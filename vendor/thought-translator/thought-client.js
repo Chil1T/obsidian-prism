@@ -30,7 +30,7 @@
 
   let currentMode = 'off'; // 'off' | 'machine' | 'ai'
   let triggerTiming = 'preload'; // 'preload' | 'expand'
-  let activeStylePreset = ''; // '' | 'technical' | 'concise' | 'custom'
+  let activeStyleTag = ''; // e.g. 'ai_technical' | 'ai_concise' | 'ai_custom_<hash>'
   let cacheWarmed = false;
   let localCacheLoaded = false;
   let scanTimer = null;
@@ -162,8 +162,6 @@
       if (docEl && docEl.getAttribute('data-ag-prism-thought-owner') !== OWNER_ID) {
         docEl.setAttribute('data-ag-prism-thought-owner', OWNER_ID);
       }
-      // Politely signal any legacy external thought runtime on this page to yield
-      W.__AGY_EMA_TRANSLATE_DISABLED__ = true;
     } catch (_) {}
 
     if (cacheWarmed) return;
@@ -172,7 +170,10 @@
     if (br && typeof br.call === 'function') {
       br.call({ action: 'get-cache' })
         .then((res) => {
-          if (res && res.stylePreset) activeStylePreset = res.stylePreset;
+          const nextTag = res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : '');
+          if (nextTag && nextTag !== activeStyleTag) {
+            activeStyleTag = nextTag;
+          }
           if (res && res.entries && typeof res.entries === 'object') {
             let added = 0;
             for (const [k, v] of Object.entries(res.entries)) {
@@ -183,9 +184,9 @@
             }
             if (added > 0) {
               persistLocalStorageCache();
-              scheduleScan(20);
             }
           }
+          scheduleScan(20);
         })
         .catch(() => {});
     }
@@ -550,7 +551,7 @@
   }
 
   function computeSig(rawText, mode) {
-    const presetTag = mode === 'machine' ? 'mt' : `ai_${activeStylePreset || 'auto'}`;
+    const presetTag = mode === 'machine' ? 'mt' : activeStyleTag || 'ai_pending';
     return `${presetTag}:${hashKey(rawText, 'sig')}`;
   }
 
@@ -558,14 +559,8 @@
     if (mode === 'machine') {
       return memCache.get(hashKey(rawText, 'mt')) || '';
     }
-    if (activeStylePreset) {
-      const kExact = hashKey(rawText, `ai_${activeStylePreset}`);
-      if (memCache.has(kExact)) return memCache.get(kExact) || '';
-    }
-    const kCustom = hashKey(rawText, 'ai_custom');
-    const kTech = hashKey(rawText, 'ai_technical');
-    const kConcise = hashKey(rawText, 'ai_concise');
-    return memCache.get(kCustom) || memCache.get(kTech) || memCache.get(kConcise) || '';
+    if (!activeStyleTag) return '';
+    return memCache.get(hashKey(rawText, activeStyleTag)) || '';
   }
 
   function bindPanelToInflight(entry, panel, expanded) {
@@ -684,7 +679,7 @@
         if (res && res.ok && typeof res.text === 'string' && res.text.trim()) {
           const finalZh = res.text.trim();
           failedSigs.delete(sig);
-          const fallbackCacheKey = hashKey(rawText, mode === 'machine' ? 'mt' : `ai_${activeStylePreset || 'technical'}`);
+          const fallbackCacheKey = hashKey(rawText, mode === 'machine' ? 'mt' : activeStyleTag || 'ai_technical');
           putMemCache(res.key || fallbackCacheKey, finalZh, true);
 
           for (const p of entry.panels) {
@@ -915,7 +910,8 @@
       const br = getBridge();
       if (!br) return Promise.resolve({ ok: false, offline: true });
       return br.call({ action: 'get-config' }).then((res) => {
-        if (res && res.stylePreset) activeStylePreset = res.stylePreset;
+        const nextTag = res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : '');
+        if (nextTag) activeStyleTag = nextTag;
         return res;
       });
     },
@@ -923,11 +919,12 @@
       const br = getBridge();
       if (!br) return Promise.resolve({ ok: false, offline: true });
       return br.call({ action: 'save-config', ...input }).then((res) => {
-        if (res && res.stylePreset && res.stylePreset !== activeStylePreset) {
-          activeStylePreset = res.stylePreset;
+        const nextTag = res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : '');
+        if (nextTag && nextTag !== activeStyleTag) {
+          activeStyleTag = nextTag;
           if (typeof document !== 'undefined') {
             document
-              .querySelectorAll('button[data-testid="thinking-collapsible-trigger"][aria-expanded="true"]')
+              .querySelectorAll('button[data-testid="thinking-collapsible-trigger"]')
               .forEach((b) => {
                 const p = b.nextElementSibling;
                 if (p) {

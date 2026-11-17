@@ -212,6 +212,26 @@ async function installPlugin(opts = {}) {
     } catch {}
   }
 
+  // Ensure ~/.gemini/config/config.json registers `obsidian-prism` cleanly and removes stale `antigravity-prism` key
+  if (!opts.targetDir) {
+    try {
+      const hostConfigPath = path.join(os.homedir(), ".gemini", "config", "config.json");
+      if (fs.existsSync(hostConfigPath)) {
+        const hostRaw = JSON.parse(fs.readFileSync(hostConfigPath, "utf8").replace(/^\uFEFF/, ""));
+        if (hostRaw && typeof hostRaw === "object") {
+          hostRaw.plugins = hostRaw.plugins && typeof hostRaw.plugins === "object" ? hostRaw.plugins : {};
+          if (!hostRaw.plugins["obsidian-prism"]) {
+            hostRaw.plugins["obsidian-prism"] = { enabled: true };
+          }
+          if (hostRaw.plugins["antigravity-prism"]) {
+            delete hostRaw.plugins["antigravity-prism"];
+          }
+          fs.writeFileSync(hostConfigPath, JSON.stringify(hostRaw, null, 2) + "\n", "utf8");
+        }
+      }
+    } catch {}
+  }
+
   let daemonInfo = { started: false, pid: null, method: null, pidVerified: false };
   let liveCheck = { cdpPort: null, attachedPages: [] };
 
