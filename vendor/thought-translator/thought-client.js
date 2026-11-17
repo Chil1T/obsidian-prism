@@ -15,7 +15,7 @@
   const LOCAL_CACHE_KEY = 'ag_prism_thought_zh_cache_v1';
   const MEM_CACHE_LIMIT = 1500;
   const STORAGE_CACHE_LIMIT = 500;
-  const STREAM_FLUSH_MS = 90;
+  const STREAM_FLUSH_MS = 48;
   const FINISH_GATE_MS = 450;
   const QUIET_GATE_MS = 900;
 
@@ -36,11 +36,18 @@
   let scanTimer = null;
 
   const memCache = new Map();
+  if (W.__agPrismThought && W.__agPrismThought.__memCache instanceof Map) {
+    for (const [k, v] of W.__agPrismThought.__memCache.entries()) {
+      memCache.set(k, v);
+    }
+  }
+  try { W.__agPrismThought?.destroy?.(); } catch {}
   const failedSigs = new Map();
   const inflightBySig = new Map();
   const panelMeta = new WeakMap();
   const waitTimers = new WeakMap();
   const lockedHeights = new WeakMap();
+  const streamLastLenMap = new WeakMap();
 
   function normalizeTextKey(str) {
     return String(str || '')
@@ -204,9 +211,20 @@
     }
   }
 
+  function cancelFlushHandle(entry) {
+    if (!entry || !entry.flushTimer) return;
+    if (entry.flushIsRaf && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(entry.flushTimer);
+    } else {
+      clearTimeout(entry.flushTimer);
+    }
+    entry.flushTimer = null;
+    entry.flushIsRaf = false;
+  }
+
   function releasePrismOverlays() {
     for (const entry of inflightBySig.values()) {
-      if (entry.flushTimer) clearTimeout(entry.flushTimer);
+      cancelFlushHandle(entry);
     }
     inflightBySig.clear();
     if (typeof document === 'undefined') return;
@@ -290,6 +308,23 @@
       collectCleanText(panel.childNodes[i], chunks);
     }
     return normalizeTextKey(chunks.join(''));
+  }
+
+  // Zero-textContent O(1) structural check for high-frequency streaming frames (0 string concatenation!)
+  function quickStructureSig(panel) {
+    if (!panel || !panel.childNodes) return null;
+    const nodes = panel.childNodes;
+    let count = 0;
+    let first = null;
+    let last = null;
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (n.nodeType === 1 && isOverlayOrIgnoredElement(n)) continue;
+      count++;
+      if (count === 1) first = n;
+      last = n;
+    }
+    return { count, first, last };
   }
 
   // Fast O(1) fingerprint of non-overlay children count + edge lengths to avoid full tree walk on unchanged ready panels
@@ -511,15 +546,17 @@
   function renderTranslatedText(panel, text, isPartial, sig) {
     if (!panel || typeof text !== 'string' || !text) return;
     const ov = ensureOverlayShell(panel);
-    ov.removeAttribute('data-pending');
+    if (ov.hasAttribute?.('data-pending')) ov.removeAttribute('data-pending');
     const body = ov.querySelector('.ag-prism-thought-body');
     if (!body) return;
 
     if (isPartial) {
-      let streamEl = body.querySelector('.ag-prism-thought-stream');
+      let streamEl = body.firstElementChild?.classList?.contains?.('ag-prism-thought-stream')
+        ? body.firstElementChild
+        : body.querySelector('.ag-prism-thought-stream');
       if (
         streamEl &&
-        streamEl.getAttribute?.('data-stream-len') === String(text.length) &&
+        streamLastLenMap.get(streamEl) === text.length &&
         panel.getAttribute('data-op-zh-ready') === '1'
       ) {
         return;
@@ -553,17 +590,17 @@
           streamEl.textContent = text;
         }
       }
-      streamEl.setAttribute?.('data-stream-len', String(text.length));
+      streamLastLenMap.set(streamEl, text.length);
     } else {
       const prevScrollTop = typeof panel.scrollTop === 'number' ? panel.scrollTop : 0;
       renderSafeMarkdownDom(body, text);
       lockedHeights.delete(panel);
-      if (panel.style) panel.style.removeProperty('min-height');
+      if (panel.style && panel.style.minHeight) panel.style.removeProperty('min-height');
       if (prevScrollTop > 0 && typeof panel.scrollTop === 'number') {
         panel.scrollTop = prevScrollTop;
       }
       if (sig) {
-        panel.setAttribute('data-op-zh-sig', sig);
+        if (panel.getAttribute('data-op-zh-sig') !== sig) panel.setAttribute('data-op-zh-sig', sig);
         const meta = panelMeta.get(panel) || {};
         meta.doneSig = sig;
         meta.readyStamp = quickPanelStamp(panel);
@@ -571,7 +608,9 @@
       }
     }
 
-    panel.removeAttribute('data-op-zh-pending');
+    if (panel.hasAttribute?.('data-op-zh-pending')) {
+      panel.removeAttribute('data-op-zh-pending');
+    }
     if (panel.getAttribute('data-op-zh-ready') !== '1') {
       panel.setAttribute('data-op-zh-ready', '1');
     }
@@ -626,7 +665,7 @@
       return;
     }
     if (existing) {
-      if (existing.flushTimer) clearTimeout(existing.flushTimer);
+      cancelFlushHandle(existing);
       inflightBySig.delete(sig);
     }
 
@@ -636,13 +675,14 @@
     const entry = {
       sig,
       srcSkelHash,
-      srcStamp: panel ? quickPanelStamp(panel) : '',
+      srcStruct: panel ? quickStructureSig(panel) : null,
       mode,
       startedAt: Date.now(),
       lastPartial: '',
       lastFlushAt: 0,
       pendingPartial: '',
       flushTimer: null,
+      flushIsRaf: false,
       panels: panel ? [panel] : [],
     };
     inflightBySig.set(sig, entry);
@@ -656,19 +696,48 @@
 
     const flushPartialToPanels = (partialStr) => {
       const trimmed = String(partialStr || '').trimStart();
-      if (!trimmed) return;
+      if (!trimmed || trimmed === entry.lastPartial) return;
       entry.lastPartial = trimmed;
       entry.lastFlushAt = Date.now();
       entry.pendingPartial = '';
       for (const p of entry.panels) {
         if (!p || !p.isConnected) continue;
-        // Fast O(1) stamp check: only extract full English text if panel child structure mutated since flight started!
-        const curStamp = quickPanelStamp(p);
-        if (entry.srcStamp && curStamp !== entry.srcStamp) {
+        // Zero-textContent O(1) reference check during streaming: only read English text if child node references changed!
+        const curStruct = quickStructureSig(p);
+        if (
+          entry.srcStruct &&
+          curStruct &&
+          (curStruct.count !== entry.srcStruct.count ||
+            curStruct.first !== entry.srcStruct.first ||
+            curStruct.last !== entry.srcStruct.last)
+        ) {
           const curRaw = extractRawEnglishText(p);
           if (curRaw && hashKey(curRaw, 'sig') !== entry.srcSkelHash) continue;
+          entry.srcStruct = curStruct;
         }
         renderTranslatedText(p, trimmed, true, null);
+      }
+    };
+
+    const scheduleAlignedStreamFlush = () => {
+      if (entry.flushTimer) return;
+      const stepFlush = () => {
+        entry.flushTimer = null;
+        entry.flushIsRaf = false;
+        if (currentMode === 'off' || !entry.pendingPartial) return;
+        const now = Date.now();
+        if (entry.lastFlushAt > 0 && now - entry.lastFlushAt < STREAM_FLUSH_MS) {
+          scheduleAlignedStreamFlush();
+          return;
+        }
+        flushPartialToPanels(entry.pendingPartial);
+      };
+      if (typeof requestAnimationFrame === 'function') {
+        entry.flushIsRaf = true;
+        entry.flushTimer = requestAnimationFrame(stepFlush);
+      } else {
+        entry.flushIsRaf = false;
+        entry.flushTimer = setTimeout(stepFlush, STREAM_FLUSH_MS);
       }
     };
 
@@ -676,32 +745,20 @@
       { text: rawText, mode },
       (partial) => {
         if (currentMode === 'off' || typeof partial !== 'string' || !partial.trim()) return;
+        entry.pendingPartial = partial;
         const now = Date.now();
-        if (entry.lastFlushAt === 0 || now - entry.lastFlushAt >= STREAM_FLUSH_MS) {
-          if (entry.flushTimer) {
-            clearTimeout(entry.flushTimer);
-            entry.flushTimer = null;
-          }
+        if (entry.lastFlushAt === 0 && typeof requestAnimationFrame !== 'function') {
+          flushPartialToPanels(partial);
+        } else if (now - entry.lastFlushAt >= STREAM_FLUSH_MS && typeof requestAnimationFrame !== 'function') {
+          cancelFlushHandle(entry);
           flushPartialToPanels(partial);
         } else {
-          entry.pendingPartial = partial;
-          if (!entry.flushTimer) {
-            const delay = Math.max(12, STREAM_FLUSH_MS - (now - entry.lastFlushAt));
-            entry.flushTimer = setTimeout(() => {
-              entry.flushTimer = null;
-              if (currentMode !== 'off' && entry.pendingPartial) {
-                flushPartialToPanels(entry.pendingPartial);
-              }
-            }, delay);
-          }
+          scheduleAlignedStreamFlush();
         }
       }
     )
       .then((res) => {
-        if (entry.flushTimer) {
-          clearTimeout(entry.flushTimer);
-          entry.flushTimer = null;
-        }
+        cancelFlushHandle(entry);
         if (inflightBySig.get(sig) === entry) {
           inflightBySig.delete(sig);
         }
@@ -729,10 +786,7 @@
         }
       })
       .catch(() => {
-        if (entry.flushTimer) {
-          clearTimeout(entry.flushTimer);
-          entry.flushTimer = null;
-        }
+        cancelFlushHandle(entry);
         if (inflightBySig.get(sig) === entry) {
           inflightBySig.delete(sig);
         }
@@ -1005,6 +1059,7 @@
       const br = getBridge();
       return br ? br.call({ action: 'test-connection', ...input }) : Promise.resolve({ ok: false, offline: true });
     },
+    __memCache: memCache,
     destroy() {
       currentMode = 'off';
       if (scanTimer) {

@@ -16,18 +16,9 @@
 
   function isVisibleAuraNode(el) {
     if (!el || el.hidden === true || el.isConnected === false) return false;
+    if (typeof el.closest === 'function' && el.closest('[hidden], .hidden')) return false;
     const st = el.style;
     if (st && (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0')) return false;
-    if (typeof getComputedStyle === 'function') {
-      try {
-        const cs = getComputedStyle(el);
-        if (cs && (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0')) return false;
-      } catch {}
-    }
-    if (typeof el.getBoundingClientRect === 'function') {
-      const r = el.getBoundingClientRect();
-      if (r && (r.width <= 0 || r.height <= 0)) return false;
-    }
     return true;
   }
 

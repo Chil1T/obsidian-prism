@@ -2838,7 +2838,7 @@
 
   let latestPrimaryModelInfo = null;
 
-  function syncComposers(measured) {
+  function syncComposers(measured, skipSparks = false) {
     const cards = Array.from(document.querySelectorAll('[data-testid="agent-input-box"] .surface-composer-card'));
     const lang = getLang();
     const ui = uiText(lang);
@@ -2915,7 +2915,7 @@
       } catch {}
     }
     syncModelSelectorPanel(primaryModelInfo);
-    syncThinkingSparks(primaryModelInfo);
+    if (!skipSparks) syncThinkingSparks(primaryModelInfo);
     if (measured && 'caretList' in measured) {
       applySmoothCaretsMutations(measured.caretList, false);
     } else {
@@ -2938,7 +2938,13 @@
     return id;
   }
 
+  let deferredConvEntryTimer = 0;
+
   function clearTransientTimers() {
+    if (deferredConvEntryTimer) {
+      clearTimeout(deferredConvEntryTimer);
+      deferredConvEntryTimer = 0;
+    }
     for (const id of transientTimers) clearTimeout(id);
     transientTimers.clear();
   }
@@ -4607,10 +4613,11 @@
   }
 
   // Phase 1: Measure (集中读取所有几何信息，零 DOM 写入，杜绝 Layout Thrashing！)
-  function measureSyncPhase(flags) {
+  function measureSyncPhase(flags, isFullSync = false) {
     const inHome = Boolean(document.querySelector('.agy-home'));
     const inHero = inHome && Boolean(document.querySelector('.agy-home [data-testid="home-greeting"]'));
     const formalConv = !inHome ? findFormalConvView() : null;
+    const isAsyncConvEntry = !isFullSync && !inHome && Boolean(formalConv) && !heroState.wasInFormalConv;
 
     let homeComposerSampled = false;
     if (inHome && (flags.full || flags.route || flags.composer)) {
@@ -4629,16 +4636,19 @@
     const sidebarSnap =
       flags.full || flags.sidebar || flags.route ? measureSidebarSelectionSnapshot() : null;
     const visibleChangedHeaders =
-      flags.full || flags.collapsible || flags.route ? measureVisibleChangedHeaders() : [];
+      !isAsyncConvEntry && (flags.full || flags.collapsible || flags.route) ? measureVisibleChangedHeaders() : [];
     const lensOverlays =
       (flags.full || flags.overlays) && isMotionStandardOrUltra() ? measureNewLensOverlays() : [];
     const caretList =
-      (flags.full || flags.composer) && cfg.smoothCaret !== false ? measureSmoothCaretsSnapshot(false) : null;
+      !isAsyncConvEntry && (flags.full || flags.composer) && cfg.smoothCaret !== false
+        ? measureSmoothCaretsSnapshot(false)
+        : null;
 
     return {
       inHome,
       inHero,
       formalConv,
+      isAsyncConvEntry,
       homeComposerSampled,
       convInputRect,
       sidebarSnap,
@@ -4670,7 +4680,8 @@
     const prevWasInConv = heroState.wasInFormalConv;
 
     // ── Phase 1: Pure Measure ──
-    const measured = measureSyncPhase(flags);
+    const measured = measureSyncPhase(flags, forceFull);
+    const deferHeavyConvWork = Boolean(measured.isAsyncConvEntry);
 
     // ── Phase 2: Pure Mutate ──
     const prevInt = internalDomMutating;
@@ -4696,12 +4707,12 @@
         syncConvAura();
       }
       if (flags.full || flags.composer || flags.overlays || flags.collapsible) {
-        syncComposers(measured);
+        syncComposers(measured, deferHeavyConvWork);
       }
       if (flags.full || flags.route || flags.sidebar || flags.collapsible || flags.composer) {
         syncHeroRouteChoreography(measured);
       }
-      if (flags.full || flags.route || flags.composer || flags.collapsible) {
+      if (!deferHeavyConvWork && (flags.full || flags.route || flags.composer || flags.collapsible)) {
         syncDualStreamEngine();
       }
       if (flags.full || flags.overlays) {
@@ -4715,22 +4726,52 @@
       if (routeJumped || flags.route || flags.composer || flags.overlays || flags.collapsible) {
         prismBoxCacheDirty = true;
       }
-      if (flags.full) {
-        syncHostAnimatedIcons(null);
-      } else if (routeJumped) {
-        const jumpRoots = [document.querySelector('.agy-home'), measured.formalConv, ...addedRoots].filter(Boolean);
-        syncHostAnimatedIcons(jumpRoots.length > 0 ? jumpRoots : null);
-      } else if (flags.buttons && addedRoots.length > 0) {
-        syncHostAnimatedIcons(addedRoots);
-      }
 
-      if (flags.full || flags.collapsible) {
-        syncWorkedForAutoUnfold();
-      }
-      if ((flags.full || flags.collapsible || routeJumped) && getThoughtTranslateMode() !== 'off') {
-        try {
-          window.__agPrismThought?.scan?.();
-        } catch {}
+      if (deferHeavyConvWork) {
+        // Staged route-entry hydration: let Chromium paint the conversation's first frame immediately,
+        // then hydrate historical icons, sparks, collapsibles, and thought cache 65ms later off the critical path!
+        if (deferredConvEntryTimer) clearTimeout(deferredConvEntryTimer);
+        deferredConvEntryTimer = setTimeout(() => {
+          deferredConvEntryTimer = 0;
+          if (destroyed) return;
+          const convNow = findFormalConvView();
+          if (!convNow) return;
+          const pMut = internalDomMutating;
+          internalDomMutating = true;
+          try {
+            syncThinkingSparks(latestPrimaryModelInfo);
+            syncDualStreamEngine();
+            syncHostAnimatedIcons([convNow]);
+            syncWorkedForAutoUnfold();
+            syncHeroCCaustics();
+          } finally {
+            internalDomMutating = pMut;
+          }
+          if (getThoughtTranslateMode() !== 'off') {
+            try {
+              window.__agPrismThought?.scan?.();
+            } catch {}
+          }
+          queueSmoothCaret(false, false, true);
+        }, 65);
+      } else {
+        if (flags.full) {
+          syncHostAnimatedIcons(null);
+        } else if (routeJumped) {
+          const jumpRoots = [document.querySelector('.agy-home'), measured.formalConv, ...addedRoots].filter(Boolean);
+          syncHostAnimatedIcons(jumpRoots.length > 0 ? jumpRoots : null);
+        } else if (flags.buttons && addedRoots.length > 0) {
+          syncHostAnimatedIcons(addedRoots);
+        }
+
+        if (flags.full || flags.collapsible) {
+          syncWorkedForAutoUnfold();
+        }
+        if ((flags.full || flags.collapsible || routeJumped) && getThoughtTranslateMode() !== 'off') {
+          try {
+            window.__agPrismThought?.scan?.();
+          } catch {}
+        }
       }
       if (flags.full || flags.settings || flags.overlays) {
         ensureSettingsSection();

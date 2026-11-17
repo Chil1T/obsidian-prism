@@ -1807,10 +1807,29 @@ function buildInjectExpression(customConfig) {
         ensureUsageBridge();
         if (document.head) applyStyle();
         else document.addEventListener('DOMContentLoaded', applyStyle, { once: true });
-        ${bundle}
         const bootCfg = ${JSON.stringify({ ...config, binding: SETTING_BINDING, codeHash })};
-        if (typeof globalThis.__agCsUiMain === 'function') {
-          globalThis.__agCsUiMain(bootCfg);
+        const existingPrism = window.__agPrism || window.__agClaudeStyle;
+        const bundleUnchanged = Boolean(
+          existingPrism &&
+            existingPrism.version === ${JSON.stringify(PLUGIN_VERSION)} &&
+            existingPrism.codeHash === ${JSON.stringify(codeHash)} &&
+            window.__agPrismTelemetry &&
+            window.__agPrismEffortSlider &&
+            window.__agPrismThought
+        );
+        if (bundleUnchanged) {
+          existingPrism.refreshConfig(bootCfg);
+        } else {
+          try { window.__agPrismTelemetry?.destroy?.(); } catch {}
+          try { window.__agPrismEffortSlider?.destroy?.(); } catch {}
+          try { window.__agPrismThought?.destroy?.(); } catch {}
+          try {
+            document.querySelectorAll('[data-ag-prism-fallback="1"]').forEach((n) => n.remove());
+          } catch {}
+          ${bundle}
+          if (typeof globalThis.__agCsUiMain === 'function') {
+            globalThis.__agCsUiMain(bootCfg);
+          }
         }
         migrateLegacyStorage();
         if (window.__agClaudeStyle && !window.__agPrism) {

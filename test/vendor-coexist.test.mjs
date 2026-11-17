@@ -454,6 +454,55 @@ test('vendor/pulse-dashboard/inline-fallback.js politely yields to external Puls
   assert.equal(ctlSolo.getState().yieldedToExternal, true);
   assert.equal(envSolo.doc.getElementById('ag-pulse-status-bar'), null);
   ctlSolo.destroy();
+
+  // Regression guard: on Customizations / Installed Plugins page (no composer, but sidebar has pinned [data-cascade-id] rows),
+  // fallback Dashboard MUST NOT mount into sidebar rows or document.body!
+  const envPluginsPage = createLightweightDom();
+  while (envPluginsPage.doc.body.children.length > 0) {
+    envPluginsPage.doc.body.children[0].remove();
+  }
+  const pinnedRow = envPluginsPage.makeEl('div');
+  pinnedRow.setAttribute('data-testid', 'conversation-row-sidebar');
+  pinnedRow.setAttribute('data-cascade-id', '31a09976-b7b4-4ba3-8b33-a14727fad7f5');
+  envPluginsPage.doc.body.appendChild(pinnedRow);
+  const ctlPlugins = telemetryMod.createTelemetryController({ window: envPluginsPage.win, document: envPluginsPage.doc });
+  ctlPlugins.sync({ telemetryModule: 'on' });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(ctlPlugins.getState().mountedFallback, false);
+  assert.equal(envPluginsPage.doc.getElementById('ag-pulse-status-bar'), null);
+  assert.equal(pinnedRow.children.length, 0);
+  ctlPlugins.destroy();
+
+  // Regression guard 2: even when telemetryModule === 'on', if external #ag-pulse-status-bar mounts later,
+  // refresh() must immediately yield & unmount fallback so bars never stack or duplicate!
+  const envOnMode = createLightweightDom();
+  const ctlOnMode = telemetryMod.createTelemetryController({ window: envOnMode.win, document: envOnMode.doc });
+  ctlOnMode.sync({ telemetryModule: 'on' });
+  assert.equal(ctlOnMode.getState().mountedFallback, true);
+  const extRealBar = envOnMode.makeEl('div');
+  extRealBar.id = 'ag-pulse-status-bar';
+  envOnMode.composerToolbar.appendChild(extRealBar);
+  await ctlOnMode.refresh();
+  assert.equal(ctlOnMode.getState().mountedFallback, false);
+  assert.equal(ctlOnMode.getState().yieldedToExternal, true);
+  assert.equal(envOnMode.doc.querySelectorAll('#ag-pulse-status-bar').length, 1);
+  ctlOnMode.destroy();
+
+  // Regression guard 3: during active agent turns, [data-testid="model-selector-trigger"] moves inside a top-left
+  // block <div class="min-w-0">; fallback MUST NOT append there and stack vertically!
+  const envActiveTurn = createLightweightDom();
+  envActiveTurn.composerToolbar.className = 'min-w-0';
+  const ctlActiveTurn = telemetryMod.createTelemetryController({ window: envActiveTurn.win, document: envActiveTurn.doc });
+  ctlActiveTurn.sync({ telemetryModule: 'on' });
+  assert.equal(ctlActiveTurn.getState().mountedFallback, false);
+  const bottomFooter = envActiveTurn.makeEl('div');
+  bottomFooter.className = 'agy-composer-footer flex w-full items-center';
+  envActiveTurn.doc.body.appendChild(bottomFooter);
+  await ctlActiveTurn.refresh();
+  assert.equal(ctlActiveTurn.getState().mountedFallback, true);
+  assert.equal(bottomFooter.children.length, 1);
+  assert.equal(envActiveTurn.composerToolbar.children.length, 1, 'Top-left min-w-0 wrapper must contain only the model button');
+  ctlActiveTurn.destroy();
 });
 
 test('vendor/effort-slider/slider-coexist.js yields 100% to external __agCodexEffortSliderInstance and throttles built-in observer (120ms + skip non-menu mutations)', async () => {

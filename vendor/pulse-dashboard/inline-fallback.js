@@ -2,6 +2,10 @@
   if (typeof module === 'object' && module.exports) {
     module.exports = factory(root);
   } else {
+    try { root.__agPrismTelemetry?.destroy?.(); } catch {}
+    if (typeof window !== 'undefined' && window !== root) {
+      try { window.__agPrismTelemetry?.destroy?.(); } catch {}
+    }
     const api = factory(root);
     root.__agPrismTelemetry = api;
     if (typeof window !== 'undefined') window.__agPrismTelemetry = api;
@@ -389,30 +393,28 @@
     }
 
     async function refreshMetrics() {
+      const win = getWin();
       const doc = getDoc();
-      if (currentMode === 'auto' && hasExternalPulse()) {
+      if (!envOpts && win && win.__agPrismTelemetry && win.__agPrismTelemetry !== controllerApi) {
+        unmountFallback();
+        return null;
+      }
+      if (hasExternalPulse()) {
         yieldedToExternal = true;
         unmountFallback();
         return null;
       }
       if (currentMode !== 'off' && fallbackHostEl) {
-        if (!isNodeConnected(doc, fallbackHostEl)) {
-          const anchor = doc ? findMountAnchor(doc) : null;
-          if (anchor) {
-            try { anchor.appendChild(fallbackHostEl); } catch {}
-          }
-        } else if (doc) {
-          const preferred = findPreferredToolbarAnchor(doc);
-          if (preferred && fallbackHostEl.parentElement !== preferred) {
-            try { preferred.appendChild(fallbackHostEl); } catch {}
-          }
+        purgeOrphanFallbacks(doc, fallbackHostEl);
+        if (!ensureFallbackSeated(doc)) {
+          return null;
         }
       }
       if (!fallbackHostEl || !isNodeConnected(doc, fallbackHostEl)) {
-        if (currentMode !== 'off' && !hasExternalPulse() && waitTimer === null) {
+        if (currentMode !== 'off' && !hasExternalPulse() && waitTimer === null && findMountAnchor(doc)) {
           mountFallbackNow();
         }
-        if (!fallbackHostEl) return null;
+        if (!fallbackHostEl || !isNodeConnected(doc, fallbackHostEl)) return null;
       }
       const cid = detectConversationId(fallbackHostEl);
       const snap = await requestMetricsSnapshot({ conversationId: cid, force: false });
@@ -420,40 +422,65 @@
       return snap;
     }
 
+    function isSidebarOrHiddenNode(el) {
+      if (!el) return true;
+      if (el.hidden === true) return true;
+      if (typeof el.closest === 'function') {
+        if (
+          el.closest(
+            'aside, [data-testid="conversation-list-sidebar"], [data-testid="conversation-row-sidebar"], [hidden], [inert]'
+          )
+        ) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function isTopLeftBlockModelWrapper(parentEl) {
+      if (!parentEl) return true;
+      const cls = String(parentEl.className || '').trim();
+      if (!cls) return false;
+      // During active agent turns, [data-testid="model-selector-trigger"] moves to a top-left block <div class="min-w-0">.
+      // Appending status bars there stacks vertically below the model pill and inflates the composer height!
+      return /\bmin-w-0\b/.test(cls) && !/\b(?:flex|inline-flex|agy-composer-footer)\b/.test(cls);
+    }
+
     function findPreferredToolbarAnchor(doc) {
       const footer = doc?.querySelector?.('.agy-composer-footer, [data-testid="input-box-bottom-toolbar"]');
-      if (footer) return footer;
+      if (footer && !isSidebarOrHiddenNode(footer)) return footer;
       const modelBtn = doc?.querySelector?.('[data-testid="model-selector-trigger"]');
-      return modelBtn && modelBtn.parentElement ? modelBtn.parentElement : null;
+      if (
+        modelBtn &&
+        modelBtn.parentElement &&
+        !isSidebarOrHiddenNode(modelBtn) &&
+        !isTopLeftBlockModelWrapper(modelBtn.parentElement)
+      ) {
+        return modelBtn.parentElement;
+      }
+      return null;
     }
 
     function findMountAnchor(doc) {
-      const toolbar = findPreferredToolbarAnchor(doc);
-      if (toolbar) return toolbar;
-      const composer = doc.querySelector?.('.surface-composer-card, [data-testid="agent-input-box"]');
-      if (composer) return composer;
-      const cascade = doc.querySelector?.('[data-cascade-id]');
-      if (cascade) return cascade;
-      return doc.body || doc.documentElement;
+      if (!doc) return null;
+      return findPreferredToolbarAnchor(doc);
     }
 
     function ensureFallbackSeated(doc) {
       if (!fallbackHostEl || !doc) return false;
-      const preferred = findPreferredToolbarAnchor(doc);
-      if (!isNodeConnected(doc, fallbackHostEl)) {
-        const anchor = preferred || findMountAnchor(doc);
-        if (!anchor) return false;
+      const anchor = findMountAnchor(doc);
+      if (!anchor) {
+        try {
+          fallbackHostEl.remove();
+        } catch {}
+        return false;
+      }
+      if (!isNodeConnected(doc, fallbackHostEl) || fallbackHostEl.parentElement !== anchor) {
         try {
           anchor.appendChild(fallbackHostEl);
-          return true;
         } catch {
           return false;
         }
-      }
-      if (preferred && fallbackHostEl.parentElement !== preferred) {
-        try {
-          preferred.appendChild(fallbackHostEl);
-        } catch {}
       }
       return true;
     }
@@ -462,12 +489,20 @@
       const win = getWin();
       const doc = getDoc();
       if (!win || !doc || typeof doc.attachShadow === 'undefined' && typeof doc.createElement !== 'function') return false;
+      if (!envOpts && win.__agPrismTelemetry && win.__agPrismTelemetry !== controllerApi) {
+        unmountFallback();
+        return false;
+      }
       if (currentMode === 'off') return false;
       if (hasExternalPulse()) {
         yieldedToExternal = true;
+        unmountFallback();
         return false;
       }
-      if (fallbackHostEl && ensureFallbackSeated(doc)) return true;
+      if (fallbackHostEl && ensureFallbackSeated(doc)) {
+        purgeOrphanFallbacks(doc, fallbackHostEl);
+        return true;
+      }
 
       const anchor = findMountAnchor(doc);
       if (!anchor) return false;
@@ -675,7 +710,7 @@
       };
     }
 
-    return {
+    const controllerApi = {
       BAR_ID,
       FALLBACK_ATTR,
       METRICS_BINDING,
@@ -685,6 +720,7 @@
       getState,
       createTelemetryController,
     };
+    return controllerApi;
   }
 
   return createTelemetryController();

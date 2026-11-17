@@ -552,6 +552,7 @@ export class ThoughtTranslatorService {
       buf += decoder.decode(chunk, { stream: true });
       const lines = buf.split(/\r?\n/);
       buf = lines.pop() || '';
+      let appended = false;
       for (const rawLine of lines) {
         const line = rawLine.trim();
         if (!line || !line.startsWith('data:')) continue;
@@ -562,14 +563,19 @@ export class ThoughtTranslatorService {
           const delta = obj?.choices?.[0]?.delta?.content ?? obj?.choices?.[0]?.message?.content ?? '';
           if (delta) {
             acc += delta;
-            const cleaned = stripThinkTagsAndQuotes(acc);
-            const now = Date.now();
-            if (cleaned && onPartial && now - lastEmitAt >= 50) {
-              lastEmitAt = now;
-              onPartial(cleaned);
-            }
+            appended = true;
           }
         } catch {}
+      }
+      if (appended && onPartial) {
+        const now = Date.now();
+        if (now - lastEmitAt >= 48) {
+          const cleaned = stripThinkTagsAndQuotes(acc);
+          if (cleaned) {
+            lastEmitAt = now;
+            onPartial(cleaned);
+          }
+        }
       }
     }
 

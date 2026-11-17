@@ -2,6 +2,10 @@
   if (typeof module === 'object' && module.exports) {
     module.exports = factory(root);
   } else {
+    try { root.__agPrismEffortSlider?.destroy?.(); } catch {}
+    if (typeof window !== 'undefined' && window !== root) {
+      try { window.__agPrismEffortSlider?.destroy?.(); } catch {}
+    }
     const api = factory(root);
     root.__agPrismEffortSlider = api;
     if (typeof window !== 'undefined') window.__agPrismEffortSlider = api;
