@@ -114,6 +114,10 @@
     if (out.motionLevel !== 'off' && out.motionLevel !== 'subtle' && out.motionLevel !== 'standard' && out.motionLevel !== 'ultra') {
       out.motionLevel = 'ultra';
     }
+    // targetFps: '60' | '120' | '180' | 'native'
+    if (out.targetFps !== '60' && out.targetFps !== '120' && out.targetFps !== '180' && out.targetFps !== 'native') {
+      out.targetFps = '180';
+    }
     // telemetryModule & effortSliderModule: 'auto' | 'on' | 'off'
     out.telemetryModule = out.telemetryModule === 'on' || out.telemetryModule === 'off' ? out.telemetryModule : 'auto';
     out.effortSliderModule = out.effortSliderModule === 'on' || out.effortSliderModule === 'off' ? out.effortSliderModule : 'auto';
@@ -376,6 +380,19 @@
   function getMotionLevel() {
     const v = cfg.motionLevel;
     return v === 'off' || v === 'subtle' || v === 'standard' || v === 'ultra' ? v : 'ultra';
+  }
+
+  function getTargetFps() {
+    const v = String(cfg.targetFps || '');
+    return v === '60' || v === '120' || v === '180' || v === 'native' ? v : '180';
+  }
+
+  function getMinFrameGapMs() {
+    const fps = getTargetFps();
+    if (fps === 'native') return 0;
+    if (fps === '60') return 15.2;
+    if (fps === '120') return 7.5;
+    return 4.8; // '180' sweet spot (~150-200fps on 165Hz/180Hz/240Hz/300Hz panels)
   }
 
   function getTelemetryMode() {
@@ -761,7 +778,7 @@
     usageLoading = true;
     if (!usageHasData) renderHomePanel();
     try {
-      const CONCURRENCY = 4;
+      const CONCURRENCY = usageHasData ? 1 : 2;
       const FETCH_TIMEOUT_MS = 4000;
       const buildFallbackUsageRecord = (id, sum) => {
         const sec = Number(sum?.lastModifiedTime?.seconds || sum?.createdTime?.seconds || 0);
@@ -806,7 +823,7 @@
           })
         );
         if (i + CONCURRENCY < staleIds.length && !destroyed) {
-          await new Promise((r) => setTimeout(r, 0));
+          await new Promise((r) => setTimeout(r, usageHasData ? 120 : 16));
         }
       }
       if (!destroyed) {
@@ -833,10 +850,15 @@
           if (deferredUsageTimer) clearTimeout(deferredUsageTimer);
           deferredUsageTimer = setTimeout(() => {
             deferredUsageTimer = 0;
-            if (!destroyed && wasHero && cfg.homeLayout === 'studio') {
+            if (destroyed || !wasHero || cfg.homeLayout !== 'studio') return;
+            if (typeof requestIdleCallback === 'function') {
+              requestIdleCallback(() => {
+                if (!destroyed && wasHero && cfg.homeLayout === 'studio') void refreshUsageRollup(false);
+              }, { timeout: 2500 });
+            } else {
               void refreshUsageRollup(false);
             }
-          }, 750);
+          }, 3800);
         } else {
           void refreshUsageRollup(false);
         }
@@ -1408,6 +1430,7 @@
       reattach: null,
     };
     let previous = state.mountedAt;
+    let lastRippleRenderAt = 0;
     let frameWanted = false;
     let drawnOnce = false;
     let forceSingleDraw = true;
@@ -1493,7 +1516,13 @@
       frameWanted = false;
       if (destroyed || state.parked || (rippleMount !== state && rippleMount !== null)) return;
       const still = motionReduced();
-      state.waves.advance(still ? 0 : Math.min(0.06, Math.max(0, (now - previous) / 1000)));
+      const minGap = getMinFrameGapMs();
+      if (!still && drawnOnce && !forceSingleDraw && minGap > 0 && lastRippleRenderAt > 0 && now - lastRippleRenderAt < minGap && !document.hidden) {
+        wake();
+        return;
+      }
+      lastRippleRenderAt = now;
+      state.waves.advance(still ? 0 : Math.min(0.05, Math.max(0, (now - previous) / 1000)));
       previous = now;
       const tideElapsed = state.tideSwellAt > 0 ? now - state.tideSwellAt : -1;
       const inTideSwell = !still && tideElapsed >= 0 && tideElapsed < 480;
@@ -1687,6 +1716,7 @@
         isHomeRippleEnabled: () => cfg.homeRipple !== false,
         isMotionStandardOrUltra,
         isDarkTheme,
+        getMinFrameGapMs,
         rippleCore,
         setAttrIfChanged,
         runGuardedMut,
@@ -2167,6 +2197,13 @@
   function stepCrystalLoop(now) {
     crystalMount.rafId = 0;
     if (destroyed || !crystalMount.inst || !crystalMount.panel || !crystalMount.panel.isConnected || !crystalMount.wasOrch) {
+      return;
+    }
+    const minGap = getMinFrameGapMs();
+    if (minGap > 0 && crystalMount.lastStepMs > 0 && now - crystalMount.lastStepMs < minGap) {
+      if (!motionReduced() && !document.hidden) {
+        crystalMount.rafId = requestAnimationFrame(stepCrystalLoop);
+      }
       return;
     }
     const dt = crystalMount.lastStepMs > 0 ? Math.min(0.05, Math.max(0.002, (now - crystalMount.lastStepMs) / 1000)) : 0.016;
@@ -3677,6 +3714,8 @@
   let lastPointerPos = { x: -9999, y: -9999 };
   let prismRaf = 0;
   let lastPrismPointerAt = 0;
+  let lastPrismDrawAt = 0;
+  let prismPendingFlush = false;
   let prismBoxCacheDirty = true;
   let prismBoxCacheAt = 0;
   let cachedPrismBoxes = [];
@@ -3708,11 +3747,26 @@
     return { cv, ctx };
   }
 
+  function strokeRoundedRectPath(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    if (typeof ctx.roundRect === 'function') {
+      ctx.roundRect(x, y, w, h, r);
+      return;
+    }
+    const cr = Math.max(0, Math.min(r, w * 0.5, h * 0.5));
+    ctx.moveTo(x + cr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, cr);
+    ctx.arcTo(x + w, y + h, x, y + h, cr);
+    ctx.arcTo(x, y + h, x, y, cr);
+    ctx.arcTo(x, y, x + w, y, cr);
+    ctx.closePath();
+  }
+
   function paintPrismRimCanvas(entry, active, localX, localY, radius, dark) {
     if (!entry || !entry.ctx || !entry.cv || !entry.rect) return false;
     const dpr = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, 2);
-    const w = Math.max(2, Math.round((entry.rect.width + (entry.insetPad || 0)) * dpr));
-    const h = Math.max(2, Math.round((entry.rect.height + (entry.insetPad || 0)) * dpr));
+    const w = Math.max(4, Math.round((entry.rect.width + (entry.insetPad || 0)) * dpr));
+    const h = Math.max(4, Math.round((entry.rect.height + (entry.insetPad || 0)) * dpr));
     if (entry.cv.width !== w || entry.cv.height !== h) {
       entry.cv.width = w;
       entry.cv.height = h;
@@ -3728,12 +3782,13 @@
     entry.wasCleared = false;
     const ctx = entry.ctx;
     ctx.clearRect(0, 0, w, h);
-    const gx = (localX + (entry.insetPad ? entry.insetPad * 0.5 : 0)) * dpr;
-    const gy = (localY + (entry.insetPad ? entry.insetPad * 0.5 : 0)) * dpr;
+    const padOffset = entry.insetPad ? entry.insetPad * 0.5 : 0;
+    const gx = (localX + padOffset) * dpr;
+    const gy = (localY + padOffset) * dpr;
     const gr = radius * dpr;
     const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, gr);
     if (dark) {
-      g.addColorStop(0, 'rgba(255,255,255,0.95)');
+      g.addColorStop(0, 'rgba(255,255,255,0.96)');
       g.addColorStop(0.24, '#4285F4');
       g.addColorStop(0.50, '#9B72CB');
       g.addColorStop(0.74, '#EA4335');
@@ -3746,13 +3801,15 @@
       g.addColorStop(0.88, '#D97706');
       g.addColorStop(1, 'rgba(217,119,6,0)');
     }
-    ctx.fillStyle = g;
-    // Only rasterize the 4 thin 2.5px border strips instead of filling the entire interior!
-    const bw = Math.max(2, Math.ceil(2.5 * dpr));
-    ctx.fillRect(0, 0, w, bw);
-    ctx.fillRect(0, Math.max(0, h - bw), w, bw);
-    ctx.fillRect(0, bw, bw, Math.max(0, h - bw * 2));
-    ctx.fillRect(Math.max(0, w - bw), bw, bw, Math.max(0, h - bw * 2));
+    const strokeInset = (entry.insetPad ? 1.0 : 0.7) * dpr;
+    const rw = Math.max(2, w - strokeInset * 2);
+    const rh = Math.max(2, h - strokeInset * 2);
+    const cssRadius = entry.borderRadius > 0 ? entry.borderRadius : 10;
+    const rr = Math.min(rw * 0.5, rh * 0.5, cssRadius * dpr);
+    strokeRoundedRectPath(ctx, strokeInset, strokeInset, rw, rh, rr);
+    ctx.lineWidth = 1.45 * dpr;
+    ctx.strokeStyle = g;
+    ctx.stroke();
     return true;
   }
 
@@ -3762,6 +3819,16 @@
       prismBoxCacheDirty = true;
     });
     return prismBoxRo;
+  }
+
+  function readBoxBorderRadius(el, fallbackPx) {
+    if (!el || typeof getComputedStyle !== 'function') return fallbackPx;
+    try {
+      const v = parseFloat(getComputedStyle(el).borderTopLeftRadius || '');
+      return Number.isFinite(v) && v >= 0 ? v : fallbackPx;
+    } catch {
+      return fallbackPx;
+    }
   }
 
   function refreshPrismBoxRectCache(now, allowReadRect) {
@@ -3794,6 +3861,7 @@
           cv: rim ? rim.cv : null,
           ctx: rim ? rim.ctx : null,
           insetPad: 2,
+          borderRadius: prev && prev.borderRadius > 0 ? prev.borderRadius : readBoxBorderRadius(box, 10),
           wasCleared: prev ? prev.wasCleared : false,
           pxStr: prev ? prev.pxStr : '',
           pyStr: prev ? prev.pyStr : '',
@@ -3820,6 +3888,7 @@
           cv: rim ? rim.cv : null,
           ctx: rim ? rim.ctx : null,
           insetPad: 0,
+          borderRadius: 999,
           wasCleared: prevOrch ? prevOrch.wasCleared : false,
           pxStr: prevOrch ? prevOrch.pxStr : '',
           pyStr: prevOrch ? prevOrch.pyStr : '',
@@ -3830,12 +3899,22 @@
     }
   }
 
-  function flushPrismPointer() {
+  function flushPrismPointer(rafNow) {
     prismRaf = 0;
     if (destroyed) return;
+    const now = typeof rafNow === 'number' && rafNow > 0 ? rafNow : performance.now();
+    const minGap = getMinFrameGapMs();
+    if (minGap > 0 && lastPrismDrawAt > 0 && now - lastPrismDrawAt < minGap) {
+      prismPendingFlush = true;
+      if (typeof requestAnimationFrame === 'function') {
+        prismRaf = requestAnimationFrame(flushPrismPointer);
+      }
+      return;
+    }
+    prismPendingFlush = false;
+    lastPrismDrawAt = now;
     const reduced = motionReduced();
     const { x, y } = lastPointerPos;
-    const now = performance.now();
     const allowReadRect = !reduced && x >= -1000;
 
     const activeTrack = crystalMount.track && crystalMount.wasOrch && crystalMount.track.isConnected !== false ? crystalMount.track : null;
@@ -4095,6 +4174,7 @@
   function resolveSettingRowActiveValue(key, lang) {
     if (key === 'language') return lang;
     if (key === 'motionLevel') return getMotionLevel();
+    if (key === 'targetFps') return getTargetFps();
     if (key === 'lightPreset') return getLightPreset();
     if (key === 'telemetryModule') return getTelemetryMode();
     if (key === 'effortSliderModule') return getEffortSliderMode();
@@ -4860,6 +4940,7 @@
           palette: getEffectivePalette(),
           lightPreset: getLightPreset(),
           motionLevel: getMotionLevel(),
+          targetFps: getTargetFps(),
           telemetryModule: getTelemetryMode(),
           effortSliderModule: getEffortSliderMode(),
           thoughtTranslate: getThoughtTranslateMode(),

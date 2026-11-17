@@ -4,6 +4,7 @@
   "palette": "obsidian",
   "lightPreset": "crystal",
   "motionLevel": "ultra",
+  "targetFps": "180",
   "telemetryModule": "auto",
   "effortSliderModule": "auto",
   "thoughtTranslate": "off",

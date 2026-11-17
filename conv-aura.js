@@ -143,6 +143,7 @@
     isHomeRippleEnabled,
     isMotionStandardOrUltra,
     isDarkTheme,
+    getMinFrameGapMs,
     rippleCore,
     setAttrIfChanged,
     runGuardedMut,
@@ -323,6 +324,7 @@
 
       let frameWanted = false;
       let drawnOnce = false;
+      let lastGpuDrawAt = 0;
 
       function applySize(w, parentH) {
         const h = parentH > 0 ? Math.max(1, Math.round(parentH * CONV_AURA_HEIGHT_RATIO)) : 0;
@@ -364,6 +366,13 @@
         state.rafId = 0;
         frameWanted = false;
         if (isDestroyed() || convAura !== state) return;
+        const isGpuGlow = Boolean(state.glow && state.glow.mode === 'webgl2');
+        const minGap = isGpuGlow && typeof getMinFrameGapMs === 'function' ? Number(getMinFrameGapMs() || 0) : 0;
+        if (isGpuGlow && drawnOnce && minGap > 0 && lastGpuDrawAt > 0 && now - lastGpuDrawAt < minGap && !document.hidden) {
+          wake(false);
+          return;
+        }
+        lastGpuDrawAt = now;
         layout();
         const phase = advancePhase(now);
         const allowLivingFlow = isMotionStandardOrUltra() && !document.hidden;
@@ -406,7 +415,6 @@
         state.sleeping = false;
         if (host.hasAttribute('data-aura-sleep')) host.removeAttribute('data-aura-sleep');
 
-        const isGpuGlow = Boolean(state.glow && state.glow.mode === 'webgl2');
         if (isGpuGlow && (inLiftoffEbb || phase === 'start' || phase === 'running' || phase === 'complete')) {
           wake(false);
           return;

@@ -186,41 +186,91 @@
     let load = 0;
     let wakeLoad = 0;
     let baseSpeedPrimed = false;
-    for (let row = 0; row < rows; row++) {
-      for (let column = 0; column < columns; column++) {
-        const cell = row * columns + column;
-        const noise = fractalNoise((column * cellWidth) / RIPPLE.turbulenceScale + seed, (row * cellHeight) / RIPPLE.turbulenceScale + seed);
-        speedFactor[cell] = Math.min(1.4, Math.max(0.3, 1 + RIPPLE.turbulence * (noise - 0.5) * 3.2));
-        const edge = Math.min(column, row, columns - 1 - column, rows - 1 - row);
-        const border = Math.max(0, 1 - edge / RIPPLE.borderCells) ** 2;
-        damping[cell] = RIPPLE.damping + border * 12;
+    let actC0 = columns;
+    let actC1 = -1;
+    let actR0 = rows;
+    let actR1 = -1;
+    if (columns >= 32 && rows >= 16) {
+      const gCols = Math.ceil(columns / 2) + 1;
+      const gRows = Math.ceil(rows / 2) + 1;
+      const coarse = new Float32Array(gCols * gRows);
+      for (let gr = 0; gr < gRows; gr++) {
+        const r = Math.min(rows - 1, gr * 2);
+        const ny = (r * cellHeight) / RIPPLE.turbulenceScale + seed;
+        for (let gc = 0; gc < gCols; gc++) {
+          const c = Math.min(columns - 1, gc * 2);
+          coarse[gr * gCols + gc] = fractalNoise((c * cellWidth) / RIPPLE.turbulenceScale + seed, ny);
+        }
+      }
+      for (let row = 0; row < rows; row++) {
+        const gr = row >> 1;
+        const ty = (row & 1) * 0.5;
+        const rowOff0 = gr * gCols;
+        const rowOff1 = Math.min(gRows - 1, gr + 1) * gCols;
+        for (let column = 0; column < columns; column++) {
+          const cell = row * columns + column;
+          const gc = column >> 1;
+          const gc1 = Math.min(gCols - 1, gc + 1);
+          const tx = (column & 1) * 0.5;
+          const n0 = coarse[rowOff0 + gc] + (coarse[rowOff0 + gc1] - coarse[rowOff0 + gc]) * tx;
+          const n1 = coarse[rowOff1 + gc] + (coarse[rowOff1 + gc1] - coarse[rowOff1 + gc]) * tx;
+          const noise = n0 + (n1 - n0) * ty;
+          speedFactor[cell] = Math.min(1.4, Math.max(0.3, 1 + RIPPLE.turbulence * (noise - 0.5) * 3.2));
+          const edge = Math.min(column, row, columns - 1 - column, rows - 1 - row);
+          const border = Math.max(0, 1 - edge / RIPPLE.borderCells) ** 2;
+          damping[cell] = RIPPLE.damping + border * 12;
+        }
+      }
+    } else {
+      for (let row = 0; row < rows; row++) {
+        for (let column = 0; column < columns; column++) {
+          const cell = row * columns + column;
+          const noise = fractalNoise((column * cellWidth) / RIPPLE.turbulenceScale + seed, (row * cellHeight) / RIPPLE.turbulenceScale + seed);
+          speedFactor[cell] = Math.min(1.4, Math.max(0.3, 1 + RIPPLE.turbulence * (noise - 0.5) * 3.2));
+          const edge = Math.min(column, row, columns - 1 - column, rows - 1 - row);
+          const border = Math.max(0, 1 - edge / RIPPLE.borderCells) ** 2;
+          damping[cell] = RIPPLE.damping + border * 12;
+        }
       }
     }
+    function primeFarBaseline() {
+      if (baseSpeedPrimed) return;
+      const far = RIPPLE.speedFar;
+      for (let i = 0; i < cells; i++) {
+        const s = far * speedFactor[i];
+        const sq = s * s;
+        if (sq > speedSquared[i]) speedSquared[i] = sq;
+      }
+      baseSpeedPrimed = true;
+    }
     function raiseSpeeds(column, row) {
+      primeFarBaseline();
       const nearMinusFar = RIPPLE.speedNear - RIPPLE.speedFar;
-      for (let r = 0; r < rows; r++) {
+      const maxReachPx = RIPPLE.speedFalloff * 4.6;
+      const maxReachSq = maxReachPx * maxReachPx;
+      const reachCols = Math.ceil(maxReachPx / cellWidth);
+      const reachRows = Math.ceil(maxReachPx / cellHeight);
+      const r0 = Math.max(0, row - reachRows);
+      const r1 = Math.min(rows - 1, row + reachRows);
+      const c0 = Math.max(0, column - reachCols);
+      const c1 = Math.min(columns - 1, column + reachCols);
+      for (let r = r0; r <= r1; r++) {
         const dy = (r - row) * cellHeight;
         const dy2 = dy * dy;
-        for (let c = 0; c < columns; c++) {
-          const cell = r * columns + c;
+        const rowBase = r * columns;
+        for (let c = c0; c <= c1; c++) {
           const dx = (c - column) * cellWidth;
-          const distance = Math.sqrt(dx * dx + dy2);
-          const speed = (RIPPLE.speedFar + nearMinusFar * Math.exp(-distance / RIPPLE.speedFalloff)) * speedFactor[cell];
+          const d2 = dx * dx + dy2;
+          if (d2 > maxReachSq) continue;
+          const cell = rowBase + c;
+          const speed = (RIPPLE.speedFar + nearMinusFar * Math.exp(-Math.sqrt(d2) / RIPPLE.speedFalloff)) * speedFactor[cell];
           const squared = speed * speed;
           if (squared > speedSquared[cell]) speedSquared[cell] = squared;
         }
       }
-      baseSpeedPrimed = true;
     }
     function raiseWakeSpeeds(column, row, speedNorm) {
-      if (!baseSpeedPrimed) {
-        const far = RIPPLE.speedFar;
-        for (let i = 0; i < cells; i++) {
-          const sq = (far * speedFactor[i]) ** 2;
-          if (sq > speedSquared[i]) speedSquared[i] = sq;
-        }
-        baseSpeedPrimed = true;
-      }
+      primeFarBaseline();
       const wakeBoost = (RIPPLE.speedNear - RIPPLE.speedFar) * (0.14 + 0.14 * speedNorm);
       const reachPx = RIPPLE.speedFalloff * 0.65;
       const reachCols = Math.ceil(reachPx / cellWidth);
@@ -270,14 +320,22 @@
         const gain = RIPPLE.sourceAmplitude * source.amplitudeScale * envelope * rate * WAVE_STEP;
         const reachColumns = Math.ceil((radius * 3) / cellWidth);
         const reachRows = Math.ceil((radius * 3) / cellHeight);
+        const r0 = Math.max(0, source.row - reachRows);
         const r1 = Math.min(rows - 1, source.row + reachRows);
+        const c0 = Math.max(0, source.column - reachColumns);
         const c1 = Math.min(columns - 1, source.column + reachColumns);
-        for (let r = Math.max(0, source.row - reachRows); r <= r1; r++) {
+        if (r0 < actR0) actR0 = r0;
+        if (r1 > actR1) actR1 = r1;
+        if (c0 < actC0) actC0 = c0;
+        if (c1 > actC1) actC1 = c1;
+        for (let r = r0; r <= r1; r++) {
           const dy = (r - source.row) * cellHeight;
-          for (let c = Math.max(0, source.column - reachColumns); c <= c1; c++) {
+          const dy2 = dy * dy;
+          const rowBase = r * columns;
+          for (let c = c0; c <= c1; c++) {
             const dx = (c - source.column) * cellWidth;
-            const i = r * columns + c;
-            let v = height[i] + gain * Math.exp(-(dx * dx + dy * dy) * inv2r2);
+            const i = rowBase + c;
+            let v = height[i] + gain * Math.exp(-(dx * dx + dy2) * inv2r2);
             const av = v < 0 ? -v : v;
             if (av > knee) v = (v < 0 ? -1 : 1) * (knee + span * Math.tanh((av - knee) / span));
             height[i] = v;
@@ -289,36 +347,91 @@
       sources.length = keep;
     }
     function step() {
-      for (let r = 0; r < rows; r++) {
-        for (let c = 0; c < columns; c++) {
-          const cell = r * columns + c;
-          const here = height[cell];
-          const left = height[c > 0 ? cell - 1 : cell];
-          const right = height[c < columns - 1 ? cell + 1 : cell];
-          const above = height[r > 0 ? cell - columns : cell];
-          const below = height[r < rows - 1 ? cell + columns : cell];
-          const laplacian = (left + right - 2 * here) / widthSquared + (above + below - 2 * here) / heightSquared;
-          velocity[cell] += (speedSquared[cell] * laplacian - damping[cell] * velocity[cell]) * WAVE_STEP;
-        }
-      }
       let peak = 0;
-      for (let cell = 0; cell < cells; cell++) {
-        height[cell] += velocity[cell] * WAVE_STEP;
-        height[cell] *= 1 - 0.35 * WAVE_STEP;
-        const a = Math.abs(height[cell]);
-        if (a > peak) peak = a;
+      if (actC0 <= actC1 && actR0 <= actR1) {
+        const rStart = Math.max(0, actR0 - 1);
+        const rEnd = Math.min(rows - 1, actR1 + 1);
+        const cStart = Math.max(0, actC0 - 1);
+        const cEnd = Math.min(columns - 1, actC1 + 1);
+        const decayMul = 1 - 0.35 * WAVE_STEP;
+        for (let r = rStart; r <= rEnd; r++) {
+          const rowBase = r * columns;
+          const hasAbove = r > 0;
+          const hasBelow = r < rows - 1;
+          for (let c = cStart; c <= cEnd; c++) {
+            const cell = rowBase + c;
+            const here = height[cell];
+            const left = c > 0 ? height[cell - 1] : here;
+            const right = c < columns - 1 ? height[cell + 1] : here;
+            const above = hasAbove ? height[cell - columns] : here;
+            const below = hasBelow ? height[cell + columns] : here;
+            const laplacian = (left + right - 2 * here) / widthSquared + (above + below - 2 * here) / heightSquared;
+            velocity[cell] += (speedSquared[cell] * laplacian - damping[cell] * velocity[cell]) * WAVE_STEP;
+          }
+        }
+        let nC0 = columns;
+        let nC1 = -1;
+        let nR0 = rows;
+        let nR1 = -1;
+        for (let r = rStart; r <= rEnd; r++) {
+          const rowBase = r * columns;
+          for (let c = cStart; c <= cEnd; c++) {
+            const cell = rowBase + c;
+            const vel = velocity[cell];
+            let h = (height[cell] + vel * WAVE_STEP) * decayMul;
+            const a = h < 0 ? -h : h;
+            const av = vel < 0 ? -vel : vel;
+            if (a > peak) peak = a;
+            if (a > 1e-5 || av > 5e-5) {
+              height[cell] = h;
+              if (c < nC0) nC0 = c;
+              if (c > nC1) nC1 = c;
+              if (r < nR0) nR0 = r;
+              if (r > nR1) nR1 = r;
+            } else if (h !== 0 || vel !== 0) {
+              height[cell] = 0;
+              velocity[cell] = 0;
+            }
+          }
+        }
+        actC0 = nC0;
+        actC1 = nC1;
+        actR0 = nR0;
+        actR1 = nR1;
       }
       drive();
+      if (peak === 0 && actC0 <= actC1) {
+        for (let r = actR0; r <= actR1; r++) {
+          const rowBase = r * columns;
+          for (let c = actC0; c <= actC1; c++) {
+            const a = Math.abs(height[rowBase + c]);
+            if (a > peak) peak = a;
+          }
+        }
+      }
       load *= loadDecay;
       wakeLoad *= wakeLoadDecay;
       moving = sources.length > 0 || peak > REST_HEIGHT;
       if (!moving) {
-        height.fill(0);
-        velocity.fill(0);
+        if (actC0 <= actC1 && actR0 <= actR1) {
+          for (let r = actR0; r <= actR1; r++) {
+            const s = r * columns + actC0;
+            const e = r * columns + actC1 + 1;
+            height.fill(0, s, e);
+            velocity.fill(0, s, e);
+          }
+        } else {
+          height.fill(0);
+          velocity.fill(0);
+        }
         speedSquared.fill(0);
         load = 0;
         wakeLoad = 0;
         baseSpeedPrimed = false;
+        actC0 = columns;
+        actC1 = -1;
+        actR0 = rows;
+        actR1 = -1;
       }
     }
     return {
@@ -552,7 +665,7 @@ color = vec4(rgb * a, a);
     };
   }
   function createWebGL2Renderer(canvas, columns, rows) {
-    const gl = canvas.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false, preserveDrawingBuffer: true });
+    const gl = canvas.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false, preserveDrawingBuffer: false });
     if (!gl) return null;
     const atlasCanvas = canvas.ownerDocument.createElement('canvas');
     const atlasContext = atlasCanvas.getContext('2d');
@@ -938,16 +1051,18 @@ color = vec4(rgb * a, a);
     let glowing = false;
     let prismBurst = 0;
     let stale = true;
+    const colClouds = new Array(Math.max(0, columns));
     const featherCols = Math.max(1, columns * RIPPLE.edgeFeather);
     const featherRows = Math.max(1, rows * RIPPLE.edgeFeather);
     for (let row = 0; row < rows; row++) {
+      const y = row * cellHeight + cellHeight / 2;
+      const ey = smooth((Math.min(row, rows - 1 - row) + 0.5) / featherRows);
+      const rowBase = row * columns;
       for (let column = 0; column < columns; column++) {
-        const cell = row * columns + column;
+        const cell = rowBase + column;
         const x = column * cellWidth + cellWidth / 2;
-        const y = row * cellHeight + cellHeight / 2;
         patch[cell] = patchClear(x, y);
         const ex = smooth((Math.min(column, columns - 1 - column) + 0.5) / featherCols);
-        const ey = smooth((Math.min(row, rows - 1 - row) + 0.5) / featherRows);
         edge[cell] = ex * ey;
         mask[cell] = edge[cell];
         const phase = fractalNoise(x / RIPPLE.breathScale + 53, y / RIPPLE.breathScale + 71) * TAU * 1.7;
@@ -1151,38 +1266,62 @@ color = vec4(rgb * a, a);
         const prismThreshold = Math.min(0.95, Math.max(0, RIPPLE.prismThreshold * (1 - 0.38 * burst)));
         const crestScale = 0.78 + 0.34 * burst;
         const bandScale = RIPPLE.prismBands / TAU;
+        const invCap = 1 / cap;
+        const inv2CellW = 1 / (2 * cellWidth);
+        const inv2CellH = 1 / (2 * cellHeight);
+        const invPrismSpan = 1 / Math.max(1e-4, 1 - prismThreshold);
+        const idleThemeScale = idleAlpha * themeScale;
         const height = waves.height;
         const { data } = renderer;
+        for (let c = 0; c < columns; c++) {
+          colClouds[c] = cloudColumn(c + drift);
+        }
         let brightest = 0;
-        for (let column = 0; column < columns; column++) {
-          const clouds = cloudColumn(column + drift);
-          for (let row = 0; row < rows; row++) {
-            const cell = row * columns + column;
+        for (let row = 0; row < rows; row++) {
+          const rowBase = row * columns;
+          const hasAbove = row > 0;
+          const hasBelow = row < rows - 1;
+          for (let column = 0; column < columns; column++) {
+            const cell = rowBase + column;
             const here = height[cell];
-            const strength = Math.tanh(RIPPLE.waveGain * Math.abs(here));
-            const shown = Math.max(glow[cell] * decay, strength);
+            const prevG = glow[cell];
+            const breath = 1 - breathHalf * (1 + bs * breathCos[cell] + bc * breathSin[cell]);
+            if (here === 0 && prevG === 0) {
+              const alpha = idleThemeScale * colClouds[column][row] * breath * mask[cell];
+              const at = cell << 2;
+              data[at] = glyphs[cell];
+              data[at + 1] = alpha < INVISIBLE_ALPHA ? 0 : (alpha >= 1 ? 255 : (alpha * 255 + 0.5) | 0);
+              data[at + 2] = 0;
+              data[at + 3] = 0;
+              continue;
+            }
+            const strength = Math.tanh(RIPPLE.waveGain * (here < 0 ? -here : here));
+            const decayed = prevG * decay;
+            const shown = decayed > strength ? decayed : strength;
             const lit = shown < 0.01 ? 0 : shown;
             glow[cell] = lit;
-            const breath = 1 - breathHalf * (1 + bs * breathCos[cell] + bc * breathSin[cell]);
-            let alpha = idleAlpha * clouds[row] * breath;
+            let alpha = idleAlpha * colClouds[column][row] * breath;
             let packed = 0;
             let waveMix = strength;
             if (lit > 0) {
               if (lit > brightest) brightest = lit;
-              const raw = patch[cell] * (lit * RIPPLE.glowAlpha + strength * RIPPLE.waveAlpha);
-              alpha += cap * Math.tanh(raw / cap);
-              waveMix = Math.min(1, Math.max(strength * 1.15, lit * 0.42));
+              const rawRatio = (patch[cell] * (lit * RIPPLE.glowAlpha + strength * RIPPLE.waveAlpha)) * invCap;
+              alpha += cap * Math.tanh(rawRatio);
+              const sBoost = strength * 1.15;
+              const lBoost = lit * 0.42;
+              const mixRaw = sBoost > lBoost ? sBoost : lBoost;
+              waveMix = mixRaw > 1 ? 1 : mixRaw;
               const left = column > 0 ? height[cell - 1] : here;
               const right = column < columns - 1 ? height[cell + 1] : here;
-              const above = row > 0 ? height[cell - columns] : here;
-              const below = row < rows - 1 ? height[cell + columns] : here;
-              const gx = (right - left) / (2 * cellWidth);
-              const gy = (below - above) / (2 * cellHeight);
+              const above = hasAbove ? height[cell - columns] : here;
+              const below = hasBelow ? height[cell + columns] : here;
+              const gx = (right - left) * inv2CellW;
+              const gy = (below - above) * inv2CellH;
               const slopeG = Math.sqrt(gx * gx + gy * gy) * slopeScale;
               const crestG = strength * crestScale;
               const g = slopeG > crestG ? slopeG : crestG;
               if (g > prismThreshold) {
-                const amt = smooth((g - prismThreshold) / (1 - prismThreshold));
+                const amt = smooth((g - prismThreshold) * invPrismSpan);
                 const level = Math.round(amt * PRISM_LEVELS);
                 if (level > 0) {
                   let hue = Math.atan2(gy, gx + 1e-6) * bandScale + Math.tanh(here * 2.4) * 0.3;
@@ -1192,10 +1331,10 @@ color = vec4(rgb * a, a);
               }
             }
             alpha *= mask[cell] * themeScale;
-            const at = cell * 4;
+            const at = cell << 2;
             data[at] = glyphs[cell];
-            data[at + 1] = alpha < INVISIBLE_ALPHA ? 0 : Math.round(Math.min(1, alpha) * 255);
-            data[at + 2] = lit > 0 ? Math.round(waveMix * 255) : 0;
+            data[at + 1] = alpha < INVISIBLE_ALPHA ? 0 : (alpha >= 1 ? 255 : (alpha * 255 + 0.5) | 0);
+            data[at + 2] = lit > 0 ? ((waveMix * 255 + 0.5) | 0) : 0;
             data[at + 3] = packed;
           }
         }
@@ -1481,7 +1620,7 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
   const GLOW_FRAG_SHADER = HORIZON_FRAGMENT_SHADER;
   function createBrandHorizonGLRenderer(canvas) {
     const gl = canvas && canvas.getContext
-      ? canvas.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false, preserveDrawingBuffer: true })
+      ? canvas.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false, preserveDrawingBuffer: false })
       : null;
     if (!gl) return null;
     let program = null;

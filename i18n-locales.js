@@ -358,6 +358,18 @@
     optMotionSubtle: ['克制', '克制', '克制', 'Subtle', '控えめ'],
     optMotionStandard: ['标准', '標準', '標準', 'Standard', '標準'],
     optMotionUltra: ['旗舰光学', '旗艦光學', '旗艦光學', 'Ultra', 'ウルトラ光学'],
+    setTargetFpsTitle: ['目标刷新帧率', '目標重新整理幀率', '目標刷新幀率', 'Target Frame Rate', '目標フレームレート'],
+    setTargetFpsDesc: [
+      '控制 GPU 棱镜边、水波纹与极光流光的活跃渲染帧率上限（画面静止时自动归零休眠）。',
+      '控制 GPU 稜鏡邊、水波紋與極光流光的活躍渲染幀率上限（畫面靜止時自動歸零休眠）。',
+      '控制 GPU 稜鏡邊、水波紋同極光流光嘅活躍渲染幀率上限（畫面靜止時自動歸零休眠）。',
+      'Set active GPU frame rate cap for prism rim, ripples, and aurora (auto-sleeps at 0 FPS when idle).',
+      'GPUプリズム縁・波紋・オーロラの最大描画フレームレート（静止時は自動で0FPSスリープ）。',
+    ],
+    optFps60: ['60 FPS', '60 FPS', '60 FPS', '60 FPS', '60 FPS'],
+    optFps120: ['120 FPS', '120 FPS', '120 FPS', '120 FPS', '120 FPS'],
+    optFps180: ['180 FPS', '180 FPS', '180 FPS', '180 FPS', '180 FPS'],
+    optFpsNative: ['原生满帧', '原生滿幀', '原生滿幀', 'Native Max', 'ネイティブ最大'],
     setMascotTitle: ['像素桌面双宠舞台', '像素桌面雙寵舞台', '像素桌面雙寵舞台', 'Pixel Mascot Stage', 'ピクセルマスコットステージ'],
     setMascotDesc: [
       '在输入框右上角显示互动小螃蟹与小紫猫（支持点击、拖拽与静置帧缓存休眠）。',

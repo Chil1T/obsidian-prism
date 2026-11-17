@@ -304,6 +304,21 @@
             ['ultra', ui.optMotionUltra || (isZh() ? '旗舰光学' : 'Ultra')],
           ],
         },
+        targetFps: {
+          key: 'targetFps',
+          title: ui.setTargetFpsTitle || (isZh() ? '目标刷新帧率' : 'Target Frame Rate'),
+          desc:
+            ui.setTargetFpsDesc ||
+            (isZh()
+              ? '控制 GPU 棱镜边、水波纹与极光流光的活跃渲染帧率上限（画面静止时自动归零休眠）。'
+              : 'Set active GPU frame rate cap for prism rim, ripples, and aurora (0 FPS when idle).'),
+          opts: [
+            ['60', ui.optFps60 || '60 FPS'],
+            ['120', ui.optFps120 || '120 FPS'],
+            ['180', ui.optFps180 || '180 FPS'],
+            ['native', ui.optFpsNative || (isZh() ? '原生满帧' : 'Native Max')],
+          ],
+        },
         homeLayout: {
           key: 'homeLayout',
           title: ui.setHomeLayoutTitle || 'Home Layout',
@@ -454,7 +469,7 @@
         {
           id: 'appearance',
           title: ui.grpAppearance || (isZh() ? '外观与版面' : 'Appearance & Layout'),
-          keys: ['palette', 'lightPreset', 'motionLevel', 'homeLayout', 'homeRipple', 'logoInk', 'language'],
+          keys: ['palette', 'lightPreset', 'motionLevel', 'targetFps', 'homeLayout', 'homeRipple', 'logoInk', 'language'],
         },
         {
           id: 'interaction',
