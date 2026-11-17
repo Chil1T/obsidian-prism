@@ -30,7 +30,7 @@ jobs:
 
   build-macos:
     if: github.event.repository.private == false
-    runs-on: macos-latest
+    runs-on: macos-26-intel
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
