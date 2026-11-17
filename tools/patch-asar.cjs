@@ -668,12 +668,43 @@ function extractInjectExprFromAsarIfPresent(asarPath) {
 }
 
 /**
- * 使用 Node 原生 detached + windowsHide (CREATE_NO_WINDOW) 优先派生完全无黑框的独立后台进程；
- * 仅在极端沙盒异常时回退 PowerShell -WindowStyle Hidden。
+ * 在 Windows 下通过 WMI Win32_Process.Create + Win32_ProcessStartup(ShowWindow=0)
+ * 由系统服务直接以 SW_HIDE 派生完全脱离当前终端 Job Object 的后台无窗进程（0 黑框 + 终端关闭不连坐）；
+ * 受限沙盒或非 Windows 环境自动回退 detached child_process.spawn。
  */
 function spawnBreakawayNodeProcess(nodeArgs, opts = {}) {
   const exe = process.execPath;
   const cwd = opts.cwd || ROOT_DIR;
+
+  if (process.platform === "win32" && !opts.disablePowerShellBreakaway) {
+    try {
+      const quoteCmdArg = (s) => {
+        const str = String(s);
+        if (!/[\s"]/u.test(str)) return str;
+        return `"${str.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, "$1$1")}"`;
+      };
+      const cmdLine = [quoteCmdArg(exe), ...nodeArgs.map(quoteCmdArg)].join(" ");
+      const escPs = (s) => String(s).replace(/'/g, "''");
+      const psScript = [
+        `$psi = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 };`,
+        `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '${escPs(cmdLine)}'; CurrentDirectory = '${escPs(cwd)}'; ProcessStartupInformation = $psi };`,
+        `if ($r -and $r.ReturnValue -eq 0 -and $r.ProcessId) { Write-Output $r.ProcessId }`,
+      ].join(" ");
+      const encodedScript = Buffer.from(psScript, "utf16le").toString("base64");
+      const out = execFileSync(
+        "powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encodedScript],
+        { encoding: "utf8", windowsHide: true, timeout: 6000, stdio: ["ignore", "pipe", "ignore"] }
+      );
+      const pid = parseInt(String(out || "").trim().split(/\s+/).pop(), 10);
+      if (Number.isInteger(pid) && pid > 0) {
+        return { spawned: true, pid, method: "wmi-win32-process-hidden" };
+      }
+    } catch {
+      // Fall through to detached spawn
+    }
+  }
+
   try {
     const child = spawn(exe, nodeArgs, {
       cwd,
@@ -686,33 +717,7 @@ function spawnBreakawayNodeProcess(nodeArgs, opts = {}) {
       return { spawned: true, pid: child.pid, method: "node-detached-windowshide" };
     }
   } catch {
-    // Fall through to PowerShell fallback if spawn is restricted
-  }
-
-  if (process.platform === "win32" && !opts.disablePowerShellBreakaway) {
-    try {
-      const escPs = (s) => String(s).replace(/'/g, "''");
-      const argArrayLiteral = nodeArgs.map((a) => `'${escPs(a)}'`).join(", ");
-      const psScript = [
-        `$p = Start-Process -FilePath '${escPs(exe)}'`,
-        `-ArgumentList @(${argArrayLiteral})`,
-        `-WorkingDirectory '${escPs(cwd)}'`,
-        `-WindowStyle Hidden -PassThru;`,
-        `if ($p) { Write-Output $p.Id }`,
-      ].join(" ");
-      const encodedScript = Buffer.from(psScript, "utf16le").toString("base64");
-      const out = execFileSync(
-        "powershell.exe",
-        ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encodedScript],
-        { encoding: "utf8", windowsHide: true, timeout: 6000, stdio: ["ignore", "pipe", "ignore"] }
-      );
-      const pid = parseInt(String(out || "").trim().split(/\s+/).pop(), 10);
-      if (Number.isInteger(pid) && pid > 0) {
-        return { spawned: true, pid, method: "powershell-start-process" };
-      }
-    } catch {
-      // Ignore
-    }
+    // Ignore
   }
 
   return { spawned: false, pid: null, method: null };

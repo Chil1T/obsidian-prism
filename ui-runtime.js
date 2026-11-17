@@ -3180,6 +3180,7 @@
       return 'settings-gear';
     }
     if (
+      !btn.closest?.('.agy-composer-footer') &&
       btn.closest?.('[data-testid="agent-input-box"], .surface-composer-card') &&
       (tid === 'attachment-button' ||
         tid === 'add-context-button' ||
@@ -3632,6 +3633,28 @@
   let pulseBridgeInst = null;
   let motionBinding = null;
   let wasContextCardOpen = false;
+  const calibratedPulseFooters = new WeakSet();
+
+  function healBlockedExternalPulseBar() {
+    const bar = document.getElementById('ag-pulse-status-bar');
+    if (!bar || bar.getAttribute('data-ag-prism-fallback') === '1') return;
+    if (bar.getAttribute('data-layout') !== 'blocked') return;
+    const footer = bar.parentElement;
+    if (!footer || !footer.classList?.contains('agy-composer-footer') || calibratedPulseFooters.has(footer)) return;
+    const fw = typeof footer.getBoundingClientRect === 'function' ? footer.getBoundingClientRect().width : 0;
+    if (fw < 420) return;
+    calibratedPulseFooters.add(footer);
+    // Zero-flicker baseline recalibration: briefly set role="banner" (200ms) so external Pulse clears
+    // any stale 0px baseline captured before CSS settled, then re-captures clean 28px native geometry!
+    const prevRole = footer.getAttribute('role');
+    footer.setAttribute('role', 'banner');
+    window.dispatchEvent?.(new Event('resize'));
+    setTimeout(() => {
+      if (prevRole) footer.setAttribute('role', prevRole);
+      else footer.removeAttribute('role');
+      window.dispatchEvent?.(new Event('resize'));
+    }, 220);
+  }
 
   function syncContextCardOpenNotify() {
     const pulseHost = document.getElementById('ag-pulse-status-bar');
@@ -3656,6 +3679,7 @@
   }
 
   function ensurePulseBridge() {
+    healBlockedExternalPulseBar();
     syncContextCardOpenNotify();
     if (destroyed || !pulseVialBridgeMod || typeof pulseVialBridgeMod.mountPulseVialBridge !== 'function') return;
     if (getTelemetryMode() === 'off') return;
