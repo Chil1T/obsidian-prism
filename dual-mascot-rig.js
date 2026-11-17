@@ -2147,7 +2147,11 @@
     let miniPileEnabled = Boolean(options.miniPileEnabled);
     let orchestrator = Boolean(options.orchestrator);
     let prismaticCoat = readChromaSaved();
-    const chromaGates = { tuned: false, forged: false };
+    const sharedSessionGates =
+      !options.storage && hostEl && typeof hostEl === 'object'
+        ? (hostEl.__opChromaGates || (hostEl.__opChromaGates = { tuned: false, forged: false }))
+        : { tuned: false, forged: false };
+    const chromaGates = sharedSessionGates;
     const chromaTapTimes = [];
     let chromaPhase = 0;
     const chromaSparks = [];
@@ -3413,12 +3417,12 @@
       const now = performance.now();
       markActivity();
 
-      // 检查叠塔态小紫猫 1.8s 内连续点击 4 次仪式
+      // 检查叠塔态小紫猫 2.6s 内连续点击 4 次仪式（2 层及以上叠塔皆可）
       if (actor.id === 'cat') {
         const towerLen = getTowerMembers('cat').length;
-        const reqTower = miniPileEnabled ? 3 : 2;
+        const reqTower = 2;
         if (towerLen >= reqTower && (prismaticCoat || (chromaGates.tuned && chromaGates.forged))) {
-          while (chromaTapTimes.length && now - chromaTapTimes[0] > 1800) {
+          while (chromaTapTimes.length && now - chromaTapTimes[0] > 2600) {
             chromaTapTimes.shift();
           }
           chromaTapTimes.push(now);
@@ -4183,7 +4187,7 @@
         const dxTotal = evt.clientX - downX;
         const dyTotal = evt.clientY - downY;
         let justStartedDrag = false;
-        if (!moved && Math.hypot(dxTotal, dyTotal) > 3) {
+        if (!moved && Math.hypot(dxTotal, dyTotal) > 7) {
           moved = true;
           justStartedDrag = true;
           clearTimeout(petTimer);

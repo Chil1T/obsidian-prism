@@ -1,6 +1,10 @@
-// Obsidian Prism — Unified Thought Translator & Polisher Client Runtime
-// - Zero extra document-wide MutationObserver: driven by Obsidian Prism's incremental scheduler
-// - Dual-gate stability (450ms finish + 850ms quiet), minHeight anti-jank lock, and zero-XSS pure DOM Markdown renderer
+// Obsidian Prism — Unified Thought Translator & Polisher Client Runtime (v1.1 Stabilized)
+// Incorporates proven anti-jank & anti-retranslate safeguards:
+// 1. Rendered-signature idempotence (`data-op-zh-sig` + `data-raw-zh`) -> 0 redundant DOM rebuilds on cache hit;
+// 2. Global `inflightBySig` flight pool across React panel remounts + pre-commit source-hash verification -> 0 duplicate requests & 0 misplacement;
+// 3. Monotonic `minHeight` lock during streaming + `scrollTop` preservation + non-regressive pending state -> 0 height collapse jank;
+// 4. Clean AST-like text collector skipping BUTTON / SVG / STYLE / SCRIPT & overlays + exponential failure backoff (15s -> 45s -> 120s);
+// 5. O(1) fast-skip on collapsed & already-settled historical panels for instant performance in long conversations.
 
 (function (root) {
   'use strict';
@@ -8,24 +12,51 @@
   if (!W) return;
 
   const OWNER_ID = 'obsidian-prism-thought';
+  const LOCAL_CACHE_KEY = 'ag_prism_thought_zh_cache_v1';
+  const MEM_CACHE_LIMIT = 1500;
+  const STORAGE_CACHE_LIMIT = 500;
   const STREAM_FLUSH_MS = 55;
   const FINISH_GATE_MS = 450;
-  const QUIET_GATE_MS = 850;
+  const QUIET_GATE_MS = 900;
+
+  const BLOCK_TAGS = {
+    P: 1, DIV: 1, LI: 1, UL: 1, OL: 1, PRE: 1, BLOCKQUOTE: 1,
+    H1: 1, H2: 1, H3: 1, H4: 1, H5: 1, H6: 1, TR: 1, HR: 1,
+    SECTION: 1, ARTICLE: 1,
+  };
+  const SKIP_TAGS = {
+    SCRIPT: 1, STYLE: 1, BUTTON: 1, SVG: 1, NOSCRIPT: 1,
+  };
 
   let currentMode = 'off'; // 'off' | 'machine' | 'ai'
   let triggerTiming = 'preload'; // 'preload' | 'expand'
   let activeStylePreset = ''; // '' | 'technical' | 'concise' | 'custom'
   let cacheWarmed = false;
+  let localCacheLoaded = false;
   let scanTimer = null;
 
   const memCache = new Map();
+  const failedSigs = new Map();
+  const inflightBySig = new Map();
   const panelMeta = new WeakMap();
   const waitTimers = new WeakMap();
-  const flushTimers = new WeakMap();
   const lockedHeights = new WeakMap();
+
+  function normalizeTextKey(str) {
+    return String(str || '')
+      .replace(/\r\n/g, '\n')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n\s*\n+/g, '\n')
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
 
   function canonicalizeSkeleton(str) {
     return String(str || '')
+      .replace(/\r\n/g, '\n')
       .replace(/```[\s\S]*?```/g, ' ')
       .replace(/https?:\/\/\S+/g, ' ')
       .replace(/[^a-zA-Z0-9\u4e00-\u9fa5]+/g, '')
@@ -33,7 +64,7 @@
   }
 
   function hashKey(rawText, prefix) {
-    const norm = String(rawText || '').trim();
+    const norm = normalizeTextKey(rawText);
     if (!norm) return '';
     const skel = canonicalizeSkeleton(norm) || norm;
     let h = 2166136261;
@@ -45,13 +76,79 @@
   }
 
   function isMostlyZh(text) {
-    const s = String(text || '').replace(/```[\s\S]*?```/g, '').replace(/`[^`]*`/g, '');
-    if (!s.trim()) return true;
-    const cjk = (s.match(/[\u4e00-\u9fa5]/g) || []).length;
-    const latin = (s.match(/[A-Za-z]{3,}/g) || []).length;
-    if (cjk >= 24 && cjk > latin * 0.85) return true;
-    if (latin <= 2 && cjk >= 4) return true;
-    return false;
+    const norm = normalizeTextKey(text);
+    if (!norm || norm.length < 10 || norm.length > 48000) return true;
+    const prose = norm
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/`[^`\n]+`/g, ' ')
+      .replace(/https?:\/\/\S+/g, ' ')
+      .replace(/[A-Za-z]:[\\/][^\s"'<>|]+/g, ' ')
+      .replace(/(?:\/[A-Za-z0-9._-]+){2,}/g, ' ');
+    const cjk = (prose.match(/[\u4e00-\u9fa5]/g) || []).length;
+    const latin = (prose.match(/[A-Za-z]/g) || []).length;
+    if (cjk >= 24 && cjk / Math.max(1, cjk + latin) >= 0.18) return true;
+    if (latin < 12) return true;
+    return cjk / Math.max(1, cjk + latin) >= 0.28;
+  }
+
+  function loadLocalStorageCache() {
+    if (localCacheLoaded) return;
+    localCacheLoaded = true;
+    try {
+      const store = W.localStorage;
+      if (!store) return;
+      const raw = store.getItem(LOCAL_CACHE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        for (const [k, v] of Object.entries(parsed)) {
+          if (k && typeof v === 'string' && v.trim()) memCache.set(k, v);
+        }
+      }
+    } catch (_) {}
+  }
+
+  function persistLocalStorageCache() {
+    try {
+      const store = W.localStorage;
+      if (!store) return;
+      const entries = Array.from(memCache.entries());
+      const slice = entries.slice(Math.max(0, entries.length - STORAGE_CACHE_LIMIT));
+      const obj = {};
+      for (const [k, v] of slice) obj[k] = v;
+      store.setItem(LOCAL_CACHE_KEY, JSON.stringify(obj));
+    } catch (_) {}
+  }
+
+  function putMemCache(key, val, persist = true) {
+    if (!key || typeof val !== 'string' || !val.trim()) return;
+    const trimmed = val.trim();
+    if (memCache.has(key)) memCache.delete(key);
+    while (memCache.size >= MEM_CACHE_LIMIT) {
+      const oldest = memCache.keys().next().value;
+      if (oldest === undefined) break;
+      memCache.delete(oldest);
+    }
+    memCache.set(key, trimmed);
+    if (persist) persistLocalStorageCache();
+  }
+
+  function isSigInCooldown(sig) {
+    const rec = failedSigs.get(sig);
+    if (!rec) return false;
+    if (Date.now() >= rec.retryAfter) {
+      failedSigs.delete(sig);
+      return false;
+    }
+    return true;
+  }
+
+  function recordSigFailure(sig) {
+    if (!sig) return;
+    const prev = failedSigs.get(sig);
+    const count = prev ? prev.count + 1 : 1;
+    const delayMs = count === 1 ? 15000 : count === 2 ? 45000 : 120000;
+    failedSigs.set(sig, { count, retryAfter: Date.now() + delayMs });
   }
 
   function getBridge() {
@@ -59,11 +156,14 @@
   }
 
   function ensureInitialized() {
+    loadLocalStorageCache();
     try {
       const docEl = typeof document !== 'undefined' && document.documentElement;
-      if (docEl) {
+      if (docEl && docEl.getAttribute('data-ag-prism-thought-owner') !== OWNER_ID) {
         docEl.setAttribute('data-ag-prism-thought-owner', OWNER_ID);
       }
+      // Politely signal any legacy external thought runtime on this page to yield
+      W.__AGY_EMA_TRANSLATE_DISABLED__ = true;
     } catch (_) {}
 
     if (cacheWarmed) return;
@@ -74,8 +174,16 @@
         .then((res) => {
           if (res && res.stylePreset) activeStylePreset = res.stylePreset;
           if (res && res.entries && typeof res.entries === 'object') {
+            let added = 0;
             for (const [k, v] of Object.entries(res.entries)) {
-              if (k && typeof v === 'string') memCache.set(k, v);
+              if (k && typeof v === 'string' && v.trim()) {
+                putMemCache(k, v, false);
+                added++;
+              }
+            }
+            if (added > 0) {
+              persistLocalStorageCache();
+              scheduleScan(20);
             }
           }
         })
@@ -84,6 +192,10 @@
   }
 
   function releasePrismOverlays() {
+    for (const entry of inflightBySig.values()) {
+      if (entry.flushTimer) clearTimeout(entry.flushTimer);
+    }
+    inflightBySig.clear();
     if (typeof document === 'undefined') return;
     document.querySelectorAll('.ag-prism-thought-overlay[data-op-thought="1"]').forEach((ov) => {
       const panel = ov.parentElement;
@@ -91,6 +203,7 @@
       if (panel) {
         panel.removeAttribute('data-op-zh-ready');
         panel.removeAttribute('data-op-zh-pending');
+        panel.removeAttribute('data-op-zh-sig');
         panel.removeAttribute('data-op-show-raw');
         panel.removeAttribute('data-op-thought-panel');
         if (panel.style) panel.style.removeProperty('min-height');
@@ -104,33 +217,84 @@
   function isTriggerStreaming(btn) {
     if (!btn) return false;
     if (btn.getAttribute('data-op-thought-state') === 'streaming') return true;
+    if (btn.getAttribute('data-ag-cs-spark-streaming') === '1') return true;
     try {
       if (
         btn.querySelector(
-          '.animate-shimmer-text, .animate-spin, .animate-pulse, .ag-cs-thinking-spark[data-state="streaming"]'
+          '.animate-shimmer-text, .animate-spin, .animate-pulse, [class*="animate-shimmer"], .ag-cs-thinking-spark[data-state="streaming"]'
         )
       ) {
         return true;
       }
     } catch (_) {}
     const txt = (btn.textContent || '').trim();
-    if (/thinking|思考中|推演中|諗緊/i.test(txt) && !/\d+\s*(s|sec|秒|m|min|分)/i.test(txt)) {
+    if (!txt) return false;
+    if (/已思考|Thought\s+for|Thought\s+process/i.test(txt)) return false;
+    if (/thinking|正在思考|思考中|推演中|諗緊/i.test(txt) && !/\d+\s*(s|sec|秒|m|min|分)/i.test(txt)) {
       return true;
     }
     return false;
   }
 
-  function extractRawEnglishText(panel) {
-    if (!panel) return '';
-    const parts = [];
-    for (const child of Array.from(panel.childNodes)) {
-      if (child.nodeType === 1 && child.classList && child.classList.contains('ag-prism-thought-overlay')) {
-        continue;
-      }
-      const t = (child.textContent || '').trim();
-      if (t) parts.push(t);
+  function isOverlayOrIgnoredElement(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.hasAttribute && (el.hasAttribute('data-op-thought') || el.hasAttribute('data-prism-ignore'))) return true;
+    const cls = String((el.getAttribute && el.getAttribute('class')) || el.className || '');
+    return cls.includes('ag-prism-thought-overlay') || cls.includes('-zh-overlay');
+  }
+
+  function collectCleanText(node, chunks) {
+    if (!node) return;
+    const nt = node.nodeType;
+    if (nt === 3) {
+      if (node.nodeValue) chunks.push(node.nodeValue);
+      return;
     }
-    return parts.join('\n\n').trim();
+    if (nt !== 1 || isOverlayOrIgnoredElement(node)) return;
+    const tag = node.tagName ? String(node.tagName).toUpperCase() : '';
+    if (SKIP_TAGS[tag]) return;
+    if (tag === 'BR') {
+      chunks.push('\n');
+      return;
+    }
+    const isBlock = Boolean(BLOCK_TAGS[tag]);
+    if (isBlock) chunks.push('\n');
+    const children = node.childNodes;
+    if (children && children.length) {
+      for (let i = 0; i < children.length; i++) {
+        collectCleanText(children[i], chunks);
+      }
+    } else if (typeof node.textContent === 'string' && (!node.children || node.children.length === 0)) {
+      chunks.push(node.textContent);
+    }
+    if (isBlock) chunks.push('\n');
+  }
+
+  function extractRawEnglishText(panel) {
+    if (!panel || !panel.childNodes) return '';
+    const chunks = [];
+    for (let i = 0; i < panel.childNodes.length; i++) {
+      collectCleanText(panel.childNodes[i], chunks);
+    }
+    return normalizeTextKey(chunks.join(''));
+  }
+
+  // Fast O(1) fingerprint of non-overlay children count + edge lengths to avoid full tree walk on unchanged ready panels
+  function quickPanelStamp(panel) {
+    if (!panel || !panel.childNodes) return '';
+    const nodes = panel.childNodes;
+    let count = 0;
+    let firstLen = 0;
+    let lastLen = 0;
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (n.nodeType === 1 && isOverlayOrIgnoredElement(n)) continue;
+      count++;
+      const l = n.nodeType === 3 ? (n.nodeValue || '').length : (n.textContent || '').length;
+      if (count === 1) firstLen = l;
+      lastLen = l;
+    }
+    return `${count}:${firstLen}:${lastLen}`;
   }
 
   function appendInlineFormatted(parent, lineText, doc) {
@@ -160,8 +324,13 @@
   }
 
   function renderSafeMarkdownDom(container, markdownText) {
+    const hasStreamChild = Boolean(container.querySelector && container.querySelector('.ag-prism-thought-stream'));
+    if (!hasStreamChild && container.getAttribute && container.getAttribute('data-raw-zh') === markdownText) {
+      return;
+    }
     const doc = container.ownerDocument || document;
     while (container.firstChild) container.removeChild(container.firstChild);
+    if (container.setAttribute) container.setAttribute('data-raw-zh', markdownText);
 
     const lines = String(markdownText || '').replace(/\r\n/g, '\n').split('\n');
     let inFence = false;
@@ -236,9 +405,20 @@
     flushList();
   }
 
+  function findDirectOverlay(panel) {
+    if (!panel || !panel.children) return null;
+    for (let i = 0; i < panel.children.length; i++) {
+      const ch = panel.children[i];
+      if (ch && ch.classList && ch.classList.contains('ag-prism-thought-overlay')) {
+        return ch;
+      }
+    }
+    return null;
+  }
+
   function ensureOverlayShell(panel) {
     const doc = panel.ownerDocument || document;
-    let ov = panel.querySelector(':scope > .ag-prism-thought-overlay');
+    let ov = findDirectOverlay(panel);
     if (ov) return ov;
 
     ov = doc.createElement('div');
@@ -275,47 +455,103 @@
   }
 
   function renderPendingState(panel, message) {
+    if (!panel) return;
+    // Never regress an already-rendered panel back to a tiny pending pill (prevents height collapse jank!)
+    const existingOv = findDirectOverlay(panel);
+    if (panel.getAttribute('data-op-zh-ready') === '1' && existingOv && existingOv.getAttribute('data-pending') !== '1') {
+      return;
+    }
     const ov = ensureOverlayShell(panel);
+    ov.setAttribute('data-pending', '1');
     const body = ov.querySelector('.ag-prism-thought-body');
     if (body) {
-      while (body.firstChild) body.removeChild(body.firstChild);
-      const hint = (panel.ownerDocument || document).createElement('span');
-      hint.className = 'ag-prism-thought-pending-hint';
-      hint.textContent = message;
-      body.appendChild(hint);
+      if (body.removeAttribute) body.removeAttribute('data-raw-zh');
+      let hint = body.querySelector('.ag-prism-thought-pending-hint');
+      if (!hint) {
+        while (body.firstChild) body.removeChild(body.firstChild);
+        hint = (panel.ownerDocument || document).createElement('span');
+        hint.className = 'ag-prism-thought-pending-hint';
+        body.appendChild(hint);
+      }
+      if (hint.textContent !== message) {
+        hint.textContent = message;
+      }
     }
-    panel.setAttribute('data-op-zh-pending', '1');
+    if (panel.getAttribute('data-op-zh-pending') !== '1') {
+      panel.setAttribute('data-op-zh-pending', '1');
+    }
     panel.removeAttribute('data-op-zh-ready');
   }
 
-  function renderTranslatedText(panel, text, isPartial) {
+  function clearPendingKeepRaw(panel) {
+    if (!panel || panel.getAttribute('data-op-zh-ready') === '1') return;
+    lockedHeights.delete(panel);
+    if (panel.style) panel.style.removeProperty('min-height');
+    panel.removeAttribute('data-op-zh-pending');
+    const ov = findDirectOverlay(panel);
+    if (ov && ov.getAttribute('data-pending') === '1') {
+      ov.remove();
+    }
+  }
+
+  function renderTranslatedText(panel, text, isPartial, sig) {
+    if (!panel || typeof text !== 'string' || !text) return;
     const ov = ensureOverlayShell(panel);
+    ov.removeAttribute('data-pending');
     const body = ov.querySelector('.ag-prism-thought-body');
     if (!body) return;
 
     if (isPartial) {
       let streamEl = body.querySelector('.ag-prism-thought-stream');
-      if (!streamEl) {
-        while (body.firstChild) body.removeChild(body.firstChild);
-        streamEl = (panel.ownerDocument || document).createElement('p');
-        streamEl.className = 'ag-prism-thought-stream';
-        body.appendChild(streamEl);
+      if (
+        streamEl &&
+        streamEl.textContent === text &&
+        panel.getAttribute('data-op-zh-ready') === '1'
+      ) {
+        return;
       }
-      streamEl.textContent = text;
       const curH = panel.offsetHeight || 0;
       const nextMinH = Math.max(lockedHeights.get(panel) || 0, curH);
       if (nextMinH > 0 && panel.style) {
         lockedHeights.set(panel, nextMinH);
         panel.style.minHeight = `${nextMinH}px`;
       }
+      if (body.removeAttribute) body.removeAttribute('data-raw-zh');
+      if (!streamEl) {
+        while (body.firstChild) body.removeChild(body.firstChild);
+        streamEl = (panel.ownerDocument || document).createElement('p');
+        streamEl.className = 'ag-prism-thought-stream';
+        body.appendChild(streamEl);
+      }
+      if (streamEl.textContent !== text) {
+        streamEl.textContent = text;
+      }
     } else {
+      const prevScrollTop = typeof panel.scrollTop === 'number' ? panel.scrollTop : 0;
       renderSafeMarkdownDom(body, text);
       lockedHeights.delete(panel);
       if (panel.style) panel.style.removeProperty('min-height');
+      if (prevScrollTop > 0 && typeof panel.scrollTop === 'number') {
+        panel.scrollTop = prevScrollTop;
+      }
+      if (sig) {
+        panel.setAttribute('data-op-zh-sig', sig);
+        const meta = panelMeta.get(panel) || {};
+        meta.doneSig = sig;
+        meta.readyStamp = quickPanelStamp(panel);
+        panelMeta.set(panel, meta);
+      }
     }
 
     panel.removeAttribute('data-op-zh-pending');
-    panel.setAttribute('data-op-zh-ready', '1');
+    if (panel.getAttribute('data-op-zh-ready') !== '1') {
+      panel.setAttribute('data-op-zh-ready', '1');
+    }
+  }
+
+  function computeSig(rawText, mode) {
+    const presetTag = mode === 'machine' ? 'mt' : `ai_${activeStylePreset || 'auto'}`;
+    return `${presetTag}:${hashKey(rawText, 'sig')}`;
   }
 
   function findCachedTranslation(rawText, mode) {
@@ -325,7 +561,6 @@
     if (activeStylePreset) {
       const kExact = hashKey(rawText, `ai_${activeStylePreset}`);
       if (memCache.has(kExact)) return memCache.get(kExact) || '';
-      return '';
     }
     const kCustom = hashKey(rawText, 'ai_custom');
     const kTech = hashKey(rawText, 'ai_technical');
@@ -333,123 +568,262 @@
     return memCache.get(kCustom) || memCache.get(kTech) || memCache.get(kConcise) || '';
   }
 
-  function triggerPanelTranslation(panel, rawText, mode) {
+  function bindPanelToInflight(entry, panel, expanded) {
+    if (panel && !entry.panels.includes(panel)) {
+      entry.panels.push(panel);
+    }
+    if (panel && expanded) {
+      if (entry.lastPartial) {
+        renderTranslatedText(panel, entry.lastPartial, true, null);
+      } else {
+        renderPendingState(
+          panel,
+          entry.mode === 'machine' ? '正在极速机翻思考过程…' : '正在通过 AI 转译并润色思考过程…'
+        );
+      }
+    }
+  }
+
+  function startOrJoinTranslation(panel, rawText, mode, sig, srcSkelHash, expanded) {
     const cached = findCachedTranslation(rawText, mode);
     if (cached) {
-      renderTranslatedText(panel, cached, false);
+      if (panel && expanded) {
+        renderTranslatedText(panel, cached, false, sig);
+      }
       return;
+    }
+
+    if (isSigInCooldown(sig)) {
+      if (panel && expanded) clearPendingKeepRaw(panel);
+      return;
+    }
+
+    const existing = inflightBySig.get(sig);
+    if (existing && Date.now() - existing.startedAt <= 75000) {
+      bindPanelToInflight(existing, panel, expanded);
+      return;
+    }
+    if (existing) {
+      if (existing.flushTimer) clearTimeout(existing.flushTimer);
+      inflightBySig.delete(sig);
     }
 
     const br = getBridge();
     if (!br || typeof br.translateStream !== 'function') return;
 
-    const meta = panelMeta.get(panel) || {};
-    const sig = `${mode}:${hashKey(rawText, 'sig')}`;
-    if (meta.inflightSig === sig || meta.doneSig === sig) return;
+    const entry = {
+      sig,
+      srcSkelHash,
+      mode,
+      startedAt: Date.now(),
+      lastPartial: '',
+      lastFlushAt: 0,
+      pendingPartial: '',
+      flushTimer: null,
+      panels: panel ? [panel] : [],
+    };
+    inflightBySig.set(sig, entry);
 
-    meta.inflightSig = sig;
-    panelMeta.set(panel, meta);
+    if (panel && expanded) {
+      renderPendingState(
+        panel,
+        mode === 'machine' ? '正在极速机翻思考过程…' : '正在通过 AI 转译并润色思考过程…'
+      );
+    }
 
-    renderPendingState(
-      panel,
-      mode === 'machine' ? '正在极速机翻思考过程…' : '正在通过 AI 转译并润色思考过程…'
-    );
-
-    let pendingPartial = '';
-    const flushPartial = () => {
-      flushTimers.delete(panel);
-      if (!panel.isConnected || !pendingPartial) return;
-      renderTranslatedText(panel, pendingPartial, true);
+    const flushPartialToPanels = (partialStr) => {
+      const trimmed = String(partialStr || '').trimStart();
+      if (!trimmed) return;
+      entry.lastPartial = trimmed;
+      entry.lastFlushAt = Date.now();
+      entry.pendingPartial = '';
+      for (const p of entry.panels) {
+        if (!p || !p.isConnected) continue;
+        // Verify panel still holds the same thought skeleton (prevents misplacement if React recycled the DOM node!)
+        const curRaw = extractRawEnglishText(p);
+        if (curRaw && hashKey(curRaw, 'sig') !== entry.srcSkelHash) continue;
+        renderTranslatedText(p, trimmed, true, null);
+      }
     };
 
     br.translateStream(
       { text: rawText, mode },
       (partial) => {
-        if (!panel.isConnected || typeof partial !== 'string' || !partial) return;
-        pendingPartial = partial;
-        if (!flushTimers.has(panel)) {
-          flushTimers.set(panel, setTimeout(flushPartial, STREAM_FLUSH_MS));
+        if (currentMode === 'off' || typeof partial !== 'string' || !partial.trim()) return;
+        const now = Date.now();
+        if (entry.lastFlushAt === 0 || now - entry.lastFlushAt >= STREAM_FLUSH_MS) {
+          if (entry.flushTimer) {
+            clearTimeout(entry.flushTimer);
+            entry.flushTimer = null;
+          }
+          flushPartialToPanels(partial);
+        } else {
+          entry.pendingPartial = partial;
+          if (!entry.flushTimer) {
+            const delay = Math.max(12, STREAM_FLUSH_MS - (now - entry.lastFlushAt));
+            entry.flushTimer = setTimeout(() => {
+              entry.flushTimer = null;
+              if (currentMode !== 'off' && entry.pendingPartial) {
+                flushPartialToPanels(entry.pendingPartial);
+              }
+            }, delay);
+          }
         }
       }
     )
       .then((res) => {
-        const ft = flushTimers.get(panel);
-        if (ft) {
-          clearTimeout(ft);
-          flushTimers.delete(panel);
+        if (entry.flushTimer) {
+          clearTimeout(entry.flushTimer);
+          entry.flushTimer = null;
         }
-        const curMeta = panelMeta.get(panel) || {};
-        curMeta.inflightSig = '';
-        if (!panel.isConnected) return;
+        if (inflightBySig.get(sig) === entry) {
+          inflightBySig.delete(sig);
+        }
+        if (currentMode === 'off') return;
 
-        if (res && res.ok && res.text) {
-          curMeta.doneSig = sig;
-          panelMeta.set(panel, curMeta);
-          if (res.key) memCache.set(res.key, res.text);
-          else memCache.set(hashKey(rawText, mode === 'machine' ? 'mt' : 'ai_technical'), res.text);
-          renderTranslatedText(panel, res.text, false);
+        if (res && res.ok && typeof res.text === 'string' && res.text.trim()) {
+          const finalZh = res.text.trim();
+          failedSigs.delete(sig);
+          const fallbackCacheKey = hashKey(rawText, mode === 'machine' ? 'mt' : `ai_${activeStylePreset || 'technical'}`);
+          putMemCache(res.key || fallbackCacheKey, finalZh, true);
+
+          for (const p of entry.panels) {
+            if (!p || !p.isConnected) continue;
+            const curRaw = extractRawEnglishText(p);
+            if (curRaw && hashKey(curRaw, 'sig') !== entry.srcSkelHash) continue;
+            renderTranslatedText(p, finalZh, false, sig);
+          }
+          // Rescan once in case user expanded a matching collapsed panel while request was in flight
+          scheduleScan(30);
         } else {
-          panelMeta.set(panel, curMeta);
-          const ov = panel.querySelector(':scope > .ag-prism-thought-overlay[data-op-thought="1"]');
-          if (ov) ov.remove();
-          panel.removeAttribute('data-op-zh-pending');
-          panel.removeAttribute('data-op-zh-ready');
-          if (panel.style) panel.style.removeProperty('min-height');
+          recordSigFailure(sig);
+          for (const p of entry.panels) {
+            if (p && p.isConnected) clearPendingKeepRaw(p);
+          }
         }
       })
       .catch(() => {
-        const curMeta = panelMeta.get(panel) || {};
-        curMeta.inflightSig = '';
-        panelMeta.set(panel, curMeta);
+        if (entry.flushTimer) {
+          clearTimeout(entry.flushTimer);
+          entry.flushTimer = null;
+        }
+        if (inflightBySig.get(sig) === entry) {
+          inflightBySig.delete(sig);
+        }
+        recordSigFailure(sig);
+        for (const p of entry.panels) {
+          if (p && p.isConnected) clearPendingKeepRaw(p);
+        }
       });
   }
 
   function processSingleTrigger(btn, allowPreloadCollapsed) {
+    if (!btn) return;
     const expanded = btn.getAttribute('aria-expanded') === 'true';
     if (!expanded && !allowPreloadCollapsed) return;
 
     const panel = btn.nextElementSibling;
-    if (!panel || panel.tagName !== 'DIV') return;
+    if (!panel || String(panel.tagName || '').toUpperCase() !== 'DIV') return;
+
+    const streaming = isTriggerStreaming(btn);
+
+    // O(1) fast-path: if panel is already rendered for current mode, not streaming, and child stamp unchanged -> skip!
+    if (expanded && !streaming && panel.getAttribute('data-op-zh-ready') === '1') {
+      const existingMeta = panelMeta.get(panel);
+      const curStamp = quickPanelStamp(panel);
+      if (
+        existingMeta &&
+        existingMeta.readyStamp === curStamp &&
+        existingMeta.doneSig &&
+        existingMeta.doneSig === panel.getAttribute('data-op-zh-sig')
+      ) {
+        return;
+      }
+    }
+
+    const rawText = extractRawEnglishText(panel);
+    if (!rawText || isMostlyZh(rawText)) {
+      if (panel.getAttribute('data-op-zh-pending') === '1') clearPendingKeepRaw(panel);
+      return;
+    }
+
+    const srcSkelHash = hashKey(rawText, 'sig');
+    const sig = computeSig(rawText, currentMode);
+
+    // Exact signature idempotence check: never rebuild DOM if already rendered with identical signature!
+    if (expanded && !streaming && panel.getAttribute('data-op-zh-ready') === '1' && panel.getAttribute('data-op-zh-sig') === sig) {
+      const meta = panelMeta.get(panel) || {};
+      meta.doneSig = sig;
+      meta.readyStamp = quickPanelStamp(panel);
+      panelMeta.set(panel, meta);
+      return;
+    }
 
     const now = Date.now();
-    const streaming = isTriggerStreaming(btn);
-    const rawText = extractRawEnglishText(panel);
-    if (!rawText || isMostlyZh(rawText)) return;
-
-    const meta = panelMeta.get(panel) || {
-      lastRaw: '',
-      lastChangeAt: now,
-      finishedAt: streaming ? 0 : now - FINISH_GATE_MS,
-      inflightSig: '',
-      doneSig: '',
-    };
-
-    if (meta.lastRaw !== rawText) {
-      meta.lastRaw = rawText;
+    let meta = panelMeta.get(panel);
+    if (!meta) {
+      meta = {
+        lastSkelHash: srcSkelHash,
+        lastChangeAt: now,
+        sawStreaming: streaming,
+        mutated: streaming,
+        finishedAt: streaming ? 0 : now - FINISH_GATE_MS,
+        doneSig: '',
+        readyStamp: '',
+      };
+    } else if (meta.lastSkelHash !== srcSkelHash) {
+      meta.lastSkelHash = srcSkelHash;
       meta.lastChangeAt = now;
+      meta.mutated = true;
     }
+
     if (streaming) {
+      meta.sawStreaming = true;
+      meta.mutated = true;
       meta.finishedAt = 0;
       panelMeta.set(panel, meta);
+      const prevT = waitTimers.get(panel);
+      if (prevT) {
+        clearTimeout(prevT);
+        waitTimers.delete(panel);
+      }
       if (expanded) {
         renderPendingState(panel, '思考流式输出中，完结后自动转译…');
       }
       return;
     }
 
-    if (!meta.finishedAt) {
+    if (meta.sawStreaming && !meta.finishedAt) {
+      meta.sawStreaming = false;
       meta.finishedAt = now;
+    } else if (!meta.finishedAt) {
+      meta.finishedAt = now - FINISH_GATE_MS;
     }
     panelMeta.set(panel, meta);
 
+    // Instant cache hit bypasses stability wait gates cleanly
     const cached = findCachedTranslation(rawText, currentMode);
     if (cached) {
-      if (expanded) renderTranslatedText(panel, cached, false);
+      const prevT = waitTimers.get(panel);
+      if (prevT) {
+        clearTimeout(prevT);
+        waitTimers.delete(panel);
+      }
+      if (expanded) {
+        renderTranslatedText(panel, cached, false, sig);
+      }
       return;
     }
 
-    const finishRem = Math.max(0, FINISH_GATE_MS - (now - meta.finishedAt));
-    const quietRem = Math.max(0, QUIET_GATE_MS - (now - meta.lastChangeAt));
+    // Reattach immediately if an identical flight is already running (e.g. panel just remounted/expanded)
+    const activeFlight = inflightBySig.get(sig);
+    if (activeFlight && now - activeFlight.startedAt <= 75000) {
+      bindPanelToInflight(activeFlight, panel, expanded);
+      return;
+    }
+
+    const finishRem = meta.mutated ? Math.max(0, FINISH_GATE_MS - (now - meta.finishedAt)) : 0;
+    const quietRem = meta.mutated ? Math.max(0, QUIET_GATE_MS - (now - meta.lastChangeAt)) : 0;
     const waitMs = Math.max(finishRem, quietRem);
 
     if (waitMs > 0) {
@@ -470,29 +844,7 @@
       return;
     }
 
-    if (expanded) {
-      triggerPanelTranslation(panel, rawText, currentMode);
-    } else if (allowPreloadCollapsed) {
-      const br = getBridge();
-      if (br && typeof br.translateStream === 'function') {
-        const sig = `${currentMode}:${hashKey(rawText, 'sig')}`;
-        if (meta.inflightSig !== sig && meta.doneSig !== sig) {
-          meta.inflightSig = sig;
-          panelMeta.set(panel, meta);
-          br.translateStream({ text: rawText, mode: currentMode }, null)
-            .then((res) => {
-              meta.inflightSig = '';
-              if (res && res.ok && res.text) {
-                meta.doneSig = sig;
-                if (res.key) memCache.set(res.key, res.text);
-              }
-            })
-            .catch(() => {
-              meta.inflightSig = '';
-            });
-        }
-      }
-    }
+    startOrJoinTranslation(panel, rawText, currentMode, sig, srcSkelHash, expanded);
   }
 
   function scanNow() {
@@ -503,11 +855,13 @@
     const lastIdx = triggers.length - 1;
     for (let i = 0; i <= lastIdx; i++) {
       const allowPreload = triggerTiming === 'preload' && i === lastIdx;
-      processSingleTrigger(triggers[i], allowPreload);
+      const btn = triggers[i];
+      if (!allowPreload && btn.getAttribute('aria-expanded') !== 'true') continue;
+      processSingleTrigger(btn, allowPreload);
     }
   }
 
-  function scheduleScan(delayMs = 40) {
+  function scheduleScan(delayMs = 55) {
     if (currentMode === 'off') return;
     if (scanTimer) return;
     scanTimer = setTimeout(scanNow, delayMs);
@@ -539,13 +893,16 @@
           .querySelectorAll('button[data-testid="thinking-collapsible-trigger"][aria-expanded="true"]')
           .forEach((b) => {
             const p = b.nextElementSibling;
-            if (p) panelMeta.delete(p);
+            if (p) {
+              p.removeAttribute('data-op-zh-sig');
+              panelMeta.delete(p);
+            }
           });
       }
-      scheduleScan(20);
+      scheduleScan(25);
     },
     scan() {
-      scheduleScan(30);
+      scheduleScan(45);
     },
     scanImmediate() {
       if (scanTimer) {
@@ -566,7 +923,21 @@
       const br = getBridge();
       if (!br) return Promise.resolve({ ok: false, offline: true });
       return br.call({ action: 'save-config', ...input }).then((res) => {
-        if (res && res.stylePreset) activeStylePreset = res.stylePreset;
+        if (res && res.stylePreset && res.stylePreset !== activeStylePreset) {
+          activeStylePreset = res.stylePreset;
+          if (typeof document !== 'undefined') {
+            document
+              .querySelectorAll('button[data-testid="thinking-collapsible-trigger"][aria-expanded="true"]')
+              .forEach((b) => {
+                const p = b.nextElementSibling;
+                if (p) {
+                  p.removeAttribute('data-op-zh-sig');
+                  panelMeta.delete(p);
+                }
+              });
+          }
+          scheduleScan(25);
+        }
         return res;
       });
     },

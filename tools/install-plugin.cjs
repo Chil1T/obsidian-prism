@@ -97,12 +97,16 @@ async function verifyLiveWindowAttach(targetCdp, portOverride = null) {
     let session = null;
     try {
       session = await targetCdp.CdpSession.connect(page.webSocketDebuggerUrl, 2500);
-      const state = await session.evaluate(`(() => ({
+      const state = await session.evaluate(
+        `(() => ({
         hasPrism: Boolean(window.__agPrism),
         hasRepoBridge: Boolean(window.__agPrismRepoBridge),
         version: document.documentElement?.getAttribute('data-ag-prism') || null,
         hasStyle: Boolean(document.getElementById('ag-prism-css')),
-      }))()`);
+      }))()`,
+        false,
+        2000
+      );
       if (state && state.hasPrism && state.hasStyle) {
         attachedPages.push({
           id: page.id,

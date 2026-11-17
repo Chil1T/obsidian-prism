@@ -1773,6 +1773,9 @@
       mascotState.root.parentElement.removeChild(mascotState.root);
     }
     if (mascotState.anchor) mascotState.anchor.removeAttribute('data-ag-cs-crab-anchor');
+    if (document.documentElement?.hasAttribute('data-ag-cs-has-crab')) {
+      document.documentElement.removeAttribute('data-ag-cs-has-crab');
+    }
     mascotState.root = null;
     mascotState.rig = null;
     mascotState.anchor = null;
@@ -1781,8 +1784,22 @@
 
   function syncCrab(activeCard, activeInfo, modelInfo) {
     const enabled = isMascotEnabled();
-    if (!enabled || !activeCard) {
+    if (!enabled) {
       unmountCrab();
+      return;
+    }
+    if (!activeCard) {
+      // Transient route switch: detach stage from stale anchor without disposing rig/chroma progress!
+      if (mascotState.root && mascotState.root.parentElement) {
+        mascotState.root.parentElement.removeChild(mascotState.root);
+      }
+      if (mascotState.anchor) {
+        mascotState.anchor.removeAttribute('data-ag-cs-crab-anchor');
+        mascotState.anchor = null;
+      }
+      if (document.documentElement?.hasAttribute('data-ag-cs-has-crab')) {
+        document.documentElement.removeAttribute('data-ag-cs-has-crab');
+      }
       return;
     }
     if (!mascotState.root) {
@@ -1798,6 +1815,9 @@
       activeCard.setAttribute('data-ag-cs-crab-anchor', 'composer');
       activeCard.appendChild(mascotState.root);
       mascotState.anchor = activeCard;
+    }
+    if (document.documentElement) {
+      setAttrIfChanged(document.documentElement, 'data-ag-cs-has-crab', '1');
     }
 
     const camp = modelInfo?.camp || 'gemini';
@@ -2139,13 +2159,35 @@
     const triggers = document.querySelectorAll('[data-testid="thinking-collapsible-trigger"]');
     if (cfg.composerRestyle === false) {
       document.querySelectorAll('.ag-cs-thinking-spark').forEach((n) => n.remove());
+      triggers.forEach((t) => {
+        if (t.hasAttribute('data-ag-cs-spark-streaming')) t.removeAttribute('data-ag-cs-spark-streaming');
+      });
       return;
     }
     const brand = primaryModelInfo?.brand || 'gemini';
-    triggers.forEach((trig) => {
-      let spark = trig.querySelector('.ag-cs-thinking-spark');
+    const len = triggers.length;
+    for (let i = 0; i < len; i++) {
+      const trig = triggers[i];
+      let spark = trig.firstElementChild?.classList?.contains('ag-cs-thinking-spark')
+        ? trig.firstElementChild
+        : trig.querySelector('.ag-cs-thinking-spark');
+      // Fast-skip historical settled triggers in long conversations (O(1) attribute check, 0 textContent regex)
+      if (
+        i < len - 2 &&
+        spark &&
+        spark.getAttribute('data-state') === 'done' &&
+        spark.getAttribute('data-brand') === brand &&
+        !trig.hasAttribute('data-ag-cs-spark-streaming')
+      ) {
+        continue;
+      }
       const txt = String(trig.textContent || '');
       const st = /\.\.\.|…|正在|思考中|thinking/i.test(txt) ? 'streaming' : 'done';
+      if (st === 'streaming') {
+        setAttrIfChanged(trig, 'data-ag-cs-spark-streaming', '1');
+      } else if (trig.hasAttribute('data-ag-cs-spark-streaming')) {
+        trig.removeAttribute('data-ag-cs-spark-streaming');
+      }
       if (!spark) {
         spark = document.createElement('span');
         spark.className = 'ag-cs-thinking-spark';
@@ -2158,7 +2200,7 @@
         spark.setAttribute('data-state', st);
         spark.innerHTML = buildBrandMarkSvg(brand, 13, 'auto', false);
       }
-    });
+    }
   }
 
   // ── Smart Two-Tier Auto-Unfold on [data-testid="worked-for-collapsible"] ──
@@ -2835,7 +2877,7 @@
     syncHeroCCaustics(measured?.visibleChangedHeaders);
   }
 
-  // ── Dual-Track Smart Streaming Engine (52ms Coalescing + Thought Overlay Zero-Flicker Guard + 250ms Pure-Text Unwrap) ───
+  // ── Dual-Track Smart Streaming Engine (Zero-Splice Element Class Tagging — 100% React Fiber Safe!) ───
   const STREAM_BATCH_MS = 52;
   const CODE_OR_TABLE_TAGS = new Set(['PRE', 'CODE', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TH', 'TD']);
   let streamObserver = null;
@@ -2843,9 +2885,6 @@
   let streamMutating = false;
   let lastProseWrapAt = -1000;
   let lastThoughtWrapAt = -1000;
-  const activeStreamSpans = new Set();
-  const textNodeLengths = new WeakMap();
-  const pendingTailByTextNode = new WeakMap();
 
   function isInsideCodeOrTable(node, stopAt) {
     let cur = isElementLike(node) ? node : node?.parentElement;
@@ -2856,100 +2895,12 @@
     return null;
   }
 
-  function findAncestorThoughtPanel(node) {
-    let cur = isElementLike(node) ? node : node?.parentElement;
-    while (cur && cur !== document.body) {
-      const prev = cur.previousElementSibling;
-      if (prev && prev.getAttribute?.('data-testid') === 'thinking-collapsible-trigger') {
-        return cur;
-      }
-      if (cur.hasAttribute?.('data-op-zh-ready') || cur.hasAttribute?.('data-op-zh-pending')) {
-        return cur;
-      }
-      cur = cur.parentElement;
-    }
-    return null;
-  }
-
-  function unwrapStreamSpan(span) {
-    if (!span) return;
-    activeStreamSpans.delete(span);
-    if (span._unwrapTimer) {
-      clearTimeout(span._unwrapTimer);
-      transientTimers.delete(span._unwrapTimer);
-      span._unwrapTimer = 0;
-    }
-    const parent = span.parentNode || span.parentElement;
-    if (!parent) return;
-
-    // 思考面板隔离保护：绝不触碰已由中文思考转译接管的面板内部任何子节点与 normalize()
-    if (isThoughtIsolatedNode(span) || isThoughtIsolatedNode(parent)) return;
-    const hostThoughtPanel = findAncestorThoughtPanel(parent);
-    if (hostThoughtPanel && isManagedThoughtPanel(hostThoughtPanel)) return;
-
-    const prevMut = streamMutating;
-    const prevInt = internalDomMutating;
-    streamMutating = true;
-    internalDomMutating = true;
-    try {
-      const srcTn = span._srcTextNode;
-      if (srcTn && srcTn.parentNode === parent) {
-        const rec = pendingTailByTextNode.get(srcTn);
-        if (rec && rec.span === span) {
-          pendingTailByTextNode.delete(srcTn);
-          if (srcTn.nodeValue === rec.prefix) {
-            srcTn.nodeValue = rec.prefix + (span.textContent || '');
-            textNodeLengths.set(srcTn, srcTn.nodeValue.length);
-          }
-        }
-        parent.removeChild(span);
-      } else {
-        let moved = false;
-        while (span.firstChild) {
-          parent.insertBefore(span.firstChild, span);
-          moved = true;
-        }
-        if (!moved && typeof span.textContent === 'string' && span.textContent) {
-          if (typeof document.createTextNode === 'function') {
-            parent.insertBefore(document.createTextNode(span.textContent), span);
-          } else if (typeof span._virtualHostText === 'string') {
-            const restText = (parent._text || '') + span.textContent;
-            parent.removeChild(span);
-            if (!parent.children || parent.children.length === 0) parent._text = restText;
-            return;
-          }
-        }
-        parent.removeChild(span);
-      }
-      if (typeof parent.normalize === 'function') {
-        try {
-          parent.normalize();
-        } catch {}
-      }
-    } catch {} finally {
-      streamMutating = prevMut;
-      internalDomMutating = prevInt;
-    }
-  }
-
   function flushAllStreamArtifacts() {
     const prevInt = internalDomMutating;
     internalDomMutating = true;
     try {
-      for (const sp of Array.from(activeStreamSpans)) {
-        unwrapStreamSpan(sp);
-      }
-      activeStreamSpans.clear();
-      document.querySelectorAll('.ag-cs-stream-chunk').forEach((sp) => unwrapStreamSpan(sp));
-      document.querySelectorAll('.ag-cs-thought-chunk').forEach((el) => {
-        const tp = findAncestorThoughtPanel(el);
-        if (tp && isManagedThoughtPanel(tp)) return;
-        if (String(el.tagName || '').toUpperCase() === 'SPAN' && el.hasAttribute('data-ag-cs-transient-chunk')) {
-          unwrapStreamSpan(el);
-        } else {
-          el.classList?.remove?.('ag-cs-thought-chunk');
-        }
-      });
+      document.querySelectorAll('.ag-cs-stream-chunk').forEach((el) => el.classList?.remove?.('ag-cs-stream-chunk'));
+      document.querySelectorAll('.ag-cs-thought-chunk').forEach((el) => el.classList?.remove?.('ag-cs-thought-chunk'));
       document.querySelectorAll('.ag-cs-code-scan').forEach((el) => el.classList?.remove?.('ag-cs-code-scan'));
       document
         .querySelectorAll('[data-ag-cs-thought-streaming]')
@@ -2957,69 +2908,6 @@
     } finally {
       internalDomMutating = prevInt;
     }
-  }
-
-  function registerTransientSpan(span, ms = 250) {
-    activeStreamSpans.add(span);
-    span._unwrapTimer = scheduleTransient(() => unwrapStreamSpan(span), ms);
-  }
-
-  function wrapAddedTextNode(tn, clsName, ms) {
-    const parent = tn?.parentNode || tn?.parentElement;
-    if (!parent || !tn.nodeValue || !tn.nodeValue.trim()) return false;
-    streamMutating = true;
-    internalDomMutating = true;
-    try {
-      const sp = document.createElement('span');
-      sp.className = clsName;
-      sp.setAttribute('data-ag-cs-transient-chunk', '1');
-      parent.insertBefore(sp, tn);
-      sp.appendChild(tn);
-      textNodeLengths.set(tn, tn.nodeValue.length);
-      registerTransientSpan(sp, ms);
-      return true;
-    } catch {
-      return false;
-    } finally {
-      streamMutating = false;
-      internalDomMutating = false;
-    }
-  }
-
-  function wrapElementDirectText(el, clsName, ms) {
-    if (!el || CODE_OR_TABLE_TAGS.has(String(el.tagName || '').toUpperCase())) return false;
-    if (el.querySelector?.('pre, code, table')) return false;
-    if (el.childNodes && el.childNodes.length > 0) {
-      let wrapped = false;
-      for (const ch of Array.from(el.childNodes)) {
-        if (ch.nodeType === 3 && ch.nodeValue && ch.nodeValue.trim()) {
-          if (wrapAddedTextNode(ch, clsName, ms)) wrapped = true;
-        }
-      }
-      return wrapped;
-    }
-    if ((!el.children || el.children.length === 0) && typeof el._text === 'string' && el._text.trim()) {
-      streamMutating = true;
-      internalDomMutating = true;
-      try {
-        const raw = el._text;
-        const sp = document.createElement('span');
-        sp.className = clsName;
-        sp.setAttribute('data-ag-cs-transient-chunk', '1');
-        sp.textContent = raw;
-        sp._virtualHostText = raw;
-        el._text = '';
-        el.appendChild(sp);
-        registerTransientSpan(sp, ms);
-        return true;
-      } catch {
-        return false;
-      } finally {
-        streamMutating = false;
-        internalDomMutating = false;
-      }
-    }
-    return false;
   }
 
   function findExpandedStreamingThoughtBody(node) {
@@ -3039,12 +2927,12 @@
     return null;
   }
 
-  function markCodeScanElement(el) {
-    if (!el || !el.classList || el.classList.contains('ag-cs-code-scan')) return;
+  function markTransientStreamClass(el, clsName, durationMs = 240) {
+    if (!el || !el.classList || el.classList.contains(clsName)) return false;
     const prevInt = internalDomMutating;
     internalDomMutating = true;
     try {
-      el.classList.add('ag-cs-code-scan');
+      el.classList.add(clsName);
     } finally {
       internalDomMutating = prevInt;
     }
@@ -3052,11 +2940,16 @@
       const p = internalDomMutating;
       internalDomMutating = true;
       try {
-        el.classList?.remove?.('ag-cs-code-scan');
+        el.classList?.remove?.(clsName);
       } finally {
         internalDomMutating = p;
       }
-    }, 240);
+    }, durationMs);
+    return true;
+  }
+
+  function markCodeScanElement(el) {
+    markTransientStreamClass(el, 'ag-cs-code-scan', 240);
   }
 
   function onStreamMutations(mutations) {
@@ -3064,7 +2957,7 @@
     const now = performance.now();
 
     for (const m of mutations) {
-      // 第一重隔离：内置中文思考转译相关突变直接跳过，0 同步、0 包裹
+      if (m.type !== 'childList' || !m.addedNodes || m.addedNodes.length === 0) continue;
       if (isThoughtMutationRecord(m)) continue;
 
       const target = m.target;
@@ -3081,31 +2974,12 @@
 
       const thoughtBody = findExpandedStreamingThoughtBody(target);
       if (thoughtBody) {
-        // 第二重隔离：只要该思考面板由 内置思考转译模块托管（含隐藏英文节点与中文浮层），一律严禁触碰任何子节点！
         if (isManagedThoughtPanel(thoughtBody)) continue;
-
-        if (m.type === 'childList' && m.addedNodes) {
-          for (const added of m.addedNodes) {
-            if (isThoughtIsolatedNode(added)) continue;
-            if (isElementLike(added) && added.classList && !added.hasAttribute?.('data-ag-cs-transient-chunk')) {
-              const p = internalDomMutating;
-              internalDomMutating = true;
-              try {
-                added.classList.add('ag-cs-thought-chunk');
-              } finally {
-                internalDomMutating = p;
-              }
-              scheduleTransient(() => {
-                const p2 = internalDomMutating;
-                internalDomMutating = true;
-                try {
-                  added.classList?.remove?.('ag-cs-thought-chunk');
-                } finally {
-                  internalDomMutating = p2;
-                }
-              }, 200);
-            } else if (added.nodeType === 3 && now - lastThoughtWrapAt >= STREAM_BATCH_MS) {
-              if (wrapAddedTextNode(added, 'ag-cs-thought-chunk', 220)) lastThoughtWrapAt = now;
+        for (const added of m.addedNodes) {
+          if (isThoughtIsolatedNode(added)) continue;
+          if (isElementLike(added) && now - lastThoughtWrapAt >= STREAM_BATCH_MS) {
+            if (markTransientStreamClass(added, 'ag-cs-thought-chunk', 200)) {
+              lastThoughtWrapAt = now;
             }
           }
         }
@@ -3117,95 +2991,29 @@
 
       const codeCtx = isInsideCodeOrTable(target, proseRoot);
       if (codeCtx) {
-        if (m.type === 'childList' && m.addedNodes && m.addedNodes.length > 0) {
-          let marked = false;
-          for (const added of m.addedNodes) {
-            if (isElementLike(added)) {
-              markCodeScanElement(added);
-              marked = true;
-            }
+        let marked = false;
+        for (const added of m.addedNodes) {
+          if (isElementLike(added)) {
+            markCodeScanElement(added);
+            marked = true;
           }
-          if (!marked) markCodeScanElement(codeCtx);
-        } else {
-          markCodeScanElement(codeCtx);
         }
+        if (!marked) markCodeScanElement(codeCtx);
         continue;
       }
 
-      if (m.type === 'childList' && m.addedNodes) {
-        for (const added of m.addedNodes) {
-          if (isElementLike(added)) {
-            const tag = String(added.tagName || '').toUpperCase();
-            if (CODE_OR_TABLE_TAGS.has(tag) || added.querySelector?.('pre, code, table')) {
-              markCodeScanElement(added);
-              continue;
-            }
-            if (now - lastProseWrapAt >= STREAM_BATCH_MS) {
-              if (wrapElementDirectText(added, 'ag-cs-stream-chunk', 250)) {
-                lastProseWrapAt = now;
-              }
-            }
-          } else if (added.nodeType === 3) {
-            const val = added.nodeValue || '';
-            textNodeLengths.set(added, val.length);
-            if (val.trim() && now - lastProseWrapAt >= STREAM_BATCH_MS) {
-              if (wrapAddedTextNode(added, 'ag-cs-stream-chunk', 250)) {
-                lastProseWrapAt = now;
-              }
-            }
+      for (const added of m.addedNodes) {
+        if (!isElementLike(added)) continue;
+        const tag = String(added.tagName || '').toUpperCase();
+        if (CODE_OR_TABLE_TAGS.has(tag) || added.querySelector?.('pre, code, table')) {
+          markCodeScanElement(added);
+          continue;
+        }
+        if (now - lastProseWrapAt >= STREAM_BATCH_MS) {
+          if (markTransientStreamClass(added, 'ag-cs-stream-chunk', 240)) {
+            lastProseWrapAt = now;
           }
         }
-      } else if (m.type === 'characterData' && target.nodeType === 3) {
-        const full = target.nodeValue || '';
-        const pending = pendingTailByTextNode.get(target);
-        let prevLen = textNodeLengths.get(target) ?? 0;
-        if (pending) {
-          if (full === pending.prefix) continue;
-          prevLen = pending.fullLen;
-          pendingTailByTextNode.delete(target);
-          streamMutating = true;
-          internalDomMutating = true;
-          try {
-            if (pending.span._unwrapTimer) {
-              clearTimeout(pending.span._unwrapTimer);
-              transientTimers.delete(pending.span._unwrapTimer);
-            }
-            activeStreamSpans.delete(pending.span);
-            pending.span.parentNode?.removeChild?.(pending.span);
-          } catch {} finally {
-            streamMutating = false;
-            internalDomMutating = false;
-          }
-        }
-        if (full.length > prevLen && prevLen > 0 && now - lastProseWrapAt >= STREAM_BATCH_MS && target.parentNode) {
-          const prefix = full.slice(0, prevLen);
-          const tail = full.slice(prevLen);
-          if (tail.trim()) {
-            streamMutating = true;
-            internalDomMutating = true;
-            try {
-              target.nodeValue = prefix;
-              const sp = document.createElement('span');
-              sp.className = 'ag-cs-stream-chunk';
-              sp.setAttribute('data-ag-cs-transient-chunk', '1');
-              sp.textContent = tail;
-              sp._srcTextNode = target;
-              target.parentNode.insertBefore(sp, target.nextSibling);
-              pendingTailByTextNode.set(target, { span: sp, prefix, fullLen: full.length });
-              textNodeLengths.set(target, full.length);
-              registerTransientSpan(sp, 250);
-              lastProseWrapAt = now;
-            } catch {
-              target.nodeValue = full;
-              textNodeLengths.set(target, full.length);
-            } finally {
-              streamMutating = false;
-              internalDomMutating = false;
-            }
-            continue;
-          }
-        }
-        textNodeLengths.set(target, full.length);
       }
     }
   }
@@ -3250,7 +3058,7 @@
     if (streamObserver && streamObservedRoot !== formalConv) {
       try {
         streamObserver.disconnect();
-        streamObserver.observe(formalConv, { childList: true, subtree: true, characterData: true });
+        streamObserver.observe(formalConv, { childList: true, subtree: true });
         streamObservedRoot = formalConv;
       } catch {}
     }
@@ -3535,6 +3343,7 @@
   // ── Pointer Tracking for Prism Rim & Orchestrator Crystal Bar (FastDOM Read->Write) ──
   let lastPointerPos = { x: -9999, y: -9999 };
   let prismRaf = 0;
+  let lastPrismPointerAt = 0;
 
   function flushPrismPointer() {
     prismRaf = 0;
@@ -3604,10 +3413,11 @@
     if (destroyed) return;
     lastPointerPos.x = Number(ev.clientX);
     lastPointerPos.y = Number(ev.clientY);
-    if (!prismRaf && typeof requestAnimationFrame === 'function') {
+    const now = performance.now();
+    if (!motionReduced() && !prismRaf && now - lastPrismPointerAt >= 28 && typeof requestAnimationFrame === 'function') {
+      lastPrismPointerAt = now;
       prismRaf = requestAnimationFrame(flushPrismPointer);
     }
-    const now = performance.now();
     if (now - mascotState.lastActivityAt >= 2000) {
       mascotState.lastActivityAt = now;
       if (mascotState.rig && typeof mascotState.rig.notify === 'function') {
@@ -3666,6 +3476,16 @@
   function onWinClick(ev) {
     if (destroyed || !ev?.target?.closest) return;
     if (isThoughtIsolatedNode(ev.target)) return;
+
+    const pulseClicked =
+      ev.target?.id === 'ag-pulse-status-bar' ||
+      Boolean(ev.target?.closest?.('#ag-pulse-status-bar')) ||
+      Boolean(typeof ev.composedPath === 'function' && ev.composedPath().some((n) => n?.id === 'ag-pulse-status-bar'));
+    if (pulseClicked) {
+      setTimeout(() => {
+        if (!destroyed) syncContextCardOpenNotify();
+      }, 28);
+    }
 
     const thinkBtn = ev.target.closest('[data-testid="thinking-collapsible-trigger"]');
     if (thinkBtn && getThoughtTranslateMode() !== 'off') {
@@ -3814,12 +3634,18 @@
   let wasContextCardOpen = false;
 
   function syncContextCardOpenNotify() {
-    const cardEl = document.getElementById('context-card');
+    const pulseHost = document.getElementById('ag-pulse-status-bar');
+    const cardEl =
+      document.getElementById('context-card') ||
+      (pulseHost && pulseHost.shadowRoot && typeof pulseHost.shadowRoot.getElementById === 'function'
+        ? pulseHost.shadowRoot.getElementById('context-card')
+        : null);
     const openNow = Boolean(
       cardEl &&
-        cardEl.isConnected &&
+        (cardEl.isConnected !== false) &&
         !cardEl.hidden &&
-        cardEl.getAttribute?.('aria-hidden') !== 'true'
+        cardEl.getAttribute?.('aria-hidden') !== 'true' &&
+        cardEl.style?.display !== 'none'
     );
     if (openNow && !wasContextCardOpen) {
       try {
@@ -4097,7 +3923,10 @@
       if (flags.full || flags.settings || flags.overlays) {
         ensureSettingsSection();
       }
-      if (flags.full || flags.overlays || flags.theme) {
+      if (flags.full || flags.route || flags.composer || flags.overlays || flags.theme) {
+        try {
+          window.__agPrismTelemetry?.sync?.(cfg);
+        } catch {}
         ensurePulseBridge();
       }
     } finally {
@@ -4176,6 +4005,12 @@
 
   function onDocCaretEvent(ev) {
     const type = ev?.type || '';
+    if (type === 'scroll' || type === 'selectionchange') {
+      const ae = document.activeElement;
+      if (!ae || !ae.closest?.('[data-testid="agent-input-box"]')) {
+        return;
+      }
+    }
     const isTyping = type === 'input' || type === 'keyup' || type === 'compositionupdate' || type === 'compositionend';
     const immediate = type === 'focusin' || type === 'mouseup' || type === 'transitionend';
     const refreshMetrics = type === 'focusin';
@@ -4528,6 +4363,7 @@
         'data-ag-cs-stage-glide',
         'data-ag-cs-liftoff-bubble',
         'data-ag-cs-thought-streaming',
+        'data-ag-cs-spark-streaming',
       ]) {
         document.querySelectorAll(`[${attr}]`).forEach((el) => el.removeAttribute(attr));
       }
@@ -4554,6 +4390,7 @@
           'data-ag-cs-sidebar',
           'data-ag-cs-sidebar-compact',
           'data-ag-cs-sidebar-collapsed',
+          'data-ag-cs-has-crab',
           'data-ag-cs-lang',
           'data-ag-cs-cjk',
         ]) {

@@ -668,12 +668,27 @@ function extractInjectExprFromAsarIfPresent(asarPath) {
 }
 
 /**
- * 在 Windows 下使用 PowerShell Start-Process -WindowStyle Hidden 派生完全脱离当前终端 Job Object 的后台进程；
- * 非 Windows 或 PowerShell 受限时无缝回退 detached child_process.spawn。
+ * 使用 Node 原生 detached + windowsHide (CREATE_NO_WINDOW) 优先派生完全无黑框的独立后台进程；
+ * 仅在极端沙盒异常时回退 PowerShell -WindowStyle Hidden。
  */
 function spawnBreakawayNodeProcess(nodeArgs, opts = {}) {
   const exe = process.execPath;
   const cwd = opts.cwd || ROOT_DIR;
+  try {
+    const child = spawn(exe, nodeArgs, {
+      cwd,
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    if (child && Number.isInteger(child.pid) && child.pid > 0) {
+      child.unref();
+      return { spawned: true, pid: child.pid, method: "node-detached-windowshide" };
+    }
+  } catch {
+    // Fall through to PowerShell fallback if spawn is restricted
+  }
+
   if (process.platform === "win32" && !opts.disablePowerShellBreakaway) {
     try {
       const escPs = (s) => String(s).replace(/'/g, "''");
@@ -696,18 +711,11 @@ function spawnBreakawayNodeProcess(nodeArgs, opts = {}) {
         return { spawned: true, pid, method: "powershell-start-process" };
       }
     } catch {
-      // Fall through to detached spawn
+      // Ignore
     }
   }
 
-  const child = spawn(exe, nodeArgs, {
-    cwd,
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-  });
-  child.unref();
-  return { spawned: true, pid: child.pid || null, method: "node-detached-spawn" };
+  return { spawned: false, pid: null, method: null };
 }
 
 function spawnDeferredFileSwap(stagedPath, targetPath, opts = {}) {

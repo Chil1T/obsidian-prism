@@ -2312,14 +2312,16 @@ test('v3.7 orchestrates 4-tier motionLevel, Hero A~E optical transitions, dual-t
     assert.equal(thoughtP.classList.contains('ag-cs-thought-chunk'), true);
     assert.equal(codeLine.classList.contains('ag-cs-code-scan'), true, 'Code block additions must use zero-blur .ag-cs-code-scan');
     assert.equal(codeLine.querySelector('.ag-cs-stream-chunk'), null, 'Code block must NEVER be blurred with .ag-cs-stream-chunk');
-    assert.ok(proseP.querySelector('.ag-cs-stream-chunk'), 'Natural prose must wrap in .ag-cs-stream-chunk');
+    assert.equal(proseP.classList.contains('ag-cs-stream-chunk'), true, 'Natural prose element must be tagged with .ag-cs-stream-chunk');
+    assert.equal(proseP.childNodes.length, 1, 'Must NEVER splice React TextNodes or insert wrapper spans');
+    assert.equal(proseP.childNodes[0].nodeType, 3, 'React TextNode must remain untouched');
     assert.equal(proseP.textContent, 'Hello crystal world');
 
-    // Wait > 250ms -> .ag-cs-stream-chunk MUST unwrap back to pure native Text node and normalize()!
+    // Wait > 250ms -> .ag-cs-stream-chunk class MUST auto-remove cleanly with zero DOM tree mutation!
     await new Promise((r) => setTimeout(r, 275));
-    assert.equal(proseP.querySelector('.ag-cs-stream-chunk'), null, 'Stream chunk span must unwrap within 250ms');
+    assert.equal(proseP.classList.contains('ag-cs-stream-chunk'), false, 'Stream chunk class must clear within 250ms');
     assert.equal(proseP.childNodes.length, 1);
-    assert.equal(proseP.childNodes[0].nodeType, 3, 'Unwrapped node must be a pure native Text node');
+    assert.equal(proseP.childNodes[0].nodeType, 3, 'Text node remains untouched');
     assert.equal(proseP.textContent, 'Hello crystal world');
 
     // Finish >= 6000ms run -> triggers Hero C composer caustic & cleans thought-streaming immediately
@@ -2734,7 +2736,7 @@ test('Prism v1.0 regression guard: Thought Translator overlay (.ag-prism-thought
     assert.equal(stIdle.convAuraPhase, 'idle');
     assert.equal(stIdle.convAuraSleeping, false, 'Expected convAuraSleeping === false in ultra idle living flow');
     assert.equal(stIdle.convAuraCanvasSize.height, Math.round(750 * 0.32), 'Canvas height must be 32% of parent (68% pixel savings)');
-    assert.equal(stIdle.convAuraOptics.frameMs, 50, 'Idle living flow must run at 50ms (20fps)');
+    assert.equal(stIdle.convAuraOptics.frameMs, 110, 'Idle living flow runs at low-power 110ms (~9fps)');
     assert.equal(stIdle.convAuraOptics.speed, 0.72, 'Idle living flow speed must be 0.72');
     assert.ok(Math.abs(stIdle.convAuraOptics.strength - 0.52) < 0.05, 'Daylight idle aura base strength must breathe around 0.52');
     const drawsAtMount = stIdle.convAuraDrawCount;

@@ -207,12 +207,16 @@ class CdpSession {
     this.listeners.get(method).push(callback);
   }
 
-  async evaluate(expression, awaitPromise = false) {
-    const res = await this.send('Runtime.evaluate', {
-      expression,
-      returnByValue: true,
-      awaitPromise,
-    });
+  async evaluate(expression, awaitPromise = false, timeoutMs = 4000) {
+    const res = await this.send(
+      'Runtime.evaluate',
+      {
+        expression,
+        returnByValue: true,
+        awaitPromise,
+      },
+      timeoutMs
+    );
     if (res.exceptionDetails) {
       throw new Error(res.exceptionDetails.exception?.description || res.exceptionDetails.text);
     }
@@ -1864,6 +1868,7 @@ const REMOVE_EXPRESSION = `(() => {
   delete globalThis.__agPrismSettingsPanel;
   delete globalThis.__agPrismConvAura;
   delete globalThis.__agPrismSmoothCaret;
+  delete globalThis.__opChromaGatesSession;
   delete globalThis.AntigravityCodexEffortSlider;
   delete globalThis.__agCodexEffortSliderDisableAutoBoot;
   delete globalThis.__agCsUiMain;
@@ -1899,6 +1904,7 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-cs-sidebar',
       'data-ag-cs-sidebar-compact',
       'data-ag-cs-sidebar-collapsed',
+      'data-ag-cs-has-crab',
       'data-ag-cs-lang',
       'data-ag-cs-cjk',
       'data-ag-cs-effort-accent',

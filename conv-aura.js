@@ -31,16 +31,29 @@
     return true;
   }
 
+  let cachedRunningVal = false;
+  let cachedRunningAt = -1;
+
   function isConvRunning() {
     if (typeof document === 'undefined') return false;
+    const now = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+    if (cachedRunningAt >= 0 && Math.abs(now - cachedRunningAt) < 12) {
+      return cachedRunningVal;
+    }
     const nodes = document.querySelectorAll(
       '[data-testid="input-cancel-button"], [data-testid="stop-button"], [data-testid="cancel-button"], [data-testid="agent-loading"], [data-testid="thinking-collapsible-trigger"][data-op-thought-state="streaming"]'
     );
+    let running = false;
     for (const n of nodes) {
       if (n.closest?.('[data-testid="subagent-tab-conversation"]')) continue;
-      if (isVisibleAuraNode(n)) return true;
+      if (isVisibleAuraNode(n)) {
+        running = true;
+        break;
+      }
     }
-    return false;
+    cachedRunningVal = running;
+    cachedRunningAt = now;
+    return running;
   }
 
   function computeConvAuraOptics(phase, phaseAt, now, dark, wasRunning) {
@@ -96,7 +109,7 @@
       prism: idlePrism,
       surge: 0,
       speed: 0.72,
-      frameMs: 50,
+      frameMs: 110,
     };
   }
 
@@ -193,6 +206,7 @@
     }
 
     function sync() {
+      cachedRunningAt = -1;
       const convView = findConvAuraView();
       const seatParent = convView ? convView.parentElement || convView : null;
       if (convAura && (convAura.seatParent !== seatParent || !convAura.host.isConnected || !convAura.canvas.isConnected)) {

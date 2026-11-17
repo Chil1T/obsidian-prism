@@ -694,10 +694,15 @@ export class PrismDaemon {
   async verifyAndHealEntry(entry) {
     if (!entry || entry.session.closed) return;
     try {
-      const probe = await entry.session.evaluate(`(() => {
+      const probe = await entry.session.evaluate(
+        `(() => {
         const root = typeof document !== 'undefined' && document.documentElement;
         if (!root || document.readyState === 'loading') return { ready: false };
         const api = window.__agPrism;
+        const st = api && typeof api.getState === 'function' ? api.getState() : null;
+        const telMode = st?.cfg?.telemetryModule || 'auto';
+        const hasModelBtn = Boolean(document.querySelector('[data-testid="model-selector-trigger"]'));
+        const hasPulseBar = Boolean(document.getElementById('ag-pulse-status-bar'));
         return {
           ready: true,
           prismAttr: root.getAttribute('data-ag-prism') || '',
@@ -706,8 +711,12 @@ export class PrismDaemon {
           hasThoughtBridge: Boolean(window.__agPrismThoughtBridge),
           codeHash: (api && api.codeHash) || '',
           hasLegacyCss: Boolean(document.getElementById('ag-claude-style-css')),
+          needsDashboardSync: Boolean(api && telMode !== 'off' && hasModelBtn && !hasPulseBar),
         };
-      })()`);
+      })()`,
+        false,
+        2600
+      );
       if (!probe || !probe.ready) return;
       if (
         !probe.hasPrism ||
@@ -717,12 +726,25 @@ export class PrismDaemon {
         probe.hasLegacyCss ||
         (this.codeHash && probe.codeHash && probe.codeHash !== this.codeHash)
       ) {
-        await entry.session.send('Runtime.addBinding', { name: this.cdp.SETTING_BINDING }).catch(() => {});
-        await entry.session.send('Runtime.addBinding', { name: METRICS_BINDING }).catch(() => {});
-        await entry.session.send('Runtime.addBinding', { name: REPO_BINDING }).catch(() => {});
-        await entry.session.send('Runtime.addBinding', { name: THOUGHT_BINDING }).catch(() => {});
-        await entry.session.evaluate(this.injectExpr);
+        await entry.session.send('Runtime.addBinding', { name: this.cdp.SETTING_BINDING }, 2600).catch(() => {});
+        await entry.session.send('Runtime.addBinding', { name: METRICS_BINDING }, 2600).catch(() => {});
+        await entry.session.send('Runtime.addBinding', { name: REPO_BINDING }, 2600).catch(() => {});
+        await entry.session.send('Runtime.addBinding', { name: THOUGHT_BINDING }, 2600).catch(() => {});
+        await entry.session.evaluate(this.injectExpr, false, 4500);
         this.log(`[↻] Hot-healed window to Obsidian Prism v${this.cdp.PLUGIN_VERSION}: ${entry.title}`);
+      } else if (probe.needsDashboardSync) {
+        await entry.session
+          .evaluate(
+            `(() => {
+              const cfg = window.__agPrism?.getState?.()?.cfg || {};
+              window.__agPrismTelemetry?.sync?.(cfg);
+              window.__agPrism?.sync?.();
+              return true;
+            })()`,
+            false,
+            2200
+          )
+          .catch(() => {});
       }
     } catch {
       entry.session.close();
@@ -845,9 +867,10 @@ export class PrismDaemon {
     if (watchFiles) {
       let reloadTimer = null;
       try {
-        this.fsw = fs.watch(this.rootDir, (_, filename) => {
-          if (!filename || filename.startsWith('.') || !/\.(css|js|json)$/i.test(filename)) return;
-          if (filename === 'daemon.log' || filename === 'watch.log' || filename === 'repo-meta.json') return;
+        this.fsw = fs.watch(this.rootDir, { recursive: true }, (_, filename) => {
+          const base = filename ? path.basename(filename) : '';
+          if (!base || base.startsWith('.') || !/\.(css|js|json)$/i.test(base)) return;
+          if (base === 'daemon.log' || base === 'watch.log' || base === 'repo-meta.json') return;
           clearTimeout(reloadTimer);
           reloadTimer = setTimeout(async () => {
             try {

@@ -44,11 +44,15 @@
 
     let currentMode = 'auto';
     let waitTimer = null;
+    let rescueTimer = null;
     let pollTimer = null;
     let fallbackHostEl = null;
     let shadowRoot = null;
     let installedHostBridge = false;
     let yieldedToExternal = false;
+    let lastExternalSig = '';
+    let externalDetachedAt = 0;
+    const EXTERNAL_RESCUE_GRACE_MS = 3500;
     let reqSeq = 0;
     const pendingReqs = new Map();
     let docClickCleanup = null;
@@ -72,6 +76,10 @@
         clearTimeout(waitTimer);
         waitTimer = null;
       }
+      if (rescueTimer !== null) {
+        clearTimeout(rescueTimer);
+        rescueTimer = null;
+      }
     }
 
     function clearPollTimer() {
@@ -86,15 +94,49 @@
       return doc.getElementById(BAR_ID);
     }
 
+    function isNodeConnected(doc, el) {
+      if (!el) return false;
+      if (el.isConnected === false) return false;
+      if (el.isConnected === true) return true;
+      if (!el.parentNode && !el.parentElement) return false;
+      if (doc && typeof doc.getElementById === 'function' && el.id) {
+        const byId = doc.getElementById(el.id);
+        if (byId && byId !== el) return false;
+      }
+      return true;
+    }
+
     function hasExternalPulse() {
       const win = getWin();
       const doc = getDoc();
       if (!win || !doc) return false;
-      if (win.__agPulseRuntimeOwner) return true;
-      if (win.__agPulseInlineInstalled) return true;
-      if (win.agPulseHost && !win.agPulseHost.__prismFallback) return true;
       const existing = findExistingBar(doc);
-      if (existing && existing.getAttribute(FALLBACK_ATTR) !== '1') return true;
+      if (existing && existing.getAttribute(FALLBACK_ATTR) !== '1' && isNodeConnected(doc, existing)) {
+        externalDetachedAt = 0;
+        return true;
+      }
+      const extSig = [
+        win.__agPulseRuntimeOwner ? String(win.__agPulseRuntimeOwner) : '',
+        win.__agPulseInlineInstalled ? '1' : '',
+        win.agPulseHost && !win.agPulseHost.__prismFallback ? 'host' : '',
+      ].join('|');
+      if (extSig !== '||') {
+        const now = Date.now();
+        if (extSig !== lastExternalSig) {
+          lastExternalSig = extSig;
+          externalDetachedAt = now;
+          return true;
+        }
+        if (!externalDetachedAt) externalDetachedAt = now;
+        if (now - externalDetachedAt < EXTERNAL_RESCUE_GRACE_MS) {
+          return true;
+        }
+        // External globals lingered >3.5s without any connected #ag-pulse-status-bar (e.g. detached by React route switch):
+        // allow Prism's built-in Dashboard to self-heal and rescue the toolbar!
+        return false;
+      }
+      lastExternalSig = '';
+      externalDetachedAt = 0;
       return false;
     }
 
@@ -307,26 +349,71 @@
     }
 
     async function refreshMetrics() {
+      const doc = getDoc();
       if (currentMode === 'auto' && hasExternalPulse()) {
         yieldedToExternal = true;
         unmountFallback();
         return null;
       }
-      if (!fallbackHostEl) return null;
+      if (currentMode !== 'off' && fallbackHostEl) {
+        if (!isNodeConnected(doc, fallbackHostEl)) {
+          const anchor = doc ? findMountAnchor(doc) : null;
+          if (anchor) {
+            try { anchor.appendChild(fallbackHostEl); } catch {}
+          }
+        } else if (doc) {
+          const preferred = findPreferredToolbarAnchor(doc);
+          if (preferred && fallbackHostEl.parentElement !== preferred) {
+            try { preferred.appendChild(fallbackHostEl); } catch {}
+          }
+        }
+      }
+      if (!fallbackHostEl || !isNodeConnected(doc, fallbackHostEl)) {
+        if (currentMode !== 'off' && !hasExternalPulse() && waitTimer === null) {
+          mountFallbackNow();
+        }
+        if (!fallbackHostEl) return null;
+      }
       const cid = detectConversationId(fallbackHostEl);
       const snap = await requestMetricsSnapshot({ conversationId: cid, force: false });
       applySnapshotToDom(snap);
       return snap;
     }
 
+    function findPreferredToolbarAnchor(doc) {
+      const modelBtn = doc?.querySelector?.('[data-testid="model-selector-trigger"]');
+      return modelBtn && modelBtn.parentElement ? modelBtn.parentElement : null;
+    }
+
     function findMountAnchor(doc) {
-      const modelBtn = doc.querySelector?.('[data-testid="model-selector-trigger"]');
-      if (modelBtn && modelBtn.parentElement) return modelBtn.parentElement;
+      const toolbar = findPreferredToolbarAnchor(doc);
+      if (toolbar) return toolbar;
       const composer = doc.querySelector?.('.surface-composer-card, [data-testid="agent-input-box"]');
       if (composer) return composer;
       const cascade = doc.querySelector?.('[data-cascade-id]');
       if (cascade) return cascade;
       return doc.body || doc.documentElement;
+    }
+
+    function ensureFallbackSeated(doc) {
+      if (!fallbackHostEl || !doc) return false;
+      const preferred = findPreferredToolbarAnchor(doc);
+      if (!isNodeConnected(doc, fallbackHostEl)) {
+        const anchor = preferred || findMountAnchor(doc);
+        if (!anchor) return false;
+        try {
+          anchor.appendChild(fallbackHostEl);
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      if (preferred && fallbackHostEl.parentElement !== preferred) {
+        try {
+          preferred.appendChild(fallbackHostEl);
+        } catch {}
+      }
+      return true;
     }
 
     function mountFallbackNow() {
@@ -338,7 +425,7 @@
         yieldedToExternal = true;
         return false;
       }
-      if (fallbackHostEl && fallbackHostEl.isConnected !== false) return true;
+      if (fallbackHostEl && ensureFallbackSeated(doc)) return true;
 
       const anchor = findMountAnchor(doc);
       if (!anchor) return false;
@@ -480,6 +567,16 @@
       if (hasExternalPulse()) {
         yieldedToExternal = true;
         unmountFallback();
+        if (externalDetachedAt > 0 && rescueTimer === null) {
+          rescueTimer = setTimeout(() => {
+            rescueTimer = null;
+            if (currentMode === 'off') return;
+            if (!hasExternalPulse()) {
+              mountFallbackNow();
+            }
+          }, EXTERNAL_RESCUE_GRACE_MS + 60);
+          if (rescueTimer && typeof rescueTimer.unref === 'function') rescueTimer.unref();
+        }
         return getState();
       }
 
@@ -490,8 +587,11 @@
       }
 
       // currentMode === 'auto': wait 1500ms politely for external Pulse plugin before fallback mount
-      if (fallbackHostEl && fallbackHostEl.isConnected !== false) {
-        return getState();
+      const doc = getDoc();
+      if (fallbackHostEl) {
+        if (ensureFallbackSeated(doc)) {
+          return getState();
+        }
       }
       if (waitTimer === null) {
         const waitMs =
@@ -518,12 +618,14 @@
       unmountFallback();
       restoreExternalVisibility();
       yieldedToExternal = false;
+      lastExternalSig = '';
+      externalDetachedAt = 0;
     }
 
     function getState() {
       return {
         mode: currentMode,
-        mountedFallback: Boolean(fallbackHostEl && fallbackHostEl.isConnected !== false),
+        mountedFallback: Boolean(fallbackHostEl && isNodeConnected(getDoc(), fallbackHostEl)),
         waitingForExternal: waitTimer !== null,
         yieldedToExternal: Boolean(yieldedToExternal || (currentMode !== 'off' && hasExternalPulse())),
         hasExternal: hasExternalPulse(),
