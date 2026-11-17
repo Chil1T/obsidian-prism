@@ -1,0 +1,1141 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const rippleCore = require('../ripple-core.js');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+test('hash and fractalNoise are deterministic and bounded in [0, 1)', () => {
+  for (let i = -20; i < 40; i++) {
+    const h1 = rippleCore.hash(i, i * 3 + 7);
+    const h2 = rippleCore.hash(i, i * 3 + 7);
+    assert.equal(h1, h2);
+    assert.ok(h1 >= 0 && h1 < 1);
+    const n = rippleCore.fractalNoise(i * 0.13, i * 0.27);
+    assert.ok(n >= 0 && n <= 1);
+  }
+});
+
+test('glyphIndex stays within GLYPHS atlas bounds', () => {
+  for (let t = 0; t < 10; t++) {
+    for (let c = 0; c < 15; c++) {
+      const idx = rippleCore.glyphIndex(c, t, t);
+      assert.ok(Number.isInteger(idx));
+      assert.ok(idx >= 0 && idx < rippleCore.GLYPHS.length);
+    }
+  }
+});
+
+test('createWaveField propagates disturbance and damps back to rest', () => {
+  const wf = rippleCore.createWaveField(20, 15, () => 0.5);
+  assert.equal(wf.active(), false);
+  wf.disturb(10, 7);
+  assert.equal(wf.active(), true);
+  wf.advance(0.05);
+  let maxH = 0;
+  for (let i = 0; i < wf.height.length; i++) {
+    maxH = Math.max(maxH, Math.abs(wf.height[i]));
+  }
+  assert.ok(maxH > 0, 'wave height should become non-zero after disturbance');
+  for (let step = 0; step < 500; step++) wf.advance(0.05);
+  assert.equal(wf.active(), false);
+});
+
+test('createWaveField handles zero-sized grids and out-of-bounds clicks safely', () => {
+  const zero = rippleCore.createWaveField(0, 0);
+  zero.disturb(5, 5);
+  assert.equal(zero.active(), false);
+
+  const small = rippleCore.createWaveField(4, 4, () => 0.2);
+  small.disturb(-10, 99);
+  assert.equal(small.active(), true);
+});
+
+test('parseCssColorToRgb parses hex and rgb(a) formats', () => {
+  assert.deepEqual(rippleCore.parseCssColorToRgb('#4d6bfe'), [77, 107, 254]);
+  assert.deepEqual(rippleCore.parseCssColorToRgb('#fff'), [255, 255, 255]);
+  assert.deepEqual(rippleCore.parseCssColorToRgb('rgb(19, 22, 29)'), [19, 22, 29]);
+  assert.deepEqual(rippleCore.parseCssColorToRgb('rgba(127, 166, 255, 0.8)'), [127, 166, 255]);
+  assert.equal(rippleCore.parseCssColorToRgb('transparent'), null);
+});
+
+test('cloudClear keeps subtle atmospheric range without over-brightening idle dark matrix', () => {
+  assert.ok(rippleCore.RIPPLE.idleAlphaDark > 0 && rippleCore.RIPPLE.idleAlphaDark <= 0.16);
+  let min = 1;
+  let max = 0;
+  for (let i = 0; i < 60; i++) {
+    const v = rippleCore.cloudClear(i * 47, i * 31);
+    assert.ok(v >= 0.22 && v <= 1);
+    min = Math.min(min, v);
+    max = Math.max(max, v);
+  }
+  assert.ok(min < 0.35, `expected low cloud valley (< 0.35), got ${min}`);
+  assert.ok(max >= min);
+});
+
+test('RIPPLE high-chroma Google AI four-color spectrum (dark & daylight jewel stops) meet prism optics contract', () => {
+  const { RIPPLE, SPECTRUM, SPECTRUM_LIGHT, spectrumRgb } = rippleCore;
+  assert.ok(RIPPLE.prismCap >= 0.7, `expected RIPPLE.prismCap >= 0.7, got ${RIPPLE.prismCap}`);
+  assert.equal(RIPPLE.prismCap, 0.74);
+  assert.equal(RIPPLE.auraTint, 0.48);
+  assert.equal(RIPPLE.auraLift, 0.78);
+  assert.equal(RIPPLE.prismTint, 0.68);
+  assert.equal(RIPPLE.prismThreshold, 0.2);
+
+  assert.deepEqual(SPECTRUM, [
+    [66, 133, 244],   // Cobalt
+    [155, 114, 203],  // Iris
+    [234, 67, 53],    // Coral
+    [251, 188, 4],    // Amber
+  ]);
+
+  assert.deepEqual(SPECTRUM_LIGHT, [
+    [37, 99, 235],    // Royal Cobalt #2563EB
+    [124, 58, 237],   // Iris #7C3AED
+    [234, 67, 53],    // Coral #EA4335
+    [217, 119, 6],    // Amber #D97706
+  ]);
+
+  const out = [0, 0, 0];
+  assert.deepEqual(spectrumRgb(0, out), [66, 133, 244]);
+  assert.deepEqual(spectrumRgb(0.25, out), [155, 114, 203]);
+  assert.deepEqual(spectrumRgb(0.5, out), [234, 67, 53]);
+  assert.deepEqual(spectrumRgb(0.75, out), [251, 188, 4]);
+  assert.deepEqual(spectrumRgb(1.0, out), [66, 133, 244]);
+
+  assert.deepEqual(spectrumRgb(0, out, false), [37, 99, 235]);
+  assert.deepEqual(spectrumRgb(0.25, out, false), [124, 58, 237]);
+  assert.deepEqual(spectrumRgb(0.5, out, false), [234, 67, 53]);
+  assert.deepEqual(spectrumRgb(0.75, out, false), [217, 119, 6]);
+  assert.deepEqual(spectrumRgb(1.0, out, false), [37, 99, 235]);
+});
+
+test('waves.skimmer excites fluid wake proportional to speedNorm without blowing out load or heightCap', () => {
+  const wfSlow = rippleCore.createWaveField(60, 30, () => 0.5);
+  const wfFast = rippleCore.createWaveField(60, 30, () => 0.5);
+
+  wfSlow.skimmer(30, 15, 0.05);
+  wfFast.skimmer(30, 15, 0.95);
+  assert.equal(wfSlow.active(), true);
+  assert.equal(wfFast.active(), true);
+
+  wfSlow.advance(0.05);
+  wfFast.advance(0.05);
+
+  let slowPeak = 0;
+  let fastPeak = 0;
+  for (let i = 0; i < wfSlow.height.length; i++) {
+    slowPeak = Math.max(slowPeak, Math.abs(wfSlow.height[i]));
+    fastPeak = Math.max(fastPeak, Math.abs(wfFast.height[i]));
+  }
+  assert.ok(slowPeak > 0, 'slow skimmer should excite subtle fluid wake');
+  assert.ok(fastPeak > slowPeak, `fast skimmer (${fastPeak}) should exceed slow skimmer (${slowPeak})`);
+
+  for (let step = 0; step < 80; step++) {
+    wfFast.skimmer(10 + (step % 40), 15, 1.0);
+    if (step % 3 === 0) wfFast.advance(0.016);
+  }
+  let maxAfterSweep = 0;
+  for (let i = 0; i < wfFast.height.length; i++) {
+    maxAfterSweep = Math.max(maxAfterSweep, Math.abs(wfFast.height[i]));
+  }
+  assert.ok(maxAfterSweep <= rippleCore.RIPPLE.heightCap + 1e-4, `height ${maxAfterSweep} must stay within heightCap`);
+
+  const zero = rippleCore.createWaveField(0, 0);
+  zero.skimmer(5, 5, 0.8);
+  assert.equal(zero.active(), false);
+
+  wfFast.skimmer(Number.NaN, 10, 0.5);
+  wfFast.disturb(20, 10, { amplitudeScale: 0.9, radiusScale: 0.85, duration: 0.24 });
+  assert.equal(wfFast.active(), true);
+
+  for (let step = 0; step < 500; step++) wfFast.advance(0.05);
+  assert.equal(wfFast.active(), false);
+});
+
+test('createGlyphField 2D renderer renders swirling four-color aura, prism waves, and respects calmZones', () => {
+  function makeMockCanvas(width, height) {
+    let lastImage = null;
+    const ctx2d = {
+      setTransform() {},
+      clearRect() {},
+      fillText() {},
+      getImageData(_x, _y, w, h) {
+        const buf = new Uint8ClampedArray(w * h * 4);
+        for (let i = 3; i < buf.length; i += 4) buf[i] = 255;
+        return { width: w, height: h, data: buf };
+      },
+      createImageData(w, h) {
+        return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) };
+      },
+      putImageData(img) {
+        lastImage = img;
+      },
+    };
+    return {
+      width,
+      height,
+      get lastImage() { return lastImage; },
+      ownerDocument: {
+        createElement() {
+          return makeMockCanvas(1, 1);
+        },
+      },
+      getContext(type) {
+        return type === '2d' ? ctx2d : null;
+      },
+    };
+  }
+
+  const cols = 40;
+  const rows = 20;
+  const { cellWidth, cellHeight } = rippleCore.RIPPLE;
+  const canvas = makeMockCanvas(cols * cellWidth, rows * cellHeight);
+  const waves = rippleCore.createWaveField(cols, rows, () => 0.5);
+  const field = rippleCore.createGlyphField(canvas, cols, rows, waves);
+  assert.equal(field.mode, '2d');
+
+  const cx = (cols * cellWidth) / 2;
+  const cy = (rows * cellHeight) / 2;
+  field.draw(1000, {
+    dark: true,
+    ink: [146, 148, 156],
+    wave: [214, 218, 228],
+    aura: { x: cx, y: cy, radius: 120, strength: 1, active: true },
+  }, false);
+
+  function samplePixel(px, py) {
+    const img = canvas.lastImage;
+    const x = Math.max(0, Math.min(img.width - 1, Math.floor(px)));
+    const y = Math.max(0, Math.min(img.height - 1, Math.floor(py)));
+    const idx = (y * img.width + x) * 4;
+    return [img.data[idx], img.data[idx + 1], img.data[idx + 2], img.data[idx + 3]];
+  }
+
+  const rightPx = samplePixel(cx + 35, cy);
+  const topPx = samplePixel(cx, cy - 35);
+  const leftPx = samplePixel(cx - 35, cy);
+  const bottomPx = samplePixel(cx, cy + 35);
+  const colorDiffTopBottom = Math.abs(topPx[0] - bottomPx[0]) + Math.abs(topPx[1] - bottomPx[1]) + Math.abs(topPx[2] - bottomPx[2]);
+  const colorDiffLeftRight = Math.abs(leftPx[0] - rightPx[0]) + Math.abs(leftPx[1] - rightPx[1]) + Math.abs(leftPx[2] - rightPx[2]);
+  assert.ok(colorDiffTopBottom > 40, `expected vertical angular spectrum variation in aura, got diff=${colorDiffTopBottom}`);
+  assert.ok(colorDiffLeftRight > 40, `expected horizontal angular spectrum variation in aura, got diff=${colorDiffLeftRight}`);
+
+  waves.skimmer(20, 10, 0.8);
+  waves.advance(0.05);
+  field.setCalmZones([]);
+  field.draw(1200, { dark: true, ink: [146, 148, 156], wave: [214, 218, 228], aura: null }, false);
+  const unmaskedAlpha = samplePixel(cx, cy)[3];
+
+  field.setCalmZones([{ x: cx - 60, y: cy - 40, w: 120, h: 80 }]);
+  field.draw(1200, { dark: true, ink: [146, 148, 156], wave: [214, 218, 228], aura: null }, false);
+  const calmedAlpha = samplePixel(cx, cy)[3];
+  assert.ok(calmedAlpha < unmaskedAlpha * 0.65, `expected calmZone alpha (${calmedAlpha}) < 0.65 * unmasked (${unmaskedAlpha})`);
+
+  // Light 白底模式：清晰深石板蓝底网 + 高饱和宝石四色受激折射
+  const lightWaves = rippleCore.createWaveField(cols, rows, () => 0.5);
+  const lightCanvas = makeMockCanvas(cols * cellWidth, rows * cellHeight);
+  const lightField = rippleCore.createGlyphField(lightCanvas, cols, rows, lightWaves);
+  function sampleLight(px, py) {
+    const img = lightCanvas.lastImage;
+    const x = Math.max(0, Math.min(img.width - 1, Math.floor(px)));
+    const y = Math.max(0, Math.min(img.height - 1, Math.floor(py)));
+    const idx = (y * img.width + x) * 4;
+    return [img.data[idx], img.data[idx + 1], img.data[idx + 2], img.data[idx + 3]];
+  }
+  lightField.draw(1000, { dark: false, ink: [85, 102, 130], wave: [37, 99, 235], aura: null }, false);
+  const idleLightAlpha = sampleLight(cx, cy)[3];
+  assert.ok(idleLightAlpha <= 35, `expected quiet idle light alpha <= 35, got ${idleLightAlpha}`);
+
+  lightWaves.disturb(20, 10);
+  lightWaves.advance(0.05);
+  lightWaves.advance(0.05);
+  lightField.draw(1100, {
+    dark: false,
+    ink: [85, 102, 130],
+    wave: [37, 99, 235],
+    aura: { x: cx, y: cy, radius: 140, strength: 1, active: true },
+  }, false);
+  const excitedLightPx = sampleLight(cx + 21, cy);
+  const chromaSpan = Math.max(excitedLightPx[0], excitedLightPx[1], excitedLightPx[2]) - Math.min(excitedLightPx[0], excitedLightPx[1], excitedLightPx[2]);
+  assert.ok(excitedLightPx[3] >= 130, `expected boosted excited light alpha >= 130, got ${excitedLightPx[3]}`);
+  assert.ok(chromaSpan >= 80, `expected vivid jewel chroma span >= 80 on light theme, got ${chromaSpan} (${excitedLightPx.slice(0, 3)})`);
+
+  lightField.setCalmZones([{ x: cx - 60, y: cy - 40, w: 120, h: 80 }]);
+  lightField.draw(1100, {
+    dark: false,
+    ink: [85, 102, 130],
+    wave: [37, 99, 235],
+    aura: { x: cx, y: cy, radius: 140, strength: 1, active: true },
+  }, false);
+  const calmedLightAlpha = sampleLight(cx + 21, cy)[3];
+  assert.ok(calmedLightAlpha < excitedLightPx[3] * 0.7, `expected light calmZone alpha (${calmedLightAlpha}) < 0.7 * excited (${excitedLightPx[3]})`);
+
+  lightField.dispose();
+  field.dispose();
+});
+
+test('autonomous out-of-phase Google 4-color nebula breathes over time with aura: null, zero waves, ~25fps cadence, and calmZones', () => {
+  function makeMockCanvas(width, height) {
+    let lastImage = null;
+    const ctx2d = {
+      setTransform() {},
+      clearRect() {},
+      fillText() {},
+      getImageData(_x, _y, w, h) {
+        const buf = new Uint8ClampedArray(w * h * 4);
+        for (let i = 3; i < buf.length; i += 4) buf[i] = 255;
+        return { width: w, height: h, data: buf };
+      },
+      createImageData(w, h) {
+        return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) };
+      },
+      putImageData(img) {
+        lastImage = img;
+      },
+    };
+    return {
+      width,
+      height,
+      get lastImage() { return lastImage; },
+      ownerDocument: {
+        createElement() {
+          return makeMockCanvas(1, 1);
+        },
+      },
+      getContext(type) {
+        return type === '2d' ? ctx2d : null;
+      },
+    };
+  }
+
+  const cols = 60;
+  const rows = 30;
+  const { cellWidth, cellHeight } = rippleCore.RIPPLE;
+  const W = cols * cellWidth;
+  const H = rows * cellHeight;
+  const canvas = makeMockCanvas(W, H);
+  const waves = rippleCore.createWaveField(cols, rows, () => 0.5);
+  assert.equal(waves.active(), false);
+
+  const field = rippleCore.createGlyphField(canvas, cols, rows, waves);
+  const basePalette = { dark: true, ink: [146, 148, 156], wave: [214, 218, 228], aura: null };
+
+  function sampleAt(px, py) {
+    const img = canvas.lastImage;
+    const x = Math.max(0, Math.min(img.width - 1, Math.floor(px)));
+    const y = Math.max(0, Math.min(img.height - 1, Math.floor(py)));
+    const idx = (y * img.width + x) * 4;
+    return [img.data[idx], img.data[idx + 1], img.data[idx + 2], img.data[idx + 3]];
+  }
+
+  assert.equal(field.needsDraw(1000, false), true);
+  field.draw(1000, basePalette, false);
+  assert.equal(field.needsDraw(1015, false), false, 'should throttle sub-40ms idle redraws');
+  assert.equal(field.needsDraw(1042, false), true, 'should trigger smooth ~25fps redraw at >=40ms');
+
+  const probeX = Math.round(W * 0.21);
+  const probeY = Math.round(H * 0.32);
+  let minAlpha = 255;
+  let maxAlpha = 0;
+  let maxChroma = 0;
+  let peakTs = 0;
+
+  for (let ts = 0; ts <= 12000; ts += 600) {
+    field.draw(ts, basePalette, false);
+    assert.equal(waves.active(), false);
+    const [r, g, b, a] = sampleAt(probeX, probeY);
+    const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+    if (a < minAlpha) minAlpha = a;
+    if (a > maxAlpha) {
+      maxAlpha = a;
+      peakTs = ts;
+    }
+    if (chroma > maxChroma) maxChroma = chroma;
+  }
+
+  assert.ok(maxChroma >= 45, `expected vivid Google 4-color nebula tinting with aura:null (chroma >= 45), got ${maxChroma}`);
+  assert.ok(maxAlpha >= minAlpha + 14, `expected visible breathing brightness variation across time, got min=${minAlpha}, max=${maxAlpha}`);
+
+  field.setCalmZones([]);
+  field.draw(peakTs, basePalette, false);
+  const unmaskedNebulaAlpha = sampleAt(probeX, probeY)[3];
+
+  field.setCalmZones([{ x: probeX - 50, y: probeY - 40, w: 100, h: 80 }]);
+  field.draw(peakTs, basePalette, false);
+  const calmedNebulaAlpha = sampleAt(probeX, probeY)[3];
+  assert.ok(
+    calmedNebulaAlpha < unmaskedNebulaAlpha * 0.65,
+    `expected calmZone to suppress nebula alpha (${calmedNebulaAlpha} < 0.65 * ${unmaskedNebulaAlpha})`
+  );
+
+  field.setCalmZones([]);
+  field.draw(1000, basePalette, true);
+  assert.equal(field.needsDraw(2500, true), false, 'reduced-motion still mode should not schedule idle redraws');
+  const stillPxA = sampleAt(probeX, probeY);
+  field.invalidate();
+  field.draw(7500, basePalette, true);
+  const stillPxB = sampleAt(probeX, probeY);
+  assert.deepEqual(stillPxA, stillPxB, 'reduced-motion still mode should hold constant nebula output across timestamps');
+
+  field.dispose();
+});
+
+test('mountBrandHorizonGlow draws Antigravity bottom-weighted cobalt horizon glow in 2D fallback mode and cleans up safely', () => {
+  const prevForce = globalThis.__agRippleForce2D;
+  globalThis.__agRippleForce2D = true;
+  try {
+    let lastImage = null;
+    const ctx2d = {
+      createImageData(w, h) {
+        return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) };
+      },
+      putImageData(img) {
+        lastImage = img;
+      },
+    };
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext(type) {
+        return type === '2d' ? ctx2d : null;
+      },
+    };
+    assert.equal(rippleCore.HORIZON_SPECTRUM.length, 4);
+    const glow = rippleCore.mountBrandHorizonGlow(canvas);
+    assert.equal(glow.mode, '2d');
+    glow.resize(240, 160, 1);
+    glow.draw(0, { dark: true, still: true, prismStrength: 1 });
+    glow.draw(1200, { dark: true, still: false, prismStrength: 1 });
+    assert.ok(lastImage, '2D fallback horizon glow should emit ImageData frame');
+
+    const sampleRowAlpha = (rowY) => {
+      let sum = 0;
+      let blueDominance = 0;
+      for (let x = 20; x < 220; x += 10) {
+        const idx = (rowY * lastImage.width + x) * 4;
+        sum += lastImage.data[idx + 3];
+        blueDominance += lastImage.data[idx + 2] - lastImage.data[idx];
+      }
+      return { sum, blueDominance };
+    };
+    const topBand = sampleRowAlpha(16);
+    const bottomBand = sampleRowAlpha(152);
+    assert.equal(topBand.sum, 0, 'Upper region above horizon reach should stay completely transparent');
+    assert.ok(bottomBand.sum > 200, `Expected visible horizon glow near bottom edge, got alpha sum ${bottomBand.sum}`);
+    assert.ok(bottomBand.blueDominance > 100, 'Expected Antigravity cobalt/sky blue dominance near horizon');
+    glow.dispose();
+  } finally {
+    if (prevForce === undefined) delete globalThis.__agRippleForce2D;
+    else globalThis.__agRippleForce2D = prevForce;
+  }
+});
+
+test('mountBrandHorizonGlow 2D supports conversation 4-state optics (idle / start surge / running prism / complete chime) while preserving home defaults', () => {
+  function makeHorizon2DCanvas() {
+    let lastImage = null;
+    let drawCalls = 0;
+    const ctx2d = {
+      createImageData(w, h) {
+        return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) };
+      },
+      putImageData(img) {
+        lastImage = img;
+        drawCalls++;
+      },
+    };
+    return {
+      width: 0,
+      height: 0,
+      get lastImage() { return lastImage; },
+      get drawCalls() { return drawCalls; },
+      getContext(type) {
+        return type === '2d' ? ctx2d : null;
+      },
+    };
+  }
+
+  assert.deepEqual(rippleCore.DEFAULT_HORIZON_AURA, { reach: 0.47, prism: 0, surge: 0, speed: 1 });
+  assert.equal(rippleCore.HORIZON_PRISM_STOPS.length, 5);
+  const c0 = rippleCore.horizonPrismRgb(0, [0, 0, 0]);
+  const c1 = rippleCore.horizonPrismRgb(1, [0, 0, 0]);
+  assert.deepEqual(c0, c1, 'horizonPrismRgb loop must close seamlessly at t=0 and t=1');
+
+  const noopGlow = rippleCore.mountBrandHorizonGlow(null);
+  assert.equal(noopGlow.mode, 'none');
+  assert.deepEqual(noopGlow.setAuraParams({ reach: 0.2 }), rippleCore.DEFAULT_HORIZON_AURA);
+  assert.equal(noopGlow.drawStaticSnapshot({ dark: false, strength: 0.3 }), false);
+  assert.equal(noopGlow.isSleeping(), true);
+
+  const W = 240;
+  const H = 200;
+  const homeCanvas = makeHorizon2DCanvas();
+  const homeGlow = rippleCore.mountBrandHorizonGlow(homeCanvas, { force2D: true });
+  homeGlow.resize(W, H, 1);
+  homeGlow.draw(2000, { dark: true, still: false, prismStrength: 1 });
+  homeGlow.draw(4000, { dark: true, still: false, prismStrength: 1 });
+
+  const convCanvas = makeHorizon2DCanvas();
+  const convGlow = rippleCore.mountBrandHorizonGlow(convCanvas, { force2D: true });
+  convGlow.resize(W, H, 1);
+
+  const totalAlpha = (img, yStart = 0, yEnd = img.height) => {
+    let sum = 0;
+    for (let y = yStart; y < yEnd; y++) {
+      for (let x = 0; x < img.width; x++) {
+        sum += img.data[(y * img.width + x) * 4 + 3];
+      }
+    }
+    return sum;
+  };
+
+  convGlow.draw(2000, true, 0.20, { reach: 0.16, prism: 0.06, surge: 0, speed: 0.55 });
+  convGlow.draw(4000, true, 0.20, { reach: 0.16, prism: 0.06, surge: 0, speed: 0.55 });
+  const homeTotal = totalAlpha(homeCanvas.lastImage);
+  const idleTotal = totalAlpha(convCanvas.lastImage);
+  assert.ok(idleTotal > 0, 'Idle conversation aura should remain subtly visible near bottom edge');
+  assert.ok(idleTotal < homeTotal * 0.32, `Idle conversation aura (${idleTotal}) must be >68% weaker than home glow (${homeTotal})`);
+  assert.equal(totalAlpha(convCanvas.lastImage, 0, Math.floor(H * 0.55)), 0, 'Upper 55% reading area must stay 100% transparent in idle');
+
+  convGlow.draw(4100, true, 0.36, { reach: 0.25, prism: 0.36, surge: 0, speed: 1.15 });
+  const frontRowY = Math.round(H * (1 - 0.25 * 0.92));
+  const baselineFrontAlpha = totalAlpha(convCanvas.lastImage, frontRowY - 2, frontRowY + 3);
+
+  convGlow.draw(4133, true, 0.36, { reach: 0.25, prism: 0.36, surge: 0.58, speed: 1.15 });
+  const surgedFrontAlpha = totalAlpha(convCanvas.lastImage, frontRowY - 2, frontRowY + 3);
+  assert.ok(surgedFrontAlpha > baselineFrontAlpha + 120, `Start surge should lift upper arc wavefront (${surgedFrontAlpha} > ${baselineFrontAlpha} + 120)`);
+  assert.equal(totalAlpha(convCanvas.lastImage, 0, Math.floor(H * 0.5)), 0, 'Upper 50% reading area must remain 100% transparent even at peak start surge');
+
+  convGlow.draw(4200, true, 0.32, { reach: 0.22, prism: 0, surge: 0, speed: 1.12 });
+  const pureBlueImg = Uint8ClampedArray.from(convCanvas.lastImage.data);
+  convGlow.draw(4200, true, 0.32, { reach: 0.22, prism: 0.40, surge: 0, speed: 1.12 });
+  const prismImg = convCanvas.lastImage.data;
+  let prismColorDelta = 0;
+  for (let i = 0; i < prismImg.length; i += 4) {
+    if (prismImg[i + 3] > 0) {
+      prismColorDelta += Math.abs(prismImg[i] - pureBlueImg[i]) + Math.abs(prismImg[i + 1] - pureBlueImg[i + 1]);
+    }
+  }
+  assert.ok(prismColorDelta > 2500, `Expected smooth Google 4-color prism dispersion across horizon wings, got delta=${prismColorDelta}`);
+
+  const regionEnergy = (img, x0, x1, y0, y1) => {
+    let e = 0;
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        const idx = (y * img.width + x) * 4;
+        e += img.data[idx] * img.data[idx + 3];
+      }
+    }
+    return e;
+  };
+  convGlow.draw(4300, true, 0.30, { reach: 0.23, prism: 0.12, surge: -0.22, speed: 0.9 });
+  const earlyCenter = regionEnergy(convCanvas.lastImage, Math.floor(W * 0.4), Math.floor(W * 0.6), Math.floor(H * 0.8), H);
+  const earlyFlank = regionEnergy(convCanvas.lastImage, Math.floor(W * 0.1), Math.floor(W * 0.28), Math.floor(H * 0.8), H);
+
+  convGlow.draw(4340, true, 0.30, { reach: 0.23, prism: 0.12, surge: -0.72, speed: 0.9 });
+  const lateCenter = regionEnergy(convCanvas.lastImage, Math.floor(W * 0.4), Math.floor(W * 0.6), Math.floor(H * 0.8), H);
+  const lateFlank = regionEnergy(convCanvas.lastImage, Math.floor(W * 0.1), Math.floor(W * 0.28), Math.floor(H * 0.8), H);
+  assert.ok(
+    lateFlank / Math.max(1, lateCenter) > earlyFlank / Math.max(1, earlyCenter),
+    'Complete chime ripple should expand outward from center toward lateral flanks as surge progresses from -0.22 to -0.72'
+  );
+
+  const setSnap = convGlow.setAuraParams({ reach: 0.18, prism: 0.15, speed: 0.55 });
+  assert.equal(setSnap.reach, 0.18);
+  assert.equal(setSnap.prism, 0.15);
+  assert.equal(setSnap.speed, 0.55);
+  convGlow.draw(5000, true, 0.24);
+  const beforeSpeedShift = Uint8ClampedArray.from(convCanvas.lastImage.data);
+  convGlow.draw(5020, true, 0.24, { reach: 0.18, prism: 0.15, speed: 1.15 });
+  const afterSpeedShift = convCanvas.lastImage.data;
+  let maxSingleStepJump = 0;
+  for (let i = 0; i < afterSpeedShift.length; i += 4) {
+    maxSingleStepJump = Math.max(maxSingleStepJump, Math.abs(afterSpeedShift[i + 3] - beforeSpeedShift[i + 3]));
+  }
+  assert.ok(maxSingleStepJump <= 8, `Phase accumulator should keep speed transition smooth without jump, got max alpha step=${maxSingleStepJump}`);
+
+  const resetSnap = convGlow.setAuraParams(null);
+  assert.deepEqual(resetSnap, rippleCore.DEFAULT_HORIZON_AURA);
+
+  homeGlow.dispose();
+  convGlow.dispose();
+});
+
+test('mountBrandHorizonGlow WebGL2 shader compiles #version 300 es prism/surge/speed uniforms and Daylight Dichroic Ink Wash', () => {
+  const prevForce = globalThis.__agRippleForce2D;
+  delete globalThis.__agRippleForce2D;
+  try {
+    const shaderSources = [];
+    const uniformValues = new Map();
+    let drawArraysCount = 0;
+    let deletedPrograms = 0;
+    const listeners = new Map();
+
+    const mockGl = {
+      VERTEX_SHADER: 0x8b31,
+      FRAGMENT_SHADER: 0x8b30,
+      COMPILE_STATUS: 0x8b81,
+      LINK_STATUS: 0x8b82,
+      COLOR_BUFFER_BIT: 0x4000,
+      TRIANGLES: 0x0004,
+      createShader(type) { return { type, source: '' }; },
+      shaderSource(sh, src) { sh.source = src; shaderSources.push(src); },
+      compileShader() {},
+      getShaderParameter() { return true; },
+      getShaderInfoLog() { return ''; },
+      deleteShader() {},
+      createProgram() { return { id: 'glow-prog' }; },
+      attachShader() {},
+      linkProgram() {},
+      getProgramParameter() { return true; },
+      getProgramInfoLog() { return ''; },
+      useProgram() {},
+      deleteProgram() { deletedPrograms++; },
+      getUniformLocation(_prog, name) { return { name }; },
+      viewport() {},
+      uniform2f(loc, x, y) { if (loc) uniformValues.set(loc.name, [x, y]); },
+      uniform1f(loc, v) { if (loc) uniformValues.set(loc.name, v); },
+      clearColor() {},
+      clear() {},
+      drawArrays(_mode, _first, count) {
+        if (count === 3) drawArraysCount++;
+      },
+    };
+
+    const canvas = {
+      width: 0,
+      height: 0,
+      addEventListener(evt, fn) { listeners.set(evt, fn); },
+      removeEventListener(evt) { listeners.delete(evt); },
+      getContext(type) { return type === 'webgl2' ? mockGl : null; },
+    };
+
+    const glow = rippleCore.mountBrandHorizonGlow(canvas);
+    assert.equal(glow.mode, 'webgl2');
+
+    const fragSrc = shaderSources.find((s) => s.includes('uniform float uPrism'));
+    assert.ok(fragSrc, 'Fragment shader source should declare uPrism uniform');
+    assert.equal(fragSrc, rippleCore.HORIZON_FRAGMENT_SHADER);
+    assert.ok(fragSrc.startsWith('#version 300 es'), 'Fragment shader must use WebGL2 #version 300 es');
+    for (const token of [
+      'uniform float uReach;',
+      'uniform float uPrism;',
+      'uniform float uSurge;',
+      'uniform float uSpeed;',
+      'vec3 prismLoop(',
+      'vec3 daylightInkLoop(',
+      'DAY_COBALT',
+      'DAY_IRIS',
+      'DAY_CORAL',
+      'DAY_AMBER',
+      'ICE_MIST',
+    ]) {
+      assert.ok(fragSrc.includes(token), `Expected HORIZON_FRAGMENT_SHADER to include "${token}"`);
+    }
+    // 严格防退化：WebGL2 GLSL ES 3.00 源码必须 100% 纯 ASCII（防 ANGLE 编译器因非 ASCII 注释报错），且浅色分支绝不可使用 mix(vec3(1.0), ...) 冲白
+    for (const src of shaderSources) {
+      assert.equal(/^[\x09\x0a\x0d\x20-\x7e]*$/.test(src), true, 'WebGL2 GLSL ES 3.00 shader source must contain strictly ASCII characters');
+      let braces = 0;
+      let parens = 0;
+      for (const ch of src) {
+        if (ch === '{') braces++;
+        else if (ch === '}') braces--;
+        else if (ch === '(') parens++;
+        else if (ch === ')') parens--;
+      }
+      assert.equal(braces, 0, 'GLSL braces must be balanced');
+      assert.equal(parens, 0, 'GLSL parentheses must be balanced');
+    }
+    assert.equal(fragSrc.includes('mix(vec3(1.0)'), false, 'Daylight shader must NOT dilute ink into white fog via mix(vec3(1.0), ...)');
+
+    glow.resize(320, 180, 1);
+
+    glow.draw(0, { dark: true, still: false, prismStrength: 1 });
+    assert.equal(drawArraysCount, 1);
+    assert.ok(Math.abs(uniformValues.get('uReach') - 0.47) < 1e-6);
+    assert.equal(uniformValues.get('uPrism'), 0);
+    assert.equal(uniformValues.get('uSurge'), 0);
+    assert.equal(uniformValues.get('uSpeed'), 1);
+
+    glow.draw(1000, true, 0.20, { reach: 0.16, prism: 0.06, surge: 0, speed: 0.55 });
+    assert.equal(drawArraysCount, 2);
+    assert.ok(Math.abs(uniformValues.get('uReach') - 0.16) < 1e-6);
+    assert.ok(Math.abs(uniformValues.get('uPrism') - 0.06) < 1e-6);
+    assert.equal(uniformValues.get('uSurge'), 0);
+    assert.ok(Math.abs(uniformValues.get('uSpeed') - 0.55) < 1e-6);
+
+    glow.draw(1016, true, 0.40, { reach: 0.25, prism: 0.36, surge: 0.54, speed: 1.15 });
+    assert.equal(drawArraysCount, 3, 'Transient start surge frame at +16ms must not be dropped by throttle');
+    assert.ok(Math.abs(uniformValues.get('uSurge') - 0.54) < 1e-6);
+    assert.ok(Math.abs(uniformValues.get('uPrism') - 0.36) < 1e-6);
+
+    glow.draw(1060, true, 0.28, { reach: 0.21, prism: 0.19, surge: 0, speed: 1.12 });
+    assert.equal(drawArraysCount, 4);
+    assert.ok(Math.abs(uniformValues.get('uReach') - 0.21) < 1e-6);
+    assert.ok(Math.abs(uniformValues.get('uPrism') - 0.19) < 1e-6);
+    assert.equal(uniformValues.get('uSurge'), 0);
+
+    glow.draw(1090, false, 0.30, { reach: 0.22, prism: 0.24, surge: -0.65, speed: 0.85 });
+    assert.equal(drawArraysCount, 5);
+    assert.equal(uniformValues.get('uDark'), 0);
+    assert.ok(Math.abs(uniformValues.get('uSurge') - (-0.65)) < 1e-6);
+
+    assert.ok(listeners.has('webglcontextrestored'));
+    listeners.get('webglcontextrestored')();
+    glow.draw(1090, false, 0.30, { reach: 0.22, prism: 0.24, surge: -0.65, speed: 0.85 });
+    assert.equal(drawArraysCount, 6);
+
+    glow.dispose();
+    assert.equal(deletedPrograms, 1);
+    assert.equal(listeners.size, 0);
+  } finally {
+    if (prevForce !== undefined) globalThis.__agRippleForce2D = prevForce;
+  }
+});
+
+test('Daylight Dichroic Ink Wash renders vivid non-white jewel chroma on #F4F7FB / #F6F4EE even at low conversation strength (0.22~0.35)', () => {
+  let lastImage = null;
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext(type) {
+      if (type !== '2d') return null;
+      return {
+        createImageData(w, h) {
+          return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) };
+        },
+        putImageData(img) {
+          lastImage = img;
+        },
+      };
+    },
+  };
+
+  const W = 280;
+  const H = 180;
+  const glow = rippleCore.mountBrandHorizonGlow(canvas, { force2D: true });
+  glow.resize(W, H, 1);
+
+  // 在苛刻的会话页低强度 strength = 0.24（浅色模式）下直接绘制静帧快照
+  const rendered = glow.drawStaticSnapshot(1000, false, 0.24, { reach: 0.26, prism: 0.22, surge: 0, speed: 0.55 });
+  assert.equal(rendered, true);
+  assert.equal(glow.isSleeping(), true);
+  assert.ok(lastImage, 'Expected 2D ImageData output for daylight static snapshot');
+
+  // 上方阅读区必须 100% 透明
+  let topAlpha = 0;
+  for (let y = 0; y < Math.floor(H * 0.45); y++) {
+    for (let x = 0; x < W; x++) {
+      topAlpha += lastImage.data[(y * W + x) * 4 + 3];
+    }
+  }
+  assert.equal(topAlpha, 0, 'Upper reading area must remain 100% transparent in daylight mode');
+
+  // 采样底部地平线光带，合成到 Daylight Crystal (#F4F7FB = [244, 247, 251]) 白底上检验视觉对比度与彩墨饱和度
+  const bg = [244, 247, 251];
+  const rowY = H - 6;
+  let maxAlpha = 0;
+  let maxRawChroma = 0;
+  let maxCompositeDeltaFromBg = 0;
+  const sampledHues = [];
+
+  for (let x = 24; x <= W - 24; x += 16) {
+    const idx = (rowY * W + x) * 4;
+    const r = lastImage.data[idx];
+    const g = lastImage.data[idx + 1];
+    const b = lastImage.data[idx + 2];
+    const a = lastImage.data[idx + 3];
+    if (a > maxAlpha) maxAlpha = a;
+    if (a > 20) {
+      const rawChroma = Math.max(r, g, b) - Math.min(r, g, b);
+      if (rawChroma > maxRawChroma) maxRawChroma = rawChroma;
+      // 严禁退化为近纯白灰雾（例如 R>235 && G>235 && B>235）
+      assert.equal(r > 235 && g > 235 && b > 235, false, `Pixel at x=${x} degenerated to near-white fog: rgba(${r},${g},${b},${a})`);
+      const af = a / 255;
+      const compR = bg[0] * (1 - af) + r * af;
+      const compG = bg[1] * (1 - af) + g * af;
+      const compB = bg[2] * (1 - af) + b * af;
+      const delta = Math.abs(bg[0] - compR) + Math.abs(bg[1] - compG) + Math.abs(bg[2] - compB);
+      if (delta > maxCompositeDeltaFromBg) maxCompositeDeltaFromBg = delta;
+      sampledHues.push([r, g, b]);
+    }
+  }
+
+  assert.ok(maxAlpha >= 70, `Expected visible alpha >= 70 at conversation strength 0.24 in daylight mode, got ${maxAlpha}`);
+  assert.ok(maxRawChroma >= 95, `Expected high-saturation jewel ink chroma >= 95 (not washed-out gray/white), got ${maxRawChroma}`);
+  assert.ok(maxCompositeDeltaFromBg >= 65, `Expected clear visible contrast >= 65 against #F4F7FB canvas, got ${maxCompositeDeltaFromBg}`);
+
+  // 验证横跨地平线存在多色棱镜折射梯度（左翼与右翼 RGB 明显不同）
+  assert.ok(sampledHues.length >= 6);
+  let maxSpanDiff = 0;
+  for (let i = 0; i < sampledHues.length; i++) {
+    for (let j = i + 1; j < sampledHues.length; j++) {
+      const d = Math.abs(sampledHues[i][0] - sampledHues[j][0])
+        + Math.abs(sampledHues[i][1] - sampledHues[j][1])
+        + Math.abs(sampledHues[i][2] - sampledHues[j][2]);
+      if (d > maxSpanDiff) maxSpanDiff = d;
+    }
+  }
+  assert.ok(maxSpanDiff >= 90, `Expected multi-hue prismatic ink dispersion across horizon span, got max diff ${maxSpanDiff}`);
+
+  // 验证动态唤醒后 isSleeping 自动解除，再次单对象调用 drawStaticSnapshot 立即重回休眠
+  glow.draw(1200, false, 0.35, { reach: 0.26, prism: 0.3, surge: 0.4, speed: 1.1 });
+  assert.equal(glow.isSleeping(), false);
+  assert.equal(glow.drawStaticSnapshot({ dark: false, strength: 0.52, reach: 0.32, prism: 0.2 }), true);
+  assert.equal(glow.isSleeping(), true);
+
+  glow.dispose();
+});
+
+test('createGlyphField.triggerLiftoffBurst & busy() converge strictly to false after wave & trail decay (zero infinite rAF)', () => {
+  function makeMockCanvas(width, height) {
+    let lastImage = null;
+    const ctx2d = {
+      setTransform() {},
+      clearRect() {},
+      fillText() {},
+      getImageData(_x, _y, w, h) {
+        const buf = new Uint8ClampedArray(w * h * 4);
+        for (let i = 3; i < buf.length; i += 4) buf[i] = 255;
+        return { width: w, height: h, data: buf };
+      },
+      createImageData(w, h) {
+        return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) };
+      },
+      putImageData(img) {
+        lastImage = img;
+      },
+    };
+    return {
+      width,
+      height,
+      get lastImage() { return lastImage; },
+      ownerDocument: {
+        hidden: false,
+        createElement() { return makeMockCanvas(1, 1); },
+      },
+      getContext(type) { return type === '2d' ? ctx2d : null; },
+    };
+  }
+
+  const zeroField = rippleCore.createGlyphField(makeMockCanvas(0, 0), 0, 0, rippleCore.createWaveField(0, 0));
+  assert.equal(zeroField.triggerLiftoffBurst(), false);
+  assert.equal(zeroField.triggerTideSwell(), false);
+  assert.equal(zeroField.busy(), false);
+  assert.equal(zeroField.isSettled(), true);
+
+  const cols = 50;
+  const rows = 28;
+  const { cellWidth, cellHeight } = rippleCore.RIPPLE;
+  const canvas = makeMockCanvas(cols * cellWidth, rows * cellHeight);
+  const waves = rippleCore.createWaveField(cols, rows, () => 0.5);
+  const field = rippleCore.createGlyphField(canvas, cols, rows, waves);
+  assert.equal(field.busy(), false);
+  assert.equal(field.isSettled(), true);
+
+  assert.equal(field.triggerLiftoffBurst(0.3, 0.7), true);
+  assert.equal(waves.active(), true);
+  assert.equal(field.busy(), true);
+  assert.equal(field.isSettled(), false);
+
+  waves.advance(0.05);
+  waves.advance(0.05);
+
+  const targetCol = Math.round(0.3 * (cols - 1));
+  const targetRow = Math.round(0.7 * (rows - 1));
+  let localEnergy = 0;
+  let farCornerEnergy = 0;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const h = Math.abs(waves.height[r * cols + c]);
+      if (Math.abs(c - targetCol) <= 8 && Math.abs(r - targetRow) <= 6) localEnergy += h;
+      if (c > cols - 6 && r < 4) farCornerEnergy += h;
+    }
+  }
+  assert.ok(localEnergy > 2.5, `Expected strong dual-layer liftoff thrust energy near (0.3, 0.7), got ${localEnergy}`);
+  assert.ok(farCornerEnergy < localEnergy * 0.01, `Wavefront should concentrate at normalized liftoff anchor (${farCornerEnergy} << ${localEnergy})`);
+
+  field.draw(1000, { dark: true, ink: [146, 148, 156], wave: [214, 218, 228], aura: null, nebula: false, prismStrength: 0.2 }, false);
+  const img = canvas.lastImage;
+  let maxBurstChroma = 0;
+  for (let i = 0; i < img.data.length; i += 4) {
+    if (img.data[i + 3] > 40) {
+      const r = img.data[i], g = img.data[i + 1], b = img.data[i + 2];
+      const ch = Math.max(r, g, b) - Math.min(r, g, b);
+      if (ch > maxBurstChroma) maxBurstChroma = ch;
+    }
+  }
+  assert.ok(maxBurstChroma >= 45, `Expected prism dispersion boost chroma >= 45 on liftoff burst, got ${maxBurstChroma}`);
+
+  // 验证大跨度时间戳跳跃后单帧即可彻底衰减尾迹归零，无需数十次冗余 draw
+  assert.equal(field.triggerLiftoffBurst(Number.NaN, 99), true);
+  for (let step = 0; step < 520; step++) waves.advance(0.05);
+  assert.equal(waves.active(), false);
+  field.draw(12000, { dark: true, ink: [146, 148, 156], wave: [214, 218, 228], aura: null }, false);
+  assert.equal(field.busy(), false, 'busy() must immediately settle to false once wave & glow decay elapse');
+  assert.equal(field.isSettled(), true);
+
+  // 验证无渲染上下文（headless null context）下 busy() 同样能准确归零，绝不残留 prismBurst
+  const headlessWaves = rippleCore.createWaveField(20, 12, () => 0.5);
+  const headlessField = rippleCore.createGlyphField({ width: 140, height: 180, ownerDocument: { hidden: false }, getContext: () => null }, 20, 12, headlessWaves);
+  assert.equal(headlessField.triggerLiftoffBurst(), true);
+  assert.equal(headlessField.busy(), true);
+  for (let step = 0; step < 500; step++) headlessWaves.advance(0.05);
+  headlessField.draw(10000, { dark: false }, false);
+  assert.equal(headlessField.busy(), false, 'headless field must also decay prismBurst to 0 and report busy() === false');
+
+  headlessField.dispose();
+  field.dispose();
+});
+
+test('createGlyphField.triggerTideSwell excites 3 staggered horizon wave sources along bottom edge', () => {
+  const cols = 60;
+  const rows = 30;
+  const { cellWidth, cellHeight } = rippleCore.RIPPLE;
+  const mockCanvas = {
+    width: cols * cellWidth,
+    height: rows * cellHeight,
+    ownerDocument: {
+      hidden: false,
+      createElement() { return mockCanvas; },
+    },
+    getContext() { return null; },
+  };
+  const waves = rippleCore.createWaveField(cols, rows, () => 0.5);
+  const field = rippleCore.createGlyphField(mockCanvas, cols, rows, waves);
+
+  assert.equal(field.triggerTideSwell(), true);
+  assert.equal(waves.active(), true);
+
+  const bandEnergy = (c0, c1, r0, r1) => {
+    let sum = 0;
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) sum += Math.abs(waves.height[r * cols + c]);
+    }
+    return sum;
+  };
+
+  waves.advance(0.03);
+  const earlyCenter = bandEnergy(27, 33, rows - 7, rows - 1);
+  const earlyLeft = bandEnergy(10, 16, rows - 7, rows - 1);
+  const earlyRight = bandEnergy(44, 50, rows - 7, rows - 1);
+  const earlyTop = bandEnergy(0, cols - 1, 0, 6);
+  assert.ok(earlyCenter > 1.0, `Expected center horizon swell to rise first, got ${earlyCenter}`);
+  assert.ok(earlyLeft < earlyCenter * 0.08, `Left flank (${earlyLeft}) should remain quiet before its 0.07s stagger`);
+  assert.ok(earlyRight < earlyCenter * 0.08, `Right flank (${earlyRight}) should remain quiet before its 0.14s stagger`);
+  assert.ok(earlyTop < 1e-6, `Upper reading zone should stay undisturbed, got ${earlyTop}`);
+
+  waves.advance(0.05);
+  waves.advance(0.03);
+  const midLeft = bandEnergy(10, 16, rows - 7, rows - 1);
+  const midRight = bandEnergy(44, 50, rows - 7, rows - 1);
+  assert.ok(midLeft > earlyLeft * 4 + 0.5, `Expected staggered left horizon swell to rise after 0.07s, got ${midLeft}`);
+  assert.ok(midLeft > midRight * 2.2, `Left swell (${midLeft}) should lead right swell (${midRight}) before 0.14s`);
+
+  waves.advance(0.05);
+  waves.advance(0.03);
+  const lateRight = bandEnergy(44, 50, rows - 7, rows - 1);
+  assert.ok(lateRight > midRight * 2 + 0.5, `Expected staggered right horizon swell to rise after 0.14s, got ${lateRight}`);
+
+  for (let step = 0; step < 500; step++) waves.advance(0.05);
+  assert.equal(waves.active(), false);
+  field.dispose();
+});
+
+test('document.hidden suppresses idle/active frame draws in both createGlyphField and mountBrandHorizonGlow', () => {
+  let glyphDraws = 0;
+  let glowDraws = 0;
+  const docState = {
+    hidden: false,
+    createElement() { return makeGlyphCanvas(1, 1); },
+  };
+
+  function makeGlyphCanvas(w, h) {
+    const ctx2d = {
+      setTransform() {},
+      clearRect() {},
+      fillText() {},
+      getImageData(_x, _y, iw, ih) {
+        const buf = new Uint8ClampedArray(iw * ih * 4);
+        for (let i = 3; i < buf.length; i += 4) buf[i] = 255;
+        return { width: iw, height: ih, data: buf };
+      },
+      createImageData(iw, ih) {
+        return { width: iw, height: ih, data: new Uint8ClampedArray(iw * ih * 4) };
+      },
+      putImageData() {
+        glyphDraws++;
+      },
+    };
+    return {
+      width: w,
+      height: h,
+      ownerDocument: docState,
+      getContext(type) { return type === '2d' ? ctx2d : null; },
+    };
+  }
+
+  const glowCanvas = {
+    width: 0,
+    height: 0,
+    ownerDocument: docState,
+    getContext(type) {
+      if (type !== '2d') return null;
+      return {
+        createImageData(w, h) { return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }; },
+        putImageData() { glowDraws++; },
+      };
+    },
+  };
+
+  const cols = 20, rows = 12;
+  const gCanvas = makeGlyphCanvas(cols * rippleCore.RIPPLE.cellWidth, rows * rippleCore.RIPPLE.cellHeight);
+  const waves = rippleCore.createWaveField(cols, rows, () => 0.5);
+  const field = rippleCore.createGlyphField(gCanvas, cols, rows, waves);
+  const glow = rippleCore.mountBrandHorizonGlow(glowCanvas, { force2D: true });
+  glow.resize(160, 120, 1);
+
+  const pal = { dark: true, ink: [146, 148, 156], wave: [214, 218, 228], aura: null };
+
+  docState.hidden = true;
+  field.triggerLiftoffBurst();
+  waves.advance(0.04);
+  assert.equal(field.needsDraw(1000, false), false, 'needsDraw must return false while document.hidden is true');
+  const prevGlyphDraws = glyphDraws;
+  field.draw(1000, pal, false);
+  glow.draw(1000, true, 0.35, { reach: 0.25, prism: 0.3, surge: 0.5, speed: 1.1 });
+  assert.equal(glyphDraws, prevGlyphDraws, 'createGlyphField.draw must skip rendering while document.hidden');
+  assert.equal(glowDraws, 0, 'mountBrandHorizonGlow.draw must skip rendering while document.hidden');
+
+  docState.hidden = false;
+  assert.equal(field.needsDraw(1050, false), true);
+  field.draw(1050, pal, false);
+  glow.draw(1050, true, 0.35, { reach: 0.25, prism: 0.3, surge: 0.5, speed: 1.1 });
+  assert.equal(glyphDraws, prevGlyphDraws + 1);
+  assert.equal(glowDraws, 1);
+
+  field.dispose();
+  glow.dispose();
+});
+
+test('style.css enforces GPU compositor offloading, dual daylight presets (Crystal & Alabaster), and core specificity guards', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+  let cssBraces = 0;
+  for (const ch of css) {
+    if (ch === '{') cssBraces++;
+    else if (ch === '}') cssBraces--;
+    assert.ok(cssBraces >= 0, 'style.css must never close an unopened brace');
+  }
+  assert.equal(cssBraces, 0, 'style.css curly braces must be 100% balanced');
+
+  // 1) 常驻底部输入舱与首页大面板彻底拔除 backdrop-filter，仅小面积临时浮层保留 blur(16px)
+  const composerBlock = css.match(/& \.surface-composer-card\{[\s\S]*?\n\}/)?.[0] || '';
+  assert.ok(composerBlock.includes('backdrop-filter:none !important'), '.surface-composer-card must force backdrop-filter:none !important');
+  assert.equal(composerBlock.includes('blur('), false, '.surface-composer-card must not apply any blur()');
+
+  const homePanelLine = css.split('\n').find((l) => l.startsWith('.ag-cs-home-panel{')) || '';
+  assert.ok(homePanelLine.includes('backdrop-filter:none'), '.ag-cs-home-panel must disable backdrop-filter');
+  assert.equal(homePanelLine.includes('blur('), false, '.ag-cs-home-panel must not apply blur()');
+
+  assert.ok(css.includes('backdrop-filter:blur(16px)'), 'Transient popovers (.agy-overlay / overview-panel) should retain moderate blur(16px)');
+  assert.equal(css.includes('blur(20px)'), false);
+  assert.equal(css.includes('blur(24px)'), false);
+
+  // 2) 流式吐字移除逐词 filter:blur(4px)，100% 纯 GPU 合成层属性 + 收敛侧栏无限滤镜位移
+  const streamKeyframe = css.split('\n').find((l) => l.startsWith('@keyframes ag-cs-stream-chunk')) || '';
+  assert.ok(streamKeyframe.includes('translate3d(0,2.5px,0)'), 'ag-cs-stream-chunk must use pure GPU translate3d(0, 2.5px, 0)');
+  assert.equal(streamKeyframe.includes('filter'), false, 'ag-cs-stream-chunk must never animate filter/blur');
+  assert.equal(css.includes('ag-cs-row-aurora'), false, 'Expensive background-position row-aurora loop must be removed');
+  assert.equal(css.includes('ag-cs-pill-breath'), false, 'Expensive filter:brightness pill-breath loop must be removed');
+
+  // 3) 关键特异性与防黑边防线 + warm/claude 暖调同享 + .ag-prism-thought-raw-toggle 零闪烁保护
+  assert.ok(css.includes('[data-testid="autoscroll-viewport"]{-webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 28px,#000 calc(100% - 22px),transparent 100%) !important;'));
+  assert.ok(css.includes('&[data-ag-cs-style][data-ag-cs-style] [data-testid="thinking-collapsible-trigger"]+div{'));
+  assert.ok(css.includes('&[data-ag-cs-style][data-ag-cs-style] [data-testid="thinking-collapsible-trigger"][aria-expanded="true"]+div{'));
+  assert.ok(css.includes('[data-ag-cs-palette="warm"]'));
+  assert.ok(css.includes('.ag-prism-thought-raw-toggle{') && css.includes('animation:none !important'));
+
+  // 4) 双浅色白昼光学重塑（Daylight Crystal & Warm Alabaster）+ Hero C/D/E 非白扫白高饱和宝石四色
+  for (const token of [
+    '--sidebar:#E8EEF6 !important',
+    '--background:#F4F7FB !important',
+    '--ag-cs-bubble:#EAF1FB',
+    'data-ag-cs-light-preset="alabaster"',
+    '--sidebar:#EBE6DC !important',
+    '--background:#F6F4EE !important',
+    '--ag-cs-bubble:#EFECE2',
+    '--ag-cs-run-core:#FFFFFF',
+    '--ag-cs-run-star:#2563EB',
+    '--ag-cs-thought-rule:rgba(37,99,235,.45)',
+    '@keyframes ag-cs-sonar-pulse-light',
+    'rgba(37,99,235,.065)',
+  ]) {
+    assert.ok(css.includes(token), `Expected style.css to include daylight optical token: ${token}`);
+  }
+  assert.equal(css.includes('rgba(255,255,255,.98)'), false, 'Light Hero C caustic must not sweep white-on-white rgba(255,255,255,.98)');
+
+  // 5) Wave 2: 可折叠设置手风琴外壳 (.ag-cs-settings-fold-head / .ag-cs-settings-fold-body) 与「关于、Git 更新与致谢」卡片 (.ag-cs-about-box)
+  for (const w2Token of [
+    '.ag-cs-settings-fold-head',
+    '.ag-cs-settings-fold-body',
+    '.ag-cs-settings-fold-chevron',
+    '.ag-cs-about-box',
+    '.ag-cs-repo-chip',
+    '.ag-cs-repo-sync-btn',
+    '.ag-cs-about-disclaimer',
+  ]) {
+    assert.ok(css.includes(w2Token), `Expected Wave 2 settings/about CSS selector: ${w2Token}`);
+  }
+});
+
+test('Wave 2: mountBrandHorizonGlow exhibits visible aurora drift and breathing amplitude across speed=0.65~1.8', () => {
+  let lastImage = null;
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext(type) {
+      if (type !== '2d') return null;
+      return {
+        createImageData(w, h) { return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }; },
+        putImageData(img) { lastImage = img; },
+      };
+    },
+  };
+
+  const W = 240;
+  const H = 120;
+  const glow = rippleCore.mountBrandHorizonGlow(canvas, { force2D: true });
+  glow.resize(W, H, 1);
+
+  // 1) Idle 慢呼吸流淌（speed = 0.72, frameMs = 50ms）：连续两帧像素差必须 > 0，且跨 2.4s 呈现明显明暗呼吸
+  glow.draw(1000, true, 0.24, { reach: 0.5, prism: 0.12, surge: 0, speed: 0.72 });
+  const idleFrame0 = Uint8ClampedArray.from(lastImage.data);
+  glow.draw(1050, true, 0.24, { reach: 0.5, prism: 0.12, surge: 0, speed: 0.72 });
+  const idleFrame1 = lastImage.data;
+  let idleStepDelta = 0;
+  for (let i = 0; i < idleFrame1.length; i++) {
+    idleStepDelta += Math.abs(idleFrame1[i] - idleFrame0[i]);
+  }
+  assert.ok(idleStepDelta > 0, `Expected living aurora pixel drift between consecutive 50ms idle frames, got delta=${idleStepDelta}`);
+
+  // 2) Running 极光流淌（speed = 1.45, prism = 0.70）：跨呼吸半周期采样总 alpha 振幅与横向色散游走显著可感
+  let minRunAlpha = Infinity;
+  let maxRunAlpha = 0;
+  for (let ms = 2000; ms <= 6000; ms += 250) {
+    glow.draw(ms, true, 0.34, { reach: 0.65, prism: 0.70, surge: 0, speed: 1.45 });
+    let sumA = 0;
+    for (let i = 3; i < lastImage.data.length; i += 4) sumA += lastImage.data[i];
+    if (sumA < minRunAlpha) minRunAlpha = sumA;
+    if (sumA > maxRunAlpha) maxRunAlpha = sumA;
+  }
+  assert.ok(
+    maxRunAlpha > minRunAlpha * 1.32,
+    `Expected clearly perceptible breathing amplitude (>1.32x) during running state, got min=${minRunAlpha}, max=${maxRunAlpha}`
+  );
+
+  glow.dispose();
+});

@@ -1,0 +1,2899 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const cdp = require('../cdp.js');
+
+test('buildInjectExpression and REMOVE_EXPRESSION compile cleanly and stay within budget (< 680KB)', () => {
+  const injectExpr = cdp.buildInjectExpression();
+  const removeExpr = cdp.REMOVE_EXPRESSION;
+  const payloadBytes = Buffer.byteLength(injectExpr, 'utf8');
+  assert.doesNotThrow(() => new vm.Script(injectExpr));
+  assert.doesNotThrow(() => new vm.Script(removeExpr));
+  assert.ok(payloadBytes < 680 * 1024, `Expected unified Prism payload < 680KB, got ${payloadBytes} bytes`);
+  assert.ok(injectExpr.includes('ag-prism-css'));
+  assert.ok(injectExpr.includes('ag-cs-home-panel'));
+  assert.equal(injectExpr.includes('__agCsPerfAssets'), false);
+  assert.equal(injectExpr.includes('__agCsEffortCore'), false);
+  assert.ok(removeExpr.includes('window.__agPrism.destroy'));
+});
+
+test('inject expression mounts cleanly without model-button or telemetry conflict, and REMOVE_EXPRESSION restores DOM', async () => {
+  function makeNode(tag, opts = {}) {
+    const attrs = new Map(Object.entries(opts.attrs || {}));
+    const listeners = new Map();
+    const children = [];
+    const classes = new Set((opts.className || '').split(/\s+/).filter(Boolean));
+    const node = {
+      tagName: tag.toUpperCase(),
+      id: opts.id || '',
+      style: {
+        _props: {},
+        setProperty(k, v) { this._props[k] = String(v); },
+        getPropertyValue(k) { return this._props[k] || ''; },
+        removeProperty(k) { delete this._props[k]; },
+      },
+      classList: {
+        contains: (c) => classes.has(c),
+        add: (c) => classes.add(c),
+        remove: (c) => classes.delete(c),
+      },
+      get className() { return Array.from(classes).join(' '); },
+      set className(v) { classes.clear(); String(v).split(/\s+/).filter(Boolean).forEach((c) => classes.add(c)); },
+      children,
+      parentElement: null,
+      parentNode: null,
+      isConnected: true,
+      _text: opts.text || '',
+      get textContent() {
+        return children.length ? children.map((c) => c.textContent).join('') : this._text;
+      },
+      set textContent(v) {
+        children.length = 0;
+        this._text = String(v);
+      },
+      set innerHTML(html) {
+        children.length = 0;
+        this._html = html;
+      },
+      get innerHTML() { return this._html || ''; },
+      get childElementCount() { return children.length; },
+      get firstChild() { return children[0] || null; },
+      get nextSibling() {
+        if (!this.parentElement) return null;
+        const idx = this.parentElement.children.indexOf(this);
+        return idx >= 0 ? this.parentElement.children[idx + 1] || null : null;
+      },
+      get lastElementChild() { return children[children.length - 1] || null; },
+      clientWidth: opts.clientWidth ?? 900,
+      clientHeight: opts.clientHeight ?? 700,
+      width: 0,
+      height: 0,
+      appendChild(ch) {
+        ch.parentElement = this;
+        ch.parentNode = this;
+        children.push(ch);
+        return ch;
+      },
+      insertBefore(ch, ref) {
+        ch.parentElement = this;
+        ch.parentNode = this;
+        const idx = ref ? children.indexOf(ref) : -1;
+        if (idx >= 0) children.splice(idx, 0, ch);
+        else children.push(ch);
+        return ch;
+      },
+      removeChild(ch) {
+        const idx = children.indexOf(ch);
+        if (idx >= 0) children.splice(idx, 1);
+        ch.parentElement = null;
+        ch.parentNode = null;
+        return ch;
+      },
+      remove() {
+        if (this.parentElement) this.parentElement.removeChild(this);
+      },
+      setAttribute(k, v) {
+        attrs.set(k, String(v));
+        if (k === 'id') this.id = String(v);
+      },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) { attrs.delete(k); },
+      toggleAttribute(k, force) {
+        const on = force === undefined ? !attrs.has(k) : Boolean(force);
+        if (on) attrs.set(k, ''); else attrs.delete(k);
+        return on;
+      },
+      addEventListener(ev, cb) {
+        if (!listeners.has(ev)) listeners.set(ev, []);
+        listeners.get(ev).push(cb);
+      },
+      removeEventListener(ev, cb) {
+        const arr = listeners.get(ev);
+        if (!arr) return;
+        const idx = arr.indexOf(cb);
+        if (idx >= 0) arr.splice(idx, 1);
+      },
+      dispatch(ev, payload = {}) {
+        const list = listeners.get(ev) || [];
+        for (const fn of [...list]) fn({ type: ev, stopPropagation() {}, preventDefault() {}, ...payload });
+      },
+      getContext() { return null; },
+      getBoundingClientRect() { return { left: 0, top: 0, right: 480, bottom: 300, width: 480, height: 300 }; },
+      animate() { return { cancel() {}, finished: Promise.resolve() }; },
+      closest(sel) {
+        let cur = this;
+        while (cur) {
+          if (matches(cur, sel)) return cur;
+          cur = cur.parentElement;
+        }
+        return null;
+      },
+      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+      querySelectorAll(sel) {
+        const out = [];
+        const walk = (n) => {
+          for (const c of n.children) {
+            if (matches(c, sel)) out.push(c);
+            walk(c);
+          }
+        };
+        walk(this);
+        return out;
+      },
+    };
+    return node;
+  }
+
+  function matchesSimple(node, simple) {
+    let rest = simple.trim();
+    if (!rest) return false;
+    const tagMatch = /^[a-zA-Z0-9_-]+/.exec(rest);
+    if (tagMatch) {
+      if (node.tagName !== tagMatch[0].toUpperCase()) return false;
+      rest = rest.slice(tagMatch[0].length);
+    }
+    while (rest.length > 0) {
+      if (rest[0] === '#') {
+        const m = /^#([a-zA-Z0-9_-]+)/.exec(rest);
+        if (!m || node.id !== m[1]) return false;
+        rest = rest.slice(m[0].length);
+      } else if (rest[0] === '.') {
+        const m = /^\.([a-zA-Z0-9_-]+)/.exec(rest);
+        if (!m || !node.classList.contains(m[1])) return false;
+        rest = rest.slice(m[0].length);
+      } else if (rest[0] === '[') {
+        const m = /^\[([^\]=]+)(?:="([^"]*)")?\]/.exec(rest);
+        if (!m) return false;
+        const ok = m[2] === undefined ? node.hasAttribute(m[1]) : node.getAttribute(m[1]) === m[2];
+        if (!ok) return false;
+        rest = rest.slice(m[0].length);
+      } else {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function matches(node, selector) {
+    return selector.split(',').some((part) => {
+      const tokens = part.trim().split(/\s+/).filter(Boolean);
+      if (tokens.length === 0) return false;
+      if (!matchesSimple(node, tokens[tokens.length - 1])) return false;
+      let cur = node.parentElement;
+      let idx = tokens.length - 2;
+      while (cur && idx >= 0) {
+        if (matchesSimple(cur, tokens[idx])) idx--;
+        cur = cur.parentElement;
+      }
+      return idx < 0;
+    });
+  }
+
+  const html = makeNode('html');
+  const head = makeNode('head');
+  const body = makeNode('body', { className: 'theme-dark' });
+  html.appendChild(head);
+  html.appendChild(body);
+
+  // Build simulated Antigravity Home DOM
+  const home = makeNode('div', { className: 'agy-home' });
+  const scrollWrap = makeNode('div');
+  const scrollCol = makeNode('div');
+  const greeting = makeNode('div', { attrs: { 'data-testid': 'home-greeting' } });
+  const h1 = makeNode('h1', { className: 'home-greeting-title', text: 'Welcome back, girl. Where should we pick up?' });
+  greeting.appendChild(h1);
+  scrollCol.appendChild(greeting);
+  scrollWrap.appendChild(scrollCol);
+  home.appendChild(scrollWrap);
+
+  const inputBox = makeNode('div', { id: 'antigravity.agentSidePanelInputBox', attrs: { 'data-testid': 'agent-input-box' } });
+  const queuedWrap = makeNode('div', { className: 'relative z-[1] flex flex-col gap-2 w-full hidden-if-empty mb-2' });
+  const queuedCard = makeNode('div', { text: '排队中的消息 1 · 智能体完成后发送' });
+  queuedWrap.appendChild(queuedCard);
+  inputBox.appendChild(queuedWrap);
+  const composerShell = makeNode('div', { id: 'antigravity.agentSidePanelInputBox', className: 'surface-composer' });
+  const card = makeNode('div', { className: 'surface-composer-card' });
+  const editorWrap = makeNode('div', { className: 'relative w-full' });
+  const placeholder = makeNode('p', { className: 'pointer-events-none', text: '有问题尽管问' });
+  const editorEl = makeNode('div', { attrs: { contenteditable: 'true', 'data-lexical-editor': 'true' } });
+  editorWrap.appendChild(placeholder);
+  editorWrap.appendChild(editorEl);
+  const footer = makeNode('div', { className: 'agy-composer-footer' });
+  const modelBtn = makeNode('button', { attrs: { 'data-testid': 'model-selector-trigger' } });
+  const modelSpan = makeNode('span', { text: 'Gemini 4 Argon' });
+  const effortSpan = makeNode('span', { className: 'opacity-70', text: ' Low' });
+  modelSpan.appendChild(effortSpan);
+  modelBtn.appendChild(modelSpan);
+  footer.appendChild(modelBtn);
+  card.appendChild(editorWrap);
+  card.appendChild(footer);
+  composerShell.appendChild(card);
+  inputBox.appendChild(composerShell);
+  home.appendChild(inputBox);
+  body.appendChild(home);
+
+  // Simulated Settings dialog containing General BEFORE Appearance
+  const dialog = makeNode('div', { attrs: { role: 'dialog' } });
+  const generalPanel = makeNode('div', { className: 'p-6 flex flex-col gap-4' });
+  const generalH2 = makeNode('h2', { text: '常规' });
+  const generalSec = makeNode('div', { className: 'space-y-2' });
+  generalPanel.appendChild(generalH2);
+  generalPanel.appendChild(generalSec);
+  const appearancePanel = makeNode('div', { className: 'p-6 flex flex-col gap-4' });
+  const appearanceH2 = makeNode('h2', { text: '外观' });
+  const appearanceWrap = makeNode('div', { className: 'flex flex-col gap-8' });
+  const appearanceSec = makeNode('div', { className: 'space-y-2' });
+  appearanceWrap.appendChild(appearanceSec);
+  appearancePanel.appendChild(appearanceH2);
+  appearancePanel.appendChild(appearanceWrap);
+  dialog.appendChild(generalPanel);
+  dialog.appendChild(appearancePanel);
+  body.appendChild(dialog);
+
+  const docListeners = new Map();
+  const doc = {
+    documentElement: html,
+    head,
+    body,
+    hidden: false,
+    createElement: (t) => makeNode(t),
+    getElementById: (id) => html.querySelector('#' + id),
+    querySelector: (s) => html.querySelector(s),
+    querySelectorAll: (s) => html.querySelectorAll(s),
+    addEventListener(ev, fn) {
+      if (!docListeners.has(ev)) docListeners.set(ev, []);
+      docListeners.get(ev).push(fn);
+    },
+    removeEventListener(ev, fn) {
+      const arr = docListeners.get(ev);
+      if (!arr) return;
+      const idx = arr.indexOf(fn);
+      if (idx >= 0) arr.splice(idx, 1);
+    },
+  };
+
+  const timers = new Set();
+  const sandbox = {
+    window: null,
+    globalThis: null,
+    document: doc,
+    navigator: { language: 'zh-CN' },
+    location: { pathname: '/' },
+    // Inject stale legacy localStorage flags to assert DISABLED_LEGACY_FLAGS locks them off
+    localStorage: {
+      _m: {
+        'agClaudeStyle.settings.v1': JSON.stringify({
+          palette: 'host',
+          composerRestyle: false,
+        }),
+        'agClaudeStyle.settings.v3': JSON.stringify({
+        }),
+      },
+      getItem(k) { return this._m[k] || null; },
+      setItem(k, v) { this._m[k] = String(v); },
+    },
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    matchMedia: () => ({ matches: false }),
+    MutationObserver: class { observe() {} disconnect() {} },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: (fn) => { const id = setTimeout(() => fn(typeof fakeNow === 'number' ? fakeNow : Date.now()), 8); timers.add(id); return id; },
+    cancelAnimationFrame: (id) => { timers.delete(id); clearTimeout(id); },
+    setTimeout: (fn, ms) => { const id = setTimeout(fn, ms); timers.add(id); return id; },
+    clearTimeout: (id) => { timers.delete(id); clearTimeout(id); },
+    setInterval: () => 1,
+    clearInterval: () => {},
+    performance: { now: () => Date.now() },
+    Math, Date, JSON, Map, Set, Array, Object, String, Number, Boolean, Promise, Uint8Array, Float32Array, Intl,
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+
+  try {
+    const res = vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), sandbox);
+    assert.equal(res.status, 'ok');
+    assert.equal(html.getAttribute('data-ag-cs-style'), '1');
+    assert.equal(html.getAttribute('data-ag-cs-palette'), 'obsidian');
+    assert.equal(html.getAttribute('data-ag-cs-home'), 'studio');
+    assert.equal(h1.textContent, '接下来做什么？');
+    assert.equal(placeholder.getAttribute('data-ag-cs-placeholder'), '描述任务或提出问题');
+
+    // Coexistence & zero-interference guarantees
+    assert.equal(sandbox.window.__agCsI18n, undefined);
+    assert.equal(sandbox.globalThis.__agCsEffortCore, undefined);
+    assert.equal(sandbox.globalThis.__agCsPerfAssets, undefined);
+    assert.equal(sandbox.window.__agClaudeStyle.openEffortPopover, undefined);
+    assert.equal(sandbox.window.__agClaudeStyle.openContextPopover, undefined);
+    assert.equal(effortSpan.hasAttribute('data-ag-cs-effort'), false);
+    assert.equal(effortSpan.classList.contains('ag-cs-effort-badge'), false);
+    assert.equal(
+      body.querySelectorAll('.ag-cs-inline-stats, .ag-cs-context-ring, .ag-cs-ctx-popover, .ag-cs-effort-popover, .ag-cs-turn-bar, .ag-cs-perf-backdrop').length,
+      0
+    );
+
+    // Ensure document does NOT register click/mousedown/keydown capture interceptors for model selector
+    assert.equal((docListeners.get('click') || []).length, 0);
+    assert.equal((docListeners.get('mousedown') || []).length, 0);
+    let stopped = false;
+    let prevented = false;
+    for (const fn of docListeners.get('pointerdown') || []) {
+      fn({
+        type: 'pointerdown',
+        target: effortSpan,
+        stopPropagation() { stopped = true; },
+        stopImmediatePropagation() { stopped = true; },
+        preventDefault() { prevented = true; },
+      });
+    }
+    assert.equal(stopped, false);
+    assert.equal(prevented, false);
+
+    // Legacy telemetry flags forced off even when stored in localStorage
+    assert.ok(sandbox.window.__agPrism, 'Expected window.__agPrism exposed');
+    assert.equal(sandbox.window.__agClaudeStyle, sandbox.window.__agPrism, 'Expected legacy alias pointing to __agPrism');
+    const st = sandbox.window.__agPrism.getState();
+    assert.equal(st.version, '1.0.0');
+    assert.equal(html.getAttribute('data-ag-prism'), '1.0.0');
+    assert.equal(html.getAttribute('data-ag-cs-light-preset'), 'crystal');
+    assert.equal(html.getAttribute('data-ag-cs-telemetry'), 'auto');
+    assert.equal(html.getAttribute('data-ag-cs-effort-slider'), 'auto');
+    assert.equal(st.cfg.palette, 'obsidian');
+
+    // Home UI mounts, optical glyph & prism rim & orbital backdrop mount, and Clawd queued clearance works
+    assert.ok(head.querySelector('#ag-prism-css'));
+    assert.ok(home.querySelector('.ag-cs-home-panel'));
+    assert.ok(home.querySelector('.ag-cs-orbital-backdrop'));
+    assert.ok(home.querySelector('.ag-cs-ripple-host'));
+    assert.ok(home.querySelector('.ag-cs-brand-glow'));
+    assert.ok(home.querySelector('.ag-cs-ripple-canvas'));
+    assert.ok(card.querySelector('.ag-cs-crab'));
+    assert.equal(card.getAttribute('data-ag-cs-prism-box'), '1');
+    const glyph = modelBtn.querySelector('.ag-cs-model-glyph');
+    assert.ok(glyph, 'Expected official brand model glyph on model-selector-trigger');
+    assert.equal(modelBtn.firstChild, glyph);
+    assert.equal(glyph.getAttribute('data-brand'), 'gemini');
+    assert.equal(glyph.getAttribute('data-tier'), 'low');
+    assert.equal(queuedWrap.getAttribute('data-ag-cs-queued'), '1');
+    assert.equal(queuedWrap.style.getPropertyValue('margin-bottom'), '46px');
+
+    // Smooth typing caret overlay is mounted on editor host
+    assert.equal(editorWrap.getAttribute('data-ag-cs-caret-host'), '1');
+    assert.ok(editorWrap.querySelector('.ag-cs-smooth-caret'));
+
+    // Prismatic CSS tokens & GPU compositor blur purge rules
+    const injectedCss = head.querySelector('#ag-prism-css')?.textContent || '';
+    assert.equal(injectedCss.includes('blur(20px) saturate(140%)'), false, 'Heavy composer backdrop-filter must be purged');
+    assert.ok(injectedCss.includes('border-radius: 4px') || injectedCss.includes('border-radius:4px'));
+    assert.ok(injectedCss.includes('margin-bottom: 46px !important') || injectedCss.includes('margin-bottom:46px!important'));
+    assert.ok(injectedCss.includes('z-index: 12 !important') || injectedCss.includes('z-index:12!important'));
+    assert.equal(injectedCss.includes('.ag-cs-effort-popover'), false);
+    assert.equal(injectedCss.includes('.ag-cs-ctx-popover'), false);
+
+    // Settings section mounts ONLY in Appearance, rebranded to Obsidian Prism collapsible banner + About & 6 credits
+    assert.equal(sandbox.window.__agPrism.brand, 'Obsidian Prism');
+    assert.equal(generalPanel.querySelector('#ag-cs-settings-sec'), null);
+    const settingsSec = appearancePanel.querySelector('#ag-cs-settings-sec');
+    assert.ok(settingsSec);
+    assert.equal(settingsSec.querySelector('h3')?.textContent, 'Obsidian Prism · 黑曜棱镜');
+    assert.equal(settingsSec.querySelector('.ag-cs-settings-ver')?.textContent, 'v1.0.0');
+    const brandMarkHtml = settingsSec.querySelector('.ag-cs-settings-brand-mark')?.innerHTML || '';
+    assert.ok(
+      brandMarkHtml.includes('ag-cs-brand-logo-svg') || brandMarkHtml.includes('ag-cs-settings-brand-svg'),
+      'Expected vector Obsidian Prism brand mark in collapsible header'
+    );
+
+    // Default collapsed ('0') on first visit; clicking banner expands and persists '1'
+    const foldHead = settingsSec.querySelector('.ag-cs-settings-fold-head');
+    const foldBody = settingsSec.querySelector('.ag-cs-settings-fold-body');
+    assert.ok(foldHead && foldBody, 'Expected collapsible banner header and body');
+    assert.equal(settingsSec.getAttribute('data-open'), '0');
+    assert.equal(foldHead.getAttribute('aria-expanded'), 'false');
+    foldHead.dispatch('click');
+    assert.equal(settingsSec.getAttribute('data-open'), '1');
+    assert.equal(foldHead.getAttribute('aria-expanded'), 'true');
+    assert.equal(sandbox.localStorage.getItem('ag-prism:settings-open'), '1');
+
+    const settingGroups = settingsSec.querySelectorAll('.ag-cs-settings-group');
+    assert.equal(settingGroups.length, 5);
+    assert.deepEqual(
+      settingGroups.map((g) => g.getAttribute('data-ag-cs-group')),
+      ['appearance', 'interaction', 'thought', 'modules', 'about']
+    );
+    const thoughtCfgBox = settingsSec.querySelector('[data-testid="prism-thought-ai-config"]');
+    assert.ok(thoughtCfgBox, 'Expected built-in OpenAI thought translator config card');
+    assert.equal(thoughtCfgBox.hidden, true, 'Thought AI config card should start hidden when mode is off');
+
+    // Verify About section: Git status/sync button + 7 upstream repo external links + GPL-3.0 & upstream MIT notices + Google disclaimer
+    const aboutBox = settingsSec.querySelector('.ag-cs-about-box');
+    assert.ok(aboutBox, 'Expected .ag-cs-about-box inside About group');
+    const creditLinks = aboutBox.querySelectorAll('a');
+    assert.equal(creditLinks.length, 7, 'Expected all 7 upstream credited repository links');
+    assert.deepEqual(
+      creditLinks.map((a) => a.getAttribute('href')),
+      [
+        'https://github.com/0DNANCY/agy-claude-style',
+        'https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard',
+        'https://github.com/LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider',
+        'https://github.com/Nwflower/dsh-claude-style',
+        'https://github.com/Microqian2th/dsh-codex-effort-slider',
+        'https://github.com/mobius/dsh-performance-slider',
+        'https://github.com/claudenoshujin/claude-web',
+      ]
+    );
+    for (const a of creditLinks) {
+      assert.equal(a.getAttribute('target'), '_blank');
+      assert.equal(a.getAttribute('rel'), 'noopener noreferrer');
+    }
+    const licPreText = aboutBox.querySelector('details.ag-cs-about-license pre')?.textContent || '';
+    assert.ok(licPreText.includes('GNU General Public License v3.0'));
+    assert.ok(licPreText.includes('RMvdesi'));
+    assert.ok(licPreText.includes('MIT License'));
+    assert.ok(
+      aboutBox.querySelector('.ag-cs-about-disclaimer')?.textContent?.includes('not affiliated with or endorsed by Google LLC')
+    );
+    assert.ok(aboutBox.querySelector('button[data-ag-cs-repo-sync]'), 'Expected Git sync button in About box');
+
+    const settingKeys = new Set(
+      appearancePanel
+        .querySelectorAll('#ag-cs-settings-sec button')
+        .map((b) => b.getAttribute('data-ag-cs-key'))
+        .filter(Boolean)
+    );
+    assert.equal(settingKeys.size, 17);
+    for (const expectedKey of [
+      'palette',
+      'lightPreset',
+      'motionLevel',
+      'homeLayout',
+      'homeRipple',
+      'logoInk',
+      'language',
+      'composerRestyle',
+      'placeholderStyle',
+      'smoothCaret',
+      'mascot',
+      'sidebarRestyle',
+      'sidebarCompact',
+      'thoughtTranslate',
+      'thoughtTrigger',
+      'telemetryModule',
+      'effortSliderModule',
+    ]) {
+      assert.ok(settingKeys.has(expectedKey), `Missing settings control for ${expectedKey}`);
+    }
+
+    // Verify all 5 language buttons switch dashboard, greeting, placeholder & settings copy + emit CDP binding
+    const bindingCalls = [];
+    sandbox[cdp.SETTING_BINDING] = (payload) => bindingCalls.push(JSON.parse(payload));
+    const getLangBtns = () =>
+      appearancePanel
+        .querySelectorAll('#ag-cs-settings-sec button')
+        .filter((b) => b.getAttribute('data-ag-cs-key') === 'language');
+
+    const checkLangSwitch = (targetLang, hostTitle, expectedSettingsLangTitle, expectedOverviewTab, expectedGreeting, expectedPlaceholder) => {
+      appearanceH2.textContent = hostTitle;
+      const btn = getLangBtns().find((b) => b.getAttribute('data-ag-cs-val') === JSON.stringify(targetLang));
+      assert.ok(btn, `Expected language button for ${targetLang}`);
+      btn.dispatch('click');
+      assert.equal(html.getAttribute('data-ag-cs-lang'), targetLang);
+      const secNow = appearancePanel.querySelector('#ag-cs-settings-sec');
+      assert.ok(secNow);
+      assert.equal(secNow.getAttribute('data-ag-cs-lang'), targetLang);
+      assert.equal(secNow.querySelector('[data-ag-cs-row="language"] [data-k="t"]')?.textContent, expectedSettingsLangTitle);
+      assert.equal(home.querySelector('.ag-cs-home-tab[data-tab="overview"]')?.textContent, expectedOverviewTab);
+      assert.equal(h1.textContent, expectedGreeting);
+      assert.equal(placeholder.getAttribute('data-ag-cs-placeholder'), expectedPlaceholder);
+    };
+
+    checkLangSwitch('zh-TW', '外觀', '外掛看板語言', '概覽', '接下來做什麼？', '描述任務或提出問題');
+    checkLangSwitch('yue', '外觀', '插件看板語言', '概覽', '跟住想做啲咩？', '寫低你想做嘅任務或者問題');
+    checkLangSwitch('en', 'Appearance', 'Plugin UI Language', 'Overview', "What's up next?", 'How can I help you today?');
+    assert.equal(html.hasAttribute('data-ag-cs-cjk'), false);
+    checkLangSwitch('ja', '外観', 'プラグイン表示言語', '概要', '次は何をしますか？', 'タスクの説明や質問を入力してください');
+    assert.equal(html.getAttribute('data-ag-cs-cjk'), '1');
+    checkLangSwitch('zh-CN', '外观', '插件看板语言', '概覽' === '概览' ? '概览' : '概览', '接下来做什么？', '描述任务或提出问题');
+
+    assert.deepEqual(
+      bindingCalls.map((c) => [c.key, c.value]),
+      [
+        ['language', 'zh-TW'],
+        ['language', 'yue'],
+        ['language', 'en'],
+        ['language', 'ja'],
+        ['language', 'zh-CN'],
+      ]
+    );
+    appearanceH2.textContent = '外观';
+
+    // Switching palette/mascot externally syncs root attrs & setting button active state immediately (warm & claude alias compat)
+    sandbox.window.__agPrism.refreshConfig({ ...cdp.DEFAULT_CONFIG, palette: 'claude' });
+    assert.equal(html.getAttribute('data-ag-cs-palette'), 'claude');
+    const warmBtn = appearancePanel
+      .querySelectorAll('#ag-cs-settings-sec button')
+      .find((b) => b.getAttribute('data-ag-cs-key') === 'palette' && b.getAttribute('data-ag-cs-val') === '"warm"');
+    assert.ok(warmBtn, 'Expected Alabaster Warm palette button');
+    assert.equal(warmBtn.textContent, 'Alabaster 暖岩');
+    assert.equal(warmBtn.getAttribute('aria-pressed'), 'true');
+    assert.equal(warmBtn.hasAttribute('data-pressed'), true);
+
+    // Teardown cleanly removes everything and restores host greeting text
+    const rem = vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
+    assert.ok(rem.removed >= 1);
+    assert.equal(html.hasAttribute('data-ag-prism'), false);
+    assert.equal(html.hasAttribute('data-ag-cs-style'), false);
+    assert.equal(html.hasAttribute('data-ag-cs-light-preset'), false);
+    assert.equal(html.hasAttribute('data-ag-cs-telemetry'), false);
+    assert.equal(html.hasAttribute('data-ag-cs-effort-slider'), false);
+    assert.equal(html.hasAttribute('data-ag-cs-thought-translate'), false);
+    assert.equal(sandbox.window.__agPrismThought, undefined);
+    assert.equal(html.hasAttribute('data-ag-cs-lang'), false);
+    assert.equal(html.hasAttribute('data-ag-cs-cjk'), false);
+    assert.equal(sandbox.globalThis.__agCsCleanups, undefined);
+    assert.equal(h1.textContent, 'Welcome back, girl. Where should we pick up?');
+    assert.equal(placeholder.hasAttribute('data-ag-cs-placeholder'), false);
+    assert.equal(effortSpan.hasAttribute('data-ag-cs-effort'), false);
+    assert.equal(home.querySelector('.ag-cs-home-panel'), null);
+    assert.equal(home.querySelector('.ag-cs-orbital-backdrop'), null);
+    assert.equal(home.querySelector('.ag-cs-ripple-host'), null);
+    assert.equal(home.querySelector('.ag-cs-brand-glow'), null);
+    assert.equal(home.querySelector('.ag-cs-ripple-canvas'), null);
+    assert.equal(card.querySelector('.ag-cs-crab'), null);
+    assert.equal(card.hasAttribute('data-ag-cs-prism-box'), false);
+    assert.equal(modelBtn.querySelector('.ag-cs-model-glyph'), null);
+    assert.equal(sandbox.globalThis.__agDualMascotRig, undefined);
+    assert.equal(sandbox.globalThis.__agCrystalPrismCore, undefined);
+    assert.equal(sandbox.globalThis.__agVialCore, undefined);
+    assert.equal(sandbox.globalThis.__agMotionEngine, undefined);
+    assert.equal(sandbox.globalThis.__agAnimatedIcons, undefined);
+    assert.equal(sandbox.globalThis.__agCsPulseVialBridge, undefined);
+    assert.equal(dialog.querySelector('#ag-cs-settings-sec'), null);
+  } finally {
+    for (const id of timers) clearTimeout(id);
+  }
+});
+
+test('buildInjectExpression defers cleanly when documentElement is null at document-start and mounts on DOMContentLoaded', () => {
+  const docListeners = new Map();
+  let htmlEl = null;
+  let headEl = null;
+  let bodyEl = null;
+  const attrs = new Map();
+  const makeStub = (tag) => ({
+    tagName: tag.toUpperCase(),
+    id: '',
+    children: [],
+    parentNode: null,
+    parentElement: null,
+    classList: { contains: () => false, add() {}, remove() {} },
+    get lastElementChild() { return this.children[this.children.length - 1] || null; },
+    appendChild(c) { c.parentNode = this; c.parentElement = this; this.children.push(c); return c; },
+    removeChild(c) { const i = this.children.indexOf(c); if (i >= 0) this.children.splice(i, 1); c.parentNode = null; c.parentElement = null; return c; },
+    remove() { if (this.parentElement) this.parentElement.removeChild(this); },
+    setAttribute(k, v) { attrs.set(k, String(v)); if (k === 'id') this.id = String(v); },
+    getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+    hasAttribute(k) { return attrs.has(k); },
+    removeAttribute(k) { attrs.delete(k); },
+    querySelectorAll() { return []; },
+    querySelector() { return null; },
+    style: { setProperty() {}, getPropertyValue() { return ''; }, removeProperty() {} },
+  });
+
+  const doc = {
+    get documentElement() { return htmlEl; },
+    get head() { return headEl; },
+    get body() { return bodyEl; },
+    hidden: false,
+    readyState: 'loading',
+    createElement: (t) => makeStub(t),
+    getElementById(id) {
+      return headEl?.children?.find((c) => c.id === id) || htmlEl?.children?.find((c) => c.id === id) || null;
+    },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener(ev, fn) {
+      if (!docListeners.has(ev)) docListeners.set(ev, []);
+      docListeners.get(ev).push(fn);
+    },
+    removeEventListener(ev, fn) {
+      const arr = docListeners.get(ev);
+      if (!arr) return;
+      const idx = arr.indexOf(fn);
+      if (idx >= 0) arr.splice(idx, 1);
+    },
+  };
+
+  const observedNodes = [];
+  const timers = new Set();
+  const sandbox = {
+    window: null,
+    globalThis: null,
+    document: doc,
+    navigator: { language: 'zh-CN' },
+    location: { pathname: '/' },
+    localStorage: { _m: {}, getItem(k) { return this._m[k] || null; }, setItem(k, v) { this._m[k] = String(v); } },
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    matchMedia: () => ({ matches: false }),
+    MutationObserver: class {
+      observe(node) {
+        if (!node) throw new TypeError('parameter 1 is not of type Node');
+        observedNodes.push(node);
+      }
+      disconnect() {}
+    },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: (fn) => { const id = setTimeout(() => fn(typeof fakeNow === 'number' ? fakeNow : Date.now()), 8); timers.add(id); return id; },
+    cancelAnimationFrame: (id) => { timers.delete(id); clearTimeout(id); },
+    setTimeout: (fn, ms) => { const id = setTimeout(fn, ms); timers.add(id); return id; },
+    clearTimeout: (id) => { timers.delete(id); clearTimeout(id); },
+    setInterval: () => 1,
+    clearInterval: () => {},
+    performance: { now: () => Date.now() },
+    Math, Date, JSON, Map, Set, Array, Object, String, Number, Boolean, Promise, Uint8Array, Float32Array, Intl,
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+
+  try {
+    const res = vm.runInNewContext(cdp.buildInjectExpression(), sandbox);
+    assert.equal(res.status, 'deferred');
+    assert.equal(sandbox.window.__agClaudeStyle, undefined);
+
+    htmlEl = makeStub('html');
+    headEl = makeStub('head');
+    bodyEl = makeStub('body');
+    htmlEl.appendChild(headEl);
+    htmlEl.appendChild(bodyEl);
+    doc.readyState = 'interactive';
+    for (const fn of [...(docListeners.get('DOMContentLoaded') || [])]) fn();
+
+    assert.ok(sandbox.window.__agPrism, 'Expected __agPrism to mount after DOMContentLoaded');
+    assert.ok(observedNodes.includes(htmlEl), 'Expected root observer to observe htmlEl');
+    assert.ok(headEl.children.some((c) => c.id === cdp.STYLE_ID));
+    assert.equal(attrs.get('data-ag-cs-style'), '1');
+
+    vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
+    assert.equal(sandbox.window.__agClaudeStyle, undefined);
+  } finally {
+    for (const id of timers) clearTimeout(id);
+  }
+});
+
+test('Q&A takeover card, side-question panel, and running tasks clear Clawd mascot without double spacing', async () => {
+  const timers = new Set();
+  const makeEl = (tag, opts = {}) => {
+    const attrs = new Map(Object.entries(opts.attrs || {}));
+    const classes = new Set((opts.className || '').split(/\s+/).filter(Boolean));
+    const children = [];
+    const matchesSimple = (node, simple) => {
+      let rest = simple.trim();
+      if (!rest) return false;
+      const tagMatch = /^[a-zA-Z0-9_-]+/.exec(rest);
+      if (tagMatch) {
+        if (node.tagName !== tagMatch[0].toUpperCase()) return false;
+        rest = rest.slice(tagMatch[0].length);
+      }
+      while (rest.length > 0) {
+        if (rest[0] === '#') {
+          const m = /^#((?:\\.|[a-zA-Z0-9_-])+)/.exec(rest);
+          if (!m || node.id !== m[1].replace(/\\/g, '')) return false;
+          rest = rest.slice(m[0].length);
+        } else if (rest[0] === '.') {
+          const m = /^\.([a-zA-Z0-9_-]+)/.exec(rest);
+          if (!m || !node.classList.contains(m[1])) return false;
+          rest = rest.slice(m[0].length);
+        } else if (rest[0] === '[') {
+          const m = /^\[([^\]=]+)(?:="([^"]*)")?\]/.exec(rest);
+          if (!m) return false;
+          const ok = m[2] === undefined ? node.hasAttribute(m[1]) : node.getAttribute(m[1]) === m[2];
+          if (!ok) return false;
+          rest = rest.slice(m[0].length);
+        } else {
+          return false;
+        }
+      }
+      return true;
+    };
+    const matchesChain = (node, selector) =>
+      selector.split(',').some((part) => {
+        const tokens = part.trim().split(/\s+/).filter(Boolean);
+        if (tokens.length === 0 || !matchesSimple(node, tokens[tokens.length - 1])) return false;
+        let cur = node.parentElement;
+        let idx = tokens.length - 2;
+        while (cur && idx >= 0) {
+          if (matchesSimple(cur, tokens[idx])) idx -= 1;
+          cur = cur.parentElement;
+        }
+        return idx < 0;
+      });
+    const node = {
+      tagName: tag.toUpperCase(),
+      id: attrs.get('id') || opts.id || '',
+      children,
+      parentElement: null,
+      parentNode: null,
+      isConnected: true,
+      _text: opts.text || '',
+      clientWidth: 640,
+      offsetWidth: 640,
+      clientHeight: 40,
+      offsetHeight: 40,
+      style: {
+        _props: {},
+        setProperty(k, v) { this._props[k] = String(v); },
+        getPropertyValue(k) { return this._props[k] || ''; },
+        removeProperty(k) { delete this._props[k]; },
+      },
+      classList: {
+        contains: (c) => classes.has(c),
+        add: (c) => classes.add(c),
+        remove: (c) => classes.delete(c),
+      },
+      get className() { return Array.from(classes).join(' '); },
+      set className(v) { classes.clear(); String(v).split(/\s+/).filter(Boolean).forEach((c) => classes.add(c)); },
+      get textContent() { return children.length ? children.map((c) => c.textContent).join('') : this._text; },
+      set textContent(v) { children.length = 0; this._text = String(v); },
+      get childElementCount() { return children.length; },
+      get firstChild() { return children[0] || null; },
+      get nextSibling() {
+        if (!this.parentElement) return null;
+        const i = this.parentElement.children.indexOf(this);
+        return i >= 0 ? this.parentElement.children[i + 1] || null : null;
+      },
+      get lastElementChild() { return children[children.length - 1] || null; },
+      appendChild(c) { c.parentElement = this; c.parentNode = this; children.push(c); return c; },
+      insertBefore(c, ref) {
+        c.parentElement = this;
+        c.parentNode = this;
+        const idx = ref ? children.indexOf(ref) : -1;
+        if (idx >= 0) children.splice(idx, 0, c);
+        else children.push(c);
+        return c;
+      },
+      removeChild(c) { const i = children.indexOf(c); if (i >= 0) children.splice(i, 1); c.parentElement = null; c.parentNode = null; return c; },
+      remove() { if (this.parentElement) this.parentElement.removeChild(this); },
+      setAttribute(k, v) { attrs.set(k, String(v)); if (k === 'id') node.id = String(v); },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) { attrs.delete(k); },
+      addEventListener() {},
+      removeEventListener() {},
+      getContext() { return null; },
+      getBoundingClientRect() { return { left: 0, top: 0, right: 640, bottom: 40, width: 640, height: 40 }; },
+      animate() { return { cancel() {}, finished: Promise.resolve() }; },
+      closest(sel) { let cur = this; while (cur) { if (matchesChain(cur, sel)) return cur; cur = cur.parentElement; } return null; },
+      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+      querySelectorAll(sel) {
+        const out = [];
+        const walk = (n) => {
+          for (const c of n.children) {
+            if (matchesChain(c, sel)) out.push(c);
+            walk(c);
+          }
+        };
+        walk(this);
+        return out;
+      },
+    };
+    return node;
+  };
+
+  const html = makeEl('html');
+  const head = makeEl('head');
+  const body = makeEl('body', { className: 'theme-dark' });
+  html.appendChild(head);
+  html.appendChild(body);
+
+  const convView = makeEl('div', { attrs: { 'data-testid': 'conversation-view' } });
+  const rtcWrap = makeEl('div', { className: 'relative z-10 flex flex-col gap-1 min-h-0' });
+  const takeoverWrap = makeEl('div', { className: 'relative z-[1] mb-1 flex flex-col min-h-0' });
+  const takeoverCard = makeEl('div', { className: 'agy-takeover-frame', attrs: { 'data-testid': 'interaction-takeover-card' } });
+  takeoverWrap.appendChild(takeoverCard);
+
+  const contentsWrap = makeEl('div', { className: 'contents' });
+  const inputBox = makeEl('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const queuedWrap = makeEl('div', { className: 'relative z-[1] flex flex-col gap-2 w-full hidden-if-empty mb-2' });
+  const composerShell = makeEl('div', { id: 'antigravity.agentSidePanelInputBox', className: 'surface-composer' });
+  const runningWrap = makeEl('div', { className: 'relative z-[1]' });
+  const runningPanel = makeEl('div', { className: 'grid grid-rows-[0fr]', attrs: { 'data-testid': 'running-items-panel' } });
+  runningWrap.appendChild(runningPanel);
+  const card = makeEl('div', { className: 'surface-composer-card' });
+  const footer = makeEl('div', { className: 'agy-composer-footer' });
+  card.appendChild(footer);
+  composerShell.appendChild(runningWrap);
+  composerShell.appendChild(card);
+  inputBox.appendChild(queuedWrap);
+  inputBox.appendChild(composerShell);
+  contentsWrap.appendChild(inputBox);
+
+  rtcWrap.appendChild(takeoverWrap);
+  rtcWrap.appendChild(contentsWrap);
+  convView.appendChild(rtcWrap);
+  body.appendChild(convView);
+
+  const doc = {
+    documentElement: html,
+    head,
+    body,
+    hidden: false,
+    readyState: 'complete',
+    createElement: (t) => makeEl(t),
+    getElementById: (id) => {
+      const find = (n) => (n.id === id ? n : n.children.map(find).find(Boolean) || null);
+      return find(html);
+    },
+    querySelector: (s) => html.querySelector(s),
+    querySelectorAll: (s) => html.querySelectorAll(s),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  const sandbox = {
+    window: null,
+    globalThis: null,
+    document: doc,
+    navigator: { language: 'zh-CN' },
+    location: { pathname: '/' },
+    localStorage: { _m: {}, getItem(k) { return this._m[k] || null; }, setItem(k, v) { this._m[k] = String(v); } },
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    matchMedia: () => ({ matches: false }),
+    MutationObserver: class { observe() {} disconnect() {} },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: (fn) => setTimeout(() => fn(Date.now()), 5),
+    cancelAnimationFrame: (id) => clearTimeout(id),
+    setTimeout: (fn, ms) => { const id = setTimeout(fn, ms); timers.add(id); return id; },
+    clearTimeout: (id) => { timers.delete(id); clearTimeout(id); },
+    setInterval: () => 1,
+    clearInterval: () => {},
+    performance: { now: () => Date.now() },
+    Math, Date, JSON, Map, Set, Array, Object, String, Number, Boolean, Promise, Uint8Array, Float32Array, Intl,
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+
+  try {
+    const res = vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), sandbox);
+    assert.equal(res.status, 'ok');
+
+    // 1. Q&A takeover card alone: wrapper raised by 46px with data-ag-cs-takeover="1"
+    assert.equal(takeoverWrap.getAttribute('data-ag-cs-takeover'), '1');
+    assert.equal(takeoverWrap.style.getPropertyValue('margin-bottom'), '46px');
+    assert.equal(queuedWrap.hasAttribute('data-ag-cs-queued'), false);
+    assert.equal(runningWrap.hasAttribute('data-ag-cs-queued'), false);
+
+    // 2. When queued message is also present, queuedWrap takes the 46px clearance and takeoverWrap avoids double spacing
+    const queuedItem = makeEl('div', { text: '排队中的消息' });
+    queuedWrap.appendChild(queuedItem);
+    sandbox.window.__agClaudeStyle.refreshConfig(cdp.DEFAULT_CONFIG);
+    assert.equal(queuedWrap.getAttribute('data-ag-cs-queued'), '1');
+    assert.equal(queuedWrap.style.getPropertyValue('margin-bottom'), '46px');
+    assert.equal(takeoverWrap.hasAttribute('data-ag-cs-takeover'), false);
+    assert.equal(takeoverWrap.style.getPropertyValue('margin-bottom'), '');
+
+    // 3. When queued clears and side-question-panel sits below takeoverWrap, side-question-panel takes clearance
+    queuedItem.remove();
+    const sideQ = makeEl('div', { attrs: { 'data-testid': 'side-question-panel' } });
+    rtcWrap.insertBefore(sideQ, contentsWrap);
+    sandbox.window.__agClaudeStyle.refreshConfig(cdp.DEFAULT_CONFIG);
+    assert.equal(sideQ.getAttribute('data-ag-cs-takeover'), '1');
+    assert.equal(sideQ.style.getPropertyValue('margin-bottom'), '46px');
+    assert.equal(takeoverWrap.hasAttribute('data-ag-cs-takeover'), false);
+
+    // 4. When running-items-panel expands (grid-rows-[1fr]), its wrapper takes the 46px clearance
+    runningPanel.className = 'grid grid-rows-[1fr]';
+    sandbox.window.__agClaudeStyle.refreshConfig(cdp.DEFAULT_CONFIG);
+    assert.equal(runningWrap.getAttribute('data-ag-cs-queued'), '1');
+    assert.equal(runningWrap.style.getPropertyValue('margin-bottom'), '46px');
+    assert.equal(sideQ.hasAttribute('data-ag-cs-takeover'), false);
+    assert.equal(takeoverWrap.hasAttribute('data-ag-cs-takeover'), false);
+
+    // 5. Turning mascot off clears all takeover/queued clearances cleanly
+    runningPanel.className = 'grid grid-rows-[0fr]';
+    sideQ.remove();
+    sandbox.window.__agClaudeStyle.refreshConfig({ ...cdp.DEFAULT_CONFIG, mascot: 'off' });
+    assert.equal(takeoverWrap.hasAttribute('data-ag-cs-takeover'), false);
+    assert.equal(takeoverWrap.style.getPropertyValue('margin-bottom'), '');
+    assert.equal(runningWrap.hasAttribute('data-ag-cs-queued'), false);
+
+    // 6. Re-enable crab, verify takeover clearance returns, then verify REMOVE_EXPRESSION tears down cleanly
+    sandbox.window.__agClaudeStyle.refreshConfig(cdp.DEFAULT_CONFIG);
+    assert.equal(takeoverWrap.getAttribute('data-ag-cs-takeover'), '1');
+    assert.equal(takeoverWrap.style.getPropertyValue('margin-bottom'), '46px');
+    vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
+    assert.equal(takeoverWrap.hasAttribute('data-ag-cs-takeover'), false);
+    assert.equal(takeoverWrap.style.getPropertyValue('margin-bottom'), '');
+
+    const injectedCss = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
+    assert.ok(injectedCss.includes('interaction-takeover-card'));
+    assert.ok(injectedCss.includes('side-question-panel'));
+  } finally {
+    for (const id of timers) clearTimeout(id);
+  }
+});
+
+test('v3.5.1 mounts dual mascot stage, brand optical glyphs, Orchestrator crystal bar, thinking spark, sidebar shortcut, and Pulse vial bridge', async () => {
+  const timers = new Set();
+  const winListeners = new Map();
+
+  function makeCanvasCtx2D() {
+    return {
+      canvas: { width: 96, height: 84 },
+      save() {},
+      restore() {},
+      clearRect() {},
+      fillRect() {},
+      strokeRect() {},
+      beginPath() {},
+      closePath() {},
+      moveTo() {},
+      lineTo() {},
+      arc() {},
+      arcTo() {},
+      roundRect() {},
+      setLineDash() {},
+      ellipse() {},
+      quadraticCurveTo() {},
+      bezierCurveTo() {},
+      clip() {},
+      fill() {},
+      stroke() {},
+      translate() {},
+      rotate() {},
+      scale() {},
+      setTransform() {},
+      drawImage() {},
+      fillText() {},
+      createLinearGradient() { return { addColorStop() {} }; },
+      createRadialGradient() { return { addColorStop() {} }; },
+      createImageData(w, h) {
+        return { data: new Uint8ClampedArray(Math.max(4, w * h * 4)), width: w, height: h };
+      },
+      getImageData(x, y, w, h) {
+        return { data: new Uint8ClampedArray(Math.max(4, w * h * 4)), width: w, height: h };
+      },
+      putImageData() {},
+    };
+  }
+
+  let docRef = null;
+  function makeNode(tag, opts = {}) {
+    const attrs = new Map(Object.entries(opts.attrs || {}));
+    const classes = new Set((opts.className || '').split(/\s+/).filter(Boolean));
+    const listeners = new Map();
+    const children = [];
+    const dataset = new Proxy(
+      {},
+      {
+        get(_, prop) {
+          const k = 'data-' + String(prop).replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
+          return attrs.has(k) ? attrs.get(k) : undefined;
+        },
+        set(_, prop, val) {
+          const k = 'data-' + String(prop).replace(/[A-Z]/g, (m) => '-' + m.toLowerCase());
+          attrs.set(k, String(val));
+          return true;
+        },
+      }
+    );
+
+    const matchesSimple = (node, simple) => {
+      let rest = simple.trim();
+      if (!rest) return false;
+      const cleanIdx = rest.indexOf(':not(');
+      let negSel = null;
+      if (cleanIdx >= 0 && rest.endsWith(')')) {
+        negSel = rest.slice(cleanIdx + 5, -1);
+        rest = rest.slice(0, cleanIdx);
+      }
+      const tagMatch = /^[a-zA-Z0-9_-]+/.exec(rest);
+      if (tagMatch) {
+        if (node.tagName !== tagMatch[0].toUpperCase()) return false;
+        rest = rest.slice(tagMatch[0].length);
+      }
+      while (rest.length > 0) {
+        if (rest[0] === '#') {
+          const m = /^#((?:\\.|[a-zA-Z0-9_-])+)/.exec(rest);
+          if (!m || node.id !== m[1].replace(/\\/g, '')) return false;
+          rest = rest.slice(m[0].length);
+        } else if (rest[0] === '.') {
+          const m = /^\.([a-zA-Z0-9_-]+)/.exec(rest);
+          if (!m || !node.classList.contains(m[1])) return false;
+          rest = rest.slice(m[0].length);
+        } else if (rest[0] === '[') {
+          const m = /^\[([^\]=]+)(?:="([^"]*)")?\]/.exec(rest);
+          if (!m) return false;
+          const ok = m[2] === undefined ? node.hasAttribute(m[1]) : node.getAttribute(m[1]) === m[2];
+          if (!ok) return false;
+          rest = rest.slice(m[0].length);
+        } else {
+          return false;
+        }
+      }
+      if (negSel && matchesSimple(node, negSel)) return false;
+      return true;
+    };
+
+    const matchesChain = (node, selector) =>
+      selector.split(',').some((part) => {
+        const tokens = part.trim().split(/\s+/).filter(Boolean);
+        if (tokens.length === 0 || !matchesSimple(node, tokens[tokens.length - 1])) return false;
+        let cur = node.parentElement;
+        let idx = tokens.length - 2;
+        while (cur && idx >= 0) {
+          if (matchesSimple(cur, tokens[idx])) idx--;
+          cur = cur.parentElement;
+        }
+        return idx < 0;
+      });
+
+    const node = {
+      tagName: tag.toUpperCase(),
+      id: attrs.get('id') || opts.id || '',
+      dataset,
+      get ownerDocument() { return docRef; },
+      children,
+      parentElement: null,
+      parentNode: null,
+      isConnected: true,
+      hidden: Boolean(opts.hidden),
+      shadowRoot: null,
+      _text: opts.text || '',
+      clientWidth: opts.clientWidth ?? 720,
+      clientHeight: opts.clientHeight ?? 480,
+      offsetWidth: opts.clientWidth ?? 720,
+      offsetHeight: opts.clientHeight ?? 48,
+      width: opts.width ?? 96,
+      height: opts.height ?? 84,
+      style: {
+        _props: {},
+        display: '',
+        transform: '',
+        transition: '',
+        zIndex: '',
+        opacity: '',
+        width: '',
+        height: '',
+        setProperty(k, v) { this._props[k] = String(v); },
+        getPropertyValue(k) { return this._props[k] || ''; },
+        removeProperty(k) { delete this._props[k]; },
+      },
+      classList: {
+        contains: (c) => classes.has(c),
+        add: (c) => classes.add(c),
+        remove: (c) => classes.delete(c),
+      },
+      get className() { return Array.from(classes).join(' '); },
+      set className(v) { classes.clear(); String(v).split(/\s+/).filter(Boolean).forEach((c) => classes.add(c)); },
+      get textContent() { return children.length ? children.map((c) => c.textContent).join('') : this._text; },
+      set textContent(v) { children.length = 0; this._text = String(v); },
+      set innerHTML(h) { children.length = 0; this._html = String(h); },
+      get innerHTML() { return this._html || ''; },
+      get childElementCount() { return children.length; },
+      get firstChild() { return children[0] || null; },
+      get lastElementChild() { return children[children.length - 1] || null; },
+      get nextSibling() {
+        if (!this.parentElement) return null;
+        const i = this.parentElement.children.indexOf(this);
+        return i >= 0 ? this.parentElement.children[i + 1] || null : null;
+      },
+      appendChild(c) { c.parentElement = this; c.parentNode = this; children.push(c); return c; },
+      insertBefore(c, ref) {
+        c.parentElement = this;
+        c.parentNode = this;
+        const idx = ref ? children.indexOf(ref) : -1;
+        if (idx >= 0) children.splice(idx, 0, c);
+        else children.push(c);
+        return c;
+      },
+      removeChild(c) { const i = children.indexOf(c); if (i >= 0) children.splice(i, 1); c.parentElement = null; c.parentNode = null; return c; },
+      remove() { if (this.parentElement) this.parentElement.removeChild(this); },
+      setAttribute(k, v) { attrs.set(k, String(v)); if (k === 'id') node.id = String(v); },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) { attrs.delete(k); },
+      toggleAttribute(k, f) {
+        const on = f === undefined ? !attrs.has(k) : Boolean(f);
+        if (on) attrs.set(k, ''); else attrs.delete(k);
+        return on;
+      },
+      addEventListener(ev, cb) { if (!listeners.has(ev)) listeners.set(ev, []); listeners.get(ev).push(cb); },
+      removeEventListener(ev, cb) { const a = listeners.get(ev); if (a) { const i = a.indexOf(cb); if (i >= 0) a.splice(i, 1); } },
+      getContext(kind) { return kind === '2d' ? makeCanvasCtx2D() : null; },
+      getBoundingClientRect() { return { left: 20, top: 20, right: 620, bottom: 104, width: 600, height: 84 }; },
+      animate() { return { cancel() {}, finished: Promise.resolve() }; },
+      closest(sel) { let cur = this; while (cur) { if (matchesChain(cur, sel)) return cur; cur = cur.parentElement; } return null; },
+      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+      querySelectorAll(sel) {
+        const out = [];
+        const walk = (n) => { for (const c of n.children) { if (matchesChain(c, sel)) out.push(c); walk(c); } };
+        walk(this);
+        return out;
+      },
+      getElementById(id) {
+        const find = (n) => (n.id === id ? n : n.children.map(find).find(Boolean) || null);
+        return find(this);
+      },
+    };
+    return node;
+  }
+
+  const html = makeNode('html');
+  const head = makeNode('head');
+  const body = makeNode('body', { className: 'theme-dark' });
+  html.appendChild(head);
+  html.appendChild(body);
+
+  // Conversation view with thinking trigger & composer
+  const convView = makeNode('div', { attrs: { 'data-testid': 'conversation-view' } });
+  const thinkTrig = makeNode('button', { attrs: { 'data-testid': 'thinking-collapsible-trigger' } });
+  thinkTrig.appendChild(makeNode('span', { text: '正在推演...' }));
+  convView.appendChild(thinkTrig);
+
+  const inputBox = makeNode('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const card = makeNode('div', { className: 'surface-composer-card' });
+  const editorWrap = makeNode('div', { className: 'relative w-full' });
+  const editorEl = makeNode('div', { attrs: { contenteditable: 'true', 'data-lexical-editor': 'true' } });
+  editorWrap.appendChild(editorEl);
+  const footer = makeNode('div', { className: 'agy-composer-footer' });
+  const modelBtn = makeNode('button', { attrs: { 'data-testid': 'model-selector-trigger', 'aria-label': 'Select model, current: Orchestrator' } });
+  const modelSpan = makeNode('span', { text: 'Orchestrator' });
+  modelBtn.appendChild(modelSpan);
+  footer.appendChild(modelBtn);
+  card.appendChild(editorWrap);
+  card.appendChild(footer);
+  inputBox.appendChild(card);
+  convView.appendChild(inputBox);
+  body.appendChild(convView);
+
+  // Model selector panel with .ces-ag-section, .ces-ag-effort-row, live menuitem structure & non-model row
+  const modelPanel = makeNode('div', { attrs: { 'data-testid': 'model-selector-panel' } });
+  const hoverHydrogenOpt = makeNode('button', { attrs: { 'aria-selected': 'true', 'data-highlighted': '' }, text: 'Gemini 4 Hydrogen Extra' });
+  const orchOpt = makeNode('button', { attrs: { 'data-selected': 'true' }, text: 'Orchestrator (Carbon)' });
+  const claudeMenuItem = makeNode('div', {
+    className: 'agy-overlay-item text-secondary-foreground hover:text-foreground',
+    attrs: { role: 'menuitem', 'data-ces-model-selected': 'false' },
+  });
+  const claudeLead = makeNode('span', { className: 'flex items-center gap-1.5 min-w-0' });
+  const claudeName = makeNode('span', { attrs: { 'data-testid': 'model-selector-effort-group' }, text: 'Claude Sonnet 4.6' });
+  const claudeBadge = makeNode('span', { className: 'rounded-full', text: '新建' });
+  claudeLead.appendChild(claudeName);
+  claudeMenuItem.appendChild(claudeLead);
+  claudeMenuItem.appendChild(claudeBadge);
+  const usageMenuItem = makeNode('div', { className: 'agy-overlay-item', attrs: { role: 'menuitem' }, text: '查看用量明细' });
+  const cesSec = makeNode('div', { className: 'ces-ag-section' });
+  const cesRow = makeNode('div', { className: 'ces-ag-effort-row' });
+  cesSec.appendChild(cesRow);
+  modelPanel.appendChild(hoverHydrogenOpt);
+  modelPanel.appendChild(orchOpt);
+  modelPanel.appendChild(claudeMenuItem);
+  modelPanel.appendChild(usageMenuItem);
+  modelPanel.appendChild(cesSec);
+  body.appendChild(modelPanel);
+
+  // Simulated #ag-pulse-status-bar with open shadowRoot
+  const pulseHost = makeNode('div', { id: 'ag-pulse-status-bar' });
+  const shadowRoot = makeNode('div');
+  const ctxChip = makeNode('button', { className: 'chip', attrs: { 'data-card': 'context' } });
+  const ctxRing = makeNode('span', { id: 'context-ring' });
+  const ctxPct = makeNode('span', { id: 'context-percent', text: '42%' });
+  ctxChip.appendChild(ctxRing);
+  ctxChip.appendChild(ctxPct);
+  const ctxCard = makeNode('div', { id: 'context-card', className: 'card context-card' });
+  const ctxHeading = makeNode('div', { className: 'heading', text: '上下文窗口' });
+  const ctxTrack = makeNode('div', { id: 'context-track' });
+  const ctxFill = makeNode('div', { id: 'context-fill' });
+  ctxTrack.appendChild(ctxFill);
+  ctxCard.appendChild(ctxHeading);
+  ctxCard.appendChild(ctxTrack);
+  shadowRoot.appendChild(ctxChip);
+  shadowRoot.appendChild(ctxCard);
+  pulseHost.shadowRoot = shadowRoot;
+  body.appendChild(pulseHost);
+
+  docRef = {
+    documentElement: html,
+    head,
+    body,
+    hidden: false,
+    defaultView: null,
+    createElement: (t) => makeNode(t),
+    getElementById: (id) => html.getElementById(id),
+    querySelector: (s) => html.querySelector(s),
+    querySelectorAll: (s) => html.querySelectorAll(s),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  const sandbox = {
+    window: null,
+    globalThis: null,
+    document: docRef,
+    devicePixelRatio: 1,
+    navigator: { language: 'zh-CN' },
+    location: { pathname: '/' },
+    localStorage: { _m: {}, getItem(k) { return this._m[k] || null; }, setItem(k, v) { this._m[k] = String(v); } },
+    agPulseHost: {
+      async getMetrics() {
+        return {
+          speed: {
+            tps: 68.5,
+            latestTps: 72.4,
+            ttftSeconds: 0.34,
+            modelSeconds: 4.2,
+            toolSeconds: 1.4,
+            context: { usedTokens: 107520, maxTokens: 256000, usedFraction: 0.42, model: 'Gemini 4 Carbon' },
+          },
+        };
+      },
+    },
+    addEventListener(ev, cb) { if (!winListeners.has(ev)) winListeners.set(ev, []); winListeners.get(ev).push(cb); },
+    removeEventListener(ev, cb) { const a = winListeners.get(ev); if (a) { const i = a.indexOf(cb); if (i >= 0) a.splice(i, 1); } },
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+    MutationObserver: class { observe() {} disconnect() {} },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: (fn) => { const id = setTimeout(() => fn(typeof fakeNow === 'number' ? fakeNow : Date.now()), 8); timers.add(id); return id; },
+    cancelAnimationFrame: (id) => { timers.delete(id); clearTimeout(id); },
+    setTimeout: (fn, ms) => { const id = setTimeout(fn, ms); timers.add(id); return id; },
+    clearTimeout: (id) => { timers.delete(id); clearTimeout(id); },
+    setInterval: () => 1,
+    clearInterval: () => {},
+    performance: { now: () => Date.now() },
+    Uint8ClampedArray,
+    Math, Date, JSON, Map, Set, WeakMap, WeakSet, Array, Object, String, Number, Boolean, Promise, Uint8Array, Uint32Array, Int32Array, Float32Array, Intl, RegExp, Error, TypeError, encodeURIComponent, parseInt, parseFloat, isFinite, isNaN,
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  docRef.defaultView = sandbox;
+
+  try {
+    const res = vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), sandbox);
+    assert.equal(res.status, 'ok');
+
+    // 1. Dual mascot stage mounts 2 real actor canvases (Clawd & Cat, 96x84)
+    const stageEl = card.querySelector('.ag-cs-crab');
+    assert.ok(stageEl && stageEl.classList.contains('ag-cs-dual-stage'));
+    const actorCanvases = stageEl.querySelectorAll('.ag-v2-mascot-canvas');
+    assert.equal(actorCanvases.length, 2);
+    assert.equal(actorCanvases[0].width, 96);
+    assert.equal(actorCanvases[0].height, 84);
+    assert.equal(sandbox.window.__agClaudeStyle.getState().hasDualRig, true);
+
+    // 2. Official brand glyph on Orchestrator -> antigravity / auto
+    const glyph = modelBtn.querySelector('.ag-cs-model-glyph');
+    assert.ok(glyph);
+    assert.equal(glyph.getAttribute('data-brand'), 'antigravity');
+    assert.equal(glyph.getAttribute('data-tier'), 'auto');
+    assert.ok(glyph.innerHTML.includes('ag-spark-orbit-svg'));
+
+    // 3. Orchestrator effort bar stays locked & model-selector-panel rows mount optical brand glyphs
+    const orchBar = modelPanel.querySelector('[data-testid="orchestrator-effort-bar"]');
+    assert.ok(orchBar);
+    assert.equal(modelPanel.getAttribute('data-ag-cs-orch-active'), '1');
+    assert.equal(orchBar.getAttribute('data-row-hidden'), 'false');
+    assert.equal(cesRow.getAttribute('data-row-hidden'), 'true');
+
+    const hydrogenRowGlyph = hoverHydrogenOpt.querySelector('.ag-cs-panel-row-glyph');
+    const orchRowGlyph = orchOpt.querySelector('.ag-cs-panel-row-glyph');
+    const claudeRowGlyph = claudeMenuItem.querySelector('.ag-cs-panel-row-glyph');
+    assert.ok(hydrogenRowGlyph, 'Expected .ag-cs-panel-row-glyph on Gemini option row');
+    assert.equal(hydrogenRowGlyph.getAttribute('data-brand'), 'gemini');
+    assert.equal(hydrogenRowGlyph.getAttribute('data-tier'), 'xhigh');
+    assert.equal(hydrogenRowGlyph.getAttribute('data-selected'), 'false');
+    assert.ok(orchRowGlyph, 'Expected .ag-cs-panel-row-glyph on Orchestrator option row');
+    assert.equal(orchRowGlyph.getAttribute('data-brand'), 'antigravity');
+    assert.equal(orchRowGlyph.getAttribute('data-tier'), 'auto');
+    assert.equal(orchRowGlyph.getAttribute('data-selected'), 'true');
+    assert.equal(orchRowGlyph.style.getPropertyValue('opacity'), '1');
+    assert.ok(claudeRowGlyph, 'Expected .ag-cs-panel-row-glyph inside live menuitem lead flex container');
+    assert.equal(claudeRowGlyph.getAttribute('data-brand'), 'claude');
+    assert.equal(claudeRowGlyph.getAttribute('data-selected'), 'false');
+    assert.equal(claudeRowGlyph.style.getPropertyValue('opacity'), '0.78');
+    assert.equal(claudeLead.firstChild, claudeRowGlyph);
+    assert.equal(claudeName.textContent, 'Claude Sonnet 4.6');
+    assert.equal(claudeBadge.textContent, '新建');
+    assert.equal(usageMenuItem.querySelector('.ag-cs-panel-row-glyph'), null, 'Non-model menu item must be skipped');
+
+    // Verify live Base UI selection via data-ces-model-selected="true" lights up brand glow & inline opacity: 1
+    orchOpt.setAttribute('data-selected', 'false');
+    claudeMenuItem.setAttribute('data-ces-model-selected', 'true');
+    claudeMenuItem.className = 'agy-overlay-item text-foreground';
+    modelBtn.setAttribute('aria-label', 'Select model, current: Claude Sonnet 4.6');
+    modelSpan.textContent = 'Claude Sonnet 4.6';
+    sandbox.window.__agClaudeStyle.refreshConfig(cdp.DEFAULT_CONFIG);
+    assert.equal(claudeRowGlyph.getAttribute('data-selected'), 'true');
+    assert.equal(claudeRowGlyph.style.getPropertyValue('opacity'), '1');
+    assert.ok(claudeRowGlyph.style.getPropertyValue('filter').includes('drop-shadow'));
+    assert.ok(claudeRowGlyph.innerHTML.includes('var(--glyph-color-hi)'));
+    claudeMenuItem.setAttribute('data-ces-model-selected', 'false');
+    claudeMenuItem.className = 'agy-overlay-item text-secondary-foreground hover:text-foreground';
+
+    // Switch committed model to Gemini 4 Hydrogen Extra -> hides crystal bar, restores native effort row, updates glyph to gemini/xhigh
+    orchOpt.setAttribute('data-selected', 'false');
+    hoverHydrogenOpt.setAttribute('data-selected', 'true');
+    modelBtn.setAttribute('aria-label', 'Select model, current: Gemini 4 Hydrogen Extra');
+    modelSpan.textContent = 'Gemini 4 Hydrogen Extra';
+    sandbox.window.__agClaudeStyle.refreshConfig(cdp.DEFAULT_CONFIG);
+    assert.equal(glyph.getAttribute('data-brand'), 'gemini');
+    assert.equal(glyph.getAttribute('data-tier'), 'xhigh');
+    assert.equal(hydrogenRowGlyph.getAttribute('data-selected'), 'true');
+    assert.equal(orchRowGlyph.getAttribute('data-selected'), 'false');
+    assert.equal(modelPanel.hasAttribute('data-ag-cs-orch-active'), false);
+    assert.equal(orchBar.getAttribute('data-row-hidden'), 'true');
+    assert.equal(cesRow.getAttribute('data-row-hidden'), 'false');
+
+    // Disabling composerRestyle cleanly removes panel row glyphs, and re-enabling restores them idempotently
+    sandbox.window.__agClaudeStyle.refreshConfig({ ...cdp.DEFAULT_CONFIG, composerRestyle: false });
+    assert.equal(modelPanel.querySelectorAll('.ag-cs-panel-row-glyph').length, 0);
+    sandbox.window.__agClaudeStyle.refreshConfig(cdp.DEFAULT_CONFIG);
+    assert.equal(modelPanel.querySelectorAll('.ag-cs-panel-row-glyph').length, 3);
+
+    // 4. Thinking spark mounts on thinking-collapsible-trigger
+    const spark = thinkTrig.querySelector('.ag-cs-thinking-spark');
+    assert.ok(spark);
+    assert.equal(spark.getAttribute('data-brand'), 'gemini');
+    assert.equal(spark.getAttribute('data-state'), 'streaming');
+
+    // 5. Window '[' keydown toggles sidebar collapsed attribute only outside editors
+    for (const fn of winListeners.get('keydown') || []) {
+      fn({ key: '[', target: editorEl });
+    }
+    assert.equal(html.hasAttribute('data-ag-cs-sidebar-collapsed'), false);
+    for (const fn of winListeners.get('keydown') || []) {
+      fn({ key: '[', target: body });
+    }
+    assert.equal(html.getAttribute('data-ag-cs-sidebar-collapsed'), '1');
+
+    // 6. Pulse status bar shadowRoot bridged cleanly with vial rail & toggle button
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(sandbox.window.__agClaudeStyle.getState().hasPulseBridge, true);
+    assert.equal(pulseHost.getAttribute('data-pv-mode'), 'vial');
+    assert.equal(ctxCard.getAttribute('data-ag-pulse-vial-mode'), 'vial');
+    assert.ok(shadowRoot.querySelector('[data-ag-pulse-vial-toggle="1"]'));
+    assert.ok(shadowRoot.querySelector('canvas[data-vial-canvas="true"]'));
+
+    // 7. Full teardown via REMOVE_EXPRESSION restores host & cleans all v3.5.1 / v3.6 nodes
+    vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
+    assert.equal(html.hasAttribute('data-ag-cs-sidebar-collapsed'), false);
+    assert.equal(card.querySelector('.ag-cs-crab'), null);
+    assert.equal(modelBtn.querySelector('.ag-cs-model-glyph'), null);
+    assert.equal(modelPanel.querySelectorAll('.ag-cs-panel-row-glyph').length, 0);
+    assert.equal(orchOpt.textContent, 'Orchestrator (Carbon)');
+    assert.equal(hoverHydrogenOpt.textContent, 'Gemini 4 Hydrogen Extra');
+    assert.equal(modelPanel.querySelector('[data-testid="orchestrator-effort-bar"]'), null);
+    assert.equal(modelPanel.hasAttribute('data-ag-cs-orch-active'), false);
+    assert.equal(thinkTrig.querySelector('.ag-cs-thinking-spark'), null);
+    assert.equal(pulseHost.hasAttribute('data-pv-mode'), false);
+    assert.equal(ctxCard.hasAttribute('data-ag-pulse-vial-mode'), false);
+    assert.equal(shadowRoot.querySelector('[data-ag-pulse-vial-toggle="1"]'), null);
+  } finally {
+    for (const id of timers) clearTimeout(id);
+  }
+});
+
+test('v3.6.1 auto-unfolds inner thinking & tool collapsibles idempotently and drives 4-state conversation horizon aura (< 680KB)', async () => {
+  const injectExpr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
+  const totalBytes = Buffer.byteLength(injectExpr, 'utf8');
+  assert.ok(totalBytes < 680 * 1024, `Expected total bundle < 680KB, got ${totalBytes}`);
+
+  const timers = new Set();
+  const winListeners = new Map();
+  let fakeNow = 10000;
+  let disposedGlowCount = 0;
+
+  function makeCtx2D() {
+    return {
+      canvas: { width: 120, height: 80 },
+      save() {},
+      restore() {},
+      clearRect() {},
+      fillRect() {},
+      strokeRect() {},
+      beginPath() {},
+      closePath() {},
+      moveTo() {},
+      lineTo() {},
+      arc() {},
+      arcTo() {},
+      roundRect() {},
+      setLineDash() {},
+      ellipse() {},
+      quadraticCurveTo() {},
+      bezierCurveTo() {},
+      clip() {},
+      fill() {},
+      stroke() {},
+      translate() {},
+      rotate() {},
+      scale() {},
+      setTransform() {},
+      drawImage() {},
+      fillText() {},
+      createLinearGradient() { return { addColorStop() {} }; },
+      createRadialGradient() { return { addColorStop() {} }; },
+      createImageData(w, h) {
+        return { data: new Uint8ClampedArray(Math.max(4, w * h * 4)), width: w, height: h };
+      },
+      getImageData(x, y, w, h) {
+        return { data: new Uint8ClampedArray(Math.max(4, w * h * 4)), width: w, height: h };
+      },
+      putImageData() {},
+    };
+  }
+
+  let docRef = null;
+  function makeNode(tag, opts = {}) {
+    const attrs = new Map(Object.entries(opts.attrs || {}));
+    const classes = new Set((opts.className || '').split(/\s+/).filter(Boolean));
+    const listeners = new Map();
+    const children = [];
+
+    const matchesSimple = (node, simple) => {
+      let rest = simple.trim();
+      if (!rest) return false;
+      const tagMatch = /^[a-zA-Z0-9_-]+/.exec(rest);
+      if (tagMatch) {
+        if (node.tagName !== tagMatch[0].toUpperCase()) return false;
+        rest = rest.slice(tagMatch[0].length);
+      }
+      while (rest.length > 0) {
+        if (rest[0] === '#') {
+          const m = /^#((?:\\.|[a-zA-Z0-9_-])+)/.exec(rest);
+          if (!m || node.id !== m[1].replace(/\\/g, '')) return false;
+          rest = rest.slice(m[0].length);
+        } else if (rest[0] === '.') {
+          const m = /^\.([a-zA-Z0-9_-]+)/.exec(rest);
+          if (!m || !node.classList.contains(m[1])) return false;
+          rest = rest.slice(m[0].length);
+        } else if (rest[0] === '[') {
+          const m = /^\[([^\]=]+)(?:="([^"]*)")?\]/.exec(rest);
+          if (!m) return false;
+          const ok = m[2] === undefined ? node.hasAttribute(m[1]) : node.getAttribute(m[1]) === m[2];
+          if (!ok) return false;
+          rest = rest.slice(m[0].length);
+        } else {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    const matchesChain = (node, selector) =>
+      selector.split(',').some((part) => {
+        const tokens = part.trim().split(/\s+/).filter(Boolean);
+        if (tokens.length === 0 || !matchesSimple(node, tokens[tokens.length - 1])) return false;
+        let cur = node.parentElement;
+        let idx = tokens.length - 2;
+        while (cur && idx >= 0) {
+          if (matchesSimple(cur, tokens[idx])) idx--;
+          cur = cur.parentElement;
+        }
+        return idx < 0;
+      });
+
+    const node = {
+      tagName: tag.toUpperCase(),
+      nodeType: 1,
+      id: attrs.get('id') || opts.id || '',
+      dataset: {},
+      get ownerDocument() { return docRef; },
+      children,
+      parentElement: null,
+      parentNode: null,
+      isConnected: true,
+      hidden: false,
+      disabled: false,
+      _text: opts.text || '',
+      _clicks: 0,
+      clientWidth: 960,
+      clientHeight: 640,
+      width: 120,
+      height: 80,
+      style: {
+        _props: {},
+        display: '',
+        visibility: '',
+        opacity: '',
+        setProperty(k, v) { this._props[k] = String(v); },
+        getPropertyValue(k) { return this._props[k] || ''; },
+        removeProperty(k) { delete this._props[k]; },
+      },
+      classList: {
+        contains: (c) => classes.has(c),
+        add: (c) => classes.add(c),
+        remove: (c) => classes.delete(c),
+      },
+      get className() { return Array.from(classes).join(' '); },
+      set className(v) { classes.clear(); String(v).split(/\s+/).filter(Boolean).forEach((c) => classes.add(c)); },
+      get textContent() { return children.length ? children.map((c) => c.textContent).join('') : this._text; },
+      set textContent(v) { children.length = 0; this._text = String(v); },
+      set innerHTML(h) { children.length = 0; this._html = String(h); },
+      get innerHTML() { return this._html || ''; },
+      get childElementCount() { return children.length; },
+      get firstChild() { return children[0] || null; },
+      get lastElementChild() { return children[children.length - 1] || null; },
+      get nextElementSibling() {
+        if (!this.parentElement) return null;
+        const i = this.parentElement.children.indexOf(this);
+        return i >= 0 ? this.parentElement.children[i + 1] || null : null;
+      },
+      get nextSibling() { return this.nextElementSibling; },
+      appendChild(c) { c.parentElement = this; c.parentNode = this; children.push(c); return c; },
+      insertBefore(c, ref) {
+        c.parentElement = this;
+        c.parentNode = this;
+        const idx = ref ? children.indexOf(ref) : -1;
+        if (idx >= 0) children.splice(idx, 0, c);
+        else children.push(c);
+        return c;
+      },
+      removeChild(c) {
+        const i = children.indexOf(c);
+        if (i >= 0) children.splice(i, 1);
+        c.parentElement = null;
+        c.parentNode = null;
+        c.isConnected = false;
+        return c;
+      },
+      remove() { if (this.parentElement) this.parentElement.removeChild(this); },
+      setAttribute(k, v) { attrs.set(k, String(v)); if (k === 'id') node.id = String(v); },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) {
+        if (k === 'webglcontextlost') disposedGlowCount++;
+        attrs.delete(k);
+      },
+      toggleAttribute(k, f) {
+        const on = f === undefined ? !attrs.has(k) : Boolean(f);
+        if (on) attrs.set(k, ''); else attrs.delete(k);
+        return on;
+      },
+      click() {
+        this._clicks += 1;
+        if (this.hasAttribute('aria-expanded')) {
+          this.setAttribute('aria-expanded', this.getAttribute('aria-expanded') === 'true' ? 'false' : 'true');
+        }
+      },
+      addEventListener(ev, cb) { if (!listeners.has(ev)) listeners.set(ev, []); listeners.get(ev).push(cb); },
+      removeEventListener(ev, cb) {
+        if (ev === 'webglcontextlost') disposedGlowCount++;
+        const a = listeners.get(ev);
+        if (a) { const i = a.indexOf(cb); if (i >= 0) a.splice(i, 1); }
+      },
+      getContext(kind) { return kind === '2d' ? makeCtx2D() : null; },
+      getBoundingClientRect() { return { left: 0, top: 0, right: 960, bottom: 640, width: 960, height: 640 }; },
+      closest(sel) { let cur = this; while (cur) { if (matchesChain(cur, sel)) return cur; cur = cur.parentElement; } return null; },
+      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+      querySelectorAll(sel) {
+        const out = [];
+        const walk = (n) => { for (const c of n.children) { if (matchesChain(c, sel)) out.push(c); walk(c); } };
+        walk(this);
+        return out;
+      },
+      getElementById(id) {
+        const find = (n) => (n.id === id ? n : n.children.map(find).find(Boolean) || null);
+        return find(this);
+      },
+    };
+    return node;
+  }
+
+  const html = makeNode('html');
+  const head = makeNode('head');
+  const body = makeNode('body', { className: 'theme-dark' });
+  html.appendChild(head);
+  html.appendChild(body);
+
+  const stageWrap = makeNode('div', { className: 'conv-shell' });
+  const convView = makeNode('div', { attrs: { 'data-testid': 'conversation-view' } });
+
+  // Build 2-tier worked-for collapsible structure
+  const turnWrap = makeNode('div');
+  const workedBtn = makeNode('button', {
+    attrs: { 'data-testid': 'worked-for-collapsible', 'aria-expanded': 'false' },
+    text: 'Worked for 12s',
+  });
+  const workedBody = makeNode('div');
+  const thinkChild = makeNode('button', {
+    attrs: { 'data-testid': 'thinking-collapsible-trigger', 'aria-expanded': 'false' },
+    text: 'Thought for 6s',
+  });
+  const toolChild = makeNode('button', {
+    attrs: { 'data-testid': 'tool-group-collapsible', 'aria-expanded': 'false' },
+    text: 'Ran 3 tools',
+  });
+  workedBody.appendChild(thinkChild);
+  workedBody.appendChild(toolChild);
+  turnWrap.appendChild(workedBtn);
+  turnWrap.appendChild(workedBody);
+  convView.appendChild(turnWrap);
+
+  // Composer with send-button initially
+  const inputBox = makeNode('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const card = makeNode('div', { className: 'surface-composer-card' });
+  const sendBtn = makeNode('button', { attrs: { 'data-testid': 'send-button' } });
+  card.appendChild(sendBtn);
+  inputBox.appendChild(card);
+  convView.appendChild(inputBox);
+  stageWrap.appendChild(convView);
+  body.appendChild(stageWrap);
+
+  docRef = {
+    documentElement: html,
+    head,
+    body,
+    hidden: false,
+    defaultView: null,
+    createElement: (t) => makeNode(t),
+    getElementById: (id) => html.getElementById(id),
+    querySelector: (s) => html.querySelector(s),
+    querySelectorAll: (s) => html.querySelectorAll(s),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  const sandbox = {
+    window: null,
+    globalThis: null,
+    document: docRef,
+    devicePixelRatio: 1,
+    navigator: { language: 'zh-CN' },
+    location: { pathname: '/c/12345678-1234-1234-1234-1234567890ab' },
+    localStorage: { _m: {}, getItem(k) { return this._m[k] || null; }, setItem(k, v) { this._m[k] = String(v); } },
+    addEventListener(ev, cb) { if (!winListeners.has(ev)) winListeners.set(ev, []); winListeners.get(ev).push(cb); },
+    removeEventListener(ev, cb) { const a = winListeners.get(ev); if (a) { const i = a.indexOf(cb); if (i >= 0) a.splice(i, 1); } },
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+    MutationObserver: class { observe() {} disconnect() {} },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: (fn) => { const id = setTimeout(() => fn(typeof fakeNow === 'number' ? fakeNow : Date.now()), 8); timers.add(id); return id; },
+    cancelAnimationFrame: (id) => { timers.delete(id); clearTimeout(id); },
+    setTimeout: (fn, ms) => { const id = setTimeout(fn, ms); timers.add(id); return id; },
+    clearTimeout: (id) => { timers.delete(id); clearTimeout(id); },
+    setInterval: () => 1,
+    clearInterval: () => {},
+    performance: { now: () => fakeNow },
+    Uint8ClampedArray,
+    Math, Date, JSON, Map, Set, WeakMap, WeakSet, Array, Object, String, Number, Boolean, Promise, Uint8Array, Uint32Array, Int32Array, Float32Array, Intl, RegExp, Error, TypeError, Function, encodeURIComponent, parseInt, parseFloat, isFinite, isNaN,
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  docRef.defaultView = sandbox;
+
+  try {
+    const res = vm.runInNewContext(injectExpr, sandbox);
+    assert.equal(res.status, 'ok');
+
+    // 1. Conversation aura mounts idempotently at convView.parentElement head in 'idle' phase
+    const auraHost = stageWrap.querySelector('.ag-cs-conv-aura-host');
+    assert.ok(auraHost, 'Expected .ag-cs-conv-aura-host mounted on conversation parent');
+    assert.equal(stageWrap.firstChild, auraHost);
+    assert.ok(auraHost.querySelector('canvas.ag-cs-conv-glow'));
+    assert.equal(sandbox.window.__agClaudeStyle.getState().hasConvAura, true);
+    assert.equal(sandbox.window.__agClaudeStyle.getState().convAuraPhase, 'idle');
+
+    // 2. While worked-for-collapsible is collapsed, inner triggers stay untouched
+    assert.equal(thinkChild.getAttribute('aria-expanded'), 'false');
+    assert.equal(toolChild.getAttribute('aria-expanded'), 'false');
+    assert.equal(thinkChild._clicks, 0);
+    assert.equal(toolChild._clicks, 0);
+
+    // 3. Opening worked-for-collapsible auto-unfolds tool-group-collapsible ONLY, keeping thinking collapsed by default
+    workedBtn.setAttribute('aria-expanded', 'true');
+    for (const fn of winListeners.get('click') || []) {
+      fn({ target: workedBtn });
+    }
+    await new Promise((r) => setTimeout(r, 42));
+    assert.equal(workedBtn.getAttribute('data-ag-cs-outer-open'), '1');
+    assert.equal(thinkChild.getAttribute('aria-expanded'), 'false', 'Thinking block must stay collapsed by default');
+    assert.equal(toolChild.getAttribute('aria-expanded'), 'true', 'Tool group must auto-unfold to avoid 3-tier nesting');
+    assert.equal(thinkChild.hasAttribute('data-ag-cs-auto-unfolded'), false);
+    assert.equal(toolChild.getAttribute('data-ag-cs-auto-unfolded'), '1');
+    assert.equal(thinkChild._clicks, 0);
+    assert.equal(toolChild._clicks, 1);
+
+    // 4. Respect manual collapse: user folds toolChild back -> subsequent sync() MUST NOT re-open it
+    toolChild.click();
+    assert.equal(toolChild.getAttribute('aria-expanded'), 'false');
+    sandbox.window.__agClaudeStyle.sync();
+    sandbox.window.__agClaudeStyle.refreshConfig(cdp.DEFAULT_CONFIG);
+    assert.equal(toolChild.getAttribute('aria-expanded'), 'false');
+    assert.equal(toolChild._clicks, 2, 'Plugin must never override manual secondary collapse');
+
+    // 5. Reset mechanism: closing outer worked-for-collapsible and re-opening allows fresh auto-unfold of toolChild
+    workedBtn.setAttribute('aria-expanded', 'false');
+    sandbox.window.__agClaudeStyle.sync();
+    assert.equal(workedBtn.hasAttribute('data-ag-cs-outer-open'), false);
+    assert.equal(toolChild.hasAttribute('data-ag-cs-auto-unfolded'), false);
+    workedBtn.setAttribute('aria-expanded', 'true');
+    sandbox.window.__agClaudeStyle.sync();
+    assert.equal(toolChild.getAttribute('aria-expanded'), 'true');
+    assert.equal(thinkChild.getAttribute('aria-expanded'), 'false');
+
+    // 6. 4-State Conversation Aura transitions: idle -> start -> running -> complete -> idle
+    const cancelBtn = makeNode('button', { attrs: { 'data-testid': 'input-cancel-button' } });
+    card.appendChild(cancelBtn);
+    sandbox.window.__agClaudeStyle.sync();
+    assert.equal(sandbox.window.__agClaudeStyle.getState().convAuraPhase, 'start');
+    assert.equal(auraHost.getAttribute('data-aura-phase'), 'start');
+
+    // Advance past 1.15s start surge -> enters steady running state
+    fakeNow += 1200;
+    assert.equal(sandbox.window.__agClaudeStyle.getState().convAuraPhase, 'running');
+    assert.equal(auraHost.getAttribute('data-aura-phase'), 'running');
+
+    // Cancel button disappears -> enters 1.40s complete chime state
+    cancelBtn.remove();
+    sandbox.window.__agClaudeStyle.sync();
+    assert.equal(sandbox.window.__agClaudeStyle.getState().convAuraPhase, 'complete');
+    assert.equal(auraHost.getAttribute('data-aura-phase'), 'complete');
+
+    // Advance past 1.40s complete chime -> settles back to quiet idle state
+    fakeNow += 1450;
+    assert.equal(sandbox.window.__agClaudeStyle.getState().convAuraPhase, 'idle');
+    assert.equal(auraHost.getAttribute('data-aura-phase'), 'idle');
+
+    // Clicking send-button also sparks start surge immediately
+    for (const fn of winListeners.get('click') || []) {
+      fn({ target: sendBtn });
+    }
+    assert.equal(sandbox.window.__agClaudeStyle.getState().convAuraPhase, 'start');
+
+    // 7. REMOVE_EXPRESSION disposes aura and cleans all DOM nodes & marker attributes
+    vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
+    assert.equal(stageWrap.querySelector('.ag-cs-conv-aura-host'), null);
+    assert.ok(disposedGlowCount >= 1, 'Expected glow.dispose() to clean up canvas listeners');
+    assert.equal(workedBtn.hasAttribute('data-ag-cs-outer-open'), false);
+    assert.equal(thinkChild.hasAttribute('data-ag-cs-auto-unfolded'), false);
+    assert.equal(toolChild.hasAttribute('data-ag-cs-auto-unfolded'), false);
+  } finally {
+    for (const id of timers) clearTimeout(id);
+  }
+});
+
+test('v3.7 orchestrates 4-tier motionLevel, Hero A~E optical transitions, dual-track streaming 250ms unwrap, cryo-lens, and lossless host icons', async () => {
+  const injectExpr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
+  const timers = new Set();
+  const winListeners = new Map();
+  const docListeners = new Map();
+  const activeObservers = [];
+  let fakeNow = 20000;
+
+  function makeCtx2D() {
+    return {
+      canvas: { width: 200, height: 120 },
+      save() {}, restore() {}, clearRect() {}, fillRect() {}, strokeRect() {},
+      beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, arc() {}, arcTo() {},
+      roundRect() {}, setLineDash() {}, ellipse() {}, quadraticCurveTo() {}, bezierCurveTo() {},
+      clip() {}, fill() {}, stroke() {}, translate() {}, rotate() {}, scale() {}, setTransform() {},
+      drawImage() {}, fillText() {},
+      createLinearGradient() { return { addColorStop() {} }; },
+      createRadialGradient() { return { addColorStop() {} }; },
+      createImageData(w, h) { return { data: new Uint8ClampedArray(Math.max(4, w * h * 4)), width: w, height: h }; },
+      getImageData(x, y, w, h) { return { data: new Uint8ClampedArray(Math.max(4, w * h * 4)), width: w, height: h }; },
+      putImageData() {},
+    };
+  }
+
+  let docRef = null;
+  function makeTextNode(text) {
+    return {
+      nodeType: 3,
+      nodeName: '#text',
+      parentNode: null,
+      parentElement: null,
+      nodeValue: String(text ?? ''),
+      get textContent() { return this.nodeValue; },
+      set textContent(v) { this.nodeValue = String(v ?? ''); },
+      get nextSibling() {
+        if (!this.parentNode) return null;
+        const arr = this.parentNode.childNodes;
+        const i = arr.indexOf(this);
+        return i >= 0 ? arr[i + 1] || null : null;
+      },
+    };
+  }
+
+  function makeNode(tag, opts = {}) {
+    const attrs = new Map(Object.entries(opts.attrs || {}));
+    const classes = new Set((opts.className || '').split(/\s+/).filter(Boolean));
+    const listeners = new Map();
+    const childNodes = [];
+    let rectBox = opts.rect || { left: 100, top: 200, right: 500, bottom: 260, width: 400, height: 60 };
+
+    const matchesSimple = (node, simple) => {
+      if (!node || node.nodeType !== 1) return false;
+      let rest = simple.trim();
+      if (!rest) return false;
+      const tagMatch = /^[a-zA-Z0-9_-]+/.exec(rest);
+      if (tagMatch) {
+        if (node.tagName !== tagMatch[0].toUpperCase()) return false;
+        rest = rest.slice(tagMatch[0].length);
+      }
+      while (rest.length > 0) {
+        if (rest[0] === '#') {
+          const m = /^#((?:\\.|[a-zA-Z0-9_-])+)/.exec(rest);
+          if (!m || node.id !== m[1].replace(/\\/g, '')) return false;
+          rest = rest.slice(m[0].length);
+        } else if (rest[0] === '.') {
+          const m = /^\.([a-zA-Z0-9_-]+)/.exec(rest);
+          if (!m || !node.classList.contains(m[1])) return false;
+          rest = rest.slice(m[0].length);
+        } else if (rest[0] === '[') {
+          const m = /^\[([^\]=]+)(?:="([^"]*)")?\]/.exec(rest);
+          if (!m) return false;
+          const ok = m[2] === undefined ? node.hasAttribute(m[1]) : node.getAttribute(m[1]) === m[2];
+          if (!ok) return false;
+          rest = rest.slice(m[0].length);
+        } else {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    const matchesChain = (node, selector) =>
+      selector.split(',').some((part) => {
+        const tokens = part.trim().split(/\s+/).filter(Boolean);
+        if (tokens.length === 0 || !matchesSimple(node, tokens[tokens.length - 1])) return false;
+        let cur = node.parentElement;
+        let idx = tokens.length - 2;
+        while (cur && idx >= 0) {
+          if (matchesSimple(cur, tokens[idx])) idx--;
+          cur = cur.parentElement;
+        }
+        return idx < 0;
+      });
+
+    const node = {
+      tagName: tag.toUpperCase(),
+      nodeType: 1,
+      id: attrs.get('id') || opts.id || '',
+      dataset: {},
+      get ownerDocument() { return docRef; },
+      childNodes,
+      get children() { return childNodes.filter((n) => n.nodeType === 1); },
+      parentElement: null,
+      parentNode: null,
+      isConnected: true,
+      hidden: false,
+      disabled: false,
+      scrollTop: 0,
+      clientWidth: rectBox.width || 960,
+      clientHeight: rectBox.height || 640,
+      width: 120,
+      height: 80,
+      _setRect(r) { rectBox = r; },
+      style: {
+        _props: {},
+        setProperty(k, v) { this._props[k] = String(v); },
+        getPropertyValue(k) { return this._props[k] || ''; },
+        removeProperty(k) { delete this._props[k]; },
+      },
+      classList: {
+        contains: (c) => classes.has(c),
+        add: (c) => classes.add(c),
+        remove: (c) => classes.delete(c),
+      },
+      get className() { return Array.from(classes).join(' '); },
+      set className(v) { classes.clear(); String(v).split(/\s+/).filter(Boolean).forEach((c) => classes.add(c)); },
+      get textContent() { return childNodes.map((c) => c.textContent).join(''); },
+      set textContent(v) {
+        childNodes.length = 0;
+        const s = String(v ?? '');
+        if (s.length > 0) this.appendChild(makeTextNode(s));
+      },
+      set innerHTML(h) {
+        childNodes.length = 0;
+        this._html = String(h ?? '');
+      },
+      get innerHTML() { return this._html || ''; },
+      get childElementCount() { return this.children.length; },
+      get firstChild() { return childNodes[0] || null; },
+      get firstElementChild() { return this.children[0] || null; },
+      get lastElementChild() { const ch = this.children; return ch[ch.length - 1] || null; },
+      get nextSibling() {
+        if (!this.parentNode) return null;
+        const i = this.parentNode.childNodes.indexOf(this);
+        return i >= 0 ? this.parentNode.childNodes[i + 1] || null : null;
+      },
+      get nextElementSibling() {
+        if (!this.parentElement) return null;
+        const elSibs = this.parentElement.children;
+        const i = elSibs.indexOf(this);
+        return i >= 0 ? elSibs[i + 1] || null : null;
+      },
+      get previousElementSibling() {
+        if (!this.parentElement) return null;
+        const elSibs = this.parentElement.children;
+        const i = elSibs.indexOf(this);
+        return i > 0 ? elSibs[i - 1] || null : null;
+      },
+      appendChild(c) {
+        if (c.parentNode) c.parentNode.removeChild(c);
+        c.parentElement = this;
+        c.parentNode = this;
+        c.isConnected = true;
+        childNodes.push(c);
+        return c;
+      },
+      insertBefore(c, ref) {
+        if (c.parentNode) c.parentNode.removeChild(c);
+        c.parentElement = this;
+        c.parentNode = this;
+        c.isConnected = true;
+        const idx = ref ? childNodes.indexOf(ref) : -1;
+        if (idx >= 0) childNodes.splice(idx, 0, c);
+        else childNodes.push(c);
+        return c;
+      },
+      removeChild(c) {
+        const i = childNodes.indexOf(c);
+        if (i >= 0) childNodes.splice(i, 1);
+        c.parentElement = null;
+        c.parentNode = null;
+        c.isConnected = false;
+        return c;
+      },
+      remove() { if (this.parentNode) this.parentNode.removeChild(this); },
+      normalize() {
+        for (let i = 0; i < childNodes.length; i++) {
+          const cur = childNodes[i];
+          if (cur.nodeType === 3) {
+            if (!cur.nodeValue) {
+              childNodes.splice(i, 1);
+              i--;
+              continue;
+            }
+            while (i + 1 < childNodes.length && childNodes[i + 1].nodeType === 3) {
+              cur.nodeValue += childNodes[i + 1].nodeValue;
+              childNodes[i + 1].parentNode = null;
+              childNodes[i + 1].parentElement = null;
+              childNodes.splice(i + 1, 1);
+            }
+          }
+        }
+      },
+      setAttribute(k, v) { attrs.set(k, String(v)); if (k === 'id') node.id = String(v); },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) { attrs.delete(k); },
+      toggleAttribute(k, f) {
+        const on = f === undefined ? !attrs.has(k) : Boolean(f);
+        if (on) attrs.set(k, ''); else attrs.delete(k);
+        return on;
+      },
+      animate(kf, o) {
+        this._lastAnim = { kf, o };
+        return { finished: Promise.resolve(), cancel() {}, commitStyles() {} };
+      },
+      addEventListener(ev, cb) { if (!listeners.has(ev)) listeners.set(ev, []); listeners.get(ev).push(cb); },
+      removeEventListener(ev, cb) {
+        const a = listeners.get(ev);
+        if (a) { const i = a.indexOf(cb); if (i >= 0) a.splice(i, 1); }
+      },
+      dispatch(ev, payload = {}) {
+        const evObj = { type: ev, target: this, ...payload };
+        for (const cb of listeners.get(ev) || []) cb(evObj);
+      },
+      matches(sel) { return matchesChain(this, sel); },
+      getContext(kind) { return kind === '2d' ? makeCtx2D() : null; },
+      getBoundingClientRect() { return { ...rectBox }; },
+      closest(sel) { let cur = this; while (cur) { if (matchesChain(cur, sel)) return cur; cur = cur.parentElement; } return null; },
+      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+      querySelectorAll(sel) {
+        const out = [];
+        const walk = (n) => { for (const c of n.children) { if (matchesChain(c, sel)) out.push(c); walk(c); } };
+        walk(this);
+        return out;
+      },
+      getElementById(id) {
+        const find = (n) => (n.id === id ? n : n.children.map(find).find(Boolean) || null);
+        return find(this);
+      },
+    };
+    if (opts.text) node.textContent = opts.text;
+    return node;
+  }
+
+  const html = makeNode('html');
+  const head = makeNode('head');
+  const body = makeNode('body', { className: 'theme-dark' });
+  html.appendChild(head);
+  html.appendChild(body);
+
+  // Sidebar with 2 conversation rows + real host <a data-testid="new-conversation-button"> & non-sidebar buttons
+  const sidebar = makeNode('aside', { rect: { left: 0, top: 0, right: 240, bottom: 800, width: 240, height: 800 } });
+  const newConvBtn = makeNode('a', { attrs: { 'data-testid': 'new-conversation-button', href: '/' } });
+  newConvBtn.appendChild(makeNode('svg', { attrs: { width: '16', height: '16' } }));
+  const sidebarToggleBtn = makeNode('button', { attrs: { 'data-testid': 'sidebar-toggle-button' } });
+  sidebarToggleBtn.appendChild(makeNode('svg', { attrs: { width: '16', height: '16' } }));
+  const addProjBtn = makeNode('button', {
+    attrs: { 'data-testid': 'sidebar-add-project-button', 'aria-label': '新建项目', 'data-ag-cs-icon-injected': 'panel-left' },
+  });
+  addProjBtn.appendChild(makeNode('svg', { className: 'ag-anim-icon' }));
+  addProjBtn.appendChild(makeNode('svg', { attrs: { width: '16', height: '16', hidden: '', 'data-ag-cs-orig-svg': '1' } }));
+  const overviewToggleBtn = makeNode('button', {
+    attrs: { 'data-testid': 'toggle-overview-panel', 'aria-label': '切换概览面板' },
+  });
+  overviewToggleBtn.appendChild(makeNode('svg', { attrs: { width: '16', height: '16' } }));
+  const autoBtn = makeNode('button', { attrs: { 'data-testid': 'automations-button' } });
+  autoBtn.appendChild(makeNode('svg', { attrs: { width: '16', height: '16' } }));
+  const copyMsgBtn = makeNode('button', { attrs: { 'aria-label': 'Copy message' } });
+  copyMsgBtn.appendChild(makeNode('svg', { attrs: { width: '15', height: '15' } }));
+  sidebar.appendChild(newConvBtn);
+  sidebar.appendChild(sidebarToggleBtn);
+  sidebar.appendChild(addProjBtn);
+  sidebar.appendChild(overviewToggleBtn);
+  sidebar.appendChild(autoBtn);
+  sidebar.appendChild(copyMsgBtn);
+
+  const rowList = makeNode('div', { rect: { left: 8, top: 100, right: 232, bottom: 500, width: 224, height: 400 } });
+  const row0 = makeNode('div', {
+    attrs: { 'data-testid': 'conversation-row-sidebar', 'data-selected': 'true' },
+    rect: { left: 8, top: 110, right: 232, bottom: 138, width: 224, height: 28 },
+  });
+  const row1 = makeNode('div', {
+    attrs: { 'data-testid': 'conversation-row-sidebar', 'data-selected': 'false' },
+    rect: { left: 8, top: 144, right: 232, bottom: 172, width: 224, height: 28 },
+  });
+  rowList.appendChild(row0);
+  rowList.appendChild(row1);
+  sidebar.appendChild(rowList);
+  body.appendChild(sidebar);
+
+  // Start on .agy-home for Hero A liftoff test
+  const stageShell = makeNode('div', { rect: { left: 240, top: 0, right: 1280, bottom: 800, width: 1040, height: 800 } });
+  const home = makeNode('div', { className: 'agy-home', rect: { left: 240, top: 0, right: 1280, bottom: 800, width: 1040, height: 800 } });
+  const homeGreet = makeNode('div', { attrs: { 'data-testid': 'home-greeting' } });
+  homeGreet.appendChild(makeNode('h1', { text: 'Hello' }));
+  const homeInputBox = makeNode('div', {
+    attrs: { 'data-testid': 'agent-input-box' },
+    rect: { left: 420, top: 420, right: 1100, bottom: 510, width: 680, height: 90 },
+  });
+  const homeCard = makeNode('div', { className: 'surface-composer-card' });
+  const homeSendBtn = makeNode('button', { attrs: { 'data-testid': 'input-send-button' } });
+  homeSendBtn.appendChild(makeNode('svg', { attrs: { width: '15', height: '15' } }));
+  homeCard.appendChild(homeSendBtn);
+  homeInputBox.appendChild(homeCard);
+  home.appendChild(homeGreet);
+  home.appendChild(homeInputBox);
+  stageShell.appendChild(home);
+  body.appendChild(stageShell);
+
+  // Settings dialog for motionLevel & group glide test
+  const dialog = makeNode('div', { attrs: { role: 'dialog' }, rect: { left: 320, top: 100, right: 960, bottom: 700, width: 640, height: 600 } });
+  const appPanel = makeNode('div', { className: 'p-6' });
+  appPanel.appendChild(makeNode('h2', { text: '外观' }));
+  appPanel.appendChild(makeNode('div', { className: 'space-y-2' }));
+  dialog.appendChild(appPanel);
+  body.appendChild(dialog);
+
+  docRef = {
+    documentElement: html,
+    head,
+    body,
+    hidden: false,
+    defaultView: null,
+    createElement: (t) => makeNode(t),
+    createTextNode: (t) => makeTextNode(t),
+    getElementById: (id) => html.getElementById(id),
+    querySelector: (s) => html.querySelector(s),
+    querySelectorAll: (s) => html.querySelectorAll(s),
+    addEventListener(ev, cb) { if (!docListeners.has(ev)) docListeners.set(ev, []); docListeners.get(ev).push(cb); },
+    removeEventListener(ev, cb) { const a = docListeners.get(ev); if (a) { const i = a.indexOf(cb); if (i >= 0) a.splice(i, 1); } },
+  };
+
+  const sandbox = {
+    window: null,
+    globalThis: null,
+    document: docRef,
+    innerWidth: 1280,
+    innerHeight: 800,
+    devicePixelRatio: 1,
+    navigator: { language: 'zh-CN' },
+    location: { pathname: '/' },
+    localStorage: { _m: {}, getItem(k) { return this._m[k] || null; }, setItem(k, v) { this._m[k] = String(v); } },
+    addEventListener(ev, cb) { if (!winListeners.has(ev)) winListeners.set(ev, []); winListeners.get(ev).push(cb); },
+    removeEventListener(ev, cb) { const a = winListeners.get(ev); if (a) { const i = a.indexOf(cb); if (i >= 0) a.splice(i, 1); } },
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+    MutationObserver: class {
+      constructor(cb) { this.cb = cb; this.target = null; }
+      observe(target, opts) { this.target = target; this.opts = opts; activeObservers.push(this); }
+      disconnect() { const i = activeObservers.indexOf(this); if (i >= 0) activeObservers.splice(i, 1); this.target = null; }
+    },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: (fn) => { const id = setTimeout(() => fn(typeof fakeNow === 'number' ? fakeNow : Date.now()), 8); timers.add(id); return id; },
+    cancelAnimationFrame: (id) => { timers.delete(id); clearTimeout(id); },
+    setTimeout: (fn, ms) => { const id = setTimeout(fn, ms); timers.add(id); return id; },
+    clearTimeout: (id) => { timers.delete(id); clearTimeout(id); },
+    setInterval: () => 1,
+    clearInterval: () => {},
+    performance: { now: () => fakeNow },
+    CSS: { supports: () => true },
+    Uint8ClampedArray,
+    Math, Date, JSON, Map, Set, WeakMap, WeakSet, Array, Object, String, Number, Boolean, Promise, Uint8Array, Uint32Array, Int32Array, Float32Array, Intl, RegExp, Error, TypeError, Function, encodeURIComponent, parseInt, parseFloat, isFinite, isNaN,
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  docRef.defaultView = sandbox;
+
+  const fireWinClick = (target) => {
+    for (const cb of winListeners.get('click') || []) cb({ type: 'click', target });
+  };
+  const fireDocDown = (target, x = 400, y = 300) => {
+    for (const cb of docListeners.get('pointerdown') || []) cb({ type: 'pointerdown', target, clientX: x, clientY: y, button: 0 });
+  };
+
+  try {
+    const res = vm.runInNewContext(injectExpr, sandbox);
+    assert.equal(res.status, 'ok');
+
+    // 1. Default motionLevel = 'ultra' & host icons non-destructively hydrated (including <a data-testid="new-conversation-button">)
+    assert.equal(html.getAttribute('data-ag-cs-motion'), 'ultra');
+    assert.equal(newConvBtn.getAttribute('data-ag-cs-icon-injected'), 'sparkles-pen');
+    assert.equal(sidebarToggleBtn.getAttribute('data-ag-cs-icon-injected'), 'panel-left');
+    assert.equal(addProjBtn.hasAttribute('data-ag-cs-icon-injected'), false, 'sidebar-add-project-button must self-heal and never become panel-left');
+    assert.equal(addProjBtn.querySelector('.ag-anim-icon'), null);
+    assert.equal(addProjBtn.querySelector('svg')?.hasAttribute('hidden'), false);
+    assert.equal(overviewToggleBtn.hasAttribute('data-ag-cs-icon-injected'), false, 'toggle-overview-panel must not become panel-left');
+    assert.equal(autoBtn.getAttribute('data-ag-cs-icon-injected'), 'zap-bolt');
+    assert.equal(homeSendBtn.getAttribute('data-ag-cs-icon-injected'), 'arrow-up-launch');
+    assert.equal(copyMsgBtn.getAttribute('data-ag-cs-icon-injected'), 'copy-check');
+    assert.ok(newConvBtn.querySelector('.ag-anim-icon'));
+    assert.equal(newConvBtn.querySelector('[data-ag-cs-orig-svg]')?.hasAttribute('hidden'), true);
+
+    // Clicking copy button plays check icon state
+    fireWinClick(copyMsgBtn);
+    assert.equal(copyMsgBtn.querySelector('.ag-anim-icon')?.getAttribute('data-icon-state'), 'check');
+
+    // Settings motionLevel row switches tier & glides indicator; 'off' restores original host SVGs!
+    let glideCalls = 0;
+    const origGlide = sandbox.__agMotionEngine.glideIndicator;
+    const motionBtns = appPanel.querySelectorAll('#ag-cs-settings-sec button').filter((b) => b.getAttribute('data-ag-cs-key') === 'motionLevel');
+    assert.equal(motionBtns.length, 4);
+    const stdBtn = motionBtns.find((b) => b.getAttribute('data-ag-cs-val') === '"standard"');
+    const offBtn = motionBtns.find((b) => b.getAttribute('data-ag-cs-val') === '"off"');
+    const ultraBtn = motionBtns.find((b) => b.getAttribute('data-ag-cs-val') === '"ultra"');
+    assert.equal(ultraBtn.getAttribute('aria-pressed'), 'true');
+    // Spy via pill creation during click
+    stdBtn.dispatch('click');
+    assert.equal(html.getAttribute('data-ag-cs-motion'), 'standard');
+    assert.ok(body.querySelector('.ag-cs-pill-glide'), 'Expected shared pill glide indicator in standard tier');
+    offBtn.dispatch('click');
+    assert.equal(html.getAttribute('data-ag-cs-motion'), 'off');
+    assert.equal(newConvBtn.hasAttribute('data-ag-cs-icon-injected'), false, 'Motion off must restore original SVG');
+    assert.equal(newConvBtn.querySelector('.ag-anim-icon'), null);
+    ultraBtn.dispatch('click');
+    assert.equal(html.getAttribute('data-ag-cs-motion'), 'ultra');
+    assert.equal(newConvBtn.getAttribute('data-ag-cs-icon-injected'), 'sparkles-pen');
+    void origGlide;
+    void glideCalls;
+
+    // 2. Hero A: Liftoff from .agy-home -> formal [data-testid="conversation-view"]
+    fireWinClick(homeSendBtn);
+    home.remove();
+    const convView = makeNode('div', {
+      attrs: { 'data-testid': 'conversation-view' },
+      rect: { left: 240, top: 0, right: 1280, bottom: 800, width: 1040, height: 800 },
+    });
+    const viewport = makeNode('div', { attrs: { 'data-testid': 'autoscroll-viewport' } });
+    const turn0 = makeNode('div', { attrs: { 'data-testid': 'user-input-step' } });
+    const turn1 = makeNode('div', { attrs: { 'data-testid': 'user-input-step' } });
+    const firstBubble = makeNode('div', { attrs: { 'data-testid': 'user-message-bubble' }, text: 'Launch!' });
+    turn0.appendChild(firstBubble);
+    viewport.appendChild(turn0);
+    viewport.appendChild(turn1);
+    convView.appendChild(viewport);
+
+    const navWrap = makeNode('div');
+    const navTurn0 = makeNode('button', { attrs: { 'data-testid': 'conversation-navigator-turn', 'data-turn-index': '0' } });
+    const navTurn1 = makeNode('button', { attrs: { 'data-testid': 'conversation-navigator-turn', 'data-turn-index': '1' } });
+    navWrap.appendChild(navTurn0);
+    navWrap.appendChild(navTurn1);
+    convView.appendChild(navWrap);
+
+    const convInputBox = makeNode('div', {
+      attrs: { 'data-testid': 'agent-input-box' },
+      rect: { left: 420, top: 700, right: 1100, bottom: 780, width: 680, height: 80 },
+    });
+    const convCard = makeNode('div', { className: 'surface-composer-card' });
+    const modelTrigger = makeNode('button', {
+      attrs: { 'data-testid': 'model-selector-trigger' },
+      text: 'Gemini 4 Carbon High',
+      rect: { left: 430, top: 702, right: 610, bottom: 730, width: 180, height: 28 },
+    });
+    convCard.appendChild(modelTrigger);
+    convInputBox.appendChild(convCard);
+    convView.appendChild(convInputBox);
+    stageShell.appendChild(convView);
+
+    sandbox.window.__agClaudeStyle.sync();
+    const liftoffVeil = body.querySelector('.ag-cs-liftoff-veil');
+    assert.ok(liftoffVeil, 'Expected .ag-cs-liftoff-veil mounted on Hero A liftoff');
+    assert.ok(liftoffVeil.querySelector('.ag-cs-liftoff-ring'));
+    assert.equal(liftoffVeil.style.getPropertyValue('--ag-lift-x'), '760px');
+    assert.equal(liftoffVeil.style.getPropertyValue('--ag-lift-y'), '465px');
+    assert.equal(firstBubble.getAttribute('data-ag-cs-liftoff-bubble'), '1');
+    assert.ok(convInputBox._lastAnim, 'Expected FLIP spring dock animation on bottom agent-input-box');
+    const stAfterLiftoff = sandbox.window.__agClaudeStyle.getState();
+    assert.ok(stAfterLiftoff.convAuraOptics.strength > 0.85, 'Expected high-water liftoff aura ebb start (~0.92)');
+
+    // 3. Hero B2: Sidebar session switch -> .ag-cs-sidebar-glide-pill + data-ag-cs-stage-glide="up"
+    row0.setAttribute('data-selected', 'false');
+    row1.setAttribute('data-selected', 'true');
+    sandbox.window.__agClaudeStyle.sync();
+    assert.ok(body.querySelector('.ag-cs-sidebar-glide-pill'), 'Expected .ag-cs-sidebar-glide-pill on row switch');
+    assert.equal(viewport.getAttribute('data-ag-cs-stage-glide'), 'up');
+
+    row1.setAttribute('data-selected', 'false');
+    row0.setAttribute('data-selected', 'true');
+    sandbox.window.__agClaudeStyle.sync();
+    assert.equal(viewport.getAttribute('data-ag-cs-stage-glide'), 'down');
+
+    // 4. Hero C: Changed files card caustic + >= 6000ms long-run completion caustic
+    const changedHdr = makeNode('div', {
+      attrs: { 'data-testid': 'changed-files-card-header' },
+      rect: { left: 420, top: 260, right: 980, bottom: 300, width: 560, height: 40 },
+    });
+    viewport.appendChild(changedHdr);
+    sandbox.window.__agClaudeStyle.sync();
+    assert.equal(changedHdr.getAttribute('data-ag-cs-caustic'), '1');
+
+    // Short run (< 6000ms) MUST NOT trigger composer caustic
+    const cancelBtn = makeNode('button', { attrs: { 'data-testid': 'input-cancel-button' } });
+    convCard.appendChild(cancelBtn);
+    sandbox.window.__agClaudeStyle.sync();
+    fakeNow += 2500;
+    cancelBtn.remove();
+    sandbox.window.__agClaudeStyle.sync();
+    assert.equal(convCard.hasAttribute('data-ag-cs-caustic'), false, 'Short <6s run must not trigger composer caustic');
+
+    // Long run (>= 6000ms) MUST trigger composer caustic
+    convCard.appendChild(cancelBtn);
+    sandbox.window.__agClaudeStyle.sync();
+    fakeNow += 6500;
+
+    // 5. While streaming in ultra tier: Dual-Track Streaming + 250ms pure-text unwrap guard!
+    const thinkTrig = makeNode('button', {
+      attrs: { 'data-testid': 'thinking-collapsible-trigger', 'aria-expanded': 'true' },
+      text: 'Thinking...',
+    });
+    const thinkBody = makeNode('div');
+    const proseArt = makeNode('div', { attrs: { 'data-testid': 'planner-response-text' } });
+    const codePre = makeNode('pre');
+    proseArt.appendChild(codePre);
+    viewport.appendChild(thinkTrig);
+    viewport.appendChild(thinkBody);
+    viewport.appendChild(proseArt);
+    sandbox.window.__agClaudeStyle.sync();
+
+    assert.equal(thinkBody.getAttribute('data-ag-cs-thought-streaming'), '1');
+    const streamObs = activeObservers.find((o) => o.target === convView);
+    assert.ok(streamObs, 'Expected dedicated streaming MutationObserver attached to conversation-view');
+
+    // Emit thought chunk, code line, and natural language prose paragraph
+    const thoughtP = makeNode('p', { text: 'Analyzing optics...' });
+    thinkBody.appendChild(thoughtP);
+    const codeLine = makeNode('span', { text: 'const x = 42;' });
+    codePre.appendChild(codeLine);
+    const proseP = makeNode('p', { text: 'Hello crystal world' });
+    proseArt.appendChild(proseP);
+    fakeNow += 40;
+    streamObs.cb([
+      { type: 'childList', target: thinkBody, addedNodes: [thoughtP] },
+      { type: 'childList', target: codePre, addedNodes: [codeLine] },
+      { type: 'childList', target: proseArt, addedNodes: [proseP] },
+    ]);
+
+    assert.equal(thoughtP.classList.contains('ag-cs-thought-chunk'), true);
+    assert.equal(codeLine.classList.contains('ag-cs-code-scan'), true, 'Code block additions must use zero-blur .ag-cs-code-scan');
+    assert.equal(codeLine.querySelector('.ag-cs-stream-chunk'), null, 'Code block must NEVER be blurred with .ag-cs-stream-chunk');
+    assert.ok(proseP.querySelector('.ag-cs-stream-chunk'), 'Natural prose must wrap in .ag-cs-stream-chunk');
+    assert.equal(proseP.textContent, 'Hello crystal world');
+
+    // Wait > 250ms -> .ag-cs-stream-chunk MUST unwrap back to pure native Text node and normalize()!
+    await new Promise((r) => setTimeout(r, 275));
+    assert.equal(proseP.querySelector('.ag-cs-stream-chunk'), null, 'Stream chunk span must unwrap within 250ms');
+    assert.equal(proseP.childNodes.length, 1);
+    assert.equal(proseP.childNodes[0].nodeType, 3, 'Unwrapped node must be a pure native Text node');
+    assert.equal(proseP.textContent, 'Hello crystal world');
+
+    // Finish >= 6000ms run -> triggers Hero C composer caustic & cleans thought-streaming immediately
+    cancelBtn.remove();
+    sandbox.window.__agClaudeStyle.sync();
+    assert.equal(convCard.getAttribute('data-ag-cs-caustic'), '1', 'Long >=6s run completion must trigger composer caustic');
+    assert.equal(thinkBody.hasAttribute('data-ag-cs-thought-streaming'), false);
+
+    // 6. Hero D: Switching model signature triggers data-ag-cs-fiber-camp
+    assert.equal(convCard.hasAttribute('data-ag-cs-fiber-camp'), false, 'Initial mount must not trigger fiber pulse');
+    modelTrigger.textContent = 'Claude Opus 4.6 Thinking';
+    sandbox.window.__agClaudeStyle.sync();
+    assert.equal(convCard.getAttribute('data-ag-cs-fiber-camp'), 'claude');
+
+    modelTrigger.textContent = 'Orchestrator';
+    sandbox.window.__agClaudeStyle.sync();
+    assert.equal(convCard.getAttribute('data-ag-cs-fiber-camp'), 'antigravity');
+
+    // 7. Hero E: Clicking timeline navigator turn triggers sonar on its own split-pane conversation-view
+    fireWinClick(navTurn1);
+    assert.equal(turn1.getAttribute('data-ag-cs-sonar'), '1');
+    assert.equal(turn0.hasAttribute('data-ag-cs-sonar'), false);
+
+    const convViewRight = makeNode('div', { attrs: { 'data-testid': 'conversation-view' } });
+    const rightTurn0 = makeNode('div', { attrs: { 'data-testid': 'user-input-step' } });
+    const rightNav0 = makeNode('button', { attrs: { 'data-testid': 'conversation-navigator-turn', 'data-turn-index': '0' } });
+    convViewRight.appendChild(rightTurn0);
+    convViewRight.appendChild(rightNav0);
+    stageShell.appendChild(convViewRight);
+    fireWinClick(rightNav0);
+    assert.equal(rightTurn0.getAttribute('data-ag-cs-sonar'), '1', 'Right split-pane navigator must target right pane turn');
+    assert.equal(turn0.hasAttribute('data-ag-cs-sonar'), false, 'Left pane turn0 must not be hit by right pane navigator');
+    convViewRight.remove();
+
+    // 8. Anchor Cryo-Lens overlay origin & --ag-row-i stagger injection
+    fireDocDown(modelTrigger, 520, 710);
+    const overlay = makeNode('div', {
+      className: 'agy-overlay',
+      rect: { left: 420, top: 440, right: 740, bottom: 700, width: 320, height: 260 },
+    });
+    for (let i = 0; i < 4; i++) {
+      overlay.appendChild(makeNode('div', { attrs: { role: 'menuitem' }, text: `Item ${i}` }));
+    }
+    body.appendChild(overlay);
+    sandbox.window.__agClaudeStyle.sync();
+    assert.equal(overlay.style.getPropertyValue('--ag-origin-x'), '100px');
+    assert.equal(overlay.style.getPropertyValue('--ag-origin-y'), '276px');
+    assert.equal(overlay.children[0].style.getPropertyValue('--ag-row-i'), '0');
+    assert.equal(overlay.children[3].style.getPropertyValue('--ag-row-i'), '3');
+
+    // 9. Hero B1: Returning from formal conversation -> .agy-home triggers tide swell
+    convView.remove();
+    stageShell.appendChild(home);
+    sandbox.window.__agClaudeStyle.sync();
+    assert.equal(sandbox.window.__agClaudeStyle.getState().hasRipple, true);
+
+    // Clean teardown via REMOVE_EXPRESSION
+    vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
+    assert.equal(html.hasAttribute('data-ag-cs-motion'), false);
+    assert.equal(body.querySelector('.ag-cs-liftoff-veil'), null);
+    assert.equal(body.querySelector('.ag-cs-sidebar-glide-pill'), null);
+    assert.equal(newConvBtn.hasAttribute('data-ag-cs-icon-injected'), false);
+    assert.equal(newConvBtn.querySelector('.ag-anim-icon'), null);
+    assert.equal(newConvBtn.querySelector('svg')?.hasAttribute('hidden'), false);
+  } finally {
+    for (const id of timers) clearTimeout(id);
+  }
+});
+
+test('Prism v1.0 regression guard: Thought Translator overlay (.ag-prism-thought-overlay & .ag-prism-thought-raw-toggle) suffers 0 child mutations, 0 normalize, and 0 flicker; lightPreset & 0fps idle aura sleep work cleanly', async () => {
+  const injectExpr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
+  const timers = new Set();
+  const activeObservers = [];
+  let fakeNow = 50000;
+
+  let docRef = null;
+  function makeTextNode(text) {
+    return {
+      nodeType: 3,
+      nodeName: '#text',
+      parentNode: null,
+      parentElement: null,
+      nodeValue: String(text ?? ''),
+      get textContent() { return this.nodeValue; },
+      set textContent(v) { this.nodeValue = String(v ?? ''); },
+      get nextSibling() {
+        if (!this.parentNode) return null;
+        const arr = this.parentNode.childNodes;
+        const i = arr.indexOf(this);
+        return i >= 0 ? arr[i + 1] || null : null;
+      },
+    };
+  }
+
+  function makeNode(tag, opts = {}) {
+    const attrs = new Map(Object.entries(opts.attrs || {}));
+    const classes = new Set((opts.className || '').split(/\s+/).filter(Boolean));
+    const listeners = new Map();
+    const childNodes = [];
+    let rectBox = opts.rect || { left: 0, top: 0, right: 1000, bottom: 750, width: 1000, height: 750 };
+
+    const matchesSimple = (node, simple) => {
+      if (!node || node.nodeType !== 1) return false;
+      let rest = simple.trim();
+      if (!rest) return false;
+      const tagMatch = /^[a-zA-Z0-9_-]+/.exec(rest);
+      if (tagMatch) {
+        if (node.tagName !== tagMatch[0].toUpperCase()) return false;
+        rest = rest.slice(tagMatch[0].length);
+      }
+      while (rest.length > 0) {
+        if (rest[0] === '#') {
+          const m = /^#((?:\\.|[a-zA-Z0-9_-])+)/.exec(rest);
+          if (!m || node.id !== m[1].replace(/\\/g, '')) return false;
+          rest = rest.slice(m[0].length);
+        } else if (rest[0] === '.') {
+          const m = /^\.([a-zA-Z0-9_-]+)/.exec(rest);
+          if (!m || !node.classList.contains(m[1])) return false;
+          rest = rest.slice(m[0].length);
+        } else if (rest[0] === '[') {
+          const m = /^\[([^\]=]+)(?:="([^"]*)")?\]/.exec(rest);
+          if (!m) return false;
+          const ok = m[2] === undefined ? node.hasAttribute(m[1]) : node.getAttribute(m[1]) === m[2];
+          if (!ok) return false;
+          rest = rest.slice(m[0].length);
+        } else {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    const matchesChain = (node, selector) =>
+      selector.split(',').some((part) => {
+        const tokens = part.trim().split(/\s+/).filter(Boolean);
+        if (tokens.length === 0 || !matchesSimple(node, tokens[tokens.length - 1])) return false;
+        let cur = node.parentElement;
+        let idx = tokens.length - 2;
+        while (cur && idx >= 0) {
+          if (matchesSimple(cur, tokens[idx])) idx--;
+          cur = cur.parentElement;
+        }
+        return idx < 0;
+      });
+
+    const node = {
+      tagName: tag.toUpperCase(),
+      nodeType: 1,
+      id: attrs.get('id') || opts.id || '',
+      dataset: {},
+      get ownerDocument() { return docRef; },
+      childNodes,
+      get children() { return childNodes.filter((n) => n.nodeType === 1); },
+      parentElement: null,
+      parentNode: null,
+      isConnected: true,
+      hidden: Boolean(opts.hidden),
+      disabled: false,
+      clientWidth: rectBox.width || 1000,
+      clientHeight: rectBox.height || 750,
+      width: 120,
+      height: 80,
+      _normalizeCalls: 0,
+      _attrMutations: 0,
+      _classMutations: 0,
+      style: {
+        _props: {},
+        setProperty(k, v) { this._props[k] = String(v); },
+        getPropertyValue(k) { return this._props[k] || ''; },
+        removeProperty(k) { delete this._props[k]; },
+      },
+      classList: {
+        contains: (c) => classes.has(c),
+        add: (c) => { node._classMutations += 1; classes.add(c); },
+        remove: (c) => { node._classMutations += 1; classes.delete(c); },
+      },
+      get className() { return Array.from(classes).join(' '); },
+      set className(v) { node._classMutations += 1; classes.clear(); String(v).split(/\s+/).filter(Boolean).forEach((c) => classes.add(c)); },
+      get textContent() { return childNodes.map((c) => c.textContent).join(''); },
+      set textContent(v) {
+        childNodes.length = 0;
+        const s = String(v ?? '');
+        if (s.length > 0) this.appendChild(makeTextNode(s));
+      },
+      set innerHTML(h) { childNodes.length = 0; this._html = String(h ?? ''); },
+      get innerHTML() { return this._html || ''; },
+      get childElementCount() { return this.children.length; },
+      get firstChild() { return childNodes[0] || null; },
+      get firstElementChild() { return this.children[0] || null; },
+      get lastElementChild() { const ch = this.children; return ch[ch.length - 1] || null; },
+      get nextElementSibling() {
+        if (!this.parentElement) return null;
+        const elSibs = this.parentElement.children;
+        const i = elSibs.indexOf(this);
+        return i >= 0 ? elSibs[i + 1] || null : null;
+      },
+      get previousElementSibling() {
+        if (!this.parentElement) return null;
+        const elSibs = this.parentElement.children;
+        const i = elSibs.indexOf(this);
+        return i > 0 ? elSibs[i - 1] || null : null;
+      },
+      appendChild(c) {
+        if (c.parentNode) c.parentNode.removeChild(c);
+        c.parentElement = this;
+        c.parentNode = this;
+        c.isConnected = true;
+        childNodes.push(c);
+        return c;
+      },
+      insertBefore(c, ref) {
+        if (c.parentNode) c.parentNode.removeChild(c);
+        c.parentElement = this;
+        c.parentNode = this;
+        c.isConnected = true;
+        const idx = ref ? childNodes.indexOf(ref) : -1;
+        if (idx >= 0) childNodes.splice(idx, 0, c);
+        else childNodes.push(c);
+        return c;
+      },
+      removeChild(c) {
+        const i = childNodes.indexOf(c);
+        if (i >= 0) childNodes.splice(i, 1);
+        c.parentElement = null;
+        c.parentNode = null;
+        c.isConnected = false;
+        return c;
+      },
+      remove() { if (this.parentNode) this.parentNode.removeChild(this); },
+      normalize() { this._normalizeCalls += 1; },
+      setAttribute(k, v) { node._attrMutations += 1; attrs.set(k, String(v)); if (k === 'id') node.id = String(v); },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) { node._attrMutations += 1; attrs.delete(k); },
+      toggleAttribute(k, f) {
+        node._attrMutations += 1;
+        const on = f === undefined ? !attrs.has(k) : Boolean(f);
+        if (on) attrs.set(k, ''); else attrs.delete(k);
+        return on;
+      },
+      addEventListener(ev, cb) { if (!listeners.has(ev)) listeners.set(ev, []); listeners.get(ev).push(cb); },
+      removeEventListener(ev, cb) { const a = listeners.get(ev); if (a) { const i = a.indexOf(cb); if (i >= 0) a.splice(i, 1); } },
+      dispatch(ev, payload = {}) {
+        const evObj = { type: ev, target: this, ...payload };
+        for (const cb of listeners.get(ev) || []) cb(evObj);
+      },
+      getContext(kind) {
+        if (kind !== '2d') return null;
+        return {
+          canvas: { width: 200, height: 100 },
+          save() {}, restore() {}, clearRect() {}, fillRect() {}, strokeRect() {},
+          beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, arc() {}, arcTo() {},
+          roundRect() {}, setLineDash() {}, ellipse() {}, quadraticCurveTo() {}, bezierCurveTo() {},
+          clip() {}, fill() {}, stroke() {}, translate() {}, rotate() {}, scale() {}, setTransform() {},
+          drawImage() {}, fillText() {},
+          createLinearGradient() { return { addColorStop() {} }; },
+          createRadialGradient() { return { addColorStop() {} }; },
+          createImageData(w, h) { return { data: new Uint8ClampedArray(Math.max(4, w * h * 4)), width: w, height: h }; },
+          getImageData(x, y, w, h) { return { data: new Uint8ClampedArray(Math.max(4, w * h * 4)), width: w, height: h }; },
+          putImageData() {},
+        };
+      },
+      getBoundingClientRect() { return { ...rectBox }; },
+      closest(sel) { let cur = this; while (cur) { if (matchesChain(cur, sel)) return cur; cur = cur.parentElement; } return null; },
+      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+      querySelectorAll(sel) {
+        const out = [];
+        const walk = (n) => { for (const c of n.children) { if (matchesChain(c, sel)) out.push(c); walk(c); } };
+        walk(this);
+        return out;
+      },
+      getElementById(id) {
+        const find = (n) => (n.id === id ? n : n.children.map(find).find(Boolean) || null);
+        return find(this);
+      },
+    };
+    if (opts.text) node.textContent = opts.text;
+    return node;
+  }
+
+  const html = makeNode('html', {
+    attrs: { 'data-ag-prism-thought-owner': 'obsidian-prism-thought' },
+  });
+  const head = makeNode('head');
+  const body = makeNode('body', { className: 'theme-light' });
+  html.appendChild(head);
+  html.appendChild(body);
+
+  const stageShell = makeNode('div', { rect: { left: 0, top: 0, right: 1000, bottom: 750, width: 1000, height: 750 } });
+  const convView = makeNode('div', {
+    attrs: { 'data-testid': 'conversation-view' },
+    rect: { left: 0, top: 0, right: 1000, bottom: 750, width: 1000, height: 750 },
+  });
+
+  // Construct Thought Chinese Thought Translation DOM inside expanded thinking panel
+  const thinkTrig = makeNode('button', {
+    attrs: { 'data-testid': 'thinking-collapsible-trigger', 'aria-expanded': 'true', 'data-op-thought-state': 'streaming' },
+    text: '正在思考...',
+  });
+  const thinkPanel = makeNode('div', {
+    attrs: { 'data-op-zh-ready': '1' },
+  });
+  const thoughtOverlay = makeNode('div', { className: 'ag-prism-thought-overlay' });
+  const thoughtBody = makeNode('span', { className: 'ag-prism-thought-body', text: '正在规划增量调度...' });
+  const thoughtRawToggle = makeNode('button', { className: 'ag-prism-thought-raw-toggle', attrs: { 'aria-label': 'Copy / 查看原文' } });
+  thoughtRawToggle.appendChild(makeNode('svg', { className: 'lucide-copy', attrs: { width: '14', height: '14' } }));
+  thoughtRawToggle.appendChild(makeTextNode('原文'));
+  thoughtOverlay.appendChild(thoughtBody);
+  thoughtOverlay.appendChild(thoughtRawToggle);
+  const hiddenEngP = makeNode('p', { hidden: true, text: 'Planning incremental scheduler...' });
+  thinkPanel.appendChild(thoughtOverlay);
+  thinkPanel.appendChild(hiddenEngP);
+  convView.appendChild(thinkTrig);
+  convView.appendChild(thinkPanel);
+
+  const inputBox = makeNode('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const card = makeNode('div', { className: 'surface-composer-card' });
+  const sendBtn = makeNode('button', { attrs: { 'data-testid': 'send-button' } });
+  card.appendChild(sendBtn);
+  inputBox.appendChild(card);
+  convView.appendChild(inputBox);
+  stageShell.appendChild(convView);
+  body.appendChild(stageShell);
+
+  // Settings dialog for lightPreset & absorbed module switches
+  const dialog = makeNode('div', { attrs: { role: 'dialog' } });
+  const appPanel = makeNode('div', { className: 'p-6' });
+  appPanel.appendChild(makeNode('h2', { text: '外观' }));
+  appPanel.appendChild(makeNode('div', { className: 'space-y-2' }));
+  dialog.appendChild(appPanel);
+  body.appendChild(dialog);
+
+  docRef = {
+    documentElement: html,
+    head,
+    body,
+    hidden: false,
+    defaultView: null,
+    createElement: (t) => makeNode(t),
+    createTextNode: (t) => makeTextNode(t),
+    getElementById: (id) => html.getElementById(id),
+    querySelector: (s) => html.querySelector(s),
+    querySelectorAll: (s) => html.querySelectorAll(s),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  const telemetrySyncCalls = [];
+  const sliderSyncCalls = [];
+
+  const sandbox = {
+    window: null,
+    globalThis: null,
+    document: docRef,
+    innerWidth: 1000,
+    innerHeight: 750,
+    devicePixelRatio: 1,
+    navigator: { language: 'zh-CN' },
+    location: { pathname: '/c/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' },
+    localStorage: {
+      _m: {
+        // Seed legacy colon storage to verify migration -> ag-prism:config
+        'ag-claude-style:config': JSON.stringify({ palette: 'obsidian', lightPreset: 'crystal' }),
+      },
+      getItem(k) { return this._m[k] || null; },
+      setItem(k, v) { this._m[k] = String(v); },
+    },
+    addEventListener() {},
+    removeEventListener() {},
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+    MutationObserver: class {
+      constructor(cb) { this.cb = cb; this.target = null; }
+      observe(target, opts) { this.target = target; this.opts = opts; activeObservers.push(this); }
+      disconnect() { const i = activeObservers.indexOf(this); if (i >= 0) activeObservers.splice(i, 1); this.target = null; }
+    },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: (fn) => { const id = setTimeout(() => fn(typeof fakeNow === 'number' ? fakeNow : Date.now()), 8); timers.add(id); return id; },
+    cancelAnimationFrame: (id) => { timers.delete(id); clearTimeout(id); },
+    setTimeout: (fn, ms) => { const id = setTimeout(fn, ms); timers.add(id); return id; },
+    clearTimeout: (id) => { timers.delete(id); clearTimeout(id); },
+    setInterval: () => 1,
+    clearInterval: () => {},
+    performance: { now: () => fakeNow },
+    CSS: { supports: () => true },
+    Uint8ClampedArray,
+    Math, Date, JSON, Map, Set, WeakMap, WeakSet, Array, Object, String, Number, Boolean, Promise, Uint8Array, Uint32Array, Int32Array, Float32Array, Intl, RegExp, Error, TypeError, Function, encodeURIComponent, parseInt, parseFloat, isFinite, isNaN,
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  docRef.defaultView = sandbox;
+
+  try {
+    // Make conversation initially idle (temporarily clear streaming attr on thinkTrig) to test 0fps idle sleep first!
+    thinkTrig.removeAttribute('data-op-thought-state');
+    thinkTrig.textContent = '已思考 4 秒';
+
+    const res = vm.runInNewContext(injectExpr, sandbox);
+    assert.equal(res.status, 'ok');
+
+    // ── Check 0: Legacy storage migrated to localStorage['ag-prism:config'] ──
+    assert.ok(sandbox.localStorage.getItem('ag-prism:config'), 'Expected legacy ag-claude-style:config migrated to ag-prism:config');
+
+    // ── Check ③: Conversation horizon aura 32% height + 20fps~45fps living flow in standard/ultra + 0fps sleep in subtle/off ──
+    const auraHost = stageShell.querySelector('.ag-cs-conv-aura-host');
+    assert.ok(auraHost, 'Expected .ag-cs-conv-aura-host mounted');
+    assert.equal(auraHost.style.getPropertyValue('height'), '32%');
+    assert.equal(auraHost.style.getPropertyValue('bottom'), '0');
+    assert.equal(auraHost.hasAttribute('data-aura-sleep'), false, 'Ultra/Standard idle aura must keep breathing (never frozen)');
+
+    const stIdle = sandbox.window.__agPrism.getState();
+    assert.equal(stIdle.convAuraPhase, 'idle');
+    assert.equal(stIdle.convAuraSleeping, false, 'Expected convAuraSleeping === false in ultra idle living flow');
+    assert.equal(stIdle.convAuraCanvasSize.height, Math.round(750 * 0.32), 'Canvas height must be 32% of parent (68% pixel savings)');
+    assert.equal(stIdle.convAuraOptics.frameMs, 50, 'Idle living flow must run at 50ms (20fps)');
+    assert.equal(stIdle.convAuraOptics.speed, 0.72, 'Idle living flow speed must be 0.72');
+    assert.ok(Math.abs(stIdle.convAuraOptics.strength - 0.52) < 0.05, 'Daylight idle aura base strength must breathe around 0.52');
+    const drawsAtMount = stIdle.convAuraDrawCount;
+    assert.ok(drawsAtMount >= 1);
+
+    // Advance clock & wait > 120ms -> continuous living flow draws multiple new frames!
+    fakeNow += 180;
+    await new Promise((r) => setTimeout(r, 135));
+    const drawsAfterFlow = sandbox.window.__agPrism.getState().convAuraDrawCount;
+    assert.ok(drawsAfterFlow > drawsAtMount, `Expected continuous living aura frames in ultra idle (${drawsAfterFlow} > ${drawsAtMount})`);
+
+    // Switch motionLevel to 'subtle' -> enters true 0fps static sleep!
+    sandbox.window.__agPrism.refreshConfig({ ...cdp.DEFAULT_CONFIG, lightPreset: 'crystal', motionLevel: 'subtle' });
+    assert.equal(sandbox.window.__agPrism.getState().convAuraSleeping, true, 'Subtle motion tier must sleep at 0fps');
+    assert.equal(auraHost.getAttribute('data-aura-sleep'), '1');
+    const drawsWhenSleeping = sandbox.window.__agPrism.getState().convAuraDrawCount;
+    fakeNow += 1500;
+    await new Promise((r) => setTimeout(r, 70));
+    assert.equal(sandbox.window.__agPrism.getState().convAuraDrawCount, drawsWhenSleeping, 'Subtle/off aura must draw 0 extra frames while sleeping');
+
+    // Switch back to 'ultra' -> wakes living flow immediately!
+    sandbox.window.__agPrism.refreshConfig({ ...cdp.DEFAULT_CONFIG, lightPreset: 'crystal', motionLevel: 'ultra' });
+    assert.equal(sandbox.window.__agPrism.getState().convAuraSleeping, false);
+
+    // Also test About Git Repo Sync button with mocked __agPrismRepoBridge (no-remote & remote pull)
+    const repoSyncBtn = appPanel.querySelector('button[data-ag-cs-repo-sync]');
+    const repoChip = appPanel.querySelector('[data-ag-cs-repo-status]');
+    assert.ok(repoSyncBtn && repoChip, 'Expected Git sync button & status chip');
+    let repoCalls = [];
+    sandbox.window.__agPrismRepoBridge = (req) => {
+      repoCalls.push(req.action);
+      if (req.action === 'status') {
+        return Promise.resolve({ ok: true, branch: 'main', shortHash: 'abc1234', hasRemote: true, remoteUrl: 'https://github.com/example/obsidian-prism.git' });
+      }
+      return Promise.resolve({ ok: true, updated: true, branch: 'main', shortHash: 'def5678' });
+    };
+    repoSyncBtn.dispatch('click');
+    await new Promise((r) => setTimeout(r, 30));
+    assert.deepEqual(repoCalls, ['status', 'pull']);
+    assert.equal(repoChip.getAttribute('data-status'), 'updated');
+    assert.ok(repoChip.textContent.includes('def5678'));
+
+    // ── Check ①: Thought Chinese thought translation 100% isolation & zero raw-toggle button flicker ──
+    const rawToggleMutBefore = thoughtRawToggle._attrMutations + thoughtRawToggle._classMutations;
+    const overlayMutBefore = thoughtOverlay._attrMutations + thoughtOverlay._classMutations;
+    assert.equal(thoughtRawToggle.hasAttribute('data-ag-cs-icon-injected'), false, 'Raw toggle button must NEVER be hijacked by host icon injector');
+    assert.equal(thoughtRawToggle.querySelector('.ag-anim-icon'), null);
+
+    // Enter streaming state
+    thinkTrig.setAttribute('data-op-thought-state', 'streaming');
+    thinkTrig.textContent = '正在思考...';
+    const cancelBtn = makeNode('button', { attrs: { 'data-testid': 'input-cancel-button' } });
+    card.appendChild(cancelBtn);
+    sandbox.window.__agPrism.sync();
+
+    // Outer shell gets comet streaming marker, while inner nodes remain untouched; verify start/running optics
+    assert.equal(thinkPanel.getAttribute('data-ag-cs-thought-streaming'), '1', 'Outer panel shell should carry streaming comet attribute');
+    const stStart = sandbox.window.__agPrism.getState();
+    assert.equal(stStart.convAuraPhase, 'start');
+    assert.equal(stStart.convAuraOptics.frameMs, 22);
+    assert.equal(stStart.convAuraOptics.speed, 1.95);
+    assert.equal(stStart.convAuraOptics.surge, 0.5);
+    fakeNow += 1500;
+    sandbox.window.__agPrism.sync();
+    const stRunning = sandbox.window.__agPrism.getState();
+    assert.equal(stRunning.convAuraPhase, 'running');
+    assert.equal(stRunning.convAuraOptics.frameMs, 32);
+    assert.equal(stRunning.convAuraOptics.speed, 1.45);
+    assert.equal(stRunning.convAuraOptics.prism, 0.7);
+    const rootObs = activeObservers.find((o) => o.target === html);
+    const streamObs = activeObservers.find((o) => o.target === convView);
+    assert.ok(rootObs && streamObs, 'Expected root and stream MutationObservers');
+
+    const syncCountBeforeThought = sandbox.window.__agPrism.getState().perf.syncCount;
+
+    // Simulate continuous Thought Chinese overlay updates + hidden native English streaming chunks
+    for (let step = 0; step < 5; step++) {
+      fakeNow += 80;
+      const newEngSpan = makeNode('span', { text: ` English step ${step}` });
+      hiddenEngP.appendChild(newEngSpan);
+      const newZhText = makeTextNode(` 中文思考增量 ${step}`);
+      thoughtBody.appendChild(newZhText);
+
+      // Fire root observer with Thought mutations -> must be 100% ignored (0 sync!)
+      rootObs.cb([
+        { type: 'childList', target: thoughtBody, addedNodes: [newZhText], removedNodes: [] },
+        { type: 'attributes', target: thoughtRawToggle, attributeName: 'class' },
+      ]);
+
+      // Fire streaming observer with both Thought overlay & hidden English child inside Thought-managed panel -> 0 chunks, 0 normalize!
+      streamObs.cb([
+        { type: 'childList', target: thoughtBody, addedNodes: [newZhText], removedNodes: [] },
+        { type: 'childList', target: hiddenEngP, addedNodes: [newEngSpan], removedNodes: [] },
+        { type: 'childList', target: thinkPanel, addedNodes: [newEngSpan], removedNodes: [] },
+      ]);
+    }
+
+    await new Promise((r) => setTimeout(r, 280));
+    assert.equal(sandbox.window.__agPrism.getState().perf.syncCount, syncCountBeforeThought, 'Thought overlay mutations must trigger 0 root syncs');
+    assert.equal(thinkPanel.querySelectorAll('.ag-cs-thought-chunk, .ag-cs-stream-chunk').length, 0, '0 chunk spans allowed inside Thought thought panel');
+    assert.equal(thinkPanel._normalizeCalls, 0, '0 normalize() calls allowed on Thought thought panel');
+    assert.equal(hiddenEngP._normalizeCalls, 0, '0 normalize() calls allowed on hidden English node inside Thought panel');
+    assert.equal(thoughtOverlay._normalizeCalls, 0, '0 normalize() calls allowed on Thought overlay');
+    assert.equal(
+      thoughtRawToggle._attrMutations + thoughtRawToggle._classMutations,
+      rawToggleMutBefore,
+      'Thought "原文" toggle button must experience 0 attribute/class mutations (zero flicker!)'
+    );
+    assert.equal(
+      thoughtOverlay._attrMutations + thoughtOverlay._classMutations,
+      overlayMutBefore,
+      'Thought overlay container must experience 0 attribute/class mutations'
+    );
+
+    // Also verify incremental button queue on non-Thought button insertion
+    const fullRunsBefore = sandbox.window.__agPrism.getState().perf.iconFullRuns;
+    const incRunsBefore = sandbox.window.__agPrism.getState().perf.iconIncrementalRuns;
+    const dynamicCopyBtn = makeNode('button', { attrs: { 'aria-label': 'Copy snippet' } });
+    dynamicCopyBtn.appendChild(makeNode('svg', { attrs: { width: '15', height: '15' } }));
+    convView.appendChild(dynamicCopyBtn);
+    rootObs.cb([{ type: 'childList', target: convView, addedNodes: [dynamicCopyBtn], removedNodes: [] }]);
+    await new Promise((r) => setTimeout(r, 65));
+    assert.equal(dynamicCopyBtn.getAttribute('data-ag-cs-icon-injected'), 'copy-check');
+    assert.equal(sandbox.window.__agPrism.getState().perf.iconFullRuns, fullRunsBefore, 'Incremental button mutation must NOT run full-page button scan');
+    assert.ok(sandbox.window.__agPrism.getState().perf.iconIncrementalRuns > incRunsBefore, 'Expected incremental button hydration run');
+
+    // ── Check ②: Dual lightPreset ('crystal' / 'alabaster') & absorbed module switches sync root attrs + controllers ──
+    sandbox.window.__agPrismTelemetry = { sync: (c) => telemetrySyncCalls.push(c.telemetryModule), destroy() {} };
+    sandbox.window.__agPrismEffortSlider = { sync: (c) => sliderSyncCalls.push(c.effortSliderModule), destroy() {} };
+
+    const alabasterBtn = appPanel
+      .querySelectorAll('#ag-cs-settings-sec button')
+      .find((b) => b.getAttribute('data-ag-cs-key') === 'lightPreset' && b.getAttribute('data-ag-cs-val') === '"alabaster"');
+    assert.ok(alabasterBtn, 'Expected Warm Alabaster button in settings');
+    alabasterBtn.dispatch('click');
+    assert.equal(html.getAttribute('data-ag-cs-light-preset'), 'alabaster');
+
+    const crystalBtn = appPanel
+      .querySelectorAll('#ag-cs-settings-sec button')
+      .find((b) => b.getAttribute('data-ag-cs-key') === 'lightPreset' && b.getAttribute('data-ag-cs-val') === '"crystal"');
+    crystalBtn.dispatch('click');
+    assert.equal(html.getAttribute('data-ag-cs-light-preset'), 'crystal');
+
+    const teleOffBtn = appPanel
+      .querySelectorAll('#ag-cs-settings-sec button')
+      .find((b) => b.getAttribute('data-ag-cs-key') === 'telemetryModule' && b.getAttribute('data-ag-cs-val') === '"off"');
+    const sliderOnBtn = appPanel
+      .querySelectorAll('#ag-cs-settings-sec button')
+      .find((b) => b.getAttribute('data-ag-cs-key') === 'effortSliderModule' && b.getAttribute('data-ag-cs-val') === '"on"');
+    assert.ok(teleOffBtn && sliderOnBtn, 'Expected absorbed module buttons in settings');
+    teleOffBtn.dispatch('click');
+    sliderOnBtn.dispatch('click');
+    assert.equal(html.getAttribute('data-ag-cs-telemetry'), 'off');
+    assert.equal(html.getAttribute('data-ag-cs-effort-slider'), 'on');
+    assert.ok(telemetrySyncCalls.includes('off'), 'Expected __agPrismTelemetry.sync called with "off"');
+    assert.ok(sliderSyncCalls.includes('on'), 'Expected __agPrismEffortSlider.sync called with "on"');
+
+    vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
+  } finally {
+    for (const id of timers) clearTimeout(id);
+  }
+});

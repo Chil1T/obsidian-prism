@@ -1,0 +1,58 @@
+name: Release Installers
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Build standalone Windows installer
+        run: npm run build:installer
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-installer
+          path: dist/obsidian-prism-installer.exe
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Build Universal macOS App & DMG
+        run: node scripts/build-macos.mjs --out dist/Obsidian-Prism-macOS-universal.dmg
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-dmg
+          path: dist/*.dmg
+
+  publish-release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            artifacts/windows-installer/* \
+            artifacts/macos-dmg/* \
+            --generate-notes \
+            --title "Obsidian Prism ${GITHUB_REF_NAME}"

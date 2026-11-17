@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you build upon, fork, or reference Obsidian Prism in derivative software or publications, please cite this repository and preserve attribution per GPL-3.0 and NOTICE."
+type: software
+title: "Obsidian Prism"
+abstract: "Optical UI, 4-tier spring motion choreography, dual daylight crystal themes, 512K physical telemetry vial, reasoning effort slider, and dual-mode thought translator suite for Antigravity."
+authors:
+  - name: "RMvdesi"
+    website: "https://github.com/RMvdesi"
+version: 1.0.0
+date-released: "2026-11-17"
+license: GPL-3.0-only
+repository-code: "https://github.com/RMvdesi/obsidian-prism"
+url: "https://github.com/RMvdesi/obsidian-prism"
+keywords:
+  - antigravity
+  - optical-ui
+  - spring-animation
+  - webgl2
+  - developer-tools
+  - thought-translator
