@@ -168,7 +168,7 @@ obsidian-prism/
 本项目吸收整合的第三方组件原采用宽松的 **MIT License**（与 GPL-3.0 向上兼容），完整原始版权声明与许可全文均永久保留于 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)：
 
 1. **[0DNANCY/agy-claude-style](https://github.com/0DNANCY/agy-claude-style)** — `MIT License`, `Copyright (c) 2026 0DNANCY`（主视觉光学底座、物理弹簧编排、WebGL2 极光/字符波纹矩阵、像素双宠底座与零依赖构建器）。
-2. **[YOU-SHOULD-KNOW-ME/antigrative-dashboard](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard)** — `MIT License`, `Copyright (c) 2026 AG Pulse contributors`（吸收于 `vendor/pulse-dashboard/`，实时吞吐速率、缓存命中率与配额遥测采集）。
+2. **[ATtacK030130/antigrative-dashboard](https://github.com/ATtacK030130/antigrative-dashboard)** — `MIT License`, `Copyright (c) 2026 AG Pulse contributors`（吸收于 `vendor/pulse-dashboard/`，实时吞吐速率、缓存命中率与配额遥测采集）。
 3. **[LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider](https://github.com/LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider)** — `MIT License`, `Copyright (c) 2026 月上寒 (LLYSH-HANNARI)`（吸收于 `vendor/effort-slider/`，模型菜单推理等级滑块与智能共存封装）。
 4. **[Nwflower/dsh-claude-style](https://github.com/Nwflower/dsh-claude-style)** — Studio 极简排版美学、清爽输入舱架构与温润画册配色灵感致谢。
 5. **[Microqian2th/dsh-codex-effort-slider](https://github.com/Microqian2th/dsh-codex-effort-slider)** — 星尘能量轨道、迟滞棘轮分档与阻尼运动曲线灵感致谢。

@@ -1301,7 +1301,7 @@
           <div class="ag-v2-set-row">
             <div>
               <div class="ag-v2-set-title">关于、Git 更新与开源致谢 · Obsidian Prism v1.0.0</div>
-              <div class="ag-v2-set-desc">MIT License · 致谢 0DNANCY/agy-claude-style、YOU-SHOULD-KNOW-ME/antigrative-dashboard、LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider、Nwflower/dsh-claude-style、Microqian2th/dsh-codex-effort-slider、mobius/dsh-performance-slider、claudenoshujin/claude-web (Mascot Pile &amp; Micro-Ecology Interaction Inspiration)</div>
+              <div class="ag-v2-set-desc">MIT License · 致谢 0DNANCY/agy-claude-style、ATtacK030130/antigrative-dashboard、LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider、Nwflower/dsh-claude-style、Microqian2th/dsh-codex-effort-slider、mobius/dsh-performance-slider、claudenoshujin/claude-web (Mascot Pile &amp; Micro-Ecology Interaction Inspiration)</div>
             </div>
             <span class="ag-v2-ready-badge">MIT · 7 CREDITS</span>
           </div>

@@ -25,8 +25,8 @@ Any derivative work or modified redistribution MUST remain open-source under **G
 - **Original License**: MIT License
 - **Scope in Obsidian Prism**: Optical UI theme foundation, 4-tier spring choreography base, WebGL2 horizon glow & character matrix ripple field, pixel mascot rig foundation, and zero-dependency bundle compiler.
 
-### 1.2 `YOU-SHOULD-KNOW-ME/antigrative-dashboard`
-- **Repository**: <https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard>
+### 1.2 `ATtacK030130/antigrative-dashboard`
+- **Repository**: <https://github.com/ATtacK030130/antigrative-dashboard>
 - **Copyright**: `Copyright (c) 2026 AG Pulse contributors`
 - **Original License**: MIT License
 - **Scope in Obsidian Prism**: Absorbed in `vendor/pulse-dashboard/` for live token throughput (TPS / TTFT), cache hit rate telemetry, context window estimation, model quota collection, and smart coexistence fallback.

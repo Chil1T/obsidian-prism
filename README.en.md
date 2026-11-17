@@ -145,7 +145,7 @@ Any fork, modification, port, or redistribution must comply with all three requi
 Absorbed third-party components were originally released under the permissive **MIT License** (upward-compatible with GPL-3.0), with full copyright and license texts preserved in [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md):
 
 1. **[0DNANCY/agy-claude-style](https://github.com/0DNANCY/agy-claude-style)** — `MIT License`, `Copyright (c) 2026 0DNANCY` (Optical theme foundation, spring choreography, WebGL2 aurora/glyph wavefield, pixel mascot rig, and zero-dependency bundler).
-2. **[YOU-SHOULD-KNOW-ME/antigrative-dashboard](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard)** — `MIT License`, `Copyright (c) 2026 AG Pulse contributors` (Absorbed in `vendor/pulse-dashboard/` for live token throughput, cache hit rate, and context telemetry).
+2. **[ATtacK030130/antigrative-dashboard](https://github.com/ATtacK030130/antigrative-dashboard)** — `MIT License`, `Copyright (c) 2026 AG Pulse contributors` (Absorbed in `vendor/pulse-dashboard/` for live token throughput, cache hit rate, and context telemetry).
 3. **[LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider](https://github.com/LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider)** — `MIT License`, `Copyright (c) 2026 LLYSH-HANNARI` (Absorbed in `vendor/effort-slider/` for reasoning effort slider and smart coexistence).
 4. **[Nwflower/dsh-claude-style](https://github.com/Nwflower/dsh-claude-style)** — Studio editorial typography, clean composer framing, and warm alabaster palette inspiration.
 5. **[Microqian2th/dsh-codex-effort-slider](https://github.com/Microqian2th/dsh-codex-effort-slider)** — Stardust energy track, hysteresis ratchet detents, and damped motion curve inspiration.

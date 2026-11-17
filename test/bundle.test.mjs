@@ -435,7 +435,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
       creditLinks.map((a) => a.getAttribute('href')),
       [
         'https://github.com/0DNANCY/agy-claude-style',
-        'https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard',
+        'https://github.com/ATtacK030130/antigrative-dashboard',
         'https://github.com/LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider',
         'https://github.com/Nwflower/dsh-claude-style',
         'https://github.com/Microqian2th/dsh-codex-effort-slider',

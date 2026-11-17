@@ -288,7 +288,7 @@ test('Obsidian Prism brand compliance, GPL-3.0 LICENSE, NOTICE, CITATION.cff, TH
   const readmeSlugs = extractGithubRepoSlugs(readmeTxt);
   const sevenUpstreamSlugs = [
     '0DNANCY/agy-claude-style',
-    'YOU-SHOULD-KNOW-ME/antigrative-dashboard',
+    'ATtacK030130/antigrative-dashboard',
     'LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider',
     'Nwflower/dsh-claude-style',
     'Microqian2th/dsh-codex-effort-slider',

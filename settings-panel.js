@@ -16,8 +16,8 @@
       meta: 'MIT · 0DNANCY',
     },
     {
-      repo: 'YOU-SHOULD-KNOW-ME/antigrative-dashboard',
-      url: 'https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard',
+      repo: 'ATtacK030130/antigrative-dashboard',
+      url: 'https://github.com/ATtacK030130/antigrative-dashboard',
       meta: 'MIT · AG Pulse',
     },
     {
