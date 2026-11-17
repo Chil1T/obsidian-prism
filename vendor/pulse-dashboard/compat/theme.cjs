@@ -33,13 +33,18 @@ module.exports = function createAgPulseTheme() {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const canvas = document.createElement('canvas'); canvas.width=canvas.height=1;
     const context = canvas.getContext('2d', { willReadFrequently:true });
+    const rgbCache = new Map();
     let stopped=false,hostTheme={};
     function rgb(color) {
-      if (!color || !context || !CSS.supports('color',color)) return null;
+      if (!color || !context) return null;
+      if (rgbCache.has(color)) return rgbCache.get(color);
+      if (!CSS.supports('color',color)) { rgbCache.set(color, null); return null; }
       context.clearRect(0,0,1,1); context.fillStyle='transparent';context.fillStyle=color; context.fillRect(0,0,1,1);
       const [r,g,b,a]=context.getImageData(0,0,1,1).data;
-      if (a<250) return null; // Transparent surfaces do not define a theme.
-      return [r,g,b];
+      const out = a<250 ? null : [r,g,b];
+      if (rgbCache.size > 256) rgbCache.clear();
+      rgbCache.set(color, out);
+      return out;
     }
     function fromColor(color) {
       const values=rgb(color);return values ? .2126*values[0]+.7152*values[1]+.0722*values[2]>=145?'light':'dark' : null;

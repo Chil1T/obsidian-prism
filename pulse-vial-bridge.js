@@ -44,7 +44,7 @@ tx(pE,`${pc}%`);sa(pE,{[D+'warn']:w});tx(rE,fmtR(rt));if(bw){bw.hidden=vb;sa(bw,
 const cs=st.cr?(st.d?['#c75714','#f59e0b','#ffdb47']:['#7c3aed','#ea580c','#f59e0b']):(st.d?['#1b49b2','#3186ff','#5cc6fc']:['#1d4ed8','#2563eb','#0284c7']);
 for(let i=0;i<3;i++)if(sg[i]){const r=st.rt[i]||0;sg[i].style.width=`${(r*100).toFixed(2)}%`;sp(sg[i],'--sc',cs[i]);sa(sg[i],{[D+'active']:r>.002?1:0});}
 tx(tL,`TTFT ${fmtS(st.tf)} · TPS ${fmtR(rt)}`);tx(tR,`${st.u!==null?tokS(st.u):`${pc}%`} / ${tokS(st.mx||512e3)}`);
-mV();if(vl&&!rf&&!vOk())safe(()=>vl.step(.016));yR(0);cX();
+mV();if(op()&&vl&&!rf&&!vOk())safe(()=>vl.step(.016));yR(0);cX();
 };
 const ig=pl=>{
 const s0=pl?.speed||null,cx=s0?.context||null,re=/(\d+(?:\.\d+)?)\s*%/,pm=(tx(bI('context-percent'))||'').match(re)||(bI('context-fill')?.style?.width||'').match(re),m1=cx?.model,m2=tx(bI('context-model'))?.trim(),mb=qs(doc,'['+D+'testid="model-selector-trigger"]'),nm=i=>{const m=(tx(bI(i))||'').match(/(\d+(?:\.\d+)?)/);return m?+m[1]:null;};
@@ -80,7 +80,7 @@ c.insertBefore(H('aside',{cls:'pv-rail',[P+'vial-rail']:1,[IA]:1},[H('div',{cls:
 sg=[0,1,2].map(i=>H('span',{cls:'pv-seg',[D+'layer-slice']:i}));tL=H('span',{[P+'telemetry']:1,text:'TTFT — · TPS —'});tR=H('span',{[P+'capacity']:1,text:'— / 512k'});
 bw=H('div',{cls:'pv-bw',[P+'minibar']:1,[IA]:1},[H('div',{cls:'pv-trk'},[...sg,H('i',{cls:'pv-th',[P+'threshold']:85,'aria-hidden':'true'})]),H('div',{cls:'pv-tl'},[tL,tR])]);
 const tr=bI('context-track');if(tr?.parentNode===c)c.insertBefore(bw,tr.nextSibling);else c.appendChild(bw);
-if(typeof W.MutationObserver==='function'){let ws=op(),wO=tOff();ob=new W.MutationObserver(()=>{const of=tOff();if(of){xR();xP();wO=!0;return;}pt();const nw=op();if((nw&&!ws)||wO){aT=Date.now();yR(1);void sync();}else yR(0);ws=nw;wO=!1;sP();});ob.observe(c,{attributes:!0,attributeFilter:['hidden','style']});de()&&safe(()=>ob.observe(de(),{attributes:!0,attributeFilter:[MO,LP,TL,'class']}));doc.body&&safe(()=>ob.observe(doc.body,{attributes:!0,attributeFilter:['class']}));}
+if(W.MutationObserver){let ws=op(),wO=tOff();ob=new W.MutationObserver(()=>{if(tOff()){xR();xP();wO=!0;return;}pt();const nw=op();if((nw&&!ws)||wO){aT=Date.now();yR(1);void sync();}else yR(0);ws=nw;wO=!1;sP();});ob.observe(c,{attributes:!0,attributeFilter:['hidden','style']});de()&&safe(()=>ob.observe(de(),{attributes:!0,attributeFilter:[MO,LP,TL,'class']}));doc.body&&safe(()=>ob.observe(doc.body,{attributes:!0,attributeFilter:['class']}));}
 pt();return!0;
 };
 async function sync(){

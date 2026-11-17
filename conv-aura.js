@@ -37,7 +37,7 @@
   function isConvRunning() {
     if (typeof document === 'undefined') return false;
     const now = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
-    if (cachedRunningAt >= 0 && Math.abs(now - cachedRunningAt) < 12) {
+    if (cachedRunningAt >= 0 && Math.abs(now - cachedRunningAt) < 200) {
       return cachedRunningVal;
     }
     const nodes = document.querySelectorAll(

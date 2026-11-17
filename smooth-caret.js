@@ -15,6 +15,7 @@
     const editorMetricsCache = new WeakMap();
     const emptyCaretProbeCache = new WeakMap();
     const caretPrevState = new WeakMap();
+    const selectionSigCache = new WeakMap();
 
     function teardown() {
       if (caretTypingTimer) {
@@ -166,11 +167,49 @@
       if (isDestroyed() || !isEnabled() || typeof document === 'undefined') return null;
       const editors = document.querySelectorAll('[data-testid="agent-input-box"] [contenteditable="true"]');
       const activeEl = document.activeElement;
+      const sel = typeof document.getSelection === 'function' ? document.getSelection() : null;
       const list = [];
       for (const ed of editors) {
         const host = ed.parentElement;
         if (!host) continue;
         const isFocused = activeEl === ed || Boolean(activeEl && ed.contains && ed.contains(activeEl));
+        // Fast-skip unfocused editors: 0 getBoundingClientRect / getClientRects when not typing in composer!
+        if (!isFocused) {
+          selectionSigCache.delete(ed);
+          if (
+            !host.hasAttribute?.('data-ag-cs-caret-host') ||
+            ed.hasAttribute?.('data-ag-cs-smooth-caret') ||
+            host.querySelector?.('.ag-cs-smooth-caret[data-ag-cs-caret-visible="1"]')
+          ) {
+            list.push({ ed, host, isFocused: false, measured: null, hostRect: null, clientLeft: 0, clientTop: 0, scrollLeft: 0, scrollTop: 0, isNowEmpty: true });
+          }
+          continue;
+        }
+        // Fast-skip unchanged selection state (e.g. modifier keys, mouse moves, or external scroll while focused!)
+        if (!refreshMetrics && sel && sel.rangeCount > 0 && ed.hasAttribute?.('data-ag-cs-smooth-caret')) {
+          const prevSig = selectionSigCache.get(ed);
+          const childCnt = ed.childNodes ? ed.childNodes.length : 0;
+          const textLen = (ed.textContent || '').length;
+          if (
+            prevSig &&
+            prevSig.epoch === editorMetricsEpoch &&
+            prevSig.isCollapsed === sel.isCollapsed &&
+            prevSig.focusNode === sel.focusNode &&
+            prevSig.focusOffset === sel.focusOffset &&
+            prevSig.childCnt === childCnt &&
+            prevSig.textLen === textLen
+          ) {
+            continue;
+          }
+          selectionSigCache.set(ed, {
+            epoch: editorMetricsEpoch,
+            isCollapsed: sel.isCollapsed,
+            focusNode: sel.focusNode,
+            focusOffset: sel.focusOffset,
+            childCnt,
+            textLen,
+          });
+        }
         const measured = measureEditorCaretBox(ed, refreshMetrics);
         const hostRect = measured && measured.collapsed ? host.getBoundingClientRect() : null;
         const clientLeft = host.clientLeft || 0;
@@ -285,11 +324,16 @@
       if (isTyping) pendingCaretTyping = true;
       if (refreshMetrics) pendingCaretRefreshMetrics = true;
       if (immediate) {
+        if (caretRaf && typeof cancelAnimationFrame === 'function') {
+          cancelAnimationFrame(caretRaf);
+          caretRaf = 0;
+        }
         const typingNow = pendingCaretTyping || isTyping;
         const refreshNow = pendingCaretRefreshMetrics || refreshMetrics;
         pendingCaretTyping = false;
         pendingCaretRefreshMetrics = false;
         sync(typingNow, refreshNow);
+        return;
       }
       if (caretRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(caretRaf);
       if (typeof requestAnimationFrame === 'function') {

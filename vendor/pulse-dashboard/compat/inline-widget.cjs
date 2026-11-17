@@ -722,9 +722,10 @@ module.exports = function installAgPulseInlineWidget() {
     return refreshRequest;
   }
   const observer=new MutationObserver(records=>{if(records.some(record=>record.target!==node&&!node?.contains(record.target)))scheduleMutationLayout();});observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['style','class','hidden','inert','data-cascade-id','data-testid','data-tooltip-id','aria-label','role','contenteditable']});
+  const onScroll=e=>{if(!cardName&&!groupMenu&&node?.isConnected&&composer?.kind!=='subagent'&&e?.target?.getAttribute?.('data-testid')==='autoscroll-viewport')return;scheduleMutationLayout();};
   const onKey=e=>{if(e.key==='Escape')hide();}, onPointer=e=>{if(node&&!e.composedPath().includes(node))hide();};
   document.addEventListener('keydown',onKey);document.addEventListener('pointerdown',onPointer);
-  window.addEventListener('resize',scheduleLayout);document.addEventListener('scroll',scheduleMutationLayout,true);
+  window.addEventListener('resize',scheduleLayout);document.addEventListener('scroll',onScroll,true);
   densityMedia.addEventListener('change',stopDensityMotion);
   const timerId=setInterval(()=>{const prevNode=node;const changed=syncConversation();mount();if(node!==prevNode||changed||!node?.dataset?.layout||Date.now()-lastLayoutAt>=5000)fit();tick();if(cardName||groupMenu)position();if(conversationId()!==lastConversation||Date.now()-lastFetch>(document.hidden?10000:2200))refresh();},1000);
   window.__agPulseDispose=()=>{
@@ -732,7 +733,7 @@ module.exports = function installAgPulseInlineWidget() {
     disposed=true;requestEpoch++;pending=false;refreshRequest=null;stopDensityMotion();densityFrame=null;densityProbe=null;
     clearInterval(timerId);clearTimeout(hoverTimer);clearTimeout(openTimer);clearTimeout(layoutTimer);layoutTimer=null;if(layoutFrame!==null)cancelAnimationFrame(layoutFrame);observer.disconnect();resizeObserver?.disconnect();themeController?.dispose();preferences.dispose();hide();usageDashboard?.dispose();node?.remove();
     document.removeEventListener('keydown',onKey);document.removeEventListener('pointerdown',onPointer);
-    document.removeEventListener('scroll',scheduleMutationLayout,true);window.removeEventListener('resize',scheduleLayout);
+    document.removeEventListener('scroll',onScroll,true);window.removeEventListener('resize',scheduleLayout);
     densityMedia.removeEventListener('change',stopDensityMotion);
     document.removeEventListener('DOMContentLoaded',mount);node=null;root=null;composer=null;
     window.__agPulseInlineInstalled=false;delete window.__agPulseDispose;

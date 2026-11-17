@@ -522,12 +522,14 @@
     const motionLv = getMotionLevel();
     const telemetryMod = getTelemetryMode();
     const effortSliderMod = getEffortSliderMode();
+    const dark = isDarkTheme();
 
     const prevMut = internalDomMutating;
     internalDomMutating = true;
     try {
       setAttrIfChanged(html, 'data-ag-prism', VERSION);
       setAttrIfChanged(html, 'data-ag-cs-style', '1');
+      setAttrIfChanged(html, 'data-ag-cs-theme', dark ? 'dark' : 'light');
       setAttrIfChanged(html, 'data-ag-cs-palette', palette);
       setAttrIfChanged(html, 'data-ag-cs-light-preset', lightPreset);
       setAttrIfChanged(html, 'data-ag-cs-motion', motionLv);
@@ -567,7 +569,6 @@
         if (prevLang !== '') refreshOpenUiForLanguage();
       }
 
-      const dark = isDarkTheme();
       const themeKey = `${palette}|${lightPreset}|${dark ? 'd' : 'l'}`;
       if (themeKey !== lastThemeKey) {
         lastThemeKey = themeKey;
@@ -2053,6 +2054,8 @@
       if (crystalMount.panel || crystalMount.bar) teardownCrystalMount();
       return;
     }
+    const modelOverlay = panel.closest?.('.agy-overlay');
+    if (modelOverlay) setAttrIfChanged(modelOverlay, 'data-ag-cs-model-overlay', '1');
     if (crystalMount.panel && crystalMount.panel !== panel) {
       teardownCrystalMount();
     }
@@ -2060,8 +2063,15 @@
     const isOrch = detectPanelIsOrchestrator(panel, primaryModelInfo);
     syncPanelRowGlyphs(panel);
     const cesSec = panel.querySelector('.ces-ag-section');
-    if (cesSec && cesSec.getAttribute('data-effort-slot') !== 'true') {
-      cesSec.setAttribute('data-effort-slot', 'true');
+    if (cesSec) {
+      if (cesSec.getAttribute('data-effort-slot') !== 'true') {
+        cesSec.setAttribute('data-effort-slot', 'true');
+      }
+      if (cesSec.querySelector('[role="separator"]')) {
+        setAttrIfChanged(cesSec, 'data-has-sep', '1');
+      } else if (cesSec.hasAttribute('data-has-sep')) {
+        cesSec.removeAttribute('data-has-sep');
+      }
     }
     const slot = cesSec || panel;
 
@@ -2305,6 +2315,11 @@
 
   function syncCrabClearance(card, inputBox, active) {
     if (!inputBox) return;
+    const hasMenuPopup = Boolean(
+      active && inputBox.querySelector?.('[role="listbox"], [role="option"], [data-testid="slash-command-menu"]')
+    );
+    if (hasMenuPopup) setAttrIfChanged(inputBox, 'data-ag-cs-menu-open', '1');
+    else if (inputBox.hasAttribute?.('data-ag-cs-menu-open')) inputBox.removeAttribute('data-ag-cs-menu-open');
     const composerShell = card.closest('#antigravity\\.agentSidePanelInputBox') || card.parentElement;
     let hasLowerClearance = false;
 
@@ -2635,14 +2650,16 @@
     if (!rows || rows.length === 0) return { empty: true };
     let selIdx = -1;
     let selRow = null;
+    const rowRunStates = [];
     for (let i = 0; i < rows.length; i++) {
-      if (rows[i].getAttribute('data-selected') === 'true') {
+      const r = rows[i];
+      if (selIdx < 0 && r.getAttribute('data-selected') === 'true') {
         selIdx = i;
-        selRow = rows[i];
-        break;
+        selRow = r;
       }
+      rowRunStates.push({ row: r, running: Boolean(r.querySelector?.('[data-testid="status-loading-spinner"]')) });
     }
-    if (!selRow) return { empty: false, selIdx: -1, selRow: null, curSnap: null, listRect: null, scrollTop: 0 };
+    if (!selRow) return { empty: false, selIdx: -1, selRow: null, curSnap: null, listRect: null, scrollTop: 0, rowRunStates };
     const listContainer = selRow.parentElement;
     const rowRect = typeof selRow.getBoundingClientRect === 'function' ? selRow.getBoundingClientRect() : null;
     const listRect = listContainer && typeof listContainer.getBoundingClientRect === 'function' ? listContainer.getBoundingClientRect() : null;
@@ -2657,11 +2674,18 @@
           relLeft: listRect ? rowRect.left - listRect.left : rowRect.left,
         }
       : null;
-    return { empty: false, selIdx, selRow, curSnap, listRect, scrollTop };
+    return { empty: false, selIdx, selRow, curSnap, listRect, scrollTop, rowRunStates };
   }
 
   function syncSidebarSelectionGlide(measuredSidebar) {
     const snap = measuredSidebar || measureSidebarSelectionSnapshot();
+    if (snap.rowRunStates) {
+      for (let i = 0; i < snap.rowRunStates.length; i++) {
+        const { row, running } = snap.rowRunStates[i];
+        if (running) setAttrIfChanged(row, 'data-ag-cs-row-running', '1');
+        else if (row.hasAttribute?.('data-ag-cs-row-running')) row.removeAttribute('data-ag-cs-row-running');
+      }
+    }
     if (snap.empty) {
       heroState.sidebarInitialized = false;
       heroState.sidebarIndex = -1;
@@ -2860,6 +2884,22 @@
     const inHome = measured ? measured.inHome : Boolean(document.querySelector('.agy-home'));
     const formalConv = measured ? measured.formalConv : !inHome ? findFormalConvView() : null;
     const inFormalConv = Boolean(formalConv);
+
+    if (inHome) {
+      const homeEl = document.querySelector('.agy-home');
+      const sheet = homeEl?.closest?.('.agy-sheet');
+      if (sheet) setAttrIfChanged(sheet, 'data-ag-cs-home-sheet', '1');
+    }
+    if (formalConv) {
+      const seat = formalConv.parentElement;
+      if (seat && String(seat.tagName || '').toUpperCase() === 'DIV') {
+        setAttrIfChanged(seat, 'data-ag-cs-conv-seat', '1');
+      }
+      const vp = formalConv.querySelector?.('[data-testid="autoscroll-viewport"]');
+      if (vp && vp.parentElement && vp.parentElement !== formalConv) {
+        setAttrIfChanged(vp.parentElement, 'data-ag-cs-vp-wrap', '1');
+      }
+    }
 
     if (inHome && !measured?.homeComposerSampled) sampleHomeComposerRect();
 
@@ -3097,6 +3137,11 @@
   }
 
   function syncLensOverlayOrigins(measuredOverlays) {
+    document.querySelectorAll('[data-testid="overview-panel"]').forEach((el) => {
+      if (el.parentElement && String(el.parentElement.tagName || '').toUpperCase() === 'DIV') {
+        setAttrIfChanged(el.parentElement, 'data-ag-cs-overview-shell', '1');
+      }
+    });
     if (!isMotionStandardOrUltra()) return;
     const entries = measuredOverlays || measureNewLensOverlays();
     const trig = heroState.lastTriggerOrigin;
@@ -3354,6 +3399,40 @@
   }
 
   // ── Pointer Tracking for Prism Rim & Orchestrator Crystal Bar (FastDOM Read->Write) ──
+  const DYN_VARS_STYLE_ID = 'ag-prism-dyn-vars';
+  let dynPrismRule = null;
+  let dynOrchRule = null;
+
+  function ensureDynPointerRules() {
+    if (dynPrismRule && dynOrchRule) return true;
+    if (typeof document === 'undefined' || !document.body || typeof document.createElement !== 'function') return false;
+    let stEl = document.getElementById(DYN_VARS_STYLE_ID);
+    if (!stEl) {
+      stEl = document.createElement('style');
+      stEl.id = DYN_VARS_STYLE_ID;
+      stEl.setAttribute('data-ag-no-i18n', '');
+      stEl.textContent =
+        'html[data-ag-cs-style] [data-ag-cs-prism-box="1"]{--ag-px:-9999px;--ag-py:-9999px;}\n' +
+        'html[data-ag-cs-style] .ag-cs-orch-track{--orch-px:-9999px;--orch-py:-9999px;}';
+      document.body.appendChild(stEl);
+    }
+    const rules = stEl.sheet && stEl.sheet.cssRules;
+    if (rules && rules.length >= 2 && rules[0].style && rules[1].style) {
+      dynPrismRule = rules[0];
+      dynOrchRule = rules[1];
+      return true;
+    }
+    return false;
+  }
+
+  function teardownDynPointerRules() {
+    dynPrismRule = null;
+    dynOrchRule = null;
+    if (typeof document !== 'undefined') {
+      document.getElementById(DYN_VARS_STYLE_ID)?.remove?.();
+    }
+  }
+
   let lastPointerPos = { x: -9999, y: -9999 };
   let prismRaf = 0;
   let lastPrismPointerAt = 0;
@@ -3415,7 +3494,9 @@
       refreshPrismBoxRectCache(now, allowReadRect);
     }
 
-    // Phase 2: Idempotent CSS variable writes (0 writes when pointer stays outside 280px range!)
+    // Phase 2: Zero-Mutation CSSOM Rule write! Never mutates .surface-composer-card[style] in real DOM,
+    // preventing external plugins (e.g. antigravity-pulse theme observer) from running 15x Canvas.getImageData per move!
+    const useCssom = ensureDynPointerRules();
     const prevInt = internalDomMutating;
     internalDomMutating = true;
     try {
@@ -3433,11 +3514,13 @@
         }
         if (entry.pxStr !== nextPx) {
           entry.pxStr = nextPx;
-          entry.box.style.setProperty('--ag-px', nextPx);
+          if (useCssom && i === 0) dynPrismRule.style.setProperty('--ag-px', nextPx);
+          else entry.box.style.setProperty('--ag-px', nextPx);
         }
         if (entry.pyStr !== nextPy) {
           entry.pyStr = nextPy;
-          entry.box.style.setProperty('--ag-py', nextPy);
+          if (useCssom && i === 0) dynPrismRule.style.setProperty('--ag-py', nextPy);
+          else entry.box.style.setProperty('--ag-py', nextPy);
         }
       }
 
@@ -3459,11 +3542,13 @@
         }
         if (cachedOrchPx !== nextOx) {
           cachedOrchPx = nextOx;
-          cachedOrchTrackEl.style.setProperty('--orch-px', nextOx);
+          if (useCssom) dynOrchRule.style.setProperty('--orch-px', nextOx);
+          else cachedOrchTrackEl.style.setProperty('--orch-px', nextOx);
         }
         if (cachedOrchPy !== nextOy) {
           cachedOrchPy = nextOy;
-          cachedOrchTrackEl.style.setProperty('--orch-py', nextOy);
+          if (useCssom) dynOrchRule.style.setProperty('--orch-py', nextOy);
+          else cachedOrchTrackEl.style.setProperty('--orch-py', nextOy);
         }
         if (crystalMount.inst && typeof crystalMount.inst.setPointerClient === 'function') {
           crystalMount.inst.setPointerClient(x, y);
@@ -3780,7 +3865,7 @@
   }
 
   const OWN_PLUGIN_SELECTOR =
-    '.ag-cs-home-panel-seat, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-model-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-smooth-caret, .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-stream-chunk, .ag-cs-thought-chunk, .ag-anim-icon, #ag-pulse-status-bar, #context-card, #' +
+    '.ag-cs-home-panel-seat, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-model-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-smooth-caret, .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-stream-chunk, .ag-cs-thought-chunk, .ag-anim-icon, #ag-pulse-status-bar, #context-card, #ag-prism-dyn-vars, #' +
     SETTINGS_SEC_ID +
     ', #ag-prism-css, #ag-claude-style-css';
 
@@ -4111,9 +4196,14 @@
     queueSmoothCaret(false);
   }
 
+  const MODIFIER_ONLY_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'NumLock', 'ScrollLock']);
+
   function onDocCaretEvent(ev) {
     const type = ev?.type || '';
-    if (type === 'scroll' || type === 'selectionchange') {
+    if ((type === 'keydown' || type === 'keyup') && ev?.key && MODIFIER_ONLY_KEYS.has(ev.key)) {
+      return;
+    }
+    if (type === 'scroll' || type === 'selectionchange' || type === 'keydown' || type === 'keyup') {
       const ae = document.activeElement;
       if (!ae || !ae.closest?.('[data-testid="agent-input-box"]')) {
         return;
@@ -4450,6 +4540,7 @@
         flushAllStreamArtifacts,
         restoreAllHostAnimatedIcons,
         teardownSmoothCarets,
+        teardownDynPointerRules,
         unmountRipple,
         unmountConvAura,
         clearWorkedForAutoUnfoldAttrs,
@@ -4478,6 +4569,14 @@
       });
       for (const attr of [
         'data-ag-cs-orch-active',
+        'data-ag-cs-model-overlay',
+        'data-ag-cs-overview-shell',
+        'data-ag-cs-conv-seat',
+        'data-ag-cs-vp-wrap',
+        'data-ag-cs-home-sheet',
+        'data-ag-cs-row-running',
+        'data-ag-cs-menu-open',
+        'data-has-sep',
         'data-ag-cs-auto-unfolded',
         'data-ag-cs-outer-open',
         'data-ag-cs-caustic',
@@ -4501,6 +4600,7 @@
         for (const attr of [
           'data-ag-prism',
           'data-ag-cs-style',
+          'data-ag-cs-theme',
           'data-ag-cs-palette',
           'data-ag-cs-light-preset',
           'data-ag-cs-motion',
