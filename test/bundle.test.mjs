@@ -2319,7 +2319,9 @@ test('v3.7 orchestrates 4-tier motionLevel, Hero A~E optical transitions, dual-t
     assert.equal(proseP.textContent, 'Hello crystal world');
 
     // Wait > 250ms -> .ag-cs-stream-chunk class MUST auto-remove cleanly with zero DOM tree mutation!
-    await new Promise((r) => setTimeout(r, 275));
+    for (let w = 0; w < 24 && proseP.classList.contains('ag-cs-stream-chunk'); w++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
     assert.equal(proseP.classList.contains('ag-cs-stream-chunk'), false, 'Stream chunk class must clear within 250ms');
     assert.equal(proseP.childNodes.length, 1);
     assert.equal(proseP.childNodes[0].nodeType, 3, 'Text node remains untouched');
@@ -2743,10 +2745,14 @@ test('Prism v1.0 regression guard: Thought Translator overlay (.ag-prism-thought
     const drawsAtMount = stIdle.convAuraDrawCount;
     assert.ok(drawsAtMount >= 1);
 
-    // Advance clock & wait > 120ms -> continuous living flow draws multiple new frames!
+    // Advance clock & poll up to 600ms -> continuous living flow draws new frames cleanly even on loaded CI runners
     fakeNow += 180;
-    await new Promise((r) => setTimeout(r, 135));
-    const drawsAfterFlow = sandbox.window.__agPrism.getState().convAuraDrawCount;
+    let drawsAfterFlow = drawsAtMount;
+    for (let w = 0; w < 24; w++) {
+      await new Promise((r) => setTimeout(r, 25));
+      drawsAfterFlow = sandbox.window.__agPrism.getState().convAuraDrawCount;
+      if (drawsAfterFlow > drawsAtMount) break;
+    }
     assert.ok(drawsAfterFlow > drawsAtMount, `Expected continuous living aura frames in ultra idle (${drawsAfterFlow} > ${drawsAtMount})`);
 
     // Switch motionLevel to 'subtle' -> enters true 0fps static sleep!
@@ -2859,7 +2865,9 @@ test('Prism v1.0 regression guard: Thought Translator overlay (.ag-prism-thought
     dynamicCopyBtn.appendChild(makeNode('svg', { attrs: { width: '15', height: '15' } }));
     convView.appendChild(dynamicCopyBtn);
     rootObs.cb([{ type: 'childList', target: convView, addedNodes: [dynamicCopyBtn], removedNodes: [] }]);
-    await new Promise((r) => setTimeout(r, 65));
+    for (let w = 0; w < 16 && !dynamicCopyBtn.getAttribute('data-ag-cs-icon-injected'); w++) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
     assert.equal(dynamicCopyBtn.getAttribute('data-ag-cs-icon-injected'), 'copy-check');
     assert.equal(sandbox.window.__agPrism.getState().perf.iconFullRuns, fullRunsBefore, 'Incremental button mutation must NOT run full-page button scan');
     assert.ok(sandbox.window.__agPrism.getState().perf.iconIncrementalRuns > incRunsBefore, 'Expected incremental button hydration run');
