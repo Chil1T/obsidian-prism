@@ -8,8 +8,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-windows:
+    if: github.event.repository.private == false
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -24,6 +29,7 @@ jobs:
           path: dist/obsidian-prism-installer.exe
 
   build-macos:
+    if: github.event.repository.private == false
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -38,8 +44,9 @@ jobs:
           path: dist/*.dmg
 
   publish-release:
+    if: github.event.repository.private == false
     needs: [build-windows, build-macos]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
