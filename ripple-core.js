@@ -1874,8 +1874,9 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
         || Math.abs(prism - lastPrism) >= 0.002
         || Math.abs(surge - lastSurge) >= 0.001
         || Math.abs(speed - lastSpeed) >= 0.005;
-      const frameGap = ext ? 14 : (basePresence < 1 ? 33 : 42);
-      if (!stale && !dirty && (still || Math.abs(nowMs - lastDrawMs) < frameGap)) {
+      const isGpuGlow = Boolean(renderer && renderer.mode === 'webgl2');
+      const frameGap = isGpuGlow ? 0 : (ext ? 14 : (basePresence < 1 ? 33 : 42));
+      if (!stale && !dirty && (still || (frameGap > 0 && Math.abs(nowMs - lastDrawMs) < frameGap))) {
         if (forceStatic) sleeping = true;
         return false;
       }

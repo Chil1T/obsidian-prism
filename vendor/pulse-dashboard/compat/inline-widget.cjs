@@ -199,8 +199,10 @@ module.exports = function installAgPulseInlineWidget() {
         const other=control.getBoundingClientRect();
         if(other.width>0&&other.height>0&&intersects(other)&&isVisible(control))return false;
       }
+      const vp=document.querySelector('[data-testid="autoscroll-viewport"]');
       for(const control of document.querySelectorAll(selector)){
         if(localParent.contains(control))continue;
+        if((vp&&vp.contains(control)&&!control.closest('[style*="fixed"]'))||control.closest('aside,pre,[data-op-thought]'))continue;
         const other=control.getBoundingClientRect();
         if(other.width<=0||other.height<=0||!intersects(other))continue;
         if(!isVisible(control))continue;
@@ -219,7 +221,7 @@ module.exports = function installAgPulseInlineWidget() {
     lastLayoutAt=Date.now();
     let safe=fits();
     const rowWidth=composer.row.getBoundingClientRect().width;
-    const probeKey=()=>node.style.cssText.replace(/--pulse-native-room:[^;]+;?/g,'')+'|'+language.language+'|'+lastConversation+'|'+bar.textContent+'|'+$('dot').className+'|'+getComputedStyle(composer.row).gap+'|'+Array.from(composer.row.querySelectorAll('button,[role="button"],a[href],input,select')).filter(c=>c!==composer.model&&!c.contains(composer.model)).map(c=>c.getBoundingClientRect().width).join(',');
+    const probeKey=()=>node.style.cssText.replace(/--pulse-native-room:[^;]+;?/g,'')+'|'+language.language+'|'+lastConversation+'|'+Math.floor(bar.textContent.length/3)+'|'+$('dot').className+'|'+getComputedStyle(composer.row).gap+'|'+Array.from(composer.row.querySelectorAll('button,[role="button"],a[href],input,select')).filter(c=>c!==composer.model&&!c.contains(composer.model)).map(c=>c.getBoundingClientRect().width).join(',');
     if(oldDensity==='icons'){
       const key=probeKey();
       // Twelve pixels of recovery headroom prevents threshold chatter. Shrinking
@@ -721,7 +723,8 @@ module.exports = function installAgPulseInlineWidget() {
     })();
     return refreshRequest;
   }
-  const observer=new MutationObserver(records=>{if(records.some(record=>record.target!==node&&!node?.contains(record.target)))scheduleMutationLayout();});observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['style','class','hidden','inert','data-cascade-id','data-testid','data-tooltip-id','aria-label','role','contenteditable']});
+  const isIgnoredMutTarget=t=>{const el=t?.nodeType===1?t:t?.parentElement;if(!el?.closest)return false;if(el.closest('.ag-cs-crab,.ag-cs-conv-aura-host,.ag-cs-ripple-host,.ag-cs-prism-rim-cv,[data-op-thought],aside'))return true;const inVp=el.closest('[data-testid="autoscroll-viewport"]');return Boolean(inVp&&!el.closest('[data-testid="agent-input-box"]'));};
+  const observer=new MutationObserver(records=>{const healthy=Boolean(node?.isConnected&&composer?.row?.isConnected&&composer?.editor?.isConnected);if(records.some(record=>{if(record.target===node||node?.contains(record.target))return false;if(healthy&&isIgnoredMutTarget(record.target))return false;return true;}))scheduleMutationLayout();});observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:['style','class','hidden','inert','data-cascade-id','data-testid','data-tooltip-id','aria-label','role','contenteditable']});
   const onScroll=e=>{if(!cardName&&!groupMenu&&node?.isConnected&&composer?.kind!=='subagent'&&e?.target?.getAttribute?.('data-testid')==='autoscroll-viewport')return;scheduleMutationLayout();};
   const onKey=e=>{if(e.key==='Escape')hide();}, onPointer=e=>{if(node&&!e.composedPath().includes(node))hide();};
   document.addEventListener('keydown',onKey);document.addEventListener('pointerdown',onPointer);

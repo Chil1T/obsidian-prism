@@ -90,8 +90,28 @@
     }
 
     function findExistingBar(doc) {
-      if (!doc || typeof doc.getElementById !== 'function') return null;
-      return doc.getElementById(BAR_ID);
+      if (!doc) return null;
+      if (typeof doc.querySelectorAll === 'function') {
+        const all = doc.querySelectorAll('#' + BAR_ID);
+        for (let i = 0; i < all.length; i++) {
+          if (all[i].getAttribute?.(FALLBACK_ATTR) !== '1') return all[i];
+        }
+        if (all.length > 0) return all[0];
+      }
+      if (typeof doc.getElementById === 'function') return doc.getElementById(BAR_ID);
+      return null;
+    }
+
+    function purgeOrphanFallbacks(doc, keepEl = null) {
+      if (!doc || typeof doc.querySelectorAll !== 'function') return;
+      const orphans = doc.querySelectorAll('[' + FALLBACK_ATTR + '="1"]');
+      for (let i = 0; i < orphans.length; i++) {
+        if (orphans[i] !== keepEl) {
+          try {
+            orphans[i].remove();
+          } catch {}
+        }
+      }
     }
 
     function isNodeConnected(doc, el) {
@@ -99,7 +119,7 @@
       if (el.isConnected === false) return false;
       if (el.isConnected === true) return true;
       if (!el.parentNode && !el.parentElement) return false;
-      if (doc && typeof doc.getElementById === 'function' && el.id) {
+      if (doc && typeof doc.getElementById === 'function' && el.id && typeof doc.querySelectorAll !== 'function') {
         const byId = doc.getElementById(el.id);
         if (byId && byId !== el) return false;
       }
@@ -189,6 +209,7 @@
           fallbackHostEl.remove();
         } catch {}
       }
+      purgeOrphanFallbacks(getDoc(), null);
       fallbackHostEl = null;
       shadowRoot = null;
     }
@@ -400,6 +421,8 @@
     }
 
     function findPreferredToolbarAnchor(doc) {
+      const footer = doc?.querySelector?.('.agy-composer-footer, [data-testid="input-box-bottom-toolbar"]');
+      if (footer) return footer;
       const modelBtn = doc?.querySelector?.('[data-testid="model-selector-trigger"]');
       return modelBtn && modelBtn.parentElement ? modelBtn.parentElement : null;
     }
@@ -543,6 +566,7 @@
         docClickCleanup = () => doc.removeEventListener('click', onDocClick);
       }
 
+      purgeOrphanFallbacks(doc, null);
       anchor.appendChild(host);
       fallbackHostEl = host;
       shadowRoot = sr;

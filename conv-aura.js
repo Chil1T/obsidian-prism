@@ -205,16 +205,67 @@
       convAura = null;
     }
 
+    function park() {
+      if (!convAura) return;
+      if (convAura.timer) {
+        clearTimeout(convAura.timer);
+        convAura.timer = 0;
+      }
+      if (convAura.rafId && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(convAura.rafId);
+        convAura.rafId = 0;
+      }
+      if (convAura.ro) {
+        try {
+          convAura.ro.disconnect();
+        } catch {}
+      }
+      if (convAura.host) convAura.host.remove();
+      convAura.seatParent = null;
+      convAura.convView = null;
+      convAura.sleeping = true;
+      convAura.parked = true;
+    }
+
     function sync() {
       cachedRunningAt = -1;
+      if (isDestroyed() || !isHomeRippleEnabled()) {
+        unmount();
+        return;
+      }
       const convView = findConvAuraView();
       const seatParent = convView ? convView.parentElement || convView : null;
-      if (convAura && (convAura.seatParent !== seatParent || !convAura.host.isConnected || !convAura.canvas.isConnected)) {
-        unmount();
+      if (!convView || !seatParent || typeof document === 'undefined') {
+        if (convAura) park();
+        return;
       }
-      if (!convView || !seatParent || typeof document === 'undefined') return;
 
       if (convAura) {
+        if (convAura.seatParent !== seatParent || !convAura.host.isConnected || !convAura.canvas.isConnected) {
+          if (convAura.ro) {
+            try {
+              convAura.ro.disconnect();
+            } catch {}
+          }
+          convAura.seatParent = seatParent;
+          convAura.convView = convView;
+          convAura.parked = false;
+          seatParent.insertBefore(convAura.host, seatParent.firstChild);
+          if (convAura.ro) {
+            try {
+              convAura.ro.observe(seatParent);
+            } catch {}
+          }
+          if (typeof convAura.relayout === 'function') convAura.relayout();
+          const nowRe = performance.now();
+          const runRe = isConvRunning();
+          convAura.wasRunning = runRe;
+          convAura.phase = runRe ? 'running' : 'idle';
+          convAura.phaseAt = nowRe;
+          setAttrIfChanged(convAura.host, 'data-aura-phase', convAura.phase);
+          convAura.wake(true);
+          return;
+        }
         const prevPhase = convAura.phase;
         const nextPhase = advancePhase(performance.now());
         if (nextPhase !== prevPhase || (isMotionStandardOrUltra() && !document.hidden && convAura.sleeping)) {
@@ -355,7 +406,13 @@
         state.sleeping = false;
         if (host.hasAttribute('data-aura-sleep')) host.removeAttribute('data-aura-sleep');
 
-        let nextDelay = opt.frameMs || 50;
+        const isGpuGlow = Boolean(state.glow && state.glow.mode === 'webgl2');
+        if (isGpuGlow && (inLiftoffEbb || phase === 'start' || phase === 'running' || phase === 'complete')) {
+          wake(false);
+          return;
+        }
+
+        let nextDelay = isGpuGlow ? Math.min(opt.frameMs || 50, 24) : opt.frameMs || 50;
         if (inLiftoffEbb) {
           nextDelay = Math.min(16, Math.max(8, 520 - liftElapsed + 4));
         } else if (phase === 'start') {
@@ -397,6 +454,12 @@
       }
 
       state.wake = wake;
+      state.relayout = () => {
+        state.width = -1;
+        state.height = -1;
+        drawnOnce = false;
+        layout(true);
+      };
       state.refreshTheme = () => {
         if (state.glow && typeof state.glow.invalidate === 'function') state.glow.invalidate();
         wake(true);

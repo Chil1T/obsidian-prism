@@ -673,6 +673,12 @@
   let modelsExpanded = false;
   let lastPanelRenderKey = '';
 
+  let usageDataEpoch = 0;
+  let cachedAggKey = '';
+  let cachedAggData = null;
+  let deferredUsageTimer = 0;
+  let saveUsageTimer = 0;
+
   function loadUsageCache() {
     try {
       const raw = JSON.parse(localStorage.getItem(STORAGE_USAGE_CACHE_KEY) || '{}');
@@ -680,17 +686,33 @@
         for (const [id, rec] of Object.entries(raw)) {
           if (rec && rec.days) usageRecords.set(id, rec);
         }
-        if (usageRecords.size > 0) usageHasData = true;
+        if (usageRecords.size > 0) {
+          usageHasData = true;
+          usageDataEpoch += 1;
+        }
       }
     } catch {}
   }
 
-  function saveUsageCache() {
+  function flushUsageCacheNow() {
+    if (saveUsageTimer) {
+      clearTimeout(saveUsageTimer);
+      saveUsageTimer = 0;
+    }
     try {
       const obj = {};
       for (const [id, rec] of usageRecords.entries()) obj[id] = rec;
       localStorage.setItem(STORAGE_USAGE_CACHE_KEY, JSON.stringify(obj));
     } catch {}
+  }
+
+  function saveUsageCache() {
+    if (destroyed || typeof setTimeout !== 'function') {
+      flushUsageCacheNow();
+      return;
+    }
+    if (saveUsageTimer) clearTimeout(saveUsageTimer);
+    saveUsageTimer = setTimeout(flushUsageCacheNow, 1200);
   }
 
   loadUsageCache();
@@ -700,7 +722,7 @@
     const h = ensureHooks();
     if (!h) return;
     const now = Date.now();
-    if (!force && usageHasData && now - lastUsageFetchAt < 15000) return;
+    if (!force && usageHasData && now - lastUsageFetchAt < 60000) return;
     const sums = h.store.getState().trajectorySummaries?.summaries || {};
     const entries = Object.entries(sums).filter(([, s]) => !!s);
     if (entries.length === 0) {
@@ -720,9 +742,14 @@
         staleIds.push([id, sum]);
       }
     }
+    let deletedAny = false;
     for (const oldId of Array.from(usageRecords.keys())) {
-      if (!presentIds.has(oldId)) usageRecords.delete(oldId);
+      if (!presentIds.has(oldId)) {
+        usageRecords.delete(oldId);
+        deletedAny = true;
+      }
     }
+    if (deletedAny) usageDataEpoch += 1;
 
     if (staleIds.length === 0) {
       usageHasData = true;
@@ -732,9 +759,9 @@
     }
 
     usageLoading = true;
-    renderHomePanel();
+    if (!usageHasData) renderHomePanel();
     try {
-      const CONCURRENCY = 6;
+      const CONCURRENCY = 4;
       const FETCH_TIMEOUT_MS = 4000;
       const buildFallbackUsageRecord = (id, sum) => {
         const sec = Number(sum?.lastModifiedTime?.seconds || sum?.createdTime?.seconds || 0);
@@ -778,9 +805,13 @@
             }
           })
         );
+        if (i + CONCURRENCY < staleIds.length && !destroyed) {
+          await new Promise((r) => setTimeout(r, 0));
+        }
       }
       if (!destroyed) {
         usageHasData = true;
+        usageDataEpoch += 1;
         lastUsageFetchAt = Date.now();
         saveUsageCache();
       }
@@ -796,8 +827,23 @@
 
   function syncGreeting(inHero) {
     if (inHero && !wasHero) {
-      bookPick = Math.random();
-      if (cfg.homeLayout === 'studio') refreshUsageRollup(false);
+      if (!usageHasData) bookPick = Math.random();
+      if (cfg.homeLayout === 'studio') {
+        if (usageHasData) {
+          if (deferredUsageTimer) clearTimeout(deferredUsageTimer);
+          deferredUsageTimer = setTimeout(() => {
+            deferredUsageTimer = 0;
+            if (!destroyed && wasHero && cfg.homeLayout === 'studio') {
+              void refreshUsageRollup(false);
+            }
+          }, 750);
+        } else {
+          void refreshUsageRollup(false);
+        }
+      }
+    } else if (!inHero && deferredUsageTimer) {
+      clearTimeout(deferredUsageTimer);
+      deferredUsageTimer = 0;
     }
     wasHero = inHero;
 
@@ -858,29 +904,43 @@
     '<circle class="ag-cs-orbit-node is-amber" cx="566" cy="212" r="1.8"/>' +
     '</svg>';
 
+  function parkPanelSeat() {
+    hideHeatTip();
+    if (panelSeat && panelSeat.parentElement) panelSeat.parentElement.removeChild(panelSeat);
+  }
+
   function ensurePanelSeat() {
-    const home = document.querySelector('.agy-home');
-    if (!home || cfg.homeLayout !== 'studio') {
+    if (cfg.homeLayout !== 'studio') {
       unmountPanelSeat();
+      return null;
+    }
+    const home = document.querySelector('.agy-home');
+    if (!home) {
+      parkPanelSeat();
       return null;
     }
     const greeting = home.querySelector('[data-testid="home-greeting"]');
     if (!greeting || !greeting.parentElement) return null;
 
-    if (!panelSeat || !panelSeat.isConnected || panelSeat.parentElement !== greeting.parentElement) {
-      unmountPanelSeat();
+    if (!panelSeat || !panelEl) {
       panelSeat = document.createElement('div');
       panelSeat.className = 'ag-cs-home-panel-seat';
       panelSeat.setAttribute('data-ag-no-i18n', '');
       panelEl = document.createElement('section');
       panelEl.className = 'ag-cs-home-panel';
       panelSeat.appendChild(panelEl);
+    }
+    if (!panelSeat.isConnected || panelSeat.parentElement !== greeting.parentElement || panelSeat.previousSibling !== greeting) {
       greeting.parentElement.insertBefore(panelSeat, greeting.nextSibling);
     }
     return panelEl;
   }
 
   function unmountPanelSeat() {
+    if (deferredUsageTimer) {
+      clearTimeout(deferredUsageTimer);
+      deferredUsageTimer = 0;
+    }
     if (panelSeat && panelSeat.parentElement) panelSeat.parentElement.removeChild(panelSeat);
     panelSeat = null;
     panelEl = null;
@@ -917,7 +977,13 @@
     const lang = getLang();
     const ui = uiText(lang);
     const skeleton = !usageHasData && usageLoading;
-    const data = usageCore.aggregateUsageRollup(Array.from(usageRecords.values()), activeRange, bookPick, lang);
+    const aggKey = `${usageDataEpoch}|${usageRecords.size}|${activeRange}|${lang}|${bookPick}`;
+    let data = cachedAggData;
+    if (!data || cachedAggKey !== aggKey) {
+      data = usageCore.aggregateUsageRollup(Array.from(usageRecords.values()), activeRange, bookPick, lang);
+      cachedAggKey = aggKey;
+      cachedAggData = data;
+    }
     const renderKey = [
       lang,
       activeTab,
@@ -1216,14 +1282,39 @@
     return { ink, wave, dark, fontFamily, prismStrength: 1, aura, auraPhase: (now || 0) * 0.0006 };
   }
 
+  function parkRipple() {
+    if (!rippleMount) return;
+    if (rippleMount.timer) {
+      clearTimeout(rippleMount.timer);
+      rippleMount.timer = 0;
+    }
+    if (rippleMount.rafId) {
+      cancelAnimationFrame(rippleMount.rafId);
+      rippleMount.rafId = 0;
+    }
+    if (rippleMount.ro) rippleMount.ro.disconnect();
+    if (rippleMount.root) {
+      rippleMount.root.removeEventListener('pointerdown', rippleMount.onPress);
+      if (rippleMount.onMove) rippleMount.root.removeEventListener('pointermove', rippleMount.onMove);
+      if (rippleMount.onLeave) rippleMount.root.removeEventListener('pointerleave', rippleMount.onLeave);
+      rippleMount.root = null;
+    }
+    rippleMount.host.remove();
+    rippleMount.sleeping = true;
+    rippleMount.parked = true;
+  }
+
   function unmountRipple() {
     if (!rippleMount) return;
     if (rippleMount.timer) clearTimeout(rippleMount.timer);
     if (rippleMount.rafId) cancelAnimationFrame(rippleMount.rafId);
     if (rippleMount.ro) rippleMount.ro.disconnect();
-    rippleMount.root.removeEventListener('pointerdown', rippleMount.onPress);
-    if (rippleMount.onMove) rippleMount.root.removeEventListener('pointermove', rippleMount.onMove);
-    if (rippleMount.onLeave) rippleMount.root.removeEventListener('pointerleave', rippleMount.onLeave);
+    if (rippleMount.root) {
+      rippleMount.root.removeEventListener('pointerdown', rippleMount.onPress);
+      if (rippleMount.onMove) rippleMount.root.removeEventListener('pointermove', rippleMount.onMove);
+      if (rippleMount.onLeave) rippleMount.root.removeEventListener('pointerleave', rippleMount.onLeave);
+      rippleMount.root = null;
+    }
     document.removeEventListener('visibilitychange', rippleMount.onVis);
     rippleMount.field.dispose();
     if (rippleMount.glow && typeof rippleMount.glow.dispose === 'function') rippleMount.glow.dispose();
@@ -1233,11 +1324,36 @@
 
   function syncRipple() {
     if (!rippleCore) return;
-    const home = cfg.homeRipple !== false && cfg.homeLayout !== 'off' ? document.querySelector('.agy-home') : null;
-    if (rippleMount && (rippleMount.root !== home || !rippleMount.canvas.isConnected)) {
+    const rippleAllowed = cfg.homeRipple !== false && cfg.homeLayout !== 'off';
+    if (!rippleAllowed) {
       unmountRipple();
+      return;
     }
-    if (!home || rippleMount) return;
+    const home = document.querySelector('.agy-home');
+    if (!home) {
+      if (rippleMount && !rippleMount.parked) parkRipple();
+      return;
+    }
+    if (rippleMount) {
+      if (rippleMount.parked || rippleMount.root !== home || !rippleMount.canvas.isConnected) {
+        if (rippleMount.ro) rippleMount.ro.disconnect();
+        if (rippleMount.root && rippleMount.root !== home) {
+          rippleMount.root.removeEventListener('pointerdown', rippleMount.onPress);
+          if (rippleMount.onMove) rippleMount.root.removeEventListener('pointermove', rippleMount.onMove);
+          if (rippleMount.onLeave) rippleMount.root.removeEventListener('pointerleave', rippleMount.onLeave);
+        }
+        rippleMount.root = home;
+        rippleMount.parked = false;
+        rippleMount.mountedAt = performance.now();
+        home.insertBefore(rippleMount.host, home.firstChild);
+        home.addEventListener('pointerdown', rippleMount.onPress, { passive: true });
+        home.addEventListener('pointermove', rippleMount.onMove, { passive: true });
+        home.addEventListener('pointerleave', rippleMount.onLeave, { passive: true });
+        if (rippleMount.ro) rippleMount.ro.observe(home);
+        if (typeof rippleMount.reattach === 'function') rippleMount.reattach();
+      }
+      return;
+    }
 
     const host = document.createElement('div');
     host.className = 'ag-cs-ripple-host';
@@ -1259,6 +1375,8 @@
     let lastSkimAt = 0;
     let skimCarryDist = 0;
     let cachedCanvasStyle = null;
+    let cachedCanvasRect = null;
+    let cachedCanvasRectAt = 0;
 
     const state = {
       root: home,
@@ -1270,6 +1388,7 @@
       dpr: 0,
       mountedAt: performance.now(),
       sleeping: false,
+      parked: false,
       aura: { reach: 0.47, strength: 1.0 },
       tideSwellAt: 0,
       waves: rippleCore.createWaveField(0, 0),
@@ -1286,6 +1405,7 @@
       onLeave: null,
       onVis: null,
       wake: null,
+      reattach: null,
     };
     let previous = state.mountedAt;
     let frameWanted = false;
@@ -1293,13 +1413,16 @@
     let forceSingleDraw = true;
 
     function updateCalmZones() {
-      if (!state.field || typeof state.field.setCalmZones !== 'function') return;
-      const greet = home.querySelector('[data-testid="home-greeting"]');
+      const curHome = state.root;
+      if (!curHome || !state.field || typeof state.field.setCalmZones !== 'function') return;
+      const greet = curHome.querySelector('[data-testid="home-greeting"]');
       if (!greet) {
         state.field.setCalmZones([]);
         return;
       }
       const c = canvas.getBoundingClientRect();
+      cachedCanvasRect = c;
+      cachedCanvasRectAt = performance.now();
       const g = greet.getBoundingClientRect();
       if (!c.width || !g.width) return;
       state.field.setCalmZones([
@@ -1308,10 +1431,15 @@
     }
 
     function layout() {
-      const w = home.clientWidth;
-      const h = home.clientHeight;
+      const curHome = state.root;
+      if (!curHome) return;
+      const w = curHome.clientWidth;
+      const h = curHome.clientHeight;
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      if (w === state.width && h === state.height && dpr === state.dpr) return;
+      if (w === state.width && h === state.height && dpr === state.dpr) {
+        cachedCanvasRect = null;
+        return;
+      }
       const cols = Math.ceil(w / rippleCore.RIPPLE.cellWidth);
       const rows = Math.ceil(h / rippleCore.RIPPLE.cellHeight);
       state.width = w;
@@ -1328,6 +1456,7 @@
       state.waves = rippleCore.createWaveField(cols, rows);
       state.field = rippleCore.createGlyphField(canvas, cols, rows, state.waves);
       cachedCanvasStyle = typeof getComputedStyle === 'function' ? getComputedStyle(canvas) : null;
+      cachedCanvasRect = null;
       updateCalmZones();
       drawnOnce = false;
       forceSingleDraw = true;
@@ -1347,7 +1476,7 @@
         clearTimeout(state.timer);
         state.timer = 0;
       }
-      if (destroyed || frameWanted) return;
+      if (destroyed || state.parked || frameWanted) return;
       state.sleeping = false;
       if (host.hasAttribute('data-ripple-sleep')) host.removeAttribute('data-ripple-sleep');
       if (document.hidden) {
@@ -1362,7 +1491,7 @@
     function drawFrame(now) {
       state.rafId = 0;
       frameWanted = false;
-      if (destroyed || rippleMount !== state && rippleMount !== null) return;
+      if (destroyed || state.parked || (rippleMount !== state && rippleMount !== null)) return;
       const still = motionReduced();
       state.waves.advance(still ? 0 : Math.min(0.06, Math.max(0, (now - previous) / 1000)));
       previous = now;
@@ -1410,21 +1539,36 @@
         enterIdleSleep();
         return;
       }
-      if (inTideSwell || fieldBusy) {
+      if (inTideSwell || fieldBusy || inIntro || auraState.active) {
         wake();
-      } else if (inIntro || auraState.active) {
-        // 入场前 1.6s 或鼠标光晕悬停在首页时以温和节拍刷新；一旦离开且波纹平息则进入 0fps 静止真休眠！
-        state.sleeping = false;
-        state.timer = setTimeout(wake, 42);
       } else {
         enterIdleSleep();
       }
     }
     state.wake = wake;
+    state.reattach = () => {
+      previous = performance.now();
+      frameWanted = false;
+      forceSingleDraw = true;
+      auraState.active = false;
+      lastSkimX = null;
+      lastSkimY = null;
+      skimCarryDist = 0;
+      layout();
+      updateCalmZones();
+      state.field.invalidate();
+      if (state.glow && typeof state.glow.invalidate === 'function') state.glow.invalidate();
+      wake();
+    };
 
     state.onMove = (ev) => {
       if (motionReduced()) return;
-      const rect = canvas.getBoundingClientRect();
+      const nowRect = performance.now();
+      if (!cachedCanvasRect || nowRect - cachedCanvasRectAt > 1500) {
+        cachedCanvasRect = canvas.getBoundingClientRect();
+        cachedCanvasRectAt = nowRect;
+      }
+      const rect = cachedCanvasRect;
       const x = ev.clientX - rect.left;
       const y = ev.clientY - rect.top;
       if (x < 0 || y < 0 || x > rect.width || y > rect.height) {
@@ -2025,14 +2169,7 @@
     if (destroyed || !crystalMount.inst || !crystalMount.panel || !crystalMount.panel.isConnected || !crystalMount.wasOrch) {
       return;
     }
-    const idlePointer = now - lastPrismPointerAt > 450 && crystalMount.mountedAt > 0 && now - crystalMount.mountedAt > 900;
-    if (idlePointer && crystalMount.lastStepMs > 0 && now - crystalMount.lastStepMs < 42) {
-      if (!motionReduced() && !document.hidden) {
-        crystalMount.rafId = requestAnimationFrame(stepCrystalLoop);
-      }
-      return;
-    }
-    const dt = crystalMount.lastStepMs > 0 ? Math.min(0.05, Math.max(0.004, (now - crystalMount.lastStepMs) / 1000)) : 0.016;
+    const dt = crystalMount.lastStepMs > 0 ? Math.min(0.05, Math.max(0.002, (now - crystalMount.lastStepMs) / 1000)) : 0.016;
     crystalMount.lastStepMs = now;
     try {
       crystalMount.inst.step(dt);
@@ -2174,10 +2311,137 @@
     }
   }
 
+  const svgElementProtoCache = new Map();
+  function cloneCachedSvgElement(cacheKey, htmlStr) {
+    if (!htmlStr) return null;
+    if (typeof HTMLTemplateElement !== 'undefined' && typeof document.createElement === 'function') {
+      let proto = svgElementProtoCache.get(cacheKey);
+      if (!proto) {
+        const tpl = document.createElement('template');
+        tpl.innerHTML = htmlStr;
+        proto = tpl.content ? tpl.content.firstElementChild || tpl.content.firstChild : null;
+        if (proto && typeof proto.cloneNode === 'function') {
+          if (svgElementProtoCache.size > 64) svgElementProtoCache.clear();
+          svgElementProtoCache.set(cacheKey, proto);
+        }
+      }
+      if (proto && typeof proto.cloneNode === 'function') {
+        return proto.cloneNode(true);
+      }
+    }
+    const tmp = document.createElement('span');
+    tmp.innerHTML = htmlStr;
+    return tmp.firstElementChild || tmp.firstChild || null;
+  }
+
+  let deferredHydrateRaf = 0;
+  let deferredSparkQueue = [];
+  let deferredIconQueue = [];
+
+  function cancelDeferredHydration() {
+    if (deferredHydrateRaf && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(deferredHydrateRaf);
+    }
+    deferredHydrateRaf = 0;
+    deferredSparkQueue = [];
+    deferredIconQueue = [];
+  }
+
+  function applySingleSparkUpdate(trig, brand, st) {
+    if (!trig || trig.isConnected === false) return;
+    if (st === 'streaming') {
+      setAttrIfChanged(trig, 'data-ag-cs-spark-streaming', '1');
+    } else if (trig.hasAttribute('data-ag-cs-spark-streaming')) {
+      trig.removeAttribute('data-ag-cs-spark-streaming');
+    }
+    let spark = trig.firstElementChild?.classList?.contains('ag-cs-thinking-spark')
+      ? trig.firstElementChild
+      : trig.querySelector('.ag-cs-thinking-spark');
+    if (!spark) {
+      spark = document.createElement('span');
+      spark.className = 'ag-cs-thinking-spark';
+      spark.setAttribute('aria-hidden', 'true');
+      spark.setAttribute('data-ag-no-i18n', '');
+      trig.insertBefore(spark, trig.firstChild);
+    }
+    if (spark.getAttribute('data-brand') !== brand || spark.getAttribute('data-state') !== st) {
+      spark.setAttribute('data-brand', brand);
+      spark.setAttribute('data-state', st);
+      const key = `spark:${brand}`;
+      const cloned = cloneCachedSvgElement(key, buildBrandMarkSvg(brand, 13, 'auto', false));
+      if (cloned && typeof spark.replaceChildren === 'function') {
+        spark.replaceChildren(cloned);
+      } else {
+        spark.innerHTML = buildBrandMarkSvg(brand, 13, 'auto', false);
+      }
+    }
+  }
+
+  function applySingleHostIcon(btn, iconName, origSvg, size) {
+    if (!btn || btn.isConnected === false || !origSvg || !origSvg.parentNode) return;
+    const htmlStr = animatedIcons.renderIcon(iconName, { size });
+    if (!htmlStr) return;
+
+    const prevDisp = origSvg.style?.getPropertyValue?.('display') || '';
+    if (prevDisp) origSvg.setAttribute('data-ag-cs-orig-disp', prevDisp);
+    origSvg.setAttribute('hidden', '');
+    origSvg.setAttribute('data-ag-cs-orig-svg', '1');
+    origSvg.hidden = true;
+    origSvg.style?.setProperty?.('display', 'none', 'important');
+
+    let animSvg = cloneCachedSvgElement(`icon:${iconName}:${size}`, htmlStr);
+    if (!animSvg) {
+      animSvg = document.createElement('svg');
+      animSvg.className = `ag-anim-icon ag-icon-${iconName}`;
+      animSvg.setAttribute('data-anim-icon', iconName);
+      animSvg.setAttribute('width', String(size));
+      animSvg.setAttribute('height', String(size));
+      animSvg.setAttribute('viewBox', '0 0 24 24');
+      animSvg.setAttribute('aria-hidden', 'true');
+      if (iconName === 'copy-check') animSvg.setAttribute('data-icon-state', 'copy');
+      animSvg.innerHTML = htmlStr;
+    }
+    origSvg.parentNode.insertBefore(animSvg, origSvg);
+    btn.setAttribute('data-ag-cs-icon-injected', iconName);
+  }
+
+  function stepDeferredHydration() {
+    deferredHydrateRaf = 0;
+    if (destroyed) return;
+    const prevInt = internalDomMutating;
+    internalDomMutating = true;
+    try {
+      let budget = 18;
+      while (budget > 0 && deferredSparkQueue.length > 0) {
+        const item = deferredSparkQueue.pop();
+        applySingleSparkUpdate(item.trig, item.brand, item.st);
+        budget--;
+      }
+      while (budget > 0 && deferredIconQueue.length > 0) {
+        const item = deferredIconQueue.pop();
+        if (!item.btn.getAttribute('data-ag-cs-icon-injected')) {
+          applySingleHostIcon(item.btn, item.iconName, item.origSvg, item.size);
+        }
+        budget--;
+      }
+    } finally {
+      internalDomMutating = prevInt;
+    }
+    if ((deferredSparkQueue.length > 0 || deferredIconQueue.length > 0) && typeof requestAnimationFrame === 'function') {
+      deferredHydrateRaf = requestAnimationFrame(stepDeferredHydration);
+    }
+  }
+
+  function scheduleDeferredHydration() {
+    if (destroyed || deferredHydrateRaf || typeof requestAnimationFrame !== 'function') return;
+    deferredHydrateRaf = requestAnimationFrame(stepDeferredHydration);
+  }
+
   // ── Living Thinking Spark on [data-testid="thinking-collapsible-trigger"] ──
   function syncThinkingSparks(primaryModelInfo) {
     const triggers = document.querySelectorAll('[data-testid="thinking-collapsible-trigger"]');
     if (cfg.composerRestyle === false) {
+      deferredSparkQueue = [];
       document.querySelectorAll('.ag-cs-thinking-spark').forEach((n) => n.remove());
       triggers.forEach((t) => {
         if (t.hasAttribute('data-ag-cs-spark-streaming')) t.removeAttribute('data-ag-cs-spark-streaming');
@@ -2186,12 +2450,12 @@
     }
     const brand = primaryModelInfo?.brand || 'gemini';
     const len = triggers.length;
+    const pending = [];
     for (let i = 0; i < len; i++) {
       const trig = triggers[i];
-      let spark = trig.firstElementChild?.classList?.contains('ag-cs-thinking-spark')
+      const spark = trig.firstElementChild?.classList?.contains('ag-cs-thinking-spark')
         ? trig.firstElementChild
         : trig.querySelector('.ag-cs-thinking-spark');
-      // Fast-skip historical settled triggers in long conversations (O(1) attribute check, 0 textContent regex)
       if (
         i < len - 2 &&
         spark &&
@@ -2203,23 +2467,27 @@
       }
       const txt = String(trig.textContent || '');
       const st = /\.\.\.|…|正在|思考中|thinking/i.test(txt) ? 'streaming' : 'done';
-      if (st === 'streaming') {
-        setAttrIfChanged(trig, 'data-ag-cs-spark-streaming', '1');
-      } else if (trig.hasAttribute('data-ag-cs-spark-streaming')) {
-        trig.removeAttribute('data-ag-cs-spark-streaming');
+      if (
+        spark &&
+        spark.getAttribute('data-brand') === brand &&
+        spark.getAttribute('data-state') === st &&
+        Boolean(st === 'streaming') === trig.hasAttribute('data-ag-cs-spark-streaming')
+      ) {
+        continue;
       }
-      if (!spark) {
-        spark = document.createElement('span');
-        spark.className = 'ag-cs-thinking-spark';
-        spark.setAttribute('aria-hidden', 'true');
-        spark.setAttribute('data-ag-no-i18n', '');
-        trig.insertBefore(spark, trig.firstChild);
+      pending.push({ trig, brand, st });
+    }
+    if (pending.length <= 16 || typeof requestAnimationFrame !== 'function') {
+      for (let i = 0; i < pending.length; i++) {
+        applySingleSparkUpdate(pending[i].trig, pending[i].brand, pending[i].st);
       }
-      if (spark.getAttribute('data-brand') !== brand || spark.getAttribute('data-state') !== st) {
-        spark.setAttribute('data-brand', brand);
-        spark.setAttribute('data-state', st);
-        spark.innerHTML = buildBrandMarkSvg(brand, 13, 'auto', false);
+    } else {
+      const syncStart = pending.length - 12;
+      for (let i = syncStart; i < pending.length; i++) {
+        applySingleSparkUpdate(pending[i].trig, pending[i].brand, pending[i].st);
       }
+      deferredSparkQueue = pending.slice(0, syncStart);
+      scheduleDeferredHydration();
     }
   }
 
@@ -3322,6 +3590,7 @@
       buttons = document.querySelectorAll(HOST_BTN_QUERY);
     }
 
+    const pendingIcons = [];
     for (const btn of buttons) {
       if (isThoughtIsolatedNode(btn)) continue;
       const existingIcon = btn.getAttribute('data-ag-cs-icon-injected');
@@ -3341,32 +3610,22 @@
 
       const rawSize = parseInt(origSvg.getAttribute?.('width') || '15', 10);
       const size = Number.isFinite(rawSize) && rawSize >= 12 && rawSize <= 20 ? rawSize : 15;
-      const htmlStr = animatedIcons.renderIcon(iconName, { size });
-      if (!htmlStr) continue;
+      pendingIcons.push({ btn, iconName, origSvg, size });
+    }
 
-      const prevDisp = origSvg.style?.getPropertyValue?.('display') || '';
-      if (prevDisp) origSvg.setAttribute('data-ag-cs-orig-disp', prevDisp);
-      origSvg.setAttribute('hidden', '');
-      origSvg.setAttribute('data-ag-cs-orig-svg', '1');
-      origSvg.hidden = true;
-      origSvg.style?.setProperty?.('display', 'none', 'important');
-
-      const tmp = document.createElement('span');
-      tmp.innerHTML = htmlStr;
-      let animSvg = tmp.firstElementChild || tmp.firstChild;
-      if (!animSvg) {
-        animSvg = document.createElement('svg');
-        animSvg.className = `ag-anim-icon ag-icon-${iconName}`;
-        animSvg.setAttribute('data-anim-icon', iconName);
-        animSvg.setAttribute('width', String(size));
-        animSvg.setAttribute('height', String(size));
-        animSvg.setAttribute('viewBox', '0 0 24 24');
-        animSvg.setAttribute('aria-hidden', 'true');
-        if (iconName === 'copy-check') animSvg.setAttribute('data-icon-state', 'copy');
-        animSvg.innerHTML = htmlStr;
+    if (pendingIcons.length <= 20 || typeof requestAnimationFrame !== 'function') {
+      for (let i = 0; i < pendingIcons.length; i++) {
+        const it = pendingIcons[i];
+        applySingleHostIcon(it.btn, it.iconName, it.origSvg, it.size);
       }
-      origSvg.parentNode.insertBefore(animSvg, origSvg);
-      btn.setAttribute('data-ag-cs-icon-injected', iconName);
+    } else {
+      const syncStart = pendingIcons.length - 16;
+      for (let i = syncStart; i < pendingIcons.length; i++) {
+        const it = pendingIcons[i];
+        applySingleHostIcon(it.btn, it.iconName, it.origSvg, it.size);
+      }
+      deferredIconQueue = pendingIcons.slice(0, syncStart);
+      scheduleDeferredHydration();
     }
   }
 
@@ -3398,39 +3657,21 @@
     scheduleTransient(() => pill.remove(), 240);
   }
 
-  // ── Pointer Tracking for Prism Rim & Orchestrator Crystal Bar (FastDOM Read->Write) ──
-  const DYN_VARS_STYLE_ID = 'ag-prism-dyn-vars';
-  let dynPrismRule = null;
-  let dynOrchRule = null;
-
-  function ensureDynPointerRules() {
-    if (dynPrismRule && dynOrchRule) return true;
-    if (typeof document === 'undefined' || !document.body || typeof document.createElement !== 'function') return false;
-    let stEl = document.getElementById(DYN_VARS_STYLE_ID);
-    if (!stEl) {
-      stEl = document.createElement('style');
-      stEl.id = DYN_VARS_STYLE_ID;
-      stEl.setAttribute('data-ag-no-i18n', '');
-      stEl.textContent =
-        'html[data-ag-cs-style] [data-ag-cs-prism-box="1"]{--ag-px:-9999px;--ag-py:-9999px;}\n' +
-        'html[data-ag-cs-style] .ag-cs-orch-track{--orch-px:-9999px;--orch-py:-9999px;}';
-      document.body.appendChild(stEl);
-    }
-    const rules = stEl.sheet && stEl.sheet.cssRules;
-    if (rules && rules.length >= 2 && rules[0].style && rules[1].style) {
-      dynPrismRule = rules[0];
-      dynOrchRule = rules[1];
-      return true;
-    }
-    return false;
-  }
-
+  // ── Zero-StyleRecalc 300Hz GPU Canvas Prism Rim & Orchestrator Rim ──────
   function teardownDynPointerRules() {
-    dynPrismRule = null;
-    dynOrchRule = null;
-    if (typeof document !== 'undefined') {
-      document.getElementById(DYN_VARS_STYLE_ID)?.remove?.();
+    if (prismBoxRo) {
+      try {
+        prismBoxRo.disconnect();
+      } catch {}
+      prismBoxRo = null;
     }
+    if (typeof document !== 'undefined') {
+      document.getElementById('ag-prism-dyn-vars')?.remove?.();
+      document.querySelectorAll('.ag-cs-prism-rim-cv').forEach((n) => n.remove());
+      document.querySelectorAll('[data-ag-cs-prism-cv]').forEach((el) => el.removeAttribute('data-ag-cs-prism-cv'));
+    }
+    cachedPrismBoxes = [];
+    cachedOrchEntry = null;
   }
 
   let lastPointerPos = { x: -9999, y: -9999 };
@@ -3439,39 +3680,154 @@
   let prismBoxCacheDirty = true;
   let prismBoxCacheAt = 0;
   let cachedPrismBoxes = [];
-  let cachedOrchTrackRect = null;
-  let cachedOrchTrackEl = null;
-  let cachedOrchPx = '';
-  let cachedOrchPy = '';
+  let cachedOrchEntry = null;
+  let prismBoxRo = null;
+
+  function ensurePrismRimCanvas(hostEl) {
+    if (!hostEl || !canMountRealCanvas(hostEl)) return null;
+    let cv = null;
+    for (let c = hostEl.firstElementChild; c; c = c.nextElementSibling) {
+      if (c.classList?.contains('ag-cs-prism-rim-cv')) {
+        cv = c;
+        break;
+      }
+    }
+    if (!cv) {
+      cv = document.createElement('canvas');
+      cv.className = 'ag-cs-prism-rim-cv';
+      cv.setAttribute('aria-hidden', 'true');
+      cv.setAttribute('data-ag-no-i18n', '');
+      hostEl.appendChild(cv);
+    }
+    const ctx = typeof cv.getContext === 'function' ? cv.getContext('2d') : null;
+    if (!ctx || typeof ctx.createRadialGradient !== 'function') {
+      cv.remove();
+      return null;
+    }
+    setAttrIfChanged(hostEl, 'data-ag-cs-prism-cv', '1');
+    return { cv, ctx };
+  }
+
+  function paintPrismRimCanvas(entry, active, localX, localY, radius, dark) {
+    if (!entry || !entry.ctx || !entry.cv || !entry.rect) return false;
+    const dpr = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, 2);
+    const w = Math.max(2, Math.round((entry.rect.width + (entry.insetPad || 0)) * dpr));
+    const h = Math.max(2, Math.round((entry.rect.height + (entry.insetPad || 0)) * dpr));
+    if (entry.cv.width !== w || entry.cv.height !== h) {
+      entry.cv.width = w;
+      entry.cv.height = h;
+      entry.wasCleared = false;
+    }
+    if (!active) {
+      if (!entry.wasCleared) {
+        entry.ctx.clearRect(0, 0, w, h);
+        entry.wasCleared = true;
+      }
+      return true;
+    }
+    entry.wasCleared = false;
+    const ctx = entry.ctx;
+    ctx.clearRect(0, 0, w, h);
+    const gx = (localX + (entry.insetPad ? entry.insetPad * 0.5 : 0)) * dpr;
+    const gy = (localY + (entry.insetPad ? entry.insetPad * 0.5 : 0)) * dpr;
+    const gr = radius * dpr;
+    const g = ctx.createRadialGradient(gx, gy, 0, gx, gy, gr);
+    if (dark) {
+      g.addColorStop(0, 'rgba(255,255,255,0.95)');
+      g.addColorStop(0.24, '#4285F4');
+      g.addColorStop(0.50, '#9B72CB');
+      g.addColorStop(0.74, '#EA4335');
+      g.addColorStop(0.92, '#FBBC04');
+      g.addColorStop(1, 'rgba(251,188,4,0)');
+    } else {
+      g.addColorStop(0, '#2563EB');
+      g.addColorStop(0.32, '#7C3AED');
+      g.addColorStop(0.64, '#EA4335');
+      g.addColorStop(0.88, '#D97706');
+      g.addColorStop(1, 'rgba(217,119,6,0)');
+    }
+    ctx.fillStyle = g;
+    // Only rasterize the 4 thin 2.5px border strips instead of filling the entire interior!
+    const bw = Math.max(2, Math.ceil(2.5 * dpr));
+    ctx.fillRect(0, 0, w, bw);
+    ctx.fillRect(0, Math.max(0, h - bw), w, bw);
+    ctx.fillRect(0, bw, bw, Math.max(0, h - bw * 2));
+    ctx.fillRect(Math.max(0, w - bw), bw, bw, Math.max(0, h - bw * 2));
+    return true;
+  }
+
+  function ensurePrismBoxRo() {
+    if (prismBoxRo || typeof ResizeObserver !== 'function') return prismBoxRo;
+    prismBoxRo = new ResizeObserver(() => {
+      prismBoxCacheDirty = true;
+    });
+    return prismBoxRo;
+  }
 
   function refreshPrismBoxRectCache(now, allowReadRect) {
     const boxes = document.querySelectorAll('[data-ag-cs-prism-box="1"]');
+    const ro = ensurePrismBoxRo();
+    if (ro) {
+      try {
+        ro.disconnect();
+      } catch {}
+    }
     const prevMap = new Map();
     for (let i = 0; i < cachedPrismBoxes.length; i++) {
       prevMap.set(cachedPrismBoxes[i].box, cachedPrismBoxes[i]);
     }
-    const next = [];
-    for (const box of boxes) {
-      const prev = prevMap.get(box);
-      next.push({
-        box,
-        rect: allowReadRect && typeof box.getBoundingClientRect === 'function' ? box.getBoundingClientRect() : null,
-        pxStr: prev ? prev.pxStr : '',
-        pyStr: prev ? prev.pyStr : '',
-      });
-    }
-    cachedPrismBoxes = next;
-    prismBoxCacheDirty = false;
-    prismBoxCacheAt = now;
+    const prevInt = internalDomMutating;
+    internalDomMutating = true;
+    try {
+      const next = [];
+      for (const box of boxes) {
+        if (ro) {
+          try {
+            ro.observe(box);
+          } catch {}
+        }
+        const prev = prevMap.get(box);
+        const rim = prev && prev.cv && prev.cv.isConnected ? { cv: prev.cv, ctx: prev.ctx } : ensurePrismRimCanvas(box);
+        next.push({
+          box,
+          rect: allowReadRect && typeof box.getBoundingClientRect === 'function' ? box.getBoundingClientRect() : null,
+          cv: rim ? rim.cv : null,
+          ctx: rim ? rim.ctx : null,
+          insetPad: 2,
+          wasCleared: prev ? prev.wasCleared : false,
+          pxStr: prev ? prev.pxStr : '',
+          pyStr: prev ? prev.pyStr : '',
+        });
+      }
+      cachedPrismBoxes = next;
+      prismBoxCacheDirty = false;
+      prismBoxCacheAt = now;
 
-    const trackEl = crystalMount.track && crystalMount.wasOrch && crystalMount.track.isConnected !== false ? crystalMount.track : null;
-    if (trackEl !== cachedOrchTrackEl) {
-      cachedOrchTrackEl = trackEl;
-      cachedOrchPx = '';
-      cachedOrchPy = '';
+      const trackEl = crystalMount.track && crystalMount.wasOrch && crystalMount.track.isConnected !== false ? crystalMount.track : null;
+      if (!trackEl) {
+        cachedOrchEntry = null;
+      } else {
+        if (ro) {
+          try {
+            ro.observe(trackEl);
+          } catch {}
+        }
+        const prevOrch = cachedOrchEntry && cachedOrchEntry.box === trackEl ? cachedOrchEntry : null;
+        const rim = prevOrch && prevOrch.cv && prevOrch.cv.isConnected ? { cv: prevOrch.cv, ctx: prevOrch.ctx } : ensurePrismRimCanvas(trackEl);
+        cachedOrchEntry = {
+          box: trackEl,
+          rect: allowReadRect && typeof trackEl.getBoundingClientRect === 'function' ? trackEl.getBoundingClientRect() : null,
+          cv: rim ? rim.cv : null,
+          ctx: rim ? rim.ctx : null,
+          insetPad: 0,
+          wasCleared: prevOrch ? prevOrch.wasCleared : false,
+          pxStr: prevOrch ? prevOrch.pxStr : '',
+          pyStr: prevOrch ? prevOrch.pyStr : '',
+        };
+      }
+    } finally {
+      internalDomMutating = prevInt;
     }
-    cachedOrchTrackRect =
-      trackEl && allowReadRect && typeof trackEl.getBoundingClientRect === 'function' ? trackEl.getBoundingClientRect() : null;
   }
 
   function flushPrismPointer() {
@@ -3482,73 +3838,75 @@
     const now = performance.now();
     const allowReadRect = !reduced && x >= -1000;
 
-    // Phase 1: Use cached rects; only re-measure when dirty, stale (>1200ms), or newly mounted!
     const activeTrack = crystalMount.track && crystalMount.wasOrch && crystalMount.track.isConnected !== false ? crystalMount.track : null;
     if (
       prismBoxCacheDirty ||
       cachedPrismBoxes.length === 0 ||
-      now - prismBoxCacheAt > 1200 ||
-      activeTrack !== cachedOrchTrackEl ||
+      (!prismBoxRo && now - prismBoxCacheAt > 2500) ||
+      now - prismBoxCacheAt > 8000 ||
+      activeTrack !== (cachedOrchEntry ? cachedOrchEntry.box : null) ||
       cachedPrismBoxes.some((e) => e.box.isConnected === false || (allowReadRect && !e.rect))
     ) {
       refreshPrismBoxRectCache(now, allowReadRect);
     }
 
-    // Phase 2: Zero-Mutation CSSOM Rule write! Never mutates .surface-composer-card[style] in real DOM,
-    // preventing external plugins (e.g. antigravity-pulse theme observer) from running 15x Canvas.getImageData per move!
-    const useCssom = ensureDynPointerRules();
+    const dark = isDarkTheme();
     const prevInt = internalDomMutating;
     internalDomMutating = true;
     try {
       for (let i = 0; i < cachedPrismBoxes.length; i++) {
         const entry = cachedPrismBoxes[i];
         const r = allowReadRect ? entry.rect : null;
-        let nextPx = '-9999px';
-        let nextPy = '-9999px';
+        let inRange = false;
+        let lx = -9999;
+        let ly = -9999;
         if (r) {
           const maxRange = 280;
           if (x >= r.left - maxRange && x <= r.right + maxRange && y >= r.top - maxRange && y <= r.bottom + maxRange) {
-            nextPx = `${Math.round(x - r.left)}px`;
-            nextPy = `${Math.round(y - r.top)}px`;
+            inRange = true;
+            lx = x - r.left;
+            ly = y - r.top;
           }
         }
+        if (entry.ctx && paintPrismRimCanvas(entry, inRange, lx, ly, 240, dark)) {
+          continue;
+        }
+        const nextPx = inRange ? `${lx.toFixed(1)}px` : '-9999px';
+        const nextPy = inRange ? `${ly.toFixed(1)}px` : '-9999px';
         if (entry.pxStr !== nextPx) {
           entry.pxStr = nextPx;
-          if (useCssom && i === 0) dynPrismRule.style.setProperty('--ag-px', nextPx);
-          else entry.box.style.setProperty('--ag-px', nextPx);
+          entry.box.style.setProperty('--ag-px', nextPx);
         }
         if (entry.pyStr !== nextPy) {
           entry.pyStr = nextPy;
-          if (useCssom && i === 0) dynPrismRule.style.setProperty('--ag-py', nextPy);
-          else entry.box.style.setProperty('--ag-py', nextPy);
+          entry.box.style.setProperty('--ag-py', nextPy);
         }
       }
 
-      if (cachedOrchTrackEl) {
-        const trackRect = allowReadRect ? cachedOrchTrackRect : null;
-        let nextOx = '-9999px';
-        let nextOy = '-9999px';
-        if (trackRect && trackRect.width >= 10) {
+      if (cachedOrchEntry) {
+        const r = allowReadRect ? cachedOrchEntry.rect : null;
+        let inRange = false;
+        let lx = -9999;
+        let ly = -9999;
+        if (r && r.width >= 10) {
           const maxRange = 120;
-          if (
-            x >= trackRect.left - maxRange &&
-            x <= trackRect.right + maxRange &&
-            y >= trackRect.top - maxRange &&
-            y <= trackRect.bottom + maxRange
-          ) {
-            nextOx = `${Math.round(x - trackRect.left)}px`;
-            nextOy = `${Math.round(y - trackRect.top)}px`;
+          if (x >= r.left - maxRange && x <= r.right + maxRange && y >= r.top - maxRange && y <= r.bottom + maxRange) {
+            inRange = true;
+            lx = x - r.left;
+            ly = y - r.top;
           }
         }
-        if (cachedOrchPx !== nextOx) {
-          cachedOrchPx = nextOx;
-          if (useCssom) dynOrchRule.style.setProperty('--orch-px', nextOx);
-          else cachedOrchTrackEl.style.setProperty('--orch-px', nextOx);
-        }
-        if (cachedOrchPy !== nextOy) {
-          cachedOrchPy = nextOy;
-          if (useCssom) dynOrchRule.style.setProperty('--orch-py', nextOy);
-          else cachedOrchTrackEl.style.setProperty('--orch-py', nextOy);
+        if (!(cachedOrchEntry.ctx && paintPrismRimCanvas(cachedOrchEntry, inRange, lx, ly, 96, dark))) {
+          const nextOx = inRange ? `${lx.toFixed(1)}px` : '-9999px';
+          const nextOy = inRange ? `${ly.toFixed(1)}px` : '-9999px';
+          if (cachedOrchEntry.pxStr !== nextOx) {
+            cachedOrchEntry.pxStr = nextOx;
+            cachedOrchEntry.box.style.setProperty('--orch-px', nextOx);
+          }
+          if (cachedOrchEntry.pyStr !== nextOy) {
+            cachedOrchEntry.pyStr = nextOy;
+            cachedOrchEntry.box.style.setProperty('--orch-py', nextOy);
+          }
         }
         if (crystalMount.inst && typeof crystalMount.inst.setPointerClient === 'function') {
           crystalMount.inst.setPointerClient(x, y);
@@ -3564,8 +3922,8 @@
     lastPointerPos.x = Number(ev.clientX);
     lastPointerPos.y = Number(ev.clientY);
     const now = performance.now();
-    if (!motionReduced() && !prismRaf && now - lastPrismPointerAt >= 28 && typeof requestAnimationFrame === 'function') {
-      lastPrismPointerAt = now;
+    lastPrismPointerAt = now;
+    if (!motionReduced() && !prismRaf && typeof requestAnimationFrame === 'function') {
       prismRaf = requestAnimationFrame(flushPrismPointer);
     }
     if (now - mascotState.lastActivityAt >= 2500) {
@@ -3865,7 +4223,7 @@
   }
 
   const OWN_PLUGIN_SELECTOR =
-    '.ag-cs-home-panel-seat, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-model-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-smooth-caret, .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-stream-chunk, .ag-cs-thought-chunk, .ag-anim-icon, #ag-pulse-status-bar, #context-card, #ag-prism-dyn-vars, #' +
+    '.ag-cs-home-panel-seat, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-prism-rim-cv, .ag-cs-model-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-smooth-caret, .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-stream-chunk, .ag-cs-thought-chunk, .ag-anim-icon, #ag-pulse-status-bar, #context-card, #' +
     SETTINGS_SEC_ID +
     ', #ag-prism-css, #ag-claude-style-css';
 
@@ -4067,10 +4425,12 @@
 
       if (flags.full || flags.route || measured.inHero !== wasHero) {
         syncGreeting(measured.inHero);
-        if (measured.inHero && cfg.homeLayout === 'studio') {
+        if (cfg.homeLayout !== 'studio') {
+          unmountPanelSeat();
+        } else if (measured.inHero) {
           renderHomePanel();
         } else {
-          unmountPanelSeat();
+          parkPanelSeat();
         }
       }
 
@@ -4097,8 +4457,11 @@
         flags.full ||
         measured.inHome !== prevWasInHome ||
         Boolean(measured.formalConv) !== prevWasInConv;
-      if (routeJumped) {
+      if (flags.full) {
         syncHostAnimatedIcons(null);
+      } else if (routeJumped) {
+        const jumpRoots = [document.querySelector('.agy-home'), measured.formalConv, ...addedRoots].filter(Boolean);
+        syncHostAnimatedIcons(jumpRoots.length > 0 ? jumpRoots : null);
       } else if (flags.buttons && addedRoots.length > 0) {
         syncHostAnimatedIcons(addedRoots);
       }
@@ -4537,6 +4900,8 @@
         window.__agPrismThought?.destroy?.();
       } catch {}
       for (const fn of [
+        cancelDeferredHydration,
+        flushUsageCacheNow,
         flushAllStreamArtifacts,
         restoreAllHostAnimatedIcons,
         teardownSmoothCarets,
