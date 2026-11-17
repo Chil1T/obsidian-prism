@@ -548,7 +548,7 @@
       const fillEl = mk(doc, 'i', { id: 'context-fill' });
       const trackEl = mk(doc, 'div', { className: 'track', id: 'context-track' }, [fillEl]);
       const ctxCard = mk(doc, 'section', { className: 'card context-card', id: 'context-card', hidden: true }, [
-        mk(doc, 'div', { className: 'heading' }, [mk(doc, 'span', { text: '上下文窗口与 512K 试管' })]),
+        mk(doc, 'div', { className: 'heading' }, [mk(doc, 'span', { text: '上下文窗口用量' })]),
         mk(doc, 'strong', { id: 'context-summary', text: '0% 已用 · 100% 剩余' }),
         mk(doc, 'p', { id: 'context-tokens', text: '— / 512K tok' }),
         trackEl,

@@ -814,7 +814,7 @@ namespace AgyClaudeStyle.Installer
             _titleLabel.Location = new Point(20, 14);
 
             _subtitleLabel = new Label();
-            _subtitleLabel.Text = "Optical UI & Motion Suite for Antigravity · 四档弹簧 · 白昼水晶 · 512K 试管";
+            _subtitleLabel.Text = "Antigravity 主题外观、动效调节、上下文监控与思考翻译套件";
             _subtitleLabel.ForeColor = Color.FromArgb(96, 165, 250);
             _subtitleLabel.Font = new Font("Microsoft YaHei UI", 9f, FontStyle.Regular);
             _subtitleLabel.AutoSize = true;

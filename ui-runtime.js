@@ -4348,7 +4348,7 @@
         ? ui.optMotionSubtle || (isZh() ? '克制' : 'Subtle')
         : ml === 'standard'
         ? ui.optMotionStandard || (isZh() ? '标准' : 'Standard')
-        : ui.optMotionUltra || (isZh() ? '旗舰光学' : 'Ultra');
+        : ui.optMotionUltra || (isZh() ? '完整' : 'Ultra');
     return `${palLabel} · ${lp} · ${mlLabel}`;
   }
 

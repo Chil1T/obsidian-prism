@@ -37,7 +37,7 @@ Four Dark/Daylight Optical Palettes · Damped Spring Physics · 512K Shallow-Wat
 - **⚡ GPU Compositor Offloading & True `0fps` Idle Sleep**: Eliminates persistent multi-layer `backdrop-filter` blur thrashing; clips the WebGL2 horizon aurora to the bottom `32%` viewport at `0.72x` resolution (`< 0.4%` GPU load) with strict **`0fps` sleep** when unfocused or set to `subtle`/`off`. Non-destructive element-level streaming animations keep React Fiber nodes 100% intact.
 - **🧪 512K Physical Shallow-Water Vial & Cut-Crystal Effort Slider**: Simulates a 24-node 1D Saint-Venant shallow-water meniscus inside a borosilicate capsule alongside an Orchestrator cut-crystal spectrum bar. Built with **Smart Auto-Yield** — politely steps aside with zero duplicate polling whenever standalone external Pulse or Slider plugins are present.
 - **🧠 Built-in Dual-Mode Thought Translator & Polisher**: Choose between zero-config **Instant Machine Translate** or **OpenAI-Compatible Streaming AI Polish** (multi-profile switching, live `GET /v1/models` discovery, and latency testing). API keys and custom prompts are stored strictly locally in `~/.gemini/config/` (`0600` permissions) — zero telemetry, never committed to Git.
-- **🦀 Pixel Mascot Micro-Ecology**: Interactive `Clawd` & purple cat companions with rigid-body spacing, parabolic leapfrogging, up to 5-tier drag-and-drop totem stacking, and automatic low-power dozing.
+- **🦀 Pixel Mascot Stage**: Interactive `Clawd` & cat companions with rigid-body spacing, leapfrogging, multi-tier drag-and-drop stacking, and automatic low-power dozing.
 
 ---
 
@@ -59,8 +59,8 @@ Every palette features bespoke surface elevation tokens and a dedicated WebGL2 d
 
 ---
 
-### 2. Shallow-Water Vial · Cut-Crystal Spectrum · Mascot Micro-Ecology
-From interactive meniscus ripples inside the **512K Context Vial** and 105px near-field dispersion on the **Cut-Crystal Bar**, to rigid-body totem stacking on the composer rim (*and a mysterious prismatic glow rumored to awaken for curious keepers…*):
+### 2. Shallow-Water Vial · Effort Slider · Pixel Mascots
+Interactive context usage meniscus inside the **512K Context Vial**, cursor-reactive optical rim highlights, and rigid-body stackable pixel mascots on the composer bar:
 
 <p align="center">
   <img src="assets/screenshots/optics-bento-details.png" width="100%" alt="Interactive Optical Craft Bento" />

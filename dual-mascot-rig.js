@@ -8,11 +8,10 @@
   'use strict';
 
   /**
-   * 双宠像素骨架与剧场物理引擎（Strictly aligned to Official Claude Clawd Pixel Grammar）
+   * 双宠像素骨架与物理引擎（Aligned to Official Claude Clawd Pixel Grammar）
    * - 主宠栅格 PX = 3 (每格 3 CSS px), 离散动画节拍 TICK = 100ms
-   * - 主体与腿爪耳尾严格零黑描边、零白眼高光噪点、纯平方块几何、暗部色 's'、1x2 竖瞳 'o'
-   * - 道具与剧场彩蛋（擦杯/干饭/吃鱼/追光点/读信/种节点/追蝴蝶/淡定着火/荧光棒/立麦/警笛）
-   *   采用比本体/道具柔和的同色系中间调渲染
+   * - 主体与腿爪耳尾零黑描边、零眼高光噪点、纯方块几何、暗部色 's'、1x2 竖瞳 'o'
+   * - 动作道具采用同色系柔和中间调渲染
    */
   const PX = 3;
   const TICK = 100;
@@ -2067,7 +2066,7 @@
 
     const actors = {
       clawd: createActorState('clawd', 'clawd', 'Claude Clawd', 0),
-      cat: createActorState('cat', 'cat', 'Gemini 小紫猫', 14),
+      cat: createActorState('cat', 'cat', 'Gemini Cat', 14),
     };
 
     const miniCrabs = [
@@ -2229,7 +2228,7 @@
       btn.setAttribute('data-no-press-spring', '1');
       btn.setAttribute('role', 'button');
       btn.setAttribute('tabindex', '0');
-      btn.setAttribute('title', `${actor.label}（点按 5 连戳气鼓鼓、长按抚摸、拖拽抛掷/叠叠乐）`);
+      btn.setAttribute('aria-label', actor.label);
       const cv = doc.createElement('canvas');
       cv.className = 'ag-v2-mascot-canvas';
       cv.width = Math.round(CANVAS_W * dpr);

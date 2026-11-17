@@ -720,8 +720,14 @@ test('high-rate pointer dragging of mini-crabs and main actors disables CSS tran
 
     miniEl.dispatch('pointerup', { clientX: snap0.worldCx + 14.73, clientY: 84.28 });
 
-    // 主宠同步验证零重排与直通锁
+    // Mascot elements must never expose hover title tooltips
+    const clawdEl = findActorEl('clawd');
     const catEl = findActorEl('cat');
+    assert.equal(clawdEl.getAttribute('title'), null, 'Clawd must never show hover title tooltip');
+    assert.equal(catEl.getAttribute('title'), null, 'Cat must never show hover title tooltip');
+    assert.equal(miniEl.getAttribute('title'), null, 'Mini crabs must never show hover title tooltip');
+
+    // 主宠同步验证零重排与直通锁
     const catCx0 = stage.getLayoutSnapshot().actors.find((a) => a.id === 'cat').worldCx;
     catEl.dispatch('pointerdown', { clientX: catCx0, clientY: 100 });
     rectReadsDuringMove = 0;

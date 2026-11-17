@@ -278,12 +278,12 @@
         },
         lightPreset: {
           key: 'lightPreset',
-          title: ui.setLightPresetTitle || (isZh() ? '浅色白昼质感' : 'Daylight Surface Preset'),
+          title: ui.setLightPresetTitle || (isZh() ? '浅色表面质感' : 'Daylight Surface Preset'),
           desc:
             ui.setLightPresetDesc ||
             (isZh()
-              ? '调校浅色模式下的冷瓷表面层次、彩墨折射光晕与玻璃对比度。'
-              : 'Tune daylight ceramic elevation, dichroic aura, and glass contrast.'),
+              ? '选择浅色模式下的表面层级、对比度与背景风格。'
+              : 'Tune surface elevation, glass contrast, and tint in light mode.'),
           opts: [
             ['crystal', ui.optLightCrystal || (isZh() ? '白昼冷晶' : 'Daylight Crystal')],
             ['alabaster', ui.optLightAlabaster || (isZh() ? '暖白画册' : 'Warm Alabaster')],
@@ -295,13 +295,13 @@
           desc:
             ui.setMotionLevelDesc ||
             (isZh()
-              ? '控制系统弹簧交互、流式吐字与光学场景转场的丰富程度。'
-              : 'Control spring physics, streaming reveal, and optical hero transitions.'),
+              ? '控制交互动画、流式吐字与场景切换的动效丰富度。'
+              : 'Control spring micro-interactions, streaming text reveal, and scene transitions.'),
           opts: [
             ['off', ui.optMotionOff || (isZh() ? '关闭' : 'Off')],
             ['subtle', ui.optMotionSubtle || (isZh() ? '克制' : 'Subtle')],
             ['standard', ui.optMotionStandard || (isZh() ? '标准' : 'Standard')],
-            ['ultra', ui.optMotionUltra || (isZh() ? '旗舰光学' : 'Ultra')],
+            ['ultra', ui.optMotionUltra || (isZh() ? '完整' : 'Ultra')],
           ],
         },
         targetFps: {
@@ -310,7 +310,7 @@
           desc:
             ui.setTargetFpsDesc ||
             (isZh()
-              ? '控制 GPU 棱镜边、水波纹与极光流光的活跃渲染帧率上限（画面静止时自动归零休眠）。'
+              ? '设置边框光效、波纹与背景动画的活跃帧率上限（静止时自动休眠）。'
               : 'Set active GPU frame rate cap for prism rim, ripples, and aurora (0 FPS when idle).'),
           opts: [
             ['60', ui.optFps60 || '60 FPS'],
@@ -414,11 +414,11 @@
           desc:
             ui.setThoughtModeDesc ||
             (isZh()
-              ? '支持免配密钥极速机翻，或接入任意 OpenAI 兼容接口流式润色为中文工程手稿。'
+              ? '支持免配置机器翻译，或接入 OpenAI 兼容接口流式翻译润色。'
               : 'Translate English reasoning chains via zero-config Machine Translate or OpenAI-compatible AI polish.'),
           opts: [
             ['off', ui.optThoughtOff || (isZh() ? '关闭' : 'Off')],
-            ['machine', ui.optThoughtMachine || (isZh() ? '极速机翻' : 'Machine')],
+            ['machine', ui.optThoughtMachine || (isZh() ? '机器翻译' : 'Machine')],
             ['ai', ui.optThoughtAi || (isZh() ? 'AI 翻译润色' : 'AI Polish')],
           ],
         },
@@ -437,12 +437,12 @@
         },
         telemetryModule: {
           key: 'telemetryModule',
-          title: ui.setTelemetryTitle || (isZh() ? '底部遥测与 512K 光学试管' : 'Telemetry & 512K Optical Vial'),
+          title: ui.setTelemetryTitle || (isZh() ? '底部遥测与上下文指示' : 'Bottom Telemetry & Context HUD'),
           desc:
             ui.setTelemetryDesc ||
             (isZh()
-              ? '内置吸收 Dashboard 吞吐与配额采样；检测到外部同名插件时自动让位免冲突。'
-              : 'Built-in throughput & quota sampling; automatically yields when external Pulse plugin is present.'),
+              ? '显示吞吐速率、缓存与上下文水位；检测到外部同类插件时自动避让。'
+              : 'Show throughput, cache, and context telemetry; automatically yields when external plugin is present.'),
           opts: [
             ['auto', autoCoexistLbl],
             ['on', ui.onLabel || 'On'],
@@ -455,8 +455,8 @@
           desc:
             ui.setEffortSliderDesc ||
             (isZh()
-              ? '内置吸收模型菜单星空推理滑块；检测到外部滑块实例时自动让位免重复监听。'
-              : 'Built-in starry effort slider in model selector; automatically yields to external slider instances.'),
+              ? '在模型菜单中提供推理等级滑块；检测到外部滑块实例时自动避让。'
+              : 'Add a reasoning effort slider inside the model menu; automatically yields to external instances.'),
           opts: [
             ['auto', autoCoexistLbl],
             ['on', ui.onLabel || 'On'],
@@ -473,7 +473,7 @@
         },
         {
           id: 'interaction',
-          title: ui.grpInteraction || (isZh() ? '输入、侧栏与小螃蟹' : 'Composer, Sidebar & Mascot'),
+          title: ui.grpInteraction || (isZh() ? '输入、侧栏与宠物' : 'Composer, Sidebar & Mascot'),
           keys: ['composerRestyle', 'placeholderStyle', 'smoothCaret', 'mascot', 'sidebarRestyle', 'sidebarCompact'],
         },
         {
@@ -568,9 +568,12 @@
       foldHead.className = 'ag-cs-settings-fold-head';
       foldHead.setAttribute('data-ag-cs-fold-toggle', '1');
       foldHead.setAttribute('aria-expanded', String(initOpen));
-      foldHead.title = initOpen
-        ? ui.foldCollapseHint || (isZh() ? '点击收起设置面板' : 'Click to collapse settings panel')
-        : ui.foldExpandHint || (isZh() ? '点击展开光学与模块设置' : 'Click to expand optical & module settings');
+      foldHead.setAttribute(
+        'aria-label',
+        initOpen
+          ? ui.foldCollapseHint || (isZh() ? '收起设置面板' : 'Collapse settings panel')
+          : ui.foldExpandHint || (isZh() ? '展开设置面板' : 'Expand settings panel')
+      );
 
       const foldLeft = mkEl('span', 'ag-cs-settings-fold-left');
       const brandMark = mkEl('span', 'ag-cs-settings-brand-mark inline-flex items-center shrink-0');
@@ -796,9 +799,12 @@
           if (nextOpen) sec.classList?.add?.('is-open');
           else sec.classList?.remove?.('is-open');
           foldHead.setAttribute('aria-expanded', String(nextOpen));
-          foldHead.title = nextOpen
-            ? ui.foldCollapseHint || (isZh() ? '点击收起设置面板' : 'Click to collapse settings panel')
-            : ui.foldExpandHint || (isZh() ? '点击展开光学与模块设置' : 'Click to expand optical & module settings');
+          foldHead.setAttribute(
+            'aria-label',
+            nextOpen
+              ? ui.foldCollapseHint || (isZh() ? '收起设置面板' : 'Collapse settings panel')
+              : ui.foldExpandHint || (isZh() ? '展开设置面板' : 'Expand settings panel')
+          );
           foldBody.setAttribute('data-open', nextOpen ? '1' : '0');
           foldBody.setAttribute('aria-hidden', String(!nextOpen));
           if (nextOpen) foldBody.classList?.add?.('is-open');

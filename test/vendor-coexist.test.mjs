@@ -361,7 +361,7 @@ test('i18n-locales.js covers all 5 languages (zh-CN, zh-TW, yue, en, ja) with Ob
   assert.equal(zh.sectionTitle, 'Obsidian Prism · 黑曜棱镜');
   assert.equal(zh.optWarm, 'Alabaster 暖岩');
   assert.equal(zh.optClaude, 'Alabaster 暖岩');
-  assert.equal(zh.setLightPresetTitle, '浅色白昼质感');
+  assert.equal(zh.setLightPresetTitle, '浅色表面质感');
   assert.equal(zh.optLightCrystal, '白昼冷晶');
   assert.equal(zh.optLightAlabaster, '暖白画册');
   assert.equal(zh.groupModules, '吸收集成模块（智能共存让位）');
