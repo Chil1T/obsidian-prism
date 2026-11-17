@@ -162,3 +162,58 @@ test('homeChartTicks never produce overlapping labels', () => {
   }
 });
 
+test('analyzeTrajectoryForUsage metadata-only span interpolation & mergeUsageRecordDelta O(delta) accumulation', () => {
+  const cSec = Math.floor(new Date(2026, 10, 10, 10, 0, 0).getTime() / 1000);
+  const mSec = Math.floor(new Date(2026, 10, 12, 16, 0, 0).getTime() / 1000);
+  const sum1 = { stepCount: 100, createdTime: { seconds: cSec }, lastModifiedTime: { seconds: mSec } };
+  const base = usageCore.analyzeTrajectoryForUsage(
+    {
+      numTotalSteps: 100,
+      numTotalGeneratorMetadata: 2,
+      trajectory: {
+        cascadeId: 'conv-inc',
+        steps: [],
+        generatorMetadata: [
+          { stepIndices: [5], metadata: { value: { modelDisplayName: 'Gemini 4 Carbon', usage: { inputTokens: 1000, outputTokens: 200 } } } },
+          { stepIndices: [95], metadata: { value: { modelDisplayName: 'Gemini 4 Carbon', usage: { inputTokens: 2000, outputTokens: 300 } } } },
+        ],
+      },
+    },
+    sum1,
+    'conv-inc'
+  );
+  assert.equal(base.gmCount, 2);
+  assert.equal(base.calls, 2);
+
+  const mSec2 = Math.floor(new Date(2026, 10, 12, 17, 0, 0).getTime() / 1000);
+  const delta = usageCore.analyzeTrajectoryForUsage(
+    {
+      numTotalSteps: 110,
+      numTotalGeneratorMetadata: 3,
+      trajectory: {
+        cascadeId: 'conv-inc',
+        steps: [],
+        generatorMetadata: [
+          { stepIndices: [108], metadata: { value: { modelDisplayName: 'Gemini 4 Carbon', usage: { inputTokens: 500, outputTokens: 100 } } } },
+        ],
+      },
+    },
+    { stepCount: 110, createdTime: { seconds: mSec2 }, lastModifiedTime: { seconds: mSec2 } },
+    'conv-inc'
+  );
+  const merged = usageCore.mergeUsageRecordDelta(base, delta, {
+    cascadeId: 'conv-inc',
+    stepCount: 110,
+    lastModifiedSec: mSec2,
+    gmCount: 3,
+    subagent: false,
+  });
+  assert.equal(merged.gmCount, 3);
+  assert.equal(merged.stepCount, 110);
+  assert.equal(merged.calls, 3);
+  const rollup = usageCore.aggregateUsageRollup([merged], 'all', 0, true, new Date(2026, 10, 14, 12, 0, 0));
+  assert.equal(rollup.tokens, 4100);
+  assert.equal(rollup.calls, 3);
+});
+
+

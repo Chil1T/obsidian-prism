@@ -176,6 +176,8 @@
     const { cellWidth, cellHeight } = RIPPLE;
     const widthSquared = cellWidth * cellWidth;
     const heightSquared = cellHeight * cellHeight;
+    const invW2 = 1 / widthSquared;
+    const invH2 = 1 / heightSquared;
     const loadDecay = Math.exp(-WAVE_STEP / RIPPLE.injectLoadDecay);
     const wakeLoadDecay = Math.exp(-WAVE_STEP / 0.2);
     const knee = RIPPLE.heightKnee;
@@ -365,7 +367,7 @@
             const right = c < columns - 1 ? height[cell + 1] : here;
             const above = hasAbove ? height[cell - columns] : here;
             const below = hasBelow ? height[cell + columns] : here;
-            const laplacian = (left + right - 2 * here) / widthSquared + (above + below - 2 * here) / heightSquared;
+            const laplacian = (left + right - 2 * here) * invW2 + (above + below - 2 * here) * invH2;
             velocity[cell] += (speedSquared[cell] * laplacian - damping[cell] * velocity[cell]) * WAVE_STEP;
           }
         }
@@ -594,6 +596,7 @@ vec2 local = position - cell * cellPixels;
 float glyph = floor(data.r * 255.0 + 0.5);
 vec2 inAtlas = vec2(glyph * atlasCell.x + local.x * atlasCell.x / cellPixels.x, local.y * atlasCell.y / cellPixels.y);
 float coverage = texture(atlas, inAtlas / vec2(glyphCount * atlasCell.x, atlasCell.y)).a;
+if (coverage <= 0.001) { color = vec4(0.0); return; }
 vec3 rgb = mix(ink, wave, data.b);
 float alpha = data.g;
 float packed = floor(data.a * 255.0 + 0.5);
@@ -605,14 +608,16 @@ vec3 auraRgb = COBALT;
 if (aura.w > 0.001) {
 vec2 rel = position - aura.xy;
 float ar = max(1.0, aura.z);
-float dist = length(rel);
-if (dist < ar) {
-float rNorm = dist / ar;
+if (abs(rel.x) < ar && abs(rel.y) < ar) {
+float d2 = dot(rel, rel);
+if (d2 < ar * ar) {
+float rNorm = sqrt(d2) / ar;
 float u = 1.0 - rNorm;
 float s = u * u * (3.0 - 2.0 * u);
 wAura = s * (0.35 + 0.65 * s);
 float ang = atan(rel.y, rel.x + 1e-5) * 0.15915494 + 0.5;
 auraRgb = spectrum(ang - rNorm * 0.45 + auraPhase, lightMode);
+}
 }
 }
 float wNeb = 0.0;
@@ -623,15 +628,17 @@ float nh = i == 0 ? nebOpt.x : (i == 1 ? nebOpt.y : nebOpt.z);
 if (nb.w > 0.001) {
 vec2 nr = position - nb.xy;
 float rad = max(1.0, nb.z);
-float nd = length(nr);
-if (nd < rad) {
-float rn = nd / rad;
+if (abs(nr.x) < rad && abs(nr.y) < rad) {
+float nd2 = dot(nr, nr);
+if (nd2 < rad * rad) {
+float rn = sqrt(nd2) / rad;
 float u = 1.0 - rn;
 float s = u * u * (3.0 - 2.0 * u);
 float wi = s * (0.30 + 0.70 * s) * nb.w;
 float nang = atan(nr.y, nr.x + 1e-5) * 0.15915494;
 wNeb += wi;
 nebAcc += spectrum(nh + nang * 0.22 - rn * 0.26, lightMode) * wi;
+}
 }
 }
 }
@@ -735,7 +742,7 @@ color = vec4(rgb * a, a);
       mode: 'webgl2',
       data,
       build,
-      draw(palette, dpr) {
+      draw(palette, dpr, uploadCells = true) {
         buildAtlas(palette.fontFamily, dpr);
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.uniform2f(uniforms.size, canvas.width, canvas.height);
@@ -760,7 +767,9 @@ color = vec4(rgb * a, a);
         gl.uniform1f(uniforms.nebulaLift, RIPPLE.nebulaLift);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, cellTexture);
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, columns, rows, gl.RGBA, gl.UNSIGNED_BYTE, data);
+        if (uploadCells !== false) {
+          gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, columns, rows, gl.RGBA, gl.UNSIGNED_BYTE, data);
+        }
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -1035,6 +1044,9 @@ color = vec4(rgb * a, a);
     const mask = new Float32Array(cells);
     const breathSin = new Float32Array(cells);
     const breathCos = new Float32Array(cells);
+    const wasLit = new Uint8Array(cells);
+    let lastIdleRefreshMs = -Infinity;
+    let lastIdleDark = null;
     const cloudColumns = new Map();
     const nebulaState = [
       { x: 0, y: 0, radius: 1, strength: 0, hue: 0 },
@@ -1243,6 +1255,20 @@ color = vec4(rgb * a, a);
           eff.prismStrength = Math.min(1.35, Math.max(eff.prismStrength, 0.96) + 0.34 * burst);
         }
         const tick = tickAt(now, still);
+        const waveActive = waves.active();
+        const needIdleRefresh =
+          stale ||
+          tick !== lastTick ||
+          eff.dark !== lastIdleDark ||
+          renderer.mode !== 'webgl2' ||
+          Math.abs(now - lastIdleRefreshMs) >= 40;
+
+        if (renderer.mode === 'webgl2' && !needIdleRefresh && !waveActive && !glowing && burst <= 0) {
+          renderer.draw(eff, canvas.width / (columns * cellWidth), false);
+          lastDraw = now;
+          return;
+        }
+
         if (tick !== lastTick) {
           for (let row = 0; row < rows; row++) {
             for (let column = 0; column < columns; column++) {
@@ -1251,10 +1277,14 @@ color = vec4(rgb * a, a);
           }
         }
         const drift = Math.floor((seconds * RIPPLE.cloudDrift) / cellWidth);
-        for (const abs of cloudColumns.keys()) if (abs < drift) cloudColumns.delete(abs);
+        if (needIdleRefresh) {
+          for (const abs of cloudColumns.keys()) if (abs < drift) cloudColumns.delete(abs);
+          lastIdleRefreshMs = now;
+          lastIdleDark = eff.dark;
+        }
         const decay = still
           ? 0
-          : (rawDt > 0 ? Math.exp(-rawDt / RIPPLE.glowDecay) : (waves.active() ? 1 : 0.88));
+          : (rawDt > 0 ? Math.exp(-rawDt / RIPPLE.glowDecay) : (waveActive ? 1 : 0.88));
         const idleAlpha = eff.dark ? RIPPLE.idleAlphaDark : RIPPLE.idleAlphaLight;
         const themeScale = eff.dark ? 1 : RIPPLE.lightAlphaScale;
         const omega = (TAU / RIPPLE.breathPeriod) * seconds;
@@ -1285,8 +1315,10 @@ color = vec4(rgb * a, a);
             const cell = rowBase + column;
             const here = height[cell];
             const prevG = glow[cell];
-            const breath = 1 - breathHalf * (1 + bs * breathCos[cell] + bc * breathSin[cell]);
             if (here === 0 && prevG === 0) {
+              if (!needIdleRefresh && wasLit[cell] === 0) continue;
+              wasLit[cell] = 0;
+              const breath = 1 - breathHalf * (1 + bs * breathCos[cell] + bc * breathSin[cell]);
               const alpha = idleThemeScale * colClouds[column][row] * breath * mask[cell];
               const at = cell << 2;
               data[at] = glyphs[cell];
@@ -1295,11 +1327,13 @@ color = vec4(rgb * a, a);
               data[at + 3] = 0;
               continue;
             }
+            const breath = 1 - breathHalf * (1 + bs * breathCos[cell] + bc * breathSin[cell]);
             const strength = Math.tanh(RIPPLE.waveGain * (here < 0 ? -here : here));
             const decayed = prevG * decay;
             const shown = decayed > strength ? decayed : strength;
             const lit = shown < 0.01 ? 0 : shown;
             glow[cell] = lit;
+            wasLit[cell] = lit > 0 ? 1 : 0;
             let alpha = idleAlpha * colClouds[column][row] * breath;
             let packed = 0;
             let waveMix = strength;

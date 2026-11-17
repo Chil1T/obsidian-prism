@@ -21,6 +21,7 @@ const DEFAULT_ROOT_DIR = path.resolve(__dirname, '..', '..');
 export const METRICS_BINDING = '__agPrismMetricsCall';
 export const REPO_BINDING = '__agPrismRepoCall';
 export const THOUGHT_BINDING = '__agPrismThoughtCall';
+export const USAGE_BINDING = '__agPrismUsageCall';
 const SKIP_TARGET_RE = /Untitled|launchpad/i;
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -474,6 +475,97 @@ export class PrismDaemon {
     return this._lazyThoughtService;
   }
 
+  async ensureLsClient() {
+    if (this._lazyLsClient) return this._lazyLsClient;
+    if (this._lazyStore && this._lazyStore.client) {
+      this._lazyLsClient = this._lazyStore.client;
+      return this._lazyLsClient;
+    }
+    const clientModUrl = new URL('../../vendor/pulse-dashboard/sidecars/panel/client.mjs', import.meta.url);
+    const { AntigravityClient } = await import(clientModUrl.href);
+    this._lazyLsClient = new AntigravityClient();
+    return this._lazyLsClient;
+  }
+
+  async fetchUsageRollupBatch(rawItems) {
+    const list = Array.isArray(rawItems) ? rawItems.slice(0, 12) : [];
+    if (list.length === 0) return { ok: true, records: [] };
+    const usageCore = require(path.join(this.rootDir, 'usage-core.js'));
+    const client = await this.ensureLsClient();
+    const records = [];
+    for (const item of list) {
+      const id = String(item?.id || '');
+      if (!GUID_RE.test(id)) continue;
+      const stepCount = Math.max(0, Number(item.stepCount || 0));
+      const lastModifiedSec = Math.max(0, Number(item.lastModifiedSec || 0));
+      const createdSec = Math.max(0, Number(item.createdSec || lastModifiedSec || 0));
+      const subagent = Boolean(item.subagent);
+      const gmOffset = Math.max(0, Math.floor(Number(item.gmOffset || 0)));
+      const summaryStub = {
+        stepCount,
+        lastModifiedTime: lastModifiedSec > 0 ? { seconds: lastModifiedSec } : undefined,
+        createdTime: createdSec > 0 ? { seconds: createdSec } : undefined,
+        trajectoryMetadata: subagent ? { nestingDepth: 1 } : {},
+      };
+      try {
+        if (gmOffset > 0) {
+          const deltaItems = [];
+          let curOffset = gmOffset;
+          let totalGm = null;
+          while (true) {
+            const page = await client.call('GetCascadeTrajectoryGeneratorMetadata', {
+              cascadeId: id,
+              generatorMetadataOffset: curOffset,
+            });
+            const chunk = page?.generatorMetadata || page?.generatorMetadatas || [];
+            if (page?.numTotalGeneratorMetadata !== undefined && page?.numTotalGeneratorMetadata !== null) {
+              totalGm = Number(page.numTotalGeneratorMetadata);
+            }
+            if (!chunk.length) break;
+            deltaItems.push(...chunk);
+            curOffset += chunk.length;
+            if (totalGm !== null && curOffset >= totalGm) break;
+          }
+          if (totalGm !== null && totalGm < gmOffset) {
+            // Rewound/reverted conversation: rebuild cleanly from offset 0
+            const fullMeta = await client._fetchMetadataOnly(id);
+            const fullRec = usageCore.analyzeTrajectoryForUsage(fullMeta, summaryStub, id);
+            records.push({ id, mode: 'full', record: fullRec });
+          } else {
+            const nextGmCount = totalGm !== null ? Math.max(gmOffset + deltaItems.length, totalGm) : gmOffset + deltaItems.length;
+            const deltaSummary = {
+              stepCount,
+              lastModifiedTime: lastModifiedSec > 0 ? { seconds: lastModifiedSec } : { seconds: Math.floor(Date.now() / 1000) },
+              createdTime: lastModifiedSec > 0 ? { seconds: lastModifiedSec } : undefined,
+              trajectoryMetadata: subagent ? { nestingDepth: 1 } : {},
+            };
+            const deltaRec = usageCore.analyzeTrajectoryForUsage(
+              { numTotalSteps: stepCount, numTotalGeneratorMetadata: nextGmCount, trajectory: { cascadeId: id, steps: [], generatorMetadata: deltaItems } },
+              deltaSummary,
+              id
+            );
+            records.push({
+              id,
+              mode: 'delta',
+              gmCount: nextGmCount,
+              stepCount,
+              lastModifiedSec,
+              subagent,
+              delta: deltaRec,
+            });
+          }
+        } else {
+          const fullMeta = await client._fetchMetadataOnly(id);
+          const fullRec = usageCore.analyzeTrajectoryForUsage(fullMeta, summaryStub, id);
+          records.push({ id, mode: 'full', record: fullRec });
+        }
+      } catch (err) {
+        records.push({ id, mode: 'error', error: sanitizeSecretText(err?.message || 'fetch failed') });
+      }
+    }
+    return { ok: true, records };
+  }
+
   updateConfigSetting(key, value) {
     if (!this.cdp.validateConfigEntry(key, value)) return false;
     const cfgPath = path.join(this.rootDir, 'config.json');
@@ -633,6 +725,31 @@ export class PrismDaemon {
         if (executionContextId) evalParams.contextId = executionContextId;
         await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
       }
+      return;
+    }
+
+    if (name === USAGE_BINDING) {
+      if (typeof payload !== 'string' || payload.length > 65536) return;
+      let parsed;
+      try {
+        parsed = JSON.parse(payload);
+      } catch {
+        return;
+      }
+      const reqId = parsed && Number.isSafeInteger(parsed.id) ? parsed.id : null;
+      if (reqId === null) return;
+      let result;
+      try {
+        result = await this.fetchUsageRollupBatch(parsed.items);
+      } catch (err) {
+        result = { ok: false, error: sanitizeSecretText(err?.message || err), records: [] };
+      }
+      if (!entry.session.closed) {
+        const resolveExpr = `window.__agPrismUsageResolve && window.__agPrismUsageResolve(${reqId}, ${JSON.stringify(result)})`;
+        const evalParams = { expression: resolveExpr, returnByValue: true };
+        if (executionContextId) evalParams.contextId = executionContextId;
+        await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+      }
     }
   }
 
@@ -667,6 +784,7 @@ export class PrismDaemon {
       await session.send('Runtime.addBinding', { name: METRICS_BINDING });
       await session.send('Runtime.addBinding', { name: REPO_BINDING });
       await session.send('Runtime.addBinding', { name: THOUGHT_BINDING });
+      await session.send('Runtime.addBinding', { name: USAGE_BINDING });
 
       const healOnNav = () => {
         setTimeout(() => {
@@ -709,6 +827,7 @@ export class PrismDaemon {
           hasPrism: Boolean(api),
           hasRepoBridge: Boolean(window.__agPrismRepoBridge),
           hasThoughtBridge: Boolean(window.__agPrismThoughtBridge),
+          hasUsageBridge: Boolean(window.__agPrismUsageBridge),
           codeHash: (api && api.codeHash) || '',
           hasLegacyCss: Boolean(document.getElementById('ag-claude-style-css')),
           needsDashboardSync: Boolean(api && telMode !== 'off' && hasModelBtn && !hasPulseBar),
@@ -722,6 +841,7 @@ export class PrismDaemon {
         !probe.hasPrism ||
         !probe.hasRepoBridge ||
         !probe.hasThoughtBridge ||
+        !probe.hasUsageBridge ||
         probe.prismAttr !== this.cdp.PLUGIN_VERSION ||
         probe.hasLegacyCss ||
         (this.codeHash && probe.codeHash && probe.codeHash !== this.codeHash)
@@ -730,6 +850,7 @@ export class PrismDaemon {
         await entry.session.send('Runtime.addBinding', { name: METRICS_BINDING }, 2600).catch(() => {});
         await entry.session.send('Runtime.addBinding', { name: REPO_BINDING }, 2600).catch(() => {});
         await entry.session.send('Runtime.addBinding', { name: THOUGHT_BINDING }, 2600).catch(() => {});
+        await entry.session.send('Runtime.addBinding', { name: USAGE_BINDING }, 2600).catch(() => {});
         await entry.session.evaluate(this.injectExpr, false, 4500);
         this.log(`[↻] Hot-healed window to Obsidian Prism v${this.cdp.PLUGIN_VERSION}: ${entry.title}`);
       } else if (probe.needsDashboardSync) {

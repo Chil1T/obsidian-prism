@@ -1742,6 +1742,59 @@ function buildInjectExpression(customConfig) {
       } catch {}
     };
 
+    const ensureUsageBridge = () => {
+      try {
+        if (window.__agPrismUsageBridge && window.__agPrismUsageBridge.__prismBridgeReady) return;
+        const pendingUsage = new Map();
+        let usageSeq = 0;
+        const fetchBatch = (items, timeoutMs = 18000) => {
+          if (typeof window.__agPrismUsageCall !== 'function') {
+            return Promise.resolve({ ok: false, offline: true, records: [] });
+          }
+          return new Promise((resolve) => {
+            if (pendingUsage.size >= 8) {
+              resolve({ ok: false, busy: true, records: [] });
+              return;
+            }
+            const id = ++usageSeq;
+            const timer = setTimeout(() => {
+              pendingUsage.delete(id);
+              resolve({ ok: false, timeout: true, records: [] });
+            }, timeoutMs);
+            pendingUsage.set(id, { resolve, timer });
+            try {
+              window.__agPrismUsageCall(JSON.stringify({ id, items: Array.isArray(items) ? items : [] }));
+            } catch (err) {
+              clearTimeout(timer);
+              pendingUsage.delete(id);
+              resolve({ ok: false, error: String(err && err.message ? err.message : err), records: [] });
+            }
+          });
+        };
+        const bridge = {
+          __prismBridgeReady: true,
+          isOnline: () => typeof window.__agPrismUsageCall === 'function',
+          fetchBatch,
+          resolve: (id, res) => {
+            const item = pendingUsage.get(id);
+            if (!item) return;
+            clearTimeout(item.timer);
+            pendingUsage.delete(id);
+            item.resolve(res);
+          },
+          dispose: () => {
+            for (const item of pendingUsage.values()) {
+              clearTimeout(item.timer);
+              item.resolve({ ok: false, disposed: true, records: [] });
+            }
+            pendingUsage.clear();
+          },
+        };
+        window.__agPrismUsageBridge = bridge;
+        window.__agPrismUsageResolve = bridge.resolve;
+      } catch {}
+    };
+
     let status = 'ok';
     let mounted = false;
     const mount = () => {
@@ -1751,6 +1804,7 @@ function buildInjectExpression(customConfig) {
         cleanupLegacyResidue();
         ensureRepoBridge();
         ensureThoughtBridge();
+        ensureUsageBridge();
         if (document.head) applyStyle();
         else document.addEventListener('DOMContentLoaded', applyStyle, { once: true });
         ${bundle}
@@ -1849,6 +1903,11 @@ const REMOVE_EXPRESSION = `(() => {
       window.__agPrismThoughtBridge.dispose();
     }
   } catch (e) {}
+  try {
+    if (window.__agPrismUsageBridge && typeof window.__agPrismUsageBridge.dispose === 'function') {
+      window.__agPrismUsageBridge.dispose();
+    }
+  } catch (e) {}
   delete window.__agPrism;
   delete window.__agClaudeStyle;
   delete window.__agPrismTelemetry;
@@ -1860,6 +1919,8 @@ const REMOVE_EXPRESSION = `(() => {
   delete window.__agPrismThoughtBridge;
   delete window.__agPrismThoughtOnChunk;
   delete window.__agPrismThoughtResolve;
+  delete window.__agPrismUsageBridge;
+  delete window.__agPrismUsageResolve;
   delete window.__agPrismBrandLogoSvg;
   delete window.__agCsI18n;
   delete globalThis.__agPrismBrandLogoSvg;

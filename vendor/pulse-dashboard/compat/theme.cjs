@@ -37,14 +37,20 @@ module.exports = function createAgPulseTheme() {
     let stopped=false,hostTheme={};
     function rgb(color) {
       if (!color || !context) return null;
-      if (rgbCache.has(color)) return rgbCache.get(color);
-      if (!CSS.supports('color',color)) { rgbCache.set(color, null); return null; }
-      context.clearRect(0,0,1,1); context.fillStyle='transparent';context.fillStyle=color; context.fillRect(0,0,1,1);
+      const key = String(color).trim();
+      if (!key) return null;
+      if (rgbCache.has(key)) return rgbCache.get(key);
+      if (!CSS.supports('color', key)) {
+        if (rgbCache.size > 256) rgbCache.clear();
+        rgbCache.set(key, null);
+        return null;
+      }
+      context.clearRect(0,0,1,1); context.fillStyle='transparent';context.fillStyle=key; context.fillRect(0,0,1,1);
       const [r,g,b,a]=context.getImageData(0,0,1,1).data;
-      const out = a<250 ? null : [r,g,b];
+      const parsed = a<250 ? null : [r,g,b]; // Transparent surfaces do not define a theme.
       if (rgbCache.size > 256) rgbCache.clear();
-      rgbCache.set(color, out);
-      return out;
+      rgbCache.set(key, parsed);
+      return parsed;
     }
     function fromColor(color) {
       const values=rgb(color);return values ? .2126*values[0]+.7152*values[1]+.0722*values[2]>=145?'light':'dark' : null;
@@ -152,7 +158,17 @@ module.exports = function createAgPulseTheme() {
       }
       return theme;
     }
-    const observer=new MutationObserver(update);
+    let rafId = 0;
+    function scheduleUpdate() {
+      if (stopped) return;
+      if (typeof window.requestAnimationFrame === 'function') {
+        if (rafId) return;
+        rafId = window.requestAnimationFrame(() => { rafId = 0; update(); });
+      } else {
+        update();
+      }
+    }
+    const observer=new MutationObserver(scheduleUpdate);
     const attributes=['class','style','data-theme','data-color-mode','data-theme-mode','data-vscode-theme-kind'];
     const elements=new Set([document.documentElement,document.body]);
     if (embedded) for(let element=target.parentElement;element;element=element.parentElement) elements.add(element);
@@ -160,9 +176,9 @@ module.exports = function createAgPulseTheme() {
     if(document.head) observer.observe(document.head,{childList:true,subtree:true,attributes:true,attributeFilter:['href','media','disabled']});
     media.addEventListener('change',update);
     // Catch stylesheet replacement and reparented composers without observing chat text.
-    const timer=setInterval(update,1500);
+    const timer=setInterval(()=>{ if (!document.hidden) update(); },2500);
     update();
-    return { update, setHostTheme(value) { hostTheme=normalizeHostTheme(value);return update(); }, dispose() { stopped=true;observer.disconnect();media.removeEventListener('change',update);clearInterval(timer); } };
+    return { update, setHostTheme(value) { hostTheme=normalizeHostTheme(value);return update(); }, dispose() { stopped=true;if(rafId&&typeof window.cancelAnimationFrame==='function'){window.cancelAnimationFrame(rafId);rafId=0;}observer.disconnect();media.removeEventListener('change',update);clearInterval(timer); } };
   }
   return { css, shadowCss, attach, normalizeHostTheme };
 };

@@ -734,6 +734,61 @@
 
   loadUsageCache();
 
+  const MAX_FRONTEND_TRAJECTORY_STEPS = 240;
+
+  function buildFallbackUsageRecord(id, sum) {
+    const sec = Number(sum?.lastModifiedTime?.seconds || sum?.createdTime?.seconds || 0);
+    const days = {};
+    if (sec > 0 && typeof usageCore.homeDayKey === 'function') {
+      const d = new Date(sec * 1000);
+      const dk = usageCore.homeDayKey(d);
+      const hours = new Array(24).fill(0);
+      hours[d.getHours()] = 1;
+      days[dk] = { calls: 1, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, hours, models: {} };
+    }
+    return {
+      cascadeId: String(id || ''),
+      stepCount: Number(sum?.stepCount || 0),
+      lastModifiedSec: Number(sum?.lastModifiedTime?.seconds || 0),
+      gmCount: 0,
+      subagent: typeof usageCore.isSubagentSummary === 'function' ? usageCore.isSubagentSummary(sum) : false,
+      calls: 0,
+      days,
+    };
+  }
+
+  function advanceCachedCursor(prev, id, sum) {
+    const stepCount = Number(sum?.stepCount || 0);
+    const lastModifiedSec = Number(sum?.lastModifiedTime?.seconds || 0);
+    if (prev && prev.days) {
+      return { ...prev, stepCount, lastModifiedSec };
+    }
+    return buildFallbackUsageRecord(id, sum);
+  }
+
+  function scheduleUsageRollupRefresh(delayMs = 1800) {
+    if (destroyed || usageLoading || cfg.homeLayout !== 'studio') return;
+    if (!usageHasData && !canMountRealCanvas(document.body)) {
+      void refreshUsageRollup(false);
+      return;
+    }
+    if (deferredUsageTimer) return;
+    const wait = usageHasData ? Math.max(400, delayMs) : Math.min(600, Math.max(120, delayMs));
+    deferredUsageTimer = setTimeout(() => {
+      deferredUsageTimer = 0;
+      if (destroyed || !document.querySelector('.agy-home') || cfg.homeLayout !== 'studio') return;
+      if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(() => {
+          if (!destroyed && document.querySelector('.agy-home') && cfg.homeLayout === 'studio') {
+            void refreshUsageRollup(false);
+          }
+        }, { timeout: 2200 });
+      } else {
+        void refreshUsageRollup(false);
+      }
+    }, wait);
+  }
+
   async function refreshUsageRollup(force = false) {
     if (destroyed || usageLoading) return;
     const h = ensureHooks();
@@ -759,6 +814,9 @@
         staleIds.push([id, sum]);
       }
     }
+    // Prioritize most recently active conversations first
+    staleIds.sort((a, b) => Number(b[1]?.lastModifiedTime?.seconds || 0) - Number(a[1]?.lastModifiedTime?.seconds || 0));
+
     let deletedAny = false;
     for (const oldId of Array.from(usageRecords.keys())) {
       if (!presentIds.has(oldId)) {
@@ -778,52 +836,91 @@
     usageLoading = true;
     if (!usageHasData) renderHomePanel();
     try {
-      const CONCURRENCY = usageHasData ? 1 : 2;
-      const FETCH_TIMEOUT_MS = 4000;
-      const buildFallbackUsageRecord = (id, sum) => {
-        const sec = Number(sum?.lastModifiedTime?.seconds || sum?.createdTime?.seconds || 0);
-        const days = {};
-        if (sec > 0 && typeof usageCore.homeDayKey === 'function') {
-          const d = new Date(sec * 1000);
-          const dk = usageCore.homeDayKey(d);
-          const hours = new Array(24).fill(0);
-          hours[d.getHours()] = 1;
-          days[dk] = { calls: 1, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, hours, models: {} };
-        }
-        return {
-          cascadeId: String(id || ''),
-          stepCount: Number(sum?.stepCount || 0),
-          lastModifiedSec: Number(sum?.lastModifiedTime?.seconds || 0),
-          subagent: typeof usageCore.isSubagentSummary === 'function' ? usageCore.isSubagentSummary(sum) : false,
-          calls: 0,
-          days,
-        };
-      };
-      for (let i = 0; i < staleIds.length && !destroyed; i += CONCURRENCY) {
-        const batch = staleIds.slice(i, i + CONCURRENCY);
-        await Promise.all(
-          batch.map(async ([id, sum]) => {
-            try {
-              let timerId = null;
-              const timeoutProm = new Promise((_, reject) => {
-                timerId = setTimeout(() => reject(new Error('Usage fetch timeout')), FETCH_TIMEOUT_MS);
-              });
-              let res;
-              try {
-                res = await Promise.race([h.svc.getCascadeTrajectory({ cascadeId: id }), timeoutProm]);
-              } finally {
-                if (timerId !== null) clearTimeout(timerId);
-              }
-              const rec = usageCore.analyzeTrajectoryForUsage(res, sum, id);
-              usageRecords.set(id, rec);
-            } catch {
+      const usageBridge = typeof window !== 'undefined' ? window.__agPrismUsageBridge : null;
+      const useDaemonBridge = Boolean(usageBridge && typeof usageBridge.fetchBatch === 'function' && usageBridge.isOnline?.());
+
+      if (useDaemonBridge) {
+        const BATCH_SIZE = 6;
+        for (let i = 0; i < staleIds.length && !destroyed; i += BATCH_SIZE) {
+          const slice = staleIds.slice(i, i + BATCH_SIZE);
+          const reqItems = slice.map(([id, sum]) => {
+            const cached = usageRecords.get(id);
+            return {
+              id,
+              stepCount: Number(sum?.stepCount || 0),
+              lastModifiedSec: Number(sum?.lastModifiedTime?.seconds || 0),
+              createdSec: Number(sum?.createdTime?.seconds || 0),
+              subagent: typeof usageCore.isSubagentSummary === 'function' ? usageCore.isSubagentSummary(sum) : false,
+              gmOffset: cached && Number.isInteger(cached.gmCount) && cached.gmCount > 0 ? cached.gmCount : 0,
+            };
+          });
+          const res = await usageBridge.fetchBatch(reqItems, 18000);
+          if (res && res.ok && Array.isArray(res.records)) {
+            const byId = new Map(res.records.map((r) => [r.id, r]));
+            for (const [id, sum] of slice) {
               const prev = usageRecords.get(id);
-              usageRecords.set(id, prev || buildFallbackUsageRecord(id, sum));
+              const hit = byId.get(id);
+              if (hit && hit.mode === 'full' && hit.record) {
+                usageRecords.set(id, hit.record);
+              } else if (hit && hit.mode === 'delta' && hit.delta && typeof usageCore.mergeUsageRecordDelta === 'function') {
+                usageRecords.set(
+                  id,
+                  usageCore.mergeUsageRecordDelta(prev, hit.delta, {
+                    cascadeId: id,
+                    stepCount: Number(sum?.stepCount || 0),
+                    lastModifiedSec: Number(sum?.lastModifiedTime?.seconds || 0),
+                    gmCount: Number(hit.gmCount || 0),
+                    subagent: typeof usageCore.isSubagentSummary === 'function' ? usageCore.isSubagentSummary(sum) : false,
+                  })
+                );
+              } else {
+                usageRecords.set(id, advanceCachedCursor(prev, id, sum));
+              }
             }
-          })
-        );
-        if (i + CONCURRENCY < staleIds.length && !destroyed) {
-          await new Promise((r) => setTimeout(r, usageHasData ? 120 : 16));
+          } else {
+            for (const [id, sum] of slice) {
+              usageRecords.set(id, advanceCachedCursor(usageRecords.get(id), id, sum));
+            }
+          }
+          if (i + BATCH_SIZE < staleIds.length && !destroyed) {
+            await new Promise((r) => setTimeout(r, 40));
+          }
+        }
+      } else {
+        const CONCURRENCY = usageHasData ? 1 : 2;
+        const FETCH_TIMEOUT_MS = 2800;
+        for (let i = 0; i < staleIds.length && !destroyed; i += CONCURRENCY) {
+          const batch = staleIds.slice(i, i + CONCURRENCY);
+          await Promise.all(
+            batch.map(async ([id, sum]) => {
+              const prev = usageRecords.get(id);
+              const stepCount = Number(sum?.stepCount || 0);
+              if (stepCount > MAX_FRONTEND_TRAJECTORY_STEPS) {
+                // Never block renderer main thread decoding multi-MB Protobuf payloads when daemon bridge is offline!
+                usageRecords.set(id, advanceCachedCursor(prev, id, sum));
+                return;
+              }
+              try {
+                let timerId = null;
+                const timeoutProm = new Promise((_, reject) => {
+                  timerId = setTimeout(() => reject(new Error('Usage fetch timeout')), FETCH_TIMEOUT_MS);
+                });
+                let res;
+                try {
+                  res = await Promise.race([h.svc.getCascadeTrajectory({ cascadeId: id }), timeoutProm]);
+                } finally {
+                  if (timerId !== null) clearTimeout(timerId);
+                }
+                const rec = usageCore.analyzeTrajectoryForUsage(res, sum, id);
+                usageRecords.set(id, rec);
+              } catch {
+                usageRecords.set(id, advanceCachedCursor(prev, id, sum));
+              }
+            })
+          );
+          if (i + CONCURRENCY < staleIds.length && !destroyed) {
+            await new Promise((r) => setTimeout(r, usageHasData ? 120 : 24));
+          }
         }
       }
       if (!destroyed) {
@@ -846,22 +943,7 @@
     if (inHero && !wasHero) {
       if (!usageHasData) bookPick = Math.random();
       if (cfg.homeLayout === 'studio') {
-        if (usageHasData) {
-          if (deferredUsageTimer) clearTimeout(deferredUsageTimer);
-          deferredUsageTimer = setTimeout(() => {
-            deferredUsageTimer = 0;
-            if (destroyed || !wasHero || cfg.homeLayout !== 'studio') return;
-            if (typeof requestIdleCallback === 'function') {
-              requestIdleCallback(() => {
-                if (!destroyed && wasHero && cfg.homeLayout === 'studio') void refreshUsageRollup(false);
-              }, { timeout: 2500 });
-            } else {
-              void refreshUsageRollup(false);
-            }
-          }, 3800);
-        } else {
-          void refreshUsageRollup(false);
-        }
+        scheduleUsageRollupRefresh(1800);
       }
     } else if (!inHero && deferredUsageTimer) {
       clearTimeout(deferredUsageTimer);
@@ -967,28 +1049,72 @@
     panelSeat = null;
     panelEl = null;
     heatTipEl = null;
+    shownHeatCell = null;
+    if (heatTipRaf && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(heatTipRaf);
+      heatTipRaf = 0;
+    }
     lastPanelRenderKey = '';
   }
 
-  function showHeatTip(cell, grid) {
+  let shownHeatCell = null;
+  let pendingHeatCell = null;
+  let pendingHeatGrid = null;
+  let heatTipRaf = 0;
+
+  function flushHeatTip() {
+    heatTipRaf = 0;
+    const cell = pendingHeatCell;
+    const grid = pendingHeatGrid;
+    if (!cell || !grid || !heatTipEl || cell.isConnected === false) return;
     const tipText = cell.getAttribute('data-tip');
-    if (!tipText || !heatTipEl) return;
-    heatTipEl.textContent = tipText;
-    heatTipEl.setAttribute('data-shown', 'true');
-    const gBox = grid.getBoundingClientRect();
-    const cBox = cell.getBoundingClientRect();
-    const tBox = heatTipEl.getBoundingClientRect();
-    const centred = cBox.left + cBox.width / 2 - tBox.width / 2;
-    const left = Math.min(Math.max(centred, gBox.left), gBox.right - tBox.width) - gBox.left;
-    const above = cBox.top - gBox.top;
-    const below = gBox.bottom - cBox.bottom;
-    const sideBelow = below > above && below >= tBox.height + 6;
-    const top = (sideBelow ? cBox.bottom + 6 : cBox.top - 6 - tBox.height) - gBox.top;
-    heatTipEl.style.left = Math.round(left) + 'px';
-    heatTipEl.style.top = Math.round(top) + 'px';
+    if (!tipText) return;
+    shownHeatCell = cell;
+    // Pure offset geometry read BEFORE any DOM write (0 getBoundingClientRect, 0 Forced Reflow!)
+    const gW = grid.clientWidth || 480;
+    const gH = grid.clientHeight || 96;
+    const cLeft = cell.offsetLeft || 0;
+    const cTop = cell.offsetTop || 0;
+    const cW = cell.offsetWidth || 10;
+    const cH = cell.offsetHeight || 10;
+    const estW = Math.max(88, Math.min(240, tipText.length * 6.8 + 18));
+    const tH = 24;
+    const centred = cLeft + cW * 0.5 - estW * 0.5;
+    const left = Math.min(Math.max(centred, 0), Math.max(0, gW - estW));
+    const above = cTop;
+    const below = gH - (cTop + cH);
+    const sideBelow = below > above && below >= tH + 6;
+    const top = sideBelow ? cTop + cH + 6 : cTop - 6 - tH;
+
+    const prevMut = internalDomMutating;
+    internalDomMutating = true;
+    try {
+      if (heatTipEl.textContent !== tipText) heatTipEl.textContent = tipText;
+      heatTipEl.style.transform = `translate3d(${Math.round(left)}px,${Math.round(top)}px,0)`;
+      setAttrIfChanged(heatTipEl, 'data-shown', 'true');
+    } finally {
+      internalDomMutating = prevMut;
+    }
+  }
+
+  function showHeatTip(cell, grid) {
+    if (!cell || !heatTipEl || cell === shownHeatCell) return;
+    pendingHeatCell = cell;
+    pendingHeatGrid = grid;
+    if (typeof requestAnimationFrame === 'function') {
+      if (!heatTipRaf) heatTipRaf = requestAnimationFrame(flushHeatTip);
+    } else {
+      flushHeatTip();
+    }
   }
 
   function hideHeatTip() {
+    shownHeatCell = null;
+    pendingHeatCell = null;
+    if (heatTipRaf && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(heatTipRaf);
+      heatTipRaf = 0;
+    }
     if (heatTipEl) heatTipEl.removeAttribute('data-shown');
   }
 
@@ -1287,8 +1413,8 @@
   const RIPPLE_INTRO_MS = 1600;
   let rippleMount = null;
 
-  function readRipplePalette(canvas, auraState, now, cachedStyle) {
-    const cs = cachedStyle || (typeof getComputedStyle === 'function' ? getComputedStyle(canvas) : null);
+  function sampleRippleThemeTokens(canvas) {
+    const cs = typeof getComputedStyle === 'function' ? getComputedStyle(canvas) : null;
     const dark = isDarkTheme();
     const ink =
       (cs && rippleCore.parseCssColorToRgb(cs.getPropertyValue('--ag-cs-ripple-ink'))) ||
@@ -1297,11 +1423,29 @@
       (cs && rippleCore.parseCssColorToRgb(cs.getPropertyValue('--ag-cs-ripple-wave'))) ||
       (dark ? [214, 218, 228] : [37, 99, 235]);
     const fontFamily = (cs && cs.getPropertyValue('--font-mono').trim()) || 'ui-monospace, Consolas, monospace';
+    return { ink, wave, dark, fontFamily };
+  }
+
+  function buildRipplePalette(tokens, auraState, now) {
+    const t = tokens || {
+      ink: isDarkTheme() ? [146, 148, 156] : [104, 114, 134],
+      wave: isDarkTheme() ? [214, 218, 228] : [37, 99, 235],
+      dark: isDarkTheme(),
+      fontFamily: 'ui-monospace, Consolas, monospace',
+    };
     const aura =
       auraState && auraState.active && !motionReduced()
         ? { x: auraState.x, y: auraState.y, radius: 230, strength: 1, active: true }
         : { x: 0, y: 0, radius: 230, strength: 0, active: false };
-    return { ink, wave, dark, fontFamily, prismStrength: 1, aura, auraPhase: (now || 0) * 0.0006 };
+    return {
+      ink: t.ink,
+      wave: t.wave,
+      dark: t.dark,
+      fontFamily: t.fontFamily,
+      prismStrength: 1,
+      aura,
+      auraPhase: (now || 0) * 0.0006,
+    };
   }
 
   function parkRipple() {
@@ -1396,7 +1540,7 @@
     let lastSkimY = null;
     let lastSkimAt = 0;
     let skimCarryDist = 0;
-    let cachedCanvasStyle = null;
+    let cachedThemeTokens = null;
     let cachedCanvasRect = null;
     let cachedCanvasRectAt = 0;
 
@@ -1413,12 +1557,12 @@
       parked: false,
       aura: { reach: 0.47, strength: 1.0 },
       tideSwellAt: 0,
-      waves: rippleCore.createWaveField(0, 0),
+      waves: { height: new Float32Array(0), active: () => false, disturb() {}, skimmer() {}, advance() {} },
       glow:
         typeof rippleCore.mountBrandHorizonGlow === 'function'
           ? rippleCore.mountBrandHorizonGlow(glowCanvas)
           : { mode: 'none', resize() {}, draw() {}, dispose() {} },
-      field: rippleCore.createGlyphField(canvas, 0, 0, rippleCore.createWaveField(0, 0)),
+      field: { mode: 'none', dispose() {}, invalidate() {}, setCalmZones() {}, draw() {}, needsDraw: () => false, busy: () => false },
       timer: 0,
       rafId: 0,
       ro: null,
@@ -1473,12 +1617,12 @@
       canvas.style.width = `${cols * rippleCore.RIPPLE.cellWidth}px`;
       canvas.style.height = `${rows * rippleCore.RIPPLE.cellHeight}px`;
       if (state.glow && typeof state.glow.resize === 'function') {
-        state.glow.resize(w, h, Math.min(dpr, 1.5));
+        state.glow.resize(w, h, 0.6);
       }
       state.field.dispose();
       state.waves = rippleCore.createWaveField(cols, rows);
       state.field = rippleCore.createGlyphField(canvas, cols, rows, state.waves);
-      cachedCanvasStyle = typeof getComputedStyle === 'function' ? getComputedStyle(canvas) : null;
+      cachedThemeTokens = sampleRippleThemeTokens(canvas);
       cachedCanvasRect = null;
       updateCalmZones();
       drawnOnce = false;
@@ -1550,7 +1694,8 @@
 
       if (canvas.width > 0 && needsRender) {
         forceSingleDraw = false;
-        const pal = readRipplePalette(canvas, auraState, now, cachedCanvasStyle);
+        if (!cachedThemeTokens) cachedThemeTokens = sampleRippleThemeTokens(canvas);
+        const pal = buildRipplePalette(cachedThemeTokens, auraState, now);
         if (state.glow && typeof state.glow.draw === 'function') {
           state.glow.draw(now, {
             dark: pal.dark,
@@ -1583,8 +1728,12 @@
       lastSkimX = null;
       lastSkimY = null;
       skimCarryDist = 0;
+      const prevW = state.width;
+      const prevH = state.height;
       layout();
-      updateCalmZones();
+      if (state.width !== prevW || state.height !== prevH) {
+        updateCalmZones();
+      }
       state.field.invalidate();
       if (state.glow && typeof state.glow.invalidate === 'function') state.glow.invalidate();
       wake();
@@ -1607,7 +1756,7 @@
         if (auraState.active) {
           auraState.active = false;
           forceSingleDraw = true;
-          state.field.invalidate();
+          if (!state.field || state.field.mode !== 'webgl2') state.field.invalidate();
           wake();
         }
         return;
@@ -1638,8 +1787,8 @@
       auraState.x = x;
       auraState.y = y;
       auraState.active = true;
-      previous = now;
-      state.field.invalidate();
+      if (state.sleeping) previous = now;
+      if (!state.field || state.field.mode !== 'webgl2') state.field.invalidate();
       wake();
     };
 
@@ -1650,7 +1799,7 @@
       if (auraState.active) {
         auraState.active = false;
         forceSingleDraw = true;
-        state.field.invalidate();
+        if (!state.field || state.field.mode !== 'webgl2') state.field.invalidate();
         wake();
       }
     };
@@ -1658,9 +1807,11 @@
     state.onPress = (ev) => {
       if (ev.button !== 0 || motionReduced()) return;
       const rect = canvas.getBoundingClientRect();
+      cachedCanvasRect = rect;
+      cachedCanvasRectAt = performance.now();
       const col = Math.floor((ev.clientX - rect.left) / rippleCore.RIPPLE.cellWidth);
       const row = Math.floor((ev.clientY - rect.top) / rippleCore.RIPPLE.cellHeight);
-      previous = performance.now();
+      if (state.sleeping) previous = performance.now();
       state.waves.disturb(col, row);
       state.field.invalidate();
       wake();
@@ -1699,7 +1850,7 @@
     rippleMount = state;
     layout();
     state.refreshTheme = () => {
-      cachedCanvasStyle = typeof getComputedStyle === 'function' ? getComputedStyle(canvas) : null;
+      cachedThemeTokens = sampleRippleThemeTokens(canvas);
       forceSingleDraw = true;
       state.field.invalidate();
       if (state.glow && typeof state.glow.invalidate === 'function') state.glow.invalidate();
@@ -2943,7 +3094,7 @@
               { opacity: 0.01, transform: 'translateY(10px)' },
               { opacity: 1, transform: 'translateY(0px)' },
             ],
-            { delayStep: 35, stepMs: 35, stiffness: 340, damping: 28, slot: 'home-return' }
+            { durationMs: 220, delayStep: 24, stepMs: 24, stiffness: 360, damping: 30, slot: 'home-return' }
           );
         } catch {}
       }
@@ -3702,6 +3853,7 @@
       } catch {}
       prismBoxRo = null;
     }
+    observedPrismSet.clear();
     if (typeof document !== 'undefined') {
       document.getElementById('ag-prism-dyn-vars')?.remove?.();
       document.querySelectorAll('.ag-cs-prism-rim-cv').forEach((n) => n.remove());
@@ -3718,9 +3870,11 @@
   let prismPendingFlush = false;
   let prismBoxCacheDirty = true;
   let prismBoxCacheAt = 0;
+  let lastPrismRectReadAt = 0;
   let cachedPrismBoxes = [];
   let cachedOrchEntry = null;
   let prismBoxRo = null;
+  const observedPrismSet = new Set();
 
   function ensurePrismRimCanvas(hostEl) {
     if (!hostEl || !canMountRealCanvas(hostEl)) return null;
@@ -3834,23 +3988,21 @@
   function refreshPrismBoxRectCache(now, allowReadRect) {
     const boxes = document.querySelectorAll('[data-ag-cs-prism-box="1"]');
     const ro = ensurePrismBoxRo();
-    if (ro) {
-      try {
-        ro.disconnect();
-      } catch {}
-    }
     const prevMap = new Map();
     for (let i = 0; i < cachedPrismBoxes.length; i++) {
       prevMap.set(cachedPrismBoxes[i].box, cachedPrismBoxes[i]);
     }
+    const nextObserved = new Set();
     const prevInt = internalDomMutating;
     internalDomMutating = true;
     try {
       const next = [];
       for (const box of boxes) {
-        if (ro) {
+        nextObserved.add(box);
+        if (ro && !observedPrismSet.has(box)) {
           try {
             ro.observe(box);
+            observedPrismSet.add(box);
           } catch {}
         }
         const prev = prevMap.get(box);
@@ -3875,9 +4027,11 @@
       if (!trackEl) {
         cachedOrchEntry = null;
       } else {
-        if (ro) {
+        nextObserved.add(trackEl);
+        if (ro && !observedPrismSet.has(trackEl)) {
           try {
             ro.observe(trackEl);
+            observedPrismSet.add(trackEl);
           } catch {}
         }
         const prevOrch = cachedOrchEntry && cachedOrchEntry.box === trackEl ? cachedOrchEntry : null;
@@ -3893,6 +4047,17 @@
           pxStr: prevOrch ? prevOrch.pxStr : '',
           pyStr: prevOrch ? prevOrch.pyStr : '',
         };
+      }
+
+      if (ro) {
+        for (const oldEl of Array.from(observedPrismSet)) {
+          if (!nextObserved.has(oldEl)) {
+            try {
+              ro.unobserve(oldEl);
+            } catch {}
+            observedPrismSet.delete(oldEl);
+          }
+        }
       }
     } finally {
       internalDomMutating = prevInt;
@@ -3927,6 +4092,16 @@
       cachedPrismBoxes.some((e) => e.box.isConnected === false || (allowReadRect && !e.rect))
     ) {
       refreshPrismBoxRectCache(now, allowReadRect);
+      lastPrismRectReadAt = now;
+    } else if (allowReadRect && now - lastPrismRectReadAt >= 250) {
+      lastPrismRectReadAt = now;
+      for (let i = 0; i < cachedPrismBoxes.length; i++) {
+        const b = cachedPrismBoxes[i].box;
+        if (b && typeof b.getBoundingClientRect === 'function') cachedPrismBoxes[i].rect = b.getBoundingClientRect();
+      }
+      if (cachedOrchEntry && cachedOrchEntry.box && typeof cachedOrchEntry.box.getBoundingClientRect === 'function') {
+        cachedOrchEntry.rect = cachedOrchEntry.box.getBoundingClientRect();
+      }
     }
 
     const dark = isDarkTheme();
@@ -4537,6 +4712,9 @@
         flags.full ||
         measured.inHome !== prevWasInHome ||
         Boolean(measured.formalConv) !== prevWasInConv;
+      if (routeJumped || flags.route || flags.composer || flags.overlays || flags.collapsible) {
+        prismBoxCacheDirty = true;
+      }
       if (flags.full) {
         syncHostAnimatedIcons(null);
       } else if (routeJumped) {
@@ -4596,7 +4774,7 @@
   function onStoreChanged() {
     const inHero = Boolean(document.querySelector('.agy-home'));
     if (inHero && cfg.homeLayout === 'studio') {
-      refreshUsageRollup(false);
+      scheduleUsageRollupRefresh(1800);
     }
     dirtyFlags.composer = true;
     dirtyFlags.route = true;
@@ -4898,7 +5076,7 @@
         applyRootAttrs();
       }
       if (wasHero && cfg.homeLayout === 'studio') {
-        refreshUsageRollup(false);
+        scheduleUsageRollupRefresh(1800);
       }
     }, Math.max(5000, Number(cfg.pollIntervalMs) || 5000));
 
@@ -4906,7 +5084,7 @@
     markAllDirty();
     runSync(true);
     if (wasHero && cfg.homeLayout === 'studio') {
-      refreshUsageRollup(false);
+      scheduleUsageRollupRefresh(1800);
     }
   }
 

@@ -198,11 +198,10 @@
       const ms = tsToMs(steps[i]?.metadata?.createdAt);
       if (ms > 0) stepTime.set(i, ms);
     }
-    const fallbackMs =
-      tsToMs(summaryObj?.lastModifiedTime) ||
-      tsToMs(summaryObj?.createdTime) ||
-      tsToMs(t?.metadata?.createdAt) ||
-      0;
+    const createdMs = tsToMs(summaryObj?.createdTime) || tsToMs(t?.metadata?.createdAt) || 0;
+    const lastModMs = tsToMs(summaryObj?.lastModifiedTime) || 0;
+    const fallbackMs = lastModMs || createdMs || 0;
+    const totalStepSpan = Math.max(1, Number(summaryObj?.stepCount ?? trajObj?.numTotalSteps ?? steps.length ?? 1));
 
     const days = {}; // YYYY-MM-DD -> { calls, input, output, cacheRead, cacheWrite, total, hours: number[24], models: { [id]: { input, output, cacheRead, cacheWrite, total, calls } } }
     let calls = 0;
@@ -229,7 +228,14 @@
           break;
         }
       }
-      if (!ts) ts = fallbackMs;
+      if (!ts) {
+        if (steps.length === 0 && createdMs > 0 && lastModMs > createdMs && sIndices.length > 0) {
+          const ratio = Math.min(1, Math.max(0, Number(sIndices[0] || 0) / totalStepSpan));
+          ts = Math.round(createdMs + ratio * (lastModMs - createdMs));
+        } else {
+          ts = fallbackMs;
+        }
+      }
       if (!ts) continue;
 
       const d = new Date(ts);
@@ -276,8 +282,82 @@
       cascadeId: String(cascadeId || t.cascadeId || ''),
       stepCount: Number(summaryObj?.stepCount ?? steps.length ?? 0),
       lastModifiedSec: Number(summaryObj?.lastModifiedTime?.seconds || 0),
+      gmCount: Number(trajObj?.numTotalGeneratorMetadata ?? gmList.length ?? 0),
       subagent: isSubagentSummary(summaryObj),
       calls,
+      days,
+    };
+  }
+
+  function mergeUsageRecordDelta(baseRec, deltaRec, nextMeta = {}) {
+    if (!baseRec || !baseRec.days) return deltaRec;
+    const days = {};
+    for (const [dk, d] of Object.entries(baseRec.days)) {
+      if (!d) continue;
+      const models = {};
+      for (const [mk, mv] of Object.entries(d.models || {})) {
+        if (mv) models[mk] = { ...mv };
+      }
+      days[dk] = {
+        calls: Number(d.calls || 0),
+        input: Number(d.input || 0),
+        output: Number(d.output || 0),
+        cacheRead: Number(d.cacheRead || 0),
+        cacheWrite: Number(d.cacheWrite || 0),
+        total: Number(d.total || 0),
+        hours: Array.isArray(d.hours) ? d.hours.slice(0, 24) : new Array(24).fill(0),
+        models,
+      };
+    }
+    if (deltaRec && deltaRec.days) {
+      for (const [dk, dd] of Object.entries(deltaRec.days)) {
+        if (!dd) continue;
+        let dst = days[dk];
+        if (!dst) {
+          dst = {
+            calls: 0,
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+            hours: new Array(24).fill(0),
+            models: {},
+          };
+          days[dk] = dst;
+        }
+        dst.calls += Number(dd.calls || 0);
+        dst.input += Number(dd.input || 0);
+        dst.output += Number(dd.output || 0);
+        dst.cacheRead += Number(dd.cacheRead || 0);
+        dst.cacheWrite += Number(dd.cacheWrite || 0);
+        dst.total += Number(dd.total || 0);
+        if (Array.isArray(dd.hours)) {
+          for (let h = 0; h < 24; h++) dst.hours[h] = (dst.hours[h] || 0) + Number(dd.hours[h] || 0);
+        }
+        for (const [mk, mv] of Object.entries(dd.models || {})) {
+          if (!mv) continue;
+          let dm = dst.models[mk];
+          if (!dm) {
+            dm = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, calls: 0 };
+            dst.models[mk] = dm;
+          }
+          dm.input += Number(mv.input || 0);
+          dm.output += Number(mv.output || 0);
+          dm.cacheRead += Number(mv.cacheRead || 0);
+          dm.cacheWrite += Number(mv.cacheWrite || 0);
+          dm.total += Number(mv.total || 0);
+          dm.calls += Number(mv.calls || 0);
+        }
+      }
+    }
+    return {
+      cascadeId: String(nextMeta.cascadeId ?? deltaRec?.cascadeId ?? baseRec.cascadeId ?? ''),
+      stepCount: Number(nextMeta.stepCount ?? deltaRec?.stepCount ?? baseRec.stepCount ?? 0),
+      lastModifiedSec: Number(nextMeta.lastModifiedSec ?? deltaRec?.lastModifiedSec ?? baseRec.lastModifiedSec ?? 0),
+      gmCount: Number(nextMeta.gmCount ?? deltaRec?.gmCount ?? baseRec.gmCount ?? 0),
+      subagent: Boolean(nextMeta.subagent ?? deltaRec?.subagent ?? baseRec.subagent),
+      calls: Number(baseRec.calls || 0) + Number(deltaRec?.calls || 0),
       days,
     };
   }
@@ -581,6 +661,7 @@
     homeShortDate,
     isSubagentSummary,
     analyzeTrajectoryForUsage,
+    mergeUsageRecordDelta,
     homeHeatGrid,
     aggregateUsageRollup,
     axisMax,
