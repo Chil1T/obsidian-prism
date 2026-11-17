@@ -36,12 +36,23 @@
     );
   }
 
+  function isIgnoredChatOrSidebarTarget(node) {
+    if (!node || typeof node.closest !== 'function') return false;
+    return Boolean(
+      node.closest(
+        '[data-testid="autoscroll-viewport"], aside, [data-op-thought="1"], .ag-cs-crab, .ag-cs-conv-aura-host, #ag-pulse-status-bar'
+      )
+    );
+  }
+
   function mutationTouchesModelControls(records, doc) {
-    if (isModelMenuOpen(doc)) return true;
     if (!Array.isArray(records) || records.length === 0) return true;
+    const menuOpen = isModelMenuOpen(doc);
     for (let i = 0; i < records.length; i++) {
       const rec = records[i];
       const t = rec && rec.target;
+      if (t && isIgnoredChatOrSidebarTarget(t)) continue;
+      if (menuOpen) return true;
       if (t && typeof t.getAttribute === 'function') {
         const tid = t.getAttribute('data-testid') || '';
         if (tid.includes('model-selector')) return true;
@@ -58,7 +69,11 @@
           if (tid.includes('model-selector')) return true;
           const role = n.getAttribute?.('role') || '';
           if (role === 'menu' || role === 'listbox' || role === 'dialog') return true;
-          if (typeof n.querySelector === 'function' && n.querySelector('[data-testid="model-selector-panel"], [data-testid="model-selector-trigger"]')) {
+          if (
+            (n.tagName === 'DIV' || n.tagName === 'BUTTON') &&
+            typeof n.querySelector === 'function' &&
+            n.querySelector('[data-testid="model-selector-panel"], [data-testid="model-selector-trigger"]')
+          ) {
             return true;
           }
         }

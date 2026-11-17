@@ -273,9 +273,7 @@
       let frameWanted = false;
       let drawnOnce = false;
 
-      function layout() {
-        const w = seatParent.clientWidth || convView.clientWidth || 0;
-        const parentH = seatParent.clientHeight || convView.clientHeight || 0;
+      function applySize(w, parentH) {
         const h = parentH > 0 ? Math.max(1, Math.round(parentH * CONV_AURA_HEIGHT_RATIO)) : 0;
         const dpr = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, 1) * 0.72;
         if (w === state.width && h === state.height && dpr === state.dpr) return;
@@ -288,6 +286,13 @@
           } catch {}
         }
         drawnOnce = false;
+      }
+
+      function layout(forceRead = false) {
+        if (!forceRead && state.ro && state.width > 0 && state.height > 0) return;
+        const w = seatParent.clientWidth || convView.clientWidth || 0;
+        const parentH = seatParent.clientHeight || convView.clientHeight || 0;
+        applySize(w, parentH);
       }
 
       function enterAuraSleep() {
@@ -342,7 +347,7 @@
           drawnOnce = true;
         }
 
-        if (isDestroyed() || !allowLivingFlow) {
+        if (isDestroyed() || !allowLivingFlow || (phase === 'idle' && !inLiftoffEbb && now - state.phaseAt >= 4800)) {
           enterAuraSleep();
           return;
         }
@@ -403,17 +408,22 @@
       document.addEventListener('visibilitychange', state.onVis);
 
       if (typeof ResizeObserver === 'function') {
-        state.ro = new ResizeObserver(() => {
+        state.ro = new ResizeObserver((entries) => {
           const prevW = state.width;
           const prevH = state.height;
-          layout();
+          const cr = entries && entries[0] && entries[0].contentRect;
+          if (cr && cr.width > 0 && cr.height > 0) {
+            applySize(Math.round(cr.width), Math.round(cr.height));
+          } else {
+            layout(true);
+          }
           if (state.width !== prevW || state.height !== prevH) wake(false);
         });
         state.ro.observe(seatParent);
       }
 
       convAura = state;
-      layout();
+      layout(true);
       wake(true);
     }
 

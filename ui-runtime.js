@@ -2024,6 +2024,13 @@
     if (destroyed || !crystalMount.inst || !crystalMount.panel || !crystalMount.panel.isConnected || !crystalMount.wasOrch) {
       return;
     }
+    const idlePointer = now - lastPrismPointerAt > 450 && crystalMount.mountedAt > 0 && now - crystalMount.mountedAt > 900;
+    if (idlePointer && crystalMount.lastStepMs > 0 && now - crystalMount.lastStepMs < 42) {
+      if (!motionReduced() && !document.hidden) {
+        crystalMount.rafId = requestAnimationFrame(stepCrystalLoop);
+      }
+      return;
+    }
     const dt = crystalMount.lastStepMs > 0 ? Math.min(0.05, Math.max(0.004, (now - crystalMount.lastStepMs) / 1000)) : 0.016;
     crystalMount.lastStepMs = now;
     try {
@@ -2137,8 +2144,11 @@
         if (lastPointerPos.x > -1000) {
           crystalMount.inst.setPointerClient(lastPointerPos.x, lastPointerPos.y);
         }
-        if (switchedIn && typeof crystalMount.inst.wake === 'function') {
-          crystalMount.inst.wake();
+        if (switchedIn) {
+          crystalMount.mountedAt = performance.now();
+          if (typeof crystalMount.inst.wake === 'function') crystalMount.inst.wake();
+        } else if (!crystalMount.mountedAt) {
+          crystalMount.mountedAt = performance.now();
         }
         try {
           crystalMount.inst.step(0.016);
@@ -2379,8 +2389,10 @@
       const isPrimary = card === primaryCard;
 
       if (isPrimary && cfg.composerRestyle !== false) {
+        if (card.getAttribute('data-ag-cs-prism-box') !== '1') prismBoxCacheDirty = true;
         setAttrIfChanged(card, 'data-ag-cs-prism-box', '1');
       } else if (card.hasAttribute('data-ag-cs-prism-box')) {
+        prismBoxCacheDirty = true;
         card.removeAttribute('data-ag-cs-prism-box');
         card.style.removeProperty('--ag-px');
         card.style.removeProperty('--ag-py');
@@ -3345,61 +3357,113 @@
   let lastPointerPos = { x: -9999, y: -9999 };
   let prismRaf = 0;
   let lastPrismPointerAt = 0;
+  let prismBoxCacheDirty = true;
+  let prismBoxCacheAt = 0;
+  let cachedPrismBoxes = [];
+  let cachedOrchTrackRect = null;
+  let cachedOrchTrackEl = null;
+  let cachedOrchPx = '';
+  let cachedOrchPy = '';
+
+  function refreshPrismBoxRectCache(now, allowReadRect) {
+    const boxes = document.querySelectorAll('[data-ag-cs-prism-box="1"]');
+    const prevMap = new Map();
+    for (let i = 0; i < cachedPrismBoxes.length; i++) {
+      prevMap.set(cachedPrismBoxes[i].box, cachedPrismBoxes[i]);
+    }
+    const next = [];
+    for (const box of boxes) {
+      const prev = prevMap.get(box);
+      next.push({
+        box,
+        rect: allowReadRect && typeof box.getBoundingClientRect === 'function' ? box.getBoundingClientRect() : null,
+        pxStr: prev ? prev.pxStr : '',
+        pyStr: prev ? prev.pyStr : '',
+      });
+    }
+    cachedPrismBoxes = next;
+    prismBoxCacheDirty = false;
+    prismBoxCacheAt = now;
+
+    const trackEl = crystalMount.track && crystalMount.wasOrch && crystalMount.track.isConnected !== false ? crystalMount.track : null;
+    if (trackEl !== cachedOrchTrackEl) {
+      cachedOrchTrackEl = trackEl;
+      cachedOrchPx = '';
+      cachedOrchPy = '';
+    }
+    cachedOrchTrackRect =
+      trackEl && allowReadRect && typeof trackEl.getBoundingClientRect === 'function' ? trackEl.getBoundingClientRect() : null;
+  }
 
   function flushPrismPointer() {
     prismRaf = 0;
     if (destroyed) return;
     const reduced = motionReduced();
     const { x, y } = lastPointerPos;
+    const now = performance.now();
+    const allowReadRect = !reduced && x >= -1000;
 
-    // Phase 1: Read all rects first
-    const boxes = document.querySelectorAll('[data-ag-cs-prism-box="1"]');
-    const boxReads = [];
-    for (const box of boxes) {
-      boxReads.push({ box, rect: !reduced && x >= -1000 ? box.getBoundingClientRect() : null });
+    // Phase 1: Use cached rects; only re-measure when dirty, stale (>1200ms), or newly mounted!
+    const activeTrack = crystalMount.track && crystalMount.wasOrch && crystalMount.track.isConnected !== false ? crystalMount.track : null;
+    if (
+      prismBoxCacheDirty ||
+      cachedPrismBoxes.length === 0 ||
+      now - prismBoxCacheAt > 1200 ||
+      activeTrack !== cachedOrchTrackEl ||
+      cachedPrismBoxes.some((e) => e.box.isConnected === false || (allowReadRect && !e.rect))
+    ) {
+      refreshPrismBoxRectCache(now, allowReadRect);
     }
-    const trackEl = crystalMount.track && crystalMount.wasOrch ? crystalMount.track : null;
-    const trackRect = trackEl && !reduced && x >= -1000 ? trackEl.getBoundingClientRect() : null;
 
-    // Phase 2: Write CSS variables
+    // Phase 2: Idempotent CSS variable writes (0 writes when pointer stays outside 280px range!)
     const prevInt = internalDomMutating;
     internalDomMutating = true;
     try {
-      for (const { box, rect: r } of boxReads) {
-        if (!r) {
-          box.style.setProperty('--ag-px', '-9999px');
-          box.style.setProperty('--ag-py', '-9999px');
-          continue;
+      for (let i = 0; i < cachedPrismBoxes.length; i++) {
+        const entry = cachedPrismBoxes[i];
+        const r = allowReadRect ? entry.rect : null;
+        let nextPx = '-9999px';
+        let nextPy = '-9999px';
+        if (r) {
+          const maxRange = 280;
+          if (x >= r.left - maxRange && x <= r.right + maxRange && y >= r.top - maxRange && y <= r.bottom + maxRange) {
+            nextPx = `${Math.round(x - r.left)}px`;
+            nextPy = `${Math.round(y - r.top)}px`;
+          }
         }
-        const maxRange = 280;
-        if (x < r.left - maxRange || x > r.right + maxRange || y < r.top - maxRange || y > r.bottom + maxRange) {
-          box.style.setProperty('--ag-px', '-9999px');
-          box.style.setProperty('--ag-py', '-9999px');
-          continue;
+        if (entry.pxStr !== nextPx) {
+          entry.pxStr = nextPx;
+          entry.box.style.setProperty('--ag-px', nextPx);
         }
-        box.style.setProperty('--ag-px', `${Math.round(x - r.left)}px`);
-        box.style.setProperty('--ag-py', `${Math.round(y - r.top)}px`);
+        if (entry.pyStr !== nextPy) {
+          entry.pyStr = nextPy;
+          entry.box.style.setProperty('--ag-py', nextPy);
+        }
       }
 
-      if (trackEl) {
-        if (!trackRect) {
-          trackEl.style.setProperty('--orch-px', '-9999px');
-          trackEl.style.setProperty('--orch-py', '-9999px');
-        } else {
+      if (cachedOrchTrackEl) {
+        const trackRect = allowReadRect ? cachedOrchTrackRect : null;
+        let nextOx = '-9999px';
+        let nextOy = '-9999px';
+        if (trackRect && trackRect.width >= 10) {
           const maxRange = 120;
           if (
-            trackRect.width < 10 ||
-            x < trackRect.left - maxRange ||
-            x > trackRect.right + maxRange ||
-            y < trackRect.top - maxRange ||
-            y > trackRect.bottom + maxRange
+            x >= trackRect.left - maxRange &&
+            x <= trackRect.right + maxRange &&
+            y >= trackRect.top - maxRange &&
+            y <= trackRect.bottom + maxRange
           ) {
-            trackEl.style.setProperty('--orch-px', '-9999px');
-            trackEl.style.setProperty('--orch-py', '-9999px');
-          } else {
-            trackEl.style.setProperty('--orch-px', `${Math.round(x - trackRect.left)}px`);
-            trackEl.style.setProperty('--orch-py', `${Math.round(y - trackRect.top)}px`);
+            nextOx = `${Math.round(x - trackRect.left)}px`;
+            nextOy = `${Math.round(y - trackRect.top)}px`;
           }
+        }
+        if (cachedOrchPx !== nextOx) {
+          cachedOrchPx = nextOx;
+          cachedOrchTrackEl.style.setProperty('--orch-px', nextOx);
+        }
+        if (cachedOrchPy !== nextOy) {
+          cachedOrchPy = nextOy;
+          cachedOrchTrackEl.style.setProperty('--orch-py', nextOy);
         }
         if (crystalMount.inst && typeof crystalMount.inst.setPointerClient === 'function') {
           crystalMount.inst.setPointerClient(x, y);
@@ -3419,7 +3483,7 @@
       lastPrismPointerAt = now;
       prismRaf = requestAnimationFrame(flushPrismPointer);
     }
-    if (now - mascotState.lastActivityAt >= 2000) {
+    if (now - mascotState.lastActivityAt >= 2500) {
       mascotState.lastActivityAt = now;
       if (mascotState.rig && typeof mascotState.rig.notify === 'function') {
         try {
@@ -3431,6 +3495,7 @@
 
   function onWinResize() {
     if (destroyed) return;
+    prismBoxCacheDirty = true;
     smoothCaretCtl.bumpMetricsEpoch();
     queueSmoothCaret(false, false, true);
   }
@@ -3678,7 +3743,7 @@
     wasContextCardOpen = openNow;
   }
 
-  function ensurePulseBridge() {
+  function ensurePulseBridge(forceSync = false) {
     healBlockedExternalPulseBar();
     syncContextCardOpenNotify();
     if (destroyed || !pulseVialBridgeMod || typeof pulseVialBridgeMod.mountPulseVialBridge !== 'function') return;
@@ -3689,7 +3754,7 @@
       } catch {
         pulseBridgeInst = null;
       }
-    } else if (typeof pulseBridgeInst.sync === 'function') {
+    } else if (forceSync && typeof pulseBridgeInst.sync === 'function') {
       try {
         void pulseBridgeInst.sync();
       } catch {}
@@ -3715,7 +3780,7 @@
   }
 
   const OWN_PLUGIN_SELECTOR =
-    '.ag-cs-home-panel-seat, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-model-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-smooth-caret, .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-stream-chunk, .ag-cs-thought-chunk, .ag-anim-icon, #' +
+    '.ag-cs-home-panel-seat, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-model-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-smooth-caret, .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-stream-chunk, .ag-cs-thought-chunk, .ag-anim-icon, #ag-pulse-status-bar, #context-card, #' +
     SETTINGS_SEC_ID +
     ', #ag-prism-css, #ag-claude-style-css';
 
@@ -3745,11 +3810,28 @@
     return false;
   }
 
+  const FAST_PRUNE_LEAF_TAGS = new Set([
+    'SPAN', 'P', 'CODE', 'STRONG', 'EM', 'B', 'I', 'LI', 'TD', 'TH', 'TR', 'BR', 'HR', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+  ]);
+
   function classifyDirtySubtree(el, isAdded) {
     if (!isElementLike(el)) return;
     const tid = String(el.getAttribute?.('data-testid') || '');
     const role = String(el.getAttribute?.('role') || '');
     const cls = String(el.className || '');
+
+    // Fast-path O(1) prune for plain streaming leaf tokens (code spans, markdown paragraphs) with zero child elements
+    if (
+      !tid &&
+      !role &&
+      !el.id &&
+      !cls.includes('agy-') &&
+      !cls.includes('surface-') &&
+      FAST_PRUNE_LEAF_TAGS.has(String(el.tagName || '').toUpperCase()) &&
+      (!el.children || el.children.length === 0)
+    ) {
+      return;
+    }
 
     if (
       cls.includes('agy-home') ||
@@ -3939,7 +4021,7 @@
       if (flags.full || flags.collapsible) {
         syncWorkedForAutoUnfold();
       }
-      if ((flags.full || flags.collapsible || flags.route || flags.composer) && getThoughtTranslateMode() !== 'off') {
+      if ((flags.full || flags.collapsible || routeJumped) && getThoughtTranslateMode() !== 'off') {
         try {
           window.__agPrismThought?.scan?.();
         } catch {}
@@ -3948,10 +4030,12 @@
         ensureSettingsSection();
       }
       if (flags.full || flags.route || flags.composer || flags.overlays || flags.theme) {
-        try {
-          window.__agPrismTelemetry?.sync?.(cfg);
-        } catch {}
-        ensurePulseBridge();
+        if (flags.full || routeJumped || flags.theme) {
+          try {
+            window.__agPrismTelemetry?.sync?.(cfg);
+          } catch {}
+        }
+        ensurePulseBridge(Boolean(flags.full || flags.theme || flags.overlays));
       }
     } finally {
       internalDomMutating = prevInt;
@@ -4033,6 +4117,21 @@
       const ae = document.activeElement;
       if (!ae || !ae.closest?.('[data-testid="agent-input-box"]')) {
         return;
+      }
+      if (type === 'scroll') {
+        const st = ev?.target;
+        if (
+          st &&
+          st !== ae &&
+          !ae.contains?.(st) &&
+          (st === document ||
+            st === document.documentElement ||
+            st === document.body ||
+            st.getAttribute?.('data-testid') === 'autoscroll-viewport' ||
+            !st.contains?.(ae))
+        ) {
+          return;
+        }
       }
     }
     const isTyping = type === 'input' || type === 'keyup' || type === 'compositionupdate' || type === 'compositionend';

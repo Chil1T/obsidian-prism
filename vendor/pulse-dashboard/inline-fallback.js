@@ -225,7 +225,14 @@
       }
     }
 
+    let cachedLocalSnap = null;
+    let cachedLocalSnapAt = 0;
+
     function estimateLocalSnapshot() {
+      const now = Date.now();
+      if (cachedLocalSnap && now - cachedLocalSnapAt < 5000) {
+        return cachedLocalSnap;
+      }
       const doc = getDoc();
       let model = 'Gemini 4';
       let charCount = 0;
@@ -234,14 +241,25 @@
         const label = trigger?.getAttribute?.('aria-label') || trigger?.textContent?.trim();
         if (label) model = label;
         const view = doc?.querySelector?.('[data-testid="conversation-view"]');
-        if (view && typeof view.textContent === 'string') {
+        if (view && typeof view.querySelectorAll === 'function') {
+          const turns = view.querySelectorAll('[data-testid="planner-response-text"], [data-testid="user-message-bubble"]');
+          if (turns && turns.length > 0) {
+            const sampleCount = Math.min(4, turns.length);
+            let sampleChars = 0;
+            for (let i = turns.length - sampleCount; i < turns.length; i++) {
+              sampleChars += (turns[i].textContent || '').length;
+            }
+            charCount = Math.round((sampleChars / sampleCount) * turns.length);
+          }
+        } else if (view && typeof view.textContent === 'string') {
           charCount = view.textContent.length;
         }
       } catch {}
       const maxTokens = 512000;
       const usedTokens = Math.max(4200, Math.min(maxTokens, Math.round(charCount / 3.2) + 8400));
       const usedFraction = Math.min(0.98, usedTokens / maxTokens);
-      return {
+      cachedLocalSnapAt = now;
+      cachedLocalSnap = {
         connection: 'local-estimate',
         speed: {
           model,
@@ -256,11 +274,12 @@
             usedTokens,
             maxTokens,
             usedFraction,
-            sampledAt: Date.now(),
+            sampledAt: now,
           },
         },
         groups: [],
       };
+      return cachedLocalSnap;
     }
 
     function requestMetricsSnapshot(input) {

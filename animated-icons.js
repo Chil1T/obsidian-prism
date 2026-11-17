@@ -54,15 +54,15 @@
       );
     }
 
-    // 饱满四色高斯柔光层：浅色白底与深色黑底下均具备鲜明色彩饱和度与棱镜通透感
+    // 饱满四色单层合并柔光：零固定 ID 冲突，单个合并层 1 次滤镜替代 4 次独立高斯模糊（直降 75% 光栅开销）
     const meshBody =
       `<path d="${OFFICIAL_GEMINI_SPARK_D}" fill="${GOOGLE_COLORS.blue}"/>` +
-      `<g style="clip-path:path('${OFFICIAL_GEMINI_SPARK_D}')">` +
-      `<ellipse cx="9.4" cy="4.4" rx="7.0" ry="6.0" fill="${GOOGLE_COLORS.red}" style="filter:blur(2.9px)"/>` +
-      `<ellipse cx="4.6" cy="13.2" rx="6.2" ry="5.6" fill="${GOOGLE_COLORS.yellow}" style="filter:blur(2.9px)"/>` +
-      `<ellipse cx="10.4" cy="20.2" rx="6.6" ry="5.6" fill="${GOOGLE_COLORS.green}" style="filter:blur(3.0px)"/>` +
-      `<ellipse cx="18.0" cy="10.8" rx="6.8" ry="6.4" fill="#3B82F6" style="filter:blur(2.6px)"/>` +
-      `</g>`;
+      `<g style="clip-path:path('${OFFICIAL_GEMINI_SPARK_D}')"><g style="filter:blur(2.7px)">` +
+      `<ellipse cx="9.4" cy="4.4" rx="7.0" ry="6.0" fill="${GOOGLE_COLORS.red}"/>` +
+      `<ellipse cx="4.6" cy="13.2" rx="6.2" ry="5.6" fill="${GOOGLE_COLORS.yellow}"/>` +
+      `<ellipse cx="10.4" cy="20.2" rx="6.6" ry="5.6" fill="${GOOGLE_COLORS.green}"/>` +
+      `<ellipse cx="18.0" cy="10.8" rx="6.8" ry="6.4" fill="#3B82F6"/>` +
+      `</g></g>`;
 
     const xGlow = tier === 'xhigh'
       ? `<path class="ai-part-orbit-outer" d="${OFFICIAL_GEMINI_SPARK_D}" stroke="#4285F4" stroke-width="0.95" opacity="0.62" transform="scale(1.06)" style="transform-origin:12px 12px"/>`

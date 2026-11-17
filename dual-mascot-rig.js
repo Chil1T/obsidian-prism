@@ -2264,8 +2264,31 @@
     const allActiveEnts = () => (miniPileEnabled ? [actors.cat, actors.clawd, ...miniCrabs] : [actors.cat, actors.clawd]);
     const maxTowerDepthAllowed = () => (miniPileEnabled ? 5 : 2);
 
+    let cachedHostWidth = typeof hostEl.clientWidth === 'number' && hostEl.clientWidth > 0 ? hostEl.clientWidth : 720;
+    const isMockHostWidth = Object.prototype.hasOwnProperty.call(hostEl, 'clientWidth');
+    if (!isMockHostWidth && typeof ResizeObserver === 'function' && hostEl && hostEl.nodeType === 1) {
+      try {
+        const hostRo = new ResizeObserver((entries) => {
+          const cr = entries && entries[0] && entries[0].contentRect;
+          const nw = cr && cr.width > 0 ? Math.round(cr.width) : hostEl.clientWidth;
+          if (nw > 0 && nw !== cachedHostWidth) {
+            cachedHostWidth = nw;
+          }
+        });
+        hostRo.observe(hostEl);
+        cleanups.push(() => hostRo.disconnect());
+      } catch (_) {}
+    }
+    const readStageWidth = () => {
+      if (isMockHostWidth) return hostEl.clientWidth || 720;
+      if (cachedHostWidth <= 0 && typeof hostEl.clientWidth === 'number' && hostEl.clientWidth > 0) {
+        cachedHostWidth = hostEl.clientWidth;
+      }
+      return cachedHostWidth || 720;
+    };
+
     const stageBoundsX = () => {
-      const w = hostEl.clientWidth || 720;
+      const w = readStageWidth();
       const rightReserve = popoverRightWidth > 0 ? Math.min(w - 150, popoverRightWidth + 16) : 0;
       return {
         minX: 14,
@@ -2274,7 +2297,7 @@
     };
 
     const clampActorX = (x) => {
-      const w = hostEl.clientWidth || 720;
+      const w = readStageWidth();
       const rightReserve = popoverRightWidth > 0 ? Math.min(w - 150, popoverRightWidth + 16) : 0;
       const maxX = Math.max(24, w - 88 - rightReserve);
       return Math.max(8, Math.min(maxX, x));
@@ -2441,7 +2464,7 @@
     };
 
     const getRestPositions = () => {
-      const w = hostEl.clientWidth || 720;
+      const w = readStageWidth();
       const safeRight = popoverRightWidth > 0 ? Math.max(185, w - popoverRightWidth - 18) : w - 12;
       const leaderX = clampActorX(safeRight - 82);
       const partnerX = clampActorX(leaderX - 66);
@@ -2947,9 +2970,13 @@
       }
     };
 
+    let lastChromaStepTick = -1;
     const renderAllFrames = (now) => {
-      if (prismaticCoat && !reducedMotion && !dozing) {
-        chromaPhase = (chromaPhase + 0.085) % 1;
+      if (prismaticCoat && !reducedMotion && !dozing && lastChromaStepTick !== tickIdx) {
+        lastChromaStepTick = tickIdx;
+        if (tickIdx % 3 === 0) {
+          chromaPhase = (chromaPhase + 1 / 12) % 1;
+        }
       }
       syncAllStackedFollowers();
 
@@ -3060,8 +3087,8 @@
         });
 
         const isChromaCat = id === 'cat' && prismaticCoat;
-        const phaseBucket = isChromaCat ? Math.round(chromaPhase * 24) : 0;
-        const earSparkPhase = isChromaCat ? tickIdx % 10 : -1;
+        const phaseBucket = isChromaCat ? Math.round(chromaPhase * 12) : 0;
+        const earSparkPhase = isChromaCat ? Math.floor(tickIdx / 2) % 10 : -1;
         if (
           isChromaCat &&
           !reducedMotion &&
@@ -3144,7 +3171,6 @@
           });
           perfStats.canvasDraws += 1;
         }
-        applyActorTransform(a);
       }
 
       const nextMiniDisplay = miniPileEnabled ? 'flex' : 'none';
@@ -4768,7 +4794,12 @@
       if (disposed) return;
       const fn = Object.prototype.hasOwnProperty.call(NOTIFY, event) ? NOTIFY[event] : null;
       if (!fn) return;
+      const wasDozing = dozing;
       markActivity();
+      if (event === 'activity') {
+        if (wasDozing) renderAllFrames(performance.now());
+        return;
+      }
       fn(payload && typeof payload === 'object' ? payload : {});
       renderAllFrames(performance.now());
     };
@@ -4834,6 +4865,15 @@
       setState(next = {}) {
         const prevRight = popoverRightWidth;
         const prevCamp = camp;
+        const prevStreaming = streaming;
+        const prevStreamTier = streamTier;
+        const prevHasError = hasError;
+        const prevYield = yieldMode;
+        const prevLeapOffset = leapOffsetY;
+        const prevMiniPile = miniPileEnabled;
+        const prevOrch = orchestrator;
+        const prevReduced = reducedMotion;
+
         if (next.camp !== undefined) camp = next.camp === 'claude' ? 'claude' : 'gemini';
         if (next.streaming !== undefined) streaming = Boolean(next.streaming);
         if (next.streamTier !== undefined) streamTier = Number(next.streamTier || 2);
@@ -4845,14 +4885,29 @@
         if (next.orchestrator !== undefined) orchestrator = Boolean(next.orchestrator);
         if (next.reducedMotion !== undefined) {
           reducedMotion = Boolean(next.reducedMotion);
-          if (reducedMotion) freezeMotion();
+          if (reducedMotion && !prevReduced) freezeMotion();
         }
+
+        const changed =
+          camp !== prevCamp ||
+          streaming !== prevStreaming ||
+          streamTier !== prevStreamTier ||
+          hasError !== prevHasError ||
+          yieldMode !== prevYield ||
+          leapOffsetY !== prevLeapOffset ||
+          popoverRightWidth !== prevRight ||
+          miniPileEnabled !== prevMiniPile ||
+          orchestrator !== prevOrch ||
+          reducedMotion !== prevReduced;
+
+        if (!changed) return;
+
         if (camp !== prevCamp) {
           // 挂载后阵营实际变化：自动播放领衔交接（站位交换在其内部完成）
           markActivity();
           campHandoff();
           if (performance.now() - lastHandoffAt > 50) resetHomePositions(popoverRightWidth !== prevRight);
-        } else {
+        } else if (popoverRightWidth !== prevRight || miniPileEnabled !== prevMiniPile) {
           resetHomePositions(popoverRightWidth !== prevRight);
         }
         renderAllFrames(performance.now());

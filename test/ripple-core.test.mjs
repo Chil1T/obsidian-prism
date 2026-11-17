@@ -1052,8 +1052,8 @@ test('style.css enforces GPU compositor offloading, dual daylight presets (Cryst
   assert.equal(css.includes('ag-cs-row-aurora'), false, 'Expensive background-position row-aurora loop must be removed');
   assert.equal(css.includes('ag-cs-pill-breath'), false, 'Expensive filter:brightness pill-breath loop must be removed');
 
-  // 3) 关键特异性与防黑边防线 + warm/claude 暖调同享 + .ag-prism-thought-raw-toggle 零闪烁保护
-  assert.ok(css.includes('[data-testid="autoscroll-viewport"]{-webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 28px,#000 calc(100% - 22px),transparent 100%) !important;'));
+  // 3) 关键特异性与防黑边防线（滚动视口禁用全屏离屏 mask-image 解锁 GPU 合成快速滚动）+ warm/claude 暖调同享 + .ag-prism-thought-raw-toggle 零闪烁保护
+  assert.ok(css.includes('[data-testid="autoscroll-viewport"]{-webkit-mask-image:none !important;mask-image:none !important;}'));
   assert.ok(css.includes('&[data-ag-cs-style][data-ag-cs-style] [data-testid="thinking-collapsible-trigger"]+div{'));
   assert.ok(css.includes('&[data-ag-cs-style][data-ag-cs-style] [data-testid="thinking-collapsible-trigger"][aria-expanded="true"]+div{'));
   assert.ok(css.includes('[data-ag-cs-palette="warm"]'));

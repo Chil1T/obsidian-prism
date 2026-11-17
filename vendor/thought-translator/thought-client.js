@@ -15,7 +15,7 @@
   const LOCAL_CACHE_KEY = 'ag_prism_thought_zh_cache_v1';
   const MEM_CACHE_LIMIT = 1500;
   const STORAGE_CACHE_LIMIT = 500;
-  const STREAM_FLUSH_MS = 55;
+  const STREAM_FLUSH_MS = 90;
   const FINISH_GATE_MS = 450;
   const QUIET_GATE_MS = 900;
 
@@ -108,7 +108,13 @@
     } catch (_) {}
   }
 
-  function persistLocalStorageCache() {
+  let persistTimer = null;
+
+  function flushLocalStorageCacheNow() {
+    if (persistTimer) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
     try {
       const store = W.localStorage;
       if (!store) return;
@@ -118,6 +124,12 @@
       for (const [k, v] of slice) obj[k] = v;
       store.setItem(LOCAL_CACHE_KEY, JSON.stringify(obj));
     } catch (_) {}
+  }
+
+  function persistLocalStorageCache() {
+    if (persistTimer) return;
+    persistTimer = setTimeout(flushLocalStorageCacheNow, 1500);
+    if (persistTimer && typeof persistTimer.unref === 'function') persistTimer.unref();
   }
 
   function putMemCache(key, val, persist = true) {
@@ -430,6 +442,7 @@
 
     const body = doc.createElement('span');
     body.className = 'ag-prism-thought-body';
+    body.setAttribute('data-ag-no-i18n', '');
     ov.appendChild(body);
 
     const toggleBtn = doc.createElement('button');
@@ -506,27 +519,41 @@
       let streamEl = body.querySelector('.ag-prism-thought-stream');
       if (
         streamEl &&
-        streamEl.textContent === text &&
+        streamEl.getAttribute?.('data-stream-len') === String(text.length) &&
         panel.getAttribute('data-op-zh-ready') === '1'
       ) {
         return;
       }
-      const curH = panel.offsetHeight || 0;
-      const nextMinH = Math.max(lockedHeights.get(panel) || 0, curH);
-      if (nextMinH > 0 && panel.style) {
-        lockedHeights.set(panel, nextMinH);
-        panel.style.minHeight = `${nextMinH}px`;
+      if (!lockedHeights.has(panel)) {
+        const curH = panel.offsetHeight || 0;
+        if (curH > 0 && panel.style) {
+          lockedHeights.set(panel, curH);
+          panel.style.minHeight = `${curH}px`;
+        }
       }
-      if (body.removeAttribute) body.removeAttribute('data-raw-zh');
+      if (body.hasAttribute?.('data-raw-zh')) body.removeAttribute('data-raw-zh');
       if (!streamEl) {
         while (body.firstChild) body.removeChild(body.firstChild);
-        streamEl = (panel.ownerDocument || document).createElement('p');
+        const doc = panel.ownerDocument || document;
+        streamEl = doc.createElement('p');
         streamEl.className = 'ag-prism-thought-stream';
+        streamEl.setAttribute?.('data-ag-no-i18n', '');
+        if (typeof doc.createTextNode === 'function') {
+          streamEl.appendChild(doc.createTextNode(text));
+        } else {
+          streamEl.textContent = text;
+        }
         body.appendChild(streamEl);
+      } else {
+        const tn = streamEl.firstChild;
+        if (tn && tn.nodeType === 3) {
+          if ('nodeValue' in tn) tn.nodeValue = text;
+          else tn.textContent = text;
+        } else {
+          streamEl.textContent = text;
+        }
       }
-      if (streamEl.textContent !== text) {
-        streamEl.textContent = text;
-      }
+      streamEl.setAttribute?.('data-stream-len', String(text.length));
     } else {
       const prevScrollTop = typeof panel.scrollTop === 'number' ? panel.scrollTop : 0;
       renderSafeMarkdownDom(body, text);
@@ -609,6 +636,7 @@
     const entry = {
       sig,
       srcSkelHash,
+      srcStamp: panel ? quickPanelStamp(panel) : '',
       mode,
       startedAt: Date.now(),
       lastPartial: '',
@@ -634,9 +662,12 @@
       entry.pendingPartial = '';
       for (const p of entry.panels) {
         if (!p || !p.isConnected) continue;
-        // Verify panel still holds the same thought skeleton (prevents misplacement if React recycled the DOM node!)
-        const curRaw = extractRawEnglishText(p);
-        if (curRaw && hashKey(curRaw, 'sig') !== entry.srcSkelHash) continue;
+        // Fast O(1) stamp check: only extract full English text if panel child structure mutated since flight started!
+        const curStamp = quickPanelStamp(p);
+        if (entry.srcStamp && curStamp !== entry.srcStamp) {
+          const curRaw = extractRawEnglishText(p);
+          if (curRaw && hashKey(curRaw, 'sig') !== entry.srcSkelHash) continue;
+        }
         renderTranslatedText(p, trimmed, true, null);
       }
     };
@@ -721,6 +752,34 @@
     if (!panel || String(panel.tagName || '').toUpperCase() !== 'DIV') return;
 
     const streaming = isTriggerStreaming(btn);
+
+    // Fast streaming early-exit: skip expensive full DOM text walk & regexes while host is still streaming raw English!
+    if (streaming) {
+      const now = Date.now();
+      const meta = panelMeta.get(panel) || {
+        lastSkelHash: '',
+        lastChangeAt: now,
+        sawStreaming: true,
+        mutated: true,
+        finishedAt: 0,
+        doneSig: '',
+        readyStamp: '',
+      };
+      meta.sawStreaming = true;
+      meta.mutated = true;
+      meta.finishedAt = 0;
+      meta.lastChangeAt = now;
+      panelMeta.set(panel, meta);
+      const prevT = waitTimers.get(panel);
+      if (prevT) {
+        clearTimeout(prevT);
+        waitTimers.delete(panel);
+      }
+      if (expanded) {
+        renderPendingState(panel, '思考流式输出中，完结后自动转译…');
+      }
+      return;
+    }
 
     // O(1) fast-path: if panel is already rendered for current mode, not streaming, and child stamp unchanged -> skip!
     if (expanded && !streaming && panel.getAttribute('data-op-zh-ready') === '1') {
@@ -951,6 +1010,9 @@
       if (scanTimer) {
         clearTimeout(scanTimer);
         scanTimer = null;
+      }
+      if (persistTimer) {
+        flushLocalStorageCacheNow();
       }
       releasePrismOverlays();
     },
