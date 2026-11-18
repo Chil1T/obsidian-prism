@@ -926,18 +926,29 @@ test('#209 inline-fallback.js: telemetryModule="on" overrides external Pulse & "
   assert.equal(stAutoRecover.mountedFallback, false);
   assert.equal(stAutoRecover.yieldedToExternal, true);
 
-  // 3. User explicitly selects telemetryModule="on" -> forces built-in bar & hides external bar!
+  // 3. User explicitly selects telemetryModule="on" -> disposes external runtime, holds __agPulseInlineInstalled=true guard, & offscreen-hides external bar!
+  let pulseDisposed = 0;
+  win.__agPulseDispose = () => {
+    pulseDisposed += 1;
+    win.__agPulseInlineInstalled = false;
+    delete win.__agPulseDispose;
+  };
   const stForcedOn = ctl.sync({ telemetryModule: 'on' });
   assert.equal(stForcedOn.mountedFallback, true, 'telemetryModule="on" must force built-in fallback even when external exists');
   assert.equal(stForcedOn.yieldedToExternal, false);
+  assert.equal(pulseDisposed, 1, 'telemetryModule="on" must invoke win.__agPulseDispose()');
+  assert.equal(win.__agPulseInlineInstalled, true, '#285: must immediately pin __agPulseInlineInstalled=true to block external sidecar 2s CDP re-injection');
   assert.equal(extBar.getAttribute('data-ag-prism-hidden'), '1');
-  assert.equal(extBar.style.display, 'none');
+  assert.notEqual(extBar.style.display, 'none', 'Must NOT set display:none (avoids getClientRects()===0 forced-reflow loop)');
+  assert.equal(extBar.style.getPropertyValue('opacity'), '0', 'External bar must be offscreen-hidden with opacity:0');
+  assert.equal(extBar.style.getPropertyValue('position'), 'fixed');
   // Seated before rightSendSlot inside .agy-composer-footer
   const fbNode = doc.querySelector('[data-ag-prism-fallback="1"]');
   assert.ok(fbNode);
   assert.equal(footer.children[footer.children.length - 1], rightSendSlot, 'Fallback bar must seat before trailing send controls');
 
   ctl.destroy();
+  assert.equal(win.__agPulseInlineInstalled, false, '#285: destroy()/showExt() must restore __agPulseInlineInstalled=false when external was disposed');
   assert.equal(win.__agPrismMetricsBridge, undefined, 'destroy() must clean up __agPrismMetricsBridge');
 });
 

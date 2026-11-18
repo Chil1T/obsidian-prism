@@ -95,6 +95,8 @@
     const fadeItems = [];
     let hlBuckets = null;
     let fadeRaf = 0;
+    let nextFadeDueAt = 0;
+    const doneSparkCache = new WeakMap();
 
     const expirableClasses = new Map();
     let sweepTimer = 0;
@@ -112,13 +114,16 @@
       if (!cssObj?.highlights?.set || typeof HlCtor !== 'function' || typeof d?.createRange !== 'function') return null;
       if (!hlBuckets) {
         hlBuckets = HIGHLIGHT_NAMES.map((n) => {
-          const h = new HlCtor();
+          const h = cssObj.highlights.get?.(n) || new HlCtor();
           cssObj.highlights.set(n, h);
           return h;
         });
       } else {
         for (let i = 0; i < 5; i++) {
-          if (!cssObj.highlights.has?.(HIGHLIGHT_NAMES[i])) cssObj.highlights.set(HIGHLIGHT_NAMES[i], hlBuckets[i]);
+          const n = HIGHLIGHT_NAMES[i];
+          const cur = cssObj.highlights.get?.(n);
+          if (cur && cur !== hlBuckets[i]) hlBuckets[i] = cur;
+          else if (!cur) cssObj.highlights.set(n, hlBuckets[i]);
         }
       }
       return hlBuckets;
@@ -136,14 +141,9 @@
     function clearHighlightFade() {
       cAF(fadeRaf);
       fadeRaf = 0;
+      nextFadeDueAt = 0;
+      for (let i = 0; i < fadeItems.length; i++) dropBucketItem(fadeItems[i]);
       fadeItems.length = 0;
-      if (hlBuckets) {
-        for (let i = 0; i < 5; i++) {
-          try {
-            hlBuckets[i].clear();
-          } catch {}
-        }
-      }
     }
 
     function stepHighlightFade(ts) {
@@ -152,13 +152,19 @@
         clearHighlightFade();
         return;
       }
+      const now = typeof ts === 'number' && Number.isFinite(ts) ? ts : nowOf();
+      if (nextFadeDueAt > 0 && now < nextFadeDueAt - 1) {
+        fadeRaf = rAF(stepHighlightFade);
+        if (!fadeRaf) clearHighlightFade();
+        return;
+      }
       const buckets = getHlBuckets();
       if (!buckets) {
         clearHighlightFade();
         return;
       }
-      const now = typeof ts === 'number' && Number.isFinite(ts) ? ts : nowOf();
       let w = 0;
+      let earliestDue = Infinity;
       for (let i = 0; i < fadeItems.length; i++) {
         const it = fadeItems[i];
         const tn = it.n;
@@ -178,10 +184,13 @@
             continue;
           }
         }
+        const due = it.t + (it.b + 1) * STREAM_FADE_STEP_MS;
+        if (due < earliestDue) earliestDue = due;
         fadeItems[w++] = it;
       }
       fadeItems.length = w;
       if (w > 0) {
+        nextFadeDueAt = Number.isFinite(earliestDue) ? earliestDue : 0;
         fadeRaf = rAF(stepHighlightFade);
         if (!fadeRaf) clearHighlightFade();
       } else {
@@ -215,6 +224,8 @@
         r.setEnd(tn, eOff);
         buckets[0].add(r);
         fadeItems.push({ n: tn, s: sOff, e: eOff, r, b: 0, t: now });
+        const due = now + STREAM_FADE_STEP_MS;
+        if (!nextFadeDueAt || due < nextFadeDueAt) nextFadeDueAt = due;
         if (!fadeRaf) fadeRaf = rAF(stepHighlightFade);
         return true;
       } catch {
@@ -351,22 +362,26 @@
     function syncThinkingSparks(primaryModelInfo) {
       const d = docOf();
       if (isDestroyed() || !d) return;
-      const triggers = qsa(d, '[data-testid="thinking-collapsible-trigger"]');
+      const conv = findFormalConvView();
+      const triggers = qsa(conv || d, '[data-testid="thinking-collapsible-trigger"]');
       const brand = primaryModelInfo?.brand || 'gemini';
       const mv = ga(d.documentElement, 'data-ag-cs-accent') === 'mono' ? '1' : '0';
+      const cacheSig = `${brand}:${mv}`;
       const len = triggers.length;
       const pending = [];
       for (let i = 0; i < len; i++) {
         const trig = triggers[i];
+        if (i < len - 1 && doneSparkCache.get(trig) === cacheSig) continue;
         const spark = clHas(trig.firstElementChild, 'ag-cs-thinking-spark') ? trig.firstElementChild : qs(trig, '.ag-cs-thinking-spark');
         if (
-          i < len - 2 &&
+          i < len - 1 &&
           spark &&
           ga(spark, 'data-state') === 'done' &&
           ga(spark, 'data-brand') === brand &&
           ga(spark, 'data-mono') === mv &&
           !ha(trig, 'data-ag-cs-spark-streaming')
         ) {
+          doneSparkCache.set(trig, cacheSig);
           continue;
         }
         const st = /\.\.\.|…|正在|思考中|thinking/i.test(String(trig.textContent || '')) ? 'streaming' : 'done';
@@ -377,15 +392,22 @@
           ga(spark, 'data-mono') === mv &&
           (st === 'streaming') === ha(trig, 'data-ag-cs-spark-streaming')
         ) {
+          if (st === 'done' && i < len - 1) doneSparkCache.set(trig, cacheSig);
+          else doneSparkCache.delete(trig);
           continue;
         }
-        pending.push({ trig, brand, st });
+        if (st !== 'done') doneSparkCache.delete(trig);
+        pending.push({ trig, brand, st, idx: i });
       }
+      const runApply = (it) => {
+        applySingleSpark(it.trig, it.brand, it.st);
+        if (it.st === 'done' && it.idx < len - 1) doneSparkCache.set(it.trig, cacheSig);
+      };
       if (pending.length <= 16 || typeof requestAnimationFrame !== 'function') {
-        for (let i = 0; i < pending.length; i++) applySingleSpark(pending[i].trig, pending[i].brand, pending[i].st);
+        for (let i = 0; i < pending.length; i++) runApply(pending[i]);
       } else {
         const syncStart = pending.length - 12;
-        for (let i = syncStart; i < pending.length; i++) applySingleSpark(pending[i].trig, pending[i].brand, pending[i].st);
+        for (let i = syncStart; i < pending.length; i++) runApply(pending[i]);
         sparkQueue = pending.slice(0, syncStart);
         if (!hydrateRaf) hydrateRaf = rAF(stepHydration);
       }

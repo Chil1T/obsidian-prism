@@ -339,8 +339,12 @@
         prevMap.set(cachedPrismBoxes[i].box, cachedPrismBoxes[i]);
       }
       const nextObserved = new Set();
+      const next = [];
+      const trackEl = getActiveCrystalTrack ? getActiveCrystalTrack() : null;
+      let nextOrch = null;
+
+      // Phase A: Batch all DOM mutations (canvas mounts, ResizeObserver bindings, orphan prune) with ZERO layout reads!
       runGuardedMut(() => {
-        const next = [];
         for (const box of boxes) {
           nextObserved.add(box);
           if (ro && !observedPrismSet.has(box)) {
@@ -353,24 +357,19 @@
           const rim = prev && prev.cv && prev.cv.isConnected ? { cv: prev.cv, ctx: prev.ctx } : ensurePrismRimCanvas(box);
           next.push({
             box,
-            rect: allowReadRect && typeof box.getBoundingClientRect === 'function' ? box.getBoundingClientRect() : null,
+            prev,
+            rect: null,
             cv: rim ? rim.cv : null,
             ctx: rim ? rim.ctx : null,
             insetPad: 2,
-            borderRadius: prev && prev.borderRadius > 0 ? prev.borderRadius : readBoxBorderRadius(box, 10),
+            borderRadius: prev && prev.borderRadius >= 0 ? prev.borderRadius : -1,
             wasCleared: prev ? prev.wasCleared : false,
             pxStr: prev ? prev.pxStr : '',
             pyStr: prev ? prev.pyStr : '',
           });
         }
-        cachedPrismBoxes = next;
-        prismBoxCacheDirty = false;
-        prismBoxCacheAt = now;
 
-        const trackEl = getActiveCrystalTrack ? getActiveCrystalTrack() : null;
-        if (!trackEl) {
-          cachedOrchEntry = null;
-        } else {
+        if (trackEl) {
           nextObserved.add(trackEl);
           if (ro && !observedPrismSet.has(trackEl)) {
             try {
@@ -380,9 +379,9 @@
           }
           const prevOrch = cachedOrchEntry && cachedOrchEntry.box === trackEl ? cachedOrchEntry : null;
           const rim = prevOrch && prevOrch.cv && prevOrch.cv.isConnected ? { cv: prevOrch.cv, ctx: prevOrch.ctx } : ensurePrismRimCanvas(trackEl);
-          cachedOrchEntry = {
+          nextOrch = {
             box: trackEl,
-            rect: allowReadRect && typeof trackEl.getBoundingClientRect === 'function' ? trackEl.getBoundingClientRect() : null,
+            rect: null,
             cv: rim ? rim.cv : null,
             ctx: rim ? rim.ctx : null,
             insetPad: 0,
@@ -405,6 +404,23 @@
         }
         pruneOrphanRimCanvases();
       });
+
+      // Phase B: Batch all layout/style reads in a single clean pass after mutations settle!
+      for (let i = 0; i < next.length; i++) {
+        const it = next[i];
+        if (it.borderRadius < 0) it.borderRadius = readBoxBorderRadius(it.box, 10);
+        if (allowReadRect && typeof it.box.getBoundingClientRect === 'function') {
+          it.rect = it.box.getBoundingClientRect();
+        }
+        it.prev = undefined;
+      }
+      if (nextOrch && allowReadRect && typeof trackEl.getBoundingClientRect === 'function') {
+        nextOrch.rect = trackEl.getBoundingClientRect();
+      }
+      cachedPrismBoxes = next;
+      cachedOrchEntry = nextOrch;
+      prismBoxCacheDirty = false;
+      prismBoxCacheAt = now;
     }
 
     function flushPrismPointer(rafNow) {
@@ -438,7 +454,7 @@
         (!prismBoxRo && now - prismBoxCacheAt > 2500) ||
         now - prismBoxCacheAt > 8000 ||
         activeTrack !== (cachedOrchEntry ? cachedOrchEntry.box : null) ||
-        cachedPrismBoxes.some((e) => e.box.isConnected === false || e.borderRadius <= 0 || (allowReadRect && !e.rect))
+        cachedPrismBoxes.some((e) => e.box.isConnected === false || e.borderRadius < 0 || (allowReadRect && !e.rect))
       ) {
         refreshPrismBoxRectCache(now, allowReadRect);
         lastPrismRectReadAt = now;
@@ -540,7 +556,7 @@
     function invalidateMetrics() {
       prismBoxCacheDirty = true;
       for (let i = 0; i < cachedPrismBoxes.length; i++) {
-        cachedPrismBoxes[i].borderRadius = 0;
+        cachedPrismBoxes[i].borderRadius = -1;
       }
       if (isDestroyed()) return;
       runGuardedMut(() => {

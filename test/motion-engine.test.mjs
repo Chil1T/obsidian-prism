@@ -1022,7 +1022,7 @@ test('#257: Velvet stream feathering — Layer A block reveal, Layer B 5-bucket 
     assert.ok(cssSrc.includes(`::highlight(ag-stream-f${i})`), `Missing ::highlight(ag-stream-f${i}) in style.css`);
   }
   assert.ok(cssSrc.includes('.ag-prism-thought-chunk{animation:ag-prism-thought-chunk-in 320ms cubic-bezier(.22,1,.36,1) both;}'));
-  assert.ok(cssSrc.includes('@keyframes ag-prism-thought-chunk-in{0%{opacity:.08;filter:blur(1px);}'));
+  assert.ok(cssSrc.includes('@keyframes ag-prism-thought-chunk-in{0%{opacity:.08;}68%{opacity:.94;}100%{opacity:1;}}'));
 
   const prevDoc = globalThis.document;
   const prevCss = globalThis.CSS;
@@ -1124,6 +1124,11 @@ test('#257: Velvet stream feathering — Layer A block reveal, Layer B 5-bucket 
     conv.appendChild(inputBox);
     body.appendChild(conv);
 
+    const preThoughtBucket = new MockHighlight();
+    const foreignThoughtRange = { foreign: 'thought-client-range' };
+    preThoughtBucket.add(foreignThoughtRange);
+    highlightMap.set('ag-stream-f0', preThoughtBucket);
+
     globalThis.CSS = { highlights: highlightMap };
     globalThis.Highlight = MockHighlight;
     globalThis.performance = { now: () => nowMs };
@@ -1191,8 +1196,10 @@ test('#257: Velvet stream feathering — Layer A block reveal, Layer B 5-bucket 
     let st = ctl.getHighlightFadeState();
     assert.equal(st.activeCount, 1);
     assert.equal(st.rafActive, true);
-    assert.deepEqual(st.buckets, [1, 0, 0, 0, 0]);
-    const r0 = [...highlightMap.get('ag-stream-f0')][0];
+    assert.equal(highlightMap.get('ag-stream-f0'), preThoughtBucket, 'Must reuse pre-registered Highlight bucket without evicting thought-client');
+    assert.equal(preThoughtBucket.has(foreignThoughtRange), true, 'Must preserve foreign thought-client Range in shared bucket');
+    assert.deepEqual(st.buckets, [2, 0, 0, 0, 0]);
+    const r0 = [...highlightMap.get('ag-stream-f0')].find((r) => r !== foreignThoughtRange);
     assert.equal(r0.startOffset, 5);
     assert.equal(r0.endOffset, 11);
 
@@ -1211,12 +1218,13 @@ test('#257: Velvet stream feathering — Layer A block reveal, Layer B 5-bucket 
       fn(ts);
       return ctl.getHighlightFadeState();
     };
-    assert.deepEqual(stepAt(1090).buckets, [0, 1, 0, 0, 0], '70ms age -> ag-stream-f1');
-    assert.deepEqual(stepAt(1150).buckets, [0, 0, 1, 0, 0], '130ms age -> ag-stream-f2');
-    assert.deepEqual(stepAt(1210).buckets, [0, 0, 0, 1, 0], '190ms age -> ag-stream-f3');
-    assert.deepEqual(stepAt(1270).buckets, [0, 0, 0, 0, 1], '250ms age -> ag-stream-f4');
+    assert.deepEqual(stepAt(1090).buckets, [1, 1, 0, 0, 0], '70ms age -> ag-stream-f1 while foreign range stays in f0');
+    assert.deepEqual(stepAt(1150).buckets, [1, 0, 1, 0, 0], '130ms age -> ag-stream-f2');
+    assert.deepEqual(stepAt(1210).buckets, [1, 0, 0, 1, 0], '190ms age -> ag-stream-f3');
+    assert.deepEqual(stepAt(1270).buckets, [1, 0, 0, 0, 1], '250ms age -> ag-stream-f4');
     const graduated = stepAt(1330);
-    assert.deepEqual(graduated.buckets, [0, 0, 0, 0, 0], '>=300ms age -> graduated out of all Highlight buckets');
+    assert.deepEqual(graduated.buckets, [1, 0, 0, 0, 0], '>=300ms age -> own range graduated, foreign thought range untouched!');
+    assert.equal(preThoughtBucket.has(foreignThoughtRange), true, 'clearHighlightFade on graduation must NEVER .clear() foreign range');
     assert.equal(graduated.activeCount, 0);
     assert.equal(graduated.rafActive, false, 'Empty fade ring must immediately return to 0fps (zero rAF)');
     assert.equal(rafMap.size, 0);
@@ -1245,7 +1253,8 @@ test('#257: Velvet stream feathering — Layer A block reveal, Layer B 5-bucket 
     ctl.disconnectStreamObserver();
     assert.equal(ctl.getHighlightFadeState().activeCount, 0);
     assert.equal(ctl.getHighlightFadeState().rafActive, false);
-    assert.deepEqual(ctl.getHighlightFadeState().buckets, [0, 0, 0, 0, 0]);
+    assert.deepEqual(ctl.getHighlightFadeState().buckets, [1, 0, 0, 0, 0]);
+    assert.equal(preThoughtBucket.has(foreignThoughtRange), true, 'disconnectStreamObserver must drop only own ranges and keep foreign thought range');
 
     ctl.clearTransientTimers();
   } finally {

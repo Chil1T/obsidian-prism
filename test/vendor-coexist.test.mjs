@@ -386,9 +386,14 @@ test('vendor/pulse-dashboard/inline-fallback.js politely yields to external Puls
   assert.equal(extBar.getAttribute('data-ag-prism-fallback'), null);
 
   ctlExt.sync({ telemetryModule: 'off' });
-  assert.equal(extBar.style.display, 'none');
+  assert.equal(extBar.getAttribute('data-ag-prism-hidden'), '1');
+  assert.equal(extBar.style.display, '', 'Must NOT set display:none to prevent external getClientRects()===0 forced-reflow loop');
+  assert.equal(extBar.style.getPropertyValue('opacity'), '0');
+  assert.equal(extBar.style.getPropertyValue('position'), 'fixed');
   ctlExt.sync({ telemetryModule: 'auto' });
-  assert.equal(extBar.style.display, '');
+  assert.equal(extBar.getAttribute('data-ag-prism-hidden'), null);
+  assert.equal(extBar.style.getPropertyValue('opacity'), '');
+  assert.equal(extBar.style.getPropertyValue('position'), '');
   ctlExt.destroy();
 
   const envSolo = createLightweightDom();

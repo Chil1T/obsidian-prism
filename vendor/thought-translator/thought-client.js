@@ -24,59 +24,46 @@
   const FINISH_GATE_MS = 450;
   const QUIET_GATE_MS = 900;
 
-  const BLOCK_TAGS = {
-    P: 1, DIV: 1, LI: 1, UL: 1, OL: 1, PRE: 1, BLOCKQUOTE: 1,
-    H1: 1, H2: 1, H3: 1, H4: 1, H5: 1, H6: 1, TR: 1, HR: 1,
-    SECTION: 1, ARTICLE: 1,
-  };
-  const SKIP_TAGS = {
-    SCRIPT: 1, STYLE: 1, BUTTON: 1, SVG: 1, NOSCRIPT: 1,
-  };
+  const BLOCK_TAGS = new Set('P,DIV,LI,UL,OL,PRE,BLOCKQUOTE,H1,H2,H3,H4,H5,H6,TR,HR,SECTION,ARTICLE'.split(','));
+  const SKIP_TAGS = new Set('SCRIPT,STYLE,BUTTON,SVG,NOSCRIPT'.split(','));
 
-  let currentMode = 'off'; // 'off' | 'machine' | 'ai'
-  let triggerTiming = 'preload'; // 'preload' | 'expand'
-  let currentViewMode = 'immersive'; // 'immersive' | 'bilingual'
-  let currentLang = 'zh-CN'; // 'zh-CN' | 'zh-TW' | 'yue' | 'en' | 'ja'
-  let activeStyleTag = ''; // e.g. 'ai_technical' | 'ai_concise' | 'ai_custom_<hash>'
+  let currentMode = 'off';
+  let triggerTiming = 'preload';
+  let currentViewMode = 'immersive';
+  let currentLang = 'zh-CN';
+  let activeStyleTag = '';
   let cacheWarmed = false;
   let localCacheLoaded = false;
   let viewModeLoaded = false;
   let hasExplicitHostView = false;
   let scanTimer = null;
+  let cachedConvRoot = null;
   let reqSeq = 0;
 
   const SEL_TRIGGER = 'button[data-testid="thinking-collapsible-trigger"]';
   const SEL_OVERLAY = '.ag-prism-thought-overlay[data-op-thought="1"]';
+  const A_RDY = 'data-op-zh-ready';
+  const A_PND = 'data-op-zh-pending';
+  const A_FLD = 'data-op-zh-failed';
+  const A_FBK = 'data-op-zh-fallback';
+  const A_SIG = 'data-op-zh-sig';
+  const A_SRW = 'data-op-show-raw';
+  const A_MRW = 'data-op-manual-raw';
+  const A_BIL = 'data-op-bilingual';
+  const A_PNL = 'data-op-thought-panel';
 
-  // [0:rawShow, 1:rawHide, 2:fallback, 3:fallbackTitle, 4:retranslateTitle, 5:errorText, 6:retryBtn, 7:pendingMachine, 8:pendingAi, 9:pendingStreaming, 10:pendingSettling]
+  const ZH_TW_PACK = '原文|收起原文|機翻降級|AI 未就緒，已降級機翻|重新轉譯|轉譯未完成|↻ 重試|機翻中…|AI 轉譯中…|思考輸出中…|收束中…'.split('|');
   const CLIENT_I18N = {
-    'zh-CN': [
-      '原文', '收起原文', '机翻降级', '当前未配置可用 AI 模型或密钥，已降级为机翻', '重新转译此块（跳过缓存）',
-      '转译未完成', '↻ 重试', '正在极速机翻思考过程…', '正在通过 AI 转译并润色思考过程…', '思考流式输出中，完结后自动转译…', '正在收束思考上下文…',
-    ],
-    'zh-TW': [
-      '原文', '收起原文', '機翻降級', '目前未設定可用 AI 模型或金鑰，已降級為機器翻譯', '重新轉譯此區塊（略過快取）',
-      '轉譯未完成', '↻ 重試', '正在快速機器翻譯思考過程…', '正在透過 AI 轉譯並潤飾思考過程…', '思考串流輸出中，完成後自動轉譯…', '正在整理思考上下文…',
-    ],
-    yue: [
-      '原文', '收埋原文', '機翻降級', '目前未設定可用 AI 模型或金鑰，已降級為機器翻譯', '重新轉譯呢一塊（跳過快取）',
-      '轉譯未完成', '↻ 重試', '正在機器翻譯思考過程…', '正在透過 AI 轉譯同潤飾思考過程…', '思考串流輸出緊，完成後自動轉譯…', '正在整理思考上下文…',
-    ],
-    en: [
-      'Raw', 'Hide Raw', 'Fallback', 'AI model or key unavailable; degraded to machine translation', 'Retranslate block (bypass cache)',
-      'Translation incomplete', '↻ Retry', 'Translating thought block…', 'Polishing thought block with AI…', 'Streaming thought; auto-translating once done…', 'Settling thought context…',
-    ],
-    ja: [
-      '原文', '原文を隠す', '機械翻訳代替', 'AIモデルまたはキーが未設定のため、機械翻訳に切り替えました', 'このブロックを再翻訳（キャッシュ無視）',
-      '翻訳未完了', '↻ 再試行', '思考プロセスを機械翻訳中…', 'AIで思考プロセスを翻訳・整形中…', '思考ストリーミング中、完了後に自動翻訳…', '思考コンテキストを整えています…',
-    ],
+    'zh-CN': '原文|收起原文|机翻降级|AI 未就绪，已降级机翻|重新转译|转译未完成|↻ 重试|机翻中…|AI 转译中…|思考输出中…|收束中…'.split('|'),
+    'zh-TW': ZH_TW_PACK,
+    yue: ['原文', '收埋原文', ...ZH_TW_PACK.slice(2)],
+    en: 'Raw|Hide Raw|Fallback|AI unavailable; machine fallback|Retranslate|Translation incomplete|↻ Retry|Translating…|AI polishing…|Streaming…|Settling…'.split('|'),
+    ja: '原文|原文を隠す|機械翻訳代替|AI未設定・機械翻訳代替|再翻訳|翻訳未完了|↻ 再試行|翻訳中…|AI翻訳中…|出力中…|整理中…'.split('|'),
   };
 
   const memCache = new Map();
   if (W.__agPrismThought && W.__agPrismThought.__memCache instanceof Map) {
-    for (const [k, v] of W.__agPrismThought.__memCache.entries()) {
-      memCache.set(k, v);
-    }
+    for (const [k, v] of W.__agPrismThought.__memCache.entries()) memCache.set(k, v);
   }
   try { W.__agPrismThought?.destroy?.(); } catch {}
 
@@ -84,22 +71,43 @@
   const inflightBySig = new Map();
   const trackedWaitPanels = new Map();
   const panelMeta = new WeakMap();
+  const rawCacheMap = new WeakMap();
   const lockedHeights = new WeakMap();
-  const streamLastLenMap = new WeakMap();
   const panelFileMaps = new WeakMap();
   const panelStreamStates = new WeakMap();
   const panelSettleTimers = new WeakMap();
 
+  const K_TC = 'textContent';
+  const K_NV = 'nodeValue';
+  const K_CN = 'childNodes';
+  const K_FC = 'firstChild';
+  const K_PE = 'parentElement';
+  const K_NS = 'nextElementSibling';
+  const K_OD = 'ownerDocument';
+  const K_IC = 'isConnected';
+  const K_ST = 'style';
   const docRoot = () => (typeof document !== 'undefined' ? document.documentElement : null);
+  const tc = (e) => (e ? e[K_TC] : '');
+  const stc = (e, v) => { if (e) e[K_TC] = v; };
+  const isConn = (e) => Boolean(e && e[K_IC] !== false);
+  const docOf = (e) => (e && e[K_OD]) || document;
+  const nextSib = (e) => e && e[K_NS];
+  const parEl = (e) => e && e[K_PE];
   const ga = (e, k) => (e && e.getAttribute ? e.getAttribute(k) : null);
-  const sa = (e, k, v) => { if (e && e.setAttribute) e.setAttribute(k, v); };
-  const ra = (e, k) => { if (e && e.removeAttribute) e.removeAttribute(k); };
+  const hasAttr = (e, k) => (e ? (typeof e.hasAttribute === 'function' ? e.hasAttribute(k) : ga(e, k) !== null) : false);
+  const sa = (e, k, v) => {
+    if (e && e.setAttribute) {
+      const s = String(v);
+      if (ga(e, k) !== s) e.setAttribute(k, s);
+    }
+  };
+  const ra = (e, k) => { if (e && e.removeAttribute && hasAttr(e, k)) e.removeAttribute(k); };
   const raList = (e, ks) => { for (let i = 0; i < ks.length; i++) ra(e, ks[i]); };
   const ce = (d, t, cls) => { const e = d.createElement(t); if (cls) e.className = cls; return e; };
   const ctn = (d, s) => d.createTextNode(s);
   const ap = (p, c) => p.appendChild(c);
-  const clearEl = (e) => { while (e && e.firstChild) e.removeChild(e.firstChild); };
-  const setTn = (tn, v) => { if (tn) { if ('nodeValue' in tn) tn.nodeValue = v; tn.textContent = v; } };
+  const clearEl = (e) => { while (e && e[K_FC]) e.removeChild(e[K_FC]); };
+  const setTn = (tn, v) => { if (tn) { if (K_NV in tn) tn[K_NV] = v; tn[K_TC] = v; } };
   const qsa = (s) => (typeof document !== 'undefined' ? document.querySelectorAll(s) : []);
   const onClk = (e, fn) => e.addEventListener('click', fn);
   const stopEv = (ev) => {
@@ -108,34 +116,126 @@
       if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
     }
   };
+  const unlockHeight = (p) => {
+    if (!p) return;
+    lockedHeights.delete(p);
+    if (p[K_ST] && p[K_ST].minHeight) p[K_ST].removeProperty('min-height');
+  };
 
-  function nowMs() {
-    return W.Date && typeof W.Date.now === 'function' ? W.Date.now() : Date.now();
+  function queryTriggers() {
+    if (typeof document === 'undefined') return [];
+    if (!isConn(cachedConvRoot)) {
+      cachedConvRoot = document.querySelector ? document.querySelector('[data-testid="conversation-view"]') : null;
+    }
+    const scope = cachedConvRoot && cachedConvRoot.querySelectorAll ? cachedConvRoot : document;
+    const list = scope.querySelectorAll(SEL_TRIGGER);
+    return list && list.length ? list : scope !== document ? qsa(SEL_TRIGGER) : [];
   }
 
-  function isMotionOff() {
+  const hlItems = [];
+  let hlTimer = null;
+  let hlBks = null;
+
+  function getCssHlBuckets() {
+    if (hlBks) return hlBks;
+    const c = W.CSS || (typeof CSS !== 'undefined' ? CSS : null);
+    const H = W.Highlight || (typeof Highlight === 'function' ? Highlight : null);
+    if (!c?.highlights?.set || typeof H !== 'function' || typeof document === 'undefined' || !document.createRange) return null;
+    hlBks = [];
+    for (let i = 0; i < 5; i++) {
+      const nm = `ag-stream-f${i}`;
+      let h = c.highlights.get && c.highlights.get(nm);
+      if (!h) c.highlights.set(nm, (h = new H()));
+      hlBks.push(h);
+    }
+    return hlBks;
+  }
+
+  function dropHlItem(it, bs) {
+    if (bs && it.b >= 0) {
+      try { bs[it.b].delete(it.r); } catch (_) {}
+    }
+    it.b = -1;
+  }
+
+  function clearPanelHlItems(panel) {
+    if (!hlItems.length) return;
+    const bs = getCssHlBuckets();
+    for (let i = hlItems.length - 1; i >= 0; i--) {
+      if (!panel || hlItems[i].p === panel) {
+        dropHlItem(hlItems[i], bs);
+        hlItems.splice(i, 1);
+      }
+    }
+    if (!hlItems.length && hlTimer) {
+      clearTimeout(hlTimer);
+      hlTimer = null;
+    }
+  }
+
+  function stepHlFade() {
+    hlTimer = null;
+    const bs = !isMotionOff() && currentMode !== 'off' ? getCssHlBuckets() : null;
+    if (!hlItems.length || !bs) return clearPanelHlItems(null);
+    const now = nowMs();
+    for (let i = hlItems.length - 1; i >= 0; i--) {
+      const it = hlItems[i];
+      const val = (it.tn && (it.tn[K_NV] ?? it.tn[K_TC])) || '';
+      const age = now - it.at;
+      if (!isConn(it.p) || val.length < it.e || age >= 320) {
+        dropHlItem(it, bs);
+        hlItems.splice(i, 1);
+      } else {
+        const nb = Math.min(4, Math.max(0, (age / 64) | 0));
+        if (it.b !== nb) {
+          dropHlItem(it, bs);
+          try { bs[nb].add(it.r); it.b = nb; } catch (_) {}
+        }
+      }
+    }
+    if (hlItems.length) (hlTimer = setTimeout(stepHlFade, 64))?.unref?.();
+  }
+
+  function pushHlSlice(panel, doc, tn, s, e, now, bs) {
+    if (!bs || e <= s || !doc?.createRange) return;
+    const last = hlItems[hlItems.length - 1];
+    if (last && last.p === panel && last.tn === tn && last.e === s && now - last.at <= 42) {
+      try { last.r.setEnd(tn, (last.e = e)); return; } catch (_) {}
+    }
+    while (hlItems.length >= 24) dropHlItem(hlItems.shift(), bs);
     try {
-      if (ga(docRoot(), 'data-ag-cs-motion') === 'off') return true;
-      if (W.__agPrism?.getState?.()?.cfg?.motionLevel === 'off') return true;
+      const r = doc.createRange();
+      r.setStart(tn, s);
+      r.setEnd(tn, e);
+      bs[0].add(r);
+      hlItems.push({ p: panel, tn, r, e, b: 0, at: now });
+      if (!hlTimer) (hlTimer = setTimeout(stepHlFade, 64))?.unref?.();
     } catch (_) {}
-    return false;
   }
 
-  function getRafFn() {
-    if (typeof W.requestAnimationFrame === 'function') return W.requestAnimationFrame.bind(W);
-    if (typeof requestAnimationFrame === 'function') return requestAnimationFrame;
-    return null;
+  let syncHydrateBudget = 99;
+  const hydrateQueue = [];
+  let hydrateHandle = null;
+
+  function clearHydrateQueue() {
+    if (hydrateHandle) {
+      clearTimeout(hydrateHandle);
+      hydrateHandle = null;
+    }
+    hydrateQueue.length = 0;
   }
 
-  function getCafFn() {
-    if (typeof W.cancelAnimationFrame === 'function') return W.cancelAnimationFrame.bind(W);
-    if (typeof cancelAnimationFrame === 'function') return cancelAnimationFrame;
-    return null;
-  }
-
-  function canUseSmoothStream() {
-    return Boolean(getRafFn()) && !isMotionOff();
-  }
+  const nowMs = () => (W.Date?.now ? W.Date.now() : Date.now());
+  const isMotionOff = () => {
+    try {
+      return ga(docRoot(), 'data-ag-cs-motion') === 'off' || W.__agPrism?.getState?.()?.cfg?.motionLevel === 'off';
+    } catch (_) {
+      return false;
+    }
+  };
+  const getRafFn = () => (W.requestAnimationFrame ? W.requestAnimationFrame.bind(W) : typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null);
+  const getCafFn = () => (W.cancelAnimationFrame ? W.cancelAnimationFrame.bind(W) : typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : null);
+  const canUseSmoothStream = () => Boolean(getRafFn()) && !isMotionOff();
 
   function clearPanelStreamState(panel) {
     if (!panel) return;
@@ -145,6 +245,7 @@
       panelSettleTimers.delete(panel);
     }
     panelStreamStates.delete(panel);
+    clearPanelHlItems(panel);
   }
 
   function normalizeLangCode(raw) {
@@ -197,17 +298,15 @@
   function isPanelCurrentlyExpanded(panel) {
     if (!panel) return false;
     if (ga(panel.previousElementSibling, 'aria-expanded') === 'true') return true;
-    const triggers = qsa(SEL_TRIGGER);
+    const triggers = queryTriggers();
     for (let i = 0; i < triggers.length; i++) {
-      if (triggers[i] && triggers[i].nextElementSibling === panel) {
-        return ga(triggers[i], 'aria-expanded') === 'true';
-      }
+      if (nextSib(triggers[i]) === panel) return ga(triggers[i], 'aria-expanded') === 'true';
     }
     return false;
   }
 
   function clearAllWaitTimers(onlyCollapsed = false) {
-    for (const [panel, rec] of Array.from(trackedWaitPanels.entries())) {
+    for (const [panel, rec] of trackedWaitPanels.entries()) {
       const expanded = ga(rec.b, 'aria-expanded') === 'true' || isPanelCurrentlyExpanded(panel);
       if (onlyCollapsed && expanded) continue;
       clearTimeout(rec.t);
@@ -218,11 +317,11 @@
 
   function cancelCollapsedInflightRequests() {
     clearAllWaitTimers(true);
-    for (const [sig, entry] of Array.from(inflightBySig.entries())) {
+    for (const [sig, entry] of inflightBySig.entries()) {
       const kept = [];
       for (let i = 0; i < entry.ps.length; i++) {
         const p = entry.ps[i];
-        if (p && p.isConnected && isPanelCurrentlyExpanded(p)) kept.push(p);
+        if (isConn(p) && isPanelCurrentlyExpanded(p)) kept.push(p);
         else if (p) clearPendingKeepRaw(p);
       }
       entry.ps = kept;
@@ -231,11 +330,6 @@
         inflightBySig.delete(sig);
       }
     }
-  }
-
-  function hasAttr(el, name) {
-    if (!el) return false;
-    return typeof el.hasAttribute === 'function' ? el.hasAttribute(name) : ga(el, name) !== null;
   }
 
   function findChildByClass(parent, cls) {
@@ -412,7 +506,7 @@
   function isSigInCooldown(sig) {
     const rec = failedSigs.get(sig);
     if (!rec) return false;
-    if (Date.now() >= rec.u) {
+    if (nowMs() >= rec.u) {
       failedSigs.delete(sig);
       return false;
     }
@@ -423,33 +517,40 @@
     if (!sig) return;
     const prev = failedSigs.get(sig);
     const c = prev ? prev.c + 1 : 1;
-    failedSigs.set(sig, { c, u: Date.now() + (c === 1 ? 15000 : c === 2 ? 45000 : 120000) });
+    failedSigs.set(sig, { c, u: nowMs() + (c === 1 ? 15000 : c === 2 ? 45000 : 120000) });
   }
 
-  function getBridge() {
-    return W.__agPrismThoughtBridge || null;
-  }
+  const getBridge = () => W.__agPrismThoughtBridge || null;
+  const offRes = () => Promise.resolve({ ok: false, offline: true });
 
-  function callDaemonRpc(payload) {
+  function callDaemonRpc(p) {
     try {
       const br = getBridge();
-      if (br) {
-        const act = payload && payload.action;
-        if (act === 'cache-stats' && typeof br.cacheStats === 'function') return Promise.resolve().then(() => br.cacheStats());
-        if (act === 'clear-cache' && typeof br.clearCache === 'function') return Promise.resolve().then(() => br.clearCache());
-        if (act === 'cancel-translate' && typeof br.cancelTranslate === 'function') return Promise.resolve().then(() => br.cancelTranslate(payload));
-        if (typeof br.call === 'function') return Promise.resolve().then(() => br.call(payload));
-      }
-      if (typeof W.__agPrismThoughtCall === 'function') {
-        const ret = W.__agPrismThoughtCall(payload);
-        if (ret && typeof ret.then === 'function') return ret;
-      }
+      const a = p && p.action;
+      const fn = br && (a === 'cache-stats' ? br.cacheStats : a === 'clear-cache' ? br.clearCache : a === 'cancel-translate' ? br.cancelTranslate : br.call);
+      if (typeof fn === 'function') return Promise.resolve().then(() => fn.call(br, p));
+      const ret = W.__agPrismThoughtCall?.(p);
+      if (ret && typeof ret.then === 'function') return ret;
     } catch (_) {}
-    return Promise.resolve({ ok: false, offline: true });
+    return offRes();
   }
 
   function syncDocViewAttribute() {
     sa(docRoot(), 'data-ag-prism-thought-view', currentViewMode);
+  }
+
+  function syncRemoteCfgMeta(res) {
+    const nextTag = res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : '');
+    if (nextTag) activeStyleTag = nextTag;
+    if (!hasExplicitHostView && (res?.viewMode === 'bilingual' || res?.viewMode === 'immersive')) {
+      let hasLocalPref = false;
+      try { hasLocalPref = Boolean(getStore()?.getItem(VIEW_MODE_STORAGE_KEY)); } catch (_) {}
+      if (!hasLocalPref && res.viewMode !== currentViewMode) {
+        currentViewMode = res.viewMode;
+        syncDocViewAttribute();
+        refreshAllPanelViewModes(false);
+      }
+    }
   }
 
   function ensureInitialized() {
@@ -467,17 +568,7 @@
     if (br && typeof br.call === 'function') {
       br.call({ action: 'get-cache' })
         .then((res) => {
-          const nextTag = res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : '');
-          if (nextTag && nextTag !== activeStyleTag) activeStyleTag = nextTag;
-          if (!hasExplicitHostView && (res?.viewMode === 'bilingual' || res?.viewMode === 'immersive')) {
-            let hasLocalPref = false;
-            try { hasLocalPref = Boolean(W.localStorage?.getItem(VIEW_MODE_STORAGE_KEY)); } catch (_) {}
-            if (!hasLocalPref && res.viewMode !== currentViewMode) {
-              currentViewMode = res.viewMode;
-              syncDocViewAttribute();
-              refreshAllPanelViewModes();
-            }
-          }
+          syncRemoteCfgMeta(res);
           if (res && res.entries && typeof res.entries === 'object') {
             let added = 0;
             for (const [k, v] of Object.entries(res.entries)) {
@@ -496,16 +587,14 @@
 
   function cancelFlushHandle(entry) {
     if (!entry) return;
-    const caf = getCafFn();
     if (entry.pRaf) {
-      if (caf) caf(entry.pRaf);
+      getCafFn()?.(entry.pRaf);
       entry.pRaf = null;
     }
-    if (!entry.fTm) return;
-    if (entry.fRaf && caf) caf(entry.fTm);
-    else clearTimeout(entry.fTm);
-    entry.fTm = null;
-    entry.fRaf = false;
+    if (entry.fTm) {
+      clearTimeout(entry.fTm);
+      entry.fTm = null;
+    }
   }
 
   function cancelTranslateRequest(entry) {
@@ -520,22 +609,22 @@
   function applyPanelViewMode(panel) {
     if (!panel) return;
     const ov = findDirectOverlay(panel);
-    const isFailed = ga(panel, 'data-op-zh-failed') === '1';
-    const manualRaw = ga(panel, 'data-op-manual-raw');
+    const isFailed = ga(panel, A_FLD) === '1';
+    const manualRaw = ga(panel, A_MRW);
     const shouldShowRaw = isFailed || (manualRaw === '1' ? true : manualRaw === '0' ? false : currentViewMode === 'bilingual');
 
-    if (shouldShowRaw) sa(panel, 'data-op-show-raw', '1');
-    else ra(panel, 'data-op-show-raw');
+    if (shouldShowRaw) sa(panel, A_SRW, '1');
+    else ra(panel, A_SRW);
 
-    if (currentViewMode === 'bilingual' && shouldShowRaw && !isFailed) sa(panel, 'data-op-bilingual', '1');
-    else ra(panel, 'data-op-bilingual');
+    if (currentViewMode === 'bilingual' && shouldShowRaw && !isFailed) sa(panel, A_BIL, '1');
+    else ra(panel, A_BIL);
 
     if (ov) {
       const toggleBtn = findChildByClass(ov, 'ag-prism-thought-raw-toggle');
       if (toggleBtn) {
         sa(toggleBtn, 'aria-pressed', String(shouldShowRaw));
         const t = getClientPack();
-        toggleBtn.textContent = shouldShowRaw ? t[1] : t[0];
+        stc(toggleBtn, shouldShowRaw ? t[1] : t[0]);
       }
     }
   }
@@ -543,10 +632,10 @@
   function refreshAllOverlayLocaleStrings() {
     const t = getClientPack();
     qsa(SEL_OVERLAY).forEach((ov) => {
-      const panel = ov.parentElement;
+      const panel = parEl(ov);
       const fb = findChildByClass(ov, 'ag-prism-thought-fallback-badge');
       if (fb) {
-        fb.textContent = t[2];
+        stc(fb, t[2]);
         fb.title = t[3];
       }
       const rb = findChildByClass(ov, 'ag-prism-thought-retranslate-btn');
@@ -555,62 +644,64 @@
         sa(rb, 'aria-label', t[4]);
       }
       const tb = findChildByClass(ov, 'ag-prism-thought-raw-toggle');
-      if (tb) {
-        tb.textContent = ga(panel, 'data-op-show-raw') === '1' ? t[1] : t[0];
-      }
+      if (tb) stc(tb, ga(panel, A_SRW) === '1' ? t[1] : t[0]);
       const body = findChildByClass(ov, 'ag-prism-thought-body');
       if (body) {
         const errBar = findChildByClass(body, 'ag-prism-thought-error-bar');
         if (errBar) {
           const errTxt = findChildByClass(errBar, 'ag-prism-thought-error-text');
-          if (errTxt) errTxt.textContent = t[5];
+          if (errTxt) stc(errTxt, t[5]);
           const retryBtn = findChildByClass(errBar, 'ag-prism-thought-retry-btn');
-          if (retryBtn) retryBtn.textContent = t[6];
+          if (retryBtn) stc(retryBtn, t[6]);
         }
         const pendingHint = findChildByClass(body, 'ag-prism-thought-pending-hint');
         const kind = ga(pendingHint, 'data-pending-kind');
-        if (kind === 'machine') pendingHint.textContent = t[7];
-        else if (kind === 'ai') pendingHint.textContent = t[8];
-        else if (kind === 'streaming') pendingHint.textContent = t[9];
-        else if (kind === 'settling') pendingHint.textContent = t[10];
+        if (kind === 'machine') stc(pendingHint, t[7]);
+        else if (kind === 'ai') stc(pendingHint, t[8]);
+        else if (kind === 'streaming') stc(pendingHint, t[9]);
+        else if (kind === 'settling') stc(pendingHint, t[10]);
       }
     });
   }
 
-  function refreshAllPanelViewModes() {
+  function refreshAllPanelViewModes(resetManual = false) {
     qsa(SEL_OVERLAY).forEach((ov) => {
-      if (ov.parentElement) applyPanelViewMode(ov.parentElement);
+      const p = parEl(ov);
+      if (p) {
+        if (resetManual) ra(p, A_MRW);
+        applyPanelViewMode(p);
+      }
     });
   }
 
-  const PANEL_CLEAN_ATTRS = [
-    'data-op-zh-ready', 'data-op-zh-pending', 'data-op-zh-failed', 'data-op-zh-fallback',
-    'data-op-zh-sig', 'data-op-show-raw', 'data-op-manual-raw', 'data-op-bilingual', 'data-op-thought-panel',
-  ];
+  const PANEL_CLEAN_ATTRS = [A_RDY, A_PND, A_FLD, A_FBK, A_SIG, A_SRW, A_MRW, A_BIL, A_PNL];
 
   function cleanSinglePanelAttributes(panel) {
     if (!panel) return;
     clearPanelStreamState(panel);
-    lockedHeights.delete(panel);
+    unlockHeight(panel);
     clearPanelWaitTimer(panel);
     panelMeta.delete(panel);
+    rawCacheMap.delete(panel);
     const ov = findDirectOverlay(panel);
     if (ov) ov.remove();
     raList(panel, PANEL_CLEAN_ATTRS);
-    if (panel.style) panel.style.removeProperty('min-height');
   }
 
   function releasePrismOverlays() {
+    clearHydrateQueue();
+    clearPanelHlItems(null);
     clearAllWaitTimers(false);
     for (const entry of inflightBySig.values()) cancelTranslateRequest(entry);
     inflightBySig.clear();
     qsa(SEL_OVERLAY).forEach((ov) => {
-      const panel = ov.parentElement;
+      const panel = parEl(ov);
       ov.remove();
       if (panel) cleanSinglePanelAttributes(panel);
     });
     qsa(SEL_TRIGGER).forEach((btn) => {
-      if (btn && btn.nextElementSibling) cleanSinglePanelAttributes(btn.nextElementSibling);
+      const p = nextSib(btn);
+      if (p) cleanSinglePanelAttributes(p);
     });
     const rootEl = docRoot();
     ra(rootEl, 'data-ag-prism-thought-owner');
@@ -628,7 +719,7 @@
         )
       ) return true;
     } catch (_) {}
-    const txt = (btn.textContent || '').trim();
+    const txt = (tc(btn) || '').trim();
     if (!txt || /已思考|Thought\s+for|Thought\s+process/i.test(txt)) return false;
     return /thinking|正在思考|思考中|推演中|諗緊/i.test(txt) && !/\d+\s*(s|sec|秒|m|min|分)/i.test(txt);
   }
@@ -707,7 +798,7 @@
   }
 
   function createEmptyFileMap() {
-    return { list: [], nh: new Map(), tk: new Map(), btk: new Map() };
+    return { l: [], n: new Map(), t: new Map(), b: new Map() };
   }
 
   function registerFileNodeInMap(node, fm) {
@@ -731,7 +822,7 @@
     }
     if (!safeHref && !omniRel) return;
 
-    const label = String(node.textContent || '').trim().replace(/^`+|`+$/g, '').trim();
+    const label = String(tc(node) || '').trim().replace(/^`+|`+$/g, '').trim();
     let rec;
     let bname = '';
     let pbase = '';
@@ -746,34 +837,34 @@
       bname = segs.length ? segs[segs.length - 1] : '';
       pbase = segs.length >= 2 ? `${segs[segs.length - 2]}/${bname}` : bname;
       extraBase = baseRel;
-      rec = { el: node, href: '', rel: omniRel, bRel: baseRel, bh: '', h: hsh, dp: `/${baseRel.toLowerCase()}` };
+      rec = { e: node, u: '', r: omniRel, br: baseRel, bh: '', h: hsh, dp: `/${baseRel.toLowerCase()}` };
     } else {
       const nh = normalizeFileHrefForMatch(safeHref);
       const pts = parseFileHrefParts(safeHref);
       bname = pts.bn;
       pbase = pts.pb;
       hsh = pts.h;
-      rec = { el: node, href: safeHref, rel: '', bRel: '', bh: pts.bh, h: hsh, dp: pts.dp.toLowerCase() };
-      if (!fm.nh.has(nh)) fm.nh.set(nh, rec);
+      rec = { e: node, u: safeHref, r: '', br: '', bh: pts.bh, h: hsh, dp: pts.dp.toLowerCase() };
+      if (!fm.n.has(nh)) fm.n.set(nh, rec);
     }
 
-    fm.list.push(rec);
+    fm.l.push(rec);
     const addMap = (mp, k) => {
       const key = String(k || '').trim().replace(/\\/g, '/').toLowerCase();
       if (key && !mp.has(key)) mp.set(key, rec);
     };
     if (label && (/[./\\]/.test(label) || /#L\d+/i.test(label))) {
-      addMap(fm.tk, label);
-      if (!/#L\d+|:\d+/i.test(label)) addMap(fm.btk, label);
+      addMap(fm.t, label);
+      if (!/#L\d+|:\d+/i.test(label)) addMap(fm.b, label);
     }
     if (bname && bname.includes('.')) {
       if (hsh) {
-        addMap(fm.tk, `${bname}${hsh}`);
-        if (pbase !== bname) addMap(fm.tk, `${pbase}${hsh}`);
+        addMap(fm.t, `${bname}${hsh}`);
+        if (pbase !== bname) addMap(fm.t, `${pbase}${hsh}`);
       }
-      addMap(fm.btk, bname);
-      if (pbase !== bname) addMap(fm.btk, pbase);
-      if (extraBase) addMap(fm.btk, extraBase);
+      addMap(fm.b, bname);
+      if (pbase !== bname) addMap(fm.b, pbase);
+      if (extraBase) addMap(fm.b, extraBase);
     }
   }
 
@@ -781,36 +872,42 @@
     if (!node) return;
     const nt = node.nodeType;
     if (nt === 3) {
-      if (node.nodeValue !== undefined && node.nodeValue !== null) chunks.push(node.nodeValue);
-      else if (node.textContent) chunks.push(node.textContent);
+      if (node[K_NV] !== undefined && node[K_NV] !== null) chunks.push(node[K_NV]);
+      else if (tc(node)) chunks.push(tc(node));
       return;
     }
     if (nt !== 1 || isOverlayOrIgnoredElement(node)) return;
     const tag = node.tagName ? String(node.tagName).toUpperCase() : '';
-    if (SKIP_TAGS[tag]) return;
+    if (SKIP_TAGS.has(tag)) return;
     if (tag === 'BR') {
       chunks.push('\n');
       return;
     }
     if (fm) registerFileNodeInMap(node, fm);
-    const isBlock = Boolean(BLOCK_TAGS[tag]);
+    const isBlock = BLOCK_TAGS.has(tag);
     if (isBlock) chunks.push('\n');
-    const chs = node.childNodes;
+    const chs = node[K_CN];
     if (chs && chs.length) {
       for (let i = 0; i < chs.length; i++) collectCleanText(chs[i], chunks, fm);
-    } else if (typeof node.textContent === 'string' && (!node.children || !node.children.length)) {
-      chunks.push(node.textContent);
+    } else if (typeof tc(node) === 'string' && (!node.children || !node.children.length)) {
+      chunks.push(tc(node));
     }
     if (isBlock) chunks.push('\n');
   }
 
   function extractRawEnglishText(panel) {
-    if (!panel || !panel.childNodes) return '';
+    const chs = panel && panel[K_CN];
+    if (!chs) return '';
+    const stp = quickPanelStamp(panel);
+    const hit = rawCacheMap.get(panel);
+    if (hit && hit.s === stp && panelFileMaps.has(panel)) return hit.t;
     const chunks = [];
     const fm = createEmptyFileMap();
-    for (let i = 0; i < panel.childNodes.length; i++) collectCleanText(panel.childNodes[i], chunks, fm);
+    for (let i = 0; i < chs.length; i++) collectCleanText(chs[i], chunks, fm);
     panelFileMaps.set(panel, fm);
-    return normalizeTextKey(chunks.join(''));
+    const rt = normalizeTextKey(chunks.join(''));
+    rawCacheMap.set(panel, { s: stp, t: rt });
+    return rt;
   }
 
   function ensurePanelFileMap(panel) {
@@ -826,31 +923,31 @@
     if (/^file:\/\//i.test(cleaned)) {
       const safe = sanitizeFileHref(cleaned);
       if (!safe) return null;
-      const hit = fm ? fm.nh.get(normalizeFileHrefForMatch(safe)) : null;
-      return { href: safe, el: hit ? hit.el : null };
+      const hit = fm ? fm.n.get(normalizeFileHrefForMatch(safe)) : null;
+      return { u: safe, e: hit ? hit.e : null };
     }
 
-    if (!fm || !fm.list.length) return null;
+    if (!fm || !fm.l.length) return null;
 
     const normToken = cleaned.replace(/\\/g, '/').replace(/^\.\//, '');
-    const exactHit = fm.tk.get(normToken.toLowerCase());
-    if (exactHit) return { href: exactHit.href, rel: exactHit.rel, el: exactHit.el };
+    const exactHit = fm.t.get(normToken.toLowerCase());
+    if (exactHit) return { u: exactHit.u, r: exactHit.r, e: exactHit.e };
 
     const lineSplit = /^(.+?)(#L\d+(?:-L?\d+)?|:\d+(?:-\d+)?(?::\d+)?)$/i.exec(normToken);
     const basePart = (lineSplit ? lineSplit[1] : normToken).toLowerCase();
     const normHash = lineSplit ? normalizeLineHashSuffix(lineSplit[2]) : '';
 
     if (normHash) {
-      const withHashHit = fm.tk.get(`${basePart}${normHash.toLowerCase()}`);
-      if (withHashHit) return { href: withHashHit.href, rel: withHashHit.rel, el: withHashHit.el };
+      const withHashHit = fm.t.get(`${basePart}${normHash.toLowerCase()}`);
+      if (withHashHit) return { u: withHashHit.u, r: withHashHit.r, e: withHashHit.e };
     }
 
-    let baseRec = fm.btk.get(basePart) || null;
+    let baseRec = fm.b.get(basePart) || null;
     if (!baseRec && basePart.includes('/')) {
       const suffix = `/${basePart}`;
-      for (let i = 0; i < fm.list.length; i++) {
-        if (fm.list[i].dp.endsWith(suffix)) {
-          baseRec = fm.list[i];
+      for (let i = 0; i < fm.l.length; i++) {
+        if (fm.l[i].dp.endsWith(suffix)) {
+          baseRec = fm.l[i];
           break;
         }
       }
@@ -858,18 +955,18 @@
     if (!baseRec) return null;
 
     const sameHash = !normHash || baseRec.h.toLowerCase() === normHash.toLowerCase();
-    if (baseRec.rel && !baseRec.href) {
-      return { href: '', rel: normHash ? `${baseRec.bRel}${normHash}` : baseRec.rel, el: sameHash ? baseRec.el : null };
+    if (baseRec.r && !baseRec.u) {
+      return { u: '', r: normHash ? `${baseRec.br}${normHash}` : baseRec.r, e: sameHash ? baseRec.e : null };
     }
 
     if (normHash) {
       const composedHref = sanitizeFileHref(`${baseRec.bh}${normHash}`);
       if (!composedHref) return null;
-      const exactAnchor = fm.nh.get(normalizeFileHrefForMatch(composedHref));
-      return { href: composedHref, rel: '', el: exactAnchor ? exactAnchor.el : !baseRec.h || sameHash ? baseRec.el : null };
+      const exactAnchor = fm.n.get(normalizeFileHrefForMatch(composedHref));
+      return { u: composedHref, r: '', e: exactAnchor ? exactAnchor.e : !baseRec.h || sameHash ? baseRec.e : null };
     }
 
-    return { href: baseRec.href, rel: '', el: baseRec.el };
+    return { u: baseRec.u, r: '', e: baseRec.e };
   }
 
   function findLiveAnchorInTree(node, targetNormHref, targetBaseHref, out) {
@@ -885,45 +982,38 @@
         if (parseFileHrefParts(safe).bh.toLowerCase() === targetBaseHref && !out.b) out.b = node;
       }
     }
-    const chs = node.children || node.childNodes;
+    const chs = node.children || node[K_CN];
     if (chs && chs.length) {
       for (let i = 0; i < chs.length && !out.e; i++) findLiveAnchorInTree(chs[i], targetNormHref, targetBaseHref, out);
     }
   }
 
   function resolveLiveNativeAnchor(panel, safeHref, cachedEl) {
-    if (cachedEl && cachedEl.isConnected !== false && typeof cachedEl.click === 'function') return cachedEl;
-    if (!panel || !panel.childNodes) return null;
+    if (isConn(cachedEl) && typeof cachedEl.click === 'function') return cachedEl;
+    const cns = panel && panel[K_CN];
+    if (!cns) return null;
     const tNorm = normalizeFileHrefForMatch(safeHref);
     const tBase = parseFileHrefParts(safeHref).bh.toLowerCase();
     const out = { e: null, b: null };
-    for (let i = 0; i < panel.childNodes.length && !out.e; i++) findLiveAnchorInTree(panel.childNodes[i], tNorm, tBase, out);
+    for (let i = 0; i < cns.length && !out.e; i++) findLiveAnchorInTree(cns[i], tNorm, tBase, out);
     return out.e || out.b || null;
   }
 
   function openInOmniFallback(rawPathOrUri, safeHref, ev) {
     const omni = W.__agPrismOmni;
     if (!omni || typeof omni.openFile !== 'function') return false;
-    const rawStr = String(rawPathOrUri || safeHref || '').trim();
-    if (!rawStr) return false;
-    let filePath = rawStr;
-    let lineStart = null;
-    let lineEnd = null;
+    let filePath = String(rawPathOrUri || safeHref || '').trim();
+    if (!filePath) return false;
+    let hSrc = filePath;
     if (safeHref) {
       const parts = parseFileHrefParts(safeHref);
-      const hm = /^#L(\d+)(?:-L?(\d+))?/i.exec(parts.h || '');
-      lineStart = hm ? parseInt(hm[1], 10) : null;
-      lineEnd = hm && hm[2] ? parseInt(hm[2], 10) : lineStart;
-      filePath = parts.dp || safeHref;
-      if (/^\/[A-Za-z]:\//.test(filePath)) filePath = filePath.slice(1);
-    } else {
-      const hm = /#L(\d+)(?:-L?(\d+))?$/i.exec(filePath);
-      if (hm) {
-        lineStart = parseInt(hm[1], 10);
-        lineEnd = hm[2] ? parseInt(hm[2], 10) : lineStart;
-        filePath = filePath.slice(0, hm.index);
-      }
+      hSrc = parts.h || '';
+      filePath = (parts.dp || safeHref).replace(/^\/([A-Za-z]:\/)/, '$1');
     }
+    const hm = /#L(\d+)(?:-L?(\d+))?$/i.exec(hSrc);
+    const lineStart = hm ? parseInt(hm[1], 10) : null;
+    const lineEnd = hm && hm[2] ? parseInt(hm[2], 10) : lineStart;
+    if (!safeHref && hm) filePath = filePath.slice(0, hm.index);
     stopEv(ev);
     void omni.openFile(filePath, {
       mode: ev && (ev.ctrlKey || ev.metaKey) ? 'external' : 'workbench',
@@ -952,13 +1042,12 @@
       sa(pill, 'title', cleanRel);
     }
     sa(pill, 'data-file-pill', '1');
-    if (pill.style) Object.assign(pill.style, { cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: '2px' });
-    pill.textContent = labelText;
+    stc(pill, labelText);
     onClk(pill, (ev) => {
       if (ev && typeof ev.button === 'number' && ev.button !== 0) return;
       const targetAnchor = safeHref
         ? resolveLiveNativeAnchor(panel, safeHref, nativeEl)
-        : nativeEl && nativeEl.isConnected !== false && typeof nativeEl.click === 'function'
+        : isConn(nativeEl) && typeof nativeEl.click === 'function'
         ? nativeEl
         : null;
       if (targetAnchor && targetAnchor !== pill && typeof targetAnchor.click === 'function') {
@@ -986,14 +1075,14 @@
         rawTok = stripped;
       }
       const hit = lookupFileTarget(fm, rawTok);
-      if (hit && (hit.href || hit.rel)) {
+      if (hit && (hit.u || hit.r)) {
         if (m.index > last) ap(parent, ctn(doc, plainSlice.slice(last, m.index)));
         let displayLabel = rawTok;
-        if (/^file:\/\//i.test(rawTok) && hit.href) {
-          const parts = parseFileHrefParts(hit.href);
+        if (/^file:\/\//i.test(rawTok) && hit.u) {
+          const parts = parseFileHrefParts(hit.u);
           displayLabel = parts.bn ? `${parts.bn}${parts.h}` : rawTok;
         }
-        ap(parent, createFilePill(doc, displayLabel, hit.href, hit.el, panel, hit.rel));
+        ap(parent, createFilePill(doc, displayLabel, hit.u, hit.e, panel, hit.r));
         if (trailing) ap(parent, ctn(doc, trailing));
         last = m.index + m[0].length;
       }
@@ -1013,11 +1102,11 @@
         const safeHref = sanitizeFileHref(rawUrl);
         if (safeHref) {
           const hit = lookupFileTarget(fm, safeHref) || lookupFileTarget(fm, cleanLabel);
-          ap(parent, createFilePill(doc, cleanLabel, safeHref, hit ? hit.el : null, panel));
+          ap(parent, createFilePill(doc, cleanLabel, safeHref, hit ? hit.e : null, panel));
         } else if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rawUrl)) {
           const mapped = lookupFileTarget(fm, rawUrl) || lookupFileTarget(fm, cleanLabel);
-          if (mapped && (mapped.href || mapped.rel)) {
-            ap(parent, createFilePill(doc, cleanLabel, mapped.href, mapped.el, panel, mapped.rel));
+          if (mapped && (mapped.u || mapped.r)) {
+            ap(parent, createFilePill(doc, cleanLabel, mapped.u, mapped.e, panel, mapped.r));
           } else {
             ap(parent, ctn(doc, cleanLabel));
           }
@@ -1027,17 +1116,17 @@
       } else if (m[4] !== undefined) {
         const codeInner = m[4];
         const hit = lookupFileTarget(fm, codeInner);
-        if (hit && (hit.href || hit.rel)) {
-          ap(parent, createFilePill(doc, codeInner.trim(), hit.href, hit.el, panel, hit.rel));
+        if (hit && (hit.u || hit.r)) {
+          ap(parent, createFilePill(doc, codeInner.trim(), hit.u, hit.e, panel, hit.r));
         } else {
           const code = ce(doc, 'code', 'ag-prism-thought-code');
-          code.textContent = codeInner;
+          stc(code, codeInner);
           ap(parent, code);
         }
       } else if (m[5] !== undefined) {
         const strong = ce(doc, 'strong');
         if (depth < 2) appendInlineFormatted(strong, m[5], doc, fm, panel, depth + 1);
-        else strong.textContent = m[5];
+        else stc(strong, m[5]);
         ap(parent, strong);
       }
       lastIdx = m.index + m[0].length;
@@ -1046,8 +1135,8 @@
   }
 
   function quickStructureSig(panel) {
-    if (!panel || !panel.childNodes) return null;
-    const nodes = panel.childNodes;
+    const nodes = panel && panel[K_CN];
+    if (!nodes) return null;
     let c = 0;
     let f = null;
     let l = null;
@@ -1062,20 +1151,23 @@
   }
 
   function quickPanelStamp(panel) {
-    if (!panel || !panel.childNodes) return '';
-    const nodes = panel.childNodes;
+    const nodes = panel && panel[K_CN];
+    if (!nodes) return '';
     let c = 0;
     let fl = 0;
     let ll = 0;
+    let ch = 0;
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
       if (n.nodeType === 1 && isOverlayOrIgnoredElement(n)) continue;
       c++;
-      const l = n.nodeType === 3 ? (n.nodeValue || '').length : (n.textContent || '').length;
+      const s = n.nodeType === 3 ? n[K_NV] || '' : tc(n) || '';
+      const l = s.length;
       if (c === 1) fl = l;
       ll = l;
+      if (l) ch = s.charCodeAt(l - 1) | 0;
     }
-    return `${c}:${fl}:${ll}`;
+    return `${c}:${fl}:${ll}:${ch}`;
   }
 
   function splitMarkdownBlocks(markdownText) {
@@ -1091,7 +1183,7 @@
           inFence = true;
           fenceLines = [];
         } else {
-          blocks.push({ type: 'pre', text: fenceLines.join('\n') });
+          blocks.push({ k: 'pre', x: fenceLines.join('\n') });
           inFence = false;
           fenceLines = [];
         }
@@ -1104,19 +1196,17 @@
       if (!trimmed) continue;
       const ulMatch = /^[-*•]\s+(.+)$/.exec(trimmed);
       if (ulMatch) {
-        blocks.push({ type: 'ul', text: ulMatch[1] });
+        blocks.push({ k: 'ul', x: ulMatch[1] });
         continue;
       }
       const olMatch = /^\d+[.)]\s+(.+)$/.exec(trimmed);
       if (olMatch) {
-        blocks.push({ type: 'ol', text: olMatch[1] });
+        blocks.push({ k: 'ol', x: olMatch[1] });
         continue;
       }
-      blocks.push({ type: 'p', text: trimmed.replace(/^#{1,4}\s+/, '') });
+      blocks.push({ k: 'p', x: trimmed.replace(/^#{1,4}\s+/, '') });
     }
-    if (inFence && fenceLines.length) {
-      blocks.push({ type: 'pre', text: fenceLines.join('\n') });
-    }
+    if (inFence && fenceLines.length) blocks.push({ k: 'pre', x: fenceLines.join('\n') });
     return blocks;
   }
 
@@ -1124,27 +1214,16 @@
     const len = str.length;
     let end = Math.min(len, fromIdx + Math.max(1, rawTake));
     if (end >= len) return len;
-    // Never split UTF-16 surrogate pairs
     const prevCode = str.charCodeAt(end - 1);
-    if (prevCode >= 0xd800 && prevCode <= 0xdbff && end < len) {
-      end++;
-    }
-    // Keep short ASCII identifier/word intact instead of chopping mid-word
+    if (prevCode >= 0xd800 && prevCode <= 0xdbff && end < len) end++;
     const curCh = str.charCodeAt(end - 1);
     const isAsciiWord = (c) => (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 95;
     if (isAsciiWord(curCh)) {
       let look = end;
-      while (look < len && look - end < 18 && isAsciiWord(str.charCodeAt(look))) {
-        look++;
-      }
-      if (look >= len || !isAsciiWord(str.charCodeAt(look))) {
-        end = look;
-      }
+      while (look < len && look - end < 18 && isAsciiWord(str.charCodeAt(look))) look++;
+      if (look >= len || !isAsciiWord(str.charCodeAt(look))) end = look;
     }
-    // Absorb trailing CJK/ASCII punctuation attached to current phrase
-    if (end < len && /[,.;:!?，。、；：！？）》」\]`]/.test(str[end])) {
-      end++;
-    }
+    if (end < len && /[,.;:!?，。、；：！？）》」\]`]/.test(str[end])) end++;
     return end;
   }
 
@@ -1152,7 +1231,7 @@
     if (!st || !st.cks.length) return;
     while (st.cks.length > 0 && (flushAll || now - st.cks[0].at >= CHUNK_FADE_TTL_MS || st.cks.length >= MAX_LIVE_CHUNKS)) {
       const old = st.cks.shift();
-      if (old.tn) setTn(old.tn, (old.tn.nodeValue ?? old.tn.textContent ?? '') + old.tx);
+      if (old.tn) setTn(old.tn, (old.tn[K_NV] ?? old.tn[K_TC] ?? '') + old.tx);
       old.sp.remove();
     }
   }
@@ -1174,7 +1253,8 @@
   function renderIncrementalStreamDom(panel, body, visibleText, now, animateChunks) {
     const blocks = splitMarkdownBlocks(visibleText);
     if (!blocks.length) return;
-    const doc = panel.ownerDocument || document;
+    const doc = docOf(panel);
+    const hlBks = animateChunks ? getCssHlBuckets() : null;
     sa(body, 'data-streaming-live', '1');
     ra(body, 'data-raw-zh');
 
@@ -1183,7 +1263,7 @@
     if (!diverged) {
       const checkLen = Math.min(st.bs.length - 1, blocks.length - 1);
       for (let i = 0; i < checkLen; i++) {
-        if (st.bs[i].type !== blocks[i].type || st.bs[i].text !== blocks[i].text) {
+        if (st.bs[i].k !== blocks[i].k || st.bs[i].x !== blocks[i].x) {
           diverged = true;
           break;
         }
@@ -1191,6 +1271,7 @@
     }
 
     if (diverged) {
+      clearPanelHlItems(panel);
       clearEl(body);
       st = { bd: body, bs: [], el: null, tn: null, raw: '', tp: '', le: null, lt: '', cks: [] };
       panelStreamStates.set(panel, st);
@@ -1202,20 +1283,23 @@
       const prevIdx = st.bs.length - 1;
       const targetPrev = blocks[prevIdx];
       if (st.el && st.tn) {
-        if (targetPrev.text.startsWith(st.raw) && targetPrev.text.length > st.raw.length) {
-          const tail = targetPrev.text.slice(st.raw.length);
-          if (animateChunks && targetPrev.type !== 'pre') {
+        if (targetPrev.x.startsWith(st.raw) && targetPrev.x.length > st.raw.length) {
+          const tail = targetPrev.x.slice(st.raw.length);
+          if (animateChunks && targetPrev.k !== 'pre' && !hlBks) {
             compactLiveChunks(st, now, false);
             const sp = ce(doc, 'span', 'ag-prism-thought-chunk');
-            sp.textContent = tail;
+            stc(sp, tail);
             ap(st.el, sp);
             st.cks.push({ sp, tn: st.tn, tx: tail, at: now });
           } else {
             compactLiveChunks(st, now, true);
-            setTn(st.tn, (st.tn.nodeValue ?? st.tn.textContent ?? '') + tail);
+            const prev = st.tn[K_NV] ?? st.tn[K_TC] ?? '';
+            const nv = prev + tail;
+            setTn(st.tn, nv);
+            if (hlBks && targetPrev.k !== 'pre') pushHlSlice(panel, doc, st.tn, prev.length, nv.length, now, hlBks);
           }
         }
-        st.bs[prevIdx] = { type: targetPrev.type, text: targetPrev.text };
+        st.bs[prevIdx] = { k: targetPrev.k, x: targetPrev.x };
       }
       st.el = null;
       st.tn = null;
@@ -1225,63 +1309,63 @@
 
     while (st.bs.length < lastIdx) {
       const blk = blocks[st.bs.length];
-      const el = mountStreamBlockContainer(st, blk.type, doc, body);
-      if (blk.type === 'pre') el.textContent = blk.text;
-      else appendInlineFormatted(el, blk.text, doc, ensurePanelFileMap(panel), panel, 0);
-      st.bs.push({ type: blk.type, text: blk.text });
+      const el = mountStreamBlockContainer(st, blk.k, doc, body);
+      if (blk.k === 'pre') stc(el, blk.x);
+      else appendInlineFormatted(el, blk.x, doc, ensurePanelFileMap(panel), panel, 0);
+      st.bs.push({ k: blk.k, x: blk.x });
     }
 
     const curBlk = blocks[lastIdx];
-    if (!st.el || st.tp !== curBlk.type) {
+    if (!st.el || st.tp !== curBlk.k) {
       if (st.el && st.bs.length > lastIdx) {
         const staleTn = st.tn;
         st.cks = st.cks.filter((c) => (c.tn === staleTn ? (c.sp.remove(), false) : true));
         st.el.remove();
       }
-      const el = mountStreamBlockContainer(st, curBlk.type, doc, body);
+      const el = mountStreamBlockContainer(st, curBlk.k, doc, body);
       const tn = ap(el, ctn(doc, ''));
       st.el = el;
       st.tn = tn;
       st.raw = '';
-      st.tp = curBlk.type;
-      st.bs[lastIdx] = { type: curBlk.type, text: '' };
+      st.tp = curBlk.k;
+      st.bs[lastIdx] = { k: curBlk.k, x: '' };
     }
 
-    if (!animateChunks || curBlk.type === 'pre') compactLiveChunks(st, now, true);
-    if (curBlk.text === st.raw) {
-      compactLiveChunks(st, now, false);
+    if (!animateChunks || curBlk.k === 'pre' || hlBks) compactLiveChunks(st, now, true);
+    if (curBlk.x === st.raw) {
+      if (!hlBks) compactLiveChunks(st, now, false);
       return;
     }
 
-    if (curBlk.text.startsWith(st.raw)) {
-      const delta = curBlk.text.slice(st.raw.length);
-      if (!animateChunks || curBlk.type === 'pre') {
-        setTn(st.tn, (st.tn.nodeValue ?? st.tn.textContent ?? '') + delta);
+    if (curBlk.x.startsWith(st.raw)) {
+      const delta = curBlk.x.slice(st.raw.length);
+      if (!animateChunks || curBlk.k === 'pre' || hlBks) {
+        const prev = st.tn[K_NV] ?? st.tn[K_TC] ?? '';
+        const nv = prev + delta;
+        setTn(st.tn, nv);
+        if (hlBks && curBlk.k !== 'pre') pushHlSlice(panel, doc, st.tn, prev.length, nv.length, now, hlBks);
       } else {
         compactLiveChunks(st, now, false);
         const sp = ce(doc, 'span', 'ag-prism-thought-chunk');
-        sp.textContent = delta;
+        stc(sp, delta);
         ap(st.el, sp);
         st.cks.push({ sp, tn: st.tn, tx: delta, at: now });
       }
     } else {
       const activeTn = st.tn;
       st.cks = st.cks.filter((c) => (c.tn === activeTn ? (c.sp.remove(), false) : true));
-      setTn(activeTn, curBlk.text);
+      setTn(activeTn, curBlk.x);
     }
-    st.raw = curBlk.text;
-    st.bs[lastIdx].text = curBlk.text;
+    st.raw = curBlk.x;
+    st.bs[lastIdx].x = curBlk.x;
   }
 
   function renderSafeMarkdownDom(container, markdownText, fm, panel) {
-    const hasStreamChild =
-      hasAttr(container, 'data-streaming-live') ||
-      Boolean((container.querySelector && container.querySelector('.ag-prism-thought-stream')) || findChildByClass(container, 'ag-prism-thought-stream'));
-    if (!hasStreamChild && !findChildByClass(container, 'ag-prism-thought-error-bar') && ga(container, 'data-raw-zh') === markdownText) {
+    if (!hasAttr(container, 'data-streaming-live') && !findChildByClass(container, 'ag-prism-thought-error-bar') && ga(container, 'data-raw-zh') === markdownText) {
       return;
     }
     ra(container, 'data-streaming-live');
-    const doc = container.ownerDocument || document;
+    const doc = docOf(container);
     clearEl(container);
     sa(container, 'data-raw-zh', markdownText);
 
@@ -1289,9 +1373,9 @@
     const listCtx = { le: null, lt: '' };
     for (let i = 0; i < blocks.length; i++) {
       const blk = blocks[i];
-      const el = mountStreamBlockContainer(listCtx, blk.type, doc, container);
-      if (blk.type === 'pre') el.textContent = blk.text;
-      else appendInlineFormatted(el, blk.text, doc, fm, panel, 0);
+      const el = mountStreamBlockContainer(listCtx, blk.k, doc, container);
+      if (blk.k === 'pre') stc(el, blk.x);
+      else appendInlineFormatted(el, blk.x, doc, fm, panel, 0);
     }
   }
 
@@ -1318,7 +1402,7 @@
   }
 
   function ensureOverlayShell(panel) {
-    const doc = panel.ownerDocument || document;
+    const doc = docOf(panel);
     let ov = findDirectOverlay(panel);
     if (ov) return ov;
 
@@ -1335,11 +1419,9 @@
     const fb = ce(doc, 'span', 'ag-prism-thought-fallback-badge');
     sa(fb, 'data-testid', 'thought-fallback-badge');
     fb.hidden = true;
-    fb.textContent = t[2];
+    stc(fb, t[2]);
     fb.title = t[3];
-    if (fb.style) {
-      Object.assign(fb.style, { display: 'none', fontSize: '11px', padding: '1px 6px', borderRadius: '999px', opacity: '0.85', marginRight: '4px' });
-    }
+    if (fb[K_ST]) fb[K_ST].display = 'none';
     ap(ov, fb);
 
     const rb = ce(doc, 'button', 'ag-prism-thought-retranslate-btn');
@@ -1347,10 +1429,10 @@
     sa(rb, 'data-no-press-spring', '1');
     sa(rb, 'data-testid', 'thought-retranslate-btn');
     rb.hidden = true;
-    rb.textContent = '↻';
+    stc(rb, '↻');
     rb.title = t[4];
     sa(rb, 'aria-label', t[4]);
-    if (rb.style) Object.assign(rb.style, { display: 'none', opacity: '0.6', cursor: 'pointer', marginRight: '4px' });
+    if (rb[K_ST]) rb[K_ST].display = 'none';
     onClk(rb, (ev) => {
       stopEv(ev);
       triggerSingleBlockRetranslate(panel);
@@ -1360,18 +1442,18 @@
     const tb = ce(doc, 'button', 'ag-prism-thought-raw-toggle');
     tb.type = 'button';
     sa(tb, 'data-no-press-spring', '1');
-    const showingRaw = ga(panel, 'data-op-show-raw') === '1';
+    const showingRaw = ga(panel, A_SRW) === '1';
     sa(tb, 'aria-pressed', String(showingRaw));
-    tb.textContent = showingRaw ? t[1] : t[0];
+    stc(tb, showingRaw ? t[1] : t[0]);
     onClk(tb, (ev) => {
       stopEv(ev);
-      sa(panel, 'data-op-manual-raw', ga(panel, 'data-op-show-raw') === '1' ? '0' : '1');
+      sa(panel, A_MRW, ga(panel, A_SRW) === '1' ? '0' : '1');
       applyPanelViewMode(panel);
     });
     ap(ov, tb);
 
-    sa(panel, 'data-op-thought-panel', '1');
-    panel.insertBefore(ov, panel.firstChild);
+    sa(panel, A_PNL, '1');
+    panel.insertBefore(ov, panel[K_FC]);
     return ov;
   }
 
@@ -1381,18 +1463,18 @@
     const fb = findChildByClass(ov, 'ag-prism-thought-fallback-badge');
     if (fb) {
       fb.hidden = !isFallback;
-      if (fb.style) fb.style.display = isFallback ? '' : 'none';
-      fb.textContent = t[2];
+      if (fb[K_ST]) fb[K_ST].display = isFallback ? '' : 'none';
+      stc(fb, t[2]);
       fb.title = t[3];
     }
     if (panel) {
-      if (isFallback) sa(panel, 'data-op-zh-fallback', '1');
-      else ra(panel, 'data-op-zh-fallback');
+      if (isFallback) sa(panel, A_FBK, '1');
+      else ra(panel, A_FBK);
     }
     const rb = findChildByClass(ov, 'ag-prism-thought-retranslate-btn');
     if (rb) {
       rb.hidden = !isReady;
-      if (rb.style) rb.style.display = isReady ? '' : 'none';
+      if (rb[K_ST]) rb[K_ST].display = isReady ? '' : 'none';
       rb.disabled = false;
       rb.title = t[4];
       sa(rb, 'aria-label', t[4]);
@@ -1402,7 +1484,7 @@
   function renderPendingState(panel, message, pendingKind = '') {
     if (!panel) return;
     const existingOv = findDirectOverlay(panel);
-    if (ga(panel, 'data-op-zh-ready') === '1' && existingOv && ga(existingOv, 'data-pending') !== '1') {
+    if (ga(panel, A_RDY) === '1' && existingOv && ga(existingOv, 'data-pending') !== '1') {
       const rb = findChildByClass(existingOv, 'ag-prism-thought-retranslate-btn');
       if (rb) rb.disabled = true;
       return;
@@ -1411,7 +1493,7 @@
     const ov = ensureOverlayShell(panel);
     sa(ov, 'data-pending', '1');
     ra(ov, 'data-failed');
-    ra(panel, 'data-op-zh-failed');
+    ra(panel, A_FLD);
     syncOverlayBadges(ov, panel, false, false);
 
     const body = findChildByClass(ov, 'ag-prism-thought-body');
@@ -1420,48 +1502,46 @@
       let hint = findChildByClass(body, 'ag-prism-thought-pending-hint');
       if (!hint) {
         clearEl(body);
-        hint = ap(body, ce(panel.ownerDocument || document, 'span', 'ag-prism-thought-pending-hint'));
+        hint = ap(body, ce(docOf(panel), 'span', 'ag-prism-thought-pending-hint'));
       }
       if (pendingKind) sa(hint, 'data-pending-kind', pendingKind);
-      if (hint.textContent !== message) hint.textContent = message;
+      if (tc(hint) !== message) stc(hint, message);
     }
-    if (ga(panel, 'data-op-zh-pending') !== '1') sa(panel, 'data-op-zh-pending', '1');
-    ra(panel, 'data-op-zh-ready');
+    sa(panel, A_PND, '1');
+    ra(panel, A_RDY);
   }
 
   function clearPendingKeepRaw(panel) {
-    if (!panel || ga(panel, 'data-op-zh-ready') === '1') return;
-    lockedHeights.delete(panel);
-    if (panel.style) panel.style.removeProperty('min-height');
-    ra(panel, 'data-op-zh-pending');
+    if (!panel || ga(panel, A_RDY) === '1') return;
+    unlockHeight(panel);
+    ra(panel, A_PND);
     const ov = findDirectOverlay(panel);
     if (ov && ga(ov, 'data-pending') === '1') {
       ov.remove();
-      if (ga(panel, 'data-op-zh-failed') !== '1') ra(panel, 'data-op-thought-panel');
+      if (ga(panel, A_FLD) !== '1') ra(panel, A_PNL);
     }
   }
 
   function renderFailedState(panel, rawText, mode, sig) {
     if (!panel) return;
     clearPanelStreamState(panel);
-    lockedHeights.delete(panel);
-    if (panel.style) panel.style.removeProperty('min-height');
-    ra(panel, 'data-op-zh-pending');
+    unlockHeight(panel);
+    ra(panel, A_PND);
 
     const existingOv = findDirectOverlay(panel);
-    if (ga(panel, 'data-op-zh-ready') === '1' && existingOv) {
+    if (ga(panel, A_RDY) === '1' && existingOv) {
       const rb = findChildByClass(existingOv, 'ag-prism-thought-retranslate-btn');
       if (rb) rb.disabled = false;
       return;
     }
 
-    const doc = panel.ownerDocument || document;
+    const doc = docOf(panel);
     const t = getClientPack();
     const ov = ensureOverlayShell(panel);
     ra(ov, 'data-pending');
     sa(ov, 'data-failed', '1');
-    ra(panel, 'data-op-zh-ready');
-    sa(panel, 'data-op-zh-failed', '1');
+    ra(panel, A_RDY);
+    sa(panel, A_FLD, '1');
     syncOverlayBadges(ov, panel, false, false);
 
     const body = findChildByClass(ov, 'ag-prism-thought-body');
@@ -1469,22 +1549,20 @@
       ra(body, 'data-raw-zh');
       clearEl(body);
       const errBar = ce(doc, 'span', 'ag-prism-thought-error-bar');
-      if (errBar.style) Object.assign(errBar.style, { display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '12px', opacity: '0.82' });
       const errTxt = ce(doc, 'span', 'ag-prism-thought-error-text');
-      errTxt.textContent = t[5];
+      stc(errTxt, t[5]);
       ap(errBar, errTxt);
 
       const retryBtn = ce(doc, 'button', 'ag-prism-thought-retry-btn');
       retryBtn.type = 'button';
       sa(retryBtn, 'data-testid', 'thought-retry-btn');
       sa(retryBtn, 'data-no-press-spring', '1');
-      retryBtn.textContent = t[6];
-      if (retryBtn.style) Object.assign(retryBtn.style, { cursor: 'pointer', textDecoration: 'underline' });
+      stc(retryBtn, t[6]);
       onClk(retryBtn, (ev) => {
         stopEv(ev);
         failedSigs.delete(sig);
         ra(ov, 'data-failed');
-        ra(panel, 'data-op-zh-failed');
+        ra(panel, A_FLD);
         applyPanelViewMode(panel);
         const curRaw = extractRawEnglishText(panel) || rawText;
         const activeMode = currentMode === 'off' ? mode : currentMode;
@@ -1501,60 +1579,53 @@
   function renderTranslatedText(panel, text, isPartial, sig, engine = '', streamOpts = null) {
     if (!panel || typeof text !== 'string' || !text) return;
     const ov = ensureOverlayShell(panel);
-    if (hasAttr(ov, 'data-pending')) ra(ov, 'data-pending');
-    if (hasAttr(ov, 'data-failed')) ra(ov, 'data-failed');
-    if (hasAttr(panel, 'data-op-zh-failed')) ra(panel, 'data-op-zh-failed');
+    ra(ov, 'data-pending');
+    ra(ov, 'data-failed');
+    ra(panel, A_FLD);
     const body = findChildByClass(ov, 'ag-prism-thought-body');
     if (!body) return;
 
     const isFallback = engine === 'machine-fallback';
+    const steadyPartial =
+      isPartial &&
+      ga(panel, A_RDY) === '1' &&
+      !hasAttr(panel, A_PND) &&
+      (ga(panel, A_FBK) === '1') === isFallback;
 
     if (isPartial) {
       if (!lockedHeights.has(panel)) {
         const curH = panel.offsetHeight || 0;
-        if (curH > 0 && panel.style) {
-          lockedHeights.set(panel, curH);
-          panel.style.minHeight = `${curH}px`;
-        }
+        lockedHeights.set(panel, curH);
+        if (curH > 0 && panel[K_ST]) panel[K_ST].minHeight = `${curH}px`;
       }
-      if (streamOpts && streamOpts.inc) {
-        renderIncrementalStreamDom(panel, body, text, streamOpts.now || nowMs(), Boolean(streamOpts.anim && !isMotionOff()));
-      } else {
-        let streamEl = findChildByClass(body, 'ag-prism-thought-stream');
-        if (streamEl && streamLastLenMap.get(streamEl) === text.length && ga(panel, 'data-op-zh-ready') === '1') return;
-        if (hasAttr(body, 'data-raw-zh')) ra(body, 'data-raw-zh');
-        if (!streamEl) {
-          clearEl(body);
-          const doc = panel.ownerDocument || document;
-          streamEl = ce(doc, 'p', 'ag-prism-thought-stream');
-          sa(streamEl, 'data-ag-no-i18n', '');
-          if (typeof doc.createTextNode === 'function') ap(streamEl, ctn(doc, text));
-          else streamEl.textContent = text;
-          ap(body, streamEl);
-        } else {
-          const tn = streamEl.firstChild;
-          if (tn && tn.nodeType === 3) setTn(tn, text);
-          else streamEl.textContent = text;
-        }
-        streamLastLenMap.set(streamEl, text.length);
-      }
+      renderIncrementalStreamDom(panel, body, text, streamOpts?.now || nowMs(), Boolean(streamOpts?.anim && !isMotionOff()));
+      if (steadyPartial) return;
       syncOverlayBadges(ov, panel, isFallback, false);
     } else {
       const commitFinalDom = () => {
         panelSettleTimers.delete(panel);
         panelStreamStates.delete(panel);
-        if (!panel.isConnected || currentMode === 'off') return;
+        clearPanelHlItems(panel);
+        if (!isConn(panel) || currentMode === 'off') return;
         const prevScrollTop = typeof panel.scrollTop === 'number' ? panel.scrollTop : 0;
         renderSafeMarkdownDom(body, text, ensurePanelFileMap(panel), panel);
-        lockedHeights.delete(panel);
-        if (panel.style && panel.style.minHeight) panel.style.removeProperty('min-height');
+        unlockHeight(panel);
         if (prevScrollTop > 0 && typeof panel.scrollTop === 'number') panel.scrollTop = prevScrollTop;
       };
 
       const st = panelStreamStates.get(panel);
       const now = nowMs();
-      const hasLive = Boolean(!isMotionOff() && st && st.cks && st.cks.length);
-      const remFadeMs = hasLive ? Math.max(0, CHUNK_FADE_TTL_MS - Math.max(0, now - st.cks[st.cks.length - 1].at)) : 0;
+      let youngestAt = 0;
+      if (!isMotionOff()) {
+        if (st && st.cks && st.cks.length) youngestAt = st.cks[st.cks.length - 1].at;
+        for (let i = hlItems.length - 1; i >= 0; i--) {
+          if (hlItems[i].p === panel) {
+            if (hlItems[i].at > youngestAt) youngestAt = hlItems[i].at;
+            break;
+          }
+        }
+      }
+      const remFadeMs = youngestAt > 0 ? Math.max(0, CHUNK_FADE_TTL_MS - Math.max(0, now - youngestAt)) : 0;
 
       if (remFadeMs > 16) {
         const prevT = panelSettleTimers.get(panel);
@@ -1570,7 +1641,7 @@
       syncOverlayBadges(ov, panel, isFallback, true);
       if (sig) {
         const effectiveSig = isFallback ? `${sig}:fallback` : sig;
-        if (ga(panel, 'data-op-zh-sig') !== effectiveSig) sa(panel, 'data-op-zh-sig', effectiveSig);
+        sa(panel, A_SIG, effectiveSig);
         const meta = panelMeta.get(panel) || {};
         meta.ds = effectiveSig;
         meta.rs = quickPanelStamp(panel);
@@ -1578,8 +1649,8 @@
       }
     }
 
-    if (hasAttr(panel, 'data-op-zh-pending')) ra(panel, 'data-op-zh-pending');
-    if (ga(panel, 'data-op-zh-ready') !== '1') sa(panel, 'data-op-zh-ready', '1');
+    ra(panel, A_PND);
+    sa(panel, A_RDY, '1');
     applyPanelViewMode(panel);
   }
 
@@ -1620,11 +1691,11 @@
         return;
       }
       if (isSigInCooldown(sig)) {
-        if (panel && expanded && ga(panel, 'data-op-zh-failed') !== '1') renderFailedState(panel, rawText, mode, sig);
+        if (panel && expanded && ga(panel, A_FLD) !== '1') renderFailedState(panel, rawText, mode, sig);
         return;
       }
       const existing = inflightBySig.get(sig);
-      if (existing && !existing.x && Date.now() - existing.at <= 75000) {
+      if (existing && !existing.x && nowMs() - existing.at <= 75000) {
         bindPanelToInflight(existing, panel, expanded);
         return;
       }
@@ -1639,13 +1710,13 @@
     const br = getBridge();
     if (!br || typeof br.translateStream !== 'function') return;
 
-    const requestId = `op_tr_${Date.now().toString(36)}_${++reqSeq}`;
+    const requestId = `op_tr_${nowMs().toString(36)}_${++reqSeq}`;
     const entry = {
       id: requestId,
       sk: srcSkelHash,
       sc: panel ? quickStructureSig(panel) : null,
       m: mode,
-      at: Date.now(),
+      at: nowMs(),
       x: false,
       lp: '',
       tg: '',
@@ -1658,7 +1729,6 @@
       fa: 0,
       pp: '',
       fTm: null,
-      fRaf: false,
       ps: panel ? [panel] : [],
     };
     inflightBySig.set(sig, entry);
@@ -1669,7 +1739,7 @@
     }
 
     const verifyPanel = (p) => {
-      if (!p || !p.isConnected) return false;
+      if (!isConn(p)) return false;
       const cs = quickStructureSig(p);
       if (entry.sc && cs && (cs.c !== entry.sc.c || cs.f !== entry.sc.f || cs.l !== entry.sc.l)) {
         const curRaw = extractRawEnglishText(p);
@@ -1694,7 +1764,7 @@
       if (inflightBySig.get(sig) === entry) inflightBySig.delete(sig);
       if (!pl || currentMode === 'off' || entry.x) return;
       for (const p of entry.ps) {
-        if (!p || !p.isConnected) continue;
+        if (!isConn(p)) continue;
         const curRaw = extractRawEnglishText(p);
         if (curRaw && hashKey(curRaw, 'sig') !== entry.sk) continue;
         renderTranslatedText(p, pl.z, false, pl.s, pl.e);
@@ -1736,7 +1806,12 @@
           return;
         }
 
-        const dt = entry.pa > 0 ? Math.min(64, Math.max(8, now - entry.pa)) : 16.67;
+        if (entry.pa > 0 && !entry.dn && now - entry.pa < 30) {
+          entry.pRaf = raf(stepPacer);
+          return;
+        }
+
+        const dt = entry.pa > 0 ? Math.min(80, Math.max(8, now - entry.pa)) : 16.67;
         const basePerFrame = entry.dn
           ? Math.max(3.2, backlog / 6.2)
           : backlog > 48
@@ -1765,24 +1840,12 @@
 
     const scheduleAlignedStreamFlush = () => {
       if (entry.fTm || entry.x) return;
-      const stepFlush = () => {
+      entry.fTm = setTimeout(() => {
         entry.fTm = null;
-        entry.fRaf = false;
         if (currentMode === 'off' || entry.x || !entry.pp) return;
-        if (entry.fa > 0 && nowMs() - entry.fa < STREAM_FLUSH_MS) {
-          scheduleAlignedStreamFlush();
-          return;
-        }
+        if (entry.fa > 0 && nowMs() - entry.fa < STREAM_FLUSH_MS) return scheduleAlignedStreamFlush();
         flushPartialToPanels(entry.pp);
-      };
-      const raf = getRafFn();
-      if (raf) {
-        entry.fRaf = true;
-        entry.fTm = raf(stepFlush);
-      } else {
-        entry.fRaf = false;
-        entry.fTm = setTimeout(stepFlush, STREAM_FLUSH_MS);
-      }
+      }, STREAM_FLUSH_MS);
     };
 
     const failEntry = () => {
@@ -1791,7 +1854,7 @@
       if (entry.x || currentMode === 'off') return;
       recordSigFailure(sig);
       for (const p of entry.ps) {
-        if (p && p.isConnected) renderFailedState(p, rawText, mode, sig);
+        if (isConn(p)) renderFailedState(p, rawText, mode, sig);
       }
     };
 
@@ -1806,9 +1869,8 @@
       }
       entry.pp = trimmed;
       const now = nowMs();
-      const immediate = !getRafFn() || isMotionOff();
-      if (entry.fa === 0 && immediate) flushPartialToPanels(trimmed);
-      else if (now - entry.fa >= STREAM_FLUSH_MS && immediate) {
+      if (entry.fa === 0) flushPartialToPanels(trimmed);
+      else if (now - entry.fa >= STREAM_FLUSH_MS) {
         cancelFlushHandle(entry);
         flushPartialToPanels(trimmed);
       } else scheduleAlignedStreamFlush();
@@ -1818,7 +1880,7 @@
           cancelFlushHandle(entry);
           if (inflightBySig.get(sig) === entry) inflightBySig.delete(sig);
           for (const p of entry.ps) {
-            if (p && p.isConnected && ga(p, 'data-op-zh-ready') !== '1') clearPendingKeepRaw(p);
+            if (isConn(p) && ga(p, A_RDY) !== '1') clearPendingKeepRaw(p);
           }
           return;
         }
@@ -1831,7 +1893,7 @@
 
           if (
             canUseSmoothStream() &&
-            entry.ps.some((p) => p && p.isConnected && isPanelCurrentlyExpanded(p)) &&
+            entry.ps.some((p) => isConn(p) && isPanelCurrentlyExpanded(p)) &&
             entry.sh.length < finalZh.length &&
             finalZh.startsWith(entry.sh) &&
             (entry.sh.length > 0 || finalZh.length <= 900)
@@ -1865,45 +1927,65 @@
     }
   }
 
+  function enqueueHydrate(panel, cached, sig, engine) {
+    if (!panel || hydrateQueue.some((x) => x.p === panel)) return;
+    hydrateQueue.push({ p: panel, z: cached, s: sig, e: engine });
+    if (hydrateHandle) return;
+    const step = () => {
+      hydrateHandle = null;
+      if (currentMode === 'off') return clearHydrateQueue();
+      let n = 0;
+      while (hydrateQueue.length && n < 3) {
+        const it = hydrateQueue.shift();
+        if (isConn(it.p) && isPanelCurrentlyExpanded(it.p)) {
+          renderTranslatedText(it.p, it.z, false, it.s, it.e);
+          n++;
+        }
+      }
+      if (hydrateQueue.length) (hydrateHandle = setTimeout(step, 16))?.unref?.();
+    };
+    (hydrateHandle = setTimeout(step, 16))?.unref?.();
+  }
+
   function processSingleTrigger(btn, allowPreloadCollapsed, priority = 0) {
     if (!btn) return;
     const expanded = ga(btn, 'aria-expanded') === 'true';
     if (!expanded && !allowPreloadCollapsed) return;
 
-    const panel = btn.nextElementSibling;
+    const panel = nextSib(btn);
     if (!panel || String(panel.tagName || '').toUpperCase() !== 'DIV') return;
 
     const streaming = isTriggerStreaming(btn);
-    const t = getClientPack();
-
     if (streaming) {
-      const now = Date.now();
-      const meta = panelMeta.get(panel) || { h: '', c: now, s: true, m: true, f: 0, ds: '', rs: '' };
+      const now = nowMs();
+      const prevMeta = panelMeta.get(panel);
+      const alreadyStreamingPending = Boolean(prevMeta && prevMeta.s && ga(panel, A_PND) === '1');
+      const meta = prevMeta || { h: '', c: now, s: true, m: true, f: 0, ds: '', rs: '' };
       meta.s = true;
       meta.m = true;
       meta.f = 0;
       meta.c = now;
       panelMeta.set(panel, meta);
       clearPanelWaitTimer(panel);
-      if (expanded) renderPendingState(panel, t[9], 'streaming');
+      if (expanded && !alreadyStreamingPending) renderPendingState(panel, getClientPack()[9], 'streaming');
       return;
     }
 
-    if (expanded && ga(panel, 'data-op-zh-ready') === '1') {
+    if (expanded && ga(panel, A_RDY) === '1') {
       const em = panelMeta.get(panel);
-      if (em && em.rs === quickPanelStamp(panel) && em.ds && em.ds === ga(panel, 'data-op-zh-sig')) return;
+      if (em && em.rs === quickPanelStamp(panel) && em.ds && em.ds === ga(panel, A_SIG)) return;
     }
 
     const rawText = extractRawEnglishText(panel);
     if (!rawText || isMostlyZh(rawText)) {
-      if (ga(panel, 'data-op-zh-pending') === '1') clearPendingKeepRaw(panel);
+      if (ga(panel, A_PND) === '1') clearPendingKeepRaw(panel);
       return;
     }
 
     const srcSkelHash = hashKey(rawText, 'sig');
     const sig = computeSig(rawText, currentMode);
 
-    if (expanded && ga(panel, 'data-op-zh-ready') === '1' && ga(panel, 'data-op-zh-sig') === sig) {
+    if (expanded && ga(panel, A_RDY) === '1' && ga(panel, A_SIG) === sig) {
       const meta = panelMeta.get(panel) || {};
       meta.ds = sig;
       meta.rs = quickPanelStamp(panel);
@@ -1911,7 +1993,7 @@
       return;
     }
 
-    const now = Date.now();
+    const now = nowMs();
     let meta = panelMeta.get(panel);
     if (!meta) {
       meta = { h: srcSkelHash, c: now, s: false, m: false, f: now - FINISH_GATE_MS, ds: '', rs: '' };
@@ -1932,8 +2014,17 @@
     const cached = findCachedTranslation(rawText, currentMode);
     if (cached) {
       clearPanelWaitTimer(panel);
-      if (expanded) renderTranslatedText(panel, cached, false, sig, currentMode === 'machine' ? 'machine' : 'ai');
-      else putMemCache(hashKey(rawText, currentMode === 'machine' ? 'mt' : activeStyleTag || 'ai_technical'), cached, false);
+      const eng = currentMode === 'machine' ? 'machine' : 'ai';
+      if (expanded) {
+        if (syncHydrateBudget > 0) {
+          syncHydrateBudget--;
+          renderTranslatedText(panel, cached, false, sig, eng);
+        } else {
+          enqueueHydrate(panel, cached, sig, eng);
+        }
+      } else {
+        putMemCache(hashKey(rawText, currentMode === 'machine' ? 'mt' : activeStyleTag || 'ai_technical'), cached, false);
+      }
       return;
     }
 
@@ -1944,22 +2035,22 @@
     }
 
     if (isSigInCooldown(sig)) {
-      if (expanded && ga(panel, 'data-op-zh-failed') !== '1') renderFailedState(panel, rawText, currentMode, sig);
+      if (expanded && ga(panel, A_FLD) !== '1') renderFailedState(panel, rawText, currentMode, sig);
       return;
     }
 
     const waitMs = meta.m ? Math.max(0, FINISH_GATE_MS - (now - meta.f), QUIET_GATE_MS - (now - meta.c)) : 0;
     if (waitMs > 0) {
-      if (expanded) renderPendingState(panel, t[10], 'settling');
+      if (expanded) renderPendingState(panel, getClientPack()[10], 'settling');
       setPanelWaitTimer(
         panel,
         btn,
         () => {
-          if (currentMode === 'off' || !btn.isConnected) return;
+          if (currentMode === 'off' || !isConn(btn)) return;
           const liveExpanded = ga(btn, 'aria-expanded') === 'true';
           let liveAllowPreload = false;
           if (!liveExpanded && triggerTiming === 'preload') {
-            const allBtns = qsa(SEL_TRIGGER);
+            const allBtns = queryTriggers();
             liveAllowPreload = Boolean(allBtns.length > 0 && allBtns[allBtns.length - 1] === btn);
           }
           if (!liveExpanded && !liveAllowPreload) {
@@ -1979,7 +2070,7 @@
   function pruneUnneededPendingRequests(activePanelSet) {
     for (const [sig, entry] of inflightBySig.entries()) {
       if (entry.lp || entry.x) continue;
-      if (!entry.ps.some((p) => p && p.isConnected && activePanelSet.has(p))) {
+      if (!entry.ps.some((p) => isConn(p) && activePanelSet.has(p))) {
         cancelTranslateRequest(entry);
         inflightBySig.delete(sig);
       }
@@ -1989,7 +2080,7 @@
   function scanNow() {
     scanTimer = null;
     if (currentMode === 'off') return;
-    const triggers = qsa(SEL_TRIGGER);
+    const triggers = queryTriggers();
     if (!triggers.length) return;
 
     const lastIdx = triggers.length - 1;
@@ -2004,18 +2095,31 @@
       const expanded = ga(btn, 'aria-expanded') === 'true';
       if (!allowPreload && !expanded) continue;
 
-      const panel = btn.nextElementSibling;
+      const panel = nextSib(btn);
       if (panel) activePanelSet.add(panel);
 
-      const inViewport = expanded ? isElementInViewport(panel || btn) : false;
+      if (expanded && panel && ga(panel, A_RDY) === '1') {
+        const em = panelMeta.get(panel);
+        if (em && em.ds && em.ds === ga(panel, A_SIG) && em.rs === quickPanelStamp(panel) && !isTriggerStreaming(btn)) {
+          continue;
+        }
+      }
+
+      const inViewport = expanded && !isLatest ? isElementInViewport(panel || btn) : false;
       const tier = isLatest && expanded ? 25 : inViewport ? 20 : isLatest ? 12 : 5;
       candidates.push({ b: btn, a: allowPreload, p: tier * 1000 + i });
     }
 
     if (inflightBySig.size > 0) pruneUnneededPendingRequests(activePanelSet);
+    if (!candidates.length) return;
     candidates.sort((x, y) => y.p - x.p);
-    for (let i = 0; i < candidates.length; i++) {
-      processSingleTrigger(candidates[i].b, candidates[i].a, candidates[i].p);
+    syncHydrateBudget = 4;
+    try {
+      for (let i = 0; i < candidates.length; i++) {
+        processSingleTrigger(candidates[i].b, candidates[i].a, candidates[i].p);
+      }
+    } finally {
+      syncHydrateBudget = 99;
     }
   }
 
@@ -2024,7 +2128,7 @@
     scanTimer = setTimeout(scanNow, delayMs);
   }
 
-  const RESET_SIG_ATTRS = ['data-op-zh-sig', 'data-op-zh-fallback', 'data-op-zh-failed'];
+  const RESET_SIG_ATTRS = [A_SIG, A_FBK, A_FLD];
 
   const api = {
     sync(cfg = {}) {
@@ -2043,16 +2147,7 @@
         currentViewMode = incomingView;
         persistViewModePreference(currentViewMode);
         syncDocViewAttribute();
-        if (viewChanged) {
-          qsa(SEL_OVERLAY).forEach((ov) => {
-            if (ov.parentElement) {
-              ra(ov.parentElement, 'data-op-manual-raw');
-              applyPanelViewMode(ov.parentElement);
-            }
-          });
-        } else {
-          refreshAllPanelViewModes();
-        }
+        refreshAllPanelViewModes(viewChanged);
       }
 
       if (nextMode === 'off') {
@@ -2073,6 +2168,7 @@
       currentMode = nextMode;
       ensureInitialized();
       if (changed) {
+        clearHydrateQueue();
         if (hadPrevEngine) {
           clearAllWaitTimers(false);
           for (const entry of inflightBySig.values()) cancelTranslateRequest(entry);
@@ -2083,8 +2179,8 @@
           raList(p, RESET_SIG_ATTRS);
           panelMeta.delete(p);
         };
-        qsa(SEL_TRIGGER).forEach((b) => { if (b && b.nextElementSibling) resetPanelSig(b.nextElementSibling); });
-        qsa(SEL_OVERLAY).forEach((ov) => { if (ov && ov.parentElement) resetPanelSig(ov.parentElement); });
+        qsa(SEL_TRIGGER).forEach((b) => { const p = nextSib(b); if (p) resetPanelSig(p); });
+        qsa(SEL_OVERLAY).forEach((ov) => { const p = parEl(ov); if (p) resetPanelSig(p); });
       }
       scheduleScan(25);
     },
@@ -2110,12 +2206,7 @@
       currentViewMode = normalized;
       persistViewModePreference(normalized);
       syncDocViewAttribute();
-      qsa(SEL_OVERLAY).forEach((ov) => {
-        if (ov.parentElement) {
-          ra(ov.parentElement, 'data-op-manual-raw');
-          applyPanelViewMode(ov.parentElement);
-        }
-      });
+      refreshAllPanelViewModes(true);
       if (changed && opts.persistDaemon !== false) {
         void callDaemonRpc({ action: 'save-config', viewMode: normalized }).catch(() => {});
       }
@@ -2147,32 +2238,22 @@
     },
     getConfig() {
       const br = getBridge();
-      if (!br) return Promise.resolve({ ok: false, offline: true });
+      if (!br) return offRes();
       return br.call({ action: 'get-config' }).then((res) => {
-        const nextTag = res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : '');
-        if (nextTag) activeStyleTag = nextTag;
-        if (!hasExplicitHostView && (res?.viewMode === 'bilingual' || res?.viewMode === 'immersive')) {
-          let hasLocalPref = false;
-          try { hasLocalPref = Boolean(W.localStorage?.getItem(VIEW_MODE_STORAGE_KEY)); } catch (_) {}
-          if (!hasLocalPref) {
-            currentViewMode = res.viewMode;
-            syncDocViewAttribute();
-            refreshAllPanelViewModes();
-          }
-        }
+        syncRemoteCfgMeta(res);
         return res;
       });
     },
     saveConfig(input) {
       const br = getBridge();
-      if (!br) return Promise.resolve({ ok: false, offline: true });
+      if (!br) return offRes();
       return br.call({ action: 'save-config', ...input }).then((res) => {
         const nextTag = res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : '');
         const tagChanged = Boolean(nextTag && nextTag !== activeStyleTag);
         if (nextTag) activeStyleTag = nextTag;
         qsa(SEL_TRIGGER).forEach((b) => {
-          const p = b && b.nextElementSibling;
-          if (p && (tagChanged || ga(p, 'data-op-zh-fallback') === '1' || ga(p, 'data-op-zh-failed') === '1')) {
+          const p = nextSib(b);
+          if (p && (tagChanged || ga(p, A_FBK) === '1' || ga(p, A_FLD) === '1')) {
             raList(p, RESET_SIG_ATTRS);
             panelMeta.delete(p);
           }
@@ -2184,11 +2265,11 @@
     },
     fetchModels(input) {
       const br = getBridge();
-      return br ? br.call({ action: 'fetch-models', ...input }) : Promise.resolve({ ok: false, offline: true });
+      return br ? br.call({ action: 'fetch-models', ...input }) : offRes();
     },
     testConnection(input) {
       const br = getBridge();
-      return br ? br.call({ action: 'test-connection', ...input }) : Promise.resolve({ ok: false, offline: true });
+      return br ? br.call({ action: 'test-connection', ...input }) : offRes();
     },
     __memCache: memCache,
     destroy() {

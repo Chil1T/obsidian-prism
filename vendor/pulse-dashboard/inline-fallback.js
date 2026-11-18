@@ -145,18 +145,15 @@
       return true;
     };
 
+    const HIDE_PROPS = 'position:fixed|left:-9999px|top:-9999px|width:1px|height:1px|opacity:0|pointer-events:none|visibility:hidden|overflow:hidden'.split('|').map((s) => s.split(':'));
+
     const findExtBars = (doc) => {
       if (!doc) return [];
       const seen = new Set(), out = [], add = (el) => { if (el && !seen.has(el)) { seen.add(el); out.push(el); } };
       if (typeof doc.querySelectorAll === 'function') {
         try {
-          const s = doc.querySelectorAll('#' + BAR_ID + ', [data-ag-pulse-bar="true"]');
+          const s = doc.querySelectorAll('#' + BAR_ID + ',[id^="' + BAR_ID + '"],[data-ag-pulse-bar="true"]');
           for (let i = 0; i < s.length; i++) add(s[i]);
-          const ds = doc.querySelectorAll('div');
-          for (let i = 0; i < ds.length; i++) {
-            const id = String(ds[i]?.getAttribute?.('id') || ds[i]?.id || '');
-            if (id.startsWith(BAR_ID)) add(ds[i]);
-          }
         } catch {}
       }
       if (typeof doc.getElementById === 'function') add(doc.getElementById(BAR_ID));
@@ -191,6 +188,8 @@
       return true;
     };
 
+    let extGuardHeld = false;
+
     const hasExt = () => {
       const w = gW(), doc = gD();
       if (!w || !doc || !isConv(doc, w)) return false;
@@ -206,7 +205,7 @@
       const sig = [
         w.__agPulseRuntimeOwner ? String(w.__agPulseRuntimeOwner) : '',
         w.__agPulseRuntimeBridge ? 'b' : '',
-        w.__agPulseInlineInstalled ? '1' : '',
+        w.__agPulseInlineInstalled && !extGuardHeld ? '1' : '',
         w.agPulseHost && !w.agPulseHost.__prismFallback ? 'h' : '',
       ].join('|');
       if (sig !== '|||') {
@@ -221,23 +220,55 @@
     };
 
     const showExt = () => {
+      if (extGuardHeld) {
+        extGuardHeld = false;
+        const w = gW();
+        if (w && !w.__agPulseDispose) w.__agPulseInlineInstalled = false;
+      }
       const bars = findExtBars(gD());
       for (let i = 0; i < bars.length; i++) {
         const b = bars[i];
         if (b && b.getAttribute?.(HID_ATTR) === '1') {
           b.removeAttribute(HID_ATTR);
-          b.style?.removeProperty?.('display');
+          if (b.style) {
+            if (typeof b.style.removeProperty === 'function') {
+              b.style.removeProperty('display');
+              for (let j = 0; j < HIDE_PROPS.length; j++) b.style.removeProperty(HIDE_PROPS[j][0]);
+            } else {
+              b.style.opacity = '';
+              b.style.position = '';
+              b.style.pointerEvents = '';
+            }
+          }
         }
       }
     };
 
-    const hideExt = () => {
+    const hideExt = (disposeExt = false) => {
+      if (disposeExt) {
+        const w = gW();
+        if (w) {
+          try { w.__agPulseDispose?.(); } catch {}
+          w.__agPulseInlineInstalled = true;
+          extGuardHeld = true;
+        }
+      }
       const bars = findExtBars(gD());
       for (let i = 0; i < bars.length; i++) {
         const b = bars[i];
         if (b && b.getAttribute?.(FALLBACK_ATTR) !== '1') {
           b.setAttribute(HID_ATTR, '1');
-          b.style?.setProperty?.('display', 'none', 'important');
+          if (b.style) {
+            b.style.removeProperty?.('display');
+            if (typeof b.style.setProperty === 'function') {
+              for (let j = 0; j < HIDE_PROPS.length; j++) b.style.setProperty(HIDE_PROPS[j][0], HIDE_PROPS[j][1], 'important');
+            } else {
+              b.style.position = 'fixed';
+              b.style.left = '-9999px';
+              b.style.opacity = '0';
+              b.style.pointerEvents = 'none';
+            }
+          }
         }
       }
     };
@@ -462,22 +493,33 @@
       return true;
     };
 
+    let lastHealAt = 0;
+    const IGN_STREAM_SEL =
+      '[data-testid="autoscroll-viewport"],[data-testid="planner-response-text"],aside,[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-conv-aura-host,.ag-cs-crab';
+    const isIgnoredStreamNode = (t) =>
+      Boolean(
+        t?.closest &&
+        !t.closest('.agy-composer-footer,[data-testid="input-box-bottom-toolbar"]') &&
+        t.closest(IGN_STREAM_SEL)
+      );
+
     const ensSeatObs = () => {
       const w = gW(), doc = gD();
       if (!w || !doc || mode === 'off') return;
       const runHeal = () => {
         healTm = null;
+        lastHealAt = Date.now();
         if (mode === 'off') return;
         const d = gD(), wn = gW();
         if (!d || !wn) return;
         if (!isConv(d, wn)) {
           yielded = false;
           if (fbEl) unmountFb(true);
-          hideExt();
+          hideExt(false);
           return;
         }
         if (mode === 'on') {
-          hideExt();
+          hideExt(true);
           if (fbEl) {
             if (!isConn(d, fbEl) && seatFb(d)) try { wn.__agPulseExternalBridge?.({ event: 'mount' }); } catch {}
           } else if (findAnchor(d)) {
@@ -497,32 +539,41 @@
           mountFb();
         }
       };
-      const schedHeal = () => {
+      const schedHeal = (fast = false) => {
         if (mode === 'off' || healTm !== null) return;
-        healTm = setTimeout(runHeal, 45);
+        const wait = fast || Date.now() - lastHealAt >= 180 ? 45 : 180;
+        healTm = setTimeout(runHeal, wait);
         healTm?.unref?.();
       };
       if (!seatObs && typeof w.MutationObserver === 'function' && (doc.body || doc.documentElement)) {
-        seatObs = new w.MutationObserver(() => {
+        seatObs = new w.MutationObserver((recs) => {
           if (mode === 'off' || healTm !== null) return;
+          if (Array.isArray(recs) && recs.length > 0) {
+            let rel = false;
+            for (let i = 0; i < recs.length; i++) {
+              if (!isIgnoredStreamNode(recs[i]?.target)) { rel = true; break; }
+            }
+            if (!rel) return;
+          }
           const inC = isConv(doc, w);
           if (!inC && (fbEl || findExtBars(doc).some((b) => b && b.getAttribute?.(HID_ATTR) !== '1'))) {
-            schedHeal();
+            schedHeal(true);
             return;
           }
           if (inC && ((!fbEl && !hasExt() && waitTm === null && findAnchor(doc)) || (fbEl && !isConn(doc, fbEl)))) {
-            schedHeal();
+            schedHeal(!fbEl);
             return;
           }
           if (inC && mode === 'on' && findExtBars(doc).some((b) => b && b.getAttribute?.(FALLBACK_ATTR) !== '1' && b.getAttribute?.(HID_ATTR) !== '1')) {
-            schedHeal();
+            schedHeal(false);
           }
         });
         try { seatObs.observe(doc.body || doc.documentElement, { childList: true, subtree: true }); } catch {}
       }
       if (!popOff && typeof w.addEventListener === 'function') {
-        w.addEventListener('popstate', schedHeal);
-        popOff = () => w.removeEventListener?.('popstate', schedHeal);
+        const onPop = () => schedHeal(true);
+        w.addEventListener('popstate', onPop);
+        popOff = () => w.removeEventListener?.('popstate', onPop);
       }
     };
 
@@ -535,7 +586,7 @@
         if (mode !== 'off') hideExt();
         return null;
       }
-      if (mode === 'on') hideExt();
+      if (mode === 'on') hideExt(true);
       else {
         showExt();
         if (hasExt()) { yielded = true; unmountFb(true); return null; }
@@ -565,7 +616,7 @@
         ensSeatObs();
         return false;
       }
-      if (mode === 'on') hideExt();
+      if (mode === 'on') hideExt(true);
       else if (hasExt()) { yielded = true; unmountFb(true); ensSeatObs(); return false; }
       if (fbEl && seatFb(doc)) { purgeOrphans(doc, fbEl); ensSeatObs(); return true; }
 
@@ -698,7 +749,7 @@
       if (mode === 'on') {
         yielded = false;
         clrWait();
-        hideExt();
+        hideExt(true);
         ensHost();
         mountFb();
         return getState();

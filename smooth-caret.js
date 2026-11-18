@@ -17,10 +17,14 @@
     let caretRaf = 0;
     let pendingCaretTyping = false;
     let pendingCaretRefreshMetrics = false;
+    let pendingCaretScroll = false;
     let editorMetricsEpoch = 1;
+    let cachedEditors = [];
+    let lastEditorScanAt = 0;
     const editorMetricsCache = new WeakMap();
     let emptyCaretProbeCache = new WeakMap();
     const caretPrevState = new WeakMap();
+    const caretNodeCache = new WeakMap();
     const selectionSigCache = new WeakMap();
 
     function teardown() {
@@ -34,6 +38,9 @@
       }
       pendingCaretTyping = false;
       pendingCaretRefreshMetrics = false;
+      pendingCaretScroll = false;
+      cachedEditors = [];
+      lastEditorScanAt = 0;
       if (typeof document === 'undefined') return;
       document.querySelectorAll('.ag-cs-smooth-caret').forEach((n) => n.remove());
       document.querySelectorAll('[data-ag-cs-smooth-caret]').forEach((n) => n.removeAttribute('data-ag-cs-smooth-caret'));
@@ -42,6 +49,7 @@
 
     function bumpMetricsEpoch() {
       editorMetricsEpoch += 1;
+      lastEditorScanAt = 0;
       emptyCaretProbeCache = new WeakMap();
     }
 
@@ -171,77 +179,101 @@
       });
     }
 
-    function measureSnapshot(refreshMetrics = false) {
+    function resolveComposerEditors(activeEl, refreshMetrics) {
+      const now = Date.now();
+      const activeIsEditable = Boolean(
+        activeEl && (activeEl.isContentEditable || activeEl.getAttribute?.('contenteditable') === 'true')
+      );
+      const cacheValid =
+        !refreshMetrics &&
+        cachedEditors.length > 0 &&
+        now - lastEditorScanAt < 1200 &&
+        cachedEditors.every((e) => e && e.isConnected !== false) &&
+        (!activeIsEditable || cachedEditors.includes(activeEl));
+      if (cacheValid) return cachedEditors;
+      cachedEditors = Array.from(document.querySelectorAll('[data-testid="agent-input-box"] [contenteditable="true"]'));
+      lastEditorScanAt = now;
+      return cachedEditors;
+    }
+
+    function measureSnapshot(refreshMetrics = false, checkScroll = true) {
       if (isDestroyed() || !isEnabled() || typeof document === 'undefined') return null;
-      const editors = document.querySelectorAll('[data-testid="agent-input-box"] [contenteditable="true"]');
       const activeEl = document.activeElement;
+      const editors = resolveComposerEditors(activeEl, refreshMetrics);
+      if (editors.length === 0) return null;
       const sel = typeof document.getSelection === 'function' ? document.getSelection() : null;
       const list = [];
       for (const ed of editors) {
         const host = ed.parentElement;
         if (!host) continue;
         const isFocused = activeEl === ed || Boolean(activeEl && ed.contains && ed.contains(activeEl));
-        // Fast-skip unfocused editors: 0 getBoundingClientRect / getClientRects when not typing in composer!
         if (!isFocused) {
           selectionSigCache.delete(ed);
-          if (
-            !host.hasAttribute?.('data-ag-cs-caret-host') ||
-            ed.hasAttribute?.('data-ag-cs-smooth-caret') ||
-            host.querySelector?.('.ag-cs-smooth-caret[data-ag-cs-caret-visible="1"]')
-          ) {
+          const cachedCaret = caretNodeCache.get(host);
+          const caretVis = cachedCaret && cachedCaret.isConnected !== false
+            ? cachedCaret.getAttribute?.('data-ag-cs-caret-visible') === '1'
+            : Boolean(host.querySelector?.('.ag-cs-smooth-caret[data-ag-cs-caret-visible="1"]'));
+          if (!host.hasAttribute?.('data-ag-cs-caret-host') || ed.hasAttribute?.('data-ag-cs-smooth-caret') || caretVis) {
             list.push({ ed, host, isFocused: false, measured: null, hostRect: null, clientLeft: 0, clientTop: 0, scrollLeft: 0, scrollTop: 0, isNowEmpty: true });
           }
           continue;
+        }
+        let scrolledOnly = false;
+        const rc = sel ? sel.rangeCount || 0 : 0;
+        const isCol = rc > 0 ? Boolean(sel.isCollapsed) : true;
+        const fNode = rc > 0 ? sel.focusNode : null;
+        const fOff = rc > 0 ? sel.focusOffset : -1;
+        const childCnt = ed.childNodes ? ed.childNodes.length : 0;
+        const textSig =
+          fNode && typeof fNode.nodeValue === 'string'
+            ? fNode.nodeValue.length
+            : (ed.firstChild && typeof ed.firstChild.textContent === 'string' ? ed.firstChild.textContent.length : (ed.textContent || '').length);
+        const prevSig = selectionSigCache.get(ed);
+        const alreadySynced = Boolean(prevSig) && (ed.hasAttribute?.('data-ag-cs-smooth-caret') || prevSig.hidden);
+        let sameSelection = false;
+        if (!refreshMetrics && alreadySynced) {
+          sameSelection =
+            prevSig.epoch === editorMetricsEpoch &&
+            prevSig.rc === rc &&
+            prevSig.isCollapsed === isCol &&
+            prevSig.focusNode === fNode &&
+            prevSig.focusOffset === fOff &&
+            prevSig.childCnt === childCnt &&
+            prevSig.textSig === textSig;
+          // Zero forced-reflow fast path: skip scrollLeft/scrollTop DOM layout reads unless scroll was flagged or selection actually changed!
+          if (sameSelection && !checkScroll) continue;
         }
         const edScrollLeft = ed.scrollLeft || 0;
         const edScrollTop = ed.scrollTop || 0;
         const hostScrollLeft = host.scrollLeft || 0;
         const hostScrollTop = host.scrollTop || 0;
-        let scrolledOnly = false;
-        // Fast-skip unchanged selection & scroll state (never skip when scrollTop/scrollLeft moves!)
-        if (sel && sel.rangeCount > 0) {
-          const prevSig = selectionSigCache.get(ed);
-          const childCnt = ed.childNodes ? ed.childNodes.length : 0;
-          const textLen = (ed.textContent || '').length;
-          if (!refreshMetrics && ed.hasAttribute?.('data-ag-cs-smooth-caret')) {
-            const sameSelection =
-              Boolean(prevSig) &&
-              prevSig.epoch === editorMetricsEpoch &&
-              prevSig.isCollapsed === sel.isCollapsed &&
-              prevSig.focusNode === sel.focusNode &&
-              prevSig.focusOffset === sel.focusOffset &&
-              prevSig.childCnt === childCnt &&
-              prevSig.textLen === textLen;
-            const sameScroll =
-              Boolean(prevSig) &&
-              prevSig.edScrollLeft === edScrollLeft &&
-              prevSig.edScrollTop === edScrollTop &&
-              prevSig.hostScrollLeft === hostScrollLeft &&
-              prevSig.hostScrollTop === hostScrollTop;
-            if (sameSelection && sameScroll) {
-              continue;
-            }
-            scrolledOnly = sameSelection && !sameScroll;
-          }
-          selectionSigCache.set(ed, {
-            epoch: editorMetricsEpoch,
-            isCollapsed: sel.isCollapsed,
-            focusNode: sel.focusNode,
-            focusOffset: sel.focusOffset,
-            childCnt,
-            textLen,
-            edScrollLeft,
-            edScrollTop,
-            hostScrollLeft,
-            hostScrollTop,
-          });
+        if (!refreshMetrics && alreadySynced && sameSelection) {
+          const sameScroll =
+            prevSig.edScrollLeft === edScrollLeft &&
+            prevSig.edScrollTop === edScrollTop &&
+            prevSig.hostScrollLeft === hostScrollLeft &&
+            prevSig.hostScrollTop === hostScrollTop;
+          if (sameScroll) continue;
+          scrolledOnly = true;
         }
         const measured = measureEditorCaretBox(ed, refreshMetrics);
         const hostRect = measured && measured.collapsed ? host.getBoundingClientRect() : null;
+        selectionSigCache.set(ed, {
+          epoch: editorMetricsEpoch,
+          rc,
+          isCollapsed: isCol,
+          focusNode: fNode,
+          focusOffset: fOff,
+          childCnt,
+          textSig,
+          edScrollLeft,
+          edScrollTop,
+          hostScrollLeft,
+          hostScrollTop,
+          hidden: !(measured && measured.collapsed && hostRect),
+        });
         const clientLeft = host.clientLeft || 0;
         const clientTop = host.clientTop || 0;
-        const scrollLeft = hostScrollLeft;
-        const scrollTop = hostScrollTop;
         const cleanText = (ed.textContent || '').replace(/\u200b/g, '');
         const isNowEmpty = cleanText.length === 0 && ed.querySelectorAll('p, div').length <= 1;
         list.push({
@@ -252,8 +284,8 @@
           hostRect,
           clientLeft,
           clientTop,
-          scrollLeft,
-          scrollTop,
+          scrollLeft: hostScrollLeft,
+          scrollTop: hostScrollTop,
           isNowEmpty,
           scrolledOnly,
         });
@@ -266,12 +298,13 @@
         teardown();
         return;
       }
-      if (!snapshotList || typeof document === 'undefined') return;
+      if (!snapshotList || snapshotList.length === 0 || typeof document === 'undefined') return;
       runGuardedMut(() => {
         for (const item of snapshotList) {
           const { ed, host, isFocused, measured, hostRect, clientLeft, clientTop, scrollLeft, scrollTop, isNowEmpty, scrolledOnly } = item;
           setAttrIfChanged(host, 'data-ag-cs-caret-host', '1');
-          let caret = host.querySelector('.ag-cs-smooth-caret');
+          let caret = caretNodeCache.get(host);
+          if (!caret || caret.parentElement !== host) caret = host.querySelector('.ag-cs-smooth-caret');
           if (!caret) {
             caret = document.createElement('div');
             caret.className = 'ag-cs-smooth-caret';
@@ -279,6 +312,7 @@
             caret.setAttribute('data-ag-no-i18n', '');
             host.appendChild(caret);
           }
+          caretNodeCache.set(host, caret);
 
           if (!measured || !measured.collapsed || !hostRect) {
             if (caret.hasAttribute('data-ag-cs-caret-visible')) caret.removeAttribute('data-ag-cs-caret-visible');
@@ -338,19 +372,20 @@
       });
     }
 
-    function sync(isTypingEvent = false, refreshMetrics = false) {
+    function sync(isTypingEvent = false, refreshMetrics = false, checkScroll = true) {
       if (isDestroyed() || !isEnabled()) {
         teardown();
         return;
       }
-      const snap = measureSnapshot(refreshMetrics);
+      const snap = measureSnapshot(refreshMetrics, checkScroll);
       applyMutations(snap, isTypingEvent);
     }
 
-    function queue(isTyping = false, immediate = false, refreshMetrics = false) {
+    function queue(isTyping = false, immediate = false, refreshMetrics = false, isScroll = false) {
       if (isDestroyed() || !isEnabled()) return;
       if (isTyping) pendingCaretTyping = true;
       if (refreshMetrics) pendingCaretRefreshMetrics = true;
+      if (isScroll) pendingCaretScroll = true;
       if (immediate) {
         if (caretRaf && typeof cancelAnimationFrame === 'function') {
           cancelAnimationFrame(caretRaf);
@@ -358,9 +393,11 @@
         }
         const typingNow = pendingCaretTyping || isTyping;
         const refreshNow = pendingCaretRefreshMetrics || refreshMetrics;
+        const scrollNow = pendingCaretScroll || isScroll;
         pendingCaretTyping = false;
         pendingCaretRefreshMetrics = false;
-        sync(typingNow, refreshNow);
+        pendingCaretScroll = false;
+        sync(typingNow, refreshNow, scrollNow);
         return;
       }
       if (caretRaf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(caretRaf);
@@ -369,9 +406,11 @@
           caretRaf = 0;
           const typingNow = pendingCaretTyping;
           const refreshNow = pendingCaretRefreshMetrics;
+          const scrollNow = pendingCaretScroll;
           pendingCaretTyping = false;
           pendingCaretRefreshMetrics = false;
-          sync(typingNow, refreshNow);
+          pendingCaretScroll = false;
+          sync(typingNow, refreshNow, scrollNow);
         });
       }
     }

@@ -155,7 +155,10 @@
     const iframeUnsubscribers = [];
 
     const codeLineCache = new WeakMap();
+    const preSyncCache = new WeakMap();
     const boundFoldBtns = new WeakSet();
+    let cachedConvView = null;
+    let lastOutlineStreamSyncAt = 0;
 
     const boundNavRails = new WeakSet();
     const navRailUnsubscribers = [];
@@ -194,15 +197,26 @@
     }
 
     function findPrimaryConvView() {
+      if (
+        cachedConvView &&
+        cachedConvView.isConnected !== false &&
+        !cachedConvView.closest?.('[data-testid="subagent-tab-conversation"]') &&
+        !cachedConvView.closest?.('.agy-home') &&
+        !cachedConvView.querySelector?.('.agy-home')
+      ) {
+        return cachedConvView;
+      }
       if (!doc || typeof doc.querySelectorAll !== 'function') return null;
       const views = doc.querySelectorAll('[data-testid="conversation-view"]');
       for (let i = 0; i < views.length; i++) {
         const cv = views[i];
         if (cv.closest?.('[data-testid="subagent-tab-conversation"]')) continue;
         if (cv.closest?.('.agy-home') || cv.querySelector?.('.agy-home')) continue;
+        cachedConvView = cv;
         return cv;
       }
-      return views.length > 0 ? views[0] : null;
+      cachedConvView = views.length > 0 ? views[0] : null;
+      return cachedConvView;
     }
 
     function findScrollViewport(startEl) {
@@ -401,17 +415,15 @@
 
     function countCodeLines(bodyEl) {
       if (!bodyEl) return 0;
-      const rawText = String(bodyEl.textContent || '');
-      const cached = codeLineCache.get(bodyEl);
-      if (cached && cached.textLen === rawText.length) {
-        return cached.lineCount;
-      }
-      let count = 0;
       if (typeof bodyEl.querySelectorAll === 'function') {
         const lineNodes = bodyEl.querySelectorAll('.code-line');
-        if (lineNodes && lineNodes.length > 0) count = lineNodes.length;
+        if (lineNodes && lineNodes.length > 0) return lineNodes.length;
       }
-      if (count === 0 && rawText.length > 0) {
+      const rawText = String(bodyEl.textContent || '');
+      const cached = codeLineCache.get(bodyEl);
+      if (cached && cached.textLen === rawText.length) return cached.lineCount;
+      let count = 0;
+      if (rawText.length > 0) {
         const trimmed = rawText.endsWith('\n') ? rawText.slice(0, -1) : rawText;
         count = trimmed.length === 0 ? 0 : trimmed.split('\n').length;
       }
@@ -455,85 +467,133 @@
       }
     }
 
-    function findActiveStreamingPre() {
-      if (!checkConvRunning() || !doc) return null;
-      const conv = findPrimaryConvView();
-      if (!conv || typeof conv.querySelectorAll !== 'function') return null;
-      const responses = conv.querySelectorAll('[data-testid="planner-response-text"], [data-testid="agent-response"]');
-      if (!responses || responses.length === 0) return null;
-      const lastResp = responses[responses.length - 1];
-      const pres = lastResp.querySelectorAll?.('pre');
-      if (!pres || pres.length === 0) return null;
-      const lastPre = pres[pres.length - 1];
-      if (!lastPre.nextElementSibling) return lastPre;
-      return null;
+    function getPreBodyStamp(body) {
+      if (!body) return '';
+      const ch = body.children;
+      const cLen = ch ? ch.length : 0;
+      if (cLen > 1) {
+        const first = ch[0];
+        const firstSub = first?.children;
+        const firstSig = firstSub && firstSub.length > 0 ? `n${firstSub.length}` : String(first?.textContent || '').length;
+        const last = ch[cLen - 1];
+        return `c:${cLen}:${firstSig}:${String(last?.textContent || '').length}`;
+      }
+      const target = cLen === 1 ? ch[0] : body;
+      const sub = target.children;
+      if (sub && sub.length > 1) {
+        return `s:${sub.length}:${String(sub[sub.length - 1]?.textContent || '').length}`;
+      }
+      return `t:${String(target.textContent || '').length}`;
     }
 
     function syncCodeBlocks() {
       if (isDead() || !doc || typeof doc.querySelectorAll !== 'function') return;
+      const conv = findPrimaryConvView();
+      const responses =
+        conv && typeof conv.querySelectorAll === 'function'
+          ? conv.querySelectorAll('[data-testid="planner-response-text"], [data-testid="agent-response"]')
+          : null;
+      const lastResp = responses && responses.length > 0 ? responses[responses.length - 1] : null;
+      const isRunning = checkConvRunning();
+      let streamingPre = null;
+      if (isRunning && lastResp) {
+        const rPres = lastResp.querySelectorAll?.('pre');
+        const tailPre = rPres && rPres.length > 0 ? rPres[rPres.length - 1] : null;
+        if (tailPre && !tailPre.nextElementSibling) streamingPre = tailPre;
+      }
+
       const pres = doc.querySelectorAll(
         '[data-testid="planner-response-text"] pre, [data-testid="agent-response"] pre, [data-testid="artifact-view"] pre'
       );
       if (!pres || pres.length === 0) return;
-
-      const streamingPre = findActiveStreamingPre();
+      const curLang = lastSyncedLang || String(getLang() || '');
 
       runGuardedMut(() => {
         for (let i = 0; i < pres.length; i++) {
           const pre = pres[i];
+          const prevRec = preSyncCache.get(pre);
+          const inHistoricalTurn = Boolean(lastResp && !lastResp.contains?.(pre) && !pre.closest?.('[data-testid="artifact-view"]'));
+          if (
+            prevRec &&
+            pre !== streamingPre &&
+            prevRec.lang === curLang &&
+            prevRec.header?.getAttribute?.('data-ag-cs-code-sticky') === '1' &&
+            (prevRec.lineCount < MIN_CODE_FOLD_LINES || (prevRec.btn && prevRec.btn.isConnected !== false && prevRec.btn.parentElement)) &&
+            (prevRec.sealed || prevRec.stamp === getPreBodyStamp(prevRec.body))
+          ) {
+            if (inHistoricalTurn && !prevRec.sealed) prevRec.sealed = true;
+            continue;
+          }
+
           const parts = resolveCodeCardParts(pre);
           if (!parts) continue;
           const { card, header, body } = parts;
           setAttrIfChanged(header, 'data-ag-cs-code-sticky', '1');
 
-          // Never inject fold toggle or alter height while this block is actively streaming
           if (pre === streamingPre) continue;
 
           const lineCount = countCodeLines(body);
-          const existingBtn = header.querySelector?.('.ag-cs-code-fold-btn');
+          let btn = prevRec?.btn && prevRec.btn.parentElement ? prevRec.btn : header.querySelector?.('.ag-cs-code-fold-btn');
           if (lineCount < MIN_CODE_FOLD_LINES) {
-            if (existingBtn) existingBtn.remove();
+            if (btn) btn.remove();
             if (card.hasAttribute?.('data-ag-cs-code-folded')) {
               card.removeAttribute('data-ag-cs-code-folded');
             }
+            preSyncCache.set(pre, {
+              header,
+              body,
+              btn: null,
+              lineCount,
+              lang: curLang,
+              stamp: getPreBodyStamp(body),
+              sealed: inHistoricalTurn,
+            });
             continue;
           }
 
           const folded = card.getAttribute('data-ag-cs-code-folded') === '1';
-          if (existingBtn) {
-            setAttrIfChanged(existingBtn, 'data-lines', String(lineCount));
-            setAttrIfChanged(existingBtn, 'aria-expanded', folded ? 'false' : 'true');
+          if (btn) {
+            setAttrIfChanged(btn, 'data-lines', String(lineCount));
+            setAttrIfChanged(btn, 'aria-expanded', folded ? 'false' : 'true');
             const expectedText = formatFoldBtnLabel(folded, lineCount);
-            if (existingBtn.textContent !== expectedText) existingBtn.textContent = expectedText;
-            continue;
-          }
-
-          const btn = doc.createElement('button');
-          btn.type = 'button';
-          btn.className = 'ag-cs-code-fold-btn';
-          btn.setAttribute('data-ag-no-i18n', '');
-          btn.setAttribute('data-no-press-spring', '1');
-          btn.setAttribute('data-lines', String(lineCount));
-          btn.setAttribute('aria-expanded', folded ? 'false' : 'true');
-          btn.textContent = formatFoldBtnLabel(folded, lineCount);
-          boundFoldBtns.add(btn);
-          btn.addEventListener('click', (ev) => {
-            ev?.preventDefault?.();
-            ev?.stopPropagation?.();
-            toggleCodeCardFold(card, btn);
-          });
-
-          const actionSlot =
-            header.lastElementChild &&
-            header.lastElementChild !== header.firstElementChild &&
-            String(header.lastElementChild.tagName || '').toUpperCase() === 'DIV'
-              ? header.lastElementChild
-              : header;
-          if (actionSlot === header) {
-            header.appendChild(btn);
+            if (btn.textContent !== expectedText) btn.textContent = expectedText;
           } else {
-            actionSlot.insertBefore(btn, actionSlot.firstChild);
+            btn = doc.createElement('button');
+            btn.type = 'button';
+            btn.className = 'ag-cs-code-fold-btn';
+            btn.setAttribute('data-ag-no-i18n', '');
+            btn.setAttribute('data-no-press-spring', '1');
+            btn.setAttribute('data-lines', String(lineCount));
+            btn.setAttribute('aria-expanded', folded ? 'false' : 'true');
+            btn.textContent = formatFoldBtnLabel(folded, lineCount);
+            boundFoldBtns.add(btn);
+            btn.addEventListener('click', (ev) => {
+              ev?.preventDefault?.();
+              ev?.stopPropagation?.();
+              toggleCodeCardFold(card, btn);
+            });
+
+            const actionSlot =
+              header.lastElementChild &&
+              header.lastElementChild !== header.firstElementChild &&
+              String(header.lastElementChild.tagName || '').toUpperCase() === 'DIV'
+                ? header.lastElementChild
+                : header;
+            if (actionSlot === header) {
+              header.appendChild(btn);
+            } else {
+              actionSlot.insertBefore(btn, actionSlot.firstChild);
+            }
           }
+          preSyncCache.set(pre, {
+            header,
+            body,
+            btn,
+            lineCount,
+            lang: curLang,
+            stamp: getPreBodyStamp(body),
+            sealed: inHistoricalTurn,
+          });
         }
       });
     }
@@ -1047,7 +1107,11 @@
         if (isHostGroupCardVisible() && doc.activeElement !== outlineSearchInput) {
           closeNavOutline();
         } else {
-          renderOutlineListOnly();
+          const now = Date.now();
+          if (!checkConvRunning() || now - lastOutlineStreamSyncAt >= 200) {
+            lastOutlineStreamSyncAt = now;
+            renderOutlineListOnly();
+          }
         }
       }
     }
@@ -1129,6 +1193,7 @@
       outlineTitleEl = null;
       outlineFoldBtn = null;
       activeNavRail = null;
+      cachedConvView = null;
       outlineOpen = false;
       cachedThemeSample = null;
       cachedAttrKey = '';

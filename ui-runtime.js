@@ -2007,64 +2007,85 @@
       return;
     }
 
-    if (
-      cls.includes('agy-home') ||
-      tid === 'conversation-view' ||
-      tid === 'home-greeting' ||
-      (!isAdded && el.querySelector?.('.agy-home, [data-testid="conversation-view"]')) ||
-      (isAdded && el.querySelector?.('.agy-home, [data-testid="conversation-view"], [data-testid="home-greeting"]'))
-    ) {
-      dirtyFlags.route = true;
-      dirtyFlags.composer = true;
-      dirtyFlags.buttons = true;
-      dirtyFlags.collapsible = true;
-      if (!isAdded) dirtyFlags.full = true;
+    const inConvStream =
+      tid !== 'conversation-view' &&
+      tid !== 'agent-input-box' &&
+      !cls.includes('agy-home') &&
+      Boolean(el.closest?.('[data-testid="conversation-view"]')) &&
+      !el.closest?.('[data-testid="agent-input-box"]');
+
+    if (!inConvStream) {
+      if (
+        cls.includes('agy-home') ||
+        tid === 'conversation-view' ||
+        tid === 'home-greeting' ||
+        (!isAdded && el.querySelector?.('.agy-home, [data-testid="conversation-view"]')) ||
+        (isAdded && el.querySelector?.('.agy-home, [data-testid="conversation-view"], [data-testid="home-greeting"]'))
+      ) {
+        dirtyFlags.route = true;
+        dirtyFlags.composer = true;
+        dirtyFlags.buttons = true;
+        dirtyFlags.collapsible = true;
+        if (!isAdded) dirtyFlags.full = true;
+      }
+
+      if (tid === 'conversation-row-sidebar' || el.closest?.('aside') || el.querySelector?.('[data-testid="conversation-row-sidebar"]')) {
+        dirtyFlags.sidebar = true;
+        if (isAdded) dirtyFlags.buttons = true;
+      }
+
+      if (
+        tid === 'agent-input-box' ||
+        tid === 'input-cancel-button' ||
+        tid === 'stop-button' ||
+        tid === 'cancel-button' ||
+        tid === 'agent-loading' ||
+        tid === 'send-button' ||
+        tid === 'input-send-button' ||
+        tid === 'model-selector-trigger' ||
+        tid === 'interaction-takeover-card' ||
+        tid === 'side-question-panel' ||
+        tid === 'running-items-panel' ||
+        cls.includes('surface-composer-card') ||
+        el.closest?.('[data-testid="agent-input-box"]') ||
+        el.querySelector?.('[data-testid="agent-input-box"], [data-testid="input-cancel-button"], .surface-composer-card')
+      ) {
+        dirtyFlags.composer = true;
+        dirtyFlags.route = true;
+        if (isAdded) dirtyFlags.buttons = true;
+      }
+
+      if (
+        role === 'dialog' ||
+        tid === 'model-selector-panel' ||
+        tid === 'overview-panel' ||
+        cls.includes('agy-overlay') ||
+        el.id === 'ag-pulse-status-bar' ||
+        el.id === 'ag-prism-pulse-bar' ||
+        el.id === 'context-card' ||
+        el.closest?.('[role="dialog"], [data-testid="model-selector-panel"]') ||
+        el.querySelector?.('[role="dialog"], [data-testid="model-selector-panel"], .agy-overlay, #context-card')
+      ) {
+        dirtyFlags.overlays = true;
+        dirtyFlags.settings = true;
+        dirtyFlags.composer = true;
+        if (isAdded) dirtyFlags.buttons = true;
+      }
+    } else {
+      if (
+        tid === 'interaction-takeover-card' ||
+        tid === 'side-question-panel' ||
+        tid === 'running-items-panel' ||
+        tid === 'agent-loading' ||
+        el.querySelector?.('[data-testid="interaction-takeover-card"], [data-testid="side-question-panel"], [data-testid="running-items-panel"]')
+      ) {
+        dirtyFlags.composer = true;
+      }
+      if (role === 'dialog' || tid === 'overview-panel' || cls.includes('agy-overlay')) {
+        dirtyFlags.overlays = true;
+      }
     }
 
-    if (tid === 'conversation-row-sidebar' || el.closest?.('aside') || el.querySelector?.('[data-testid="conversation-row-sidebar"]')) {
-      dirtyFlags.sidebar = true;
-      if (isAdded) dirtyFlags.buttons = true;
-    }
-
-    if (
-      tid === 'agent-input-box' ||
-      tid === 'input-cancel-button' ||
-      tid === 'stop-button' ||
-      tid === 'cancel-button' ||
-      tid === 'agent-loading' ||
-      tid === 'send-button' ||
-      tid === 'input-send-button' ||
-      tid === 'model-selector-trigger' ||
-      tid === 'interaction-takeover-card' ||
-      tid === 'side-question-panel' ||
-      tid === 'running-items-panel' ||
-      cls.includes('surface-composer-card') ||
-      el.closest?.('[data-testid="agent-input-box"]') ||
-      el.querySelector?.('[data-testid="agent-input-box"], [data-testid="input-cancel-button"], .surface-composer-card')
-    ) {
-      dirtyFlags.composer = true;
-      dirtyFlags.route = true;
-      if (isAdded) dirtyFlags.buttons = true;
-    }
-
-    if (
-      role === 'dialog' ||
-      tid === 'model-selector-panel' ||
-      tid === 'overview-panel' ||
-      cls.includes('agy-overlay') ||
-      el.id === 'ag-pulse-status-bar' ||
-      el.id === 'ag-prism-pulse-bar' ||
-      el.id === 'context-card' ||
-      el.closest?.('[role="dialog"], [data-testid="model-selector-panel"]') ||
-      el.querySelector?.('[role="dialog"], [data-testid="model-selector-panel"], .agy-overlay, #context-card')
-    ) {
-      dirtyFlags.overlays = true;
-      dirtyFlags.settings = true;
-      dirtyFlags.composer = true;
-      if (isAdded) dirtyFlags.buttons = true;
-    }
-
-    // Swarm 并发脏标记隔离：折叠块/工具组变化仅标记 collapsible + composer，绝不污染 route/sidebar 触发侧栏全量测量！
     if (
       tid === 'worked-for-collapsible' ||
       tid === 'thinking-collapsible-trigger' ||
@@ -2078,7 +2099,6 @@
       )
     ) {
       dirtyFlags.collapsible = true;
-      dirtyFlags.composer = true;
       if (isAdded) dirtyCollapsibleTargets.add(el);
     }
 
@@ -2115,7 +2135,7 @@
       (flags.full || flags.overlays) && isMotionStandardOrUltra() ? streamChoreoCtl.measureNewLensOverlays() : [];
     const caretList =
       !isAsyncConvEntry && (flags.full || flags.composer) && cfg.smoothCaret !== false
-        ? smoothCaretCtl.measureSnapshot(false)
+        ? smoothCaretCtl.measureSnapshot(false, false)
         : null;
 
     return {
@@ -2130,6 +2150,34 @@
       lensOverlays,
       caretList,
     };
+  }
+
+  let enhancerSyncTimer = 0;
+  let lastEnhancerSyncAt = 0;
+  function flushHostEnhancerSync() {
+    if (enhancerSyncTimer) {
+      clearTimeout(enhancerSyncTimer);
+      enhancerSyncTimer = 0;
+    }
+    if (destroyed) return;
+    lastEnhancerSyncAt = Date.now();
+    try {
+      hostEnhancerCtl.sync?.();
+    } catch {}
+  }
+  function scheduleHostEnhancerSync(immediate) {
+    if (immediate || !isConvRunning()) {
+      flushHostEnhancerSync();
+      return;
+    }
+    const elapsed = Date.now() - lastEnhancerSyncAt;
+    if (elapsed >= 200) {
+      flushHostEnhancerSync();
+      return;
+    }
+    if (!enhancerSyncTimer) {
+      enhancerSyncTimer = setTimeout(flushHostEnhancerSync, Math.max(32, 200 - elapsed));
+    }
   }
 
   function runSync(forceFull = false) {
@@ -2266,9 +2314,7 @@
         flags.overlays ||
         flags.theme
       ) {
-        try {
-          hostEnhancerCtl.sync?.();
-        } catch {}
+        scheduleHostEnhancerSync(Boolean(flags.full || routeJumped || flags.theme));
       }
     });
 
@@ -2517,7 +2563,7 @@
     const isTyping = type === 'input' || type === 'keyup' || type === 'compositionupdate' || type === 'compositionend';
     const immediate = type === 'focusin' || type === 'mouseup' || type === 'transitionend';
     const refreshMetrics = type === 'focusin';
-    smoothCaretCtl.queue(isTyping, immediate, refreshMetrics);
+    smoothCaretCtl.queue(isTyping, immediate, refreshMetrics, type === 'scroll');
     if (type === 'input' && ev?.target?.closest && ev.target.closest('[data-testid="agent-input-box"]')) {
       if (mascotState.rig && typeof mascotState.rig.onUserType === 'function') {
         try {
@@ -2568,7 +2614,6 @@
           anyRelevant = true;
         } else if (tid === 'worked-for-collapsible' || tid === 'thinking-collapsible-trigger') {
           dirtyFlags.collapsible = true;
-          dirtyFlags.composer = true;
           dirtyCollapsibleTargets.add(tgt);
           anyRelevant = true;
         } else if (tid === 'running-items-panel') {
@@ -2665,6 +2710,10 @@
     if (pollTimer !== null) {
       clearInterval(pollTimer);
       pollTimer = null;
+    }
+    if (enhancerSyncTimer) {
+      clearTimeout(enhancerSyncTimer);
+      enhancerSyncTimer = 0;
     }
     if (storeDebounce) {
       clearTimeout(storeDebounce);

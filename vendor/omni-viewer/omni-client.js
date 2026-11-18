@@ -93,7 +93,7 @@
     '[data-omni-scan="true"]',
   ].join(', ');
 
-  const EXCLUDED_ANCESTOR_SELECTOR = [
+  const STATIC_EXCLUDED_SELECTOR = [
     'pre', 'code', 'a', 'button', 'svg',
     '[contenteditable="true"]',
     '[data-testid="agent-input-box"]',
@@ -101,12 +101,13 @@
     '.inline-pill',
     '.code-block',
     '.ag-prism-thought-overlay',
-    '[data-ag-cs-spark-streaming="1"]',
-    '[data-ag-cs-thought-streaming="1"]',
+    '.ag-prism-thought-chunk',
     '.ag-omni-autolink',
     '.ag-omni-menu',
     '.ag-omni-aux-bar',
   ].join(', ');
+  const STREAMING_EXCLUDED_SELECTOR = '[data-ag-cs-spark-streaming="1"], [data-ag-cs-thought-streaming="1"]';
+  const EXCLUDED_ANCESTOR_SELECTOR = `${STATIC_EXCLUDED_SELECTOR}, ${STREAMING_EXCLUDED_SELECTOR}`;
 
   const FILE_PILL_SELECTOR = [
     '[data-testid="entity-pill"]',
@@ -284,17 +285,15 @@
     return '';
   }
 
+  function mayContainBareToken(raw) {
+    if (!raw || raw.length < 4 || raw.length > 32000) return false;
+    if (raw.indexOf('http') !== -1 || raw.indexOf('localhost:') !== -1) return true;
+    return raw.indexOf('.') !== -1 && (raw.indexOf('/') !== -1 || raw.indexOf('\\') !== -1);
+  }
+
   function tokenizeBareText(text) {
     const raw = String(text || '');
-    if (!raw || raw.length < 4 || raw.length > 32000) return null;
-    if (
-      raw.indexOf('http') === -1 &&
-      raw.indexOf('localhost:') === -1 &&
-      raw.indexOf('/') === -1 &&
-      raw.indexOf('\\') === -1
-    ) {
-      return null;
-    }
+    if (!mayContainBareToken(raw)) return null;
 
     BARE_TOKEN_RE.lastIndex = 0;
     const tokens = [];
@@ -683,15 +682,22 @@
 
     // Zero-DOM-mutation CSS Custom Highlight API state
     const textNodeTokenMap = new WeakMap();
+    const excludedElCache = new WeakMap();
     const trackedHighlightNodes = new Set();
     let urlHighlight = null;
     let pathHighlight = null;
     let hoverTokenActive = false;
+    let pointerMoveRaf = null;
+    let pendingPointerTarget = null;
+    let pendingPointerX = 0;
+    let pendingPointerY = 0;
 
     let domObserver = null;
     let rootAttrObserver = null;
     let scanTimer = null;
+    let textScanTimer = null;
     const pendingScanRoots = new Set();
+    const pendingTextNodes = new Set();
 
     let activeMenuEl = null;
     let activeMenuItems = [];
@@ -1791,18 +1797,42 @@
     }
 
     // ── Event Handlers ───────────────────────────────────────────────────────
+    function evalPointerHoverAt(rawTarget, x, y) {
+      if (!enabled || !urlHighlight || (!urlHighlight.size && !pathHighlight?.size)) {
+        if (hoverTokenActive) setHoverTokenCursor(false);
+        return;
+      }
+      const el = rawTarget && rawTarget.nodeType === 1 ? rawTarget : rawTarget?.parentElement;
+      if (!el || !el.isConnected || !findClosest(el, SCAN_CONTAINER_SELECTOR) || isExcludedElement(el)) {
+        if (hoverTokenActive) setHoverTokenCursor(false);
+        return;
+      }
+      const hit = hitTestHighlightedToken(x, y);
+      setHoverTokenCursor(Boolean(hit));
+    }
+
+    function flushPointerMove() {
+      pointerMoveRaf = null;
+      const target = pendingPointerTarget;
+      pendingPointerTarget = null;
+      evalPointerHoverAt(target, pendingPointerX, pendingPointerY);
+    }
+
     function onDocPointerMove(ev) {
       if (!enabled || !urlHighlight || (!urlHighlight.size && !pathHighlight?.size)) {
         if (hoverTokenActive) setHoverTokenCursor(false);
         return;
       }
-      const el = ev.target && ev.target.nodeType === 1 ? ev.target : ev.target?.parentElement;
-      if (!el || !findClosest(el, SCAN_CONTAINER_SELECTOR) || findClosest(el, EXCLUDED_ANCESTOR_SELECTOR)) {
-        if (hoverTokenActive) setHoverTokenCursor(false);
+      if (typeof W?.requestAnimationFrame === 'function') {
+        pendingPointerTarget = ev.target || null;
+        pendingPointerX = ev.clientX;
+        pendingPointerY = ev.clientY;
+        if (pointerMoveRaf === null) {
+          pointerMoveRaf = W.requestAnimationFrame(flushPointerMove);
+        }
         return;
       }
-      const hit = hitTestHighlightedToken(ev.clientX, ev.clientY);
-      setHoverTokenCursor(Boolean(hit));
+      evalPointerHoverAt(ev.target, ev.clientX, ev.clientY);
     }
 
     function onDocClickCapture(ev) {
@@ -1923,11 +1953,20 @@
       }
     }
 
+    function cancelPendingPointerRaf() {
+      if (pointerMoveRaf !== null) {
+        try { W?.cancelAnimationFrame?.(pointerMoveRaf); } catch (_) {}
+        pointerMoveRaf = null;
+      }
+      pendingPointerTarget = null;
+    }
+
     function onWindowBlurOrScroll(ev) {
       if (activeMenuEl) {
         if (ev?.type === 'scroll' && findClosest(ev.target, '.ag-omni-menu')) return;
         closeContextMenu();
       }
+      cancelPendingPointerRaf();
       if (hoverTokenActive) setHoverTokenCursor(false);
     }
 
@@ -1946,12 +1985,20 @@
     }
 
     // ── Safe Incremental Scanner (`CSS.highlights` Primary + `<span>` Fallback) ─
+    function isExcludedElement(el) {
+      if (!el || el.nodeType !== 1) return true;
+      if (SKIP_WALK_TAGS.has(el.tagName)) return true;
+      let staticExcluded = excludedElCache.get(el);
+      if (staticExcluded === undefined) {
+        staticExcluded = Boolean(findClosest(el, STATIC_EXCLUDED_SELECTOR));
+        excludedElCache.set(el, staticExcluded);
+      }
+      if (staticExcluded) return true;
+      return Boolean(findClosest(el, STREAMING_EXCLUDED_SELECTOR));
+    }
+
     function isExcludedFromLinkify(node) {
-      const parent = node?.parentElement;
-      if (!parent) return true;
-      if (SKIP_WALK_TAGS.has(parent.tagName)) return true;
-      if (findClosest(parent, EXCLUDED_ANCESTOR_SELECTOR)) return true;
-      return false;
+      return isExcludedElement(node?.parentElement);
     }
 
     function ensureHighlightRegistries() {
@@ -1991,20 +2038,39 @@
     function registerHighlightOnTextNode(textNode) {
       const raw = textNode.nodeValue || '';
       const existing = textNodeTokenMap.get(textNode);
+      if (!existing && !mayContainBareToken(raw)) return;
       if (existing && existing.rawValue === raw) return;
-      if (existing) clearHighlightEntryForNode(textNode);
-      if (isExcludedFromLinkify(textNode)) return;
+      if (isExcludedFromLinkify(textNode)) {
+        if (existing) clearHighlightEntryForNode(textNode);
+        return;
+      }
 
       const tokens = tokenizeBareText(raw);
       if (!tokens) {
-        textNodeTokenMap.set(textNode, { rawValue: raw, spans: [] });
+        if (existing) clearHighlightEntryForNode(textNode);
         return;
       }
 
       ensureHighlightRegistries();
+      const oldSpans = existing?.spans || [];
+      const reusedOld = oldSpans.length ? new Uint8Array(oldSpans.length) : null;
       const spans = [];
       for (const tok of tokens) {
         if (tok.type === 'text') continue;
+        let reusedRange = null;
+        for (let k = 0; k < oldSpans.length; k++) {
+          if (reusedOld[k]) continue;
+          const prev = oldSpans[k];
+          if (prev.range && prev.type === tok.type && prev.start === tok.start && prev.end === tok.end) {
+            reusedOld[k] = 1;
+            reusedRange = prev.range;
+            break;
+          }
+        }
+        if (reusedRange) {
+          spans.push({ ...tok, range: reusedRange });
+          continue;
+        }
         try {
           const range = D.createRange();
           range.setStart(textNode, tok.start);
@@ -2014,18 +2080,27 @@
           spans.push({ ...tok, range });
         } catch (_) {}
       }
+      for (let k = 0; k < oldSpans.length; k++) {
+        if (!reusedOld[k] && oldSpans[k].range) {
+          urlHighlight?.delete?.(oldSpans[k].range);
+          pathHighlight?.delete?.(oldSpans[k].range);
+        }
+      }
       if (spans.length > 0) {
         textNodeTokenMap.set(textNode, { rawValue: raw, spans });
         trackedHighlightNodes.add(textNode);
+      } else if (existing) {
+        clearHighlightEntryForNode(textNode);
       }
     }
 
     function linkifyTextNodeFallback(textNode) {
       if (!D || !textNode || processedTextNodes.has(textNode)) return;
       processedTextNodes.add(textNode);
-      if (isExcludedFromLinkify(textNode)) return;
+      const raw = textNode.nodeValue || '';
+      if (!mayContainBareToken(raw) || isExcludedFromLinkify(textNode)) return;
 
-      const tokens = tokenizeBareText(textNode.nodeValue);
+      const tokens = tokenizeBareText(raw);
       if (!tokens) return;
       const parent = textNode.parentNode;
       if (!parent) return;
@@ -2058,7 +2133,7 @@
 
     function scanContainerForBareTokens(container) {
       if (!D || !container || container.nodeType !== 1) return;
-      if (findClosest(container, EXCLUDED_ANCESTOR_SELECTOR)) return;
+      if (isExcludedElement(container)) return;
 
       const useHighlights = supportsHighlightApi();
       const handleNode = useHighlights ? registerHighlightOnTextNode : linkifyTextNodeFallback;
@@ -2067,6 +2142,8 @@
         const walker = D.createTreeWalker(container, 4 /* SHOW_TEXT */, {
           acceptNode(node) {
             if (!useHighlights && processedTextNodes.has(node)) return 2;
+            const raw = node.nodeValue || '';
+            if (!mayContainBareToken(raw) && (!useHighlights || !textNodeTokenMap.has(node))) return 2;
             if (isExcludedFromLinkify(node)) return 2;
             return 1;
           },
@@ -2084,7 +2161,7 @@
             return;
           }
           if (el.nodeType !== 1) return;
-          if (SKIP_WALK_TAGS.has(el.tagName) || findClosest(el, EXCLUDED_ANCESTOR_SELECTOR)) return;
+          if (isExcludedElement(el)) return;
           for (const k of Array.from(el.childNodes || [])) walk(k, budget);
         };
         walk(container, { n: 400 });
@@ -2459,11 +2536,63 @@
       decorateAuxUnsupportedViews(root);
     }
 
+    function isIgnoredMutationTarget(node) {
+      let cur = node && node.nodeType === 1 ? node : node?.parentElement;
+      for (let d = 0; cur && d < 6; d++, cur = cur.parentElement) {
+        const id = cur.id;
+        if (id === 'ag-prism-pulse-bar' || id === 'ag-pulse-status-bar') return true;
+        const tid = cur.getAttribute?.('data-testid');
+        if (tid === 'agent-input-box') return true;
+        const cls = typeof cur.className === 'string' ? cur.className : '';
+        if (
+          cls &&
+          (cls.indexOf('ag-prism-thought-') !== -1 ||
+            cls.indexOf('ag-omni-') !== -1 ||
+            cls.indexOf('ces-root') !== -1)
+        ) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function scheduleTextNodeHighlight(textNode) {
+      if (!enabled || !textNode || textNode.nodeType !== 3) return;
+      const raw = textNode.nodeValue || '';
+      if (!mayContainBareToken(raw) && !textNodeTokenMap.has(textNode)) return;
+      pendingTextNodes.add(textNode);
+      if (textScanTimer) return;
+      textScanTimer = setTimeout(() => {
+        textScanTimer = null;
+        if (!enabled) {
+          pendingTextNodes.clear();
+          return;
+        }
+        const batch = Array.from(pendingTextNodes);
+        pendingTextNodes.clear();
+        for (let i = 0; i < batch.length; i++) {
+          const tn = batch[i];
+          if (!tn.isConnected) clearHighlightEntryForNode(tn);
+          else registerHighlightOnTextNode(tn);
+        }
+      }, 120);
+    }
+
+    function hasPendingAncestor(el, set) {
+      let cur = el?.parentElement;
+      while (cur) {
+        if (set.has(cur)) return true;
+        cur = cur.parentElement;
+      }
+      return false;
+    }
+
     function scheduleIncrementalScan(node) {
       if (!enabled || !D) return;
       const el = node && node.nodeType === 1 ? node : node?.parentElement;
       if (el) pendingScanRoots.add(el);
       if (scanTimer) return;
+      const delay = D.documentElement?.hasAttribute?.('data-ag-cs-stream-active') ? 120 : 60;
       scanTimer = setTimeout(() => {
         scanTimer = null;
         if (!enabled) {
@@ -2471,24 +2600,31 @@
           return;
         }
         pruneDisconnectedHighlights();
-        const roots = Array.from(pendingScanRoots);
+        const rootSet = new Set(pendingScanRoots);
         pendingScanRoots.clear();
         let scannedAuxSplit = false;
-        for (const r of roots) {
+        for (const r of rootSet) {
           if (!r || !r.isConnected) continue;
-          const scanBox = findClosest(r, SCAN_CONTAINER_SELECTOR);
-          if (scanBox) scanContainerForBareTokens(scanBox);
-          else runScanNow(r);
+          if (rootSet.size > 1 && hasPendingAncestor(r, rootSet)) continue;
+          if (findClosest(r, SCAN_CONTAINER_SELECTOR)) {
+            scanContainerForBareTokens(r);
+          } else if (typeof r.querySelectorAll === 'function') {
+            for (const c of r.querySelectorAll(SCAN_CONTAINER_SELECTOR)) {
+              scanContainerForBareTokens(c);
+            }
+          }
           decorateMermaidContainers(r);
-          const auxRoot = !scannedAuxSplit && findClosest(r, '[data-testid="aux-pane-split"]');
-          if (auxRoot) {
-            scannedAuxSplit = true;
-            decorateAuxUnsupportedViews(auxRoot);
-          } else {
-            decorateAuxUnsupportedViews(r);
+          if (!findClosest(r, '[data-testid="conversation-view"]')) {
+            const auxRoot = !scannedAuxSplit && findClosest(r, '[data-testid="aux-pane-split"]');
+            if (auxRoot) {
+              scannedAuxSplit = true;
+              decorateAuxUnsupportedViews(auxRoot);
+            } else {
+              decorateAuxUnsupportedViews(r);
+            }
           }
         }
-      }, 60);
+      }, delay);
     }
 
     // ── Lifecycle & Zero-Residue Teardown ────────────────────────────────────
@@ -2504,6 +2640,11 @@
     }
 
     function unwrapAllModifications() {
+      if (textScanTimer) {
+        clearTimeout(textScanTimer);
+        textScanTimer = null;
+      }
+      pendingTextNodes.clear();
       // 1. Clear CSS Custom Highlights (zero DOM changes needed)
       for (const tn of Array.from(trackedHighlightNodes)) {
         textNodeTokenMap.delete(tn);
@@ -2607,15 +2748,17 @@
         domObserver = new W.MutationObserver((mutations) => {
           for (let i = 0; i < mutations.length; i++) {
             const m = mutations[i];
+            if (isIgnoredMutationTarget(m.target)) continue;
             if (m.type === 'childList') {
               for (let j = 0; j < m.addedNodes.length; j++) {
                 const n = m.addedNodes[j];
-                if (n.nodeType === 1 && String(n.className || '').includes('ag-omni-')) continue;
+                if (n.nodeType !== 1 && n.nodeType !== 3) continue;
+                if (isIgnoredMutationTarget(n)) continue;
                 scheduleIncrementalScan(n);
               }
             } else if (m.type === 'characterData' && m.target) {
               if (supportsHighlightApi() && m.target.nodeType === 3) {
-                registerHighlightOnTextNode(m.target);
+                scheduleTextNodeHighlight(m.target);
               } else {
                 scheduleIncrementalScan(m.target);
               }
@@ -2654,7 +2797,13 @@
         clearTimeout(scanTimer);
         scanTimer = null;
       }
+      if (textScanTimer) {
+        clearTimeout(textScanTimer);
+        textScanTimer = null;
+      }
+      cancelPendingPointerRaf();
       pendingScanRoots.clear();
+      pendingTextNodes.clear();
 
       if (domObserver) {
         try { domObserver.disconnect(); } catch (_) {}

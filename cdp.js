@@ -676,6 +676,18 @@ function serializeJsValue(val) {
   );
 }
 
+function serializeStringListExpr(list) {
+  const arrExpr = serializeJsValue(list);
+  if (!Array.isArray(list) || list.length < 8) return arrExpr;
+  for (const sep of ['\x7f', '\u00fe', '\u00ff']) {
+    if (list.every((s) => typeof s === 'string' && !s.includes(sep))) {
+      const joinedExpr = `${serializeJsValue(list.join(sep))}.split(${serializeJsValue(sep)})`;
+      if (Buffer.byteLength(joinedExpr, 'utf8') < Buffer.byteLength(arrExpr, 'utf8')) return joinedExpr;
+    }
+  }
+  return arrExpr;
+}
+
 const PROTECTED_CSS_LITERALS = ['interaction-takeover-card', 'side-question-panel'];
 
 // Fast 2-gram pre-filter + Batch Top-K non-overlapping greedy phrase replacement
@@ -968,7 +980,7 @@ function packCssJsExpr(css) {
   }
   if (verify !== css) return serializeJsValue(css);
 
-  return `(()=>{let s=${serializeJsValue(work)},d=${serializeJsValue(dict)};for(let f=1;f;)f=0,s=s.replace(/[\\u0100-\\u${maxCodeHex}]/g,(c)=>(f=1,d[c.charCodeAt(0)-${TOKEN_BASE}]));return s})()`;
+  return `(()=>{let s=${serializeJsValue(work)},d=${serializeStringListExpr(dict)};for(let f=1;f;)f=0,s=s.replace(/[\\u0100-\\u${maxCodeHex}]/g,(c)=>(f=1,d[c.charCodeAt(0)-${TOKEN_BASE}]));return s})()`;
 }
 
 function minifyGlsl(glsl) {
@@ -2393,7 +2405,7 @@ function packTextJsExpr(text, maxDict = 5200) {
       });
     }
     if (verify !== text) return rawExpr;
-    packed = `(()=>{let s=${serializeJsValue(work)},d=${serializeJsValue(dict)};for(let f=1;f;)f=0,s=s.replace(/[\\u0100-\\u${maxHex}]/g,(c)=>(f=1,d[c.charCodeAt(0)-${TOKEN_BASE}]));return s})()`;
+    packed = `(()=>{let s=${serializeJsValue(work)},d=${serializeStringListExpr(dict)};for(let f=1;f;)f=0,s=s.replace(/[\\u0100-\\u${maxHex}]/g,(c)=>(f=1,d[c.charCodeAt(0)-${TOKEN_BASE}]));return s})()`;
   } else {
     const decMap = new Map();
     for (let i = 0; i < dict.length; i++) decMap.set(tokChars[i], dict[i]);
@@ -2409,7 +2421,7 @@ function packTextJsExpr(text, maxDict = 5200) {
       });
     }
     if (verify !== text) return rawExpr;
-    packed = `(()=>{let s=${serializeJsValue(work)},k=${serializeJsValue(tokChars.join(''))},d=${serializeJsValue(dict)},m=new Map(Array.from(k,(c,i)=>[c,d[i]]));for(let f=1;f;)f=0,s=s.replace(/[\\u00A1-\\u07FF\\uE010-\\uF8FF]/g,(c)=>{let v=m.get(c);return v===void 0?c:(f=1,v)});return s})()`;
+    packed = `(()=>{let s=${serializeJsValue(work)},k=${serializeJsValue(tokChars.join(''))},d=${serializeStringListExpr(dict)},m=new Map(Array.from(k,(c,i)=>[c,d[i]]));for(let f=1;f;)f=0,s=s.replace(/[\\u00A1-\\u07FF\\uE010-\\uF8FF]/g,(c)=>{let v=m.get(c);return v===void 0?c:(f=1,v)});return s})()`;
   }
   return Buffer.byteLength(packed, 'utf8') + 12 < Buffer.byteLength(rawExpr, 'utf8') ? packed : rawExpr;
 }
@@ -4129,6 +4141,7 @@ function getInjectWrapperTemplate() {
           try { window.__agPrismTelemetry?.destroy?.(); } catch {}
           try { window.__agPrismEffortSlider?.destroy?.(); } catch {}
           try { window.__agPrismThought?.destroy?.(); } catch {}
+          try { window.__agPrismOmni?.destroy?.(); } catch {}
           try {
             document.querySelectorAll('[data-ag-prism-fallback="1"]').forEach((n) => n.remove());
           } catch {}

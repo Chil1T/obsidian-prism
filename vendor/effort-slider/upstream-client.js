@@ -85,10 +85,10 @@ decel: 180,
 snapEps: 0.002,
 velEps: 0.04
 });
-var RELEASE_PROJECT_S = 0.09;
-var POINTER_SPEED_EMA = 0.45;
-var POINTER_STALE_S = 0.05;
-var POINTER_SPEED_TAU = 0.035;
+var _REL_PRJ = 0.09;
+var _PS_EMA = 0.45;
+var _PS_STL = 0.05;
+var _PS_TAU = 0.035;
 // ── 用户设置 Schema 与持久化 ────────────────────────────────────────────────
 var SETTINGS_KEY = "ag.codexEffortSlider.settings.v1";
 var LEGACY_SETTINGS_KEY = "dsh.codexEffortSlider.settings.v1";
@@ -397,24 +397,24 @@ state.a = a;
 function decayPointerSpeed(rawSpeed, idleSeconds) {
 var v = Number(rawSpeed) || 0;
 var idle = Number(idleSeconds) || 0;
-if (idle <= POINTER_STALE_S) return v;
-var decay = Math.exp(-(idle - POINTER_STALE_S) / POINTER_SPEED_TAU);
+if (idle <= _PS_STL) return v;
+var decay = Math.exp(-(idle - _PS_STL) / _PS_TAU);
 var out = v * decay;
 return Math.abs(out) < 1e-4 ? 0 : out;
 }
 function releaseIndexFor(ptrPct, rawSpeed, idleSeconds, count) {
 var v = decayPointerSpeed(rawSpeed, idleSeconds);
-var projected = clamp01((Number(ptrPct) || 0) + v * RELEASE_PROJECT_S);
+var projected = clamp01((Number(ptrPct) || 0) + v * _REL_PRJ);
 return indexFromPct(projected, count);
 }
 // ── 22 颗黄金分割确定性星尘与色彩引擎（对齐 dsh-codex-effort-slider 右向左横穿星空） ──
 var PARTICLE_COUNT = 22;
-var STARFIELD_DURATION_MEAN = 1.5;
-var STARFIELD_DURATION_SPREAD = 0.08;
+var _SF_MEAN = 1.5;
+var _SF_SPR = 0.08;
 var STARFIELD_MIN = 0.5;
 var GOLDEN_RATIO = 0.6180339887498949;
 var MAX_SPEED_FACTOR = 2;
-var REDUCED_MOTION_SLOWDOWN = 2.6;
+var _RM_SLOW = 2.6;
 /** 确定性伪随机 [0,1)：不用 Math.random，每次渲染完全一致且可离线断言 */
 function starHash01(index, salt) {
 var value = ((index + 1) * (salt || 1) * 2654435761) % 4294967296;
@@ -797,8 +797,8 @@ var speed = Math.min(
 MAX_SPEED_FACTOR,
 Math.max(0.35, typeof speedFactor === "number" && Number.isFinite(speedFactor) ? speedFactor : MAX_SPEED_FACTOR)
 );
-var spread = 1 - STARFIELD_DURATION_SPREAD + 2 * STARFIELD_DURATION_SPREAD * starHash01(idx, 29);
-return (STARFIELD_DURATION_MEAN * MAX_SPEED_FACTOR) / speed * spread;
+var spread = 1 - _SF_SPR + 2 * _SF_SPR * starHash01(idx, 29);
+return (_SF_MEAN * MAX_SPEED_FACTOR) / speed * spread;
 }
 /**
 * 第 index 颗粒子的负相位延迟（秒）：
@@ -1407,7 +1407,7 @@ return indexMap;
 * - cYb         : conversationId
 * - eKa.Provider: setModelConfigByLabelForConversation（直接切档不关菜单、不抢焦点）
 */
-function readAntigravityFiberContext(el) {
+function _rdAgFiber(el) {
 var startFiber = getReactFiber(el);
 if (!startFiber) return null;
 var selectorCtx = null;
@@ -1510,7 +1510,7 @@ isOpen: Boolean((outerPopoverProps && outerPopoverProps.open) || (innerPopoverPr
 /**
 * 剖析当前选中模型（或指定 baseName 模型）在 Antigravity 中的可用推理档位列表
 */
-function resolveModelEffortProfile(ctx, targetModelOrBase, perModelEffortMap) {
+function resolveModelEffortProfile(ctx, targetModelOrBase, _effMap) {
 if (!ctx) return null;
 var selected = ctx.selectedModel;
 var modelObj = null;
@@ -1540,8 +1540,8 @@ var key = AG_EFFORT_ORDER[i];
 if (byEffort.has(key)) sortedKeys.push(key);
 }
 if (!activeEffort) {
-if (perModelEffortMap && perModelEffortMap.has(baseName)) {
-var remembered = perModelEffortMap.get(baseName);
+if (_effMap && _effMap.has(baseName)) {
+var remembered = _effMap.get(baseName);
 if (byEffort.has(remembered)) activeEffort = remembered;
 }
 if (!activeEffort) {
@@ -1602,7 +1602,7 @@ currentLabel: singleLabel,
 modelOption: modelObj
 };
 }
-function commitAntigravityModelOption(ctx, targetOption) {
+function _commitAgOpt(ctx, targetOption) {
 if (!ctx || !targetOption || !targetOption.label) return false;
 try {
 // 优先调用 eKa.Provider 的 setModelConfigByLabelForConversation：
@@ -1665,7 +1665,7 @@ return String(item.effort || item.id || item.value || item.key || item.label || 
 }
 return String(item);
 }
-function extractEffortDisplayLabel(item, effortKey, seat) {
+function _extEffLbl(item, effortKey, seat) {
 if (item && typeof item === "object" && typeof item.label === "string" && item.label) {
 return item.label;
 }
@@ -1697,7 +1697,7 @@ if (ui && ui.effortTitle) return String(ui.effortTitle);
 } catch (e) {}
 return EFFORT_TITLE_I18N[lang] || EFFORT_TITLE_I18N["zh-CN"];
 }
-function clearAntigravityDomDecorations(doc) {
+function _clrAgDom(doc) {
 if (!doc || typeof doc.querySelectorAll !== "function") return;
 var spans = doc.querySelectorAll('[data-ces-part="trigger-effort"], [data-testid="model-selector-trigger"] span[style]');
 for (var i = 0; i < spans.length; i += 1) {
@@ -1803,15 +1803,15 @@ var draftPct = null;
 var draftIndex = null;
 var snapIndex = null;
 var detentIndex = -1;
-var lastCommittedIndex = -1;
+var _lastCmtIdx = -1;
 var lastPtrPct = null;
 var lastPtrMs = 0;
 var ptrSpeed = 0;
 var motionState = null;
 var tickNodes = [];
-var lastRenderedTickCount = -1;
-var lastAppliedEnergy = -1;
-var lastAppliedSlowdown = -1;
+var _lastTicks = -1;
+var _lastEng = -1;
+var _lastSlow = -1;
 function nowMs() {
 if (win && win.performance && typeof win.performance.now === "function") {
 return win.performance.now();
@@ -1825,7 +1825,7 @@ var key = extractEffortKey(item);
 return {
 raw: item,
 effort: key,
-label: extractEffortDisplayLabel(item, key, seat)
+label: _extEffLbl(item, key, seat)
 };
 });
 var count = levels.length;
@@ -1872,7 +1872,7 @@ target: initPct
 }
 return motionState;
 }
-function syncHeaderAndTrigger(snap, showIdx) {
+function _syncHeadTrig(snap, showIdx) {
 var count = snap.count;
 var safeIdx = Math.max(0, Math.min(Math.max(0, count - 1), showIdx));
 var levelItem = snap.levels[safeIdx];
@@ -1954,7 +1954,7 @@ return;
 if (ticksEl.style.display !== "") {
 ticksEl.style.display = "";
 }
-if (lastRenderedTickCount !== count) {
+if (_lastTicks !== count) {
 ticksEl.innerHTML = "";
 tickNodes = [];
 for (var i = 0; i < count; i += 1) {
@@ -1966,7 +1966,7 @@ tick.style.left = knobOffsetOf(tickPct, KNOB_RADIUS);
 ticksEl.appendChild(tick);
 tickNodes.push({ el: tick, pct: tickPct });
 }
-lastRenderedTickCount = count;
+_lastTicks = count;
 }
 for (var j = 0; j < tickNodes.length; j += 1) {
 var node = tickNodes[j];
@@ -1977,7 +1977,7 @@ node.el.className = nextTickClass;
 }
 }
 }
-function stopClaudeCanvasAnimation() {
+function _stopClRaf() {
 if (claudeRafId !== null && win && typeof win.cancelAnimationFrame === "function") {
 win.cancelAnimationFrame(claudeRafId);
 }
@@ -1989,7 +1989,7 @@ if (destroyed) return;
 var snap = readSeatSnapshot();
 // 强度归零（回到 Low / 切走 Claude / 锁定）即停止循环，零冗余开销
 if (!snap.isClaude || snap.locked || claudeIntensity <= 0) {
-stopClaudeCanvasAnimation();
+_stopClRaf();
 return;
 }
 var now = typeof nowTs === "number" && nowTs > 0 ? nowTs : nowMs();
@@ -2016,7 +2016,7 @@ if (win && typeof win.requestAnimationFrame === "function") {
 claudeRafId = win.requestAnimationFrame(stepClaudeCanvas);
 }
 }
-function startClaudeCanvasAnimation() {
+function _startClRaf() {
 if (destroyed || claudeRafId !== null) return;
 if (win && typeof win.requestAnimationFrame === "function") {
 claudeRafId = win.requestAnimationFrame(stepClaudeCanvas);
@@ -2072,18 +2072,18 @@ claudeCanvasEl.style.display = "block";
 claudeAnimStart = nowMs();
 claudeLastTs = 0;
 }
-startClaudeCanvasAnimation();
+_startClRaf();
 } else {
 if (claudeCanvasEl.style.display !== "none") {
 claudeCanvasEl.style.display = "none";
 }
-stopClaudeCanvasAnimation();
+_stopClRaf();
 }
 var energy = snap.locked || motOff ? 0 : energyForPct(p, snap.energyStart);
-var slowdown = motionMode(win, null, doc) === "quick" ? REDUCED_MOTION_SLOWDOWN : 1;
-if (Math.abs(energy - lastAppliedEnergy) > 1e-5 || slowdown !== lastAppliedSlowdown) {
-lastAppliedEnergy = energy;
-lastAppliedSlowdown = slowdown;
+var slowdown = motionMode(win, null, doc) === "quick" ? _RM_SLOW : 1;
+if (Math.abs(energy - _lastEng) > 1e-5 || slowdown !== _lastSlow) {
+_lastEng = energy;
+_lastSlow = slowdown;
 var energyOn = energy > 0 ? "1" : "0";
 var energyStr = String(Math.round(energy * 1000) / 1000);
 if (rootEl.getAttribute("data-energy") !== energyOn) rootEl.setAttribute("data-energy", energyOn);
@@ -2108,7 +2108,7 @@ sNode.el.style.animationDelay = delay.toFixed(3) + "s";
 }
 }
 renderTicks(snap, p);
-syncHeaderAndTrigger(snap, safeIdx);
+_syncHeadTrig(snap, safeIdx);
 }
 function stopFrames() {
 if (rafId !== null && win && typeof win.cancelAnimationFrame === "function") {
@@ -2202,8 +2202,8 @@ var clampedIdx = Math.max(0, Math.min(snap.count - 1, targetIndex));
 var item = snap.levels[clampedIdx];
 if (!item) return;
 var isNowMax = clampedIdx === snap.count - 1 && !isOffLevel(item.label);
-var wasMax = lastCommittedIndex === snap.count - 1;
-lastCommittedIndex = clampedIdx;
+var wasMax = _lastCmtIdx === snap.count - 1;
+_lastCmtIdx = clampedIdx;
 tracePush("commit", {
 reason: reason || "drag",
 index: clampedIdx,
@@ -2247,7 +2247,7 @@ if (lastPtrPct !== null && lastPtrMs > 0) {
 var dt = (now - lastPtrMs) / 1000;
 if (dt > 1e-4 && dt < 0.25) {
 var instSpeed = (ptrPct - lastPtrPct) / dt;
-ptrSpeed = ptrSpeed * (1 - POINTER_SPEED_EMA) + instSpeed * POINTER_SPEED_EMA;
+ptrSpeed = ptrSpeed * (1 - _PS_EMA) + instSpeed * _PS_EMA;
 }
 } else {
 ptrSpeed = 0;
@@ -2285,7 +2285,7 @@ draftIndex = nowIndex;
 var m = ensureMotion(snap);
 m.target = targetPct;
 // ★ 核心交互：只要滑过档位边界（或者点击了另一档位），不用等松手，立即切换官方真实档位 ★
-if (nowIndex !== lastCommittedIndex) {
+if (nowIndex !== _lastCmtIdx) {
 commitAtIndex(nowIndex, isInitialDown ? "down" : "drag");
 }
 // ★ 顺滑连续跟手：拖动中圆钮直接 1:1 跟随鼠标连续浮点位置，不卡顿、不硬吸附 ★
@@ -2323,7 +2323,7 @@ detentIndex = -1;
 lastPtrPct = null;
 ptrSpeed = 0;
 snapIndex = finalIndex;
-if (finalIndex !== lastCommittedIndex) {
+if (finalIndex !== _lastCmtIdx) {
 commitAtIndex(finalIndex, "release");
 }
 var m = ensureMotion(snap);
@@ -2356,7 +2356,7 @@ if (typeof ev.preventDefault === "function") ev.preventDefault();
 dragging = true;
 buttonDown = true;
 // 起手时对齐当前官方档位，若起手点就在当前档位则不重复触发无意义的写入；若点在其他档位则立即切过去
-lastCommittedIndex = snap.officialIndex;
+_lastCmtIdx = snap.officialIndex;
 detentIndex = snap.officialIndex;
 snapIndex = null;
 lastPtrPct = null;
@@ -2485,7 +2485,7 @@ return {
 unmount: function () {
 destroyed = true;
 stopFrames();
-stopClaudeCanvasAnimation();
+_stopClRaf();
 clearMaxEffects();
 var rowEl =
 opts.row ||
@@ -2614,20 +2614,20 @@ return { stop: function () {}, rescan: function () {} };
 }
 installStyles(doc);
 // 记录每个基础模型在当前会话最后选定的推理档位（默认跟随 selectedModel 或 medium）
-var perModelEffortMap = new Map();
+var _effMap = new Map();
 var activeMount = null;
 var activePanel = null;
 var activeSection = null;
 var activeRow = null;
 var activeValueEl = null;
 var activeHostEl = null;
-var activeSeatListeners = new Set();
+var _seatLs = new Set();
 var activeBaseOverride = null;
-var activeModelOptionOverride = null;
+var _actOptOvr = null;
 var observer = null;
-var isInternalMutating = false;
+var _intMut = false;
 function notifySeatListeners() {
-activeSeatListeners.forEach(function (fn) {
+_seatLs.forEach(function (fn) {
 try {
 fn();
 } catch (err) {
@@ -2638,24 +2638,24 @@ fn();
 function getLiveContext() {
 var trigger = findAntigravityTrigger(doc);
 var panel = findAntigravityPanel(doc);
-return readAntigravityFiberContext(trigger || panel);
+return _rdAgFiber(trigger || panel);
 }
 function getActiveProfile(ctx) {
 if (!ctx) return null;
-var target = activeModelOptionOverride || activeBaseOverride || ctx.selectedModel;
-return resolveModelEffortProfile(ctx, target, perModelEffortMap);
+var target = _actOptOvr || activeBaseOverride || ctx.selectedModel;
+return resolveModelEffortProfile(ctx, target, _effMap);
 }
 /**
 * 立即同步更新：
 * 1. 底部 Composer 折叠触发按钮的模型名与档位颜色
 * 2. 展开菜单中每一行模型右侧的档位文字与颜色、以及选中态高亮
 */
-function syncAntigravityDomDecorations(ctx, activeProfile) {
+function _syncAgDom(ctx, activeProfile) {
 if (!ctx) return;
 var profile = activeProfile || getActiveProfile(ctx);
 if (!profile) return;
 if (!profile.locked && profile.baseName && profile.currentEffort) {
-perModelEffortMap.set(profile.baseName, profile.currentEffort);
+_effMap.set(profile.baseName, profile.currentEffort);
 }
 var count = profile.levels.length;
 var idx = profile.currentIndex;
@@ -2695,7 +2695,7 @@ for (var i = 0; i < groupSpans.length; i += 1) {
 var gSpan = groupSpans[i];
 var base = gSpan.getAttribute("data-model-base") || (gSpan.textContent || "").trim();
 var menuItem = gSpan.closest('[role="menuitem"]');
-var rowProf = resolveModelEffortProfile(ctx, base, perModelEffortMap);
+var rowProf = resolveModelEffortProfile(ctx, base, _effMap);
 if (!rowProf) continue;
 var isSelectedModel = profile.baseName === base;
 if (menuItem) {
@@ -2804,27 +2804,27 @@ var effortKey = levelItem.effort || (levelItem.raw && levelItem.raw.effort);
 if (!targetOpt) return;
 var parsed = parseModelLabel(targetOpt.label);
 if (parsed) {
-perModelEffortMap.set(parsed.base, parsed.effort);
+_effMap.set(parsed.base, parsed.effort);
 activeBaseOverride = parsed.base;
 }
-activeModelOptionOverride = targetOpt;
-commitAntigravityModelOption(ctx, targetOpt);
-isInternalMutating = true;
+_actOptOvr = targetOpt;
+_commitAgOpt(ctx, targetOpt);
+_intMut = true;
 try {
-var updatedProfile = resolveModelEffortProfile(ctx, targetOpt, perModelEffortMap);
-syncAntigravityDomDecorations(ctx, updatedProfile);
+var updatedProfile = resolveModelEffortProfile(ctx, targetOpt, _effMap);
+_syncAgDom(ctx, updatedProfile);
 } finally {
-isInternalMutating = false;
+_intMut = false;
 }
 },
 subscribe: function (fn) {
-activeSeatListeners.add(fn);
+_seatLs.add(fn);
 return function () {
-activeSeatListeners.delete(fn);
+_seatLs.delete(fn);
 };
 }
 };
-function bindPanelInteractions(panel) {
+function _bindPnl(panel) {
 if (!panel || panel.__cesAgBound) return;
 panel.__cesAgBound = true;
 function findClickedModelRow(target) {
@@ -2868,11 +2868,11 @@ var ctx = getLiveContext();
 if (!ctx) return;
 var targetOption = null;
 if (hit.type === "group" && hit.base) {
-var prof = resolveModelEffortProfile(ctx, hit.base, perModelEffortMap);
+var prof = resolveModelEffortProfile(ctx, hit.base, _effMap);
 if (prof && prof.modelOption) {
 targetOption = prof.modelOption;
 activeBaseOverride = hit.base;
-activeModelOptionOverride = targetOption;
+_actOptOvr = targetOption;
 }
 } else if (hit.type === "single" && hit.label) {
 var optsList = Array.isArray(ctx.modelOptions) ? ctx.modelOptions : [];
@@ -2884,19 +2884,19 @@ break;
 }
 if (targetOption) {
 activeBaseOverride = hit.label;
-activeModelOptionOverride = targetOption;
+_actOptOvr = targetOption;
 }
 }
 if (targetOption) {
 tracePush("ag-select-model-in-menu", { label: targetOption.label });
-commitAntigravityModelOption(ctx, targetOption);
-isInternalMutating = true;
+_commitAgOpt(ctx, targetOption);
+_intMut = true;
 try {
-var nextProf = resolveModelEffortProfile(ctx, targetOption, perModelEffortMap);
-syncAntigravityDomDecorations(ctx, nextProf);
+var nextProf = resolveModelEffortProfile(ctx, targetOption, _effMap);
+_syncAgDom(ctx, nextProf);
 notifySeatListeners();
 } finally {
-isInternalMutating = false;
+_intMut = false;
 }
 }
 }
@@ -3061,7 +3061,7 @@ panel.addEventListener("mouseup", onPointerOrMouseUpCapture, true);
 panel.addEventListener("click", onClickCapture, true);
 panel.__cesAgResetUsageHover = resetUsageHover;
 }
-function unmountActiveSection() {
+function _unmntSec() {
 if (activePanel && typeof activePanel.__cesAgResetUsageHover === "function") {
 try {
 activePanel.__cesAgResetUsageHover();
@@ -3085,11 +3085,11 @@ activeValueEl = null;
 activeHostEl = null;
 activePanel = null;
 activeBaseOverride = null;
-activeModelOptionOverride = null;
+_actOptOvr = null;
 }
-function mountSectionIntoPanel(panel, ctx) {
+function _mntSec(panel, ctx) {
 panel.classList.add("ces-ag-panel-enhanced");
-bindPanelInteractions(panel);
+_bindPnl(panel);
 var section = doc.createElement("div");
 section.className = "ces-ag-section";
 section.setAttribute("data-ces-part", "ag-section");
@@ -3157,16 +3157,16 @@ seat: agSeatAdapter,
 document: doc,
 window: win,
 onVisualChange: function (vState) {
-isInternalMutating = true;
+_intMut = true;
 try {
 var liveCtx = getLiveContext();
 if (liveCtx) {
-syncAntigravityDomDecorations(liveCtx, getActiveProfile(liveCtx));
+_syncAgDom(liveCtx, getActiveProfile(liveCtx));
 } else {
 syncTriggerColor(doc, vState.label, vState.index, vState.count, vState.isMax, false);
 }
 } finally {
-isInternalMutating = false;
+_intMut = false;
 }
 }
 });
@@ -3179,30 +3179,30 @@ win.dispatchEvent(new win.Event("resize"));
 }
 }
 function scan() {
-if (isInternalMutating) return;
-isInternalMutating = true;
+if (_intMut) return;
+_intMut = true;
 try {
 var ctx = getLiveContext();
 var panel = findAntigravityPanel(doc);
 if (!panel) {
 if (activeSection) {
-unmountActiveSection();
+_unmntSec();
 }
 if (ctx) {
-syncAntigravityDomDecorations(ctx, resolveModelEffortProfile(ctx, ctx.selectedModel, perModelEffortMap));
+_syncAgDom(ctx, resolveModelEffortProfile(ctx, ctx.selectedModel, _effMap));
 }
 return;
 }
 // 若外部修改了 selectedModel，清除临时 override 对齐最新模型
-if (ctx && ctx.selectedModel && activeModelOptionOverride) {
-if (ctx.selectedModel.label === activeModelOptionOverride.label) {
-activeModelOptionOverride = null;
+if (ctx && ctx.selectedModel && _actOptOvr) {
+if (ctx.selectedModel.label === _actOptOvr.label) {
+_actOptOvr = null;
 activeBaseOverride = null;
 }
 }
 if (activePanel !== panel || !activeSection || !panel.contains(activeSection)) {
-unmountActiveSection();
-mountSectionIntoPanel(panel, ctx);
+_unmntSec();
+_mntSec(panel, ctx);
 } else if (activeSection) {
 var nextTitle = resolveEffortTitle(doc, win);
 var tSpan = activeSection.querySelector(".ces-ag-effort-title");
@@ -3210,11 +3210,11 @@ if (tSpan && tSpan.textContent !== nextTitle) tSpan.textContent = nextTitle;
 if (activeMount && typeof activeMount.refresh === "function") activeMount.refresh();
 }
 if (ctx) {
-syncAntigravityDomDecorations(ctx, getActiveProfile(ctx));
+_syncAgDom(ctx, getActiveProfile(ctx));
 }
 notifySeatListeners();
 } finally {
-isInternalMutating = false;
+_intMut = false;
 }
 }
 scan();
@@ -3235,11 +3235,11 @@ if (observer) {
 observer.disconnect();
 observer = null;
 }
-unmountActiveSection();
-clearAntigravityDomDecorations(doc);
+_unmntSec();
+_clrAgDom(doc);
 },
 rescan: scan,
-bindPanelInteractions: bindPanelInteractions
+_bindPnl: _bindPnl
 };
 }
 // ── 一键安装到当前窗口（同时兼容 Antigravity 原生环境与 Seat 预览环境） ────────
@@ -3258,20 +3258,20 @@ win.__agCodexEffortSliderInstance.stop();
 installStyles(doc);
 var settingsUi = opts.disableContextMenuSettings ? { stop: function () {} } : installSettingsUi({ document: doc, window: win });
 var agObs = installAntigravityObserver({ document: doc, window: win, MutationObserver: opts.MutationObserver });
-var activeGenericMount = null;
-var menuObs = installMenuObserver({
+var _actGenMnt = null;
+var menuObs = opts.skipGenericMenuObserver ? { stop: function () {}, rescan: function () {} } : installMenuObserver({
 document: doc,
 window: win,
 MutationObserver: opts.MutationObserver,
 onChange: function (current) {
-if (activeGenericMount) {
-activeGenericMount.unmount();
-activeGenericMount = null;
+if (_actGenMnt) {
+_actGenMnt.unmount();
+_actGenMnt = null;
 }
 if (!current || !current.container) return;
 var seat = opts.seat || findSeatEffort(win);
 if (!seat) return;
-activeGenericMount = mountCodexEffortSlider({
+_actGenMnt = mountCodexEffortSlider({
 container: current.container,
 row: current.row,
 seat: seat,
@@ -3282,9 +3282,9 @@ window: win
 });
 var instance = {
 stop: function () {
-if (activeGenericMount) {
-activeGenericMount.unmount();
-activeGenericMount = null;
+if (_actGenMnt) {
+_actGenMnt.unmount();
+_actGenMnt = null;
 }
 menuObs.stop();
 agObs.stop();
@@ -3323,5 +3323,5 @@ document.addEventListener("DOMContentLoaded", boot, { once: true });
 boot();
 }
 }
-return {mountCodexEffortSlider,installMenuObserver,installAntigravityObserver,installCodexEffortSlider,findInferenceRow,findEffortTrigger,findAntigravityTrigger,findAntigravityPanel,readAntigravityFiberContext,resolveModelEffortProfile,commitAntigravityModelOption,parseModelLabel,syncTriggerColor,pctFromIndex,indexFromPct,detentTargetIndex,energyForPct,energyStopsFor,speedFor,particleCountFor,starCountFor,PARTICLES,starBrightnessFor,starDurationFor,starDelayFor,starLayerOpacityFor,starHash01,STARFIELD_DURATION_MEAN,STARFIELD_DURATION_SPREAD,STARFIELD_MIN,GOLDEN_RATIO,MAX_SPEED_FACTOR,REDUCED_MOTION_SLOWDOWN,readSettings,writeSettings,resetSettings,onSettingsChange,normalizeSettings,schemaDefaults,motionMode,motionParamsForMode,tracePush,dumpTrace,traceClear,installSettingsUi,openSettingsPanel,SETTINGS_SCHEMA,SETTINGS_VERSION,SETTINGS_KEY,SETTINGS_EVENT,MIN_HEIGHT_SLOTS,fillColorFor,fillBackgroundFor,valueColorFor,isOffLevel,findValueElement,findSeatEffort,knobOffsetOf,KNOB_RADIUS,KNOB_SIZE,TRACK_HEIGHT,BASE_SPEEDUP,ENERGY_START,ENERGY_END,clamp01,clampAbs,installStyles,MOTION,MOTION_REDUCED,MOTION_FAST,RELEASE_PROJECT_S,POINTER_SPEED_EMA,POINTER_STALE_S,POINTER_SPEED_TAU,motionStep,motionSettled,decayPointerSpeed,releaseIndexFor,isClaudeModel,claudeIntensityFor,claudeSpeedFor,paintDither,ditherAlphaAt,valueNoise,hash01,fillRoundRect,surfaceIsDark,CLAUDE_CELL,CLAUDE_ROWS,CLAUDE_SWEEP_MS,CLAUDE_KNOB_W,CLAUDE_KNOB_H,CLAUDE_KNOB_R};
+return {mountCodexEffortSlider,installMenuObserver,installAntigravityObserver,installCodexEffortSlider,findAntigravityTrigger,findAntigravityPanel,resolveModelEffortProfile,motionMode,openSettingsPanel,fillColorFor,fillBackgroundFor,valueColorFor,paintDither,surfaceIsDark};
 });

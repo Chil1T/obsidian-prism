@@ -38,6 +38,7 @@
   let cachedRunningAt = -1;
   let cachedDecisionVal = false;
   let cachedDecisionAt = -1;
+  let cachedErrorAt = -1;
   const seenErrorNodes = typeof WeakSet === 'function' ? new WeakSet() : null;
 
   function readNowMs() {
@@ -90,6 +91,9 @@
 
   function consumeFreshDomError(convView) {
     if (!seenErrorNodes || typeof document === 'undefined') return false;
+    const now = readNowMs();
+    if (cachedErrorAt >= 0 && Math.abs(now - cachedErrorAt) < 240) return false;
+    cachedErrorAt = now;
     const scope = convView || document;
     if (typeof scope.querySelectorAll !== 'function') return false;
     const errs = scope.querySelectorAll(
@@ -321,6 +325,15 @@
 
     function findConvAuraView() {
       if (typeof document === 'undefined' || !isHomeRippleEnabled() || document.querySelector('.agy-home')) return null;
+      if (
+        convAura &&
+        convAura.convView &&
+        convAura.convView.isConnected !== false &&
+        !convAura.convView.closest?.('.agy-home') &&
+        !convAura.convView.closest?.('[data-testid="subagent-tab-conversation"]')
+      ) {
+        return convAura.convView;
+      }
       const views = document.querySelectorAll('[data-testid="conversation-view"]');
       for (const cv of views) {
         if (cv.closest?.('.agy-home') || cv.closest?.('[data-testid="subagent-tab-conversation"]')) continue;
@@ -503,6 +516,7 @@
     function sync() {
       cachedRunningAt = -1;
       cachedDecisionAt = -1;
+      cachedErrorAt = -1;
       if (isDestroyed() || !isHomeRippleEnabled()) {
         unmount();
         return;
