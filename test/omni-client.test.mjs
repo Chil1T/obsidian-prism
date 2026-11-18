@@ -63,7 +63,6 @@ function matchesSimpleToken(el, rawSel) {
   }
 
   let rem = sel;
-  // Handle simple `:not([style*="..."])`
   const notStyleMatch = rem.match(/:not\(\[style\*="([^"]+)"\]\)/);
   if (notStyleMatch) {
     const curStyle = String(el.getAttribute('style') || '');
@@ -490,14 +489,14 @@ function createFakeDomEnvironment(opts = {}) {
   win.document = doc;
   win.innerWidth = 1440;
   win.innerHeight = 900;
+  win.location = opts.location || {
+    href: 'https://127.0.0.1:1714/c/620cf67b-fb6c-4d11-a77c-13cdb6a252d2',
+    pathname: '/c/620cf67b-fb6c-4d11-a77c-13cdb6a252d2',
+    search: '',
+  };
   win.Event = FakeEvent;
   win.InputEvent = FakeEvent;
   win.MutationObserver = FakeMutationObserver;
-  win.ResizeObserver = class {
-    constructor(cb) { this.cb = cb; }
-    observe() {}
-    disconnect() {}
-  };
 
   if (opts.enableCssHighlights) {
     win.Highlight = class FakeHighlight extends Set {};
@@ -561,12 +560,121 @@ function createFakeDomEnvironment(opts = {}) {
   };
 }
 
+// Mounts a realistic Antigravity `#root` React Fiber with Redux `store` (`sidePanel` + `sidePanelV2`) & optional `browserCtx`
+function mountMockHostRoot(document, { withBrowserCtx = true, withV2 = true, overviewOpen = false } = {}) {
+  const cascadeId = '620cf67b-fb6c-4d11-a77c-13cdb6a252d2';
+  const dispatched = [];
+  const state = {
+    multiConvoLayout: {
+      rootNode: { type: 'pane', id: 'pane-1', cascadeId },
+      focusedPaneId: 'pane-1',
+    },
+    sidePanel: {
+      conversationPanes: {
+        [cascadeId]: { tabs: [], activeTabId: 'overview', isPaneOpen: false },
+      },
+    },
+    ...(withV2
+      ? {
+          sidePanelV2: {
+            conversationPanes: {
+              [cascadeId]: { tabs: [], activeTabId: undefined },
+            },
+            overviewPanelOpen: { [cascadeId]: overviewOpen },
+          },
+        }
+      : {}),
+  };
+
+  const store = {
+    getState: () => state,
+    dispatch: (action) => {
+      dispatched.push(action);
+      const { type, payload } = action || {};
+      if (type === 'sidePanel/setSidePanelOpen' && payload?.treeId?.kind === 'cascadeId') {
+        const cid = payload.treeId.cascadeId;
+        state.sidePanel.conversationPanes[cid] ??= { tabs: [], isPaneOpen: false };
+        state.sidePanel.conversationPanes[cid].isPaneOpen = Boolean(payload.isOpen);
+      } else if (type === 'sidePanelV2/setOverviewPanelOpen' && payload?.cascadeId) {
+        state.sidePanelV2.overviewPanelOpen[payload.cascadeId] = Boolean(payload.open);
+      } else if (type === 'sidePanelV2/setContent' && payload?.treeId?.kind === 'cascadeId') {
+        const cid = payload.treeId.cascadeId;
+        const pane = (state.sidePanelV2.conversationPanes[cid] ??= { tabs: [] });
+        const idx = pane.tabs.findIndex((t) => t.id === payload.tabId);
+        const tabObj = { id: payload.tabId, content: payload.content, isPreview: false };
+        if (idx >= 0) pane.tabs[idx] = tabObj;
+        else pane.tabs.push(tabObj);
+        if (!payload.background) pane.activeTabId = payload.tabId;
+      } else if (type === 'sidePanelV2/setActiveTab' && payload?.treeId?.kind === 'cascadeId') {
+        const pane = state.sidePanelV2.conversationPanes[payload.treeId.cascadeId];
+        if (pane) pane.activeTabId = payload.tabId;
+      } else if (type === 'sidePanel/setContent' && payload?.treeId?.kind === 'cascadeId') {
+        const cid = payload.treeId.cascadeId;
+        const pane = (state.sidePanel.conversationPanes[cid] ??= { tabs: [] });
+        const idx = pane.tabs.findIndex((t) => t.id === payload.tabId);
+        const tabObj = { id: payload.tabId, content: payload.content, isPreview: false };
+        if (idx >= 0) pane.tabs[idx] = tabObj;
+        else pane.tabs.push(tabObj);
+        if (!payload.background) pane.activeTabId = payload.tabId;
+      }
+      return action;
+    },
+  };
+
+  const contextCalls = [];
+  const browserCtxNode = withBrowserCtx
+    ? {
+        memoizedProps: {
+          value: {
+            isBrowserPaneAvailable: true,
+            getTargetTreeId: () => ({ kind: 'cascadeId', cascadeId }),
+            openUrlInBrowserPane: (url, opts = {}) => {
+              contextCalls.push({ url, opts });
+              const tabId = opts.preferredTabId || `browser__native_${contextCalls.length}`;
+              const target = withV2 ? 'sidePanelV2/setContent' : 'sidePanel/setContent';
+              store.dispatch({
+                type: target,
+                payload: {
+                  treeId: opts.targetTreeId || { kind: 'cascadeId', cascadeId },
+                  tabId,
+                  keepOpen: true,
+                  background: false,
+                  content: {
+                    type: 'customView',
+                    customView: {
+                      customPaneKey: 'browser',
+                      serializedInputs: JSON.stringify({ tabId, initialUrl: url, entryUrl: url }),
+                    },
+                  },
+                },
+              });
+              return true;
+            },
+          },
+        },
+        child: null,
+        sibling: null,
+      }
+    : null;
+
+  const rootEl = document.createElement('div');
+  rootEl.id = 'root';
+  rootEl.__reactContainer$test = {
+    memoizedProps: { store },
+    child: browserCtxNode,
+    sibling: null,
+  };
+  document.body.appendChild(rootEl);
+
+  return { rootEl, store, state, dispatched, contextCalls, cascadeId };
+}
+
 function flushMicrotasks() {
   return new Promise((resolve) => setTimeout(resolve, 18));
 }
 
-// ── 1. Pure Parsers & Path Utilities ────────────────────────────────────────
-test('URI decoding, line range parsing, relative path calculation & preview kind mapping', () => {
+// ── 1. Pure Parsers, Stable Hash & Path Utilities ───────────────────────────
+test('URI decoding, line range parsing, relative path calculation, stable hash & preview kind mapping', () => {
   const winParsed = omniMod.parseFileUriToPath(
     'file:///d%3A/projects/prism-app/src/main.tsx#L18-L42'
   );
@@ -587,6 +695,8 @@ test('URI decoding, line range parsing, relative path calculation & preview kind
     omniMod.computeRelativePath('D:\\projects\\prism-app\\src\\ui\\card.ts#L10-L20', 'd:/projects/prism-app'),
     'src/ui/card.ts#L10-L20'
   );
+  assert.equal(omniMod.shortStableHash('assets/intro.mp4'), omniMod.shortStableHash('assets/intro.mp4'));
+  assert.notEqual(omniMod.shortStableHash('assets/intro.mp4'), omniMod.shortStableHash('assets/outro.mp4'));
   assert.equal(omniMod.detectPreviewKind('/media/demo.mp4'), 'video');
   assert.equal(omniMod.detectPreviewKind('/media/voice.wav'), 'audio');
   assert.equal(omniMod.detectPreviewKind('/media/icon.svg'), 'svg');
@@ -596,20 +706,30 @@ test('URI decoding, line range parsing, relative path calculation & preview kind
   assert.equal(omniMod.detectPreviewKind('/media/spec.pdf'), 'pdf');
 });
 
-// ── 2. Left-Click Web Link Routing + Sandbox Security + `<a download>` Skip ──
-test('left-clicking http(s) links honors linkTarget + Ctrl/Cmd inversion, skips <a download>, and strips allow-same-origin on external fallback iframe', async () => {
+// ── 2. Native Host Browser Tab Routing (React Context Primary + Redux Fallback) ─
+test('left-clicking http(s) links opens native host Browser Tab (ZERO .ag-omni-dock DOM!), honors Ctrl/Cmd inversion & skips <a download>', async () => {
   const env = createFakeDomEnvironment();
   const { window, document, FakeEvent, externalOpened } = env;
+  const host = mountMockHostRoot(document, { withBrowserCtx: true, withV2: true, overviewOpen: true });
 
+  // Plant a stale legacy `.ag-omni-dock` and polluted `mainPane.style.flex` to verify automatic cleanup!
   const auxSplit = document.createElement('div');
   auxSplit.setAttribute('data-testid', 'aux-pane-split');
-  const convWrap = document.createElement('div');
+  const mainPane = document.createElement('div');
+  mainPane.style.flex = '1 1 0%';
+  mainPane.style.minWidth = '320px';
+  const staleDock = document.createElement('aside');
+  staleDock.className = 'ag-omni-dock';
+  staleDock.setAttribute('data-testid', 'ag-omni-dock');
+  auxSplit.appendChild(mainPane);
+  auxSplit.appendChild(staleDock);
+
   const resp = document.createElement('div');
   resp.setAttribute('data-testid', 'planner-response-text');
 
   const link = document.createElement('a');
-  link.setAttribute('href', 'https://example.org/docs/guide');
-  link.textContent = 'Example Guide';
+  link.setAttribute('href', 'https://github.com/org/repo');
+  link.textContent = 'GitHub Repo';
   resp.appendChild(link);
 
   const dlLink = document.createElement('a');
@@ -618,8 +738,7 @@ test('left-clicking http(s) links honors linkTarget + Ctrl/Cmd inversion, skips 
   dlLink.textContent = 'Download ZIP';
   resp.appendChild(dlLink);
 
-  convWrap.appendChild(resp);
-  auxSplit.appendChild(convWrap);
+  mainPane.appendChild(resp);
   document.body.appendChild(auxSplit);
 
   const client = omniMod.createOmniClient({ window, document });
@@ -628,132 +747,92 @@ test('left-clicking http(s) links honors linkTarget + Ctrl/Cmd inversion, skips 
     { baseUrl: 'http://127.0.0.1:43999', token: 'tok123' }
   );
 
+  // Legacy `.ag-omni-dock` is purged immediately on `sync()` and `mainPane` flex is healed!
+  assert.equal(document.querySelector('.ag-omni-dock'), null);
+  assert.equal(mainPane.style.flex, '');
+  assert.equal(mainPane.style.flexGrow, '1');
+  assert.equal(mainPane.style.minWidth, '300px');
+
   // `<a download>` must NOT be intercepted
   const dlEv = new FakeEvent('click', { bubbles: true, cancelable: true, button: 0 });
   dlLink.dispatchEvent(dlEv);
   assert.equal(dlEv.defaultPrevented, false);
 
-  // Hovering over a link must NEVER spawn floating toolbars
-  link.dispatchEvent(new FakeEvent('mouseenter', { bubbles: true }));
-  assert.equal(document.querySelector('.ag-omni-menu'), null);
-  assert.equal(resp.querySelectorAll('button').length, 0);
-
-  // Default linkTarget = 'builtin': opens right-side dock WITHOUT `allow-same-origin` on external fallback iframe
+  // Default linkTarget = 'builtin': opens via host React Context `openUrlInBrowserPane` with ZERO `.ag-omni-dock`!
   const clickEv1 = new FakeEvent('click', { bubbles: true, cancelable: true, button: 0 });
   link.dispatchEvent(clickEv1);
   await flushMicrotasks();
 
   assert.equal(clickEv1.defaultPrevented, true);
   assert.equal(externalOpened.length, 0);
-  const dock = document.querySelector('[data-testid="ag-omni-dock"]');
-  assert.ok(dock);
-  const iframe = dock.querySelector('[data-testid="ag-omni-iframe"]');
-  assert.equal(iframe.src, 'https://example.org/docs/guide');
-  assert.equal(
-    iframe.getAttribute('sandbox').includes('allow-same-origin'),
-    false,
-    'External URL fallback iframe must NEVER include allow-same-origin'
-  );
-
-  // Responsive viewport buttons (`100%` -> `390`)
-  dock.querySelector('[data-vp-btn="390"]').click();
-  assert.equal(dock.querySelector('.ag-omni-viewport-box').getAttribute('data-vp'), '390');
+  assert.equal(document.querySelector('.ag-omni-dock'), null, 'Must NEVER create rogue .ag-omni-dock');
+  assert.equal(host.contextCalls.length, 1);
+  assert.equal(host.contextCalls[0].url, 'https://github.com/org/repo');
+  assert.equal(host.state.sidePanel.conversationPanes[host.cascadeId].isPaneOpen, true);
+  assert.equal(host.state.sidePanelV2.overviewPanelOpen[host.cascadeId], false);
+  assert.equal(client.getState().lastOpenedTab?.method, 'context');
 
   // Ctrl+Click inverts to external system browser
   link.dispatchEvent(new FakeEvent('click', { bubbles: true, cancelable: true, button: 0, ctrlKey: true }));
   await flushMicrotasks();
-  assert.deepEqual(externalOpened, ['https://example.org/docs/guide']);
+  assert.deepEqual(externalOpened, ['https://github.com/org/repo']);
 
-  // Switch linkTarget to 'external': plain click opens external, Meta+Click opens builtin
+  // Switch linkTarget to 'external': plain click opens external, Meta+Click opens native host tab
   client.sync({ linkTarget: 'external' });
   link.dispatchEvent(new FakeEvent('click', { bubbles: true, cancelable: true, button: 0 }));
   await flushMicrotasks();
   assert.equal(externalOpened.length, 2);
 
-  link.setAttribute('href', 'https://example.org/changelog');
+  link.setAttribute('href', 'https://github.com/org/repo/pulls');
   link.dispatchEvent(new FakeEvent('click', { bubbles: true, cancelable: true, button: 0, metaKey: true }));
   await flushMicrotasks();
-  assert.equal(iframe.src, 'https://example.org/changelog');
+  assert.equal(host.contextCalls.length, 2);
+  assert.equal(host.contextCalls[1].url, 'https://github.com/org/repo/pulls');
 
   client.destroy();
 });
 
-// ── 3. Native `wcvBrowser` Engine + Portal/Visibility Yield + Route Remount ──
-test('native wcvBrowser yields immediately to Base UI portal menus / document.hidden and survives route remount', async () => {
-  const wcvLog = [];
-  const mockWcv = {
-    acquire: async (opts) => {
-      wcvLog.push(['acquire', opts.tabKey, opts.initialUrl]);
-      return { webContentsId: 77, url: opts.initialUrl, title: 'GitHub Repo', canGoBack: true, canGoForward: false };
-    },
-    show: async (tabKey, bounds) => {
-      wcvLog.push(['show', tabKey, bounds.width > 0]);
-      return { url: 'https://github.com/org/repo', title: 'GitHub Repo', canGoBack: true, canGoForward: false };
-    },
-    setBounds: (tabKey, bounds) => { wcvLog.push(['setBounds', tabKey, bounds.width]); },
-    hide: (tabKey) => { wcvLog.push(['hide', tabKey]); },
-    navigate: async (tabKey, url) => { wcvLog.push(['navigate', tabKey, url]); },
-    control: (tabKey, cmd) => { wcvLog.push(['control', tabKey, cmd]); },
-    dispose: (tabKey) => { wcvLog.push(['dispose', tabKey]); },
-    onGuestEvent: () => () => {},
-  };
-
-  const env = createFakeDomEnvironment({ wcvBrowser: mockWcv });
-  const { window, document, FakeEvent } = env;
-
-  const auxSplit = document.createElement('div');
-  auxSplit.setAttribute('data-testid', 'aux-pane-split');
-  auxSplit.appendChild(document.createElement('div'));
-  document.body.appendChild(auxSplit);
+// ── 3. Direct Redux `sidePanelV2` Fallback Dispatch & Title Synchronization ──
+test('falls back to Redux sidePanelV2/setContent + setActiveTab when React Context is absent and sets friendly pageTitle', async () => {
+  const env = createFakeDomEnvironment();
+  const { window, document } = env;
+  const host = mountMockHostRoot(document, { withBrowserCtx: false, withV2: true });
 
   const client = omniMod.createOmniClient({ window, document });
-  client.sync({ omniModule: 'on', linkTarget: 'builtin' }, { baseUrl: 'http://127.0.0.1:43999', token: 't1' });
+  client.sync(
+    { omniModule: 'on', linkTarget: 'builtin' },
+    { baseUrl: 'http://127.0.0.1:43999', token: 'tok_rdx' }
+  );
 
-  await client.openUrl('https://github.com/org/repo', 'builtin');
-  await flushMicrotasks();
-  assert.ok(wcvLog.some((e) => e[0] === 'acquire'));
-  assert.ok(wcvLog.some((e) => e[0] === 'show'));
+  await client.openUrl('https://developer.mozilla.org/en-US/docs/Web', 'builtin');
+  assert.equal(client.getState().lastOpenedTab?.method, 'redux');
+  assert.equal(host.state.sidePanel.conversationPanes[host.cascadeId].isPaneOpen, true);
 
-  // Mounting a Base UI portal menu automatically hides WCV immediately via MutationObserver
-  const hidesBeforePortal = wcvLog.filter((e) => e[0] === 'hide').length;
-  const portal = document.createElement('div');
-  portal.setAttribute('data-base-ui-portal', '');
-  const menuPopup = document.createElement('div');
-  menuPopup.setAttribute('role', 'menu');
-  portal.appendChild(menuPopup);
-  document.body.appendChild(portal);
-  assert.ok(wcvLog.filter((e) => e[0] === 'hide').length > hidesBeforePortal);
+  const paneTabs = host.state.sidePanelV2.conversationPanes[host.cascadeId].tabs;
+  assert.equal(paneTabs.length, 1);
+  assert.equal(paneTabs[0].content.type, 'customView');
+  assert.equal(paneTabs[0].content.customView.customPaneKey, 'browser');
+  const parsedWebInputs = JSON.parse(paneTabs[0].content.customView.serializedInputs);
+  assert.equal(parsedWebInputs.initialUrl, 'https://developer.mozilla.org/en-US/docs/Web');
 
-  // Removing portal restores WCV
-  const showsBeforeClose = wcvLog.filter((e) => e[0] === 'show').length;
-  portal.remove();
-  assert.ok(wcvLog.filter((e) => e[0] === 'show').length > showsBeforeClose);
+  // Opening a local file routes `/viewer?...` to a native Browser Tab with `prism-omni__<hash>` & `pageTitle`
+  await client.openFile('/workspace/demo/video/preview.mp4', { lineStart: 12, lineEnd: 24 });
+  assert.equal(paneTabs.length, 2);
+  const fileTab = paneTabs[1];
+  assert.match(fileTab.id, /^prism-omni__[a-z0-9]+$/);
+  const parsedFileInputs = JSON.parse(fileTab.content.customView.serializedInputs);
+  assert.equal(parsedFileInputs.pageTitle, 'preview.mp4 #L12-L24');
+  assert.match(parsedFileInputs.initialUrl, /^http:\/\/127\.0\.0\.1:43999\/viewer\?token=tok_rdx&path=/);
 
-  // Document visibility hidden hides WCV
-  document.hidden = true;
-  document.dispatchEvent(new FakeEvent('visibilitychange'));
-  assert.equal(wcvLog[wcvLog.length - 1][0], 'hide');
-  document.hidden = false;
-  document.dispatchEvent(new FakeEvent('visibilitychange'));
-
-  // Simulate React route change detaching `aux-pane-split` and remounting a fresh one
-  auxSplit.remove();
-  const newAuxSplit = document.createElement('div');
-  newAuxSplit.setAttribute('data-testid', 'aux-pane-split');
-  newAuxSplit.appendChild(document.createElement('div'));
-  document.body.appendChild(newAuxSplit);
-
-  await client.openUrl('https://github.com/org/repo/issues', 'builtin');
-  await flushMicrotasks();
-  assert.ok(newAuxSplit.querySelector('[data-testid="ag-omni-dock"]'));
-  assert.ok(wcvLog.some((e) => e[0] === 'navigate' && e[2] === 'https://github.com/org/repo/issues'));
+  // Re-opening the same file reuses the exact same `prism-omni__<hash>` tab without tab bloat!
+  await client.openFile('/workspace/demo/video/preview.mp4');
+  assert.equal(paneTabs.length, 2);
 
   client.destroy();
-  assert.ok(wcvLog.some((e) => e[0] === 'dispose'));
 });
 
-// ── 4. Right-Click Menu, Thought Code Chips, Composer @Mention & Origin-Locked Sync ─
-test('right-clicking file pills & thought code chips supports preview, reveal, @mention, and origin-locked postMessage sync', async () => {
+// ── 4. Right-Click Menu, Thought Code Chips, Composer @Mention & Aux Origin-Locked Sync ─
+test('right-clicking file pills & thought code chips opens native workbench tab, reveals, inserts @mention, and locks Aux postMessage origin', async () => {
   const env = createFakeDomEnvironment({
     onRpc(req) {
       if (req.action === 'getServerInfo') {
@@ -771,6 +850,7 @@ test('right-clicking file pills & thought code chips supports preview, reveal, @
     },
   });
   const { window, document, FakeEvent, revealedFiles, getClipboard } = env;
+  const host = mountMockHostRoot(document, { withBrowserCtx: true, withV2: true });
 
   document.documentElement.setAttribute('data-ag-cs-theme', 'dark');
   document.documentElement.setAttribute('data-ag-cs-palette', 'obsidian');
@@ -792,7 +872,6 @@ test('right-clicking file pills & thought code chips supports preview, reveal, @
   pill.textContent = 'intro.mp4';
   document.body.appendChild(pill);
 
-  // TS-6: Thought translator inline code chip carrying a workspace path
   const thoughtCode = document.createElement('code');
   thoughtCode.className = 'ag-prism-thought-code';
   thoughtCode.textContent = 'vendor/omni-viewer/omni-server.mjs#L114';
@@ -802,6 +881,15 @@ test('right-clicking file pills & thought code chips supports preview, reveal, @
   assert.equal(tcMeta?.filePath, 'vendor/omni-viewer/omni-server.mjs');
   assert.equal(tcMeta?.lineStart, 114);
 
+  // Also mount a native Aux `binary-file-no-preview` view to verify inline switcher + SEC-7 postMessage origin lock
+  const binShell = document.createElement('div');
+  binShell.className = 'relative h-full w-full';
+  const binLeaf = document.createElement('div');
+  binLeaf.setAttribute('data-testid', 'binary-file-no-preview');
+  binLeaf.setAttribute('data-file-uri', 'file:///projects/demo/assets/intro.mp4');
+  binShell.appendChild(binLeaf);
+  document.body.appendChild(binShell);
+
   const client = omniMod.createOmniClient({ window, document });
   client.sync({ omniModule: 'on' });
 
@@ -810,7 +898,7 @@ test('right-clicking file pills & thought code chips supports preview, reveal, @
   ce.dispatchEvent(ceCtx);
   assert.equal(ceCtx.defaultPrevented, false);
 
-  // Right-click `.inline-pill` -> insert @mention -> reveal -> copy-rel-path -> open-preview
+  // Right-click `.inline-pill` -> insert @mention -> reveal -> copy-rel-path -> open-preview (in native host tab!)
   pill.dispatchEvent(new FakeEvent('contextmenu', { bubbles: true, cancelable: true }));
   document.querySelector('[data-omni-action="insert-mention"]').click();
   assert.match(ce.textContent, /^请检查这个视频 @[A-Za-z0-9_./-]*intro\.mp4 $/);
@@ -829,42 +917,42 @@ test('right-clicking file pills & thought code chips supports preview, reveal, @
   document.querySelector('[data-omni-action="open-preview"]').click();
   await flushMicrotasks();
 
-  const iframe = document.querySelector('[data-testid="ag-omni-iframe"]');
-  assert.ok(iframe);
-  assert.match(iframe.src, /^http:\/\/127\.0\.0\.1:45120\/viewer\?/);
-  assert.ok(iframe.getAttribute('sandbox').includes('allow-same-origin'));
+  const paneTabs = host.state.sidePanelV2.conversationPanes[host.cascadeId].tabs;
+  assert.equal(paneTabs.length, 1);
+  const tabInputs = JSON.parse(paneTabs[0].content.customView.serializedInputs);
+  assert.equal(tabInputs.pageTitle, 'intro.mp4');
+  assert.match(tabInputs.initialUrl, /^http:\/\/127\.0\.0\.1:45120\/viewer\?token=sec_tok_99/);
+  assert.match(tabInputs.initialUrl, /palette=obsidian/);
+  assert.match(tabInputs.initialUrl, /accent=cobalt/);
 
-  // SEC-7: Verify postMessage targetOrigin is locked to `http://127.0.0.1:45120` (NOT `'*'`)
-  const firstPost = iframe._postedMessages[iframe._postedMessages.length - 1];
-  assert.equal(firstPost.origin, 'http://127.0.0.1:45120');
+  // Inline Aux switcher SEC-7 origin-locked postMessage verification
+  const switcher = binShell.querySelector('[data-testid="ag-omni-aux-switcher"]');
+  assert.ok(switcher);
+  switcher.children[0].click(); // Click `检视台视图`
+  await flushMicrotasks();
 
-  // SEC-7: Spoofed message from wrong origin or wrong source must be ignored
-  const countBeforeSpoof = iframe._postedMessages.length;
+  const auxIframe = binShell.querySelector('[data-testid="ag-omni-aux-iframe"]');
+  assert.ok(auxIframe);
+  assert.equal(auxIframe._postedMessages.at(-1).origin, 'http://127.0.0.1:45120');
+
+  const countBeforeSpoof = auxIframe._postedMessages.length;
   window.dispatchEvent(
     new FakeEvent('message', {
       data: { type: 'ag-prism-workbench-ready' },
       origin: 'https://evil.example.com',
-      source: iframe.contentWindow,
+      source: auxIframe.contentWindow,
     })
   );
-  window.dispatchEvent(
-    new FakeEvent('message', {
-      data: { type: 'ag-prism-workbench-ready' },
-      origin: 'http://127.0.0.1:45120',
-      source: {},
-    })
-  );
-  assert.equal(iframe._postedMessages.length, countBeforeSpoof);
+  assert.equal(auxIframe._postedMessages.length, countBeforeSpoof);
 
-  // Authentic message from `http://127.0.0.1:45120` + `iframe.contentWindow` triggers sync
   window.dispatchEvent(
     new FakeEvent('message', {
       data: { type: 'ag-prism-workbench-ready' },
       origin: 'http://127.0.0.1:45120',
-      source: iframe.contentWindow,
+      source: auxIframe.contentWindow,
     })
   );
-  assert.equal(iframe._postedMessages.length, countBeforeSpoof + 1);
+  assert.equal(auxIframe._postedMessages.length, countBeforeSpoof + 1);
 
   client.destroy();
 });
@@ -873,6 +961,7 @@ test('right-clicking file pills & thought code chips supports preview, reveal, @
 test('CSS.highlights engine highlights bare URLs & paths with ZERO TextNode splitting so React removeChild never throws', async () => {
   const env = createFakeDomEnvironment({ enableCssHighlights: true });
   const { window, document, FakeEvent, setCaretHit } = env;
+  const host = mountMockHostRoot(document, { withBrowserCtx: true, withV2: true });
 
   const resp = document.createElement('div');
   resp.setAttribute('data-testid', 'planner-response-text');
@@ -894,28 +983,25 @@ test('CSS.highlights engine highlights bare URLs & paths with ZERO TextNode spli
   client.sync({ omniModule: 'on', linkTarget: 'builtin' }, { baseUrl: 'http://127.0.0.1:47000', token: 'tok_hl' });
 
   assert.equal(client.getState().highlightMode, 'css-highlights');
-  // ZERO `.ag-omni-autolink` spans created; `origTextNode` remains the sole child of `para`!
   assert.equal(para.childNodes.length, 1);
   assert.equal(para.firstChild, origTextNode);
   assert.equal(document.querySelectorAll('.ag-omni-autolink').length, 0);
 
-  // Streaming paragraph was skipped while `data-ag-cs-spark-streaming="1"` was set
   const urlHl = window.CSS.highlights.get('ag-omni-url');
   const pathHl = window.CSS.highlights.get('ag-omni-path');
   assert.equal(urlHl.size, 1);
   assert.equal(pathHl.size, 1);
 
-  // Hovering token updates root cursor attribute without mutating paragraph DOM
-  setCaretHit(origTextNode, 10); // Inside `https://docs.example.com/api(v2)`
+  setCaretHit(origTextNode, 10);
   para.dispatchEvent(new FakeEvent('mousemove', { bubbles: true, clientX: 80, clientY: 20 }));
   assert.equal(document.documentElement.getAttribute('data-ag-omni-hover-token'), '1');
 
-  // Left-clicking at token coordinates opens built-in browser dock
+  // Left-clicking at token coordinates opens native host Browser Tab
   para.dispatchEvent(new FakeEvent('click', { bubbles: true, cancelable: true, button: 0, clientX: 80, clientY: 20 }));
   await flushMicrotasks();
-  assert.equal(document.querySelector('[data-testid="ag-omni-iframe"]')?.src, 'https://docs.example.com/api(v2)');
+  assert.equal(host.contextCalls.at(-1)?.url, 'https://docs.example.com/api(v2)');
 
-  // Right-clicking at file path coordinates (`src/core/engine.ts#L15-L30`) opens 6-item file context menu
+  // Right-clicking at file path coordinates opens file context menu
   setCaretHit(origTextNode, 52);
   para.dispatchEvent(new FakeEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 20 }));
   assert.ok(document.querySelector('[data-testid="ag-omni-context-menu"]'));
@@ -975,10 +1061,11 @@ test('fallback span linkifier works when CSS.highlights is unavailable and stric
   client.destroy();
 });
 
-// ── 6. Mermaid Zoom + Real Host Aux FilePane Selectors + Re-Entrant Sync ─────
-test('Mermaid zoom, real host Aux selectors (binary-file-no-preview, csv-file-viewer, file-viewer-root), and re-entrant sync', async () => {
+// ── 6. Mermaid `#raw=` Native Tab Zoom + Real Host Aux Selectors + Re-Entrant Sync ─
+test('Mermaid zoom opens native Browser Tab with #raw=<svg> hash, decorates real host Aux selectors, and supports re-entrant sync', async () => {
   const env = createFakeDomEnvironment();
-  const { window, document, FakeEvent } = env;
+  const { window, document } = env;
+  const host = mountMockHostRoot(document, { withBrowserCtx: true, withV2: true });
 
   const mermaidWrap = document.createElement('div');
   mermaidWrap.className = 'mermaid';
@@ -1011,40 +1098,38 @@ test('Mermaid zoom, real host Aux selectors (binary-file-no-preview, csv-file-vi
   zoomBtn.click();
   await flushMicrotasks();
 
-  const dockIframe = document.querySelector('[data-testid="ag-omni-iframe"]');
-  window.dispatchEvent(
-    new FakeEvent('message', {
-      data: { type: 'ag-prism-workbench-ready' },
-      origin: 'http://127.0.0.1:46000',
-      source: dockIframe.contentWindow,
-    })
-  );
-  assert.match(dockIframe._postedMessages.at(-1).msg.rawContent, /<svg id="mermaid-diagram-1"/);
+  const paneTabs = host.state.sidePanelV2.conversationPanes[host.cascadeId].tabs;
+  assert.equal(paneTabs.length, 1);
+  assert.equal(paneTabs[0].id, 'prism-omni__mermaid');
+  const mmdInputs = JSON.parse(paneTabs[0].content.customView.serializedInputs);
+  assert.match(mmdInputs.initialUrl, /^http:\/\/127\.0\.0\.1:46000\/viewer\?token=tok_mmd.*kind=mermaid/);
+  assert.match(decodeURIComponent(mmdInputs.initialUrl), /#raw=<svg id="mermaid-diagram-1"/);
 
   const binSwitcher = binShell.querySelector('[data-testid="ag-omni-aux-switcher"]');
   assert.ok(binSwitcher);
   assert.equal(csvBox.querySelectorAll('[data-testid="ag-omni-aux-switcher"]').length, 1);
 
   client.destroy();
-  assert.equal(document.querySelector('[data-testid="ag-omni-dock"]'), null);
   client.sync({ omniModule: 'on' }, { baseUrl: 'http://127.0.0.1:46000', token: 'tok_mmd' });
   assert.equal(client.getState().enabled, true);
   client.destroy();
 });
 
-// ── 7. CSS Token Alignment, Whitespace Hygiene, vm.Script & Bundle Budget ────
-test('omni-client.js aligns style.css tokens, has zero blank-line bloat, passes vm.Script + buildOmniClientExpression, and has 0 forbidden literals', () => {
+// ── 7. CSS Token Alignment, Zero Legacy Dock Residue, vm.Script & Bundle Budget ─
+test('omni-client.js has zero persist:ag-prism-omni or custom dock creation, aligns style.css tokens, passes vm.Script + buildOmniClientExpression', () => {
   const clientCode = fs.readFileSync(CLIENT_PATH, 'utf8');
   const testCode = fs.readFileSync(path.join(__dirname, 'omni-client.test.mjs'), 'utf8');
+
+  assert.equal(clientCode.includes('persist:ag-prism-omni'), false, 'Must not contain rogue WCV partition');
+  assert.equal(clientCode.includes('ensureDockMounted'), false, 'Must not contain custom dock builder');
 
   const lines = clientCode.split('\n');
   const emptyRatio = lines.filter((l) => !l.trim()).length / lines.length;
   assert.ok(emptyRatio < 0.12, `Expected clean low blank-line ratio (< 12%), got ${(emptyRatio * 100).toFixed(1)}%`);
   assert.equal(/\n\n\n/.test(clientCode), false, 'Must not contain consecutive blank line bloat');
 
-  // Verify HS-3 token alignment (no stale nonexistent CSS var names)
   assert.match(clientCode, /--ag-cs-accent/);
-  assert.match(clientCode, /--ag-cs-r-md|--ag-cs-r-sm/);
+  assert.match(clientCode, /--ag-cs-r-lg|--ag-cs-r-sm/);
   assert.match(clientCode, /--ag-cs-popover-bg/);
   assert.match(clientCode, /--ag-cs-mono-stack/);
   assert.equal(/--ag-accent\b|--ag-radius-md\b|--ag-code-font-family\b/.test(clientCode), false);

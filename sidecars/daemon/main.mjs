@@ -215,6 +215,7 @@ export class PrismDaemon {
     this._broadcastPending = false;
     this._broadcastWaiters = [];
     this.sessions = new Map();
+    this.ignoredTargets = new Map();
     this.browserSession = null;
     this.browserPort = null;
     this._discoverTimer = null;
@@ -570,33 +571,11 @@ export class PrismDaemon {
     return activePort;
   }
 
-  async ensureMetricsCollector() {
-    if (this._customMetricsProvider) return this._customMetricsProvider;
-    if (this._lazyStore) {
-      return async (input) => {
-        this.syncClientCdpPort(this._lazyStore);
-        const safeId = input?.conversationId && GUID_RE.test(input.conversationId) ? input.conversationId : null;
-        const base = await this._lazyStore.snapshot({ conversationId: safeId, force: Boolean(input?.force) });
-        let usageSnap = null;
-        if (this._lazyUsage) {
-          if (input?.force) void this._lazyUsage.sync(true);
-          usageSnap = await this._lazyUsage
-            .snapshot({ groups: Array.isArray(base?.groups) ? base.groups : null })
-            .catch(() => null);
-        }
-        return { ...base, usage: usageSnap };
-      };
-    }
+  async _ensureLazyDesktopUsage() {
+    if (this._lazyUsage || !this._lazyStore) return this._lazyUsage;
     const telemetryDataDir = this.resolveTelemetryDataDir();
-    const activePort = discoverActivePort(this.overridePort, this.portFile);
-    const storeModUrl = new URL('../../vendor/pulse-dashboard/sidecars/panel/store.mjs', import.meta.url);
     const usageModUrl = new URL('../../vendor/pulse-dashboard/sidecars/panel/usage.mjs', import.meta.url);
-    const { MetricsStore } = await import(storeModUrl.href);
     const { DesktopUsage } = await import(usageModUrl.href);
-    this._lazyStore = new MetricsStore({
-      dataDir: telemetryDataDir,
-      ...(activePort ? { cdpPort: activePort } : {}),
-    });
     this._lazyUsage = new DesktopUsage(this._lazyStore, { dataDir: telemetryDataDir });
     this._lazyStore.onTrajectory = (scope, id, raw, options) =>
       typeof this._lazyUsage.ingestLive === 'function'
@@ -606,6 +585,39 @@ export class PrismDaemon {
       typeof this._lazyUsage.ingestDisk === 'function'
         ? this._lazyUsage.ingestDisk(scope, id, jobDb, options)
         : undefined;
+    return this._lazyUsage;
+  }
+
+  async ensureMetricsCollector() {
+    if (this._customMetricsProvider) return this._customMetricsProvider;
+    if (this._lazyStore) {
+      return async (input) => {
+        this.syncClientCdpPort(this._lazyStore);
+        const safeId = input?.conversationId && GUID_RE.test(input.conversationId) ? input.conversationId : null;
+        const base = await this._lazyStore.snapshot({ conversationId: safeId, force: Boolean(input?.force) });
+        let usageSnap = null;
+        if (input?.includeUsage === true) {
+          if (!this._lazyUsage) {
+            await this._ensureLazyDesktopUsage().catch(() => null);
+          }
+          if (this._lazyUsage) {
+            if (input?.force) void this._lazyUsage.sync(true);
+            usageSnap = await this._lazyUsage
+              .snapshot({ groups: Array.isArray(base?.groups) ? base.groups : null })
+              .catch(() => null);
+          }
+        }
+        return { ...base, usage: usageSnap };
+      };
+    }
+    const telemetryDataDir = this.resolveTelemetryDataDir();
+    const activePort = discoverActivePort(this.overridePort, this.portFile);
+    const storeModUrl = new URL('../../vendor/pulse-dashboard/sidecars/panel/store.mjs', import.meta.url);
+    const { MetricsStore } = await import(storeModUrl.href);
+    this._lazyStore = new MetricsStore({
+      dataDir: telemetryDataDir,
+      ...(activePort ? { cdpPort: activePort } : {}),
+    });
     return this.ensureMetricsCollector();
   }
 
@@ -1064,6 +1076,53 @@ export class PrismDaemon {
     }
   }
 
+  _targetKey(target) {
+    if (!target || typeof target !== 'object') return '';
+    return String(target.id || target.targetId || target.webSocketDebuggerUrl || '').trim();
+  }
+
+  _normalizeIgnoreUrl(rawUrl) {
+    const s = String(rawUrl || '').trim();
+    if (!s) return '';
+    try {
+      const u = new URL(s);
+      return `${u.protocol.toLowerCase()}//${u.host.toLowerCase()}${u.pathname}`;
+    } catch {
+      return s.split(/[?#]/)[0].toLowerCase();
+    }
+  }
+
+  _markTargetIgnored(target, urlOverride = '') {
+    const key = this._targetKey(target);
+    if (!key) return;
+    const normUrl = this._normalizeIgnoreUrl(urlOverride || target?.url || '');
+    if (this.ignoredTargets.has(key)) {
+      this.ignoredTargets.delete(key);
+    } else if (this.ignoredTargets.size >= 256) {
+      const oldest = this.ignoredTargets.keys().next().value;
+      if (oldest !== undefined) this.ignoredTargets.delete(oldest);
+    }
+    this.ignoredTargets.set(key, normUrl);
+  }
+
+  isTargetIgnored(target) {
+    const key = this._targetKey(target);
+    if (!key || !this.ignoredTargets.has(key)) return false;
+    const prevNorm = this.ignoredTargets.get(key);
+    const curNorm = this._normalizeIgnoreUrl(target?.url || '');
+    if (curNorm && prevNorm && curNorm !== prevNorm) {
+      this.ignoredTargets.delete(key);
+      return false;
+    }
+    return true;
+  }
+
+  _isEligibleDaemonTarget(target) {
+    const checkFn = typeof this.cdp?.isEligibleTarget === 'function' ? this.cdp.isEligibleTarget : isEligibleTarget;
+    if (!checkFn(target)) return false;
+    return !this.isTargetIgnored(target);
+  }
+
   async applyToEntry(entry) {
     return this._runEntryExclusive(entry, async () => {
       if (!entry || entry.session.closed) return null;
@@ -1085,6 +1144,22 @@ export class PrismDaemon {
         entry.scriptId = addRes.identifier;
       }
       const mainRes = await entry.session.evaluate(this.injectExpr);
+
+      if (mainRes && mainRes.status === 'skipped-non-host') {
+        if (entry.scriptId) {
+          await entry.session
+            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId })
+            .catch(() => {});
+          entry.scriptId = null;
+        }
+        if (entry.omniScriptId) {
+          await entry.session
+            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId })
+            .catch(() => {});
+          entry.omniScriptId = null;
+        }
+        return mainRes;
+      }
 
       if (entry.omniScriptId) {
         await entry.session
@@ -1321,12 +1396,14 @@ export class PrismDaemon {
 
   async attachTarget(target) {
     const wsUrl = target.webSocketDebuggerUrl;
+    if (this.isTargetIgnored(target)) return null;
     if (this.sessions.has(wsUrl)) return this.sessions.get(wsUrl);
 
     const session = await this.cdp.CdpSession.connect(wsUrl, 3500);
     const entry = {
       wsUrl,
       pageId: target.id,
+      url: String(target.url || ''),
       title: target.title || target.url || 'Antigravity',
       session,
       scriptId: null,
@@ -1371,6 +1448,9 @@ export class PrismDaemon {
           entry.mainFrameId = frame.id;
           entry.hasFrameTree = true;
           entry.pendingAckEpoch = 0;
+          if (typeof frame.url === 'string' && frame.url) {
+            entry.url = frame.url;
+          }
         }
       });
       await session.send('Page.enable');
@@ -1401,6 +1481,13 @@ export class PrismDaemon {
       session.on('Page.loadEventFired', healOnNav);
 
       const res = await this.applyToEntry(entry);
+      if (res && res.status === 'skipped-non-host') {
+        this._markTargetIgnored(target, entry.url || target.url);
+        session.close();
+        this.sessions.delete(wsUrl);
+        this.log(`[↷] Ignored non-host target: ${entry.title}`);
+        return null;
+      }
       this.log(`[✓] Attached & injected Obsidian Prism v${this.cdp.PLUGIN_VERSION}: ${entry.title} (${res?.status || 'ok'})`);
       return entry;
     } catch (err) {
@@ -1430,9 +1517,14 @@ export class PrismDaemon {
         const telMode = st?.cfg?.telemetryModule || 'auto';
         const omniMode = st?.cfg?.omniModule || 'on';
         const hasModelBtn = Boolean(document.querySelector('[data-testid="model-selector-trigger"]'));
-        const hasPulseBar = Boolean(document.querySelector('[data-ag-pulse-bar="true"], #ag-pulse-status-bar'));
+        const hasPulseBar = Boolean(
+          document.querySelector(
+            '[data-ag-prism-pulse-bar="true"], #ag-prism-pulse-bar, [data-ag-pulse-bar="true"], #ag-pulse-status-bar'
+          )
+        );
         return {
           ready: true,
+          href: (typeof location !== 'undefined' && location && typeof location.href === 'string') ? location.href : '',
           prismAttr: root.getAttribute('data-ag-prism') || '',
           hasPrism: Boolean(api),
           hasRepoBridge: Boolean(window.__agPrismRepoBridge),
@@ -1451,6 +1543,7 @@ export class PrismDaemon {
         2600
       );
       if (!probe || !probe.ready) return;
+      if (probe.href) entry.url = probe.href;
       const hasClientOnDisk = this._hasOmniClientFile();
       const needsOmniHeal =
         !probe.hasOmniBridge ||
@@ -1472,7 +1565,22 @@ export class PrismDaemon {
         await entry.session.send('Runtime.addBinding', { name: THOUGHT_BINDING }, 2600).catch(() => {});
         await entry.session.send('Runtime.addBinding', { name: USAGE_BINDING }, 2600).catch(() => {});
         await entry.session.send('Runtime.addBinding', { name: OMNI_BINDING }, 2600).catch(() => {});
-        await entry.session.evaluate(this.injectExpr, false, 4500);
+        const healRes = await entry.session.evaluate(this.injectExpr, false, 4500);
+        if (healRes && healRes.status === 'skipped-non-host') {
+          if (entry.scriptId) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId }).catch(() => {});
+            entry.scriptId = null;
+          }
+          if (entry.omniScriptId) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId }).catch(() => {});
+            entry.omniScriptId = null;
+          }
+          this._markTargetIgnored({ id: entry.pageId, webSocketDebuggerUrl: entry.wsUrl }, probe.href || entry.url);
+          entry.session.close();
+          this.sessions.delete(entry.wsUrl);
+          this.log(`[↷] Detached & ignored deferred non-host target: ${entry.title}`);
+          return;
+        }
         if (this.omniExpr) {
           await entry.session.evaluate(this.omniExpr, false, 3500).catch(() => {});
         }
@@ -1560,7 +1668,7 @@ export class PrismDaemon {
       const onTargetEvent = (params) => {
         const info = params?.targetInfo;
         if (!info || info.type !== 'page') return;
-        if (!isEligibleTarget({ ...info, webSocketDebuggerUrl: 'ws://check' })) return;
+        if (!this._isEligibleDaemonTarget({ ...info, id: info.targetId || info.id, webSocketDebuggerUrl: 'ws://check' })) return;
         this.scheduleImmediateTick(45);
       };
       bSession.on('Target.targetCreated', onTargetEvent);
@@ -1628,7 +1736,7 @@ export class PrismDaemon {
         void this.ensureBrowserDiscovery(port);
       }
 
-      const eligible = rawPages.filter(isEligibleTarget);
+      const eligible = rawPages.filter((t) => this._isEligibleDaemonTarget(t));
       const activeUrls = new Set(eligible.map((t) => t.webSocketDebuggerUrl));
 
       for (const [wsUrl, entry] of this.sessions.entries()) {

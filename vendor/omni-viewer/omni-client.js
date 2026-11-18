@@ -1,12 +1,12 @@
-// Obsidian Prism — Omni Built-in Browser, Context Menu & Streaming Workbench Client (v1.0.1)
+// Obsidian Prism — Omni Native Browser Router, Context Menu & Streaming Workbench Client (v1.0.1)
 // Second-channel runtime (`window.__agPrismOmni`) + CommonJS factory for deterministic unit tests.
 // Engineering & security guarantees:
-// 1. ZERO hover popups or inline action clutter; enhanced actions live in Right-Click (`contextmenu`) menu.
-// 2. Zero-DOM-Mutation bare URL/path activation via CSS Custom Highlight API (`CSS.highlights` + Range)
+// 1. ZERO custom side-dock DOM or rogue `wcvBrowser` calls: 100% native integration with Antigravity's
+//    resizable, tab-closeable Right Side Panel (`openUrlInBrowserPane` + Redux `sidePanelV2` / `sidePanel`).
+// 2. ZERO hover popups or inline clutter; enhanced actions live in Right-Click (`contextmenu`) menu.
+// 3. Zero-DOM-Mutation bare URL/path activation via CSS Custom Highlight API (`CSS.highlights` + Range)
 //    so React 19 `HostText` nodes are never split or detached (`0` `removeChild`/`insertBefore` crashes),
 //    with automatic `<span>` fallback only in headless test harnesses lacking `CSS.highlights`.
-// 3. Dual-engine side pane: isolated Electron `wcvBrowser` (`persist:ag-prism-omni`) for external web URLs
-//    with full Base UI portal/menu/QuickPick/visibility auto-hide, plus origin-locked `/viewer` iframe.
 // 4. 100% alignment with `style.css` tokens (`--ag-cs-*`) and zero-residue re-entrant `destroy() <-> sync()`.
 
 (function (root, factory) {
@@ -34,9 +34,9 @@
 
   const VERSION = '1.0.1';
   const STYLE_EL_ID = 'ag-prism-omni-css';
-  const WCV_TAB_KEY = 'ag-prism-omni-browser';
   const HL_URL_NAME = 'ag-omni-url';
   const HL_PATH_NAME = 'ag-omni-path';
+  const GUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
   // Compact 5-locale fallback table [zh-CN, zh-TW, yue, en, ja]; primary source is `window.__agCsLocales`
   const LANG_INDEX = { 'zh-CN': 0, 'zh-TW': 1, yue: 2, en: 3, ja: 4 };
@@ -54,21 +54,7 @@
     omniZoomDiagram: ['放大查看图表', '放大檢視圖表', '放大睇圖表', 'Zoom Diagram', '図を拡大表示'],
     omniViewWorkbench: ['检视台视图', '檢視台檢視', '檢視台檢視', 'Workbench View', 'プレビュー表示'],
     omniViewRaw: ['原始视图', '原始檢視', '原始檢視', 'Raw View', 'ソース表示'],
-    omniReload: ['刷新', '重新整理', '重新整理', 'Reload', '再読み込み'],
-    omniBack: ['后退', '返回', '後退', 'Back', '戻る'],
-    omniForward: ['前进', '前進', '前進', 'Forward', '進む'],
-    omniClose: ['关闭面板', '關閉面板', '關閉面板', 'Close Pane', 'パネルを閉じる'],
     omniCopied: ['已复制', '已複製', '已複製', 'Copied', 'コピー済'],
-    omniOfflineHint: [
-      '本地流式检视网关未连接，可使用系统默认程序打开或定位文件。',
-      '本機串流檢視閘道未連線，可使用系統預設程式開啟或顯示檔案。',
-      '本地串流檢視網關未連線，可以用系統預設程式打開或者定位檔案。',
-      'Local streaming gateway is offline. Use default app or reveal in folder.',
-      'ローカルプレビューサーバーが未接続です。既定のアプリまたはフォルダ表示をご利用ください。',
-    ],
-    omniViewportFull: ['自适应宽度 (100%)', '自適應寬度 (100%)', '自適應闊度 (100%)', 'Fluid Width (100%)', '自動幅 (100%)'],
-    omniViewportTablet: ['平板宽度 (768px)', '平板寬度 (768px)', '平板闊度 (768px)', 'Tablet Width (768px)', 'タブレット幅 (768px)'],
-    omniViewportMobile: ['手机宽度 (390px)', '手機寬度 (390px)', '手機闊度 (390px)', 'Mobile Width (390px)', 'モバイル幅 (390px)'],
   };
 
   const PREVIEW_KIND_BY_EXT = {
@@ -118,7 +104,6 @@
     '[data-ag-cs-spark-streaming="1"]',
     '[data-ag-cs-thought-streaming="1"]',
     '.ag-omni-autolink',
-    '.ag-omni-dock',
     '.ag-omni-menu',
     '.ag-omni-aux-bar',
   ].join(', ');
@@ -150,22 +135,6 @@
     '[data-omni-aux-file]',
   ].join(', ');
 
-  const BLOCKING_OVERLAY_SELECTOR = [
-    '[role="dialog"]',
-    '[role="alertdialog"]',
-    '[data-base-ui-portal] [role="menu"]',
-    '[data-base-ui-portal] [role="listbox"]',
-    '[data-base-ui-portal] [role="dialog"]',
-    '[data-base-ui-portal] [data-open]',
-    '[data-base-ui-portal] [data-popup-open]',
-    '[data-testid="quick-pick"]',
-    '.quick-input-widget:not([style*="display: none"])',
-    '.aux-drawer-popup',
-    '.ag-cs-effort-popover',
-    '.ag-cs-ctx-popover',
-    '.ag-cs-nav-outline-popover',
-  ].join(', ');
-
   const BARE_TOKEN_RE = new RegExp(
     [
       '(https?:\\/\\/[^\\s<>"\'`\\]]+)',
@@ -177,6 +146,16 @@
   );
 
   const TRAILING_PUNCT_RE = /[.,;:!?。，；：！？、）】》"'`]+$/;
+
+  function shortStableHash(input) {
+    const str = String(input || '');
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0).toString(36).padStart(7, '0');
+  }
 
   function normalizeLangCode(raw) {
     const s = String(raw || '').trim();
@@ -480,7 +459,7 @@
   function extractTargetMeta(startNode) {
     const el = startNode && startNode.nodeType === 1 ? startNode : startNode?.parentElement;
     if (!el) return null;
-    if (findClosest(el, '.ag-omni-dock, .ag-omni-menu')) return null;
+    if (findClosest(el, '.ag-omni-menu')) return null;
 
     // 1. Activated fallback autolink span
     const autoSpan = findClosest(el, '.ag-omni-autolink');
@@ -655,31 +634,17 @@
     '.ag-omni-autolink{cursor:pointer;color:var(--link,var(--ag-cs-accent,var(--primary,#669DF6)));text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 44%,transparent);text-underline-offset:3px;border-radius:var(--ag-cs-r-sm,4px);transition:color .12s ease,background-color .12s ease,text-decoration-color .12s ease}',
     '.ag-omni-autolink[data-omni-path]{font-family:var(--ag-cs-mono-stack,var(--font-mono,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace));font-size:.92em;padding:0 3px;background:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 9%,transparent);text-decoration:none;border:1px solid color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 22%,transparent)}',
     '.ag-omni-autolink:hover{background:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 16%,transparent);text-decoration-color:var(--ag-cs-accent,var(--primary,#669DF6))}',
-    'html[data-ag-cs-motion="off"] .ag-omni-autolink,html[data-ag-cs-motion="off"] .ag-omni-menu,html[data-ag-cs-motion="off"] .ag-omni-dock,html[data-ag-cs-motion="off"] .ag-omni-mermaid-zoom-btn{transition:none!important;animation:none!important}',
+    'html[data-ag-cs-motion="off"] .ag-omni-autolink,html[data-ag-cs-motion="off"] .ag-omni-menu,html[data-ag-cs-motion="off"] .ag-omni-mermaid-zoom-btn{transition:none!important;animation:none!important}',
     '.ag-omni-menu{position:fixed;z-index:2147483640;min-width:208px;max-width:300px;padding:5px;border-radius:var(--ag-cs-r-lg,10px);background:var(--ag-cs-popover-bg,var(--card,rgba(23,24,30,.95)));color:var(--foreground,#F2F2F5);border:1px solid var(--ag-cs-border-2,var(--card-border,rgba(255,255,255,.12)));box-shadow:var(--ag-cs-surface-sh,0 14px 36px rgba(0,0,0,.38));backdrop-filter:blur(16px) saturate(140%);-webkit-backdrop-filter:blur(16px) saturate(140%);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:12.5px;line-height:1.35;user-select:none;outline:none}',
     '.ag-omni-menu-header{padding:4px 8px 5px;font-size:11px;color:var(--muted-foreground,rgba(148,163,184,.85));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-bottom:1px solid var(--ag-cs-border-1,var(--border,rgba(148,163,184,.14)));margin-bottom:4px;font-family:var(--ag-cs-mono-stack,var(--font-mono,ui-monospace,SFMono-Regular,Menlo,monospace))}',
     '.ag-omni-menu-sep{height:1px;margin:4px;background:var(--ag-cs-border-1,var(--border,rgba(148,163,184,.15)))}',
     '.ag-omni-menu-item{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;padding:6px 9px;border:0;border-radius:var(--ag-cs-r-sm,4px);background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}',
     '.ag-omni-menu-item:hover,.ag-omni-menu-item[data-active="1"]{background:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 16%,transparent);color:var(--foreground,inherit)}',
     '.ag-omni-menu-kbd{font-size:10.5px;color:var(--muted-foreground,inherit);opacity:.78;font-family:var(--ag-cs-mono-stack,ui-monospace,SFMono-Regular,Menlo,monospace);flex-shrink:0}',
-    '.ag-omni-dock{position:relative;display:flex;flex-direction:column;flex:0 0 auto;height:100%;min-width:320px;max-width:78vw;background:var(--ag-cs-panel-bg,var(--background,#0E0E11));color:var(--foreground,#F2F2F5);border-left:1px solid var(--ag-cs-border-2,var(--border,rgba(148,163,184,.18)));z-index:28;overflow:hidden}',
-    '.ag-omni-dock[data-dock-fallback="fixed"]{position:fixed;top:35px;right:0;bottom:0;height:auto;box-shadow:-12px 0 32px rgba(0,0,0,.28)}',
-    '.ag-omni-sash{position:absolute;left:0;top:0;bottom:0;width:5px;cursor:col-resize;z-index:4;background:transparent}',
-    '.ag-omni-sash:hover,.ag-omni-dock[data-resizing="1"] .ag-omni-sash{background:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 55%,transparent)}',
-    '.ag-omni-topbar{display:flex;align-items:center;gap:5px;height:36px;padding:0 8px 0 10px;flex-shrink:0;background:var(--card,var(--ag-cs-panel-bg,rgba(20,21,26,.96)));border-bottom:1px solid var(--ag-cs-border-1,var(--border,rgba(148,163,184,.16)));font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:12px}',
     '.ag-omni-btn{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:24px;padding:0 6px;border:1px solid transparent;border-radius:var(--ag-cs-r-sm,4px);background:transparent;color:inherit;font-size:12px;line-height:1;cursor:pointer;opacity:.82}',
     '.ag-omni-btn:hover:not(:disabled){opacity:1;background:var(--ag-cs-hover-wash,color-mix(in srgb,var(--ag-cs-accent,#669DF6) 14%,transparent))}',
     '.ag-omni-btn:disabled{opacity:.32;cursor:default}',
     '.ag-omni-btn[data-active="1"]{opacity:1;background:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 18%,transparent);border-color:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 38%,transparent)}',
-    '.ag-omni-addr{flex:1 1 0%;min-width:0;height:24px;padding:0 8px;display:flex;align-items:center;gap:6px;border-radius:var(--ag-cs-r-sm,4px);background:var(--ag-cs-pill-bg,color-mix(in srgb,var(--foreground,#94a3b8) 6%,transparent));border:1px solid var(--ag-cs-border-1,var(--border,rgba(148,163,184,.14)));font-family:var(--ag-cs-mono-stack,var(--font-mono,ui-monospace,SFMono-Regular,Menlo,monospace));font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}',
-    '.ag-omni-addr-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-    '.ag-omni-vp-group{display:inline-flex;align-items:center;gap:2px}.ag-omni-vp-group[hidden],.ag-omni-offline[hidden]{display:none!important}',
-    '.ag-omni-stage{position:relative;flex:1 1 0%;min-height:0;width:100%;display:flex;justify-content:center;align-items:stretch;background:var(--ag-cs-code-well,var(--content,rgba(9,11,15,.65)));overflow:auto}',
-    '.ag-omni-viewport-box{position:relative;width:100%;height:100%;flex:0 0 auto;background:var(--background,#0E0E11)}',
-    '.ag-omni-viewport-box[data-vp="768"]{width:768px;max-width:100%;border-left:1px solid var(--ag-cs-border-1,rgba(148,163,184,.2));border-right:1px solid var(--ag-cs-border-1,rgba(148,163,184,.2))}',
-    '.ag-omni-viewport-box[data-vp="390"]{width:390px;max-width:100%;border-left:1px solid var(--ag-cs-border-1,rgba(148,163,184,.2));border-right:1px solid var(--ag-cs-border-1,rgba(148,163,184,.2))}',
-    '.ag-omni-iframe{width:100%;height:100%;border:0;display:block;background:transparent}.ag-omni-dock[data-resizing="1"] .ag-omni-iframe{pointer-events:none}',
-    '.ag-omni-offline{padding:24px 20px;display:flex;flex-direction:column;align-items:flex-start;gap:12px;font-size:12.5px;color:var(--secondary-foreground,var(--muted-foreground,#94a3b8))}',
     '.ag-omni-mermaid-zoom-btn{position:absolute;top:6px;right:6px;z-index:3;height:24px;padding:0 7px;border-radius:var(--ag-cs-r-sm,4px);border:1px solid var(--ag-cs-border-2,rgba(148,163,184,.22));background:var(--ag-cs-popover-bg,var(--card,rgba(20,23,30,.88)));color:var(--foreground,#e2e8f0);font-size:11px;cursor:pointer;opacity:0;transition:opacity .14s ease,background-color .14s ease}',
     '[data-omni-mermaid-box]:hover>.ag-omni-mermaid-zoom-btn,.ag-omni-mermaid-zoom-btn:focus-visible{opacity:.92}',
     '.ag-omni-mermaid-zoom-btn:hover{opacity:1!important;background:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 18%,var(--card,#1e293b))}',
@@ -699,6 +664,7 @@
     let destroyed = false;
 
     let rpcSeq = 0;
+    let tabSeq = 0;
     const pendingRpc = new Map();
     const processedTextNodes = new WeakSet();
     const createdAutolinks = new Set();
@@ -715,29 +681,16 @@
     let domObserver = null;
     let rootAttrObserver = null;
     let scanTimer = null;
-    let pendingScanRoots = new Set();
+    const pendingScanRoots = new Set();
 
     let activeMenuEl = null;
     let activeMenuItems = [];
     let activeMenuIndex = -1;
 
-    let dockEl = null;
-    let dockRefs = null;
-    let dockWidthPx = 560;
-    let dockViewportMode = '100%';
-    let dockSession = null;
-    let navHistory = [];
-    let navIndex = -1;
-    let savedHostSiblingStyle = null;
-    let resizeObs = null;
-
-    let wcvAcquired = false;
-    let wcvVisible = false;
-    let wcvCanBack = false;
-    let wcvCanForward = false;
-    let wcvCurrentUrl = '';
-    let wcvCurrentTitle = '';
-    let wcvUnsubGuest = null;
+    // Observable native browser tab history & logical-to-host tabId map
+    let lastOpenedTab = null;
+    const openedNativeTabs = [];
+    const logicalTabIdMap = new Map();
 
     function supportsHighlightApi() {
       return Boolean(
@@ -794,6 +747,30 @@
       };
     }
 
+    // ── Legacy `.ag-omni-dock` Residue Sweeper (#209) ────────────────────────
+    function purgeLegacyOmniDock() {
+      if (!D || typeof D.querySelectorAll !== 'function') return;
+      try {
+        const staleDocks = D.querySelectorAll('.ag-omni-dock, [data-testid="ag-omni-dock"]');
+        for (const node of staleDocks) {
+          try { node.remove?.(); } catch (_) {}
+        }
+        const auxSplit = D.querySelector?.('[data-testid="aux-pane-split"]');
+        const mainPane = auxSplit?.firstElementChild;
+        if (mainPane && mainPane.style) {
+          if (mainPane.style.flex === '1 1 0%' || mainPane.style.minWidth === '320px') {
+            mainPane.style.flex = '';
+            mainPane.style.flexGrow = '1';
+            mainPane.style.minWidth = '300px';
+          }
+        }
+      } catch (_) {}
+      try {
+        W?.electronNative?.wcvBrowser?.hide?.('ag-prism-omni-browser');
+        W?.electronNative?.wcvBrowser?.dispose?.('ag-prism-omni-browser');
+      } catch (_) {}
+    }
+
     // ── Bridge / RPC Client (`__agPrismOmniBridge` + `__agPrismOmniCall`) ────
     function installRpcResolver() {
       if (!W) return;
@@ -816,7 +793,7 @@
       if (!W) return Promise.resolve({ ok: false, offline: true });
       try {
         if (W.__agPrismOmniBridge && typeof W.__agPrismOmniBridge.call === 'function') {
-          return Promise.resolve(W.__agPrismOmniBridge.call({ action, ...params }));
+          return Promise.resolve(W.__agPrismOmniBridge.call({ action, ...params }, timeoutMs));
         }
         if (typeof W.__agPrismOmniCall === 'function') {
           installRpcResolver();
@@ -875,6 +852,370 @@
       return null;
     }
 
+    // ── Host React Fiber & Redux Store Discovery (`/main.js` #208 Contract) ──
+    function discoverHostBridge() {
+      let browserCtx = null;
+      let reduxStore = null;
+      if (!D) return { browserCtx: null, reduxStore: null };
+
+      try {
+        const candidates = [D.getElementById?.('root'), D.body].filter(Boolean);
+        const queue = [];
+        for (const hostNode of candidates) {
+          const keys = Object.keys(hostNode);
+          for (const k of keys) {
+            if (k.startsWith('__reactContainer') || k.startsWith('__reactFiber')) {
+              if (hostNode[k]) queue.push(hostNode[k]);
+            }
+          }
+        }
+        const seen = new Set();
+        let steps = 0;
+        while (queue.length && steps++ < 2000 && (!browserCtx || !reduxStore)) {
+          const n = queue.shift();
+          if (!n || seen.has(n)) continue;
+          seen.add(n);
+          const mp = n.memoizedProps;
+          if (mp && typeof mp === 'object') {
+            if (
+              !reduxStore &&
+              mp.store &&
+              typeof mp.store.getState === 'function' &&
+              typeof mp.store.dispatch === 'function'
+            ) {
+              reduxStore = mp.store;
+            }
+            const ctxVal =
+              typeof mp.openUrlInBrowserPane === 'function'
+                ? mp
+                : mp.value && typeof mp.value === 'object' && typeof mp.value.openUrlInBrowserPane === 'function'
+                ? mp.value
+                : null;
+            if (!browserCtx && ctxVal && ctxVal.isBrowserPaneAvailable !== false) {
+              browserCtx = ctxVal;
+            }
+          }
+          if (n.child) queue.push(n.child);
+          if (n.sibling) queue.push(n.sibling);
+        }
+      } catch (_) {}
+
+      return { browserCtx, reduxStore };
+    }
+
+    function findFocusedCascadeIdFromLayout(layoutState) {
+      if (!layoutState || !layoutState.rootNode) return '';
+      const panes = [];
+      const walk = (node) => {
+        if (!node) return;
+        if (node.type === 'pane') panes.push(node);
+        else if (Array.isArray(node.children)) node.children.forEach(walk);
+      };
+      walk(layoutState.rootNode);
+      const focusedId = layoutState.focusedPaneId;
+      const hit = panes.find((p) => p.id === focusedId || p.cascadeId === focusedId) || panes[0];
+      return hit && typeof hit.cascadeId === 'string' ? hit.cascadeId : '';
+    }
+
+    function resolveHostTreeId(reduxStore, browserCtx) {
+      if (browserCtx && typeof browserCtx.getTargetTreeId === 'function') {
+        try {
+          const tid = browserCtx.getTargetTreeId();
+          if (tid && typeof tid === 'object' && typeof tid.kind === 'string') return tid;
+        } catch (_) {}
+      }
+
+      const pathname = String(W?.location?.pathname || '');
+      const search = String(W?.location?.search || '');
+      const cMatch = pathname.match(/\/c\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+      if (cMatch && cMatch[1]) {
+        return { kind: 'cascadeId', cascadeId: cMatch[1] };
+      }
+
+      try {
+        const st = reduxStore?.getState?.();
+        const layoutCid = findFocusedCascadeIdFromLayout(st?.multiConvoLayout);
+        if (layoutCid && GUID_RE.test(layoutCid)) {
+          return { kind: 'cascadeId', cascadeId: layoutCid };
+        }
+      } catch (_) {}
+
+      if (search) {
+        try {
+          const qs = new URLSearchParams(search);
+          const projId = qs.get('project');
+          if (projId) return { kind: 'newConversation', projectId: projId };
+        } catch (_) {}
+      }
+
+      const cascadeDom = D?.querySelector?.('[data-cascade-id]');
+      const domCid = cascadeDom?.getAttribute?.('data-cascade-id') || '';
+      if (domCid && GUID_RE.test(domCid)) {
+        return { kind: 'cascadeId', cascadeId: domCid };
+      }
+
+      return { kind: 'home' };
+    }
+
+    function getSidePanelPaneSlice(sliceObj, treeId) {
+      if (!sliceObj || !treeId) return null;
+      if (treeId.kind === 'cascadeId') return sliceObj.conversationPanes?.[treeId.cascadeId] || null;
+      if (treeId.kind === 'newConversation') return sliceObj.newConversationPanes?.[treeId.projectId] || null;
+      if (treeId.kind === 'customView') return sliceObj.customViewPanes?.[treeId.viewId] || null;
+      return sliceObj.homePane || null;
+    }
+
+    function recordNativeTabOpen(entry) {
+      lastOpenedTab = entry;
+      openedNativeTabs.push(entry);
+      if (openedNativeTabs.length > 32) openedNativeTabs.shift();
+    }
+
+    // ── Native Host Right-Side Browser Tab Launcher (#208 + #209) ────────────
+    function openInHostNativeBrowserTab(rawUrl, opts = {}) {
+      const url = String(rawUrl || '').trim();
+      if (!url) return false;
+
+      const title = String(opts.title || '').trim();
+      const preferredTabId = String(opts.preferredTabId || '').trim();
+      const { browserCtx, reduxStore } = discoverHostBridge();
+      const treeId = resolveHostTreeId(reduxStore, browserCtx);
+
+      // 1. Primary path: Host React Context `openUrlInBrowserPane(url, { preferredTabId, targetTreeId })`
+      //    Always prefer `openUrlInBrowserPane` when available so the host router updates URL `?tab=browser__...`
+      //    atomically and activates the WCV guest immediately (avoiding router `?tab=` snap-back to an older tab).
+      if (browserCtx && typeof browserCtx.openUrlInBrowserPane === 'function') {
+        try {
+          let mappedHostTabId = preferredTabId ? logicalTabIdMap.get(preferredTabId) || preferredTabId : '';
+          if (reduxStore && preferredTabId && logicalTabIdMap.has(preferredTabId)) {
+            const preSt = reduxStore.getState?.() || {};
+            const prePane = getSidePanelPaneSlice(preSt.sidePanelV2 || preSt.sidePanel, treeId);
+            const stillOpen = prePane?.tabs?.find((t) => t.id === mappedHostTabId);
+            if (!stillOpen) {
+              logicalTabIdMap.delete(preferredTabId);
+              mappedHostTabId = preferredTabId;
+            } else if (stillOpen.content?.customView?.customPaneKey === 'browser') {
+              // Refresh initialUrl if query/theme params changed on an existing logical tab
+              let curInp = {};
+              try { curInp = JSON.parse(stillOpen.content.customView.serializedInputs || '{}'); } catch (_) {}
+              if (curInp.initialUrl !== url) {
+                const updatedInputs = JSON.stringify({
+                  ...curInp,
+                  tabId: stillOpen.id,
+                  initialUrl: url,
+                  entryUrl: url,
+                  ...(title ? { pageTitle: title } : {}),
+                });
+                reduxStore.dispatch({
+                  type: preSt.sidePanelV2 ? 'sidePanelV2/setContent' : 'sidePanel/setContent',
+                  payload: {
+                    treeId,
+                    tabId: stillOpen.id,
+                    keepOpen: true,
+                    background: false,
+                    content: {
+                      type: 'customView',
+                      customView: { customPaneKey: 'browser', serializedInputs: updatedInputs },
+                    },
+                  },
+                });
+              }
+            }
+          }
+
+          const ctxOpts = {};
+          if (mappedHostTabId) ctxOpts.preferredTabId = mappedHostTabId;
+          if (treeId) ctxOpts.targetTreeId = treeId;
+          const opened = browserCtx.openUrlInBrowserPane(url, ctxOpts);
+          if (opened !== false) {
+            let activeTabId = mappedHostTabId || preferredTabId;
+            if (reduxStore) {
+              try {
+                const st = reduxStore.getState?.() || {};
+                const hasV2 = Boolean(st.sidePanelV2);
+                const pane = getSidePanelPaneSlice(hasV2 ? st.sidePanelV2 : st.sidePanel, treeId);
+                const matchedTab =
+                  (mappedHostTabId && pane?.tabs?.find((t) => t.id === mappedHostTabId)) ||
+                  (pane?.activeTabId && pane?.tabs?.find((t) => t.id === pane.activeTabId && t.content?.customView?.customPaneKey === 'browser')) ||
+                  pane?.tabs?.find((t) => {
+                    if (t.content?.type !== 'customView' || t.content.customView?.customPaneKey !== 'browser') {
+                      return false;
+                    }
+                    try {
+                      const inp = JSON.parse(t.content.customView.serializedInputs || '{}');
+                      return inp.initialUrl === url || inp.entryUrl === url;
+                    } catch (_) {
+                      return false;
+                    }
+                  });
+                if (matchedTab) {
+                  activeTabId = matchedTab.id;
+                  if (preferredTabId) logicalTabIdMap.set(preferredTabId, matchedTab.id);
+                }
+
+                reduxStore.dispatch({
+                  type: 'sidePanel/setSidePanelOpen',
+                  payload: { treeId, isOpen: true },
+                });
+                if (hasV2 && treeId?.kind === 'cascadeId' && st.sidePanelV2?.overviewPanelOpen?.[treeId.cascadeId]) {
+                  reduxStore.dispatch({
+                    type: 'sidePanelV2/setOverviewPanelOpen',
+                    payload: { cascadeId: treeId.cascadeId, open: false },
+                  });
+                }
+                if (title && matchedTab) {
+                  let prevInputs = {};
+                  try {
+                    prevInputs = JSON.parse(matchedTab.content?.customView?.serializedInputs || '{}');
+                  } catch (_) {}
+                  if (prevInputs.pageTitle !== title) {
+                    const nextInputs = JSON.stringify({
+                      ...prevInputs,
+                      tabId: matchedTab.id,
+                      initialUrl: prevInputs.initialUrl || url,
+                      entryUrl: prevInputs.entryUrl || url,
+                      pageTitle: title,
+                    });
+                    reduxStore.dispatch({
+                      type: hasV2 ? 'sidePanelV2/setContent' : 'sidePanel/setContent',
+                      payload: {
+                        treeId,
+                        tabId: matchedTab.id,
+                        keepOpen: true,
+                        background: false,
+                        content: {
+                          type: 'customView',
+                          customView: { customPaneKey: 'browser', serializedInputs: nextInputs },
+                        },
+                      },
+                    });
+                  }
+                }
+              } catch (_) {}
+            }
+            recordNativeTabOpen({
+              method: 'context',
+              url,
+              tabId: activeTabId || 'host-browser-tab',
+              title,
+              treeId,
+            });
+            return true;
+          }
+        } catch (_) {}
+      }
+
+      // 2. Fallback path: Direct Redux `store.dispatch` (`sidePanelV2/*` & legacy `sidePanel/*`)
+      if (reduxStore && typeof reduxStore.dispatch === 'function') {
+        try {
+          const st = reduxStore.getState?.() || {};
+          const hasV2 = Boolean(st.sidePanelV2);
+          const pane = getSidePanelPaneSlice(hasV2 ? st.sidePanelV2 : st.sidePanel, treeId);
+
+          let tabId = preferredTabId;
+          let existingInputs = null;
+          if (pane && Array.isArray(pane.tabs)) {
+            const existing = pane.tabs.find((t) => {
+              if (t.content?.type !== 'customView' || t.content.customView?.customPaneKey !== 'browser') {
+                return false;
+              }
+              if (tabId && t.id === tabId) return true;
+              if (!tabId) {
+                try {
+                  const inp = JSON.parse(t.content.customView.serializedInputs || '{}');
+                  return inp.initialUrl === url;
+                } catch (_) {}
+              }
+              return false;
+            });
+            if (existing) {
+              tabId = existing.id;
+              try {
+                existingInputs = JSON.parse(existing.content.customView.serializedInputs || '{}');
+              } catch (_) {}
+            }
+          }
+          if (!tabId) {
+            tabId = `browser__${Date.now()}_${(++tabSeq).toString(36)}`;
+          }
+
+          const serializedInputs = JSON.stringify({
+            ...(existingInputs || {}),
+            tabId,
+            initialUrl: url,
+            entryUrl: url,
+            ...(title ? { pageTitle: title } : {}),
+          });
+
+          reduxStore.dispatch({
+            type: 'sidePanel/setSidePanelOpen',
+            payload: { treeId, isOpen: true },
+          });
+
+          if (hasV2) {
+            if (treeId?.kind === 'cascadeId' && st.sidePanelV2?.overviewPanelOpen?.[treeId.cascadeId]) {
+              reduxStore.dispatch({
+                type: 'sidePanelV2/setOverviewPanelOpen',
+                payload: { cascadeId: treeId.cascadeId, open: false },
+              });
+            }
+            reduxStore.dispatch({
+              type: 'sidePanelV2/setContent',
+              payload: {
+                treeId,
+                tabId,
+                keepOpen: true,
+                background: false,
+                content: {
+                  type: 'customView',
+                  customView: { customPaneKey: 'browser', serializedInputs },
+                },
+              },
+            });
+            reduxStore.dispatch({
+              type: 'sidePanelV2/setActiveTab',
+              payload: { treeId, tabId },
+            });
+          } else {
+            reduxStore.dispatch({
+              type: 'sidePanel/setContent',
+              payload: {
+                treeId,
+                tabId,
+                keepOpen: true,
+                background: false,
+                content: {
+                  type: 'customView',
+                  customView: { customPaneKey: 'browser', serializedInputs },
+                },
+              },
+            });
+            reduxStore.dispatch({
+              type: 'sidePanel/setActiveTab',
+              payload: { treeId, tabId },
+            });
+          }
+
+          recordNativeTabOpen({ method: 'redux', url, tabId, title, treeId });
+          return true;
+        } catch (_) {}
+      }
+
+      // 3. Headless / Unit-Test Observable Fallback (no host React Fiber / Redux store mounted)
+      const fallbackTabId = preferredTabId || `browser__fallback_${++tabSeq}`;
+      const fallbackEntry = { method: 'fallback', url, tabId: fallbackTabId, title, treeId: null };
+      recordNativeTabOpen(fallbackEntry);
+      if (typeof env.onNativeTabOpen === 'function') {
+        try { env.onNativeTabOpen(fallbackEntry); } catch (_) {}
+        return true;
+      }
+      const isLocalGateway = Boolean(serverMeta?.baseUrl && url.startsWith(serverMeta.baseUrl + '/'));
+      if (!isLocalGateway && env.fallbackToExternal !== false) {
+        void openExternalTarget(url);
+      }
+      return true;
+    }
+
     function discoverWorkspaceRoot() {
       if (cachedWorkspaceRoot || !D) return cachedWorkspaceRoot;
       try {
@@ -894,34 +1235,21 @@
             }
           }
         }
-        const rootNode = D.getElementById?.('root');
-        const rfk = rootNode ? Object.keys(rootNode).find((k) => k.startsWith('__reactContainer') || k.startsWith('__reactFiber')) : null;
-        if (rfk && rootNode[rfk]) {
-          const queue = [rootNode[rfk]];
-          let steps = 0;
-          while (queue.length && steps++ < 500) {
-            const n = queue.shift();
-            if (!n) continue;
-            const store = n.memoizedProps?.store;
-            if (store && typeof store.getState === 'function') {
-              const st = store.getState();
-              const byWs = st?.vcsWorkspaceState?.byWorkspaceUri;
-              if (byWs && typeof byWs === 'object') {
-                const firstUri = Object.keys(byWs)[0];
-                if (firstUri) {
-                  cachedWorkspaceRoot = parseFileUriToPath(firstUri).filePath;
-                  if (cachedWorkspaceRoot) return cachedWorkspaceRoot;
-                }
-              }
-              const selUri = st?.settingsScreen?.selectedWorkspaceUri;
-              if (typeof selUri === 'string' && selUri) {
-                cachedWorkspaceRoot = parseFileUriToPath(selUri).filePath;
-                if (cachedWorkspaceRoot) return cachedWorkspaceRoot;
-              }
-              break;
+        const { reduxStore } = discoverHostBridge();
+        if (reduxStore) {
+          const st = reduxStore.getState();
+          const byWs = st?.vcsWorkspaceState?.byWorkspaceUri;
+          if (byWs && typeof byWs === 'object') {
+            const firstUri = Object.keys(byWs)[0];
+            if (firstUri) {
+              cachedWorkspaceRoot = parseFileUriToPath(firstUri).filePath;
+              if (cachedWorkspaceRoot) return cachedWorkspaceRoot;
             }
-            if (n.child) queue.push(n.child);
-            if (n.sibling) queue.push(n.sibling);
+          }
+          const selUri = st?.settingsScreen?.selectedWorkspaceUri;
+          if (typeof selUri === 'string' && selUri) {
+            cachedWorkspaceRoot = parseFileUriToPath(selUri).filePath;
+            if (cachedWorkspaceRoot) return cachedWorkspaceRoot;
           }
         }
       } catch (_) {}
@@ -1034,477 +1362,7 @@
       return true;
     }
 
-    // ── Native Electron `wcvBrowser` Controller Bridge ───────────────────────
-    function getWcvApi() {
-      const api = W?.electronNative?.wcvBrowser;
-      return api && typeof api.acquire === 'function' && typeof api.show === 'function' ? api : null;
-    }
-
-    function cleanupDetachedDockRefs() {
-      if (resizeObs) {
-        try { resizeObs.disconnect(); } catch (_) {}
-        resizeObs = null;
-      }
-      if (savedHostSiblingStyle) {
-        if (savedHostSiblingStyle.el?.isConnected && savedHostSiblingStyle.el.style) {
-          savedHostSiblingStyle.el.style.flex = savedHostSiblingStyle.flex;
-          savedHostSiblingStyle.el.style.minWidth = savedHostSiblingStyle.minWidth;
-        }
-        savedHostSiblingStyle = null;
-      }
-      dockEl = null;
-      dockRefs = null;
-    }
-
-    function hasBlockingHostModal() {
-      if (activeMenuEl || D?.hidden) return true;
-      if (!D || typeof D.querySelector !== 'function') return false;
-      return Boolean(D.querySelector(BLOCKING_OVERLAY_SELECTOR));
-    }
-
-    function syncWcvBounds() {
-      const wcv = getWcvApi();
-      if (dockEl && !dockEl.isConnected) {
-        cleanupDetachedDockRefs();
-      }
-      if (!wcv || !wcvAcquired) return;
-      if (
-        !dockEl ||
-        !dockEl.isConnected ||
-        !dockRefs?.viewportBox?.isConnected ||
-        dockSession?.engine !== 'wcv' ||
-        hasBlockingHostModal()
-      ) {
-        if (wcvVisible) {
-          wcvVisible = false;
-          try { wcv.hide?.(WCV_TAB_KEY); } catch (_) {}
-        }
-        return;
-      }
-      const r = dockRefs.viewportBox.getBoundingClientRect?.();
-      if (!r || r.width < 10 || r.height < 10) {
-        if (wcvVisible) {
-          wcvVisible = false;
-          try { wcv.hide?.(WCV_TAB_KEY); } catch (_) {}
-        }
-        return;
-      }
-      const bounds = {
-        x: Math.round(r.left),
-        y: Math.round(r.top),
-        width: Math.round(r.width),
-        height: Math.round(r.height),
-      };
-      try {
-        if (!wcvVisible) {
-          wcvVisible = true;
-          Promise.resolve(wcv.show(WCV_TAB_KEY, bounds))
-            .then((st) => {
-              if (st && typeof st === 'object') applyWcvState(st);
-            })
-            .catch(() => {});
-        } else {
-          wcv.setBounds?.(WCV_TAB_KEY, bounds);
-        }
-      } catch (_) {}
-    }
-
-    function applyWcvState(st) {
-      if (!st) return;
-      if (typeof st.canGoBack === 'boolean') wcvCanBack = st.canGoBack;
-      if (typeof st.canGoForward === 'boolean') wcvCanForward = st.canGoForward;
-      if (typeof st.url === 'string' && st.url && st.url !== 'about:blank') wcvCurrentUrl = st.url;
-      if (typeof st.title === 'string' && st.title) wcvCurrentTitle = st.title;
-      updateDockHeaderState();
-    }
-
-    function hideWcvTemporary() {
-      const wcv = getWcvApi();
-      if (wcv && wcvVisible) {
-        wcvVisible = false;
-        try { wcv.hide?.(WCV_TAB_KEY); } catch (_) {}
-      }
-    }
-
-    function disposeWcv() {
-      if (wcvUnsubGuest) {
-        try { wcvUnsubGuest(); } catch (_) {}
-        wcvUnsubGuest = null;
-      }
-      const wcv = getWcvApi();
-      if (wcv && wcvAcquired) {
-        try { wcv.hide?.(WCV_TAB_KEY); } catch (_) {}
-        try { wcv.dispose?.(WCV_TAB_KEY); } catch (_) {}
-      }
-      wcvAcquired = false;
-      wcvVisible = false;
-      wcvCanBack = false;
-      wcvCanForward = false;
-      wcvCurrentUrl = '';
-      wcvCurrentTitle = '';
-    }
-
-    async function loadUrlInWcv(url) {
-      const wcv = getWcvApi();
-      if (!wcv) return false;
-      try {
-        if (!wcvUnsubGuest && typeof wcv.onGuestEvent === 'function') {
-          wcvUnsubGuest = wcv.onGuestEvent((ev) => {
-            if (!ev || ev.tabKey !== WCV_TAB_KEY) return;
-            if (ev.type === 'new-window' && isHttpUrl(ev.url)) {
-              try { wcv.navigate?.(WCV_TAB_KEY, ev.url); } catch (_) {}
-              return;
-            }
-            applyWcvState(ev);
-          });
-        }
-        if (!wcvAcquired) {
-          wcvAcquired = true;
-          wcvCurrentUrl = url;
-          const st = await wcv.acquire({
-            tabKey: WCV_TAB_KEY,
-            initialUrl: url,
-            partition: 'persist:ag-prism-omni',
-          });
-          applyWcvState(st);
-        } else {
-          wcvCurrentUrl = url;
-          await wcv.navigate?.(WCV_TAB_KEY, url);
-        }
-        syncWcvBounds();
-        return true;
-      } catch (_) {
-        disposeWcv();
-        return false;
-      }
-    }
-
-    // ── Right-Side Built-in Browser & Streaming Workbench Dock ───────────────
-    function ensureDockMounted() {
-      if (!D) return null;
-      if (dockEl && dockEl.isConnected) return dockEl;
-      cleanupDetachedDockRefs();
-
-      const s = getStrings();
-      const nextDock = D.createElement('aside');
-      nextDock.className = 'ag-omni-dock ag-prism-omni-pane';
-      nextDock.setAttribute('data-testid', 'ag-omni-dock');
-      nextDock.setAttribute('data-ag-prism-omni-owned', '1');
-      nextDock.style.width = `${dockWidthPx}px`;
-
-      const sash = D.createElement('div');
-      sash.className = 'ag-omni-sash';
-      sash.addEventListener('mousedown', onSashMouseDown);
-
-      const topbar = D.createElement('div');
-      topbar.className = 'ag-omni-topbar';
-
-      const mkBtn = (label, titleKey, onClick) => {
-        const b = D.createElement('button');
-        b.type = 'button';
-        b.className = 'ag-omni-btn';
-        b.textContent = label;
-        b.setAttribute('data-i18n-title', titleKey);
-        b.title = s[titleKey] || titleKey;
-        b.addEventListener('click', onClick);
-        return b;
-      };
-
-      const btnBack = mkBtn('←', 'omniBack', () => navigateDockHistory(-1));
-      const btnFwd = mkBtn('→', 'omniForward', () => navigateDockHistory(1));
-      const btnReload = mkBtn('↻', 'omniReload', () => reloadDock());
-
-      const addrBox = D.createElement('div');
-      addrBox.className = 'ag-omni-addr';
-      const addrText = D.createElement('span');
-      addrText.className = 'ag-omni-addr-text';
-      addrBox.appendChild(addrText);
-      addrBox.addEventListener('click', () => {
-        const copyVal =
-          dockSession?.type === 'url'
-            ? wcvCurrentUrl || dockSession.url
-            : dockSession?.filePath || '';
-        if (!copyVal) return;
-        void copyTextToClipboard(copyVal).then((ok) => {
-          if (!ok) return;
-          addrText.textContent = `${getStrings().omniCopied}: ${copyVal}`;
-          setTimeout(() => {
-            if (addrText.isConnected) updateDockHeaderState();
-          }, 900);
-        });
-      });
-
-      const vpGroup = D.createElement('div');
-      vpGroup.className = 'ag-omni-vp-group';
-      const mkVpBtn = (vpVal, label, titleKey) => {
-        const b = mkBtn(label, titleKey, () => {
-          dockViewportMode = vpVal;
-          updateDockHeaderState();
-          syncWcvBounds();
-        });
-        b.setAttribute('data-vp-btn', vpVal);
-        return b;
-      };
-      const vpFull = mkVpBtn('100%', '100%', 'omniViewportFull');
-      const vpTab = mkVpBtn('768', '768', 'omniViewportTablet');
-      const vpMob = mkVpBtn('390', '390', 'omniViewportMobile');
-      vpGroup.appendChild(vpFull);
-      vpGroup.appendChild(vpTab);
-      vpGroup.appendChild(vpMob);
-
-      const btnReveal = mkBtn('⌖', 'omniRevealFolder', () => {
-        if (dockSession?.filePath) void revealFileInFolder(dockSession.filePath, dockSession.rawUri);
-      });
-      const btnExt = mkBtn('↗', 'omniOpenBrowser', () => {
-        if (!dockSession) return;
-        if (dockSession.type === 'url') void openExternalTarget(wcvCurrentUrl || dockSession.url);
-        else if (dockSession.filePath) void openExternalTarget(dockSession.filePath);
-      });
-      const btnClose = mkBtn('×', 'omniClose', () => closeDock());
-
-      topbar.appendChild(btnBack);
-      topbar.appendChild(btnFwd);
-      topbar.appendChild(btnReload);
-      topbar.appendChild(addrBox);
-      topbar.appendChild(vpGroup);
-      topbar.appendChild(btnReveal);
-      topbar.appendChild(btnExt);
-      topbar.appendChild(btnClose);
-
-      const stage = D.createElement('div');
-      stage.className = 'ag-omni-stage';
-
-      const viewportBox = D.createElement('div');
-      viewportBox.className = 'ag-omni-viewport-box';
-      viewportBox.setAttribute('data-vp', dockViewportMode);
-
-      const iframe = D.createElement('iframe');
-      iframe.className = 'ag-omni-iframe';
-      iframe.setAttribute('data-testid', 'ag-omni-iframe');
-      iframe.setAttribute('referrerpolicy', 'no-referrer');
-      iframe.setAttribute('sandbox', 'allow-scripts allow-forms allow-popups allow-downloads');
-      iframe.addEventListener('load', () => {
-        if (dockSession?.type !== 'url') pushWorkbenchSyncToIframe(iframe);
-      });
-
-      const offlineBox = D.createElement('div');
-      offlineBox.className = 'ag-omni-offline';
-      offlineBox.hidden = true;
-      const offlineMsg = D.createElement('div');
-      offlineMsg.textContent = s.omniOfflineHint;
-      const offlineActions = D.createElement('div');
-      offlineActions.style.display = 'flex';
-      offlineActions.style.gap = '8px';
-      const offExtBtn = mkBtn(s.omniOpenExternal, 'omniOpenExternal', () => {
-        if (dockSession?.filePath) void openExternalTarget(dockSession.filePath);
-      });
-      offExtBtn.style.border = '1px solid var(--ag-cs-border-2, rgba(148,163,184,0.28))';
-      offExtBtn.style.padding = '0 10px';
-      const offRevBtn = mkBtn(s.omniRevealFolder, 'omniRevealFolder', () => {
-        if (dockSession?.filePath) void revealFileInFolder(dockSession.filePath, dockSession.rawUri);
-      });
-      offRevBtn.style.border = '1px solid var(--ag-cs-border-2, rgba(148,163,184,0.28))';
-      offRevBtn.style.padding = '0 10px';
-      offlineActions.appendChild(offExtBtn);
-      offlineActions.appendChild(offRevBtn);
-      offlineBox.appendChild(offlineMsg);
-      offlineBox.appendChild(offlineActions);
-
-      viewportBox.appendChild(iframe);
-      viewportBox.appendChild(offlineBox);
-      stage.appendChild(viewportBox);
-
-      nextDock.appendChild(sash);
-      nextDock.appendChild(topbar);
-      nextDock.appendChild(stage);
-
-      const nextRefs = {
-        topbar, btnBack, btnFwd, btnReload, addrBox, addrText, vpGroup,
-        vpBtns: [vpFull, vpTab, vpMob], btnReveal, btnExt, btnClose,
-        stage, viewportBox, iframe, offlineBox, offlineMsg, offExtBtn, offRevBtn,
-      };
-
-      const auxSplit = D.querySelector('[data-testid="aux-pane-split"]');
-      if (auxSplit && auxSplit.firstElementChild) {
-        const mainPane = auxSplit.firstElementChild;
-        savedHostSiblingStyle = {
-          el: mainPane,
-          flex: mainPane.style?.flex || '',
-          minWidth: mainPane.style?.minWidth || '',
-        };
-        if (mainPane.style) {
-          mainPane.style.flex = '1 1 0%';
-          mainPane.style.minWidth = '320px';
-        }
-        const hostWidth = auxSplit.getBoundingClientRect?.()?.width || 1280;
-        const kids = Array.from(auxSplit.children || []);
-        const nativeRightOpen = kids.length >= 3 && (kids[2]?.getBoundingClientRect?.()?.width || 0) > 40;
-        const ratio = nativeRightOpen ? 0.34 : 0.46;
-        const cap = nativeRightOpen ? 500 : 680;
-        dockWidthPx = Math.max(340, Math.min(cap, Math.round(hostWidth * ratio)));
-        nextDock.style.width = `${dockWidthPx}px`;
-        auxSplit.appendChild(nextDock);
-      } else {
-        nextDock.setAttribute('data-dock-fallback', 'fixed');
-        (D.body || D.documentElement).appendChild(nextDock);
-      }
-
-      dockEl = nextDock;
-      dockRefs = nextRefs;
-
-      if (typeof W?.ResizeObserver === 'function') {
-        resizeObs = new W.ResizeObserver(() => {
-          syncWcvBounds();
-        });
-        resizeObs.observe(viewportBox);
-      }
-
-      return dockEl;
-    }
-
-    function onSashMouseDown(ev) {
-      if (!dockEl || !W || !D) return;
-      ev.preventDefault();
-      const startX = ev.clientX;
-      const startWidth = dockEl.getBoundingClientRect?.()?.width || dockWidthPx;
-      dockEl.setAttribute('data-resizing', '1');
-
-      const onMove = (me) => {
-        const delta = startX - me.clientX;
-        const maxW = Math.max(420, Math.floor((W.innerWidth || 1440) * 0.75));
-        dockWidthPx = Math.max(320, Math.min(maxW, Math.round(startWidth + delta)));
-        dockEl.style.width = `${dockWidthPx}px`;
-        syncWcvBounds();
-      };
-      const onUp = () => {
-        dockEl?.removeAttribute?.('data-resizing');
-        W.removeEventListener('mousemove', onMove, true);
-        W.removeEventListener('mouseup', onUp, true);
-        syncWcvBounds();
-      };
-      W.addEventListener('mousemove', onMove, true);
-      W.addEventListener('mouseup', onUp, true);
-    }
-
-    function updateDockHeaderState() {
-      if (!dockRefs || !dockEl) return;
-      const s = getStrings();
-      const isUrl = dockSession?.type === 'url';
-      const isHtmlFile = dockSession?.type === 'file' && dockSession?.kind === 'html';
-      const showVp = Boolean(isUrl || isHtmlFile);
-
-      dockRefs.vpGroup.hidden = !showVp;
-      const activeVp = showVp ? dockViewportMode : '100%';
-      dockRefs.viewportBox.setAttribute('data-vp', activeVp);
-      for (const b of dockRefs.vpBtns) {
-        if (b.getAttribute('data-vp-btn') === dockViewportMode) b.setAttribute('data-active', '1');
-        else b.removeAttribute('data-active');
-      }
-
-      dockRefs.btnReveal.hidden = !dockSession?.filePath;
-      dockRefs.btnExt.hidden = dockSession?.type === 'mermaid';
-      dockRefs.btnExt.title = isUrl ? s.omniOpenBrowser : s.omniOpenExternal;
-
-      for (const b of [
-        dockRefs.btnBack, dockRefs.btnFwd, dockRefs.btnReload,
-        dockRefs.btnReveal, dockRefs.btnClose, ...dockRefs.vpBtns,
-      ]) {
-        const tk = b.getAttribute('data-i18n-title');
-        if (tk && s[tk]) b.title = s[tk];
-      }
-      dockRefs.offlineMsg.textContent = s.omniOfflineHint;
-      dockRefs.offExtBtn.textContent = s.omniOpenExternal;
-      dockRefs.offRevBtn.textContent = s.omniRevealFolder;
-
-      if (dockSession?.engine === 'wcv') {
-        dockRefs.btnBack.disabled = !wcvCanBack;
-        dockRefs.btnFwd.disabled = !wcvCanForward;
-        const disp = wcvCurrentTitle
-          ? `${wcvCurrentTitle} — ${wcvCurrentUrl || dockSession.url}`
-          : wcvCurrentUrl || dockSession.url;
-        dockRefs.addrText.textContent = disp;
-        dockRefs.addrBox.title = wcvCurrentUrl || dockSession.url;
-      } else {
-        dockRefs.btnBack.disabled = navIndex <= 0;
-        dockRefs.btnFwd.disabled = navIndex < 0 || navIndex >= navHistory.length - 1;
-        if (isUrl) {
-          dockRefs.addrText.textContent = dockSession.url;
-          dockRefs.addrBox.title = dockSession.url;
-        } else if (dockSession?.type === 'mermaid') {
-          dockRefs.addrText.textContent = dockSession.title || s.omniZoomDiagram;
-          dockRefs.addrBox.title = dockSession.title || s.omniZoomDiagram;
-        } else if (dockSession?.filePath) {
-          const range = dockSession.lineStart
-            ? dockSession.lineEnd
-              ? ` #L${dockSession.lineStart}-L${dockSession.lineEnd}`
-              : ` #L${dockSession.lineStart}`
-            : '';
-          dockRefs.addrText.textContent = `${getBaseName(dockSession.filePath)}${range}`;
-          dockRefs.addrBox.title = dockSession.filePath;
-        }
-      }
-    }
-
-    function pushHistorySnapshot(entry) {
-      if (navIndex < navHistory.length - 1) navHistory = navHistory.slice(0, navIndex + 1);
-      const prev = navHistory[navHistory.length - 1];
-      if (
-        prev &&
-        prev.type === entry.type &&
-        prev.url === entry.url &&
-        prev.filePath === entry.filePath &&
-        prev.kind === entry.kind
-      ) {
-        navHistory[navHistory.length - 1] = { ...entry };
-        navIndex = navHistory.length - 1;
-        return;
-      }
-      navHistory.push({ ...entry });
-      if (navHistory.length > 32) navHistory.shift();
-      navIndex = navHistory.length - 1;
-    }
-
-    function navigateDockHistory(delta) {
-      if (dockSession?.engine === 'wcv') {
-        const wcv = getWcvApi();
-        if (wcv) {
-          try { wcv.control?.(WCV_TAB_KEY, delta < 0 ? 'back' : 'forward'); } catch (_) {}
-          return;
-        }
-      }
-      const nextIdx = navIndex + delta;
-      if (nextIdx < 0 || nextIdx >= navHistory.length) return;
-      navIndex = nextIdx;
-      const snap = navHistory[navIndex];
-      if (snap.type === 'url') void renderUrlInDock(snap.url, false);
-      else void renderFileOrMermaidInDock(snap, false);
-    }
-
-    function reloadDock() {
-      if (!dockSession) return;
-      if (dockSession.engine === 'wcv') {
-        try { getWcvApi()?.control?.(WCV_TAB_KEY, 'reload'); } catch (_) {}
-        return;
-      }
-      if (dockRefs?.iframe) {
-        if (dockSession.type === 'mermaid') pushWorkbenchSyncToIframe(dockRefs.iframe);
-        else {
-          const curSrc = dockRefs.iframe.getAttribute('src') || dockRefs.iframe.src;
-          if (curSrc) dockRefs.iframe.src = curSrc;
-        }
-      }
-    }
-
-    function closeDock() {
-      hideWcvTemporary();
-      disposeWcv();
-      if (dockEl) {
-        try { dockEl.remove(); } catch (_) {}
-      }
-      cleanupDetachedDockRefs();
-      dockSession = null;
-    }
-
+    // ── Streaming Workbench URL Builder & Aux Sync ───────────────────────────
     function buildViewerUrl(meta, opts = {}) {
       const vs = readVisualState();
       const params = [
@@ -1518,14 +1376,17 @@
         `corners=${encodeURIComponent(vs.corners)}`,
         `lang=${encodeURIComponent(vs.lang)}`,
       ];
+      if (opts.name) params.push(`name=${encodeURIComponent(String(opts.name))}`);
       if (opts.lineStart) params.push(`lineStart=${encodeURIComponent(String(opts.lineStart))}`);
       if (opts.lineEnd) params.push(`lineEnd=${encodeURIComponent(String(opts.lineEnd))}`);
-      return `${meta.baseUrl}/viewer?${params.join('&')}`;
+      const hash = opts.rawContent
+        ? `#raw=${encodeURIComponent(String(opts.rawContent))}${opts.name ? `&title=${encodeURIComponent(String(opts.name))}` : ''}`
+        : '';
+      return `${meta.baseUrl}/viewer?${params.join('&')}${hash}`;
     }
 
     function buildSyncPayload(sessionOverride) {
       const vs = readVisualState();
-      const sess = sessionOverride || dockSession;
       return {
         type: 'ag-prism-workbench-sync',
         theme: vs.theme,
@@ -1534,10 +1395,10 @@
         accent: vs.accent,
         corners: vs.corners,
         lang: vs.lang,
-        path: sess?.filePath || '',
-        ...(sess?.lineStart ? { lineStart: sess.lineStart } : {}),
-        ...(sess?.lineEnd ? { lineEnd: sess.lineEnd } : {}),
-        ...(sess?.rawContent ? { rawContent: sess.rawContent } : {}),
+        path: sessionOverride?.filePath || '',
+        ...(sessionOverride?.lineStart ? { lineStart: sessionOverride.lineStart } : {}),
+        ...(sessionOverride?.lineEnd ? { lineEnd: sessionOverride.lineEnd } : {}),
+        ...(sessionOverride?.rawContent ? { rawContent: sessionOverride.rawContent } : {}),
       };
     }
 
@@ -1551,9 +1412,6 @@
 
     function broadcastThemeAndLocaleSync() {
       const s = getStrings();
-      if (dockRefs?.iframe && dockSession && dockSession.engine === 'iframe' && dockSession.type !== 'url') {
-        pushWorkbenchSyncToIframe(dockRefs.iframe, dockSession);
-      }
       for (const rec of mountedAuxSwitches) {
         if (rec.iframe && rec.iframe.isConnected && rec.iframe.contentWindow) {
           pushWorkbenchSyncToIframe(rec.iframe, { filePath: rec.filePath });
@@ -1570,95 +1428,9 @@
           btn.title = s.omniZoomDiagram;
         }
       }
-      if (dockEl) updateDockHeaderState();
     }
 
-    async function renderUrlInDock(url, recordHistory = true) {
-      ensureDockMounted();
-      if (!dockRefs) return false;
-      dockRefs.offlineBox.hidden = true;
-
-      const isLocalGateway = Boolean(serverMeta?.baseUrl && url.startsWith(serverMeta.baseUrl + '/'));
-      const canUseWcv = Boolean(getWcvApi()) && !isLocalGateway;
-      dockSession = {
-        type: 'url',
-        url,
-        filePath: '',
-        kind: 'web',
-        engine: canUseWcv ? 'wcv' : 'iframe',
-      };
-      if (recordHistory) pushHistorySnapshot(dockSession);
-
-      if (canUseWcv) {
-        dockRefs.iframe.hidden = true;
-        dockRefs.iframe.removeAttribute('src');
-        const ok = await loadUrlInWcv(url);
-        if (ok) {
-          updateDockHeaderState();
-          return true;
-        }
-        dockSession.engine = 'iframe';
-      }
-
-      // SEC-2: External web URLs in fallback iframe MUST NOT carry `allow-same-origin`
-      hideWcvTemporary();
-      dockRefs.iframe.setAttribute(
-        'sandbox',
-        isLocalGateway
-          ? 'allow-scripts allow-same-origin allow-forms allow-downloads'
-          : 'allow-scripts allow-forms allow-popups allow-downloads'
-      );
-      dockRefs.iframe.hidden = false;
-      dockRefs.iframe.src = url;
-      updateDockHeaderState();
-      return true;
-    }
-
-    async function renderFileOrMermaidInDock(spec, recordHistory = true) {
-      ensureDockMounted();
-      if (!dockRefs) return false;
-      hideWcvTemporary();
-
-      const resolvedKind = spec.type === 'mermaid' ? 'mermaid' : detectPreviewKind(spec.filePath, spec.kind);
-      dockSession = {
-        type: spec.type || 'file',
-        url: '',
-        filePath: spec.filePath || '',
-        rawUri: spec.rawUri || '',
-        kind: resolvedKind,
-        lineStart: spec.lineStart || null,
-        lineEnd: spec.lineEnd || null,
-        rawContent: spec.rawContent || '',
-        title: spec.title || '',
-        engine: 'iframe',
-      };
-      if (recordHistory) pushHistorySnapshot(dockSession);
-
-      const meta = await ensureServerMeta();
-      if (!meta) {
-        dockRefs.iframe.hidden = true;
-        dockRefs.offlineBox.hidden = false;
-        updateDockHeaderState();
-        return false;
-      }
-
-      dockRefs.offlineBox.hidden = true;
-      dockRefs.iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-downloads');
-      dockRefs.iframe.hidden = false;
-      const viewerUrl = buildViewerUrl(meta, {
-        filePath: dockSession.filePath,
-        kind: resolvedKind,
-        lineStart: dockSession.lineStart,
-        lineEnd: dockSession.lineEnd,
-      });
-      dockSession.url = viewerUrl;
-      dockRefs.iframe.src = viewerUrl;
-      updateDockHeaderState();
-      pushWorkbenchSyncToIframe(dockRefs.iframe, dockSession);
-      return true;
-    }
-
-    // ── Public API: `openUrl` & `openFile` ───────────────────────────────────
+    // ── Public API: `openUrl` & `openFile` (Unified Native Side Tab Routing) ──
     async function openUrl(rawUrl, mode = 'auto') {
       const url = String(rawUrl || '').trim();
       if (!url) return false;
@@ -1669,7 +1441,7 @@
           ? 'external'
           : 'builtin';
       if (effectiveMode === 'external' || !enabled) return openExternalTarget(url);
-      return renderUrlInDock(url, true);
+      return openInHostNativeBrowserTab(url);
     }
 
     async function openFile(rawFilePath, opts = {}) {
@@ -1683,31 +1455,47 @@
       if (mode === 'external' || !enabled) return openExternalTarget(cleanPath);
 
       let finalPath = cleanPath;
+      const isInlineMermaid = opts.kind === 'mermaid' && !finalPath;
       if (
-        cleanPath &&
-        opts.kind !== 'mermaid' &&
-        !/^[A-Za-z]:[\\/]/.test(cleanPath) &&
-        !cleanPath.startsWith('/')
+        finalPath &&
+        !isInlineMermaid &&
+        !/^[A-Za-z]:[\\/]/.test(finalPath) &&
+        !finalPath.startsWith('/')
       ) {
         const wsHint = discoverWorkspaceRoot();
-        const res = await callOmniRpc('resolvePath', { rawPath: cleanPath, workspaceHint: wsHint });
+        const res = await callOmniRpc('resolvePath', { rawPath: finalPath, workspaceHint: wsHint });
         if (res && res.ok && res.absPath) finalPath = res.absPath;
-        else if (wsHint) finalPath = normalizeSlashes(wsHint).replace(/\/$/, '') + '/' + cleanPath.replace(/^\.\//, '');
+        else if (wsHint) finalPath = normalizeSlashes(wsHint).replace(/\/$/, '') + '/' + finalPath.replace(/^\.\//, '');
       }
 
-      return renderFileOrMermaidInDock(
-        {
-          type: opts.kind === 'mermaid' && !finalPath ? 'mermaid' : 'file',
-          filePath: finalPath,
-          rawUri: opts.rawUri || toFileUri(finalPath),
-          kind: opts.kind || 'auto',
-          lineStart,
-          lineEnd,
-          rawContent: opts.rawContent || '',
-          title: opts.title || '',
-        },
-        true
-      );
+      const meta = await ensureServerMeta();
+      if (!meta) {
+        if (finalPath) return openExternalTarget(finalPath);
+        return false;
+      }
+
+      const resolvedKind = isInlineMermaid ? 'mermaid' : detectPreviewKind(finalPath, opts.kind);
+      const s = getStrings();
+      const baseTitle = opts.title || (finalPath ? getBaseName(finalPath) : s.omniZoomDiagram);
+      const rangeSuffix = lineStart ? (lineEnd ? ` #L${lineStart}-L${lineEnd}` : ` #L${lineStart}`) : '';
+      const tabTitle = `${baseTitle}${rangeSuffix}`;
+      const preferredTabId = isInlineMermaid
+        ? 'prism-omni__mermaid'
+        : `prism-omni__${shortStableHash(normalizeSlashes(finalPath).toLowerCase())}`;
+
+      const viewerUrl = buildViewerUrl(meta, {
+        filePath: finalPath,
+        kind: resolvedKind,
+        name: baseTitle,
+        lineStart,
+        lineEnd,
+        rawContent: isInlineMermaid ? opts.rawContent || '' : '',
+      });
+
+      return openInHostNativeBrowserTab(viewerUrl, {
+        title: tabTitle,
+        preferredTabId,
+      });
     }
 
     // ── Right-Click Optical Context Menu ─────────────────────────────────────
@@ -1718,7 +1506,6 @@
       }
       activeMenuItems = [];
       activeMenuIndex = -1;
-      if (dockSession?.engine === 'wcv') syncWcvBounds();
     }
 
     function highlightMenuIndex(idx) {
@@ -1738,7 +1525,6 @@
     function openContextMenuAt(clientX, clientY, headerLabel, entries) {
       if (!D) return;
       closeContextMenu();
-      hideWcvTemporary();
 
       const menu = D.createElement('div');
       menu.className = 'ag-omni-menu ag-prism-omni-menu';
@@ -2018,7 +1804,7 @@
 
       const el = ev.target && ev.target.nodeType === 1 ? ev.target : ev.target?.parentElement;
       if (!el) return;
-      if (findClosest(el, '[data-testid="agent-input-box"], [contenteditable="true"], .ag-omni-dock, .ag-omni-menu, [data-omni-ignore]')) {
+      if (findClosest(el, '[data-testid="agent-input-box"], [contenteditable="true"], .ag-omni-menu, [data-omni-ignore]')) {
         return;
       }
 
@@ -2110,33 +1896,20 @@
     }
 
     function onDocKeyDown(ev) {
-      if (!enabled) return;
-      if (activeMenuEl) {
-        if (ev.key === 'Escape') {
-          ev.preventDefault();
-          ev.stopPropagation();
-          closeContextMenu();
-          return;
-        }
-        if (ev.key === 'ArrowDown') {
-          ev.preventDefault();
-          highlightMenuIndex(activeMenuIndex + 1);
-          return;
-        }
-        if (ev.key === 'ArrowUp') {
-          ev.preventDefault();
-          highlightMenuIndex(activeMenuIndex - 1);
-          return;
-        }
-        if (ev.key === 'Enter' && activeMenuIndex >= 0 && activeMenuItems[activeMenuIndex]) {
-          ev.preventDefault();
-          activeMenuItems[activeMenuIndex].click();
-        }
-      } else if (ev.key === 'Escape' && dockEl && !ev.defaultPrevented) {
-        const active = D?.activeElement;
-        if (!active || active === D.body || findClosest(active, '.ag-omni-dock')) {
-          closeDock();
-        }
+      if (!enabled || !activeMenuEl) return;
+      if (ev.key === 'Escape') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        closeContextMenu();
+      } else if (ev.key === 'ArrowDown') {
+        ev.preventDefault();
+        highlightMenuIndex(activeMenuIndex + 1);
+      } else if (ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        highlightMenuIndex(activeMenuIndex - 1);
+      } else if (ev.key === 'Enter' && activeMenuIndex >= 0 && activeMenuItems[activeMenuIndex]) {
+        ev.preventDefault();
+        activeMenuItems[activeMenuIndex].click();
       }
     }
 
@@ -2146,19 +1919,14 @@
         closeContextMenu();
       }
       if (hoverTokenActive) setHoverTokenCursor(false);
-      if (dockSession?.engine === 'wcv') syncWcvBounds();
     }
 
-    // SEC-7: Strict origin + source window verification on incoming postMessage
+    // SEC-7: Strict origin + source window verification on incoming postMessage for inline Aux switchers
     function onWindowMessage(ev) {
       if (!enabled || !ev || !ev.data || typeof ev.data !== 'object') return;
       if (!serverMeta?.baseUrl || ev.origin !== serverMeta.baseUrl) return;
       if (ev.data.type !== 'ag-prism-workbench-ready') return;
 
-      if (dockRefs?.iframe && ev.source === dockRefs.iframe.contentWindow) {
-        pushWorkbenchSyncToIframe(dockRefs.iframe, dockSession);
-        return;
-      }
       for (const rec of mountedAuxSwitches) {
         if (rec.iframe && rec.iframe.isConnected && ev.source === rec.iframe.contentWindow) {
           pushWorkbenchSyncToIframe(rec.iframe, { filePath: rec.filePath });
@@ -2321,7 +2089,7 @@
       for (const node of candidates) {
         if (!isMermaidContainer(node)) continue;
         const box = node.tagName === 'SVG' && node.parentElement ? node.parentElement : node;
-        if (!box || box.hasAttribute('data-omni-mermaid-box') || findClosest(box, '.ag-omni-dock')) continue;
+        if (!box || box.hasAttribute('data-omni-mermaid-box')) continue;
 
         const prevPos = box.style?.position || '';
         box.setAttribute('data-omni-mermaid-box', '1');
@@ -2430,10 +2198,7 @@
       for (const el of scopeEl.querySelectorAll(AUX_FILE_VIEW_SELECTOR)) candidates.push(el);
 
       for (const viewEl of candidates) {
-        if (
-          viewEl.hasAttribute('data-omni-aux-mounted') ||
-          findClosest(viewEl, '[data-omni-aux-mounted], .ag-omni-dock')
-        ) {
+        if (viewEl.hasAttribute('data-omni-aux-mounted') || findClosest(viewEl, '[data-omni-aux-mounted]')) {
           continue;
         }
         const rawAttr = extractAuxFileRef(viewEl);
@@ -2508,6 +2273,7 @@
             if (!rec.iframe) {
               const ifr = D.createElement('iframe');
               ifr.className = 'ag-omni-aux-overlay';
+              ifr.setAttribute('data-testid', 'ag-omni-aux-iframe');
               ifr.setAttribute('data-ag-prism-omni-owned', '1');
               ifr.setAttribute('referrerpolicy', 'no-referrer');
               ifr.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms');
@@ -2517,6 +2283,7 @@
             }
             rec.iframe.hidden = false;
             rec.iframe.src = buildViewerUrl(meta, { filePath, kind: detectPreviewKind(filePath) });
+            pushWorkbenchSyncToIframe(rec.iframe, { filePath });
           } else {
             btnRaw.setAttribute('data-active', '1');
             btnWb.removeAttribute('data-active');
@@ -2576,7 +2343,6 @@
           decorateMermaidContainers(r);
           decorateAuxUnsupportedViews(r);
         }
-        if (dockSession?.engine === 'wcv') syncWcvBounds();
       }, 60);
     }
 
@@ -2704,13 +2470,9 @@
 
       if (typeof W.MutationObserver === 'function') {
         domObserver = new W.MutationObserver((mutations) => {
-          let checkWcvOverlay = false;
           for (let i = 0; i < mutations.length; i++) {
             const m = mutations[i];
             if (m.type === 'childList') {
-              if (dockSession?.engine === 'wcv' && (m.addedNodes.length || m.removedNodes?.length)) {
-                checkWcvOverlay = true;
-              }
               for (let j = 0; j < m.addedNodes.length; j++) {
                 const n = m.addedNodes[j];
                 if (n.nodeType === 1 && String(n.className || '').includes('ag-omni-')) continue;
@@ -2723,7 +2485,6 @@
                 scheduleIncrementalScan(m.target);
               }
             } else if (m.type === 'attributes') {
-              if (dockSession?.engine === 'wcv') checkWcvOverlay = true;
               const attrName = m.attributeName;
               if (
                 (attrName === 'data-ag-cs-spark-streaming' || attrName === 'data-ag-cs-thought-streaming') &&
@@ -2734,10 +2495,6 @@
               }
             }
           }
-          // Immediately yield/restore native WCV surface when host portals/menus open or close
-          if (checkWcvOverlay && dockSession?.engine === 'wcv') {
-            syncWcvBounds();
-          }
         });
         const obsRoot = D.body || D.documentElement;
         if (obsRoot) {
@@ -2747,10 +2504,6 @@
             characterData: true,
             attributes: true,
             attributeFilter: [
-              'data-open',
-              'data-popup-open',
-              'role',
-              'hidden',
               'data-ag-cs-spark-streaming',
               'data-ag-cs-thought-streaming',
             ],
@@ -2773,7 +2526,7 @@
         domObserver = null;
       }
       closeContextMenu();
-      closeDock();
+      purgeLegacyOmniDock();
       unwrapAllModifications();
 
       if (D) {
@@ -2799,6 +2552,7 @@
     }
 
     function sync(cfg = null, incomingServerMeta = null) {
+      purgeLegacyOmniDock();
       if (incomingServerMeta && typeof incomingServerMeta === 'object' && incomingServerMeta.baseUrl) {
         serverMeta = {
           baseUrl: String(incomingServerMeta.baseUrl).replace(/\/+$/, ''),
@@ -2856,6 +2610,7 @@
         item.resolve({ ok: false, disposed: true });
       }
       pendingRpc.clear();
+      logicalTabIdMap.clear();
       detachRuntime(true);
     }
 
@@ -2868,8 +2623,9 @@
         linkTarget,
         hasServerMeta: Boolean(serverMeta?.baseUrl && serverMeta?.token),
         serverMeta: serverMeta ? { ...serverMeta } : null,
-        dockOpen: Boolean(dockEl && dockEl.isConnected),
-        dockSession: dockSession ? { ...dockSession } : null,
+        dockOpen: false,
+        lastOpenedTab: lastOpenedTab ? { ...lastOpenedTab } : null,
+        openedTabsCount: openedNativeTabs.length,
         menuOpen: Boolean(activeMenuEl && activeMenuEl.isConnected),
       };
     }
@@ -2879,8 +2635,10 @@
       sync,
       openUrl,
       openFile,
+      openInHostNativeBrowserTab,
       destroy,
       getState,
+      _getOpenedTabs: () => openedNativeTabs.map((x) => ({ ...x })),
       _scanRoot: runScanNow,
     };
   }
@@ -2889,6 +2647,7 @@
     VERSION,
     PREVIEW_KIND_BY_EXT,
     createOmniClient,
+    shortStableHash,
     normalizeLangCode,
     splitPathAndLineRange,
     parseFileUriToPath,

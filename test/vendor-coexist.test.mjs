@@ -424,13 +424,15 @@ test('vendor/pulse-dashboard/inline-fallback.js politely yields to external Puls
 
   for (let i = 0; i < 20; i++) {
     await new Promise((r) => setTimeout(r, 30));
-    const el = envSolo.doc.getElementById('ag-pulse-status-bar');
+    const el = envSolo.doc.getElementById('ag-prism-pulse-bar');
     if (el && el.shadowRoot && el.shadowRoot.getElementById('context-percent')?.textContent === '25%') break;
   }
   assert.equal(ctlSolo.getState().mountedFallback, true);
 
-  const barEl = envSolo.doc.getElementById('ag-pulse-status-bar');
-  assert.ok(barEl);
+  const barEl = envSolo.doc.getElementById('ag-prism-pulse-bar');
+  assert.ok(barEl, 'Built-in telemetry bar must mount with dedicated #ag-prism-pulse-bar ID');
+  assert.equal(envSolo.doc.getElementById('ag-pulse-status-bar'), null, 'Built-in bar must NEVER collide with external #ag-pulse-status-bar');
+  assert.equal(barEl.getAttribute('data-ag-prism-pulse-bar'), 'true');
   assert.equal(barEl.getAttribute('data-ag-prism-fallback'), '1');
   assert.ok(barEl.shadowRoot);
 
@@ -457,7 +459,7 @@ test('vendor/pulse-dashboard/inline-fallback.js politely yields to external Puls
   await ctlSolo.refresh();
   assert.equal(ctlSolo.getState().mountedFallback, false);
   assert.equal(ctlSolo.getState().yieldedToExternal, true);
-  assert.equal(envSolo.doc.getElementById('ag-pulse-status-bar'), null);
+  assert.equal(envSolo.doc.getElementById('ag-prism-pulse-bar'), null);
   ctlSolo.destroy();
 
   // Regression guard: on Customizations / Installed Plugins page (no composer, but sidebar has pinned [data-cascade-id] rows),
@@ -468,29 +470,44 @@ test('vendor/pulse-dashboard/inline-fallback.js politely yields to external Puls
   }
   const pinnedRow = envPluginsPage.makeEl('div');
   pinnedRow.setAttribute('data-testid', 'conversation-row-sidebar');
-  pinnedRow.setAttribute('data-cascade-id', '31a09976-b7b4-4ba3-8b33-a14727fad7f5');
+  pinnedRow.setAttribute('data-cascade-id', '11111111-2222-4333-8444-555555555555');
   envPluginsPage.doc.body.appendChild(pinnedRow);
   const ctlPlugins = telemetryMod.createTelemetryController({ window: envPluginsPage.win, document: envPluginsPage.doc });
   ctlPlugins.sync({ telemetryModule: 'on' });
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(ctlPlugins.getState().mountedFallback, false);
-  assert.equal(envPluginsPage.doc.getElementById('ag-pulse-status-bar'), null);
+  assert.equal(envPluginsPage.doc.getElementById('ag-prism-pulse-bar'), null);
   assert.equal(pinnedRow.children.length, 0);
   ctlPlugins.destroy();
 
-  // Regression guard 2: even when telemetryModule === 'on', if external #ag-pulse-status-bar mounts later,
-  // refresh() must immediately yield & unmount fallback so bars never stack or duplicate!
+  // Regression guard 2: 'auto' yields to healthy external #ag-pulse-status-bar, whereas 'on' ("Built-in")
+  // takes authoritative priority over external bar and suppresses it without stacking!
+  const envAutoMode = createLightweightDom();
+  const ctlAutoMode = telemetryMod.createTelemetryController({ window: envAutoMode.win, document: envAutoMode.doc });
+  ctlAutoMode.sync({ telemetryModule: 'auto', __fallbackDelayMs: 5 });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(ctlAutoMode.getState().mountedFallback, true);
+  assert.ok(envAutoMode.doc.getElementById('ag-prism-pulse-bar'));
+  const extHealthyBar = envAutoMode.makeEl('div');
+  extHealthyBar.id = 'ag-pulse-status-bar';
+  envAutoMode.composerToolbar.appendChild(extHealthyBar);
+  await ctlAutoMode.refresh();
+  assert.equal(ctlAutoMode.getState().mountedFallback, false);
+  assert.equal(ctlAutoMode.getState().yieldedToExternal, true);
+  assert.equal(envAutoMode.doc.getElementById('ag-prism-pulse-bar'), null);
+  assert.equal(envAutoMode.doc.querySelectorAll('#ag-pulse-status-bar').length, 1);
+  ctlAutoMode.destroy();
+
   const envOnMode = createLightweightDom();
+  const extStuckBar = envOnMode.makeEl('div');
+  extStuckBar.id = 'ag-pulse-status-bar';
+  envOnMode.composerToolbar.appendChild(extStuckBar);
   const ctlOnMode = telemetryMod.createTelemetryController({ window: envOnMode.win, document: envOnMode.doc });
   ctlOnMode.sync({ telemetryModule: 'on' });
-  assert.equal(ctlOnMode.getState().mountedFallback, true);
-  const extRealBar = envOnMode.makeEl('div');
-  extRealBar.id = 'ag-pulse-status-bar';
-  envOnMode.composerToolbar.appendChild(extRealBar);
-  await ctlOnMode.refresh();
-  assert.equal(ctlOnMode.getState().mountedFallback, false);
-  assert.equal(ctlOnMode.getState().yieldedToExternal, true);
-  assert.equal(envOnMode.doc.querySelectorAll('#ag-pulse-status-bar').length, 1);
+  assert.equal(ctlOnMode.getState().mountedFallback, true, 'telemetryModule="on" must force built-in fallback even when external bar exists');
+  assert.equal(ctlOnMode.getState().yieldedToExternal, false);
+  assert.ok(envOnMode.doc.getElementById('ag-prism-pulse-bar'), 'Built-in #ag-prism-pulse-bar must stay mounted alongside suppressed external bar');
+  assert.equal(extStuckBar.getAttribute('data-ag-prism-hidden'), '1', 'External bar must be suppressed while built-in mode is forced on');
   ctlOnMode.destroy();
 
   // Regression guard 3: during active agent turns, [data-testid="model-selector-trigger"] moves inside a top-left
@@ -508,6 +525,57 @@ test('vendor/pulse-dashboard/inline-fallback.js politely yields to external Puls
   assert.equal(bottomFooter.children.length, 1);
   assert.equal(envActiveTurn.composerToolbar.children.length, 1, 'Top-left min-w-0 wrapper must contain only the model button');
   ctlActiveTurn.destroy();
+
+  // Regression guard 4 (#223): hot-reload re-execution of inline-fallback.js UMD bundle must overwrite stale
+  // __agPrismMetricsResolve closure (and clean it up on destroy) instead of timing out 3500ms to local-estimate!
+  const envHotReload = createLightweightDom();
+  const inlineSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'pulse-dashboard', 'inline-fallback.js'), 'utf8');
+  let callCount = 0;
+  envHotReload.win.__agPrismMetricsCall = (payloadStr) => {
+    callCount += 1;
+    const req = JSON.parse(payloadStr);
+    setTimeout(() => {
+      envHotReload.win.__agPrismMetricsResolve?.(req.id, {
+        connection: 'live',
+        speed: {
+          model: 'Gemini 4 Carbon High',
+          tps: 88.5,
+          rounds: callCount,
+          context: { model: 'Gemini 4 Carbon High', usedTokens: 163840, maxTokens: 512000, usedFraction: 0.32, sampledAt: Date.now() },
+        },
+        groups: [{ id: 'gemini', name: 'Gemini', windows: { '5h': { remaining: 0.72 } } }],
+      });
+    }, 5);
+  };
+  const sandbox = Object.assign(envHotReload.win, {
+    window: envHotReload.win,
+    document: envHotReload.doc,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+  });
+  sandbox.globalThis = sandbox;
+  // 1st injection
+  vm.runInNewContext(inlineSrc, sandbox);
+  sandbox.__agPrismTelemetry.sync({ telemetryModule: 'on' });
+  const snap1 = await sandbox.__agPrismMetricsBridge.getMetrics({ force: false });
+  assert.equal(snap1.connection, 'live');
+  // Simulate legacy zombie __agPrismMetricsResolve left behind before hot-reload AND 2nd UMD re-execution
+  const staleZombieResolve = () => {};
+  sandbox.__agPrismMetricsResolve = staleZombieResolve;
+  vm.runInNewContext(inlineSrc, sandbox);
+  sandbox.__agPrismTelemetry.sync({ telemetryModule: 'on' });
+  assert.notEqual(sandbox.__agPrismMetricsResolve, staleZombieResolve, 'Hot-reloaded telemetry must replace stale __agPrismMetricsResolve');
+  const tHot0 = Date.now();
+  const snap2 = await sandbox.__agPrismMetricsBridge.getMetrics({ force: false });
+  const hotElapsed = Date.now() - tHot0;
+  assert.equal(snap2.connection, 'live', 'Hot-reloaded getMetrics() must receive live response instead of local-estimate');
+  assert.ok(hotElapsed < 500, `Expected fast live callback (<500ms), got ${hotElapsed}ms`);
+  assert.equal(snap2.groups?.length, 1);
+  sandbox.__agPrismTelemetry.destroy();
+  assert.equal(sandbox.__agPrismMetricsResolve, undefined, 'destroy() must clean up __agPrismMetricsResolve');
+  assert.equal(sandbox.__agPrismMetricsBridge, undefined, 'destroy() must clean up __agPrismMetricsBridge');
 });
 
 test('vendor/effort-slider/slider-coexist.js yields 100% to external __agCodexEffortSliderInstance and throttles built-in observer (120ms + skip non-menu mutations)', async () => {
@@ -1329,6 +1397,203 @@ test('PrismDaemon HS-1 & SEC-2: 68 rapid-fire setting updates, multi-window cros
   } finally {
     if (daemon) await daemon.stop(false).catch(() => {});
     await installPluginTool.uninstallPlugin({ targetDir: targetPluginDir, noCdp: true }).catch(() => {});
+    for (const s of sockets) s.destroy();
+    await new Promise((r) => server.close(r));
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test('PrismDaemon ignores wcvBrowser non-host loopback pages after skipped-non-host without repeated reconnects or Omni token injection', async () => {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-ignore-wcv-'));
+  const targetPluginDir = path.join(workDir, 'obsidian-prism');
+  await installPluginTool.installPlugin({ targetDir: targetPluginDir, noCdp: true, skipHostConfig: true, startDaemon: false });
+
+  const sockets = new Set();
+  let connectCount = 0;
+  let omniEvalCount = 0;
+  let currentGuestUrl = 'http://127.0.0.1:5173/app#home';
+
+  function sendWs(socket, obj) {
+    const payload = Buffer.from(JSON.stringify(obj), 'utf8');
+    let hdr;
+    if (payload.length < 126) {
+      hdr = Buffer.from([0x81, payload.length]);
+    } else if (payload.length < 65536) {
+      hdr = Buffer.alloc(4);
+      hdr[0] = 0x81;
+      hdr[1] = 126;
+      hdr.writeUInt16BE(payload.length, 2);
+    } else {
+      hdr = Buffer.alloc(10);
+      hdr[0] = 0x81;
+      hdr[1] = 127;
+      hdr.writeBigUInt64BE(BigInt(payload.length), 2);
+    }
+    socket.write(Buffer.concat([hdr, payload]));
+  }
+
+  const server = http.createServer((req, res) => {
+    if (req.url === '/json/list') {
+      const p = server.address().port;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify([
+          {
+            id: 'WCV_GUEST_TAB_1',
+            type: 'page',
+            title: 'Antigravity Marketing Landing Preview',
+            url: currentGuestUrl,
+            webSocketDebuggerUrl: `ws://127.0.0.1:${p}/devtools/page/WCV_GUEST_TAB_1`,
+          },
+          {
+            id: 'OMNI_VIEWER_TAB_1',
+            type: 'page',
+            title: 'antigravity-notes.md · Prism Omni',
+            url: 'http://127.0.0.1:5169/viewer?token=secret&path=antigravity-notes.md',
+            webSocketDebuggerUrl: `ws://127.0.0.1:${p}/devtools/page/OMNI_VIEWER_TAB_1`,
+          },
+        ])
+      );
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+
+  let touchedOmniViewer = false;
+  server.on('upgrade', (req, socket) => {
+    if (req.url?.includes('OMNI_VIEWER_TAB_1')) {
+      touchedOmniViewer = true;
+      socket.destroy();
+      return;
+    }
+    connectCount += 1;
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    const accept = crypto
+      .createHash('sha1')
+      .update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+      .digest('base64');
+    socket.write(
+      'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' +
+        accept +
+        '\r\n\r\n'
+    );
+    let buf = Buffer.alloc(0);
+    let frags = [];
+    socket.on('data', (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      while (buf.length >= 2) {
+        const fin = (buf[0] & 0x80) !== 0;
+        const opcode = buf[0] & 0x0f;
+        const masked = (buf[1] & 0x80) !== 0;
+        let len = buf[1] & 0x7f;
+        let off = 2;
+        if (len === 126) {
+          if (buf.length < 4) return;
+          len = buf.readUInt16BE(2);
+          off = 4;
+        } else if (len === 127) {
+          if (buf.length < 10) return;
+          len = Number(buf.readBigUInt64BE(2));
+          off = 10;
+        }
+        const mLen = masked ? 4 : 0;
+        if (buf.length < off + mLen + len) return;
+        const data = Buffer.from(buf.subarray(off + mLen, off + mLen + len));
+        if (masked) {
+          const mask = buf.subarray(off, off + 4);
+          for (let i = 0; i < len; i++) data[i] ^= mask[i & 3];
+        }
+        buf = buf.subarray(off + mLen + len);
+        if (opcode === 0x8) {
+          socket.end();
+          return;
+        }
+        if (opcode !== 0x1 && opcode !== 0x0) continue;
+        frags.push(data);
+        if (!fin) continue;
+        const msg = JSON.parse(Buffer.concat(frags).toString('utf8'));
+        frags = [];
+        if (msg.method === 'Page.addScriptToEvaluateOnNewDocument') {
+          sendWs(socket, { id: msg.id, result: { identifier: 'doc-sc-1' } });
+        } else if (msg.method === 'Runtime.evaluate') {
+          const expr = String(msg.params?.expression || '');
+          if (expr.includes('const serverMeta =')) omniEvalCount += 1;
+          sendWs(socket, {
+            id: msg.id,
+            result: { result: { type: 'object', value: { version: '1.0.1', status: 'skipped-non-host', state: null } } },
+          });
+        } else {
+          sendWs(socket, { id: msg.id, result: {} });
+        }
+      }
+    });
+  });
+
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  let daemon = null;
+  try {
+    daemon = new PrismDaemon({
+      rootDir: targetPluginDir,
+      overridePort: port,
+      silent: true,
+    });
+    daemon.running = true;
+
+    await daemon.tick();
+    assert.equal(touchedOmniViewer, false, '/viewer gateway page must be blocked before CDP connect');
+    assert.equal(connectCount, 1, 'First tick probes ambiguous wcvBrowser page once');
+    assert.equal(omniEvalCount, 0, 'Omni second-channel expression must NEVER evaluate on skipped-non-host page');
+    assert.equal(daemon.sessions.size, 0, 'Daemon must immediately detach skipped-non-host page');
+    assert.equal(daemon.ignoredTargets.has('WCV_GUEST_TAB_1'), true);
+
+    // Subsequent ticks (including SPA hash change on same pathname) must skip reconnect completely
+    currentGuestUrl = 'http://127.0.0.1:5173/app#pricing';
+    await daemon.tick();
+    await daemon.tick();
+    assert.equal(connectCount, 1, 'Subsequent ticks must NOT reconnect to ignored wcvBrowser target');
+
+    // Navigating to a new pathname clears ignore entry and re-evaluates cleanly
+    currentGuestUrl = 'http://127.0.0.1:5173/other-route';
+    await daemon.tick();
+    assert.equal(connectCount, 2, 'Navigating to a new pathname should re-evaluate once and re-ignore');
+
+    // A2 regression guard: ensureMetricsCollector skips slow _lazyUsage.snapshot() unless includeUsage === true
+    let usageSnapshotCalls = 0;
+    daemon._lazyStore = {
+      setCdpPort() {},
+      snapshot: async ({ conversationId }) => ({
+        connection: 'live',
+        speed: { model: 'Gemini 4 Carbon (High)', tps: 72.5, conversationId },
+        groups: [{ id: 'gemini-pro', name: 'Gemini Pro' }],
+      }),
+    };
+    daemon._lazyUsage = {
+      sync() {},
+      snapshot: async () => {
+        usageSnapshotCalls += 1;
+        await new Promise((r) => setTimeout(r, 120));
+        return { quotaWindows: { fiveHour: { tokens: 1234 } } };
+      },
+      dispose() {},
+    };
+    const collect = await daemon.ensureMetricsCollector();
+    const tFast0 = performance.now();
+    const fastSnap = await collect({ conversationId: '11111111-2222-3333-4444-555555555555' });
+    const fastElapsed = performance.now() - tFast0;
+    assert.equal(usageSnapshotCalls, 0, 'Status-bar polling without includeUsage must NOT invoke _lazyUsage.snapshot()');
+    assert.ok(fastElapsed < 80, `Expected unblocked fast snapshot < 80ms, got ${fastElapsed.toFixed(1)}ms`);
+    assert.equal(fastSnap.connection, 'live');
+    assert.equal(fastSnap.groups.length, 1);
+    assert.equal(fastSnap.usage, null);
+
+    const fullSnap = await collect({ conversationId: '11111111-2222-3333-4444-555555555555', includeUsage: true });
+    assert.equal(usageSnapshotCalls, 1, 'Explicit includeUsage: true must still populate usage snapshot');
+    assert.equal(fullSnap.usage.quotaWindows.fiveHour.tokens, 1234);
+  } finally {
+    if (daemon) await daemon.stop(false).catch(() => {});
     for (const s of sockets) s.destroy();
     await new Promise((r) => server.close(r));
     fs.rmSync(workDir, { recursive: true, force: true });

@@ -817,6 +817,8 @@ test('style.css covers all 6 Wave-2 config hooks, eliminates double borders & en
     '[data-ag-cs-palette="host"]>body',
     '[data-ag-cs-telemetry="off"] :is(#ag-pulse-status-bar,[data-ag-pulse-bar="true"]){display:none !important;}',
     '[data-ag-cs-composer="on"]:not([data-ag-cs-telemetry="off"]) .agy-composer-footer>#ag-pulse-status-bar',
+    ':is(.agy-composer-footer,[data-testid="input-box-bottom-toolbar"]){position:relative !important;z-index:26 !important;}',
+    ':is(#ag-prism-pulse-bar,[data-ag-prism-pulse-bar],#ag-pulse-status-bar):not([data-layout="blocked"]){z-index:28 !important;}',
     '[data-ag-cs-composer="off"] .surface-composer-card>.ag-cs-prism-rim-cv{display:none !important;',
     '&:not([data-ag-cs-home="off"]) .agy-home{',
     '[data-ag-cs-sidebar="on"][data-ag-cs-sidebar-compact="on"]',

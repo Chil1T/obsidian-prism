@@ -377,12 +377,12 @@ html[data-wb-corners="soft"] { --wb-r-sm: 6px; --wb-r-md: 10px; --wb-r-lg: 14px;
 
 * { box-sizing: border-box; }
 html, body {
-  margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
+  margin: 0; padding: 0; width: 100%; height: 100%; min-height: 100vh; overflow: hidden;
   background: var(--wb-bg); color: var(--wb-fg);
   font-family: var(--wb-font-sans); font-size: 12.5px; line-height: 1.45;
   -webkit-font-smoothing: antialiased;
 }
-#wb-app { display: flex; flex-direction: column; width: 100%; height: 100%; }
+#wb-app { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 100vh; }
 #wb-topbar {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   min-height: 38px; padding: 4px 10px; background: var(--wb-surface);
@@ -397,7 +397,7 @@ html, body {
 }
 .wb-filename {
   font-weight: 600; font-size: 12.5px; color: var(--wb-fg);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: min(280px, 46vw);
 }
 .wb-pill {
   display: inline-flex; align-items: center; height: 20px; padding: 0 7px;
@@ -562,12 +562,15 @@ html, body {
 function bootPrismWorkbench(INIT_STATE, I18N_TABLE) {
   const LANG_IDX = { 'zh-CN': 0, 'zh-TW': 1, yue: 2, en: 3, ja: 4 };
   const urlQs = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
+  const readHashParams = () =>
+    new URLSearchParams(typeof location !== 'undefined' && location.hash ? location.hash.slice(1) : '');
+  const hashQs = readHashParams();
 
   const state = {
     baseUrl: INIT_STATE.baseUrl || (typeof location !== 'undefined' ? location.origin : ''),
     token: INIT_STATE.token || urlQs.get('token') || '',
     path: INIT_STATE.path || urlQs.get('path') || '',
-    name: INIT_STATE.name || '',
+    name: INIT_STATE.name || hashQs.get('title') || urlQs.get('name') || urlQs.get('title') || '',
     kind: INIT_STATE.kind || urlQs.get('kind') || 'auto',
     theme: INIT_STATE.theme || urlQs.get('theme') || 'dark',
     palette: INIT_STATE.palette || urlQs.get('palette') || 'obsidian',
@@ -575,7 +578,7 @@ function bootPrismWorkbench(INIT_STATE, I18N_TABLE) {
     accent: INIT_STATE.accent || urlQs.get('accent') || 'follow',
     corners: INIT_STATE.corners || urlQs.get('corners') || 'balanced',
     lang: INIT_STATE.lang || urlQs.get('lang') || 'zh-CN',
-    rawContent: INIT_STATE.rawContent || '',
+    rawContent: INIT_STATE.rawContent || hashQs.get('raw') || urlQs.get('raw') || '',
     sandboxUrl: INIT_STATE.sandboxUrl || '',
     meta: INIT_STATE.meta || null,
     textBuffer: '',
@@ -1860,6 +1863,7 @@ function bootPrismWorkbench(INIT_STATE, I18N_TABLE) {
     const displayTitle = state.name || (state.path ? state.path.split(/[\\/]/).pop() : '') || (state.kind === 'mermaid' ? 'Mermaid Diagram' : 'Workbench');
     titleEl.textContent = displayTitle;
     titleEl.title = state.path || displayTitle;
+    if (typeof document !== 'undefined') document.title = `${displayTitle} · Prism Omni`;
 
     // Fetch /meta when path is given and not pure in-memory payload
     if (state.path && !state.rawContent) {
@@ -1876,6 +1880,7 @@ function bootPrismWorkbench(INIT_STATE, I18N_TABLE) {
         if (meta.name && !state.name) {
           state.name = meta.name;
           titleEl.textContent = meta.name;
+          if (typeof document !== 'undefined') document.title = `${meta.name} · Prism Omni`;
         }
         if (state.kind === 'auto' || !state.kind) {
           state.kind = detectWorkbenchKind(state.path, meta.mime || '');
@@ -2000,6 +2005,18 @@ function bootPrismWorkbench(INIT_STATE, I18N_TABLE) {
     }
   });
 
+  window.addEventListener('hashchange', () => {
+    const nextHash = readHashParams();
+    const nextRaw = nextHash.get('raw') || '';
+    const nextTitle = nextHash.get('title') || '';
+    if (nextRaw && nextRaw !== state.rawContent) {
+      state.rawContent = nextRaw;
+      if (nextTitle) state.name = nextTitle;
+      if (nextRaw.includes('<svg') && state.kind !== 'svg') state.kind = 'mermaid';
+      void mountCurrentResource();
+    }
+  });
+
   void mountCurrentResource();
 }
 
@@ -2065,7 +2082,7 @@ export function renderWorkbenchHtml(ctx = {}) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(fileName)} — Obsidian Prism Workbench</title>
+<title>${escapeHtml(fileName)} · Prism Omni</title>
 <style id="ag-prism-workbench-css">${WORKBENCH_CSS}</style>
 </head>
 <body>

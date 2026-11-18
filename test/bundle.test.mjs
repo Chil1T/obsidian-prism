@@ -3119,6 +3119,26 @@ test('v1.0.1 compiler safety fixes, unified shared string pool < 670KB (< 680KB 
     false,
     'External non-loopback origin must always be rejected even with spoofed title'
   );
+  assert.equal(
+    cdp.isEligibleTarget({
+      type: 'page',
+      title: 'antigravity-spec.md · Prism Omni',
+      url: 'http://127.0.0.1:5169/viewer?token=abc&path=antigravity-spec.md',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:3014/4',
+    }),
+    false,
+    'Omni /viewer gateway pages must always be rejected even when filename contains antigravity'
+  );
+  assert.equal(
+    cdp.isEligibleTarget({
+      type: 'page',
+      title: 'Antigravity Sandbox Preview',
+      url: 'http://127.0.0.1:5169/sandbox/abcd1234/index.html',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:3014/5',
+    }),
+    false,
+    'Omni /sandbox pages must always be rejected'
+  );
   const reconciledLegacy = cdp.reconcileConfigAliases({ ripple: 'off', homeMode: 'classic', lang: 'en', sidebar: 'off' });
   assert.equal(reconciledLegacy.homeRipple, false);
   assert.equal(reconciledLegacy.homeLayout, 'classic');
@@ -3271,4 +3291,99 @@ test('v1.0.1 compiler safety fixes, unified shared string pool < 670KB (< 680KB 
   } finally {
     fs.rmSync(tmpPidDir, { recursive: true, force: true });
   }
+
+  // 11. Native Sidecar process signature verification (Windows/macOS/Linux) & plain-HTTP title-spoof Omni token guard
+  assert.equal(cdp.matchesExpectedDaemonSignature('node.exe', 'node watch.js'), true);
+  assert.equal(cdp.matchesExpectedDaemonSignature('obsidian-prism-watcher.exe', ''), true);
+  assert.equal(
+    cdp.matchesExpectedDaemonSignature(
+      'Antigravity.exe',
+      '"C:\\Programs\\Antigravity\\Antigravity.exe" --import=file:///app/sidecar_sdk/register_loader.js C:\\plugins\\obsidian-prism\\sidecars\\daemon\\main.mjs'
+    ),
+    true,
+    'Host-spawned Antigravity.exe running obsidian-prism/sidecars/daemon/main.mjs must be recognized'
+  );
+  assert.equal(
+    cdp.matchesExpectedDaemonSignature(
+      '/Applications/Antigravity.app/Contents/MacOS/Antigravity',
+      '/Applications/Antigravity.app/Contents/MacOS/Antigravity --import=file:///sidecar_sdk/register_loader.js /Users/dev/.gemini/config/plugins/obsidian-prism/sidecars/daemon/main.mjs'
+    ),
+    true,
+    'macOS host-spawned Antigravity sidecar daemon must be recognized'
+  );
+  assert.equal(
+    cdp.matchesExpectedDaemonSignature('Antigravity.exe', '"C:\\Programs\\Antigravity\\Antigravity.exe" --remote-debugging-port=3014'),
+    false,
+    'Main Antigravity GUI process must NEVER be treated as Prism daemon'
+  );
+  assert.equal(
+    cdp.matchesExpectedDaemonSignature(
+      'Antigravity.exe',
+      '"C:\\Programs\\Antigravity\\Antigravity.exe" --type=renderer --field-trial-handle=1234'
+    ),
+    false,
+    'Electron renderer process must NEVER be treated as Prism daemon'
+  );
+  assert.equal(
+    cdp.matchesExpectedDaemonSignature(
+      'Antigravity.exe',
+      '"C:\\Programs\\Antigravity\\Antigravity.exe" --import=file:///app/register_loader.js C:\\plugins\\antigravity-pulse\\sidecars\\panel\\main.mjs'
+    ),
+    false,
+    'Sibling plugin sidecar must NEVER be treated as Prism daemon'
+  );
+  assert.equal(
+    cdp.isExpectedDaemonProcess(999991, () => ({
+      imageName: 'Antigravity.exe',
+      commandLine: 'Antigravity.exe --import=register_loader.js /plugins/obsidian-prism/sidecars/daemon/main.mjs',
+    })),
+    true
+  );
+  assert.equal(
+    cdp.isExpectedDaemonProcess(999992, () => ({
+      imageName: 'Antigravity.exe',
+      commandLine: 'Antigravity.exe',
+    })),
+    false
+  );
+  assert.equal(
+    cdp.matchesExpectedDaemonSignature(
+      'Antigravity',
+      '"Antigravity.exe" --import=file:///lib/sidecar_sdk/register_loader.js main.mjs',
+      { matchedLockPid: true, lockStartedAt: 1794981121743, processStartMs: 1794981119683 }
+    ),
+    true,
+    'Host relative-cwd sidecar matching .daemon.pid startedAt window must be recognized'
+  );
+  assert.equal(
+    cdp.matchesExpectedDaemonSignature(
+      'Antigravity',
+      '"Antigravity.exe" --import=file:///lib/sidecar_sdk/register_loader.js main.mjs',
+      { matchedLockPid: true, lockStartedAt: 1794900000000, processStartMs: 1794981119683 }
+    ),
+    false,
+    'Stale .daemon.pid after reboot/PID reuse must be rejected via processStartMs mismatch'
+  );
+
+  // Plain-HTTP wcvBrowser webapp with "Antigravity" in document.title must be rejected by both bundles (0 token leak)
+  const spoofAppDoc = {
+    title: 'My Antigravity Clone WebApp',
+    readyState: 'complete',
+    documentElement: { setAttribute() {}, hasAttribute: () => false, removeAttribute() {} },
+    head: { appendChild() {} },
+    body: { classList: { contains: () => false } },
+    getElementById: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const spoofAppWin = { location: { href: 'http://127.0.0.1:5173/dashboard' }, document: spoofAppDoc, addEventListener() {} };
+  spoofAppWin.window = spoofAppWin;
+  const spoofAppSandbox = { window: spoofAppWin, document: spoofAppDoc, location: spoofAppWin.location, globalThis: spoofAppWin, setTimeout, clearTimeout };
+  const spoofMainRes = vm.runInNewContext(expr1, spoofAppSandbox);
+  assert.equal(spoofMainRes.status, 'skipped-non-host');
+  const spoofOmniRes = vm.runInNewContext(omniExpr, spoofAppSandbox);
+  assert.equal(spoofOmniRes.status, 'skipped-non-host');
+  assert.equal(spoofAppWin.__agPrismOmniServerMeta, undefined, 'Omni server token must NEVER be injected into non-host wcvBrowser pages');
 });

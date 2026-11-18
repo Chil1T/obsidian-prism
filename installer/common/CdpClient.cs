@@ -450,6 +450,14 @@ namespace AgyClaudeStyle
             if (scheme != "http" && scheme != "https") return false;
             string host = (uri.Host ?? "").ToLowerInvariant();
             if (host != "127.0.0.1" && host != "localhost" && host != "::1" && host != "[::1]") return false;
+            string absPath = (uri.AbsolutePath ?? "/").ToLowerInvariant();
+            if (absPath == "/viewer" || absPath.StartsWith("/viewer/", StringComparison.Ordinal) ||
+                absPath == "/sandbox" || absPath.StartsWith("/sandbox/", StringComparison.Ordinal) ||
+                absPath == "/stream" || absPath.StartsWith("/stream/", StringComparison.Ordinal) ||
+                absPath == "/api" || absPath.StartsWith("/api/", StringComparison.Ordinal))
+            {
+                return false;
+            }
             if (ttl.IndexOf("antigravity", StringComparison.OrdinalIgnoreCase) >= 0) return true;
             if (scheme == "https" && (ttl.Length == 0 || ttl.StartsWith("127.0.0.1", StringComparison.OrdinalIgnoreCase)))
             {
@@ -698,6 +706,67 @@ namespace AgyClaudeStyle
             return null;
         }
 
+        private static string QueryWindowsProcessCommandLine(int pid)
+        {
+            if (pid <= 0) return "";
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = "powershell.exe";
+                psi.Arguments = "-NoProfile -NonInteractive -Command \"(Get-CimInstance Win32_Process -Filter 'ProcessId = " + pid + "').CommandLine\"";
+                psi.CreateNoWindow = true;
+                psi.UseShellExecute = false;
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                using (Process p = Process.Start(psi))
+                {
+                    if (p == null) return "";
+                    Task<string> readTask = p.StandardOutput.ReadToEndAsync();
+                    if (!p.WaitForExit(7500))
+                    {
+                        try { p.Kill(); } catch { }
+                        return "";
+                    }
+                    return readTask.GetAwaiter().GetResult() ?? "";
+                }
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        private static bool MatchesNativeLockFilePid(int pid, out long startedAtMs)
+        {
+            startedAtMs = 0L;
+            if (pid <= 0) return false;
+            try
+            {
+                string pidPath = Path.Combine(GetDefaultNativePluginDir(), ".daemon.pid");
+                if (!File.Exists(pidPath)) return false;
+                string raw = File.ReadAllText(pidPath, Encoding.UTF8).Trim();
+                if (string.IsNullOrEmpty(raw)) return false;
+                int plainPid;
+                if (int.TryParse(raw, out plainPid)) return plainPid == pid;
+                if (raw.StartsWith("{", StringComparison.Ordinal))
+                {
+                    Dictionary<string, object> obj = MiniJson.ParseObject(raw);
+                    object pidVal;
+                    if (obj != null && obj.TryGetValue("pid", out pidVal) && pidVal != null && Convert.ToInt32(pidVal) == pid)
+                    {
+                        object stVal;
+                        if (obj.TryGetValue("startedAt", out stVal) && stVal != null)
+                        {
+                            startedAtMs = Convert.ToInt64(stVal);
+                        }
+                        return true;
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
         public static bool IsExpectedPrismDaemonProcess(Process proc)
         {
             if (proc == null) return false;
@@ -705,10 +774,40 @@ namespace AgyClaudeStyle
             {
                 string name = (proc.ProcessName ?? "").ToLowerInvariant();
                 if (string.IsNullOrEmpty(name)) return false;
-                return name.Contains("node") ||
-                       name.Contains("watcher") ||
-                       name.Contains("obsidian-prism") ||
-                       name.Contains("agy-claude-style");
+                if (name.Contains("node") ||
+                    name.Contains("watcher") ||
+                    name.Contains("obsidian-prism") ||
+                    name.Contains("agy-claude-style"))
+                {
+                    return true;
+                }
+                if (name.Contains("antigravity") || name.Contains("electron") || name == "agy")
+                {
+                    long lockStartedMs;
+                    bool matchedLock = MatchesNativeLockFilePid(proc.Id, out lockStartedMs);
+                    if (matchedLock && lockStartedMs > 0L)
+                    {
+                        try
+                        {
+                            DateTime epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+                            long procStartMs = (long)(proc.StartTime.ToUniversalTime() - epoch).TotalMilliseconds;
+                            if (procStartMs <= lockStartedMs + 5000L && (lockStartedMs - procStartMs) <= 120000L)
+                            {
+                                return true;
+                            }
+                            return false;
+                        }
+                        catch { }
+                    }
+                    string cmd = QueryWindowsProcessCommandLine(proc.Id).Replace('\\', '/').ToLowerInvariant();
+                    if (string.IsNullOrEmpty(cmd) || cmd.Contains("--type=")) return false;
+                    bool hasPrismOwner = cmd.Contains("obsidian-prism") || cmd.Contains("antigravity-prism") || cmd.Contains("agy-claude-style");
+                    bool hasDaemonEntry = cmd.Contains("sidecars/daemon/main.mjs") || cmd.Contains("/daemon/main.mjs") || cmd.Contains("/watch.js");
+                    if (hasPrismOwner && hasDaemonEntry) return true;
+                    if (matchedLock && cmd.Contains("sidecar_sdk/register_loader.js") && cmd.Contains("main.mjs")) return true;
+                    return false;
+                }
+                return false;
             }
             catch
             {
@@ -827,6 +926,7 @@ namespace AgyClaudeStyle
             sb.Append("(() => {\n");
             sb.Append("  const href = String((typeof location !== 'undefined' && location && location.href) || '');\n");
             sb.Append("  if (/^(devtools:|chrome:|chrome-extension:|edge:|about:|data:|blob:|plugin:)/i.test(href)) return { ok: false, skipped: true };\n");
+            sb.Append("  if (/^https?:\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?\\/(?:viewer|sandbox|stream|api)(?:[/?#]|$)/i.test(href)) return { ok: false, skipped: true };\n");
             sb.Append("  const bootCfg = ").Append(cfgJson).Append(";\n");
             sb.Append("  const nextHash = ").Append(hashJson).Append(";\n");
             sb.Append("  const liveCfg = (window.__agPrism && typeof window.__agPrism.getState === 'function' && window.__agPrism.getState()?.cfg) || bootCfg;\n");

@@ -298,6 +298,7 @@ function bootRenderedWorkbenchInVm(html, options = {}) {
   const compiled = new vm.Script(inlineCode, { filename: 'workbench-inline.js' });
 
   const doc = {
+    title: '',
     documentElement: null,
     body: null,
     fonts: {
@@ -442,18 +443,21 @@ function bootRenderedWorkbenchInVm(html, options = {}) {
       href: urlObj.href,
       origin: urlObj.origin,
       search: urlObj.search,
+      hash: urlObj.hash,
     },
-    parent: {
-      postMessage(msg) {
-        parentMessages.push(msg);
-      },
-    },
+    parent: null,
     addEventListener(type, fn) {
       if (!winListeners.has(type)) winListeners.set(type, new Set());
       winListeners.get(type).add(fn);
     },
     removeEventListener(type, fn) {
       winListeners.get(type)?.delete(fn);
+    },
+    dispatchWindowEvent(type, ev = {}) {
+      const set = winListeners.get(type);
+      if (set) {
+        for (const fn of Array.from(set)) fn({ type, ...ev });
+      }
     },
     postMessageToSelf(data, customSource) {
       const set = winListeners.get('message');
@@ -463,6 +467,13 @@ function bootRenderedWorkbenchInVm(html, options = {}) {
       }
     },
   };
+  win.parent = options.topLevelTab
+    ? win
+    : {
+        postMessage(msg) {
+          parentMessages.push(msg);
+        },
+      };
 
   const CustomURL = Object.assign(
     function (...args) {
@@ -1256,6 +1267,37 @@ test('Security & resilience regressions: opaque HTML sandbox, foreignObject/SMIL
   });
   await badFontEnv.settle();
   assert.match(badFontEnv.pillsEl.textContent, /Failed to load file/);
+
+  // 6. Top-level native Browser Tab mode (window.parent === window): #raw=... Mermaid hash, hashchange & Prism Omni title
+  const svg1 = '<svg viewBox="0 0 280 90"><rect width="280" height="90"/></svg>';
+  const svg2 = '<svg viewBox="0 0 640 360"><circle cx="50" cy="50" r="40"/></svg>';
+  const tabHtml = renderWorkbenchHtml({ kind: 'mermaid', name: 'Sequence Flow' });
+  assert.match(tabHtml, /<title>Sequence Flow · Prism Omni<\/title>/);
+  assert.equal(/Antigravity/i.test(tabHtml), false, 'Workbench HTML must never include host title keyword Antigravity');
+
+  const tabEnv = bootRenderedWorkbenchInVm(tabHtml, {
+    topLevelTab: true,
+    locationHref: `http://127.0.0.1:43199/viewer?token=t1&kind=mermaid#raw=${encodeURIComponent(svg1)}`,
+  });
+  await tabEnv.settle();
+  tabEnv.flushRaf(2);
+  assert.equal(tabEnv.doc.title, 'Sequence Flow · Prism Omni');
+  assert.match(tabEnv.pillsEl.textContent, /280×90/);
+  assert.equal(tabEnv.parentMessages.length, 0, 'top-level Browser Tab must not postMessage to itself');
+
+  // Dynamic #raw=... hashchange updates Mermaid canvas in-place without full reload
+  tabEnv.win.location.hash = `#raw=${encodeURIComponent(svg2)}&title=Updated%20Flow`;
+  tabEnv.win.dispatchWindowEvent('hashchange');
+  await tabEnv.settle();
+  tabEnv.flushRaf(2);
+  assert.equal(tabEnv.doc.title, 'Updated Flow · Prism Omni');
+  assert.match(tabEnv.pillsEl.textContent, /640×360/);
+
+  // 7. style.css preserves transparent browser-hole cutout for host native wcvBrowser
+  const styleCss = fs.readFileSync(path.resolve(__dirname, '../style.css'), 'utf8');
+  assert.match(styleCss, /body:not\(\[data-has-browser-hole="true"\]\)/);
+  assert.match(styleCss, /\.agy-shell[\s\S]{0,120}:not\(\[data-has-browser-hole="true"\]\)/);
+  assert.match(styleCss, /\.browser-hole-ancestor\[data-has-browser-hole="true"\][\s\S]{0,360}background-color:transparent !important/);
 });
 
 test('Compliance & copy hygiene: zero machine path leaks, zero secret patterns, zero hyperbolic copy', () => {

@@ -1891,7 +1891,7 @@
   }
 
   function syncContextCardOpenNotify() {
-    const pulseHost = document.getElementById('ag-pulse-status-bar');
+    const pulseHost = document.getElementById('ag-prism-pulse-bar') || document.getElementById('ag-pulse-status-bar');
     const cardEl =
       document.getElementById('context-card') ||
       (pulseHost && pulseHost.shadowRoot && typeof pulseHost.shadowRoot.getElementById === 'function'
@@ -2053,6 +2053,7 @@
       tid === 'overview-panel' ||
       cls.includes('agy-overlay') ||
       el.id === 'ag-pulse-status-bar' ||
+      el.id === 'ag-prism-pulse-bar' ||
       el.id === 'context-card' ||
       el.closest?.('[role="dialog"], [data-testid="model-selector-panel"]') ||
       el.querySelector?.('[role="dialog"], [data-testid="model-selector-panel"], .agy-overlay, #context-card')
@@ -2379,10 +2380,11 @@
     if (destroyed || !ev?.target?.closest) return;
     if (isThoughtIsolatedNode(ev.target)) return;
 
+    const isPulseNode = (n) => n?.id === 'ag-prism-pulse-bar' || n?.id === 'ag-pulse-status-bar';
     const pulseClicked =
-      ev.target?.id === 'ag-pulse-status-bar' ||
-      Boolean(ev.target?.closest?.('#ag-pulse-status-bar')) ||
-      Boolean(typeof ev.composedPath === 'function' && ev.composedPath().some((n) => n?.id === 'ag-pulse-status-bar'));
+      isPulseNode(ev.target) ||
+      Boolean(ev.target?.closest?.('#ag-prism-pulse-bar,#ag-pulse-status-bar')) ||
+      Boolean(typeof ev.composedPath === 'function' && ev.composedPath().some(isPulseNode));
     if (pulseClicked) {
       setTimeout(() => {
         if (!destroyed) syncContextCardOpenNotify();

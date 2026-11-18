@@ -14,28 +14,29 @@
   'use strict';
 
   const BAR_ID = 'ag-pulse-status-bar';
+  const PRISM_BAR_ID = 'ag-prism-pulse-bar';
+  const PRISM_BAR_ATTR = 'data-ag-prism-pulse-bar';
   const FALLBACK_ATTR = 'data-ag-prism-fallback';
-  const HIDDEN_BY_PRISM_ATTR = 'data-ag-prism-hidden';
+  const HID_ATTR = 'data-ag-prism-hidden';
   const METRICS_BINDING = '__agPrismMetricsCall';
-  const DEFAULT_WAIT_MS = 1500;
+  const WAIT_MS = 1500;
+  const GRACE_MS = 3500;
   const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-  const FALLBACK_SHADOW_CSS = [
-    ':host{display:inline-flex;align-items:center;position:relative;font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;font-size:11px;line-height:16px;color:var(--foreground,#dae2f0);user-select:none;z-index:20}',
-    ':host([hidden]){display:none!important}',
+  const SHADOW_CSS = [
+    ':host,.bar,.chip{display:inline-flex;align-items:center}',
+    ':host{flex:0 0 auto;position:relative;font:11px/16px Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--foreground,#dae2f0);user-select:none;z-index:28}',
+    ':host([hidden]),.sub-badge[hidden],.card[hidden],:host([data-layout="blocked"])>.bar{display:none!important}',
     ':host([data-layout="blocked"]){position:fixed!important;left:-9999px!important;top:-9999px!important;width:0!important;height:0!important;margin:0!important;padding:0!important;overflow:hidden!important;visibility:hidden!important;pointer-events:none!important}',
-    ':host([data-layout="blocked"])>.bar{display:none!important}',
-    '.bar{display:inline-flex;align-items:center;gap:3px}',
-    '.chip{display:inline-flex;align-items:center;gap:3.5px;height:24px;padding:0 6px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;cursor:pointer;font-variant-numeric:tabular-nums;transition:background .15s,color .15s}',
+    '.bar{gap:3px}',
+    '.chip{gap:3.5px;height:24px;padding:0 6px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;cursor:pointer;font-variant-numeric:tabular-nums;transition:background .15s,color .15s}',
     '.chip:hover,.chip[aria-expanded="true"]{background:rgba(128,138,158,.12)}',
     '.chip svg{width:12px;height:12px;stroke:currentColor;stroke-width:1.5;fill:none;opacity:.75;flex:none}',
     '.dim{opacity:.64;font-size:10px}',
     '.sub-badge{font-size:10px;opacity:.78;color:var(--primary,#38bdf8);font-weight:500}',
-    '.sub-badge[hidden]{display:none!important}',
     '.context-ring{width:11px;height:11px;border-radius:50%;background:conic-gradient(var(--pv-tint,#3186ff) var(--used-angle,36deg),rgba(148,163,184,.28) 0);display:inline-block;position:relative;flex:none}',
     '.context-ring::after{content:"";position:absolute;inset:2.2px;border-radius:50%;background:var(--card,#141720)}',
     '.card{position:fixed;right:18px;bottom:68px;width:min(320px,calc(100vw - 24px));padding:13px 14px 12px;border-radius:10px;border:1px solid rgba(148,163,184,.22);background:var(--card,#12151ef5);color:var(--foreground,#eef1f7);box-shadow:0 16px 40px rgba(0,0,0,.36);z-index:9999}',
-    '.card[hidden]{display:none!important}',
     '.heading{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;font-weight:600;margin-bottom:6px}',
     '#context-summary{display:block;font-size:13px;font-weight:600;margin-bottom:2px}',
     '#context-tokens{margin:0 0 8px;font-size:11px;opacity:.76}',
@@ -46,838 +47,629 @@
     '.footnote{margin:6px 0 0;font-size:10px;opacity:.58}',
   ].join('');
 
+  const isFin = (v) => typeof v === 'number' && Number.isFinite(v);
+  const FB_ROWS = {
+    'zh-CN': '缓存|吞吐速率|首字延迟|最近速率|上下文窗口用量|当前模型|Prism 实时遥测同步|Prism 实时遥测同步 · 后台统计整编中|Prism 本地上下文估算|已用|剩余|代理',
+    'zh-TW': '快取|吞吐速率|首字延遲|最近速率|上下文視窗用量|目前模型|Prism 即時遙測同步|Prism 即時遙測同步 · 背景統計彙整中|Prism 本機上下文估算|已用|剩餘|代理',
+    yue: '快取|吞吐速率|首字延遲|最近速率|上下文視窗用量|目前模型|Prism 即時遙測同步|Prism 即時遙測同步 · 背景統計整理中|Prism 本機上下文估算|已用|剩低|代理',
+    en: 'Cache|Throughput|TTFT|Latest Rate|Context Window|Active Model|Prism live telemetry|Prism live telemetry · Indexing usage|Prism local context estimate|used|free| sub',
+    ja: 'キャッシュ|スループット|初回応答|最新速度|コンテキスト使用量|現在のモデル|Prism リアルタイム同期|Prism 同期中 · バックグラウンド集計中|Prism ローカル推定|使用|残り| sub',
+  };
+  const FB_I18N = Object.fromEntries(
+    Object.entries(FB_ROWS).map(([lk, s]) => {
+      const r = s.split('|');
+      return [
+        lk,
+        {
+          cache: r[0], speedHeading: r[1], ttft: r[2], latestRate: r[3],
+          ctxHeading: r[4], curModel: r[5], noteSync: r[6], noteProc: r[7], noteLocal: r[8],
+          summary: (p, rem) => `${p}% ${r[9]} · ${rem}% ${r[10]}`,
+          agents: (n) => `· ${n}${r[11]}`,
+        },
+      ];
+    })
+  );
+
+  function fmtTok(n) {
+    if (!isFin(n) || n < 0) return '—';
+    if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, '')}M`;
+    if (n >= 1e3) return `${Math.round(n / 1e3)}K`;
+    return String(Math.round(n));
+  }
+
+  function mk(doc, tag, attrs, kids) {
+    const el = doc.createElement(tag);
+    if (attrs) {
+      for (const [k, v] of Object.entries(attrs)) {
+        if (v == null) continue;
+        if (k === 'text') el.textContent = String(v);
+        else if (k === 'cls') el.className = String(v);
+        else if (k === 'hidden') el.hidden = Boolean(v);
+        else el.setAttribute(k, String(v));
+      }
+    }
+    if (kids) for (const c of kids) if (c) el.appendChild(c);
+    return el;
+  }
+
+  let reqSeq = 0;
+
   function createTelemetryController(envOpts) {
-    const getWin = () => (envOpts && envOpts.window) || (typeof window !== 'undefined' ? window : globalRoot);
-    const getDoc = () => (envOpts && envOpts.document) || getWin()?.document || null;
+    const gW = () => (envOpts && envOpts.window) || (typeof window !== 'undefined' ? window : globalRoot);
+    const gD = () => (envOpts && envOpts.document) || gW()?.document || null;
 
-    let currentMode = 'auto';
-    let waitTimer = null;
-    let rescueTimer = null;
-    let pollTimer = null;
-    let fallbackHostEl = null;
-    let shadowRoot = null;
-    let installedHostBridge = false;
-    let yieldedToExternal = false;
-    let lastExternalSig = '';
-    let externalDetachedAt = 0;
-    const EXTERNAL_RESCUE_GRACE_MS = 3500;
-    let reqSeq = 0;
-    const pendingReqs = new Map();
-    let docClickCleanup = null;
-    let lastSnapshot = null;
+    let mode = 'auto', waitTm = null, rescTm = null, pollTm = null, fbEl = null, srEl = null;
+    let hasHost = false, yielded = false, lastSig = '', detAt = 0;
+    let docOff = null, lastSnap = null, mApi = null, mRes = null, seatObs = null, healTm = null;
+    let locSnap = null, locAt = 0, expLang = '';
+    const pend = new Map();
 
-    function resolveMetricsBindingHook() {
-      const win = getWin();
-      if (!win) return;
-      if (!win.__agPrismMetricsResolve) {
-        win.__agPrismMetricsResolve = function (id, payload) {
-          const item = pendingReqs.get(id);
-          if (!item) return;
-          clearTimeout(item.timer);
-          pendingReqs.delete(id);
-          item.resolve(payload);
+    const bindHook = () => {
+      const w = gW();
+      if (!w) return;
+      if (!mRes) {
+        mRes = (id, pl) => {
+          const it = pend.get(id);
+          if (!it) return;
+          clearTimeout(it.timer);
+          pend.delete(id);
+          it.resolve(pl);
         };
       }
-    }
+      if (w.__agPrismMetricsResolve !== mRes) w.__agPrismMetricsResolve = mRes;
+    };
 
-    function clearWaitTimer() {
-      if (waitTimer !== null) {
-        clearTimeout(waitTimer);
-        waitTimer = null;
-      }
-      if (rescueTimer !== null) {
-        clearTimeout(rescueTimer);
-        rescueTimer = null;
-      }
-    }
+    const clrWait = () => {
+      if (waitTm !== null) { clearTimeout(waitTm); waitTm = null; }
+      if (rescTm !== null) { clearTimeout(rescTm); rescTm = null; }
+    };
+    const clrPoll = () => {
+      if (pollTm !== null) { clearInterval(pollTm); pollTm = null; }
+    };
+    const clrSeat = () => {
+      if (healTm !== null) { clearTimeout(healTm); healTm = null; }
+      if (seatObs) { try { seatObs.disconnect(); } catch {} seatObs = null; }
+    };
 
-    function clearPollTimer() {
-      if (pollTimer !== null) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-      }
-    }
-
-    function findAllPulseBars(doc) {
+    const findExtBars = (doc) => {
       if (!doc) return [];
-      const seen = new Set();
-      const out = [];
-      const add = (el) => {
-        if (el && !seen.has(el)) {
-          seen.add(el);
-          out.push(el);
-        }
-      };
+      const seen = new Set(), out = [], add = (el) => { if (el && !seen.has(el)) { seen.add(el); out.push(el); } };
       if (typeof doc.querySelectorAll === 'function') {
         try {
-          const bySel = doc.querySelectorAll('#' + BAR_ID + ', [data-ag-pulse-bar="true"]');
-          for (let i = 0; i < bySel.length; i++) add(bySel[i]);
-          const divs = doc.querySelectorAll('div');
-          for (let i = 0; i < divs.length; i++) {
-            const id = String(divs[i]?.getAttribute?.('id') || divs[i]?.id || '');
-            if (id.startsWith(BAR_ID)) add(divs[i]);
+          const s = doc.querySelectorAll('#' + BAR_ID + ', [data-ag-pulse-bar="true"]');
+          for (let i = 0; i < s.length; i++) add(s[i]);
+          const ds = doc.querySelectorAll('div');
+          for (let i = 0; i < ds.length; i++) {
+            const id = String(ds[i]?.getAttribute?.('id') || ds[i]?.id || '');
+            if (id.startsWith(BAR_ID)) add(ds[i]);
           }
         } catch {}
       }
-      if (typeof doc.getElementById === 'function') {
-        add(doc.getElementById(BAR_ID));
-      }
+      if (typeof doc.getElementById === 'function') add(doc.getElementById(BAR_ID));
       return out;
-    }
+    };
 
-    function findExistingBar(doc) {
-      const all = findAllPulseBars(doc);
-      for (let i = 0; i < all.length; i++) {
-        if (all[i].getAttribute?.(FALLBACK_ATTR) !== '1') return all[i];
-      }
-      return all.length > 0 ? all[0] : null;
-    }
-
-    function purgeOrphanFallbacks(doc, keepEl = null) {
+    const purgeOrphans = (doc, keep = null) => {
       if (!doc || typeof doc.querySelectorAll !== 'function') return;
-      const orphans = doc.querySelectorAll('[' + FALLBACK_ATTR + '="1"]');
-      for (let i = 0; i < orphans.length; i++) {
-        if (orphans[i] !== keepEl) {
-          try {
-            orphans[i].remove();
-          } catch {}
-        }
+      const list = doc.querySelectorAll('[' + FALLBACK_ATTR + '="1"], #' + PRISM_BAR_ID + ', [' + PRISM_BAR_ATTR + '="true"]');
+      for (let i = 0; i < list.length; i++) {
+        if (list[i] !== keep) try { list[i].remove(); } catch {}
       }
-    }
+    };
 
-    function isNodeConnected(doc, el) {
-      if (!el) return false;
-      if (el.isConnected === false) return false;
+    const isConn = (doc, el) => {
+      if (!el || el.isConnected === false) return false;
       if (el.isConnected === true) return true;
       if (!el.parentNode && !el.parentElement) return false;
       if (doc && typeof doc.getElementById === 'function' && el.id && typeof doc.querySelectorAll !== 'function') {
-        const byId = doc.getElementById(el.id);
-        if (byId && byId !== el) return false;
+        const b = doc.getElementById(el.id);
+        if (b && b !== el) return false;
       }
       return true;
-    }
+    };
 
-    function hasExternalPulse() {
-      const win = getWin();
-      const doc = getDoc();
-      if (!win || !doc) return false;
-      const allBars = findAllPulseBars(doc);
-      for (let i = 0; i < allBars.length; i++) {
-        const b = allBars[i];
-        if (b && b.getAttribute?.(FALLBACK_ATTR) !== '1' && isNodeConnected(doc, b)) {
-          externalDetachedAt = 0;
-          return true;
-        }
+    const usableExt = (doc, b) => {
+      if (!b || b.getAttribute?.(FALLBACK_ATTR) === '1' || !isConn(doc, b)) return false;
+      if (b.getAttribute?.(HID_ATTR) === '1' || b.getAttribute?.('data-layout') === 'blocked' || b.hidden === true) return false;
+      if (b.style && b.style.display === 'none') return false;
+      if (doc && doc.body && (b.parentElement === doc.body || b.parentNode === doc.body)) return false;
+      return true;
+    };
+
+    const hasExt = () => {
+      const w = gW(), doc = gD();
+      if (!w || !doc) return false;
+      const bars = findExtBars(doc);
+      let sawDead = false;
+      for (let i = 0; i < bars.length; i++) {
+        const b = bars[i];
+        if (!b || b.getAttribute?.(FALLBACK_ATTR) === '1' || !isConn(doc, b) || b.getAttribute?.(HID_ATTR) === '1') continue;
+        if (usableExt(doc, b)) { detAt = 0; return true; }
+        sawDead = true;
       }
-      const extSig = [
-        win.__agPulseRuntimeOwner ? String(win.__agPulseRuntimeOwner) : '',
-        win.__agPulseRuntimeBridge ? 'bridge' : '',
-        win.__agPulseInlineInstalled ? '1' : '',
-        win.agPulseHost && !win.agPulseHost.__prismFallback ? 'host' : '',
+      if (sawDead) return false;
+      const sig = [
+        w.__agPulseRuntimeOwner ? String(w.__agPulseRuntimeOwner) : '',
+        w.__agPulseRuntimeBridge ? 'b' : '',
+        w.__agPulseInlineInstalled ? '1' : '',
+        w.agPulseHost && !w.agPulseHost.__prismFallback ? 'h' : '',
       ].join('|');
-      if (extSig !== '|||') {
+      if (sig !== '|||') {
         const now = Date.now();
-        if (extSig !== lastExternalSig) {
-          lastExternalSig = extSig;
-          externalDetachedAt = now;
-          return true;
-        }
-        if (!externalDetachedAt) externalDetachedAt = now;
-        if (now - externalDetachedAt < EXTERNAL_RESCUE_GRACE_MS) {
-          return true;
-        }
-        // External globals lingered >3.5s without any connected #ag-pulse-status-bar:
-        // allow Prism's built-in Dashboard to self-heal and rescue the toolbar.
-        return false;
+        if (sig !== lastSig) { lastSig = sig; detAt = now; return true; }
+        if (!detAt) detAt = now;
+        return now - detAt < GRACE_MS;
       }
-      lastExternalSig = '';
-      externalDetachedAt = 0;
+      lastSig = '';
+      detAt = 0;
       return false;
-    }
+    };
 
-    function restoreExternalVisibility() {
-      const doc = getDoc();
-      const bars = findAllPulseBars(doc);
+    const showExt = () => {
+      const bars = findExtBars(gD());
       for (let i = 0; i < bars.length; i++) {
-        const existing = bars[i];
-        if (existing && existing.getAttribute?.(HIDDEN_BY_PRISM_ATTR) === '1') {
-          existing.removeAttribute(HIDDEN_BY_PRISM_ATTR);
-          if (existing.style && typeof existing.style.removeProperty === 'function') {
-            existing.style.removeProperty('display');
-          }
+        const b = bars[i];
+        if (b && b.getAttribute?.(HID_ATTR) === '1') {
+          b.removeAttribute(HID_ATTR);
+          b.style?.removeProperty?.('display');
         }
       }
-    }
+    };
 
-    function hideExternalBarIfPresent() {
-      const doc = getDoc();
-      const bars = findAllPulseBars(doc);
+    const hideExt = () => {
+      const bars = findExtBars(gD());
       for (let i = 0; i < bars.length; i++) {
-        const existing = bars[i];
-        if (existing && existing.getAttribute?.(FALLBACK_ATTR) !== '1') {
-          existing.setAttribute(HIDDEN_BY_PRISM_ATTR, '1');
-          if (existing.style && typeof existing.style.setProperty === 'function') {
-            existing.style.setProperty('display', 'none', 'important');
-          }
+        const b = bars[i];
+        if (b && b.getAttribute?.(FALLBACK_ATTR) !== '1') {
+          b.setAttribute(HID_ATTR, '1');
+          b.style?.setProperty?.('display', 'none', 'important');
         }
       }
-    }
+    };
 
-    function removeDataHostBridge() {
-      const win = getWin();
-      if (installedHostBridge && win && win.agPulseHost && win.agPulseHost.__prismFallback) {
-        delete win.agPulseHost;
+    const ensBridge = () => {
+      const w = gW();
+      if (!w) return;
+      bindHook();
+      if (!mApi) {
+        mApi = { __prismOwned: true, getMetrics: (inp) => reqSnap(inp), getLatestSnapshot: () => lastSnap };
       }
-      installedHostBridge = false;
-    }
+      w.__agPrismMetricsBridge = mApi;
+    };
 
-    function ensureDataHostBridge() {
-      const win = getWin();
-      if (!win) return;
-      resolveMetricsBindingHook();
-      if (!win.agPulseHost || typeof win.agPulseHost.getMetrics !== 'function') {
-        win.agPulseHost = {
+    const rmHost = () => {
+      const w = gW();
+      if (hasHost && w?.agPulseHost?.__prismFallback) delete w.agPulseHost;
+      hasHost = false;
+    };
+
+    const ensHost = () => {
+      const w = gW();
+      if (!w) return;
+      ensBridge();
+      if (!w.agPulseHost || typeof w.agPulseHost.getMetrics !== 'function') {
+        w.agPulseHost = {
           __prismFallback: true,
-          getMetrics: (input) => requestMetricsSnapshot(input),
-          getLatestSnapshot: () => lastSnapshot,
+          getMetrics: (inp) => reqSnap(inp),
+          getLatestSnapshot: () => lastSnap,
           getPreferences: () => Promise.resolve({ language: 'zh-CN' }),
           setPreferences: (v) => Promise.resolve(v || {}),
           report: () => {},
         };
-        installedHostBridge = true;
+        hasHost = true;
       }
-    }
+    };
 
-    function unmountFallback(keepDataBridge = false) {
-      clearWaitTimer();
-      clearPollTimer();
-      if (docClickCleanup) {
-        try { docClickCleanup(); } catch {}
-        docClickCleanup = null;
+    const unmountFb = (keepBridge = false) => {
+      clrWait();
+      clrPoll();
+      clrSeat();
+      if (docOff) { try { docOff(); } catch {} docOff = null; }
+      if (!keepBridge) {
+        for (const it of pend.values()) { clearTimeout(it.timer); it.resolve(null); }
+        pend.clear();
+        rmHost();
       }
-      if (!keepDataBridge) {
-        for (const item of pendingReqs.values()) {
-          clearTimeout(item.timer);
-          item.resolve(null);
-        }
-        pendingReqs.clear();
-        removeDataHostBridge();
+      if (fbEl) {
+        try { gW()?.__agPulseExternalBridge?.({ event: 'dispose' }); } catch {}
+        try { fbEl.remove(); } catch {}
       }
+      purgeOrphans(gD(), null);
+      fbEl = null;
+      srEl = null;
+    };
 
-      const win = getWin();
-
-      if (fallbackHostEl) {
-        try {
-          win?.__agPulseExternalBridge?.({ event: 'dispose' });
-        } catch {}
-        try {
-          fallbackHostEl.remove();
-        } catch {}
-      }
-      purgeOrphanFallbacks(getDoc(), null);
-      fallbackHostEl = null;
-      shadowRoot = null;
-    }
-
-    function mk(doc, tag, attrs, children) {
-      const el = doc.createElement(tag);
-      if (attrs) {
-        for (const [k, v] of Object.entries(attrs)) {
-          if (v === undefined || v === null) continue;
-          if (k === 'text') el.textContent = String(v);
-          else if (k === 'className') el.className = String(v);
-          else if (k === 'hidden') el.hidden = Boolean(v);
-          else el.setAttribute(k, String(v));
-        }
-      }
-      if (Array.isArray(children)) {
-        for (const ch of children) {
-          if (ch) el.appendChild(ch);
-        }
-      }
-      return el;
-    }
-
-    function detectConversationId(hostNode) {
-      const win = getWin();
+    const detCid = (node) => {
       try {
-        const cascadeEl = hostNode?.closest?.('[data-cascade-id]');
-        const cid = cascadeEl?.getAttribute?.('data-cascade-id');
+        const cid = node?.closest?.('[data-cascade-id]')?.getAttribute?.('data-cascade-id');
         if (cid && GUID_RE.test(cid)) return cid;
-        const m = win?.location?.pathname?.match?.(/\/c\/([0-9a-f-]{36})/i);
+        const m = gW()?.location?.pathname?.match?.(/\/c\/([0-9a-f-]{36})/i);
         return m ? m[1] : null;
-      } catch {
-        return null;
-      }
-    }
+      } catch { return null; }
+    };
 
-    let cachedLocalSnap = null;
-    let cachedLocalSnapAt = 0;
-
-    function estimateLocalSnapshot() {
+    const estSnap = () => {
       const now = Date.now();
-      if (cachedLocalSnap && now - cachedLocalSnapAt < 5000) {
-        return cachedLocalSnap;
-      }
-      const doc = getDoc();
-      let model = 'Gemini 4';
-      let charCount = 0;
+      if (locSnap && now - locAt < 5000) return locSnap;
+      const doc = gD();
+      let model = 'Gemini 4', chars = 0;
       try {
-        const trigger = doc?.querySelector?.('[data-testid="model-selector-trigger"]');
-        const label = trigger?.getAttribute?.('aria-label') || trigger?.textContent?.trim();
-        if (label) model = label;
-        const view = doc?.querySelector?.('[data-testid="conversation-view"]');
-        if (view && typeof view.querySelectorAll === 'function') {
-          const turns = view.querySelectorAll('[data-testid="planner-response-text"], [data-testid="user-message-bubble"]');
-          if (turns && turns.length > 0) {
-            const sampleCount = Math.min(4, turns.length);
-            let sampleChars = 0;
-            for (let i = turns.length - sampleCount; i < turns.length; i++) {
-              sampleChars += (turns[i].textContent || '').length;
-            }
-            charCount = Math.round((sampleChars / sampleCount) * turns.length);
+        const tr = doc?.querySelector?.('[data-testid="model-selector-trigger"]');
+        const lb = tr?.getAttribute?.('aria-label') || tr?.textContent?.trim();
+        if (lb) model = lb;
+        const vw = doc?.querySelector?.('[data-testid="conversation-view"]');
+        if (vw && typeof vw.querySelectorAll === 'function') {
+          const ts = vw.querySelectorAll('[data-testid="planner-response-text"], [data-testid="user-message-bubble"]');
+          if (ts?.length > 0) {
+            const n = Math.min(4, ts.length);
+            let s = 0;
+            for (let i = ts.length - n; i < ts.length; i++) s += (ts[i].textContent || '').length;
+            chars = Math.round((s / n) * ts.length);
           }
-        } else if (view && typeof view.textContent === 'string') {
-          charCount = view.textContent.length;
-        }
+        } else if (typeof vw?.textContent === 'string') chars = vw.textContent.length;
       } catch {}
-      const maxTokens = 512000;
-      const usedTokens = Math.max(4200, Math.min(maxTokens, Math.round(charCount / 3.2) + 8400));
+      const maxTokens = 512000, usedTokens = Math.max(4200, Math.min(maxTokens, Math.round(chars / 3.2) + 8400));
       const usedFraction = Math.min(0.98, usedTokens / maxTokens);
-      cachedLocalSnapAt = now;
-      cachedLocalSnap = {
+      locAt = now;
+      locSnap = {
         connection: 'local-estimate',
-        speed: {
-          model,
-          tps: null,
-          latestTps: null,
-          ttftSeconds: null,
-          rounds: 0,
-          cacheHitRate: null,
-          totalTokens: usedTokens,
-          context: {
-            model,
-            usedTokens,
-            maxTokens,
-            usedFraction,
-            sampledAt: now,
-          },
-        },
+        speed: { model, tps: null, latestTps: null, ttftSeconds: null, rounds: 0, cacheHitRate: null, totalTokens: usedTokens, context: { model, usedTokens, maxTokens, usedFraction, sampledAt: now } },
         groups: [],
       };
-      return cachedLocalSnap;
-    }
+      return locSnap;
+    };
 
-    function requestMetricsSnapshot(input) {
-      const win = getWin();
-      resolveMetricsBindingHook();
-      // Strip usageSync unless explicitly demanded to keep toolbar polling zero-jank
-      const safeInput = input && typeof input === 'object' ? { ...input } : {};
-      if (safeInput.usageSync) delete safeInput.usageSync;
-      if (win && typeof win[METRICS_BINDING] === 'function') {
+    const reqSnap = (inp) => {
+      const w = gW();
+      bindHook();
+      const si = inp && typeof inp === 'object' ? { ...inp } : {};
+      if (si.usageSync) delete si.usageSync;
+      if (w && typeof w[METRICS_BINDING] === 'function') {
         return new Promise((resolve) => {
-          if (pendingReqs.size >= 6) {
-            resolve(lastSnapshot || estimateLocalSnapshot());
-            return;
-          }
+          if (pend.size >= 6) { resolve(lastSnap || estSnap()); return; }
           const id = ++reqSeq;
-          const timer = setTimeout(() => {
-            pendingReqs.delete(id);
-            resolve(lastSnapshot || estimateLocalSnapshot());
-          }, 3500);
-          pendingReqs.set(id, { resolve, timer });
+          const timer = setTimeout(() => { pend.delete(id); resolve(lastSnap || estSnap()); }, 3500);
+          pend.set(id, { resolve, timer });
           try {
-            win[METRICS_BINDING](JSON.stringify({ id, input: safeInput }));
+            w[METRICS_BINDING](JSON.stringify({ id, input: si }));
           } catch {
             clearTimeout(timer);
-            pendingReqs.delete(id);
-            resolve(lastSnapshot || estimateLocalSnapshot());
+            pend.delete(id);
+            resolve(lastSnap || estSnap());
           }
         });
       }
-      return Promise.resolve(estimateLocalSnapshot());
-    }
+      return Promise.resolve(estSnap());
+    };
 
-    const FB_I18N = {
-      'zh-CN': {
-        cache: '缓存', speedHeading: '吞吐速率', ttft: '首字延迟', latestRate: '最近速率',
-        ctxHeading: '上下文窗口用量', curModel: '当前模型',
-        noteSync: 'Prism 实时遥测同步', noteProc: 'Prism 实时遥测同步 · 后台统计整编中', noteLocal: 'Prism 本地上下文估算',
-        summary: (p, r) => `${p}% 已用 · ${r}% 剩余`, agents: (n) => `· ${n}代理`,
-      },
-      'zh-TW': {
-        cache: '快取', speedHeading: '吞吐速率', ttft: '首字延遲', latestRate: '最近速率',
-        ctxHeading: '上下文視窗用量', curModel: '目前模型',
-        noteSync: 'Prism 即時遙測同步', noteProc: 'Prism 即時遙測同步 · 背景統計彙整中', noteLocal: 'Prism 本機上下文估算',
-        summary: (p, r) => `${p}% 已用 · ${r}% 剩餘`, agents: (n) => `· ${n}代理`,
-      },
-      yue: {
-        cache: '快取', speedHeading: '吞吐速率', ttft: '首字延遲', latestRate: '最近速率',
-        ctxHeading: '上下文視窗用量', curModel: '目前模型',
-        noteSync: 'Prism 即時遙測同步', noteProc: 'Prism 即時遙測同步 · 背景統計整理中', noteLocal: 'Prism 本機上下文估算',
-        summary: (p, r) => `${p}% 已用 · ${r}% 剩低`, agents: (n) => `· ${n}代理`,
-      },
-      en: {
-        cache: 'Cache', speedHeading: 'Throughput', ttft: 'TTFT', latestRate: 'Latest Rate',
-        ctxHeading: 'Context Window', curModel: 'Active Model',
-        noteSync: 'Prism live telemetry', noteProc: 'Prism live telemetry · Indexing usage', noteLocal: 'Prism local context estimate',
-        summary: (p, r) => `${p}% used · ${r}% free`, agents: (n) => `· ${n} sub`,
-      },
-      ja: {
-        cache: 'キャッシュ', speedHeading: 'スループット', ttft: '初回応答', latestRate: '最新速度',
-        ctxHeading: 'コンテキスト使用量', curModel: '現在のモデル',
-        noteSync: 'Prism リアルタイム同期', noteProc: 'Prism 同期中 · バックグラウンド集計中', noteLocal: 'Prism ローカル推定',
-        summary: (p, r) => `${p}% 使用 · ${r}% 残り`, agents: (n) => `· ${n} sub`,
-      },
-    };
-    let explicitLang = '';
-    const getFbStrings = () => {
-      const docLang = getDoc()?.documentElement?.getAttribute?.('data-ag-cs-lang') || '';
-      const key = docLang || explicitLang || 'zh-CN';
-      return FB_I18N[key] || FB_I18N['zh-CN'];
-    };
-    const syncFallbackLabels = () => {
-      if (!shadowRoot) return;
-      const t = getFbStrings();
-      const nodes = shadowRoot.querySelectorAll?.('[data-fb-i18n]') || [];
-      for (let i = 0; i < nodes.length; i++) {
-        const k = nodes[i].getAttribute('data-fb-i18n');
-        if (k && typeof t[k] === 'string' && nodes[i].textContent !== t[k]) {
-          nodes[i].textContent = t[k];
-        }
+    const gStr = () => FB_I18N[gD()?.documentElement?.getAttribute?.('data-ag-cs-lang') || expLang || 'zh-CN'] || FB_I18N['zh-CN'];
+    const syncLbls = () => {
+      if (!srEl) return;
+      const t = gStr(), ns = srEl.querySelectorAll?.('[data-fb-i18n]') || [];
+      for (let i = 0; i < ns.length; i++) {
+        const k = ns[i].getAttribute('data-fb-i18n');
+        if (k && typeof t[k] === 'string' && ns[i].textContent !== t[k]) ns[i].textContent = t[k];
       }
     };
 
-    function fmtTok(n) {
-      if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return '—';
-      if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, '')}M`;
-      if (n >= 1e3) return `${Math.round(n / 1e3)}K`;
-      return String(Math.round(n));
-    }
-
-    function applySnapshotToDom(snap) {
-      if (snap && typeof snap === 'object') lastSnapshot = snap;
-      if (!shadowRoot || !fallbackHostEl) return;
-      const sp = snap?.speed || {};
-      const ctx = sp.context || {};
+    const applySnap = (snap) => {
+      if (snap && typeof snap === 'object') lastSnap = snap;
+      if (!srEl || !fbEl) return;
+      const sp = snap?.speed || {}, ctx = sp.context || {};
       const maxTok = ctx.maxTokens > 0 ? ctx.maxTokens : 512000;
-      const usedFrac =
-        typeof ctx.usedFraction === 'number' && Number.isFinite(ctx.usedFraction)
-          ? Math.max(0, Math.min(1, ctx.usedFraction))
-          : 0.04;
-      const usedTok =
-        typeof ctx.usedTokens === 'number' && Number.isFinite(ctx.usedTokens)
-          ? ctx.usedTokens
-          : Math.round(usedFrac * maxTok);
-      const pct = Math.round(usedFrac * 100);
-      const remPct = Math.max(0, 100 - pct);
+      const uf = isFin(ctx.usedFraction) ? Math.max(0, Math.min(1, ctx.usedFraction)) : 0.04;
+      const uTok = isFin(ctx.usedTokens) ? ctx.usedTokens : Math.round(uf * maxTok);
+      const pct = Math.round(uf * 100), rem = Math.max(0, 100 - pct);
       const model = ctx.model || sp.model || 'Antigravity Model';
+      const tot = sp.taskUsage?.total?.totalTokens ?? sp.tokens?.totalTokens ?? sp.cache?.totalTokens ?? sp.totalTokens ?? 0;
+      const hit = isFin(sp.cache?.hitRate) ? sp.cache.hitRate : sp.cacheHitRate;
+      const subs = Number(sp.taskUsage?.subagents || 0);
+      const proc = snap?.collection?.state === 'processing';
 
-      const totalTok =
-        sp.taskUsage?.total?.totalTokens ??
-        sp.tokens?.totalTokens ??
-        sp.cache?.totalTokens ??
-        sp.totalTokens ??
-        0;
-      const hitRate =
-        typeof sp.cache?.hitRate === 'number' && Number.isFinite(sp.cache.hitRate)
-          ? sp.cache.hitRate
-          : sp.cacheHitRate;
-      const subCount = Number(sp.taskUsage?.subagents || 0);
-      const isProcessing = snap?.collection?.state === 'processing';
+      if (proc) fbEl.setAttribute('data-collection', 'processing');
+      else fbEl.removeAttribute('data-collection');
 
-      if (isProcessing) fallbackHostEl.setAttribute('data-collection', 'processing');
-      else fallbackHostEl.removeAttribute('data-collection');
+      const t = gStr();
+      syncLbls();
+      const sT = (id, v) => { const e = srEl.getElementById(id), s = String(v); if (e && e.textContent !== s) e.textContent = s; };
+      sT('rounds', sp.rounds > 0 ? `${sp.rounds}r` : '—');
+      sT('tps', isFin(sp.tps) && sp.tps > 0 ? sp.tps.toFixed(1) : '—');
+      sT('cache-total', `${fmtTok(tot > 0 ? tot : uTok)} tok`);
+      sT('cache-rate', isFin(hit) ? `${(hit * 100).toFixed(1)}%` : '—');
 
-      const t = getFbStrings();
-      syncFallbackLabels();
-
-      const setTxt = (id, val) => {
-        const el = shadowRoot.getElementById(id);
-        if (el && el.textContent !== String(val)) el.textContent = String(val);
-      };
-
-      setTxt('rounds', sp.rounds > 0 ? `${sp.rounds}r` : '—');
-      setTxt('tps', typeof sp.tps === 'number' && sp.tps > 0 ? sp.tps.toFixed(1) : '—');
-      setTxt('cache-total', totalTok > 0 ? `${fmtTok(totalTok)} tok` : `${fmtTok(usedTok)} tok`);
-      setTxt(
-        'cache-rate',
-        typeof hitRate === 'number' && Number.isFinite(hitRate)
-          ? `${(hitRate * 100).toFixed(1)}%`
-          : '—'
-      );
-
-      const subBadge = shadowRoot.getElementById('subagent-badge');
-      if (subBadge) {
-        if (subCount > 0) {
-          subBadge.hidden = false;
-          const badgeTxt = t.agents(subCount);
-          if (subBadge.textContent !== badgeTxt) subBadge.textContent = badgeTxt;
-        } else {
-          subBadge.hidden = true;
-        }
+      const sb = srEl.getElementById('subagent-badge');
+      if (sb) {
+        if (subs > 0) {
+          sb.hidden = false;
+          const bt = t.agents(subs);
+          if (sb.textContent !== bt) sb.textContent = bt;
+        } else sb.hidden = true;
       }
 
-      setTxt('context-percent', `${pct}%`);
-      setTxt('ttft', typeof sp.ttftSeconds === 'number' ? `${sp.ttftSeconds.toFixed(2)}s` : '—');
-      setTxt('latest-rate', typeof sp.latestTps === 'number' ? `${sp.latestTps.toFixed(1)} tok/s` : '—');
-      setTxt('context-summary', t.summary(pct, remPct));
-      setTxt('context-tokens', `${fmtTok(usedTok)} / ${fmtTok(maxTok)} tok`);
-      setTxt('context-model', model);
-      setTxt(
-        'context-note',
-        snap?.connection === 'local-estimate'
-          ? t.noteLocal
-          : isProcessing
-          ? t.noteProc
-          : t.noteSync
-      );
+      sT('context-percent', `${pct}%`);
+      sT('ttft', typeof sp.ttftSeconds === 'number' ? `${sp.ttftSeconds.toFixed(2)}s` : '—');
+      sT('latest-rate', typeof sp.latestTps === 'number' ? `${sp.latestTps.toFixed(1)} tok/s` : '—');
+      sT('context-summary', t.summary(pct, rem));
+      sT('context-tokens', `${fmtTok(uTok)} / ${fmtTok(maxTok)} tok`);
+      sT('context-model', model);
+      sT('context-note', snap?.connection === 'local-estimate' ? t.noteLocal : proc ? t.noteProc : t.noteSync);
 
-      const fillEl = shadowRoot.getElementById('context-fill');
-      if (fillEl && fillEl.style) fillEl.style.width = `${pct}%`;
-      const ringEl = shadowRoot.getElementById('context-ring');
-      if (ringEl && ringEl.style) {
-        ringEl.style.setProperty('--used-angle', `${Math.round(usedFrac * 360)}deg`);
-      }
+      const fl = srEl.getElementById('context-fill');
+      if (fl?.style) fl.style.width = `${pct}%`;
+      const rg = srEl.getElementById('context-ring');
+      rg?.style?.setProperty?.('--used-angle', `${Math.round(uf * 360)}deg`);
+      try { gW()?.__agPulseExternalBridge?.({ event: 'render', data: snap }); } catch {}
+    };
 
-      try {
-        getWin()?.__agPulseExternalBridge?.({ event: 'render', data: snap });
-      } catch {}
-    }
+    const isHidAnc = (el) => !el || el.hidden === true || Boolean(el.closest?.('aside, [data-testid="conversation-list-sidebar"], [data-testid="conversation-row-sidebar"], [hidden], [inert]'));
+    const isTopWrap = (p) => {
+      if (!p) return true;
+      const c = String(p.className || '').trim();
+      return Boolean(c && /\bmin-w-0\b/.test(c) && !/\b(?:flex|inline-flex|agy-composer-footer)\b/.test(c));
+    };
+    const findAnchor = (doc) => {
+      if (!doc) return null;
+      const ft = doc.querySelector?.('.agy-composer-footer, [data-testid="input-box-bottom-toolbar"]');
+      if (ft && !isHidAnc(ft)) return ft;
+      const mb = doc.querySelector?.('[data-testid="model-selector-trigger"]');
+      return mb?.parentElement && !isHidAnc(mb) && !isTopWrap(mb.parentElement) ? mb.parentElement : null;
+    };
 
-    async function refreshMetrics() {
-      const win = getWin();
-      const doc = getDoc();
-      if (!envOpts && win && win.__agPrismTelemetry && win.__agPrismTelemetry !== controllerApi) {
-        unmountFallback();
-        return null;
+    const seatIn = (anc, el) => {
+      if (!anc || !el) return false;
+      const kids = anc.children || [];
+      if (/\bagy-composer-footer\b/.test(String(anc.className || '')) && kids.length >= 2 && typeof anc.insertBefore === 'function') {
+        const last = kids[kids.length - 1];
+        if (last && last !== el) { anc.insertBefore(el, last); return true; }
       }
-      if (hasExternalPulse()) {
-        yieldedToExternal = true;
-        unmountFallback();
-        return null;
+      anc.appendChild(el);
+      return true;
+    };
+
+    const seatFb = (doc) => {
+      if (!fbEl || !doc) return false;
+      const anc = findAnchor(doc);
+      if (!anc) { try { fbEl.remove(); } catch {} return false; }
+      if (!isConn(doc, fbEl) || fbEl.parentElement !== anc) {
+        try { seatIn(anc, fbEl); } catch { return false; }
       }
-      if (currentMode !== 'off' && fallbackHostEl) {
-        purgeOrphanFallbacks(doc, fallbackHostEl);
-        if (!ensureFallbackSeated(doc)) {
-          return null;
-        }
+      return true;
+    };
+
+    async function refresh() {
+      const w = gW(), doc = gD();
+      if (!envOpts && w?.__agPrismTelemetry && w.__agPrismTelemetry !== api) { unmountFb(); return null; }
+      if (mode === 'on') hideExt();
+      else if (hasExt()) { yielded = true; unmountFb(true); return null; }
+      if (mode !== 'off' && fbEl) {
+        purgeOrphans(doc, fbEl);
+        if (!seatFb(doc)) return null;
       }
-      if (!fallbackHostEl || !isNodeConnected(doc, fallbackHostEl)) {
-        if (currentMode !== 'off' && !hasExternalPulse() && waitTimer === null && findMountAnchor(doc)) {
-          mountFallbackNow();
-        }
-        if (!fallbackHostEl || !isNodeConnected(doc, fallbackHostEl)) return null;
+      if (!fbEl || !isConn(doc, fbEl)) {
+        if (mode !== 'off' && (mode === 'on' || !hasExt()) && waitTm === null && findAnchor(doc)) mountFb();
+        if (!fbEl || !isConn(doc, fbEl)) return null;
       }
-      const cid = detectConversationId(fallbackHostEl);
-      const snap = await requestMetricsSnapshot({ conversationId: cid, force: false });
-      applySnapshotToDom(snap);
+      const snap = await reqSnap({ conversationId: detCid(fbEl), force: false });
+      applySnap(snap);
       return snap;
     }
 
-    function isSidebarOrHiddenNode(el) {
-      if (!el) return true;
-      if (el.hidden === true) return true;
-      if (typeof el.closest === 'function') {
-        if (
-          el.closest(
-            'aside, [data-testid="conversation-list-sidebar"], [data-testid="conversation-row-sidebar"], [hidden], [inert]'
-          )
-        ) {
-          return true;
-        }
-      }
-      return false;
-    }
+    function mountFb() {
+      const w = gW(), doc = gD();
+      if (!w || !doc || (typeof doc.attachShadow === 'undefined' && typeof doc.createElement !== 'function')) return false;
+      if (!envOpts && w.__agPrismTelemetry && w.__agPrismTelemetry !== api) { unmountFb(); return false; }
+      if (mode === 'off') return false;
+      if (mode === 'on') hideExt();
+      else if (hasExt()) { yielded = true; unmountFb(true); return false; }
+      if (fbEl && seatFb(doc)) { purgeOrphans(doc, fbEl); return true; }
 
-    function isTopLeftBlockModelWrapper(parentEl) {
-      if (!parentEl) return true;
-      const cls = String(parentEl.className || '').trim();
-      if (!cls) return false;
-      return /\bmin-w-0\b/.test(cls) && !/\b(?:flex|inline-flex|agy-composer-footer)\b/.test(cls);
-    }
-
-    function findPreferredToolbarAnchor(doc) {
-      const footer = doc?.querySelector?.('.agy-composer-footer, [data-testid="input-box-bottom-toolbar"]');
-      if (footer && !isSidebarOrHiddenNode(footer)) return footer;
-      const modelBtn = doc?.querySelector?.('[data-testid="model-selector-trigger"]');
-      if (
-        modelBtn &&
-        modelBtn.parentElement &&
-        !isSidebarOrHiddenNode(modelBtn) &&
-        !isTopLeftBlockModelWrapper(modelBtn.parentElement)
-      ) {
-        return modelBtn.parentElement;
-      }
-      return null;
-    }
-
-    function findMountAnchor(doc) {
-      if (!doc) return null;
-      return findPreferredToolbarAnchor(doc);
-    }
-
-    function ensureFallbackSeated(doc) {
-      if (!fallbackHostEl || !doc) return false;
-      const anchor = findMountAnchor(doc);
-      if (!anchor) {
-        try {
-          fallbackHostEl.remove();
-        } catch {}
-        return false;
-      }
-      if (!isNodeConnected(doc, fallbackHostEl) || fallbackHostEl.parentElement !== anchor) {
-        try {
-          anchor.appendChild(fallbackHostEl);
-        } catch {
-          return false;
-        }
-      }
-      return true;
-    }
-
-    function mountFallbackNow() {
-      const win = getWin();
-      const doc = getDoc();
-      if (!win || !doc || (typeof doc.attachShadow === 'undefined' && typeof doc.createElement !== 'function')) return false;
-      if (!envOpts && win.__agPrismTelemetry && win.__agPrismTelemetry !== controllerApi) {
-        unmountFallback();
-        return false;
-      }
-      if (currentMode === 'off') return false;
-      if (hasExternalPulse()) {
-        yieldedToExternal = true;
-        unmountFallback();
-        return false;
-      }
-      if (fallbackHostEl && ensureFallbackSeated(doc)) {
-        purgeOrphanFallbacks(doc, fallbackHostEl);
-        return true;
-      }
-
-      const anchor = findMountAnchor(doc);
-      if (!anchor) return false;
-
-      const host = mk(doc, 'div', { id: BAR_ID, [FALLBACK_ATTR]: '1', 'data-ag-pulse-bar': 'true' });
+      const anc = findAnchor(doc);
+      if (!anc) return false;
+      const E = (t, a, k) => mk(doc, t, a, k);
+      const host = E('div', { id: PRISM_BAR_ID, [FALLBACK_ATTR]: '1', [PRISM_BAR_ATTR]: 'true' });
       if (typeof host.attachShadow !== 'function') return false;
       const sr = host.attachShadow({ mode: 'open' });
-      sr.appendChild(mk(doc, 'style', { text: FALLBACK_SHADOW_CSS }));
+      sr.appendChild(E('style', { text: SHADOW_CSS }));
 
-      const tInit = getFbStrings();
-      const speedChip = mk(doc, 'button', { type: 'button', className: 'chip', 'data-card': 'speed' }, [
-        mk(doc, 'span', { className: 'rounds dim', id: 'rounds', text: '—' }),
-        mk(doc, 'strong', { id: 'tps', text: '—' }),
-        mk(doc, 'span', { className: 'dim', text: 'tok/s' }),
+      const t0 = gStr();
+      const sChip = E('button', { type: 'button', cls: 'chip', 'data-card': 'speed' }, [
+        E('span', { cls: 'rounds dim', id: 'rounds', text: '—' }),
+        E('strong', { id: 'tps', text: '—' }),
+        E('span', { cls: 'dim', text: 'tok/s' }),
       ]);
-      const cacheChip = mk(doc, 'button', { type: 'button', className: 'chip', 'data-card': 'cache' }, [
-        mk(doc, 'span', { className: 'cache-total', id: 'cache-total', text: '—' }),
-        mk(doc, 'span', { className: 'sub-badge', id: 'subagent-badge', hidden: true, text: '' }),
-        mk(doc, 'span', { className: 'dim', text: '·' }),
-        mk(doc, 'span', { 'data-i18n': 'cache', 'data-fb-i18n': 'cache', text: tInit.cache }),
-        mk(doc, 'strong', { id: 'cache-rate', text: '—' }),
+      const cChip = E('button', { type: 'button', cls: 'chip', 'data-card': 'cache' }, [
+        E('span', { cls: 'cache-total', id: 'cache-total', text: '—' }),
+        E('span', { cls: 'sub-badge', id: 'subagent-badge', hidden: true, text: '' }),
+        E('span', { cls: 'dim', text: '·' }),
+        E('span', { 'data-i18n': 'cache', 'data-fb-i18n': 'cache', text: t0.cache }),
+        E('strong', { id: 'cache-rate', text: '—' }),
       ]);
-      const ctxChip = mk(
-        doc,
-        'button',
-        { type: 'button', className: 'chip', 'data-card': 'context', 'aria-expanded': 'false' },
-        [
-          mk(doc, 'span', { className: 'context-ring', id: 'context-ring' }),
-          mk(doc, 'span', { className: 'context-label dim', 'data-i18n': 'contextShort', text: 'Ctx' }),
-          mk(doc, 'strong', { id: 'context-percent', text: '0%' }),
-        ]
-      );
-
-      const bar = mk(doc, 'div', { className: 'bar' }, [speedChip, cacheChip, ctxChip]);
-      const speedCard = mk(doc, 'section', { className: 'card', id: 'speed-card', hidden: true }, [
-        mk(doc, 'div', { className: 'heading' }, [mk(doc, 'span', { 'data-fb-i18n': 'speedHeading', text: tInit.speedHeading })]),
-        mk(doc, 'dl', null, [
-          mk(doc, 'dt', { 'data-fb-i18n': 'ttft', text: tInit.ttft }),
-          mk(doc, 'dd', { id: 'ttft', text: '—' }),
-          mk(doc, 'dt', { 'data-fb-i18n': 'latestRate', text: tInit.latestRate }),
-          mk(doc, 'dd', { id: 'latest-rate', text: '—' }),
+      const xChip = E('button', { type: 'button', cls: 'chip', 'data-card': 'context', 'aria-expanded': 'false' }, [
+        E('span', { cls: 'context-ring', id: 'context-ring' }),
+        E('span', { cls: 'context-label dim', 'data-i18n': 'contextShort', text: 'Ctx' }),
+        E('strong', { id: 'context-percent', text: '0%' }),
+      ]);
+      const sCard = E('section', { cls: 'card', id: 'speed-card', hidden: true }, [
+        E('div', { cls: 'heading' }, [E('span', { 'data-fb-i18n': 'speedHeading', text: t0.speedHeading })]),
+        E('dl', null, [
+          E('dt', { 'data-fb-i18n': 'ttft', text: t0.ttft }),
+          E('dd', { id: 'ttft', text: '—' }),
+          E('dt', { 'data-fb-i18n': 'latestRate', text: t0.latestRate }),
+          E('dd', { id: 'latest-rate', text: '—' }),
         ]),
       ]);
-
-      const fillEl = mk(doc, 'i', { id: 'context-fill' });
-      const trackEl = mk(doc, 'div', { className: 'track', id: 'context-track' }, [fillEl]);
-      const ctxCard = mk(doc, 'section', { className: 'card context-card', id: 'context-card', hidden: true }, [
-        mk(doc, 'div', { className: 'heading' }, [mk(doc, 'span', { 'data-fb-i18n': 'ctxHeading', text: tInit.ctxHeading })]),
-        mk(doc, 'strong', { id: 'context-summary', text: tInit.summary(0, 100) }),
-        mk(doc, 'p', { id: 'context-tokens', text: '— / 512K tok' }),
-        trackEl,
-        mk(doc, 'dl', null, [
-          mk(doc, 'dt', { 'data-fb-i18n': 'curModel', text: tInit.curModel }),
-          mk(doc, 'dd', { id: 'context-model', text: '—' }),
+      const xCard = E('section', { cls: 'card context-card', id: 'context-card', hidden: true }, [
+        E('div', { cls: 'heading' }, [E('span', { 'data-fb-i18n': 'ctxHeading', text: t0.ctxHeading })]),
+        E('strong', { id: 'context-summary', text: t0.summary(0, 100) }),
+        E('p', { id: 'context-tokens', text: '— / 512K tok' }),
+        E('div', { cls: 'track', id: 'context-track' }, [E('i', { id: 'context-fill' })]),
+        E('dl', null, [
+          E('dt', { 'data-fb-i18n': 'curModel', text: t0.curModel }),
+          E('dd', { id: 'context-model', text: '—' }),
         ]),
-        mk(doc, 'p', { className: 'footnote', id: 'context-note', text: tInit.noteSync }),
+        E('p', { cls: 'footnote', id: 'context-note', text: t0.noteSync }),
       ]);
 
-      sr.appendChild(bar);
-      sr.appendChild(speedCard);
-      sr.appendChild(ctxCard);
+      sr.appendChild(E('div', { cls: 'bar' }, [sChip, cChip, xChip]));
+      sr.appendChild(sCard);
+      sr.appendChild(xCard);
 
-      const toggleCard = (targetCard, triggerBtn) => {
-        const nextOpen = Boolean(targetCard.hidden);
-        speedCard.hidden = true;
-        ctxCard.hidden = true;
-        speedChip.setAttribute('aria-expanded', 'false');
-        ctxChip.setAttribute('aria-expanded', 'false');
-        targetCard.hidden = !nextOpen;
-        triggerBtn.setAttribute('aria-expanded', String(nextOpen));
-        if (nextOpen) void refreshMetrics();
-        try {
-          win.__agPulseExternalBridge?.({ event: 'card' });
-        } catch {}
+      const tog = (card, btn) => {
+        const nx = Boolean(card.hidden);
+        sCard.hidden = xCard.hidden = true;
+        sChip.setAttribute('aria-expanded', 'false');
+        xChip.setAttribute('aria-expanded', 'false');
+        card.hidden = !nx;
+        btn.setAttribute('aria-expanded', String(nx));
+        if (nx) void refresh();
+        try { w.__agPulseExternalBridge?.({ event: 'card' }); } catch {}
       };
-
-      ctxChip.addEventListener('click', (e) => {
-        e?.stopPropagation?.();
-        toggleCard(ctxCard, ctxChip);
-      });
-      speedChip.addEventListener('click', (e) => {
-        e?.stopPropagation?.();
-        toggleCard(speedCard, speedChip);
-      });
+      xChip.addEventListener('click', (e) => { e?.stopPropagation?.(); tog(xCard, xChip); });
+      sChip.addEventListener('click', (e) => { e?.stopPropagation?.(); tog(sCard, sChip); });
 
       if (typeof doc.addEventListener === 'function') {
-        const onDocClick = (ev) => {
+        const onDoc = (ev) => {
           if (ev?.target === host || host.contains?.(ev?.target)) return;
-          if (!ctxCard.hidden || !speedCard.hidden) {
-            ctxCard.hidden = true;
-            speedCard.hidden = true;
-            ctxChip.setAttribute('aria-expanded', 'false');
-            speedChip.setAttribute('aria-expanded', 'false');
-            try { win.__agPulseExternalBridge?.({ event: 'card' }); } catch {}
+          if (!xCard.hidden || !sCard.hidden) {
+            xCard.hidden = sCard.hidden = true;
+            xChip.setAttribute('aria-expanded', 'false');
+            sChip.setAttribute('aria-expanded', 'false');
+            try { w.__agPulseExternalBridge?.({ event: 'card' }); } catch {}
           }
         };
-        doc.addEventListener('click', onDocClick);
-        docClickCleanup = () => doc.removeEventListener('click', onDocClick);
+        doc.addEventListener('click', onDoc);
+        docOff = () => doc.removeEventListener('click', onDoc);
       }
 
-      purgeOrphanFallbacks(doc, null);
-      anchor.appendChild(host);
-      fallbackHostEl = host;
-      shadowRoot = sr;
-      yieldedToExternal = false;
+      purgeOrphans(doc, null);
+      seatIn(anc, host);
+      fbEl = host;
+      srEl = sr;
+      yielded = false;
 
-      ensureDataHostBridge();
+      clrSeat();
+      if (typeof w.MutationObserver === 'function') {
+        seatObs = new w.MutationObserver(() => {
+          if (mode === 'off' || !fbEl || healTm !== null) return;
+          const det = !isConn(doc, fbEl);
+          const unh = mode === 'on' && findExtBars(doc).some((b) => b && b.getAttribute?.(FALLBACK_ATTR) !== '1' && b.getAttribute?.(HID_ATTR) !== '1');
+          if (!det && !unh) return;
+          healTm = setTimeout(() => {
+            healTm = null;
+            if (mode === 'off' || !fbEl) return;
+            if (mode === 'on') hideExt();
+            else if (hasExt()) return;
+            if (!isConn(doc, fbEl) && seatFb(doc)) {
+              try { w.__agPulseExternalBridge?.({ event: 'mount' }); } catch {}
+            }
+          }, 45);
+          healTm?.unref?.();
+        });
+        try { seatObs.observe(doc.body || anc, { childList: true, subtree: Boolean(doc.body) }); } catch {}
+      }
 
-      void refreshMetrics();
-      clearPollTimer();
-      pollTimer = setInterval(() => {
-        if (doc.hidden) return;
-        void refreshMetrics();
-      }, 4000);
-      if (pollTimer && typeof pollTimer.unref === 'function') pollTimer.unref();
-
+      ensHost();
+      try { w.__agPulseExternalBridge?.({ event: 'mount' }); } catch {}
+      void refresh();
+      clrPoll();
+      pollTm = setInterval(() => { if (!doc.hidden) void refresh(); }, 4000);
+      pollTm?.unref?.();
       return true;
     }
 
+    const getState = () => ({
+      mode,
+      mountedFallback: Boolean(fbEl && isConn(gD(), fbEl)),
+      waitingForExternal: waitTm !== null,
+      yieldedToExternal: Boolean(mode === 'auto' && (yielded || hasExt())),
+      hasExternal: hasExt(),
+    });
+
     function sync(cfg) {
-      if (cfg && typeof cfg.language === 'string' && cfg.language) {
-        explicitLang = cfg.language;
-      }
+      if (cfg && typeof cfg.language === 'string' && cfg.language) expLang = cfg.language;
       const raw = cfg && cfg.telemetryModule;
-      currentMode = raw === 'on' || raw === 'off' ? raw : 'auto';
-      if (shadowRoot && currentMode !== 'off') {
-        syncFallbackLabels();
-        if (lastSnapshot) applySnapshotToDom(lastSnapshot);
+      mode = raw === 'on' || raw === 'off' ? raw : 'auto';
+      if (srEl && mode !== 'off') {
+        syncLbls();
+        if (lastSnap) applySnap(lastSnap);
       }
-
-      if (currentMode === 'off') {
-        yieldedToExternal = false;
-        unmountFallback();
-        hideExternalBarIfPresent();
+      if (mode === 'off') {
+        yielded = false;
+        unmountFb();
+        hideExt();
         return getState();
       }
-
-      restoreExternalVisibility();
-
-      if (hasExternalPulse()) {
-        yieldedToExternal = true;
-        unmountFallback(true);
-        // Legacy external Pulse (<= v0.8.x) mounts DOM but exposes no window.agPulseHost:
-        // keep Prism's headless data bridge alive so Vial quotas & Studio Quotas tab work seamlessly!
-        ensureDataHostBridge();
-        if (externalDetachedAt > 0 && rescueTimer === null) {
-          rescueTimer = setTimeout(() => {
-            rescueTimer = null;
-            if (currentMode === 'off') return;
-            if (!hasExternalPulse()) {
-              mountFallbackNow();
-            }
-          }, EXTERNAL_RESCUE_GRACE_MS + 60);
-          if (rescueTimer && typeof rescueTimer.unref === 'function') rescueTimer.unref();
+      ensBridge();
+      if (mode === 'on') {
+        yielded = false;
+        clrWait();
+        hideExt();
+        ensHost();
+        mountFb();
+        return getState();
+      }
+      showExt();
+      if (hasExt()) {
+        yielded = true;
+        unmountFb(true);
+        ensHost();
+        if (detAt > 0 && rescTm === null) {
+          rescTm = setTimeout(() => {
+            rescTm = null;
+            if (mode !== 'off' && !hasExt()) mountFb();
+          }, GRACE_MS + 60);
+          rescTm?.unref?.();
         }
         return getState();
       }
-
-      if (currentMode === 'on') {
-        clearWaitTimer();
-        mountFallbackNow();
+      const doc = gD();
+      if (fbEl && seatFb(doc)) return getState();
+      if (findExtBars(doc).some((b) => b && b.getAttribute?.(FALLBACK_ATTR) !== '1' && isConn(doc, b) && !usableExt(doc, b))) {
+        clrWait();
+        mountFb();
         return getState();
       }
-
-      // currentMode === 'auto': wait 1500ms politely for external Pulse plugin before fallback mount
-      const doc = getDoc();
-      if (fallbackHostEl) {
-        if (ensureFallbackSeated(doc)) {
-          return getState();
-        }
-      }
-      if (waitTimer === null) {
-        const waitMs =
-          typeof cfg?.__fallbackDelayMs === 'number' && cfg.__fallbackDelayMs >= 0
-            ? cfg.__fallbackDelayMs
-            : DEFAULT_WAIT_MS;
-        waitTimer = setTimeout(() => {
-          waitTimer = null;
-          if (currentMode !== 'auto') return;
-          if (hasExternalPulse()) {
-            yieldedToExternal = true;
-            unmountFallback(true);
-            ensureDataHostBridge();
-            return;
-          }
-          mountFallbackNow();
-        }, waitMs);
-        if (waitTimer && typeof waitTimer.unref === 'function') rescueTimer?.unref?.();
-        if (waitTimer && typeof waitTimer.unref === 'function') waitTimer.unref();
+      if (waitTm === null) {
+        const ms = isFin(cfg?.__fallbackDelayMs) && cfg.__fallbackDelayMs >= 0 ? cfg.__fallbackDelayMs : WAIT_MS;
+        waitTm = setTimeout(() => {
+          waitTm = null;
+          if (mode !== 'auto') return;
+          if (hasExt()) { yielded = true; unmountFb(true); ensHost(); return; }
+          mountFb();
+        }, ms);
+        waitTm?.unref?.();
       }
       return getState();
     }
 
     function destroy() {
-      clearWaitTimer();
-      unmountFallback();
-      restoreExternalVisibility();
-      yieldedToExternal = false;
-      lastExternalSig = '';
-      externalDetachedAt = 0;
+      clrWait();
+      unmountFb();
+      showExt();
+      const w = gW();
+      if (w) {
+        if (mApi && w.__agPrismMetricsBridge === mApi) delete w.__agPrismMetricsBridge;
+        if (mRes && w.__agPrismMetricsResolve === mRes) delete w.__agPrismMetricsResolve;
+      }
+      yielded = false;
+      lastSig = '';
+      detAt = 0;
     }
 
-    function getState() {
-      return {
-        mode: currentMode,
-        mountedFallback: Boolean(fallbackHostEl && isNodeConnected(getDoc(), fallbackHostEl)),
-        waitingForExternal: waitTimer !== null,
-        yieldedToExternal: Boolean(yieldedToExternal || (currentMode !== 'off' && hasExternalPulse())),
-        hasExternal: hasExternalPulse(),
-      };
-    }
-
-    const controllerApi = {
+    const api = {
       BAR_ID,
+      PRISM_BAR_ID,
+      PRISM_BAR_ATTR,
       FALLBACK_ATTR,
       METRICS_BINDING,
       sync,
       destroy,
-      refresh: refreshMetrics,
-      getLatestSnapshot: () => lastSnapshot,
+      refresh,
+      getLatestSnapshot: () => lastSnap,
       getState,
       createTelemetryController,
     };
-    return controllerApi;
+    return api;
   }
 
   return createTelemetryController();

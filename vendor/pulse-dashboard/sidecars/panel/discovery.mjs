@@ -248,24 +248,112 @@ export async function discoverProcesses({ platform = process.platform, run = exe
   const hasCdpHint = validPort(targetCdpPort);
 
   if (platform === 'win32') {
-    const script = hasCdpHint
-      ? "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"
-      : "Get-CimInstance Win32_Process -Filter \"Name='language_server.exe'\" | Where-Object { $_.CommandLine -match '(?:^|\\s)--standalone(?:\\s|=|$)' } | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress";
-    const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 8000, maxBuffer: 8388608 });
-    const parsed = stdout.trim() ? JSON.parse(stdout.replace(/^\uFEFF/, '')) : [];
-    const allRows = (Array.isArray(parsed) ? parsed : [parsed]).filter(r => validPid(integer(r?.ProcessId))).map(r => ({
-      ...r,
-      ProcessId: integer(r.ProcessId),
-      ParentProcessId: integer(r.ParentProcessId),
-    }));
-    let candidates = allRows.filter(row =>
-      (languageServer(row.Name || row.CommandLine || '') && /(?:^|\s)--standalone(?:\s|=|$)/.test(row.CommandLine || '')) ||
-      (hasCdpHint && (agyHubCommand(row.CommandLine || '') || (languageServer(row.Name || row.CommandLine || '') && /--subclient_type(?:=|\s+)["']?ide["']?/i.test(row.CommandLine || ''))))
+    // Zero-WMI Win32 kernel fast-path (NtQueryInformationProcess Basic=0 + CommandLine=60):
+    // immune to Windows WMI (Winmgmt) service hangs (8s+ ETIMEDOUT under heavy IDE/Swarm load)
+    // and 100% architecture-independent across x64 & ARM64, with automatic CIM fallback if blocked.
+    const buildZeroWmiScript = (fullTree) => `
+$ErrorActionPreference = 'SilentlyContinue'
+try {
+  Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+public static class AgFastProc {
+  [StructLayout(LayoutKind.Sequential)]
+  struct PBI { public IntPtr ExitStatus; public IntPtr PebBaseAddress; public UIntPtr AffinityMask; public int BasePriority; public UIntPtr UniqueProcessId; public IntPtr InheritedFromUniqueProcessId; }
+  [StructLayout(LayoutKind.Sequential)]
+  struct US { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
+  [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr h, int cls, IntPtr buf, int cb, out int ret);
+  [DllImport("ntdll.dll", EntryPoint="NtQueryInformationProcess")] static extern int NtQueryPbi(IntPtr h, int cls, ref PBI pbi, int cb, out int ret);
+  [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint acc, bool inh, int pid);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+  static string ReadCmd(IntPtr h) {
+    int needed = 0;
+    int st = NtQueryInformationProcess(h, 60, IntPtr.Zero, 0, out needed);
+    if (needed <= 0 || needed > 65536) return "";
+    IntPtr mem = Marshal.AllocHGlobal(needed);
+    try {
+      if (NtQueryInformationProcess(h, 60, mem, needed, out needed) != 0) return "";
+      US us = (US)Marshal.PtrToStructure(mem, typeof(US));
+      if (us.Length == 0 || us.Buffer == IntPtr.Zero) return "";
+      return Marshal.PtrToStringUni(us.Buffer, us.Length / 2) ?? "";
+    } finally { Marshal.FreeHGlobal(mem); }
+  }
+  public static object[] Scan(bool fullTree) {
+    var list = new List<object>();
+    foreach (var p in Process.GetProcesses()) {
+      int pid = 0; string n = "";
+      try { pid = p.Id; n = p.ProcessName ?? ""; } catch { p.Dispose(); continue; }
+      p.Dispose();
+      bool isCand = n.StartsWith("language_server", StringComparison.OrdinalIgnoreCase) || string.Equals(n, "agy", StringComparison.OrdinalIgnoreCase);
+      if (!fullTree && !isCand) continue;
+      int ppid = 0; string cmd = "";
+      IntPtr h = OpenProcess(0x1000u, false, pid);
+      if (h != IntPtr.Zero) {
+        try {
+          PBI pbi = new PBI(); int ret;
+          if (NtQueryPbi(h, 0, ref pbi, Marshal.SizeOf(pbi), out ret) == 0) ppid = (int)pbi.InheritedFromUniqueProcessId.ToInt64();
+          if (isCand) cmd = ReadCmd(h);
+        } finally { CloseHandle(h); }
+      }
+      list.Add(new { ProcessId = pid, ParentProcessId = ppid, Name = n + ".exe", CommandLine = cmd });
+    }
+    return list.ToArray();
+  }
+}
+'@
+  $res = [AgFastProc]::Scan($${fullTree ? 'true' : 'false'})
+  if ($null -ne $res) { $res | ConvertTo-Json -Compress }
+} catch {
+  Get-CimInstance Win32_Process${fullTree ? '' : " -Filter \"Name LIKE 'language_server%' OR Name = 'agy.exe'\""} | Select-Object ProcessId,ParentProcessId,Name${fullTree ? '' : ',CommandLine'} | ConvertTo-Json -Compress
+}`;
+    const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', buildZeroWmiScript(false)], {
+      windowsHide: true,
+      timeout: 6000,
+      maxBuffer: 4194304,
+    });
+    const parseWinRows = (raw) => {
+      const trimmed = String(raw || '').replace(/^\uFEFF/, '').trim();
+      if (!trimmed) return [];
+      const parsed = JSON.parse(trimmed);
+      return (Array.isArray(parsed) ? parsed : [parsed])
+        .filter((r) => validPid(integer(r?.ProcessId)))
+        .map((r) => ({
+          ...r,
+          ProcessId: integer(r.ProcessId),
+          ParentProcessId: integer(r.ParentProcessId),
+        }));
+    };
+    const fastRows = parseWinRows(stdout);
+    let candidates = fastRows.filter(
+      (row) =>
+        (languageServer(row.Name || row.CommandLine || '') && /(?:^|\s)--standalone(?:\s|=|$)/.test(row.CommandLine || '')) ||
+        (hasCdpHint &&
+          (agyHubCommand(row.CommandLine || '') ||
+            (languageServer(row.Name || row.CommandLine || '') && /--subclient_type(?:=|\s+)["']?ide["']?/i.test(row.CommandLine || ''))))
     );
     if (!candidates.length) return [];
 
-    if (hasCdpHint && (candidates.length > 1 || candidates.some(c => agyHubCommand(c.CommandLine || '')))) {
-      const { stdout: netOut } = await run('netstat.exe', ['-ano', '-p', 'tcp'], { windowsHide: true, timeout: 4000, maxBuffer: 4194304 }).catch(() => ({ stdout: '' }));
+    if (hasCdpHint && (candidates.length > 1 || candidates.some((c) => agyHubCommand(c.CommandLine || '')))) {
+      const [{ stdout: netOut }, { stdout: treeOut }] = await Promise.all([
+        run('netstat.exe', ['-ano', '-p', 'tcp'], { windowsHide: true, timeout: 4000, maxBuffer: 4194304 }).catch(() => ({ stdout: '' })),
+        run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', buildZeroWmiScript(true)], {
+          windowsHide: true,
+          timeout: 4500,
+          maxBuffer: 4194304,
+        }).catch(() => ({ stdout: '' })),
+      ]);
+      let treeRows = [];
+      try {
+        treeRows = parseWinRows(treeOut);
+      } catch {}
+      const mergedByPid = new Map();
+      for (const r of fastRows) mergedByPid.set(r.ProcessId, r);
+      for (const r of treeRows) {
+        if (!mergedByPid.has(r.ProcessId)) mergedByPid.set(r.ProcessId, r);
+      }
+      const allRows = [...mergedByPid.values()];
       const snap = netstatSnapshot(netOut);
       const portOwners = new Map();
       for (const [pid, pList] of snap.ports) {
@@ -277,12 +365,17 @@ export async function discoverProcesses({ platform = process.platform, run = exe
       candidates = selectServerByCdpLineage(candidates, allRows, portOwners, targetCdpPort);
     }
 
-    const expMap = new Map(candidates.map(row => {
-      const hubP = extractHubPort(row.CommandLine);
-      return [row.ProcessId, hubP ? [hubP, ...expectedPorts] : expectedPorts];
-    }));
-    const ports = await discoverWindowsPorts(candidates.map(row => row.ProcessId), { run, expectedPorts: expMap });
-    return candidates.map(row => ({ ...row, Ports: ports.get(row.ProcessId) || [], HubPort: extractHubPort(row.CommandLine) }));
+    const expMap = new Map(
+      candidates.map((row) => {
+        const hubP = extractHubPort(row.CommandLine);
+        return [row.ProcessId, hubP ? [hubP, ...expectedPorts] : expectedPorts];
+      })
+    );
+    const ports = await discoverWindowsPorts(
+      candidates.map((row) => row.ProcessId),
+      { run, expectedPorts: expMap }
+    );
+    return candidates.map((row) => ({ ...row, Ports: ports.get(row.ProcessId) || [], HubPort: extractHubPort(row.CommandLine) }));
   }
 
   if (platform === 'darwin') {

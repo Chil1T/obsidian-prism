@@ -213,10 +213,87 @@ function readPidFromLockFile(filePath) {
   return null;
 }
 
-// 终止旧守护前核验进程映像名，防止系统重启后 PID 复用误杀无关进程
-function isExpectedDaemonProcess(pid) {
+function findDaemonLockMetaForPid(pid, customLockFile = null) {
+  const candidates = [];
+  if (customLockFile) candidates.push(customLockFile);
+  candidates.push(path.join(__dirname, '.daemon.pid'));
+  const envPluginDir = process.env.AG_PRISM_PLUGIN_DIR;
+  if (envPluginDir) candidates.push(path.join(envPluginDir, '.daemon.pid'));
+  candidates.push(path.join(os.homedir(), '.gemini', 'config', 'plugins', 'obsidian-prism', '.daemon.pid'));
+  const seen = new Set();
+  for (const filePath of candidates) {
+    if (!filePath || seen.has(filePath)) continue;
+    seen.add(filePath);
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const raw = fs.readFileSync(filePath, 'utf8').trim();
+      if (!raw) continue;
+      if (/^\d+$/.test(raw) && parseInt(raw, 10) === pid) {
+        return { matchedPid: true, startedAt: 0 };
+      }
+      if (raw.startsWith('{')) {
+        const parsed = JSON.parse(raw);
+        if (Number(parsed?.pid) === pid) {
+          return { matchedPid: true, startedAt: Number(parsed?.startedAt || 0) };
+        }
+      }
+    } catch {}
+  }
+  return { matchedPid: false, startedAt: 0 };
+}
+
+// 校验进程映像名、内核启动时间与命令行签名：既精准识别宿主以 Antigravity 二进制拉起的原生 Sidecar，又严防误杀宿主主进程/其他插件
+function matchesExpectedDaemonSignature(imageName, commandLine = '', opts = null) {
+  const img = String(imageName || '').trim().toLowerCase();
+  const cmd = String(commandLine || '').replace(/\\/g, '/').toLowerCase();
+  if (!img) return false;
+  if (cmd && /--type=(?:renderer|gpu-process|utility|zygote|broker)\b/.test(cmd)) {
+    return false;
+  }
+  const matchedLockPid = Boolean(opts && opts.matchedLockPid);
+  const lockStartedAt = Number((opts && opts.lockStartedAt) || 0);
+  const processStartMs = Number((opts && opts.processStartMs) || 0);
+  if (lockStartedAt > 0 && processStartMs > 0) {
+    // 若进程在锁文件写入后 >5s 才创建（PID 复用）或早于锁文件 >120s（老主进程），一律拒绝
+    if (processStartMs > lockStartedAt + 5000 || lockStartedAt - processStartMs > 120000) {
+      return false;
+    }
+  }
+  if (/\b(?:node|nodejs|obsidian-prism|watcher|agy-claude-style)(?:\.exe)?\b/.test(img)) {
+    return true;
+  }
+  if (/(?:antigravity|electron|agy)(?:\.exe|\b)/.test(img)) {
+    if (matchedLockPid && lockStartedAt > 0 && processStartMs > 0) {
+      return true;
+    }
+    if (!cmd) return false;
+    const hasPrismOwner = /(?:obsidian-prism|antigravity-prism|agy-claude-style)/.test(cmd);
+    const hasDaemonEntry = /(?:sidecars\/daemon\/main\.mjs|\/daemon\/main\.mjs|\/watch\.js)\b/.test(cmd);
+    if (hasPrismOwner && hasDaemonEntry) return true;
+    // 宿主以插件子目录为 cwd 拉起 Sidecar 时命令行为 `Antigravity --import=.../sidecar_sdk/register_loader.js main.mjs`
+    if (matchedLockPid && /sidecar_sdk\/register_loader\.js\b/.test(cmd) && /(?:^|\s|\/)main\.mjs(?:\s|"|'|$)/.test(cmd)) {
+      return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+// 终止旧守护前核验进程映像名与启动时间/命令行，防止系统重启后 PID 复用误杀无关进程或宿主主窗口
+function isExpectedDaemonProcess(pid, probeOverride = null) {
   const n = Number(pid);
   if (!Number.isInteger(n) || n <= 0 || n === process.pid) return false;
+  const customLock = typeof probeOverride === 'string' ? probeOverride : null;
+  const lockMeta = findDaemonLockMetaForPid(n, customLock);
+  if (typeof probeOverride === 'function') {
+    const info = probeOverride(n);
+    if (!info) return false;
+    return matchesExpectedDaemonSignature(info.imageName, info.commandLine, {
+      matchedLockPid: Boolean(info.matchedLockPid ?? lockMeta.matchedPid),
+      lockStartedAt: Number(info.lockStartedAt ?? lockMeta.startedAt ?? 0),
+      processStartMs: Number(info.processStartMs || 0),
+    });
+  }
   try {
     process.kill(n, 0);
   } catch (err) {
@@ -224,26 +301,68 @@ function isExpectedDaemonProcess(pid) {
   }
   try {
     if (IS_WIN) {
-      const out = execFileSync('tasklist', ['/FI', `PID eq ${n}`, '/FO', 'CSV', '/NH'], {
-        encoding: 'utf8',
-        windowsHide: true,
-        timeout: 1800,
-        stdio: ['ignore', 'pipe', 'ignore'],
+      const needWmiCmd = !(lockMeta.matchedPid && lockMeta.startedAt > 0);
+      const psScript =
+        `$p = Get-Process -Id ${n} -ErrorAction SilentlyContinue; ` +
+        `if (-not $p) { exit 0 }; ` +
+        `$nm = [string]$p.ProcessName; ` +
+        `$st = 0; try { $st = ([DateTimeOffset]$p.StartTime).ToUnixTimeMilliseconds() } catch {}; ` +
+        `if ($nm -match '^(?:node|nodejs|obsidian-prism|obsidian-prism-watcher|watcher|agy-claude-style)$') { Write-Output ($nm + '|' + $st + '|'); exit 0 }; ` +
+        `if ($nm -match '^(?:antigravity|electron|agy)$') { ` +
+        (needWmiCmd
+          ? `$cl = (Get-CimInstance Win32_Process -Filter 'ProcessId = ${n}' -ErrorAction SilentlyContinue).CommandLine; Write-Output ($nm + '|' + $st + '|' + [string]$cl); exit 0 `
+          : `Write-Output ($nm + '|' + $st + '|'); exit 0 `) +
+        `}; ` +
+        `Write-Output ($nm + '|' + $st + '|')`;
+      const out = execFileSync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-Command', psScript],
+        {
+          encoding: 'utf8',
+          windowsHide: true,
+          timeout: 8000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }
+      );
+      const trimmed = String(out || '').trim();
+      if (!trimmed) return false;
+      const p1 = trimmed.indexOf('|');
+      const p2 = p1 >= 0 ? trimmed.indexOf('|', p1 + 1) : -1;
+      const imgName = p1 >= 0 ? trimmed.slice(0, p1) : trimmed;
+      const procStartMs = p1 >= 0 && p2 > p1 ? Number(trimmed.slice(p1 + 1, p2)) || 0 : 0;
+      const cmdLine = p2 >= 0 ? trimmed.slice(p2 + 1) : '';
+      return matchesExpectedDaemonSignature(imgName, cmdLine, {
+        matchedLockPid: lockMeta.matchedPid,
+        lockStartedAt: lockMeta.startedAt,
+        processStartMs: procStartMs,
       });
-      const low = String(out || '').toLowerCase();
-      if (!low || low.includes('info:') || !low.includes(`"${n}"`)) return true;
-      return /\b(?:node|obsidian-prism|watcher)\b/.test(low);
     }
     const out = execFileSync('ps', ['-p', String(n), '-o', 'comm='], {
       encoding: 'utf8',
-      timeout: 1500,
+      timeout: 2000,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
     const low = String(out || '').trim().toLowerCase();
     if (!low) return false;
-    return /node|obsidian-prism|watcher/.test(low);
+    if (/node|nodejs|obsidian-prism|watcher|agy-claude-style/.test(low)) return true;
+    if (/antigravity|electron|agy/.test(low)) {
+      try {
+        const argsOut = execFileSync('ps', ['-p', String(n), '-o', 'args='], {
+          encoding: 'utf8',
+          timeout: 2000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        return matchesExpectedDaemonSignature(low, argsOut, {
+          matchedLockPid: lockMeta.matchedPid,
+          lockStartedAt: lockMeta.startedAt,
+        });
+      } catch {
+        return false;
+      }
+    }
+    return false;
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -274,8 +393,12 @@ function isEligibleTarget(target) {
     return /workbench|antigravity/i.test(lowUrl) || /\bantigravity\b/i.test(title);
   }
 
-  const m = /^(https?):\/\/(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(\/|$)/i.exec(url);
+  const m = /^(https?):\/\/(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(\/[^?#]*)?(?:[?#]|$)/i.exec(url);
   if (!m) return false;
+  const pathname = (m[3] || '/').toLowerCase();
+  if (/^\/(?:viewer(?:\/|$)|sandbox(?:\/|$)|stream(?:\/|$)|api(?:\/|$))/.test(pathname)) {
+    return false;
+  }
   if (/\bantigravity\b/i.test(title)) return true;
   if (m[1].toLowerCase() === 'https' && (!title || /^127\.0\.0\.1(?::\d+)?/.test(title))) {
     return true;
@@ -3906,13 +4029,18 @@ function getInjectWrapperTemplate() {
       delete window.__agClaudeStyle;
     };
 
-    const hasWorkbenchMarkers = () => {
+    const hasDomWorkbenchMarkers = () => {
       try {
-        if (/\\bantigravity\\b/i.test(String(document.title || ''))) return true;
-        if (document.body && document.body.classList && document.body.classList.contains('theme-standalone')) return true;
+        if (
+          document.body &&
+          document.body.classList &&
+          (document.body.classList.contains('theme-standalone') || document.body.classList.contains('monaco-workbench'))
+        ) {
+          return true;
+        }
         return Boolean(
           document.querySelector(
-            '.agy-home, [data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="model-selector-trigger"], .monaco-workbench'
+            '.agy-shell, .agy-home, [data-testid="aux-pane-split"], [data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="model-selector-trigger"], .monaco-workbench'
           )
         );
       } catch {
@@ -3932,16 +4060,21 @@ function getInjectWrapperTemplate() {
         if (low.startsWith('vscode-file://') || low.startsWith('app://') || low.startsWith('about:')) {
           return /\\b(?:Untitled|launchpad)\\b/i.test(String(document.title || '') + ' ' + href) ? 'reject' : 'ok';
         }
-        const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/|$)/i.exec(href);
+        const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);
         if (!m) {
           return low.startsWith('http:') || low.startsWith('https:') ? 'reject' : 'ok';
         }
-        if (hasWorkbenchMarkers()) return 'ok';
+        const pathname = (m[3] || '/').toLowerCase();
+        if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test(pathname)) {
+          return 'reject';
+        }
+        if (hasDomWorkbenchMarkers()) return 'ok';
         const isPlainHttp = m[1].toLowerCase() === 'http';
         const rs = String(document.readyState || '');
         if (isPlainHttp) {
           return rs === 'loading' ? 'defer' : 'reject';
         }
+        if (/\\bantigravity\\b/i.test(String(document.title || ''))) return 'ok';
         return rs === 'complete' ? 'reject' : 'ok';
       } catch {
         return 'ok';
@@ -4124,13 +4257,28 @@ function buildOmniClientExpression(serverMeta = null, customClientSource = null)
           }
         }
         if (low.startsWith('http:') || low.startsWith('https:')) {
-          const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/|$)/i.exec(href);
+          const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);
           if (!m) return { ok: false, status: 'skipped-non-host' };
-          const hasMarker =
-            /\\bantigravity\\b/i.test(String(document.title || '')) ||
-            Boolean(document.body && document.body.classList && document.body.classList.contains('theme-standalone')) ||
-            Boolean(document.querySelector && document.querySelector('.agy-home, [data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="model-selector-trigger"], .monaco-workbench'));
-          if (!hasMarker && (m[1].toLowerCase() === 'http' || String(document.readyState || '') === 'complete')) {
+          const pathname = (m[3] || '/').toLowerCase();
+          if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test(pathname)) {
+            return { ok: false, status: 'skipped-non-host' };
+          }
+          const hasDomMarker =
+            Boolean(window.__agPrism || window.__agClaudeStyle) ||
+            Boolean(
+              document.body &&
+                document.body.classList &&
+                (document.body.classList.contains('theme-standalone') || document.body.classList.contains('monaco-workbench'))
+            ) ||
+            Boolean(
+              document.querySelector &&
+                document.querySelector(
+                  '.agy-shell, .agy-home, [data-testid="aux-pane-split"], [data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="model-selector-trigger"], .monaco-workbench'
+                )
+            );
+          const isPlainHttp = m[1].toLowerCase() === 'http';
+          const hasTitleMarker = !isPlainHttp && /\\bantigravity\\b/i.test(String(document.title || ''));
+          if (!hasDomMarker && !hasTitleMarker && (isPlainHttp || String(document.readyState || '') === 'complete')) {
             return { ok: false, status: 'skipped-non-host' };
           }
         }
@@ -4488,6 +4636,7 @@ module.exports = {
   reconcileConfigAliases,
   isEligibleTarget,
   readPidFromLockFile,
+  matchesExpectedDaemonSignature,
   isExpectedDaemonProcess,
   RUNTIME_PARTS,
   SYNC_ROOT_FILES,

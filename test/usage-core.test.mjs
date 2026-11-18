@@ -431,7 +431,7 @@ test('home-studio-panel backfills Swarm subagent summaries via usageBridge.listS
     setItem: (k, v) => storeMem.set(k, String(v)),
   };
   globalThis.document = {
-    title: 'obsidian-prism-dev - Antigravity',
+    title: 'obsidian-prism - Antigravity',
     body: {},
     querySelector: () => null,
   };
@@ -689,5 +689,251 @@ test('UX-4 & UX-9 Effort Slider off-mode trigger tint cleanup and 5-language tit
   mountedJa.unmount();
   ctl.destroy();
 });
+
+test('#209 Windows zero-WMI discoverProcesses fast-path & multi-instance cdpPort lineage disambiguation', async () => {
+  const { discoverProcesses } = await import('../vendor/pulse-dashboard/sidecars/panel/discovery.mjs');
+
+  // 1. Single instance with cdpPort=3014: must run ONLY 1 PowerShell fast scan + 1 netstat (zero full-tree second PS call!)
+  const singleCalls = [];
+  const singleRes = await discoverProcesses({
+    platform: 'win32',
+    cdpPort: 3014,
+    run: async (bin, args) => {
+      singleCalls.push({ bin, args });
+      if (/powershell/i.test(bin)) {
+        return {
+          stdout: JSON.stringify({
+            ProcessId: 113040,
+            ParentProcessId: 58892,
+            Name: 'language_server.exe',
+            CommandLine: 'language_server.exe --standalone --csrf_token tok123',
+          }),
+        };
+      }
+      if (/netstat/i.test(bin)) {
+        return {
+          stdout: '  TCP    127.0.0.1:5506         0.0.0.0:0              LISTENING       113040\r\n',
+        };
+      }
+      return { stdout: '' };
+    },
+  });
+  assert.equal(singleRes.length, 1);
+  assert.equal(singleRes[0].ProcessId, 113040);
+  assert.deepEqual(singleRes[0].Ports, [5506]);
+  assert.equal(singleCalls.filter((c) => /powershell/i.test(c.bin)).length, 1, 'Single candidate must skip full process tree scan');
+  assert.ok(singleCalls[0].args.join(' ').includes('AgFastProc'), 'Must use zero-WMI AgFastProc kernel fast-path');
+
+  // 2. Multi-instance disambiguation: picks the language_server descended from the Antigravity PID owning cdpPort=3018
+  let psCount = 0;
+  const multiRes = await discoverProcesses({
+    platform: 'win32',
+    cdpPort: 3018,
+    run: async (bin) => {
+      if (/powershell/i.test(bin)) {
+        psCount += 1;
+        if (psCount === 1) {
+          return {
+            stdout: JSON.stringify([
+              { ProcessId: 2001, ParentProcessId: 1000, Name: 'language_server.exe', CommandLine: 'language_server.exe --standalone --csrf_token a' },
+              { ProcessId: 3001, ParentProcessId: 2000, Name: 'language_server.exe', CommandLine: 'language_server.exe --standalone --csrf_token b' },
+            ]),
+          };
+        }
+        return {
+          stdout: JSON.stringify([
+            { ProcessId: 1000, ParentProcessId: 4, Name: 'Antigravity.exe' },
+            { ProcessId: 2000, ParentProcessId: 4, Name: 'Antigravity.exe' },
+          ]),
+        };
+      }
+      return {
+        stdout: [
+          '  TCP    127.0.0.1:3014         0.0.0.0:0              LISTENING       1000',
+          '  TCP    127.0.0.1:3018         0.0.0.0:0              LISTENING       2000',
+          '  TCP    127.0.0.1:6101         0.0.0.0:0              LISTENING       2001',
+          '  TCP    127.0.0.1:6202         0.0.0.0:0              LISTENING       3001',
+        ].join('\r\n'),
+      };
+    },
+  });
+  assert.equal(multiRes.length, 1);
+  assert.equal(multiRes[0].ProcessId, 3001);
+  assert.deepEqual(multiRes[0].Ports, [6202]);
+});
+
+test('#209 inline-fallback.js: telemetryModule="on" overrides external Pulse & "auto" rescues blocked/parked external bar immediately', async () => {
+  const telemetryMod = (await import('../vendor/pulse-dashboard/inline-fallback.js')).default || (await import('../vendor/pulse-dashboard/inline-fallback.js'));
+
+  const makeEl = (tag) => {
+    const attrs = new Map();
+    const styleProps = new Map();
+    const el = {
+      nodeType: 1,
+      tagName: String(tag).toUpperCase(),
+      children: [],
+      parentNode: null,
+      parentElement: null,
+      shadowRoot: null,
+      isConnected: true,
+      hidden: false,
+      textContent: '',
+      className: '',
+      style: {
+        setProperty(k, v) { styleProps.set(k, String(v)); },
+        getPropertyValue(k) { return styleProps.get(k) || ''; },
+        removeProperty(k) { styleProps.delete(k); },
+        get display() { return styleProps.get('display') || ''; },
+        set display(v) { if (v) styleProps.set('display', String(v)); else styleProps.delete('display'); },
+      },
+      get id() { return attrs.get('id') || ''; },
+      set id(v) { attrs.set('id', String(v)); },
+      setAttribute(k, v) { attrs.set(k, String(v)); },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) { attrs.delete(k); },
+      appendChild(c) {
+        if (c.parentNode) c.remove();
+        c.parentNode = el;
+        c.parentElement = el.tagName === '#SHADOW-ROOT' ? null : el;
+        c.isConnected = el.isConnected;
+        el.children.push(c);
+        return c;
+      },
+      insertBefore(c, ref) {
+        const idx = ref ? el.children.indexOf(ref) : -1;
+        if (idx < 0) return el.appendChild(c);
+        if (c.parentNode) c.remove();
+        c.parentNode = el;
+        c.parentElement = el.tagName === '#SHADOW-ROOT' ? null : el;
+        c.isConnected = el.isConnected;
+        el.children.splice(idx, 0, c);
+        return c;
+      },
+      removeChild(c) {
+        const i = el.children.indexOf(c);
+        if (i >= 0) {
+          el.children.splice(i, 1);
+          c.parentNode = null;
+          c.parentElement = null;
+          c.isConnected = false;
+        }
+        return c;
+      },
+      remove() { if (el.parentNode) el.parentNode.removeChild(el); },
+      attachShadow() {
+        const sr = makeEl('#shadow-root');
+        sr.host = el;
+        el.shadowRoot = sr;
+        return sr;
+      },
+      getElementById(id) {
+        let hit = null;
+        const walk = (n) => {
+          for (const ch of n.children || []) {
+            if (!hit && ch.id === id) hit = ch;
+            if (!hit) walk(ch);
+          }
+        };
+        walk(el);
+        return hit;
+      },
+      querySelector(sel) { return el.querySelectorAll(sel)[0] || null; },
+      querySelectorAll(sel) {
+        const out = [];
+        const parts = String(sel).split(',').map((s) => s.trim()).filter(Boolean);
+        const match = (n, p) => {
+          if (p.startsWith('#')) return n.id === p.slice(1);
+          if (p.startsWith('.')) return String(n.className || '').split(/\s+/).includes(p.slice(1));
+          const am = p.match(/^\[([a-zA-Z0-9_-]+)(?:="([^"]+)")?\]$/);
+          if (am) return n.hasAttribute(am[1]) && (am[2] === undefined || n.getAttribute(am[1]) === am[2]);
+          return n.tagName === p.toUpperCase();
+        };
+        const walk = (n) => {
+          for (const ch of n.children || []) {
+            if (parts.some((p) => match(ch, p))) out.push(ch);
+            walk(ch);
+          }
+        };
+        walk(el);
+        return out;
+      },
+      closest() { return null; },
+      contains() { return false; },
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    return el;
+  };
+
+  const html = makeEl('html');
+  const body = makeEl('body');
+  html.appendChild(body);
+  const footer = makeEl('div');
+  footer.className = 'agy-composer-footer flex items-center';
+  const leftSlot = makeEl('div');
+  const rightSendSlot = makeEl('div');
+  footer.appendChild(leftSlot);
+  footer.appendChild(rightSendSlot);
+  body.appendChild(footer);
+
+  const extBar = makeEl('div');
+  extBar.id = 'ag-pulse-status-bar';
+  extBar.setAttribute('data-ag-pulse-bar', 'true');
+  footer.insertBefore(extBar, rightSendSlot);
+
+  const doc = {
+    hidden: false,
+    readyState: 'complete',
+    documentElement: html,
+    body,
+    createElement: makeEl,
+    getElementById: (id) => html.getElementById(id),
+    querySelector: (s) => html.querySelector(s),
+    querySelectorAll: (s) => html.querySelectorAll(s),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const win = {
+    document: doc,
+    location: { pathname: '/c/11111111-2222-3333-4444-555555555555' },
+    __agPulseRuntimeOwner: 'external-pulse-v091',
+  };
+
+  const ctl = telemetryMod.createTelemetryController({ window: win, document: doc });
+
+  // 1. In "auto" mode with healthy external bar -> politely yields
+  const stAutoHealthy = ctl.sync({ telemetryModule: 'auto' });
+  assert.equal(stAutoHealthy.yieldedToExternal, true);
+  assert.equal(stAutoHealthy.mountedFallback, false);
+  assert.ok(win.__agPrismMetricsBridge?.getMetrics, 'Must expose __agPrismMetricsBridge even when yielding');
+
+  // 2. External bar gets squeezed into data-layout="blocked" -> "auto" mode rescues immediately (0ms)
+  extBar.setAttribute('data-layout', 'blocked');
+  const stAutoRescue = ctl.sync({ telemetryModule: 'auto' });
+  assert.equal(stAutoRescue.mountedFallback, true, 'Auto mode must immediately mount fallback when external bar is blocked');
+  assert.equal(stAutoRescue.yieldedToExternal, false);
+
+  // External bar recovers to data-layout="ready" -> "auto" mode yields back cleanly
+  extBar.setAttribute('data-layout', 'ready');
+  const stAutoRecover = ctl.sync({ telemetryModule: 'auto' });
+  assert.equal(stAutoRecover.mountedFallback, false);
+  assert.equal(stAutoRecover.yieldedToExternal, true);
+
+  // 3. User explicitly selects telemetryModule="on" -> forces built-in bar & hides external bar!
+  const stForcedOn = ctl.sync({ telemetryModule: 'on' });
+  assert.equal(stForcedOn.mountedFallback, true, 'telemetryModule="on" must force built-in fallback even when external exists');
+  assert.equal(stForcedOn.yieldedToExternal, false);
+  assert.equal(extBar.getAttribute('data-ag-prism-hidden'), '1');
+  assert.equal(extBar.style.display, 'none');
+  // Seated before rightSendSlot inside .agy-composer-footer
+  const fbNode = doc.querySelector('[data-ag-prism-fallback="1"]');
+  assert.ok(fbNode);
+  assert.equal(footer.children[footer.children.length - 1], rightSendSlot, 'Fallback bar must seat before trailing send controls');
+
+  ctl.destroy();
+  assert.equal(win.__agPrismMetricsBridge, undefined, 'destroy() must clean up __agPrismMetricsBridge');
+});
+
 
 

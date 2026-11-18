@@ -512,7 +512,7 @@ test('Task 1: Restores clickable file:// source & #L line pills delegating to na
       translateStream: async () => ({
         ok: true,
         text: [
-          '我先检查 `cdp.js#L31-L45` 的压缩逻辑，并对齐 [配置入口](file:///c:/workspace/obsidian-prism-dev/cdp.js#L31-L45)。',
+          '我先检查 `cdp.js#L31-L45` 的压缩逻辑，并对齐 [配置入口](file:///c:/workspace/obsidian-prism/cdp.js#L31-L45)。',
           '同时核验 ui-runtime.js#L120 的事件委托；拦截 [XSS1](javascript:alert(1)) 与 [XSS2](data:text/html,<script>alert(1)</script>) 及 [Web](https://example.com/a)。',
         ].join('\n'),
         engine: 'ai',
@@ -530,7 +530,7 @@ test('Task 1: Restores clickable file:// source & #L line pills delegating to na
   rawPara.appendChild(doc.createTextNode('Checking bundle logic in '));
 
   const nativeAnchor = doc.createElement('a');
-  nativeAnchor.setAttribute('href', 'file:///c%3A/workspace/obsidian-prism-dev/cdp.js#L31-L45');
+  nativeAnchor.setAttribute('href', 'file:///c%3A/workspace/obsidian-prism/cdp.js#L31-L45');
   nativeAnchor.textContent = 'cdp.js#L31-L45';
   nativeAnchor.addEventListener('click', () => {
     nativeAnchorClicks++;
@@ -539,7 +539,7 @@ test('Task 1: Restores clickable file:// source & #L line pills delegating to na
 
   rawPara.appendChild(doc.createTextNode(' and event handler in '));
   const hostSourcePill = doc.createElement('span');
-  hostSourcePill.setAttribute('data-file-path', 'c:\\workspace\\obsidian-prism-dev\\ui-runtime.js');
+  hostSourcePill.setAttribute('data-file-path', 'c:\\workspace\\obsidian-prism\\ui-runtime.js');
   hostSourcePill.setAttribute('data-line', '120');
   hostSourcePill.textContent = 'ui-runtime.js';
   hostSourcePill.addEventListener('click', () => {

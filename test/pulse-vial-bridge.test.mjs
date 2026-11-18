@@ -1305,3 +1305,208 @@ test('OP-5.2 / HS-8.3 / UX-9 & <31,000B gate: light+warm alabaster alignment, ta
     if (prevDoc !== undefined) globalThis.document = prevDoc;
   }
 });
+
+test('#209 live resilience: 1800ms agPulseHost timeout fallback to __agPrismMetricsBridge, unstuck "—" quota rescue, 96x220 non-zero canvas lock & hidden-host skip', async () => {
+  const env = createPulseMockEnv();
+  // Create a hidden external bar FIRST in DOM order to verify fH() skips hidden/blocked bars and binds visible fallback bar!
+  const hiddenExt = env.getPulseHost();
+  hiddenExt.setAttribute('data-ag-prism-hidden', '1');
+  hiddenExt.style.display = 'none';
+
+  const visibleFallback = env.doc.createElement('div');
+  visibleFallback.id = 'ag-prism-pulse-bar';
+  visibleFallback.setAttribute('data-ag-prism-fallback', '1');
+  visibleFallback.setAttribute('data-ag-prism-pulse-bar', 'true');
+  const sr = visibleFallback.attachShadow({ mode: 'open' });
+
+  const bar = env.doc.createElement('div');
+  bar.className = 'bar';
+  const ctxChip = env.doc.createElement('button');
+  ctxChip.className = 'chip';
+  ctxChip.setAttribute('data-card', 'context');
+  const ctxPct = env.doc.createElement('strong');
+  ctxPct.id = 'context-percent';
+  ctxPct.textContent = '10%';
+  ctxChip.appendChild(ctxPct);
+  bar.appendChild(ctxChip);
+  sr.appendChild(bar);
+
+  const card = env.doc.createElement('section');
+  card.className = 'card context-card';
+  card.id = 'context-card';
+  card.hidden = false;
+  const heading = env.doc.createElement('div');
+  heading.className = 'heading';
+  card.appendChild(heading);
+  const track = env.doc.createElement('div');
+  track.id = 'context-track';
+  card.appendChild(track);
+
+  // Simulate external empty/stuck quota skeleton (#five-balance = '—', #week-balance = '—')
+  const stuckQuotaDetails = env.doc.createElement('div');
+  stuckQuotaDetails.className = 'quota-details';
+  const b5 = env.doc.createElement('strong');
+  b5.id = 'five-balance';
+  b5.textContent = '—';
+  const bw = env.doc.createElement('strong');
+  bw.id = 'week-balance';
+  bw.textContent = '—';
+  stuckQuotaDetails.appendChild(b5);
+  stuckQuotaDetails.appendChild(bw);
+  card.appendChild(stuckQuotaDetails);
+  sr.appendChild(card);
+  env.cascadeWrap.appendChild(visibleFallback);
+
+  // External agPulseHost hangs forever (simulating live 4.18s+ stall)
+  env.win.agPulseHost = {
+    getMetrics: () => new Promise(() => {}),
+  };
+
+  let fallbackCalls = 0;
+  env.win.__agPrismMetricsBridge = {
+    getMetrics: async () => {
+      fallbackCalls += 1;
+      return {
+        connection: 'ok',
+        speed: {
+          tps: 92.4,
+          latestTps: 98.1,
+          ttftSeconds: 0.35,
+          rounds: 6,
+          taskUsage: {
+            subagents: 2,
+            own: { totalTokens: 80000 },
+            delegated: { totalTokens: 40000 },
+            total: { totalTokens: 120000 },
+          },
+          context: {
+            usedTokens: 204800,
+            maxTokens: 256000,
+            usedFraction: 0.8,
+            model: 'Gemini 4 Carbon High',
+            sampledAt: new Date().toISOString(),
+          },
+        },
+        groups: [
+          {
+            id: 'gemini',
+            name: 'Gemini',
+            windows: {
+              '5h': { available: true, remaining: 0.64, resetAt: new Date(Date.now() + 7200e3).toISOString() },
+            },
+          },
+        ],
+      };
+    },
+  };
+
+  const prevDoc = globalThis.document;
+  delete globalThis.document;
+  const bridge = bridgeMod.mountPulseVialBridge({
+    win: env.win,
+    doc: env.doc,
+    storage: env.storage,
+    vialCore,
+    autoPoll: false,
+    allowMultiple: true,
+  });
+
+  try {
+    const t0 = Date.now();
+    const st = await bridge.sync();
+    const elapsed = Date.now() - t0;
+
+    assert.equal(st.attached, true);
+    assert.ok(fallbackCalls >= 1, 'Must fall back to __agPrismMetricsBridge when agPulseHost stalls');
+    assert.ok(elapsed >= 1700 && elapsed < 3200, `Expected ~1800ms race fallback, got ${elapsed}ms`);
+    assert.equal(visibleFallback.getAttribute('data-pv-mode'), 'vial', 'Must attach to visible fallback bar, skipping hidden external bar');
+    assert.equal(hiddenExt.hasAttribute('data-pv-mode'), false, 'Hidden external bar must remain untouched');
+    assert.equal(visibleFallback.style.getPropertyValue('flex-shrink'), '0', 'Visible non-icon bar must lock flex-shrink: 0');
+    assert.equal(st.usedFraction, 0.8);
+    assert.equal(st.quotaGroups, 1);
+
+    const css = sr.querySelector('style[data-ag-cs-pulse-style="1"]')?.textContent || '';
+    assert.equal(css.includes(';,--pulse-'), false, 'PV CSS variables must have zero stray commas');
+    assert.ok(
+      css.includes('.pv-slot,.pv-cv{width:96px!important;height:220px!important;min-width:96px;min-height:220px;flex:none;display:block}'),
+      'Vial slot & canvas must lock explicit 96x220 non-zero geometry'
+    );
+
+    const cv = sr.querySelector('canvas.pv-cv');
+    assert.ok(cv);
+    assert.equal(cv.getAttribute('width'), '96');
+    assert.equal(cv.getAttribute('height'), '220');
+
+    // Because #five-balance & #week-balance were stuck at '—', Prism .pv-qt must automatically unhide and show live 64% quota!
+    const pvQt = sr.querySelector('[data-ag-pulse-quotas="1"]');
+    assert.equal(pvQt.hidden, false, 'Must rescue stuck "—" quota skeleton with live Prism quota rows');
+    assert.match(pvQt.querySelector('.pv-qval')?.textContent || '', /64%/);
+
+    // #219 guard: external Pulse orphan sweeper `[id^="ag-pulse-status-bar"],[data-ag-pulse-bar]` must NEVER match `#ag-prism-pulse-bar`!
+    assert.equal(visibleFallback.hasAttribute('data-ag-pulse-bar'), false);
+    assert.equal(visibleFallback.getAttribute('data-ag-prism-pulse-bar'), 'true');
+  } finally {
+    bridge.destroy();
+    if (prevDoc !== undefined) globalThis.document = prevDoc;
+  }
+});
+
+test('inline-fallback mounts isolated #ag-prism-pulse-bar invisible to external orphan sweeper and auto-reattaches via MutationObserver (#219)', async () => {
+  const inlineMod = require('../vendor/pulse-dashboard/inline-fallback.js');
+  const env = createPulseMockEnv();
+  const mutObservers = [];
+  env.win.MutationObserver = class {
+    constructor(cb) {
+      this.cb = cb;
+      mutObservers.push(this);
+    }
+    observe() {}
+    disconnect() {
+      const idx = mutObservers.indexOf(this);
+      if (idx >= 0) mutObservers.splice(idx, 1);
+    }
+  };
+  const footer = env.doc.createElement('div');
+  footer.className = 'agy-composer-footer flex items-center';
+  const leftSlot = env.doc.createElement('div');
+  const sendBtn = env.doc.createElement('button');
+  footer.appendChild(leftSlot);
+  footer.appendChild(sendBtn);
+  env.doc.body.appendChild(footer);
+
+  // Mark default external #ag-pulse-status-bar with data-ag-pulse-bar to simulate live #218 collision
+  const extBar = env.getPulseHost();
+  extBar.setAttribute('data-ag-pulse-bar', 'true');
+  extBar.setAttribute('data-layout', 'blocked');
+
+  const ctrl = inlineMod.createTelemetryController({ window: env.win, document: env.doc });
+  try {
+    const st = ctrl.sync({ telemetryModule: 'on', language: 'zh-CN' });
+    assert.equal(st.mountedFallback, true);
+    assert.equal(extBar.getAttribute('data-ag-prism-hidden'), '1', 'telemetryModule=on must hide external bar');
+
+    const prismBar = env.doc.getElementById('ag-prism-pulse-bar');
+    assert.ok(prismBar, 'Must mount #ag-prism-pulse-bar');
+    assert.equal(prismBar.getAttribute('data-ag-prism-pulse-bar'), 'true');
+    assert.equal(prismBar.getAttribute('data-ag-prism-fallback'), '1');
+    assert.equal(prismBar.hasAttribute('data-ag-pulse-bar'), false, 'Must NOT carry data-ag-pulse-bar');
+    assert.equal(prismBar.id.startsWith('ag-pulse-status-bar'), false, 'ID must NOT start with ag-pulse-status-bar');
+    assert.equal(prismBar.parentElement, footer, 'Must seat inside .agy-composer-footer');
+    assert.equal(footer.children[1], prismBar, 'Must seat before trailing send button');
+
+    // Simulate external Pulse orphan sweeper query `[id^="ag-pulse-status-bar"],[data-ag-pulse-bar]`
+    const swept = [...env.doc.querySelectorAll('[data-ag-pulse-bar="true"]'), env.doc.getElementById('ag-pulse-status-bar')].filter(Boolean);
+    assert.equal(swept.includes(prismBar), false, 'External orphan sweeper query must NOT match Prism bar');
+
+    // Simulate accidental DOM removal (e.g. React footer re-render) and verify MutationObserver auto-reattach within 80ms
+    prismBar.remove();
+    assert.equal(prismBar.parentElement, null);
+    for (const obs of [...mutObservers]) obs.cb([]);
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(prismBar.parentElement, footer, 'seatObs must auto-reattach #ag-prism-pulse-bar into .agy-composer-footer');
+  } finally {
+    ctrl.destroy();
+  }
+});
+
+

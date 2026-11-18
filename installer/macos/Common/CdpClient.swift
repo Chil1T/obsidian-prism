@@ -442,6 +442,13 @@ enum CdpHelper {
         }
         let host = (parsed.host ?? "").lowercased()
         if host != "127.0.0.1" && host != "localhost" && host != "::1" && host != "[::1]" { return false }
+        let lowerPath = parsed.path.lowercased()
+        if lowerPath == "/viewer" || lowerPath.hasPrefix("/viewer/") ||
+           lowerPath == "/sandbox" || lowerPath.hasPrefix("/sandbox/") ||
+           lowerPath == "/stream" || lowerPath.hasPrefix("/stream/") ||
+           lowerPath == "/api" || lowerPath.hasPrefix("/api/") {
+            return false
+        }
         if ttl.lowercased().contains("antigravity") { return true }
         if scheme == "https" && (ttl.isEmpty || ttl.lowercased().hasPrefix("127.0.0.1")) { return true }
         return false
@@ -596,11 +603,10 @@ enum CdpHelper {
         return nil
     }
 
-    static func isExpectedDaemonProcess(pid: Int32) -> Bool {
-        guard pid > 0 else { return false }
+    private static func runPsQuery(pid: Int32, format: String) -> String {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-        proc.arguments = ["-p", "\(pid)", "-o", "comm="]
+        proc.arguments = ["-p", "\(pid)", "-o", format]
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = Pipe()
@@ -608,15 +614,35 @@ enum CdpHelper {
             try proc.run()
             proc.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let comm = (String(data: data, encoding: .utf8) ?? "").lowercased()
-            if comm.isEmpty { return false }
-            return comm.contains("node") ||
-                   comm.contains("watcher") ||
-                   comm.contains("obsidian-prism") ||
-                   comm.contains("agy-claude-style")
+            return String(data: data, encoding: .utf8) ?? ""
         } catch {
+            return ""
+        }
+    }
+
+    static func isExpectedDaemonProcess(pid: Int32) -> Bool {
+        guard pid > 0 else { return false }
+        let comm = runPsQuery(pid: pid, format: "comm=").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if comm.isEmpty { return false }
+        if comm.contains("node") ||
+           comm.contains("watcher") ||
+           comm.contains("obsidian-prism") ||
+           comm.contains("agy-claude-style") {
+            return true
+        }
+        if comm.contains("antigravity") || comm.contains("electron") || comm.hasSuffix("/agy") || comm == "agy" {
+            let args = runPsQuery(pid: pid, format: "args=").replacingOccurrences(of: "\\", with: "/").lowercased()
+            if args.isEmpty || args.contains("--type=") { return false }
+            let hasPrismOwner = args.contains("obsidian-prism") || args.contains("antigravity-prism") || args.contains("agy-claude-style")
+            let hasDaemonEntry = args.contains("sidecars/daemon/main.mjs") || args.contains("/daemon/main.mjs") || args.contains("/watch.js")
+            if hasPrismOwner && hasDaemonEntry { return true }
+            let matchedLock = readNativeDaemonPid(pluginDir: getDefaultNativePluginDir()) == pid
+            if matchedLock && args.contains("sidecar_sdk/register_loader.js") && args.contains("main.mjs") {
+                return true
+            }
             return false
         }
+        return false
     }
 
     static func isNativeDaemonAlive(pluginDir: String) -> Bool {
@@ -684,6 +710,7 @@ enum CdpHelper {
         sb.append("(() => {\n")
         sb.append("  const href = String((typeof location !== 'undefined' && location && location.href) || '');\n")
         sb.append("  if (/^(devtools:|chrome:|chrome-extension:|edge:|about:|data:|blob:|plugin:)/i.test(href)) return { ok: false, skipped: true };\n")
+        sb.append("  if (/^https?:\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?\\/(?:viewer|sandbox|stream|api)(?:[/?#]|$)/i.test(href)) return { ok: false, skipped: true };\n")
         sb.append("  const bootCfg = ")
         sb.append(cfgJson)
         sb.append(";\n")
