@@ -616,6 +616,26 @@ test('vendor/effort-slider/slider-coexist.js yields 100% to external __agCodexEf
   await new Promise((r) => setTimeout(r, 150));
   assert.ok(ctlSolo.getState().perfStats.executedScans <= 2);
 
+  // #242 guard: Claude Opus 5.5 / Sonnet 5.5 preserves authentic Claude spectrum, fast detent motion under motion="ultra",
+  // and localized 5-language context-menu settings panel
+  const upstreamLib = require(path.join(ROOT_DIR, 'vendor', 'effort-slider', 'upstream-client.js'));
+  envSolo.doc.documentElement.setAttribute('data-ag-cs-motion', 'ultra');
+  envSolo.doc.documentElement.setAttribute('data-ag-cs-palette', 'warm');
+  envSolo.doc.documentElement.setAttribute('data-ag-cs-accent', 'follow');
+  envSolo.doc.documentElement.setAttribute('data-ag-cs-lang', 'en');
+  assert.equal(upstreamLib.motionMode(envSolo.win, null, envSolo.doc), 'fast', 'motion="ultra" must preserve crisp fast detent mode');
+  const closeSet = upstreamLib.openSettingsPanel({ document: envSolo.doc, window: envSolo.win, x: 100, y: 100 });
+  const setDialog = envSolo.doc.querySelector('.ces-set');
+  assert.ok(setDialog, 'Right-click settings panel must remain available');
+  assert.equal(setDialog.getAttribute('aria-label'), 'Effort Slider');
+  closeSet();
+  assert.match(
+    upstreamLib.fillBackgroundFor(1, 0, 0.5, true),
+    /rgba\(142,\s*118,\s*192,\s*0\.25\).*#704ea2/i,
+    'Claude slider must retain authentic Claude violet spectrum even under warm palette'
+  );
+  assert.equal(upstreamLib.valueColorFor('High', 2, 3, true, false, true, 'follow'), '#c4b5fd');
+
   ctlSolo.destroy();
   assert.equal(envSolo.win.__agCodexEffortSliderInstance, undefined);
 });

@@ -528,8 +528,8 @@ test('UX-A2 Effort Slider full Prism integration: data-ag-cs-motion="off", data-
   globalThis.document = mockDoc;
 
   try {
-    // 1. motionMode obeys html[data-ag-cs-motion]
-    assert.equal(upstream.motionMode({ document: mockDoc }, null, mockDoc), 'full');
+    // 1. motionMode preserves crisp 'fast' detent feel by default under motion="ultra" (#242) and switches to 'quick' when 'off'
+    assert.equal(upstream.motionMode({ document: mockDoc }, null, mockDoc), 'fast');
     rootAttrs['data-ag-cs-motion'] = 'off';
     assert.equal(upstream.motionMode({ document: mockDoc }, null, mockDoc), 'quick');
 

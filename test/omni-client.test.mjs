@@ -1115,6 +1115,93 @@ test('Mermaid zoom opens native Browser Tab with #raw=<svg> hash, decorates real
   client.destroy();
 });
 
+// ── 6b. #236/#241 >20MB Video Host Error Auto-Takeover & Same-Slot File Switch ─
+test('auto-replaces host >20MB File Pane error (UHc without data-testid) with inline streaming viewer and reconciles same-slot file switches', async () => {
+  const env = createFakeDomEnvironment();
+  const { window, document } = env;
+  mountMockHostRoot(document, { withBrowserCtx: true, withV2: true });
+
+  const auxSplit = document.createElement('div');
+  auxSplit.setAttribute('data-testid', 'aux-pane-split');
+  const mainPane = document.createElement('div');
+  const rightPane = document.createElement('div');
+  auxSplit.appendChild(mainPane);
+  auxSplit.appendChild(rightPane);
+  document.body.appendChild(auxSplit);
+
+  // Build exact host File Pane DOM (`Ey` .relative.h-full.w-full -> scroll div -> `UHc` error div without data-testid)
+  const fileShell = document.createElement('div');
+  fileShell.className = 'relative h-full w-full';
+  const fiberState = {
+    memoizedProps: {
+      fileUri: 'file:///d%3A/projects/demo/media/launch-1080p60.mp4',
+      tabId: 'file__mp4_1',
+    },
+  };
+  fileShell.__reactFiber$host = { return: fiberState };
+
+  const scrollBox = document.createElement('div');
+  scrollBox.className = 'flex flex-col h-full w-full pl-2 overflow-y-auto';
+  const errBox = document.createElement('div');
+  errBox.className = 'flex flex-col items-center justify-center w-full h-full text-center';
+  const errTitle = document.createElement('p');
+  errTitle.textContent = 'Failed to read file content';
+  const errDetail = document.createElement('p');
+  errDetail.textContent = 'File exceeds the 20MB display limit (36MB).';
+  errBox.appendChild(errTitle);
+  errBox.appendChild(errDetail);
+  scrollBox.appendChild(errBox);
+  fileShell.appendChild(scrollBox);
+  rightPane.appendChild(fileShell);
+
+  const client = omniMod.createOmniClient({ window, document });
+  client.sync({ omniModule: 'on' }, { baseUrl: 'http://127.0.0.1:46500', token: 'tok_vid' });
+  await flushMicrotasks();
+
+  // Immediately auto-activates inline Workbench streaming iframe and hides the >20MB error!
+  const switcher1 = fileShell.querySelector('[data-testid="ag-omni-aux-switcher"]');
+  const iframe1 = fileShell.querySelector('[data-testid="ag-omni-aux-iframe"]');
+  assert.ok(switcher1, 'Must mount Aux switcher on UHc >20MB error shell');
+  assert.ok(iframe1, 'Must auto-mount inline streaming iframe without user clicking button');
+  assert.equal(iframe1.hidden, false);
+  assert.equal(scrollBox.style.display, 'none', 'Host 20MB error box must be hidden');
+  assert.match(iframe1.src, /^http:\/\/127\.0\.0\.1:46500\/viewer\?token=tok_vid.*launch-1080p60\.mp4/);
+  assert.match(iframe1.src, /kind=video/);
+
+  // Same-slot switch to a second >20MB video updates the inline streaming iframe to the new video!
+  fiberState.memoizedProps = {
+    fileUri: 'file:///d%3A/projects/demo/media/keynote-4k.mp4',
+    tabId: 'file__mp4_2',
+  };
+  errDetail.replaceChild(
+    document.createTextNode('File exceeds the 20MB display limit (73MB).'),
+    errDetail.firstChild
+  );
+  await new Promise((r) => setTimeout(r, 95));
+
+  const iframe2 = fileShell.querySelector('[data-testid="ag-omni-aux-iframe"]');
+  assert.ok(iframe2);
+  assert.match(iframe2.src, /keynote-4k\.mp4/);
+
+  // Same-slot switch to a normal TypeScript source file cleanly unmounts the media overlay!
+  fiberState.memoizedProps = {
+    fileUri: 'file:///d%3A/projects/demo/src/engine.ts',
+    tabId: 'file__ts_1',
+  };
+  errBox.remove();
+  const codeRoot = document.createElement('div');
+  codeRoot.className = 'file-viewer-root';
+  codeRoot.textContent = 'export const answer = 42;';
+  scrollBox.appendChild(codeRoot);
+  await new Promise((r) => setTimeout(r, 85));
+
+  assert.equal(fileShell.querySelector('[data-testid="ag-omni-aux-iframe"]'), null);
+  assert.equal(fileShell.querySelector('[data-testid="ag-omni-aux-switcher"]'), null);
+  assert.equal(scrollBox.style.display, '', 'Normal code viewer scroll box must be restored');
+
+  client.destroy();
+});
+
 // ── 7. CSS Token Alignment, Zero Legacy Dock Residue, vm.Script & Bundle Budget ─
 test('omni-client.js has zero persist:ag-prism-omni or custom dock creation, aligns style.css tokens, passes vm.Script + buildOmniClientExpression', () => {
   const clientCode = fs.readFileSync(CLIENT_PATH, 'utf8');

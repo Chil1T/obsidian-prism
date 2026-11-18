@@ -24,8 +24,9 @@
   const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
   const SHADOW_CSS = [
+    ':host,*,::before,::after{box-sizing:border-box}',
     ':host,.bar,.chip{display:inline-flex;align-items:center}',
-    ':host{flex:0 0 auto;position:relative;font:11px/16px Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--foreground,#dae2f0);user-select:none;z-index:28}',
+    ':host{flex:0 0 auto;position:relative;font:11px/16px Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--foreground,#dae2f0);user-select:none;z-index:20}',
     ':host([hidden]),.sub-badge[hidden],.card[hidden],:host([data-layout="blocked"])>.bar{display:none!important}',
     ':host([data-layout="blocked"]){position:fixed!important;left:-9999px!important;top:-9999px!important;width:0!important;height:0!important;margin:0!important;padding:0!important;overflow:hidden!important;visibility:hidden!important;pointer-events:none!important}',
     '.bar{gap:3px}',
@@ -36,8 +37,9 @@
     '.sub-badge{font-size:10px;opacity:.78;color:var(--primary,#38bdf8);font-weight:500}',
     '.context-ring{width:11px;height:11px;border-radius:50%;background:conic-gradient(var(--pv-tint,#3186ff) var(--used-angle,36deg),rgba(148,163,184,.28) 0);display:inline-block;position:relative;flex:none}',
     '.context-ring::after{content:"";position:absolute;inset:2.2px;border-radius:50%;background:var(--card,#141720)}',
-    '.card{position:fixed;right:18px;bottom:68px;width:min(320px,calc(100vw - 24px));padding:13px 14px 12px;border-radius:10px;border:1px solid rgba(148,163,184,.22);background:var(--card,#12151ef5);color:var(--foreground,#eef1f7);box-shadow:0 16px 40px rgba(0,0,0,.36);z-index:9999}',
-    '.heading{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;font-weight:600;margin-bottom:6px}',
+    '.card{position:absolute;right:0;left:auto;bottom:calc(100% + 10px);width:min(304px,calc(100vw - 24px));padding:12px 13px;border-radius:10px;border:1px solid rgba(148,163,184,.22);background:var(--card,#12151ef5);color:var(--foreground,#eef1f7);box-shadow:0 16px 40px rgba(0,0,0,.36);z-index:9999}',
+    '.heading{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:11px;font-weight:600;margin-bottom:6px}',
+    '.heading>span:first-child{white-space:nowrap}',
     '#context-summary{display:block;font-size:13px;font-weight:600;margin-bottom:2px}',
     '#context-tokens{margin:0 0 8px;font-size:11px;opacity:.76}',
     '.track{height:5px;border-radius:999px;background:rgba(148,163,184,.18);overflow:hidden;margin:6px 0 10px}',
@@ -49,11 +51,11 @@
 
   const isFin = (v) => typeof v === 'number' && Number.isFinite(v);
   const FB_ROWS = {
-    'zh-CN': '缓存|吞吐速率|首字延迟|最近速率|上下文窗口用量|当前模型|Prism 实时遥测同步|Prism 实时遥测同步 · 后台统计整编中|Prism 本地上下文估算|已用|剩余|代理',
-    'zh-TW': '快取|吞吐速率|首字延遲|最近速率|上下文視窗用量|目前模型|Prism 即時遙測同步|Prism 即時遙測同步 · 背景統計彙整中|Prism 本機上下文估算|已用|剩餘|代理',
-    yue: '快取|吞吐速率|首字延遲|最近速率|上下文視窗用量|目前模型|Prism 即時遙測同步|Prism 即時遙測同步 · 背景統計整理中|Prism 本機上下文估算|已用|剩低|代理',
+    'zh-CN': '缓存|吞吐速率|首字延迟|最近速率|上下文窗口|当前模型|Prism 实时遥测同步|Prism 实时遥测同步 · 后台统计整编中|Prism 本地上下文估算|已用|剩余|代理',
+    'zh-TW': '快取|吞吐速率|首字延遲|最近速率|上下文視窗|目前模型|Prism 即時遙測同步|Prism 即時遙測同步 · 背景統計彙整中|Prism 本機上下文估算|已用|剩餘|代理',
+    yue: '快取|吞吐速率|首字延遲|最近速率|上下文視窗|目前模型|Prism 即時遙測同步|Prism 即時遙測同步 · 背景統計整理中|Prism 本機上下文估算|已用|剩低|代理',
     en: 'Cache|Throughput|TTFT|Latest Rate|Context Window|Active Model|Prism live telemetry|Prism live telemetry · Indexing usage|Prism local context estimate|used|free| sub',
-    ja: 'キャッシュ|スループット|初回応答|最新速度|コンテキスト使用量|現在のモデル|Prism リアルタイム同期|Prism 同期中 · バックグラウンド集計中|Prism ローカル推定|使用|残り| sub',
+    ja: 'キャッシュ|スループット|初回応答|最新速度|コンテキスト|現在のモデル|Prism リアルタイム同期|Prism 同期中 · バックグラウンド集計中|Prism ローカル推定|使用|残り| sub',
   };
   const FB_I18N = Object.fromEntries(
     Object.entries(FB_ROWS).map(([lk, s]) => {
@@ -100,7 +102,7 @@
 
     let mode = 'auto', waitTm = null, rescTm = null, pollTm = null, fbEl = null, srEl = null;
     let hasHost = false, yielded = false, lastSig = '', detAt = 0;
-    let docOff = null, lastSnap = null, mApi = null, mRes = null, seatObs = null, healTm = null;
+    let docOff = null, popOff = null, lastSnap = null, mApi = null, mRes = null, seatObs = null, healTm = null;
     let locSnap = null, locAt = 0, expLang = '';
     const pend = new Map();
 
@@ -129,6 +131,18 @@
     const clrSeat = () => {
       if (healTm !== null) { clearTimeout(healTm); healTm = null; }
       if (seatObs) { try { seatObs.disconnect(); } catch {} seatObs = null; }
+      if (popOff) { try { popOff(); } catch {} popOff = null; }
+    };
+
+    const isConv = (doc, w, anc) => {
+      if (!doc || anc?.closest?.('.agy-home') || doc.querySelector?.('.agy-home, [data-testid="home-greeting"]')) return false;
+      const pn = w?.location?.pathname;
+      if (typeof pn === 'string' && pn && !/\/c\/[0-9a-f-]{8,}/i.test(pn)) {
+        if (!doc.querySelector?.('[data-testid="conversation-view"]') && !anc?.closest?.('[data-cascade-id]') && !doc.querySelector?.('[data-cascade-id]')) {
+          return false;
+        }
+      }
+      return true;
     };
 
     const findExtBars = (doc) => {
@@ -173,12 +187,13 @@
       if (b.getAttribute?.(HID_ATTR) === '1' || b.getAttribute?.('data-layout') === 'blocked' || b.hidden === true) return false;
       if (b.style && b.style.display === 'none') return false;
       if (doc && doc.body && (b.parentElement === doc.body || b.parentNode === doc.body)) return false;
+      if (b.closest?.('.agy-home')) return false;
       return true;
     };
 
     const hasExt = () => {
       const w = gW(), doc = gD();
-      if (!w || !doc) return false;
+      if (!w || !doc || !isConv(doc, w)) return false;
       const bars = findExtBars(doc);
       let sawDead = false;
       for (let i = 0; i < bars.length; i++) {
@@ -263,15 +278,22 @@
     const unmountFb = (keepBridge = false) => {
       clrWait();
       clrPoll();
-      clrSeat();
       if (docOff) { try { docOff(); } catch {} docOff = null; }
       if (!keepBridge) {
+        clrSeat();
         for (const it of pend.values()) { clearTimeout(it.timer); it.resolve(null); }
         pend.clear();
         rmHost();
       }
       if (fbEl) {
-        try { gW()?.__agPulseExternalBridge?.({ event: 'dispose' }); } catch {}
+        try {
+          if (srEl) {
+            const xc = srEl.getElementById('context-card'), sc = srEl.getElementById('speed-card');
+            if (xc) xc.hidden = true;
+            if (sc) sc.hidden = true;
+          }
+          gW()?.__agPulseExternalBridge?.({ event: 'dispose' });
+        } catch {}
         try { fbEl.remove(); } catch {}
       }
       purgeOrphans(gD(), null);
@@ -401,18 +423,18 @@
       try { gW()?.__agPulseExternalBridge?.({ event: 'render', data: snap }); } catch {}
     };
 
-    const isHidAnc = (el) => !el || el.hidden === true || Boolean(el.closest?.('aside, [data-testid="conversation-list-sidebar"], [data-testid="conversation-row-sidebar"], [hidden], [inert]'));
+    const isHidAnc = (el) => !el || el.hidden === true || Boolean(el.closest?.('.agy-home, aside, [data-testid="conversation-list-sidebar"], [data-testid="conversation-row-sidebar"], [hidden], [inert]'));
     const isTopWrap = (p) => {
       if (!p) return true;
       const c = String(p.className || '').trim();
       return Boolean(c && /\bmin-w-0\b/.test(c) && !/\b(?:flex|inline-flex|agy-composer-footer)\b/.test(c));
     };
     const findAnchor = (doc) => {
-      if (!doc) return null;
+      if (!doc || !isConv(doc, gW())) return null;
       const ft = doc.querySelector?.('.agy-composer-footer, [data-testid="input-box-bottom-toolbar"]');
-      if (ft && !isHidAnc(ft)) return ft;
+      if (ft && !isHidAnc(ft) && isConv(doc, gW(), ft)) return ft;
       const mb = doc.querySelector?.('[data-testid="model-selector-trigger"]');
-      return mb?.parentElement && !isHidAnc(mb) && !isTopWrap(mb.parentElement) ? mb.parentElement : null;
+      return mb?.parentElement && !isHidAnc(mb) && !isTopWrap(mb.parentElement) && isConv(doc, gW(), mb) ? mb.parentElement : null;
     };
 
     const seatIn = (anc, el) => {
@@ -429,18 +451,91 @@
     const seatFb = (doc) => {
       if (!fbEl || !doc) return false;
       const anc = findAnchor(doc);
-      if (!anc) { try { fbEl.remove(); } catch {} return false; }
+      if (!anc) { unmountFb(true); return false; }
       if (!isConn(doc, fbEl) || fbEl.parentElement !== anc) {
         try { seatIn(anc, fbEl); } catch { return false; }
       }
       return true;
     };
 
+    const ensSeatObs = () => {
+      const w = gW(), doc = gD();
+      if (!w || !doc || mode === 'off') return;
+      const runHeal = () => {
+        healTm = null;
+        if (mode === 'off') return;
+        const d = gD(), wn = gW();
+        if (!d || !wn) return;
+        if (!isConv(d, wn)) {
+          yielded = false;
+          if (fbEl) unmountFb(true);
+          hideExt();
+          return;
+        }
+        if (mode === 'on') {
+          hideExt();
+          if (fbEl) {
+            if (!isConn(d, fbEl) && seatFb(d)) try { wn.__agPulseExternalBridge?.({ event: 'mount' }); } catch {}
+          } else if (findAnchor(d)) {
+            mountFb();
+          }
+          return;
+        }
+        showExt();
+        if (hasExt()) {
+          yielded = true;
+          if (fbEl) unmountFb(true);
+          return;
+        }
+        if (fbEl) {
+          if (!isConn(d, fbEl) && seatFb(d)) try { wn.__agPulseExternalBridge?.({ event: 'mount' }); } catch {}
+        } else if (waitTm === null && findAnchor(d)) {
+          mountFb();
+        }
+      };
+      const schedHeal = () => {
+        if (mode === 'off' || healTm !== null) return;
+        healTm = setTimeout(runHeal, 45);
+        healTm?.unref?.();
+      };
+      if (!seatObs && typeof w.MutationObserver === 'function' && (doc.body || doc.documentElement)) {
+        seatObs = new w.MutationObserver(() => {
+          if (mode === 'off' || healTm !== null) return;
+          const inC = isConv(doc, w);
+          if (!inC && (fbEl || findExtBars(doc).some((b) => b && b.getAttribute?.(HID_ATTR) !== '1'))) {
+            schedHeal();
+            return;
+          }
+          if (inC && ((!fbEl && !hasExt() && waitTm === null && findAnchor(doc)) || (fbEl && !isConn(doc, fbEl)))) {
+            schedHeal();
+            return;
+          }
+          if (inC && mode === 'on' && findExtBars(doc).some((b) => b && b.getAttribute?.(FALLBACK_ATTR) !== '1' && b.getAttribute?.(HID_ATTR) !== '1')) {
+            schedHeal();
+          }
+        });
+        try { seatObs.observe(doc.body || doc.documentElement, { childList: true, subtree: true }); } catch {}
+      }
+      if (!popOff && typeof w.addEventListener === 'function') {
+        w.addEventListener('popstate', schedHeal);
+        popOff = () => w.removeEventListener?.('popstate', schedHeal);
+      }
+    };
+
     async function refresh() {
       const w = gW(), doc = gD();
       if (!envOpts && w?.__agPrismTelemetry && w.__agPrismTelemetry !== api) { unmountFb(); return null; }
+      if (!isConv(doc, w)) {
+        yielded = false;
+        unmountFb(true);
+        if (mode !== 'off') hideExt();
+        return null;
+      }
       if (mode === 'on') hideExt();
-      else if (hasExt()) { yielded = true; unmountFb(true); return null; }
+      else {
+        showExt();
+        if (hasExt()) { yielded = true; unmountFb(true); return null; }
+      }
       if (mode !== 'off' && fbEl) {
         purgeOrphans(doc, fbEl);
         if (!seatFb(doc)) return null;
@@ -459,12 +554,19 @@
       if (!w || !doc || (typeof doc.attachShadow === 'undefined' && typeof doc.createElement !== 'function')) return false;
       if (!envOpts && w.__agPrismTelemetry && w.__agPrismTelemetry !== api) { unmountFb(); return false; }
       if (mode === 'off') return false;
+      if (!isConv(doc, w)) {
+        yielded = false;
+        unmountFb(true);
+        hideExt();
+        ensSeatObs();
+        return false;
+      }
       if (mode === 'on') hideExt();
-      else if (hasExt()) { yielded = true; unmountFb(true); return false; }
-      if (fbEl && seatFb(doc)) { purgeOrphans(doc, fbEl); return true; }
+      else if (hasExt()) { yielded = true; unmountFb(true); ensSeatObs(); return false; }
+      if (fbEl && seatFb(doc)) { purgeOrphans(doc, fbEl); ensSeatObs(); return true; }
 
       const anc = findAnchor(doc);
-      if (!anc) return false;
+      if (!anc) { ensSeatObs(); return false; }
       const E = (t, a, k) => mk(doc, t, a, k);
       const host = E('div', { id: PRISM_BAR_ID, [FALLBACK_ATTR]: '1', [PRISM_BAR_ATTR]: 'true' });
       if (typeof host.attachShadow !== 'function') return false;
@@ -547,27 +649,7 @@
       srEl = sr;
       yielded = false;
 
-      clrSeat();
-      if (typeof w.MutationObserver === 'function') {
-        seatObs = new w.MutationObserver(() => {
-          if (mode === 'off' || !fbEl || healTm !== null) return;
-          const det = !isConn(doc, fbEl);
-          const unh = mode === 'on' && findExtBars(doc).some((b) => b && b.getAttribute?.(FALLBACK_ATTR) !== '1' && b.getAttribute?.(HID_ATTR) !== '1');
-          if (!det && !unh) return;
-          healTm = setTimeout(() => {
-            healTm = null;
-            if (mode === 'off' || !fbEl) return;
-            if (mode === 'on') hideExt();
-            else if (hasExt()) return;
-            if (!isConn(doc, fbEl) && seatFb(doc)) {
-              try { w.__agPulseExternalBridge?.({ event: 'mount' }); } catch {}
-            }
-          }, 45);
-          healTm?.unref?.();
-        });
-        try { seatObs.observe(doc.body || anc, { childList: true, subtree: Boolean(doc.body) }); } catch {}
-      }
-
+      ensSeatObs();
       ensHost();
       try { w.__agPulseExternalBridge?.({ event: 'mount' }); } catch {}
       void refresh();
@@ -600,6 +682,15 @@
         return getState();
       }
       ensBridge();
+      ensSeatObs();
+      const doc = gD(), w = gW();
+      if (!isConv(doc, w)) {
+        yielded = false;
+        unmountFb(true);
+        hideExt();
+        ensHost();
+        return getState();
+      }
       if (mode === 'on') {
         yielded = false;
         clrWait();
@@ -622,7 +713,6 @@
         }
         return getState();
       }
-      const doc = gD();
       if (fbEl && seatFb(doc)) return getState();
       if (findExtBars(doc).some((b) => b && b.getAttribute?.(FALLBACK_ATTR) !== '1' && isConn(doc, b) && !usableExt(doc, b))) {
         clrWait();
@@ -632,18 +722,24 @@
       if (waitTm === null) {
         const ms = isFin(cfg?.__fallbackDelayMs) && cfg.__fallbackDelayMs >= 0 ? cfg.__fallbackDelayMs : WAIT_MS;
         waitTm = setTimeout(() => {
-          waitTm = null;
-          if (mode !== 'auto') return;
-          if (hasExt()) { yielded = true; unmountFb(true); ensHost(); return; }
-          mountFb();
+          waitTimerDone();
         }, ms);
         waitTm?.unref?.();
       }
       return getState();
     }
 
+    function waitTimerDone() {
+      waitTm = null;
+      if (mode !== 'auto') return;
+      if (!isConv(gD(), gW())) { unmountFb(true); hideExt(); return; }
+      if (hasExt()) { yielded = true; unmountFb(true); ensHost(); return; }
+      mountFb();
+    }
+
     function destroy() {
       clrWait();
+      clrSeat();
       unmountFb();
       showExt();
       const w = gW();

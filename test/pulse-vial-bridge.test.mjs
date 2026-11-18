@@ -551,8 +551,8 @@ test('peaceful coexistence: preserves #ag-pulse-status-bar, __agPulseRuntimeVers
     assert.deepEqual(segColors, ['#1b49b2', '#3186ff', '#5cc6fc']);
     const card = sr.getElementById('context-card');
     assert.equal(card.getAttribute('data-ag-pulse-vial-mode'), 'vial');
-    assert.equal(card.getAttribute('data-ag-pulse-card-width'), '464');
-    assert.equal(card.style.getPropertyValue('--pv-cx'), '-176px');
+    assert.equal(card.getAttribute('data-ag-pulse-card-width'), '396');
+    assert.equal(card.style.getPropertyValue('--pv-cx'), '-108px');
 
     const toggleBtn = sr.querySelector('[data-ag-pulse-vial-toggle="1"]');
     assert.equal(toggleBtn?.textContent, '实体试管');
@@ -1104,7 +1104,7 @@ test('v0.9.1 live compatibility: [data-ag-pulse-bar="true"][data-scope="main"] h
   try {
     const st = await bridge.sync();
     assert.equal(st.attached, true);
-    assert.equal(card.getAttribute('data-ag-pulse-card-width'), '464');
+    assert.equal(card.getAttribute('data-ag-pulse-card-width'), '396');
     assert.ok(hero.querySelector('.pv-acts'), '.pv-acts must mount inside .heading.context-hero');
 
     // .quota-details presence must suppress Prism fallback .pv-qt
@@ -1504,6 +1504,34 @@ test('inline-fallback mounts isolated #ag-prism-pulse-bar invisible to external 
     for (const obs of [...mutObservers]) obs.cb([]);
     await new Promise((r) => setTimeout(r, 80));
     assert.equal(prismBar.parentElement, footer, 'seatObs must auto-reattach #ag-prism-pulse-bar into .agy-composer-footer');
+
+    // #241: Verify compact inward-right card CSS & New Conversation (.agy-home / '/') route suppression + recovery
+    const shadowStyle = prismBar.shadowRoot.querySelector('style')?.textContent || '';
+    assert.ok(shadowStyle.includes('box-sizing:border-box'), 'Fallback shadow CSS must enforce border-box');
+    assert.ok(
+      shadowStyle.includes('.card{position:absolute;right:0;left:auto;bottom:calc(100% + 10px);width:min(304px'),
+      'Fallback .card must anchor right:0 inward above the trigger bar instead of viewport right:18px'
+    );
+    assert.equal(prismBar.shadowRoot.getElementById('context-card')?.querySelector('[data-fb-i18n="ctxHeading"]')?.textContent, '上下文窗口');
+
+    // Switch route to New Conversation ('/' + .agy-home) -> must unmount #ag-prism-pulse-bar & suppress external bar
+    const homeEl = env.doc.createElement('div');
+    homeEl.className = 'agy-home';
+    env.doc.body.appendChild(homeEl);
+    env.win.location.pathname = '/';
+    for (const obs of [...mutObservers]) obs.cb([]);
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(ctrl.getState().mountedFallback, false, 'Must unmount #ag-prism-pulse-bar on New Conversation (.agy-home) page');
+    assert.equal(env.doc.getElementById('ag-prism-pulse-bar'), null);
+    assert.equal(extBar.getAttribute('data-ag-prism-hidden'), '1', 'External bar must stay hidden on New Conversation page');
+
+    // Navigate back into active conversation (/c/<uuid>) -> must auto-remount within 80ms!
+    homeEl.remove();
+    env.win.location.pathname = '/c/6546d8a7-52c2-42df-82c0-85aa82cedf9c';
+    for (const obs of [...mutObservers]) obs.cb([]);
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(ctrl.getState().mountedFallback, true, 'Must auto-restore #ag-prism-pulse-bar when entering /c/<uuid> conversation');
+    assert.ok(env.doc.getElementById('ag-prism-pulse-bar'));
   } finally {
     ctrl.destroy();
   }

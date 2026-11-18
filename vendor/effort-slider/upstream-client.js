@@ -255,20 +255,11 @@
 
   function resolvePrismAccentTone(doc, win) {
     var ac = getPrismRootAttr(doc, win, "data-ag-cs-accent");
-    if (ac === "mono" || ac === "amber" || ac === "iris" || ac === "cobalt") return ac;
-    var pal = getPrismRootAttr(doc, win, "data-ag-cs-palette");
-    if ((!ac || ac === "follow") && pal === "warm") return "amber";
-    return "follow";
+    return ac === "mono" || ac === "amber" || ac === "iris" || ac === "cobalt" ? ac : "follow";
   }
 
   function motionMode(win, explicitSettings, doc) {
-    if (prefersReducedMotion(win)) return "quick";
-    if (!explicitSettings) {
-      var pm = getPrismRootAttr(doc, win, "data-ag-cs-motion");
-      if (pm === "off") return "quick";
-      if (pm === "subtle" || pm === "standard") return "fast";
-      if (pm === "ultra") return "full";
-    }
+    if (isPrismMotionOff(doc, win)) return "quick";
     var s = explicitSettings ? normalizeSettings(explicitSettings) : readSettings(win);
     return s.motion || "fast";
   }
@@ -933,30 +924,23 @@
    * - start < pct <= end    : #4d93f8 -> #9333ea (蓝紫过渡)
    * - end < pct <= 1        : #9333ea -> #4c1d95 (深紫星云)
    */
+  var TONE_PAL = {
+    mono: ["#71717a", "#a1a1aa", "#d4d4d8", ""],
+    amber: ["#b45309", "#d97706", "#f59e0b", "#f59e0b"],
+    iris: ["#6d28d9", "#8b5cf6", "#a855f7", "#a78bfa"],
+    cobalt: ["#1d4ed8", "#2563eb", "#0284c7", "#38bdf8"]
+  };
+
   function fillColorFor(pct, startOverride, endOverride, isClaude, accentOverride) {
     var p = clamp01(pct);
     var start = typeof startOverride === "number" && Number.isFinite(startOverride) ? startOverride : ENERGY_START;
     var end = typeof endOverride === "number" && Number.isFinite(endOverride) ? endOverride : ENERGY_END;
     var tone = accentOverride || resolvePrismAccentTone(null, null);
-    if (tone === "mono") {
-      if (p <= start + 1e-6) return "#71717a";
-      if (p <= end + 1e-6) return mixHex("#71717a", "#a1a1aa", (p - start) / Math.max(1e-6, end - start));
-      return mixHex("#a1a1aa", "#d4d4d8", (p - end) / Math.max(1e-6, 1 - end));
-    }
-    if (tone === "amber") {
-      if (p <= start + 1e-6) return "#b45309";
-      if (p <= end + 1e-6) return mixHex("#b45309", "#d97706", (p - start) / Math.max(1e-6, end - start));
-      return mixHex("#d97706", "#f59e0b", (p - end) / Math.max(1e-6, 1 - end));
-    }
-    if (tone === "iris") {
-      if (p <= start + 1e-6) return "#6d28d9";
-      if (p <= end + 1e-6) return mixHex("#6d28d9", "#8b5cf6", (p - start) / Math.max(1e-6, end - start));
-      return mixHex("#8b5cf6", "#a855f7", (p - end) / Math.max(1e-6, 1 - end));
-    }
-    if (tone === "cobalt") {
-      if (p <= start + 1e-6) return "#1d4ed8";
-      if (p <= end + 1e-6) return mixHex("#1d4ed8", "#2563eb", (p - start) / Math.max(1e-6, end - start));
-      return mixHex("#2563eb", "#0284c7", (p - end) / Math.max(1e-6, 1 - end));
+    if (tone === "mono" || (!isClaude && TONE_PAL[tone])) {
+      var tp = TONE_PAL[tone];
+      if (p <= start + 1e-6) return tp[0];
+      if (p <= end + 1e-6) return mixHex(tp[0], tp[1], (p - start) / Math.max(1e-6, end - start));
+      return mixHex(tp[1], tp[2], (p - end) / Math.max(1e-6, 1 - end));
     }
     if (isClaude) {
       if (p <= start + 1e-6) return "#71717a";
@@ -976,10 +960,6 @@
     return mixHex("#9333ea", "#4c1d95", (p - end) / span2);
   }
 
-  /**
-   * 填充区线性渐变背景：
-   * 让轨道左侧始终保留蓝色起点，随滑块向右推进依次展开蓝紫过渡与深紫星云
-   */
   function fillBackgroundFor(pct, startOverride, endOverride, isClaude, accentOverride) {
     var p = clamp01(pct);
     var start = typeof startOverride === "number" && Number.isFinite(startOverride) ? startOverride : ENERGY_START;
@@ -990,14 +970,12 @@
         ? "rgba(161, 161, 170, 0.22)"
         : "linear-gradient(90deg, rgba(113, 113, 122, 0.45) 0%, " + fillColorFor(p, start, end, false, "mono") + " 100%)";
     }
-    if (tone === "amber" || tone === "iris" || tone === "cobalt") {
-      var baseStart = tone === "amber" ? "#b45309" : tone === "iris" ? "#6d28d9" : "#1d4ed8";
-      return "linear-gradient(90deg, " + baseStart + " 0%, " + fillColorFor(p, start, end, false, tone) + " 100%)";
-    }
     if (isClaude) {
       if (p <= 0.05) return "rgba(142, 118, 192, 0.15)";
-      // 末端颜色随位置连续插值（#71717a → #a78bfa → #704ea2），避免过中点时整条填充色突变
       return "linear-gradient(90deg, rgba(142, 118, 192, 0.25) 0%, " + fillColorFor(p, start, end, true, "follow") + " 100%)";
+    }
+    if (TONE_PAL[tone]) {
+      return "linear-gradient(90deg, " + TONE_PAL[tone][0] + " 0%, " + fillColorFor(p, start, end, false, tone) + " 100%)";
     }
     if (p <= start + 1e-6) return "#4d93f8";
     var endColor = fillColorFor(p, start, end, false, "follow");
@@ -1013,33 +991,15 @@
     if (stopStart <= 0) {
       return "linear-gradient(90deg, #4d93f8 0%, #9333ea " + stopMid + "%, " + endColor + " 100%)";
     }
-    return (
-      "linear-gradient(90deg, #4d93f8 0%, #4d93f8 " +
-      stopStart +
-      "%, #9333ea " +
-      stopMid +
-      "%, " +
-      endColor +
-      " 100%)"
-    );
+    return "linear-gradient(90deg, #4d93f8 0%, #4d93f8 " + stopStart + "%, #9333ea " + stopMid + "%, " + endColor + " 100%)";
   }
 
-  /**
-   * 档位文字着色：
-   * - 单档位锁定模型、Off 档位或极简单色（mono）保持官方默认灰（返回 ""）
-   */
   function valueColorFor(label, index, count, isMax, hasOffFirst, isClaude, accentOverride) {
     if (isOffLevel(label)) return "";
     var n = Number(count) || 0;
     if (n <= 1) return "";
     var tone = accentOverride || resolvePrismAccentTone(null, null);
     if (tone === "mono") return "";
-    var tIdx = typeof index === "number" && index >= 0 ? index : 0;
-    var tFirst = hasOffFirst ? 1 : 0;
-    var tRatio = clamp01((tIdx - tFirst) / Math.max(1, n - 1 - tFirst));
-    if (tone === "amber") return isMax || index === n - 1 ? "#f59e0b" : mixHex("#d97706", "#f59e0b", tRatio);
-    if (tone === "iris") return isMax || index === n - 1 ? "#a78bfa" : mixHex("#7c3aed", "#a78bfa", tRatio);
-    if (tone === "cobalt") return isMax || index === n - 1 ? "#38bdf8" : mixHex("#2563eb", "#38bdf8", tRatio);
     if (isClaude) {
       if (isMax || index === n - 1) return "#c4b5fd";
       var cIdx = typeof index === "number" && index >= 0 ? index : 0;
@@ -1049,6 +1009,12 @@
       var cDenom = Math.max(1, n - 1 - cFirstActive);
       var cT = clamp01((cIdx - cFirstActive) / cDenom);
       return mixHex("#94a3b8", "#c4b5fd", cT);
+    }
+    if (TONE_PAL[tone]) {
+      var tIdx = typeof index === "number" && index >= 0 ? index : 0;
+      var tFirst = hasOffFirst ? 1 : 0;
+      var tp = TONE_PAL[tone];
+      return isMax || index === n - 1 ? tp[3] : mixHex(tp[1], tp[3], clamp01((tIdx - tFirst) / Math.max(1, n - 1 - tFirst)));
     }
     if (isMax || index === n - 1) return "#8b5cf6";
     var idx = typeof index === "number" && index >= 0 ? index : 0;
@@ -1062,455 +1028,7 @@
   var FILL_RADIUS_CSS = KNOB_RADIUS + "px 0 0 " + KNOB_RADIUS + "px";
 
   // ── 样式表注入（对齐 dsh-codex-effort-slider 右向左星尘横穿 + 星云扫光 + Antigravity 面板适配） ──
-  var SLIDER_CSS = [
-    "@keyframes ces-sweep {",
-    "  0% { transform: translateX(100%); }",
-    "  100% { transform: translateX(-100%); }",
-    "}",
-    "@keyframes ces-star-sweep {",
-    "  0% { transform: translate3d(0, 0, 0); opacity: 0; }",
-    "  6% { opacity: 1; }",
-    "  94% { opacity: 1; }",
-    "  100% { transform: translate3d(-100%, 0, 0); opacity: 0; }",
-    "}",
-    ".ces-inline {",
-    "  width: 100%;",
-    "  box-sizing: border-box;",
-    "  padding-top: 6px;",
-    "  user-select: none !important;",
-    "  -webkit-user-select: none !important;",
-    "}",
-    ".ces-root,",
-    ".ces-root:focus,",
-    ".ces-root:focus-visible,",
-    ".ces-root:focus-within {",
-    "  position: relative;",
-    "  width: 100%;",
-    "  box-sizing: border-box;",
-    "  outline: none !important;",
-    "  outline-width: 0 !important;",
-    "  box-shadow: none !important;",
-    "  user-select: none !important;",
-    "  -webkit-user-select: none !important;",
-    "  -webkit-tap-highlight-color: transparent !important;",
-    "}",
-    ".ces-track {",
-    "  position: relative;",
-    "  width: 100%;",
-    "  height: " + TRACK_HEIGHT + "px;",
-    "  border-radius: 999px;",
-    "  background: rgba(128, 128, 145, 0.18);",
-    "  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.24), inset 0 0 0 1px rgba(255, 255, 255, 0.06);",
-    "  cursor: pointer;",
-    "  touch-action: none;",
-    "  box-sizing: border-box;",
-    "  transition: opacity 0.15s ease, box-shadow 0.2s ease;",
-    "}",
-    ".ces-inline[data-energy='1'] .ces-track,",
-    ".ces-root[data-energy='1'] .ces-track {",
-    "  box-shadow: 0 0 calc(var(--ces-energy, 0) * 16px) rgba(168, 85, 247, 0.5), inset 0 1px 2px rgba(0, 0, 0, 0.24);",
-    "}",
-    ".ces-inline[data-energy='0'] .ces-star,",
-    ".ces-inline[data-energy='0'] .ces-energy__sweep,",
-    ".ces-root[data-energy='0'] .ces-star,",
-    ".ces-root[data-energy='0'] .ces-energy__sweep {",
-    "  animation-play-state: paused;",
-    "}",
-    ".ces-track.is-locked {",
-    "  opacity: 0.45;",
-    "  cursor: not-allowed;",
-    "  filter: saturate(0.25);",
-    "}",
-    ".ces-fill {",
-    "  position: absolute;",
-    "  top: 0;",
-    "  left: 0;",
-    "  bottom: 0;",
-    "  width: var(--ces-fill, 14px);",
-    "  border-radius: " + FILL_RADIUS_CSS + ";",
-    "  background: var(--ces-fill-bg, #4d93f8);",
-    "  pointer-events: none;",
-    "  will-change: width, background;",
-    "}",
-    ".ces-energy {",
-    "  position: absolute;",
-    "  top: 0;",
-    "  left: 0;",
-    "  bottom: 0;",
-    "  width: var(--ces-fill, 14px);",
-    "  border-radius: " + FILL_RADIUS_CSS + ";",
-    "  overflow: hidden;",
-    "  pointer-events: none;",
-    "  opacity: var(--ces-energy, 0);",
-    "  transition: opacity 0.2s ease;",
-    "  background: linear-gradient(90deg, #3b1178 0%, #6d28d9 30%, #9333ea 62%, #c084fc 100%);",
-    "}",
-    ".ces-energy__sweep {",
-    "  position: absolute;",
-    "  inset: 0;",
-    "  background: linear-gradient(100deg, transparent 18%, rgba(255, 255, 255, 0.30) 50%, transparent 82%);",
-    "  transform: translateX(100%);",
-    "  animation: ces-sweep 2.4s linear infinite;",
-    "  pointer-events: none;",
-    "}",
-    ".ces-stars {",
-    "  position: absolute;",
-    "  top: 0;",
-    "  left: 0;",
-    "  bottom: 0;",
-    "  width: var(--ces-fill, 14px);",
-    "  border-radius: " + FILL_RADIUS_CSS + ";",
-    "  opacity: var(--ces-star-opacity, 0);",
-    "  transition: opacity 0.2s ease;",
-    "  pointer-events: none;",
-    "  overflow: hidden;",
-    "}",
-    ".ces-star {",
-    "  position: absolute;",
-    "  left: 0;",
-    "  right: 0;",
-    "  height: 3px;",
-    "  margin-top: -1.5px;",
-    "  pointer-events: none;",
-    "  animation-name: ces-star-sweep;",
-    "  animation-timing-function: linear;",
-    "  animation-iteration-count: infinite;",
-    "}",
-    ".ces-star__dot {",
-    "  position: absolute;",
-    "  left: 100%;",
-    "  top: 0;",
-    "  width: 3px;",
-    "  height: 3px;",
-    "  margin-left: -1.5px;",
-    "  border-radius: 50%;",
-    "  background: #f5f3ff;",
-    "  box-shadow: 0 0 5px rgba(216, 180, 254, 0.95);",
-    "  opacity: var(--ces-b, 1);",
-    "  transform: scale(var(--ces-b, 1));",
-    "}",
-    ".ces-ticks {",
-    "  position: absolute;",
-    "  inset: 0;",
-    "  pointer-events: none;",
-    "}",
-    ".ces-tick {",
-    "  position: absolute;",
-    "  top: 50%;",
-    "  width: 3px;",
-    "  height: 3px;",
-    "  margin: -1.5px 0 0 -1.5px;",
-    "  border-radius: 50%;",
-    "  background: rgba(255, 255, 255, 0.28);",
-    "  pointer-events: none;",
-    "  transition: background-color 0.12s ease;",
-    "}",
-    ".ces-tick.is-on {",
-    "  background: rgba(255, 255, 255, 0.65);",
-    "}",
-    ".ces-tick.is-dim {",
-    "  background: rgba(255, 255, 255, 0.28);",
-    "}",
-    ".ces-knob {",
-    "  position: absolute;",
-    "  top: 50%;",
-    "  left: var(--ces-fill, 14px);",
-    "  width: " + KNOB_SIZE + "px;",
-    "  height: " + KNOB_SIZE + "px;",
-    "  margin: " + (-KNOB_RADIUS) + "px 0 0 " + (-KNOB_RADIUS) + "px;",
-    "  border-radius: 50%;",
-    "  background: #ffffff;",
-    "  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.34), 0 0 0 0.5px rgba(0, 0, 0, 0.06);",
-    "  pointer-events: none;",
-    "  will-change: left;",
-    "}",
-    "/* ── Claude 专属主题适配 (data-theme='claude') ── */",
-    ".ces-root[data-theme='claude'] .ces-stars,",
-    ".ces-root[data-theme='claude'] .ces-energy,",
-    ".ces-inline[data-theme='claude'] .ces-stars,",
-    ".ces-inline[data-theme='claude'] .ces-energy {",
-    "  display: none !important;",
-    "}",
-    ".ces-root[data-theme='claude'] .ces-track,",
-    ".ces-inline[data-theme='claude'] .ces-track {",
-    "  height: 28px;",
-    "  border-radius: 999px;",
-    "  background: rgba(128, 128, 145, 0.16);",
-    "  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22), inset 0 0 0 1px rgba(255, 255, 255, 0.08);",
-    "}",
-    ".ces-root[data-theme='claude'][data-energy='1'] .ces-track,",
-    ".ces-inline[data-theme='claude'][data-energy='1'] .ces-track {",
-    "  box-shadow: 0 0 16px rgba(167, 139, 250, 0.45), inset 0 1px 2px rgba(0, 0, 0, 0.22);",
-    "}",
-    ".ces-root[data-theme='claude'] .ces-knob,",
-    ".ces-inline[data-theme='claude'] .ces-knob {",
-    "  width: 24px;",
-    "  height: 30px;",
-    "  margin: -15px 0 0 -12px;",
-    "  border-radius: 7px;",
-    "  background: #ffffff;",
-    "  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(0, 0, 0, 0.12);",
-    "  display: flex;",
-    "  align-items: center;",
-    "  justify-content: center;",
-    "}",
-    ".ces-knob-notch {",
-    "  display: none;",
-    "  width: 2px;",
-    "  height: 10px;",
-    "  border-radius: 999px;",
-    "  background: rgba(0, 0, 0, 0.28);",
-    "}",
-    ".ces-root[data-theme='claude'] .ces-knob-notch,",
-    ".ces-inline[data-theme='claude'] .ces-knob-notch {",
-    "  display: block;",
-    "}",
-    ".ces-claude-canvas {",
-    "  position: absolute;",
-    "  left: 0;",
-    "  top: 0;",
-    // 宽度由 JS 每帧同步为已填充宽度（与 .ces-stars 一致），只在圆钮左侧绘制点阵，杜绝右侧未填充区提前冒出特效
-    "  width: var(--ces-fill, 0px);",
-    "  height: 100%;",
-    "  border-radius: 999px;",
-    "  display: none;",
-    "  pointer-events: none;",
-    "}",
-    ".ces-root[data-theme='claude'][data-energy='1'] .ces-claude-canvas,",
-    ".ces-inline[data-theme='claude'][data-energy='1'] .ces-claude-canvas {",
-    "  display: block;",
-    "}",
-    "@keyframes ces-claude-rise {",
-    "  0% { transform: translateY(85%) scale(0.96); opacity: 0; }",
-    "  55% { opacity: 1; }",
-    "  80% { transform: translateY(-6%) scale(1.01); }",
-    "  100% { transform: translateY(0) scale(1); opacity: 1; }",
-    "}",
-    ".ces-ag-effort-value.is-claude-changing,",
-    ".ces-ag-effort-value.ces-text-rise {",
-    "  animation: ces-claude-rise 0.3s cubic-bezier(0.2, 0.85, 0.25, 1);",
-    "}",
-    "/* 当同时触发文字向上翻转与 High 光斑爆散时，以 CSS 复合动画并发执行，防止相互覆盖打断 */",
-    ".ces-ag-effort-value.is-claude-changing.is-glowing,",
-    ".ces-ag-effort-value.ces-text-rise.is-glowing {",
-    "  animation: ces-claude-rise 0.3s cubic-bezier(0.2, 0.85, 0.25, 1), ces-text-bloom 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;",
-    "}",
-    "/* Antigravity 原生模型菜单底部专属「推理等级」区域 */",
-    "[data-testid='model-selector-panel'].ces-ag-panel-enhanced {",
-    "  max-height: 26rem !important;",
-    "}",
-    ".ces-ag-section,",
-    ".ces-ag-section:focus,",
-    ".ces-ag-section:focus-visible,",
-    ".ces-ag-section * {",
-    "  outline: none !important;",
-    "  outline-width: 0 !important;",
-    "  user-select: none !important;",
-    "  -webkit-user-select: none !important;",
-    "  -webkit-tap-highlight-color: transparent !important;",
-    "}",
-    ".ces-ag-section {",
-    "  display: flex;",
-    "  flex-direction: column;",
-    "  flex-shrink: 0;",
-    "  width: 100%;",
-    "  box-sizing: border-box;",
-    "}",
-    ".ces-ag-effort-row {",
-    "  display: flex;",
-    "  flex-direction: column;",
-    "  width: 100%;",
-    "  box-sizing: border-box;",
-    "  padding: 6px 8px 8px 8px;",
-    "  border-radius: 6px;",
-    "  transition: box-shadow 0.2s ease, background-color 0.2s ease;",
-    "}",
-    ".ces-ag-effort-row:hover {",
-    "  background-color: rgba(128, 128, 145, 0.08);",
-    "}",
-    ".ces-ag-effort-row[data-ces-max='true'], [data-ces-effort-row='true'][data-ces-max='true'] {",
-    "  box-shadow: inset 0 0 0 1px rgba(139, 92, 246, 0.42), 0 0 14px -4px rgba(139, 92, 246, 0.45) !important;",
-    "  background-color: rgba(139, 92, 246, 0.06);",
-    "}",
-    ".ces-ag-effort-head {",
-    "  display: flex;",
-    "  align-items: center;",
-    "  justify-content: space-between;",
-    "  width: 100%;",
-    "  font-size: 12px;",
-    "  line-height: 16px;",
-    "}",
-    ".ces-ag-effort-title {",
-    "  display: inline-flex;",
-    "  align-items: center;",
-    "  gap: 6px;",
-    "  color: inherit;",
-    "  font-weight: 500;",
-    "  opacity: 0.9;",
-    "}",
-    "/* ── 'High' 档位文字到达最高档时的模糊光斑爆散 (约 0.4s 淡淡消失) ── */",
-    ".ces-ag-effort-value {",
-    "  position: relative;",
-    "  z-index: 1;",
-    "  display: inline-block;",
-    "  font-size: 12px;",
-    "  font-weight: 600;",
-    "  transition: color 0.15s ease;",
-    "}",
-    ".ces-ag-effort-value::after {",
-    "  content: '';",
-    "  position: absolute;",
-    "  top: 50%;",
-    "  left: 50%;",
-    "  width: 52px;",
-    "  height: 26px;",
-    "  border-radius: 999px;",
-    "  transform: translate(-50%, -50%) scale(0.6);",
-    "  background: radial-gradient(ellipse at center, var(--ces-glow-color, rgba(168, 85, 247, 0.85)) 0%, var(--ces-glow-color, rgba(168, 85, 247, 0.45)) 45%, rgba(168, 85, 247, 0) 75%);",
-    "  filter: blur(8px);",
-    "  pointer-events: none;",
-    "  opacity: 0;",
-    "  z-index: -1;",
-    "}",
-    "@keyframes ces-glow-flash {",
-    "  0% {",
-    "    opacity: 0.95;",
-    "    transform: translate(-50%, -50%) scale(0.65);",
-    "    filter: blur(6px);",
-    "  }",
-    "  25% {",
-    "    opacity: 1;",
-    "    transform: translate(-50%, -50%) scale(1.15);",
-    "    filter: blur(8px);",
-    "  }",
-    "  100% {",
-    "    opacity: 0;",
-    "    transform: translate(-50%, -50%) scale(1.5);",
-    "    filter: blur(14px);",
-    "  }",
-    "}",
-    "@keyframes ces-text-bloom {",
-    "  0% { text-shadow: 0 0 8px var(--ces-glow-color, #c084fc); }",
-    "  30% { text-shadow: 0 0 14px var(--ces-glow-color, #c084fc), 0 0 3px #ffffff; }",
-    "  100% { text-shadow: none; }",
-    "}",
-    ".ces-ag-effort-value.is-glowing {",
-    "  animation: ces-text-bloom 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;",
-    "}",
-    ".ces-ag-effort-value.is-glowing::after {",
-    "  animation: ces-glow-flash 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;",
-    "}",
-    "@media (prefers-reduced-motion: reduce) {",
-    "  .ces-panel-shaking { animation: none !important; }",
-    "  .ces-ag-effort-value.is-glowing { animation: none !important; }",
-    "  .ces-ag-effort-value.is-glowing::after { animation: none !important; }",
-    "  .ces-ag-effort-value.ces-text-rise { animation: none !important; }",
-    "  .ces-ag-effort-value.is-claude-changing { animation: none !important; }",
-    "}",
-    "/* 屏蔽模型行悬停弹出的冗余右侧二级档位子菜单（严格排除包含 model-selector-panel 的外层主菜单容器，防止悬停时主面板闪烁） */",
-    "[role='menu']:has([data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])),",
-    "div[role='presentation']:has(> [role='menu'] [data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])) {",
-    "  display: none !important;",
-    "  visibility: hidden !important;",
-    "  pointer-events: none !important;",
-    "  opacity: 0 !important;",
-    "}",
-    "[role='menuitem']:has([data-testid='model-selector-effort-group']) > span.shrink-0:last-child {",
-    "  display: none !important;",
-    "}",
-    "[role='menuitem']:has([data-testid='model-selector-effort-group']) > .group-hover\\:hidden {",
-    "  display: flex !important;",
-    "}",
-    "[role='menuitem'][data-ces-model-selected='true'] {",
-    "  background-color: rgba(128, 128, 145, 0.14);",
-    "}",
-    "/* 右键 / 长按 设置浮层 */",
-    ".ces-set {",
-    "  position: fixed;",
-    "  z-index: 2147483646;",
-    "  width: 268px;",
-    "  padding: 12px;",
-    "  border-radius: 10px;",
-    "  background: rgba(24, 24, 28, 0.96);",
-    "  color: #f4f4f6;",
-    "  border: 1px solid rgba(255, 255, 255, 0.12);",
-    "  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);",
-    "  backdrop-filter: blur(12px);",
-    "  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;",
-    "  font-size: 12px;",
-    "  box-sizing: border-box;",
-    "  user-select: none;",
-    "}",
-    ".ces-set-head {",
-    "  display: flex;",
-    "  align-items: center;",
-    "  justify-content: space-between;",
-    "  margin-bottom: 10px;",
-    "  padding-bottom: 6px;",
-    "  border-bottom: 1px solid rgba(255, 255, 255, 0.08);",
-    "  font-weight: 600;",
-    "  font-size: 12.5px;",
-    "}",
-    ".ces-set-ver {",
-    "  font-size: 11px;",
-    "  font-weight: 400;",
-    "  opacity: 0.55;",
-    "}",
-    ".ces-set-group {",
-    "  margin-bottom: 10px;",
-    "}",
-    ".ces-set-label {",
-    "  margin-bottom: 5px;",
-    "  font-size: 11px;",
-    "  opacity: 0.72;",
-    "}",
-    ".ces-set-opts {",
-    "  display: flex;",
-    "  gap: 4px;",
-    "}",
-    ".ces-set-opt {",
-    "  flex: 1;",
-    "  padding: 5px 6px;",
-    "  border-radius: 6px;",
-    "  border: 1px solid rgba(255, 255, 255, 0.1);",
-    "  background: rgba(255, 255, 255, 0.04);",
-    "  color: #d4d4d8;",
-    "  font-size: 11.5px;",
-    "  cursor: pointer;",
-    "  text-align: center;",
-    "  transition: all 0.12s ease;",
-    "}",
-    ".ces-set-opt:hover {",
-    "  background: rgba(255, 255, 255, 0.1);",
-    "  color: #ffffff;",
-    "}",
-    ".ces-set-opt.is-on {",
-    "  background: rgba(139, 92, 246, 0.28);",
-    "  border-color: rgba(139, 92, 246, 0.75);",
-    "  color: #ffffff;",
-    "  font-weight: 600;",
-    "}",
-    ".ces-set-actions {",
-    "  display: flex;",
-    "  gap: 6px;",
-    "  margin-top: 8px;",
-    "  padding-top: 8px;",
-    "  border-top: 1px solid rgba(255, 255, 255, 0.08);",
-    "}",
-    ".ces-set-btn {",
-    "  flex: 1;",
-    "  padding: 5px 8px;",
-    "  border-radius: 6px;",
-    "  border: 1px solid rgba(255, 255, 255, 0.12);",
-    "  background: rgba(255, 255, 255, 0.06);",
-    "  color: #e4e4e7;",
-    "  font-size: 11px;",
-    "  cursor: pointer;",
-    "}",
-    ".ces-set-btn:hover {",
-    "  background: rgba(255, 255, 255, 0.14);",
-    "}"
-  ].join("\n");
+  var SLIDER_CSS = "@keyframes ces-sweep{0%{transform:translateX(100%)}100%{transform:translateX(-100%)}}@keyframes ces-star-sweep{0%{transform:translate3d(0,0,0);opacity:0}6%{opacity:1}94%{opacity:1}100%{transform:translate3d(-100%,0,0);opacity:0}}.ces-inline{width:100%;box-sizing:border-box;padding-top:6px;user-select:none !important;-webkit-user-select:none !important}.ces-root,.ces-root:focus,.ces-root:focus-visible,.ces-root:focus-within{position:relative;width:100%;box-sizing:border-box;outline:none !important;outline-width:0 !important;box-shadow:none !important;user-select:none !important;-webkit-user-select:none !important;-webkit-tap-highlight-color:transparent !important}.ces-track{position:relative;width:100%;height:28px;border-radius:999px;background:rgba(128,128,145,0.18);box-shadow:inset 0 1px 2px rgba(0,0,0,0.24),inset 0 0 0 1px rgba(255,255,255,0.06);cursor:pointer;touch-action:none;box-sizing:border-box;transition:opacity 0.15s ease,box-shadow 0.2s ease}.ces-inline[data-energy='1'] .ces-track,.ces-root[data-energy='1'] .ces-track{box-shadow:0 0 calc(var(--ces-energy,0) * 16px) rgba(168,85,247,0.5),inset 0 1px 2px rgba(0,0,0,0.24)}.ces-inline[data-energy='0'] .ces-star,.ces-inline[data-energy='0'] .ces-energy__sweep,.ces-root[data-energy='0'] .ces-star,.ces-root[data-energy='0'] .ces-energy__sweep{animation-play-state:paused}.ces-track.is-locked{opacity:0.45;cursor:not-allowed;filter:saturate(0.25)}.ces-fill{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;background:var(--ces-fill-bg,#4d93f8);pointer-events:none;will-change:width,background}.ces-energy{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;overflow:hidden;pointer-events:none;opacity:var(--ces-energy,0);transition:opacity 0.2s ease;background:linear-gradient(90deg,#3b1178 0%,#6d28d9 30%,#9333ea 62%,#c084fc 100%)}.ces-energy__sweep{position:absolute;inset:0;background:linear-gradient(100deg,transparent 18%,rgba(255,255,255,0.30) 50%,transparent 82%);transform:translateX(100%);animation:ces-sweep 2.4s linear infinite;pointer-events:none}.ces-stars{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;opacity:var(--ces-star-opacity,0);transition:opacity 0.2s ease;pointer-events:none;overflow:hidden}.ces-star{position:absolute;left:0;right:0;height:3px;margin-top:-1.5px;pointer-events:none;animation-name:ces-star-sweep;animation-timing-function:linear;animation-iteration-count:infinite}.ces-star__dot{position:absolute;left:100%;top:0;width:3px;height:3px;margin-left:-1.5px;border-radius:50%;background:#f5f3ff;box-shadow:0 0 5px rgba(216,180,254,0.95);opacity:var(--ces-b,1);transform:scale(var(--ces-b,1))}.ces-ticks{position:absolute;inset:0;pointer-events:none}.ces-tick{position:absolute;top:50%;width:3px;height:3px;margin:-1.5px 0 0 -1.5px;border-radius:50%;background:rgba(255,255,255,0.28);pointer-events:none;transition:background-color 0.12s ease}.ces-tick.is-on{background:rgba(255,255,255,0.65)}.ces-tick.is-dim{background:rgba(255,255,255,0.28)}.ces-knob{position:absolute;top:50%;left:var(--ces-fill,14px);width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;background:#ffffff;box-shadow:0 1px 5px rgba(0,0,0,0.34),0 0 0 0.5px rgba(0,0,0,0.06);pointer-events:none;will-change:left}.ces-root[data-theme='claude'] .ces-stars,.ces-root[data-theme='claude'] .ces-energy,.ces-inline[data-theme='claude'] .ces-stars,.ces-inline[data-theme='claude'] .ces-energy{display:none !important}.ces-root[data-theme='claude'] .ces-track,.ces-inline[data-theme='claude'] .ces-track{height:28px;border-radius:999px;background:rgba(128,128,145,0.16);box-shadow:inset 0 1px 2px rgba(0,0,0,0.22),inset 0 0 0 1px rgba(255,255,255,0.08)}.ces-root[data-theme='claude'][data-energy='1'] .ces-track,.ces-inline[data-theme='claude'][data-energy='1'] .ces-track{box-shadow:0 0 16px rgba(167,139,250,0.45),inset 0 1px 2px rgba(0,0,0,0.22)}.ces-root[data-theme='claude'] .ces-knob,.ces-inline[data-theme='claude'] .ces-knob{width:24px;height:30px;margin:-15px 0 0 -12px;border-radius:7px;background:#ffffff;box-shadow:0 2px 6px rgba(0,0,0,0.4),0 0 0 0.5px rgba(0,0,0,0.12);display:flex;align-items:center;justify-content:center}.ces-knob-notch{display:none;width:2px;height:10px;border-radius:999px;background:rgba(0,0,0,0.28)}.ces-root[data-theme='claude'] .ces-knob-notch,.ces-inline[data-theme='claude'] .ces-knob-notch{display:block}.ces-claude-canvas{position:absolute;left:0;top:0;width:100%;height:100%;border-radius:999px;display:none;pointer-events:none}.ces-root[data-theme='claude'][data-energy='1'] .ces-claude-canvas,.ces-inline[data-theme='claude'][data-energy='1'] .ces-claude-canvas{display:block}@keyframes ces-claude-rise{0%{transform:translateY(85%) scale(0.96);opacity:0}55%{opacity:1}80%{transform:translateY(-6%) scale(1.01)}100%{transform:translateY(0) scale(1);opacity:1}}.ces-ag-effort-value.is-claude-changing,.ces-ag-effort-value.ces-text-rise{animation:ces-claude-rise 0.3s cubic-bezier(0.2,0.85,0.25,1)}.ces-ag-effort-value.is-claude-changing.is-glowing,.ces-ag-effort-value.ces-text-rise.is-glowing{animation:ces-claude-rise 0.3s cubic-bezier(0.2,0.85,0.25,1),ces-text-bloom 0.4s cubic-bezier(0.16,1,0.3,1) forwards}[data-testid='model-selector-panel'].ces-ag-panel-enhanced{max-height:26rem !important}.ces-ag-section,.ces-ag-section:focus,.ces-ag-section:focus-visible,.ces-ag-section *{outline:none !important;outline-width:0 !important;user-select:none !important;-webkit-user-select:none !important;-webkit-tap-highlight-color:transparent !important}.ces-ag-section{display:flex;flex-direction:column;flex-shrink:0;width:100%;box-sizing:border-box}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']{grid-template-rows:auto auto}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>[role='separator']{grid-row:1;grid-column:1}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>.ces-ag-effort-row,[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>[data-testid='orchestrator-effort-bar']{grid-row:2 !important;grid-column:1 !important}.ces-ag-effort-row{display:flex;flex-direction:column;width:100%;box-sizing:border-box;padding:6px 8px 8px 8px;border-radius:6px;transition:box-shadow 0.2s ease,background-color 0.2s ease}.ces-ag-effort-row:hover{background-color:rgba(128,128,145,0.08)}.ces-ag-effort-row[data-ces-max='true'],[data-ces-effort-row='true'][data-ces-max='true']{box-shadow:inset 0 0 0 1px rgba(139,92,246,0.42),0 0 14px -4px rgba(139,92,246,0.45) !important;background-color:rgba(139,92,246,0.06)}.ces-ag-effort-head{display:flex;align-items:center;justify-content:space-between;width:100%;font-size:12px;line-height:16px}.ces-ag-effort-title{display:inline-flex;align-items:center;gap:6px;color:inherit;font-weight:500;opacity:0.9}.ces-ag-effort-value{position:relative;z-index:1;display:inline-block;font-size:12px;font-weight:600;transition:color 0.15s ease}.ces-ag-effort-value::after{content:'';position:absolute;top:50%;left:50%;width:52px;height:26px;border-radius:999px;transform:translate(-50%,-50%) scale(0.6);background:radial-gradient(ellipse at center,var(--ces-glow-color,rgba(168,85,247,0.85)) 0%,var(--ces-glow-color,rgba(168,85,247,0.45)) 45%,rgba(168,85,247,0) 75%);filter:blur(8px);pointer-events:none;opacity:0;z-index:-1}@keyframes ces-glow-flash{0%{opacity:0.95;transform:translate(-50%,-50%) scale(0.65);filter:blur(6px)}25%{opacity:1;transform:translate(-50%,-50%) scale(1.15);filter:blur(8px)}100%{opacity:0;transform:translate(-50%,-50%) scale(1.5);filter:blur(14px)}}@keyframes ces-text-bloom{0%{text-shadow:0 0 8px var(--ces-glow-color,#c084fc)}30%{text-shadow:0 0 14px var(--ces-glow-color,#c084fc),0 0 3px #ffffff}100%{text-shadow:none}}.ces-ag-effort-value.is-glowing{animation:ces-text-bloom 0.4s cubic-bezier(0.16,1,0.3,1) forwards}.ces-ag-effort-value.is-glowing::after{animation:ces-glow-flash 0.4s cubic-bezier(0.16,1,0.3,1) forwards}@media (prefers-reduced-motion:reduce){.ces-panel-shaking{animation:none !important}.ces-ag-effort-value.is-glowing{animation:none !important}.ces-ag-effort-value.is-glowing::after{animation:none !important}.ces-ag-effort-value.ces-text-rise{animation:none !important}.ces-ag-effort-value.is-claude-changing{animation:none !important}}[role='menu']:has([data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])),div[role='presentation']:has(>[role='menu'] [data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])){display:none !important;visibility:hidden !important;pointer-events:none !important;opacity:0 !important}[role='menuitem']:has([data-testid='model-selector-effort-group'])>span.shrink-0:last-child{display:none !important}[role='menuitem']:has([data-testid='model-selector-effort-group'])>.group-hover\\:hidden{display:flex !important}[role='menuitem'][data-ces-model-selected='true']{background-color:rgba(128,128,145,0.14)}.ces-set{position:fixed;z-index:2147483646;width:268px;padding:12px;border-radius:10px;background:rgba(24,24,28,0.96);color:#f4f4f6;border:1px solid rgba(255,255,255,0.12);box-shadow:0 12px 32px rgba(0,0,0,0.55);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;box-sizing:border-box;user-select:none}.ces-set-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.08);font-weight:600;font-size:12.5px}.ces-set-ver{font-size:11px;font-weight:400;opacity:0.55}.ces-set-group{margin-bottom:10px}.ces-set-label{margin-bottom:5px;font-size:11px;opacity:0.72}.ces-set-opts{display:flex;gap:4px}.ces-set-opt{flex:1;padding:5px 6px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);color:#d4d4d8;font-size:11.5px;cursor:pointer;text-align:center;transition:all 0.12s ease}.ces-set-opt:hover{background:rgba(255,255,255,0.1);color:#ffffff}.ces-set-opt.is-on{background:rgba(139,92,246,0.28);border-color:rgba(139,92,246,0.75);color:#ffffff;font-weight:600}.ces-set-actions{display:flex;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.08)}.ces-set-btn{flex:1;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#e4e4e7;font-size:11px;cursor:pointer}.ces-set-btn:hover{background:rgba(255,255,255,0.14)}";
 
   function installStyles(doc) {
     var d = doc || (typeof document !== "undefined" ? document : null);
@@ -1530,12 +1048,22 @@
   }
 
   // ── 右键设置面板 ────────────────────────────────────────────────────────────
+  var SET_I18N = {
+    "zh-CN": "推理等级滑条|动画效果|快速动画|简洁动画|完整动画|已到达档位的刻度点|亮白显示|与未到达同色|隐藏|复制诊断|已复制|恢复默认|关闭",
+    "zh-TW": "推理等級滑桿|動畫效果|快速動畫|簡潔動畫|完整動畫|已到達檔位的刻度點|亮白顯示|與未到達同色|隱藏|複製診斷|已複製|恢復預設|關閉",
+    yue: "推理等級滑桿|動畫效果|快速動畫|簡潔動畫|完整動畫|已到達檔位嘅刻度點|亮白顯示|同未到達同色|隱藏|複製診斷|已複製|恢復預設|關閉",
+    en: "Effort Slider|Motion|Fast|Instant|Smooth|Reached Ticks|Bright|Subtle|Hidden|Copy Diag|Copied|Reset|Close",
+    ja: "推論スライダー|アニメーション|高速|瞬時|滑らか|到達目盛り|ハイライト|控えめ|非表示|診断コピー|コピー済|初期化|閉じる"
+  };
+
   function openSettingsPanel(options) {
     var opts = options || {};
     var doc = opts.document || (typeof document !== "undefined" ? document : null);
     var win = opts.window || (doc && doc.defaultView) || (typeof window !== "undefined" ? window : globalRoot);
     if (!doc || !doc.body) return function () {};
     installStyles(doc);
+    var langKey = getPrismRootAttr(doc, win, "data-ag-cs-lang") || "zh-CN";
+    var stxt = (SET_I18N[langKey] || SET_I18N["zh-CN"]).split("|");
 
     var prev = doc.querySelector(".ces-set");
     if (prev && prev.parentNode) prev.parentNode.removeChild(prev);
@@ -1543,7 +1071,7 @@
     var panel = doc.createElement("div");
     panel.className = "ces-set";
     panel.setAttribute("role", "dialog");
-    panel.setAttribute("aria-label", "推理等级滑条设置");
+    panel.setAttribute("aria-label", stxt[0]);
 
     var x = typeof opts.x === "number" ? opts.x : 120;
     var y = typeof opts.y === "number" ? opts.y : 120;
@@ -1557,7 +1085,7 @@
     var head = doc.createElement("div");
     head.className = "ces-set-head";
     var titleSpan = doc.createElement("span");
-    titleSpan.textContent = "推理等级滑条";
+    titleSpan.textContent = stxt[0];
     var verSpan = doc.createElement("span");
     verSpan.className = "ces-set-ver";
     verSpan.textContent = "v1.2.1";
@@ -1571,30 +1099,34 @@
       for (var i = 0; i < optButtons.length; i += 1) {
         var item = optButtons[i];
         var isOn = cur[item.key] === item.value;
-        if (isOn) item.btn.classList.add("is-on");
-        else item.btn.classList.remove("is-on");
+        if (item.btn.classList) {
+          if (isOn) item.btn.classList.add("is-on");
+          else item.btn.classList.remove("is-on");
+        } else {
+          item.btn.className = isOn ? "ces-set-opt is-on" : "ces-set-opt";
+        }
         item.btn.setAttribute("aria-pressed", isOn ? "true" : "false");
       }
     }
 
     for (var sIdx = 0; sIdx < SETTINGS_SCHEMA.length; sIdx += 1) {
-      (function (schemaItem) {
+      (function (schemaItem, gIdx) {
         var group = doc.createElement("div");
         group.className = "ces-set-group";
         var label = doc.createElement("div");
         label.className = "ces-set-label";
-        label.textContent = schemaItem.label;
+        label.textContent = stxt[gIdx === 0 ? 1 : 5] || schemaItem.label;
         group.appendChild(label);
 
         var row = doc.createElement("div");
         row.className = "ces-set-opts";
         for (var oIdx = 0; oIdx < schemaItem.options.length; oIdx += 1) {
-          (function (optionItem) {
+          (function (optionItem, kIdx) {
             var btn = doc.createElement("button");
             btn.type = "button";
             btn.className = "ces-set-opt";
-            btn.textContent = optionItem.label;
-            if (optionItem.hint) btn.title = optionItem.hint;
+            btn.textContent = stxt[(gIdx === 0 ? 2 : 6) + kIdx] || optionItem.label;
+            if (optionItem.hint && langKey === "zh-CN") btn.title = optionItem.hint;
             btn.addEventListener("click", function (ev) {
               ev.stopPropagation();
               var patch = {};
@@ -1604,11 +1136,11 @@
             });
             optButtons.push({ key: schemaItem.key, value: optionItem.value, btn: btn });
             row.appendChild(btn);
-          })(schemaItem.options[oIdx]);
+          })(schemaItem.options[oIdx], oIdx);
         }
         group.appendChild(row);
         panel.appendChild(group);
-      })(SETTINGS_SCHEMA[sIdx]);
+      })(SETTINGS_SCHEMA[sIdx], sIdx);
     }
 
     var actions = doc.createElement("div");
@@ -1617,7 +1149,7 @@
     var copyBtn = doc.createElement("button");
     copyBtn.type = "button";
     copyBtn.className = "ces-set-btn";
-    copyBtn.textContent = "复制诊断";
+    copyBtn.textContent = stxt[9];
     copyBtn.addEventListener("click", function (ev) {
       ev.stopPropagation();
       var payload = JSON.stringify(dumpTrace(win), null, 2);
@@ -1625,16 +1157,14 @@
         if (win && win.navigator && win.navigator.clipboard && typeof win.navigator.clipboard.writeText === "function") {
           win.navigator.clipboard.writeText(payload);
         }
-      } catch (err) {
-        // 忽略剪贴板权限错误
-      }
-      copyBtn.textContent = "已复制";
+      } catch (err) {}
+      copyBtn.textContent = stxt[10];
     });
 
     var resetBtn = doc.createElement("button");
     resetBtn.type = "button";
     resetBtn.className = "ces-set-btn";
-    resetBtn.textContent = "恢复默认";
+    resetBtn.textContent = stxt[11];
     resetBtn.addEventListener("click", function (ev) {
       ev.stopPropagation();
       resetSettings(win);
@@ -1644,7 +1174,7 @@
     var closeBtn = doc.createElement("button");
     closeBtn.type = "button";
     closeBtn.className = "ces-set-btn";
-    closeBtn.textContent = "关闭";
+    closeBtn.textContent = stxt[12];
 
     actions.appendChild(copyBtn);
     actions.appendChild(resetBtn);
@@ -2666,17 +2196,30 @@
       claudeLastTs = now;
       claudeFlowTime += frameDt * claudeSpeed;
       var isDark = surfaceIsDark(win, doc);
+      var dpr = Math.min(3, Math.max(1, (win && win.devicePixelRatio) || 1));
       var rect = trackEl.getBoundingClientRect ? trackEl.getBoundingClientRect() : null;
       var trackW = rect && rect.width > 0 ? rect.width : 280;
-      var th = rect && rect.height > 0 ? Math.round(rect.height) : (claudeCanvasEl.height || 28);
-      // 画布像素宽度 = 已填充宽度（圆钮中心），与 CSS width: var(--ces-fill) 对齐
+      var th = rect && rect.height > 0 ? Math.round(rect.height) : 28;
       var curPct = motionState ? clamp01(motionState.x) : 0;
-      var tw = Math.max(1, Math.round(KNOB_RADIUS + (trackW - KNOB_RADIUS * 2) * curPct));
-      if (claudeCanvasEl.width !== tw) claudeCanvasEl.width = tw;
-      if (claudeCanvasEl.height !== th) claudeCanvasEl.height = th;
+      var fillW = Math.max(1, KNOB_RADIUS + (trackW - KNOB_RADIUS * 2) * curPct);
+      var bw = Math.max(1, Math.round(trackW * dpr));
+      var bh = Math.max(1, Math.round(th * dpr));
+      if (claudeCanvasEl.width !== bw) claudeCanvasEl.width = bw;
+      if (claudeCanvasEl.height !== bh) claudeCanvasEl.height = bh;
       var cctx = claudeCanvasEl.getContext && claudeCanvasEl.getContext("2d");
       if (cctx) {
-        paintDither(cctx, tw, th, isDark, progress, claudeFlowTime, claudeIntensity);
+        if (typeof cctx.setTransform === "function") cctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        cctx.clearRect(0, 0, trackW, th);
+        if (typeof cctx.save === "function" && typeof cctx.clip === "function" && typeof cctx.rect === "function") {
+          cctx.save();
+          cctx.beginPath();
+          cctx.rect(0, 0, fillW, th);
+          cctx.clip();
+          paintDither(cctx, trackW, th, isDark, progress, claudeFlowTime, claudeIntensity);
+          cctx.restore();
+        } else {
+          paintDither(cctx, fillW, th, isDark, progress, claudeFlowTime, claudeIntensity);
+        }
       }
       if (win && typeof win.requestAnimationFrame === "function") {
         claudeRafId = win.requestAnimationFrame(stepClaudeCanvas);
@@ -3438,7 +2981,7 @@
           }
         }
       }
-      syncTriggerColor(doc, profile.currentLabel, idx, count, isMax, false);
+      syncTriggerColor(doc, profile.currentLabel, idx, count, isMax, false, profile.isClaude);
 
       // 2. 同步展开菜单中的各模型行
       var panel = findAntigravityPanel(doc);
@@ -3486,7 +3029,7 @@
             sib.textContent = displayEffort;
           }
           var rowColor =
-            valueColorFor(displayEffort, displayIdx, displayCount, displayMax, false, false, resolvePrismAccentTone(doc, win)) || "";
+            valueColorFor(displayEffort, displayIdx, displayCount, displayMax, false, rowProf.isClaude, resolvePrismAccentTone(doc, win)) || "";
           if (sib.style.color !== rowColor) sib.style.color = rowColor;
           var rowOpacity = rowColor ? "1" : "";
           if (sib.style.opacity !== rowOpacity) sib.style.opacity = rowOpacity;
@@ -3890,21 +3433,7 @@
       var section = doc.createElement("div");
       section.className = "ces-ag-section";
       section.setAttribute("data-ces-part", "ag-section");
-      section.addEventListener("pointerdown", function (ev) {
-        if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation();
-      });
-      section.addEventListener("mousedown", function (ev) {
-        if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation();
-      });
-      section.addEventListener("pointerup", function (ev) {
-        if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation();
-      });
-      section.addEventListener("mouseup", function (ev) {
-        if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation();
-      });
-      section.addEventListener("click", function (ev) {
-        if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation();
-      });
+      ["pointerdown","mousedown","pointerup","mouseup","click"].forEach(function(evName){section.addEventListener(evName,function(ev){ev&&ev.stopPropagation&&ev.stopPropagation();});});
 
       var sep = doc.createElement("div");
       sep.setAttribute("role", "separator");
@@ -4157,98 +3686,21 @@
   }
 
   return {
-    mountCodexEffortSlider: mountCodexEffortSlider,
-    installMenuObserver: installMenuObserver,
-    installAntigravityObserver: installAntigravityObserver,
-    installCodexEffortSlider: installCodexEffortSlider,
-    findInferenceRow: findInferenceRow,
-    findEffortTrigger: findEffortTrigger,
-    findAntigravityTrigger: findAntigravityTrigger,
-    findAntigravityPanel: findAntigravityPanel,
-    readAntigravityFiberContext: readAntigravityFiberContext,
-    resolveModelEffortProfile: resolveModelEffortProfile,
-    commitAntigravityModelOption: commitAntigravityModelOption,
-    parseModelLabel: parseModelLabel,
-    syncTriggerColor: syncTriggerColor,
-    pctFromIndex: pctFromIndex,
-    indexFromPct: indexFromPct,
-    detentTargetIndex: detentTargetIndex,
-    energyForPct: energyForPct,
-    energyStopsFor: energyStopsFor,
-    speedFor: speedFor,
-    particleCountFor: particleCountFor,
-    starCountFor: starCountFor,
-    PARTICLES: PARTICLES,
-    starBrightnessFor: starBrightnessFor,
-    starDurationFor: starDurationFor,
-    starDelayFor: starDelayFor,
-    starLayerOpacityFor: starLayerOpacityFor,
-    starHash01: starHash01,
-    STARFIELD_DURATION_MEAN: STARFIELD_DURATION_MEAN,
-    STARFIELD_DURATION_SPREAD: STARFIELD_DURATION_SPREAD,
-    STARFIELD_MIN: STARFIELD_MIN,
-    GOLDEN_RATIO: GOLDEN_RATIO,
-    MAX_SPEED_FACTOR: MAX_SPEED_FACTOR,
-    REDUCED_MOTION_SLOWDOWN: REDUCED_MOTION_SLOWDOWN,
-    readSettings: readSettings,
-    writeSettings: writeSettings,
-    resetSettings: resetSettings,
-    onSettingsChange: onSettingsChange,
-    normalizeSettings: normalizeSettings,
-    schemaDefaults: schemaDefaults,
-    motionMode: motionMode,
-    motionParamsForMode: motionParamsForMode,
-    tracePush: tracePush,
-    dumpTrace: dumpTrace,
-    traceClear: traceClear,
-    installSettingsUi: installSettingsUi,
-    openSettingsPanel: openSettingsPanel,
-    SETTINGS_SCHEMA: SETTINGS_SCHEMA,
-    SETTINGS_VERSION: SETTINGS_VERSION,
-    SETTINGS_KEY: SETTINGS_KEY,
-    SETTINGS_EVENT: SETTINGS_EVENT,
-    MIN_HEIGHT_SLOTS: MIN_HEIGHT_SLOTS,
-    fillColorFor: fillColorFor,
-    fillBackgroundFor: fillBackgroundFor,
-    valueColorFor: valueColorFor,
-    isOffLevel: isOffLevel,
-    findValueElement: findValueElement,
-    findSeatEffort: findSeatEffort,
-    knobOffsetOf: knobOffsetOf,
-    KNOB_RADIUS: KNOB_RADIUS,
-    KNOB_SIZE: KNOB_SIZE,
-    TRACK_HEIGHT: TRACK_HEIGHT,
-    BASE_SPEEDUP: BASE_SPEEDUP,
-    ENERGY_START: ENERGY_START,
-    ENERGY_END: ENERGY_END,
-    clamp01: clamp01,
-    clampAbs: clampAbs,
-    installStyles: installStyles,
-    MOTION: MOTION,
-    MOTION_REDUCED: MOTION_REDUCED,
-    MOTION_FAST: MOTION_FAST,
-    RELEASE_PROJECT_S: RELEASE_PROJECT_S,
-    POINTER_SPEED_EMA: POINTER_SPEED_EMA,
-    POINTER_STALE_S: POINTER_STALE_S,
-    POINTER_SPEED_TAU: POINTER_SPEED_TAU,
-    motionStep: motionStep,
-    motionSettled: motionSettled,
-    decayPointerSpeed: decayPointerSpeed,
-    releaseIndexFor: releaseIndexFor,
-    isClaudeModel: isClaudeModel,
-    claudeIntensityFor: claudeIntensityFor,
-    claudeSpeedFor: claudeSpeedFor,
-    paintDither: paintDither,
-    ditherAlphaAt: ditherAlphaAt,
-    valueNoise: valueNoise,
-    hash01: hash01,
-    fillRoundRect: fillRoundRect,
-    surfaceIsDark: surfaceIsDark,
-    CLAUDE_CELL: CLAUDE_CELL,
-    CLAUDE_ROWS: CLAUDE_ROWS,
-    CLAUDE_SWEEP_MS: CLAUDE_SWEEP_MS,
-    CLAUDE_KNOB_W: CLAUDE_KNOB_W,
-    CLAUDE_KNOB_H: CLAUDE_KNOB_H,
-    CLAUDE_KNOB_R: CLAUDE_KNOB_R
+    mountCodexEffortSlider, installMenuObserver, installAntigravityObserver, installCodexEffortSlider,
+    findInferenceRow, findEffortTrigger, findAntigravityTrigger, findAntigravityPanel,
+    readAntigravityFiberContext, resolveModelEffortProfile, commitAntigravityModelOption, parseModelLabel,
+    syncTriggerColor, pctFromIndex, indexFromPct, detentTargetIndex, energyForPct, energyStopsFor,
+    speedFor, particleCountFor, starCountFor, PARTICLES, starBrightnessFor, starDurationFor,
+    starDelayFor, starLayerOpacityFor, starHash01, STARFIELD_DURATION_MEAN, STARFIELD_DURATION_SPREAD,
+    STARFIELD_MIN, GOLDEN_RATIO, MAX_SPEED_FACTOR, REDUCED_MOTION_SLOWDOWN, readSettings, writeSettings,
+    resetSettings, onSettingsChange, normalizeSettings, schemaDefaults, motionMode, motionParamsForMode,
+    tracePush, dumpTrace, traceClear, installSettingsUi, openSettingsPanel, SETTINGS_SCHEMA,
+    SETTINGS_VERSION, SETTINGS_KEY, SETTINGS_EVENT, MIN_HEIGHT_SLOTS, fillColorFor, fillBackgroundFor,
+    valueColorFor, isOffLevel, findValueElement, findSeatEffort, knobOffsetOf, KNOB_RADIUS, KNOB_SIZE,
+    TRACK_HEIGHT, BASE_SPEEDUP, ENERGY_START, ENERGY_END, clamp01, clampAbs, installStyles, MOTION,
+    MOTION_REDUCED, MOTION_FAST, RELEASE_PROJECT_S, POINTER_SPEED_EMA, POINTER_STALE_S, POINTER_SPEED_TAU,
+    motionStep, motionSettled, decayPointerSpeed, releaseIndexFor, isClaudeModel, claudeIntensityFor,
+    claudeSpeedFor, paintDither, ditherAlphaAt, valueNoise, hash01, fillRoundRect, surfaceIsDark,
+    CLAUDE_CELL, CLAUDE_ROWS, CLAUDE_SWEEP_MS, CLAUDE_KNOB_W, CLAUDE_KNOB_H, CLAUDE_KNOB_R
   };
 });

@@ -116,13 +116,18 @@
             queuedRecords.push(records[i]);
           }
         }
-        if (!mutationTouchesModelControls(records, doc) && !isModelMenuOpen(doc)) {
+        const menuNow = isModelMenuOpen(doc);
+        if (!mutationTouchesModelControls(records, doc) && !menuNow) {
           queuedRecords = [];
           stats.skippedIrrelevant += 1;
           return;
         }
         const elapsed = Date.now() - lastRunAt;
-        if (elapsed >= THROTTLE_MS && timer === null) {
+        if (menuNow || (elapsed >= THROTTLE_MS && timer === null)) {
+          if (timer !== null) {
+            clearTimeout(timer);
+            timer = null;
+          }
           flush();
         } else if (timer === null) {
           timer = setTimeout(flush, Math.max(16, THROTTLE_MS - elapsed));
@@ -270,7 +275,6 @@
       const inst = lib.installCodexEffortSlider({
         document: doc,
         window: winProxy,
-        disableContextMenuSettings: true,
       });
       if (!inst) return false;
       inst.__prismOwned = true;

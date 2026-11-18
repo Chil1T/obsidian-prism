@@ -135,6 +135,9 @@
     '[data-omni-aux-file]',
   ].join(', ');
 
+  const HOST_AUX_ERROR_RE =
+    /exceeds the \d+\s*MB display limit|Failed to read file content|Preview is not available for this file type|Unable to display/i;
+
   const BARE_TOKEN_RE = new RegExp(
     [
       '(https?:\\/\\/[^\\s<>"\'`\\]]+)',
@@ -377,7 +380,7 @@
     return tokens;
   }
 
-  function readFiberFileHint(el, maxDepth = 12) {
+  function readFiberFileHint(el, maxDepth = 20) {
     if (!el || typeof el !== 'object') return '';
     try {
       const keys = Object.keys(el);
@@ -398,6 +401,13 @@
           p['data-uri'] || p['data-active-file-uri'] || p['data-file-uri'];
         if (typeof direct === 'string' && (direct.startsWith('file://') || /[\\/]/.test(direct))) {
           return direct;
+        }
+        const parsedObj = p.parsedUri || p.resource;
+        if (parsedObj && typeof parsedObj === 'object') {
+          const objPath = parsedObj.fsPath || parsedObj.path || '';
+          if (typeof objPath === 'string' && (objPath.startsWith('file://') || /[\\/]/.test(objPath))) {
+            return objPath;
+          }
         }
         if (Array.isArray(p.artifactUris) && typeof p.artifactUris[0] === 'string') {
           return p.artifactUris[0];
@@ -2143,37 +2153,54 @@
         if (subAttr) return subAttr;
       }
 
-      const fromSelfFiber = readFiberFileHint(viewEl, 12);
+      const fromSelfFiber = readFiberFileHint(viewEl, 20);
       if (fromSelfFiber) return fromSelfFiber;
 
       if (viewEl.firstElementChild) {
-        const fromChildFiber = readFiberFileHint(viewEl.firstElementChild, 6);
+        const fromChildFiber = readFiberFileHint(viewEl.firstElementChild, 10);
         if (fromChildFiber) return fromChildFiber;
+      }
+      if (viewEl.parentElement && viewEl.parentElement !== D?.body && viewEl.parentElement !== D?.documentElement) {
+        const fromParentFiber = readFiberFileHint(viewEl.parentElement, 20);
+        if (fromParentFiber) return fromParentFiber;
       }
       return '';
     }
 
+    function isValidAuxShell(shell) {
+      if (!shell || shell === D?.body || shell === D?.documentElement) return false;
+      const shellTid = String(shell.getAttribute?.('data-testid') || '');
+      if (shellTid.includes('split') || shellTid === 'overview-panel-host' || shellTid === 'conversation-view') {
+        return false;
+      }
+      if (findClosest(shell, '[data-testid="conversation-view"], aside, .agy-home, .ag-omni-menu')) {
+        return false;
+      }
+      return true;
+    }
+
     function resolveAuxMountHost(viewEl) {
       const tid = String(viewEl.getAttribute?.('data-testid') || '');
+      const tag = String(viewEl.tagName || '').toUpperCase();
+      const isSelfShell =
+        Boolean(viewEl.classList?.contains?.('relative') && viewEl.classList?.contains?.('h-full')) &&
+        isValidAuxShell(viewEl);
+      if (isSelfShell) return viewEl;
+
       const isChildLeaf =
         tid === 'binary-file-no-preview' ||
         tid === 'artifact-pdf-no-preview' ||
         tid === 'image-file-viewer' ||
         tid === 'html-file-preview' ||
-        Boolean(viewEl.classList?.contains?.('file-viewer-root'));
+        tag === 'VIDEO' ||
+        tag === 'AUDIO' ||
+        viewEl.hasAttribute?.('data-omni-aux-error') ||
+        Boolean(viewEl.classList?.contains?.('file-viewer-root')) ||
+        HOST_AUX_ERROR_RE.test(viewEl.textContent || '');
 
       if (isChildLeaf && viewEl.parentElement) {
         const shell = findClosest(viewEl.parentElement, '.relative.h-full.w-full');
-        const shellTid = String(shell?.getAttribute?.('data-testid') || '');
-        if (
-          shell &&
-          shell !== D.body &&
-          shell !== D.documentElement &&
-          !shellTid.includes('split') &&
-          shellTid !== 'overview-panel-host'
-        ) {
-          return shell;
-        }
+        if (isValidAuxShell(shell)) return shell;
         const parent = viewEl.parentElement;
         const ptid = String(parent.getAttribute?.('data-testid') || '');
         if (
@@ -2189,13 +2216,114 @@
       return viewEl;
     }
 
+    function unmountSingleAuxSwitch(rec) {
+      if (!rec) return;
+      for (const item of rec.hiddenKids) {
+        if (item.el?.style) item.el.style.display = item.display;
+      }
+      rec.hiddenKids = [];
+      if (rec.hostEl && rec.hostEl.style) {
+        rec.hostEl.style.display = rec.origHostDisplay || '';
+        rec.hostEl.style.flexDirection = rec.origHostFlexDir || '';
+      }
+      try { rec.bar?.remove?.(); } catch (_) {}
+      try { rec.iframe?.remove?.(); } catch (_) {}
+      rec.viewEl?.removeAttribute?.('data-omni-aux-mounted');
+      rec.hostEl?.removeAttribute?.('data-omni-aux-mounted');
+      mountedAuxSwitches.delete(rec);
+    }
+
+    function reconcileMountedAuxSwitches() {
+      if (!mountedAuxSwitches.size) return;
+      for (const rec of Array.from(mountedAuxSwitches)) {
+        if (!rec.hostEl || !rec.hostEl.isConnected) {
+          unmountSingleAuxSwitch(rec);
+          continue;
+        }
+        const curRaw = extractAuxFileRef(rec.hostEl) || extractAuxFileRef(rec.viewEl);
+        if (!curRaw) continue;
+        const curPath = parseFileUriToPath(curRaw).filePath;
+        if (curPath && curPath !== rec.filePath) {
+          const nextExt = getFileExt(curPath);
+          if (nextExt && AUX_SWITCHABLE_EXTS.has(nextExt)) {
+            rec.filePath = curPath;
+            if (rec.activeMode === 'workbench' && rec.iframe && serverMeta?.baseUrl && serverMeta?.token) {
+              const nextSrc = buildViewerUrl(serverMeta, { filePath: curPath, kind: detectPreviewKind(curPath) });
+              if (rec.iframe.src !== nextSrc) rec.iframe.src = nextSrc;
+              pushWorkbenchSyncToIframe(rec.iframe, { filePath: curPath });
+            } else if (rec.switchMode && shouldAutoActivateWorkbench(rec.viewEl, rec.hostEl)) {
+              void rec.switchMode(true, { auto: true });
+            }
+          } else {
+            unmountSingleAuxSwitch(rec);
+          }
+        }
+      }
+    }
+
+    function shouldAutoActivateWorkbench(viewEl, hostEl) {
+      const tid = String(viewEl?.getAttribute?.('data-testid') || '');
+      if (
+        tid === 'binary-file-no-preview' ||
+        tid === 'artifact-pdf-no-preview' ||
+        viewEl?.hasAttribute?.('data-omni-aux-error')
+      ) {
+        return true;
+      }
+      if (viewEl?.classList?.contains?.('file-viewer-root')) return false;
+      const txt = String((hostEl || viewEl)?.textContent || '');
+      return txt.length > 0 && txt.length < 4096 && HOST_AUX_ERROR_RE.test(txt);
+    }
+
+    function collectAuxCandidateViews(scopeEl) {
+      const seen = new Set();
+      const candidates = [];
+      const pushUnique = (el) => {
+        if (el && el.nodeType === 1 && !seen.has(el)) {
+          seen.add(el);
+          candidates.push(el);
+        }
+      };
+
+      if (typeof scopeEl.matches === 'function' && scopeEl.matches(AUX_FILE_VIEW_SELECTOR)) {
+        pushUnique(scopeEl);
+      }
+      for (const el of scopeEl.querySelectorAll(AUX_FILE_VIEW_SELECTOR)) {
+        pushUnique(el);
+      }
+
+      // Detect host File Pane `UHc` (>20MB / read-error) & native <video>/<audio> views lacking data-testid
+      const shellPool = new Set();
+      if (scopeEl !== D.body && scopeEl !== D.documentElement) {
+        const ancShell = findClosest(scopeEl, '.relative.h-full.w-full');
+        if (isValidAuxShell(ancShell)) shellPool.add(ancShell);
+      }
+      for (const sh of scopeEl.querySelectorAll('.relative.h-full.w-full')) {
+        if (isValidAuxShell(sh)) shellPool.add(sh);
+      }
+      for (const mediaOrErr of scopeEl.querySelectorAll('video, audio, [data-omni-aux-error]')) {
+        if (findClosest(mediaOrErr, '[data-testid="conversation-view"], aside, .agy-home, .ag-omni-aux-bar')) {
+          continue;
+        }
+        const sh = findClosest(mediaOrErr, '.relative.h-full.w-full');
+        if (isValidAuxShell(sh)) shellPool.add(sh);
+        else pushUnique(mediaOrErr);
+      }
+
+      for (const sh of shellPool) {
+        if (sh.querySelector?.(AUX_FILE_VIEW_SELECTOR)) continue;
+        const hasMedia = Boolean(sh.querySelector?.('video, audio, [data-omni-aux-error]'));
+        const txt = String(sh.textContent || '');
+        const hasHostError = txt.length > 0 && txt.length < 4096 && HOST_AUX_ERROR_RE.test(txt);
+        if (hasMedia || hasHostError) pushUnique(sh);
+      }
+      return candidates;
+    }
+
     function decorateAuxUnsupportedViews(scopeEl) {
       if (!D || !scopeEl || typeof scopeEl.querySelectorAll !== 'function') return;
-      const candidates = [];
-      if (typeof scopeEl.matches === 'function' && scopeEl.matches(AUX_FILE_VIEW_SELECTOR)) {
-        candidates.push(scopeEl);
-      }
-      for (const el of scopeEl.querySelectorAll(AUX_FILE_VIEW_SELECTOR)) candidates.push(el);
+      reconcileMountedAuxSwitches();
+      const candidates = collectAuxCandidateViews(scopeEl);
 
       for (const viewEl of candidates) {
         if (viewEl.hasAttribute('data-omni-aux-mounted') || findClosest(viewEl, '[data-omni-aux-mounted]')) {
@@ -2247,27 +2375,29 @@
 
         const rec = {
           viewEl, hostEl, origHostDisplay, origHostFlexDir,
-          bar, btnWb, btnRaw, iframe: null, filePath, hiddenKids: [],
+          bar, btnWb, btnRaw, iframe: null, filePath, hiddenKids: [], activeMode: 'raw',
         };
 
-        const switchMode = async (toWorkbench) => {
+        const switchMode = async (toWorkbench, opts = {}) => {
           if (toWorkbench) {
-            btnWb.setAttribute('data-active', '1');
-            btnRaw.removeAttribute('data-active');
             const meta = await ensureServerMeta();
             if (!meta) {
-              void openFile(filePath, { mode: 'workbench' });
+              if (!opts.auto) void openFile(rec.filePath, { mode: 'workbench' });
               return;
             }
+            btnWb.setAttribute('data-active', '1');
+            btnRaw.removeAttribute('data-active');
             if (hostEl.style) {
               hostEl.style.display = 'flex';
               hostEl.style.flexDirection = 'column';
             }
-            for (const ch of Array.from(hostEl.children || [])) {
-              if (ch === bar || ch === rec.iframe) continue;
-              if (ch.style) {
-                rec.hiddenKids.push({ el: ch, display: ch.style.display || '' });
-                ch.style.display = 'none';
+            if (rec.activeMode !== 'workbench') {
+              for (const ch of Array.from(hostEl.children || [])) {
+                if (ch === bar || ch === rec.iframe) continue;
+                if (ch.style) {
+                  rec.hiddenKids.push({ el: ch, display: ch.style.display || '' });
+                  ch.style.display = 'none';
+                }
               }
             }
             if (!rec.iframe) {
@@ -2277,16 +2407,19 @@
               ifr.setAttribute('data-ag-prism-omni-owned', '1');
               ifr.setAttribute('referrerpolicy', 'no-referrer');
               ifr.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms');
-              ifr.addEventListener('load', () => pushWorkbenchSyncToIframe(ifr, { filePath }));
+              ifr.addEventListener('load', () => pushWorkbenchSyncToIframe(ifr, { filePath: rec.filePath }));
               rec.iframe = ifr;
               hostEl.appendChild(ifr);
             }
+            rec.activeMode = 'workbench';
+            const nextSrc = buildViewerUrl(meta, { filePath: rec.filePath, kind: detectPreviewKind(rec.filePath) });
             rec.iframe.hidden = false;
-            rec.iframe.src = buildViewerUrl(meta, { filePath, kind: detectPreviewKind(filePath) });
-            pushWorkbenchSyncToIframe(rec.iframe, { filePath });
+            if (rec.iframe.src !== nextSrc) rec.iframe.src = nextSrc;
+            pushWorkbenchSyncToIframe(rec.iframe, { filePath: rec.filePath });
           } else {
             btnRaw.setAttribute('data-active', '1');
             btnWb.removeAttribute('data-active');
+            rec.activeMode = 'raw';
             if (rec.iframe) rec.iframe.hidden = true;
             for (const item of rec.hiddenKids) {
               if (item.el?.style) item.el.style.display = item.display;
@@ -2295,12 +2428,17 @@
           }
         };
 
+        rec.switchMode = switchMode;
         btnWb.addEventListener('click', () => void switchMode(true));
         btnRaw.addEventListener('click', () => void switchMode(false));
 
         if (hostEl.firstChild) hostEl.insertBefore(bar, hostEl.firstChild);
         else hostEl.appendChild(bar);
         mountedAuxSwitches.add(rec);
+
+        if (shouldAutoActivateWorkbench(viewEl, hostEl)) {
+          void switchMode(true, { auto: true });
+        }
       }
     }
 
@@ -2335,13 +2473,20 @@
         pruneDisconnectedHighlights();
         const roots = Array.from(pendingScanRoots);
         pendingScanRoots.clear();
+        let scannedAuxSplit = false;
         for (const r of roots) {
           if (!r || !r.isConnected) continue;
           const scanBox = findClosest(r, SCAN_CONTAINER_SELECTOR);
           if (scanBox) scanContainerForBareTokens(scanBox);
           else runScanNow(r);
           decorateMermaidContainers(r);
-          decorateAuxUnsupportedViews(r);
+          const auxRoot = !scannedAuxSplit && findClosest(r, '[data-testid="aux-pane-split"]');
+          if (auxRoot) {
+            scannedAuxSplit = true;
+            decorateAuxUnsupportedViews(auxRoot);
+          } else {
+            decorateAuxUnsupportedViews(r);
+          }
         }
       }, 60);
     }
@@ -2407,17 +2552,7 @@
 
       // 4. Remove Aux view switchers & restore shell styles
       for (const rec of Array.from(mountedAuxSwitches)) {
-        for (const item of rec.hiddenKids) {
-          if (item.el?.style) item.el.style.display = item.display;
-        }
-        if (rec.hostEl && rec.hostEl.style) {
-          rec.hostEl.style.display = rec.origHostDisplay || '';
-          rec.hostEl.style.flexDirection = rec.origHostFlexDir || '';
-        }
-        try { rec.bar?.remove?.(); } catch (_) {}
-        try { rec.iframe?.remove?.(); } catch (_) {}
-        rec.viewEl?.removeAttribute?.('data-omni-aux-mounted');
-        rec.hostEl?.removeAttribute?.('data-omni-aux-mounted');
+        unmountSingleAuxSwitch(rec);
       }
       mountedAuxSwitches.clear();
     }
