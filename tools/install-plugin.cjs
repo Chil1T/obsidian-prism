@@ -32,6 +32,81 @@ function getLegacyTempPluginDir(targetDir = getDefaultPluginTargetDir()) {
   return candidate;
 }
 
+function resolveHostGeminiConfigDir(targetDir, explicitHostDir = null) {
+  if (explicitHostDir) return path.resolve(explicitHostDir);
+  if (process.env.AG_PRISM_GEMINI_CONFIG_DIR) {
+    return path.resolve(process.env.AG_PRISM_GEMINI_CONFIG_DIR);
+  }
+  const defaultTarget = path.resolve(getDefaultPluginTargetDir());
+  const resolvedTarget = path.resolve(targetDir || defaultTarget);
+  if (resolvedTarget.toLowerCase() === defaultTarget.toLowerCase()) {
+    return path.join(os.homedir(), ".gemini", "config");
+  }
+  const parentDir = path.dirname(resolvedTarget);
+  if (path.basename(parentDir).toLowerCase() === "plugins") {
+    return path.dirname(parentDir);
+  }
+  return null;
+}
+
+function syncHostPluginRegistry(configDir, enable) {
+  if (!configDir) return false;
+  const hostConfigPath = path.join(configDir, "config.json");
+  try {
+    if (enable) {
+      fs.mkdirSync(configDir, { recursive: true });
+      let hostObj = {};
+      if (fs.existsSync(hostConfigPath)) {
+        const raw = fs.readFileSync(hostConfigPath, "utf8").replace(/^\uFEFF/, "").trim();
+        if (raw.length > 0) {
+          const parsed = JSON.parse(raw);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+          hostObj = parsed;
+        }
+      }
+      hostObj.plugins = hostObj.plugins && typeof hostObj.plugins === "object" && !Array.isArray(hostObj.plugins) ? hostObj.plugins : {};
+      const prevEntry = hostObj.plugins["obsidian-prism"];
+      hostObj.plugins["obsidian-prism"] =
+        prevEntry && typeof prevEntry === "object" && !Array.isArray(prevEntry)
+          ? { ...prevEntry, enabled: true }
+          : { enabled: true };
+      if (hostObj.plugins["antigravity-prism"]) {
+        delete hostObj.plugins["antigravity-prism"];
+      }
+      fs.writeFileSync(hostConfigPath, JSON.stringify(hostObj, null, 2) + "\n", "utf8");
+      return true;
+    }
+
+    if (fs.existsSync(hostConfigPath)) {
+      const raw = fs.readFileSync(hostConfigPath, "utf8").replace(/^\uFEFF/, "").trim();
+      if (raw.length > 0) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          let changed = false;
+          if (parsed.plugins && typeof parsed.plugins === "object") {
+            if ("obsidian-prism" in parsed.plugins) { delete parsed.plugins["obsidian-prism"]; changed = true; }
+            if ("antigravity-prism" in parsed.plugins) { delete parsed.plugins["antigravity-prism"]; changed = true; }
+          }
+          if (parsed.sidecars && typeof parsed.sidecars === "object" && "obsidian-prism/daemon" in parsed.sidecars) {
+            delete parsed.sidecars["obsidian-prism/daemon"];
+            changed = true;
+          }
+          if (changed) {
+            fs.writeFileSync(hostConfigPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+          }
+        }
+      }
+    }
+    const cachePath = path.join(configDir, "obsidian-prism-thought-cache.json");
+    if (fs.existsSync(cachePath)) {
+      try { fs.unlinkSync(cachePath); } catch {}
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const ROOT_FILES_TO_SYNC = SYNC_ROOT_FILES;
 
 const DIRS_TO_SYNC = [
@@ -211,25 +286,9 @@ async function installPlugin(opts = {}) {
     } catch {}
   }
 
-  // Ensure ~/.gemini/config/config.json registers `obsidian-prism` cleanly and removes stale `antigravity-prism` key
-  if (!opts.targetDir) {
-    try {
-      const hostConfigPath = path.join(os.homedir(), ".gemini", "config", "config.json");
-      if (fs.existsSync(hostConfigPath)) {
-        const hostRaw = JSON.parse(fs.readFileSync(hostConfigPath, "utf8").replace(/^\uFEFF/, ""));
-        if (hostRaw && typeof hostRaw === "object") {
-          hostRaw.plugins = hostRaw.plugins && typeof hostRaw.plugins === "object" ? hostRaw.plugins : {};
-          if (!hostRaw.plugins["obsidian-prism"]) {
-            hostRaw.plugins["obsidian-prism"] = { enabled: true };
-          }
-          if (hostRaw.plugins["antigravity-prism"]) {
-            delete hostRaw.plugins["antigravity-prism"];
-          }
-          fs.writeFileSync(hostConfigPath, JSON.stringify(hostRaw, null, 2) + "\n", "utf8");
-        }
-      }
-    } catch {}
-  }
+  // Ensure ~/.gemini/config/config.json (including 0-byte empty file) registers `obsidian-prism` cleanly
+  const hostConfigDir = resolveHostGeminiConfigDir(opts.targetDir ? targetDir : null, opts.hostConfigDir || null);
+  syncHostPluginRegistry(hostConfigDir, true);
 
   let daemonInfo = { started: false, pid: null, method: null, pidVerified: false };
   let liveCheck = { cdpPort: null, attachedPages: [] };
@@ -313,7 +372,6 @@ async function uninstallPlugin(opts = {}) {
       if (port) {
         const pages = await cdp.listPages(port).catch(() => []);
         for (const p of pages) {
-          if (/Untitled|launchpad/i.test(`${p.title || ""} ${p.url || ""}`)) continue;
           let s = null;
           try {
             s = await cdp.CdpSession.connect(p.webSocketDebuggerUrl, 2000);
@@ -327,6 +385,9 @@ async function uninstallPlugin(opts = {}) {
       }
     } catch {}
   }
+
+  const hostConfigDir = resolveHostGeminiConfigDir(opts.targetDir ? targetDir : null, opts.hostConfigDir || null);
+  syncHostPluginRegistry(hostConfigDir, false);
 
   if (fs.existsSync(targetDir)) {
     fs.rmSync(targetDir, { recursive: true, force: true });
@@ -414,6 +475,8 @@ if (require.main === module) {
 module.exports = {
   getDefaultPluginTargetDir,
   getLegacyTempPluginDir,
+  resolveHostGeminiConfigDir,
+  syncHostPluginRegistry,
   installPlugin,
   uninstallPlugin,
   getPluginInstallStatus,

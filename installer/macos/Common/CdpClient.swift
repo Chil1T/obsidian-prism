@@ -421,6 +421,21 @@ enum CdpHelper {
         return pages
     }
 
+    static func isBareAuxiliaryTarget(title: String, pageUrl: String) -> Bool {
+        let ttl = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if ttl.caseInsensitiveCompare("Untitled") == .orderedSame ||
+           ttl.caseInsensitiveCompare("launchpad") == .orderedSame {
+            return true
+        }
+        let url = pageUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanEnd = url.firstIndex(where: { $0 == "?" || $0 == "#" }) ?? url.endIndex
+        let cleanLower = String(url[..<cleanEnd]).lowercased()
+        if cleanLower.hasSuffix("/launchpad") || cleanLower.hasSuffix("/launchpad.html") {
+            return true
+        }
+        return false
+    }
+
     static func isEligibleTarget(type: String, wsUrl: String, title: String, pageUrl: String) -> Bool {
         if type != "page" || wsUrl.isEmpty { return false }
         let url = pageUrl.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -431,8 +446,7 @@ enum CdpHelper {
         for pfx in blockedPrefixes {
             if lowerUrl.hasPrefix(pfx) { return false }
         }
-        let combined = (ttl + " " + url).lowercased()
-        if combined.contains("untitled") || combined.contains("launchpad") { return false }
+        if isBareAuxiliaryTarget(title: ttl, pageUrl: url) { return false }
         if lowerUrl.hasPrefix("vscode-file://") || lowerUrl.hasPrefix("app://") { return true }
         if lowerUrl.hasPrefix("file://") {
             return lowerUrl.contains("workbench") || lowerUrl.contains("antigravity") || ttl.lowercased().contains("antigravity")
@@ -620,7 +634,7 @@ enum CdpHelper {
         }
     }
 
-    static func isExpectedDaemonProcess(pid: Int32) -> Bool {
+    static func isExpectedDaemonProcess(pid: Int32, pluginDir: String = "") -> Bool {
         guard pid > 0 else { return false }
         let comm = runPsQuery(pid: pid, format: "comm=").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if comm.isEmpty { return false }
@@ -633,10 +647,17 @@ enum CdpHelper {
         if comm.contains("antigravity") || comm.contains("electron") || comm.hasSuffix("/agy") || comm == "agy" {
             let args = runPsQuery(pid: pid, format: "args=").replacingOccurrences(of: "\\", with: "/").lowercased()
             if args.isEmpty || args.contains("--type=") { return false }
-            let hasPrismOwner = args.contains("obsidian-prism") || args.contains("antigravity-prism") || args.contains("agy-claude-style")
+            var hasPrismOwner = args.contains("obsidian-prism") || args.contains("antigravity-prism") || args.contains("agy-claude-style")
+            if !hasPrismOwner && !pluginDir.isEmpty {
+                let normPlugin = pluginDir.replacingOccurrences(of: "\\", with: "/").lowercased()
+                if !normPlugin.isEmpty && args.contains(normPlugin) {
+                    hasPrismOwner = true
+                }
+            }
             let hasDaemonEntry = args.contains("sidecars/daemon/main.mjs") || args.contains("/daemon/main.mjs") || args.contains("/watch.js")
-            if hasPrismOwner && hasDaemonEntry { return true }
-            let matchedLock = readNativeDaemonPid(pluginDir: getDefaultNativePluginDir()) == pid
+            let matchedLock = (!pluginDir.isEmpty && readNativeDaemonPid(pluginDir: pluginDir) == pid) ||
+                              (readNativeDaemonPid(pluginDir: getDefaultNativePluginDir()) == pid)
+            if (hasPrismOwner || matchedLock) && hasDaemonEntry { return true }
             if matchedLock && args.contains("sidecar_sdk/register_loader.js") && args.contains("main.mjs") {
                 return true
             }
@@ -645,10 +666,257 @@ enum CdpHelper {
         return false
     }
 
+    private static let daemonCacheLock = NSLock()
+    private static var verifiedDaemonPid: Int32 = 0
+
+    private static func removeStaleDaemonLockIfMatches(pluginDir: String, stalePid: Int32) {
+        guard !pluginDir.isEmpty, stalePid > 0 else { return }
+        if readNativeDaemonPid(pluginDir: pluginDir) == stalePid {
+            let pidPath = (pluginDir as NSString).appendingPathComponent(".daemon.pid")
+            try? FileManager.default.removeItem(atPath: pidPath)
+        }
+    }
+
     static func isNativeDaemonAlive(pluginDir: String) -> Bool {
         guard let pid = readNativeDaemonPid(pluginDir: pluginDir), pid > 0 else { return false }
-        if kill(pid, 0) == 0 { return true }
-        return errno == EPERM
+        if kill(pid, 0) != 0 {
+            daemonCacheLock.lock()
+            if verifiedDaemonPid == pid { verifiedDaemonPid = 0 }
+            daemonCacheLock.unlock()
+            removeStaleDaemonLockIfMatches(pluginDir: pluginDir, stalePid: pid)
+            return false
+        }
+        daemonCacheLock.lock()
+        let alreadyVerified = (verifiedDaemonPid == pid)
+        daemonCacheLock.unlock()
+        if alreadyVerified { return true }
+
+        if isExpectedDaemonProcess(pid: pid, pluginDir: pluginDir) {
+            daemonCacheLock.lock()
+            verifiedDaemonPid = pid
+            daemonCacheLock.unlock()
+            return true
+        }
+        removeStaleDaemonLockIfMatches(pluginDir: pluginDir, stalePid: pid)
+        return false
+    }
+
+    static func resolveHostGeminiConfigDir(pluginDir: String) -> String? {
+        if let envDir = ProcessInfo.processInfo.environment["AG_PRISM_GEMINI_CONFIG_DIR"],
+           !envDir.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(fileURLWithPath: envDir.trimmingCharacters(in: .whitespacesAndNewlines)).standardizedFileURL.path
+        }
+        let defPlugin = URL(fileURLWithPath: getDefaultNativePluginDir()).standardizedFileURL.path
+        let resolvedPlugin = pluginDir.isEmpty
+            ? defPlugin
+            : URL(fileURLWithPath: pluginDir).standardizedFileURL.path
+        if resolvedPlugin == defPlugin {
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            return (home as NSString).appendingPathComponent(".gemini/config")
+        }
+        let parent = (resolvedPlugin as NSString).deletingLastPathComponent
+        if (parent as NSString).lastPathComponent.caseInsensitiveCompare("plugins") == .orderedSame {
+            return (parent as NSString).deletingLastPathComponent
+        }
+        return nil
+    }
+
+    private static func atomicWriteJsonObject(_ obj: [String: JsonValue], toFile path: String) throws {
+        let tmpPath = path + ".tmp"
+        let content = MiniJson.stringify(.object(obj), pretty: true) + "\n"
+        try content.write(toFile: tmpPath, atomically: false, encoding: .utf8)
+        if rename(tmpPath, path) != 0 {
+            try content.write(toFile: path, atomically: true, encoding: .utf8)
+            try? FileManager.default.removeItem(atPath: tmpPath)
+        }
+    }
+
+    @discardableResult
+    static func syncHostPluginRegistry(pluginDir: String, enable: Bool) -> Bool {
+        guard let cfgDir = resolveHostGeminiConfigDir(pluginDir: pluginDir), !cfgDir.isEmpty else {
+            return false
+        }
+        let fm = FileManager.default
+        let cfgPath = (cfgDir as NSString).appendingPathComponent("config.json")
+        do {
+            if enable {
+                try fm.createDirectory(atPath: cfgDir, withIntermediateDirectories: true, attributes: nil)
+                var rootObj: [String: JsonValue] = [:]
+                if fm.fileExists(atPath: cfgPath) {
+                    let raw = (try String(contentsOfFile: cfgPath, encoding: .utf8))
+                        .replacingOccurrences(of: "\u{FEFF}", with: "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !raw.isEmpty {
+                        rootObj = try MiniJson.parseObject(raw)
+                    }
+                }
+                var pluginsObj = rootObj["plugins"]?.objectValue ?? [:]
+                var entryObj = pluginsObj["obsidian-prism"]?.objectValue ?? [:]
+                entryObj["enabled"] = .bool(true)
+                pluginsObj["obsidian-prism"] = .object(entryObj)
+                pluginsObj.removeValue(forKey: "antigravity-prism")
+                rootObj["plugins"] = .object(pluginsObj)
+                try atomicWriteJsonObject(rootObj, toFile: cfgPath)
+                return true
+            }
+
+            if fm.fileExists(atPath: cfgPath) {
+                let raw = (try String(contentsOfFile: cfgPath, encoding: .utf8))
+                    .replacingOccurrences(of: "\u{FEFF}", with: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !raw.isEmpty, var rootObj = try? MiniJson.parseObject(raw) {
+                    var changed = false
+                    if var pluginsObj = rootObj["plugins"]?.objectValue {
+                        if pluginsObj.removeValue(forKey: "obsidian-prism") != nil { changed = true }
+                        if pluginsObj.removeValue(forKey: "antigravity-prism") != nil { changed = true }
+                        rootObj["plugins"] = .object(pluginsObj)
+                    }
+                    if var sidecarsObj = rootObj["sidecars"]?.objectValue {
+                        if sidecarsObj.removeValue(forKey: "obsidian-prism/daemon") != nil { changed = true }
+                        rootObj["sidecars"] = .object(sidecarsObj)
+                    }
+                    if changed {
+                        try atomicWriteJsonObject(rootObj, toFile: cfgPath)
+                    }
+                }
+            }
+            // Remove ephemeral translation cache while strictly preserving user secret file obsidian-prism-thought.json
+            let cacheFile = (cfgDir as NSString).appendingPathComponent("obsidian-prism-thought-cache.json")
+            if fm.fileExists(atPath: cacheFile) {
+                try? fm.removeItem(atPath: cacheFile)
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    static func findAntigravityNodeRuntime(preferredApp: String? = nil) -> (executable: String, runAsNode: Bool)? {
+        let fm = FileManager.default
+        if let envExe = ProcessInfo.processInfo.environment["AG_PRISM_ELECTRON_EXE"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !envExe.isEmpty, fm.isExecutableFile(atPath: envExe) {
+            return (envExe, true)
+        }
+        let home = fm.homeDirectoryForCurrentUser.path
+        var appBundles: [String] = []
+        if let pref = preferredApp?.trimmingCharacters(in: .whitespacesAndNewlines), !pref.isEmpty {
+            appBundles.append(pref)
+        }
+        appBundles.append("/Applications/Antigravity.app")
+        appBundles.append((home as NSString).appendingPathComponent("Applications/Antigravity.app"))
+
+        let relBinaries = [
+            "Contents/Frameworks/Antigravity Helper.app/Contents/MacOS/Antigravity Helper",
+            "Contents/Frameworks/Antigravity Helper (Plugin).app/Contents/MacOS/Antigravity Helper (Plugin)",
+            "Contents/MacOS/Antigravity",
+        ]
+        for bundle in appBundles {
+            for rel in relBinaries {
+                let candidate = (bundle as NSString).appendingPathComponent(rel)
+                if fm.isExecutableFile(atPath: candidate) {
+                    return (candidate, true)
+                }
+            }
+        }
+        return nil
+    }
+
+    static func findFallbackNodeExecutable() -> String? {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+        var candidates: [String] = []
+        if let pathEnv = ProcessInfo.processInfo.environment["PATH"], !pathEnv.isEmpty {
+            for seg in pathEnv.split(separator: ":") {
+                let dir = String(seg).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !dir.isEmpty {
+                    candidates.append((dir as NSString).appendingPathComponent("node"))
+                }
+            }
+        }
+        candidates.append("/opt/homebrew/bin/node")
+        candidates.append("/usr/local/bin/node")
+        candidates.append((home as NSString).appendingPathComponent(".volta/bin/node"))
+        candidates.append((home as NSString).appendingPathComponent(".local/share/fnm/aliases/default/bin/node"))
+        candidates.append((home as NSString).appendingPathComponent("Library/Application Support/fnm/aliases/default/bin/node"))
+
+        for cand in candidates {
+            if fm.isExecutableFile(atPath: cand) { return cand }
+        }
+
+        let nvmVersions = (home as NSString).appendingPathComponent(".nvm/versions/node")
+        if let dirs = try? fm.contentsOfDirectory(atPath: nvmVersions) {
+            for ver in dirs.sorted().reversed() {
+                let cand = ((nvmVersions as NSString).appendingPathComponent(ver) as NSString)
+                    .appendingPathComponent("bin/node")
+                if fm.isExecutableFile(atPath: cand) { return cand }
+            }
+        }
+        return nil
+    }
+
+    @discardableResult
+    static func ensureNativeDaemonRunning(
+        pluginDir: String,
+        cdpPort: Int? = nil,
+        preferredApp: String? = nil,
+        log: ((String) -> Void)? = nil
+    ) -> Bool {
+        if ProcessInfo.processInfo.environment["AG_PRISM_NO_NATIVE_DAEMON"] == "1" {
+            return false
+        }
+        guard !pluginDir.isEmpty else { return false }
+        if isNativeDaemonAlive(pluginDir: pluginDir) { return true }
+
+        let daemonEntry = (pluginDir as NSString).appendingPathComponent("sidecars/daemon/main.mjs")
+        guard FileManager.default.fileExists(atPath: daemonEntry) else { return false }
+
+        let runtime: (executable: String, runAsNode: Bool)?
+        if let electronRt = findAntigravityNodeRuntime(preferredApp: preferredApp) {
+            runtime = electronRt
+        } else if let nodeBin = findFallbackNodeExecutable() {
+            runtime = (nodeBin, false)
+        } else {
+            runtime = nil
+        }
+        guard let rt = runtime else { return false }
+
+        var args = [daemonEntry, "--root", pluginDir]
+        if let port = cdpPort, port > 0 {
+            args.append("--port")
+            args.append(String(port))
+        }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: rt.executable)
+        proc.arguments = args
+        proc.currentDirectoryURL = URL(fileURLWithPath: pluginDir)
+        var env = ProcessInfo.processInfo.environment
+        if rt.runAsNode {
+            env["ELECTRON_RUN_AS_NODE"] = "1"
+        } else {
+            env.removeValue(forKey: "ELECTRON_RUN_AS_NODE")
+        }
+        proc.environment = env
+        proc.standardInput = FileHandle.nullDevice
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+
+        do {
+            try proc.run()
+            let rtLabel = rt.runAsNode ? "Electron RunAsNode" : "Node.js"
+            let deadline = Date().addingTimeInterval(3.0)
+            while Date() < deadline {
+                if isNativeDaemonAlive(pluginDir: pluginDir) {
+                    log?("已自举启动五通道原生 Sidecar Daemon (\(rtLabel))")
+                    return true
+                }
+                if !proc.isRunning { break }
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            return isNativeDaemonAlive(pluginDir: pluginDir)
+        } catch {
+            return false
+        }
     }
 
     static func readRuntimeBundle(baseDir: String, manifest: PluginManifest) throws -> String {
@@ -709,6 +977,8 @@ enum CdpHelper {
         sb.reserveCapacity(clientSource.count + cfgJson.count + 1024)
         sb.append("(() => {\n")
         sb.append("  const href = String((typeof location !== 'undefined' && location && location.href) || '');\n")
+        sb.append("  const ttl = String((typeof document !== 'undefined' && document && document.title) || '').trim();\n")
+        sb.append("  if (/^(?:untitled|launchpad)$/i.test(ttl) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(href)) return { ok: false, skipped: true };\n")
         sb.append("  if (/^(devtools:|chrome:|chrome-extension:|edge:|about:|data:|blob:|plugin:)/i.test(href)) return { ok: false, skipped: true };\n")
         sb.append("  if (/^https?:\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?\\/(?:viewer|sandbox|stream|api)(?:[/?#]|$)/i.test(href)) return { ok: false, skipped: true };\n")
         sb.append("  const bootCfg = ")
@@ -771,6 +1041,39 @@ enum CdpHelper {
         sb.append("      try { const oldStyle = document.getElementById('ag-claude-style-css'); if (oldStyle) oldStyle.remove(); } catch {}\n")
         sb.append("      try { const oldApi = window.__agClaudeStyle; if (oldApi && (!window.__agPrism || Number(oldApi.version) <= 2)) { if (typeof oldApi.destroy === 'function') oldApi.destroy(); delete window.__agClaudeStyle; } } catch {}\n")
         sb.append("    };\n")
+        sb.append("    const stripForeignMount = () => {\n")
+        sb.append("      try { const st = document.getElementById(")
+        sb.append(styleIdJson)
+        sb.append("); if (st) st.remove(); } catch {}\n")
+        sb.append("      try { if (document.documentElement) document.documentElement.removeAttribute('data-ag-prism'); } catch {}\n")
+        sb.append("    };\n")
+        sb.append("    const hasDomWorkbenchMarkers = () => {\n")
+        sb.append("      try {\n")
+        sb.append("        if (!document || !document.documentElement) return false;\n")
+        sb.append("        if (document.querySelector('.agy-shell, .monaco-workbench, .antigravity-agent-side-panel, [data-testid=\"conversation-view\"], [data-testid=\"agent-view\"]')) return true;\n")
+        sb.append("        return Boolean(window.__agPrismSetting || window.__agPrismMetricsCall || window.__agPrismThoughtCall || window.__agPrismUsageCall);\n")
+        sb.append("      } catch { return false; }\n")
+        sb.append("    };\n")
+        sb.append("    const checkHostIdentity = () => {\n")
+        sb.append("      try {\n")
+        sb.append("        const href = String((typeof location !== 'undefined' && location && location.href) || '');\n")
+        sb.append("        const lowUrl = href.toLowerCase();\n")
+        sb.append("        if (!lowUrl) return 'defer';\n")
+        sb.append("        if (/^(devtools:|data:|about:|chrome:|chrome-extension:|edge:|blob:|plugin:)/.test(lowUrl)) return 'reject';\n")
+        sb.append("        const title = String((document && document.title) || '').trim();\n")
+        sb.append("        if (/^(?:untitled|launchpad)$/i.test(title) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(lowUrl)) return 'reject';\n")
+        sb.append("        if (lowUrl.startsWith('vscode-file://') || lowUrl.startsWith('app://')) return 'allow';\n")
+        sb.append("        if (lowUrl.startsWith('file://')) {\n")
+        sb.append("          return (lowUrl.includes('workbench') || lowUrl.includes('antigravity') || title.toLowerCase().includes('antigravity') || hasDomWorkbenchMarkers()) ? 'allow' : 'reject';\n")
+        sb.append("        }\n")
+        sb.append("        if (/^https?:\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?\\/(?:viewer|sandbox|stream|api)(?:[/?#]|$)/i.test(lowUrl)) return 'reject';\n")
+        sb.append("        if (!/^https?:\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(?:[/?#]|$)/i.test(lowUrl)) return 'reject';\n")
+        sb.append("        if (title.toLowerCase().includes('antigravity') || hasDomWorkbenchMarkers()) return 'allow';\n")
+        sb.append("        if (lowUrl.startsWith('https://') && (!title || title.toLowerCase().startsWith('127.0.0.1'))) return 'allow';\n")
+        sb.append("        if (document.readyState !== 'complete') return 'defer';\n")
+        sb.append("        return 'reject';\n")
+        sb.append("      } catch { return 'reject'; }\n")
+        sb.append("    };\n")
         sb.append("    const applyStyle = () => {\n")
         sb.append("      const targetParent = document.head || document.documentElement;\n")
         sb.append("      if (!targetParent) return;\n")
@@ -791,9 +1094,29 @@ enum CdpHelper {
         sb.append("    };\n\n")
         sb.append("    let status = 'ok';\n")
         sb.append("    let mounted = false;\n")
+        sb.append("    let hostGateTimer = null;\n")
+        sb.append("    let hostGateAttempts = 0;\n")
         sb.append("    const mount = () => {\n")
         sb.append("      if (mounted || !document.documentElement) return;\n")
+        sb.append("      const verdict = checkHostIdentity();\n")
+        sb.append("      if (verdict === 'reject') {\n")
+        sb.append("        status = 'skipped-non-host';\n")
+        sb.append("        stripForeignMount();\n")
+        sb.append("        return;\n")
+        sb.append("      }\n")
+        sb.append("      if (verdict === 'defer') {\n")
+        sb.append("        status = 'deferred-host-check';\n")
+        sb.append("        if (!hostGateTimer && hostGateAttempts < 20) {\n")
+        sb.append("          hostGateAttempts += 1;\n")
+        sb.append("          hostGateTimer = setTimeout(() => { hostGateTimer = null; mount(); }, 150);\n")
+        sb.append("        } else if (hostGateAttempts >= 20) {\n")
+        sb.append("          status = 'skipped-non-host';\n")
+        sb.append("          stripForeignMount();\n")
+        sb.append("        }\n")
+        sb.append("        return;\n")
+        sb.append("      }\n")
         sb.append("      mounted = true;\n")
+        sb.append("      status = 'ok';\n")
         sb.append("      try {\n")
         sb.append("        cleanupLegacyResidue();\n")
         sb.append("        if (!window.__agPrismRepoBridge) {\n")
@@ -825,7 +1148,12 @@ enum CdpHelper {
         sb.append("        if (bundleUnchanged) {\n")
         sb.append("          existingPrism.refreshConfig(bootCfg);\n")
         sb.append("        } else {\n")
+        sb.append("          try { existingPrism?.destroy?.(); } catch {}\n")
+        sb.append("          try { window.__agPrismTelemetry?.destroy?.(); } catch {}\n")
+        sb.append("          try { window.__agPrismEffortSlider?.destroy?.(); } catch {}\n")
         sb.append("          try { window.__agPrismThought?.destroy?.(); } catch {}\n")
+        sb.append("          try { window.__agPrismOmni?.destroy?.(); } catch {}\n")
+        sb.append("          try { document.querySelectorAll('[data-ag-prism-fallback=\"1\"]').forEach((n) => n.remove()); } catch {}\n")
         sb.append("          ")
         sb.append(bundle)
         sb.append("\n")

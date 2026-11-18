@@ -65,6 +65,7 @@ namespace AgyClaudeStyle.Watcher
         private static string _logFile;
         private static string _pidFile;
         private static bool _isWatch;
+        private static bool _noNativeDaemon;
 
         private static string GetDefaultWatcherInstallDir()
         {
@@ -91,6 +92,7 @@ namespace AgyClaudeStyle.Watcher
                 if (a == "--watch") mode = "watch";
                 else if (a == "--once") mode = "once";
                 else if (a == "--remove") mode = "remove";
+                else if (a == "--no-native-daemon") _noNativeDaemon = true;
                 else if (a == "--dir" && i + 1 < args.Length) customDir = args[++i];
                 else if (a == "--plugin-dir" && i + 1 < args.Length) customPluginDir = args[++i];
                 else if (a == "--cdp-port" && i + 1 < args.Length)
@@ -375,6 +377,24 @@ namespace AgyClaudeStyle.Watcher
                     object idVal;
                     if (addRes.TryGetValue("identifier", out idVal)) entry.ScriptId = idVal as string;
                     object evalVal = await entry.Session.EvaluateAsync(exprToUse, false).ConfigureAwait(false);
+                    Dictionary<string, object> evalDict = evalVal as Dictionary<string, object>;
+                    object statusVal;
+                    if (evalDict != null && evalDict.TryGetValue("status", out statusVal) &&
+                        string.Equals(statusVal as string, "skipped-non-host", StringComparison.Ordinal))
+                    {
+                        if (!string.IsNullOrEmpty(entry.ScriptId))
+                        {
+                            try
+                            {
+                                Dictionary<string, object> rmSkip = new Dictionary<string, object>(StringComparer.Ordinal);
+                                rmSkip["identifier"] = entry.ScriptId;
+                                await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmSkip, 5000).ConfigureAwait(false);
+                            }
+                            catch { }
+                            entry.ScriptId = null;
+                        }
+                        return evalDict;
+                    }
 
                     if (!string.IsNullOrEmpty(entry.OmniScriptId))
                     {
@@ -738,6 +758,7 @@ namespace AgyClaudeStyle.Watcher
 
                 int? lastPort = null;
                 bool yieldingToDaemon = false;
+                long lastDaemonBootTick = 0L;
                 try
                 {
                     while (!exitEvent.IsSet)
@@ -745,8 +766,31 @@ namespace AgyClaudeStyle.Watcher
                         try
                         {
                             bool nativeAlive = !string.IsNullOrEmpty(_pluginDir) && CdpHelper.IsNativeDaemonAlive(_pluginDir);
+                            if (!nativeAlive && !_noNativeDaemon && !string.IsNullOrEmpty(_pluginDir))
+                            {
+                                long nowTick = Environment.TickCount & int.MaxValue;
+                                if ((lastDaemonBootTick == 0L || Math.Abs(nowTick - lastDaemonBootTick) >= 6000L) &&
+                                    CdpHelper.ReadPort(overridePort).HasValue)
+                                {
+                                    lastDaemonBootTick = nowTick;
+                                    if (CdpHelper.EnsureNativeDaemonRunning(_pluginDir, overridePort, null, Log))
+                                    {
+                                        nativeAlive = true;
+                                    }
+                                }
+                            }
                             if (nativeAlive)
                             {
+                                try
+                                {
+                                    string pCfg = Path.Combine(_pluginDir, "config.json");
+                                    string bCfg = Path.Combine(_baseDir, "config.json");
+                                    if (File.Exists(pCfg) && (!File.Exists(bCfg) || File.GetLastWriteTimeUtc(pCfg) > File.GetLastWriteTimeUtc(bCfg)))
+                                    {
+                                        File.Copy(pCfg, bCfg, true);
+                                    }
+                                }
+                                catch { }
                                 if (!yieldingToDaemon || attached.Count > 0)
                                 {
                                     foreach (KeyValuePair<string, AttachedEntry> kv in attached)

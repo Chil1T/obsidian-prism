@@ -35,7 +35,7 @@ Antigravity 桌面端主题与工作台增强套件 · 四套深浅配色 · 内
 **Obsidian Prism (`v1.0.1`)** 在不改动宿主业务逻辑、不触碰外部插件锁文件的前提下，通过原生 Sidecar 插件架构为 Antigravity 桌面端提供界面配色、工作台交互增强、侧边栏内置浏览器与多格式流式检视台、模型配额遥测及思考过程转译：
 
 - **四套深浅配色与细节微调**：内置深色（`obsidian` 深空黑曜、`warm` 暖炭玄岩）与浅色（`crystal` 白昼冷晶、`alabaster` 暖白画册）共四套主题，支持跟随系统/宿主亮暗切换；提供 5 档工业强调色（跟随模型 / 钴蓝 `cobalt` / 鸢尾紫 `iris` / 琥珀金 `amber` / 纯银钛单色 `mono`）、3 档全局圆角、4 档代码等宽字体与连字开关、环境光浓度调节。
-- **300Hz 高刷分频与三态 `0fps` 语义余晖**：移除常驻大面积 `backdrop-filter` 模糊开销；在 300Hz 等高刷显示器下，推理稳态期背景极光自动限频至 `~30fps` 降低 GPU 占用，空闲 `1.2s` 后进入 `0fps` 休眠；支持「待用户决策 / 异常中止 / 长任务后台完成」三态无弹窗边缘余晖提示，静态定格后维持 `0fps` 零重绘，且不破坏宿主 React Fiber DOM 结构。
+- **300Hz 高刷分频、五级水墨流式淡入与 `0fps` 语义余晖**：移除常驻大面积 `backdrop-filter` 模糊开销；对话流式吐字采用基于 `CSS.highlights` 的**五级水墨流式淡入**（零 DOM 节点包裹、零强制同步回流），在超长会话（`34k+` DOM 节点）与高刷屏下保持流畅零卡顿；推理稳态期背景极光自动限频至 `~30fps` 降低 GPU 占用，空闲 `1.2s` 后进入 `0fps` 休眠；支持「待用户决策 / 异常中止 / 长任务后台完成」三态无弹窗边缘余晖提示，静态定格后维持 `0fps` 零重绘。
 - **宿主深水区工作台适配**：通过宿主原生 `preload` 协议向 `plugin://*` Sidecar 面板（Swarm、Model Hub、Pulse 等）按需同步 24 项主题色彩变量，消除跨源 `iframe` 浅色闪白；Markdown 与 Artifacts 代码块顶栏支持 Sticky 吸顶，已完成且 `>= 48` 行的长代码块提供手动折叠/展开（不做自动截断，收起时自动补偿滚动位置）；左侧原生会话导轨支持长会话章节刻度、悬停提问大纲与关键词过滤、一键折叠历史步骤及非编辑焦点下 `Alt+↑` / `Alt+↓` 上下轮跳转；统一底部终端与后台任务卡片的控制台凹槽（Console Well）样式。
 - **Omni 内置浏览器、右键菜单与全格式流式检视台**：支持开关控制（`omniModule: "on" | "off"`）与链接打开位置配置（`linkTarget: "builtin" | "external"`）。采用 `CSS.highlights`（Custom Highlight API）零 DOM 篡改激活对话与终端内的裸 URL、`localhost` 端口与本地文件路径，不拆分宿主 React 文本节点；默认左键网页链接在右侧内置浏览器打开（`Ctrl/Cmd+点击` 临时切换系统浏览器）。日常阅读保持**零悬停浮窗干扰**，仅在右键点击链接、文件药丸、Artifact 卡片或 Mermaid 图表时弹出操作菜单（复制绝对/相对路径、在文件夹中定位选中、作为 `@引用` 填入输入框、内外部浏览器打开、图表缩放）。侧边栏检视台基于仅监听 `127.0.0.1` 的 HTTP `206 Range` 流式网关，支持大体积视频逐帧检视、音频毫秒级波形打点、SVG/透明图棋盘格缩放画布（含 PNG 导出）、本地 HTML 响应式视口沙盒、PDF、`CSV/TSV/JSONL` 冻结表头检索与 `TTF/OTF/WOFF2` 字体样张预览。
 - **纵深安全边界与本地隔离**：CDP 特权绑定（`__agPrism*`）强制校验顶层主 Frame 上下文，拒绝任何子 `<iframe>` 越权调用；本地流式网关实施 `Host` 与跨站请求校验、`realpath` 敏感凭据文件（`.env*`、`.ssh`、私钥证书与本地令牌配置等）双重拦截及远程 UNC 路径阻断；本地 HTML 预览采用 `HMAC-SHA256` 单目录作用域只读子令牌与受限 `sandbox` 隔离，思考转译上游请求禁用重定向并阻断云元数据与高危内网端口。
@@ -64,7 +64,7 @@ Antigravity 桌面端主题与工作台增强套件 · 四套深浅配色 · 内
 ---
 
 ### 2. 上下文水试管 · 推理等级滑块 · 桌面像素宠物
-底部胶囊以 1D 浅水波实时指示 512K 上下文占用比例，悬停可展开上下文切片拆分与 5h/周配额预测浮窗；模型选择菜单内置推理等级滑块；输入框上方提供可独立开关的像素宠物（`Clawd` 与小猫，无操作自动休眠）：
+底部紧凑胶囊以 1D 浅水波实时指示 512K 上下文占用比例，**点击可展开饱满光学配额浮窗**（查看上下文切片拆分、主/子代理消耗占比与 5h/周配额耗尽预测）；模型选择菜单内置推理等级滑块；输入框上方提供可独立开关的像素宠物（`Clawd` 与小猫，无操作自动休眠）：
 
 <p align="center">
   <img src="assets/screenshots/optics-bento-details.png" width="100%" alt="Interactive Optical Craft Bento" />
@@ -85,10 +85,17 @@ Antigravity 桌面端主题与工作台增强套件 · 四套深浅配色 · 内
 
 Obsidian Prism 提供 **「免环境图形安装包」** 与 **「源码部署原生插件」** 两种安装方式，刷新或重启客户端均自动生效，随时可无痕卸载还原：
 
-### 方式一：图形化独立安装包（推荐普通用户，免装 Node.js）
-前往 [**GitHub Releases**](https://github.com/RMvdesi/obsidian-prism/releases) 下载对应平台安装包：
-1. **Windows (`.exe`)**：运行 `obsidian-prism-installer.exe`，安装器会优先将完整原生 Sidecar 插件树部署至 `~/.gemini/config/plugins/obsidian-prism`（覆盖配置、遥测、历史用量、Git 同步、思考转译与 Omni 检视通道），并注册后台热备守护进程（检测到原生 Sidecar Daemon 在线时自动礼貌避让，离线时无缝接管注入；同一程序亦支持一键卸载还原）。
-2. **macOS (`Apple Silicon & Intel Universal`)**：挂载 `Obsidian-Prism-macOS-universal.dmg`，运行 `Obsidian Prism.app` 自动部署完整原生 Sidecar 插件并配置 `LaunchAgent` 热备守护。
+### 方式一：图形化独立安装包（推荐普通用户 · 零外部依赖，免预装 Node.js）
+点击下方直链下载对应系统安装包（或前往 [**GitHub Releases**](https://github.com/RMvdesi/obsidian-prism/releases) 查看历史版本）：
+1. **Windows (`x64`)**：下载 [**`obsidian-prism-installer.exe`**](https://github.com/RMvdesi/obsidian-prism/releases/latest/download/obsidian-prism-installer.exe) 并双击运行，点击安装即可一键部署完整原生插件至 `~/.gemini/config/plugins/obsidian-prism`，自动复用 Antigravity 客户端内置运行时（无需系统预装 Node.js）无窗拉起全套五通道 Sidecar 能力并注册开机守护；再次运行同一程序可一键干净卸载还原。
+2. **macOS (`Apple Silicon & Intel Universal`)**：下载 [**`Obsidian-Prism-macOS-universal.dmg`**](https://github.com/RMvdesi/obsidian-prism/releases/latest/download/Obsidian-Prism-macOS-universal.dmg)，挂载镜像并将 `Obsidian Prism.app` 拖入 `/Applications`（应用程序）文件夹，随后**双击运行一次 `Obsidian Prism.app`** 即可完成全套五通道原生插件部署与 `LaunchAgent` 自启配置（同一应用亦提供一键卸载还原）。
+
+> **首次打开系统安全提示（未签名开源构建说明）**
+> - **Windows SmartScreen**：首次运行安装器若弹出「Windows 已保护你的电脑」，请点击 **「更多信息」→「仍要运行」**。
+> - **macOS 15+ Gatekeeper**：由于安装包采用开源 Ad-hoc 签名（未申请商业 Apple Developer ID 公证），首次打开若提示「未打开 / 无法验证开发者」，请打开 **「系统设置 → 隐私与安全性」** 滑至底部点击 **「仍要打开」**，或在终端执行以下命令清除浏览器下载隔离属性后重新双击：
+>   ```bash
+>   xattr -cr "/Applications/Obsidian Prism.app"
+>   ```
 
 ### 方式二：源码部署为 Antigravity 原生插件（推荐开发者，支持面板内一键拉取 Git 更新）
 ```bash
@@ -132,7 +139,7 @@ obsidian-prism/
 ├── home-studio-panel.js                # 控制器 1：Studio 新建会话看板（概览/趋势/配额三视图）
 ├── home-ripple-host.js                 # 控制器 2：首页字符波纹矩阵宿主控制器
 ├── model-glyph-crystal.js              # 控制器 3：模型星标与 WebGL2 棱镜状态栏控制器
-├── stream-choreography.js              # 控制器 4：流式输出分块过渡与表格行级防抖控制器
+├── stream-choreography.js              # 控制器 4：CSS.highlights 五级水墨流式淡入与表格行级防抖控制器
 ├── prism-rim-canvas.js                 # 控制器 5：近场指针边框高光控制器
 ├── host-workbench-enhancer.js          # 控制器 6：Sidecar 主题同步桥、代码折叠与导轨大纲控制器
 ├── ui-runtime.js                       # 前端微内核：配置热同步、DOM 观察器与生命周期编排

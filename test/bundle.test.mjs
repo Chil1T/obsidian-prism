@@ -3139,6 +3139,148 @@ test('v1.0.1 compiler safety fixes, unified shared string pool < 670KB (< 680KB 
     false,
     'Omni /sandbox pages must always be rejected'
   );
+  // #304/#310: Swarm "Full View" ("Untitled Conversation - ... - Antigravity") & Untitled/launchpad file tabs MUST remain eligible!
+  assert.equal(
+    cdp.isEligibleTarget({
+      type: 'page',
+      title: 'Untitled Conversation - antigravity - Antigravity',
+      url: 'https://127.0.0.1:14472/c/7abbe5f5-ad54-4c00-af2c-4ad0cf43f044',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:14470/swarm-fullview',
+    }),
+    true,
+    'Swarm Full View ("Untitled Conversation - ... - Antigravity") must never be rejected'
+  );
+  assert.equal(
+    cdp.isEligibleTarget({
+      type: 'page',
+      title: 'Untitled.md - my-launchpad - Antigravity',
+      url: 'https://127.0.0.1:14472/c/123?project=my-launchpad&tab=file__Untitled.md',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:14470/file-tab',
+    }),
+    true,
+    'Workbench tabs or project names containing Untitled/launchpad must remain eligible'
+  );
+  assert.equal(
+    cdp.isEligibleTarget({
+      type: 'page',
+      title: 'Untitled',
+      url: 'vscode-file://vscode-app/blank.html',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:14470/bare-untitled',
+    }),
+    false,
+    'Bare auxiliary "Untitled" shell page must still be rejected'
+  );
+  assert.equal(
+    cdp.isEligibleTarget({
+      type: 'page',
+      title: 'Antigravity',
+      url: 'vscode-file://vscode-app/out/vs/code/electron-sandbox/launchpad/launchpad.html',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:14470/launchpad',
+    }),
+    false,
+    'Legacy launchpad.html target must still be rejected'
+  );
+
+  // #306/#310: REMOVE_EXPRESSION restores all 9 offscreen HIDE_PROPS on external Pulse & cleans CSS.highlights
+  {
+    const removedProps = [];
+    const hlMap = new Map([
+      ['ag-stream-f0', new Set()],
+      ['ag-stream-f4', new Set()],
+      ['ag-omni-url', new Set()],
+      ['host-custom-hl', new Set()],
+    ]);
+    const hiddenExtBar = {
+      removeAttribute(k) {
+        if (k === 'data-ag-prism-hidden') this._unhidden = true;
+      },
+      style: {
+        removeProperty(p) {
+          removedProps.push(p);
+        },
+      },
+    };
+    const remDoc = {
+      documentElement: null,
+      getElementById: () => null,
+      querySelector: () => null,
+      querySelectorAll: (sel) => (sel === '[data-ag-prism-hidden="1"]' ? [hiddenExtBar] : []),
+    };
+    const remWin = { __agPulseInlineInstalled: true, document: remDoc };
+    vm.runInNewContext(cdp.REMOVE_EXPRESSION, {
+      window: remWin,
+      document: remDoc,
+      globalThis: remWin,
+      CSS: { highlights: hlMap },
+    });
+    assert.equal(hiddenExtBar._unhidden, true);
+    assert.equal(remWin.__agPulseInlineInstalled, false, 'REMOVE_EXPRESSION must release __agPulseInlineInstalled guard when __agPulseDispose is absent');
+    for (const prop of ['display', 'position', 'left', 'top', 'width', 'height', 'opacity', 'pointer-events', 'visibility', 'overflow']) {
+      assert.ok(removedProps.includes(prop), `REMOVE_EXPRESSION must removeProperty('${prop}') on [data-ag-prism-hidden="1"]`);
+    }
+    assert.equal(hlMap.has('ag-stream-f0'), false);
+    assert.equal(hlMap.has('ag-stream-f4'), false);
+    assert.equal(hlMap.has('ag-omni-url'), false);
+    assert.equal(hlMap.has('host-custom-hl'), true, 'Host non-Prism highlights must remain untouched');
+  }
+
+  // #304/#310: PrismDaemon.tick() must NEVER fire REMOVE_EXPRESSION on a live session whose in-page DOM is still a valid workbench
+  {
+    const { PrismDaemon } = await import('../sidecars/daemon/main.mjs');
+    const daemon = new PrismDaemon({ overridePort: 14470, enabledCheck: () => true, silent: true });
+    daemon.running = true;
+    daemon.isCurrentOwner = () => true;
+    daemon.cdp = {
+      ...cdp,
+      listPages: async () => [], // Simulate transient moment where target dropped out of static listPages
+    };
+    let removeFired = false;
+    let hostDomPresent = true;
+    const mockSession = {
+      closed: false,
+      send: async () => ({}),
+      evaluate: async (expr) => {
+        if (expr === cdp.REMOVE_EXPRESSION) removeFired = true;
+        return {
+          ready: true,
+          isHostDom: hostDomPresent,
+          href: 'https://127.0.0.1:14472/c/child-subagent',
+          prismAttr: cdp.PLUGIN_VERSION,
+          hasPrism: true,
+          hasRepoBridge: true,
+          hasThoughtBridge: true,
+          hasUsageBridge: true,
+          hasOmniBridge: true,
+          hasOmniServerMeta: true,
+          hasOmni: true,
+          omniMode: 'off',
+          codeHash: daemon.codeHash || '',
+          hasLegacyCss: false,
+          needsDashboardSync: false,
+        };
+      },
+      close() {
+        this.closed = true;
+      },
+    };
+    daemon.sessions.set('ws://127.0.0.1:14470/live-workbench', {
+      wsUrl: 'ws://127.0.0.1:14470/live-workbench',
+      pageId: 'live-1',
+      url: 'https://127.0.0.1:14472/c/parent',
+      title: 'Parent - Antigravity',
+      session: mockSession,
+      scriptId: '1',
+      omniScriptId: null,
+    });
+    await daemon.tick();
+    assert.equal(removeFired, false, 'Daemon must NEVER send REMOVE_EXPRESSION while live in-page workbench DOM is present');
+    assert.equal(daemon.sessions.has('ws://127.0.0.1:14470/live-workbench'), true);
+
+    hostDomPresent = false;
+    await daemon.tick();
+    assert.equal(removeFired, true, 'Once non-host page lacks workbench DOM, daemon cleanly detaches with REMOVE_EXPRESSION');
+    assert.equal(daemon.sessions.has('ws://127.0.0.1:14470/live-workbench'), false);
+  }
   const reconciledLegacy = cdp.reconcileConfigAliases({ ripple: 'off', homeMode: 'classic', lang: 'en', sidebar: 'off' });
   assert.equal(reconciledLegacy.homeRipple, false);
   assert.equal(reconciledLegacy.homeLayout, 'classic');

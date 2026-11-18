@@ -5,9 +5,11 @@ using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Net.WebSockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Win32;
 
 namespace AgyClaudeStyle
 {
@@ -410,6 +412,27 @@ namespace AgyClaudeStyle
             return null;
         }
 
+        public static bool IsBareAuxiliaryTarget(string title, string pageUrl)
+        {
+            string ttl = (title ?? "").Trim();
+            if (string.Equals(ttl, "Untitled", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(ttl, "launchpad", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            string rawUrl = (pageUrl ?? "").Trim();
+            int qIdx = rawUrl.IndexOfAny(new char[] { '?', '#' });
+            string cleanUrl = (qIdx >= 0 ? rawUrl.Substring(0, qIdx) : rawUrl).TrimEnd('/');
+            if (string.Equals(cleanUrl, "launchpad", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(cleanUrl, "launchpad.html", StringComparison.OrdinalIgnoreCase) ||
+                cleanUrl.EndsWith("/launchpad", StringComparison.OrdinalIgnoreCase) ||
+                cleanUrl.EndsWith("/launchpad.html", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            return false;
+        }
+
         public static bool IsEligibleTarget(string type, string wsUrl, string title, string pageUrl)
         {
             if (type != "page" || string.IsNullOrEmpty(wsUrl)) return false;
@@ -427,9 +450,7 @@ namespace AgyClaudeStyle
             {
                 return false;
             }
-            string combined = ttl + " " + url;
-            if (combined.IndexOf("Untitled", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                combined.IndexOf("launchpad", StringComparison.OrdinalIgnoreCase) >= 0)
+            if (IsBareAuxiliaryTarget(ttl, url))
             {
                 return false;
             }
@@ -706,9 +727,79 @@ namespace AgyClaudeStyle
             return null;
         }
 
+        private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+        private const int ProcessCommandLineInformation = 60;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct UNICODE_STRING
+        {
+            public ushort Length;
+            public ushort MaximumLength;
+            public IntPtr Buffer;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr hObject);
+
+        [DllImport("ntdll.dll")]
+        private static extern int NtQueryInformationProcess(
+            IntPtr processHandle,
+            int processInformationClass,
+            IntPtr processInformation,
+            int processInformationLength,
+            out int returnLength
+        );
+
+        private static readonly object _daemonCacheLock = new object();
+        private static int _verifiedDaemonPid = 0;
+        private static long _verifiedStartTicks = 0L;
+
+        private static string QueryProcessCommandLineFast(int pid)
+        {
+            if (pid <= 0) return "";
+            IntPtr hProc = IntPtr.Zero;
+            IntPtr buf = IntPtr.Zero;
+            try
+            {
+                hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+                if (hProc == IntPtr.Zero) return "";
+                int allocSize = 2048;
+                buf = Marshal.AllocHGlobal(allocSize);
+                int reqLen = 0;
+                int status = NtQueryInformationProcess(hProc, ProcessCommandLineInformation, buf, allocSize, out reqLen);
+                if (status != 0 && reqLen > allocSize && reqLen <= 262144)
+                {
+                    Marshal.FreeHGlobal(buf);
+                    allocSize = reqLen + 64;
+                    buf = Marshal.AllocHGlobal(allocSize);
+                    status = NtQueryInformationProcess(hProc, ProcessCommandLineInformation, buf, allocSize, out reqLen);
+                }
+                if (status == 0)
+                {
+                    UNICODE_STRING us = (UNICODE_STRING)Marshal.PtrToStructure(buf, typeof(UNICODE_STRING));
+                    if (us.Buffer != IntPtr.Zero && us.Length > 0)
+                    {
+                        return Marshal.PtrToStringUni(us.Buffer, us.Length / 2) ?? "";
+                    }
+                }
+            }
+            catch { }
+            finally
+            {
+                if (buf != IntPtr.Zero) Marshal.FreeHGlobal(buf);
+                if (hProc != IntPtr.Zero) CloseHandle(hProc);
+            }
+            return "";
+        }
+
         private static string QueryWindowsProcessCommandLine(int pid)
         {
             if (pid <= 0) return "";
+            string fastCmd = QueryProcessCommandLineFast(pid);
+            if (!string.IsNullOrEmpty(fastCmd)) return fastCmd;
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo();
@@ -736,38 +827,39 @@ namespace AgyClaudeStyle
             }
         }
 
-        private static bool MatchesNativeLockFilePid(int pid, out long startedAtMs)
+        private static bool MatchesNativeLockFilePid(int pid, string pluginDir)
         {
-            startedAtMs = 0L;
             if (pid <= 0) return false;
-            try
+            List<string> dirs = new List<string>();
+            if (!string.IsNullOrEmpty(pluginDir)) dirs.Add(pluginDir);
+            string defDir = GetDefaultNativePluginDir();
+            if (!string.IsNullOrEmpty(defDir) && !dirs.Contains(defDir)) dirs.Add(defDir);
+            for (int d = 0; d < dirs.Count; d++)
             {
-                string pidPath = Path.Combine(GetDefaultNativePluginDir(), ".daemon.pid");
-                if (!File.Exists(pidPath)) return false;
-                string raw = File.ReadAllText(pidPath, Encoding.UTF8).Trim();
-                if (string.IsNullOrEmpty(raw)) return false;
-                int plainPid;
-                if (int.TryParse(raw, out plainPid)) return plainPid == pid;
-                if (raw.StartsWith("{", StringComparison.Ordinal))
+                try
                 {
-                    Dictionary<string, object> obj = MiniJson.ParseObject(raw);
-                    object pidVal;
-                    if (obj != null && obj.TryGetValue("pid", out pidVal) && pidVal != null && Convert.ToInt32(pidVal) == pid)
+                    string pidPath = Path.Combine(dirs[d], ".daemon.pid");
+                    if (!File.Exists(pidPath)) continue;
+                    string raw = File.ReadAllText(pidPath, Encoding.UTF8).Trim();
+                    if (string.IsNullOrEmpty(raw)) continue;
+                    int plainPid;
+                    if (int.TryParse(raw, out plainPid) && plainPid == pid) return true;
+                    if (raw.StartsWith("{", StringComparison.Ordinal))
                     {
-                        object stVal;
-                        if (obj.TryGetValue("startedAt", out stVal) && stVal != null)
+                        Dictionary<string, object> obj = MiniJson.ParseObject(raw);
+                        object pidVal;
+                        if (obj != null && obj.TryGetValue("pid", out pidVal) && pidVal != null && Convert.ToInt32(pidVal) == pid)
                         {
-                            startedAtMs = Convert.ToInt64(stVal);
+                            return true;
                         }
-                        return true;
                     }
                 }
+                catch { }
             }
-            catch { }
             return false;
         }
 
-        public static bool IsExpectedPrismDaemonProcess(Process proc)
+        public static bool IsExpectedPrismDaemonProcess(Process proc, string pluginDir = null)
         {
             if (proc == null) return false;
             try
@@ -783,27 +875,17 @@ namespace AgyClaudeStyle
                 }
                 if (name.Contains("antigravity") || name.Contains("electron") || name == "agy")
                 {
-                    long lockStartedMs;
-                    bool matchedLock = MatchesNativeLockFilePid(proc.Id, out lockStartedMs);
-                    if (matchedLock && lockStartedMs > 0L)
-                    {
-                        try
-                        {
-                            DateTime epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-                            long procStartMs = (long)(proc.StartTime.ToUniversalTime() - epoch).TotalMilliseconds;
-                            if (procStartMs <= lockStartedMs + 5000L && (lockStartedMs - procStartMs) <= 120000L)
-                            {
-                                return true;
-                            }
-                            return false;
-                        }
-                        catch { }
-                    }
+                    bool matchedLock = MatchesNativeLockFilePid(proc.Id, pluginDir);
                     string cmd = QueryWindowsProcessCommandLine(proc.Id).Replace('\\', '/').ToLowerInvariant();
                     if (string.IsNullOrEmpty(cmd) || cmd.Contains("--type=")) return false;
                     bool hasPrismOwner = cmd.Contains("obsidian-prism") || cmd.Contains("antigravity-prism") || cmd.Contains("agy-claude-style");
+                    if (!hasPrismOwner && !string.IsNullOrEmpty(pluginDir))
+                    {
+                        string normPlugin = pluginDir.Replace('\\', '/').TrimEnd('/').ToLowerInvariant();
+                        if (!string.IsNullOrEmpty(normPlugin) && cmd.Contains(normPlugin)) hasPrismOwner = true;
+                    }
                     bool hasDaemonEntry = cmd.Contains("sidecars/daemon/main.mjs") || cmd.Contains("/daemon/main.mjs") || cmd.Contains("/watch.js");
-                    if (hasPrismOwner && hasDaemonEntry) return true;
+                    if ((hasPrismOwner || matchedLock) && hasDaemonEntry) return true;
                     if (matchedLock && cmd.Contains("sidecar_sdk/register_loader.js") && cmd.Contains("main.mjs")) return true;
                     return false;
                 }
@@ -815,6 +897,329 @@ namespace AgyClaudeStyle
             }
         }
 
+        public static string ResolveHostGeminiConfigDir(string pluginDir)
+        {
+            string envDir = Environment.GetEnvironmentVariable("AG_PRISM_GEMINI_CONFIG_DIR");
+            if (!string.IsNullOrEmpty(envDir))
+            {
+                return Path.GetFullPath(envDir.Trim()).TrimEnd('\\', '/');
+            }
+            string defPlugin = Path.GetFullPath(GetDefaultNativePluginDir()).TrimEnd('\\', '/');
+            string resolvedPlugin = string.IsNullOrEmpty(pluginDir) ? defPlugin : Path.GetFullPath(pluginDir).TrimEnd('\\', '/');
+            if (string.Equals(resolvedPlugin, defPlugin, StringComparison.OrdinalIgnoreCase))
+            {
+                string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                if (string.IsNullOrEmpty(home)) home = Environment.GetEnvironmentVariable("USERPROFILE") ?? "";
+                return Path.Combine(home, ".gemini", "config");
+            }
+            string parent = Path.GetDirectoryName(resolvedPlugin);
+            if (!string.IsNullOrEmpty(parent) && string.Equals(Path.GetFileName(parent), "plugins", StringComparison.OrdinalIgnoreCase))
+            {
+                return Path.GetDirectoryName(parent);
+            }
+            return null;
+        }
+
+        public static bool SyncHostPluginRegistry(string pluginDir, bool enable)
+        {
+            string cfgDir = ResolveHostGeminiConfigDir(pluginDir);
+            if (string.IsNullOrEmpty(cfgDir)) return false;
+            string cfgPath = Path.Combine(cfgDir, "config.json");
+            try
+            {
+                if (enable)
+                {
+                    Directory.CreateDirectory(cfgDir);
+                    Dictionary<string, object> rootObj = new Dictionary<string, object>(StringComparer.Ordinal);
+                    if (File.Exists(cfgPath))
+                    {
+                        string raw = File.ReadAllText(cfgPath, Encoding.UTF8).TrimStart('\uFEFF').Trim();
+                        if (raw.Length > 0)
+                        {
+                            Dictionary<string, object> parsed = MiniJson.ParseObject(raw);
+                            if (parsed == null) return false;
+                            rootObj = parsed;
+                        }
+                    }
+                    Dictionary<string, object> pluginsObj = null;
+                    object existingPlugins;
+                    if (rootObj.TryGetValue("plugins", out existingPlugins) && existingPlugins is Dictionary<string, object>)
+                    {
+                        pluginsObj = (Dictionary<string, object>)existingPlugins;
+                    }
+                    else
+                    {
+                        pluginsObj = new Dictionary<string, object>(StringComparer.Ordinal);
+                        rootObj["plugins"] = pluginsObj;
+                    }
+                    Dictionary<string, object> entryObj = null;
+                    object existingEntry;
+                    if (pluginsObj.TryGetValue("obsidian-prism", out existingEntry) && existingEntry is Dictionary<string, object>)
+                    {
+                        entryObj = (Dictionary<string, object>)existingEntry;
+                    }
+                    else
+                    {
+                        entryObj = new Dictionary<string, object>(StringComparer.Ordinal);
+                    }
+                    entryObj["enabled"] = true;
+                    pluginsObj["obsidian-prism"] = entryObj;
+                    if (pluginsObj.ContainsKey("antigravity-prism"))
+                    {
+                        pluginsObj.Remove("antigravity-prism");
+                    }
+                    AtomicWriteJson(cfgPath, rootObj);
+                    return true;
+                }
+
+                if (File.Exists(cfgPath))
+                {
+                    string raw = File.ReadAllText(cfgPath, Encoding.UTF8).TrimStart('\uFEFF').Trim();
+                    if (raw.Length > 0)
+                    {
+                        Dictionary<string, object> parsed = MiniJson.ParseObject(raw);
+                        if (parsed != null)
+                        {
+                            bool changed = false;
+                            object pVal;
+                            if (parsed.TryGetValue("plugins", out pVal) && pVal is Dictionary<string, object>)
+                            {
+                                Dictionary<string, object> pDict = (Dictionary<string, object>)pVal;
+                                if (pDict.Remove("obsidian-prism")) changed = true;
+                                if (pDict.Remove("antigravity-prism")) changed = true;
+                            }
+                            object sVal;
+                            if (parsed.TryGetValue("sidecars", out sVal) && sVal is Dictionary<string, object>)
+                            {
+                                Dictionary<string, object> sDict = (Dictionary<string, object>)sVal;
+                                if (sDict.Remove("obsidian-prism/daemon")) changed = true;
+                            }
+                            if (changed)
+                            {
+                                AtomicWriteJson(cfgPath, parsed);
+                            }
+                        }
+                    }
+                }
+                string cacheFile = Path.Combine(cfgDir, "obsidian-prism-thought-cache.json");
+                if (File.Exists(cacheFile))
+                {
+                    try { File.Delete(cacheFile); } catch { }
+                }
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static string FindAntigravityExecutable(string preferredExe = null)
+        {
+            string envExe = Environment.GetEnvironmentVariable("AG_PRISM_ELECTRON_EXE");
+            if (!string.IsNullOrEmpty(envExe) && File.Exists(envExe.Trim())) return envExe.Trim();
+            if (!string.IsNullOrEmpty(preferredExe) && File.Exists(preferredExe)) return preferredExe;
+
+            try
+            {
+                Process[] procs = Process.GetProcessesByName("Antigravity");
+                for (int i = 0; i < procs.Length; i++)
+                {
+                    try
+                    {
+                        string p = procs[i].MainModule.FileName;
+                        if (!string.IsNullOrEmpty(p) && File.Exists(p)) return p;
+                    }
+                    catch { }
+                    finally
+                    {
+                        try { procs[i].Dispose(); } catch { }
+                    }
+                }
+            }
+            catch { }
+
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string progFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            string progFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+            string[] candidates = new string[]
+            {
+                !string.IsNullOrEmpty(localAppData) ? Path.Combine(localAppData, "Programs", "antigravity", "Antigravity.exe") : null,
+                !string.IsNullOrEmpty(progFiles) ? Path.Combine(progFiles, "Antigravity", "Antigravity.exe") : null,
+                !string.IsNullOrEmpty(progFilesX86) ? Path.Combine(progFilesX86, "Antigravity", "Antigravity.exe") : null
+            };
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                if (!string.IsNullOrEmpty(candidates[i]) && File.Exists(candidates[i])) return candidates[i];
+            }
+
+            try
+            {
+                RegistryKey[] roots = new RegistryKey[] { Registry.CurrentUser, Registry.LocalMachine };
+                string[] subPaths = new string[]
+                {
+                    @"Software\Microsoft\Windows\CurrentVersion\Uninstall",
+                    @"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+                };
+                for (int r = 0; r < roots.Length; r++)
+                {
+                    for (int sp = 0; sp < subPaths.Length; sp++)
+                    {
+                        using (RegistryKey parent = roots[r].OpenSubKey(subPaths[sp]))
+                        {
+                            if (parent == null) continue;
+                            string[] names = parent.GetSubKeyNames();
+                            for (int i = 0; i < names.Length; i++)
+                            {
+                                using (RegistryKey item = parent.OpenSubKey(names[i]))
+                                {
+                                    if (item == null) continue;
+                                    string disp = item.GetValue("DisplayName") as string;
+                                    if (string.IsNullOrEmpty(disp) || !disp.StartsWith("Antigravity", StringComparison.OrdinalIgnoreCase)) continue;
+                                    if (disp.IndexOf("IDE", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                                    string loc = item.GetValue("InstallLocation") as string;
+                                    if (!string.IsNullOrEmpty(loc))
+                                    {
+                                        string cand = Path.Combine(loc.Trim().Trim('"'), "Antigravity.exe");
+                                        if (File.Exists(cand)) return cand;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        public static string FindFallbackNodeExecutable()
+        {
+            string pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
+            string[] parts = pathEnv.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < parts.Length; i++)
+            {
+                try
+                {
+                    string cand = Path.Combine(parts[i].Trim().Trim('"'), "node.exe");
+                    if (File.Exists(cand)) return cand;
+                }
+                catch { }
+            }
+            string progFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            List<string> extra = new List<string>();
+            if (!string.IsNullOrEmpty(progFiles)) extra.Add(Path.Combine(progFiles, "nodejs", "node.exe"));
+            if (!string.IsNullOrEmpty(localAppData)) extra.Add(Path.Combine(localAppData, "Volta", "bin", "node.exe"));
+            if (!string.IsNullOrEmpty(localAppData)) extra.Add(Path.Combine(localAppData, "Programs", "nodejs", "node.exe"));
+            for (int i = 0; i < extra.Count; i++)
+            {
+                if (File.Exists(extra[i])) return extra[i];
+            }
+            if (!string.IsNullOrEmpty(appData))
+            {
+                string nvmRoot = Path.Combine(appData, "nvm");
+                if (Directory.Exists(nvmRoot))
+                {
+                    try
+                    {
+                        string[] dirs = Directory.GetDirectories(nvmRoot, "v*");
+                        Array.Sort(dirs, StringComparer.OrdinalIgnoreCase);
+                        for (int i = dirs.Length - 1; i >= 0; i--)
+                        {
+                            string cand = Path.Combine(dirs[i], "node.exe");
+                            if (File.Exists(cand)) return cand;
+                        }
+                    }
+                    catch { }
+                }
+            }
+            return null;
+        }
+
+        public static bool EnsureNativeDaemonRunning(string pluginDir, int? cdpPort = null, string preferredAgExe = null, Action<string> log = null)
+        {
+            if (string.Equals(Environment.GetEnvironmentVariable("AG_PRISM_NO_NATIVE_DAEMON"), "1", StringComparison.Ordinal))
+            {
+                return false;
+            }
+            if (string.IsNullOrEmpty(pluginDir)) return false;
+            string mainMjs = Path.Combine(pluginDir, Path.Combine("sidecars", Path.Combine("daemon", "main.mjs")));
+            if (!File.Exists(mainMjs)) return false;
+            if (IsNativeDaemonAlive(pluginDir)) return true;
+
+            string runtimeExe = FindAntigravityExecutable(preferredAgExe);
+            bool useElectronAsNode = !string.IsNullOrEmpty(runtimeExe);
+            if (!useElectronAsNode)
+            {
+                runtimeExe = FindFallbackNodeExecutable();
+            }
+            if (string.IsNullOrEmpty(runtimeExe) || !File.Exists(runtimeExe))
+            {
+                return false;
+            }
+
+            try
+            {
+                string args = "\"" + mainMjs + "\" --root \"" + pluginDir.TrimEnd('\\', '/') + "\"";
+                if (cdpPort.HasValue && cdpPort.Value > 0)
+                {
+                    args += " --port " + cdpPort.Value;
+                }
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = runtimeExe;
+                psi.Arguments = args;
+                psi.WorkingDirectory = Path.GetDirectoryName(mainMjs);
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.WindowStyle = ProcessWindowStyle.Hidden;
+                if (useElectronAsNode)
+                {
+                    psi.EnvironmentVariables["ELECTRON_RUN_AS_NODE"] = "1";
+                }
+                Process started = Process.Start(psi);
+                if (started == null) return false;
+
+                for (int i = 0; i < 25; i++)
+                {
+                    if (IsNativeDaemonAlive(pluginDir))
+                    {
+                        if (log != null)
+                        {
+                            log("[✓] 已拉起原生五通道 Sidecar Daemon (" + (useElectronAsNode ? "ELECTRON_RUN_AS_NODE=1" : "node") + ")");
+                        }
+                        return true;
+                    }
+                    try
+                    {
+                        if (started.HasExited) break;
+                    }
+                    catch { }
+                    Thread.Sleep(120);
+                }
+                return IsNativeDaemonAlive(pluginDir);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void RemoveStaleDaemonLockIfMatches(string pluginDir, int stalePid)
+        {
+            if (string.IsNullOrEmpty(pluginDir) || stalePid <= 0) return;
+            try
+            {
+                if (ReadNativeDaemonPid(pluginDir) == stalePid)
+                {
+                    string pidPath = Path.Combine(pluginDir, ".daemon.pid");
+                    if (File.Exists(pidPath)) File.Delete(pidPath);
+                }
+            }
+            catch { }
+        }
+
         public static bool IsNativeDaemonAlive(string pluginDir)
         {
             int? pid = ReadNativeDaemonPid(pluginDir);
@@ -823,10 +1228,51 @@ namespace AgyClaudeStyle
             try
             {
                 proc = Process.GetProcessById(pid.Value);
-                return !proc.HasExited;
+                if (proc.HasExited)
+                {
+                    lock (_daemonCacheLock)
+                    {
+                        if (_verifiedDaemonPid == pid.Value)
+                        {
+                            _verifiedDaemonPid = 0;
+                            _verifiedStartTicks = 0L;
+                        }
+                    }
+                    RemoveStaleDaemonLockIfMatches(pluginDir, pid.Value);
+                    return false;
+                }
+                long procStartTicks = 0L;
+                try { procStartTicks = proc.StartTime.ToUniversalTime().Ticks; } catch { procStartTicks = 0L; }
+                lock (_daemonCacheLock)
+                {
+                    if (_verifiedDaemonPid == pid.Value && _verifiedStartTicks == procStartTicks)
+                    {
+                        return true;
+                    }
+                }
+                if (IsExpectedPrismDaemonProcess(proc, pluginDir))
+                {
+                    lock (_daemonCacheLock)
+                    {
+                        _verifiedDaemonPid = pid.Value;
+                        _verifiedStartTicks = procStartTicks;
+                    }
+                    return true;
+                }
+                RemoveStaleDaemonLockIfMatches(pluginDir, pid.Value);
+                return false;
             }
             catch
             {
+                lock (_daemonCacheLock)
+                {
+                    if (_verifiedDaemonPid == pid.Value)
+                    {
+                        _verifiedDaemonPid = 0;
+                        _verifiedStartTicks = 0L;
+                    }
+                }
+                RemoveStaleDaemonLockIfMatches(pluginDir, pid.Value);
                 return false;
             }
             finally
@@ -925,6 +1371,8 @@ namespace AgyClaudeStyle
             StringBuilder sb = new StringBuilder(clientSource.Length + cfgJson.Length + 1024);
             sb.Append("(() => {\n");
             sb.Append("  const href = String((typeof location !== 'undefined' && location && location.href) || '');\n");
+            sb.Append("  const ttl = String((typeof document !== 'undefined' && document && document.title) || '').trim();\n");
+            sb.Append("  if (/^(?:untitled|launchpad)$/i.test(ttl) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(href)) return { ok: false, skipped: true };\n");
             sb.Append("  if (/^(devtools:|chrome:|chrome-extension:|edge:|about:|data:|blob:|plugin:)/i.test(href)) return { ok: false, skipped: true };\n");
             sb.Append("  if (/^https?:\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?\\/(?:viewer|sandbox|stream|api)(?:[/?#]|$)/i.test(href)) return { ok: false, skipped: true };\n");
             sb.Append("  const bootCfg = ").Append(cfgJson).Append(";\n");
@@ -1000,8 +1448,50 @@ namespace AgyClaudeStyle
             sb.Append("    };\n\n");
             sb.Append("    let status = 'ok';\n");
             sb.Append("    let mounted = false;\n");
+            sb.Append("    const stripForeignMount = () => {\n");
+            sb.Append("      try { window.__agPrismTelemetry?.destroy?.(); } catch {}\n");
+            sb.Append("      try { window.__agPrismEffortSlider?.destroy?.(); } catch {}\n");
+            sb.Append("      try { window.__agPrismThought?.destroy?.(); } catch {}\n");
+            sb.Append("      try { window.__agPrismOmni?.destroy?.(); } catch {}\n");
+            sb.Append("      try { window.__agPrism?.destroy?.(); } catch {}\n");
+            sb.Append("      try { document.getElementById(").Append(styleIdJson).Append(")?.remove(); } catch {}\n");
+            sb.Append("      try { document.getElementById('ag-claude-style-css')?.remove(); } catch {}\n");
+            sb.Append("      try { document.getElementById('ag-prism-settings-v101-css')?.remove(); } catch {}\n");
+            sb.Append("      try { document.getElementById('ag-prism-omni-css')?.remove(); } catch {}\n");
+            sb.Append("      delete window.__agPrismOmni; delete window.__agPrism; delete window.__agClaudeStyle;\n");
+            sb.Append("    };\n");
+            sb.Append("    const hasDomWorkbenchMarkers = () => {\n");
+            sb.Append("      try {\n");
+            sb.Append("        if (document.body?.classList && (document.body.classList.contains('theme-standalone') || document.body.classList.contains('monaco-workbench'))) return true;\n");
+            sb.Append("        return Boolean(document.querySelector('.agy-shell, .agy-home, [data-testid=\"aux-pane-split\"], [data-testid=\"conversation-view\"], [data-testid=\"agent-input-box\"], [data-testid=\"model-selector-trigger\"], .monaco-workbench'));\n");
+            sb.Append("      } catch { return false; }\n");
+            sb.Append("    };\n");
+            sb.Append("    const checkHostIdentity = () => {\n");
+            sb.Append("      try {\n");
+            sb.Append("        const href = String((typeof window !== 'undefined' && window.location && window.location.href) || '');\n");
+            sb.Append("        if (!href) return 'ok';\n");
+            sb.Append("        const low = href.toLowerCase();\n");
+            sb.Append("        if (/^(devtools:|data:|chrome:|chrome-extension:|edge:|blob:|plugin:)/.test(low)) return 'reject';\n");
+            sb.Append("        const ttl = String(document.title || '').trim();\n");
+            sb.Append("        const bareAux = /^(?:untitled|launchpad)$/i.test(ttl) || /(?:^|\\/)launchpad(?:\\.html)?(?:[?#]|$)/i.test(href);\n");
+            sb.Append("        if (low.startsWith('vscode-file://') || low.startsWith('app://') || low.startsWith('about:')) return bareAux ? 'reject' : 'ok';\n");
+            sb.Append("        if (bareAux) return 'reject';\n");
+            sb.Append("        const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);\n");
+            sb.Append("        if (!m) return low.startsWith('http:') || low.startsWith('https:') ? 'reject' : 'ok';\n");
+            sb.Append("        const pathname = (m[3] || '/').toLowerCase();\n");
+            sb.Append("        if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test(pathname)) return 'reject';\n");
+            sb.Append("        if (hasDomWorkbenchMarkers()) return 'ok';\n");
+            sb.Append("        const rs = String(document.readyState || '');\n");
+            sb.Append("        if (m[1].toLowerCase() === 'http') return rs === 'loading' ? 'defer' : 'reject';\n");
+            sb.Append("        if (/\\bantigravity\\b/i.test(ttl)) return 'ok';\n");
+            sb.Append("        return rs === 'complete' ? 'reject' : 'ok';\n");
+            sb.Append("      } catch { return 'ok'; }\n");
+            sb.Append("    };\n");
             sb.Append("    const mount = () => {\n");
             sb.Append("      if (mounted || !document.documentElement) return;\n");
+            sb.Append("      const hostVerdict = checkHostIdentity();\n");
+            sb.Append("      if (hostVerdict === 'reject') { status = 'skipped-non-host'; stripForeignMount(); return; }\n");
+            sb.Append("      if (hostVerdict === 'defer') { status = 'deferred'; document.addEventListener('DOMContentLoaded', () => mount(), { once: true }); return; }\n");
             sb.Append("      mounted = true;\n");
             sb.Append("      try {\n");
             sb.Append("        cleanupLegacyResidue();\n");
@@ -1026,7 +1516,11 @@ namespace AgyClaudeStyle
             sb.Append("        if (bundleUnchanged) {\n");
             sb.Append("          existingPrism.refreshConfig(bootCfg);\n");
             sb.Append("        } else {\n");
+            sb.Append("          try { window.__agPrismTelemetry?.destroy?.(); } catch {}\n");
+            sb.Append("          try { window.__agPrismEffortSlider?.destroy?.(); } catch {}\n");
             sb.Append("          try { window.__agPrismThought?.destroy?.(); } catch {}\n");
+            sb.Append("          try { window.__agPrismOmni?.destroy?.(); } catch {}\n");
+            sb.Append("          try { document.querySelectorAll?.('[data-ag-prism-fallback=\"1\"]').forEach((n) => n.remove()); } catch {}\n");
             sb.Append("          ").Append(bundle).Append('\n');
             sb.Append("          if (typeof globalThis.__agCsUiMain === 'function') {\n");
             sb.Append("            globalThis.__agCsUiMain(bootCfg);\n");

@@ -10,9 +10,13 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-function runExe(exePath, args, timeoutMs = 20000) {
+function runExe(exePath, args, timeoutMs = 20000, customEnv = null) {
   return new Promise((resolve, reject) => {
-    const child = spawn(exePath, args, { stdio: 'ignore', windowsHide: true });
+    const child = spawn(exePath, args, {
+      stdio: 'ignore',
+      windowsHide: true,
+      env: customEnv || process.env,
+    });
     const timer = setTimeout(() => {
       try { child.kill(); } catch {}
       reject(new Error(`Timeout running ${path.basename(exePath)} ${args.join(' ')}`));
@@ -36,8 +40,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 const cdp = require(path.join(ROOT_DIR, 'cdp.js'));
+const cliInstaller = require(path.join(ROOT_DIR, 'tools', 'install-plugin.cjs'));
 
-function createMockCdpServer() {
+function createMockCdpServer(options = {}) {
+  const extraTargets = Array.isArray(options.extraTargets) ? options.extraTargets : [];
   const receivedCalls = [];
   const sockets = new Set();
   let prismMounted = false;
@@ -77,6 +83,18 @@ function createMockCdpServer() {
     let result = {};
     if (msg.method === 'Page.addScriptToEvaluateOnNewDocument') {
       result = { identifier: 'script-' + receivedCalls.length };
+    } else if (msg.method === 'Page.getFrameTree') {
+      result = { frameTree: { frame: { id: 'MAIN_FRAME' } } };
+    } else if (msg.method === 'Runtime.enable') {
+      sendWsMessage(socket, {
+        method: 'Runtime.executionContextCreated',
+        params: {
+          context: {
+            id: 1,
+            auxData: { frameId: 'MAIN_FRAME', isDefault: true, type: 'default' },
+          },
+        },
+      });
     } else if (msg.method === 'Runtime.evaluate') {
       const expr = msg.params && msg.params.expression ? msg.params.expression : '';
       if (expr.startsWith('Boolean(window.__agPrism') || expr === 'Boolean(window.__agClaudeStyle)') {
@@ -85,11 +103,44 @@ function createMockCdpServer() {
         lastRemovedExpr = expr;
         prismMounted = false;
         result = { result: { type: 'object', value: { removed: 3 } } };
+      } else if (expr.includes('const isHostDom = Boolean(')) {
+        result = {
+          result: {
+            type: 'object',
+            value: {
+              ready: true,
+              isHostDom: true,
+              prismAttr: cdp.PLUGIN_VERSION,
+              hasPrism: prismMounted,
+              hasRepoBridge: prismMounted,
+              hasThoughtBridge: prismMounted,
+              hasUsageBridge: prismMounted,
+              hasOmniBridge: prismMounted,
+              hasOmniServerMeta: prismMounted,
+              hasOmni: prismMounted,
+              omniMode: 'on',
+              codeHash: '',
+              hasLegacyCss: false,
+              needsDashboardSync: false,
+            },
+          },
+        };
       } else if (expr.includes('const serverMeta = window.__agPrismOmniServerMeta')) {
         result = {
           result: {
             type: 'object',
             value: { ok: true, status: 'mounted' },
+          },
+        };
+      } else if (
+        expr.includes('window.__agPrismRepoBridge') &&
+        expr.includes('window.__agPrismThoughtBridge') &&
+        !expr.includes('globalThis.__agCsUiMain')
+      ) {
+        result = {
+          result: {
+            type: 'object',
+            value: { ok: true },
           },
         };
       } else {
@@ -110,38 +161,57 @@ function createMockCdpServer() {
     if (req.url === '/json/list') {
       const addr = server.address();
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify([
-          {
-            id: 'PAGE_1',
-            type: 'page',
-            title: 'Antigravity',
-            url: 'https://127.0.0.1:9999/',
-            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/page/PAGE_1`,
-          },
-          {
-            id: 'USER_PREVIEW_1',
-            type: 'page',
-            title: 'AI Rap Video Generator',
-            url: 'http://127.0.0.1:3115/',
-            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/page/USER_PREVIEW_1`,
-          },
-          {
-            id: 'EXT_WEB_1',
-            type: 'page',
-            title: 'Antigravity Spoofed External',
-            url: 'https://example.com/',
-            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/page/EXT_WEB_1`,
-          },
-          {
-            id: 'DEVTOOLS_1',
-            type: 'page',
-            title: 'DevTools',
-            url: 'devtools://devtools/bundled/inspector.html',
-            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/page/DEVTOOLS_1`,
-          },
-        ])
-      );
+      const baseTargets = [
+        {
+          id: 'PAGE_1',
+          type: 'page',
+          title: 'Antigravity',
+          url: 'https://127.0.0.1:9999/',
+          webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/page/PAGE_1`,
+        },
+        {
+          id: 'BARE_UNTITLED_1',
+          type: 'page',
+          title: 'Untitled',
+          url: 'https://127.0.0.1:9999/',
+          webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/page/BARE_UNTITLED_1`,
+        },
+        {
+          id: 'LAUNCHPAD_1',
+          type: 'page',
+          title: 'Antigravity Launchpad',
+          url: 'https://127.0.0.1:9999/launchpad.html',
+          webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/page/LAUNCHPAD_1`,
+        },
+        {
+          id: 'USER_PREVIEW_1',
+          type: 'page',
+          title: 'AI Rap Video Generator',
+          url: 'http://127.0.0.1:3115/',
+          webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/page/USER_PREVIEW_1`,
+        },
+        {
+          id: 'EXT_WEB_1',
+          type: 'page',
+          title: 'Antigravity Spoofed External',
+          url: 'https://example.com/',
+          webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/page/EXT_WEB_1`,
+        },
+        {
+          id: 'DEVTOOLS_1',
+          type: 'page',
+          title: 'DevTools',
+          url: 'devtools://devtools/bundled/inspector.html',
+          webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/page/DEVTOOLS_1`,
+        },
+      ];
+      for (const extra of extraTargets) {
+        baseTargets.push({
+          ...extra,
+          webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/page/${extra.id}`,
+        });
+      }
+      res.end(JSON.stringify(baseTargets));
       return;
     }
     res.writeHead(404);
@@ -230,11 +300,11 @@ function createMockCdpServer() {
       await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
       return server.address().port;
     },
-    emitBindingCalled(name, payload) {
+    emitBindingCalled(name, payload, executionContextId = 1) {
       for (const s of sockets) {
         sendWsMessage(s, {
           method: 'Runtime.bindingCalled',
-          params: { name, payload: JSON.stringify(payload) },
+          params: { name, payload: JSON.stringify(payload), executionContextId },
         });
       }
     },
@@ -349,13 +419,22 @@ test(
       assert.equal(st.nativePluginInstalled, false);
       assert.equal(st.cdpPort, port);
 
-      // 2. Run --silent install against mock CDP server with isolated --plugin-dir
+      // Prepare 0-byte empty host config.json, user secret file, and ephemeral cache file in sandbox config root
+      const sandboxHostCfgPath = path.join(workDir, 'config.json');
+      const sandboxSecretPath = path.join(workDir, 'obsidian-prism-thought.json');
+      const sandboxCachePath = path.join(workDir, 'obsidian-prism-thought-cache.json');
+      fs.writeFileSync(sandboxHostCfgPath, '', 'utf8');
+      fs.writeFileSync(sandboxSecretPath, JSON.stringify({ engine: 'gemini', apiKey: 'test-user-secret' }), 'utf8');
+      fs.writeFileSync(sandboxCachePath, JSON.stringify({ entries: { a: '1' } }), 'utf8');
+
+      // 2. Run --silent install (--no-native-daemon to specifically exercise C# Watcher standalone fallback)
       await runExe(
         installerExe,
         [
           '--silent',
           '--no-autostart',
           '--no-kill-legacy',
+          '--no-native-daemon',
           '--install-dir',
           installDir,
           '--plugin-dir',
@@ -373,6 +452,8 @@ test(
       assert.equal(installResult.nativePluginDeployed, true);
       assert.equal(installResult.preservedExistingConfig, false);
       assert.deepEqual(installResult.injectedPages, ['Antigravity']);
+      const hostRegistryAfterInstall = JSON.parse(fs.readFileSync(sandboxHostCfgPath, 'utf8'));
+      assert.deepEqual(hostRegistryAfterInstall.plugins['obsidian-prism'], { enabled: true });
       assert.ok(fs.existsSync(path.join(installDir, 'obsidian-prism-watcher.exe')));
       assert.ok(fs.existsSync(path.join(installDir, 'obsidian-prism-installer.exe')));
       assert.ok(fs.existsSync(path.join(installDir, 'manifest.json')));
@@ -500,6 +581,7 @@ test(
           '--silent',
           '--no-autostart',
           '--no-kill-legacy',
+          '--no-native-daemon',
           '--install-dir',
           installDir,
           '--plugin-dir',
@@ -545,8 +627,12 @@ test(
       assert.deepEqual(uninstallResult.injectedPages, ['Antigravity']);
       assert.equal(mockCdp.getLastRemovedExpr(), cdp.REMOVE_EXPRESSION);
       assert.equal(fs.existsSync(nativePluginDir), false);
+      const hostRegistryAfterUninstall = JSON.parse(fs.readFileSync(sandboxHostCfgPath, 'utf8'));
+      assert.equal(hostRegistryAfterUninstall.plugins?.['obsidian-prism'], undefined);
+      assert.equal(fs.existsSync(sandboxCachePath), false, 'ephemeral thought cache must be removed on uninstall');
+      assert.equal(fs.existsSync(sandboxSecretPath), true, 'user secret file obsidian-prism-thought.json must be preserved');
 
-      await waitFor(() => (!fs.existsSync(installDir) ? true : null), 8000, 150);
+      await waitFor(() => (!fs.existsSync(installDir) ? true : null), 20000, 150);
       assert.equal(fs.existsSync(installDir), false);
     } finally {
       try {
@@ -554,6 +640,211 @@ test(
         if (fs.existsSync(pidPath)) {
           const pid = parseInt(fs.readFileSync(pidPath, 'utf8'), 10);
           if (pid) process.kill(pid);
+        }
+      } catch {}
+      await mockCdp.close();
+      try {
+        fs.rmSync(workDir, { recursive: true, force: true });
+      } catch {}
+    }
+  }
+);
+
+test('CLI syncHostPluginRegistry safely initializes 0-byte config.json and preserves user secret file on uninstall', () => {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-cli-reg-'));
+  try {
+    const cfgPath = path.join(workDir, 'config.json');
+    const secretPath = path.join(workDir, 'obsidian-prism-thought.json');
+    const cachePath = path.join(workDir, 'obsidian-prism-thought-cache.json');
+    fs.writeFileSync(cfgPath, '', 'utf8');
+    fs.writeFileSync(secretPath, '{"apiKey":"keep-me"}', 'utf8');
+    fs.writeFileSync(cachePath, '{"cached":1}', 'utf8');
+
+    assert.equal(cliInstaller.syncHostPluginRegistry(workDir, true), true);
+    const enabledCfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    assert.deepEqual(enabledCfg.plugins['obsidian-prism'], { enabled: true });
+
+    enabledCfg.plugins['antigravity-prism'] = { enabled: true };
+    enabledCfg.sidecars = { 'obsidian-prism/daemon': { enabled: true }, other: { enabled: true } };
+    fs.writeFileSync(cfgPath, JSON.stringify(enabledCfg, null, 2), 'utf8');
+
+    assert.equal(cliInstaller.syncHostPluginRegistry(workDir, false), true);
+    const cleanedCfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    assert.equal(cleanedCfg.plugins['obsidian-prism'], undefined);
+    assert.equal(cleanedCfg.plugins['antigravity-prism'], undefined);
+    assert.equal(cleanedCfg.sidecars['obsidian-prism/daemon'], undefined);
+    assert.deepEqual(cleanedCfg.sidecars.other, { enabled: true });
+    assert.equal(fs.existsSync(cachePath), false);
+    assert.equal(fs.existsSync(secretPath), true);
+  } finally {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test(
+  'installer.exe zero-Node bare-machine mode boots full 5-channel native Sidecar via ELECTRON_RUN_AS_NODE=1, injects Untitled Conversation, and auto-respawns daemon',
+  { skip: process.platform !== 'win32' ? 'Windows-only zero-Node native daemon E2E test' : false },
+  async () => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-zero-node-'));
+    const installerExe = path.join(workDir, 'installer.exe');
+    const installDir = path.join(workDir, 'installed');
+    const nativePluginDir = path.join(workDir, 'plugins', 'obsidian-prism');
+    const outInstall = path.join(workDir, 'install.json');
+    const outStatus = path.join(workDir, 'status.json');
+    const outUninstall = path.join(workDir, 'uninstall.json');
+    const mockCdp = createMockCdpServer({
+      extraTargets: [
+        {
+          id: 'SWARM_FULL_VIEW_1',
+          type: 'page',
+          title: 'Untitled Conversation - antigravity - Antigravity',
+          url: 'https://127.0.0.1:9999/?view=agent',
+        },
+      ],
+    });
+
+    try {
+      buildInstaller({ outputPath: installerExe });
+      const port = await mockCdp.start();
+
+      // Strip all Node.js directories from PATH to simulate a bare Windows machine without system Node.js
+      const rawPath = process.env.PATH || process.env.Path || '';
+      const strippedPath = rawPath
+        .split(path.delimiter)
+        .filter((seg) => {
+          if (!seg) return false;
+          try {
+            return !fs.existsSync(path.join(seg.trim(), 'node.exe'));
+          } catch {
+            return true;
+          }
+        })
+        .join(path.delimiter);
+
+      const localAppData = process.env.LOCALAPPDATA || '';
+      const realAgExe = localAppData
+        ? path.join(localAppData, 'Programs', 'antigravity', 'Antigravity.exe')
+        : '';
+      const bareEnv = {
+        ...process.env,
+        PATH: strippedPath,
+        Path: strippedPath,
+      };
+      delete bareEnv.AG_PRISM_NO_NATIVE_DAEMON;
+      if (!realAgExe || !fs.existsSync(realAgExe)) {
+        bareEnv.AG_PRISM_ELECTRON_EXE = process.execPath;
+      }
+
+      await runExe(
+        installerExe,
+        [
+          '--silent',
+          '--no-autostart',
+          '--no-kill-legacy',
+          '--install-dir',
+          installDir,
+          '--plugin-dir',
+          nativePluginDir,
+          '--cdp-port',
+          String(port),
+          '--out',
+          outInstall,
+        ],
+        25000,
+        bareEnv
+      );
+
+      const installRes = JSON.parse(fs.readFileSync(outInstall, 'utf8'));
+      assert.equal(installRes.ok, true);
+      assert.equal(installRes.nativePluginDeployed, true);
+      assert.equal(installRes.nativeDaemonStarted, true, 'Setup must immediately boot native 5-channel daemon');
+
+      await runExe(
+        installerExe,
+        ['--status', '--install-dir', installDir, '--plugin-dir', nativePluginDir, '--cdp-port', String(port), '--out', outStatus],
+        10000,
+        bareEnv
+      );
+      const statusObj = JSON.parse(fs.readFileSync(outStatus, 'utf8'));
+      assert.equal(statusObj.nativeDaemonAlive, true);
+
+      // Wait for all 6 privileged 5-channel bindings to be registered by sidecars/daemon/main.mjs
+      const requiredBindings = [
+        '__agPrismSetting',
+        '__agPrismMetricsCall',
+        '__agPrismThoughtCall',
+        '__agPrismUsageCall',
+        '__agPrismRepoCall',
+        '__agPrismOmniCall',
+      ];
+      await waitFor(() => {
+        const bound = new Set(
+          mockCdp
+            .getCalls()
+            .filter((c) => c.method === 'Runtime.addBinding' && c.params?.name)
+            .map((c) => c.params.name)
+        );
+        return requiredBindings.every((b) => bound.has(b)) ? true : null;
+      }, 8000, 120);
+
+      // Verify Untitled Conversation Swarm Full View was injected alongside Antigravity main window (2 pages, bare Untitled/launchpad skipped)
+      assert.ok(
+        installRes.injectedPages.some((t) => t.startsWith('Untitled Conversation')),
+        `Expected Untitled Conversation to be injected, got: ${JSON.stringify(installRes.injectedPages)}`
+      );
+      assert.equal(installRes.injectedPages.includes('Untitled'), false);
+
+      // Kill the native daemon and verify background C# Watcher auto-respawns it
+      const pidFile = path.join(nativePluginDir, '.daemon.pid');
+      const firstLock = JSON.parse(fs.readFileSync(pidFile, 'utf8'));
+      assert.ok(firstLock.pid > 0);
+      try {
+        process.kill(firstLock.pid);
+      } catch {}
+
+      const respawnedLock = await waitFor(() => {
+        if (!fs.existsSync(pidFile)) return null;
+        const parsed = JSON.parse(fs.readFileSync(pidFile, 'utf8'));
+        return parsed.pid > 0 && parsed.pid !== firstLock.pid ? parsed : null;
+      }, 12000, 200);
+      assert.notEqual(respawnedLock.pid, firstLock.pid, 'Watcher must auto-respawn native Sidecar daemon');
+
+      // Clean uninstall stops both Watcher and Electron RunAsNode native daemon
+      await runExe(
+        installerExe,
+        [
+          '--uninstall',
+          '--silent',
+          '--no-autostart',
+          '--install-dir',
+          installDir,
+          '--plugin-dir',
+          nativePluginDir,
+          '--cdp-port',
+          String(port),
+          '--out',
+          outUninstall,
+        ],
+        25000,
+        bareEnv
+      );
+      const unRes = JSON.parse(fs.readFileSync(outUninstall, 'utf8'));
+      assert.equal(unRes.ok, true);
+      assert.equal(fs.existsSync(nativePluginDir), false);
+      assert.equal(fs.existsSync(installDir), false);
+    } finally {
+      try {
+        const pidFile = path.join(nativePluginDir, '.daemon.pid');
+        if (fs.existsSync(pidFile)) {
+          const parsed = JSON.parse(fs.readFileSync(pidFile, 'utf8'));
+          if (parsed.pid) process.kill(parsed.pid);
+        }
+      } catch {}
+      try {
+        const wPidFile = path.join(installDir, '.watch.pid');
+        if (fs.existsSync(wPidFile)) {
+          const wPid = parseInt(fs.readFileSync(wPidFile, 'utf8'), 10);
+          if (wPid) process.kill(wPid);
         }
       } catch {}
       await mockCdp.close();

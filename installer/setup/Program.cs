@@ -23,6 +23,7 @@ namespace AgyClaudeStyle.Installer
         public bool StatusOnly;
         public bool NoAutostart;
         public bool NoKillLegacy;
+        public bool NoNativeDaemon;
         public string InstallDir;
         public string PluginDir;
         public int? CdpPort;
@@ -45,6 +46,7 @@ namespace AgyClaudeStyle.Installer
         public string InstallDir;
         public string PluginDir;
         public bool NativePluginDeployed;
+        public bool NativeDaemonStarted;
         public string AntigravityExe;
         public string AntigravityVersion;
         public int? CdpPort;
@@ -100,7 +102,7 @@ namespace AgyClaudeStyle.Installer
                 {
                     using (Process p = Process.GetProcessById(pid.Value))
                     {
-                        if (!p.HasExited && CdpHelper.IsExpectedPrismDaemonProcess(p))
+                        if (!p.HasExited && CdpHelper.IsExpectedPrismDaemonProcess(p, pluginDir))
                         {
                             p.Kill();
                             p.WaitForExit(2000);
@@ -534,6 +536,17 @@ namespace AgyClaudeStyle.Installer
             {
                 try { File.Copy(pluginCfgPath, installCfgPath, false); hadInstallCfg = true; } catch { }
             }
+            else if (hadInstallCfg && hadPluginCfg)
+            {
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(pluginCfgPath) > File.GetLastWriteTimeUtc(installCfgPath))
+                    {
+                        File.Copy(pluginCfgPath, installCfgPath, true);
+                    }
+                }
+                catch { }
+            }
 
             bool preservedConfig = false;
             const string nativePrefix = "native-plugin/";
@@ -576,6 +589,10 @@ namespace AgyClaudeStyle.Installer
             }
             result.PreservedExistingConfig = preservedConfig;
             result.NativePluginDeployed = !string.IsNullOrEmpty(pluginDir) && File.Exists(Path.Combine(pluginDir, "plugin.json"));
+            if (!string.IsNullOrEmpty(pluginDir))
+            {
+                CdpHelper.SyncHostPluginRegistry(pluginDir, true);
+            }
             report(62, preservedConfig ? "已保留本机现有 config.json 用户配置并同步部署原生 Sidecar 插件" : "已部署原生 Sidecar 插件并写入默认配置 config.json");
 
             try
@@ -611,12 +628,22 @@ namespace AgyClaudeStyle.Installer
                 report(72, "已按参数跳过开机自启注册");
             }
 
+            if (!opts.NoNativeDaemon && result.NativePluginDeployed)
+            {
+                report(78, "正在激活原生五通道 Sidecar Daemon...");
+                result.NativeDaemonStarted = CdpHelper.EnsureNativeDaemonRunning(pluginDir, opts.CdpPort, ag.ExePath, (m) => report(80, m));
+            }
+
             report(82, "正在启动后台静默守护进程...");
             string watcherExe = Path.Combine(installDir, WatcherExeName);
             string watcherArgs = "--watch --dir \"" + installDir + "\"";
             if (!string.IsNullOrEmpty(pluginDir))
             {
                 watcherArgs += " --plugin-dir \"" + pluginDir + "\"";
+            }
+            if (opts.NoNativeDaemon)
+            {
+                watcherArgs += " --no-native-daemon";
             }
             if (opts.CdpPort.HasValue && opts.CdpPort.Value > 0)
             {
@@ -785,20 +812,47 @@ namespace AgyClaudeStyle.Installer
                 catch { }
             }
 
-            if (!opts.NoAutostart)
+            report(70, "正在移除开机自启与卸载注册表项...");
+            bool isDefaultInstall = string.Equals(
+                Path.GetFullPath(installDir).TrimEnd('\\', '/'),
+                Path.GetFullPath(GetDefaultInstallDir()).TrimEnd('\\', '/'),
+                StringComparison.OrdinalIgnoreCase
+            );
+            try
             {
-                report(70, "正在移除开机自启与卸载注册表项...");
-                try
+                string lnk = GetStartupShortcutPath();
+                if (File.Exists(lnk))
                 {
-                    string lnk = GetStartupShortcutPath();
-                    if (File.Exists(lnk)) File.Delete(lnk);
+                    string lnkWork = ReadShortcutWorkingDir(lnk);
+                    if (isDefaultInstall || (!string.IsNullOrEmpty(lnkWork) &&
+                        string.Equals(Path.GetFullPath(lnkWork).TrimEnd('\\', '/'), Path.GetFullPath(installDir).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)))
+                    {
+                        File.Delete(lnk);
+                    }
                 }
-                catch { }
-                try
+            }
+            catch { }
+            try
+            {
+                using (RegistryKey regKey = Registry.CurrentUser.OpenSubKey(UninstallRegSubKey))
                 {
-                    Registry.CurrentUser.DeleteSubKeyTree(UninstallRegSubKey, false);
+                    if (regKey != null)
+                    {
+                        string regLoc = regKey.GetValue("InstallLocation") as string;
+                        if (isDefaultInstall || (!string.IsNullOrEmpty(regLoc) &&
+                            string.Equals(Path.GetFullPath(regLoc).TrimEnd('\\', '/'), Path.GetFullPath(installDir).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)))
+                        {
+                            regKey.Close();
+                            Registry.CurrentUser.DeleteSubKeyTree(UninstallRegSubKey, false);
+                        }
+                    }
                 }
-                catch { }
+            }
+            catch { }
+
+            if (!string.IsNullOrEmpty(pluginDir))
+            {
+                CdpHelper.SyncHostPluginRegistry(pluginDir, false);
             }
 
             if (!string.IsNullOrEmpty(pluginDir) && Directory.Exists(pluginDir))
@@ -843,20 +897,44 @@ namespace AgyClaudeStyle.Installer
         {
             string selfExe = Assembly.GetExecutingAssembly().Location;
             if (string.IsNullOrEmpty(selfExe)) return;
-            string safeSelf = selfExe.Replace("'", "''");
-            string safeDir = (installDir ?? string.Empty).Replace("'", "''");
-            string ps = string.Format(
-                "for ($i = 0; $i -lt 10; $i++) {{ Start-Sleep -Milliseconds 900; Remove-Item -LiteralPath '{0}' -Force -ErrorAction SilentlyContinue; if ('{1}') {{ Remove-Item -LiteralPath '{1}' -Recurse -Force -ErrorAction SilentlyContinue }}; if (-not (Test-Path -LiteralPath '{1}')) {{ break }} }}",
-                safeSelf,
-                safeDir
-            );
-            string encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(ps));
-            ProcessStartInfo psi = new ProcessStartInfo("powershell.exe", "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand " + encoded);
-            psi.WorkingDirectory = Path.GetTempPath();
-            psi.CreateNoWindow = true;
-            psi.UseShellExecute = false;
-            psi.WindowStyle = ProcessWindowStyle.Hidden;
-            try { Process.Start(psi); } catch { }
+            bool startedPs = false;
+            try
+            {
+                string safeSelf = selfExe.Replace("'", "''");
+                string safeDir = (installDir ?? string.Empty).Replace("'", "''");
+                string ps = string.Format(
+                    "for ($i = 0; $i -lt 10; $i++) {{ Start-Sleep -Milliseconds 900; Remove-Item -LiteralPath '{0}' -Force -ErrorAction SilentlyContinue; if ('{1}') {{ Remove-Item -LiteralPath '{1}' -Recurse -Force -ErrorAction SilentlyContinue }}; if (-not (Test-Path -LiteralPath '{1}')) {{ break }} }}",
+                    safeSelf,
+                    safeDir
+                );
+                string encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(ps));
+                ProcessStartInfo psi = new ProcessStartInfo("powershell.exe", "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand " + encoded);
+                psi.WorkingDirectory = Path.GetTempPath();
+                psi.CreateNoWindow = true;
+                psi.UseShellExecute = false;
+                psi.WindowStyle = ProcessWindowStyle.Hidden;
+                startedPs = (Process.Start(psi) != null);
+            }
+            catch { }
+
+            // Fallback cmd.exe self-deletion guard in case PowerShell is restricted by Group Policy
+            try
+            {
+                string quotedSelf = "\"" + selfExe.Replace("\"", "") + "\"";
+                string quotedDir = !string.IsNullOrEmpty(installDir) ? "\"" + installDir.Replace("\"", "") + "\"" : "";
+                string cmdBody = "ping 127.0.0.1 -n " + (startedPs ? "5" : "3") + " > nul & del /f /q " + quotedSelf + " > nul 2>&1";
+                if (!string.IsNullOrEmpty(quotedDir))
+                {
+                    cmdBody += " & rmdir /s /q " + quotedDir + " > nul 2>&1";
+                }
+                ProcessStartInfo cmdPsi = new ProcessStartInfo("cmd.exe", "/c " + cmdBody);
+                cmdPsi.WorkingDirectory = Path.GetTempPath();
+                cmdPsi.CreateNoWindow = true;
+                cmdPsi.UseShellExecute = false;
+                cmdPsi.WindowStyle = ProcessWindowStyle.Hidden;
+                Process.Start(cmdPsi);
+            }
+            catch { }
         }
     }
 
@@ -1257,6 +1335,7 @@ namespace AgyClaudeStyle.Installer
                 else if (a == "--status") opts.StatusOnly = true;
                 else if (a == "--no-autostart") opts.NoAutostart = true;
                 else if (a == "--no-kill-legacy") opts.NoKillLegacy = true;
+                else if (a == "--no-native-daemon") opts.NoNativeDaemon = true;
                 else if (a == "--install-dir" && i + 1 < args.Length) opts.InstallDir = args[++i];
                 else if (a == "--plugin-dir" && i + 1 < args.Length) opts.PluginDir = args[++i];
                 else if (a == "--cdp-port" && i + 1 < args.Length)
@@ -1280,6 +1359,7 @@ namespace AgyClaudeStyle.Installer
             d["installDir"] = res.InstallDir;
             d["pluginDir"] = res.PluginDir;
             d["nativePluginDeployed"] = res.NativePluginDeployed;
+            d["nativeDaemonStarted"] = res.NativeDaemonStarted;
             d["antigravityExe"] = res.AntigravityExe;
             d["antigravityVersion"] = res.AntigravityVersion;
             d["cdpPort"] = res.CdpPort.HasValue ? (object)res.CdpPort.Value : null;

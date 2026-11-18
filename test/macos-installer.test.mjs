@@ -294,6 +294,16 @@ test('macOS Swift installer & LaunchAgent contracts enforce KeepAlive <true/>, n
   assert.match(setupSwift, /<key>KeepAlive<\/key>\s*<true\/>/, 'macOS LaunchAgent must set KeepAlive to <true/>');
   assert.ok(setupSwift.includes('--plugin-dir'), 'macOS Setup supports --plugin-dir');
   assert.ok(setupSwift.includes('.gemini/config/plugins') || cdpSwift.includes('.gemini/config/plugins'), 'Deploys to standard native plugin dir');
+  assert.ok(cdpSwift.includes('ELECTRON_RUN_AS_NODE'), 'macOS CdpClient boots full 5-channel Sidecar via ELECTRON_RUN_AS_NODE=1');
+  assert.ok(cdpSwift.includes('Antigravity Helper'), 'macOS CdpClient prefers Antigravity Helper binary to avoid second Dock icon');
+  assert.ok(cdpSwift.includes('ensureNativeDaemonRunning'), 'macOS CdpClient implements zero-Node ensureNativeDaemonRunning');
+  assert.ok(setupSwift.includes('ensureNativeDaemonRunning'), 'macOS Setup launches native Sidecar daemon immediately on install');
+  assert.ok(watcherSwift.includes('ensureNativeDaemonRunning'), 'macOS Watcher auto-respawns native Sidecar daemon when host CDP is active');
+  assert.ok(cdpSwift.includes('syncHostPluginRegistry'), 'macOS CdpClient enables/cleans plugins[\"obsidian-prism\"] in config.json');
+  assert.ok(cdpSwift.includes('obsidian-prism-thought-cache.json'), 'macOS CdpClient cleans thought cache on uninstall while preserving secret file');
+  assert.ok(cdpSwift.includes('isBareAuxiliaryTarget'), 'macOS CdpClient narrows Untitled/launchpad filtering to bare auxiliary targets');
+  assert.ok(cdpSwift.includes('checkHostIdentity'), 'macOS CdpClient enforces in-page checkHostIdentity gate');
+  assert.ok(setupSwift.includes('shouldCleanHostLaunchAgent'), 'macOS Setup unconditionally cleans LaunchAgent on host uninstall');
   assert.ok(watcherSwift.includes('isNativeDaemonAlive'), 'macOS Watcher politely yields when native Sidecar daemon is alive');
   assert.ok(watcherSwift.includes('patch-batch'), 'macOS Watcher supports patch-batch atomic config updates');
   assert.ok(cdpSwift.includes('bundleUnchanged'), 'macOS CdpClient implements bundleUnchanged -> refreshConfig fast path');
@@ -359,6 +369,7 @@ test(
           '--silent',
           '--no-autostart',
           '--no-kill-legacy',
+          '--no-native-daemon',
           '--install-dir',
           installDir,
           '--cdp-port',
@@ -444,6 +455,7 @@ test(
           '--silent',
           '--no-autostart',
           '--no-kill-legacy',
+          '--no-native-daemon',
           '--install-dir',
           installDir,
           '--cdp-port',

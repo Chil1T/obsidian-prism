@@ -757,6 +757,9 @@
       if (convoState?.type === 'active' && typeof convoState.cascadeId === 'string' && convoState.cascadeId) {
         return convoState.cascadeId;
       }
+      if (convoState?.type === 'subagent' && typeof convoState.childConversationId === 'string' && convoState.childConversationId) {
+        return convoState.childConversationId;
+      }
     }
     return '';
   }
@@ -895,6 +898,9 @@
   }
 
   // ── Extracted Domain Controllers Initialization ────────────────────────
+  const noopFn = () => null;
+  const noopStub = (ov = {}) => new Proxy(ov, { get: (t, k) => (k in t ? t[k] : noopFn) });
+
   const homeStudioCtl = homeStudioMod?.createHomeStudioPanelController
     ? homeStudioMod.createHomeStudioPanelController({
         usageCore,
@@ -909,19 +915,12 @@
         setAttrIfChanged,
         runGuardedMut,
       })
-    : {
-        scheduleUsageRollupRefresh() {},
+    : noopStub({
         refreshUsageRollup: async () => {},
-        syncGreeting() {},
-        restoreGreetings() {},
-        parkPanelSeat() {},
-        unmountPanelSeat() {},
-        renderHomePanel() {},
-        flushUsageCacheNow() {},
         wasHero: () => false,
         getUsageRecordsCount: () => 0,
         hasConnectedPanel: () => false,
-      };
+      });
 
   const rippleCtl = homeRippleMod?.createHomeRippleController
     ? homeRippleMod.createHomeRippleController({
@@ -944,15 +943,7 @@
           }
         },
       })
-    : {
-        sync() {},
-        park() {},
-        unmount() {},
-        refreshTheme() {},
-        triggerLiftoffBurst() {},
-        triggerTideSwell() {},
-        getMount: () => null,
-      };
+    : noopStub();
 
   const convAuraCtl = convAuraMod?.createConvAuraController
     ? convAuraMod.createConvAuraController({
@@ -968,18 +959,7 @@
         setAttrIfChanged,
         runGuardedMut,
       })
-    : {
-        sync() {},
-        unmount() {},
-        triggerStart() {},
-        triggerLiftoffEbb() {},
-        advancePhase: () => 'off',
-        refreshTheme() {},
-        setAmbientIntensity() {},
-        setSpectrumMode() {},
-        setSemanticState() {},
-        getInstance: () => null,
-      };
+    : noopStub({ advancePhase: () => 'off' });
 
   const hostEnhancerCtl = hostEnhancerMod?.createHostEnhancerController
     ? hostEnhancerMod.createHostEnhancerController({
@@ -1004,11 +984,7 @@
           thoughtView: getThoughtView(),
         }),
       })
-    : {
-        sync() {},
-        onThemeChange() {},
-        destroy() {},
-      };
+    : noopStub();
 
   function isConvRunning() {
     return Boolean(convAuraMod && typeof convAuraMod.isConvRunning === 'function' && convAuraMod.isConvRunning());
@@ -1030,21 +1006,12 @@
         getLastPointerPos: () => (prismRimCtl ? prismRimCtl.getLastPointerPos() : { x: -9999, y: -9999 }),
         setAttrIfChanged,
       })
-    : {
+    : noopStub({
         readButtonLabelWithoutGlyph: () => '',
         parseModelLabelInfo: () => ({ brand: 'gemini', tier: 'medium', isOrchestrator: false, camp: 'gemini' }),
-        parseModelTriggerInfo: () => null,
         renderSparkSvg: () => '',
         buildBrandMarkSvg: () => '',
-        cloneCachedSvgElement: () => null,
-        syncModelGlyphOnButton: () => null,
-        syncPanelRowGlyphs() {},
-        clearPanelRowGlyphs() {},
-        teardownCrystalMount() {},
-        syncModelSelectorPanel() {},
-        getActiveCrystalTrack: () => null,
-        setCrystalPointerClient() {},
-      };
+      });
 
   prismRimCtl = prismRimMod?.createPrismRimCanvasController
     ? prismRimMod.createPrismRimCanvasController({
@@ -1064,14 +1031,7 @@
           }
         },
       })
-    : {
-        onPointerMove() {},
-        cancelPendingRaf() {},
-        teardown() {},
-        markDirty() {},
-        invalidateMetrics() {},
-        getLastPointerPos: () => ({ x: -9999, y: -9999 }),
-      };
+    : noopStub({ getLastPointerPos: () => ({ x: -9999, y: -9999 }) });
 
   const smoothCaretCtl = smoothCaretMod?.createSmoothCaretController
     ? smoothCaretMod.createSmoothCaretController({
@@ -1080,14 +1040,7 @@
         setAttrIfChanged,
         runGuardedMut,
       })
-    : {
-        teardown() {},
-        bumpMetricsEpoch() {},
-        measureSnapshot: () => null,
-        applyMutations() {},
-        sync() {},
-        queue() {},
-      };
+    : noopStub();
 
   function applySingleHostIcon(btn, iconName, origSvg, size) {
     if (!btn || btn.isConnected === false || !origSvg || !origSvg.parentNode || !animatedIcons) return;
@@ -1137,7 +1090,7 @@
         convAuraCtl,
         notifyMascot,
       })
-    : {
+    : noopStub({
         heroState: {
           wasInHome: false,
           wasInFormalConv: false,
@@ -1147,31 +1100,12 @@
           lastGroupPress: null,
         },
         scheduleTransient: (fn, ms) => setTimeout(fn, ms),
-        clearTransientTimers() {},
-        cancelDeferredHydration() {},
-        enqueueDeferredIcons() {},
-        syncThinkingSparks() {},
-        clearWorkedForAutoUnfoldAttrs() {},
-        syncWorkedForAutoUnfold() {},
-        scheduleWorkedForClickSync() {},
-        findFormalConvView: () => null,
-        sampleHomeComposerRect: () => null,
-        triggerHomeLiftoffRippleBurst() {},
-        triggerHeroDFiberPulse() {},
-        triggerHeroESonar() {},
         measureSidebarSelectionSnapshot: () => ({ empty: true }),
         measureVisibleChangedHeaders: () => [],
-        syncHeroCCaustics() {},
-        syncHeroRouteChoreography() {},
-        flushAllStreamArtifacts() {},
-        syncDualStreamEngine() {},
-        disconnectStreamObserver() {},
         measureNewLensOverlays: () => [],
-        syncLensOverlayOrigins() {},
-        scheduleDeferredConvEntry() {},
         isStreamMutating: () => false,
         hasStreamObserver: () => false,
-      };
+      });
 
   // ── Root Attrs, Spring Tokens & Language Sync ──────────────────────────
   let lastThemeKey = '';

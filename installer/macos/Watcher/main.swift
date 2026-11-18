@@ -79,15 +79,17 @@ final class WatcherApp {
     private let pidFile: String
     private let lockFile: String
     private let isWatch: Bool
+    private let noNativeDaemon: Bool
     private let logLock = NSLock()
 
-    init(baseDir: String, pluginDir: String, isWatch: Bool) {
+    init(baseDir: String, pluginDir: String, isWatch: Bool, noNativeDaemon: Bool = false) {
         self.baseDir = baseDir
         self.pluginDir = pluginDir
         self.logFile = (baseDir as NSString).appendingPathComponent("watch.log")
         self.pidFile = (baseDir as NSString).appendingPathComponent(".watch.pid")
         self.lockFile = (baseDir as NSString).appendingPathComponent(".watch.lock")
         self.isWatch = isWatch
+        self.noNativeDaemon = noNativeDaemon || (ProcessInfo.processInfo.environment["AG_PRISM_NO_NATIVE_DAEMON"] == "1")
     }
 
     func log(_ line: String) {
@@ -333,6 +335,25 @@ final class WatcherApp {
                 entry.scriptId = newId
             }
             let mainVal = try entry.session.evaluate(exprToUse, awaitPromise: false)
+            if mainVal.objectValue?["status"]?.stringValue == "skipped-non-host" {
+                if let revId = entry.scriptId, !revId.isEmpty {
+                    _ = try? entry.session.send(
+                        "Page.removeScriptToEvaluateOnNewDocument",
+                        params: ["identifier": .string(revId)],
+                        timeoutMs: 5000
+                    )
+                    entry.scriptId = nil
+                }
+                if let oldOmniId = entry.omniScriptId, !oldOmniId.isEmpty {
+                    _ = try? entry.session.send(
+                        "Page.removeScriptToEvaluateOnNewDocument",
+                        params: ["identifier": .string(oldOmniId)],
+                        timeoutMs: 5000
+                    )
+                    entry.omniScriptId = nil
+                }
+                return mainVal
+            }
 
             if let oldOmniId = entry.omniScriptId, !oldOmniId.isEmpty {
                 _ = try? entry.session.send(
@@ -589,11 +610,44 @@ final class WatcherApp {
             dirSource = src
         }
 
+        let syncNewerPluginConfigToBase = {
+            guard !self.pluginDir.isEmpty else { return }
+            let pluginCfg = (self.pluginDir as NSString).appendingPathComponent("config.json")
+            let baseCfg = (self.baseDir as NSString).appendingPathComponent("config.json")
+            let fm = FileManager.default
+            guard fm.fileExists(atPath: pluginCfg) else { return }
+            if !fm.fileExists(atPath: baseCfg) {
+                try? fm.copyItem(atPath: pluginCfg, toPath: baseCfg)
+                return
+            }
+            if let pAttrs = try? fm.attributesOfItem(atPath: pluginCfg),
+               let bAttrs = try? fm.attributesOfItem(atPath: baseCfg),
+               let pMtime = pAttrs[.modificationDate] as? Date,
+               let bMtime = bAttrs[.modificationDate] as? Date,
+               pMtime.timeIntervalSince(bMtime) > 0.25 {
+                try? fm.removeItem(atPath: baseCfg)
+                try? fm.copyItem(atPath: pluginCfg, toPath: baseCfg)
+            }
+        }
+
         var lastPort: Int?
         var yieldingToDaemon = false
+        var lastDaemonSpawnAttempt = Date.distantPast
         while !isExiting() {
-            let nativeAlive = !pluginDir.isEmpty && CdpHelper.isNativeDaemonAlive(pluginDir: pluginDir)
+            var nativeAlive = !pluginDir.isEmpty && CdpHelper.isNativeDaemonAlive(pluginDir: pluginDir)
+            if !nativeAlive && !noNativeDaemon && !pluginDir.isEmpty {
+                if let activePort = CdpHelper.readPort(overridePort: overridePort),
+                   Date().timeIntervalSince(lastDaemonSpawnAttempt) >= 6.0 {
+                    lastDaemonSpawnAttempt = Date()
+                    if CdpHelper.ensureNativeDaemonRunning(pluginDir: pluginDir, cdpPort: activePort, log: { msg in
+                        self.log("[+] \(msg)")
+                    }) {
+                        nativeAlive = true
+                    }
+                }
+            }
             if nativeAlive {
+                syncNewerPluginConfigToBase()
                 stateLock.lock()
                 let hasAttached = !attached.isEmpty
                 let oldEntries = Array(attached.values)
@@ -680,6 +734,7 @@ func runWatcherMain() -> Int32 {
     var customPluginDir: String?
     var overridePort: Int?
     var outFile: String?
+    var noNativeDaemon = false
 
     let args = CommandLine.arguments
     var i = 1
@@ -688,6 +743,7 @@ func runWatcherMain() -> Int32 {
         if a == "--watch" { mode = "watch" }
         else if a == "--once" { mode = "once" }
         else if a == "--remove" { mode = "remove" }
+        else if a == "--no-native-daemon" { noNativeDaemon = true }
         else if a == "--dir" && i + 1 < args.count { i += 1; customDir = args[i] }
         else if a == "--plugin-dir" && i + 1 < args.count { i += 1; customPluginDir = args[i] }
         else if a == "--cdp-port" && i + 1 < args.count {
@@ -721,7 +777,7 @@ func runWatcherMain() -> Int32 {
         pluginDir = (parentDir as NSString).appendingPathComponent("\(baseName)-native-plugin")
     }
 
-    let app = WatcherApp(baseDir: baseDir, pluginDir: pluginDir, isWatch: mode == "watch")
+    let app = WatcherApp(baseDir: baseDir, pluginDir: pluginDir, isWatch: mode == "watch", noNativeDaemon: noNativeDaemon)
 
     if mode == "once" {
         return app.runOnce(overridePort: overridePort, outFile: outFile)

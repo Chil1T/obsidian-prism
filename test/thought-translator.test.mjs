@@ -1966,3 +1966,221 @@ test('Cache jank root-cause guards: persisted custom styleTag 0ms hit, collapsed
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('Zero-flicker streaming: appendData preserves CSS.highlights Range offsets, buffers partial Markdown prefixes/fences, reuses final DOM & enforces panelActiveEntry lock', async () => {
+  const clientSrc = fs.readFileSync(
+    path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-client.js'),
+    'utf8'
+  );
+
+  let fakeNow = 20000;
+  let nextRafId = 1;
+  const rafQueue = new Map();
+  const stepFrames = (count = 1, dtMs = 32) => {
+    for (let i = 0; i < count; i++) {
+      fakeNow += dtMs;
+      const batch = Array.from(rafQueue.entries());
+      rafQueue.clear();
+      for (const [, cb] of batch) cb(fakeNow);
+    }
+  };
+
+  // Strict WHATWG DOM live Range + TextNode simulation:
+  // Setting `.data` / `.nodeValue` / `.textContent` collapses all live ranges on that TextNode to (0, 0),
+  // whereas `.appendData(delta)` preserves all existing (startOffset, endOffset) untouched!
+  const liveRangesByNode = new WeakMap();
+  let appendDataCalls = 0;
+  let destructiveReplaceCalls = 0;
+
+  class MockHighlight extends Set {}
+  const hlRegistry = new Map();
+  const streamControllers = [];
+  const cancelledIds = [];
+
+  const { doc, rootBody, sandbox } = createMockDomEnv({
+    Date: { now: () => fakeNow },
+    Highlight: MockHighlight,
+    CSS: { highlights: hlRegistry },
+    requestAnimationFrame: (cb) => {
+      const id = nextRafId++;
+      rafQueue.set(id, cb);
+      return id;
+    },
+    cancelAnimationFrame: (id) => rafQueue.delete(id),
+    __agPrismThoughtBridge: {
+      call: async (p) => {
+        if (p?.action === 'cancel-translate') cancelledIds.push(p.requestId);
+        return { ok: true, stylePreset: 'technical', entries: {} };
+      },
+      cancelTranslate: async (p) => {
+        cancelledIds.push(p.requestId);
+        return { ok: true, cancelled: true };
+      },
+      translateStream: async (opts, onPartial) =>
+        new Promise((resolve) => {
+          streamControllers.push({ opts, onPartial, resolve });
+        }),
+    },
+  });
+
+  doc.createTextNode = (initial) => {
+    let buf = String(initial ?? '');
+    const tn = {
+      nodeType: 3,
+      get data() {
+        return buf;
+      },
+      set data(v) {
+        destructiveReplaceCalls++;
+        buf = String(v ?? '');
+        const rs = liveRangesByNode.get(tn);
+        if (rs) for (const r of rs) { r.startOffset = 0; r.endOffset = 0; }
+      },
+      get nodeValue() {
+        return buf;
+      },
+      set nodeValue(v) {
+        tn.data = v;
+      },
+      get textContent() {
+        return buf;
+      },
+      set textContent(v) {
+        tn.data = v;
+      },
+      appendData(delta) {
+        appendDataCalls++;
+        buf += String(delta ?? '');
+      },
+    };
+    return tn;
+  };
+
+  doc.createRange = () => {
+    const r = {
+      startContainer: null,
+      startOffset: 0,
+      endOffset: 0,
+      setStart(node, off) {
+        this.startContainer = node;
+        this.startOffset = off;
+        let set = liveRangesByNode.get(node);
+        if (!set) {
+          set = new Set();
+          liveRangesByNode.set(node, set);
+        }
+        set.add(r);
+      },
+      setEnd(_node, off) {
+        this.endOffset = off;
+      },
+    };
+    return r;
+  };
+
+  const btn = doc.createElement('button');
+  btn.setAttribute('data-testid', 'thinking-collapsible-trigger');
+  btn.setAttribute('aria-expanded', 'true');
+  btn.textContent = 'Thought for 6s';
+  const panel = doc.createElement('div');
+  const rawP = doc.createElement('p');
+  rawP.appendChild(doc.createTextNode('Analyzing streaming flicker across highlights, markdown lists, code fences, and dual-flight locks.'));
+  panel.appendChild(rawP);
+  btn.nextElementSibling = panel;
+  rootBody.appendChild(btn);
+  rootBody.appendChild(panel);
+
+  vm.runInNewContext(clientSrc, sandbox);
+  const api = sandbox.__agPrismThought;
+  api.sync({ thoughtTranslate: 'ai', thoughtTrigger: 'expand' });
+  await new Promise((r) => setTimeout(r, 30));
+
+  assert.equal(streamControllers.length, 1);
+  const staleCtrl = streamControllers[0];
+  staleCtrl.onPartial('旧流式草稿不应残留');
+  stepFrames(2, 32);
+
+  // 1) Trigger single-block retranslate while stream 1 is active -> panelActiveEntry must evict & cancel stream 1!
+  const reBtn = panel.querySelector('[data-testid="thought-retranslate-btn"]');
+  // Or force a second translation via styleTag change in saveConfig / retranslate
+  api.sync({ thoughtTranslate: 'machine', thoughtTrigger: 'expand' });
+  api.scanImmediate();
+  assert.equal(streamControllers.length, 2, 'Engine switch should start stream 2');
+  const activeCtrl = streamControllers[1];
+
+  // Stale stream 1 emitting late chunks must have ZERO effect on panel DOM
+  staleCtrl.onPartial('旧流式脏写入企图覆盖新流');
+  stepFrames(2, 32);
+
+  // 2) Stream progressive Markdown with partial prefixes (`###`, `-`, closing ```` ``` ````)
+  destructiveReplaceCalls = 0;
+  appendDataCalls = 0;
+
+  activeCtrl.onPartial('###');
+  stepFrames(2, 32);
+  activeCtrl.onPartial('### 核心排查清单\n-');
+  stepFrames(2, 32);
+
+  const body = panel.querySelector('.ag-prism-thought-body');
+  assert.ok(body);
+  let bodyClears = 0;
+  const origRemoveChild = body.removeChild.bind(body);
+  body.removeChild = (ch) => {
+    bodyClears++;
+    return origRemoveChild(ch);
+  };
+
+  // Frame A: first slice of paragraph -> creates Range in ag-stream-f1
+  const f1Bucket = hlRegistry.get('ag-stream-f1');
+  assert.ok(f1Bucket && f1Bucket.size >= 1, 'Initial highlight slice must start gently at ag-stream-f1 (42%)');
+  const firstRange = Array.from(f1Bucket)[0];
+  const initialStart = firstRange.startOffset;
+  const initialEnd = firstRange.endOffset;
+  assert.ok(initialEnd > initialStart);
+
+  // Frame B (+50ms > 42ms merge window): append more text to same paragraph -> firstRange offsets MUST NOT collapse to 0!
+  activeCtrl.onPartial('### 核心排查清单与验证步骤说明\n-');
+  stepFrames(2, 50);
+  assert.ok(appendDataCalls > 0, 'Streaming text growth must use CharacterData.appendData');
+  assert.equal(destructiveReplaceCalls, 0, 'Must never overwrite tn.data/nodeValue during normal monotonic append');
+  assert.equal(firstRange.startOffset, initialStart, 'Existing Highlight Range startOffset must remain intact');
+  assert.ok(firstRange.endOffset >= initialEnd, 'Existing Highlight Range endOffset must never collapse to 0');
+
+  // Stream two list items one char at a time across `-` boundary -> must stay inside ONE <ul> without <p> flip!
+  activeCtrl.onPartial('### 核心排查清单与验证步骤说明\n- 检查 `thought-client.js` 高亮偏移\n-');
+  stepFrames(4, 32);
+  activeCtrl.onPartial('### 核心排查清单与验证步骤说明\n- 检查 `thought-client.js` 高亮偏移\n- 验证围栏闭合零闪烁\n```js\nconst ok = 1;\n`');
+  stepFrames(5, 32);
+  activeCtrl.onPartial('### 核心排查清单与验证步骤说明\n- 检查 `thought-client.js` 高亮偏移\n- 验证围栏闭合零闪烁\n```js\nconst ok = 1;\n``');
+  stepFrames(2, 32);
+  const fullMd =
+    '### 核心排查清单与验证步骤说明\n- 检查 `thought-client.js` 高亮偏移\n- 验证围栏闭合零闪烁\n```js\nconst ok = 1;\n```\n收尾段落平滑落盘。';
+  activeCtrl.onPartial(fullMd);
+  stepFrames(10, 32);
+
+  assert.equal(bodyClears, 0, 'Streaming across list markers and closing code fence must cause 0 body clears (0 flicker)');
+  const ulsDuringStream = body.querySelectorAll('.ag-prism-thought-ul');
+  assert.equal(ulsDuringStream.length, 1, 'Consecutive list items must stay in a single <ul> container');
+  const ulRefBeforeFinal = ulsDuringStream[0];
+  const preRefBeforeFinal = body.querySelector('.ag-prism-thought-pre');
+  assert.ok(preRefBeforeFinal);
+  assert.equal(
+    ulRefBeforeFinal.querySelectorAll('.ag-prism-thought-code').length,
+    1,
+    'Completed preceding list item should upgrade inline `code` in-place during stream'
+  );
+
+  // 3) Finish stream & settle -> completed DOM nodes must be reused in-place with 0 body clear!
+  activeCtrl.resolve({ ok: true, text: fullMd, engine: 'machine' });
+  await new Promise((r) => setTimeout(r, 20));
+  stepFrames(6, 32);
+  fakeNow += 400;
+  await new Promise((r) => setTimeout(r, 390));
+
+  assert.equal(bodyClears, 0, 'Final markdown commit must reuse streamed blocks in-place without clearing body');
+  assert.equal(body.querySelector('.ag-prism-thought-ul'), ulRefBeforeFinal, '<ul> node must be preserved across final settle');
+  assert.equal(body.querySelector('.ag-prism-thought-pre'), preRefBeforeFinal, '<pre> node must be preserved across final settle');
+  assert.equal(reBtn !== null, true);
+
+  api.destroy();
+});

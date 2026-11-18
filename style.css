@@ -190,7 +190,7 @@ border-left:1px solid var(--ag-cs-thought-rule,rgba(92,198,252,.26)) !important;
 &[data-ag-prism-thought-view="bilingual"][data-ag-cs-style] [data-testid="thinking-collapsible-trigger"][aria-expanded="true"]+div[data-op-zh-ready="1"]:not([data-op-manual-raw="0"]){&>:not(.ag-prism-thought-overlay){display:block !important;opacity:.68;}&>.ag-prism-thought-overlay+:not(.ag-prism-thought-overlay){margin-top:8px !important;padding-top:7px !important;border-top:1px dashed var(--ag-cs-border-2) !important;}}
 & .ag-prism-thought-overlay{display:block;position:relative;}
 & .ag-prism-thought-body{display:inline;}
-& .ag-prism-thought-body>:last-child{display:inline;}
+& .ag-prism-thought-body>p.ag-prism-thought-p:first-child:last-child{display:inline;}
 & :is(.ag-prism-thought-pending-hint,.ag-prism-thought-fallback-badge,.ag-prism-thought-retranslate-btn,.ag-prism-thought-error-bar)[hidden]{display:none !important;}
 & .ag-prism-thought-pending-hint:not([hidden]){display:inline-flex;align-items:center;gap:6px;padding:1px 8px;margin-bottom:5px;border-radius:999px;font-size:11.5px !important;line-height:18px !important;color:var(--secondary-foreground) !important;background:var(--ag-cs-pill-bg);border:1px solid var(--ag-cs-border-1);}
 & .ag-prism-thought-code{font-family:var(--ag-cs-mono-stack);font-size:11.5px !important;padding:1px 5px;border-radius:var(--ag-cs-r-sm);background:color-mix(in srgb,var(--foreground) 6.5%,transparent);border:1px solid var(--ag-cs-border-1);color:var(--foreground) !important;}

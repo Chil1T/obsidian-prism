@@ -247,7 +247,7 @@ function matchesExpectedDaemonSignature(imageName, commandLine = '', opts = null
   const img = String(imageName || '').trim().toLowerCase();
   const cmd = String(commandLine || '').replace(/\\/g, '/').toLowerCase();
   if (!img) return false;
-  if (cmd && /--type=(?:renderer|gpu-process|utility|zygote|broker)\b/.test(cmd)) {
+  if (cmd && /--type=/.test(cmd)) {
     return false;
   }
   const matchedLockPid = Boolean(opts && opts.matchedLockPid);
@@ -263,9 +263,6 @@ function matchesExpectedDaemonSignature(imageName, commandLine = '', opts = null
     return true;
   }
   if (/(?:antigravity|electron|agy)(?:\.exe|\b)/.test(img)) {
-    if (matchedLockPid && lockStartedAt > 0 && processStartMs > 0) {
-      return true;
-    }
     if (!cmd) return false;
     const hasPrismOwner = /(?:obsidian-prism|antigravity-prism|agy-claude-style)/.test(cmd);
     const hasDaemonEntry = /(?:sidecars\/daemon\/main\.mjs|\/daemon\/main\.mjs|\/watch\.js)\b/.test(cmd);
@@ -301,7 +298,6 @@ function isExpectedDaemonProcess(pid, probeOverride = null) {
   }
   try {
     if (IS_WIN) {
-      const needWmiCmd = !(lockMeta.matchedPid && lockMeta.startedAt > 0);
       const psScript =
         `$p = Get-Process -Id ${n} -ErrorAction SilentlyContinue; ` +
         `if (-not $p) { exit 0 }; ` +
@@ -309,9 +305,7 @@ function isExpectedDaemonProcess(pid, probeOverride = null) {
         `$st = 0; try { $st = ([DateTimeOffset]$p.StartTime).ToUnixTimeMilliseconds() } catch {}; ` +
         `if ($nm -match '^(?:node|nodejs|obsidian-prism|obsidian-prism-watcher|watcher|agy-claude-style)$') { Write-Output ($nm + '|' + $st + '|'); exit 0 }; ` +
         `if ($nm -match '^(?:antigravity|electron|agy)$') { ` +
-        (needWmiCmd
-          ? `$cl = (Get-CimInstance Win32_Process -Filter 'ProcessId = ${n}' -ErrorAction SilentlyContinue).CommandLine; Write-Output ($nm + '|' + $st + '|' + [string]$cl); exit 0 `
-          : `Write-Output ($nm + '|' + $st + '|'); exit 0 `) +
+        `$cl = (Get-CimInstance Win32_Process -Filter 'ProcessId = ${n}' -ErrorAction SilentlyContinue).CommandLine; Write-Output ($nm + '|' + $st + '|' + [string]$cl); exit 0 ` +
         `}; ` +
         `Write-Output ($nm + '|' + $st + '|')`;
       const out = execFileSync(
@@ -384,7 +378,7 @@ function isEligibleTarget(target) {
   ) {
     return false;
   }
-  if (/\b(?:Untitled|launchpad)\b/i.test(`${title} ${url}`)) return false;
+  if (/^(?:untitled|launchpad)$/i.test(title) || /\/launchpad(?:\.html)?(?:[?#]|$)/i.test(lowUrl)) return false;
 
   if (lowUrl.startsWith('vscode-file://') || lowUrl.startsWith('app://')) {
     return true;
@@ -4070,7 +4064,8 @@ function getInjectWrapperTemplate() {
           return 'reject';
         }
         if (low.startsWith('vscode-file://') || low.startsWith('app://') || low.startsWith('about:')) {
-          return /\\b(?:Untitled|launchpad)\\b/i.test(String(document.title || '') + ' ' + href) ? 'reject' : 'ok';
+          const ttl = String(document.title || '').trim();
+          return /^(?:untitled|launchpad)$/i.test(ttl) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(low) ? 'reject' : 'ok';
         }
         const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);
         if (!m) {
@@ -4265,7 +4260,8 @@ function buildOmniClientExpression(serverMeta = null, customClientSource = null)
           return { ok: false, status: 'skipped-non-host' };
         }
         if (low.startsWith('vscode-file://') || low.startsWith('app://') || low.startsWith('about:')) {
-          if (/\\b(?:Untitled|launchpad)\\b/i.test(String(document.title || '') + ' ' + href)) {
+          const ttl = String(document.title || '').trim();
+          if (/^(?:untitled|launchpad)$/i.test(ttl) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(low)) {
             return { ok: false, status: 'skipped-non-host' };
           }
         }
@@ -4614,12 +4610,41 @@ const REMOVE_EXPRESSION = `(() => {
   document.querySelectorAll('[data-ag-cs-auto-unfolded]').forEach((el) => el.removeAttribute('data-ag-cs-auto-unfolded'));
   // Only remove Prism-owned fallback nodes & styles; NEVER touch external Pulse or external Effort Slider instances!
   document.querySelectorAll('[data-ag-prism-fallback="1"]').forEach((n) => n.remove());
+  if (typeof window !== 'undefined' && window && !window.__agPulseDispose && window.__agPulseInlineInstalled === true) {
+    window.__agPulseInlineInstalled = false;
+  }
   document.querySelectorAll('[data-ag-prism-hidden="1"]').forEach((hiddenExtPulse) => {
     hiddenExtPulse.removeAttribute('data-ag-prism-hidden');
-    if (hiddenExtPulse.style && typeof hiddenExtPulse.style.removeProperty === 'function') {
-      hiddenExtPulse.style.removeProperty('display');
+    const st = hiddenExtPulse.style;
+    if (st) {
+      if (typeof st.removeProperty === 'function') {
+        ['display', 'position', 'left', 'top', 'width', 'height', 'opacity', 'pointer-events', 'visibility', 'overflow'].forEach((p) =>
+          st.removeProperty(p)
+        );
+      } else {
+        st.display = '';
+        st.position = '';
+        st.left = '';
+        st.top = '';
+        st.width = '';
+        st.height = '';
+        st.opacity = '';
+        st.pointerEvents = '';
+        st.visibility = '';
+        st.overflow = '';
+      }
     }
   });
+  try {
+    if (typeof CSS !== 'undefined' && CSS && CSS.highlights && typeof CSS.highlights.delete === 'function') {
+      ['ag-stream-f0', 'ag-stream-f1', 'ag-stream-f2', 'ag-stream-f3', 'ag-stream-f4'].forEach((k) => CSS.highlights.delete(k));
+      if (typeof CSS.highlights.keys === 'function') {
+        for (const k of Array.from(CSS.highlights.keys())) {
+          if (typeof k === 'string' && k.startsWith('ag-omni-')) CSS.highlights.delete(k);
+        }
+      }
+    }
+  } catch (e) {}
   const prismSliderStyle = document.querySelector('#ag-codex-effort-slider-styles[data-ag-prism-slider="1"]');
   if (prismSliderStyle) prismSliderStyle.remove();
   const prismHideSlider = document.getElementById('ag-prism-effort-slider-hide');

@@ -11,6 +11,7 @@ final class InstallerOptions {
     var statusOnly = false
     var noAutostart = false
     var noKillLegacy = false
+    var noNativeDaemon = false
     var installDir: String?
     var pluginDir: String?
     var cdpPort: Int?
@@ -31,6 +32,7 @@ final class OperationResult {
     var installDir = ""
     var pluginDir = ""
     var nativePluginDeployed = false
+    var nativeDaemonStarted = false
     var antigravityApp: String?
     var antigravityVersion: String?
     var cdpPort: Int?
@@ -88,12 +90,26 @@ enum InstallerCore {
     static func stopNativeDaemonInDir(_ pluginDir: String, log: ((String) -> Void)?) {
         guard !pluginDir.isEmpty, FileManager.default.fileExists(atPath: pluginDir) else { return }
         if let pid = CdpHelper.readNativeDaemonPid(pluginDir: pluginDir), pid > 0, pid != getpid() {
-            if CdpHelper.isExpectedDaemonProcess(pid: pid) && terminatePid(pid) {
+            if CdpHelper.isExpectedDaemonProcess(pid: pid, pluginDir: pluginDir) && terminatePid(pid) {
                 log?("已停止原生 Sidecar Daemon (PID \(pid))")
             }
         }
         let pidFile = (pluginDir as NSString).appendingPathComponent(".daemon.pid")
         try? FileManager.default.removeItem(atPath: pidFile)
+    }
+
+    static func shouldCleanHostLaunchAgent(installDir: String) -> Bool {
+        let defaultDir = URL(fileURLWithPath: getDefaultInstallDir()).standardizedFileURL.path
+        let normalizedDir = URL(fileURLWithPath: installDir).standardizedFileURL.path
+        if normalizedDir == defaultDir {
+            return true
+        }
+        let plistPath = getLaunchAgentPlistPath()
+        if let content = try? String(contentsOfFile: plistPath, encoding: .utf8),
+           content.contains(normalizedDir) {
+            return true
+        }
+        return false
     }
 
     static func getLaunchAgentPlistPath() -> String {
@@ -292,7 +308,7 @@ enum InstallerCore {
             .replacingOccurrences(of: "'", with: "&apos;")
     }
 
-    static func registerLaunchAgent(installDir: String, pluginDir: String, cdpPort: Int?) throws {
+    static func registerLaunchAgent(installDir: String, pluginDir: String, cdpPort: Int?, noNativeDaemon: Bool = false) throws {
         let plistPath = getLaunchAgentPlistPath()
         let launchAgentsDir = (plistPath as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(atPath: launchAgentsDir, withIntermediateDirectories: true, attributes: nil)
@@ -306,6 +322,9 @@ enum InstallerCore {
         if let port = cdpPort, port > 0 {
             args.append("--cdp-port")
             args.append(String(port))
+        }
+        if noNativeDaemon {
+            args.append("--no-native-daemon")
         }
         let argsXml = args.map { "    <string>\(xmlEscape($0))</string>" }.joined(separator: "\n")
         let outLog = (installDir as NSString).appendingPathComponent("launchd.out.log")
@@ -345,7 +364,7 @@ enum InstallerCore {
         }
     }
 
-    private static func spawnWatcherDirectly(installDir: String, pluginDir: String, cdpPort: Int?) throws {
+    private static func spawnWatcherDirectly(installDir: String, pluginDir: String, cdpPort: Int?, noNativeDaemon: Bool = false) throws {
         let watcherExe = (installDir as NSString).appendingPathComponent(watcherExeName)
         var args = ["--watch", "--dir", installDir]
         if !pluginDir.isEmpty {
@@ -355,6 +374,9 @@ enum InstallerCore {
         if let port = cdpPort, port > 0 {
             args.append("--cdp-port")
             args.append(String(port))
+        }
+        if noNativeDaemon {
+            args.append("--no-native-daemon")
         }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: watcherExe)
@@ -446,6 +468,14 @@ enum InstallerCore {
         if !hadInstallCfg && hadPluginCfg {
             try? fm.copyItem(atPath: pluginCfgPath, toPath: installCfgPath)
             hadInstallCfg = fm.fileExists(atPath: installCfgPath)
+        } else if hadInstallCfg && hadPluginCfg,
+                  let pAttrs = try? fm.attributesOfItem(atPath: pluginCfgPath),
+                  let iAttrs = try? fm.attributesOfItem(atPath: installCfgPath),
+                  let pMtime = pAttrs[.modificationDate] as? Date,
+                  let iMtime = iAttrs[.modificationDate] as? Date,
+                  pMtime.timeIntervalSince(iMtime) > 0.25 {
+            try? fm.removeItem(atPath: installCfgPath)
+            try? fm.copyItem(atPath: pluginCfgPath, toPath: installCfgPath)
         }
 
         var preservedConfig = false
@@ -483,6 +513,9 @@ enum InstallerCore {
             }
         }
         result.nativePluginDeployed = !pluginDir.isEmpty && fm.fileExists(atPath: (pluginDir as NSString).appendingPathComponent("plugin.json"))
+        if result.nativePluginDeployed {
+            _ = CdpHelper.syncHostPluginRegistry(pluginDir: pluginDir, enable: true)
+        }
 
         let watcherDest = (installDir as NSString).appendingPathComponent(watcherExeName)
         if fm.fileExists(atPath: watcherDest) {
@@ -512,19 +545,29 @@ enum InstallerCore {
         let omni = activeCfg["omniModule"]?.stringValue ?? "on"
         result.configSummary = "语言=\(lang) | 配色=\(palette) | 动效=\(motion) | Omni=\(omni)"
 
+        if !opts.noNativeDaemon && result.nativePluginDeployed {
+            report(68, "正在通过内置运行时自举启动五通道原生 Sidecar Daemon...")
+            result.nativeDaemonStarted = CdpHelper.ensureNativeDaemonRunning(
+                pluginDir: pluginDir,
+                cdpPort: opts.cdpPort,
+                preferredApp: ag.appPath,
+                log: { msg in report(70, msg) }
+            )
+        }
+
         if !opts.noAutostart {
-            report(72, "正在配置 macOS LaunchAgent 登录自启...")
-            try registerLaunchAgent(installDir: installDir, pluginDir: pluginDir, cdpPort: opts.cdpPort)
+            report(74, "正在配置 macOS LaunchAgent 登录自启...")
+            try registerLaunchAgent(installDir: installDir, pluginDir: pluginDir, cdpPort: opts.cdpPort, noNativeDaemon: opts.noNativeDaemon)
             Thread.sleep(forTimeInterval: 0.25)
             let pidFile = (installDir as NSString).appendingPathComponent(".watch.pid")
             if !fm.fileExists(atPath: pidFile) {
                 report(82, "正在启动后台静默守护进程...")
-                try spawnWatcherDirectly(installDir: installDir, pluginDir: pluginDir, cdpPort: opts.cdpPort)
+                try spawnWatcherDirectly(installDir: installDir, pluginDir: pluginDir, cdpPort: opts.cdpPort, noNativeDaemon: opts.noNativeDaemon)
             }
         } else {
-            report(72, "已按参数跳过 LaunchAgent 登录自启注册")
+            report(74, "已按参数跳过 LaunchAgent 登录自启注册")
             report(82, "正在启动后台静默守护进程...")
-            try spawnWatcherDirectly(installDir: installDir, pluginDir: pluginDir, cdpPort: opts.cdpPort)
+            try spawnWatcherDirectly(installDir: installDir, pluginDir: pluginDir, cdpPort: opts.cdpPort, noNativeDaemon: opts.noNativeDaemon)
         }
 
         report(90, "正在检查 Antigravity Desktop 实时注入状态...")
@@ -601,8 +644,9 @@ enum InstallerCore {
             progress?(pct, msg)
         }
 
+        let cleanLaunchAgent = !opts.noAutostart || shouldCleanHostLaunchAgent(installDir: installDir)
         report(15, "正在停止后台守护进程...")
-        stopWatcherInDir(installDir, noAutostart: opts.noAutostart) { msg in
+        stopWatcherInDir(installDir, noAutostart: !cleanLaunchAgent) { msg in
             report(25, msg)
         }
         stopNativeDaemonInDir(pluginDir) { msg in
@@ -636,7 +680,7 @@ enum InstallerCore {
             }
         }
 
-        if !opts.noAutostart {
+        if cleanLaunchAgent {
             report(70, "正在移除 LaunchAgent 登录自启项...")
             unloadLaunchAgent()
             let plistPath = getLaunchAgentPlistPath()
@@ -645,6 +689,9 @@ enum InstallerCore {
             }
         }
 
+        if !pluginDir.isEmpty {
+            _ = CdpHelper.syncHostPluginRegistry(pluginDir: pluginDir, enable: false)
+        }
         if !pluginDir.isEmpty && FileManager.default.fileExists(atPath: pluginDir) {
             report(80, "正在清理原生 Sidecar 插件目录: \(pluginDir)")
             try? FileManager.default.removeItem(atPath: pluginDir)
@@ -1009,6 +1056,7 @@ func parseInstallerArgs(_ args: [String]) -> InstallerOptions {
         else if a == "--status" { opts.statusOnly = true }
         else if a == "--no-autostart" { opts.noAutostart = true }
         else if a == "--no-kill-legacy" { opts.noKillLegacy = true }
+        else if a == "--no-native-daemon" { opts.noNativeDaemon = true }
         else if a == "--install-dir" && i + 1 < args.count { i += 1; opts.installDir = args[i] }
         else if a == "--plugin-dir" && i + 1 < args.count { i += 1; opts.pluginDir = args[i] }
         else if a == "--cdp-port" && i + 1 < args.count {
@@ -1031,6 +1079,7 @@ func writeOperationOutFile(_ outFile: String?, res: OperationResult) {
         "installDir": .string(res.installDir),
         "pluginDir": .string(res.pluginDir),
         "nativePluginDeployed": .bool(res.nativePluginDeployed),
+        "nativeDaemonStarted": .bool(res.nativeDaemonStarted),
         "antigravityApp": res.antigravityApp.map { .string($0) } ?? .null,
         "antigravityVersion": res.antigravityVersion.map { .string($0) } ?? .null,
         "cdpPort": res.cdpPort.map { .int(Int64($0)) } ?? .null,

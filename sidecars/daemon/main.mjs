@@ -1511,12 +1511,20 @@ export class PrismDaemon {
   }
 
   async verifyAndHealEntry(entry) {
-    if (!entry || entry.session.closed) return;
+    if (!entry || entry.session.closed) return { alive: false, ready: false, isHostDom: false };
     try {
       const probe = await entry.session.evaluate(
         `(() => {
         const root = typeof document !== 'undefined' && document.documentElement;
         if (!root || document.readyState === 'loading') return { ready: false };
+        const isHostDom = Boolean(
+          (document.body &&
+            document.body.classList &&
+            (document.body.classList.contains('theme-standalone') || document.body.classList.contains('monaco-workbench'))) ||
+            document.querySelector(
+              '.agy-shell, .agy-home, [data-testid="aux-pane-split"], [data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="model-selector-trigger"], .monaco-workbench'
+            )
+        );
         const api = window.__agPrism;
         const st = api && typeof api.getState === 'function' ? api.getState() : null;
         const telMode = st?.cfg?.telemetryModule || 'auto';
@@ -1529,6 +1537,7 @@ export class PrismDaemon {
         );
         return {
           ready: true,
+          isHostDom,
           href: (typeof location !== 'undefined' && location && typeof location.href === 'string') ? location.href : '',
           prismAttr: root.getAttribute('data-ag-prism') || '',
           hasPrism: Boolean(api),
@@ -1547,7 +1556,7 @@ export class PrismDaemon {
         false,
         2600
       );
-      if (!probe || !probe.ready) return;
+      if (!probe || !probe.ready) return { alive: true, ready: false, isHostDom: true };
       if (probe.href) entry.url = probe.href;
       const hasClientOnDisk = this._hasOmniClientFile();
       const needsOmniHeal =
@@ -1584,7 +1593,7 @@ export class PrismDaemon {
           entry.session.close();
           this.sessions.delete(entry.wsUrl);
           this.log(`[↷] Detached & ignored deferred non-host target: ${entry.title}`);
-          return;
+          return { alive: false, ready: true, isHostDom: false };
         }
         if (this.omniExpr) {
           await entry.session.evaluate(this.omniExpr, false, 3500).catch(() => {});
@@ -1613,9 +1622,11 @@ export class PrismDaemon {
             .catch(() => {});
         }
       }
+      return { alive: true, ready: true, isHostDom: Boolean(probe.isHostDom), href: probe.href || '' };
     } catch {
       entry.session.close();
       this.sessions.delete(entry.wsUrl);
+      return { alive: false, ready: false, isHostDom: false };
     }
   }
 
@@ -1745,7 +1756,17 @@ export class PrismDaemon {
       const activeUrls = new Set(eligible.map((t) => t.webSocketDebuggerUrl));
 
       for (const [wsUrl, entry] of this.sessions.entries()) {
-        if (!activeUrls.has(wsUrl) || entry.session.closed) {
+        if (entry.session.closed) {
+          this.sessions.delete(wsUrl);
+          continue;
+        }
+        if (!activeUrls.has(wsUrl)) {
+          // Guard live workbench sessions against transient SPA title shifts (e.g. Swarm "Full View" -> "Untitled Conversation"):
+          // verify actual in-page DOM before ever issuing REMOVE_EXPRESSION!
+          const check = await this.verifyAndHealEntry(entry);
+          if (check && check.alive && (!check.ready || check.isHostDom)) {
+            continue;
+          }
           if (!entry.session.closed) {
             if (entry.scriptId) {
               await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId }).catch(() => {});

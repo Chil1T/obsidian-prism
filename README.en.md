@@ -35,7 +35,7 @@ Four Dark/Daylight Themes · Side-Pane Browser & Streaming File Viewer · Dual-W
 **Obsidian Prism (`v1.0.1`)** provides dark/daylight themes, host workbench enhancements, a built-in side-pane browser and streaming multi-format file viewer, live quota telemetry, and chain-of-thought translation for the Antigravity desktop client through a native Sidecar plugin architecture — without altering host business logic or conflicting with external plugins:
 
 - **Four Dark/Daylight Themes & Fine-Grained Controls**: Includes two dark palettes (**Obsidian Dark** & **Warm Charcoal**) and two daylight presets (**Daylight Crystal** & **Warm Alabaster**) with automatic host light/dark tracking, plus 5 accent tones (Follow Model, Cobalt, Iris, Amber, and Graphite Monochrome `mono`), 3 corner radius scales, 4 code monospace font stacks with ligature toggle, and ambient glow intensity controls.
-- **300Hz Split-Rate Pipeline & `0fps` Semantic Afterglow**: Removes persistent multi-layer `backdrop-filter` blur passes; caps steady-state background aurora rendering to `~30fps` on high-refresh displays (up to 300Hz) to reduce GPU load, entering `0fps` idle sleep `1.2s` after activity ends. Provides non-intrusive three-state semantic edge cues (awaiting user decision, error halted, and background long-task completion) that freeze into `0fps` static snapshots without touching host React Fiber nodes.
+- **300Hz Split-Rate Pipeline, 5-Step Ink Streaming & `0fps` Semantic Afterglow**: Removes persistent multi-layer `backdrop-filter` blur passes; renders streaming responses with a `CSS.highlights`-based **5-step ink fade-in** (zero wrapper nodes, zero forced layout reflow, maintaining smooth high-refresh frame pacing even in `34k+`-node long sessions); caps steady-state background aurora rendering to `~30fps` on 300Hz displays and enters `0fps` idle sleep `1.2s` after activity ends. Provides non-intrusive three-state semantic edge cues (awaiting user decision, error halted, and background long-task completion) that freeze into `0fps` static snapshots.
 - **Host Workbench & Sidecar Integration**: Synchronizes 24 theme color variables in real time to `plugin://*` Sidecar `iframe` panels (Swarm, Model Hub, Pulse, etc.) via the host `preload` `postMessage` protocol to prevent white flashes; adds sticky headers to Markdown and Artifact code blocks with manual fold/unfold controls for completed blocks (`>= 48` lines, never auto-truncated, with scroll-anchor compensation); enhances the left conversation rail with chapter tick styles, on-hover prompt outline filtering, historical step folding, and `Alt+↑` / `Alt+↓` turn navigation; unifies terminal and background task surfaces with four-theme Console Well styling.
 - **Omni Side-Pane Browser, Context Menu & Streaming File Viewer**: Configurable via `omniModule` (`"on" | "off"`) and `linkTarget` (`"builtin" | "external"`). Uses `CSS.highlights` (Custom Highlight API) for zero-DOM-mutation activation of bare URLs, `localhost` ports, and local file paths in chat and terminal output without splitting host React text nodes; left-clicking web links opens them in the right side-pane built-in browser by default (`Ctrl/Cmd+Click` toggles the system browser). Preserves **zero hover-popup clutter** during reading — actions appear strictly on right-click (`contextmenu`) over links, file pills, Artifact cards, or Mermaid diagrams (copy absolute/relative paths, reveal in folder, insert as `@mention` into composer, open in side-pane/external browser, or zoom diagrams). Backed by a loopback-only (`127.0.0.1`) HTTP `206 Range` streaming gateway supporting frame-stepped large video inspection, millisecond audio waveform markers, checkerboard SVG/transparent-image zoom & PNG export, responsive local HTML sandboxes, PDF viewing, frozen-header `CSV/TSV/JSONL` search/sorting, and `TTF/OTF/WOFF2` font specimen waterfalls.
 - **Defense-in-Depth Security & Local Isolation**: Enforces top-level main-frame verification on all privileged `__agPrism*` CDP bindings (rejecting sub-`<iframe>` RPC calls); hardens the loopback streaming gateway with `Host` and cross-site request checks, `realpath` blocking of sensitive credential files (`.env*`, `.ssh`, private keys, and local token configs), and remote UNC path blocking; isolates local HTML previews with per-directory `HMAC-SHA256` read-only sub-tokens and restricted `sandbox` attributes (without `allow-same-origin`), while disabling upstream redirects and blocking cloud-metadata/unsafe ports in thought translation requests.
@@ -64,7 +64,7 @@ Each theme defines surface elevation tokens, border contrast, and matching WebGL
 ---
 
 ### 2. Context Vial · Effort Slider · Pixel Mascots
-Displays live 512K context usage via a 1D shallow-water meniscus with hover breakdown and 5h/weekly quota forecasts, a reasoning effort slider inside the model selector menu, and optional pixel mascots (`Clawd` & cat) that sleep automatically when idle:
+Displays live 512K context usage inside a compact 1D shallow-water vial — **click to open the optical quota & breakdown popover** (showing context slice breakdown, main/subagent token split, and 5h/weekly depletion forecasts) — alongside a reasoning effort slider inside the model selector menu and optional pixel mascots (`Clawd` & cat) that sleep automatically when idle:
 
 <p align="center">
   <img src="assets/screenshots/optics-bento-details.png" width="100%" alt="Interactive Optical Craft Bento" />
@@ -85,10 +85,17 @@ Integrated into **Antigravity → Settings → Appearance**, providing 5 UI lang
 
 Obsidian Prism provides **standalone GUI installers** (no Node.js required) and **source-based native plugin deployment**, persisting across window reloads and client restarts:
 
-### Option A: Standalone GUI Installer (Recommended for General Users)
-Download the latest package from [**GitHub Releases**](https://github.com/RMvdesi/obsidian-prism/releases):
-1. **Windows (`.exe`)**: Run `obsidian-prism-installer.exe`. The installer deploys the complete native Sidecar plugin tree directly to `~/.gemini/config/plugins/obsidian-prism` (covering settings, telemetry, usage history, Git sync, thought translation, and Omni viewer bindings) and registers a background standby watcher that yields politely whenever the native Sidecar daemon is active (also supports one-click clean uninstall).
-2. **macOS (`Apple Silicon & Intel Universal`)**: Open `Obsidian-Prism-macOS-universal.dmg` and launch `Obsidian Prism.app` to deploy the complete native Sidecar plugin and configure the `LaunchAgent` standby watcher.
+### Option A: Standalone GUI Installer (Recommended · Zero External Dependencies, No Node.js Required)
+Download the latest installer directly below (or browse all versions on [**GitHub Releases**](https://github.com/RMvdesi/obsidian-prism/releases)):
+1. **Windows (`x64`)**: Download [**`obsidian-prism-installer.exe`**](https://github.com/RMvdesi/obsidian-prism/releases/latest/download/obsidian-prism-installer.exe) and run it. With zero external runtime dependencies (no system Node.js installation needed), it deploys the complete native plugin to `~/.gemini/config/plugins/obsidian-prism`, reuses the bundled Antigravity runtime headlessly to activate all five Sidecar channels immediately, and registers background startup protection (re-run the same `.exe` anytime for a one-click clean uninstall).
+2. **macOS (`Apple Silicon & Intel Universal`)**: Download [**`Obsidian-Prism-macOS-universal.dmg`**](https://github.com/RMvdesi/obsidian-prism/releases/latest/download/Obsidian-Prism-macOS-universal.dmg), mount the disk image, drag `Obsidian Prism.app` into `/Applications`, and **double-click `Obsidian Prism.app` once** to complete native five-channel Sidecar deployment and `LaunchAgent` setup (the same app also provides one-click clean uninstall).
+
+> **First-Launch OS Security Prompt (Open-Source Build Note)**
+> - **Windows SmartScreen**: Because the installer is built independently without a commercial EV code-signing certificate, if Windows shows *"Windows protected your PC"*, click **More info → Run anyway**.
+> - **macOS 15+ Gatekeeper**: Because the Universal `.app` uses open-source ad-hoc signing (not notarized under a paid Apple Developer ID), if macOS blocks first launch due to browser quarantine, open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**, or strip the quarantine attribute once in Terminal before launching:
+>   ```bash
+>   xattr -cr "/Applications/Obsidian Prism.app"
+>   ```
 
 ### Option B: Native Plugin Deployment from Source (Recommended for Developers)
 ```bash
@@ -132,7 +139,7 @@ obsidian-prism/
 ├── home-studio-panel.js                # Controller 1: Studio home dashboard (Overview/Trends/Quotas)
 ├── home-ripple-host.js                 # Controller 2: Home glyph ripple matrix host controller
 ├── model-glyph-crystal.js              # Controller 3: Model glyph & WebGL2 prism bar controller
-├── stream-choreography.js              # Controller 4: Streaming chunk transitions & table row throttle
+├── stream-choreography.js              # Controller 4: CSS.highlights 5-step ink fade & table row throttle
 ├── prism-rim-canvas.js                 # Controller 5: Cursor-reactive border highlight controller
 ├── host-workbench-enhancer.js          # Controller 6: Sidecar theme bridge, code fold & rail outline
 ├── ui-runtime.js                       # Frontend microkernel: fast config sync & lifecycle orchestration
