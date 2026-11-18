@@ -85,6 +85,13 @@ function createMockCdpServer() {
         lastRemovedExpr = expr;
         claudeStyleMounted = false;
         result = { result: { type: 'object', value: { removed: 3 } } };
+      } else if (expr.includes('__agPrismOmniServerMeta') || expr.includes('__agPrismOmniBridge')) {
+        result = {
+          result: {
+            type: 'object',
+            value: { ok: true, status: 'mounted' },
+          },
+        };
       } else {
         lastInjectedExpr = expr;
         claudeStyleMounted = true;
@@ -235,12 +242,17 @@ function createMockCdpServer() {
 
 async function waitFor(fn, timeoutMs = 6000, intervalMs = 100) {
   const deadline = Date.now() + timeoutMs;
+  let lastErr = null;
   while (Date.now() < deadline) {
-    const val = await fn();
-    if (val) return val;
+    try {
+      const val = await fn();
+      if (val) return val;
+    } catch (err) {
+      lastErr = err;
+    }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
-  throw new Error('Timed out waiting for condition');
+  throw lastErr || new Error('Timed out waiting for condition');
 }
 
 test('buildIcns generates a valid Apple ICNS container with PNG icon chunks', () => {

@@ -256,12 +256,17 @@ function createMockCdpServer() {
 
 async function waitFor(fn, timeoutMs = 6000, intervalMs = 100) {
   const deadline = Date.now() + timeoutMs;
+  let lastErr = null;
   while (Date.now() < deadline) {
-    const val = await fn();
-    if (val) return val;
+    try {
+      const val = await fn();
+      if (val) return val;
+    } catch (err) {
+      lastErr = err;
+    }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
-  throw new Error('Timed out waiting for condition');
+  throw lastErr || new Error('Timed out waiting for condition');
 }
 
 test('installer manifest validators match inject.js, cdp.js, and config.example.json 100%', () => {
