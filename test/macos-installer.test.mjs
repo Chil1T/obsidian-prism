@@ -85,7 +85,7 @@ function createMockCdpServer() {
         lastRemovedExpr = expr;
         claudeStyleMounted = false;
         result = { result: { type: 'object', value: { removed: 3 } } };
-      } else if (expr.includes('__agPrismOmniServerMeta') || expr.includes('__agPrismOmniBridge')) {
+      } else if (expr.includes('const serverMeta = window.__agPrismOmniServerMeta')) {
         result = {
           result: {
             type: 'object',

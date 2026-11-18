@@ -533,7 +533,7 @@ enum InstallerCore {
         let watchLogPath = (installDir as NSString).appendingPathComponent("watch.log")
 
         if let port = port {
-            for attempt in 0..<15 {
+            for attempt in 0..<25 {
                 if let pages = try? CdpHelper.listPages(port: port) {
                     cdpReachable = true
                     let logContent = (try? String(contentsOfFile: watchLogPath, encoding: .utf8)) ?? ""
