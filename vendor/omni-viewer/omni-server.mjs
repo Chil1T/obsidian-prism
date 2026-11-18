@@ -416,9 +416,15 @@ async function resolveSafeFileRealPath(absPath, { allowDir = false } = {}) {
 
 async function readSafeFileSlice(absPath, offset = 0, maxBytes = DEFAULT_HEAD_BYTES) {
   const { realTarget, stat: st } = await resolveSafeFileRealPath(absPath, { allowDir: false });
-  const safeOffset = Math.max(0, Math.min(st.size, Math.floor(Number(offset) || 0)));
-  const clampedMax = Math.max(1, Math.min(MAX_TEXT_SLICE_BYTES, Math.floor(Number(maxBytes) || DEFAULT_HEAD_BYTES)));
-  const toRead = Math.min(clampedMax, Math.max(0, st.size - safeOffset));
+  const rawOff = Math.floor(Number(offset) || 0);
+  const safeOffset = rawOff > 0 ? (rawOff < st.size ? rawOff : st.size) : 0;
+  const rawMax = Math.floor(Number(maxBytes) || DEFAULT_HEAD_BYTES);
+  const clampedMax = rawMax > 0 && rawMax <= MAX_TEXT_SLICE_BYTES ? rawMax : DEFAULT_HEAD_BYTES;
+  const avail = st.size > safeOffset ? st.size - safeOffset : 0;
+  const toRead = avail < clampedMax ? avail : clampedMax;
+  if (!(toRead >= 0 && toRead <= MAX_TEXT_SLICE_BYTES)) {
+    throw new RangeError('Slice size out of bounds');
+  }
 
   const buf = Buffer.alloc(toRead);
   let fh = null;

@@ -127,14 +127,11 @@
   const ctn = (d, s) => d.createTextNode(s);
   const ap = (p, c) => p.appendChild(c);
   const clearEl = (e) => { while (e && e[K_FC]) e.removeChild(e[K_FC]); };
-  const getTnStr = (tn) => (tn ? tn.data ?? tn[K_NV] ?? tn[K_TC] ?? '' : '');
+  const getTnStr = (tn) => (tn ? tn[K_NV] ?? tn[K_TC] ?? '' : '');
   const setTn = (tn, v) => {
     if (!tn) return;
-    if (typeof tn.data === 'string') tn.data = v;
-    else {
-      if (K_NV in tn) tn[K_NV] = v;
-      if (K_TC in tn) tn[K_TC] = v;
-    }
+    if (K_NV in tn) tn[K_NV] = v;
+    if (K_TC in tn && tn[K_TC] !== v) tn[K_TC] = v;
   };
   const appendTn = (tn, d) => {
     if (!tn || !d) return;

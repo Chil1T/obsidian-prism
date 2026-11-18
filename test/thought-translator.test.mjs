@@ -628,7 +628,8 @@ test('Task 2: Allows keyless local Ollama / LM Studio / vLLM with Qwen3 no-think
           { status: 200, headers: { 'Content-Type': 'application/json' } }
         );
       }
-      if (u.includes('translate.googleapis.com')) {
+      const parsedUrl = new URL(u);
+      if (parsedUrl.hostname === 'translate.googleapis.com') {
         return new Response(JSON.stringify([[['降级机翻结果文本', 'src']]]), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
@@ -2027,26 +2028,20 @@ test('Zero-flicker streaming: appendData preserves CSS.highlights Range offsets,
     let buf = String(initial ?? '');
     const tn = {
       nodeType: 3,
-      get data() {
+      get nodeValue() {
         return buf;
       },
-      set data(v) {
+      set nodeValue(v) {
         destructiveReplaceCalls++;
         buf = String(v ?? '');
         const rs = liveRangesByNode.get(tn);
         if (rs) for (const r of rs) { r.startOffset = 0; r.endOffset = 0; }
       },
-      get nodeValue() {
-        return buf;
-      },
-      set nodeValue(v) {
-        tn.data = v;
-      },
       get textContent() {
         return buf;
       },
       set textContent(v) {
-        tn.data = v;
+        tn.nodeValue = v;
       },
       appendData(delta) {
         appendDataCalls++;

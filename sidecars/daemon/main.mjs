@@ -56,6 +56,13 @@ function sanitizeSecretText(text) {
     .replace(SECRET_TOKEN_RE, '***REDACTED***');
 }
 
+function serializeJsonForEval(val) {
+  const raw = JSON.stringify(val === undefined ? null : val);
+  return String(raw).replace(/[<>/\u2028\u2029]/g, (ch) =>
+    `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`
+  );
+}
+
 export function sanitizeGitRemoteUrl(rawUrl) {
   const s = String(rawUrl || '').trim();
   if (!s) return '';
@@ -1219,12 +1226,13 @@ export class PrismDaemon {
 
       const result = await this.executeRepoAction({ ...parsed?.input, action });
       if (reqId !== null) {
-        const jsonRes = JSON.stringify(result);
+        const safeId = Number(reqId) | 0;
+        const jsonRes = serializeJsonForEval(result);
         const expr = `(() => {
           if (window.__agPrismRepoBridge && typeof window.__agPrismRepoBridge.resolve === 'function') {
-            window.__agPrismRepoBridge.resolve(${reqId}, ${jsonRes});
+            window.__agPrismRepoBridge.resolve(${safeId}, ${jsonRes});
           } else if (typeof window.__agPrismRepoResolve === 'function') {
-            window.__agPrismRepoResolve(${reqId}, ${jsonRes});
+            window.__agPrismRepoResolve(${safeId}, ${jsonRes});
           }
         })()`;
         const evalParams = { expression: expr, returnByValue: true };
@@ -1257,7 +1265,8 @@ export class PrismDaemon {
           groups: [],
         };
       }
-      const expr = `window.__agPrismMetricsResolve && window.__agPrismMetricsResolve(${reqId}, ${JSON.stringify(result)})`;
+      const safeId = Number(reqId) | 0;
+      const expr = `window.__agPrismMetricsResolve && window.__agPrismMetricsResolve(${safeId}, ${serializeJsonForEval(result)})`;
       const evalParams = { expression: expr, returnByValue: true };
       if (executionContextId) evalParams.contextId = executionContextId;
       await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
@@ -1313,7 +1322,8 @@ export class PrismDaemon {
             bypassCache: Boolean(input.bypassCache),
             onPartial: (partialText) => {
               if (!entry || entry.session.closed) return;
-              const chunkExpr = `window.__agPrismThoughtOnChunk && window.__agPrismThoughtOnChunk(${reqId}, ${JSON.stringify(partialText)})`;
+              const safeId = Number(reqId) | 0;
+              const chunkExpr = `window.__agPrismThoughtOnChunk && window.__agPrismThoughtOnChunk(${safeId}, ${serializeJsonForEval(partialText)})`;
               const chunkParams = { expression: chunkExpr, returnByValue: true };
               if (executionContextId) chunkParams.contextId = executionContextId;
               void entry.session.send('Runtime.evaluate', chunkParams).catch(() => {});
@@ -1327,9 +1337,10 @@ export class PrismDaemon {
       }
 
       if (!entry.session.closed) {
-        const rawJson = JSON.stringify(result);
-        const payloadExpr = rawJson && rawJson.length > 4096 ? `JSON.parse(${JSON.stringify(rawJson)})` : rawJson;
-        const resolveExpr = `window.__agPrismThoughtResolve && window.__agPrismThoughtResolve(${reqId}, ${payloadExpr})`;
+        const safeId = Number(reqId) | 0;
+        const safeJson = serializeJsonForEval(result);
+        const payloadExpr = safeJson.length > 4096 ? `JSON.parse(${serializeJsonForEval(safeJson)})` : safeJson;
+        const resolveExpr = `window.__agPrismThoughtResolve && window.__agPrismThoughtResolve(${safeId}, ${payloadExpr})`;
         const evalParams = { expression: resolveExpr, returnByValue: true };
         if (executionContextId) evalParams.contextId = executionContextId;
         await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
@@ -1357,7 +1368,8 @@ export class PrismDaemon {
         result = { ok: false, error: sanitizeSecretText(err?.message || err), records: [] };
       }
       if (!entry.session.closed) {
-        const resolveExpr = `window.__agPrismUsageResolve && window.__agPrismUsageResolve(${reqId}, ${JSON.stringify(result)})`;
+        const safeId = Number(reqId) | 0;
+        const resolveExpr = `window.__agPrismUsageResolve && window.__agPrismUsageResolve(${safeId}, ${serializeJsonForEval(result)})`;
         const evalParams = { expression: resolveExpr, returnByValue: true };
         if (executionContextId) evalParams.contextId = executionContextId;
         await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
@@ -1390,8 +1402,9 @@ export class PrismDaemon {
         result = { ok: false, error: sanitizeSecretText(err?.message || err) };
       }
       if (!entry.session.closed) {
-        const jsonRes = JSON.stringify(result);
-        const resolveExpr = `(() => { const r = ${jsonRes}; const b = window.__agPrismOmniBridge; if (b && typeof b.resolve === 'function') b.resolve(${reqId}, r); if (typeof window.__agPrismOmniResolve === 'function' && (!b || window.__agPrismOmniResolve !== b.resolve)) window.__agPrismOmniResolve(${reqId}, r); })()`;
+        const safeId = Number(reqId) | 0;
+        const jsonRes = serializeJsonForEval(result);
+        const resolveExpr = `(() => { const r = ${jsonRes}; const b = window.__agPrismOmniBridge; if (b && typeof b.resolve === 'function') b.resolve(${safeId}, r); if (typeof window.__agPrismOmniResolve === 'function' && (!b || window.__agPrismOmniResolve !== b.resolve)) window.__agPrismOmniResolve(${safeId}, r); })()`;
         const evalParams = { expression: resolveExpr, returnByValue: true };
         if (executionContextId) evalParams.contextId = executionContextId;
         await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});

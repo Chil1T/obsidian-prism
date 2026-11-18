@@ -44,6 +44,13 @@ function shortTitle(page) {
   return t.length > 60 ? t.slice(0, 57) + '...' : t;
 }
 
+function serializeJsonForEval(val) {
+  const raw = JSON.stringify(val === undefined ? null : val);
+  return String(raw).replace(/[<>/\u2028\u2029]/g, (ch) =>
+    `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`
+  );
+}
+
 function updateConfigBatch(entriesObj) {
   if (!entriesObj || typeof entriesObj !== 'object' || Array.isArray(entriesObj)) return false;
   const patch = {};
@@ -335,8 +342,9 @@ async function watch() {
             result = { ok: false, error: String(err && err.message ? err.message : err) };
           }
           if (!session.closed) {
-            const jsonRes = JSON.stringify(result);
-            const resolveExpr = `(() => { const r = ${jsonRes}; const b = window.__agPrismOmniBridge; if (b && typeof b.resolve === 'function') b.resolve(${reqId}, r); if (typeof window.__agPrismOmniResolve === 'function' && (!b || window.__agPrismOmniResolve !== b.resolve)) window.__agPrismOmniResolve(${reqId}, r); })()`;
+            const safeId = Number(reqId) | 0;
+            const jsonRes = serializeJsonForEval(result);
+            const resolveExpr = `(() => { const r = ${jsonRes}; const b = window.__agPrismOmniBridge; if (b && typeof b.resolve === 'function') b.resolve(${safeId}, r); if (typeof window.__agPrismOmniResolve === 'function' && (!b || window.__agPrismOmniResolve !== b.resolve)) window.__agPrismOmniResolve(${safeId}, r); })()`;
             const evalParams = { expression: resolveExpr, returnByValue: true };
             if (executionContextId) evalParams.contextId = executionContextId;
             await session.send('Runtime.evaluate', evalParams).catch(() => {});

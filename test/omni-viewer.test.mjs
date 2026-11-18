@@ -89,6 +89,9 @@ class MockElement {
   }
 
   get innerHTML() {
+    if (!this._innerHTML && this.children.length > 0) {
+      return this.children.map((c) => c._serializeMockXml()).join('');
+    }
     return this._innerHTML;
   }
   set innerHTML(v) {
@@ -103,6 +106,27 @@ class MockElement {
       svgNode.parentNode = this;
       this.children.push(svgNode);
     }
+  }
+
+  _serializeMockXml() {
+    const escTxt = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const escAtt = (s) => escTxt(s).replace(/"/g, '&quot;');
+    if (this._isText) return escTxt(this._text);
+    const name = this._origTag || this.tagName.toLowerCase();
+    let out = `<${name}`;
+    for (const [k, v] of this._attrs.entries()) {
+      out += ` ${k}="${escAtt(v)}"`;
+    }
+    if (this.children.length === 0 && !this._text) {
+      return `${out}/>`;
+    }
+    out += '>';
+    if (this._text) out += escTxt(this._text);
+    for (const c of this.children) {
+      out += c._serializeMockXml();
+    }
+    out += `</${name}>`;
+    return out;
   }
 
   setAttribute(k, v) {
@@ -262,6 +286,7 @@ class MockElement {
   }
 
   matchesSelector(sel) {
+    if (this._isText) return false;
     if (sel.startsWith('#')) return this.id === sel.slice(1);
     if (sel.startsWith('.')) {
       const cls = sel.slice(1);
@@ -308,7 +333,20 @@ function bootRenderedWorkbenchInVm(html, options = {}) {
       },
     },
     createElement(tag) {
-      return new MockElement(tag, doc);
+      const el = new MockElement(tag, doc);
+      el._origTag = String(tag || 'div');
+      return el;
+    },
+    createElementNS(_ns, tag) {
+      const el = new MockElement(tag, doc);
+      el._origTag = String(tag || 'svg');
+      return el;
+    },
+    createTextNode(txt) {
+      const t = new MockElement('#text', doc);
+      t._isText = true;
+      t._text = String(txt ?? '');
+      return t;
     },
     getElementById(id) {
       return doc.documentElement.querySelector(`#${id}`);
@@ -1192,24 +1230,34 @@ test('Security & resilience regressions: opaque HTML sandbox, foreignObject/SMIL
   await sbxEnv.settle();
   assert.equal(sbxEnv.htmlEl.getAttribute('data-wb-theme'), 'dark', 'spoofed child postMessage must be ignored');
 
-  // 3. SVG sanitizer strips <foreignObject>, <iframe>, <animate>, <set>, javascript: href & external <image>
+  // 3. SVG sanitizer strips <!DOCTYPE/!ENTITY> XML bombs, nested <scr<script>ipt>, <foreignObject>, <iframe>, <animate>, <set>, @import/external CSS url(), javascript: href & external <image>
   sbxEnv.win.postMessageToSelf({
     type: 'ag-prism-workbench-sync',
     kind: 'mermaid',
     rawContent:
+      '<!DOCTYPE svg [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;">]>' +
       '<svg viewBox="0 0 200 100">' +
-      '<foreignObject><iframe srcdoc="evil"></iframe></foreignObject>' +
+      '<style>@import url("https://198.51.100.7/evil-ext-css"); .ok-node { fill: url(#grad-ok); background: url("https://198.51.100.7/evil-ext-bg"); width: expression(alert(1)); }</style>' +
+      '<script>if (1 < 2) evil()</script>' +
+      '<scr<script>ipt>nestedEvil()</scr</script>ipt>' +
+      '<foreignObject><div><img src="x"><iframe srcdoc="evil"></iframe></div></foreignObject>' +
       '<animate attributeName="href" to="javascript:evil()"/>' +
       '<set attributeName="onload" to="evil()"/>' +
-      '<a href="javascript:evil()"><text>bad</text></a>' +
-      '<image href="https://example.com/tracker.png"/>' +
+      '<a href="javascript:evil()"><text>bad &amp; escaped</text></a>' +
+      '<image href="https://198.51.100.7/evil-ext-img"/>' +
+      '<image href="data:image/png;base64,iVBORw0KGgo=" width="10" height="10"/>' +
       '<use href="#ok-id"/>' +
       '</svg>',
   });
   await sbxEnv.settle();
   const svgLayer = sbxEnv.stageEl.querySelector('.wb-panzoom-layer');
-  assert.ok(!/foreignObject|iframe|<animate|<set|javascript:|example\.com/i.test(svgLayer.innerHTML));
+  assert.ok(!/foreignObject|iframe|<animate|<set|<script|javascript:|evil-ext-|@import|expression/i.test(svgLayer.innerHTML));
   assert.match(svgLayer.innerHTML, /#ok-id/);
+  assert.match(svgLayer.innerHTML, /#grad-ok/);
+  assert.match(svgLayer.innerHTML, /data:image\/png;base64,iVBORw0KGgo=/);
+
+  const wbSrc = fs.readFileSync(WORKBENCH_FILE, 'utf8');
+  assert.equal(/DOMParser|XMLSerializer|\.innerHTML\s*=/.test(wbSrc), false, 'workbench-page.mjs must contain zero DOMParser/XMLSerializer/innerHTML sinks');
 
   // 4. Truncated >256KB JSONL slice strips trailing half-line until Load More completes it
   const jlPart1 = '{"id":1,"status":"ok"}\n{"id":2,"stat';
