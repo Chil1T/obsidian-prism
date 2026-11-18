@@ -5,10 +5,11 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import vm from 'node:vm';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { PrismDaemon, REPO_BINDING, METRICS_BINDING } from '../sidecars/daemon/main.mjs';
+import { PrismDaemon, REPO_BINDING, METRICS_BINDING, THOUGHT_BINDING, OMNI_BINDING } from '../sidecars/daemon/main.mjs';
 
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -235,14 +236,14 @@ function createLightweightDom() {
 test('Obsidian Prism brand compliance, GPL-3.0 LICENSE, NOTICE, CITATION.cff, THIRD_PARTY_NOTICES.md, plugin.json, and sidecar.json contract', () => {
   const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'));
   assert.equal(pkgJson.name, 'obsidian-prism');
-  assert.equal(pkgJson.version, '1.0.0');
+  assert.equal(pkgJson.version, '1.0.1');
   assert.equal(pkgJson.license, 'GPL-3.0-only');
 
   const pluginJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'plugin.json'), 'utf8'));
   assert.deepEqual(Object.keys(pluginJson).sort(), ['description', 'displayName', 'logo', 'name', 'version']);
   assert.equal(pluginJson.name, 'obsidian-prism');
   assert.equal(pluginJson.displayName, 'Obsidian Prism');
-  assert.equal(pluginJson.version, '1.0.0');
+  assert.equal(pluginJson.version, '1.0.1');
   assert.equal(pluginJson.logo, 'assets/logo.svg');
   assert.ok(fs.existsSync(path.join(ROOT_DIR, 'assets', 'logo.svg')));
 
@@ -421,7 +422,11 @@ test('vendor/pulse-dashboard/inline-fallback.js politely yields to external Puls
   assert.equal(stWait.waitingForExternal, true);
   assert.equal(stWait.mountedFallback, false);
 
-  await new Promise((r) => setTimeout(r, 60));
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 30));
+    const el = envSolo.doc.getElementById('ag-pulse-status-bar');
+    if (el && el.shadowRoot && el.shadowRoot.getElementById('context-percent')?.textContent === '25%') break;
+  }
   assert.equal(ctlSolo.getState().mountedFallback, true);
 
   const barEl = envSolo.doc.getElementById('ag-pulse-status-bar');
@@ -574,6 +579,7 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
   let wsServerConn = null;
   let lastRepoResolveExpr = null;
   let metricsResolveExpr = null;
+  let lastOmniResolveExpr = null;
 
   function sendWs(sock, obj) {
     if (sock.destroyed) return;
@@ -609,6 +615,20 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
             webSocketDebuggerUrl: `ws://127.0.0.1:${p}/devtools/page/HANG_LP`,
           },
           {
+            id: 'USER_DEV_PREVIEW',
+            type: 'page',
+            title: 'AI Rap Video Generator',
+            url: 'http://127.0.0.1:3115/',
+            webSocketDebuggerUrl: `ws://127.0.0.1:${p}/devtools/page/USER_DEV_PREVIEW`,
+          },
+          {
+            id: 'EXTERNAL_SPOOF',
+            type: 'page',
+            title: 'Antigravity',
+            url: 'https://example.com/app',
+            webSocketDebuggerUrl: `ws://127.0.0.1:${p}/devtools/page/EXTERNAL_SPOOF`,
+          },
+          {
             id: 'MAIN_WB',
             type: 'page',
             title: 'Workspace - Antigravity',
@@ -624,10 +644,16 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
   });
 
   let touchedLaunchpad = false;
+  let touchedForeignPreview = false;
 
   server.on('upgrade', (req, socket) => {
     if (req.url.includes('HANG_LP')) {
       touchedLaunchpad = true;
+      socket.destroy();
+      return;
+    }
+    if (req.url.includes('USER_DEV_PREVIEW') || req.url.includes('EXTERNAL_SPOOF')) {
+      touchedForeignPreview = true;
       socket.destroy();
       return;
     }
@@ -683,6 +709,8 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
                 metricsResolveExpr = expr;
               } else if (expr.includes('__agPrismRepoBridge')) {
                 if (expr.includes('.resolve(')) lastRepoResolveExpr = expr;
+              } else if (expr.includes('__agPrismOmniBridge') && expr.includes('b.resolve(')) {
+                lastOmniResolveExpr = expr;
               }
               sendWs(socket, {
                 id: msg.id,
@@ -693,9 +721,9 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
                       ready: true,
                       hasPrism: true,
                       hasRepoBridge: true,
-                      prismAttr: '1.0.0',
+                      prismAttr: '1.0.1',
                       hasStyle: true,
-                      version: '1.0.0',
+                      version: '1.0.1',
                       status: 'ok',
                     },
                   },
@@ -743,6 +771,7 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
         return { connection: 'ok', speed: { tps: 88.8, conversationId: input?.conversationId || null }, groups: [] };
       },
     });
+    daemon.claimOwnership();
     daemon.running = true;
     const tickRes = await daemon.tick();
     assert.equal(tickRes.attached, 1);
@@ -751,6 +780,10 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
 
     assert.ok(cdpCalls.some((c) => c.method === 'Runtime.addBinding' && c.params?.name === METRICS_BINDING));
     assert.ok(cdpCalls.some((c) => c.method === 'Runtime.addBinding' && c.params?.name === REPO_BINDING));
+    assert.ok(cdpCalls.some((c) => c.method === 'Runtime.addBinding' && c.params?.name === OMNI_BINDING));
+    assert.equal(Boolean(daemon.omniServer && daemon.omniServer.running), true, 'PrismDaemon must auto-start OmniServer on 127.0.0.1');
+    const omniPortBeforeStop = daemon.omniServer.port;
+    assert.ok(omniPortBeforeStop > 0);
 
     // Test 1: Git status without remote -> noRemote: true
     const noRemoteStatus = await daemon.executeRepoAction({ action: 'status' });
@@ -800,6 +833,28 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
     const afterDocScripts = cdpCalls.filter((c) => c.method === 'Page.addScriptToEvaluateOnNewDocument').length;
     assert.ok(afterDocScripts > beforeDocScripts, 'Pulling new commits must immediately hot-push updated bundle to CDP windows');
 
+    // Trigger batch setting update (`patch-batch`) over SETTING_BINDING -> writes config.json once & fast-refreshes
+    sendWs(wsServerConn, {
+      method: 'Runtime.bindingCalled',
+      params: {
+        name: '__agPrismSetting',
+        payload: JSON.stringify({
+          action: 'patch-batch',
+          entries: { palette: 'warm', motionLevel: 'subtle', targetFps: '120', homeRipple: false, language: 'ja' },
+        }),
+      },
+    });
+    await new Promise((r) => setTimeout(r, 90));
+    const savedCfgAfterBatch = JSON.parse(fs.readFileSync(path.join(targetPluginDir, 'config.json'), 'utf8'));
+    assert.equal(savedCfgAfterBatch.palette, 'warm');
+    assert.equal(savedCfgAfterBatch.motionLevel, 'subtle');
+    assert.equal(savedCfgAfterBatch.targetFps, '120');
+    assert.equal(savedCfgAfterBatch.homeRipple, false);
+    assert.equal(savedCfgAfterBatch.ripple, 'off', 'Expected legacy twin key ripple synced on disk');
+    assert.equal(savedCfgAfterBatch.language, 'ja');
+    assert.equal(savedCfgAfterBatch.lang, 'ja', 'Expected legacy twin key lang synced on disk');
+    assert.equal(touchedForeignPreview, false, 'PrismDaemon must never connect or expose RPC bindings to non-host preview pages');
+
     // Trigger on-demand metrics request as well
     sendWs(wsServerConn, {
       method: 'Runtime.bindingCalled',
@@ -812,7 +867,28 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
     assert.equal(lazyCollectorInvoked, 1);
     assert.ok(metricsResolveExpr && metricsResolveExpr.includes('88.8'));
 
+    // Trigger OMNI_BINDING RPC over CDP -> resolves path & returns via __agPrismOmniBridge.resolve
+    sendWs(wsServerConn, {
+      method: 'Runtime.bindingCalled',
+      params: {
+        name: OMNI_BINDING,
+        payload: JSON.stringify({
+          id: 99,
+          action: 'resolvePath',
+          rawPath: '@README.md#L1-L2',
+          workspaceHint: targetPluginDir,
+        }),
+      },
+    });
+    for (let i = 0; i < 30 && !lastOmniResolveExpr; i++) {
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    assert.ok(lastOmniResolveExpr, 'Expected __agPrismOmniBridge.resolve callback via CDP');
+    assert.ok(lastOmniResolveExpr.includes('"exists":true'));
+    assert.ok(lastOmniResolveExpr.includes('"line":1'));
+
     await daemon.stop(false);
+    assert.equal(daemon.omniServer, null, 'PrismDaemon.stop() must tear down OmniServer cleanly');
     daemon = null;
 
     const uninst = await installPluginTool.uninstallPlugin({ targetDir: targetPluginDir, noCdp: true });
@@ -820,6 +896,439 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
     assert.equal(fs.existsSync(targetPluginDir), false);
   } finally {
     if (daemon) await daemon.stop(false).catch(() => {});
+    await installPluginTool.uninstallPlugin({ targetDir: targetPluginDir, noCdp: true }).catch(() => {});
+    for (const s of sockets) s.destroy();
+    await new Promise((r) => server.close(r));
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test('PrismDaemon HS-1 & SEC-2: 68 rapid-fire setting updates, multi-window cross-sync & reload epoch reset suffer 0 rebound & 0 script leaks; child iframe bindings are rejected & stop() disposes lazy services', async () => {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-hs1-sec2-'));
+  const targetPluginDir = path.join(workDir, 'obsidian-prism');
+  await installPluginTool.installPlugin({ targetDir: targetPluginDir, noCdp: true, skipHostConfig: true, startDaemon: false });
+
+  const sockets = new Set();
+  const pageConns = new Map();
+  let scriptSeq = 0;
+  const activeScripts = new Map(); // id -> source
+  let totalAddScriptCalls = 0;
+
+  function createWindowVm(pageId) {
+    const storeMap = new Map();
+    const localStorageMock = {
+      getItem: (k) => (storeMap.has(k) ? storeMap.get(k) : null),
+      setItem: (k, v) => storeMap.set(k, String(v)),
+      removeItem: (k) => storeMap.delete(k),
+    };
+    const rootAttrs = new Map();
+    const docEl = {
+      setAttribute: (k, v) => rootAttrs.set(k, String(v)),
+      getAttribute: (k) => rootAttrs.get(k) || null,
+      hasAttribute: (k) => rootAttrs.has(k),
+      removeAttribute: (k) => rootAttrs.delete(k),
+      style: { setProperty() {}, removeProperty() {} },
+      classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    };
+    const vmDoc = {
+      title: `Obsidian Prism - Antigravity (${pageId})`,
+      readyState: 'complete',
+      hidden: false,
+      documentElement: docEl,
+      head: { appendChild() {}, lastElementChild: null },
+      body: { appendChild() {}, classList: { contains: (c) => c === 'monaco-workbench' } },
+      createElement: () => ({
+        id: '',
+        style: {},
+        setAttribute() {},
+        appendChild() {},
+        remove() {},
+        addEventListener() {},
+        classList: { add() {}, remove() {}, contains: () => false },
+      }),
+      getElementById: () => null,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    const vmWin = {
+      location: { href: 'vscode-file://vscode-app/workbench.html' },
+      document: vmDoc,
+      localStorage: localStorageMock,
+      navigator: { language: 'zh-CN', clipboard: { writeText: async () => {} } },
+      matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
+      MutationObserver: class { observe() {} disconnect() {} },
+      ResizeObserver: class { observe() {} disconnect() {} },
+      IntersectionObserver: class { observe() {} disconnect() {} },
+      requestAnimationFrame: () => 1,
+      cancelAnimationFrame() {},
+      performance: { now: () => Date.now() },
+      getComputedStyle: () => ({ getPropertyValue: () => '' }),
+      CSS: {},
+      setTimeout,
+      clearTimeout,
+      setInterval: () => ({ unref() {} }),
+      clearInterval() {},
+      addEventListener() {},
+      removeEventListener() {},
+      __agPrismSetting: (payload) => {
+        const sock = pageConns.get(pageId);
+        if (sock) {
+          sendWs(sock, {
+            method: 'Runtime.bindingCalled',
+            params: { name: '__agPrismSetting', payload, executionContextId: pageState.get(pageId).mainCtxId },
+          });
+        }
+      },
+    };
+    vmWin.window = vmWin;
+    vmWin.globalThis = vmWin;
+    return { vmWin, vmCtx: vm.createContext(vmWin) };
+  }
+
+  const pageState = new Map([
+    ['page-a', { ...createWindowVm('page-a'), mainCtxId: 1, scripts: new Map() }],
+    ['page-b', { ...createWindowVm('page-b'), mainCtxId: 1, scripts: new Map() }],
+  ]);
+
+  function sendWs(socket, obj) {
+    const payload = Buffer.from(JSON.stringify(obj), 'utf8');
+    let hdr;
+    if (payload.length < 126) {
+      hdr = Buffer.from([0x81, payload.length]);
+    } else if (payload.length < 65536) {
+      hdr = Buffer.alloc(4);
+      hdr[0] = 0x81;
+      hdr[1] = 126;
+      hdr.writeUInt16BE(payload.length, 2);
+    } else {
+      hdr = Buffer.alloc(10);
+      hdr[0] = 0x81;
+      hdr[1] = 127;
+      hdr.writeBigUInt64BE(BigInt(payload.length), 2);
+    }
+    socket.write(Buffer.concat([hdr, payload]));
+  }
+
+  const server = http.createServer((req, res) => {
+    if (req.url === '/json/list') {
+      const addr = server.address();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify([
+          {
+            id: 'page-a',
+            type: 'page',
+            title: 'Obsidian Prism - Antigravity (A)',
+            url: 'vscode-file://vscode-app/workbench.html',
+            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/page/page-a`,
+          },
+          {
+            id: 'page-b',
+            type: 'page',
+            title: 'Obsidian Prism - Antigravity (B)',
+            url: 'vscode-file://vscode-app/workbench.html',
+            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/page/page-b`,
+          },
+        ])
+      );
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+
+  server.on('upgrade', (req, socket) => {
+    const pageId = req.url?.endsWith('/page-b') ? 'page-b' : 'page-a';
+    const topFrameId = `TOP_MAIN_FRAME_${pageId}`;
+    sockets.add(socket);
+    socket.on('close', () => {
+      sockets.delete(socket);
+      if (pageConns.get(pageId) === socket) pageConns.delete(pageId);
+    });
+    const accept = crypto
+      .createHash('sha1')
+      .update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+      .digest('base64');
+    socket.write(
+      'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' +
+        accept +
+        '\r\n\r\n'
+    );
+    pageConns.set(pageId, socket);
+
+    let buf = Buffer.alloc(0);
+    let frags = [];
+    socket.on('data', (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      while (buf.length >= 2) {
+        const fin = (buf[0] & 0x80) !== 0;
+        const opcode = buf[0] & 0x0f;
+        const masked = (buf[1] & 0x80) !== 0;
+        let len = buf[1] & 0x7f;
+        let off = 2;
+        if (len === 126) {
+          if (buf.length < 4) return;
+          len = buf.readUInt16BE(2);
+          off = 4;
+        } else if (len === 127) {
+          if (buf.length < 10) return;
+          len = Number(buf.readBigUInt64BE(2));
+          off = 10;
+        }
+        const mLen = masked ? 4 : 0;
+        if (buf.length < off + mLen + len) return;
+        let data = Buffer.from(buf.subarray(off + mLen, off + mLen + len));
+        if (masked) {
+          const mask = buf.subarray(off, off + 4);
+          for (let i = 0; i < len; i++) data[i] ^= mask[i & 3];
+        }
+        buf = buf.subarray(off + mLen + len);
+        if (opcode === 0x8) {
+          socket.end();
+          return;
+        }
+        if (opcode !== 0x1 && opcode !== 0x0) continue;
+        frags.push(data);
+        if (!fin) continue;
+        let msg;
+        try {
+          msg = JSON.parse(Buffer.concat(frags).toString('utf8'));
+          frags = [];
+        } catch {
+          frags = [];
+          continue;
+        }
+        const st = pageState.get(pageId);
+        if (msg.method === 'Page.getFrameTree') {
+          sendWs(socket, { id: msg.id, result: { frameTree: { frame: { id: topFrameId } } } });
+        } else if (msg.method === 'Runtime.enable') {
+          sendWs(socket, { id: msg.id, result: {} });
+          sendWs(socket, {
+            method: 'Runtime.executionContextCreated',
+            params: { context: { id: 1, auxData: { frameId: topFrameId, isDefault: true, type: 'default' } } },
+          });
+          sendWs(socket, {
+            method: 'Runtime.executionContextCreated',
+            params: { context: { id: 2, auxData: { frameId: 'UNTRUSTED_CHILD_IFRAME', isDefault: true, type: 'default' } } },
+          });
+          sendWs(socket, {
+            method: 'Runtime.executionContextCreated',
+            params: { context: { id: 3, auxData: { frameId: topFrameId, isDefault: false, type: 'isolated' } } },
+          });
+        } else if (msg.method === 'Page.addScriptToEvaluateOnNewDocument') {
+          const src = msg.params?.source || '';
+          setTimeout(() => {
+            const id = `sc-${++scriptSeq}`;
+            totalAddScriptCalls += 1;
+            activeScripts.set(id, src);
+            st.scripts.set(id, src);
+            if (!socket.destroyed) sendWs(socket, { id: msg.id, result: { identifier: id } });
+          }, 12);
+        } else if (msg.method === 'Page.removeScriptToEvaluateOnNewDocument') {
+          const rmId = msg.params?.identifier;
+          activeScripts.delete(rmId);
+          st.scripts.delete(rmId);
+          sendWs(socket, { id: msg.id, result: {} });
+        } else if (msg.method === 'Runtime.evaluate') {
+          let val = { ok: true };
+          try {
+            val = vm.runInContext(msg.params.expression, st.vmCtx);
+          } catch {}
+          sendWs(socket, { id: msg.id, result: { result: { type: 'object', value: val } } });
+        } else {
+          sendWs(socket, { id: msg.id, result: {} });
+        }
+      }
+    });
+  });
+
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+
+  const waitBroadcastDrain = async (daemonInst) => {
+    for (let w = 0; w < 60; w++) {
+      await new Promise((r) => setTimeout(r, 25));
+      if (!daemonInst._broadcastRunning && !daemonInst._broadcastPending) break;
+    }
+    await new Promise((r) => setTimeout(r, 40));
+  };
+
+  let thoughtDisposed = 0;
+  let thoughtGetConfigCalls = 0;
+  let daemon = null;
+  try {
+    daemon = new PrismDaemon({
+      rootDir: targetPluginDir,
+      overridePort: port,
+      pollIntervalMs: 1000,
+      silent: true,
+      thoughtService: {
+        getSanitizedConfig: () => {
+          thoughtGetConfigCalls += 1;
+          return { ok: true };
+        },
+        dispose: () => {
+          thoughtDisposed += 1;
+        },
+      },
+    });
+    daemon.claimOwnership();
+    daemon.running = true;
+    const tickRes = await daemon.tick();
+    assert.equal(tickRes.attached, 2, 'Expected both Window A and Window B attached');
+    const stA = pageState.get('page-a');
+    const stB = pageState.get('page-b');
+    assert.ok(stA.vmWin.__agPrism && stB.vmWin.__agPrism, 'Expected ui-runtime mounted inside both VM windows');
+
+    // SEC-2 Test: Child iframe (ctx 2) and isolated world (ctx 3) binding calls MUST be silently rejected!
+    const sockA = pageConns.get('page-a');
+    sendWs(sockA, {
+      method: 'Runtime.bindingCalled',
+      params: {
+        name: '__agPrismSetting',
+        payload: JSON.stringify({ key: 'palette', value: 'claude' }),
+        executionContextId: 2,
+      },
+    });
+    sendWs(sockA, {
+      method: 'Runtime.bindingCalled',
+      params: {
+        name: THOUGHT_BINDING,
+        payload: JSON.stringify({ id: 1, action: 'get-config' }),
+        executionContextId: 2,
+      },
+    });
+    sendWs(sockA, {
+      method: 'Runtime.bindingCalled',
+      params: {
+        name: THOUGHT_BINDING,
+        payload: JSON.stringify({ id: 2, action: 'get-config' }),
+        executionContextId: 3,
+      },
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    const cfgAfterUntrusted = JSON.parse(fs.readFileSync(path.join(targetPluginDir, 'config.json'), 'utf8'));
+    assert.equal(cfgAfterUntrusted.palette, 'obsidian', 'SEC-2: Child iframe binding must never mutate config.json');
+    assert.equal(thoughtGetConfigCalls, 0, 'SEC-2: Child iframe & isolated world must never invoke THOUGHT_BINDING');
+
+    // Main frame (ctx 1) binding call succeeds
+    sendWs(sockA, {
+      method: 'Runtime.bindingCalled',
+      params: {
+        name: THOUGHT_BINDING,
+        payload: JSON.stringify({ id: 3, action: 'get-config' }),
+        executionContextId: 1,
+      },
+    });
+    await new Promise((r) => setTimeout(r, 40));
+    assert.equal(thoughtGetConfigCalls, 1, 'Top-level main frame context must be permitted');
+
+    // Phase A (HS-1): Fire 68 rapid-fire setting updates from Window A (localWriteEpoch reaches 68)
+    const palettes = ['obsidian', 'claude', 'warm'];
+    const accents = ['follow', 'amber', 'iris', 'cobalt', 'mono'];
+    const motions = ['off', 'subtle', 'standard', 'ultra'];
+    for (let i = 1; i <= 68; i++) {
+      const patch =
+        i === 68
+          ? { palette: 'warm', accentTone: 'cobalt', motionLevel: 'subtle', omniModule: 'on' }
+          : {
+              palette: palettes[i % palettes.length],
+              accentTone: accents[i % accents.length],
+              motionLevel: motions[i % motions.length],
+              omniModule: i % 2 === 0 ? 'on' : 'off',
+            };
+      stA.vmWin.__agPrism.saveSettingsBatch(patch);
+    }
+    await waitBroadcastDrain(daemon);
+
+    assert.equal(stA.vmWin.__agPrism.getState().cfg.palette, 'warm');
+    assert.equal(stA.vmWin.__agPrism.getState().cfg.accentTone, 'cobalt');
+    assert.equal(stB.vmWin.__agPrism.getState().cfg.palette, 'warm', 'Window B must receive Window A cross-window sync');
+    assert.equal(stB.vmWin.__agPrism.getState().cfg.accentTone, 'cobalt');
+    assert.ok(
+      totalAddScriptCalls <= 20,
+      `HS-1: Single-flight coalescing should collapse 68 rapid clicks across 2 windows (got ${totalAddScriptCalls})`
+    );
+
+    // Phase B (Cross-window epoch isolation): Window B (localWriteEpoch 1..12 << Window A's 68!) rapid-fires 12 updates
+    for (let j = 1; j <= 12; j++) {
+      const patch =
+        j === 12
+          ? { palette: 'claude', accentTone: 'amber', motionLevel: 'ultra', omniModule: 'off' }
+          : {
+              palette: palettes[j % palettes.length],
+              accentTone: accents[j % accents.length],
+              motionLevel: motions[j % motions.length],
+              omniModule: j % 2 === 0 ? 'on' : 'off',
+            };
+      stB.vmWin.__agPrism.saveSettingsBatch(patch);
+    }
+    await waitBroadcastDrain(daemon);
+
+    assert.equal(stB.vmWin.__agPrism.getState().cfg.palette, 'claude', 'Window B must not suffer stale rebound');
+    assert.equal(stB.vmWin.__agPrism.getState().cfg.accentTone, 'amber');
+    assert.equal(
+      stA.vmWin.__agPrism.getState().cfg.palette,
+      'claude',
+      'Window A (with localWriteEpoch=68) must never drop sibling Window B updates (baseRefreshExpr omits __ackEpoch)'
+    );
+    assert.equal(stA.vmWin.__agPrism.getState().cfg.accentTone, 'amber');
+
+    // Phase C (Ctrl+Shift+R reload reset): Window A reloads (localWriteEpoch resets to 0) and rapid-fires 10 updates
+    sendWs(sockA, { method: 'Runtime.executionContextsCleared', params: {} });
+    sendWs(sockA, { method: 'Page.frameNavigated', params: { frame: { id: 'TOP_MAIN_FRAME_page-a_v2' } } });
+    const freshA = createWindowVm('page-a');
+    stA.vmWin = freshA.vmWin;
+    stA.vmCtx = freshA.vmCtx;
+    stA.mainCtxId = 10;
+    sendWs(sockA, {
+      method: 'Runtime.executionContextCreated',
+      params: { context: { id: 10, auxData: { frameId: 'TOP_MAIN_FRAME_page-a_v2', isDefault: true, type: 'default' } } },
+    });
+    for (const src of stA.scripts.values()) {
+      try {
+        vm.runInContext(src, stA.vmCtx);
+      } catch {}
+    }
+    assert.ok(stA.vmWin.__agPrism, 'Expected NewDocument scripts to mount Prism cleanly after simulated reload');
+
+    for (let k = 1; k <= 10; k++) {
+      const patch =
+        k === 10
+          ? { palette: 'obsidian', accentTone: 'iris', motionLevel: 'off', omniModule: 'on' }
+          : {
+              palette: palettes[k % palettes.length],
+              accentTone: accents[k % accents.length],
+              motionLevel: motions[k % motions.length],
+              omniModule: k % 2 === 0 ? 'on' : 'off',
+            };
+      stA.vmWin.__agPrism.saveSettingsBatch(patch);
+    }
+    await waitBroadcastDrain(daemon);
+
+    const finalDiskCfg = JSON.parse(fs.readFileSync(path.join(targetPluginDir, 'config.json'), 'utf8'));
+    assert.equal(finalDiskCfg.palette, 'obsidian');
+    assert.equal(finalDiskCfg.accentTone, 'iris');
+    assert.equal(finalDiskCfg.motionLevel, 'off');
+    assert.equal(finalDiskCfg.omniModule, 'on');
+
+    assert.equal(stA.vmWin.__agPrism.getState().cfg.palette, 'obsidian', 'Reloaded Window A must lock onto 10th update with 0 rebound');
+    assert.equal(stA.vmWin.__agPrism.getState().cfg.accentTone, 'iris');
+    assert.equal(stB.vmWin.__agPrism.getState().cfg.palette, 'obsidian', 'Window B must sync with reloaded Window A');
+    assert.equal(stB.vmWin.__agPrism.getState().cfg.accentTone, 'iris');
+    assert.ok(
+      activeScripts.size <= 4,
+      `HS-1: Active NewDocument script handles across 2 windows must never leak (got ${activeScripts.size})`
+    );
+
+    await daemon.stop(false);
+    assert.equal(thoughtDisposed, 1, 'CP-C: PrismDaemon.stop() must dispose lazy services');
+    daemon = null;
+  } finally {
+    if (daemon) await daemon.stop(false).catch(() => {});
+    await installPluginTool.uninstallPlugin({ targetDir: targetPluginDir, noCdp: true }).catch(() => {});
     for (const s of sockets) s.destroy();
     await new Promise((r) => server.close(r));
     fs.rmSync(workDir, { recursive: true, force: true });

@@ -1,3 +1,5 @@
+// Upstream: ATtacK030130/antigrative-dashboard v0.9.1 (MIT License — Copyright (c) 2026 AG Pulse contributors)
+// Integrated & adapted for Obsidian Prism under GPL-3.0-only compatibility terms.
 // Summary-only timing checks: no chunk timestamps are exposed by this host.
 // These flags mean unmeasurable/suspect, not proof of upstream buffering.
 export const RATE_VERSION = 2;

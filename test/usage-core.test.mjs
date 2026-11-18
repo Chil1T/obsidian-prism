@@ -216,4 +216,478 @@ test('analyzeTrajectoryForUsage metadata-only span interpolation & mergeUsageRec
   assert.equal(rollup.calls, 3);
 });
 
+test('v0.9.1 chatModel parsing, Swarm subagent token split, cacheHitRate, and workspace filtering with parent inheritance', () => {
+  const isoDay = '2026-11-15T10:30:00.000Z';
+  const mainRec = usageCore.analyzeTrajectoryForUsage(
+    {
+      trajectory: {
+        steps: [{ metadata: { createdAt: isoDay } }],
+        generatorMetadata: [
+          {
+            stepIndices: [0],
+            chatModel: {
+              modelDisplayName: 'Gemini 4 Carbon (High)',
+              usage: { inputTokens: 2000, cacheReadTokens: 18000, cacheWriteTokens: 0, outputTokens: 1000 },
+            },
+          },
+        ],
+      },
+    },
+    {
+      stepCount: 1,
+      lastModifiedTime: isoDay,
+      workspaces: [{ workspaceFolderAbsoluteUri: 'file:///c%3A/projects/obsidian-prism/' }],
+    },
+    'conv-main'
+  );
+  assert.equal(mainRec.workspace, 'obsidian-prism');
+  assert.equal(mainRec.subagent, false);
+  assert.equal(mainRec.calls, 1);
+
+  const subRec = usageCore.analyzeTrajectoryForUsage(
+    {
+      trajectory: {
+        steps: [{ metadata: { createdAt: isoDay } }],
+        generatorMetadata: [
+          {
+            stepIndices: [0],
+            chatModel: {
+              modelDisplayName: 'Gemini 4 Hydrogen (High)',
+              usage: { inputTokens: 5000, cacheReadTokens: 15000, cacheWriteTokens: 0, outputTokens: 2000 },
+            },
+          },
+        ],
+      },
+    },
+    {
+      stepCount: 1,
+      lastModifiedTime: isoDay,
+      trajectoryMetadata: { parentConversationId: 'conv-main', nestingDepth: 1 },
+    },
+    'conv-sub-1'
+  );
+  assert.equal(subRec.subagent, true);
+  assert.equal(subRec.parentId, 'conv-main');
+  assert.equal(subRec.workspace, ''); // subagent summary lacks workspace, should inherit from parentId during rollup
+
+  const otherWsRec = usageCore.analyzeTrajectoryForUsage(
+    {
+      trajectory: {
+        steps: [{ metadata: { createdAt: isoDay } }],
+        generatorMetadata: [
+          {
+            stepIndices: [0],
+            chatModel: {
+              modelDisplayName: 'Claude Opus 4.6',
+              usage: { inputTokens: 4000, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 1000 },
+            },
+          },
+        ],
+      },
+    },
+    {
+      stepCount: 1,
+      lastModifiedTime: isoDay,
+      workspaceUri: 'file:///Users/dev/another-repo',
+    },
+    'conv-other'
+  );
+  assert.equal(otherWsRec.workspace, 'another-repo');
+
+  const now = new Date('2026-11-16T12:00:00.000Z');
+  const fullRollup = usageCore.aggregateUsageRollup([mainRec, subRec, otherWsRec], 'all', 0, 'zh-CN', now);
+  assert.equal(fullRollup.sessions, 2);
+  assert.equal(fullRollup.subagentSessions, 1);
+  assert.equal(fullRollup.mainTokens, 21000 + 5000);
+  assert.equal(fullRollup.subagentTokens, 22000);
+  assert.equal(fullRollup.tokens, 48000);
+  // Total input = (2000+18000) + (5000+15000) + 4000 = 44000, cacheRead = 33000 -> 0.75
+  assert.ok(Math.abs(fullRollup.cacheHitRate - 0.75) < 1e-6);
+  assert.equal(fullRollup.workspaces.length, 2);
+  assert.equal(fullRollup.workspaces[0].id, 'obsidian-prism');
+  assert.equal(fullRollup.workspaces[0].tokens, 43000); // includes inherited subagent!
+
+  // Filtered by obsidian-prism workspace
+  const wsRollup = usageCore.aggregateUsageRollup([mainRec, subRec, otherWsRec], 'all', 0, 'zh-CN', now, {
+    workspace: 'obsidian-prism',
+  });
+  assert.equal(wsRollup.sessions, 1);
+  assert.equal(wsRollup.subagentSessions, 1);
+  assert.equal(wsRollup.tokens, 43000);
+  assert.equal(wsRollup.subagentTokens, 22000);
+});
+
+test('v0.9.1 quota helpers: Argon weekly pool matching, linear depletion forecast, and multi-language pace status', () => {
+  const nowMs = Date.parse('2026-11-18T06:00:00.000Z');
+  const groups = [
+    {
+      id: 'gemini',
+      name: 'Gemini',
+      windows: {
+        '5h': { available: true, id: 'gemini-5h', remaining: 0.72, resetAt: new Date(nowMs + 2.5 * 3600 * 1000).toISOString() },
+        weekly: { available: true, id: 'gemini-weekly', remaining: 0.84, resetAt: new Date(nowMs + 4 * 86400 * 1000).toISOString() },
+      },
+    },
+    {
+      id: 'gemini-argon-wtu',
+      name: 'Gemini (Argon)',
+      windows: {
+        '5h': { available: false },
+        weekly: { available: true, id: 'gemini-argon-wtu-weekly', remaining: 0.2, resetAt: new Date(nowMs + 5 * 86400 * 1000).toISOString() },
+      },
+    },
+    {
+      id: 'claude',
+      name: 'Claude / GPT',
+      windows: {
+        '5h': { available: true, id: 'claude-5h', remaining: 0.9, resetAt: new Date(nowMs + 4 * 3600 * 1000).toISOString() },
+        weekly: { available: true, id: 'claude-weekly', remaining: 0.92, resetAt: new Date(nowMs + 6 * 86400 * 1000).toISOString() },
+      },
+    },
+  ];
+
+  assert.equal(usageCore.chooseQuotaGroup(groups, 'Gemini 4 Argon (High)').id, 'gemini-argon-wtu');
+  assert.equal(usageCore.chooseQuotaGroup(groups, 'Gemini 4 Carbon (High)').id, 'gemini');
+  assert.equal(usageCore.chooseQuotaGroup(groups, 'Claude Sonnet 4.6').id, 'claude');
+  assert.equal(usageCore.chooseQuotaGroup(groups, 'Gemini 4 Carbon', 'claude').id, 'claude');
+
+  // Gemini 5h: 2.5h elapsed, 28% used -> projected another 28% drop -> endRemaining ~ 0.44, status 'ok'
+  const fcOk = usageCore.quotaForecast(groups[0].windows['5h'], '5h', nowMs);
+  assert.equal(fcOk.status, 'ok');
+  assert.equal(fcOk.willExhaust, false);
+  assert.ok(Math.abs(fcOk.endRemaining - 0.44) < 0.01);
+  assert.ok(Math.abs(fcOk.forecastDrop - 0.28) < 0.01);
+
+  // Argon weekly: 2 days elapsed out of 7, 80% already burned (remaining 0.20) -> will exhaust well before 5 days reset!
+  const fcExhaust = usageCore.quotaForecast(groups[1].windows.weekly, 'weekly', nowMs);
+  assert.equal(fcExhaust.status, 'exhaust');
+  assert.equal(fcExhaust.willExhaust, true);
+  assert.equal(fcExhaust.endRemaining, 0);
+  assert.ok(Math.abs(fcExhaust.forecastDrop - 0.2) < 0.01);
+
+  const paceZh = usageCore.groupQuotaPace(groups[1], 'zh-CN', nowMs);
+  assert.equal(paceZh.status, 'exhaust');
+  assert.equal(paceZh.label, '提前耗尽');
+  assert.match(paceZh.detail, /预计 .*后耗尽/);
+
+  const paceEn = usageCore.groupQuotaPace(groups[0], 'en', nowMs);
+  assert.equal(paceEn.status, 'ok');
+  assert.equal(paceEn.label, 'On track');
+});
+
+test('v0.9.1 telemetry sidecar isolation & selectServerByCdpLineage multi-instance matching', async () => {
+  const { platformPaths } = await import('../vendor/pulse-dashboard/compat/platform.mjs');
+  const { selectServerByCdpLineage, extractHubPort } = await import('../vendor/pulse-dashboard/sidecars/panel/discovery.mjs');
+
+  const defaultPaths = platformPaths();
+  assert.ok(
+    defaultPaths.data.includes('obsidian-prism'),
+    `Default telemetry data dir must be isolated under obsidian-prism, got ${defaultPaths.data}`
+  );
+  assert.equal(
+    defaultPaths.data.includes('antigravity-pulse'),
+    false,
+    'Must never collide with external antigravity-pulse data lock directory'
+  );
+
+  // Simulate two Antigravity Electron instances (PID 1000 on CDP 9222 -> child language_server 1050; PID 2000 on CDP 9223 -> child helper 2010 -> language_server 2050)
+  const allRows = [
+    { ProcessId: 1000, ParentProcessId: 100, Name: 'Antigravity.exe', CommandLine: 'Antigravity.exe --remote-debugging-port=9222' },
+    { ProcessId: 1050, ParentProcessId: 1000, Name: 'language_server.exe', CommandLine: 'language_server.exe --standalone --hub-port 51111' },
+    { ProcessId: 2000, ParentProcessId: 100, Name: 'Antigravity.exe', CommandLine: 'Antigravity.exe --remote-debugging-port=9223' },
+    { ProcessId: 2010, ParentProcessId: 2000, Name: 'Antigravity.exe', CommandLine: 'Antigravity.exe --type=utility' },
+    { ProcessId: 2050, ParentProcessId: 2010, Name: 'language_server.exe', CommandLine: 'language_server.exe --standalone --hub-port=52222' },
+  ];
+  const candidates = [allRows[1], allRows[4]];
+  const portOwners = new Map([
+    [9222, new Set([1000])],
+    [9223, new Set([2000])],
+  ]);
+
+  const matched9223 = selectServerByCdpLineage(candidates, allRows, portOwners, 9223);
+  assert.equal(matched9223.length, 1);
+  assert.equal(matched9223[0].ProcessId, 2050);
+  assert.equal(extractHubPort(matched9223[0].CommandLine), 52222);
+
+  const matched9222 = selectServerByCdpLineage(candidates, allRows, portOwners, 9222);
+  assert.equal(matched9222.length, 1);
+  assert.equal(matched9222[0].ProcessId, 1050);
+  assert.equal(extractHubPort(matched9222[0].CommandLine), 51111);
+});
+
+test('home-studio-panel backfills Swarm subagent summaries via usageBridge.listSummaries flat fields without deleting cached subagents', async () => {
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevStorage = globalThis.localStorage;
+
+  let listSummariesCalls = 0;
+  let fetchBatchItems = [];
+  const dKey = usageCore.homeDayKey(new Date(1763400000 * 1000));
+  const storeMem = new Map();
+
+  globalThis.localStorage = {
+    getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+    setItem: (k, v) => storeMem.set(k, String(v)),
+  };
+  globalThis.document = {
+    title: 'obsidian-prism-dev - Antigravity',
+    body: {},
+    querySelector: () => null,
+  };
+  globalThis.window = {
+    __agPrismUsageBridge: {
+      isOnline: () => true,
+      listSummaries: async () => {
+        listSummariesCalls += 1;
+        return {
+          ok: true,
+          summaries: [
+            {
+              id: 'sub-swarm-1',
+              stepCount: 6,
+              lastModifiedSec: 1763400050,
+              createdSec: 1763400000,
+              subagent: true,
+              parentId: 'main-conv-1',
+              rootId: 'main-conv-1',
+            },
+          ],
+        };
+      },
+      fetchBatch: async (items) => {
+        fetchBatchItems = items;
+        return {
+          ok: true,
+          records: items.map((it) => ({
+            id: it.id,
+            mode: 'full',
+            record: {
+              cascadeId: it.id,
+              stepCount: it.stepCount,
+              lastModifiedSec: it.lastModifiedSec,
+              gmCount: 2,
+              subagent: it.subagent,
+              workspace: it.workspace || '',
+              parentId: it.parentId || '',
+              calls: 2,
+              days: {
+                [dKey]: {
+                  calls: 2,
+                  input: 4000,
+                  output: 1000,
+                  cacheRead: 6000,
+                  cacheWrite: 0,
+                  total: 11000,
+                  hours: new Array(24).fill(0),
+                  models: { 'Gemini 4 Carbon': { input: 4000, output: 1000, cacheRead: 6000, cacheWrite: 0, total: 11000, calls: 2 } },
+                },
+              },
+            },
+          })),
+        };
+      },
+    },
+  };
+
+  try {
+    const ctl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:rollup:v101',
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({
+        store: {
+          getState: () => ({
+            trajectorySummaries: {
+              // Redux only exposes main-conv-1, NOT sub-swarm-1!
+              summaries: {
+                'main-conv-1': {
+                  stepCount: 8,
+                  lastModifiedTime: { seconds: 1763400060 },
+                  workspaces: [{ workspaceFolderAbsoluteUri: 'file:///c:/projects/obsidian-prism' }],
+                },
+              },
+            },
+          }),
+        },
+        svc: {},
+      }),
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+
+    await ctl.refreshUsageRollup(true);
+    assert.equal(listSummariesCalls, 1, 'Must invoke usageBridge.listSummaries()');
+    assert.equal(ctl.getUsageRecordsCount(), 2, 'Both main-conv-1 and backfilled sub-swarm-1 must be retained');
+    const subItem = fetchBatchItems.find((x) => x.id === 'sub-swarm-1');
+    assert.ok(subItem, 'sub-swarm-1 must be included in fetchBatch');
+    assert.equal(subItem.subagent, true);
+    assert.equal(subItem.parentId, 'main-conv-1');
+    assert.equal(subItem.lastModifiedSec, 1763400050);
+
+    // Simulate temporary daemon bridge offline on subsequent refresh: cached sub-swarm-1 must NOT be deleted while parent main-conv-1 is present!
+    globalThis.window.__agPrismUsageBridge = null;
+    await ctl.refreshUsageRollup(true);
+    assert.equal(ctl.getUsageRecordsCount(), 2, 'Cached subagent must not be purged while parent conversation remains active');
+
+    ctl.flushUsageCacheNow();
+    const persisted = JSON.parse(storeMem.get('test:rollup:v101') || '{}');
+    const wsRollup = usageCore.aggregateUsageRollup(Object.values(persisted), 'all', 0, 'zh-CN', new Date(1763400100 * 1000), {
+      workspace: 'obsidian-prism',
+    });
+    assert.equal(wsRollup.tokens, 22000, 'Subagent tokens must inherit parent workspace during workspace filtering');
+    assert.equal(wsRollup.subagentTokens, 11000);
+  } finally {
+    if (prevWin === undefined) delete globalThis.window;
+    else globalThis.window = prevWin;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevStorage;
+  }
+});
+
+test('UX-4 & UX-9 Effort Slider off-mode trigger tint cleanup and 5-language title resolution', async () => {
+  const sliderCoexist = (await import('../vendor/effort-slider/slider-coexist.js')).default || (await import('../vendor/effort-slider/slider-coexist.js'));
+  const upstreamSlider = (await import('../vendor/effort-slider/upstream-client.js')).default || (await import('../vendor/effort-slider/upstream-client.js'));
+
+  // Minimal DOM mock for slider-coexist off-mode cleanup
+  const stylesById = new Map();
+  const effortSpan = {
+    style: { color: 'rgb(245, 158, 11)', opacity: '1', fontWeight: '600' },
+    attrs: new Map([['data-ces-part', 'trigger-effort']]),
+    removeAttribute(k) {
+      this.attrs.delete(k);
+    },
+  };
+  const enhancedPanel = {
+    classes: new Set(['ces-ag-panel-enhanced']),
+    classList: {
+      remove(c) {
+        enhancedPanel.classes.delete(c);
+      },
+    },
+  };
+  const mockDoc = {
+    documentElement: {
+      langAttr: 'en',
+      getAttribute(k) {
+        return k === 'data-ag-cs-lang' ? this.langAttr : null;
+      },
+      appendChild(el) {
+        if (el.id) stylesById.set(el.id, el);
+      },
+    },
+    head: {
+      appendChild(el) {
+        if (el.id) stylesById.set(el.id, el);
+      },
+    },
+    body: {},
+    createElement(tag) {
+      return {
+        tagName: tag.toUpperCase(),
+        id: '',
+        textContent: '',
+        remove() {
+          if (this.id) stylesById.delete(this.id);
+        },
+      };
+    },
+    getElementById(id) {
+      return stylesById.get(id) || null;
+    },
+    querySelectorAll(sel) {
+      if (sel.includes('trigger-effort')) return [effortSpan];
+      if (sel === '.ces-ag-panel-enhanced') return [enhancedPanel];
+      return [];
+    },
+  };
+  const mockWin = { document: mockDoc };
+  const ctl = sliderCoexist.createEffortSliderController({ window: mockWin, document: mockDoc });
+
+  ctl.sync({ effortSliderModule: 'off' });
+  assert.equal(effortSpan.style.color, '', 'Off mode must strip inline trigger effort color');
+  assert.equal(effortSpan.style.fontWeight, '', 'Off mode must strip inline trigger effort fontWeight');
+  assert.equal(effortSpan.attrs.has('data-ces-part'), false, 'Off mode must remove data-ces-part="trigger-effort"');
+  assert.equal(enhancedPanel.classes.has('ces-ag-panel-enhanced'), false, 'Off mode must strip .ces-ag-panel-enhanced');
+  const hideCss = stylesById.get('ag-prism-effort-slider-hide')?.textContent || '';
+  assert.ok(hideCss.includes('.ces-ag-section') && hideCss.includes('trigger-effort'), 'Hide CSS must cover .ces-ag-section and trigger-effort');
+
+  // Verify upstream mountCodexEffortSlider localizes aria-label to English / Japanese via data-ag-cs-lang
+  const makeNode = (tag) => {
+    const attrs = new Map();
+    const children = [];
+    const styleObj = {
+      setProperty(k, v) {
+        styleObj[k] = v;
+      },
+      removeProperty(k) {
+        delete styleObj[k];
+      },
+      getPropertyValue(k) {
+        return styleObj[k] || '';
+      },
+    };
+    const clsSet = new Set();
+    return {
+      tagName: tag.toUpperCase(),
+      className: '',
+      classList: {
+        add: (...cs) => cs.forEach((c) => clsSet.add(c)),
+        remove: (...cs) => cs.forEach((c) => clsSet.delete(c)),
+        toggle: (c, f) => (f === undefined ? (clsSet.has(c) ? clsSet.delete(c) : clsSet.add(c)) : f ? clsSet.add(c) : clsSet.delete(c)),
+        contains: (c) => clsSet.has(c),
+      },
+      innerHTML: '',
+      style: styleObj,
+      children,
+      setAttribute: (k, v) => attrs.set(k, String(v)),
+      getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+      removeAttribute: (k) => attrs.delete(k),
+      appendChild: (c) => { children.push(c); return c; },
+      removeChild: (c) => {
+        const idx = children.indexOf(c);
+        if (idx >= 0) children.splice(idx, 1);
+      },
+      addEventListener() {},
+      removeEventListener() {},
+      getBoundingClientRect: () => ({ left: 0, width: 120, top: 0, height: 24 }),
+    };
+  };
+  let curSliderLang = 'en';
+  const sliderDoc = {
+    documentElement: { getAttribute: (k) => (k === 'data-ag-cs-lang' ? curSliderLang : null) },
+    head: makeNode('head'),
+    getElementById: () => null,
+    createElement: makeNode,
+  };
+  const hostBox = makeNode('div');
+  const mountedEn = upstreamSlider.mountCodexEffortSlider({
+    container: hostBox,
+    document: sliderDoc,
+    window: { document: sliderDoc },
+    seat: { getLevels: () => ['low', 'medium', 'high'], getIndex: () => 1, setIndex() {} },
+  });
+  assert.equal(hostBox.children[0].getAttribute('aria-label'), 'Reasoning Effort');
+  mountedEn.unmount();
+
+  curSliderLang = 'ja';
+  const hostBoxJa = makeNode('div');
+  const mountedJa = upstreamSlider.mountCodexEffortSlider({
+    container: hostBoxJa,
+    document: sliderDoc,
+    window: { document: sliderDoc },
+    seat: { getLevels: () => ['low', 'medium', 'high'], getIndex: () => 1, setIndex() {} },
+  });
+  assert.equal(hostBoxJa.children[0].getAttribute('aria-label'), '推論レベル');
+  mountedJa.unmount();
+  ctl.destroy();
+});
+
 

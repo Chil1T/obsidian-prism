@@ -36,30 +36,6 @@ const LEGACY_PATCH_END_MARKER = "/* __AG_CLAUDE_STYLE_END__ */";
 const CODEX_SLIDER_MARKER = "/* __AG_CODEX_EFFORT_SLIDER_START__ */";
 const CHINESE_INJECTION_MARKER = "Antigravity Chinese Localization Injection";
 
-const FALLBACK_REMOVE_EXPRESSION = `(() => {
-  try { window.__agPrismTelemetry?.destroy?.(); } catch {}
-  try { window.__agPrismEffortSlider?.destroy?.(); } catch {}
-  try {
-    if (window.__agPrism && typeof window.__agPrism.destroy === 'function') {
-      window.__agPrism.destroy();
-    } else if (window.__agClaudeStyle && typeof window.__agClaudeStyle.destroy === 'function') {
-      window.__agClaudeStyle.destroy();
-    }
-  } catch {}
-  try {
-    document.getElementById('ag-prism-css')?.remove();
-    document.getElementById('ag-claude-style-css')?.remove();
-    const docEl = document.documentElement;
-    if (docEl) {
-      docEl.removeAttribute('data-ag-prism');
-      for (const attr of Array.from(docEl.attributes)) {
-        if (attr.name.startsWith('data-ag-cs-')) docEl.removeAttribute(attr.name);
-      }
-    }
-  } catch {}
-  return { removed: true };
-})()`;
-
 const LEGACY_ONLY_CLEANUP_EXPRESSION = `(() => {
   try {
     document.getElementById('ag-claude-style-css')?.remove();
@@ -743,7 +719,7 @@ function spawnDeferredFileSwap(stagedPath, targetPath, opts = {}) {
     removeExpr:
       mode === "clean-legacy"
         ? opts.removeExpr || LEGACY_ONLY_CLEANUP_EXPRESSION
-        : opts.removeExpr || FALLBACK_REMOVE_EXPRESSION,
+        : opts.removeExpr || getCdp().REMOVE_EXPRESSION,
     cdpPort: opts.cdpPort ?? null,
     hostPid: opts.hostPid ?? null,
     pollIntervalMs: Math.max(100, Number(opts.pollIntervalMs) || 1500),
@@ -1290,10 +1266,7 @@ async function applyCdpLive(mode, opts = {}) {
   if (!Array.isArray(pages) || pages.length === 0) {
     return { ok: false, skipped: true, reason: "no-pages" };
   }
-  const skipRe = /Untitled|launchpad/i;
-  const targetPages = opts.includeAllPages
-    ? pages
-    : pages.filter((p) => !skipRe.test(`${p.title || ""} ${p.url || ""}`));
+  const targetPages = opts.includeAllPages ? pages : pages.filter(cdp.isEligibleTarget);
   if (targetPages.length === 0) {
     return { ok: false, skipped: true, reason: "no-active-pages" };
   }

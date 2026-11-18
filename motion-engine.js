@@ -8,20 +8,41 @@ default:{stiffness:380,damping:26,mass:1},gentle:{stiffness:260,damping:26,mass:
 micro:{stiffness:440,damping:24,mass:.85},indicator:{stiffness:430,damping:32,mass:.9},
 });
 const TIERS=new Set(['off','subtle','standard','ultra']);
-const CACHE=new Map(),ANIMS=new WeakMap(),ROOTS=new WeakMap(),CDS=new WeakMap(),TIMERS=new WeakMap();
+const CACHE=new Map(),ANIMS=new WeakMap(),ROOTS=new WeakMap(),CDS=new WeakMap(),TIMERS=new WeakMap(),EXCL_CACHE=new WeakMap();
 const HOST_SEL='button, a, [role="button"], summary, [data-icon-host]';
 const THOUGHT_CLS_RE=/\b(ag-prism-thought-raw-toggle|ag-prism-thought-overlay)\b/;
 const BEZ='cubic-bezier(0.22, 1.25, 0.36, 1)',clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+let exclEpoch=1;
 
-// Isolate Thought Translator overlay & raw-toggle controls from micro-interaction spring wrapping
+function invalidateExclusionCache(){exclEpoch=(exclEpoch+1)|0;}
+
+// Isolate Thought Translator overlay & raw-toggle controls from micro-interaction spring wrapping (WeakMap cached for 300Hz pointerover)
 function isThoughtExcluded(el){
-let cur=el;
-while(cur){
-const cls=String((cur.getAttribute&&cur.getAttribute('class'))||cur.className||'');
-if(THOUGHT_CLS_RE.test(cls)||(cur.hasAttribute&&cur.hasAttribute('data-prism-ignore')))return true;
-cur=cur.parentElement||cur.parentNode||null;
+if(!el||typeof el!=='object')return false;
+const bucket=((typeof performance!=='undefined'&&performance.now?performance.now():Date.now())*(1/48))|0;
+const tag=(exclEpoch<<20)^bucket;
+const hitC=EXCL_CACHE.get(el);
+const topP=el.parentElement||el.parentNode||null;
+const topCls=String((el.getAttribute&&el.getAttribute('class'))||el.className||'');
+const topIg=Boolean(el.hasAttribute&&el.hasAttribute('data-prism-ignore'));
+if(hitC&&hitC.tag===tag&&hitC.p===topP&&hitC.cls===topCls&&hitC.ig===topIg)return hitC.v;
+const visited=[];
+let cur=el,res=false;
+while(cur&&typeof cur==='object'){
+const p=cur.parentElement||cur.parentNode||null;
+const cls=cur===el?topCls:String((cur.getAttribute&&cur.getAttribute('class'))||cur.className||'');
+const ig=cur===el?topIg:Boolean(cur.hasAttribute&&cur.hasAttribute('data-prism-ignore'));
+if(ig||THOUGHT_CLS_RE.test(cls)){res=true;visited.push({n:cur,p,cls,ig});break;}
+const c=EXCL_CACHE.get(cur);
+if(c&&c.tag===tag&&c.p===p&&c.cls===cls&&c.ig===ig){res=c.v;break;}
+visited.push({n:cur,p,cls,ig});
+cur=p;
 }
-return false;
+for(let i=0;i<visited.length;i++){
+const it=visited[i];
+EXCL_CACHE.set(it.n,{tag,p:it.p,cls:it.cls,ig:it.ig,v:res});
+}
+return res;
 }
 
 function prefersReducedMotion(ov){
@@ -278,15 +299,17 @@ if(ROOTS.has(r))return ROOTS.get(r);
 const cd=clamp(+(opts.cooldownMs??150),40,1000);
 const gate=h=>{const now=Date.now();if(now-(CDS.get(h)||0)<cd)return false;CDS.set(h,now);return true;};
 const onOver=e=>{
-if(!e||isThoughtExcluded(e.target))return;
+if(!e)return;
 const tier=resolveTier(opts);if(tier==='off'||tier==='subtle')return;
+if(isThoughtExcluded(e.target))return;
 const t=findTarget(e.target);
 if(!t||isDis(t.hostEl)||(e.relatedTarget&&t.hostEl.contains&&t.hostEl.contains(e.relatedTarget)))return;
 if(gate(t.hostEl))triggerIcon(t.hostEl,'hover',opts);
 };
 const onFocus=e=>{
-if(!e||isThoughtExcluded(e.target))return;
+if(!e)return;
 const tier=resolveTier(opts);if(tier==='off'||tier==='subtle')return;
+if(isThoughtExcluded(e.target))return;
 try{if(e.target.matches&&!e.target.matches(':focus-visible'))return;}catch(_){}
 const t=findTarget(e.target);if(t&&!isDis(t.hostEl)&&gate(t.hostEl))triggerIcon(t.hostEl,'hover',opts);
 };
@@ -316,5 +339,5 @@ r.removeEventListener('pointerover',onOver);r.removeEventListener('focusin',onFo
 ROOTS.set(r,binding);return binding;
 }
 
-return Object.freeze({SPRING_PRESETS,prefersReducedMotion,getMotionTier,springLinear,spring,stagger,glideIndicator,drawStroke,bindMicroInteractions,triggerIcon});
+return Object.freeze({SPRING_PRESETS,prefersReducedMotion,getMotionTier,springLinear,spring,stagger,glideIndicator,drawStroke,bindMicroInteractions,triggerIcon,isThoughtExcluded,invalidateExclusionCache});
 });

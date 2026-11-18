@@ -447,10 +447,10 @@ function createPulseMockEnv({ cascadeId = '6546d8a7-52c2-42df-82c0-85aa82cedf9c'
   };
 }
 
-test('pulse-vial-bridge stays strictly under 19,500 bytes budget, avoids innerHTML, and supports browser UMD + CJS', () => {
+test('pulse-vial-bridge stays strictly under 31,000 bytes budget, avoids innerHTML, and supports browser UMD + CJS', () => {
   const src = fs.readFileSync(BRIDGE_PATH, 'utf8');
   const byteSize = Buffer.byteLength(src.replace(/\r\n/g, '\n'), 'utf8');
-  assert.ok(byteSize < 19500, `Expected < 19500 bytes, got ${byteSize}`);
+  assert.ok(byteSize < 31000, `Expected < 31000 bytes, got ${byteSize}`);
   assert.equal(src.includes('.innerHTML'), false, 'Bridge must use TrustedHTML-safe DOM creation without innerHTML');
 
   assert.equal(bridgeMod.STORAGE_KEY, 'agCs.pulseVialMode.v1');
@@ -551,8 +551,8 @@ test('peaceful coexistence: preserves #ag-pulse-status-bar, __agPulseRuntimeVers
     assert.deepEqual(segColors, ['#1b49b2', '#3186ff', '#5cc6fc']);
     const card = sr.getElementById('context-card');
     assert.equal(card.getAttribute('data-ag-pulse-vial-mode'), 'vial');
-    assert.equal(card.getAttribute('data-ag-pulse-card-width'), '408');
-    assert.equal(card.style.getPropertyValue('--pv-cx'), '-120px');
+    assert.equal(card.getAttribute('data-ag-pulse-card-width'), '464');
+    assert.equal(card.style.getPropertyValue('--pv-cx'), '-176px');
 
     const toggleBtn = sr.querySelector('[data-ag-pulse-vial-toggle="1"]');
     assert.equal(toggleBtn?.textContent, '实体试管');
@@ -851,6 +851,457 @@ test('cross-closure hot re-injection idempotence: purges legacy legacy-style orp
     assert.equal(sr.querySelectorAll('.pv-btn').length, 0);
   } finally {
     lastInst?.destroy?.();
+    if (prevDoc !== undefined) globalThis.document = prevDoc;
+  }
+});
+
+test('v1.0.1 interactive slice hover, >=80% /compact button, 5h+weekly quota forecast, sibling pool switcher, Swarm split & #five-quota-section yield', async () => {
+  const env = createPulseMockEnv();
+  const host = env.getPulseHost();
+  const sr = host.shadowRoot;
+  const composerInput = env.doc.createElement('textarea');
+  env.doc.body.appendChild(composerInput);
+
+  const nowMs = Date.now();
+  const capturedInputs = [];
+  env.win.agPulseHost = {
+    getMetrics: async (input) => {
+      capturedInputs.push(input);
+      return {
+        connection: 'live',
+        speed: {
+          tps: 62.5,
+          latestTps: 0,
+          ttftSeconds: 0.48,
+          rounds: 5,
+          modelSeconds: 6.0,
+          toolSeconds: 3.0,
+          taskUsage: {
+            subagents: 3,
+            own: { totalTokens: 140000 },
+            delegated: { totalTokens: 85000 },
+            total: { totalTokens: 225000 },
+          },
+          context: {
+            usedTokens: 430080,
+            maxTokens: 512000,
+            usedFraction: 0.84,
+            model: 'Gemini 4 Carbon (High)',
+            sampledAt: '2020-01-01T00:00:00Z',
+          },
+        },
+        groups: [
+          {
+            id: 'gemini',
+            name: 'Gemini',
+            windows: {
+              '5h': { available: true, id: 'gemini-5h', remaining: 0.65, resetAt: new Date(nowMs + 2 * 3600 * 1000).toISOString() },
+              weekly: { available: true, id: 'gemini-weekly', remaining: 0.80, resetAt: new Date(nowMs + 4 * 86400 * 1000).toISOString() },
+            },
+          },
+          {
+            id: 'gemini-argon-wtu',
+            name: 'Gemini (Argon)',
+            windows: {
+              '5h': { available: false },
+              weekly: { available: true, id: 'gemini-argon-wtu-weekly', remaining: 0.25, resetAt: new Date(nowMs + 5 * 86400 * 1000).toISOString() },
+            },
+          },
+        ],
+      };
+    },
+  };
+
+  const prevDoc = globalThis.document;
+  delete globalThis.document;
+  const bridge = bridgeMod.mountPulseVialBridge({
+    win: env.win,
+    doc: env.doc,
+    storage: env.storage,
+    vialCore,
+    autoPoll: false,
+    allowMultiple: true,
+  });
+
+  try {
+    await bridge.sync();
+
+    // 1. Must NEVER pass usageSync: true in background/popover getMetrics calls
+    for (const inp of capturedInputs) {
+      assert.equal(Boolean(inp?.usageSync), false, 'getMetrics call must never request blocking usageSync: true');
+    }
+
+    // 2. High water >= 80% exposes /compact button and fills composer on click
+    const compactBtn = sr.querySelector('[data-ag-pulse-compact="1"]');
+    assert.ok(compactBtn && compactBtn.hidden === false, '/compact button must be visible when fill >= 80%');
+    compactBtn.dispatchEvent({ type: 'click' });
+    assert.equal(composerInput.value, '/compact');
+
+    // 3. Hovering .pv-seg updates hoveredSlice (0/1/2) & telemetry readout, and resets on pointerleave
+    const segs = sr.querySelectorAll('[data-layer-slice]');
+    assert.equal(segs.length, 3);
+    segs[2].dispatchEvent({ type: 'pointerenter' });
+    assert.equal(bridge.getDebugState().hoveredSlice, 2);
+    assert.match(sr.querySelector('[data-ag-pulse-telemetry="1"]').textContent, /工具输出/);
+    segs[2].dispatchEvent({ type: 'pointerleave' });
+    assert.equal(bridge.getDebugState().hoveredSlice, -1);
+    assert.match(sr.querySelector('[data-ag-pulse-telemetry="1"]').textContent, /TTFT/);
+
+    // 4. Lower-half quota panel renders 5h + weekly solid & hatched forecast bars, sibling switcher, and Swarm split
+    const qtSec = sr.querySelector('[data-ag-pulse-quotas="1"]');
+    assert.ok(qtSec && qtSec.hidden === false, 'Quota section must render when external #five-quota-section is absent');
+    assert.equal(sr.querySelector('[data-ag-pulse-quota-title="1"]').textContent, 'Gemini');
+    assert.equal(qtSec.querySelectorAll('.pv-qrow').length, 2, 'Gemini group has both 5h and weekly windows');
+    assert.ok(qtSec.querySelector('[data-ag-pulse-forecast="5h"]'), 'Must render hatched linear forecast element');
+    const taskSplit = sr.querySelector('[data-ag-pulse-qtask="1"]');
+    assert.equal(taskSplit.hidden, false);
+    assert.match(taskSplit.textContent, /Swarm\/子代理\(3\)/);
+
+    // Click sibling Argon pill -> switches to Argon weekly window & pace warning
+    const qTabs = sr.querySelectorAll('[data-ag-pulse-qgroup]');
+    assert.equal(qTabs.length, 2);
+    qTabs[1].dispatchEvent({ type: 'click' });
+    assert.equal(sr.querySelector('[data-ag-pulse-quota-title="1"]').textContent, 'Gemini (Argon)');
+    assert.equal(qtSec.querySelectorAll('.pv-qrow').length, 1, 'Argon group renders only its weekly window');
+    assert.equal(sr.querySelector('[data-ag-pulse-pace="1"]').getAttribute('data-pace'), 'exhaust');
+
+    // 5. If external antigravity-pulse v0.9.1 already rendered #five-quota-section, yield to avoid duplicate quota bars
+    const extQuota = env.doc.createElement('section');
+    extQuota.id = 'five-quota-section';
+    sr.getElementById('context-card').appendChild(extQuota);
+    await bridge.sync();
+    assert.equal(qtSec.hidden, true, 'Must auto-hide .pv-qt when external #five-quota-section is present');
+  } finally {
+    bridge.destroy();
+    if (prevDoc !== undefined) globalThis.document = prevDoc;
+  }
+});
+
+test('v0.9.1 live compatibility: [data-ag-pulse-bar="true"][data-scope="main"] host, .context-hero 2-row grid, .quota-details yield, 30 --pulse-* overrides, nested #usage-dashboard ShadowRoot UD_CSS, and data-layout="blocked" guard', async () => {
+  const env = createPulseMockEnv();
+  const observerRecords = [];
+  env.win.MutationObserver = class {
+    constructor(cb) {
+      this.cb = cb;
+      observerRecords.push(this);
+    }
+    observe() {}
+    disconnect() {}
+  };
+
+  // Replace legacy #ag-pulse-status-bar with v0.9.1 data-ag-pulse-bar="true" [data-scope="main"] host
+  const legacyHost = env.getPulseHost();
+  legacyHost.remove();
+  legacyHost.isConnected = false;
+
+  const v9Host = env.doc.createElement('div');
+  v9Host.setAttribute('data-ag-pulse-bar', 'true');
+  v9Host.setAttribute('data-scope', 'main');
+  v9Host.setAttribute('data-pulse-theme', 'dark');
+  const sr = v9Host.attachShadow({ mode: 'open' });
+
+  const bar = env.doc.createElement('div');
+  bar.className = 'bar';
+  const ctxChip = env.doc.createElement('button');
+  ctxChip.className = 'chip';
+  ctxChip.setAttribute('data-card', 'context');
+  const ctxRing = env.doc.createElement('span');
+  ctxRing.id = 'context-ring';
+  const ctxPct = env.doc.createElement('strong');
+  ctxPct.id = 'context-percent';
+  ctxPct.textContent = '62%';
+  ctxChip.appendChild(ctxRing);
+  ctxChip.appendChild(ctxPct);
+  bar.appendChild(ctxChip);
+  sr.appendChild(bar);
+
+  const card = env.doc.createElement('section');
+  card.className = 'card context-card';
+  card.id = 'context-card';
+  card.hidden = false;
+  const hero = env.doc.createElement('div');
+  hero.className = 'heading context-hero';
+  const heroLabel = env.doc.createElement('span');
+  heroLabel.className = 'hero-label';
+  heroLabel.textContent = '上下文窗口';
+  const heroModel = env.doc.createElement('span');
+  heroModel.id = 'context-model';
+  heroModel.textContent = 'Gemini 4 Carbon (High)';
+  hero.appendChild(heroLabel);
+  hero.appendChild(heroModel);
+  card.appendChild(hero);
+
+  const track = env.doc.createElement('div');
+  track.className = 'track';
+  track.id = 'context-track';
+  const fill = env.doc.createElement('i');
+  fill.id = 'context-fill';
+  fill.style.width = '62%';
+  track.appendChild(fill);
+  card.appendChild(track);
+
+  // v0.9.1 native .quota-details without legacy #five-quota-section ID
+  const quotaDetails = env.doc.createElement('div');
+  quotaDetails.className = 'quota-details';
+  card.appendChild(quotaDetails);
+
+  const usageEntry = env.doc.createElement('div');
+  usageEntry.id = 'usage-entry';
+  card.appendChild(usageEntry);
+  sr.appendChild(card);
+
+  // v0.9.1 <dialog id="usage-dashboard"> with nested shell ShadowRoot (usage-ui.cjs#L5-8)
+  const usageDialog = env.doc.createElement('dialog');
+  usageDialog.id = 'usage-dashboard';
+  const usageShell = env.doc.createElement('div');
+  const usageInnerSr = usageShell.attachShadow({ mode: 'open' });
+  usageDialog.appendChild(usageShell);
+  sr.appendChild(usageDialog);
+
+  const updateDialog = env.doc.createElement('dialog');
+  updateDialog.id = 'plugin-update-dialog';
+  sr.appendChild(updateDialog);
+
+  env.cascadeWrap.appendChild(v9Host);
+
+  env.win.agPulseHost = {
+    getMetrics: async () => ({
+      connection: 'live',
+      speed: {
+        tps: 51.4,
+        latestTps: 0,
+        ttftSeconds: 0.62,
+        rounds: 4,
+        context: {
+          usedTokens: 158720,
+          maxTokens: 256000,
+          usedFraction: 0.62,
+          model: 'Gemini 4 Carbon (High)',
+          sampledAt: '2020-01-01T00:00:00Z',
+        },
+      },
+      groups: [
+        {
+          id: 'gemini',
+          name: 'Gemini',
+          windows: { '5h': { available: true, remaining: 0.72, resetAt: new Date(Date.now() + 3600e3).toISOString() } },
+        },
+      ],
+    }),
+  };
+
+  const prevDoc = globalThis.document;
+  delete globalThis.document;
+  const bridge = bridgeMod.mountPulseVialBridge({
+    win: env.win,
+    doc: env.doc,
+    storage: env.storage,
+    vialCore,
+    autoPoll: false,
+    allowMultiple: true,
+  });
+
+  try {
+    const st = await bridge.sync();
+    assert.equal(st.attached, true);
+    assert.equal(card.getAttribute('data-ag-pulse-card-width'), '464');
+    assert.ok(hero.querySelector('.pv-acts'), '.pv-acts must mount inside .heading.context-hero');
+
+    // .quota-details presence must suppress Prism fallback .pv-qt
+    const pvQt = sr.querySelector('[data-ag-pulse-quotas="1"]');
+    assert.equal(pvQt?.hidden, true, '.pv-qt must yield when v0.9.1 .quota-details exists');
+
+    // Main stylesheet checks: 30 --pulse-* overrides, 2-row grid, blocked guard, dialogs
+    const mainCss = sr.querySelector('style[data-ag-cs-pulse-style="1"]')?.textContent || '';
+    assert.equal(mainCss.includes('undefined'), false);
+    assert.equal(mainCss.includes('$'), false);
+    assert.equal(mainCss.includes('?'), false);
+    for (const token of [
+      '--pulse-page:var(--pg)!important',
+      '--pulse-background:var(--bg)!important',
+      '--pulse-card:var(--cd)!important',
+      '--pulse-border:var(--b)!important',
+      '--pulse-font-mono:var(--mo)!important',
+      '#context-card>.heading.context-hero{display:grid!important',
+      ':host([data-layout="blocked"])',
+      '#usage-dashboard',
+      '#plugin-update-dialog',
+    ]) {
+      assert.ok(mainCss.includes(token), `Main CSS must contain ${token}`);
+    }
+
+    // Nested #usage-dashboard ShadowRoot UD_CSS check
+    const udStyle = usageInnerSr.querySelector('style[data-ag-cs-pulse-style="1"]');
+    assert.ok(udStyle, 'Must inject UD_CSS into #usage-dashboard nested firstElementChild.shadowRoot');
+    assert.equal(udStyle.textContent.includes('undefined'), false);
+    assert.equal(udStyle.textContent.includes('$'), false);
+    assert.equal(udStyle.textContent.includes('?'), false);
+    assert.ok(udStyle.textContent.includes('.metric{') && udStyle.textContent.includes('.heat-wrap'));
+
+    // Live sync of palette="warm", accent="mono", corners="soft"
+    env.doc.documentElement.setAttribute('data-ag-cs-palette', 'warm');
+    env.doc.documentElement.setAttribute('data-ag-cs-accent', 'mono');
+    env.doc.documentElement.setAttribute('data-ag-cs-corners', 'soft');
+    for (const rec of observerRecords) rec.cb([]);
+    assert.equal(v9Host.getAttribute('data-pv-pal'), 'warm');
+    assert.equal(v9Host.getAttribute('data-pv-accent'), 'mono');
+    assert.equal(v9Host.getAttribute('data-pv-corners'), 'soft');
+    assert.equal(v9Host.style.getPropertyValue('--ac'), '#94a3b8');
+
+    // Route safety guard: data-layout="blocked" treats card as closed & sleeps rAF at 0fps
+    v9Host.setAttribute('data-layout', 'blocked');
+    for (const rec of observerRecords) rec.cb([]);
+    assert.equal(bridge.getDebugState().cardOpen, false);
+    assert.equal(bridge.getDebugState().rafActive, false);
+
+    // Clean teardown removes nested UD_CSS as well
+    bridge.destroy();
+    assert.equal(usageInnerSr.querySelector('style[data-ag-cs-pulse-style="1"]'), null);
+  } finally {
+    bridge.destroy();
+    if (prevDoc !== undefined) globalThis.document = prevDoc;
+  }
+});
+
+test('OP-5.2 / HS-8.3 / UX-9 & <31,000B gate: light+warm alabaster alignment, targetFps=60 rAF throttling, and live 5-language switching', async () => {
+  const rawSrc = fs.readFileSync(BRIDGE_PATH, 'utf8');
+  assert.equal(rawSrc.includes('\r'), false, 'pulse-vial-bridge.js must use LF line endings');
+  assert.ok(Buffer.byteLength(rawSrc, 'utf8') < 31000, `pulse-vial-bridge.js must stay < 31,000B, got ${Buffer.byteLength(rawSrc, 'utf8')}`);
+  assert.equal(/innerHTML|outerHTML|insertAdjacentHTML/.test(rawSrc), false, 'Zero innerHTML allowed');
+
+  const env = createPulseMockEnv();
+  const observerRecords = [];
+  env.win.MutationObserver = class {
+    constructor(cb) {
+      this.cb = cb;
+      observerRecords.push(this);
+    }
+    observe() {}
+    disconnect() {}
+  };
+
+  env.win.setScheme('light');
+  env.doc.body.className = 'theme-light';
+  const host = env.getPulseHost();
+  const sr = host.shadowRoot;
+
+  let stepCalls = 0;
+  const mockVialCore = {
+    mountPhysicalWaterVial() {
+      return {
+        step() {
+          stepCalls++;
+        },
+        isSettled() {
+          return false;
+        },
+        wake() {},
+        impulse() {},
+        dispose() {},
+        getDebugState() {
+          return { rendererMode: '2d' };
+        },
+      };
+    },
+  };
+
+  env.win.agPulseHost = {
+    getMetrics: async () => ({
+      connection: 'live',
+      speed: {
+        tps: 48.0,
+        latestTps: 50.0,
+        ttftSeconds: 0.4,
+        rounds: 3,
+        taskUsage: {
+          subagents: 3,
+          own: { totalTokens: 60000 },
+          delegated: { totalTokens: 40000 },
+          total: { totalTokens: 100000 },
+        },
+        context: {
+          usedTokens: 220000,
+          maxTokens: 256000,
+          usedFraction: 0.86,
+          model: 'Gemini 4 Carbon',
+          sampledAt: new Date().toISOString(),
+        },
+      },
+      groups: [
+        {
+          id: 'gemini',
+          name: 'Gemini',
+          windows: { '5h': { available: true, remaining: 0.75, resetAt: new Date(Date.now() + 7200e3).toISOString() } },
+        },
+      ],
+    }),
+  };
+
+  const prevDoc = globalThis.document;
+  delete globalThis.document;
+  const bridge = bridgeMod.mountPulseVialBridge({
+    win: env.win,
+    doc: env.doc,
+    storage: env.storage,
+    vialCore: mockVialCore,
+    autoPoll: false,
+    allowMultiple: true,
+  });
+
+  try {
+    await bridge.sync();
+
+    // 1. OP-5.2: Light mode + palette="warm" automatically aligns data-pv-preset="alabaster" (#F2EFE7 warm well)
+    assert.equal(host.getAttribute('data-pv-preset'), 'crystal');
+    env.doc.documentElement.setAttribute('data-ag-cs-palette', 'warm');
+    for (const rec of observerRecords) rec.cb([]);
+    assert.equal(host.getAttribute('data-pv-preset'), 'alabaster');
+    assert.equal(bridge.getDebugState().lightPreset, 'alabaster');
+
+    // 2. UX-9: Live 5-language switching (zh-CN -> en -> ja)
+    const toggleBtn = sr.querySelector('[data-ag-pulse-vial-toggle="1"]');
+    const segs = sr.querySelectorAll('[data-layer-slice]');
+    const taskSplit = sr.querySelector('[data-ag-pulse-qtask="1"]');
+    assert.equal(toggleBtn.textContent, '实体试管');
+
+    env.doc.documentElement.setAttribute('data-ag-cs-lang', 'en');
+    for (const rec of observerRecords) rec.cb([]);
+    assert.equal(toggleBtn.textContent, 'Vial');
+    assert.match(taskSplit.textContent, /Main .* Swarm\/Sub\(3\)/);
+    segs[2].dispatchEvent({ type: 'pointerenter' });
+    assert.match(sr.querySelector('[data-ag-pulse-telemetry="1"]').textContent, /Tool Output/);
+    segs[2].dispatchEvent({ type: 'pointerleave' });
+
+    env.doc.documentElement.setAttribute('data-ag-cs-lang', 'ja');
+    for (const rec of observerRecords) rec.cb([]);
+    assert.equal(toggleBtn.textContent, '試験管');
+    assert.match(taskSplit.textContent, /メイン .* Swarm\/サブ\(3\)/);
+
+    // 3. HS-8.3: targetFps="60" throttles 180Hz (5ms) rAF callbacks to ~60Hz (>=15.2ms)
+    env.doc.documentElement.setAttribute('data-ag-cs-target-fps', '60');
+    for (const rec of observerRecords) rec.cb([]);
+    assert.equal(bridge.getDebugState().targetFps, '60');
+
+    // First frame at t=1000 executes and anchors t0=1000
+    env.win.stepRaf(1000);
+    const baseSteps = stepCalls;
+    // Next two 180Hz ticks (+5ms, +10ms) must be skipped by throttle (<15.2ms)
+    env.win.stepRaf(1005);
+    env.win.stepRaf(1010);
+    assert.equal(stepCalls, baseSteps, '5ms/10ms rAF ticks must be throttled when targetFps="60"');
+    // At t=1016 (+16ms >= 15.2ms), frame executes cleanly
+    env.win.stepRaf(1016);
+    assert.equal(stepCalls, baseSteps + 1, '16ms tick must execute step cleanly under targetFps="60"');
+
+    // 4. UX-A4 & UX-B4: .pv-qf uses theme-reactive var(--em) (no hardcoded #38bdf8) and /compact rapid double-click cleans timer cleanly
+    const styleTxt = sr.querySelector('style[data-ag-cs-pulse-style="1"]')?.textContent || '';
+    assert.equal(styleTxt.includes('#38bdf8'), false, 'Forecast border must not hardcode sky-blue #38bdf8');
+    assert.ok(styleTxt.includes('.pv-qf{position:absolute;top:0;bottom:0;border-right:1px solid var(--em)}'));
+    const cmpBtn = sr.querySelector('[data-ag-pulse-compact="1"]');
+    cmpBtn.dispatchEvent({ type: 'click' });
+    cmpBtn.dispatchEvent({ type: 'click' });
+  } finally {
+    bridge.destroy();
     if (prevDoc !== undefined) globalThis.document = prevDoc;
   }
 });

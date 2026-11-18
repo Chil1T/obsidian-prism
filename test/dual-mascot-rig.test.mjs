@@ -299,7 +299,7 @@ test('static frame cache & adaptive heartbeat: skips redundant clearRect + style
   const stage = rig.mountDualMascotStage(host, {
     camp: 'gemini',
     streaming: false,
-    reducedMotion: true, // 关闭随机眨眼/微抖干扰，纯测帧缓存命中
+    reducedMotion: false, // 挂载后前 2.4s 内无随机眨眼/微抖，直接测试活跃 100ms 心跳下的静态帧缓存命中
   });
 
   try {
@@ -739,4 +739,118 @@ test('high-rate pointer dragging of mini-crabs and main actors disables CSS tran
   } finally {
     stage.dispose();
   }
+});
+
+test('reducedMotion pauses idle heartbeat to 0fps (timerIntervalMs=0) and revives 100ms heartbeat on setState unfreeze', () => {
+  const h = createInteractiveStageHarness({ miniPileEnabled: true, reducedMotion: false });
+  try {
+    assert.equal(h.stage.getLayoutSnapshot().perf.timerIntervalMs, 100);
+    assert.equal(h.stage.getLayoutSnapshot().perf.timerPaused, false);
+
+    // 切换全局禁动效 reducedMotion: true（非流式忙碌态）-> 立即停表至 0fps
+    h.stage.setState({ reducedMotion: true });
+    const pausedSnap = h.stage.getLayoutSnapshot();
+    assert.equal(pausedSnap.reducedMotion, true);
+    assert.equal(pausedSnap.perf.timerIntervalMs, 0, 'Idle reducedMotion must stop 100ms heartbeat to 0fps');
+    assert.equal(pausedSnap.perf.timerPaused, true);
+
+    // 若在 reducedMotion 下进入流式忙碌态 -> 按需维持状态同步，流式结束后再次回到 0fps
+    h.stage.setState({ streaming: true });
+    assert.equal(h.stage.getLayoutSnapshot().perf.timerIntervalMs, 100);
+    h.stage.setState({ streaming: false });
+    assert.equal(h.stage.getLayoutSnapshot().perf.timerIntervalMs, 0);
+
+    // 从 reducedMotion: true 解冻切回 false -> 立即复活 100ms 心跳，绝不僵死！
+    h.stage.setState({ reducedMotion: false });
+    const revivedSnap = h.stage.getLayoutSnapshot();
+    assert.equal(revivedSnap.reducedMotion, false);
+    assert.equal(revivedSnap.perf.timerIntervalMs, 100, 'Unfreezing reducedMotion must revive 100ms heartbeat immediately');
+    assert.equal(revivedSnap.perf.timerPaused, false);
+  } finally {
+    h.stage.dispose();
+  }
+});
+
+test('OP-1 & OP-3 regressions: streamDone error worry pose, window blur drag release, dynamic DPR resize & clean DOM dispose', () => {
+  const winListeners = new Map();
+  const mockWin = {
+    devicePixelRatio: 1,
+    matchMedia: () => ({ matches: false }),
+    addEventListener(type, fn) {
+      if (!winListeners.has(type)) winListeners.set(type, new Set());
+      winListeners.get(type).add(fn);
+    },
+    removeEventListener(type, fn) {
+      winListeners.get(type)?.delete(fn);
+    },
+    dispatch(type) {
+      for (const fn of [...(winListeners.get(type) || [])]) fn({ type });
+    },
+  };
+  const makeNode = (tag) => {
+    const listeners = new Map();
+    const attrs = new Map();
+    const children = [];
+    return {
+      tagName: tag.toUpperCase(),
+      ownerDocument: null,
+      clientWidth: 720,
+      width: 96,
+      height: 84,
+      className: '',
+      dataset: {},
+      style: {},
+      children,
+      get firstChild() { return children[0] || null; },
+      setAttribute(k, v) { attrs.set(k, String(v)); },
+      getAttribute(k) { return attrs.get(k) ?? null; },
+      removeAttribute(k) { attrs.delete(k); },
+      appendChild(c) { children.push(c); return c; },
+      removeChild(c) { const i = children.indexOf(c); if (i >= 0) children.splice(i, 1); return c; },
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 720, bottom: 84, width: 720, height: 84 }),
+      addEventListener(t, f) { if (!listeners.has(t)) listeners.set(t, new Set()); listeners.get(t).add(f); },
+      removeEventListener(t, f) { listeners.get(t)?.delete(f); },
+      dispatch(t, ev = {}) { for (const fn of [...(listeners.get(t) || [])]) fn({ type: t, button: 0, preventDefault() {}, stopPropagation() {}, ...ev }); },
+      getContext: (k) => k === '2d' ? { save() {}, restore() {}, setTransform() {}, clearRect() {}, beginPath() {}, rect() {}, clip() {}, translate() {}, scale() {}, rotate() {}, fillRect() {}, drawImage() {} } : null,
+    };
+  };
+  const doc = {
+    hidden: false,
+    defaultView: mockWin,
+    createElement(tag) {
+      const n = makeNode(tag);
+      n.ownerDocument = doc;
+      return n;
+    },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const hostEl = doc.createElement('div');
+  const stage = rig.mountDualMascotStage(hostEl, { miniPileEnabled: true, reducedMotion: true });
+
+  // 1. Error termination sets 'worry' + 'sweat' instead of celebrating
+  stage.notify('streamDone', { error: true });
+  const errSnap = stage.getLayoutSnapshot();
+  assert.ok(errSnap.actors.every((a) => a.pose === 'worry' && a.sym === 'sweat'));
+
+  // 2. Dynamic multi-monitor DPR change resizes actor & mini-crab canvases on next render
+  const catActorEl = hostEl.children.find((n) => n.getAttribute('data-mascot-id') === 'cat');
+  assert.equal(catActorEl.children[0].width, 96);
+  mockWin.devicePixelRatio = 2;
+  stage.notify('activity');
+  stage.setState({ camp: 'claude' });
+  assert.equal(catActorEl.children[0].width, 192, 'Actor canvas must rescale to 2x DPR when moved across displays');
+
+  // 3. Window blur during active drag releases dragging state and settles back to ground
+  catActorEl.dispatch('pointerdown', { clientX: 600, clientY: 80 });
+  catActorEl.dispatch('pointermove', { clientX: 120, clientY: 40 });
+  assert.equal(catActorEl.getAttribute('data-dragging'), '1');
+  mockWin.dispatch('blur');
+  assert.equal(catActorEl.getAttribute('data-dragging'), null, 'Window blur must release mid-air drag lock');
+  assert.equal(stage.getLayoutSnapshot().actors.find((a) => a.id === 'cat').footY, 0);
+
+  // 4. dispose() removes all mounted DOM subtrees from hostEl
+  assert.equal(hostEl.children.length, 4);
+  stage.dispose();
+  assert.equal(hostEl.children.length, 0, 'dispose() must detach all stage children from hostEl');
 });

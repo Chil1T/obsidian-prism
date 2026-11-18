@@ -139,8 +139,84 @@ function renderPrismIconPng(size) {
   return encodePngRgba(size, size, rgba);
 }
 
-// Keep alias renderCrabIconPng for compatibility
-const renderCrabIconPng = renderPrismIconPng;
+function collectOptionalOmniTopEntries() {
+  const omniClientRel = 'vendor/omni-viewer/omni-client.js';
+  const omniClientAbs = path.join(ROOT_DIR, 'vendor', 'omni-viewer', 'omni-client.js');
+  if (!fs.existsSync(omniClientAbs)) return [];
+  try {
+    return [
+      {
+        name: omniClientRel,
+        data: Buffer.from(cdp.minifyJs(fs.readFileSync(omniClientAbs, 'utf8')), 'utf8'),
+      },
+    ];
+  } catch {
+    return [];
+  }
+}
+
+function collectNativePluginEntries(activeConfigFile) {
+  const entries = [];
+  const seen = new Set();
+  const pushEntry = (zipRel, fileBuf) => {
+    const normalized = zipRel.replace(/\\/g, '/').replace(/^\/+/, '');
+    if (seen.has(normalized)) return;
+    seen.add(normalized);
+    entries.push({ name: normalized, data: fileBuf });
+  };
+
+  for (const rel of cdp.SYNC_ROOT_FILES || []) {
+    const abs = path.join(ROOT_DIR, rel);
+    try {
+      if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
+        pushEntry(`native-plugin/${rel}`, fs.readFileSync(abs));
+      }
+    } catch {}
+  }
+
+  if (activeConfigFile && fs.existsSync(activeConfigFile)) {
+    try {
+      pushEntry('native-plugin/config.json', fs.readFileSync(activeConfigFile));
+    } catch {}
+  }
+
+  const walkSubDir = (subRel) => {
+    const absDir = path.join(ROOT_DIR, subRel);
+    if (!fs.existsSync(absDir)) return;
+    let dirents = [];
+    try {
+      dirents = fs.readdirSync(absDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const dirent of dirents) {
+      const name = dirent.name;
+      if (
+        name === '.DS_Store' ||
+        name === '__pycache__' ||
+        name === '.daemon.pid' ||
+        name.endsWith('.log') ||
+        name.endsWith('.tmp')
+      ) {
+        continue;
+      }
+      const nextRel = `${subRel}/${name}`;
+      const nextAbs = path.join(absDir, name);
+      if (dirent.isDirectory()) {
+        walkSubDir(nextRel);
+      } else if (dirent.isFile()) {
+        try {
+          pushEntry(`native-plugin/${nextRel}`, fs.readFileSync(nextAbs));
+        } catch {}
+      }
+    }
+  };
+
+  walkSubDir('assets');
+  walkSubDir('vendor');
+  walkSubDir('sidecars');
+  return entries;
+}
 
 function buildMultiResIco(sizes = [16, 32, 48, 256]) {
   const pngs = sizes.map((s) => ({ size: s, data: renderPrismIconPng(s) }));
@@ -271,8 +347,9 @@ export {
   VALIDATORS,
   createManifest,
   resolveActiveConfigFile,
+  collectOptionalOmniTopEntries,
+  collectNativePluginEntries,
   renderPrismIconPng,
-  renderCrabIconPng,
   buildMultiResIco,
   buildIcns,
   buildZip,

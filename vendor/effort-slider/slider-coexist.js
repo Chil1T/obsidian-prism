@@ -183,6 +183,34 @@
       return false;
     }
 
+    const HIDE_CSS_TEXT =
+      '.ces-ag-section,.ces-menu-section,[data-ces-effort-row="true"],.ces-set,.ces-settings-panel{display:none!important}' +
+      '[data-ces-part="trigger-effort"]{color:inherit!important;opacity:.7!important;font-weight:inherit!important}';
+
+    function clearTriggerEffortTint(doc) {
+      if (!doc || typeof doc.querySelectorAll !== 'function') return;
+      const spans = doc.querySelectorAll(
+        '[data-ces-part="trigger-effort"], [data-testid="model-selector-trigger"] span[style]'
+      );
+      for (let i = 0; i < spans.length; i++) {
+        const sp = spans[i];
+        if (sp.style) {
+          sp.style.color = '';
+          sp.style.opacity = '';
+          sp.style.fontWeight = '';
+        }
+        sp.removeAttribute?.('data-ces-part');
+      }
+      const panels = doc.querySelectorAll('.ces-ag-panel-enhanced');
+      for (let i = 0; i < panels.length; i++) {
+        panels[i].classList?.remove?.('ces-ag-panel-enhanced');
+      }
+      const selectedItems = doc.querySelectorAll('[data-ces-model-selected]');
+      for (let i = 0; i < selectedItems.length; i++) {
+        selectedItems[i].removeAttribute?.('data-ces-model-selected');
+      }
+    }
+
     function setHideExternalCss(hidden) {
       const doc = getDoc();
       if (!doc || typeof doc.getElementById !== 'function') return;
@@ -191,10 +219,14 @@
         if (existing) existing.remove();
         return;
       }
-      if (!existing && (doc.head || doc.documentElement)) {
+      if (existing) {
+        if (existing.textContent !== HIDE_CSS_TEXT) existing.textContent = HIDE_CSS_TEXT;
+        return;
+      }
+      if (doc.head || doc.documentElement) {
         const st = doc.createElement('style');
         st.id = HIDE_STYLE_ID;
-        st.textContent = '.ces-menu-section,[data-ces-effort-row="true"]{display:none!important}';
+        st.textContent = HIDE_CSS_TEXT;
         (doc.head || doc.documentElement).appendChild(st);
       }
     }
@@ -211,6 +243,7 @@
         }
         prismInstance = null;
       }
+      clearTriggerEffortTint(doc);
       const styleEl = doc?.getElementById?.(SLIDER_STYLE_ID);
       if (styleEl && styleEl.getAttribute(PRISM_OWNER_ATTR) === '1') {
         styleEl.remove();
@@ -237,6 +270,7 @@
       const inst = lib.installCodexEffortSlider({
         document: doc,
         window: winProxy,
+        disableContextMenuSettings: true,
       });
       if (!inst) return false;
       inst.__prismOwned = true;
@@ -255,6 +289,7 @@
       if (currentMode === 'off') {
         yieldedToExternal = false;
         stopPrismInstance();
+        clearTriggerEffortTint(getDoc());
         setHideExternalCss(true);
         return getState();
       }
@@ -265,12 +300,15 @@
         // Yield politely to external slider (e.g., app.asar Codex slider) to prevent duplicate body observers
         yieldedToExternal = true;
         stopPrismInstance();
+        try { getWin()?.__agCodexEffortSliderInstance?.rescan?.(); } catch {}
         return getState();
       }
 
       yieldedToExternal = false;
       if (!prismInstance) {
         mountBuiltIn();
+      } else {
+        try { prismInstance.rescan?.(); } catch {}
       }
       return getState();
     }

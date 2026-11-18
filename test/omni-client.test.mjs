@@ -1,0 +1,1088 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const __dirname = import.meta.dirname;
+const ROOT_DIR = path.join(__dirname, '..');
+const CLIENT_PATH = path.join(ROOT_DIR, 'vendor', 'omni-viewer', 'omni-client.js');
+
+const omniMod = require(CLIENT_PATH);
+
+// ── Deterministic Lightweight DOM + Highlight + MutationObserver Harness ────
+function splitSelectorTopLevelCommas(selectorList) {
+  const out = [];
+  let depth = 0;
+  let cur = '';
+  for (let i = 0; i < selectorList.length; i++) {
+    const ch = selectorList[i];
+    if (ch === '[' || ch === '(') depth++;
+    else if (ch === ']' || ch === ')') depth = Math.max(0, depth - 1);
+    if (ch === ',' && depth === 0) {
+      if (cur.trim()) out.push(cur.trim());
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+function matchesSimpleToken(el, rawSel) {
+  if (!el || el.nodeType !== 1) return false;
+  const sel = rawSel.trim();
+  if (!sel) return false;
+  if (sel === '*') return true;
+
+  if (/\s/.test(sel)) {
+    const tokens = sel.replace(/\s*>\s*/g, ' > ').trim().split(/\s+/);
+    let idx = tokens.length - 1;
+    if (!matchesSimpleToken(el, tokens[idx])) return false;
+    idx--;
+    let cur = el.parentElement;
+    while (idx >= 0) {
+      if (tokens[idx] === '>') {
+        idx--;
+        if (!cur || !matchesSimpleToken(cur, tokens[idx])) return false;
+        cur = cur.parentElement;
+        idx--;
+      } else {
+        while (cur && !matchesSimpleToken(cur, tokens[idx])) {
+          cur = cur.parentElement;
+        }
+        if (!cur) return false;
+        cur = cur.parentElement;
+        idx--;
+      }
+    }
+    return true;
+  }
+
+  let rem = sel;
+  // Handle simple `:not([style*="..."])`
+  const notStyleMatch = rem.match(/:not\(\[style\*="([^"]+)"\]\)/);
+  if (notStyleMatch) {
+    const curStyle = String(el.getAttribute('style') || '');
+    if (curStyle.includes(notStyleMatch[1])) return false;
+    rem = rem.replace(notStyleMatch[0], '');
+  }
+
+  const idMatch = rem.match(/#([A-Za-z0-9_\\.-]+)/);
+  if (idMatch) {
+    const wantId = idMatch[1].replace(/\\/g, '');
+    if (el.id !== wantId) return false;
+    rem = rem.replace(idMatch[0], '');
+  }
+
+  const tagMatch = rem.match(/^[A-Za-z0-9-]+/);
+  if (tagMatch) {
+    if (el.tagName.toLowerCase() !== tagMatch[0].toLowerCase()) return false;
+    rem = rem.slice(tagMatch[0].length);
+  }
+
+  for (const cm of rem.matchAll(/\.([A-Za-z0-9_-]+)/g)) {
+    if (!el.classList.contains(cm[1])) return false;
+  }
+  rem = rem.replace(/\.[A-Za-z0-9_-]+/g, '');
+
+  for (const am of rem.matchAll(/\[([A-Za-z0-9_:-]+)(?:(\^=|\*=|=)"([^"]*)")?\]/g)) {
+    const attrName = am[1];
+    const op = am[2];
+    const expected = am[3];
+    if (!el.hasAttribute(attrName)) return false;
+    if (op) {
+      const actual = String(el.getAttribute(attrName) ?? '');
+      if (op === '=' && actual !== expected) return false;
+      if (op === '^=' && !actual.startsWith(expected)) return false;
+      if (op === '*=' && !actual.includes(expected)) return false;
+    }
+  }
+  return true;
+}
+
+function matchesSelectorList(el, selectorList) {
+  for (const part of splitSelectorTopLevelCommas(String(selectorList || ''))) {
+    if (matchesSimpleToken(el, part)) return true;
+  }
+  return false;
+}
+
+function createFakeDomEnvironment(opts = {}) {
+  const mutationObservers = new Set();
+
+  class FakeEvent {
+    constructor(type, init = {}) {
+      this.type = type;
+      this.bubbles = Boolean(init.bubbles);
+      this.cancelable = init.cancelable !== false;
+      this.button = init.button ?? 0;
+      this.ctrlKey = Boolean(init.ctrlKey);
+      this.metaKey = Boolean(init.metaKey);
+      this.shiftKey = Boolean(init.shiftKey);
+      this.altKey = Boolean(init.altKey);
+      this.clientX = init.clientX ?? 120;
+      this.clientY = init.clientY ?? 140;
+      this.key = init.key || '';
+      this.data = init.data ?? null;
+      this.origin = init.origin ?? '';
+      this.source = init.source ?? null;
+      this.inputType = init.inputType || '';
+      this.defaultPrevented = false;
+      this._stopped = false;
+      this.target = null;
+      this.currentTarget = null;
+    }
+    preventDefault() {
+      if (this.cancelable) this.defaultPrevented = true;
+    }
+    stopPropagation() {
+      this._stopped = true;
+    }
+  }
+
+  function notifyMutations(record) {
+    for (const obs of Array.from(mutationObservers)) {
+      obs._deliver([record]);
+    }
+  }
+
+  class FakeNode {
+    constructor(nodeType) {
+      this.nodeType = nodeType;
+      this.parentNode = null;
+      this.childNodes = [];
+      this._listeners = new Map();
+    }
+    get parentElement() {
+      return this.parentNode && this.parentNode.nodeType === 1 ? this.parentNode : null;
+    }
+    get firstChild() {
+      return this.childNodes[0] || null;
+    }
+    get isConnected() {
+      let cur = this;
+      while (cur.parentNode) cur = cur.parentNode;
+      return cur === doc || cur === doc.documentElement;
+    }
+    addEventListener(type, fn, optsOrCap = false) {
+      const capture = typeof optsOrCap === 'boolean' ? optsOrCap : Boolean(optsOrCap?.capture);
+      if (!this._listeners.has(type)) this._listeners.set(type, []);
+      this._listeners.get(type).push({ fn, capture });
+    }
+    removeEventListener(type, fn, optsOrCap = false) {
+      const capture = typeof optsOrCap === 'boolean' ? optsOrCap : Boolean(optsOrCap?.capture);
+      const list = this._listeners.get(type);
+      if (!list) return;
+      this._listeners.set(
+        type,
+        list.filter((item) => !(item.fn === fn && item.capture === capture))
+      );
+    }
+    dispatchEvent(ev) {
+      if (!ev.target) ev.target = this;
+      const chain = [];
+      let cur = this;
+      while (cur) {
+        chain.push(cur);
+        cur = cur.parentNode;
+      }
+      for (let i = chain.length - 1; i >= 0; i--) {
+        if (ev._stopped) break;
+        const node = chain[i];
+        const list = node._listeners.get(ev.type) || [];
+        for (const item of [...list]) {
+          if (item.capture) {
+            ev.currentTarget = node;
+            item.fn.call(node, ev);
+            if (ev._stopped) break;
+          }
+        }
+      }
+      const maxBubble = ev.bubbles ? chain.length : 1;
+      for (let i = 0; i < maxBubble; i++) {
+        if (ev._stopped) break;
+        const node = chain[i];
+        const list = node._listeners.get(ev.type) || [];
+        for (const item of [...list]) {
+          if (!item.capture) {
+            ev.currentTarget = node;
+            item.fn.call(node, ev);
+            if (ev._stopped) break;
+          }
+        }
+      }
+      return !ev.defaultPrevented;
+    }
+  }
+
+  class FakeTextNode extends FakeNode {
+    constructor(text) {
+      super(3);
+      this._val = String(text ?? '');
+    }
+    get nodeValue() {
+      return this._val;
+    }
+    set nodeValue(v) {
+      this._val = String(v ?? '');
+      notifyMutations({ type: 'characterData', target: this, addedNodes: [], removedNodes: [] });
+    }
+    get textContent() {
+      return this._val;
+    }
+    set textContent(v) {
+      this.nodeValue = v;
+    }
+    remove() {
+      if (this.parentNode) this.parentNode.removeChild(this);
+    }
+  }
+
+  class FakeFragment extends FakeNode {
+    constructor() {
+      super(11);
+    }
+    appendChild(node) {
+      if (node.parentNode) node.parentNode.removeChild(node);
+      node.parentNode = this;
+      this.childNodes.push(node);
+      return node;
+    }
+  }
+
+  class FakeElement extends FakeNode {
+    constructor(tagName) {
+      super(1);
+      this.tagName = String(tagName || 'DIV').toUpperCase();
+      this._attrs = new Map();
+      this.style = {};
+      this.hidden = false;
+      this.disabled = false;
+      this.tabIndex = 0;
+      this._rect = { left: 800, top: 60, width: 520, height: 760, x: 800, y: 60 };
+      const self = this;
+      const clsSet = new Set();
+      this.classList = {
+        _sync(str) {
+          clsSet.clear();
+          for (const t of String(str || '').split(/\s+/).filter(Boolean)) clsSet.add(t);
+        },
+        add(...toks) {
+          for (const t of toks) if (t) clsSet.add(t);
+          self._attrs.set('class', Array.from(clsSet).join(' '));
+        },
+        remove(...toks) {
+          for (const t of toks) clsSet.delete(t);
+          const s = Array.from(clsSet).join(' ');
+          if (s) self._attrs.set('class', s);
+          else self._attrs.delete('class');
+        },
+        contains(t) {
+          return clsSet.has(t);
+        },
+      };
+      if (this.tagName === 'IFRAME') {
+        this._postedMessages = [];
+        this.contentWindow = {
+          postMessage: (msg, origin) => {
+            this._postedMessages.push({ msg, origin });
+          },
+        };
+      }
+    }
+    get id() { return this._attrs.get('id') || ''; }
+    set id(v) { if (v) this.setAttribute('id', v); else this.removeAttribute('id'); }
+    get className() { return this._attrs.get('class') || ''; }
+    set className(v) { this.setAttribute('class', v); }
+    get src() { return this._attrs.get('src') || ''; }
+    set src(v) { this.setAttribute('src', v); }
+    get title() { return this._attrs.get('title') || ''; }
+    set title(v) { this.setAttribute('title', v); }
+    get firstElementChild() { return this.childNodes.find((n) => n.nodeType === 1) || null; }
+    get children() { return this.childNodes.filter((n) => n.nodeType === 1); }
+    get textContent() { return this.childNodes.map((c) => c.textContent).join(''); }
+    set textContent(v) {
+      for (const c of this.childNodes) c.parentNode = null;
+      this.childNodes = [];
+      if (v !== '' && v !== null && v !== undefined) {
+        const tn = new FakeTextNode(String(v));
+        tn.parentNode = this;
+        this.childNodes.push(tn);
+      }
+    }
+    get outerHTML() {
+      const attrs = Array.from(this._attrs.entries())
+        .map(([k, val]) => `${k}="${String(val).replace(/"/g, '&quot;')}"`)
+        .join(' ');
+      const open = attrs ? `<${this.tagName.toLowerCase()} ${attrs}>` : `<${this.tagName.toLowerCase()}>`;
+      const inner = this.childNodes
+        .map((c) => (c.nodeType === 1 ? c.outerHTML : c.nodeValue))
+        .join('');
+      return `${open}${inner}</${this.tagName.toLowerCase()}>`;
+    }
+    setAttribute(name, val) {
+      const s = String(val);
+      this._attrs.set(name, s);
+      if (name === 'class') this.classList._sync(s);
+      notifyMutations({ type: 'attributes', target: this, attributeName: name, addedNodes: [], removedNodes: [] });
+    }
+    getAttribute(name) { return this._attrs.has(name) ? this._attrs.get(name) : null; }
+    hasAttribute(name) { return this._attrs.has(name); }
+    removeAttribute(name) {
+      this._attrs.delete(name);
+      if (name === 'class') this.classList._sync('');
+      notifyMutations({ type: 'attributes', target: this, attributeName: name, addedNodes: [], removedNodes: [] });
+    }
+    appendChild(node) {
+      if (node.nodeType === 11) {
+        const moved = [...node.childNodes];
+        node.childNodes = [];
+        for (const ch of moved) {
+          ch.parentNode = this;
+          this.childNodes.push(ch);
+        }
+        notifyMutations({ type: 'childList', target: this, addedNodes: moved, removedNodes: [] });
+        return node;
+      }
+      if (node.parentNode) node.parentNode.removeChild(node);
+      node.parentNode = this;
+      this.childNodes.push(node);
+      notifyMutations({ type: 'childList', target: this, addedNodes: [node], removedNodes: [] });
+      return node;
+    }
+    insertBefore(newNode, refNode) {
+      const idx = this.childNodes.indexOf(refNode);
+      if (idx === -1) throw new Error("NotFoundError: Failed to execute 'insertBefore' on 'Node'");
+      if (newNode.nodeType === 11) {
+        const moved = [...newNode.childNodes];
+        newNode.childNodes = [];
+        for (const ch of moved) ch.parentNode = this;
+        this.childNodes.splice(idx, 0, ...moved);
+        notifyMutations({ type: 'childList', target: this, addedNodes: moved, removedNodes: [] });
+        return newNode;
+      }
+      if (newNode.parentNode) newNode.parentNode.removeChild(newNode);
+      newNode.parentNode = this;
+      this.childNodes.splice(idx, 0, newNode);
+      notifyMutations({ type: 'childList', target: this, addedNodes: [newNode], removedNodes: [] });
+      return newNode;
+    }
+    replaceChild(newNode, oldNode) {
+      const idx = this.childNodes.indexOf(oldNode);
+      if (idx === -1) throw new Error("NotFoundError: Failed to execute 'replaceChild' on 'Node'");
+      oldNode.parentNode = null;
+      if (newNode.nodeType === 11) {
+        const moved = [...newNode.childNodes];
+        newNode.childNodes = [];
+        for (const ch of moved) ch.parentNode = this;
+        this.childNodes.splice(idx, 1, ...moved);
+        notifyMutations({ type: 'childList', target: this, addedNodes: moved, removedNodes: [oldNode] });
+        return oldNode;
+      }
+      if (newNode.parentNode) newNode.parentNode.removeChild(newNode);
+      newNode.parentNode = this;
+      this.childNodes.splice(idx, 1, newNode);
+      notifyMutations({ type: 'childList', target: this, addedNodes: [newNode], removedNodes: [oldNode] });
+      return oldNode;
+    }
+    removeChild(child) {
+      const idx = this.childNodes.indexOf(child);
+      if (idx === -1) throw new Error("NotFoundError: Failed to execute 'removeChild' on 'Node'");
+      this.childNodes.splice(idx, 1);
+      child.parentNode = null;
+      notifyMutations({ type: 'childList', target: this, addedNodes: [], removedNodes: [child] });
+      return child;
+    }
+    remove() {
+      if (this.parentNode) this.parentNode.removeChild(this);
+    }
+    normalize() {
+      const merged = [];
+      for (const ch of this.childNodes) {
+        if (ch.nodeType === 3 && merged.length && merged[merged.length - 1].nodeType === 3) {
+          merged[merged.length - 1]._val += ch._val;
+          ch.parentNode = null;
+        } else {
+          merged.push(ch);
+        }
+      }
+      this.childNodes = merged;
+    }
+    matches(sel) { return matchesSelectorList(this, sel); }
+    querySelectorAll(sel) {
+      const hits = [];
+      const walk = (n) => {
+        for (const ch of n.childNodes) {
+          if (ch.nodeType === 1) {
+            if (matchesSelectorList(ch, sel)) hits.push(ch);
+            walk(ch);
+          }
+        }
+      };
+      walk(this);
+      return hits;
+    }
+    querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+    getBoundingClientRect() { return { ...this._rect }; }
+    focus() { doc.activeElement = this; }
+    click() {
+      const ev = new FakeEvent('click', { bubbles: true, cancelable: true, button: 0 });
+      this.dispatchEvent(ev);
+    }
+  }
+
+  class FakeMutationObserver {
+    constructor(cb) {
+      this._cb = cb;
+      this._opts = null;
+      this._target = null;
+    }
+    observe(target, options = {}) {
+      this._target = target;
+      this._opts = options;
+      mutationObservers.add(this);
+    }
+    disconnect() { mutationObservers.delete(this); }
+    _deliver(records) {
+      if (!this._opts) return;
+      const filtered = records.filter((r) => {
+        if (r.type === 'attributes') {
+          if (!this._opts.attributes) return false;
+          if (this._target && r.target !== this._target && !this._opts.subtree) return false;
+          if (Array.isArray(this._opts.attributeFilter) && !this._opts.attributeFilter.includes(r.attributeName)) {
+            return false;
+          }
+          return true;
+        }
+        return Boolean(this._opts.childList || this._opts.characterData);
+      });
+      if (filtered.length) this._cb(filtered);
+    }
+  }
+
+  const doc = new FakeNode(9);
+  doc.hidden = false;
+  doc.documentElement = new FakeElement('HTML');
+  doc.documentElement.parentNode = doc;
+  doc.childNodes.push(doc.documentElement);
+  doc.head = new FakeElement('HEAD');
+  doc.body = new FakeElement('BODY');
+  doc.documentElement.appendChild(doc.head);
+  doc.documentElement.appendChild(doc.body);
+  doc.activeElement = doc.body;
+
+  doc.createElement = (tag) => new FakeElement(tag);
+  doc.createTextNode = (txt) => new FakeTextNode(txt);
+  doc.createDocumentFragment = () => new FakeFragment();
+  doc.querySelectorAll = (sel) => doc.documentElement.querySelectorAll(sel);
+  doc.querySelector = (sel) => doc.documentElement.querySelector(sel);
+  doc.getElementById = (id) => doc.querySelector(`#${id}`);
+
+  let clipboardText = '';
+  let selectionText = '';
+  let mockCaretHit = null;
+
+  const win = new FakeNode(9);
+  win.document = doc;
+  win.innerWidth = 1440;
+  win.innerHeight = 900;
+  win.Event = FakeEvent;
+  win.InputEvent = FakeEvent;
+  win.MutationObserver = FakeMutationObserver;
+  win.ResizeObserver = class {
+    constructor(cb) { this.cb = cb; }
+    observe() {}
+    disconnect() {}
+  };
+
+  if (opts.enableCssHighlights) {
+    win.Highlight = class FakeHighlight extends Set {};
+    win.CSS = { highlights: new Map() };
+    doc.createRange = () => ({
+      startContainer: null,
+      startOffset: 0,
+      endContainer: null,
+      endOffset: 0,
+      setStart(n, o) { this.startContainer = n; this.startOffset = o; },
+      setEnd(n, o) { this.endContainer = n; this.endOffset = o; },
+      getClientRects() {
+        return [{ left: 10, top: 10, right: 500, bottom: 40 }];
+      },
+    });
+    doc.caretRangeFromPoint = () => mockCaretHit;
+  }
+
+  win.navigator = {
+    clipboard: {
+      writeText: async (txt) => { clipboardText = String(txt); },
+    },
+  };
+  win.getSelection = () => ({ toString: () => selectionText });
+
+  const externalOpened = [];
+  const revealedFiles = [];
+  const rpcCalls = [];
+
+  win.electronNative = {
+    openExternal: async (target) => { externalOpened.push(target); },
+    revealInFilePicker: async (target) => { revealedFiles.push(target); },
+    ...(opts.wcvBrowser ? { wcvBrowser: opts.wcvBrowser } : {}),
+  };
+
+  win.__agPrismOmniCall = (jsonStr) => {
+    const req = JSON.parse(jsonStr);
+    rpcCalls.push(req);
+    if (typeof opts.onRpc === 'function') {
+      const reply = opts.onRpc(req);
+      if (reply !== undefined) {
+        queueMicrotask(() => {
+          win.__agPrismOmniResolve?.(req.id, reply);
+        });
+      }
+    }
+  };
+
+  return {
+    window: win,
+    document: doc,
+    FakeEvent,
+    externalOpened,
+    revealedFiles,
+    rpcCalls,
+    getClipboard: () => clipboardText,
+    setSelection: (txt) => { selectionText = txt; },
+    setCaretHit: (node, offset) => {
+      mockCaretHit = node ? { startContainer: node, startOffset: offset } : null;
+    },
+  };
+}
+
+function flushMicrotasks() {
+  return new Promise((resolve) => setTimeout(resolve, 18));
+}
+
+// ── 1. Pure Parsers & Path Utilities ────────────────────────────────────────
+test('URI decoding, line range parsing, relative path calculation & preview kind mapping', () => {
+  const winParsed = omniMod.parseFileUriToPath(
+    'file:///d%3A/projects/prism-app/src/main.tsx#L18-L42'
+  );
+  assert.equal(winParsed.filePath, 'd:\\projects\\prism-app\\src\\main.tsx');
+  assert.equal(winParsed.lineStart, 18);
+  assert.equal(winParsed.lineEnd, 42);
+
+  const posixParsed = omniMod.parseFileUriToPath('file:///opt/work/demo/report.csv:95:4');
+  assert.equal(posixParsed.filePath, '/opt/work/demo/report.csv');
+  assert.equal(posixParsed.lineStart, 95);
+  assert.equal(posixParsed.lineEnd, null);
+
+  const ideScheme = omniMod.parseFileUriToPath('antigravity-ide://file/d:/projects/prism-app/README.md#L7');
+  assert.equal(ideScheme.filePath, 'd:\\projects\\prism-app\\README.md');
+  assert.equal(ideScheme.lineStart, 7);
+
+  assert.equal(
+    omniMod.computeRelativePath('D:\\projects\\prism-app\\src\\ui\\card.ts#L10-L20', 'd:/projects/prism-app'),
+    'src/ui/card.ts#L10-L20'
+  );
+  assert.equal(omniMod.detectPreviewKind('/media/demo.mp4'), 'video');
+  assert.equal(omniMod.detectPreviewKind('/media/voice.wav'), 'audio');
+  assert.equal(omniMod.detectPreviewKind('/media/icon.svg'), 'svg');
+  assert.equal(omniMod.detectPreviewKind('/media/data.jsonl'), 'table');
+  assert.equal(omniMod.detectPreviewKind('/media/mono.woff2'), 'font');
+  assert.equal(omniMod.detectPreviewKind('/media/page.html'), 'html');
+  assert.equal(omniMod.detectPreviewKind('/media/spec.pdf'), 'pdf');
+});
+
+// ── 2. Left-Click Web Link Routing + Sandbox Security + `<a download>` Skip ──
+test('left-clicking http(s) links honors linkTarget + Ctrl/Cmd inversion, skips <a download>, and strips allow-same-origin on external fallback iframe', async () => {
+  const env = createFakeDomEnvironment();
+  const { window, document, FakeEvent, externalOpened } = env;
+
+  const auxSplit = document.createElement('div');
+  auxSplit.setAttribute('data-testid', 'aux-pane-split');
+  const convWrap = document.createElement('div');
+  const resp = document.createElement('div');
+  resp.setAttribute('data-testid', 'planner-response-text');
+
+  const link = document.createElement('a');
+  link.setAttribute('href', 'https://example.org/docs/guide');
+  link.textContent = 'Example Guide';
+  resp.appendChild(link);
+
+  const dlLink = document.createElement('a');
+  dlLink.setAttribute('href', 'https://example.org/release.zip');
+  dlLink.setAttribute('download', 'release.zip');
+  dlLink.textContent = 'Download ZIP';
+  resp.appendChild(dlLink);
+
+  convWrap.appendChild(resp);
+  auxSplit.appendChild(convWrap);
+  document.body.appendChild(auxSplit);
+
+  const client = omniMod.createOmniClient({ window, document });
+  client.sync(
+    { omniModule: 'on', linkTarget: 'builtin' },
+    { baseUrl: 'http://127.0.0.1:43999', token: 'tok123' }
+  );
+
+  // `<a download>` must NOT be intercepted
+  const dlEv = new FakeEvent('click', { bubbles: true, cancelable: true, button: 0 });
+  dlLink.dispatchEvent(dlEv);
+  assert.equal(dlEv.defaultPrevented, false);
+
+  // Hovering over a link must NEVER spawn floating toolbars
+  link.dispatchEvent(new FakeEvent('mouseenter', { bubbles: true }));
+  assert.equal(document.querySelector('.ag-omni-menu'), null);
+  assert.equal(resp.querySelectorAll('button').length, 0);
+
+  // Default linkTarget = 'builtin': opens right-side dock WITHOUT `allow-same-origin` on external fallback iframe
+  const clickEv1 = new FakeEvent('click', { bubbles: true, cancelable: true, button: 0 });
+  link.dispatchEvent(clickEv1);
+  await flushMicrotasks();
+
+  assert.equal(clickEv1.defaultPrevented, true);
+  assert.equal(externalOpened.length, 0);
+  const dock = document.querySelector('[data-testid="ag-omni-dock"]');
+  assert.ok(dock);
+  const iframe = dock.querySelector('[data-testid="ag-omni-iframe"]');
+  assert.equal(iframe.src, 'https://example.org/docs/guide');
+  assert.equal(
+    iframe.getAttribute('sandbox').includes('allow-same-origin'),
+    false,
+    'External URL fallback iframe must NEVER include allow-same-origin'
+  );
+
+  // Responsive viewport buttons (`100%` -> `390`)
+  dock.querySelector('[data-vp-btn="390"]').click();
+  assert.equal(dock.querySelector('.ag-omni-viewport-box').getAttribute('data-vp'), '390');
+
+  // Ctrl+Click inverts to external system browser
+  link.dispatchEvent(new FakeEvent('click', { bubbles: true, cancelable: true, button: 0, ctrlKey: true }));
+  await flushMicrotasks();
+  assert.deepEqual(externalOpened, ['https://example.org/docs/guide']);
+
+  // Switch linkTarget to 'external': plain click opens external, Meta+Click opens builtin
+  client.sync({ linkTarget: 'external' });
+  link.dispatchEvent(new FakeEvent('click', { bubbles: true, cancelable: true, button: 0 }));
+  await flushMicrotasks();
+  assert.equal(externalOpened.length, 2);
+
+  link.setAttribute('href', 'https://example.org/changelog');
+  link.dispatchEvent(new FakeEvent('click', { bubbles: true, cancelable: true, button: 0, metaKey: true }));
+  await flushMicrotasks();
+  assert.equal(iframe.src, 'https://example.org/changelog');
+
+  client.destroy();
+});
+
+// ── 3. Native `wcvBrowser` Engine + Portal/Visibility Yield + Route Remount ──
+test('native wcvBrowser yields immediately to Base UI portal menus / document.hidden and survives route remount', async () => {
+  const wcvLog = [];
+  const mockWcv = {
+    acquire: async (opts) => {
+      wcvLog.push(['acquire', opts.tabKey, opts.initialUrl]);
+      return { webContentsId: 77, url: opts.initialUrl, title: 'GitHub Repo', canGoBack: true, canGoForward: false };
+    },
+    show: async (tabKey, bounds) => {
+      wcvLog.push(['show', tabKey, bounds.width > 0]);
+      return { url: 'https://github.com/org/repo', title: 'GitHub Repo', canGoBack: true, canGoForward: false };
+    },
+    setBounds: (tabKey, bounds) => { wcvLog.push(['setBounds', tabKey, bounds.width]); },
+    hide: (tabKey) => { wcvLog.push(['hide', tabKey]); },
+    navigate: async (tabKey, url) => { wcvLog.push(['navigate', tabKey, url]); },
+    control: (tabKey, cmd) => { wcvLog.push(['control', tabKey, cmd]); },
+    dispose: (tabKey) => { wcvLog.push(['dispose', tabKey]); },
+    onGuestEvent: () => () => {},
+  };
+
+  const env = createFakeDomEnvironment({ wcvBrowser: mockWcv });
+  const { window, document, FakeEvent } = env;
+
+  const auxSplit = document.createElement('div');
+  auxSplit.setAttribute('data-testid', 'aux-pane-split');
+  auxSplit.appendChild(document.createElement('div'));
+  document.body.appendChild(auxSplit);
+
+  const client = omniMod.createOmniClient({ window, document });
+  client.sync({ omniModule: 'on', linkTarget: 'builtin' }, { baseUrl: 'http://127.0.0.1:43999', token: 't1' });
+
+  await client.openUrl('https://github.com/org/repo', 'builtin');
+  await flushMicrotasks();
+  assert.ok(wcvLog.some((e) => e[0] === 'acquire'));
+  assert.ok(wcvLog.some((e) => e[0] === 'show'));
+
+  // Mounting a Base UI portal menu automatically hides WCV immediately via MutationObserver
+  const hidesBeforePortal = wcvLog.filter((e) => e[0] === 'hide').length;
+  const portal = document.createElement('div');
+  portal.setAttribute('data-base-ui-portal', '');
+  const menuPopup = document.createElement('div');
+  menuPopup.setAttribute('role', 'menu');
+  portal.appendChild(menuPopup);
+  document.body.appendChild(portal);
+  assert.ok(wcvLog.filter((e) => e[0] === 'hide').length > hidesBeforePortal);
+
+  // Removing portal restores WCV
+  const showsBeforeClose = wcvLog.filter((e) => e[0] === 'show').length;
+  portal.remove();
+  assert.ok(wcvLog.filter((e) => e[0] === 'show').length > showsBeforeClose);
+
+  // Document visibility hidden hides WCV
+  document.hidden = true;
+  document.dispatchEvent(new FakeEvent('visibilitychange'));
+  assert.equal(wcvLog[wcvLog.length - 1][0], 'hide');
+  document.hidden = false;
+  document.dispatchEvent(new FakeEvent('visibilitychange'));
+
+  // Simulate React route change detaching `aux-pane-split` and remounting a fresh one
+  auxSplit.remove();
+  const newAuxSplit = document.createElement('div');
+  newAuxSplit.setAttribute('data-testid', 'aux-pane-split');
+  newAuxSplit.appendChild(document.createElement('div'));
+  document.body.appendChild(newAuxSplit);
+
+  await client.openUrl('https://github.com/org/repo/issues', 'builtin');
+  await flushMicrotasks();
+  assert.ok(newAuxSplit.querySelector('[data-testid="ag-omni-dock"]'));
+  assert.ok(wcvLog.some((e) => e[0] === 'navigate' && e[2] === 'https://github.com/org/repo/issues'));
+
+  client.destroy();
+  assert.ok(wcvLog.some((e) => e[0] === 'dispose'));
+});
+
+// ── 4. Right-Click Menu, Thought Code Chips, Composer @Mention & Origin-Locked Sync ─
+test('right-clicking file pills & thought code chips supports preview, reveal, @mention, and origin-locked postMessage sync', async () => {
+  const env = createFakeDomEnvironment({
+    onRpc(req) {
+      if (req.action === 'getServerInfo') {
+        return { ok: true, baseUrl: 'http://127.0.0.1:45120', token: 'sec_tok_99' };
+      }
+      if (req.action === 'resolvePath') {
+        return {
+          ok: true,
+          exists: true,
+          absPath: '/projects/demo/assets/intro.mp4',
+          relPath: 'assets/intro.mp4',
+        };
+      }
+      return { ok: true };
+    },
+  });
+  const { window, document, FakeEvent, revealedFiles, getClipboard } = env;
+
+  document.documentElement.setAttribute('data-ag-cs-theme', 'dark');
+  document.documentElement.setAttribute('data-ag-cs-palette', 'obsidian');
+  document.documentElement.setAttribute('data-ag-cs-accent', 'cobalt');
+  document.documentElement.setAttribute('data-ag-cs-lang', 'zh-CN');
+
+  const composerBox = document.createElement('div');
+  composerBox.setAttribute('data-testid', 'agent-input-box');
+  const ce = document.createElement('div');
+  ce.setAttribute('contenteditable', 'true');
+  ce.textContent = '请检查这个视频';
+  composerBox.appendChild(ce);
+  document.body.appendChild(composerBox);
+
+  const pill = document.createElement('button');
+  pill.className = 'inline-pill';
+  pill.setAttribute('data-uri', 'file:///projects/demo/assets/intro.mp4');
+  pill.setAttribute('title', '/projects/demo/assets/intro.mp4');
+  pill.textContent = 'intro.mp4';
+  document.body.appendChild(pill);
+
+  // TS-6: Thought translator inline code chip carrying a workspace path
+  const thoughtCode = document.createElement('code');
+  thoughtCode.className = 'ag-prism-thought-code';
+  thoughtCode.textContent = 'vendor/omni-viewer/omni-server.mjs#L114';
+  document.body.appendChild(thoughtCode);
+  const tcMeta = omniMod.extractTargetMeta(thoughtCode);
+  assert.equal(tcMeta?.kind, 'file');
+  assert.equal(tcMeta?.filePath, 'vendor/omni-viewer/omni-server.mjs');
+  assert.equal(tcMeta?.lineStart, 114);
+
+  const client = omniMod.createOmniClient({ window, document });
+  client.sync({ omniModule: 'on' });
+
+  // Composer editable area is never hijacked
+  const ceCtx = new FakeEvent('contextmenu', { bubbles: true, cancelable: true });
+  ce.dispatchEvent(ceCtx);
+  assert.equal(ceCtx.defaultPrevented, false);
+
+  // Right-click `.inline-pill` -> insert @mention -> reveal -> copy-rel-path -> open-preview
+  pill.dispatchEvent(new FakeEvent('contextmenu', { bubbles: true, cancelable: true }));
+  document.querySelector('[data-omni-action="insert-mention"]').click();
+  assert.match(ce.textContent, /^请检查这个视频 @[A-Za-z0-9_./-]*intro\.mp4 $/);
+
+  pill.dispatchEvent(new FakeEvent('contextmenu', { bubbles: true, cancelable: true }));
+  document.querySelector('[data-omni-action="reveal-folder"]').click();
+  await flushMicrotasks();
+  assert.equal(revealedFiles.length, 1);
+
+  pill.dispatchEvent(new FakeEvent('contextmenu', { bubbles: true, cancelable: true }));
+  document.querySelector('[data-omni-action="copy-rel-path"]').click();
+  await flushMicrotasks();
+  assert.equal(getClipboard(), 'assets/intro.mp4');
+
+  pill.dispatchEvent(new FakeEvent('contextmenu', { bubbles: true, cancelable: true }));
+  document.querySelector('[data-omni-action="open-preview"]').click();
+  await flushMicrotasks();
+
+  const iframe = document.querySelector('[data-testid="ag-omni-iframe"]');
+  assert.ok(iframe);
+  assert.match(iframe.src, /^http:\/\/127\.0\.0\.1:45120\/viewer\?/);
+  assert.ok(iframe.getAttribute('sandbox').includes('allow-same-origin'));
+
+  // SEC-7: Verify postMessage targetOrigin is locked to `http://127.0.0.1:45120` (NOT `'*'`)
+  const firstPost = iframe._postedMessages[iframe._postedMessages.length - 1];
+  assert.equal(firstPost.origin, 'http://127.0.0.1:45120');
+
+  // SEC-7: Spoofed message from wrong origin or wrong source must be ignored
+  const countBeforeSpoof = iframe._postedMessages.length;
+  window.dispatchEvent(
+    new FakeEvent('message', {
+      data: { type: 'ag-prism-workbench-ready' },
+      origin: 'https://evil.example.com',
+      source: iframe.contentWindow,
+    })
+  );
+  window.dispatchEvent(
+    new FakeEvent('message', {
+      data: { type: 'ag-prism-workbench-ready' },
+      origin: 'http://127.0.0.1:45120',
+      source: {},
+    })
+  );
+  assert.equal(iframe._postedMessages.length, countBeforeSpoof);
+
+  // Authentic message from `http://127.0.0.1:45120` + `iframe.contentWindow` triggers sync
+  window.dispatchEvent(
+    new FakeEvent('message', {
+      data: { type: 'ag-prism-workbench-ready' },
+      origin: 'http://127.0.0.1:45120',
+      source: iframe.contentWindow,
+    })
+  );
+  assert.equal(iframe._postedMessages.length, countBeforeSpoof + 1);
+
+  client.destroy();
+});
+
+// ── 5a. HS-2 Zero-DOM-Mutation `CSS.highlights` Engine (React 19 Safe!) ──────
+test('CSS.highlights engine highlights bare URLs & paths with ZERO TextNode splitting so React removeChild never throws', async () => {
+  const env = createFakeDomEnvironment({ enableCssHighlights: true });
+  const { window, document, FakeEvent, setCaretHit } = env;
+
+  const resp = document.createElement('div');
+  resp.setAttribute('data-testid', 'planner-response-text');
+
+  const streamingPara = document.createElement('p');
+  streamingPara.setAttribute('data-ag-cs-spark-streaming', '1');
+  streamingPara.textContent = 'Streaming https://partial.example.org';
+  resp.appendChild(streamingPara);
+
+  const para = document.createElement('p');
+  const origTextNode = document.createTextNode(
+    'Check https://docs.example.com/api(v2)。 Also src/core/engine.ts#L15-L30!'
+  );
+  para.appendChild(origTextNode);
+  resp.appendChild(para);
+  document.body.appendChild(resp);
+
+  const client = omniMod.createOmniClient({ window, document });
+  client.sync({ omniModule: 'on', linkTarget: 'builtin' }, { baseUrl: 'http://127.0.0.1:47000', token: 'tok_hl' });
+
+  assert.equal(client.getState().highlightMode, 'css-highlights');
+  // ZERO `.ag-omni-autolink` spans created; `origTextNode` remains the sole child of `para`!
+  assert.equal(para.childNodes.length, 1);
+  assert.equal(para.firstChild, origTextNode);
+  assert.equal(document.querySelectorAll('.ag-omni-autolink').length, 0);
+
+  // Streaming paragraph was skipped while `data-ag-cs-spark-streaming="1"` was set
+  const urlHl = window.CSS.highlights.get('ag-omni-url');
+  const pathHl = window.CSS.highlights.get('ag-omni-path');
+  assert.equal(urlHl.size, 1);
+  assert.equal(pathHl.size, 1);
+
+  // Hovering token updates root cursor attribute without mutating paragraph DOM
+  setCaretHit(origTextNode, 10); // Inside `https://docs.example.com/api(v2)`
+  para.dispatchEvent(new FakeEvent('mousemove', { bubbles: true, clientX: 80, clientY: 20 }));
+  assert.equal(document.documentElement.getAttribute('data-ag-omni-hover-token'), '1');
+
+  // Left-clicking at token coordinates opens built-in browser dock
+  para.dispatchEvent(new FakeEvent('click', { bubbles: true, cancelable: true, button: 0, clientX: 80, clientY: 20 }));
+  await flushMicrotasks();
+  assert.equal(document.querySelector('[data-testid="ag-omni-iframe"]')?.src, 'https://docs.example.com/api(v2)');
+
+  // Right-clicking at file path coordinates (`src/core/engine.ts#L15-L30`) opens 6-item file context menu
+  setCaretHit(origTextNode, 52);
+  para.dispatchEvent(new FakeEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 20 }));
+  assert.ok(document.querySelector('[data-testid="ag-omni-context-menu"]'));
+
+  // Simulate React 19 `commitDeletion` removing original `HostText` node -> ZERO `NotFoundError`!
+  assert.doesNotThrow(() => para.removeChild(origTextNode));
+
+  client.destroy();
+  assert.equal(window.CSS.highlights.size, 0);
+});
+
+// ── 5b. Fallback `<span>` Linkifier (Headless Environments Without CSS.highlights) ─
+test('fallback span linkifier works when CSS.highlights is unavailable and strictly skips pre/code/composer/thought-overlay', () => {
+  const env = createFakeDomEnvironment({ enableCssHighlights: false });
+  const { window, document } = env;
+
+  const resp = document.createElement('div');
+  resp.setAttribute('data-testid', 'planner-response-text');
+
+  const para = document.createElement('p');
+  para.textContent =
+    '(See https://docs.example.com/api(v2))。 Also check localhost:5173/health and src/core/engine.ts#L15-L30!';
+
+  const pre = document.createElement('pre');
+  const code = document.createElement('code');
+  code.textContent = 'const url = "https://do-not-touch.example.com"; // src/secret/raw.ts';
+  pre.appendChild(code);
+
+  const thoughtOverlay = document.createElement('div');
+  thoughtOverlay.className = 'ag-prism-thought-overlay';
+  thoughtOverlay.textContent = 'Translated thought mentioning https://skip-thought.example.com and lib/a.js';
+
+  resp.appendChild(para);
+  resp.appendChild(pre);
+  resp.appendChild(thoughtOverlay);
+  document.body.appendChild(resp);
+
+  const client = omniMod.createOmniClient({ window, document });
+  client.sync({ omniModule: 'on' });
+
+  assert.equal(client.getState().highlightMode, 'span-fallback');
+  const autolinks = para.querySelectorAll('.ag-omni-autolink');
+  assert.equal(autolinks.length, 3);
+  assert.equal(autolinks[0].getAttribute('data-omni-url'), 'https://docs.example.com/api(v2)');
+  assert.equal(autolinks[1].getAttribute('data-omni-url'), 'http://localhost:5173/health');
+  assert.equal(autolinks[2].getAttribute('data-omni-path'), 'src/core/engine.ts');
+
+  assert.equal(pre.querySelectorAll('.ag-omni-autolink').length, 0);
+  assert.equal(thoughtOverlay.querySelectorAll('.ag-omni-autolink').length, 0);
+
+  client.sync({ omniModule: 'off' });
+  assert.equal(document.querySelectorAll('.ag-omni-autolink').length, 0);
+  assert.equal(
+    para.textContent,
+    '(See https://docs.example.com/api(v2))。 Also check localhost:5173/health and src/core/engine.ts#L15-L30!'
+  );
+  client.destroy();
+});
+
+// ── 6. Mermaid Zoom + Real Host Aux FilePane Selectors + Re-Entrant Sync ─────
+test('Mermaid zoom, real host Aux selectors (binary-file-no-preview, csv-file-viewer, file-viewer-root), and re-entrant sync', async () => {
+  const env = createFakeDomEnvironment();
+  const { window, document, FakeEvent } = env;
+
+  const mermaidWrap = document.createElement('div');
+  mermaidWrap.className = 'mermaid';
+  const svg = document.createElement('svg');
+  svg.setAttribute('id', 'mermaid-diagram-1');
+  svg.setAttribute('viewBox', '0 0 200 100');
+  mermaidWrap.appendChild(svg);
+  document.body.appendChild(mermaidWrap);
+
+  const binShell = document.createElement('div');
+  binShell.className = 'relative h-full w-full';
+  const binLeaf = document.createElement('div');
+  binLeaf.setAttribute('data-testid', 'binary-file-no-preview');
+  binLeaf.__reactFiber$mock = {
+    return: { memoizedProps: { fileUri: 'file:///projects/demo/fonts/JetBrainsMono.woff2' } },
+  };
+  binShell.appendChild(binLeaf);
+  document.body.appendChild(binShell);
+
+  const csvBox = document.createElement('div');
+  csvBox.setAttribute('data-testid', 'csv-file-viewer');
+  csvBox.__reactFiber$mock = { return: { key: 'file:///projects/demo/data/bench.tsv', memoizedProps: {} } };
+  document.body.appendChild(csvBox);
+
+  const client = omniMod.createOmniClient({ window, document });
+  client.sync({ omniModule: 'on' }, { baseUrl: 'http://127.0.0.1:46000', token: 'tok_mmd' });
+
+  const zoomBtn = mermaidWrap.querySelector('[data-testid="ag-omni-mermaid-zoom"]');
+  assert.ok(zoomBtn);
+  zoomBtn.click();
+  await flushMicrotasks();
+
+  const dockIframe = document.querySelector('[data-testid="ag-omni-iframe"]');
+  window.dispatchEvent(
+    new FakeEvent('message', {
+      data: { type: 'ag-prism-workbench-ready' },
+      origin: 'http://127.0.0.1:46000',
+      source: dockIframe.contentWindow,
+    })
+  );
+  assert.match(dockIframe._postedMessages.at(-1).msg.rawContent, /<svg id="mermaid-diagram-1"/);
+
+  const binSwitcher = binShell.querySelector('[data-testid="ag-omni-aux-switcher"]');
+  assert.ok(binSwitcher);
+  assert.equal(csvBox.querySelectorAll('[data-testid="ag-omni-aux-switcher"]').length, 1);
+
+  client.destroy();
+  assert.equal(document.querySelector('[data-testid="ag-omni-dock"]'), null);
+  client.sync({ omniModule: 'on' }, { baseUrl: 'http://127.0.0.1:46000', token: 'tok_mmd' });
+  assert.equal(client.getState().enabled, true);
+  client.destroy();
+});
+
+// ── 7. CSS Token Alignment, Whitespace Hygiene, vm.Script & Bundle Budget ────
+test('omni-client.js aligns style.css tokens, has zero blank-line bloat, passes vm.Script + buildOmniClientExpression, and has 0 forbidden literals', () => {
+  const clientCode = fs.readFileSync(CLIENT_PATH, 'utf8');
+  const testCode = fs.readFileSync(path.join(__dirname, 'omni-client.test.mjs'), 'utf8');
+
+  const lines = clientCode.split('\n');
+  const emptyRatio = lines.filter((l) => !l.trim()).length / lines.length;
+  assert.ok(emptyRatio < 0.12, `Expected clean low blank-line ratio (< 12%), got ${(emptyRatio * 100).toFixed(1)}%`);
+  assert.equal(/\n\n\n/.test(clientCode), false, 'Must not contain consecutive blank line bloat');
+
+  // Verify HS-3 token alignment (no stale nonexistent CSS var names)
+  assert.match(clientCode, /--ag-cs-accent/);
+  assert.match(clientCode, /--ag-cs-r-md|--ag-cs-r-sm/);
+  assert.match(clientCode, /--ag-cs-popover-bg/);
+  assert.match(clientCode, /--ag-cs-mono-stack/);
+  assert.equal(/--ag-accent\b|--ag-radius-md\b|--ag-code-font-family\b/.test(clientCode), false);
+
+  assert.doesNotThrow(() => new vm.Script(clientCode, { filename: 'omni-client.js' }));
+
+  const forbiddenPatterns = [
+    new RegExp(['work', 'space_program'].join(''), 'i'),
+    new RegExp(['Users', '\\\\', 'Administrator'].join(''), 'i'),
+    new RegExp(['ema', '_persona'].join(''), 'i'),
+    new RegExp(['\\bsk', '-[A-Za-z0-9]{12,}'].join('')),
+  ];
+  for (const re of forbiddenPatterns) {
+    assert.equal(re.test(clientCode), false, `Forbidden pattern ${re} matched in omni-client.js`);
+    assert.equal(re.test(testCode), false, `Forbidden pattern ${re} matched in omni-client.test.mjs`);
+  }
+
+  const cdp = require(path.join(ROOT_DIR, 'cdp.js'));
+  const staticExpr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
+  assert.ok(Buffer.byteLength(staticExpr, 'utf8') < 680 * 1024);
+
+  if (typeof cdp.buildOmniClientExpression === 'function') {
+    const omniExpr = cdp.buildOmniClientExpression({ baseUrl: 'http://127.0.0.1:48123', token: 'tok_2nd' });
+    assert.doesNotThrow(() => new vm.Script(omniExpr, { filename: 'omni-2nd-channel.js' }));
+    const env = createFakeDomEnvironment({ enableCssHighlights: true });
+    env.document.title = 'Antigravity';
+    const ctx = vm.createContext({
+      window: env.window,
+      document: env.document,
+      globalThis: env.window,
+      setTimeout,
+      clearTimeout,
+      queueMicrotask,
+      Promise,
+    });
+    const res = vm.runInContext(omniExpr, ctx);
+    assert.equal(res.ok, true);
+    assert.equal(env.window.__agPrismOmni?.getState().highlightMode, 'css-highlights');
+    env.window.__agPrismOmni.destroy();
+  }
+});

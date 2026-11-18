@@ -46,13 +46,6 @@
       'Click to collapse settings panel',
       'クリックして設定パネルを折りたたむ',
     ],
-    settingsFoldHint: [
-      '点击展开或收起配置项',
-      '點擊展開或收合設定項',
-      '撳呢度展開或者收埋設定項',
-      'Click to expand or collapse settings',
-      'クリックして設定を展開・折りたたみ',
-    ],
 
     // ── About, Repo Sync & Open-Source Credits ───────────────────────────────
     aboutGroupTitle: [
@@ -140,91 +133,28 @@
     kpiCalls: ['消息数', '訊息數', '訊息數', 'Messages', 'メッセージ'],
     kpiTokens: ['Token 总量', 'Token 總量', 'Token 總量', 'Total tokens', '総トークン'],
     kpiDays: ['活跃天数', '活躍天數', '活躍日數', 'Active days', 'アクティブ日数'],
-    kpiPeak: ['高峰时段', '尖峰時段', '高峰時段', 'Peak hour', 'ピーク時間帯'],
     kpiFavModel: ['最常用模型', '最常用模型', '最常用模型', 'Favorite model', 'よく使うモデル'],
     noModelUsage: ['暂无模型用量记录', '尚無模型用量紀錄', '暫時冇模型用量紀錄', 'No model usage data yet', 'モデル使用データは未記録です'],
     sessionsUnit: ['个会话', '個工作階段', '個對話', 'sessions', 'セッション'],
     tokenUnit: ['Token', 'Token', 'Token', 'tokens', 'トークン'],
-    toolsShort: ['工具', '工具', '工具', 'Tools', 'ツール'],
     showLess: ['收起', '收合', '收埋', 'Show less', '折りたたむ'],
 
-    // ── Context Popover & Telemetry ──────────────────────────────────────────
-    activeModelFallback: ['当前模型', '目前模型', '而家個模型', 'Active Model', '使用中モデル'],
-    quotaRemShort: ['配额剩余', '配額剩餘', '剩餘配額', 'Quota Rem', '残クォータ'],
+    // ── Studio Quotas & Effort Slider ────────────────────────────────────────
     thinkingEllipsis: ['思考中…', '思考中…', '諗緊…', 'Thinking…', '思考中…'],
-    streamingEllipsis: ['输出中…', '輸出中…', '出緊字…', 'Streaming…', '生成中…'],
-    segSystemRules: ['系统提示与规则', '系統提示與規則', '系統提示同規則', 'System & Rules', 'システムとルール'],
-    segChatMessages: ['对话历史消息', '對話歷史訊息', '對話歷史訊息', 'Chat Messages', 'チャット履歴'],
-    segToolResults: ['工具执行结果', '工具執行結果', '工具執行結果', 'Tool Results', 'ツール実行結果'],
-    segOverhead: ['其他上下文开销', '其他上下文開銷', '其他上下文開銷', 'Context Overhead', 'その他オーバーヘッド'],
-    segRemaining: ['剩余可用容量', '剩餘可用容量', '剩低可用容量', 'Remaining Free Capacity', '残り利用可能容量'],
-    kpiRemaining: ['剩余可用容量', '剩餘可用容量', '剩低可用容量', 'Remaining Free', '残り容量'],
-    usedWord: ['已用', '已用', '用咗', 'Used', '使用済み'],
     kpiCacheHit: ['缓存命中率', '快取命中率', '快取命中率', 'Cache Hit Rate', 'キャッシュ率'],
-    cacheReadShort: ['读', '讀', '讀', 'Read', '読込'],
-    cacheFreshShort: ['新', '新', '新', 'Fresh', '新規'],
-    kpiSpeed: ['生成吞吐速度', '生成吞吐速度', '生成速度', 'Output Speed', '生成速度'],
-    speedAvgShort: ['均值', '平均', '平均', 'Avg', '平均'],
-    kpiSessionTotal: ['会话累计消耗', '工作階段累計消耗', '對話累計用量', 'Session Total', 'セッション合計'],
-    turnsUnit: ['轮', '輪', '輪', 'turns', 'ターン'],
-    callsUnit: ['次调用', '次呼叫', '次呼叫', 'calls', '回呼出'],
-    callsShortUnit: ['轮', '輪', '輪', 'calls', '回'],
-    stepsUnit: ['步', '步', '步', 'steps', 'ステップ'],
-    outShort: ['输出', '輸出', '輸出', 'Out', '出力'],
-    ctxBreakdownTitle: ['上下文窗口构成明细', '上下文視窗構成明細', '上下文視窗明細', 'Context Window Breakdown', 'コンテキスト内訳'],
-    rulesBudget: ['规则预算', '規則預算', '規則預算', 'Rules Budget', 'ルール上限'],
-    customBudget: ['自定义预算', '自訂預算', '自訂預算', 'Custom Budget', 'カスタム上限'],
-    maxWindow: ['窗口上限', '視窗上限', '視窗上限', 'Max Window', '最大ウィンドウ'],
-    latestCallTitle: ['最近一次调用指标', '最近一次呼叫指標', '最近一次呼叫數據', 'Latest Model Call', '最新モデル呼び出し'],
-    freshIn: ['新输入', '新輸入', '新輸入', 'Fresh In', '新規入力'],
     cacheRead: ['缓存读取', '快取讀取', '快取讀取', 'Cache Read', 'キャッシュ読込'],
-    replyOutput: ['回复输出', '回覆輸出', '回覆輸出', 'Output', '応答出力'],
-    thinkingTokens: ['思考 Token', '思考 Token', '思考 Token', 'Thinking', '思考トークン'],
-    turnsEmpty: ['当前会话暂无轮次记录', '目前對話尚無輪次紀錄', '呢段對話暫時未有輪次紀錄', 'No turn records in active conversation yet.', 'この会話のターン記録はまだありません。'],
-    ctxShort: ['上下文', '上下文', '上下文', 'Ctx', 'Ctx'],
-    thinkShort: ['思考', '思考', '思考', 'Think', '思考'],
     cacheShort: ['缓存', '快取', '快取', 'Cache', 'キャッシュ'],
-    noSubagents: ['本轮对话暂未调用子代理', '本對話尚未呼叫子代理', '呢段對話暫時未用子代理', 'No subagents invoked in this session.', 'このセッションではサブエージェント未使用です。'],
-    runningTag: ['运行中', '執行中', '行緊', 'Running', '実行中'],
-    noToolOutputs: ['暂无工具执行输出数据', '尚無工具執行輸出資料', '暫時冇工具輸出資料', 'No tool output data yet.', 'ツール出力データはまだありません。'],
     quotaPoolsTitle: ['模型配额池剩余 (Model Quotas)', '模型配額池剩餘 (Model Quotas)', '模型配額剩餘 (Model Quotas)', 'Model Quota Pools Remaining', 'モデルクォータ残量'],
     quotaLoading: ['正在读取模型配额状态…', '正在讀取模型配額狀態…', '讀取緊模型配額狀態…', 'Loading model quota status…', 'モデルクォータを読み込み中…'],
-    activeTag: ['当前', '目前', '而家', 'Active', '使用中'],
-    remShort: ['剩余', '剩餘', '剩餘', 'Rem', '残り'],
     weeklyLabel: ['周配额', '週配額', '週配額', 'Weekly', '週間'],
-    popoverTitle: ['上下文窗口与 Token 监控', '上下文視窗與 Token 監控', '上下文視窗同 Token 監控', 'Context & Token HUD', 'コンテキスト＆Token HUD'],
-    compactBtnTitle: ['向输入框填入 /compact 压缩上下文', '向輸入框填入 /compact 壓縮上下文', '填入 /compact 到輸入框壓縮上下文', 'Fill /compact into composer', '入力欄に /compact を入力して圧縮'],
-    copyBtnTitle: ['复制完整遥测报告', '複製完整遙測報告', '複製完整遙測報告', 'Copy telemetry report', 'テレメトリレポートをコピー'],
-    copyBtnLabel: ['复制报告', '複製報告', '複製報告', 'Copy', 'コピー'],
-    copiedBtnLabel: ['✓ 已复制', '✓ 已複製', '✓ 複製咗', '✓ Copied', '✓ コピー済み'],
     refreshBtnTitle: ['立即刷新遥测与配额', '立即重新整理遙測與配額', '即刻重新整理數據同配額', 'Refresh telemetry', 'データを更新'],
-    closeBtnTitle: ['关闭', '關閉', '關閉', 'Close', '閉じる'],
-    remAvailLabel: ['剩余可用', '剩餘可用', '剩低可用', 'Remaining', '残り利用可能'],
-    draftWord: ['草稿', '草稿', '草稿', 'Draft', '下書き'],
-    tabBreakdown: ['上下文拆分', '上下文拆分', '上下文明細', 'Breakdown', '内訳'],
     tabQuotas: ['模型配额', '模型配額', '模型配額', 'Quotas', 'クォータ'],
-    sessionThroughput: ['累计吞吐', '累計吞吐', '累計用量', 'Session', 'セッション合計'],
-    modelQuotaRem: ['模型配额剩余', '模型配額剩餘', '模型剩餘配額', 'Quota Rem', 'モデル残クォータ'],
-    quotaRemWord: ['配额剩余', '配額剩餘', '剩餘配額', 'Quota Rem', 'クォータ残量'],
-
-    // ── Effort Slider Popovers ───────────────────────────────────────────────
     effortTitle: ['推理等级', '推理等級', '推理等級', 'Reasoning effort', '推論レベル'],
-    effortFaster: ['更快', '更快', '更快', 'Faster', '高速'],
-    effortSmarter: ['更强', '更強', '更強', 'Smarter', '高精度'],
-    perfKicker: ['性能 · PERFORMANCE', '效能 · PERFORMANCE', '效能 · PERFORMANCE', 'PERFORMANCE', 'パフォーマンス'],
-    perfSliderAria: ['性能滑块', '效能滑桿', '效能滑桿', 'Performance slider', 'パフォーマンススライダー'],
 
     // ── Settings Panel ───────────────────────────────────────────────────────
     grpAppearance: ['外观与版面', '外觀與版面', '外觀同版面', 'Appearance & Layout', '外観とレイアウト'],
     grpInteraction: ['输入、侧栏与宠物', '輸入、側邊欄與寵物', '輸入、側欄同寵物', 'Composer, Sidebar & Mascots', '入力欄・サイドバー・マスコット'],
     groupModules: [
-      '吸收集成模块（智能共存让位）',
-      '吸收整合模組（智慧共存讓位）',
-      '吸收集成模組（智能共存讓位）',
-      'Integrated Modules (Smart Coexistence)',
-      '統合モジュール（スマート共存）',
-    ],
-    grpModules: [
       '吸收集成模块（智能共存让位）',
       '吸收整合模組（智慧共存讓位）',
       '吸收集成模組（智能共存讓位）',
@@ -277,6 +207,27 @@
     ],
     optLightCrystal: ['白昼冷晶', '白晝冷晶', '白晝冷晶', 'Daylight Crystal', '白昼クリスタル'],
     optLightAlabaster: ['暖白画册', '暖白畫冊', '暖白畫冊', 'Warm Alabaster', 'ウォーム画集'],
+    lightPresetHintDark: [
+      '当前处于深色模式，切换至浅色主题后生效',
+      '目前處於深色模式，切換至淺色主題後生效',
+      '而家係深色模式，轉去淺色主題後生效',
+      'Active in Light mode — switch host theme to Light to preview',
+      '現在はダークモードです（ライトモード切替時に反映）',
+    ],
+    lightPresetHintWarm: [
+      'Alabaster 暖岩配色已自动启用暖白画册质感',
+      'Alabaster 暖岩配色已自動啟用暖白畫冊質感',
+      'Alabaster 暖岩配色已自動啟用暖白畫冊質感',
+      'Alabaster Warm palette automatically applies warm linen surface',
+      'Alabaster 暖岩パレットではウォーム質感が自動適用されます',
+    ],
+    lightPresetHintHost: [
+      '当前跟随宿主主题，切换为 Obsidian 配色并在浅色下生效',
+      '目前跟隨宿主主題，切換為 Obsidian 配色並在淺色下生效',
+      '而家跟隨原生主題，轉做 Obsidian 配色並喺淺色下生效',
+      'Following host theme — select Obsidian palette in Light mode to customize',
+      'ホスト連動中です（ライトモード＋Obsidian 選択時に有効）',
+    ],
 
     setTelemetryTitle: ['底部遥测与上下文指示', '底部遙測與上下文指示', '底部遙測同上下文指示', 'Bottom Telemetry & Context HUD', '下部テレメトリ＆コンテキスト表示'],
     setTelemetryDesc: [
@@ -294,6 +245,24 @@
       'Add a reasoning effort slider inside the model menu; yields automatically to external instances.',
       'モデルメニュー内に推論レベルスライダーを表示し、外部インスタンス検出時は自動譲歩します。',
     ],
+    setOmniTitle: ['文件检视与右键菜单', '檔案檢視與右鍵選單', '檔案檢視同右鍵選單', 'File Viewer & Context Menu', 'ファイル表示と右クリックメニュー'],
+    setOmniDesc: [
+      '支持对话内链接与路径点击、右键文件操作及侧边栏多格式预览。',
+      '支援對話內連結與路徑點擊、右鍵檔案操作及側邊欄多格式預覽。',
+      '支援對話內連結同路徑撳開、右鍵檔案操作同側欄多格式預覽。',
+      'Enable link handling, file context menu actions, and side-pane media/data preview.',
+      'リンク処理、ファイルの右クリック操作、サイドパネルでの各種プレビューを有効化します。',
+    ],
+    setLinkTargetTitle: ['网页链接打开方式', '網頁連結開啟方式', '網頁連結打開方式', 'Web Link Target', 'Webリンクの開き方'],
+    setLinkTargetDesc: [
+      '设置左键点击网页链接的默认位置（按住 Ctrl/Cmd 点击可临时切换）。',
+      '設定左鍵點擊網頁連結的預設位置（按住 Ctrl/Cmd 點擊可臨時切換）。',
+      '設定左鍵撳網頁連結嘅預設位置（撳住 Ctrl/Cmd 撳可臨時切換）。',
+      'Default target when clicking web links (hold Ctrl/Cmd+Click to invert).',
+      'Webリンクの左クリック時の開き先（Ctrl/Cmd+クリックで一時切替）。',
+    ],
+    optLinkBuiltin: ['右侧内置面板', '右側內建面板', '右邊內置面板', 'Side Pane', '右パネル'],
+    optLinkExternal: ['系统浏览器', '系統瀏覽器', '系統瀏覽器', 'System Browser', '標準ブラウザ'],
 
     setLogoInkTitle: ['问候标志着色', '問候標誌著色', '問候標誌顏色', 'Logo Color', 'ロゴカラー'],
     setLogoInkDesc: [
@@ -456,6 +425,134 @@
       'API keys & custom prompts are stored locally in ~/.gemini/config/ (0600) and never touch Git.',
       'APIキーとカスタムプロンプトは ~/.gemini/config/ (0600) にのみ保存され、Git には一切含まれません。',
     ],
+
+    // ── v1.0.1 Studio Quotas, Scene Presets, 6 New Config Keys & Backup ─────
+    workspaceAll: ['全部项目', '全部專案', '全部項目', 'All Projects', '全プロジェクト'],
+    workspaceFilterAria: ['按项目筛选用量', '依專案篩選用量', '按項目篩選用量', 'Filter usage by workspace', 'ワークスペースで絞り込み'],
+    fiveHourLabel: ['5 小时窗口', '5 小時視窗', '5 個鐘視窗', '5-Hour Window', '5時間枠'],
+    quotaEmptyHint: [
+      '暂未获取到实时配额池快照，可点击右上角刷新重试',
+      '暫未取得即時配額池快照，可點擊右上角重新整理',
+      '暫時未攞到即時配額快照，可撳右上角重新整理',
+      'Waiting for live quota snapshot — click Refresh to retry',
+      'リアルタイムクォータ未取得（右上から再取得できます）',
+    ],
+    presetBarLabel: ['场景预设', '場景預設', '場景預設', 'Scene Presets', 'プリセット'],
+    presetUltra: ['完整光效', '完整光效', '完整光效', 'Full Visuals', 'フル視覚効果'],
+    presetFocus: ['专注编码', '專注編碼', '專注寫 Code', 'Deep Focus', '集中コーディング'],
+    presetEco: ['静默省电', '靜默省電', '靜音慳電', 'Silent Eco', '省電力静音'],
+    subTabAll: ['全部', '全部', '全部', 'All', 'すべて'],
+    subTabAppearance: ['外观', '外觀', '外觀', 'Appearance', '外観'],
+    subTabInteraction: ['交互', '互動', '互動', 'Workspace', '操作'],
+    subTabThought: ['思考转译', '思考轉譯', '思考轉譯', 'Thought', '思考翻訳'],
+    subTabModules: ['集成模块', '整合模組', '集成模組', 'Modules', '統合'],
+    subTabAbout: ['配置与关于', '設定與關於', '設定同關於', 'Config & About', '設定・情報'],
+
+    setAccentToneTitle: ['强调色倾向', '強調色傾向', '強調色傾向', 'Accent Tone', 'アクセントトーン'],
+    setAccentToneDesc: [
+      '调节按钮高亮、焦点环与图表主色的色相倾向。',
+      '調節按鈕高亮、焦點環與圖表主色的色相傾向。',
+      '調節掣位高亮、焦點環同圖表主色嘅色調。',
+      'Adjust accent hue for active controls, focus rings, and charts.',
+      '操作ハイライト・フォーカスリング・チャートのアクセント色相を調整します。',
+    ],
+    optToneFollow: ['跟随模型', '跟隨模型', '跟隨模型', 'Follow Model', 'モデル連動'],
+    optToneCobalt: ['钴蓝', '鈷藍', '鈷藍', 'Cobalt', 'コバルト'],
+    optToneIris: ['鸢尾紫', '鳶尾紫', '鳶尾紫', 'Iris', 'アイリス'],
+    optToneAmber: ['琥珀金', '琥珀金', '琥珀金', 'Amber', 'アンバー'],
+    optToneMono: ['极简单色', '極簡單色', '極簡單色', 'Monochrome', 'モノクロ'],
+
+    setCornerStyleTitle: ['界面圆角风格', '介面圓角風格', '介面圓角風格', 'Corner Radius Style', '角丸スタイル'],
+    setCornerStyleDesc: [
+      '统一调节输入框、卡片与弹出面板的几何曲率。',
+      '統一調節輸入框、卡片與彈出面板的幾何曲率。',
+      '統一調節輸入框、卡片同彈出面板嘅圓角弧度。',
+      'Adjust border radius curvature across composer, cards, and popovers.',
+      '入力欄・カード・ポップオーバーの角丸曲率を一括調整します。',
+    ],
+    optCornerSharp: ['利落锐角', '俐落銳角', '利落銳角', 'Sharp', 'シャープ'],
+    optCornerBalanced: ['均衡标准', '均衡標準', '均衡標準', 'Balanced', '標準'],
+    optCornerSoft: ['柔和圆润', '柔和圓潤', '柔和圓潤', 'Soft', 'ソフト'],
+
+    setCodeFontTitle: ['代码等宽字体', '程式碼等寬字型', '代碼等寬字體', 'Code Monospace Font', 'コード等幅フォント'],
+    setCodeFontDesc: [
+      '设置对话代码块、行内代码与终端片段的首选等宽字体栈。',
+      '設定對話程式碼區塊、行內程式碼與終端片段的首選等寬字型。',
+      '設定對話代碼塊、行內代碼同終端片段嘅首選等寬字體。',
+      'Preferred monospace font family for code blocks and inline code.',
+      'コードブロックおよびインラインコードの優先等幅フォントを指定します。',
+    ],
+    optFontDefault: ['系统默认', '系統預設', '系統預設', 'Default', 'システム標準'],
+    optFontSfmono: ['SF Mono / Consolas', 'SF Mono / Consolas', 'SF Mono / Consolas', 'SF Mono / Consolas', 'SF Mono / Consolas'],
+
+    setCodeLigaturesTitle: ['代码编程连字', '程式碼連字', '代碼連字', 'Code Font Ligatures', 'コード合字（リガチャ）'],
+    setCodeLigaturesDesc: [
+      '在代码块中启用 =>、!==、>= 等多字符运算符连字特性。',
+      '在程式碼區塊中啟用 =>、!==、>= 等多字元運算子連字特性。',
+      '喺代碼塊入面啟用 =>、!==、>= 等運算符連字顯示。',
+      'Enable programming font ligatures (=>, !==, >=) inside code blocks.',
+      'コードブロック内で =>、!==、>= などの演算子リガチャを有効化します。',
+    ],
+
+    setAmbientIntensityTitle: ['环境氛围光浓度', '環境氛圍光濃度', '環境氛圍光濃度', 'Ambient Glow Intensity', '環境グロー強度'],
+    setAmbientIntensityDesc: [
+      '精细控制背景极光与边缘折射光晕的不透明度比例。',
+      '精細控制背景極光與邊緣折射光暈的不透明度比例。',
+      '精細控制背景極光同邊緣折射光暈嘅不透明度。',
+      'Control opacity scale of ambient aurora and edge refraction glow.',
+      '背景オーロラおよびエッジ屈折グローの不透明度を調整します。',
+    ],
+    optAmb0: ['关闭 (0%)', '關閉 (0%)', '關閉 (0%)', '0%', 'オフ (0%)'],
+    optAmb35: ['微光 (35%)', '微光 (35%)', '微光 (35%)', '35%', '控えめ (35%)'],
+    optAmb70: ['柔和 (70%)', '柔和 (70%)', '柔和 (70%)', '70%', '標準 (70%)'],
+    optAmb100: ['标准 (100%)', '標準 (100%)', '標準 (100%)', '100%', 'フル (100%)'],
+
+    setThoughtViewTitle: ['译文排版视图', '譯文排版檢視', '譯文排版檢視', 'Translated Thought View', '翻訳表示レイアウト'],
+    setThoughtViewDesc: [
+      '在「沉浸纯译文」与「中英段落上下双语对照」之间切换。',
+      '在「沉浸純譯文」與「原文譯文上下雙語對照」之間切換。',
+      '喺「沉浸純譯文」同「中英上下雙語對照」之間切換。',
+      'Switch between clean immersive translation and stacked bilingual view.',
+      '没入型の翻訳のみ表示と、原文・訳文の二言語対訳表示を切り替えます。',
+    ],
+    optThoughtImmersive: ['沉浸纯译文', '沉浸純譯文', '沉浸純譯文', 'Immersive', '翻訳のみ'],
+    optThoughtBilingual: ['双语上下对照', '雙語上下對照', '雙語上下對照', 'Bilingual', '二言語対訳'],
+
+    cfgToolbarTitle: ['配置备份与重置', '設定備份與重設', '設定備份同重設', 'Configuration Backup & Reset', '設定のバックアップと初期化'],
+    cfgToolbarHint: [
+      '导出 JSON 时会自动剥离所有 API Key 私密凭据，可安全分享或跨机迁移。',
+      '匯出 JSON 時會自動剝離所有 API Key 私密憑證，可安全分享或跨機遷移。',
+      '匯出 JSON 時會自動剝走晒所有 API Key 私密憑證，可以放心分享或者跨機遷移。',
+      'Exported JSON strips all API keys automatically for safe backup and sharing.',
+      'エクスポートされる JSON からは API キーが自動的に除外され、安全に共有・移行できます。',
+    ],
+    cfgExportBtn: ['导出配置 JSON', '匯出設定 JSON', '匯出設定 JSON', 'Export JSON', 'JSON 書き出し'],
+    cfgImportBtn: ['导入恢复', '匯入還原', '匯入還原', 'Import JSON', 'JSON 読み込み'],
+    cfgResetBtn: ['恢复默认', '恢復預設', '恢復預設', 'Reset Defaults', '初期設定に戻す'],
+    cfgExportOk: ['已导出脱敏配置（不含 API Key）', '已匯出脫敏設定（不含 API Key）', '已匯出脫敏設定（唔含 API Key）', 'Exported sanitized config (API keys stripped)', 'APIキーを除外して設定を書き出しました'],
+    cfgImportOk: ['已校验并恢复配置项', '已校驗並還原設定項', '已校驗並還原設定項', 'Validated and restored settings', '設定を検証して復元しました'],
+    cfgImportErr: ['配置 JSON 格式无效或无合法字段', '設定 JSON 格式無效或無合法欄位', '設定 JSON 格式無效或者冇合法欄位', 'Invalid JSON or no recognized setting keys', '無効な JSON または有効な設定項目がありません'],
+    cfgResetOk: ['已恢复全部默认配置', '已恢復全部預設設定', '已恢復全部預設設定', 'Restored all default settings', 'すべての設定を初期値に戻しました'],
+    thoughtClearCacheBtn: ['清空缓存', '清除快取', '清空快取', 'Clear Cache', 'キャッシュ消去'],
+    thoughtViewLabel: ['译文排版视图', '譯文排版檢視', '譯文排版檢視', 'Reading View', '翻訳表示レイアウト'],
+
+    // ── Omni Context Menu & Built-in Side-Pane Browser / Viewer ──────────────
+    omniOpenBuiltin: ['在右侧面板打开', '在右側面板開啟', '喺右邊面板打開', 'Open in Side Pane', '右パネルで開く'],
+    omniOpenPreview: ['在右侧检视台预览', '在右側檢視台預覽', '喺右邊檢視台預覽', 'Preview in Workbench', 'ワークベンチでプレビュー'],
+    omniOpenExternal: ['使用系统默认程序打开', '使用系統預設程式開啟', '用系統預設程式打開', 'Open in Default App', '既定のアプリで開く'],
+    omniOpenBrowser: ['在系统浏览器中打开', '在系統瀏覽器中開啟', '喺系統瀏覽器打開', 'Open in System Browser', '標準ブラウザで開く'],
+    omniRevealFolder: ['在文件夹中显示', '在資料夾中顯示', '喺資料夾入面顯示', 'Reveal in Folder', 'フォルダに表示'],
+    omniInsertMention: ['作为 @引用 填入输入框', '作為 @引用 填入輸入框', '當做 @引用 填入輸入框', 'Insert as @Mention', '@参照として入力欄へ挿入'],
+    omniCopyLink: ['复制链接地址', '複製連結位址', '複製連結地址', 'Copy Link URL', 'リンクURLをコピー'],
+    omniCopyAbsPath: ['复制绝对路径', '複製絕對路徑', '複製絕對路徑', 'Copy Absolute Path', '絶対パスをコピー'],
+    omniCopyRelPath: ['复制相对路径', '複製相對路徑', '複製相對路徑', 'Copy Relative Path', '相対パスをコピー'],
+    omniCopyText: ['复制文本', '複製文字', '複製文字', 'Copy Text', 'テキストをコピー'],
+    omniZoomDiagram: ['放大查看图表', '放大檢視圖表', '放大睇圖表', 'Zoom Diagram', '図を拡大表示'],
+    omniViewWorkbench: ['检视台视图', '檢視台檢視', '檢視台檢視', 'Workbench View', 'プレビュー表示'],
+    omniViewRaw: ['原始视图', '原始檢視', '原始檢視', 'Raw View', 'ソース表示'],
+    omniReload: ['刷新', '重新整理', '重新整理', 'Reload', '再読み込み'],
+    omniBack: ['后退', '返回', '後退', 'Back', '戻る'],
+    omniForward: ['前进', '前進', '前進', 'Forward', '進む'],
   };
 
   function getUiStrings(lang) {
@@ -463,6 +560,18 @@
     for (const key in UI_TABLE) {
       out[key] = pick(lang, UI_TABLE[key]);
     }
+    out.optViewImmersive = out.optThoughtImmersive;
+    out.optViewBilingual = out.optThoughtBilingual;
+    out.swarmSplitSub = (mainPct, subPct) =>
+      lang === 'zh-CN'
+        ? `主会话 ${mainPct}% · 子代理 ${subPct}%`
+        : lang === 'zh-TW'
+        ? `主工作階段 ${mainPct}% · 子代理 ${subPct}%`
+        : lang === 'yue'
+        ? `主對話 ${mainPct}% · 子代理 ${subPct}%`
+        : lang === 'ja'
+        ? `メイン ${mainPct}% · 子 ${subPct}%`
+        : `Main ${mainPct}% · Swarm ${subPct}%`;
     out.showMoreN = (n) =>
       lang === 'zh-CN'
         ? `再显示 ${n} 个`
@@ -473,116 +582,6 @@
         : lang === 'ja'
         ? `さらに ${n} 件表示`
         : `Show ${n} more`;
-    out.hudSummaryMeta = (n) =>
-      lang === 'zh-CN'
-        ? `${n} 项`
-        : lang === 'zh-TW'
-        ? `${n} 項`
-        : lang === 'yue'
-        ? `${n} 項`
-        : lang === 'ja'
-        ? `${n} 項目`
-        : `${n} options`;
-    out.tabTurnsN = (n) =>
-      lang === 'zh-CN'
-        ? `对话轮次 (${n})`
-        : lang === 'zh-TW'
-        ? `對話輪次 (${n})`
-        : lang === 'yue'
-        ? `對話輪次 (${n})`
-        : lang === 'ja'
-        ? `ターン (${n})`
-        : `Turns (${n})`;
-    out.tabToolsN = (n) =>
-      lang === 'zh-CN'
-        ? `工具/代理 (${n})`
-        : lang === 'zh-TW'
-        ? `工具/代理 (${n})`
-        : lang === 'yue'
-        ? `工具/代理 (${n})`
-        : lang === 'ja'
-        ? `ツール (${n})`
-        : `Tools (${n})`;
-    out.toolDeclarationsN = (n) =>
-      lang === 'zh-CN'
-        ? `工具定义声明 (${n})`
-        : lang === 'zh-TW'
-        ? `工具定義宣告 (${n})`
-        : lang === 'yue'
-        ? `工具定義聲明 (${n})`
-        : lang === 'ja'
-        ? `ツール定義 (${n})`
-        : `Tool Declarations (${n})`;
-    out.liveDraftN = (n) =>
-      lang === 'zh-CN'
-        ? `当前输入草稿 (${n} 字)`
-        : lang === 'zh-TW'
-        ? `目前輸入草稿 (${n} 字)`
-        : lang === 'yue'
-        ? `而家草稿 (${n} 字)`
-        : lang === 'ja'
-        ? `入力中の下書き (${n} 文字)`
-        : `Live Draft (${n} chars)`;
-    out.subagentsHeading = (cnt, calls, tokFmt) =>
-      lang === 'zh-CN'
-        ? `子代理消耗 (${cnt} 个 · ${calls} 次调用 · 累计 ${tokFmt})`
-        : lang === 'zh-TW'
-        ? `子代理消耗 (${cnt} 個 · ${calls} 次呼叫 · 累計 ${tokFmt})`
-        : lang === 'yue'
-        ? `子代理用量 (${cnt} 個 · ${calls} 次呼叫 · 累計 ${tokFmt})`
-        : lang === 'ja'
-        ? `サブエージェント (${cnt} 体 · ${calls} 回呼出 · 合計 ${tokFmt})`
-        : `Subagents (${cnt} · ${calls} calls · Total ${tokFmt})`;
-    out.toolResultsHeading = (tokFmt) =>
-      lang === 'zh-CN'
-        ? `工具输出体积排行 (共 ${tokFmt} tok)`
-        : lang === 'zh-TW'
-        ? `工具輸出大小排行 (共 ${tokFmt} tok)`
-        : lang === 'yue'
-        ? `工具輸出大細排行 (共 ${tokFmt} tok)`
-        : lang === 'ja'
-        ? `ツール結果サイズ順 (${tokFmt} tok)`
-        : `Tool Results Leaderboard (${tokFmt} tok)`;
-    out.ringTooltip = (remStr, maxStr, remPctStr, usedStr, usedPctStr, quotaPct) => {
-      const qTip =
-        quotaPct != null
-          ? lang === 'zh-CN'
-            ? ` · 配额剩余 ${quotaPct.toFixed(1)}%`
-            : lang === 'zh-TW'
-            ? ` · 配額剩餘 ${quotaPct.toFixed(1)}%`
-            : lang === 'yue'
-            ? ` · 剩餘配額 ${quotaPct.toFixed(1)}%`
-            : lang === 'ja'
-            ? ` · クォータ残 ${quotaPct.toFixed(1)}%`
-            : ` · Quota Rem ${quotaPct.toFixed(1)}%`
-          : '';
-      if (lang === 'zh-CN') return `剩余可用 ${remStr} / ${maxStr} (${remPctStr}%) · 已用 ${usedStr} (${usedPctStr}%)${qTip}`;
-      if (lang === 'zh-TW') return `剩餘可用 ${remStr} / ${maxStr} (${remPctStr}%) · 已用 ${usedStr} (${usedPctStr}%)${qTip}`;
-      if (lang === 'yue') return `剩低可用 ${remStr} / ${maxStr} (${remPctStr}%) · 用咗 ${usedStr} (${usedPctStr}%)${qTip}`;
-      if (lang === 'ja') return `残り ${remStr} / ${maxStr} (${remPctStr}%) · 使用済 ${usedStr} (${usedPctStr}%)${qTip}`;
-      return `Remaining ${remStr} / ${maxStr} (${remPctStr}%) · Used ${usedStr} (${usedPctStr}%)${qTip}`;
-    };
-    out.perfPreviewStatus = (frameStr, modelShort, subTitle, fullLabel) => {
-      if (lang === 'zh-CN') return `预览帧 ${frameStr} · 松手吸附到 ${modelShort} ${subTitle}`;
-      if (lang === 'zh-TW') return `預覽影格 ${frameStr} · 放開吸附至 ${modelShort} ${subTitle}`;
-      if (lang === 'yue') return `預覽第 ${frameStr} 格 · 放手揀 ${modelShort} ${subTitle}`;
-      if (lang === 'ja') return `フレーム ${frameStr} · 離して ${fullLabel} を選択`;
-      return `Frame ${frameStr} · Release to select ${fullLabel}`;
-    };
-    out.perfCommittedStatus = (num, fullLabel) => {
-      if (lang === 'zh-CN') return `已落到档位 ${num}：${fullLabel}`;
-      if (lang === 'zh-TW') return `已切換至檔位 ${num}：${fullLabel}`;
-      if (lang === 'yue') return `已揀第 ${num} 級：${fullLabel}`;
-      if (lang === 'ja') return `プリセット ${num}：${fullLabel}`;
-      return `Preset ${num}: ${fullLabel}`;
-    };
-    out.perfHoverStatus = (num, fullLabel) => {
-      if (lang === 'zh-CN') return `切换到档位 ${num}：${fullLabel}`;
-      if (lang === 'zh-TW') return `切換到檔位 ${num}：${fullLabel}`;
-      if (lang === 'yue') return `轉去第 ${num} 級：${fullLabel}`;
-      if (lang === 'ja') return `プリセット ${num} に切替：${fullLabel}`;
-      return `Select preset ${num}: ${fullLabel}`;
-    };
     return out;
   }
 

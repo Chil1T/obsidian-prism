@@ -24,6 +24,7 @@ namespace AgyClaudeStyle.Installer
         public bool NoAutostart;
         public bool NoKillLegacy;
         public string InstallDir;
+        public string PluginDir;
         public int? CdpPort;
         public string OutFile;
     }
@@ -42,6 +43,8 @@ namespace AgyClaudeStyle.Installer
         public string Headline;
         public string Detail;
         public string InstallDir;
+        public string PluginDir;
+        public bool NativePluginDeployed;
         public string AntigravityExe;
         public string AntigravityVersion;
         public int? CdpPort;
@@ -66,6 +69,49 @@ namespace AgyClaudeStyle.Installer
                 localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             }
             return Path.Combine(localAppData, "obsidian-prism");
+        }
+
+        public static string ResolveNativePluginDir(InstallerOptions opts, string resolvedInstallDir)
+        {
+            if (opts != null && !string.IsNullOrEmpty(opts.PluginDir))
+            {
+                return Path.GetFullPath(opts.PluginDir).TrimEnd('\\', '/');
+            }
+            if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AG_PRISM_PLUGIN_DIR")))
+            {
+                return CdpHelper.GetDefaultNativePluginDir();
+            }
+            if (opts == null || string.IsNullOrEmpty(opts.InstallDir))
+            {
+                return CdpHelper.GetDefaultNativePluginDir();
+            }
+            string parentDir = Path.GetDirectoryName(resolvedInstallDir);
+            string baseName = Path.GetFileName(resolvedInstallDir);
+            return Path.Combine(string.IsNullOrEmpty(parentDir) ? resolvedInstallDir : parentDir, baseName + "-native-plugin");
+        }
+
+        public static void StopNativeDaemonInDir(string pluginDir, Action<string> log)
+        {
+            if (string.IsNullOrEmpty(pluginDir) || !Directory.Exists(pluginDir)) return;
+            int? pid = CdpHelper.ReadNativeDaemonPid(pluginDir);
+            if (pid.HasValue && pid.Value > 0 && pid.Value != Process.GetCurrentProcess().Id)
+            {
+                try
+                {
+                    using (Process p = Process.GetProcessById(pid.Value))
+                    {
+                        if (!p.HasExited && CdpHelper.IsExpectedPrismDaemonProcess(p))
+                        {
+                            p.Kill();
+                            p.WaitForExit(2000);
+                            if (log != null) log("已停止原生 Sidecar Daemon (PID " + pid.Value + ")");
+                        }
+                    }
+                }
+                catch { }
+            }
+            string pidFile = Path.Combine(pluginDir, ".daemon.pid");
+            try { if (File.Exists(pidFile)) File.Delete(pidFile); } catch { }
         }
 
         public static string GetDirHash(string dir)
@@ -401,16 +447,21 @@ namespace AgyClaudeStyle.Installer
             }
         }
 
-        public static void CreateStartupShortcut(string installDir)
+        public static void CreateStartupShortcut(string installDir, string pluginDir)
         {
             string lnkPath = GetStartupShortcutPath();
             string targetExe = Path.Combine(installDir, WatcherExeName);
+            string shortcutArgs = "--watch";
+            if (!string.IsNullOrEmpty(pluginDir))
+            {
+                shortcutArgs += " --plugin-dir \"" + pluginDir + "\"";
+            }
             Type shellType = Type.GetTypeFromProgID("WScript.Shell");
             object shell = Activator.CreateInstance(shellType);
             object lnk = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnkPath });
             Type lnkType = lnk.GetType();
             lnkType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, lnk, new object[] { targetExe });
-            lnkType.InvokeMember("Arguments", BindingFlags.SetProperty, null, lnk, new object[] { "--watch" });
+            lnkType.InvokeMember("Arguments", BindingFlags.SetProperty, null, lnk, new object[] { shortcutArgs });
             lnkType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, lnk, new object[] { installDir.TrimEnd('\\', '/') });
             lnkType.InvokeMember("Description", BindingFlags.SetProperty, null, lnk, new object[] { "Obsidian Prism (obsidian-prism) watcher" });
             lnkType.InvokeMember("Save", BindingFlags.InvokeMethod, null, lnk, null);
@@ -423,7 +474,7 @@ namespace AgyClaudeStyle.Installer
                 if (key == null) return;
                 string exePath = Path.Combine(installDir, SelfInstalledExeName);
                 key.SetValue("DisplayName", "Obsidian Prism · 黑曜棱镜 (Optical UI & Motion Suite for Antigravity)", RegistryValueKind.String);
-                key.SetValue("DisplayVersion", version ?? "1.0.0", RegistryValueKind.String);
+                key.SetValue("DisplayVersion", version ?? "1.0.1", RegistryValueKind.String);
                 key.SetValue("Publisher", "Obsidian Prism Contributors", RegistryValueKind.String);
                 key.SetValue("InstallLocation", installDir, RegistryValueKind.String);
                 key.SetValue("DisplayIcon", exePath + ",0", RegistryValueKind.String);
@@ -438,7 +489,9 @@ namespace AgyClaudeStyle.Installer
             OperationResult result = new OperationResult();
             result.Mode = "install";
             string installDir = Path.GetFullPath(string.IsNullOrEmpty(opts.InstallDir) ? GetDefaultInstallDir() : opts.InstallDir).TrimEnd('\\', '/');
+            string pluginDir = ResolveNativePluginDir(opts, installDir);
             result.InstallDir = installDir;
+            result.PluginDir = pluginDir;
 
             Action<int, string> report = (pct, msg) =>
             {
@@ -460,15 +513,30 @@ namespace AgyClaudeStyle.Installer
 
             report(28, "正在停止旧版守护进程（如存在）...");
             StopWatcherInDir(installDir, (m) => report(32, m));
+            StopNativeDaemonInDir(pluginDir, (m) => report(34, m));
             if (!opts.NoKillLegacy)
             {
                 StopLegacyNodeWatchers((m) => report(35, m));
             }
 
-            report(45, "正在部署独立运行环境与插件资源至: " + installDir);
+            report(45, "正在部署原生 Sidecar 插件与独立守护资源...");
             Directory.CreateDirectory(installDir);
+            if (!string.IsNullOrEmpty(pluginDir))
+            {
+                Directory.CreateDirectory(pluginDir);
+            }
+
+            string installCfgPath = Path.Combine(installDir, "config.json");
+            string pluginCfgPath = !string.IsNullOrEmpty(pluginDir) ? Path.Combine(pluginDir, "config.json") : null;
+            bool hadInstallCfg = File.Exists(installCfgPath);
+            bool hadPluginCfg = !string.IsNullOrEmpty(pluginCfgPath) && File.Exists(pluginCfgPath);
+            if (!hadInstallCfg && hadPluginCfg)
+            {
+                try { File.Copy(pluginCfgPath, installCfgPath, false); hadInstallCfg = true; } catch { }
+            }
 
             bool preservedConfig = false;
+            const string nativePrefix = "native-plugin/";
             using (Stream resStream = Assembly.GetExecutingAssembly().GetManifestResourceStream("AGY_PAYLOAD.zip"))
             {
                 if (resStream == null) throw new InvalidOperationException("安装包内嵌资源 AGY_PAYLOAD.zip 缺失");
@@ -477,13 +545,21 @@ namespace AgyClaudeStyle.Installer
                     foreach (ZipArchiveEntry entry in archive.Entries)
                     {
                         if (string.IsNullOrEmpty(entry.Name)) continue;
-                        string destPath = Path.Combine(installDir, entry.FullName.Replace('/', '\\'));
+                        string normFull = entry.FullName.Replace('\\', '/');
+                        bool isNativeEntry = normFull.StartsWith(nativePrefix, StringComparison.OrdinalIgnoreCase);
+                        string relPath = isNativeEntry ? normFull.Substring(nativePrefix.Length) : normFull;
+                        if (string.IsNullOrEmpty(relPath)) continue;
+
+                        string targetRoot = isNativeEntry ? pluginDir : installDir;
+                        if (string.IsNullOrEmpty(targetRoot)) continue;
+
+                        string destPath = Path.Combine(targetRoot, relPath.Replace('/', '\\'));
                         string parent = Path.GetDirectoryName(destPath);
                         if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
 
                         if (string.Equals(entry.Name, "config.json", StringComparison.OrdinalIgnoreCase) && File.Exists(destPath))
                         {
-                            preservedConfig = true;
+                            if (!isNativeEntry) preservedConfig = true;
                             continue;
                         }
                         using (Stream inStream = entry.Open())
@@ -494,8 +570,13 @@ namespace AgyClaudeStyle.Installer
                     }
                 }
             }
+            if (hadInstallCfg && !string.IsNullOrEmpty(pluginCfgPath) && File.Exists(installCfgPath))
+            {
+                try { File.Copy(installCfgPath, pluginCfgPath, true); } catch { }
+            }
             result.PreservedExistingConfig = preservedConfig;
-            report(62, preservedConfig ? "已保留本机现有 config.json 用户配置" : "已写入内置默认配置 config.json");
+            result.NativePluginDeployed = !string.IsNullOrEmpty(pluginDir) && File.Exists(Path.Combine(pluginDir, "plugin.json"));
+            report(62, preservedConfig ? "已保留本机现有 config.json 用户配置并同步部署原生 Sidecar 插件" : "已部署原生 Sidecar 插件并写入默认配置 config.json");
 
             try
             {
@@ -512,17 +593,17 @@ namespace AgyClaudeStyle.Installer
             PluginManifest manifest = PluginManifest.Load(installDir);
             Dictionary<string, object> activeCfg = CdpHelper.ReadConfig(installDir, manifest);
             result.ConfigSummary = string.Format(
-                "语言={0} | 配色={1} | 圆环={2} | 思考滑块={3}",
+                "语言={0} | 配色={1} | 动效={2} | Omni={3}",
                 activeCfg.ContainsKey("language") ? activeCfg["language"] : "zh-CN",
-                activeCfg.ContainsKey("palette") ? activeCfg["palette"] : "claude",
-                activeCfg.ContainsKey("ringMode") ? activeCfg["ringMode"] : "quota",
-                activeCfg.ContainsKey("effortSliderStyle") ? activeCfg["effortSliderStyle"] : "claude"
+                activeCfg.ContainsKey("palette") ? activeCfg["palette"] : "obsidian",
+                activeCfg.ContainsKey("motionLevel") ? activeCfg["motionLevel"] : "standard",
+                activeCfg.ContainsKey("omniModule") ? activeCfg["omniModule"] : "on"
             );
 
             if (!opts.NoAutostart)
             {
                 report(72, "正在配置 Windows 开机自动修补与卸载入口...");
-                CreateStartupShortcut(installDir);
+                CreateStartupShortcut(installDir, pluginDir);
                 RegisterUninstallEntry(installDir, manifest.Version);
             }
             else
@@ -533,6 +614,10 @@ namespace AgyClaudeStyle.Installer
             report(82, "正在启动后台静默守护进程...");
             string watcherExe = Path.Combine(installDir, WatcherExeName);
             string watcherArgs = "--watch --dir \"" + installDir + "\"";
+            if (!string.IsNullOrEmpty(pluginDir))
+            {
+                watcherArgs += " --plugin-dir \"" + pluginDir + "\"";
+            }
             if (opts.CdpPort.HasValue && opts.CdpPort.Value > 0)
             {
                 watcherArgs += " --cdp-port " + opts.CdpPort.Value;
@@ -568,7 +653,8 @@ namespace AgyClaudeStyle.Installer
                                 logContent = sr.ReadToEnd();
                             }
                         }
-                        bool watcherInjected = logContent.IndexOf("[✓] 已注入 obsidian-prism:", StringComparison.Ordinal) >= 0;
+                        bool watcherInjected = logContent.IndexOf("[✓] 已注入 obsidian-prism:", StringComparison.Ordinal) >= 0 ||
+                                               (!string.IsNullOrEmpty(pluginDir) && CdpHelper.IsNativeDaemonAlive(pluginDir));
                         if (pages != null && pages.Count > 0 && watcherInjected)
                         {
                             bool allReady = true;
@@ -609,7 +695,7 @@ namespace AgyClaudeStyle.Installer
             if (result.InjectedPages.Count > 0)
             {
                 result.Headline = string.Format("修补成功！已实时注入 {0} 个 Antigravity 窗口", result.InjectedPages.Count);
-                result.Detail = "后台无损守护已运行并已配置开机自启。后续打开新窗口或更新 Antigravity 后也会自动注入。";
+                result.Detail = "已部署原生五通道 Sidecar 插件与后台热备守护，并配置开机自启。后续打开新窗口或更新 Antigravity 后也会自动生效。";
                 for (int i = 0; i < result.InjectedPages.Count; i++)
                 {
                     report(98, "已注入窗口: " + result.InjectedPages[i]);
@@ -617,13 +703,13 @@ namespace AgyClaudeStyle.Installer
             }
             else if (cdpReachable && port.HasValue)
             {
-                result.Headline = "已安装并启动守护！等待 Antigravity 窗口就绪";
-                result.Detail = "已配置开机自启并启动后台守护。检测到调试端口 " + port.Value + "，窗口就绪后将自动完成注入。";
+                result.Headline = "已安装原生插件并启动守护！等待 Antigravity 窗口就绪";
+                result.Detail = "已部署原生 Sidecar 插件并启动后台守护。检测到调试端口 " + port.Value + "，窗口就绪后将自动完成注入。";
             }
             else
             {
-                result.Headline = "安装成功！后台自动修补已就绪";
-                result.Detail = "当前未检测到运行中的 Antigravity Desktop；守护进程已在后台待命，打开 Antigravity Desktop 后会自动立即生效。";
+                result.Headline = "安装成功！原生 Sidecar 插件与自动修补已就绪";
+                result.Detail = "当前未检测到运行中的 Antigravity Desktop；原生插件与守护进程已就绪，打开 Antigravity Desktop 后会自动立即生效。";
             }
             report(100, result.Headline);
             return result;
@@ -634,7 +720,9 @@ namespace AgyClaudeStyle.Installer
             OperationResult result = new OperationResult();
             result.Mode = "uninstall";
             string installDir = Path.GetFullPath(string.IsNullOrEmpty(opts.InstallDir) ? GetDefaultInstallDir() : opts.InstallDir).TrimEnd('\\', '/');
+            string pluginDir = ResolveNativePluginDir(opts, installDir);
             result.InstallDir = installDir;
+            result.PluginDir = pluginDir;
 
             Action<int, string> report = (pct, msg) =>
             {
@@ -643,6 +731,7 @@ namespace AgyClaudeStyle.Installer
 
             report(15, "正在停止后台守护进程...");
             StopWatcherInDir(installDir, (m) => report(25, m));
+            StopNativeDaemonInDir(pluginDir, (m) => report(30, m));
 
             report(40, "正在通过 CDP 清理运行中的 Antigravity Desktop 界面...");
             int? port = CdpHelper.ReadPort(opts.CdpPort);
@@ -710,6 +799,12 @@ namespace AgyClaudeStyle.Installer
                     Registry.CurrentUser.DeleteSubKeyTree(UninstallRegSubKey, false);
                 }
                 catch { }
+            }
+
+            if (!string.IsNullOrEmpty(pluginDir) && Directory.Exists(pluginDir))
+            {
+                report(80, "正在清理原生 Sidecar 插件目录: " + pluginDir);
+                try { Directory.Delete(pluginDir, true); } catch { }
             }
 
             report(85, "正在清理安装目录: " + installDir);
@@ -1089,11 +1184,15 @@ namespace AgyClaudeStyle.Installer
             if (opts.StatusOnly)
             {
                 string dir = Path.GetFullPath(string.IsNullOrEmpty(opts.InstallDir) ? InstallerCore.GetDefaultInstallDir() : opts.InstallDir).TrimEnd('\\', '/');
+                string pluginDir = InstallerCore.ResolveNativePluginDir(opts, dir);
                 AntigravityDetectResult ag = InstallerCore.DetectAntigravityDesktop();
                 int? port = CdpHelper.ReadPort(opts.CdpPort);
                 Dictionary<string, object> st = new Dictionary<string, object>(StringComparer.Ordinal);
                 st["installed"] = Directory.Exists(dir) && File.Exists(Path.Combine(dir, "obsidian-prism-watcher.exe"));
                 st["installDir"] = dir;
+                st["pluginDir"] = pluginDir;
+                st["nativePluginInstalled"] = !string.IsNullOrEmpty(pluginDir) && File.Exists(Path.Combine(pluginDir, "plugin.json"));
+                st["nativeDaemonAlive"] = !string.IsNullOrEmpty(pluginDir) && CdpHelper.IsNativeDaemonAlive(pluginDir);
                 st["startupShortcut"] = File.Exists(InstallerCore.GetStartupShortcutPath());
                 st["antigravityExe"] = ag.ExePath;
                 st["antigravityVersion"] = ag.Version;
@@ -1159,6 +1258,7 @@ namespace AgyClaudeStyle.Installer
                 else if (a == "--no-autostart") opts.NoAutostart = true;
                 else if (a == "--no-kill-legacy") opts.NoKillLegacy = true;
                 else if (a == "--install-dir" && i + 1 < args.Length) opts.InstallDir = args[++i];
+                else if (a == "--plugin-dir" && i + 1 < args.Length) opts.PluginDir = args[++i];
                 else if (a == "--cdp-port" && i + 1 < args.Length)
                 {
                     int p;
@@ -1178,6 +1278,8 @@ namespace AgyClaudeStyle.Installer
             d["headline"] = res.Headline;
             d["detail"] = res.Detail;
             d["installDir"] = res.InstallDir;
+            d["pluginDir"] = res.PluginDir;
+            d["nativePluginDeployed"] = res.NativePluginDeployed;
             d["antigravityExe"] = res.AntigravityExe;
             d["antigravityVersion"] = res.AntigravityVersion;
             d["cdpPort"] = res.CdpPort.HasValue ? (object)res.CdpPort.Value : null;

@@ -171,21 +171,79 @@
 
   function tsToMs(ts) {
     if (!ts) return 0;
-    if (typeof ts === 'number') return ts;
+    if (typeof ts === 'number') return Number.isFinite(ts) ? ts : 0;
+    if (typeof ts === 'string') {
+      const parsed = Date.parse(ts);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+      const num = Number(ts);
+      return Number.isFinite(num) && num > 0 ? (num > 1e11 ? num : num * 1000) : 0;
+    }
     const sec = Number(ts.seconds || 0);
     const nanos = Number(ts.nanos || 0);
     return sec > 0 ? sec * 1000 + Math.floor(nanos / 1e6) : 0;
   }
 
   function cleanModelName(val) {
-    const raw = String(val?.modelDisplayName || val?.responseModel || (val?.model ? 'Model #' + val.model : 'unknown')).trim();
-    return raw || 'unknown';
+    const direct = val?.modelDisplayName || val?.responseModel || val?.modelName;
+    if (direct && String(direct).trim()) return String(direct).trim();
+    const m = val?.model;
+    if (typeof m === 'string' && m.trim()) {
+      return /^\d+$/.test(m.trim()) ? 'Model #' + m.trim() : m.trim();
+    }
+    if (m) return 'Model #' + m;
+    return 'unknown';
   }
 
   function isSubagentSummary(summary) {
     if (!summary || typeof summary !== 'object') return false;
+    if (summary.subagent === true) return true;
     const meta = summary.trajectoryMetadata || {};
-    return Boolean(meta.parentConversationId) || Number(meta.nestingDepth || 0) > 0;
+    return Boolean(meta.parentConversationId || summary.parentConversationId) || Number(meta.nestingDepth || 0) > 0;
+  }
+
+  function normalizeWorkspaceLabel(rawUriOrPath) {
+    const s = String(rawUriOrPath || '').trim();
+    if (!s) return '';
+    try {
+      const decoded = decodeURIComponent(s.replace(/^file:\/\//i, '')).replace(/[\\/]+$/, '');
+      const segs = decoded.split(/[\\/]/).filter(Boolean);
+      return segs.length ? segs[segs.length - 1] : '';
+    } catch {
+      const segs = s.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean);
+      return segs.length ? segs[segs.length - 1] : '';
+    }
+  }
+
+  function extractWorkspaceId(summaryObj, trajObj) {
+    if (summaryObj && typeof summaryObj.workspace === 'string' && summaryObj.workspace.trim()) {
+      return normalizeWorkspaceLabel(summaryObj.workspace);
+    }
+    const wsList =
+      summaryObj?.workspaces ||
+      summaryObj?.trajectoryMetadata?.workspaces ||
+      trajObj?.metadata?.workspaces ||
+      [];
+    const first = Array.isArray(wsList) && wsList.length ? wsList[0] : null;
+    const candidate =
+      first?.workspaceFolderAbsoluteUri ||
+      first?.gitRootAbsoluteUri ||
+      first?.uri ||
+      first?.path ||
+      summaryObj?.workspaceUri ||
+      summaryObj?.workspacePath ||
+      summaryObj?.trajectoryMetadata?.workspaceUri ||
+      '';
+    return normalizeWorkspaceLabel(candidate);
+  }
+
+  function extractParentConversationId(summaryObj, trajObj) {
+    const pid =
+      summaryObj?.trajectoryMetadata?.parentConversationId ||
+      summaryObj?.parentConversationId ||
+      summaryObj?.rootConversationId ||
+      trajObj?.metadata?.parentConversationId ||
+      '';
+    return String(pid || '').trim();
   }
 
   // Extract a compact, JSON-serializable per-conversation usage record for caching.
@@ -195,7 +253,7 @@
     const gmList = Array.isArray(t.generatorMetadata) ? t.generatorMetadata : [];
     const stepTime = new Map();
     for (let i = 0; i < steps.length; i++) {
-      const ms = tsToMs(steps[i]?.metadata?.createdAt);
+      const ms = tsToMs(steps[i]?.metadata?.createdAt || steps[i]?.createdAt);
       if (ms > 0) stepTime.set(i, ms);
     }
     const createdMs = tsToMs(summaryObj?.createdTime) || tsToMs(t?.metadata?.createdAt) || 0;
@@ -207,9 +265,9 @@
     let calls = 0;
 
     for (let i = 0; i < gmList.length; i++) {
-      const val = gmList[i]?.metadata?.value;
+      const val = gmList[i]?.metadata?.value || gmList[i]?.chatModel;
       if (!val) continue;
-      const u = val.usage || val.retryInfos?.[val.retryInfos.length - 1]?.usage;
+      const u = val.usage || val.retryInfos?.[val.retryInfos.length - 1]?.usage || gmList[i]?.usage;
       if (!u) continue;
       const input = Number(u.inputTokens || 0);
       const cacheRead = Number(u.cacheReadTokens || 0);
@@ -229,7 +287,10 @@
         }
       }
       if (!ts) {
-        if (steps.length === 0 && createdMs > 0 && lastModMs > createdMs && sIndices.length > 0) {
+        const chatCreatedMs = tsToMs(val?.chatStartMetadata?.createdAt);
+        if (chatCreatedMs > 0) {
+          ts = chatCreatedMs;
+        } else if (steps.length === 0 && createdMs > 0 && lastModMs > createdMs && sIndices.length > 0) {
           const ratio = Math.min(1, Math.max(0, Number(sIndices[0] || 0) / totalStepSpan));
           ts = Math.round(createdMs + ratio * (lastModMs - createdMs));
         } else {
@@ -278,12 +339,20 @@
       mod.calls += 1;
     }
 
+    const lastModifiedSec =
+      Number(summaryObj?.lastModifiedTime?.seconds || 0) ||
+      (lastModMs > 0 ? Math.floor(lastModMs / 1000) : 0);
+    const workspace = extractWorkspaceId(summaryObj, t);
+    const parentId = extractParentConversationId(summaryObj, t);
+
     return {
       cascadeId: String(cascadeId || t.cascadeId || ''),
       stepCount: Number(summaryObj?.stepCount ?? steps.length ?? 0),
-      lastModifiedSec: Number(summaryObj?.lastModifiedTime?.seconds || 0),
+      lastModifiedSec,
       gmCount: Number(trajObj?.numTotalGeneratorMetadata ?? gmList.length ?? 0),
       subagent: isSubagentSummary(summaryObj),
+      workspace,
+      parentId,
       calls,
       days,
     };
@@ -357,6 +426,8 @@
       lastModifiedSec: Number(nextMeta.lastModifiedSec ?? deltaRec?.lastModifiedSec ?? baseRec.lastModifiedSec ?? 0),
       gmCount: Number(nextMeta.gmCount ?? deltaRec?.gmCount ?? baseRec.gmCount ?? 0),
       subagent: Boolean(nextMeta.subagent ?? deltaRec?.subagent ?? baseRec.subagent),
+      workspace: String(nextMeta.workspace ?? deltaRec?.workspace ?? baseRec.workspace ?? ''),
+      parentId: String(nextMeta.parentId ?? deltaRec?.parentId ?? baseRec.parentId ?? ''),
       calls: Number(baseRec.calls || 0) + Number(deltaRec?.calls || 0),
       days,
     };
@@ -383,26 +454,78 @@
     return { cells, peak };
   }
 
-  function aggregateUsageRollup(records, rangeId, bookPick, zh, nowDate) {
+  function aggregateUsageRollup(records, rangeId, bookPick, zh, nowDate, options = {}) {
     const list = Array.isArray(records) ? records : [];
     const rangeObj = HOME_RANGES.find((r) => r.id === rangeId) || HOME_RANGES[0];
     const start = homeRangeStart(rangeObj.days, nowDate);
     const inRange = (dateStr) => start === null || dateStr >= start;
+    const workspaceFilter =
+      options && typeof options.workspace === 'string' && options.workspace && options.workspace !== 'all'
+        ? options.workspace
+        : '';
+
+    const byId = new Map();
+    for (let i = 0; i < list.length; i++) {
+      const r = list[i];
+      if (r && r.cascadeId) byId.set(r.cascadeId, r);
+    }
+    const resolveRecWorkspace = (rec) => {
+      if (!rec) return '';
+      if (rec.workspace) return String(rec.workspace);
+      let cur = rec;
+      for (let hop = 0; hop < 4 && cur && cur.parentId; hop++) {
+        const p = byId.get(cur.parentId);
+        if (!p) break;
+        if (p.workspace) return String(p.workspace);
+        cur = p;
+      }
+      return '';
+    };
 
     let totalTokens = 0;
+    let mainTokens = 0;
+    let subagentTokens = 0;
     let totalCalls = 0;
+    let totalInput = 0;
+    let totalCacheRead = 0;
     const sessionSet = new Set();
+    const subagentSessionSet = new Set();
     const activeDaySet = new Set();
     const hourCounts = new Array(24).fill(0);
-    const modelTotals = {}; // modelId -> { id, input, output, cacheRead, cacheWrite, tokens, calls, sessions: Set }
-    const allDayTotals = {}; // full calendar day -> tokens (heat grid shows 26 weeks always)
+    const modelTotals = {}; // modelId -> { id, input, output, cacheRead, cacheWrite, tokens, subagentTokens, calls, sessionsSet: Set }
+    const allDayTotals = {}; // full calendar day -> tokens (heat grid shows 26 weeks)
     const allDayModels = {}; // full calendar day -> { modelId: tokens } (chart shows 30d/7d)
+    const workspaceMap = {}; // wsId -> { id, tokens, sessionsSet: Set }
 
     for (let i = 0; i < list.length; i++) {
       const rec = list[i];
       if (!rec || !rec.days) continue;
-      let countedSessionInRange = false;
+      const wsId = resolveRecWorkspace(rec);
       const dayKeys = Object.keys(rec.days);
+
+      // Accumulate workspace index across all records in range regardless of active workspaceFilter
+      if (wsId) {
+        let wsEntry = workspaceMap[wsId];
+        if (!wsEntry) {
+          wsEntry = { id: wsId, tokens: 0, sessionsSet: new Set() };
+          workspaceMap[wsId] = wsEntry;
+        }
+        for (let d = 0; d < dayKeys.length; d++) {
+          const dk = dayKeys[d];
+          if (!inRange(dk)) continue;
+          const day = rec.days[dk];
+          if (!day) continue;
+          const dt = Number(day.total || 0);
+          wsEntry.tokens += dt;
+          if (!rec.subagent && (dt > 0 || (day.calls || 0) > 0)) {
+            wsEntry.sessionsSet.add(rec.cascadeId || String(i));
+          }
+        }
+      }
+
+      if (workspaceFilter && wsId !== workspaceFilter) continue;
+
+      let countedSessionInRange = false;
       for (let d = 0; d < dayKeys.length; d++) {
         const dk = dayKeys[d];
         const day = rec.days[dk];
@@ -420,13 +543,21 @@
         if (!inRange(dk)) continue;
         if (dTotal > 0 || (day.calls || 0) > 0) {
           activeDaySet.add(dk);
-          if (!rec.subagent && !countedSessionInRange) {
+          if (rec.subagent) {
+            subagentSessionSet.add(rec.cascadeId || String(i));
+          } else if (!countedSessionInRange) {
             sessionSet.add(rec.cascadeId || String(i));
             countedSessionInRange = true;
           }
         }
         totalTokens += dTotal;
+        if (rec.subagent) subagentTokens += dTotal;
+        else mainTokens += dTotal;
         totalCalls += Number(day.calls || 0);
+        const dInp = Number(day.input || 0) + Number(day.cacheRead || 0) + Number(day.cacheWrite || 0);
+        totalInput += dInp;
+        totalCacheRead += Number(day.cacheRead || 0);
+
         if (Array.isArray(day.hours)) {
           for (let h = 0; h < 24; h++) {
             hourCounts[h] += Number(day.hours[h] || 0);
@@ -443,16 +574,19 @@
                 cacheRead: 0,
                 cacheWrite: 0,
                 tokens: 0,
+                subagentTokens: 0,
                 calls: 0,
                 sessionsSet: new Set(),
               };
               modelTotals[mId] = entry;
             }
+            const mTok = Number(mData.total || 0);
             entry.input += Number(mData.input || 0);
             entry.output += Number(mData.output || 0);
             entry.cacheRead += Number(mData.cacheRead || 0);
             entry.cacheWrite += Number(mData.cacheWrite || 0);
-            entry.tokens += Number(mData.total || 0);
+            entry.tokens += mTok;
+            if (rec.subagent) entry.subagentTokens += mTok;
             entry.calls += Number(mData.calls || 0);
             if (!rec.subagent) entry.sessionsSet.add(rec.cascadeId || String(i));
           }
@@ -469,17 +603,27 @@
     const peakHour = hourSum > 0 ? formatHomeHour(bestHour, zh) : null;
 
     const models = Object.values(modelTotals)
-      .map((m) => ({
-        id: m.id,
-        input: m.input,
-        output: m.output,
-        cacheRead: m.cacheRead,
-        cacheWrite: m.cacheWrite,
-        tokens: m.tokens,
-        calls: m.calls,
-        sessions: m.sessionsSet.size,
-      }))
+      .map((m) => {
+        const mInp = m.input + m.cacheRead + m.cacheWrite;
+        return {
+          id: m.id,
+          input: m.input,
+          output: m.output,
+          cacheRead: m.cacheRead,
+          cacheWrite: m.cacheWrite,
+          tokens: m.tokens,
+          subagentTokens: m.subagentTokens,
+          cacheHitRate: mInp > 0 ? m.cacheRead / mInp : null,
+          calls: m.calls,
+          sessions: m.sessionsSet.size,
+        };
+      })
       .sort((a, b) => b.tokens - a.tokens || b.calls - a.calls || a.id.localeCompare(b.id));
+
+    const workspaces = Object.values(workspaceMap)
+      .map((w) => ({ id: w.id, tokens: w.tokens, sessions: w.sessionsSet.size }))
+      .filter((w) => w.tokens > 0 || w.sessions > 0)
+      .sort((a, b) => b.tokens - a.tokens || a.id.localeCompare(b.id));
 
     const favModel = models.length > 0 ? models[0].id : null;
 
@@ -513,8 +657,14 @@
 
     return {
       sessions: sessionSet.size,
+      subagentSessions: subagentSessionSet.size,
       calls: totalCalls,
       tokens: totalTokens,
+      mainTokens,
+      subagentTokens,
+      totalInput,
+      cacheReadTokens: totalCacheRead,
+      cacheHitRate: totalInput > 0 ? totalCacheRead / totalInput : null,
       activeDays: activeDaySet.size,
       peakHour,
       model: favModel,
@@ -522,6 +672,226 @@
       funBook,
       models,
       modelDays,
+      workspaces,
+    };
+  }
+
+  // ── v0.9.1 Quota Pools, Argon Weekly Allowance & Linear Depletion Forecast ──
+  function quotaGroupKind(group) {
+    if (!group || typeof group !== 'object') return 'other';
+    const w5 = group.windows?.['5h']?.id || group.fiveHour?.id || '';
+    const ww = group.windows?.weekly?.id || group.weekly?.id || '';
+    const hay = `${group.id || ''} ${group.name || ''} ${group.description || ''} ${w5} ${ww}`.toLowerCase();
+    if (/argon|wtu/.test(hay)) return 'gemini-argon';
+    if (/claude|anthropic|gpt|openai/.test(hay)) return 'claude';
+    if (/gemini|google/.test(hay)) return 'gemini';
+    return 'other';
+  }
+
+  function quotaGroupLabel(group, langOrZh) {
+    const kind = quotaGroupKind(group);
+    if (kind === 'gemini-argon') return 'Gemini (Argon)';
+    if (kind === 'claude') return 'Claude / GPT';
+    if (kind === 'gemini') return 'Gemini';
+    const raw = String(group?.name || group?.id || '').trim();
+    if (raw) return raw;
+    return pickByLang({ 'zh-CN': '模型配额', 'zh-TW': '模型配額', yue: '模型配額', en: 'Quota Pool', ja: 'クォータ' }, langOrZh);
+  }
+
+  function quotaRemaining(bucket) {
+    if (!bucket || typeof bucket !== 'object' || bucket.available === false || bucket.disabled === true) return null;
+    if (bucket.expired === true) return 1;
+    const r = bucket.remaining ?? bucket.remainingFraction;
+    if (typeof r === 'number' && Number.isFinite(r)) return Math.max(0, Math.min(1, r));
+    if (typeof r === 'string' && r.trim() !== '' && Number.isFinite(Number(r))) {
+      return Math.max(0, Math.min(1, Number(r)));
+    }
+    return null;
+  }
+
+  function quotaWindows(group) {
+    if (!group || typeof group !== 'object') return [];
+    const w5 = group.windows?.['5h'] || group.fiveHour || null;
+    const ww = group.windows?.weekly || group.weekly || null;
+    const out = [];
+    if (w5 && quotaRemaining(w5) !== null) out.push(['5h', w5]);
+    if (ww && quotaRemaining(ww) !== null) out.push(['weekly', ww]);
+    return out;
+  }
+
+  function chooseQuotaGroup(groups, models, selectedId) {
+    const list = Array.isArray(groups) ? groups.filter((g) => g && typeof g === 'object') : [];
+    if (!list.length) return null;
+    if (selectedId) {
+      const hit = list.find((g) => g.id === selectedId || g.name === selectedId);
+      if (hit) return hit;
+    }
+    const modelStr = (Array.isArray(models) ? models.join(' ') : String(models || '')).toLowerCase();
+    if (/argon/.test(modelStr)) {
+      const argon = list.find((g) => quotaGroupKind(g) === 'gemini-argon');
+      if (argon) return argon;
+      const gem = list.find((g) => quotaGroupKind(g) === 'gemini');
+      if (gem) return gem;
+    } else if (/claude|anthropic|sonnet|opus|haiku|gpt|openai|o1|o3|o4/.test(modelStr)) {
+      const cld = list.find((g) => quotaGroupKind(g) === 'claude');
+      if (cld) return cld;
+    } else if (/gemini|carbon|hydrogen|pro|flash/.test(modelStr)) {
+      const gem = list.find((g) => quotaGroupKind(g) === 'gemini');
+      if (gem) return gem;
+      const argon = list.find((g) => quotaGroupKind(g) === 'gemini-argon');
+      if (argon) return argon;
+    }
+    return list.find((g) => quotaWindows(g).length > 0) || list[0];
+  }
+
+  function shortEta(ms, langOrZh) {
+    const l = resolveLang(langOrZh);
+    if (!(ms > 0) || !Number.isFinite(ms)) {
+      return pickByLang({ 'zh-CN': '即将刷新', 'zh-TW': '即將重設', yue: '就嚟重設', en: 'Refreshing', ja: '間もなく更新' }, l);
+    }
+    const totalSec = Math.max(1, Math.round(ms / 1000));
+    const d = Math.floor(totalSec / 86400);
+    const h = Math.floor((totalSec % 86400) / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    if (l === 'zh-CN') return d > 0 ? `${d}天${h}小时` : h > 0 ? `${h}小时${m}分` : `${Math.max(1, m)}分钟`;
+    if (l === 'zh-TW') return d > 0 ? `${d}天${h}小時` : h > 0 ? `${h}小時${m}分` : `${Math.max(1, m)}分鐘`;
+    if (l === 'yue') return d > 0 ? `${d}日${h}個鐘` : h > 0 ? `${h}個鐘${m}分` : `${Math.max(1, m)}分鐘`;
+    if (l === 'ja') return d > 0 ? `${d}日${h}時間` : h > 0 ? `${h}時間${m}分` : `${Math.max(1, m)}分`;
+    if (d > 0) return `${d}d ${h}h`;
+    if (h > 0) return `${h}h ${m}m`;
+    return `${Math.max(1, m)}m`;
+  }
+
+  function quotaForecast(bucket, windowKey, nowMs = Date.now()) {
+    const rem = quotaRemaining(bucket);
+    if (rem === null) return null;
+    const spanMs = windowKey === 'weekly' ? 7 * 86400 * 1000 : 5 * 3600 * 1000;
+    const rawReset = bucket?.resetAt ?? bucket?.resetTime ?? null;
+    const resetMs =
+      typeof rawReset === 'string'
+        ? Date.parse(rawReset)
+        : typeof rawReset === 'number'
+        ? (rawReset > 1e11 ? rawReset : rawReset * 1000)
+        : NaN;
+
+    if (!Number.isFinite(resetMs) || resetMs <= nowMs) {
+      return {
+        window: windowKey,
+        remaining: rem,
+        endRemaining: rem,
+        forecastDrop: 0,
+        willExhaust: false,
+        exhaustInMs: null,
+        paceRatio: 0,
+        status: rem < 1 ? 'ok' : 'idle',
+        resetAtMs: Number.isFinite(resetMs) ? resetMs : null,
+        resetInMs: 0,
+      };
+    }
+
+    const leftMs = Math.max(0, Math.min(spanMs, resetMs - nowMs));
+    const elapsedMs = Math.max(0, spanMs - leftMs);
+    const used = Math.max(0, 1 - rem);
+    const minSmoothMs = windowKey === 'weekly' ? 2 * 3600 * 1000 : 15 * 60 * 1000;
+
+    if (used < 0.005 || elapsedMs < 3 * 60 * 1000) {
+      return {
+        window: windowKey,
+        remaining: rem,
+        endRemaining: rem,
+        forecastDrop: 0,
+        willExhaust: rem <= 0.005,
+        exhaustInMs: rem <= 0.005 ? 0 : null,
+        paceRatio: 0,
+        status: rem <= 0.005 ? 'exhaust' : 'idle',
+        resetAtMs: resetMs,
+        resetInMs: leftMs,
+      };
+    }
+
+    const burnPerMs = used / Math.max(elapsedMs, minSmoothMs);
+    const projectedExtra = burnPerMs * leftMs;
+    const endRemaining = Math.max(0, Math.min(rem, rem - projectedExtra));
+    const forecastDrop = Math.max(0, rem - endRemaining);
+    const idealUsed = spanMs > 0 ? elapsedMs / spanMs : 0;
+    const paceRatio = idealUsed > 0.02 ? used / idealUsed : used / 0.02;
+    const timeToZeroMs = burnPerMs > 0 ? rem / burnPerMs : Infinity;
+    const willExhaust = rem <= 0.01 || (timeToZeroMs < leftMs * 0.95 && used >= 0.06);
+
+    let status = 'ok';
+    if (willExhaust) status = 'exhaust';
+    else if (paceRatio > 1.18 && used >= 0.05) status = 'tight';
+    else if (used < 0.01) status = 'idle';
+
+    return {
+      window: windowKey,
+      remaining: rem,
+      endRemaining,
+      forecastDrop,
+      willExhaust,
+      exhaustInMs: Number.isFinite(timeToZeroMs) && willExhaust ? Math.max(0, Math.round(timeToZeroMs)) : null,
+      paceRatio: Number(paceRatio.toFixed(2)),
+      status,
+      resetAtMs: resetMs,
+      resetInMs: leftMs,
+    };
+  }
+
+  function groupQuotaPace(group, langOrZh, nowMs = Date.now()) {
+    const l = resolveLang(langOrZh);
+    const wins = quotaWindows(group);
+    const forecasts = wins.map(([wk, b]) => quotaForecast(b, wk, nowMs)).filter(Boolean);
+    const rank = { exhaust: 3, tight: 2, ok: 1, idle: 0 };
+    let primary = null;
+    for (const f of forecasts) {
+      if (!primary || (rank[f.status] ?? 0) > (rank[primary.status] ?? 0)) primary = f;
+    }
+    const status = primary ? primary.status : 'idle';
+    const label = pickByLang(
+      status === 'exhaust'
+        ? { 'zh-CN': '提前耗尽', 'zh-TW': '提前耗盡', yue: '提早用晒', en: 'Depleting early', ja: '早期枯渇予測' }
+        : status === 'tight'
+        ? { 'zh-CN': '配速偏紧', 'zh-TW': '配速偏緊', yue: '進度偏緊', en: 'Burning fast', ja: '消費やや速め' }
+        : status === 'ok'
+        ? { 'zh-CN': '配额充裕', 'zh-TW': '配額充裕', yue: '配額充裕', en: 'On track', ja: 'ペース良好' }
+        : { 'zh-CN': '待命充裕', 'zh-TW': '待命充裕', yue: '待命充裕', en: 'Standby', ja: '待機中' },
+      l
+    );
+    let detail = '';
+    if (primary) {
+      if (primary.willExhaust && primary.exhaustInMs !== null) {
+        const eta = shortEta(primary.exhaustInMs, l);
+        detail = pickByLang(
+          {
+            'zh-CN': `预计 ${eta}后耗尽`,
+            'zh-TW': `預計 ${eta}後耗盡`,
+            yue: `預計 ${eta}後用晒`,
+            en: `Est. empty in ${eta}`,
+            ja: `約${eta}で枯渇予測`,
+          },
+          l
+        );
+      } else if (primary.resetInMs > 0) {
+        const eta = shortEta(primary.resetInMs, l);
+        const endPct = Math.round(primary.endRemaining * 100);
+        detail = pickByLang(
+          {
+            'zh-CN': `${eta}后重置 · 预计结余 ${endPct}%`,
+            'zh-TW': `${eta}後重設 · 預計結餘 ${endPct}%`,
+            yue: `${eta}後重設 · 預計剩 ${endPct}%`,
+            en: `Resets in ${eta} · Est. ${endPct}% left`,
+            ja: `${eta}後に更新 · 予測残 ${endPct}%`,
+          },
+          l
+        );
+      }
+    }
+    return {
+      status,
+      label,
+      detail,
+      primary,
+      forecasts,
     };
   }
 
@@ -660,10 +1030,19 @@
     homeShortDateFormat,
     homeShortDate,
     isSubagentSummary,
+    extractWorkspaceId,
     analyzeTrajectoryForUsage,
     mergeUsageRecordDelta,
     homeHeatGrid,
     aggregateUsageRollup,
+    quotaGroupKind,
+    quotaGroupLabel,
+    quotaRemaining,
+    quotaWindows,
+    chooseQuotaGroup,
+    shortEta,
+    quotaForecast,
+    groupQuotaPace,
     axisMax,
     homeChartTicks,
     createHomeModelColours,

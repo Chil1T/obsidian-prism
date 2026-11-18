@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Net.WebSockets;
@@ -33,7 +34,7 @@ namespace AgyClaudeStyle
             string manifestPath = Path.Combine(baseDir, "manifest.json");
             Dictionary<string, object> raw = MiniJson.ParseObject(File.ReadAllText(manifestPath, Encoding.UTF8));
             PluginManifest m = new PluginManifest();
-            m.Version = GetString(raw, "version", "1.0.0");
+            m.Version = GetString(raw, "version", "1.0.1");
             m.StyleId = GetString(raw, "styleId", "ag-prism-css");
             m.SettingBinding = GetString(raw, "settingBinding", "__agPrismSetting");
             m.RemoveExpression = GetString(raw, "removeExpression", "");
@@ -409,6 +410,54 @@ namespace AgyClaudeStyle
             return null;
         }
 
+        public static bool IsEligibleTarget(string type, string wsUrl, string title, string pageUrl)
+        {
+            if (type != "page" || string.IsNullOrEmpty(wsUrl)) return false;
+            string url = (pageUrl ?? "").Trim();
+            string ttl = (title ?? "").Trim();
+            if (url.Length == 0) return false;
+            if (url.StartsWith("devtools://", StringComparison.OrdinalIgnoreCase) ||
+                url.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ||
+                url.StartsWith("about:", StringComparison.OrdinalIgnoreCase) ||
+                url.StartsWith("chrome:", StringComparison.OrdinalIgnoreCase) ||
+                url.StartsWith("chrome-extension:", StringComparison.OrdinalIgnoreCase) ||
+                url.StartsWith("edge:", StringComparison.OrdinalIgnoreCase) ||
+                url.StartsWith("blob:", StringComparison.OrdinalIgnoreCase) ||
+                url.StartsWith("plugin:", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            string combined = ttl + " " + url;
+            if (combined.IndexOf("Untitled", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                combined.IndexOf("launchpad", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return false;
+            }
+            if (url.StartsWith("vscode-file://", StringComparison.OrdinalIgnoreCase) ||
+                url.StartsWith("app://", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            if (url.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+            {
+                return url.IndexOf("workbench", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                       url.IndexOf("antigravity", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                       ttl.IndexOf("antigravity", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            Uri uri;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out uri)) return false;
+            string scheme = (uri.Scheme ?? "").ToLowerInvariant();
+            if (scheme != "http" && scheme != "https") return false;
+            string host = (uri.Host ?? "").ToLowerInvariant();
+            if (host != "127.0.0.1" && host != "localhost" && host != "::1" && host != "[::1]") return false;
+            if (ttl.IndexOf("antigravity", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (scheme == "https" && (ttl.Length == 0 || ttl.StartsWith("127.0.0.1", StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+            return false;
+        }
+
         public static async Task<List<CdpPageInfo>> ListPagesAsync(int port)
         {
             string url = string.Format("http://127.0.0.1:{0}/json/list", port);
@@ -421,21 +470,84 @@ namespace AgyClaudeStyle
                 if (t == null) continue;
                 string type = GetStr(t, "type");
                 string wsUrl = GetStr(t, "webSocketDebuggerUrl");
+                string title = GetStr(t, "title") ?? "";
                 string pageUrl = GetStr(t, "url") ?? "";
-                if (type == "page" &&
-                    !string.IsNullOrEmpty(wsUrl) &&
-                    !pageUrl.StartsWith("devtools://", StringComparison.OrdinalIgnoreCase) &&
-                    !pageUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                if (IsEligibleTarget(type, wsUrl, title, pageUrl))
                 {
                     CdpPageInfo info = new CdpPageInfo();
                     info.Id = GetStr(t, "id") ?? wsUrl;
-                    info.Title = GetStr(t, "title") ?? "";
+                    info.Title = title;
                     info.Url = pageUrl;
                     info.WebSocketDebuggerUrl = wsUrl;
                     pages.Add(info);
                 }
             }
             return pages;
+        }
+
+        private static bool ToBoolOnOff(object v)
+        {
+            if (v is bool) return (bool)v;
+            string s = v as string;
+            return s != null && !string.Equals(s, "off", StringComparison.OrdinalIgnoreCase) && !string.Equals(s, "false", StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static Dictionary<string, object> ReconcileConfigAliases(Dictionary<string, object> raw)
+        {
+            Dictionary<string, object> res = new Dictionary<string, object>(StringComparer.Ordinal);
+            if (raw != null)
+            {
+                foreach (KeyValuePair<string, object> kv in raw) res[kv.Key] = kv.Value;
+            }
+            if (res.ContainsKey("language")) res["lang"] = res["language"];
+            else if (res.ContainsKey("lang")) res["language"] = res["lang"];
+
+            if (res.ContainsKey("homeLayout")) res["homeMode"] = res["homeLayout"];
+            else if (res.ContainsKey("homeMode")) res["homeLayout"] = res["homeMode"];
+
+            if (res.ContainsKey("homeRipple") || res.ContainsKey("ripple"))
+            {
+                bool on = res.ContainsKey("homeRipple") ? ToBoolOnOff(res["homeRipple"]) : ToBoolOnOff(res["ripple"]);
+                res["homeRipple"] = on;
+                res["ripple"] = on ? "on" : "off";
+            }
+            if (res.ContainsKey("composerRestyle") || res.ContainsKey("composer"))
+            {
+                bool on = res.ContainsKey("composerRestyle") ? ToBoolOnOff(res["composerRestyle"]) : ToBoolOnOff(res["composer"]);
+                res["composerRestyle"] = on;
+                res["composer"] = on ? "on" : "off";
+            }
+            if (res.ContainsKey("placeholderStyle")) res["promptStyle"] = res["placeholderStyle"];
+            else if (res.ContainsKey("promptStyle")) res["placeholderStyle"] = res["promptStyle"];
+
+            if (res.ContainsKey("sidebarRestyle") || res.ContainsKey("sidebar"))
+            {
+                bool on = res.ContainsKey("sidebarRestyle") ? ToBoolOnOff(res["sidebarRestyle"]) : ToBoolOnOff(res["sidebar"]);
+                res["sidebarRestyle"] = on;
+                res["sidebar"] = on ? "on" : "off";
+            }
+            if (res.ContainsKey("sidebarCompact"))
+            {
+                res["sidebarCompact"] = ToBoolOnOff(res["sidebarCompact"]);
+            }
+            if (res.ContainsKey("smoothCaret"))
+            {
+                res["smoothCaret"] = ToBoolOnOff(res["smoothCaret"]);
+            }
+            if (res.ContainsKey("codeLigatures"))
+            {
+                object cl = res["codeLigatures"];
+                if (cl is bool)
+                {
+                    res["codeLigatures"] = (bool)cl;
+                }
+                else
+                {
+                    string cls = cl as string;
+                    res["codeLigatures"] = cls != null && (string.Equals(cls, "on", StringComparison.OrdinalIgnoreCase) || string.Equals(cls, "true", StringComparison.OrdinalIgnoreCase));
+                }
+            }
+            return res;
         }
 
         public static Dictionary<string, object> ReadConfig(string baseDir, PluginManifest manifest)
@@ -450,7 +562,7 @@ namespace AgyClaudeStyle
                 string cfgPath = Path.Combine(baseDir, "config.json");
                 if (File.Exists(cfgPath))
                 {
-                    Dictionary<string, object> userCfg = MiniJson.ParseObject(File.ReadAllText(cfgPath, Encoding.UTF8));
+                    Dictionary<string, object> userCfg = ReconcileConfigAliases(MiniJson.ParseObject(File.ReadAllText(cfgPath, Encoding.UTF8)));
                     foreach (KeyValuePair<string, object> kv in userCfg)
                     {
                         cfg[kv.Key] = kv.Value;
@@ -458,11 +570,12 @@ namespace AgyClaudeStyle
                 }
             }
             catch { }
-            return cfg;
+            return ReconcileConfigAliases(cfg);
         }
 
-        public static bool UpdateConfigSetting(string baseDir, PluginManifest manifest, string key, object value)
+        public static bool ValidateConfigEntry(PluginManifest manifest, string key, object value)
         {
+            if (manifest == null || manifest.Validators == null || string.IsNullOrEmpty(key)) return false;
             object rule;
             if (!manifest.Validators.TryGetValue(key, out rule)) return false;
             string ruleStr = rule as string;
@@ -473,31 +586,26 @@ namespace AgyClaudeStyle
                     string sv = value as string;
                     if (sv != "on" && sv != "off") return false;
                 }
+                return true;
             }
-            else if (rule is List<object>)
+            if (rule is List<object>)
             {
                 string strVal = value as string;
                 if (strVal == null) return false;
                 List<object> allowed = (List<object>)rule;
-                bool matched = false;
                 for (int i = 0; i < allowed.Count; i++)
                 {
                     if (string.Equals(allowed[i] as string, strVal, StringComparison.Ordinal))
                     {
-                        matched = true;
-                        break;
+                        return true;
                     }
                 }
-                if (!matched) return false;
             }
-            else
-            {
-                return false;
-            }
+            return false;
+        }
 
-            Dictionary<string, object> next = ReadConfig(baseDir, manifest);
-            next[key] = value;
-            string cfgPath = Path.Combine(baseDir, "config.json");
+        private static void AtomicWriteJson(string cfgPath, Dictionary<string, object> next)
+        {
             string tmpPath = cfgPath + ".tmp";
             string content = MiniJson.Stringify(next, true) + "\n";
             File.WriteAllText(tmpPath, content, new UTF8Encoding(false));
@@ -517,7 +625,118 @@ namespace AgyClaudeStyle
             {
                 File.Move(tmpPath, cfgPath);
             }
+        }
+
+        public static bool UpdateConfigBatch(string baseDir, PluginManifest manifest, Dictionary<string, object> entries)
+        {
+            if (entries == null || entries.Count == 0) return false;
+            Dictionary<string, object> validPatch = new Dictionary<string, object>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, object> kv in entries)
+            {
+                if (ValidateConfigEntry(manifest, kv.Key, kv.Value))
+                {
+                    validPatch[kv.Key] = kv.Value;
+                }
+            }
+            if (validPatch.Count == 0) return false;
+
+            Dictionary<string, object> reconciledPatch = ReconcileConfigAliases(validPatch);
+            Dictionary<string, object> next = ReadConfig(baseDir, manifest);
+            foreach (KeyValuePair<string, object> kv in reconciledPatch)
+            {
+                next[kv.Key] = kv.Value;
+            }
+            AtomicWriteJson(Path.Combine(baseDir, "config.json"), next);
             return true;
+        }
+
+        public static bool UpdateConfigSetting(string baseDir, PluginManifest manifest, string key, object value)
+        {
+            Dictionary<string, object> single = new Dictionary<string, object>(StringComparer.Ordinal);
+            single[key] = value;
+            return UpdateConfigBatch(baseDir, manifest, single);
+        }
+
+        public static string GetDefaultNativePluginDir()
+        {
+            string envOverride = Environment.GetEnvironmentVariable("AG_PRISM_PLUGIN_DIR");
+            if (!string.IsNullOrEmpty(envOverride))
+            {
+                return Path.GetFullPath(envOverride.Trim()).TrimEnd('\\', '/');
+            }
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrEmpty(home))
+            {
+                home = Environment.GetEnvironmentVariable("USERPROFILE") ?? "";
+            }
+            return Path.Combine(home, ".gemini", "config", "plugins", "obsidian-prism");
+        }
+
+        public static int? ReadNativeDaemonPid(string pluginDir)
+        {
+            if (string.IsNullOrEmpty(pluginDir)) return null;
+            try
+            {
+                string pidPath = Path.Combine(pluginDir, ".daemon.pid");
+                if (!File.Exists(pidPath)) return null;
+                string raw = File.ReadAllText(pidPath, Encoding.UTF8).Trim();
+                if (string.IsNullOrEmpty(raw)) return null;
+                int plainPid;
+                if (int.TryParse(raw, out plainPid) && plainPid > 0) return plainPid;
+                if (raw.StartsWith("{", StringComparison.Ordinal))
+                {
+                    Dictionary<string, object> obj = MiniJson.ParseObject(raw);
+                    object pidVal;
+                    if (obj != null && obj.TryGetValue("pid", out pidVal) && pidVal != null)
+                    {
+                        int parsed = Convert.ToInt32(pidVal);
+                        if (parsed > 0) return parsed;
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        public static bool IsExpectedPrismDaemonProcess(Process proc)
+        {
+            if (proc == null) return false;
+            try
+            {
+                string name = (proc.ProcessName ?? "").ToLowerInvariant();
+                if (string.IsNullOrEmpty(name)) return false;
+                return name.Contains("node") ||
+                       name.Contains("watcher") ||
+                       name.Contains("obsidian-prism") ||
+                       name.Contains("agy-claude-style");
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static bool IsNativeDaemonAlive(string pluginDir)
+        {
+            int? pid = ReadNativeDaemonPid(pluginDir);
+            if (!pid.HasValue || pid.Value <= 0) return false;
+            Process proc = null;
+            try
+            {
+                proc = Process.GetProcessById(pid.Value);
+                return !proc.HasExited;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                if (proc != null)
+                {
+                    try { proc.Dispose(); } catch { }
+                }
+            }
         }
 
         public static string ComputeHash(string str)
@@ -560,6 +779,74 @@ namespace AgyClaudeStyle
             return sb.ToString();
         }
 
+        public static string BuildConfigRefreshExpression(string baseDir, PluginManifest manifest)
+        {
+            Dictionary<string, object> config = ReadConfig(baseDir, manifest);
+            string codeHash = "";
+            try { codeHash = ComputeHash(ReadRuntimeBundle(baseDir, manifest)); } catch { }
+            Dictionary<string, object> nextCfg = new Dictionary<string, object>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, object> kv in config)
+            {
+                nextCfg[kv.Key] = kv.Value;
+            }
+            nextCfg["binding"] = manifest.SettingBinding;
+            if (!string.IsNullOrEmpty(codeHash)) nextCfg["codeHash"] = codeHash;
+            nextCfg["__fromFile"] = true;
+            string cfgJson = MiniJson.Stringify(nextCfg, false);
+            string verJson = MiniJson.StringifyString(manifest.Version);
+            string hashJson = MiniJson.StringifyString(codeHash);
+
+            StringBuilder sb = new StringBuilder(cfgJson.Length + 768);
+            sb.Append("(() => {\n");
+            sb.Append("    const nextCfg = ").Append(cfgJson).Append(";\n");
+            sb.Append("    const api = window.__agPrism || window.__agClaudeStyle;\n");
+            sb.Append("    if (!api || api.version !== ").Append(verJson).Append(" || typeof api.refreshConfig !== 'function') return { ok: false, refreshed: false };\n");
+            sb.Append("    if (").Append(hashJson).Append(" && api.codeHash && api.codeHash !== ").Append(hashJson).Append(") return { ok: false, refreshed: false };\n");
+            sb.Append("    api.refreshConfig(nextCfg);\n");
+            sb.Append("    const liveState = typeof api.getState === 'function' ? api.getState() : null;\n");
+            sb.Append("    const effectiveCfg = (liveState && liveState.cfg) || nextCfg;\n");
+            sb.Append("    try { window.__agPrismTelemetry?.sync?.(effectiveCfg); } catch {}\n");
+            sb.Append("    try { window.__agPrismEffortSlider?.sync?.(effectiveCfg); } catch {}\n");
+            sb.Append("    try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}\n");
+            sb.Append("    try { if (effectiveCfg.omniModule === 'off') window.__agPrismOmni?.destroy?.(); else window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}\n");
+            sb.Append("    return { ok: true, refreshed: true, state: liveState };\n");
+            sb.Append("  })()");
+            return sb.ToString();
+        }
+
+        public static string BuildOmniClientExpression(string baseDir, PluginManifest manifest)
+        {
+            string omniPath = Path.Combine(baseDir, Path.Combine("vendor", Path.Combine("omni-viewer", "omni-client.js")));
+            if (!File.Exists(omniPath)) return "";
+            string clientSource = File.ReadAllText(omniPath, Encoding.UTF8);
+            if (string.IsNullOrEmpty(clientSource)) return "";
+            Dictionary<string, object> config = ReadConfig(baseDir, manifest);
+            string cfgJson = MiniJson.Stringify(config, false);
+            string hashJson = MiniJson.StringifyString(ComputeHash(clientSource));
+            StringBuilder sb = new StringBuilder(clientSource.Length + cfgJson.Length + 1024);
+            sb.Append("(() => {\n");
+            sb.Append("  const href = String((typeof location !== 'undefined' && location && location.href) || '');\n");
+            sb.Append("  if (/^(devtools:|chrome:|chrome-extension:|edge:|about:|data:|blob:|plugin:)/i.test(href)) return { ok: false, skipped: true };\n");
+            sb.Append("  const bootCfg = ").Append(cfgJson).Append(";\n");
+            sb.Append("  const nextHash = ").Append(hashJson).Append(";\n");
+            sb.Append("  const liveCfg = (window.__agPrism && typeof window.__agPrism.getState === 'function' && window.__agPrism.getState()?.cfg) || bootCfg;\n");
+            sb.Append("  const serverMeta = window.__agPrismOmniServerMeta || null;\n");
+            sb.Append("  const prev = window.__agPrismOmni;\n");
+            sb.Append("  const reused = Boolean(prev && prev.codeHash === nextHash && typeof prev.sync === 'function');\n");
+            sb.Append("  if (!reused) {\n");
+            sb.Append("    try { prev?.destroy?.(); } catch {}\n");
+            sb.Append("    ").Append(clientSource).Append('\n');
+            sb.Append("    if (window.__agPrismOmni && typeof window.__agPrismOmni === 'object') {\n");
+            sb.Append("      try { window.__agPrismOmni.codeHash = nextHash; } catch {}\n");
+            sb.Append("    }\n");
+            sb.Append("  }\n");
+            sb.Append("  try { window.__agPrismOmni?.sync?.(liveCfg, serverMeta); } catch {}\n");
+            sb.Append("  if (liveCfg && liveCfg.omniModule === 'off') return { ok: true, status: 'disabled' };\n");
+            sb.Append("  return { ok: true, status: reused ? 'synced' : (window.__agPrismOmni ? 'mounted' : 'ready') };\n");
+            sb.Append("})()");
+            return sb.ToString();
+        }
+
         public static string BuildInjectExpression(string baseDir, PluginManifest manifest)
         {
             Dictionary<string, object> config = ReadConfig(baseDir, manifest);
@@ -574,9 +861,11 @@ namespace AgyClaudeStyle
             }
             initCfg["binding"] = manifest.SettingBinding;
             initCfg["codeHash"] = codeHash;
+            initCfg["__fromFile"] = true;
 
             string styleIdJson = MiniJson.StringifyString(manifest.StyleId);
-            StringBuilder sb = new StringBuilder(css.Length + bundle.Length + 4096);
+            string verJson = MiniJson.StringifyString(manifest.Version);
+            StringBuilder sb = new StringBuilder(css.Length + bundle.Length + 4608);
             sb.Append("(() => {\n");
             sb.Append("    const css = ");
             sb.Append(MiniJson.StringifyString(css));
@@ -617,16 +906,31 @@ namespace AgyClaudeStyle
             sb.Append("      try {\n");
             sb.Append("        cleanupLegacyResidue();\n");
             sb.Append("        if (!window.__agPrismRepoBridge) {\n");
-            sb.Append("          const fn = (a) => Promise.resolve({ ok: false, offline: true, action: typeof a === 'string' ? a : (a && a.action) || 'status', noRemote: true, hasRemote: false, branch: 'local', commit: '1.0.0', shortHash: '1.0.0' });\n");
+            sb.Append("          const fn = (a) => Promise.resolve({ ok: false, offline: true, action: typeof a === 'string' ? a : (a && a.action) || 'status', noRemote: true, hasRemote: false, branch: 'local', commit: ").Append(verJson).Append(", shortHash: ").Append(verJson).Append(" });\n");
             sb.Append("          fn.call = fn; fn.request = fn; fn.status = () => fn('status'); fn.pull = () => fn('pull'); fn.sync = () => fn('pull'); fn.resolve = () => {};\n");
             sb.Append("          window.__agPrismRepoBridge = fn;\n");
             sb.Append("        }\n");
             sb.Append("        if (document.head) applyStyle();\n");
             sb.Append("        else document.addEventListener('DOMContentLoaded', applyStyle, { once: true });\n");
-            sb.Append("        ").Append(bundle).Append('\n');
             sb.Append("        const bootCfg = ").Append(MiniJson.Stringify(initCfg, false)).Append(";\n");
-            sb.Append("        if (typeof globalThis.__agCsUiMain === 'function') {\n");
-            sb.Append("          globalThis.__agCsUiMain(bootCfg);\n");
+            sb.Append("        const existingPrism = window.__agPrism || window.__agClaudeStyle;\n");
+            sb.Append("        const bundleUnchanged = Boolean(\n");
+            sb.Append("          existingPrism &&\n");
+            sb.Append("          existingPrism.version === ").Append(verJson).Append(" &&\n");
+            sb.Append("          existingPrism.codeHash === bootCfg.codeHash &&\n");
+            sb.Append("          typeof existingPrism.refreshConfig === 'function' &&\n");
+            sb.Append("          window.__agPrismTelemetry &&\n");
+            sb.Append("          window.__agPrismEffortSlider &&\n");
+            sb.Append("          window.__agPrismThought\n");
+            sb.Append("        );\n");
+            sb.Append("        if (bundleUnchanged) {\n");
+            sb.Append("          existingPrism.refreshConfig(bootCfg);\n");
+            sb.Append("        } else {\n");
+            sb.Append("          try { window.__agPrismThought?.destroy?.(); } catch {}\n");
+            sb.Append("          ").Append(bundle).Append('\n');
+            sb.Append("          if (typeof globalThis.__agCsUiMain === 'function') {\n");
+            sb.Append("            globalThis.__agCsUiMain(bootCfg);\n");
+            sb.Append("          }\n");
             sb.Append("        }\n");
             sb.Append("        migrateLegacyStorage();\n");
             sb.Append("        if (window.__agClaudeStyle && !window.__agPrism) window.__agPrism = window.__agClaudeStyle;\n");
@@ -635,8 +939,10 @@ namespace AgyClaudeStyle
             sb.Append("        const effectiveCfg = (liveState && liveState.cfg) || bootCfg;\n");
             sb.Append("        try { window.__agPrismTelemetry?.sync?.(effectiveCfg); } catch {}\n");
             sb.Append("        try { window.__agPrismEffortSlider?.sync?.(effectiveCfg); } catch {}\n");
+            sb.Append("        try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}\n");
+            sb.Append("        try { if (effectiveCfg.omniModule === 'off') window.__agPrismOmni?.destroy?.(); else window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}\n");
             sb.Append("        if (document.documentElement && !document.documentElement.hasAttribute('data-ag-prism')) {\n");
-            sb.Append("          document.documentElement.setAttribute('data-ag-prism', ").Append(MiniJson.StringifyString(manifest.Version)).Append(");\n");
+            sb.Append("          document.documentElement.setAttribute('data-ag-prism', ").Append(verJson).Append(");\n");
             sb.Append("        }\n");
             sb.Append("      } catch (e) {\n");
             sb.Append("        status = 'error: ' + (e && e.message ? e.message : String(e));\n");
@@ -662,7 +968,7 @@ namespace AgyClaudeStyle
             sb.Append("    const api = window.__agPrism || window.__agClaudeStyle;\n");
             sb.Append("    const st = api && typeof api.getState === 'function' ? api.getState() : null;\n");
             sb.Append("    return {\n");
-            sb.Append("      version: ").Append(MiniJson.StringifyString(manifest.Version)).Append(",\n");
+            sb.Append("      version: ").Append(verJson).Append(",\n");
             sb.Append("      status,\n");
             sb.Append("      state: st,\n");
             sb.Append("    };\n");

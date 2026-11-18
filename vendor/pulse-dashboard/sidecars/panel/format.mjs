@@ -1,3 +1,5 @@
+// Upstream: ATtacK030130/antigrative-dashboard v0.9.1 (MIT License — Copyright (c) 2026 AG Pulse contributors)
+// Integrated & adapted for Obsidian Prism under GPL-3.0-only compatibility terms.
 export function percent(fraction) {
   return typeof fraction === 'number' && Number.isFinite(fraction) ? `${(fraction * 100).toFixed(1)}%` : '—';
 }

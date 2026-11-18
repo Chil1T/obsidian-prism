@@ -23,11 +23,15 @@
   const FALLBACK_SHADOW_CSS = [
     ':host{display:inline-flex;align-items:center;position:relative;font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;font-size:11px;line-height:16px;color:var(--foreground,#dae2f0);user-select:none;z-index:20}',
     ':host([hidden]){display:none!important}',
+    ':host([data-layout="blocked"]){position:fixed!important;left:-9999px!important;top:-9999px!important;width:0!important;height:0!important;margin:0!important;padding:0!important;overflow:hidden!important;visibility:hidden!important;pointer-events:none!important}',
+    ':host([data-layout="blocked"])>.bar{display:none!important}',
     '.bar{display:inline-flex;align-items:center;gap:3px}',
     '.chip{display:inline-flex;align-items:center;gap:3.5px;height:24px;padding:0 6px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;cursor:pointer;font-variant-numeric:tabular-nums;transition:background .15s,color .15s}',
     '.chip:hover,.chip[aria-expanded="true"]{background:rgba(128,138,158,.12)}',
     '.chip svg{width:12px;height:12px;stroke:currentColor;stroke-width:1.5;fill:none;opacity:.75;flex:none}',
     '.dim{opacity:.64;font-size:10px}',
+    '.sub-badge{font-size:10px;opacity:.78;color:var(--primary,#38bdf8);font-weight:500}',
+    '.sub-badge[hidden]{display:none!important}',
     '.context-ring{width:11px;height:11px;border-radius:50%;background:conic-gradient(var(--pv-tint,#3186ff) var(--used-angle,36deg),rgba(148,163,184,.28) 0);display:inline-block;position:relative;flex:none}',
     '.context-ring::after{content:"";position:absolute;inset:2.2px;border-radius:50%;background:var(--card,#141720)}',
     '.card{position:fixed;right:18px;bottom:68px;width:min(320px,calc(100vw - 24px));padding:13px 14px 12px;border-radius:10px;border:1px solid rgba(148,163,184,.22);background:var(--card,#12151ef5);color:var(--foreground,#eef1f7);box-shadow:0 16px 40px rgba(0,0,0,.36);z-index:9999}',
@@ -60,6 +64,7 @@
     let reqSeq = 0;
     const pendingReqs = new Map();
     let docClickCleanup = null;
+    let lastSnapshot = null;
 
     function resolveMetricsBindingHook() {
       const win = getWin();
@@ -93,17 +98,39 @@
       }
     }
 
-    function findExistingBar(doc) {
-      if (!doc) return null;
-      if (typeof doc.querySelectorAll === 'function') {
-        const all = doc.querySelectorAll('#' + BAR_ID);
-        for (let i = 0; i < all.length; i++) {
-          if (all[i].getAttribute?.(FALLBACK_ATTR) !== '1') return all[i];
+    function findAllPulseBars(doc) {
+      if (!doc) return [];
+      const seen = new Set();
+      const out = [];
+      const add = (el) => {
+        if (el && !seen.has(el)) {
+          seen.add(el);
+          out.push(el);
         }
-        if (all.length > 0) return all[0];
+      };
+      if (typeof doc.querySelectorAll === 'function') {
+        try {
+          const bySel = doc.querySelectorAll('#' + BAR_ID + ', [data-ag-pulse-bar="true"]');
+          for (let i = 0; i < bySel.length; i++) add(bySel[i]);
+          const divs = doc.querySelectorAll('div');
+          for (let i = 0; i < divs.length; i++) {
+            const id = String(divs[i]?.getAttribute?.('id') || divs[i]?.id || '');
+            if (id.startsWith(BAR_ID)) add(divs[i]);
+          }
+        } catch {}
       }
-      if (typeof doc.getElementById === 'function') return doc.getElementById(BAR_ID);
-      return null;
+      if (typeof doc.getElementById === 'function') {
+        add(doc.getElementById(BAR_ID));
+      }
+      return out;
+    }
+
+    function findExistingBar(doc) {
+      const all = findAllPulseBars(doc);
+      for (let i = 0; i < all.length; i++) {
+        if (all[i].getAttribute?.(FALLBACK_ATTR) !== '1') return all[i];
+      }
+      return all.length > 0 ? all[0] : null;
     }
 
     function purgeOrphanFallbacks(doc, keepEl = null) {
@@ -134,17 +161,21 @@
       const win = getWin();
       const doc = getDoc();
       if (!win || !doc) return false;
-      const existing = findExistingBar(doc);
-      if (existing && existing.getAttribute(FALLBACK_ATTR) !== '1' && isNodeConnected(doc, existing)) {
-        externalDetachedAt = 0;
-        return true;
+      const allBars = findAllPulseBars(doc);
+      for (let i = 0; i < allBars.length; i++) {
+        const b = allBars[i];
+        if (b && b.getAttribute?.(FALLBACK_ATTR) !== '1' && isNodeConnected(doc, b)) {
+          externalDetachedAt = 0;
+          return true;
+        }
       }
       const extSig = [
         win.__agPulseRuntimeOwner ? String(win.__agPulseRuntimeOwner) : '',
+        win.__agPulseRuntimeBridge ? 'bridge' : '',
         win.__agPulseInlineInstalled ? '1' : '',
         win.agPulseHost && !win.agPulseHost.__prismFallback ? 'host' : '',
       ].join('|');
-      if (extSig !== '||') {
+      if (extSig !== '|||') {
         const now = Date.now();
         if (extSig !== lastExternalSig) {
           lastExternalSig = extSig;
@@ -155,8 +186,8 @@
         if (now - externalDetachedAt < EXTERNAL_RESCUE_GRACE_MS) {
           return true;
         }
-        // External globals lingered >3.5s without any connected #ag-pulse-status-bar (e.g. detached by React route switch):
-        // allow Prism's built-in Dashboard to self-heal and rescue the toolbar!
+        // External globals lingered >3.5s without any connected #ag-pulse-status-bar:
+        // allow Prism's built-in Dashboard to self-heal and rescue the toolbar.
         return false;
       }
       lastExternalSig = '';
@@ -166,44 +197,74 @@
 
     function restoreExternalVisibility() {
       const doc = getDoc();
-      const existing = findExistingBar(doc);
-      if (existing && existing.getAttribute(HIDDEN_BY_PRISM_ATTR) === '1') {
-        existing.removeAttribute(HIDDEN_BY_PRISM_ATTR);
-        if (existing.style && typeof existing.style.removeProperty === 'function') {
-          existing.style.removeProperty('display');
+      const bars = findAllPulseBars(doc);
+      for (let i = 0; i < bars.length; i++) {
+        const existing = bars[i];
+        if (existing && existing.getAttribute?.(HIDDEN_BY_PRISM_ATTR) === '1') {
+          existing.removeAttribute(HIDDEN_BY_PRISM_ATTR);
+          if (existing.style && typeof existing.style.removeProperty === 'function') {
+            existing.style.removeProperty('display');
+          }
         }
       }
     }
 
     function hideExternalBarIfPresent() {
       const doc = getDoc();
-      const existing = findExistingBar(doc);
-      if (existing && existing.getAttribute(FALLBACK_ATTR) !== '1') {
-        existing.setAttribute(HIDDEN_BY_PRISM_ATTR, '1');
-        if (existing.style && typeof existing.style.setProperty === 'function') {
-          existing.style.setProperty('display', 'none', 'important');
+      const bars = findAllPulseBars(doc);
+      for (let i = 0; i < bars.length; i++) {
+        const existing = bars[i];
+        if (existing && existing.getAttribute?.(FALLBACK_ATTR) !== '1') {
+          existing.setAttribute(HIDDEN_BY_PRISM_ATTR, '1');
+          if (existing.style && typeof existing.style.setProperty === 'function') {
+            existing.style.setProperty('display', 'none', 'important');
+          }
         }
       }
     }
 
-    function unmountFallback() {
+    function removeDataHostBridge() {
+      const win = getWin();
+      if (installedHostBridge && win && win.agPulseHost && win.agPulseHost.__prismFallback) {
+        delete win.agPulseHost;
+      }
+      installedHostBridge = false;
+    }
+
+    function ensureDataHostBridge() {
+      const win = getWin();
+      if (!win) return;
+      resolveMetricsBindingHook();
+      if (!win.agPulseHost || typeof win.agPulseHost.getMetrics !== 'function') {
+        win.agPulseHost = {
+          __prismFallback: true,
+          getMetrics: (input) => requestMetricsSnapshot(input),
+          getLatestSnapshot: () => lastSnapshot,
+          getPreferences: () => Promise.resolve({ language: 'zh-CN' }),
+          setPreferences: (v) => Promise.resolve(v || {}),
+          report: () => {},
+        };
+        installedHostBridge = true;
+      }
+    }
+
+    function unmountFallback(keepDataBridge = false) {
       clearWaitTimer();
       clearPollTimer();
       if (docClickCleanup) {
         try { docClickCleanup(); } catch {}
         docClickCleanup = null;
       }
-      for (const item of pendingReqs.values()) {
-        clearTimeout(item.timer);
-        item.resolve(null);
+      if (!keepDataBridge) {
+        for (const item of pendingReqs.values()) {
+          clearTimeout(item.timer);
+          item.resolve(null);
+        }
+        pendingReqs.clear();
+        removeDataHostBridge();
       }
-      pendingReqs.clear();
 
       const win = getWin();
-      if (installedHostBridge && win && win.agPulseHost && win.agPulseHost.__prismFallback) {
-        delete win.agPulseHost;
-      }
-      installedHostBridge = false;
 
       if (fallbackHostEl) {
         try {
@@ -310,29 +371,82 @@
     function requestMetricsSnapshot(input) {
       const win = getWin();
       resolveMetricsBindingHook();
+      // Strip usageSync unless explicitly demanded to keep toolbar polling zero-jank
+      const safeInput = input && typeof input === 'object' ? { ...input } : {};
+      if (safeInput.usageSync) delete safeInput.usageSync;
       if (win && typeof win[METRICS_BINDING] === 'function') {
         return new Promise((resolve) => {
           if (pendingReqs.size >= 6) {
-            resolve(estimateLocalSnapshot());
+            resolve(lastSnapshot || estimateLocalSnapshot());
             return;
           }
           const id = ++reqSeq;
           const timer = setTimeout(() => {
             pendingReqs.delete(id);
-            resolve(estimateLocalSnapshot());
+            resolve(lastSnapshot || estimateLocalSnapshot());
           }, 3500);
           pendingReqs.set(id, { resolve, timer });
           try {
-            win[METRICS_BINDING](JSON.stringify({ id, input: input || {} }));
+            win[METRICS_BINDING](JSON.stringify({ id, input: safeInput }));
           } catch {
             clearTimeout(timer);
             pendingReqs.delete(id);
-            resolve(estimateLocalSnapshot());
+            resolve(lastSnapshot || estimateLocalSnapshot());
           }
         });
       }
       return Promise.resolve(estimateLocalSnapshot());
     }
+
+    const FB_I18N = {
+      'zh-CN': {
+        cache: '缓存', speedHeading: '吞吐速率', ttft: '首字延迟', latestRate: '最近速率',
+        ctxHeading: '上下文窗口用量', curModel: '当前模型',
+        noteSync: 'Prism 实时遥测同步', noteProc: 'Prism 实时遥测同步 · 后台统计整编中', noteLocal: 'Prism 本地上下文估算',
+        summary: (p, r) => `${p}% 已用 · ${r}% 剩余`, agents: (n) => `· ${n}代理`,
+      },
+      'zh-TW': {
+        cache: '快取', speedHeading: '吞吐速率', ttft: '首字延遲', latestRate: '最近速率',
+        ctxHeading: '上下文視窗用量', curModel: '目前模型',
+        noteSync: 'Prism 即時遙測同步', noteProc: 'Prism 即時遙測同步 · 背景統計彙整中', noteLocal: 'Prism 本機上下文估算',
+        summary: (p, r) => `${p}% 已用 · ${r}% 剩餘`, agents: (n) => `· ${n}代理`,
+      },
+      yue: {
+        cache: '快取', speedHeading: '吞吐速率', ttft: '首字延遲', latestRate: '最近速率',
+        ctxHeading: '上下文視窗用量', curModel: '目前模型',
+        noteSync: 'Prism 即時遙測同步', noteProc: 'Prism 即時遙測同步 · 背景統計整理中', noteLocal: 'Prism 本機上下文估算',
+        summary: (p, r) => `${p}% 已用 · ${r}% 剩低`, agents: (n) => `· ${n}代理`,
+      },
+      en: {
+        cache: 'Cache', speedHeading: 'Throughput', ttft: 'TTFT', latestRate: 'Latest Rate',
+        ctxHeading: 'Context Window', curModel: 'Active Model',
+        noteSync: 'Prism live telemetry', noteProc: 'Prism live telemetry · Indexing usage', noteLocal: 'Prism local context estimate',
+        summary: (p, r) => `${p}% used · ${r}% free`, agents: (n) => `· ${n} sub`,
+      },
+      ja: {
+        cache: 'キャッシュ', speedHeading: 'スループット', ttft: '初回応答', latestRate: '最新速度',
+        ctxHeading: 'コンテキスト使用量', curModel: '現在のモデル',
+        noteSync: 'Prism リアルタイム同期', noteProc: 'Prism 同期中 · バックグラウンド集計中', noteLocal: 'Prism ローカル推定',
+        summary: (p, r) => `${p}% 使用 · ${r}% 残り`, agents: (n) => `· ${n} sub`,
+      },
+    };
+    let explicitLang = '';
+    const getFbStrings = () => {
+      const docLang = getDoc()?.documentElement?.getAttribute?.('data-ag-cs-lang') || '';
+      const key = docLang || explicitLang || 'zh-CN';
+      return FB_I18N[key] || FB_I18N['zh-CN'];
+    };
+    const syncFallbackLabels = () => {
+      if (!shadowRoot) return;
+      const t = getFbStrings();
+      const nodes = shadowRoot.querySelectorAll?.('[data-fb-i18n]') || [];
+      for (let i = 0; i < nodes.length; i++) {
+        const k = nodes[i].getAttribute('data-fb-i18n');
+        if (k && typeof t[k] === 'string' && nodes[i].textContent !== t[k]) {
+          nodes[i].textContent = t[k];
+        }
+      }
+    };
 
     function fmtTok(n) {
       if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return '—';
@@ -342,6 +456,7 @@
     }
 
     function applySnapshotToDom(snap) {
+      if (snap && typeof snap === 'object') lastSnapshot = snap;
       if (!shadowRoot || !fallbackHostEl) return;
       const sp = snap?.speed || {};
       const ctx = sp.context || {};
@@ -358,6 +473,25 @@
       const remPct = Math.max(0, 100 - pct);
       const model = ctx.model || sp.model || 'Antigravity Model';
 
+      const totalTok =
+        sp.taskUsage?.total?.totalTokens ??
+        sp.tokens?.totalTokens ??
+        sp.cache?.totalTokens ??
+        sp.totalTokens ??
+        0;
+      const hitRate =
+        typeof sp.cache?.hitRate === 'number' && Number.isFinite(sp.cache.hitRate)
+          ? sp.cache.hitRate
+          : sp.cacheHitRate;
+      const subCount = Number(sp.taskUsage?.subagents || 0);
+      const isProcessing = snap?.collection?.state === 'processing';
+
+      if (isProcessing) fallbackHostEl.setAttribute('data-collection', 'processing');
+      else fallbackHostEl.removeAttribute('data-collection');
+
+      const t = getFbStrings();
+      syncFallbackLabels();
+
       const setTxt = (id, val) => {
         const el = shadowRoot.getElementById(id);
         if (el && el.textContent !== String(val)) el.textContent = String(val);
@@ -365,20 +499,39 @@
 
       setTxt('rounds', sp.rounds > 0 ? `${sp.rounds}r` : '—');
       setTxt('tps', typeof sp.tps === 'number' && sp.tps > 0 ? sp.tps.toFixed(1) : '—');
-      setTxt('cache-total', sp.totalTokens > 0 ? `${fmtTok(sp.totalTokens)} tok` : `${fmtTok(usedTok)} tok`);
+      setTxt('cache-total', totalTok > 0 ? `${fmtTok(totalTok)} tok` : `${fmtTok(usedTok)} tok`);
       setTxt(
         'cache-rate',
-        typeof sp.cacheHitRate === 'number' && Number.isFinite(sp.cacheHitRate)
-          ? `${(sp.cacheHitRate * 100).toFixed(1)}%`
+        typeof hitRate === 'number' && Number.isFinite(hitRate)
+          ? `${(hitRate * 100).toFixed(1)}%`
           : '—'
       );
+
+      const subBadge = shadowRoot.getElementById('subagent-badge');
+      if (subBadge) {
+        if (subCount > 0) {
+          subBadge.hidden = false;
+          const badgeTxt = t.agents(subCount);
+          if (subBadge.textContent !== badgeTxt) subBadge.textContent = badgeTxt;
+        } else {
+          subBadge.hidden = true;
+        }
+      }
+
       setTxt('context-percent', `${pct}%`);
       setTxt('ttft', typeof sp.ttftSeconds === 'number' ? `${sp.ttftSeconds.toFixed(2)}s` : '—');
       setTxt('latest-rate', typeof sp.latestTps === 'number' ? `${sp.latestTps.toFixed(1)} tok/s` : '—');
-      setTxt('context-summary', `${pct}% 已用 · ${remPct}% 剩余`);
+      setTxt('context-summary', t.summary(pct, remPct));
       setTxt('context-tokens', `${fmtTok(usedTok)} / ${fmtTok(maxTok)} tok`);
       setTxt('context-model', model);
-      setTxt('context-note', snap?.connection === 'local-estimate' ? 'Prism 本地上下文估算' : 'Prism 实时遥测同步');
+      setTxt(
+        'context-note',
+        snap?.connection === 'local-estimate'
+          ? t.noteLocal
+          : isProcessing
+          ? t.noteProc
+          : t.noteSync
+      );
 
       const fillEl = shadowRoot.getElementById('context-fill');
       if (fillEl && fillEl.style) fillEl.style.width = `${pct}%`;
@@ -441,8 +594,6 @@
       if (!parentEl) return true;
       const cls = String(parentEl.className || '').trim();
       if (!cls) return false;
-      // During active agent turns, [data-testid="model-selector-trigger"] moves to a top-left block <div class="min-w-0">.
-      // Appending status bars there stacks vertically below the model pill and inflates the composer height!
       return /\bmin-w-0\b/.test(cls) && !/\b(?:flex|inline-flex|agy-composer-footer)\b/.test(cls);
     }
 
@@ -488,7 +639,7 @@
     function mountFallbackNow() {
       const win = getWin();
       const doc = getDoc();
-      if (!win || !doc || typeof doc.attachShadow === 'undefined' && typeof doc.createElement !== 'function') return false;
+      if (!win || !doc || (typeof doc.attachShadow === 'undefined' && typeof doc.createElement !== 'function')) return false;
       if (!envOpts && win.__agPrismTelemetry && win.__agPrismTelemetry !== controllerApi) {
         unmountFallback();
         return false;
@@ -507,11 +658,12 @@
       const anchor = findMountAnchor(doc);
       if (!anchor) return false;
 
-      const host = mk(doc, 'div', { id: BAR_ID, [FALLBACK_ATTR]: '1' });
+      const host = mk(doc, 'div', { id: BAR_ID, [FALLBACK_ATTR]: '1', 'data-ag-pulse-bar': 'true' });
       if (typeof host.attachShadow !== 'function') return false;
       const sr = host.attachShadow({ mode: 'open' });
       sr.appendChild(mk(doc, 'style', { text: FALLBACK_SHADOW_CSS }));
 
+      const tInit = getFbStrings();
       const speedChip = mk(doc, 'button', { type: 'button', className: 'chip', 'data-card': 'speed' }, [
         mk(doc, 'span', { className: 'rounds dim', id: 'rounds', text: '—' }),
         mk(doc, 'strong', { id: 'tps', text: '—' }),
@@ -519,8 +671,9 @@
       ]);
       const cacheChip = mk(doc, 'button', { type: 'button', className: 'chip', 'data-card': 'cache' }, [
         mk(doc, 'span', { className: 'cache-total', id: 'cache-total', text: '—' }),
+        mk(doc, 'span', { className: 'sub-badge', id: 'subagent-badge', hidden: true, text: '' }),
         mk(doc, 'span', { className: 'dim', text: '·' }),
-        mk(doc, 'span', { 'data-i18n': 'cache', text: '缓存' }),
+        mk(doc, 'span', { 'data-i18n': 'cache', 'data-fb-i18n': 'cache', text: tInit.cache }),
         mk(doc, 'strong', { id: 'cache-rate', text: '—' }),
       ]);
       const ctxChip = mk(
@@ -536,11 +689,11 @@
 
       const bar = mk(doc, 'div', { className: 'bar' }, [speedChip, cacheChip, ctxChip]);
       const speedCard = mk(doc, 'section', { className: 'card', id: 'speed-card', hidden: true }, [
-        mk(doc, 'div', { className: 'heading' }, [mk(doc, 'span', { text: '吞吐速率' })]),
+        mk(doc, 'div', { className: 'heading' }, [mk(doc, 'span', { 'data-fb-i18n': 'speedHeading', text: tInit.speedHeading })]),
         mk(doc, 'dl', null, [
-          mk(doc, 'dt', { text: '首字延迟' }),
+          mk(doc, 'dt', { 'data-fb-i18n': 'ttft', text: tInit.ttft }),
           mk(doc, 'dd', { id: 'ttft', text: '—' }),
-          mk(doc, 'dt', { text: '最近速率' }),
+          mk(doc, 'dt', { 'data-fb-i18n': 'latestRate', text: tInit.latestRate }),
           mk(doc, 'dd', { id: 'latest-rate', text: '—' }),
         ]),
       ]);
@@ -548,15 +701,15 @@
       const fillEl = mk(doc, 'i', { id: 'context-fill' });
       const trackEl = mk(doc, 'div', { className: 'track', id: 'context-track' }, [fillEl]);
       const ctxCard = mk(doc, 'section', { className: 'card context-card', id: 'context-card', hidden: true }, [
-        mk(doc, 'div', { className: 'heading' }, [mk(doc, 'span', { text: '上下文窗口用量' })]),
-        mk(doc, 'strong', { id: 'context-summary', text: '0% 已用 · 100% 剩余' }),
+        mk(doc, 'div', { className: 'heading' }, [mk(doc, 'span', { 'data-fb-i18n': 'ctxHeading', text: tInit.ctxHeading })]),
+        mk(doc, 'strong', { id: 'context-summary', text: tInit.summary(0, 100) }),
         mk(doc, 'p', { id: 'context-tokens', text: '— / 512K tok' }),
         trackEl,
         mk(doc, 'dl', null, [
-          mk(doc, 'dt', { text: '当前模型' }),
+          mk(doc, 'dt', { 'data-fb-i18n': 'curModel', text: tInit.curModel }),
           mk(doc, 'dd', { id: 'context-model', text: '—' }),
         ]),
-        mk(doc, 'p', { className: 'footnote', id: 'context-note', text: 'Prism 实时遥测同步' }),
+        mk(doc, 'p', { className: 'footnote', id: 'context-note', text: tInit.noteSync }),
       ]);
 
       sr.appendChild(bar);
@@ -607,16 +760,7 @@
       shadowRoot = sr;
       yieldedToExternal = false;
 
-      if (!win.agPulseHost) {
-        win.agPulseHost = {
-          __prismFallback: true,
-          getMetrics: (input) => requestMetricsSnapshot(input),
-          getPreferences: () => Promise.resolve({ language: 'zh-CN' }),
-          setPreferences: (v) => Promise.resolve(v || {}),
-          report: () => {},
-        };
-        installedHostBridge = true;
-      }
+      ensureDataHostBridge();
 
       void refreshMetrics();
       clearPollTimer();
@@ -630,8 +774,15 @@
     }
 
     function sync(cfg) {
+      if (cfg && typeof cfg.language === 'string' && cfg.language) {
+        explicitLang = cfg.language;
+      }
       const raw = cfg && cfg.telemetryModule;
       currentMode = raw === 'on' || raw === 'off' ? raw : 'auto';
+      if (shadowRoot && currentMode !== 'off') {
+        syncFallbackLabels();
+        if (lastSnapshot) applySnapshotToDom(lastSnapshot);
+      }
 
       if (currentMode === 'off') {
         yieldedToExternal = false;
@@ -644,7 +795,10 @@
 
       if (hasExternalPulse()) {
         yieldedToExternal = true;
-        unmountFallback();
+        unmountFallback(true);
+        // Legacy external Pulse (<= v0.8.x) mounts DOM but exposes no window.agPulseHost:
+        // keep Prism's headless data bridge alive so Vial quotas & Studio Quotas tab work seamlessly!
+        ensureDataHostBridge();
         if (externalDetachedAt > 0 && rescueTimer === null) {
           rescueTimer = setTimeout(() => {
             rescueTimer = null;
@@ -681,11 +835,13 @@
           if (currentMode !== 'auto') return;
           if (hasExternalPulse()) {
             yieldedToExternal = true;
-            unmountFallback();
+            unmountFallback(true);
+            ensureDataHostBridge();
             return;
           }
           mountFallbackNow();
         }, waitMs);
+        if (waitTimer && typeof waitTimer.unref === 'function') rescueTimer?.unref?.();
         if (waitTimer && typeof waitTimer.unref === 'function') waitTimer.unref();
       }
       return getState();
@@ -717,6 +873,7 @@
       sync,
       destroy,
       refresh: refreshMetrics,
+      getLatestSnapshot: () => lastSnapshot,
       getState,
       createTelemetryController,
     };

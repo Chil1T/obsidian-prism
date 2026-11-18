@@ -47,9 +47,9 @@ final class PluginManifest {
         let manifestPath = (baseDir as NSString).appendingPathComponent("manifest.json")
         let text = try String(contentsOfFile: manifestPath, encoding: .utf8)
         let raw = try MiniJson.parseObject(text)
-        let version = raw["version"]?.stringValue ?? "1.0.0"
-        let styleId = raw["styleId"]?.stringValue ?? "ag-claude-style-css"
-        let settingBinding = raw["settingBinding"]?.stringValue ?? "__agClaudeStyleSetting"
+        let version = raw["version"]?.stringValue ?? "1.0.1"
+        let styleId = raw["styleId"]?.stringValue ?? "ag-prism-css"
+        let settingBinding = raw["settingBinding"]?.stringValue ?? "__agPrismSetting"
         let removeExpression = raw["removeExpression"]?.stringValue ?? ""
         var parts: [String] = []
         if let arr = raw["parts"]?.arrayValue {
@@ -412,14 +412,39 @@ enum CdpHelper {
             let type = t["type"]?.stringValue ?? ""
             let wsUrl = t["webSocketDebuggerUrl"]?.stringValue ?? ""
             let pageUrl = t["url"]?.stringValue ?? ""
-            let lowerUrl = pageUrl.lowercased()
-            if type == "page" && !wsUrl.isEmpty && !lowerUrl.hasPrefix("devtools://") && !lowerUrl.hasPrefix("data:") {
+            let title = t["title"]?.stringValue ?? ""
+            if isEligibleTarget(type: type, wsUrl: wsUrl, title: title, pageUrl: pageUrl) {
                 let id = t["id"]?.stringValue ?? wsUrl
-                let title = t["title"]?.stringValue ?? ""
                 pages.append(CdpPageInfo(id: id, title: title, url: pageUrl, webSocketDebuggerUrl: wsUrl))
             }
         }
         return pages
+    }
+
+    static func isEligibleTarget(type: String, wsUrl: String, title: String, pageUrl: String) -> Bool {
+        if type != "page" || wsUrl.isEmpty { return false }
+        let url = pageUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ttl = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if url.isEmpty { return false }
+        let lowerUrl = url.lowercased()
+        let blockedPrefixes = ["devtools://", "data:", "about:", "chrome:", "chrome-extension:", "edge:", "blob:", "plugin:"]
+        for pfx in blockedPrefixes {
+            if lowerUrl.hasPrefix(pfx) { return false }
+        }
+        let combined = (ttl + " " + url).lowercased()
+        if combined.contains("untitled") || combined.contains("launchpad") { return false }
+        if lowerUrl.hasPrefix("vscode-file://") || lowerUrl.hasPrefix("app://") { return true }
+        if lowerUrl.hasPrefix("file://") {
+            return lowerUrl.contains("workbench") || lowerUrl.contains("antigravity") || ttl.lowercased().contains("antigravity")
+        }
+        guard let parsed = URL(string: url), let scheme = parsed.scheme?.lowercased(), (scheme == "http" || scheme == "https") else {
+            return false
+        }
+        let host = (parsed.host ?? "").lowercased()
+        if host != "127.0.0.1" && host != "localhost" && host != "::1" && host != "[::1]" { return false }
+        if ttl.lowercased().contains("antigravity") { return true }
+        if scheme == "https" && (ttl.isEmpty || ttl.lowercased().hasPrefix("127.0.0.1")) { return true }
+        return false
     }
 
     static func computeHash(_ str: String) -> String {
@@ -431,32 +456,97 @@ enum CdpHelper {
         return String(h, radix: 36)
     }
 
+    private static func toBoolOnOff(_ val: JsonValue?) -> Bool {
+        guard let v = val else { return true }
+        if case .bool(let b) = v { return b }
+        if let s = v.stringValue?.lowercased() {
+            return s != "off" && s != "false"
+        }
+        return true
+    }
+
+    static func reconcileConfigAliases(_ raw: [String: JsonValue]) -> [String: JsonValue] {
+        var out = raw
+        if let lang = out["language"] { out["lang"] = lang }
+        else if let lang = out["lang"] { out["language"] = lang }
+
+        if let hl = out["homeLayout"] { out["homeMode"] = hl }
+        else if let hm = out["homeMode"] { out["homeLayout"] = hm }
+
+        if out["homeRipple"] != nil || out["ripple"] != nil {
+            let on = out["homeRipple"] != nil ? toBoolOnOff(out["homeRipple"]) : toBoolOnOff(out["ripple"])
+            out["homeRipple"] = .bool(on)
+            out["ripple"] = .string(on ? "on" : "off")
+        }
+        if out["composerRestyle"] != nil || out["composer"] != nil {
+            let on = out["composerRestyle"] != nil ? toBoolOnOff(out["composerRestyle"]) : toBoolOnOff(out["composer"])
+            out["composerRestyle"] = .bool(on)
+            out["composer"] = .string(on ? "on" : "off")
+        }
+        if let ps = out["placeholderStyle"] { out["promptStyle"] = ps }
+        else if let pr = out["promptStyle"] { out["placeholderStyle"] = pr }
+
+        if out["sidebarRestyle"] != nil || out["sidebar"] != nil {
+            let on = out["sidebarRestyle"] != nil ? toBoolOnOff(out["sidebarRestyle"]) : toBoolOnOff(out["sidebar"])
+            out["sidebarRestyle"] = .bool(on)
+            out["sidebar"] = .string(on ? "on" : "off")
+        }
+        if out["sidebarCompact"] != nil {
+            out["sidebarCompact"] = .bool(toBoolOnOff(out["sidebarCompact"]))
+        }
+        if out["smoothCaret"] != nil {
+            out["smoothCaret"] = .bool(toBoolOnOff(out["smoothCaret"]))
+        }
+        if let cl = out["codeLigatures"] {
+            if case .bool(let b) = cl {
+                out["codeLigatures"] = .bool(b)
+            } else if let s = cl.stringValue?.lowercased() {
+                out["codeLigatures"] = .bool(s == "on" || s == "true")
+            }
+        }
+        return out
+    }
+
     static func readConfig(baseDir: String, manifest: PluginManifest) -> [String: JsonValue] {
         var cfg = manifest.defaultConfig
         let cfgPath = (baseDir as NSString).appendingPathComponent("config.json")
         if let text = try? String(contentsOfFile: cfgPath, encoding: .utf8),
            let userCfg = try? MiniJson.parseObject(text) {
-            for (k, v) in userCfg {
+            let reconciled = reconcileConfigAliases(userCfg)
+            for (k, v) in reconciled {
                 cfg[k] = v
             }
         }
-        return cfg
+        return reconcileConfigAliases(cfg)
     }
 
-    static func updateConfigSetting(baseDir: String, manifest: PluginManifest, key: String, value: JsonValue) -> Bool {
+    static func validateConfigEntry(manifest: PluginManifest, key: String, value: JsonValue) -> Bool {
         guard let rule = manifest.validators[key] else { return false }
         if let ruleStr = rule.stringValue, ruleStr == "boolean" {
-            guard case .bool = value else { return false }
+            if case .bool = value { return true }
+            if let sv = value.stringValue, (sv == "on" || sv == "off") { return true }
+            return false
         } else if let allowed = rule.arrayValue {
             guard let strVal = value.stringValue else { return false }
-            let matched = allowed.contains { $0.stringValue == strVal }
-            if !matched { return false }
-        } else {
-            return false
+            return allowed.contains { $0.stringValue == strVal }
         }
+        return false
+    }
 
+    static func updateConfigBatch(baseDir: String, manifest: PluginManifest, entries: [String: JsonValue]) -> Bool {
+        var validPatch: [String: JsonValue] = [:]
+        for (k, v) in entries {
+            if validateConfigEntry(manifest: manifest, key: k, value: v) {
+                validPatch[k] = v
+            }
+        }
+        if validPatch.isEmpty { return false }
+
+        let reconciledPatch = reconcileConfigAliases(validPatch)
         var next = readConfig(baseDir: baseDir, manifest: manifest)
-        next[key] = value
+        for (k, v) in reconciledPatch {
+            next[k] = v
+        }
         let cfgPath = (baseDir as NSString).appendingPathComponent("config.json")
         let tmpPath = cfgPath + ".tmp"
         let content = MiniJson.stringify(.object(next), pretty: true) + "\n"
@@ -472,6 +562,69 @@ enum CdpHelper {
         }
     }
 
+    static func updateConfigSetting(baseDir: String, manifest: PluginManifest, key: String, value: JsonValue) -> Bool {
+        return updateConfigBatch(baseDir: baseDir, manifest: manifest, entries: [key: value])
+    }
+
+    static func getDefaultNativePluginDir() -> String {
+        if let envOverride = ProcessInfo.processInfo.environment["AG_PRISM_PLUGIN_DIR"],
+           !envOverride.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(fileURLWithPath: envOverride.trimmingCharacters(in: .whitespacesAndNewlines)).standardizedFileURL.path
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return (((home as NSString).appendingPathComponent(".gemini/config/plugins")) as NSString)
+            .appendingPathComponent("obsidian-prism")
+    }
+
+    static func readNativeDaemonPid(pluginDir: String) -> Int32? {
+        guard !pluginDir.isEmpty else { return nil }
+        let pidPath = (pluginDir as NSString).appendingPathComponent(".daemon.pid")
+        guard let raw = try? String(contentsOfFile: pidPath, encoding: .utf8) else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        if let plainPid = Int32(trimmed), plainPid > 0 { return plainPid }
+        if trimmed.hasPrefix("{"),
+           let obj = try? MiniJson.parseObject(trimmed),
+           let pidVal = obj["pid"] {
+            if case .int(let n) = pidVal, n > 0 && n <= Int64(Int32.max) {
+                return Int32(n)
+            }
+            if case .double(let d) = pidVal, d > 0 && d <= Double(Int32.max) {
+                return Int32(d)
+            }
+        }
+        return nil
+    }
+
+    static func isExpectedDaemonProcess(pid: Int32) -> Bool {
+        guard pid > 0 else { return false }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+        proc.arguments = ["-p", "\(pid)", "-o", "comm="]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = Pipe()
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let comm = (String(data: data, encoding: .utf8) ?? "").lowercased()
+            if comm.isEmpty { return false }
+            return comm.contains("node") ||
+                   comm.contains("watcher") ||
+                   comm.contains("obsidian-prism") ||
+                   comm.contains("agy-claude-style")
+        } catch {
+            return false
+        }
+    }
+
+    static func isNativeDaemonAlive(pluginDir: String) -> Bool {
+        guard let pid = readNativeDaemonPid(pluginDir: pluginDir), pid > 0 else { return false }
+        if kill(pid, 0) == 0 { return true }
+        return errno == EPERM
+    }
+
     static func readRuntimeBundle(baseDir: String, manifest: PluginManifest) throws -> String {
         var partsContent: [String] = []
         partsContent.reserveCapacity(manifest.parts.count)
@@ -480,6 +633,81 @@ enum CdpHelper {
             partsContent.append(try String(contentsOfFile: p, encoding: .utf8))
         }
         return partsContent.joined(separator: "\n")
+    }
+
+    static func buildConfigRefreshExpression(baseDir: String, manifest: PluginManifest) -> String {
+        var nextCfg = readConfig(baseDir: baseDir, manifest: manifest)
+        let codeHash = (try? readRuntimeBundle(baseDir: baseDir, manifest: manifest)).map { computeHash($0) } ?? ""
+        nextCfg["binding"] = .string(manifest.settingBinding)
+        if !codeHash.isEmpty { nextCfg["codeHash"] = .string(codeHash) }
+        nextCfg["__fromFile"] = .bool(true)
+        let cfgJson = MiniJson.stringify(.object(nextCfg), pretty: false)
+        let verJson = MiniJson.stringifyString(manifest.version)
+        let hashJson = MiniJson.stringifyString(codeHash)
+        var sb = ""
+        sb.reserveCapacity(cfgJson.count + 768)
+        sb.append("(() => {\n")
+        sb.append("    const nextCfg = ")
+        sb.append(cfgJson)
+        sb.append(";\n")
+        sb.append("    const api = window.__agPrism || window.__agClaudeStyle;\n")
+        sb.append("    if (!api || api.version !== ")
+        sb.append(verJson)
+        sb.append(" || typeof api.refreshConfig !== 'function') return { ok: false, refreshed: false };\n")
+        sb.append("    if (")
+        sb.append(hashJson)
+        sb.append(" && api.codeHash && api.codeHash !== ")
+        sb.append(hashJson)
+        sb.append(") return { ok: false, refreshed: false };\n")
+        sb.append("    api.refreshConfig(nextCfg);\n")
+        sb.append("    const liveState = typeof api.getState === 'function' ? api.getState() : null;\n")
+        sb.append("    const effectiveCfg = (liveState && liveState.cfg) || nextCfg;\n")
+        sb.append("    try { window.__agPrismTelemetry?.sync?.(effectiveCfg); } catch {}\n")
+        sb.append("    try { window.__agPrismEffortSlider?.sync?.(effectiveCfg); } catch {}\n")
+        sb.append("    try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}\n")
+        sb.append("    try { if (effectiveCfg.omniModule === 'off') window.__agPrismOmni?.destroy?.(); else window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}\n")
+        sb.append("    return { ok: true, refreshed: true, state: liveState };\n")
+        sb.append("  })()")
+        return sb
+    }
+
+    static func buildOmniClientExpression(baseDir: String, manifest: PluginManifest) -> String {
+        let omniPath = (baseDir as NSString).appendingPathComponent("vendor/omni-viewer/omni-client.js")
+        guard let clientSource = try? String(contentsOfFile: omniPath, encoding: .utf8), !clientSource.isEmpty else {
+            return ""
+        }
+        let config = readConfig(baseDir: baseDir, manifest: manifest)
+        let cfgJson = MiniJson.stringify(.object(config), pretty: false)
+        let hashJson = MiniJson.stringifyString(computeHash(clientSource))
+        var sb = ""
+        sb.reserveCapacity(clientSource.count + cfgJson.count + 1024)
+        sb.append("(() => {\n")
+        sb.append("  const href = String((typeof location !== 'undefined' && location && location.href) || '');\n")
+        sb.append("  if (/^(devtools:|chrome:|chrome-extension:|edge:|about:|data:|blob:|plugin:)/i.test(href)) return { ok: false, skipped: true };\n")
+        sb.append("  const bootCfg = ")
+        sb.append(cfgJson)
+        sb.append(";\n")
+        sb.append("  const nextHash = ")
+        sb.append(hashJson)
+        sb.append(";\n")
+        sb.append("  const liveCfg = (window.__agPrism && typeof window.__agPrism.getState === 'function' && window.__agPrism.getState()?.cfg) || bootCfg;\n")
+        sb.append("  const serverMeta = window.__agPrismOmniServerMeta || null;\n")
+        sb.append("  const prev = window.__agPrismOmni;\n")
+        sb.append("  const reused = Boolean(prev && prev.codeHash === nextHash && typeof prev.sync === 'function');\n")
+        sb.append("  if (!reused) {\n")
+        sb.append("    try { prev?.destroy?.(); } catch {}\n")
+        sb.append("    ")
+        sb.append(clientSource)
+        sb.append("\n")
+        sb.append("    if (window.__agPrismOmni && typeof window.__agPrismOmni === 'object') {\n")
+        sb.append("      try { window.__agPrismOmni.codeHash = nextHash; } catch {}\n")
+        sb.append("    }\n")
+        sb.append("  }\n")
+        sb.append("  try { window.__agPrismOmni?.sync?.(liveCfg, serverMeta); } catch {}\n")
+        sb.append("  if (liveCfg && liveCfg.omniModule === 'off') return { ok: true, status: 'disabled' };\n")
+        sb.append("  return { ok: true, status: reused ? 'synced' : (window.__agPrismOmni ? 'mounted' : 'ready') };\n")
+        sb.append("})()")
+        return sb
     }
 
     static func buildInjectExpression(baseDir: String, manifest: PluginManifest) throws -> String {
@@ -492,17 +720,34 @@ enum CdpHelper {
         var initCfg = config
         initCfg["binding"] = .string(manifest.settingBinding)
         initCfg["codeHash"] = .string(codeHash)
+        initCfg["__fromFile"] = .bool(true)
 
         let styleIdJson = MiniJson.stringifyString(manifest.styleId)
+        let verJson = MiniJson.stringifyString(manifest.version)
         var sb = ""
-        sb.reserveCapacity(css.count + bundle.count + 4096)
+        sb.reserveCapacity(css.count + bundle.count + 4608)
         sb.append("(() => {\n")
         sb.append("    const css = ")
         sb.append(MiniJson.stringifyString(css))
         sb.append(";\n")
+        sb.append("    const migrateLegacyStorage = () => {\n")
+        sb.append("      try {\n")
+        sb.append("        if (typeof localStorage === 'undefined' || !localStorage) return;\n")
+        sb.append("        const legacyRaw = localStorage.getItem('ag-claude-style:config');\n")
+        sb.append("        const v3Raw = localStorage.getItem('agClaudeStyle.settings.v3');\n")
+        sb.append("        const prismRaw = localStorage.getItem('ag-prism:config');\n")
+        sb.append("        if (!prismRaw && (legacyRaw || v3Raw)) localStorage.setItem('ag-prism:config', legacyRaw || v3Raw);\n")
+        sb.append("        if (!v3Raw && (prismRaw || legacyRaw)) localStorage.setItem('agClaudeStyle.settings.v3', prismRaw || legacyRaw);\n")
+        sb.append("      } catch {}\n")
+        sb.append("    };\n")
+        sb.append("    const cleanupLegacyResidue = () => {\n")
+        sb.append("      try { const oldStyle = document.getElementById('ag-claude-style-css'); if (oldStyle) oldStyle.remove(); } catch {}\n")
+        sb.append("      try { const oldApi = window.__agClaudeStyle; if (oldApi && (!window.__agPrism || Number(oldApi.version) <= 2)) { if (typeof oldApi.destroy === 'function') oldApi.destroy(); delete window.__agClaudeStyle; } } catch {}\n")
+        sb.append("    };\n")
         sb.append("    const applyStyle = () => {\n")
         sb.append("      const targetParent = document.head || document.documentElement;\n")
         sb.append("      if (!targetParent) return;\n")
+        sb.append("      cleanupLegacyResidue();\n")
         sb.append("      let style = document.getElementById(")
         sb.append(styleIdJson)
         sb.append(");\n")
@@ -523,23 +768,58 @@ enum CdpHelper {
         sb.append("      if (mounted || !document.documentElement) return;\n")
         sb.append("      mounted = true;\n")
         sb.append("      try {\n")
+        sb.append("        cleanupLegacyResidue();\n")
+        sb.append("        if (!window.__agPrismRepoBridge) {\n")
+        sb.append("          const fn = (a) => Promise.resolve({ ok: false, offline: true, action: typeof a === 'string' ? a : (a && a.action) || 'status', noRemote: true, hasRemote: false, branch: 'local', commit: ")
+        sb.append(verJson)
+        sb.append(", shortHash: ")
+        sb.append(verJson)
+        sb.append(" });\n")
+        sb.append("          fn.call = fn; fn.request = fn; fn.status = () => fn('status'); fn.pull = () => fn('pull'); fn.sync = () => fn('pull'); fn.resolve = () => {};\n")
+        sb.append("          window.__agPrismRepoBridge = fn;\n")
+        sb.append("        }\n")
         sb.append("        if (document.head) applyStyle();\n")
         sb.append("        else document.addEventListener('DOMContentLoaded', applyStyle, { once: true });\n")
-        sb.append("        ")
-        sb.append(bundle)
-        sb.append("\n")
         sb.append("        const bootCfg = ")
         sb.append(MiniJson.stringify(.object(initCfg), pretty: false))
         sb.append(";\n")
-        sb.append("        if (typeof globalThis.__agCsUiMain === 'function') {\n")
-        sb.append("          globalThis.__agCsUiMain(bootCfg);\n")
+        sb.append("        const existingPrism = window.__agPrism || window.__agClaudeStyle;\n")
+        sb.append("        const bundleUnchanged = Boolean(\n")
+        sb.append("          existingPrism &&\n")
+        sb.append("          existingPrism.version === ")
+        sb.append(verJson)
+        sb.append(" &&\n")
+        sb.append("          existingPrism.codeHash === bootCfg.codeHash &&\n")
+        sb.append("          typeof existingPrism.refreshConfig === 'function' &&\n")
+        sb.append("          window.__agPrismTelemetry &&\n")
+        sb.append("          window.__agPrismEffortSlider &&\n")
+        sb.append("          window.__agPrismThought\n")
+        sb.append("        );\n")
+        sb.append("        if (bundleUnchanged) {\n")
+        sb.append("          existingPrism.refreshConfig(bootCfg);\n")
+        sb.append("        } else {\n")
+        sb.append("          try { window.__agPrismThought?.destroy?.(); } catch {}\n")
+        sb.append("          ")
+        sb.append(bundle)
+        sb.append("\n")
+        sb.append("          if (typeof globalThis.__agCsUiMain === 'function') {\n")
+        sb.append("            globalThis.__agCsUiMain(bootCfg);\n")
+        sb.append("          }\n")
         sb.append("        }\n")
+        sb.append("        migrateLegacyStorage();\n")
         sb.append("        if (window.__agClaudeStyle && !window.__agPrism) window.__agPrism = window.__agClaudeStyle;\n")
         sb.append("        else if (window.__agPrism) window.__agClaudeStyle = window.__agPrism;\n")
         sb.append("        const liveState = window.__agPrism && typeof window.__agPrism.getState === 'function' ? window.__agPrism.getState() : null;\n")
         sb.append("        const effectiveCfg = (liveState && liveState.cfg) || bootCfg;\n")
         sb.append("        try { window.__agPrismTelemetry?.sync?.(effectiveCfg); } catch {}\n")
         sb.append("        try { window.__agPrismEffortSlider?.sync?.(effectiveCfg); } catch {}\n")
+        sb.append("        try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}\n")
+        sb.append("        try { if (effectiveCfg.omniModule === 'off') window.__agPrismOmni?.destroy?.(); else window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}\n")
+        sb.append("        if (document.documentElement && !document.documentElement.hasAttribute('data-ag-prism')) {\n")
+        sb.append("          document.documentElement.setAttribute('data-ag-prism', ")
+        sb.append(verJson)
+        sb.append(");\n")
+        sb.append("        }\n")
         sb.append("      } catch (e) {\n")
         sb.append("        status = 'error: ' + (e && e.message ? e.message : String(e));\n")
         sb.append("        if (typeof console !== 'undefined' && console.error) {\n")
@@ -561,10 +841,11 @@ enum CdpHelper {
         sb.append("      document.addEventListener('readystatechange', onReady);\n")
         sb.append("      document.addEventListener('DOMContentLoaded', onReady);\n")
         sb.append("    }\n")
-        sb.append("    const st = window.__agClaudeStyle && window.__agClaudeStyle.getState ? window.__agClaudeStyle.getState() : null;\n")
+        sb.append("    const api = window.__agPrism || window.__agClaudeStyle;\n")
+        sb.append("    const st = api && typeof api.getState === 'function' ? api.getState() : null;\n")
         sb.append("    return {\n")
         sb.append("      version: ")
-        sb.append(MiniJson.stringifyString(manifest.version))
+        sb.append(verJson)
         sb.append(",\n")
         sb.append("      status,\n")
         sb.append("      state: st,\n")

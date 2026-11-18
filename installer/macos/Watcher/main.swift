@@ -3,28 +3,87 @@ import Foundation
 import Darwin
 #endif
 
+struct FrameContextMeta {
+    let frameId: String
+    let isDefault: Bool
+    let contextType: String
+}
+
 final class AttachedEntry {
     let session: CdpSession
     var scriptId: String?
+    var omniScriptId: String?
     let title: String
+    private let ctxLock = NSLock()
+    var mainFrameId: String = ""
+    var hasFrameTree: Bool = false
+    var contextFrames: [Int: FrameContextMeta] = [:]
 
-    init(session: CdpSession, scriptId: String? = nil, title: String) {
+    init(session: CdpSession, scriptId: String? = nil, omniScriptId: String? = nil, title: String) {
         self.session = session
         self.scriptId = scriptId
+        self.omniScriptId = omniScriptId
         self.title = title
+    }
+
+    func setMainFrame(_ id: String) {
+        guard !id.isEmpty else { return }
+        ctxLock.lock()
+        mainFrameId = id
+        hasFrameTree = true
+        ctxLock.unlock()
+    }
+
+    func recordContext(id: Int, meta: FrameContextMeta) {
+        ctxLock.lock()
+        contextFrames[id] = meta
+        ctxLock.unlock()
+    }
+
+    func removeContext(id: Int) {
+        ctxLock.lock()
+        contextFrames.removeValue(forKey: id)
+        ctxLock.unlock()
+    }
+
+    func clearContexts() {
+        ctxLock.lock()
+        contextFrames.removeAll()
+        ctxLock.unlock()
+    }
+
+    func isTrustedMainFrameBinding(_ params: [String: JsonValue]) -> Bool {
+        ctxLock.lock()
+        defer { ctxLock.unlock() }
+        if let ctxId = params["executionContextId"]?.intValue,
+           let meta = contextFrames[ctxId] {
+            if !meta.isDefault { return false }
+            if !meta.contextType.isEmpty && meta.contextType != "default" { return false }
+            if !mainFrameId.isEmpty && !meta.frameId.isEmpty && meta.frameId != mainFrameId {
+                return false
+            }
+            return true
+        }
+        if hasFrameTree {
+            if params["executionContextId"]?.intValue == nil { return false }
+            if !contextFrames.isEmpty { return false }
+        }
+        return true
     }
 }
 
 final class WatcherApp {
     private let baseDir: String
+    private let pluginDir: String
     private let logFile: String
     private let pidFile: String
     private let lockFile: String
     private let isWatch: Bool
     private let logLock = NSLock()
 
-    init(baseDir: String, isWatch: Bool) {
+    init(baseDir: String, pluginDir: String, isWatch: Bool) {
         self.baseDir = baseDir
+        self.pluginDir = pluginDir
         self.logFile = (baseDir as NSString).appendingPathComponent("watch.log")
         self.pidFile = (baseDir as NSString).appendingPathComponent(".watch.pid")
         self.lockFile = (baseDir as NSString).appendingPathComponent(".watch.lock")
@@ -95,11 +154,15 @@ final class WatcherApp {
                 return 1
             }
             let expr = try CdpHelper.buildInjectExpression(baseDir: baseDir, manifest: manifest)
+            let omniExpr = CdpHelper.buildOmniClientExpression(baseDir: baseDir, manifest: manifest)
             var injectedTitles: [String] = []
             for page in pages {
                 let session = try CdpSession.connect(wsUrl: page.webSocketDebuggerUrl, timeoutMs: 4000)
                 defer { session.close() }
                 _ = try session.evaluate(expr, awaitPromise: false)
+                if !omniExpr.isEmpty {
+                    _ = try? session.evaluate(omniExpr, awaitPromise: false)
+                }
                 injectedTitles.append(CdpHelper.shortTitle(page))
             }
             Self.writeResult(outFile: outFile, ok: true, message: "injected \(injectedTitles.count) page(s)", pages: injectedTitles)
@@ -134,7 +197,7 @@ final class WatcherApp {
     private func stopRunningWatcherInDir() {
         let selfPid = getpid()
         if let pid = readPidFile(), pid != selfPid {
-            if kill(pid, 0) == 0 {
+            if kill(pid, 0) == 0 && CdpHelper.isExpectedDaemonProcess(pid: pid) {
                 _ = kill(pid, SIGTERM)
                 let deadline = Date().addingTimeInterval(2.0)
                 while Date() < deadline {
@@ -167,6 +230,13 @@ final class WatcherApp {
                 stamp[name] = "\(mtime):\(size)"
             }
         }
+        let omniRel = "vendor/omni-viewer/omni-client.js"
+        let omniFull = (baseDir as NSString).appendingPathComponent(omniRel)
+        if let attrs = try? fm.attributesOfItem(atPath: omniFull) {
+            let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+            let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+            stamp[omniRel] = "\(mtime):\(size)"
+        }
         return stamp
     }
 
@@ -197,9 +267,11 @@ final class WatcherApp {
 
         var manifest: PluginManifest
         var currentExpr: String
+        var currentOmniExpr: String
         do {
             manifest = try PluginManifest.load(baseDir: baseDir)
             currentExpr = try CdpHelper.buildInjectExpression(baseDir: baseDir, manifest: manifest)
+            currentOmniExpr = CdpHelper.buildOmniClientExpression(baseDir: baseDir, manifest: manifest)
         } catch {
             log("[!] 初始化加载失败: \(error.localizedDescription)")
             releasePidFile(selfPid: selfPid)
@@ -244,7 +316,7 @@ final class WatcherApp {
         intSource.setEventHandler(handler: requestExit)
         intSource.resume()
 
-        let applyToEntry: (AttachedEntry, String) throws -> JsonValue = { entry, exprToUse in
+        let applyToEntry: (AttachedEntry, String, String) throws -> JsonValue = { entry, exprToUse, omniExprToUse in
             if let oldId = entry.scriptId, !oldId.isEmpty {
                 _ = try? entry.session.send(
                     "Page.removeScriptToEvaluateOnNewDocument",
@@ -260,7 +332,27 @@ final class WatcherApp {
             if let newId = addRes["identifier"]?.stringValue {
                 entry.scriptId = newId
             }
-            return try entry.session.evaluate(exprToUse, awaitPromise: false)
+            let mainVal = try entry.session.evaluate(exprToUse, awaitPromise: false)
+
+            if let oldOmniId = entry.omniScriptId, !oldOmniId.isEmpty {
+                _ = try? entry.session.send(
+                    "Page.removeScriptToEvaluateOnNewDocument",
+                    params: ["identifier": .string(oldOmniId)],
+                    timeoutMs: 5000
+                )
+                entry.omniScriptId = nil
+            }
+            if !omniExprToUse.isEmpty {
+                if let omniRes = try? entry.session.send(
+                    "Page.addScriptToEvaluateOnNewDocument",
+                    params: ["source": .string(omniExprToUse)],
+                    timeoutMs: 15000
+                ), let omniId = omniRes["identifier"]?.stringValue {
+                    entry.omniScriptId = omniId
+                }
+                _ = try? entry.session.evaluate(omniExprToUse, awaitPromise: false)
+            }
+            return mainVal
         }
 
         let attachPage: (CdpPageInfo) -> Void = { page in
@@ -288,18 +380,65 @@ final class WatcherApp {
                     }
                 }
 
+                s.on("Runtime.executionContextCreated") { cp in
+                    guard let ctx = cp["context"]?.objectValue,
+                          let cid = ctx["id"]?.intValue else { return }
+                    let aux = ctx["auxData"]?.objectValue ?? [:]
+                    let fid = aux["frameId"]?.stringValue ?? ""
+                    let isDef = aux["isDefault"]?.boolValue ?? true
+                    let cType = aux["type"]?.stringValue ?? "default"
+                    entry.recordContext(id: cid, meta: FrameContextMeta(frameId: fid, isDefault: isDef, contextType: cType))
+                }
+                s.on("Runtime.executionContextDestroyed") { dp in
+                    if let cid = dp["executionContextId"]?.intValue {
+                        entry.removeContext(id: cid)
+                    }
+                }
+                s.on("Runtime.executionContextsCleared") { _ in
+                    entry.clearContexts()
+                }
+                s.on("Page.frameNavigated") { fp in
+                    if let frame = fp["frame"]?.objectValue {
+                        let parentId = frame["parentId"]?.stringValue ?? ""
+                        if parentId.isEmpty, let fid = frame["id"]?.stringValue, !fid.isEmpty {
+                            entry.setMainFrame(fid)
+                        }
+                    }
+                }
+
                 _ = try s.send("Page.enable", params: nil, timeoutMs: 5000)
+                if let ftRes = try? s.send("Page.getFrameTree", params: nil, timeoutMs: 3000),
+                   let topId = ftRes["frameTree"]?.objectValue?["frame"]?.objectValue?["id"]?.stringValue,
+                   !topId.isEmpty {
+                    entry.setMainFrame(topId)
+                }
                 s.on("Runtime.bindingCalled") { params in
+                    guard entry.isTrustedMainFrameBinding(params) else { return }
                     guard let name = params["name"]?.stringValue,
                           let payloadStr = params["payload"]?.stringValue else { return }
                     stateLock.lock()
                     let manifestSnap = manifest
                     stateLock.unlock()
-                    guard name == manifestSnap.settingBinding else { return }
-                    if let kv = try? MiniJson.parseObject(payloadStr),
-                       let key = kv["key"]?.stringValue,
+                    guard name == manifestSnap.settingBinding || name == "__agClaudeStyleSetting" else { return }
+                    guard let kv = try? MiniJson.parseObject(payloadStr) else { return }
+
+                    if kv["action"]?.stringValue == "patch-batch",
+                       let entriesObj = kv["entries"]?.objectValue {
+                        if CdpHelper.updateConfigBatch(baseDir: self.baseDir, manifest: manifestSnap, entries: entriesObj) {
+                            if !self.pluginDir.isEmpty && FileManager.default.fileExists(atPath: self.pluginDir) {
+                                _ = CdpHelper.updateConfigBatch(baseDir: self.pluginDir, manifest: manifestSnap, entries: entriesObj)
+                            }
+                            self.log("[⚙] 批量设置已保存 (\(entriesObj.count) 项)")
+                        }
+                        return
+                    }
+
+                    if let key = kv["key"]?.stringValue,
                        let value = kv["value"] {
                         if CdpHelper.updateConfigSetting(baseDir: self.baseDir, manifest: manifestSnap, key: key, value: value) {
+                            if !self.pluginDir.isEmpty && FileManager.default.fileExists(atPath: self.pluginDir) {
+                                _ = CdpHelper.updateConfigSetting(baseDir: self.pluginDir, manifest: manifestSnap, key: key, value: value)
+                            }
                             self.log("[⚙] 设置已保存: \(key) = \(MiniJson.stringify(value, pretty: false))")
                         }
                     }
@@ -309,16 +448,20 @@ final class WatcherApp {
                 stateLock.lock()
                 let bindingName = manifest.settingBinding
                 let exprSnap = currentExpr
+                let omniSnap = currentOmniExpr
                 stateLock.unlock()
 
                 _ = try s.send("Runtime.addBinding", params: ["name": .string(bindingName)], timeoutMs: 5000)
+                if bindingName != "__agClaudeStyleSetting" {
+                    _ = try? s.send("Runtime.addBinding", params: ["name": .string("__agClaudeStyleSetting")], timeoutMs: 5000)
+                }
 
                 stateLock.lock()
                 attached[page.id] = entry
                 attaching.remove(page.id)
                 stateLock.unlock()
 
-                let evalVal = try applyToEntry(entry, exprSnap)
+                let evalVal = try applyToEntry(entry, exprSnap, omniSnap)
                 let status = evalVal.objectValue?["status"]?.stringValue ?? "ok"
                 self.log("[✓] 已注入 obsidian-prism: \(title) (\(status))")
             } catch {
@@ -355,16 +498,55 @@ final class WatcherApp {
             do {
                 let nextManifest = try PluginManifest.load(baseDir: self.baseDir)
                 let nextExpr = try CdpHelper.buildInjectExpression(baseDir: self.baseDir, manifest: nextManifest)
+                let nextOmniExpr = CdpHelper.buildOmniClientExpression(baseDir: self.baseDir, manifest: nextManifest)
+                let fastCfgExpr: String? = ((changedName as NSString).lastPathComponent.caseInsensitiveCompare("config.json") == .orderedSame)
+                    ? CdpHelper.buildConfigRefreshExpression(baseDir: self.baseDir, manifest: nextManifest)
+                    : nil
                 stateLock.lock()
                 manifest = nextManifest
                 currentExpr = nextExpr
+                currentOmniExpr = nextOmniExpr
                 let entries = Array(attached.values)
                 stateLock.unlock()
 
                 var n = 0
                 for entry in entries {
-                    if (try? applyToEntry(entry, nextExpr)) != nil {
-                        n += 1
+                    if let fastExpr = fastCfgExpr {
+                        if let oldId = entry.scriptId, !oldId.isEmpty {
+                            _ = try? entry.session.send("Page.removeScriptToEvaluateOnNewDocument", params: ["identifier": .string(oldId)], timeoutMs: 5000)
+                            entry.scriptId = nil
+                        }
+                        if let addRes = try? entry.session.send("Page.addScriptToEvaluateOnNewDocument", params: ["source": .string(nextExpr)], timeoutMs: 15000),
+                           let newId = addRes["identifier"]?.stringValue {
+                            entry.scriptId = newId
+                        }
+                        if let oldOmniId = entry.omniScriptId, !oldOmniId.isEmpty {
+                            _ = try? entry.session.send("Page.removeScriptToEvaluateOnNewDocument", params: ["identifier": .string(oldOmniId)], timeoutMs: 5000)
+                            entry.omniScriptId = nil
+                        }
+                        if !nextOmniExpr.isEmpty,
+                           let omniAdd = try? entry.session.send("Page.addScriptToEvaluateOnNewDocument", params: ["source": .string(nextOmniExpr)], timeoutMs: 15000),
+                           let omniId = omniAdd["identifier"]?.stringValue {
+                            entry.omniScriptId = omniId
+                        }
+                        if let fastRes = try? entry.session.evaluate(fastExpr, awaitPromise: false),
+                           fastRes.objectValue?["refreshed"]?.boolValue == true {
+                            if !nextOmniExpr.isEmpty {
+                                _ = try? entry.session.evaluate(nextOmniExpr, awaitPromise: false)
+                            }
+                            n += 1
+                            continue
+                        }
+                        if (try? entry.session.evaluate(nextExpr, awaitPromise: false)) != nil {
+                            if !nextOmniExpr.isEmpty {
+                                _ = try? entry.session.evaluate(nextOmniExpr, awaitPromise: false)
+                            }
+                            n += 1
+                        }
+                    } else {
+                        if (try? applyToEntry(entry, nextExpr, nextOmniExpr)) != nil {
+                            n += 1
+                        }
                     }
                 }
                 self.log("[↻] \(changedName) 已变更，已热更新 \(n) 个窗口")
@@ -408,7 +590,33 @@ final class WatcherApp {
         }
 
         var lastPort: Int?
+        var yieldingToDaemon = false
         while !isExiting() {
+            let nativeAlive = !pluginDir.isEmpty && CdpHelper.isNativeDaemonAlive(pluginDir: pluginDir)
+            if nativeAlive {
+                stateLock.lock()
+                let hasAttached = !attached.isEmpty
+                let oldEntries = Array(attached.values)
+                attached.removeAll()
+                stateLock.unlock()
+                if !yieldingToDaemon || hasAttached {
+                    for oldEntry in oldEntries {
+                        oldEntry.session.close()
+                    }
+                    lastPort = nil
+                    if !yieldingToDaemon {
+                        yieldingToDaemon = true
+                        log("[~] 检测到原生 Sidecar Daemon 运行中，Watcher 进入热备避让态")
+                    }
+                }
+                _ = exitSem.wait(timeout: .now() + .milliseconds(750))
+                continue
+            }
+            if yieldingToDaemon {
+                yieldingToDaemon = false
+                log("[+] 原生 Sidecar Daemon 已离线，Watcher 接管实时注入")
+            }
+
             // Poll fallback for in-place edits that don't fire directory vnode write events
             reloadQueue.sync {
                 performReload(nil)
@@ -469,6 +677,7 @@ final class WatcherApp {
 func runWatcherMain() -> Int32 {
     var mode = "watch"
     var customDir: String?
+    var customPluginDir: String?
     var overridePort: Int?
     var outFile: String?
 
@@ -480,6 +689,7 @@ func runWatcherMain() -> Int32 {
         else if a == "--once" { mode = "once" }
         else if a == "--remove" { mode = "remove" }
         else if a == "--dir" && i + 1 < args.count { i += 1; customDir = args[i] }
+        else if a == "--plugin-dir" && i + 1 < args.count { i += 1; customPluginDir = args[i] }
         else if a == "--cdp-port" && i + 1 < args.count {
             i += 1
             if let p = Int(args[i]), p > 0 { overridePort = p }
@@ -492,7 +702,26 @@ func runWatcherMain() -> Int32 {
         ? customDir!
         : ((args[0] as NSString).deletingLastPathComponent)
     let baseDir = URL(fileURLWithPath: rawBase.isEmpty ? "." : rawBase).standardizedFileURL.path
-    let app = WatcherApp(baseDir: baseDir, isWatch: mode == "watch")
+
+    let defaultInstallDir = URL(
+        fileURLWithPath: (FileManager.default.homeDirectoryForCurrentUser.path as NSString)
+            .appendingPathComponent("Library/Application Support/obsidian-prism")
+    ).standardizedFileURL.path
+
+    let pluginDir: String
+    if let explicitPlugin = customPluginDir, !explicitPlugin.isEmpty {
+        pluginDir = URL(fileURLWithPath: explicitPlugin).standardizedFileURL.path
+    } else if let envOverride = ProcessInfo.processInfo.environment["AG_PRISM_PLUGIN_DIR"], !envOverride.isEmpty {
+        pluginDir = CdpHelper.getDefaultNativePluginDir()
+    } else if customDir == nil || baseDir == defaultInstallDir {
+        pluginDir = CdpHelper.getDefaultNativePluginDir()
+    } else {
+        let parentDir = (baseDir as NSString).deletingLastPathComponent
+        let baseName = (baseDir as NSString).lastPathComponent
+        pluginDir = (parentDir as NSString).appendingPathComponent("\(baseName)-native-plugin")
+    }
+
+    let app = WatcherApp(baseDir: baseDir, pluginDir: pluginDir, isWatch: mode == "watch")
 
     if mode == "once" {
         return app.runOnce(overridePort: overridePort, outFile: outFile)

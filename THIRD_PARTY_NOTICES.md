@@ -25,23 +25,24 @@ Any derivative work or modified redistribution MUST remain open-source under **G
 - **Original License**: MIT License
 - **Scope in Obsidian Prism**: Optical UI theme foundation, 4-tier spring choreography base, WebGL2 horizon glow & character matrix ripple field, pixel mascot rig foundation, and zero-dependency bundle compiler.
 
-### 1.2 `ATtacK030130/antigrative-dashboard`
+### 1.2 `ATtacK030130/antigrative-dashboard` (`v0.9.1`)
 - **Repository**: <https://github.com/ATtacK030130/antigrative-dashboard>
+- **Upstream Baseline**: `v0.9.1`
 - **Copyright**: `Copyright (c) 2026 AG Pulse contributors`
-- **Original License**: MIT License
-- **Scope in Obsidian Prism**: Absorbed in `vendor/pulse-dashboard/` for live token throughput (TPS / TTFT), cache hit rate telemetry, context window estimation, model quota collection, and smart coexistence fallback.
+- **Original License**: MIT License (compatible with `GPL-3.0-only`)
+- **Scope in Obsidian Prism**: Absorbed and adapted in `vendor/pulse-dashboard/` (`compat/` and `sidecars/panel/`) for live token throughput (TPS / TTFT), cache hit rate telemetry, context window estimation, dual-window (`5h` / weekly) model quota collection & linear depletion forecasting, main session vs. Swarm/subagent token attribution, CDP process-lineage multi-instance discovery, isolated sidecar telemetry storage, and smart coexistence yielding.
 
 ### 1.3 `LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider`
 - **Repository**: <https://github.com/LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider>
 - **Copyright**: `Copyright (c) 2026 月上寒 (LLYSH-HANNARI)`
-- **Original License**: MIT License
+- **Original License**: MIT License (compatible with `GPL-3.0-only`)
 - **Scope in Obsidian Prism**: Absorbed in `vendor/effort-slider/` for interactive reasoning effort slider inside the model selector menu, enhanced with smart coexistence yielding and 120ms MutationObserver throttling.
 
 ---
 
 ## 2. Upstream Design Inspiration & Component Credits
 
-Obsidian Prism gratefully acknowledges the pioneering UI/UX concepts and interaction mechanics created by the following upstream open-source projects:
+Obsidian Prism acknowledges the UI/UX concepts and interaction patterns established by the following upstream open-source projects:
 
 ### 2.1 `Nwflower/dsh-claude-style`
 - **Repository**: <https://github.com/Nwflower/dsh-claude-style>

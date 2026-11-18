@@ -1139,3 +1139,596 @@ test('Wave 2: mountBrandHorizonGlow exhibits visible aurora drift and breathing 
 
   glow.dispose();
 });
+
+test('Wave 1 Optics: HORIZON_FRAGMENT_SHADER & mountBrandHorizonGlow support Warm/Alabaster/Mono/Accent spectra, IGN TPDF dither, fwidth AA, HiDPI DPR, and ambientIntensity=0', () => {
+  const frag = rippleCore.HORIZON_FRAGMENT_SHADER;
+  for (const tok of [
+    'uniform float uSpectrum;',
+    'uniform float uSemantic;',
+    'float ign(',
+    'fwidth(dist)',
+    'WARM_DARK_B',
+    'DAY_TERRACOTTA',
+    'MONO_DARK_HI',
+  ]) {
+    assert.ok(frag.includes(tok), `Expected HORIZON_FRAGMENT_SHADER to include ${tok}`);
+  }
+
+  assert.equal(rippleCore.resolveHorizonDpr(1, 0.72), 0.72);
+  assert.ok(rippleCore.resolveHorizonDpr(2, 0.72) >= 1.2, 'HiDPI 2x screen should scale horizon DPR >= 1.2 for crisp halftone');
+
+  let lastImage = null;
+  let clearCalls = 0;
+  const htmlEl = {
+    attrs: new Map(),
+    getAttribute(k) { return this.attrs.has(k) ? this.attrs.get(k) : null; },
+  };
+  const canvas = {
+    width: 0,
+    height: 0,
+    ownerDocument: { hidden: false, documentElement: htmlEl },
+    getContext(type) {
+      if (type !== '2d') return null;
+      return {
+        clearRect() { clearCalls++; },
+        createImageData(w, h) { return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }; },
+        putImageData(img) { lastImage = img; },
+      };
+    },
+  };
+
+  const W = 200;
+  const H = 120;
+  const glow = rippleCore.mountBrandHorizonGlow(canvas, { force2D: true });
+  glow.resize(W, H, 1);
+
+  const avgBottomRgb = () => {
+    let r = 0, g = 0, b = 0, n = 0, maxChroma = 0;
+    const y = H - 6;
+    for (let x = 24; x <= W - 24; x += 8) {
+      const i = (y * W + x) * 4;
+      if (lastImage.data[i + 3] > 20) {
+        const pr = lastImage.data[i], pg = lastImage.data[i + 1], pb = lastImage.data[i + 2];
+        r += pr; g += pg; b += pb; n++;
+        const ch = Math.max(pr, pg, pb) - Math.min(pr, pg, pb);
+        if (ch > maxChroma) maxChroma = ch;
+      }
+    }
+    return n > 0 ? { r: r / n, g: g / n, b: b / n, maxChroma } : { r: 0, g: 0, b: 0, maxChroma: 0 };
+  };
+
+  // 1) Auto-detect Warm Dark via html[data-ag-cs-palette="warm"] -> terracotta warm tone (R > B + 45)
+  htmlEl.attrs.set('data-ag-cs-palette', 'warm');
+  glow.drawStaticSnapshot(1000, true, 0.36, { reach: 0.45, prism: 0.4 });
+  const warmDark = avgBottomRgb();
+  assert.ok(warmDark.r > warmDark.b + 45, `Warm Dark horizon must render warm terracotta (R=${warmDark.r.toFixed(1)} > B=${warmDark.b.toFixed(1)} + 45)`);
+
+  // 2) Auto-detect Warm Alabaster Light via html[data-ag-cs-light-preset="alabaster"] -> mineral terracotta ink
+  htmlEl.attrs.set('data-ag-cs-palette', 'obsidian');
+  htmlEl.attrs.set('data-ag-cs-light-preset', 'alabaster');
+  glow.drawStaticSnapshot(1200, false, 0.36, { reach: 0.45, prism: 0.4 });
+  const warmLight = avgBottomRgb();
+  assert.ok(warmLight.r > warmLight.b + 55, `Warm Alabaster horizon must render warm terracotta ink (R=${warmLight.r.toFixed(1)} > B=${warmLight.b.toFixed(1)} + 55)`);
+
+  // 3) Graphite Mono ('mono') -> restrained titanium silver-grey with zero rainbow saturation
+  glow.drawStaticSnapshot(1400, true, 0.4, { reach: 0.45, prism: 0.8, spectrum: 'mono' });
+  const monoDark = avgBottomRgb();
+  assert.ok(monoDark.maxChroma <= 34, `Graphite Mono must suppress rainbow chroma (maxChroma=${monoDark.maxChroma} <= 34)`);
+
+  // 4) Explicit Iris & Amber accents
+  glow.drawStaticSnapshot(1500, true, 0.4, { reach: 0.45, prism: 0.5, spectrum: 'iris' });
+  const irisDark = avgBottomRgb();
+  assert.ok(irisDark.b > irisDark.g + 40, `Iris accent should favor violet-blue channel`);
+
+  glow.drawStaticSnapshot(1600, true, 0.4, { reach: 0.45, prism: 0.5, spectrum: 'amber' });
+  const amberDark = avgBottomRgb();
+  assert.ok(amberDark.r > amberDark.b + 60, `Amber accent should favor warm gold channel`);
+
+  // 5) ambientIntensity = 0 clears canvas and sleeps immediately at 0fps
+  const prevClears = clearCalls;
+  assert.equal(glow.draw(1700, true, 0.5, { ambientIntensity: 0 }), false);
+  assert.equal(clearCalls, prevClears + 1);
+  assert.equal(glow.isSleeping(), true);
+
+  glow.dispose();
+});
+
+test('Wave 1 ConvAura: Split-Rate 300Hz VSync (~30fps running cap, 1200ms idle sleep) & 3-State 0fps Semantic Afterglow Engine', () => {
+  require('../conv-aura.js');
+  const convAuraMod = globalThis.__agPrismConvAura;
+  assert.ok(convAuraMod);
+  assert.equal(convAuraMod.CONV_AURA_IDLE_SLEEP_MS, 1200);
+  assert.equal(convAuraMod.CONV_AURA_DECISION_BREATH_MS, 1600);
+  assert.equal(convAuraMod.CONV_AURA_ERROR_MS, 900);
+  assert.equal(convAuraMod.CONV_AURA_LONG_TASK_THRESHOLD_MS, 15000);
+  assert.equal(convAuraMod.CONV_AURA_LONG_COMPLETE_MS, 1200);
+
+  const prevDoc = globalThis.document;
+  const prevWin = globalThis.window;
+  const prevPerf = globalThis.performance;
+  const prevRaf = globalThis.requestAnimationFrame;
+  const prevCaf = globalThis.cancelAnimationFrame;
+  const prevSetTimeout = globalThis.setTimeout;
+  const prevClearTimeout = globalThis.clearTimeout;
+
+  let nowMs = 1000;
+  let windowFocused = true;
+  let nextId = 1;
+  const rafQueue = new Map();
+  const timerQueue = new Map();
+  const winListeners = new Map();
+
+  globalThis.performance = { now: () => nowMs };
+  globalThis.requestAnimationFrame = (cb) => {
+    const id = nextId++;
+    rafQueue.set(id, cb);
+    return id;
+  };
+  globalThis.cancelAnimationFrame = (id) => {
+    rafQueue.delete(id);
+  };
+  globalThis.setTimeout = (cb, ms = 0) => {
+    const id = nextId++;
+    timerQueue.set(id, { cb, due: nowMs + Math.max(0, Number(ms) || 0) });
+    return id;
+  };
+  globalThis.clearTimeout = (id) => {
+    timerQueue.delete(id);
+  };
+
+  function advanceSimulated300Hz(totalMs) {
+    const endMs = nowMs + totalMs;
+    const stepMs = 1000 / 300; // 3.333ms 300Hz display VSync!
+    while (nowMs < endMs) {
+      nowMs = Math.min(endMs, nowMs + stepMs);
+      for (const [tid, item] of [...timerQueue.entries()]) {
+        if (item.due <= nowMs) {
+          timerQueue.delete(tid);
+          item.cb();
+        }
+      }
+      const rafs = [...rafQueue.entries()];
+      rafQueue.clear();
+      for (const [, fn] of rafs) {
+        fn(nowMs);
+      }
+    }
+  }
+
+  let gpuDraws = 0;
+  let staticSnapshots = 0;
+  let clearCount = 0;
+  let lastSemanticSeen = 'none';
+
+  const mockRippleCore = {
+    resolveHorizonDpr: rippleCore.resolveHorizonDpr,
+    mountBrandHorizonGlow() {
+      return {
+        mode: 'webgl2',
+        resize() {},
+        invalidate() {},
+        clear() { clearCount++; },
+        draw(_now, _dark, _str, extra) {
+          gpuDraws++;
+          lastSemanticSeen = extra?.semantic || 'none';
+          return true;
+        },
+        drawStaticSnapshot(_now, _dark, _str, extra) {
+          gpuDraws++;
+          staticSnapshots++;
+          lastSemanticSeen = extra?.semantic || 'none';
+          return true;
+        },
+        dispose() {},
+      };
+    },
+  };
+
+  function makeDomEl(tag, testId = '') {
+    const attrs = new Map();
+    if (testId) attrs.set('data-testid', testId);
+    const children = [];
+    const el = {
+      tagName: tag.toUpperCase(),
+      className: '',
+      hidden: false,
+      isConnected: true,
+      parentElement: null,
+      clientWidth: 800,
+      clientHeight: 600,
+      style: {
+        setProperty(k, v) { this[k] = v; },
+      },
+      get firstChild() { return children[0] || null; },
+      setAttribute(k, v) { attrs.set(k, String(v)); },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) { attrs.delete(k); },
+      insertBefore(ch) {
+        ch.parentElement = el;
+        ch.isConnected = true;
+        children.unshift(ch);
+        return ch;
+      },
+      appendChild(ch) {
+        ch.parentElement = el;
+        ch.isConnected = true;
+        children.push(ch);
+        return ch;
+      },
+      remove() {
+        el.isConnected = false;
+        if (el.parentElement) {
+          const arr = el.parentElement._children;
+          if (arr) {
+            const i = arr.indexOf(el);
+            if (i >= 0) arr.splice(i, 1);
+          }
+        }
+      },
+      closest() { return null; },
+      querySelectorAll() { return []; },
+      _children: children,
+    };
+    return el;
+  }
+
+  const stageSeat = makeDomEl('div');
+  const convView = makeDomEl('div', 'conversation-view');
+  stageSeat.appendChild(convView);
+
+  let runningDomActive = false;
+  let decisionDomActive = false;
+  const cancelNode = makeDomEl('button', 'input-cancel-button');
+  const decisionCard = makeDomEl('div', 'interaction-takeover-card');
+
+  globalThis.window = {
+    devicePixelRatio: 2,
+    addEventListener(evt, fn) { winListeners.set(evt, fn); },
+    removeEventListener(evt) { winListeners.delete(evt); },
+  };
+  globalThis.document = {
+    hidden: false,
+    documentElement: makeDomEl('html'),
+    hasFocus: () => windowFocused,
+    createElement: (tag) => makeDomEl(tag),
+    addEventListener() {},
+    removeEventListener() {},
+    querySelector: () => null,
+    querySelectorAll(sel) {
+      if (sel.includes('conversation-view')) return [convView];
+      if (sel.includes('input-cancel-button')) return runningDomActive ? [cancelNode] : [];
+      if (sel.includes('interaction-takeover-card')) return decisionDomActive ? [decisionCard] : [];
+      return [];
+    },
+  };
+
+  try {
+    const ctl = convAuraMod.createConvAuraController({
+      isDestroyed: () => false,
+      isHomeRippleEnabled: () => true,
+      isMotionStandardOrUltra: () => true,
+      isDarkTheme: () => true,
+      getMinFrameGapMs: () => 0, // Native 300Hz uncapped!
+      isWindowFocused: () => windowFocused,
+      rippleCore: mockRippleCore,
+      setAttrIfChanged(el, k, v) { if (el.getAttribute(k) !== v) el.setAttribute(k, v); },
+      runGuardedMut(fn) { return fn(); },
+    });
+
+    // 1) Mounts in idle -> settles to true 0fps after 1200ms (and ignores redundant sync() calls while settled!)
+    ctl.sync();
+    const inst = ctl.getInstance();
+    assert.ok(inst);
+    assert.equal(inst.phase, 'idle');
+    assert.equal(inst.sleeping, false);
+
+    advanceSimulated300Hz(1300);
+    assert.equal(inst.sleeping, true, 'Idle aura must enter 0fps sleep after 1200ms');
+    assert.equal(inst.host.getAttribute('data-aura-sleep'), '1');
+    assert.equal(rafQueue.size, 0);
+    assert.equal(timerQueue.size, 0);
+
+    const drawsAtIdleSleep = gpuDraws;
+    for (let i = 0; i < 8; i++) {
+      nowMs += 50;
+      ctl.sync();
+    }
+    assert.equal(gpuDraws, drawsAtIdleSleep, 'Redundant sync() must NOT wake settled 0fps idle aura');
+
+    // 2) Split-Rate 300Hz running throttle: during 1000ms steady running on a 300Hz monitor, draws <= 36 frames (~30fps instead of 300fps!)
+    runningDomActive = true;
+    ctl.sync();
+    assert.equal(inst.phase, 'start');
+    advanceSimulated300Hz(1200); // finish 1150ms start surge -> enters steady 'running'
+    assert.equal(inst.phase, 'running');
+
+    const drawsBefore1sRun = gpuDraws;
+    advanceSimulated300Hz(1000); // 300 VSync ticks on 300Hz screen!
+    const runDrawsIn1s = gpuDraws - drawsBefore1sRun;
+    assert.ok(
+      runDrawsIn1s >= 24 && runDrawsIn1s <= 36,
+      `Split-Rate VSync must cap steady running aura around ~30fps (24..36 draws/s on 300Hz), got ${runDrawsIn1s}`
+    );
+
+    // 3) Long-task-complete (>= 15s running) while window is unfocused -> 1.2s jade chime then freezes at 0fps snapshot until user pointer returns!
+    advanceSimulated300Hz(14500); // total running duration > 15,000ms
+    windowFocused = false;
+    runningDomActive = false;
+    ctl.sync();
+    assert.equal(inst.phase, 'long-task-complete');
+    assert.equal(lastSemanticSeen, 'long-task-complete');
+
+    const snapsBeforeLong = staticSnapshots;
+    advanceSimulated300Hz(1300); // finish 1200ms jade chime
+    assert.equal(inst.sleeping, true, 'Unfocused long-task-complete must freeze at 0fps static afterglow');
+    assert.equal(inst.unfocusedHold, true);
+    assert.equal(staticSnapshots, snapsBeforeLong + 1);
+    const drawsDuringUnfocusedHold = gpuDraws;
+    advanceSimulated300Hz(3000);
+    assert.equal(gpuDraws, drawsDuringUnfocusedHold, '0 extra frames while holding unfocused completion afterglow');
+
+    // User moves pointer back into window -> fades out over 600ms and sleeps at 0fps
+    windowFocused = true;
+    const returnFn = winListeners.get('pointermove') || winListeners.get('focus');
+    assert.ok(returnFn, 'Expected one-shot focus/pointermove wake listener');
+    returnFn();
+    advanceSimulated300Hz(700);
+    assert.equal(inst.phase, 'idle');
+    assert.equal(inst.sleeping, true);
+
+    // 4) awaiting-decision (ask_question takeover card) -> 1.6s warm amber breath then freezes at 0fps static snapshot!
+    decisionDomActive = true;
+    nowMs += 250;
+    ctl.sync();
+    assert.equal(inst.phase, 'awaiting-decision');
+    assert.equal(lastSemanticSeen, 'awaiting-decision');
+    assert.equal(inst.sleeping, false);
+
+    const snapsBeforeDec = staticSnapshots;
+    advanceSimulated300Hz(1700);
+    assert.equal(inst.sleeping, true, 'awaiting-decision must freeze at 0fps static amber snapshot after 1.6s');
+    assert.equal(inst.decisionHolding, true);
+    assert.equal(staticSnapshots, snapsBeforeDec + 1);
+
+    const drawsWhileWaitingUser = gpuDraws;
+    advanceSimulated300Hz(4000);
+    ctl.sync();
+    assert.equal(gpuDraws, drawsWhileWaitingUser, 'Must draw 0 extra frames while user deliberates on ask_question');
+
+    // User answers ask_question -> clears cleanly back to 0fps
+    decisionDomActive = false;
+    nowMs += 250;
+    ctl.sync();
+    advanceSimulated300Hz(1700);
+    assert.equal(inst.phase, 'idle');
+    assert.equal(inst.sleeping, true);
+
+    // 5) error-halted -> 900ms muted coral inward convergence then clears to 0fps!
+    const clearsBeforeErr = clearCount;
+    ctl.triggerErrorHalted(nowMs);
+    assert.equal(inst.phase, 'error-halted');
+    assert.equal(lastSemanticSeen, 'error-halted');
+    advanceSimulated300Hz(960);
+    assert.equal(inst.phase, 'idle');
+    assert.equal(inst.sleeping, true);
+    assert.ok(clearCount > clearsBeforeErr, 'error-halted must clear canvas to zero before 0fps sleep');
+
+    // 6) setAmbientIntensity(0) immediately clears and sleeps at 0fps
+    ctl.setAmbientIntensity(0);
+    assert.equal(inst.sleeping, true);
+    assert.equal(inst.sleepReason, 'ambient-zero');
+
+    ctl.unmount();
+  } finally {
+    globalThis.document = prevDoc;
+    globalThis.window = prevWin;
+    globalThis.performance = prevPerf;
+    globalThis.requestAnimationFrame = prevRaf;
+    globalThis.cancelAnimationFrame = prevCaf;
+    globalThis.setTimeout = prevSetTimeout;
+    globalThis.clearTimeout = prevClearTimeout;
+  }
+});
+
+test('Wave 3: createGlyphField & home-ripple-host honor accentTone (mono/iris/amber/cobalt/warm) and ambientIntensity=0 0fps sleep', () => {
+  const homeRippleMod = require('../home-ripple-host.js');
+
+  function make2DCanvas(width, height) {
+    let lastImage = null;
+    const ctx2d = {
+      setTransform() {},
+      clearRect() {},
+      fillText() {},
+      getImageData(_x, _y, w, h) {
+        const buf = new Uint8ClampedArray(w * h * 4);
+        for (let i = 3; i < buf.length; i += 4) buf[i] = 255;
+        return { width: w, height: h, data: buf };
+      },
+      createImageData(w, h) {
+        return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) };
+      },
+      putImageData(img) {
+        lastImage = img;
+      },
+    };
+    const attrs = new Map();
+    return {
+      width,
+      height,
+      className: '',
+      isConnected: true,
+      style: {},
+      setAttribute: (k, v) => attrs.set(k, String(v)),
+      getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+      hasAttribute: (k) => attrs.has(k),
+      removeAttribute: (k) => attrs.delete(k),
+      remove() { this.isConnected = false; },
+      get lastImage() { return lastImage; },
+      getBoundingClientRect: () => ({ left: 0, top: 0, width, height }),
+      ownerDocument: {
+        hidden: false,
+        createElement: () => make2DCanvas(1, 1),
+      },
+      getContext: (type) => (type === '2d' ? ctx2d : null),
+    };
+  }
+
+  const cols = 40;
+  const rows = 20;
+  const { cellWidth, cellHeight } = rippleCore.RIPPLE;
+  const waves = rippleCore.createWaveField(cols, rows, () => 0.5);
+  const cv = make2DCanvas(cols * cellWidth, rows * cellHeight);
+  const field = rippleCore.createGlyphField(cv, cols, rows, waves);
+
+  // 1) mono spectrum renders neutral silver-slate aura without high-chroma rainbow split
+  const cx = (cols * cellWidth) / 2;
+  const cy = (rows * cellHeight) / 2;
+  field.draw(1000, {
+    dark: true,
+    ink: [146, 148, 156],
+    wave: [214, 218, 228],
+    spectrum: 'mono',
+    ambientIntensity: 1,
+    aura: { x: cx, y: cy, radius: 120, strength: 1, active: true },
+  }, false);
+
+  const imgMono = cv.lastImage;
+  let maxMonoChroma = 0;
+  for (let i = 0; i < imgMono.data.length; i += 4) {
+    if (imgMono.data[i + 3] < 40) continue;
+    const r = imgMono.data[i];
+    const g = imgMono.data[i + 1];
+    const b = imgMono.data[i + 2];
+    const span = Math.max(r, g, b) - Math.min(r, g, b);
+    if (span > maxMonoChroma) maxMonoChroma = span;
+  }
+  assert.ok(maxMonoChroma <= 42, `mono glyph field must stay neutral silver-slate (chroma <= 42), got ${maxMonoChroma}`);
+
+  // 2) ambientIntensity: 0 disables nebula wakeup within the same glyph tick
+  field.draw(2000, {
+    dark: true,
+    ink: [146, 148, 156],
+    wave: [214, 218, 228],
+    spectrum: 'default',
+    ambientIntensity: 0,
+    aura: { x: cx, y: cy, radius: 120, strength: 1, active: true },
+  }, false);
+  assert.equal(field.needsDraw(2060, false), false, 'ambientIntensity=0 must suppress 40ms nebula redraws when idle');
+  field.dispose();
+
+  // 3) home-ripple-host skips hidden glow.draw() and enters 0fps sleep when ambientIntensity=0
+  const prevDoc = globalThis.document;
+  const prevWin = globalThis.window;
+  const prevPerf = globalThis.performance;
+  const prevRaf = globalThis.requestAnimationFrame;
+  const prevCaf = globalThis.cancelAnimationFrame;
+
+  let nowMs = 1000;
+  let rafSeq = 1;
+  const rafMap = new Map();
+  let glowDraws = 0;
+  let glowClears = 0;
+  let lastGlowOpts = null;
+  const htmlAttrs = new Map([['data-ag-cs-ambient', '0'], ['data-ag-cs-accent', 'mono']]);
+
+  const homeNode = {
+    clientWidth: 320,
+    clientHeight: 180,
+    children: [],
+    get firstChild() { return this.children[0] || null; },
+    insertBefore(n) { this.children.unshift(n); n.isConnected = true; return n; },
+    querySelector: () => null,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  globalThis.performance = { now: () => nowMs };
+  globalThis.window = { devicePixelRatio: 1 };
+  globalThis.requestAnimationFrame = (fn) => { const id = rafSeq++; rafMap.set(id, fn); return id; };
+  globalThis.cancelAnimationFrame = (id) => { rafMap.delete(id); };
+  globalThis.document = {
+    hidden: false,
+    documentElement: {
+      getAttribute: (k) => (htmlAttrs.has(k) ? htmlAttrs.get(k) : null),
+    },
+    querySelector: (sel) => (sel === '.agy-home' ? homeNode : null),
+    addEventListener() {},
+    removeEventListener() {},
+    createElement(tag) {
+      if (tag === 'canvas') return make2DCanvas(320, 180);
+      const attrs = new Map();
+      const kids = [];
+      return {
+        tagName: tag.toUpperCase(),
+        className: '',
+        isConnected: true,
+        setAttribute: (k, v) => attrs.set(k, String(v)),
+        getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+        hasAttribute: (k) => attrs.has(k),
+        removeAttribute: (k) => attrs.delete(k),
+        appendChild: (c) => { kids.push(c); c.isConnected = true; return c; },
+        remove: () => {},
+      };
+    },
+  };
+
+  const wrappedRippleCore = {
+    ...rippleCore,
+    mountBrandHorizonGlow: () => ({
+      mode: 'webgl2',
+      resize() {},
+      invalidate() {},
+      clear() { glowClears++; },
+      draw(_now, opts) { glowDraws++; lastGlowOpts = opts; },
+      dispose() {},
+    }),
+  };
+
+  try {
+    const ctl = homeRippleMod.createHomeRippleController({
+      rippleCore: wrappedRippleCore,
+      isDestroyed: () => false,
+      isAllowed: () => true,
+      isDarkTheme: () => true,
+      motionReduced: () => false,
+      getMinFrameGapMs: () => 0,
+      setAttrIfChanged: (el, k, v) => el.setAttribute(k, v),
+    });
+    ctl.sync();
+    // Drain rAF -> at ambient=0, intro loop must NOT keep waking, glow.draw must be 0, glow.clear must be 1!
+    for (let step = 0; step < 5 && rafMap.size > 0; step++) {
+      nowMs += 16;
+      const [[id, fn]] = rafMap.entries();
+      rafMap.delete(id);
+      fn(nowMs);
+    }
+    assert.equal(glowDraws, 0, 'ambient=0 must skip hidden BrandHorizonGlow draw()');
+    assert.equal(glowClears, 1, 'ambient=0 must clear BrandHorizonGlow once');
+    assert.equal(rafMap.size, 0, 'ambient=0 home ripple must settle to 0fps immediately without intro spin');
+    assert.equal(ctl.getMount().sleeping, true);
+
+    // Switch ambient -> 0.7 and accent -> iris -> refreshTheme wakes and passes spectrum/ambient to glow
+    htmlAttrs.set('data-ag-cs-ambient', '0.7');
+    htmlAttrs.set('data-ag-cs-accent', 'iris');
+    ctl.refreshTheme();
+    assert.ok(rafMap.size > 0);
+    nowMs += 16;
+    {
+      const [[id, fn]] = rafMap.entries();
+      rafMap.delete(id);
+      fn(nowMs);
+    }
+    assert.equal(glowDraws, 1);
+    assert.equal(lastGlowOpts.ambientIntensity, 0.7);
+    assert.equal(lastGlowOpts.spectrum, 'iris');
+
+    ctl.unmount();
+  } finally {
+    globalThis.document = prevDoc;
+    globalThis.window = prevWin;
+    globalThis.performance = prevPerf;
+    globalThis.requestAnimationFrame = prevRaf;
+    globalThis.cancelAnimationFrame = prevCaf;
+  }
+});

@@ -325,9 +325,6 @@
     // 小紫猫吃小鱼
     fishDish: F(['.PPsPP.', 'DDDDDDD', '.DDDDD.'], 11, 7),
     fishBone: F(['.M.M.M.', 'DDDDDDD', '.DDDDD.'], 11, 7),
-    laser0: F(['RR'], 15, 9, { grounded: true }),
-    laser1: F(['RR'], 18, 8, { grounded: true }),
-    laser2: F(['RR'], 13, 9, { grounded: true }),
 
     // 读信
     envS: F(['dddddd', 'ddwwdd', 'dwddwd', 'dwwwwd', 'dddddd'], 12, 5),
@@ -464,9 +461,6 @@
     note: F(['..kk.', '..k.k', '..k..', 'kkk..', 'kk...'], 5, -8),
     sweat: F(['.B.', 'BbB', 'BbB', '.B.'], 13, -4),
     tilde: F(['.k...', 'k.k.k', '...k.'], 5, -7),
-    fireSpark0: F(['...Y...', 'f....f.'], 4, -13),
-    fireSpark1: F(['.f...Y.', '.....f.', 'Y......'], 3, -15),
-    fireSpark2: F(['..F..f.', '..Y....'], 4, -14),
     // 打盹 z：从头顶右侧逐级变大上浮（3×3 → 4×4 → 5×5，块状无描边）
     dozeZ0: F(['kkk', '.k.', 'kkk'], 12, -3),
     dozeZ1: F(['kkkk', '..k.', '.k..', 'kkkk'], 13, -7),
@@ -1940,7 +1934,8 @@
     if (!hostEl) return null;
     const doc = hostEl.ownerDocument;
     const win = (doc && doc.defaultView) || (typeof window !== 'undefined' ? window : null);
-    const dpr = Math.min((win && win.devicePixelRatio) || 1, 2);
+    const readDpr = () => Math.min((win && win.devicePixelRatio) || 1, 2);
+    let dpr = readDpr();
     const rand = (a, b) => a + Math.random() * (b - a);
     const ticksIn = (minMs, maxMs) => Math.max(1, Math.round(rand(minMs, maxMs) / TICK));
 
@@ -1953,6 +1948,8 @@
     const onReducedChange = (e) => {
       reducedMotion = Boolean(e && e.matches);
       if (reducedMotion) freezeMotion();
+      else lastActivityAt = performance.now();
+      syncHeartbeat();
     };
     try {
       if (win && typeof win.matchMedia === 'function') {
@@ -2263,6 +2260,28 @@
     const allActiveEnts = () => (miniPileEnabled ? [actors.cat, actors.clawd, ...miniCrabs] : [actors.cat, actors.clawd]);
     const maxTowerDepthAllowed = () => (miniPileEnabled ? 5 : 2);
 
+    const syncStageDpr = () => {
+      const nextDpr = readDpr();
+      if (nextDpr === dpr) return false;
+      dpr = nextDpr;
+      for (const id of ['cat', 'clawd']) {
+        const a = actors[id];
+        if (a.canvas) {
+          a.canvas.width = Math.round(CANVAS_W * dpr);
+          a.canvas.height = Math.round(CANVAS_H * dpr);
+        }
+        a.lastRender.poseKey = null;
+      }
+      miniCrabs.forEach((mc) => {
+        if (mc.canvas) {
+          mc.canvas.width = Math.round(40 * dpr);
+          mc.canvas.height = Math.round(32 * dpr);
+        }
+        mc.lastFrameKey = null;
+      });
+      return true;
+    };
+
     let cachedHostWidth = typeof hostEl.clientWidth === 'number' && hostEl.clientWidth > 0 ? hostEl.clientWidth : 720;
     const isMockHostWidth = Object.prototype.hasOwnProperty.call(hostEl, 'clientWidth');
     if (!isMockHostWidth && typeof ResizeObserver === 'function' && hostEl && hostEl.nodeType === 1) {
@@ -2270,9 +2289,11 @@
         const hostRo = new ResizeObserver((entries) => {
           const cr = entries && entries[0] && entries[0].contentRect;
           const nw = cr && cr.width > 0 ? Math.round(cr.width) : hostEl.clientWidth;
+          const dprChanged = syncStageDpr();
           if (nw > 0 && nw !== cachedHostWidth) {
             cachedHostWidth = nw;
           }
+          if (dprChanged && !disposed) renderAllFrames(performance.now());
         });
         hostRo.observe(hostEl);
         cleanups.push(() => hostRo.disconnect());
@@ -2971,6 +2992,7 @@
 
     let lastChromaStepTick = -1;
     const renderAllFrames = (now) => {
+      syncStageDpr();
       if (prismaticCoat && !reducedMotion && !dozing && lastChromaStepTick !== tickIdx) {
         lastChromaStepTick = tickIdx;
         if (tickIdx % 3 === 0) {
@@ -4147,11 +4169,17 @@
     };
 
     const cleanups = [];
+    const dragReleaseHooks = [];
     let dragRafPending = false;
+    let dragRafId = 0;
+    const cAF =
+      (win && typeof win.cancelAnimationFrame === 'function' && win.cancelAnimationFrame.bind(win)) ||
+      (typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : null);
     const scheduleDragRender = () => {
       if (dragRafPending || disposed) return;
       dragRafPending = true;
-      rAF((frameNow) => {
+      dragRafId = rAF((frameNow) => {
+        dragRafId = 0;
         dragRafPending = false;
         if (!disposed) renderAllFrames(frameNow);
       });
@@ -4305,6 +4333,21 @@
         triggerPoke(actor, true);
       };
 
+      const cancelDragOnBlur = () => {
+        if (lastMoveT === 0 && !actor.dragging) return;
+        clearTimeout(petTimer);
+        lastMoveT = 0;
+        if (moved || actor.dragging) {
+          moved = false;
+          actor.dragging = false;
+          actor.vx = 0;
+          actor.vy = 0;
+          syncDirectMotionDomAttr(actor, actor.el);
+          if (!disposed) startBallistic(actor, 0, 0, { noSnap: true });
+        }
+      };
+      dragReleaseHooks.push(cancelDragOnBlur);
+
       actor.el.addEventListener('pointerdown', onDown);
       actor.el.addEventListener('pointermove', onMove);
       actor.el.addEventListener('pointerup', onUp);
@@ -4435,6 +4478,20 @@
         renderAllFrames(performance.now());
       };
 
+      const cancelMiniDragOnBlur = () => {
+        if (lastMoveT === 0 && !mc.dragging) return;
+        lastMoveT = 0;
+        if (moved || mc.dragging) {
+          moved = false;
+          mc.dragging = false;
+          mc.vx = 0;
+          mc.vy = 0;
+          syncDirectMotionDomAttr(mc, mc.canvas);
+          if (!disposed) startMiniBallistic(mc, 0, 0, { noSnap: true });
+        }
+      };
+      dragReleaseHooks.push(cancelMiniDragOnBlur);
+
       mc.el.addEventListener('pointerdown', onDown);
       mc.el.addEventListener('pointermove', onMove);
       mc.el.addEventListener('pointerup', onUp);
@@ -4450,6 +4507,17 @@
     bindActorEvents(actors.cat);
     bindActorEvents(actors.clawd);
     miniCrabs.forEach(bindMiniCrabEvents);
+
+    const onWindowBlur = () => {
+      if (disposed) return;
+      for (let i = 0; i < dragReleaseHooks.length; i++) dragReleaseHooks[i]();
+    };
+    if (win && typeof win.addEventListener === 'function') {
+      win.addEventListener('blur', onWindowBlur);
+      cleanups.push(() => {
+        if (typeof win.removeEventListener === 'function') win.removeEventListener('blur', onWindowBlur);
+      });
+    }
 
     // ── 生态联动：活动唤醒 / 打盹 / 领衔交接 / 外部事件 notify ───────────────
     const leaderActor = () => (camp === 'claude' ? actors.clawd : actors.cat);
@@ -4477,12 +4545,12 @@
 
     function syncHeartbeat(now = performance.now()) {
       let targetMs = TICK;
-      if (disposed || isDocHidden()) {
+      if (disposed || isDocHidden() || (reducedMotion && !stageBusy())) {
         targetMs = 0;
       } else if (dozing && !stageBusy() && !hasDozeTransition(now)) {
         targetMs = DOZE_TICK;
       }
-      if (targetMs === 0 || dozing) {
+      if (targetMs === 0 || dozing || reducedMotion) {
         clearTimeout(theaterTimer);
         theaterTimer = 0;
       } else if (!theaterTimer) {
@@ -4735,16 +4803,8 @@
       orchestrator(p) {
         orchestrator = Boolean(p.on);
         if (orchestrator) {
-          // 抬头朝左上（模型触发按钮方向）扫视并冒 spark，随后冰晶常驻 Clawd 头顶
           gaze(actors.clawd, 'left', 900, true, 'spark');
           gaze(actors.cat, 'left', 900, true, 'spark');
-        }
-      },
-      popover(p) {
-        const side = p.side === 'left' || p.side === 'right' ? p.side : null;
-        for (const a of [actors.clawd, actors.cat]) {
-          if (side) gaze(a, side, 1200);
-          else endClip(a, 'gaze');
         }
       },
       streamDone(p) {
@@ -4775,18 +4835,6 @@
         const partner = partnerActor();
         startClip(leader, 'salute', 900, { sym: 'spark' });
         startClip(partner, 'lookNod', 1200, { face: faceToward(partner, leader), param: 2 });
-      },
-      critical(p) {
-        const leader = leaderActor();
-        const partner = partnerActor();
-        if (p.on) {
-          dismountRidersSideHop(leader.id);
-          startClip(leader, 'siren', 2000);
-          startClip(partner, 'worry', 2000, { sym: 'sweat' });
-        } else {
-          endClip(leader, 'siren');
-          endClip(partner, 'worry');
-        }
       },
     };
     const handleNotify = (event, payload) => {
@@ -4885,6 +4933,7 @@
         if (next.reducedMotion !== undefined) {
           reducedMotion = Boolean(next.reducedMotion);
           if (reducedMotion && !prevReduced) freezeMotion();
+          else if (!reducedMotion && prevReduced) lastActivityAt = performance.now();
         }
 
         const changed =
@@ -4908,6 +4957,9 @@
           if (performance.now() - lastHandoffAt > 50) resetHomePositions(popoverRightWidth !== prevRight);
         } else if (popoverRightWidth !== prevRight || miniPileEnabled !== prevMiniPile) {
           resetHomePositions(popoverRightWidth !== prevRight);
+        }
+        if (reducedMotion !== prevReduced || streaming !== prevStreaming) {
+          syncHeartbeat();
         }
         renderAllFrames(performance.now());
       },
@@ -4942,119 +4994,23 @@
         const now = performance.now();
         const leader = camp === 'claude' ? actors.clawd : actors.cat;
         const partner = camp === 'claude' ? actors.cat : actors.clawd;
-        // 生态联动自检命令
-        const ecoDemos = {
-          campSwitch: () => {
-            lastHandoffAt = 0;
-            handleNotify('campSwitch');
-          },
-          orchestratorOn: () => handleNotify('orchestrator', { on: true }),
-          orchestratorOff: () => handleNotify('orchestrator', { on: false }),
-          streamDone: () => handleNotify('streamDone', { error: false }),
-          streamError: () => handleNotify('streamDone', { error: true }),
-          send: () => handleNotify('send'),
-          doze: () => startDoze(true),
-          wake: () => markActivity(),
-          wave: () => startClip(actors.clawd, 'wave', CLIP_MS.wave),
-          yawn: () => {
-            startClip(actors.cat, 'yawnStretch', CLIP_MS.yawnStretch);
-            startClip(actors.clawd, 'yawn', CLIP_MS.yawn);
-          },
-          crabRide: () => runCrabRide(true),
-          crabChase: () => runCrabChase(true),
-          totem: () => {
-            allActiveEnts().forEach((e) => {
-              e.stackedOn = null;
-              e.y = 0;
-            });
-            mountOntoStack(partner.id, leader.id);
-            if (miniPileEnabled) {
-              miniCrabs.forEach((mc) => mountOntoStack(mc.id, leader.id));
-            }
-          },
-          leapfrog: () => {
-            partner.stackedOn = null;
-            leader.stackedOn = null;
-            partner.y = 0;
-            leader.y = 0;
-            const mid = Math.round((clampActorX(9999) + 16) * 0.48);
-            partner.x = clampActorX(mid);
-            leader.x = clampActorX(mid - 50);
-            triggerObstacleEncounter(leader.id, partner.id, 'leapfrog');
-          },
-          autoPerch: () => {
-            partner.stackedOn = null;
-            leader.stackedOn = null;
-            partner.y = 0;
-            leader.y = 0;
-            const mid = Math.round((clampActorX(9999) + 16) * 0.48);
-            partner.x = clampActorX(mid);
-            leader.x = clampActorX(mid - 50);
-            triggerObstacleEncounter(leader.id, partner.id, 'autoPerch');
-          },
-          greetTurn: () => {
-            partner.stackedOn = null;
-            leader.stackedOn = null;
-            partner.y = 0;
-            leader.y = 0;
-            const mid = Math.round((clampActorX(9999) + 16) * 0.48);
-            partner.x = clampActorX(mid);
-            leader.x = clampActorX(mid - 50);
-            triggerObstacleEncounter(leader.id, partner.id, 'greetTurn');
-          },
-          bump: () => {
-            duetUntil = 0;
-            pairCooldowns.delete('mainWalk');
-            actors.cat.stackedOn = null;
-            actors.clawd.stackedOn = null;
-            actors.cat.y = 0;
-            actors.clawd.y = 0;
-            const mid = Math.round((clampActorX(9999) + 16) * 0.45);
-            actors.clawd.x = clampActorX(mid - 32);
-            actors.cat.x = clampActorX(mid + 32);
-            startClip(actors.clawd, 'walk', 2600, { patrolDir: 1 });
-            startClip(actors.cat, 'walk', 2600, { patrolDir: -1 });
-            if (miniPileEnabled) {
-              miniCrabs[0].act = null;
-              miniCrabs[1].act = null;
-              miniCrabs[0].cooldownTick = -1;
-              miniCrabs[1].cooldownTick = -1;
-              miniCrabs[0].px = 36;
-              miniCrabs[0].dir = 1;
-              miniCrabs[1].px = 70;
-              miniCrabs[1].dir = -1;
-            }
-          },
-          passBy: () => {
-            duetUntil = 0;
-            pairCooldowns.delete('mainPass');
-            pairCooldowns.delete('mainWalk');
-            actors.cat.stackedOn = null;
-            actors.clawd.stackedOn = null;
-            actors.cat.y = 0;
-            actors.clawd.y = 0;
-            const mid = Math.round((clampActorX(9999) + 16) * 0.48);
-            partner.x = clampActorX(mid);
-            leader.x = clampActorX(mid - 54);
-            startClip(partner, 'idle', 2400);
-            startClip(leader, 'walk', 2400, { patrolDir: 1 });
-          },
+        const stageObstacle = (mode) => {
+          partner.stackedOn = null;
+          leader.stackedOn = null;
+          partner.y = 0;
+          leader.y = 0;
+          const mid = Math.round((clampActorX(9999) + 16) * 0.48);
+          partner.x = clampActorX(mid);
+          leader.x = clampActorX(mid - 50);
+          triggerObstacleEncounter(leader.id, partner.id, mode);
         };
-        if (Object.prototype.hasOwnProperty.call(ecoDemos, kind)) {
-          ecoDemos[kind]();
-          renderAllFrames(now);
-          return;
-        }
-        const clipMap = {
-          fire: 'onFire',
-          cheer: 'cheerSticks',
-          rickroll: 'rickroll',
-          siren: 'siren',
-        };
-        const mapped = clipMap[kind] || kind;
-        const duetMap = { lookNod: 'lookNod', nodTogether: 'lookNod', catRub: 'catRub', rub: 'catRub', readAlong: 'readAlong' };
-
-        if (kind === 'stack') {
+        if (kind === 'doze') {
+          startDoze(true);
+        } else if (kind === 'wake') {
+          markActivity();
+        } else if (kind === 'leapfrog' || kind === 'autoPerch' || kind === 'greetTurn') {
+          stageObstacle(kind);
+        } else if (kind === 'stack') {
           mountOntoStack(partner.id, leader.id);
         } else if (kind === 'unstack') {
           allActiveEnts().forEach((e) => {
@@ -5073,40 +5029,13 @@
           if (leader.stackedOn) detachWithGravitySettle(leader.id);
           leader.y = -48;
           startBallistic(leader, -3.5, -7.8);
-        } else if (kind === 'pet') {
-          startClip(leader, 'pet', 1200, { sym: 'heart' });
         } else if (kind === 'poke') {
           triggerPoke(leader, false);
-        } else if (kind === 'sulk') {
-          startClip(leader, 'sulk', 3200, { mirror: true, sym: 'vein' });
-        } else if (kind === 'theater') {
-          startClip(actors.clawd, DAILY_CLAWD[theaterCursor % DAILY_CLAWD.length], 3800);
-          startClip(actors.cat, DAILY_CAT[theaterCursor % DAILY_CAT.length], 3800);
-          theaterCursor += 1;
-        } else if (duetMap[kind]) {
-          runDuet(duetMap[kind]);
-        } else if (kind === 'land') {
-          // 视觉自检：直接播放落地四相衰减
-          playSeq(leader, landingSteps(2));
-        } else if (kind === 'hop') {
-          startBallistic(leader, 0, -4.4, { anticipate: true });
-        } else if (kind === 'blink') {
-          actors.cat.nextBlinkTick = tickIdx;
-          actors.clawd.nextBlinkTick = tickIdx;
-        } else if (kind === 'breath') {
-          actors.cat.nextBreathTick = tickIdx;
-          actors.clawd.nextBreathTick = tickIdx;
-        } else if (kind === 'twitch') {
-          actors.cat.nextTwitchTick = tickIdx;
-          actors.clawd.nextSnapTick = tickIdx;
-        } else if (kind === 'walk') {
-          startClip(leader, 'walk', 2400, { patrolDir: -1 });
-        } else if (['onFire', 'cheerSticks', 'rickroll', 'siren', 'polish', 'eat', 'eatFish', 'chaseDot', 'catStretch', 'letter', 'plant', 'butterfly', 'stretch', 'spinHop', 'chatGreet'].includes(mapped)) {
-          if (['onFire', 'siren', 'spinHop'].includes(mapped)) {
-            dismountRidersSideHop(leader.id);
-          }
+        } else {
+          const clipMap = { fire: 'onFire', cheer: 'cheerSticks', rickroll: 'rickroll', siren: 'siren' };
+          const mapped = clipMap[kind] || kind;
+          if (['onFire', 'siren', 'spinHop'].includes(mapped)) dismountRidersSideHop(leader.id);
           startClip(leader, mapped, 3800);
-          if (mapped === 'chatGreet') crabsWave();
           if (['onFire', 'cheerSticks', 'rickroll', 'siren'].includes(mapped)) {
             startClip(partner, mapped === 'cheerSticks' ? 'cheerSticks' : 'wow', 3600, { sym: mapped === 'siren' ? 'sweat' : 'spark' });
           }
@@ -5222,6 +5151,11 @@
           tickTimer = null;
         }
         currentTickMs = 0;
+        if (dragRafId && cAF) {
+          try { cAF(dragRafId); } catch (_) {}
+          dragRafId = 0;
+        }
+        dragRafPending = false;
         clearTimeout(pauseTimer);
         clearTimeout(theaterTimer);
         pendingTimers.forEach((t) => clearTimeout(t));
@@ -5236,6 +5170,16 @@
           /* 忽略 */
         }
         cleanups.forEach((fn) => fn());
+        for (const node of [miniGroupEl, actors.cat.el, actors.clawd.el, fxCanvas]) {
+          if (node) {
+            if (typeof node.remove === 'function') node.remove();
+            else if (node.parentNode && typeof node.parentNode.removeChild === 'function') {
+              node.parentNode.removeChild(node);
+            } else if (hostEl && typeof hostEl.removeChild === 'function') {
+              try { hostEl.removeChild(node); } catch (_) {}
+            }
+          }
+        }
       },
     };
   }

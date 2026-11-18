@@ -1,7 +1,7 @@
 // Obsidian Prism Native Sidecar Daemon (sidecars/daemon/main.mjs)
-// - Auto-discovers DevToolsActivePort across Windows/macOS/Linux
+// - Auto-discovers DevToolsActivePort across Windows/macOS/Linux + fast Target.setDiscoverTargets push
 // - Registers Page.addScriptToEvaluateOnNewDocument + Runtime.evaluate (survives Ctrl+Shift+R reloads with zero app.asar touch!)
-// - Hot-upgrades legacy instances to Obsidian Prism v1.0.0
+// - Hot-upgrades legacy instances to Obsidian Prism v1.0.1
 // - Lazily serves real MetricsStore + DesktopUsage snapshots over __agPrismMetricsCall only when requested (0 idle CPU)
 // - Registers __agPrismRepoCall (paired with window.__agPrismRepoBridge) for live Git status & safe git pull --ff-only + hot-reload!
 
@@ -12,24 +12,28 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { OmniServer, OMNI_BINDING, isBlockedUncPath } from '../../vendor/omni-viewer/omni-server.mjs';
 
 const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DEFAULT_ROOT_DIR = path.resolve(__dirname, '..', '..');
+const defaultCdp = require(path.join(DEFAULT_ROOT_DIR, 'cdp.js'));
 
 export const METRICS_BINDING = '__agPrismMetricsCall';
 export const REPO_BINDING = '__agPrismRepoCall';
 export const THOUGHT_BINDING = '__agPrismThoughtCall';
 export const USAGE_BINDING = '__agPrismUsageCall';
-const SKIP_TARGET_RE = /Untitled|launchpad/i;
+export { OmniServer, OMNI_BINDING };
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function execGit(args, cwd, timeoutMs = 12000) {
+function execGit(args, cwd, timeoutMs = 12000, extraConfigs = []) {
+  const cfgFlags = ['-c', 'protocol.ext.allow=never', '-c', 'submodule.recurse=false'];
+  for (const flag of extraConfigs) cfgFlags.push(flag);
   return new Promise((resolve, reject) => {
     execFile(
       'git',
-      args,
+      [...cfgFlags, ...args],
       { cwd, encoding: 'utf8', windowsHide: true, timeout: timeoutMs, maxBuffer: 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err) {
@@ -68,14 +72,29 @@ export function sanitizeGitRemoteUrl(rawUrl) {
   return s.replace(/\/\/[^/\s:@]+:[^/\s@]+@/, '//');
 }
 
-function copyUpdatedRuntimeFromRepo(repoDir, pluginDir, syncFilesList) {
+export function copyUpdatedRuntimeFromRepo(repoDir, pluginDir, syncFilesList) {
   if (!repoDir || !pluginDir) return 0;
   const normRepo = path.resolve(repoDir).toLowerCase();
   const normPlugin = path.resolve(pluginDir).toLowerCase();
   if (normRepo === normPlugin) return 0;
 
+  let resolvedFiles = null;
+  const repoCdpPath = path.join(repoDir, 'cdp.js');
+  if (fs.existsSync(repoCdpPath)) {
+    try {
+      const reqKey = require.resolve(repoCdpPath);
+      delete require.cache[reqKey];
+      const freshRepoCdp = require(repoCdpPath);
+      if (Array.isArray(freshRepoCdp?.SYNC_ROOT_FILES) && freshRepoCdp.SYNC_ROOT_FILES.length > 0) {
+        resolvedFiles = freshRepoCdp.SYNC_ROOT_FILES;
+      }
+    } catch {}
+  }
+
   let synced = 0;
-  const files = Array.isArray(syncFilesList) && syncFilesList.length > 0 ? syncFilesList : ['cdp.js', 'style.css', 'ui-runtime.js'];
+  const files =
+    resolvedFiles ||
+    (Array.isArray(syncFilesList) && syncFilesList.length > 0 ? syncFilesList : ['cdp.js', 'style.css', 'ui-runtime.js']);
   for (const rel of files) {
     const src = path.join(repoDir, rel);
     const dst = path.join(pluginDir, rel);
@@ -101,6 +120,7 @@ function copyUpdatedRuntimeFromRepo(repoDir, pluginDir, syncFilesList) {
   };
   syncSubDir('assets');
   syncSubDir('vendor');
+  syncSubDir('sidecars');
   return synced;
 }
 
@@ -140,11 +160,7 @@ export function discoverActivePort(overridePort = null, customPortFile = null) {
 }
 
 export function isEligibleTarget(target) {
-  if (!target || target.type !== 'page' || !target.webSocketDebuggerUrl) return false;
-  const url = String(target.url || '');
-  if (url.startsWith('devtools://') || url.startsWith('data:')) return false;
-  if (SKIP_TARGET_RE.test(`${target.title || ''} ${url}`)) return false;
-  return true;
+  return defaultCdp.isEligibleTarget(target);
 }
 
 export function isPluginEnabledInHostConfig(customConfigPath = null) {
@@ -181,6 +197,7 @@ export class PrismDaemon {
     enabledCheck = () => isPluginEnabledInHostConfig(),
     metricsProvider = null,
     thoughtService = null,
+    omniExecHooks = null,
     silent = false,
   } = {}) {
     this.rootDir = path.resolve(rootDir);
@@ -191,12 +208,23 @@ export class PrismDaemon {
     this.enabledCheck = enabledCheck;
     this.silent = Boolean(silent);
     this.cdp = require(path.join(this.rootDir, 'cdp.js'));
+    this._cdpFileSig = this._readCdpFileSig();
+    this._selfConfigWriteUntil = 0;
+    this._configSeq = 0;
+    this._broadcastRunning = false;
+    this._broadcastPending = false;
+    this._broadcastWaiters = [];
     this.sessions = new Map();
+    this.browserSession = null;
+    this.browserPort = null;
+    this._discoverTimer = null;
+    this._pendingTick = false;
     this.running = false;
     this.busy = false;
     this.timer = null;
     this.fsw = null;
     this.injectExpr = '';
+    this.omniExpr = '';
     this.codeHash = '';
     this.ownerToken = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     this.pidFile = path.join(this.rootDir, '.daemon.pid');
@@ -205,6 +233,9 @@ export class PrismDaemon {
     this._lazyUsage = null;
     this._customMetricsProvider = metricsProvider;
     this._lazyThoughtService = thoughtService;
+    this.omniServer = null;
+    this._omniServerPromise = null;
+    this._omniExecHooks = omniExecHooks;
   }
 
   log(msg) {
@@ -292,15 +323,33 @@ export class PrismDaemon {
       dirty = Boolean(porcelain.trim());
     } catch {}
 
+    let isNetworkRemote = false;
     try {
       const remotesRaw = await execGit(['remote'], repoDir, 4000);
       const remotes = remotesRaw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
       if (remotes.length > 0) {
         remoteName = remotes.includes('origin') ? 'origin' : remotes[0];
         const rawRemoteUrl = await execGit(['remote', 'get-url', remoteName], repoDir, 4000).catch(() => '');
+        if (rawRemoteUrl && isBlockedUncPath(rawRemoteUrl)) {
+          return {
+            ok: false,
+            action,
+            isGitRepo: true,
+            repoPath: path.basename(repoDir),
+            branch,
+            commit,
+            shortHash: commit,
+            dirty,
+            error: 'Remote UNC Git paths are blocked',
+            message: 'Remote UNC Git paths are blocked',
+          };
+        }
+        isNetworkRemote = /^(?:https?|ssh|git):\/\/|^[^/\\:\s]+@[^/\\:\s]+:/i.test(rawRemoteUrl);
         remoteUrl = sanitizeGitRemoteUrl(rawRemoteUrl);
       }
     } catch {}
+
+    const netGitCfg = isNetworkRemote ? ['-c', 'protocol.file.allow=never'] : [];
 
     const safeRepoName = path.basename(repoDir);
     const hasRemote = Boolean(remoteName && remoteUrl);
@@ -333,7 +382,7 @@ export class PrismDaemon {
       let ahead = 0;
       let behind = 0;
       try {
-        await execGit(['fetch', '--quiet', remoteName], repoDir, 8000);
+        await execGit(['fetch', '--quiet', '--no-recurse-submodules', remoteName], repoDir, 8000, netGitCfg);
       } catch {
         // Offline or unreachable remote: fall back to local tracking refs
       }
@@ -371,8 +420,11 @@ export class PrismDaemon {
     // action === 'pull': safe fast-forward pull + hot-push updated bundle!
     const prevCommit = commit;
     try {
-      const pullArgs = branch && branch !== 'HEAD' ? ['pull', '--ff-only', remoteName, branch] : ['pull', '--ff-only'];
-      const pullOut = await execGit(pullArgs, repoDir, 15000);
+      const pullArgs =
+        branch && branch !== 'HEAD'
+          ? ['pull', '--ff-only', '--no-recurse-submodules', remoteName, branch]
+          : ['pull', '--ff-only', '--no-recurse-submodules'];
+      const pullOut = await execGit(pullArgs, repoDir, 15000, netGitCfg);
       const nextCommit = await execGit(['rev-parse', '--short', 'HEAD'], repoDir, 5000).catch(() => prevCommit);
       const updated = Boolean(nextCommit && nextCommit !== prevCommit);
 
@@ -380,12 +432,11 @@ export class PrismDaemon {
       if (updated) {
         copyUpdatedRuntimeFromRepo(repoDir, this.rootDir, this.cdp.SYNC_ROOT_FILES);
       }
-      this.rebuildBundle();
-      for (const item of this.sessions.values()) {
-        if (item && !item.session.closed) {
-          await this.applyToEntry(item).catch(() => {});
-          hotReloaded = true;
-        }
+      this.rebuildBundle({ forceReloadCdp: updated });
+      const activeItems = [...this.sessions.values()].filter((item) => item && !item.session.closed);
+      if (activeItems.length > 0) {
+        await Promise.allSettled(activeItems.map((item) => this.applyToEntry(item)));
+        hotReloaded = true;
       }
 
       return {
@@ -434,36 +485,127 @@ export class PrismDaemon {
     }
   }
 
-  rebuildBundle() {
-    delete require.cache[require.resolve(path.join(this.rootDir, 'cdp.js'))];
-    this.cdp = require(path.join(this.rootDir, 'cdp.js'));
+  _readCdpFileSig() {
+    try {
+      const st = fs.statSync(path.join(this.rootDir, 'cdp.js'));
+      return `${st.mtimeMs}:${st.size}`;
+    } catch {
+      return '';
+    }
+  }
+
+  rebuildBundle({ forceReloadCdp = false } = {}) {
+    const cdpPath = path.join(this.rootDir, 'cdp.js');
+    const nextSig = this._readCdpFileSig();
+    if (forceReloadCdp || !this.cdp || (nextSig && nextSig !== this._cdpFileSig)) {
+      try {
+        delete require.cache[require.resolve(cdpPath)];
+      } catch {}
+      this.cdp = require(cdpPath);
+      this._cdpFileSig = nextSig;
+    }
     this.injectExpr = this.cdp.buildInjectExpression();
     const m = this.injectExpr.match(/"codeHash":"([^"]+)"/);
     this.codeHash = m ? m[1] : '';
+    if (typeof this.cdp.buildOmniClientExpression === 'function') {
+      const meta = this.omniServer && this.omniServer.running ? this.omniServer.getServerInfo() : null;
+      this.omniExpr = this.cdp.buildOmniClientExpression(meta);
+    } else {
+      this.omniExpr = '';
+    }
     return this.injectExpr;
+  }
+
+  _hasOmniClientFile() {
+    try {
+      return fs.existsSync(path.join(this.rootDir, 'vendor', 'omni-viewer', 'omni-client.js'));
+    } catch {
+      return false;
+    }
+  }
+
+  async ensureOmniServer() {
+    if (this.omniServer && this.omniServer.running) return this.omniServer;
+    if (this._omniServerPromise) return this._omniServerPromise;
+    this._omniServerPromise = (async () => {
+      const srv = new OmniServer({
+        rootDir: this.rootDir,
+        execHooks: this._omniExecHooks,
+      });
+      await srv.start();
+      this.omniServer = srv;
+      if (typeof this.cdp.buildOmniClientExpression === 'function') {
+        this.omniExpr = this.cdp.buildOmniClientExpression(srv.getServerInfo());
+      }
+      return srv;
+    })();
+    try {
+      return await this._omniServerPromise;
+    } finally {
+      this._omniServerPromise = null;
+    }
+  }
+
+  resolveTelemetryDataDir() {
+    if (this._telemetryDataDir) return this._telemetryDataDir;
+    const dir = path.join(os.homedir(), '.gemini', 'antigravity', 'sidecar_data', 'obsidian-prism', 'telemetry');
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch {}
+    this._telemetryDataDir = dir;
+    return dir;
+  }
+
+  syncClientCdpPort(clientOrStore) {
+    if (!clientOrStore) return null;
+    const activePort = discoverActivePort(this.overridePort, this.portFile);
+    if (activePort) {
+      if (typeof clientOrStore.setCdpPort === 'function') {
+        clientOrStore.setCdpPort(activePort);
+      } else {
+        clientOrStore.cdpPort = activePort;
+        if (clientOrStore.client) clientOrStore.client.cdpPort = activePort;
+      }
+    }
+    return activePort;
   }
 
   async ensureMetricsCollector() {
     if (this._customMetricsProvider) return this._customMetricsProvider;
     if (this._lazyStore) {
       return async (input) => {
+        this.syncClientCdpPort(this._lazyStore);
         const safeId = input?.conversationId && GUID_RE.test(input.conversationId) ? input.conversationId : null;
         const base = await this._lazyStore.snapshot({ conversationId: safeId, force: Boolean(input?.force) });
         let usageSnap = null;
         if (this._lazyUsage) {
-          if (input?.force) void this._lazyUsage.sync();
-          usageSnap = await this._lazyUsage.snapshot().catch(() => null);
+          if (input?.force) void this._lazyUsage.sync(true);
+          usageSnap = await this._lazyUsage
+            .snapshot({ groups: Array.isArray(base?.groups) ? base.groups : null })
+            .catch(() => null);
         }
         return { ...base, usage: usageSnap };
       };
     }
+    const telemetryDataDir = this.resolveTelemetryDataDir();
+    const activePort = discoverActivePort(this.overridePort, this.portFile);
     const storeModUrl = new URL('../../vendor/pulse-dashboard/sidecars/panel/store.mjs', import.meta.url);
     const usageModUrl = new URL('../../vendor/pulse-dashboard/sidecars/panel/usage.mjs', import.meta.url);
     const { MetricsStore } = await import(storeModUrl.href);
     const { DesktopUsage } = await import(usageModUrl.href);
-    this._lazyStore = new MetricsStore();
-    this._lazyUsage = new DesktopUsage(this._lazyStore);
-    this._lazyStore.onTrajectory = (scope, id, raw) => this._lazyUsage.ingest(scope, id, raw);
+    this._lazyStore = new MetricsStore({
+      dataDir: telemetryDataDir,
+      ...(activePort ? { cdpPort: activePort } : {}),
+    });
+    this._lazyUsage = new DesktopUsage(this._lazyStore, { dataDir: telemetryDataDir });
+    this._lazyStore.onTrajectory = (scope, id, raw, options) =>
+      typeof this._lazyUsage.ingestLive === 'function'
+        ? this._lazyUsage.ingestLive(scope, id, raw, options)
+        : this._lazyUsage.ingest(scope, id, raw);
+    this._lazyStore.onBackgroundResult = (scope, id, jobDb, options) =>
+      typeof this._lazyUsage.ingestDisk === 'function'
+        ? this._lazyUsage.ingestDisk(scope, id, jobDb, options)
+        : undefined;
     return this.ensureMetricsCollector();
   }
 
@@ -476,36 +618,208 @@ export class PrismDaemon {
   }
 
   async ensureLsClient() {
-    if (this._lazyLsClient) return this._lazyLsClient;
-    if (this._lazyStore && this._lazyStore.client) {
-      this._lazyLsClient = this._lazyStore.client;
+    if (this._lazyLsClient) {
+      this.syncClientCdpPort(this._lazyLsClient);
       return this._lazyLsClient;
     }
+    if (this._lazyStore && this._lazyStore.client) {
+      this._lazyLsClient = this._lazyStore.client;
+      this.syncClientCdpPort(this._lazyLsClient);
+      return this._lazyLsClient;
+    }
+    const activePort = discoverActivePort(this.overridePort, this.portFile);
     const clientModUrl = new URL('../../vendor/pulse-dashboard/sidecars/panel/client.mjs', import.meta.url);
     const { AntigravityClient } = await import(clientModUrl.href);
-    this._lazyLsClient = new AntigravityClient();
+    this._lazyLsClient = new AntigravityClient(activePort ? { cdpPort: activePort } : {});
     return this._lazyLsClient;
   }
 
-  async fetchUsageRollupBatch(rawItems) {
-    const list = Array.isArray(rawItems) ? rawItems.slice(0, 12) : [];
-    if (list.length === 0) return { ok: true, records: [] };
+  async _fetchFullGeneratorMetadata(client, id) {
+    if (typeof client._fetchMetadataOnly === 'function') {
+      return await client._fetchMetadataOnly(id);
+    }
+    const allItems = [];
+    let curOffset = 0;
+    let totalGm = null;
+    let totalSteps = 0;
+    while (true) {
+      const page = await client.call('GetCascadeTrajectoryGeneratorMetadata', {
+        cascadeId: id,
+        generatorMetadataOffset: curOffset,
+      });
+      const chunk = page?.generatorMetadata || page?.generatorMetadatas || [];
+      if (page?.numTotalGeneratorMetadata !== undefined && page?.numTotalGeneratorMetadata !== null) {
+        totalGm = Number(page.numTotalGeneratorMetadata);
+      }
+      if (page?.numTotalSteps !== undefined && page?.numTotalSteps !== null) {
+        totalSteps = Math.max(totalSteps, Number(page.numTotalSteps) || 0);
+      }
+      if (!chunk.length) break;
+      allItems.push(...chunk);
+      curOffset += chunk.length;
+      if (totalGm !== null && curOffset >= totalGm) break;
+    }
+    return {
+      numTotalSteps: totalSteps,
+      numTotalGeneratorMetadata: totalGm !== null ? totalGm : allItems.length,
+      trajectory: {
+        cascadeId: id,
+        steps: [],
+        generatorMetadata: allItems,
+      },
+    };
+  }
+
+  async _fetchBackendTrajectorySummaries(client, usageCore, force = false) {
+    const now = Date.now();
+    if (!force && this._backendSummariesCache && now - this._backendSummariesAt < 8000) {
+      return this._backendSummariesCache;
+    }
+    try {
+      const raw = await client.call('GetAllCascadeTrajectories', {});
+      const mapOrList = raw?.trajectorySummaries || {};
+      const entries = Array.isArray(mapOrList)
+        ? mapOrList.map((sum) => [sum?.cascadeId || sum?.id || '', sum])
+        : Object.entries(mapOrList);
+      const list = [];
+      const byId = new Map();
+      const toSec = (v) => {
+        if (!v) return 0;
+        if (typeof usageCore?.tsSec === 'function') {
+          const n = Number(usageCore.tsSec(v) || 0);
+          if (n > 0) return Math.floor(n);
+        }
+        if (typeof v === 'object' && v.seconds !== undefined) return Math.max(0, Math.floor(Number(v.seconds) || 0));
+        if (typeof v === 'string') {
+          const ms = Date.parse(v);
+          if (Number.isFinite(ms) && ms > 0) return Math.floor(ms / 1000);
+        }
+        return 0;
+      };
+      const extractWs = (sum) => {
+        const wsArr = sum?.workspaces || sum?.trajectoryMetadata?.workspaces;
+        const out = [];
+        if (Array.isArray(wsArr)) {
+          for (const w of wsArr) {
+            const uri = String(
+              w?.workspaceFolderAbsoluteUri || w?.gitRootAbsoluteUri || w?.uri || w?.path || ''
+            ).trim();
+            if (uri) out.push(uri);
+          }
+        }
+        const single = String(sum?.workspaceUri || sum?.workspacePath || sum?.trajectoryMetadata?.workspaceUri || '').trim();
+        if (single && !out.includes(single)) out.push(single);
+        let workspace = '';
+        if (out.length > 0) {
+          try {
+            const decoded = decodeURIComponent(out[0].replace(/^file:\/\//i, '')).replace(/[\\/]+$/, '');
+            workspace = decoded.split(/[\\/]/).filter(Boolean).pop() || '';
+          } catch {
+            workspace = out[0].replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).pop() || '';
+          }
+        }
+        return { workspace, workspaces: out };
+      };
+
+      for (const [rawId, sum] of entries) {
+        const id = String(rawId || sum?.cascadeId || sum?.id || '').trim();
+        if (!GUID_RE.test(id) || !sum || typeof sum !== 'object') continue;
+        const meta = sum.trajectoryMetadata && typeof sum.trajectoryMetadata === 'object' ? sum.trajectoryMetadata : {};
+        const parentId = String(
+          sum.parentConversationId ||
+            meta.parentConversationId ||
+            sum.parentCascadeId ||
+            sum.parentTrajectoryId ||
+            meta.parentCascadeId ||
+            meta.parentTrajectoryId ||
+            ''
+        ).trim();
+        const rootId = String(
+          sum.rootConversationId || meta.rootConversationId || sum.rootCascadeId || meta.rootCascadeId || ''
+        ).trim();
+        const subagent = Boolean(
+          (typeof usageCore?.isSubagentSummary === 'function' && usageCore.isSubagentSummary(sum)) ||
+            parentId ||
+            Number(meta.nestingDepth || sum.nestingDepth || 0) > 0 ||
+            sum.isSubagent ||
+            meta.isSubagent ||
+            meta.subagentName
+        );
+        const stepCount = Math.max(0, Number(sum.stepCount ?? sum.numTotalSteps ?? 0) || 0);
+        const lastModifiedSec = toSec(sum.lastModifiedTime || sum.modifiedAt || sum.updatedAt);
+        const createdSec = toSec(sum.createdTime || sum.createdAt) || lastModifiedSec;
+        const { workspace, workspaces } = extractWs(sum);
+        const item = {
+          id,
+          stepCount,
+          lastModifiedSec,
+          createdSec,
+          subagent,
+          ...(parentId ? { parentId } : {}),
+          ...(rootId ? { rootId } : {}),
+          ...(workspace ? { workspace } : {}),
+          ...(workspaces.length ? { workspaces } : {}),
+          title: String(sum.summary || sum.title || '').slice(0, 140),
+          status: String(sum.status || ''),
+        };
+        list.push(item);
+        byId.set(id.toLowerCase(), item);
+      }
+      const pack = { list, byId };
+      this._backendSummariesCache = pack;
+      this._backendSummariesAt = now;
+      return pack;
+    } catch {
+      return { list: [], byId: new Map() };
+    }
+  }
+
+  async fetchUsageRollupBatch(rawItems, opts = {}) {
     const usageCore = require(path.join(this.rootDir, 'usage-core.js'));
     const client = await this.ensureLsClient();
+    const action = opts?.action || 'fetch-batch';
+    const wantSummaries = action === 'list-summaries' || Boolean(opts?.includeSummaries);
+    const backendPack = await this._fetchBackendTrajectorySummaries(client, usageCore, action === 'list-summaries');
+
+    if (action === 'list-summaries') {
+      return { ok: true, records: [], summaries: backendPack.list };
+    }
+
+    const list = Array.isArray(rawItems) ? rawItems.slice(0, 16) : [];
+    if (list.length === 0) {
+      return wantSummaries ? { ok: true, records: [], summaries: backendPack.list } : { ok: true, records: [] };
+    }
+
     const records = [];
     for (const item of list) {
       const id = String(item?.id || '');
       if (!GUID_RE.test(id)) continue;
-      const stepCount = Math.max(0, Number(item.stepCount || 0));
-      const lastModifiedSec = Math.max(0, Number(item.lastModifiedSec || 0));
-      const createdSec = Math.max(0, Number(item.createdSec || lastModifiedSec || 0));
-      const subagent = Boolean(item.subagent);
+      const backendSum = backendPack.byId.get(id.toLowerCase()) || null;
+      const stepCount = Math.max(0, Number(item.stepCount || backendSum?.stepCount || 0));
+      const lastModifiedSec = Math.max(0, Number(item.lastModifiedSec || backendSum?.lastModifiedSec || 0));
+      const createdSec = Math.max(0, Number(item.createdSec || backendSum?.createdSec || lastModifiedSec || 0));
+      const subagent = Boolean(item.subagent || backendSum?.subagent);
+      const parentId = String(item.parentId || backendSum?.parentId || '').trim();
+      const rootId = String(item.rootId || backendSum?.rootId || '').trim();
+      const workspace = String(item.workspace || backendSum?.workspace || '');
+      const workspaces = Array.isArray(item.workspaces) && item.workspaces.length
+        ? item.workspaces
+        : backendSum?.workspaces || [];
       const gmOffset = Math.max(0, Math.floor(Number(item.gmOffset || 0)));
+      const wsMeta = workspaces.map((uri) => ({ workspaceFolderAbsoluteUri: uri }));
       const summaryStub = {
         stepCount,
         lastModifiedTime: lastModifiedSec > 0 ? { seconds: lastModifiedSec } : undefined,
         createdTime: createdSec > 0 ? { seconds: createdSec } : undefined,
-        trajectoryMetadata: subagent ? { nestingDepth: 1 } : {},
+        ...(parentId ? { parentConversationId: parentId, parentId } : {}),
+        ...(rootId ? { rootConversationId: rootId, rootId } : {}),
+        ...(wsMeta.length ? { workspaces: wsMeta } : {}),
+        trajectoryMetadata: {
+          ...(subagent ? { nestingDepth: 1 } : {}),
+          ...(parentId ? { parentConversationId: parentId } : {}),
+          ...(rootId ? { rootConversationId: rootId } : {}),
+          ...(wsMeta.length ? { workspaces: wsMeta } : {}),
+        },
       };
       try {
         if (gmOffset > 0) {
@@ -528,22 +842,41 @@ export class PrismDaemon {
           }
           if (totalGm !== null && totalGm < gmOffset) {
             // Rewound/reverted conversation: rebuild cleanly from offset 0
-            const fullMeta = await client._fetchMetadataOnly(id);
+            const fullMeta = await this._fetchFullGeneratorMetadata(client, id);
             const fullRec = usageCore.analyzeTrajectoryForUsage(fullMeta, summaryStub, id);
-            records.push({ id, mode: 'full', record: fullRec });
+            if (workspace && fullRec && typeof fullRec === 'object' && !fullRec.workspace) fullRec.workspace = workspace;
+            if (parentId && fullRec && typeof fullRec === 'object' && !fullRec.parentId) fullRec.parentId = parentId;
+            records.push({
+              id,
+              mode: 'full',
+              subagent,
+              ...(parentId ? { parentId } : {}),
+              ...(workspace ? { workspace } : {}),
+              record: fullRec,
+            });
           } else {
             const nextGmCount = totalGm !== null ? Math.max(gmOffset + deltaItems.length, totalGm) : gmOffset + deltaItems.length;
             const deltaSummary = {
               stepCount,
               lastModifiedTime: lastModifiedSec > 0 ? { seconds: lastModifiedSec } : { seconds: Math.floor(Date.now() / 1000) },
               createdTime: lastModifiedSec > 0 ? { seconds: lastModifiedSec } : undefined,
-              trajectoryMetadata: subagent ? { nestingDepth: 1 } : {},
+              ...(parentId ? { parentConversationId: parentId, parentId } : {}),
+              ...(rootId ? { rootConversationId: rootId, rootId } : {}),
+              ...(wsMeta.length ? { workspaces: wsMeta } : {}),
+              trajectoryMetadata: {
+                ...(subagent ? { nestingDepth: 1 } : {}),
+                ...(parentId ? { parentConversationId: parentId } : {}),
+                ...(rootId ? { rootConversationId: rootId } : {}),
+                ...(wsMeta.length ? { workspaces: wsMeta } : {}),
+              },
             };
             const deltaRec = usageCore.analyzeTrajectoryForUsage(
               { numTotalSteps: stepCount, numTotalGeneratorMetadata: nextGmCount, trajectory: { cascadeId: id, steps: [], generatorMetadata: deltaItems } },
               deltaSummary,
               id
             );
+            if (workspace && deltaRec && typeof deltaRec === 'object' && !deltaRec.workspace) deltaRec.workspace = workspace;
+            if (parentId && deltaRec && typeof deltaRec === 'object' && !deltaRec.parentId) deltaRec.parentId = parentId;
             records.push({
               id,
               mode: 'delta',
@@ -551,61 +884,243 @@ export class PrismDaemon {
               stepCount,
               lastModifiedSec,
               subagent,
+              ...(parentId ? { parentId } : {}),
+              ...(workspace ? { workspace } : {}),
               delta: deltaRec,
             });
           }
         } else {
-          const fullMeta = await client._fetchMetadataOnly(id);
+          const fullMeta = await this._fetchFullGeneratorMetadata(client, id);
           const fullRec = usageCore.analyzeTrajectoryForUsage(fullMeta, summaryStub, id);
-          records.push({ id, mode: 'full', record: fullRec });
+          if (workspace && fullRec && typeof fullRec === 'object' && !fullRec.workspace) fullRec.workspace = workspace;
+          if (parentId && fullRec && typeof fullRec === 'object' && !fullRec.parentId) fullRec.parentId = parentId;
+          records.push({
+            id,
+            mode: 'full',
+            subagent,
+            ...(parentId ? { parentId } : {}),
+            ...(workspace ? { workspace } : {}),
+            record: fullRec,
+          });
         }
       } catch (err) {
         records.push({ id, mode: 'error', error: sanitizeSecretText(err?.message || 'fetch failed') });
       }
     }
-    return { ok: true, records };
+    return wantSummaries ? { ok: true, records, summaries: backendPack.list } : { ok: true, records };
   }
 
-  updateConfigSetting(key, value) {
-    if (!this.cdp.validateConfigEntry(key, value)) return false;
+  updateConfigBatch(entriesObj) {
+    if (!entriesObj || typeof entriesObj !== 'object' || Array.isArray(entriesObj)) return false;
+    const validPatch = {};
+    let count = 0;
+    for (const [k, v] of Object.entries(entriesObj)) {
+      if (this.cdp.validateConfigEntry(k, v)) {
+        validPatch[k] = v;
+        count += 1;
+      }
+    }
+    if (count === 0) return false;
     const cfgPath = path.join(this.rootDir, 'config.json');
     const current = this.cdp.readConfig();
-    const next = { ...current, [key]: value };
+    const expandedPatch =
+      typeof this.cdp.reconcileConfigAliases === 'function' ? this.cdp.reconcileConfigAliases(validPatch) : validPatch;
+    const next = { ...current, ...expandedPatch };
+    this._configSeq += 1;
+    this._selfConfigWriteUntil = Date.now() + 650;
     fs.writeFileSync(cfgPath, JSON.stringify(next, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
     return true;
   }
 
+  updateConfigSetting(key, value) {
+    return this.updateConfigBatch({ [key]: value });
+  }
+
+  _runEntryExclusive(entry, fn) {
+    if (!entry) return Promise.resolve();
+    const prev = entry._opChain || Promise.resolve();
+    const next = prev.then(() => fn(), () => fn());
+    entry._opChain = next.catch(() => {});
+    return next;
+  }
+
+  _isTrustedMainFrameBindingCall(entry, executionContextId) {
+    if (!entry) return false;
+    const hasCtxId = typeof executionContextId === 'number';
+    if (hasCtxId && entry.contextFrames && entry.contextFrames.has(executionContextId)) {
+      const meta = entry.contextFrames.get(executionContextId);
+      if (!meta.isDefault) return false;
+      if (meta.type && meta.type !== 'default') return false;
+      if (entry.mainFrameId && meta.frameId && meta.frameId !== entry.mainFrameId) {
+        return false;
+      }
+      return true;
+    }
+    if (entry.hasFrameTree) {
+      if (!hasCtxId) return false;
+      if (entry.contextFrames && entry.contextFrames.size > 0) return false;
+    }
+    return true;
+  }
+
+  async broadcastConfigRefresh() {
+    this._broadcastPending = true;
+    if (this._broadcastRunning) {
+      return new Promise((resolve) => {
+        this._broadcastWaiters.push(resolve);
+      });
+    }
+
+    this._broadcastRunning = true;
+    try {
+      while (this._broadcastPending) {
+        this._broadcastPending = false;
+        const snapSeq = this._configSeq;
+        const activeItems = [...this.sessions.values()].filter((item) => item && !item.session.closed);
+        const perEntryAck = new Map();
+        for (const item of activeItems) {
+          const entryAck = Number.isSafeInteger(item.pendingAckEpoch) && item.pendingAckEpoch > 0 ? item.pendingAckEpoch : 0;
+          item.pendingAckEpoch = 0;
+          perEntryAck.set(item, entryAck);
+        }
+
+        await this.ensureOmniServer().catch(() => null);
+        // Warm-cache rebuild updates `this.injectExpr` bootCfg in < 3ms without re-minifying modules!
+        this.rebuildBundle();
+        const injectSnap = this.injectExpr;
+        const omniSnap = this.omniExpr;
+        const canFastRefresh = typeof this.cdp.buildConfigRefreshExpression === 'function';
+        const baseRefreshExpr = canFastRefresh ? this.cdp.buildConfigRefreshExpression() : null;
+        if (activeItems.length === 0) continue;
+
+        await Promise.allSettled(
+          activeItems.map((entry) =>
+            this._runEntryExclusive(entry, async () => {
+              if (!entry || entry.session.closed) return;
+              const entryAck = perEntryAck.get(entry) || 0;
+              const refreshExpr =
+                canFastRefresh && entryAck > 0
+                  ? this.cdp.buildConfigRefreshExpression(null, { __ackEpoch: entryAck })
+                  : baseRefreshExpr;
+              // Fast live refresh first for immediate UI responsiveness
+              let refreshedFast = false;
+              let skippedStale = false;
+              if (refreshExpr) {
+                const fastRes = await entry.session.evaluate(refreshExpr).catch(() => null);
+                if (fastRes && fastRes.refreshed) {
+                  refreshedFast = true;
+                  skippedStale = Boolean(fastRes.skippedStale);
+                }
+              }
+              if (!refreshedFast && !entry.session.closed) {
+                await entry.session.evaluate(injectSnap).catch(() => {});
+              }
+              if (omniSnap && !skippedStale && !entry.session.closed) {
+                await entry.session.evaluate(omniSnap).catch(() => {});
+              }
+
+              // Coalesce persistent NewDocument script replacement if a newer mutation is already queued!
+              if (this._broadcastPending || this._configSeq !== snapSeq || entry.session.closed) {
+                return;
+              }
+              if (entry.scriptId) {
+                await entry.session
+                  .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId })
+                  .catch(() => {});
+                entry.scriptId = null;
+              }
+              const addRes = await entry.session
+                .send('Page.addScriptToEvaluateOnNewDocument', { source: injectSnap })
+                .catch(() => null);
+              if (addRes && addRes.identifier) {
+                entry.scriptId = addRes.identifier;
+              }
+              if (entry.omniScriptId) {
+                await entry.session
+                  .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId })
+                  .catch(() => {});
+                entry.omniScriptId = null;
+              }
+              if (omniSnap && !entry.session.closed) {
+                const omniAdd = await entry.session
+                  .send('Page.addScriptToEvaluateOnNewDocument', { source: omniSnap })
+                  .catch(() => null);
+                if (omniAdd && omniAdd.identifier) {
+                  entry.omniScriptId = omniAdd.identifier;
+                }
+              }
+            })
+          )
+        );
+      }
+    } finally {
+      this._broadcastRunning = false;
+      const waiters = this._broadcastWaiters.splice(0);
+      for (const resolve of waiters) {
+        try {
+          resolve();
+        } catch {}
+      }
+    }
+  }
+
   async applyToEntry(entry) {
-    if (!this.injectExpr) this.rebuildBundle();
-    if (entry.scriptId) {
-      await entry.session
-        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId })
-        .catch(() => {});
-      entry.scriptId = null;
-    }
-    const addRes = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', {
-      source: this.injectExpr,
+    return this._runEntryExclusive(entry, async () => {
+      if (!entry || entry.session.closed) return null;
+      await this.ensureOmniServer().catch(() => null);
+      if (!this.injectExpr) this.rebuildBundle();
+      else if (this.omniServer && !this.omniExpr && typeof this.cdp.buildOmniClientExpression === 'function') {
+        this.omniExpr = this.cdp.buildOmniClientExpression(this.omniServer.getServerInfo());
+      }
+      if (entry.scriptId) {
+        await entry.session
+          .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId })
+          .catch(() => {});
+        entry.scriptId = null;
+      }
+      const addRes = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', {
+        source: this.injectExpr,
+      });
+      if (addRes && addRes.identifier) {
+        entry.scriptId = addRes.identifier;
+      }
+      const mainRes = await entry.session.evaluate(this.injectExpr);
+
+      if (entry.omniScriptId) {
+        await entry.session
+          .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId })
+          .catch(() => {});
+        entry.omniScriptId = null;
+      }
+      if (this.omniExpr) {
+        const omniAdd = await entry.session
+          .send('Page.addScriptToEvaluateOnNewDocument', { source: this.omniExpr })
+          .catch(() => null);
+        if (omniAdd && omniAdd.identifier) {
+          entry.omniScriptId = omniAdd.identifier;
+        }
+        await entry.session.evaluate(this.omniExpr).catch(() => null);
+      }
+      return mainRes;
     });
-    if (addRes && addRes.identifier) {
-      entry.scriptId = addRes.identifier;
-    }
-    return await entry.session.evaluate(this.injectExpr);
   }
 
   async handleBindingCall(entry, { name, payload, executionContextId }) {
+    if (!this._isTrustedMainFrameBindingCall(entry, executionContextId)) return;
     if (name === this.cdp.SETTING_BINDING || name === this.cdp.LEGACY_SETTING_BINDING) {
-      if (typeof payload !== 'string' || payload.length > 2048) return;
+      if (typeof payload !== 'string' || payload.length > 8192) return;
       try {
         const parsed = JSON.parse(payload);
         if (!parsed || typeof parsed !== 'object') return;
-        const { key, value } = parsed;
-        if (this.updateConfigSetting(key, value)) {
-          this.rebuildBundle();
-          for (const item of this.sessions.values()) {
-            if (item && !item.session.closed) {
-              await this.applyToEntry(item).catch(() => {});
-            }
+        const updated =
+          parsed.action === 'patch-batch' && parsed.entries && typeof parsed.entries === 'object'
+            ? this.updateConfigBatch(parsed.entries)
+            : this.updateConfigSetting(parsed.key, parsed.value);
+        if (updated) {
+          if (entry && Number.isSafeInteger(parsed.clientEpoch) && parsed.clientEpoch > 0) {
+            entry.pendingAckEpoch = parsed.clientEpoch;
           }
+          await this.broadcastConfigRefresh();
         }
       } catch {}
       return;
@@ -695,7 +1210,17 @@ export class PrismDaemon {
         } else if (action === 'save-config') {
           result = svc.saveConfig(input);
         } else if (action === 'get-cache') {
-          result = svc.getWarmCacheSnapshot(400);
+          result = svc.getWarmCacheSnapshot(Number(input.limit) > 0 ? Number(input.limit) : 400);
+        } else if (action === 'cache-stats') {
+          result = svc.getCacheStats();
+        } else if (action === 'clear-cache') {
+          result = svc.clearCache();
+        } else if (action === 'cancel-translate') {
+          result = svc.cancelPending(
+            input.requestId !== undefined || input.key !== undefined
+              ? input
+              : parsed?.requestId ?? parsed?.key ?? input
+          );
         } else if (action === 'fetch-models') {
           result = await svc.fetchModels(input);
         } else if (action === 'test-connection') {
@@ -704,6 +1229,10 @@ export class PrismDaemon {
           result = await svc.translateThought({
             text: input.text || '',
             mode: input.mode || 'ai',
+            priority: Number(input.priority || 0),
+            requestId: input.requestId ? String(input.requestId) : '',
+            force: Boolean(input.force),
+            bypassCache: Boolean(input.bypassCache),
             onPartial: (partialText) => {
               if (!entry || entry.session.closed) return;
               const chunkExpr = `window.__agPrismThoughtOnChunk && window.__agPrismThoughtOnChunk(${reqId}, ${JSON.stringify(partialText)})`;
@@ -740,12 +1269,49 @@ export class PrismDaemon {
       if (reqId === null) return;
       let result;
       try {
-        result = await this.fetchUsageRollupBatch(parsed.items);
+        result = await this.fetchUsageRollupBatch(parsed.items, {
+          action: parsed.action || 'fetch-batch',
+          includeSummaries: Boolean(parsed.includeSummaries),
+        });
       } catch (err) {
         result = { ok: false, error: sanitizeSecretText(err?.message || err), records: [] };
       }
       if (!entry.session.closed) {
         const resolveExpr = `window.__agPrismUsageResolve && window.__agPrismUsageResolve(${reqId}, ${JSON.stringify(result)})`;
+        const evalParams = { expression: resolveExpr, returnByValue: true };
+        if (executionContextId) evalParams.contextId = executionContextId;
+        await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+      }
+      return;
+    }
+
+    if (name === OMNI_BINDING) {
+      if (typeof payload !== 'string' || payload.length > 65536) return;
+      let parsed;
+      try {
+        parsed = JSON.parse(payload);
+      } catch {
+        return;
+      }
+      const reqId = parsed && Number.isSafeInteger(parsed.id) ? parsed.id : null;
+      if (reqId === null) return;
+      const action = typeof parsed.action === 'string' ? parsed.action : '';
+      const mergedParams = {
+        ...parsed,
+        ...(parsed.params && typeof parsed.params === 'object' ? parsed.params : {}),
+        ...(parsed.input && typeof parsed.input === 'object' ? parsed.input : {}),
+        ...(parsed.payload && typeof parsed.payload === 'object' ? parsed.payload : {}),
+      };
+      let result;
+      try {
+        const srv = await this.ensureOmniServer();
+        result = await srv.handleRpcAction(action, mergedParams);
+      } catch (err) {
+        result = { ok: false, error: sanitizeSecretText(err?.message || err) };
+      }
+      if (!entry.session.closed) {
+        const jsonRes = JSON.stringify(result);
+        const resolveExpr = `(() => { const r = ${jsonRes}; const b = window.__agPrismOmniBridge; if (b && typeof b.resolve === 'function') b.resolve(${reqId}, r); if (typeof window.__agPrismOmniResolve === 'function' && (!b || window.__agPrismOmniResolve !== b.resolve)) window.__agPrismOmniResolve(${reqId}, r); })()`;
         const evalParams = { expression: resolveExpr, returnByValue: true };
         if (executionContextId) evalParams.contextId = executionContextId;
         await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
@@ -764,6 +1330,12 @@ export class PrismDaemon {
       title: target.title || target.url || 'Antigravity',
       session,
       scriptId: null,
+      omniScriptId: null,
+      mainFrameId: null,
+      hasFrameTree: false,
+      contextFrames: new Map(),
+      pendingAckEpoch: 0,
+      _opChain: Promise.resolve(),
     };
     this.sessions.set(wsUrl, entry);
 
@@ -774,7 +1346,40 @@ export class PrismDaemon {
     };
 
     try {
+      session.on('Runtime.executionContextCreated', (params) => {
+        const ctx = params?.context;
+        if (!ctx || typeof ctx.id !== 'number') return;
+        const aux = ctx.auxData && typeof ctx.auxData === 'object' ? ctx.auxData : {};
+        entry.contextFrames.set(ctx.id, {
+          frameId: typeof aux.frameId === 'string' ? aux.frameId : '',
+          isDefault: aux.isDefault !== false,
+          type: typeof aux.type === 'string' ? aux.type : 'default',
+        });
+      });
+      session.on('Runtime.executionContextDestroyed', (params) => {
+        if (typeof params?.executionContextId === 'number') {
+          entry.contextFrames.delete(params.executionContextId);
+        }
+      });
+      session.on('Runtime.executionContextsCleared', () => {
+        entry.contextFrames.clear();
+        entry.pendingAckEpoch = 0;
+      });
+      session.on('Page.frameNavigated', (params) => {
+        const frame = params?.frame;
+        if (frame && !frame.parentId && typeof frame.id === 'string' && frame.id) {
+          entry.mainFrameId = frame.id;
+          entry.hasFrameTree = true;
+          entry.pendingAckEpoch = 0;
+        }
+      });
       await session.send('Page.enable');
+      const ft = await session.send('Page.getFrameTree', {}, 2000).catch(() => null);
+      const topFrameId = ft?.frameTree?.frame?.id;
+      if (typeof topFrameId === 'string' && topFrameId) {
+        entry.mainFrameId = topFrameId;
+        entry.hasFrameTree = true;
+      }
       await session.send('Runtime.enable');
       session.on('Runtime.bindingCalled', (params) => {
         void this.handleBindingCall(entry, params || {});
@@ -785,6 +1390,7 @@ export class PrismDaemon {
       await session.send('Runtime.addBinding', { name: REPO_BINDING });
       await session.send('Runtime.addBinding', { name: THOUGHT_BINDING });
       await session.send('Runtime.addBinding', { name: USAGE_BINDING });
+      await session.send('Runtime.addBinding', { name: OMNI_BINDING });
 
       const healOnNav = () => {
         setTimeout(() => {
@@ -801,6 +1407,9 @@ export class PrismDaemon {
       try {
         if (entry.scriptId) {
           await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId });
+        }
+        if (entry.omniScriptId) {
+          await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId });
         }
       } catch {}
       session.close();
@@ -819,15 +1428,20 @@ export class PrismDaemon {
         const api = window.__agPrism;
         const st = api && typeof api.getState === 'function' ? api.getState() : null;
         const telMode = st?.cfg?.telemetryModule || 'auto';
+        const omniMode = st?.cfg?.omniModule || 'on';
         const hasModelBtn = Boolean(document.querySelector('[data-testid="model-selector-trigger"]'));
-        const hasPulseBar = Boolean(document.getElementById('ag-pulse-status-bar'));
+        const hasPulseBar = Boolean(document.querySelector('[data-ag-pulse-bar="true"], #ag-pulse-status-bar'));
         return {
           ready: true,
           prismAttr: root.getAttribute('data-ag-prism') || '',
           hasPrism: Boolean(api),
           hasRepoBridge: Boolean(window.__agPrismRepoBridge),
-          hasThoughtBridge: Boolean(window.__agPrismThoughtBridge),
-          hasUsageBridge: Boolean(window.__agPrismUsageBridge),
+          hasThoughtBridge: Boolean(window.__agPrismThoughtBridge && typeof window.__agPrismThoughtBridge.cacheStats === 'function'),
+          hasUsageBridge: Boolean(window.__agPrismUsageBridge && typeof window.__agPrismUsageBridge.listSummaries === 'function'),
+          hasOmniBridge: Boolean(window.__agPrismOmniBridge && typeof window.__agPrismOmniBridge.call === 'function'),
+          hasOmniServerMeta: Boolean(window.__agPrismOmniServerMeta && window.__agPrismOmniServerMeta.baseUrl && window.__agPrismOmniServerMeta.token),
+          hasOmni: Boolean(window.__agPrismOmni),
+          omniMode,
           codeHash: (api && api.codeHash) || '',
           hasLegacyCss: Boolean(document.getElementById('ag-claude-style-css')),
           needsDashboardSync: Boolean(api && telMode !== 'off' && hasModelBtn && !hasPulseBar),
@@ -837,6 +1451,11 @@ export class PrismDaemon {
         2600
       );
       if (!probe || !probe.ready) return;
+      const hasClientOnDisk = this._hasOmniClientFile();
+      const needsOmniHeal =
+        !probe.hasOmniBridge ||
+        !probe.hasOmniServerMeta ||
+        (hasClientOnDisk && probe.omniMode !== 'off' && !probe.hasOmni);
       if (
         !probe.hasPrism ||
         !probe.hasRepoBridge ||
@@ -846,26 +1465,40 @@ export class PrismDaemon {
         probe.hasLegacyCss ||
         (this.codeHash && probe.codeHash && probe.codeHash !== this.codeHash)
       ) {
+        await this.ensureOmniServer().catch(() => null);
         await entry.session.send('Runtime.addBinding', { name: this.cdp.SETTING_BINDING }, 2600).catch(() => {});
         await entry.session.send('Runtime.addBinding', { name: METRICS_BINDING }, 2600).catch(() => {});
         await entry.session.send('Runtime.addBinding', { name: REPO_BINDING }, 2600).catch(() => {});
         await entry.session.send('Runtime.addBinding', { name: THOUGHT_BINDING }, 2600).catch(() => {});
         await entry.session.send('Runtime.addBinding', { name: USAGE_BINDING }, 2600).catch(() => {});
+        await entry.session.send('Runtime.addBinding', { name: OMNI_BINDING }, 2600).catch(() => {});
         await entry.session.evaluate(this.injectExpr, false, 4500);
+        if (this.omniExpr) {
+          await entry.session.evaluate(this.omniExpr, false, 3500).catch(() => {});
+        }
         this.log(`[↻] Hot-healed window to Obsidian Prism v${this.cdp.PLUGIN_VERSION}: ${entry.title}`);
-      } else if (probe.needsDashboardSync) {
-        await entry.session
-          .evaluate(
-            `(() => {
-              const cfg = window.__agPrism?.getState?.()?.cfg || {};
-              window.__agPrismTelemetry?.sync?.(cfg);
-              window.__agPrism?.sync?.();
-              return true;
-            })()`,
-            false,
-            2200
-          )
-          .catch(() => {});
+      } else {
+        if (needsOmniHeal) {
+          await this.ensureOmniServer().catch(() => null);
+          await entry.session.send('Runtime.addBinding', { name: OMNI_BINDING }, 2600).catch(() => {});
+          if (this.omniExpr) {
+            await entry.session.evaluate(this.omniExpr, false, 3500).catch(() => {});
+          }
+        }
+        if (probe.needsDashboardSync) {
+          await entry.session
+            .evaluate(
+              `(() => {
+                const cfg = window.__agPrism?.getState?.()?.cfg || {};
+                window.__agPrismTelemetry?.sync?.(cfg);
+                window.__agPrism?.sync?.();
+                return true;
+              })()`,
+              false,
+              2200
+            )
+            .catch(() => {});
+        }
       }
     } catch {
       entry.session.close();
@@ -873,24 +1506,99 @@ export class PrismDaemon {
     }
   }
 
-  async detachAll(cleanPageDom = false) {
-    for (const entry of this.sessions.values()) {
-      try {
-        if (entry.scriptId && !entry.session.closed) {
-          await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId }).catch(() => {});
-        }
-        if (cleanPageDom && !entry.session.closed) {
-          await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
-        }
-      } catch {}
-      entry.session.close();
+  closeBrowserDiscovery() {
+    if (this._discoverTimer) {
+      clearTimeout(this._discoverTimer);
+      this._discoverTimer = null;
     }
+    if (this.browserSession) {
+      const bs = this.browserSession;
+      this.browserSession = null;
+      this.browserPort = null;
+      try {
+        bs.close();
+      } catch {}
+    }
+  }
+
+  scheduleImmediateTick(delayMs = 45) {
+    if (!this.running) return;
+    if (this.busy) {
+      this._pendingTick = true;
+      return;
+    }
+    if (this._discoverTimer) clearTimeout(this._discoverTimer);
+    this._discoverTimer = setTimeout(() => {
+      this._discoverTimer = null;
+      if (this.running) void this.tick();
+    }, delayMs);
+    if (this._discoverTimer && typeof this._discoverTimer.unref === 'function') {
+      this._discoverTimer.unref();
+    }
+  }
+
+  async ensureBrowserDiscovery(port) {
+    if (!this.running || !port || typeof this.cdp.getBrowserWsUrl !== 'function') return;
+    if (this.browserSession && !this.browserSession.closed && this.browserPort === port) return;
+    this.closeBrowserDiscovery();
+    try {
+      const browserWs = await this.cdp.getBrowserWsUrl(port);
+      if (!browserWs || !this.running) return;
+      const bSession = await this.cdp.CdpSession.connect(browserWs, 1800);
+      if (!this.running) {
+        bSession.close();
+        return;
+      }
+      this.browserSession = bSession;
+      this.browserPort = port;
+      bSession.onClose = () => {
+        if (this.browserSession === bSession) {
+          this.browserSession = null;
+          this.browserPort = null;
+        }
+      };
+      const onTargetEvent = (params) => {
+        const info = params?.targetInfo;
+        if (!info || info.type !== 'page') return;
+        if (!isEligibleTarget({ ...info, webSocketDebuggerUrl: 'ws://check' })) return;
+        this.scheduleImmediateTick(45);
+      };
+      bSession.on('Target.targetCreated', onTargetEvent);
+      bSession.on('Target.targetInfoChanged', onTargetEvent);
+      await bSession.send('Target.setDiscoverTargets', { discover: true }, 1500).catch(() => {});
+    } catch {}
+  }
+
+  async detachAll(cleanPageDom = false) {
+    this.closeBrowserDiscovery();
+    const entries = [...this.sessions.values()];
+    await Promise.allSettled(
+      entries.map(async (entry) => {
+        try {
+          if (entry.scriptId && !entry.session.closed) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId }).catch(() => {});
+          }
+          if (entry.omniScriptId && !entry.session.closed) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId }).catch(() => {});
+          }
+          if (cleanPageDom && !entry.session.closed) {
+            await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
+          }
+        } catch {}
+        entry.session.close();
+      })
+    );
     this.sessions.clear();
   }
 
   async tick() {
-    if (this.busy || !this.running) return { attached: this.sessions.size };
+    if (!this.running) return { attached: this.sessions.size };
+    if (this.busy) {
+      this._pendingTick = true;
+      return { attached: this.sessions.size };
+    }
     this.busy = true;
+    this._pendingTick = false;
     try {
       if (!this.isCurrentOwner()) {
         await this.stop(false);
@@ -898,7 +1606,7 @@ export class PrismDaemon {
       }
 
       if (!this.enabledCheck()) {
-        if (this.sessions.size > 0) {
+        if (this.sessions.size > 0 || this.browserSession) {
           await this.detachAll(true);
         }
         return { attached: 0, disabled: true };
@@ -911,7 +1619,13 @@ export class PrismDaemon {
       try {
         rawPages = await this.cdp.listPages(port);
       } catch {
+        this.closeBrowserDiscovery();
         return { attached: this.sessions.size, port, unreachable: true };
+      }
+
+      // Subscribe to Browser-level Target.setDiscoverTargets when persistent daemon is running
+      if (this.timer) {
+        void this.ensureBrowserDiscovery(port);
       }
 
       const eligible = rawPages.filter(isEligibleTarget);
@@ -919,6 +1633,15 @@ export class PrismDaemon {
 
       for (const [wsUrl, entry] of this.sessions.entries()) {
         if (!activeUrls.has(wsUrl) || entry.session.closed) {
+          if (!entry.session.closed) {
+            if (entry.scriptId) {
+              await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId }).catch(() => {});
+            }
+            if (entry.omniScriptId) {
+              await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId }).catch(() => {});
+            }
+            await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
+          }
           entry.session.close();
           this.sessions.delete(wsUrl);
         }
@@ -926,26 +1649,38 @@ export class PrismDaemon {
 
       if (!this.injectExpr) this.rebuildBundle();
 
-      for (const target of eligible) {
-        if (!this.sessions.has(target.webSocketDebuggerUrl)) {
-          await this.attachTarget(target).catch(() => {});
-        } else {
-          await this.verifyAndHealEntry(this.sessions.get(target.webSocketDebuggerUrl));
-        }
-      }
+      await Promise.allSettled(
+        eligible.map((target) => {
+          if (!this.sessions.has(target.webSocketDebuggerUrl)) {
+            return this.attachTarget(target);
+          }
+          return this.verifyAndHealEntry(this.sessions.get(target.webSocketDebuggerUrl));
+        })
+      );
 
       return { attached: this.sessions.size, port, pages: eligible.map((p) => p.title || p.url) };
     } finally {
       this.busy = false;
+      if (this._pendingTick && this.running) {
+        this._pendingTick = false;
+        this.scheduleImmediateTick(40);
+      }
     }
   }
 
   claimOwnership() {
     try {
       if (fs.existsSync(this.pidFile)) {
-        const prev = JSON.parse(fs.readFileSync(this.pidFile, 'utf8'));
-        if (prev && prev.pid && prev.pid !== process.pid && isPidAlive(prev.pid)) {
-          try { process.kill(prev.pid); } catch {}
+        const prevPid =
+          typeof this.cdp.readPidFromLockFile === 'function'
+            ? this.cdp.readPidFromLockFile(this.pidFile)
+            : JSON.parse(fs.readFileSync(this.pidFile, 'utf8'))?.pid;
+        if (prevPid && prevPid !== process.pid && isPidAlive(prevPid)) {
+          const safeToKill =
+            typeof this.cdp.isExpectedDaemonProcess === 'function' ? this.cdp.isExpectedDaemonProcess(prevPid) : true;
+          if (safeToKill) {
+            try { process.kill(prevPid); } catch {}
+          }
         }
       }
     } catch {}
@@ -987,22 +1722,32 @@ export class PrismDaemon {
 
     if (watchFiles) {
       let reloadTimer = null;
+      let pendingCodeChange = false;
       try {
         this.fsw = fs.watch(this.rootDir, { recursive: true }, (_, filename) => {
           const base = filename ? path.basename(filename) : '';
-          if (!base || base.startsWith('.') || !/\.(css|js|json)$/i.test(base)) return;
+          if (!base || base.startsWith('.') || !/\.(css|c?js|mjs|json)$/i.test(base)) return;
           if (base === 'daemon.log' || base === 'watch.log' || base === 'repo-meta.json') return;
+          if (base === 'config.json') {
+            // Suppress duplicate rebuild right after SETTING_BINDING already broadcasted config refresh!
+            if (Date.now() < this._selfConfigWriteUntil) return;
+          } else {
+            pendingCodeChange = true;
+          }
           clearTimeout(reloadTimer);
           reloadTimer = setTimeout(async () => {
+            const isCodeChange = pendingCodeChange;
+            pendingCodeChange = false;
             try {
-              this.rebuildBundle();
-              for (const entry of this.sessions.values()) {
-                if (entry && !entry.session.closed) {
-                  await this.applyToEntry(entry).catch(() => {});
-                }
+              if (!isCodeChange) {
+                await this.broadcastConfigRefresh();
+                return;
               }
+              this.rebuildBundle();
+              const activeItems = [...this.sessions.values()].filter((e) => e && !e.session.closed);
+              await Promise.allSettled(activeItems.map((entry) => this.applyToEntry(entry)));
             } catch {}
-          }, 180);
+          }, pendingCodeChange ? 180 : 120);
         });
         if (this.fsw && typeof this.fsw.unref === 'function') this.fsw.unref();
       } catch {}
@@ -1025,6 +1770,23 @@ export class PrismDaemon {
       this.fsw = null;
     }
     await this.detachAll(cleanPageDom);
+    for (const svc of [this._lazyUsage, this._lazyStore, this._lazyThoughtService]) {
+      if (!svc) continue;
+      try {
+        if (typeof svc.dispose === 'function') await svc.dispose();
+        else if (typeof svc.close === 'function') await svc.close();
+        else if (typeof svc.stop === 'function') await svc.stop();
+      } catch {}
+    }
+    this._lazyUsage = null;
+    this._lazyStore = null;
+    this._lazyThoughtService = null;
+    if (this.omniServer) {
+      const srv = this.omniServer;
+      this.omniServer = null;
+      this._omniServerPromise = null;
+      await srv.stop().catch(() => {});
+    }
     this.releaseOwnership();
   }
 }
@@ -1067,6 +1829,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
           console.log(JSON.stringify({ ok: true, ...res }, null, 2));
         }
         for (const e of daemon.sessions.values()) e.session.close();
+        if (daemon.omniServer) await daemon.omniServer.stop().catch(() => {});
         process.exit(0);
       })
       .catch((err) => {

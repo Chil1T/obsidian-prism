@@ -85,6 +85,13 @@ function createMockCdpServer() {
         lastRemovedExpr = expr;
         prismMounted = false;
         result = { result: { type: 'object', value: { removed: 3 } } };
+      } else if (expr.includes('const serverMeta = window.__agPrismOmniServerMeta')) {
+        result = {
+          result: {
+            type: 'object',
+            value: { ok: true, status: 'mounted' },
+          },
+        };
       } else {
         lastInjectedExpr = expr;
         prismMounted = true;
@@ -111,6 +118,20 @@ function createMockCdpServer() {
             title: 'Antigravity',
             url: 'https://127.0.0.1:9999/',
             webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/page/PAGE_1`,
+          },
+          {
+            id: 'USER_PREVIEW_1',
+            type: 'page',
+            title: 'AI Rap Video Generator',
+            url: 'http://127.0.0.1:3115/',
+            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/page/USER_PREVIEW_1`,
+          },
+          {
+            id: 'EXT_WEB_1',
+            type: 'page',
+            title: 'Antigravity Spoofed External',
+            url: 'https://example.com/',
+            webSocketDebuggerUrl: `ws://127.0.0.1:${addr.port}/devtools/page/EXT_WEB_1`,
           },
           {
             id: 'DEVTOOLS_1',
@@ -273,15 +294,32 @@ test('installer manifest validators match inject.js, cdp.js, and config.example.
   assert.equal(exampleCfg.motionLevel, 'ultra');
   assert.equal(exampleCfg.telemetryModule, 'auto');
   assert.equal(exampleCfg.effortSliderModule, 'auto');
+
+  // Wave 2: 6 new settings + host-workbench-enhancer.js registration parity
+  assert.deepEqual(VALIDATORS.accentTone, ['follow', 'cobalt', 'iris', 'amber', 'mono']);
+  assert.deepEqual(VALIDATORS.cornerStyle, ['sharp', 'balanced', 'soft']);
+  assert.deepEqual(VALIDATORS.codeFont, ['default', 'jetbrains', 'cascadia', 'sfmono']);
+  assert.equal(VALIDATORS.codeLigatures, 'boolean');
+  assert.deepEqual(VALIDATORS.ambientIntensity, ['0', '35', '70', '100']);
+  assert.deepEqual(VALIDATORS.thoughtView, ['immersive', 'bilingual']);
+  assert.equal(exampleCfg.accentTone, 'follow');
+  assert.equal(exampleCfg.cornerStyle, 'balanced');
+  assert.equal(exampleCfg.codeFont, 'default');
+  assert.equal(exampleCfg.codeLigatures, false);
+  assert.equal(exampleCfg.ambientIntensity, '100');
+  assert.equal(exampleCfg.thoughtView, 'immersive');
+  assert.ok(cdp.RUNTIME_PARTS.includes('host-workbench-enhancer.js'));
+  assert.ok(cdp.SYNC_ROOT_FILES.includes('host-workbench-enhancer.js'));
 });
 
 test(
-  'installer.exe builds cleanly and executes full install, CDP injection, setting sync, upgrade, and uninstall lifecycle',
+  'installer.exe builds cleanly and executes full install, native Sidecar deployment, CDP injection, patch-batch sync, polite daemon yield, upgrade, and uninstall lifecycle',
   { skip: process.platform !== 'win32' ? 'Windows-only installer.exe E2E test' : false },
   async () => {
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-e2e-'));
     const installerExe = path.join(workDir, 'installer.exe');
     const installDir = path.join(workDir, 'installed');
+    const nativePluginDir = path.join(workDir, 'plugins', 'obsidian-prism');
     const outInstall = path.join(workDir, 'install.json');
     const outUpgrade = path.join(workDir, 'upgrade.json');
     const outUninstall = path.join(workDir, 'uninstall.json');
@@ -298,14 +336,15 @@ test(
       // 1. Check --status CLI
       await runExe(
         installerExe,
-        ['--status', '--install-dir', installDir, '--cdp-port', String(port), '--out', outStatus],
+        ['--status', '--install-dir', installDir, '--plugin-dir', nativePluginDir, '--cdp-port', String(port), '--out', outStatus],
         10000
       );
       const st = JSON.parse(fs.readFileSync(outStatus, 'utf8'));
       assert.equal(st.installed, false);
+      assert.equal(st.nativePluginInstalled, false);
       assert.equal(st.cdpPort, port);
 
-      // 2. Run --silent install against mock CDP server
+      // 2. Run --silent install against mock CDP server with isolated --plugin-dir
       await runExe(
         installerExe,
         [
@@ -314,6 +353,8 @@ test(
           '--no-kill-legacy',
           '--install-dir',
           installDir,
+          '--plugin-dir',
+          nativePluginDir,
           '--cdp-port',
           String(port),
           '--out',
@@ -324,14 +365,25 @@ test(
 
       const installResult = JSON.parse(fs.readFileSync(outInstall, 'utf8'));
       assert.equal(installResult.ok, true);
+      assert.equal(installResult.nativePluginDeployed, true);
       assert.equal(installResult.preservedExistingConfig, false);
       assert.deepEqual(installResult.injectedPages, ['Antigravity']);
       assert.ok(fs.existsSync(path.join(installDir, 'obsidian-prism-watcher.exe')));
       assert.ok(fs.existsSync(path.join(installDir, 'obsidian-prism-installer.exe')));
       assert.ok(fs.existsSync(path.join(installDir, 'manifest.json')));
+      assert.ok(fs.existsSync(path.join(installDir, 'host-workbench-enhancer.js')));
       assert.ok(fs.existsSync(path.join(installDir, 'vendor', 'pulse-dashboard', 'inline-fallback.js')));
       assert.ok(fs.existsSync(path.join(installDir, 'vendor', 'effort-slider', 'slider-coexist.js')));
       assert.ok(fs.existsSync(path.join(installDir, '.watch.pid')));
+
+      // Verify full 5-channel native Sidecar plugin directory deployed cleanly
+      assert.ok(fs.existsSync(path.join(nativePluginDir, 'plugin.json')));
+      assert.ok(fs.existsSync(path.join(nativePluginDir, 'sidecars', 'daemon', 'sidecar.json')));
+      assert.ok(fs.existsSync(path.join(nativePluginDir, 'sidecars', 'daemon', 'main.mjs')));
+      assert.ok(fs.existsSync(path.join(nativePluginDir, 'vendor', 'thought-translator', 'translator-service.mjs')));
+      assert.ok(fs.existsSync(path.join(nativePluginDir, 'vendor', 'pulse-dashboard', 'sidecars', 'panel', 'store.mjs')));
+      assert.ok(fs.existsSync(path.join(nativePluginDir, 'host-workbench-enhancer.js')));
+      assert.ok(fs.existsSync(path.join(nativePluginDir, 'config.json')));
 
       const activeCfgPath = path.join(ROOT_DIR, 'config.example.json');
       const expectedCfg = fs.readFileSync(activeCfgPath, 'utf8');
@@ -375,19 +427,43 @@ test(
       assert.equal(onceResult.ok, true);
       assert.deepEqual(onceResult.pages, ['Antigravity']);
 
-      // 3. Test Runtime.bindingCalled -> config.json update & hot-reload
+      // 3. Test Runtime.bindingCalled (single + patch-batch) -> config.json update & hot-reload
       const beforeCallCount = mockCdp.getCalls().length;
       mockCdp.emitBindingCalled(cdp.SETTING_BINDING, { key: 'palette', value: 'hacker-invalid' });
       mockCdp.emitBindingCalled(cdp.SETTING_BINDING, { key: 'lightPreset', value: 'invalid-preset' });
       mockCdp.emitBindingCalled(cdp.SETTING_BINDING, { key: 'lightPreset', value: 'alabaster' });
       mockCdp.emitBindingCalled(cdp.SETTING_BINDING, { key: 'palette', value: 'warm' });
+      mockCdp.emitBindingCalled(cdp.SETTING_BINDING, {
+        action: 'patch-batch',
+        entries: {
+          accentTone: 'iris',
+          cornerStyle: 'soft',
+          ambientIntensity: '70',
+          thoughtView: 'bilingual',
+          codeLigatures: true,
+        },
+      });
 
       const updatedCfg = await waitFor(() => {
         const parsed = JSON.parse(fs.readFileSync(path.join(installDir, 'config.json'), 'utf8'));
-        return parsed.palette === 'warm' && parsed.lightPreset === 'alabaster' ? parsed : null;
+        return parsed.palette === 'warm' &&
+          parsed.lightPreset === 'alabaster' &&
+          parsed.accentTone === 'iris' &&
+          parsed.cornerStyle === 'soft' &&
+          parsed.ambientIntensity === '70' &&
+          parsed.thoughtView === 'bilingual' &&
+          parsed.codeLigatures === true
+          ? parsed
+          : null;
       });
       assert.equal(updatedCfg.palette, 'warm');
       assert.equal(updatedCfg.lightPreset, 'alabaster');
+      assert.equal(updatedCfg.accentTone, 'iris');
+      assert.equal(updatedCfg.ambientIntensity, '70');
+
+      const syncedPluginCfg = JSON.parse(fs.readFileSync(path.join(nativePluginDir, 'config.json'), 'utf8'));
+      assert.equal(syncedPluginCfg.accentTone, 'iris');
+      assert.equal(syncedPluginCfg.thoughtView, 'bilingual');
 
       // Confirm hot-reload fired on watcher
       await waitFor(() => {
@@ -395,7 +471,21 @@ test(
         return newer.some((c) => c.method === 'Page.removeScriptToEvaluateOnNewDocument') ? true : null;
       });
 
-      // 4. Test re-install / upgrade preserves existing user config.json
+      // 3b. Test Watcher polite yield when native Sidecar daemon (.daemon.pid) is alive & auto-resume on exit
+      const daemonPidPath = path.join(nativePluginDir, '.daemon.pid');
+      const watchLogPath = path.join(installDir, 'watch.log');
+      fs.writeFileSync(daemonPidPath, JSON.stringify({ pid: process.pid }), 'utf8');
+      await waitFor(() => {
+        const logText = fs.existsSync(watchLogPath) ? fs.readFileSync(watchLogPath, 'utf8') : '';
+        return logText.includes('检测到原生 Sidecar Daemon 运行中') ? true : null;
+      }, 6000, 120);
+      fs.unlinkSync(daemonPidPath);
+      await waitFor(() => {
+        const logText = fs.existsSync(watchLogPath) ? fs.readFileSync(watchLogPath, 'utf8') : '';
+        return logText.includes('原生 Sidecar Daemon 已离线') ? true : null;
+      }, 6000, 120);
+
+      // 4. Test re-install / upgrade preserves existing user config.json across both dirs
       await runExe(
         installerExe,
         [
@@ -404,6 +494,8 @@ test(
           '--no-kill-legacy',
           '--install-dir',
           installDir,
+          '--plugin-dir',
+          nativePluginDir,
           '--cdp-port',
           String(port),
           '--out',
@@ -417,8 +509,9 @@ test(
       const cfgAfterUpgrade = JSON.parse(fs.readFileSync(path.join(installDir, 'config.json'), 'utf8'));
       assert.equal(cfgAfterUpgrade.palette, 'warm');
       assert.equal(cfgAfterUpgrade.lightPreset, 'alabaster');
+      assert.equal(cfgAfterUpgrade.accentTone, 'iris');
 
-      // 5. Test --uninstall from installed copy inside installDir (exercises self-delete & CDP cleanup)
+      // 5. Test --uninstall from installed copy inside installDir (exercises self-delete, plugin cleanup & CDP cleanup)
       const installedSelf = path.join(installDir, 'obsidian-prism-installer.exe');
       await runExe(
         installedSelf,
@@ -428,6 +521,8 @@ test(
           '--no-autostart',
           '--install-dir',
           installDir,
+          '--plugin-dir',
+          nativePluginDir,
           '--cdp-port',
           String(port),
           '--out',
@@ -441,6 +536,7 @@ test(
       assert.equal(uninstallResult.selfDeleteScheduled, true);
       assert.deepEqual(uninstallResult.injectedPages, ['Antigravity']);
       assert.equal(mockCdp.getLastRemovedExpr(), cdp.REMOVE_EXPRESSION);
+      assert.equal(fs.existsSync(nativePluginDir), false);
 
       await waitFor(() => (!fs.existsSync(installDir) ? true : null), 8000, 150);
       assert.equal(fs.existsSync(installDir), false);

@@ -50,49 +50,61 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
-      - name: Create or Update GitHub Release
+      - name: Generate release notes from CHANGELOG.md
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+          REPO_SLUG: ${{ github.repository }}
         run: |
-          cat <<'EOF' > release-notes.md
-          ## Obsidian Prism ${GITHUB_REF_NAME}
+          VERSION="${TAG_NAME#v}"
+          SECTION_BODY="$(awk -v ver="${VERSION}" '
+            index($0, "## [" ver "]") == 1 { found=1; next }
+            found && index($0, "## [") == 1 { exit }
+            found { print }
+          ' CHANGELOG.md)"
 
-          Optical UI, 300Hz GPU-accelerated motion engine, 5-pet interactive physics stage, unified Thought Translator & Polisher, and real-time telemetry suite for Google Antigravity IDE.
-
-          ### Highlights / 核心亮点
-          - **4-Theme Optical Matrix (四重光学主题矩阵)** — Obsidian Night, Warm Charcoal, Daylight Crystal, and Warm Alabaster with zero-reflow GPU compositor styling.
-          - **High-Refresh GPU Optics (`60` / `120` / `180` / `Native VSync` up to 300Hz+)** — WebGL2 fluid ripples with empty-pixel fragment early-out, Canvas2D cursor-reactive prismatic input rim, and 4-state conversation horizon aura.
-          - **Zero-Freeze Telemetry & Usage Rollup (零阻塞遥测与增量聚合)** — Background Sidecar incremental `GetCascadeTrajectoryGeneratorMetadata` decoding (`0ms` renderer block even on 5,000+ step trajectories), physical 512K borosilicate water vial (`0fps` idle sleep), and seamless coexistence with standalone Pulse / Effort Slider plugins.
-          - **Smooth Streaming Thought Translator & Polisher (丝滑流式思考转译与润色)** — Zero-attribute-thrash `requestAnimationFrame` streaming updates, OpenAI-compatible multi-profile AI polishing, machine translation fallback, and one-click raw toggle.
-          - **5-Pet Interactive Physics Stage (五宠刚体物理与叠叠乐图腾塔)** — Rigid-body separation, leapfrog/perch encounters, 5-tier totem stacking, and 5-language UI (`zh-CN`, `zh-TW`, `yue`, `en`, `ja`).
-
+          {
+            printf '## Obsidian Prism %s\n\n' "${TAG_NAME}"
+            if [ -n "${SECTION_BODY}" ]; then
+              printf '%s\n\n' "${SECTION_BODY}"
+            else
+              printf 'Release %s of Obsidian Prism. See CHANGELOG.md for details.\n\n' "${TAG_NAME}"
+            fi
+            cat <<'EOF'
           ### Standalone Installers / 独立安装包
           - **Windows (`x64`)**: `obsidian-prism-installer.exe`
           - **macOS (`Universal: Apple Silicon + Intel`)**: `Obsidian-Prism-macOS-universal.dmg`
-
-          **Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/commits/${GITHUB_REF_NAME}
           EOF
-          sed -i "s|\${GITHUB_REF_NAME}|${GITHUB_REF_NAME}|g; s|\${GITHUB_REPOSITORY}|${GITHUB_REPOSITORY}|g" release-notes.md
-          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" \
+            printf '\n**Full Changelog**: [CHANGELOG.md](https://github.com/%s/blob/%s/CHANGELOG.md) · [Commits (%s)](https://github.com/%s/commits/%s)\n' \
+              "${REPO_SLUG}" "${TAG_NAME}" "${TAG_NAME}" "${REPO_SLUG}" "${TAG_NAME}"
+          } > release-notes.md
+      - name: Create or Update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+          REPO_SLUG: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          if gh release view "${TAG_NAME}" --repo "${REPO_SLUG}" >/dev/null 2>&1; then
+            gh release upload "${TAG_NAME}" \
               artifacts/windows-installer/* \
               artifacts/macos-dmg/* \
               --clobber \
-              --repo "${GITHUB_REPOSITORY}"
-            gh release edit "${GITHUB_REF_NAME}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --target "${GITHUB_SHA}" \
-              --title "Obsidian Prism ${GITHUB_REF_NAME}" \
+              --repo "${REPO_SLUG}"
+            gh release edit "${TAG_NAME}" \
+              --repo "${REPO_SLUG}" \
+              --target "${COMMIT_SHA}" \
+              --title "Obsidian Prism ${TAG_NAME}" \
               --notes-file release-notes.md
           else
-            gh release create "${GITHUB_REF_NAME}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --target "${GITHUB_SHA}" \
+            gh release create "${TAG_NAME}" \
+              --repo "${REPO_SLUG}" \
+              --target "${COMMIT_SHA}" \
               artifacts/windows-installer/* \
               artifacts/macos-dmg/* \
-              --title "Obsidian Prism ${GITHUB_REF_NAME}" \
+              --title "Obsidian Prism ${TAG_NAME}" \
               --notes-file release-notes.md
           fi

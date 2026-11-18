@@ -12,6 +12,7 @@ final class InstallerOptions {
     var noAutostart = false
     var noKillLegacy = false
     var installDir: String?
+    var pluginDir: String?
     var cdpPort: Int?
     var outFile: String?
 }
@@ -28,6 +29,8 @@ final class OperationResult {
     var headline = ""
     var detail = ""
     var installDir = ""
+    var pluginDir = ""
+    var nativePluginDeployed = false
     var antigravityApp: String?
     var antigravityVersion: String?
     var cdpPort: Int?
@@ -45,6 +48,52 @@ enum InstallerCore {
     static func getDefaultInstallDir() -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return (home as NSString).appendingPathComponent("Library/Application Support/obsidian-prism")
+    }
+
+    static func resolveNativePluginDir(opts: InstallerOptions, resolvedInstallDir: String) -> String {
+        if let explicitPlugin = opts.pluginDir, !explicitPlugin.isEmpty {
+            return URL(fileURLWithPath: explicitPlugin).standardizedFileURL.path
+        }
+        if let envOverride = ProcessInfo.processInfo.environment["AG_PRISM_PLUGIN_DIR"], !envOverride.isEmpty {
+            return CdpHelper.getDefaultNativePluginDir()
+        }
+        if opts.installDir == nil || opts.installDir?.isEmpty == true {
+            return CdpHelper.getDefaultNativePluginDir()
+        }
+        let parentDir = (resolvedInstallDir as NSString).deletingLastPathComponent
+        let baseName = (resolvedInstallDir as NSString).lastPathComponent
+        return (parentDir as NSString).appendingPathComponent("\(baseName)-native-plugin")
+    }
+
+    static func resolveNativePluginSourceDir(payloadDir: String) -> String? {
+        let fm = FileManager.default
+        let nested = (payloadDir as NSString).appendingPathComponent("native-plugin")
+        if fm.fileExists(atPath: (nested as NSString).appendingPathComponent("plugin.json")) {
+            return nested
+        }
+        let resourcesDir = (payloadDir as NSString).deletingLastPathComponent
+        let sibling = (resourcesDir as NSString).appendingPathComponent("native-plugin")
+        if fm.fileExists(atPath: (sibling as NSString).appendingPathComponent("plugin.json")) {
+            return sibling
+        }
+        let appBundleDir = ((resourcesDir as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent
+        let repoParent = (appBundleDir as NSString).deletingLastPathComponent
+        if fm.fileExists(atPath: (repoParent as NSString).appendingPathComponent("plugin.json")) &&
+           fm.fileExists(atPath: (repoParent as NSString).appendingPathComponent("sidecars/daemon/main.mjs")) {
+            return repoParent
+        }
+        return nil
+    }
+
+    static func stopNativeDaemonInDir(_ pluginDir: String, log: ((String) -> Void)?) {
+        guard !pluginDir.isEmpty, FileManager.default.fileExists(atPath: pluginDir) else { return }
+        if let pid = CdpHelper.readNativeDaemonPid(pluginDir: pluginDir), pid > 0, pid != getpid() {
+            if CdpHelper.isExpectedDaemonProcess(pid: pid) && terminatePid(pid) {
+                log?("已停止原生 Sidecar Daemon (PID \(pid))")
+            }
+        }
+        let pidFile = (pluginDir as NSString).appendingPathComponent(".daemon.pid")
+        try? FileManager.default.removeItem(atPath: pidFile)
     }
 
     static func getLaunchAgentPlistPath() -> String {
@@ -195,7 +244,7 @@ enum InstallerCore {
         if let pidStr = try? String(contentsOfFile: pidFile, encoding: .utf8),
            let pid = Int32(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)),
            pid > 0 {
-            if terminatePid(pid) {
+            if CdpHelper.isExpectedDaemonProcess(pid: pid) && terminatePid(pid) {
                 log?("已停止运行中的守护进程 (PID \(pid))")
             }
             try? fm.removeItem(atPath: pidFile)
@@ -243,13 +292,17 @@ enum InstallerCore {
             .replacingOccurrences(of: "'", with: "&apos;")
     }
 
-    static func registerLaunchAgent(installDir: String, cdpPort: Int?) throws {
+    static func registerLaunchAgent(installDir: String, pluginDir: String, cdpPort: Int?) throws {
         let plistPath = getLaunchAgentPlistPath()
         let launchAgentsDir = (plistPath as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(atPath: launchAgentsDir, withIntermediateDirectories: true, attributes: nil)
 
         let watcherExe = (installDir as NSString).appendingPathComponent(watcherExeName)
         var args = [watcherExe, "--watch", "--dir", installDir]
+        if !pluginDir.isEmpty {
+            args.append("--plugin-dir")
+            args.append(pluginDir)
+        }
         if let port = cdpPort, port > 0 {
             args.append("--cdp-port")
             args.append(String(port))
@@ -274,7 +327,7 @@ enum InstallerCore {
           <key>RunAtLoad</key>
           <true/>
           <key>KeepAlive</key>
-          <false/>
+          <true/>
           <key>StandardOutPath</key>
           <string>\(xmlEscape(outLog))</string>
           <key>StandardErrorPath</key>
@@ -292,9 +345,13 @@ enum InstallerCore {
         }
     }
 
-    private static func spawnWatcherDirectly(installDir: String, cdpPort: Int?) throws {
+    private static func spawnWatcherDirectly(installDir: String, pluginDir: String, cdpPort: Int?) throws {
         let watcherExe = (installDir as NSString).appendingPathComponent(watcherExeName)
         var args = ["--watch", "--dir", installDir]
+        if !pluginDir.isEmpty {
+            args.append("--plugin-dir")
+            args.append(pluginDir)
+        }
         if let port = cdpPort, port > 0 {
             args.append("--cdp-port")
             args.append(String(port))
@@ -309,12 +366,39 @@ enum InstallerCore {
         try proc.run()
     }
 
+    private static func copyNativePluginAssets(from srcRoot: String, to pluginDir: String, preserveConfig: Bool) {
+        let fm = FileManager.default
+        try? fm.createDirectory(atPath: pluginDir, withIntermediateDirectories: true, attributes: nil)
+        guard let entries = try? fm.contentsOfDirectory(atPath: srcRoot) else { return }
+        let skipNames: Set<String> = [
+            ".git", ".DS_Store", "__pycache__", ".daemon.pid", ".watch.pid", ".watch.lock",
+            "node_modules", "installer", "scripts", "test", "tools",
+            "Obsidian Prism.app", "Obsidian-Prism-macOS-universal.dmg", "installer.exe",
+        ]
+        for name in entries {
+            if skipNames.contains(name) || name.hasSuffix(".log") || name.hasSuffix(".tmp") { continue }
+            let src = (srcRoot as NSString).appendingPathComponent(name)
+            let dest = (pluginDir as NSString).appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: src, isDirectory: &isDir) else { continue }
+            if !isDir.boolValue && name.caseInsensitiveCompare("config.json") == .orderedSame && preserveConfig && fm.fileExists(atPath: dest) {
+                continue
+            }
+            if fm.fileExists(atPath: dest) {
+                try? fm.removeItem(atPath: dest)
+            }
+            try? fm.copyItem(atPath: src, toPath: dest)
+        }
+    }
+
     static func runInstall(opts: InstallerOptions, progress: ((Int, String) -> Void)?) throws -> OperationResult {
         let result = OperationResult()
         result.mode = "install"
         let rawDir = (opts.installDir?.isEmpty == false) ? opts.installDir! : getDefaultInstallDir()
         let installDir = URL(fileURLWithPath: rawDir).standardizedFileURL.path
+        let pluginDir = resolveNativePluginDir(opts: opts, resolvedInstallDir: installDir)
         result.installDir = installDir
+        result.pluginDir = pluginDir
 
         let report: (Int, String) -> Void = { pct, msg in
             progress?(pct, msg)
@@ -335,13 +419,16 @@ enum InstallerCore {
         stopWatcherInDir(installDir, noAutostart: opts.noAutostart) { msg in
             report(32, msg)
         }
+        stopNativeDaemonInDir(pluginDir) { msg in
+            report(34, msg)
+        }
         if !opts.noKillLegacy {
             stopLegacyNodeWatchers { msg in
                 report(35, msg)
             }
         }
 
-        report(45, "正在部署独立运行环境与插件资源至: \(installDir)")
+        report(45, "正在部署原生 Sidecar 插件与独立守护资源...")
         let fm = FileManager.default
         try fm.createDirectory(atPath: installDir, withIntermediateDirectories: true, attributes: nil)
 
@@ -352,10 +439,19 @@ enum InstallerCore {
             throw CdpError("安装包内置守护程序 \(watcherExeName) 缺失")
         }
 
+        let installCfgPath = (installDir as NSString).appendingPathComponent("config.json")
+        let pluginCfgPath = !pluginDir.isEmpty ? (pluginDir as NSString).appendingPathComponent("config.json") : ""
+        var hadInstallCfg = fm.fileExists(atPath: installCfgPath)
+        let hadPluginCfg = !pluginCfgPath.isEmpty && fm.fileExists(atPath: pluginCfgPath)
+        if !hadInstallCfg && hadPluginCfg {
+            try? fm.copyItem(atPath: pluginCfgPath, toPath: installCfgPath)
+            hadInstallCfg = fm.fileExists(atPath: installCfgPath)
+        }
+
         var preservedConfig = false
         let payloadEntries = try fm.contentsOfDirectory(atPath: payloadDir)
         for name in payloadEntries {
-            if name.hasPrefix(".") { continue }
+            if name.hasPrefix(".") || name == "native-plugin" { continue }
             let src = (payloadDir as NSString).appendingPathComponent(name)
             let dest = (installDir as NSString).appendingPathComponent(name)
             var isDir: ObjCBool = false
@@ -370,6 +466,23 @@ enum InstallerCore {
             }
             try fm.copyItem(atPath: src, toPath: dest)
         }
+
+        if !pluginDir.isEmpty {
+            if let nativeSrc = resolveNativePluginSourceDir(payloadDir: payloadDir) {
+                copyNativePluginAssets(from: nativeSrc, to: pluginDir, preserveConfig: true)
+            } else {
+                copyNativePluginAssets(from: payloadDir, to: pluginDir, preserveConfig: true)
+            }
+            if fm.fileExists(atPath: installCfgPath) && !pluginCfgPath.isEmpty {
+                if hadInstallCfg || !fm.fileExists(atPath: pluginCfgPath) {
+                    if fm.fileExists(atPath: pluginCfgPath) {
+                        try? fm.removeItem(atPath: pluginCfgPath)
+                    }
+                    try? fm.copyItem(atPath: installCfgPath, toPath: pluginCfgPath)
+                }
+            }
+        }
+        result.nativePluginDeployed = !pluginDir.isEmpty && fm.fileExists(atPath: (pluginDir as NSString).appendingPathComponent("plugin.json"))
 
         let watcherDest = (installDir as NSString).appendingPathComponent(watcherExeName)
         if fm.fileExists(atPath: watcherDest) {
@@ -389,29 +502,29 @@ enum InstallerCore {
         }
 
         result.preservedExistingConfig = preservedConfig
-        report(62, preservedConfig ? "已保留本机现有 config.json 用户配置" : "已写入内置默认配置 config.json")
+        report(62, preservedConfig ? "已保留本机现有 config.json 用户配置并同步部署原生 Sidecar 插件" : "已部署原生 Sidecar 插件并写入默认配置 config.json")
 
         let manifest = try PluginManifest.load(baseDir: installDir)
         let activeCfg = CdpHelper.readConfig(baseDir: installDir, manifest: manifest)
         let lang = activeCfg["language"]?.stringValue ?? "zh-CN"
         let palette = activeCfg["palette"]?.stringValue ?? "obsidian"
-        let ringMode = activeCfg["ringMode"]?.stringValue ?? "context"
-        let effortStyle = activeCfg["effortSliderStyle"]?.stringValue ?? "claude"
-        result.configSummary = "语言=\(lang) | 配色=\(palette) | 圆环=\(ringMode) | 思考滑块=\(effortStyle)"
+        let motion = activeCfg["motionLevel"]?.stringValue ?? "standard"
+        let omni = activeCfg["omniModule"]?.stringValue ?? "on"
+        result.configSummary = "语言=\(lang) | 配色=\(palette) | 动效=\(motion) | Omni=\(omni)"
 
         if !opts.noAutostart {
             report(72, "正在配置 macOS LaunchAgent 登录自启...")
-            try registerLaunchAgent(installDir: installDir, cdpPort: opts.cdpPort)
+            try registerLaunchAgent(installDir: installDir, pluginDir: pluginDir, cdpPort: opts.cdpPort)
             Thread.sleep(forTimeInterval: 0.25)
             let pidFile = (installDir as NSString).appendingPathComponent(".watch.pid")
             if !fm.fileExists(atPath: pidFile) {
                 report(82, "正在启动后台静默守护进程...")
-                try spawnWatcherDirectly(installDir: installDir, cdpPort: opts.cdpPort)
+                try spawnWatcherDirectly(installDir: installDir, pluginDir: pluginDir, cdpPort: opts.cdpPort)
             }
         } else {
             report(72, "已按参数跳过 LaunchAgent 登录自启注册")
             report(82, "正在启动后台静默守护进程...")
-            try spawnWatcherDirectly(installDir: installDir, cdpPort: opts.cdpPort)
+            try spawnWatcherDirectly(installDir: installDir, pluginDir: pluginDir, cdpPort: opts.cdpPort)
         }
 
         report(90, "正在检查 Antigravity Desktop 实时注入状态...")
@@ -424,7 +537,8 @@ enum InstallerCore {
                 if let pages = try? CdpHelper.listPages(port: port) {
                     cdpReachable = true
                     let logContent = (try? String(contentsOfFile: watchLogPath, encoding: .utf8)) ?? ""
-                    let watcherInjected = logContent.contains("[✓] 已注入 obsidian-prism:")
+                    let watcherInjected = logContent.contains("[✓] 已注入 obsidian-prism:") ||
+                        (!pluginDir.isEmpty && CdpHelper.isNativeDaemonAlive(pluginDir: pluginDir))
                     if !pages.isEmpty && watcherInjected {
                         var allReady = true
                         var titles: [String] = []
@@ -459,16 +573,16 @@ enum InstallerCore {
         result.ok = true
         if !result.injectedPages.isEmpty {
             result.headline = "修补成功！已实时注入 \(result.injectedPages.count) 个 Antigravity 窗口"
-            result.detail = "后台无损守护已运行并已配置登录自启。后续打开新窗口或更新 Antigravity 后也会自动注入。"
+            result.detail = "已部署原生五通道 Sidecar 插件与后台热备守护，并配置登录自启。后续打开新窗口或更新 Antigravity 后也会自动生效。"
             for title in result.injectedPages {
                 report(98, "已注入窗口: \(title)")
             }
         } else if cdpReachable, let port = port {
-            result.headline = "已安装并启动守护！等待 Antigravity 窗口就绪"
-            result.detail = "已配置登录自启并启动后台守护。检测到调试端口 \(port)，窗口就绪后将自动完成注入。"
+            result.headline = "已安装原生插件并启动守护！等待 Antigravity 窗口就绪"
+            result.detail = "已部署原生 Sidecar 插件并启动后台守护。检测到调试端口 \(port)，窗口就绪后将自动完成注入。"
         } else {
-            result.headline = "安装成功！后台自动修补已就绪"
-            result.detail = "当前未检测到运行中的 Antigravity Desktop；守护进程已在后台待命，打开 Antigravity Desktop 后会自动立即生效。"
+            result.headline = "安装成功！原生 Sidecar 插件与自动修补已就绪"
+            result.detail = "当前未检测到运行中的 Antigravity Desktop；原生插件与守护进程已就绪，打开 Antigravity Desktop 后会自动立即生效。"
         }
         report(100, result.headline)
         return result
@@ -479,7 +593,9 @@ enum InstallerCore {
         result.mode = "uninstall"
         let rawDir = (opts.installDir?.isEmpty == false) ? opts.installDir! : getDefaultInstallDir()
         let installDir = URL(fileURLWithPath: rawDir).standardizedFileURL.path
+        let pluginDir = resolveNativePluginDir(opts: opts, resolvedInstallDir: installDir)
         result.installDir = installDir
+        result.pluginDir = pluginDir
 
         let report: (Int, String) -> Void = { pct, msg in
             progress?(pct, msg)
@@ -488,6 +604,9 @@ enum InstallerCore {
         report(15, "正在停止后台守护进程...")
         stopWatcherInDir(installDir, noAutostart: opts.noAutostart) { msg in
             report(25, msg)
+        }
+        stopNativeDaemonInDir(pluginDir) { msg in
+            report(30, msg)
         }
 
         report(40, "正在通过 CDP 清理运行中的 Antigravity Desktop 界面...")
@@ -524,6 +643,11 @@ enum InstallerCore {
             if FileManager.default.fileExists(atPath: plistPath) {
                 try? FileManager.default.removeItem(atPath: plistPath)
             }
+        }
+
+        if !pluginDir.isEmpty && FileManager.default.fileExists(atPath: pluginDir) {
+            report(80, "正在清理原生 Sidecar 插件目录: \(pluginDir)")
+            try? FileManager.default.removeItem(atPath: pluginDir)
         }
 
         report(85, "正在清理安装目录: \(installDir)")
@@ -886,6 +1010,7 @@ func parseInstallerArgs(_ args: [String]) -> InstallerOptions {
         else if a == "--no-autostart" { opts.noAutostart = true }
         else if a == "--no-kill-legacy" { opts.noKillLegacy = true }
         else if a == "--install-dir" && i + 1 < args.count { i += 1; opts.installDir = args[i] }
+        else if a == "--plugin-dir" && i + 1 < args.count { i += 1; opts.pluginDir = args[i] }
         else if a == "--cdp-port" && i + 1 < args.count {
             i += 1
             if let p = Int(args[i]), p > 0 { opts.cdpPort = p }
@@ -904,6 +1029,8 @@ func writeOperationOutFile(_ outFile: String?, res: OperationResult) {
         "headline": .string(res.headline),
         "detail": .string(res.detail),
         "installDir": .string(res.installDir),
+        "pluginDir": .string(res.pluginDir),
+        "nativePluginDeployed": .bool(res.nativePluginDeployed),
         "antigravityApp": res.antigravityApp.map { .string($0) } ?? .null,
         "antigravityVersion": res.antigravityVersion.map { .string($0) } ?? .null,
         "cdpPort": res.cdpPort.map { .int(Int64($0)) } ?? .null,
@@ -920,6 +1047,7 @@ func runInstallerMain() -> Int32 {
     if opts.statusOnly {
         let rawDir = (opts.installDir?.isEmpty == false) ? opts.installDir! : InstallerCore.getDefaultInstallDir()
         let dir = URL(fileURLWithPath: rawDir).standardizedFileURL.path
+        let pluginDir = InstallerCore.resolveNativePluginDir(opts: opts, resolvedInstallDir: dir)
         let ag = InstallerCore.detectAntigravityDesktop()
         let port = CdpHelper.readPort(overridePort: opts.cdpPort)
         let watcherPath = (dir as NSString).appendingPathComponent(InstallerCore.watcherExeName)
@@ -927,6 +1055,9 @@ func runInstallerMain() -> Int32 {
         let st: [String: JsonValue] = [
             "installed": .bool(fm.fileExists(atPath: dir) && fm.fileExists(atPath: watcherPath)),
             "installDir": .string(dir),
+            "pluginDir": .string(pluginDir),
+            "nativePluginInstalled": .bool(!pluginDir.isEmpty && fm.fileExists(atPath: (pluginDir as NSString).appendingPathComponent("plugin.json"))),
+            "nativeDaemonAlive": .bool(!pluginDir.isEmpty && CdpHelper.isNativeDaemonAlive(pluginDir: pluginDir)),
             "launchAgent": .bool(fm.fileExists(atPath: InstallerCore.getLaunchAgentPlistPath())),
             "antigravityApp": ag.appPath.map { .string($0) } ?? .null,
             "antigravityVersion": ag.version.map { .string($0) } ?? .null,

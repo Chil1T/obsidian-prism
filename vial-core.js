@@ -402,6 +402,7 @@
     uniform float u_tilt;
     uniform vec3 u_tint;
     uniform float u_camp;
+    uniform float u_accent;
     uniform float u_critical;
     uniform float u_pendant;
     uniform float u_wetL;
@@ -526,20 +527,56 @@
       return rSide;
     }
 
-    // 连续电离能量渐变采样：深色深海靛青 vs 白昼皇家钴蓝-晴空蔚蓝（高负载紫晶 -> 琥珀红）
+    // 连续电离能量渐变采样：深色深海靛青 vs 白昼皇家钴蓝-晴空蔚蓝（支持 cobalt / iris / amber / mono 四档强调色）
     vec3 evalHorizonSpectrum(float hFrac) {
       float h = clamp(hFrac, 0.0, 1.0);
       if (u_dark > 0.5) {
+        vec3 crit = mix(CRIT_DEEP, CRIT_SYS, smoothstep(0.0, 0.36, h));
+        crit = mix(crit, CRIT_CONV, smoothstep(0.30, 0.76, h));
+        crit = mix(crit, CRIT_TOOL, smoothstep(0.68, 1.00, h));
+        if (u_accent > 2.5) {
+          vec3 monoSea = mix(vec3(0.110, 0.115, 0.128), vec3(0.310, 0.320, 0.345), smoothstep(0.0, 0.40, h));
+          monoSea = mix(monoSea, vec3(0.580, 0.595, 0.625), smoothstep(0.34, 0.78, h));
+          monoSea = mix(monoSea, vec3(0.865, 0.875, 0.895), smoothstep(0.70, 1.00, h));
+          return mix(monoSea, crit, u_critical);
+        }
+        if (u_accent > 1.5) {
+          vec3 ambSea = mix(vec3(0.215, 0.095, 0.025), vec3(0.580, 0.270, 0.055), smoothstep(0.0, 0.40, h));
+          ambSea = mix(ambSea, vec3(0.851, 0.467, 0.024), smoothstep(0.34, 0.78, h));
+          ambSea = mix(ambSea, vec3(0.984, 0.749, 0.141), smoothstep(0.70, 1.00, h));
+          return mix(ambSea, crit, u_critical);
+        }
+        if (u_accent > 0.5) {
+          vec3 irisSea = mix(vec3(0.110, 0.055, 0.255), vec3(0.310, 0.165, 0.720), smoothstep(0.0, 0.40, h));
+          irisSea = mix(irisSea, vec3(0.545, 0.361, 0.965), smoothstep(0.34, 0.78, h));
+          irisSea = mix(irisSea, vec3(0.768, 0.620, 0.992), smoothstep(0.70, 1.00, h));
+          return mix(irisSea, crit, u_critical);
+        }
         vec3 sea = mix(ION_DEEP, ION_SYS, smoothstep(0.0, 0.38, h));
         sea = mix(sea, ION_CONV, smoothstep(0.30, 0.78, h));
         sea = mix(sea, ION_TOOL, smoothstep(0.68, 1.00, h));
         vec3 darkCamp = mix(CAMP_INDIGO, CAMP_ASTRAL, smoothstep(0.22, 0.96, h));
         vec3 campTinted = mix(sea, darkCamp, u_camp * 0.22);
-
-        vec3 crit = mix(CRIT_DEEP, CRIT_SYS, smoothstep(0.0, 0.36, h));
-        crit = mix(crit, CRIT_CONV, smoothstep(0.30, 0.76, h));
-        crit = mix(crit, CRIT_TOOL, smoothstep(0.68, 1.00, h));
         return mix(campTinted, crit, u_critical);
+      }
+
+      vec3 dayCrit = mix(DAY_VIOLET * 0.86, DAY_VIOLET, smoothstep(0.0, 0.34, h));
+      dayCrit = mix(dayCrit, DAY_AMBER_RED, smoothstep(0.28, 0.80, h));
+      dayCrit = mix(dayCrit, vec3(0.960, 0.560, 0.065), smoothstep(0.76, 1.00, h));
+      if (u_accent > 2.5) {
+        vec3 dayMono = mix(vec3(0.153, 0.153, 0.165), vec3(0.322, 0.322, 0.357), smoothstep(0.0, 0.50, h));
+        dayMono = mix(dayMono, vec3(0.455, 0.455, 0.490), smoothstep(0.45, 1.00, h));
+        return mix(dayMono, dayCrit, u_critical);
+      }
+      if (u_accent > 1.5) {
+        vec3 dayAmb = mix(vec3(0.706, 0.325, 0.035), vec3(0.851, 0.467, 0.024), smoothstep(0.0, 0.50, h));
+        dayAmb = mix(dayAmb, vec3(0.961, 0.620, 0.043), smoothstep(0.45, 1.00, h));
+        return mix(dayAmb, dayCrit, u_critical);
+      }
+      if (u_accent > 0.5) {
+        vec3 dayIris = mix(vec3(0.357, 0.129, 0.714), vec3(0.486, 0.227, 0.929), smoothstep(0.0, 0.50, h));
+        dayIris = mix(dayIris, vec3(0.659, 0.333, 0.969), smoothstep(0.45, 1.00, h));
+        return mix(dayIris, dayCrit, u_critical);
       }
 
       // 白昼高对比晴空蔚蓝 -> 皇家钴蓝光谱（#1D4ED8 -> #2563EB -> #0284C7）
@@ -552,10 +589,6 @@
       float warnShift = smoothstep(0.68, 0.85, u_fill);
       vec3 warnSpec = mix(DAY_ROYAL, DAY_VIOLET, smoothstep(0.10, 0.78, h));
       daySea = mix(daySea, warnSpec, warnShift * 0.68);
-
-      vec3 dayCrit = mix(DAY_VIOLET * 0.86, DAY_VIOLET, smoothstep(0.0, 0.34, h));
-      dayCrit = mix(dayCrit, DAY_AMBER_RED, smoothstep(0.28, 0.80, h));
-      dayCrit = mix(dayCrit, vec3(0.960, 0.560, 0.065), smoothstep(0.76, 1.00, h));
       return mix(daySea, dayCrit, u_critical);
     }
 
@@ -838,7 +871,16 @@
         : lightRim;
       layerOver(col, alpha, rimCol, rimMask * mix(0.82, 0.84, u_dark));
 
-      // 8. 动态微米抖动防 8-bit 梯度色带
+      // 8. Mono 钛银单色纯化（消除蓝光/彩虹折射残留）+ 动态微米抖动防 8-bit 梯度色带
+      if (u_accent > 2.5 && u_critical < 0.5) {
+        float monoLum = dot(col, vec3(0.299, 0.587, 0.114));
+        col = mix(col, vec3(monoLum * 0.99, monoLum, monoLum * 1.01), 0.94);
+      } else if (u_accent > 0.5 && u_dark <= 0.5 && u_critical < 0.5) {
+        // 白昼 iris / amber 模式下同步玻璃侧沿与液面刀锋色相
+        float lum = dot(col, vec3(0.299, 0.587, 0.114));
+        vec3 toneTint = u_accent > 1.5 ? vec3(lum * 1.24, lum * 0.88, lum * 0.52) : vec3(lum * 0.96, lum * 0.78, lum * 1.28);
+        col = mix(col, clamp(toneTint, 0.0, 1.0), 0.24 * (1.0 - step(surfBackY, px.y)));
+      }
       float n1 = hash12(gl_FragCoord.xy + fract(u_time * 7.0) * 31.0);
       float n2 = hash12(gl_FragCoord.xy + vec2(17.31, 41.7));
       float dither = (n1 + n2 - 1.0) / 255.0;
@@ -959,9 +1001,19 @@
         useManualFill = false;
       }
       const effFill = useManualFill ? manualFill : extFill;
+      const docEl = typeof document !== 'undefined' ? document.documentElement : null;
+      const rawTone = raw.accentTone || docEl?.getAttribute?.('data-ag-cs-accent') || 'follow';
+      const rawPal = raw.palette || docEl?.getAttribute?.('data-ag-cs-palette') || 'obsidian';
+      const effTone =
+        rawTone === 'iris' || rawTone === 'amber' || rawTone === 'mono' || rawTone === 'cobalt'
+          ? rawTone
+          : rawPal === 'warm'
+            ? 'amber'
+            : 'cobalt';
       return {
         isDark: raw.isDark !== undefined ? Boolean(raw.isDark) : manualDark,
         lightPreset: raw.lightPreset || 'crystal',
+        accentTone: effTone,
         camp: raw.camp === 'claude' ? 'claude' : 'gemini',
         critical: raw.critical !== undefined ? Boolean(raw.critical) : effFill >= 0.85,
         fill: effFill,
@@ -974,45 +1026,81 @@
 
     let glState = null;
     let glCanvas = null;
+    let glContextLost = false;
+
+    const buildGlState = (gl) => {
+      const prog = compileProgram(gl, VERT_SRC, FRAG_SRC);
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+      const locPos = gl.getAttribLocation(prog, 'a_pos');
+      gl.enableVertexAttribArray(locPos);
+      gl.vertexAttribPointer(locPos, 2, gl.FLOAT, false, 0, 0);
+      return {
+        gl,
+        prog,
+        buf,
+        u: {
+          res: gl.getUniformLocation(prog, 'u_res'),
+          time: gl.getUniformLocation(prog, 'u_time'),
+          dark: gl.getUniformLocation(prog, 'u_dark'),
+          fill: gl.getUniformLocation(prog, 'u_fill'),
+          tilt: gl.getUniformLocation(prog, 'u_tilt'),
+          tint: gl.getUniformLocation(prog, 'u_tint'),
+          camp: gl.getUniformLocation(prog, 'u_camp'),
+          accent: gl.getUniformLocation(prog, 'u_accent'),
+          critical: gl.getUniformLocation(prog, 'u_critical'),
+          pendant: gl.getUniformLocation(prog, 'u_pendant'),
+          wetL: gl.getUniformLocation(prog, 'u_wetL'),
+          wetR: gl.getUniformLocation(prog, 'u_wetR'),
+          hoverSlice: gl.getUniformLocation(prog, 'u_hoverSlice'),
+          wave: gl.getUniformLocation(prog, 'u_wave[0]'),
+          drops: gl.getUniformLocation(prog, 'u_drops[0]'),
+          bubbles: gl.getUniformLocation(prog, 'u_bubbles[0]'),
+          bubShape: gl.getUniformLocation(prog, 'u_bubShape[0]'),
+          raySlope: gl.getUniformLocation(prog, 'u_raySlope[0]'),
+          ratios: gl.getUniformLocation(prog, 'u_ratios'),
+        },
+      };
+    };
+
+    const onGlLost = (ev) => {
+      if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+      glContextLost = true;
+      glState = null;
+      dirtyRender = true;
+      if (typeof options.onWake === 'function') {
+        try { options.onWake(); } catch {}
+      }
+    };
+
+    const onGlRestored = () => {
+      if (!glCanvas) return;
+      try {
+        const gl = glCanvas.getContext('webgl2', { alpha: true, antialias: true, premultipliedAlpha: false });
+        if (gl) {
+          glState = buildGlState(gl);
+          glContextLost = false;
+          dirtyRender = true;
+          if (typeof options.onWake === 'function') {
+            try { options.onWake(); } catch {}
+          }
+        }
+      } catch {
+        glState = null;
+      }
+    };
 
     if (typeof document !== 'undefined' && ctx2d) {
       try {
         glCanvas = document.createElement('canvas');
+        if (glCanvas && typeof glCanvas.addEventListener === 'function') {
+          glCanvas.addEventListener('webglcontextlost', onGlLost);
+          glCanvas.addEventListener('webglcontextrestored', onGlRestored);
+        }
         const gl = glCanvas.getContext('webgl2', { alpha: true, antialias: true, premultipliedAlpha: false });
         if (gl) {
-          const prog = compileProgram(gl, VERT_SRC, FRAG_SRC);
-          const buf = gl.createBuffer();
-          gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-          gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-          const locPos = gl.getAttribLocation(prog, 'a_pos');
-          gl.enableVertexAttribArray(locPos);
-          gl.vertexAttribPointer(locPos, 2, gl.FLOAT, false, 0, 0);
-
-          glState = {
-            gl,
-            prog,
-            buf,
-            u: {
-              res: gl.getUniformLocation(prog, 'u_res'),
-              time: gl.getUniformLocation(prog, 'u_time'),
-              dark: gl.getUniformLocation(prog, 'u_dark'),
-              fill: gl.getUniformLocation(prog, 'u_fill'),
-              tilt: gl.getUniformLocation(prog, 'u_tilt'),
-              tint: gl.getUniformLocation(prog, 'u_tint'),
-              camp: gl.getUniformLocation(prog, 'u_camp'),
-              critical: gl.getUniformLocation(prog, 'u_critical'),
-              pendant: gl.getUniformLocation(prog, 'u_pendant'),
-              wetL: gl.getUniformLocation(prog, 'u_wetL'),
-              wetR: gl.getUniformLocation(prog, 'u_wetR'),
-              hoverSlice: gl.getUniformLocation(prog, 'u_hoverSlice'),
-              wave: gl.getUniformLocation(prog, 'u_wave[0]'),
-              drops: gl.getUniformLocation(prog, 'u_drops[0]'),
-              bubbles: gl.getUniformLocation(prog, 'u_bubbles[0]'),
-              bubShape: gl.getUniformLocation(prog, 'u_bubShape[0]'),
-              raySlope: gl.getUniformLocation(prog, 'u_raySlope[0]'),
-              ratios: gl.getUniformLocation(prog, 'u_ratios'),
-            },
-          };
+          glState = buildGlState(gl);
         }
       } catch (err) {
         if (typeof console !== 'undefined') console.warn('[vial-core] WebGL2 不可用，降级 2D：', err && err.message);
@@ -1020,7 +1108,7 @@
       }
     }
 
-    const rendererMode = glState ? 'webgl2' : '2d';
+    const getRendererMode = () => (glState && !glContextLost ? 'webgl2' : '2d');
     let lastPointer = null;
     let elapsedTime = 0;
     let settleClock = 0;
@@ -1037,7 +1125,7 @@
     const snapBuf = {};
 
     const buildVisualSig = (st) =>
-      `${st.isDark ? 1 : 0}|${st.lightPreset}|${st.camp}|${st.critical ? 1 : 0}|${st.hoveredSlice}|${st.maxTokens}|${st.fill.toFixed(4)}`;
+      `${st.isDark ? 1 : 0}|${st.lightPreset}|${st.camp}|${st.critical ? 1 : 0}|${st.hoveredSlice}|${st.maxTokens}|${st.fill.toFixed(4)}|${st.accentTone}`;
 
     const notifyWake = () => {
       dirtyRender = true;
@@ -1131,10 +1219,19 @@
         ctx.fillRect(tickX, sy - 0.4, 2.0, 0.85);
       }
 
+      const tone = st.accentTone || 'cobalt';
+      const activeCols =
+        tone === 'mono'
+          ? isDark ? ['#71717A', '#A1A1AA', '#E4E4E7'] : ['#3F3F46', '#52525B', '#71717A']
+          : tone === 'amber'
+            ? isDark ? ['#B45309', '#D97706', '#FBBF24'] : ['#92400E', '#B45309', '#D97706']
+            : tone === 'iris'
+              ? isDark ? ['#6D28D9', '#8B5CF6', '#C4B5FD'] : ['#5B21B6', '#7C3AED', '#9333EA']
+              : [isDark ? '#2A6EE8' : '#1D4ED8', isDark ? '#3186FF' : '#2563EB', isDark ? '#5CC6FC' : '#0284C7'];
       const majorSpecs = [
-        { frac: 0.25, label: formatTickTokens(maxTok * 0.25), activeCol: isDark ? '#2A6EE8' : '#1D4ED8' },
-        { frac: 0.5, label: formatTickTokens(maxTok * 0.5), activeCol: isDark ? '#3186FF' : '#2563EB' },
-        { frac: 0.75, label: formatTickTokens(maxTok * 0.75), activeCol: isDark ? '#5CC6FC' : '#0284C7' },
+        { frac: 0.25, label: formatTickTokens(maxTok * 0.25), activeCol: activeCols[0] },
+        { frac: 0.5, label: formatTickTokens(maxTok * 0.5), activeCol: activeCols[1] },
+        { frac: 0.75, label: formatTickTokens(maxTok * 0.75), activeCol: activeCols[2] },
       ];
       for (const item of majorSpecs) {
         const ty = Math.round(botChamber - item.frac * hChamber);
@@ -1150,9 +1247,15 @@
         if (reached) {
           ctx.fillStyle = st.critical
             ? 'rgba(234, 88, 12, 0.20)'
-            : isDark
-              ? 'rgba(92, 198, 252, 0.18)'
-              : 'rgba(37, 99, 235, 0.16)';
+            : tone === 'mono'
+              ? 'rgba(161, 161, 170, 0.20)'
+              : tone === 'amber'
+                ? 'rgba(217, 119, 6, 0.18)'
+                : tone === 'iris'
+                  ? 'rgba(139, 92, 246, 0.18)'
+                  : isDark
+                    ? 'rgba(92, 198, 252, 0.18)'
+                    : 'rgba(37, 99, 235, 0.16)';
           ctx.fillRect(tickX - 0.5, ty - 1.1, 4.5, 2.2);
         }
         ctx.fillStyle = lineCol;
@@ -1172,35 +1275,55 @@
 
     // 2D 降级保底：与 WebGL2 视觉一致的白昼高硼硅折射侧壁 + 皇家钴蓝至晴空蔚蓝液柱
     const gradCache = new Map();
-    const getIonCylGrad = (ctx, isDark) => {
-      const key = isDark ? 'd' : 'l';
+    const getIonCylGrad = (ctx, isDark, tone = 'cobalt') => {
+      const key = `${isDark ? 'd' : 'l'}:${tone}`;
       let g = gradCache.get(key);
       if (g) return g;
       g = ctx.createLinearGradient(TUBE_X - TUBE_IN_R, 0, TUBE_X + TUBE_IN_R, 0);
-      g.addColorStop(0.0, isDark ? 'rgba(15, 23, 58, 0.58)' : 'rgba(30, 64, 175, 0.32)');
+      const edgeL =
+        tone === 'mono'
+          ? 'rgba(63, 63, 70, 0.30)'
+          : tone === 'amber'
+            ? 'rgba(146, 64, 14, 0.30)'
+            : tone === 'iris'
+              ? 'rgba(91, 33, 182, 0.30)'
+              : 'rgba(30, 64, 175, 0.32)';
+      const edgeD = tone === 'mono' ? 'rgba(24, 24, 27, 0.58)' : 'rgba(15, 23, 58, 0.58)';
+      g.addColorStop(0.0, isDark ? edgeD : edgeL);
       g.addColorStop(0.24, 'rgba(255, 255, 255, 0.08)');
-      g.addColorStop(0.5, isDark ? 'rgba(168, 220, 255, 0.14)' : 'rgba(255, 255, 255, 0.22)');
-      g.addColorStop(0.82, isDark ? 'rgba(15, 23, 58, 0.38)' : 'rgba(30, 64, 175, 0.20)');
-      g.addColorStop(1.0, isDark ? 'rgba(15, 23, 58, 0.64)' : 'rgba(30, 64, 175, 0.34)');
+      g.addColorStop(0.5, isDark ? (tone === 'mono' ? 'rgba(228, 228, 231, 0.14)' : 'rgba(168, 220, 255, 0.14)') : 'rgba(255, 255, 255, 0.22)');
+      g.addColorStop(0.82, isDark ? (tone === 'mono' ? 'rgba(24, 24, 27, 0.38)' : 'rgba(15, 23, 58, 0.38)') : (tone === 'cobalt' ? 'rgba(30, 64, 175, 0.20)' : edgeL));
+      g.addColorStop(1.0, isDark ? (tone === 'mono' ? 'rgba(24, 24, 27, 0.64)' : 'rgba(15, 23, 58, 0.64)') : (tone === 'cobalt' ? 'rgba(30, 64, 175, 0.34)' : edgeL));
       gradCache.set(key, g);
       return g;
     };
 
-    const getAirGlassGrad2D = (ctx) => {
-      let g = gradCache.get('airL');
+    const getAirGlassGrad2D = (ctx, tone = 'cobalt') => {
+      const key = `airL:${tone}`;
+      let g = gradCache.get(key);
       if (g) return g;
       g = ctx.createLinearGradient(TUBE_X - TUBE_OUT_R, 0, TUBE_X + TUBE_OUT_R, 0);
-      g.addColorStop(0.0, 'rgba(30, 64, 175, 0.28)');
-      g.addColorStop(0.14, 'rgba(224, 235, 250, 0.36)');
-      g.addColorStop(0.5, 'rgba(224, 235, 250, 0.28)');
-      g.addColorStop(0.86, 'rgba(224, 235, 250, 0.36)');
-      g.addColorStop(1.0, 'rgba(30, 64, 175, 0.28)');
-      gradCache.set('airL', g);
+      const rim =
+        tone === 'mono'
+          ? 'rgba(82, 82, 91, 0.28)'
+          : tone === 'amber'
+            ? 'rgba(146, 64, 14, 0.26)'
+            : tone === 'iris'
+              ? 'rgba(91, 33, 182, 0.26)'
+              : 'rgba(30, 64, 175, 0.28)';
+      const mid = tone === 'mono' ? 'rgba(244, 244, 245, 0.34)' : tone === 'amber' ? 'rgba(254, 243, 199, 0.32)' : 'rgba(224, 235, 250, 0.36)';
+      g.addColorStop(0.0, rim);
+      g.addColorStop(0.14, mid);
+      g.addColorStop(0.5, tone === 'mono' ? 'rgba(244, 244, 245, 0.26)' : 'rgba(224, 235, 250, 0.28)');
+      g.addColorStop(0.86, mid);
+      g.addColorStop(1.0, rim);
+      gradCache.set(key, g);
       return g;
     };
 
     const drawFallback2D = (ctx, st) => {
       const isDark = Boolean(st.isDark);
+      const tone = st.accentTone || 'cobalt';
       const snap = phys.readSnapshotInto(snapBuf);
       const surfY = phys.getSurfacePixelY();
       const tilt = snap.tiltAngle;
@@ -1211,15 +1334,21 @@
         ? isDark
           ? 'rgba(255, 236, 168, 0.94)'
           : 'rgba(234, 88, 12, 0.96)'
-        : isDark
-          ? 'rgba(176, 224, 255, 0.94)'
-          : 'rgba(3, 105, 161, 0.96)';
+        : tone === 'mono'
+          ? isDark ? 'rgba(244, 244, 245, 0.94)' : 'rgba(39, 39, 42, 0.96)'
+          : tone === 'amber'
+            ? isDark ? 'rgba(253, 224, 71, 0.94)' : 'rgba(180, 83, 9, 0.96)'
+            : tone === 'iris'
+              ? isDark ? 'rgba(221, 214, 254, 0.94)' : 'rgba(109, 40, 217, 0.96)'
+              : isDark
+                ? 'rgba(176, 224, 255, 0.94)'
+                : 'rgba(3, 105, 161, 0.96)';
 
       ctx.save();
 
       // 1. 高硼硅/暗曜石对称胶囊空气腔背衬与折射侧壁
       traceClosedCapsule(ctx, TUBE_X, TUBE_OUT_R, TOP_OUT, FLOOR_OUT, RC_OUT, RC_OUT);
-      ctx.fillStyle = isDark ? 'rgba(11, 16, 30, 0.12)' : getAirGlassGrad2D(ctx);
+      ctx.fillStyle = isDark ? (tone === 'mono' ? 'rgba(24, 24, 27, 0.14)' : 'rgba(11, 16, 30, 0.12)') : getAirGlassGrad2D(ctx, tone);
       ctx.fill();
 
       // 2. 连续电离能量柱
@@ -1235,6 +1364,36 @@
             liqGrad.addColorStop(0.0, 'rgba(124, 58, 237, 0.94)');
             liqGrad.addColorStop(0.52, 'rgba(234, 88, 12, 0.93)');
             liqGrad.addColorStop(1.0, 'rgba(245, 158, 11, 0.94)');
+          }
+        } else if (tone === 'mono') {
+          if (isDark) {
+            liqGrad.addColorStop(0.0, 'rgba(24, 24, 27, 0.92)');
+            liqGrad.addColorStop(0.45, 'rgba(82, 82, 91, 0.90)');
+            liqGrad.addColorStop(1.0, 'rgba(212, 212, 216, 0.90)');
+          } else {
+            liqGrad.addColorStop(0.0, 'rgba(39, 39, 42, 0.94)');
+            liqGrad.addColorStop(0.52, 'rgba(82, 82, 91, 0.93)');
+            liqGrad.addColorStop(1.0, 'rgba(113, 113, 122, 0.94)');
+          }
+        } else if (tone === 'amber') {
+          if (isDark) {
+            liqGrad.addColorStop(0.0, 'rgba(69, 26, 3, 0.92)');
+            liqGrad.addColorStop(0.45, 'rgba(180, 83, 9, 0.90)');
+            liqGrad.addColorStop(1.0, 'rgba(251, 191, 36, 0.90)');
+          } else {
+            liqGrad.addColorStop(0.0, 'rgba(146, 64, 14, 0.94)');
+            liqGrad.addColorStop(0.52, 'rgba(217, 119, 6, 0.93)');
+            liqGrad.addColorStop(1.0, 'rgba(245, 158, 11, 0.94)');
+          }
+        } else if (tone === 'iris') {
+          if (isDark) {
+            liqGrad.addColorStop(0.0, 'rgba(46, 16, 101, 0.92)');
+            liqGrad.addColorStop(0.45, 'rgba(109, 40, 217, 0.90)');
+            liqGrad.addColorStop(1.0, 'rgba(196, 181, 253, 0.90)');
+          } else {
+            liqGrad.addColorStop(0.0, 'rgba(91, 33, 182, 0.94)');
+            liqGrad.addColorStop(0.52, 'rgba(124, 58, 237, 0.93)');
+            liqGrad.addColorStop(1.0, 'rgba(168, 85, 247, 0.94)');
           }
         } else if (isDark) {
           liqGrad.addColorStop(0.0, 'rgba(15, 23, 58, 0.92)');
@@ -1255,7 +1414,7 @@
         ctx.fill();
 
         traceCapsuleColumn(ctx, TUBE_X, TUBE_IN_R, surfY - slope, surfY + slope, FLOOR_IN, RC_IN);
-        ctx.fillStyle = getIonCylGrad(ctx, isDark);
+        ctx.fillStyle = getIonCylGrad(ctx, isDark, tone);
         ctx.fill();
       }
 
@@ -1284,7 +1443,15 @@
         ctx.ellipse(TUBE_X + b.x, b.y, br, br, 0, 0, Math.PI * 2);
         ctx.fill();
         if (!isDark) {
-          ctx.strokeStyle = isCrit ? 'rgba(194, 65, 12, 0.72)' : 'rgba(29, 78, 216, 0.68)';
+          ctx.strokeStyle = isCrit
+            ? 'rgba(194, 65, 12, 0.72)'
+            : tone === 'mono'
+              ? 'rgba(63, 63, 70, 0.68)'
+              : tone === 'amber'
+                ? 'rgba(180, 83, 9, 0.68)'
+                : tone === 'iris'
+                  ? 'rgba(109, 40, 217, 0.68)'
+                  : 'rgba(29, 78, 216, 0.68)';
           ctx.lineWidth = 0.65;
           ctx.stroke();
         }
@@ -1297,20 +1464,33 @@
         ctx.fill();
       }
 
-      // 4. 3D 弯月面与靛青折射刀锋
+      // 4. 3D 弯月面与色调一致的折射刀锋
       ctx.save();
       ctx.translate(TUBE_X, surfY);
       ctx.rotate(tilt);
       ctx.fillStyle = isCrit
         ? 'rgba(234, 88, 12, 0.44)'
-        : isDark
-          ? 'rgba(92, 198, 252, 0.36)'
-          : 'rgba(2, 132, 199, 0.56)';
+        : tone === 'mono'
+          ? isDark ? 'rgba(212, 212, 216, 0.32)' : 'rgba(82, 82, 91, 0.48)'
+          : tone === 'amber'
+            ? isDark ? 'rgba(251, 191, 36, 0.36)' : 'rgba(217, 119, 6, 0.50)'
+            : tone === 'iris'
+              ? isDark ? 'rgba(196, 181, 253, 0.36)' : 'rgba(124, 58, 237, 0.50)'
+              : isDark
+                ? 'rgba(92, 198, 252, 0.36)'
+                : 'rgba(2, 132, 199, 0.56)';
       ctx.beginPath();
       ctx.ellipse(0, 0, TUBE_IN_R - 0.3, 4.0, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.strokeStyle = isDark ? 'rgba(176, 224, 255, 0.44)' : 'rgba(29, 78, 216, 0.58)';
+      ctx.strokeStyle =
+        tone === 'mono'
+          ? isDark ? 'rgba(228, 228, 231, 0.42)' : 'rgba(63, 63, 70, 0.56)'
+          : tone === 'amber'
+            ? isDark ? 'rgba(253, 224, 71, 0.42)' : 'rgba(180, 83, 9, 0.56)'
+            : tone === 'iris'
+              ? isDark ? 'rgba(221, 214, 254, 0.44)' : 'rgba(109, 40, 217, 0.56)'
+              : isDark ? 'rgba(176, 224, 255, 0.44)' : 'rgba(29, 78, 216, 0.58)';
       ctx.lineWidth = 0.75;
       ctx.beginPath();
       ctx.ellipse(0, 0, TUBE_IN_R - 0.3, 4.0, 0, Math.PI, Math.PI * 2);
@@ -1323,6 +1503,27 @@
       ctx.stroke();
       ctx.restore();
 
+      // 4b. 悬停切片图例时的 1px 光学聚焦环（2D 保底与 WebGL2 一致）
+      if (typeof st.hoveredSlice === 'number' && st.hoveredSlice >= 0 && surfY < FLOOR_IN - 2) {
+        const rt = Array.isArray(st.ratios) ? st.ratios : [0.08, 0.27, 0.12];
+        const sumR = Math.max(1e-3, (Number(rt[0]) || 0) + (Number(rt[1]) || 0) + (Number(rt[2]) || 0));
+        const midFrac =
+          st.hoveredSlice < 0.5
+            ? ((Number(rt[0]) || 0) * 0.5) / sumR
+            : st.hoveredSlice < 1.5
+              ? ((Number(rt[0]) || 0) + (Number(rt[1]) || 0) * 0.5) / sumR
+              : ((Number(rt[0]) || 0) + (Number(rt[1]) || 0) + (Number(rt[2]) || 0) * 0.5) / sumR;
+        const colH = Math.max(12, FLOOR_IN - surfY);
+        const sliceY = FLOOR_IN - colH * midFrac;
+        ctx.save();
+        ctx.strokeStyle = isDark ? 'rgba(176, 224, 255, 0.85)' : 'rgba(255, 255, 255, 0.92)';
+        ctx.lineWidth = 1.1;
+        ctx.beginPath();
+        ctx.ellipse(TUBE_X, sliceY, TUBE_IN_R - 0.8, 2.8, 0, 0, Math.PI);
+        ctx.stroke();
+        ctx.restore();
+      }
+
       // 5. 垂直折射丝（浅色空气段冷蓝折射丝 + 水柱段晶白高光丝）与外轮廓描边
       const threadX = TUBE_X - TUBE_OUT_R * 0.72;
       const topThreadY = TOP_OUT + 16;
@@ -1333,7 +1534,14 @@
       } else {
         const splitY = Math.max(topThreadY, Math.min(botThreadY, surfY));
         if (splitY > topThreadY) {
-          ctx.fillStyle = 'rgba(30, 64, 175, 0.34)';
+          ctx.fillStyle =
+            tone === 'mono'
+              ? 'rgba(82, 82, 91, 0.34)'
+              : tone === 'amber'
+                ? 'rgba(180, 83, 9, 0.32)'
+                : tone === 'iris'
+                  ? 'rgba(109, 40, 217, 0.32)'
+                  : 'rgba(30, 64, 175, 0.34)';
           ctx.fillRect(threadX, topThreadY, 0.85, splitY - topThreadY);
         }
         if (botThreadY > splitY) {
@@ -1343,7 +1551,14 @@
       }
 
       traceClosedCapsule(ctx, TUBE_X, TUBE_OUT_R, TOP_OUT, FLOOR_OUT, RC_OUT, RC_OUT);
-      ctx.strokeStyle = isDark ? 'rgba(172, 204, 248, 0.68)' : 'rgba(30, 64, 175, 0.68)';
+      ctx.strokeStyle =
+        tone === 'mono'
+          ? isDark ? 'rgba(212, 212, 216, 0.68)' : 'rgba(82, 82, 91, 0.68)'
+          : tone === 'amber'
+            ? isDark ? 'rgba(251, 191, 36, 0.62)' : 'rgba(146, 64, 14, 0.68)'
+            : tone === 'iris'
+              ? isDark ? 'rgba(196, 181, 253, 0.64)' : 'rgba(91, 33, 182, 0.68)'
+              : isDark ? 'rgba(172, 204, 248, 0.68)' : 'rgba(30, 64, 175, 0.68)';
       ctx.lineWidth = isDark ? 1.0 : 1.15;
       ctx.stroke();
 
@@ -1379,7 +1594,15 @@
 
       const snap = phys.readSnapshotInto(snapBuf);
 
-      if (glState && glCanvas) {
+      const glAlive =
+        Boolean(glState && glCanvas && !glContextLost) &&
+        (typeof glState.gl.isContextLost !== 'function' || !glState.gl.isContextLost());
+      if (glState && !glAlive) {
+        glContextLost = true;
+        glState = null;
+      }
+
+      if (glAlive && glState && glCanvas) {
         const { gl, prog, u } = glState;
         if (glCanvas.width !== targetW || glCanvas.height !== targetH) {
           glCanvas.width = targetW;
@@ -1419,6 +1642,8 @@
         gl.uniform1f(u.tilt, snap.tiltAngle);
         gl.uniform3fv(u.tint, tintVec);
         gl.uniform1f(u.camp, st.camp === 'claude' ? 1.0 : 0.0);
+        const accentNum = st.accentTone === 'mono' ? 3.0 : st.accentTone === 'amber' ? 2.0 : st.accentTone === 'iris' ? 1.0 : 0.0;
+        if (u.accent !== null && u.accent !== undefined) gl.uniform1f(u.accent, accentNum);
         gl.uniform1f(u.critical, st.critical ? 1.0 : 0.0);
         gl.uniform1f(u.pendant, snap.streaming ? snap.pendantSize : 0.0);
         const rt = st.ratios;
@@ -1493,7 +1718,7 @@
       },
       getDebugState() {
         return {
-          rendererMode,
+          rendererMode: getRendererMode(),
           settled: isSettled(),
           settleClock: Number(settleClock.toFixed(3)),
           ...phys.getSnapshot(),
@@ -1504,6 +1729,10 @@
           canvas.removeEventListener('pointermove', onPointerMove);
           canvas.removeEventListener('pointerdown', onPointerDown);
           canvas.removeEventListener('pointerleave', onPointerLeave);
+        }
+        if (glCanvas && typeof glCanvas.removeEventListener === 'function') {
+          glCanvas.removeEventListener('webglcontextlost', onGlLost);
+          glCanvas.removeEventListener('webglcontextrestored', onGlRestored);
         }
         if (glState) {
           const { gl, prog, buf } = glState;

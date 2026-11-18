@@ -9,26 +9,79 @@ using System.Threading.Tasks;
 
 namespace AgyClaudeStyle.Watcher
 {
+    internal class FrameContextMeta
+    {
+        public string FrameId;
+        public bool IsDefault;
+        public string ContextType;
+    }
+
     internal class AttachedEntry
     {
         public CdpSession Session;
         public string ScriptId;
+        public string OmniScriptId;
         public string Title;
+        public string MainFrameId;
+        public bool HasFrameTree;
+        public readonly ConcurrentDictionary<long, FrameContextMeta> ContextFrames = new ConcurrentDictionary<long, FrameContextMeta>();
+
+        public bool IsTrustedMainFrameBinding(Dictionary<string, object> p)
+        {
+            object ctxIdObj = null;
+            bool hasCtxId = p != null && p.TryGetValue("executionContextId", out ctxIdObj) && ctxIdObj != null;
+            long ctxId = 0;
+            if (hasCtxId)
+            {
+                try { ctxId = Convert.ToInt64(ctxIdObj); }
+                catch { hasCtxId = false; }
+            }
+            FrameContextMeta meta;
+            if (hasCtxId && ContextFrames.TryGetValue(ctxId, out meta) && meta != null)
+            {
+                if (!meta.IsDefault) return false;
+                if (!string.IsNullOrEmpty(meta.ContextType) && !string.Equals(meta.ContextType, "default", StringComparison.Ordinal)) return false;
+                if (!string.IsNullOrEmpty(MainFrameId) && !string.IsNullOrEmpty(meta.FrameId) &&
+                    !string.Equals(meta.FrameId, MainFrameId, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+                return true;
+            }
+            if (HasFrameTree)
+            {
+                if (!hasCtxId) return false;
+                if (ContextFrames.Count > 0) return false;
+            }
+            return true;
+        }
     }
 
     internal static class Program
     {
         private static readonly object LogLock = new object();
         private static string _baseDir;
+        private static string _pluginDir;
         private static string _logFile;
         private static string _pidFile;
         private static bool _isWatch;
+
+        private static string GetDefaultWatcherInstallDir()
+        {
+            string localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+            if (string.IsNullOrEmpty(localAppData))
+            {
+                localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            }
+            return Path.GetFullPath(Path.Combine(localAppData, "obsidian-prism")).TrimEnd('\\', '/');
+        }
 
         [STAThread]
         private static int Main(string[] args)
         {
             string mode = "watch";
             string customDir = null;
+            string customPluginDir = null;
             int? overridePort = null;
             string outFile = null;
 
@@ -39,6 +92,7 @@ namespace AgyClaudeStyle.Watcher
                 else if (a == "--once") mode = "once";
                 else if (a == "--remove") mode = "remove";
                 else if (a == "--dir" && i + 1 < args.Length) customDir = args[++i];
+                else if (a == "--plugin-dir" && i + 1 < args.Length) customPluginDir = args[++i];
                 else if (a == "--cdp-port" && i + 1 < args.Length)
                 {
                     int p;
@@ -48,6 +102,23 @@ namespace AgyClaudeStyle.Watcher
             }
 
             _baseDir = Path.GetFullPath(string.IsNullOrEmpty(customDir) ? AppDomain.CurrentDomain.BaseDirectory : customDir).TrimEnd('\\', '/');
+            if (!string.IsNullOrEmpty(customPluginDir))
+            {
+                _pluginDir = Path.GetFullPath(customPluginDir).TrimEnd('\\', '/');
+            }
+            else if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AG_PRISM_PLUGIN_DIR")))
+            {
+                _pluginDir = CdpHelper.GetDefaultNativePluginDir();
+            }
+            else if (string.IsNullOrEmpty(customDir) ||
+                     string.Equals(_baseDir, GetDefaultWatcherInstallDir(), StringComparison.OrdinalIgnoreCase))
+            {
+                _pluginDir = CdpHelper.GetDefaultNativePluginDir();
+            }
+            else
+            {
+                _pluginDir = Path.Combine(_baseDir, "obsidian-prism-plugin");
+            }
             _logFile = Path.Combine(_baseDir, "watch.log");
             _pidFile = Path.Combine(_baseDir, ".watch.pid");
             _isWatch = (mode == "watch");
@@ -157,6 +228,7 @@ namespace AgyClaudeStyle.Watcher
             }
 
             string expr = CdpHelper.BuildInjectExpression(_baseDir, manifest);
+            string omniExpr = CdpHelper.BuildOmniClientExpression(_baseDir, manifest);
             List<string> injectedTitles = new List<string>();
             for (int i = 0; i < pages.Count; i++)
             {
@@ -164,6 +236,10 @@ namespace AgyClaudeStyle.Watcher
                 using (CdpSession session = await CdpSession.ConnectAsync(page.WebSocketDebuggerUrl, 4000).ConfigureAwait(false))
                 {
                     await session.EvaluateAsync(expr, false).ConfigureAwait(false);
+                    if (!string.IsNullOrEmpty(omniExpr))
+                    {
+                        try { await session.EvaluateAsync(omniExpr, false).ConfigureAwait(false); } catch { }
+                    }
                     injectedTitles.Add(CdpHelper.ShortTitle(page));
                 }
             }
@@ -231,11 +307,13 @@ namespace AgyClaudeStyle.Watcher
             {
                 try
                 {
-                    Process proc = Process.GetProcessById(pid.Value);
-                    if (!proc.WaitForExit(1500))
+                    using (Process proc = Process.GetProcessById(pid.Value))
                     {
-                        proc.Kill();
-                        proc.WaitForExit(1500);
+                        if (!proc.WaitForExit(1500) && CdpHelper.IsExpectedPrismDaemonProcess(proc))
+                        {
+                            proc.Kill();
+                            proc.WaitForExit(1500);
+                        }
                     }
                 }
                 catch { }
@@ -262,6 +340,7 @@ namespace AgyClaudeStyle.Watcher
                 Log(string.Format("[*] Obsidian Prism (obsidian-prism) 守护模式启动 (PID {0})，每 2 秒检查一次窗口", selfPid));
 
                 string currentExpr = CdpHelper.BuildInjectExpression(_baseDir, manifest);
+                string currentOmniExpr = CdpHelper.BuildOmniClientExpression(_baseDir, manifest);
                 object exprLock = new object();
                 ConcurrentDictionary<string, AttachedEntry> attached = new ConcurrentDictionary<string, AttachedEntry>(StringComparer.Ordinal);
                 ManualResetEventSlim exitEvent = new ManualResetEventSlim(false);
@@ -278,7 +357,7 @@ namespace AgyClaudeStyle.Watcher
                     ReleasePidFile(selfPid);
                 };
 
-                Func<AttachedEntry, string, Task<Dictionary<string, object>>> applyAsync = async (entry, exprToUse) =>
+                Func<AttachedEntry, string, string, Task<Dictionary<string, object>>> applyAsync = async (entry, exprToUse, omniExprToUse) =>
                 {
                     if (!string.IsNullOrEmpty(entry.ScriptId))
                     {
@@ -296,6 +375,31 @@ namespace AgyClaudeStyle.Watcher
                     object idVal;
                     if (addRes.TryGetValue("identifier", out idVal)) entry.ScriptId = idVal as string;
                     object evalVal = await entry.Session.EvaluateAsync(exprToUse, false).ConfigureAwait(false);
+
+                    if (!string.IsNullOrEmpty(entry.OmniScriptId))
+                    {
+                        try
+                        {
+                            Dictionary<string, object> rmOmni = new Dictionary<string, object>(StringComparer.Ordinal);
+                            rmOmni["identifier"] = entry.OmniScriptId;
+                            await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmOmni, 5000).ConfigureAwait(false);
+                        }
+                        catch { }
+                        entry.OmniScriptId = null;
+                    }
+                    if (!string.IsNullOrEmpty(omniExprToUse))
+                    {
+                        try
+                        {
+                            Dictionary<string, object> addOmni = new Dictionary<string, object>(StringComparer.Ordinal);
+                            addOmni["source"] = omniExprToUse;
+                            Dictionary<string, object> omniRes = await entry.Session.SendAsync("Page.addScriptToEvaluateOnNewDocument", addOmni, 15000).ConfigureAwait(false);
+                            object omniIdVal;
+                            if (omniRes.TryGetValue("identifier", out omniIdVal)) entry.OmniScriptId = omniIdVal as string;
+                            await entry.Session.EvaluateAsync(omniExprToUse, false).ConfigureAwait(false);
+                        }
+                        catch { }
+                    }
                     return evalVal as Dictionary<string, object>;
                 };
 
@@ -319,16 +423,121 @@ namespace AgyClaudeStyle.Watcher
                             Log("[-] 窗口已关闭: " + entry.Title);
                         };
 
+                        session.On("Runtime.executionContextCreated", (cp) =>
+                        {
+                            object ctxObj;
+                            if (cp == null || !cp.TryGetValue("context", out ctxObj) || !(ctxObj is Dictionary<string, object>)) return;
+                            Dictionary<string, object> ctxDict = (Dictionary<string, object>)ctxObj;
+                            object idObj;
+                            if (!ctxDict.TryGetValue("id", out idObj) || idObj == null) return;
+                            long cid;
+                            try { cid = Convert.ToInt64(idObj); } catch { return; }
+                            FrameContextMeta meta = new FrameContextMeta();
+                            meta.IsDefault = true;
+                            meta.ContextType = "default";
+                            meta.FrameId = "";
+                            object auxObj;
+                            if (ctxDict.TryGetValue("auxData", out auxObj) && auxObj is Dictionary<string, object>)
+                            {
+                                Dictionary<string, object> aux = (Dictionary<string, object>)auxObj;
+                                object fid;
+                                if (aux.TryGetValue("frameId", out fid) && fid is string) meta.FrameId = (string)fid;
+                                object defObj;
+                                if (aux.TryGetValue("isDefault", out defObj) && defObj is bool) meta.IsDefault = (bool)defObj;
+                                object tObj;
+                                if (aux.TryGetValue("type", out tObj) && tObj is string) meta.ContextType = (string)tObj;
+                            }
+                            entry.ContextFrames[cid] = meta;
+                        });
+                        session.On("Runtime.executionContextDestroyed", (dp) =>
+                        {
+                            object idObj;
+                            if (dp != null && dp.TryGetValue("executionContextId", out idObj) && idObj != null)
+                            {
+                                try
+                                {
+                                    FrameContextMeta removedMeta;
+                                    entry.ContextFrames.TryRemove(Convert.ToInt64(idObj), out removedMeta);
+                                }
+                                catch { }
+                            }
+                        });
+                        session.On("Runtime.executionContextsCleared", (cp) =>
+                        {
+                            entry.ContextFrames.Clear();
+                        });
+                        session.On("Page.frameNavigated", (fp) =>
+                        {
+                            object fObj;
+                            if (fp != null && fp.TryGetValue("frame", out fObj) && fObj is Dictionary<string, object>)
+                            {
+                                Dictionary<string, object> fDict = (Dictionary<string, object>)fObj;
+                                object parentObj;
+                                bool hasParent = fDict.TryGetValue("parentId", out parentObj) && parentObj is string && !string.IsNullOrEmpty((string)parentObj);
+                                object fidObj;
+                                if (!hasParent && fDict.TryGetValue("id", out fidObj) && fidObj is string && !string.IsNullOrEmpty((string)fidObj))
+                                {
+                                    entry.MainFrameId = (string)fidObj;
+                                    entry.HasFrameTree = true;
+                                }
+                            }
+                        });
+
                         await session.SendAsync("Page.enable", null, 5000).ConfigureAwait(false);
+                        try
+                        {
+                            Dictionary<string, object> ftRes = await session.SendAsync("Page.getFrameTree", null, 3000).ConfigureAwait(false);
+                            object ftObj;
+                            if (ftRes != null && ftRes.TryGetValue("frameTree", out ftObj) && ftObj is Dictionary<string, object>)
+                            {
+                                object topFrameObj;
+                                if (((Dictionary<string, object>)ftObj).TryGetValue("frame", out topFrameObj) && topFrameObj is Dictionary<string, object>)
+                                {
+                                    object topIdObj;
+                                    if (((Dictionary<string, object>)topFrameObj).TryGetValue("id", out topIdObj) && topIdObj is string && !string.IsNullOrEmpty((string)topIdObj))
+                                    {
+                                        entry.MainFrameId = (string)topIdObj;
+                                        entry.HasFrameTree = true;
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
+
                         session.On("Runtime.bindingCalled", (p) =>
                         {
+                            if (!entry.IsTrustedMainFrameBinding(p)) return;
                             object bNameObj;
                             object payloadObj;
-                            if (!p.TryGetValue("name", out bNameObj) || !string.Equals(bNameObj as string, manifest.SettingBinding, StringComparison.Ordinal)) return;
+                            if (!p.TryGetValue("name", out bNameObj)) return;
+                            string bName = bNameObj as string;
+                            if (!string.Equals(bName, manifest.SettingBinding, StringComparison.Ordinal) &&
+                                !string.Equals(bName, "__agClaudeStyleSetting", StringComparison.Ordinal))
+                            {
+                                return;
+                            }
                             if (!p.TryGetValue("payload", out payloadObj) || !(payloadObj is string)) return;
                             try
                             {
                                 Dictionary<string, object> kv = MiniJson.ParseObject((string)payloadObj);
+                                object actObj;
+                                object entriesObj;
+                                if (kv.TryGetValue("action", out actObj) &&
+                                    string.Equals(actObj as string, "patch-batch", StringComparison.Ordinal) &&
+                                    kv.TryGetValue("entries", out entriesObj) &&
+                                    entriesObj is Dictionary<string, object>)
+                                {
+                                    Dictionary<string, object> entriesDict = (Dictionary<string, object>)entriesObj;
+                                    if (CdpHelper.UpdateConfigBatch(_baseDir, manifest, entriesDict))
+                                    {
+                                        if (!string.IsNullOrEmpty(_pluginDir) && Directory.Exists(_pluginDir))
+                                        {
+                                            try { CdpHelper.UpdateConfigBatch(_pluginDir, manifest, entriesDict); } catch { }
+                                        }
+                                        Log("[⚙] 批量设置已保存 (" + entriesDict.Count + " 项)");
+                                    }
+                                    return;
+                                }
                                 object kObj;
                                 object vObj;
                                 if (kv.TryGetValue("key", out kObj) && kObj is string && kv.TryGetValue("value", out vObj))
@@ -336,6 +545,10 @@ namespace AgyClaudeStyle.Watcher
                                     string key = (string)kObj;
                                     if (CdpHelper.UpdateConfigSetting(_baseDir, manifest, key, vObj))
                                     {
+                                        if (!string.IsNullOrEmpty(_pluginDir) && Directory.Exists(_pluginDir))
+                                        {
+                                            try { CdpHelper.UpdateConfigSetting(_pluginDir, manifest, key, vObj); } catch { }
+                                        }
                                         Log("[⚙] 设置已保存: " + key + " = " + MiniJson.Stringify(vObj, false));
                                     }
                                 }
@@ -347,10 +560,25 @@ namespace AgyClaudeStyle.Watcher
                         Dictionary<string, object> bindParams = new Dictionary<string, object>(StringComparer.Ordinal);
                         bindParams["name"] = manifest.SettingBinding;
                         await session.SendAsync("Runtime.addBinding", bindParams, 5000).ConfigureAwait(false);
+                        if (!string.Equals(manifest.SettingBinding, "__agClaudeStyleSetting", StringComparison.Ordinal))
+                        {
+                            try
+                            {
+                                Dictionary<string, object> legacyBind = new Dictionary<string, object>(StringComparer.Ordinal);
+                                legacyBind["name"] = "__agClaudeStyleSetting";
+                                await session.SendAsync("Runtime.addBinding", legacyBind, 5000).ConfigureAwait(false);
+                            }
+                            catch { }
+                        }
 
                         string exprSnapshot;
-                        lock (exprLock) { exprSnapshot = currentExpr; }
-                        Dictionary<string, object> res = await applyAsync(entry, exprSnapshot).ConfigureAwait(false);
+                        string omniSnapshot;
+                        lock (exprLock)
+                        {
+                            exprSnapshot = currentExpr;
+                            omniSnapshot = currentOmniExpr;
+                        }
+                        Dictionary<string, object> res = await applyAsync(entry, exprSnapshot, omniSnapshot).ConfigureAwait(false);
                         string status = (res != null && res.ContainsKey("status")) ? Convert.ToString(res["status"]) : "ok";
                         Log(string.Format("[✓] 已注入 obsidian-prism: {0} ({1})", entry.Title, status));
                     }
@@ -402,7 +630,15 @@ namespace AgyClaudeStyle.Watcher
                                     {
                                         manifest = PluginManifest.Load(_baseDir);
                                         string nextExpr = CdpHelper.BuildInjectExpression(_baseDir, manifest);
-                                        lock (exprLock) { currentExpr = nextExpr; }
+                                        string nextOmniExpr = CdpHelper.BuildOmniClientExpression(_baseDir, manifest);
+                                        string fastCfgExpr = string.Equals(Path.GetFileName(changedName ?? ""), "config.json", StringComparison.OrdinalIgnoreCase)
+                                            ? CdpHelper.BuildConfigRefreshExpression(_baseDir, manifest)
+                                            : null;
+                                        lock (exprLock)
+                                        {
+                                            currentExpr = nextExpr;
+                                            currentOmniExpr = nextOmniExpr;
+                                        }
 
                                         int n = 0;
                                         foreach (KeyValuePair<string, AttachedEntry> kv in attached)
@@ -411,8 +647,71 @@ namespace AgyClaudeStyle.Watcher
                                             if (entry == null) continue;
                                             try
                                             {
-                                                await applyAsync(entry, nextExpr).ConfigureAwait(false);
-                                                n++;
+                                                if (!string.IsNullOrEmpty(fastCfgExpr))
+                                                {
+                                                    if (!string.IsNullOrEmpty(entry.ScriptId))
+                                                    {
+                                                        try
+                                                        {
+                                                            Dictionary<string, object> rmP = new Dictionary<string, object>(StringComparer.Ordinal);
+                                                            rmP["identifier"] = entry.ScriptId;
+                                                            await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmP, 5000).ConfigureAwait(false);
+                                                        }
+                                                        catch { }
+                                                    }
+                                                    Dictionary<string, object> addP = new Dictionary<string, object>(StringComparer.Ordinal);
+                                                    addP["source"] = nextExpr;
+                                                    Dictionary<string, object> addR = await entry.Session.SendAsync("Page.addScriptToEvaluateOnNewDocument", addP, 15000).ConfigureAwait(false);
+                                                    object idV;
+                                                    if (addR.TryGetValue("identifier", out idV)) entry.ScriptId = idV as string;
+
+                                                    if (!string.IsNullOrEmpty(entry.OmniScriptId))
+                                                    {
+                                                        try
+                                                        {
+                                                            Dictionary<string, object> rmO = new Dictionary<string, object>(StringComparer.Ordinal);
+                                                            rmO["identifier"] = entry.OmniScriptId;
+                                                            await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmO, 5000).ConfigureAwait(false);
+                                                        }
+                                                        catch { }
+                                                        entry.OmniScriptId = null;
+                                                    }
+                                                    if (!string.IsNullOrEmpty(nextOmniExpr))
+                                                    {
+                                                        try
+                                                        {
+                                                            Dictionary<string, object> addO = new Dictionary<string, object>(StringComparer.Ordinal);
+                                                            addO["source"] = nextOmniExpr;
+                                                            Dictionary<string, object> omniR = await entry.Session.SendAsync("Page.addScriptToEvaluateOnNewDocument", addO, 15000).ConfigureAwait(false);
+                                                            object oIdV;
+                                                            if (omniR.TryGetValue("identifier", out oIdV)) entry.OmniScriptId = oIdV as string;
+                                                        }
+                                                        catch { }
+                                                    }
+
+                                                    Dictionary<string, object> fastRes = await entry.Session.EvaluateAsync(fastCfgExpr, false).ConfigureAwait(false) as Dictionary<string, object>;
+                                                    object refVal;
+                                                    if (fastRes != null && fastRes.TryGetValue("refreshed", out refVal) && refVal is bool && (bool)refVal)
+                                                    {
+                                                        if (!string.IsNullOrEmpty(nextOmniExpr))
+                                                        {
+                                                            try { await entry.Session.EvaluateAsync(nextOmniExpr, false).ConfigureAwait(false); } catch { }
+                                                        }
+                                                        n++;
+                                                        continue;
+                                                    }
+                                                    await entry.Session.EvaluateAsync(nextExpr, false).ConfigureAwait(false);
+                                                    if (!string.IsNullOrEmpty(nextOmniExpr))
+                                                    {
+                                                        try { await entry.Session.EvaluateAsync(nextOmniExpr, false).ConfigureAwait(false); } catch { }
+                                                    }
+                                                    n++;
+                                                }
+                                                else
+                                                {
+                                                    await applyAsync(entry, nextExpr, nextOmniExpr).ConfigureAwait(false);
+                                                    n++;
+                                                }
                                             }
                                             catch { }
                                         }
@@ -438,12 +737,42 @@ namespace AgyClaudeStyle.Watcher
                 catch { }
 
                 int? lastPort = null;
+                bool yieldingToDaemon = false;
                 try
                 {
                     while (!exitEvent.IsSet)
                     {
                         try
                         {
+                            bool nativeAlive = !string.IsNullOrEmpty(_pluginDir) && CdpHelper.IsNativeDaemonAlive(_pluginDir);
+                            if (nativeAlive)
+                            {
+                                if (!yieldingToDaemon || attached.Count > 0)
+                                {
+                                    foreach (KeyValuePair<string, AttachedEntry> kv in attached)
+                                    {
+                                        AttachedEntry oldEntry;
+                                        if (attached.TryRemove(kv.Key, out oldEntry) && oldEntry != null && oldEntry.Session != null)
+                                        {
+                                            try { oldEntry.Session.Close(); } catch { }
+                                        }
+                                    }
+                                    lastPort = null;
+                                    if (!yieldingToDaemon)
+                                    {
+                                        yieldingToDaemon = true;
+                                        Log("[~] 检测到原生 Sidecar Daemon 运行中，Watcher 进入热备避让态");
+                                    }
+                                }
+                                exitEvent.Wait(750);
+                                continue;
+                            }
+                            if (yieldingToDaemon)
+                            {
+                                yieldingToDaemon = false;
+                                Log("[+] 原生 Sidecar Daemon 已离线，Watcher 接管实时注入");
+                            }
+
                             int? port = CdpHelper.ReadPort(overridePort);
                             if (port.HasValue)
                             {

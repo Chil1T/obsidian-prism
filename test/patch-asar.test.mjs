@@ -186,7 +186,7 @@ async function startMockCdpServer(docState) {
                 JSON.stringify({ id: msg.id, result: { result: { type: 'string', value: status } } })
               );
             } else if (expr.includes('__TEST_STAGED_INJECT_V1__')) {
-              docState.agPrism = '1.0.0';
+              docState.agPrism = '1.0.1';
               docState.agCsStyle = '1';
               docState.injectCount += 1;
               docState.lastMarker = '__TEST_STAGED_INJECT_V1__';
@@ -195,7 +195,7 @@ async function startMockCdpServer(docState) {
                 JSON.stringify({ id: msg.id, result: { result: { type: 'object', value: { status: 'ok' } } } })
               );
             } else if (expr.includes('__TEST_STAGED_INJECT_V2__')) {
-              docState.agPrism = '1.0.0';
+              docState.agPrism = '1.0.1';
               docState.agCsStyle = '1';
               docState.injectCount += 1;
               docState.lastMarker = '__TEST_STAGED_INJECT_V2__';
@@ -276,7 +276,7 @@ test('tools/patch-asar.cjs installs /* __AG_PRISM_START__ */, preserves Chinese 
     ].join('\n');
 
     const stubInjectExpr =
-      '(() => { window.__agPrism = { ok: true }; document.documentElement?.setAttribute("data-ag-prism", "1.0.0"); })()';
+      '(() => { window.__agPrism = { ok: true }; document.documentElement?.setAttribute("data-ag-prism", "1.0.1"); })()';
 
     const initialAsarBuf = buildFixtureAsar(basePreload);
     fs.writeFileSync(asarPath, initialAsarBuf);
@@ -489,7 +489,7 @@ test('tools/patch-asar.cjs deferred daemon heals CDP window on Ctrl+Shift+R relo
 
     const docState = {
       readyState: 'complete',
-      agPrism: '1.0.0',
+      agPrism: '1.0.1',
       agCsStyle: '1',
       injectCount: 0,
       pageEnabledCount: 0,
@@ -505,7 +505,7 @@ test('tools/patch-asar.cjs deferred daemon heals CDP window on Ctrl+Shift+R relo
     });
 
     const stagedInjectExpr =
-      '(() => { /* __TEST_STAGED_INJECT_V2__ */ document.documentElement.setAttribute("data-ag-prism", "1.0.0"); })()';
+      '(() => { /* __TEST_STAGED_INJECT_V2__ */ document.documentElement.setAttribute("data-ag-prism", "1.0.1"); })()';
 
     const res = patchAsar.patchAsarFile(asarPath, {
       hostPid: mockHost.pid,
@@ -528,7 +528,7 @@ test('tools/patch-asar.cjs deferred daemon heals CDP window on Ctrl+Shift+R relo
 
     mockCdp.emitReload();
     const healedOnEvent = await waitForCondition(
-      () => docState.agPrism === '1.0.0' && docState.injectCount >= 1,
+      () => docState.agPrism === '1.0.1' && docState.injectCount >= 1,
       4500
     );
     assert.equal(healedOnEvent, true);

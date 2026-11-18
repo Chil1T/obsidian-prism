@@ -274,6 +274,29 @@ test('generateInfoPlist generates valid bundle metadata and escapes special XML 
   assert.ok(plist.includes('<string>1.2.3-beta&amp;1&lt;test&gt;</string>'));
 });
 
+test('macOS Swift installer & LaunchAgent contracts enforce KeepAlive <true/>, native Sidecar yield, and bundleUnchanged fast-refresh', () => {
+  const setupSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Setup', 'main.swift'), 'utf8');
+  const watcherSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Watcher', 'main.swift'), 'utf8');
+  const cdpSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'CdpClient.swift'), 'utf8');
+
+  assert.match(setupSwift, /<key>KeepAlive<\/key>\s*<true\/>/, 'macOS LaunchAgent must set KeepAlive to <true/>');
+  assert.ok(setupSwift.includes('--plugin-dir'), 'macOS Setup supports --plugin-dir');
+  assert.ok(setupSwift.includes('.gemini/config/plugins') || cdpSwift.includes('.gemini/config/plugins'), 'Deploys to standard native plugin dir');
+  assert.ok(watcherSwift.includes('isNativeDaemonAlive'), 'macOS Watcher politely yields when native Sidecar daemon is alive');
+  assert.ok(watcherSwift.includes('patch-batch'), 'macOS Watcher supports patch-batch atomic config updates');
+  assert.ok(cdpSwift.includes('bundleUnchanged'), 'macOS CdpClient implements bundleUnchanged -> refreshConfig fast path');
+  assert.ok(cdpSwift.includes('__agPrismThought?.sync?.(effectiveCfg)'), 'macOS CdpClient syncs __agPrismThought');
+  assert.ok(cdpSwift.includes('isEligibleTarget'), 'macOS CdpClient filters non-host preview targets via isEligibleTarget');
+  assert.ok(cdpSwift.includes('reconcileConfigAliases'), 'macOS CdpClient reconciles canonical & legacy config aliases');
+  assert.ok(cdpSwift.includes('__fromFile'), 'macOS CdpClient marks file-driven config refresh with __fromFile');
+  assert.ok(watcherSwift.includes('isTrustedMainFrameBinding'), 'macOS Watcher isolates privileged CDP bindings to top-level frame');
+
+  const buildMacosSrc = fs.readFileSync(path.join(ROOT_DIR, 'scripts', 'build-macos.mjs'), 'utf8');
+  assert.ok(buildMacosSrc.includes('collectNativePluginEntries'), 'macOS app payload must bundle native-plugin Sidecar directory');
+  assert.ok(buildMacosSrc.includes('collectOptionalOmniTopEntries'), 'macOS app payload must bundle top-level omni-client.js');
+  assert.ok(buildMacosSrc.includes("'-volname', 'Obsidian Prism'"), 'macOS DMG volume name must be Obsidian Prism');
+});
+
 test(
   'macOS .app builds cleanly as universal binary and executes full install, CDP injection, setting sync, upgrade, and uninstall lifecycle',
   { skip: process.platform !== 'darwin' ? 'macOS-only .app E2E test' : false },
@@ -371,7 +394,7 @@ test(
       assert.equal(swiftHash, nodeHash);
       const expectedCfgObj = JSON.parse(expectedCfg);
       assert.ok(injectedExpr.includes(`"palette":"${expectedCfgObj.palette}"`));
-      assert.ok(injectedExpr.includes(`"ringMode":"${expectedCfgObj.ringMode}"`));
+      assert.ok(injectedExpr.includes(`"omniModule":"${expectedCfgObj.omniModule}"`));
 
       // Verify watcher --once CLI mode works standalone against CDP
       const watcherBin = path.join(installDir, 'obsidian-prism-watcher');

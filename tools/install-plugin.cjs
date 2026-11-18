@@ -17,7 +17,7 @@ const path = require("node:path");
 const { spawnBreakawayNodeProcess, isPidAlive } = require("./patch-asar.cjs");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
-const { SYNC_ROOT_FILES } = require(path.join(ROOT_DIR, "cdp.js"));
+const { SYNC_ROOT_FILES, readPidFromLockFile, isExpectedDaemonProcess } = require(path.join(ROOT_DIR, "cdp.js"));
 
 function getDefaultPluginTargetDir() {
   return path.join(os.homedir(), ".gemini", "config", "plugins", "obsidian-prism");
@@ -64,11 +64,11 @@ function stopExistingDaemonInDir(targetDir) {
   if (!fs.existsSync(pidFile)) return null;
   let killedPid = null;
   try {
-    const raw = JSON.parse(fs.readFileSync(pidFile, "utf8"));
-    if (raw && raw.pid && isPidAlive(raw.pid)) {
+    const pid = readPidFromLockFile(pidFile);
+    if (pid && isPidAlive(pid) && isExpectedDaemonProcess(pid)) {
       try {
-        process.kill(raw.pid);
-        killedPid = raw.pid;
+        process.kill(pid);
+        killedPid = pid;
       } catch {}
     }
   } catch {}
@@ -85,13 +85,12 @@ function sleep(ms) {
 async function verifyLiveWindowAttach(targetCdp, portOverride = null) {
   const port = portOverride || targetCdp.readPort();
   if (!port) return { cdpPort: null, attachedPages: [] };
-  let pages;
+  let active;
   try {
-    pages = await targetCdp.listPages(port);
+    active = await targetCdp.listPages(port);
   } catch {
     return { cdpPort: port, attachedPages: [], unreachable: true };
   }
-  const active = pages.filter((p) => !/Untitled|launchpad/i.test(`${p.title || ""} ${p.url || ""}`));
   const attachedPages = [];
   for (const page of active) {
     let session = null;

@@ -1,12 +1,21 @@
-// Stop watch/daemon processes and remove Antigravity Prism from every open Antigravity window.
+// Stop watch/daemon processes and remove Obsidian Prism from every open Antigravity window.
 const fs = require('fs');
 const path = require('path');
-const { PID_FILE, REMOVE_EXPRESSION, readPort, listPages, CdpSession } = require('./cdp');
+const {
+  PID_FILE,
+  REMOVE_EXPRESSION,
+  readPort,
+  listPages,
+  CdpSession,
+  readPidFromLockFile,
+  isExpectedDaemonProcess,
+} = require('./cdp');
 
 function stopPidFile(filePath, label) {
   try {
-    const pid = parseInt(fs.readFileSync(filePath, 'utf8'), 10);
-    if (pid) {
+    if (!fs.existsSync(filePath)) return;
+    const pid = readPidFromLockFile(filePath);
+    if (pid && isExpectedDaemonProcess(pid)) {
       try {
         process.kill(pid);
         console.log(`[✓] 已停止${label} (PID ${pid})`);
@@ -14,7 +23,9 @@ function stopPidFile(filePath, label) {
         console.log(`[i] ${label}未在运行`);
       }
     }
-    fs.unlinkSync(filePath);
+    try {
+      fs.unlinkSync(filePath);
+    } catch {}
   } catch {}
 }
 

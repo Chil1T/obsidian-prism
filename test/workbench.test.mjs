@@ -214,8 +214,17 @@ test('workbench & host runtime enforce GPU compositor optimization, 32% aura hei
   const htmlSrc = fs.readFileSync(htmlPath, 'utf8');
   const cssSrc = fs.readFileSync(cssPath, 'utf8');
   const hostCssSrc = fs.readFileSync(hostCssPath, 'utf8');
-  const auraSrc = fs.readFileSync(path.resolve(import.meta.dirname, '..', 'conv-aura.js'), 'utf8');
-  const runtimeSrc = fs.readFileSync(runtimePath, 'utf8') + '\n' + auraSrc;
+  const extractedParts = [
+    'conv-aura.js',
+    'home-studio-panel.js',
+    'home-ripple-host.js',
+    'model-glyph-crystal.js',
+    'stream-choreography.js',
+    'prism-rim-canvas.js',
+  ]
+    .map((rel) => fs.readFileSync(path.resolve(import.meta.dirname, '..', rel), 'utf8'))
+    .join('\n');
+  const runtimeSrc = fs.readFileSync(runtimePath, 'utf8') + '\n' + extractedParts;
 
   // 1. Composer send/cancel & sidebar running indicator parity
   assert.ok(src.includes('ag-v2-send-btn'));

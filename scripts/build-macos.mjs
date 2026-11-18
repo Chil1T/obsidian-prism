@@ -11,6 +11,8 @@ import {
   cdp,
   createManifest,
   resolveActiveConfigFile,
+  collectOptionalOmniTopEntries,
+  collectNativePluginEntries,
   renderPrismIconPng,
   buildIcns,
 } from './build-common.mjs';
@@ -139,7 +141,7 @@ function createDmgWithRetry(srcFolder, dmgPath) {
       if (fs.existsSync(dmgPath)) fs.rmSync(dmgPath, { force: true });
       execFileSync(
         'hdiutil',
-        ['create', '-volname', 'Antigravity Prism', '-srcfolder', srcFolder, '-ov', '-format', 'UDZO', dmgPath],
+        ['create', '-volname', 'Obsidian Prism', '-srcfolder', srcFolder, '-ov', '-format', 'UDZO', dmgPath],
         { stdio: 'inherit' }
       );
       return;
@@ -235,6 +237,8 @@ function buildMacosApp({
         name: part,
         data: Buffer.from(cdp.prepareRuntimePart(part, fs.readFileSync(path.join(ROOT_DIR, part), 'utf8')), 'utf8'),
       })),
+      ...collectOptionalOmniTopEntries(),
+      ...collectNativePluginEntries(activeConfigFile),
     ];
 
     for (const entry of payloadEntries) {

@@ -1,6 +1,6 @@
 {
   "language": "zh-CN",
-  "lang": "auto",
+  "lang": "zh-CN",
   "palette": "obsidian",
   "lightPreset": "crystal",
   "motionLevel": "ultra",
@@ -23,7 +23,12 @@
   "sidebar": "on",
   "sidebarCompact": false,
   "smoothCaret": true,
-  "ringMode": "context",
-  "effortSliderStyle": "claude",
-  "effortAccent": true
+  "accentTone": "follow",
+  "cornerStyle": "balanced",
+  "codeFont": "default",
+  "codeLigatures": false,
+  "ambientIntensity": "100",
+  "thoughtView": "immersive",
+  "omniModule": "on",
+  "linkTarget": "builtin"
 }

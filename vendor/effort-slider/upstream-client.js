@@ -239,8 +239,36 @@
     return false;
   }
 
-  function motionMode(win, explicitSettings) {
+  function getPrismRootAttr(doc, win, attr) {
+    try {
+      var d = doc || (win && win.document) || (typeof document !== "undefined" ? document : null);
+      if (d && d.documentElement && typeof d.documentElement.getAttribute === "function") {
+        return d.documentElement.getAttribute(attr) || "";
+      }
+    } catch (err) {}
+    return "";
+  }
+
+  function isPrismMotionOff(doc, win) {
+    return getPrismRootAttr(doc, win, "data-ag-cs-motion") === "off" || prefersReducedMotion(win);
+  }
+
+  function resolvePrismAccentTone(doc, win) {
+    var ac = getPrismRootAttr(doc, win, "data-ag-cs-accent");
+    if (ac === "mono" || ac === "amber" || ac === "iris" || ac === "cobalt") return ac;
+    var pal = getPrismRootAttr(doc, win, "data-ag-cs-palette");
+    if ((!ac || ac === "follow") && pal === "warm") return "amber";
+    return "follow";
+  }
+
+  function motionMode(win, explicitSettings, doc) {
     if (prefersReducedMotion(win)) return "quick";
+    if (!explicitSettings) {
+      var pm = getPrismRootAttr(doc, win, "data-ag-cs-motion");
+      if (pm === "off") return "quick";
+      if (pm === "subtle" || pm === "standard") return "fast";
+      if (pm === "ultra") return "full";
+    }
     var s = explicitSettings ? normalizeSettings(explicitSettings) : readSettings(win);
     return s.motion || "fast";
   }
@@ -905,10 +933,31 @@
    * - start < pct <= end    : #4d93f8 -> #9333ea (蓝紫过渡)
    * - end < pct <= 1        : #9333ea -> #4c1d95 (深紫星云)
    */
-  function fillColorFor(pct, startOverride, endOverride, isClaude) {
+  function fillColorFor(pct, startOverride, endOverride, isClaude, accentOverride) {
     var p = clamp01(pct);
     var start = typeof startOverride === "number" && Number.isFinite(startOverride) ? startOverride : ENERGY_START;
     var end = typeof endOverride === "number" && Number.isFinite(endOverride) ? endOverride : ENERGY_END;
+    var tone = accentOverride || resolvePrismAccentTone(null, null);
+    if (tone === "mono") {
+      if (p <= start + 1e-6) return "#71717a";
+      if (p <= end + 1e-6) return mixHex("#71717a", "#a1a1aa", (p - start) / Math.max(1e-6, end - start));
+      return mixHex("#a1a1aa", "#d4d4d8", (p - end) / Math.max(1e-6, 1 - end));
+    }
+    if (tone === "amber") {
+      if (p <= start + 1e-6) return "#b45309";
+      if (p <= end + 1e-6) return mixHex("#b45309", "#d97706", (p - start) / Math.max(1e-6, end - start));
+      return mixHex("#d97706", "#f59e0b", (p - end) / Math.max(1e-6, 1 - end));
+    }
+    if (tone === "iris") {
+      if (p <= start + 1e-6) return "#6d28d9";
+      if (p <= end + 1e-6) return mixHex("#6d28d9", "#8b5cf6", (p - start) / Math.max(1e-6, end - start));
+      return mixHex("#8b5cf6", "#a855f7", (p - end) / Math.max(1e-6, 1 - end));
+    }
+    if (tone === "cobalt") {
+      if (p <= start + 1e-6) return "#1d4ed8";
+      if (p <= end + 1e-6) return mixHex("#1d4ed8", "#2563eb", (p - start) / Math.max(1e-6, end - start));
+      return mixHex("#2563eb", "#0284c7", (p - end) / Math.max(1e-6, 1 - end));
+    }
     if (isClaude) {
       if (p <= start + 1e-6) return "#71717a";
       if (p <= end + 1e-6) {
@@ -931,17 +980,27 @@
    * 填充区线性渐变背景：
    * 让轨道左侧始终保留蓝色起点，随滑块向右推进依次展开蓝紫过渡与深紫星云
    */
-  function fillBackgroundFor(pct, startOverride, endOverride, isClaude) {
+  function fillBackgroundFor(pct, startOverride, endOverride, isClaude, accentOverride) {
     var p = clamp01(pct);
     var start = typeof startOverride === "number" && Number.isFinite(startOverride) ? startOverride : ENERGY_START;
     var end = typeof endOverride === "number" && Number.isFinite(endOverride) ? endOverride : ENERGY_END;
+    var tone = accentOverride || resolvePrismAccentTone(null, null);
+    if (tone === "mono") {
+      return p <= 0.05
+        ? "rgba(161, 161, 170, 0.22)"
+        : "linear-gradient(90deg, rgba(113, 113, 122, 0.45) 0%, " + fillColorFor(p, start, end, false, "mono") + " 100%)";
+    }
+    if (tone === "amber" || tone === "iris" || tone === "cobalt") {
+      var baseStart = tone === "amber" ? "#b45309" : tone === "iris" ? "#6d28d9" : "#1d4ed8";
+      return "linear-gradient(90deg, " + baseStart + " 0%, " + fillColorFor(p, start, end, false, tone) + " 100%)";
+    }
     if (isClaude) {
       if (p <= 0.05) return "rgba(142, 118, 192, 0.15)";
       // 末端颜色随位置连续插值（#71717a → #a78bfa → #704ea2），避免过中点时整条填充色突变
-      return "linear-gradient(90deg, rgba(142, 118, 192, 0.25) 0%, " + fillColorFor(p, start, end, true) + " 100%)";
+      return "linear-gradient(90deg, rgba(142, 118, 192, 0.25) 0%, " + fillColorFor(p, start, end, true, "follow") + " 100%)";
     }
     if (p <= start + 1e-6) return "#4d93f8";
-    var endColor = fillColorFor(p, start, end, false);
+    var endColor = fillColorFor(p, start, end, false, "follow");
     if (p <= end + 1e-6) {
       var stopBlue = start > 0 ? Math.round((start / p) * 100) : 0;
       if (stopBlue <= 0) {
@@ -967,14 +1026,20 @@
 
   /**
    * 档位文字着色：
-   * - 单档位锁定模型或 Off 档位保持官方默认灰（返回 ""）
-   * - Codex 风格：首档蓝 #4d93f8、中档蓝紫 #6c78f7、高档亮紫 #8b5cf6
-   * - Claude 风格：首档暖灰/柔紫 #94a3b8、中档紫罗兰 #a78bfa、高档亮淡紫 #c4b5fd
+   * - 单档位锁定模型、Off 档位或极简单色（mono）保持官方默认灰（返回 ""）
    */
-  function valueColorFor(label, index, count, isMax, hasOffFirst, isClaude) {
+  function valueColorFor(label, index, count, isMax, hasOffFirst, isClaude, accentOverride) {
     if (isOffLevel(label)) return "";
     var n = Number(count) || 0;
     if (n <= 1) return "";
+    var tone = accentOverride || resolvePrismAccentTone(null, null);
+    if (tone === "mono") return "";
+    var tIdx = typeof index === "number" && index >= 0 ? index : 0;
+    var tFirst = hasOffFirst ? 1 : 0;
+    var tRatio = clamp01((tIdx - tFirst) / Math.max(1, n - 1 - tFirst));
+    if (tone === "amber") return isMax || index === n - 1 ? "#f59e0b" : mixHex("#d97706", "#f59e0b", tRatio);
+    if (tone === "iris") return isMax || index === n - 1 ? "#a78bfa" : mixHex("#7c3aed", "#a78bfa", tRatio);
+    if (tone === "cobalt") return isMax || index === n - 1 ? "#38bdf8" : mixHex("#2563eb", "#38bdf8", tRatio);
     if (isClaude) {
       if (isMax || index === n - 1) return "#c4b5fd";
       var cIdx = typeof index === "number" && index >= 0 ? index : 0;
@@ -1840,7 +1905,7 @@
     if (!d) return;
     var agTrigger = findAntigravityTrigger(d);
     var claudeFlag = typeof isClaude === "boolean" ? isClaude : isClaudeModel(agTrigger ? agTrigger.textContent : "");
-    var color = valueColorFor(label, index, count, isMax, hasOffFirst, claudeFlag);
+    var color = valueColorFor(label, index, count, isMax, hasOffFirst, claudeFlag, resolvePrismAccentTone(d, null));
 
     // 1. Antigravity 原生触发按钮：只给档位后缀 span 着色，保持模型名称本身清晰易读
     var agTrigger = findAntigravityTrigger(d);
@@ -2123,7 +2188,9 @@
     // 单档位模型（如 GPT-OSS 120B (Medium)）或自定义模型：锁定不可拖动
     var singleParsed = modelObj && parseModelLabel(modelObj.label);
     var singleEffort = singleParsed ? singleParsed.effort : "medium";
-    var singleLabel = singleParsed ? singleParsed.effortLabel : "固定";
+    var curDocLang = getPrismRootAttr(null, null, "data-ag-cs-lang");
+    var fallbackFixed = curDocLang === "en" ? "Fixed" : "固定";
+    var singleLabel = singleParsed ? singleParsed.effortLabel : fallbackFixed;
     var isClaudeSingle = isClaudeModel(baseName || (modelObj && modelObj.label));
     return {
       baseName: baseName || (modelObj && modelObj.label) || "",
@@ -2230,6 +2297,50 @@
     return String(effortKey || "");
   }
 
+  var EFFORT_TITLE_I18N = {
+    "zh-CN": "推理等级",
+    "zh-TW": "推理等級",
+    "yue": "推理等級",
+    "en": "Reasoning Effort",
+    "ja": "推論レベル"
+  };
+
+  function resolveEffortTitle(doc, win) {
+    var lang =
+      (doc && doc.documentElement && typeof doc.documentElement.getAttribute === "function" && doc.documentElement.getAttribute("data-ag-cs-lang")) ||
+      "zh-CN";
+    try {
+      var loc = (win && win.__agCsLocales) || (globalRoot && globalRoot.__agCsLocales);
+      var ui = loc && typeof loc.getUiStrings === "function" ? loc.getUiStrings(lang) : null;
+      if (ui && ui.effortTitle) return String(ui.effortTitle);
+    } catch (e) {}
+    return EFFORT_TITLE_I18N[lang] || EFFORT_TITLE_I18N["zh-CN"];
+  }
+
+  function clearAntigravityDomDecorations(doc) {
+    if (!doc || typeof doc.querySelectorAll !== "function") return;
+    var spans = doc.querySelectorAll('[data-ces-part="trigger-effort"], [data-testid="model-selector-trigger"] span[style]');
+    for (var i = 0; i < spans.length; i += 1) {
+      var sp = spans[i];
+      if (sp.style) {
+        sp.style.color = "";
+        sp.style.opacity = "";
+        sp.style.fontWeight = "";
+      }
+      if (typeof sp.removeAttribute === "function") {
+        sp.removeAttribute("data-ces-part");
+      }
+    }
+    var panels = doc.querySelectorAll(".ces-ag-panel-enhanced");
+    for (var p = 0; p < panels.length; p += 1) {
+      if (panels[p].classList) panels[p].classList.remove("ces-ag-panel-enhanced");
+    }
+    var items = doc.querySelectorAll("[data-ces-model-selected]");
+    for (var m = 0; m < items.length; m += 1) {
+      items[m].removeAttribute("data-ces-model-selected");
+    }
+  }
+
   function mountCodexEffortSlider(options) {
     var opts = options || {};
     var container = opts.container;
@@ -2248,7 +2359,7 @@
     var rootEl = doc.createElement("div");
     rootEl.className = "ces-root";
     rootEl.setAttribute("role", "slider");
-    rootEl.setAttribute("aria-label", "推理等级");
+    rootEl.setAttribute("aria-label", resolveEffortTitle(doc, win));
 
     var trackEl = doc.createElement("div");
     trackEl.className = "ces-track";
@@ -2446,7 +2557,7 @@
         if (label && valEl.textContent !== label) {
           valEl.textContent = label;
           // 无论是 Claude 还是 Codex (Argon / Flash)，文字切换时统一触发顺滑向上翻转动效
-          if (!prefersReducedMotion(win)) {
+          if (!isPrismMotionOff(doc, win)) {
             if (valEl.__cesRiseTimer) {
               clearTimeout(valEl.__cesRiseTimer);
               valEl.__cesRiseTimer = null;
@@ -2465,7 +2576,10 @@
             }, 320);
           }
         }
-        var vColor = snap.locked ? "" : valueColorFor(label, safeIdx, count, isMax, snap.hasOffFirst, snap.isClaude) || "";
+        var vColor =
+          snap.locked
+            ? ""
+            : valueColorFor(label, safeIdx, count, isMax, snap.hasOffFirst, snap.isClaude, resolvePrismAccentTone(doc, win)) || "";
         if (valEl.style && valEl.style.color !== vColor) {
           valEl.style.color = vColor;
         }
@@ -2610,8 +2724,10 @@
         trackEl.classList.remove("is-locked");
       }
 
+      var curTone = resolvePrismAccentTone(doc, win);
+      var motOff = isPrismMotionOff(doc, win);
       var offsetCss = knobOffsetOf(p, KNOB_RADIUS);
-      var fillBg = fillBackgroundFor(p, snap.energyStart, snap.energyEnd, snap.isClaude);
+      var fillBg = fillBackgroundFor(p, snap.energyStart, snap.energyEnd, snap.isClaude, curTone);
       trackEl.style.setProperty("--ces-fill", offsetCss);
       trackEl.style.setProperty("--ces-fill-bg", fillBg);
       fillEl.style.width = offsetCss;
@@ -2620,12 +2736,14 @@
       starsEl.style.width = offsetCss;
       knobEl.style.left = offsetCss;
 
-      // Claude 点阵：按圆钮实际位置连续计算强度/速度（Medium ≈0.35 强度、半速；High 全量、全速）
-      claudeIntensity = snap.isClaude && !snap.locked && count > 1 ? claudeIntensityFor(p, snap.energyStart) : 0;
+      // Claude 点阵：在 motion="off" 或 accent="mono" 极简单色下自动停用彩色点阵
+      claudeIntensity =
+        !motOff && curTone !== "mono" && snap.isClaude && !snap.locked && count > 1
+          ? claudeIntensityFor(p, snap.energyStart)
+          : 0;
       claudeSpeed = claudeSpeedFor(p, snap.energyStart);
       if (claudeIntensity > 0) {
         if (claudeCanvasEl.style.display !== "block") {
-          // 仅「无特效 → 有特效」时重置入场扫掠；之后拖动只调强度/速度，不重播
           claudeCanvasEl.style.display = "block";
           claudeAnimStart = nowMs();
           claudeLastTs = 0;
@@ -2638,8 +2756,8 @@
         stopClaudeCanvasAnimation();
       }
 
-      var energy = snap.locked ? 0 : energyForPct(p, snap.energyStart);
-      var slowdown = motionMode(win) === "quick" ? REDUCED_MOTION_SLOWDOWN : 1;
+      var energy = snap.locked || motOff ? 0 : energyForPct(p, snap.energyStart);
+      var slowdown = motionMode(win, null, doc) === "quick" ? REDUCED_MOTION_SLOWDOWN : 1;
       if (Math.abs(energy - lastAppliedEnergy) > 1e-5 || slowdown !== lastAppliedSlowdown) {
         lastAppliedEnergy = energy;
         lastAppliedSlowdown = slowdown;
@@ -2688,7 +2806,7 @@
       if (destroyed) return;
       var snap = readSeatSnapshot();
       var m = ensureMotion(snap);
-      var mode = motionMode(win);
+      var mode = motionMode(win, null, doc);
       var params = motionParamsForMode(mode);
 
       var now = typeof ts === "number" && ts > 0 ? ts : nowMs();
@@ -2837,7 +2955,7 @@
       lastPtrPct = ptrPct;
       lastPtrMs = now;
 
-      var mode = motionMode(win);
+      var mode = motionMode(win, null, doc);
       var nowIndex;
       var targetPct;
 
@@ -2894,7 +3012,7 @@
         if (p !== null) ptrPct = p;
       }
 
-      var mode = motionMode(win);
+      var mode = motionMode(win, null, doc);
       var finalIndex;
       if (mode === "fast") {
         var baseDetent = detentIndex >= 0 && detentIndex < snap.count ? detentIndex : snap.officialIndex;
@@ -3367,7 +3485,8 @@
           if (sib.textContent !== displayEffort) {
             sib.textContent = displayEffort;
           }
-          var rowColor = valueColorFor(displayEffort, displayIdx, displayCount, displayMax, false) || "";
+          var rowColor =
+            valueColorFor(displayEffort, displayIdx, displayCount, displayMax, false, false, resolvePrismAccentTone(doc, win)) || "";
           if (sib.style.color !== rowColor) sib.style.color = rowColor;
           var rowOpacity = rowColor ? "1" : "";
           if (sib.style.opacity !== rowOpacity) sib.style.opacity = rowOpacity;
@@ -3740,6 +3859,9 @@
           activePanel.__cesAgResetUsageHover();
         } catch (e) {}
       }
+      if (activePanel && activePanel.classList) {
+        activePanel.classList.remove("ces-ag-panel-enhanced");
+      }
       if (doc && doc.activeElement && activeSection && activeSection.contains(doc.activeElement)) {
         try {
           doc.activeElement.blur();
@@ -3799,7 +3921,7 @@
 
       var title = doc.createElement("span");
       title.className = "ces-ag-effort-title";
-      title.textContent = "推理等级";
+      title.textContent = resolveEffortTitle(doc, win);
 
       var valueEl = doc.createElement("span");
       valueEl.className = "ces-ag-effort-value";
@@ -3894,6 +4016,19 @@
         if (activePanel !== panel || !activeSection || !panel.contains(activeSection)) {
           unmountActiveSection();
           mountSectionIntoPanel(panel, ctx);
+        } else if (activeSection) {
+          var nextEffortTitle = resolveEffortTitle(doc, win);
+          var titleSpan = activeSection.querySelector(".ces-ag-effort-title");
+          if (titleSpan && titleSpan.textContent !== nextEffortTitle) {
+            titleSpan.textContent = nextEffortTitle;
+          }
+          var sliderRoot = activeSection.querySelector(".ces-root");
+          if (sliderRoot && sliderRoot.getAttribute("aria-label") !== nextEffortTitle) {
+            sliderRoot.setAttribute("aria-label", nextEffortTitle);
+          }
+          if (activeMount && typeof activeMount.refresh === "function") {
+            activeMount.refresh();
+          }
         }
 
         if (ctx) {
@@ -3925,6 +4060,7 @@
           observer = null;
         }
         unmountActiveSection();
+        clearAntigravityDomDecorations(doc);
       },
       rescan: scan,
       bindPanelInteractions: bindPanelInteractions
@@ -3947,7 +4083,9 @@
     }
 
     installStyles(doc);
-    var settingsUi = installSettingsUi({ document: doc, window: win });
+    var settingsUi = opts.disableContextMenuSettings
+      ? { stop: function () {} }
+      : installSettingsUi({ document: doc, window: win });
     var agObs = installAntigravityObserver({ document: doc, window: win });
 
     var activeGenericMount = null;

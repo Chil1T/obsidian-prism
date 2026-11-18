@@ -1,6 +1,4 @@
-// Obsidian Prism — Collapsible Settings Panel, Git Sync & Open-Source Credits Module
-// Extracted from ui-runtime.js to enforce modular separation of concerns.
-
+// Obsidian Prism — Collapsible Settings Control Center, Scene Presets, Config Backup & Credits Module
 (function (root) {
   'use strict';
   const G = root || (typeof globalThis !== 'undefined' ? globalThis : window);
@@ -8,43 +6,183 @@
 
   const SETTINGS_SEC_ID = 'ag-cs-settings-sec';
   const STORAGE_SETTINGS_OPEN_KEY = 'ag-prism:settings-open';
+  const STORAGE_SETTINGS_SUBTAB_KEY = 'ag-prism:settings-subtab';
+  const SETTINGS_STYLE_ID = 'ag-prism-settings-v101-css';
+
+  const SETTINGS_EXTRA_CSS =
+    '.ag-cs-settings-topdeck{display:flex;flex-direction:column;gap:8px;margin-bottom:10px;padding:9px 11px;border-radius:var(--ag-cs-r-md,10px);border:1px solid var(--border,rgba(148,163,184,.18));background:rgba(128,138,158,.05)}' +
+    '.ag-cs-preset-row,.ag-cs-cfg-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}' +
+    '.ag-cs-preset-label{font-size:11px;font-weight:600;color:var(--muted-foreground)}' +
+    '.ag-cs-preset-pills,.ag-cs-cfg-actions{display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap}' +
+    '.ag-cs-preset-btn,.ag-cs-cfg-btn{height:25px;padding:0 10px;border-radius:999px;border:1px solid var(--border,rgba(148,163,184,.22));background:transparent;color:var(--foreground);font-size:11.5px;font-weight:500;cursor:pointer;transition:background .15s,border-color .15s}' +
+    '.ag-cs-cfg-btn{border-radius:var(--ag-cs-r-sm,7px);height:26px}' +
+    '.ag-cs-preset-btn:hover,.ag-cs-cfg-btn:hover{background:rgba(128,138,158,.12);border-color:rgba(148,163,184,.38)}' +
+    '.ag-cs-preset-btn[data-active="1"]{background:rgba(49,134,255,.15);border-color:rgba(49,134,255,.48);font-weight:600}' +
+    '.ag-cs-subtabs{display:flex;align-items:center;gap:3px;flex-wrap:wrap;padding-top:6px;border-top:1px solid var(--border,rgba(148,163,184,.14))}' +
+    '.ag-cs-subtab-btn{height:24px;padding:0 9px;border-radius:var(--ag-cs-r-sm,6px);border:0;background:transparent;color:var(--muted-foreground);font-size:11.5px;font-weight:500;cursor:pointer}' +
+    '.ag-cs-subtab-btn:hover{color:var(--foreground);background:rgba(128,138,158,.09)}' +
+    '.ag-cs-subtab-btn[aria-selected="true"]{background:var(--secondary,rgba(128,138,158,.18));color:var(--foreground);font-weight:600}' +
+    '.ag-cs-settings-group[hidden]{display:none!important}' +
+    '.ag-cs-settings-card{border-radius:var(--ag-cs-r-lg,12px)!important}' +
+    '.ag-cs-seg-group{border-radius:var(--ag-cs-r-md,8px)!important}' +
+    '.ag-cs-seg-btn{border-radius:var(--ag-cs-r-sm,6px)!important}' +
+    '.ag-cs-cfg-footer{margin-top:10px;padding:10px 12px;border-radius:var(--ag-cs-r-md,10px);border:1px solid var(--border,rgba(148,163,184,.18));background:rgba(128,138,158,.04)}' +
+    '.ag-cs-cfg-meta{display:flex;flex-direction:column;gap:2px;min-width:180px;flex:1}' +
+    '.ag-cs-cfg-title{font-size:12px;font-weight:600;color:var(--foreground)}' +
+    '.ag-cs-cfg-hint{font-size:11px;color:var(--muted-foreground)}' +
+    '.ag-cs-cfg-hint[data-tone="ok"]{color:#10b981}.ag-cs-cfg-hint[data-tone="err"]{color:#ef4444}';
+
+  const PRISM_SETTINGS_SCHEMA = Object.freeze({
+    palette: { allowed: ['obsidian', 'host', 'warm'], default: 'obsidian', aliases: { claude: 'warm' } },
+    lightPreset: { allowed: ['crystal', 'alabaster'], default: 'crystal' },
+    accentTone: { allowed: ['follow', 'cobalt', 'iris', 'amber', 'mono'], default: 'follow' },
+    cornerStyle: { allowed: ['sharp', 'balanced', 'soft'], default: 'balanced' },
+    ambientIntensity: { allowed: ['0', '35', '70', '100'], default: '100' },
+    motionLevel: { allowed: ['off', 'subtle', 'standard', 'ultra'], default: 'ultra' },
+    targetFps: { allowed: ['60', '120', '180', 'native'], default: '180' },
+    homeLayout: { allowed: ['studio', 'classic', 'off'], default: 'studio' },
+    homeRipple: { allowed: [true, false], default: true },
+    logoInk: { allowed: ['accent', 'foreground'], default: 'accent' },
+    language: { allowed: ['zh-CN', 'zh-TW', 'yue', 'en', 'ja'], default: 'zh-CN' },
+    composerRestyle: { allowed: [true, false], default: true },
+    placeholderStyle: { allowed: ['studio', 'host'], default: 'studio' },
+    smoothCaret: { allowed: [true, false], default: true },
+    codeFont: { allowed: ['default', 'jetbrains', 'cascadia', 'sfmono'], default: 'default' },
+    codeLigatures: { allowed: [true, false], default: false },
+    mascot: { allowed: ['crab', 'minis', 'off'], default: 'crab', aliases: { dual: 'crab' } },
+    sidebarRestyle: { allowed: [true, false], default: true },
+    sidebarCompact: { allowed: [true, false], default: false },
+    thoughtTranslate: { allowed: ['off', 'machine', 'ai'], default: 'off' },
+    thoughtTrigger: { allowed: ['preload', 'expand'], default: 'preload' },
+    thoughtView: { allowed: ['immersive', 'bilingual'], default: 'immersive' },
+    telemetryModule: { allowed: ['auto', 'on', 'off'], default: 'auto' },
+    effortSliderModule: { allowed: ['auto', 'on', 'off'], default: 'auto' },
+    omniModule: { allowed: ['on', 'off'], default: 'on' },
+    linkTarget: { allowed: ['builtin', 'external'], default: 'builtin' },
+  });
+
+  const SCENE_PRESETS = Object.freeze({
+    ultra: Object.freeze({ motionLevel: 'ultra', targetFps: '180', homeRipple: true, mascot: 'crab', sidebarCompact: false, smoothCaret: true, ambientIntensity: '100' }),
+    focus: Object.freeze({ motionLevel: 'subtle', targetFps: '120', homeRipple: false, mascot: 'off', sidebarCompact: true, smoothCaret: true, ambientIntensity: '35' }),
+    eco: Object.freeze({ motionLevel: 'off', targetFps: '60', homeRipple: false, mascot: 'off', sidebarCompact: false, smoothCaret: false, ambientIntensity: '0' }),
+  });
+
+  const normThoughtStyle = (s) => (s === 'tech' || s === 'technical' ? 'technical' : s === 'concise' || s === 'custom' ? s : null);
+
+  function getDefaultSettingsPatch() {
+    const out = {};
+    for (const [k, spec] of Object.entries(PRISM_SETTINGS_SCHEMA)) out[k] = spec.default;
+    return out;
+  }
+
+  const redactSecrets = (s) =>
+    String(s || '')
+      .replace(/\b(?:sk|rk|pk|ak|AIza)[A-Za-z0-9_\-]{10,}\b/g, '[REDACTED]')
+      .replace(/\bBearer\s+[A-Za-z0-9._\-]{10,}\b/gi, 'Bearer [REDACTED]');
+
+  function sanitizeKeyVal(key, rawVal) {
+    if (!Object.prototype.hasOwnProperty.call(PRISM_SETTINGS_SCHEMA, key)) return { valid: false };
+    const spec = PRISM_SETTINGS_SCHEMA[key];
+    let val = typeof rawVal === 'string' && spec.aliases && Object.prototype.hasOwnProperty.call(spec.aliases, rawVal) ? spec.aliases[rawVal] : rawVal;
+    if (key === 'language' && val === 'auto') {
+      const nav = typeof navigator !== 'undefined' && navigator?.language ? navigator.language : '';
+      const normFn = G.__agCsI18n?.normalizeLanguage;
+      val = typeof normFn === 'function' && nav ? normFn(nav) : /^ja\b/i.test(nav) ? 'ja' : /^en\b/i.test(nav) ? 'en' : /^zh[-_](?:HK|MO)/i.test(nav) ? 'yue' : /^zh[-_](?:TW|Hant)/i.test(nav) ? 'zh-TW' : 'zh-CN';
+    }
+    if (key === 'omniModule' && typeof val === 'boolean') val = val ? 'on' : 'off';
+    if (typeof spec.default === 'string' && typeof val === 'number' && Number.isFinite(val)) val = String(val);
+    return spec.allowed.includes(val) ? { valid: true, value: val } : { valid: false };
+  }
+
+  function buildSanitizedConfigExport(currentSettings = {}, rawThoughtCfg = null, version = '1.0.1') {
+    const settings = {};
+    for (const [k, spec] of Object.entries(PRISM_SETTINGS_SCHEMA)) {
+      const c = sanitizeKeyVal(k, currentSettings[k]);
+      settings[k] = c.valid ? c.value : spec.default;
+    }
+    const out = { schema: 'obsidian-prism-config-v1', version: String(version || '1.0.1'), exportedAt: new Date().toISOString(), settings };
+    const tSrc =
+      rawThoughtCfg && typeof rawThoughtCfg === 'object' && rawThoughtCfg.config && typeof rawThoughtCfg.config === 'object'
+        ? rawThoughtCfg.config
+        : rawThoughtCfg;
+    if (tSrc && typeof tSrc === 'object' && !Array.isArray(tSrc) && typeof tSrc.then !== 'function' && tSrc.ok !== false) {
+      out.thought = {
+        stylePreset: normThoughtStyle(tSrc.stylePreset) || 'technical',
+        customPrompt: typeof tSrc.customPrompt === 'string' ? redactSecrets(tSrc.customPrompt.slice(0, 4000)) : '',
+        activeProfileId: typeof tSrc.activeProfileId === 'string' ? tSrc.activeProfileId.slice(0, 64) : '',
+        profiles: Array.isArray(tSrc.profiles)
+          ? tSrc.profiles
+              .filter((p) => p && typeof p === 'object' && !Array.isArray(p))
+              .slice(0, 16)
+              .map((p, i) => ({
+                id: String(p.id || `p-${i + 1}`).slice(0, 64),
+                name: redactSecrets(String(p.name || '').slice(0, 80)),
+                baseUrl: redactSecrets(String(p.baseUrl || '').slice(0, 260)),
+                model: redactSecrets(String(p.model || '').slice(0, 120)),
+              }))
+          : [],
+      };
+    }
+    return out;
+  }
+
+  function validateImportedConfigJson(rawInput) {
+    let parsed = rawInput;
+    if (typeof rawInput === 'string') {
+      if (rawInput.length > 131072) return { ok: false, error: 'payload-too-large' };
+      try {
+        parsed = JSON.parse(rawInput);
+      } catch {
+        return { ok: false, error: 'invalid-json' };
+      }
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { ok: false, error: 'invalid-root' };
+    const src = parsed.settings && typeof parsed.settings === 'object' && !Array.isArray(parsed.settings) ? parsed.settings : parsed;
+    const cleanPatch = {};
+    for (const k of Object.keys(src)) {
+      if (k === '__proto__' || k === 'constructor' || k === 'prototype' || /apikey|secret|token|password/i.test(k)) continue;
+      const c = sanitizeKeyVal(k, src[k]);
+      if (c.valid) cleanPatch[k] = c.value;
+    }
+    let cleanThought = null;
+    if (parsed.thought && typeof parsed.thought === 'object' && !Array.isArray(parsed.thought)) {
+      const t = parsed.thought;
+      const stylePreset = normThoughtStyle(t.stylePreset) || undefined;
+      const customPrompt = typeof t.customPrompt === 'string' ? redactSecrets(t.customPrompt.slice(0, 4000)) : undefined;
+      const profiles = Array.isArray(t.profiles)
+        ? t.profiles
+            .filter((p) => p && typeof p === 'object' && !Array.isArray(p))
+            .slice(0, 16)
+            .map((p, i) => ({
+              id: String(p.id || `p-${i + 1}`).slice(0, 64),
+              name: redactSecrets(String(p.name || '').slice(0, 80)),
+              baseUrl: /^https?:\/\//i.test(String(p.baseUrl || '').trim()) ? redactSecrets(String(p.baseUrl).trim().slice(0, 260)) : '',
+              model: redactSecrets(String(p.model || '').slice(0, 120)),
+              apiKey: '',
+              keepExistingKey: true,
+            }))
+        : undefined;
+      if (stylePreset !== undefined || customPrompt !== undefined || (profiles && profiles.length > 0)) {
+        cleanThought = {
+          ...(stylePreset !== undefined ? { stylePreset } : {}),
+          ...(customPrompt !== undefined ? { customPrompt } : {}),
+          ...(typeof t.activeProfileId === 'string' ? { activeProfileId: t.activeProfileId.slice(0, 64) } : {}),
+          ...(profiles ? { profiles } : {}),
+          keepExistingKey: true,
+        };
+      }
+    }
+    return Object.keys(cleanPatch).length === 0 && !cleanThought ? { ok: false, error: 'no-valid-keys' } : { ok: true, settings: cleanPatch, thought: cleanThought };
+  }
 
   const UPSTREAM_CREDITS = [
-    {
-      repo: '0DNANCY/agy-claude-style',
-      url: 'https://github.com/0DNANCY/agy-claude-style',
-      meta: 'MIT · 0DNANCY',
-    },
-    {
-      repo: 'ATtacK030130/antigrative-dashboard',
-      url: 'https://github.com/ATtacK030130/antigrative-dashboard',
-      meta: 'MIT · AG Pulse',
-    },
-    {
-      repo: 'LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider',
-      url: 'https://github.com/LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider',
-      meta: 'MIT · 月上寒',
-    },
-    {
-      repo: 'Nwflower/dsh-claude-style',
-      url: 'https://github.com/Nwflower/dsh-claude-style',
-      meta: 'Inspiration',
-    },
-    {
-      repo: 'Microqian2th/dsh-codex-effort-slider',
-      url: 'https://github.com/Microqian2th/dsh-codex-effort-slider',
-      meta: 'Upstream',
-    },
-    {
-      repo: 'mobius/dsh-performance-slider',
-      url: 'https://github.com/mobius/dsh-performance-slider',
-      meta: 'Upstream',
-    },
-    {
-      repo: 'claudenoshujin/claude-web',
-      url: 'https://github.com/claudenoshujin/claude-web',
-      meta: 'Mascot Pile & Micro-Ecology Interaction Inspiration',
-    },
+    { repo: '0DNANCY/agy-claude-style', url: 'https://github.com/0DNANCY/agy-claude-style', meta: 'MIT · 0DNANCY' },
+    { repo: 'ATtacK030130/antigrative-dashboard', url: 'https://github.com/ATtacK030130/antigrative-dashboard', meta: 'MIT · AG Pulse' },
+    { repo: 'LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider', url: 'https://github.com/LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider', meta: 'MIT · 月上寒' },
+    { repo: 'Nwflower/dsh-claude-style', url: 'https://github.com/Nwflower/dsh-claude-style', meta: 'Inspiration' },
+    { repo: 'Microqian2th/dsh-codex-effort-slider', url: 'https://github.com/Microqian2th/dsh-codex-effort-slider', meta: 'Upstream' },
+    { repo: 'mobius/dsh-performance-slider', url: 'https://github.com/mobius/dsh-performance-slider', meta: 'Upstream' },
+    { repo: 'claudenoshujin/claude-web', url: 'https://github.com/claudenoshujin/claude-web', meta: 'Mascot Pile & Micro-Ecology Interaction Inspiration' },
   ];
 
   const LICENSE_SUMMARY_TEXT = [
@@ -68,21 +206,16 @@
 
   let localRepoSeq = 0;
   const localRepoPending = new Map();
+  let pendingCfgToast = null;
 
   function invokePrismRepoAction(action, versionStr) {
     const act = action === 'pull' ? 'pull' : 'status';
     const win = typeof window !== 'undefined' ? window : G;
     try {
       const bridge = win.__agPrismRepoBridge;
-      if (typeof bridge === 'function') {
-        return Promise.resolve(bridge({ action: act }));
-      }
-      if (bridge && typeof bridge[act] === 'function') {
-        return Promise.resolve(bridge[act]());
-      }
-      if (bridge && typeof bridge.call === 'function') {
-        return Promise.resolve(bridge.call({ action: act }));
-      }
+      if (typeof bridge === 'function') return Promise.resolve(bridge({ action: act }));
+      if (bridge && typeof bridge[act] === 'function') return Promise.resolve(bridge[act]());
+      if (bridge && typeof bridge.call === 'function') return Promise.resolve(bridge.call({ action: act }));
       if (typeof win.__agPrismRepoCall === 'function') {
         if (typeof win.__agPrismRepoResolve !== 'function') {
           win.__agPrismRepoResolve = (id, res) => {
@@ -112,43 +245,21 @@
     } catch (err) {
       return Promise.resolve({ ok: false, action: act, error: String(err?.message || err) });
     }
-    return Promise.resolve({
-      ok: false,
-      offline: true,
-      action: act,
-      noRemote: true,
-      hasRemote: false,
-      branch: 'local',
-      shortHash: versionStr,
-    });
+    return Promise.resolve({ ok: false, offline: true, action: act, noRemote: true, hasRemote: false, branch: 'local', shortHash: versionStr });
   }
 
-  function readSettingsFoldOpen() {
-    try {
-      const raw = typeof localStorage !== 'undefined' && localStorage ? localStorage.getItem(STORAGE_SETTINGS_OPEN_KEY) : '';
-      return raw === '1' || raw === 'true';
-    } catch {
-      return false;
-    }
-  }
-
-  function writeSettingsFoldOpen(open) {
-    try {
-      if (typeof localStorage !== 'undefined' && localStorage) {
-        localStorage.setItem(STORAGE_SETTINGS_OPEN_KEY, open ? '1' : '0');
-      }
-    } catch {}
-  }
+  const readStore = (k) => {
+    try { return typeof localStorage !== 'undefined' && localStorage ? localStorage.getItem(k) || '' : ''; } catch { return ''; }
+  };
+  const writeStore = (k, v) => {
+    try { if (typeof localStorage !== 'undefined' && localStorage) localStorage.setItem(k, v); } catch {}
+  };
 
   function renderObsidianPrismBrandSvg(size = 20) {
     try {
       const ext = G.__agPrismBrandLogoSvg || (typeof window !== 'undefined' && window.__agPrismBrandLogoSvg);
-      if (typeof ext === 'function') {
-        const out = ext(size);
-        if (typeof out === 'string' && out.includes('<svg')) return out;
-      } else if (typeof ext === 'string' && ext.includes('<svg')) {
-        return ext;
-      }
+      const out = typeof ext === 'function' ? ext(size) : ext;
+      if (typeof out === 'string' && out.includes('<svg')) return out;
     } catch {}
     return `<svg class="ag-cs-settings-brand-svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="1.5" y="1.5" width="21" height="21" rx="5.5" fill="#12151E" stroke="rgba(255,255,255,0.14)" stroke-width="1"/><path d="M12 4.8L18.4 16.6H5.6L12 4.8Z" fill="rgba(255,255,255,0.08)" stroke="#E6ECF8" stroke-width="1.35" stroke-linejoin="round"/><path d="M12 4.8L14.7 16.6" stroke="#9B72CB" stroke-width="1.15" stroke-linecap="round" opacity="0.9"/><path d="M14.9 10.6L20.2 8.9" stroke="#4285F4" stroke-width="1.4" stroke-linecap="round"/><path d="M15.6 12.1L20.6 11.8" stroke="#9B72CB" stroke-width="1.4" stroke-linecap="round"/><path d="M16.3 13.6L20.4 14.5" stroke="#EA4335" stroke-width="1.4" stroke-linecap="round"/><path d="M16.9 15.0L19.8 16.9" stroke="#FBBC04" stroke-width="1.4" stroke-linecap="round"/></svg>`;
   }
@@ -158,14 +269,6 @@
     if (lang === 'ja') return ['ペア', 'ペア+ミニ蟹', ui.offLabel || 'オフ'];
     if (lang === 'en') return ['Dual', 'Dual+Crabs', ui.offLabel || 'Off'];
     return ['双宠', '双宠+三蟹', ui.offLabel || '关闭'];
-  }
-
-  function resolveSectionBrandTitle(lang, ui) {
-    if (ui.sectionTitle && /Obsidian Prism/i.test(ui.sectionTitle)) return ui.sectionTitle;
-    if (lang === 'zh-TW' || lang === 'yue') return 'Obsidian Prism · 黑曜稜鏡';
-    if (lang === 'ja') return 'Obsidian Prism · 黒曜プリズム';
-    if (lang === 'en') return 'Obsidian Prism';
-    return 'Obsidian Prism · 黑曜棱镜';
   }
 
   function mountOrSyncSettingsSection(ctx) {
@@ -179,6 +282,7 @@
       resolveSettingRowActiveValue,
       isSettingButtonMatch,
       saveSetting,
+      saveSettingsBatch,
       getThoughtTranslateMode,
       handledGroupClicks,
       runSettingsGroupGlide,
@@ -187,7 +291,6 @@
 
     const doc = typeof document !== 'undefined' ? document : null;
     if (!doc) return;
-
     const lang = getLang();
     const ui = uiText(lang);
     const targetTitles = ['Appearance', '外观', '外觀', '外観'];
@@ -200,27 +303,80 @@
     }
     if (!panel) return;
 
+    const effVal = (k, l) => {
+      const v = typeof resolveSettingRowActiveValue === 'function' ? resolveSettingRowActiveValue(k, l) : undefined;
+      return v !== undefined && v !== null && v !== '' ? v : PRISM_SETTINGS_SCHEMA[k]?.default;
+    };
+    const matchBtn = (k, valJson, cur) => {
+      if (typeof isSettingButtonMatch === 'function') {
+        const r = isSettingButtonMatch(k, valJson, cur);
+        if (r === true) return true;
+        if (cur !== undefined && cur !== null) return false;
+      }
+      try { return JSON.parse(valJson) === cur; } catch { return String(valJson) === String(cur); }
+    };
+    const applyBatch = (patch) => {
+      if (!patch || typeof patch !== 'object') return;
+      if (typeof saveSettingsBatch === 'function') saveSettingsBatch(patch);
+      else if (typeof saveSetting === 'function') for (const [k, v] of Object.entries(patch)) saveSetting(k, v);
+    };
+    const syncRootState = (rootEl, l, u) => {
+      rootEl.querySelectorAll('button[data-ag-cs-key]').forEach((btn) => {
+        const k = btn.getAttribute('data-ag-cs-key');
+        const on = matchBtn(k, btn.getAttribute('data-ag-cs-val'), effVal(k, l));
+        if (btn.getAttribute('aria-pressed') !== String(on)) {
+          btn.setAttribute('aria-pressed', String(on));
+          btn.toggleAttribute('data-pressed', on);
+        }
+      });
+      rootEl.querySelectorAll('button[data-ag-cs-preset]').forEach((pBtn) => {
+        const spec = SCENE_PRESETS[pBtn.getAttribute('data-ag-cs-preset')];
+        if (!spec) return;
+        const m = Object.entries(spec).every(([k, ex]) => effVal(k, l) === ex);
+        pBtn.setAttribute('data-active', m ? '1' : '0');
+        pBtn.setAttribute('aria-pressed', String(m));
+      });
+      const th = rootEl.__prismThoughtUiHandle;
+      if (th?.onViewSwitched) th.onViewSwitched(effVal('thoughtView', l));
+      const tb = rootEl.querySelector('[data-testid="prism-thought-ai-config"]');
+      if (tb) tb.hidden = getThoughtTranslateMode() !== 'ai';
+      const ltRow = rootEl.querySelector('[data-ag-cs-row="linkTarget"]');
+      if (ltRow && ltRow.style) ltRow.style.opacity = effVal('omniModule', l) === 'off' ? '0.55' : '';
+      const lpDescEl = rootEl.querySelector('[data-ag-cs-row="lightPreset"] [data-k="d"]');
+      if (lpDescEl) {
+        const de = doc.documentElement;
+        const themeAttr = de?.getAttribute?.('data-ag-cs-theme');
+        const isLightTheme =
+          themeAttr === 'light' ||
+          (!themeAttr && (Boolean(de?.classList?.contains?.('light')) || Boolean(doc.body?.classList?.contains?.('light'))));
+        const curPal = effVal('palette', l);
+        let lpText = u.setLightPresetDesc || '';
+        if (!isLightTheme && u.lightPresetHintDark) lpText = u.lightPresetHintDark;
+        else if (isLightTheme && curPal === 'warm' && u.lightPresetHintWarm) lpText = u.lightPresetHintWarm;
+        else if (isLightTheme && curPal === 'host' && u.lightPresetHintHost) lpText = u.lightPresetHintHost;
+        if (lpDescEl.textContent !== lpText) lpDescEl.textContent = lpText;
+      }
+      const sumEl = rootEl.querySelector('[data-ag-cs-fold-summary]');
+      if (sumEl) {
+        const ns = formatSettingsSummary(l, u);
+        if (sumEl.textContent !== ns) sumEl.textContent = ns;
+      }
+    };
+
     runGuardedMut(() => {
+      try {
+        if (doc.head && typeof doc.getElementById === 'function' && !doc.getElementById(SETTINGS_STYLE_ID)) {
+          const stEl = doc.createElement('style');
+          stEl.id = SETTINGS_STYLE_ID;
+          stEl.textContent = SETTINGS_EXTRA_CSS;
+          doc.head.appendChild(stEl);
+        }
+      } catch {}
+
       const existing = doc.getElementById(SETTINGS_SEC_ID);
       if (existing) {
         if (panel.querySelector('#' + SETTINGS_SEC_ID) === existing && existing.getAttribute('data-ag-cs-lang') === lang) {
-          existing.querySelectorAll('button[data-ag-cs-key]').forEach((btn) => {
-            const k = btn.getAttribute('data-ag-cs-key');
-            const v = btn.getAttribute('data-ag-cs-val');
-            const curVal = resolveSettingRowActiveValue(k, lang);
-            const on = isSettingButtonMatch(k, v, curVal);
-            if (btn.getAttribute('aria-pressed') !== String(on)) {
-              btn.setAttribute('aria-pressed', String(on));
-              btn.toggleAttribute('data-pressed', on);
-            }
-          });
-          const thoughtBox = existing.querySelector('[data-testid="prism-thought-ai-config"]');
-          if (thoughtBox) thoughtBox.hidden = getThoughtTranslateMode() !== 'ai';
-          const sumEl = existing.querySelector('[data-ag-cs-fold-summary]');
-          if (sumEl) {
-            const nextSum = formatSettingsSummary(lang, ui);
-            if (sumEl.textContent !== nextSum) sumEl.textContent = nextSum;
-          }
+          syncRootState(existing, lang, ui);
           return;
         }
         existing.remove();
@@ -233,9 +389,12 @@
       if (!anchor || !anchor.parentElement) return;
 
       const BTN =
-        'inline-flex items-center justify-center transition-colors text-secondary-foreground outline-none cursor-pointer border-none shrink-0 select-none h-full hover:text-foreground data-[pressed]:bg-secondary data-[pressed]:text-foreground text-sm px-2 rounded-md gap-1.5';
+        'ag-cs-seg-btn inline-flex items-center justify-center transition-colors text-secondary-foreground outline-none cursor-pointer border-none shrink-0 select-none h-full hover:text-foreground data-[pressed]:bg-secondary data-[pressed]:text-foreground text-sm px-2 rounded-md gap-1.5';
 
-      const initOpen = readSettingsFoldOpen();
+      const initOpen = ['1', 'true'].includes(readStore(STORAGE_SETTINGS_OPEN_KEY));
+      const savedTab = readStore(STORAGE_SETTINGS_SUBTAB_KEY);
+      let activeSubTab = ['all', 'appearance', 'interaction', 'thought', 'modules', 'about'].includes(savedTab) ? savedTab : 'all';
+
       const sec = doc.createElement('div');
       sec.id = SETTINGS_SEC_ID;
       sec.className = initOpen ? 'space-y-2 is-open' : 'space-y-2';
@@ -255,249 +414,56 @@
       ).map((o) => [o.id, o.label]);
 
       const [mDual, mMinis, mOff] = mascotLabels(lang, ui);
-      const autoCoexistLbl = ui.optAutoCoexist || (isZh() ? '智能共存' : lang === 'ja' ? '自動共存' : 'Auto Coexist');
-      const warmPaletteLbl =
-        ui.optWarm ||
-        (ui.optClaude && !/claude/i.test(ui.optClaude) ? ui.optClaude : '') ||
-        (isZh() ? 'Alabaster 暖岩' : lang === 'ja' ? 'Alabaster ウォーム' : 'Alabaster');
+      const onOff = [[true, ui.onLabel || 'On'], [false, ui.offLabel || 'Off']];
+      const autoOnOff = [['auto', ui.optAutoCoexist || 'Auto Coexist'], ['on', ui.onLabel || 'On'], ['off', ui.offLabel || 'Off']];
+      const warmLbl = ui.optWarm || (ui.optClaude && !/claude/i.test(ui.optClaude) ? ui.optClaude : '') || 'Alabaster';
+      const R = (key, tk, dk, opts) => ({ key, title: ui[tk] || key, desc: ui[dk] || '', opts });
 
       const rowDefs = {
-        palette: {
-          key: 'palette',
-          title: ui.setPaletteTitle || (isZh() ? '主题配色方案' : 'Color Palette'),
-          desc:
-            ui.setPaletteDesc ||
-            (isZh()
-              ? '默认 Obsidian 深空黑灰钛；可选跟随当前主题或 Alabaster 暖岩画册色调。'
-              : 'Follow host theme, or switch to Obsidian / Alabaster palettes.'),
-          opts: [
-            ['host', ui.optHost || 'Follow Host'],
-            ['warm', warmPaletteLbl],
-            ['obsidian', ui.optObsidian || 'Obsidian'],
-          ],
-        },
-        lightPreset: {
-          key: 'lightPreset',
-          title: ui.setLightPresetTitle || (isZh() ? '浅色表面质感' : 'Daylight Surface Preset'),
-          desc:
-            ui.setLightPresetDesc ||
-            (isZh()
-              ? '选择浅色模式下的表面层级、对比度与背景风格。'
-              : 'Tune surface elevation, glass contrast, and tint in light mode.'),
-          opts: [
-            ['crystal', ui.optLightCrystal || (isZh() ? '白昼冷晶' : 'Daylight Crystal')],
-            ['alabaster', ui.optLightAlabaster || (isZh() ? '暖白画册' : 'Warm Alabaster')],
-          ],
-        },
-        motionLevel: {
-          key: 'motionLevel',
-          title: ui.setMotionLevelTitle || (isZh() ? '动效档位' : 'Motion Tier'),
-          desc:
-            ui.setMotionLevelDesc ||
-            (isZh()
-              ? '控制交互动画、流式吐字与场景切换的动效丰富度。'
-              : 'Control spring micro-interactions, streaming text reveal, and scene transitions.'),
-          opts: [
-            ['off', ui.optMotionOff || (isZh() ? '关闭' : 'Off')],
-            ['subtle', ui.optMotionSubtle || (isZh() ? '克制' : 'Subtle')],
-            ['standard', ui.optMotionStandard || (isZh() ? '标准' : 'Standard')],
-            ['ultra', ui.optMotionUltra || (isZh() ? '完整' : 'Ultra')],
-          ],
-        },
-        targetFps: {
-          key: 'targetFps',
-          title: ui.setTargetFpsTitle || (isZh() ? '目标刷新帧率' : 'Target Frame Rate'),
-          desc:
-            ui.setTargetFpsDesc ||
-            (isZh()
-              ? '设置边框光效、波纹与背景动画的活跃帧率上限（静止时自动休眠）。'
-              : 'Set active GPU frame rate cap for prism rim, ripples, and aurora (0 FPS when idle).'),
-          opts: [
-            ['60', ui.optFps60 || '60 FPS'],
-            ['120', ui.optFps120 || '120 FPS'],
-            ['180', ui.optFps180 || '180 FPS'],
-            ['native', ui.optFpsNative || (isZh() ? '原生满帧' : 'Native Max')],
-          ],
-        },
-        homeLayout: {
-          key: 'homeLayout',
-          title: ui.setHomeLayoutTitle || 'Home Layout',
-          desc: ui.setHomeLayoutDesc || 'Switch new-conversation home layout.',
-          opts: [
-            ['studio', ui.optStudio || 'Studio'],
-            ['classic', ui.optClassic || 'Classic'],
-            ['off', ui.optNativeOff || 'Off'],
-          ],
-        },
-        homeRipple: {
-          key: 'homeRipple',
-          title: ui.setRippleTitle || 'Home Matrix Ripple',
-          desc: ui.setRippleDesc || 'Interactive character matrix ripple field on home view.',
-          opts: [
-            [true, ui.onLabel || 'On'],
-            [false, ui.offLabel || 'Off'],
-          ],
-        },
-        logoInk: {
-          key: 'logoInk',
-          title: ui.setLogoInkTitle || 'Logo Color',
-          desc: ui.setLogoInkDesc || 'Tint of the home greeting mark.',
-          opts: [
-            ['accent', ui.optAccent || 'Accent'],
-            ['foreground', ui.optForeground || 'Ink'],
-          ],
-        },
-        language: {
-          key: 'language',
-          title: ui.setLanguageTitle || 'Plugin UI Language',
-          desc: ui.setLanguageDesc || 'Switch language for Obsidian Prism home dashboard and settings UI.',
-          opts: langOpts,
-        },
-        composerRestyle: {
-          key: 'composerRestyle',
-          title: ui.setComposerTitle || 'Composer Restyle',
-          desc: ui.setComposerDesc || 'Minimalist input box + clean canvas footer.',
-          opts: [
-            [true, ui.onLabel || 'On'],
-            [false, ui.offLabel || 'Off'],
-          ],
-        },
-        placeholderStyle: {
-          key: 'placeholderStyle',
-          title: ui.setPlaceholderTitle || 'Placeholder Style',
-          desc: ui.setPlaceholderDesc || 'Switch between Studio placeholder copy and host default.',
-          opts: [
-            ['studio', 'Studio'],
-            ['host', ui.optPlaceholderHost || 'Host'],
-          ],
-        },
-        smoothCaret: {
-          key: 'smoothCaret',
-          title: ui.setSmoothCaretTitle || 'Smooth Typing Caret',
-          desc: ui.setSmoothCaretDesc || 'Enable smooth gliding caret interpolation in composer input.',
-          opts: [
-            [true, ui.onLabel || 'On'],
-            [false, ui.offLabel || 'Off'],
-          ],
-        },
-        mascot: {
-          key: 'mascot',
-          title: ui.setMascotTitle || 'Pixel Mascot Stage',
-          desc: ui.setMascotDesc || 'Show interactive Clawd & Gemini Cat on composer.',
-          opts: [
-            ['crab', mDual],
-            ['minis', mMinis],
-            ['off', mOff],
-          ],
-        },
-        sidebarRestyle: {
-          key: 'sidebarRestyle',
-          title: ui.setSidebarTitle || 'Sidebar Restyle',
-          desc: ui.setSidebarDesc || 'Apply refined row height and hover plates to sidebar.',
-          opts: [
-            [true, ui.onLabel || 'On'],
-            [false, ui.offLabel || 'Off'],
-          ],
-        },
-        sidebarCompact: {
-          key: 'sidebarCompact',
-          title: ui.setSidebarCompactTitle || 'Compact Sidebar',
-          desc: ui.setSidebarCompactDesc || 'Tighten sidebar row height from 28px to 24px.',
-          opts: [
-            [true, ui.onLabel || 'On'],
-            [false, ui.offLabel || 'Off'],
-          ],
-        },
-        thoughtTranslate: {
-          key: 'thoughtTranslate',
-          title: ui.setThoughtModeTitle || (isZh() ? '思考过程转译模式' : 'Thought Translation Mode'),
-          desc:
-            ui.setThoughtModeDesc ||
-            (isZh()
-              ? '支持免配置机器翻译，或接入 OpenAI 兼容接口流式翻译润色。'
-              : 'Translate English reasoning chains via zero-config Machine Translate or OpenAI-compatible AI polish.'),
-          opts: [
-            ['off', ui.optThoughtOff || (isZh() ? '关闭' : 'Off')],
-            ['machine', ui.optThoughtMachine || (isZh() ? '机器翻译' : 'Machine')],
-            ['ai', ui.optThoughtAi || (isZh() ? 'AI 翻译润色' : 'AI Polish')],
-          ],
-        },
-        thoughtTrigger: {
-          key: 'thoughtTrigger',
-          title: ui.setThoughtTriggerTitle || (isZh() ? '自动转译触发时机' : 'Translation Trigger Timing'),
-          desc:
-            ui.setThoughtTriggerDesc ||
-            (isZh()
-              ? '「完结预译」在最新思考块输出结束后后台静默预热缓存；「点开按需」仅在展开思考折叠块时请求。'
-              : 'Preload latest finished thought in background, or translate strictly on expand.'),
-          opts: [
-            ['preload', ui.optTriggerPreload || (isZh() ? '完结预译' : 'Preload')],
-            ['expand', ui.optTriggerExpand || (isZh() ? '点开按需' : 'On Expand')],
-          ],
-        },
-        telemetryModule: {
-          key: 'telemetryModule',
-          title: ui.setTelemetryTitle || (isZh() ? '底部遥测与上下文指示' : 'Bottom Telemetry & Context HUD'),
-          desc:
-            ui.setTelemetryDesc ||
-            (isZh()
-              ? '显示吞吐速率、缓存与上下文水位；检测到外部同类插件时自动避让。'
-              : 'Show throughput, cache, and context telemetry; automatically yields when external plugin is present.'),
-          opts: [
-            ['auto', autoCoexistLbl],
-            ['on', ui.onLabel || 'On'],
-            ['off', ui.offLabel || 'Off'],
-          ],
-        },
-        effortSliderModule: {
-          key: 'effortSliderModule',
-          title: ui.setEffortSliderTitle || (isZh() ? '模型推理等级滑块' : 'Model Reasoning Effort Slider'),
-          desc:
-            ui.setEffortSliderDesc ||
-            (isZh()
-              ? '在模型菜单中提供推理等级滑块；检测到外部滑块实例时自动避让。'
-              : 'Add a reasoning effort slider inside the model menu; automatically yields to external instances.'),
-          opts: [
-            ['auto', autoCoexistLbl],
-            ['on', ui.onLabel || 'On'],
-            ['off', ui.offLabel || 'Off'],
-          ],
-        },
+        palette: R('palette', 'setPaletteTitle', 'setPaletteDesc', [['host', ui.optHost || 'Follow Host'], ['warm', warmLbl], ['obsidian', ui.optObsidian || 'Obsidian']]),
+        lightPreset: R('lightPreset', 'setLightPresetTitle', 'setLightPresetDesc', [['crystal', ui.optLightCrystal || 'Crystal'], ['alabaster', ui.optLightAlabaster || 'Alabaster']]),
+        accentTone: R('accentTone', 'setAccentToneTitle', 'setAccentToneDesc', [['follow', ui.optToneFollow || 'Follow'], ['cobalt', ui.optToneCobalt || 'Cobalt'], ['iris', ui.optToneIris || 'Iris'], ['amber', ui.optToneAmber || 'Amber'], ['mono', ui.optToneMono || 'Mono']]),
+        cornerStyle: R('cornerStyle', 'setCornerStyleTitle', 'setCornerStyleDesc', [['sharp', ui.optCornerSharp || 'Sharp'], ['balanced', ui.optCornerBalanced || 'Balanced'], ['soft', ui.optCornerSoft || 'Soft']]),
+        ambientIntensity: R('ambientIntensity', 'setAmbientIntensityTitle', 'setAmbientIntensityDesc', [['0', ui.optAmb0 || '0%'], ['35', ui.optAmb35 || '35%'], ['70', ui.optAmb70 || '70%'], ['100', ui.optAmb100 || '100%']]),
+        motionLevel: R('motionLevel', 'setMotionLevelTitle', 'setMotionLevelDesc', [['off', ui.optMotionOff || 'Off'], ['subtle', ui.optMotionSubtle || 'Subtle'], ['standard', ui.optMotionStandard || 'Standard'], ['ultra', ui.optMotionUltra || 'Ultra']]),
+        targetFps: R('targetFps', 'setTargetFpsTitle', 'setTargetFpsDesc', [['60', ui.optFps60 || '60 FPS'], ['120', ui.optFps120 || '120 FPS'], ['180', ui.optFps180 || '180 FPS'], ['native', ui.optFpsNative || 'Native Max']]),
+        homeLayout: R('homeLayout', 'setHomeLayoutTitle', 'setHomeLayoutDesc', [['studio', ui.optStudio || 'Studio'], ['classic', ui.optClassic || 'Classic'], ['off', ui.optNativeOff || 'Off']]),
+        homeRipple: R('homeRipple', 'setRippleTitle', 'setRippleDesc', onOff),
+        logoInk: R('logoInk', 'setLogoInkTitle', 'setLogoInkDesc', [['accent', ui.optAccent || 'Accent'], ['foreground', ui.optForeground || 'Ink']]),
+        language: R('language', 'setLanguageTitle', 'setLanguageDesc', langOpts),
+        composerRestyle: R('composerRestyle', 'setComposerTitle', 'setComposerDesc', onOff),
+        placeholderStyle: R('placeholderStyle', 'setPlaceholderTitle', 'setPlaceholderDesc', [['studio', 'Studio'], ['host', ui.optPlaceholderHost || 'Host']]),
+        smoothCaret: R('smoothCaret', 'setSmoothCaretTitle', 'setSmoothCaretDesc', onOff),
+        codeFont: R('codeFont', 'setCodeFontTitle', 'setCodeFontDesc', [['default', ui.optFontDefault || 'Default'], ['jetbrains', 'JetBrains Mono'], ['cascadia', 'Cascadia Code'], ['sfmono', ui.optFontSfmono || 'SF Mono / Consolas']]),
+        codeLigatures: R('codeLigatures', 'setCodeLigaturesTitle', 'setCodeLigaturesDesc', onOff),
+        mascot: R('mascot', 'setMascotTitle', 'setMascotDesc', [['crab', mDual], ['minis', mMinis], ['off', mOff]]),
+        sidebarRestyle: R('sidebarRestyle', 'setSidebarTitle', 'setSidebarDesc', onOff),
+        sidebarCompact: R('sidebarCompact', 'setSidebarCompactTitle', 'setSidebarCompactDesc', onOff),
+        thoughtTranslate: R('thoughtTranslate', 'setThoughtModeTitle', 'setThoughtModeDesc', [['off', ui.optThoughtOff || 'Off'], ['machine', ui.optThoughtMachine || 'Machine'], ['ai', ui.optThoughtAi || 'AI Polish']]),
+        thoughtTrigger: R('thoughtTrigger', 'setThoughtTriggerTitle', 'setThoughtTriggerDesc', [['preload', ui.optTriggerPreload || 'Preload'], ['expand', ui.optTriggerExpand || 'On Expand']]),
+        thoughtView: R('thoughtView', 'setThoughtViewTitle', 'setThoughtViewDesc', [['immersive', ui.optThoughtImmersive || 'Immersive'], ['bilingual', ui.optThoughtBilingual || 'Bilingual']]),
+        telemetryModule: R('telemetryModule', 'setTelemetryTitle', 'setTelemetryDesc', autoOnOff),
+        effortSliderModule: R('effortSliderModule', 'setEffortSliderTitle', 'setEffortSliderDesc', autoOnOff),
+        omniModule: R('omniModule', 'setOmniTitle', 'setOmniDesc', [['on', ui.onLabel || 'On'], ['off', ui.offLabel || 'Off']]),
+        linkTarget: R('linkTarget', 'setLinkTargetTitle', 'setLinkTargetDesc', [['builtin', ui.optLinkBuiltin || 'Side Pane'], ['external', ui.optLinkExternal || 'System Browser']]),
       };
 
       const groups = [
-        {
-          id: 'appearance',
-          title: ui.grpAppearance || (isZh() ? '外观与版面' : 'Appearance & Layout'),
-          keys: ['palette', 'lightPreset', 'motionLevel', 'targetFps', 'homeLayout', 'homeRipple', 'logoInk', 'language'],
-        },
-        {
-          id: 'interaction',
-          title: ui.grpInteraction || (isZh() ? '输入、侧栏与宠物' : 'Composer, Sidebar & Mascot'),
-          keys: ['composerRestyle', 'placeholderStyle', 'smoothCaret', 'mascot', 'sidebarRestyle', 'sidebarCompact'],
-        },
-        {
-          id: 'thought',
-          title: ui.grpThought || (isZh() ? '思考链转译与润色' : 'Thought Translation & Polishing'),
-          keys: ['thoughtTranslate', 'thoughtTrigger'],
-        },
-        {
-          id: 'modules',
-          title: ui.groupModules || (isZh() ? '吸收集成模块（智能共存让位）' : 'Integrated Modules (Smart Coexistence)'),
-          keys: ['telemetryModule', 'effortSliderModule'],
-        },
+        { id: 'appearance', title: ui.grpAppearance || 'Appearance & Layout', keys: ['palette', 'lightPreset', 'accentTone', 'cornerStyle', 'ambientIntensity', 'motionLevel', 'targetFps', 'homeLayout', 'homeRipple', 'logoInk', 'language'] },
+        { id: 'interaction', title: ui.grpInteraction || 'Composer, Sidebar & Mascot', keys: ['composerRestyle', 'placeholderStyle', 'smoothCaret', 'codeFont', 'codeLigatures', 'mascot', 'sidebarRestyle', 'sidebarCompact'] },
+        { id: 'thought', title: ui.grpThought || 'Thought Translation & Polishing', keys: ['thoughtTranslate', 'thoughtTrigger', 'thoughtView'] },
+        { id: 'modules', title: ui.groupModules || 'Integrated Modules (Smart Coexistence)', keys: ['telemetryModule', 'effortSliderModule', 'omniModule', 'linkTarget'] },
       ];
 
-      const mkEl = (tag, cls) => {
+      const mkEl = (tag, cls, txt) => {
         const el = doc.createElement(tag);
         if (cls) el.className = cls;
+        if (txt !== undefined) el.textContent = txt;
         return el;
       };
 
-      const foldSummaryEl = mkEl('span', 'ag-cs-settings-fold-summary');
+      const foldSummaryEl = mkEl('span', 'ag-cs-settings-fold-summary', formatSettingsSummary(lang, ui));
       foldSummaryEl.setAttribute('data-ag-cs-fold-summary', '');
-      foldSummaryEl.textContent = formatSettingsSummary(lang, ui);
-
       let thoughtUiHandle = null;
 
       const buildRow = (r) => {
@@ -506,53 +472,41 @@
         const inner = mkEl('div', 'py-2 px-3 w-full bg-transparent flex justify-between gap-4 items-center');
         const textCol = mkEl('div', 'flex-1 flex flex-col gap-0.5');
         const titleLine = mkEl('div', 'ag-cs-settings-title-line');
-        const tSpan = mkEl('span', 'text-sm');
+        const tSpan = mkEl('span', 'text-sm', r.title);
         tSpan.setAttribute('data-k', 't');
-        tSpan.textContent = r.title;
         titleLine.appendChild(tSpan);
-        const dSpan = mkEl('span', 'text-xs text-muted-foreground whitespace-pre-wrap');
+        const dSpan = mkEl('span', 'text-xs text-muted-foreground whitespace-pre-wrap', r.desc);
         dSpan.setAttribute('data-k', 'd');
-        dSpan.textContent = r.desc;
         textCol.appendChild(titleLine);
         textCol.appendChild(dSpan);
 
         const ctlWrap = mkEl('div', 'shrink-0');
-        const group = mkEl(
-          'div',
-          'inline-flex items-center rounded-lg border border-border bg-secondary/20 p-0.5 gap-0.5 select-none min-h-8'
-        );
+        const group = mkEl('div', 'ag-cs-seg-group inline-flex items-center rounded-lg border border-border bg-secondary/20 p-0.5 gap-0.5 select-none min-h-8');
         group.setAttribute('role', 'group');
-        const curVal = resolveSettingRowActiveValue(r.key, lang);
+        const curVal = effVal(r.key, lang);
         for (const [val, lbl] of r.opts) {
-          const b = doc.createElement('button');
+          const b = mkEl('button', BTN, lbl);
           b.type = 'button';
-          b.className = BTN;
-          b.textContent = lbl;
           const valJson = JSON.stringify(val);
           b.setAttribute('data-ag-cs-key', r.key);
           b.setAttribute('data-ag-cs-val', valJson);
-          const on = isSettingButtonMatch(r.key, valJson, curVal);
+          const on = matchBtn(r.key, valJson, curVal);
           b.setAttribute('aria-pressed', String(on));
           if (on) b.setAttribute('data-pressed', '');
           b.addEventListener('click', (ev) => {
-            if (ev && typeof ev === 'object') handledGroupClicks.add(ev);
-            const prevBtn = Array.from(group.children).find(
-              (sib) => sib.getAttribute('aria-pressed') === 'true' || sib.hasAttribute('data-pressed')
-            );
-            const prevRect =
-              prevBtn && typeof prevBtn.getBoundingClientRect === 'function' ? prevBtn.getBoundingClientRect() : null;
+            if (ev && typeof ev === 'object' && handledGroupClicks) handledGroupClicks.add(ev);
+            const prevBtn = Array.from(group.children).find((s) => s.getAttribute('aria-pressed') === 'true' || s.hasAttribute('data-pressed'));
+            const prevRect = prevBtn && typeof prevBtn.getBoundingClientRect === 'function' ? prevBtn.getBoundingClientRect() : null;
             for (const sib of group.children) {
               sib.setAttribute('aria-pressed', String(sib === b));
               sib.toggleAttribute('data-pressed', sib === b);
             }
             saveSetting(r.key, val);
-            if (r.key === 'thoughtTranslate' && thoughtUiHandle) {
-              thoughtUiHandle.onModeSwitched(val);
-            }
-            foldSummaryEl.textContent = formatSettingsSummary(getLang(), uiText(getLang()));
-            if (prevBtn && prevBtn !== b) {
-              runSettingsGroupGlide(group, prevBtn, b, prevRect);
-            }
+            if (r.key === 'thoughtTranslate' && thoughtUiHandle) thoughtUiHandle.onModeSwitched(val);
+            if (r.key === 'thoughtView' && thoughtUiHandle?.onViewSwitched) thoughtUiHandle.onViewSwitched(val);
+            const lNow = getLang();
+            syncRootState(sec, lNow, uiText(lNow));
+            if (prevBtn && prevBtn !== b && typeof runSettingsGroupGlide === 'function') runSettingsGroupGlide(group, prevBtn, b, prevRect);
           });
           group.appendChild(b);
         }
@@ -563,40 +517,36 @@
         return row;
       };
 
-      const foldHead = doc.createElement('button');
+      const foldHead = mkEl('button', 'ag-cs-settings-fold-head');
       foldHead.type = 'button';
-      foldHead.className = 'ag-cs-settings-fold-head';
       foldHead.setAttribute('data-ag-cs-fold-toggle', '1');
       foldHead.setAttribute('aria-expanded', String(initOpen));
-      foldHead.setAttribute(
-        'aria-label',
-        initOpen
-          ? ui.foldCollapseHint || (isZh() ? '收起设置面板' : 'Collapse settings panel')
-          : ui.foldExpandHint || (isZh() ? '展开设置面板' : 'Expand settings panel')
-      );
+      foldHead.setAttribute('aria-label', initOpen ? ui.foldCollapseHint || 'Collapse' : ui.foldExpandHint || 'Expand');
 
       const foldLeft = mkEl('span', 'ag-cs-settings-fold-left');
       const brandMark = mkEl('span', 'ag-cs-settings-brand-mark inline-flex items-center shrink-0');
       brandMark.setAttribute('aria-hidden', 'true');
       brandMark.innerHTML = renderObsidianPrismBrandSvg(20);
       foldLeft.appendChild(brandMark);
-
-      const h3 = mkEl('h3', 'm-0 text-sm font-medium');
-      h3.textContent = resolveSectionBrandTitle(lang, ui);
-      foldLeft.appendChild(h3);
-
-      const verBadge = mkEl('span', 'ag-cs-settings-ver');
-      verBadge.textContent = `v${version}`;
-      foldLeft.appendChild(verBadge);
+      const brandTitle =
+        ui.sectionTitle && /Obsidian Prism/i.test(ui.sectionTitle)
+          ? ui.sectionTitle
+          : lang === 'en'
+          ? 'Obsidian Prism'
+          : lang === 'ja'
+          ? 'Obsidian Prism · 黒曜プリズム'
+          : lang === 'zh-TW' || lang === 'yue'
+          ? 'Obsidian Prism · 黑曜稜鏡'
+          : 'Obsidian Prism · 黑曜棱镜';
+      foldLeft.appendChild(mkEl('h3', 'm-0 text-sm font-medium', brandTitle));
+      foldLeft.appendChild(mkEl('span', 'ag-cs-settings-ver', `v${version}`));
 
       const foldRight = mkEl('span', 'ag-cs-settings-fold-right');
       foldRight.appendChild(foldSummaryEl);
-
       const chevron = mkEl('span', 'ag-cs-settings-fold-chevron');
       chevron.setAttribute('data-ag-cs-chevron', '');
       chevron.setAttribute('aria-hidden', 'true');
-      chevron.innerHTML =
-        '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>';
+      chevron.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>';
       foldRight.appendChild(chevron);
 
       foldHead.appendChild(foldLeft);
@@ -607,150 +557,164 @@
       foldBody.setAttribute('data-open', initOpen ? '1' : '0');
       foldBody.setAttribute('aria-hidden', String(!initOpen));
 
+      const topDeck = mkEl('div', 'ag-cs-settings-topdeck');
+      topDeck.setAttribute('data-ag-cs-topdeck', '1');
+      const presetRow = mkEl('div', 'ag-cs-preset-row');
+      presetRow.appendChild(mkEl('span', 'ag-cs-preset-label', ui.presetBarLabel || 'Scene Presets'));
+      const presetPills = mkEl('div', 'ag-cs-preset-pills');
+      for (const [pid, plbl] of [['ultra', ui.presetUltra || 'Full Optical'], ['focus', ui.presetFocus || 'Deep Focus'], ['eco', ui.presetEco || 'Silent Eco']]) {
+        const pb = mkEl('button', 'ag-cs-preset-btn', plbl);
+        pb.type = 'button';
+        pb.setAttribute('data-ag-cs-preset', pid);
+        pb.addEventListener('click', (ev) => {
+          ev?.stopPropagation?.();
+          applyBatch({ ...SCENE_PRESETS[pid] });
+          const lNow = getLang();
+          runGuardedMut(() => syncRootState(sec, lNow, uiText(lNow)));
+        });
+        presetPills.appendChild(pb);
+      }
+      presetRow.appendChild(presetPills);
+      topDeck.appendChild(presetRow);
+
+      const subTabBar = mkEl('div', 'ag-cs-subtabs');
+      subTabBar.setAttribute('role', 'tablist');
+      const subTabBtns = [];
+      const groupElsById = new Map();
+      const applySubTab = (sid) => {
+        activeSubTab = sid;
+        writeStore(STORAGE_SETTINGS_SUBTAB_KEY, sid);
+        for (const sb of subTabBtns) sb.setAttribute('aria-selected', String(sb.getAttribute('data-ag-cs-subtab') === sid));
+        for (const [gid, gel] of groupElsById.entries()) {
+          const show = sid === 'all' || sid === gid;
+          gel.hidden = !show;
+          if (!show) gel.setAttribute('hidden', '');
+          else gel.removeAttribute('hidden');
+        }
+      };
+      for (const [sid, slbl] of [
+        ['all', ui.subTabAll || 'All'],
+        ['appearance', ui.subTabAppearance || 'Appearance'],
+        ['interaction', ui.subTabInteraction || 'Workspace'],
+        ['thought', ui.subTabThought || 'Thought'],
+        ['modules', ui.subTabModules || 'Modules'],
+        ['about', ui.subTabAbout || 'Config & About'],
+      ]) {
+        const sb = mkEl('button', 'ag-cs-subtab-btn', slbl);
+        sb.type = 'button';
+        sb.setAttribute('role', 'tab');
+        sb.setAttribute('data-ag-cs-subtab', sid);
+        sb.setAttribute('aria-selected', String(activeSubTab === sid));
+        sb.addEventListener('click', (ev) => {
+          ev?.stopPropagation?.();
+          runGuardedMut(() => applySubTab(sid));
+        });
+        subTabBtns.push(sb);
+        subTabBar.appendChild(sb);
+      }
+      topDeck.appendChild(subTabBar);
+      foldBody.appendChild(topDeck);
+
       const groupsWrap = mkEl('div', 'ag-cs-settings-groups');
       for (const grp of groups) {
         const grpEl = mkEl('div', 'ag-cs-settings-group');
         grpEl.setAttribute('data-ag-cs-group', grp.id);
-        const subHead = mkEl('div', 'ag-cs-settings-subhead');
-        subHead.textContent = grp.title;
-        grpEl.appendChild(subHead);
-
-        const list = mkEl('div', 'bg-transparent rounded-xl border border-border overflow-hidden divide-y divide-border');
-        for (const k of grp.keys) {
-          if (rowDefs[k]) list.appendChild(buildRow(rowDefs[k]));
-        }
+        groupElsById.set(grp.id, grpEl);
+        grpEl.appendChild(mkEl('div', 'ag-cs-settings-subhead', grp.title));
+        const list = mkEl('div', 'ag-cs-settings-card bg-transparent rounded-xl border border-border overflow-hidden divide-y divide-border');
+        for (const k of grp.keys) if (rowDefs[k]) list.appendChild(buildRow(rowDefs[k]));
         if (grp.id === 'thought' && G.__agPrismThoughtSettingsUi?.createThoughtAiConfigBox) {
-          thoughtUiHandle = G.__agPrismThoughtSettingsUi.createThoughtAiConfigBox({
-            mkEl,
-            btnClass: BTN,
-            ui,
-            isZh,
-            getMode: getThoughtTranslateMode,
-            runGuardedMut,
-          });
-          if (thoughtUiHandle && thoughtUiHandle.box) {
-            list.appendChild(thoughtUiHandle.box);
-          }
+          thoughtUiHandle = G.__agPrismThoughtSettingsUi.createThoughtAiConfigBox({ mkEl, btnClass: BTN, ui, lang, getLang, isZh, getMode: getThoughtTranslateMode, runGuardedMut });
+          sec.__prismThoughtUiHandle = thoughtUiHandle;
+          if (thoughtUiHandle?.box) list.appendChild(thoughtUiHandle.box);
         }
         grpEl.appendChild(list);
         groupsWrap.appendChild(grpEl);
       }
 
-      // About, Repo Sync & Open-Source Credits section
       const aboutGrp = mkEl('div', 'ag-cs-settings-group');
       aboutGrp.setAttribute('data-ag-cs-group', 'about');
-      const aboutSubHead = mkEl('div', 'ag-cs-settings-subhead');
-      aboutSubHead.textContent =
-        ui.aboutGroupTitle || (isZh() ? '关于、更新与开源致谢' : 'About, Updates & Open-Source Credits');
-      aboutGrp.appendChild(aboutSubHead);
+      groupElsById.set('about', aboutGrp);
+      aboutGrp.appendChild(mkEl('div', 'ag-cs-settings-subhead', ui.aboutGroupTitle || 'About, Updates & Open-Source Credits'));
 
       const aboutBox = mkEl('div', 'ag-cs-about-box');
       aboutBox.setAttribute('data-ag-cs-about', '1');
-
       const repoRow = mkEl('div', 'ag-cs-about-repo-row');
       const repoInfo = mkEl('div', 'ag-cs-about-repo-info');
-      const repoBrandTag = mkEl('span', 'font-medium text-foreground');
-      repoBrandTag.textContent = `Obsidian Prism v${version}`;
-      repoInfo.appendChild(repoBrandTag);
-
-      const repoChip = mkEl('span', 'ag-cs-repo-chip');
+      repoInfo.appendChild(mkEl('span', 'font-medium text-foreground', `Obsidian Prism v${version}`));
+      const repoChip = mkEl('span', 'ag-cs-repo-chip', ui.aboutRepoSyncTitle || 'Git Repository Status & Sync');
       repoChip.setAttribute('data-ag-cs-repo-status', '');
       repoChip.setAttribute('data-status', 'idle');
-      repoChip.textContent =
-        ui.aboutRepoSyncTitle || (isZh() ? '本地 Git 仓库状态与更新' : 'Git Repository Status & Sync');
       repoInfo.appendChild(repoChip);
 
-      const syncBtn = doc.createElement('button');
+      const syncBtn = mkEl('button', 'ag-cs-repo-sync-btn', ui.aboutRepoSyncBtn || 'Check / Sync Git Updates');
       syncBtn.type = 'button';
-      syncBtn.className = 'ag-cs-repo-sync-btn';
       syncBtn.setAttribute('data-ag-cs-repo-sync', '1');
-      syncBtn.textContent = ui.aboutRepoSyncBtn || (isZh() ? '检查 / 同步 Git 更新' : 'Check / Sync Git Updates');
 
       let repoProbedOnce = false;
       let repoSyncBusy = false;
-
-      const applyRepoStatusView = (res, isPullResult) => {
+      const applyRepoStatusView = (res, isPull) => {
         if (!repoChip.isConnected) return;
         runGuardedMut(() => {
           const branch = res?.branch || 'local';
           const hash = res?.shortHash || (res?.commit ? String(res.commit).slice(0, 7) : '');
-          const refLabel = hash && hash !== branch ? `${branch} @ ${hash}` : branch;
+          const ref = hash && hash !== branch ? `${branch} @ ${hash}` : branch;
           const hasRemote = Boolean(res && !res.noRemote && res.hasRemote !== false && res.remoteUrl);
           if (!hasRemote) {
             repoChip.setAttribute('data-status', 'warn');
-            repoChip.textContent = `${refLabel} · ${
-              ui.aboutRepoNoRemote ||
-              (isZh() ? '本地独立 Git 仓库（尚未配置远端 origin）' : 'Local Git repository (no remote configured)')
-            }`;
-          } else if (isPullResult && res?.updated) {
+            repoChip.textContent = `${ref} · ${ui.aboutRepoNoRemote || 'Local Git repository (no remote configured)'}`;
+          } else if (isPull && res?.updated) {
             repoChip.setAttribute('data-status', 'updated');
-            repoChip.textContent = `${refLabel} · ${
-              ui.aboutRepoUpdated || (isZh() ? '已同步最新提交并热更新界面' : 'Pulled latest commits & hot-reloaded UI')
-            }`;
+            repoChip.textContent = `${ref} · ${ui.aboutRepoUpdated || 'Pulled latest commits & hot-reloaded UI'}`;
           } else if (res?.ok === false && res?.error) {
             repoChip.setAttribute('data-status', 'error');
-            repoChip.textContent = `${refLabel} · ${res.error}`;
+            repoChip.textContent = `${ref} · ${res.error}`;
           } else {
             repoChip.setAttribute('data-status', 'ok');
-            repoChip.textContent = `${refLabel} · ${
-              ui.aboutRepoUpToDate || (isZh() ? '当前已是最新版本' : 'Repository is already up to date')
-            }`;
+            repoChip.textContent = `${ref} · ${ui.aboutRepoUpToDate || 'Repository is already up to date'}`;
           }
         });
       };
-
       const probeRepoStatusSilently = () => {
         if (repoProbedOnce || repoSyncBusy) return;
         repoProbedOnce = true;
-        void invokePrismRepoAction('status', version).then((st) => {
-          if (st) applyRepoStatusView(st, false);
-        });
+        void invokePrismRepoAction('status', version).then((st) => st && applyRepoStatusView(st, false));
       };
-
       syncBtn.addEventListener('click', (ev) => {
-        if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+        ev?.stopPropagation?.();
         if (repoSyncBusy) return;
         repoSyncBusy = true;
         repoProbedOnce = true;
         runGuardedMut(() => {
           syncBtn.disabled = true;
           repoChip.setAttribute('data-status', 'idle');
-          repoChip.textContent =
-            ui.aboutRepoChecking || (isZh() ? '正在检查 Git 状态…' : 'Checking Git repository status…');
+          repoChip.textContent = ui.aboutRepoChecking || 'Checking Git repository status…';
         });
-
         void invokePrismRepoAction('status', version)
           .then((st) => {
-            const hasRemote = Boolean(st && !st.noRemote && st.hasRemote !== false && st.remoteUrl);
-            if (!hasRemote) {
+            if (!(st && !st.noRemote && st.hasRemote !== false && st.remoteUrl)) {
               applyRepoStatusView(st || { noRemote: true, branch: 'local' }, false);
               return null;
             }
-            return invokePrismRepoAction('pull', version).then((pullRes) => {
-              applyRepoStatusView({ ...st, ...pullRes }, true);
-              return pullRes;
+            return invokePrismRepoAction('pull', version).then((p) => {
+              applyRepoStatusView({ ...st, ...p }, true);
+              return p;
             });
           })
           .finally(() => {
             repoSyncBusy = false;
-            runGuardedMut(() => {
-              if (syncBtn.isConnected) syncBtn.disabled = false;
-            });
+            runGuardedMut(() => { if (syncBtn.isConnected) syncBtn.disabled = false; });
           });
       });
 
       repoRow.appendChild(repoInfo);
       repoRow.appendChild(syncBtn);
       aboutBox.appendChild(repoRow);
-
-      const creditsTitle = mkEl('div', 'ag-cs-about-credits-title');
-      creditsTitle.textContent =
-        ui.aboutCreditsTitle || (isZh() ? '上游开源项目与灵感致谢' : 'Upstream Open-Source & Inspiration Credits');
-      aboutBox.appendChild(creditsTitle);
+      aboutBox.appendChild(mkEl('div', 'ag-cs-about-credits-title', ui.aboutCreditsTitle || 'Upstream Open-Source & Inspiration Credits'));
 
       const creditsGrid = mkEl('div', 'ag-cs-about-credits');
       for (const item of UPSTREAM_CREDITS) {
-        const a = doc.createElement('a');
+        const a = mkEl('a');
         a.setAttribute('href', item.url);
         a.href = item.url;
         a.setAttribute('target', '_blank');
@@ -758,53 +722,166 @@
         a.setAttribute('rel', 'noopener noreferrer');
         a.rel = 'noopener noreferrer';
         a.setAttribute('data-ag-cs-credit', item.repo);
-        const nameSpan = mkEl('span', 'truncate');
-        nameSpan.textContent = item.repo;
-        const metaSpan = mkEl('span', 'opacity-75 text-[10px] shrink-0');
-        metaSpan.textContent = `${item.meta} ↗`;
-        a.appendChild(nameSpan);
-        a.appendChild(metaSpan);
+        a.appendChild(mkEl('span', 'truncate', item.repo));
+        a.appendChild(mkEl('span', 'opacity-75 text-[10px] shrink-0', `${item.meta} ↗`));
         creditsGrid.appendChild(a);
       }
       aboutBox.appendChild(creditsGrid);
 
-      const licDetails = doc.createElement('details');
-      licDetails.className = 'ag-cs-about-license';
-      const licSummary = doc.createElement('summary');
-      licSummary.textContent = ui.aboutLicenseTitle || (isZh() ? 'GPL-3.0 开源与署名协议' : 'GPL-3.0 License & Attribution Notice');
-      const licPre = mkEl('pre', 'ag-cs-license-pre');
-      licPre.textContent = LICENSE_SUMMARY_TEXT;
-      licDetails.appendChild(licSummary);
-      licDetails.appendChild(licPre);
+      const licDetails = mkEl('details', 'ag-cs-about-license');
+      licDetails.appendChild(mkEl('summary', '', ui.aboutLicenseTitle || 'GPL-3.0 License & Attribution Notice'));
+      licDetails.appendChild(mkEl('pre', 'ag-cs-license-pre', LICENSE_SUMMARY_TEXT));
       aboutBox.appendChild(licDetails);
-
-      const disclaimer = mkEl('p', 'ag-cs-about-disclaimer');
-      disclaimer.textContent =
-        ui.aboutDisclaimer ||
-        'Obsidian Prism is an independent open-source project and is not affiliated with or endorsed by Google LLC.';
-      aboutBox.appendChild(disclaimer);
-
+      aboutBox.appendChild(mkEl('p', 'ag-cs-about-disclaimer', ui.aboutDisclaimer || 'Obsidian Prism is an independent open-source project and is not affiliated with or endorsed by Google LLC.'));
       aboutGrp.appendChild(aboutBox);
       groupsWrap.appendChild(aboutGrp);
       foldBody.appendChild(groupsWrap);
+
+      const cfgFooter = mkEl('div', 'ag-cs-cfg-footer');
+      cfgFooter.setAttribute('data-ag-cs-cfg-footer', '1');
+      const cfgMeta = mkEl('div', 'ag-cs-cfg-meta');
+      cfgMeta.appendChild(mkEl('span', 'ag-cs-cfg-title', ui.cfgToolbarTitle || 'Configuration Backup & Reset'));
+      const cfgHint = mkEl('span', 'ag-cs-cfg-hint', ui.cfgToolbarHint || 'Exported JSON strips all API keys automatically.');
+      cfgHint.setAttribute('data-ag-cs-cfg-status', '');
+      cfgMeta.appendChild(cfgHint);
+      const setCfgStatus = (msg, tone = '') =>
+        runGuardedMut(() => {
+          cfgHint.textContent = msg;
+          if (tone) cfgHint.setAttribute('data-tone', tone);
+          else cfgHint.removeAttribute('data-tone');
+        });
+      if (pendingCfgToast && pendingCfgToast.exp > Date.now()) {
+        const toastMsg = (pendingCfgToast.key && ui[pendingCfgToast.key]) || pendingCfgToast.fallback || '';
+        const toastTone = pendingCfgToast.tone || 'ok';
+        pendingCfgToast = null;
+        if (toastMsg) setCfgStatus(toastMsg, toastTone);
+      } else {
+        pendingCfgToast = null;
+      }
+
+      const cfgActions = mkEl('div', 'ag-cs-cfg-actions');
+      const exportBtn = mkEl('button', 'ag-cs-cfg-btn', ui.cfgExportBtn || 'Export JSON');
+      exportBtn.type = 'button';
+      exportBtn.setAttribute('data-ag-cs-cfg-action', 'export');
+      exportBtn.addEventListener('click', async (ev) => {
+        ev?.stopPropagation?.();
+        const lNow = getLang(), uNow = uiText(lNow), cur = {};
+        for (const k of Object.keys(PRISM_SETTINGS_SCHEMA)) cur[k] = effVal(k, lNow);
+        const win = typeof window !== 'undefined' ? window : G;
+        const rawThought = await Promise.resolve(win?.__agPrismThought?.getConfig?.()).catch(() => null);
+        const jsonStr = JSON.stringify(buildSanitizedConfigExport(cur, rawThought || null, version), null, 2);
+        try {
+          if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+            const url = URL.createObjectURL(new Blob([jsonStr], { type: 'application/json;charset=utf-8' }));
+            const dl = mkEl('a');
+            dl.href = url;
+            dl.download = `obsidian-prism-settings-v${version}.json`;
+            dl.click?.();
+            setTimeout(() => URL.revokeObjectURL(url), 1500);
+          } else win?.navigator?.clipboard?.writeText?.(jsonStr);
+        } catch {
+          try { win?.navigator?.clipboard?.writeText?.(jsonStr); } catch {}
+        }
+        setCfgStatus(uNow.cfgExportOk || 'Exported sanitized config', 'ok');
+      });
+
+      const fileInput = mkEl('input');
+      fileInput.type = 'file';
+      fileInput.setAttribute('accept', '.json,application/json');
+      fileInput.hidden = true;
+      fileInput.setAttribute('hidden', '');
+      const handleImportRaw = (rawText) => {
+        const lNow = getLang(), uNow = uiText(lNow), res = validateImportedConfigJson(rawText);
+        if (!res.ok) {
+          setCfgStatus(uNow.cfgImportErr || 'Invalid JSON', 'err');
+          return false;
+        }
+        pendingCfgToast = { key: 'cfgImportOk', fallback: 'Validated and restored settings', tone: 'ok', exp: Date.now() + 2500 };
+        if (Object.keys(res.settings).length > 0) {
+          applyBatch(res.settings);
+          if (res.settings.thoughtTranslate && thoughtUiHandle) thoughtUiHandle.onModeSwitched(res.settings.thoughtTranslate);
+          if (res.settings.thoughtView && thoughtUiHandle?.onViewSwitched) thoughtUiHandle.onViewSwitched(res.settings.thoughtView);
+        }
+        if (res.thought) {
+          const win = typeof window !== 'undefined' ? window : G;
+          try {
+            void Promise.resolve(win?.__agPrismThought?.saveConfig?.(res.thought))
+              .then(() => {
+                const livePanel = doc.getElementById(SETTINGS_SEC_ID);
+                const liveTh = livePanel?.__prismThoughtUiHandle || thoughtUiHandle;
+                liveTh?.reloadConfig?.();
+                liveTh?.ensureLoaded?.(true);
+              })
+              .catch(() => {});
+          } catch {}
+          thoughtUiHandle?.reloadConfig?.();
+        }
+        const rl = getLang(), ru = uiText(rl);
+        if (sec.isConnected) {
+          pendingCfgToast = null;
+          runGuardedMut(() => syncRootState(sec, rl, ru));
+          setCfgStatus(ru.cfgImportOk || 'Validated and restored settings', 'ok');
+        }
+        return true;
+      };
+      fileInput.addEventListener('change', () => {
+        const f = fileInput.files?.[0];
+        if (!f) return;
+        if (typeof f.text === 'function') void f.text().then(handleImportRaw).catch(() => handleImportRaw(''));
+        else if (typeof FileReader === 'function') {
+          const rd = new FileReader();
+          rd.onload = () => handleImportRaw(String(rd.result || ''));
+          rd.readAsText(f);
+        }
+        fileInput.value = '';
+      });
+
+      const importBtn = mkEl('button', 'ag-cs-cfg-btn', ui.cfgImportBtn || 'Import JSON');
+      importBtn.type = 'button';
+      importBtn.setAttribute('data-ag-cs-cfg-action', 'import');
+      importBtn.addEventListener('click', (ev) => { ev?.stopPropagation?.(); fileInput.click?.(); });
+
+      const resetBtn = mkEl('button', 'ag-cs-cfg-btn', ui.cfgResetBtn || 'Reset Defaults');
+      resetBtn.type = 'button';
+      resetBtn.setAttribute('data-ag-cs-cfg-action', 'reset');
+      resetBtn.addEventListener('click', (ev) => {
+        ev?.stopPropagation?.();
+        const defs = getDefaultSettingsPatch();
+        pendingCfgToast = { key: 'cfgResetOk', fallback: 'Restored defaults', tone: 'ok', exp: Date.now() + 2500 };
+        applyBatch(defs);
+        if (thoughtUiHandle) thoughtUiHandle.onModeSwitched(defs.thoughtTranslate);
+        if (thoughtUiHandle?.onViewSwitched) thoughtUiHandle.onViewSwitched(defs.thoughtView);
+        const rl = getLang(), ru = uiText(rl);
+        if (sec.isConnected) {
+          pendingCfgToast = null;
+          runGuardedMut(() => syncRootState(sec, rl, ru));
+          setCfgStatus(ru.cfgResetOk || 'Restored defaults', 'ok');
+        }
+      });
+
+      cfgActions.appendChild(exportBtn);
+      cfgActions.appendChild(importBtn);
+      cfgActions.appendChild(resetBtn);
+      cfgActions.appendChild(fileInput);
+      cfgFooter.appendChild(cfgMeta);
+      cfgFooter.appendChild(cfgActions);
+      foldBody.appendChild(cfgFooter);
+
       sec.appendChild(foldBody);
+      applySubTab(activeSubTab);
+      syncRootState(sec, lang, ui);
 
       foldHead.addEventListener('click', (ev) => {
-        if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+        ev?.preventDefault?.();
         const nextOpen = sec.getAttribute('data-open') !== '1';
-        writeSettingsFoldOpen(nextOpen);
+        writeStore(STORAGE_SETTINGS_OPEN_KEY, nextOpen ? '1' : '0');
         runGuardedMut(() => {
           sec.setAttribute('data-open', nextOpen ? '1' : '0');
           sec.setAttribute('data-ag-cs-open', nextOpen ? '1' : '0');
           if (nextOpen) sec.classList?.add?.('is-open');
           else sec.classList?.remove?.('is-open');
           foldHead.setAttribute('aria-expanded', String(nextOpen));
-          foldHead.setAttribute(
-            'aria-label',
-            nextOpen
-              ? ui.foldCollapseHint || (isZh() ? '收起设置面板' : 'Collapse settings panel')
-              : ui.foldExpandHint || (isZh() ? '展开设置面板' : 'Expand settings panel')
-          );
+          foldHead.setAttribute('aria-label', nextOpen ? ui.foldCollapseHint || 'Collapse' : ui.foldExpandHint || 'Expand');
           foldBody.setAttribute('data-open', nextOpen ? '1' : '0');
           foldBody.setAttribute('aria-hidden', String(!nextOpen));
           if (nextOpen) foldBody.classList?.add?.('is-open');
@@ -818,9 +895,16 @@
     });
   }
 
-  G.__agPrismSettingsPanel = {
+  const exportedApi = {
     SETTINGS_SEC_ID,
+    PRISM_SETTINGS_SCHEMA,
+    SCENE_PRESETS,
     UPSTREAM_CREDITS,
+    getDefaultSettingsPatch,
+    buildSanitizedConfigExport,
+    validateImportedConfigJson,
     mountOrSyncSettingsSection,
   };
+  if (typeof module === 'object' && module.exports) module.exports = exportedApi;
+  G.__agPrismSettingsPanel = exportedApi;
 })(typeof globalThis !== 'undefined' ? globalThis : window);

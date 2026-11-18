@@ -495,7 +495,7 @@ test('cdp.REMOVE_EXPRESSION cleanly unwraps stream chunks without losing text, r
     return tn;
   };
 
-  const root = makeNode('html', { 'data-ag-cs-motion': 'ultra', 'data-ag-cs-lang': 'zh-CN', 'data-ag-prism': '1.0.0' });
+  const root = makeNode('html', { 'data-ag-cs-motion': 'ultra', 'data-ag-cs-lang': 'zh-CN', 'data-ag-prism': '1.0.1' });
   const body = makeNode('body');
   root.appendChild(body);
 
@@ -540,4 +540,475 @@ test('cdp.REMOVE_EXPRESSION cleanly unwraps stream chunks without losing text, r
   assert.equal(copyBtn.hasAttribute('data-ag-cs-icon-injected'), false);
   assert.equal(origSvg.hidden, false);
   assert.equal(animSvg.parentNode, null);
+});
+
+test('motionEngine WeakMap ancestor exclusion cache short-circuits repeated 300Hz pointerover walks while staying reactive to class changes', () => {
+  const prevPerf = globalThis.performance;
+  let fakeNow = 1000;
+  globalThis.performance = { now: () => fakeNow };
+
+  try {
+    let parentClassReads = 0;
+    const makeTrackedNode = (cls = '') => {
+      let curCls = cls;
+      const children = [];
+      const n = {
+        parentElement: null,
+        parentNode: null,
+        get className() {
+          return curCls;
+        },
+        set className(v) {
+          curCls = String(v);
+        },
+        getAttribute(k) {
+          if (k === 'class') {
+            parentClassReads++;
+            return curCls;
+          }
+          return null;
+        },
+        hasAttribute() {
+          return false;
+        },
+        appendChild(ch) {
+          ch.parentElement = n;
+          ch.parentNode = n;
+          children.push(ch);
+          return ch;
+        },
+      };
+      return n;
+    };
+
+    const rootWrap = makeTrackedNode('conversation-root');
+    const midA = makeTrackedNode('prose-section');
+    const midB = makeTrackedNode('prose-paragraph');
+    const leaf = makeTrackedNode('prose-word');
+    rootWrap.appendChild(midA);
+    midA.appendChild(midB);
+    midB.appendChild(leaf);
+
+    motionEngine.invalidateExclusionCache();
+    assert.equal(motionEngine.isThoughtExcluded(leaf), false);
+    const readsFirstCall = parentClassReads;
+    assert.ok(readsFirstCall >= 3);
+
+    // 50 repeated checks within the same 48ms high-refresh window only inspect leaf's own class (0 ancestor walks)
+    parentClassReads = 0;
+    for (let i = 0; i < 50; i++) {
+      assert.equal(motionEngine.isThoughtExcluded(leaf), false);
+    }
+    assert.equal(parentClassReads, 50, 'Ancestors must be served from WeakMap without walking up DOM tree');
+
+    // Sibling under cached midB also short-circuits at midB without walking midA / rootWrap
+    const siblingLeaf = makeTrackedNode('prose-code');
+    midB.appendChild(siblingLeaf);
+    parentClassReads = 0;
+    assert.equal(motionEngine.isThoughtExcluded(siblingLeaf), false);
+    assert.equal(parentClassReads, 2, 'Sibling leaf should stop immediately at cached parent midB');
+
+    // Mutating leaf itself or invalidating cache reflects exclusion immediately
+    leaf.className = 'ag-prism-thought-raw-toggle';
+    assert.equal(motionEngine.isThoughtExcluded(leaf), true);
+
+    leaf.className = 'prose-word';
+    rootWrap.className = 'ag-prism-thought-overlay';
+    motionEngine.invalidateExclusionCache();
+    assert.equal(motionEngine.isThoughtExcluded(leaf), true);
+  } finally {
+    globalThis.performance = prevPerf;
+  }
+});
+
+test('smooth-caret tracks editor/host scrollTop without floating stale caret and snaps to physical sub-pixels on HiDPI displays', () => {
+  require(path.join(ROOT_DIR, 'smooth-caret.js'));
+  const smoothCaretMod = globalThis.__agPrismSmoothCaret;
+  assert.ok(smoothCaretMod && typeof smoothCaretMod.createSmoothCaretController === 'function');
+  assert.equal(smoothCaretMod.snapDevicePx(14.49, 1), 14);
+  assert.equal(smoothCaretMod.snapDevicePx(14.49, 2), 14.5);
+  assert.equal(smoothCaretMod.snapDevicePx(14.39, 2.5), 14.4);
+
+  const prevDoc = globalThis.document;
+  const prevWin = globalThis.window;
+  const prevGetCs = globalThis.getComputedStyle;
+  const prevRaf = globalThis.requestAnimationFrame;
+  const rafCbs = [];
+  globalThis.requestAnimationFrame = (cb) => {
+    rafCbs.push(cb);
+    return rafCbs.length;
+  };
+
+  let caretTopInViewport = 124.4;
+  let caretLeftInViewport = 52.5;
+
+  const textLeaf = { nodeType: 3, textContent: 'Line 1\nLine 2\nLine 3' };
+  const hostChildren = [];
+  const host = {
+    clientLeft: 0,
+    clientTop: 0,
+    scrollLeft: 0,
+    scrollTop: 0,
+    attrs: new Map(),
+    setAttribute(k, v) { this.attrs.set(k, String(v)); },
+    getAttribute(k) { return this.attrs.has(k) ? this.attrs.get(k) : null; },
+    hasAttribute(k) { return this.attrs.has(k); },
+    removeAttribute(k) { this.attrs.delete(k); },
+    getBoundingClientRect: () => ({ left: 40, top: 100, width: 400, height: 80 }),
+    appendChild(ch) {
+      ch.isConnected = true;
+      hostChildren.push(ch);
+      return ch;
+    },
+    querySelector(sel) {
+      if (sel.startsWith('.ag-cs-smooth-caret')) {
+        return hostChildren.find((c) => c.className === 'ag-cs-smooth-caret') || null;
+      }
+      return null;
+    },
+  };
+
+  const ed = {
+    parentElement: host,
+    scrollLeft: 0,
+    scrollTop: 0,
+    scrollHeight: 220,
+    clientHeight: 80,
+    childNodes: [textLeaf],
+    textContent: textLeaf.textContent,
+    attrs: new Map(),
+    setAttribute(k, v) { this.attrs.set(k, String(v)); },
+    getAttribute(k) { return this.attrs.has(k) ? this.attrs.get(k) : null; },
+    hasAttribute(k) { return this.attrs.has(k); },
+    removeAttribute(k) { this.attrs.delete(k); },
+    contains: (n) => n === textLeaf,
+    querySelectorAll: () => [],
+    getBoundingClientRect: () => ({ left: 40, top: 100, right: 440, bottom: 180, width: 400, height: 80 }),
+  };
+
+  globalThis.window = { devicePixelRatio: 2 };
+  globalThis.getComputedStyle = () => ({ paddingLeft: '8px', paddingTop: '8px', fontSize: '14px', lineHeight: '22px' });
+  globalThis.document = {
+    activeElement: ed,
+    createElement(tag) {
+      const attrs = new Map();
+      return {
+        tagName: tag.toUpperCase(),
+        className: '',
+        style: {},
+        isConnected: false,
+        setAttribute(k, v) { attrs.set(k, String(v)); },
+        getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+        hasAttribute(k) { return attrs.has(k); },
+        removeAttribute(k) { attrs.delete(k); },
+        remove() { this.isConnected = false; },
+      };
+    },
+    getSelection: () => ({
+      rangeCount: 1,
+      isCollapsed: true,
+      focusNode: textLeaf,
+      focusOffset: 6,
+      getRangeAt: () => ({
+        startContainer: textLeaf,
+        startOffset: 6,
+        getClientRects: () => [{ left: caretLeftInViewport, top: caretTopInViewport, height: 18.5 }],
+      }),
+    }),
+    querySelectorAll(sel) {
+      if (sel.includes('[contenteditable="true"]')) return [ed];
+      if (sel === '.ag-cs-smooth-caret') return hostChildren;
+      return [];
+    },
+  };
+
+  try {
+    const ctl = smoothCaretMod.createSmoothCaretController({
+      isDestroyed: () => false,
+      isEnabled: () => true,
+      setAttrIfChanged(el, k, v) { if (el.getAttribute(k) !== v) el.setAttribute(k, v); },
+      runGuardedMut(fn) { return fn(); },
+    });
+
+    ctl.sync(true, false);
+    const caret = host.querySelector('.ag-cs-smooth-caret');
+    assert.ok(caret);
+    // Physical 2x DPR subpixel alignment: 52.5 - 40 = 12.5px, 124.4 - 100 = 24.4 -> snapped to 24.5px
+    assert.equal(caret.style.transform, 'translate3d(12.5px, 24.5px, 0)');
+    assert.equal(caret.style.height, '18.5px');
+
+    // Wheel scroll changes ed.scrollTop while selection focusNode/focusOffset stay identical!
+    ed.scrollTop = 18;
+    caretTopInViewport = 106.4;
+    ctl.sync(false, false);
+    assert.equal(
+      caret.style.transform,
+      'translate3d(12.5px, 6.5px, 0)',
+      'Caret must update immediately on editor scrollTop change instead of floating at stale Y'
+    );
+    assert.equal(caret.style.transition, 'none', 'Scroll-only sync should suppress laggy glide transition');
+    while (rafCbs.length) rafCbs.shift()();
+    assert.equal(caret.style.transition, '', 'Next animation frame restores smooth glide transition');
+
+    ctl.teardown();
+  } finally {
+    globalThis.document = prevDoc;
+    globalThis.window = prevWin;
+    globalThis.getComputedStyle = prevGetCs;
+    globalThis.requestAnimationFrame = prevRaf;
+  }
+});
+
+test('smooth-caret bumpMetricsEpoch invalidates emptyCaretProbeCache and prism-rim-canvas honors accentTone, ambient=0, subtle/off motion, orphan cleanup, and invalidateMetrics', () => {
+  const smoothCaretMod = require('../smooth-caret.js');
+  const prismRimMod = require('../prism-rim-canvas.js');
+
+  // Part A: smooth-caret emptyCaretProbeCache invalidation on bumpMetricsEpoch()
+  const prevDoc = globalThis.document;
+  const prevWin = globalThis.window;
+  const prevGetCs = globalThis.getComputedStyle;
+  const prevPerf = globalThis.performance;
+  const prevRaf = globalThis.requestAnimationFrame;
+  const prevCaf = globalThis.cancelAnimationFrame;
+
+  let padLeftPx = 8;
+  let padTopPx = 8;
+  let brViewportRect = { left: 48, top: 108, height: 18 };
+  let hasSelectionRange = true;
+  const hostKids = [];
+  const brNode = {
+    nodeName: 'BR',
+    nodeType: 1,
+    hasAttribute: () => true,
+    getBoundingClientRect: () => brViewportRect,
+  };
+  const host = {
+    clientLeft: 0,
+    clientTop: 0,
+    scrollLeft: 0,
+    scrollTop: 0,
+    attrs: new Map(),
+    getBoundingClientRect: () => ({ left: 40, top: 100, width: 360, height: 60 }),
+    setAttribute(k, v) { this.attrs.set(k, String(v)); },
+    getAttribute(k) { return this.attrs.has(k) ? this.attrs.get(k) : null; },
+    hasAttribute(k) { return this.attrs.has(k); },
+    removeAttribute(k) { this.attrs.delete(k); },
+    appendChild(c) { c.isConnected = true; hostKids.push(c); return c; },
+    querySelector: () => hostKids[0] || null,
+  };
+  const ed = {
+    nodeType: 1,
+    parentElement: host,
+    scrollLeft: 0,
+    scrollTop: 0,
+    scrollHeight: 60,
+    clientHeight: 60,
+    childNodes: [brNode],
+    textContent: '',
+    attrs: new Map(),
+    setAttribute(k, v) { this.attrs.set(k, String(v)); },
+    getAttribute(k) { return this.attrs.has(k) ? this.attrs.get(k) : null; },
+    hasAttribute(k) { return this.attrs.has(k); },
+    removeAttribute(k) { this.attrs.delete(k); },
+    contains: (n) => n === ed || n === brNode,
+    querySelectorAll: () => [],
+    getBoundingClientRect: () => ({ left: 40, top: 100, right: 400, bottom: 160, width: 360, height: 60 }),
+  };
+
+  let rafQueue = [];
+  globalThis.performance = { now: () => 1000 };
+  globalThis.window = { devicePixelRatio: 1 };
+  globalThis.requestAnimationFrame = (fn) => { rafQueue.push(fn); return rafQueue.length; };
+  globalThis.cancelAnimationFrame = () => { rafQueue = []; };
+  globalThis.getComputedStyle = (el) => {
+    if (el === ed) return { paddingLeft: `${padLeftPx}px`, paddingTop: `${padTopPx}px`, fontSize: '14px', lineHeight: '20px' };
+    return { borderTopLeftRadius: `${el._radiusPx || 10}px` };
+  };
+  globalThis.document = {
+    activeElement: ed,
+    documentElement: {
+      attrs: new Map([['data-ag-cs-accent', 'mono'], ['data-ag-cs-ambient', '1'], ['data-ag-cs-motion', 'ultra']]),
+      getAttribute(k) { return this.attrs.has(k) ? this.attrs.get(k) : null; },
+    },
+    createElement(tag) {
+      const attrs = new Map();
+      return {
+        tagName: tag.toUpperCase(),
+        className: '',
+        style: {},
+        dataset: {},
+        width: 0,
+        height: 0,
+        isConnected: true,
+        parentElement: null,
+        classList: { contains(c) { return String(this._owner?.className || '').split(/\s+/).includes(c); } },
+        setAttribute(k, v) { attrs.set(k, String(v)); },
+        getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+        hasAttribute(k) { return attrs.has(k); },
+        removeAttribute(k) { attrs.delete(k); },
+        remove() {
+          this.isConnected = false;
+          if (this.parentElement && Array.isArray(this.parentElement._kids)) {
+            const idx = this.parentElement._kids.indexOf(this);
+            if (idx >= 0) this.parentElement._kids.splice(idx, 1);
+          }
+        },
+        getContext: () => null,
+      };
+    },
+    getSelection: () => (hasSelectionRange ? {
+      rangeCount: 1,
+      isCollapsed: true,
+      focusNode: ed,
+      focusOffset: 0,
+      getRangeAt: () => ({
+        startContainer: ed,
+        startOffset: 0,
+        getClientRects: () => [],
+        getBoundingClientRect: () => ({ left: 0, top: 0, height: 0 }),
+      }),
+    } : { rangeCount: 0, isCollapsed: true }),
+    querySelectorAll(sel) {
+      if (sel.includes('[contenteditable="true"]')) return [ed];
+      if (sel === '.ag-cs-smooth-caret') return hostKids;
+      if (sel === '[data-ag-cs-prism-box="1"]') return prismBoxes.filter((b) => b.getAttribute('data-ag-cs-prism-box') === '1');
+      if (sel === '.ag-cs-prism-rim-cv') return prismBoxes.flatMap((b) => b._kids.filter((k) => k.className === 'ag-cs-prism-rim-cv'));
+      if (sel === '[data-ag-cs-prism-cv]') return prismBoxes.filter((b) => b.hasAttribute('data-ag-cs-prism-cv'));
+      return [];
+    },
+    getElementById: () => null,
+  };
+
+  let prismBoxes = [];
+  try {
+    const caretCtl = smoothCaretMod.createSmoothCaretController({
+      isDestroyed: () => false,
+      isEnabled: () => true,
+      setAttrIfChanged: (el, k, v) => el.setAttribute(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+    // Seed emptyCaretProbeCache via BR rect at dx=8, dy=8
+    caretCtl.sync(false, false);
+    const caret = hostKids[0];
+    assert.equal(caret.style.transform, 'translate3d(8px, 8px, 0)');
+
+    // Selection temporarily empty (falls back to emptyCaretProbeCache); then composerRestyle changes padding to 16px, 14px!
+    hasSelectionRange = false;
+    padLeftPx = 16;
+    padTopPx = 14;
+    caretCtl.bumpMetricsEpoch();
+    caretCtl.sync(false, true);
+    assert.ok(
+      caret.style.transform.startsWith('translate3d(16px, '),
+      `bumpMetricsEpoch must evict stale emptyCaretProbeCache (dx=8) and use fresh padL=16, got ${caret.style.transform}`
+    );
+    caretCtl.teardown();
+    rafQueue = [];
+
+    // Part B: prism-rim-canvas accentTone, ambient=0, subtle/off motion, orphan cleanup, and invalidateMetrics
+    const stopsSeen = [];
+    const roundRectRadii = [];
+    let clearsCount = 0;
+    const mock2d = {
+      globalAlpha: 1,
+      lineWidth: 1,
+      strokeStyle: null,
+      clearRect() { clearsCount++; },
+      beginPath() {},
+      roundRect(_x, _y, _w, _h, r) { roundRectRadii.push(r); },
+      stroke() {},
+      createRadialGradient() {
+        const stops = [];
+        stopsSeen.push(stops);
+        return { addColorStop(off, col) { stops.push([off, col]); } };
+      },
+    };
+    const origCreate = globalThis.document.createElement;
+    globalThis.document.createElement = (tag) => {
+      const el = origCreate(tag);
+      el.classList._owner = el;
+      if (tag === 'canvas') el.getContext = () => mock2d;
+      return el;
+    };
+
+    const boxAttrs = new Map([['data-ag-cs-prism-box', '1']]);
+    const box = {
+      _radiusPx: 10,
+      _kids: [],
+      isConnected: true,
+      style: { setProperty() {}, removeProperty() {} },
+      get firstElementChild() { return this._kids[0] || null; },
+      setAttribute(k, v) { boxAttrs.set(k, String(v)); },
+      getAttribute(k) { return boxAttrs.has(k) ? boxAttrs.get(k) : null; },
+      hasAttribute(k) { return boxAttrs.has(k); },
+      removeAttribute(k) { boxAttrs.delete(k); },
+      appendChild(c) { c.parentElement = box; c.isConnected = true; this._kids.push(c); return c; },
+      querySelector(sel) {
+        if (sel === '.ag-cs-prism-rim-cv') return this._kids.find((k) => k.className === 'ag-cs-prism-rim-cv') || null;
+        return null;
+      },
+      getBoundingClientRect: () => ({ left: 50, top: 50, right: 350, bottom: 130, width: 300, height: 80 }),
+    };
+    prismBoxes = [box];
+
+    const rimCtl = prismRimMod.createPrismRimCanvasController({
+      isDestroyed: () => false,
+      isDarkTheme: () => true,
+      motionReduced: () => false,
+      getMinFrameGapMs: () => 0,
+      canMountRealCanvas: () => true,
+      setAttrIfChanged: (el, k, v) => el.setAttribute(k, v),
+      runGuardedMut: (fn) => fn(),
+      getActiveCrystalTrack: () => null,
+      setCrystalPointerClient: () => {},
+      onPointerActivity: () => {},
+    });
+
+    rimCtl.onPointerMove({ clientX: 120, clientY: 80 });
+    assert.equal(rafQueue.length, 1);
+    rafQueue.shift()(1016);
+    assert.equal(stopsSeen.length, 1);
+    const monoColors = stopsSeen[0].map((s) => s[1]);
+    assert.ok(monoColors.includes('#E2E8F0') && !monoColors.includes('#EA4335'), `mono accent must use silver-titanium stops, got ${monoColors}`);
+    assert.equal(roundRectRadii[0], 10);
+
+    // Change cornerStyle (borderRadius 10 -> 14) and call invalidateMetrics() -> refreshes cached borderRadius!
+    box._radiusPx = 14;
+    globalThis.document.documentElement.attrs.set('data-ag-cs-accent', 'amber');
+    rimCtl.invalidateMetrics();
+    assert.equal(rafQueue.length, 1);
+    rafQueue.shift()(1040);
+    assert.equal(roundRectRadii[roundRectRadii.length - 1], 14, 'invalidateMetrics must refresh cached borderRadius from 10px to 14px');
+    const amberColors = stopsSeen[stopsSeen.length - 1].map((s) => s[1]);
+    assert.ok(amberColors.includes('#F2B84B'), `amber accent must use amber stops, got ${amberColors}`);
+
+    // ambient=0 clears canvas and skips rAF on pointermove (0fps)
+    const clearsBeforeZero = clearsCount;
+    globalThis.document.documentElement.attrs.set('data-ag-cs-ambient', '0');
+    rimCtl.invalidateMetrics();
+    assert.ok(clearsCount > clearsBeforeZero, 'ambient=0 must clear rim canvas immediately');
+    rimCtl.onPointerMove({ clientX: 140, clientY: 85 });
+    assert.equal(rafQueue.length, 0, 'ambient=0 must not schedule rAF on pointermove');
+
+    // motionLevel=subtle also skips rAF
+    globalThis.document.documentElement.attrs.set('data-ag-cs-ambient', '1');
+    globalThis.document.documentElement.attrs.set('data-ag-cs-motion', 'subtle');
+    rimCtl.onPointerMove({ clientX: 145, clientY: 85 });
+    assert.equal(rafQueue.length, 0, 'motion=subtle must not run 300Hz rim pointer loop');
+
+    // composerRestyle: false removes data-ag-cs-prism-box -> markDirty() prunes orphan canvas & data-ag-cs-prism-cv
+    box.removeAttribute('data-ag-cs-prism-box');
+    rimCtl.markDirty();
+    assert.equal(box._kids.length, 0, 'Orphan .ag-cs-prism-rim-cv must be removed when composerRestyle turns off');
+    assert.equal(box.hasAttribute('data-ag-cs-prism-cv'), false);
+
+    rimCtl.teardown();
+  } finally {
+    globalThis.document = prevDoc;
+    globalThis.window = prevWin;
+    globalThis.getComputedStyle = prevGetCs;
+    globalThis.performance = prevPerf;
+    globalThis.requestAnimationFrame = prevRaf;
+    globalThis.cancelAnimationFrame = prevCaf;
+  }
 });

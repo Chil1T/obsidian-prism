@@ -209,6 +209,44 @@ test('isSettled() enters true 0fps sleep after >=1.1s convergence and immediatel
   }
 });
 
+test('hoveredSlice change wakes 0fps sleep for 1 optical focus-ring frame and immediately re-settles', () => {
+  const prevDoc = globalThis.document;
+  delete globalThis.document;
+
+  try {
+    const canvas = createMock2DCanvas();
+    let activeSlice = -1;
+    const vial = vialCore.mountPhysicalWaterVial(canvas, {
+      fill: 0.55,
+      streaming: false,
+      getState: () => ({
+        isDark: true,
+        camp: 'gemini',
+        critical: false,
+        fill: 0.55,
+        maxTokens: 512000,
+        ratios: [0.10, 0.30, 0.15],
+        hoveredSlice: activeSlice,
+        streaming: false,
+      }),
+    });
+
+    for (let i = 0; i < 30; i++) vial.step(0.05);
+    assert.equal(vial.isSettled(), true, 'Vial must settle cleanly at 0fps');
+
+    for (const s of [0, 1, 2, -1]) {
+      activeSlice = s;
+      assert.equal(vial.isSettled(), false, `Changing hoveredSlice to ${s} must wake isSettled()`);
+      vial.step(0.016);
+      assert.equal(vial.isSettled(), true, `After 1 redraw frame for slice ${s}, vial must immediately re-settle to 0fps`);
+    }
+
+    vial.dispose();
+  } finally {
+    if (prevDoc !== undefined) globalThis.document = prevDoc;
+  }
+});
+
 test('mountPhysicalWaterVial renders high-contrast daylight borosilicate glass & cobalt-sky column in 2D fallback mode', () => {
   const prevDoc = globalThis.document;
   delete globalThis.document;
@@ -406,5 +444,72 @@ test('mountPhysicalWaterVial mounts WebGL2 borosilicate daylight + deep-sea ioni
   } finally {
     if (prevDoc === undefined) delete globalThis.document;
     else globalThis.document = prevDoc;
+  }
+});
+
+test('OP-3.5 vial-core accentTone response: mono silver-titanium, iris, amber, and warm-follow wake from 0fps sleep cleanly', () => {
+  const prevDoc = globalThis.document;
+  delete globalThis.document;
+
+  try {
+    const canvas = createMock2DCanvas();
+    let curState = {
+      isDark: false,
+      accentTone: 'follow',
+      palette: 'obsidian',
+      camp: 'gemini',
+      critical: false,
+      fill: 0.48,
+      ratios: [0.10, 0.26, 0.12],
+      hoveredSlice: -1,
+      streaming: false,
+    };
+
+    const inst = vialCore.mountPhysicalWaterVial(canvas, {
+      fill: 0.48,
+      streaming: false,
+      reduceMotion: true,
+      getState: () => curState,
+    });
+    assert.equal(inst.isSettled(), true, 'Must settle immediately when reduceMotion is true');
+
+    // Switching accentTone to mono must invalidate settled signature, wake for 1 frame, and render silver-titanium without cobalt blue
+    curState = { ...curState, accentTone: 'mono' };
+    assert.equal(inst.isSettled(), false, 'Changing accentTone must mark visual signature dirty to wake 0fps loop');
+    canvas.gradStops.length = 0;
+    inst.step(0.016);
+    assert.equal(inst.isSettled(), true, 'Must re-settle immediately after rendering updated mono frame');
+    assert.ok(
+      canvas.gradStops.some(([, c]) => c.includes('82, 82, 91')),
+      'Mono daylight column must render neutral zinc/titanium stops'
+    );
+    assert.equal(
+      canvas.gradStops.some(([, c]) => c.includes('29, 78, 216') || c.includes('2, 132, 199')),
+      false,
+      'Mono daylight column must NOT contain cobalt/sky blue stops'
+    );
+
+    // Switching to warm + follow automatically adopts amber spectrum
+    curState = { ...curState, accentTone: 'follow', palette: 'warm' };
+    assert.equal(inst.isSettled(), false);
+    canvas.gradStops.length = 0;
+    inst.step(0.016);
+    assert.ok(
+      canvas.gradStops.some(([, c]) => c.includes('217, 119, 6')),
+      'Warm palette + follow accent must render warm amber liquid spectrum'
+    );
+
+    // Switching to iris renders violet/iris spectrum
+    curState = { ...curState, accentTone: 'iris', palette: 'obsidian' };
+    canvas.gradStops.length = 0;
+    inst.step(0.016);
+    assert.ok(
+      canvas.gradStops.some(([, c]) => c.includes('124, 58, 237')),
+      'Iris accent must render violet/iris liquid spectrum'
+    );
+
+    inst.dispose();
+  } finally {
+    if (prevDoc !== undefined) globalThis.document = prevDoc;
   }
 });

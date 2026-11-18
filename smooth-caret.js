@@ -6,6 +6,12 @@
   const G = root || (typeof globalThis !== 'undefined' ? globalThis : window);
   if (!G) return;
 
+  function snapDevicePx(value, dpr = 1) {
+    const v = Number(value) || 0;
+    const d = Number.isFinite(Number(dpr)) && Number(dpr) > 0 ? Math.min(4, Number(dpr)) : 1;
+    return +(Math.round(v * d) / d).toFixed(3);
+  }
+
   function createSmoothCaretController({ isDestroyed, isEnabled, setAttrIfChanged, runGuardedMut }) {
     let caretTypingTimer = null;
     let caretRaf = 0;
@@ -13,7 +19,7 @@
     let pendingCaretRefreshMetrics = false;
     let editorMetricsEpoch = 1;
     const editorMetricsCache = new WeakMap();
-    const emptyCaretProbeCache = new WeakMap();
+    let emptyCaretProbeCache = new WeakMap();
     const caretPrevState = new WeakMap();
     const selectionSigCache = new WeakMap();
 
@@ -36,6 +42,7 @@
 
     function bumpMetricsEpoch() {
       editorMetricsEpoch += 1;
+      emptyCaretProbeCache = new WeakMap();
     }
 
     function getCachedEditorMetrics(ed, forceRefresh = false) {
@@ -75,6 +82,7 @@
             dx: boxRect.left - edRect.left,
             dy: boxRect.top - edRect.top,
             height: boxRect.height,
+            epoch: editorMetricsEpoch,
           });
         }
       };
@@ -146,7 +154,7 @@
       }
 
       const cached = emptyCaretProbeCache.get(ed);
-      if (cached) {
+      if (cached && cached.epoch === editorMetricsEpoch) {
         return checkScrollBounds({
           collapsed: true,
           left: edRect.left + cached.dx,
@@ -185,21 +193,35 @@
           }
           continue;
         }
-        // Fast-skip unchanged selection state (e.g. modifier keys, mouse moves, or external scroll while focused!)
-        if (!refreshMetrics && sel && sel.rangeCount > 0 && ed.hasAttribute?.('data-ag-cs-smooth-caret')) {
+        const edScrollLeft = ed.scrollLeft || 0;
+        const edScrollTop = ed.scrollTop || 0;
+        const hostScrollLeft = host.scrollLeft || 0;
+        const hostScrollTop = host.scrollTop || 0;
+        let scrolledOnly = false;
+        // Fast-skip unchanged selection & scroll state (never skip when scrollTop/scrollLeft moves!)
+        if (sel && sel.rangeCount > 0) {
           const prevSig = selectionSigCache.get(ed);
           const childCnt = ed.childNodes ? ed.childNodes.length : 0;
           const textLen = (ed.textContent || '').length;
-          if (
-            prevSig &&
-            prevSig.epoch === editorMetricsEpoch &&
-            prevSig.isCollapsed === sel.isCollapsed &&
-            prevSig.focusNode === sel.focusNode &&
-            prevSig.focusOffset === sel.focusOffset &&
-            prevSig.childCnt === childCnt &&
-            prevSig.textLen === textLen
-          ) {
-            continue;
+          if (!refreshMetrics && ed.hasAttribute?.('data-ag-cs-smooth-caret')) {
+            const sameSelection =
+              Boolean(prevSig) &&
+              prevSig.epoch === editorMetricsEpoch &&
+              prevSig.isCollapsed === sel.isCollapsed &&
+              prevSig.focusNode === sel.focusNode &&
+              prevSig.focusOffset === sel.focusOffset &&
+              prevSig.childCnt === childCnt &&
+              prevSig.textLen === textLen;
+            const sameScroll =
+              Boolean(prevSig) &&
+              prevSig.edScrollLeft === edScrollLeft &&
+              prevSig.edScrollTop === edScrollTop &&
+              prevSig.hostScrollLeft === hostScrollLeft &&
+              prevSig.hostScrollTop === hostScrollTop;
+            if (sameSelection && sameScroll) {
+              continue;
+            }
+            scrolledOnly = sameSelection && !sameScroll;
           }
           selectionSigCache.set(ed, {
             epoch: editorMetricsEpoch,
@@ -208,14 +230,18 @@
             focusOffset: sel.focusOffset,
             childCnt,
             textLen,
+            edScrollLeft,
+            edScrollTop,
+            hostScrollLeft,
+            hostScrollTop,
           });
         }
         const measured = measureEditorCaretBox(ed, refreshMetrics);
         const hostRect = measured && measured.collapsed ? host.getBoundingClientRect() : null;
         const clientLeft = host.clientLeft || 0;
         const clientTop = host.clientTop || 0;
-        const scrollLeft = host.scrollLeft || 0;
-        const scrollTop = host.scrollTop || 0;
+        const scrollLeft = hostScrollLeft;
+        const scrollTop = hostScrollTop;
         const cleanText = (ed.textContent || '').replace(/\u200b/g, '');
         const isNowEmpty = cleanText.length === 0 && ed.querySelectorAll('p, div').length <= 1;
         list.push({
@@ -229,6 +255,7 @@
           scrollLeft,
           scrollTop,
           isNowEmpty,
+          scrolledOnly,
         });
       }
       return list;
@@ -242,7 +269,7 @@
       if (!snapshotList || typeof document === 'undefined') return;
       runGuardedMut(() => {
         for (const item of snapshotList) {
-          const { ed, host, isFocused, measured, hostRect, clientLeft, clientTop, scrollLeft, scrollTop, isNowEmpty } = item;
+          const { ed, host, isFocused, measured, hostRect, clientLeft, clientTop, scrollLeft, scrollTop, isNowEmpty, scrolledOnly } = item;
           setAttrIfChanged(host, 'data-ag-cs-caret-host', '1');
           let caret = host.querySelector('.ag-cs-smooth-caret');
           if (!caret) {
@@ -259,14 +286,15 @@
             continue;
           }
 
-          const x = Math.round(measured.left - hostRect.left - clientLeft + scrollLeft);
-          const y = Math.round(measured.top - hostRect.top - clientTop + scrollTop);
-          const h = Math.max(15, Math.round(measured.height || 18));
+          const rawDpr = (typeof window !== 'undefined' && Number(window.devicePixelRatio)) || 1;
+          const x = snapDevicePx(measured.left - hostRect.left - clientLeft + scrollLeft, rawDpr);
+          const y = snapDevicePx(measured.top - hostRect.top - clientTop + scrollTop, rawDpr);
+          const h = Math.max(15, snapDevicePx(measured.height || 18, rawDpr));
           const wasVisible = caret.getAttribute('data-ag-cs-caret-visible') === '1';
           const prev = caretPrevState.get(caret);
           const clearedToEmpty = Boolean(prev && prev.empty === false && isNowEmpty);
 
-          if ((isFocused && !wasVisible) || clearedToEmpty) {
+          if ((isFocused && !wasVisible) || clearedToEmpty || scrolledOnly) {
             caret.style.transition = 'none';
             caret.style.transform = `translate3d(${x}px, ${y}px, 0)`;
             caret.style.height = `${h}px`;
@@ -358,5 +386,7 @@
     };
   }
 
-  G.__agPrismSmoothCaret = { createSmoothCaretController };
+  const api = { createSmoothCaretController, snapDevicePx };
+  if (typeof module === 'object' && module.exports) module.exports = api;
+  G.__agPrismSmoothCaret = api;
 })(typeof globalThis !== 'undefined' ? globalThis : window);

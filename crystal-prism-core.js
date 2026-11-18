@@ -19,6 +19,25 @@
     return Math.min(hi, Math.max(lo, v));
   }
 
+  function resolveCrystalAccentCode(raw) {
+    const k = String(raw || 'default').trim().toLowerCase();
+    if (k === 'mono' || k === 'monochrome') return 5;
+    if (k === 'amber') return 4;
+    if (k === 'iris') return 3;
+    if (k === 'cobalt') return 2;
+    if (k === 'warm' || k === 'claude' || k === 'alabaster') return 1;
+    return 0;
+  }
+
+  const FALLBACK_SPECTRA = {
+    0: ['#4c8df6', '#9b72cb', '#d96570', '#f2b84b'],
+    1: ['#c25934', '#d97757', '#e59377', '#f6bd60'],
+    2: ['#1d4ed8', '#3186ff', '#5cc6fc', '#8ce0ff'],
+    3: ['#6d28d9', '#8b5cf6', '#a58af8', '#ddd6fe'],
+    4: ['#b45309', '#d97706', '#f2b84b', '#fde68a'],
+    5: ['#94a3b8', '#cbd5e1', '#e2e8f0', '#f8fafc'],
+  };
+
   /**
    * 计算鼠标局部坐标 (localX, localY) 到圆角胶囊轨道 [0..width, 0..height] 的光学近场权重 (0..1)。
    * 感应半径显著小于输入框大棱镜边框 (220px)，仅在靠近约 105px 内激活色散反应。
@@ -131,6 +150,8 @@ uniform vec4 u_glints;      // 4 路异步星芒强度
 uniform vec4 u_glintU;      // 星芒锚点 u（左原点）
 uniform vec4 u_glintV;      // 星芒锚点 v（上原点）
 uniform vec2 u_wake;        // x: 扫光中心（u 空间），y: 扫光包络强度（0 表示未激活）
+uniform float u_accent;     // 0:default 1:warm 2:cobalt 3:iris 4:amber 5:mono
+uniform float u_ambient;    // 0..1 环境氛围光缩放
 
 vec2 hash22(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
@@ -184,13 +205,46 @@ float sdCapsuleBox(vec2 p, vec2 halfSize, float radius) {
   return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
 }
 
-// 柯西四色光谱（钴蓝 -> 鸢尾紫 -> 珊瑚红 -> 琥珀金），t ∈ [0,1] 不循环
-vec3 cauchySpectrum(float t) {
-  vec3 c0 = vec3(0.298, 0.553, 0.965); // #4C8DF6
-  vec3 c1 = vec3(0.608, 0.447, 0.796); // #9B72CB
-  vec3 c2 = vec3(0.851, 0.396, 0.439); // #D96570
-  vec3 c3 = vec3(0.949, 0.722, 0.294); // #F2B84B
-  float s = clamp(t, 0.0, 1.0) * 3.0;
+float etchedLockMask(vec2 q, float halfStroke, float aa) {
+  float dBody = abs(sdCapsuleBox(q - vec2(0.0, -2.65), vec2(3.6, 2.45), 1.2)) - halfStroke;
+  vec2 qs = q - vec2(0.0, 1.5);
+  float dShackle = (qs.y >= 0.0 ? abs(length(qs) - 2.25) : length(vec2(abs(qs.x) - 2.25, max(0.0, -0.2 - q.y)))) - halfStroke;
+  float dKey = length(q - vec2(0.0, -2.55)) - 0.75;
+  return 1.0 - smoothstep(-aa, aa, min(min(dBody, dShackle), dKey));
+}
+
+// 柯西四色光谱与强调色模式映射（0:四色 1:暖岩 2:钴蓝 3:鸢尾紫 4:琥珀金 5:纯银钛单色）
+vec3 cauchySpectrum(float t, float accent) {
+  float u = clamp(t, 0.0, 1.0);
+  if (accent > 4.5) {
+    return mix(vec3(0.760, 0.800, 0.865), vec3(0.975, 0.985, 1.010), u);
+  }
+  vec3 c0 = vec3(0.298, 0.553, 0.965);
+  vec3 c1 = vec3(0.608, 0.447, 0.796);
+  vec3 c2 = vec3(0.851, 0.396, 0.439);
+  vec3 c3 = vec3(0.949, 0.722, 0.294);
+  if (accent > 3.5) {
+    c0 = vec3(0.706, 0.325, 0.035);
+    c1 = vec3(0.851, 0.467, 0.024);
+    c2 = vec3(0.949, 0.722, 0.294);
+    c3 = vec3(0.992, 0.902, 0.541);
+  } else if (accent > 2.5) {
+    c0 = vec3(0.427, 0.157, 0.851);
+    c1 = vec3(0.545, 0.361, 0.965);
+    c2 = vec3(0.647, 0.541, 0.973);
+    c3 = vec3(0.867, 0.839, 0.996);
+  } else if (accent > 1.5) {
+    c0 = vec3(0.114, 0.306, 0.847);
+    c1 = vec3(0.192, 0.525, 1.000);
+    c2 = vec3(0.361, 0.776, 0.988);
+    c3 = vec3(0.549, 0.878, 1.000);
+  } else if (accent > 0.5) {
+    c0 = vec3(0.761, 0.349, 0.204);
+    c1 = vec3(0.851, 0.467, 0.341);
+    c2 = vec3(0.898, 0.576, 0.467);
+    c3 = vec3(0.965, 0.741, 0.376);
+  }
+  float s = u * 3.0;
   if (s < 1.0) return mix(c0, c1, s);
   if (s < 2.0) return mix(c1, c2, s - 1.0);
   return mix(c2, c3, s - 2.0);
@@ -272,26 +326,35 @@ void main() {
   lum = mix(lum, lum * 0.10, tir * (isDark > 0.5 ? 0.92 : 0.70));
 
   vec3 col = iceRamp(lum, isDark);
-  // 中部清透区：极淡冷青透射色，读出「冰透」而非金属镀铬
+  // 中部清透区：随强调色自适应透射底韵（mono 为纯银灰透射，零彩色残留）
   float clearZone = (1.0 - crown) * (1.0 - pav) * smoothstep(0.30, 0.70, lum);
-  col = mix(col, vec3(0.72, 0.82, 0.97) * (0.55 + 0.5 * lum), clearZone * (isDark > 0.5 ? 0.22 : 0.16));
+  vec3 clearTint = u_accent > 4.5
+    ? vec3(0.84, 0.87, 0.92)
+    : (u_accent > 0.5 ? mix(vec3(0.82, 0.85, 0.90), cauchySpectrum(0.55, u_accent), 0.55) : vec3(0.72, 0.82, 0.97));
+  col = mix(col, clearTint * (0.55 + 0.5 * lum), clearZone * (isDark > 0.5 ? 0.22 : 0.16) * (0.35 + 0.65 * u_ambient));
 
   // 朝向棚灯的切面：整面冰白镜面反光
   float facetSpec = pow(max(dot(N, Hk), 0.0), 38.0);
   col += vec3(0.92, 0.95, 1.0) * facetSpec * (isDark > 0.5 ? 0.55 : 0.35);
 
-  // ── 3. 仅 2~3 条内部斜棱带：约 15% 冷蓝紫折光（经折射在切面边界错位） ──
-  for (int k = 0; k < 3; k++) {
-    float fk = float(k);
-    float cx = (k == 0 ? 0.27 : (k == 1 ? 0.555 : 0.775)) - 0.5;
-    float strength = k == 0 ? 1.0 : (k == 1 ? 0.78 : 0.56);
-    float d = (px.x + refrDir.x * 16.0) - cx * cssRes.x - px.y * (0.80 + 0.12 * fk);
-    float band = exp(-d * d / 4.5);
-    float vfade = 1.0 - smoothstep(0.55, 0.95, abs(yN));
-    vec3 tint = d < 0.0 ? vec3(0.50, 0.68, 1.00) : vec3(0.68, 0.58, 0.98);
-    col = mix(col, tint * (0.62 + 0.40 * clamp(lum, 0.0, 1.0)), 0.15 * band * vfade * strength);
-    // 斜棱带中心极细的冷白折光脊
-    col += vec3(0.80, 0.86, 1.0) * exp(-d * d / 0.45) * vfade * strength * 0.10;
+  // ── 3. 仅 2~3 条内部斜棱带：约 15% 折光（随 u_accent & u_ambient 联动） ──
+  if (u_ambient > 0.01) {
+    for (int k = 0; k < 3; k++) {
+      float fk = float(k);
+      float cx = (k == 0 ? 0.27 : (k == 1 ? 0.555 : 0.775)) - 0.5;
+      float strength = (k == 0 ? 1.0 : (k == 1 ? 0.78 : 0.56)) * u_ambient;
+      float d = (px.x + refrDir.x * 16.0) - cx * cssRes.x - px.y * (0.80 + 0.12 * fk);
+      float band = exp(-d * d / 4.5);
+      float vfade = 1.0 - smoothstep(0.55, 0.95, abs(yN));
+      vec3 tint = u_accent > 4.5
+        ? vec3(0.86, 0.89, 0.94)
+        : (u_accent > 0.5
+          ? cauchySpectrum(d < 0.0 ? 0.28 : 0.72, u_accent)
+          : (d < 0.0 ? vec3(0.50, 0.68, 1.00) : vec3(0.68, 0.58, 0.98)));
+      col = mix(col, tint * (0.62 + 0.40 * clamp(lum, 0.0, 1.0)), 0.15 * band * vfade * strength);
+      // 斜棱带中心极细的冷白折光脊
+      col += vec3(0.86, 0.90, 0.98) * exp(-d * d / 0.45) * vfade * strength * 0.10;
+    }
   }
 
   // ── 4. 刀锋菲涅尔棱线：亮度由「棱面法线 · 主光」与边缘 Fresnel 调制，只有朝光的棱亮起 ──
@@ -320,23 +383,25 @@ void main() {
     float pSpec = pow(max(dot(N, Hp), 0.0), 26.0);
     col += vec3(0.94, 0.97, 1.0) * (pSpec * 0.42 + spot * 0.10) * react;
 
-    // 切面火彩：低饱和柯西色调，每块切面随朝向取不同色相（火彩而非整片单色泛光）
+    // 切面火彩：随 u_accent 呈现对应色散（mono 下收敛为纯银白切面微光）
     float fireT = fract(h1 * 1.7 + dot(N.xy, Lp.xy) * 1.4 + 0.2);
     float fireMask = smoothstep(0.60, 0.95, dot(N, Lp)) * (0.30 + 0.70 * h2);
-    vec3 fire = cauchySpectrum(fireT);
-    col = mix(col, col * mix(vec3(1.0), fire * 1.55, 0.40), fireMask * react * 0.38);
+    vec3 fire = cauchySpectrum(fireT, u_accent);
+    float fireAmt = u_accent > 4.5 ? 0.18 : 0.38;
+    col = mix(col, col * mix(vec3(1.0), fire * 1.55, 0.40), fireMask * react * fireAmt);
 
-    // 棱线分光：朝向指针光的棱在棱外侧展开 钴蓝→鸢尾→珊瑚→琥珀 的极窄色散带
+    // 棱线分光：朝向指针光的棱在棱外侧展开极窄色散带（mono 下关闭彩色色散，仅留刀锋纯白亮棱）
     float eLit = pow(max(dot(Nb, Hp), 0.0), 9.0) * edgeGain;
     float fringeT = (pxD - 0.55) / 2.2;
     float fringeMask = smoothstep(0.0, 0.12, fringeT) * (1.0 - smoothstep(0.82, 1.0, fringeT));
-    col += cauchySpectrum(fringeT) * fringeMask * eLit * react * (0.6 + 0.8 * spot) * (isDark > 0.5 ? 1.70 : 1.25);
+    float dispScale = u_accent > 4.5 ? 0.25 : 1.0;
+    col += cauchySpectrum(fringeT, u_accent) * fringeMask * eLit * react * dispScale * (0.6 + 0.8 * spot) * (isDark > 0.5 ? 1.70 : 1.25);
     col += vec3(1.0) * blade * eLit * react * 0.55;
   }
 
-  // ── 6. 4 路异步冷白十字星芒（尖端 1px 级柯西分光） ──
+  // ── 6. 4 路异步冷白十字星芒（尖端 1px 级分光，受 u_ambient 调制） ──
   for (int i = 0; i < 4; i++) {
-    float gi = u_glints[i];
+    float gi = u_glints[i] * u_ambient;
     if (gi > 0.01) {
       vec2 anchor = vec2((u_glintU[i] - 0.5) * cssRes.x, (0.5 - u_glintV[i]) * cssRes.y);
       vec2 g = px - anchor;
@@ -347,8 +412,9 @@ void main() {
       float spikeX = exp(-rg.y * rg.y * 2.4) * exp(-sx * 0.24);
       float spikeY = exp(-rg.x * rg.x * 2.4) * exp(-sy * 0.40);
       float core = exp(-dot(g, g) * 0.42) + exp(-length(g) * 0.55) * 0.30;
-      vec3 tipX = mix(vec3(1.0), cauchySpectrum(fract(sx * 0.085 + float(i) * 0.23)) * 1.25, smoothstep(2.5, 7.0, sx) * 0.70);
-      vec3 tipY = mix(vec3(1.0), cauchySpectrum(fract(sy * 0.120 + float(i) * 0.31)) * 1.25, smoothstep(2.0, 5.0, sy) * 0.70);
+      float tipMix = u_accent > 4.5 ? 0.0 : 0.70;
+      vec3 tipX = mix(vec3(1.0), cauchySpectrum(fract(sx * 0.085 + float(i) * 0.23), u_accent) * 1.25, smoothstep(2.5, 7.0, sx) * tipMix);
+      vec3 tipY = mix(vec3(1.0), cauchySpectrum(fract(sy * 0.120 + float(i) * 0.31), u_accent) * 1.25, smoothstep(2.0, 5.0, sy) * tipMix);
       vec3 star = vec3(0.96, 0.98, 1.0) * core * 1.20 + tipX * spikeX * 0.78 + tipY * spikeY * 0.62;
       col += star * gi * (isDark > 0.5 ? 1.15 : 0.80);
     }
@@ -380,6 +446,20 @@ void main() {
   // Reinhard 色调映射（压缩系数 0.12，保住高光峰值）
   col = max(col, vec3(0.0));
   col = col / (1.0 + col * 0.12);
+
+  // Inner-wall laser-etched lock mark (zero-copy single WebGL2 pass, no 2D canvas blit)
+  vec2 lockCenter = vec2(halfSize.x - 15.5, 0.0);
+  if (abs(px.x - lockCenter.x) < 6.5 && abs(px.y) < 7.2) {
+    float lockAa = max(0.35, 0.68 / dpr);
+    float shMask = etchedLockMask(px - (lockCenter + vec2(0.6, -0.8)), 0.625, lockAa);
+    vec3 shCol = isDark > 0.5 ? vec3(0.024, 0.031, 0.063) : vec3(0.094, 0.133, 0.227);
+    col = mix(col, shCol, shMask * (isDark > 0.5 ? 0.56 : 0.20));
+    float etMask = etchedLockMask(px - lockCenter, 0.525, lockAa);
+    vec3 etCol = isDark > 0.5 ? vec3(0.933, 0.961, 1.0) : vec3(0.149, 0.188, 0.282);
+    float etAlpha = isDark > 0.5 ? (0.54 + u_proximity * 0.28) : (0.50 + u_proximity * 0.224);
+    col = mix(col, etCol, clamp(etMask * etAlpha, 0.0, 1.0));
+  }
+
   // ±1/255 屏幕空间噪声 dither，防止平滑梯度色带
   col += (hash21(gl_FragCoord.xy + vec2(17.0, 59.0)) - 0.5) * (2.0 / 255.0);
   fragColor = vec4(clamp(col, 0.0, 1.0) * alphaMask, alphaMask);
@@ -433,7 +513,7 @@ void main() {
   /**
    * 2D 降级切面绘制（无 WebGL2 时）：更少更大的斜切长切面 + 全局明暗梯度 + 仅朝光棱亮起。
    */
-  function drawFallback2D(ctx, cssW, cssH, isDark, pointerLocal, proximityFactor, glintIntensities, wakeU, wakeAmp) {
+  function drawFallback2D(ctx, cssW, cssH, isDark, pointerLocal, proximityFactor, glintIntensities, wakeU, wakeAmp, accentCode = 0, ambientScale = 1) {
     const r = cssH * 0.5;
     ctx.save();
     ctx.beginPath();
@@ -464,7 +544,7 @@ void main() {
       const jitter = i === 0 || i === cols ? 0 : Math.sin(i * 4.7) * 0.18;
       xs.push(((i + jitter) / cols) * cssW);
     }
-    const spectrum = ['#4c8df6', '#9b72cb', '#d96570', '#f2b84b'];
+    const spectrum = FALLBACK_SPECTRA[accentCode] || FALLBACK_SPECTRA[0];
     const lightDirX = -0.53;
     const lightDirY = -0.85;
     const edges = [];
@@ -538,16 +618,21 @@ void main() {
       ctx.stroke();
     }
 
-    // 2 条内部冷蓝紫斜棱带（约 15%）
-    ctx.lineWidth = 1.6;
-    [0.27, 0.555].forEach((u, k) => {
-      const x = u * cssW;
-      ctx.strokeStyle = k === 0 ? 'rgba(128, 172, 255, 0.15)' : 'rgba(170, 148, 250, 0.12)';
-      ctx.beginPath();
-      ctx.moveTo(x + cssH * 0.4, 2);
-      ctx.lineTo(x - cssH * 0.4, cssH - 2);
-      ctx.stroke();
-    });
+    // 2 条内部斜棱带（随 accentCode 与 ambientScale 联动）
+    if (ambientScale > 0.01) {
+      ctx.lineWidth = 1.6;
+      const prevAlpha = ctx.globalAlpha;
+      ctx.globalAlpha = 0.14 * ambientScale;
+      [0.27, 0.555].forEach((u, k) => {
+        const x = u * cssW;
+        ctx.strokeStyle = accentCode === 5 ? '#e2e8f0' : spectrum[k === 0 ? 0 : 1];
+        ctx.beginPath();
+        ctx.moveTo(x + cssH * 0.4, 2);
+        ctx.lineTo(x - cssH * 0.4, cssH - 2);
+        ctx.stroke();
+      });
+      ctx.globalAlpha = prevAlpha;
+    }
 
     // 近场追光柔斑
     if (pointerLocal.x > -2000 && proximityFactor > 0.02) {
@@ -569,9 +654,9 @@ void main() {
       ctx.fillRect(0, 0, cssW, cssH);
     }
 
-    // 异步星芒（尖端微分光）
+    // 异步星芒（尖端微分光，受 ambientScale 调制）
     for (let i = 0; i < 4; i++) {
-      const inten = glintIntensities[i];
+      const inten = glintIntensities[i] * ambientScale;
       if (inten <= 0.05) continue;
       const a = GLINT_ANCHORS[i];
       const gx = a.u * cssW;
@@ -586,11 +671,13 @@ void main() {
       ctx.moveTo(gx - 1.2, gy + 4.5);
       ctx.lineTo(gx + 1.2, gy - 4.5);
       ctx.stroke();
-      ctx.globalAlpha = inten * 0.5;
-      ctx.fillStyle = spectrum[0];
-      ctx.fillRect(gx - 7, gy - 2.1, 1, 1);
-      ctx.fillStyle = spectrum[3];
-      ctx.fillRect(gx + 6, gy + 1.1, 1, 1);
+      if (accentCode !== 5) {
+        ctx.globalAlpha = inten * 0.5;
+        ctx.fillStyle = spectrum[0];
+        ctx.fillRect(gx - 7, gy - 2.1, 1, 1);
+        ctx.fillStyle = spectrum[3];
+        ctx.fillRect(gx + 6, gy + 1.1, 1, 1);
+      }
       ctx.restore();
     }
 
@@ -610,11 +697,10 @@ void main() {
    */
   function mountCrystalPrismBar(canvas, options = {}) {
     if (!canvas || !canvas.getContext) return null;
-    const ctx2d = canvas.getContext('2d');
-    if (!ctx2d) return null;
 
     const getState = typeof options.getState === 'function' ? options.getState : () => ({ isDark: true, prismStrength: 1 });
-    const reduceMotion = Boolean(options.reduceMotion);
+    let reduceMotion = Boolean(options.reduceMotion);
+    const force2D = Boolean(options.force2D);
 
     let pointerClientX = -9999;
     let pointerClientY = -9999;
@@ -628,16 +714,32 @@ void main() {
     let lastCssW = 0;
     let lastCssH = 0;
     let wakeT = -1;
+    let hasDrawnFrame = false;
+    let lastDrawW = -1;
+    let lastDrawH = -1;
+    let lastDrawDpr = -1;
+    let lastDrawDark = null;
+    let lastDrawStrength = -1;
+    let lastDrawAccent = -1;
+    let lastDrawAmbient = -1;
+    let lastDrawReduce = null;
+    let wasProximityActive = false;
+    let wasGlintActive = false;
+    let wasWaking = false;
+    let glintAccumSec = 0;
+    let drawCount = 0;
+    let skippedCount = 0;
     const glintBuf = new Float32Array(4);
+    const lastDrawnGlint = new Float32Array(4);
 
     // ── 尺寸缓存：ResizeObserver 推送，取消每帧 getBoundingClientRect ──
     let cachedW = 0;
     let cachedH = 0;
     let resizeObserver = null;
     const seedSizeFromRect = () => {
-      const rect = canvas.getBoundingClientRect();
-      cachedW = rect ? rect.width : 0;
-      cachedH = rect ? rect.height : 0;
+      const rect = typeof canvas.getBoundingClientRect === 'function' ? canvas.getBoundingClientRect() : null;
+      cachedW = rect ? rect.width : canvas.width || 0;
+      cachedH = rect ? rect.height : canvas.height || 0;
       return rect;
     };
     if (typeof ResizeObserver === 'function') {
@@ -649,65 +751,96 @@ void main() {
         }
         rectAge = 999; // 布局变化后下一帧校准指针局部坐标
       });
-      resizeObserver.observe(canvas);
+      try {
+        resizeObserver.observe(canvas);
+      } catch {}
     }
     seedSizeFromRect();
 
     let rendererMode = '2d';
-    let glCanvas = null;
     let glState = null;
+    let ctx2d = null;
 
-    try {
-      glCanvas = document.createElement('canvas');
-      const gl = glCanvas.getContext('webgl2', {
-        alpha: true,
-        antialias: true,
-        premultipliedAlpha: true,
-        powerPreference: 'high-performance',
-      });
-      if (gl) {
-        const vs = createShader(gl, gl.VERTEX_SHADER, VS_SRC);
-        const fs = createShader(gl, gl.FRAGMENT_SHADER, FS_SRC);
-        const prog = gl.createProgram();
-        gl.attachShader(prog, vs);
-        gl.attachShader(prog, fs);
-        gl.linkProgram(prog);
-        gl.deleteShader(vs);
-        gl.deleteShader(fs);
-        if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-          throw new Error(gl.getProgramInfoLog(prog) || 'program link error');
-        }
-        const buf = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-        gl.enableVertexAttribArray(0);
-        gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-
-        const uloc = (name) => gl.getUniformLocation(prog, name);
-        glState = {
-          gl,
-          prog,
-          buf,
-          u: {
-            res: uloc('u_res'),
-            dpr: uloc('u_dpr'),
-            time: uloc('u_time'),
-            dark: uloc('u_dark'),
-            pointer: uloc('u_pointer'),
-            proximity: uloc('u_proximity'),
-            reduce: uloc('u_reduce'),
-            glints: uloc('u_glints'),
-            glintU: uloc('u_glintU'),
-            glintV: uloc('u_glintV'),
-            wake: uloc('u_wake'),
-          },
-        };
-        rendererMode = 'webgl2';
+    const initWebGL2 = (gl) => {
+      const vs = createShader(gl, gl.VERTEX_SHADER, VS_SRC);
+      const fs = createShader(gl, gl.FRAGMENT_SHADER, FS_SRC);
+      const prog = gl.createProgram();
+      gl.attachShader(prog, vs);
+      gl.attachShader(prog, fs);
+      gl.linkProgram(prog);
+      gl.deleteShader(vs);
+      gl.deleteShader(fs);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        const info = gl.getProgramInfoLog(prog) || 'program link error';
+        gl.deleteProgram(prog);
+        throw new Error(info);
       }
-    } catch {
-      glState = null;
-      glCanvas = null;
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+      const uloc = (name) => gl.getUniformLocation(prog, name);
+      return {
+        gl,
+        prog,
+        buf,
+        u: {
+          res: uloc('u_res'),
+          dpr: uloc('u_dpr'),
+          time: uloc('u_time'),
+          dark: uloc('u_dark'),
+          pointer: uloc('u_pointer'),
+          proximity: uloc('u_proximity'),
+          reduce: uloc('u_reduce'),
+          glints: uloc('u_glints'),
+          glintU: uloc('u_glintU'),
+          glintV: uloc('u_glintV'),
+          wake: uloc('u_wake'),
+          accent: uloc('u_accent'),
+          ambient: uloc('u_ambient'),
+        },
+      };
+    };
+
+    if (!force2D) {
+      try {
+        const gl = canvas.getContext('webgl2', {
+          alpha: true,
+          antialias: true,
+          premultipliedAlpha: true,
+          powerPreference: 'high-performance',
+        });
+        if (gl) {
+          glState = initWebGL2(gl);
+          rendererMode = 'webgl2';
+        }
+      } catch {
+        glState = null;
+      }
+    }
+
+    if (!glState) {
+      ctx2d = canvas.getContext('2d');
+      if (!ctx2d) return null;
       rendererMode = '2d';
+    }
+
+    const onContextLost = (e) => {
+      if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    };
+    const onContextRestored = () => {
+      if (glState && glState.gl) {
+        try {
+          glState = initWebGL2(glState.gl);
+          hasDrawnFrame = false;
+        } catch {}
+      }
+    };
+    if (rendererMode === 'webgl2' && typeof canvas.addEventListener === 'function') {
+      canvas.addEventListener('webglcontextlost', onContextLost);
+      canvas.addEventListener('webglcontextrestored', onContextRestored);
     }
 
     const readPrismStrength = (st) => clamp(Number(st.prismStrength ?? 1), 0, 1);
@@ -720,7 +853,7 @@ void main() {
         pointerLocalY = -9999;
         return;
       }
-      const rect = canvas.getBoundingClientRect();
+      const rect = typeof canvas.getBoundingClientRect === 'function' ? canvas.getBoundingClientRect() : null;
       if (!rect || rect.width < 10) {
         pointerLocalX = -9999;
         pointerLocalY = -9999;
@@ -743,7 +876,7 @@ void main() {
       // 无 ResizeObserver 环境才逐帧读取 rect
       if (!resizeObserver) seedSizeFromRect();
       if (cachedW < 12 || cachedH < 10) {
-        return;
+        return false;
       }
 
       // 指针静止但页面滚动 / 重排时，低频（~2Hz）校准局部坐标
@@ -753,63 +886,116 @@ void main() {
       }
 
       const st = getState() || {};
+      if (st.reduceMotion !== undefined) {
+        reduceMotion = Boolean(st.reduceMotion);
+      }
       const isDark = st.isDark !== false;
+      const ambientVal = clamp(Number(st.ambientIntensity ?? 1), 0, 1);
+      const prismStrengthVal = clamp(readPrismStrength(st) * ambientVal, 0, 1);
+      const accentCode = resolveCrystalAccentCode(st.accentTone ?? st.spectrum ?? 'default');
       const cssW = Math.round(cachedW * 10) / 10;
       const cssH = Math.round(cachedH * 10) / 10;
       lastCssW = cssW;
       lastCssH = cssH;
 
       targetProximity =
-        pointerLocalX > -2000
-          ? computeProximityFactor(pointerLocalX, pointerLocalY, cssW, cssH, PROXIMITY_RADIUS_PX) * readPrismStrength(st)
+        !reduceMotion && ambientVal > 0.001 && pointerLocalX > -2000
+          ? computeProximityFactor(pointerLocalX, pointerLocalY, cssW, cssH, PROXIMITY_RADIUS_PX) * prismStrengthVal
           : 0;
-      // 非对称指数平滑：attack ≈45ms / release ≈280ms（按真实 dt）
-      const tau = targetProximity > currentProximity ? PROXIMITY_ATTACK_SEC : PROXIMITY_RELEASE_SEC;
-      currentProximity += (targetProximity - currentProximity) * (1 - Math.exp(-dt / tau));
-      if (Math.abs(targetProximity - currentProximity) < 0.001) {
-        currentProximity = targetProximity;
+      // 非对称指数平滑：attack ≈45ms / release ≈280ms（按真实 dt；禁动效或关闭氛围光时立即收敛）
+      if (reduceMotion || ambientVal <= 0.001) {
+        currentProximity = 0;
+      } else {
+        const tau = targetProximity > currentProximity ? PROXIMITY_ATTACK_SEC : PROXIMITY_RELEASE_SEC;
+        currentProximity += (targetProximity - currentProximity) * (1 - Math.exp(-dt / tau));
+        if (Math.abs(targetProximity - currentProximity) < 0.001) {
+          currentProximity = targetProximity;
+        }
       }
 
       const dpr = Math.min(2.5, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
       const targetW = Math.max(4, Math.round(cssW * dpr));
       const targetH = Math.max(4, Math.round(cssH * dpr));
 
-      if (canvas.width !== targetW || canvas.height !== targetH) {
-        canvas.width = targetW;
-        canvas.height = targetH;
+      const glintMotionOff = reduceMotion || ambientVal <= 0.001;
+      fillGlintIntensities(elapsedTime, glintMotionOff, glintBuf);
+      if (ambientVal <= 0.001) {
+        glintBuf[0] = 0;
+        glintBuf[1] = 0;
+        glintBuf[2] = 0;
+        glintBuf[3] = 0;
       }
-
-      ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx2d.clearRect(0, 0, cssW, cssH);
-
-      fillGlintIntensities(elapsedTime, reduceMotion, glintBuf);
 
       // 光学唤醒：扫光位置（u 空间）与包络，星芒随扫光依次点亮
       let wakeU = 0;
       let wakeAmp = 0;
       if (wakeT >= 0) {
-        wakeT += dt;
-        const p = wakeT / WAKE_DURATION_SEC;
-        if (p >= 1) {
+        if (glintMotionOff) {
           wakeT = -1;
         } else {
-          const eased = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
-          wakeU = -0.1 + 1.2 * eased;
-          wakeAmp = Math.pow(Math.sin(Math.PI * p), 0.6);
-          for (let i = 0; i < 4; i++) {
-            const d = wakeU - GLINT_ANCHORS[i].u;
-            const boost = Math.exp(-(d * d) / 0.006) * 0.95;
-            if (boost > glintBuf[i]) glintBuf[i] = boost;
+          wakeT += dt;
+          const p = wakeT / WAKE_DURATION_SEC;
+          if (p >= 1) {
+            wakeT = -1;
+          } else {
+            const eased = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+            wakeU = -0.1 + 1.2 * eased;
+            wakeAmp = Math.pow(Math.sin(Math.PI * p), 0.6) * ambientVal;
+            for (let i = 0; i < 4; i++) {
+              const d = wakeU - GLINT_ANCHORS[i].u;
+              const boost = Math.exp(-(d * d) / 0.006) * 0.95;
+              if (boost > glintBuf[i]) glintBuf[i] = boost;
+            }
           }
         }
       }
 
-      if (glState && glCanvas) {
+      const maxGlint = Math.max(glintBuf[0], glintBuf[1], glintBuf[2], glintBuf[3]);
+      let maxGlintDelta = 0;
+      for (let i = 0; i < 4; i++) {
+        const gd = Math.abs(glintBuf[i] - lastDrawnGlint[i]);
+        if (gd > maxGlintDelta) maxGlintDelta = gd;
+      }
+      glintAccumSec += dt;
+      const proximityActive = currentProximity > 0.001;
+      const glintVisible = !glintMotionOff && maxGlint > 0.015;
+      const glintDirty =
+        !glintMotionOff &&
+        ((glintVisible && maxGlintDelta > 0.012 && glintAccumSec >= 0.030) || (!glintVisible && wasGlintActive));
+      const wakingNow = wakeT >= 0 && wakeAmp > 0.001;
+      const paramsChanged =
+        !hasDrawnFrame ||
+        canvas.width !== targetW ||
+        canvas.height !== targetH ||
+        cssW !== lastDrawW ||
+        cssH !== lastDrawH ||
+        dpr !== lastDrawDpr ||
+        isDark !== lastDrawDark ||
+        accentCode !== lastDrawAccent ||
+        reduceMotion !== lastDrawReduce ||
+        Math.abs(ambientVal - lastDrawAmbient) > 0.002 ||
+        Math.abs(prismStrengthVal - lastDrawStrength) > 0.002;
+
+      const needsRender =
+        paramsChanged ||
+        proximityActive ||
+        wasProximityActive ||
+        glintDirty ||
+        wakingNow ||
+        wasWaking;
+
+      if (!needsRender) {
+        skippedCount += 1;
+        return false;
+      }
+
+      if (canvas.width !== targetW || canvas.height !== targetH) {
+        canvas.width = targetW;
+        canvas.height = targetH;
+      }
+
+      if (glState) {
         const { gl, prog, u } = glState;
-        if (glCanvas.width !== targetW || glCanvas.height !== targetH) {
-          glCanvas.width = targetW;
-          glCanvas.height = targetH;
-        }
         gl.viewport(0, 0, targetW, targetH);
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
@@ -831,20 +1017,61 @@ void main() {
         gl.uniform4f(u.glintU, GLINT_ANCHORS[0].u, GLINT_ANCHORS[1].u, GLINT_ANCHORS[2].u, GLINT_ANCHORS[3].u);
         gl.uniform4f(u.glintV, GLINT_ANCHORS[0].v, GLINT_ANCHORS[1].v, GLINT_ANCHORS[2].v, GLINT_ANCHORS[3].v);
         gl.uniform2f(u.wake, wakeU, wakeAmp);
+        gl.uniform1f(u.accent, accentCode);
+        gl.uniform1f(u.ambient, ambientVal);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-        ctx2d.drawImage(glCanvas, 0, 0, cssW, cssH);
-      } else {
+      } else if (ctx2d) {
+        ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx2d.clearRect(0, 0, cssW, cssH);
         const localCorner =
           pointerLocalX > -2000 ? { x: pointerLocalX, y: pointerLocalY } : { x: -9999, y: -9999 };
-        drawFallback2D(ctx2d, cssW, cssH, isDark, localCorner, currentProximity, glintBuf, wakeU, wakeAmp);
+        drawFallback2D(ctx2d, cssW, cssH, isDark, localCorner, currentProximity, glintBuf, wakeU, wakeAmp, accentCode, ambientVal);
+        drawLaserEtchedLock(ctx2d, cssW, cssH, isDark, currentProximity);
       }
 
-      drawLaserEtchedLock(ctx2d, cssW, cssH, isDark, currentProximity);
+      hasDrawnFrame = true;
+      lastDrawW = cssW;
+      lastDrawH = cssH;
+      lastDrawDpr = dpr;
+      lastDrawDark = isDark;
+      lastDrawStrength = prismStrengthVal;
+      lastDrawAccent = accentCode;
+      lastDrawAmbient = ambientVal;
+      lastDrawReduce = reduceMotion;
+      wasProximityActive = proximityActive;
+      wasGlintActive = glintVisible;
+      wasWaking = wakingNow;
+      glintAccumSec = 0;
+      for (let i = 0; i < 4; i++) lastDrawnGlint[i] = glintBuf[i];
+      drawCount += 1;
+      return true;
+    };
+
+    const isIdle = () => {
+      if (!hasDrawnFrame || wakeT >= 0 || currentProximity > 0.001 || targetProximity > 0.001) return false;
+      if (reduceMotion || lastDrawAmbient === 0) return true;
+      fillGlintIntensities(elapsedTime, false, glintBuf);
+      return Math.max(glintBuf[0], glintBuf[1], glintBuf[2], glintBuf[3]) <= 0.015;
     };
 
     return {
       step,
+      isIdle,
+      setReduceMotion(flag) {
+        const next = Boolean(flag);
+        if (reduceMotion !== next) {
+          reduceMotion = next;
+          if (next) {
+            wakeT = -1;
+            currentProximity = 0;
+            targetProximity = 0;
+          }
+          hasDrawnFrame = false;
+        }
+      },
+      invalidate() {
+        hasDrawnFrame = false;
+      },
       setPointerClient(clientX, clientY) {
         pointerClientX = Number.isFinite(clientX) ? clientX : -9999;
         pointerClientY = Number.isFinite(clientY) ? clientY : -9999;
@@ -862,12 +1089,19 @@ void main() {
         for (let i = 0; i < 4; i++) if (glintBuf[i] > 0.05) active++;
         return {
           rendererMode,
+          zeroCopy: rendererMode === 'webgl2',
           width: lastCssW,
           height: lastCssH,
           proximityFactor: Math.round(currentProximity * 1000) / 1000,
-          dispersionActive: currentProximity > 0.05,
+          dispersionActive: currentProximity > 0.05 && lastDrawAccent !== 5,
+          accentCode: lastDrawAccent >= 0 ? lastDrawAccent : 0,
+          ambientIntensity: lastDrawAmbient >= 0 ? lastDrawAmbient : 1,
+          reduceMotion,
           activeGlints: active,
           waking: wakeT >= 0,
+          idle: isIdle(),
+          drawCount,
+          skippedCount,
         };
       },
       dispose() {
@@ -876,6 +1110,10 @@ void main() {
             resizeObserver.disconnect();
           } catch {}
           resizeObserver = null;
+        }
+        if (typeof canvas.removeEventListener === 'function') {
+          canvas.removeEventListener('webglcontextlost', onContextLost);
+          canvas.removeEventListener('webglcontextrestored', onContextRestored);
         }
         if (glState) {
           const { gl, prog, buf } = glState;
@@ -887,13 +1125,14 @@ void main() {
           } catch {}
           glState = null;
         }
-        glCanvas = null;
+        ctx2d = null;
       },
     };
   }
 
   return {
     PROXIMITY_RADIUS_PX,
+    resolveCrystalAccentCode,
     computeProximityFactor,
     evaluateDeterministicGlints,
     mountCrystalPrismBar,

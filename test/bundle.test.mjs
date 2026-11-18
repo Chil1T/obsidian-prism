@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 
@@ -277,12 +280,26 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
   };
 
   const timers = new Set();
+  const winListeners = new Map();
   const sandbox = {
     window: null,
     globalThis: null,
     document: doc,
     navigator: { language: 'zh-CN' },
     location: { pathname: '/' },
+    addEventListener(ev, cb) {
+      if (!winListeners.has(ev)) winListeners.set(ev, []);
+      winListeners.get(ev).push(cb);
+    },
+    removeEventListener(ev, cb) {
+      const arr = winListeners.get(ev);
+      if (!arr) return;
+      const idx = arr.indexOf(cb);
+      if (idx >= 0) arr.splice(idx, 1);
+    },
+    dispatchWin(ev, payload = {}) {
+      for (const fn of [...(winListeners.get(ev) || [])]) fn({ type: ev, ...payload });
+    },
     // Inject stale legacy localStorage flags to assert DISABLED_LEGACY_FLAGS locks them off
     localStorage: {
       _m: {
@@ -355,8 +372,8 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     assert.ok(sandbox.window.__agPrism, 'Expected window.__agPrism exposed');
     assert.equal(sandbox.window.__agClaudeStyle, sandbox.window.__agPrism, 'Expected legacy alias pointing to __agPrism');
     const st = sandbox.window.__agPrism.getState();
-    assert.equal(st.version, '1.0.0');
-    assert.equal(html.getAttribute('data-ag-prism'), '1.0.0');
+    assert.equal(st.version, '1.0.1');
+    assert.equal(html.getAttribute('data-ag-prism'), '1.0.1');
     assert.equal(html.getAttribute('data-ag-cs-light-preset'), 'crystal');
     assert.equal(html.getAttribute('data-ag-cs-telemetry'), 'auto');
     assert.equal(html.getAttribute('data-ag-cs-effort-slider'), 'auto');
@@ -386,7 +403,12 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     // Prismatic CSS tokens & GPU compositor blur purge rules
     const injectedCss = head.querySelector('#ag-prism-css')?.textContent || '';
     assert.equal(injectedCss.includes('blur(20px) saturate(140%)'), false, 'Heavy composer backdrop-filter must be purged');
-    assert.ok(injectedCss.includes('border-radius: 4px') || injectedCss.includes('border-radius:4px'));
+    assert.ok(
+      injectedCss.includes('border-radius: 4px') ||
+        injectedCss.includes('border-radius:4px') ||
+        injectedCss.includes('--ag-cs-r-sm:4px') ||
+        injectedCss.includes('--ag-cs-r-sm: 4px')
+    );
     assert.ok(injectedCss.includes('margin-bottom: 46px !important') || injectedCss.includes('margin-bottom:46px!important'));
     assert.ok(injectedCss.includes('z-index: 12 !important') || injectedCss.includes('z-index:12!important'));
     assert.equal(injectedCss.includes('.ag-cs-effort-popover'), false);
@@ -398,7 +420,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     const settingsSec = appearancePanel.querySelector('#ag-cs-settings-sec');
     assert.ok(settingsSec);
     assert.equal(settingsSec.querySelector('h3')?.textContent, 'Obsidian Prism · 黑曜棱镜');
-    assert.equal(settingsSec.querySelector('.ag-cs-settings-ver')?.textContent, 'v1.0.0');
+    assert.equal(settingsSec.querySelector('.ag-cs-settings-ver')?.textContent, 'v1.0.1');
     const brandMarkHtml = settingsSec.querySelector('.ag-cs-settings-brand-mark')?.innerHTML || '';
     assert.ok(
       brandMarkHtml.includes('ag-cs-brand-logo-svg') || brandMarkHtml.includes('ag-cs-settings-brand-svg'),
@@ -462,7 +484,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
         .map((b) => b.getAttribute('data-ag-cs-key'))
         .filter(Boolean)
     );
-    assert.equal(settingKeys.size, 18);
+    assert.equal(settingKeys.size, 26);
     for (const expectedKey of [
       'palette',
       'lightPreset',
@@ -482,6 +504,12 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
       'thoughtTrigger',
       'telemetryModule',
       'effortSliderModule',
+      'accentTone',
+      'cornerStyle',
+      'codeFont',
+      'codeLigatures',
+      'ambientIntensity',
+      'thoughtView',
     ]) {
       assert.ok(settingKeys.has(expectedKey), `Missing settings control for ${expectedKey}`);
     }
@@ -540,16 +568,76 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     assert.equal(warmBtn.getAttribute('aria-pressed'), 'true');
     assert.equal(warmBtn.hasAttribute('data-pressed'), true);
 
+    // Verify Wave 2 6 new settings root attributes, saveSettingsBatch (`patch-batch`), and hostEnhancer integration
+    assert.equal(sandbox.window.__agPrism.getState().hasHostEnhancer, true);
+    assert.equal(html.getAttribute('data-ag-cs-accent'), 'follow');
+    assert.equal(html.getAttribute('data-ag-cs-corners'), 'balanced');
+    assert.equal(html.getAttribute('data-ag-cs-code-font'), 'default');
+    assert.equal(html.getAttribute('data-ag-cs-ligatures'), '0');
+    assert.equal(html.getAttribute('data-ag-cs-ambient'), '1');
+    assert.equal(html.getAttribute('data-ag-prism-thought-view'), 'immersive');
+
+    const beforeBatchLen = bindingCalls.length;
+    sandbox.window.__agPrism.saveSettingsBatch({
+      accentTone: 'iris',
+      cornerStyle: 'soft',
+      codeFont: 'jetbrains',
+      codeLigatures: true,
+      ambientIntensity: '70',
+      thoughtView: 'bilingual',
+    });
+    assert.equal(html.getAttribute('data-ag-cs-accent'), 'iris');
+    assert.equal(html.getAttribute('data-ag-cs-corners'), 'soft');
+    assert.equal(html.getAttribute('data-ag-cs-code-font'), 'jetbrains');
+    assert.equal(html.getAttribute('data-ag-cs-ligatures'), '1');
+    assert.equal(html.getAttribute('data-ag-cs-ambient'), '0.7');
+    assert.equal(html.getAttribute('data-ag-prism-thought-view'), 'bilingual');
+    const batchCall = bindingCalls.slice(beforeBatchLen).find((c) => c.action === 'patch-batch');
+    assert.ok(batchCall, 'Expected patch-batch payload over setting binding');
+    assert.equal(batchCall.entries.accentTone, 'iris');
+    assert.equal(batchCall.entries.ambientIntensity, '70');
+    assert.equal(html.getAttribute('data-ag-cs-target-fps'), '180');
+
+    // HS-1: mascot 'minis' ("双宠+三蟹") must be preserved verbatim over wire (never downgraded to 'crab')
+    const beforeMinisLen = bindingCalls.length;
+    sandbox.window.__agPrism.saveSettingsBatch({ mascot: 'minis', targetFps: '120' });
+    const minisBatch = bindingCalls.slice(beforeMinisLen).find((c) => c.action === 'patch-batch');
+    assert.equal(minisBatch?.entries?.mascot, 'minis');
+    assert.equal(html.getAttribute('data-ag-cs-target-fps'), '120');
+
+    // HS-5: disabling sidebarRestyle unlocks any active `[` collapsed attribute
+    html.setAttribute('data-ag-cs-sidebar-collapsed', '1');
+    sandbox.window.__agPrism.saveSettingsBatch({ sidebarRestyle: false });
+    assert.equal(html.hasAttribute('data-ag-cs-sidebar-collapsed'), false);
+
+    // CP-2: file-driven config refresh updates mutable base config so cross-window `storage` events & zero-arg refreshConfig() never roll back to boot defaults
+    sandbox.window.__agPrism.refreshConfig({ ...cdp.DEFAULT_CONFIG, palette: 'warm', accentTone: 'cobalt', __fromFile: true });
+    assert.equal(html.getAttribute('data-ag-cs-palette'), 'warm');
+    assert.equal(html.getAttribute('data-ag-cs-accent'), 'cobalt');
+    sandbox.dispatchWin('storage', { key: 'ag-prism:config' });
+    assert.equal(html.getAttribute('data-ag-cs-palette'), 'warm', 'Cross-window storage sync must not revert file-refreshed palette');
+    sandbox.window.__agPrism.refreshConfig();
+    assert.equal(html.getAttribute('data-ag-cs-palette'), 'warm', 'Zero-arg refreshConfig() must not revert file-refreshed palette');
+    assert.equal(html.getAttribute('data-ag-cs-accent'), 'cobalt');
+
     // Teardown cleanly removes everything and restores host greeting text
     const rem = vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
     assert.ok(rem.removed >= 1);
     assert.equal(html.hasAttribute('data-ag-prism'), false);
+    assert.equal(html.hasAttribute('data-ag-cs-target-fps'), false);
     assert.equal(html.hasAttribute('data-ag-cs-style'), false);
     assert.equal(html.hasAttribute('data-ag-cs-light-preset'), false);
     assert.equal(html.hasAttribute('data-ag-cs-telemetry'), false);
     assert.equal(html.hasAttribute('data-ag-cs-effort-slider'), false);
     assert.equal(html.hasAttribute('data-ag-cs-thought-translate'), false);
+    assert.equal(html.hasAttribute('data-ag-cs-accent'), false);
+    assert.equal(html.hasAttribute('data-ag-cs-corners'), false);
+    assert.equal(html.hasAttribute('data-ag-cs-code-font'), false);
+    assert.equal(html.hasAttribute('data-ag-cs-ligatures'), false);
+    assert.equal(html.hasAttribute('data-ag-cs-ambient'), false);
+    assert.equal(html.hasAttribute('data-ag-prism-thought-view'), false);
     assert.equal(sandbox.window.__agPrismThought, undefined);
+    assert.equal(sandbox.globalThis.__agPrismHostEnhancer, undefined);
     assert.equal(html.hasAttribute('data-ag-cs-lang'), false);
     assert.equal(html.hasAttribute('data-ag-cs-cjk'), false);
     assert.equal(sandbox.globalThis.__agCsCleanups, undefined);
@@ -628,12 +716,26 @@ test('buildInjectExpression defers cleanly when documentElement is null at docum
 
   const observedNodes = [];
   const timers = new Set();
+  const winListeners = new Map();
   const sandbox = {
     window: null,
     globalThis: null,
     document: doc,
     navigator: { language: 'zh-CN' },
     location: { pathname: '/' },
+    addEventListener(ev, cb) {
+      if (!winListeners.has(ev)) winListeners.set(ev, []);
+      winListeners.get(ev).push(cb);
+    },
+    removeEventListener(ev, cb) {
+      const arr = winListeners.get(ev);
+      if (!arr) return;
+      const idx = arr.indexOf(cb);
+      if (idx >= 0) arr.splice(idx, 1);
+    },
+    dispatchWin(ev, payload = {}) {
+      for (const fn of [...(winListeners.get(ev) || [])]) fn({ type: ev, ...payload });
+    },
     localStorage: { _m: {}, getItem(k) { return this._m[k] || null; }, setItem(k, v) { this._m[k] = String(v); } },
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
     matchMedia: () => ({ matches: false }),
@@ -2906,5 +3008,267 @@ test('Prism v1.0 regression guard: Thought Translator overlay (.ag-prism-thought
     vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
   } finally {
     for (const id of timers) clearTimeout(id);
+  }
+});
+
+test('v1.0.1 compiler safety fixes, unified shared string pool < 670KB (< 680KB CI budget), warm cache < 35ms, and 6-module microkernel + Omni second channel', async () => {
+  // 1. Property keyword `.in / w / 2` division must NOT be mis-tokenized as regex literal
+  const propKeywordSrc = `
+    function compute(state, width) {
+      const half = state.in / width / 2;
+      const opt = state?.return / width / 2;
+      return half + opt;
+    }
+  `;
+  const minProp = cdp.minifyJs(propKeywordSrc);
+  const propFn = vm.runInNewContext(`(${minProp})`, {});
+  assert.equal(propFn({ in: 40, return: 20 }, 5), 6);
+
+  // 2. Outer undeclared free variable must NOT be mangled when inner function shadows same name
+  const freeVarSrc = `
+    function outerRead() {
+      const a = externalFreeGlobal.count;
+      function innerHelper(externalFreeGlobal) {
+        return externalFreeGlobal * 2;
+      }
+      return a + innerHelper(5);
+    }
+  `;
+  const minFree = cdp.minifyJs(freeVarSrc);
+  const freeFn = vm.runInNewContext(`(${minFree})`, { externalFreeGlobal: { count: 7 } });
+  assert.equal(freeFn(), 17);
+
+  // 3. Template interpolation `${...}` & spread `...obj` must keep bracket stack balanced so locals mangle cleanly
+  const tplSpreadSrc = `
+    function buildSummary(baseConfig) {
+      const tag = \`v-\${baseConfig.ver}\`;
+      const longInternalCounter = 10;
+      const mergedConfig = { ...baseConfig, count: longInternalCounter + longInternalCounter };
+      return \`\${tag}:\${mergedConfig.count}\`;
+    }
+  `;
+  const minTplSpread = cdp.minifyJs(tplSpreadSrc);
+  assert.equal(minTplSpread.includes('longInternalCounter'), false, 'Expected local after template interpolation to be mangled');
+  assert.equal(minTplSpread.includes('mergedConfig'), false, 'Expected spread-assigned local to be mangled');
+  const tplSpreadFn = vm.runInNewContext(`(${minTplSpread})`, {});
+  assert.equal(tplSpreadFn({ ver: '1.0.1' }), 'v-1.0.1:20');
+
+  // 4. Balanced-brace embedded CSS template minification + Unicode `\u{...}` & class string field safety
+  const unicodeAndClassSrc = `
+    (() => {
+      class Bucket {
+        'raw-key' = 'keep';
+        static 'stat-key' = 42;
+      }
+      const emoji = '\\u{1F52E}';
+      const b = new Bucket();
+      return b['raw-key'] + ':' + Bucket['stat-key'] + ':' + emoji.codePointAt(0);
+    })()
+  `;
+  const partOut = cdp.prepareRuntimePart('synthetic-test.js', unicodeAndClassSrc);
+  assert.equal(vm.runInNewContext(partOut, {}), 'keep:42:128302');
+
+  // 5. Unified shared pool payload < 670KB (< 680KB CI hard ceiling) & warm config rebuild < 35ms
+  const expr1 = cdp.buildInjectExpression();
+  const payloadBytes = Buffer.byteLength(expr1, 'utf8');
+  assert.ok(
+    payloadBytes < 670 * 1024 && payloadBytes < 680 * 1024,
+    `Expected unified bundle payload < ${670 * 1024} bytes (670 KiB), got ${payloadBytes}`
+  );
+  // Omni modules must never bloat static RUNTIME_PARTS
+  for (const part of cdp.RUNTIME_PARTS) {
+    assert.equal(part.includes('omni-viewer'), false, `Omni module ${part} must load via second channel, not RUNTIME_PARTS`);
+  }
+  const tWarm0 = performance.now();
+  const expr2 = cdp.buildInjectExpression({ palette: 'warm', motionLevel: 'subtle', accentTone: 'iris' });
+  const warmElapsed = performance.now() - tWarm0;
+  assert.ok(warmElapsed < 35, `Expected warm config rebuild < 35ms, got ${warmElapsed.toFixed(2)}ms`);
+  assert.ok(expr2.includes('"palette":"warm"'));
+  assert.ok(expr2.includes('"accentTone":"iris"'));
+
+  // 6. All 6 extracted/Wave2 microkernel domain modules registered in RUNTIME_PARTS & SYNC_ROOT_FILES
+  for (const modName of [
+    'home-studio-panel.js',
+    'home-ripple-host.js',
+    'model-glyph-crystal.js',
+    'stream-choreography.js',
+    'prism-rim-canvas.js',
+    'host-workbench-enhancer.js',
+  ]) {
+    assert.ok(cdp.RUNTIME_PARTS.includes(modName), `Missing ${modName} in RUNTIME_PARTS`);
+    assert.ok(cdp.SYNC_ROOT_FILES.includes(modName), `Missing ${modName} in SYNC_ROOT_FILES`);
+  }
+
+  // 7. Lightweight config refresh expression + thought/usage bridge enhancements
+  const refreshExpr = cdp.buildConfigRefreshExpression({ palette: 'warm', lightPreset: 'alabaster', accentTone: 'cobalt' });
+  assert.ok(Buffer.byteLength(refreshExpr, 'utf8') < 4096);
+  assert.ok(refreshExpr.includes('refreshConfig'));
+
+  // 8. CP-1 & CP-2: Target eligibility guard, in-page foreign preview guard, and bidirectional alias reconciliation
+  assert.equal(
+    cdp.isEligibleTarget({ type: 'page', title: 'Workspace - Antigravity', url: 'https://127.0.0.1:3053/c/123', webSocketDebuggerUrl: 'ws://127.0.0.1:3014/1' }),
+    true
+  );
+  assert.equal(
+    cdp.isEligibleTarget({ type: 'page', title: 'AI Rap Video Generator', url: 'http://127.0.0.1:3115/', webSocketDebuggerUrl: 'ws://127.0.0.1:3014/2' }),
+    false,
+    'Plain HTTP user preview webapp without Antigravity title must be rejected'
+  );
+  assert.equal(
+    cdp.isEligibleTarget({ type: 'page', title: 'Antigravity', url: 'https://evil.example.com/', webSocketDebuggerUrl: 'ws://127.0.0.1:3014/3' }),
+    false,
+    'External non-loopback origin must always be rejected even with spoofed title'
+  );
+  const reconciledLegacy = cdp.reconcileConfigAliases({ ripple: 'off', homeMode: 'classic', lang: 'en', sidebar: 'off' });
+  assert.equal(reconciledLegacy.homeRipple, false);
+  assert.equal(reconciledLegacy.homeLayout, 'classic');
+  assert.equal(reconciledLegacy.language, 'en');
+  assert.equal(reconciledLegacy.sidebarRestyle, false);
+
+  // In-page host identity guard aborts cleanly on foreign user preview pages
+  const foreignStyles = [];
+  const foreignDoc = {
+    title: 'AI Rap Video Generator',
+    readyState: 'complete',
+    documentElement: { setAttribute() {}, hasAttribute: () => false, removeAttribute() {} },
+    head: { appendChild: (el) => foreignStyles.push(el) },
+    body: { classList: { contains: () => false } },
+    getElementById: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const foreignWin = { location: { href: 'http://127.0.0.1:3115/' }, document: foreignDoc, addEventListener() {} };
+  const foreignSandbox = { window: foreignWin, document: foreignDoc, globalThis: foreignWin, setTimeout, clearTimeout };
+  const foreignRes = vm.runInNewContext(expr1, foreignSandbox);
+  assert.equal(foreignRes.status, 'skipped-non-host');
+  assert.equal(foreignStyles.length, 0);
+  assert.equal(foreignWin.__agPrism, undefined);
+
+  // 9. 26-key Omni validators & second-channel buildOmniClientExpression lifecycle
+  for (const k of Object.keys(cdp.VALIDATORS)) {
+    assert.ok(Object.prototype.hasOwnProperty.call(cdp.DEFAULT_CONFIG, k), `Missing default config for ${k}`);
+  }
+  assert.ok(Object.keys(cdp.VALIDATORS).includes('omniModule') && Object.keys(cdp.VALIDATORS).includes('linkTarget'));
+  assert.equal(cdp.validateConfigEntry('omniModule', 'on'), true);
+  assert.equal(cdp.validateConfigEntry('omniModule', 'off'), true);
+  assert.equal(cdp.validateConfigEntry('omniModule', 'invalid'), false);
+  assert.equal(cdp.validateConfigEntry('linkTarget', 'builtin'), true);
+  assert.equal(cdp.validateConfigEntry('linkTarget', 'external'), true);
+  assert.equal(cdp.validateConfigEntry('linkTarget', 'popup'), false);
+
+  const syntheticOmniClient = `
+    (() => {
+      let syncCalls = 0;
+      let destroyed = false;
+      let enabled = false;
+      window.__agPrismOmni = {
+        version: '1.0.1',
+        sync(cfg, meta) {
+          syncCalls += 1;
+          enabled = !(cfg && cfg.omniModule === 'off');
+          if (enabled) destroyed = false;
+          this.lastCfg = cfg;
+          this.lastMeta = meta;
+        },
+        destroy() {
+          destroyed = true;
+          enabled = false;
+        },
+        stats() {
+          return { syncCalls, destroyed, enabled };
+        }
+      };
+    })();
+  `;
+  const fakeMeta = { baseUrl: 'http://127.0.0.1:45678', port: 45678, token: 'a'.repeat(64), version: '1.0.1' };
+  const omniExpr = cdp.buildOmniClientExpression(fakeMeta, syntheticOmniClient);
+  const rpcPayloads = [];
+  const hostDoc = {
+    title: 'Obsidian Prism - Antigravity',
+    readyState: 'complete',
+    documentElement: { setAttribute() {}, hasAttribute: () => true, removeAttribute() {} },
+    body: { classList: { contains: (c) => c === 'monaco-workbench' } },
+    getElementById: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+  const hostWin = {
+    location: { href: 'vscode-file://vscode-app/workbench.html' },
+    document: hostDoc,
+    __agPrism: { getState: () => ({ cfg: { omniModule: 'on', linkTarget: 'builtin' } }) },
+    [cdp.OMNI_BINDING]: (raw) => rpcPayloads.push(JSON.parse(raw)),
+  };
+  hostWin.window = hostWin;
+  const omniSandbox = { window: hostWin, document: hostDoc, location: hostWin.location, globalThis: hostWin, setTimeout, clearTimeout };
+
+  const mountRes = vm.runInNewContext(omniExpr, omniSandbox);
+  assert.equal(mountRes.ok, true);
+  assert.equal(mountRes.status, 'mounted');
+  assert.equal(hostWin.__agPrismOmniServerMeta.port, 45678);
+  assert.equal(hostWin.__agPrismOmni.lastMeta.token, 'a'.repeat(64));
+  assert.equal(hostWin.__agPrismOmni.stats().syncCalls, 1);
+  assert.equal(hostWin.__agPrismOmni.stats().enabled, true);
+
+  // Fast codeHash reuse path only invokes sync() without re-mounting
+  const syncRes = vm.runInNewContext(omniExpr, omniSandbox);
+  assert.equal(syncRes.status, 'synced');
+  assert.equal(hostWin.__agPrismOmni.stats().syncCalls, 2);
+
+  // Bridge RPC roundtrip
+  const pendingRpc = hostWin.__agPrismOmniBridge.resolvePath({ rawPath: 'README.md#L5' });
+  assert.equal(rpcPayloads.length, 1);
+  assert.equal(rpcPayloads[0].action, 'resolvePath');
+  hostWin.__agPrismOmniBridge.resolve(rpcPayloads[0].id, { ok: true, exists: true, line: 5 });
+  const rpcResult = await pendingRpc;
+  assert.equal(rpcResult.ok, true);
+  assert.equal(rpcResult.line, 5);
+
+  // Disabling omniModule puts window.__agPrismOmni into dormant state while keeping handle alive for re-enable
+  hostWin.__agPrism = { getState: () => ({ cfg: { omniModule: 'off', linkTarget: 'external' } }) };
+  const disableRes = vm.runInNewContext(omniExpr, omniSandbox);
+  assert.equal(disableRes.status, 'disabled');
+  assert.ok(hostWin.__agPrismOmni, 'Dormant handle must remain registered for instant re-entry');
+  assert.equal(hostWin.__agPrismOmni.stats().enabled, false);
+
+  // Cold boot with initial omniModule: 'off' still registers dormant handle so pure in-page off -> on wakes without re-injection
+  const coldOffWin = {
+    location: { href: 'vscode-file://vscode-app/workbench.html' },
+    document: hostDoc,
+    __agPrism: { getState: () => ({ cfg: { omniModule: 'off', linkTarget: 'builtin' } }) },
+  };
+  coldOffWin.window = coldOffWin;
+  const coldOffSandbox = { window: coldOffWin, document: hostDoc, location: coldOffWin.location, globalThis: coldOffWin, setTimeout, clearTimeout };
+  const coldOffRes = vm.runInNewContext(omniExpr, coldOffSandbox);
+  assert.equal(coldOffRes.status, 'disabled');
+  assert.ok(coldOffWin.__agPrismOmni, 'Cold-off boot must still register __agPrismOmni');
+  assert.equal(coldOffWin.__agPrismOmni.stats().enabled, false);
+  coldOffWin.__agPrismOmni.sync({ omniModule: 'on', linkTarget: 'builtin' }, coldOffWin.__agPrismOmniServerMeta);
+  assert.equal(coldOffWin.window.__agPrismOmni.stats().enabled, true, 'In-page off -> on toggle must wake immediately without re-injection');
+
+  // 10. Compiler cross-token `0.x -> .x` safety, SAFE_ALIAS_GLOBALS destructuring shadow guard, & JSON lockfile PID reader
+  const decMin = cdp.minifyJs('const r = a ? 0.5 : 0.25; const tag = "v0.5"; const obj = { v0: 0.75 }; return [r, tag, obj.v0];');
+  assert.equal(new Function('a', decMin)(true).join(','), '0.5,v0.5,0.75');
+  assert.ok(decMin.includes('.5') && decMin.includes('"v0.5"'), '0.5 should compact to .5 without touching string literals');
+
+  const shadowSrc = `(() => {
+    const [Map] = [42];
+    const fn = (Error) => [Error, Math.max(1, 3), Math.min(2, 5), Math.abs(-7), Math.floor(1.9)];
+    return Map + fn(8)[0] + fn(8)[4];
+  })()`;
+  const shadowPacked = cdp.prepareRuntimePart('__synthetic-shadow-check.js', shadowSrc);
+  assert.equal(vm.runInNewContext(shadowPacked, { Math }), 51, 'Destructured/parameter globals must never collide with SAFE_ALIAS_GLOBALS');
+
+  const tmpPidDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-pid-parse-'));
+  try {
+    const jsonPidFile = path.join(tmpPidDir, '.daemon.pid');
+    fs.writeFileSync(jsonPidFile, JSON.stringify({ pid: 54321, token: 'abc' }), 'utf8');
+    assert.equal(cdp.readPidFromLockFile(jsonPidFile), 54321);
+    const plainPidFile = path.join(tmpPidDir, '.watch.pid');
+    fs.writeFileSync(plainPidFile, '65432\n', 'utf8');
+    assert.equal(cdp.readPidFromLockFile(plainPidFile), 65432);
+  } finally {
+    fs.rmSync(tmpPidDir, { recursive: true, force: true });
   }
 });

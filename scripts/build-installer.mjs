@@ -12,6 +12,8 @@ import {
   VALIDATORS,
   createManifest,
   resolveActiveConfigFile,
+  collectOptionalOmniTopEntries,
+  collectNativePluginEntries,
   buildMultiResIco,
   buildZip,
 } from './build-common.mjs';
@@ -64,6 +66,7 @@ function buildInstaller({ outputPath = path.join(ROOT_DIR, 'installer.exe'), con
     ], { stdio: 'inherit' });
 
     const activeConfigFile = resolveActiveConfigFile(configPath);
+    const optionalOmniTopEntries = collectOptionalOmniTopEntries();
 
     const payloadFiles = [
       { name: 'obsidian-prism-watcher.exe', data: fs.readFileSync(watcherOut) },
@@ -75,6 +78,8 @@ function buildInstaller({ outputPath = path.join(ROOT_DIR, 'installer.exe'), con
         name: part,
         data: Buffer.from(cdp.prepareRuntimePart(part, fs.readFileSync(path.join(ROOT_DIR, part), 'utf8')), 'utf8'),
       })),
+      ...optionalOmniTopEntries,
+      ...collectNativePluginEntries(activeConfigFile),
     ];
 
     const payloadZip = path.join(stageDir, 'payload.zip');
