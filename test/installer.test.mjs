@@ -466,7 +466,10 @@ test(
       assert.equal(updatedCfg.accentTone, 'iris');
       assert.equal(updatedCfg.ambientIntensity, '70');
 
-      const syncedPluginCfg = JSON.parse(fs.readFileSync(path.join(nativePluginDir, 'config.json'), 'utf8'));
+      const syncedPluginCfg = await waitFor(() => {
+        const parsed = JSON.parse(fs.readFileSync(path.join(nativePluginDir, 'config.json'), 'utf8'));
+        return parsed.accentTone === 'iris' && parsed.thoughtView === 'bilingual' ? parsed : null;
+      });
       assert.equal(syncedPluginCfg.accentTone, 'iris');
       assert.equal(syncedPluginCfg.thoughtView, 'bilingual');
 
