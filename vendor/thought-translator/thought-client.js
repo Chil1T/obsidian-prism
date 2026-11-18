@@ -14,9 +14,10 @@
   const OWNER_ID = 'obsidian-prism-thought';
   const LOCAL_CACHE_KEY = 'ag_prism_thought_zh_cache_v1';
   const VIEW_MODE_STORAGE_KEY = 'ag_prism_thought_view_mode_v1';
+  const STYLE_TAG_KEY = 'ag_prism_thought_style_tag_v1';
   const MEM_CACHE_LIMIT = 1500;
-  const STORAGE_CACHE_LIMIT = 500;
-  const MAX_STORAGE_TOTAL_CHARS = 600000;
+  const STORAGE_CACHE_LIMIT = 80;
+  const MAX_STORAGE_TOTAL_CHARS = 120000;
   const MAX_STORAGE_ENTRY_CHARS = 32000;
   const STREAM_FLUSH_MS = 48;
   const CHUNK_FADE_TTL_MS = 350;
@@ -32,10 +33,14 @@
   let currentViewMode = 'immersive';
   let currentLang = 'zh-CN';
   let activeStyleTag = '';
+  let storedCount = 0;
+  let cacheDirty = false;
   let cacheWarmed = false;
   let localCacheLoaded = false;
   let viewModeLoaded = false;
   let hasExplicitHostView = false;
+  let scrollBound = false;
+  let scrollTimer = null;
   let scanTimer = null;
   let cachedConvRoot = null;
   let reqSeq = 0;
@@ -362,8 +367,7 @@
       .toLowerCase();
   }
 
-  function hashKey(rawText, prefix) {
-    const norm = normalizeTextKey(rawText);
+  function computeSkelBody(norm) {
     if (!norm) return '';
     const skel = canonicalizeSkeleton(norm) || norm;
     let h = 2166136261;
@@ -371,11 +375,15 @@
       h ^= skel.charCodeAt(i);
       h = Math.imul(h, 16777619);
     }
-    return `${prefix}_v3_${(h >>> 0).toString(36)}_${skel.length}`;
+    return `_v3_${(h >>> 0).toString(36)}_${skel.length}`;
   }
 
-  function isMostlyZh(text) {
-    const norm = normalizeTextKey(text);
+  function hashKey(rawText, prefix) {
+    const b = computeSkelBody(normalizeTextKey(rawText));
+    return b ? `${prefix}${b}` : '';
+  }
+
+  function isMostlyZhNorm(norm) {
     if (!norm || norm.length < 10 || norm.length > 48000) return true;
     const prose = norm
       .replace(/```[\s\S]*?```/g, ' ')
@@ -385,12 +393,17 @@
       .replace(/(?:\/[A-Za-z0-9._-]+){2,}/g, ' ');
     const cjk = (prose.match(/[\u4e00-\u9fa5]/g) || []).length;
     const latin = (prose.match(/[A-Za-z]/g) || []).length;
-    if (cjk >= 24 && cjk / Math.max(1, cjk + latin) >= 0.18) return true;
-    if (latin < 12) return true;
-    return cjk / Math.max(1, cjk + latin) >= 0.28;
+    return (cjk >= 24 && cjk / Math.max(1, cjk + latin) >= 0.18) || latin < 12 || cjk / Math.max(1, cjk + latin) >= 0.28;
   }
 
   const getStore = () => W.localStorage || null;
+
+  function setActiveStyleTag(nextTag) {
+    if (!nextTag || nextTag === activeStyleTag) return false;
+    activeStyleTag = nextTag;
+    try { getStore()?.setItem(STYLE_TAG_KEY, nextTag); } catch (_) {}
+    return true;
+  }
 
   function loadViewModePreference() {
     if (viewModeLoaded || hasExplicitHostView) {
@@ -411,25 +424,46 @@
   function loadLocalStorageCache() {
     if (localCacheLoaded) return;
     localCacheLoaded = true;
+    const store = getStore();
+    if (!store) return;
     try {
-      const raw = getStore()?.getItem(LOCAL_CACHE_KEY);
+      if (!activeStyleTag) {
+        const st = store.getItem(STYLE_TAG_KEY);
+        if (st) activeStyleTag = st;
+      }
+      const raw = store.getItem(LOCAL_CACHE_KEY);
       if (!raw) return;
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') {
+        let cnt = 0;
         for (const [k, v] of Object.entries(parsed)) {
-          if (k && typeof v === 'string' && v.trim()) memCache.set(k, v);
+          if (k && typeof v === 'string' && v.trim()) {
+            if (!memCache.has(k)) memCache.set(k, v);
+            cnt++;
+          }
         }
+        storedCount = cnt;
       }
     } catch (_) {}
   }
 
   let persistTimer = null;
+  let persistIdle = null;
 
-  function flushLocalStorageCacheNow() {
+  function cancelPersistHandles() {
     if (persistTimer) {
       clearTimeout(persistTimer);
       persistTimer = null;
     }
+    if (persistIdle && typeof W.cancelIdleCallback === 'function') {
+      try { W.cancelIdleCallback(persistIdle); } catch (_) {}
+      persistIdle = null;
+    }
+  }
+
+  function flushLocalStorageCacheNow() {
+    cancelPersistHandles();
+    cacheDirty = false;
     try {
       const store = getStore();
       if (!store) return;
@@ -448,6 +482,7 @@
         const obj = {};
         for (let i = list.length - 1; i >= 0; i--) obj[list[i][0]] = list[i][1];
         store.setItem(LOCAL_CACHE_KEY, JSON.stringify(obj));
+        storedCount = list.length;
       };
       try {
         writePicked(picked);
@@ -460,14 +495,30 @@
   }
 
   function persistLocalStorageCache() {
-    if (persistTimer) return;
-    persistTimer = setTimeout(flushLocalStorageCacheNow, 1500);
-    if (persistTimer && typeof persistTimer.unref === 'function') persistTimer.unref();
+    cacheDirty = true;
+    if (persistTimer || persistIdle) return;
+    const sched = (ms) => {
+      persistTimer = setTimeout(() => {
+        persistTimer = null;
+        if (inflightBySig.size > 0) return sched(2000);
+        if (typeof W.requestIdleCallback === 'function') {
+          persistIdle = W.requestIdleCallback(() => {
+            persistIdle = null;
+            flushLocalStorageCacheNow();
+          }, { timeout: 1500 });
+        } else {
+          flushLocalStorageCacheNow();
+        }
+      }, ms);
+      persistTimer?.unref?.();
+    };
+    sched(3500);
   }
 
   function putMemCache(key, val, persist = true) {
-    if (!key || typeof val !== 'string' || !val.trim()) return;
+    if (!key || typeof val !== 'string' || !val.trim()) return false;
     const trimmed = val.trim();
+    const existed = memCache.get(key) === trimmed;
     if (memCache.has(key)) memCache.delete(key);
     while (memCache.size >= MEM_CACHE_LIMIT) {
       const oldest = memCache.keys().next().value;
@@ -475,27 +526,19 @@
       memCache.delete(oldest);
     }
     memCache.set(key, trimmed);
-    if (persist) persistLocalStorageCache();
+    if (!existed && persist) persistLocalStorageCache();
+    return !existed;
   }
 
   function getLocalCacheStats() {
     loadLocalStorageCache();
-    let storageEntries = 0;
-    try {
-      const raw = getStore()?.getItem(LOCAL_CACHE_KEY) || '';
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') storageEntries = Object.keys(parsed).length;
-      }
-    } catch (_) {}
-    return { ok: true, memEntries: memCache.size, storageEntries };
+    return { ok: true, memEntries: memCache.size, storageEntries: storedCount };
   }
 
   function clearLocalCache() {
-    if (persistTimer) {
-      clearTimeout(persistTimer);
-      persistTimer = null;
-    }
+    cancelPersistHandles();
+    cacheDirty = false;
+    storedCount = 0;
     const cleared = memCache.size;
     memCache.clear();
     failedSigs.clear();
@@ -539,9 +582,18 @@
     sa(docRoot(), 'data-ag-prism-thought-view', currentViewMode);
   }
 
+  const onScrollCapture = () => {
+    if (currentMode === 'off' || scrollTimer) return;
+    scrollTimer = setTimeout(() => {
+      scrollTimer = null;
+      if (currentMode !== 'off') scheduleScan(20);
+    }, 100);
+    scrollTimer?.unref?.();
+  };
+
   function syncRemoteCfgMeta(res) {
     const nextTag = res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : '');
-    if (nextTag) activeStyleTag = nextTag;
+    const tagChanged = setActiveStyleTag(nextTag);
     if (!hasExplicitHostView && (res?.viewMode === 'bilingual' || res?.viewMode === 'immersive')) {
       let hasLocalPref = false;
       try { hasLocalPref = Boolean(getStore()?.getItem(VIEW_MODE_STORAGE_KEY)); } catch (_) {}
@@ -551,6 +603,7 @@
         refreshAllPanelViewModes(false);
       }
     }
+    return tagChanged;
   }
 
   function ensureInitialized() {
@@ -561,21 +614,28 @@
       sa(rootEl, 'data-ag-prism-thought-owner', OWNER_ID);
     }
     syncDocViewAttribute();
+    if (!scrollBound && typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('scroll', onScrollCapture, { capture: true, passive: true });
+      scrollBound = true;
+    }
 
     if (cacheWarmed) return;
     cacheWarmed = true;
     const br = getBridge();
     if (br && typeof br.call === 'function') {
-      br.call({ action: 'get-cache' })
+      br.call({ action: 'get-cache', limit: 40, maxChars: 80000 })
         .then((res) => {
-          syncRemoteCfgMeta(res);
+          const tagChanged = syncRemoteCfgMeta(res);
+          if (tagChanged) {
+            qsa(SEL_TRIGGER).forEach((b) => {
+              const p = nextSib(b);
+              if (p) panelMeta.delete(p);
+            });
+          }
           if (res && res.entries && typeof res.entries === 'object') {
             let added = 0;
             for (const [k, v] of Object.entries(res.entries)) {
-              if (k && typeof v === 'string' && v.trim()) {
-                putMemCache(k, v, false);
-                added++;
-              }
+              if (putMemCache(k, v, false)) added++;
             }
             if (added > 0) persistLocalStorageCache();
           }
@@ -689,6 +749,14 @@
   }
 
   function releasePrismOverlays() {
+    if (scrollTimer) {
+      clearTimeout(scrollTimer);
+      scrollTimer = null;
+    }
+    if (scrollBound && typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+      document.removeEventListener('scroll', onScrollCapture, { capture: true });
+      scrollBound = false;
+    }
     clearHydrateQueue();
     clearPanelHlItems(null);
     clearAllWaitTimers(false);
@@ -895,20 +963,23 @@
     if (isBlock) chunks.push('\n');
   }
 
-  function extractRawEnglishText(panel) {
+  function extractPanelInfo(panel) {
     const chs = panel && panel[K_CN];
-    if (!chs) return '';
+    if (!chs) return { s: '', t: '', k: '', z: true };
     const stp = quickPanelStamp(panel);
     const hit = rawCacheMap.get(panel);
-    if (hit && hit.s === stp && panelFileMaps.has(panel)) return hit.t;
+    if (hit && hit.s === stp && panelFileMaps.has(panel)) return hit;
     const chunks = [];
     const fm = createEmptyFileMap();
     for (let i = 0; i < chs.length; i++) collectCleanText(chs[i], chunks, fm);
     panelFileMaps.set(panel, fm);
     const rt = normalizeTextKey(chunks.join(''));
-    rawCacheMap.set(panel, { s: stp, t: rt });
-    return rt;
+    const rec = { s: stp, t: rt, k: computeSkelBody(rt), z: isMostlyZhNorm(rt) };
+    rawCacheMap.set(panel, rec);
+    return rec;
   }
+
+  const extractRawEnglishText = (panel) => extractPanelInfo(panel).t;
 
   function ensurePanelFileMap(panel) {
     if (!panel) return null;
@@ -1150,24 +1221,20 @@
     return { c, f, l };
   }
 
+  const leafStr = (n) => {
+    if (!n) return '';
+    if (n.nodeType === 3) return n[K_NV] || '';
+    const cns = n[K_CN];
+    return cns && cns.length === 1 && cns[0].nodeType === 3 ? cns[0][K_NV] || '' : tc(n) || '';
+  };
+
   function quickPanelStamp(panel) {
-    const nodes = panel && panel[K_CN];
-    if (!nodes) return '';
-    let c = 0;
-    let fl = 0;
-    let ll = 0;
-    let ch = 0;
-    for (let i = 0; i < nodes.length; i++) {
-      const n = nodes[i];
-      if (n.nodeType === 1 && isOverlayOrIgnoredElement(n)) continue;
-      c++;
-      const s = n.nodeType === 3 ? n[K_NV] || '' : tc(n) || '';
-      const l = s.length;
-      if (c === 1) fl = l;
-      ll = l;
-      if (l) ch = s.charCodeAt(l - 1) | 0;
-    }
-    return `${c}:${fl}:${ll}:${ch}`;
+    const st = quickStructureSig(panel);
+    if (!st || !st.c) return '';
+    const fs = leafStr(st.f);
+    const ls = st.l === st.f ? fs : leafStr(st.l);
+    const ll = ls.length;
+    return `${st.c}:${fs.length}:${ll}:${ll ? ls.charCodeAt(ll - 1) | 0 : 0}`;
   }
 
   function splitMarkdownBlocks(markdownText) {
@@ -1654,17 +1721,13 @@
     applyPanelViewMode(panel);
   }
 
-  function computeSig(rawText, mode) {
-    const presetTag = mode === 'machine' ? 'mt' : activeStyleTag || 'ai_pending';
-    return `${presetTag}:${hashKey(rawText, 'sig')}`;
-  }
+  const sigFromBody = (kb, mode) => `${mode === 'machine' ? 'mt' : activeStyleTag || 'ai_pending'}:sig${kb}`;
+  const computeSig = (rawText, mode) => sigFromBody(computeSkelBody(normalizeTextKey(rawText)), mode);
 
-  function findCachedTranslation(rawText, mode) {
-    if (mode === 'machine') {
-      return memCache.get(hashKey(rawText, 'mt')) || '';
-    }
-    if (!activeStyleTag) return '';
-    return memCache.get(hashKey(rawText, activeStyleTag)) || '';
+  function findCachedByBody(kb, mode) {
+    if (!kb) return '';
+    const tag = mode === 'machine' ? 'mt' : activeStyleTag;
+    return tag ? memCache.get(`${tag}${kb}`) || '' : '';
   }
 
   function bindPanelToInflight(entry, panel, expanded) {
@@ -1683,9 +1746,10 @@
   function startOrJoinTranslation(panel, rawText, mode, sig, srcSkelHash, expanded, opts = {}) {
     const force = Boolean(opts.force);
     const priority = Number(opts.priority) || 0;
+    const skelBody = srcSkelHash && srcSkelHash.startsWith('sig') ? srcSkelHash.slice(3) : computeSkelBody(normalizeTextKey(rawText));
 
     if (!force) {
-      const cached = findCachedTranslation(rawText, mode);
+      const cached = findCachedByBody(skelBody, mode);
       if (cached) {
         if (panel && expanded) renderTranslatedText(panel, cached, false, sig, mode === 'machine' ? 'machine' : 'ai');
         return;
@@ -1742,8 +1806,8 @@
       if (!isConn(p)) return false;
       const cs = quickStructureSig(p);
       if (entry.sc && cs && (cs.c !== entry.sc.c || cs.f !== entry.sc.f || cs.l !== entry.sc.l)) {
-        const curRaw = extractRawEnglishText(p);
-        if (curRaw && hashKey(curRaw, 'sig') !== entry.sk) return false;
+        const inf = extractPanelInfo(p);
+        if (inf.t && `sig${inf.k}` !== entry.sk) return false;
         entry.sc = cs;
       }
       return true;
@@ -1765,9 +1829,16 @@
       if (!pl || currentMode === 'off' || entry.x) return;
       for (const p of entry.ps) {
         if (!isConn(p)) continue;
-        const curRaw = extractRawEnglishText(p);
-        if (curRaw && hashKey(curRaw, 'sig') !== entry.sk) continue;
-        renderTranslatedText(p, pl.z, false, pl.s, pl.e);
+        const inf = extractPanelInfo(p);
+        if (inf.t && `sig${inf.k}` !== entry.sk) continue;
+        if (isPanelCurrentlyExpanded(p) && !isHiddenByAncestor(null, p)) {
+          renderTranslatedText(p, pl.z, false, pl.s, pl.e);
+        } else {
+          const m = panelMeta.get(p) || {};
+          m.ps = pl.s;
+          m.rs = inf.s;
+          panelMeta.set(p, m);
+        }
       }
       scheduleScan(30);
     };
@@ -1889,11 +1960,12 @@
           const isFb = res.engine === 'machine-fallback' || Boolean(res.fallback);
           const eng = isFb ? 'machine-fallback' : res.engine || (mode === 'machine' ? 'machine' : 'ai');
           failedSigs.delete(sig);
-          putMemCache(res.key || hashKey(rawText, isFb || mode === 'machine' ? 'mt' : activeStyleTag || 'ai_technical'), finalZh, true);
+          putMemCache(res.key || `${isFb || mode === 'machine' ? 'mt' : activeStyleTag || 'ai_technical'}${skelBody}`, finalZh, true);
 
           if (
+            !res.cached &&
             canUseSmoothStream() &&
-            entry.ps.some((p) => isConn(p) && isPanelCurrentlyExpanded(p)) &&
+            entry.ps.some((p) => isConn(p) && isPanelCurrentlyExpanded(p) && !isHiddenByAncestor(null, p)) &&
             entry.sh.length < finalZh.length &&
             finalZh.startsWith(entry.sh) &&
             (entry.sh.length > 0 || finalZh.length <= 900)
@@ -1913,17 +1985,27 @@
       .catch(failEntry);
   }
 
-  function isElementInViewport(el) {
-    if (!el || typeof el.getBoundingClientRect !== 'function') return true;
+  function isHiddenByAncestor(btn, panel) {
+    if (btn && typeof btn.checkVisibility === 'function' && !btn.checkVisibility()) return true;
+    if (panel && typeof panel.checkVisibility === 'function' && !panel.checkVisibility()) return true;
+    return false;
+  }
+
+  function probeViewportBand(el) {
+    if (!el || typeof el.getBoundingClientRect !== 'function') return 2;
     try {
       const rect = el.getBoundingClientRect();
-      if (rect.width === 0 && rect.height === 0) return false;
+      if (rect.width === 0 && rect.height === 0) return typeof el.checkVisibility === 'function' ? 0 : 2;
       const rootEl = docRoot();
-      const vh = W.innerHeight || (rootEl && rootEl.clientHeight) || 900;
+      const vh = W.innerHeight || (rootEl && rootEl.clientHeight) || 0;
+      if (vh <= 0 || rect.height <= 0) return 2;
       const vw = W.innerWidth || (rootEl && rootEl.clientWidth) || 1440;
-      return rect.bottom >= -120 && rect.top <= vh + 120 && rect.right >= 0 && rect.left <= vw;
+      if (rect.right < 0 || rect.left > vw) return 0;
+      if (rect.bottom >= -120 && rect.top <= vh + 120) return 2;
+      if (rect.bottom >= -800 && rect.top <= vh + 800) return 1;
+      return 0;
     } catch (_) {
-      return true;
+      return 2;
     }
   }
 
@@ -1937,7 +2019,7 @@
       let n = 0;
       while (hydrateQueue.length && n < 3) {
         const it = hydrateQueue.shift();
-        if (isConn(it.p) && isPanelCurrentlyExpanded(it.p)) {
+        if (isConn(it.p) && isPanelCurrentlyExpanded(it.p) && !isHiddenByAncestor(null, it.p) && probeViewportBand(it.p) > 0) {
           renderTranslatedText(it.p, it.z, false, it.s, it.e);
           n++;
         }
@@ -1954,41 +2036,48 @@
 
     const panel = nextSib(btn);
     if (!panel || String(panel.tagName || '').toUpperCase() !== 'DIV') return;
+    const hiddenAnc = isHiddenByAncestor(btn, panel);
+    if (hiddenAnc && !allowPreloadCollapsed) return;
+    const visExpanded = expanded && !hiddenAnc;
 
     const streaming = isTriggerStreaming(btn);
     if (streaming) {
       const now = nowMs();
       const prevMeta = panelMeta.get(panel);
       const alreadyStreamingPending = Boolean(prevMeta && prevMeta.s && ga(panel, A_PND) === '1');
-      const meta = prevMeta || { h: '', c: now, s: true, m: true, f: 0, ds: '', rs: '' };
+      const meta = prevMeta || { h: '', c: now, s: true, m: true, f: 0, ds: '', ps: '', rs: '' };
       meta.s = true;
       meta.m = true;
       meta.f = 0;
       meta.c = now;
       panelMeta.set(panel, meta);
       clearPanelWaitTimer(panel);
-      if (expanded && !alreadyStreamingPending) renderPendingState(panel, getClientPack()[9], 'streaming');
+      if (visExpanded && !alreadyStreamingPending) renderPendingState(panel, getClientPack()[9], 'streaming');
       return;
     }
 
-    if (expanded && ga(panel, A_RDY) === '1') {
+    if (visExpanded && ga(panel, A_RDY) === '1') {
       const em = panelMeta.get(panel);
       if (em && em.rs === quickPanelStamp(panel) && em.ds && em.ds === ga(panel, A_SIG)) return;
     }
 
-    const rawText = extractRawEnglishText(panel);
-    if (!rawText || isMostlyZh(rawText)) {
+    const inf = extractPanelInfo(panel);
+    if (!inf.t || inf.z) {
       if (ga(panel, A_PND) === '1') clearPendingKeepRaw(panel);
+      const m0 = panelMeta.get(panel) || {};
+      m0.ps = sigFromBody(inf.k, currentMode);
+      m0.rs = inf.s;
+      panelMeta.set(panel, m0);
       return;
     }
 
-    const srcSkelHash = hashKey(rawText, 'sig');
-    const sig = computeSig(rawText, currentMode);
+    const srcSkelHash = `sig${inf.k}`;
+    const sig = sigFromBody(inf.k, currentMode);
 
-    if (expanded && ga(panel, A_RDY) === '1' && ga(panel, A_SIG) === sig) {
+    if (visExpanded && ga(panel, A_RDY) === '1' && ga(panel, A_SIG) === sig) {
       const meta = panelMeta.get(panel) || {};
       meta.ds = sig;
-      meta.rs = quickPanelStamp(panel);
+      meta.rs = inf.s;
       panelMeta.set(panel, meta);
       return;
     }
@@ -1996,7 +2085,7 @@
     const now = nowMs();
     let meta = panelMeta.get(panel);
     if (!meta) {
-      meta = { h: srcSkelHash, c: now, s: false, m: false, f: now - FINISH_GATE_MS, ds: '', rs: '' };
+      meta = { h: srcSkelHash, c: now, s: false, m: false, f: now - FINISH_GATE_MS, ds: '', ps: '', rs: '' };
     } else if (meta.h !== srcSkelHash) {
       meta.h = srcSkelHash;
       meta.c = now;
@@ -2011,11 +2100,11 @@
     }
     panelMeta.set(panel, meta);
 
-    const cached = findCachedTranslation(rawText, currentMode);
+    const cached = findCachedByBody(inf.k, currentMode);
     if (cached) {
       clearPanelWaitTimer(panel);
       const eng = currentMode === 'machine' ? 'machine' : 'ai';
-      if (expanded) {
+      if (visExpanded) {
         if (syncHydrateBudget > 0) {
           syncHydrateBudget--;
           renderTranslatedText(panel, cached, false, sig, eng);
@@ -2023,25 +2112,27 @@
           enqueueHydrate(panel, cached, sig, eng);
         }
       } else {
-        putMemCache(hashKey(rawText, currentMode === 'machine' ? 'mt' : activeStyleTag || 'ai_technical'), cached, false);
+        meta.ps = sig;
+        meta.rs = inf.s;
+        panelMeta.set(panel, meta);
       }
       return;
     }
 
     const activeFlight = inflightBySig.get(sig);
     if (activeFlight && !activeFlight.x && now - activeFlight.at <= 75000) {
-      bindPanelToInflight(activeFlight, panel, expanded);
+      bindPanelToInflight(activeFlight, panel, visExpanded);
       return;
     }
 
     if (isSigInCooldown(sig)) {
-      if (expanded && ga(panel, A_FLD) !== '1') renderFailedState(panel, rawText, currentMode, sig);
+      if (visExpanded && ga(panel, A_FLD) !== '1') renderFailedState(panel, inf.t, currentMode, sig);
       return;
     }
 
     const waitMs = meta.m ? Math.max(0, FINISH_GATE_MS - (now - meta.f), QUIET_GATE_MS - (now - meta.c)) : 0;
     if (waitMs > 0) {
-      if (expanded) renderPendingState(panel, getClientPack()[10], 'settling');
+      if (visExpanded) renderPendingState(panel, getClientPack()[10], 'settling');
       setPanelWaitTimer(
         panel,
         btn,
@@ -2064,7 +2155,7 @@
       return;
     }
 
-    startOrJoinTranslation(panel, rawText, currentMode, sig, srcSkelHash, expanded, { priority });
+    startOrJoinTranslation(panel, inf.t, currentMode, sig, srcSkelHash, visExpanded, { priority });
   }
 
   function pruneUnneededPendingRequests(activePanelSet) {
@@ -2096,17 +2187,30 @@
       if (!allowPreload && !expanded) continue;
 
       const panel = nextSib(btn);
-      if (panel) activePanelSet.add(panel);
+      if (panel && !isLatest && isHiddenByAncestor(btn, panel)) continue;
 
-      if (expanded && panel && ga(panel, A_RDY) === '1') {
+      if (panel) {
         const em = panelMeta.get(panel);
-        if (em && em.ds && em.ds === ga(panel, A_SIG) && em.rs === quickPanelStamp(panel) && !isTriggerStreaming(btn)) {
-          continue;
+        if (em && !isTriggerStreaming(btn) && em.rs === quickPanelStamp(panel)) {
+          if (expanded && ga(panel, A_RDY) === '1' && em.ds && em.ds === ga(panel, A_SIG)) {
+            activePanelSet.add(panel);
+            continue;
+          }
+          if (!expanded || isHiddenByAncestor(btn, panel)) {
+            const inf = rawCacheMap.get(panel);
+            if (inf && inf.s === em.rs && em.ps && em.ps === sigFromBody(inf.k, currentMode)) {
+              activePanelSet.add(panel);
+              continue;
+            }
+          }
         }
       }
 
-      const inViewport = expanded && !isLatest ? isElementInViewport(panel || btn) : false;
-      const tier = isLatest && expanded ? 25 : inViewport ? 20 : isLatest ? 12 : 5;
+      const band = expanded && !isLatest ? probeViewportBand(panel || btn) : 0;
+      if (!isLatest && band === 0) continue;
+      if (panel) activePanelSet.add(panel);
+
+      const tier = isLatest && expanded ? 25 : band === 2 ? 20 : isLatest ? 12 : 10;
       candidates.push({ b: btn, a: allowPreload, p: tier * 1000 + i });
     }
 
@@ -2249,8 +2353,7 @@
       if (!br) return offRes();
       return br.call({ action: 'save-config', ...input }).then((res) => {
         const nextTag = res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : '');
-        const tagChanged = Boolean(nextTag && nextTag !== activeStyleTag);
-        if (nextTag) activeStyleTag = nextTag;
+        const tagChanged = setActiveStyleTag(nextTag);
         qsa(SEL_TRIGGER).forEach((b) => {
           const p = nextSib(b);
           if (p && (tagChanged || ga(p, A_FBK) === '1' || ga(p, A_FLD) === '1')) {
@@ -2278,7 +2381,7 @@
         clearTimeout(scanTimer);
         scanTimer = null;
       }
-      if (persistTimer) flushLocalStorageCacheNow();
+      if (cacheDirty || persistTimer || persistIdle || memCache.size > storedCount) flushLocalStorageCacheNow();
       releasePrismOverlays();
     },
   };

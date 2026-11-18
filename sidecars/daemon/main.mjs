@@ -1285,7 +1285,10 @@ export class PrismDaemon {
         } else if (action === 'save-config') {
           result = svc.saveConfig(input);
         } else if (action === 'get-cache') {
-          result = svc.getWarmCacheSnapshot(Number(input.limit) > 0 ? Number(input.limit) : 400);
+          result = svc.getWarmCacheSnapshot(
+            Number(input.limit) > 0 ? Number(input.limit) : 40,
+            Number(input.maxChars) > 0 ? Number(input.maxChars) : 80000
+          );
         } else if (action === 'cache-stats') {
           result = svc.getCacheStats();
         } else if (action === 'clear-cache') {
@@ -1324,7 +1327,9 @@ export class PrismDaemon {
       }
 
       if (!entry.session.closed) {
-        const resolveExpr = `window.__agPrismThoughtResolve && window.__agPrismThoughtResolve(${reqId}, ${JSON.stringify(result)})`;
+        const rawJson = JSON.stringify(result);
+        const payloadExpr = rawJson && rawJson.length > 4096 ? `JSON.parse(${JSON.stringify(rawJson)})` : rawJson;
+        const resolveExpr = `window.__agPrismThoughtResolve && window.__agPrismThoughtResolve(${reqId}, ${payloadExpr})`;
         const evalParams = { expression: resolveExpr, returnByValue: true };
         if (executionContextId) evalParams.contextId = executionContextId;
         await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});

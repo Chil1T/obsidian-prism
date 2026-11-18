@@ -245,6 +245,11 @@ export class ThoughtTranslatorService {
     this._queueSeq = 0;
     this._cacheLoaded = false;
     this._saveCacheTimer = null;
+    this._flushPromise = null;
+    this._flushDirty = false;
+    this._lastDiskBytes = 0;
+    this._hasDiskFile = false;
+    this._cacheEpoch = 0;
     this._config = null;
   }
 
@@ -530,7 +535,10 @@ export class ThoughtTranslatorService {
     this._cacheLoaded = true;
     try {
       if (fs.existsSync(this.cacheFile)) {
-        const obj = JSON.parse(fs.readFileSync(this.cacheFile, 'utf8'));
+        const raw = fs.readFileSync(this.cacheFile, 'utf8');
+        this._lastDiskBytes = Buffer.byteLength(raw, 'utf8');
+        this._hasDiskFile = this._lastDiskBytes > 0;
+        const obj = JSON.parse(raw);
         const entries = obj?.entries && typeof obj.entries === 'object' ? obj.entries : obj;
         if (entries && typeof entries === 'object') {
           for (const [k, v] of Object.entries(entries)) {
@@ -555,10 +563,30 @@ export class ThoughtTranslatorService {
   _setCache(key, value) {
     if (!key || !value || !String(value).trim()) return;
     this._ensureCacheLoaded();
+    const trimmed = String(value).trim();
+    const unchanged = this.memCache.get(key) === trimmed;
     if (this.memCache.has(key)) this.memCache.delete(key);
-    this.memCache.set(key, String(value).trim());
+    this.memCache.set(key, trimmed);
     this._trimCache();
-    this._schedulePersistCache();
+    if (!unchanged) this._schedulePersistCache();
+  }
+
+  _buildDiskCacheJson() {
+    const entriesArr = Array.from(this.memCache.entries());
+    const picked = [];
+    let totalChars = 0;
+    for (let i = entriesArr.length - 1; i >= 0 && picked.length < 600; i--) {
+      const [k, v] = entriesArr[i];
+      if (!k || typeof v !== 'string' || v.length > 32000) continue;
+      if (totalChars + k.length + v.length > 800000) break;
+      totalChars += k.length + v.length;
+      picked.push([k, v]);
+    }
+    const out = {};
+    for (let i = picked.length - 1; i >= 0; i--) {
+      out[picked[i][0]] = picked[i][1];
+    }
+    return JSON.stringify({ version: 1, entries: out });
   }
 
   _flushCacheToDisk() {
@@ -566,25 +594,15 @@ export class ThoughtTranslatorService {
       clearTimeout(this._saveCacheTimer);
       this._saveCacheTimer = null;
     }
+    this._flushDirty = false;
     const tmp = `${this.cacheFile}.${process.pid}.tmp`;
     try {
       fs.mkdirSync(path.dirname(this.cacheFile), { recursive: true });
-      const entriesArr = Array.from(this.memCache.entries());
-      const picked = [];
-      let totalChars = 0;
-      for (let i = entriesArr.length - 1; i >= 0; i--) {
-        const [k, v] = entriesArr[i];
-        if (!k || typeof v !== 'string' || v.length > 32000) continue;
-        if (totalChars + k.length + v.length > 2400000) break;
-        totalChars += k.length + v.length;
-        picked.push([k, v]);
-      }
-      const out = {};
-      for (let i = picked.length - 1; i >= 0; i--) {
-        out[picked[i][0]] = picked[i][1];
-      }
-      fs.writeFileSync(tmp, JSON.stringify({ version: 1, entries: out }), { encoding: 'utf8', mode: 0o600 });
+      const jsonStr = this._buildDiskCacheJson();
+      fs.writeFileSync(tmp, jsonStr, { encoding: 'utf8', mode: 0o600 });
       fs.renameSync(tmp, this.cacheFile);
+      this._lastDiskBytes = Buffer.byteLength(jsonStr, 'utf8');
+      this._hasDiskFile = true;
     } catch {
       try {
         if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
@@ -592,45 +610,87 @@ export class ThoughtTranslatorService {
     }
   }
 
+  _flushCacheToDiskAsync() {
+    if (this._saveCacheTimer) {
+      clearTimeout(this._saveCacheTimer);
+      this._saveCacheTimer = null;
+    }
+    if (this._flushPromise) {
+      this._flushDirty = true;
+      return this._flushPromise;
+    }
+    this._flushDirty = false;
+    const epoch = this._cacheEpoch;
+    const jsonStr = this._buildDiskCacheJson();
+    const byteLen = Buffer.byteLength(jsonStr, 'utf8');
+    this._lastDiskBytes = byteLen;
+    const tmp = `${this.cacheFile}.${process.pid}.${Date.now().toString(36)}.tmp`;
+    this._flushPromise = (async () => {
+      try {
+        await fs.promises.mkdir(path.dirname(this.cacheFile), { recursive: true });
+        if (epoch !== this._cacheEpoch) return;
+        await fs.promises.writeFile(tmp, jsonStr, { encoding: 'utf8', mode: 0o600 });
+        if (epoch !== this._cacheEpoch) {
+          await fs.promises.unlink(tmp).catch(() => {});
+          return;
+        }
+        await fs.promises.rename(tmp, this.cacheFile);
+        if (epoch === this._cacheEpoch) {
+          this._lastDiskBytes = byteLen;
+          this._hasDiskFile = true;
+        }
+      } catch {
+        await fs.promises.unlink(tmp).catch(() => {});
+      } finally {
+        this._flushPromise = null;
+        if (this._flushDirty && epoch === this._cacheEpoch && this.memCache.size > 0) {
+          this._flushDirty = false;
+          void this._flushCacheToDiskAsync();
+        }
+      }
+    })();
+    return this._flushPromise;
+  }
+
   _schedulePersistCache() {
     if (this._saveCacheTimer) return;
     this._saveCacheTimer = setTimeout(() => {
       this._saveCacheTimer = null;
-      this._flushCacheToDisk();
-    }, 350);
+      void this._flushCacheToDiskAsync();
+    }, 900);
     if (this._saveCacheTimer.unref) this._saveCacheTimer.unref();
   }
 
   getCacheStats() {
     this._ensureCacheLoaded();
-    if (this._saveCacheTimer) {
+    if (this._saveCacheTimer && !this._hasDiskFile && this.memCache.size > 0) {
       this._flushCacheToDisk();
+    } else if (this._saveCacheTimer) {
+      void this._flushCacheToDiskAsync();
     }
-    let diskBytes = 0;
-    try {
-      if (fs.existsSync(this.cacheFile)) {
-        diskBytes = fs.statSync(this.cacheFile).size || 0;
-      }
-    } catch {}
     const entries = this.memCache.size;
     return {
       ok: true,
       entries,
       count: entries,
       maxEntries: this.maxCacheEntries,
-      diskBytes,
+      diskBytes: entries > 0 ? this._lastDiskBytes : 0,
       cacheFile: this.cacheFile,
     };
   }
 
   clearCache() {
     this._ensureCacheLoaded();
+    this._cacheEpoch++;
+    this._flushDirty = false;
     if (this._saveCacheTimer) {
       clearTimeout(this._saveCacheTimer);
       this._saveCacheTimer = null;
     }
     const cleared = this.memCache.size;
     this.memCache.clear();
+    this._lastDiskBytes = 0;
+    this._hasDiskFile = false;
     try {
       if (fs.existsSync(this.cacheFile)) {
         fs.unlinkSync(this.cacheFile);
@@ -649,14 +709,24 @@ export class ThoughtTranslatorService {
     };
   }
 
-  getWarmCacheSnapshot(limit = 400) {
+  getWarmCacheSnapshot(limit = 40, maxChars = 80000) {
     this._ensureCacheLoaded();
     const store = this.loadStore();
+    const cap = Math.max(1, Math.min(200, Number(limit) || 40));
+    const charBudget = Math.max(4096, Number(maxChars) || 80000);
+    const entriesArr = Array.from(this.memCache.entries());
+    const picked = [];
+    let totalChars = 0;
+    for (let i = entriesArr.length - 1; i >= 0 && picked.length < cap; i--) {
+      const [k, v] = entriesArr[i];
+      if (!k || typeof v !== 'string' || v.length > 24000) continue;
+      if (totalChars + k.length + v.length > charBudget) break;
+      totalChars += k.length + v.length;
+      picked.push([k, v]);
+    }
     const items = {};
-    const keys = Array.from(this.memCache.keys());
-    const start = Math.max(0, keys.length - limit);
-    for (let i = start; i < keys.length; i++) {
-      items[keys[i]] = this.memCache.get(keys[i]);
+    for (let i = picked.length - 1; i >= 0; i--) {
+      items[picked[i][0]] = picked[i][1];
     }
     return {
       ok: true,
@@ -785,7 +855,7 @@ export class ThoughtTranslatorService {
   }
 
   dispose() {
-    if (this._saveCacheTimer) {
+    if (this._saveCacheTimer || this._flushDirty) {
       this._flushCacheToDisk();
     }
     for (const qItem of Array.from(this._queue)) {
@@ -998,7 +1068,6 @@ export class ThoughtTranslatorService {
 
     if (!skipCache && this.memCache.has(cacheKey)) {
       const hit = this.memCache.get(cacheKey);
-      if (onPartial) onPartial(hit);
       return { ok: true, text: hit, cached: true, engine: mode === 'machine' ? 'machine' : 'ai', key: cacheKey };
     }
 

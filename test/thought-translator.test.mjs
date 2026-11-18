@@ -15,6 +15,7 @@ import {
   normalizeOpenAiBaseUrl,
   isKeylessAllowedEndpoint,
   buildNoThinkingParams,
+  hashThoughtKey,
 } from '../vendor/thought-translator/translator-service.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1778,4 +1779,190 @@ test('Smooth Token Pacer + incremental .ag-prism-thought-chunk fade-in, paragrap
   assert.equal(panel2.getAttribute('data-op-zh-ready'), '1');
 
   api.destroy();
+});
+
+test('Cache jank root-cause guards: persisted custom styleTag 0ms hit, collapsed preload O(1) skip, checkVisibility/800px lazy hydration & capture scroll', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-cacheperf-'));
+  try {
+    // 1) Backend getWarmCacheSnapshot caps at <= 40 entries & <= 80,000 chars, and cached hit skips duplicate onPartial
+    const svc = new ThoughtTranslatorService({ configDir: tmpDir });
+    for (let i = 0; i < 65; i++) {
+      svc._setCache(`ai_custom_vl9dgg_v3_k${i}_100`, `工程长思考缓存片段-${i}-` + '稳'.repeat(2400));
+    }
+    const snap = svc.getWarmCacheSnapshot();
+    const snapKeys = Object.keys(snap.entries);
+    const snapChars = snapKeys.reduce((s, k) => s + k.length + snap.entries[k].length, 0);
+    assert.ok(snapKeys.length > 0 && snapKeys.length <= 40, `Warm snapshot must cap <= 40 entries, got ${snapKeys.length}`);
+    assert.ok(snapChars <= 80000, `Warm snapshot must cap <= 80,000 chars, got ${snapChars}`);
+
+    const rawDemo = 'Verifying custom style tag immediate cache hit and zero duplicate partial stream.';
+    const customTag = 'ai_custom_vl9dgg';
+    const customKey = hashThoughtKey(rawDemo, customTag);
+    svc.saveConfig({ stylePreset: 'custom', customPrompt: '请输出第一人称精炼工程笔记。' });
+    const actualTag = svc.getSanitizedConfig().styleTag;
+    svc._setCache(hashThoughtKey(rawDemo, actualTag), '首帧零延迟自定义风格命中译文');
+    let partialCountOnCached = 0;
+    const hitRes = await svc.translateThought({
+      text: rawDemo,
+      mode: 'ai',
+      onPartial: () => {
+        partialCountOnCached++;
+      },
+    });
+    assert.equal(hitRes.cached, true);
+    assert.equal(partialCountOnCached, 0, 'Daemon cache hit must not emit redundant onPartial evaluation');
+
+    // 2) Frontend: persisted styleTag + O(1) getLocalCacheStats + checkVisibility & >800px lazy hydration + collapsed preload O(1) skip
+    const clientSrc = fs.readFileSync(
+      path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-client.js'),
+      'utf8'
+    );
+    const scrollListeners = [];
+    let delayedGetCacheResolve = null;
+    const { doc, rootBody, localStorage, sandbox } = createMockDomEnv({
+      __agPrismThoughtBridge: {
+        call: (p) => {
+          if (p && p.action === 'get-cache') {
+            return new Promise((r) => {
+              delayedGetCacheResolve = r;
+            });
+          }
+          return Promise.resolve({ ok: true });
+        },
+        translateStream: async () => ({ ok: false, error: 'Should hit cache without network' }),
+      },
+    });
+    doc.addEventListener = (type, fn, opts) => {
+      scrollListeners.push({ type, fn, opts });
+    };
+    doc.removeEventListener = (type, fn, opts) => {
+      const idx = scrollListeners.findIndex(
+        (x) => x.type === type && x.fn === fn && Boolean(x.opts?.capture) === Boolean(opts?.capture)
+      );
+      if (idx >= 0) scrollListeners.splice(idx, 1);
+    };
+
+    const txtVisible = 'Visible viewport block checking custom style tag zero-ms hit on first frame.';
+    const txtHiddenOuter = 'Inside collapsed Worked-for outer group with display none ancestor.';
+    const txtFarOffscreen = 'Historical expanded thought block 2400px above current scroll viewport.';
+    const txtCollapsedLatest = 'Latest collapsed thought block preloaded in background without repeated regex scans.';
+
+    const preSeededCache = {
+      [hashThoughtKey(txtVisible, customKey.split('_v3_')[0])]: '视口内首帧命中译文',
+      [hashThoughtKey(txtHiddenOuter, customKey.split('_v3_')[0])]: '外层折叠组按需挂载译文',
+      [hashThoughtKey(txtFarOffscreen, customKey.split('_v3_')[0])]: '远端历史块滚入视口懒挂载译文',
+      [hashThoughtKey(`Step 1: ${txtCollapsedLatest}`, customKey.split('_v3_')[0])]: '最新折叠块预载命中译文',
+    };
+    localStorage.setItem('ag_prism_thought_style_tag_v1', customTag);
+    localStorage.setItem('ag_prism_thought_zh_cache_v1', JSON.stringify(preSeededCache));
+
+    const mountBlock = (rawStr, expanded = true) => {
+      const btn = doc.createElement('button');
+      btn.setAttribute('data-testid', 'thinking-collapsible-trigger');
+      btn.setAttribute('aria-expanded', String(expanded));
+      btn.textContent = 'Thought for 3s';
+      const panel = doc.createElement('div');
+      const p = doc.createElement('p');
+      p.textContent = rawStr;
+      panel.appendChild(p);
+      btn.nextElementSibling = panel;
+      rootBody.appendChild(btn);
+      rootBody.appendChild(panel);
+      return { btn, panel, p };
+    };
+
+    const blkVis = mountBlock(txtVisible, true);
+    const blkHidden = mountBlock(txtHiddenOuter, true);
+    let outerCollapsed = true;
+    blkHidden.btn.checkVisibility = () => !outerCollapsed;
+    blkHidden.panel.checkVisibility = () => !outerCollapsed;
+
+    const blkFar = mountBlock(txtFarOffscreen, true);
+    blkFar.panel._boundingRect = { top: -2400, bottom: -2200, left: 20, right: 620, width: 600, height: 200 };
+
+    const blkLatest = mountBlock('', false);
+    blkLatest.p._text = undefined;
+    const innerSpan = doc.createElement('span');
+    innerSpan.appendChild(doc.createTextNode(txtCollapsedLatest));
+    blkLatest.p.appendChild(doc.createTextNode('Step 1: '));
+    blkLatest.p.appendChild(innerSpan);
+    let latestSubtreeExtracts = 0;
+    const origGetAttr = innerSpan.getAttribute.bind(innerSpan);
+    innerSpan.getAttribute = (k) => {
+      if (k === 'data-file-href') latestSubtreeExtracts++;
+      return origGetAttr(k);
+    };
+
+    vm.runInNewContext(clientSrc, sandbox);
+    const api = sandbox.__agPrismThought;
+
+    let getItemCallsAfterInit = 0;
+    const origGetItem = localStorage.getItem;
+    localStorage.getItem = (k) => {
+      getItemCallsAfterInit++;
+      return origGetItem(k);
+    };
+
+    // Sync BEFORE delayed get-cache resolves -> persisted customTag must hit immediately on frame 0!
+    api.sync({ thoughtTranslate: 'ai', thoughtTrigger: 'preload' });
+    api.scanImmediate();
+
+    assert.equal(blkVis.panel.getAttribute('data-op-zh-ready'), '1', 'Visible block must hit persisted custom styleTag before get-cache RPC');
+    assert.ok(blkVis.panel.textContent.includes('视口内首帧命中译文'));
+    assert.equal(
+      blkHidden.panel.querySelector('.ag-prism-thought-overlay'),
+      null,
+      'Expanded block inside collapsed Worked-for (checkVisibility()===false) must mount 0 ghost overlay DOM'
+    );
+    assert.equal(
+      blkFar.panel.querySelector('.ag-prism-thought-overlay'),
+      null,
+      'Far offscreen (>800px) block must defer overlay DOM mounting'
+    );
+
+    // Verify capture+passive scroll listener is bound
+    const scrollHook = scrollListeners.find((x) => x.type === 'scroll' && x.opts?.capture === true && x.opts?.passive === true);
+    assert.ok(scrollHook, 'Must bind capture+passive scroll listener for non-bubbling inner scroll container');
+
+    // Verify collapsed latest preload block does 0 subtree extractions on 15 subsequent scanImmediate() calls!
+    assert.equal(latestSubtreeExtracts, 1, 'Initial preload scan should extract collapsed block once');
+    for (let i = 0; i < 15; i++) {
+      api.scanImmediate();
+    }
+    assert.equal(latestSubtreeExtracts, 1, 'Preloaded collapsed block must skip subtree extraction/regex O(1) on subsequent scans');
+
+    // Verify getLocalCacheStats() does 0 localStorage.getItem / JSON.parse after initial load
+    getItemCallsAfterInit = 0;
+    const st1 = api.getLocalCacheStats();
+    const st2 = api.getLocalCacheStats();
+    assert.equal(st1.storageEntries, 4);
+    assert.equal(st2.memEntries, 4);
+    assert.equal(getItemCallsAfterInit, 0, 'getLocalCacheStats() must read O(1) storedCount with 0 localStorage.getItem calls');
+
+    // Unfold outer Worked-for group -> immediately mounts overlay on next scan!
+    outerCollapsed = false;
+    api.scanImmediate();
+    assert.equal(blkHidden.panel.getAttribute('data-op-zh-ready'), '1');
+    assert.ok(blkHidden.panel.textContent.includes('外层折叠组按需挂载译文'));
+
+    // Scroll far block into [-800, vh+800] warm band -> capture scroll listener hydrates smoothly!
+    blkFar.panel._boundingRect = { top: -520, bottom: -320, left: 20, right: 620, width: 600, height: 200 };
+    scrollHook.fn();
+    await new Promise((r) => setTimeout(r, 140));
+    assert.equal(blkFar.panel.getAttribute('data-op-zh-ready'), '1');
+    assert.ok(blkFar.panel.textContent.includes('远端历史块滚入视口懒挂载译文'));
+
+    if (delayedGetCacheResolve) delayedGetCacheResolve({ ok: true, styleTag: customTag, entries: preSeededCache });
+    await new Promise((r) => setTimeout(r, 30));
+
+    api.destroy();
+    assert.equal(
+      scrollListeners.filter((x) => x.type === 'scroll').length,
+      0,
+      'destroy() must cleanly remove capture scroll listener'
+    );
+    svc.dispose();
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
