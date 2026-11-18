@@ -19,6 +19,8 @@
   const MAX_STORAGE_TOTAL_CHARS = 600000;
   const MAX_STORAGE_ENTRY_CHARS = 32000;
   const STREAM_FLUSH_MS = 48;
+  const CHUNK_FADE_TTL_MS = 350;
+  const MAX_LIVE_CHUNKS = 10;
   const FINISH_GATE_MS = 450;
   const QUIET_GATE_MS = 900;
 
@@ -43,72 +45,31 @@
   let scanTimer = null;
   let reqSeq = 0;
 
+  const SEL_TRIGGER = 'button[data-testid="thinking-collapsible-trigger"]';
+  const SEL_OVERLAY = '.ag-prism-thought-overlay[data-op-thought="1"]';
+
+  // [0:rawShow, 1:rawHide, 2:fallback, 3:fallbackTitle, 4:retranslateTitle, 5:errorText, 6:retryBtn, 7:pendingMachine, 8:pendingAi, 9:pendingStreaming, 10:pendingSettling]
   const CLIENT_I18N = {
-    'zh-CN': {
-      rawShow: '原文',
-      rawHide: '收起原文',
-      fallback: '机翻降级',
-      fallbackTitle: '当前未配置可用 AI 模型或密钥，已降级为机翻',
-      retranslateTitle: '重新转译此块（跳过缓存）',
-      errorText: '转译未完成',
-      retryBtn: '↻ 重试',
-      pendingMachine: '正在极速机翻思考过程…',
-      pendingAi: '正在通过 AI 转译并润色思考过程…',
-      pendingStreaming: '思考流式输出中，完结后自动转译…',
-      pendingSettling: '正在收束思考上下文…',
-    },
-    'zh-TW': {
-      rawShow: '原文',
-      rawHide: '收起原文',
-      fallback: '機翻降級',
-      fallbackTitle: '目前未設定可用 AI 模型或金鑰，已降級為機器翻譯',
-      retranslateTitle: '重新轉譯此區塊（略過快取）',
-      errorText: '轉譯未完成',
-      retryBtn: '↻ 重試',
-      pendingMachine: '正在快速機器翻譯思考過程…',
-      pendingAi: '正在透過 AI 轉譯並潤飾思考過程…',
-      pendingStreaming: '思考串流輸出中，完成後自動轉譯…',
-      pendingSettling: '正在整理思考上下文…',
-    },
-    yue: {
-      rawShow: '原文',
-      rawHide: '收埋原文',
-      fallback: '機翻降級',
-      fallbackTitle: '目前未設定可用 AI 模型或金鑰，已降級為機器翻譯',
-      retranslateTitle: '重新轉譯呢一塊（跳過快取）',
-      errorText: '轉譯未完成',
-      retryBtn: '↻ 重試',
-      pendingMachine: '正在機器翻譯思考過程…',
-      pendingAi: '正在透過 AI 轉譯同潤飾思考過程…',
-      pendingStreaming: '思考串流輸出緊，完成後自動轉譯…',
-      pendingSettling: '正在整理思考上下文…',
-    },
-    en: {
-      rawShow: 'Raw',
-      rawHide: 'Hide Raw',
-      fallback: 'Fallback',
-      fallbackTitle: 'AI model or key unavailable; degraded to machine translation',
-      retranslateTitle: 'Retranslate block (bypass cache)',
-      errorText: 'Translation incomplete',
-      retryBtn: '↻ Retry',
-      pendingMachine: 'Translating thought block…',
-      pendingAi: 'Polishing thought block with AI…',
-      pendingStreaming: 'Streaming thought; auto-translating once done…',
-      pendingSettling: 'Settling thought context…',
-    },
-    ja: {
-      rawShow: '原文',
-      rawHide: '原文を隠す',
-      fallback: '機械翻訳代替',
-      fallbackTitle: 'AIモデルまたはキーが未設定のため、機械翻訳に切り替えました',
-      retranslateTitle: 'このブロックを再翻訳（キャッシュ無視）',
-      errorText: '翻訳未完了',
-      retryBtn: '↻ 再試行',
-      pendingMachine: '思考プロセスを機械翻訳中…',
-      pendingAi: 'AIで思考プロセスを翻訳・整形中…',
-      pendingStreaming: '思考ストリーミング中、完了後に自動翻訳…',
-      pendingSettling: '思考コンテキストを整えています…',
-    },
+    'zh-CN': [
+      '原文', '收起原文', '机翻降级', '当前未配置可用 AI 模型或密钥，已降级为机翻', '重新转译此块（跳过缓存）',
+      '转译未完成', '↻ 重试', '正在极速机翻思考过程…', '正在通过 AI 转译并润色思考过程…', '思考流式输出中，完结后自动转译…', '正在收束思考上下文…',
+    ],
+    'zh-TW': [
+      '原文', '收起原文', '機翻降級', '目前未設定可用 AI 模型或金鑰，已降級為機器翻譯', '重新轉譯此區塊（略過快取）',
+      '轉譯未完成', '↻ 重試', '正在快速機器翻譯思考過程…', '正在透過 AI 轉譯並潤飾思考過程…', '思考串流輸出中，完成後自動轉譯…', '正在整理思考上下文…',
+    ],
+    yue: [
+      '原文', '收埋原文', '機翻降級', '目前未設定可用 AI 模型或金鑰，已降級為機器翻譯', '重新轉譯呢一塊（跳過快取）',
+      '轉譯未完成', '↻ 重試', '正在機器翻譯思考過程…', '正在透過 AI 轉譯同潤飾思考過程…', '思考串流輸出緊，完成後自動轉譯…', '正在整理思考上下文…',
+    ],
+    en: [
+      'Raw', 'Hide Raw', 'Fallback', 'AI model or key unavailable; degraded to machine translation', 'Retranslate block (bypass cache)',
+      'Translation incomplete', '↻ Retry', 'Translating thought block…', 'Polishing thought block with AI…', 'Streaming thought; auto-translating once done…', 'Settling thought context…',
+    ],
+    ja: [
+      '原文', '原文を隠す', '機械翻訳代替', 'AIモデルまたはキーが未設定のため、機械翻訳に切り替えました', 'このブロックを再翻訳（キャッシュ無視）',
+      '翻訳未完了', '↻ 再試行', '思考プロセスを機械翻訳中…', 'AIで思考プロセスを翻訳・整形中…', '思考ストリーミング中、完了後に自動翻訳…', '思考コンテキストを整えています…',
+    ],
   };
 
   const memCache = new Map();
@@ -126,6 +87,65 @@
   const lockedHeights = new WeakMap();
   const streamLastLenMap = new WeakMap();
   const panelFileMaps = new WeakMap();
+  const panelStreamStates = new WeakMap();
+  const panelSettleTimers = new WeakMap();
+
+  const docRoot = () => (typeof document !== 'undefined' ? document.documentElement : null);
+  const ga = (e, k) => (e && e.getAttribute ? e.getAttribute(k) : null);
+  const sa = (e, k, v) => { if (e && e.setAttribute) e.setAttribute(k, v); };
+  const ra = (e, k) => { if (e && e.removeAttribute) e.removeAttribute(k); };
+  const raList = (e, ks) => { for (let i = 0; i < ks.length; i++) ra(e, ks[i]); };
+  const ce = (d, t, cls) => { const e = d.createElement(t); if (cls) e.className = cls; return e; };
+  const ctn = (d, s) => d.createTextNode(s);
+  const ap = (p, c) => p.appendChild(c);
+  const clearEl = (e) => { while (e && e.firstChild) e.removeChild(e.firstChild); };
+  const setTn = (tn, v) => { if (tn) { if ('nodeValue' in tn) tn.nodeValue = v; tn.textContent = v; } };
+  const qsa = (s) => (typeof document !== 'undefined' ? document.querySelectorAll(s) : []);
+  const onClk = (e, fn) => e.addEventListener('click', fn);
+  const stopEv = (ev) => {
+    if (ev) {
+      if (typeof ev.preventDefault === 'function') ev.preventDefault();
+      if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
+    }
+  };
+
+  function nowMs() {
+    return W.Date && typeof W.Date.now === 'function' ? W.Date.now() : Date.now();
+  }
+
+  function isMotionOff() {
+    try {
+      if (ga(docRoot(), 'data-ag-cs-motion') === 'off') return true;
+      if (W.__agPrism?.getState?.()?.cfg?.motionLevel === 'off') return true;
+    } catch (_) {}
+    return false;
+  }
+
+  function getRafFn() {
+    if (typeof W.requestAnimationFrame === 'function') return W.requestAnimationFrame.bind(W);
+    if (typeof requestAnimationFrame === 'function') return requestAnimationFrame;
+    return null;
+  }
+
+  function getCafFn() {
+    if (typeof W.cancelAnimationFrame === 'function') return W.cancelAnimationFrame.bind(W);
+    if (typeof cancelAnimationFrame === 'function') return cancelAnimationFrame;
+    return null;
+  }
+
+  function canUseSmoothStream() {
+    return Boolean(getRafFn()) && !isMotionOff();
+  }
+
+  function clearPanelStreamState(panel) {
+    if (!panel) return;
+    const t = panelSettleTimers.get(panel);
+    if (t) {
+      clearTimeout(t);
+      panelSettleTimers.delete(panel);
+    }
+    panelStreamStates.delete(panel);
+  }
 
   function normalizeLangCode(raw) {
     const s = String(raw || '').trim();
@@ -138,17 +158,14 @@
     return '';
   }
 
-  // Strictly prioritize Prism `data-ag-cs-lang` over host `<html lang="en">`!
   function resolveActiveLang(explicitLang) {
     const fromArg = normalizeLangCode(explicitLang);
     if (fromArg) return fromArg;
     try {
-      const docEl = typeof document !== 'undefined' ? document.documentElement : null;
-      if (docEl && docEl.getAttribute) {
-        const csLang = normalizeLangCode(docEl.getAttribute('data-ag-cs-lang'));
+      const rootEl = docRoot();
+      if (rootEl) {
+        const csLang = normalizeLangCode(ga(rootEl, 'data-ag-cs-lang')) || normalizeLangCode(ga(rootEl, 'data-ag-prism-lang'));
         if (csLang) return csLang;
-        const prismLang = normalizeLangCode(docEl.getAttribute('data-ag-prism-lang'));
-        if (prismLang) return prismLang;
       }
       const stateLang = normalizeLangCode(W.__agPrism?.getState?.()?.cfg?.language);
       if (stateLang) return stateLang;
@@ -157,37 +174,33 @@
   }
 
   function getClientPack(explicitLang) {
-    const code = resolveActiveLang(explicitLang);
-    return CLIENT_I18N[code] || CLIENT_I18N['zh-CN'];
+    return CLIENT_I18N[resolveActiveLang(explicitLang)] || CLIENT_I18N['zh-CN'];
   }
 
   function setPanelWaitTimer(panel, btn, fn, delayMs) {
     if (!panel) return;
     clearPanelWaitTimer(panel);
-    const timer = setTimeout(() => {
+    const t = setTimeout(() => {
       trackedWaitPanels.delete(panel);
       fn();
     }, delayMs);
-    trackedWaitPanels.set(panel, { timer, btn });
+    trackedWaitPanels.set(panel, { t, b: btn });
   }
 
   function clearPanelWaitTimer(panel) {
     const rec = trackedWaitPanels.get(panel);
     if (!rec) return;
-    clearTimeout(rec.timer);
+    clearTimeout(rec.t);
     trackedWaitPanels.delete(panel);
   }
 
   function isPanelCurrentlyExpanded(panel) {
     if (!panel) return false;
-    const prev = panel.previousElementSibling;
-    if (prev && prev.getAttribute && prev.getAttribute('aria-expanded') === 'true') return true;
-    if (typeof document !== 'undefined') {
-      const triggers = document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]');
-      for (let i = 0; i < triggers.length; i++) {
-        if (triggers[i] && triggers[i].nextElementSibling === panel) {
-          return triggers[i].getAttribute('aria-expanded') === 'true';
-        }
+    if (ga(panel.previousElementSibling, 'aria-expanded') === 'true') return true;
+    const triggers = qsa(SEL_TRIGGER);
+    for (let i = 0; i < triggers.length; i++) {
+      if (triggers[i] && triggers[i].nextElementSibling === panel) {
+        return ga(triggers[i], 'aria-expanded') === 'true';
       }
     }
     return false;
@@ -195,11 +208,9 @@
 
   function clearAllWaitTimers(onlyCollapsed = false) {
     for (const [panel, rec] of Array.from(trackedWaitPanels.entries())) {
-      const expanded =
-        (rec.btn && rec.btn.getAttribute && rec.btn.getAttribute('aria-expanded') === 'true') ||
-        isPanelCurrentlyExpanded(panel);
+      const expanded = ga(rec.b, 'aria-expanded') === 'true' || isPanelCurrentlyExpanded(panel);
       if (onlyCollapsed && expanded) continue;
-      clearTimeout(rec.timer);
+      clearTimeout(rec.t);
       trackedWaitPanels.delete(panel);
       if (!expanded) clearPendingKeepRaw(panel);
     }
@@ -208,17 +219,14 @@
   function cancelCollapsedInflightRequests() {
     clearAllWaitTimers(true);
     for (const [sig, entry] of Array.from(inflightBySig.entries())) {
-      const keptPanels = [];
-      for (let i = 0; i < entry.panels.length; i++) {
-        const p = entry.panels[i];
-        if (p && p.isConnected && isPanelCurrentlyExpanded(p)) {
-          keptPanels.push(p);
-        } else if (p) {
-          clearPendingKeepRaw(p);
-        }
+      const kept = [];
+      for (let i = 0; i < entry.ps.length; i++) {
+        const p = entry.ps[i];
+        if (p && p.isConnected && isPanelCurrentlyExpanded(p)) kept.push(p);
+        else if (p) clearPendingKeepRaw(p);
       }
-      entry.panels = keptPanels;
-      if (keptPanels.length === 0) {
+      entry.ps = kept;
+      if (!kept.length) {
         cancelTranslateRequest(entry);
         inflightBySig.delete(sig);
       }
@@ -227,15 +235,14 @@
 
   function hasAttr(el, name) {
     if (!el) return false;
-    if (typeof el.hasAttribute === 'function') return el.hasAttribute(name);
-    return typeof el.getAttribute === 'function' && el.getAttribute(name) !== null;
+    return typeof el.hasAttribute === 'function' ? el.hasAttribute(name) : ga(el, name) !== null;
   }
 
   function findChildByClass(parent, cls) {
-    if (!parent || !parent.children) return null;
-    for (let i = 0; i < parent.children.length; i++) {
-      const ch = parent.children[i];
-      if (ch && ch.classList && ch.classList.contains(cls)) return ch;
+    const chs = parent && parent.children;
+    if (!chs) return null;
+    for (let i = 0; i < chs.length; i++) {
+      if (chs[i] && chs[i].classList && chs[i].classList.contains(cls)) return chs[i];
     }
     return null;
   }
@@ -289,6 +296,8 @@
     return cjk / Math.max(1, cjk + latin) >= 0.28;
   }
 
+  const getStore = () => W.localStorage || null;
+
   function loadViewModePreference() {
     if (viewModeLoaded || hasExplicitHostView) {
       viewModeLoaded = true;
@@ -296,29 +305,20 @@
     }
     viewModeLoaded = true;
     try {
-      const store = W.localStorage;
-      if (!store) return;
-      const saved = store.getItem(VIEW_MODE_STORAGE_KEY);
-      if (saved === 'bilingual' || saved === 'immersive') {
-        currentViewMode = saved;
-      }
+      const saved = getStore()?.getItem(VIEW_MODE_STORAGE_KEY);
+      if (saved === 'bilingual' || saved === 'immersive') currentViewMode = saved;
     } catch (_) {}
   }
 
   function persistViewModePreference(mode) {
-    try {
-      const store = W.localStorage;
-      if (store) store.setItem(VIEW_MODE_STORAGE_KEY, mode);
-    } catch (_) {}
+    try { getStore()?.setItem(VIEW_MODE_STORAGE_KEY, mode); } catch (_) {}
   }
 
   function loadLocalStorageCache() {
     if (localCacheLoaded) return;
     localCacheLoaded = true;
     try {
-      const store = W.localStorage;
-      if (!store) return;
-      const raw = store.getItem(LOCAL_CACHE_KEY);
+      const raw = getStore()?.getItem(LOCAL_CACHE_KEY);
       if (!raw) return;
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') {
@@ -337,7 +337,7 @@
       persistTimer = null;
     }
     try {
-      const store = W.localStorage;
+      const store = getStore();
       if (!store) return;
       const entries = Array.from(memCache.entries());
       const picked = [];
@@ -352,18 +352,14 @@
       }
       const writePicked = (list) => {
         const obj = {};
-        for (let i = list.length - 1; i >= 0; i--) {
-          obj[list[i][0]] = list[i][1];
-        }
+        for (let i = list.length - 1; i >= 0; i--) obj[list[i][0]] = list[i][1];
         store.setItem(LOCAL_CACHE_KEY, JSON.stringify(obj));
       };
       try {
         writePicked(picked);
       } catch (_) {
         if (picked.length > 4) {
-          try {
-            writePicked(picked.slice(0, Math.floor(picked.length / 2)));
-          } catch (_) {}
+          try { writePicked(picked.slice(0, Math.floor(picked.length / 2))); } catch (_) {}
         }
       }
     } catch (_) {}
@@ -392,20 +388,13 @@
     loadLocalStorageCache();
     let storageEntries = 0;
     try {
-      const store = W.localStorage;
-      const raw = store ? store.getItem(LOCAL_CACHE_KEY) : '';
+      const raw = getStore()?.getItem(LOCAL_CACHE_KEY) || '';
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') {
-          storageEntries = Object.keys(parsed).length;
-        }
+        if (parsed && typeof parsed === 'object') storageEntries = Object.keys(parsed).length;
       }
     } catch (_) {}
-    return {
-      ok: true,
-      memEntries: memCache.size,
-      storageEntries,
-    };
+    return { ok: true, memEntries: memCache.size, storageEntries };
   }
 
   function clearLocalCache() {
@@ -416,24 +405,14 @@
     const cleared = memCache.size;
     memCache.clear();
     failedSigs.clear();
-    try {
-      const store = W.localStorage;
-      if (store && typeof store.removeItem === 'function') {
-        store.removeItem(LOCAL_CACHE_KEY);
-      }
-    } catch (_) {}
-    return {
-      ok: true,
-      cleared,
-      memEntries: 0,
-      storageEntries: 0,
-    };
+    try { getStore()?.removeItem?.(LOCAL_CACHE_KEY); } catch (_) {}
+    return { ok: true, cleared, memEntries: 0, storageEntries: 0 };
   }
 
   function isSigInCooldown(sig) {
     const rec = failedSigs.get(sig);
     if (!rec) return false;
-    if (Date.now() >= rec.retryAfter) {
+    if (Date.now() >= rec.u) {
       failedSigs.delete(sig);
       return false;
     }
@@ -443,33 +422,23 @@
   function recordSigFailure(sig) {
     if (!sig) return;
     const prev = failedSigs.get(sig);
-    const count = prev ? prev.count + 1 : 1;
-    const delayMs = count === 1 ? 15000 : count === 2 ? 45000 : 120000;
-    failedSigs.set(sig, { count, retryAfter: Date.now() + delayMs });
+    const c = prev ? prev.c + 1 : 1;
+    failedSigs.set(sig, { c, u: Date.now() + (c === 1 ? 15000 : c === 2 ? 45000 : 120000) });
   }
 
   function getBridge() {
     return W.__agPrismThoughtBridge || null;
   }
 
-  // Strictly prioritize `__agPrismThoughtBridge` over raw V8 CDP binding `__agPrismThoughtCall(jsonStr) -> void`!
   function callDaemonRpc(payload) {
     try {
       const br = getBridge();
       if (br) {
         const act = payload && payload.action;
-        if (act === 'cache-stats' && typeof br.cacheStats === 'function') {
-          return Promise.resolve().then(() => br.cacheStats());
-        }
-        if (act === 'clear-cache' && typeof br.clearCache === 'function') {
-          return Promise.resolve().then(() => br.clearCache());
-        }
-        if (act === 'cancel-translate' && typeof br.cancelTranslate === 'function') {
-          return Promise.resolve().then(() => br.cancelTranslate(payload));
-        }
-        if (typeof br.call === 'function') {
-          return Promise.resolve().then(() => br.call(payload));
-        }
+        if (act === 'cache-stats' && typeof br.cacheStats === 'function') return Promise.resolve().then(() => br.cacheStats());
+        if (act === 'clear-cache' && typeof br.clearCache === 'function') return Promise.resolve().then(() => br.clearCache());
+        if (act === 'cancel-translate' && typeof br.cancelTranslate === 'function') return Promise.resolve().then(() => br.cancelTranslate(payload));
+        if (typeof br.call === 'function') return Promise.resolve().then(() => br.call(payload));
       }
       if (typeof W.__agPrismThoughtCall === 'function') {
         const ret = W.__agPrismThoughtCall(payload);
@@ -480,24 +449,17 @@
   }
 
   function syncDocViewAttribute() {
-    try {
-      const docEl = typeof document !== 'undefined' && document.documentElement;
-      if (docEl && docEl.setAttribute) {
-        docEl.setAttribute('data-ag-prism-thought-view', currentViewMode);
-      }
-    } catch (_) {}
+    sa(docRoot(), 'data-ag-prism-thought-view', currentViewMode);
   }
 
   function ensureInitialized() {
     loadLocalStorageCache();
     loadViewModePreference();
-    try {
-      const docEl = typeof document !== 'undefined' && document.documentElement;
-      if (docEl && docEl.getAttribute('data-ag-prism-thought-owner') !== OWNER_ID) {
-        docEl.setAttribute('data-ag-prism-thought-owner', OWNER_ID);
-      }
-      syncDocViewAttribute();
-    } catch (_) {}
+    const rootEl = docRoot();
+    if (rootEl && ga(rootEl, 'data-ag-prism-thought-owner') !== OWNER_ID) {
+      sa(rootEl, 'data-ag-prism-thought-owner', OWNER_ID);
+    }
+    syncDocViewAttribute();
 
     if (cacheWarmed) return;
     cacheWarmed = true;
@@ -506,14 +468,10 @@
       br.call({ action: 'get-cache' })
         .then((res) => {
           const nextTag = res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : '');
-          if (nextTag && nextTag !== activeStyleTag) {
-            activeStyleTag = nextTag;
-          }
+          if (nextTag && nextTag !== activeStyleTag) activeStyleTag = nextTag;
           if (!hasExplicitHostView && (res?.viewMode === 'bilingual' || res?.viewMode === 'immersive')) {
             let hasLocalPref = false;
-            try {
-              hasLocalPref = Boolean(W.localStorage && W.localStorage.getItem(VIEW_MODE_STORAGE_KEY));
-            } catch (_) {}
+            try { hasLocalPref = Boolean(W.localStorage?.getItem(VIEW_MODE_STORAGE_KEY)); } catch (_) {}
             if (!hasLocalPref && res.viewMode !== currentViewMode) {
               currentViewMode = res.viewMode;
               syncDocViewAttribute();
@@ -528,9 +486,7 @@
                 added++;
               }
             }
-            if (added > 0) {
-              persistLocalStorageCache();
-            }
+            if (added > 0) persistLocalStorageCache();
           }
           scheduleScan(20);
         })
@@ -539,181 +495,148 @@
   }
 
   function cancelFlushHandle(entry) {
-    if (!entry || !entry.flushTimer) return;
-    if (entry.flushIsRaf && typeof cancelAnimationFrame === 'function') {
-      cancelAnimationFrame(entry.flushTimer);
-    } else {
-      clearTimeout(entry.flushTimer);
+    if (!entry) return;
+    const caf = getCafFn();
+    if (entry.pRaf) {
+      if (caf) caf(entry.pRaf);
+      entry.pRaf = null;
     }
-    entry.flushTimer = null;
-    entry.flushIsRaf = false;
+    if (!entry.fTm) return;
+    if (entry.fRaf && caf) caf(entry.fTm);
+    else clearTimeout(entry.fTm);
+    entry.fTm = null;
+    entry.fRaf = false;
   }
 
   function cancelTranslateRequest(entry) {
-    if (!entry || entry.cancelled) return;
-    entry.cancelled = true;
+    if (!entry || entry.x) return;
+    entry.x = true;
     cancelFlushHandle(entry);
-    if (entry.requestId) {
-      void callDaemonRpc({ action: 'cancel-translate', requestId: entry.requestId }).catch(() => {});
+    if (entry.id) {
+      void callDaemonRpc({ action: 'cancel-translate', requestId: entry.id }).catch(() => {});
     }
   }
 
   function applyPanelViewMode(panel) {
     if (!panel) return;
     const ov = findDirectOverlay(panel);
-    const isFailed = panel.getAttribute('data-op-zh-failed') === '1';
-    const manualRaw = panel.getAttribute('data-op-manual-raw');
+    const isFailed = ga(panel, 'data-op-zh-failed') === '1';
+    const manualRaw = ga(panel, 'data-op-manual-raw');
+    const shouldShowRaw = isFailed || (manualRaw === '1' ? true : manualRaw === '0' ? false : currentViewMode === 'bilingual');
 
-    let shouldShowRaw = false;
-    if (isFailed) {
-      shouldShowRaw = true;
-    } else if (manualRaw === '1') {
-      shouldShowRaw = true;
-    } else if (manualRaw === '0') {
-      shouldShowRaw = false;
-    } else {
-      shouldShowRaw = currentViewMode === 'bilingual';
-    }
+    if (shouldShowRaw) sa(panel, 'data-op-show-raw', '1');
+    else ra(panel, 'data-op-show-raw');
 
-    if (shouldShowRaw) {
-      panel.setAttribute('data-op-show-raw', '1');
-    } else {
-      panel.removeAttribute('data-op-show-raw');
-    }
-
-    if (currentViewMode === 'bilingual' && shouldShowRaw && !isFailed) {
-      panel.setAttribute('data-op-bilingual', '1');
-    } else {
-      panel.removeAttribute('data-op-bilingual');
-    }
+    if (currentViewMode === 'bilingual' && shouldShowRaw && !isFailed) sa(panel, 'data-op-bilingual', '1');
+    else ra(panel, 'data-op-bilingual');
 
     if (ov) {
       const toggleBtn = findChildByClass(ov, 'ag-prism-thought-raw-toggle');
       if (toggleBtn) {
-        toggleBtn.setAttribute('aria-pressed', String(shouldShowRaw));
+        sa(toggleBtn, 'aria-pressed', String(shouldShowRaw));
         const t = getClientPack();
-        toggleBtn.textContent = shouldShowRaw ? t.rawHide : t.rawShow;
+        toggleBtn.textContent = shouldShowRaw ? t[1] : t[0];
       }
     }
   }
 
   function refreshAllOverlayLocaleStrings() {
-    if (typeof document === 'undefined') return;
     const t = getClientPack();
-    document.querySelectorAll('.ag-prism-thought-overlay[data-op-thought="1"]').forEach((ov) => {
+    qsa(SEL_OVERLAY).forEach((ov) => {
       const panel = ov.parentElement;
-      const fallbackBadge = findChildByClass(ov, 'ag-prism-thought-fallback-badge');
-      if (fallbackBadge) {
-        fallbackBadge.textContent = t.fallback;
-        fallbackBadge.title = t.fallbackTitle;
+      const fb = findChildByClass(ov, 'ag-prism-thought-fallback-badge');
+      if (fb) {
+        fb.textContent = t[2];
+        fb.title = t[3];
       }
-      const retranslateBtn = findChildByClass(ov, 'ag-prism-thought-retranslate-btn');
-      if (retranslateBtn) {
-        retranslateBtn.title = t.retranslateTitle;
-        retranslateBtn.setAttribute('aria-label', t.retranslateTitle);
+      const rb = findChildByClass(ov, 'ag-prism-thought-retranslate-btn');
+      if (rb) {
+        rb.title = t[4];
+        sa(rb, 'aria-label', t[4]);
       }
-      const toggleBtn = findChildByClass(ov, 'ag-prism-thought-raw-toggle');
-      if (toggleBtn) {
-        const showingRaw = Boolean(panel && panel.getAttribute('data-op-show-raw') === '1');
-        toggleBtn.textContent = showingRaw ? t.rawHide : t.rawShow;
+      const tb = findChildByClass(ov, 'ag-prism-thought-raw-toggle');
+      if (tb) {
+        tb.textContent = ga(panel, 'data-op-show-raw') === '1' ? t[1] : t[0];
       }
       const body = findChildByClass(ov, 'ag-prism-thought-body');
       if (body) {
         const errBar = findChildByClass(body, 'ag-prism-thought-error-bar');
         if (errBar) {
           const errTxt = findChildByClass(errBar, 'ag-prism-thought-error-text');
-          if (errTxt) errTxt.textContent = t.errorText;
+          if (errTxt) errTxt.textContent = t[5];
           const retryBtn = findChildByClass(errBar, 'ag-prism-thought-retry-btn');
-          if (retryBtn) retryBtn.textContent = t.retryBtn;
+          if (retryBtn) retryBtn.textContent = t[6];
         }
         const pendingHint = findChildByClass(body, 'ag-prism-thought-pending-hint');
-        if (pendingHint && pendingHint.getAttribute) {
-          const kind = pendingHint.getAttribute('data-pending-kind');
-          if (kind === 'machine') pendingHint.textContent = t.pendingMachine;
-          else if (kind === 'ai') pendingHint.textContent = t.pendingAi;
-          else if (kind === 'streaming') pendingHint.textContent = t.pendingStreaming;
-          else if (kind === 'settling') pendingHint.textContent = t.pendingSettling;
-        }
+        const kind = ga(pendingHint, 'data-pending-kind');
+        if (kind === 'machine') pendingHint.textContent = t[7];
+        else if (kind === 'ai') pendingHint.textContent = t[8];
+        else if (kind === 'streaming') pendingHint.textContent = t[9];
+        else if (kind === 'settling') pendingHint.textContent = t[10];
       }
     });
   }
 
   function refreshAllPanelViewModes() {
-    if (typeof document === 'undefined') return;
-    document.querySelectorAll('.ag-prism-thought-overlay[data-op-thought="1"]').forEach((ov) => {
+    qsa(SEL_OVERLAY).forEach((ov) => {
       if (ov.parentElement) applyPanelViewMode(ov.parentElement);
     });
   }
 
+  const PANEL_CLEAN_ATTRS = [
+    'data-op-zh-ready', 'data-op-zh-pending', 'data-op-zh-failed', 'data-op-zh-fallback',
+    'data-op-zh-sig', 'data-op-show-raw', 'data-op-manual-raw', 'data-op-bilingual', 'data-op-thought-panel',
+  ];
+
   function cleanSinglePanelAttributes(panel) {
     if (!panel) return;
+    clearPanelStreamState(panel);
     lockedHeights.delete(panel);
     clearPanelWaitTimer(panel);
     panelMeta.delete(panel);
     const ov = findDirectOverlay(panel);
     if (ov) ov.remove();
-    panel.removeAttribute('data-op-zh-ready');
-    panel.removeAttribute('data-op-zh-pending');
-    panel.removeAttribute('data-op-zh-failed');
-    panel.removeAttribute('data-op-zh-fallback');
-    panel.removeAttribute('data-op-zh-sig');
-    panel.removeAttribute('data-op-show-raw');
-    panel.removeAttribute('data-op-manual-raw');
-    panel.removeAttribute('data-op-bilingual');
-    panel.removeAttribute('data-op-thought-panel');
+    raList(panel, PANEL_CLEAN_ATTRS);
     if (panel.style) panel.style.removeProperty('min-height');
   }
 
   function releasePrismOverlays() {
     clearAllWaitTimers(false);
-    for (const entry of inflightBySig.values()) {
-      cancelTranslateRequest(entry);
-    }
+    for (const entry of inflightBySig.values()) cancelTranslateRequest(entry);
     inflightBySig.clear();
-    if (typeof document === 'undefined') return;
-    document.querySelectorAll('.ag-prism-thought-overlay[data-op-thought="1"]').forEach((ov) => {
+    qsa(SEL_OVERLAY).forEach((ov) => {
       const panel = ov.parentElement;
       ov.remove();
       if (panel) cleanSinglePanelAttributes(panel);
     });
-    document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]').forEach((btn) => {
-      if (btn && btn.nextElementSibling) {
-        cleanSinglePanelAttributes(btn.nextElementSibling);
-      }
+    qsa(SEL_TRIGGER).forEach((btn) => {
+      if (btn && btn.nextElementSibling) cleanSinglePanelAttributes(btn.nextElementSibling);
     });
-    try {
-      document.documentElement?.removeAttribute?.('data-ag-prism-thought-owner');
-      document.documentElement?.removeAttribute?.('data-ag-prism-thought-view');
-    } catch (_) {}
+    const rootEl = docRoot();
+    ra(rootEl, 'data-ag-prism-thought-owner');
+    ra(rootEl, 'data-ag-prism-thought-view');
   }
 
   function isTriggerStreaming(btn) {
     if (!btn) return false;
-    if (btn.getAttribute('data-op-thought-state') === 'streaming') return true;
-    if (btn.getAttribute('data-ag-cs-spark-streaming') === '1') return true;
+    if (ga(btn, 'data-op-thought-state') === 'streaming' || ga(btn, 'data-ag-cs-spark-streaming') === '1') return true;
     try {
       if (
         btn.querySelector &&
         btn.querySelector(
           '.animate-shimmer-text, .animate-spin, .animate-pulse, [class*="animate-shimmer"], .ag-cs-thinking-spark[data-state="streaming"]'
         )
-      ) {
-        return true;
-      }
+      ) return true;
     } catch (_) {}
     const txt = (btn.textContent || '').trim();
-    if (!txt) return false;
-    if (/已思考|Thought\s+for|Thought\s+process/i.test(txt)) return false;
-    if (/thinking|正在思考|思考中|推演中|諗緊/i.test(txt) && !/\d+\s*(s|sec|秒|m|min|分)/i.test(txt)) {
-      return true;
-    }
-    return false;
+    if (!txt || /已思考|Thought\s+for|Thought\s+process/i.test(txt)) return false;
+    return /thinking|正在思考|思考中|推演中|諗緊/i.test(txt) && !/\d+\s*(s|sec|秒|m|min|分)/i.test(txt);
   }
 
   function isOverlayOrIgnoredElement(el) {
     if (!el || el.nodeType !== 1) return false;
     if (hasAttr(el, 'data-op-thought') || hasAttr(el, 'data-prism-ignore')) return true;
-    const cls = String((el.getAttribute && el.getAttribute('class')) || el.className || '');
+    const cls = String(ga(el, 'class') || el.className || '');
     return cls.includes('ag-prism-thought-overlay') || cls.includes('-zh-overlay');
   }
 
@@ -759,18 +682,15 @@
   }
 
   function parseFileHrefParts(safeHref) {
-    const hashIdx = safeHref.indexOf('#');
-    const baseHref = hashIdx >= 0 ? safeHref.slice(0, hashIdx) : safeHref;
-    const hash = hashIdx >= 0 ? safeHref.slice(hashIdx) : '';
-    let decodedPath = baseHref.replace(/^file:\/\/(?:localhost)?/i, '');
-    try {
-      decodedPath = decodeURIComponent(decodedPath);
-    } catch (_) {}
-    decodedPath = decodedPath.replace(/\\/g, '/');
-    const segs = decodedPath.split('/').filter(Boolean);
-    const basename = segs.length ? segs[segs.length - 1] : '';
-    const parentAndBase = segs.length >= 2 ? `${segs[segs.length - 2]}/${basename}` : basename;
-    return { baseHref, hash, decodedPath, basename, parentAndBase };
+    const hi = safeHref.indexOf('#');
+    const bh = hi >= 0 ? safeHref.slice(0, hi) : safeHref;
+    const h = hi >= 0 ? safeHref.slice(hi) : '';
+    let dp = bh.replace(/^file:\/\/(?:localhost)?/i, '');
+    try { dp = decodeURIComponent(dp); } catch (_) {}
+    dp = dp.replace(/\\/g, '/');
+    const segs = dp.split('/').filter(Boolean);
+    const bn = segs.length ? segs[segs.length - 1] : '';
+    return { bh, h, dp, bn, pb: segs.length >= 2 ? `${segs[segs.length - 2]}/${bn}` : bn };
   }
 
   function normalizeLineHashSuffix(rawLinePart) {
@@ -787,147 +707,77 @@
   }
 
   function createEmptyFileMap() {
-    return {
-      entries: [],
-      byNormHref: new Map(),
-      byToken: new Map(),
-      byBaseToken: new Map(),
-    };
+    return { list: [], nh: new Map(), tk: new Map(), btk: new Map() };
   }
 
-  function registerFileNodeInMap(node, fileMap) {
-    if (!node || !fileMap) return;
+  function registerFileNodeInMap(node, fm) {
+    if (!node || !fm) return;
     const tag = node.tagName ? String(node.tagName).toUpperCase() : '';
-    const rawHref =
-      (tag === 'A' && ((node.getAttribute && node.getAttribute('href')) || node.href)) ||
-      (node.getAttribute && (node.getAttribute('data-file-href') || node.getAttribute('data-href'))) ||
-      '';
+    const rawHref = (tag === 'A' && (ga(node, 'href') || node.href)) || ga(node, 'data-file-href') || ga(node, 'data-href') || '';
     let safeHref = sanitizeFileHref(rawHref);
-    let omniRelRef = '';
-    if (!safeHref && node.getAttribute) {
-      const rawPath =
-        node.getAttribute('data-file-path') ||
-        node.getAttribute('data-filepath') ||
-        node.getAttribute('data-omni-path') ||
-        '';
+    let omniRel = '';
+    if (!safeHref) {
+      const rawPath = ga(node, 'data-file-path') || ga(node, 'data-filepath') || ga(node, 'data-omni-path') || '';
       if (rawPath) {
-        const lineStart = node.getAttribute('data-line') || node.getAttribute('data-omni-line-start') || '';
-        const lineEnd = node.getAttribute('data-omni-line-end') || '';
-        const hashSuffix =
-          lineStart && /^\d+$/.test(lineStart)
-            ? lineEnd && /^\d+$/.test(lineEnd) && lineEnd !== lineStart
-              ? `#L${lineStart}-L${lineEnd}`
-              : `#L${lineStart}`
-            : '';
+        const ls = ga(node, 'data-line') || ga(node, 'data-omni-line-start') || '';
+        const le = ga(node, 'data-omni-line-end') || '';
+        const hashSfx = ls && /^\d+$/.test(ls) ? (le && /^\d+$/.test(le) && le !== ls ? `#L${ls}-L${le}` : `#L${ls}`) : '';
         const base = filePathToSafeHref(rawPath);
-        if (base) {
-          safeHref = hashSuffix ? `${base}${hashSuffix}` : base;
-        } else if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rawPath) && !/[\u0000-\u001f\u007f"'<>`]/.test(rawPath)) {
-          omniRelRef = `${rawPath.trim().replace(/\\/g, '/')}${hashSuffix}`;
+        if (base) safeHref = hashSfx ? `${base}${hashSfx}` : base;
+        else if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rawPath) && !/[\u0000-\u001f\u007f"'<>`]/.test(rawPath)) {
+          omniRel = `${rawPath.trim().replace(/\\/g, '/')}${hashSfx}`;
         }
       }
     }
-    if (!safeHref && !omniRelRef) return;
+    if (!safeHref && !omniRel) return;
 
-    const label = String(node.textContent || '')
-      .trim()
-      .replace(/^`+|`+$/g, '')
-      .trim();
+    const label = String(node.textContent || '').trim().replace(/^`+|`+$/g, '').trim();
+    let rec;
+    let bname = '';
+    let pbase = '';
+    let hsh = '';
+    let extraBase = '';
 
-    if (!safeHref && omniRelRef) {
-      const hashIdx = omniRelRef.indexOf('#');
-      const baseRel = hashIdx >= 0 ? omniRelRef.slice(0, hashIdx) : omniRelRef;
-      const hash = hashIdx >= 0 ? omniRelRef.slice(hashIdx) : '';
+    if (!safeHref) {
+      const hi = omniRel.indexOf('#');
+      const baseRel = hi >= 0 ? omniRel.slice(0, hi) : omniRel;
+      hsh = hi >= 0 ? omniRel.slice(hi) : '';
       const segs = baseRel.split('/').filter(Boolean);
-      const basename = segs.length ? segs[segs.length - 1] : '';
-      const parentAndBase = segs.length >= 2 ? `${segs[segs.length - 2]}/${basename}` : basename;
-      const rec = {
-        el: node,
-        href: '',
-        omniRelRef,
-        baseRel,
-        normHref: '',
-        baseHref: '',
-        hash,
-        decodedPathLower: `/${baseRel.toLowerCase()}`,
-        label,
-      };
-      fileMap.entries.push(rec);
-      const addExact = (k) => {
-        const key = String(k || '').trim().replace(/\\/g, '/').toLowerCase();
-        if (key && !fileMap.byToken.has(key)) fileMap.byToken.set(key, rec);
-      };
-      const addBase = (k) => {
-        const key = String(k || '').trim().replace(/\\/g, '/').toLowerCase();
-        if (key && !fileMap.byBaseToken.has(key)) fileMap.byBaseToken.set(key, rec);
-      };
-      if (label && (/[./\\]/.test(label) || /#L\d+/i.test(label))) {
-        addExact(label);
-        if (!/#L\d+|:\d+/i.test(label)) addBase(label);
-      }
-      if (basename && basename.includes('.')) {
-        if (hash) {
-          addExact(`${basename}${hash}`);
-          if (parentAndBase !== basename) addExact(`${parentAndBase}${hash}`);
-        }
-        addBase(basename);
-        if (parentAndBase !== basename) addBase(parentAndBase);
-        addBase(baseRel);
-      }
-      return;
+      bname = segs.length ? segs[segs.length - 1] : '';
+      pbase = segs.length >= 2 ? `${segs[segs.length - 2]}/${bname}` : bname;
+      extraBase = baseRel;
+      rec = { el: node, href: '', rel: omniRel, bRel: baseRel, bh: '', h: hsh, dp: `/${baseRel.toLowerCase()}` };
+    } else {
+      const nh = normalizeFileHrefForMatch(safeHref);
+      const pts = parseFileHrefParts(safeHref);
+      bname = pts.bn;
+      pbase = pts.pb;
+      hsh = pts.h;
+      rec = { el: node, href: safeHref, rel: '', bRel: '', bh: pts.bh, h: hsh, dp: pts.dp.toLowerCase() };
+      if (!fm.nh.has(nh)) fm.nh.set(nh, rec);
     }
 
-    const normHref = normalizeFileHrefForMatch(safeHref);
-    const parts = parseFileHrefParts(safeHref);
-    const rec = {
-      el: node,
-      href: safeHref,
-      omniRelRef: '',
-      normHref,
-      baseHref: parts.baseHref,
-      hash: parts.hash,
-      decodedPathLower: parts.decodedPath.toLowerCase(),
-      label,
-    };
-
-    fileMap.entries.push(rec);
-    if (!fileMap.byNormHref.has(normHref)) {
-      fileMap.byNormHref.set(normHref, rec);
-    }
-
-    const addExact = (k) => {
+    fm.list.push(rec);
+    const addMap = (mp, k) => {
       const key = String(k || '').trim().replace(/\\/g, '/').toLowerCase();
-      if (key && !fileMap.byToken.has(key)) fileMap.byToken.set(key, rec);
+      if (key && !mp.has(key)) mp.set(key, rec);
     };
-    const addBase = (k) => {
-      const key = String(k || '').trim().replace(/\\/g, '/').toLowerCase();
-      if (key && !fileMap.byBaseToken.has(key)) fileMap.byBaseToken.set(key, rec);
-    };
-
     if (label && (/[./\\]/.test(label) || /#L\d+/i.test(label))) {
-      addExact(label);
-      if (!/#L\d+|:\d+/i.test(label) && !parts.hash) {
-        addBase(label);
-      } else if (!/#L\d+|:\d+/i.test(label) && parts.hash) {
-        addBase(label);
-      }
+      addMap(fm.tk, label);
+      if (!/#L\d+|:\d+/i.test(label)) addMap(fm.btk, label);
     }
-
-    if (parts.basename && parts.basename.includes('.')) {
-      if (parts.hash) {
-        addExact(`${parts.basename}${parts.hash}`);
-        if (parts.parentAndBase !== parts.basename) {
-          addExact(`${parts.parentAndBase}${parts.hash}`);
-        }
+    if (bname && bname.includes('.')) {
+      if (hsh) {
+        addMap(fm.tk, `${bname}${hsh}`);
+        if (pbase !== bname) addMap(fm.tk, `${pbase}${hsh}`);
       }
-      addBase(parts.basename);
-      if (parts.parentAndBase !== parts.basename) {
-        addBase(parts.parentAndBase);
-      }
+      addMap(fm.btk, bname);
+      if (pbase !== bname) addMap(fm.btk, pbase);
+      if (extraBase) addMap(fm.btk, extraBase);
     }
   }
 
-  function collectCleanText(node, chunks, fileMap) {
+  function collectCleanText(node, chunks, fm) {
     if (!node) return;
     const nt = node.nodeType;
     if (nt === 3) {
@@ -942,17 +792,13 @@
       chunks.push('\n');
       return;
     }
-    if (fileMap) {
-      registerFileNodeInMap(node, fileMap);
-    }
+    if (fm) registerFileNodeInMap(node, fm);
     const isBlock = Boolean(BLOCK_TAGS[tag]);
     if (isBlock) chunks.push('\n');
-    const children = node.childNodes;
-    if (children && children.length) {
-      for (let i = 0; i < children.length; i++) {
-        collectCleanText(children[i], chunks, fileMap);
-      }
-    } else if (typeof node.textContent === 'string' && (!node.children || node.children.length === 0)) {
+    const chs = node.childNodes;
+    if (chs && chs.length) {
+      for (let i = 0; i < chs.length; i++) collectCleanText(chs[i], chunks, fm);
+    } else if (typeof node.textContent === 'string' && (!node.children || !node.children.length)) {
       chunks.push(node.textContent);
     }
     if (isBlock) chunks.push('\n');
@@ -961,135 +807,98 @@
   function extractRawEnglishText(panel) {
     if (!panel || !panel.childNodes) return '';
     const chunks = [];
-    const fileMap = createEmptyFileMap();
-    for (let i = 0; i < panel.childNodes.length; i++) {
-      collectCleanText(panel.childNodes[i], chunks, fileMap);
-    }
-    panelFileMaps.set(panel, fileMap);
+    const fm = createEmptyFileMap();
+    for (let i = 0; i < panel.childNodes.length; i++) collectCleanText(panel.childNodes[i], chunks, fm);
+    panelFileMaps.set(panel, fm);
     return normalizeTextKey(chunks.join(''));
   }
 
   function ensurePanelFileMap(panel) {
     if (!panel) return null;
-    const existing = panelFileMaps.get(panel);
-    if (existing) return existing;
-    extractRawEnglishText(panel);
+    if (!panelFileMaps.has(panel)) extractRawEnglishText(panel);
     return panelFileMaps.get(panel) || null;
   }
 
-  function lookupFileTarget(fileMap, rawCandidate) {
-    const cleaned = String(rawCandidate || '')
-      .trim()
-      .replace(/^`+|`+$/g, '')
-      .trim();
+  function lookupFileTarget(fm, rawCandidate) {
+    const cleaned = String(rawCandidate || '').trim().replace(/^`+|`+$/g, '').trim();
     if (!cleaned) return null;
 
     if (/^file:\/\//i.test(cleaned)) {
       const safe = sanitizeFileHref(cleaned);
       if (!safe) return null;
-      const hit = fileMap ? fileMap.byNormHref.get(normalizeFileHrefForMatch(safe)) : null;
-      return { href: safe, nativeEl: hit ? hit.el : null };
+      const hit = fm ? fm.nh.get(normalizeFileHrefForMatch(safe)) : null;
+      return { href: safe, el: hit ? hit.el : null };
     }
 
-    if (!fileMap || !fileMap.entries.length) return null;
+    if (!fm || !fm.list.length) return null;
 
     const normToken = cleaned.replace(/\\/g, '/').replace(/^\.\//, '');
-    const lowerToken = normToken.toLowerCase();
-
-    const exactHit = fileMap.byToken.get(lowerToken);
-    if (exactHit) {
-      return { href: exactHit.href, omniRelRef: exactHit.omniRelRef || '', nativeEl: exactHit.el };
-    }
+    const exactHit = fm.tk.get(normToken.toLowerCase());
+    if (exactHit) return { href: exactHit.href, rel: exactHit.rel, el: exactHit.el };
 
     const lineSplit = /^(.+?)(#L\d+(?:-L?\d+)?|:\d+(?:-\d+)?(?::\d+)?)$/i.exec(normToken);
     const basePart = (lineSplit ? lineSplit[1] : normToken).toLowerCase();
     const normHash = lineSplit ? normalizeLineHashSuffix(lineSplit[2]) : '';
 
     if (normHash) {
-      const withHashHit = fileMap.byToken.get(`${basePart}${normHash.toLowerCase()}`);
-      if (withHashHit) {
-        return { href: withHashHit.href, omniRelRef: withHashHit.omniRelRef || '', nativeEl: withHashHit.el };
-      }
+      const withHashHit = fm.tk.get(`${basePart}${normHash.toLowerCase()}`);
+      if (withHashHit) return { href: withHashHit.href, rel: withHashHit.rel, el: withHashHit.el };
     }
 
-    let baseRec = fileMap.byBaseToken.get(basePart) || null;
+    let baseRec = fm.btk.get(basePart) || null;
     if (!baseRec && basePart.includes('/')) {
       const suffix = `/${basePart}`;
-      for (let i = 0; i < fileMap.entries.length; i++) {
-        if (fileMap.entries[i].decodedPathLower.endsWith(suffix)) {
-          baseRec = fileMap.entries[i];
+      for (let i = 0; i < fm.list.length; i++) {
+        if (fm.list[i].dp.endsWith(suffix)) {
+          baseRec = fm.list[i];
           break;
         }
       }
     }
-
     if (!baseRec) return null;
 
-    if (baseRec.omniRelRef && !baseRec.href) {
-      const composedRel = normHash ? `${baseRec.baseRel}${normHash}` : baseRec.omniRelRef;
-      return {
-        href: '',
-        omniRelRef: composedRel,
-        nativeEl: !normHash || baseRec.hash.toLowerCase() === normHash.toLowerCase() ? baseRec.el : null,
-      };
+    const sameHash = !normHash || baseRec.h.toLowerCase() === normHash.toLowerCase();
+    if (baseRec.rel && !baseRec.href) {
+      return { href: '', rel: normHash ? `${baseRec.bRel}${normHash}` : baseRec.rel, el: sameHash ? baseRec.el : null };
     }
 
     if (normHash) {
-      const composedHref = sanitizeFileHref(`${baseRec.baseHref}${normHash}`);
+      const composedHref = sanitizeFileHref(`${baseRec.bh}${normHash}`);
       if (!composedHref) return null;
-      const exactAnchor = fileMap.byNormHref.get(normalizeFileHrefForMatch(composedHref));
-      return {
-        href: composedHref,
-        omniRelRef: '',
-        nativeEl: exactAnchor
-          ? exactAnchor.el
-          : !baseRec.hash || baseRec.hash.toLowerCase() === normHash.toLowerCase()
-          ? baseRec.el
-          : null,
-      };
+      const exactAnchor = fm.nh.get(normalizeFileHrefForMatch(composedHref));
+      return { href: composedHref, rel: '', el: exactAnchor ? exactAnchor.el : !baseRec.h || sameHash ? baseRec.el : null };
     }
 
-    return { href: baseRec.href, omniRelRef: '', nativeEl: baseRec.el };
+    return { href: baseRec.href, rel: '', el: baseRec.el };
   }
 
   function findLiveAnchorInTree(node, targetNormHref, targetBaseHref, out) {
     if (!node || node.nodeType !== 1 || isOverlayOrIgnoredElement(node)) return;
     const tag = node.tagName ? String(node.tagName).toUpperCase() : '';
-    if (tag === 'A' || (node.getAttribute && (node.getAttribute('data-file-href') || node.getAttribute('data-file-path')))) {
-      const rawHref = (node.getAttribute && (node.getAttribute('href') || node.getAttribute('data-file-href'))) || node.href || '';
-      const safe = sanitizeFileHref(rawHref);
+    if (tag === 'A' || ga(node, 'data-file-href') || ga(node, 'data-file-path')) {
+      const safe = sanitizeFileHref(ga(node, 'href') || ga(node, 'data-file-href') || node.href || '');
       if (safe) {
-        const norm = normalizeFileHrefForMatch(safe);
-        if (norm === targetNormHref && !out.exact) {
-          out.exact = node;
+        if (normalizeFileHrefForMatch(safe) === targetNormHref && !out.e) {
+          out.e = node;
           return;
         }
-        const base = parseFileHrefParts(safe).baseHref.toLowerCase();
-        if (base === targetBaseHref && !out.base) {
-          out.base = node;
-        }
+        if (parseFileHrefParts(safe).bh.toLowerCase() === targetBaseHref && !out.b) out.b = node;
       }
     }
-    const children = node.children || node.childNodes;
-    if (children && children.length) {
-      for (let i = 0; i < children.length && !out.exact; i++) {
-        findLiveAnchorInTree(children[i], targetNormHref, targetBaseHref, out);
-      }
+    const chs = node.children || node.childNodes;
+    if (chs && chs.length) {
+      for (let i = 0; i < chs.length && !out.e; i++) findLiveAnchorInTree(chs[i], targetNormHref, targetBaseHref, out);
     }
   }
 
   function resolveLiveNativeAnchor(panel, safeHref, cachedEl) {
-    if (cachedEl && cachedEl.isConnected !== false && typeof cachedEl.click === 'function') {
-      return cachedEl;
-    }
+    if (cachedEl && cachedEl.isConnected !== false && typeof cachedEl.click === 'function') return cachedEl;
     if (!panel || !panel.childNodes) return null;
-    const targetNormHref = normalizeFileHrefForMatch(safeHref);
-    const targetBaseHref = parseFileHrefParts(safeHref).baseHref.toLowerCase();
-    const out = { exact: null, base: null };
-    for (let i = 0; i < panel.childNodes.length && !out.exact; i++) {
-      findLiveAnchorInTree(panel.childNodes[i], targetNormHref, targetBaseHref, out);
-    }
-    return out.exact || out.base || null;
+    const tNorm = normalizeFileHrefForMatch(safeHref);
+    const tBase = parseFileHrefParts(safeHref).bh.toLowerCase();
+    const out = { e: null, b: null };
+    for (let i = 0; i < panel.childNodes.length && !out.e; i++) findLiveAnchorInTree(panel.childNodes[i], tNorm, tBase, out);
+    return out.e || out.b || null;
   }
 
   function openInOmniFallback(rawPathOrUri, safeHref, ev) {
@@ -1102,10 +911,10 @@
     let lineEnd = null;
     if (safeHref) {
       const parts = parseFileHrefParts(safeHref);
-      const hm = /^#L(\d+)(?:-L?(\d+))?/i.exec(parts.hash || '');
+      const hm = /^#L(\d+)(?:-L?(\d+))?/i.exec(parts.h || '');
       lineStart = hm ? parseInt(hm[1], 10) : null;
       lineEnd = hm && hm[2] ? parseInt(hm[2], 10) : lineStart;
-      filePath = parts.decodedPath || safeHref;
+      filePath = parts.dp || safeHref;
       if (/^\/[A-Za-z]:\//.test(filePath)) filePath = filePath.slice(1);
     } else {
       const hm = /#L(\d+)(?:-L?(\d+))?$/i.exec(filePath);
@@ -1115,8 +924,7 @@
         filePath = filePath.slice(0, hm.index);
       }
     }
-    if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-    if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+    stopEv(ev);
     void omni.openFile(filePath, {
       mode: ev && (ev.ctrlKey || ev.metaKey) ? 'external' : 'workbench',
       rawUri: safeHref || undefined,
@@ -1126,34 +934,27 @@
     return true;
   }
 
-  function createFilePill(doc, labelText, targetHref, nativeEl, panel, omniRelRef = '') {
+  function createFilePill(doc, labelText, targetHref, nativeEl, panel, omniRel = '') {
     const safeHref = sanitizeFileHref(targetHref);
     const cleanRel =
-      !safeHref && omniRelRef && !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(omniRelRef) && !/[\u0000-\u001f\u007f"'<>`]/.test(omniRelRef)
-        ? String(omniRelRef).trim()
+      !safeHref && omniRel && !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(omniRel) && !/[\u0000-\u001f\u007f"'<>`]/.test(omniRel)
+        ? String(omniRel).trim()
         : '';
-    if (!safeHref && !cleanRel) {
-      return doc.createTextNode(labelText);
-    }
-    const pill = doc.createElement(safeHref ? 'a' : 'span');
-    pill.className = 'ag-prism-thought-file-pill';
+    if (!safeHref && !cleanRel) return ctn(doc, labelText);
+    const pill = ce(doc, safeHref ? 'a' : 'span', 'ag-prism-thought-file-pill');
     if (safeHref) {
-      pill.setAttribute('href', safeHref);
-      pill.setAttribute('title', safeHref);
+      sa(pill, 'href', safeHref);
+      sa(pill, 'title', safeHref);
     } else {
-      pill.setAttribute('role', 'link');
-      pill.setAttribute('tabindex', '0');
-      pill.setAttribute('data-file-path', cleanRel);
-      pill.setAttribute('title', cleanRel);
+      sa(pill, 'role', 'link');
+      sa(pill, 'tabindex', '0');
+      sa(pill, 'data-file-path', cleanRel);
+      sa(pill, 'title', cleanRel);
     }
-    pill.setAttribute('data-file-pill', '1');
-    if (pill.style) {
-      pill.style.cursor = 'pointer';
-      pill.style.textDecoration = 'underline';
-      pill.style.textUnderlineOffset = '2px';
-    }
+    sa(pill, 'data-file-pill', '1');
+    if (pill.style) Object.assign(pill.style, { cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: '2px' });
     pill.textContent = labelText;
-    pill.addEventListener('click', (ev) => {
+    onClk(pill, (ev) => {
       if (ev && typeof ev.button === 'number' && ev.button !== 0) return;
       const targetAnchor = safeHref
         ? resolveLiveNativeAnchor(panel, safeHref, nativeEl)
@@ -1161,8 +962,7 @@
         ? nativeEl
         : null;
       if (targetAnchor && targetAnchor !== pill && typeof targetAnchor.click === 'function') {
-        if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-        if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+        stopEv(ev);
         targetAnchor.click();
         return;
       }
@@ -1171,7 +971,7 @@
     return pill;
   }
 
-  function appendPlainTextWithFileRefs(parent, plainSlice, doc, fileMap, panel) {
+  function appendPlainTextWithFileRefs(parent, plainSlice, doc, fm, panel) {
     if (!plainSlice) return;
     const refRe =
       /(file:\/\/[^\s"'<>()`\uff0c\u3002\uff1b\uff01\uff1f\u3001\uff08\uff09\u3010\u3011\]]+|(?:[A-Za-z0-9_.-]+[\\/])*[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,8}(?:#L\d+(?:-L?\d+)?|:\d+(?:-\d+)?)?)/g;
@@ -1185,160 +985,113 @@
         trailing = rawTok.slice(stripped.length);
         rawTok = stripped;
       }
-      const hit = lookupFileTarget(fileMap, rawTok);
-      if (hit && (hit.href || hit.omniRelRef)) {
-        if (m.index > last) {
-          parent.appendChild(doc.createTextNode(plainSlice.slice(last, m.index)));
-        }
+      const hit = lookupFileTarget(fm, rawTok);
+      if (hit && (hit.href || hit.rel)) {
+        if (m.index > last) ap(parent, ctn(doc, plainSlice.slice(last, m.index)));
         let displayLabel = rawTok;
         if (/^file:\/\//i.test(rawTok) && hit.href) {
           const parts = parseFileHrefParts(hit.href);
-          displayLabel = parts.basename ? `${parts.basename}${parts.hash}` : rawTok;
+          displayLabel = parts.bn ? `${parts.bn}${parts.h}` : rawTok;
         }
-        parent.appendChild(createFilePill(doc, displayLabel, hit.href, hit.nativeEl, panel, hit.omniRelRef));
-        if (trailing) {
-          parent.appendChild(doc.createTextNode(trailing));
-        }
+        ap(parent, createFilePill(doc, displayLabel, hit.href, hit.el, panel, hit.rel));
+        if (trailing) ap(parent, ctn(doc, trailing));
         last = m.index + m[0].length;
       }
     }
-    if (last < plainSlice.length) {
-      parent.appendChild(doc.createTextNode(plainSlice.slice(last)));
-    }
+    if (last < plainSlice.length) ap(parent, ctn(doc, plainSlice.slice(last)));
   }
 
-  function appendInlineFormatted(parent, lineText, doc, fileMap, panel, depth = 0) {
+  function appendInlineFormatted(parent, lineText, doc, fm, panel, depth = 0) {
     const tokenRe = /(\[([^\[\]\n]+)\]\(((?:\([^()\s]*\)|[^()\s])+)\)|`([^`\n]+)`|\*\*([^*\n]+)\*\*)/g;
     let lastIdx = 0;
     let m;
     while ((m = tokenRe.exec(lineText)) !== null) {
-      if (m.index > lastIdx) {
-        appendPlainTextWithFileRefs(parent, lineText.slice(lastIdx, m.index), doc, fileMap, panel);
-      }
+      if (m.index > lastIdx) appendPlainTextWithFileRefs(parent, lineText.slice(lastIdx, m.index), doc, fm, panel);
       if (m[2] !== undefined && m[3] !== undefined) {
         const cleanLabel = m[2].trim().replace(/^`+|`+$/g, '').trim() || m[2].trim();
         const rawUrl = m[3].trim();
         const safeHref = sanitizeFileHref(rawUrl);
         if (safeHref) {
-          const hit = lookupFileTarget(fileMap, safeHref) || lookupFileTarget(fileMap, cleanLabel);
-          parent.appendChild(createFilePill(doc, cleanLabel, safeHref, hit ? hit.nativeEl : null, panel));
+          const hit = lookupFileTarget(fm, safeHref) || lookupFileTarget(fm, cleanLabel);
+          ap(parent, createFilePill(doc, cleanLabel, safeHref, hit ? hit.el : null, panel));
         } else if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rawUrl)) {
-          const mapped = lookupFileTarget(fileMap, rawUrl) || lookupFileTarget(fileMap, cleanLabel);
-          if (mapped && (mapped.href || mapped.omniRelRef)) {
-            parent.appendChild(createFilePill(doc, cleanLabel, mapped.href, mapped.nativeEl, panel, mapped.omniRelRef));
+          const mapped = lookupFileTarget(fm, rawUrl) || lookupFileTarget(fm, cleanLabel);
+          if (mapped && (mapped.href || mapped.rel)) {
+            ap(parent, createFilePill(doc, cleanLabel, mapped.href, mapped.el, panel, mapped.rel));
           } else {
-            parent.appendChild(doc.createTextNode(cleanLabel));
+            ap(parent, ctn(doc, cleanLabel));
           }
         } else {
-          // Non-file scheme (e.g. javascript:, data:, http:): never render executable href, emit safe plain text only
-          parent.appendChild(doc.createTextNode(cleanLabel));
+          ap(parent, ctn(doc, cleanLabel));
         }
       } else if (m[4] !== undefined) {
         const codeInner = m[4];
-        const hit = lookupFileTarget(fileMap, codeInner);
-        if (hit && (hit.href || hit.omniRelRef)) {
-          parent.appendChild(createFilePill(doc, codeInner.trim(), hit.href, hit.nativeEl, panel, hit.omniRelRef));
+        const hit = lookupFileTarget(fm, codeInner);
+        if (hit && (hit.href || hit.rel)) {
+          ap(parent, createFilePill(doc, codeInner.trim(), hit.href, hit.el, panel, hit.rel));
         } else {
-          const code = doc.createElement('code');
-          code.className = 'ag-prism-thought-code';
+          const code = ce(doc, 'code', 'ag-prism-thought-code');
           code.textContent = codeInner;
-          parent.appendChild(code);
+          ap(parent, code);
         }
       } else if (m[5] !== undefined) {
-        const strong = doc.createElement('strong');
-        if (depth < 2) {
-          appendInlineFormatted(strong, m[5], doc, fileMap, panel, depth + 1);
-        } else {
-          strong.textContent = m[5];
-        }
-        parent.appendChild(strong);
+        const strong = ce(doc, 'strong');
+        if (depth < 2) appendInlineFormatted(strong, m[5], doc, fm, panel, depth + 1);
+        else strong.textContent = m[5];
+        ap(parent, strong);
       }
       lastIdx = m.index + m[0].length;
     }
-    if (lastIdx < lineText.length) {
-      appendPlainTextWithFileRefs(parent, lineText.slice(lastIdx), doc, fileMap, panel);
-    }
+    if (lastIdx < lineText.length) appendPlainTextWithFileRefs(parent, lineText.slice(lastIdx), doc, fm, panel);
   }
 
-  // Zero-textContent O(1) structural check for high-frequency streaming frames (0 string concatenation!)
   function quickStructureSig(panel) {
     if (!panel || !panel.childNodes) return null;
     const nodes = panel.childNodes;
-    let count = 0;
-    let first = null;
-    let last = null;
+    let c = 0;
+    let f = null;
+    let l = null;
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
       if (n.nodeType === 1 && isOverlayOrIgnoredElement(n)) continue;
-      count++;
-      if (count === 1) first = n;
-      last = n;
+      c++;
+      if (c === 1) f = n;
+      l = n;
     }
-    return { count, first, last };
+    return { c, f, l };
   }
 
-  // Fast O(1) fingerprint of non-overlay children count + edge lengths to avoid full tree walk on unchanged ready panels
   function quickPanelStamp(panel) {
     if (!panel || !panel.childNodes) return '';
     const nodes = panel.childNodes;
-    let count = 0;
-    let firstLen = 0;
-    let lastLen = 0;
+    let c = 0;
+    let fl = 0;
+    let ll = 0;
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
       if (n.nodeType === 1 && isOverlayOrIgnoredElement(n)) continue;
-      count++;
+      c++;
       const l = n.nodeType === 3 ? (n.nodeValue || '').length : (n.textContent || '').length;
-      if (count === 1) firstLen = l;
-      lastLen = l;
+      if (c === 1) fl = l;
+      ll = l;
     }
-    return `${count}:${firstLen}:${lastLen}`;
+    return `${c}:${fl}:${ll}`;
   }
 
-  function renderSafeMarkdownDom(container, markdownText, fileMap, panel) {
-    const hasStreamChild = Boolean(
-      (container.querySelector && container.querySelector('.ag-prism-thought-stream')) ||
-        findChildByClass(container, 'ag-prism-thought-stream')
-    );
-    const hasErrorChild = Boolean(findChildByClass(container, 'ag-prism-thought-error-bar'));
-    if (
-      !hasStreamChild &&
-      !hasErrorChild &&
-      container.getAttribute &&
-      container.getAttribute('data-raw-zh') === markdownText
-    ) {
-      return;
-    }
-    const doc = container.ownerDocument || document;
-    while (container.firstChild) container.removeChild(container.firstChild);
-    if (container.setAttribute) container.setAttribute('data-raw-zh', markdownText);
-
+  function splitMarkdownBlocks(markdownText) {
     const lines = String(markdownText || '').replace(/\r\n/g, '\n').split('\n');
+    const blocks = [];
     let inFence = false;
     let fenceLines = [];
-    let listEl = null;
-    let listType = '';
-
-    const flushList = () => {
-      if (listEl) {
-        container.appendChild(listEl);
-        listEl = null;
-        listType = '';
-      }
-    };
-
-    for (const rawLine of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const rawLine = lines[i];
       const trimmed = rawLine.trim();
       if (trimmed.startsWith('```')) {
-        flushList();
         if (!inFence) {
           inFence = true;
           fenceLines = [];
         } else {
-          const pre = doc.createElement('pre');
-          pre.className = 'ag-prism-thought-pre';
-          pre.textContent = fenceLines.join('\n');
-          container.appendChild(pre);
+          blocks.push({ type: 'pre', text: fenceLines.join('\n') });
           inFence = false;
           fenceLines = [];
         }
@@ -1348,42 +1101,198 @@
         fenceLines.push(rawLine);
         continue;
       }
-      if (!trimmed) {
-        flushList();
-        continue;
-      }
-
+      if (!trimmed) continue;
       const ulMatch = /^[-*•]\s+(.+)$/.exec(trimmed);
-      const olMatch = /^\d+[.)]\s+(.+)$/.exec(trimmed);
-      if (ulMatch || olMatch) {
-        const nextType = ulMatch ? 'ul' : 'ol';
-        if (!listEl || listType !== nextType) {
-          flushList();
-          listEl = doc.createElement(nextType);
-          listEl.className = nextType === 'ul' ? 'ag-prism-thought-ul' : 'ag-prism-thought-ol';
-          listType = nextType;
-        }
-        const li = doc.createElement('li');
-        li.className = 'ag-prism-thought-li';
-        appendInlineFormatted(li, (ulMatch || olMatch)[1], doc, fileMap, panel, 0);
-        listEl.appendChild(li);
+      if (ulMatch) {
+        blocks.push({ type: 'ul', text: ulMatch[1] });
         continue;
       }
-
-      flushList();
-      const p = doc.createElement('p');
-      p.className = 'ag-prism-thought-p';
-      appendInlineFormatted(p, trimmed.replace(/^#{1,4}\s+/, ''), doc, fileMap, panel, 0);
-      container.appendChild(p);
+      const olMatch = /^\d+[.)]\s+(.+)$/.exec(trimmed);
+      if (olMatch) {
+        blocks.push({ type: 'ol', text: olMatch[1] });
+        continue;
+      }
+      blocks.push({ type: 'p', text: trimmed.replace(/^#{1,4}\s+/, '') });
     }
-
     if (inFence && fenceLines.length) {
-      const pre = doc.createElement('pre');
-      pre.className = 'ag-prism-thought-pre';
-      pre.textContent = fenceLines.join('\n');
-      container.appendChild(pre);
+      blocks.push({ type: 'pre', text: fenceLines.join('\n') });
     }
-    flushList();
+    return blocks;
+  }
+
+  function advanceSafeChunkEnd(str, fromIdx, rawTake) {
+    const len = str.length;
+    let end = Math.min(len, fromIdx + Math.max(1, rawTake));
+    if (end >= len) return len;
+    // Never split UTF-16 surrogate pairs
+    const prevCode = str.charCodeAt(end - 1);
+    if (prevCode >= 0xd800 && prevCode <= 0xdbff && end < len) {
+      end++;
+    }
+    // Keep short ASCII identifier/word intact instead of chopping mid-word
+    const curCh = str.charCodeAt(end - 1);
+    const isAsciiWord = (c) => (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 95;
+    if (isAsciiWord(curCh)) {
+      let look = end;
+      while (look < len && look - end < 18 && isAsciiWord(str.charCodeAt(look))) {
+        look++;
+      }
+      if (look >= len || !isAsciiWord(str.charCodeAt(look))) {
+        end = look;
+      }
+    }
+    // Absorb trailing CJK/ASCII punctuation attached to current phrase
+    if (end < len && /[,.;:!?，。、；：！？）》」\]`]/.test(str[end])) {
+      end++;
+    }
+    return end;
+  }
+
+  function compactLiveChunks(st, now, flushAll) {
+    if (!st || !st.cks.length) return;
+    while (st.cks.length > 0 && (flushAll || now - st.cks[0].at >= CHUNK_FADE_TTL_MS || st.cks.length >= MAX_LIVE_CHUNKS)) {
+      const old = st.cks.shift();
+      if (old.tn) setTn(old.tn, (old.tn.nodeValue ?? old.tn.textContent ?? '') + old.tx);
+      old.sp.remove();
+    }
+  }
+
+  function mountStreamBlockContainer(st, blockType, doc, body) {
+    if (blockType === 'ul' || blockType === 'ol') {
+      if (!st.le || st.lt !== blockType) {
+        st.le = ce(doc, blockType, blockType === 'ul' ? 'ag-prism-thought-ul' : 'ag-prism-thought-ol');
+        st.lt = blockType;
+        ap(body, st.le);
+      }
+      return ap(st.le, ce(doc, 'li', 'ag-prism-thought-li'));
+    }
+    st.le = null;
+    st.lt = '';
+    return ap(body, ce(doc, blockType === 'pre' ? 'pre' : 'p', blockType === 'pre' ? 'ag-prism-thought-pre' : 'ag-prism-thought-p'));
+  }
+
+  function renderIncrementalStreamDom(panel, body, visibleText, now, animateChunks) {
+    const blocks = splitMarkdownBlocks(visibleText);
+    if (!blocks.length) return;
+    const doc = panel.ownerDocument || document;
+    sa(body, 'data-streaming-live', '1');
+    ra(body, 'data-raw-zh');
+
+    let st = panelStreamStates.get(panel);
+    let diverged = !st || st.bd !== body || blocks.length < st.bs.length;
+    if (!diverged) {
+      const checkLen = Math.min(st.bs.length - 1, blocks.length - 1);
+      for (let i = 0; i < checkLen; i++) {
+        if (st.bs[i].type !== blocks[i].type || st.bs[i].text !== blocks[i].text) {
+          diverged = true;
+          break;
+        }
+      }
+    }
+
+    if (diverged) {
+      clearEl(body);
+      st = { bd: body, bs: [], el: null, tn: null, raw: '', tp: '', le: null, lt: '', cks: [] };
+      panelStreamStates.set(panel, st);
+    }
+
+    const lastIdx = blocks.length - 1;
+
+    if (st.bs.length > 0 && st.bs.length - 1 < lastIdx) {
+      const prevIdx = st.bs.length - 1;
+      const targetPrev = blocks[prevIdx];
+      if (st.el && st.tn) {
+        if (targetPrev.text.startsWith(st.raw) && targetPrev.text.length > st.raw.length) {
+          const tail = targetPrev.text.slice(st.raw.length);
+          if (animateChunks && targetPrev.type !== 'pre') {
+            compactLiveChunks(st, now, false);
+            const sp = ce(doc, 'span', 'ag-prism-thought-chunk');
+            sp.textContent = tail;
+            ap(st.el, sp);
+            st.cks.push({ sp, tn: st.tn, tx: tail, at: now });
+          } else {
+            compactLiveChunks(st, now, true);
+            setTn(st.tn, (st.tn.nodeValue ?? st.tn.textContent ?? '') + tail);
+          }
+        }
+        st.bs[prevIdx] = { type: targetPrev.type, text: targetPrev.text };
+      }
+      st.el = null;
+      st.tn = null;
+      st.raw = '';
+      st.tp = '';
+    }
+
+    while (st.bs.length < lastIdx) {
+      const blk = blocks[st.bs.length];
+      const el = mountStreamBlockContainer(st, blk.type, doc, body);
+      if (blk.type === 'pre') el.textContent = blk.text;
+      else appendInlineFormatted(el, blk.text, doc, ensurePanelFileMap(panel), panel, 0);
+      st.bs.push({ type: blk.type, text: blk.text });
+    }
+
+    const curBlk = blocks[lastIdx];
+    if (!st.el || st.tp !== curBlk.type) {
+      if (st.el && st.bs.length > lastIdx) {
+        const staleTn = st.tn;
+        st.cks = st.cks.filter((c) => (c.tn === staleTn ? (c.sp.remove(), false) : true));
+        st.el.remove();
+      }
+      const el = mountStreamBlockContainer(st, curBlk.type, doc, body);
+      const tn = ap(el, ctn(doc, ''));
+      st.el = el;
+      st.tn = tn;
+      st.raw = '';
+      st.tp = curBlk.type;
+      st.bs[lastIdx] = { type: curBlk.type, text: '' };
+    }
+
+    if (!animateChunks || curBlk.type === 'pre') compactLiveChunks(st, now, true);
+    if (curBlk.text === st.raw) {
+      compactLiveChunks(st, now, false);
+      return;
+    }
+
+    if (curBlk.text.startsWith(st.raw)) {
+      const delta = curBlk.text.slice(st.raw.length);
+      if (!animateChunks || curBlk.type === 'pre') {
+        setTn(st.tn, (st.tn.nodeValue ?? st.tn.textContent ?? '') + delta);
+      } else {
+        compactLiveChunks(st, now, false);
+        const sp = ce(doc, 'span', 'ag-prism-thought-chunk');
+        sp.textContent = delta;
+        ap(st.el, sp);
+        st.cks.push({ sp, tn: st.tn, tx: delta, at: now });
+      }
+    } else {
+      const activeTn = st.tn;
+      st.cks = st.cks.filter((c) => (c.tn === activeTn ? (c.sp.remove(), false) : true));
+      setTn(activeTn, curBlk.text);
+    }
+    st.raw = curBlk.text;
+    st.bs[lastIdx].text = curBlk.text;
+  }
+
+  function renderSafeMarkdownDom(container, markdownText, fm, panel) {
+    const hasStreamChild =
+      hasAttr(container, 'data-streaming-live') ||
+      Boolean((container.querySelector && container.querySelector('.ag-prism-thought-stream')) || findChildByClass(container, 'ag-prism-thought-stream'));
+    if (!hasStreamChild && !findChildByClass(container, 'ag-prism-thought-error-bar') && ga(container, 'data-raw-zh') === markdownText) {
+      return;
+    }
+    ra(container, 'data-streaming-live');
+    const doc = container.ownerDocument || document;
+    clearEl(container);
+    sa(container, 'data-raw-zh', markdownText);
+
+    const blocks = splitMarkdownBlocks(markdownText);
+    const listCtx = { le: null, lt: '' };
+    for (let i = 0; i < blocks.length; i++) {
+      const blk = blocks[i];
+      const el = mountStreamBlockContainer(listCtx, blk.type, doc, container);
+      if (blk.type === 'pre') el.textContent = blk.text;
+      else appendInlineFormatted(el, blk.text, doc, fm, panel, 0);
+    }
   }
 
   function findDirectOverlay(panel) {
@@ -1394,14 +1303,10 @@
     if (!panel || currentMode === 'off') return;
     const rawText = extractRawEnglishText(panel);
     if (!rawText) return;
-    const srcSkelHash = hashKey(rawText, 'sig');
     const sig = computeSig(rawText, currentMode);
     failedSigs.delete(sig);
-
-    const mtKey = hashKey(rawText, 'mt');
-    const aiKey = hashKey(rawText, activeStyleTag || 'ai_technical');
-    memCache.delete(mtKey);
-    memCache.delete(aiKey);
+    memCache.delete(hashKey(rawText, 'mt'));
+    memCache.delete(hashKey(rawText, activeStyleTag || 'ai_technical'));
     persistLocalStorageCache();
 
     const existing = inflightBySig.get(sig);
@@ -1409,11 +1314,7 @@
       cancelTranslateRequest(existing);
       inflightBySig.delete(sig);
     }
-
-    startOrJoinTranslation(panel, rawText, currentMode, sig, srcSkelHash, true, {
-      force: true,
-      priority: 30000,
-    });
+    startOrJoinTranslation(panel, rawText, currentMode, sig, hashKey(rawText, 'sig'), true, { force: true, priority: 30000 });
   }
 
   function ensureOverlayShell(panel) {
@@ -1422,72 +1323,54 @@
     if (ov) return ov;
 
     const t = getClientPack();
-    ov = doc.createElement('div');
-    ov.className = 'ag-prism-thought-overlay';
-    ov.setAttribute('data-op-thought', '1');
-    ov.setAttribute('data-prism-ignore', '1');
-    ov.setAttribute('data-ag-no-i18n', '');
+    ov = ce(doc, 'div', 'ag-prism-thought-overlay');
+    sa(ov, 'data-op-thought', '1');
+    sa(ov, 'data-prism-ignore', '1');
+    sa(ov, 'data-ag-no-i18n', '');
 
-    const body = doc.createElement('span');
-    body.className = 'ag-prism-thought-body';
-    body.setAttribute('data-ag-no-i18n', '');
-    ov.appendChild(body);
+    const body = ce(doc, 'span', 'ag-prism-thought-body');
+    sa(body, 'data-ag-no-i18n', '');
+    ap(ov, body);
 
-    const fallbackBadge = doc.createElement('span');
-    fallbackBadge.className = 'ag-prism-thought-fallback-badge';
-    fallbackBadge.setAttribute('data-testid', 'thought-fallback-badge');
-    fallbackBadge.hidden = true;
-    fallbackBadge.textContent = t.fallback;
-    fallbackBadge.title = t.fallbackTitle;
-    if (fallbackBadge.style) {
-      fallbackBadge.style.display = 'none';
-      fallbackBadge.style.fontSize = '11px';
-      fallbackBadge.style.padding = '1px 6px';
-      fallbackBadge.style.borderRadius = '999px';
-      fallbackBadge.style.opacity = '0.85';
-      fallbackBadge.style.marginRight = '4px';
+    const fb = ce(doc, 'span', 'ag-prism-thought-fallback-badge');
+    sa(fb, 'data-testid', 'thought-fallback-badge');
+    fb.hidden = true;
+    fb.textContent = t[2];
+    fb.title = t[3];
+    if (fb.style) {
+      Object.assign(fb.style, { display: 'none', fontSize: '11px', padding: '1px 6px', borderRadius: '999px', opacity: '0.85', marginRight: '4px' });
     }
-    ov.appendChild(fallbackBadge);
+    ap(ov, fb);
 
-    const retranslateBtn = doc.createElement('button');
-    retranslateBtn.type = 'button';
-    retranslateBtn.className = 'ag-prism-thought-retranslate-btn';
-    retranslateBtn.setAttribute('data-no-press-spring', '1');
-    retranslateBtn.setAttribute('data-testid', 'thought-retranslate-btn');
-    retranslateBtn.hidden = true;
-    retranslateBtn.textContent = '↻';
-    retranslateBtn.title = t.retranslateTitle;
-    retranslateBtn.setAttribute('aria-label', t.retranslateTitle);
-    if (retranslateBtn.style) {
-      retranslateBtn.style.display = 'none';
-      retranslateBtn.style.opacity = '0.6';
-      retranslateBtn.style.cursor = 'pointer';
-      retranslateBtn.style.marginRight = '4px';
-    }
-    retranslateBtn.addEventListener('click', (ev) => {
-      if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+    const rb = ce(doc, 'button', 'ag-prism-thought-retranslate-btn');
+    rb.type = 'button';
+    sa(rb, 'data-no-press-spring', '1');
+    sa(rb, 'data-testid', 'thought-retranslate-btn');
+    rb.hidden = true;
+    rb.textContent = '↻';
+    rb.title = t[4];
+    sa(rb, 'aria-label', t[4]);
+    if (rb.style) Object.assign(rb.style, { display: 'none', opacity: '0.6', cursor: 'pointer', marginRight: '4px' });
+    onClk(rb, (ev) => {
+      stopEv(ev);
       triggerSingleBlockRetranslate(panel);
     });
-    ov.appendChild(retranslateBtn);
+    ap(ov, rb);
 
-    const toggleBtn = doc.createElement('button');
-    toggleBtn.type = 'button';
-    toggleBtn.className = 'ag-prism-thought-raw-toggle';
-    toggleBtn.setAttribute('data-no-press-spring', '1');
-    const showingRaw = panel.getAttribute('data-op-show-raw') === '1';
-    toggleBtn.setAttribute('aria-pressed', String(showingRaw));
-    toggleBtn.textContent = showingRaw ? t.rawHide : t.rawShow;
-    toggleBtn.addEventListener('click', (ev) => {
-      if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
-      const currentlyShowing = panel.getAttribute('data-op-show-raw') === '1';
-      panel.setAttribute('data-op-manual-raw', currentlyShowing ? '0' : '1');
+    const tb = ce(doc, 'button', 'ag-prism-thought-raw-toggle');
+    tb.type = 'button';
+    sa(tb, 'data-no-press-spring', '1');
+    const showingRaw = ga(panel, 'data-op-show-raw') === '1';
+    sa(tb, 'aria-pressed', String(showingRaw));
+    tb.textContent = showingRaw ? t[1] : t[0];
+    onClk(tb, (ev) => {
+      stopEv(ev);
+      sa(panel, 'data-op-manual-raw', ga(panel, 'data-op-show-raw') === '1' ? '0' : '1');
       applyPanelViewMode(panel);
     });
-    ov.appendChild(toggleBtn);
+    ap(ov, tb);
 
-    panel.setAttribute('data-op-thought-panel', '1');
+    sa(panel, 'data-op-thought-panel', '1');
     panel.insertBefore(ov, panel.firstChild);
     return ov;
   }
@@ -1495,175 +1378,138 @@
   function syncOverlayBadges(ov, panel, isFallback, isReady) {
     if (!ov) return;
     const t = getClientPack();
-    const fallbackBadge = findChildByClass(ov, 'ag-prism-thought-fallback-badge');
-    if (fallbackBadge) {
-      fallbackBadge.hidden = !isFallback;
-      if (fallbackBadge.style) fallbackBadge.style.display = isFallback ? '' : 'none';
-      fallbackBadge.textContent = t.fallback;
-      fallbackBadge.title = t.fallbackTitle;
+    const fb = findChildByClass(ov, 'ag-prism-thought-fallback-badge');
+    if (fb) {
+      fb.hidden = !isFallback;
+      if (fb.style) fb.style.display = isFallback ? '' : 'none';
+      fb.textContent = t[2];
+      fb.title = t[3];
     }
     if (panel) {
-      if (isFallback) panel.setAttribute('data-op-zh-fallback', '1');
-      else panel.removeAttribute('data-op-zh-fallback');
+      if (isFallback) sa(panel, 'data-op-zh-fallback', '1');
+      else ra(panel, 'data-op-zh-fallback');
     }
-    const retranslateBtn = findChildByClass(ov, 'ag-prism-thought-retranslate-btn');
-    if (retranslateBtn) {
-      retranslateBtn.hidden = !isReady;
-      if (retranslateBtn.style) retranslateBtn.style.display = isReady ? '' : 'none';
-      retranslateBtn.disabled = false;
-      retranslateBtn.title = t.retranslateTitle;
-      retranslateBtn.setAttribute('aria-label', t.retranslateTitle);
+    const rb = findChildByClass(ov, 'ag-prism-thought-retranslate-btn');
+    if (rb) {
+      rb.hidden = !isReady;
+      if (rb.style) rb.style.display = isReady ? '' : 'none';
+      rb.disabled = false;
+      rb.title = t[4];
+      sa(rb, 'aria-label', t[4]);
     }
   }
 
   function renderPendingState(panel, message, pendingKind = '') {
     if (!panel) return;
-    // Never regress an already-rendered panel back to a tiny pending pill (prevents height collapse jank!)
     const existingOv = findDirectOverlay(panel);
-    if (panel.getAttribute('data-op-zh-ready') === '1' && existingOv && existingOv.getAttribute('data-pending') !== '1') {
-      const retranslateBtn = findChildByClass(existingOv, 'ag-prism-thought-retranslate-btn');
-      if (retranslateBtn) retranslateBtn.disabled = true;
+    if (ga(panel, 'data-op-zh-ready') === '1' && existingOv && ga(existingOv, 'data-pending') !== '1') {
+      const rb = findChildByClass(existingOv, 'ag-prism-thought-retranslate-btn');
+      if (rb) rb.disabled = true;
       return;
     }
+    clearPanelStreamState(panel);
     const ov = ensureOverlayShell(panel);
-    ov.setAttribute('data-pending', '1');
-    ov.removeAttribute('data-failed');
-    panel.removeAttribute('data-op-zh-failed');
+    sa(ov, 'data-pending', '1');
+    ra(ov, 'data-failed');
+    ra(panel, 'data-op-zh-failed');
     syncOverlayBadges(ov, panel, false, false);
 
     const body = findChildByClass(ov, 'ag-prism-thought-body');
     if (body) {
-      if (body.removeAttribute) body.removeAttribute('data-raw-zh');
+      ra(body, 'data-raw-zh');
       let hint = findChildByClass(body, 'ag-prism-thought-pending-hint');
       if (!hint) {
-        while (body.firstChild) body.removeChild(body.firstChild);
-        hint = (panel.ownerDocument || document).createElement('span');
-        hint.className = 'ag-prism-thought-pending-hint';
-        body.appendChild(hint);
+        clearEl(body);
+        hint = ap(body, ce(panel.ownerDocument || document, 'span', 'ag-prism-thought-pending-hint'));
       }
-      if (pendingKind && hint.setAttribute) {
-        hint.setAttribute('data-pending-kind', pendingKind);
-      }
-      if (hint.textContent !== message) {
-        hint.textContent = message;
-      }
+      if (pendingKind) sa(hint, 'data-pending-kind', pendingKind);
+      if (hint.textContent !== message) hint.textContent = message;
     }
-    if (panel.getAttribute('data-op-zh-pending') !== '1') {
-      panel.setAttribute('data-op-zh-pending', '1');
-    }
-    panel.removeAttribute('data-op-zh-ready');
+    if (ga(panel, 'data-op-zh-pending') !== '1') sa(panel, 'data-op-zh-pending', '1');
+    ra(panel, 'data-op-zh-ready');
   }
 
   function clearPendingKeepRaw(panel) {
-    if (!panel || panel.getAttribute('data-op-zh-ready') === '1') return;
+    if (!panel || ga(panel, 'data-op-zh-ready') === '1') return;
     lockedHeights.delete(panel);
     if (panel.style) panel.style.removeProperty('min-height');
-    panel.removeAttribute('data-op-zh-pending');
+    ra(panel, 'data-op-zh-pending');
     const ov = findDirectOverlay(panel);
-    if (ov && ov.getAttribute('data-pending') === '1') {
+    if (ov && ga(ov, 'data-pending') === '1') {
       ov.remove();
-      if (panel.getAttribute('data-op-zh-failed') !== '1') {
-        panel.removeAttribute('data-op-thought-panel');
-      }
+      if (ga(panel, 'data-op-zh-failed') !== '1') ra(panel, 'data-op-thought-panel');
     }
   }
 
   function renderFailedState(panel, rawText, mode, sig) {
     if (!panel) return;
+    clearPanelStreamState(panel);
     lockedHeights.delete(panel);
     if (panel.style) panel.style.removeProperty('min-height');
-    panel.removeAttribute('data-op-zh-pending');
+    ra(panel, 'data-op-zh-pending');
 
-    // If panel already had a valid ready translation (e.g. manual retranslate failed), preserve existing translation cleanly
     const existingOv = findDirectOverlay(panel);
-    if (panel.getAttribute('data-op-zh-ready') === '1' && existingOv) {
-      const retranslateBtn = findChildByClass(existingOv, 'ag-prism-thought-retranslate-btn');
-      if (retranslateBtn) retranslateBtn.disabled = false;
+    if (ga(panel, 'data-op-zh-ready') === '1' && existingOv) {
+      const rb = findChildByClass(existingOv, 'ag-prism-thought-retranslate-btn');
+      if (rb) rb.disabled = false;
       return;
     }
 
     const doc = panel.ownerDocument || document;
     const t = getClientPack();
     const ov = ensureOverlayShell(panel);
-    ov.removeAttribute('data-pending');
-    ov.setAttribute('data-failed', '1');
-    panel.removeAttribute('data-op-zh-ready');
-    panel.setAttribute('data-op-zh-failed', '1');
+    ra(ov, 'data-pending');
+    sa(ov, 'data-failed', '1');
+    ra(panel, 'data-op-zh-ready');
+    sa(panel, 'data-op-zh-failed', '1');
     syncOverlayBadges(ov, panel, false, false);
 
     const body = findChildByClass(ov, 'ag-prism-thought-body');
     if (body) {
-      if (body.removeAttribute) body.removeAttribute('data-raw-zh');
-      while (body.firstChild) body.removeChild(body.firstChild);
+      ra(body, 'data-raw-zh');
+      clearEl(body);
+      const errBar = ce(doc, 'span', 'ag-prism-thought-error-bar');
+      if (errBar.style) Object.assign(errBar.style, { display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '12px', opacity: '0.82' });
+      const errTxt = ce(doc, 'span', 'ag-prism-thought-error-text');
+      errTxt.textContent = t[5];
+      ap(errBar, errTxt);
 
-      const errBar = doc.createElement('span');
-      errBar.className = 'ag-prism-thought-error-bar';
-      if (errBar.style) {
-        errBar.style.display = 'inline-flex';
-        errBar.style.alignItems = 'center';
-        errBar.style.gap = '8px';
-        errBar.style.fontSize = '12px';
-        errBar.style.opacity = '0.82';
-      }
-
-      const errTxt = doc.createElement('span');
-      errTxt.className = 'ag-prism-thought-error-text';
-      errTxt.textContent = t.errorText;
-      errBar.appendChild(errTxt);
-
-      const retryBtn = doc.createElement('button');
+      const retryBtn = ce(doc, 'button', 'ag-prism-thought-retry-btn');
       retryBtn.type = 'button';
-      retryBtn.className = 'ag-prism-thought-retry-btn';
-      retryBtn.setAttribute('data-testid', 'thought-retry-btn');
-      retryBtn.setAttribute('data-no-press-spring', '1');
-      retryBtn.textContent = t.retryBtn;
-      if (retryBtn.style) {
-        retryBtn.style.cursor = 'pointer';
-        retryBtn.style.textDecoration = 'underline';
-      }
-      retryBtn.addEventListener('click', (ev) => {
-        if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-        if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+      sa(retryBtn, 'data-testid', 'thought-retry-btn');
+      sa(retryBtn, 'data-no-press-spring', '1');
+      retryBtn.textContent = t[6];
+      if (retryBtn.style) Object.assign(retryBtn.style, { cursor: 'pointer', textDecoration: 'underline' });
+      onClk(retryBtn, (ev) => {
+        stopEv(ev);
         failedSigs.delete(sig);
-        ov.removeAttribute('data-failed');
-        panel.removeAttribute('data-op-zh-failed');
+        ra(ov, 'data-failed');
+        ra(panel, 'data-op-zh-failed');
         applyPanelViewMode(panel);
         const curRaw = extractRawEnglishText(panel) || rawText;
         const activeMode = currentMode === 'off' ? mode : currentMode;
         const nextSig = computeSig(curRaw, activeMode);
         failedSigs.delete(nextSig);
-        startOrJoinTranslation(panel, curRaw, activeMode, nextSig, hashKey(curRaw, 'sig'), true, {
-          force: true,
-          priority: 30000,
-        });
+        startOrJoinTranslation(panel, curRaw, activeMode, nextSig, hashKey(curRaw, 'sig'), true, { force: true, priority: 30000 });
       });
-      errBar.appendChild(retryBtn);
-      body.appendChild(errBar);
+      ap(errBar, retryBtn);
+      ap(body, errBar);
     }
-
     applyPanelViewMode(panel);
   }
 
-  function renderTranslatedText(panel, text, isPartial, sig, engine = '') {
+  function renderTranslatedText(panel, text, isPartial, sig, engine = '', streamOpts = null) {
     if (!panel || typeof text !== 'string' || !text) return;
     const ov = ensureOverlayShell(panel);
-    if (hasAttr(ov, 'data-pending')) ov.removeAttribute('data-pending');
-    if (hasAttr(ov, 'data-failed')) ov.removeAttribute('data-failed');
-    if (hasAttr(panel, 'data-op-zh-failed')) panel.removeAttribute('data-op-zh-failed');
+    if (hasAttr(ov, 'data-pending')) ra(ov, 'data-pending');
+    if (hasAttr(ov, 'data-failed')) ra(ov, 'data-failed');
+    if (hasAttr(panel, 'data-op-zh-failed')) ra(panel, 'data-op-zh-failed');
     const body = findChildByClass(ov, 'ag-prism-thought-body');
     if (!body) return;
 
     const isFallback = engine === 'machine-fallback';
 
     if (isPartial) {
-      let streamEl = findChildByClass(body, 'ag-prism-thought-stream');
-      if (
-        streamEl &&
-        streamLastLenMap.get(streamEl) === text.length &&
-        panel.getAttribute('data-op-zh-ready') === '1'
-      ) {
-        return;
-      }
       if (!lockedHeights.has(panel)) {
         const curH = panel.offsetHeight || 0;
         if (curH > 0 && panel.style) {
@@ -1671,58 +1517,69 @@
           panel.style.minHeight = `${curH}px`;
         }
       }
-      if (hasAttr(body, 'data-raw-zh')) body.removeAttribute('data-raw-zh');
-      if (!streamEl) {
-        while (body.firstChild) body.removeChild(body.firstChild);
-        const doc = panel.ownerDocument || document;
-        streamEl = doc.createElement('p');
-        streamEl.className = 'ag-prism-thought-stream';
-        if (streamEl.setAttribute) streamEl.setAttribute('data-ag-no-i18n', '');
-        if (typeof doc.createTextNode === 'function') {
-          streamEl.appendChild(doc.createTextNode(text));
-        } else {
-          streamEl.textContent = text;
-        }
-        body.appendChild(streamEl);
+      if (streamOpts && streamOpts.inc) {
+        renderIncrementalStreamDom(panel, body, text, streamOpts.now || nowMs(), Boolean(streamOpts.anim && !isMotionOff()));
       } else {
-        const tn = streamEl.firstChild;
-        if (tn && tn.nodeType === 3) {
-          if ('nodeValue' in tn) tn.nodeValue = text;
-          else tn.textContent = text;
+        let streamEl = findChildByClass(body, 'ag-prism-thought-stream');
+        if (streamEl && streamLastLenMap.get(streamEl) === text.length && ga(panel, 'data-op-zh-ready') === '1') return;
+        if (hasAttr(body, 'data-raw-zh')) ra(body, 'data-raw-zh');
+        if (!streamEl) {
+          clearEl(body);
+          const doc = panel.ownerDocument || document;
+          streamEl = ce(doc, 'p', 'ag-prism-thought-stream');
+          sa(streamEl, 'data-ag-no-i18n', '');
+          if (typeof doc.createTextNode === 'function') ap(streamEl, ctn(doc, text));
+          else streamEl.textContent = text;
+          ap(body, streamEl);
         } else {
-          streamEl.textContent = text;
+          const tn = streamEl.firstChild;
+          if (tn && tn.nodeType === 3) setTn(tn, text);
+          else streamEl.textContent = text;
         }
+        streamLastLenMap.set(streamEl, text.length);
       }
-      streamLastLenMap.set(streamEl, text.length);
       syncOverlayBadges(ov, panel, isFallback, false);
     } else {
-      const prevScrollTop = typeof panel.scrollTop === 'number' ? panel.scrollTop : 0;
-      const fileMap = ensurePanelFileMap(panel);
-      renderSafeMarkdownDom(body, text, fileMap, panel);
-      lockedHeights.delete(panel);
-      if (panel.style && panel.style.minHeight) panel.style.removeProperty('min-height');
-      if (prevScrollTop > 0 && typeof panel.scrollTop === 'number') {
-        panel.scrollTop = prevScrollTop;
+      const commitFinalDom = () => {
+        panelSettleTimers.delete(panel);
+        panelStreamStates.delete(panel);
+        if (!panel.isConnected || currentMode === 'off') return;
+        const prevScrollTop = typeof panel.scrollTop === 'number' ? panel.scrollTop : 0;
+        renderSafeMarkdownDom(body, text, ensurePanelFileMap(panel), panel);
+        lockedHeights.delete(panel);
+        if (panel.style && panel.style.minHeight) panel.style.removeProperty('min-height');
+        if (prevScrollTop > 0 && typeof panel.scrollTop === 'number') panel.scrollTop = prevScrollTop;
+      };
+
+      const st = panelStreamStates.get(panel);
+      const now = nowMs();
+      const hasLive = Boolean(!isMotionOff() && st && st.cks && st.cks.length);
+      const remFadeMs = hasLive ? Math.max(0, CHUNK_FADE_TTL_MS - Math.max(0, now - st.cks[st.cks.length - 1].at)) : 0;
+
+      if (remFadeMs > 16) {
+        const prevT = panelSettleTimers.get(panel);
+        if (prevT) clearTimeout(prevT);
+        const timer = setTimeout(commitFinalDom, remFadeMs + 12);
+        if (timer && typeof timer.unref === 'function') timer.unref();
+        panelSettleTimers.set(panel, timer);
+      } else {
+        clearPanelStreamState(panel);
+        commitFinalDom();
       }
+
       syncOverlayBadges(ov, panel, isFallback, true);
       if (sig) {
         const effectiveSig = isFallback ? `${sig}:fallback` : sig;
-        if (panel.getAttribute('data-op-zh-sig') !== effectiveSig) {
-          panel.setAttribute('data-op-zh-sig', effectiveSig);
-        }
+        if (ga(panel, 'data-op-zh-sig') !== effectiveSig) sa(panel, 'data-op-zh-sig', effectiveSig);
         const meta = panelMeta.get(panel) || {};
-        meta.doneSig = effectiveSig;
-        meta.readyStamp = quickPanelStamp(panel);
+        meta.ds = effectiveSig;
+        meta.rs = quickPanelStamp(panel);
         panelMeta.set(panel, meta);
       }
     }
 
-    if (hasAttr(panel, 'data-op-zh-pending')) {
-      panel.removeAttribute('data-op-zh-pending');
-    }
-    if (panel.getAttribute('data-op-zh-ready') !== '1') {
-      panel.setAttribute('data-op-zh-ready', '1');
-    }
+    if (hasAttr(panel, 'data-op-zh-pending')) ra(panel, 'data-op-zh-pending');
+    if (ga(panel, 'data-op-zh-ready') !== '1') sa(panel, 'data-op-zh-ready', '1');
     applyPanelViewMode(panel);
   }
 
@@ -1740,19 +1597,14 @@
   }
 
   function bindPanelToInflight(entry, panel, expanded) {
-    if (panel && !entry.panels.includes(panel)) {
-      entry.panels.push(panel);
-    }
+    if (panel && !entry.ps.includes(panel)) entry.ps.push(panel);
     if (panel && expanded) {
-      if (entry.lastPartial) {
-        renderTranslatedText(panel, entry.lastPartial, true, null);
+      const shown = entry.sh || entry.lp;
+      if (shown) {
+        renderTranslatedText(panel, shown, true, null, '', { inc: Boolean(entry.sh), anim: false, now: nowMs() });
       } else {
         const t = getClientPack();
-        renderPendingState(
-          panel,
-          entry.mode === 'machine' ? t.pendingMachine : t.pendingAi,
-          entry.mode === 'machine' ? 'machine' : 'ai'
-        );
+        renderPendingState(panel, entry.m === 'machine' ? t[7] : t[8], entry.m === 'machine' ? 'machine' : 'ai');
       }
     }
   }
@@ -1764,21 +1616,15 @@
     if (!force) {
       const cached = findCachedTranslation(rawText, mode);
       if (cached) {
-        if (panel && expanded) {
-          renderTranslatedText(panel, cached, false, sig, mode === 'machine' ? 'machine' : 'ai');
-        }
+        if (panel && expanded) renderTranslatedText(panel, cached, false, sig, mode === 'machine' ? 'machine' : 'ai');
         return;
       }
-
       if (isSigInCooldown(sig)) {
-        if (panel && expanded && panel.getAttribute('data-op-zh-failed') !== '1') {
-          renderFailedState(panel, rawText, mode, sig);
-        }
+        if (panel && expanded && ga(panel, 'data-op-zh-failed') !== '1') renderFailedState(panel, rawText, mode, sig);
         return;
       }
-
       const existing = inflightBySig.get(sig);
-      if (existing && !existing.cancelled && Date.now() - existing.startedAt <= 75000) {
+      if (existing && !existing.x && Date.now() - existing.at <= 75000) {
         bindPanelToInflight(existing, panel, expanded);
         return;
       }
@@ -1795,149 +1641,214 @@
 
     const requestId = `op_tr_${Date.now().toString(36)}_${++reqSeq}`;
     const entry = {
-      sig,
-      requestId,
-      srcSkelHash,
-      srcStruct: panel ? quickStructureSig(panel) : null,
-      mode,
-      startedAt: Date.now(),
-      cancelled: false,
-      lastPartial: '',
-      lastFlushAt: 0,
-      pendingPartial: '',
-      flushTimer: null,
-      flushIsRaf: false,
-      panels: panel ? [panel] : [],
+      id: requestId,
+      sk: srcSkelHash,
+      sc: panel ? quickStructureSig(panel) : null,
+      m: mode,
+      at: Date.now(),
+      x: false,
+      lp: '',
+      tg: '',
+      sh: '',
+      cy: 0,
+      pa: 0,
+      pRaf: null,
+      dn: false,
+      fn: null,
+      fa: 0,
+      pp: '',
+      fTm: null,
+      fRaf: false,
+      ps: panel ? [panel] : [],
     };
     inflightBySig.set(sig, entry);
 
     if (panel && expanded) {
       const t = getClientPack();
-      renderPendingState(
-        panel,
-        mode === 'machine' ? t.pendingMachine : t.pendingAi,
-        mode === 'machine' ? 'machine' : 'ai'
-      );
+      renderPendingState(panel, mode === 'machine' ? t[7] : t[8], mode === 'machine' ? 'machine' : 'ai');
     }
 
-    const flushPartialToPanels = (partialStr) => {
-      const trimmed = String(partialStr || '').trimStart();
-      if (!trimmed || trimmed === entry.lastPartial || entry.cancelled) return;
-      entry.lastPartial = trimmed;
-      entry.lastFlushAt = Date.now();
-      entry.pendingPartial = '';
-      for (const p of entry.panels) {
-        if (!p || !p.isConnected) continue;
-        // Zero-textContent O(1) reference check during streaming: only read English text if child node references changed!
-        const curStruct = quickStructureSig(p);
-        if (
-          entry.srcStruct &&
-          curStruct &&
-          (curStruct.count !== entry.srcStruct.count ||
-            curStruct.first !== entry.srcStruct.first ||
-            curStruct.last !== entry.srcStruct.last)
-        ) {
-          const curRaw = extractRawEnglishText(p);
-          if (curRaw && hashKey(curRaw, 'sig') !== entry.srcSkelHash) continue;
-          entry.srcStruct = curStruct;
-        }
-        renderTranslatedText(p, trimmed, true, null);
+    const verifyPanel = (p) => {
+      if (!p || !p.isConnected) return false;
+      const cs = quickStructureSig(p);
+      if (entry.sc && cs && (cs.c !== entry.sc.c || cs.f !== entry.sc.f || cs.l !== entry.sc.l)) {
+        const curRaw = extractRawEnglishText(p);
+        if (curRaw && hashKey(curRaw, 'sig') !== entry.sk) return false;
+        entry.sc = cs;
       }
+      return true;
+    };
+
+    const flushPartialToPanels = (partialStr, streamOpts = null) => {
+      const trimmed = String(partialStr || '').trimStart();
+      if (!trimmed || trimmed === entry.lp || entry.x) return;
+      entry.lp = trimmed;
+      entry.fa = nowMs();
+      entry.pp = '';
+      for (const p of entry.ps) {
+        if (verifyPanel(p)) renderTranslatedText(p, trimmed, true, null, '', streamOpts);
+      }
+    };
+
+    const commitFinalPayloadToPanels = (pl) => {
+      if (inflightBySig.get(sig) === entry) inflightBySig.delete(sig);
+      if (!pl || currentMode === 'off' || entry.x) return;
+      for (const p of entry.ps) {
+        if (!p || !p.isConnected) continue;
+        const curRaw = extractRawEnglishText(p);
+        if (curRaw && hashKey(curRaw, 'sig') !== entry.sk) continue;
+        renderTranslatedText(p, pl.z, false, pl.s, pl.e);
+      }
+      scheduleScan(30);
+    };
+
+    const ensurePacerLoop = () => {
+      if (entry.pRaf || entry.x || currentMode === 'off') return;
+      const raf = getRafFn();
+      if (!raf) return;
+      const stepPacer = () => {
+        entry.pRaf = null;
+        if (currentMode === 'off' || entry.x) return;
+        const now = nowMs();
+        if (isMotionOff()) {
+          if (entry.dn && entry.fn) {
+            entry.sh = entry.fn.z;
+            commitFinalPayloadToPanels(entry.fn);
+          } else if (entry.tg) {
+            entry.sh = entry.tg;
+            flushPartialToPanels(entry.sh, { inc: true, anim: false, now });
+          }
+          return;
+        }
+
+        const target = entry.tg;
+        if (!target) return;
+        if (!target.startsWith(entry.sh)) {
+          let common = 0;
+          const lim = Math.min(target.length, entry.sh.length);
+          while (common < lim && target.charCodeAt(common) === entry.sh.charCodeAt(common)) common++;
+          entry.sh = target.slice(0, common);
+        }
+
+        const backlog = target.length - entry.sh.length;
+        if (backlog <= 0) {
+          if (entry.dn && entry.fn) commitFinalPayloadToPanels(entry.fn);
+          return;
+        }
+
+        const dt = entry.pa > 0 ? Math.min(64, Math.max(8, now - entry.pa)) : 16.67;
+        const basePerFrame = entry.dn
+          ? Math.max(3.2, backlog / 6.2)
+          : backlog > 48
+          ? Math.max(3.0, backlog / 9.5)
+          : Math.max(1.25, backlog / 11.5);
+
+        entry.cy += basePerFrame * (dt / 16.67);
+        const minChunk = backlog === 1 || entry.dn || now - entry.pa >= 26 ? 1 : 2;
+        if (entry.cy < minChunk) {
+          entry.pRaf = raf(stepPacer);
+          return;
+        }
+
+        const nextIdx = advanceSafeChunkEnd(target, entry.sh.length, Math.min(backlog, Math.floor(entry.cy)));
+        entry.cy = Math.max(0, entry.cy - (nextIdx - entry.sh.length));
+        entry.pa = now;
+        entry.sh = target.slice(0, nextIdx);
+
+        flushPartialToPanels(entry.sh, { inc: true, anim: true, now });
+
+        if (entry.sh.length < entry.tg.length) entry.pRaf = raf(stepPacer);
+        else if (entry.dn && entry.fn) commitFinalPayloadToPanels(entry.fn);
+      };
+      entry.pRaf = raf(stepPacer);
     };
 
     const scheduleAlignedStreamFlush = () => {
-      if (entry.flushTimer || entry.cancelled) return;
+      if (entry.fTm || entry.x) return;
       const stepFlush = () => {
-        entry.flushTimer = null;
-        entry.flushIsRaf = false;
-        if (currentMode === 'off' || entry.cancelled || !entry.pendingPartial) return;
-        const now = Date.now();
-        if (entry.lastFlushAt > 0 && now - entry.lastFlushAt < STREAM_FLUSH_MS) {
+        entry.fTm = null;
+        entry.fRaf = false;
+        if (currentMode === 'off' || entry.x || !entry.pp) return;
+        if (entry.fa > 0 && nowMs() - entry.fa < STREAM_FLUSH_MS) {
           scheduleAlignedStreamFlush();
           return;
         }
-        flushPartialToPanels(entry.pendingPartial);
+        flushPartialToPanels(entry.pp);
       };
-      if (typeof requestAnimationFrame === 'function') {
-        entry.flushIsRaf = true;
-        entry.flushTimer = requestAnimationFrame(stepFlush);
+      const raf = getRafFn();
+      if (raf) {
+        entry.fRaf = true;
+        entry.fTm = raf(stepFlush);
       } else {
-        entry.flushIsRaf = false;
-        entry.flushTimer = setTimeout(stepFlush, STREAM_FLUSH_MS);
+        entry.fRaf = false;
+        entry.fTm = setTimeout(stepFlush, STREAM_FLUSH_MS);
       }
     };
 
-    br.translateStream(
-      { text: rawText, mode, priority, requestId, force },
-      (partial) => {
-        if (currentMode === 'off' || entry.cancelled || typeof partial !== 'string' || !partial.trim()) return;
-        entry.pendingPartial = partial;
-        const now = Date.now();
-        if (entry.lastFlushAt === 0 && typeof requestAnimationFrame !== 'function') {
-          flushPartialToPanels(partial);
-        } else if (now - entry.lastFlushAt >= STREAM_FLUSH_MS && typeof requestAnimationFrame !== 'function') {
-          cancelFlushHandle(entry);
-          flushPartialToPanels(partial);
-        } else {
-          scheduleAlignedStreamFlush();
-        }
+    const failEntry = () => {
+      cancelFlushHandle(entry);
+      if (inflightBySig.get(sig) === entry) inflightBySig.delete(sig);
+      if (entry.x || currentMode === 'off') return;
+      recordSigFailure(sig);
+      for (const p of entry.ps) {
+        if (p && p.isConnected) renderFailedState(p, rawText, mode, sig);
       }
-    )
-      .then((res) => {
+    };
+
+    br.translateStream({ text: rawText, mode, priority, requestId, force }, (partial) => {
+      if (currentMode === 'off' || entry.x || typeof partial !== 'string' || !partial.trim()) return;
+      const trimmed = partial.trimStart();
+      if (!trimmed) return;
+      if (canUseSmoothStream()) {
+        entry.tg = trimmed;
+        ensurePacerLoop();
+        return;
+      }
+      entry.pp = trimmed;
+      const now = nowMs();
+      const immediate = !getRafFn() || isMotionOff();
+      if (entry.fa === 0 && immediate) flushPartialToPanels(trimmed);
+      else if (now - entry.fa >= STREAM_FLUSH_MS && immediate) {
         cancelFlushHandle(entry);
-        if (inflightBySig.get(sig) === entry) {
-          inflightBySig.delete(sig);
-        }
-        if (currentMode === 'off' || entry.cancelled || res?.cancelled) {
-          for (const p of entry.panels) {
-            if (p && p.isConnected && p.getAttribute('data-op-zh-ready') !== '1') {
-              clearPendingKeepRaw(p);
-            }
+        flushPartialToPanels(trimmed);
+      } else scheduleAlignedStreamFlush();
+    })
+      .then((res) => {
+        if (currentMode === 'off' || entry.x || res?.cancelled) {
+          cancelFlushHandle(entry);
+          if (inflightBySig.get(sig) === entry) inflightBySig.delete(sig);
+          for (const p of entry.ps) {
+            if (p && p.isConnected && ga(p, 'data-op-zh-ready') !== '1') clearPendingKeepRaw(p);
           }
           return;
         }
-
         if (res && res.ok && typeof res.text === 'string' && res.text.trim()) {
           const finalZh = res.text.trim();
-          const isFallback = res.engine === 'machine-fallback' || Boolean(res.fallback);
-          const effectiveEngine = isFallback ? 'machine-fallback' : res.engine || (mode === 'machine' ? 'machine' : 'ai');
+          const isFb = res.engine === 'machine-fallback' || Boolean(res.fallback);
+          const eng = isFb ? 'machine-fallback' : res.engine || (mode === 'machine' ? 'machine' : 'ai');
           failedSigs.delete(sig);
-          const fallbackCacheKey = hashKey(
-            rawText,
-            isFallback || mode === 'machine' ? 'mt' : activeStyleTag || 'ai_technical'
-          );
-          putMemCache(res.key || fallbackCacheKey, finalZh, true);
+          putMemCache(res.key || hashKey(rawText, isFb || mode === 'machine' ? 'mt' : activeStyleTag || 'ai_technical'), finalZh, true);
 
-          for (const p of entry.panels) {
-            if (!p || !p.isConnected) continue;
-            const curRaw = extractRawEnglishText(p);
-            if (curRaw && hashKey(curRaw, 'sig') !== entry.srcSkelHash) continue;
-            renderTranslatedText(p, finalZh, false, sig, effectiveEngine);
+          if (
+            canUseSmoothStream() &&
+            entry.ps.some((p) => p && p.isConnected && isPanelCurrentlyExpanded(p)) &&
+            entry.sh.length < finalZh.length &&
+            finalZh.startsWith(entry.sh) &&
+            (entry.sh.length > 0 || finalZh.length <= 900)
+          ) {
+            entry.tg = finalZh;
+            entry.dn = true;
+            entry.fn = { z: finalZh, s: sig, e: eng };
+            ensurePacerLoop();
+            return;
           }
-          // Rescan once in case user expanded a matching collapsed panel while request was in flight
-          scheduleScan(30);
+          cancelFlushHandle(entry);
+          commitFinalPayloadToPanels({ z: finalZh, s: sig, e: eng });
         } else {
-          recordSigFailure(sig);
-          for (const p of entry.panels) {
-            if (p && p.isConnected) {
-              renderFailedState(p, rawText, mode, sig);
-            }
-          }
+          failEntry();
         }
       })
-      .catch(() => {
-        cancelFlushHandle(entry);
-        if (inflightBySig.get(sig) === entry) {
-          inflightBySig.delete(sig);
-        }
-        if (entry.cancelled || currentMode === 'off') return;
-        recordSigFailure(sig);
-        for (const p of entry.panels) {
-          if (p && p.isConnected) {
-            renderFailedState(p, rawText, mode, sig);
-          }
-        }
-      });
+      .catch(failEntry);
   }
 
   function isElementInViewport(el) {
@@ -1945,14 +1856,9 @@
     try {
       const rect = el.getBoundingClientRect();
       if (rect.width === 0 && rect.height === 0) return false;
-      const vh =
-        W.innerHeight ||
-        (typeof document !== 'undefined' && document.documentElement && document.documentElement.clientHeight) ||
-        900;
-      const vw =
-        W.innerWidth ||
-        (typeof document !== 'undefined' && document.documentElement && document.documentElement.clientWidth) ||
-        1440;
+      const rootEl = docRoot();
+      const vh = W.innerHeight || (rootEl && rootEl.clientHeight) || 900;
+      const vw = W.innerWidth || (rootEl && rootEl.clientWidth) || 1440;
       return rect.bottom >= -120 && rect.top <= vh + 120 && rect.right >= 0 && rect.left <= vw;
     } catch (_) {
       return true;
@@ -1961,7 +1867,7 @@
 
   function processSingleTrigger(btn, allowPreloadCollapsed, priority = 0) {
     if (!btn) return;
-    const expanded = btn.getAttribute('aria-expanded') === 'true';
+    const expanded = ga(btn, 'aria-expanded') === 'true';
     if (!expanded && !allowPreloadCollapsed) return;
 
     const panel = btn.nextElementSibling;
@@ -1970,63 +1876,37 @@
     const streaming = isTriggerStreaming(btn);
     const t = getClientPack();
 
-    // Fast streaming early-exit: skip expensive full DOM text walk & regexes while host is still streaming raw English!
     if (streaming) {
       const now = Date.now();
-      const meta = panelMeta.get(panel) || {
-        lastSkelHash: '',
-        lastChangeAt: now,
-        sawStreaming: true,
-        mutated: true,
-        finishedAt: 0,
-        doneSig: '',
-        readyStamp: '',
-      };
-      meta.sawStreaming = true;
-      meta.mutated = true;
-      meta.finishedAt = 0;
-      meta.lastChangeAt = now;
+      const meta = panelMeta.get(panel) || { h: '', c: now, s: true, m: true, f: 0, ds: '', rs: '' };
+      meta.s = true;
+      meta.m = true;
+      meta.f = 0;
+      meta.c = now;
       panelMeta.set(panel, meta);
       clearPanelWaitTimer(panel);
-      if (expanded) {
-        renderPendingState(panel, t.pendingStreaming, 'streaming');
-      }
+      if (expanded) renderPendingState(panel, t[9], 'streaming');
       return;
     }
 
-    // O(1) fast-path: if panel is already rendered for current mode, not streaming, and child stamp unchanged -> skip!
-    if (expanded && !streaming && panel.getAttribute('data-op-zh-ready') === '1') {
-      const existingMeta = panelMeta.get(panel);
-      const curStamp = quickPanelStamp(panel);
-      if (
-        existingMeta &&
-        existingMeta.readyStamp === curStamp &&
-        existingMeta.doneSig &&
-        existingMeta.doneSig === panel.getAttribute('data-op-zh-sig')
-      ) {
-        return;
-      }
+    if (expanded && ga(panel, 'data-op-zh-ready') === '1') {
+      const em = panelMeta.get(panel);
+      if (em && em.rs === quickPanelStamp(panel) && em.ds && em.ds === ga(panel, 'data-op-zh-sig')) return;
     }
 
     const rawText = extractRawEnglishText(panel);
     if (!rawText || isMostlyZh(rawText)) {
-      if (panel.getAttribute('data-op-zh-pending') === '1') clearPendingKeepRaw(panel);
+      if (ga(panel, 'data-op-zh-pending') === '1') clearPendingKeepRaw(panel);
       return;
     }
 
     const srcSkelHash = hashKey(rawText, 'sig');
     const sig = computeSig(rawText, currentMode);
 
-    // Exact signature idempotence check: never rebuild DOM if already rendered with identical signature!
-    if (
-      expanded &&
-      !streaming &&
-      panel.getAttribute('data-op-zh-ready') === '1' &&
-      panel.getAttribute('data-op-zh-sig') === sig
-    ) {
+    if (expanded && ga(panel, 'data-op-zh-ready') === '1' && ga(panel, 'data-op-zh-sig') === sig) {
       const meta = panelMeta.get(panel) || {};
-      meta.doneSig = sig;
-      meta.readyStamp = quickPanelStamp(panel);
+      meta.ds = sig;
+      meta.rs = quickPanelStamp(panel);
       panelMeta.set(panel, meta);
       return;
     }
@@ -2034,73 +1914,53 @@
     const now = Date.now();
     let meta = panelMeta.get(panel);
     if (!meta) {
-      meta = {
-        lastSkelHash: srcSkelHash,
-        lastChangeAt: now,
-        sawStreaming: streaming,
-        mutated: streaming,
-        finishedAt: streaming ? 0 : now - FINISH_GATE_MS,
-        doneSig: '',
-        readyStamp: '',
-      };
-    } else if (meta.lastSkelHash !== srcSkelHash) {
-      meta.lastSkelHash = srcSkelHash;
-      meta.lastChangeAt = now;
-      meta.mutated = true;
+      meta = { h: srcSkelHash, c: now, s: false, m: false, f: now - FINISH_GATE_MS, ds: '', rs: '' };
+    } else if (meta.h !== srcSkelHash) {
+      meta.h = srcSkelHash;
+      meta.c = now;
+      meta.m = true;
     }
 
-    if (meta.sawStreaming && !meta.finishedAt) {
-      meta.sawStreaming = false;
-      meta.finishedAt = now;
-    } else if (!meta.finishedAt) {
-      meta.finishedAt = now - FINISH_GATE_MS;
+    if (meta.s && !meta.f) {
+      meta.s = false;
+      meta.f = now;
+    } else if (!meta.f) {
+      meta.f = now - FINISH_GATE_MS;
     }
     panelMeta.set(panel, meta);
 
-    // Instant cache hit bypasses stability wait gates cleanly
     const cached = findCachedTranslation(rawText, currentMode);
     if (cached) {
       clearPanelWaitTimer(panel);
-      if (expanded) {
-        renderTranslatedText(panel, cached, false, sig, currentMode === 'machine' ? 'machine' : 'ai');
-      } else {
-        putMemCache(hashKey(rawText, currentMode === 'machine' ? 'mt' : activeStyleTag || 'ai_technical'), cached, false);
-      }
+      if (expanded) renderTranslatedText(panel, cached, false, sig, currentMode === 'machine' ? 'machine' : 'ai');
+      else putMemCache(hashKey(rawText, currentMode === 'machine' ? 'mt' : activeStyleTag || 'ai_technical'), cached, false);
       return;
     }
 
-    // Reattach immediately if an identical flight is already running (e.g. panel just remounted/expanded)
     const activeFlight = inflightBySig.get(sig);
-    if (activeFlight && !activeFlight.cancelled && now - activeFlight.startedAt <= 75000) {
+    if (activeFlight && !activeFlight.x && now - activeFlight.at <= 75000) {
       bindPanelToInflight(activeFlight, panel, expanded);
       return;
     }
 
     if (isSigInCooldown(sig)) {
-      if (expanded && panel.getAttribute('data-op-zh-failed') !== '1') {
-        renderFailedState(panel, rawText, currentMode, sig);
-      }
+      if (expanded && ga(panel, 'data-op-zh-failed') !== '1') renderFailedState(panel, rawText, currentMode, sig);
       return;
     }
 
-    const finishRem = meta.mutated ? Math.max(0, FINISH_GATE_MS - (now - meta.finishedAt)) : 0;
-    const quietRem = meta.mutated ? Math.max(0, QUIET_GATE_MS - (now - meta.lastChangeAt)) : 0;
-    const waitMs = Math.max(finishRem, quietRem);
-
+    const waitMs = meta.m ? Math.max(0, FINISH_GATE_MS - (now - meta.f), QUIET_GATE_MS - (now - meta.c)) : 0;
     if (waitMs > 0) {
-      if (expanded) {
-        renderPendingState(panel, t.pendingSettling, 'settling');
-      }
+      if (expanded) renderPendingState(panel, t[10], 'settling');
       setPanelWaitTimer(
         panel,
         btn,
         () => {
           if (currentMode === 'off' || !btn.isConnected) return;
-          const liveExpanded = btn.getAttribute('aria-expanded') === 'true';
+          const liveExpanded = ga(btn, 'aria-expanded') === 'true';
           let liveAllowPreload = false;
-          if (!liveExpanded && triggerTiming === 'preload' && typeof document !== 'undefined') {
-            const allBtns = document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]');
-            liveAllowPreload = Boolean(allBtns && allBtns.length > 0 && allBtns[allBtns.length - 1] === btn);
+          if (!liveExpanded && triggerTiming === 'preload') {
+            const allBtns = qsa(SEL_TRIGGER);
+            liveAllowPreload = Boolean(allBtns.length > 0 && allBtns[allBtns.length - 1] === btn);
           }
           if (!liveExpanded && !liveAllowPreload) {
             clearPendingKeepRaw(panel);
@@ -2118,9 +1978,8 @@
 
   function pruneUnneededPendingRequests(activePanelSet) {
     for (const [sig, entry] of inflightBySig.entries()) {
-      if (entry.lastPartial || entry.cancelled) continue;
-      const stillNeeded = entry.panels.some((p) => p && p.isConnected && activePanelSet.has(p));
-      if (!stillNeeded) {
+      if (entry.lp || entry.x) continue;
+      if (!entry.ps.some((p) => p && p.isConnected && activePanelSet.has(p))) {
         cancelTranslateRequest(entry);
         inflightBySig.delete(sig);
       }
@@ -2129,9 +1988,9 @@
 
   function scanNow() {
     scanTimer = null;
-    if (currentMode === 'off' || typeof document === 'undefined') return;
-    const triggers = document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]');
-    if (!triggers || !triggers.length) return;
+    if (currentMode === 'off') return;
+    const triggers = qsa(SEL_TRIGGER);
+    if (!triggers.length) return;
 
     const lastIdx = triggers.length - 1;
     const candidates = [];
@@ -2142,7 +2001,7 @@
       if (!btn) continue;
       const isLatest = i === lastIdx;
       const allowPreload = triggerTiming === 'preload' && isLatest;
-      const expanded = btn.getAttribute('aria-expanded') === 'true';
+      const expanded = ga(btn, 'aria-expanded') === 'true';
       if (!allowPreload && !expanded) continue;
 
       const panel = btn.nextElementSibling;
@@ -2150,42 +2009,31 @@
 
       const inViewport = expanded ? isElementInViewport(panel || btn) : false;
       const tier = isLatest && expanded ? 25 : inViewport ? 20 : isLatest ? 12 : 5;
-      const priority = tier * 1000 + i;
-      candidates.push({ btn, allowPreload, priority });
+      candidates.push({ b: btn, a: allowPreload, p: tier * 1000 + i });
     }
 
-    if (inflightBySig.size > 0) {
-      pruneUnneededPendingRequests(activePanelSet);
-    }
-
-    // Schedule highest-priority (viewport-visible & latest turn) thought blocks first!
-    candidates.sort((a, b) => b.priority - a.priority);
+    if (inflightBySig.size > 0) pruneUnneededPendingRequests(activePanelSet);
+    candidates.sort((x, y) => y.p - x.p);
     for (let i = 0; i < candidates.length; i++) {
-      const item = candidates[i];
-      processSingleTrigger(item.btn, item.allowPreload, item.priority);
+      processSingleTrigger(candidates[i].b, candidates[i].a, candidates[i].p);
     }
   }
 
   function scheduleScan(delayMs = 55) {
-    if (currentMode === 'off') return;
-    if (scanTimer) return;
+    if (currentMode === 'off' || scanTimer) return;
     scanTimer = setTimeout(scanNow, delayMs);
   }
 
+  const RESET_SIG_ATTRS = ['data-op-zh-sig', 'data-op-zh-fallback', 'data-op-zh-failed'];
+
   const api = {
     sync(cfg = {}) {
-      const nextMode =
-        cfg.thoughtTranslate === 'machine' || cfg.thoughtTranslate === 'ai' ? cfg.thoughtTranslate : 'off';
+      const nextMode = cfg.thoughtTranslate === 'machine' || cfg.thoughtTranslate === 'ai' ? cfg.thoughtTranslate : 'off';
       const prevTrigger = triggerTiming;
       triggerTiming = cfg.thoughtTrigger === 'expand' ? 'expand' : 'preload';
 
-      const nextLang = resolveActiveLang(cfg.language);
-      if (nextLang !== currentLang) {
-        currentLang = nextLang;
-        refreshAllOverlayLocaleStrings();
-      } else {
-        refreshAllOverlayLocaleStrings();
-      }
+      currentLang = resolveActiveLang(cfg.language);
+      refreshAllOverlayLocaleStrings();
 
       const incomingView = cfg.thoughtView || cfg.thoughtViewMode;
       if (incomingView === 'bilingual' || incomingView === 'immersive') {
@@ -2195,10 +2043,10 @@
         currentViewMode = incomingView;
         persistViewModePreference(currentViewMode);
         syncDocViewAttribute();
-        if (viewChanged && typeof document !== 'undefined') {
-          document.querySelectorAll('.ag-prism-thought-overlay[data-op-thought="1"]').forEach((ov) => {
+        if (viewChanged) {
+          qsa(SEL_OVERLAY).forEach((ov) => {
             if (ov.parentElement) {
-              ov.parentElement.removeAttribute('data-op-manual-raw');
+              ra(ov.parentElement, 'data-op-manual-raw');
               applyPanelViewMode(ov.parentElement);
             }
           });
@@ -2217,11 +2065,8 @@
         return;
       }
 
-      if (triggerTiming === 'expand' && prevTrigger !== 'expand') {
-        cancelCollapsedInflightRequests();
-      } else if (triggerTiming === 'expand') {
-        clearAllWaitTimers(true);
-      }
+      if (triggerTiming === 'expand' && prevTrigger !== 'expand') cancelCollapsedInflightRequests();
+      else if (triggerTiming === 'expand') clearAllWaitTimers(true);
 
       const changed = currentMode !== nextMode;
       const hadPrevEngine = currentMode !== 'off';
@@ -2230,26 +2075,16 @@
       if (changed) {
         if (hadPrevEngine) {
           clearAllWaitTimers(false);
-          for (const entry of inflightBySig.values()) {
-            cancelTranslateRequest(entry);
-          }
+          for (const entry of inflightBySig.values()) cancelTranslateRequest(entry);
           inflightBySig.clear();
         }
-        if (typeof document !== 'undefined') {
-          const resetPanelSig = (p) => {
-            if (!p) return;
-            p.removeAttribute('data-op-zh-sig');
-            p.removeAttribute('data-op-zh-fallback');
-            p.removeAttribute('data-op-zh-failed');
-            panelMeta.delete(p);
-          };
-          document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]').forEach((b) => {
-            if (b && b.nextElementSibling) resetPanelSig(b.nextElementSibling);
-          });
-          document.querySelectorAll('.ag-prism-thought-overlay[data-op-thought="1"]').forEach((ov) => {
-            if (ov && ov.parentElement) resetPanelSig(ov.parentElement);
-          });
-        }
+        const resetPanelSig = (p) => {
+          if (!p) return;
+          raList(p, RESET_SIG_ATTRS);
+          panelMeta.delete(p);
+        };
+        qsa(SEL_TRIGGER).forEach((b) => { if (b && b.nextElementSibling) resetPanelSig(b.nextElementSibling); });
+        qsa(SEL_OVERLAY).forEach((ov) => { if (ov && ov.parentElement) resetPanelSig(ov.parentElement); });
       }
       scheduleScan(25);
     },
@@ -2275,15 +2110,12 @@
       currentViewMode = normalized;
       persistViewModePreference(normalized);
       syncDocViewAttribute();
-      if (typeof document !== 'undefined') {
-        document.querySelectorAll('.ag-prism-thought-overlay[data-op-thought="1"]').forEach((ov) => {
-          if (ov.parentElement) {
-            // Reset per-panel manual override when user explicitly flips global reading view
-            ov.parentElement.removeAttribute('data-op-manual-raw');
-            applyPanelViewMode(ov.parentElement);
-          }
-        });
-      }
+      qsa(SEL_OVERLAY).forEach((ov) => {
+        if (ov.parentElement) {
+          ra(ov.parentElement, 'data-op-manual-raw');
+          applyPanelViewMode(ov.parentElement);
+        }
+      });
       if (changed && opts.persistDaemon !== false) {
         void callDaemonRpc({ action: 'save-config', viewMode: normalized }).catch(() => {});
       }
@@ -2293,64 +2125,25 @@
     clearLocalCache,
     getCacheStats() {
       const local = getLocalCacheStats();
+      const mk = (localOnly, dEntries, dBytes) => ({
+        ok: true,
+        localOnly,
+        localEntries: local.memEntries,
+        storageEntries: local.storageEntries,
+        daemonEntries: dEntries,
+        diskBytes: dBytes,
+        totalEntries: Math.max(local.memEntries, dEntries),
+      });
       return callDaemonRpc({ action: 'cache-stats' })
-        .then((res) => {
-          if (res && res.ok && typeof res.entries === 'number') {
-            return {
-              ok: true,
-              localOnly: false,
-              localEntries: local.memEntries,
-              storageEntries: local.storageEntries,
-              daemonEntries: res.entries,
-              diskBytes: res.diskBytes || 0,
-              totalEntries: Math.max(local.memEntries, res.entries),
-            };
-          }
-          return {
-            ok: true,
-            localOnly: true,
-            localEntries: local.memEntries,
-            storageEntries: local.storageEntries,
-            daemonEntries: 0,
-            diskBytes: 0,
-            totalEntries: local.memEntries,
-          };
-        })
-        .catch(() => ({
-          ok: true,
-          localOnly: true,
-          localEntries: local.memEntries,
-          storageEntries: local.storageEntries,
-          daemonEntries: 0,
-          diskBytes: 0,
-          totalEntries: local.memEntries,
-        }));
+        .then((res) => (res && res.ok && typeof res.entries === 'number' ? mk(false, res.entries, res.diskBytes || 0) : mk(true, 0, 0)))
+        .catch(() => mk(true, 0, 0));
     },
     clearCache() {
       const localRes = clearLocalCache();
+      const mk = (localOnly, dc) => ({ ok: true, localOnly, localCleared: localRes.cleared, daemonCleared: dc });
       return callDaemonRpc({ action: 'clear-cache' })
-        .then((res) => {
-          if (res && res.ok) {
-            return {
-              ok: true,
-              localOnly: false,
-              localCleared: localRes.cleared,
-              daemonCleared: typeof res.cleared === 'number' ? res.cleared : 0,
-            };
-          }
-          return {
-            ok: true,
-            localOnly: true,
-            localCleared: localRes.cleared,
-            daemonCleared: 0,
-          };
-        })
-        .catch(() => ({
-          ok: true,
-          localOnly: true,
-          localCleared: localRes.cleared,
-          daemonCleared: 0,
-        }));
+        .then((res) => (res && res.ok ? mk(false, typeof res.cleared === 'number' ? res.cleared : 0) : mk(true, 0)))
+        .catch(() => mk(true, 0));
     },
     getConfig() {
       const br = getBridge();
@@ -2360,9 +2153,7 @@
         if (nextTag) activeStyleTag = nextTag;
         if (!hasExplicitHostView && (res?.viewMode === 'bilingual' || res?.viewMode === 'immersive')) {
           let hasLocalPref = false;
-          try {
-            hasLocalPref = Boolean(W.localStorage && W.localStorage.getItem(VIEW_MODE_STORAGE_KEY));
-          } catch (_) {}
+          try { hasLocalPref = Boolean(W.localStorage?.getItem(VIEW_MODE_STORAGE_KEY)); } catch (_) {}
           if (!hasLocalPref) {
             currentViewMode = res.viewMode;
             syncDocViewAttribute();
@@ -2379,19 +2170,13 @@
         const nextTag = res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : '');
         const tagChanged = Boolean(nextTag && nextTag !== activeStyleTag);
         if (nextTag) activeStyleTag = nextTag;
-        if (typeof document !== 'undefined') {
-          document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]').forEach((b) => {
-            const p = b.nextElementSibling;
-            if (!p) return;
-            // Re-run if styleTag changed OR if panel previously degraded to machine-fallback!
-            if (tagChanged || p.getAttribute('data-op-zh-fallback') === '1' || p.getAttribute('data-op-zh-failed') === '1') {
-              p.removeAttribute('data-op-zh-sig');
-              p.removeAttribute('data-op-zh-fallback');
-              p.removeAttribute('data-op-zh-failed');
-              panelMeta.delete(p);
-            }
-          });
-        }
+        qsa(SEL_TRIGGER).forEach((b) => {
+          const p = b && b.nextElementSibling;
+          if (p && (tagChanged || ga(p, 'data-op-zh-fallback') === '1' || ga(p, 'data-op-zh-failed') === '1')) {
+            raList(p, RESET_SIG_ATTRS);
+            panelMeta.delete(p);
+          }
+        });
         failedSigs.clear();
         scheduleScan(25);
         return res;
@@ -2412,9 +2197,7 @@
         clearTimeout(scanTimer);
         scanTimer = null;
       }
-      if (persistTimer) {
-        flushLocalStorageCacheNow();
-      }
+      if (persistTimer) flushLocalStorageCacheNow();
       releasePrismOverlays();
     },
   };

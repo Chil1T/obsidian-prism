@@ -27,7 +27,7 @@
     ':host,*,::before,::after{box-sizing:border-box}',
     ':host,.bar,.chip{display:inline-flex;align-items:center}',
     ':host{flex:0 0 auto;position:relative;font:11px/16px Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--foreground,#dae2f0);user-select:none;z-index:20}',
-    ':host([hidden]),.sub-badge[hidden],.card[hidden],:host([data-layout="blocked"])>.bar{display:none!important}',
+    ':host([hidden]),.sub-badge[hidden],.card[hidden],.footnote[hidden],.footnote:empty,:host([data-layout="blocked"])>.bar{display:none!important}',
     ':host([data-layout="blocked"]){position:fixed!important;left:-9999px!important;top:-9999px!important;width:0!important;height:0!important;margin:0!important;padding:0!important;overflow:hidden!important;visibility:hidden!important;pointer-events:none!important}',
     '.bar{gap:3px}',
     '.chip{gap:3.5px;height:24px;padding:0 6px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;cursor:pointer;font-variant-numeric:tabular-nums;transition:background .15s,color .15s}',
@@ -51,11 +51,11 @@
 
   const isFin = (v) => typeof v === 'number' && Number.isFinite(v);
   const FB_ROWS = {
-    'zh-CN': '缓存|吞吐速率|首字延迟|最近速率|上下文窗口|当前模型|Prism 实时遥测同步|Prism 实时遥测同步 · 后台统计整编中|Prism 本地上下文估算|已用|剩余|代理',
-    'zh-TW': '快取|吞吐速率|首字延遲|最近速率|上下文視窗|目前模型|Prism 即時遙測同步|Prism 即時遙測同步 · 背景統計彙整中|Prism 本機上下文估算|已用|剩餘|代理',
-    yue: '快取|吞吐速率|首字延遲|最近速率|上下文視窗|目前模型|Prism 即時遙測同步|Prism 即時遙測同步 · 背景統計整理中|Prism 本機上下文估算|已用|剩低|代理',
-    en: 'Cache|Throughput|TTFT|Latest Rate|Context Window|Active Model|Prism live telemetry|Prism live telemetry · Indexing usage|Prism local context estimate|used|free| sub',
-    ja: 'キャッシュ|スループット|初回応答|最新速度|コンテキスト|現在のモデル|Prism リアルタイム同期|Prism 同期中 · バックグラウンド集計中|Prism ローカル推定|使用|残り| sub',
+    'zh-CN': '缓存|吞吐速率|首字延迟|最近速率|上下文窗口|当前模型|已用|剩余|代理',
+    'zh-TW': '快取|吞吐速率|首字延遲|最近速率|上下文視窗|目前模型|已用|剩餘|代理',
+    yue: '快取|吞吐速率|首字延遲|最近速率|上下文視窗|目前模型|已用|剩低|代理',
+    en: 'Cache|Throughput|TTFT|Latest Rate|Context Window|Active Model|used|free| sub',
+    ja: 'キャッシュ|スループット|初回応答|最新速度|コンテキスト|現在のモデル|使用|残り| sub',
   };
   const FB_I18N = Object.fromEntries(
     Object.entries(FB_ROWS).map(([lk, s]) => {
@@ -64,9 +64,9 @@
         lk,
         {
           cache: r[0], speedHeading: r[1], ttft: r[2], latestRate: r[3],
-          ctxHeading: r[4], curModel: r[5], noteSync: r[6], noteProc: r[7], noteLocal: r[8],
-          summary: (p, rem) => `${p}% ${r[9]} · ${rem}% ${r[10]}`,
-          agents: (n) => `· ${n}${r[11]}`,
+          ctxHeading: r[4], curModel: r[5],
+          summary: (p, rem) => `${p}% ${r[6]} · ${rem}% ${r[7]}`,
+          agents: (n) => `· ${n}${r[8]}`,
         },
       ];
     })
@@ -414,7 +414,11 @@
       sT('context-summary', t.summary(pct, rem));
       sT('context-tokens', `${fmtTok(uTok)} / ${fmtTok(maxTok)} tok`);
       sT('context-model', model);
-      sT('context-note', snap?.connection === 'local-estimate' ? t.noteLocal : proc ? t.noteProc : t.noteSync);
+      const noteEl = srEl.getElementById('context-note');
+      if (noteEl) {
+        noteEl.hidden = true;
+        if (noteEl.textContent) noteEl.textContent = '';
+      }
 
       const fl = srEl.getElementById('context-fill');
       if (fl?.style) fl.style.width = `${pct}%`;
@@ -609,7 +613,7 @@
           E('dt', { 'data-fb-i18n': 'curModel', text: t0.curModel }),
           E('dd', { id: 'context-model', text: '—' }),
         ]),
-        E('p', { cls: 'footnote', id: 'context-note', text: t0.noteSync }),
+        E('p', { cls: 'footnote', id: 'context-note', hidden: true, text: '' }),
       ]);
 
       sr.appendChild(E('div', { cls: 'bar' }, [sChip, cChip, xChip]));

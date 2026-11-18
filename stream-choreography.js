@@ -1,24 +1,45 @@
-// Obsidian Prism — Hero A~E Route Choreography, Dual-Track Streaming, Collapsible Auto-Unfold & Lens Module (stream-choreography.js)
-// Extracted from ui-runtime.js: manages living thinking sparks, smart 2-tier auto-unfold, Hero A~E transitions,
-// React-Fiber-safe dual-track streaming tags, and cryo-lens overlay origins.
-
+// Obsidian Prism — Route Choreography, Velvet Stream Feathering, Auto-Unfold & Lens Module (stream-choreography.js)
 (function (root) {
   'use strict';
   const G = root || (typeof globalThis !== 'undefined' ? globalThis : window);
   if (!G) return;
 
   const STREAM_BATCH_MS = 52;
-  const TABLE_TAGS = new Set(['TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TH', 'TD']);
-  const CODE_OR_TABLE_TAGS = new Set(['PRE', 'CODE', 'TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TH', 'TD']);
+  const STREAM_FADE_MS = 300;
+  const STREAM_FADE_STEP_MS = 60;
+  const MAX_FADE_RANGES = 48;
+  const HIGHLIGHT_NAMES = [0, 1, 2, 3, 4].map((i) => 'ag-stream-f' + i);
+  const TABLE_TAGS = new Set('TABLE|THEAD|TBODY|TFOOT|TR|TH|TD'.split('|'));
+  const INLINE_TAGS = new Set('SPAN|STRONG|EM|B|I|A|CODE|MARK|DEL|SUB|SUP'.split('|'));
+  const K_PE = 'parentElement';
+  const K_CL = 'classList';
+  const K_IC = 'isConnected';
 
-  function isElementLike(n) {
-    return Boolean(n && (n.nodeType === 1 || (n.nodeType === undefined && typeof n.tagName === 'string')));
-  }
+  const isEl = (n) => Boolean(n && (n.nodeType === 1 || (n.nodeType === undefined && typeof n.tagName === 'string')));
+  const tagOf = (n) => String(n?.tagName || '').toUpperCase();
+  const peOf = (n) => n?.[K_PE] || null;
+  const clHas = (e, c) => Boolean(e?.[K_CL]?.contains?.(c));
+  const clRm = (e, c) => e?.[K_CL]?.remove?.(c);
+  const isConn = (e) => Boolean(e && e[K_IC] !== false);
+  const ga = (e, k) => e?.getAttribute?.(k);
+  const sa = (e, k, v) => e?.setAttribute?.(k, v);
+  const ra = (e, k) => e?.removeAttribute?.(k);
+  const ha = (e, k) => Boolean(e?.hasAttribute?.(k));
+  const qs = (e, s) => e?.querySelector?.(s) || null;
+  const qsa = (e, s) => e?.querySelectorAll?.(s) || [];
+  const closestOf = (e, s) => e?.closest?.(s) || null;
+  const rectOf = (e) => (typeof e?.getBoundingClientRect === 'function' ? e.getBoundingClientRect() : null);
+  const setProp = (e, k, v) => e?.style?.setProperty?.(k, v);
+  const docOf = () => (typeof document !== 'undefined' ? document : null);
+  const nowOf = () => (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now());
+  const rAF = (fn) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : 0);
+  const cAF = (id) => {
+    if (id && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(id);
+  };
 
   function createStreamChoreographyController({
     motionEngine,
     isDestroyed,
-    isComposerRestyleEnabled,
     isMotionStandardOrUltra,
     isMotionUltra,
     isConvRunning,
@@ -34,70 +55,208 @@
     convAuraCtl,
     notifyMascot,
   }) {
-    let deferredHydrateRaf = 0;
-    let deferredSparkQueue = [];
-    let deferredIconQueue = [];
-
-    let workedForClickTimer = 0;
-    let deferredConvEntryTimer = 0;
+    let hydrateRaf = 0;
+    let sparkQueue = [];
+    let iconQueue = [];
+    let wfClickTimer = 0;
+    let convEntryTimer = 0;
     const transientTimers = new Set();
 
     const heroState = {
       routeInitialized: false,
       wasInHome: false,
       wasInFormalConv: false,
-      lastHomeComposerRect: null,
-      pendingLiftoffBubbleUntil: 0,
-      runTrackInitialized: false,
-      wasConvRunning: false,
-      runStartedAt: 0,
       lastModelSig: null,
       pendingModelShiftNotify: false,
-      fiberTimer: 0,
-      sidebarInitialized: false,
-      sidebarIndex: -1,
-      sidebarRow: null,
-      sidebarRect: null,
       lastTriggerOrigin: null,
       lastGroupPress: null,
     };
+    let lastHomeRect = null;
+    let liftoffBubbleUntil = 0;
+    let runInit = false;
+    let wasRunning = false;
+    let runStartAt = 0;
+    let fiberTimer = 0;
+    let sbInit = false;
+    let sbIndex = -1;
+    let sbRect = null;
 
-    const seenChangedFileHeaders = new WeakSet();
-    const seenLensOverlays = new WeakSet();
+    const seenHeaders = new WeakSet();
+    const seenOverlays = new WeakSet();
 
-    let streamObserver = null;
-    let streamObservedRoot = null;
+    let streamObs = null;
+    let streamRoot = null;
     let streamMutating = false;
-    let lastProseWrapAt = -1000;
-    let lastThoughtWrapAt = -1000;
-    let lastCodeScanAt = -1000;
-    let scannedStreamNodes = new WeakSet();
+    let lastCodeAt = -1000;
+    let scannedNodes = new WeakSet();
+    let seenBlocks = new WeakSet();
+    const textLenMap = new WeakMap();
 
-    // Coalesced transient class expiry queue (eliminates per-span setTimeout storms during Swarm code streaming)
-    const expirableClassEntries = new Map();
-    let classSweepTimer = 0;
+    const fadeItems = [];
+    let hlBuckets = null;
+    let fadeRaf = 0;
+
+    const expirableClasses = new Map();
+    let sweepTimer = 0;
+
+    const canStreamMotion = () => {
+      const d = docOf();
+      if (ga(d?.documentElement, 'data-ag-cs-motion') === 'off') return false;
+      return typeof isMotionStandardOrUltra === 'function' ? Boolean(isMotionStandardOrUltra()) : Boolean(isMotionUltra());
+    };
+
+    function getHlBuckets() {
+      const cssObj = typeof CSS !== 'undefined' ? CSS : G.CSS;
+      const HlCtor = typeof Highlight === 'function' ? Highlight : G.Highlight;
+      const d = docOf();
+      if (!cssObj?.highlights?.set || typeof HlCtor !== 'function' || typeof d?.createRange !== 'function') return null;
+      if (!hlBuckets) {
+        hlBuckets = HIGHLIGHT_NAMES.map((n) => {
+          const h = new HlCtor();
+          cssObj.highlights.set(n, h);
+          return h;
+        });
+      } else {
+        for (let i = 0; i < 5; i++) {
+          if (!cssObj.highlights.has?.(HIGHLIGHT_NAMES[i])) cssObj.highlights.set(HIGHLIGHT_NAMES[i], hlBuckets[i]);
+        }
+      }
+      return hlBuckets;
+    }
+
+    function dropBucketItem(it) {
+      if (hlBuckets && it.b >= 0 && it.b < 5) {
+        try {
+          hlBuckets[it.b].delete(it.r);
+        } catch {}
+      }
+      it.b = -1;
+    }
+
+    function clearHighlightFade() {
+      cAF(fadeRaf);
+      fadeRaf = 0;
+      fadeItems.length = 0;
+      if (hlBuckets) {
+        for (let i = 0; i < 5; i++) {
+          try {
+            hlBuckets[i].clear();
+          } catch {}
+        }
+      }
+    }
+
+    function stepHighlightFade(ts) {
+      fadeRaf = 0;
+      if (isDestroyed() || !canStreamMotion() || fadeItems.length === 0) {
+        clearHighlightFade();
+        return;
+      }
+      const buckets = getHlBuckets();
+      if (!buckets) {
+        clearHighlightFade();
+        return;
+      }
+      const now = typeof ts === 'number' && Number.isFinite(ts) ? ts : nowOf();
+      let w = 0;
+      for (let i = 0; i < fadeItems.length; i++) {
+        const it = fadeItems[i];
+        const tn = it.n;
+        const val = tn ? tn.data ?? tn.nodeValue ?? '' : '';
+        const age = Math.max(0, now - it.t);
+        if (!isConn(tn) || val.length < it.e || age >= STREAM_FADE_MS) {
+          dropBucketItem(it);
+          continue;
+        }
+        const nb = Math.min(4, (age / STREAM_FADE_STEP_MS) | 0);
+        if (it.b !== nb) {
+          dropBucketItem(it);
+          try {
+            buckets[nb].add(it.r);
+            it.b = nb;
+          } catch {
+            continue;
+          }
+        }
+        fadeItems[w++] = it;
+      }
+      fadeItems.length = w;
+      if (w > 0) {
+        fadeRaf = rAF(stepHighlightFade);
+        if (!fadeRaf) clearHighlightFade();
+      } else {
+        clearHighlightFade();
+      }
+    }
+
+    function enqueueFadeRange(tn, sOff, eOff, now) {
+      if (!tn || eOff <= sOff) return false;
+      const buckets = getHlBuckets();
+      const d = docOf();
+      if (!buckets || !d) return false;
+      const raw = tn.data ?? tn.nodeValue ?? '';
+      if (eOff > raw.length || !/\S/.test(raw.slice(sOff, eOff))) return false;
+
+      const prev = fadeItems.length > 0 ? fadeItems[fadeItems.length - 1] : null;
+      if (prev && prev.n === tn && prev.e === sOff && now - prev.t <= 34) {
+        try {
+          prev.r.setEnd(tn, eOff);
+          prev.e = eOff;
+          return true;
+        } catch {}
+      }
+      if (fadeItems.length >= MAX_FADE_RANGES) {
+        const old = fadeItems.shift();
+        if (old) dropBucketItem(old);
+      }
+      try {
+        const r = d.createRange();
+        r.setStart(tn, sOff);
+        r.setEnd(tn, eOff);
+        buckets[0].add(r);
+        fadeItems.push({ n: tn, s: sOff, e: eOff, r, b: 0, t: now });
+        if (!fadeRaf) fadeRaf = rAF(stepHighlightFade);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    function snapTextLens(node, limit = 24) {
+      if (!node) return;
+      let c = 0;
+      const walk = (n) => {
+        if (!n || c >= limit) return;
+        if (n.nodeType === 3) {
+          textLenMap.set(n, (n.data ?? n.nodeValue ?? '').length);
+          c++;
+          return;
+        }
+        const ks = n.childNodes;
+        if (!ks) return;
+        for (let i = ks.length - 1; i >= 0 && c < limit; i--) walk(ks[i]);
+      };
+      walk(node);
+    }
 
     function flushExpiredClasses() {
-      classSweepTimer = 0;
-      if (expirableClassEntries.size === 0) return;
+      sweepTimer = 0;
+      if (expirableClasses.size === 0) return;
       const now = Date.now();
       let nextDue = Infinity;
       runGuardedMut(() => {
-        for (const [el, map] of expirableClassEntries.entries()) {
+        for (const [el, map] of expirableClasses.entries()) {
           for (const [cls, expAt] of map.entries()) {
             if (now >= expAt - 2) {
-              el.classList?.remove?.(cls);
+              clRm(el, cls);
               map.delete(cls);
-            } else if (expAt < nextDue) {
-              nextDue = expAt;
-            }
+            } else if (expAt < nextDue) nextDue = expAt;
           }
-          if (map.size === 0) expirableClassEntries.delete(el);
+          if (map.size === 0) expirableClasses.delete(el);
         }
       });
-      if (!isDestroyed() && expirableClassEntries.size > 0 && Number.isFinite(nextDue)) {
-        const waitMs = Math.max(16, Math.ceil(nextDue - Date.now()));
-        classSweepTimer = setTimeout(flushExpiredClasses, waitMs);
+      if (!isDestroyed() && expirableClasses.size > 0 && Number.isFinite(nextDue)) {
+        sweepTimer = setTimeout(flushExpiredClasses, Math.max(16, Math.ceil(nextDue - Date.now())));
       }
     }
 
@@ -115,560 +274,471 @@
     }
 
     function clearTransientTimers() {
-      if (deferredConvEntryTimer) {
-        clearTimeout(deferredConvEntryTimer);
-        deferredConvEntryTimer = 0;
+      if (convEntryTimer) {
+        clearTimeout(convEntryTimer);
+        convEntryTimer = 0;
       }
-      if (workedForClickTimer) {
-        clearTimeout(workedForClickTimer);
-        workedForClickTimer = 0;
+      if (wfClickTimer) {
+        clearTimeout(wfClickTimer);
+        wfClickTimer = 0;
       }
-      if (classSweepTimer) {
-        clearTimeout(classSweepTimer);
-        classSweepTimer = 0;
+      if (sweepTimer) {
+        clearTimeout(sweepTimer);
+        sweepTimer = 0;
       }
-      expirableClassEntries.clear();
+      expirableClasses.clear();
       for (const id of transientTimers) clearTimeout(id);
       transientTimers.clear();
     }
 
     function cancelDeferredHydration() {
-      if (deferredHydrateRaf && typeof cancelAnimationFrame === 'function') {
-        cancelAnimationFrame(deferredHydrateRaf);
-      }
-      deferredHydrateRaf = 0;
-      deferredSparkQueue = [];
-      deferredIconQueue = [];
+      cAF(hydrateRaf);
+      hydrateRaf = 0;
+      sparkQueue = [];
+      iconQueue = [];
     }
 
-    function applySingleSparkUpdate(trig, brand, st) {
-      if (!trig || trig.isConnected === false) return;
-      if (st === 'streaming') {
-        setAttrIfChanged(trig, 'data-ag-cs-spark-streaming', '1');
-      } else if (trig.hasAttribute('data-ag-cs-spark-streaming')) {
-        trig.removeAttribute('data-ag-cs-spark-streaming');
-      }
-      let spark = trig.firstElementChild?.classList?.contains('ag-cs-thinking-spark')
-        ? trig.firstElementChild
-        : trig.querySelector('.ag-cs-thinking-spark');
+    function applySingleSpark(trig, brand, st) {
+      const d = docOf();
+      if (!d || !isConn(trig)) return;
+      if (st === 'streaming') setAttrIfChanged(trig, 'data-ag-cs-spark-streaming', '1');
+      else if (ha(trig, 'data-ag-cs-spark-streaming')) ra(trig, 'data-ag-cs-spark-streaming');
+      let spark = clHas(trig.firstElementChild, 'ag-cs-thinking-spark') ? trig.firstElementChild : qs(trig, '.ag-cs-thinking-spark');
       if (!spark) {
-        spark = document.createElement('span');
+        spark = d.createElement('span');
         spark.className = 'ag-cs-thinking-spark';
-        spark.setAttribute('aria-hidden', 'true');
-        spark.setAttribute('data-ag-no-i18n', '');
+        sa(spark, 'aria-hidden', 'true');
+        sa(spark, 'data-ag-no-i18n', '');
         trig.insertBefore(spark, trig.firstChild);
       }
-      const isMono =
-        typeof document !== 'undefined' && document.documentElement?.getAttribute?.('data-ag-cs-accent') === 'mono';
-      const monoVal = isMono ? '1' : '0';
-      if (
-        spark.getAttribute('data-brand') !== brand ||
-        spark.getAttribute('data-state') !== st ||
-        spark.getAttribute('data-mono') !== monoVal
-      ) {
-        spark.setAttribute('data-brand', brand);
-        spark.setAttribute('data-state', st);
-        spark.setAttribute('data-mono', monoVal);
-        const key = `spark:${brand}:${monoVal}`;
+      const isMono = ga(d.documentElement, 'data-ag-cs-accent') === 'mono';
+      const mv = isMono ? '1' : '0';
+      if (ga(spark, 'data-brand') !== brand || ga(spark, 'data-state') !== st || ga(spark, 'data-mono') !== mv) {
+        sa(spark, 'data-brand', brand);
+        sa(spark, 'data-state', st);
+        sa(spark, 'data-mono', mv);
         const svgStr = buildBrandMarkSvg(brand, 13, 'auto', isMono);
-        const cloned = cloneCachedSvgElement(key, svgStr);
-        if (cloned && typeof spark.replaceChildren === 'function') {
-          spark.replaceChildren(cloned);
-        } else {
-          spark.innerHTML = svgStr;
-        }
+        const cloned = cloneCachedSvgElement(`spark:${brand}:${mv}`, svgStr);
+        if (cloned && typeof spark.replaceChildren === 'function') spark.replaceChildren(cloned);
+        else spark.innerHTML = svgStr;
       }
     }
 
-    function stepDeferredHydration() {
-      deferredHydrateRaf = 0;
+    function stepHydration() {
+      hydrateRaf = 0;
       if (isDestroyed()) return;
       runGuardedMut(() => {
         let budget = 18;
-        while (budget > 0 && deferredSparkQueue.length > 0) {
-          const item = deferredSparkQueue.pop();
-          applySingleSparkUpdate(item.trig, item.brand, item.st);
+        while (budget > 0 && sparkQueue.length > 0) {
+          const it = sparkQueue.pop();
+          applySingleSpark(it.trig, it.brand, it.st);
           budget--;
         }
-        while (budget > 0 && deferredIconQueue.length > 0) {
-          const item = deferredIconQueue.pop();
-          if (!item.btn.getAttribute('data-ag-cs-icon-injected')) {
-            applySingleHostIcon(item.btn, item.iconName, item.origSvg, item.size);
-          }
+        while (budget > 0 && iconQueue.length > 0) {
+          const it = iconQueue.pop();
+          if (!ga(it.btn, 'data-ag-cs-icon-injected')) applySingleHostIcon(it.btn, it.iconName, it.origSvg, it.size);
           budget--;
         }
       });
-      if ((deferredSparkQueue.length > 0 || deferredIconQueue.length > 0) && typeof requestAnimationFrame === 'function') {
-        deferredHydrateRaf = requestAnimationFrame(stepDeferredHydration);
-      }
-    }
-
-    function scheduleDeferredHydration() {
-      if (isDestroyed() || deferredHydrateRaf || typeof requestAnimationFrame !== 'function') return;
-      deferredHydrateRaf = requestAnimationFrame(stepDeferredHydration);
+      if (sparkQueue.length > 0 || iconQueue.length > 0) hydrateRaf = rAF(stepHydration);
     }
 
     function enqueueDeferredIcons(items) {
-      deferredIconQueue = items;
-      scheduleDeferredHydration();
+      iconQueue = items;
+      if (!isDestroyed() && !hydrateRaf) hydrateRaf = rAF(stepHydration);
     }
 
     function syncThinkingSparks(primaryModelInfo) {
-      if (isDestroyed() || typeof document === 'undefined') return;
-      const triggers = document.querySelectorAll('[data-testid="thinking-collapsible-trigger"]');
+      const d = docOf();
+      if (isDestroyed() || !d) return;
+      const triggers = qsa(d, '[data-testid="thinking-collapsible-trigger"]');
       const brand = primaryModelInfo?.brand || 'gemini';
-      const monoVal = document.documentElement?.getAttribute?.('data-ag-cs-accent') === 'mono' ? '1' : '0';
+      const mv = ga(d.documentElement, 'data-ag-cs-accent') === 'mono' ? '1' : '0';
       const len = triggers.length;
       const pending = [];
       for (let i = 0; i < len; i++) {
         const trig = triggers[i];
-        const spark = trig.firstElementChild?.classList?.contains('ag-cs-thinking-spark')
-          ? trig.firstElementChild
-          : trig.querySelector('.ag-cs-thinking-spark');
+        const spark = clHas(trig.firstElementChild, 'ag-cs-thinking-spark') ? trig.firstElementChild : qs(trig, '.ag-cs-thinking-spark');
         if (
           i < len - 2 &&
           spark &&
-          spark.getAttribute('data-state') === 'done' &&
-          spark.getAttribute('data-brand') === brand &&
-          spark.getAttribute('data-mono') === monoVal &&
-          !trig.hasAttribute('data-ag-cs-spark-streaming')
+          ga(spark, 'data-state') === 'done' &&
+          ga(spark, 'data-brand') === brand &&
+          ga(spark, 'data-mono') === mv &&
+          !ha(trig, 'data-ag-cs-spark-streaming')
         ) {
           continue;
         }
-        const txt = String(trig.textContent || '');
-        const st = /\.\.\.|…|正在|思考中|thinking/i.test(txt) ? 'streaming' : 'done';
+        const st = /\.\.\.|…|正在|思考中|thinking/i.test(String(trig.textContent || '')) ? 'streaming' : 'done';
         if (
           spark &&
-          spark.getAttribute('data-brand') === brand &&
-          spark.getAttribute('data-state') === st &&
-          spark.getAttribute('data-mono') === monoVal &&
-          Boolean(st === 'streaming') === trig.hasAttribute('data-ag-cs-spark-streaming')
+          ga(spark, 'data-brand') === brand &&
+          ga(spark, 'data-state') === st &&
+          ga(spark, 'data-mono') === mv &&
+          (st === 'streaming') === ha(trig, 'data-ag-cs-spark-streaming')
         ) {
           continue;
         }
         pending.push({ trig, brand, st });
       }
       if (pending.length <= 16 || typeof requestAnimationFrame !== 'function') {
-        for (let i = 0; i < pending.length; i++) {
-          applySingleSparkUpdate(pending[i].trig, pending[i].brand, pending[i].st);
-        }
+        for (let i = 0; i < pending.length; i++) applySingleSpark(pending[i].trig, pending[i].brand, pending[i].st);
       } else {
         const syncStart = pending.length - 12;
-        for (let i = syncStart; i < pending.length; i++) {
-          applySingleSparkUpdate(pending[i].trig, pending[i].brand, pending[i].st);
-        }
-        deferredSparkQueue = pending.slice(0, syncStart);
-        scheduleDeferredHydration();
+        for (let i = syncStart; i < pending.length; i++) applySingleSpark(pending[i].trig, pending[i].brand, pending[i].st);
+        sparkQueue = pending.slice(0, syncStart);
+        if (!hydrateRaf) hydrateRaf = rAF(stepHydration);
       }
     }
 
     function clearWorkedForAutoUnfoldAttrs() {
-      document.querySelectorAll('[data-ag-cs-auto-unfolded]').forEach((el) => el.removeAttribute('data-ag-cs-auto-unfolded'));
-      document.querySelectorAll('[data-ag-cs-outer-open]').forEach((el) => el.removeAttribute('data-ag-cs-outer-open'));
+      const d = docOf();
+      if (!d) return;
+      for (const el of qsa(d, '[data-ag-cs-auto-unfolded]')) ra(el, 'data-ag-cs-auto-unfolded');
+      for (const el of qsa(d, '[data-ag-cs-outer-open]')) ra(el, 'data-ag-cs-outer-open');
     }
 
-    function processSingleWorkedForOuter(btn) {
-      if (!btn || btn.isConnected === false) return;
-      const expanded = btn.getAttribute('aria-expanded') === 'true';
+    function processOuterWf(btn) {
+      if (!isConn(btn)) return;
+      const expanded = ga(btn, 'aria-expanded') === 'true';
       let scope = btn.nextElementSibling;
       if (!scope) {
         let sib = btn.nextSibling;
         while (sib && sib.nodeType && sib.nodeType !== 1) sib = sib.nextSibling;
         scope = sib || null;
       }
-      if (!scope) scope = btn.parentElement;
-      const innerBtns = scope ? scope.querySelectorAll('[data-testid="tool-group-collapsible"]') : [];
+      if (!scope) scope = peOf(btn);
+      const innerBtns = qsa(scope, '[data-testid="tool-group-collapsible"]');
       if (expanded) {
         setAttrIfChanged(btn, 'data-ag-cs-outer-open', '1');
-        for (const childBtn of innerBtns) {
-          if (childBtn === btn) continue;
-          if (childBtn.getAttribute('data-ag-cs-auto-unfolded') !== '1') {
-            childBtn.setAttribute('data-ag-cs-auto-unfolded', '1');
-            if (childBtn.getAttribute('aria-expanded') === 'false' && typeof childBtn.click === 'function') {
+        for (const cb of innerBtns) {
+          if (cb !== btn && ga(cb, 'data-ag-cs-auto-unfolded') !== '1') {
+            sa(cb, 'data-ag-cs-auto-unfolded', '1');
+            if (ga(cb, 'aria-expanded') === 'false' && typeof cb.click === 'function') {
               try {
-                childBtn.click();
+                cb.click();
               } catch {}
             }
           }
         }
-      } else if (btn.getAttribute('data-ag-cs-outer-open') === '1') {
-        btn.removeAttribute('data-ag-cs-outer-open');
-        for (const childBtn of innerBtns) {
-          childBtn.removeAttribute('data-ag-cs-auto-unfolded');
-        }
-        if (btn.parentElement && btn.parentElement !== scope) {
-          btn.parentElement
-            .querySelectorAll('[data-ag-cs-auto-unfolded]')
-            .forEach((el) => el.removeAttribute('data-ag-cs-auto-unfolded'));
+      } else if (ga(btn, 'data-ag-cs-outer-open') === '1') {
+        ra(btn, 'data-ag-cs-outer-open');
+        for (const cb of innerBtns) ra(cb, 'data-ag-cs-auto-unfolded');
+        const p = peOf(btn);
+        if (p && p !== scope) {
+          for (const el of qsa(p, '[data-ag-cs-auto-unfolded]')) ra(el, 'data-ag-cs-auto-unfolded');
         }
       }
     }
 
     function syncWorkedForAutoUnfold(dirtyTargets = null) {
+      const d = docOf();
       if (isDestroyed()) {
         clearWorkedForAutoUnfoldAttrs();
         return;
       }
+      if (!d) return;
       if (dirtyTargets && dirtyTargets.size > 0) {
         const outers = new Set();
         for (const node of dirtyTargets) {
-          if (!node || node.isConnected === false) continue;
-          if (node.getAttribute?.('data-testid') === 'worked-for-collapsible') {
+          if (!isConn(node)) continue;
+          if (ga(node, 'data-testid') === 'worked-for-collapsible') {
             outers.add(node);
             continue;
           }
-          const prevOuter = node.previousElementSibling;
-          if (prevOuter && prevOuter.getAttribute?.('data-testid') === 'worked-for-collapsible') {
-            outers.add(prevOuter);
-          }
-          if (typeof node.querySelectorAll === 'function') {
-            node.querySelectorAll('[data-testid="worked-for-collapsible"]').forEach((b) => outers.add(b));
-          }
-          let cur = node.parentElement;
-          while (cur && cur !== document.body) {
+          const prev = node.previousElementSibling;
+          if (prev && ga(prev, 'data-testid') === 'worked-for-collapsible') outers.add(prev);
+          for (const b of qsa(node, '[data-testid="worked-for-collapsible"]')) outers.add(b);
+          let cur = peOf(node);
+          while (cur && cur !== d.body) {
             const sib = cur.previousElementSibling;
-            if (sib && sib.getAttribute?.('data-testid') === 'worked-for-collapsible') {
+            if (sib && ga(sib, 'data-testid') === 'worked-for-collapsible') {
               outers.add(sib);
               break;
             }
-            cur = cur.parentElement;
+            cur = peOf(cur);
           }
         }
-        for (const btn of outers) processSingleWorkedForOuter(btn);
+        for (const btn of outers) processOuterWf(btn);
         return;
       }
-      const outers = document.querySelectorAll('[data-testid="worked-for-collapsible"]');
-      for (const btn of outers) processSingleWorkedForOuter(btn);
+      for (const btn of qsa(d, '[data-testid="worked-for-collapsible"]')) processOuterWf(btn);
     }
 
     function scheduleWorkedForClickSync() {
       if (isDestroyed()) return;
-      if (workedForClickTimer) clearTimeout(workedForClickTimer);
-      workedForClickTimer = setTimeout(() => {
-        workedForClickTimer = 0;
+      if (wfClickTimer) clearTimeout(wfClickTimer);
+      wfClickTimer = setTimeout(() => {
+        wfClickTimer = 0;
         if (!isDestroyed()) syncWorkedForAutoUnfold();
       }, 28);
     }
 
     function findFormalConvView() {
-      const views = document.querySelectorAll('[data-testid="conversation-view"]');
-      for (const cv of views) {
-        if (cv.closest?.('[data-testid="subagent-tab-conversation"]')) continue;
-        if (cv.closest?.('.agy-home') || cv.querySelector?.('.agy-home')) continue;
+      const d = docOf();
+      for (const cv of qsa(d, '[data-testid="conversation-view"]')) {
+        if (closestOf(cv, '[data-testid="subagent-tab-conversation"]')) continue;
+        if (closestOf(cv, '.agy-home') || qs(cv, '.agy-home')) continue;
         return cv;
       }
       return null;
     }
 
     function sampleHomeComposerRect() {
-      const home = document.querySelector('.agy-home');
+      const home = qs(docOf(), '.agy-home');
       if (!home) return null;
-      const target = home.querySelector('[data-testid="agent-input-box"]') || home.querySelector('.surface-composer-card');
-      if (!target || typeof target.getBoundingClientRect !== 'function') return null;
-      const r = target.getBoundingClientRect();
+      const r = rectOf(qs(home, '[data-testid="agent-input-box"]') || qs(home, '.surface-composer-card'));
       if (r && r.width > 0 && r.height > 0) {
-        heroState.lastHomeComposerRect = { left: r.left, top: r.top, width: r.width, height: r.height };
+        lastHomeRect = { left: r.left, top: r.top, width: r.width, height: r.height };
       }
-      return heroState.lastHomeComposerRect;
+      return lastHomeRect;
     }
 
     function triggerHomeLiftoffRippleBurst() {
-      const home = document.querySelector('.agy-home');
+      const home = qs(docOf(), '.agy-home');
       if (!home) return;
-      const rect = sampleHomeComposerRect();
-      if (!isMotionUltra() || !rippleCtl) return;
-      rippleCtl.triggerLiftoffBurst(rect);
+      const r = sampleHomeComposerRect();
+      if (isMotionUltra() && rippleCtl) rippleCtl.triggerLiftoffBurst(r);
     }
 
-    function markFirstUserLiftoffBubble(formalConv) {
-      if (!formalConv) return false;
-      const bubble = formalConv.querySelector('[data-testid="user-message-bubble"]');
+    function markLiftoffBubble(conv) {
+      const bubble = qs(conv, '[data-testid="user-message-bubble"]');
       if (!bubble) return false;
-      bubble.setAttribute('data-ag-cs-liftoff-bubble', '1');
+      sa(bubble, 'data-ag-cs-liftoff-bubble', '1');
       scheduleTransient(() => {
-        if (bubble.isConnected) bubble.removeAttribute('data-ag-cs-liftoff-bubble');
+        if (isConn(bubble)) ra(bubble, 'data-ag-cs-liftoff-bubble');
       }, 500);
       return true;
     }
 
-    function triggerHeroALiftoff(formalConv, measuredConvInputRect = null) {
-      if (!isMotionUltra() || !formalConv) return;
-      const now = performance.now();
-
-      document.querySelectorAll('.ag-cs-liftoff-veil').forEach((n) => n.remove());
-      const veil = document.createElement('div');
+    function triggerHeroALiftoff(formalConv, measuredRect = null) {
+      const d = docOf();
+      if (!isMotionUltra() || !formalConv || !d) return;
+      const now = nowOf();
+      for (const n of qsa(d, '.ag-cs-liftoff-veil')) n.remove();
+      const veil = d.createElement('div');
       veil.className = 'ag-cs-liftoff-veil';
-      veil.setAttribute('aria-hidden', 'true');
-      veil.setAttribute('data-ag-no-i18n', '');
-      const r = heroState.lastHomeComposerRect;
-      const cx = r && r.width > 0 ? `${Math.round(r.left + r.width / 2)}px` : '50%';
-      const cy = r && r.height > 0 ? `${Math.round(r.top + r.height / 2)}px` : '58%';
-      veil.style.setProperty('--ag-lift-x', cx);
-      veil.style.setProperty('--ag-lift-y', cy);
-      const ring = document.createElement('div');
+      sa(veil, 'aria-hidden', 'true');
+      sa(veil, 'data-ag-no-i18n', '');
+      const r = lastHomeRect;
+      setProp(veil, '--ag-lift-x', r && r.width > 0 ? `${Math.round(r.left + r.width / 2)}px` : '50%');
+      setProp(veil, '--ag-lift-y', r && r.height > 0 ? `${Math.round(r.top + r.height / 2)}px` : '58%');
+      const ring = d.createElement('div');
       ring.className = 'ag-cs-liftoff-ring';
       veil.appendChild(ring);
-      if (document.body) document.body.appendChild(veil);
+      d.body?.appendChild(veil);
       scheduleTransient(() => veil.remove(), 540);
 
-      const inputBox =
-        formalConv.querySelector('[data-testid="agent-input-box"]') ||
-        document.querySelector('[data-testid="agent-input-box"]');
-      if (inputBox && motionEngine && typeof motionEngine.spring === 'function') {
-        const nr = measuredConvInputRect || (typeof inputBox.getBoundingClientRect === 'function' ? inputBox.getBoundingClientRect() : null);
+      const inputBox = qs(formalConv, '[data-testid="agent-input-box"]') || qs(d, '[data-testid="agent-input-box"]');
+      if (inputBox && typeof motionEngine?.spring === 'function') {
+        const nr = measuredRect || rectOf(inputBox);
         const rawDelta = r && nr ? Math.round(r.top - nr.top) : -160;
-        const deltaY = Math.max(-420, Math.min(-24, rawDelta === 0 ? -140 : rawDelta));
+        const dy = Math.max(-420, Math.min(-24, rawDelta === 0 ? -140 : rawDelta));
         try {
           motionEngine.spring(
             inputBox,
-            [
-              { transform: `translateY(${deltaY}px) scale(0.985)` },
-              { transform: 'translateY(0) scale(1)' },
-            ],
+            [{ transform: `translateY(${dy}px) scale(0.985)` }, { transform: 'translateY(0) scale(1)' }],
             { durationMs: 480, stiffness: 310, damping: 28, slot: 'liftoff-dock' }
           );
         } catch {}
       }
-
-      if (!markFirstUserLiftoffBubble(formalConv)) {
-        heroState.pendingLiftoffBubbleUntil = now + 900;
-      } else {
-        heroState.pendingLiftoffBubbleUntil = 0;
-      }
-
-      convAuraCtl.triggerLiftoffEbb(now);
+      liftoffBubbleUntil = markLiftoffBubble(formalConv) ? 0 : now + 900;
+      convAuraCtl?.triggerLiftoffEbb?.(now);
     }
 
     function triggerHeroBHomeReturn() {
       if (!isMotionUltra()) return;
-      const home = document.querySelector('.agy-home');
+      const home = qs(docOf(), '.agy-home');
       if (!home) return;
-      if (rippleCtl) rippleCtl.triggerTideSwell();
-      if (motionEngine && typeof motionEngine.stagger === 'function') {
-        const items = [
-          home.querySelector('[data-testid="home-greeting"]'),
-          home.querySelector('.ag-cs-home-panel'),
-          home.querySelector('[data-testid="agent-input-box"]'),
-        ].filter(Boolean);
+      rippleCtl?.triggerTideSwell?.();
+      if (typeof motionEngine?.stagger === 'function') {
+        const items = [qs(home, '[data-testid="home-greeting"]'), qs(home, '.ag-cs-home-panel'), qs(home, '[data-testid="agent-input-box"]')].filter(
+          Boolean
+        );
         if (items.length > 0) {
           try {
-            motionEngine.stagger(
-              items,
-              [
-                { opacity: 0.01, transform: 'translateY(10px)' },
-                { opacity: 1, transform: 'translateY(0px)' },
-              ],
-              { durationMs: 220, delayStep: 24, stepMs: 24, stiffness: 360, damping: 30, slot: 'home-return' }
-            );
+            motionEngine.stagger(items, [{ opacity: 0.01, transform: 'translateY(10px)' }, { opacity: 1, transform: 'translateY(0px)' }], {
+              durationMs: 220,
+              delayStep: 24,
+              stepMs: 24,
+              stiffness: 360,
+              damping: 30,
+              slot: 'home-return',
+            });
           } catch {}
         }
       }
     }
 
     function measureSidebarSelectionSnapshot() {
-      const rows = document.querySelectorAll('[data-testid="conversation-row-sidebar"]');
-      if (!rows || rows.length === 0) return { empty: true };
+      const rows = qsa(docOf(), '[data-testid="conversation-row-sidebar"]');
+      if (!rows.length) return { e: true };
       let selIdx = -1;
       let selRow = null;
-      const rowRunStates = [];
+      const states = [];
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
-        if (selIdx < 0 && r.getAttribute('data-selected') === 'true') {
+        if (selIdx < 0 && ga(r, 'data-selected') === 'true') {
           selIdx = i;
           selRow = r;
         }
-        rowRunStates.push({ row: r, running: Boolean(r.querySelector?.('[data-testid="status-loading-spinner"]')) });
+        states.push([r, Boolean(qs(r, '[data-testid="status-loading-spinner"]'))]);
       }
-      if (!selRow) return { empty: false, selIdx: -1, selRow: null, curSnap: null, listRect: null, scrollTop: 0, rowRunStates };
-      const listContainer = selRow.parentElement;
-      const rowRect = typeof selRow.getBoundingClientRect === 'function' ? selRow.getBoundingClientRect() : null;
-      const listRect = listContainer && typeof listContainer.getBoundingClientRect === 'function' ? listContainer.getBoundingClientRect() : null;
-      const scrollTop = listContainer ? listContainer.scrollTop || 0 : 0;
-      const curSnap = rowRect
+      if (!selRow) return { e: false, i: -1, r: null, s: null, l: null, t: 0, st: states };
+      const list = peOf(selRow);
+      const rr = rectOf(selRow);
+      const lr = rectOf(list);
+      const stTop = list ? list.scrollTop || 0 : 0;
+      const snap = rr
         ? {
-            left: rowRect.left,
-            top: rowRect.top,
-            width: rowRect.width,
-            height: rowRect.height,
-            relTop: listRect ? rowRect.top - listRect.top + scrollTop : rowRect.top,
-            relLeft: listRect ? rowRect.left - listRect.left : rowRect.left,
+            left: rr.left,
+            top: rr.top,
+            width: rr.width,
+            height: rr.height,
+            ry: lr ? rr.top - lr.top + stTop : rr.top,
+            rx: lr ? rr.left - lr.left : rr.left,
           }
         : null;
-      return { empty: false, selIdx, selRow, curSnap, listRect, scrollTop, rowRunStates };
+      return { e: false, i: selIdx, r: selRow, s: snap, l: lr, t: stTop, st: states };
     }
 
-    function syncSidebarSelectionGlide(measuredSidebar) {
-      if (!measuredSidebar) return;
-      const sidebarOff =
-        typeof document !== 'undefined' && document.documentElement?.getAttribute?.('data-ag-cs-sidebar') === 'off';
-      if (sidebarOff) {
-        document.querySelectorAll('.ag-cs-sidebar-glide-pill').forEach((n) => n.remove());
-        if (measuredSidebar.rowRunStates) {
-          for (let i = 0; i < measuredSidebar.rowRunStates.length; i++) {
-            const { row } = measuredSidebar.rowRunStates[i];
-            if (row?.hasAttribute?.('data-ag-cs-row-running')) row.removeAttribute('data-ag-cs-row-running');
-          }
+    function syncSidebarSelectionGlide(snap) {
+      const d = docOf();
+      if (!snap || !d) return;
+      if (ga(d.documentElement, 'data-ag-cs-sidebar') === 'off') {
+        for (const n of qsa(d, '.ag-cs-sidebar-glide-pill')) n.remove();
+        if (snap.st) {
+          for (const [row] of snap.st) if (ha(row, 'data-ag-cs-row-running')) ra(row, 'data-ag-cs-row-running');
         }
-        heroState.sidebarInitialized = false;
-        heroState.sidebarIndex = -1;
-        heroState.sidebarRow = null;
-        heroState.sidebarRect = null;
+        sbInit = false;
+        sbIndex = -1;
+        sbRect = null;
         return;
       }
-      const snap = measuredSidebar;
-      if (snap.rowRunStates) {
-        for (let i = 0; i < snap.rowRunStates.length; i++) {
-          const { row, running } = snap.rowRunStates[i];
-          if (running) setAttrIfChanged(row, 'data-ag-cs-row-running', '1');
-          else if (row.hasAttribute?.('data-ag-cs-row-running')) row.removeAttribute('data-ag-cs-row-running');
+      if (snap.st) {
+        for (const [row, run] of snap.st) {
+          if (run) setAttrIfChanged(row, 'data-ag-cs-row-running', '1');
+          else if (ha(row, 'data-ag-cs-row-running')) ra(row, 'data-ag-cs-row-running');
         }
       }
-      if (snap.empty) {
-        heroState.sidebarInitialized = false;
-        heroState.sidebarIndex = -1;
-        heroState.sidebarRow = null;
-        heroState.sidebarRect = null;
+      if (snap.e) {
+        sbInit = false;
+        sbIndex = -1;
+        sbRect = null;
         return;
       }
-      const { selIdx, selRow, curSnap, listRect, scrollTop } = snap;
+      const { i: selIdx, r: selRow, s: curSnap, l: listRect, t: scrollTop } = snap;
       if (!selRow) return;
-
-      if (!heroState.sidebarInitialized) {
-        heroState.sidebarInitialized = true;
-        heroState.sidebarIndex = selIdx;
-        heroState.sidebarRow = selRow;
-        heroState.sidebarRect = curSnap;
+      if (!sbInit) {
+        sbInit = true;
+        sbIndex = selIdx;
+        sbRect = curSnap;
         return;
       }
-
-      const prevIdx = heroState.sidebarIndex;
-      const prevSnap = heroState.sidebarRect;
-      if (prevIdx >= 0 && selIdx >= 0 && selIdx !== prevIdx && prevSnap && curSnap) {
-        const fromViewportRect = listRect
-          ? {
-              left: listRect.left + prevSnap.relLeft,
-              top: listRect.top + prevSnap.relTop - scrollTop,
-              width: prevSnap.width,
-              height: prevSnap.height,
-            }
-          : prevSnap;
-
+      if (sbIndex >= 0 && selIdx >= 0 && selIdx !== sbIndex && sbRect && curSnap) {
+        const fromRect = listRect
+          ? { left: listRect.left + sbRect.rx, top: listRect.top + sbRect.ry - scrollTop, width: sbRect.width, height: sbRect.height }
+          : sbRect;
         if (isMotionStandardOrUltra()) {
-          document.querySelectorAll('.ag-cs-sidebar-glide-pill').forEach((n) => n.remove());
-          const pill = document.createElement('div');
+          for (const n of qsa(d, '.ag-cs-sidebar-glide-pill')) n.remove();
+          const pill = d.createElement('div');
           pill.className = 'ag-cs-sidebar-glide-pill';
-          pill.setAttribute('aria-hidden', 'true');
-          pill.setAttribute('data-ag-no-i18n', '');
-          pill.style.setProperty('position', 'fixed');
-          pill.style.setProperty('z-index', '38');
-          pill.style.setProperty('pointer-events', 'none');
-          pill.style.setProperty('left', `${Math.round(curSnap.left)}px`);
-          pill.style.setProperty('top', `${Math.round(curSnap.top)}px`);
-          pill.style.setProperty('width', `${Math.round(curSnap.width)}px`);
-          pill.style.setProperty('height', `${Math.round(curSnap.height)}px`);
-          if (document.body) document.body.appendChild(pill);
-          if (motionEngine && typeof motionEngine.glideIndicator === 'function') {
-            try {
-              motionEngine.glideIndicator(pill, fromViewportRect, curSnap, { durationMs: 240 });
-            } catch {}
+          sa(pill, 'aria-hidden', 'true');
+          sa(pill, 'data-ag-no-i18n', '');
+          for (const [k, v] of [
+            ['position', 'fixed'],
+            ['z-index', '38'],
+            ['pointer-events', 'none'],
+            ['left', `${Math.round(curSnap.left)}px`],
+            ['top', `${Math.round(curSnap.top)}px`],
+            ['width', `${Math.round(curSnap.width)}px`],
+            ['height', `${Math.round(curSnap.height)}px`],
+          ]) {
+            setProp(pill, k, v);
           }
+          d.body?.appendChild(pill);
+          try {
+            motionEngine?.glideIndicator?.(pill, fromRect, curSnap, { durationMs: 240 });
+          } catch {}
           scheduleTransient(() => pill.remove(), 260);
         }
-
         if (isMotionUltra()) {
-          const dir = selIdx < prevIdx ? 'down' : 'up';
-          const viewports = document.querySelectorAll('[data-testid="autoscroll-viewport"]');
-          for (const vp of viewports) {
-            if (vp.closest?.('[data-testid="subagent-tab-conversation"]')) continue;
-            vp.setAttribute('data-ag-cs-stage-glide', dir);
+          const dir = selIdx < sbIndex ? 'down' : 'up';
+          for (const vp of qsa(d, '[data-testid="autoscroll-viewport"]')) {
+            if (closestOf(vp, '[data-testid="subagent-tab-conversation"]')) continue;
+            sa(vp, 'data-ag-cs-stage-glide', dir);
             scheduleTransient(() => {
-              if (vp.isConnected && vp.getAttribute('data-ag-cs-stage-glide') === dir) {
-                vp.removeAttribute('data-ag-cs-stage-glide');
-              }
+              if (isConn(vp) && ga(vp, 'data-ag-cs-stage-glide') === dir) ra(vp, 'data-ag-cs-stage-glide');
             }, 220);
             break;
           }
         }
       }
-
-      heroState.sidebarIndex = selIdx;
-      heroState.sidebarRow = selRow;
-      heroState.sidebarRect = curSnap;
+      sbIndex = selIdx;
+      sbRect = curSnap;
     }
 
-    function applyCausticSweep(el) {
+    function applyCaustic(el) {
       if (!el || !isMotionUltra()) return;
-      el.setAttribute('data-ag-cs-caustic', '1');
+      sa(el, 'data-ag-cs-caustic', '1');
       scheduleTransient(() => {
-        if (el.isConnected) el.removeAttribute('data-ag-cs-caustic');
+        if (isConn(el)) ra(el, 'data-ag-cs-caustic');
       }, 920);
     }
 
     function measureVisibleChangedHeaders() {
       const out = [];
-      const headers = document.querySelectorAll('[data-testid="changed-files-card-header"]');
-      const vh = typeof window.innerHeight === 'number' && window.innerHeight > 0 ? window.innerHeight : 1080;
-      for (const hdr of headers) {
-        if (seenChangedFileHeaders.has(hdr)) continue;
-        const r = typeof hdr.getBoundingClientRect === 'function' ? hdr.getBoundingClientRect() : null;
-        const inView = !r || r.height <= 0 || (r.bottom > 0 && r.top < vh);
-        if (inView) out.push(hdr);
+      const vh = typeof window !== 'undefined' && window.innerHeight > 0 ? window.innerHeight : 1080;
+      for (const hdr of qsa(docOf(), '[data-testid="changed-files-card-header"]')) {
+        if (seenHeaders.has(hdr)) continue;
+        const r = rectOf(hdr);
+        if (!r || r.height <= 0 || (r.bottom > 0 && r.top < vh)) out.push(hdr);
       }
       return out;
     }
 
     function syncHeroCCaustics(measuredHeaders) {
-      const now = performance.now();
-      const visibleHeaders = measuredHeaders || measureVisibleChangedHeaders();
-      let sawNewChangedFiles = false;
-      for (const hdr of visibleHeaders) {
-        if (seenChangedFileHeaders.has(hdr)) continue;
-        seenChangedFileHeaders.add(hdr);
-        sawNewChangedFiles = true;
-        if (isMotionUltra()) applyCausticSweep(hdr);
+      const d = docOf();
+      const now = nowOf();
+      let sawNew = false;
+      for (const hdr of measuredHeaders || measureVisibleChangedHeaders()) {
+        if (seenHeaders.has(hdr)) continue;
+        seenHeaders.add(hdr);
+        sawNew = true;
+        if (isMotionUltra()) applyCaustic(hdr);
       }
-      if (sawNewChangedFiles) {
-        notifyMascot('files-changed');
-      }
+      if (sawNew) notifyMascot('files-changed');
 
       const runningNow = isConvRunning();
-      if (!heroState.runTrackInitialized) {
-        heroState.runTrackInitialized = true;
-        heroState.wasConvRunning = runningNow;
-        heroState.runStartedAt = runningNow ? now : 0;
-      } else if (runningNow && !heroState.wasConvRunning) {
-        heroState.wasConvRunning = true;
-        heroState.runStartedAt = now;
-      } else if (!runningNow && heroState.wasConvRunning) {
-        heroState.wasConvRunning = false;
-        const elapsed = heroState.runStartedAt > 0 ? now - heroState.runStartedAt : 0;
-        heroState.runStartedAt = 0;
+      if (!runInit) {
+        runInit = true;
+        wasRunning = runningNow;
+        runStartAt = runningNow ? now : 0;
+      } else if (runningNow && !wasRunning) {
+        wasRunning = true;
+        runStartAt = now;
+      } else if (!runningNow && wasRunning) {
+        wasRunning = false;
+        const elapsed = runStartAt > 0 ? now - runStartAt : 0;
+        runStartAt = 0;
         const auraPhase = convAuraCtl?.getInstance?.()?.phase || '';
-        const errDom =
-          typeof document !== 'undefined' &&
-          typeof document.querySelector === 'function' &&
-          document.querySelector(
-            '[data-testid="conversation-view"] [data-testid="agent-error-banner"], [data-testid="conversation-view"] [data-testid="error-message"]'
-          );
-        const haltedByError = auraPhase === 'error-halted' || Boolean(errDom);
-        if (haltedByError) {
+        const errDom = qs(
+          d,
+          '[data-testid="conversation-view"] [data-testid="agent-error-banner"], [data-testid="conversation-view"] [data-testid="error-message"]'
+        );
+        if (auraPhase === 'error-halted' || Boolean(errDom)) {
           convAuraCtl?.triggerErrorHalted?.(now);
           notifyMascot('streamDone', { error: true, durationMs: elapsed });
         } else {
           if (elapsed >= 6000 && isMotionUltra()) {
-            const cards = document.querySelectorAll('[data-testid="agent-input-box"] .surface-composer-card');
-            let primaryCard = null;
-            for (const c of cards) {
-              if (!c.closest?.('[data-testid="subagent-tab-conversation"]')) {
-                primaryCard = c;
+            for (const c of qsa(d, '[data-testid="agent-input-box"] .surface-composer-card')) {
+              if (!closestOf(c, '[data-testid="subagent-tab-conversation"]')) {
+                applyCaustic(c);
                 break;
               }
             }
-            if (primaryCard) applyCausticSweep(primaryCard);
           }
-          if (elapsed >= 15000) {
-            convAuraCtl?.triggerLongTaskComplete?.(now);
-          }
+          if (elapsed >= 15000) convAuraCtl?.triggerLongTaskComplete?.(now);
           notifyMascot('complete', { durationMs: elapsed });
         }
       }
@@ -677,18 +747,18 @@
     function triggerHeroDFiberPulse(card, modelBtn, brand) {
       if (!card || !isMotionUltra()) return;
       const camp = brand === 'antigravity' || brand === 'claude' || brand === 'openai' ? brand : 'gemini';
-      if (heroState.fiberTimer) {
-        clearTimeout(heroState.fiberTimer);
-        transientTimers.delete(heroState.fiberTimer);
-        heroState.fiberTimer = 0;
+      if (fiberTimer) {
+        clearTimeout(fiberTimer);
+        transientTimers.delete(fiberTimer);
+        fiberTimer = 0;
       }
-      card.setAttribute('data-ag-cs-fiber-camp', camp);
-      heroState.fiberTimer = scheduleTransient(() => {
-        heroState.fiberTimer = 0;
-        if (card.isConnected) card.removeAttribute('data-ag-cs-fiber-camp');
+      sa(card, 'data-ag-cs-fiber-camp', camp);
+      fiberTimer = scheduleTransient(() => {
+        fiberTimer = 0;
+        if (isConn(card)) ra(card, 'data-ag-cs-fiber-camp');
       }, 480);
-      const glyph = modelBtn?.querySelector?.('.ag-cs-model-glyph');
-      if (glyph && motionEngine && typeof motionEngine.spring === 'function') {
+      const glyph = qs(modelBtn, '.ag-cs-model-glyph');
+      if (glyph && typeof motionEngine?.spring === 'function') {
         try {
           motionEngine.spring(
             glyph,
@@ -705,60 +775,52 @@
 
     function triggerHeroESonar(navTurn) {
       if (!navTurn || !isMotionUltra()) return;
-      const conv = navTurn.closest?.('[data-testid="conversation-view"]') || findFormalConvView();
+      const conv = closestOf(navTurn, '[data-testid="conversation-view"]') || findFormalConvView();
       if (!conv) return;
-      let turns = conv.querySelectorAll('[data-testid="user-input-step"]');
-      if (!turns || turns.length === 0) turns = conv.querySelectorAll('[data-testid="conversation-turn"]');
-      if (!turns || turns.length === 0) turns = conv.querySelectorAll('[data-testid="user-message-bubble"]');
-      if (!turns || turns.length === 0) return;
+      let turns = qsa(conv, '[data-testid="user-input-step"]');
+      if (!turns.length) turns = qsa(conv, '[data-testid="conversation-turn"]');
+      if (!turns.length) turns = qsa(conv, '[data-testid="user-message-bubble"]');
+      if (!turns.length) return;
 
       let idx = -1;
-      const rawAttr = navTurn.getAttribute?.('data-turn-index') ?? navTurn.getAttribute?.('data-index');
-      if (rawAttr !== null && rawAttr !== undefined && /^\d+$/.test(String(rawAttr).trim())) {
+      const rawAttr = ga(navTurn, 'data-turn-index') ?? ga(navTurn, 'data-index');
+      if (rawAttr != null && /^\d+$/.test(String(rawAttr).trim())) {
         idx = parseInt(String(rawAttr).trim(), 10);
-      } else if (navTurn.getAttribute?.('data-testid') === 'conversation-navigator-group') {
+      } else if (ga(navTurn, 'data-testid') === 'conversation-navigator-group') {
         idx = 0;
       } else {
-        const navRoot = navTurn.closest?.('[data-testid="conversation-navigator"]') || navTurn.parentElement;
+        const navRoot = closestOf(navTurn, '[data-testid="conversation-navigator"]') || peOf(navTurn);
         if (navRoot) {
-          const sibs = Array.from(navRoot.querySelectorAll('[data-testid="conversation-navigator-turn"]'));
+          const sibs = Array.from(qsa(navRoot, '[data-testid="conversation-navigator-turn"]'));
           const relIdx = sibs.indexOf(navTurn);
-          if (relIdx >= 0) {
-            const offset = Math.max(0, turns.length - sibs.length);
-            idx = Math.min(turns.length - 1, offset + relIdx);
-          }
+          if (relIdx >= 0) idx = Math.min(turns.length - 1, Math.max(0, turns.length - sibs.length) + relIdx);
         }
       }
-      if (idx < 0 || idx >= turns.length) return;
-      const target = turns[idx];
+      const target = idx >= 0 && idx < turns.length ? turns[idx] : null;
       if (!target) return;
-      target.setAttribute('data-ag-cs-sonar', '1');
+      sa(target, 'data-ag-cs-sonar', '1');
       scheduleTransient(() => {
-        if (target.isConnected) target.removeAttribute('data-ag-cs-sonar');
+        if (isConn(target)) ra(target, 'data-ag-cs-sonar');
       }, 720);
     }
 
     function syncHeroRouteChoreography(measured) {
-      const inHome = measured ? measured.inHome : Boolean(document.querySelector('.agy-home'));
+      const d = docOf();
+      const inHome = measured ? measured.inHome : Boolean(qs(d, '.agy-home'));
       const formalConv = measured ? measured.formalConv : !inHome ? findFormalConvView() : null;
       const inFormalConv = Boolean(formalConv);
 
       if (inHome) {
-        const homeEl = document.querySelector('.agy-home');
-        const sheet = homeEl?.closest?.('.agy-sheet');
+        const sheet = closestOf(qs(d, '.agy-home'), '.agy-sheet');
         if (sheet) setAttrIfChanged(sheet, 'data-ag-cs-home-sheet', '1');
       }
       if (formalConv) {
-        const seat = formalConv.parentElement;
-        if (seat && String(seat.tagName || '').toUpperCase() === 'DIV') {
-          setAttrIfChanged(seat, 'data-ag-cs-conv-seat', '1');
-        }
-        const vp = formalConv.querySelector?.('[data-testid="autoscroll-viewport"]');
-        if (vp && vp.parentElement && vp.parentElement !== formalConv) {
-          setAttrIfChanged(vp.parentElement, 'data-ag-cs-vp-wrap', '1');
-        }
+        const seat = peOf(formalConv);
+        if (seat && tagOf(seat) === 'DIV') setAttrIfChanged(seat, 'data-ag-cs-conv-seat', '1');
+        const vp = qs(formalConv, '[data-testid="autoscroll-viewport"]');
+        const vpP = peOf(vp);
+        if (vpP && vpP !== formalConv) setAttrIfChanged(vpP, 'data-ag-cs-vp-wrap', '1');
       }
-
       if (inHome && !measured?.homeComposerSampled) sampleHomeComposerRect();
 
       if (!heroState.routeInitialized) {
@@ -766,345 +828,372 @@
         heroState.wasInHome = inHome;
         heroState.wasInFormalConv = inFormalConv;
       } else {
-        if (heroState.wasInHome && !inHome && inFormalConv) {
-          triggerHeroALiftoff(formalConv, measured?.convInputRect || null);
-        } else if (heroState.wasInFormalConv && !heroState.wasInHome && inHome) {
-          triggerHeroBHomeReturn();
-        }
+        if (heroState.wasInHome && !inHome && inFormalConv) triggerHeroALiftoff(formalConv, measured?.convInputRect || null);
+        else if (heroState.wasInFormalConv && !heroState.wasInHome && inHome) triggerHeroBHomeReturn();
         heroState.wasInHome = inHome;
         heroState.wasInFormalConv = inFormalConv;
       }
 
-      if (heroState.pendingLiftoffBubbleUntil > 0 && formalConv) {
-        if (performance.now() <= heroState.pendingLiftoffBubbleUntil) {
-          if (markFirstUserLiftoffBubble(formalConv)) heroState.pendingLiftoffBubbleUntil = 0;
-        } else {
-          heroState.pendingLiftoffBubbleUntil = 0;
-        }
+      if (liftoffBubbleUntil > 0 && formalConv) {
+        if (nowOf() <= liftoffBubbleUntil) {
+          if (markLiftoffBubble(formalConv)) liftoffBubbleUntil = 0;
+        } else liftoffBubbleUntil = 0;
       }
-
-      if (measured && measured.sidebarSnap) {
-        syncSidebarSelectionGlide(measured.sidebarSnap);
-      }
-      if (!measured || measured.checkCaustics !== false) {
-        syncHeroCCaustics(measured?.visibleChangedHeaders);
-      }
+      if (measured?.sidebarSnap) syncSidebarSelectionGlide(measured.sidebarSnap);
+      if (!measured || measured.checkCaustics !== false) syncHeroCCaustics(measured?.visibleChangedHeaders);
     }
 
-    function isBlockCodeElement(el, stopAt) {
-      if (!isElementLike(el)) return false;
-      const tag = String(el.tagName || '').toUpperCase();
-      if (tag === 'PRE') return true;
-      const cls = el.classList;
-      if (cls && (cls.contains('code-block') || cls.contains('code-line'))) return true;
-      if (tag === 'CODE') {
-        let p = el.parentElement;
+    function isBlockCode(el, stopAt) {
+      if (!isEl(el)) return false;
+      const t = tagOf(el);
+      if (t === 'PRE' || clHas(el, 'code-block') || clHas(el, 'code-line')) return true;
+      if (t === 'CODE') {
+        let p = peOf(el);
         while (p && p !== stopAt) {
-          const pt = String(p.tagName || '').toUpperCase();
-          if (pt === 'PRE' || p.classList?.contains?.('code-block')) return true;
-          p = p.parentElement;
+          if (tagOf(p) === 'PRE' || clHas(p, 'code-block')) return true;
+          p = peOf(p);
         }
-        return false;
       }
       return false;
     }
 
-    function isInsideCodeOrTable(node, stopAt) {
-      let cur = isElementLike(node) ? node : node?.parentElement;
+    function insideCodeOrTable(node, stopAt) {
+      let cur = isEl(node) ? node : peOf(node);
       while (cur && cur !== stopAt) {
-        const tag = String(cur.tagName || '').toUpperCase();
-        if (TABLE_TAGS.has(tag)) return cur;
-        if (isBlockCodeElement(cur, stopAt)) return cur;
-        cur = cur.parentElement;
+        if (TABLE_TAGS.has(tagOf(cur)) || isBlockCode(cur, stopAt)) return cur;
+        cur = peOf(cur);
       }
       return null;
     }
 
-    function findTableRowAncestor(node, stopAt) {
-      let cur = isElementLike(node) ? node : node?.parentElement;
+    function findRowAnc(node, stopAt) {
+      let cur = isEl(node) ? node : peOf(node);
       while (cur && cur !== stopAt) {
-        if (String(cur.tagName || '').toUpperCase() === 'TR') return cur;
-        cur = cur.parentElement;
+        if (tagOf(cur) === 'TR') return cur;
+        cur = peOf(cur);
       }
       return null;
     }
 
-    function flushAllStreamArtifacts() {
-      if (classSweepTimer) {
-        clearTimeout(classSweepTimer);
-        classSweepTimer = 0;
+    function flushAllStreamArtifacts(immediate = true) {
+      scannedNodes = new WeakSet();
+      seenBlocks = new WeakSet();
+      const force = immediate || !canStreamMotion() || isDestroyed();
+      if (force) {
+        clearHighlightFade();
+        if (sweepTimer) {
+          clearTimeout(sweepTimer);
+          sweepTimer = 0;
+        }
       }
-      scannedStreamNodes = new WeakSet();
       runGuardedMut(() => {
-        for (const [el, map] of expirableClassEntries.entries()) {
-          for (const cls of map.keys()) {
-            el.classList?.remove?.(cls);
+        const d = docOf();
+        if (force) {
+          for (const [el, map] of expirableClasses.entries()) {
+            for (const cls of map.keys()) clRm(el, cls);
+          }
+          expirableClasses.clear();
+          if (d) {
+            for (const cls of ['ag-cs-stream-chunk', 'ag-cs-thought-chunk', 'ag-cs-code-scan']) {
+              for (const el of qsa(d, '.' + cls)) clRm(el, cls);
+            }
           }
         }
-        expirableClassEntries.clear();
-        if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
-        document.querySelectorAll('.ag-cs-stream-chunk').forEach((el) => el.classList?.remove?.('ag-cs-stream-chunk'));
-        document.querySelectorAll('.ag-cs-thought-chunk').forEach((el) => el.classList?.remove?.('ag-cs-thought-chunk'));
-        document.querySelectorAll('.ag-cs-code-scan').forEach((el) => el.classList?.remove?.('ag-cs-code-scan'));
-        document
-          .querySelectorAll('[data-ag-cs-thought-streaming]')
-          .forEach((el) => el.removeAttribute('data-ag-cs-thought-streaming'));
+        if (!d) return;
+        for (const el of qsa(d, '[data-ag-cs-thought-streaming]')) ra(el, 'data-ag-cs-thought-streaming');
         if (!isMotionUltra()) {
-          document.querySelectorAll('.ag-cs-liftoff-veil').forEach((el) => el.remove());
-          document.querySelectorAll('[data-ag-cs-liftoff-bubble]').forEach((el) => el.removeAttribute('data-ag-cs-liftoff-bubble'));
-          document.querySelectorAll('[data-ag-cs-caustic]').forEach((el) => el.removeAttribute('data-ag-cs-caustic'));
-          document.querySelectorAll('[data-ag-cs-fiber-camp]').forEach((el) => el.removeAttribute('data-ag-cs-fiber-camp'));
-          document.querySelectorAll('[data-ag-cs-stage-glide]').forEach((el) => el.removeAttribute('data-ag-cs-stage-glide'));
-          document.querySelectorAll('[data-ag-cs-sonar]').forEach((el) => el.removeAttribute('data-ag-cs-sonar'));
+          for (const el of qsa(d, '.ag-cs-liftoff-veil')) el.remove();
+          for (const attr of [
+            'data-ag-cs-liftoff-bubble',
+            'data-ag-cs-caustic',
+            'data-ag-cs-fiber-camp',
+            'data-ag-cs-stage-glide',
+            'data-ag-cs-sonar',
+          ]) {
+            for (const el of qsa(d, `[${attr}]`)) ra(el, attr);
+          }
         }
         if (!isMotionStandardOrUltra()) {
-          document.querySelectorAll('.ag-cs-sidebar-glide-pill').forEach((el) => el.remove());
+          for (const el of qsa(d, '.ag-cs-sidebar-glide-pill')) el.remove();
         }
       });
     }
 
-    function findExpandedStreamingThoughtBody(node) {
-      let cur = isElementLike(node) ? node : node?.parentElement;
-      while (cur && cur !== document.body) {
-        if (cur.getAttribute?.('data-ag-cs-thought-streaming') === '1') return cur;
+    function findStreamingThoughtBody(node) {
+      const body = docOf()?.body;
+      let cur = isEl(node) ? node : peOf(node);
+      while (cur && cur !== body) {
+        if (ga(cur, 'data-ag-cs-thought-streaming') === '1') return cur;
         const prev = cur.previousElementSibling;
-        if (
-          prev &&
-          prev.getAttribute?.('data-testid') === 'thinking-collapsible-trigger' &&
-          prev.getAttribute?.('aria-expanded') === 'true'
-        ) {
-          return cur;
-        }
-        cur = cur.parentElement;
+        if (prev && ga(prev, 'data-testid') === 'thinking-collapsible-trigger' && ga(prev, 'aria-expanded') === 'true') return cur;
+        cur = peOf(cur);
       }
       return null;
     }
 
-    function markTransientStreamClass(el, clsName, durationMs = 240) {
-      if (!el || !el.classList || el.classList.contains(clsName)) return false;
-      runGuardedMut(() => {
-        el.classList.add(clsName);
-      });
-      const expAt = Date.now() + durationMs;
-      let map = expirableClassEntries.get(el);
+    function markStreamClass(el, cls, dur = 300) {
+      if (!el?.[K_CL] || clHas(el, cls)) return false;
+      runGuardedMut(() => el[K_CL].add(cls));
+      let map = expirableClasses.get(el);
       if (!map) {
         map = new Map();
-        expirableClassEntries.set(el, map);
+        expirableClasses.set(el, map);
       }
-      map.set(clsName, expAt);
-      if (!classSweepTimer) {
-        classSweepTimer = setTimeout(flushExpiredClasses, durationMs);
-      }
+      map.set(cls, Date.now() + dur);
+      if (!sweepTimer) sweepTimer = setTimeout(flushExpiredClasses, dur);
       return true;
     }
 
-    function markCodeScanElement(el) {
-      markTransientStreamClass(el, 'ag-cs-code-scan', 240);
+    function fadeLeafTexts(node, now, max = 4) {
+      if (!node || isThoughtIsolatedNode(node)) return;
+      let c = 0;
+      const walk = (cur) => {
+        if (!cur || c >= max || isThoughtIsolatedNode(cur)) return;
+        if (cur.nodeType === 3) {
+          const s = cur.data ?? cur.nodeValue ?? '';
+          textLenMap.set(cur, s.length);
+          if (s.length > 0) {
+            enqueueFadeRange(cur, 0, s.length, now);
+            c++;
+          }
+          return;
+        }
+        if (!isEl(cur) || !cur.childNodes) return;
+        for (let i = 0; i < cur.childNodes.length && c < max; i++) walk(cur.childNodes[i]);
+      };
+      walk(node);
     }
 
     function onStreamMutations(mutations) {
-      if (isDestroyed() || streamMutating || !isMotionUltra()) return;
-      const now = performance.now();
+      if (isDestroyed() || streamMutating || !canStreamMotion()) return;
+      const now = nowOf();
+      let newBlocks = 0;
 
       for (const m of mutations) {
-        if (m.type !== 'childList' || !m.addedNodes || m.addedNodes.length === 0) continue;
-        if (isThoughtMutationRecord(m)) continue;
-
+        if (!m || isThoughtMutationRecord(m)) continue;
         const target = m.target;
-        if (!target) continue;
-        const baseEl = isElementLike(target) ? target : target.parentElement;
-        if (!baseEl) continue;
+        if (!target || isThoughtIsolatedNode(target)) continue;
+        const baseEl = isEl(target) ? target : peOf(target);
         if (
-          baseEl.closest?.(
-            '.ag-cs-stream-chunk, .ag-cs-thought-chunk, .ag-cs-smooth-caret, .ag-cs-crab, .ag-cs-conv-aura-host, [data-testid="agent-input-box"]'
+          !baseEl ||
+          closestOf(
+            baseEl,
+            '.ag-prism-thought-overlay, .ag-cs-smooth-caret, .ag-cs-crab, .ag-cs-conv-aura-host, [data-testid="agent-input-box"], script, style'
           )
         ) {
           continue;
         }
 
-        const thoughtBody = findExpandedStreamingThoughtBody(target);
+        if (m.type === 'characterData') {
+          if (target.nodeType !== 3) continue;
+          const tb = findStreamingThoughtBody(baseEl);
+          if (tb) {
+            if (isManagedThoughtPanel(tb)) continue;
+          } else if (!closestOf(baseEl, '[data-testid="planner-response-text"]')) continue;
+          const nLen = (target.data ?? target.nodeValue ?? '').length;
+          const pLen = textLenMap.get(target);
+          textLenMap.set(target, nLen);
+          if (pLen !== undefined) {
+            if (nLen > pLen) enqueueFadeRange(target, pLen, nLen, now);
+          } else if (nLen > 0 && nLen <= 28) enqueueFadeRange(target, 0, nLen, now);
+          continue;
+        }
+
+        if (m.type !== 'childList' || !m.addedNodes?.length) continue;
+
+        const inAnimBlock = Boolean(closestOf(baseEl, '.ag-cs-stream-chunk, .ag-cs-thought-chunk'));
+        const thoughtBody = findStreamingThoughtBody(target);
         if (thoughtBody) {
           if (isManagedThoughtPanel(thoughtBody)) continue;
           for (const added of m.addedNodes) {
             if (isThoughtIsolatedNode(added)) continue;
-            if (isElementLike(added) && now - lastThoughtWrapAt >= STREAM_BATCH_MS) {
-              if (markTransientStreamClass(added, 'ag-cs-thought-chunk', 200)) {
-                lastThoughtWrapAt = now;
+            if (added.nodeType === 3) {
+              fadeLeafTexts(added, now, 1);
+            } else if (isEl(added)) {
+              if (inAnimBlock || INLINE_TAGS.has(tagOf(added))) fadeLeafTexts(added, now, 4);
+              else if (!seenBlocks.has(added) && newBlocks < 4) {
+                seenBlocks.add(added);
+                newBlocks++;
+                snapTextLens(added, 12);
+                markStreamClass(added, 'ag-cs-thought-chunk', 290);
               }
             }
           }
           continue;
         }
 
-        const proseRoot = baseEl.closest?.('[data-testid="planner-response-text"]');
+        const proseRoot = closestOf(baseEl, '[data-testid="planner-response-text"]');
         if (!proseRoot) continue;
 
-        const codeCtx = isInsideCodeOrTable(target, proseRoot);
+        const codeCtx = insideCodeOrTable(target, proseRoot);
         if (codeCtx) {
-          const ctxTag = String(codeCtx.tagName || '').toUpperCase();
-          if (TABLE_TAGS.has(ctxTag)) {
+          if (TABLE_TAGS.has(tagOf(codeCtx))) {
             for (const added of m.addedNodes) {
-              if (!isElementLike(added)) continue;
-              const addTag = String(added.tagName || '').toUpperCase();
-              const trEl = addTag === 'TR' ? added : findTableRowAncestor(added, proseRoot) || findTableRowAncestor(codeCtx, proseRoot);
-              if (trEl && !scannedStreamNodes.has(trEl) && now - lastCodeScanAt >= STREAM_BATCH_MS) {
-                scannedStreamNodes.add(trEl);
-                lastCodeScanAt = now;
-                markCodeScanElement(trEl);
+              if (added.nodeType === 3) {
+                fadeLeafTexts(added, now, 1);
+                continue;
               }
+              if (!isEl(added)) continue;
+              const tr = tagOf(added) === 'TR' ? added : findRowAnc(added, proseRoot) || findRowAnc(codeCtx, proseRoot);
+              if (tr && !scannedNodes.has(tr) && now - lastCodeAt >= STREAM_BATCH_MS) {
+                scannedNodes.add(tr);
+                lastCodeAt = now;
+                snapTextLens(tr, 12);
+                markStreamClass(tr, 'ag-cs-code-scan', 240);
+              } else fadeLeafTexts(added, now, 3);
             }
             continue;
           }
 
-          // Block code context: never re-animate outer <pre>/.code-block on plain TextNode appends!
           for (const added of m.addedNodes) {
-            if (!isElementLike(added)) continue;
-            const addTag = String(added.tagName || '').toUpperCase();
-            if (addTag === 'PRE' || added.classList?.contains?.('code-block')) {
-              if (!scannedStreamNodes.has(added)) {
-                scannedStreamNodes.add(added);
-                lastCodeScanAt = now;
-                markCodeScanElement(added);
+            if (added.nodeType === 3) {
+              fadeLeafTexts(added, now, 1);
+              continue;
+            }
+            if (!isEl(added)) continue;
+            if (tagOf(added) === 'PRE' || clHas(added, 'code-block')) {
+              if (!scannedNodes.has(added)) {
+                scannedNodes.add(added);
+                lastCodeAt = now;
+                snapTextLens(added, 16);
+                markStreamClass(added, 'ag-cs-code-scan', 240);
               }
               continue;
             }
-            const lineEl = added.classList?.contains?.('code-line') ? added : added.closest?.('.code-line') || added;
+            const lineEl = clHas(added, 'code-line') ? added : closestOf(added, '.code-line') || added;
             if (
               lineEl &&
               lineEl !== proseRoot &&
-              String(lineEl.tagName || '').toUpperCase() !== 'PRE' &&
-              !lineEl.classList?.contains?.('code-block') &&
-              !scannedStreamNodes.has(lineEl) &&
-              now - lastCodeScanAt >= STREAM_BATCH_MS
+              tagOf(lineEl) !== 'PRE' &&
+              !clHas(lineEl, 'code-block') &&
+              !scannedNodes.has(lineEl) &&
+              now - lastCodeAt >= STREAM_BATCH_MS
             ) {
-              scannedStreamNodes.add(lineEl);
-              lastCodeScanAt = now;
-              markCodeScanElement(lineEl);
-            }
+              scannedNodes.add(lineEl);
+              lastCodeAt = now;
+              snapTextLens(lineEl, 8);
+              markStreamClass(lineEl, 'ag-cs-code-scan', 240);
+            } else fadeLeafTexts(added, now, 3);
           }
           continue;
         }
 
         for (const added of m.addedNodes) {
-          if (!isElementLike(added)) continue;
-          const tag = String(added.tagName || '').toUpperCase();
-          const cls = added.classList;
-          const isBlockCodeOrTable =
+          if (added.nodeType === 3) {
+            fadeLeafTexts(added, now, 1);
+            continue;
+          }
+          if (!isEl(added)) continue;
+          const tag = tagOf(added);
+          const isCodeOrTbl =
             tag === 'PRE' ||
             tag === 'TABLE' ||
-            Boolean(cls && (cls.contains('code-block') || cls.contains('md-table-host') || cls.contains('md-table-frame'))) ||
-            Boolean(added.querySelector?.('pre, table, .code-block, .md-table-frame'));
-          if (isBlockCodeOrTable) {
-            if (!scannedStreamNodes.has(added) && now - lastCodeScanAt >= STREAM_BATCH_MS) {
-              scannedStreamNodes.add(added);
-              lastCodeScanAt = now;
-              markCodeScanElement(added);
+            clHas(added, 'code-block') ||
+            clHas(added, 'md-table-host') ||
+            clHas(added, 'md-table-frame') ||
+            Boolean(qs(added, 'pre, table, .code-block, .md-table-frame'));
+          if (isCodeOrTbl) {
+            if (!scannedNodes.has(added) && now - lastCodeAt >= STREAM_BATCH_MS) {
+              scannedNodes.add(added);
+              lastCodeAt = now;
+              snapTextLens(added, 16);
+              markStreamClass(added, 'ag-cs-code-scan', 240);
             }
-            continue;
-          }
-          // Skip inline leaf tokens inside an already-rendered paragraph
-          if (tag === 'CODE' && baseEl !== proseRoot) {
-            continue;
-          }
-          if (now - lastProseWrapAt >= STREAM_BATCH_MS) {
-            if (markTransientStreamClass(added, 'ag-cs-stream-chunk', 240)) {
-              lastProseWrapAt = now;
-            }
+          } else if (inAnimBlock || (INLINE_TAGS.has(tag) && baseEl !== proseRoot)) {
+            fadeLeafTexts(added, now, 4);
+          } else if (!seenBlocks.has(added) && newBlocks < 4) {
+            seenBlocks.add(added);
+            newBlocks++;
+            snapTextLens(added, 12);
+            markStreamClass(added, 'ag-cs-stream-chunk', 310);
+          } else {
+            fadeLeafTexts(added, now, 4);
           }
         }
       }
     }
 
     function syncDualStreamEngine() {
-      const activeUltraStream = isMotionUltra() && isConvRunning();
-      const formalConv = activeUltraStream ? findFormalConvView() : null;
-
-      if (!activeUltraStream || !formalConv) {
-        if (streamObserver) {
+      const active = canStreamMotion() && isConvRunning();
+      const conv = active ? findFormalConvView() : null;
+      if (!active || !conv) {
+        if (streamObs) {
           try {
-            streamObserver.disconnect();
+            streamObs.disconnect();
           } catch {}
-          streamObservedRoot = null;
+          streamRoot = null;
         }
-        flushAllStreamArtifacts();
+        flushAllStreamArtifacts(!canStreamMotion());
         return;
       }
 
-      const triggers = formalConv.querySelectorAll('[data-testid="thinking-collapsible-trigger"]');
+      const triggers = qsa(conv, '[data-testid="thinking-collapsible-trigger"]');
       for (let i = 0; i < triggers.length; i++) {
         const trig = triggers[i];
         const bodyDiv = trig.nextElementSibling;
-        if (!bodyDiv || String(bodyDiv.tagName || '').toUpperCase() !== 'DIV') continue;
-        const expanded = trig.getAttribute('aria-expanded') === 'true';
-        const txt = String(trig.textContent || '');
-        const isTrigStreaming =
-          trig.getAttribute('data-op-thought-state') === 'streaming' ||
-          /\.\.\.|…|正在|思考中|thinking/i.test(txt) ||
-          i === triggers.length - 1;
-        if (expanded && isTrigStreaming) {
-          setAttrIfChanged(bodyDiv, 'data-ag-cs-thought-streaming', '1');
-        } else if (bodyDiv.hasAttribute('data-ag-cs-thought-streaming')) {
-          bodyDiv.removeAttribute('data-ag-cs-thought-streaming');
-        }
+        if (!bodyDiv || tagOf(bodyDiv) !== 'DIV') continue;
+        const streaming =
+          ga(trig, 'aria-expanded') === 'true' &&
+          (ga(trig, 'data-op-thought-state') === 'streaming' ||
+            /\.\.\.|…|正在|思考中|thinking/i.test(String(trig.textContent || '')) ||
+            i === triggers.length - 1);
+        if (streaming) setAttrIfChanged(bodyDiv, 'data-ag-cs-thought-streaming', '1');
+        else if (ha(bodyDiv, 'data-ag-cs-thought-streaming')) ra(bodyDiv, 'data-ag-cs-thought-streaming');
       }
 
-      if (!streamObserver && typeof MutationObserver === 'function') {
-        streamObserver = new MutationObserver(onStreamMutations);
-      }
-      if (streamObserver && streamObservedRoot !== formalConv) {
+      if (!streamObs && typeof MutationObserver === 'function') streamObs = new MutationObserver(onStreamMutations);
+      if (streamObs && streamRoot !== conv) {
         try {
-          streamObserver.disconnect();
-          streamObserver.observe(formalConv, { childList: true, subtree: true });
-          streamObservedRoot = formalConv;
+          streamObs.disconnect();
+          const resps = qsa(conv, '[data-testid="planner-response-text"]');
+          if (resps.length > 0) snapTextLens(resps[resps.length - 1], 24);
+          if (triggers.length > 0) {
+            const lb = triggers[triggers.length - 1]?.nextElementSibling;
+            if (lb && !isManagedThoughtPanel(lb)) snapTextLens(lb, 16);
+          }
+          streamObs.observe(conv, { childList: true, characterData: true, subtree: true });
+          streamRoot = conv;
         } catch {}
       }
     }
 
     function measureNewLensOverlays() {
-      if (!isMotionStandardOrUltra()) return [];
-      const candidates = new Set();
-      document.querySelectorAll('.agy-overlay, .agy-fastpick').forEach((el) => candidates.add(el));
-      document.querySelectorAll('div[role="dialog"]').forEach((el) => candidates.add(el));
-      document
-        .querySelectorAll('[data-testid="context-menu-popup"], [data-testid="context-menu-submenu-popup"]')
-        .forEach((el) => candidates.add(el));
-      document.querySelectorAll('[data-testid="overview-panel"]').forEach((el) => {
-        if (el.parentElement && String(el.parentElement.tagName || '').toUpperCase() === 'DIV') {
-          candidates.add(el.parentElement);
-        }
-      });
+      const d = docOf();
+      if (!isMotionStandardOrUltra() || !d) return [];
+      const cands = new Set([
+        ...qsa(d, '.agy-overlay, .agy-fastpick, div[role="dialog"], [data-testid="context-menu-popup"], [data-testid="context-menu-submenu-popup"]'),
+      ]);
+      for (const el of qsa(d, '[data-testid="overview-panel"]')) {
+        const p = peOf(el);
+        if (p && tagOf(p) === 'DIV') cands.add(p);
+      }
       const out = [];
-      for (const ov of candidates) {
-        if (seenLensOverlays.has(ov)) continue;
-        const r = typeof ov.getBoundingClientRect === 'function' ? ov.getBoundingClientRect() : null;
-        out.push({ ov, rect: r });
+      for (const ov of cands) {
+        if (!seenOverlays.has(ov)) out.push({ ov, rect: rectOf(ov) });
       }
       return out;
     }
 
     function syncLensOverlayOrigins(measuredOverlays) {
-      document.querySelectorAll('[data-testid="overview-panel"]').forEach((el) => {
-        if (el.parentElement && String(el.parentElement.tagName || '').toUpperCase() === 'DIV') {
-          setAttrIfChanged(el.parentElement, 'data-ag-cs-overview-shell', '1');
-        }
-      });
+      const d = docOf();
+      if (!d) return;
+      for (const el of qsa(d, '[data-testid="overview-panel"]')) {
+        const p = peOf(el);
+        if (p && tagOf(p) === 'DIV') setAttrIfChanged(p, 'data-ag-cs-overview-shell', '1');
+      }
       if (!isMotionStandardOrUltra()) return;
-      const entries = measuredOverlays || measureNewLensOverlays();
       const trig = heroState.lastTriggerOrigin;
-      for (const { ov, rect: r } of entries) {
-        if (seenLensOverlays.has(ov)) continue;
-        seenLensOverlays.add(ov);
+      for (const { ov, rect: r } of measuredOverlays || measureNewLensOverlays()) {
+        if (seenOverlays.has(ov)) continue;
+        seenOverlays.add(ov);
         if (trig && r && r.width > 0 && r.height > 0) {
-          const ox = Math.round(Math.max(-40, Math.min(r.width + 40, trig.x - r.left)));
-          const oy = Math.round(Math.max(-40, Math.min(r.height + 40, trig.y - r.top)));
-          ov.style.setProperty('--ag-origin-x', `${ox}px`);
-          ov.style.setProperty('--ag-origin-y', `${oy}px`);
+          setProp(ov, '--ag-origin-x', `${Math.round(Math.max(-40, Math.min(r.width + 40, trig.x - r.left)))}px`);
+          setProp(ov, '--ag-origin-y', `${Math.round(Math.max(-40, Math.min(r.height + 40, trig.y - r.top)))}px`);
         }
-        const rowNodes = [];
-        const allEls = ov.querySelectorAll('[role="option"], [role="menuitem"], [data-testid]');
-        for (const item of allEls) {
-          const role = item.getAttribute?.('role');
-          const tid = item.getAttribute?.('data-testid') || '';
+        let idx = 0;
+        for (const item of qsa(ov, '[role="option"], [role="menuitem"], [data-testid]')) {
+          const role = ga(item, 'role');
+          const tid = ga(item, 'data-testid') || '';
           if (
             role === 'option' ||
             role === 'menuitem' ||
@@ -1112,33 +1201,30 @@
             tid === 'subagent-node' ||
             tid === 'artifact-row'
           ) {
-            rowNodes.push(item);
-            if (rowNodes.length >= 12) break;
+            setProp(item, '--ag-row-i', String(idx++));
+            if (idx >= 12) break;
           }
-        }
-        for (let i = 0; i < rowNodes.length; i++) {
-          rowNodes[i].style?.setProperty?.('--ag-row-i', String(i));
         }
       }
     }
 
     function scheduleDeferredConvEntry(fn, delayMs = 65) {
-      if (deferredConvEntryTimer) clearTimeout(deferredConvEntryTimer);
-      deferredConvEntryTimer = setTimeout(() => {
-        deferredConvEntryTimer = 0;
+      if (convEntryTimer) clearTimeout(convEntryTimer);
+      convEntryTimer = setTimeout(() => {
+        convEntryTimer = 0;
         if (!isDestroyed()) fn();
       }, delayMs);
     }
 
     function disconnectStreamObserver() {
-      if (streamObserver) {
+      if (streamObs) {
         try {
-          streamObserver.disconnect();
+          streamObs.disconnect();
         } catch {}
-        streamObserver = null;
-        streamObservedRoot = null;
+        streamObs = null;
+        streamRoot = null;
       }
-      flushAllStreamArtifacts();
+      flushAllStreamArtifacts(true);
     }
 
     return {
@@ -1168,11 +1254,18 @@
       syncLensOverlayOrigins,
       scheduleDeferredConvEntry,
       isStreamMutating: () => streamMutating,
-      hasStreamObserver: () => Boolean(streamObserver && streamObservedRoot),
+      hasStreamObserver: () => Boolean(streamObs && streamRoot),
+      stepHighlightFade,
+      clearHighlightFade,
+      getHighlightFadeState: () => ({
+        activeCount: fadeItems.length,
+        rafActive: Boolean(fadeRaf),
+        buckets: hlBuckets ? hlBuckets.map((h) => h.size ?? 0) : [],
+      }),
     };
   }
 
-  const api = { STREAM_BATCH_MS, createStreamChoreographyController };
+  const api = { STREAM_BATCH_MS, STREAM_FADE_MS, HIGHLIGHT_NAMES, createStreamChoreographyController };
   if (typeof module === 'object' && module.exports) module.exports = api;
   G.__agPrismStreamChoreography = api;
 })(typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : this);

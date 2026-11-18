@@ -21,20 +21,19 @@
     '.ag-cs-quota-card{padding:11px 12px;border-radius:var(--ag-cs-r-md,10px);border:1px solid var(--ag-cs-border-1,rgba(148,163,184,.18));background:var(--ag-cs-pill-bg,rgba(128,138,158,.06));display:flex;flex-direction:column;gap:8px;font-variant-numeric:tabular-nums}' +
     '.ag-cs-quota-name{font-size:12px;font-weight:600;color:var(--foreground)}' +
     '.ag-cs-quota-pace{padding:1.5px 6.5px;border-radius:999px;font-size:10px;font-weight:600;border:1px solid rgba(148,163,184,.24);color:var(--muted-foreground)}' +
-    '.ag-cs-quota-pace[data-pace="ok"]{color:var(--ag-cs-accent,var(--primary,#2563eb));border-color:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#2563eb)) 32%,transparent);background:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#2563eb)) 11%,transparent)}' +
+    '.ag-cs-quota-pace[data-pace="ok"]{color:var(--ag-cs-accent,var(--primary,#2563eb));border-color:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#2563eb)) 30%,transparent);background:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#2563eb)) 10%,transparent)}' +
     '.ag-cs-quota-pace[data-pace="tight"]{color:#d97706;border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.12)}' +
     '.dark .ag-cs-quota-pace[data-pace="tight"]{color:#fbbf24}' +
-    '.ag-cs-quota-pace[data-pace="exhaust"]{color:#dc2626;border-color:rgba(239,68,68,.38);background:rgba(239,68,68,.12)}' +
-    '.dark .ag-cs-quota-pace[data-pace="exhaust"]{color:#f87171}' +
+    '.ag-cs-quota-pace[data-pace="low"]{color:#dc2626;border-color:rgba(239,68,68,.38);background:rgba(239,68,68,.12)}' +
+    '.dark .ag-cs-quota-pace[data-pace="low"]{color:#f87171}' +
     '.ag-cs-quota-win{display:flex;flex-direction:column;gap:4px}' +
     '.ag-cs-quota-win-row{align-items:baseline;font-size:11px}' +
     '.ag-cs-quota-win-lbl{color:var(--muted-foreground);font-size:10.5px}' +
-    '.ag-cs-quota-win-val{font-weight:600;color:var(--foreground);font-size:11px}' +
+    '.ag-cs-quota-win-val{font-weight:600;color:var(--foreground);font-size:11px;font-variant-numeric:tabular-nums}' +
     '.ag-cs-quota-bar{position:relative;height:6px;border-radius:999px;background:rgba(148,163,184,.18);overflow:hidden}' +
-    '.ag-cs-qbar-solid{position:absolute;inset:0 auto 0 0;border-radius:999px;background:linear-gradient(90deg,var(--ag-cs-accent,var(--primary,#2563eb)),color-mix(in srgb,var(--ag-cs-accent,var(--primary,#2563eb)) 72%,#ffffff))}' +
-    '.ag-cs-quota-win[data-warn="1"] .ag-cs-qbar-solid{background:linear-gradient(90deg,#ea580c,#f59e0b)}' +
-    '.ag-cs-qbar-hatch{position:absolute;top:0;bottom:0;background:repeating-linear-gradient(-45deg,color-mix(in srgb,var(--ag-cs-accent,var(--primary,#2563eb)) 46%,transparent) 0 3px,color-mix(in srgb,var(--ag-cs-accent,var(--primary,#2563eb)) 12%,transparent) 3px 6px);border-right:1px solid color-mix(in srgb,var(--ag-cs-accent,var(--primary,#2563eb)) 72%,transparent)}' +
-    '.ag-cs-quota-win[data-warn="1"] .ag-cs-qbar-hatch{background:repeating-linear-gradient(-45deg,rgba(245,158,11,.55) 0 3px,rgba(245,158,11,.14) 3px 6px);border-right-color:#f59e0b}' +
+    '.ag-cs-qbar-solid{position:absolute;inset:0 auto 0 0;border-radius:999px;background:linear-gradient(90deg,var(--ag-cs-accent,var(--primary,#2563eb)),color-mix(in srgb,var(--ag-cs-accent,var(--primary,#2563eb)) 68%,#ffffff))}' +
+    '.ag-cs-quota-win[data-warn="1"] .ag-cs-qbar-solid{background:linear-gradient(90deg,#d97706,#fbbf24)}' +
+    '.ag-cs-quota-win[data-warn="2"] .ag-cs-qbar-solid{background:linear-gradient(90deg,#dc2626,#f87171)}' +
     '.ag-cs-quota-foot{font-size:10px;color:var(--muted-foreground);opacity:.82}';
 
   const ORBITAL_SVG_HTML =
@@ -454,40 +453,59 @@
 
       const grid = mk('div', 'ag-cs-quota-grid');
       const quotaWinUsage = liveQuotaSnap?.usage?.quotaWindows || null;
+      const healthBadgeFor = (minRem) => {
+        if (!(minRem >= 0 && minRem <= 1)) return { status: 'idle', label: '—' };
+        if (minRem <= 0.15) {
+          return {
+            status: 'low',
+            label: lang === 'en' ? 'Low Quota' : lang === 'ja' ? '残枠少' : lang === 'zh-TW' || lang === 'yue' ? '額度偏低' : '额度偏低',
+          };
+        }
+        if (minRem <= 0.35) {
+          return {
+            status: 'tight',
+            label: lang === 'en' ? 'Running Low' : lang === 'ja' ? '残り少なめ' : lang === 'zh-TW' ? '餘量偏緊' : lang === 'yue' ? '餘額偏緊' : '余量偏紧',
+          };
+        }
+        return { status: 'ok', label: lang === 'en' ? 'Healthy' : lang === 'ja' ? '余裕あり' : '充裕' };
+      };
       for (const grp of groups) {
         const card = mk('div', 'ag-cs-quota-card');
         card.setAttribute('data-quota-kind', usageCore.quotaGroupKind ? usageCore.quotaGroupKind(grp) : 'other');
         const cHead = mk('div', 'ag-cs-quota-card-head');
         cHead.appendChild(mk('span', 'ag-cs-quota-name', usageCore.quotaGroupLabel ? usageCore.quotaGroupLabel(grp, lang) : grp.name || grp.id));
-        const paceInfo = usageCore.groupQuotaPace ? usageCore.groupQuotaPace(grp, lang) : { status: 'idle', label: '—', detail: '' };
-        const paceBadge = mk('span', 'ag-cs-quota-pace', paceInfo.label);
-        paceBadge.setAttribute('data-pace', paceInfo.status || 'idle');
-        cHead.appendChild(paceBadge);
-        card.appendChild(cHead);
-
+        const winEntries = [];
+        let minRem = 2;
         for (const [wk, bucket] of usageCore.quotaWindows ? usageCore.quotaWindows(grp) : []) {
           const fc = usageCore.quotaForecast ? usageCore.quotaForecast(bucket, wk) : null;
           if (!fc) continue;
+          const rem = typeof fc.remaining === 'number' && Number.isFinite(fc.remaining) ? Math.max(0, Math.min(1, fc.remaining)) : 0;
+          if (rem < minRem) minRem = rem;
+          winEntries.push([wk, fc, rem]);
+        }
+        const badgeInfo = healthBadgeFor(minRem <= 1 ? minRem : -1);
+        const paceBadge = mk('span', 'ag-cs-quota-pace', badgeInfo.label);
+        paceBadge.setAttribute('data-pace', badgeInfo.status);
+        cHead.appendChild(paceBadge);
+        card.appendChild(cHead);
+
+        for (const [wk, fc, rem] of winEntries) {
           const winBox = mk('div', 'ag-cs-quota-win');
-          if (fc.status === 'exhaust' || fc.status === 'tight' || fc.remaining < 0.15) winBox.setAttribute('data-warn', '1');
+          if (rem <= 0.15) winBox.setAttribute('data-warn', '2');
+          else if (rem <= 0.35) winBox.setAttribute('data-warn', '1');
           const wRow = mk('div', 'ag-cs-quota-win-row');
           wRow.appendChild(mk('span', 'ag-cs-quota-win-lbl', wk === 'weekly' ? ui.weeklyLabel || 'Weekly' : ui.fiveHourLabel || '5h'));
           const eta = fc.resetInMs > 0 && usageCore.shortEta ? ` · ${usageCore.shortEta(fc.resetInMs, lang)}` : '';
-          wRow.appendChild(mk('span', 'ag-cs-quota-win-val', `${Math.round(fc.remaining * 100)}%${eta}`));
+          wRow.appendChild(mk('span', 'ag-cs-quota-win-val', `${Math.round(rem * 100)}%${eta}`));
           const bar = mk('div', 'ag-cs-quota-bar');
-          const endPct = Math.max(0, Math.min(100, fc.endRemaining * 100));
-          const dropPct = Math.max(0, Math.min(100 - endPct, fc.forecastDrop * 100));
-          const solid = mk('i', 'ag-cs-qbar-solid'), hatch = mk('i', 'ag-cs-qbar-hatch');
-          solid.style.width = `${endPct.toFixed(1)}%`;
-          hatch.style.left = `${endPct.toFixed(1)}%`;
-          hatch.style.width = `${dropPct.toFixed(1)}%`;
+          const solid = mk('i', 'ag-cs-qbar-solid');
+          solid.style.width = `${(rem * 100).toFixed(1)}%`;
           bar.appendChild(solid);
-          bar.appendChild(hatch);
           winBox.appendChild(wRow);
           winBox.appendChild(bar);
           card.appendChild(winBox);
         }
-        const footText = paceInfo.detail || (quotaWinUsage?.[grp.id]?.totalTokens > 0 ? `${usageCore.formatCompactTokens(quotaWinUsage[grp.id].totalTokens)} tok` : '');
+        const footText = quotaWinUsage?.[grp.id]?.totalTokens > 0 ? `${usageCore.formatCompactTokens(quotaWinUsage[grp.id].totalTokens)} tok` : '';
         if (footText) card.appendChild(mk('div', 'ag-cs-quota-foot', footText));
         grid.appendChild(card);
       }

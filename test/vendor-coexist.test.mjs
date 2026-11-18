@@ -636,6 +636,114 @@ test('vendor/effort-slider/slider-coexist.js yields 100% to external __agCodexEf
   );
   assert.equal(upstreamLib.valueColorFor('High', 2, 3, true, false, true, 'follow'), '#c4b5fd');
 
+  // #253 guard: WebIDL host methods (requestAnimationFrame / getComputedStyle) throw Illegal invocation if `this !== win`
+  // (previously caused by Object.create(win) in slider-coexist.js, wiping out Claude pixel matrix, ticks, and High violet border!).
+  const envStrict = createLightweightDom();
+  envStrict.doc.documentElement.setAttribute('data-ag-cs-theme', 'dark');
+  let ditherPixelsPainted = 0;
+  const fillStylesUsed = new Set();
+  const rafQueue = [];
+  let rafSeq = 0;
+  const strictWin = {
+    document: envStrict.doc,
+    location: envStrict.win.location,
+    performance,
+    MutationObserver: envStrict.win.MutationObserver,
+    requestAnimationFrame(cb) {
+      if (this !== strictWin) throw new TypeError('Illegal invocation: requestAnimationFrame');
+      const id = ++rafSeq;
+      rafQueue.push({ id, cb });
+      return id;
+    },
+    cancelAnimationFrame(id) {
+      if (this !== strictWin) throw new TypeError('Illegal invocation: cancelAnimationFrame');
+      const idx = rafQueue.findIndex((item) => item.id === id);
+      if (idx >= 0) rafQueue.splice(idx, 1);
+    },
+    getComputedStyle() {
+      if (this !== strictWin) throw new TypeError('Illegal invocation: getComputedStyle');
+      return { backgroundColor: 'rgb(11, 11, 14)' };
+    },
+    matchMedia() {
+      if (this !== strictWin) throw new TypeError('Illegal invocation: matchMedia');
+      return { matches: false };
+    },
+  };
+  const origStrictCreateEl = envStrict.doc.createElement;
+  envStrict.doc.createElement = (tag) => {
+    const node = origStrictCreateEl(tag);
+    node.classList = {
+      add(c) { if (!node.className.split(/\s+/).includes(c)) node.className = (node.className + ' ' + c).trim(); },
+      remove(c) { node.className = node.className.split(/\s+/).filter((x) => x && x !== c).join(' '); },
+      contains(c) { return node.className.split(/\s+/).includes(c); },
+    };
+    if (String(tag).toLowerCase() === 'canvas') {
+      node.width = 280;
+      node.height = 28;
+      let curStyle = '';
+      node.getContext = () => ({
+        get fillStyle() { return curStyle; },
+        set fillStyle(v) { curStyle = String(v); fillStylesUsed.add(curStyle); },
+        clearRect() {},
+        createLinearGradient: () => ({ addColorStop() {} }),
+        fillRect() {},
+        beginPath() {},
+        moveTo() { ditherPixelsPainted += 1; },
+        lineTo() {},
+        quadraticCurveTo() {},
+        closePath() {},
+        fill() {},
+      });
+    }
+    return node;
+  };
+  let capturedInstallOpts = null;
+  const origInstall = upstreamLib.installCodexEffortSlider;
+  upstreamLib.installCodexEffortSlider = (opts) => {
+    capturedInstallOpts = opts;
+    return origInstall(opts);
+  };
+  const ctlStrict = sliderMod.createEffortSliderController({ window: strictWin, document: envStrict.doc });
+  ctlStrict.sync({ effortSliderModule: 'on' });
+  upstreamLib.installCodexEffortSlider = origInstall;
+  assert.equal(capturedInstallOpts.window, strictWin, 'slider-coexist must pass raw window directly without Object.create(win) wrapper');
+  assert.ok(capturedInstallOpts.MutationObserver, 'slider-coexist must pass ThrottledMO via opts.MutationObserver');
+  const claudeRow = envStrict.doc.createElement('div');
+  claudeRow.className = 'ces-ag-effort-row';
+  const claudeContainer = envStrict.doc.createElement('div');
+  claudeRow.appendChild(claudeContainer);
+  envStrict.doc.body.appendChild(claudeRow);
+  const mountedClaude = upstreamLib.mountCodexEffortSlider({
+    container: claudeContainer,
+    row: claudeRow,
+    document: envStrict.doc,
+    window: strictWin,
+    seat: {
+      isClaude: true,
+      theme: 'claude',
+      locked: false,
+      effortLevels: [
+        { effort: 'low', label: 'Low' },
+        { effort: 'medium', label: 'Medium' },
+        { effort: 'high', label: 'High' },
+      ],
+      currentEffort: 'high',
+      selectEffort() {},
+    },
+  });
+  for (let frame = 1; frame <= 2; frame++) {
+    const batch = rafQueue.splice(0, rafQueue.length);
+    for (const item of batch) item.cb(performance.now() + frame * 1800);
+  }
+  assert.ok(ditherPixelsPainted > 100, `Expected Claude pixel dither matrix cells painted (>100 cells), got ${ditherPixelsPainted}`);
+  assert.ok(fillStylesUsed.has('rgb(208,192,246)') && fillStylesUsed.has('rgb(220, 204, 255)'), 'Must paint authentic Claude base violet & pulse highlight cells');
+  assert.equal(claudeContainer.querySelectorAll('.ces-tick').length, 3, 'Must render all 3 level ticks in Claude mode');
+  assert.equal(claudeRow.getAttribute('data-ces-max'), 'true', 'Claude High must activate data-ces-max="true" violet glow border');
+  const styleElStrict = envStrict.doc.getElementById('ag-codex-effort-slider-styles');
+  assert.match(styleElStrict.textContent, /\.ces-claude-canvas\s*\{[^}]*width:\s*var\(--ces-fill,\s*0px\)/, 'Authentic .ces-claude-canvas width: var(--ces-fill, 0px) must be preserved');
+  mountedClaude.unmount();
+  ctlStrict.destroy();
+
   ctlSolo.destroy();
   assert.equal(envSolo.win.__agCodexEffortSliderInstance, undefined);
 });

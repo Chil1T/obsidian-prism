@@ -264,17 +264,11 @@
 
       const BaseMO = win.MutationObserver || (typeof MutationObserver === 'function' ? MutationObserver : null);
       const ThrottledMO = createThrottledMutationObserverClass(BaseMO, doc, perfStats);
-      const winProxy = Object.create(win);
-      if (ThrottledMO) {
-        Object.defineProperty(winProxy, 'MutationObserver', {
-          value: ThrottledMO,
-          configurable: true,
-        });
-      }
 
       const inst = lib.installCodexEffortSlider({
         document: doc,
-        window: winProxy,
+        window: win,
+        MutationObserver: ThrottledMO || undefined,
       });
       if (!inst) return false;
       inst.__prismOwned = true;

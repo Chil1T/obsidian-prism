@@ -1583,3 +1583,199 @@ test('Phase 2 TS-1~TS-8 security & lifecycle audit: SSRF/redirect defense, key r
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('Smooth Token Pacer + incremental .ag-prism-thought-chunk fade-in, paragraph DOM reuse, 10-chunk/350ms compaction, 0fps stop & motion=off bypass', async () => {
+  const clientSrc = fs.readFileSync(
+    path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-client.js'),
+    'utf8'
+  );
+
+  let fakeNow = 10000;
+  let nextRafId = 1;
+  const rafQueue = new Map();
+
+  const stepFrame = (dtMs = 16) => {
+    fakeNow += dtMs;
+    const batch = Array.from(rafQueue.entries());
+    rafQueue.clear();
+    for (const [, cb] of batch) {
+      cb(fakeNow);
+    }
+  };
+
+  const streamControllers = [];
+  const { doc, docEl, rootBody, sandbox } = createMockDomEnv({
+    Date: { now: () => fakeNow },
+    requestAnimationFrame: (cb) => {
+      const id = nextRafId++;
+      rafQueue.set(id, cb);
+      return id;
+    },
+    cancelAnimationFrame: (id) => {
+      rafQueue.delete(id);
+    },
+    __agPrismThoughtBridge: {
+      call: async () => ({ ok: true, stylePreset: 'technical', entries: {} }),
+      translateStream: async (_opts, onPartial) =>
+        new Promise((resolve) => {
+          streamControllers.push({ onPartial, resolve });
+        }),
+    },
+  });
+
+  // Panel 1: Multi-paragraph streaming block with native file:// anchor
+  const btn1 = doc.createElement('button');
+  btn1.setAttribute('data-testid', 'thinking-collapsible-trigger');
+  btn1.setAttribute('aria-expanded', 'true');
+  btn1.textContent = 'Thought for 4s';
+  const panel1 = doc.createElement('div');
+  const rawP1 = doc.createElement('p');
+  let nativeClicks = 0;
+  const nativeLink = doc.createElement('a');
+  nativeLink.setAttribute('href', 'file:///c:/project/demo.js#L8');
+  nativeLink.textContent = 'demo.js#L8';
+  nativeLink.addEventListener('click', () => {
+    nativeClicks++;
+  });
+  rawP1.appendChild(doc.createTextNode('Inspecting frame pacing in '));
+  rawP1.appendChild(nativeLink);
+  rawP1.appendChild(doc.createTextNode(' to eliminate bursty streaming jumps across paragraphs.'));
+  panel1.appendChild(rawP1);
+  btn1.nextElementSibling = panel1;
+  rootBody.appendChild(btn1);
+  rootBody.appendChild(panel1);
+
+  vm.runInNewContext(clientSrc, sandbox);
+  const api = sandbox.__agPrismThought;
+  api.sync({ thoughtTranslate: 'ai', thoughtTrigger: 'expand' });
+  await new Promise((r) => setTimeout(r, 40));
+
+  assert.equal(streamControllers.length, 1, 'Expanded panel should start streaming translation');
+  const ctrl1 = streamControllers[0];
+
+  // 1) Feed a large 54-char burst in a single SSE chunk -> Pacer must smooth it across frames, never dumping all at once
+  const para1 = '首先我们深入排查 rendererFrameLoop 渲染管线中的帧同步抖动问题，确保流式输出如丝绸般顺滑。';
+  ctrl1.onPartial(para1);
+  assert.equal(rafQueue.size, 1, 'Pacer should schedule exactly one rAF step');
+
+  stepFrame(16);
+  const body1 = panel1.querySelector('.ag-prism-thought-body');
+  assert.ok(body1, 'Overlay body must exist during streaming');
+  const firstFrameText = body1.textContent;
+  assert.ok(
+    firstFrameText.length > 0 && firstFrameText.length < 25,
+    `Frame 1 should emit a gentle slice instead of full 54-char burst, got len=${firstFrameText.length}`
+  );
+  assert.equal(
+    body1.querySelectorAll('.ag-prism-thought-chunk').length,
+    1,
+    'Newly emitted slice must be wrapped in .ag-prism-thought-chunk'
+  );
+
+  const firstParaEl = body1.querySelector('.ag-prism-thought-p');
+  assert.ok(firstParaEl, 'Streaming paragraph container must use .ag-prism-thought-p');
+
+  // 2) Step 14 fast frames (16ms each = 224ms < 350ms TTL) -> live chunk count must NEVER exceed MAX_LIVE_CHUNKS (10)!
+  let maxObservedChunks = 0;
+  for (let i = 0; i < 14 && rafQueue.size > 0; i++) {
+    stepFrame(16);
+    const liveCount = body1.querySelectorAll('.ag-prism-thought-chunk').length;
+    if (liveCount > maxObservedChunks) maxObservedChunks = liveCount;
+    assert.ok(liveCount <= 10, `Live .ag-prism-thought-chunk count must stay <= 10, got ${liveCount}`);
+    assert.ok(para1.startsWith(firstParaEl.textContent), 'Compacted base TextNode + chunks must match exact prefix');
+    // Verify ASCII identifier `rendererFrameLoop` is never chopped mid-word once started
+    if (firstParaEl.textContent.includes('renderer')) {
+      assert.ok(
+        firstParaEl.textContent.includes('rendererFrameLoop'),
+        'Short/medium ASCII identifier should advance cleanly without mid-word tear'
+      );
+    }
+  }
+  assert.ok(maxObservedChunks >= 4, 'Multiple soft-focus chunk spans should mount progressively');
+
+  // Drain remainder of paragraph 1 -> once caught up with targetText while stream still open, rAF must pause at 0fps!
+  let guard = 0;
+  while (rafQueue.size > 0 && guard++ < 25) {
+    stepFrame(16);
+  }
+  assert.equal(firstParaEl.textContent, para1);
+  assert.equal(rafQueue.size, 0, 'Pacer must stop at 0fps immediately when caught up with current partial');
+
+  // 3) Advance clock past 350ms TTL and stream paragraph 2 -> Paragraph 1 DOM element must stay untouched in-place!
+  fakeNow += 380;
+  const para2 = '接着定位 `demo.js#L8` 核验行内代码 `rafBudget` 收口门禁。';
+  const fullZh = `${para1}\n\n${para2}`;
+  ctrl1.onPartial(fullZh);
+  assert.equal(rafQueue.size, 1);
+
+  stepFrame(16);
+  stepFrame(16);
+  const parasDuringP2 = body1.querySelectorAll('.ag-prism-thought-p');
+  assert.equal(parasDuringP2.length, 2, 'Second paragraph should mount incrementally');
+  assert.equal(parasDuringP2[0], firstParaEl, 'Settled paragraph 1 <p> DOM node must be preserved in-place (zero redraw)');
+  assert.equal(
+    firstParaEl.querySelectorAll('.ag-prism-thought-chunk').length,
+    0,
+    'Chunks older than 350ms in paragraph 1 must compact cleanly into its base TextNode'
+  );
+  assert.ok(
+    parasDuringP2[1].querySelectorAll('.ag-prism-thought-chunk').length >= 1,
+    'Growing tail paragraph 2 must animate new slices via .ag-prism-thought-chunk'
+  );
+
+  // 4) Complete stream -> Pacer gracefully drains remaining tail within a few frames and halts at 0fps!
+  ctrl1.resolve({ ok: true, text: fullZh, engine: 'ai' });
+  await new Promise((r) => setTimeout(r, 15));
+
+  let drainFrames = 0;
+  while (rafQueue.size > 0 && drainFrames < 20) {
+    stepFrame(16);
+    drainFrames++;
+  }
+  assert.ok(drainFrames <= 12, `Post-done catch-up should finish briskly, took ${drainFrames} frames`);
+  assert.equal(rafQueue.size, 0, 'Once stream finishes and pacer catches up, rAF loop must be 100% stopped (0fps)');
+
+  // Wait for tail chunk fade settle timer (~360ms) -> final inline code & clickable file:// pill must commit cleanly
+  fakeNow += 400;
+  await new Promise((r) => setTimeout(r, 390));
+
+  assert.equal(body1.querySelectorAll('.ag-prism-thought-chunk').length, 0, 'All temporary chunk spans must clear after settle');
+  const codeEls = body1.querySelectorAll('.ag-prism-thought-code');
+  assert.equal(codeEls.length, 1);
+  assert.equal(codeEls[0].textContent, 'rafBudget');
+  const filePills = body1.querySelectorAll('.ag-prism-thought-file-pill');
+  assert.equal(filePills.length, 1);
+  filePills[0].dispatchClick();
+  assert.equal(nativeClicks, 1, 'Settled file pill must still delegate clicks to native host anchor');
+
+  // 5) Motion="off" accessibility/performance bypass: renders full partial immediately with 0 rAF pacing & 0 chunk spans
+  docEl.setAttribute('data-ag-cs-motion', 'off');
+  const btn2 = doc.createElement('button');
+  btn2.setAttribute('data-testid', 'thinking-collapsible-trigger');
+  btn2.setAttribute('aria-expanded', 'true');
+  btn2.textContent = 'Thought for 2s';
+  const panel2 = doc.createElement('div');
+  const rawP2 = doc.createElement('p');
+  rawP2.textContent = 'Testing motion off immediate rendering without token pacer delay or chunk spans.';
+  panel2.appendChild(rawP2);
+  btn2.nextElementSibling = panel2;
+  rootBody.appendChild(btn2);
+  rootBody.appendChild(panel2);
+
+  api.scanImmediate();
+  assert.equal(streamControllers.length, 2);
+  const ctrl2 = streamControllers[1];
+  const motionOffText = '关闭动效模式下跳过逐帧阻尼并立即全量直出完整译文内容。';
+  ctrl2.onPartial(motionOffText);
+
+  assert.equal(rafQueue.size, 0, 'motion="off" must bypass rAF token pacer completely');
+  const body2 = panel2.querySelector('.ag-prism-thought-body');
+  assert.equal(body2.textContent, motionOffText, 'Full partial text must appear immediately when motion="off"');
+  assert.equal(body2.querySelectorAll('.ag-prism-thought-chunk').length, 0, 'motion="off" must not wrap chunks');
+
+  ctrl2.resolve({ ok: true, text: motionOffText, engine: 'ai' });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(panel2.getAttribute('data-op-zh-ready'), '1');
+
+  api.destroy();
+});

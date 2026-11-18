@@ -947,23 +947,28 @@ test('v1.0.1 interactive slice hover, >=80% /compact button, 5h+weekly quota for
     assert.equal(bridge.getDebugState().hoveredSlice, -1);
     assert.match(sr.querySelector('[data-ag-pulse-telemetry="1"]').textContent, /TTFT/);
 
-    // 4. Lower-half quota panel renders 5h + weekly solid & hatched forecast bars, sibling switcher, and Swarm split
+    // 4. Lower-half quota panel (#256): 100% true remaining solid bars (zero zebra hatch), health-tier badge (>35% ok, <=35% tight, <=15% low), sibling switcher, and pill Swarm tag
     const qtSec = sr.querySelector('[data-ag-pulse-quotas="1"]');
     assert.ok(qtSec && qtSec.hidden === false, 'Quota section must render when external #five-quota-section is absent');
     assert.equal(sr.querySelector('[data-ag-pulse-quota-title="1"]').textContent, 'Gemini');
+    assert.equal(sr.querySelector('[data-ag-pulse-pace="1"]').getAttribute('data-pace'), 'ok', '>35% remaining must show calm ok badge, never anxious exhaust badge');
     assert.equal(qtSec.querySelectorAll('.pv-qrow').length, 2, 'Gemini group has both 5h and weekly windows');
-    assert.ok(qtSec.querySelector('[data-ag-pulse-forecast="5h"]'), 'Must render hatched linear forecast element');
+    assert.equal(qtSec.querySelectorAll('.pv-qf, [data-ag-pulse-forecast]').length, 0, 'Zebra forecast hatch elements must be completely eliminated');
+    assert.equal(qtSec.querySelector('[data-ag-pulse-quota-fill="5h"]')?.style?.width, '65.0%', '5h solid bar must reflect 100% true remaining quota (65.0%)');
+    assert.equal(qtSec.querySelector('[data-ag-pulse-quota-fill="weekly"]')?.style?.width, '80.0%', 'Weekly solid bar must reflect 100% true remaining quota (80.0%)');
     const taskSplit = sr.querySelector('[data-ag-pulse-qtask="1"]');
     assert.equal(taskSplit.hidden, false);
     assert.match(taskSplit.textContent, /Swarm\/子代理\(3\)/);
 
-    // Click sibling Argon pill -> switches to Argon weekly window & pace warning
+    // Click sibling Argon pill (remaining: 0.25 <= 0.35) -> switches to Argon weekly window & amber 'tight' health tier (25.0% solid bar)
     const qTabs = sr.querySelectorAll('[data-ag-pulse-qgroup]');
     assert.equal(qTabs.length, 2);
     qTabs[1].dispatchEvent({ type: 'click' });
     assert.equal(sr.querySelector('[data-ag-pulse-quota-title="1"]').textContent, 'Gemini (Argon)');
     assert.equal(qtSec.querySelectorAll('.pv-qrow').length, 1, 'Argon group renders only its weekly window');
-    assert.equal(sr.querySelector('[data-ag-pulse-pace="1"]').getAttribute('data-pace'), 'exhaust');
+    assert.equal(sr.querySelector('[data-ag-pulse-pace="1"]').getAttribute('data-pace'), 'tight');
+    assert.equal(qtSec.querySelector('[data-ag-pulse-quota-fill="weekly"]')?.style?.width, '25.0%');
+    assert.equal(qtSec.querySelector('.pv-qrow')?.getAttribute('data-warn'), '1');
 
     // 5. If external antigravity-pulse v0.9.1 already rendered #five-quota-section, yield to avoid duplicate quota bars
     const extQuota = env.doc.createElement('section');
@@ -1293,10 +1298,12 @@ test('OP-5.2 / HS-8.3 / UX-9 & <31,000B gate: light+warm alabaster alignment, ta
     env.win.stepRaf(1016);
     assert.equal(stepCalls, baseSteps + 1, '16ms tick must execute step cleanly under targetFps="60"');
 
-    // 4. UX-A4 & UX-B4: .pv-qf uses theme-reactive var(--em) (no hardcoded #38bdf8) and /compact rapid double-click cleans timer cleanly
+    // 4. #256 & UX-B4: Zero zebra stripes, zero .pv-qf tick line, hidden #context-note boilerplate, no dashed .pv-qtask border, and /compact double-click safety
     const styleTxt = sr.querySelector('style[data-ag-cs-pulse-style="1"]')?.textContent || '';
-    assert.equal(styleTxt.includes('#38bdf8'), false, 'Forecast border must not hardcode sky-blue #38bdf8');
-    assert.ok(styleTxt.includes('.pv-qf{position:absolute;top:0;bottom:0;border-right:1px solid var(--em)}'));
+    assert.equal(styleTxt.includes('repeating-linear-gradient'), false, 'Zebra hatch stripes must be 100% eliminated');
+    assert.equal(styleTxt.includes('.pv-qf'), false, 'Forecast tick line must be 100% eliminated');
+    assert.ok(styleTxt.includes('#context-card[data-ag-pulse-vial-mode] :is(#context-track,#context-note)'), 'Meaningless #context-note tail must be hidden');
+    assert.equal(styleTxt.includes('dl.stats-grid>.span-row,.pv-qtask'), false, 'Harsh dashed line above .pv-qtask must be removed');
     const cmpBtn = sr.querySelector('[data-ag-pulse-compact="1"]');
     cmpBtn.dispatchEvent({ type: 'click' });
     cmpBtn.dispatchEvent({ type: 'click' });
@@ -1513,6 +1520,7 @@ test('inline-fallback mounts isolated #ag-prism-pulse-bar invisible to external 
       'Fallback .card must anchor right:0 inward above the trigger bar instead of viewport right:18px'
     );
     assert.equal(prismBar.shadowRoot.getElementById('context-card')?.querySelector('[data-fb-i18n="ctxHeading"]')?.textContent, '上下文窗口');
+    assert.equal(prismBar.shadowRoot.getElementById('context-note')?.hidden, true, '#256: meaningless "Prism 实时遥测同步" footnote must stay hidden');
 
     // Switch route to New Conversation ('/' + .agy-home) -> must unmount #ag-prism-pulse-bar & suppress external bar
     const homeEl = env.doc.createElement('div');

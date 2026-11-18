@@ -1012,3 +1012,248 @@ test('smooth-caret bumpMetricsEpoch invalidates emptyCaretProbeCache and prism-r
     globalThis.cancelAnimationFrame = prevCaf;
   }
 });
+
+test('#257: Velvet stream feathering — Layer A block reveal, Layer B 5-bucket CSS.highlights ink fade (0 DOM split & 0fps idle), and Layer C .ag-prism-thought-chunk CSS', () => {
+  const streamMod = require(path.join(ROOT_DIR, 'stream-choreography.js'));
+  const cssSrc = fs.readFileSync(path.join(ROOT_DIR, 'style.css'), 'utf8');
+
+  // Verify Layer B & Layer C CSS rules in style.css
+  for (let i = 0; i < 5; i++) {
+    assert.ok(cssSrc.includes(`::highlight(ag-stream-f${i})`), `Missing ::highlight(ag-stream-f${i}) in style.css`);
+  }
+  assert.ok(cssSrc.includes('.ag-prism-thought-chunk{animation:ag-prism-thought-chunk-in 320ms cubic-bezier(.22,1,.36,1) both;}'));
+  assert.ok(cssSrc.includes('@keyframes ag-prism-thought-chunk-in{0%{opacity:.08;filter:blur(1px);}'));
+
+  const prevDoc = globalThis.document;
+  const prevCss = globalThis.CSS;
+  const prevHl = globalThis.Highlight;
+  const prevPerf = globalThis.performance;
+  const prevRaf = globalThis.requestAnimationFrame;
+  const prevCaf = globalThis.cancelAnimationFrame;
+
+  let nowMs = 1000;
+  let nextRafId = 1;
+  const rafMap = new Map();
+  const highlightMap = new Map();
+
+  class MockHighlight extends Set {}
+
+  function mkElem(tag, attrs = {}) {
+    const attrMap = new Map(Object.entries(attrs).map(([k, v]) => [k, String(v)]));
+    const classSet = new Set((attrMap.get('class') || '').split(/\s+/).filter(Boolean));
+    const el = {
+      nodeType: 1,
+      tagName: tag.toUpperCase(),
+      isConnected: true,
+      parentElement: null,
+      parentNode: null,
+      previousElementSibling: null,
+      nextElementSibling: null,
+      childNodes: [],
+      children: [],
+      classList: {
+        add(c) { classSet.add(c); },
+        remove(c) { classSet.delete(c); },
+        contains(c) { return classSet.has(c); },
+      },
+      getAttribute(k) { return attrMap.has(k) ? attrMap.get(k) : null; },
+      setAttribute(k, v) { attrMap.set(k, String(v)); },
+      hasAttribute(k) { return attrMap.has(k); },
+      removeAttribute(k) { attrMap.delete(k); },
+      appendChild(ch) {
+        ch.parentElement = el;
+        ch.parentNode = el;
+        ch.isConnected = true;
+        const prevEl = el.children[el.children.length - 1] || null;
+        if (ch.nodeType === 1) {
+          if (prevEl) {
+            prevEl.nextElementSibling = ch;
+            ch.previousElementSibling = prevEl;
+          }
+          el.children.push(ch);
+        }
+        el.childNodes.push(ch);
+        return ch;
+      },
+      matches(sel) {
+        return String(sel)
+          .split(',')
+          .map((s) => s.trim())
+          .some((tok) => {
+            if (!tok) return false;
+            if (tok.startsWith('.')) return classSet.has(tok.slice(1));
+            const m = tok.match(/^\[([a-zA-Z0-9_-]+)="([^"]+)"\]$/);
+            if (m) return attrMap.get(m[1]) === m[2];
+            return tok.toUpperCase() === el.tagName;
+          });
+      },
+      closest(sel) {
+        let cur = el;
+        while (cur) {
+          if (cur.matches && cur.matches(sel)) return cur;
+          cur = cur.parentElement;
+        }
+        return null;
+      },
+      querySelectorAll() { return []; },
+      querySelector() { return null; },
+    };
+    return el;
+  }
+
+  function mkText(str) {
+    return {
+      nodeType: 3,
+      data: str,
+      get nodeValue() { return this.data; },
+      isConnected: true,
+      parentElement: null,
+      parentNode: null,
+    };
+  }
+
+  try {
+    const html = mkElem('html', { 'data-ag-cs-style': 'true', 'data-ag-cs-motion': 'standard' });
+    const body = mkElem('body');
+    const conv = mkElem('div', { 'data-testid': 'conversation-view' });
+    const prose = mkElem('div', { 'data-testid': 'planner-response-text' });
+    const thoughtOverlay = mkElem('div', { class: 'ag-prism-thought-overlay' });
+    const inputBox = mkElem('div', { 'data-testid': 'agent-input-box' });
+    conv.appendChild(prose);
+    conv.appendChild(thoughtOverlay);
+    conv.appendChild(inputBox);
+    body.appendChild(conv);
+
+    globalThis.CSS = { highlights: highlightMap };
+    globalThis.Highlight = MockHighlight;
+    globalThis.performance = { now: () => nowMs };
+    globalThis.requestAnimationFrame = (cb) => {
+      const id = nextRafId++;
+      rafMap.set(id, cb);
+      return id;
+    };
+    globalThis.cancelAnimationFrame = (id) => {
+      rafMap.delete(id);
+    };
+    globalThis.document = {
+      documentElement: html,
+      body,
+      createRange() {
+        return {
+          startContainer: null,
+          startOffset: 0,
+          endContainer: null,
+          endOffset: 0,
+          setStart(n, o) { this.startContainer = n; this.startOffset = o; },
+          setEnd(n, o) { this.endContainer = n; this.endOffset = o; },
+        };
+      },
+      querySelectorAll: () => [],
+      querySelector: () => null,
+    };
+
+    let motionEnabled = true;
+    const ctl = streamMod.createStreamChoreographyController({
+      motionEngine: null,
+      isDestroyed: () => false,
+      isComposerRestyleEnabled: () => true,
+      isMotionStandardOrUltra: () => motionEnabled,
+      isMotionUltra: () => false, // Verify standard tier ALSO enables stream feathering!
+      isConvRunning: () => true,
+      isThoughtIsolatedNode: () => false,
+      isThoughtMutationRecord: () => false,
+      isManagedThoughtPanel: () => false,
+      setAttrIfChanged: (el, k, v) => el.setAttribute(k, v),
+      runGuardedMut: (fn) => fn(),
+      cloneCachedSvgElement: () => null,
+      buildBrandMarkSvg: () => '<svg></svg>',
+      applySingleHostIcon: () => {},
+      rippleCtl: null,
+      convAuraCtl: null,
+      notifyMascot: () => {},
+    });
+
+    // 1. Layer A: New paragraph block receives single .ag-cs-stream-chunk and snapshots initial text length
+    const p1 = mkElem('p');
+    const t1 = mkText('Hello');
+    p1.appendChild(t1);
+    prose.appendChild(p1);
+    ctl.onStreamMutations([{ type: 'childList', target: prose, addedNodes: [p1] }]);
+    assert.equal(p1.classList.contains('ag-cs-stream-chunk'), true, 'New block must receive .ag-cs-stream-chunk in standard tier');
+    assert.equal(ctl.getHighlightFadeState().activeCount, 0, 'Initial block snapshot must not double-fade initial text');
+
+    // 2. Layer B: Appending text via characterData on the SAME TextNode creates Range [5, 11] in ag-stream-f0 with ZERO DOM split!
+    nowMs = 1020;
+    t1.data = 'Hello world';
+    ctl.onStreamMutations([{ type: 'characterData', target: t1 }]);
+    assert.equal(p1.childNodes.length, 1, 'React TextNode must NEVER be split or wrapped');
+    assert.equal(p1.childNodes[0], t1);
+    let st = ctl.getHighlightFadeState();
+    assert.equal(st.activeCount, 1);
+    assert.equal(st.rafActive, true);
+    assert.deepEqual(st.buckets, [1, 0, 0, 0, 0]);
+    const r0 = [...highlightMap.get('ag-stream-f0')][0];
+    assert.equal(r0.startOffset, 5);
+    assert.equal(r0.endOffset, 11);
+
+    // Sub-frame rapid append (<= 34ms) coalesces into the SAME Range [5, 12] without allocating a second Range
+    nowMs = 1040;
+    t1.data = 'Hello world!';
+    ctl.onStreamMutations([{ type: 'characterData', target: t1 }]);
+    assert.equal(ctl.getHighlightFadeState().activeCount, 1, 'Sub-frame delta on same TextNode must coalesce');
+    assert.equal(r0.endOffset, 12);
+
+    // 3. Step through all 5 buckets (f0 -> f1 -> f2 -> f3 -> f4) and graduate cleanly to 0fps at >= 300ms
+    const stepAt = (ts) => {
+      nowMs = ts;
+      const fn = [...rafMap.values()][0];
+      rafMap.clear();
+      fn(ts);
+      return ctl.getHighlightFadeState();
+    };
+    assert.deepEqual(stepAt(1090).buckets, [0, 1, 0, 0, 0], '70ms age -> ag-stream-f1');
+    assert.deepEqual(stepAt(1150).buckets, [0, 0, 1, 0, 0], '130ms age -> ag-stream-f2');
+    assert.deepEqual(stepAt(1210).buckets, [0, 0, 0, 1, 0], '190ms age -> ag-stream-f3');
+    assert.deepEqual(stepAt(1270).buckets, [0, 0, 0, 0, 1], '250ms age -> ag-stream-f4');
+    const graduated = stepAt(1330);
+    assert.deepEqual(graduated.buckets, [0, 0, 0, 0, 0], '>=300ms age -> graduated out of all Highlight buckets');
+    assert.equal(graduated.activeCount, 0);
+    assert.equal(graduated.rafActive, false, 'Empty fade ring must immediately return to 0fps (zero rAF)');
+    assert.equal(rafMap.size, 0);
+
+    // 4. Exclusions: .ag-prism-thought-overlay and agent-input-box mutations never trigger Highlight ranges
+    const ovTxt = mkText('翻译中');
+    thoughtOverlay.appendChild(ovTxt);
+    const inTxt = mkText('typing');
+    inputBox.appendChild(inTxt);
+    ctl.onStreamMutations([
+      { type: 'characterData', target: ovTxt },
+      { type: 'characterData', target: inTxt },
+    ]);
+    assert.equal(ctl.getHighlightFadeState().activeCount, 0, 'Overlay and input box must be strictly excluded');
+
+    // 5. Bounded 48-item ring + immediate cleanup on motion="off" / disconnectStreamObserver
+    for (let k = 0; k < 56; k++) {
+      nowMs += 40;
+      const tn = mkText(`word-${k}`);
+      p1.appendChild(tn);
+      ctl.onStreamMutations([{ type: 'childList', target: p1, addedNodes: [tn] }]);
+    }
+    assert.equal(ctl.getHighlightFadeState().activeCount, 48, 'Fade ring must cap strictly at 48 active ranges');
+    html.setAttribute('data-ag-cs-motion', 'off');
+    motionEnabled = false;
+    ctl.disconnectStreamObserver();
+    assert.equal(ctl.getHighlightFadeState().activeCount, 0);
+    assert.equal(ctl.getHighlightFadeState().rafActive, false);
+    assert.deepEqual(ctl.getHighlightFadeState().buckets, [0, 0, 0, 0, 0]);
+
+    ctl.clearTransientTimers();
+  } finally {
+    globalThis.document = prevDoc;
+    globalThis.CSS = prevCss;
+    globalThis.Highlight = prevHl;
+    globalThis.performance = prevPerf;
+    globalThis.requestAnimationFrame = prevRaf;
+    globalThis.cancelAnimationFrame = prevCaf;
+  }
+});

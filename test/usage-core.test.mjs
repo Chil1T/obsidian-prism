@@ -542,6 +542,12 @@ test('home-studio-panel backfills Swarm subagent summaries via usageBridge.listS
     });
     assert.equal(wsRollup.tokens, 22000, 'Subagent tokens must inherit parent workspace during workspace filtering');
     assert.equal(wsRollup.subagentTokens, 11000);
+
+    // #256 guard: home-studio-panel STUDIO_EXTRA_CSS & renderQuotasView must eliminate zebra hatch (.ag-cs-qbar-hatch)
+    const fsMod = await import('node:fs');
+    const homePanelSrc = fsMod.readFileSync(new URL('../home-studio-panel.js', import.meta.url), 'utf8');
+    assert.equal(homePanelSrc.includes('repeating-linear-gradient'), false, 'Studio quota bars must have zero zebra hatch stripes');
+    assert.equal(homePanelSrc.includes('ag-cs-qbar-hatch'), false, 'Studio quota bars must render 100% solid remaining width only');
   } finally {
     if (prevWin === undefined) delete globalThis.window;
     else globalThis.window = prevWin;
