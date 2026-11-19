@@ -3,7 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFile, execFileSync, spawn } = require('child_process');
 
 const STYLE_ID = 'ag-prism-css';
 const LEGACY_STYLE_ID = 'ag-claude-style-css';
@@ -98,6 +98,9 @@ const VALIDATORS = {
 function validateConfigEntry(key, value) {
   if (key === 'pollIntervalMs') {
     return typeof value === 'number' && Number.isInteger(value) && value >= 500 && value <= 60000;
+  }
+  if (key === 'autoPromptCdpRelaunch') {
+    return typeof value === 'boolean';
   }
   if (!Object.prototype.hasOwnProperty.call(VALIDATORS, key)) return false;
   const rule = VALIDATORS[key];
@@ -358,6 +361,961 @@ function isExpectedDaemonProcess(pid, probeOverride = null) {
   } catch {
     return false;
   }
+}
+
+const CDP_OPT_IN_SWITCH = '--remote-debugging-port=0';
+const RELAUNCH_STATE_FILENAME = '.relaunch-prompt-state.json';
+const PATCHED_SHORTCUTS_FILENAME = '.patched-shortcuts.json';
+
+// 纯线性扫描检测命令行是否已显式携带 --remote-debugging-port（零嵌套正则，杜绝 ReDoS）
+function hasRemoteDebuggingPortSwitch(commandLine) {
+  const raw = String(commandLine || '');
+  if (!raw) return false;
+  const low = raw.toLowerCase();
+  const needle = '--remote-debugging-port';
+  let from = 0;
+  while (from <= low.length - needle.length) {
+    const idx = low.indexOf(needle, from);
+    if (idx < 0) return false;
+    const prev = idx === 0 ? ' ' : low[idx - 1];
+    const afterIdx = idx + needle.length;
+    const next = afterIdx >= low.length ? ' ' : low[afterIdx];
+    const prevOk = prev === ' ' || prev === '\t' || prev === '"' || prev === "'";
+    const nextOk = next === '=' || next === ' ' || next === '\t' || next === '"' || next === "'";
+    if (prevOk && nextOk) return true;
+    from = idx + needle.length;
+  }
+  return false;
+}
+
+// 无损追加 --remote-debugging-port=0（若已含任意 --remote-debugging-port 则原样保留）
+function appendCdpFlagToArguments(rawArgs) {
+  const orig = String(rawArgs || '');
+  if (hasRemoteDebuggingPortSwitch(orig)) {
+    return { args: orig, changed: false };
+  }
+  const trimmed = orig.trim();
+  if (!trimmed) {
+    return { args: CDP_OPT_IN_SWITCH, changed: true };
+  }
+  return { args: `${trimmed} ${CDP_OPT_IN_SWITCH}`, changed: true };
+}
+
+// 纯线性词法扫描剥离 --remote-debugging-port=0，100% 保留引号内空白与用户其余参数
+function stripCdpFlagFromArguments(rawArgs) {
+  const s = String(rawArgs || '');
+  if (!s) return { args: '', changed: false };
+  const tokens = [];
+  let i = 0;
+  const len = s.length;
+  let removed = false;
+  while (i < len) {
+    while (i < len && (s[i] === ' ' || s[i] === '\t' || s[i] === '\r' || s[i] === '\n')) i++;
+    if (i >= len) break;
+    const start = i;
+    let inQuote = '';
+    while (i < len) {
+      const ch = s[i];
+      if (inQuote) {
+        if (ch === '\\' && i + 1 < len) {
+          i += 2;
+          continue;
+        }
+        if (ch === inQuote) inQuote = '';
+        i++;
+      } else {
+        if (ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n') break;
+        if (ch === '"' || ch === "'") inQuote = ch;
+        i++;
+      }
+    }
+    const tok = s.slice(start, i);
+    const unquoted =
+      (tok.startsWith('"') && tok.endsWith('"')) || (tok.startsWith("'") && tok.endsWith("'"))
+        ? tok.slice(1, -1)
+        : tok;
+    if (unquoted.toLowerCase() === CDP_OPT_IN_SWITCH) {
+      removed = true;
+    } else {
+      tokens.push(tok);
+    }
+  }
+  if (!removed) return { args: s, changed: false };
+  return { args: tokens.join(' '), changed: true };
+}
+
+// 严格按可执行文件名精确匹配 Antigravity.exe（自动排除 antigravity-tools.exe 与 Uninstall Antigravity.exe）
+function isAntigravityShortcutTarget(targetPath) {
+  const cleaned = String(targetPath || '').trim().replace(/^"+|"+$/g, '');
+  if (!cleaned) return false;
+  const parts = cleaned.split(/[\\/]/);
+  const base = (parts[parts.length - 1] || '').trim().toLowerCase();
+  return base === 'antigravity.exe';
+}
+
+// 精准识别真正的 Antigravity 主进程（过滤 --type= 渲染/GPU 子进程、sidecar_sdk 守护进程与第三方 antigravity-tools）
+function isMainAntigravityProcessSignature(imageName, commandLine = '') {
+  const rawImg = String(imageName || '').trim().replace(/^"+|"+$/g, '');
+  const imgParts = rawImg.split(/[\\/]/);
+  const baseImg = (imgParts[imgParts.length - 1] || '').trim().toLowerCase();
+  if (baseImg !== 'antigravity' && baseImg !== 'antigravity.exe') {
+    return false;
+  }
+  const normCmd = String(commandLine || '').replace(/\\/g, '/').toLowerCase();
+  if (!normCmd) return true;
+  if (normCmd.includes('--type=')) return false;
+  if (
+    normCmd.includes('sidecar_sdk') ||
+    normCmd.includes('register_loader.js') ||
+    normCmd.includes('sidecars/daemon/main.mjs') ||
+    normCmd.includes('/daemon/main.mjs') ||
+    normCmd.includes('/watch.js') ||
+    normCmd.includes('--run-guard') ||
+    normCmd.includes('antigravity-tools') ||
+    normCmd.includes('uninstall antigravity')
+  ) {
+    return false;
+  }
+  return true;
+}
+
+const WIN_SHORTCUT_LIST_PS = [
+  '$ErrorActionPreference = "SilentlyContinue"',
+  '$ProgressPreference = "SilentlyContinue"',
+  '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+  '$dirs = @()',
+  'if ($env:AG_PRISM_LNK_DIRS) {',
+  '  try { $rawDirs = ConvertFrom-Json -InputObject $env:AG_PRISM_LNK_DIRS; $dirs = if ($rawDirs -is [System.Array]) { $rawDirs } elseif ($null -ne $rawDirs) { @($rawDirs) } else { @() } } catch {}',
+  '} else {',
+  '  $dirs += [Environment]::GetFolderPath("Desktop")',
+  '  if ($env:USERPROFILE) { $dirs += (Join-Path $env:USERPROFILE "Desktop") }',
+  '  $dirs += [Environment]::GetFolderPath("Programs")',
+  '  if ($env:APPDATA) { $dirs += (Join-Path $env:APPDATA "Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar") }',
+  '  $dirs += [Environment]::GetFolderPath("CommonDesktopDirectory")',
+  '  $dirs += [Environment]::GetFolderPath("CommonPrograms")',
+  '}',
+  '$extra = @()',
+  'if ($env:AG_PRISM_LNK_EXTRA) {',
+  '  try { $rawExtra = ConvertFrom-Json -InputObject $env:AG_PRISM_LNK_EXTRA; $extra = if ($rawExtra -is [System.Array]) { $rawExtra } elseif ($null -ne $rawExtra) { @($rawExtra) } else { @() } } catch {}',
+  '}',
+  '$seen = New-Object "System.Collections.Generic.HashSet[string]" ([System.StringComparer]::OrdinalIgnoreCase)',
+  '$files = New-Object "System.Collections.Generic.List[string]"',
+  'foreach ($f in $extra) {',
+  '  if ($f -and (Test-Path -LiteralPath $f -PathType Leaf) -and $f.EndsWith(".lnk", [System.StringComparison]::OrdinalIgnoreCase)) {',
+  '    $full = [System.IO.Path]::GetFullPath($f)',
+  '    if ($seen.Add($full)) { [void]$files.Add($full) }',
+  '  }',
+  '}',
+  'foreach ($d in $dirs) {',
+  '  if (-not $d -or -not (Test-Path -LiteralPath $d -PathType Container)) { continue }',
+  '  foreach ($item in @(Get-ChildItem -LiteralPath $d -Filter "*.lnk" -File -ErrorAction SilentlyContinue)) {',
+  '    if ($seen.Add($item.FullName)) { [void]$files.Add($item.FullName) }',
+  '  }',
+  '  foreach ($sub in @(Get-ChildItem -LiteralPath $d -Directory -ErrorAction SilentlyContinue)) {',
+  '    foreach ($item2 in @(Get-ChildItem -LiteralPath $sub.FullName -Filter "*.lnk" -File -ErrorAction SilentlyContinue)) {',
+  '      if ($seen.Add($item2.FullName)) { [void]$files.Add($item2.FullName) }',
+  '    }',
+  '  }',
+  '}',
+  'if ($files.Count -eq 0) { Write-Output "[]"; exit 0 }',
+  '$ws = New-Object -ComObject WScript.Shell',
+  '$items = New-Object "System.Collections.Generic.List[object]"',
+  'foreach ($lnk in $files) {',
+  '  try {',
+  '    $sc = $ws.CreateShortcut($lnk)',
+  '    $tp = [string]$sc.TargetPath',
+  '    if (-not $tp) { continue }',
+  '    [void]$items.Add([pscustomobject]@{ lnkPath = $lnk; targetPath = $tp; arguments = [string]$sc.Arguments })',
+  '  } catch {}',
+  '}',
+  'if ($items.Count -eq 0) { Write-Output "[]" } elseif ($items.Count -eq 1) { Write-Output ("[" + ($items[0] | ConvertTo-Json -Compress) + "]") } else { $items | ConvertTo-Json -Compress }',
+].join('\n');
+
+const WIN_SHORTCUT_APPLY_PS = [
+  '$ErrorActionPreference = "Stop"',
+  '$ProgressPreference = "SilentlyContinue"',
+  '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+  '$updates = @()',
+  'if ($env:AG_PRISM_LNK_UPDATES) {',
+  '  $rawUpd = ConvertFrom-Json -InputObject $env:AG_PRISM_LNK_UPDATES',
+  '  $updates = if ($rawUpd -is [System.Array]) { $rawUpd } elseif ($null -ne $rawUpd) { @($rawUpd) } else { @() }',
+  '}',
+  '$ws = New-Object -ComObject WScript.Shell',
+  '$applied = New-Object "System.Collections.Generic.List[string]"',
+  '$skipped = New-Object "System.Collections.Generic.List[string]"',
+  'foreach ($u in $updates) {',
+  '  $p = [string]$u.lnkPath',
+  '  if (-not $p) { continue }',
+  '  try {',
+  '    $sc = $ws.CreateShortcut($p)',
+  '    $sc.Arguments = [string]$u.arguments',
+  '    $sc.Save()',
+  '    [void]$applied.Add($p)',
+  '  } catch {',
+  '    [void]$skipped.Add($p)',
+  '  }',
+  '}',
+  '([pscustomobject]@{ applied = $applied.ToArray(); skipped = $skipped.ToArray() }) | ConvertTo-Json -Compress',
+].join('\n');
+
+const WIN_SHORTCUT_LIST_B64 = Buffer.from(WIN_SHORTCUT_LIST_PS, 'utf16le').toString('base64');
+const WIN_SHORTCUT_APPLY_B64 = Buffer.from(WIN_SHORTCUT_APPLY_PS, 'utf16le').toString('base64');
+
+function readPatchedShortcutsRecord(pluginDir) {
+  if (!pluginDir) return [];
+  try {
+    const recFile = path.join(pluginDir, PATCHED_SHORTCUTS_FILENAME);
+    if (!fs.existsSync(recFile)) return [];
+    const parsed = JSON.parse(fs.readFileSync(recFile, 'utf8'));
+    const list = Array.isArray(parsed?.patchedPaths) ? parsed.patchedPaths : [];
+    return list.filter((p) => typeof p === 'string' && p.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+function writePatchedShortcutsRecord(pluginDir, pathsList) {
+  if (!pluginDir) return;
+  try {
+    fs.mkdirSync(pluginDir, { recursive: true });
+    const uniq = Array.from(new Set(pathsList.filter((p) => typeof p === 'string' && p.length > 0)));
+    const recFile = path.join(pluginDir, PATCHED_SHORTCUTS_FILENAME);
+    const tmpFile = `${recFile}.${process.pid}.tmp`;
+    fs.writeFileSync(
+      tmpFile,
+      JSON.stringify({ patchedPaths: uniq, updatedAt: Date.now() }, null, 2) + '\n',
+      'utf8'
+    );
+    fs.renameSync(tmpFile, recFile);
+  } catch {}
+}
+
+function runWindowsShortcutAdapter(searchDirs, extraFiles) {
+  const env = { ...process.env };
+  if (Array.isArray(searchDirs)) {
+    env.AG_PRISM_LNK_DIRS = JSON.stringify(searchDirs.map((d) => path.resolve(d)));
+  } else {
+    delete env.AG_PRISM_LNK_DIRS;
+  }
+  if (Array.isArray(extraFiles) && extraFiles.length > 0) {
+    env.AG_PRISM_LNK_EXTRA = JSON.stringify(extraFiles.map((f) => path.resolve(f)));
+  } else {
+    delete env.AG_PRISM_LNK_EXTRA;
+  }
+  const listOut = execFileSync(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_SHORTCUT_LIST_B64],
+    { encoding: 'utf8', env, windowsHide: true, timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] }
+  );
+  const rawJson = String(listOut || '').trim();
+  const parsed = rawJson ? JSON.parse(rawJson) : [];
+  const entries = Array.isArray(parsed) ? parsed : [parsed];
+  return {
+    entries,
+    applyUpdates(updates) {
+      if (!Array.isArray(updates) || updates.length === 0) {
+        return { applied: [], skipped: [] };
+      }
+      const applyEnv = { ...process.env, AG_PRISM_LNK_UPDATES: JSON.stringify(updates) };
+      const applyOut = execFileSync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_SHORTCUT_APPLY_B64],
+        { encoding: 'utf8', env: applyEnv, windowsHide: true, timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] }
+      );
+      const res = JSON.parse(String(applyOut || '{}').trim() || '{}');
+      return {
+        applied: Array.isArray(res?.applied) ? res.applied : [],
+        skipped: Array.isArray(res?.skipped) ? res.skipped : [],
+      };
+    },
+  };
+}
+
+// 扫描并无损为 Antigravity.lnk 补齐 --remote-debugging-port=0（支持真实 Windows COM 与注入式沙箱适配器）
+function ensureAntigravityShortcutsCdpFlag(opts = {}) {
+  const isWinPlatform = opts.platformOverride ? opts.platformOverride === 'win32' : IS_WIN;
+  if (!isWinPlatform && typeof opts.shortcutAdapter !== 'function') {
+    return { supported: false, scanned: 0, matched: 0, patched: [], alreadySet: [], skipped: [] };
+  }
+  try {
+    const adapter =
+      typeof opts.shortcutAdapter === 'function'
+        ? opts.shortcutAdapter(opts.searchDirs || null, [])
+        : runWindowsShortcutAdapter(opts.searchDirs || null, []);
+    const entries = Array.isArray(adapter?.entries) ? adapter.entries : [];
+    const updates = [];
+    const alreadySet = [];
+    let matched = 0;
+    for (const item of entries) {
+      if (!item || !isAntigravityShortcutTarget(item.targetPath)) continue;
+      matched += 1;
+      const next = appendCdpFlagToArguments(item.arguments);
+      if (next.changed) {
+        updates.push({ lnkPath: item.lnkPath, arguments: next.args });
+      } else {
+        alreadySet.push(item.lnkPath);
+      }
+    }
+    const writeRes = updates.length > 0 ? adapter.applyUpdates(updates) : { applied: [], skipped: [] };
+    if (opts.pluginDir && writeRes.applied.length > 0) {
+      const prev = readPatchedShortcutsRecord(opts.pluginDir);
+      writePatchedShortcutsRecord(opts.pluginDir, [...prev, ...writeRes.applied]);
+    }
+    return {
+      supported: true,
+      scanned: entries.length,
+      matched,
+      patched: writeRes.applied,
+      alreadySet,
+      skipped: writeRes.skipped,
+    };
+  } catch (err) {
+    return {
+      supported: true,
+      scanned: 0,
+      matched: 0,
+      patched: [],
+      alreadySet: [],
+      skipped: [],
+      error: String(err && err.message ? err.message : err),
+    };
+  }
+}
+
+// 卸载时精准剥离 Antigravity.lnk 中的 --remote-debugging-port=0 并保留用户原有其他启动参数
+function restoreAntigravityShortcutsCdpFlag(opts = {}) {
+  const isWinPlatform = opts.platformOverride ? opts.platformOverride === 'win32' : IS_WIN;
+  if (!isWinPlatform && typeof opts.shortcutAdapter !== 'function') {
+    return { supported: false, restored: [], skipped: [] };
+  }
+  try {
+    const recorded = opts.pluginDir ? readPatchedShortcutsRecord(opts.pluginDir) : [];
+    const adapter =
+      typeof opts.shortcutAdapter === 'function'
+        ? opts.shortcutAdapter(opts.searchDirs || null, recorded)
+        : runWindowsShortcutAdapter(opts.searchDirs || null, recorded);
+    const entries = Array.isArray(adapter?.entries) ? adapter.entries : [];
+    const updates = [];
+    for (const item of entries) {
+      if (!item || !isAntigravityShortcutTarget(item.targetPath)) continue;
+      const next = stripCdpFlagFromArguments(item.arguments);
+      if (next.changed) {
+        updates.push({ lnkPath: item.lnkPath, arguments: next.args });
+      }
+    }
+    const writeRes = updates.length > 0 ? adapter.applyUpdates(updates) : { applied: [], skipped: [] };
+    if (opts.pluginDir) {
+      try {
+        const recFile = path.join(opts.pluginDir, PATCHED_SHORTCUTS_FILENAME);
+        if (fs.existsSync(recFile)) fs.unlinkSync(recFile);
+      } catch {}
+    }
+    return {
+      supported: true,
+      restored: writeRes.applied,
+      skipped: writeRes.skipped,
+    };
+  } catch (err) {
+    return {
+      supported: true,
+      restored: [],
+      skipped: [],
+      error: String(err && err.message ? err.message : err),
+    };
+  }
+}
+
+const WIN_HOST_PROBE_PS = [
+  '$ErrorActionPreference = "SilentlyContinue"',
+  '$ProgressPreference = "SilentlyContinue"',
+  '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+  '$procs = @(Get-Process -Name "Antigravity" -ErrorAction SilentlyContinue)',
+  'if ($procs.Count -eq 0) { Write-Output "[]"; exit 0 }',
+  '$filter = ($procs | ForEach-Object { "ProcessId = " + $_.Id }) -join " OR "',
+  '$cimMap = @{}',
+  'try {',
+  '  foreach ($c in @(Get-CimInstance Win32_Process -Filter $filter -ErrorAction SilentlyContinue)) {',
+  '    $cimMap[[int]$c.ProcessId] = $c',
+  '  }',
+  '} catch {}',
+  '$out = @(foreach ($p in $procs) {',
+  '  $st = 0',
+  '  try { $st = [long]([DateTimeOffset]$p.StartTime).ToUnixTimeMilliseconds() } catch {}',
+  '  $cim = $cimMap[[int]$p.Id]',
+  '  $exe = ""',
+  '  try { $exe = [string]$p.Path } catch {}',
+  '  if (-not $exe -and $cim) { $exe = [string]$cim.ExecutablePath }',
+  '  $cmd = if ($cim) { [string]$cim.CommandLine } else { "" }',
+  '  [pscustomobject]@{',
+  '    pid = [int]$p.Id',
+  '    imageName = [string]$p.ProcessName',
+  '    startMs = $st',
+  '    exePath = $exe',
+  '    commandLine = $cmd',
+  '  }',
+  '})',
+  'if ($out.Count -eq 0) { Write-Output "[]" } elseif ($out.Count -eq 1) { Write-Output ("[" + ($out[0] | ConvertTo-Json -Compress) + "]") } else { $out | ConvertTo-Json -Compress }',
+].join('\n');
+
+const WIN_HOST_PROBE_B64 = Buffer.from(WIN_HOST_PROBE_PS, 'utf16le').toString('base64');
+
+// 解析 POSIX `ps -axo pid=,etime=,comm=,args=` 的 BSD/Linux etime（[[dd-]hh:]mm:ss）为毫秒
+function parsePsElapsedMs(etimeStr) {
+  const raw = String(etimeStr || '').trim();
+  if (!raw) return 0;
+  let days = 0;
+  let rest = raw;
+  const dashIdx = raw.indexOf('-');
+  if (dashIdx > 0) {
+    days = parseInt(raw.slice(0, dashIdx), 10) || 0;
+    rest = raw.slice(dashIdx + 1);
+  }
+  const parts = rest.split(':').map((x) => parseInt(x, 10) || 0);
+  let secs = 0;
+  if (parts.length === 3) {
+    secs = parts[0] * 3600 + parts[1] * 60 + parts[2];
+  } else if (parts.length === 2) {
+    secs = parts[0] * 60 + parts[1];
+  } else if (parts.length === 1) {
+    secs = parts[0];
+  }
+  return (days * 86400 + secs) * 1000;
+}
+
+function selectPrimaryHostCandidate(candidates, nowMs = Date.now()) {
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+  const mains = [];
+  for (const c of candidates) {
+    const pid = Number(c && c.pid);
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) continue;
+    if (!isMainAntigravityProcessSignature(c.imageName, c.commandLine)) continue;
+    const startMs = Number(c.startMs) > 0 ? Number(c.startMs) : 0;
+    mains.push({
+      pid,
+      startMs,
+      ageMs: startMs > 0 && nowMs >= startMs ? nowMs - startMs : 0,
+      exePath: String(c.exePath || '').trim(),
+      commandLine: String(c.commandLine || ''),
+      hasDebugPortSwitch: hasRemoteDebuggingPortSwitch(c.commandLine),
+    });
+  }
+  if (mains.length === 0) return null;
+  mains.sort((a, b) => {
+    if (a.startMs > 0 && b.startMs > 0 && a.startMs !== b.startMs) return a.startMs - b.startMs;
+    return a.pid - b.pid;
+  });
+  return mains[0];
+}
+
+function parsePosixPsHostCandidates(psStdout, nowMs = Date.now()) {
+  const lines = String(psStdout || '').split(/\r?\n/);
+  const list = [];
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const m = /^(\d+)\s+(\S+)\s+(.+)$/.exec(line);
+    if (!m) continue;
+    const pid = parseInt(m[1], 10);
+    const elapsedMs = parsePsElapsedMs(m[2]);
+    const cmdLine = m[3].trim();
+    if (!cmdLine.toLowerCase().includes('antigravity')) continue;
+    let firstExe = cmdLine;
+    const macAppIdx = cmdLine.indexOf('.app/Contents/MacOS/');
+    if (macAppIdx > 0) {
+      const slashAfter = cmdLine.indexOf(' ', macAppIdx + 20);
+      firstExe = slashAfter > 0 ? cmdLine.slice(0, slashAfter) : cmdLine;
+    } else {
+      const spIdx = cmdLine.indexOf(' ');
+      firstExe = spIdx > 0 ? cmdLine.slice(0, spIdx) : cmdLine;
+    }
+    let appBundlePath = firstExe;
+    const appEnd = firstExe.indexOf('.app/');
+    if (appEnd > 0) {
+      appBundlePath = firstExe.slice(0, appEnd + 4);
+    }
+    list.push({
+      pid,
+      imageName: firstExe,
+      startMs: elapsedMs > 0 ? Math.max(1, nowMs - elapsedMs) : 0,
+      exePath: IS_MAC && appBundlePath.endsWith('.app') ? appBundlePath : firstExe,
+      commandLine: cmdLine,
+    });
+  }
+  return list;
+}
+
+function detectRunningAntigravityHostSync(opts = {}) {
+  const nowMs = Number(opts.nowMs) > 0 ? Number(opts.nowMs) : Date.now();
+  if (typeof opts.probeProcesses === 'function') {
+    return selectPrimaryHostCandidate(opts.probeProcesses(), nowMs);
+  }
+  try {
+    if (IS_WIN) {
+      const out = execFileSync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_HOST_PROBE_B64],
+        { encoding: 'utf8', windowsHide: true, timeout: 6000, stdio: ['ignore', 'pipe', 'ignore'] }
+      );
+      const trimmed = String(out || '').trim();
+      if (!trimmed) return null;
+      const parsed = JSON.parse(trimmed);
+      return selectPrimaryHostCandidate(Array.isArray(parsed) ? parsed : [parsed], nowMs);
+    }
+    const psOut = execFileSync('ps', ['-axo', 'pid=,etime=,args='], {
+      encoding: 'utf8',
+      timeout: 3000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return selectPrimaryHostCandidate(parsePosixPsHostCandidates(psOut, nowMs), nowMs);
+  } catch {
+    return null;
+  }
+}
+
+function detectRunningAntigravityHost(opts = {}) {
+  const nowMs = Number(opts.nowMs) > 0 ? Number(opts.nowMs) : Date.now();
+  if (typeof opts.probeProcesses === 'function') {
+    return Promise.resolve(opts.probeProcesses()).then((list) => selectPrimaryHostCandidate(list, nowMs));
+  }
+  return new Promise((resolve) => {
+    if (IS_WIN) {
+      execFile(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_HOST_PROBE_B64],
+        { encoding: 'utf8', windowsHide: true, timeout: 6000, maxBuffer: 1024 * 1024 },
+        (err, stdout) => {
+          if (err) {
+            resolve(null);
+            return;
+          }
+          try {
+            const trimmed = String(stdout || '').trim();
+            if (!trimmed) {
+              resolve(null);
+              return;
+            }
+            const parsed = JSON.parse(trimmed);
+            resolve(selectPrimaryHostCandidate(Array.isArray(parsed) ? parsed : [parsed], nowMs));
+          } catch {
+            resolve(null);
+          }
+        }
+      );
+      return;
+    }
+    execFile(
+      'ps',
+      ['-axo', 'pid=,etime=,args='],
+      { encoding: 'utf8', timeout: 3000, maxBuffer: 2 * 1024 * 1024 },
+      (err, stdout) => {
+        if (err) {
+          resolve(null);
+          return;
+        }
+        resolve(selectPrimaryHostCandidate(parsePosixPsHostCandidates(stdout, nowMs), nowMs));
+      }
+    );
+  });
+}
+
+function getRelaunchPromptStatePaths(pluginDir, extraDirs = []) {
+  const dirs = [];
+  if (pluginDir) dirs.push(path.resolve(pluginDir));
+  for (const d of extraDirs) {
+    if (d) dirs.push(path.resolve(d));
+  }
+  if (!extraDirs || extraDirs.length === 0) {
+    if (IS_WIN) {
+      const localApp = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+      const watcherDir = path.join(localApp, 'obsidian-prism');
+      if (fs.existsSync(watcherDir)) dirs.push(watcherDir);
+    } else if (IS_MAC) {
+      const macWatcherDir = path.join(os.homedir(), 'Library', 'Application Support', 'obsidian-prism');
+      if (fs.existsSync(macWatcherDir)) dirs.push(macWatcherDir);
+    }
+  }
+  const uniq = [];
+  const seen = new Set();
+  for (const dir of dirs) {
+    const norm = IS_WIN ? dir.toLowerCase() : dir;
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    uniq.push(path.join(dir, RELAUNCH_STATE_FILENAME));
+  }
+  return uniq;
+}
+
+// 与 C# / Swift Watcher 超集双向兼容的单次去重检查（容忍毫秒/秒级精度误差，同时防系统重启后 PID 复用）
+function hasRelaunchBeenPromptedForHost(pluginDir, hostPid, hostStartMs = 0, extraDirs = []) {
+  const pid = Number(hostPid);
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  const startMs = Number(hostStartMs) > 0 ? Number(hostStartMs) : 0;
+  const exactKey = `${pid}:${startMs}`;
+  const prefix = `${pid}:`;
+  const files = getRelaunchPromptStatePaths(pluginDir, extraDirs);
+  for (const file of files) {
+    try {
+      if (!fs.existsSync(file)) continue;
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (!parsed || typeof parsed !== 'object') continue;
+      if (parsed.key === exactKey || parsed.hostKey === exactKey) return true;
+      const recordedPid = Number(parsed.hostPid);
+      const recordedStart = Number(parsed.startTimeMs ?? parsed.hostStartMs ?? 0);
+      if (recordedPid === pid) {
+        if (!startMs || !recordedStart || Math.abs(recordedStart - startMs) <= 15000) {
+          return true;
+        }
+      }
+      const list = Array.isArray(parsed.promptedKeys)
+        ? parsed.promptedKeys
+        : Array.isArray(parsed.prompts)
+        ? parsed.prompts
+        : [];
+      for (const item of list) {
+        if (typeof item !== 'string') continue;
+        if (item === exactKey) return true;
+        if (item.startsWith(prefix)) {
+          const itemStart = Number(item.slice(prefix.length)) || 0;
+          if (!startMs || !itemStart || Math.abs(itemStart - startMs) <= 15000) {
+            return true;
+          }
+        }
+      }
+    } catch {}
+  }
+  return false;
+}
+
+function recordRelaunchPromptState(pluginDir, hostPid, hostStartMs = 0, decision = 'prompted', extraDirs = []) {
+  const pid = Number(hostPid);
+  if (!Number.isInteger(pid) || pid <= 0 || !pluginDir) return null;
+  const startMs = Number(hostStartMs) > 0 ? Math.trunc(Number(hostStartMs)) : 0;
+  const key = `${pid}:${startMs}`;
+  const files = getRelaunchPromptStatePaths(pluginDir, extraDirs);
+  let prevKeys = [];
+  for (const file of files) {
+    try {
+      if (!fs.existsSync(file)) continue;
+      const oldObj = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (Array.isArray(oldObj?.promptedKeys)) {
+        prevKeys.push(...oldObj.promptedKeys.filter((x) => typeof x === 'string'));
+      }
+    } catch {}
+  }
+  const promptedKeys = Array.from(new Set([...prevKeys.slice(-24), key]));
+  const payload = {
+    hostPid: pid,
+    startTimeMs: startMs,
+    hostStartMs: startMs,
+    key,
+    hostKey: key,
+    promptedKeys,
+    decision: String(decision || 'prompted'),
+    reason: String(decision || 'prompted'),
+    updatedAt: Date.now(),
+  };
+  const jsonText = JSON.stringify(payload, null, 2) + '\n';
+  for (const file of files) {
+    try {
+      const dir = path.dirname(file);
+      fs.mkdirSync(dir, { recursive: true });
+      const tmp = `${file}.${process.pid}.tmp`;
+      fs.writeFileSync(tmp, jsonText, 'utf8');
+      fs.renameSync(tmp, file);
+    } catch {}
+  }
+  return payload;
+}
+
+const WIN_MESSAGEBOX_PS = [
+  '$ErrorActionPreference = "SilentlyContinue"',
+  'Add-Type -AssemblyName System.Windows.Forms',
+  '$res = [System.Windows.Forms.MessageBox]::Show(',
+  '  [string]$env:AG_PRISM_DLG_BODY,',
+  '  [string]$env:AG_PRISM_DLG_TITLE,',
+  '  [System.Windows.Forms.MessageBoxButtons]::YesNo,',
+  '  [System.Windows.Forms.MessageBoxIcon]::Information',
+  ')',
+  'Write-Output ([string]$res)',
+].join('\n');
+
+const WIN_MESSAGEBOX_B64 = Buffer.from(WIN_MESSAGEBOX_PS, 'utf16le').toString('base64');
+
+const MAC_DIALOG_APPLESCRIPT = [
+  'on run argv',
+  '  set msgText to item 1 of argv',
+  '  set titleText to item 2 of argv',
+  '  set btnLater to item 3 of argv',
+  '  set btnRelaunch to item 4 of argv',
+  '  set dlg to display dialog msgText with title titleText buttons {btnLater, btnRelaunch} default button btnRelaunch with icon note',
+  '  return button returned of dlg',
+  'end run',
+].join('\n');
+
+function buildRelaunchDialogCopy(lang = 'zh-CN') {
+  const low = String(lang || 'zh-CN').toLowerCase();
+  const isZh = low.startsWith('zh') || low === 'yue';
+  if (isZh) {
+    return {
+      title: 'Obsidian Prism',
+      body:
+        '检测到 Antigravity 已启动或完成更新，但未开启本地调试桥接参数（--remote-debugging-port=0），导致 Obsidian Prism 界面无法挂载。\n\n' +
+        '是否立即重新打开 Antigravity 以恢复 Obsidian Prism 界面？\n' +
+        '（若当前正在进行对话或有未保存内容，请选择“否 / 稍后”，下次通过快捷方式启动将自动生效。）',
+      laterBtn: '稍后',
+      relaunchBtn: '立即重开',
+    };
+  }
+  return {
+    title: 'Obsidian Prism',
+    body:
+      'Antigravity started or updated without --remote-debugging-port=0, so Obsidian Prism cannot attach.\n\n' +
+      'Relaunch Antigravity now to restore Obsidian Prism?\n' +
+      '(Choose "No / Later" if a task is running; shortcuts have been updated for next launch.)',
+    laterBtn: 'Later',
+    relaunchBtn: 'Relaunch Now',
+  };
+}
+
+function promptUserForHostRelaunch(opts = {}) {
+  const copy = buildRelaunchDialogCopy(opts.lang || 'zh-CN');
+  if (typeof opts.dialogHook === 'function') {
+    return Promise.resolve(opts.dialogHook(copy)).then((ans) => Boolean(ans));
+  }
+  return new Promise((resolve) => {
+    if (IS_WIN) {
+      execFile(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_MESSAGEBOX_B64],
+        {
+          encoding: 'utf8',
+          windowsHide: true,
+          timeout: 120000,
+          env: {
+            ...process.env,
+            AG_PRISM_DLG_TITLE: copy.title,
+            AG_PRISM_DLG_BODY: copy.body,
+          },
+        },
+        (err, stdout) => {
+          if (err) {
+            resolve(false);
+            return;
+          }
+          resolve(String(stdout || '').trim().toLowerCase() === 'yes');
+        }
+      );
+      return;
+    }
+    if (IS_MAC) {
+      execFile(
+        'osascript',
+        ['-e', MAC_DIALOG_APPLESCRIPT, copy.body, copy.title, copy.laterBtn, copy.relaunchBtn],
+        { encoding: 'utf8', timeout: 120000 },
+        (err, stdout) => {
+          if (err) {
+            resolve(false);
+            return;
+          }
+          resolve(String(stdout || '').trim() === copy.relaunchBtn);
+        }
+      );
+      return;
+    }
+    resolve(false);
+  });
+}
+
+// 纯异步顺序控制模型：温和请求退出 -> 轮询确认单实例锁完全释放 -> 带 --remote-debugging-port=0 拉起（供单测与脱离微进程复用）
+async function executeHostRelaunchSequence(task, hooks = {}) {
+  const pid = Number(task && task.hostPid);
+  const exePath = String((task && task.exePath) || '').trim();
+  const maxWaitMs = Math.max(500, Number(task?.maxWaitMs) || 25000);
+  const pollMs = Math.max(20, Number(task?.pollMs) || 250);
+  const settleMs = Math.max(0, Number(task?.settleMs ?? 350));
+  const sleepFn = typeof hooks.sleep === 'function' ? hooks.sleep : (ms) => new Promise((r) => setTimeout(r, ms));
+  const requestGracefulQuit =
+    typeof hooks.requestGracefulQuit === 'function' ? hooks.requestGracefulQuit : async () => true;
+  const isHostStillRunning =
+    typeof hooks.isHostStillRunning === 'function'
+      ? hooks.isHostStillRunning
+      : async () => {
+          try {
+            process.kill(pid, 0);
+            return true;
+          } catch (e) {
+            return Boolean(e && e.code === 'EPERM');
+          }
+        };
+  const launchWithCdpFlag =
+    typeof hooks.launchWithCdpFlag === 'function' ? hooks.launchWithCdpFlag : async () => true;
+
+  await requestGracefulQuit(pid, exePath);
+  const deadline = Date.now() + maxWaitMs;
+  let exited = false;
+  while (Date.now() <= deadline) {
+    const alive = await isHostStillRunning(pid, exePath);
+    if (!alive) {
+      exited = true;
+      break;
+    }
+    await sleepFn(pollMs);
+  }
+  if (!exited) {
+    return { relaunched: false, reason: 'host-did-not-exit' };
+  }
+  if (settleMs > 0) {
+    await sleepFn(settleMs);
+  }
+  await launchWithCdpFlag(exePath, [CDP_OPT_IN_SWITCH]);
+  return { relaunched: true, exePath, args: [CDP_OPT_IN_SWITCH] };
+}
+
+const WIN_DETACHED_RELAUNCH_PS = [
+  '$ErrorActionPreference = "SilentlyContinue"',
+  '$taskFile = [string]$env:AG_PRISM_RELAUNCH_TASK_FILE',
+  'if (-not $taskFile -or -not (Test-Path -LiteralPath $taskFile -PathType Leaf)) { exit 0 }',
+  '$task = Get-Content -LiteralPath $taskFile -Raw -Encoding UTF8 | ConvertFrom-Json',
+  'Remove-Item -LiteralPath $taskFile -Force -ErrorAction SilentlyContinue',
+  '$targetPid = [int]$task.hostPid',
+  '$exePath = [string]$task.exePath',
+  'if (-not $exePath) {',
+  '  $exePath = Join-Path $env:LOCALAPPDATA "Programs\\antigravity\\Antigravity.exe"',
+  '}',
+  'if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) { exit 0 }',
+  'function Test-MainHostAlive {',
+  '  $ps = @(Get-Process -Name "Antigravity" -ErrorAction SilentlyContinue)',
+  '  if ($ps.Count -eq 0) { return $false }',
+  '  foreach ($p in $ps) {',
+  '    if ($p.Id -eq $targetPid) { return $true }',
+  '    $cl = [string](Get-CimInstance Win32_Process -Filter ("ProcessId = " + $p.Id) -ErrorAction SilentlyContinue).CommandLine',
+  '    if ($cl -and ($cl -notmatch "--type=") -and ($cl -notmatch "sidecar_sdk") -and ($cl -notmatch "register_loader\\.js")) {',
+  '      return $true',
+  '    }',
+  '  }',
+  '  return $false',
+  '}',
+  'foreach ($p in @(Get-Process -Name "Antigravity" -ErrorAction SilentlyContinue)) {',
+  '  if ($p.MainWindowHandle -ne 0) { $null = $p.CloseMainWindow() }',
+  '}',
+  '$exited = $false',
+  'for ($i = 0; $i -lt 100; $i++) {',
+  '  if (-not (Test-MainHostAlive)) { $exited = $true; break }',
+  '  if ($i -eq 12) {',
+  '    foreach ($p in @(Get-Process -Name "Antigravity" -ErrorAction SilentlyContinue)) {',
+  '      if ($p.MainWindowHandle -ne 0) { $null = $p.CloseMainWindow() }',
+  '    }',
+  '  }',
+  '  Start-Sleep -Milliseconds 250',
+  '}',
+  'if (-not $exited) { exit 0 }',
+  'Start-Sleep -Milliseconds 350',
+  '$workDir = Split-Path -Parent $exePath',
+  'Start-Process -FilePath $exePath -ArgumentList "--remote-debugging-port=0" -WorkingDirectory $workDir | Out-Null',
+].join('\n');
+
+const WIN_DETACHED_RELAUNCH_B64 = Buffer.from(WIN_DETACHED_RELAUNCH_PS, 'utf16le').toString('base64');
+
+const WIN_WMI_BREAKAWAY_PS = [
+  '$ErrorActionPreference = "Stop"',
+  '$cmd = "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand " + $env:AG_PRISM_HELPER_B64',
+  '$psi = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }',
+  '$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd; ProcessStartupInformation = $psi }',
+  'if ($r -and $r.ReturnValue -eq 0 -and $r.ProcessId) { Write-Output $r.ProcessId }',
+].join('\n');
+
+const WIN_WMI_BREAKAWAY_B64 = Buffer.from(WIN_WMI_BREAKAWAY_PS, 'utf16le').toString('base64');
+
+const MAC_DETACHED_RELAUNCH_SH = [
+  'target_pid="$1"',
+  'app_path="$2"',
+  'if [ -z "$app_path" ]; then app_path="/Applications/Antigravity.app"; fi',
+  'osascript -e \'tell application "Antigravity" to quit\' >/dev/null 2>&1 || kill -TERM "$target_pid" >/dev/null 2>&1 || true',
+  'i=0',
+  'exited=0',
+  'while [ "$i" -lt 100 ]; do',
+  '  if ! kill -0 "$target_pid" >/dev/null 2>&1; then exited=1; break; fi',
+  '  sleep 0.25',
+  '  i=$((i + 1))',
+  'done',
+  'if [ "$exited" -ne 1 ]; then exit 0; fi',
+  'sleep 0.35',
+  'open -a "$app_path" --args --remote-debugging-port=0 >/dev/null 2>&1 &',
+].join('\n');
+
+// 派生物理脱离宿主进程树与 Job Object 的独立微进程执行「温和退出 -> 等单实例锁释放 -> 带参重开」
+function spawnDetachedHostRelaunchHelper(task, opts = {}) {
+  const hostPid = Number(task && task.hostPid);
+  if (!Number.isInteger(hostPid) || hostPid <= 0) {
+    return { spawned: false, reason: 'invalid-pid' };
+  }
+  if (typeof opts.spawnHook === 'function') {
+    return opts.spawnHook({
+      hostPid,
+      exePath: task.exePath || '',
+      args: [CDP_OPT_IN_SWITCH],
+    });
+  }
+  if (IS_WIN) {
+    const privateStateDir = path.join(os.homedir(), '.gemini', 'config', 'plugins', 'obsidian-prism');
+    fs.mkdirSync(privateStateDir, { recursive: true });
+    const privateTaskFile = path.join(privateStateDir, '.relaunch-task.json');
+    const resolvedExe =
+      task.exePath ||
+      path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'antigravity', 'Antigravity.exe');
+    const tmpTaskFile = `${privateTaskFile}.${process.pid}.tmp`;
+    fs.writeFileSync(
+      tmpTaskFile,
+      JSON.stringify({ hostPid, exePath: resolvedExe }, null, 2) + '\n',
+      { encoding: 'utf8', mode: 0o600 }
+    );
+    fs.renameSync(tmpTaskFile, privateTaskFile);
+    if (!opts.disableWmiBreakaway) {
+      try {
+        const wmiRunnerPs = `$env:AG_PRISM_RELAUNCH_TASK_FILE = [System.IO.Path]::Combine($env:USERPROFILE, '.gemini', 'config', 'plugins', 'obsidian-prism', '.relaunch-task.json'); powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ${WIN_DETACHED_RELAUNCH_B64}`;
+        const wmiRunnerB64 = Buffer.from(wmiRunnerPs, 'utf16le').toString('base64');
+        const out = execFileSync(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_WMI_BREAKAWAY_B64],
+          {
+            encoding: 'utf8',
+            windowsHide: true,
+            timeout: 6000,
+            stdio: ['ignore', 'pipe', 'ignore'],
+            env: { ...process.env, AG_PRISM_HELPER_B64: wmiRunnerB64 },
+          }
+        );
+        const helperPid = parseInt(String(out || '').trim().split(/\s+/).pop(), 10);
+        if (Number.isInteger(helperPid) && helperPid > 0) {
+          return { spawned: true, pid: helperPid, method: 'wmi-breakaway' };
+        }
+      } catch {}
+    }
+    const child = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_DETACHED_RELAUNCH_B64],
+      {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        env: { ...process.env, AG_PRISM_RELAUNCH_TASK_FILE: privateTaskFile },
+      }
+    );
+    child.unref();
+    return { spawned: true, pid: child.pid || null, method: 'detached-spawn' };
+  }
+
+  if (IS_MAC) {
+    const appPath = task.exePath && task.exePath.endsWith('.app') ? task.exePath : '/Applications/Antigravity.app';
+    const child = spawn('/usr/bin/nohup', ['/bin/sh', '-c', MAC_DETACHED_RELAUNCH_SH, 'sh', String(hostPid), appPath], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+    return { spawned: true, pid: child.pid || null, method: 'nohup-sh' };
+  }
+
+  return { spawned: false, reason: 'unsupported-platform' };
 }
 
 function isEligibleTarget(target) {
@@ -4676,6 +5634,22 @@ module.exports = {
   readPidFromLockFile,
   matchesExpectedDaemonSignature,
   isExpectedDaemonProcess,
+  CDP_OPT_IN_SWITCH,
+  hasRemoteDebuggingPortSwitch,
+  appendCdpFlagToArguments,
+  stripCdpFlagFromArguments,
+  isAntigravityShortcutTarget,
+  isMainAntigravityProcessSignature,
+  ensureAntigravityShortcutsCdpFlag,
+  restoreAntigravityShortcutsCdpFlag,
+  detectRunningAntigravityHostSync,
+  detectRunningAntigravityHost,
+  getRelaunchPromptStatePaths,
+  hasRelaunchBeenPromptedForHost,
+  recordRelaunchPromptState,
+  promptUserForHostRelaunch,
+  executeHostRelaunchSequence,
+  spawnDetachedHostRelaunchHelper,
   RUNTIME_PARTS,
   SYNC_ROOT_FILES,
   REMOVE_EXPRESSION,

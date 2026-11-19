@@ -303,6 +303,10 @@ test('macOS Swift installer & LaunchAgent contracts enforce KeepAlive <true/>, n
   assert.ok(cdpSwift.includes('obsidian-prism-thought-cache.json'), 'macOS CdpClient cleans thought cache on uninstall while preserving secret file');
   assert.ok(cdpSwift.includes('isBareAuxiliaryTarget'), 'macOS CdpClient narrows Untitled/launchpad filtering to bare auxiliary targets');
   assert.ok(cdpSwift.includes('checkHostIdentity'), 'macOS CdpClient enforces in-page checkHostIdentity gate');
+  assert.ok(cdpSwift.includes('--remote-debugging-port=0'), 'macOS CdpClient defines v2.33.0+ --remote-debugging-port=0 flag');
+  assert.ok(cdpSwift.includes('findBareAntigravityMainProcess'), 'macOS CdpClient detects bare v2.33.0+ Antigravity process');
+  assert.ok(cdpSwift.includes('.relaunch-prompt-state.json'), 'macOS CdpClient shares .relaunch-prompt-state.json deduplication lock');
+  assert.ok(cdpSwift.includes('relaunchAntigravityWithCdp'), 'macOS CdpClient supports graceful quit + open --args --remote-debugging-port=0 relaunch');
   assert.ok(setupSwift.includes('shouldCleanHostLaunchAgent'), 'macOS Setup unconditionally cleans LaunchAgent on host uninstall');
   assert.ok(watcherSwift.includes('isNativeDaemonAlive'), 'macOS Watcher politely yields when native Sidecar daemon is alive');
   assert.ok(watcherSwift.includes('patch-batch'), 'macOS Watcher supports patch-batch atomic config updates');

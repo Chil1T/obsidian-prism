@@ -66,6 +66,7 @@ namespace AgyClaudeStyle.Watcher
         private static string _pidFile;
         private static bool _isWatch;
         private static bool _noNativeDaemon;
+        private static bool _noRelaunchPrompt;
 
         private static string GetDefaultWatcherInstallDir()
         {
@@ -93,6 +94,7 @@ namespace AgyClaudeStyle.Watcher
                 else if (a == "--once") mode = "once";
                 else if (a == "--remove") mode = "remove";
                 else if (a == "--no-native-daemon") _noNativeDaemon = true;
+                else if (a == "--no-relaunch-prompt") _noRelaunchPrompt = true;
                 else if (a == "--dir" && i + 1 < args.Length) customDir = args[++i];
                 else if (a == "--plugin-dir" && i + 1 < args.Length) customPluginDir = args[++i];
                 else if (a == "--cdp-port" && i + 1 < args.Length)
@@ -759,12 +761,27 @@ namespace AgyClaudeStyle.Watcher
                 int? lastPort = null;
                 bool yieldingToDaemon = false;
                 long lastDaemonBootTick = 0L;
+                long lastShortcutCheckTick = 0L;
+                string defaultWatcherDir = GetDefaultWatcherInstallDir();
+                bool isDefaultDir = string.Equals(_baseDir, defaultWatcherDir, StringComparison.OrdinalIgnoreCase);
                 try
                 {
                     while (!exitEvent.IsSet)
                     {
                         try
                         {
+                            long loopTick = Environment.TickCount & int.MaxValue;
+                            if (lastShortcutCheckTick == 0L || Math.Abs(loopTick - lastShortcutCheckTick) >= 45000L)
+                            {
+                                lastShortcutCheckTick = loopTick;
+                                CdpHelper.EnsureAntigravityShortcutsOptIn(
+                                    _baseDir,
+                                    defaultWatcherDir,
+                                    !string.IsNullOrEmpty(_pluginDir) ? _pluginDir : _baseDir,
+                                    Log
+                                );
+                            }
+
                             bool nativeAlive = !string.IsNullOrEmpty(_pluginDir) && CdpHelper.IsNativeDaemonAlive(_pluginDir);
                             if (!nativeAlive && !_noNativeDaemon && !string.IsNullOrEmpty(_pluginDir))
                             {
@@ -818,6 +835,49 @@ namespace AgyClaudeStyle.Watcher
                             }
 
                             int? port = CdpHelper.ReadPort(overridePort);
+                            if (!port.HasValue && !overridePort.HasValue)
+                            {
+                                string noPromptEnv1 = Environment.GetEnvironmentVariable("PRISM_NO_RELAUNCH_PROMPT");
+                                string noPromptEnv2 = Environment.GetEnvironmentVariable("AG_PRISM_NO_RELAUNCH_PROMPT");
+                                string nodeEnv = Environment.GetEnvironmentVariable("NODE_ENV");
+                                string mockDec = Environment.GetEnvironmentVariable("AG_PRISM_MOCK_RELAUNCH_DECISION");
+                                bool allowPrompt = !_noRelaunchPrompt &&
+                                                   noPromptEnv1 != "1" &&
+                                                   noPromptEnv2 != "1" &&
+                                                   !string.Equals(nodeEnv, "test", StringComparison.OrdinalIgnoreCase) &&
+                                                   (isDefaultDir || !string.IsNullOrEmpty(mockDec));
+                                if (allowPrompt)
+                                {
+                                    Dictionary<string, object> curCfg = CdpHelper.ReadConfig(_baseDir, manifest);
+                                    object autoObj;
+                                    if (curCfg != null && curCfg.TryGetValue("autoPromptCdpRelaunch", out autoObj) && autoObj != null)
+                                    {
+                                        if ((autoObj is bool && !((bool)autoObj)) ||
+                                            string.Equals(Convert.ToString(autoObj), "off", StringComparison.OrdinalIgnoreCase) ||
+                                            string.Equals(Convert.ToString(autoObj), "false", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            allowPrompt = false;
+                                        }
+                                    }
+                                }
+                                if (allowPrompt)
+                                {
+                                    BareHostProcessInfo bare = CdpHelper.FindBareAntigravityMainProcess();
+                                    if (bare != null &&
+                                        bare.UptimeMs >= 8000L &&
+                                        !CdpHelper.HasPromptedForHost(bare.Pid, bare.StartTimeMs, _baseDir, _pluginDir))
+                                    {
+                                        CdpHelper.RecordPromptedForHost(bare.Pid, bare.StartTimeMs, "prompted", _baseDir, _pluginDir);
+                                        bool confirmed = CdpHelper.PromptUserForCdpRelaunch();
+                                        CdpHelper.RecordPromptedForHost(bare.Pid, bare.StartTimeMs, confirmed ? "yes" : "no", _baseDir, _pluginDir);
+                                        if (confirmed)
+                                        {
+                                            Log("[*] 用户确认带 --remote-debugging-port=0 重新打开 Antigravity (旧 PID " + bare.Pid + ")");
+                                            CdpHelper.RelaunchAntigravityWithCdp(bare, 15000, Log);
+                                        }
+                                    }
+                                }
+                            }
                             if (port.HasValue)
                             {
                                 List<CdpPageInfo> pages = null;

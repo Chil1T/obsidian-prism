@@ -3529,3 +3529,325 @@ test('v1.0.1 compiler safety fixes, unified shared string pool < 670KB (< 680KB 
   assert.equal(spoofOmniRes.status, 'skipped-non-host');
   assert.equal(spoofAppWin.__agPrismOmniServerMeta, undefined, 'Omni server token must NEVER be injected into non-host wcvBrowser pages');
 });
+
+test('Antigravity v2.33.0+ dual-layer CDP opt-in guard: shortcut lossless patch/restore, main-host filter, single-prompt dedup & single-instance-lock safe relaunch', async () => {
+  const { execFileSync } = require('node:child_process');
+  const { installPlugin, uninstallPlugin } = require('../tools/install-plugin.cjs');
+  const { PrismDaemon } = await import('../sidecars/daemon/main.mjs');
+
+  // 1. Target filtering & lossless argument append/strip (preserving inner quotes & existing custom port)
+  assert.equal(cdp.isAntigravityShortcutTarget('C:\\Users\\Dev\\AppData\\Local\\Programs\\antigravity\\Antigravity.exe'), true);
+  assert.equal(cdp.isAntigravityShortcutTarget('C:\\Tools\\antigravity-tools.exe'), false);
+  assert.equal(cdp.isAntigravityShortcutTarget('C:\\Programs\\antigravity\\Uninstall Antigravity.exe'), false);
+
+  assert.deepEqual(cdp.appendCdpFlagToArguments(''), {
+    args: '--remote-debugging-port=0',
+    changed: true,
+  });
+  assert.deepEqual(cdp.appendCdpFlagToArguments('--disable-gpu --user-data-dir="C:\\My   Profile"'), {
+    args: '--disable-gpu --user-data-dir="C:\\My   Profile" --remote-debugging-port=0',
+    changed: true,
+  });
+  assert.deepEqual(cdp.appendCdpFlagToArguments('--remote-debugging-port=9222'), {
+    args: '--remote-debugging-port=9222',
+    changed: false,
+  });
+  assert.deepEqual(
+    cdp.stripCdpFlagFromArguments('--disable-gpu --remote-debugging-port=0 --user-data-dir="C:\\My   Profile"'),
+    {
+      args: '--disable-gpu --user-data-dir="C:\\My   Profile"',
+      changed: true,
+    }
+  );
+  assert.deepEqual(cdp.stripCdpFlagFromArguments('--remote-debugging-port=9222'), {
+    args: '--remote-debugging-port=9222',
+    changed: false,
+  });
+
+  // 2. Main host process signature filtering (excludes --type= children, sidecar_sdk daemons, and antigravity-tools)
+  const mixedCandidates = [
+    {
+      pid: 20010,
+      imageName: 'Antigravity.exe',
+      startMs: 1795046342000,
+      exePath: 'C:\\Programs\\antigravity\\Antigravity.exe',
+      commandLine: '"C:\\Programs\\antigravity\\Antigravity.exe" --import=file:///lib/sidecar_sdk/register_loader.js main.mjs',
+    },
+    {
+      pid: 20011,
+      imageName: 'Antigravity.exe',
+      startMs: 1795046341000,
+      exePath: 'C:\\Programs\\antigravity\\Antigravity.exe',
+      commandLine: '"C:\\Programs\\antigravity\\Antigravity.exe" --type=renderer --lang=zh-CN',
+    },
+    {
+      pid: 20012,
+      imageName: 'antigravity-tools.exe',
+      startMs: 1795046300000,
+      exePath: 'C:\\Tools\\antigravity-tools.exe',
+      commandLine: '"C:\\Tools\\antigravity-tools.exe"',
+    },
+    {
+      pid: 111868,
+      imageName: 'Antigravity.exe',
+      startMs: 1795046338000,
+      exePath: 'C:\\Programs\\antigravity\\Antigravity.exe',
+      commandLine: '"C:\\Programs\\antigravity\\Antigravity.exe" --updated',
+    },
+  ];
+  const detectedHost = cdp.detectRunningAntigravityHostSync({
+    nowMs: 1795046350000,
+    probeProcesses: () => mixedCandidates,
+  });
+  assert.ok(detectedHost);
+  assert.equal(detectedHost.pid, 111868);
+  assert.equal(detectedHost.hasDebugPortSwitch, false);
+
+  // 3. Single-instance-lock safe relaunch sequence: MUST wait for old host exit before spawning new host
+  const events = [];
+  let pollCount = 0;
+  const seqRes = await cdp.executeHostRelaunchSequence(
+    { hostPid: 111868, exePath: '/Applications/Antigravity.app', maxWaitMs: 2000, pollMs: 10, settleMs: 0 },
+    {
+      sleep: async () => {},
+      requestGracefulQuit: async (pid) => {
+        events.push(`quit:${pid}`);
+      },
+      isHostStillRunning: async () => {
+        pollCount += 1;
+        events.push(`poll:${pollCount}`);
+        return pollCount < 4;
+      },
+      launchWithCdpFlag: async (exe, args) => {
+        events.push(`launch:${exe}:${args.join(',')}`);
+      },
+    }
+  );
+  assert.equal(seqRes.relaunched, true);
+  assert.deepEqual(events, [
+    'quit:111868',
+    'poll:1',
+    'poll:2',
+    'poll:3',
+    'poll:4',
+    'launch:/Applications/Antigravity.app:--remote-debugging-port=0',
+  ]);
+
+  const abortEvents = [];
+  const abortRes = await cdp.executeHostRelaunchSequence(
+    { hostPid: 111868, exePath: 'Antigravity.exe', maxWaitMs: 30, pollMs: 10, settleMs: 0 },
+    {
+      sleep: async () => new Promise((r) => setTimeout(r, 12)),
+      requestGracefulQuit: async () => abortEvents.push('quit'),
+      isHostStillRunning: async () => true,
+      launchWithCdpFlag: async () => abortEvents.push('launch-should-not-run'),
+    }
+  );
+  assert.equal(abortRes.relaunched, false);
+  assert.equal(abortRes.reason, 'host-did-not-exit');
+  assert.deepEqual(abortEvents, ['quit']);
+
+  // 4. Sandbox installPlugin (--defer-relaunch-prompt + shortcut patch/restore) & PrismDaemon boot log + single-prompt dedup
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-v233-guard-'));
+  try {
+    const pluginDir = path.join(tmpRoot, 'plugins', 'obsidian-prism');
+    const hostCfgDir = path.join(tmpRoot, 'host-cfg');
+    const watcherStateDir = path.join(tmpRoot, 'watcher-state');
+    const missingPortFile = path.join(tmpRoot, 'DevToolsActivePort-missing');
+    fs.mkdirSync(watcherStateDir, { recursive: true });
+
+    const mockShortcuts = new Map([
+      ['Desktop/Antigravity.lnk', { targetPath: 'C:\\Programs\\antigravity\\Antigravity.exe', arguments: '' }],
+      ['StartMenu/Antigravity.lnk', { targetPath: 'C:\\Programs\\antigravity\\Antigravity.exe', arguments: '--disable-gpu' }],
+      ['StartMenu/Antigravity Tools.lnk', { targetPath: 'C:\\Tools\\antigravity-tools.exe', arguments: '' }],
+      ['TaskBar/Antigravity.lnk', { targetPath: 'C:\\Programs\\antigravity\\Antigravity.exe', arguments: '--remote-debugging-port=9222' }],
+    ]);
+    const shortcutAdapter = () => ({
+      entries: Array.from(mockShortcuts.entries()).map(([lnkPath, v]) => ({
+        lnkPath,
+        targetPath: v.targetPath,
+        arguments: v.arguments,
+      })),
+      applyUpdates(updates) {
+        const applied = [];
+        for (const u of updates) {
+          const item = mockShortcuts.get(u.lnkPath);
+          if (item) {
+            item.arguments = u.arguments;
+            applied.push(u.lnkPath);
+          }
+        }
+        return { applied, skipped: [] };
+      },
+    });
+
+    const hostStartMs = Date.now() - 20000;
+    const installRes = await installPlugin({
+      targetDir: pluginDir,
+      hostConfigDir: hostCfgDir,
+      startDaemon: false,
+      platformOverride: 'win32',
+      shortcutAdapter,
+      stateExtraDirs: [watcherStateDir],
+      hostProbe: () => [
+        {
+          pid: 334455,
+          imageName: 'Antigravity.exe',
+          startMs: hostStartMs,
+          exePath: 'C:\\Programs\\antigravity\\Antigravity.exe',
+          commandLine: '"C:\\Programs\\antigravity\\Antigravity.exe" --updated',
+        },
+      ],
+    });
+    assert.equal(installRes.ok, true);
+    assert.equal(installRes.shortcuts.patched.length, 2);
+    assert.equal(mockShortcuts.get('Desktop/Antigravity.lnk').arguments, '--remote-debugging-port=0');
+    assert.equal(mockShortcuts.get('StartMenu/Antigravity.lnk').arguments, '--disable-gpu --remote-debugging-port=0');
+    assert.equal(mockShortcuts.get('StartMenu/Antigravity Tools.lnk').arguments, '', 'Third-party Antigravity Tools.lnk must NOT be touched');
+    assert.equal(mockShortcuts.get('TaskBar/Antigravity.lnk').arguments, '--remote-debugging-port=9222', 'Custom debug port must be preserved');
+    assert.deepEqual(installRes.deferredRelaunchHost, { pid: 334455, startMs: hostStartMs });
+
+    // Real Windows COM .lnk round-trip verification with >=2 dirs & >=2 .lnk files inside isolated temp folder
+    if (process.platform === 'win32') {
+      const lnkDirA = path.join(tmpRoot, 'real-shortcuts-desktop');
+      const lnkDirB = path.join(tmpRoot, 'real-shortcuts-programs');
+      const subDirB = path.join(lnkDirB, 'Antigravity');
+      fs.mkdirSync(lnkDirA, { recursive: true });
+      fs.mkdirSync(subDirB, { recursive: true });
+      const realAgyLnk1 = path.join(lnkDirA, 'Antigravity.lnk');
+      const realAgyLnk2 = path.join(subDirB, 'Antigravity.lnk');
+      const realToolsLnk = path.join(lnkDirB, 'Antigravity Tools.lnk');
+      const createLnkPs = [
+        '$ProgressPreference = "SilentlyContinue"',
+        '$ws = New-Object -ComObject WScript.Shell',
+        '$s1 = $ws.CreateShortcut($env:TEST_AGY_LNK1); $s1.TargetPath = "C:\\Windows\\System32\\Antigravity.exe"; $s1.Arguments = ""; $s1.Save()',
+        '$s2 = $ws.CreateShortcut($env:TEST_AGY_LNK2); $s2.TargetPath = "C:\\Windows\\System32\\Antigravity.exe"; $s2.Arguments = "--foo"; $s2.Save()',
+        '$s3 = $ws.CreateShortcut($env:TEST_TOOLS_LNK); $s3.TargetPath = "C:\\Windows\\System32\\antigravity-tools.exe"; $s3.Arguments = ""; $s3.Save()',
+      ].join('\n');
+      execFileSync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(createLnkPs, 'utf16le').toString('base64')],
+        {
+          env: { ...process.env, TEST_AGY_LNK1: realAgyLnk1, TEST_AGY_LNK2: realAgyLnk2, TEST_TOOLS_LNK: realToolsLnk },
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }
+      );
+      const realEnsure = cdp.ensureAntigravityShortcutsCdpFlag({ pluginDir, searchDirs: [lnkDirA, lnkDirB] });
+      assert.equal(realEnsure.patched.length, 2);
+      assert.equal(realEnsure.skipped.length, 0);
+      const readPatchedPs =
+        '$ProgressPreference = "SilentlyContinue"; $ws = New-Object -ComObject WScript.Shell; Write-Output ($ws.CreateShortcut($env:TEST_AGY_LNK1).Arguments + "|" + $ws.CreateShortcut($env:TEST_AGY_LNK2).Arguments + "|" + $ws.CreateShortcut($env:TEST_TOOLS_LNK).Arguments)';
+      const patchedState = execFileSync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(readPatchedPs, 'utf16le').toString('base64')],
+        {
+          env: { ...process.env, TEST_AGY_LNK1: realAgyLnk1, TEST_AGY_LNK2: realAgyLnk2, TEST_TOOLS_LNK: realToolsLnk },
+          encoding: 'utf8',
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }
+      ).trim();
+      assert.equal(patchedState, '--remote-debugging-port=0|--foo --remote-debugging-port=0|');
+      const realRestore = cdp.restoreAntigravityShortcutsCdpFlag({ pluginDir, searchDirs: [lnkDirA, lnkDirB] });
+      assert.equal(realRestore.restored.length, 2);
+      const readBack = execFileSync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(readPatchedPs, 'utf16le').toString('base64')],
+        {
+          env: { ...process.env, TEST_AGY_LNK1: realAgyLnk1, TEST_AGY_LNK2: realAgyLnk2, TEST_TOOLS_LNK: realToolsLnk },
+          encoding: 'utf8',
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }
+      ).trim();
+      assert.equal(readBack, '|--foo|');
+    }
+
+    // PrismDaemon boot heartbeat log + deferred PID skip + single-prompt dedup + relaunch spawn on fresh host PID
+    let activeMockHost = {
+      pid: 334455,
+      startMs: hostStartMs + 2500, // 2.5s clock jitter tolerance between installer & daemon/watcher
+      exePath: 'C:\\Programs\\antigravity\\Antigravity.exe',
+      hasDebugPortSwitch: false,
+    };
+    let promptCalls = 0;
+    let promptDecision = false;
+    const spawnedTasks = [];
+
+    const daemon = new PrismDaemon({
+      rootDir: pluginDir,
+      portFile: missingPortFile,
+      pollIntervalMs: 200,
+      noPortRelaunchThresholdMs: 60,
+      relaunchHooks: {
+        stateExtraDirs: [watcherStateDir],
+        syncShortcuts: () => ({ supported: true, patched: [] }),
+        detectHost: async () => activeMockHost,
+        promptUser: async () => {
+          promptCalls += 1;
+          return promptDecision;
+        },
+        spawnRelaunch: async (task) => {
+          spawnedTasks.push(task);
+          return { spawned: true, method: 'mock-breakaway' };
+        },
+      },
+    });
+
+    daemon.start({ claimPid: false, watchFiles: false });
+    try {
+      await new Promise((r) => setTimeout(r, 160));
+      await daemon.tick();
+      const logContent = fs.readFileSync(path.join(pluginDir, 'daemon.log'), 'utf8');
+      assert.match(logContent, /\[boot\] PrismDaemon started \(pid=\d+, activePort=none,/);
+      assert.equal(promptCalls, 0, 'Host pre-recorded by --defer-relaunch-prompt must NOT trigger a prompt');
+
+      // Simulate client auto-update spawning a new bare host PID 445566; user clicks "Later" -> prompts ONCE only
+      activeMockHost = {
+        pid: 445566,
+        startMs: Date.now() - 15000,
+        exePath: 'C:\\Programs\\antigravity\\Antigravity.exe',
+        hasDebugPortSwitch: false,
+      };
+      promptDecision = false;
+      await daemon.tick();
+      await daemon.tick();
+      await daemon.tick();
+      assert.equal(promptCalls, 1, 'Same bare host PID must prompt at most once even across repeated ticks');
+      assert.equal(spawnedTasks.length, 0);
+
+      // Simulate another bare launch PID 556677 where user confirms "Yes" -> spawns detached relaunch helper once
+      activeMockHost = {
+        pid: 556677,
+        startMs: Date.now() - 15000,
+        exePath: 'C:\\Programs\\antigravity\\Antigravity.exe',
+        hasDebugPortSwitch: false,
+      };
+      promptDecision = true;
+      await daemon.tick();
+      await daemon.tick();
+      assert.equal(promptCalls, 2);
+      assert.equal(spawnedTasks.length, 1);
+      assert.equal(spawnedTasks[0].hostPid, 556677);
+    } finally {
+      await daemon.stop(false);
+    }
+
+    // Uninstall restores patched shortcuts cleanly while preserving user flags
+    const uninstRes = await uninstallPlugin({
+      targetDir: pluginDir,
+      hostConfigDir: hostCfgDir,
+      noCdp: true,
+      platformOverride: 'win32',
+      shortcutAdapter,
+    });
+    assert.equal(uninstRes.ok, true);
+    assert.equal(uninstRes.shortcuts.restored.length, 2);
+    assert.equal(mockShortcuts.get('Desktop/Antigravity.lnk').arguments, '');
+    assert.equal(mockShortcuts.get('StartMenu/Antigravity.lnk').arguments, '--disable-gpu');
+    assert.equal(mockShortcuts.get('TaskBar/Antigravity.lnk').arguments, '--remote-debugging-port=9222');
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});

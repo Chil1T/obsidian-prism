@@ -597,16 +597,16 @@ function mountMockHostRoot(document, { withBrowserCtx = true, withV2 = true, ove
         state.sidePanel.conversationPanes[cid].isPaneOpen = Boolean(payload.isOpen);
       } else if (type === 'sidePanelV2/setOverviewPanelOpen' && payload?.cascadeId) {
         state.sidePanelV2.overviewPanelOpen[payload.cascadeId] = Boolean(payload.open);
-      } else if (type === 'sidePanelV2/setContent' && payload?.treeId?.kind === 'cascadeId') {
-        const cid = payload.treeId.cascadeId;
+      } else if (type === 'sidePanelV2/setContent' && (payload?.panelScope || payload?.treeId)?.kind === 'cascadeId') {
+        const cid = (payload.panelScope || payload.treeId).cascadeId;
         const pane = (state.sidePanelV2.conversationPanes[cid] ??= { tabs: [] });
         const idx = pane.tabs.findIndex((t) => t.id === payload.tabId);
         const tabObj = { id: payload.tabId, content: payload.content, isPreview: false };
         if (idx >= 0) pane.tabs[idx] = tabObj;
         else pane.tabs.push(tabObj);
         if (!payload.background) pane.activeTabId = payload.tabId;
-      } else if (type === 'sidePanelV2/setActiveTab' && payload?.treeId?.kind === 'cascadeId') {
-        const pane = state.sidePanelV2.conversationPanes[payload.treeId.cascadeId];
+      } else if (type === 'sidePanelV2/setActiveTab' && (payload?.panelScope || payload?.treeId)?.kind === 'cascadeId') {
+        const pane = state.sidePanelV2.conversationPanes[(payload.panelScope || payload.treeId).cascadeId];
         if (pane) pane.activeTabId = payload.tabId;
       } else if (type === 'sidePanel/setContent' && payload?.treeId?.kind === 'cascadeId') {
         const cid = payload.treeId.cascadeId;
@@ -706,8 +706,8 @@ test('URI decoding, line range parsing, relative path calculation, stable hash &
   assert.equal(omniMod.detectPreviewKind('/media/spec.pdf'), 'pdf');
 });
 
-// ── 2. Native Host Browser Tab Routing (React Context Primary + Redux Fallback) ─
-test('left-clicking http(s) links opens native host Browser Tab (ZERO .ag-omni-dock DOM!), honors Ctrl/Cmd inversion & skips <a download>', async () => {
+// ── 2. Native Host Browser Tab Routing (Yields Host `<a href>`, Handles `.ag-prism-thought-overlay a` & Bare Links) ─
+test('yields host-native http(s) <a href> to Antigravity v2.33.0+ router, while routing .ag-prism-thought-overlay links with Ctrl/Cmd inversion & zero .ag-omni-dock', async () => {
   const env = createFakeDomEnvironment();
   const { window, document, FakeEvent, externalOpened } = env;
   const host = mountMockHostRoot(document, { withBrowserCtx: true, withV2: true, overviewOpen: true });
@@ -727,16 +727,26 @@ test('left-clicking http(s) links opens native host Browser Tab (ZERO .ag-omni-d
   const resp = document.createElement('div');
   resp.setAttribute('data-testid', 'planner-response-text');
 
+  // Host-native Markdown `<a href>` (must yield 100% to Antigravity's native `defaultLinkOpenTarget` & `S4a` menu!)
+  const hostLink = document.createElement('a');
+  hostLink.setAttribute('href', 'https://antigravity.google/docs');
+  hostLink.textContent = 'Host Native Link';
+  resp.appendChild(hostLink);
+
+  // Prism-owned `.ag-prism-thought-overlay` link (no host React `uB()` hook -> handled by Omni!)
+  const thoughtOverlay = document.createElement('div');
+  thoughtOverlay.className = 'ag-prism-thought-overlay';
   const link = document.createElement('a');
   link.setAttribute('href', 'https://github.com/org/repo');
   link.textContent = 'GitHub Repo';
-  resp.appendChild(link);
+  thoughtOverlay.appendChild(link);
+  resp.appendChild(thoughtOverlay);
 
   const dlLink = document.createElement('a');
   dlLink.setAttribute('href', 'https://example.org/release.zip');
   dlLink.setAttribute('download', 'release.zip');
   dlLink.textContent = 'Download ZIP';
-  resp.appendChild(dlLink);
+  thoughtOverlay.appendChild(dlLink);
 
   mainPane.appendChild(resp);
   document.body.appendChild(auxSplit);
@@ -753,12 +763,23 @@ test('left-clicking http(s) links opens native host Browser Tab (ZERO .ag-omni-d
   assert.equal(mainPane.style.flexGrow, '1');
   assert.equal(mainPane.style.minWidth, '300px');
 
-  // `<a download>` must NOT be intercepted
+  // Host-native `<a href="https://...">` left-click AND right-click MUST NOT be intercepted!
+  const hostClickEv = new FakeEvent('click', { bubbles: true, cancelable: true, button: 0 });
+  hostLink.dispatchEvent(hostClickEv);
+  assert.equal(hostClickEv.defaultPrevented, false, 'Must yield host-native <a href> left-click to official router');
+  assert.equal(host.contextCalls.length, 0);
+
+  const hostCtxEv = new FakeEvent('contextmenu', { bubbles: true, cancelable: true });
+  hostLink.dispatchEvent(hostCtxEv);
+  assert.equal(hostCtxEv.defaultPrevented, false, 'Must yield host-native <a href> right-click to official S4a menu');
+  assert.equal(document.querySelector('[data-testid="ag-omni-context-menu"]'), null);
+
+  // `<a download>` must NOT be intercepted even inside `.ag-prism-thought-overlay`
   const dlEv = new FakeEvent('click', { bubbles: true, cancelable: true, button: 0 });
   dlLink.dispatchEvent(dlEv);
   assert.equal(dlEv.defaultPrevented, false);
 
-  // Default linkTarget = 'builtin': opens via host React Context `openUrlInBrowserPane` with ZERO `.ag-omni-dock`!
+  // `.ag-prism-thought-overlay` link opens via host React Context `openUrlInBrowserPane` with ZERO `.ag-omni-dock`!
   const clickEv1 = new FakeEvent('click', { bubbles: true, cancelable: true, button: 0 });
   link.dispatchEvent(clickEv1);
   await flushMicrotasks();
@@ -807,6 +828,11 @@ test('falls back to Redux sidePanelV2/setContent + setActiveTab when React Conte
   await client.openUrl('https://developer.mozilla.org/en-US/docs/Web', 'builtin');
   assert.equal(client.getState().lastOpenedTab?.method, 'redux');
   assert.equal(host.state.sidePanel.conversationPanes[host.cascadeId].isPaneOpen, true);
+
+  const v2SetContent = host.dispatched.find((a) => a.type === 'sidePanelV2/setContent');
+  const v2SetActive = host.dispatched.find((a) => a.type === 'sidePanelV2/setActiveTab');
+  assert.deepEqual(v2SetContent?.payload?.panelScope, { kind: 'cascadeId', cascadeId: host.cascadeId });
+  assert.deepEqual(v2SetActive?.payload?.panelScope, { kind: 'cascadeId', cascadeId: host.cascadeId });
 
   const paneTabs = host.state.sidePanelV2.conversationPanes[host.cascadeId].tabs;
   assert.equal(paneTabs.length, 1);
@@ -1090,6 +1116,12 @@ test('Mermaid zoom opens native Browser Tab with #raw=<svg> hash, decorates real
   csvBox.__reactFiber$mock = { return: { key: 'file:///projects/demo/data/bench.tsv', memoizedProps: {} } };
   document.body.appendChild(csvBox);
 
+  const normalVideoShell = document.createElement('div');
+  normalVideoShell.className = 'relative h-full w-full';
+  normalVideoShell.__reactFiber$mock = { return: { memoizedProps: { fileUri: 'file:///projects/demo/media/clip-80mb.mp4' } } };
+  normalVideoShell.appendChild(document.createElement('video'));
+  document.body.appendChild(normalVideoShell);
+
   const client = omniMod.createOmniClient({ window, document });
   client.sync({ omniModule: 'on' }, { baseUrl: 'http://127.0.0.1:46000', token: 'tok_mmd' });
 
@@ -1106,8 +1138,9 @@ test('Mermaid zoom opens native Browser Tab with #raw=<svg> hash, decorates real
   assert.match(decodeURIComponent(mmdInputs.initialUrl), /#raw=<svg id="mermaid-diagram-1"/);
 
   const binSwitcher = binShell.querySelector('[data-testid="ag-omni-aux-switcher"]');
-  assert.ok(binSwitcher);
-  assert.equal(csvBox.querySelectorAll('[data-testid="ag-omni-aux-switcher"]').length, 1);
+  assert.ok(binSwitcher, 'Unsupported binary-file-no-preview must still get Omni rescue switcher');
+  assert.equal(csvBox.querySelectorAll('[data-testid="ag-omni-aux-switcher"]').length, 0, 'Must yield native csv-file-viewer');
+  assert.equal(normalVideoShell.querySelectorAll('[data-testid="ag-omni-aux-switcher"]').length, 0, 'Must yield native <=200MB <video>');
 
   client.destroy();
   client.sync({ omniModule: 'on' }, { baseUrl: 'http://127.0.0.1:46000', token: 'tok_mmd' });
@@ -1168,13 +1201,13 @@ test('auto-replaces host >20MB File Pane error (UHc without data-testid) with in
   assert.match(iframe1.src, /^http:\/\/127\.0\.0\.1:46500\/viewer\?token=tok_vid.*launch-1080p60\.mp4/);
   assert.match(iframe1.src, /kind=video/);
 
-  // Same-slot switch to a second >20MB video updates the inline streaming iframe to the new video!
+  // Same-slot switch to a second >200MB video (v2.33.0+ media limit) updates the inline streaming iframe!
   fiberState.memoizedProps = {
     fileUri: 'file:///d%3A/projects/demo/media/keynote-4k.mp4',
     tabId: 'file__mp4_2',
   };
   errDetail.replaceChild(
-    document.createTextNode('File exceeds the 20MB display limit (73MB).'),
+    document.createTextNode('File exceeds the 200MB display limit (273MB).'),
     errDetail.firstChild
   );
   await new Promise((r) => setTimeout(r, 95));
@@ -1183,21 +1216,20 @@ test('auto-replaces host >20MB File Pane error (UHc without data-testid) with in
   assert.ok(iframe2);
   assert.match(iframe2.src, /keynote-4k\.mp4/);
 
-  // Same-slot switch to a normal TypeScript source file cleanly unmounts the media overlay!
+  // Same-slot switch to an <=200MB video supported natively by Antigravity v2.33.0+ cleanly unmounts the Omni overlay!
   fiberState.memoizedProps = {
-    fileUri: 'file:///d%3A/projects/demo/src/engine.ts',
-    tabId: 'file__ts_1',
+    fileUri: 'file:///d%3A/projects/demo/media/short-demo-40mb.mp4',
+    tabId: 'file__mp4_3',
   };
   errBox.remove();
-  const codeRoot = document.createElement('div');
-  codeRoot.className = 'file-viewer-root';
-  codeRoot.textContent = 'export const answer = 42;';
-  scrollBox.appendChild(codeRoot);
+  const nativeVideo = document.createElement('video');
+  nativeVideo.setAttribute('src', 'blob:https://127.0.0.1:10725/native-vid');
+  scrollBox.appendChild(nativeVideo);
   await new Promise((r) => setTimeout(r, 85));
 
-  assert.equal(fileShell.querySelector('[data-testid="ag-omni-aux-iframe"]'), null);
+  assert.equal(fileShell.querySelector('[data-testid="ag-omni-aux-iframe"]'), null, 'Must yield to native <=200MB video');
   assert.equal(fileShell.querySelector('[data-testid="ag-omni-aux-switcher"]'), null);
-  assert.equal(scrollBox.style.display, '', 'Normal code viewer scroll box must be restored');
+  assert.equal(scrollBox.style.display, '', 'Native <=200MB video scroll box must be restored');
 
   client.destroy();
 });

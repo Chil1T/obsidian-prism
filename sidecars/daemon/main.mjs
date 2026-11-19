@@ -194,6 +194,12 @@ function isPidAlive(pid) {
   }
 }
 
+function isAutomatedTestRuntime() {
+  if (process.env.NODE_ENV === 'test') return true;
+  if (process.env.NODE_TEST_CONTEXT) return true;
+  return Array.isArray(process.execArgv) && process.execArgv.some((a) => a === '--test' || a.startsWith('--test-'));
+}
+
 export class PrismDaemon {
   constructor({
     rootDir = DEFAULT_ROOT_DIR,
@@ -205,6 +211,9 @@ export class PrismDaemon {
     metricsProvider = null,
     thoughtService = null,
     omniExecHooks = null,
+    relaunchHooks = null,
+    noPortRelaunchThresholdMs = 8000,
+    shortcutCheckIntervalMs = 300000,
     silent = false,
   } = {}) {
     this.rootDir = path.resolve(rootDir);
@@ -244,6 +253,13 @@ export class PrismDaemon {
     this.omniServer = null;
     this._omniServerPromise = null;
     this._omniExecHooks = omniExecHooks;
+    this._relaunchHooks = relaunchHooks;
+    this.noPortRelaunchThresholdMs = Math.max(50, Number(noPortRelaunchThresholdMs) || 8000);
+    this.shortcutCheckIntervalMs = Math.max(1000, Number(shortcutCheckIntervalMs) || 300000);
+    this._noPortSinceMs = 0;
+    this._promptInFlight = false;
+    this._lastShortcutCheckAt = 0;
+    this._lastObservedHostPid = 0;
   }
 
   log(msg) {
@@ -1728,6 +1744,157 @@ export class PrismDaemon {
     this.sessions.clear();
   }
 
+  _isRelaunchGuardAllowed() {
+    if (this._relaunchHooks) return true;
+    if (isAutomatedTestRuntime()) return false;
+    if (process.env.PRISM_NO_RELAUNCH_PROMPT === '1') return false;
+    if (this.overridePort) return false;
+    return true;
+  }
+
+  _readDiskRawConfig() {
+    try {
+      const cfgPath = path.join(this.rootDir, 'config.json');
+      if (!fs.existsSync(cfgPath)) return {};
+      return JSON.parse(fs.readFileSync(cfgPath, 'utf8')) || {};
+    } catch {
+      return {};
+    }
+  }
+
+  _maybeSyncShortcuts(force = false) {
+    if (!this._isRelaunchGuardAllowed()) return null;
+    if (process.env.PRISM_DISABLE_SHORTCUT_SYNC === '1' && !this._relaunchHooks?.syncShortcuts) return null;
+    const now = Date.now();
+    if (!force && this._lastShortcutCheckAt > 0 && now - this._lastShortcutCheckAt < this.shortcutCheckIntervalMs) {
+      return null;
+    }
+    this._lastShortcutCheckAt = now;
+    try {
+      const fn =
+        typeof this._relaunchHooks?.syncShortcuts === 'function'
+          ? this._relaunchHooks.syncShortcuts
+          : typeof this.cdp.ensureAntigravityShortcutsCdpFlag === 'function'
+          ? (opts) => this.cdp.ensureAntigravityShortcutsCdpFlag(opts)
+          : null;
+      if (!fn) return null;
+      const res = fn({ pluginDir: this.rootDir });
+      if (res && Array.isArray(res.patched) && res.patched.length > 0) {
+        this.log(`[shortcut-guard] Ensured --remote-debugging-port=0 on ${res.patched.length} shortcut(s)`);
+      }
+      return res;
+    } catch {
+      return null;
+    }
+  }
+
+  async _handleMissingCdpPort() {
+    if (!this.running || !this.timer || this._promptInFlight) return;
+    if (!this._isRelaunchGuardAllowed()) return;
+
+    const now = Date.now();
+    if (this._noPortSinceMs <= 0) {
+      this._noPortSinceMs = now;
+    }
+    this._maybeSyncShortcuts(false);
+
+    if (now - this._noPortSinceMs < this.noPortRelaunchThresholdMs) {
+      return;
+    }
+
+    const rawCfg = this._readDiskRawConfig();
+    if (rawCfg.autoPromptCdpRelaunch === false) {
+      return;
+    }
+
+    const detectFn =
+      typeof this._relaunchHooks?.detectHost === 'function'
+        ? this._relaunchHooks.detectHost
+        : typeof this.cdp.detectRunningAntigravityHost === 'function'
+        ? () => this.cdp.detectRunningAntigravityHost()
+        : null;
+    if (!detectFn) return;
+
+    const host = await detectFn();
+    if (!this.running) return;
+    if (!host || !host.pid) {
+      this._noPortSinceMs = Date.now();
+      return;
+    }
+
+    if (host.pid !== this._lastObservedHostPid) {
+      this._lastObservedHostPid = host.pid;
+      this._maybeSyncShortcuts(true);
+    }
+
+    if (host.hasDebugPortSwitch) {
+      return;
+    }
+
+    const hostAgeMs = host.startMs > 0 ? Math.max(0, Date.now() - host.startMs) : now - this._noPortSinceMs;
+    if (hostAgeMs < this.noPortRelaunchThresholdMs) {
+      return;
+    }
+
+    const extraDirs = Array.isArray(this._relaunchHooks?.stateExtraDirs) ? this._relaunchHooks.stateExtraDirs : [];
+    const alreadyPrompted =
+      typeof this.cdp.hasRelaunchBeenPromptedForHost === 'function'
+        ? this.cdp.hasRelaunchBeenPromptedForHost(this.rootDir, host.pid, host.startMs, extraDirs)
+        : false;
+    if (alreadyPrompted) {
+      return;
+    }
+
+    this._promptInFlight = true;
+    try {
+      if (typeof this.cdp.recordRelaunchPromptState === 'function') {
+        this.cdp.recordRelaunchPromptState(this.rootDir, host.pid, host.startMs, 'prompted', extraDirs);
+      }
+      this.log(`[relaunch-guard] Host pid=${host.pid} running without CDP port; prompting user once`);
+      const lang = rawCfg.language || rawCfg.lang || 'zh-CN';
+      const promptFn =
+        typeof this._relaunchHooks?.promptUser === 'function'
+          ? this._relaunchHooks.promptUser
+          : typeof this.cdp.promptUserForHostRelaunch === 'function'
+          ? (o) => this.cdp.promptUserForHostRelaunch(o)
+          : async () => false;
+      const confirmed = await promptFn({ lang, host });
+      if (!this.running) return;
+      if (!confirmed) {
+        if (typeof this.cdp.recordRelaunchPromptState === 'function') {
+          this.cdp.recordRelaunchPromptState(this.rootDir, host.pid, host.startMs, 'no', extraDirs);
+        }
+        this.log(`[relaunch-guard] User declined immediate relaunch for pid=${host.pid}; shortcuts ready for next launch`);
+        return;
+      }
+      // 二次复核：若用户在等待点击期间已自行重开带参实例，则直接挂载不再重复重启
+      const portNow = discoverActivePort(this.overridePort, this.portFile);
+      if (portNow) {
+        this._noPortSinceMs = 0;
+        return;
+      }
+      if (typeof this.cdp.recordRelaunchPromptState === 'function') {
+        this.cdp.recordRelaunchPromptState(this.rootDir, host.pid, host.startMs, 'yes', extraDirs);
+      }
+      const spawnFn =
+        typeof this._relaunchHooks?.spawnRelaunch === 'function'
+          ? this._relaunchHooks.spawnRelaunch
+          : typeof this.cdp.spawnDetachedHostRelaunchHelper === 'function'
+          ? (t) => this.cdp.spawnDetachedHostRelaunchHelper(t)
+          : () => ({ spawned: false });
+      const spawnRes = await spawnFn({
+        hostPid: host.pid,
+        exePath: host.exePath || '',
+        pluginDir: this.rootDir,
+      });
+      this.log(
+        `[relaunch-guard] Triggered detached relaunch helper for pid=${host.pid} (spawned=${Boolean(spawnRes?.spawned)}, method=${spawnRes?.method || 'custom'})`
+      );
+    } finally {
+      this._promptInFlight = false;
+    }
+  }
+
   async tick() {
     if (!this.running) return { attached: this.sessions.size };
     if (this.busy) {
@@ -1743,6 +1910,7 @@ export class PrismDaemon {
       }
 
       if (!this.enabledCheck()) {
+        this._noPortSinceMs = 0;
         if (this.sessions.size > 0 || this.browserSession) {
           await this.detachAll(true);
         }
@@ -1750,14 +1918,25 @@ export class PrismDaemon {
       }
 
       const port = discoverActivePort(this.overridePort, this.portFile);
-      if (!port) return { attached: 0, port: null };
+      if (!port) {
+        await this._handleMissingCdpPort();
+        return { attached: 0, port: null };
+      }
 
       let rawPages = [];
       try {
         rawPages = await this.cdp.listPages(port);
       } catch {
         this.closeBrowserDiscovery();
+        if (this.sessions.size === 0) {
+          await this._handleMissingCdpPort();
+        }
         return { attached: this.sessions.size, port, unreachable: true };
+      }
+
+      this._noPortSinceMs = 0;
+      if (this.timer) {
+        this._maybeSyncShortcuts(false);
       }
 
       // Subscribe to Browser-level Target.setDiscoverTargets when persistent daemon is running
@@ -1865,6 +2044,8 @@ export class PrismDaemon {
     if (this.running) return;
     this.running = true;
     if (claimPid) this.claimOwnership();
+    const initialPort = discoverActivePort(this.overridePort, this.portFile);
+    this.log(`[boot] PrismDaemon started (pid=${process.pid}, activePort=${initialPort || 'none'}, root=${this.rootDir})`);
     this.rebuildBundle();
 
     if (watchFiles) {
@@ -1900,10 +2081,10 @@ export class PrismDaemon {
       } catch {}
     }
 
-    void this.tick();
     this.timer = setInterval(() => {
       void this.tick();
     }, this.pollIntervalMs);
+    void this.tick();
   }
 
   async stop(cleanPageDom = false) {

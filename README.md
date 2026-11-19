@@ -83,7 +83,7 @@ Antigravity 桌面端主题与工作台增强套件 · 四套深浅配色 · 内
 
 ## 快速安装指南 (Quick Start)
 
-Obsidian Prism 提供 **「免环境图形安装包」** 与 **「源码部署原生插件」** 两种安装方式，刷新或重启客户端均自动生效，随时可无痕卸载还原：
+Obsidian Prism 提供 **「免环境图形安装包」** 与 **「源码部署原生插件」** 两种安装方式，原生兼容 **`Antigravity v2.33.0+`**（自动维护启动入口 `--remote-debugging-port=0` 并在客户端在线更新后支持一键带参重开恢复），刷新或重启客户端均自动生效，随时可无痕卸载还原：
 
 ### 方式一：图形化独立安装包（推荐普通用户 · 零外部依赖，免预装 Node.js）
 点击下方直链下载对应系统安装包（或前往 [**GitHub Releases**](https://github.com/RMvdesi/obsidian-prism/releases) 查看历史版本）：
@@ -106,6 +106,12 @@ cd obsidian-prism
 npm run install:plugin
 ```
 安装完成后打开 **设置 (Settings) → 外观 (Appearance)**，展开 **「Obsidian Prism · 黑曜棱镜」** 区域即可调整各项参数。
+
+### 常见问题与 `Antigravity v2.33.0+` 兼容说明 (FAQ)
+- **为什么客户端在线自动更新到 `v2.33.0+` 当次重启后界面暂时回到原生状态？**
+  自 `Antigravity v2.33.0` 起，宿主将本地调试桥接改为显式按需启用（`--remote-debugging-port=0`，仅在本地 `127.0.0.1` 随机分配端口并写入受限鉴权文件），且客户端内置在线更新器（`quitAndInstall`）当次拉起进程时不携带命令行参数。Obsidian Prism 内置双层自动恢复机制：
+  1. **日常启动零感生效**：安装器、插件脚本与后台守护会自动为桌面、开始菜单及任务栏固定栏的 `Antigravity` 快捷方式维护 `--remote-debugging-port=0` 参数（客户端升级重置快捷方式后会自动补回；卸载插件时精准剥离还原）。
+  2. **在线更新裸启一键恢复**：当守护进程检测到运行中的客户端未开启本地桥接端口时，会弹出**单次确认提示框**（同一客户端进程生命周期最多提示 1 次，选择稍后不会重复弹窗），确认后将等待当前实例安全退出并自动带 `--remote-debugging-port=0` 重新打开恢复全套界面；macOS 用户亦可执行 `open -a "/Applications/Antigravity.app" --args --remote-debugging-port=0` 手动带参启动。
 
 <details>
 <summary><strong>命令行维护工具与仓库目录结构（点击展开）</strong></summary>

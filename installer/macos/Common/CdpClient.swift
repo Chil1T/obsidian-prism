@@ -10,6 +10,13 @@ struct CdpPageInfo {
     let webSocketDebuggerUrl: String
 }
 
+struct BareHostAppInfo {
+    let pid: Int32
+    let appPath: String
+    let startTimeMs: Int64
+    let uptimeMs: Int64
+}
+
 struct CdpError: Error, LocalizedError {
     let message: String
     init(_ message: String) { self.message = message }
@@ -917,6 +924,220 @@ enum CdpHelper {
         } catch {
             return false
         }
+    }
+
+    static let cdpOptInFlag = "--remote-debugging-port=0"
+
+    private static func nowEpochMs() -> Int64 {
+        return Int64(Date().timeIntervalSince1970 * 1000.0)
+    }
+
+    private static func parseBsdElapsedSeconds(_ raw: String) -> Int64 {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.isEmpty { return 0 }
+        var days: Int64 = 0
+        var timePart = s
+        if let dashIdx = s.firstIndex(of: "-") {
+            days = Int64(s[..<dashIdx]) ?? 0
+            timePart = String(s[s.index(after: dashIdx)...])
+        }
+        let parts = timePart.split(separator: ":").compactMap { Int64($0) }
+        if parts.count == 3 {
+            return days * 86400 + parts[0] * 3600 + parts[1] * 60 + parts[2]
+        }
+        if parts.count == 2 {
+            return days * 86400 + parts[0] * 60 + parts[1]
+        }
+        return Int64(timePart) ?? 0
+    }
+
+    static func findBareAntigravityMainProcess() -> BareHostAppInfo? {
+        let env = ProcessInfo.processInfo.environment
+        if let mockPidStr = env["AG_PRISM_MOCK_BARE_HOST_PID"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           let mockPid = Int32(mockPidStr), mockPid > 0, kill(mockPid, 0) == 0 {
+            let forcedUptime = Int64(env["AG_PRISM_MOCK_BARE_HOST_UPTIME_MS"] ?? "") ?? 10000
+            let nowMs = nowEpochMs()
+            let appPath = env["AG_PRISM_MOCK_BARE_HOST_APP"] ?? "/Applications/Antigravity.app"
+            return BareHostAppInfo(pid: mockPid, appPath: appPath, startTimeMs: nowMs - forcedUptime, uptimeMs: forcedUptime)
+        }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+        proc.arguments = ["-ax", "-o", "pid=,etime=,command="]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+            guard let out = String(data: data, encoding: .utf8) else { return nil }
+            let nowMs = nowEpochMs()
+            var candidate: BareHostAppInfo?
+            for rawLine in out.components(separatedBy: CharacterSet.newlines) {
+                let line = rawLine.trimmingCharacters(in: .whitespaces)
+                if line.isEmpty { continue }
+                let cols = line.split(maxSplits: 2, omittingEmptySubsequences: true, whereSeparator: { $0.isWhitespace })
+                guard cols.count == 3, let pid = Int32(cols[0]), pid > 0 else { continue }
+                let elapsedSec = parseBsdElapsedSeconds(String(cols[1]))
+                let cmd = String(cols[2])
+                let lowerCmd = cmd.lowercased()
+                guard let appRange = lowerCmd.range(of: ".app/contents/macos/antigravity") else { continue }
+                let afterSuffix = lowerCmd[appRange.upperBound...]
+                if !afterSuffix.isEmpty && afterSuffix.first != " " && afterSuffix.first != "\"" {
+                    // Excludes "Antigravity Helper" and other helper binaries
+                    continue
+                }
+                if lowerCmd.contains("--type=") ||
+                   lowerCmd.contains("sidecar_sdk") ||
+                   lowerCmd.contains("main.mjs") ||
+                   lowerCmd.contains("watch.js") {
+                    continue
+                }
+                if lowerCmd.contains("--remote-debugging-port") {
+                    return nil
+                }
+                if candidate == nil {
+                    let prefixUpToApp = String(cmd[..<appRange.lowerBound]) + ".app"
+                    let cleanedApp = prefixUpToApp.trimmingCharacters(in: CharacterSet(charactersIn: " \"'"))
+                    let appPath = FileManager.default.fileExists(atPath: cleanedApp) ? cleanedApp : "/Applications/Antigravity.app"
+                    let uptimeMs = max(0, elapsedSec * 1000)
+                    let startMs = nowMs - uptimeMs
+                    candidate = BareHostAppInfo(pid: pid, appPath: appPath, startTimeMs: startMs, uptimeMs: uptimeMs)
+                }
+            }
+            return candidate
+        } catch {
+            return nil
+        }
+    }
+
+    private static func stateFileMatchesHost(filePath: String, hostPid: Int32, startTimeMs: Int64) -> Bool {
+        guard !filePath.isEmpty, hostPid > 0,
+              let raw = try? String(contentsOfFile: filePath, encoding: .utf8) else { return false }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return false }
+        guard let obj = try? MiniJson.parseObject(trimmed) else { return false }
+        let expectedKey = "\(hostPid):\(startTimeMs)"
+        let pidPrefix = "\(hostPid):"
+        if let hk = obj["hostKey"]?.stringValue {
+            if hk == expectedKey { return true }
+            if startTimeMs <= 0 && hk.hasPrefix(pidPrefix) { return true }
+        }
+        if let k = obj["key"]?.stringValue {
+            if k == expectedKey { return true }
+            if startTimeMs <= 0 && k.hasPrefix(pidPrefix) { return true }
+        }
+        if let savedPid = obj["hostPid"]?.intValue, Int32(savedPid) == hostPid {
+            let savedStart: Int64
+            if case .int(let s1)? = obj["hostStartMs"] { savedStart = s1 }
+            else if case .int(let s2)? = obj["startTimeMs"] { savedStart = s2 }
+            else { savedStart = 0 }
+            if savedStart <= 0 || startTimeMs <= 0 || abs(savedStart - startTimeMs) <= 15000 {
+                return true
+            }
+        }
+        return false
+    }
+
+    static func hasPromptedForHost(pid: Int32, startTimeMs: Int64, installDir: String, pluginDir: String) -> Bool {
+        guard pid > 0 else { return true }
+        if !pluginDir.isEmpty {
+            let pFile = (pluginDir as NSString).appendingPathComponent(".relaunch-prompt-state.json")
+            if stateFileMatchesHost(filePath: pFile, hostPid: pid, startTimeMs: startTimeMs) { return true }
+        }
+        if !installDir.isEmpty {
+            let iFile = (installDir as NSString).appendingPathComponent(".relaunch-prompt-state.json")
+            if stateFileMatchesHost(filePath: iFile, hostPid: pid, startTimeMs: startTimeMs) { return true }
+        }
+        return false
+    }
+
+    static func recordPromptedForHost(pid: Int32, startTimeMs: Int64, decision: String, installDir: String, pluginDir: String) {
+        guard pid > 0 else { return }
+        let hostKey = "\(pid):\(startTimeMs)"
+        let obj: [String: JsonValue] = [
+            "hostPid": .int(Int64(pid)),
+            "hostStartMs": .int(startTimeMs),
+            "startTimeMs": .int(startTimeMs),
+            "hostKey": .string(hostKey),
+            "key": .string(hostKey),
+            "decision": .string(decision.isEmpty ? "prompted" : decision),
+            "updatedAt": .int(nowEpochMs()),
+        ]
+        for dir in [pluginDir, installDir] where !dir.isEmpty {
+            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil)
+            let path = (dir as NSString).appendingPathComponent(".relaunch-prompt-state.json")
+            try? atomicWriteJsonObject(obj, toFile: path)
+        }
+    }
+
+    static func promptUserForCdpRelaunch() -> Bool {
+        if let mockDec = ProcessInfo.processInfo.environment["AG_PRISM_MOCK_RELAUNCH_DECISION"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !mockDec.isEmpty {
+            return mockDec.caseInsensitiveCompare("yes") == .orderedSame || mockDec == "1"
+        }
+        let script = """
+        display dialog "检测到 Antigravity 已升级或无参启动，尚未开启本地光学桥接端口（--remote-debugging-port=0）。\\n\\n是否立即重新打开 Antigravity 以恢复 Obsidian Prism（黑曜棱镜）界面？" with title "Obsidian Prism · 恢复界面连接" buttons {"稍后手动重开", "立即重新打开"} default button "立即重新打开"
+        """
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        proc.arguments = ["-e", script]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+            if proc.terminationStatus != 0 { return false }
+            let out = String(data: data, encoding: .utf8) ?? ""
+            return out.contains("立即重新打开")
+        } catch {
+            return false
+        }
+    }
+
+    @discardableResult
+    static func relaunchAntigravityWithCdp(host: BareHostAppInfo, waitExitMs: Int = 15000, log: ((String) -> Void)? = nil) -> Bool {
+        guard host.pid > 0, !host.appPath.isEmpty else { return false }
+        let quitProc = Process()
+        quitProc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        quitProc.arguments = ["-e", "tell application \"Antigravity\" to quit"]
+        quitProc.standardOutput = FileHandle.nullDevice
+        quitProc.standardError = FileHandle.nullDevice
+        try? quitProc.run()
+        quitProc.waitUntilExit()
+
+        let softDeadline = Date().addingTimeInterval(Double(min(8000, max(1000, waitExitMs))) / 1000.0)
+        while Date() < softDeadline {
+            if kill(host.pid, 0) != 0 { break }
+            Thread.sleep(forTimeInterval: 0.12)
+        }
+        if kill(host.pid, 0) == 0 {
+            _ = kill(host.pid, SIGTERM)
+            let hardDeadline = Date().addingTimeInterval(4.0)
+            while Date() < hardDeadline {
+                if kill(host.pid, 0) != 0 { break }
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+        }
+        Thread.sleep(forTimeInterval: 0.25)
+
+        let openProc = Process()
+        openProc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        openProc.arguments = ["-a", host.appPath, "--args", cdpOptInFlag]
+        openProc.standardOutput = FileHandle.nullDevice
+        openProc.standardError = FileHandle.nullDevice
+        do {
+            try openProc.run()
+            openProc.waitUntilExit()
+            if openProc.terminationStatus == 0 {
+                log?("已带 \(cdpOptInFlag) 重新打开 Antigravity.app")
+                return true
+            }
+        } catch {}
+        return false
     }
 
     static func readRuntimeBundle(baseDir: String, manifest: PluginManifest) throws -> String {

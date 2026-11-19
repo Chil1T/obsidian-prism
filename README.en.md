@@ -83,7 +83,7 @@ Integrated into **Antigravity → Settings → Appearance**, providing 5 UI lang
 
 ## Quick Start
 
-Obsidian Prism provides **standalone GUI installers** (no Node.js required) and **source-based native plugin deployment**, persisting across window reloads and client restarts:
+Obsidian Prism provides **standalone GUI installers** (no Node.js required) and **source-based native plugin deployment**, natively compatible with **`Antigravity v2.33.0+`** (automatically maintaining `--remote-debugging-port=0` on launch shortcuts and offering one-click relaunch recovery after in-app updates), persisting cleanly across reloads and restarts:
 
 ### Option A: Standalone GUI Installer (Recommended · Zero External Dependencies, No Node.js Required)
 Download the latest installer directly below (or browse all versions on [**GitHub Releases**](https://github.com/RMvdesi/obsidian-prism/releases)):
@@ -106,6 +106,12 @@ cd obsidian-prism
 npm run install:plugin
 ```
 Then open **Settings → Appearance** in Antigravity to expand the **Obsidian Prism** control panel.
+
+### FAQ & `Antigravity v2.33.0+` Compatibility
+- **Why did the UI temporarily revert to stock right after an in-app update to `Antigravity v2.33.0+`?**
+  Starting in `Antigravity v2.33.0`, the host switched its local DevTools bridge to explicit opt-in (`--remote-debugging-port=0`, binding an ephemeral `127.0.0.1` port with a local token file), and Electron's built-in `quitAndInstall` updater relaunches the app once without command-line arguments. Obsidian Prism handles this automatically in two layers:
+  1. **Zero-Friction Daily Launch**: Both the installer and background daemon automatically maintain `--remote-debugging-port=0` on user Desktop, Start Menu, and Taskbar `Antigravity` shortcuts (silently restoring the flag if an app update overwrites shortcuts, and cleanly stripping it upon uninstall).
+  2. **One-Click Relaunch Recovery**: Whenever the daemon detects a running Antigravity instance launched without a local bridge port, it shows a **single non-repeating confirmation prompt** (at most once per host process lifetime) to gracefully close the current instance and relaunch with `--remote-debugging-port=0`; on macOS you can also launch via `open -a "/Applications/Antigravity.app" --args --remote-debugging-port=0`.
 
 <details>
 <summary><strong>CLI Utilities & Repository Structure (Click to expand)</strong></summary>

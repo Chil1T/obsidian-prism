@@ -12,6 +12,7 @@ final class InstallerOptions {
     var noAutostart = false
     var noKillLegacy = false
     var noNativeDaemon = false
+    var noRelaunchPrompt = false
     var installDir: String?
     var pluginDir: String?
     var cdpPort: Int?
@@ -33,6 +34,7 @@ final class OperationResult {
     var pluginDir = ""
     var nativePluginDeployed = false
     var nativeDaemonStarted = false
+    var bareHostDetected = false
     var antigravityApp: String?
     var antigravityVersion: String?
     var cdpPort: Int?
@@ -308,7 +310,7 @@ enum InstallerCore {
             .replacingOccurrences(of: "'", with: "&apos;")
     }
 
-    static func registerLaunchAgent(installDir: String, pluginDir: String, cdpPort: Int?, noNativeDaemon: Bool = false) throws {
+    static func registerLaunchAgent(installDir: String, pluginDir: String, cdpPort: Int?, noNativeDaemon: Bool = false, noRelaunchPrompt: Bool = false) throws {
         let plistPath = getLaunchAgentPlistPath()
         let launchAgentsDir = (plistPath as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(atPath: launchAgentsDir, withIntermediateDirectories: true, attributes: nil)
@@ -325,6 +327,9 @@ enum InstallerCore {
         }
         if noNativeDaemon {
             args.append("--no-native-daemon")
+        }
+        if noRelaunchPrompt {
+            args.append("--no-relaunch-prompt")
         }
         let argsXml = args.map { "    <string>\(xmlEscape($0))</string>" }.joined(separator: "\n")
         let outLog = (installDir as NSString).appendingPathComponent("launchd.out.log")
@@ -364,7 +369,7 @@ enum InstallerCore {
         }
     }
 
-    private static func spawnWatcherDirectly(installDir: String, pluginDir: String, cdpPort: Int?, noNativeDaemon: Bool = false) throws {
+    private static func spawnWatcherDirectly(installDir: String, pluginDir: String, cdpPort: Int?, noNativeDaemon: Bool = false, noRelaunchPrompt: Bool = false) throws {
         let watcherExe = (installDir as NSString).appendingPathComponent(watcherExeName)
         var args = ["--watch", "--dir", installDir]
         if !pluginDir.isEmpty {
@@ -377,6 +382,9 @@ enum InstallerCore {
         }
         if noNativeDaemon {
             args.append("--no-native-daemon")
+        }
+        if noRelaunchPrompt {
+            args.append("--no-relaunch-prompt")
         }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: watcherExe)
@@ -557,17 +565,17 @@ enum InstallerCore {
 
         if !opts.noAutostart {
             report(74, "正在配置 macOS LaunchAgent 登录自启...")
-            try registerLaunchAgent(installDir: installDir, pluginDir: pluginDir, cdpPort: opts.cdpPort, noNativeDaemon: opts.noNativeDaemon)
+            try registerLaunchAgent(installDir: installDir, pluginDir: pluginDir, cdpPort: opts.cdpPort, noNativeDaemon: opts.noNativeDaemon, noRelaunchPrompt: opts.noRelaunchPrompt)
             Thread.sleep(forTimeInterval: 0.25)
             let pidFile = (installDir as NSString).appendingPathComponent(".watch.pid")
             if !fm.fileExists(atPath: pidFile) {
                 report(82, "正在启动后台静默守护进程...")
-                try spawnWatcherDirectly(installDir: installDir, pluginDir: pluginDir, cdpPort: opts.cdpPort, noNativeDaemon: opts.noNativeDaemon)
+                try spawnWatcherDirectly(installDir: installDir, pluginDir: pluginDir, cdpPort: opts.cdpPort, noNativeDaemon: opts.noNativeDaemon, noRelaunchPrompt: opts.noRelaunchPrompt)
             }
         } else {
             report(74, "已按参数跳过 LaunchAgent 登录自启注册")
             report(82, "正在启动后台静默守护进程...")
-            try spawnWatcherDirectly(installDir: installDir, pluginDir: pluginDir, cdpPort: opts.cdpPort, noNativeDaemon: opts.noNativeDaemon)
+            try spawnWatcherDirectly(installDir: installDir, pluginDir: pluginDir, cdpPort: opts.cdpPort, noNativeDaemon: opts.noNativeDaemon, noRelaunchPrompt: opts.noRelaunchPrompt)
         }
 
         report(90, "正在检查 Antigravity Desktop 实时注入状态...")
@@ -623,6 +631,10 @@ enum InstallerCore {
         } else if cdpReachable, let port = port {
             result.headline = "已安装原生插件并启动守护！等待 Antigravity 窗口就绪"
             result.detail = "已部署原生 Sidecar 插件并启动后台守护。检测到调试端口 \(port)，窗口就绪后将自动完成注入。"
+        } else if opts.cdpPort == nil, CdpHelper.findBareAntigravityMainProcess() != nil {
+            result.bareHostDetected = true
+            result.headline = "安装完成！重新打开一次 Antigravity 即可激活界面"
+            result.detail = "检测到当前 Antigravity (v2.33.0+) 未开启本地光学桥接端口（--remote-debugging-port=0），带参重新打开即可立即生效。"
         } else {
             result.headline = "安装成功！原生 Sidecar 插件与自动修补已就绪"
             result.detail = "当前未检测到运行中的 Antigravity Desktop；原生插件与守护进程已就绪，打开 Antigravity Desktop 后会自动立即生效。"
@@ -970,11 +982,67 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
                     self.metaLabel.stringValue = "配置: \(res.configSummary)"
                     self.openDirBtn.isEnabled = FileManager.default.fileExists(atPath: self.activeInstallDir)
                     self.uninstallBtn.isEnabled = true
-                    let showLaunch = (self.antigravityApp != nil && res.injectedPages.isEmpty)
+                    let showLaunch = (self.antigravityApp != nil && res.injectedPages.isEmpty && !res.bareHostDetected)
                     self.launchAgBtn.isHidden = !showLaunch
                     self.launchAgBtn.isEnabled = showLaunch
                     self.busy = false
                     self.closeBtn.isEnabled = true
+
+                    let env = ProcessInfo.processInfo.environment
+                    if res.bareHostDetected &&
+                       !self.opts.silent &&
+                       !self.opts.noRelaunchPrompt &&
+                       env["PRISM_NO_RELAUNCH_PROMPT"] != "1" &&
+                       env["AG_PRISM_NO_RELAUNCH_PROMPT"] != "1",
+                       let bare = CdpHelper.findBareAntigravityMainProcess() {
+                        let alert = NSAlert()
+                        alert.messageText = "立即激活 Obsidian Prism"
+                        alert.informativeText = "检测到正在运行的 Antigravity (v2.33.0+) 未开启本地光学桥接端口（--remote-debugging-port=0）。\n\n是否立即重新打开 Antigravity 使黑曜棱镜（Obsidian Prism）五通道界面当场生效？"
+                        alert.alertStyle = .informational
+                        alert.addButton(withTitle: "立即重新打开")
+                        alert.addButton(withTitle: "稍后手动重开")
+                        let confirmed = (alert.runModal() == .alertFirstButtonReturn)
+                        CdpHelper.recordPromptedForHost(
+                            pid: bare.pid,
+                            startTimeMs: bare.startTimeMs,
+                            decision: confirmed ? "yes" : "no",
+                            installDir: res.installDir,
+                            pluginDir: res.pluginDir
+                        )
+                        if confirmed {
+                            self.busy = true
+                            self.closeBtn.isEnabled = false
+                            self.statusHeadline.stringValue = "正在带参重新打开 Antigravity 并激活界面..."
+                            DispatchQueue.global(qos: .userInitiated).async {
+                                let ok = CdpHelper.relaunchAntigravityWithCdp(host: bare, waitExitMs: 15000) { m in
+                                    self.appendLog(m)
+                                }
+                                if ok {
+                                    for _ in 0..<24 {
+                                        if let newPort = CdpHelper.readPort(overridePort: nil) {
+                                            if !self.opts.noNativeDaemon && res.nativePluginDeployed {
+                                                _ = CdpHelper.ensureNativeDaemonRunning(
+                                                    pluginDir: res.pluginDir,
+                                                    cdpPort: newPort,
+                                                    preferredApp: res.antigravityApp
+                                                ) { m in self.appendLog(m) }
+                                            }
+                                            break
+                                        }
+                                        Thread.sleep(forTimeInterval: 0.35)
+                                    }
+                                }
+                                DispatchQueue.main.async {
+                                    if ok {
+                                        self.statusHeadline.stringValue = "修补成功！已带参重开并激活 Antigravity 界面"
+                                        self.statusDetail.stringValue = "已带 --remote-debugging-port=0 重新打开 Antigravity 并激活五通道原生 Sidecar 守护。"
+                                    }
+                                    self.busy = false
+                                    self.closeBtn.isEnabled = true
+                                }
+                            }
+                        }
+                    }
                 }
             } catch {
                 self.appendLog("[✗] 错误: \(error.localizedDescription)")
@@ -1030,9 +1098,12 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
 
     @objc private func handleLaunchAgClick() {
         if let appPath = antigravityApp, FileManager.default.fileExists(atPath: appPath) {
-            let url = URL(fileURLWithPath: appPath)
-            let cfg = NSWorkspace.OpenConfiguration()
-            NSWorkspace.shared.openApplication(at: url, configuration: cfg, completionHandler: nil)
+            let openProc = Process()
+            openProc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            openProc.arguments = ["-a", appPath, "--args", CdpHelper.cdpOptInFlag]
+            openProc.standardOutput = FileHandle.nullDevice
+            openProc.standardError = FileHandle.nullDevice
+            try? openProc.run()
         }
     }
 
@@ -1057,6 +1128,7 @@ func parseInstallerArgs(_ args: [String]) -> InstallerOptions {
         else if a == "--no-autostart" { opts.noAutostart = true }
         else if a == "--no-kill-legacy" { opts.noKillLegacy = true }
         else if a == "--no-native-daemon" { opts.noNativeDaemon = true }
+        else if a == "--no-relaunch-prompt" { opts.noRelaunchPrompt = true }
         else if a == "--install-dir" && i + 1 < args.count { i += 1; opts.installDir = args[i] }
         else if a == "--plugin-dir" && i + 1 < args.count { i += 1; opts.pluginDir = args[i] }
         else if a == "--cdp-port" && i + 1 < args.count {
@@ -1080,6 +1152,7 @@ func writeOperationOutFile(_ outFile: String?, res: OperationResult) {
         "pluginDir": .string(res.pluginDir),
         "nativePluginDeployed": .bool(res.nativePluginDeployed),
         "nativeDaemonStarted": .bool(res.nativeDaemonStarted),
+        "bareHostDetected": .bool(res.bareHostDetected),
         "antigravityApp": res.antigravityApp.map { .string($0) } ?? .null,
         "antigravityVersion": res.antigravityVersion.map { .string($0) } ?? .null,
         "cdpPort": res.cdpPort.map { .int(Int64($0)) } ?? .null,

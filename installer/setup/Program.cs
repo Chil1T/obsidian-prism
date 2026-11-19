@@ -24,6 +24,7 @@ namespace AgyClaudeStyle.Installer
         public bool NoAutostart;
         public bool NoKillLegacy;
         public bool NoNativeDaemon;
+        public bool NoRelaunchPrompt;
         public string InstallDir;
         public string PluginDir;
         public int? CdpPort;
@@ -53,6 +54,9 @@ namespace AgyClaudeStyle.Installer
         public List<string> InjectedPages = new List<string>();
         public bool PreservedExistingConfig;
         public bool SelfDeleteScheduled;
+        public int PatchedShortcuts;
+        public int RestoredShortcuts;
+        public bool BareHostDetected;
         public string ConfigSummary;
     }
 
@@ -617,6 +621,14 @@ namespace AgyClaudeStyle.Installer
                 activeCfg.ContainsKey("omniModule") ? activeCfg["omniModule"] : "on"
             );
 
+            string shortcutStateDir = !string.IsNullOrEmpty(pluginDir) ? pluginDir : installDir;
+            result.PatchedShortcuts = CdpHelper.EnsureAntigravityShortcutsOptIn(
+                installDir,
+                GetDefaultInstallDir(),
+                shortcutStateDir,
+                (m) => report(68, m)
+            );
+
             if (!opts.NoAutostart)
             {
                 report(72, "正在配置 Windows 开机自动修补与卸载入口...");
@@ -644,6 +656,10 @@ namespace AgyClaudeStyle.Installer
             if (opts.NoNativeDaemon)
             {
                 watcherArgs += " --no-native-daemon";
+            }
+            if (opts.NoRelaunchPrompt)
+            {
+                watcherArgs += " --no-relaunch-prompt";
             }
             if (opts.CdpPort.HasValue && opts.CdpPort.Value > 0)
             {
@@ -735,8 +751,18 @@ namespace AgyClaudeStyle.Installer
             }
             else
             {
-                result.Headline = "安装成功！原生 Sidecar 插件与自动修补已就绪";
-                result.Detail = "当前未检测到运行中的 Antigravity Desktop；原生插件与守护进程已就绪，打开 Antigravity Desktop 后会自动立即生效。";
+                BareHostProcessInfo bareHost = !opts.CdpPort.HasValue ? CdpHelper.FindBareAntigravityMainProcess() : null;
+                if (bareHost != null)
+                {
+                    result.BareHostDetected = true;
+                    result.Headline = "安装完成！重新打开一次 Antigravity 即可激活界面";
+                    result.Detail = "检测到当前 Antigravity (v2.33.0+) 未开启本地光学桥接端口；桌面与开始菜单快捷方式已自动补齐 --remote-debugging-port=0，重新打开后将自动永久生效。";
+                }
+                else
+                {
+                    result.Headline = "安装成功！原生 Sidecar 插件与自动修补已就绪";
+                    result.Detail = "当前未检测到运行中的 Antigravity Desktop；快捷方式与守护进程已就绪，打开 Antigravity Desktop 后会自动立即生效。";
+                }
             }
             report(100, result.Headline);
             return result;
@@ -812,7 +838,13 @@ namespace AgyClaudeStyle.Installer
                 catch { }
             }
 
-            report(70, "正在移除开机自启与卸载注册表项...");
+            report(70, "正在还原快捷方式并移除开机自启与卸载注册表项...");
+            result.RestoredShortcuts = CdpHelper.RestoreAntigravityShortcutsOptIn(
+                installDir,
+                GetDefaultInstallDir(),
+                !string.IsNullOrEmpty(pluginDir) ? pluginDir : installDir,
+                (m) => report(72, m)
+            );
             bool isDefaultInstall = string.Equals(
                 Path.GetFullPath(installDir).TrimEnd('\\', '/'),
                 Path.GetFullPath(GetDefaultInstallDir()).TrimEnd('\\', '/'),
@@ -1082,7 +1114,9 @@ namespace AgyClaudeStyle.Installer
                 {
                     if (!string.IsNullOrEmpty(_antigravityExe) && File.Exists(_antigravityExe))
                     {
-                        Process.Start(_antigravityExe);
+                        ProcessStartInfo lpsi = new ProcessStartInfo(_antigravityExe, CdpHelper.CdpOptInFlag);
+                        lpsi.UseShellExecute = false;
+                        Process.Start(lpsi);
                     }
                 }
                 catch { }
@@ -1178,8 +1212,65 @@ namespace AgyClaudeStyle.Installer
                 _metaLabel.Text = "配置: " + res.ConfigSummary;
                 _openDirBtn.Enabled = Directory.Exists(_activeInstallDir);
                 _uninstallBtn.Enabled = true;
-                _launchAgBtn.Visible = (!string.IsNullOrEmpty(_antigravityExe) && res.InjectedPages.Count == 0);
+                _launchAgBtn.Visible = (!string.IsNullOrEmpty(_antigravityExe) && res.InjectedPages.Count == 0 && !res.BareHostDetected);
                 _launchAgBtn.Enabled = _launchAgBtn.Visible;
+
+                if (res.BareHostDetected &&
+                    !_opts.Silent &&
+                    !_opts.NoRelaunchPrompt &&
+                    Environment.GetEnvironmentVariable("PRISM_NO_RELAUNCH_PROMPT") != "1" &&
+                    Environment.GetEnvironmentVariable("AG_PRISM_NO_RELAUNCH_PROMPT") != "1")
+                {
+                    BareHostProcessInfo bareHost = CdpHelper.FindBareAntigravityMainProcess();
+                    if (bareHost != null)
+                    {
+                        DialogResult relaunchDr = MessageBox.Show(
+                            this,
+                            "检测到正在运行的 Antigravity 未开启本地光学桥接端口（v2.33.0+ 默认关闭）。\r\n" +
+                            "桌面与开始菜单快捷方式已自动补齐 --remote-debugging-port=0。\r\n\r\n" +
+                            "是否立即重新打开 Antigravity 使黑曜棱镜（Obsidian Prism）界面当场生效？",
+                            "立即激活 Obsidian Prism",
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Question
+                        );
+                        CdpHelper.RecordPromptedForHost(
+                            bareHost.Pid,
+                            bareHost.StartTimeMs,
+                            relaunchDr == DialogResult.Yes ? "yes" : "no",
+                            res.InstallDir,
+                            res.PluginDir
+                        );
+                        if (relaunchDr == DialogResult.Yes)
+                        {
+                            _statusHeadline.Text = "正在带参重新打开 Antigravity 并激活界面...";
+                            AppendLog("正在等待旧实例释放锁并带 --remote-debugging-port=0 重新打开 Antigravity...");
+                            bool relaunched = await Task.Run(() =>
+                            {
+                                bool ok = CdpHelper.RelaunchAntigravityWithCdp(bareHost, 15000, AppendLog);
+                                if (!ok) return false;
+                                for (int w = 0; w < 24; w++)
+                                {
+                                    int? newPort = CdpHelper.ReadPort(null);
+                                    if (newPort.HasValue)
+                                    {
+                                        if (!_opts.NoNativeDaemon && res.NativePluginDeployed)
+                                        {
+                                            CdpHelper.EnsureNativeDaemonRunning(res.PluginDir, newPort, res.AntigravityExe, AppendLog);
+                                        }
+                                        return true;
+                                    }
+                                    Thread.Sleep(350);
+                                }
+                                return true;
+                            });
+                            if (relaunched)
+                            {
+                                _statusHeadline.Text = "修补成功！已带参重开并激活 Antigravity 界面";
+                                _statusDetail.Text = "已自动为快捷方式补齐 --remote-debugging-port=0 并激活五通道原生 Sidecar 守护，后续日常启动将自动生效。";
+                            }
+                        }
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -1336,6 +1427,7 @@ namespace AgyClaudeStyle.Installer
                 else if (a == "--no-autostart") opts.NoAutostart = true;
                 else if (a == "--no-kill-legacy") opts.NoKillLegacy = true;
                 else if (a == "--no-native-daemon") opts.NoNativeDaemon = true;
+                else if (a == "--no-relaunch-prompt") opts.NoRelaunchPrompt = true;
                 else if (a == "--install-dir" && i + 1 < args.Length) opts.InstallDir = args[++i];
                 else if (a == "--plugin-dir" && i + 1 < args.Length) opts.PluginDir = args[++i];
                 else if (a == "--cdp-port" && i + 1 < args.Length)
@@ -1366,6 +1458,9 @@ namespace AgyClaudeStyle.Installer
             d["injectedPages"] = res.InjectedPages;
             d["preservedExistingConfig"] = res.PreservedExistingConfig;
             d["selfDeleteScheduled"] = res.SelfDeleteScheduled;
+            d["patchedShortcuts"] = res.PatchedShortcuts;
+            d["restoredShortcuts"] = res.RestoredShortcuts;
+            d["bareHostDetected"] = res.BareHostDetected;
             File.WriteAllText(outFile, MiniJson.Stringify(d, true), new UTF8Encoding(false));
         }
     }

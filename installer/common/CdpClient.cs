@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Net.WebSockets;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -13,6 +14,13 @@ using Microsoft.Win32;
 
 namespace AgyClaudeStyle
 {
+    public class BareHostProcessInfo
+    {
+        public int Pid;
+        public string ExePath;
+        public long StartTimeMs;
+        public long UptimeMs;
+    }
     public class CdpPageInfo
     {
         public string Id;
@@ -1282,6 +1290,601 @@ namespace AgyClaudeStyle
                     try { proc.Dispose(); } catch { }
                 }
             }
+        }
+
+        public const string CdpOptInFlag = "--remote-debugging-port=0";
+        private const uint MB_YESNO = 0x00000004;
+        private const uint MB_ICONQUESTION = 0x00000020;
+        private const uint MB_SETFOREGROUND = 0x00010000;
+        private const int IDYES = 6;
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int MessageBoxW(IntPtr hWnd, string lpText, string lpCaption, uint uType);
+
+        private static long NowEpochMs()
+        {
+            DateTime epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            return (long)(DateTime.UtcNow - epoch).TotalMilliseconds;
+        }
+
+        private static long ProcessStartEpochMs(Process proc)
+        {
+            try
+            {
+                DateTime epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+                return (long)(proc.StartTime.ToUniversalTime() - epoch).TotalMilliseconds;
+            }
+            catch
+            {
+                return 0L;
+            }
+        }
+
+        private static List<string> GetShortcutCandidateDirs(string installDir, string defaultInstallDir)
+        {
+            List<string> dirs = new List<string>();
+            string envDirs = Environment.GetEnvironmentVariable("AG_PRISM_SHORTCUT_DIRS");
+            if (!string.IsNullOrEmpty(envDirs))
+            {
+                string[] parts = envDirs.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    string d = parts[i].Trim();
+                    if (!string.IsNullOrEmpty(d) && Directory.Exists(d) && !dirs.Contains(d)) dirs.Add(d);
+                }
+                return dirs;
+            }
+
+            if (!string.IsNullOrEmpty(installDir) && !string.IsNullOrEmpty(defaultInstallDir))
+            {
+                string normInst = Path.GetFullPath(installDir).TrimEnd('\\', '/');
+                string normDef = Path.GetFullPath(defaultInstallDir).TrimEnd('\\', '/');
+                if (!string.Equals(normInst, normDef, StringComparison.OrdinalIgnoreCase))
+                {
+                    return dirs;
+                }
+            }
+
+            string userDesktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            string userPrograms = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            string taskbarPinned = !string.IsNullOrEmpty(appData)
+                ? Path.Combine(appData, @"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar")
+                : null;
+            string commonDesktop = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
+            string commonPrograms = Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms);
+
+            string[] raw = new string[] { userDesktop, userPrograms, taskbarPinned, commonDesktop, commonPrograms };
+            for (int i = 0; i < raw.Length; i++)
+            {
+                if (!string.IsNullOrEmpty(raw[i]) && Directory.Exists(raw[i]) && !dirs.Contains(raw[i]))
+                {
+                    dirs.Add(raw[i]);
+                }
+            }
+            return dirs;
+        }
+
+        private static void CollectLnkFilesBounded(string dir, int depth, List<string> outFiles)
+        {
+            if (depth > 2 || string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;
+            try
+            {
+                string[] lnks = Directory.GetFiles(dir, "*.lnk", SearchOption.TopDirectoryOnly);
+                for (int i = 0; i < lnks.Length; i++)
+                {
+                    outFiles.Add(lnks[i]);
+                }
+            }
+            catch { }
+            if (depth >= 2) return;
+            try
+            {
+                string[] subs = Directory.GetDirectories(dir);
+                for (int i = 0; i < subs.Length; i++)
+                {
+                    CollectLnkFilesBounded(subs[i], depth + 1, outFiles);
+                }
+            }
+            catch { }
+        }
+
+        private static List<string> ReadPatchedShortcutsRecord(string stateDir)
+        {
+            List<string> list = new List<string>();
+            if (string.IsNullOrEmpty(stateDir)) return list;
+            try
+            {
+                string recPath = Path.Combine(stateDir, ".patched-shortcuts.json");
+                if (!File.Exists(recPath)) return list;
+                Dictionary<string, object> obj = MiniJson.ParseObject(File.ReadAllText(recPath, Encoding.UTF8));
+                object arrObj;
+                if (obj != null && obj.TryGetValue("patchedPaths", out arrObj) && arrObj is List<object>)
+                {
+                    List<object> rawList = (List<object>)arrObj;
+                    for (int i = 0; i < rawList.Count; i++)
+                    {
+                        string p = rawList[i] as string;
+                        if (!string.IsNullOrEmpty(p)) list.Add(p);
+                    }
+                }
+            }
+            catch { }
+            return list;
+        }
+
+        private static void WritePatchedShortcutsRecord(string stateDir, List<string> paths)
+        {
+            if (string.IsNullOrEmpty(stateDir)) return;
+            try
+            {
+                Directory.CreateDirectory(stateDir);
+                string recPath = Path.Combine(stateDir, ".patched-shortcuts.json");
+                List<object> arr = new List<object>();
+                HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < paths.Count; i++)
+                {
+                    if (!string.IsNullOrEmpty(paths[i]) && seen.Add(paths[i]))
+                    {
+                        arr.Add(paths[i]);
+                    }
+                }
+                Dictionary<string, object> root = new Dictionary<string, object>(StringComparer.Ordinal);
+                root["patchedPaths"] = arr;
+                root["updatedAt"] = NowEpochMs();
+                AtomicWriteJson(recPath, root);
+            }
+            catch { }
+        }
+
+        public static int EnsureAntigravityShortcutsOptIn(
+            string installDir,
+            string defaultInstallDir,
+            string stateDir,
+            Action<string> log = null
+        )
+        {
+            List<string> rootDirs = GetShortcutCandidateDirs(installDir, defaultInstallDir);
+            if (rootDirs.Count == 0) return 0;
+
+            List<string> lnkFiles = new List<string>();
+            for (int i = 0; i < rootDirs.Count; i++)
+            {
+                CollectLnkFilesBounded(rootDirs[i], 0, lnkFiles);
+            }
+            if (lnkFiles.Count == 0) return 0;
+
+            List<string> recorded = ReadPatchedShortcutsRecord(stateDir);
+            int patchedCount = 0;
+            object shell = null;
+            try
+            {
+                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType == null) return 0;
+                shell = Activator.CreateInstance(shellType);
+                for (int i = 0; i < lnkFiles.Count; i++)
+                {
+                    string lnkPath = lnkFiles[i];
+                    object lnk = null;
+                    try
+                    {
+                        lnk = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnkPath });
+                        if (lnk == null) continue;
+                        Type lnkType = lnk.GetType();
+                        string target = (lnkType.InvokeMember("TargetPath", BindingFlags.GetProperty, null, lnk, null) as string) ?? "";
+                        string fileName = Path.GetFileName(target.Trim().Trim('"'));
+                        if (!string.Equals(fileName, "Antigravity.exe", StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+                        string origArgs = (lnkType.InvokeMember("Arguments", BindingFlags.GetProperty, null, lnk, null) as string) ?? "";
+                        if (origArgs.IndexOf("--remote-debugging-port", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            continue;
+                        }
+                        string nextArgs = string.IsNullOrEmpty(origArgs.Trim())
+                            ? CdpOptInFlag
+                            : (origArgs.TrimEnd() + " " + CdpOptInFlag);
+                        lnkType.InvokeMember("Arguments", BindingFlags.SetProperty, null, lnk, new object[] { nextArgs });
+                        lnkType.InvokeMember("Save", BindingFlags.InvokeMethod, null, lnk, null);
+                        recorded.Add(lnkPath);
+                        patchedCount++;
+                    }
+                    catch { }
+                    finally
+                    {
+                        if (lnk != null && Marshal.IsComObject(lnk))
+                        {
+                            try { Marshal.FinalReleaseComObject(lnk); } catch { }
+                        }
+                    }
+                }
+            }
+            catch { }
+            finally
+            {
+                if (shell != null && Marshal.IsComObject(shell))
+                {
+                    try { Marshal.FinalReleaseComObject(shell); } catch { }
+                }
+            }
+
+            if (patchedCount > 0)
+            {
+                WritePatchedShortcutsRecord(stateDir, recorded);
+                if (log != null)
+                {
+                    log("已自动维护 " + patchedCount + " 个 Antigravity 快捷方式开启 --remote-debugging-port=0");
+                }
+            }
+            return patchedCount;
+        }
+
+        private static string StripOptInFlagFromArguments(string rawArgs)
+        {
+            if (string.IsNullOrEmpty(rawArgs)) return "";
+            string[] tokens = rawArgs.Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            List<string> kept = new List<string>();
+            for (int i = 0; i < tokens.Length; i++)
+            {
+                string t = tokens[i];
+                if (string.Equals(t, CdpOptInFlag, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(t, "\"--remote-debugging-port=0\"", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                kept.Add(t);
+            }
+            return string.Join(" ", kept.ToArray());
+        }
+
+        public static int RestoreAntigravityShortcutsOptIn(
+            string installDir,
+            string defaultInstallDir,
+            string stateDir,
+            Action<string> log = null
+        )
+        {
+            HashSet<string> candidateLnks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            List<string> rootDirs = GetShortcutCandidateDirs(installDir, defaultInstallDir);
+            List<string> scanned = new List<string>();
+            for (int i = 0; i < rootDirs.Count; i++)
+            {
+                CollectLnkFilesBounded(rootDirs[i], 0, scanned);
+            }
+            for (int i = 0; i < scanned.Count; i++) candidateLnks.Add(scanned[i]);
+
+            string[] stateCandidates = new string[] { stateDir, installDir };
+            for (int s = 0; s < stateCandidates.Length; s++)
+            {
+                List<string> rec = ReadPatchedShortcutsRecord(stateCandidates[s]);
+                for (int i = 0; i < rec.Count; i++) candidateLnks.Add(rec[i]);
+            }
+
+            int restoredCount = 0;
+            object shell = null;
+            if (candidateLnks.Count > 0)
+            {
+                try
+                {
+                    Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+                    if (shellType != null)
+                    {
+                        shell = Activator.CreateInstance(shellType);
+                        foreach (string lnkPath in candidateLnks)
+                        {
+                            if (string.IsNullOrEmpty(lnkPath) || !File.Exists(lnkPath)) continue;
+                            object lnk = null;
+                            try
+                            {
+                                lnk = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnkPath });
+                                if (lnk == null) continue;
+                                Type lnkType = lnk.GetType();
+                                string target = (lnkType.InvokeMember("TargetPath", BindingFlags.GetProperty, null, lnk, null) as string) ?? "";
+                                string fileName = Path.GetFileName(target.Trim().Trim('"'));
+                                if (!string.Equals(fileName, "Antigravity.exe", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    continue;
+                                }
+                                string origArgs = (lnkType.InvokeMember("Arguments", BindingFlags.GetProperty, null, lnk, null) as string) ?? "";
+                                if (origArgs.IndexOf(CdpOptInFlag, StringComparison.OrdinalIgnoreCase) < 0)
+                                {
+                                    continue;
+                                }
+                                string restoredArgs = StripOptInFlagFromArguments(origArgs);
+                                lnkType.InvokeMember("Arguments", BindingFlags.SetProperty, null, lnk, new object[] { restoredArgs });
+                                lnkType.InvokeMember("Save", BindingFlags.InvokeMethod, null, lnk, null);
+                                restoredCount++;
+                            }
+                            catch { }
+                            finally
+                            {
+                                if (lnk != null && Marshal.IsComObject(lnk))
+                                {
+                                    try { Marshal.FinalReleaseComObject(lnk); } catch { }
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { }
+                finally
+                {
+                    if (shell != null && Marshal.IsComObject(shell))
+                    {
+                        try { Marshal.FinalReleaseComObject(shell); } catch { }
+                    }
+                }
+            }
+
+            for (int s = 0; s < stateCandidates.Length; s++)
+            {
+                if (string.IsNullOrEmpty(stateCandidates[s])) continue;
+                try
+                {
+                    string recFile = Path.Combine(stateCandidates[s], ".patched-shortcuts.json");
+                    if (File.Exists(recFile)) File.Delete(recFile);
+                }
+                catch { }
+            }
+
+            if (restoredCount > 0 && log != null)
+            {
+                log("已还原 " + restoredCount + " 个 Antigravity 快捷方式启动参数");
+            }
+            return restoredCount;
+        }
+
+        public static BareHostProcessInfo FindBareAntigravityMainProcess()
+        {
+            string mockPidEnv = Environment.GetEnvironmentVariable("AG_PRISM_MOCK_BARE_HOST_PID");
+            int mockPid;
+            if (!string.IsNullOrEmpty(mockPidEnv) && int.TryParse(mockPidEnv.Trim(), out mockPid) && mockPid > 0)
+            {
+                Process mp = null;
+                try
+                {
+                    mp = Process.GetProcessById(mockPid);
+                    if (!mp.HasExited)
+                    {
+                        long startMs = ProcessStartEpochMs(mp);
+                        long uptimeMs = startMs > 0L ? Math.Max(0L, NowEpochMs() - startMs) : 10000L;
+                        string mockUptimeEnv = Environment.GetEnvironmentVariable("AG_PRISM_MOCK_BARE_HOST_UPTIME_MS");
+                        long forcedUptime;
+                        if (!string.IsNullOrEmpty(mockUptimeEnv) && long.TryParse(mockUptimeEnv.Trim(), out forcedUptime))
+                        {
+                            uptimeMs = forcedUptime;
+                        }
+                        string exe = "";
+                        try { exe = mp.MainModule.FileName; } catch { }
+                        BareHostProcessInfo info = new BareHostProcessInfo();
+                        info.Pid = mockPid;
+                        info.ExePath = exe;
+                        info.StartTimeMs = startMs;
+                        info.UptimeMs = uptimeMs;
+                        return info;
+                    }
+                }
+                catch { }
+                finally
+                {
+                    if (mp != null) { try { mp.Dispose(); } catch { } }
+                }
+                return null;
+            }
+
+            try
+            {
+                Process[] procs = Process.GetProcessesByName("Antigravity");
+                BareHostProcessInfo candidate = null;
+                for (int i = 0; i < procs.Length; i++)
+                {
+                    Process p = procs[i];
+                    try
+                    {
+                        if (p.HasExited) continue;
+                        string cmd = QueryWindowsProcessCommandLine(p.Id);
+                        if (string.IsNullOrEmpty(cmd)) continue;
+                        if (cmd.IndexOf("--type=", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                        if (cmd.IndexOf("sidecar_sdk", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            cmd.IndexOf("main.mjs", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            cmd.IndexOf("watch.js", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            continue;
+                        }
+                        if (cmd.IndexOf("--remote-debugging-port", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            // A host process already opted into CDP is running
+                            return null;
+                        }
+                        if (candidate == null)
+                        {
+                            long stMs = ProcessStartEpochMs(p);
+                            string exePath = "";
+                            try { exePath = p.MainModule.FileName; } catch { }
+                            if (string.IsNullOrEmpty(exePath)) exePath = FindAntigravityExecutable(null);
+                            candidate = new BareHostProcessInfo();
+                            candidate.Pid = p.Id;
+                            candidate.ExePath = exePath;
+                            candidate.StartTimeMs = stMs;
+                            candidate.UptimeMs = stMs > 0L ? Math.Max(0L, NowEpochMs() - stMs) : 0L;
+                        }
+                    }
+                    catch { }
+                    finally
+                    {
+                        try { p.Dispose(); } catch { }
+                    }
+                }
+                return candidate;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static bool StateFileMatchesHost(string filePath, int hostPid, long startTimeMs)
+        {
+            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath) || hostPid <= 0) return false;
+            try
+            {
+                string raw = File.ReadAllText(filePath, Encoding.UTF8).Trim();
+                if (string.IsNullOrEmpty(raw)) return false;
+                Dictionary<string, object> obj = MiniJson.ParseObject(raw);
+                if (obj == null) return false;
+                string expectedKey = hostPid + ":" + startTimeMs;
+                string pidPrefix = hostPid + ":";
+                object hkObj;
+                if (obj.TryGetValue("hostKey", out hkObj) && hkObj is string)
+                {
+                    string hk = (string)hkObj;
+                    if (string.Equals(hk, expectedKey, StringComparison.Ordinal)) return true;
+                    if (startTimeMs <= 0L && hk.StartsWith(pidPrefix, StringComparison.Ordinal)) return true;
+                }
+                object kObj;
+                if (obj.TryGetValue("key", out kObj) && kObj is string)
+                {
+                    string k = (string)kObj;
+                    if (string.Equals(k, expectedKey, StringComparison.Ordinal)) return true;
+                    if (startTimeMs <= 0L && k.StartsWith(pidPrefix, StringComparison.Ordinal)) return true;
+                }
+                object pidObj;
+                if (obj.TryGetValue("hostPid", out pidObj) && pidObj != null && Convert.ToInt32(pidObj) == hostPid)
+                {
+                    long savedStart = 0L;
+                    object st1;
+                    object st2;
+                    if (obj.TryGetValue("hostStartMs", out st1) && st1 != null) savedStart = Convert.ToInt64(st1);
+                    else if (obj.TryGetValue("startTimeMs", out st2) && st2 != null) savedStart = Convert.ToInt64(st2);
+                    if (savedStart <= 0L || startTimeMs <= 0L || Math.Abs(savedStart - startTimeMs) <= 15000L)
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        public static bool HasPromptedForHost(int hostPid, long startTimeMs, string installDir, string pluginDir)
+        {
+            if (hostPid <= 0) return true;
+            if (!string.IsNullOrEmpty(pluginDir))
+            {
+                if (StateFileMatchesHost(Path.Combine(pluginDir, ".relaunch-prompt-state.json"), hostPid, startTimeMs))
+                    return true;
+            }
+            if (!string.IsNullOrEmpty(installDir))
+            {
+                if (StateFileMatchesHost(Path.Combine(installDir, ".relaunch-prompt-state.json"), hostPid, startTimeMs))
+                    return true;
+            }
+            return false;
+        }
+
+        public static void RecordPromptedForHost(int hostPid, long startTimeMs, string decision, string installDir, string pluginDir)
+        {
+            if (hostPid <= 0) return;
+            string hostKey = hostPid + ":" + startTimeMs;
+            Dictionary<string, object> obj = new Dictionary<string, object>(StringComparer.Ordinal);
+            obj["hostPid"] = hostPid;
+            obj["hostStartMs"] = startTimeMs;
+            obj["startTimeMs"] = startTimeMs;
+            obj["hostKey"] = hostKey;
+            obj["key"] = hostKey;
+            obj["decision"] = string.IsNullOrEmpty(decision) ? "prompted" : decision;
+            obj["updatedAt"] = NowEpochMs();
+
+            string[] dirs = new string[] { pluginDir, installDir };
+            for (int i = 0; i < dirs.Length; i++)
+            {
+                if (string.IsNullOrEmpty(dirs[i])) continue;
+                try
+                {
+                    Directory.CreateDirectory(dirs[i]);
+                    AtomicWriteJson(Path.Combine(dirs[i], ".relaunch-prompt-state.json"), obj);
+                }
+                catch { }
+            }
+        }
+
+        public static bool PromptUserForCdpRelaunch()
+        {
+            string mockDec = Environment.GetEnvironmentVariable("AG_PRISM_MOCK_RELAUNCH_DECISION");
+            if (!string.IsNullOrEmpty(mockDec))
+            {
+                return string.Equals(mockDec.Trim(), "yes", StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(mockDec.Trim(), "1", StringComparison.OrdinalIgnoreCase);
+            }
+            string text =
+                "检测到 Antigravity 已升级或无参启动，尚未开启本地光学桥接端口（--remote-debugging-port=0）。\r\n" +
+                "快捷方式参数已自动维护完毕。\r\n\r\n" +
+                "是否立即重新打开 Antigravity 以恢复 Obsidian Prism（黑曜棱镜）界面？";
+            int ans = MessageBoxW(IntPtr.Zero, text, "Obsidian Prism · 恢复界面连接", MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND);
+            return ans == IDYES;
+        }
+
+        public static bool RelaunchAntigravityWithCdp(
+            BareHostProcessInfo host,
+            int waitExitMs = 15000,
+            Action<string> log = null
+        )
+        {
+            if (host == null || host.Pid <= 0 || string.IsNullOrEmpty(host.ExePath) || !File.Exists(host.ExePath))
+            {
+                return false;
+            }
+            try
+            {
+                Process target = null;
+                try
+                {
+                    target = Process.GetProcessById(host.Pid);
+                    if (!target.HasExited)
+                    {
+                        try { target.CloseMainWindow(); } catch { }
+                        int softWait = Math.Min(8000, Math.Max(1000, waitExitMs));
+                        if (!target.WaitForExit(softWait) && !target.HasExited)
+                        {
+                            try { target.Kill(); } catch { }
+                            target.WaitForExit(4000);
+                        }
+                    }
+                }
+                catch { }
+                finally
+                {
+                    if (target != null) { try { target.Dispose(); } catch { } }
+                }
+
+                // Wait until single-instance lock holder is fully gone before spawning --remote-debugging-port=0
+                int waited = 0;
+                while (waited < 5000)
+                {
+                    BareHostProcessInfo lingering = FindBareAntigravityMainProcess();
+                    if (lingering == null || lingering.Pid != host.Pid) break;
+                    Thread.Sleep(150);
+                    waited += 150;
+                }
+                Thread.Sleep(250);
+
+                string launchArgs = Environment.GetEnvironmentVariable("AG_PRISM_MOCK_RELAUNCH_ARGS");
+                if (string.IsNullOrEmpty(launchArgs)) launchArgs = CdpOptInFlag;
+                ProcessStartInfo psi = new ProcessStartInfo();
+                psi.FileName = host.ExePath;
+                psi.Arguments = launchArgs;
+                psi.WorkingDirectory = Path.GetDirectoryName(host.ExePath);
+                psi.UseShellExecute = false;
+                Process spawned = Process.Start(psi);
+                if (spawned != null)
+                {
+                    if (log != null) log("已带 " + CdpOptInFlag + " 重新打开 Antigravity (PID " + spawned.Id + ")");
+                    return true;
+                }
+            }
+            catch { }
+            return false;
         }
 
         public static string ComputeHash(string str)

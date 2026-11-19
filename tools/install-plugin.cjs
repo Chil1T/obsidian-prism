@@ -17,7 +17,21 @@ const path = require("node:path");
 const { spawnBreakawayNodeProcess, isPidAlive } = require("./patch-asar.cjs");
 
 const ROOT_DIR = path.resolve(__dirname, "..");
-const { SYNC_ROOT_FILES, readPidFromLockFile, isExpectedDaemonProcess } = require(path.join(ROOT_DIR, "cdp.js"));
+const {
+  SYNC_ROOT_FILES,
+  readPidFromLockFile,
+  isExpectedDaemonProcess,
+  ensureAntigravityShortcutsCdpFlag,
+  restoreAntigravityShortcutsCdpFlag,
+  detectRunningAntigravityHostSync,
+  recordRelaunchPromptState,
+} = require(path.join(ROOT_DIR, "cdp.js"));
+
+function isAutomatedTestRuntime() {
+  if (process.env.NODE_ENV === "test") return true;
+  if (process.env.NODE_TEST_CONTEXT) return true;
+  return Array.isArray(process.execArgv) && process.execArgv.some((a) => a === "--test" || a.startsWith("--test-"));
+}
 
 function getDefaultPluginTargetDir() {
   return path.join(os.homedir(), ".gemini", "config", "plugins", "obsidian-prism");
@@ -290,6 +304,49 @@ async function installPlugin(opts = {}) {
   const hostConfigDir = resolveHostGeminiConfigDir(opts.targetDir ? targetDir : null, opts.hostConfigDir || null);
   syncHostPluginRegistry(hostConfigDir, true);
 
+  const isDefaultTarget = path.resolve(targetDir).toLowerCase() === path.resolve(getDefaultPluginTargetDir()).toLowerCase();
+  const hasExplicitShortcutScope = Boolean(opts.shortcutSearchDirs || opts.shortcutAdapter);
+  const shouldSyncShortcuts =
+    opts.syncShortcuts !== undefined
+      ? Boolean(opts.syncShortcuts)
+      : hasExplicitShortcutScope || (isDefaultTarget && !isAutomatedTestRuntime());
+
+  let shortcuts = { supported: false, patched: [], alreadySet: [], skipped: [] };
+  if (shouldSyncShortcuts) {
+    shortcuts = ensureAntigravityShortcutsCdpFlag({
+      pluginDir: targetDir,
+      searchDirs: opts.shortcutSearchDirs || null,
+      shortcutAdapter: opts.shortcutAdapter,
+      platformOverride: opts.platformOverride,
+    });
+  }
+
+  // 默认开启 --defer-relaunch-prompt：若当前本机宿主已裸启运行，预先记入 .relaunch-prompt-state.json 避免弹窗打断正在进行的会话
+  const deferRelaunchPrompt = opts.deferRelaunchPrompt !== false;
+  let deferredRelaunchHost = null;
+  if (deferRelaunchPrompt && !cdpPort && (typeof opts.hostProbe === "function" || (isDefaultTarget && !isAutomatedTestRuntime()))) {
+    try {
+      const targetCdpEarly = require(path.join(targetDir, "cdp.js"));
+      const activePortNow = targetCdpEarly.readPort();
+      if (!activePortNow) {
+        const runningHost = detectRunningAntigravityHostSync({ probeProcesses: opts.hostProbe });
+        if (runningHost && runningHost.pid && !runningHost.hasDebugPortSwitch) {
+          recordRelaunchPromptState(
+            targetDir,
+            runningHost.pid,
+            runningHost.startMs || 0,
+            "deferred",
+            opts.stateExtraDirs || []
+          );
+          deferredRelaunchHost = {
+            pid: runningHost.pid,
+            startMs: runningHost.startMs || 0,
+          };
+        }
+      }
+    } catch {}
+  }
+
   let daemonInfo = { started: false, pid: null, method: null, pidVerified: false };
   let liveCheck = { cdpPort: null, attachedPages: [] };
 
@@ -348,6 +405,8 @@ async function installPlugin(opts = {}) {
     copiedFiles,
     missingOptional,
     preservedConfig,
+    shortcuts,
+    deferredRelaunchHost,
     daemon: daemonInfo,
     live: liveCheck,
   };
@@ -386,6 +445,23 @@ async function uninstallPlugin(opts = {}) {
     } catch {}
   }
 
+  const isDefaultTarget = path.resolve(targetDir).toLowerCase() === path.resolve(getDefaultPluginTargetDir()).toLowerCase();
+  const hasExplicitShortcutScope = Boolean(opts.shortcutSearchDirs || opts.shortcutAdapter);
+  const shouldSyncShortcuts =
+    opts.syncShortcuts !== undefined
+      ? Boolean(opts.syncShortcuts)
+      : hasExplicitShortcutScope || (isDefaultTarget && !isAutomatedTestRuntime());
+
+  let shortcuts = { supported: false, restored: [], skipped: [] };
+  if (shouldSyncShortcuts) {
+    shortcuts = restoreAntigravityShortcutsCdpFlag({
+      pluginDir: targetDir,
+      searchDirs: opts.shortcutSearchDirs || null,
+      shortcutAdapter: opts.shortcutAdapter,
+      platformOverride: opts.platformOverride,
+    });
+  }
+
   const hostConfigDir = resolveHostGeminiConfigDir(opts.targetDir ? targetDir : null, opts.hostConfigDir || null);
   syncHostPluginRegistry(hostConfigDir, false);
 
@@ -398,6 +474,7 @@ async function uninstallPlugin(opts = {}) {
     targetDir,
     stoppedPid,
     removedDomPages,
+    shortcuts,
   };
 }
 
@@ -435,6 +512,8 @@ function parseCliArgs(argv) {
   let noDaemon = false;
   let noCdp = false;
   let cdpPort = null;
+  let deferRelaunchPrompt = true;
+  let noShortcuts = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--install") action = "install";
@@ -442,10 +521,13 @@ function parseCliArgs(argv) {
     else if (a === "--status") action = "status";
     else if (a === "--no-daemon") noDaemon = true;
     else if (a === "--no-cdp") noCdp = true;
+    else if (a === "--defer-relaunch-prompt" || a === "--no-relaunch-prompt") deferRelaunchPrompt = true;
+    else if (a === "--prompt-relaunch") deferRelaunchPrompt = false;
+    else if (a === "--no-shortcuts") noShortcuts = true;
     else if (a === "--target" && args[i + 1]) targetDir = args[++i];
     else if (a === "--cdp-port" && args[i + 1]) cdpPort = parseInt(args[++i], 10);
   }
-  return { action, targetDir, noDaemon, noCdp, cdpPort };
+  return { action, targetDir, noDaemon, noCdp, cdpPort, deferRelaunchPrompt, noShortcuts };
 }
 
 if (require.main === module) {
@@ -456,7 +538,12 @@ if (require.main === module) {
       return;
     }
     if (cli.action === "uninstall") {
-      const res = await uninstallPlugin({ targetDir: cli.targetDir, noCdp: cli.noCdp, cdpPort: cli.cdpPort });
+      const res = await uninstallPlugin({
+        targetDir: cli.targetDir,
+        noCdp: cli.noCdp,
+        cdpPort: cli.cdpPort,
+        syncShortcuts: cli.noShortcuts ? false : undefined,
+      });
       console.log(JSON.stringify(res, null, 2));
       return;
     }
@@ -464,6 +551,8 @@ if (require.main === module) {
       targetDir: cli.targetDir,
       startDaemon: !cli.noDaemon,
       cdpPort: cli.cdpPort,
+      deferRelaunchPrompt: cli.deferRelaunchPrompt,
+      syncShortcuts: cli.noShortcuts ? false : undefined,
     });
     console.log(JSON.stringify(res, null, 2));
   })().catch((err) => {

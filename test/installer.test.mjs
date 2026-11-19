@@ -6,7 +6,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
@@ -848,6 +848,169 @@ test(
         }
       } catch {}
       await mockCdp.close();
+      try {
+        fs.rmSync(workDir, { recursive: true, force: true });
+      } catch {}
+    }
+  }
+);
+
+test(
+  'installer.exe v2.33.0+ compatibility: patches Antigravity.lnk with --remote-debugging-port=0 (ignoring Antigravity Tools.lnk), writes shared .relaunch-prompt-state.json once, and restores original .lnk args on uninstall',
+  { skip: process.platform !== 'win32' ? 'Windows-only .lnk & relaunch-state E2E test' : false },
+  async () => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-v233-'));
+    const installerExe = path.join(workDir, 'installer.exe');
+    const installDir = path.join(workDir, 'installed');
+    const nativePluginDir = path.join(workDir, 'plugins', 'obsidian-prism');
+    const shortcutDir = path.join(workDir, 'shortcuts');
+    const fakeBinDir = path.join(workDir, 'fake-bin');
+    const fakeAppData = path.join(workDir, 'appdata');
+    const outInstall = path.join(workDir, 'install.json');
+    const outUninstall = path.join(workDir, 'uninstall.json');
+
+    fs.mkdirSync(shortcutDir, { recursive: true });
+    fs.mkdirSync(fakeBinDir, { recursive: true });
+    fs.mkdirSync(fakeAppData, { recursive: true });
+
+    const fakeAgExe = path.join(fakeBinDir, 'Antigravity.exe');
+    const fakeToolsExe = path.join(fakeBinDir, 'antigravity-tools.exe');
+    fs.writeFileSync(fakeAgExe, 'stub', 'utf8');
+    fs.writeFileSync(fakeToolsExe, 'stub', 'utf8');
+
+    const agLnk = path.join(shortcutDir, 'Antigravity.lnk');
+    const toolsLnk = path.join(shortcutDir, 'Antigravity Tools.lnk');
+
+    const createLnkPs = [
+      '$sh = New-Object -ComObject WScript.Shell;',
+      '$s1 = $sh.CreateShortcut($env:TEST_AG_LNK);',
+      '$s1.TargetPath = $env:TEST_AG_EXE;',
+      '$s1.Arguments = "--reuse-window";',
+      '$s1.Save();',
+      '$s2 = $sh.CreateShortcut($env:TEST_TOOLS_LNK);',
+      '$s2.TargetPath = $env:TEST_TOOLS_EXE;',
+      '$s2.Arguments = "--helper";',
+      '$s2.Save();',
+    ].join(' ');
+    execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', createLnkPs], {
+      env: {
+        ...process.env,
+        TEST_AG_LNK: agLnk,
+        TEST_AG_EXE: fakeAgExe,
+        TEST_TOOLS_LNK: toolsLnk,
+        TEST_TOOLS_EXE: fakeToolsExe,
+      },
+    });
+
+    const readLnkArgs = (lnkFile) =>
+      execFileSync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          '$sh = New-Object -ComObject WScript.Shell; Write-Output ($sh.CreateShortcut($env:TEST_LNK).Arguments)',
+        ],
+        {
+          encoding: 'utf8',
+          env: { ...process.env, TEST_LNK: lnkFile },
+        }
+      ).trim();
+
+    const dummyBareHost = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+
+    try {
+      buildInstaller({ outputPath: installerExe });
+
+      const testEnv = {
+        ...process.env,
+        APPDATA: fakeAppData,
+        AG_PRISM_SHORTCUT_DIRS: shortcutDir,
+        AG_PRISM_MOCK_BARE_HOST_PID: String(dummyBareHost.pid),
+        AG_PRISM_MOCK_BARE_HOST_UPTIME_MS: '12000',
+        AG_PRISM_MOCK_RELAUNCH_DECISION: 'no',
+      };
+      delete testEnv.NODE_ENV;
+      delete testEnv.PRISM_NO_RELAUNCH_PROMPT;
+      delete testEnv.AG_PRISM_NO_RELAUNCH_PROMPT;
+
+      await runExe(
+        installerExe,
+        [
+          '--silent',
+          '--no-autostart',
+          '--no-kill-legacy',
+          '--no-native-daemon',
+          '--install-dir',
+          installDir,
+          '--plugin-dir',
+          nativePluginDir,
+          '--out',
+          outInstall,
+        ],
+        20000,
+        testEnv
+      );
+
+      const installRes = JSON.parse(fs.readFileSync(outInstall, 'utf8'));
+      assert.equal(installRes.ok, true);
+      assert.equal(installRes.patchedShortcuts, 1);
+      assert.equal(installRes.bareHostDetected, true);
+      assert.equal(readLnkArgs(agLnk), '--reuse-window --remote-debugging-port=0');
+      assert.equal(readLnkArgs(toolsLnk), '--helper', 'must not touch Antigravity Tools.lnk');
+
+      const patchedRecord = JSON.parse(
+        fs.readFileSync(path.join(nativePluginDir, '.patched-shortcuts.json'), 'utf8')
+      );
+      assert.ok(Array.isArray(patchedRecord.patchedPaths) && patchedRecord.patchedPaths.length === 1);
+
+      // Verify background Watcher writes shared .relaunch-prompt-state.json deduplication lock once
+      const promptStatePath = path.join(nativePluginDir, '.relaunch-prompt-state.json');
+      const stateObj = await waitFor(() => {
+        if (!fs.existsSync(promptStatePath)) return null;
+        const parsed = JSON.parse(fs.readFileSync(promptStatePath, 'utf8'));
+        return parsed.hostPid === dummyBareHost.pid && parsed.decision === 'no' ? parsed : null;
+      }, 8000, 150);
+      assert.equal(stateObj.hostPid, dummyBareHost.pid);
+      assert.ok(String(stateObj.hostKey).startsWith(`${dummyBareHost.pid}:`));
+
+      // Uninstall must cleanly strip --remote-debugging-port=0 while preserving original --reuse-window
+      await runExe(
+        installerExe,
+        [
+          '--uninstall',
+          '--silent',
+          '--no-autostart',
+          '--install-dir',
+          installDir,
+          '--plugin-dir',
+          nativePluginDir,
+          '--out',
+          outUninstall,
+        ],
+        20000,
+        testEnv
+      );
+
+      const unRes = JSON.parse(fs.readFileSync(outUninstall, 'utf8'));
+      assert.equal(unRes.ok, true);
+      assert.equal(unRes.restoredShortcuts, 1);
+      assert.equal(readLnkArgs(agLnk), '--reuse-window');
+      assert.equal(readLnkArgs(toolsLnk), '--helper');
+    } finally {
+      try {
+        dummyBareHost.kill();
+      } catch {}
+      try {
+        const wPidFile = path.join(installDir, '.watch.pid');
+        if (fs.existsSync(wPidFile)) {
+          const wPid = parseInt(fs.readFileSync(wPidFile, 'utf8'), 10);
+          if (wPid) process.kill(wPid);
+        }
+      } catch {}
       try {
         fs.rmSync(workDir, { recursive: true, force: true });
       } catch {}

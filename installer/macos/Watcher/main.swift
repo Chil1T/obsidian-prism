@@ -80,9 +80,10 @@ final class WatcherApp {
     private let lockFile: String
     private let isWatch: Bool
     private let noNativeDaemon: Bool
+    private let noRelaunchPrompt: Bool
     private let logLock = NSLock()
 
-    init(baseDir: String, pluginDir: String, isWatch: Bool, noNativeDaemon: Bool = false) {
+    init(baseDir: String, pluginDir: String, isWatch: Bool, noNativeDaemon: Bool = false, noRelaunchPrompt: Bool = false) {
         self.baseDir = baseDir
         self.pluginDir = pluginDir
         self.logFile = (baseDir as NSString).appendingPathComponent("watch.log")
@@ -90,6 +91,7 @@ final class WatcherApp {
         self.lockFile = (baseDir as NSString).appendingPathComponent(".watch.lock")
         self.isWatch = isWatch
         self.noNativeDaemon = noNativeDaemon || (ProcessInfo.processInfo.environment["AG_PRISM_NO_NATIVE_DAEMON"] == "1")
+        self.noRelaunchPrompt = noRelaunchPrompt
     }
 
     func log(_ line: String) {
@@ -630,6 +632,12 @@ final class WatcherApp {
             }
         }
 
+        let defaultMacInstallDir = URL(
+            fileURLWithPath: (FileManager.default.homeDirectoryForCurrentUser.path as NSString)
+                .appendingPathComponent("Library/Application Support/obsidian-prism")
+        ).standardizedFileURL.path
+        let isDefaultDir = (self.baseDir == defaultMacInstallDir)
+
         var lastPort: Int?
         var yieldingToDaemon = false
         var lastDaemonSpawnAttempt = Date.distantPast
@@ -676,7 +684,40 @@ final class WatcherApp {
                 performReload(nil)
             }
 
-            if let port = CdpHelper.readPort(overridePort: overridePort),
+            let activePort = CdpHelper.readPort(overridePort: overridePort)
+            if activePort == nil && overridePort == nil {
+                let env = ProcessInfo.processInfo.environment
+                let mockDec = env["AG_PRISM_MOCK_RELAUNCH_DECISION"] ?? ""
+                var allowPrompt = !self.noRelaunchPrompt &&
+                    env["PRISM_NO_RELAUNCH_PROMPT"] != "1" &&
+                    env["AG_PRISM_NO_RELAUNCH_PROMPT"] != "1" &&
+                    (env["NODE_ENV"] ?? "").caseInsensitiveCompare("test") != .orderedSame &&
+                    (isDefaultDir || !mockDec.isEmpty)
+                if allowPrompt {
+                    stateLock.lock()
+                    let mSnap = manifest
+                    stateLock.unlock()
+                    let curCfg = CdpHelper.readConfig(baseDir: self.baseDir, manifest: mSnap)
+                    if let autoVal = curCfg["autoPromptCdpRelaunch"] {
+                        if autoVal.boolValue == false { allowPrompt = false }
+                        else if let s = autoVal.stringValue?.lowercased(), (s == "off" || s == "false") { allowPrompt = false }
+                    }
+                }
+                if allowPrompt,
+                   let bare = CdpHelper.findBareAntigravityMainProcess(),
+                   bare.uptimeMs >= 8000,
+                   !CdpHelper.hasPromptedForHost(pid: bare.pid, startTimeMs: bare.startTimeMs, installDir: self.baseDir, pluginDir: self.pluginDir) {
+                    CdpHelper.recordPromptedForHost(pid: bare.pid, startTimeMs: bare.startTimeMs, decision: "prompted", installDir: self.baseDir, pluginDir: self.pluginDir)
+                    let confirmed = CdpHelper.promptUserForCdpRelaunch()
+                    CdpHelper.recordPromptedForHost(pid: bare.pid, startTimeMs: bare.startTimeMs, decision: confirmed ? "yes" : "no", installDir: self.baseDir, pluginDir: self.pluginDir)
+                    if confirmed {
+                        log("[*] 用户确认带 --remote-debugging-port=0 重新打开 Antigravity (旧 PID \(bare.pid))")
+                        _ = CdpHelper.relaunchAntigravityWithCdp(host: bare, waitExitMs: 15000) { m in self.log("[+] \(m)") }
+                    }
+                }
+            }
+
+            if let port = activePort,
                let pages = try? CdpHelper.listPages(port: port) {
                 if lastPort != port {
                     stateLock.lock()
@@ -735,6 +776,7 @@ func runWatcherMain() -> Int32 {
     var overridePort: Int?
     var outFile: String?
     var noNativeDaemon = false
+    var noRelaunchPrompt = false
 
     let args = CommandLine.arguments
     var i = 1
@@ -744,6 +786,7 @@ func runWatcherMain() -> Int32 {
         else if a == "--once" { mode = "once" }
         else if a == "--remove" { mode = "remove" }
         else if a == "--no-native-daemon" { noNativeDaemon = true }
+        else if a == "--no-relaunch-prompt" { noRelaunchPrompt = true }
         else if a == "--dir" && i + 1 < args.count { i += 1; customDir = args[i] }
         else if a == "--plugin-dir" && i + 1 < args.count { i += 1; customPluginDir = args[i] }
         else if a == "--cdp-port" && i + 1 < args.count {
@@ -777,7 +820,7 @@ func runWatcherMain() -> Int32 {
         pluginDir = (parentDir as NSString).appendingPathComponent("\(baseName)-native-plugin")
     }
 
-    let app = WatcherApp(baseDir: baseDir, pluginDir: pluginDir, isWatch: mode == "watch", noNativeDaemon: noNativeDaemon)
+    let app = WatcherApp(baseDir: baseDir, pluginDir: pluginDir, isWatch: mode == "watch", noNativeDaemon: noNativeDaemon, noRelaunchPrompt: noRelaunchPrompt)
 
     if mode == "once" {
         return app.runOnce(overridePort: overridePort, outFile: outFile)

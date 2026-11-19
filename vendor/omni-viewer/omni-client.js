@@ -126,13 +126,7 @@
   const AUX_FILE_VIEW_SELECTOR = [
     '[data-testid="binary-file-no-preview"]',
     '[data-testid="artifact-pdf-no-preview"]',
-    '[data-testid="csv-file-viewer"]',
-    '[data-testid="image-file-viewer"]',
-    '[data-testid="html-file-preview"]',
-    '[data-testid="artifact-pdf-view"]',
-    '.file-viewer-root',
-    '[data-testid="file-view"]',
-    '[data-testid="aux-file-view"]',
+    '[data-omni-aux-error]',
     '[data-omni-aux-file]',
   ].join(', ');
 
@@ -544,12 +538,15 @@
       }
     }
 
-    // 3. Anchor with http(s) or file scheme href
+    // 3. Anchor with file scheme href, or http(s) anchor inside Prism's own `.ag-prism-thought-overlay`
     const anchor = findClosest(el, 'a[href]');
     if (anchor) {
       const href = String(anchor.getAttribute('href') || '').trim();
       if (isHttpUrl(href)) {
-        return { kind: 'url', url: href, text: (anchor.textContent || '').trim(), element: anchor };
+        if (findClosest(anchor, '.ag-prism-thought-overlay')) {
+          return { kind: 'url', url: href, text: (anchor.textContent || '').trim(), element: anchor };
+        }
+        return null;
       }
       if (/^(?:file|vscode-file|antigravity-ide):/i.test(href)) {
         const parsed = parseFileUriToPath(href);
@@ -1025,6 +1022,7 @@
                 reduxStore.dispatch({
                   type: preSt.sidePanelV2 ? 'sidePanelV2/setContent' : 'sidePanel/setContent',
                   payload: {
+                    panelScope: treeId,
                     treeId,
                     tabId: stillOpen.id,
                     keepOpen: true,
@@ -1095,6 +1093,7 @@
                     reduxStore.dispatch({
                       type: hasV2 ? 'sidePanelV2/setContent' : 'sidePanel/setContent',
                       payload: {
+                        panelScope: treeId,
                         treeId,
                         tabId: matchedTab.id,
                         keepOpen: true,
@@ -1178,6 +1177,7 @@
             reduxStore.dispatch({
               type: 'sidePanelV2/setContent',
               payload: {
+                panelScope: treeId,
                 treeId,
                 tabId,
                 keepOpen: true,
@@ -1190,7 +1190,7 @@
             });
             reduxStore.dispatch({
               type: 'sidePanelV2/setActiveTab',
-              payload: { treeId, tabId },
+              payload: { panelScope: treeId, treeId, tabId },
             });
           } else {
             reduxStore.dispatch({
@@ -1873,12 +1873,12 @@
         }
       }
 
-      // 2. Intercept http(s) anchor left-click (skip `<a download>` & native file pills)
+      // 2. Yield host-native http(s) anchors to Antigravity's built-in link router; handle `.ag-prism-thought-overlay` anchors
       const anchor = findClosest(el, 'a[href]');
       if (anchor) {
         if (anchor.hasAttribute('download') || anchor.getAttribute('data-testid') === 'entity-pill') return;
         const href = String(anchor.getAttribute('href') || '').trim();
-        if (!isHttpUrl(href)) return;
+        if (!isHttpUrl(href) || !findClosest(anchor, '.ag-prism-thought-overlay')) return;
         ev.preventDefault();
         ev.stopPropagation();
         void openUrl(href, resolveEffectiveLinkMode(ev));
@@ -1916,6 +1916,15 @@
       if (findClosest(el, '[data-testid="agent-input-box"] [contenteditable="true"]')) {
         closeContextMenu();
         return;
+      }
+
+      const nativeAnchor = findClosest(el, 'a[href]');
+      if (nativeAnchor && !findClosest(nativeAnchor, '.ag-prism-thought-overlay')) {
+        const nativeHref = String(nativeAnchor.getAttribute('href') || '').trim();
+        if (isHttpUrl(nativeHref)) {
+          closeContextMenu();
+          return;
+        }
       }
 
       let selectedText = '';
@@ -2258,7 +2267,6 @@
 
     function resolveAuxMountHost(viewEl) {
       const tid = String(viewEl.getAttribute?.('data-testid') || '');
-      const tag = String(viewEl.tagName || '').toUpperCase();
       const isSelfShell =
         Boolean(viewEl.classList?.contains?.('relative') && viewEl.classList?.contains?.('h-full')) &&
         isValidAuxShell(viewEl);
@@ -2267,12 +2275,8 @@
       const isChildLeaf =
         tid === 'binary-file-no-preview' ||
         tid === 'artifact-pdf-no-preview' ||
-        tid === 'image-file-viewer' ||
-        tid === 'html-file-preview' ||
-        tag === 'VIDEO' ||
-        tag === 'AUDIO' ||
         viewEl.hasAttribute?.('data-omni-aux-error') ||
-        Boolean(viewEl.classList?.contains?.('file-viewer-root')) ||
+        viewEl.hasAttribute?.('data-omni-aux-file') ||
         HOST_AUX_ERROR_RE.test(viewEl.textContent || '');
 
       if (isChildLeaf && viewEl.parentElement) {
@@ -2310,6 +2314,28 @@
       mountedAuxSwitches.delete(rec);
     }
 
+    function hasHostUnsupportedState(viewEl, hostEl) {
+      const root = hostEl || viewEl;
+      if (!root) return false;
+      const tid = String(viewEl?.getAttribute?.('data-testid') || '');
+      if (
+        viewEl?.isConnected &&
+        (tid === 'binary-file-no-preview' ||
+          tid === 'artifact-pdf-no-preview' ||
+          viewEl.hasAttribute?.('data-omni-aux-error') ||
+          viewEl.hasAttribute?.('data-omni-aux-file'))
+      ) {
+        return true;
+      }
+      if (root.querySelector?.(AUX_FILE_VIEW_SELECTOR)) return true;
+      for (const ch of Array.from(root.children || [])) {
+        if (ch.hasAttribute?.('data-ag-prism-omni-owned')) continue;
+        const txt = String(ch.textContent || '');
+        if (txt.length > 0 && txt.length < 4096 && HOST_AUX_ERROR_RE.test(txt)) return true;
+      }
+      return false;
+    }
+
     function reconcileMountedAuxSwitches() {
       if (!mountedAuxSwitches.size) return;
       for (const rec of Array.from(mountedAuxSwitches)) {
@@ -2322,7 +2348,7 @@
         const curPath = parseFileUriToPath(curRaw).filePath;
         if (curPath && curPath !== rec.filePath) {
           const nextExt = getFileExt(curPath);
-          if (nextExt && AUX_SWITCHABLE_EXTS.has(nextExt)) {
+          if (nextExt && AUX_SWITCHABLE_EXTS.has(nextExt) && hasHostUnsupportedState(rec.viewEl, rec.hostEl)) {
             rec.filePath = curPath;
             if (rec.activeMode === 'workbench' && rec.iframe && serverMeta?.baseUrl && serverMeta?.token) {
               const nextSrc = buildViewerUrl(serverMeta, { filePath: curPath, kind: detectPreviewKind(curPath) });
@@ -2339,17 +2365,7 @@
     }
 
     function shouldAutoActivateWorkbench(viewEl, hostEl) {
-      const tid = String(viewEl?.getAttribute?.('data-testid') || '');
-      if (
-        tid === 'binary-file-no-preview' ||
-        tid === 'artifact-pdf-no-preview' ||
-        viewEl?.hasAttribute?.('data-omni-aux-error')
-      ) {
-        return true;
-      }
-      if (viewEl?.classList?.contains?.('file-viewer-root')) return false;
-      const txt = String((hostEl || viewEl)?.textContent || '');
-      return txt.length > 0 && txt.length < 4096 && HOST_AUX_ERROR_RE.test(txt);
+      return hasHostUnsupportedState(viewEl, hostEl);
     }
 
     function collectAuxCandidateViews(scopeEl) {
@@ -2369,7 +2385,7 @@
         pushUnique(el);
       }
 
-      // Detect host File Pane `UHc` (>20MB / read-error) & native <video>/<audio> views lacking data-testid
+      // Detect host File Pane `UHc` (>20MB / >200MB / read-error) views lacking data-testid
       const shellPool = new Set();
       if (scopeEl !== D.body && scopeEl !== D.documentElement) {
         const ancShell = findClosest(scopeEl, '.relative.h-full.w-full');
@@ -2378,21 +2394,12 @@
       for (const sh of scopeEl.querySelectorAll('.relative.h-full.w-full')) {
         if (isValidAuxShell(sh)) shellPool.add(sh);
       }
-      for (const mediaOrErr of scopeEl.querySelectorAll('video, audio, [data-omni-aux-error]')) {
-        if (findClosest(mediaOrErr, '[data-testid="conversation-view"], aside, .agy-home, .ag-omni-aux-bar')) {
-          continue;
-        }
-        const sh = findClosest(mediaOrErr, '.relative.h-full.w-full');
-        if (isValidAuxShell(sh)) shellPool.add(sh);
-        else pushUnique(mediaOrErr);
-      }
 
       for (const sh of shellPool) {
         if (sh.querySelector?.(AUX_FILE_VIEW_SELECTOR)) continue;
-        const hasMedia = Boolean(sh.querySelector?.('video, audio, [data-omni-aux-error]'));
         const txt = String(sh.textContent || '');
         const hasHostError = txt.length > 0 && txt.length < 4096 && HOST_AUX_ERROR_RE.test(txt);
-        if (hasMedia || hasHostError) pushUnique(sh);
+        if (hasHostError) pushUnique(sh);
       }
       return candidates;
     }
