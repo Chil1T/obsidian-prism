@@ -2086,7 +2086,18 @@ test('live-host-adapter normalizes Win32/WSL paths, matches real File ID, enforc
     });
 
     assert.equal(adapter.isPathSharedWithCode(codeDir), true);
-    assert.equal(adapter.isPathSharedWithCode(codeDir.toUpperCase()), process.platform === 'win32');
+    const upperCodeDir = codeDir.toUpperCase();
+    let isCaseInsensitiveFs = process.platform === 'win32';
+    if (!isCaseInsensitiveFs) {
+      try {
+        const stOrig = fs.statSync(codeDir);
+        const stUpper = fs.statSync(upperCodeDir);
+        isCaseInsensitiveFs = stOrig.dev === stUpper.dev && stOrig.ino === stUpper.ino;
+      } catch {
+        isCaseInsensitiveFs = false;
+      }
+    }
+    assert.equal(adapter.isPathSharedWithCode(upperCodeDir), isCaseInsensitiveFs);
     assert.equal(adapter.isPathSharedWithCode(sparkOnlyDir), false);
 
     // Win32 盘符路径同步后，等价的 WSL /mnt/<drive>/... 路径也必须判定为共享目录

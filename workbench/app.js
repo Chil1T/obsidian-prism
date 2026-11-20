@@ -350,10 +350,14 @@
       brandMark.innerHTML = renderSparkOrbitMark({ size: 14, tier: 'auto', monochrome: true });
     }
     document.querySelectorAll('[data-wb-icon]').forEach((slot) => {
-      const iconName = slot.getAttribute('data-wb-icon');
-      if (!iconName) return;
-      const size = iconName === 'sliders-tune' ? 14 : 13;
-      slot.innerHTML = renderAnimIcon(iconName, { size });
+      const rawIcon = slot.getAttribute('data-wb-icon');
+      let safeIcon = '';
+      if (rawIcon === 'layers-stack') safeIcon = 'layers-stack';
+      else if (rawIcon === 'sun-moon') safeIcon = 'sun-moon';
+      else if (rawIcon === 'sliders-tune') safeIcon = 'sliders-tune';
+      if (!safeIcon) return;
+      const size = safeIcon === 'sliders-tune' ? 14 : 13;
+      slot.innerHTML = renderAnimIcon(safeIcon, { size });
     });
   }
 
@@ -3844,7 +3848,8 @@
 
       const paletteBtn = evt.target.closest('[data-wb-palette]');
       if (paletteBtn) {
-        state.tokens.palette = paletteBtn.getAttribute('data-wb-palette');
+        const rawPalette = paletteBtn.getAttribute('data-wb-palette');
+        state.tokens.palette = rawPalette === 'warm' ? 'warm' : rawPalette === 'titanium' ? 'titanium' : 'obsidian';
         if (state.tokens.palette === 'warm') state.tokens.lightPreset = 'alabaster';
         else if (state.tokens.palette === 'obsidian') state.tokens.lightPreset = 'crystal';
         applyTokenStylesToStages();
@@ -3869,7 +3874,7 @@
 
       const themeBtn = evt.target.closest('[data-wb-theme]');
       if (themeBtn && !themeBtn.disabled) {
-        state.tokens.theme = themeBtn.getAttribute('data-wb-theme');
+        state.tokens.theme = themeBtn.getAttribute('data-wb-theme') === 'light' ? 'light' : 'dark';
         withViewTransition(renderWorkbench);
         return;
       }

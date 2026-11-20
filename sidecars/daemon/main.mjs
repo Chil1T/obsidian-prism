@@ -2277,6 +2277,7 @@ export class PrismDaemon {
       if (!parsed || typeof parsed !== 'object' || !Number.isSafeInteger(parsed.id) || parsed.id < 1) return;
       if (parsed.action !== 'import-spark-file' && payloadBytes > 128 * 1024) return;
       const { id, input: _transportCopy, ...request } = parsed;
+      const safeId = serializeJsonForEval(Math.trunc(Number(id)));
       const unavailable = { ok: false, error: {
         code: 'CAPABILITY_UNAVAILABLE', message: 'Sidebar Studio service unavailable', retryable: true,
       } };
@@ -2294,7 +2295,7 @@ export class PrismDaemon {
       }
       if (isCurrentHost()) {
         const jsonRes = serializeJsonForEval(result);
-        const resolveExpr = `(() => { const r = ${jsonRes}; const b = window.__agPrismSidebarBridge; if (b && typeof b.resolve === 'function') b.resolve(${id}, r); if (typeof window.__agPrismSidebarResolve === 'function' && (!b || window.__agPrismSidebarResolve !== b.resolve)) window.__agPrismSidebarResolve(${id}, r); })()`;
+        const resolveExpr = `(() => { const r = ${jsonRes}; const b = window.__agPrismSidebarBridge; if (b && typeof b.resolve === 'function') b.resolve(${safeId}, r); if (typeof window.__agPrismSidebarResolve === 'function' && (!b || window.__agPrismSidebarResolve !== b.resolve)) window.__agPrismSidebarResolve(${safeId}, r); })()`;
         const evalParams = { expression: resolveExpr, returnByValue: true };
         if (executionContextId) evalParams.contextId = executionContextId;
         await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});

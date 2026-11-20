@@ -53,6 +53,19 @@ export function getDefaultArchiveDir(homeDir = os.homedir()) {
   return path.join(getDefaultAntigravityDir(homeDir), 'conversations_archive');
 }
 
+function isDarwinSystemRootSymlink(curPath) {
+  if (process.platform !== 'darwin') return false;
+  if (curPath !== '/var' && curPath !== '/tmp') return false;
+  try {
+    const linkTarget = fs.readlinkSync(curPath);
+    if (curPath === '/var') return linkTarget === 'private/var' || linkTarget === '/private/var';
+    if (curPath === '/tmp') return linkTarget === 'private/tmp' || linkTarget === '/private/tmp';
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 function assertPathChainNoSymlinks(targetPath, label = 'path') {
   const resolved = path.resolve(targetPath);
   const parsed = path.parse(resolved);
@@ -65,6 +78,10 @@ function assertPathChainNoSymlinks(targetPath, label = 'path') {
     try {
       const st = fs.lstatSync(cur);
       if (st.isSymbolicLink()) {
+        if (isDarwinSystemRootSymlink(cur)) {
+          lastStat = fs.statSync(cur);
+          continue;
+        }
         throw new Error(`Refusing symbolic link in ${label} chain: ${cur}`);
       }
       lastStat = st;
