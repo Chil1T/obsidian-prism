@@ -6,10 +6,19 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { PrismDaemon, REPO_BINDING, METRICS_BINDING, THOUGHT_BINDING, OMNI_BINDING } from '../sidecars/daemon/main.mjs';
+import {
+  PrismDaemon,
+  REPO_BINDING,
+  METRICS_BINDING,
+  THOUGHT_BINDING,
+  OMNI_BINDING,
+  SIDEBAR_BINDING,
+  copyUpdatedRuntimeFromRepo,
+  isObsidianPrismDaemonCommandLine,
+} from '../sidecars/daemon/main.mjs';
 
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -236,14 +245,14 @@ function createLightweightDom() {
 test('Obsidian Prism brand compliance, GPL-3.0 LICENSE, NOTICE, CITATION.cff, THIRD_PARTY_NOTICES.md, plugin.json, and sidecar.json contract', () => {
   const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'));
   assert.equal(pkgJson.name, 'obsidian-prism');
-  assert.equal(pkgJson.version, '1.0.1');
+  assert.equal(pkgJson.version, '1.0.2');
   assert.equal(pkgJson.license, 'GPL-3.0-only');
 
   const pluginJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'plugin.json'), 'utf8'));
   assert.deepEqual(Object.keys(pluginJson).sort(), ['description', 'displayName', 'logo', 'name', 'version']);
   assert.equal(pluginJson.name, 'obsidian-prism');
   assert.equal(pluginJson.displayName, 'Obsidian Prism');
-  assert.equal(pluginJson.version, '1.0.1');
+  assert.equal(pluginJson.version, '1.0.2');
   assert.equal(pluginJson.logo, 'assets/logo.svg');
   assert.ok(fs.existsSync(path.join(ROOT_DIR, 'assets', 'logo.svg')));
 
@@ -335,6 +344,10 @@ test('i18n-locales.js covers all 5 languages (zh-CN, zh-TW, yue, en, ja) with Ob
     'optLightCrystal',
     'optLightAlabaster',
     'groupModules',
+    'grpBeta',
+    'subTabBeta',
+    'setSidebarStudioTitle',
+    'setSidebarStudioDesc',
     'setTelemetryTitle',
     'setTelemetryDesc',
     'setEffortSliderTitle',
@@ -357,6 +370,7 @@ test('i18n-locales.js covers all 5 languages (zh-CN, zh-TW, yue, en, ja) with Ob
     for (const k of requiredKeys) {
       assert.ok(typeof ui[k] === 'string' && ui[k].length > 0, `Missing ${k} for ${lang}`);
     }
+    assert.ok(/Beta/i.test(ui.setSidebarStudioTitle), `Chat module title must mark Beta for ${lang}`);
   }
   const zh = locales.getUiStrings('zh-CN');
   assert.equal(zh.sectionTitle, 'Obsidian Prism · 黑曜棱镜');
@@ -365,8 +379,9 @@ test('i18n-locales.js covers all 5 languages (zh-CN, zh-TW, yue, en, ja) with Ob
   assert.equal(zh.setLightPresetTitle, '浅色表面质感');
   assert.equal(zh.optLightCrystal, '白昼冷晶');
   assert.equal(zh.optLightAlabaster, '暖白画册');
-  assert.equal(zh.groupModules, '吸收集成模块（智能共存让位）');
-  assert.equal(zh.optAutoCoexist, '智能共存');
+  assert.equal(zh.groupModules, '实用功能模块');
+  assert.equal(zh.grpBeta, 'Beta 内容');
+  assert.equal(zh.optAutoCoexist, '智能兼容');
   assert.ok(zh.aboutDisclaimer.includes('Google LLC'));
 });
 
@@ -922,9 +937,9 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
                       ready: true,
                       hasPrism: true,
                       hasRepoBridge: true,
-                      prismAttr: '1.0.1',
+                      prismAttr: '1.0.2',
                       hasStyle: true,
-                      version: '1.0.1',
+                      version: '1.0.2',
                       status: 'ok',
                     },
                   },
@@ -1023,7 +1038,7 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
       },
     });
 
-    for (let i = 0; i < 40 && !lastRepoResolveExpr; i++) {
+    for (let i = 0; i < 150 && !lastRepoResolveExpr; i++) {
       await new Promise((r) => setTimeout(r, 60));
     }
     assert.ok(lastRepoResolveExpr, 'Expected __agPrismRepoBridge.resolve callback via CDP');
@@ -1100,7 +1115,7 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
     await installPluginTool.uninstallPlugin({ targetDir: targetPluginDir, noCdp: true }).catch(() => {});
     for (const s of sockets) s.destroy();
     await new Promise((r) => server.close(r));
-    fs.rmSync(workDir, { recursive: true, force: true });
+    fs.rmSync(workDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 80 });
   }
 });
 
@@ -1520,8 +1535,8 @@ test('PrismDaemon HS-1 & SEC-2: 68 rapid-fire setting updates, multi-window cros
     assert.equal(stB.vmWin.__agPrism.getState().cfg.palette, 'obsidian', 'Window B must sync with reloaded Window A');
     assert.equal(stB.vmWin.__agPrism.getState().cfg.accentTone, 'iris');
     assert.ok(
-      activeScripts.size <= 4,
-      `HS-1: Active NewDocument script handles across 2 windows must never leak (got ${activeScripts.size})`
+      activeScripts.size <= 6,
+      `HS-1: Active NewDocument script handles across 2 windows × 3 dynamic channels (main + Omni + Sidebar Studio) must never leak (got ${activeScripts.size})`
     );
 
     await daemon.stop(false);
@@ -1532,7 +1547,7 @@ test('PrismDaemon HS-1 & SEC-2: 68 rapid-fire setting updates, multi-window cros
     await installPluginTool.uninstallPlugin({ targetDir: targetPluginDir, noCdp: true }).catch(() => {});
     for (const s of sockets) s.destroy();
     await new Promise((r) => server.close(r));
-    fs.rmSync(workDir, { recursive: true, force: true });
+    fs.rmSync(workDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 80 });
   }
 });
 
@@ -1655,7 +1670,7 @@ test('PrismDaemon ignores wcvBrowser non-host loopback pages after skipped-non-h
           if (expr.includes('const serverMeta =')) omniEvalCount += 1;
           sendWs(socket, {
             id: msg.id,
-            result: { result: { type: 'object', value: { version: '1.0.1', status: 'skipped-non-host', state: null } } },
+            result: { result: { type: 'object', value: { version: '1.0.2', status: 'skipped-non-host', state: null } } },
           });
         } else {
           sendWs(socket, { id: msg.id, result: {} });
@@ -1729,6 +1744,410 @@ test('PrismDaemon ignores wcvBrowser non-host loopback pages after skipped-non-h
     if (daemon) await daemon.stop(false).catch(() => {});
     for (const s of sockets) s.destroy();
     await new Promise((r) => server.close(r));
-    fs.rmSync(workDir, { recursive: true, force: true });
+    fs.rmSync(workDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 80 });
+  }
+});
+
+test('PrismDaemon security hardening: fail-closed iframe/context revocation, disabled-state SIDEBAR_BINDING & payload caps, atomic config/version-checked refresh/timer cleanup, symlink-safe sync & PID identity verification', async () => {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-sec-harden-'));
+  const targetPluginDir = path.join(workDir, 'obsidian-prism');
+  await installPluginTool.installPlugin({ targetDir: targetPluginDir, noCdp: true, skipHostConfig: true, startDaemon: false });
+
+  let dummyChild = null;
+  let daemon = null;
+  try {
+    // 1. iframe/上下文 fail-closed 与上下文销毁撤权 + 同帧文档代际防继承
+    daemon = new PrismDaemon({
+      rootDir: targetPluginDir,
+      overridePort: 19999,
+      pollIntervalMs: 5000,
+      silent: true,
+    });
+
+    const ctxEntry = {
+      wsUrl: 'ws://127.0.0.1:19999/devtools/page/sec-1',
+      pageId: 'sec-1',
+      mainFrameId: 'MAIN_F',
+      hasFrameTree: true,
+      sidebarHostVerified: true,
+      sidebarDocument: 0,
+      sidebarVerifiedDocument: 0,
+      sidebarHostContextId: 1,
+      contextFrames: new Map([
+        [1, { frameId: 'MAIN_F', isDefault: true, type: 'default', docGen: 0 }],
+        [2, { frameId: 'CHILD_F', isDefault: true, type: 'default', docGen: 0 }],
+        [3, { frameId: 'MAIN_F', isDefault: false, type: 'isolated', docGen: 0 }],
+        [4, { frameId: '', isDefault: true, type: 'default', docGen: 0 }],
+      ]),
+      session: { closed: false, send: async () => ({}), evaluate: async () => ({ status: 'ok' }) },
+    };
+    assert.equal(daemon._isTrustedMainFrameBindingCall(ctxEntry, 1), true, 'Valid main-frame default context must pass');
+    assert.equal(daemon._isTrustedMainFrameBindingCall(ctxEntry, 2), false, 'Child iframe must be rejected');
+    assert.equal(daemon._isTrustedMainFrameBindingCall(ctxEntry, 3), false, 'Isolated world must be rejected');
+    assert.equal(daemon._isTrustedMainFrameBindingCall(ctxEntry, 4), false, 'Empty frameId must be rejected fail-closed');
+    assert.equal(daemon._isTrustedMainFrameBindingCall(ctxEntry, 999), false, 'Unknown executionContextId must be rejected fail-closed');
+    assert.equal(daemon._isTrustedMainFrameBindingCall(ctxEntry, undefined), false, 'Missing executionContextId with frame tree must be rejected');
+    assert.equal(
+      daemon._isTrustedMainFrameBindingCall({ mainFrameId: null, hasFrameTree: false, contextFrames: new Map([[5, { frameId: 'ANY', isDefault: true, type: 'default' }]]) }, 5),
+      false,
+      'Without mainFrameId, known context must still fail closed'
+    );
+
+    // 通过模拟 attachTarget 事件流验证 executionContextDestroyed 撤权与同帧新上下文不继承旧授权
+    const evListeners = new Map();
+    const fakeSession = {
+      closed: false,
+      on(ev, fn) {
+        if (!evListeners.has(ev)) evListeners.set(ev, []);
+        evListeners.get(ev).push(fn);
+      },
+      emit(ev, params) {
+        for (const fn of evListeners.get(ev) || []) fn(params);
+      },
+      async send(method) {
+        if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'TOP_F1' } } };
+        if (method === 'Runtime.enable') {
+          this.emit('Runtime.executionContextCreated', {
+            context: { id: 10, auxData: { frameId: 'TOP_F1', isDefault: true, type: 'default' } },
+          });
+          this.emit('Runtime.executionContextCreated', {
+            context: { id: 11, auxData: { frameId: 'CHILD_IFRAME', isDefault: true, type: 'default' } },
+          });
+          return {};
+        }
+        if (method === 'Page.addScriptToEvaluateOnNewDocument') return { identifier: 'sc-mock' };
+        return {};
+      },
+      async evaluate() {
+        return { status: 'ok' };
+      },
+      close() {
+        this.closed = true;
+      },
+    };
+    const origConnect = daemon.cdp.CdpSession.connect;
+    let sidebarEnsureCalls = 0;
+    daemon.ensureOmniServer = async () => null;
+    daemon.ensureSidebarService = async () => {
+      sidebarEnsureCalls += 1;
+      return { handleRpc: async (req) => ({ ok: true, echoed: req.action }) };
+    };
+    daemon.cdp.CdpSession.connect = async () => fakeSession;
+    const evalHistory = [];
+    const addScriptHistory = [];
+    const origSend = fakeSession.send.bind(fakeSession);
+    fakeSession.send = async (method, params) => {
+      if (method === 'Page.addScriptToEvaluateOnNewDocument') addScriptHistory.push(String(params?.source || ''));
+      return origSend(method, params);
+    };
+    fakeSession.evaluate = async (expr) => {
+      evalHistory.push(String(expr || ''));
+      return { status: 'ok' };
+    };
+
+    const attachedEntry = await daemon.attachTarget({
+      id: 'T_SEC',
+      title: 'Antigravity',
+      url: 'vscode-file://vscode-app/workbench.html',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:19999/devtools/page/T_SEC',
+    });
+    daemon.cdp.CdpSession.connect = origConnect;
+
+    // 2A. 关闭态 attachTarget 零后台服务启动 & 免下发完整 sidebar-client.js 载荷
+    assert.equal(sidebarEnsureCalls, 0, 'Disabled state attachTarget must NOT launch ensureSidebarService()');
+    assert.equal(attachedEntry.sidebarScriptId, null, 'Disabled state must NOT register sidebar NewDocument script');
+    assert.equal(
+      addScriptHistory.some((s) => s.includes('SIDEBAR_STUDIO_CLIENT_V2')),
+      false,
+      'Disabled state must NOT persist full sidebar-client.js in NewDocument scripts'
+    );
+    assert.equal(
+      evalHistory.some((s) => s.includes('SIDEBAR_STUDIO_CLIENT_V2')),
+      false,
+      'Disabled state attachTarget must NOT evaluate full sidebar-client.js payload'
+    );
+    assert.equal(attachedEntry.sidebarHostVerified, true);
+    assert.equal(attachedEntry.sidebarHostContextId, 10);
+
+    // 销毁子 iframe (ctx 11) 不应撤权主帧
+    fakeSession.emit('Runtime.executionContextDestroyed', { executionContextId: 11 });
+    assert.equal(attachedEntry.contextFrames.has(11), false);
+    assert.equal(attachedEntry.sidebarHostVerified, true, 'Destroying child iframe must NOT revoke main frame verification');
+
+    // 销毁主帧默认上下文 (ctx 10) 必须立即撤权并递增文档代际，随后同帧新上下文 (ctx 12) 绝不继承旧授权
+    const docBeforeDestroy = attachedEntry.sidebarDocument;
+    fakeSession.emit('Runtime.executionContextDestroyed', { executionContextId: 10 });
+    assert.equal(attachedEntry.contextFrames.has(10), false);
+    assert.equal(attachedEntry.sidebarHostVerified, false, 'Destroying main default context must revoke sidebarHostVerified');
+    assert.ok(attachedEntry.sidebarDocument > docBeforeDestroy, 'Document generation must increment on revocation');
+
+    fakeSession.emit('Runtime.executionContextCreated', {
+      context: { id: 12, auxData: { frameId: 'TOP_F1', isDefault: true, type: 'default' } },
+    });
+    assert.equal(attachedEntry.sidebarHostVerified, false, 'New context in same frame must NOT inherit old host verification');
+    const rejectedAfterRevoke = await daemon.handleBindingCall(attachedEntry, {
+      name: SIDEBAR_BINDING,
+      executionContextId: 12,
+      payload: JSON.stringify({ id: 1, action: 'get-state' }),
+    });
+    assert.equal(rejectedAfterRevoke, undefined);
+    assert.equal(sidebarEnsureCalls, 0);
+
+    // 重新验证 ctx 12 后，测试同帧并发新建 ctx 13 也会自动撤权防继承
+    daemon._markSidebarHostVerified(attachedEntry, attachedEntry.sidebarDocument, true);
+    assert.equal(attachedEntry.sidebarHostVerified, true);
+    assert.equal(attachedEntry.sidebarHostContextId, 12);
+    fakeSession.emit('Runtime.executionContextCreated', {
+      context: { id: 13, auxData: { frameId: 'TOP_F1', isDefault: true, type: 'default' } },
+    });
+    assert.equal(attachedEntry.sidebarHostVerified, false, 'New main-frame default context must revoke previous verified document');
+
+    // 2B. SIDEBAR_BINDING 关闭态在 JSON.parse 之前直接返回 { ok: false, error: 'Chat Beta is disabled' }，且校验大小上限
+    daemon._markSidebarHostVerified(attachedEntry, attachedEntry.sidebarDocument, true);
+    const parsedPayloads = [];
+    const origJsonParse = JSON.parse;
+    JSON.parse = (...args) => {
+      parsedPayloads.push(args[0]);
+      return origJsonParse(...args);
+    };
+    try {
+      const invalidDisabledPayload = '{not-even-valid-json';
+      const disabledRes = await daemon.handleBindingCall(attachedEntry, {
+        name: SIDEBAR_BINDING,
+        executionContextId: 13,
+        payload: invalidDisabledPayload,
+      });
+      assert.deepEqual(disabledRes, { ok: false, error: 'Chat Beta is disabled' });
+      assert.equal(
+        parsedPayloads.includes(invalidDisabledPayload),
+        false,
+        'Disabled SIDEBAR_BINDING must short-circuit BEFORE JSON.parse(payload)'
+      );
+      assert.equal(sidebarEnsureCalls, 0, 'Disabled SIDEBAR_BINDING must NOT start sidebar service');
+
+      // 开启 sidebarStudio 后，验证 >12MiB 在 JSON.parse 之前拦截、非 import-spark-file >128KiB 拦截、import-spark-file 允许 >128KiB
+      daemon.updateConfigSetting('sidebarStudio', 'on');
+      parsedPayloads.length = 0;
+      const hugePayload = 'x'.repeat(12 * 1024 * 1024 + 16);
+      const hugeRes = await daemon.handleBindingCall(attachedEntry, {
+        name: SIDEBAR_BINDING,
+        executionContextId: 13,
+        payload: hugePayload,
+      });
+      assert.equal(hugeRes, undefined);
+      assert.equal(
+        parsedPayloads.includes(hugePayload),
+        false,
+        '>12MiB payload must be rejected BEFORE JSON.parse(payload)'
+      );
+
+      const over128kNonImport = JSON.stringify({ id: 2, action: 'get-state', pad: 'a'.repeat(132000) });
+      const nonImportRes = await daemon.handleBindingCall(attachedEntry, {
+        name: SIDEBAR_BINDING,
+        executionContextId: 13,
+        payload: over128kNonImport,
+      });
+      assert.equal(nonImportRes, undefined, 'Non-import-spark-file >128KiB must be rejected');
+      assert.equal(sidebarEnsureCalls, 0);
+
+      const over128kImport = JSON.stringify({ id: 3, action: 'import-spark-file', data: 'b'.repeat(140000) });
+      const importRes = await daemon.handleBindingCall(attachedEntry, {
+        name: SIDEBAR_BINDING,
+        executionContextId: 13,
+        payload: over128kImport,
+      });
+      assert.deepEqual(importRes, { ok: true, echoed: 'import-spark-file' });
+      assert.equal(sidebarEnsureCalls, 1);
+    } finally {
+      JSON.parse = origJsonParse;
+    }
+
+    // 3A. 原子写入配置（无 .tmp 残留，POSIX 0o600）+ broadcastConfigRefresh 版本复核（防过期快照覆盖最新设置）
+    assert.equal(daemon.updateConfigBatch({ palette: 'warm', sidebarStudio: 'off' }), true);
+    const rootFiles = fs.readdirSync(targetPluginDir);
+    assert.equal(rootFiles.some((f) => f.endsWith('.tmp')), false, 'Atomic config write must leave 0 .tmp files');
+    if (process.platform !== 'win32') {
+      assert.equal(fs.statSync(path.join(targetPluginDir, 'config.json')).mode & 0o777, 0o600);
+    }
+
+    // 验证关闭态 broadcastConfigRefresh 不启动 ensureSidebarService 且 on->off 仅下发轻量清理
+    sidebarEnsureCalls = 0;
+    attachedEntry.sidebarMounted = true;
+    const evalsDuringRefresh = [];
+    fakeSession.evaluate = async (expr) => {
+      evalsDuringRefresh.push(String(expr || ''));
+      return { refreshed: true };
+    };
+    await daemon.broadcastConfigRefresh();
+    assert.equal(sidebarEnsureCalls, 0, 'Disabled broadcastConfigRefresh must NOT start ensureSidebarService');
+    assert.equal(
+      evalsDuringRefresh.some((s) => s.includes('SIDEBAR_STUDIO_CLIENT_V2')),
+      false,
+      'on->off broadcastConfigRefresh must NOT evaluate full sidebar-client.js'
+    );
+    assert.equal(
+      evalsDuringRefresh.some((s) => s.includes('ag-prism-sidebar-studio-css')),
+      true,
+      'on->off broadcastConfigRefresh must run lightweight cleanup'
+    );
+
+    // 验证 broadcastConfigRefresh 在 evaluate 前复核 this._configSeq === snapSeq，阻止过期快照覆盖最新设置
+    const evaluatedPalettes = [];
+    let mutatedMidFlight = false;
+    daemon.ensureOmniServer = async () => {
+      if (!mutatedMidFlight) {
+        mutatedMidFlight = true;
+        // 模拟快照 1（palette=claude）在异步期间已被快照 2（palette=obsidian）超越
+        daemon.updateConfigSetting('palette', 'obsidian');
+      }
+      return null;
+    };
+    fakeSession.evaluate = async (expr) => {
+      const m = String(expr || '').match(/"palette":"([^"]+)"/);
+      if (m) evaluatedPalettes.push(m[1]);
+      return { refreshed: true };
+    };
+    daemon.updateConfigSetting('palette', 'claude');
+    await daemon.broadcastConfigRefresh();
+    assert.equal(
+      evaluatedPalettes.includes('claude'),
+      false,
+      `Stale snapshot ("claude") must be aborted before evaluate when _configSeq advanced (got ${JSON.stringify(evaluatedPalettes)})`
+    );
+    assert.equal(evaluatedPalettes.at(-1), 'obsidian', 'Latest config snapshot ("obsidian") must win');
+
+    // 3B. stop() 清理 reloadTimer 及托管定时器防退出残留
+    let timerFiredAfterStop = false;
+    daemon.start({ claimPid: false, watchFiles: true });
+    daemon._reloadTimer = setTimeout(() => { timerFiredAfterStop = true; }, 40);
+    daemon._discoverTimer = setTimeout(() => { timerFiredAfterStop = true; }, 40);
+    const managedT = setTimeout(() => { timerFiredAfterStop = true; }, 40);
+    daemon._managedTimers.add(managedT);
+    await daemon.stop(false);
+    assert.equal(daemon.timer, null, 'stop() must clear poll interval');
+    assert.equal(daemon._reloadTimer, null, 'stop() must clear reloadTimer');
+    assert.equal(daemon._discoverTimer, null, 'stop() must clear discoverTimer');
+    assert.equal(daemon._managedTimers.size, 0, 'stop() must clear all managed timers');
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(timerFiredAfterStop, false, 'No cleared timer may fire after daemon.stop()');
+
+    // 4A. copyUpdatedRuntimeFromRepo 防符号链接/联接点穿越（源与目标双向防御）
+    const syncRepo = path.join(workDir, 'sync-repo');
+    const syncPlugin = path.join(workDir, 'sync-plugin');
+    const outsideDir = path.join(workDir, 'outside-secret');
+    fs.mkdirSync(path.join(syncRepo, 'assets'), { recursive: true });
+    fs.mkdirSync(path.join(syncPlugin, 'assets'), { recursive: true });
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.writeFileSync(path.join(outsideDir, 'secret.txt'), 'TOP_SECRET', 'utf8');
+    fs.writeFileSync(path.join(syncRepo, 'style.css'), 'body { color: #fff; }\n', 'utf8');
+    fs.writeFileSync(path.join(syncRepo, 'assets', 'ok.svg'), '<svg/>', 'utf8');
+
+    // 源目录放置指向外部目录的 junction/symlink，以及目标目录放置指向外部目录的 junction/symlink
+    let srcDirLinked = false;
+    try {
+      fs.symlinkSync(outsideDir, path.join(syncRepo, 'assets', 'linked-out'), process.platform === 'win32' ? 'junction' : 'dir');
+      srcDirLinked = true;
+    } catch {}
+    let dstDirLinked = false;
+    try {
+      fs.symlinkSync(outsideDir, path.join(syncPlugin, 'vendor'), process.platform === 'win32' ? 'junction' : 'dir');
+      dstDirLinked = true;
+    } catch {}
+    fs.mkdirSync(path.join(syncRepo, 'vendor'), { recursive: true });
+    fs.writeFileSync(path.join(syncRepo, 'vendor', 'overwrite.txt'), 'PWNED', 'utf8');
+
+    let srcFileLinked = false;
+    try {
+      fs.symlinkSync(path.join(outsideDir, 'secret.txt'), path.join(syncRepo, 'ui-runtime.js'), 'file');
+      srcFileLinked = true;
+    } catch {}
+
+    const syncedCount = copyUpdatedRuntimeFromRepo(syncRepo, syncPlugin, ['style.css', 'ui-runtime.js']);
+    assert.ok(syncedCount >= 2, 'Normal files must still sync cleanly');
+    assert.equal(fs.readFileSync(path.join(syncPlugin, 'style.css'), 'utf8'), 'body { color: #fff; }\n');
+    assert.equal(fs.readFileSync(path.join(syncPlugin, 'assets', 'ok.svg'), 'utf8'), '<svg/>');
+    if (srcDirLinked) {
+      assert.equal(
+        fs.existsSync(path.join(syncPlugin, 'assets', 'linked-out', 'secret.txt')),
+        false,
+        'Source directory symlink/junction must NEVER be traversed or copied'
+      );
+    }
+    if (dstDirLinked) {
+      assert.equal(
+        fs.existsSync(path.join(outsideDir, 'overwrite.txt')),
+        false,
+        'Destination directory symlink/junction must NEVER allow writing outside pluginDir'
+      );
+    }
+    if (srcFileLinked) {
+      assert.equal(
+        fs.existsSync(path.join(syncPlugin, 'ui-runtime.js')),
+        false,
+        'Source file symlink must NEVER be copied'
+      );
+    }
+
+    // 4B. stopExistingDaemon PID 身份核验：无校验器不盲杀、无关 node 进程不盲杀、合法签名或测试钩子放行
+    assert.equal(isObsidianPrismDaemonCommandLine('node /plugins/obsidian-prism/sidecars/daemon/main.mjs'), true);
+    assert.equal(isObsidianPrismDaemonCommandLine('Antigravity.exe --import=file:///lib/sidecar_sdk/register_loader.js main.mjs'), true);
+    assert.equal(isObsidianPrismDaemonCommandLine('node /app/unrelated-server.js'), false);
+    assert.equal(isObsidianPrismDaemonCommandLine('Antigravity.exe --type=renderer'), false);
+    assert.equal(isObsidianPrismDaemonCommandLine('Antigravity.exe --import=file:///lib/sidecar_sdk/register_loader.js /plugins/other/main.mjs'), false);
+
+    dummyChild = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+    const childPid = dummyChild.pid;
+    assert.ok(childPid > 0 && childPid !== process.pid);
+
+    const pidDaemon = new PrismDaemon({ rootDir: targetPluginDir, overridePort: 19999, silent: true });
+    fs.writeFileSync(pidDaemon.pidFile, JSON.stringify({ pid: childPid, token: 'other', startedAt: Date.now() }), 'utf8');
+
+    const killedPids = [];
+    const mockKill = (p) => killedPids.push(p);
+
+    // 缺失 isExpectedDaemonProcess 校验器 -> fail-closed 绝不盲杀
+    const origIsExpected = pidDaemon.cdp.isExpectedDaemonProcess;
+    pidDaemon.cdp = { ...pidDaemon.cdp, isExpectedDaemonProcess: undefined };
+    assert.equal(pidDaemon.stopExistingDaemon({ killProcess: mockKill }), false, 'Missing verifier must fail closed and NOT kill PID');
+    assert.deepEqual(killedPids, []);
+
+    // 标准校验器面对无关 node 子进程 -> 命令行复核拒绝杀死
+    pidDaemon.cdp = { ...pidDaemon.cdp, isExpectedDaemonProcess: origIsExpected };
+    assert.equal(
+      pidDaemon.stopExistingDaemon({
+        inspectCommandLine: () => 'node -e "setTimeout(() => {}, 30000)"',
+        killProcess: mockKill,
+      }),
+      false,
+      'Unrelated node.exe PID must NOT be killed'
+    );
+    assert.deepEqual(killedPids, []);
+
+    // 标准校验器面对真实 Obsidian Prism daemon 命令行 -> 允许终止
+    assert.equal(
+      pidDaemon.stopExistingDaemon({
+        inspectCommandLine: () => 'node /plugins/obsidian-prism/sidecars/daemon/main.mjs',
+        killProcess: mockKill,
+      }),
+      true
+    );
+    assert.deepEqual(killedPids, [childPid]);
+
+    // 测试显式注入校验钩子（verifyPid 或覆写 cdp.isExpectedDaemonProcess）保持 100% 兼容
+    killedPids.length = 0;
+    assert.equal(pidDaemon.stopExistingDaemon({ verifyPid: () => false, killProcess: mockKill }), false);
+    assert.equal(pidDaemon.stopExistingDaemon({ verifyPid: (p) => p === childPid, killProcess: mockKill }), true);
+    assert.deepEqual(killedPids, [childPid]);
+
+    killedPids.length = 0;
+    pidDaemon.cdp = { ...pidDaemon.cdp, isExpectedDaemonProcess: (p) => p === childPid };
+    assert.equal(pidDaemon.stopExistingDaemon({ killProcess: mockKill }), true);
+    assert.deepEqual(killedPids, [childPid]);
+  } finally {
+    if (dummyChild && !dummyChild.killed) {
+      try { dummyChild.kill(); } catch {}
+    }
+    if (daemon) await daemon.stop(false).catch(() => {});
+    fs.rmSync(workDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 80 });
   }
 });

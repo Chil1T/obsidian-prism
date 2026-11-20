@@ -77,23 +77,206 @@ namespace AgyClaudeStyle.Installer
             return Path.Combine(localAppData, "obsidian-prism");
         }
 
+        /// <summary>
+        /// 规范化目录路径，保留盘符根路径末尾斜杠（例如 C:\ 不会被截断为 C:）。
+        /// </summary>
+        public static string NormalizeDirPath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return path;
+            string full = Path.GetFullPath(path);
+            string root = Path.GetPathRoot(full);
+            if (!string.IsNullOrEmpty(root) &&
+                string.Equals(full.TrimEnd('\\', '/'), root.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+            {
+                return root;
+            }
+            return full.TrimEnd('\\', '/');
+        }
+
+        private static bool IsReparsePoint(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            try
+            {
+                if (!File.Exists(path) && !Directory.Exists(path)) return false;
+                return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void AssertNoReparsePointChain(string dirPath, string stopAtRoot)
+        {
+            if (string.IsNullOrEmpty(dirPath)) return;
+            string cur = NormalizeDirPath(dirPath);
+            string rootNorm = !string.IsNullOrEmpty(stopAtRoot) ? NormalizeDirPath(stopAtRoot) : null;
+            string rootPrefix = !string.IsNullOrEmpty(rootNorm)
+                ? rootNorm.TrimEnd('\\', '/') + Path.DirectorySeparatorChar
+                : null;
+
+            while (!string.IsNullOrEmpty(cur))
+            {
+                if (IsReparsePoint(cur))
+                {
+                    throw new InvalidOperationException("检测到符号链接或重解析点目录，已拒绝操作: " + cur);
+                }
+                if (!string.IsNullOrEmpty(rootNorm))
+                {
+                    if (string.Equals(cur, rootNorm, StringComparison.OrdinalIgnoreCase))
+                    {
+                        break;
+                    }
+                    if (!string.IsNullOrEmpty(rootPrefix) &&
+                        !cur.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        break;
+                    }
+                }
+                string parent = Path.GetDirectoryName(cur);
+                if (string.IsNullOrEmpty(parent) || string.Equals(parent, cur, StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+                cur = NormalizeDirPath(parent);
+            }
+        }
+
+        private static string ResolveSafeZipEntryDestPath(string targetRoot, string relPath)
+        {
+            if (string.IsNullOrEmpty(targetRoot) || string.IsNullOrEmpty(relPath))
+            {
+                throw new InvalidOperationException("非法的 ZIP 解压目标路径");
+            }
+            string normalizedRel = relPath.Replace('/', '\\');
+            if (normalizedRel.StartsWith("\\", StringComparison.Ordinal) || Path.IsPathRooted(normalizedRel))
+            {
+                throw new InvalidOperationException("检测到非法绝对路径 ZIP 条目: " + relPath);
+            }
+            string rootFull = NormalizeDirPath(targetRoot);
+            string rootPrefix = rootFull.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+            string destFull = Path.GetFullPath(Path.Combine(rootFull, normalizedRel));
+            if (!destFull.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("检测到 ZIP Slip 越界路径: " + relPath);
+            }
+            string parent = Path.GetDirectoryName(destFull);
+            if (!string.IsNullOrEmpty(parent))
+            {
+                AssertNoReparsePointChain(parent, rootFull);
+            }
+            if (IsReparsePoint(destFull))
+            {
+                throw new InvalidOperationException("检测到目标文件为符号链接或重解析点，已拒绝覆盖: " + destFull);
+            }
+            return destFull;
+        }
+
+        /// <summary>
+        /// 判断路径是否为驱动器根目录、用户主目录或系统关键目录等危险根路径。
+        /// </summary>
+        public static bool IsDangerousRootPath(string dirPath)
+        {
+            if (string.IsNullOrEmpty(dirPath) || string.IsNullOrEmpty(dirPath.Trim())) return true;
+            string norm;
+            string root;
+            try
+            {
+                norm = NormalizeDirPath(dirPath);
+                root = Path.GetPathRoot(norm);
+            }
+            catch
+            {
+                return true;
+            }
+            if (string.IsNullOrEmpty(norm) || string.IsNullOrEmpty(root)) return true;
+            if (string.Equals(norm.TrimEnd('\\', '/'), root.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            string normSlash = norm.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+            List<string> protectedRoots = new List<string>();
+            Action<string> addProtected = (p) =>
+            {
+                if (string.IsNullOrEmpty(p)) return;
+                try { protectedRoots.Add(NormalizeDirPath(p)); } catch { }
+            };
+
+            addProtected(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+            addProtected(Environment.GetEnvironmentVariable("USERPROFILE"));
+            string homeDrive = Environment.GetEnvironmentVariable("HOMEDRIVE");
+            string homePath = Environment.GetEnvironmentVariable("HOMEPATH");
+            if (!string.IsNullOrEmpty(homeDrive) && !string.IsNullOrEmpty(homePath))
+            {
+                addProtected(homeDrive + homePath);
+            }
+            addProtected(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+            addProtected(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
+            addProtected(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData));
+            addProtected(Environment.GetFolderPath(Environment.SpecialFolder.Windows));
+            addProtected(Environment.GetFolderPath(Environment.SpecialFolder.System));
+            addProtected(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles));
+            addProtected(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86));
+            addProtected(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory));
+            addProtected(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments));
+            addProtected(Path.GetTempPath());
+
+            string userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrEmpty(userHome)) userHome = Environment.GetEnvironmentVariable("USERPROFILE");
+            if (!string.IsNullOrEmpty(userHome))
+            {
+                string geminiDir = Path.Combine(userHome, ".gemini");
+                addProtected(geminiDir);
+                addProtected(Path.Combine(geminiDir, "config"));
+                addProtected(Path.Combine(geminiDir, "config", "plugins"));
+            }
+
+            for (int i = 0; i < protectedRoots.Count; i++)
+            {
+                string p = protectedRoots[i];
+                if (string.IsNullOrEmpty(p)) continue;
+                if (string.Equals(norm, p, StringComparison.OrdinalIgnoreCase)) return true;
+                if (p.StartsWith(normSlash, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
+        }
+
+        private static void SafeDeleteDirectory(string dir)
+        {
+            if (string.IsNullOrEmpty(dir)) return;
+            if (IsDangerousRootPath(dir))
+            {
+                throw new InvalidOperationException("已拒绝删除受保护的系统或用户根目录: " + dir);
+            }
+            if (!Directory.Exists(dir)) return;
+            if (IsReparsePoint(dir))
+            {
+                Directory.Delete(dir, false);
+                return;
+            }
+            Directory.Delete(dir, true);
+        }
+
         public static string ResolveNativePluginDir(InstallerOptions opts, string resolvedInstallDir)
         {
             if (opts != null && !string.IsNullOrEmpty(opts.PluginDir))
             {
-                return Path.GetFullPath(opts.PluginDir).TrimEnd('\\', '/');
+                return NormalizeDirPath(opts.PluginDir);
             }
             if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AG_PRISM_PLUGIN_DIR")))
             {
-                return CdpHelper.GetDefaultNativePluginDir();
+                return NormalizeDirPath(CdpHelper.GetDefaultNativePluginDir());
             }
             if (opts == null || string.IsNullOrEmpty(opts.InstallDir))
             {
-                return CdpHelper.GetDefaultNativePluginDir();
+                return NormalizeDirPath(CdpHelper.GetDefaultNativePluginDir());
             }
-            string parentDir = Path.GetDirectoryName(resolvedInstallDir);
-            string baseName = Path.GetFileName(resolvedInstallDir);
-            return Path.Combine(string.IsNullOrEmpty(parentDir) ? resolvedInstallDir : parentDir, baseName + "-native-plugin");
+            string normInstall = NormalizeDirPath(resolvedInstallDir);
+            string parentDir = Path.GetDirectoryName(normInstall);
+            string baseName = Path.GetFileName(normInstall);
+            return Path.Combine(string.IsNullOrEmpty(parentDir) ? normInstall : parentDir, (string.IsNullOrEmpty(baseName) ? "obsidian-prism" : baseName) + "-native-plugin");
         }
 
         public static void StopNativeDaemonInDir(string pluginDir, Action<string> log)
@@ -122,7 +305,7 @@ namespace AgyClaudeStyle.Installer
 
         public static string GetDirHash(string dir)
         {
-            return CdpHelper.ComputeHash(Path.GetFullPath(dir).TrimEnd('\\', '/').ToLowerInvariant());
+            return CdpHelper.ComputeHash(NormalizeDirPath(dir).ToLowerInvariant());
         }
 
         public static string GetStartupShortcutPath()
@@ -319,17 +502,24 @@ namespace AgyClaudeStyle.Installer
                 try
                 {
                     int pid;
-                    if (int.TryParse(File.ReadAllText(pidFile, Encoding.UTF8).Trim(), out pid) && pid > 0)
+                    if (int.TryParse(File.ReadAllText(pidFile, Encoding.UTF8).Trim(), out pid) &&
+                        pid > 0 &&
+                        pid != Process.GetCurrentProcess().Id)
                     {
                         try
                         {
-                            Process p = Process.GetProcessById(pid);
-                            if (!p.WaitForExit(2000))
+                            using (Process p = Process.GetProcessById(pid))
                             {
-                                p.Kill();
-                                p.WaitForExit(2000);
+                                if (!p.HasExited && CdpHelper.IsExpectedPrismDaemonProcess(p, dir))
+                                {
+                                    if (!p.WaitForExit(2000))
+                                    {
+                                        p.Kill();
+                                        p.WaitForExit(2000);
+                                    }
+                                    if (log != null) log("已停止运行中的守护进程 (PID " + pid + ")");
+                                }
                             }
-                            if (log != null) log("已停止运行中的守护进程 (PID " + pid + ")");
                         }
                         catch { }
                     }
@@ -338,7 +528,7 @@ namespace AgyClaudeStyle.Installer
                 try { File.Delete(pidFile); } catch { }
             }
 
-            string normalizedDir = Path.GetFullPath(dir).TrimEnd('\\', '/').ToLowerInvariant();
+            string normalizedDirPrefix = NormalizeDirPath(dir).TrimEnd('\\', '/').ToLowerInvariant() + "\\";
             try
             {
                 Process[] procs = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(WatcherExeName));
@@ -348,7 +538,7 @@ namespace AgyClaudeStyle.Installer
                     {
                         string path = procs[i].MainModule.FileName;
                         if (!string.IsNullOrEmpty(path) &&
-                            Path.GetFullPath(path).ToLowerInvariant().StartsWith(normalizedDir + "\\", StringComparison.Ordinal))
+                            Path.GetFullPath(path).ToLowerInvariant().StartsWith(normalizedDirPrefix, StringComparison.Ordinal))
                         {
                             if (!procs[i].WaitForExit(1500))
                             {
@@ -381,16 +571,20 @@ namespace AgyClaudeStyle.Installer
                         if (File.Exists(legacyPidFile))
                         {
                             int pid;
-                            if (int.TryParse(File.ReadAllText(legacyPidFile, Encoding.UTF8).Trim(), out pid) && pid > 0)
+                            if (int.TryParse(File.ReadAllText(legacyPidFile, Encoding.UTF8).Trim(), out pid) &&
+                                pid > 0 &&
+                                pid != Process.GetCurrentProcess().Id)
                             {
                                 try
                                 {
-                                    Process p = Process.GetProcessById(pid);
-                                    if (string.Equals(p.ProcessName, "node", StringComparison.OrdinalIgnoreCase))
+                                    using (Process p = Process.GetProcessById(pid))
                                     {
-                                        p.Kill();
-                                        p.WaitForExit(1500);
-                                        if (log != null) log("已停止旧版脚本守护进程 (PID " + pid + ")");
+                                        if (!p.HasExited && string.Equals(p.ProcessName, "node", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            p.Kill();
+                                            p.WaitForExit(1500);
+                                            if (log != null) log("已停止旧版脚本守护进程 (PID " + pid + ")");
+                                        }
                                     }
                                 }
                                 catch { }
@@ -418,14 +612,22 @@ namespace AgyClaudeStyle.Installer
                                 cmd.IndexOf("--watch", StringComparison.OrdinalIgnoreCase) >= 0)
                             {
                                 int pid = Convert.ToInt32(obj["ProcessId"]);
-                                try
+                                if (pid > 0 && pid != Process.GetCurrentProcess().Id)
                                 {
-                                    Process p = Process.GetProcessById(pid);
-                                    p.Kill();
-                                    p.WaitForExit(1500);
-                                    if (log != null) log("已替换旧版 Node 守护进程 (PID " + pid + ")");
+                                    try
+                                    {
+                                        using (Process p = Process.GetProcessById(pid))
+                                        {
+                                            if (!p.HasExited && string.Equals(p.ProcessName, "node", StringComparison.OrdinalIgnoreCase))
+                                            {
+                                                p.Kill();
+                                                p.WaitForExit(1500);
+                                                if (log != null) log("已替换旧版 Node 守护进程 (PID " + pid + ")");
+                                            }
+                                        }
+                                    }
+                                    catch { }
                                 }
-                                catch { }
                             }
                         }
                         finally
@@ -468,7 +670,7 @@ namespace AgyClaudeStyle.Installer
             Type lnkType = lnk.GetType();
             lnkType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, lnk, new object[] { targetExe });
             lnkType.InvokeMember("Arguments", BindingFlags.SetProperty, null, lnk, new object[] { shortcutArgs });
-            lnkType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, lnk, new object[] { installDir.TrimEnd('\\', '/') });
+            lnkType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, lnk, new object[] { NormalizeDirPath(installDir) });
             lnkType.InvokeMember("Description", BindingFlags.SetProperty, null, lnk, new object[] { "Obsidian Prism (obsidian-prism) watcher" });
             lnkType.InvokeMember("Save", BindingFlags.InvokeMethod, null, lnk, null);
         }
@@ -480,7 +682,7 @@ namespace AgyClaudeStyle.Installer
                 if (key == null) return;
                 string exePath = Path.Combine(installDir, SelfInstalledExeName);
                 key.SetValue("DisplayName", "Obsidian Prism · 黑曜棱镜 (Optical UI & Motion Suite for Antigravity)", RegistryValueKind.String);
-                key.SetValue("DisplayVersion", version ?? "1.0.1", RegistryValueKind.String);
+                key.SetValue("DisplayVersion", version ?? "1.0.2", RegistryValueKind.String);
                 key.SetValue("Publisher", "Obsidian Prism Contributors", RegistryValueKind.String);
                 key.SetValue("InstallLocation", installDir, RegistryValueKind.String);
                 key.SetValue("DisplayIcon", exePath + ",0", RegistryValueKind.String);
@@ -494,8 +696,16 @@ namespace AgyClaudeStyle.Installer
         {
             OperationResult result = new OperationResult();
             result.Mode = "install";
-            string installDir = Path.GetFullPath(string.IsNullOrEmpty(opts.InstallDir) ? GetDefaultInstallDir() : opts.InstallDir).TrimEnd('\\', '/');
+            string installDir = NormalizeDirPath(string.IsNullOrEmpty(opts.InstallDir) ? GetDefaultInstallDir() : opts.InstallDir);
             string pluginDir = ResolveNativePluginDir(opts, installDir);
+            if (IsDangerousRootPath(installDir))
+            {
+                throw new InvalidOperationException("已拒绝将受保护的系统或用户根目录作为安装目录: " + installDir);
+            }
+            if (!string.IsNullOrEmpty(pluginDir) && IsDangerousRootPath(pluginDir))
+            {
+                throw new InvalidOperationException("已拒绝将受保护的系统或用户根目录作为插件目录: " + pluginDir);
+            }
             result.InstallDir = installDir;
             result.PluginDir = pluginDir;
 
@@ -526,9 +736,11 @@ namespace AgyClaudeStyle.Installer
             }
 
             report(45, "正在部署原生 Sidecar 插件与独立守护资源...");
+            AssertNoReparsePointChain(installDir, installDir);
             Directory.CreateDirectory(installDir);
             if (!string.IsNullOrEmpty(pluginDir))
             {
+                AssertNoReparsePointChain(pluginDir, pluginDir);
                 Directory.CreateDirectory(pluginDir);
             }
 
@@ -570,9 +782,17 @@ namespace AgyClaudeStyle.Installer
                         string targetRoot = isNativeEntry ? pluginDir : installDir;
                         if (string.IsNullOrEmpty(targetRoot)) continue;
 
-                        string destPath = Path.Combine(targetRoot, relPath.Replace('/', '\\'));
+                        string destPath = ResolveSafeZipEntryDestPath(targetRoot, relPath);
                         string parent = Path.GetDirectoryName(destPath);
-                        if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
+                        if (!string.IsNullOrEmpty(parent))
+                        {
+                            Directory.CreateDirectory(parent);
+                            AssertNoReparsePointChain(parent, targetRoot);
+                        }
+                        if (IsReparsePoint(destPath))
+                        {
+                            throw new InvalidOperationException("检测到目标文件为符号链接或重解析点，已拒绝覆盖: " + destPath);
+                        }
 
                         if (string.Equals(entry.Name, "config.json", StringComparison.OrdinalIgnoreCase) && File.Exists(destPath))
                         {
@@ -772,8 +992,16 @@ namespace AgyClaudeStyle.Installer
         {
             OperationResult result = new OperationResult();
             result.Mode = "uninstall";
-            string installDir = Path.GetFullPath(string.IsNullOrEmpty(opts.InstallDir) ? GetDefaultInstallDir() : opts.InstallDir).TrimEnd('\\', '/');
+            string installDir = NormalizeDirPath(string.IsNullOrEmpty(opts.InstallDir) ? GetDefaultInstallDir() : opts.InstallDir);
             string pluginDir = ResolveNativePluginDir(opts, installDir);
+            if (IsDangerousRootPath(installDir))
+            {
+                throw new InvalidOperationException("已拒绝在受保护的系统或用户根目录执行卸载: " + installDir);
+            }
+            if (!string.IsNullOrEmpty(pluginDir) && IsDangerousRootPath(pluginDir))
+            {
+                throw new InvalidOperationException("已拒绝在受保护的系统或用户根目录执行插件目录卸载: " + pluginDir);
+            }
             result.InstallDir = installDir;
             result.PluginDir = pluginDir;
 
@@ -846,8 +1074,8 @@ namespace AgyClaudeStyle.Installer
                 (m) => report(72, m)
             );
             bool isDefaultInstall = string.Equals(
-                Path.GetFullPath(installDir).TrimEnd('\\', '/'),
-                Path.GetFullPath(GetDefaultInstallDir()).TrimEnd('\\', '/'),
+                NormalizeDirPath(installDir),
+                NormalizeDirPath(GetDefaultInstallDir()),
                 StringComparison.OrdinalIgnoreCase
             );
             try
@@ -857,7 +1085,7 @@ namespace AgyClaudeStyle.Installer
                 {
                     string lnkWork = ReadShortcutWorkingDir(lnk);
                     if (isDefaultInstall || (!string.IsNullOrEmpty(lnkWork) &&
-                        string.Equals(Path.GetFullPath(lnkWork).TrimEnd('\\', '/'), Path.GetFullPath(installDir).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)))
+                        string.Equals(NormalizeDirPath(lnkWork), NormalizeDirPath(installDir), StringComparison.OrdinalIgnoreCase)))
                     {
                         File.Delete(lnk);
                     }
@@ -872,7 +1100,7 @@ namespace AgyClaudeStyle.Installer
                     {
                         string regLoc = regKey.GetValue("InstallLocation") as string;
                         if (isDefaultInstall || (!string.IsNullOrEmpty(regLoc) &&
-                            string.Equals(Path.GetFullPath(regLoc).TrimEnd('\\', '/'), Path.GetFullPath(installDir).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)))
+                            string.Equals(NormalizeDirPath(regLoc), NormalizeDirPath(installDir), StringComparison.OrdinalIgnoreCase)))
                         {
                             regKey.Close();
                             Registry.CurrentUser.DeleteSubKeyTree(UninstallRegSubKey, false);
@@ -890,22 +1118,27 @@ namespace AgyClaudeStyle.Installer
             if (!string.IsNullOrEmpty(pluginDir) && Directory.Exists(pluginDir))
             {
                 report(80, "正在清理原生 Sidecar 插件目录: " + pluginDir);
-                try { Directory.Delete(pluginDir, true); } catch { }
+                try { SafeDeleteDirectory(pluginDir); } catch { }
             }
 
             report(85, "正在清理安装目录: " + installDir);
             string selfExe = Assembly.GetExecutingAssembly().Location;
+            string installDirPrefix = NormalizeDirPath(installDir).TrimEnd('\\', '/').ToLowerInvariant() + "\\";
             bool runningInsideInstallDir = !string.IsNullOrEmpty(selfExe) &&
-                Path.GetFullPath(selfExe).ToLowerInvariant().StartsWith(installDir.ToLowerInvariant() + "\\", StringComparison.Ordinal);
+                Path.GetFullPath(selfExe).ToLowerInvariant().StartsWith(installDirPrefix, StringComparison.Ordinal);
 
             if (Directory.Exists(installDir))
             {
                 if (!runningInsideInstallDir)
                 {
-                    try { Directory.Delete(installDir, true); } catch { }
+                    try { SafeDeleteDirectory(installDir); } catch { }
                 }
                 else
                 {
+                    if (IsDangerousRootPath(installDir))
+                    {
+                        throw new InvalidOperationException("已拒绝清理受保护的系统或用户根目录: " + installDir);
+                    }
                     string[] files = Directory.GetFiles(installDir, "*", SearchOption.AllDirectories);
                     for (int i = 0; i < files.Length; i++)
                     {
@@ -929,44 +1162,51 @@ namespace AgyClaudeStyle.Installer
         {
             string selfExe = Assembly.GetExecutingAssembly().Location;
             if (string.IsNullOrEmpty(selfExe)) return;
-            bool startedPs = false;
-            try
-            {
-                string safeSelf = selfExe.Replace("'", "''");
-                string safeDir = (installDir ?? string.Empty).Replace("'", "''");
-                string ps = string.Format(
-                    "for ($i = 0; $i -lt 10; $i++) {{ Start-Sleep -Milliseconds 900; Remove-Item -LiteralPath '{0}' -Force -ErrorAction SilentlyContinue; if ('{1}') {{ Remove-Item -LiteralPath '{1}' -Recurse -Force -ErrorAction SilentlyContinue }}; if (-not (Test-Path -LiteralPath '{1}')) {{ break }} }}",
-                    safeSelf,
-                    safeDir
-                );
-                string encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(ps));
-                ProcessStartInfo psi = new ProcessStartInfo("powershell.exe", "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand " + encoded);
-                psi.WorkingDirectory = Path.GetTempPath();
-                psi.CreateNoWindow = true;
-                psi.UseShellExecute = false;
-                psi.WindowStyle = ProcessWindowStyle.Hidden;
-                startedPs = (Process.Start(psi) != null);
-            }
-            catch { }
+            string safeInstallDir = (!string.IsNullOrEmpty(installDir) && !IsDangerousRootPath(installDir))
+                ? NormalizeDirPath(installDir)
+                : string.Empty;
 
-            // Fallback cmd.exe self-deletion guard in case PowerShell is restricted by Group Policy
-            try
+            // 通过环境变量 + -LiteralPath 传递路径，彻底消除命令拼接与元字符注入风险（不使用 cmd.exe /c）
+            string ps =
+                "$exe = $env:OBSIDIAN_PRISM_SELF_DELETE_EXE; " +
+                "$dir = $env:OBSIDIAN_PRISM_SELF_DELETE_DIR; " +
+                "for ($i = 0; $i -lt 10; $i++) { " +
+                "Start-Sleep -Milliseconds 900; " +
+                "if ($exe) { Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue }; " +
+                "if ($dir) { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }; " +
+                "if ((-not $dir) -or (-not (Test-Path -LiteralPath $dir))) { break } " +
+                "}";
+            string encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(ps));
+            string[] psCandidates = new string[]
             {
-                string quotedSelf = "\"" + selfExe.Replace("\"", "") + "\"";
-                string quotedDir = !string.IsNullOrEmpty(installDir) ? "\"" + installDir.Replace("\"", "") + "\"" : "";
-                string cmdBody = "ping 127.0.0.1 -n " + (startedPs ? "5" : "3") + " > nul & del /f /q " + quotedSelf + " > nul 2>&1";
-                if (!string.IsNullOrEmpty(quotedDir))
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"),
+                "powershell.exe",
+                "pwsh.exe"
+            };
+
+            for (int i = 0; i < psCandidates.Length; i++)
+            {
+                string candidate = psCandidates[i];
+                if (string.IsNullOrEmpty(candidate)) continue;
+                try
                 {
-                    cmdBody += " & rmdir /s /q " + quotedDir + " > nul 2>&1";
+                    ProcessStartInfo psi = new ProcessStartInfo(
+                        candidate,
+                        "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand " + encoded
+                    );
+                    psi.WorkingDirectory = Path.GetTempPath();
+                    psi.CreateNoWindow = true;
+                    psi.UseShellExecute = false;
+                    psi.WindowStyle = ProcessWindowStyle.Hidden;
+                    psi.EnvironmentVariables["OBSIDIAN_PRISM_SELF_DELETE_EXE"] = selfExe;
+                    psi.EnvironmentVariables["OBSIDIAN_PRISM_SELF_DELETE_DIR"] = safeInstallDir;
+                    if (Process.Start(psi) != null)
+                    {
+                        return;
+                    }
                 }
-                ProcessStartInfo cmdPsi = new ProcessStartInfo("cmd.exe", "/c " + cmdBody);
-                cmdPsi.WorkingDirectory = Path.GetTempPath();
-                cmdPsi.CreateNoWindow = true;
-                cmdPsi.UseShellExecute = false;
-                cmdPsi.WindowStyle = ProcessWindowStyle.Hidden;
-                Process.Start(cmdPsi);
+                catch { }
             }
-            catch { }
         }
     }
 
@@ -982,10 +1222,12 @@ namespace AgyClaudeStyle.Installer
         private readonly TextBox _logBox;
         private readonly Button _uninstallBtn;
         private readonly Button _openDirBtn;
+        private readonly Button _installBtn;
         private readonly Button _launchAgBtn;
         private readonly Button _closeBtn;
 
         private string _activeInstallDir;
+        private string _activePluginDir;
         private string _antigravityExe;
         private bool _selfDeleteOnClose;
         private bool _busy;
@@ -993,7 +1235,8 @@ namespace AgyClaudeStyle.Installer
         public InstallerForm(InstallerOptions opts)
         {
             _opts = opts;
-            _activeInstallDir = string.IsNullOrEmpty(opts.InstallDir) ? InstallerCore.GetDefaultInstallDir() : opts.InstallDir;
+            _activeInstallDir = InstallerCore.NormalizeDirPath(string.IsNullOrEmpty(opts.InstallDir) ? InstallerCore.GetDefaultInstallDir() : opts.InstallDir);
+            _activePluginDir = InstallerCore.ResolveNativePluginDir(opts, _activeInstallDir);
 
             Text = "Obsidian Prism · 黑曜棱镜 安装与修补工具";
             StartPosition = FormStartPosition.CenterScreen;
@@ -1036,20 +1279,22 @@ namespace AgyClaudeStyle.Installer
             card.BorderStyle = BorderStyle.FixedSingle;
 
             _statusHeadline = new Label();
-            _statusHeadline.Text = opts.Uninstall ? "准备卸载并恢复原版界面..." : "正在自动修补本机 Antigravity Desktop...";
+            _statusHeadline.Text = opts.Uninstall ? "准备卸载并恢复原版界面..." : "正在检测本地 Antigravity 环境...";
             _statusHeadline.ForeColor = Color.FromArgb(28, 25, 23);
             _statusHeadline.Font = new Font("Microsoft YaHei UI", 11f, FontStyle.Bold);
             _statusHeadline.Location = new Point(14, 12);
             _statusHeadline.Size = new Size(520, 26);
 
             _statusDetail = new Label();
-            _statusDetail.Text = "正在检测环境并配置独立守护进程，请稍候...";
+            _statusDetail.Text = opts.Uninstall
+                ? "请确认是否卸载 Obsidian Prism、停止后台守护并恢复原生界面。"
+                : "正在只读检测 Antigravity Desktop 与安装状态，等待你确认后再开始安装...";
             _statusDetail.ForeColor = Color.FromArgb(87, 83, 78);
             _statusDetail.Location = new Point(14, 42);
             _statusDetail.Size = new Size(520, 40);
 
             _metaLabel = new Label();
-            _metaLabel.Text = "安装路径: " + _activeInstallDir;
+            _metaLabel.Text = "插件目录: " + _activePluginDir;
             _metaLabel.ForeColor = Color.FromArgb(120, 113, 108);
             _metaLabel.Font = new Font("Microsoft YaHei UI", 8.2f, FontStyle.Regular);
             _metaLabel.Location = new Point(14, 88);
@@ -1065,7 +1310,7 @@ namespace AgyClaudeStyle.Installer
             _progressBar.Size = new Size(548, 14);
             _progressBar.Minimum = 0;
             _progressBar.Maximum = 100;
-            _progressBar.Value = 5;
+            _progressBar.Value = 0;
             Controls.Add(_progressBar);
 
             _logBox = new TextBox();
@@ -1082,29 +1327,44 @@ namespace AgyClaudeStyle.Installer
             _uninstallBtn = new Button();
             _uninstallBtn.Text = "卸载并恢复原版";
             _uninstallBtn.Location = new Point(20, 412);
-            _uninstallBtn.Size = new Size(134, 34);
+            _uninstallBtn.Size = new Size(130, 34);
             _uninstallBtn.Enabled = false;
             _uninstallBtn.FlatStyle = FlatStyle.System;
             _uninstallBtn.Click += async (s, e) => await HandleUninstallClickAsync();
 
             _openDirBtn = new Button();
             _openDirBtn.Text = "打开配置目录";
-            _openDirBtn.Location = new Point(162, 412);
-            _openDirBtn.Size = new Size(116, 34);
+            _openDirBtn.Location = new Point(158, 412);
+            _openDirBtn.Size = new Size(108, 34);
             _openDirBtn.Enabled = false;
             _openDirBtn.FlatStyle = FlatStyle.System;
             _openDirBtn.Click += (s, e) =>
             {
                 try
                 {
-                    if (Directory.Exists(_activeInstallDir)) Process.Start("explorer.exe", _activeInstallDir);
+                    string targetDir = (!string.IsNullOrEmpty(_activePluginDir) && Directory.Exists(_activePluginDir))
+                        ? _activePluginDir
+                        : _activeInstallDir;
+                    if (!string.IsNullOrEmpty(targetDir) && Directory.Exists(targetDir)) Process.Start("explorer.exe", targetDir);
                 }
                 catch { }
             };
 
+            _installBtn = new Button();
+            _installBtn.Text = "立即安装";
+            _installBtn.Location = new Point(318, 412);
+            _installBtn.Size = new Size(134, 34);
+            _installBtn.Visible = !opts.Uninstall;
+            _installBtn.Enabled = false;
+            _installBtn.FlatStyle = FlatStyle.Flat;
+            _installBtn.FlatAppearance.BorderSize = 0;
+            _installBtn.Font = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Bold);
+            _installBtn.Cursor = Cursors.Hand;
+            _installBtn.Click += async (s, e) => await ExecuteInstallAsync();
+
             _launchAgBtn = new Button();
             _launchAgBtn.Text = "启动 Antigravity";
-            _launchAgBtn.Location = new Point(286, 412);
+            _launchAgBtn.Location = new Point(318, 412);
             _launchAgBtn.Size = new Size(134, 34);
             _launchAgBtn.Visible = false;
             _launchAgBtn.FlatStyle = FlatStyle.System;
@@ -1123,17 +1383,20 @@ namespace AgyClaudeStyle.Installer
             };
 
             _closeBtn = new Button();
-            _closeBtn.Text = "完成并关闭";
-            _closeBtn.Location = new Point(456, 412);
-            _closeBtn.Size = new Size(112, 34);
-            _closeBtn.Enabled = false;
+            _closeBtn.Text = "取消";
+            _closeBtn.Location = new Point(460, 412);
+            _closeBtn.Size = new Size(108, 34);
+            _closeBtn.Enabled = true;
             _closeBtn.FlatStyle = FlatStyle.System;
             _closeBtn.Click += (s, e) => Close();
 
             Controls.Add(_uninstallBtn);
             Controls.Add(_openDirBtn);
+            Controls.Add(_installBtn);
             Controls.Add(_launchAgBtn);
             Controls.Add(_closeBtn);
+            CancelButton = _closeBtn;
+            UpdateInstallButtonStyle();
 
             Shown += async (s, e) => await StartInitialActionAsync();
             FormClosing += (s, e) =>
@@ -1148,6 +1411,20 @@ namespace AgyClaudeStyle.Installer
                     InstallerCore.ScheduleSelfDeleteIfNeeded(_activeInstallDir);
                 }
             };
+        }
+
+        private void UpdateInstallButtonStyle()
+        {
+            if (_installBtn.Enabled)
+            {
+                _installBtn.BackColor = Color.FromArgb(37, 99, 235);
+                _installBtn.ForeColor = Color.White;
+            }
+            else
+            {
+                _installBtn.BackColor = Color.FromArgb(203, 213, 225);
+                _installBtn.ForeColor = Color.FromArgb(100, 116, 139);
+            }
         }
 
         private void AppendLog(string msg)
@@ -1193,27 +1470,133 @@ namespace AgyClaudeStyle.Installer
             }
             else
             {
-                await ExecuteInstallAsync();
+                await PrepareInstallChoiceAsync();
+            }
+        }
+
+        private async Task PrepareInstallChoiceAsync()
+        {
+            SetButtonsEnabled(false);
+            _closeBtn.Enabled = true;
+            try
+            {
+                string installDir = _activeInstallDir;
+                string pluginDir = _activePluginDir;
+                AntigravityDetectResult ag = null;
+                bool alreadyInstalled = false;
+                bool hasDir = false;
+                int? port = null;
+
+                await Task.Run(() =>
+                {
+                    ag = InstallerCore.DetectAntigravityDesktop();
+                    bool hasNative = !string.IsNullOrEmpty(pluginDir) && File.Exists(Path.Combine(pluginDir, "plugin.json"));
+                    bool hasWatcher = Directory.Exists(installDir) && File.Exists(Path.Combine(installDir, "obsidian-prism-watcher.exe"));
+                    alreadyInstalled = hasNative || hasWatcher;
+                    hasDir = (!string.IsNullOrEmpty(pluginDir) && Directory.Exists(pluginDir)) || Directory.Exists(installDir);
+                    port = CdpHelper.ReadPort(_opts.CdpPort);
+                });
+
+                if (IsDisposed || Disposing) return;
+
+                _antigravityExe = ag != null ? ag.ExePath : null;
+                if (alreadyInstalled)
+                {
+                    _statusHeadline.Text = "已检测到本地 Obsidian Prism · 请选择操作";
+                    _statusHeadline.ForeColor = Color.FromArgb(28, 25, 23);
+                    _statusDetail.Text = "点击「重新安装 / 升级」可覆盖更新插件并保留现有配置；点击「卸载并恢复原版」可彻底卸载并还原原生界面。";
+                    _installBtn.Text = "重新安装 / 升级";
+                }
+                else
+                {
+                    _statusHeadline.Text = "是否安装 Obsidian Prism · 黑曜棱镜？";
+                    _statusHeadline.ForeColor = Color.FromArgb(28, 25, 23);
+                    _statusDetail.Text = "将部署原生 Sidecar 插件、后台热备守护与开机自启（不修改 Antigravity 核心程序文件）。请点击「立即安装」开始，或点击「取消」退出。";
+                    _installBtn.Text = "立即安装";
+                }
+
+                string agSummary;
+                if (ag != null && !string.IsNullOrEmpty(ag.ExePath))
+                {
+                    string ver = !string.IsNullOrEmpty(ag.Version) ? "v" + ag.Version : "已检测到";
+                    string runState = ag.IsRunning
+                        ? (port.HasValue ? "运行中 · 端口 " + port.Value : "运行中")
+                        : "未运行";
+                    agSummary = "Antigravity: " + ver + " (" + runState + ")";
+                }
+                else
+                {
+                    agSummary = "未检测到运行中的 Antigravity（支持预先安装）";
+                }
+                _metaLabel.Text = agSummary + " | " + pluginDir;
+
+                AppendLog("环境只读预检完成，当前未对本机做任何修改，等待你确认操作。");
+                AppendLog("原生插件目录: " + pluginDir);
+                AppendLog("后台守护目录: " + installDir);
+                if (ag != null && !string.IsNullOrEmpty(ag.ExePath))
+                {
+                    AppendLog("检测到 Antigravity Desktop: " + ag.ExePath);
+                }
+
+                _progressBar.Value = 0;
+                _launchAgBtn.Visible = false;
+                _installBtn.Visible = true;
+                _installBtn.Enabled = true;
+                _uninstallBtn.Enabled = alreadyInstalled;
+                _openDirBtn.Enabled = hasDir;
+                _closeBtn.Text = "取消";
+                _closeBtn.Enabled = true;
+                AcceptButton = _installBtn;
+                UpdateInstallButtonStyle();
+            }
+            catch (Exception ex)
+            {
+                if (IsDisposed || Disposing) return;
+                _statusHeadline.Text = "准备安装 Obsidian Prism";
+                _statusDetail.Text = "环境预检遇到提示：" + ex.Message + "。你仍可点击「立即安装」继续或点击「取消」退出。";
+                AppendLog("[!] 预检提示: " + ex.Message);
+                _installBtn.Visible = true;
+                _installBtn.Text = "立即安装";
+                _installBtn.Enabled = true;
+                _closeBtn.Text = "取消";
+                _closeBtn.Enabled = true;
+                AcceptButton = _installBtn;
+                UpdateInstallButtonStyle();
             }
         }
 
         private async Task ExecuteInstallAsync()
         {
+            if (_busy) return;
             _busy = true;
+            _statusHeadline.Text = "正在安装并修补本机 Antigravity Desktop...";
+            _statusHeadline.ForeColor = Color.FromArgb(28, 25, 23);
+            _statusDetail.Text = "正在部署原生 Sidecar 插件与后台热备守护，请稍候...";
+            _progressBar.Value = 5;
             SetButtonsEnabled(false);
             try
             {
                 OperationResult res = await Task.Run(() => InstallerCore.RunInstall(_opts, UpdateProgress));
                 _activeInstallDir = res.InstallDir;
+                if (!string.IsNullOrEmpty(res.PluginDir)) _activePluginDir = res.PluginDir;
                 _antigravityExe = res.AntigravityExe;
                 _statusHeadline.Text = res.Headline;
                 _statusHeadline.ForeColor = Color.FromArgb(21, 128, 61);
                 _statusDetail.Text = res.Detail;
                 _metaLabel.Text = "配置: " + res.ConfigSummary;
-                _openDirBtn.Enabled = Directory.Exists(_activeInstallDir);
+                _openDirBtn.Enabled = (!string.IsNullOrEmpty(_activePluginDir) && Directory.Exists(_activePluginDir)) || Directory.Exists(_activeInstallDir);
                 _uninstallBtn.Enabled = true;
-                _launchAgBtn.Visible = (!string.IsNullOrEmpty(_antigravityExe) && res.InjectedPages.Count == 0 && !res.BareHostDetected);
-                _launchAgBtn.Enabled = _launchAgBtn.Visible;
+                bool showLaunch = (!string.IsNullOrEmpty(_antigravityExe) && res.InjectedPages.Count == 0 && !res.BareHostDetected);
+                _launchAgBtn.Visible = showLaunch;
+                _launchAgBtn.Enabled = showLaunch;
+                _installBtn.Visible = !showLaunch;
+                if (!showLaunch)
+                {
+                    _installBtn.Text = "重新安装";
+                    _installBtn.Enabled = true;
+                }
+                _closeBtn.Text = "完成并关闭";
+                AcceptButton = _closeBtn;
 
                 if (res.BareHostDetected &&
                     !_opts.Silent &&
@@ -1278,11 +1661,18 @@ namespace AgyClaudeStyle.Installer
                 _statusHeadline.ForeColor = Color.FromArgb(185, 28, 28);
                 _statusDetail.Text = ex.Message;
                 AppendLog("[✗] 错误: " + ex);
+                _launchAgBtn.Visible = false;
+                _installBtn.Visible = true;
+                _installBtn.Text = "重试安装";
+                _installBtn.Enabled = true;
+                _closeBtn.Text = "关闭";
+                AcceptButton = _installBtn;
             }
             finally
             {
                 _busy = false;
                 _closeBtn.Enabled = true;
+                UpdateInstallButtonStyle();
             }
         }
 
@@ -1301,7 +1691,12 @@ namespace AgyClaudeStyle.Installer
 
         private async Task ExecuteUninstallAsync()
         {
+            if (_busy) return;
             _busy = true;
+            _statusHeadline.Text = "正在卸载 Obsidian Prism 并恢复原版界面...";
+            _statusHeadline.ForeColor = Color.FromArgb(28, 25, 23);
+            _statusDetail.Text = "正在停止后台守护、还原快捷方式并清理插件文件，请稍候...";
+            _progressBar.Value = 5;
             SetButtonsEnabled(false);
             try
             {
@@ -1314,6 +1709,19 @@ namespace AgyClaudeStyle.Installer
                 _openDirBtn.Enabled = false;
                 _uninstallBtn.Enabled = false;
                 _launchAgBtn.Visible = false;
+                if (!_selfDeleteOnClose)
+                {
+                    _installBtn.Visible = true;
+                    _installBtn.Text = "重新安装";
+                    _installBtn.Enabled = true;
+                }
+                else
+                {
+                    _installBtn.Visible = false;
+                    _installBtn.Enabled = false;
+                }
+                _closeBtn.Text = "完成并关闭";
+                AcceptButton = _closeBtn;
             }
             catch (Exception ex)
             {
@@ -1321,11 +1729,13 @@ namespace AgyClaudeStyle.Installer
                 _statusHeadline.ForeColor = Color.FromArgb(185, 28, 28);
                 _statusDetail.Text = ex.Message;
                 AppendLog("[✗] 错误: " + ex);
+                _closeBtn.Text = "关闭";
             }
             finally
             {
                 _busy = false;
                 _closeBtn.Enabled = true;
+                UpdateInstallButtonStyle();
             }
         }
 
@@ -1333,8 +1743,10 @@ namespace AgyClaudeStyle.Installer
         {
             _uninstallBtn.Enabled = enabled;
             _openDirBtn.Enabled = enabled;
+            _installBtn.Enabled = enabled;
             _launchAgBtn.Enabled = enabled;
             _closeBtn.Enabled = enabled;
+            UpdateInstallButtonStyle();
         }
     }
 
@@ -1352,7 +1764,7 @@ namespace AgyClaudeStyle.Installer
 
             if (opts.StatusOnly)
             {
-                string dir = Path.GetFullPath(string.IsNullOrEmpty(opts.InstallDir) ? InstallerCore.GetDefaultInstallDir() : opts.InstallDir).TrimEnd('\\', '/');
+                string dir = InstallerCore.NormalizeDirPath(string.IsNullOrEmpty(opts.InstallDir) ? InstallerCore.GetDefaultInstallDir() : opts.InstallDir);
                 string pluginDir = InstallerCore.ResolveNativePluginDir(opts, dir);
                 AntigravityDetectResult ag = InstallerCore.DetectAntigravityDesktop();
                 int? port = CdpHelper.ReadPort(opts.CdpPort);

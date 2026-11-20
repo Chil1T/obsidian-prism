@@ -27,6 +27,8 @@ const schema={trajectory:{cascadeId:scalar,trajectoryId:scalar,steps,generatorMe
  generatorMetadata:generators,generatorMetadatas:generators,status:scalar,numTotalSteps:scalar,numTotalGeneratorMetadata:scalar,
  trajectorySummaries:summaries};
 const DROP=Symbol('discard');
+const STR_SPECIAL=/["\\\x00-\x1f]/g;
+const LITERAL_CH=/[a-zA-Z0-9+\-.]/;
 export class TrajectoryJson {
  constructor({maxRetainedBytes=8*1024*1024,projection=schema,onRecord=null,recordKeys=null}={}){this.maxRetainedBytes=maxRetainedBytes;this.projection=projection;this.onRecord=onRecord;this.recordCounts={steps:0,generatorMetadata:0};this.streamedKinds=new Set();this.recordKeys=recordKeys;this.emitted=0;if(recordKeys&&(!Array.isArray(recordKeys)||recordKeys.length>8||recordKeys.some(k=>typeof k!=='string'||!Object.hasOwn(projection,k))))throw Error('Invalid streamed record keys');}
  stack=[];token=null;result=undefined;done=false;retained=0;
@@ -74,7 +76,8 @@ export class TrajectoryJson {
   const f=this.stack.at(-1),key=f&&!f.array&&['key','keyOrEnd'].includes(f.expect);
   if(!key&&!this.valueAllowed())this.fail();
   const node=key?null:this.node();
-  this.token={kind:'string',key,node,buffer:'',overflow:false,escape:0,hex:'',any:false,ascii:0,other:0};
+  const discard=!key&&(node===undefined||node===null);
+  this.token={kind:'string',key,node,discard,buffer:'',overflow:false,escape:0,hex:'',hexLen:0,any:false,ascii:0,other:0};
  }
  stringPart(text){
   const t=this.token;if(t.node===nonempty&&/\S/u.test(text)||t.node===presence&&text.length)t.any=true;
@@ -110,21 +113,44 @@ export class TrajectoryJson {
    if(stopAfterRecord&&this.emitted!==before)return i;
    const t=this.token;
    if(t?.kind==='string'){
+    if(t.discard){
+     if(t.escape===1){
+      const cc=text.charCodeAt(i++);
+      if(cc===117){t.escape=2;t.hexLen=0;continue;}
+      if(cc!==34&&cc!==92&&cc!==47&&cc!==98&&cc!==102&&cc!==110&&cc!==114&&cc!==116)this.fail();
+      t.escape=0;continue;
+     }
+     if(t.escape===2){
+      const cc=text.charCodeAt(i++);
+      if(!((cc>=48&&cc<=57)||(cc>=65&&cc<=70)||(cc>=97&&cc<=102)))this.fail();
+      if(++t.hexLen===4)t.escape=0;
+      continue;
+     }
+     while(i<text.length){
+      const cc=text.charCodeAt(i);
+      if(cc===34){i++;this.endString();break;}
+      if(cc===92){i++;t.escape=1;break;}
+      if(cc<32)this.fail();
+      i++;
+     }
+     continue;
+    }
     if(t.escape===1){
      const c=text[i++];if(c==='u'){t.escape=2;t.hex='';continue;}
      const decoded={'"':'"','\\':'\\','/':'/','b':'\b','f':'\f','n':'\n','r':'\r','t':'\t'}[c];
      if(decoded===undefined)this.fail();this.stringPart(decoded);t.escape=0;continue;
     }
     if(t.escape===2){const c=text[i++];if(!/[0-9a-f]/i.test(c))this.fail();t.hex+=c;if(t.hex.length===4){this.stringPart(String.fromCharCode(parseInt(t.hex,16)));t.escape=0;}continue;}
-    const special=/["\\\x00-\x1f]/g;special.lastIndex=i;const hit=special.exec(text),end=hit?hit.index:text.length;
-    this.stringPart(text.slice(i,end));i=end;if(!hit)continue;
+    STR_SPECIAL.lastIndex=i;const hit=STR_SPECIAL.exec(text),end=hit?hit.index:text.length;
+    if(end>i)this.stringPart(text.slice(i,end));i=end;if(!hit)continue;
     const c=text[i++];if(c==='"')this.endString();else if(c==='\\')t.escape=1;else this.fail();continue;
    }
    if(t?.kind==='literal'){
-    const start=i;while(i<text.length&&/[a-zA-Z0-9+\-.]/.test(text[i]))i++;
+    const start=i;while(i<text.length&&LITERAL_CH.test(text[i]))i++;
     t.buffer+=text.slice(start,i);if(t.buffer.length>1024)this.fail();if(i<text.length)this.literalEnd();continue;
    }
-   const c=text[i++];if(/[ \r\n\t]/.test(c))continue;
+   const cc=text.charCodeAt(i);if(cc===32||cc===10||cc===13||cc===9){i++;continue;}
+   const c=text[i++];
    if(c==='"'){this.startString();continue;}
    if('{}[]:,'.includes(c)){this.punctuation(c);continue;}
    if(!this.valueAllowed()||!/[tfn\d-]/.test(c))this.fail();this.token={kind:'literal',node:this.node(),buffer:c};

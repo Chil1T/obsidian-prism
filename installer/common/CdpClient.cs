@@ -44,7 +44,7 @@ namespace AgyClaudeStyle
             string manifestPath = Path.Combine(baseDir, "manifest.json");
             Dictionary<string, object> raw = MiniJson.ParseObject(File.ReadAllText(manifestPath, Encoding.UTF8));
             PluginManifest m = new PluginManifest();
-            m.Version = GetString(raw, "version", "1.0.1");
+            m.Version = GetString(raw, "version", "1.0.2");
             m.StyleId = GetString(raw, "styleId", "ag-prism-css");
             m.SettingBinding = GetString(raw, "settingBinding", "__agPrismSetting");
             m.RemoveExpression = GetString(raw, "removeExpression", "");
@@ -2044,7 +2044,7 @@ namespace AgyClaudeStyle
             sb.Append("        style = document.createElement('style');\n");
             sb.Append("        style.id = ").Append(styleIdJson).Append(";\n");
             sb.Append("      }\n");
-            sb.Append("      if (style.textContent !== css) style.textContent = css;\n");
+            sb.Append("      if (style.textContent !== css) { style.textContent = css; style.removeAttribute?.('data-ag-cs-flat'); }\n");
             sb.Append("      if (style.parentNode !== targetParent || targetParent.lastElementChild !== style) {\n");
             sb.Append("        targetParent.appendChild(style);\n");
             sb.Append("      }\n");

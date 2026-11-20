@@ -8,7 +8,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-export const OMNI_VERSION = '1.0.1';
+export const OMNI_VERSION = '1.0.2';
 export const OMNI_BINDING = '__agPrismOmniCall';
 
 const MAX_TEXT_SLICE_BYTES = 2 * 1024 * 1024;
@@ -129,7 +129,7 @@ const BLOCKED_EXTERNAL_EXEC_EXTS = new Set([
 
 const SENSITIVE_BASENAMES = new Set([
   'keys.txt',
-  'model-hub.config.json',
+  'secrets.json',
   '.npmrc',
   '.pypirc',
   '.git-credentials',

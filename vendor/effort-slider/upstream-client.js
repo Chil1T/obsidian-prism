@@ -1325,7 +1325,6 @@ var agTrigger = findAntigravityTrigger(d);
 var claudeFlag = typeof isClaude === "boolean" ? isClaude : isClaudeModel(agTrigger ? agTrigger.textContent : "");
 var color = valueColorFor(label, index, count, isMax, hasOffFirst, claudeFlag, resolvePrismAccentTone(d, null));
 // 1. Antigravity 原生触发按钮：只给档位后缀 span 着色，保持模型名称本身清晰易读
-var agTrigger = findAntigravityTrigger(d);
 if (agTrigger) {
 var effortSpan = agTrigger.querySelector("span.opacity-70, [data-ces-part='trigger-effort']");
 if (effortSpan) {
@@ -1977,15 +1976,27 @@ node.el.className = nextTickClass;
 }
 }
 }
+var cachedTrackRect = null;
+var cachedTrackRectAt = 0;
+var cachedSurfaceDark = true;
+var cachedSurfaceDarkAt = 0;
+var lastClaudePaintAt = 0;
 function _stopClRaf() {
 if (claudeRafId !== null && win && typeof win.cancelAnimationFrame === "function") {
 win.cancelAnimationFrame(claudeRafId);
 }
 claudeRafId = null;
+cachedTrackRect = null;
+cachedTrackRectAt = 0;
+lastClaudePaintAt = 0;
 }
 function stepClaudeCanvas(nowTs) {
 claudeRafId = null;
 if (destroyed) return;
+if (doc && doc.hidden) {
+_stopClRaf();
+return;
+}
 var snap = readSeatSnapshot();
 // 强度归零（回到 Low / 切走 Claude / 锁定）即停止循环，零冗余开销
 if (!snap.isClaude || snap.locked || claudeIntensity <= 0) {
@@ -1993,14 +2004,30 @@ _stopClRaf();
 return;
 }
 var now = typeof nowTs === "number" && nowTs > 0 ? nowTs : nowMs();
+// 高刷屏限频至 ~60fps（15.5ms），避免 180Hz/300Hz 下重复逐像素重绘 Canvas，60Hz 丝滑度 100% 一致
+if (lastClaudePaintAt > 0 && now - lastClaudePaintAt < 15.5) {
+if (win && typeof win.requestAnimationFrame === "function") {
+claudeRafId = win.requestAnimationFrame(stepClaudeCanvas);
+}
+return;
+}
+lastClaudePaintAt = now;
 var elapsed = Math.max(0, now - claudeAnimStart);
 var progress = Math.min(1, elapsed / CLAUDE_SWEEP_MS);
 // 相位按帧累加：dt 上限 50ms，防止切后台回来后一次性跳很远
 var frameDt = claudeLastTs > 0 ? Math.min(0.05, Math.max(0, (now - claudeLastTs) / 1000)) : 0;
 claudeLastTs = now;
 claudeFlowTime += frameDt * claudeSpeed;
-var isDark = surfaceIsDark(win, doc);
-var rect = trackEl.getBoundingClientRect ? trackEl.getBoundingClientRect() : null;
+if (now - cachedSurfaceDarkAt > 300 || cachedSurfaceDarkAt === 0) {
+cachedSurfaceDark = surfaceIsDark(win, doc);
+cachedSurfaceDarkAt = now;
+}
+var isDark = cachedSurfaceDark;
+if (!cachedTrackRect || now - cachedTrackRectAt > 250) {
+cachedTrackRect = trackEl.getBoundingClientRect ? trackEl.getBoundingClientRect() : null;
+cachedTrackRectAt = now;
+}
+var rect = cachedTrackRect;
 var trackW = rect && rect.width > 0 ? rect.width : 280;
 var th = rect && rect.height > 0 ? Math.round(rect.height) : (claudeCanvasEl.height || 28);
 // 画布像素宽度 = 已填充宽度（圆钮中心），与 CSS width: var(--ces-fill) 对齐
@@ -3051,20 +3078,34 @@ if (!rel || !panel.contains(rel)) {
 resetUsageHover();
 }
 }
-panel.addEventListener("pointerenter", onPointerEnterCapture, true);
-panel.addEventListener("pointerover", onPointerOverCapture, true);
-panel.addEventListener("pointerout", onPointerOutCapture, true);
-panel.addEventListener("pointerleave", onPointerLeaveCapture, true);
-panel.addEventListener("pointermove", onPointerMoveCapture, true);
-panel.addEventListener("pointerup", onPointerOrMouseUpCapture, true);
-panel.addEventListener("mouseup", onPointerOrMouseUpCapture, true);
-panel.addEventListener("click", onClickCapture, true);
+var evPairs = [
+["pointerenter", onPointerEnterCapture],
+["pointerover", onPointerOverCapture],
+["pointerout", onPointerOutCapture],
+["pointerleave", onPointerLeaveCapture],
+["pointermove", onPointerMoveCapture],
+["pointerup", onPointerOrMouseUpCapture],
+["mouseup", onPointerOrMouseUpCapture],
+["click", onClickCapture]
+];
+for (var ei = 0; ei < evPairs.length; ei++) panel.addEventListener(evPairs[ei][0], evPairs[ei][1], true);
 panel.__cesAgResetUsageHover = resetUsageHover;
+panel.__cesAgUnbindPanel = function () {
+for (var ui = 0; ui < evPairs.length; ui++) panel.removeEventListener(evPairs[ui][0], evPairs[ui][1], true);
+delete panel.__cesAgResetUsageHover;
+delete panel.__cesAgUnbindPanel;
+delete panel.__cesAgBound;
+};
 }
 function _unmntSec() {
 if (activePanel && typeof activePanel.__cesAgResetUsageHover === "function") {
 try {
 activePanel.__cesAgResetUsageHover();
+} catch (e) {}
+}
+if (activePanel && typeof activePanel.__cesAgUnbindPanel === "function") {
+try {
+activePanel.__cesAgUnbindPanel();
 } catch (e) {}
 }
 if (doc && doc.activeElement && activeSection && activeSection.contains(doc.activeElement)) {
@@ -3220,13 +3261,29 @@ _intMut = false;
 scan();
 var MO = opts.MutationObserver || (win && win.MutationObserver) || (typeof MutationObserver === "function" ? MutationObserver : null);
 if (typeof MO === "function") {
-observer = new MO(function () {
+observer = new MO(function (recs) {
+if (_intMut) return;
+if (Array.isArray(recs) && recs.length && !activePanel) {
+var rel = false;
+var ctrlSel = '[data-testid="model-selector-trigger"],button[aria-label^="Select model"],[data-testid="model-selector-panel"],[role="menu"]';
+var noiseSel = '[data-testid="autoscroll-viewport"],.toast-viewport,[data-testid="sidebar-split"]>div:first-child';
+for (var ri = 0; ri < recs.length; ri += 1) {
+var r = recs[ri], t = r && r.target, el = t && (t.nodeType === 1 ? t : t.parentElement);
+if (!el || typeof el.closest !== "function") { rel = true; break; }
+if (r.type === "characterData" || r.type === "attributes") {
+if (el.closest(ctrlSel)) { rel = true; break; }
+} else if (el.closest(ctrlSel) || !el.closest(noiseSel)) { rel = true; break; }
+}
+if (!rel) return;
+}
 scan();
 });
 observer.observe(doc.body, {
 childList: true,
 subtree: true,
-characterData: true
+characterData: true,
+attributes: true,
+attributeFilter: ["aria-expanded", "data-state", "hidden", "data-selected"]
 });
 }
 return {

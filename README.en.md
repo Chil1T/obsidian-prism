@@ -12,7 +12,7 @@ Four Dark/Daylight Themes · Side-Pane Browser & Streaming File Viewer · Dual-W
 
 <p>
   <a href="https://github.com/RMvdesi/obsidian-prism/releases"><img src="https://img.shields.io/github/v/release/RMvdesi/obsidian-prism?style=flat-square&color=3186ff&label=Release" alt="Latest Release" /></a>
-  <img src="https://img.shields.io/badge/Version-1.0.1-0f172a?style=flat-square" alt="Version 1.0.1" />
+  <img src="https://img.shields.io/badge/Version-1.0.2-0f172a?style=flat-square" alt="Version 1.0.2" />
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20Universal-1e293b?style=flat-square" alt="Platform" />
   <a href="https://github.com/RMvdesi/obsidian-prism/actions"><img src="https://img.shields.io/github/actions/workflow/status/RMvdesi/obsidian-prism/ci.yml?branch=main&style=flat-square&label=CI" alt="CI Status" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-2563eb?style=flat-square" alt="License: GPL-3.0" /></a>
@@ -32,16 +32,17 @@ Four Dark/Daylight Themes · Side-Pane Browser & Streaming File Viewer · Dual-W
 
 ## Key Features
 
-**Obsidian Prism (`v1.0.1`)** provides dark/daylight themes, host workbench enhancements, a built-in side-pane browser and streaming multi-format file viewer, live quota telemetry, and chain-of-thought translation for the Antigravity desktop client through a native Sidecar plugin architecture — without altering host business logic or conflicting with external plugins:
+**Obsidian Prism (`v1.0.2`)** provides dark/daylight themes, host workbench enhancements, a built-in side-pane browser and streaming multi-format file viewer, live quota telemetry, and chain-of-thought translation for the Antigravity desktop client through a native Sidecar plugin architecture — without altering host business logic or conflicting with external plugins:
 
 - **Four Dark/Daylight Themes & Fine-Grained Controls**: Includes two dark palettes (**Obsidian Dark** & **Warm Charcoal**) and two daylight presets (**Daylight Crystal** & **Warm Alabaster**) with automatic host light/dark tracking, plus 5 accent tones (Follow Model, Cobalt, Iris, Amber, and Graphite Monochrome `mono`), 3 corner radius scales, 4 code monospace font stacks with ligature toggle, and ambient glow intensity controls.
 - **300Hz Split-Rate Pipeline, 5-Step Ink Streaming & `0fps` Semantic Afterglow**: Removes persistent multi-layer `backdrop-filter` blur passes; renders streaming responses with a `CSS.highlights`-based **5-step ink fade-in** (zero wrapper nodes, zero forced layout reflow, maintaining smooth high-refresh frame pacing even in `34k+`-node long sessions); caps steady-state background aurora rendering to `~30fps` on 300Hz displays and enters `0fps` idle sleep `1.2s` after activity ends. Provides non-intrusive three-state semantic edge cues (awaiting user decision, error halted, and background long-task completion) that freeze into `0fps` static snapshots.
-- **Host Workbench & Sidecar Integration**: Synchronizes 24 theme color variables in real time to `plugin://*` Sidecar `iframe` panels (Swarm, Model Hub, Pulse, etc.) via the host `preload` `postMessage` protocol to prevent white flashes; adds sticky headers to Markdown and Artifact code blocks with manual fold/unfold controls for completed blocks (`>= 48` lines, never auto-truncated, with scroll-anchor compensation); enhances the left conversation rail with chapter tick styles, on-hover prompt outline filtering, historical step folding, and `Alt+↑` / `Alt+↓` turn navigation; unifies terminal and background task surfaces with four-theme Console Well styling.
-- **Omni Side-Pane Browser, Context Menu & Streaming File Viewer**: Configurable via `omniModule` (`"on" | "off"`) and `linkTarget` (`"builtin" | "external"`). Uses `CSS.highlights` (Custom Highlight API) for zero-DOM-mutation activation of bare URLs, `localhost` ports, and local file paths in chat and terminal output without splitting host React text nodes; left-clicking web links opens them in the right side-pane built-in browser by default (`Ctrl/Cmd+Click` toggles the system browser). Preserves **zero hover-popup clutter** during reading — actions appear strictly on right-click (`contextmenu`) over links, file pills, Artifact cards, or Mermaid diagrams (copy absolute/relative paths, reveal in folder, insert as `@mention` into composer, open in side-pane/external browser, or zoom diagrams). Backed by a loopback-only (`127.0.0.1`) HTTP `206 Range` streaming gateway supporting frame-stepped large video inspection, millisecond audio waveform markers, checkerboard SVG/transparent-image zoom & PNG export, responsive local HTML sandboxes, PDF viewing, frozen-header `CSV/TSV/JSONL` search/sorting, and `TTF/OTF/WOFF2` font specimen waterfalls.
+- **Host Workbench & Sidecar Integration**: Synchronizes 24 theme color variables in real time to `plugin://*` Sidecar `iframe` panels (Swarm, Pulse, etc.) via the host `preload` `postMessage` protocol to prevent white flashes; adds sticky headers to Markdown and Artifact code blocks with manual fold/unfold controls for completed blocks (`>= 48` lines, never auto-truncated, with scroll-anchor compensation); enhances the left conversation rail with chapter tick styles, on-hover prompt outline filtering, historical step folding, and `Alt+↑` / `Alt+↓` turn navigation; unifies terminal and background task surfaces with four-theme Console Well styling.
+- **Omni Native Browser Integration, Context Menu & Streaming File Viewer**: Configurable via `omniModule` (`"on" | "off"`) and `linkTarget` (`"builtin" | "external"`). Follows a **stock-first deference** rule: yields 100% of native `<a href="http...">` clicks, in-page search, external confirmation modals, and `<= 200MB` native media/CSV/PDF/HTML previews to Antigravity's built-in handlers. Uses `CSS.highlights` (Custom Highlight API) for zero-DOM-mutation activation of bare URLs, `localhost` ports, and local file paths (routing bare links to native right-pane Browser Tabs), and upgrades the side pane in-place only when the host shows size-limit (`> 20MB` / `> 200MB`) or unsupported-file notices (auto-unmounting when switching back). Preserves **zero hover-popup clutter** during reading — actions appear strictly on right-click (`contextmenu`) over bare links, file pills, Artifact cards, or Mermaid diagrams (copy absolute/relative paths, reveal in folder, insert as `@mention` into composer, open in side-pane/external browser, or zoom diagrams). Backed by a loopback-only (`127.0.0.1`) HTTP `206 Range` streaming gateway supporting frame-stepped large video inspection, millisecond audio waveform markers, checkerboard SVG/transparent-image zoom & PNG export, responsive local HTML sandboxes, PDF viewing, frozen-header `CSV/TSV/JSONL` search/sorting, and `TTF/OTF/WOFF2` font specimen waterfalls.
 - **Defense-in-Depth Security & Local Isolation**: Enforces top-level main-frame verification on all privileged `__agPrism*` CDP bindings (rejecting sub-`<iframe>` RPC calls); hardens the loopback streaming gateway with `Host` and cross-site request checks, `realpath` blocking of sensitive credential files (`.env*`, `.ssh`, private keys, and local token configs), and remote UNC path blocking; isolates local HTML previews with per-directory `HMAC-SHA256` read-only sub-tokens and restricted `sandbox` attributes (without `allow-same-origin`), while disabling upstream redirects and blocking cloud-metadata/unsafe ports in thought translation requests.
 - **Dual-Window Quota Telemetry & 512K Context Vial**: Aligns `vendor/pulse-dashboard/` with upstream [`ATtacK030130/antigrative-dashboard`](https://github.com/ATtacK030130/antigrative-dashboard) `v0.9.1` (MIT), supporting **5-hour and weekly quota pool tracking with linear depletion forecasts**, **main session vs. Swarm/subagent token attribution**, **cache hit rate** metrics, and CDP process-lineage multi-instance discovery. Exposes Overview, Trends, and Quotas views with workspace filtering on the Studio home dashboard, stores telemetry in an isolated sidecar directory, and yields automatically when standalone external plugins are active.
 - **Dual-Mode Thought Translator**: Supports zero-config **Machine Translation** and **OpenAI-Compatible Streaming Translation**, allowing keyless local endpoints (`localhost` / LAN Ollama, LM Studio, vLLM without requiring an API key); safely restores `file://` source paths and `#L` line-number jump pills under a strict `file://`-only protocol allowlist; adds a concurrency-limited (`max = 3`) viewport-priority queue, per-block retry/re-translate controls, **Immersive vs. Stacked Bilingual** view modes, and cache management. API keys and custom prompts are stored locally in `~/.gemini/config/` (`0600` permissions).
-- **Microkernel Architecture & Sub-10ms Config Sync**: Splits the runtime into a lean `ui-runtime.js` microkernel and 6 focused controller modules compiled with a cross-module shared string pool (`< 680 KB` static main bundle, with the Omni client delivered on a dedicated second channel). Covers 26 validated configuration keys with `< 10 ms` single-flight incremental `refreshConfig` broadcast, three scene presets, categorized sub-tabs, and API-key-sanitized JSON export/import.
+- **Chat Mode (Beta · Off by Default)**: Off by default and toggleable anytime in **Settings → Appearance → Beta** (`sidebarStudio: "on" | "off"`). When enabled, adds a top-sidebar switcher between the Code workspace and a dedicated Chat space for everyday conversations and document organization, complete with folder/project grouping, clean multi-turn reading views, Artifacts preview, and project-scoped permission isolation that preserves global Code settings.
+- **Microkernel Architecture & Sub-10ms Config Sync**: Splits the runtime into a lean `ui-runtime.js` microkernel and 6 focused controller modules compiled with a cross-module shared string pool (`< 670 KiB` static main bundle, with the Omni client delivered on a dedicated second channel). Covers 27 validated configuration keys with `< 10 ms` single-flight incremental `refreshConfig` broadcast, three scene presets, categorized sub-tabs, and API-key-sanitized JSON export/import.
 
 ---
 
@@ -73,7 +74,7 @@ Displays live 512K context usage inside a compact 1D shallow-water vial — **cl
 ---
 
 ### 3. Appearance Control Center & Thought Translator Settings
-Integrated into **Antigravity → Settings → Appearance**, providing 5 UI languages (`zh-CN`, `zh-TW`, `yue`, `en`, `ja`), 26 validated configuration keys (including `omniModule` for file viewer & context menu and `linkTarget` for default web link target), three scene presets (Full Visuals / Deep Focus / Silent Eco), sanitized JSON config backup/restore, one-click Git `pull --ff-only` updates, and multi-profile thought translation settings:
+Integrated into **Antigravity → Settings → Appearance**, providing 5 UI languages (`zh-CN`, `zh-TW`, `yue`, `en`, `ja`), 27 validated configuration keys (including `omniModule` for file viewer & context menu, `linkTarget` for default web link target, and the Chat Mode (Beta) toggle under Beta), three scene presets (Full Visuals / Deep Focus / Silent Eco), sanitized JSON config backup/restore, one-click Git `pull --ff-only` updates, and multi-profile thought translation settings:
 
 <p align="center">
   <img src="assets/screenshots/settings-and-thought-suite.png" width="100%" alt="Appearance Settings and Dual-Mode Thought Suite" />
@@ -118,22 +119,23 @@ Then open **Settings → Appearance** in Antigravity to expand the **Obsidian Pr
 
 #### Common CLI Commands
 ```bash
-npm run inject           # One-shot live injection into running Antigravity windows
-npm run remove           # Cleanly remove all styles/widgets and restore stock UI
-npm run clean:legacy     # Strip legacy blocks from historical app.asar archives
-npm test                 # Run cross-module security, bundle & regression tests
-npm run build:installer  # Build standalone Windows installer (.exe)
-npm run build:macos      # Build standalone macOS Universal bundle (.dmg)
+npm run inject                 # One-shot live injection into running Antigravity windows
+npm run remove                 # Cleanly remove all styles/widgets and restore stock UI
+npm run clean:legacy           # Strip legacy blocks from historical app.asar archives
+npm run archive:conversations  # Inspect conversation DB bloat & safely archive old subagent sessions offline (reversible)
+npm test                       # Run cross-module security, bundle & regression tests
+npm run build:installer        # Build standalone Windows installer (.exe)
+npm run build:macos            # Build standalone macOS Universal bundle (.dmg)
 ```
 
 #### Core Repository Layout
 ```text
 obsidian-prism/
-├── plugin.json                         # Antigravity native plugin manifest (obsidian-prism@1.0.1)
+├── plugin.json                         # Antigravity native plugin manifest (obsidian-prism@1.0.2)
 ├── LICENSE / NOTICE / CITATION.cff     # GPL-3.0 license, attribution terms & citation metadata
 ├── THIRD_PARTY_NOTICES.md              # Preserved copyright & license notices for MIT upstreams
 ├── assets/                             # Vector plugin icon & documentation screenshots
-├── cdp.js / inject.js / remove.js      # Shared-pool bundle compiler (<680KB), dual-channel attach & removal
+├── cdp.js / inject.js / remove.js      # Shared-pool bundle compiler (<670KiB), dual-channel attach & removal
 ├── style.css                           # Four themes, accent/corner tokens & workbench surface styles
 ├── i18n-locales.js / i18n-core.js      # 5-language localization tables (zh-CN/zh-TW/yue/en/ja)
 ├── motion-engine.js / animated-icons.js# 4-tier damped spring physics & animated UI icons
@@ -141,7 +143,7 @@ obsidian-prism/
 ├── smooth-caret.js / dual-mascot-rig.js# Read/write-separated caret tracking & pixel mascot rig
 ├── usage-core.js / vial-core.js        # Quota forecast functions & 512K shallow-water vial renderer
 ├── pulse-vial-bridge.js                # Context slice breakdown & 5h/weekly quota popover bridge
-├── settings-panel.js                   # Settings UI (26 keys, scene presets, sanitized JSON backup)
+├── settings-panel.js                   # Settings UI (27 keys, scene presets, sanitized JSON backup)
 ├── home-studio-panel.js                # Controller 1: Studio home dashboard (Overview/Trends/Quotas)
 ├── home-ripple-host.js                 # Controller 2: Home glyph ripple matrix host controller
 ├── model-glyph-crystal.js              # Controller 3: Model glyph & WebGL2 prism bar controller
@@ -149,7 +151,7 @@ obsidian-prism/
 ├── prism-rim-canvas.js                 # Controller 5: Cursor-reactive border highlight controller
 ├── host-workbench-enhancer.js          # Controller 6: Sidecar theme bridge, code fold & rail outline
 ├── ui-runtime.js                       # Frontend microkernel: fast config sync & lifecycle orchestration
-├── sidecars/daemon/                    # Multi-channel native daemon (settings/metrics/usage/repo/thought/omni)
+├── sidecars/daemon/                    # Multi-channel native daemon (settings/metrics/usage/repo/storage archiver/thought/omni)
 ├── vendor/                             # Telemetry (v0.9.1), effort-slider, thought-translator & omni-viewer
 └── installer/ & tools/                 # Windows (C#) / macOS (Swift) native-plugin installers & scripts
 ```
@@ -178,7 +180,7 @@ Any fork, modification, port, or redistribution must comply with all three requi
   author       = {RMvdesi},
   title        = {{Obsidian Prism: Modular Optical UI, Workbench Enhancements, Omni File Viewer, Quota Telemetry & Thought Translator for Antigravity}},
   year         = {2026},
-  version      = {1.0.1},
+  version      = {1.0.2},
   license      = {GPL-3.0-only},
   url          = {https://github.com/RMvdesi/obsidian-prism}
 }

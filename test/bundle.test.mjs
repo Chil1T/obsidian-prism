@@ -372,8 +372,8 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     assert.ok(sandbox.window.__agPrism, 'Expected window.__agPrism exposed');
     assert.equal(sandbox.window.__agClaudeStyle, sandbox.window.__agPrism, 'Expected legacy alias pointing to __agPrism');
     const st = sandbox.window.__agPrism.getState();
-    assert.equal(st.version, '1.0.1');
-    assert.equal(html.getAttribute('data-ag-prism'), '1.0.1');
+    assert.equal(st.version, '1.0.2');
+    assert.equal(html.getAttribute('data-ag-prism'), '1.0.2');
     assert.equal(html.getAttribute('data-ag-cs-light-preset'), 'crystal');
     assert.equal(html.getAttribute('data-ag-cs-telemetry'), 'auto');
     assert.equal(html.getAttribute('data-ag-cs-effort-slider'), 'auto');
@@ -420,7 +420,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     const settingsSec = appearancePanel.querySelector('#ag-cs-settings-sec');
     assert.ok(settingsSec);
     assert.equal(settingsSec.querySelector('h3')?.textContent, 'Obsidian Prism · 黑曜棱镜');
-    assert.equal(settingsSec.querySelector('.ag-cs-settings-ver')?.textContent, 'v1.0.1');
+    assert.equal(settingsSec.querySelector('.ag-cs-settings-ver')?.textContent, 'v1.0.2');
     const brandMarkHtml = settingsSec.querySelector('.ag-cs-settings-brand-mark')?.innerHTML || '';
     assert.ok(
       brandMarkHtml.includes('ag-cs-brand-logo-svg') || brandMarkHtml.includes('ag-cs-settings-brand-svg'),
@@ -439,10 +439,10 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     assert.equal(sandbox.localStorage.getItem('ag-prism:settings-open'), '1');
 
     const settingGroups = settingsSec.querySelectorAll('.ag-cs-settings-group');
-    assert.equal(settingGroups.length, 5);
+    assert.equal(settingGroups.length, 6);
     assert.deepEqual(
       settingGroups.map((g) => g.getAttribute('data-ag-cs-group')),
-      ['appearance', 'interaction', 'thought', 'modules', 'about']
+      ['appearance', 'interaction', 'thought', 'modules', 'beta', 'about']
     );
     const thoughtCfgBox = settingsSec.querySelector('[data-testid="prism-thought-ai-config"]');
     assert.ok(thoughtCfgBox, 'Expected built-in OpenAI thought translator config card');
@@ -484,7 +484,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
         .map((b) => b.getAttribute('data-ag-cs-key'))
         .filter(Boolean)
     );
-    assert.equal(settingKeys.size, 26);
+    assert.equal(settingKeys.size, 27);
     for (const expectedKey of [
       'palette',
       'lightPreset',
@@ -503,6 +503,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
       'thoughtTranslate',
       'thoughtTrigger',
       'telemetryModule',
+      'sidebarStudio',
       'effortSliderModule',
       'accentTone',
       'cornerStyle',
@@ -537,13 +538,13 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
       assert.equal(placeholder.getAttribute('data-ag-cs-placeholder'), expectedPlaceholder);
     };
 
-    checkLangSwitch('zh-TW', '外觀', '外掛看板語言', '概覽', '接下來做什麼？', '描述任務或提出問題');
-    checkLangSwitch('yue', '外觀', '插件看板語言', '概覽', '跟住想做啲咩？', '寫低你想做嘅任務或者問題');
-    checkLangSwitch('en', 'Appearance', 'Plugin UI Language', 'Overview', "What's up next?", 'How can I help you today?');
+    checkLangSwitch('zh-TW', '外觀', '介面語言', '概覽', '接下來做什麼？', '描述任務或提出問題');
+    checkLangSwitch('yue', '外觀', '介面語言', '概覽', '跟住想做啲咩？', '寫低你想做嘅任務或者問題');
+    checkLangSwitch('en', 'Appearance', 'UI Language', 'Overview', "What's up next?", 'How can I help you today?');
     assert.equal(html.hasAttribute('data-ag-cs-cjk'), false);
-    checkLangSwitch('ja', '外観', 'プラグイン表示言語', '概要', '次は何をしますか？', 'タスクの説明や質問を入力してください');
+    checkLangSwitch('ja', '外観', '表示言語', '概要', '次は何をしますか？', 'タスクの説明や質問を入力してください');
     assert.equal(html.getAttribute('data-ag-cs-cjk'), '1');
-    checkLangSwitch('zh-CN', '外观', '插件看板语言', '概覽' === '概览' ? '概览' : '概览', '接下来做什么？', '描述任务或提出问题');
+    checkLangSwitch('zh-CN', '外观', '界面语言', '概览', '接下来做什么？', '描述任务或提出问题');
 
     assert.deepEqual(
       bindingCalls.map((c) => [c.key, c.value]),
@@ -3144,7 +3145,7 @@ test('v1.0.1 compiler safety fixes, unified shared string pool < 670KB (< 680KB 
     cdp.isEligibleTarget({
       type: 'page',
       title: 'Untitled Conversation - antigravity - Antigravity',
-      url: 'https://127.0.0.1:14472/c/7abbe5f5-ad54-4c00-af2c-4ad0cf43f044',
+      url: 'https://127.0.0.1:14472/c/11111111-2222-4333-8444-555555555555',
       webSocketDebuggerUrl: 'ws://127.0.0.1:14470/swarm-fullview',
     }),
     true,
@@ -3687,6 +3688,7 @@ test('Antigravity v2.33.0+ dual-layer CDP opt-in guard: shortcut lossless patch/
       hostConfigDir: hostCfgDir,
       startDaemon: false,
       platformOverride: 'win32',
+      portFile: missingPortFile,
       shortcutAdapter,
       stateExtraDirs: [watcherStateDir],
       hostProbe: () => [

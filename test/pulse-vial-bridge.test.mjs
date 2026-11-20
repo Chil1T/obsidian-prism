@@ -14,7 +14,7 @@ const BRIDGE_PATH = path.join(ROOT_DIR, 'pulse-vial-bridge.js');
 const bridgeMod = require(BRIDGE_PATH);
 const vialCore = require(path.join(ROOT_DIR, 'vial-core.js'));
 
-function createPulseMockEnv({ cascadeId = '6546d8a7-52c2-42df-82c0-85aa82cedf9c' } = {}) {
+function createPulseMockEnv({ cascadeId = '11111111-2222-4333-8444-555555555555' } = {}) {
   const winListeners = new Map();
   const docListeners = new Map();
   const storageData = new Map();
@@ -512,7 +512,7 @@ test('peaceful coexistence: preserves #ag-pulse-status-bar, __agPulseRuntimeVers
 
     assert.equal(env.getPulseHost(), originalHost, 'Host #ag-pulse-status-bar node must not be replaced');
     assert.equal(env.win.__agPulseRuntimeVersion, 'pulse-runtime-v083-intact', 'Runtime version must remain untouched');
-    assert.equal(lastInput?.conversationId, '6546d8a7-52c2-42df-82c0-85aa82cedf9c', 'Must pass valid conversationId GUID');
+    assert.equal(lastInput?.conversationId, '11111111-2222-4333-8444-555555555555', 'Must pass valid conversationId GUID');
 
     const requiredIds = [
       'context-percent',
@@ -1535,7 +1535,7 @@ test('inline-fallback mounts isolated #ag-prism-pulse-bar invisible to external 
 
     // Navigate back into active conversation (/c/<uuid>) -> must auto-remount within 80ms!
     homeEl.remove();
-    env.win.location.pathname = '/c/6546d8a7-52c2-42df-82c0-85aa82cedf9c';
+    env.win.location.pathname = '/c/11111111-2222-4333-8444-555555555555';
     for (const obs of [...mutObservers]) obs.cb([]);
     await new Promise((r) => setTimeout(r, 80));
     assert.equal(ctrl.getState().mountedFallback, true, 'Must auto-restore #ag-prism-pulse-bar when entering /c/<uuid> conversation');

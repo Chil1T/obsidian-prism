@@ -99,8 +99,15 @@ async function readBounded(file,budget){
     return Buffer.concat(chunks,bytes).toString('utf8');
   }finally{await handle.close();}
 }
+const DATE_FMT_CACHE = new Map();
 export function dateKey(time,zone='Asia/Shanghai'){
-  const parts=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(time);
+  let fmt=DATE_FMT_CACHE.get(zone);
+  if(!fmt){
+    fmt=new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'});
+    if(DATE_FMT_CACHE.size>=32)DATE_FMT_CACHE.delete(DATE_FMT_CACHE.keys().next().value);
+    DATE_FMT_CACHE.set(zone,fmt);
+  }
+  const parts=fmt.formatToParts(time);
   const get=key=>parts.find(p=>p.type===key).value;return `${get('year')}-${get('month')}-${get('day')}`;
 }
 export function usageRecords(raw,conversationId,{maxRows=Infinity,maxBytes=Infinity}={}){
@@ -137,11 +144,12 @@ const validRow=r=>r&&HASH.test(r.id)&&typeof r.model==='string'&&r.model.length<
   (r.at===null||Number.isSafeInteger(r.at)&&r.at>=0)&&keys.every(k=>r[k]===null||Number.isSafeInteger(r[k])&&r[k]>=0);
 export class UsageLedger{
   constructor(directory=join(platformPaths().data,'usage-v1'),{timeZone='Asia/Shanghai',source='desktop-local'}={}){this.directory=directory;this.timeZone=timeZone;this.source=source;}
-  _gate=Promise.resolve();_barrier=Promise.resolve();_writes=new Set();_files=new Map();usageWrites=new Map();revision=0;_cache=null;caches=new Map();diskSummaryPending=null;_diskSummaryRetry=null;diskSummaryRetries=new Map();
+  _gate=Promise.resolve();_barrier=Promise.resolve();_writes=new Set();_files=new Map();usageWrites=new Map();revision=0;_cache=null;caches=new Map();diskSummaryPending=null;_diskSummaryRetry=null;diskSummaryRetries=new Map();lastDiskWorkerDiagnostic=null;diskSummaryLastError=null;
+  _setBounded(map,key,value,max=64){if(map.has(key))map.delete(key);map.set(key,value);while(map.size>max)map.delete(map.keys().next().value);}
   get cache(){return this._cache;}
-  set cache(value){this._cache=value;if(!value)this.caches.clear();else if(value.key)this.caches.set(value.key,value);}
+  set cache(value){this._cache=value;if(!value)this.caches.clear();else if(value.key)this._setBounded(this.caches,value.key,value,64);}
   get diskSummaryRetry(){return this._diskSummaryRetry;}
-  set diskSummaryRetry(value){this._diskSummaryRetry=value;if(!value)this.diskSummaryRetries.clear();else if(value.key)this.diskSummaryRetries.set(value.key,value);}
+  set diskSummaryRetry(value){this._diskSummaryRetry=value;if(!value)this.diskSummaryRetries.clear();else if(value.key)this._setBounded(this.diskSummaryRetries,value.key,value,64);}
   beginUsageWrite(scope){this.usageWrites.set(scope,(this.usageWrites.get(scope)||0)+1);}
   endUsageWrite(scope){const n=(this.usageWrites.get(scope)||0)-1;if(n>0)this.usageWrites.set(scope,n);else this.usageWrites.delete(scope);}
   // Public queue remains a snapshot barrier for all outstanding writes. Its
@@ -233,12 +241,23 @@ export class UsageLedger{
     const cancel=new SharedArrayBuffer(4),flag=new Int32Array(cancel);
     return new Promise((resolve,reject)=>{
       if(isCurrent()!==true){resolve(null);return;}
-      const worker=new Worker(new URL('./usage-disk-worker.mjs',import.meta.url),{workerData:{...input,cancel},resourceLimits:{maxOldGenerationSizeMb:64,maxYoungGenerationSizeMb:8}});
+      const worker=new Worker(new URL('./usage-disk-worker.mjs',import.meta.url),{workerData:{...input,cancel},resourceLimits:{maxOldGenerationSizeMb:32,maxYoungGenerationSizeMb:8}});
       let result=null,settled=false,workerError=null;
       const timer=setInterval(()=>{if(isCurrent()!==true){Atomics.store(flag,0,1);void worker.terminate();}},100);timer.unref();
       const done=(error,value)=>{if(settled)return;settled=true;clearInterval(timer);error?reject(error):resolve(value);};
       worker.on('message',value=>{result=value;});worker.on('error',error=>{workerError=error;});
-      worker.on('exit',code=>{if(isCurrent()!==true)done(null,null);else if(code===0&&result?.ok)done(null,result.result);else done(workerError||Error('Usage disk processing failed'));});
+      worker.on('exit',code=>{
+        if(isCurrent()!==true)done(null,null);
+        else if(code===0&&result?.ok)done(null,result.result);
+        else {
+          const isOom=workerError?.code==='ERR_WORKER_OUT_OF_MEMORY'||/out of memory|heap limit/i.test(String(workerError?.message||''));
+          const diagError=isOom
+            ?Object.assign(Error(`Usage disk worker hit V8 heap limit (maxOldGenerationSizeMb=32, exit=${code})`),{code:'USAGE_WORKER_OOM',exitCode:code})
+            :(workerError||Object.assign(Error(`Usage disk processing failed (exit=${code})`),{code:'USAGE_WORKER_EXIT',exitCode:code}));
+          this.lastDiskWorkerDiagnostic={at:Date.now(),action:input?.action||'unknown',code:diagError.code||'USAGE_WORKER_ERROR',exitCode:code,oom:isOom,message:diagError.message};
+          done(diagError);
+        }
+      });
     });
   }
   ingestDisk(scope,id,jobDb,options={}){return this.ingestDiskRows(scope,id,{jobDb},options);}
@@ -286,14 +305,14 @@ export class UsageLedger{
       const {quotaWindowCounts,...value}=raw;
       if(quotaWindowCounts)Object.defineProperty(value,'_quotaWindowCounts',{value:quotaWindowCounts,enumerable:false,configurable:true});
       const entry={key:cacheKey,revision:scanRevision,value};
-      if(this.revision===scanRevision){this._cache=entry;this.caches.set(cacheKey,entry);this._diskSummaryRetry=null;this.diskSummaryRetries.delete(cacheKey);}
+      if(this.revision===scanRevision){this._cache=entry;this._setBounded(this.caches,cacheKey,entry,64);this._diskSummaryRetry=null;this.diskSummaryRetries.delete(cacheKey);this.diskSummaryLastError=null;}
       else {
         const existing=this.caches.get(cacheKey);
-        if(!existing||existing.revision<=scanRevision){this._cache=entry;this.caches.set(cacheKey,entry);}
+        if(!existing||existing.revision<=scanRevision){this._cache=entry;this._setBounded(this.caches,cacheKey,entry,64);}
         const retryEntry={key:cacheKey,at:Date.now()+30000};
-        this._diskSummaryRetry=retryEntry;this.diskSummaryRetries.set(cacheKey,retryEntry);
+        this._diskSummaryRetry=retryEntry;this._setBounded(this.diskSummaryRetries,cacheKey,retryEntry,64);
       }
-    }).catch(()=>{if(isCurrent()===true){this.diskSummaryError=true;const retryEntry={key:cacheKey,at:Date.now()+30000};this._diskSummaryRetry=retryEntry;this.diskSummaryRetries.set(cacheKey,retryEntry);}}).finally(async()=>{for(const suffix of ['', '-journal'])await unlink(staging+suffix).catch(()=>{});this.diskSummaryPending=null;});
+    }).catch((err)=>{if(isCurrent()===true){this.diskSummaryError=true;this.diskSummaryLastError={at:Date.now(),code:err?.code||'USAGE_SUMMARY_FAILED',message:String(err?.message||'Usage disk summary failed').slice(0,200)};const retryEntry={key:cacheKey,at:Date.now()+30000};this._diskSummaryRetry=retryEntry;this._setBounded(this.diskSummaryRetries,cacheKey,retryEntry,64);}}).finally(async()=>{for(const suffix of ['', '-journal'])await unlink(staging+suffix).catch(()=>{});this.diskSummaryPending=null;});
   }
   async listAccountBuckets(){
     let names=[];try{names=await readdir(this.directory);}catch(e){if(e.code==='ENOENT')return [];throw e;}
@@ -375,7 +394,7 @@ export class UsageLedger{
       requests:seen.size,firstDate:days[0]?.date||null,updatedAt:new Date(now).toISOString(),source:this.source,...(allBuckets?{accountsCount:activeAccounts.size}:{})};
     if(specs.length)Object.defineProperty(value,'_quotaWindowCounts',{value:windowCounts,enumerable:false,configurable:true});
     const stillWriting=allBuckets?this.usageWrites.size>0:Boolean(this.usageWrites.get(scope));
-    if(this.revision===scanRevision&&!stillWriting){const entry={key:cacheKey,revision:scanRevision,value};this._cache=entry;this.caches.set(cacheKey,entry);return finalize(value);}
+    if(this.revision===scanRevision&&!stillWriting){const entry={key:cacheKey,revision:scanRevision,value};this._cache=entry;this._setBounded(this.caches,cacheKey,entry,64);return finalize(value);}
     return {...finalize(value),summaryStale:true};
   }
 }
@@ -388,8 +407,8 @@ export class DesktopUsage{
     const resolvedDataDir=rawOpts.dataDir||store?.dataDir||platformPaths().data;
     const ledger=isLedger?ledgerOrOpts:new UsageLedger(join(resolvedDataDir,'usage-v1'));
     const {host='app',discoverLocal=null,owns=()=>true,now=Date.now,sliceMs=3000,continueDelay=250,
-    maxCandidates=25,maxCandidatesPerSlice=25,maxPassMs=15000,maxMapEntries=4096,localScanMs=30000,
-    liveMaxConversations=16,liveMaxRows=8192,liveMaxBytes=4*1024*1024,liveMaxGroups=128,liveMaxRecoveryGuards=16,liveMaxRecoveries=256,liveRetryMs=1000,livePollMs=1000,liveRecoveryPollMs=1000,liveBackgroundPollMs=1000,liveBackgroundRetryMs=60000}=rawOpts;
+    maxCandidates=10,maxCandidatesPerSlice=10,maxPassMs=15000,maxMapEntries=1024,localScanMs=30000,
+    liveMaxConversations=6,liveMaxRows=2048,liveMaxBytes=1024*1024,liveMaxGroups=128,liveMaxRecoveryGuards=16,liveMaxRecoveries=256,liveRetryMs=1000,livePollMs=3000,liveRecoveryPollMs=3000,liveBackgroundPollMs=3000,liveBackgroundRetryMs=60000}=rawOpts;
     this.store=store;this.ledger=ledger;this.fingerprints=new Map();this.host=host;this.owns=()=>owns()===true;this.now=now;
     this.discoverLocal=discoverLocal||(()=>host?discoverLocalConversations({host}):Promise.resolve({conversations:[],errors:0}));
     this.customDiscover=Boolean(discoverLocal);this.localScanMs=localScanMs;this.localScanAt=-Infinity;this.localScanResult=null;
@@ -778,5 +797,5 @@ export class DesktopUsage{
     const stillSyncing=syncing||value?.summaryStale===true;
     return {...value,scope:requestedScope,accountKey:requestedScope==='local'?'all-local':identity,activeAccountKey:identity||null,accountAvailable:Boolean(identity),syncing:stillSyncing,status:stillSyncing?'syncing':this.status,missingConversations:this.missingConversations,confirmedMissingConversations:this.confirmedMissingConversations,retryingConversations:this.retryingConversations,persistenceError:this.store.usagePersistenceError===true||this.ledger.diskSummaryError===true};
   }
-  dispose(){this.disposed=true;this.forceQueued=false;clearTimeout(this.continuation);this.continuation=null;clearTimeout(this.liveRecoveryTimer);this.liveRecoveryTimer=null;this.refreshLiveScope();this.fullRemaining.clear();this.fullJournal=null;}
+  dispose(){this.disposed=true;this.forceQueued=false;clearTimeout(this.continuation);this.continuation=null;clearTimeout(this.liveRecoveryTimer);this.liveRecoveryTimer=null;this.refreshLiveScope();this.fullRemaining.clear();this.fullJournal=null;this.fingerprints.clear();this.readFailures.clear();this.delegatedCandidates.clear();this.passSeen.clear();this.passFailures.clear();if(this.ledger){this.ledger._cache=null;this.ledger._diskSummaryRetry=null;this.ledger.caches?.clear?.();this.ledger.diskSummaryRetries?.clear?.();this.ledger.diskSignatures?.clear?.();}}
 }

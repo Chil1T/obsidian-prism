@@ -54,7 +54,7 @@ final class PluginManifest {
         let manifestPath = (baseDir as NSString).appendingPathComponent("manifest.json")
         let text = try String(contentsOfFile: manifestPath, encoding: .utf8)
         let raw = try MiniJson.parseObject(text)
-        let version = raw["version"]?.stringValue ?? "1.0.1"
+        let version = raw["version"]?.stringValue ?? "1.0.2"
         let styleId = raw["styleId"]?.stringValue ?? "ag-prism-css"
         let settingBinding = raw["settingBinding"]?.stringValue ?? "__agPrismSetting"
         let removeExpression = raw["removeExpression"]?.stringValue ?? ""

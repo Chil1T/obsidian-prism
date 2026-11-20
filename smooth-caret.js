@@ -98,9 +98,10 @@
       if (typeof document !== 'undefined' && typeof document.getSelection === 'function') {
         const sel = document.getSelection();
         if (sel && sel.rangeCount > 0) {
-          if (!sel.isCollapsed) return { collapsed: false };
-          const range = sel.getRangeAt(0);
-          if (ed.contains && ed.contains(range.startContainer)) {
+          const range = typeof sel.getRangeAt === 'function' ? sel.getRangeAt(0) : null;
+          const isCol0 = range && typeof range.collapsed === 'boolean' ? range.collapsed : Boolean(sel.isCollapsed);
+          if (!isCol0) return { collapsed: false };
+          if (range && ed.contains && ed.contains(range.startContainer)) {
             const rects = typeof range.getClientRects === 'function' ? range.getClientRects() : [];
             const r0 =
               rects && rects.length > 0
@@ -220,9 +221,10 @@
         }
         let scrolledOnly = false;
         const rc = sel ? sel.rangeCount || 0 : 0;
-        const isCol = rc > 0 ? Boolean(sel.isCollapsed) : true;
-        const fNode = rc > 0 ? sel.focusNode : null;
-        const fOff = rc > 0 ? sel.focusOffset : -1;
+        const r0 = rc > 0 && typeof sel.getRangeAt === 'function' ? sel.getRangeAt(0) : null;
+        const isCol = r0 && typeof r0.collapsed === 'boolean' ? r0.collapsed : rc > 0 ? Boolean(sel.isCollapsed) : true;
+        const fNode = r0 && r0.endContainer !== undefined ? r0.endContainer : rc > 0 ? sel.focusNode : null;
+        const fOff = r0 && typeof r0.endOffset === 'number' ? r0.endOffset : rc > 0 ? sel.focusOffset : -1;
         const childCnt = ed.childNodes ? ed.childNodes.length : 0;
         const textSig =
           fNode && typeof fNode.nodeValue === 'string'

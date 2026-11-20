@@ -198,9 +198,40 @@
       }
     }
 
-    function pruneOrphanRimCanvases() {
+    const trackedRimCanvases = new Set();
+
+    function removeSingleRimCanvas(cv) {
+      if (!cv) return;
+      trackedRimCanvases.delete(cv);
+      const host = cv.parentElement;
+      try {
+        const ctx = typeof cv.getContext === 'function' ? cv.getContext('2d') : null;
+        if (ctx && cv.width > 0 && cv.height > 0) ctx.clearRect(0, 0, cv.width, cv.height);
+      } catch {}
+      cv.remove?.();
+      if (host?.hasAttribute?.('data-ag-cs-prism-cv')) {
+        host.removeAttribute('data-ag-cs-prism-cv');
+      }
+    }
+
+    function pruneOrphanRimCanvases(fullScan = true) {
       if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
       const activeTrack = getActiveCrystalTrack ? getActiveCrystalTrack() : null;
+      if (!fullScan) {
+        // Fast O(k) sweep over tracked canvases during high-frequency markDirty() calls (0 full-DOM querySelectorAll)
+        for (const cv of trackedRimCanvases) {
+          const host = cv.parentElement;
+          const keep =
+            Boolean(host) &&
+            cv.isConnected !== false &&
+            (host.getAttribute?.('data-ag-cs-prism-box') === '1' || (activeTrack && host === activeTrack));
+          if (!keep) removeSingleRimCanvas(cv);
+        }
+        return;
+      }
+      for (const cv of trackedRimCanvases) {
+        if (!cv || cv.isConnected === false) trackedRimCanvases.delete(cv);
+      }
       const cvs = document.querySelectorAll('.ag-cs-prism-rim-cv');
       cvs.forEach((cv) => {
         const host = cv.parentElement;
@@ -208,14 +239,9 @@
           Boolean(host) &&
           (host.getAttribute?.('data-ag-cs-prism-box') === '1' || (activeTrack && host === activeTrack));
         if (!keep) {
-          try {
-            const ctx = typeof cv.getContext === 'function' ? cv.getContext('2d') : null;
-            if (ctx && cv.width > 0 && cv.height > 0) ctx.clearRect(0, 0, cv.width, cv.height);
-          } catch {}
-          cv.remove?.();
-          if (host?.hasAttribute?.('data-ag-cs-prism-cv')) {
-            host.removeAttribute('data-ag-cs-prism-cv');
-          }
+          removeSingleRimCanvas(cv);
+        } else {
+          trackedRimCanvases.add(cv);
         }
       });
       document.querySelectorAll('[data-ag-cs-prism-cv]').forEach((host) => {
@@ -243,6 +269,7 @@
         cv.setAttribute('data-ag-no-i18n', '');
         hostEl.appendChild(cv);
       }
+      trackedRimCanvases.add(cv);
       const ctx = typeof cv.getContext === 'function' ? cv.getContext('2d') : null;
       if (!ctx || typeof ctx.createRadialGradient !== 'function') {
         cv.remove();
@@ -269,20 +296,21 @@
 
     function paintPrismRimCanvas(entry, active, localX, localY, radius, dark, toneKey = 'default', ambientScale = 1) {
       if (!entry || !entry.ctx || !entry.cv || !entry.rect) return false;
+      if (!active || ambientScale <= 0.001) {
+        if (!entry.wasCleared) {
+          if (entry.cv.width > 0 && entry.cv.height > 0) {
+            entry.ctx.clearRect(0, 0, entry.cv.width, entry.cv.height);
+          }
+          entry.wasCleared = true;
+        }
+        return true;
+      }
       const dpr = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, 2);
       const w = Math.max(4, Math.round((entry.rect.width + (entry.insetPad || 0)) * dpr));
       const h = Math.max(4, Math.round((entry.rect.height + (entry.insetPad || 0)) * dpr));
       if (entry.cv.width !== w || entry.cv.height !== h) {
         entry.cv.width = w;
         entry.cv.height = h;
-        entry.wasCleared = false;
-      }
-      if (!active || ambientScale <= 0.001) {
-        if (!entry.wasCleared) {
-          entry.ctx.clearRect(0, 0, w, h);
-          entry.wasCleared = true;
-        }
-        return true;
       }
       entry.wasCleared = false;
       const ctx = entry.ctx;
@@ -343,9 +371,26 @@
       const trackEl = getActiveCrystalTrack ? getActiveCrystalTrack() : null;
       let nextOrch = null;
 
-      // Phase A: Batch all DOM mutations (canvas mounts, ResizeObserver bindings, orphan prune) with ZERO layout reads!
+      // Phase A: Batch all layout/style reads BEFORE DOM mutations to prevent forced write->read reflows!
+      const boxList = Array.from(boxes);
+      const preMeasured = boxList.map((box) => {
+        const prev = prevMap.get(box);
+        return {
+          box,
+          prev,
+          borderRadius: prev && prev.borderRadius >= 0 ? prev.borderRadius : readBoxBorderRadius(box, 10),
+          rect: allowReadRect && typeof box.getBoundingClientRect === 'function' ? box.getBoundingClientRect() : null,
+        };
+      });
+      const orchRect =
+        trackEl && allowReadRect && typeof trackEl.getBoundingClientRect === 'function'
+          ? trackEl.getBoundingClientRect()
+          : null;
+
+      // Phase B: Batch all DOM mutations (canvas mounts, ResizeObserver bindings, orphan prune) after reads!
       runGuardedMut(() => {
-        for (const box of boxes) {
+        for (let i = 0; i < preMeasured.length; i++) {
+          const { box, prev, borderRadius, rect } = preMeasured[i];
           nextObserved.add(box);
           if (ro && !observedPrismSet.has(box)) {
             try {
@@ -353,16 +398,14 @@
               observedPrismSet.add(box);
             } catch {}
           }
-          const prev = prevMap.get(box);
           const rim = prev && prev.cv && prev.cv.isConnected ? { cv: prev.cv, ctx: prev.ctx } : ensurePrismRimCanvas(box);
           next.push({
             box,
-            prev,
-            rect: null,
+            rect,
             cv: rim ? rim.cv : null,
             ctx: rim ? rim.ctx : null,
             insetPad: 2,
-            borderRadius: prev && prev.borderRadius >= 0 ? prev.borderRadius : -1,
+            borderRadius,
             wasCleared: prev ? prev.wasCleared : false,
             pxStr: prev ? prev.pxStr : '',
             pyStr: prev ? prev.pyStr : '',
@@ -381,7 +424,7 @@
           const rim = prevOrch && prevOrch.cv && prevOrch.cv.isConnected ? { cv: prevOrch.cv, ctx: prevOrch.ctx } : ensurePrismRimCanvas(trackEl);
           nextOrch = {
             box: trackEl,
-            rect: null,
+            rect: orchRect,
             cv: rim ? rim.cv : null,
             ctx: rim ? rim.ctx : null,
             insetPad: 0,
@@ -405,18 +448,6 @@
         pruneOrphanRimCanvases();
       });
 
-      // Phase B: Batch all layout/style reads in a single clean pass after mutations settle!
-      for (let i = 0; i < next.length; i++) {
-        const it = next[i];
-        if (it.borderRadius < 0) it.borderRadius = readBoxBorderRadius(it.box, 10);
-        if (allowReadRect && typeof it.box.getBoundingClientRect === 'function') {
-          it.rect = it.box.getBoundingClientRect();
-        }
-        it.prev = undefined;
-      }
-      if (nextOrch && allowReadRect && typeof trackEl.getBoundingClientRect === 'function') {
-        nextOrch.rect = trackEl.getBoundingClientRect();
-      }
       cachedPrismBoxes = next;
       cachedOrchEntry = nextOrch;
       prismBoxCacheDirty = false;
@@ -458,7 +489,7 @@
       ) {
         refreshPrismBoxRectCache(now, allowReadRect);
         lastPrismRectReadAt = now;
-      } else if (allowReadRect && now - lastPrismRectReadAt >= 250) {
+      } else if (allowReadRect && now - lastPrismRectReadAt >= (prismBoxRo ? 1500 : 250)) {
         lastPrismRectReadAt = now;
         for (let i = 0; i < cachedPrismBoxes.length; i++) {
           const b = cachedPrismBoxes[i].box;
@@ -535,11 +566,23 @@
 
     function onPointerMove(ev) {
       if (isDestroyed()) return;
-      lastPointerPos.x = Number(ev.clientX);
-      lastPointerPos.y = Number(ev.clientY);
+      const x = Number(ev.clientX), y = Number(ev.clientY);
+      lastPointerPos.x = x;
+      lastPointerPos.y = y;
       const now = performance.now();
       if (!isRimMotionDisabled() && readAmbientScale() > 0.001 && !prismRaf && typeof requestAnimationFrame === 'function') {
-        prismRaf = requestAnimationFrame(flushPrismPointer);
+        const far = (e, d) => {
+          const r = e.rect;
+          return e.wasCleared && r && (x < r.left - d || x > r.right + d || y < r.top - d || y > r.bottom + d);
+        };
+        const farIdle =
+          !prismBoxCacheDirty &&
+          cachedPrismBoxes.length > 0 &&
+          now - prismBoxCacheAt <= 6000 &&
+          now - lastPrismRectReadAt < 1500 &&
+          cachedPrismBoxes.every((e) => far(e, 360)) &&
+          (!cachedOrchEntry || far(cachedOrchEntry, 200));
+        if (!farIdle) prismRaf = requestAnimationFrame(flushPrismPointer);
       }
       if (typeof onPointerActivity === 'function') {
         onPointerActivity(now);
@@ -575,7 +618,7 @@
       prismBoxCacheDirty = true;
       if (isDestroyed()) return;
       runGuardedMut(() => {
-        pruneOrphanRimCanvases();
+        pruneOrphanRimCanvases(false);
         if (isRimMotionDisabled() || readAmbientScale() <= 0.001) {
           cancelPendingRaf();
           clearAllRimCanvases();
@@ -585,6 +628,7 @@
 
     function teardownDynPointerRules() {
       cancelPendingRaf();
+      trackedRimCanvases.clear();
       if (prismBoxRo) {
         try {
           prismBoxRo.disconnect();

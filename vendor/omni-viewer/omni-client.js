@@ -1,4 +1,4 @@
-// Obsidian Prism — Omni Native Browser Router, Context Menu & Streaming Workbench Client (v1.0.1)
+// Obsidian Prism — Omni Native Browser Router, Context Menu & Streaming Workbench Client (v1.0.2)
 // Second-channel runtime (`window.__agPrismOmni`) + CommonJS factory for deterministic unit tests.
 // Engineering & security guarantees:
 // 1. ZERO custom side-dock DOM or rogue `wcvBrowser` calls: 100% native integration with Antigravity's
@@ -32,7 +32,7 @@
 })(typeof window !== 'undefined' ? window : globalThis, function () {
   'use strict';
 
-  const VERSION = '1.0.1';
+  const VERSION = '1.0.2';
   const STYLE_EL_ID = 'ag-prism-omni-css';
   const HL_URL_NAME = 'ag-omni-url';
   const HL_PATH_NAME = 'ag-omni-path';
@@ -634,8 +634,8 @@
 
   // Aligned 100% with `style.css` tokens (`--ag-cs-accent`, `--ag-cs-r-*`, `--ag-cs-popover-bg`, `--ag-cs-mono-stack`, etc.)
   const OMNI_CSS = [
-    '::highlight(ag-omni-url){color:var(--link,var(--ag-cs-accent,var(--primary,#669DF6)));text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 46%,transparent)}',
-    '::highlight(ag-omni-path){color:var(--ag-cs-accent,var(--primary,#669DF6));background-color:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 12%,transparent);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 36%,transparent)}',
+    ':root::highlight(ag-omni-url){color:var(--link,var(--ag-cs-accent,var(--primary,#669DF6)));text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 46%,transparent)}',
+    ':root::highlight(ag-omni-path){color:var(--ag-cs-accent,var(--primary,#669DF6));background-color:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 12%,transparent);text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 36%,transparent)}',
     'html[data-ag-omni-hover-token="1"],html[data-ag-omni-hover-token="1"] body{cursor:pointer}',
     '.ag-omni-autolink{cursor:pointer;color:var(--link,var(--ag-cs-accent,var(--primary,#669DF6)));text-decoration:underline;text-decoration-color:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 44%,transparent);text-underline-offset:3px;border-radius:var(--ag-cs-r-sm,4px);transition:color .12s ease,background-color .12s ease,text-decoration-color .12s ease}',
     '.ag-omni-autolink[data-omni-path]{font-family:var(--ag-cs-mono-stack,var(--font-mono,ui-monospace,SFMono-Regular,Menlo,Consolas,monospace));font-size:.92em;padding:0 3px;background:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 9%,transparent);text-decoration:none;border:1px solid color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 22%,transparent)}',
@@ -680,6 +680,7 @@
     // Zero-DOM-mutation CSS Custom Highlight API state
     const textNodeTokenMap = new WeakMap();
     const excludedElCache = new WeakMap();
+    const highlightedParentCount = new WeakMap();
     const trackedHighlightNodes = new Set();
     let urlHighlight = null;
     let pathHighlight = null;
@@ -1803,7 +1804,7 @@
         return;
       }
       const el = rawTarget && rawTarget.nodeType === 1 ? rawTarget : rawTarget?.parentElement;
-      if (!el || !el.isConnected || !findClosest(el, SCAN_CONTAINER_SELECTOR) || isExcludedElement(el)) {
+      if (!el || !el.isConnected || !highlightedParentCount.get(el) || !findClosest(el, SCAN_CONTAINER_SELECTOR) || isExcludedElement(el)) {
         if (hoverTokenActive) setHoverTokenCursor(false);
         return;
       }
@@ -2023,6 +2024,27 @@
       return true;
     }
 
+    function collectHighlightAncestors(parentEl) {
+      const list = [];
+      let cur = parentEl;
+      for (let depth = 0; cur && cur.nodeType === 1 && depth < 4; depth++) {
+        list.push(cur);
+        if (typeof cur.matches === 'function' && cur.matches(SCAN_CONTAINER_SELECTOR)) break;
+        cur = cur.parentElement;
+      }
+      return list;
+    }
+
+    function adjustHighlightedAncestors(ancestors, delta) {
+      if (!ancestors || !ancestors.length) return;
+      for (let i = 0; i < ancestors.length; i++) {
+        const el = ancestors[i];
+        const next = (highlightedParentCount.get(el) || 0) + delta;
+        if (next > 0) highlightedParentCount.set(el, next);
+        else highlightedParentCount.delete(el);
+      }
+    }
+
     function clearHighlightEntryForNode(textNode) {
       const prev = textNodeTokenMap.get(textNode);
       if (prev && prev.spans) {
@@ -2033,14 +2055,53 @@
           }
         }
       }
+      if (prev && prev.ancestors) {
+        adjustHighlightedAncestors(prev.ancestors, -1);
+      }
       textNodeTokenMap.delete(textNode);
       trackedHighlightNodes.delete(textNode);
     }
 
-    function pruneDisconnectedHighlights() {
-      if (!trackedHighlightNodes.size) return;
-      for (const tn of Array.from(trackedHighlightNodes)) {
-        if (!tn.isConnected) clearHighlightEntryForNode(tn);
+    let lastPruneAt = 0;
+    function pruneDisconnectedHighlights(force = false) {
+      const now = Date.now();
+      if (!force && now - lastPruneAt < 3000 && trackedHighlightNodes.size < 256) return;
+      lastPruneAt = now;
+      if (trackedHighlightNodes.size) {
+        for (const tn of Array.from(trackedHighlightNodes)) {
+          const prev = textNodeTokenMap.get(tn);
+          const curParent = tn.parentElement || null;
+          if (!tn.isConnected || !curParent) {
+            clearHighlightEntryForNode(tn);
+            continue;
+          }
+          if (prev && prev.parentEl !== curParent) {
+            excludedElCache.delete(curParent);
+            if (isExcludedElement(curParent)) {
+              clearHighlightEntryForNode(tn);
+              continue;
+            }
+            adjustHighlightedAncestors(prev.ancestors, -1);
+            prev.parentEl = curParent;
+            prev.ancestors = collectHighlightAncestors(curParent);
+            adjustHighlightedAncestors(prev.ancestors, 1);
+          } else if (isExcludedElement(curParent)) {
+            clearHighlightEntryForNode(tn);
+          }
+        }
+      }
+      if (createdAutolinks.size > 0) {
+        for (const el of createdAutolinks) {
+          if (!el || el.isConnected === false) createdAutolinks.delete(el);
+        }
+      }
+      if (decoratedMermaidBoxes.size > 0) {
+        for (const el of decoratedMermaidBoxes) {
+          if (!el || el.isConnected === false) decoratedMermaidBoxes.delete(el);
+        }
+      }
+      if (openedNativeTabs.length > 128) {
+        openedNativeTabs.splice(0, openedNativeTabs.length - 128);
       }
     }
 
@@ -2048,9 +2109,21 @@
       const raw = textNode.nodeValue || '';
       const existing = textNodeTokenMap.get(textNode);
       if (!existing && !mayContainBareToken(raw)) return;
-      if (existing && existing.rawValue === raw) return;
+      const curParent = textNode.parentElement || null;
+      if (existing && existing.parentEl !== curParent && curParent) {
+        excludedElCache.delete(curParent);
+      }
       if (isExcludedFromLinkify(textNode)) {
         if (existing) clearHighlightEntryForNode(textNode);
+        return;
+      }
+      if (existing && existing.rawValue === raw) {
+        if (existing.parentEl !== curParent) {
+          adjustHighlightedAncestors(existing.ancestors, -1);
+          existing.parentEl = curParent;
+          existing.ancestors = collectHighlightAncestors(curParent);
+          adjustHighlightedAncestors(existing.ancestors, 1);
+        }
         return;
       }
 
@@ -2096,7 +2169,12 @@
         }
       }
       if (spans.length > 0) {
-        textNodeTokenMap.set(textNode, { rawValue: raw, spans });
+        const ancestors = existing && existing.parentEl === curParent ? existing.ancestors : collectHighlightAncestors(curParent);
+        if (!existing || existing.parentEl !== curParent) {
+          if (existing?.ancestors) adjustHighlightedAncestors(existing.ancestors, -1);
+          adjustHighlightedAncestors(ancestors, 1);
+        }
+        textNodeTokenMap.set(textNode, { rawValue: raw, spans, parentEl: curParent, ancestors });
         trackedHighlightNodes.add(textNode);
       } else if (existing) {
         clearHighlightEntryForNode(textNode);
@@ -2555,7 +2633,15 @@
           cls &&
           (cls.indexOf('ag-prism-thought-') !== -1 ||
             cls.indexOf('ag-omni-') !== -1 ||
-            cls.indexOf('ces-root') !== -1)
+            cls.indexOf('ces-root') !== -1 ||
+            cls.indexOf('ag-cs-stream-chunk') !== -1 ||
+            cls.indexOf('ag-cs-code-scan') !== -1 ||
+            cls.indexOf('ag-cs-crab') !== -1 ||
+            cls.indexOf('ag-cs-conv-aura-host') !== -1 ||
+            cls.indexOf('ag-cs-ripple-host') !== -1 ||
+            cls.indexOf('ag-anim-icon') !== -1 ||
+            cls.indexOf('ag-cs-thinking-spark') !== -1 ||
+            cls.indexOf('ag-cs-prism-rim-cv') !== -1)
         ) {
           return true;
         }
@@ -2569,6 +2655,7 @@
       if (!mayContainBareToken(raw) && !textNodeTokenMap.has(textNode)) return;
       pendingTextNodes.add(textNode);
       if (textScanTimer) return;
+      const delay = D?.documentElement?.hasAttribute?.('data-ag-cs-stream-active') ? 320 : 120;
       textScanTimer = setTimeout(() => {
         textScanTimer = null;
         if (!enabled) {
@@ -2582,7 +2669,7 @@
           if (!tn.isConnected) clearHighlightEntryForNode(tn);
           else registerHighlightOnTextNode(tn);
         }
-      }, 120);
+      }, delay);
     }
 
     function hasPendingAncestor(el, set) {
@@ -2626,7 +2713,10 @@
             if (auxRoot) {
               scannedAuxSplit = true;
               decorateAuxUnsupportedViews(auxRoot);
-            } else {
+            } else if (
+              (typeof r.matches === 'function' && r.matches(AUX_FILE_VIEW_SELECTOR)) ||
+              r.querySelector?.(AUX_FILE_VIEW_SELECTOR)
+            ) {
               decorateAuxUnsupportedViews(r);
             }
           }
@@ -2654,7 +2744,7 @@
       pendingTextNodes.clear();
       // 1. Clear CSS Custom Highlights (zero DOM changes needed)
       for (const tn of Array.from(trackedHighlightNodes)) {
-        textNodeTokenMap.delete(tn);
+        clearHighlightEntryForNode(tn);
       }
       trackedHighlightNodes.clear();
       if (urlHighlight) {

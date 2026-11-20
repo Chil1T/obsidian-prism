@@ -51,7 +51,7 @@ try{
    let count=0,identified=true;const hash=createHash('sha256');
    try{
     await client.streamTrajectoryPage(isStep?'GetCascadeTrajectorySteps':'GetCascadeTrajectoryGeneratorMetadata',
-     isStep?{cascadeId:id,stepOffset:offset,trajectoryVerbosity:3}:{cascadeId:id,generatorMetadataOffset:offset,includeMessages:false},
+     isStep?{cascadeId:id,stepOffset:offset,trajectoryVerbosity:2}:{cascadeId:id,generatorMetadataOffset:offset,includeMessages:false},
      {wallMs:300000,isCurrent:current,onRecord:async(kind,index,value)=>{
        assertCurrent();if(kind!==(isStep?'steps':'generatorMetadata')||index!==count)throw Error('Invalid streamed record order');
        const stable=isStep?(value.id||value.stepId||value.metadata?.id):(value.id||value.generatorId||value.chatModel?.usage?.responseId||value.chatModel?.usage?.messageId);if(stable){const text=JSON.stringify(stable);hash.update(Buffer.byteLength(text)+':'+text);}else identified=false;if(isStep)store.addStep(offset+index,value);else store.addGenerator(offset+index,value);
@@ -78,9 +78,9 @@ try{
   // Never publish a mixture of old and changing host revisions.
   const latest=await summary();
   if(mark(latest.conversation)!==cp.mark||latest.relations!==cp.relations){
-   if(++revisions>3)throw Error('Conversation keeps changing');
+   if(++revisions>1)throw Error('Conversation keeps changing');
    view=latest;s=view.conversation;store.truncate('steps',0);store.truncate('generators',0);steps=generators=0;fingerprints.clear();
-   cp={schema:1,mark:mark(s),relations:view.relations,steps:0,generators:0,phase:'steps'};await save(cp);await sleep(1000);continue;
+   cp={schema:1,mark:mark(s),relations:view.relations,steps:0,generators:0,phase:'steps'};await save(cp);await sleep(8000);continue;
   }
   phase='reducing';progress(true);
   const result=await store.finish({status:s.status,numTotalSteps:steps,numTotalGeneratorMetadata:generators});
@@ -93,5 +93,9 @@ try{
   store.close();store=null;phase='publishing';progress(true);
   parentPort.postMessage({type:'complete',result,revision:cp.mark,relations:final.relations});break;
  }
-}catch(error){parentPort.postMessage({type:'failed',collection:collectionFailure(error),code:!current()?'cancelled':error.code==='ERR_UNKNOWN_BUILTIN_MODULE'?'unsupported-runtime':error.code==='SQLITE_FULL'||error.errcode===13||error.code==='ENOSPC'?'disk-budget':'background-unavailable'});}
-finally{try{store?.close();}catch{}parentPort.close();}
+}catch(error){
+ const isOom=error?.code==='ERR_WORKER_OUT_OF_MEMORY'||/out of memory|heap limit/i.test(String(error?.message||''));
+ const code=!current()?'cancelled':error.code==='ERR_UNKNOWN_BUILTIN_MODULE'?'unsupported-runtime':isOom?'worker-oom':error.code==='SQLITE_FULL'||error.errcode===13||error.code==='ENOSPC'?'disk-budget':error.message==='Conversation keeps changing'?'revision-churn':'background-unavailable';
+ parentPort.postMessage({type:'failed',collection:collectionFailure(error),code,detail:code==='revision-churn'?'Active conversation kept changing past restart limit':(isOom?'Worker hit V8 heap limit':null)});
+}
+finally{try{store?.close();}catch{}try{client?.dispose?.();}catch{}parentPort.close();}

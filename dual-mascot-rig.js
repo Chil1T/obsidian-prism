@@ -2196,7 +2196,6 @@
     } else {
       hostEl.innerHTML = '';
     }
-    const stageRect = () => hostEl.getBoundingClientRect();
 
     const miniGroupEl = doc.createElement('div');
     miniGroupEl.className = 'ag-v2-mini-pile';
@@ -2241,14 +2240,19 @@
 
     const fxCanvas = doc.createElement('canvas');
     fxCanvas.className = 'ag-v2-chroma-fx';
+    const releaseFxCanvas = () => {
+      fxCanvas.width = fxCanvas.height = 0;
+      if (fxCanvas.style) { fxCanvas.style.width = fxCanvas.style.height = '0px'; fxCanvas.style.display = 'none'; }
+      fxCanvasCleared = true;
+    };
     if (fxCanvas.style) {
       fxCanvas.style.position = 'absolute';
-      fxCanvas.style.left = '0';
-      fxCanvas.style.bottom = '0';
+      fxCanvas.style.left = fxCanvas.style.bottom = '0';
       fxCanvas.style.pointerEvents = 'none';
       fxCanvas.style.zIndex = '42';
       fxCanvas.style.imageRendering = 'pixelated';
     }
+    releaseFxCanvas();
     hostEl.appendChild(fxCanvas);
 
     // ── 5 宠统一图腾塔拓扑、抽底重力补位与地面刚体防重叠核心 ─────────────────
@@ -2790,7 +2794,7 @@
     // 迷你蟹坐标：translateX 相对迷你堆左缘（宿主 left 12px），精灵中心在画布 20px 处
     const crabHostCenter = (mc) => 12 + mc.lastX + 20;
     const crabSafeX = (x) => Math.min(clampActorX(9999) - 132, Math.max(2, Math.round(x)));
-    const crabMaxX = () => Math.max(40, (hostEl.clientWidth || 720) - 52);
+    const crabMaxX = () => Math.max(40, readStageWidth() - 52);
     const nearestFreeCrab = (hx) =>
       miniCrabs
         .filter((mc) => !mc.act || tickIdx - mc.act.start < 0)
@@ -2941,53 +2945,39 @@
       return true;
     };
 
-    // 舞台棱镜像素星屑渲染器（无粒子时自动清屏休眠，0 常驻开销）
+    // 舞台棱镜像素星屑渲染器（无粒子时自动缩回 0×0 释放 GPU 显存纹理，0 常驻开销）
     const stepAndPaintChromaFx = () => {
       if (!chromaSparks.length) {
-        if (!fxCanvasCleared) {
-          const ctx = fxCanvas.getContext('2d');
-          if (ctx) ctx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
-          fxCanvasCleared = true;
-        }
+        if (!fxCanvasCleared || fxCanvas.width || fxCanvas.height) releaseFxCanvas();
         return;
       }
       fxCanvasCleared = false;
-      const wCss = Math.max(240, hostEl.clientWidth || 720);
+      const wCss = Math.max(240, readStageWidth());
       const hCss = 160;
       const tw = Math.round(wCss * dpr);
       const th = Math.round(hCss * dpr);
+      if (fxCanvas.style?.display === 'none') fxCanvas.style.display = '';
       if (fxCanvas.width !== tw || fxCanvas.height !== th) {
         fxCanvas.width = tw;
         fxCanvas.height = th;
-        if (fxCanvas.style) {
-          fxCanvas.style.width = `${wCss}px`;
-          fxCanvas.style.height = `${hCss}px`;
-        }
+        if (fxCanvas.style) { fxCanvas.style.width = `${wCss}px`; fxCanvas.style.height = `${hCss}px`; }
       }
       const ctx = fxCanvas.getContext('2d');
-      if (!ctx) {
-        chromaSparks.length = 0;
-        return;
-      }
+      if (!ctx) { chromaSparks.length = 0; releaseFxCanvas(); return; }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, wCss, hCss);
       ctx.imageSmoothingEnabled = false;
-
       for (let i = chromaSparks.length - 1; i >= 0; i--) {
         const sp = chromaSparks[i];
         sp.life += 1;
-        if (sp.life > sp.maxLife) {
-          chromaSparks.splice(i, 1);
-          continue;
-        }
+        if (sp.life > sp.maxLife) { chromaSparks.splice(i, 1); continue; }
         sp.x += sp.vx;
         sp.y += sp.vy;
         sp.vy += 0.28;
-        const drawX = Math.round(sp.x / PX) * PX;
-        const drawY = Math.round((hCss - 8 + sp.y) / PX) * PX;
         ctx.fillStyle = sp.life % 3 === 1 ? '#FFFFFF' : sp.color;
-        ctx.fillRect(drawX, drawY, sp.size, sp.size);
+        ctx.fillRect(Math.round(sp.x / PX) * PX, Math.round((hCss - 8 + sp.y) / PX) * PX, sp.size, sp.size);
       }
+      if (!chromaSparks.length) releaseFxCanvas();
     };
 
     let lastChromaStepTick = -1;
@@ -4073,6 +4063,17 @@
       let prev = performance.now();
       const step = (now) => {
         if (disposed || flightId !== actor.flying || actor.dragging) return;
+        if (doc && doc.hidden) {
+          actor.y = 0;
+          actor.vx = 0;
+          actor.vy = 0;
+          actor.rot = 0;
+          actor.overridePose = null;
+          actor.overrideRot = 0;
+          enforceGroundSeparation();
+          applyActorTransform(actor);
+          return;
+        }
         const k = Math.max(0.5, Math.min(2.5, (now - prev) / 16.6667));
         prev = now;
         vy += 0.44 * k;
@@ -4081,7 +4082,7 @@
         actor.x += vx * k;
         actor.y += vy * k;
 
-        const w = hostEl.clientWidth || 720;
+        const w = readStageWidth();
         const minX = 8;
         const maxX = Math.max(40, w - 88);
         if (actor.x < minX) {
@@ -4719,9 +4720,6 @@
       if (a.dragging || (a.overridePose === 'dangle' && now < a.overrideUntil)) return;
       startClip(a, 'gaze', ms, { face: dir === 'left' ? 'left' : 'right', param: up ? 1 : 0, sym: sym || undefined });
     };
-    const endClip = (a, pose) => {
-      if (a.overridePose === pose) a.overrideUntil = 0;
-    };
 
     // 领衔位交接：两宠下蹲小跳，腾空瞬间交换站位；落地后新领衔冒 spark、旧领衔点头，三蟹迎宾挥手
     const campHandoff = () => {
@@ -5169,6 +5167,13 @@
         } catch (_) {
           /* 忽略 */
         }
+        pairCooldowns.clear();
+        try {
+          if (fxCanvas) { fxCanvas.width = 0; fxCanvas.height = 0; }
+          for (const a of [actors.cat, actors.clawd]) {
+            if (a?.canvas?.__agRotOff) { a.canvas.__agRotOff.width = 0; a.canvas.__agRotOff.height = 0; a.canvas.__agRotOff = null; }
+          }
+        } catch (_) {}
         cleanups.forEach((fn) => fn());
         for (const node of [miniGroupEl, actors.cat.el, actors.clawd.el, fxCanvas]) {
           if (node) {

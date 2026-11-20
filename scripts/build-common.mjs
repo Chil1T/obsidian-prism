@@ -27,6 +27,7 @@ function createManifest() {
     version: cdp.PLUGIN_VERSION,
     styleId: cdp.STYLE_ID,
     settingBinding: cdp.SETTING_BINDING,
+    sidebarBinding: cdp.SIDEBAR_BINDING,
     parts: getEffectiveRuntimeParts(),
     defaultConfig: cdp.DEFAULT_CONFIG,
     validators: VALIDATORS,
@@ -139,20 +140,36 @@ function renderPrismIconPng(size) {
   return encodePngRgba(size, size, rgba);
 }
 
-function collectOptionalOmniTopEntries() {
-  const omniClientRel = 'vendor/omni-viewer/omni-client.js';
-  const omniClientAbs = path.join(ROOT_DIR, 'vendor', 'omni-viewer', 'omni-client.js');
-  if (!fs.existsSync(omniClientAbs)) return [];
+function collectOptionalSidebarTopEntries() {
+  const sidebarClientRel = 'vendor/sidebar-studio/sidebar-client.js';
+  const sidebarClientAbs = path.join(ROOT_DIR, 'vendor', 'sidebar-studio', 'sidebar-client.js');
+  if (!fs.existsSync(sidebarClientAbs)) return [];
   try {
     return [
       {
-        name: omniClientRel,
-        data: Buffer.from(cdp.minifyJs(fs.readFileSync(omniClientAbs, 'utf8')), 'utf8'),
+        name: sidebarClientRel,
+        data: Buffer.from(cdp.minifyJs(fs.readFileSync(sidebarClientAbs, 'utf8')), 'utf8'),
       },
     ];
   } catch {
     return [];
   }
+}
+
+function collectOptionalOmniTopEntries() {
+  const entries = [];
+  const omniClientRel = 'vendor/omni-viewer/omni-client.js';
+  const omniClientAbs = path.join(ROOT_DIR, 'vendor', 'omni-viewer', 'omni-client.js');
+  if (fs.existsSync(omniClientAbs)) {
+    try {
+      entries.push({
+        name: omniClientRel,
+        data: Buffer.from(cdp.minifyJs(fs.readFileSync(omniClientAbs, 'utf8')), 'utf8'),
+      });
+    } catch {}
+  }
+  entries.push(...collectOptionalSidebarTopEntries());
+  return entries;
 }
 
 function collectNativePluginEntries(activeConfigFile) {
@@ -348,6 +365,7 @@ export {
   createManifest,
   resolveActiveConfigFile,
   collectOptionalOmniTopEntries,
+  collectOptionalSidebarTopEntries,
   collectNativePluginEntries,
   renderPrismIconPng,
   buildMultiResIco,

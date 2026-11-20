@@ -6,10 +6,10 @@ import {mkdir,mkdtemp,rm,lstat,readdir} from 'node:fs/promises';
 import {join,resolve,dirname,basename} from 'node:path';
 const GUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i,HASH=/^[a-f0-9]{64}$/;
 export class BackgroundStatistics {
- constructor({directory,onComplete,owns=()=>true,workerFactory=(data)=>new Worker(new URL('./background-worker.mjs',import.meta.url),{workerData:data,resourceLimits:{maxOldGenerationSizeMb:96,maxYoungGenerationSizeMb:8,stackSizeMb:4}}),now=Date.now}={}){
-  Object.assign(this,{directory:resolve(directory),onComplete,owns,workerFactory,now});this.jobs=new Map();this.active=null;this.epoch=0;this.disposed=false;
+ constructor({directory,onComplete,owns=()=>true,workerFactory=(data)=>new Worker(new URL('./background-worker.mjs',import.meta.url),{workerData:data,resourceLimits:{maxOldGenerationSizeMb:48,maxYoungGenerationSizeMb:8,stackSizeMb:4}}),now=Date.now}={}){
+  Object.assign(this,{directory:resolve(directory),onComplete,owns,workerFactory,now});this.jobs=new Map();this.active=null;this.epoch=0;this.disposed=false;this.lastDiagnostic=null;
  }
- state(id){const j=this.jobs.get(id);return j?.state==='processing'?{state:'processing',code:'background-collection',stage:j.stage,processedSteps:j.steps,processedGenerators:j.generators}:j?.state==='failed'?{state:'limited',code:'budget-exceeded',reason:j.reason}:null;}
+ state(id){const j=this.jobs.get(id);return j?.state==='processing'?{state:'processing',code:'background-collection',stage:j.stage,processedSteps:j.steps,processedGenerators:j.generators}:j?.state==='failed'?{state:'limited',code:'budget-exceeded',reason:j.reason,...(j.detail?{detail:j.detail}:{})}:null;}
  request(scope,id,endpoint,{summary,isCurrent=()=>true}={}){
   if(this.disposed||!this.owns()||!HASH.test(scope)||!GUID.test(id)||!endpoint?.csrf||!Number.isInteger(endpoint.port))return false;
   const old=this.jobs.get(id);if(old&&old.scope===scope){if(old.state==='processing')return true;if(old.state==='failed'&&old.retryAt>this.now())return false;this.jobs.delete(id);}
@@ -25,7 +25,7 @@ export class BackgroundStatistics {
   // usage. A watchdog or worker failure can occur after 'complete' is sent.
   const current=()=>scopeCurrent()&&(!job.cancel||Atomics.load(new Int32Array(job.cancel),0)===0);
   let directory,worker,watchdog;
-  const fail=reason=>{job.state='failed';job.reason=reason;job.retryAt=this.now()+300000;};
+  const fail=(reason,detail=null)=>{job.state='failed';job.reason=reason;if(detail)job.detail=detail;job.retryAt=this.now()+300000;this.lastDiagnostic={at:this.now(),id:job.id,reason,detail};};
   try{
    await mkdir(this.directory,{recursive:true,mode:0o700});if((await lstat(this.directory)).isSymbolicLink())throw Error('Unsafe scratch directory');
    // Abrupt exits may leave scratch files. Count, do not silently delete,
@@ -49,7 +49,12 @@ export class BackgroundStatistics {
      if(error){
       // First make the publishing guard false; any delayed async ledger write
       // must observe cancellation before the scratch database can be removed.
-      if(scopeCurrent()&&job.state==='processing')fail(error.code==='BACKGROUND_TIMEOUT'?'timeout':'background-unavailable');
+      if(scopeCurrent()&&job.state==='processing'){
+       const isOom=error.code==='BACKGROUND_OOM'||error.code==='ERR_WORKER_OUT_OF_MEMORY'||/out of memory|heap limit/i.test(String(error.message||''));
+       const reason=error.code==='BACKGROUND_TIMEOUT'?'timeout':isOom?'worker-oom':'background-unavailable';
+       const detail=isOom?'V8 heap limit exceeded (maxOldGenerationSizeMb=48)':(Number.isInteger(error.exitCode)?`exit=${error.exitCode}`:null);
+       fail(reason,detail);
+      }
       if(job.cancel)Atomics.store(new Int32Array(job.cancel),0,1);
      }
      settled=true;clearInterval(watchdog);error?reject(error):done();
@@ -57,14 +62,17 @@ export class BackgroundStatistics {
     worker.on('message',message=>{
      if(!current())return;
      if(message.type==='progress'){job.stage=message.stage;job.steps=message.processedSteps;job.generators=message.processedGenerators;}
-     if(message.type==='failed'){fail(message.code);finish(Object.assign(Error('Background worker failed'),{code:message.code}));}
+     if(message.type==='failed'){fail(message.code,message.detail||null);finish(Object.assign(Error('Background worker failed'),{code:message.code}));}
      if(message.type==='complete'){
       completed=true;job.stage='publishing';
       Promise.resolve().then(()=>current()?this.onComplete(job.scope,job.id,message.result,{database:join(directory,'statistics.sqlite'),revision:message.revision,isCurrent:current}):undefined).then(()=>{if(current())job.state='ready';finish();},finish);
      }
     });
-    worker.on('error',finish);
-    worker.on('exit',code=>{if(!completed||code!==0)finish(Error('Background worker stopped'));});
+    worker.on('error',err=>{
+     const isOom=err?.code==='ERR_WORKER_OUT_OF_MEMORY'||/out of memory|heap limit/i.test(String(err?.message||''));
+     finish(isOom?Object.assign(Error('Background worker hit V8 heap limit (maxOldGenerationSizeMb=48)'),{code:'BACKGROUND_OOM'}):err);
+    });
+    worker.on('exit',code=>{if(!completed||code!==0)finish(Object.assign(Error(`Background worker stopped (exit=${code})`),{code:'BACKGROUND_EXIT',exitCode:code}));});
     const started=this.now();watchdog=setInterval(()=>{
      if(!current()||this.now()-started>60*60*1000){
       const timeout=scopeCurrent()&&this.now()-started>60*60*1000;

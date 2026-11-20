@@ -1,4 +1,4 @@
-// Obsidian Prism — Unified Thought Translator & Polisher Client Runtime (v1.0.1 Upgraded)
+// Obsidian Prism — Unified Thought Translator & Polisher Client Runtime (v1.0.2 Upgraded)
 // Incorporates proven anti-jank & anti-retranslate safeguards + v1.0.1 workbench capabilities:
 // 1. Rendered-signature idempotence (`data-op-zh-sig` + `data-raw-zh`) -> 0 redundant DOM rebuilds on cache hit;
 // 2. Global `inflightBySig` flight pool across React panel remounts + pre-commit source-hash verification -> 0 duplicate requests & 0 misplacement;
@@ -407,11 +407,6 @@
     return `_v3_${(h >>> 0).toString(36)}_${skel.length}`;
   }
 
-  function hashKey(rawText, prefix) {
-    const b = computeSkelBody(normalizeTextKey(rawText));
-    return b ? `${prefix}${b}` : '';
-  }
-
   function isMostlyZhNorm(norm) {
     if (!norm || norm.length < 10 || norm.length > 48000) return true;
     const prose = norm
@@ -582,7 +577,12 @@
     if (!sig) return;
     const prev = failedSigs.get(sig);
     const c = prev ? prev.c + 1 : 1;
+    failedSigs.delete(sig);
     failedSigs.set(sig, { c, u: nowMs() + (c === 1 ? 15000 : c === 2 ? 45000 : 120000) });
+    if (failedSigs.size > 512) {
+      const oldest = failedSigs.keys().next().value;
+      if (oldest !== undefined) failedSigs.delete(oldest);
+    }
   }
 
   const getBridge = () => W.__agPrismThoughtBridge || null;
@@ -604,11 +604,12 @@
     sa(docRoot(), 'data-ag-prism-thought-view', currentViewMode);
   }
 
+  let hasOffscreenLazyPanels = false;
   const onScrollCapture = () => {
-    if (currentMode === 'off' || scrollTimer) return;
+    if (currentMode === 'off' || scrollTimer || !hasOffscreenLazyPanels) return;
     scrollTimer = setTimeout(() => {
       scrollTimer = null;
-      if (currentMode !== 'off') scheduleScan(20);
+      if (currentMode !== 'off' && hasOffscreenLazyPanels) scheduleScan(20);
     }, 100);
     scrollTimer?.unref?.();
   };
@@ -672,6 +673,10 @@
     if (entry.pRaf) {
       getCafFn()?.(entry.pRaf);
       entry.pRaf = null;
+    }
+    if (entry.pTm) {
+      clearTimeout(entry.pTm);
+      entry.pTm = null;
     }
     if (entry.fTm) {
       clearTimeout(entry.fTm);
@@ -1243,49 +1248,52 @@
     return `${st.c}:${fs.length}:${ll}:${ll ? ls.charCodeAt(ll - 1) | 0 : 0}`;
   }
 
-  function splitMarkdownBlocks(markdownText, isStreaming = false) {
-    const lines = String(markdownText || '').replace(/\r\n/g, '\n').split('\n');
+  function splitMarkdownBlocks(markdownText, isStreaming = false, metaOut = null) {
+    const src = String(markdownText || '');
+    const lines = src.split('\n');
     const lastLineIdx = lines.length - 1;
     const blocks = [];
     let inFence = false;
     let fenceLines = [];
+    let cursor = 0;
+    let safeEnd = 0;
+    let safeCount = 0;
     for (let i = 0; i <= lastLineIdx; i++) {
-      const rawLine = lines[i];
+      const origLine = lines[i];
+      const nextCursor = cursor + origLine.length + (i < lastLineIdx ? 1 : 0);
+      const rawLine = origLine.endsWith('\r') ? origLine.slice(0, -1) : origLine;
       const trimmed = rawLine.trim();
       const isTailLine = isStreaming && i === lastLineIdx;
-      if (trimmed.startsWith('```')) {
-        if (!inFence) {
-          inFence = true;
-          fenceLines = [];
-        } else {
-          blocks.push({ k: 'pre', x: fenceLines.join('\n') });
-          inFence = false;
-          fenceLines = [];
-        }
-        continue;
+      let commitSafe = false;
+      if (!inFence && trimmed.startsWith('```')) {
+        inFence = true;
+        fenceLines = [];
+      } else if (inFence && /^`{3,}\s*$/.test(trimmed)) {
+        blocks.push({ k: 'pre', x: fenceLines.join('\n') });
+        inFence = false;
+        fenceLines = [];
+        commitSafe = true;
+      } else if (inFence) {
+        if (!isTailLine || !/^`{1,2}$/.test(trimmed)) fenceLines.push(rawLine);
+      } else if (!trimmed) {
+        commitSafe = true;
+      } else if (!(isTailLine && (/^`{1,2}$/.test(trimmed) || /^[-*•]$/.test(trimmed) || /^\d{1,3}[.)]?$/.test(trimmed) || /^#{1,4}$/.test(trimmed)))) {
+        const ulMatch = /^[-*•]\s+(.+)$/.exec(trimmed);
+        const olMatch = !ulMatch && /^\d+[.)]\s+(.+)$/.exec(trimmed);
+        blocks.push(ulMatch ? { k: 'ul', x: ulMatch[1] } : olMatch ? { k: 'ol', x: olMatch[1] } : { k: 'p', x: trimmed.replace(/^#{1,4}\s+/, '') });
+        commitSafe = true;
       }
-      if (inFence) {
-        if (isTailLine && /^`{1,2}$/.test(trimmed)) continue;
-        fenceLines.push(rawLine);
-        continue;
+      if (commitSafe && !isTailLine) {
+        safeEnd = nextCursor;
+        safeCount = blocks.length;
       }
-      if (!trimmed) continue;
-      if (isTailLine && (/^`{1,2}$/.test(trimmed) || /^[-*•]$/.test(trimmed) || /^\d{1,3}[.)]?$/.test(trimmed) || /^#{1,4}$/.test(trimmed))) {
-        continue;
-      }
-      const ulMatch = /^[-*•]\s+(.+)$/.exec(trimmed);
-      if (ulMatch) {
-        blocks.push({ k: 'ul', x: ulMatch[1] });
-        continue;
-      }
-      const olMatch = /^\d+[.)]\s+(.+)$/.exec(trimmed);
-      if (olMatch) {
-        blocks.push({ k: 'ol', x: olMatch[1] });
-        continue;
-      }
-      blocks.push({ k: 'p', x: trimmed.replace(/^#{1,4}\s+/, '') });
+      cursor = nextCursor;
     }
     if (inFence && fenceLines.length) blocks.push({ k: 'pre', x: fenceLines.join('\n') });
+    if (metaOut) {
+      metaOut.se = safeEnd;
+      metaOut.sc = safeCount;
+    }
     return blocks;
   }
 
@@ -1339,19 +1347,43 @@
   }
 
   function renderIncrementalStreamDom(panel, body, visibleText, now, animateChunks) {
-    const blocks = splitMarkdownBlocks(visibleText, true);
-    if (!blocks.length) return;
     const doc = docOf(panel);
     const hlBks = animateChunks ? getCssHlBuckets() : null;
     sa(body, 'data-streaming-live', '1');
     ra(body, 'data-raw-zh');
 
     let st = panelStreamStates.get(panel);
-    let diverged = !st || st.bd !== body || blocks.length < st.bs.length;
+    const splitMeta = { se: 0, sc: 0, cr: false };
+    let baseCount = 0;
+    let baseEnd = 0;
+    let tailBlocks = null;
+    const canFastTail = Boolean(
+      st &&
+        st.bd === body &&
+        st.lEnd > 0 &&
+        st.lCnt > 0 &&
+        st.lCnt < st.bs.length &&
+        typeof st.lSrc === 'string' &&
+        visibleText.length >= st.lEnd &&
+        visibleText.startsWith(st.lSrc)
+    );
+    if (canFastTail) {
+      baseCount = st.lCnt;
+      baseEnd = st.lEnd;
+      tailBlocks = splitMarkdownBlocks(visibleText.slice(baseEnd), true, splitMeta);
+    } else {
+      tailBlocks = splitMarkdownBlocks(visibleText, true, splitMeta);
+    }
+    const totalLen = baseCount + tailBlocks.length;
+    if (!totalLen) return;
+    const blockAt = (idx) => (idx < baseCount ? st.bs[idx] : tailBlocks[idx - baseCount]);
+
+    let diverged = !st || st.bd !== body || totalLen < st.bs.length;
     if (!diverged) {
-      const checkLen = Math.min(st.bs.length - 1, blocks.length - 1);
-      for (let i = 0; i < checkLen; i++) {
-        if (st.bs[i].k !== blocks[i].k || st.bs[i].x !== blocks[i].x) {
+      const checkLen = Math.min(st.bs.length - 1, totalLen - 1);
+      for (let i = baseCount; i < checkLen; i++) {
+        const blk = blockAt(i);
+        if (st.bs[i].k !== blk.k || st.bs[i].x !== blk.x) {
           diverged = true;
           break;
         }
@@ -1359,22 +1391,29 @@
     }
 
     if (diverged) {
+      if (canFastTail) {
+        baseCount = 0;
+        baseEnd = 0;
+        tailBlocks = splitMarkdownBlocks(visibleText, true, splitMeta);
+        if (!tailBlocks.length) return;
+      }
       clearPanelHlItems(panel);
       clearEl(body);
-      st = { bd: body, bs: [], el: null, tn: null, raw: '', tp: '', le: null, lt: '', cks: [] };
+      st = { bd: body, bs: [], el: null, tn: null, raw: '', tp: '', le: null, lt: '', cks: [], lEnd: 0, lCnt: 0, lSrc: '' };
       panelStreamStates.set(panel, st);
     }
 
-    const lastIdx = blocks.length - 1;
+    const lastIdx = baseCount + tailBlocks.length - 1;
 
     if (st.bs.length > 0 && st.bs.length - 1 < lastIdx) {
       const prevIdx = st.bs.length - 1;
-      const targetPrev = blocks[prevIdx];
+      const targetPrev = blockAt(prevIdx);
       if (st.el && st.tn) {
         const needsFmt = targetPrev.k !== 'pre' && INLINE_MD_HINT_RE.test(targetPrev.x);
         if (needsFmt) {
           const prevTn = st.tn;
           st.cks = st.cks.filter((c) => (c.tn === prevTn ? (c.sp.remove(), false) : true));
+          clearPanelHlItems(panel);
           upgradeBlockInlineInPlace(st.el, targetPrev, doc, panel);
         } else if (targetPrev.x.startsWith(st.raw) && targetPrev.x.length > st.raw.length) {
           const tail = targetPrev.x.slice(st.raw.length);
@@ -1391,6 +1430,7 @@
             if (hlBks && targetPrev.k !== 'pre') pushHlSlice(panel, doc, st.tn, prevLen, prevLen + tail.length, now, hlBks);
           }
         } else if (targetPrev.x !== st.raw) {
+          clearPanelHlItems(panel);
           compactLiveChunks(st, now, true);
           setTn(st.tn, targetPrev.x);
         }
@@ -1403,18 +1443,19 @@
     }
 
     while (st.bs.length < lastIdx) {
-      const blk = blocks[st.bs.length];
+      const blk = blockAt(st.bs.length);
       const el = mountStreamBlockContainer(st, blk.k, doc, body);
       if (blk.k === 'pre') stc(el, blk.x);
       else appendInlineFormatted(el, blk.x, doc, ensurePanelFileMap(panel), panel, 0);
       st.bs.push({ k: blk.k, x: blk.x, el });
     }
 
-    const curBlk = blocks[lastIdx];
+    const curBlk = blockAt(lastIdx);
     if (!st.el || st.tp !== curBlk.k) {
       if (st.el && st.bs.length > lastIdx) {
         const staleTn = st.tn;
         st.cks = st.cks.filter((c) => (c.tn === staleTn ? (c.sp.remove(), false) : true));
+        clearPanelHlItems(panel);
         st.el.remove();
       }
       const el = mountStreamBlockContainer(st, curBlk.k, doc, body);
@@ -1429,10 +1470,7 @@
     if (!animateChunks || curBlk.k === 'pre' || hlBks) compactLiveChunks(st, now, true);
     if (curBlk.x === st.raw) {
       if (!hlBks) compactLiveChunks(st, now, false);
-      return;
-    }
-
-    if (curBlk.x.startsWith(st.raw)) {
+    } else if (curBlk.x.startsWith(st.raw)) {
       const delta = curBlk.x.slice(st.raw.length);
       if (!animateChunks || curBlk.k === 'pre' || hlBks) {
         const prevLen = getTnStr(st.tn).length;
@@ -1445,15 +1483,29 @@
         ap(st.el, sp);
         st.cks.push({ sp, tn: st.tn, tx: delta, at: now });
       }
+      st.raw = curBlk.x;
+      st.bs[lastIdx].x = curBlk.x;
+      st.bs[lastIdx].el = st.el;
     } else {
       clearPanelHlItems(panel);
       const activeTn = st.tn;
       st.cks = st.cks.filter((c) => (c.tn === activeTn ? (c.sp.remove(), false) : true));
       setTn(activeTn, curBlk.x);
+      st.raw = curBlk.x;
+      st.bs[lastIdx].x = curBlk.x;
+      st.bs[lastIdx].el = st.el;
     }
-    st.raw = curBlk.x;
-    st.bs[lastIdx].x = curBlk.x;
-    st.bs[lastIdx].el = st.el;
+
+    // Advance O(1) incremental checkpoint past fully closed pre-tail blocks (works identically for LF and CRLF)
+    if (splitMeta.se > 0 && splitMeta.sc > 0) {
+      const nextSafeCnt = baseCount + splitMeta.sc;
+      const nextSafeEnd = baseEnd + splitMeta.se;
+      if (nextSafeCnt < st.bs.length && nextSafeEnd > (st.lEnd || 0) && nextSafeEnd < visibleText.length) {
+        st.lCnt = nextSafeCnt;
+        st.lEnd = nextSafeEnd;
+        st.lSrc = visibleText.slice(0, nextSafeEnd);
+      }
+    }
   }
 
   function renderSafeMarkdownDom(container, markdownText, fm, panel, prevStreamState = null) {
@@ -1785,7 +1837,6 @@
   }
 
   const sigFromBody = (kb, mode) => `${mode === 'machine' ? 'mt' : activeStyleTag || 'ai_pending'}:sig${kb}`;
-  const computeSig = (rawText, mode) => sigFromBody(computeSkelBody(normalizeTextKey(rawText)), mode);
 
   function findCachedByBody(kb, mode) {
     if (!kb) return '';
@@ -1931,7 +1982,7 @@
     };
 
     const ensurePacerLoop = () => {
-      if (entry.pRaf || entry.x || currentMode === 'off') return;
+      if (entry.pRaf || entry.pTm || entry.x || currentMode === 'off') return;
       const raf = getRafFn();
       if (!raf) return;
       const stepPacer = () => {
@@ -1964,10 +2015,22 @@
           return;
         }
 
-        if (entry.pa > 0 && !entry.dn && now - entry.pa < 30) {
-          entry.pRaf = raf(stepPacer);
+        const rem = 30 - (now - entry.pa);
+        if (entry.pa > 0 && !entry.dn && rem > 0) {
+          entry.sk = (entry.sk || 0) + 1;
+          if (entry.sk >= 2 && typeof setTimeout === 'function' && rem > 6) {
+            entry.sk = 0;
+            entry.pTm = setTimeout(() => {
+              entry.pTm = null;
+              if (!entry.x && currentMode !== 'off') ensurePacerLoop();
+            }, Math.ceil(rem - 2));
+            entry.pTm?.unref?.();
+          } else {
+            entry.pRaf = raf(stepPacer);
+          }
           return;
         }
+        entry.sk = 0;
 
         const dt = entry.pa > 0 ? Math.min(80, Math.max(8, now - entry.pa)) : 16.67;
         const basePerFrame = entry.dn
@@ -2104,13 +2167,17 @@
     const step = () => {
       hydrateHandle = null;
       if (currentMode === 'off') return clearHydrateQueue();
-      let n = 0;
-      while (hydrateQueue.length && n < 3) {
+      // 两阶段读写分离：先批量读取可见性/视口位置，再统一写入 DOM，消除多帧 Layout Thrashing
+      const ready = [];
+      while (hydrateQueue.length && ready.length < 3) {
         const it = hydrateQueue.shift();
         if (isConn(it.p) && isPanelCurrentlyExpanded(it.p) && !isHiddenByAncestor(null, it.p) && probeViewportBand(it.p) > 0) {
-          renderTranslatedText(it.p, it.z, false, it.s, it.e);
-          n++;
+          ready.push(it);
         }
+      }
+      for (let i = 0; i < ready.length; i++) {
+        const it = ready[i];
+        renderTranslatedText(it.p, it.z, false, it.s, it.e);
       }
       if (hydrateQueue.length) (hydrateHandle = setTimeout(step, 16))?.unref?.();
     };
@@ -2124,9 +2191,6 @@
 
     const panel = nextSib(btn);
     if (!panel || String(panel.tagName || '').toUpperCase() !== 'DIV') return;
-    const hiddenAnc = isHiddenByAncestor(btn, panel);
-    if (hiddenAnc && !allowPreloadCollapsed) return;
-    const visExpanded = expanded && !hiddenAnc;
 
     const streaming = isTriggerStreaming(btn);
     if (streaming) {
@@ -2140,14 +2204,19 @@
       meta.c = now;
       panelMeta.set(panel, meta);
       clearPanelWaitTimer(panel);
-      if (visExpanded && !alreadyStreamingPending) renderPendingState(panel, getClientPack()[9], 'streaming');
+      if (alreadyStreamingPending) return;
+      if (expanded && !isHiddenByAncestor(btn, panel)) renderPendingState(panel, getClientPack()[9], 'streaming');
       return;
     }
 
-    if (visExpanded && ga(panel, A_RDY) === '1') {
+    if (expanded && ga(panel, A_RDY) === '1') {
       const em = panelMeta.get(panel);
       if (em && em.rs === quickPanelStamp(panel) && em.ds && em.ds === ga(panel, A_SIG)) return;
     }
+
+    const hiddenAnc = isHiddenByAncestor(btn, panel);
+    if (hiddenAnc && !allowPreloadCollapsed) return;
+    const visExpanded = expanded && !hiddenAnc;
 
     const inf = extractPanelInfo(panel);
     if (!inf.t || inf.z) {
@@ -2262,6 +2331,7 @@
     const lastIdx = triggers.length - 1;
     const candidates = [];
     const activePanelSet = new Set();
+    let sawOffscreenLazy = false;
 
     for (let i = 0; i <= lastIdx; i++) {
       const btn = triggers[i];
@@ -2272,37 +2342,50 @@
       if (!allowPreload && !expanded) continue;
 
       const panel = nextSib(btn);
-      if (panel && !isLatest && isHiddenByAncestor(btn, panel)) continue;
-
       if (panel) {
         const em = panelMeta.get(panel);
-        if (em && !isTriggerStreaming(btn) && em.rs === quickPanelStamp(panel)) {
+        const streamingNow = isTriggerStreaming(btn);
+        if (streamingNow && expanded && isLatest && em && em.s && ga(panel, A_PND) === '1') {
+          activePanelSet.add(panel);
+          continue;
+        }
+        if (em && !streamingNow && em.rs === quickPanelStamp(panel)) {
           if (expanded && ga(panel, A_RDY) === '1' && em.ds && em.ds === ga(panel, A_SIG)) {
-            activePanelSet.add(panel);
             continue;
           }
-          if (!expanded || isHiddenByAncestor(btn, panel)) {
+          if (!expanded) {
             const inf = rawCacheMap.get(panel);
             if (inf && inf.s === em.rs && em.ps && em.ps === sigFromBody(inf.k, currentMode)) {
-              activePanelSet.add(panel);
               continue;
             }
+          }
+        }
+        if (!isLatest && isHiddenByAncestor(btn, panel)) continue;
+        if (em && !streamingNow && em.rs === quickPanelStamp(panel) && isHiddenByAncestor(btn, panel)) {
+          const inf = rawCacheMap.get(panel);
+          if (inf && inf.s === em.rs && em.ps && em.ps === sigFromBody(inf.k, currentMode)) {
+            activePanelSet.add(panel);
+            continue;
           }
         }
       }
 
       const band = expanded && !isLatest ? probeViewportBand(panel || btn) : 0;
-      if (!isLatest && band === 0) continue;
+      if (!isLatest && band === 0) {
+        sawOffscreenLazy = true;
+        continue;
+      }
       if (panel) activePanelSet.add(panel);
 
       const tier = isLatest && expanded ? 25 : band === 2 ? 20 : isLatest ? 12 : 10;
       candidates.push({ b: btn, a: allowPreload, p: tier * 1000 + i });
     }
+    hasOffscreenLazyPanels = sawOffscreenLazy;
 
     if (inflightBySig.size > 0) pruneUnneededPendingRequests(activePanelSet);
     if (!candidates.length) return;
     candidates.sort((x, y) => y.p - x.p);
-    syncHydrateBudget = 4;
+    syncHydrateBudget = 1;
     try {
       for (let i = 0; i < candidates.length; i++) {
         processSingleTrigger(candidates[i].b, candidates[i].a, candidates[i].p);
@@ -2329,29 +2412,38 @@
   };
   const RESET_SIG_ATTRS = [A_SIG, A_FBK, A_FLD];
 
+  let syncedOnce = false;
+
   const api = {
     sync(cfg = {}) {
       const nextMode = cfg.thoughtTranslate === 'machine' || cfg.thoughtTranslate === 'ai' ? cfg.thoughtTranslate : 'off';
       const prevTrigger = triggerTiming;
       triggerTiming = cfg.thoughtTrigger === 'expand' ? 'expand' : 'preload';
+      const triggerChanged = prevTrigger !== triggerTiming;
 
+      const prevLang = currentLang;
       currentLang = resolveActiveLang(cfg.language);
-      refreshAllOverlayLocaleStrings();
+      const langChanged = prevLang !== currentLang;
+      if (langChanged) refreshAllOverlayLocaleStrings();
 
       const incomingView = cfg.thoughtView || cfg.thoughtViewMode;
+      let viewChanged = false;
       if (incomingView === 'bilingual' || incomingView === 'immersive') {
         hasExplicitHostView = true;
         viewModeLoaded = true;
-        const viewChanged = currentViewMode !== incomingView;
+        viewChanged = currentViewMode !== incomingView;
         currentViewMode = incomingView;
-        persistViewModePreference(currentViewMode);
-        syncDocViewAttribute();
-        refreshAllPanelViewModes(viewChanged);
+        if (viewChanged || !syncedOnce) {
+          persistViewModePreference(currentViewMode);
+          syncDocViewAttribute();
+          refreshAllPanelViewModes(viewChanged);
+        }
       }
 
       if (nextMode === 'off') {
         clrScan();
         currentMode = 'off';
+        syncedOnce = false;
         releasePrismOverlays();
         return;
       }
@@ -2378,7 +2470,9 @@
         qsa(SEL_TRIGGER).forEach((b) => resetPanelSig(nextSib(b)));
         qsa(SEL_OVERLAY).forEach((ov) => resetPanelSig(parEl(ov)));
       }
-      scheduleScan(25);
+      const needScan = !syncedOnce || changed || langChanged || viewChanged || triggerChanged;
+      syncedOnce = true;
+      if (needScan) scheduleScan(25);
     },
     scan() {
       scheduleScan(45);
@@ -2451,9 +2545,12 @@
     __memCache: memCache,
     destroy() {
       currentMode = 'off';
+      syncedOnce = false;
+      hasOffscreenLazyPanels = false;
       clrScan();
       if (cacheDirty || persistTimer || persistIdle || memCache.size > storedCount) flushLocalStorageCacheNow();
       releasePrismOverlays();
+      hlBks = null;
     },
   };
 

@@ -58,8 +58,12 @@
     let hydrateRaf = 0;
     let sparkQueue = [];
     let iconQueue = [];
+    let unfoldQueue = [];
+    let unfoldRaf = 0;
     let wfClickTimer = 0;
     let convEntryTimer = 0;
+    let convEntryRaf = 0;
+    let convEntrySeq = 0;
     const transientTimers = new Set();
 
     const heroState = {
@@ -73,12 +77,14 @@
     };
     let lastHomeRect = null;
     let liftoffBubbleUntil = 0;
+    let suppressEntryMotionUntil = 0;
     let runInit = false;
     let wasRunning = false;
     let runStartAt = 0;
     let fiberTimer = 0;
     let sbInit = false;
     let sbIndex = -1;
+    let sbCid = '';
     let sbRect = null;
 
     const seenHeaders = new WeakSet();
@@ -95,6 +101,7 @@
     const fadeItems = [];
     let hlBuckets = null;
     let fadeRaf = 0;
+    let fadeTimer = 0;
     let nextFadeDueAt = 0;
     const doneSparkCache = new WeakMap();
 
@@ -138,7 +145,15 @@
       it.b = -1;
     }
 
+    function clearFadeTimer() {
+      if (fadeTimer) {
+        clearTimeout(fadeTimer);
+        fadeTimer = 0;
+      }
+    }
+
     function clearHighlightFade() {
+      clearFadeTimer();
       cAF(fadeRaf);
       fadeRaf = 0;
       nextFadeDueAt = 0;
@@ -146,16 +161,44 @@
       fadeItems.length = 0;
     }
 
+    function scheduleFadeStep(now, useTimer) {
+      if (isDestroyed() || fadeItems.length === 0) return;
+      if (docOf()?.hidden) {
+        clearHighlightFade();
+        return;
+      }
+      if (fadeRaf) return;
+      const delay = nextFadeDueAt > 0 ? nextFadeDueAt - now : 0;
+      if (useTimer && delay > 18 && typeof setTimeout === 'function') {
+        if (fadeTimer) return;
+        fadeTimer = setTimeout(() => {
+          fadeTimer = 0;
+          if (isDestroyed() || !canStreamMotion() || fadeItems.length === 0 || docOf()?.hidden) {
+            clearHighlightFade();
+            return;
+          }
+          if (!fadeRaf) {
+            fadeRaf = rAF(stepHighlightFade);
+            if (!fadeRaf) clearHighlightFade();
+          }
+        }, Math.max(8, Math.round(delay - 6)));
+        return;
+      }
+      clearFadeTimer();
+      fadeRaf = rAF(stepHighlightFade);
+      if (!fadeRaf) clearHighlightFade();
+    }
+
     function stepHighlightFade(ts) {
+      clearFadeTimer();
       fadeRaf = 0;
-      if (isDestroyed() || !canStreamMotion() || fadeItems.length === 0) {
+      if (isDestroyed() || !canStreamMotion() || fadeItems.length === 0 || docOf()?.hidden) {
         clearHighlightFade();
         return;
       }
       const now = typeof ts === 'number' && Number.isFinite(ts) ? ts : nowOf();
       if (nextFadeDueAt > 0 && now < nextFadeDueAt - 1) {
-        fadeRaf = rAF(stepHighlightFade);
-        if (!fadeRaf) clearHighlightFade();
+        scheduleFadeStep(now, true);
         return;
       }
       const buckets = getHlBuckets();
@@ -191,8 +234,7 @@
       fadeItems.length = w;
       if (w > 0) {
         nextFadeDueAt = Number.isFinite(earliestDue) ? earliestDue : 0;
-        fadeRaf = rAF(stepHighlightFade);
-        if (!fadeRaf) clearHighlightFade();
+        scheduleFadeStep(now, false);
       } else {
         clearHighlightFade();
       }
@@ -200,14 +242,15 @@
 
     function enqueueFadeRange(tn, sOff, eOff, now) {
       if (!tn || eOff <= sOff) return false;
-      const buckets = getHlBuckets();
       const d = docOf();
-      if (!buckets || !d) return false;
+      if (!d || d.hidden) return false;
+      const buckets = getHlBuckets();
+      if (!buckets) return false;
       const raw = tn.data ?? tn.nodeValue ?? '';
       if (eOff > raw.length || !/\S/.test(raw.slice(sOff, eOff))) return false;
 
       const prev = fadeItems.length > 0 ? fadeItems[fadeItems.length - 1] : null;
-      if (prev && prev.n === tn && prev.e === sOff && now - prev.t <= 34) {
+      if (prev && prev.n === tn && prev.e === sOff && now - prev.t <= 64) {
         try {
           prev.r.setEnd(tn, eOff);
           prev.e = eOff;
@@ -225,8 +268,10 @@
         buckets[0].add(r);
         fadeItems.push({ n: tn, s: sOff, e: eOff, r, b: 0, t: now });
         const due = now + STREAM_FADE_STEP_MS;
-        if (!nextFadeDueAt || due < nextFadeDueAt) nextFadeDueAt = due;
-        if (!fadeRaf) fadeRaf = rAF(stepHighlightFade);
+        const earlier = !nextFadeDueAt || due < nextFadeDueAt;
+        if (earlier) nextFadeDueAt = due;
+        if (earlier && fadeTimer) clearFadeTimer();
+        scheduleFadeStep(now, false);
         return true;
       } catch {
         return false;
@@ -285,9 +330,14 @@
     }
 
     function clearTransientTimers() {
+      convEntrySeq++;
       if (convEntryTimer) {
         clearTimeout(convEntryTimer);
         convEntryTimer = 0;
+      }
+      if (convEntryRaf) {
+        cAF(convEntryRaf);
+        convEntryRaf = 0;
       }
       if (wfClickTimer) {
         clearTimeout(wfClickTimer);
@@ -303,10 +353,22 @@
     }
 
     function cancelDeferredHydration() {
+      convEntrySeq++;
+      if (convEntryTimer) {
+        clearTimeout(convEntryTimer);
+        convEntryTimer = 0;
+      }
+      if (convEntryRaf) {
+        cAF(convEntryRaf);
+        convEntryRaf = 0;
+      }
       cAF(hydrateRaf);
       hydrateRaf = 0;
+      cAF(unfoldRaf);
+      unfoldRaf = 0;
       sparkQueue = [];
       iconQueue = [];
+      unfoldQueue = [];
     }
 
     function applySingleSpark(trig, brand, st) {
@@ -420,7 +482,29 @@
       for (const el of qsa(d, '[data-ag-cs-outer-open]')) ra(el, 'data-ag-cs-outer-open');
     }
 
-    function processOuterWf(btn) {
+    function pumpUnfoldQueue() {
+      unfoldRaf = 0;
+      if (isDestroyed() || unfoldQueue.length === 0) {
+        unfoldQueue = [];
+        return;
+      }
+      let budget = 2;
+      while (unfoldQueue.length > 0 && budget > 0) {
+        const cb = unfoldQueue.pop();
+        if (!cb || !isConn(cb)) continue;
+        if (ga(cb, 'aria-expanded') === 'false' && typeof cb.click === 'function') {
+          try {
+            cb.click();
+          } catch {}
+          budget--;
+        }
+      }
+      if (unfoldQueue.length > 0 && !isDestroyed()) {
+        unfoldRaf = rAF(pumpUnfoldQueue);
+      }
+    }
+
+    function processOuterWf(btn, pendingClicks) {
       if (!isConn(btn)) return;
       const expanded = ga(btn, 'aria-expanded') === 'true';
       let scope = btn.nextElementSibling;
@@ -437,9 +521,7 @@
           if (cb !== btn && ga(cb, 'data-ag-cs-auto-unfolded') !== '1') {
             sa(cb, 'data-ag-cs-auto-unfolded', '1');
             if (ga(cb, 'aria-expanded') === 'false' && typeof cb.click === 'function') {
-              try {
-                cb.click();
-              } catch {}
+              pendingClicks.push(cb);
             }
           }
         }
@@ -453,6 +535,32 @@
       }
     }
 
+    function flushPendingUnfoldClicks(pendingClicks) {
+      if (!pendingClicks.length) return;
+      if (pendingClicks.length <= 2 || typeof requestAnimationFrame !== 'function') {
+        for (let i = 0; i < pendingClicks.length; i++) {
+          const cb = pendingClicks[i];
+          if (isConn(cb) && ga(cb, 'aria-expanded') === 'false') {
+            try {
+              cb.click();
+            } catch {}
+          }
+        }
+        return;
+      }
+      // 优先同步展开最新的 2 个工具组，其余历史组按帧每帧展开 2 个，避免切换长会话同步连环点击阻塞主线程
+      for (let k = 0; k < 2 && pendingClicks.length > 0; k++) {
+        const cb = pendingClicks.pop();
+        if (isConn(cb) && ga(cb, 'aria-expanded') === 'false') {
+          try {
+            cb.click();
+          } catch {}
+        }
+      }
+      for (let i = 0; i < pendingClicks.length; i++) unfoldQueue.push(pendingClicks[i]);
+      if (!unfoldRaf && unfoldQueue.length > 0) unfoldRaf = rAF(pumpUnfoldQueue);
+    }
+
     function syncWorkedForAutoUnfold(dirtyTargets = null) {
       const d = docOf();
       if (isDestroyed()) {
@@ -460,6 +568,7 @@
         return;
       }
       if (!d) return;
+      const pendingClicks = [];
       if (dirtyTargets && dirtyTargets.size > 0) {
         const outers = new Set();
         for (const node of dirtyTargets) {
@@ -481,10 +590,12 @@
             cur = peOf(cur);
           }
         }
-        for (const btn of outers) processOuterWf(btn);
+        for (const btn of outers) processOuterWf(btn, pendingClicks);
+        flushPendingUnfoldClicks(pendingClicks);
         return;
       }
-      for (const btn of qsa(d, '[data-testid="worked-for-collapsible"]')) processOuterWf(btn);
+      for (const btn of qsa(d, '[data-testid="worked-for-collapsible"]')) processOuterWf(btn, pendingClicks);
+      flushPendingUnfoldClicks(pendingClicks);
     }
 
     function scheduleWorkedForClickSync() {
@@ -606,7 +717,8 @@
         }
         states.push([r, Boolean(qs(r, '[data-testid="status-loading-spinner"]'))]);
       }
-      if (!selRow) return { e: false, i: -1, r: null, s: null, l: null, t: 0, st: states };
+      if (!selRow) return { e: false, i: -1, cid: '', r: null, s: null, l: null, t: 0, st: states };
+      const curCid = String(ga(selRow, 'data-cascade-id') || ga(qs(selRow, 'a[href]'), 'href') || '').trim();
       const list = peOf(selRow);
       const rr = rectOf(selRow);
       const lr = rectOf(list);
@@ -621,7 +733,7 @@
             rx: lr ? rr.left - lr.left : rr.left,
           }
         : null;
-      return { e: false, i: selIdx, r: selRow, s: snap, l: lr, t: stTop, st: states };
+      return { e: false, i: selIdx, cid: curCid, r: selRow, s: snap, l: lr, t: stTop, st: states };
     }
 
     function syncSidebarSelectionGlide(snap) {
@@ -634,6 +746,7 @@
         }
         sbInit = false;
         sbIndex = -1;
+        sbCid = '';
         sbRect = null;
         return;
       }
@@ -646,18 +759,22 @@
       if (snap.e) {
         sbInit = false;
         sbIndex = -1;
+        sbCid = '';
         sbRect = null;
         return;
       }
-      const { i: selIdx, r: selRow, s: curSnap, l: listRect, t: scrollTop } = snap;
+      const { i: selIdx, cid: curCid, r: selRow, s: curSnap, l: listRect, t: scrollTop } = snap;
       if (!selRow) return;
       if (!sbInit) {
         sbInit = true;
         sbIndex = selIdx;
+        sbCid = curCid;
         sbRect = curSnap;
         return;
       }
-      if (sbIndex >= 0 && selIdx >= 0 && selIdx !== sbIndex && sbRect && curSnap) {
+      // 虚拟滚动增删上下行会让同一会话的 DOM 下标 selIdx 漂移；仅在真实切换会话 ID 时触发滑条与主区转场，消除滚动闪烁
+      const sessionChanged = curCid && sbCid ? curCid !== sbCid : selIdx !== sbIndex;
+      if (sbIndex >= 0 && selIdx >= 0 && sessionChanged && sbRect && curSnap && !(suppressEntryMotionUntil > nowOf())) {
         const fromRect = listRect
           ? { left: listRect.left + sbRect.rx, top: listRect.top + sbRect.ry - scrollTop, width: sbRect.width, height: sbRect.height }
           : sbRect;
@@ -689,14 +806,21 @@
           for (const vp of qsa(d, '[data-testid="autoscroll-viewport"]')) {
             if (closestOf(vp, '[data-testid="subagent-tab-conversation"]')) continue;
             sa(vp, 'data-ag-cs-stage-glide', dir);
+            const kids = vp.children ? Array.from(vp.children) : [];
+            const glideKids = kids.slice(Math.max(0, kids.length - 3));
+            for (const ch of glideKids) sa(ch, 'data-ag-cs-glide-item', dir);
             scheduleTransient(() => {
               if (isConn(vp) && ga(vp, 'data-ag-cs-stage-glide') === dir) ra(vp, 'data-ag-cs-stage-glide');
+              for (const ch of glideKids) {
+                if (isConn(ch) && ga(ch, 'data-ag-cs-glide-item') === dir) ra(ch, 'data-ag-cs-glide-item');
+              }
             }, 220);
             break;
           }
         }
       }
       sbIndex = selIdx;
+      sbCid = curCid;
       sbRect = curSnap;
     }
 
@@ -719,9 +843,20 @@
       return out;
     }
 
+    function syncHeaderOpenStates(scope = null) {
+      const root = scope || docOf();
+      if (!root) return;
+      for (const hdr of qsa(root, '[data-testid="changed-files-card-header"]')) {
+        const next = hdr.nextElementSibling;
+        if (next && tagOf(next) === 'DIV') setAttrIfChanged(hdr, 'data-ag-cs-hdr-open', '1');
+        else if (ha(hdr, 'data-ag-cs-hdr-open')) ra(hdr, 'data-ag-cs-hdr-open');
+      }
+    }
+
     function syncHeroCCaustics(measuredHeaders) {
       const d = docOf();
       const now = nowOf();
+      syncHeaderOpenStates(d);
       let sawNew = false;
       for (const hdr of measuredHeaders || measureVisibleChangedHeaders()) {
         if (seenHeaders.has(hdr)) continue;
@@ -850,8 +985,12 @@
         heroState.wasInHome = inHome;
         heroState.wasInFormalConv = inFormalConv;
       } else {
-        if (heroState.wasInHome && !inHome && inFormalConv) triggerHeroALiftoff(formalConv, measured?.convInputRect || null);
-        else if (heroState.wasInFormalConv && !heroState.wasInHome && inHome) triggerHeroBHomeReturn();
+        if (!(suppressEntryMotionUntil > nowOf())) {
+          if (heroState.wasInHome && !inHome && inFormalConv) triggerHeroALiftoff(formalConv, measured?.convInputRect || null);
+          else if (heroState.wasInFormalConv && !heroState.wasInHome && inHome) triggerHeroBHomeReturn();
+        } else {
+          liftoffBubbleUntil = 0;
+        }
         heroState.wasInHome = inHome;
         heroState.wasInFormalConv = inFormalConv;
       }
@@ -930,6 +1069,7 @@
             'data-ag-cs-caustic',
             'data-ag-cs-fiber-camp',
             'data-ag-cs-stage-glide',
+            'data-ag-cs-glide-item',
             'data-ag-cs-sonar',
           ]) {
             for (const el of qsa(d, `[${attr}]`)) ra(el, attr);
@@ -946,6 +1086,16 @@
       let cur = isEl(node) ? node : peOf(node);
       while (cur && cur !== body) {
         if (ga(cur, 'data-ag-cs-thought-streaming') === '1') return cur;
+        const tid = ga(cur, 'data-testid');
+        if (
+          tid === 'planner-response-text' ||
+          tid === 'background-task-command' ||
+          tid === 'tool-group-collapsible' ||
+          tid === 'conversation-view' ||
+          tid === 'autoscroll-viewport'
+        ) {
+          return null;
+        }
         const prev = cur.previousElementSibling;
         if (prev && ga(prev, 'data-testid') === 'thinking-collapsible-trigger' && ga(prev, 'aria-expanded') === 'true') return cur;
         cur = peOf(cur);
@@ -1008,16 +1158,16 @@
 
         if (m.type === 'characterData') {
           if (target.nodeType !== 3) continue;
+          const nLen = (target.data ?? target.nodeValue ?? '').length;
+          const pLen = textLenMap.get(target);
+          textLenMap.set(target, nLen);
+          if (pLen !== undefined ? nLen <= pLen : nLen <= 0 || nLen > 28) continue;
           const tb = findStreamingThoughtBody(baseEl);
           if (tb) {
             if (isManagedThoughtPanel(tb)) continue;
           } else if (!closestOf(baseEl, '[data-testid="planner-response-text"]')) continue;
-          const nLen = (target.data ?? target.nodeValue ?? '').length;
-          const pLen = textLenMap.get(target);
-          textLenMap.set(target, nLen);
-          if (pLen !== undefined) {
-            if (nLen > pLen) enqueueFadeRange(target, pLen, nLen, now);
-          } else if (nLen > 0 && nLen <= 28) enqueueFadeRange(target, 0, nLen, now);
+          if (pLen !== undefined) enqueueFadeRange(target, pLen, nLen, now);
+          else enqueueFadeRange(target, 0, nLen, now);
           continue;
         }
 
@@ -1179,6 +1329,12 @@
       }
     }
 
+    function isFreshTriggerOrigin(trig) {
+      if (!trig || !Number.isFinite(trig.at)) return false;
+      const age = nowOf() - trig.at;
+      return age >= 0 && age <= 900;
+    }
+
     function measureNewLensOverlays() {
       const d = docOf();
       if (!isMotionStandardOrUltra() || !d) return [];
@@ -1189,9 +1345,10 @@
         const p = peOf(el);
         if (p && tagOf(p) === 'DIV') cands.add(p);
       }
+      const needRect = isFreshTriggerOrigin(heroState.lastTriggerOrigin);
       const out = [];
       for (const ov of cands) {
-        if (!seenOverlays.has(ov)) out.push({ ov, rect: rectOf(ov) });
+        if (!ha(ov, 'data-hover-card-popup') && !seenOverlays.has(ov)) out.push({ ov, rect: needRect ? rectOf(ov) : null });
       }
       return out;
     }
@@ -1204,9 +1361,10 @@
         if (p && tagOf(p) === 'DIV') setAttrIfChanged(p, 'data-ag-cs-overview-shell', '1');
       }
       if (!isMotionStandardOrUltra()) return;
-      const trig = heroState.lastTriggerOrigin;
+      const trig = isFreshTriggerOrigin(heroState.lastTriggerOrigin) ? heroState.lastTriggerOrigin : null;
       for (const { ov, rect: r } of measuredOverlays || measureNewLensOverlays()) {
         if (seenOverlays.has(ov)) continue;
+        if (trig && r && (r.width <= 0 || r.height <= 0)) continue;
         seenOverlays.add(ov);
         if (trig && r && r.width > 0 && r.height > 0) {
           setProp(ov, '--ag-origin-x', `${Math.round(Math.max(-40, Math.min(r.width + 40, trig.x - r.left)))}px`);
@@ -1230,11 +1388,23 @@
       }
     }
 
-    function scheduleDeferredConvEntry(fn, delayMs = 65) {
+    function scheduleDeferredConvEntry(fn, delayMs = 65, frame2Fn = null) {
+      const seq = ++convEntrySeq;
       if (convEntryTimer) clearTimeout(convEntryTimer);
+      if (convEntryRaf) {
+        cAF(convEntryRaf);
+        convEntryRaf = 0;
+      }
       convEntryTimer = setTimeout(() => {
         convEntryTimer = 0;
-        if (!isDestroyed()) fn();
+        if (isDestroyed() || seq !== convEntrySeq) return;
+        const cont = fn();
+        if (cont !== false && seq === convEntrySeq && typeof frame2Fn === 'function') {
+          convEntryRaf = rAF(() => {
+            convEntryRaf = 0;
+            if (!isDestroyed() && seq === convEntrySeq) frame2Fn();
+          });
+        }
       }, delayMs);
     }
 
@@ -1266,6 +1436,7 @@
       triggerHeroESonar,
       measureSidebarSelectionSnapshot,
       measureVisibleChangedHeaders,
+      syncHeaderOpenStates,
       syncHeroCCaustics,
       syncHeroRouteChoreography,
       flushAllStreamArtifacts,
@@ -1275,13 +1446,20 @@
       measureNewLensOverlays,
       syncLensOverlayOrigins,
       scheduleDeferredConvEntry,
+      suppressEntryMotion(ms) {
+        suppressEntryMotionUntil = Math.max(suppressEntryMotionUntil, nowOf() + Math.max(120, Number(ms) || 900));
+        liftoffBubbleUntil = 0;
+        const d = docOf();
+        if (d) for (const n of qsa(d, '.ag-cs-liftoff-veil,.ag-cs-sidebar-glide-pill')) n.remove();
+      },
+      isEntryMotionSuppressed: () => suppressEntryMotionUntil > nowOf(),
       isStreamMutating: () => streamMutating,
       hasStreamObserver: () => Boolean(streamObs && streamRoot),
       stepHighlightFade,
       clearHighlightFade,
       getHighlightFadeState: () => ({
         activeCount: fadeItems.length,
-        rafActive: Boolean(fadeRaf),
+        rafActive: Boolean(fadeRaf || fadeTimer),
         buckets: hlBuckets ? hlBuckets.map((h) => h.size ?? 0) : [],
       }),
     };

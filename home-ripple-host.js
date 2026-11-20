@@ -7,6 +7,7 @@
   if (!G) return;
 
   const RIPPLE_INTRO_MS = 1600;
+  const AURA_IDLE_SLEEP_MS = 1200;
 
   const parseAmbientScale = (raw) =>
     G.__agPrismRipple?.parseAmbientScale
@@ -344,6 +345,8 @@
         if (ambientScale <= 0.001 && auraState.active) {
           auraState.active = false;
         }
+        const auraActiveRecent =
+          ambientScale > 0.001 && auraState.active && lastSkimAt > 0 && now - lastSkimAt < AURA_IDLE_SLEEP_MS;
         const inIntro = !still && ambientScale > 0.001 && now - state.mountedAt < RIPPLE_INTRO_MS;
         const fieldBusy = Boolean(state.field && typeof state.field.busy === 'function' && state.field.busy());
         const needsGlowClear = ambientScale <= 0.001 && !state.glowClearedAtZero;
@@ -353,7 +356,7 @@
           needsGlowClear ||
           inTideSwell ||
           inIntro ||
-          (ambientScale > 0.001 && auraState.active) ||
+          auraActiveRecent ||
           (state.field && state.field.needsDraw(now, still));
 
         if (canvas.width > 0 && needsRender) {
@@ -389,7 +392,7 @@
           enterIdleSleep();
           return;
         }
-        if (inTideSwell || fieldBusy || inIntro || (ambientScale > 0.001 && auraState.active)) {
+        if (inTideSwell || fieldBusy || inIntro || auraActiveRecent) {
           wake();
         } else {
           enterIdleSleep();
@@ -405,15 +408,27 @@
         lastSkimX = null;
         lastSkimY = null;
         skimCarryDist = 0;
-        const prevW = state.width;
-        const prevH = state.height;
-        layout();
-        if (state.width !== prevW || state.height !== prevH) {
-          updateCalmZones();
+        const runReattachLayout = () => {
+          if (isDestroyed() || state.parked) return;
+          const prevW = state.width;
+          const prevH = state.height;
+          layout();
+          if (state.width !== prevW || state.height !== prevH) {
+            updateCalmZones();
+          }
+          state.field.invalidate();
+          if (state.glow && typeof state.glow.invalidate === 'function') state.glow.invalidate();
+          wake();
+        };
+        if (state.width > 0 && state.height > 0 && !document.hidden && typeof requestAnimationFrame === 'function') {
+          if (state.rafId) cancelAnimationFrame(state.rafId);
+          state.rafId = requestAnimationFrame(() => {
+            state.rafId = 0;
+            runReattachLayout();
+          });
+        } else {
+          runReattachLayout();
         }
-        state.field.invalidate();
-        if (state.glow && typeof state.glow.invalidate === 'function') state.glow.invalidate();
-        wake();
       };
 
       state.onMove = (ev) => {

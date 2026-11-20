@@ -10,7 +10,7 @@ import { performance } from 'node:perf_hooks';
 
 const exec = promisify(execFile);
 const languageServer = command => /(?:^|[\/\\])language_server(?:_(?:windows|linux|macos|darwin)(?:_(?:x64|arm|arm64))?)?(?:\.exe)?(?:\s|$)/i.test(command);
-const agyHubCommand = command => /(?:^|[\/\\])agy(?:\.exe)?(?:\s|$)/i.test(command) && /(?:^|\s)["']?--hub(?:["']?)(?=\s|$)/i.test(command) && !/(?:^|\s)["']?--enable_lsp(?:=|\s|$)/i.test(command);
+const agyHubCommand = command => /(?:^|[\/\\"'])agy(?:\.exe)?(?:["']?(?:\s|$))/i.test(command) && /(?:^|\s)["']?--hub(?:["']?)(?=\s|$)/i.test(command) && !/(?:^|\s)["']?--enable_lsp(?:=|\s|$)/i.test(command);
 
 export function extractHubPort(command) {
   const m = String(command || '').match(/(?:^|\s)--hub-port(?:=|\s+)["']?(\d{1,5})["']?(?=\s|$)/i);
@@ -136,7 +136,7 @@ async function boundedProbe(probe, port, timeoutMs) {
   }
 }
 
-export async function discoverWindowsPorts(pids, { run = exec, expectedPorts = new Map(), probe = probeLoopbackPort } = {}) {
+export async function discoverWindowsPorts(pids, { run = exec, expectedPorts = new Map(), probe = probeLoopbackPort, preloadedNetstatStdout = null } = {}) {
   const wanted = new Set(pids.filter(validPid));
   if (!wanted.size) return new Map();
   const preferred = new Map();
@@ -145,7 +145,10 @@ export async function discoverWindowsPorts(pids, { run = exec, expectedPorts = n
       if (validPort(port)) { preferred.set(pid, port); break; }
     }
   }
-  const { stdout } = await run('netstat.exe', ['-ano', '-p', 'tcp'], { windowsHide: true, timeout: 4000, maxBuffer: 4194304 }).catch(() => ({ stdout: '' }));
+  const stdout =
+    typeof preloadedNetstatStdout === 'string' && preloadedNetstatStdout.length > 0
+      ? preloadedNetstatStdout
+      : (await run('netstat.exe', ['-ano', '-p', 'tcp'], { windowsHide: true, timeout: 4000, maxBuffer: 4194304 }).catch(() => ({ stdout: '' }))).stdout;
   const snapshot = netstatSnapshot(stdout);
   const ports = new Map([...snapshot.ports].filter(([pid]) => wanted.has(pid)));
   const missing = [...wanted].filter(pid => {
@@ -281,25 +284,44 @@ public static class AgFastProc {
     } finally { Marshal.FreeHGlobal(mem); }
   }
   public static object[] Scan(bool fullTree) {
-    var list = new List<object>();
+    var cands = new List<object>();
+    var otherMeta = new List<KeyValuePair<int, string>>();
+    bool hasHub = false;
     foreach (var p in Process.GetProcesses()) {
       int pid = 0; string n = "";
       try { pid = p.Id; n = p.ProcessName ?? ""; } catch { p.Dispose(); continue; }
       p.Dispose();
       bool isCand = n.StartsWith("language_server", StringComparison.OrdinalIgnoreCase) || string.Equals(n, "agy", StringComparison.OrdinalIgnoreCase);
-      if (!fullTree && !isCand) continue;
+      if (!isCand) {
+        otherMeta.Add(new KeyValuePair<int, string>(pid, n));
+        continue;
+      }
       int ppid = 0; string cmd = "";
       IntPtr h = OpenProcess(0x1000u, false, pid);
       if (h != IntPtr.Zero) {
         try {
           PBI pbi = new PBI(); int ret;
           if (NtQueryPbi(h, 0, ref pbi, Marshal.SizeOf(pbi), out ret) == 0) ppid = (int)pbi.InheritedFromUniqueProcessId.ToInt64();
-          if (isCand) cmd = ReadCmd(h);
+          cmd = ReadCmd(h);
         } finally { CloseHandle(h); }
       }
-      list.Add(new { ProcessId = pid, ParentProcessId = ppid, Name = n + ".exe", CommandLine = cmd });
+      cands.Add(new { ProcessId = pid, ParentProcessId = ppid, Name = n + ".exe", CommandLine = cmd });
+      if (string.Equals(n, "agy", StringComparison.OrdinalIgnoreCase)) hasHub = true;
     }
-    return list.ToArray();
+    if (fullTree || cands.Count > 1 || hasHub) {
+      foreach (var kv in otherMeta) {
+        int ppid = 0;
+        IntPtr h = OpenProcess(0x1000u, false, kv.Key);
+        if (h != IntPtr.Zero) {
+          try {
+            PBI pbi = new PBI(); int ret;
+            if (NtQueryPbi(h, 0, ref pbi, Marshal.SizeOf(pbi), out ret) == 0) ppid = (int)pbi.InheritedFromUniqueProcessId.ToInt64();
+          } finally { CloseHandle(h); }
+        }
+        cands.Add(new { ProcessId = kv.Key, ParentProcessId = ppid, Name = kv.Value + ".exe", CommandLine = "" });
+      }
+    }
+    return cands.ToArray();
   }
 }
 '@
@@ -335,15 +357,21 @@ public static class AgFastProc {
     );
     if (!candidates.length) return [];
 
+    let cachedNetstatStdout = null;
     if (hasCdpHint && (candidates.length > 1 || candidates.some((c) => agyHubCommand(c.CommandLine || '')))) {
+      const candPids = new Set(candidates.map((c) => c.ProcessId));
+      const alreadyHasTreeRows = fastRows.some((r) => !candPids.has(r.ProcessId));
       const [{ stdout: netOut }, { stdout: treeOut }] = await Promise.all([
         run('netstat.exe', ['-ano', '-p', 'tcp'], { windowsHide: true, timeout: 4000, maxBuffer: 4194304 }).catch(() => ({ stdout: '' })),
-        run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', buildZeroWmiScript(true)], {
-          windowsHide: true,
-          timeout: 4500,
-          maxBuffer: 4194304,
-        }).catch(() => ({ stdout: '' })),
+        alreadyHasTreeRows
+          ? Promise.resolve({ stdout: '' })
+          : run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', buildZeroWmiScript(true)], {
+              windowsHide: true,
+              timeout: 4500,
+              maxBuffer: 4194304,
+            }).catch(() => ({ stdout: '' })),
       ]);
+      cachedNetstatStdout = netOut || null;
       let treeRows = [];
       try {
         treeRows = parseWinRows(treeOut);
@@ -373,7 +401,7 @@ public static class AgFastProc {
     );
     const ports = await discoverWindowsPorts(
       candidates.map((row) => row.ProcessId),
-      { run, expectedPorts: expMap }
+      { run, expectedPorts: expMap, preloadedNetstatStdout: cachedNetstatStdout }
     );
     return candidates.map((row) => ({ ...row, Ports: ports.get(row.ProcessId) || [], HubPort: extractHubPort(row.CommandLine) }));
   }

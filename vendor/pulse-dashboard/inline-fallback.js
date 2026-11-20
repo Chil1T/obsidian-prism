@@ -495,7 +495,7 @@
 
     let lastHealAt = 0;
     const IGN_STREAM_SEL =
-      '[data-testid="autoscroll-viewport"],[data-testid="planner-response-text"],aside,[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-conv-aura-host,.ag-cs-crab';
+      '[data-testid="autoscroll-viewport"],[data-testid="planner-response-text"],[data-testid="background-task-command"],[data-testid="running-items-card"],aside,[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-conv-aura-host,.ag-cs-crab,.ag-cs-prism-rim-cv,.ag-anim-icon,.ag-cs-thinking-spark';
     const isIgnoredStreamNode = (t) =>
       Boolean(
         t?.closest &&

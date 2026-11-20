@@ -139,6 +139,17 @@ export class MetricsStore {
   usageFailureVersion(source) { return this.usagePersistenceFailureVersions.get(source) || 0; }
   clearUsagePersistenceErrors() { this.usagePersistenceFailures.clear(); this.usagePersistenceFailureVersions.clear(); this.usagePersistenceError = false; }
 
+  evictSessions(keepId = null) {
+    if (this.sessions.size > 32) {
+      for (const [oldId, oldEntry] of this.sessions) {
+        if (this.sessions.size <= 32) break;
+        if (oldId === keepId || oldEntry?.pending) continue;
+        if (oldEntry?.backgroundOnly && this.background?.state(oldId)?.state === 'processing') continue;
+        this.sessions.delete(oldId);
+      }
+    }
+  }
+
   async cachedSession(id) {
     if (!this.owned() || !GUID.test(id)) return null;
     id = id.toLowerCase();
@@ -148,7 +159,10 @@ export class MetricsStore {
     const saved = await this.history.load(scope, id);
     if (!this.owned() || identity !== this.identity || epoch !== this.epoch) return null;
     if (!saved) return null;
-    if (!this.sessions.has(id)) this.sessions.set(id, { data: saved.metrics, savedAt: saved.savedAt, updatedAt: 0 });
+    if (!this.sessions.has(id)) {
+      this.sessions.set(id, { data: saved.metrics, savedAt: saved.savedAt, updatedAt: 0 });
+      this.evictSessions(id);
+    }
     return { ...saved.metrics, transcriptRestoredFromHistory: !!saved.metrics.transcriptStats, restoredFromHistory: true, savedAt: saved.savedAt };
   }
 
@@ -185,7 +199,7 @@ export class MetricsStore {
 
   async listConversations(force = false) {
     if (!this.owned()) throw new Error('后台已重新连接，请等待刷新');
-    if (!force && Date.now() - this.summariesAt < 5000) return this.summaries;
+    if (!force && Date.now() - this.summariesAt < 12000) return this.summaries;
     const scope = this.identity, epoch = this.epoch;
     const response = await this.client.call('GetAllCascadeTrajectories', { excludeSubtrajectories: false });
     if (!this.owned() || scope !== this.identity || epoch !== this.epoch) throw new Error('后台已重新连接，请等待刷新');
@@ -293,9 +307,11 @@ export class MetricsStore {
     const identity = this.identity, scope = this.storageScope(identity), epoch = this.epoch;
     let entry = this.sessions.get(id);
     if (entry?.pending) return entry.pending;
-    if (!force && entry?.data && Date.now() - entry.updatedAt < 1800) return entry.data;
+    if (!force && entry?.data && Date.now() - entry.updatedAt < 4500) return entry.data;
     entry ||= {};
+    this.sessions.delete(id);
     this.sessions.set(id, entry);
+    this.evictSessions(id);
     const current = () => this.owned() && identity === this.identity && epoch === this.epoch && this.sessions.get(id) === entry;
     entry.pending = (async () => {
       if (!entry.data) {
@@ -449,6 +465,10 @@ export class MetricsStore {
     this.background?.dispose();
     this.delegated.dispose();
     this.transcripts?.reset();
+    this.client?.dispose?.();
+    this.sessions.clear();
+    this.summaries = [];
+    this.summariesAt = 0;
     this.epoch++;
   }
 }

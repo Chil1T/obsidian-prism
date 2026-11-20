@@ -12,7 +12,7 @@ Antigravity 桌面端主题与工作台增强套件 · 四套深浅配色 · 内
 
 <p>
   <a href="https://github.com/RMvdesi/obsidian-prism/releases"><img src="https://img.shields.io/github/v/release/RMvdesi/obsidian-prism?style=flat-square&color=3186ff&label=Release" alt="Latest Release" /></a>
-  <img src="https://img.shields.io/badge/Version-1.0.1-0f172a?style=flat-square" alt="Version 1.0.1" />
+  <img src="https://img.shields.io/badge/Version-1.0.2-0f172a?style=flat-square" alt="Version 1.0.2" />
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20Universal-1e293b?style=flat-square" alt="Platform" />
   <a href="https://github.com/RMvdesi/obsidian-prism/actions"><img src="https://img.shields.io/github/actions/workflow/status/RMvdesi/obsidian-prism/ci.yml?branch=main&style=flat-square&label=CI" alt="CI Status" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-2563eb?style=flat-square" alt="License: GPL-3.0" /></a>
@@ -32,16 +32,17 @@ Antigravity 桌面端主题与工作台增强套件 · 四套深浅配色 · 内
 
 ## 核心特性
 
-**Obsidian Prism (`v1.0.1`)** 在不改动宿主业务逻辑、不触碰外部插件锁文件的前提下，通过原生 Sidecar 插件架构为 Antigravity 桌面端提供界面配色、工作台交互增强、侧边栏内置浏览器与多格式流式检视台、模型配额遥测及思考过程转译：
+**Obsidian Prism (`v1.0.2`)** 在不改动宿主业务逻辑、不触碰外部插件锁文件的前提下，通过原生 Sidecar 插件架构为 Antigravity 桌面端提供界面配色、工作台交互增强、侧边栏内置浏览器与多格式流式检视台、模型配额遥测及思考过程转译：
 
 - **四套深浅配色与细节微调**：内置深色（`obsidian` 深空黑曜、`warm` 暖炭玄岩）与浅色（`crystal` 白昼冷晶、`alabaster` 暖白画册）共四套主题，支持跟随系统/宿主亮暗切换；提供 5 档工业强调色（跟随模型 / 钴蓝 `cobalt` / 鸢尾紫 `iris` / 琥珀金 `amber` / 纯银钛单色 `mono`）、3 档全局圆角、4 档代码等宽字体与连字开关、环境光浓度调节。
 - **300Hz 高刷分频、五级水墨流式淡入与 `0fps` 语义余晖**：移除常驻大面积 `backdrop-filter` 模糊开销；对话流式吐字采用基于 `CSS.highlights` 的**五级水墨流式淡入**（零 DOM 节点包裹、零强制同步回流），在超长会话（`34k+` DOM 节点）与高刷屏下保持流畅零卡顿；推理稳态期背景极光自动限频至 `~30fps` 降低 GPU 占用，空闲 `1.2s` 后进入 `0fps` 休眠；支持「待用户决策 / 异常中止 / 长任务后台完成」三态无弹窗边缘余晖提示，静态定格后维持 `0fps` 零重绘。
-- **宿主深水区工作台适配**：通过宿主原生 `preload` 协议向 `plugin://*` Sidecar 面板（Swarm、Model Hub、Pulse 等）按需同步 24 项主题色彩变量，消除跨源 `iframe` 浅色闪白；Markdown 与 Artifacts 代码块顶栏支持 Sticky 吸顶，已完成且 `>= 48` 行的长代码块提供手动折叠/展开（不做自动截断，收起时自动补偿滚动位置）；左侧原生会话导轨支持长会话章节刻度、悬停提问大纲与关键词过滤、一键折叠历史步骤及非编辑焦点下 `Alt+↑` / `Alt+↓` 上下轮跳转；统一底部终端与后台任务卡片的控制台凹槽（Console Well）样式。
-- **Omni 内置浏览器、右键菜单与全格式流式检视台**：支持开关控制（`omniModule: "on" | "off"`）与链接打开位置配置（`linkTarget: "builtin" | "external"`）。采用 `CSS.highlights`（Custom Highlight API）零 DOM 篡改激活对话与终端内的裸 URL、`localhost` 端口与本地文件路径，不拆分宿主 React 文本节点；默认左键网页链接在右侧内置浏览器打开（`Ctrl/Cmd+点击` 临时切换系统浏览器）。日常阅读保持**零悬停浮窗干扰**，仅在右键点击链接、文件药丸、Artifact 卡片或 Mermaid 图表时弹出操作菜单（复制绝对/相对路径、在文件夹中定位选中、作为 `@引用` 填入输入框、内外部浏览器打开、图表缩放）。侧边栏检视台基于仅监听 `127.0.0.1` 的 HTTP `206 Range` 流式网关，支持大体积视频逐帧检视、音频毫秒级波形打点、SVG/透明图棋盘格缩放画布（含 PNG 导出）、本地 HTML 响应式视口沙盒、PDF、`CSV/TSV/JSONL` 冻结表头检索与 `TTF/OTF/WOFF2` 字体样张预览。
+- **宿主深水区工作台适配**：通过宿主原生 `preload` 协议向 `plugin://*` Sidecar 面板（Swarm、Pulse 等）按需同步 24 项主题色彩变量，消除跨源 `iframe` 浅色闪白；Markdown 与 Artifacts 代码块顶栏支持 Sticky 吸顶，已完成且 `>= 48` 行的长代码块提供手动折叠/展开（不做自动截断，收起时自动补偿滚动位置）；左侧原生会话导轨支持长会话章节刻度、悬停提问大纲与关键词过滤、一键折叠历史步骤及非编辑焦点下 `Alt+↑` / `Alt+↓` 上下轮跳转；统一底部终端与后台任务卡片的控制台凹槽（Console Well）样式。
+- **Omni 宿主原生内置浏览器联动、右键菜单与流式检视台**：支持开关控制（`omniModule: "on" | "off"`）与链接打开位置配置（`linkTarget: "builtin" | "external"`）。全面贯彻**官方优先礼让**：对宿主原生 `<a href="http...">` 链接、页内搜索、外链确认弹窗及原生 `<= 200MB` 音视频/CSV/PDF/HTML 预览 100% 礼让官方能力；仅通过 `CSS.highlights`（Custom Highlight API）零 DOM 篡改激活纯文本裸 URL、`localhost` 端口与本地路径（左键链接可直达右侧多标签内置 Browser Tab），并在宿主右侧栏报体积超限（`> 20MB` / `> 200MB`）或无预览时原位接管为流式检视台（切回正常文件自动卸载）。日常阅读保持**零悬停浮窗干扰**，仅在右键点击裸链接、文件药丸、Artifact 卡片或 Mermaid 图表时弹出操作菜单（复制绝对/相对路径、在文件夹中定位选中、作为 `@引用` 填入输入框、内外部浏览器打开、图表缩放）。流式检视台基于仅监听 `127.0.0.1` 的 HTTP `206 Range` 流式网关，支持大体积视频逐帧检视、音频毫秒级波形打点、SVG/透明图棋盘格缩放画布（含 PNG 导出）、本地 HTML 响应式视口沙盒、PDF、`CSV/TSV/JSONL` 冻结表头检索与 `TTF/OTF/WOFF2` 字体样张预览。
 - **纵深安全边界与本地隔离**：CDP 特权绑定（`__agPrism*`）强制校验顶层主 Frame 上下文，拒绝任何子 `<iframe>` 越权调用；本地流式网关实施 `Host` 与跨站请求校验、`realpath` 敏感凭据文件（`.env*`、`.ssh`、私钥证书与本地令牌配置等）双重拦截及远程 UNC 路径阻断；本地 HTML 预览采用 `HMAC-SHA256` 单目录作用域只读子令牌与受限 `sandbox` 隔离，思考转译上游请求禁用重定向并阻断云元数据与高危内网端口。
 - **双窗口配额遥测与 512K 上下文指示**：遥测引擎对齐上游 [`ATtacK030130/antigrative-dashboard`](https://github.com/ATtacK030130/antigrative-dashboard) `v0.9.1`，支持全模型池 **5 小时 + 周度（Weekly）双窗口配额监控与线性耗尽预测**、**主会话与 Swarm/子代理 Token 消耗拆分**、**Cache 命中率**统计，以及基于 CDP 进程族谱的多实例归属识别；Studio 首页看板提供概览、趋势与模型配额三视图及按工作区筛选；遥测目录独立隔离，检测到外部独立插件时自动礼貌避让（Auto-Yield）。
 - **双模思考转译工作台**：同时支持免配置**机器翻译**与 **OpenAI 兼容接口流式转译**，放行本地免密端点（`localhost` / 局域网 Ollama、LM Studio、vLLM 等无需填写 API Key）；基于 `file://` 协议白名单还原思考内容中的源码路径与 `#L` 行号点击跳转；内置服务端并发限流（上限 `3`）与视口优先调度队列、单块失败重试与强制重译，支持「沉浸纯译文 / 双语上下对照」切换及双端缓存清理；API Key 与提示词以 `0600` 权限仅保存在本机配置目录。
-- **微内核模块化架构与毫秒级热刷新**：前端拆解为 `ui-runtime.js` 微内核与 6 个高内聚控制器模块，经 `cdp.js` 跨模块共享字符串池编译后静态主包体积 `< 680 KB`（Omni 客户端按独立双通道加载）；设置中心覆盖 26 项可校验配置键，内置三档场景预设、分类子标签页与自动剥离私钥凭据的脱敏 JSON 导入/导出备份，配置变更通过单飞增量广播在 `< 10 ms` 内热刷新生效。
+- **Chat 对话模式 (Beta · 默认关闭)**：默认保持关闭，可在 **设置 → 外观 → Beta 内容** 中随时开启或关闭（`sidebarStudio: "on" | "off"`）。开启后可在侧栏顶部切换工程模式与专注日常交流、文档整理的 Chat 空间，提供独立文件夹/项目组织、多轮阅读视图与 Artifacts 侧边栏预览，并实行项目级权限隔离，避免改动全局工程设置。
+- **微内核模块化架构与毫秒级热刷新**：前端拆解为 `ui-runtime.js` 微内核与 6 个高内聚控制器模块，经 `cdp.js` 跨模块共享字符串池编译后静态主包体积 `< 670 KiB`（Omni 客户端按独立双通道加载）；设置中心覆盖 27 项可校验配置键，内置三档场景预设、分类子标签页与自动剥离私钥凭据的脱敏 JSON 导入/导出备份，配置变更通过单飞增量广播在 `< 10 ms` 内热刷新生效。
 
 ---
 
@@ -73,7 +74,7 @@ Antigravity 桌面端主题与工作台增强套件 · 四套深浅配色 · 内
 ---
 
 ### 3. 外观控制中心与思考转译配置
-集成至 **Antigravity → 设置 (Settings) → 外观 (Appearance)**，覆盖简/繁/粤/英/日 5 语种界面、26 项可校验配置键（含 `omniModule` 文件检视与右键菜单、`linkTarget` 网页链接默认打开位置）、三档场景预设（完整光效 / 专注编码 / 静默省电）、脱敏 JSON 备份恢复、面板内一键拉取 Git 更新，以及多渠道思考转译配置：
+集成至 **Antigravity → 设置 (Settings) → 外观 (Appearance)**，覆盖简/繁/粤/英/日 5 语种界面、27 项可校验配置键（含 `omniModule` 文件检视与右键菜单、`linkTarget` 网页链接默认打开位置，以及「Beta 内容」分组中的 Chat 对话模式开关）、三档场景预设（完整光效 / 专注编码 / 静默省电）、脱敏 JSON 备份恢复、面板内一键拉取 Git 更新，以及多渠道思考转译配置：
 
 <p align="center">
   <img src="assets/screenshots/settings-and-thought-suite.png" width="100%" alt="Appearance Settings and Dual-Mode Thought Suite" />
@@ -118,22 +119,23 @@ npm run install:plugin
 
 #### 常用开发与维护命令
 ```bash
-npm run inject           # 单次实时注入当前已打开的 Antigravity 窗口
-npm run remove           # 移除全部注入样式与组件，立即恢复宿主原生界面
-npm run clean:legacy     # 清理历史旧版 app.asar 遗留块（保留汉化与外部插件）
-npm test                 # 运行跨模块安全、性能与回归测试套件
-npm run build:installer  # 编译 Windows 独立安装器 (.exe)
-npm run build:macos      # 编译 macOS Universal 安装包 (.dmg)
+npm run inject                 # 单次实时注入当前已打开的 Antigravity 窗口
+npm run remove                 # 移除全部注入样式与组件，立即恢复宿主原生界面
+npm run clean:legacy           # 清理历史旧版 app.asar 遗留块（保留汉化与外部插件）
+npm run archive:conversations  # 检查本地对话库体积并离线安全归档历史子代理会话（支持无损还原）
+npm test                       # 运行跨模块安全、性能与回归测试套件
+npm run build:installer        # 编译 Windows 独立安装器 (.exe)
+npm run build:macos            # 编译 macOS Universal 安装包 (.dmg)
 ```
 
 #### 仓库核心目录结构
 ```text
 obsidian-prism/
-├── plugin.json                         # Antigravity 原生插件清单 (obsidian-prism@1.0.1)
+├── plugin.json                         # Antigravity 原生插件清单 (obsidian-prism@1.0.2)
 ├── LICENSE / NOTICE / CITATION.cff     # GPL-3.0 许可证、附加署名声明与仓库引用元数据
 ├── THIRD_PARTY_NOTICES.md              # 吸收整合的上游 MIT 项目完整版权与许可声明
 ├── assets/                             # 插件矢量图标与说明文档截图资源
-├── cdp.js / inject.js / remove.js      # 共享字符串池打包器 (<680KB)、双通道注入与卸载协议
+├── cdp.js / inject.js / remove.js      # 共享字符串池打包器 (<670KiB)、双通道注入与卸载协议
 ├── style.css                           # 四套深浅主题、强调色/圆角变量与宿主表面样式表
 ├── i18n-locales.js / i18n-core.js      # 简/繁/粤/英/日 5 语种多语言词条模块
 ├── motion-engine.js / animated-icons.js# 4 档二阶阻尼弹簧动画与微动态图标模块
@@ -141,7 +143,7 @@ obsidian-prism/
 ├── smooth-caret.js / dual-mascot-rig.js# 读写分离编辑器光标跟随与桌面像素双宠模块
 ├── usage-core.js / vial-core.js        # 用量统计/双窗口配额预测纯函数与 512K 浅水波胶囊
 ├── pulse-vial-bridge.js                # 上下文切片拆分与 5h/周配额浮窗桥接器
-├── settings-panel.js                   # 外观设置中心（26 项配置、场景预设、脱敏 JSON 备份）
+├── settings-panel.js                   # 外观设置中心（27 项配置、场景预设、脱敏 JSON 备份）
 ├── home-studio-panel.js                # 控制器 1：Studio 新建会话看板（概览/趋势/配额三视图）
 ├── home-ripple-host.js                 # 控制器 2：首页字符波纹矩阵宿主控制器
 ├── model-glyph-crystal.js              # 控制器 3：模型星标与 WebGL2 棱镜状态栏控制器
@@ -149,7 +151,7 @@ obsidian-prism/
 ├── prism-rim-canvas.js                 # 控制器 5：近场指针边框高光控制器
 ├── host-workbench-enhancer.js          # 控制器 6：Sidecar 主题同步桥、代码折叠与导轨大纲控制器
 ├── ui-runtime.js                       # 前端微内核：配置热同步、DOM 观察器与生命周期编排
-├── sidecars/daemon/                    # 多通道常驻守护进程 (设置/遥测/用量/Git/思考/Omni流式网关)
+├── sidecars/daemon/                    # 多通道常驻守护进程 (设置/遥测/用量/Git/对话库体检归档/思考/Omni)
 ├── vendor/                             # 遥测 (v0.9.1)、滑块、思考转译与 omni-viewer 流式检视台
 └── installer/ & tools/                 # Windows (C#) / macOS (Swift) 原生插件安装器与工具链
 ```
@@ -178,7 +180,7 @@ obsidian-prism/
   author       = {RMvdesi},
   title        = {{Obsidian Prism: Modular Optical UI, Workbench Enhancements, Omni File Viewer, Quota Telemetry & Thought Translator for Antigravity}},
   year         = {2026},
-  version      = {1.0.1},
+  version      = {1.0.2},
   license      = {GPL-3.0-only},
   url          = {https://github.com/RMvdesi/obsidian-prism}
 }

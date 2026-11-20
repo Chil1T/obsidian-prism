@@ -32,6 +32,12 @@
     '.ag-cs-cfg-hint{font-size:11px;color:var(--muted-foreground)}' +
     '.ag-cs-cfg-hint[data-tone="ok"]{color:#10b981}.ag-cs-cfg-hint[data-tone="err"]{color:#ef4444}';
 
+  const S_ON = Object.freeze({ allowed: ['on', 'off'], default: 'on' });
+  const S_OFF = Object.freeze({ allowed: ['on', 'off'], default: 'off' });
+  const S_AUTO = Object.freeze({ allowed: ['auto', 'on', 'off'], default: 'auto' });
+  const S_T = Object.freeze({ allowed: [true, false], default: true });
+  const S_F = Object.freeze({ allowed: [true, false], default: false });
+
   const PRISM_SETTINGS_SCHEMA = Object.freeze({
     palette: { allowed: ['obsidian', 'host', 'warm'], default: 'obsidian', aliases: { claude: 'warm' } },
     lightPreset: { allowed: ['crystal', 'alabaster'], default: 'crystal' },
@@ -41,24 +47,25 @@
     motionLevel: { allowed: ['off', 'subtle', 'standard', 'ultra'], default: 'ultra' },
     targetFps: { allowed: ['60', '120', '180', 'native'], default: '180' },
     homeLayout: { allowed: ['studio', 'classic', 'off'], default: 'studio' },
-    homeRipple: { allowed: [true, false], default: true },
+    homeRipple: S_T,
     logoInk: { allowed: ['accent', 'foreground'], default: 'accent' },
     language: { allowed: ['zh-CN', 'zh-TW', 'yue', 'en', 'ja'], default: 'zh-CN' },
-    composerRestyle: { allowed: [true, false], default: true },
+    composerRestyle: S_T,
     placeholderStyle: { allowed: ['studio', 'host'], default: 'studio' },
-    smoothCaret: { allowed: [true, false], default: true },
+    smoothCaret: S_T,
     codeFont: { allowed: ['default', 'jetbrains', 'cascadia', 'sfmono'], default: 'default' },
-    codeLigatures: { allowed: [true, false], default: false },
+    codeLigatures: S_F,
     mascot: { allowed: ['crab', 'minis', 'off'], default: 'crab', aliases: { dual: 'crab' } },
-    sidebarRestyle: { allowed: [true, false], default: true },
-    sidebarCompact: { allowed: [true, false], default: false },
+    sidebarRestyle: S_T,
+    sidebarCompact: S_F,
     thoughtTranslate: { allowed: ['off', 'machine', 'ai'], default: 'off' },
     thoughtTrigger: { allowed: ['preload', 'expand'], default: 'preload' },
     thoughtView: { allowed: ['immersive', 'bilingual'], default: 'immersive' },
-    telemetryModule: { allowed: ['auto', 'on', 'off'], default: 'auto' },
-    effortSliderModule: { allowed: ['auto', 'on', 'off'], default: 'auto' },
-    omniModule: { allowed: ['on', 'off'], default: 'on' },
+    telemetryModule: S_AUTO,
+    effortSliderModule: S_AUTO,
+    omniModule: S_ON,
     linkTarget: { allowed: ['builtin', 'external'], default: 'builtin' },
+    sidebarStudio: S_OFF,
   });
 
   const SCENE_PRESETS = Object.freeze({
@@ -89,18 +96,18 @@
       const normFn = G.__agCsI18n?.normalizeLanguage;
       val = typeof normFn === 'function' && nav ? normFn(nav) : /^ja\b/i.test(nav) ? 'ja' : /^en\b/i.test(nav) ? 'en' : /^zh[-_](?:HK|MO)/i.test(nav) ? 'yue' : /^zh[-_](?:TW|Hant)/i.test(nav) ? 'zh-TW' : 'zh-CN';
     }
-    if (key === 'omniModule' && typeof val === 'boolean') val = val ? 'on' : 'off';
+    if ((key === 'omniModule' || key === 'sidebarStudio') && typeof val === 'boolean') val = val ? 'on' : 'off';
     if (typeof spec.default === 'string' && typeof val === 'number' && Number.isFinite(val)) val = String(val);
     return spec.allowed.includes(val) ? { valid: true, value: val } : { valid: false };
   }
 
-  function buildSanitizedConfigExport(currentSettings = {}, rawThoughtCfg = null, version = '1.0.1') {
+  function buildSanitizedConfigExport(currentSettings = {}, rawThoughtCfg = null, version = '1.0.2') {
     const settings = {};
     for (const [k, spec] of Object.entries(PRISM_SETTINGS_SCHEMA)) {
       const c = sanitizeKeyVal(k, currentSettings[k]);
       settings[k] = c.valid ? c.value : spec.default;
     }
-    const out = { schema: 'obsidian-prism-config-v1', version: String(version || '1.0.1'), exportedAt: new Date().toISOString(), settings };
+    const out = { schema: 'obsidian-prism-config-v1', version: String(version || '1.0.2'), exportedAt: new Date().toISOString(), settings };
     const tSrc =
       rawThoughtCfg && typeof rawThoughtCfg === 'object' && rawThoughtCfg.config && typeof rawThoughtCfg.config === 'object'
         ? rawThoughtCfg.config
@@ -204,44 +211,19 @@
     'See LICENSE, NOTICE, CITATION.cff, and THIRD_PARTY_NOTICES.md in the repository.',
   ].join('\n');
 
-  let localRepoSeq = 0;
-  const localRepoPending = new Map();
   let pendingCfgToast = null;
 
   function invokePrismRepoAction(action, versionStr) {
-    const act = action === 'pull' ? 'pull' : 'status';
+    const act =
+      action === 'pull' || action === 'storage-health' || action === 'prepare-archive'
+        ? action
+        : 'status';
     const win = typeof window !== 'undefined' ? window : G;
     try {
-      const bridge = win.__agPrismRepoBridge;
+      const bridge = win?.__agPrismRepoBridge;
       if (typeof bridge === 'function') return Promise.resolve(bridge({ action: act }));
       if (bridge && typeof bridge[act] === 'function') return Promise.resolve(bridge[act]());
       if (bridge && typeof bridge.call === 'function') return Promise.resolve(bridge.call({ action: act }));
-      if (typeof win.__agPrismRepoCall === 'function') {
-        if (typeof win.__agPrismRepoResolve !== 'function') {
-          win.__agPrismRepoResolve = (id, res) => {
-            const item = localRepoPending.get(id);
-            if (!item) return;
-            clearTimeout(item.timer);
-            localRepoPending.delete(id);
-            item.resolve(res);
-          };
-        }
-        return new Promise((resolve) => {
-          const id = ++localRepoSeq;
-          const timer = setTimeout(() => {
-            localRepoPending.delete(id);
-            resolve({ ok: false, timeout: true, action: act, noRemote: true, hasRemote: false });
-          }, 12000);
-          localRepoPending.set(id, { resolve, timer });
-          try {
-            win.__agPrismRepoCall(JSON.stringify({ id, action: act, input: { action: act } }));
-          } catch (err) {
-            clearTimeout(timer);
-            localRepoPending.delete(id);
-            resolve({ ok: false, action: act, error: String(err?.message || err) });
-          }
-        });
-      }
     } catch (err) {
       return Promise.resolve({ ok: false, action: act, error: String(err?.message || err) });
     }
@@ -261,7 +243,7 @@
       const out = typeof ext === 'function' ? ext(size) : ext;
       if (typeof out === 'string' && out.includes('<svg')) return out;
     } catch {}
-    return `<svg class="ag-cs-settings-brand-svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="1.5" y="1.5" width="21" height="21" rx="5.5" fill="#12151E" stroke="rgba(255,255,255,0.14)" stroke-width="1"/><path d="M12 4.8L18.4 16.6H5.6L12 4.8Z" fill="rgba(255,255,255,0.08)" stroke="#E6ECF8" stroke-width="1.35" stroke-linejoin="round"/><path d="M12 4.8L14.7 16.6" stroke="#9B72CB" stroke-width="1.15" stroke-linecap="round" opacity="0.9"/><path d="M14.9 10.6L20.2 8.9" stroke="#4285F4" stroke-width="1.4" stroke-linecap="round"/><path d="M15.6 12.1L20.6 11.8" stroke="#9B72CB" stroke-width="1.4" stroke-linecap="round"/><path d="M16.3 13.6L20.4 14.5" stroke="#EA4335" stroke-width="1.4" stroke-linecap="round"/><path d="M16.9 15.0L19.8 16.9" stroke="#FBBC04" stroke-width="1.4" stroke-linecap="round"/></svg>`;
+    return '';
   }
 
   function mascotLabels(lang, ui) {
@@ -393,7 +375,7 @@
 
       const initOpen = ['1', 'true'].includes(readStore(STORAGE_SETTINGS_OPEN_KEY));
       const savedTab = readStore(STORAGE_SETTINGS_SUBTAB_KEY);
-      let activeSubTab = ['all', 'appearance', 'interaction', 'thought', 'modules', 'about'].includes(savedTab) ? savedTab : 'all';
+      let activeSubTab = ['all', 'appearance', 'interaction', 'thought', 'modules', 'beta', 'about'].includes(savedTab) ? savedTab : 'all';
 
       const sec = doc.createElement('div');
       sec.id = SETTINGS_SEC_ID;
@@ -416,6 +398,7 @@
       const [mDual, mMinis, mOff] = mascotLabels(lang, ui);
       const onOff = [[true, ui.onLabel || 'On'], [false, ui.offLabel || 'Off']];
       const autoOnOff = [['auto', ui.optAutoCoexist || 'Auto Coexist'], ['on', ui.onLabel || 'On'], ['off', ui.offLabel || 'Off']];
+      const onOffStr = autoOnOff.slice(1);
       const warmLbl = ui.optWarm || (ui.optClaude && !/claude/i.test(ui.optClaude) ? ui.optClaude : '') || 'Alabaster';
       const R = (key, tk, dk, opts) => ({ key, title: ui[tk] || key, desc: ui[dk] || '', opts });
 
@@ -444,15 +427,17 @@
         thoughtView: R('thoughtView', 'setThoughtViewTitle', 'setThoughtViewDesc', [['immersive', ui.optThoughtImmersive || 'Immersive'], ['bilingual', ui.optThoughtBilingual || 'Bilingual']]),
         telemetryModule: R('telemetryModule', 'setTelemetryTitle', 'setTelemetryDesc', autoOnOff),
         effortSliderModule: R('effortSliderModule', 'setEffortSliderTitle', 'setEffortSliderDesc', autoOnOff),
-        omniModule: R('omniModule', 'setOmniTitle', 'setOmniDesc', [['on', ui.onLabel || 'On'], ['off', ui.offLabel || 'Off']]),
+        omniModule: R('omniModule', 'setOmniTitle', 'setOmniDesc', onOffStr),
         linkTarget: R('linkTarget', 'setLinkTargetTitle', 'setLinkTargetDesc', [['builtin', ui.optLinkBuiltin || 'Side Pane'], ['external', ui.optLinkExternal || 'System Browser']]),
+        sidebarStudio: R('sidebarStudio', 'setSidebarStudioTitle', 'setSidebarStudioDesc', onOffStr),
       };
 
       const groups = [
         { id: 'appearance', title: ui.grpAppearance || 'Appearance & Layout', keys: ['palette', 'lightPreset', 'accentTone', 'cornerStyle', 'ambientIntensity', 'motionLevel', 'targetFps', 'homeLayout', 'homeRipple', 'logoInk', 'language'] },
         { id: 'interaction', title: ui.grpInteraction || 'Composer, Sidebar & Mascot', keys: ['composerRestyle', 'placeholderStyle', 'smoothCaret', 'codeFont', 'codeLigatures', 'mascot', 'sidebarRestyle', 'sidebarCompact'] },
         { id: 'thought', title: ui.grpThought || 'Thought Translation & Polishing', keys: ['thoughtTranslate', 'thoughtTrigger', 'thoughtView'] },
-        { id: 'modules', title: ui.groupModules || 'Integrated Modules (Smart Coexistence)', keys: ['telemetryModule', 'effortSliderModule', 'omniModule', 'linkTarget'] },
+        { id: 'modules', title: ui.groupModules || 'Utility Modules', keys: ['telemetryModule', 'effortSliderModule', 'omniModule', 'linkTarget'] },
+        { id: 'beta', title: ui.grpBeta || 'Beta Features', keys: ['sidebarStudio'] },
       ];
 
       const mkEl = (tag, cls, txt) => {
@@ -528,16 +513,7 @@
       brandMark.setAttribute('aria-hidden', 'true');
       brandMark.innerHTML = renderObsidianPrismBrandSvg(20);
       foldLeft.appendChild(brandMark);
-      const brandTitle =
-        ui.sectionTitle && /Obsidian Prism/i.test(ui.sectionTitle)
-          ? ui.sectionTitle
-          : lang === 'en'
-          ? 'Obsidian Prism'
-          : lang === 'ja'
-          ? 'Obsidian Prism · 黒曜プリズム'
-          : lang === 'zh-TW' || lang === 'yue'
-          ? 'Obsidian Prism · 黑曜稜鏡'
-          : 'Obsidian Prism · 黑曜棱镜';
+      const brandTitle = ui.sectionTitle && /Obsidian Prism/i.test(ui.sectionTitle) ? ui.sectionTitle : 'Obsidian Prism';
       foldLeft.appendChild(mkEl('h3', 'm-0 text-sm font-medium', brandTitle));
       foldLeft.appendChild(mkEl('span', 'ag-cs-settings-ver', `v${version}`));
 
@@ -598,6 +574,7 @@
         ['interaction', ui.subTabInteraction || 'Workspace'],
         ['thought', ui.subTabThought || 'Thought'],
         ['modules', ui.subTabModules || 'Modules'],
+        ['beta', ui.subTabBeta || 'Beta'],
         ['about', ui.subTabAbout || 'Config & About'],
       ]) {
         const sb = mkEl('button', 'ag-cs-subtab-btn', slbl);
@@ -679,6 +656,7 @@
         if (repoProbedOnce || repoSyncBusy) return;
         repoProbedOnce = true;
         void invokePrismRepoAction('status', version).then((st) => st && applyRepoStatusView(st, false));
+        probeStorageSilently();
       };
       syncBtn.addEventListener('click', (ev) => {
         ev?.stopPropagation?.();
@@ -710,6 +688,75 @@
       repoRow.appendChild(repoInfo);
       repoRow.appendChild(syncBtn);
       aboutBox.appendChild(repoRow);
+
+      // 对话库健康度体检与一键安全归档入口（防止隐藏子代理 .db 撑爆 language_server 内存）
+      const storageRow = mkEl('div', 'ag-cs-about-repo-row');
+      const storageInfo = mkEl('div', 'ag-cs-about-repo-info');
+      const fmtTpl = (tpl, args) => tpl.replace(/\{(\d)\}/g, (_, k) => String(args[k] ?? ''));
+      storageInfo.appendChild(mkEl('span', 'font-medium text-foreground', ui.storageHealthTitle || 'Conversation DB Health'));
+      const storageChip = mkEl('span', 'ag-cs-repo-chip', ui.storageHealthIdle || 'Auto-checks DB bloat for language_server');
+      storageChip.setAttribute('data-ag-cs-storage-status', '');
+      storageChip.setAttribute('data-status', 'idle');
+      storageInfo.appendChild(storageChip);
+      const archiveBtn = mkEl('button', 'ag-cs-repo-sync-btn', ui.storageArchiveBtn || 'Prepare Archive');
+      archiveBtn.type = 'button';
+      archiveBtn.setAttribute('data-ag-cs-storage-archive', '1');
+      let storageBusy = false;
+      const applyStorageView = (st, prepared) => {
+        if (!storageChip.isConnected || !st || st.offline || st.timeout) return;
+        const u = uiText(getLang()) || ui;
+        runGuardedMut(() => {
+          if (st.ok === false && st.error) {
+            storageChip.setAttribute('data-status', 'error');
+            storageChip.textContent = st.error;
+            return;
+          }
+          const fmtMb = (v) => (Number(v) >= 1024 ? `${(Number(v) / 1024).toFixed(2)} GB` : `${Math.round(Number(v) || 0)} MB`);
+          if (prepared && st.archiveScriptPath) {
+            storageChip.setAttribute('data-status', 'updated');
+            storageChip.textContent = fmtTpl(
+              u.storageReadyTpl || 'Script ready ({0} subagents / {1}). Close Antigravity & run: {2}',
+              [st.archivableSubagentCount || 0, fmtMb(st.archivableSubagentMb), st.archiveScriptPath]
+            );
+            try { navigator?.clipboard?.writeText?.(st.archiveScriptPath)?.catch?.(() => {}); } catch {}
+          } else {
+            storageChip.setAttribute('data-status', st.warn ? 'warn' : 'ok');
+            storageChip.textContent = fmtTpl(
+              u.storageSummaryTpl || '{0} ({1} main · {2} subagents / {3}) · {4}',
+              [
+                fmtMb(st.totalMb),
+                st.mainCount || 0,
+                st.subagentCount || 0,
+                fmtMb(st.subagentMb),
+                st.warn ? u.storageWarn || 'Archive recommended' : u.storageOk || 'Healthy',
+              ]
+            );
+          }
+        });
+      };
+      const probeStorageSilently = () => {
+        if (storageBusy) return;
+        void invokePrismRepoAction('storage-health', version)
+          .then((st) => st && applyStorageView(st, false))
+          .catch((err) => applyStorageView({ ok: false, error: String(err?.message || err) }, false));
+      };
+      archiveBtn.addEventListener('click', (ev) => {
+        ev?.stopPropagation?.();
+        if (storageBusy) return;
+        storageBusy = true;
+        runGuardedMut(() => { archiveBtn.disabled = true; });
+        void invokePrismRepoAction('prepare-archive', version)
+          .then((st) => st && applyStorageView(st, true))
+          .catch((err) => applyStorageView({ ok: false, error: String(err?.message || err) }, false))
+          .finally(() => {
+            storageBusy = false;
+            runGuardedMut(() => { if (archiveBtn.isConnected) archiveBtn.disabled = false; });
+          });
+      });
+      storageRow.appendChild(storageInfo);
+      storageRow.appendChild(archiveBtn);
+      aboutBox.appendChild(storageRow);
+
       aboutBox.appendChild(mkEl('div', 'ag-cs-about-credits-title', ui.aboutCreditsTitle || 'Upstream Open-Source & Inspiration Credits'));
 
       const creditsGrid = mkEl('div', 'ag-cs-about-credits');

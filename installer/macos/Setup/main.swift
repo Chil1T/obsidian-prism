@@ -738,10 +738,12 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
     private var logView: NSTextView!
     private var uninstallBtn: NSButton!
     private var openDirBtn: NSButton!
+    private var installBtn: NSButton!
     private var launchAgBtn: NSButton!
     private var closeBtn: NSButton!
 
     private var activeInstallDir: String
+    private var activePluginDir: String
     private var antigravityApp: String?
     private var busy = false
 
@@ -749,6 +751,7 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
         self.opts = opts
         let rawDir = (opts.installDir?.isEmpty == false) ? opts.installDir! : InstallerCore.getDefaultInstallDir()
         self.activeInstallDir = URL(fileURLWithPath: rawDir).standardizedFileURL.path
+        self.activePluginDir = InstallerCore.resolveNativePluginDir(opts: opts, resolvedInstallDir: self.activeInstallDir)
         super.init()
     }
 
@@ -825,21 +828,23 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
         card.layer?.cornerRadius = 6.0
         root.addSubview(card)
 
-        statusHeadline = NSTextField(labelWithString: opts.uninstall ? "准备卸载并恢复原版界面..." : "正在自动修补本机 Antigravity Desktop...")
+        statusHeadline = NSTextField(labelWithString: opts.uninstall ? "准备卸载并恢复原版界面..." : "正在检测本地 Antigravity 环境...")
         statusHeadline.frame = NSRect(x: 14, y: 12, width: 520, height: 24)
         statusHeadline.textColor = Self.srgb(28, 25, 23)
         statusHeadline.font = NSFont.systemFont(ofSize: 14, weight: .bold)
         statusHeadline.lineBreakMode = .byTruncatingTail
         card.addSubview(statusHeadline)
 
-        statusDetail = NSTextField(wrappingLabelWithString: "正在检测环境并配置独立守护进程，请稍候...")
+        statusDetail = NSTextField(wrappingLabelWithString: opts.uninstall
+            ? "请确认是否卸载 Obsidian Prism、停止后台守护并恢复原生界面。"
+            : "正在只读检测 Antigravity Desktop 与安装状态，等待你确认后再开始安装...")
         statusDetail.frame = NSRect(x: 14, y: 40, width: 520, height: 40)
         statusDetail.textColor = Self.srgb(87, 83, 78)
         statusDetail.font = NSFont.systemFont(ofSize: 12, weight: .regular)
         statusDetail.maximumNumberOfLines = 2
         card.addSubview(statusDetail)
 
-        metaLabel = NSTextField(labelWithString: "安装路径: \(activeInstallDir)")
+        metaLabel = NSTextField(labelWithString: "插件目录: \(activePluginDir)")
         metaLabel.frame = NSRect(x: 14, y: 88, width: 520, height: 18)
         metaLabel.textColor = Self.srgb(120, 113, 108)
         metaLabel.font = NSFont.systemFont(ofSize: 11, weight: .regular)
@@ -851,7 +856,7 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
         progressBar.isIndeterminate = false
         progressBar.minValue = 0
         progressBar.maxValue = 100
-        progressBar.doubleValue = 5
+        progressBar.doubleValue = 0
         root.addSubview(progressBar)
 
         // Log area
@@ -874,29 +879,37 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
 
         // Buttons
         uninstallBtn = NSButton(title: "卸载并恢复原版", target: self, action: #selector(handleUninstallClick))
-        uninstallBtn.frame = NSRect(x: 20, y: 412, width: 136, height: 32)
+        uninstallBtn.frame = NSRect(x: 20, y: 412, width: 130, height: 32)
         uninstallBtn.bezelStyle = .rounded
         uninstallBtn.isEnabled = false
         root.addSubview(uninstallBtn)
 
         openDirBtn = NSButton(title: "打开配置目录", target: self, action: #selector(handleOpenDirClick))
-        openDirBtn.frame = NSRect(x: 162, y: 412, width: 118, height: 32)
+        openDirBtn.frame = NSRect(x: 158, y: 412, width: 108, height: 32)
         openDirBtn.bezelStyle = .rounded
         openDirBtn.isEnabled = false
         root.addSubview(openDirBtn)
 
+        installBtn = NSButton(title: "立即安装", target: self, action: #selector(handleInstallClick))
+        installBtn.frame = NSRect(x: 318, y: 412, width: 134, height: 32)
+        installBtn.bezelStyle = .rounded
+        installBtn.keyEquivalent = "\r"
+        installBtn.isHidden = opts.uninstall
+        installBtn.isEnabled = false
+        root.addSubview(installBtn)
+
         launchAgBtn = NSButton(title: "启动 Antigravity", target: self, action: #selector(handleLaunchAgClick))
-        launchAgBtn.frame = NSRect(x: 286, y: 412, width: 134, height: 32)
+        launchAgBtn.frame = NSRect(x: 318, y: 412, width: 134, height: 32)
         launchAgBtn.bezelStyle = .rounded
         launchAgBtn.isHidden = true
         launchAgBtn.isEnabled = false
         root.addSubview(launchAgBtn)
 
-        closeBtn = NSButton(title: "完成并关闭", target: self, action: #selector(handleCloseClick))
-        closeBtn.frame = NSRect(x: 456, y: 412, width: 112, height: 32)
+        closeBtn = NSButton(title: "取消", target: self, action: #selector(handleCloseClick))
+        closeBtn.frame = NSRect(x: 460, y: 412, width: 108, height: 32)
         closeBtn.bezelStyle = .rounded
-        closeBtn.keyEquivalent = "\r"
-        closeBtn.isEnabled = false
+        closeBtn.keyEquivalent = "\u{1b}"
+        closeBtn.isEnabled = true
         root.addSubview(closeBtn)
 
         win.center()
@@ -943,6 +956,7 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
     private func setButtonsEnabled(_ enabled: Bool) {
         uninstallBtn.isEnabled = enabled
         openDirBtn.isEnabled = enabled
+        installBtn.isEnabled = enabled
         launchAgBtn.isEnabled = enabled
         closeBtn.isEnabled = enabled
     }
@@ -961,12 +975,85 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
                 window.close()
             }
         } else {
-            executeInstall()
+            prepareInstallChoice()
         }
     }
 
+    private func prepareInstallChoice() {
+        setButtonsEnabled(false)
+        closeBtn.isEnabled = true
+        let installDir = activeInstallDir
+        let pluginDir = activePluginDir
+        DispatchQueue.global(qos: .userInitiated).async {
+            let fm = FileManager.default
+            let ag = InstallerCore.detectAntigravityDesktop()
+            let hasNative = !pluginDir.isEmpty && fm.fileExists(atPath: (pluginDir as NSString).appendingPathComponent("plugin.json"))
+            let hasWatcher = fm.fileExists(atPath: (installDir as NSString).appendingPathComponent("obsidian-prism-watcher"))
+            let alreadyInstalled = hasNative || hasWatcher
+            let hasDir = (!pluginDir.isEmpty && fm.fileExists(atPath: pluginDir)) || fm.fileExists(atPath: installDir)
+            let port = CdpHelper.readPort(overridePort: self.opts.cdpPort)
+
+            DispatchQueue.main.async {
+                self.antigravityApp = ag.appPath
+                if alreadyInstalled {
+                    self.statusHeadline.stringValue = "已检测到本地 Obsidian Prism · 请选择操作"
+                    self.statusHeadline.textColor = Self.srgb(28, 25, 23)
+                    self.statusDetail.stringValue = "点击「重新安装 / 升级」可覆盖更新插件并保留现有配置；点击「卸载并恢复原版」可彻底卸载并还原原生界面。"
+                    self.installBtn.title = "重新安装 / 升级"
+                } else {
+                    self.statusHeadline.stringValue = "是否安装 Obsidian Prism · 黑曜棱镜？"
+                    self.statusHeadline.textColor = Self.srgb(28, 25, 23)
+                    self.statusDetail.stringValue = "将部署原生 Sidecar 插件与 LaunchAgent 守护（不修改 Antigravity 核心程序文件）。请点击「立即安装」开始，或点击「取消」退出。"
+                    self.installBtn.title = "立即安装"
+                }
+
+                let agSummary: String
+                if let appPath = ag.appPath, !appPath.isEmpty {
+                    let ver = (ag.version?.isEmpty == false) ? "v\(ag.version!)" : "已检测到"
+                    let runState: String
+                    if ag.isRunning {
+                        runState = port != nil ? "运行中 · 端口 \(port!)" : "运行中"
+                    } else {
+                        runState = "未运行"
+                    }
+                    agSummary = "Antigravity: \(ver) (\(runState))"
+                } else {
+                    agSummary = "未检测到运行中的 Antigravity（支持预先安装）"
+                }
+                self.metaLabel.stringValue = "\(agSummary) | \(pluginDir)"
+
+                self.appendLog("环境只读预检完成，当前未对本机做任何修改，等待你确认操作。")
+                self.appendLog("原生插件目录: \(pluginDir)")
+                self.appendLog("后台守护目录: \(installDir)")
+                if let appPath = ag.appPath, !appPath.isEmpty {
+                    self.appendLog("检测到 Antigravity Desktop: \(appPath)")
+                }
+
+                self.progressBar.doubleValue = 0
+                self.launchAgBtn.isHidden = true
+                self.installBtn.isHidden = false
+                self.installBtn.isEnabled = true
+                self.installBtn.keyEquivalent = "\r"
+                self.uninstallBtn.isEnabled = alreadyInstalled
+                self.openDirBtn.isEnabled = hasDir
+                self.closeBtn.title = "取消"
+                self.closeBtn.keyEquivalent = "\u{1b}"
+                self.closeBtn.isEnabled = true
+            }
+        }
+    }
+
+    @objc private func handleInstallClick() {
+        executeInstall()
+    }
+
     private func executeInstall() {
+        if busy { return }
         busy = true
+        statusHeadline.stringValue = "正在安装并修补本机 Antigravity Desktop..."
+        statusHeadline.textColor = Self.srgb(28, 25, 23)
+        statusDetail.stringValue = "正在部署原生 Sidecar 插件与后台热备守护，请稍候..."
+        progressBar.doubleValue = 5
         setButtonsEnabled(false)
         DispatchQueue.global(qos: .userInitiated).async {
             do {
@@ -975,17 +1062,26 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
                 }
                 DispatchQueue.main.async {
                     self.activeInstallDir = res.installDir
+                    if !res.pluginDir.isEmpty { self.activePluginDir = res.pluginDir }
                     self.antigravityApp = res.antigravityApp
                     self.statusHeadline.stringValue = res.headline
                     self.statusHeadline.textColor = Self.srgb(21, 128, 61)
                     self.statusDetail.stringValue = res.detail
                     self.metaLabel.stringValue = "配置: \(res.configSummary)"
-                    self.openDirBtn.isEnabled = FileManager.default.fileExists(atPath: self.activeInstallDir)
+                    self.openDirBtn.isEnabled = FileManager.default.fileExists(atPath: self.activePluginDir) || FileManager.default.fileExists(atPath: self.activeInstallDir)
                     self.uninstallBtn.isEnabled = true
                     let showLaunch = (self.antigravityApp != nil && res.injectedPages.isEmpty && !res.bareHostDetected)
                     self.launchAgBtn.isHidden = !showLaunch
                     self.launchAgBtn.isEnabled = showLaunch
+                    self.installBtn.isHidden = showLaunch
+                    if !showLaunch {
+                        self.installBtn.title = "重新安装"
+                        self.installBtn.isEnabled = true
+                        self.installBtn.keyEquivalent = ""
+                    }
                     self.busy = false
+                    self.closeBtn.title = "完成并关闭"
+                    self.closeBtn.keyEquivalent = "\r"
                     self.closeBtn.isEnabled = true
 
                     let env = ProcessInfo.processInfo.environment
@@ -1050,7 +1146,14 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
                     self.statusHeadline.stringValue = "修补失败"
                     self.statusHeadline.textColor = Self.srgb(185, 28, 28)
                     self.statusDetail.stringValue = error.localizedDescription
+                    self.launchAgBtn.isHidden = true
+                    self.installBtn.isHidden = false
+                    self.installBtn.title = "重试安装"
+                    self.installBtn.isEnabled = true
+                    self.installBtn.keyEquivalent = "\r"
                     self.busy = false
+                    self.closeBtn.title = "关闭"
+                    self.closeBtn.keyEquivalent = "\u{1b}"
                     self.closeBtn.isEnabled = true
                 }
             }
@@ -1070,7 +1173,12 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
     }
 
     private func executeUninstall() {
+        if busy { return }
         busy = true
+        statusHeadline.stringValue = "正在卸载 Obsidian Prism 并恢复原版界面..."
+        statusHeadline.textColor = Self.srgb(28, 25, 23)
+        statusDetail.stringValue = "正在停止后台守护并清理插件文件，请稍候..."
+        progressBar.doubleValue = 5
         setButtonsEnabled(false)
         DispatchQueue.global(qos: .userInitiated).async {
             let res = InstallerCore.runUninstall(opts: self.opts) { pct, msg in
@@ -1084,15 +1192,23 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
                 self.openDirBtn.isEnabled = false
                 self.uninstallBtn.isEnabled = false
                 self.launchAgBtn.isHidden = true
+                self.installBtn.isHidden = false
+                self.installBtn.title = "重新安装"
+                self.installBtn.isEnabled = true
+                self.installBtn.keyEquivalent = ""
                 self.busy = false
+                self.closeBtn.title = "完成并关闭"
+                self.closeBtn.keyEquivalent = "\r"
                 self.closeBtn.isEnabled = true
             }
         }
     }
 
     @objc private func handleOpenDirClick() {
-        if FileManager.default.fileExists(atPath: activeInstallDir) {
-            NSWorkspace.shared.open(URL(fileURLWithPath: activeInstallDir))
+        let fm = FileManager.default
+        let targetDir = (!activePluginDir.isEmpty && fm.fileExists(atPath: activePluginDir)) ? activePluginDir : activeInstallDir
+        if fm.fileExists(atPath: targetDir) {
+            NSWorkspace.shared.open(URL(fileURLWithPath: targetDir))
         }
     }
 

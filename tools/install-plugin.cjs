@@ -11,6 +11,7 @@
  * 4. 通过 PowerShell Start-Process -WindowStyle Hidden 脱离终端 Job Object 确保后台守护实例已启动并接管当前 CDP 窗口！
  */
 
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -63,10 +64,79 @@ function resolveHostGeminiConfigDir(targetDir, explicitHostDir = null) {
   return null;
 }
 
+function assertNotSymbolicLink(targetPath, label = "path") {
+  try {
+    const lst = fs.lstatSync(targetPath);
+    if (lst.isSymbolicLink()) {
+      throw new Error(`Refusing symbolic link ${label}: ${targetPath}`);
+    }
+    return lst;
+  } catch (err) {
+    if (err && err.code === "ENOENT") return null;
+    throw err;
+  }
+}
+
+function atomicWriteFileSync(filePath, content, options = {}) {
+  assertNotSymbolicLink(filePath, "target file");
+  const dir = path.dirname(filePath);
+  assertNotSymbolicLink(dir, "target directory");
+  fs.mkdirSync(dir, { recursive: true });
+  assertNotSymbolicLink(dir, "target directory");
+  const encoding = options.encoding !== undefined ? options.encoding : "utf8";
+  const mode = options.mode !== undefined ? options.mode : 0o600;
+  const tmpPath = `${filePath}.tmp.${process.pid}.${crypto.randomBytes(8).toString("hex")}`;
+  let fd = null;
+  try {
+    fd = fs.openSync(tmpPath, "wx", mode);
+    if (Buffer.isBuffer(content) || encoding === null) {
+      fs.writeFileSync(fd, content);
+    } else {
+      fs.writeFileSync(fd, content, encoding);
+    }
+    try {
+      fs.fsyncSync(fd);
+    } catch {}
+    fs.closeSync(fd);
+    fd = null;
+    try {
+      fs.chmodSync(tmpPath, mode);
+    } catch {}
+    assertNotSymbolicLink(dir, "target directory");
+    assertNotSymbolicLink(filePath, "target file");
+    fs.renameSync(tmpPath, filePath);
+  } catch (err) {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {}
+    }
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {}
+    throw err;
+  }
+}
+
+function safeCopyFileNoSymlink(src, dst) {
+  const srcStat = assertNotSymbolicLink(src, "source");
+  if (!srcStat || !srcStat.isFile()) {
+    throw new Error(`Refusing non-regular source file: ${src}`);
+  }
+  assertNotSymbolicLink(dst, "destination");
+  const dstDir = path.dirname(dst);
+  assertNotSymbolicLink(dstDir, "destination directory");
+  fs.mkdirSync(dstDir, { recursive: true });
+  assertNotSymbolicLink(dstDir, "destination directory");
+  fs.copyFileSync(src, dst);
+}
+
 function syncHostPluginRegistry(configDir, enable) {
   if (!configDir) return false;
   const hostConfigPath = path.join(configDir, "config.json");
   try {
+    assertNotSymbolicLink(configDir, "host config directory");
+    assertNotSymbolicLink(hostConfigPath, "host config.json");
     if (enable) {
       fs.mkdirSync(configDir, { recursive: true });
       let hostObj = {};
@@ -87,7 +157,10 @@ function syncHostPluginRegistry(configDir, enable) {
       if (hostObj.plugins["antigravity-prism"]) {
         delete hostObj.plugins["antigravity-prism"];
       }
-      fs.writeFileSync(hostConfigPath, JSON.stringify(hostObj, null, 2) + "\n", "utf8");
+      atomicWriteFileSync(hostConfigPath, JSON.stringify(hostObj, null, 2) + "\n", {
+        encoding: "utf8",
+        mode: 0o600,
+      });
       return true;
     }
 
@@ -106,7 +179,10 @@ function syncHostPluginRegistry(configDir, enable) {
             changed = true;
           }
           if (changed) {
-            fs.writeFileSync(hostConfigPath, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+            atomicWriteFileSync(hostConfigPath, JSON.stringify(parsed, null, 2) + "\n", {
+              encoding: "utf8",
+              mode: 0o600,
+            });
           }
         }
       }
@@ -129,18 +205,37 @@ const DIRS_TO_SYNC = [
   "sidecars",
 ];
 
+function shouldSkipSyncEntry(name) {
+  if (name === "__pycache__" || name === ".DS_Store" || name === ".daemon.pid") return true;
+  const lower = String(name || "").toLowerCase();
+  if (lower.endsWith(".log") || lower.endsWith(".tmp")) return true;
+  if (/\.tmp\.[a-z0-9._-]+$/i.test(name)) return true;
+  return false;
+}
+
 function copyDirRecursiveSync(srcDir, dstDir) {
-  if (!fs.existsSync(srcDir)) return 0;
+  const srcStat = assertNotSymbolicLink(srcDir, "source directory");
+  if (!srcStat) return 0;
+  if (!srcStat.isDirectory()) {
+    throw new Error(`Refusing non-directory source: ${srcDir}`);
+  }
+  assertNotSymbolicLink(dstDir, "destination directory");
   fs.mkdirSync(dstDir, { recursive: true });
+  assertNotSymbolicLink(dstDir, "destination directory");
   let copied = 0;
   for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
-    if (entry.name === "__pycache__" || entry.name === ".DS_Store") continue;
+    if (shouldSkipSyncEntry(entry.name)) continue;
     const srcPath = path.join(srcDir, entry.name);
     const dstPath = path.join(dstDir, entry.name);
-    if (entry.isDirectory()) {
+    if (entry.isSymbolicLink()) {
+      throw new Error(`Refusing symbolic link entry: ${srcPath}`);
+    }
+    const entryStat = assertNotSymbolicLink(srcPath, "source");
+    assertNotSymbolicLink(dstPath, "destination");
+    if (entry.isDirectory() || (entryStat && entryStat.isDirectory())) {
       copied += copyDirRecursiveSync(srcPath, dstPath);
-    } else if (entry.isFile()) {
-      fs.copyFileSync(srcPath, dstPath);
+    } else if (entry.isFile() || (entryStat && entryStat.isFile())) {
+      safeCopyFileNoSymlink(srcPath, dstPath);
       copied += 1;
     }
   }
@@ -189,6 +284,7 @@ async function verifyLiveWindowAttach(targetCdp, portOverride = null) {
         `(() => ({
         hasPrism: Boolean(window.__agPrism),
         hasRepoBridge: Boolean(window.__agPrismRepoBridge),
+        hasSidebarBridge: Boolean(window.__agPrismSidebarBridge),
         version: document.documentElement?.getAttribute('data-ag-prism') || null,
         hasStyle: Boolean(document.getElementById('ag-prism-css')),
       }))()`,
@@ -201,6 +297,7 @@ async function verifyLiveWindowAttach(targetCdp, portOverride = null) {
           title: page.title || page.url,
           version: state.version,
           hasRepoBridge: state.hasRepoBridge,
+          hasSidebarBridge: state.hasSidebarBridge,
         });
       }
     } catch {
@@ -217,7 +314,9 @@ async function installPlugin(opts = {}) {
   const startDaemon = opts.startDaemon !== false;
   const cdpPort = opts.cdpPort || null;
 
+  assertNotSymbolicLink(targetDir, "target directory");
   fs.mkdirSync(targetDir, { recursive: true });
+  assertNotSymbolicLink(targetDir, "target directory");
 
   // Migrate config & clean legacy temporary sibling directory `antigravity-prism` if present
   let cleanedLegacyPluginDir = false;
@@ -226,9 +325,11 @@ async function installPlugin(opts = {}) {
     stopExistingDaemonInDir(legacyDir);
     const legacyCfg = path.join(legacyDir, "config.json");
     const newCfg = path.join(targetDir, "config.json");
-    if (fs.existsSync(legacyCfg) && !fs.existsSync(newCfg)) {
+    const legacyCfgStat = assertNotSymbolicLink(legacyCfg, "legacy config.json");
+    if (legacyCfgStat && legacyCfgStat.isFile() && !fs.existsSync(newCfg)) {
       try {
-        fs.copyFileSync(legacyCfg, newCfg);
+        const legacyContent = fs.readFileSync(legacyCfg, "utf8");
+        atomicWriteFileSync(newCfg, legacyContent, { encoding: "utf8", mode: 0o600 });
       } catch {}
     }
     try {
@@ -244,9 +345,9 @@ async function installPlugin(opts = {}) {
   for (const rel of ROOT_FILES_TO_SYNC) {
     const src = path.join(sourceDir, rel);
     const dst = path.join(targetDir, rel);
-    if (fs.existsSync(src)) {
-      fs.mkdirSync(path.dirname(dst), { recursive: true });
-      fs.copyFileSync(src, dst);
+    const srcStat = assertNotSymbolicLink(src, "source");
+    if (srcStat) {
+      safeCopyFileNoSymlink(src, dst);
       copiedFiles += 1;
     } else {
       missingOptional.push(rel);
@@ -260,27 +361,38 @@ async function installPlugin(opts = {}) {
   }
 
   // Record linked Git repository metadata so Sidecar can inspect/pull source repo
+  const repoMetaPath = path.join(targetDir, "repo-meta.json");
+  assertNotSymbolicLink(repoMetaPath, "repo-meta.json");
   try {
-    fs.writeFileSync(
-      path.join(targetDir, "repo-meta.json"),
+    atomicWriteFileSync(
+      repoMetaPath,
       JSON.stringify({ sourceRepoDir: sourceDir, installedAt: new Date().toISOString() }, null, 2) + "\n",
-      "utf8"
+      { encoding: "utf8", mode: 0o600 }
     );
-  } catch {}
+  } catch (err) {
+    if (err && /symbolic link/i.test(err.message)) throw err;
+  }
 
   const targetCfg = path.join(targetDir, "config.json");
+  assertNotSymbolicLink(targetCfg, "target config.json");
   let preservedConfig = false;
   if (fs.existsSync(targetCfg)) {
     preservedConfig = true;
   } else {
     const srcLocalCfg = path.join(sourceDir, "config.json");
     const srcExampleCfg = path.join(sourceDir, "config.example.json");
-    if (fs.existsSync(srcLocalCfg)) {
-      fs.copyFileSync(srcLocalCfg, targetCfg);
+    const localCfgStat = assertNotSymbolicLink(srcLocalCfg, "source config.json");
+    if (localCfgStat && localCfgStat.isFile()) {
+      const cfgContent = fs.readFileSync(srcLocalCfg, "utf8");
+      atomicWriteFileSync(targetCfg, cfgContent, { encoding: "utf8", mode: 0o600 });
       copiedFiles += 1;
-    } else if (fs.existsSync(srcExampleCfg)) {
-      fs.copyFileSync(srcExampleCfg, targetCfg);
-      copiedFiles += 1;
+    } else {
+      const exampleCfgStat = assertNotSymbolicLink(srcExampleCfg, "source config.example.json");
+      if (exampleCfgStat && exampleCfgStat.isFile()) {
+        const cfgContent = fs.readFileSync(srcExampleCfg, "utf8");
+        atomicWriteFileSync(targetCfg, cfgContent, { encoding: "utf8", mode: 0o600 });
+        copiedFiles += 1;
+      }
     }
   }
 
@@ -288,13 +400,17 @@ async function installPlugin(opts = {}) {
   // with no explicit `thoughtTranslate` preference yet, default to 'ai'.
   if (!opts.targetDir && fs.existsSync(targetCfg)) {
     try {
+      assertNotSymbolicLink(targetCfg, "target config.json");
       const parsedCfg = JSON.parse(fs.readFileSync(targetCfg, "utf8"));
       if (parsedCfg && typeof parsedCfg === "object" && parsedCfg.thoughtTranslate === undefined) {
         const prismThoughtCfg = path.join(os.homedir(), ".gemini", "config", "obsidian-prism-thought.json");
         if (fs.existsSync(prismThoughtCfg)) {
           parsedCfg.thoughtTranslate = "ai";
           parsedCfg.thoughtTrigger = parsedCfg.thoughtTrigger || "preload";
-          fs.writeFileSync(targetCfg, JSON.stringify(parsedCfg, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+          atomicWriteFileSync(targetCfg, JSON.stringify(parsedCfg, null, 2) + "\n", {
+            encoding: "utf8",
+            mode: 0o600,
+          });
         }
       }
     } catch {}
@@ -327,7 +443,18 @@ async function installPlugin(opts = {}) {
   if (deferRelaunchPrompt && !cdpPort && (typeof opts.hostProbe === "function" || (isDefaultTarget && !isAutomatedTestRuntime()))) {
     try {
       const targetCdpEarly = require(path.join(targetDir, "cdp.js"));
-      const activePortNow = targetCdpEarly.readPort();
+      let activePortNow = null;
+      if (opts.portFile) {
+        try {
+          const text = fs.readFileSync(opts.portFile, "utf8");
+          const parsed = parseInt(text.split(/\r?\n/)[0].trim(), 10);
+          activePortNow = Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+        } catch {
+          activePortNow = null;
+        }
+      } else {
+        activePortNow = targetCdpEarly.readPort();
+      }
       if (!activePortNow) {
         const runningHost = detectRunningAntigravityHostSync({ probeProcesses: opts.hostProbe });
         if (runningHost && runningHost.pid && !runningHost.hasDebugPortSwitch) {
@@ -398,6 +525,11 @@ async function installPlugin(opts = {}) {
     } catch {}
   }
 
+  const sidebarStudio = {
+    hasService: fs.existsSync(path.join(targetDir, "vendor", "sidebar-studio", "sidebar-service.mjs")),
+    hasClient: fs.existsSync(path.join(targetDir, "vendor", "sidebar-studio", "sidebar-client.js")),
+  };
+
   return {
     ok: true,
     targetDir,
@@ -407,6 +539,7 @@ async function installPlugin(opts = {}) {
     preservedConfig,
     shortcuts,
     deferredRelaunchHost,
+    sidebarStudio,
     daemon: daemonInfo,
     live: liveCheck,
   };
@@ -483,6 +616,8 @@ function getPluginInstallStatus(opts = {}) {
   const pluginJsonPath = path.join(targetDir, "plugin.json");
   const sidecarJsonPath = path.join(targetDir, "sidecars", "daemon", "sidecar.json");
   const logoPath = path.join(targetDir, "assets", "logo.svg");
+  const sidebarServicePath = path.join(targetDir, "vendor", "sidebar-studio", "sidebar-service.mjs");
+  const sidebarClientPath = path.join(targetDir, "vendor", "sidebar-studio", "sidebar-client.js");
   const pidFile = path.join(targetDir, ".daemon.pid");
 
   let daemonPid = null;
@@ -500,6 +635,8 @@ function getPluginInstallStatus(opts = {}) {
     targetDir,
     hasLogo: fs.existsSync(logoPath),
     hasSidecar: fs.existsSync(sidecarJsonPath),
+    hasSidebarService: fs.existsSync(sidebarServicePath),
+    hasSidebarClient: fs.existsSync(sidebarClientPath),
     daemonPid,
     daemonAlive,
   };
@@ -566,6 +703,8 @@ module.exports = {
   getLegacyTempPluginDir,
   resolveHostGeminiConfigDir,
   syncHostPluginRegistry,
+  atomicWriteFileSync,
+  copyDirRecursiveSync,
   installPlugin,
   uninstallPlugin,
   getPluginInstallStatus,

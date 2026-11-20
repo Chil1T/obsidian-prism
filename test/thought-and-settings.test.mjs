@@ -262,7 +262,7 @@ function createMockDomEnv(initialTheme = 'dark') {
   return { doc, win, storage, clipboardWrites };
 }
 
-test('mountOrSyncSettingsSection mounts all 26 settings (including omniModule & linkTarget), syncs presets, async export, cross-language import/reset toast, and 5-language UI', async () => {
+test('mountOrSyncSettingsSection mounts all 27 settings (including omniModule, linkTarget & sidebarStudio), syncs presets, async export, cross-language import/reset toast, and 5-language UI', async () => {
   const prevDoc = globalThis.document;
   const prevWin = globalThis.window;
   const prevStorage = globalThis.localStorage;
@@ -355,14 +355,18 @@ test('mountOrSyncSettingsSection mounts all 26 settings (including omniModule & 
     let sec = doc.getElementById(settingsPanel.SETTINGS_SEC_ID);
     assert.ok(sec, 'Settings section must mount into Appearance dialog');
 
-    // 1. Verify all 26 setting rows mount cleanly, with 4 rows in modules group (telemetry, effortSlider, omniModule, linkTarget)
+    // 1. Verify all 27 setting rows mount cleanly, with 4 rows in modules group and sidebarStudio (Beta) in beta group
     const allRows = sec.querySelectorAll('[data-ag-cs-row]');
-    assert.equal(allRows.length, 26, 'Must render all 26 setting rows');
+    assert.equal(allRows.length, 27, 'Must render all 27 setting rows');
     const modulesGrp = sec.querySelector('[data-ag-cs-group="modules"]');
     const moduleRowKeys = modulesGrp.querySelectorAll('[data-ag-cs-row]').map((r) => r.getAttribute('data-ag-cs-row'));
     assert.deepEqual(moduleRowKeys, ['telemetryModule', 'effortSliderModule', 'omniModule', 'linkTarget']);
+    const betaGrp = sec.querySelector('[data-ag-cs-group="beta"]');
+    assert.ok(betaGrp, 'Beta features group must mount');
+    const betaRowKeys = betaGrp.querySelectorAll('[data-ag-cs-row]').map((r) => r.getAttribute('data-ag-cs-row'));
+    assert.deepEqual(betaRowKeys, ['sidebarStudio']);
 
-    // 2. Toggle omniModule='off' -> linkTarget row dims to 0.55; toggle linkTarget='external'; toggle omniModule='on' -> restores full opacity
+    // 2. Toggle omniModule='off' -> linkTarget row dims to 0.55; toggle linkTarget='external'; toggle omniModule='on' -> restores full opacity; toggle sidebarStudio
     const findSegBtn = (key, val) =>
       sec.querySelectorAll(`button[data-ag-cs-key="${key}"]`).find((b) => b.getAttribute('data-ag-cs-val') === JSON.stringify(val));
     const omniOffBtn = findSegBtn('omniModule', 'off');
@@ -381,6 +385,14 @@ test('mountOrSyncSettingsSection mounts all 26 settings (including omniModule & 
     assert.equal(state.omniModule, 'on');
     assert.equal(linkRow.style.opacity, '');
 
+    const sidebarOffBtn = findSegBtn('sidebarStudio', 'off');
+    const sidebarOnBtn = findSegBtn('sidebarStudio', 'on');
+    assert.ok(sidebarOffBtn && sidebarOnBtn, 'sidebarStudio on/off buttons must mount');
+    sidebarOffBtn.click();
+    assert.equal(state.sidebarStudio, 'off');
+    sidebarOnBtn.click();
+    assert.equal(state.sidebarStudio, 'on');
+
     // 3. Scene presets: focus enables sidebarCompact=true; switching to ultra resets sidebarCompact=false & highlights ultra pill
     sec.querySelector('button[data-ag-cs-preset="focus"]').click();
     assert.equal(state.sidebarCompact, true);
@@ -391,15 +403,16 @@ test('mountOrSyncSettingsSection mounts all 26 settings (including omniModule & 
     assert.equal(sec.querySelector('button[data-ag-cs-preset="ultra"]').getAttribute('data-active'), '1');
     assert.equal(sec.querySelector('button[data-ag-cs-preset="focus"]').getAttribute('data-active'), '0');
 
-    // 4. Async Export JSON awaits __agPrismThought.getConfig() Promise, normalizes 'tech' -> 'technical', strips secrets, and includes 26 keys
+    // 4. Async Export JSON awaits __agPrismThought.getConfig() Promise, normalizes 'tech' -> 'technical', strips secrets, and includes 27 keys
     const exportBtn = sec.querySelector('button[data-ag-cs-cfg-action="export"]');
     exportBtn.click();
     await new Promise((r) => setTimeout(r, 25));
     assert.equal(clipboardWrites.length, 1);
     const exportedObj = JSON.parse(clipboardWrites[0]);
-    assert.equal(Object.keys(exportedObj.settings).length, 26);
+    assert.equal(Object.keys(exportedObj.settings).length, 27);
     assert.equal(exportedObj.settings.omniModule, 'on');
     assert.equal(exportedObj.settings.linkTarget, 'external');
+    assert.equal(exportedObj.settings.sidebarStudio, 'on');
     assert.equal(exportedObj.thought.stylePreset, 'technical');
     assert.equal(clipboardWrites[0].includes('SECRETKEY123'), false);
     assert.equal(clipboardWrites[0].includes('PRIVATE999'), false);

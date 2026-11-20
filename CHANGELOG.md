@@ -5,6 +5,37 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 本项目遵循语义化版本（SemVer）规范，记录各正式版本的新增功能、架构变更、安全加固与缺陷修复。
 
+## [1.0.2] - 2026-11-20
+
+### Added / 新增特性
+
+- **Chat 对话模式 (Beta · 默认关闭，`sidebarStudio`)**：在 **设置 → 外观 → Beta 内容** 中新增 `Chat 对话模式 (Beta)` 实验性开关（默认关闭 `"off"`，可随时开启或关闭）。开启后在侧栏顶部提供工程模式与 Chat 对话空间切换，支持独立文件夹与项目组织、多轮纯对话阅读视图、Artifacts 侧边栏预览与环境呼吸氛围光，并实行项目级权限隔离，不改动全局工程权限基线。
+  - *Chat Mode (Beta · Off by Default, `sidebarStudio`)*: Adds an experimental `Chat Mode (Beta)` toggle under **Settings → Appearance → Beta** (`"off"` by default, toggleable anytime). When enabled, adds a sidebar switcher between the Code workspace and a dedicated Chat space for everyday conversations and document organization, featuring folder/project grouping, multi-turn reading views, Artifacts preview, ambient breathing aura, and project-scoped permission isolation that preserves global Code settings.
+- **外观控制中心扩展至 27 项配置键**：在设置中心新增 **Beta 内容** 子分组及 `sidebarStudio` 校验键，同步支持配置文件备份恢复与热刷新。
+  - *27-Key Settings Center*: Expands the validated settings schema to **27** keys with a new **Beta** sub-tab for `sidebarStudio`, complete with config backup/restore and live hot-reload.
+- **对话库体积体检与离线归档工具（`npm run archive:conversations`）**：在设置中心「关于」区域提供本地对话库体积与子代理占比体检，并支持一键生成离线安全归档与无损还原脚本，缓解历史隐藏子代理会话积累导致的 `language_server` 内存膨胀（仅移动备份不删数据，支持 5 语种界面）。
+  - *Conversation Storage Health & Offline Archiver (`npm run archive:conversations`)*: Adds conversation DB health checks in **Settings → About** and a one-click offline archive/restore script generator to curb `language_server` memory growth from accumulated subagent `.db` files (move-only backup with manifest and lossless restore, localized across all 5 languages).
+
+### Changed & Optimized / 架构优化与精简
+
+- **后台遥测与运行态性能优化**：优化遥测后台工作线程内存与轨迹缓存淘汰、窗口失焦动画暂停、宿主重复样式表去重及已完成代码块缓存短路，降低长会话与空闲驻留场景的资源开销。
+  - *Background Telemetry & Runtime Performance*: Optimizes telemetry worker memory and trajectory cache eviction, pauses off-focus animations, deduplicates repeated host style tags, and short-circuits sealed code-block syncs to reduce idle and long-session overhead.
+- **主包共享字符串池与资源精简**：优化 `cdp.js` 共享字符串池安全成员访问放行规则与 `performance` 全局别名收录、支持 GLSL 着色器安全局部标识符压缩与安全短色值优化、整数化品牌 SVG 坐标，进一步缩减静态主包体积（`< 670 KiB`）并留足安全余量；清理重复的遗留存储迁移调用、已弃用 CSS 规则及未引用死代码。
+  - *Bundle & Asset Slimming*: Enhances the `cdp.js` shared string pool with safe member-access aliasing (including `performance`), adds safe GLSL local identifier minification and short-hex CSS compaction, and rounds brand SVG coordinates to integers—keeping the static main bundle well below `670 KiB`—while removing duplicate legacy storage migration work and unused CSS/helper code.
+- **开发预览工作台 `/studio` 体验完善**：完善本地预览工作台的 `/studio` 交互界面文案与项目级权限隔离状态展示，移除内部开发用语。
+  - *Workbench `/studio` Refinement*: Polishes the local `/studio` preview interface copy and project-scoped permission audit display for general developer clarity.
+
+### Security & Fixed / 安全加固与缺陷修复
+
+- **Windows 安装器 Zip 解压路径边界校验（Zip Slip 防护）**：`installer/setup/Program.cs` 解压离线包或资源条目时强制执行 `Path.GetFullPath` 前缀边界核验，阻断任何越界路径写入。
+  - *Installer Zip Slip Guard*: Enforces normalized `Path.GetFullPath` target-root prefix checks during archive extraction in `installer/setup/Program.cs`.
+- **Chat Beta 后端硬拦截与沙盒边界加固**：统一 `inject.js`、`sidecars/daemon/main.mjs` 与 `sidebar-service.mjs` 的 `sidebarStudio === 'on'` 关闭态后端硬拦截、顶层主 Frame 绑定核验、RPC 载荷上限分流校验（`Buffer.byteLength`）及 `sandboxRoot` 边界复核；扩大危险导入文件扩展名拦截清单并确保前端关闭态早退。
+  - *Backend Enforcement & Sandbox Boundary Hardening*: Aligns `inject.js`, `sidecars/daemon/main.mjs`, and `sidebar-service.mjs` on strict `sidebarStudio === 'on'` backend gating, main-frame binding verification, normalized RPC payload size limits (`Buffer.byteLength`), `sandboxRoot` boundary checks, and expanded blocked import extensions.
+- **工作台静态文件防符号链接逃逸与本地请求防护**：`workbench/server.cjs` 静态文件服务补充 `fs.realpathSync` 根目录校验防符号链接逃逸，并加强 `/api/tokens` 写入请求的回环 Host/Origin/跨站头核验；移除 `workbench-page.mjs` `postMessage` 中的本地完整路径字段，并统一配置文件写入的 `0600` 权限。
+  - *Workbench Symlink & Local Request Hardening*: Adds `fs.realpathSync` containment checks for static assets and tighter loopback Host/Origin/`Sec-Fetch-Site` guards on `/api/tokens` writes in `workbench/server.cjs`, strips local full paths from `workbench-page.mjs` `postMessage` payloads, and standardizes `0600` file permissions on config writes.
+- **样式自愈指纹、前端安全与设置持久化修复**：为 `data-ag-cs-flat` 样式注入补齐长度指纹自愈校验；为 Sidecar iframe 主题 `postMessage` 补充协议与本地回环源白名单校验；将脉冲条校准定时器纳入卸载清理；修复设置中心 `Beta` 分栏状态无法持久化保存的问题；同步 `1.0.2` 版本号至双端安装器构建兜底与引用元数据。
+  - *Style Self-Healing, Frontend Hardening & Settings Persistence Fixes*: Restores length-fingerprinted `data-ag-cs-flat` self-healing validation, adds protocol/loopback origin allowlisting for sidecar iframe theme `postMessage`, cancels pulse-bar calibration timers on teardown, fixes persistence of the **Beta** settings sub-tab, and aligns `1.0.2` version metadata across installers, templates, and build scripts.
+
 ## [1.0.1] - 2026-11-18
 
 ### Added / 新增特性

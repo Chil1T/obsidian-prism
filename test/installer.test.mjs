@@ -1017,3 +1017,29 @@ test(
     }
   }
 );
+
+test('interactive GUI installers require explicit user confirmation before installing (Windows & macOS)', () => {
+  const winSrc = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'setup', 'Program.cs'), 'utf8');
+  const winInitMatch = winSrc.match(/private\s+async\s+Task\s+StartInitialActionAsync\(\)[\s\S]*?\n\s{8}\}/);
+  assert.ok(winInitMatch, 'Windows InstallerForm.StartInitialActionAsync must exist');
+  assert.doesNotMatch(
+    winInitMatch[0],
+    /ExecuteInstallAsync\s*\(/,
+    'Windows GUI must NOT auto-run ExecuteInstallAsync() on launch without user click'
+  );
+  assert.match(winInitMatch[0], /PrepareInstallChoiceAsync\s*\(/);
+  assert.match(winSrc, /_installBtn\.Click\s*\+=\s*async\s*\(s,\s*e\)\s*=>\s*await\s+ExecuteInstallAsync\(\)/);
+  assert.match(winSrc, /_closeBtn\.Text\s*=\s*"取消"/);
+
+  const macSrc = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Setup', 'main.swift'), 'utf8');
+  const macInitMatch = macSrc.match(/private\s+func\s+startInitialAction\(\)[\s\S]*?\n\s{4}\}/);
+  assert.ok(macInitMatch, 'macOS InstallerAppDelegate.startInitialAction must exist');
+  assert.doesNotMatch(
+    macInitMatch[0],
+    /executeInstall\s*\(/,
+    'macOS GUI must NOT auto-run executeInstall() on launch without user click'
+  );
+  assert.match(macInitMatch[0], /prepareInstallChoice\s*\(/);
+  assert.match(macSrc, /#selector\(handleInstallClick\)/);
+  assert.match(macSrc, /closeBtn\s*=\s*NSButton\(title:\s*"取消"/);
+});

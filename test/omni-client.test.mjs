@@ -490,8 +490,8 @@ function createFakeDomEnvironment(opts = {}) {
   win.innerWidth = 1440;
   win.innerHeight = 900;
   win.location = opts.location || {
-    href: 'https://127.0.0.1:1714/c/620cf67b-fb6c-4d11-a77c-13cdb6a252d2',
-    pathname: '/c/620cf67b-fb6c-4d11-a77c-13cdb6a252d2',
+    href: 'https://127.0.0.1:1714/c/11111111-2222-4333-8444-555555555555',
+    pathname: '/c/11111111-2222-4333-8444-555555555555',
     search: '',
   };
   win.Event = FakeEvent;
@@ -562,7 +562,7 @@ function createFakeDomEnvironment(opts = {}) {
 
 // Mounts a realistic Antigravity `#root` React Fiber with Redux `store` (`sidePanel` + `sidePanelV2`) & optional `browserCtx`
 function mountMockHostRoot(document, { withBrowserCtx = true, withV2 = true, overviewOpen = false } = {}) {
-  const cascadeId = '620cf67b-fb6c-4d11-a77c-13cdb6a252d2';
+  const cascadeId = '11111111-2222-4333-8444-555555555555';
   const dispatched = [];
   const state = {
     multiConvoLayout: {

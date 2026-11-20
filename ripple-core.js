@@ -784,9 +784,15 @@ color = vec4(rgb * a, a);
     }
     function build() {
       program = gl.createProgram();
-      gl.attachShader(program, compile(gl.VERTEX_SHADER, VERTEX_SHADER));
-      gl.attachShader(program, compile(gl.FRAGMENT_SHADER, FRAGMENT_SHADER));
+      const vs = compile(gl.VERTEX_SHADER, VERTEX_SHADER);
+      const fs = compile(gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
+      gl.attachShader(program, vs);
+      gl.attachShader(program, fs);
       gl.linkProgram(program);
+      if (typeof gl.deleteShader === 'function') {
+        gl.deleteShader(vs);
+        gl.deleteShader(fs);
+      }
       if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) || 'program link error');
       gl.useProgram(program);
       uniforms = {};

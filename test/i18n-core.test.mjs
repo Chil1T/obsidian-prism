@@ -354,10 +354,10 @@ test('v1.0.1 i18n keys cover all 5 languages for scene presets, 6 new config key
 });
 
 test('settings-panel schema, scene presets, strict apiKey-stripping JSON export, and allowlist-validated JSON import', () => {
-  // Verify all 26 global config keys (including omniModule & linkTarget) match exact contract
+  // Verify all 27 global config keys (including omniModule, linkTarget & sidebarStudio) match exact contract
   const { PRISM_SETTINGS_SCHEMA, SCENE_PRESETS, buildSanitizedConfigExport, validateImportedConfigJson, getDefaultSettingsPatch } =
     settingsPanel;
-  assert.equal(Object.keys(PRISM_SETTINGS_SCHEMA).length, 26);
+  assert.equal(Object.keys(PRISM_SETTINGS_SCHEMA).length, 27);
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.accentTone.allowed, ['follow', 'cobalt', 'iris', 'amber', 'mono']);
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.cornerStyle.allowed, ['sharp', 'balanced', 'soft']);
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.codeFont.allowed, ['default', 'jetbrains', 'cascadia', 'sfmono']);
@@ -368,6 +368,8 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
   assert.equal(PRISM_SETTINGS_SCHEMA.omniModule.default, 'on');
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.linkTarget.allowed, ['builtin', 'external']);
   assert.equal(PRISM_SETTINGS_SCHEMA.linkTarget.default, 'builtin');
+  assert.deepEqual(PRISM_SETTINGS_SCHEMA.sidebarStudio.allowed, ['on', 'off']);
+  assert.equal(PRISM_SETTINGS_SCHEMA.sidebarStudio.default, 'off');
   assert.ok(SCENE_PRESETS.ultra && SCENE_PRESETS.focus && SCENE_PRESETS.eco);
 
   // Export MUST strip apiKey, secret fields, and embedded sk-... tokens
@@ -445,7 +447,7 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
 
   assert.equal(validateImportedConfigJson('not-json').ok, false);
   assert.equal(validateImportedConfigJson('{"unknownOnly": 1}').ok, false);
-  assert.equal(Object.keys(getDefaultSettingsPatch()).length, 26);
+  assert.equal(Object.keys(getDefaultSettingsPatch()).length, 27);
 });
 
 test('UX-1 / OP-5 / UX-4 / UX-9 regressions: async thought config export, tech->technical normalization, preset sidebarCompact reset, lightPreset context hints, and Effort Slider off/i18n', () => {

@@ -1165,23 +1165,36 @@
       }
     };
 
+    let cachedCanvasRect = null;
+    let cachedCanvasRectAt = 0;
+    const readCanvasRect = (force = false) => {
+      const now = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+      if (!force && cachedCanvasRect && now - cachedCanvasRectAt < 250) {
+        return cachedCanvasRect;
+      }
+      cachedCanvasRect = canvas.getBoundingClientRect();
+      cachedCanvasRectAt = now;
+      return cachedCanvasRect;
+    };
+
     const onPointerMove = (evt) => {
-      const rect = canvas.getBoundingClientRect();
-      if (!rect.width || !rect.height) return;
+      const rect = readCanvasRect(false);
+      if (!rect || !rect.width || !rect.height) return;
       const rx = evt.clientX - rect.left;
       const ry = evt.clientY - rect.top;
       if (lastPointer) {
-        const vx = Math.max(-24, Math.min(24, rx - lastPointer.x));
-        const vy = Math.max(-24, Math.min(24, ry - lastPointer.y));
+        const vx = Math.max(-24, Math.min(24, evt.clientX - lastPointer.cx));
+        const vy = Math.max(-24, Math.min(24, evt.clientY - lastPointer.cy));
         const normX = (rx - TUBE_X) / TUBE_IN_R;
         const normY = (ry - (LIP_Y + 8)) / (HEM_Y - LIP_Y + 6);
         phys.injectFingerPoke(normX, normY, vx, vy);
         notifyWake();
       }
-      lastPointer = { x: rx, y: ry };
+      lastPointer = { x: rx, y: ry, cx: evt.clientX, cy: evt.clientY };
     };
     const onPointerDown = (evt) => {
-      const rect = canvas.getBoundingClientRect();
+      const rect = readCanvasRect(true);
+      if (!rect || !rect.width || !rect.height) return;
       const rx = evt.clientX - rect.left;
       const ry = evt.clientY - rect.top;
       const normX = (rx - TUBE_X) / TUBE_IN_R;
@@ -1192,6 +1205,8 @@
     };
     const onPointerLeave = () => {
       lastPointer = null;
+      cachedCanvasRect = null;
+      cachedCanvasRectAt = 0;
     };
 
     if (canvas && canvas.addEventListener) {

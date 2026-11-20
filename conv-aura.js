@@ -26,61 +26,94 @@
     return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : fallback;
   }
 
-  function isVisibleAuraNode(el) {
+  function isVisibleAuraNode(el, skipSyncVis = false) {
     if (!el || el.hidden === true || el.isConnected === false) return false;
-    if (typeof el.closest === 'function' && el.closest('[hidden], .hidden')) return false;
     const st = el.style;
     if (st && (st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0')) return false;
+    if (typeof el.closest === 'function' && el.closest('[hidden], .hidden')) return false;
+    if (!skipSyncVis && typeof el.checkVisibility === 'function' && !el.checkVisibility()) return false;
     return true;
   }
 
   let cachedRunningVal = false;
   let cachedRunningAt = -1;
+  let cachedRunningEl = null;
   let cachedDecisionVal = false;
   let cachedDecisionAt = -1;
+  let cachedDecisionEl = null;
   let cachedErrorAt = -1;
+  let lastFullVisAt = -1;
   const seenErrorNodes = typeof WeakSet === 'function' ? new WeakSet() : null;
 
   function readNowMs() {
     return typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
   }
 
-  function isConvRunning() {
+  const RUNNING_SEL =
+    '[data-testid="input-cancel-button"], [data-testid="stop-button"], [data-testid="cancel-button"], [data-testid="agent-loading"], [data-testid="thinking-collapsible-trigger"][data-op-thought-state="streaming"]';
+  const DECISION_SEL = '[data-testid="interaction-takeover-card"], [data-testid="side-question-panel"]';
+  const SUBAGENT_SEL = '[data-testid="subagent-tab-conversation"]';
+
+  function isLiveMatchedIndicator(el, sel, skipSyncVis = false) {
+    return Boolean(
+      el &&
+        el.isConnected === true &&
+        typeof el.nodeType === 'number' &&
+        typeof el.matches === 'function' &&
+        el.matches(sel) &&
+        !el.closest?.(SUBAGENT_SEL) &&
+        isVisibleAuraNode(el, skipSyncVis)
+    );
+  }
+
+  function isConvRunning(skipSyncVis = false) {
     if (typeof document === 'undefined') return false;
     const now = readNowMs();
     if (cachedRunningAt >= 0 && Math.abs(now - cachedRunningAt) < 200) {
       return cachedRunningVal;
     }
-    const nodes = document.querySelectorAll(
-      '[data-testid="input-cancel-button"], [data-testid="stop-button"], [data-testid="cancel-button"], [data-testid="agent-loading"], [data-testid="thinking-collapsible-trigger"][data-op-thought-state="streaming"]'
-    );
+    if (isLiveMatchedIndicator(cachedRunningEl, RUNNING_SEL, skipSyncVis)) {
+      cachedRunningVal = true;
+      cachedRunningAt = now;
+      if (!skipSyncVis) lastFullVisAt = now;
+      return true;
+    }
+    cachedRunningEl = null;
+    const nodes = document.querySelectorAll(RUNNING_SEL);
     let running = false;
     for (const n of nodes) {
-      if (n.closest?.('[data-testid="subagent-tab-conversation"]')) continue;
-      if (isVisibleAuraNode(n)) {
+      if (n.closest?.(SUBAGENT_SEL)) continue;
+      if (isVisibleAuraNode(n, skipSyncVis)) {
         running = true;
+        cachedRunningEl = n;
         break;
       }
     }
     cachedRunningVal = running;
     cachedRunningAt = now;
+    if (!skipSyncVis) lastFullVisAt = now;
     return running;
   }
 
-  function isAwaitingDecision() {
+  function isAwaitingDecision(skipSyncVis = false) {
     if (typeof document === 'undefined') return false;
     const now = readNowMs();
     if (cachedDecisionAt >= 0 && Math.abs(now - cachedDecisionAt) < 200) {
       return cachedDecisionVal;
     }
-    const nodes = document.querySelectorAll(
-      '[data-testid="interaction-takeover-card"], [data-testid="side-question-panel"]'
-    );
+    if (isLiveMatchedIndicator(cachedDecisionEl, DECISION_SEL, skipSyncVis)) {
+      cachedDecisionVal = true;
+      cachedDecisionAt = now;
+      return true;
+    }
+    cachedDecisionEl = null;
+    const nodes = document.querySelectorAll(DECISION_SEL);
     let awaiting = false;
     for (const n of nodes) {
-      if (n.closest?.('[data-testid="subagent-tab-conversation"]')) continue;
-      if (isVisibleAuraNode(n)) {
+      if (n.closest?.(SUBAGENT_SEL)) continue;
+      if (isVisibleAuraNode(n, skipSyncVis)) {
         awaiting = true;
+        cachedDecisionEl = n;
         break;
       }
     }
@@ -381,10 +414,11 @@
       } catch {}
     }
 
-    function advancePhase(now = readNowMs()) {
+    function advancePhase(now = readNowMs(), fromAnimLoop = false) {
       if (!convAura || !convAura.host || !convAura.host.isConnected) return 'off';
-      const runningNow = isConvRunning();
-      const awaitingNow = externalAwaiting !== null ? Boolean(externalAwaiting) : isAwaitingDecision();
+      const skipSyncVis = Boolean(fromAnimLoop && lastFullVisAt >= 0 && Math.abs(now - lastFullVisAt) < 2000);
+      const runningNow = isConvRunning(skipSyncVis);
+      const awaitingNow = externalAwaiting !== null ? Boolean(externalAwaiting) : isAwaitingDecision(skipSyncVis);
       const freshErr = externalErrorPending || (!runningNow && consumeFreshDomError(convAura.convView));
       if (externalErrorPending) externalErrorPending = false;
 
@@ -513,10 +547,22 @@
       convAura.parked = true;
     }
 
-    function sync() {
+    function prime() {
       cachedRunningAt = -1;
       cachedDecisionAt = -1;
       cachedErrorAt = -1;
+      if (isDestroyed() || !isHomeRippleEnabled()) return;
+      if (!findConvAuraView()) return;
+      isConvRunning();
+      if (externalAwaiting === null) isAwaitingDecision();
+    }
+
+    function sync(preserveCache = false) {
+      if (!preserveCache) {
+        cachedRunningAt = -1;
+        cachedDecisionAt = -1;
+        cachedErrorAt = -1;
+      }
       if (isDestroyed() || !isHomeRippleEnabled()) {
         unmount();
         return;
@@ -544,7 +590,13 @@
               convAura.ro.observe(seatParent);
             } catch {}
           }
-          if (typeof convAura.relayout === 'function') convAura.relayout();
+          const canDeferRelayout =
+            Boolean(convAura.ro) &&
+            convAura.width > 0 &&
+            convAura.height > 0 &&
+            typeof requestAnimationFrame === 'function' &&
+            !document.hidden;
+          if (!canDeferRelayout && typeof convAura.relayout === 'function') convAura.relayout();
           const nowRe = readNowMs();
           const runRe = isConvRunning();
           convAura.wasRunning = runRe;
@@ -555,7 +607,7 @@
           convAura.phase = runRe ? 'running' : 'idle';
           convAura.phaseAt = nowRe;
           setAttrIfChanged(convAura.host, 'data-aura-phase', convAura.phase);
-          convAura.wake(true);
+          convAura.wake(!canDeferRelayout);
           return;
         }
         const prevPhase = convAura.phase;
@@ -702,7 +754,7 @@
         }
 
         const prevPhaseBeforeAdv = state.phase;
-        const phase = advancePhase(now);
+        const phase = advancePhase(now, true);
         const phaseJustChanged = phase !== prevPhaseBeforeAdv;
         const dark = isDarkTheme();
         const spectrum = resolveSpectrum();
@@ -1047,6 +1099,7 @@
     }
 
     return {
+      prime,
       sync,
       unmount,
       triggerStart,

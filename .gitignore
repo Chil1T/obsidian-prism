@@ -22,3 +22,16 @@ repo-meta.json
 Thumbs.db
 *.agcs-staged*
 *.prism-staged*
+
+# IDE / C# build artifacts
+bin/
+obj/
+*.pdb
+.vs/
+*.user
+*.suo
+
+# Internal audit drafts & editor backups
+docs/audit/
+*.bak
+*.swp

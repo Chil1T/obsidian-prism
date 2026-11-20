@@ -1349,12 +1349,23 @@ test('Phase 2 TS-1~TS-8 security & lifecycle audit: SSRF/redirect defense, key r
   assert.equal(normalizeOpenAiBaseUrl('http://100.100.100.200/latest/meta-data/'), 'https://api.openai.com/v1');
   assert.equal(normalizeOpenAiBaseUrl('http://metadata.google.internal/computeMetadata/v1'), 'https://api.openai.com/v1');
   assert.equal(normalizeOpenAiBaseUrl('http://0.0.0.0:11434/v1'), 'https://api.openai.com/v1');
+  assert.equal(normalizeOpenAiBaseUrl('http://[::]:11434/v1'), 'https://api.openai.com/v1');
+  assert.equal(normalizeOpenAiBaseUrl('http://[::ffff:169.254.169.254]/latest/meta-data/'), 'https://api.openai.com/v1');
+  assert.equal(normalizeOpenAiBaseUrl('http://[::ffff:a9fe:a9fe]/latest/meta-data/'), 'https://api.openai.com/v1');
+  assert.equal(normalizeOpenAiBaseUrl('http://[::ffff:169.254.1.2]/v1'), 'https://api.openai.com/v1');
+  assert.equal(normalizeOpenAiBaseUrl('http://[::ffff:100.100.100.200]/latest/meta-data/'), 'https://api.openai.com/v1');
+  assert.equal(normalizeOpenAiBaseUrl('http://[::ffff:0.0.0.0]:11434/v1'), 'https://api.openai.com/v1');
   assert.equal(normalizeOpenAiBaseUrl('http://127.0.0.1:6379/v1'), 'https://api.openai.com/v1');
   assert.equal(normalizeOpenAiBaseUrl('http://127.0.0.1:22/v1'), 'https://api.openai.com/v1');
   assert.equal(isKeylessAllowedEndpoint('http://169.254.169.254/v1'), false);
   assert.equal(isKeylessAllowedEndpoint('http://100.100.100.200/v1'), false);
   assert.equal(isKeylessAllowedEndpoint('http://0.0.0.0:8000/v1'), false);
+  assert.equal(isKeylessAllowedEndpoint('http://[::]:8000/v1'), false);
+  assert.equal(isKeylessAllowedEndpoint('http://[::ffff:169.254.169.254]/v1'), false);
+  assert.equal(isKeylessAllowedEndpoint('http://[::ffff:a9fe:a9fe]/v1'), false);
+  assert.equal(isKeylessAllowedEndpoint('http://[::ffff:100.100.100.200]/v1'), false);
   assert.equal(isKeylessAllowedEndpoint('http://127.0.0.1:6379/v1'), false);
+  assert.equal(isKeylessAllowedEndpoint('http://[::1]:8000/v1'), true);
 
   // 2) TS-4: Extended secret redaction patterns (Groq, HF, Perplexity, NVIDIA, JWT Bearer, URL api_key, short secret)
   const gskTok = 'gsk_' + 'abcdefghijklmnop1234';

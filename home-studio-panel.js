@@ -65,7 +65,7 @@
     let lastUsageFetchAt = 0, lastQuotaFetchAt = 0, liveQuotaSnap = null, quotaEpoch = 0;
     let bookPick = 0.07, activeTab = 'overview', activeRange = 'all', activeWorkspace = 'all', detectedCurrentWorkspace = '';
     let modelsExpanded = false, lastPanelRenderKey = '', usageDataEpoch = 0, cachedAggKey = '', cachedAggData = null;
-    let deferredUsageTimer = 0, saveUsageTimer = 0, wasHero = false;
+    let deferredUsageTimer = 0, saveUsageTimer = 0, saveUsageIdle = 0, wasHero = false;
     const replacedGreetings = new Map();
     let panelSeat = null, panelEl = null, heatTipEl = null, shownHeatCell = null, pendingHeatCell = null, pendingHeatGrid = null, heatTipRaf = 0;
     const modelColours = usageCore?.createHomeModelColours ? usageCore.createHomeModelColours() : () => ({});
@@ -88,6 +88,10 @@
 
     function flushUsageCacheNow() {
       if (saveUsageTimer) { clearTimeout(saveUsageTimer); saveUsageTimer = 0; }
+      if (saveUsageIdle) {
+        try { if (typeof cancelIdleCallback === 'function') cancelIdleCallback(saveUsageIdle); } catch {}
+        saveUsageIdle = 0;
+      }
       try {
         if (typeof localStorage === 'undefined' || !localStorage) return;
         let entries = Array.from(usageRecords.entries());
@@ -103,7 +107,19 @@
     function saveUsageCache() {
       if (isDestroyed() || typeof setTimeout !== 'function') { flushUsageCacheNow(); return; }
       if (saveUsageTimer) clearTimeout(saveUsageTimer);
-      saveUsageTimer = setTimeout(flushUsageCacheNow, 1200);
+      if (saveUsageIdle) {
+        try { if (typeof cancelIdleCallback === 'function') cancelIdleCallback(saveUsageIdle); } catch {}
+        saveUsageIdle = 0;
+      }
+      saveUsageTimer = setTimeout(() => {
+        saveUsageTimer = 0;
+        if (isDestroyed()) return;
+        if (typeof requestIdleCallback === 'function') {
+          saveUsageIdle = requestIdleCallback(() => { saveUsageIdle = 0; if (!isDestroyed()) flushUsageCacheNow(); }, { timeout: 2500 });
+        } else {
+          flushUsageCacheNow();
+        }
+      }, 1200);
     }
 
     function extractMeta(sum) {
@@ -604,15 +620,7 @@
             subTok > 0
               ? typeof ui.swarmSplitSub === 'function'
                 ? ui.swarmSplitSub(mainPct, subPct)
-                : lang === 'en'
-                ? `Main ${mainPct}% · Swarm ${subPct}%`
-                : lang === 'ja'
-                ? `メイン ${mainPct}% · 子 ${subPct}%`
-                : lang === 'zh-TW'
-                ? `主工作階段 ${mainPct}% · 子代理 ${subPct}%`
-                : lang === 'yue'
-                ? `主對話 ${mainPct}% · 子代理 ${subPct}%`
-                : `主会话 ${mainPct}% · 子代理 ${subPct}%`
+                : `Main ${mainPct}% · Swarm ${subPct}%`
               : '';
 
           for (const [k, label, valText, titleText, subTxt] of [
@@ -642,6 +650,7 @@
           const heat = mk('div', 'ag-cs-home-heat');
           if (skeleton) heat.setAttribute('data-skeleton', '');
           const fmt = usageCore.homeShortDateFormat(lang);
+          const heatFrag = typeof document.createDocumentFragment === 'function' ? document.createDocumentFragment() : heat;
           for (const c of data.grid.cells) {
             const sq = mk('span', 'ag-cs-home-heat-cell');
             sq.setAttribute('data-level', String(c.level));
@@ -650,8 +659,9 @@
               sq.setAttribute('data-tip', tip);
               sq.setAttribute('aria-label', tip);
             }
-            heat.appendChild(sq);
+            heatFrag.appendChild(sq);
           }
+          if (heatFrag !== heat) heat.appendChild(heatFrag);
           heatTipEl = mk('span', 'ag-cs-home-heat-hint');
           heatTipEl.setAttribute('aria-hidden', 'true');
           heat.appendChild(heatTipEl);

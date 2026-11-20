@@ -30,5 +30,6 @@
   "ambientIntensity": "100",
   "thoughtView": "immersive",
   "omniModule": "on",
-  "linkTarget": "builtin"
+  "linkTarget": "builtin",
+  "sidebarStudio": "off"
 }

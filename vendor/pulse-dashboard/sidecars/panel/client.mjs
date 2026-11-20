@@ -2,7 +2,7 @@
 // Integrated & adapted for Obsidian Prism under GPL-3.0-only compatibility terms.
 // Enhanced with cdpPort multi-instance lineage resolution and backward-compatible _fetchMetadataOnly().
 import { readFile, stat } from 'node:fs/promises';
-import { request } from 'node:http';
+import { request, Agent as HttpAgent } from 'node:http';
 import { setImmediate as yieldStream } from 'node:timers/promises';
 import { platformPaths } from '../../compat/platform.mjs';
 import { discoverProcesses, httpLogPorts, extractHubPort } from './discovery.mjs';
@@ -61,6 +61,7 @@ export class AntigravityClient {
     this.now = now;
     this.onRpc = onRpc;
     this.cdpPort = cdpPort ?? debugPort ?? null;
+    this.agent = new HttpAgent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 2, maxFreeSockets: 2, timeout: 25000 });
     this.reader = new TrajectoryReader(this);
   }
   server = null;
@@ -166,7 +167,11 @@ export class AntigravityClient {
     const server = await this.discover();
     try {
       return await new Promise((resolve, reject) => {
-        const data = JSON.stringify(body);
+        const reqBody =
+          method === 'GetCascadeTrajectoryGeneratorMetadata' && body && typeof body === 'object' && body.includeMessages === undefined
+            ? { ...body, includeMessages: false }
+            : body;
+        const data = JSON.stringify(reqBody);
         const projection = ['GetCascadeTrajectory', 'GetCascadeTrajectorySteps', 'GetCascadeTrajectoryGeneratorMetadata', 'GetAllCascadeTrajectories'].includes(method);
         const started = this.now();
         const req = request(
@@ -175,7 +180,7 @@ export class AntigravityClient {
             port: server.port,
             method: 'POST',
             path: SERVICE + method,
-            ...(projection ? { agent: false } : {}),
+            agent: this.agent,
             headers: {
               'Content-Type': 'application/json',
               'Connect-Protocol-Version': '1',
@@ -282,7 +287,7 @@ export class AntigravityClient {
             port: server.port,
             method: 'POST',
             path: SERVICE + method,
-            agent: false,
+            agent: this.agent,
             headers: {
               'Content-Type': 'application/json',
               'Connect-Protocol-Version': '1',
@@ -330,11 +335,16 @@ export class AntigravityClient {
       }
       try { this.onRpc?.({ method, bytes, retainedBytes: peakRetained, ms: this.now() - started, streamed: true }); } catch {}
       return result;
+    } catch (error) {
+      streamError ||= error;
+      throw error;
     } finally {
       clearTimeout(deadline);
       clearInterval(watch);
-      res?.destroy();
-      req?.destroy();
+      if (streamError || !res?.complete) {
+        res?.destroy();
+        req?.destroy();
+      }
     }
   }
 
@@ -378,4 +388,8 @@ export class AntigravityClient {
 
   resetTrajectories() { this.reader.reset(); }
   trajectory(id, options) { return this.reader.read(id, options); }
+  dispose() {
+    try { this.agent?.destroy?.(); } catch {}
+    this.reader?.reset?.();
+  }
 }

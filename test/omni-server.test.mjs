@@ -195,7 +195,8 @@ test('OmniServer blocks sensitive files with 403 across HTTP routes and RPC acti
     'tls-cert.pem',
     'service.key',
     'keys.txt',
-    'model-hub.config.json',
+    'credentials.json',
+    'secrets.json',
   ];
 
   for (const name of sensitiveNames) {

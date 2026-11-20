@@ -23,19 +23,120 @@ const BLOCKED_AI_PORTS = new Set([
   21, 22, 23, 25, 53, 110, 135, 139, 143, 445, 1433, 3306, 3389, 5432, 6379, 11211, 27017,
 ]);
 
+function parseIpv4Octets(raw) {
+  const parts = String(raw || '').split('.');
+  if (parts.length !== 4) return null;
+  const out = [];
+  for (let i = 0; i < 4; i++) {
+    if (!/^\d{1,3}$/.test(parts[i])) return null;
+    const n = Number(parts[i]);
+    if (!Number.isInteger(n) || n < 0 || n > 255) return null;
+    out.push(n);
+  }
+  return out;
+}
+
+function isBlockedIpv4(a, b, c, d) {
+  if (a === 0) return true; // 0.0.0.0/8 未指定地址
+  if (a === 169 && b === 254) return true; // 169.254.0.0/16 云元数据与链路本地
+  if (a === 100 && b === 100 && c === 100 && d === 200) return true; // 阿里云元数据
+  return false;
+}
+
+function parseIpv6Hextets(raw) {
+  let s = String(raw || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
+  const zoneIdx = s.indexOf('%');
+  if (zoneIdx >= 0) s = s.slice(0, zoneIdx);
+  if (!s.includes(':')) return null;
+
+  let ipv4Tail = null;
+  const lastColon = s.lastIndexOf(':');
+  const tailPart = s.slice(lastColon + 1);
+  if (tailPart.includes('.')) {
+    const octets = parseIpv4Octets(tailPart);
+    if (!octets) return null;
+    ipv4Tail = [(octets[0] << 8) | octets[1], (octets[2] << 8) | octets[3]];
+    if (lastColon > 0 && s[lastColon - 1] === ':') {
+      // 保留完整 "::"（如 "::169.254.169.254" 或 "64:ff9b::169.254.169.254"）
+      s = s.slice(0, lastColon + 1);
+    } else {
+      s = s.slice(0, lastColon);
+    }
+  }
+
+  const targetGroups = ipv4Tail ? 6 : 8;
+  const dblIdx = s.indexOf('::');
+  let groups;
+  if (dblIdx >= 0) {
+    if (s.indexOf('::', dblIdx + 2) >= 0) return null;
+    const leftStr = s.slice(0, dblIdx);
+    const rightStr = s.slice(dblIdx + 2);
+    const left = leftStr ? leftStr.split(':') : [];
+    const right = rightStr ? rightStr.split(':') : [];
+    const missing = targetGroups - left.length - right.length;
+    if (missing < 1) return null;
+    groups = [...left, ...new Array(missing).fill('0'), ...right];
+  } else {
+    groups = s.split(':');
+    if (groups.length !== targetGroups) return null;
+  }
+
+  const hextets = [];
+  for (let i = 0; i < groups.length; i++) {
+    if (!/^[0-9a-f]{1,4}$/.test(groups[i])) return null;
+    hextets.push(parseInt(groups[i], 16));
+  }
+  if (ipv4Tail) {
+    hextets.push(ipv4Tail[0], ipv4Tail[1]);
+  }
+  return hextets.length === 8 ? hextets : null;
+}
+
 function isBlockedSsrfHost(rawHost) {
-  const host = String(rawHost || '').toLowerCase().replace(/^\[|\]$/g, '');
+  const host = String(rawHost || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
   if (!host) return true;
   if (
-    host === '0.0.0.0' ||
-    host === '100.100.100.200' ||
     host === 'metadata.google.internal' ||
+    host.endsWith('.metadata.google.internal') ||
+    host === 'metadata.goog' ||
     host === 'metadata' ||
-    host === 'instance-data' ||
-    /^fd00:ec2::254$/i.test(host) ||
-    /^169\.254(?:\.\d{1,3}){2}$/.test(host)
+    host === 'instance-data'
   ) {
     return true;
+  }
+  const v4 = parseIpv4Octets(host);
+  if (v4) {
+    return isBlockedIpv4(v4[0], v4[1], v4[2], v4[3]);
+  }
+  if (host.includes(':')) {
+    const h = parseIpv6Hextets(host);
+    if (!h) return true; // 畸形 IPv6 保守拦截
+    // 未指定地址 ::
+    if (h.every((x) => x === 0)) return true;
+    // 回环 ::1 允许（用于本地大模型服务）
+    if (h[0] === 0 && h[1] === 0 && h[2] === 0 && h[3] === 0 && h[4] === 0 && h[5] === 0 && h[6] === 0 && h[7] === 1) {
+      return false;
+    }
+    // 链路本地 fe80::/10 (fe80..febf)
+    if ((h[0] & 0xffc0) === 0xfe80) return true;
+    // AWS IMDSv2 IPv6 元数据 fd00:ec2::254 (fd00:ec2::/32)
+    if (h[0] === 0xfd00 && h[1] === 0x0ec2) return true;
+    // IPv4-mapped (::ffff:0:0/96)、IPv4-translated (::ffff:0:0:0/96)、IPv4-compatible (::/96)、NAT64 (64:ff9b::/96, 64:ff9b:1::/48)
+    const isV4Mapped = h[0] === 0 && h[1] === 0 && h[2] === 0 && h[3] === 0 && h[4] === 0 && h[5] === 0xffff;
+    const isV4Translated = h[0] === 0 && h[1] === 0 && h[2] === 0 && h[3] === 0 && h[4] === 0xffff && h[5] === 0;
+    const isV4Compatible = h[0] === 0 && h[1] === 0 && h[2] === 0 && h[3] === 0 && h[4] === 0 && h[5] === 0;
+    const isNat64 =
+      h[0] === 0x0064 &&
+      h[1] === 0xff9b &&
+      ((h[2] === 0 && h[3] === 0 && h[4] === 0 && h[5] === 0) || h[2] === 0x0001);
+    if (isV4Mapped || isV4Translated || isV4Compatible || isNat64) {
+      if (isBlockedIpv4(h[6] >> 8, h[6] & 0xff, h[7] >> 8, h[7] & 0xff)) return true;
+    }
+    // 6to4 (2002::/16) 内嵌 IPv4
+    if (h[0] === 0x2002) {
+      if (isBlockedIpv4(h[1] >> 8, h[1] & 0xff, h[2] >> 8, h[2] & 0xff)) return true;
+    }
+    return false;
   }
   return false;
 }
@@ -73,9 +174,9 @@ export function redactSecrets(text, explicitKey = '') {
   return out;
 }
 
-export function normalizeOpenAiBaseUrl(rawUrl) {
+export function validateOpenAiBaseUrl(rawUrl) {
   let u = String(rawUrl || '').trim();
-  if (!u) return 'https://api.openai.com/v1';
+  if (!u) return { ok: true, url: 'https://api.openai.com/v1', isDefault: true };
   if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u)) {
     const bare = u.split('/')[0].toLowerCase();
     const isLocalBare =
@@ -88,14 +189,14 @@ export function normalizeOpenAiBaseUrl(rawUrl) {
   try {
     const parsed = new URL(u);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return 'https://api.openai.com/v1';
+      return { ok: false, reason: 'blocked-protocol', error: `Unsupported Base URL protocol: ${parsed.protocol}` };
     }
     const cleanHost = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
     if (isBlockedSsrfHost(cleanHost)) {
-      return 'https://api.openai.com/v1';
+      return { ok: false, reason: 'blocked-ssrf-host', error: 'Blocked Base URL host (SSRF protection)' };
     }
     if (parsed.port && BLOCKED_AI_PORTS.has(Number(parsed.port))) {
-      return 'https://api.openai.com/v1';
+      return { ok: false, reason: 'blocked-port', error: `Blocked Base URL port: ${parsed.port}` };
     }
     parsed.username = '';
     parsed.password = '';
@@ -104,10 +205,15 @@ export function normalizeOpenAiBaseUrl(rawUrl) {
     let pathname = parsed.pathname.replace(/\/+$/, '');
     pathname = pathname.replace(/\/chat\/completions$/i, '').replace(/\/models$/i, '').replace(/\/+$/, '');
     if (!pathname) pathname = '/v1';
-    return `${parsed.origin}${pathname}`;
+    return { ok: true, url: `${parsed.origin}${pathname}`, isDefault: false };
   } catch {
-    return 'https://api.openai.com/v1';
+    return { ok: false, reason: 'invalid-url', error: 'Invalid Base URL format' };
   }
+}
+
+export function normalizeOpenAiBaseUrl(rawUrl) {
+  const checked = validateOpenAiBaseUrl(rawUrl);
+  return checked.ok ? checked.url : 'https://api.openai.com/v1';
 }
 
 export const MAX_CONCURRENCY = 3;
@@ -138,7 +244,7 @@ export function isKeylessAllowedEndpoint(rawUrl) {
     if (/^192\.168(?:\.\d{1,3}){2}$/.test(host)) return true;
     if (/^172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}$/.test(host)) return true;
     if (/^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])(?:\.\d{1,3}){2}$/.test(host)) return true;
-    if (/^(?:fc|fd|fe80:)/i.test(host)) return true;
+    if (/^(?:f[cd][0-9a-f]{2}:|fe80:)/i.test(host)) return true;
     if (/\.(?:local|lan|internal|home|arpa)$/i.test(host)) return true;
     if (!host.includes('.') && !host.includes(':')) return true;
     return false;
@@ -205,11 +311,13 @@ export function isMostlyChinese(text) {
 
 export function stripThinkTagsAndQuotes(text) {
   let s = String(text || '');
-  s = s.replace(/<think>[\s\S]*?<\/think>/gi, '');
-  if (/<think>/i.test(s) && !/<\/think>/i.test(s)) {
-    s = s.replace(/<think>[\s\S]*$/i, '');
+  if (s.includes('<') && /<think|<\/?thought_source/i.test(s)) {
+    s = s.replace(/<think>[\s\S]*?<\/think>/gi, '');
+    if (/<think>/i.test(s) && !/<\/think>/i.test(s)) {
+      s = s.replace(/<think>[\s\S]*$/i, '');
+    }
+    s = s.replace(/<\/?thought_source>/gi, '');
   }
-  s = s.replace(/<\/?thought_source>/gi, '');
   return s.trim();
 }
 
@@ -235,7 +343,7 @@ export class ThoughtTranslatorService {
     this.configFile = opts.configFile || path.join(cfgDir, 'obsidian-prism-thought.json');
     this.cacheFile = opts.cacheFile || path.join(cfgDir, 'obsidian-prism-thought-cache.json');
     this.fetchImpl = opts.fetchImpl || globalThis.fetch;
-    this.maxCacheEntries = opts.maxCacheEntries || 1600;
+    this.maxCacheEntries = opts.maxCacheEntries || 400;
     this.maxConcurrency = Math.max(1, Number(opts.maxConcurrency) || MAX_CONCURRENCY);
 
     this.memCache = new Map();
@@ -303,13 +411,22 @@ export class ThoughtTranslatorService {
           .slice(0, 36) || `p_${profiles.length + 1}`;
       if (seen.has(id)) continue;
       seen.add(id);
-      profiles.push({
+      const rawBaseUrl = typeof item.baseUrl === 'string' ? item.baseUrl.trim() : '';
+      const checkedUrl = validateOpenAiBaseUrl(rawBaseUrl);
+      const preservedError = !rawBaseUrl && typeof item.baseUrlError === 'string' ? item.baseUrlError.trim() : '';
+      const profileRec = {
         id,
         name: String(item.name || `渠道 ${profiles.length + 1}`).trim().slice(0, 48) || `渠道 ${profiles.length + 1}`,
-        baseUrl: normalizeOpenAiBaseUrl(item.baseUrl || ''),
+        baseUrl: checkedUrl.ok && !preservedError ? checkedUrl.url : '',
         apiKey: typeof item.apiKey === 'string' ? item.apiKey.trim() : '',
         model: String(item.model || '').trim().slice(0, 120),
-      });
+      };
+      if (!checkedUrl.ok) {
+        profileRec.baseUrlError = checkedUrl.error;
+      } else if (preservedError) {
+        profileRec.baseUrlError = preservedError;
+      }
+      profiles.push(profileRec);
       if (profiles.length >= 12) break;
     }
     if (!profiles.length) profiles.push(...def.profiles);
@@ -386,11 +503,33 @@ export class ThoughtTranslatorService {
     const store = this.loadStore();
     const targetId = input.profileId || store.activeProfileId;
     const saved = store.profiles.find((p) => p.id === targetId) || store.profiles[0];
-    const baseUrl = normalizeOpenAiBaseUrl(input.baseUrl || saved?.baseUrl || '');
+    const hasInputUrl = typeof input.baseUrl === 'string' && input.baseUrl.trim() !== '';
+    let baseUrl = 'https://api.openai.com/v1';
+    let baseUrlError = '';
+    if (hasInputUrl) {
+      const checked = validateOpenAiBaseUrl(input.baseUrl);
+      if (checked.ok) {
+        baseUrl = checked.url;
+      } else {
+        baseUrl = '';
+        baseUrlError = checked.error || 'Blocked Base URL';
+      }
+    } else if (saved?.baseUrlError) {
+      baseUrl = '';
+      baseUrlError = saved.baseUrlError;
+    } else {
+      const checked = validateOpenAiBaseUrl(saved?.baseUrl || '');
+      if (checked.ok) {
+        baseUrl = checked.url;
+      } else {
+        baseUrl = '';
+        baseUrlError = checked.error || 'Blocked Base URL';
+      }
+    }
     const rawKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : '';
     const apiKey = rawKey && !rawKey.includes('••••') ? rawKey : saved?.apiKey || '';
     const model = String(input.model || saved?.model || '').trim();
-    return { baseUrl, apiKey, model, store };
+    return { baseUrl, baseUrlError, apiKey, model, store };
   }
 
   _resolveSystemPrompt(store) {
@@ -402,7 +541,8 @@ export class ThoughtTranslatorService {
   }
 
   async fetchModels(input = {}) {
-    const { baseUrl, apiKey } = this._resolveEffectiveCredentials(input);
+    const { baseUrl, baseUrlError, apiKey } = this._resolveEffectiveCredentials(input);
+    if (baseUrlError) return { ok: false, error: baseUrlError };
     if (!this.fetchImpl) return { ok: false, error: 'Fetch unavailable in runtime' };
     const headers = { Accept: 'application/json' };
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
@@ -458,7 +598,8 @@ export class ThoughtTranslatorService {
   }
 
   async testConnection(input = {}) {
-    const { baseUrl, apiKey, model } = this._resolveEffectiveCredentials(input);
+    const { baseUrl, baseUrlError, apiKey, model } = this._resolveEffectiveCredentials(input);
+    if (baseUrlError) return { ok: false, model, error: baseUrlError };
     if (!model) return { ok: false, error: '请先选择或输入模型 ID（Model）' };
     if (!apiKey && !isKeylessAllowedEndpoint(baseUrl)) {
       return { ok: false, error: '请先填写 API Key（本地 Ollama / LM Studio / vLLM 渠道可留空）' };
@@ -916,7 +1057,10 @@ export class ThoughtTranslatorService {
 
   async translateAiStream(rawText, onPartial, abortSignal = null) {
     const store = this.loadStore();
-    const { baseUrl, apiKey, model } = this._resolveEffectiveCredentials({});
+    const { baseUrl, baseUrlError, apiKey, model } = this._resolveEffectiveCredentials({});
+    if (baseUrlError) {
+      throw new Error(baseUrlError);
+    }
     const allowEmptyKey = isKeylessAllowedEndpoint(baseUrl);
     if ((!apiKey && !allowEmptyKey) || !model) {
       const fallback = await this.translateMachine(rawText, abortSignal);

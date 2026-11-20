@@ -1,7 +1,7 @@
 // Obsidian Prism Native Sidecar Daemon (sidecars/daemon/main.mjs)
 // - Auto-discovers DevToolsActivePort across Windows/macOS/Linux + fast Target.setDiscoverTargets push
 // - Registers Page.addScriptToEvaluateOnNewDocument + Runtime.evaluate (survives Ctrl+Shift+R reloads with zero app.asar touch!)
-// - Hot-upgrades legacy instances to Obsidian Prism v1.0.1
+// - Hot-upgrades legacy instances to Obsidian Prism v1.0.2
 // - Lazily serves real MetricsStore + DesktopUsage snapshots over __agPrismMetricsCall only when requested (0 idle CPU)
 // - Registers __agPrismRepoCall (paired with window.__agPrismRepoBridge) for live Git status & safe git pull --ff-only + hot-reload!
 
@@ -9,9 +9,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { OmniServer, OMNI_BINDING, isBlockedUncPath } from '../../vendor/omni-viewer/omni-server.mjs';
 
 const require = createRequire(import.meta.url);
@@ -24,6 +24,7 @@ export const METRICS_BINDING = '__agPrismMetricsCall';
 export const REPO_BINDING = '__agPrismRepoCall';
 export const THOUGHT_BINDING = '__agPrismThoughtCall';
 export const USAGE_BINDING = '__agPrismUsageCall';
+export const SIDEBAR_BINDING = '__agPrismSidebarCall';
 export { OmniServer, OMNI_BINDING };
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -79,49 +80,273 @@ export function sanitizeGitRemoteUrl(rawUrl) {
   return s.replace(/\/\/[^/\s:@]+:[^/\s@]+@/, '//');
 }
 
+function assertNotSymlinkSync(targetPath, label = 'path') {
+  try {
+    const st = fs.lstatSync(targetPath);
+    if (st.isSymbolicLink()) {
+      throw new Error(`Refusing symbolic link ${label}: ${targetPath}`);
+    }
+    return st;
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+export function writeFileAtomicSync(targetPath, content, { mode = 0o600 } = {}) {
+  const resolvedTarget = path.resolve(targetPath);
+  const dir = path.dirname(resolvedTarget);
+  const dirStat = assertNotSymlinkSync(dir, 'target directory');
+  if (dirStat && !dirStat.isDirectory()) {
+    throw new Error(`Target parent is not a directory: ${dir}`);
+  }
+  assertNotSymlinkSync(resolvedTarget, 'target file');
+
+  const base = path.basename(resolvedTarget);
+  const tmpName = `.${base}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  const tmpPath = path.join(dir, tmpName);
+  let fd = null;
+  try {
+    fd = fs.openSync(tmpPath, 'wx', mode);
+    fs.writeFileSync(fd, content, 'utf8');
+    try { fs.fsyncSync(fd); } catch {}
+    fs.closeSync(fd);
+    fd = null;
+    try { fs.chmodSync(tmpPath, mode); } catch {}
+  } catch (err) {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+    try { fs.unlinkSync(tmpPath); } catch {}
+    throw err;
+  }
+
+  try {
+    assertNotSymlinkSync(dir, 'target directory');
+    assertNotSymlinkSync(resolvedTarget, 'target file');
+    let renamed = false;
+    let lastErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        fs.renameSync(tmpPath, resolvedTarget);
+        renamed = true;
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (process.platform !== 'win32' || !['EBUSY', 'EPERM', 'EACCES', 'EEXIST'].includes(err?.code)) {
+          throw err;
+        }
+      }
+    }
+    if (!renamed) {
+      // Windows 兼容回退：句柄短暂占用导致 renameSync 失败时先复核非符号链接再覆盖目标并清理临时文件
+      if (process.platform === 'win32' && ['EBUSY', 'EPERM', 'EACCES', 'EEXIST'].includes(lastErr?.code)) {
+        assertNotSymlinkSync(dir, 'target directory');
+        assertNotSymlinkSync(resolvedTarget, 'target file');
+        fs.copyFileSync(tmpPath, resolvedTarget);
+        try { fs.unlinkSync(tmpPath); } catch {}
+      } else {
+        throw lastErr;
+      }
+    }
+    assertNotSymlinkSync(resolvedTarget, 'target file');
+    try { fs.chmodSync(resolvedTarget, mode); } catch {}
+  } catch (err) {
+    try { fs.unlinkSync(tmpPath); } catch {}
+    throw err;
+  }
+}
+
+function isSafeRelativeSyncPath(rel) {
+  if (typeof rel !== 'string') return false;
+  const trimmed = rel.trim();
+  if (!trimmed || trimmed.includes('\0') || path.isAbsolute(trimmed)) return false;
+  const parts = trimmed.split(/[\\/]+/).filter(Boolean);
+  if (parts.length === 0) return false;
+  return !parts.some((p) => p === '.' || p === '..');
+}
+
+function isPathWithinRoot(rootPath, candidatePath, allowEqual = false) {
+  const rel = path.relative(rootPath, candidatePath);
+  if (rel === '') return allowEqual;
+  return !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+function hasSymlinkSegment(rootDir, targetPath) {
+  const rel = path.relative(rootDir, targetPath);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return true;
+  const parts = rel.split(path.sep).filter(Boolean);
+  let cur = rootDir;
+  for (const part of parts) {
+    cur = path.join(cur, part);
+    try {
+      const st = fs.lstatSync(cur);
+      if (st.isSymbolicLink()) return true;
+    } catch (err) {
+      if (err && err.code === 'ENOENT') break;
+      return true;
+    }
+  }
+  return false;
+}
+
 export function copyUpdatedRuntimeFromRepo(repoDir, pluginDir, syncFilesList) {
   if (!repoDir || !pluginDir) return 0;
-  const normRepo = path.resolve(repoDir).toLowerCase();
-  const normPlugin = path.resolve(pluginDir).toLowerCase();
-  if (normRepo === normPlugin) return 0;
+  const repoRoot = path.resolve(repoDir);
+  const pluginRoot = path.resolve(pluginDir);
+  if (repoRoot.toLowerCase() === pluginRoot.toLowerCase()) return 0;
+
+  let repoRootStat;
+  try {
+    repoRootStat = fs.lstatSync(repoRoot);
+  } catch {
+    return 0;
+  }
+  if (repoRootStat.isSymbolicLink() || !repoRootStat.isDirectory()) return 0;
+
+  try {
+    const pluginRootStat = fs.lstatSync(pluginRoot);
+    if (pluginRootStat.isSymbolicLink() || !pluginRootStat.isDirectory()) return 0;
+  } catch (err) {
+    if (err && err.code !== 'ENOENT') return 0;
+    fs.mkdirSync(pluginRoot, { recursive: true });
+  }
+
+  let realRepoRoot;
+  let realPluginRoot;
+  try {
+    realRepoRoot = fs.realpathSync(repoRoot);
+    realPluginRoot = fs.realpathSync(pluginRoot);
+  } catch {
+    return 0;
+  }
+  if (realRepoRoot.toLowerCase() === realPluginRoot.toLowerCase()) return 0;
 
   let resolvedFiles = null;
-  const repoCdpPath = path.join(repoDir, 'cdp.js');
-  if (fs.existsSync(repoCdpPath)) {
-    try {
-      const reqKey = require.resolve(repoCdpPath);
-      delete require.cache[reqKey];
-      const freshRepoCdp = require(repoCdpPath);
-      if (Array.isArray(freshRepoCdp?.SYNC_ROOT_FILES) && freshRepoCdp.SYNC_ROOT_FILES.length > 0) {
-        resolvedFiles = freshRepoCdp.SYNC_ROOT_FILES;
+  const repoCdpPath = path.join(repoRoot, 'cdp.js');
+  try {
+    const cdpStat = fs.lstatSync(repoCdpPath);
+    if (!cdpStat.isSymbolicLink() && cdpStat.isFile()) {
+      const realCdp = fs.realpathSync(repoCdpPath);
+      if (isPathWithinRoot(realRepoRoot, realCdp)) {
+        const reqKey = require.resolve(repoCdpPath);
+        delete require.cache[reqKey];
+        const freshRepoCdp = require(repoCdpPath);
+        if (Array.isArray(freshRepoCdp?.SYNC_ROOT_FILES) && freshRepoCdp.SYNC_ROOT_FILES.length > 0) {
+          resolvedFiles = freshRepoCdp.SYNC_ROOT_FILES;
+        }
       }
-    } catch {}
-  }
+    }
+  } catch {}
+
+  const safeCopyFile = (rel) => {
+    if (!isSafeRelativeSyncPath(rel)) return false;
+    const src = path.resolve(repoRoot, rel);
+    const dst = path.resolve(pluginRoot, rel);
+    if (!isPathWithinRoot(repoRoot, src) || !isPathWithinRoot(pluginRoot, dst)) return false;
+    if (hasSymlinkSegment(repoRoot, src)) return false;
+
+    let srcStat;
+    try {
+      srcStat = fs.lstatSync(src);
+    } catch {
+      return false;
+    }
+    if (srcStat.isSymbolicLink() || !srcStat.isFile()) return false;
+    try {
+      const realSrc = fs.realpathSync(src);
+      if (!isPathWithinRoot(realRepoRoot, realSrc)) return false;
+    } catch {
+      return false;
+    }
+
+    if (hasSymlinkSegment(pluginRoot, dst)) return false;
+    try {
+      const dstStat = fs.lstatSync(dst);
+      if (dstStat.isSymbolicLink() || !dstStat.isFile()) return false;
+    } catch (err) {
+      if (!err || err.code !== 'ENOENT') return false;
+    }
+
+    const dstParent = path.dirname(dst);
+    fs.mkdirSync(dstParent, { recursive: true });
+    if (hasSymlinkSegment(pluginRoot, dst)) return false;
+    try {
+      const realDstParent = fs.realpathSync(dstParent);
+      if (!isPathWithinRoot(realPluginRoot, realDstParent, true)) return false;
+      try {
+        const dstStatAfter = fs.lstatSync(dst);
+        if (dstStatAfter.isSymbolicLink() || !dstStatAfter.isFile()) return false;
+      } catch (err) {
+        if (!err || err.code !== 'ENOENT') return false;
+      }
+    } catch {
+      return false;
+    }
+
+    fs.copyFileSync(src, dst);
+    return true;
+  };
 
   let synced = 0;
   const files =
     resolvedFiles ||
     (Array.isArray(syncFilesList) && syncFilesList.length > 0 ? syncFilesList : ['cdp.js', 'style.css', 'ui-runtime.js']);
   for (const rel of files) {
-    const src = path.join(repoDir, rel);
-    const dst = path.join(pluginDir, rel);
-    if (fs.existsSync(src)) {
-      fs.mkdirSync(path.dirname(dst), { recursive: true });
-      fs.copyFileSync(src, dst);
-      synced += 1;
-    }
+    if (safeCopyFile(rel)) synced += 1;
   }
   const syncSubDir = (sub) => {
-    const sDir = path.join(repoDir, sub);
-    const dDir = path.join(pluginDir, sub);
-    if (!fs.existsSync(sDir)) return;
+    if (!isSafeRelativeSyncPath(sub)) return;
+    const sDir = path.resolve(repoRoot, sub);
+    const dDir = path.resolve(pluginRoot, sub);
+    if (!isPathWithinRoot(repoRoot, sDir) || !isPathWithinRoot(pluginRoot, dDir)) return;
+    if (hasSymlinkSegment(repoRoot, sDir)) return;
+
+    let sDirStat;
+    try {
+      sDirStat = fs.lstatSync(sDir);
+    } catch {
+      return;
+    }
+    if (sDirStat.isSymbolicLink() || !sDirStat.isDirectory()) return;
+    try {
+      const realSDir = fs.realpathSync(sDir);
+      if (!isPathWithinRoot(realRepoRoot, realSDir)) return;
+    } catch {
+      return;
+    }
+
+    if (hasSymlinkSegment(pluginRoot, dDir)) return;
+    try {
+      const dDirStat = fs.lstatSync(dDir);
+      if (dDirStat.isSymbolicLink() || !dDirStat.isDirectory()) return;
+    } catch (err) {
+      if (!err || err.code !== 'ENOENT') return;
+    }
     fs.mkdirSync(dDir, { recursive: true });
+    if (hasSymlinkSegment(pluginRoot, dDir)) return;
+    try {
+      const realDDir = fs.realpathSync(dDir);
+      if (!isPathWithinRoot(realPluginRoot, realDDir)) return;
+    } catch {
+      return;
+    }
+
     for (const ent of fs.readdirSync(sDir, { withFileTypes: true })) {
       if (ent.name === '__pycache__' || ent.name === '.DS_Store') continue;
-      if (ent.isDirectory()) syncSubDir(path.join(sub, ent.name));
-      else if (ent.isFile()) {
-        fs.copyFileSync(path.join(sDir, ent.name), path.join(dDir, ent.name));
-        synced += 1;
+      if (ent.isSymbolicLink()) continue;
+      const childRel = path.join(sub, ent.name);
+      const childSrc = path.join(sDir, ent.name);
+      let childStat;
+      try {
+        childStat = fs.lstatSync(childSrc);
+      } catch {
+        continue;
+      }
+      if (childStat.isSymbolicLink()) continue;
+      if (childStat.isDirectory()) syncSubDir(childRel);
+      else if (childStat.isFile()) {
+        if (safeCopyFile(childRel)) synced += 1;
       }
     }
   };
@@ -200,6 +425,53 @@ function isAutomatedTestRuntime() {
   return Array.isArray(process.execArgv) && process.execArgv.some((a) => a === '--test' || a.startsWith('--test-'));
 }
 
+function queryProcessCommandLineSync(pid) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0) return null;
+  try {
+    if (process.platform === 'linux') {
+      const raw = fs.readFileSync(`/proc/${n}/cmdline`);
+      if (!raw || raw.length === 0) return '';
+      return raw.toString('utf8').replace(/\0+/g, ' ').trim();
+    }
+    if (process.platform === 'win32') {
+      const psScript = `(Get-CimInstance Win32_Process -Filter 'ProcessId = ${n}' -ErrorAction SilentlyContinue).CommandLine`;
+      const out = execFileSync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-Command', psScript],
+        { encoding: 'utf8', windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }
+      );
+      return String(out || '').trim();
+    }
+    const out = execFileSync('ps', ['-p', String(n), '-o', 'command='], {
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return String(out || '').trim();
+  } catch {
+    return null;
+  }
+}
+
+export function isObsidianPrismDaemonCommandLine(commandLine) {
+  const cmd = String(commandLine || '').replace(/\\/g, '/').trim().toLowerCase();
+  if (!cmd) return false;
+  if (/--type=/.test(cmd)) return false;
+  const hasPrismBrand = /(?:obsidian-prism|antigravity-prism|agy-claude-style)/.test(cmd);
+  const hasDaemonScript = /(?:sidecars\/daemon\/main\.mjs|\/daemon\/main\.mjs|\/watch\.js)\b/.test(cmd);
+  if (hasPrismBrand && hasDaemonScript) return true;
+  // 宿主以 sidecars/daemon 为工作目录拉起时，命令行为 node main.mjs 或 Antigravity --import=.../sidecar_sdk/register_loader.js main.mjs
+  const hasRelativeMain = /(?:^|[\s"'=])main\.mjs(?:$|[\s"'])/.test(cmd);
+  if (
+    hasRelativeMain &&
+    /(?:^|\s|\/)(?:node|nodejs)(?:\.exe)?(?:\s|"|'|$)|sidecar_sdk\/register_loader\.js\b/.test(cmd)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export class PrismDaemon {
   constructor({
     rootDir = DEFAULT_ROOT_DIR,
@@ -211,7 +483,9 @@ export class PrismDaemon {
     metricsProvider = null,
     thoughtService = null,
     omniExecHooks = null,
+    sidebarService = null,
     relaunchHooks = null,
+    daemonPidVerifier = null,
     noPortRelaunchThresholdMs = 8000,
     shortcutCheckIntervalMs = 300000,
     silent = false,
@@ -224,6 +498,8 @@ export class PrismDaemon {
     this.enabledCheck = enabledCheck;
     this.silent = Boolean(silent);
     this.cdp = require(path.join(this.rootDir, 'cdp.js'));
+    this._loadedCdpVerifier = typeof this.cdp?.isExpectedDaemonProcess === 'function' ? this.cdp.isExpectedDaemonProcess : null;
+    this._daemonPidVerifier = typeof daemonPidVerifier === 'function' ? daemonPidVerifier : null;
     this._cdpFileSig = this._readCdpFileSig();
     this._selfConfigWriteUntil = 0;
     this._configSeq = 0;
@@ -235,6 +511,8 @@ export class PrismDaemon {
     this.browserSession = null;
     this.browserPort = null;
     this._discoverTimer = null;
+    this._reloadTimer = null;
+    this._managedTimers = new Set();
     this._pendingTick = false;
     this.running = false;
     this.busy = false;
@@ -242,17 +520,28 @@ export class PrismDaemon {
     this.fsw = null;
     this.injectExpr = '';
     this.omniExpr = '';
+    this.sidebarExpr = '';
     this.codeHash = '';
     this.ownerToken = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     this.pidFile = path.join(this.rootDir, '.daemon.pid');
     this.logFile = path.join(this.rootDir, 'daemon.log');
     this._lazyStore = null;
     this._lazyUsage = null;
+    this._lazyLsClient = null;
+    this._backendSummariesCache = null;
+    this._backendSummariesAt = 0;
+    this._storageHealthCache = null;
+    this._storageHealthAt = 0;
+    this._lastTelemetryActivityAt = 0;
+    this._telemetryInFlight = 0;
     this._customMetricsProvider = metricsProvider;
     this._lazyThoughtService = thoughtService;
     this.omniServer = null;
     this._omniServerPromise = null;
     this._omniExecHooks = omniExecHooks;
+    this.sidebarService = sidebarService;
+    this._sidebarServicePromise = null;
+    this._sidebarStopped = false;
     this._relaunchHooks = relaunchHooks;
     this.noPortRelaunchThresholdMs = Math.max(50, Number(noPortRelaunchThresholdMs) || 8000);
     this.shortcutCheckIntervalMs = Math.max(1000, Number(shortcutCheckIntervalMs) || 300000);
@@ -300,7 +589,87 @@ export class PrismDaemon {
     return null;
   }
 
+  async _handleStorageAction(action, _testOverrides = null) {
+    try {
+      const modUrl = new URL('./conversation-archive.mjs', import.meta.url);
+      const arch = await import(modUrl.href);
+      const now = Number.isFinite(_testOverrides?.now) ? _testOverrides.now : Date.now();
+      if (action === 'storage-health' && this._storageHealthCache && now - this._storageHealthAt < 300000) {
+        return this._storageHealthCache;
+      }
+      const convDir = _testOverrides?.convDir || arch.getDefaultConversationsDir();
+      const archiveDir = _testOverrides?.archiveDir || arch.getDefaultArchiveDir();
+      let liveSummaries = null;
+      const existingIdx = arch.loadCatalogIndex(archiveDir);
+      const parsedUpdatedAt = existingIdx?.updatedAt ? Date.parse(existingIdx.updatedAt) : NaN;
+      const idxAgeMs = Number.isFinite(parsedUpdatedAt) ? Math.max(0, now - parsedUpdatedAt) : Infinity;
+
+      if (action === 'prepare-archive' || !existingIdx || idxAgeMs > 1800000) {
+        // Reuse already-warm in-memory summaries first to avoid extra RPC traffic
+        const warmReaderSums = this._lazyStore?.client?.reader?.summaries;
+        if (action !== 'prepare-archive' && warmReaderSums && Object.keys(warmReaderSums).length > 0) {
+          liveSummaries = warmReaderSums;
+        } else {
+          this._telemetryInFlight = (this._telemetryInFlight || 0) + 1;
+          this._lastTelemetryActivityAt = Date.now();
+          try {
+            const client = await this.ensureLsClient();
+            const raw = await client.call('GetAllCascadeTrajectories', { excludeSubtrajectories: false });
+            if (raw?.trajectorySummaries && Object.keys(raw.trajectorySummaries).length > 0) {
+              liveSummaries = raw.trajectorySummaries;
+            }
+          } catch {
+          } finally {
+            this._telemetryInFlight = Math.max(0, (this._telemetryInFlight || 1) - 1);
+            this._lastTelemetryActivityAt = Date.now();
+          }
+        }
+        if (liveSummaries) {
+          try { arch.saveCatalogIndex(archiveDir, liveSummaries); } catch {}
+        }
+      }
+
+      const scan = arch.scanConversationStorage({
+        convDir,
+        archiveDir,
+        summaries: liveSummaries,
+        subagentMaxAgeHours: action === 'prepare-archive' ? 1 : 6,
+        now,
+      });
+      const base = {
+        ok: true,
+        action,
+        totalMb: scan.totalMb,
+        conversationCount: scan.conversationCount,
+        mainCount: scan.mainCount,
+        mainMb: scan.mainMb,
+        subagentCount: scan.subagentCount,
+        subagentMb: scan.subagentMb,
+        archivableSubagentCount: scan.archivableSubagentCount,
+        archivableSubagentMb: scan.archivableSubagentMb,
+        warn: scan.warn,
+        archiveDir: scan.archiveDir,
+      };
+      if (action === 'prepare-archive') {
+        const scriptPath = path.join(this.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
+        const helpers = arch.writeHelperScripts({ scriptPath, archiveDir });
+        // Do not overwrite 6h storage-health cache with prepare-archive's 1h threshold view
+        this._storageHealthCache = null;
+        this._storageHealthAt = 0;
+        return { ...base, ...helpers };
+      }
+      this._storageHealthCache = base;
+      this._storageHealthAt = now;
+      return base;
+    } catch (err) {
+      return { ok: false, action, error: sanitizeSecretText(err?.message || err) };
+    }
+  }
+
   async executeRepoAction(rawInput = {}) {
+    if (rawInput?.action === 'storage-health' || rawInput?.action === 'prepare-archive') {
+      return this._handleStorageAction(rawInput.action);
+    }
     const action = rawInput?.action === 'pull' || rawInput?.action === 'sync' ? 'pull' : 'status';
     const repoDir = this.resolveGitRepoDir();
     if (!repoDir) {
@@ -526,6 +895,7 @@ export class PrismDaemon {
         delete require.cache[require.resolve(cdpPath)];
       } catch {}
       this.cdp = require(cdpPath);
+      this._loadedCdpVerifier = typeof this.cdp?.isExpectedDaemonProcess === 'function' ? this.cdp.isExpectedDaemonProcess : null;
       this._cdpFileSig = nextSig;
     }
     this.injectExpr = this.cdp.buildInjectExpression();
@@ -537,6 +907,14 @@ export class PrismDaemon {
     } else {
       this.omniExpr = '';
     }
+    const shouldBuildSidebar =
+      typeof this.cdp.buildSidebarStudioExpression === 'function' &&
+      (typeof this.cdp.readConfig !== 'function' || this._isSidebarStudioEnabled());
+    if (shouldBuildSidebar) {
+      this.sidebarExpr = this._buildSidebarExprForCurrentClient();
+    } else {
+      this.sidebarExpr = '';
+    }
     return this.injectExpr;
   }
 
@@ -545,6 +923,229 @@ export class PrismDaemon {
       return fs.existsSync(path.join(this.rootDir, 'vendor', 'omni-viewer', 'omni-client.js'));
     } catch {
       return false;
+    }
+  }
+
+  _hasSafeV2SidebarClientFile() {
+    try {
+      const p = path.join(this.rootDir, 'vendor', 'sidebar-studio', 'sidebar-client.js');
+      if (!fs.existsSync(p)) return false;
+      const src = fs.readFileSync(p, 'utf8');
+      if (typeof this.cdp?.isSafeV2SidebarClientSource === 'function') {
+        return this.cdp.isSafeV2SidebarClientSource(src);
+      }
+      // 严禁挂载任何含旧版全局权限写入（setPrefValue/setPrefValues 任意形式）的客户端，仅放行 v2 零全局写渲染端
+      if (!src.includes('SIDEBAR_STUDIO_CLIENT_V2')) return false;
+      if (/setPrefValues?/i.test(src)) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  _isSidebarStudioEnabled() {
+    try {
+      return this.cdp?.readConfig?.()?.sidebarStudio === 'on';
+    } catch {
+      return false;
+    }
+  }
+
+  _isTelemetryDisabled() {
+    try {
+      return this.cdp?.readConfig?.()?.telemetryModule === 'off';
+    } catch {
+      return false;
+    }
+  }
+
+  _releaseIdleTelemetry(force = false) {
+    if (!this._lazyStore && !this._lazyUsage && !this._lazyLsClient && !this._backendSummariesCache) {
+      return false;
+    }
+    if ((this._telemetryInFlight || 0) > 0) {
+      return false;
+    }
+    if (!force) {
+      const idleMs = Date.now() - (this._lastTelemetryActivityAt || 0);
+      if (idleMs < 120000) return false;
+      if (
+        this._lazyUsage?.syncing ||
+        this._lazyUsage?.ledger?.diskWrites > 0 ||
+        this._lazyUsage?.ledger?.diskSummaryPending ||
+        this._lazyStore?.background?.active
+      ) {
+        return false;
+      }
+    }
+    const storeClient = this._lazyStore?.client || null;
+    const lsClient = this._lazyLsClient && this._lazyLsClient !== storeClient ? this._lazyLsClient : null;
+    const targets = [this._lazyUsage, this._lazyStore, lsClient];
+    this._lazyUsage = null;
+    this._lazyStore = null;
+    this._lazyLsClient = null;
+    this._backendSummariesCache = null;
+    this._backendSummariesAt = 0;
+    for (const svc of targets) {
+      if (!svc) continue;
+      try {
+        if (typeof svc.dispose === 'function') svc.dispose();
+        else if (typeof svc.close === 'function') svc.close();
+      } catch {}
+    }
+    return true;
+  }
+
+  _buildSidebarCleanupExpression(force = false) {
+    const residueGuard = force
+      ? ''
+      : `const hasResidue = Boolean(
+          window.__agPrismSidebar ||
+          document.getElementById('ag-prism-sidebar-studio-css') ||
+          document.querySelector('[data-ag-prism-sidebar-owned="1"], .ag-prism-sidebar-studio, .ag-prism-sidebar-rail, .ag-prism-sidebar-popover, .ag-prism-sidebar-modal')
+        );
+        if (!hasResidue) return { ok: true, status: 'clean' };`;
+    return `(() => {
+      try {
+        ${residueGuard}
+        if (document.documentElement) {
+          document.documentElement.setAttribute('data-ag-prism-sidebar-studio', 'off');
+        }
+        try { window.__agPrismSidebar?.destroy?.({ preserveRuntimeState: false }); } catch {}
+        try { delete window.__agPrismSidebar; } catch {}
+        try { delete window.${SIDEBAR_BINDING}; } catch {}
+        document.getElementById('ag-prism-sidebar-studio-css')?.remove();
+        document.querySelectorAll('[data-ag-prism-sidebar-owned="1"], .ag-prism-sidebar-studio, .ag-prism-sidebar-rail, .ag-prism-sidebar-popover, .ag-prism-sidebar-modal').forEach((n) => n.remove());
+        if (document.documentElement) {
+          ['data-ag-prism-mode', 'data-ag-prism-chat-kind', 'data-ag-prism-chat-telemetry', 'data-ag-cs-space', 'data-ag-cs-space-palette', 'data-ag-cs-space-accent'].forEach((a) => document.documentElement.removeAttribute(a));
+        }
+        return { ok: true, status: 'cleaned' };
+      } catch {}
+      return { ok: true, status: 'disabled' };
+    })()`;
+  }
+
+  _findCurrentMainDefaultContextId(entry) {
+    if (!entry?.contextFrames || !entry.mainFrameId) return null;
+    let found = null;
+    for (const [id, meta] of entry.contextFrames.entries()) {
+      if (
+        meta &&
+        meta.isDefault === true &&
+        meta.type === 'default' &&
+        meta.frameId === entry.mainFrameId &&
+        (typeof meta.docGen !== 'number' || meta.docGen === entry.sidebarDocument)
+      ) {
+        found = id;
+      }
+    }
+    return found;
+  }
+
+  _markSidebarHostVerified(entry, expectedDoc, ok) {
+    if (!entry || expectedDoc !== entry.sidebarDocument) return;
+    if (ok) {
+      entry.sidebarHostVerified = true;
+      entry.sidebarVerifiedDocument = expectedDoc;
+      entry.sidebarHostContextId = this._findCurrentMainDefaultContextId(entry);
+    } else {
+      entry.sidebarHostVerified = false;
+      entry.sidebarVerifiedDocument = -1;
+      entry.sidebarHostContextId = null;
+    }
+  }
+
+  _buildSidebarExprForCurrentClient() {
+    if (typeof this.cdp.buildSidebarStudioExpression !== 'function') return '';
+    const meta = this._getSidebarServerMeta();
+    return this._hasSafeV2SidebarClientFile()
+      ? this.cdp.buildSidebarStudioExpression(meta)
+      : this.cdp.buildSidebarStudioExpression(meta, '');
+  }
+
+  _pickActiveSidebarHostEntry() {
+    for (const entry of this.sessions.values()) {
+      if (entry && !entry.session?.closed && entry.sidebarHostVerified === true) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  _getSidebarServerMeta() {
+    return {
+      binding: SIDEBAR_BINDING,
+      version: this.cdp?.PLUGIN_VERSION || '1.0.2',
+      schemaVersion: 2,
+      serviceReady: !this._sidebarStopped && typeof this.sidebarService?.handleRpc === 'function' &&
+        !this.sidebarService.getBootDiagnostic?.(),
+    };
+  }
+
+  async _ensureSidebarBinding(entry, timeoutMs = 2600, force = false) {
+    if (!entry || entry.session.closed) return false;
+    if (!force && entry.sidebarBindingAdded) return true;
+    const ok = await entry.session
+      .send('Runtime.addBinding', { name: SIDEBAR_BINDING }, timeoutMs)
+      .then(() => true)
+      .catch(() => false);
+    if (ok) entry.sidebarBindingAdded = true;
+    return ok;
+  }
+
+  async _removeSidebarBinding(entry, timeoutMs = 2000) {
+    if (!entry || entry.session.closed) return;
+    if (!entry.sidebarBindingAdded) return;
+    await entry.session
+      .send('Runtime.removeBinding', { name: SIDEBAR_BINDING }, timeoutMs)
+      .catch(() => {});
+    entry.sidebarBindingAdded = false;
+  }
+
+  async ensureSidebarService() {
+    if (this._sidebarStopped) return null;
+    if (this.sidebarService) return this.sidebarService;
+    if (this._sidebarServicePromise) return this._sidebarServicePromise;
+    this._sidebarServicePromise = (async () => {
+      const svcPath = path.join(this.rootDir, 'vendor', 'sidebar-studio', 'sidebar-service.mjs');
+      if (!fs.existsSync(svcPath)) {
+        return null;
+      }
+      const mod = await import(pathToFileURL(svcPath).href);
+      const Ctor = mod?.SidebarStudioService || mod?.default;
+      if (this._sidebarStopped || typeof Ctor !== 'function') return null;
+
+      let hostAdapter = null;
+      const adapterPath = path.join(this.rootDir, 'vendor', 'sidebar-studio', 'live-host-adapter.mjs');
+      if (fs.existsSync(adapterPath)) {
+        try {
+          const adapterMod = await import(pathToFileURL(adapterPath).href);
+          if (typeof adapterMod?.createLiveHostAdapter === 'function') {
+            hostAdapter = adapterMod.createLiveHostAdapter({
+              logger: (m) => this.log(m),
+              evaluateInHost: async (expr, timeoutMs = 4500) => {
+                const entry = this._pickActiveSidebarHostEntry();
+                if (!entry || entry.session.closed) {
+                  return { ok: false, error: 'no-verified-host-window' };
+                }
+                return entry.session.evaluate(expr, true, timeoutMs);
+              },
+            });
+          }
+        } catch {}
+      }
+
+      const svc = new Ctor({ logger: (m) => this.log(m), hostAdapter });
+      this.sidebarService = svc;
+      if (typeof this.cdp.buildSidebarStudioExpression === 'function') {
+        this.sidebarExpr = this._buildSidebarExprForCurrentClient();
+      }
+      return svc;
+    })();
+    try {
+      return await this._sidebarServicePromise;
+    } finally {
+      this._sidebarServicePromise = null;
     }
   }
 
@@ -681,6 +1282,7 @@ export class PrismDaemon {
       const page = await client.call('GetCascadeTrajectoryGeneratorMetadata', {
         cascadeId: id,
         generatorMetadataOffset: curOffset,
+        includeMessages: false,
       });
       const chunk = page?.generatorMetadata || page?.generatorMetadatas || [];
       if (page?.numTotalGeneratorMetadata !== undefined && page?.numTotalGeneratorMetadata !== null) {
@@ -707,7 +1309,7 @@ export class PrismDaemon {
 
   async _fetchBackendTrajectorySummaries(client, usageCore, force = false) {
     const now = Date.now();
-    if (!force && this._backendSummariesCache && now - this._backendSummariesAt < 8000) {
+    if (!force && this._backendSummariesCache && now - this._backendSummariesAt < 15000) {
       return this._backendSummariesCache;
     }
     try {
@@ -865,6 +1467,7 @@ export class PrismDaemon {
             const page = await client.call('GetCascadeTrajectoryGeneratorMetadata', {
               cascadeId: id,
               generatorMetadataOffset: curOffset,
+              includeMessages: false,
             });
             const chunk = page?.generatorMetadata || page?.generatorMetadatas || [];
             if (page?.numTotalGeneratorMetadata !== undefined && page?.numTotalGeneratorMetadata !== null) {
@@ -961,9 +1564,9 @@ export class PrismDaemon {
     const expandedPatch =
       typeof this.cdp.reconcileConfigAliases === 'function' ? this.cdp.reconcileConfigAliases(validPatch) : validPatch;
     const next = { ...current, ...expandedPatch };
-    this._configSeq += 1;
     this._selfConfigWriteUntil = Date.now() + 650;
-    fs.writeFileSync(cfgPath, JSON.stringify(next, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+    writeFileAtomicSync(cfgPath, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
+    this._configSeq += 1;
     return true;
   }
 
@@ -982,18 +1585,31 @@ export class PrismDaemon {
   _isTrustedMainFrameBindingCall(entry, executionContextId) {
     if (!entry) return false;
     const hasCtxId = typeof executionContextId === 'number';
-    if (hasCtxId && entry.contextFrames && entry.contextFrames.has(executionContextId)) {
-      const meta = entry.contextFrames.get(executionContextId);
-      if (!meta.isDefault) return false;
+    const contexts = entry.contextFrames instanceof Map ? entry.contextFrames : null;
+    const meta = hasCtxId && contexts ? contexts.get(executionContextId) : null;
+
+    if (meta) {
+      if (meta.isDefault !== true) return false;
       if (meta.type && meta.type !== 'default') return false;
-      if (entry.mainFrameId && meta.frameId && meta.frameId !== entry.mainFrameId) {
+      if (!entry.mainFrameId || !meta.frameId || meta.frameId !== entry.mainFrameId) {
         return false;
       }
       return true;
     }
-    if (entry.hasFrameTree) {
-      if (!hasCtxId) return false;
-      if (entry.contextFrames && entry.contextFrames.size > 0) return false;
+
+    // 真实帧树、已识别主帧、已登记上下文映射或带有未登记/已销毁 executionContextId 时一律 fail-closed
+    if (entry.hasFrameTree || entry.mainFrameId) {
+      return false;
+    }
+    if (contexts && contexts.size > 0) {
+      return false;
+    }
+    if (hasCtxId) {
+      return false;
+    }
+    // 非测试运行时未拿到帧树时 fail-closed；仅兼容无帧树且无上下文 ID 的极简单测 mock
+    if (!isAutomatedTestRuntime()) {
+      return false;
     }
     return true;
   }
@@ -1019,11 +1635,40 @@ export class PrismDaemon {
           perEntryAck.set(item, entryAck);
         }
 
+        const restoreAllAcks = () => {
+          for (const [item, ack] of perEntryAck.entries()) {
+            if (ack > 0) {
+              item.pendingAckEpoch = Math.max(Number(item.pendingAckEpoch || 0), ack);
+            }
+          }
+        };
+
         await this.ensureOmniServer().catch(() => null);
+        if (this._configSeq !== snapSeq) {
+          restoreAllAcks();
+          this._broadcastPending = true;
+          continue;
+        }
+        const preCfg = typeof this.cdp.readConfig === 'function' ? this.cdp.readConfig() : {};
+        const preSidebarEnabled = preCfg?.sidebarStudio === 'on';
+        if (preSidebarEnabled) {
+          await this.ensureSidebarService().catch(() => null);
+          if (this._configSeq !== snapSeq) {
+            restoreAllAcks();
+            this._broadcastPending = true;
+            continue;
+          }
+        }
         // Warm-cache rebuild updates `this.injectExpr` bootCfg in < 3ms without re-minifying modules!
         this.rebuildBundle();
         const injectSnap = this.injectExpr;
         const omniSnap = this.omniExpr;
+        const sidebarSnap = this.sidebarExpr;
+        const currentCfg = typeof this.cdp.readConfig === 'function' ? this.cdp.readConfig() : {};
+        if (currentCfg?.telemetryModule === 'off') {
+          this._releaseIdleTelemetry(true);
+        }
+        const sidebarEnabled = currentCfg?.sidebarStudio === 'on';
         const canFastRefresh = typeof this.cdp.buildConfigRefreshExpression === 'function';
         const baseRefreshExpr = canFastRefresh ? this.cdp.buildConfigRefreshExpression() : null;
         if (activeItems.length === 0) continue;
@@ -1033,6 +1678,18 @@ export class PrismDaemon {
             this._runEntryExclusive(entry, async () => {
               if (!entry || entry.session.closed) return;
               const entryAck = perEntryAck.get(entry) || 0;
+              const abortIfStale = () => {
+                if (this._configSeq !== snapSeq) {
+                  if (entryAck > 0) {
+                    entry.pendingAckEpoch = Math.max(Number(entry.pendingAckEpoch || 0), entryAck);
+                  }
+                  this._broadcastPending = true;
+                  return true;
+                }
+                return entry.session.closed;
+              };
+              if (abortIfStale()) return;
+
               const refreshExpr =
                 canFastRefresh && entryAck > 0
                   ? this.cdp.buildConfigRefreshExpression(null, { __ackEpoch: entryAck })
@@ -1041,17 +1698,40 @@ export class PrismDaemon {
               let refreshedFast = false;
               let skippedStale = false;
               if (refreshExpr) {
+                if (abortIfStale()) return;
                 const fastRes = await entry.session.evaluate(refreshExpr).catch(() => null);
                 if (fastRes && fastRes.refreshed) {
                   refreshedFast = true;
                   skippedStale = Boolean(fastRes.skippedStale);
                 }
               }
+              if (abortIfStale()) return;
               if (!refreshedFast && !entry.session.closed) {
                 await entry.session.evaluate(injectSnap).catch(() => {});
               }
-              if (omniSnap && !skippedStale && !entry.session.closed) {
+              if (abortIfStale()) return;
+              const omniChanged = Boolean(omniSnap && (entry.lastOmniExpr !== omniSnap || !entry.omniScriptId));
+              if (omniSnap && !skippedStale && !entry.session.closed && (!refreshedFast || omniChanged)) {
                 await entry.session.evaluate(omniSnap).catch(() => {});
+              }
+              if (abortIfStale()) return;
+              const hadSidebar = Boolean(entry.sidebarScriptId || entry.sidebarMounted || entry.sidebarBindingAdded);
+              if (sidebarEnabled) {
+                if (!skippedStale && !entry.session.closed) {
+                  await this._ensureSidebarBinding(entry);
+                  if (sidebarSnap && !entry.session.closed) {
+                    await entry.session.evaluate(sidebarSnap).catch(() => {});
+                    entry.sidebarMounted = true;
+                  }
+                }
+              } else if (hadSidebar && !skippedStale && !entry.session.closed) {
+                // on -> off 切换：移除绑定并仅下发轻量清理脚本，绝不下发完整 sidebar-client.js 载荷
+                await this._removeSidebarBinding(entry);
+                await entry.session.evaluate(this._buildSidebarCleanupExpression(true)).catch(() => {});
+                entry.sidebarMounted = false;
+              } else {
+                await this._removeSidebarBinding(entry);
+                entry.sidebarMounted = false;
               }
 
               // Coalesce persistent NewDocument script replacement if a newer mutation is already queued!
@@ -1070,18 +1750,41 @@ export class PrismDaemon {
               if (addRes && addRes.identifier) {
                 entry.scriptId = addRes.identifier;
               }
-              if (entry.omniScriptId) {
-                await entry.session
-                  .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId })
-                  .catch(() => {});
-                entry.omniScriptId = null;
-              }
-              if (omniSnap && !entry.session.closed) {
+              if (!omniSnap) {
+                if (entry.omniScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId })
+                    .catch(() => {});
+                  entry.omniScriptId = null;
+                }
+                entry.lastOmniExpr = '';
+              } else if (omniChanged && !entry.session.closed) {
+                if (entry.omniScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId })
+                    .catch(() => {});
+                  entry.omniScriptId = null;
+                }
                 const omniAdd = await entry.session
                   .send('Page.addScriptToEvaluateOnNewDocument', { source: omniSnap })
                   .catch(() => null);
                 if (omniAdd && omniAdd.identifier) {
                   entry.omniScriptId = omniAdd.identifier;
+                  entry.lastOmniExpr = omniSnap;
+                }
+              }
+              if (entry.sidebarScriptId) {
+                await entry.session
+                  .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId })
+                  .catch(() => {});
+                entry.sidebarScriptId = null;
+              }
+              if (sidebarSnap && sidebarEnabled && !entry.session.closed) {
+                const sbAdd = await entry.session
+                  .send('Page.addScriptToEvaluateOnNewDocument', { source: sidebarSnap })
+                  .catch(() => null);
+                if (sbAdd && sbAdd.identifier) {
+                  entry.sidebarScriptId = sbAdd.identifier;
                 }
               }
             })
@@ -1150,9 +1853,18 @@ export class PrismDaemon {
     return this._runEntryExclusive(entry, async () => {
       if (!entry || entry.session.closed) return null;
       await this.ensureOmniServer().catch(() => null);
+      const sidebarEnabledInit = this._isSidebarStudioEnabled();
+      if (sidebarEnabledInit) {
+        await this.ensureSidebarService().catch(() => null);
+      }
       if (!this.injectExpr) this.rebuildBundle();
-      else if (this.omniServer && !this.omniExpr && typeof this.cdp.buildOmniClientExpression === 'function') {
-        this.omniExpr = this.cdp.buildOmniClientExpression(this.omniServer.getServerInfo());
+      else {
+        if (this.omniServer && !this.omniExpr && typeof this.cdp.buildOmniClientExpression === 'function') {
+          this.omniExpr = this.cdp.buildOmniClientExpression(this.omniServer.getServerInfo());
+        }
+        if (sidebarEnabledInit && !this.sidebarExpr && typeof this.cdp.buildSidebarStudioExpression === 'function') {
+          this.sidebarExpr = this._buildSidebarExprForCurrentClient();
+        }
       }
       if (entry.scriptId) {
         await entry.session
@@ -1166,7 +1878,9 @@ export class PrismDaemon {
       if (addRes && addRes.identifier) {
         entry.scriptId = addRes.identifier;
       }
+      const sidebarDocument = entry.sidebarDocument;
       const mainRes = await entry.session.evaluate(this.injectExpr);
+      this._markSidebarHostVerified(entry, sidebarDocument, mainRes?.status === 'ok');
 
       if (mainRes && mainRes.status === 'skipped-non-host') {
         if (entry.scriptId) {
@@ -1181,6 +1895,13 @@ export class PrismDaemon {
             .catch(() => {});
           entry.omniScriptId = null;
         }
+        if (entry.sidebarScriptId) {
+          await entry.session
+            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId })
+            .catch(() => {});
+          entry.sidebarScriptId = null;
+        }
+        entry.sidebarMounted = false;
         return mainRes;
       }
 
@@ -1196,9 +1917,48 @@ export class PrismDaemon {
           .catch(() => null);
         if (omniAdd && omniAdd.identifier) {
           entry.omniScriptId = omniAdd.identifier;
+          entry.lastOmniExpr = this.omniExpr;
         }
         await entry.session.evaluate(this.omniExpr).catch(() => null);
+      } else {
+        entry.lastOmniExpr = '';
       }
+      const hadSidebarBefore = Boolean(entry.sidebarScriptId || entry.sidebarMounted);
+      if (entry.sidebarScriptId) {
+        await entry.session
+          .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId })
+          .catch(() => {});
+        entry.sidebarScriptId = null;
+      }
+      const sidebarEnabledNow = this._isSidebarStudioEnabled();
+      if (sidebarEnabledNow) {
+        if (!this.sidebarService) {
+          await this.ensureSidebarService().catch(() => null);
+        }
+        await this._ensureSidebarBinding(entry);
+        if (!this.sidebarExpr && typeof this.cdp.buildSidebarStudioExpression === 'function') {
+          this.sidebarExpr = this._buildSidebarExprForCurrentClient();
+        }
+        if (this.sidebarExpr) {
+          const sbAdd = await entry.session
+            .send('Page.addScriptToEvaluateOnNewDocument', { source: this.sidebarExpr })
+            .catch(() => null);
+          if (sbAdd && sbAdd.identifier) {
+            entry.sidebarScriptId = sbAdd.identifier;
+          }
+          await entry.session.evaluate(this.sidebarExpr).catch(() => null);
+          entry.sidebarMounted = true;
+        }
+      } else {
+        await this._removeSidebarBinding(entry);
+        // 关闭态免向新页面下发完整 sidebar-client.js 载荷；仅对已有残留或此前已挂载页面执行轻量清理
+        await entry.session.evaluate(this._buildSidebarCleanupExpression(hadSidebarBefore)).catch(() => null);
+        entry.sidebarMounted = false;
+      }
+      entry.lastVerifyAt = Date.now();
+      entry.healthyStreak = 1;
+      entry.verifyDirty = false;
+      entry.lastVerifiedCodeHash = this.codeHash || '';
       return mainRes;
     });
   }
@@ -1270,16 +2030,33 @@ export class PrismDaemon {
       if (!reqId) return;
 
       let result;
-      try {
-        const collector = await this.ensureMetricsCollector();
-        result = await collector(parsed.input || {});
-      } catch (err) {
+      if (!this._customMetricsProvider && this._isTelemetryDisabled()) {
+        this._releaseIdleTelemetry(true);
         result = {
-          connection: 'offline',
-          error: err?.message || 'Metrics unavailable',
+          connection: 'disabled',
           speed: null,
           groups: [],
         };
+      } else {
+        this._telemetryInFlight = (this._telemetryInFlight || 0) + 1;
+        this._lastTelemetryActivityAt = Date.now();
+        try {
+          const collector = await this.ensureMetricsCollector();
+          result = await collector(parsed.input || {});
+        } catch (err) {
+          result = {
+            connection: 'offline',
+            error: err?.message || 'Metrics unavailable',
+            speed: null,
+            groups: [],
+          };
+        } finally {
+          this._telemetryInFlight = Math.max(0, (this._telemetryInFlight || 1) - 1);
+          this._lastTelemetryActivityAt = Date.now();
+          if (!this._customMetricsProvider && this._isTelemetryDisabled() && this._telemetryInFlight === 0) {
+            this._releaseIdleTelemetry(true);
+          }
+        }
       }
       const safeId = Number(reqId) | 0;
       const expr = `window.__agPrismMetricsResolve && window.__agPrismMetricsResolve(${safeId}, ${serializeJsonForEval(result)})`;
@@ -1329,6 +2106,41 @@ export class PrismDaemon {
         } else if (action === 'test-connection') {
           result = await svc.testConnection(input);
         } else if (action === 'translate-stream') {
+          let lastSent = '';
+          let pendingPartial = null;
+          let sendingPartial = false;
+          const flushPartial = async () => {
+            if (sendingPartial) return;
+            sendingPartial = true;
+            try {
+              while (pendingPartial !== null) {
+                if (!entry || entry.session.closed) {
+                  pendingPartial = null;
+                  break;
+                }
+                const target = pendingPartial;
+                pendingPartial = null;
+                if (target === lastSent) continue;
+                const payload =
+                  lastSent.length > 0 && target.startsWith(lastSent)
+                    ? { a: target.slice(lastSent.length), o: lastSent.length }
+                    : target;
+                const safeId = Number(reqId) | 0;
+                const chunkExpr = `window.__agPrismThoughtOnChunk && window.__agPrismThoughtOnChunk(${safeId}, ${serializeJsonForEval(payload)})`;
+                const chunkParams = { expression: chunkExpr, returnByValue: true };
+                if (executionContextId) chunkParams.contextId = executionContextId;
+                try {
+                  await entry.session.send('Runtime.evaluate', chunkParams);
+                  lastSent = target;
+                } catch {
+                  // Delivery failed: reset cursor so the next chunk resyncs cleanly via full-string reset frame
+                  lastSent = '';
+                }
+              }
+            } finally {
+              sendingPartial = false;
+            }
+          };
           result = await svc.translateThought({
             text: input.text || '',
             mode: input.mode || 'ai',
@@ -1338,11 +2150,8 @@ export class PrismDaemon {
             bypassCache: Boolean(input.bypassCache),
             onPartial: (partialText) => {
               if (!entry || entry.session.closed) return;
-              const safeId = Number(reqId) | 0;
-              const chunkExpr = `window.__agPrismThoughtOnChunk && window.__agPrismThoughtOnChunk(${safeId}, ${serializeJsonForEval(partialText)})`;
-              const chunkParams = { expression: chunkExpr, returnByValue: true };
-              if (executionContextId) chunkParams.contextId = executionContextId;
-              void entry.session.send('Runtime.evaluate', chunkParams).catch(() => {});
+              pendingPartial = String(partialText || '');
+              void flushPartial();
             },
           });
         } else {
@@ -1374,6 +2183,8 @@ export class PrismDaemon {
       }
       const reqId = parsed && Number.isSafeInteger(parsed.id) ? parsed.id : null;
       if (reqId === null) return;
+      this._telemetryInFlight = (this._telemetryInFlight || 0) + 1;
+      this._lastTelemetryActivityAt = Date.now();
       let result;
       try {
         result = await this.fetchUsageRollupBatch(parsed.items, {
@@ -1382,6 +2193,9 @@ export class PrismDaemon {
         });
       } catch (err) {
         result = { ok: false, error: sanitizeSecretText(err?.message || err), records: [] };
+      } finally {
+        this._telemetryInFlight = Math.max(0, (this._telemetryInFlight || 1) - 1);
+        this._lastTelemetryActivityAt = Date.now();
       }
       if (!entry.session.closed) {
         const safeId = Number(reqId) | 0;
@@ -1425,6 +2239,67 @@ export class PrismDaemon {
         if (executionContextId) evalParams.contextId = executionContextId;
         await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
       }
+      return;
+    }
+
+    if (name === SIDEBAR_BINDING) {
+      const context = typeof executionContextId === 'number' ? entry.contextFrames?.get(executionContextId) : undefined;
+      const isCurrentHost = () => {
+        if (this._sidebarStopped || entry.session.closed || entry.sidebarHostVerified !== true) return false;
+        if (!context || context.isDefault !== true || context.type !== 'default') return false;
+        if (!entry.mainFrameId || context.frameId !== entry.mainFrameId) return false;
+        if (entry.contextFrames.get(executionContextId) !== context) return false;
+        if (typeof entry.sidebarDocument === 'number') {
+          if (typeof entry.sidebarVerifiedDocument === 'number' && entry.sidebarVerifiedDocument !== entry.sidebarDocument) {
+            return false;
+          }
+          if (typeof context.docGen === 'number' && context.docGen !== entry.sidebarDocument) {
+            return false;
+          }
+        }
+        if (typeof entry.sidebarHostContextId === 'number' && entry.sidebarHostContextId !== executionContextId) {
+          return false;
+        }
+        return true;
+      };
+      if (!isCurrentHost()) return;
+      // 关闭态在 JSON.parse 之前直接硬拦截，杜绝关闭态触发解析或拉起后台服务
+      if (this.cdp?.readConfig?.()?.sidebarStudio !== 'on') {
+        return { ok: false, error: 'Chat Beta is disabled' };
+      }
+      if (typeof payload !== 'string') return;
+      const SIDEBAR_MAX_PAYLOAD_BYTES = 12 * 1024 * 1024;
+      if (payload.length > SIDEBAR_MAX_PAYLOAD_BYTES) return;
+      const payloadBytes = Buffer.byteLength(payload, 'utf8');
+      if (payloadBytes > SIDEBAR_MAX_PAYLOAD_BYTES) return;
+      let parsed;
+      try { parsed = JSON.parse(payload); } catch { return; }
+      if (!parsed || typeof parsed !== 'object' || !Number.isSafeInteger(parsed.id) || parsed.id < 1) return;
+      if (parsed.action !== 'import-spark-file' && payloadBytes > 128 * 1024) return;
+      const { id, input: _transportCopy, ...request } = parsed;
+      const unavailable = { ok: false, error: {
+        code: 'CAPABILITY_UNAVAILABLE', message: 'Sidebar Studio service unavailable', retryable: true,
+      } };
+      let result = unavailable;
+      try {
+        if (this.cdp?.readConfig?.()?.sidebarStudio === 'on') {
+          const svc = await this.ensureSidebarService();
+          if (!isCurrentHost()) return;
+          if (typeof svc?.handleRpc === 'function') result = await svc.handleRpc(request);
+        } else {
+          result = { ok: false, error: 'Chat Beta is disabled' };
+        }
+      } catch {
+        // 异常不把宿主栈、命令参数或本地路径回传到渲染进程。
+      }
+      if (isCurrentHost()) {
+        const jsonRes = serializeJsonForEval(result);
+        const resolveExpr = `(() => { const r = ${jsonRes}; const b = window.__agPrismSidebarBridge; if (b && typeof b.resolve === 'function') b.resolve(${id}, r); if (typeof window.__agPrismSidebarResolve === 'function' && (!b || window.__agPrismSidebarResolve !== b.resolve)) window.__agPrismSidebarResolve(${id}, r); })()`;
+        const evalParams = { expression: resolveExpr, returnByValue: true };
+        if (executionContextId) evalParams.contextId = executionContextId;
+        await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+      }
+      return result;
     }
   }
 
@@ -1442,38 +2317,93 @@ export class PrismDaemon {
       session,
       scriptId: null,
       omniScriptId: null,
+      sidebarScriptId: null,
+      sidebarBindingAdded: false,
+      sidebarMounted: false,
+      sidebarHostVerified: false,
+      sidebarVerifiedDocument: -1,
+      sidebarHostContextId: null,
+      sidebarDocument: 0,
+      lastOmniExpr: '',
+      lastVerifyAt: 0,
+      healthyStreak: 0,
+      verifyDirty: true,
+      lastVerifiedCodeHash: '',
       mainFrameId: null,
       hasFrameTree: false,
       contextFrames: new Map(),
       pendingAckEpoch: 0,
+      _healTimer: null,
       _opChain: Promise.resolve(),
     };
     this.sessions.set(wsUrl, entry);
 
     session.onClose = () => {
+      if (entry._healTimer) {
+        clearTimeout(entry._healTimer);
+        this._managedTimers?.delete(entry._healTimer);
+        entry._healTimer = null;
+      }
       if (this.sessions.get(wsUrl) === entry) {
         this.sessions.delete(wsUrl);
       }
     };
 
     try {
+      const revokeSidebarHost = () => {
+        entry.sidebarHostVerified = false;
+        entry.sidebarVerifiedDocument = -1;
+        entry.sidebarHostContextId = null;
+        entry.sidebarDocument += 1;
+      };
       session.on('Runtime.executionContextCreated', (params) => {
         const ctx = params?.context;
         if (!ctx || typeof ctx.id !== 'number') return;
         const aux = ctx.auxData && typeof ctx.auxData === 'object' ? ctx.auxData : {};
+        const frameId = typeof aux.frameId === 'string' ? aux.frameId : '';
+        const isDefault = aux.isDefault === true;
+        const type = typeof aux.type === 'string' && aux.type ? aux.type : (isDefault ? 'default' : '');
+        const isMainDefault = Boolean(entry.mainFrameId && frameId === entry.mainFrameId && isDefault && type === 'default');
+        if (isMainDefault) {
+          // 同帧新建默认上下文时撤销旧文档授权并递增文档代际，防止新上下文继承旧授权
+          if (
+            entry.sidebarHostVerified ||
+            (typeof entry.sidebarHostContextId === 'number' && entry.sidebarHostContextId !== ctx.id)
+          ) {
+            revokeSidebarHost();
+            entry.verifyDirty = true;
+            entry.healthyStreak = 0;
+          }
+        }
         entry.contextFrames.set(ctx.id, {
-          frameId: typeof aux.frameId === 'string' ? aux.frameId : '',
-          isDefault: aux.isDefault !== false,
-          type: typeof aux.type === 'string' ? aux.type : 'default',
+          frameId,
+          isDefault,
+          type,
+          docGen: entry.sidebarDocument,
         });
       });
       session.on('Runtime.executionContextDestroyed', (params) => {
         if (typeof params?.executionContextId === 'number') {
-          entry.contextFrames.delete(params.executionContextId);
+          const destroyedId = params.executionContextId;
+          const destroyedMeta = entry.contextFrames.get(destroyedId);
+          entry.contextFrames.delete(destroyedId);
+          const wasMainDefault = Boolean(
+            destroyedMeta &&
+            destroyedMeta.isDefault === true &&
+            destroyedMeta.type === 'default' &&
+            entry.mainFrameId &&
+            destroyedMeta.frameId === entry.mainFrameId
+          );
+          if (destroyedId === entry.sidebarHostContextId || wasMainDefault) {
+            revokeSidebarHost();
+            entry.verifyDirty = true;
+            entry.healthyStreak = 0;
+          }
         }
       });
       session.on('Runtime.executionContextsCleared', () => {
         entry.contextFrames.clear();
+        revokeSidebarHost();
         entry.pendingAckEpoch = 0;
       });
       session.on('Page.frameNavigated', (params) => {
@@ -1481,7 +2411,10 @@ export class PrismDaemon {
         if (frame && !frame.parentId && typeof frame.id === 'string' && frame.id) {
           entry.mainFrameId = frame.id;
           entry.hasFrameTree = true;
+          revokeSidebarHost();
           entry.pendingAckEpoch = 0;
+          entry.verifyDirty = true;
+          entry.healthyStreak = 0;
           if (typeof frame.url === 'string' && frame.url) {
             entry.url = frame.url;
           }
@@ -1505,11 +2438,29 @@ export class PrismDaemon {
       await session.send('Runtime.addBinding', { name: THOUGHT_BINDING });
       await session.send('Runtime.addBinding', { name: USAGE_BINDING });
       await session.send('Runtime.addBinding', { name: OMNI_BINDING });
+      if (this._isSidebarStudioEnabled()) {
+        await session.send('Runtime.addBinding', { name: SIDEBAR_BINDING });
+        entry.sidebarBindingAdded = true;
+      }
 
       const healOnNav = () => {
-        setTimeout(() => {
-          void this.verifyAndHealEntry(entry);
+        if (!this.running || entry.session.closed) return;
+        entry.verifyDirty = true;
+        entry.healthyStreak = 0;
+        if (entry._healTimer) {
+          clearTimeout(entry._healTimer);
+          this._managedTimers?.delete(entry._healTimer);
+          entry._healTimer = null;
+        }
+        const t = setTimeout(() => {
+          entry._healTimer = null;
+          this._managedTimers?.delete(t);
+          if (!this.running || entry.session.closed) return;
+          void this.verifyAndHealEntry(entry, true);
         }, 50);
+        if (typeof t.unref === 'function') t.unref();
+        entry._healTimer = t;
+        this._managedTimers?.add(t);
       };
       session.on('Page.domContentLoadedEventFired', healOnNav);
       session.on('Page.loadEventFired', healOnNav);
@@ -1532,6 +2483,9 @@ export class PrismDaemon {
         if (entry.omniScriptId) {
           await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId });
         }
+        if (entry.sidebarScriptId) {
+          await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId });
+        }
       } catch {}
       session.close();
       this.sessions.delete(wsUrl);
@@ -1539,8 +2493,24 @@ export class PrismDaemon {
     }
   }
 
-  async verifyAndHealEntry(entry) {
+  async verifyAndHealEntry(entry, force = false) {
     if (!entry || entry.session.closed) return { alive: false, ready: false, isHostDom: false };
+    return this._runEntryExclusive(entry, () => this._verifyAndHealEntryUnlocked(entry, force));
+  }
+
+  async _verifyAndHealEntryUnlocked(entry, force = false) {
+    if (!entry || entry.session.closed) return { alive: false, ready: false, isHostDom: false };
+    const now = Date.now();
+    const hashMatches = !this.codeHash || entry.lastVerifiedCodeHash === this.codeHash;
+    if (!force && !entry.verifyDirty && hashMatches && entry.lastVerifyAt > 0 && entry.healthyStreak > 0) {
+      const browserLive = Boolean(this.browserSession && !this.browserSession.closed);
+      const backoffMs = browserLive
+        ? Math.min(15000, 3000 * Math.pow(2, Math.min(3, entry.healthyStreak - 1)))
+        : 4000;
+      if (now - entry.lastVerifyAt < backoffMs) {
+        return { alive: true, ready: true, isHostDom: true, skipped: true };
+      }
+    }
     try {
       const probe = await entry.session.evaluate(
         `(() => {
@@ -1558,6 +2528,8 @@ export class PrismDaemon {
         const st = api && typeof api.getState === 'function' ? api.getState() : null;
         const telMode = st?.cfg?.telemetryModule || 'auto';
         const omniMode = st?.cfg?.omniModule || 'on';
+        const sidebarMode = st?.cfg?.sidebarStudio === 'on' ? 'on' : 'off';
+        const isHome = Boolean(document.querySelector('.agy-home, [data-testid="home-greeting"]'));
         const hasModelBtn = Boolean(document.querySelector('[data-testid="model-selector-trigger"]'));
         const hasPulseBar = Boolean(
           document.querySelector(
@@ -1577,9 +2549,12 @@ export class PrismDaemon {
           hasOmniServerMeta: Boolean(window.__agPrismOmniServerMeta && window.__agPrismOmniServerMeta.baseUrl && window.__agPrismOmniServerMeta.token),
           hasOmni: Boolean(window.__agPrismOmni),
           omniMode,
+          hasSidebarBridge: Boolean(window.__agPrismSidebarBridge && typeof window.__agPrismSidebarBridge.call === 'function'),
+          hasSidebar: Boolean(window.__agPrismSidebar),
+          sidebarMode,
           codeHash: (api && api.codeHash) || '',
           hasLegacyCss: Boolean(document.getElementById('ag-claude-style-css')),
-          needsDashboardSync: Boolean(api && telMode !== 'off' && hasModelBtn && !hasPulseBar),
+          needsDashboardSync: Boolean(api && telMode !== 'off' && !isHome && hasModelBtn && !hasPulseBar),
         };
       })()`,
         false,
@@ -1592,7 +2567,15 @@ export class PrismDaemon {
         !probe.hasOmniBridge ||
         !probe.hasOmniServerMeta ||
         (hasClientOnDisk && probe.omniMode !== 'off' && !probe.hasOmni);
+      const sidebarEnabled = this._isSidebarStudioEnabled();
+      const hasSafeSidebarOnDisk = this._hasSafeV2SidebarClientFile();
+      const needsSidebarHeal =
+        sidebarEnabled && (!probe.hasSidebarBridge || (hasSafeSidebarOnDisk && !probe.hasSidebar));
+      const needsSidebarCleanup =
+        !sidebarEnabled && Boolean(probe.hasSidebar || entry.sidebarScriptId || entry.sidebarMounted || entry.sidebarBindingAdded);
+      let healed = false;
       if (
+        (entry.sidebarHostVerified === false && probe.isHostDom) ||
         !probe.hasPrism ||
         !probe.hasRepoBridge ||
         !probe.hasThoughtBridge ||
@@ -1601,14 +2584,23 @@ export class PrismDaemon {
         probe.hasLegacyCss ||
         (this.codeHash && probe.codeHash && probe.codeHash !== this.codeHash)
       ) {
+        healed = true;
         await this.ensureOmniServer().catch(() => null);
+        if (sidebarEnabled) {
+          await this.ensureSidebarService().catch(() => null);
+        }
         await entry.session.send('Runtime.addBinding', { name: this.cdp.SETTING_BINDING }, 2600).catch(() => {});
         await entry.session.send('Runtime.addBinding', { name: METRICS_BINDING }, 2600).catch(() => {});
         await entry.session.send('Runtime.addBinding', { name: REPO_BINDING }, 2600).catch(() => {});
         await entry.session.send('Runtime.addBinding', { name: THOUGHT_BINDING }, 2600).catch(() => {});
         await entry.session.send('Runtime.addBinding', { name: USAGE_BINDING }, 2600).catch(() => {});
         await entry.session.send('Runtime.addBinding', { name: OMNI_BINDING }, 2600).catch(() => {});
+        if (sidebarEnabled) {
+          await this._ensureSidebarBinding(entry, 2600, true);
+        }
+        const sidebarDocument = entry.sidebarDocument;
         const healRes = await entry.session.evaluate(this.injectExpr, false, 4500);
+        this._markSidebarHostVerified(entry, sidebarDocument, healRes?.status === 'ok');
         if (healRes && healRes.status === 'skipped-non-host') {
           if (entry.scriptId) {
             await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId }).catch(() => {});
@@ -1618,6 +2610,12 @@ export class PrismDaemon {
             await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId }).catch(() => {});
             entry.omniScriptId = null;
           }
+          if (entry.sidebarScriptId) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId }).catch(() => {});
+            entry.sidebarScriptId = null;
+          }
+          await this._removeSidebarBinding(entry);
+          entry.sidebarMounted = false;
           this._markTargetIgnored({ id: entry.pageId, webSocketDebuggerUrl: entry.wsUrl }, probe.href || entry.url);
           entry.session.close();
           this.sessions.delete(entry.wsUrl);
@@ -1627,16 +2625,56 @@ export class PrismDaemon {
         if (this.omniExpr) {
           await entry.session.evaluate(this.omniExpr, false, 3500).catch(() => {});
         }
+        if (sidebarEnabled) {
+          if (!this.sidebarExpr && typeof this.cdp.buildSidebarStudioExpression === 'function') {
+            this.sidebarExpr = this._buildSidebarExprForCurrentClient();
+          }
+          if (this.sidebarExpr) {
+            await entry.session.evaluate(this.sidebarExpr, false, 3500).catch(() => {});
+            entry.sidebarMounted = true;
+          }
+        } else if (needsSidebarCleanup) {
+          if (entry.sidebarScriptId) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId }).catch(() => {});
+            entry.sidebarScriptId = null;
+          }
+          await this._removeSidebarBinding(entry);
+          await entry.session.evaluate(this._buildSidebarCleanupExpression(true), false, 3500).catch(() => {});
+          entry.sidebarMounted = false;
+        }
         this.log(`[↻] Hot-healed window to Obsidian Prism v${this.cdp.PLUGIN_VERSION}: ${entry.title}`);
       } else {
         if (needsOmniHeal) {
+          healed = true;
           await this.ensureOmniServer().catch(() => null);
           await entry.session.send('Runtime.addBinding', { name: OMNI_BINDING }, 2600).catch(() => {});
           if (this.omniExpr) {
             await entry.session.evaluate(this.omniExpr, false, 3500).catch(() => {});
           }
         }
+        if (needsSidebarHeal) {
+          healed = true;
+          await this.ensureSidebarService().catch(() => null);
+          await this._ensureSidebarBinding(entry, 2600, true);
+          if (!this.sidebarExpr && typeof this.cdp.buildSidebarStudioExpression === 'function') {
+            this.sidebarExpr = this._buildSidebarExprForCurrentClient();
+          }
+          if (this.sidebarExpr) {
+            await entry.session.evaluate(this.sidebarExpr, false, 3500).catch(() => {});
+            entry.sidebarMounted = true;
+          }
+        } else if (needsSidebarCleanup) {
+          healed = true;
+          if (entry.sidebarScriptId) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId }).catch(() => {});
+            entry.sidebarScriptId = null;
+          }
+          await this._removeSidebarBinding(entry);
+          await entry.session.evaluate(this._buildSidebarCleanupExpression(true), false, 3500).catch(() => {});
+          entry.sidebarMounted = false;
+        }
         if (probe.needsDashboardSync) {
+          healed = true;
           await entry.session
             .evaluate(
               `(() => {
@@ -1651,6 +2689,10 @@ export class PrismDaemon {
             .catch(() => {});
         }
       }
+      entry.lastVerifyAt = Date.now();
+      entry.verifyDirty = false;
+      entry.lastVerifiedCodeHash = this.codeHash || '';
+      entry.healthyStreak = healed ? 0 : Math.min(8, (entry.healthyStreak || 0) + 1);
       return { alive: true, ready: true, isHostDom: Boolean(probe.isHostDom), href: probe.href || '' };
     } catch {
       entry.session.close();
@@ -1713,7 +2755,19 @@ export class PrismDaemon {
       const onTargetEvent = (params) => {
         const info = params?.targetInfo;
         if (!info || info.type !== 'page') return;
-        if (!this._isEligibleDaemonTarget({ ...info, id: info.targetId || info.id, webSocketDebuggerUrl: 'ws://check' })) return;
+        const tid = info.targetId || info.id || '';
+        // If this page is already attached and healthy, only mark it dirty on URL shift rather than waking all pages
+        for (const existing of this.sessions.values()) {
+          if (tid && existing.pageId === tid) {
+            if (typeof info.url === 'string' && info.url && info.url !== existing.url) {
+              existing.verifyDirty = true;
+              existing.healthyStreak = 0;
+              this.scheduleImmediateTick(45);
+            }
+            return;
+          }
+        }
+        if (!this._isEligibleDaemonTarget({ ...info, id: tid, webSocketDebuggerUrl: 'ws://check' })) return;
         this.scheduleImmediateTick(45);
       };
       bSession.on('Target.targetCreated', onTargetEvent);
@@ -1733,6 +2787,9 @@ export class PrismDaemon {
           }
           if (entry.omniScriptId && !entry.session.closed) {
             await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId }).catch(() => {});
+          }
+          if (entry.sidebarScriptId && !entry.session.closed) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId }).catch(() => {});
           }
           if (cleanPageDom && !entry.session.closed) {
             await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
@@ -1765,25 +2822,51 @@ export class PrismDaemon {
   _maybeSyncShortcuts(force = false) {
     if (!this._isRelaunchGuardAllowed()) return null;
     if (process.env.PRISM_DISABLE_SHORTCUT_SYNC === '1' && !this._relaunchHooks?.syncShortcuts) return null;
+    if (this._shortcutSyncInFlight) {
+      if (force) this._shortcutForcePending = true;
+      return null;
+    }
     const now = Date.now();
     if (!force && this._lastShortcutCheckAt > 0 && now - this._lastShortcutCheckAt < this.shortcutCheckIntervalMs) {
       return null;
     }
-    this._lastShortcutCheckAt = now;
-    try {
-      const fn =
-        typeof this._relaunchHooks?.syncShortcuts === 'function'
-          ? this._relaunchHooks.syncShortcuts
-          : typeof this.cdp.ensureAntigravityShortcutsCdpFlag === 'function'
-          ? (opts) => this.cdp.ensureAntigravityShortcutsCdpFlag(opts)
-          : null;
-      if (!fn) return null;
-      const res = fn({ pluginDir: this.rootDir });
+    const onDone = (res) => {
+      if (res && !res.error) this._lastShortcutCheckAt = Date.now();
       if (res && Array.isArray(res.patched) && res.patched.length > 0) {
         this.log(`[shortcut-guard] Ensured --remote-debugging-port=0 on ${res.patched.length} shortcut(s)`);
       }
       return res;
+    };
+    const onFinally = () => {
+      this._shortcutSyncInFlight = false;
+      if (this._shortcutForcePending && this.running) {
+        this._shortcutForcePending = false;
+        void this._maybeSyncShortcuts(true);
+      }
+    };
+    try {
+      if (typeof this._relaunchHooks?.syncShortcuts === 'function') {
+        const res = this._relaunchHooks.syncShortcuts({ pluginDir: this.rootDir });
+        if (res && typeof res.then === 'function') {
+          this._shortcutSyncInFlight = true;
+          return res.then(onDone).catch(() => null).finally(onFinally);
+        }
+        return onDone(res);
+      }
+      if (typeof this.cdp.ensureAntigravityShortcutsCdpFlagAsync === 'function') {
+        this._shortcutSyncInFlight = true;
+        return this.cdp
+          .ensureAntigravityShortcutsCdpFlagAsync({ pluginDir: this.rootDir })
+          .then(onDone)
+          .catch(() => null)
+          .finally(onFinally);
+      }
+      if (typeof this.cdp.ensureAntigravityShortcutsCdpFlag === 'function') {
+        return onDone(this.cdp.ensureAntigravityShortcutsCdpFlag({ pluginDir: this.rootDir }));
+      }
+      return null;
     } catch {
+      this._shortcutSyncInFlight = false;
       return null;
     }
   }
@@ -1955,7 +3038,7 @@ export class PrismDaemon {
         if (!activeUrls.has(wsUrl)) {
           // Guard live workbench sessions against transient SPA title shifts (e.g. Swarm "Full View" -> "Untitled Conversation"):
           // verify actual in-page DOM before ever issuing REMOVE_EXPRESSION!
-          const check = await this.verifyAndHealEntry(entry);
+          const check = await this.verifyAndHealEntry(entry, true);
           if (check && check.alive && (!check.ready || check.isHostDom)) {
             continue;
           }
@@ -1965,6 +3048,9 @@ export class PrismDaemon {
             }
             if (entry.omniScriptId) {
               await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId }).catch(() => {});
+            }
+            if (entry.sidebarScriptId) {
+              await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId }).catch(() => {});
             }
             await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
           }
@@ -1984,6 +3070,12 @@ export class PrismDaemon {
         })
       );
 
+      if (this._isTelemetryDisabled()) {
+        this._releaseIdleTelemetry(true);
+      } else {
+        this._releaseIdleTelemetry(false);
+      }
+
       return { attached: this.sessions.size, port, pages: eligible.map((p) => p.title || p.url) };
     } finally {
       this.busy = false;
@@ -1994,27 +3086,88 @@ export class PrismDaemon {
     }
   }
 
-  claimOwnership() {
+  stopExistingDaemon({ verifyPid = null, inspectCommandLine = null, killProcess = null } = {}) {
     try {
-      if (fs.existsSync(this.pidFile)) {
-        const prevPid =
-          typeof this.cdp.readPidFromLockFile === 'function'
-            ? this.cdp.readPidFromLockFile(this.pidFile)
-            : JSON.parse(fs.readFileSync(this.pidFile, 'utf8'))?.pid;
-        if (prevPid && prevPid !== process.pid && isPidAlive(prevPid)) {
-          const safeToKill =
-            typeof this.cdp.isExpectedDaemonProcess === 'function' ? this.cdp.isExpectedDaemonProcess(prevPid) : true;
-          if (safeToKill) {
-            try { process.kill(prevPid); } catch {}
-          }
-        }
+      if (!this.pidFile) return false;
+      let pidStat;
+      try {
+        pidStat = fs.lstatSync(this.pidFile);
+      } catch {
+        return false;
       }
-    } catch {}
+      if (pidStat.isSymbolicLink() || !pidStat.isFile()) return false;
+
+      const prevPid =
+        typeof this.cdp?.readPidFromLockFile === 'function'
+          ? this.cdp.readPidFromLockFile(this.pidFile)
+          : (() => {
+              const raw = fs.readFileSync(this.pidFile, 'utf8').trim();
+              if (/^\d+$/.test(raw)) return parseInt(raw, 10);
+              return Number(JSON.parse(raw)?.pid);
+            })();
+      if (!Number.isInteger(prevPid) || prevPid <= 0 || prevPid === process.pid || !isPidAlive(prevPid)) {
+        return false;
+      }
+
+      const customVerifier =
+        typeof verifyPid === 'function'
+          ? verifyPid
+          : typeof this._daemonPidVerifier === 'function'
+          ? this._daemonPidVerifier
+          : null;
+
+      let safeToKill = false;
+      if (customVerifier) {
+        safeToKill = Boolean(customVerifier(prevPid, this.pidFile));
+      } else if (typeof this.cdp?.isExpectedDaemonProcess === 'function') {
+        const isDefaultVerifier =
+          this.cdp.isExpectedDaemonProcess === this._loadedCdpVerifier ||
+          this.cdp.isExpectedDaemonProcess === defaultCdp.isExpectedDaemonProcess;
+        const cdpVerified = Boolean(this.cdp.isExpectedDaemonProcess(prevPid, this.pidFile));
+        if (!cdpVerified) {
+          safeToKill = false;
+        } else if (!isDefaultVerifier) {
+          // 兼容单测显式覆写 this.cdp.isExpectedDaemonProcess 注入校验钩子
+          safeToKill = true;
+        } else {
+          // 标准 cdp.isExpectedDaemonProcess 对 node.exe 仅核对映像名，补充命令行身份复核防误杀无关 node 进程
+          const cmd =
+            typeof inspectCommandLine === 'function'
+              ? inspectCommandLine(prevPid)
+              : queryProcessCommandLineSync(prevPid);
+          safeToKill = isObsidianPrismDaemonCommandLine(cmd);
+        }
+      } else {
+        // 无有效身份校验钩子时严格 fail-closed，绝不盲杀无关 PID
+        safeToKill = false;
+      }
+
+      if (!safeToKill) return false;
+      const killer = typeof killProcess === 'function' ? killProcess : (pid) => process.kill(pid);
+      try {
+        killer(prevPid);
+        return true;
+      } catch {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  claimOwnership() {
+    this.stopExistingDaemon();
     try {
-      fs.writeFileSync(
+      try {
+        const st = fs.lstatSync(this.pidFile);
+        if (st.isSymbolicLink()) return;
+      } catch (err) {
+        if (err && err.code !== 'ENOENT') return;
+      }
+      writeFileAtomicSync(
         this.pidFile,
         JSON.stringify({ pid: process.pid, token: this.ownerToken, startedAt: Date.now() }),
-        'utf8'
+        { mode: 0o600 }
       );
     } catch {}
   }
@@ -2031,17 +3184,23 @@ export class PrismDaemon {
 
   releaseOwnership() {
     try {
-      if (fs.existsSync(this.pidFile)) {
-        const cur = JSON.parse(fs.readFileSync(this.pidFile, 'utf8'));
-        if (cur && cur.token === this.ownerToken) {
-          fs.unlinkSync(this.pidFile);
-        }
+      let st;
+      try {
+        st = fs.lstatSync(this.pidFile);
+      } catch {
+        return;
+      }
+      if (st.isSymbolicLink() || !st.isFile()) return;
+      const cur = JSON.parse(fs.readFileSync(this.pidFile, 'utf8'));
+      if (cur && cur.token === this.ownerToken) {
+        fs.unlinkSync(this.pidFile);
       }
     } catch {}
   }
 
   start({ claimPid = true, watchFiles = true } = {}) {
     if (this.running) return;
+    this._sidebarStopped = false;
     this.running = true;
     if (claimPid) this.claimOwnership();
     const initialPort = discoverActivePort(this.overridePort, this.portFile);
@@ -2049,10 +3208,10 @@ export class PrismDaemon {
     this.rebuildBundle();
 
     if (watchFiles) {
-      let reloadTimer = null;
       let pendingCodeChange = false;
       try {
         this.fsw = fs.watch(this.rootDir, { recursive: true }, (_, filename) => {
+          if (!this.running) return;
           const base = filename ? path.basename(filename) : '';
           if (!base || base.startsWith('.') || !/\.(css|c?js|mjs|json)$/i.test(base)) return;
           if (base === 'daemon.log' || base === 'watch.log' || base === 'repo-meta.json') return;
@@ -2062,8 +3221,14 @@ export class PrismDaemon {
           } else {
             pendingCodeChange = true;
           }
-          clearTimeout(reloadTimer);
-          reloadTimer = setTimeout(async () => {
+          if (this._reloadTimer) {
+            clearTimeout(this._reloadTimer);
+            this._reloadTimer = null;
+          }
+          const delayMs = pendingCodeChange ? 180 : 120;
+          this._reloadTimer = setTimeout(async () => {
+            this._reloadTimer = null;
+            if (!this.running) return;
             const isCodeChange = pendingCodeChange;
             pendingCodeChange = false;
             try {
@@ -2075,7 +3240,10 @@ export class PrismDaemon {
               const activeItems = [...this.sessions.values()].filter((e) => e && !e.session.closed);
               await Promise.allSettled(activeItems.map((entry) => this.applyToEntry(entry)));
             } catch {}
-          }, pendingCodeChange ? 180 : 120);
+          }, delayMs);
+          if (this._reloadTimer && typeof this._reloadTimer.unref === 'function') {
+            this._reloadTimer.unref();
+          }
         });
         if (this.fsw && typeof this.fsw.unref === 'function') this.fsw.unref();
       } catch {}
@@ -2088,17 +3256,41 @@ export class PrismDaemon {
   }
 
   async stop(cleanPageDom = false) {
+    this._sidebarStopped = true;
     this.running = false;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
+    }
+    if (this._reloadTimer) {
+      clearTimeout(this._reloadTimer);
+      this._reloadTimer = null;
+    }
+    if (this._discoverTimer) {
+      clearTimeout(this._discoverTimer);
+      this._discoverTimer = null;
+    }
+    if (this._managedTimers) {
+      for (const t of this._managedTimers) {
+        clearTimeout(t);
+      }
+      this._managedTimers.clear();
+    }
+    if (this.sessions && typeof this.sessions.values === 'function') {
+      for (const entry of this.sessions.values()) {
+        if (entry && entry._healTimer) {
+          clearTimeout(entry._healTimer);
+          entry._healTimer = null;
+        }
+      }
     }
     if (this.fsw) {
       try { this.fsw.close(); } catch {}
       this.fsw = null;
     }
     await this.detachAll(cleanPageDom);
-    for (const svc of [this._lazyUsage, this._lazyStore, this._lazyThoughtService]) {
+    const standaloneLsClient = this._lazyLsClient && this._lazyLsClient !== this._lazyStore?.client ? this._lazyLsClient : null;
+    for (const svc of [this._lazyUsage, this._lazyStore, standaloneLsClient, this._lazyThoughtService]) {
       if (!svc) continue;
       try {
         if (typeof svc.dispose === 'function') await svc.dispose();
@@ -2108,12 +3300,23 @@ export class PrismDaemon {
     }
     this._lazyUsage = null;
     this._lazyStore = null;
+    this._lazyLsClient = null;
+    this._backendSummariesCache = null;
+    this._backendSummariesAt = 0;
     this._lazyThoughtService = null;
     if (this.omniServer) {
       const srv = this.omniServer;
       this.omniServer = null;
       this._omniServerPromise = null;
       await srv.stop().catch(() => {});
+    }
+    await this._sidebarServicePromise?.catch(() => null);
+    if (this.sidebarService) {
+      const sb = this.sidebarService;
+      this.sidebarService = null;
+      try {
+        if (typeof sb.dispose === 'function') await sb.dispose();
+      } catch {}
     }
     this.releaseOwnership();
   }
@@ -2156,13 +3359,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
         } else {
           console.log(JSON.stringify({ ok: true, ...res }, null, 2));
         }
-        for (const e of daemon.sessions.values()) e.session.close();
-        if (daemon.omniServer) await daemon.omniServer.stop().catch(() => {});
+        await daemon.stop(false);
         process.exit(0);
       })
-      .catch((err) => {
+      .catch(async (err) => {
         console.error('[obsidian-prism daemon] error:', err.message);
-        process.exit(1);
+        await daemon.stop(false);
+        process.exitCode = 1;
       });
   } else {
     daemon.start({ claimPid: true, watchFiles: true });

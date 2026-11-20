@@ -2421,19 +2421,30 @@ function bootPrismWorkbench(INIT_STATE, I18N_TABLE) {
     const ext = (state.path.split('.').pop() || 'FONT').toUpperCase();
     setMetaPills([ext, state.meta?.size ? formatBytes(state.meta.size) : '']);
 
+    let loadedFontFace = null;
+    let disposed = false;
     if (typeof FontFace === 'function' && document.fonts) {
       const face = new FontFace(familyName, `url("${buildApiUrl('/stream')}")`);
       face
         .load()
         .then((loaded) => {
+          if (disposed) return;
+          loadedFontFace = loaded;
           document.fonts.add(loaded);
         })
         .catch(() => {
+          if (disposed) return;
           setMetaPills([ext, tr('loadError')]);
           scroll.insertBefore(el('div', 'wb-empty', tr('loadError')), scroll.firstChild);
         });
     }
-    return () => {};
+    return () => {
+      disposed = true;
+      if (loadedFontFace && document.fonts && typeof document.fonts.delete === 'function') {
+        try { document.fonts.delete(loadedFontFace); } catch {}
+        loadedFontFace = null;
+      }
+    };
   }
 
   // ── Fallback Plain Text Stage ─────────────────────────────────────────────
@@ -2464,14 +2475,25 @@ function bootPrismWorkbench(INIT_STATE, I18N_TABLE) {
     if (state.truncated && state.nextOffset > 0) {
       const btnMore = el('button', 'wb-btn', tr('loadMore'));
       btnMore.type = 'button';
+      const mountSeq = loadSeq;
+      let loadingMore = false;
       btnMore.onclick = async () => {
-        const nextMeta = await fetch(buildApiUrl('/meta', { headBytes: 262144, offset: state.nextOffset })).then((r) => r.json());
-        if (nextMeta && typeof nextMeta.textSlice === 'string') {
-          state.textBuffer += nextMeta.textSlice;
-          state.truncated = Boolean(nextMeta.truncated);
-          state.nextOffset = Number(nextMeta.nextOffset || 0);
-          pane.textContent = state.textBuffer;
-          if (!state.truncated) btnMore.hidden = true;
+        if (loadingMore || loadSeq !== mountSeq) return;
+        loadingMore = true;
+        btnMore.disabled = true;
+        try {
+          const nextMeta = await fetch(buildApiUrl('/meta', { headBytes: 262144, offset: state.nextOffset })).then((r) => r.json());
+          if (loadSeq !== mountSeq) return;
+          if (nextMeta && typeof nextMeta.textSlice === 'string') {
+            state.textBuffer += nextMeta.textSlice;
+            state.truncated = Boolean(nextMeta.truncated);
+            state.nextOffset = Number(nextMeta.nextOffset || 0);
+            pane.appendChild(document.createTextNode(nextMeta.textSlice));
+            if (!state.truncated) btnMore.hidden = true;
+          }
+        } catch {} finally {
+          loadingMore = false;
+          if (loadSeq === mountSeq) btnMore.disabled = false;
         }
       };
       toolsEl.appendChild(btnMore);
@@ -2575,7 +2597,23 @@ function bootPrismWorkbench(INIT_STATE, I18N_TABLE) {
 
     try {
       if (window.parent && window.parent !== window) {
-        window.parent.postMessage({ type: 'ag-prism-workbench-ready', kind: state.kind, path: state.path }, '*');
+        let targetOrigin = '*';
+        try {
+          if (typeof document !== 'undefined' && document.referrer) {
+            const ref = new URL(document.referrer);
+            if (
+              ref.origin &&
+              ref.origin !== 'null' &&
+              (ref.protocol === 'vscode-file:' ||
+                ref.protocol === 'app:' ||
+                ((ref.protocol === 'http:' || ref.protocol === 'https:') &&
+                  /^(?:127\.0\.0\.1|localhost|\[::1\])$/i.test(ref.hostname)))
+            ) {
+              targetOrigin = ref.origin;
+            }
+          }
+        } catch {}
+        window.parent.postMessage({ type: 'ag-prism-workbench-ready', kind: state.kind }, targetOrigin);
       }
     } catch {}
   }
