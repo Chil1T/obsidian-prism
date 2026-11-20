@@ -1,7 +1,7 @@
 // Obsidian Prism Native Sidecar Daemon (sidecars/daemon/main.mjs)
 // - Auto-discovers DevToolsActivePort across Windows/macOS/Linux + fast Target.setDiscoverTargets push
 // - Registers Page.addScriptToEvaluateOnNewDocument + Runtime.evaluate (survives Ctrl+Shift+R reloads with zero app.asar touch!)
-// - Hot-upgrades legacy instances to Obsidian Prism v1.0.2
+// - Hot-upgrades legacy instances to Obsidian Prism v1.0.3
 // - Lazily serves real MetricsStore + DesktopUsage snapshots over __agPrismMetricsCall only when requested (0 idle CPU)
 // - Registers __agPrismRepoCall (paired with window.__agPrismRepoBridge) for live Git status & safe git pull --ff-only + hot-reload!
 
@@ -13,6 +13,15 @@ import { execFile, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { OmniServer, OMNI_BINDING, isBlockedUncPath } from '../../vendor/omni-viewer/omni-server.mjs';
+import {
+  buildRendererRpcExpression,
+  extractModelLabelMap,
+  normalizeRendererUserStatus,
+  normalizeRendererQuotaSummary,
+  normalizeRendererSummaries,
+  normalizeRendererTrajectory,
+} from '../../vendor/pulse-dashboard/sidecars/panel/renderer-rpc-adapter.mjs';
+import { discoverLocalConversations } from '../../vendor/pulse-dashboard/sidecars/panel/local-conversations.mjs';
 
 const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
@@ -1075,7 +1084,7 @@ export class PrismDaemon {
   _getSidebarServerMeta() {
     return {
       binding: SIDEBAR_BINDING,
-      version: this.cdp?.PLUGIN_VERSION || '1.0.2',
+      version: this.cdp?.PLUGIN_VERSION || '1.0.3',
       schemaVersion: 2,
       serviceReady: !this._sidebarStopped && typeof this.sidebarService?.handleRpc === 'function' &&
         !this.sidebarService.getBootDiagnostic?.(),
@@ -1212,6 +1221,65 @@ export class PrismDaemon {
     return this._lazyUsage;
   }
 
+  _getRendererRpcCandidates() {
+    const out = [];
+    for (const entry of this.sessions.values()) {
+      if (!entry || !entry.session || entry.session.closed) continue;
+      const url = String(entry.url || '');
+      if (/^(?:devtools|chrome-extension|chrome|about):/i.test(url)) continue;
+      const isLocalHost = /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\//i.test(url);
+      out.push({ entry, score: (isLocalHost ? 2 : 0) + (entry.healthyStreak > 0 ? 1 : 0) });
+    }
+    out.sort((a, b) => b.score - a.score);
+    return out.map((x) => x.entry);
+  }
+
+  async _invokeRendererLsRpc(method, body = {}) {
+    const candidates = this._getRendererRpcCandidates();
+    if (!candidates.length) {
+      throw new Error('等待 Antigravity 主窗口连接');
+    }
+    const expr = buildRendererRpcExpression(method, body);
+    const timeoutMs = method === 'Probe' ? 2600 : 12000;
+    let lastErr = null;
+    for (const entry of candidates) {
+      try {
+        const res = await entry.session.evaluate(expr, true, timeoutMs);
+        if (!res || res.ok !== true) {
+          lastErr = new Error(String(res?.error || 'renderer_ls_unavailable'));
+          continue;
+        }
+        const raw = res.data;
+        if (method === 'Probe') return raw;
+        if (method === 'GetUserStatus') {
+          const normalized = normalizeRendererUserStatus(raw);
+          const labels = extractModelLabelMap(normalized);
+          if (labels.size > 0) {
+            if (!this._rendererModelLabels) this._rendererModelLabels = new Map();
+            for (const [k, v] of labels.entries()) {
+              if (this._rendererModelLabels.size >= 256 && !this._rendererModelLabels.has(k)) break;
+              this._rendererModelLabels.set(k, v);
+            }
+          }
+          return normalized;
+        }
+        if (method === 'RetrieveUserQuotaSummary') {
+          return normalizeRendererQuotaSummary(raw);
+        }
+        if (method === 'GetAllCascadeTrajectories') {
+          return normalizeRendererSummaries(raw);
+        }
+        if (method === 'GetCascadeTrajectory') {
+          return normalizeRendererTrajectory(raw, body?.cascadeId, this._rendererModelLabels || null);
+        }
+        return raw;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr || new Error('Antigravity 渲染器遥测通道暂不可用');
+  }
+
   async ensureMetricsCollector() {
     if (this._customMetricsProvider) return this._customMetricsProvider;
     if (this._lazyStore) {
@@ -1240,6 +1308,7 @@ export class PrismDaemon {
     const { MetricsStore } = await import(storeModUrl.href);
     this._lazyStore = new MetricsStore({
       dataDir: telemetryDataDir,
+      rendererRpc: (m, b) => this._invokeRendererLsRpc(m, b),
       ...(activePort ? { cdpPort: activePort } : {}),
     });
     return this.ensureMetricsCollector();
@@ -1266,7 +1335,10 @@ export class PrismDaemon {
     const activePort = discoverActivePort(this.overridePort, this.portFile);
     const clientModUrl = new URL('../../vendor/pulse-dashboard/sidecars/panel/client.mjs', import.meta.url);
     const { AntigravityClient } = await import(clientModUrl.href);
-    this._lazyLsClient = new AntigravityClient(activePort ? { cdpPort: activePort } : {});
+    this._lazyLsClient = new AntigravityClient({
+      rendererRpc: (m, b) => this._invokeRendererLsRpc(m, b),
+      ...(activePort ? { cdpPort: activePort } : {}),
+    });
     return this._lazyLsClient;
   }
 
@@ -1402,12 +1474,81 @@ export class PrismDaemon {
         list.push(item);
         byId.set(id.toLowerCase(), item);
       }
+      if (client?.server?.mode === 'renderer-proxy') {
+        const subMap = this._discoveredSubagents || null;
+        try {
+          const localRes = await discoverLocalConversations({ host: 'app' });
+          const convRoot = path.join(os.homedir(), '.gemini', 'antigravity', 'conversations');
+          const convRootStat = await fs.promises.lstat(convRoot).catch(() => null);
+          const rootSafe = Boolean(convRootStat && !convRootStat.isSymbolicLink() && convRootStat.isDirectory());
+          for (const entry of localRes?.conversations || []) {
+            const lid = String(entry?.id || '').toLowerCase();
+            if (!GUID_RE.test(lid) || byId.has(lid)) continue;
+            let mtimeSec = 0;
+            if (rootSafe) {
+              const dbFile = path.join(convRoot, `${lid}.db`);
+              const st = await fs.promises.lstat(dbFile).catch(() => null);
+              if (st && !st.isSymbolicLink() && st.isFile() && Number.isFinite(st.mtimeMs) && st.mtimeMs > 0) {
+                mtimeSec = Math.floor(st.mtimeMs / 1000);
+              }
+            }
+            const knownSub = subMap?.get(lid) || null;
+            const localItem = {
+              id: lid,
+              stepCount: 0,
+              lastModifiedSec: mtimeSec,
+              createdSec: mtimeSec,
+              subagent: Boolean(knownSub),
+              ...(knownSub?.parentId ? { parentId: knownSub.parentId } : {}),
+              ...(knownSub?.workspace ? { workspace: knownSub.workspace } : {}),
+              title: '',
+              status: '',
+            };
+            list.push(localItem);
+            byId.set(lid, localItem);
+          }
+        } catch {}
+        if (subMap && subMap.size > 0) {
+          for (const item of list) {
+            const info = subMap.get(item.id.toLowerCase());
+            if (!info) continue;
+            if (!item.subagent) item.subagent = true;
+            if (!item.parentId && info.parentId) item.parentId = info.parentId;
+            if (!item.workspace && info.workspace) item.workspace = info.workspace;
+          }
+        }
+        list.sort((a, b) => (b.lastModifiedSec || 0) - (a.lastModifiedSec || 0));
+      }
       const pack = { list, byId };
       this._backendSummariesCache = pack;
       this._backendSummariesAt = now;
       return pack;
     } catch {
       return { list: [], byId: new Map() };
+    }
+  }
+
+  _recordDiscoveredSubagents(parentId, traj, parentWorkspace = '') {
+    const steps = traj?.trajectory?.steps;
+    if (!Array.isArray(steps) || !GUID_RE.test(String(parentId || ''))) return;
+    const pid = String(parentId).toLowerCase();
+    if (!this._discoveredSubagents) this._discoveredSubagents = new Map();
+    const register = (rawChildId) => {
+      const cid = String(rawChildId || '').toLowerCase();
+      if (!GUID_RE.test(cid) || cid === pid) return;
+      this._discoveredSubagents.delete(cid);
+      this._discoveredSubagents.set(cid, { parentId: pid, workspace: String(parentWorkspace || '') });
+      while (this._discoveredSubagents.size > 512) {
+        this._discoveredSubagents.delete(this._discoveredSubagents.keys().next().value);
+      }
+    };
+    for (const s of steps) {
+      const inv = s?.invokeSubagent;
+      if (!inv || typeof inv !== 'object') continue;
+      register(inv.conversationId);
+      if (Array.isArray(inv.results)) {
+        for (const r of inv.results) register(r?.conversationId);
+      }
     }
   }
 
@@ -1459,7 +1600,64 @@ export class PrismDaemon {
         },
       };
       try {
-        if (gmOffset > 0) {
+        if (client?.server?.mode === 'renderer-proxy' && typeof client.trajectory === 'function') {
+          const fullTraj = await client.trajectory(id, { force: gmOffset === 0 });
+          this._recordDiscoveredSubagents(id, fullTraj, workspace);
+          const allSteps = Array.isArray(fullTraj?.trajectory?.steps) ? fullTraj.trajectory.steps : [];
+          const allGms = Array.isArray(fullTraj?.trajectory?.generatorMetadata) ? fullTraj.trajectory.generatorMetadata : [];
+          const realStepCount = Math.max(stepCount, Number(fullTraj?.numTotalSteps || 0), allSteps.length);
+          const totalGm = Math.max(Number(fullTraj?.numTotalGeneratorMetadata || 0), allGms.length);
+          const firstStepTs = allSteps.find((s) => s?.metadata?.createdAt)?.metadata?.createdAt;
+          const lastStepTs = [...allSteps].reverse().find((s) => s?.metadata?.completedAt || s?.metadata?.createdAt);
+          const realLastModSec =
+            lastModifiedSec ||
+            (lastStepTs ? Math.floor((Date.parse(lastStepTs.metadata.completedAt || lastStepTs.metadata.createdAt) || 0) / 1000) : 0);
+          const realCreatedSec =
+            (firstStepTs ? Math.floor((Date.parse(firstStepTs) || 0) / 1000) : 0) || createdSec || realLastModSec;
+          const enrichedStub = {
+            ...summaryStub,
+            stepCount: realStepCount,
+            ...(realLastModSec > 0 ? { lastModifiedTime: { seconds: realLastModSec } } : {}),
+            ...(realCreatedSec > 0 ? { createdTime: { seconds: realCreatedSec } } : {}),
+          };
+          if (gmOffset > 0 && totalGm >= gmOffset) {
+            const deltaItems = allGms.slice(gmOffset);
+            const deltaRec = usageCore.analyzeTrajectoryForUsage(
+              {
+                numTotalSteps: realStepCount,
+                numTotalGeneratorMetadata: totalGm,
+                trajectory: { cascadeId: id, steps: allSteps, generatorMetadata: deltaItems },
+              },
+              enrichedStub,
+              id
+            );
+            if (workspace && deltaRec && typeof deltaRec === 'object' && !deltaRec.workspace) deltaRec.workspace = workspace;
+            if (parentId && deltaRec && typeof deltaRec === 'object' && !deltaRec.parentId) deltaRec.parentId = parentId;
+            records.push({
+              id,
+              mode: 'delta',
+              gmCount: totalGm,
+              stepCount: realStepCount,
+              lastModifiedSec: realLastModSec,
+              subagent,
+              ...(parentId ? { parentId } : {}),
+              ...(workspace ? { workspace } : {}),
+              delta: deltaRec,
+            });
+          } else {
+            const fullRec = usageCore.analyzeTrajectoryForUsage(fullTraj, enrichedStub, id);
+            if (workspace && fullRec && typeof fullRec === 'object' && !fullRec.workspace) fullRec.workspace = workspace;
+            if (parentId && fullRec && typeof fullRec === 'object' && !fullRec.parentId) fullRec.parentId = parentId;
+            records.push({
+              id,
+              mode: 'full',
+              subagent,
+              ...(parentId ? { parentId } : {}),
+              ...(workspace ? { workspace } : {}),
+              record: fullRec,
+            });
+          }
+        } else if (gmOffset > 0) {
           const deltaItems = [];
           let curOffset = gmOffset;
           let totalGm = null;

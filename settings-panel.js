@@ -101,13 +101,13 @@
     return spec.allowed.includes(val) ? { valid: true, value: val } : { valid: false };
   }
 
-  function buildSanitizedConfigExport(currentSettings = {}, rawThoughtCfg = null, version = '1.0.2') {
+  function buildSanitizedConfigExport(currentSettings = {}, rawThoughtCfg = null, version = '1.0.3') {
     const settings = {};
     for (const [k, spec] of Object.entries(PRISM_SETTINGS_SCHEMA)) {
       const c = sanitizeKeyVal(k, currentSettings[k]);
       settings[k] = c.valid ? c.value : spec.default;
     }
-    const out = { schema: 'obsidian-prism-config-v1', version: String(version || '1.0.2'), exportedAt: new Date().toISOString(), settings };
+    const out = { schema: 'obsidian-prism-config-v1', version: String(version || '1.0.3'), exportedAt: new Date().toISOString(), settings };
     const tSrc =
       rawThoughtCfg && typeof rawThoughtCfg === 'object' && rawThoughtCfg.config && typeof rawThoughtCfg.config === 'object'
         ? rawThoughtCfg.config

@@ -347,7 +347,7 @@
 
     return {
       cascadeId: String(cascadeId || t.cascadeId || ''),
-      stepCount: Number(summaryObj?.stepCount ?? steps.length ?? 0),
+      stepCount: Math.max(Number(summaryObj?.stepCount || 0), Number(trajObj?.numTotalSteps || 0), steps.length),
       lastModifiedSec,
       gmCount: Number(trajObj?.numTotalGeneratorMetadata ?? gmList.length ?? 0),
       subagent: isSubagentSummary(summaryObj),

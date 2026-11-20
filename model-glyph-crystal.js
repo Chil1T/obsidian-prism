@@ -63,7 +63,7 @@
       brand = 'claude';
     } else if (/\bgpt\b|\bopenai\b|\bo1\b|\bo3\b|\bo4\b|\bcodex\b|\bdeepseek\b/.test(raw)) {
       brand = 'openai';
-    } else if (/\bantigravity\b/.test(raw) && !/\bgemini\b|\bargon\b|\bcarbon\b|\bhydrogen\b|\bflash\b/.test(raw)) {
+    } else if (/\bantigravity\b/.test(raw) && !/\bgemini\b|\bneon\b|\bargon\b|\bcarbon\b|\bhydrogen\b|\bflash\b/.test(raw)) {
       brand = 'antigravity';
     }
 
@@ -448,6 +448,8 @@
       }
 
       const isOrch = detectPanelIsOrchestrator(panel, primaryModelInfo);
+      const isOrchTunable = isOrch && panel.getAttribute('data-ces-orch-tunable') === 'true';
+      const showCrystalAutoBar = isOrch && !isOrchTunable;
       syncPanelRowGlyphs(panel);
       const cesSec = panel.querySelector('.ces-ag-section');
       if (cesSec) {
@@ -505,22 +507,22 @@
       crystalMount.track = bar.querySelector('.ag-cs-orch-track');
       crystalMount.canvas = bar.querySelector('canvas[data-orch-crystal-canvas="true"]');
 
-      if (isOrch) setAttrIfChanged(panel, 'data-ag-cs-orch-active', '1');
+      if (showCrystalAutoBar) setAttrIfChanged(panel, 'data-ag-cs-orch-active', '1');
       else if (panel.hasAttribute('data-ag-cs-orch-active')) panel.removeAttribute('data-ag-cs-orch-active');
 
       panel
         .querySelectorAll('.ces-ag-effort-row:not([data-testid="orchestrator-effort-bar"])')
         .forEach((row) => {
-          setAttrIfChanged(row, 'data-row-hidden', String(isOrch));
-          setAttrIfChanged(row, 'aria-hidden', String(isOrch));
+          setAttrIfChanged(row, 'data-row-hidden', String(showCrystalAutoBar));
+          setAttrIfChanged(row, 'aria-hidden', String(showCrystalAutoBar));
         });
 
-      const switchedIn = isOrch && !crystalMount.wasOrch;
-      crystalMount.wasOrch = isOrch;
-      setAttrIfChanged(bar, 'data-row-hidden', String(!isOrch));
-      setAttrIfChanged(bar, 'aria-hidden', String(!isOrch));
+      const switchedIn = showCrystalAutoBar && !crystalMount.wasOrch;
+      crystalMount.wasOrch = showCrystalAutoBar;
+      setAttrIfChanged(bar, 'data-row-hidden', String(!showCrystalAutoBar));
+      setAttrIfChanged(bar, 'aria-hidden', String(!showCrystalAutoBar));
 
-      if (isOrch) {
+      if (showCrystalAutoBar) {
         const reducedNow = motionReduced();
         const ambientNow = readRootAmbientFloat();
         if (

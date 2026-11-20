@@ -53,7 +53,7 @@ export function serverFromDiscovery(log, processes) {
 }
 
 export class AntigravityClient {
-  constructor({ paths = platformPaths, readLog = readFile, logStat = stat, processes = discoverProcesses, now = Date.now, onRpc = null, cdpPort = null, debugPort = null } = {}) {
+  constructor({ paths = platformPaths, readLog = readFile, logStat = stat, processes = discoverProcesses, now = Date.now, onRpc = null, cdpPort = null, debugPort = null, rendererRpc = null } = {}) {
     this.paths = paths;
     this.readLog = readLog;
     this.logStat = logStat;
@@ -61,6 +61,8 @@ export class AntigravityClient {
     this.now = now;
     this.onRpc = onRpc;
     this.cdpPort = cdpPort ?? debugPort ?? null;
+    this.rendererRpc = typeof rendererRpc === 'function' ? rendererRpc : null;
+    this._proxyTrajCache = new Map();
     this.agent = new HttpAgent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 2, maxFreeSockets: 2, timeout: 25000 });
     this.reader = new TrajectoryReader(this);
   }
@@ -71,6 +73,10 @@ export class AntigravityClient {
   retryAt = 0;
   discoveryFailures = 0;
   discoveryError = null;
+
+  setRendererRpc(fn) {
+    this.rendererRpc = typeof fn === 'function' ? fn : null;
+  }
 
   setCdpPort(port) {
     const next = typeof port === 'function' ? port : (Number.isInteger(Number(port)) && Number(port) > 0 ? Number(port) : null);
@@ -86,7 +92,8 @@ export class AntigravityClient {
   }
 
   async discover(force = false) {
-    if (!force && this.server && this.now() - this.discoveredAt < 15000) return this.server;
+    const cacheTtl = this.server?.mode === 'renderer-proxy' ? 120000 : 15000;
+    if (!force && this.server && this.now() - this.discoveredAt < cacheTtl) return this.server;
     if (this.discovering) return this.discovering;
     if (!force && this.discoveryError && this.now() < this.retryAt) throw this.discoveryError;
     this.lastScanAt = this.now();
@@ -136,7 +143,19 @@ export class AntigravityClient {
     const expectedPorts = [...new Set(logs.flatMap(log => log.ports || []))];
     const cdpPort = this._resolveCdpPort();
     const parsed = await this.processes({ expectedPorts, ...(cdpPort ? { cdpPort } : {}) });
-    if (!parsed || (Array.isArray(parsed) && !parsed.length)) throw new Error('请先打开 Antigravity');
+    if (!parsed || (Array.isArray(parsed) && !parsed.length)) {
+      if (typeof this.rendererRpc === 'function') {
+        try {
+          const probe = await this.rendererRpc('Probe', {});
+          if (probe && probe.available) {
+            this.server = { port: 0, csrf: '', pid: cdpPort || 1, mode: 'renderer-proxy' };
+            this.discoveredAt = this.now();
+            return this.server;
+          }
+        } catch {}
+      }
+      throw new Error('请先打开 Antigravity');
+    }
 
     // Allow hub-port resolution even if log files are absent
     if (Array.isArray(parsed) && parsed.some(r => r?.HubPort)) {
@@ -158,13 +177,87 @@ export class AntigravityClient {
         if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') lastError = error;
       }
     }
-    if (!this.server) throw lastError || new Error(foundLog ? '等待 Antigravity 本地接口启动' : '未找到 Antigravity 语言服务日志，请检查日志路径');
+    if (!this.server) {
+      const primaryErr = lastError || new Error(foundLog ? '等待 Antigravity 本地接口启动' : '未找到 Antigravity 语言服务日志，请检查日志路径');
+      if (typeof this.rendererRpc === 'function') {
+        try {
+          const probe = await this.rendererRpc('Probe', {});
+          if (probe && probe.available) {
+            const firstPid = Array.isArray(parsed) && parsed[0]?.ProcessId ? Number(parsed[0].ProcessId) : (cdpPort || 1);
+            this.server = { port: 0, csrf: '', pid: firstPid, mode: 'renderer-proxy' };
+            this.discoveredAt = this.now();
+            return this.server;
+          }
+        } catch {}
+      }
+      throw primaryErr;
+    }
     this.discoveredAt = this.now();
     return this.server;
   }
 
+  async _getProxyTrajectory(cascadeId, force = false) {
+    const key = String(cascadeId || '').toLowerCase();
+    const now = this.now();
+    const cached = !force ? this._proxyTrajCache.get(key) : null;
+    if (cached && now - cached.at < 2500) return cached.data;
+    const data = await this.rendererRpc('GetCascadeTrajectory', { cascadeId });
+    this._proxyTrajCache.delete(key);
+    this._proxyTrajCache.set(key, { at: now, data });
+    while (this._proxyTrajCache.size > 8) {
+      this._proxyTrajCache.delete(this._proxyTrajCache.keys().next().value);
+    }
+    return data;
+  }
+
+  async _callRendererProxy(method, body = {}) {
+    if (typeof this.rendererRpc !== 'function') {
+      throw new Error('当前版本未提供可用的本地检测凭据');
+    }
+    if (method === 'GetCascadeTrajectory') {
+      return this._getProxyTrajectory(body?.cascadeId, true);
+    }
+    if (method === 'GetCascadeTrajectorySteps') {
+      const offset = Math.max(0, Math.floor(Number(body?.stepOffset || 0)));
+      const full = await this._getProxyTrajectory(body?.cascadeId, offset === 0);
+      const all = Array.isArray(full?.trajectory?.steps) ? full.trajectory.steps : [];
+      return {
+        steps: offset < all.length ? all.slice(offset) : [],
+        numTotalSteps: full?.numTotalSteps ?? all.length,
+      };
+    }
+    if (method === 'GetCascadeTrajectoryGeneratorMetadata') {
+      const offset = Math.max(0, Math.floor(Number(body?.generatorMetadataOffset || 0)));
+      const full = await this._getProxyTrajectory(body?.cascadeId, false);
+      const all = Array.isArray(full?.trajectory?.generatorMetadata) ? full.trajectory.generatorMetadata : [];
+      const allSteps = Array.isArray(full?.trajectory?.steps) ? full.trajectory.steps : [];
+      return {
+        generatorMetadata: offset < all.length ? all.slice(offset) : [],
+        numTotalGeneratorMetadata: full?.numTotalGeneratorMetadata ?? all.length,
+        numTotalSteps: full?.numTotalSteps ?? allSteps.length,
+      };
+    }
+    return this.rendererRpc(method, body);
+  }
+
   async call(method, body = {}, retry = true) {
     const server = await this.discover();
+    if (server && server.mode === 'renderer-proxy') {
+      try {
+        return await this._callRendererProxy(method, body);
+      } catch (error) {
+        if (this.server === server) {
+          this.server = null;
+          this.discoveryError = error;
+          this.retryAt = Math.max(this.retryAt, this.lastScanAt + 3000);
+        }
+        if (retry) {
+          await this.discover(true);
+          return this.call(method, body, false);
+        }
+        throw error;
+      }
+    }
     try {
       return await new Promise((resolve, reject) => {
         const reqBody =
@@ -386,10 +479,30 @@ export class AntigravityClient {
     };
   }
 
-  resetTrajectories() { this.reader.reset(); }
-  trajectory(id, options) { return this.reader.read(id, options); }
+  resetTrajectories() {
+    this._proxyTrajCache?.clear?.();
+    this.reader.reset();
+  }
+  async trajectory(id, options = {}) {
+    const server = await this.discover();
+    if (server && server.mode === 'renderer-proxy') {
+      if (options?.isCurrent && options.isCurrent() !== true) {
+        throw new Error('后台已重新连接，请等待刷新');
+      }
+      const data = await this._getProxyTrajectory(id, true);
+      if (options?.isCurrent && options.isCurrent() !== true) {
+        throw new Error('后台已重新连接，请等待刷新');
+      }
+      if (Buffer.byteLength(JSON.stringify(data || {})) > 8 * 1024 * 1024) {
+        throw new Error('接口响应超过采集上限');
+      }
+      return data;
+    }
+    return this.reader.read(id, options);
+  }
   dispose() {
     try { this.agent?.destroy?.(); } catch {}
+    this._proxyTrajCache?.clear?.();
     this.reader?.reset?.();
   }
 }

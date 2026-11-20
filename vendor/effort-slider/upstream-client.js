@@ -1380,24 +1380,72 @@ return raw.alternate;
 }
 return raw;
 }
-function buildEffortIndexFromOptions(modelOptions) {
-var indexMap = new Map();
-var list = Array.isArray(modelOptions) ? modelOptions : [];
+function _slug(s) {
+return String(s || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+function _isOrch(m) {
+if (!m) return false;
+if (typeof m === "string") return /\borchestrator\b|编排/i.test(m);
+return /\borchestrator\b|编排/i.test(String(m.label || "")) || /orchestrator/i.test(String(m.modelId || ""));
+}
+function buildEffortIndexFromOptions(list) {
+var out = new Map();
+if (!Array.isArray(list)) return out;
 for (var i = 0; i < list.length; i += 1) {
-var opt = list[i];
-if (!opt || opt.isCustom || typeof opt.label !== "string") continue;
-var parsed = parseModelLabel(opt.label);
-if (!parsed) continue;
-var byEffort = indexMap.get(parsed.base);
-if (!byEffort) {
-byEffort = new Map();
-indexMap.set(parsed.base, byEffort);
+var o = list[i];
+if (!o || o.isCustom || typeof o.label !== "string" || _isOrch(o)) continue;
+var p = parseModelLabel(o.label);
+if (!p) continue;
+var m = out.get(p.base);
+if (!m) { m = new Map(); out.set(p.base, m); }
+if (!m.has(p.effort)) m.set(p.effort, o);
 }
-if (!byEffort.has(parsed.effort)) {
-byEffort.set(parsed.effort, opt);
+return out;
 }
+function normalizeEffortIndex(raw, opts) {
+var out = buildEffortIndexFromOptions(opts);
+if (!(raw instanceof Map)) return out;
+raw.forEach(function (inn, rk) {
+if (!(inn instanceof Map) || !inn.size) return;
+var db = "";
+inn.forEach(function (o) {
+if (db || !o || typeof o.label !== "string") return;
+var p = parseModelLabel(o.label);
+if (p && p.base) db = p.base;
+});
+var k = db || String(rk || "");
+if (!k) return;
+var mg = out.get(k) || new Map();
+inn.forEach(function (o, ek) {
+var nk = String(ek || "").toLowerCase();
+if (nk === "extra") nk = "xhigh";
+if (nk && o && !mg.has(nk)) mg.set(nk, o);
+});
+if (mg.size) out.set(k, mg);
+});
+return out;
 }
-return indexMap;
+function _luEff(idx, base) {
+if (!base || !(idx instanceof Map)) return null;
+var d = idx.get(base);
+if (d instanceof Map && d.size) return d;
+var w = _slug(base), hit = w ? idx.get(w) : null;
+if (!(hit instanceof Map && hit.size) && w) { hit = null; idx.forEach(function (v, k) { if (!hit && v instanceof Map && v.size && _slug(k) === w) hit = v; }); }
+return hit;
+}
+function _resOrch(ctx, ovr) {
+var pk = ctx && (ctx.orchPick || ctx.orchestratorPick), ps = ctx && (ctx.orchPlanners || ctx.orchestratorPlanners);
+if (!pk || typeof pk.select !== "function" || !Array.isArray(ps) || !ps.length) return null;
+var f = function (r) {
+if (!r) return null;
+if (typeof r === "object" && typeof r.label === "string") return r;
+for (var i = 0; i < ps.length; i += 1) if (ps[i] && (ps[i].value === r || ps[i].modelId === r || ps[i].label === r)) return ps[i];
+return null;
+};
+var def = f(ctx.orchDef || ctx.orchestratorDefaultPlanner) || ps[0] || null;
+var act = f(ovr) || f(pk.model) || def;
+var oi = ctx.orchIdx || ctx.orchestratorPlannerIndex;
+return act ? { opt: act, def: def, idx: oi instanceof Map && oi.size ? oi : ctx.effortIndex } : null;
 }
 /**
 * 从 Antigravity 的 DOM 节点向上遍历 React Fiber 树，提取：
@@ -1469,69 +1517,44 @@ var selectedModel =
 ? globalModelCtx.getModelConfigForConversation(conversationId)
 : globalModelCtx.currentModelConfig)) ||
 null;
-var effortIndex =
-selectorCtx && selectorCtx.effortIndex instanceof Map
-? selectorCtx.effortIndex
-: buildEffortIndexFromOptions(modelOptions);
-// ★ 关键：在 Antigravity IDE (VSCode / agy.exe) 中：
-// kKc 将原始未包装的 setSelectedModel 传给 hKc；
-// hKc 内部将其包装为 g = (m) => { b(m); c(!1); } 并传给子组件 XJc 和 Provider；
-// 爬树遍历时从内部向外爬，innerPopoverProps 是 XJc (带 c(!1) 强制闭合菜单逻辑)，
-// 而最外层的 outerPopoverProps (hKc) 才是最原始未包装关菜单的纯净 setter！
-var unwrappedSetter =
-(outerPopoverProps && typeof outerPopoverProps.setSelectedModel === "function" ? outerPopoverProps.setSelectedModel : null) ||
-(innerPopoverProps && typeof innerPopoverProps.setSelectedModel === "function" ? innerPopoverProps.setSelectedModel : null) ||
-(selectorCtx && typeof selectorCtx.setSelectedModel === "function" ? selectorCtx.setSelectedModel : null);
-var setIsOpenFn =
-(outerPopoverProps && typeof outerPopoverProps.setIsOpen === "function" ? outerPopoverProps.setIsOpen : null) ||
-(innerPopoverProps && typeof innerPopoverProps.setIsOpen === "function" ? innerPopoverProps.setIsOpen : null) ||
-(selectorCtx && typeof selectorCtx.setIsOpen === "function" ? selectorCtx.setIsOpen : null);
+var _fn = function (o, k) { return o && typeof o[k] === "function" ? o[k] : null; };
+var sc = selectorCtx, op = outerPopoverProps, ip = innerPopoverProps, gm = globalModelCtx;
+var orchPlanners = sc && Array.isArray(sc.orchestratorPlanners) ? sc.orchestratorPlanners : [];
 return {
-effortIndex: effortIndex,
+effortIndex: normalizeEffortIndex(sc && sc.effortIndex, modelOptions),
 modelOptions: modelOptions,
 selectedModel: selectedModel,
-groups: (selectorCtx && selectorCtx.groups) || [],
+orchPlanners: orchPlanners,
+orchIdx: normalizeEffortIndex(sc && sc.orchestratorPlannerIndex, orchPlanners),
+orchDef: (sc && sc.orchestratorDefaultPlanner) || null,
+orchPick: sc && sc.orchestratorPick && typeof sc.orchestratorPick === "object" ? sc.orchestratorPick : null,
+groups: (sc && sc.groups) || [],
 conversationId: conversationId,
 hasConversationSelector: hasConversationSelector,
-setModelConfigByLabelForConversation:
-globalModelCtx && typeof globalModelCtx.setModelConfigByLabelForConversation === "function"
-? globalModelCtx.setModelConfigByLabelForConversation
-: null,
-setCurrentModelConfigByLabel:
-globalModelCtx && typeof globalModelCtx.setCurrentModelConfigByLabel === "function"
-? globalModelCtx.setCurrentModelConfigByLabel
-: null,
-unwrappedSetSelectedModel: unwrappedSetter,
-setIsOpen: setIsOpenFn,
-isOpen: Boolean((outerPopoverProps && outerPopoverProps.open) || (innerPopoverProps && innerPopoverProps.open))
+setModelConfigByLabelForConversation: _fn(gm, "setModelConfigByLabelForConversation"),
+setCurrentModelConfigByLabel: _fn(gm, "setCurrentModelConfigByLabel"),
+unwrappedSetSelectedModel: _fn(op, "setSelectedModel") || _fn(ip, "setSelectedModel") || _fn(sc, "setSelectedModel"),
+setIsOpen: _fn(op, "setIsOpen") || _fn(ip, "setIsOpen") || _fn(sc, "setIsOpen"),
+isOpen: Boolean((op && op.open) || (ip && ip.open))
 };
 }
-/**
-* 剖析当前选中模型（或指定 baseName 模型）在 Antigravity 中的可用推理档位列表
-*/
-function resolveModelEffortProfile(ctx, targetModelOrBase, _effMap) {
+function resolveModelEffortProfile(ctx, targetModelOrBase, _effMap, planOvr) {
 if (!ctx) return null;
-var selected = ctx.selectedModel;
-var modelObj = null;
-var baseName = "";
-var activeEffort = "";
-if (typeof targetModelOrBase === "string" && targetModelOrBase) {
-baseName = targetModelOrBase;
-} else if (targetModelOrBase && typeof targetModelOrBase === "object") {
-modelObj = targetModelOrBase;
-} else {
-modelObj = selected;
+var selected = ctx.selectedModel, modelObj = null, baseName = "", activeEffort = "";
+if (typeof targetModelOrBase === "string" && targetModelOrBase) baseName = targetModelOrBase;
+else if (targetModelOrBase && typeof targetModelOrBase === "object") modelObj = targetModelOrBase;
+else modelObj = selected;
+var isOrch = _isOrch(modelObj || baseName), idx = ctx.effortIndex, orchTune = false;
+if (isOrch) {
+var pi = _resOrch(ctx, planOvr);
+if (pi && pi.opt) { modelObj = pi.opt; idx = pi.idx || ctx.effortIndex; orchTune = true; }
 }
 if (modelObj && typeof modelObj.label === "string") {
 var parsed = parseModelLabel(modelObj.label);
-if (parsed) {
-baseName = parsed.base;
-activeEffort = parsed.effort;
-} else {
-baseName = modelObj.label;
+if (parsed) { baseName = parsed.base; activeEffort = parsed.effort; }
+else baseName = modelObj.label;
 }
-}
-var byEffort = baseName && ctx.effortIndex instanceof Map ? ctx.effortIndex.get(baseName) : null;
+var byEffort = _luEff(idx, baseName);
 if (byEffort && byEffort.size >= 2) {
 var sortedKeys = [];
 for (var i = 0; i < AG_EFFORT_ORDER.length; i += 1) {
@@ -1545,65 +1568,42 @@ if (byEffort.has(remembered)) activeEffort = remembered;
 }
 if (!activeEffort) {
 var selParsed = selected && parseModelLabel(selected.label);
-if (selParsed && selParsed.base === baseName && byEffort.has(selParsed.effort)) {
-activeEffort = selParsed.effort;
-} else if (byEffort.has("medium")) {
-activeEffort = "medium";
-} else {
-activeEffort = sortedKeys[0] || "";
+if (selParsed && selParsed.base === baseName && byEffort.has(selParsed.effort)) activeEffort = selParsed.effort;
+else if (byEffort.has("medium")) activeEffort = "medium";
+else activeEffort = sortedKeys[0] || "";
 }
 }
-}
-var levels = sortedKeys.map(function (k) {
-var opt = byEffort.get(k);
-return {
-effort: k,
-label: AG_EFFORT_LABELS[k] || k,
-modelOption: opt
-};
-});
+var levels = sortedKeys.map(function (k) { return { effort: k, label: AG_EFFORT_LABELS[k] || k, modelOption: byEffort.get(k) }; });
 var currentIndex = Math.max(0, sortedKeys.indexOf(activeEffort));
 var isClaude = isClaudeModel(baseName);
-var theme = isClaude ? "claude" : "codex";
 return {
-baseName: baseName,
-isClaude: isClaude,
-theme: theme,
-locked: false,
-levels: levels,
-currentIndex: currentIndex,
-currentEffort: sortedKeys[currentIndex] || activeEffort,
+baseName: baseName, isOrchestrator: isOrch, orchestratorTunable: orchTune,
+isClaude: isClaude, theme: isClaude ? "claude" : "codex", locked: false, levels: levels,
+currentIndex: currentIndex, currentEffort: sortedKeys[currentIndex] || activeEffort,
 currentLabel: AG_EFFORT_LABELS[sortedKeys[currentIndex]] || activeEffort,
 modelOption: byEffort.get(sortedKeys[currentIndex]) || modelObj
 };
 }
-// 单档位模型（如 GPT-OSS 120B (Medium)）或自定义模型：锁定不可拖动
-var singleParsed = modelObj && parseModelLabel(modelObj.label);
-var singleEffort = singleParsed ? singleParsed.effort : "medium";
-var curDocLang = getPrismRootAttr(null, null, "data-ag-cs-lang");
-var singleLabel = singleParsed ? singleParsed.effortLabel : (curDocLang === "en" ? "Fixed" : "固定");
-var isClaudeSingle = isClaudeModel(baseName || (modelObj && modelObj.label));
+var sP = modelObj && parseModelLabel(modelObj.label), sE = sP ? sP.effort : "medium";
+var sL = sP ? sP.effortLabel : (getPrismRootAttr(null, null, "data-ag-cs-lang") === "en" ? "Fixed" : "固定");
+var sC = isClaudeModel(baseName || (modelObj && modelObj.label));
 return {
-baseName: baseName || (modelObj && modelObj.label) || "",
-isClaude: isClaudeSingle,
-theme: isClaudeSingle ? "claude" : "codex",
-locked: true,
-levels: [
-{
-effort: singleEffort,
-label: singleLabel,
-modelOption: modelObj
-}
-],
-currentIndex: 0,
-currentEffort: singleEffort,
-currentLabel: singleLabel,
-modelOption: modelObj
+baseName: baseName || (modelObj && modelObj.label) || "", isOrchestrator: isOrch, orchestratorTunable: false,
+isClaude: sC, theme: sC ? "claude" : "codex", locked: true,
+levels: [{ effort: sE, label: sL, modelOption: modelObj }],
+currentIndex: 0, currentEffort: sE, currentLabel: sL, modelOption: modelObj
 };
 }
-function _commitAgOpt(ctx, targetOption) {
+function _commitAgOpt(ctx, targetOption, isOrchPlan) {
 if (!ctx || !targetOption || !targetOption.label) return false;
 try {
+var pk = ctx.orchPick || ctx.orchestratorPick;
+if (isOrchPlan && pk && typeof pk.select === "function") {
+var def = ctx.orchDef || ctx.orchestratorDefaultPlanner;
+pk.select(def && def.value === targetOption.value ? 0 : targetOption.value);
+if (typeof ctx.setIsOpen === "function") { try { ctx.setIsOpen(true); } catch (e) {} }
+return true;
+}
 // 优先调用 eKa.Provider 的 setModelConfigByLabelForConversation：
 // 直接更新当前会话与全局默认模型，不触发 $Xb 的 setIsOpen(false) 关菜单，也不触发编辑器抢焦点
 if (typeof ctx.setModelConfigByLabelForConversation === "function") {
@@ -2651,6 +2651,7 @@ var activeHostEl = null;
 var _seatLs = new Set();
 var activeBaseOverride = null;
 var _actOptOvr = null;
+var _orchPlanOvr = null;
 var observer = null;
 var _intMut = false;
 function notifySeatListeners() {
@@ -2670,7 +2671,7 @@ return _rdAgFiber(trigger || panel);
 function getActiveProfile(ctx) {
 if (!ctx) return null;
 var target = _actOptOvr || activeBaseOverride || ctx.selectedModel;
-return resolveModelEffortProfile(ctx, target, _effMap);
+return resolveModelEffortProfile(ctx, target, _effMap, _orchPlanOvr);
 }
 /**
 * 立即同步更新：
@@ -2681,7 +2682,7 @@ function _syncAgDom(ctx, activeProfile) {
 if (!ctx) return;
 var profile = activeProfile || getActiveProfile(ctx);
 if (!profile) return;
-if (!profile.locked && profile.baseName && profile.currentEffort) {
+if (!profile.locked && !profile.isOrchestrator && profile.baseName && profile.currentEffort) {
 _effMap.set(profile.baseName, profile.currentEffort);
 }
 var count = profile.levels.length;
@@ -2689,7 +2690,7 @@ var idx = profile.currentIndex;
 var isMax = !profile.locked && count > 1 && idx === count - 1 && !isOffLevel(profile.currentLabel);
 // 1. 同步底部折叠按钮 (button[data-testid="model-selector-trigger"])
 var triggerBtn = findAntigravityTrigger(doc);
-if (triggerBtn) {
+if (triggerBtn && !profile.isOrchestrator) {
 var outerSpan = triggerBtn.querySelector("span.min-w-0");
 if (outerSpan) {
 var allSpans = outerSpan.querySelectorAll("span");
@@ -2713,128 +2714,80 @@ effortSpan.textContent = nextEffortText;
 }
 }
 }
-syncTriggerColor(doc, profile.currentLabel, idx, count, isMax, false);
+syncTriggerColor(doc, profile.currentLabel, idx, count, isMax, false, Boolean(profile.isClaude));
 // 2. 同步展开菜单中的各模型行
 var panel = findAntigravityPanel(doc);
 if (!panel) return;
+var _sa = function (el, k, v) { if (el && el.getAttribute(k) !== v) el.setAttribute(k, v); };
+var _mkSel = function (el, on) {
+if (!el) return;
+_sa(el, "data-ces-model-selected", on ? "true" : "false");
+el.classList.toggle("text-foreground", on);
+el.classList.toggle("text-secondary-foreground", !on);
+};
+if (profile.isOrchestrator && profile.orchestratorTunable && !profile.locked) {
+_sa(panel, "data-ces-orch-tunable", "true");
+panel.removeAttribute("data-ag-cs-orch-active");
+_sa(activeRow, "data-row-hidden", "false");
+_sa(activeRow, "aria-hidden", "false");
+var ob = panel.querySelector('[data-testid="orchestrator-effort-bar"]');
+_sa(ob, "data-row-hidden", "true");
+_sa(ob, "aria-hidden", "true");
+} else panel.removeAttribute("data-ces-orch-tunable");
+var orchRows = panel.querySelectorAll('[data-testid="model-selector-orchestrator"]');
+for (var oi = 0; oi < orchRows.length; oi += 1) _sa(orchRows[oi], "data-ces-model-selected", profile.isOrchestrator ? "true" : "false");
 var groupSpans = panel.querySelectorAll('[data-testid="model-selector-effort-group"]');
 for (var i = 0; i < groupSpans.length; i += 1) {
-var gSpan = groupSpans[i];
-var base = gSpan.getAttribute("data-model-base") || (gSpan.textContent || "").trim();
-var menuItem = gSpan.closest('[role="menuitem"]');
+var gSpan = groupSpans[i], base = gSpan.getAttribute("data-model-base") || (gSpan.textContent || "").trim();
 var rowProf = resolveModelEffortProfile(ctx, base, _effMap);
 if (!rowProf) continue;
-var isSelectedModel = profile.baseName === base;
-if (menuItem) {
-var nextSelectedAttr = isSelectedModel ? "true" : "false";
-if (menuItem.getAttribute("data-ces-model-selected") !== nextSelectedAttr) {
-menuItem.setAttribute("data-ces-model-selected", nextSelectedAttr);
-}
-if (isSelectedModel) {
-if (menuItem.classList.contains("text-secondary-foreground")) {
-menuItem.classList.remove("text-secondary-foreground");
-}
-if (!menuItem.classList.contains("text-foreground")) {
-menuItem.classList.add("text-foreground");
-}
-} else {
-if (menuItem.classList.contains("text-foreground")) {
-menuItem.classList.remove("text-foreground");
-}
-if (!menuItem.classList.contains("text-secondary-foreground")) {
-menuItem.classList.add("text-secondary-foreground");
-}
-}
-}
-// 模型名右侧的档位标签 (<span class="shrink-0 opacity-70 text-xs">)
+var sel = !profile.isOrchestrator && profile.baseName === base;
+_mkSel(gSpan.closest('[role="menuitem"]'), sel);
 var sib = gSpan.nextElementSibling;
 if (sib && sib.tagName === "SPAN") {
-var displayEffort = isSelectedModel ? profile.currentLabel : rowProf.currentLabel;
-var displayIdx = isSelectedModel ? profile.currentIndex : rowProf.currentIndex;
-var displayCount = rowProf.levels.length;
-var displayMax = displayCount > 1 && displayIdx === displayCount - 1;
-if (sib.textContent !== displayEffort) {
-sib.textContent = displayEffort;
-}
-var rowColor = valueColorFor(displayEffort, displayIdx, displayCount, displayMax, false) || "";
-if (sib.style.color !== rowColor) sib.style.color = rowColor;
-var rowOpacity = rowColor ? "1" : "";
-if (sib.style.opacity !== rowOpacity) sib.style.opacity = rowOpacity;
-var rowWeight = rowColor ? "600" : "";
-if (sib.style.fontWeight !== rowWeight) sib.style.fontWeight = rowWeight;
+var dE = sel ? profile.currentLabel : rowProf.currentLabel, dI = sel ? profile.currentIndex : rowProf.currentIndex, dC = rowProf.levels.length;
+if (sib.textContent !== dE) sib.textContent = dE;
+var rc = valueColorFor(dE, dI, dC, dC > 1 && dI === dC - 1, false) || "";
+if (sib.style.color !== rc) sib.style.color = rc;
+if (sib.style.opacity !== (rc ? "1" : "")) sib.style.opacity = rc ? "1" : "";
+if (sib.style.fontWeight !== (rc ? "600" : "")) sib.style.fontWeight = rc ? "600" : "";
 }
 }
 var singleItems = panel.querySelectorAll('[data-testid="model-selector-item"]');
 for (var j = 0; j < singleItems.length; j += 1) {
 var sItem = singleItems[j];
 var sLabel = sItem.getAttribute("data-model-label") || "";
-var isSingleSelected =
-(profile.modelOption && profile.modelOption.label === sLabel) ||
-profile.baseName === sLabel;
-var nextSingleAttr = isSingleSelected ? "true" : "false";
-if (sItem.getAttribute("data-ces-model-selected") !== nextSingleAttr) {
-sItem.setAttribute("data-ces-model-selected", nextSingleAttr);
-}
-if (isSingleSelected) {
-if (sItem.classList.contains("text-secondary-foreground")) {
-sItem.classList.remove("text-secondary-foreground");
-}
-if (!sItem.classList.contains("text-foreground")) {
-sItem.classList.add("text-foreground");
-}
-} else {
-if (sItem.classList.contains("text-foreground")) {
-sItem.classList.remove("text-foreground");
-}
-if (!sItem.classList.contains("text-secondary-foreground")) {
-sItem.classList.add("text-secondary-foreground");
+_mkSel(sItem, !profile.isOrchestrator && ((profile.modelOption && profile.modelOption.label === sLabel) || profile.baseName === sLabel));
 }
 }
-}
-}
+function _curProf() { return getActiveProfile(getLiveContext()); }
 var agSeatAdapter = {
-get effortLevels() {
-var ctx = getLiveContext();
-var prof = getActiveProfile(ctx);
-return prof ? prof.levels : [];
-},
-get currentEffort() {
-var ctx = getLiveContext();
-var prof = getActiveProfile(ctx);
-return prof ? prof.currentEffort : "";
-},
-get locked() {
-var ctx = getLiveContext();
-var prof = getActiveProfile(ctx);
-return prof ? prof.locked : true;
-},
-get baseName() {
-var ctx = getLiveContext();
-var prof = getActiveProfile(ctx);
-return prof ? prof.baseName : "";
-},
-get isClaude() {
-var ctx = getLiveContext();
-var prof = getActiveProfile(ctx);
-return prof ? Boolean(prof.isClaude) : false;
-},
-get theme() {
-var ctx = getLiveContext();
-var prof = getActiveProfile(ctx);
-return prof ? (prof.theme || "codex") : "codex";
-},
+get effortLevels() { var p = _curProf(); return p ? p.levels : []; },
+get currentEffort() { var p = _curProf(); return p ? p.currentEffort : ""; },
+get locked() { var p = _curProf(); return p ? p.locked : true; },
+get baseName() { var p = _curProf(); return p ? p.baseName : ""; },
+get isClaude() { var p = _curProf(); return p ? Boolean(p.isClaude) : false; },
+get theme() { var p = _curProf(); return p ? (p.theme || "codex") : "codex"; },
 selectEffort: function (levelItem) {
 var ctx = getLiveContext();
 if (!ctx || !levelItem) return;
 var targetOpt = levelItem.modelOption || (levelItem.raw && levelItem.raw.modelOption);
-var effortKey = levelItem.effort || (levelItem.raw && levelItem.raw.effort);
 if (!targetOpt) return;
+var curProf = getActiveProfile(ctx);
+if (curProf && curProf.isOrchestrator && curProf.orchestratorTunable) {
+_orchPlanOvr = targetOpt;
+_commitAgOpt(ctx, targetOpt, true);
+_intMut = true;
+try { _syncAgDom(ctx, resolveModelEffortProfile(ctx, _actOptOvr || ctx.selectedModel, _effMap, targetOpt)); notifySeatListeners(); } finally { _intMut = false; }
+return;
+}
 var parsed = parseModelLabel(targetOpt.label);
 if (parsed) {
 _effMap.set(parsed.base, parsed.effort);
 activeBaseOverride = parsed.base;
 }
 _actOptOvr = targetOpt;
+_orchPlanOvr = null;
 _commitAgOpt(ctx, targetOpt);
 _intMut = true;
 try {
@@ -2915,6 +2868,7 @@ _actOptOvr = targetOption;
 }
 }
 if (targetOption) {
+_orchPlanOvr = null;
 tracePush("ag-select-model-in-menu", { label: targetOption.label });
 _commitAgOpt(ctx, targetOption);
 _intMut = true;
@@ -3127,6 +3081,7 @@ activeHostEl = null;
 activePanel = null;
 activeBaseOverride = null;
 _actOptOvr = null;
+_orchPlanOvr = null;
 }
 function _mntSec(panel, ctx) {
 panel.classList.add("ces-ag-panel-enhanced");
@@ -3240,6 +3195,10 @@ if (ctx.selectedModel.label === _actOptOvr.label) {
 _actOptOvr = null;
 activeBaseOverride = null;
 }
+}
+if (ctx && _orchPlanOvr) {
+var lp = _isOrch(ctx.selectedModel) ? _resOrch(ctx) : null;
+if (!lp || (lp.opt && lp.opt.value === _orchPlanOvr.value)) _orchPlanOvr = null;
 }
 if (activePanel !== panel || !activeSection || !panel.contains(activeSection)) {
 _unmntSec();
@@ -3380,5 +3339,5 @@ document.addEventListener("DOMContentLoaded", boot, { once: true });
 boot();
 }
 }
-return {mountCodexEffortSlider,installMenuObserver,installAntigravityObserver,installCodexEffortSlider,findAntigravityTrigger,findAntigravityPanel,resolveModelEffortProfile,motionMode,openSettingsPanel,fillColorFor,fillBackgroundFor,valueColorFor,paintDither,surfaceIsDark};
+return {mountCodexEffortSlider,installMenuObserver,installAntigravityObserver,installCodexEffortSlider,findAntigravityTrigger,findAntigravityPanel,resolveModelEffortProfile,normalizeEffortIndex,motionMode,openSettingsPanel,fillColorFor,fillBackgroundFor,valueColorFor,paintDither,surfaceIsDark};
 });

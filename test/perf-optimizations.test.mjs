@@ -1394,7 +1394,7 @@ test('perf guard 20: Host Turbo alert.css dedup+restore, async img, hidden sidec
   };
   sbUi.globalThis = sbUi;
   vm.runInNewContext(uiSrc, sbUi);
-  sbUi.__agCsUiMain({}, { version: '1.0.2', codeHash: 'test' });
+  sbUi.__agCsUiMain({}, { version: '1.0.3', codeHash: 'test' });
 
   // Verify T1: 1 singleton hoisted in head, all 3 duplicate bubble styles kept in React DOM but disabled=true
   const singleton = doc.getElementById('ag-prism-host-alert-css');

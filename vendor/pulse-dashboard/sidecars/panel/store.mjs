@@ -51,7 +51,7 @@ export class MetricsStore {
     const cdpPort = opts.cdpPort ?? opts.debugPort ?? null;
     const client = isClientInstance
       ? clientOrOpts
-      : (opts.client || new AntigravityClient({ ...(cdpPort ? { cdpPort } : {}), ...(opts.dataDir ? { paths: () => platformPaths({ dataDir: resolvedDataDir }) } : {}) }));
+      : (opts.client || new AntigravityClient({ ...(cdpPort ? { cdpPort } : {}), ...(typeof opts.rendererRpc === 'function' ? { rendererRpc: opts.rendererRpc } : {}), ...(opts.dataDir ? { paths: () => platformPaths({ dataDir: resolvedDataDir }) } : {}) }));
     if (cdpPort && typeof client.setCdpPort === 'function') client.setCdpPort(cdpPort);
 
     const history = opts.history || new SessionHistory(join(resolvedDataDir, 'history-v1'));
@@ -292,7 +292,9 @@ export class MetricsStore {
   }
 
   startBackground(scope, id, entry, current) {
-    const started = this.background?.request(scope, id, this.client.server || this.client.reader?.endpoint, { summary: this.client.reader?.summaries?.[id], isCurrent: current });
+    const ep = this.client.server || this.client.reader?.endpoint;
+    if (!ep || ep.mode === 'renderer-proxy' || !ep.csrf) return false;
+    const started = this.background?.request(scope, id, ep, { summary: this.client.reader?.summaries?.[id], isCurrent: current });
     if (started) {
       entry.backgroundOnly = true;
       entry.backgroundReady = false;

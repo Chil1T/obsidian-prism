@@ -20,6 +20,10 @@ function identify(model){
  const normalized=name.toLowerCase().replace(/(\d)[._-](\d)/g,'$1.$2').replace(/[\s()_]+/g,'-').replace(/-+$/,'');
  let match=normalized.match(/^gemini-3\.8-flash(?:-(n|high|medium|low))?$/);
  if(match)return {key:'gemini-3.8-flash',display:'Gemini 3.8 Flash'+(match[1]&&match[1]!=='n'?` (${match[1][0].toUpperCase()+match[1].slice(1)})`:'')};
+ match=normalized.match(/^gemini-4-(neon|carbon|argon|hydrogen)(?:-(xhigh|extra|high|medium|low))?$/);
+ if(match){const fam=match[1][0].toUpperCase()+match[1].slice(1);const eff=match[2]?match[2]==='xhigh'?'XHigh':match[2][0].toUpperCase()+match[2].slice(1):'';return {key:`gemini-4-${match[1]}`,display:`Gemini 4 ${fam}`+(eff?` (${eff})`:'')};}
+ match=normalized.match(/^(?:gemini-pro-)?orchestrator(?:-(neon|carbon|argon))?$/);
+ if(match)return {key:'orchestrator',display:'Orchestrator'+(match[1]?` (${match[1][0].toUpperCase()+match[1].slice(1)})`:'')};
  match=normalized.match(/^claude-(sonnet|opus)-(4\.6|5\.5)(?:-(thinking|high|medium|low))?(?:-\d{8})?$/);
  if(match)return {key:`claude-${match[1]}-${match[2]}`,display:`Claude ${match[1][0].toUpperCase()+match[1].slice(1)} ${match[2]}`+(match[3]?` (${match[3][0].toUpperCase()+match[3].slice(1)})`:'')};
  match=normalized.match(/^gpt-oss-120b(?:-(high|medium|low))?$/);

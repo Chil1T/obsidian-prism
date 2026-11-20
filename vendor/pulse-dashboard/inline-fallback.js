@@ -352,7 +352,7 @@
         if (lb) model = lb;
         const vw = doc?.querySelector?.('[data-testid="conversation-view"]');
         if (vw && typeof vw.querySelectorAll === 'function') {
-          const ts = vw.querySelectorAll('[data-testid="planner-response-text"], [data-testid="user-message-bubble"]');
+          const ts = vw.querySelectorAll('[data-testid="planner-response-text"],[data-testid="agent-response"],[data-testid="user-message-bubble"]');
           if (ts?.length > 0) {
             const n = Math.min(4, ts.length);
             let s = 0;

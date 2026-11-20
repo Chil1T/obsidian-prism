@@ -1081,6 +1081,8 @@
       });
     }
 
+    const PROSE_SEL = '[data-testid="planner-response-text"],[data-testid="agent-response"] [data-markdown-root]';
+
     function findStreamingThoughtBody(node) {
       const body = docOf()?.body;
       let cur = isEl(node) ? node : peOf(node);
@@ -1089,6 +1091,7 @@
         const tid = ga(cur, 'data-testid');
         if (
           tid === 'planner-response-text' ||
+          tid === 'agent-response' ||
           tid === 'background-task-command' ||
           tid === 'tool-group-collapsible' ||
           tid === 'conversation-view' ||
@@ -1165,7 +1168,7 @@
           const tb = findStreamingThoughtBody(baseEl);
           if (tb) {
             if (isManagedThoughtPanel(tb)) continue;
-          } else if (!closestOf(baseEl, '[data-testid="planner-response-text"]')) continue;
+          } else if (!closestOf(baseEl, PROSE_SEL)) continue;
           if (pLen !== undefined) enqueueFadeRange(target, pLen, nLen, now);
           else enqueueFadeRange(target, 0, nLen, now);
           continue;
@@ -1194,7 +1197,7 @@
           continue;
         }
 
-        const proseRoot = closestOf(baseEl, '[data-testid="planner-response-text"]');
+        const proseRoot = closestOf(baseEl, PROSE_SEL);
         if (!proseRoot) continue;
 
         const codeCtx = insideCodeOrTable(target, proseRoot);
@@ -1317,7 +1320,7 @@
       if (streamObs && streamRoot !== conv) {
         try {
           streamObs.disconnect();
-          const resps = qsa(conv, '[data-testid="planner-response-text"]');
+          const resps = qsa(conv, PROSE_SEL);
           if (resps.length > 0) snapTextLens(resps[resps.length - 1], 24);
           if (triggers.length > 0) {
             const lb = triggers[triggers.length - 1]?.nextElementSibling;
