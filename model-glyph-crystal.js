@@ -54,33 +54,25 @@
 
   function parseModelLabelInfo(rawText) {
     const raw = String(rawText || '').toLowerCase();
+    const isOrchestrator = /\borchestrator\b|编排/.test(raw);
     let brand = 'gemini';
-    let isOrchestrator = false;
-    if (/\borchestrator\b|编排/.test(raw)) {
-      brand = 'antigravity';
-      isOrchestrator = true;
-    } else if (/\bclaude\b|\banthropic\b|\bsonnet\b|\bopus\b|\bhaiku\b/.test(raw)) {
+    if (/\bclaude\b|\banthropic\b|\bsonnet\b|\bopus\b|\bhaiku\b/.test(raw)) {
       brand = 'claude';
     } else if (/\bgpt\b|\bopenai\b|\bo1\b|\bo3\b|\bo4\b|\bcodex\b|\bdeepseek\b/.test(raw)) {
       brand = 'openai';
+    } else if (isOrchestrator) {
+      brand = 'antigravity';
     } else if (/\bantigravity\b/.test(raw) && !/\bgemini\b|\bneon\b|\bargon\b|\bcarbon\b|\bhydrogen\b|\bflash\b/.test(raw)) {
       brand = 'antigravity';
     }
 
     let tier = 'medium';
-    if (isOrchestrator) {
-      tier = 'auto';
-    } else if (/\bgpt-oss\b|\bfixed\b|固定/.test(raw)) {
-      tier = 'fixed';
-    } else if (/\bxhigh\b|\bextra\b|超深|极高/.test(raw)) {
-      tier = 'xhigh';
-    } else if (/\bhigh\b|\bmax\b|\bthinking\b|高/.test(raw)) {
-      tier = 'high';
-    } else if (/\blow\b|\blite\b|\bminimal\b|低/.test(raw)) {
-      tier = 'low';
-    } else if (/\bmedium\b|\bmed\b|中/.test(raw)) {
-      tier = 'medium';
-    }
+    if (/\bgpt-oss\b|\bfixed\b|固定/.test(raw)) tier = 'fixed';
+    else if (/\bxhigh\b|\bextra\b|超深|极高/.test(raw)) tier = 'xhigh';
+    else if (/\bhigh\b|\bmax\b|\bthinking\b|高/.test(raw)) tier = 'high';
+    else if (/\blow\b|\blite\b|\bminimal\b|低/.test(raw)) tier = 'low';
+    else if (/\bmedium\b|\bmed\b|中/.test(raw)) tier = 'medium';
+    else if (isOrchestrator) tier = 'auto';
     return { brand, tier, isOrchestrator, camp: brand === 'claude' ? 'claude' : 'gemini' };
   }
 
@@ -161,7 +153,12 @@
     }
 
     function parseModelTriggerInfo(btn) {
-      return parseModelLabelInfo(readButtonLabelWithoutGlyph(btn));
+      const info = parseModelLabelInfo(readButtonLabelWithoutGlyph(btn));
+      if (info.isOrchestrator && btn?.getAttribute?.('data-ces-orch-b') === 'claude') {
+        info.brand = 'claude';
+        info.camp = 'claude';
+      }
+      return info;
     }
 
     function renderSparkSvg(size = 16, tier = 'auto', monochrome = false, className = '') {
@@ -355,6 +352,18 @@
       }
     }
 
+    function clearSliderPrismOverlay(panel) {
+      if (!panel) return;
+      panel.querySelectorAll('.ces-ag-effort-row[data-ag-orch-p]').forEach((row) => {
+        row.removeAttribute('data-ag-orch-p');
+        const trk = row.querySelector('.ces-track');
+        if (trk) {
+          trk.classList.remove('ag-cs-orch-track');
+          trk.querySelectorAll('canvas[data-orch-crystal-canvas="true"]').forEach((c) => c.remove());
+        }
+      });
+    }
+
     function teardownCrystalMount() {
       if (crystalMount.rafId) {
         cancelAnimationFrame(crystalMount.rafId);
@@ -367,6 +376,7 @@
       }
       if (crystalMount.panel && crystalMount.panel.isConnected) {
         clearPanelRowGlyphs(crystalMount.panel);
+        clearSliderPrismOverlay(crystalMount.panel);
         crystalMount.panel.removeAttribute('data-ag-cs-orch-active');
         crystalMount.panel
           .querySelectorAll('.ces-ag-effort-row:not([data-testid="orchestrator-effort-bar"])')
@@ -379,7 +389,7 @@
       if (crystalMount.bar && crystalMount.bar.parentElement) {
         crystalMount.bar.remove();
       }
-      crystalMount = { panel: null, bar: null, track: null, canvas: null, inst: null, rafId: 0, lastStepMs: 0, wasOrch: false };
+      crystalMount = { panel: null, bar: null, track: null, canvas: null, inst: null, rafId: 0, lastStepMs: 0, wasOrch: false, hideLock: false };
     }
 
     function detectPanelIsOrchestrator(panel, fallbackModelInfo) {
@@ -449,7 +459,6 @@
 
       const isOrch = detectPanelIsOrchestrator(panel, primaryModelInfo);
       const isOrchTunable = isOrch && panel.getAttribute('data-ces-orch-tunable') === 'true';
-      const showCrystalAutoBar = isOrch && !isOrchTunable;
       syncPanelRowGlyphs(panel);
       const cesSec = panel.querySelector('.ces-ag-section');
       if (cesSec) {
@@ -502,27 +511,58 @@
         slot.appendChild(bar);
       }
 
+      const sRow = panel.querySelector('.ces-ag-effort-row:not([data-testid="orchestrator-effort-bar"])');
+      const sTrk = sRow && sRow.querySelector('.ces-track');
+      const useSP = Boolean(isOrch && isOrchTunable && sRow && sTrk);
+      const useAuto = Boolean(isOrch && !useSP);
+
+      let tTrk = bar.querySelector('.ag-cs-orch-track');
+      let tCv = bar.querySelector('canvas[data-orch-crystal-canvas="true"]');
+      if (useSP) {
+        setAttrIfChanged(sRow, 'data-ag-orch-p', '1');
+        sTrk.classList.add('ag-cs-orch-track');
+        let c = sTrk.querySelector('canvas[data-orch-crystal-canvas="true"]');
+        if (!c) {
+          c = document.createElement('canvas');
+          c.className = 'ag-cs-orch-canvas';
+          c.setAttribute('data-orch-crystal-canvas', 'true');
+          c.setAttribute('aria-hidden', 'true');
+          sTrk.insertBefore(c, sTrk.firstChild);
+        }
+        tTrk = sTrk;
+        tCv = c;
+      } else {
+        clearSliderPrismOverlay(panel);
+      }
+
+      if (crystalMount.inst && crystalMount.canvas && crystalMount.canvas !== tCv) {
+        if (crystalMount.rafId) { cancelAnimationFrame(crystalMount.rafId); crystalMount.rafId = 0; }
+        try { crystalMount.inst.dispose?.(); } catch {}
+        crystalMount.inst = null;
+      }
+
       crystalMount.panel = panel;
       crystalMount.bar = bar;
-      crystalMount.track = bar.querySelector('.ag-cs-orch-track');
-      crystalMount.canvas = bar.querySelector('canvas[data-orch-crystal-canvas="true"]');
+      crystalMount.track = tTrk;
+      crystalMount.canvas = tCv;
+      crystalMount.hideLock = useSP;
 
-      if (showCrystalAutoBar) setAttrIfChanged(panel, 'data-ag-cs-orch-active', '1');
-      else if (panel.hasAttribute('data-ag-cs-orch-active')) panel.removeAttribute('data-ag-cs-orch-active');
+      if (useAuto) setAttrIfChanged(panel, 'data-ag-cs-orch-active', '1');
+      else panel.removeAttribute('data-ag-cs-orch-active');
 
       panel
         .querySelectorAll('.ces-ag-effort-row:not([data-testid="orchestrator-effort-bar"])')
         .forEach((row) => {
-          setAttrIfChanged(row, 'data-row-hidden', String(showCrystalAutoBar));
-          setAttrIfChanged(row, 'aria-hidden', String(showCrystalAutoBar));
+          setAttrIfChanged(row, 'data-row-hidden', String(useAuto));
+          setAttrIfChanged(row, 'aria-hidden', String(useAuto));
         });
 
-      const switchedIn = showCrystalAutoBar && !crystalMount.wasOrch;
-      crystalMount.wasOrch = showCrystalAutoBar;
-      setAttrIfChanged(bar, 'data-row-hidden', String(!showCrystalAutoBar));
-      setAttrIfChanged(bar, 'aria-hidden', String(!showCrystalAutoBar));
+      const switchedIn = isOrch && !crystalMount.wasOrch;
+      crystalMount.wasOrch = isOrch;
+      setAttrIfChanged(bar, 'data-row-hidden', String(!useAuto));
+      setAttrIfChanged(bar, 'aria-hidden', String(!useAuto));
 
-      if (showCrystalAutoBar) {
+      if (isOrch) {
         const reducedNow = motionReduced();
         const ambientNow = readRootAmbientFloat();
         if (
@@ -543,6 +583,7 @@
                   ambientIntensity: readRootAmbientFloat(),
                   accentTone: resolveCrystalAccentMode(dark),
                   reduceMotion: motionReduced(),
+                  hideLock: Boolean(crystalMount.hideLock),
                 };
               },
             });

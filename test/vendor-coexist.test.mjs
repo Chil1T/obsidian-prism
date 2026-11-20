@@ -1079,7 +1079,9 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
         payload: JSON.stringify({ id: 7, input: { conversationId: '11111111-2222-3333-4444-555555555555' } }),
       },
     });
-    await new Promise((r) => setTimeout(r, 80));
+    for (let i = 0; i < 100 && (!lazyCollectorInvoked || !metricsResolveExpr); i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
     assert.equal(lazyCollectorInvoked, 1);
     assert.ok(metricsResolveExpr && metricsResolveExpr.includes('88.8'));
 

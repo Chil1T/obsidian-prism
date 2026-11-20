@@ -462,3 +462,54 @@ test('v2.34.0 follow-up fixes: usage-core stepCount/hours, renderer-proxy 120s d
   assert.equal(fbSrc.includes('[data-testid="agent-response"]'), true);
 });
 
+test('v2.34.0 Orchestrator patch: Claude planner shows Claude icon & tunable Orchestrator mounts unlocked crystal prism bar', () => {
+  const mgc = require('../model-glyph-crystal.js');
+  // 1) parseModelLabelInfo recognizes Orchestrator + Claude -> brand=claude, isOrchestrator=true
+  const orchClaude = mgc.parseModelLabelInfo('Orchestrator Claude Opus 5.5 High');
+  assert.equal(orchClaude.isOrchestrator, true);
+  assert.equal(orchClaude.brand, 'claude');
+  assert.equal(orchClaude.camp, 'claude');
+  assert.equal(orchClaude.tier, 'high');
+
+  const orchCarbon = mgc.parseModelLabelInfo('Orchestrator Gemini 4 Carbon High');
+  assert.equal(orchCarbon.isOrchestrator, true);
+  assert.equal(orchCarbon.brand, 'antigravity');
+  assert.equal(orchCarbon.camp, 'gemini');
+  assert.equal(orchCarbon.tier, 'high');
+
+  const orchLegacy = mgc.parseModelLabelInfo('Orchestrator');
+  assert.equal(orchLegacy.isOrchestrator, true);
+  assert.equal(orchLegacy.brand, 'antigravity');
+  assert.equal(orchLegacy.tier, 'auto');
+
+  // 2) Fallback data-ces-orch-b="claude" on truncated trigger button
+  const fakeBtn = {
+    nodeType: 1,
+    childNodes: [{ nodeType: 3, nodeValue: 'Orchestrator' }],
+    getAttribute: (k) => (k === 'data-ces-orch-b' ? 'claude' : ''),
+    querySelectorAll: () => [],
+  };
+  const ctl = mgc.createModelGlyphCrystalController({
+    animatedIcons: null,
+    crystalPrismCore: null,
+    isDestroyed: () => false,
+    isComposerRestyleEnabled: () => true,
+    isZh: () => true,
+    isDarkTheme: () => true,
+    motionReduced: () => false,
+    getMinFrameGapMs: () => 0,
+    canMountRealCanvas: () => true,
+    getLastPointerPos: () => null,
+    setAttrIfChanged: (el, k, v) => el.setAttribute(k, v),
+  });
+  const trigInfo = ctl.parseModelTriggerInfo(fakeBtn);
+  assert.equal(trigInfo.isOrchestrator, true);
+  assert.equal(trigInfo.brand, 'claude');
+  assert.equal(trigInfo.camp, 'claude');
+
+  // 3) crystal-prism-core supports hideLock without adding new GLSL uniforms
+  const cpSrc = fs.readFileSync(new URL('../crystal-prism-core.js', import.meta.url), 'utf8');
+  assert.equal(cpSrc.includes('u_reduce < 1.5'), true);
+  assert.equal(cpSrc.includes('if (!hideLock) drawLaserEtchedLock'), true);
+});
+

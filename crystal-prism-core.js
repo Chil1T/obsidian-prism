@@ -449,7 +449,7 @@ void main() {
 
   // Inner-wall laser-etched lock mark (zero-copy single WebGL2 pass, no 2D canvas blit)
   vec2 lockCenter = vec2(halfSize.x - 15.5, 0.0);
-  if (abs(px.x - lockCenter.x) < 6.5 && abs(px.y) < 7.2) {
+  if (u_reduce < 1.5 && abs(px.x - lockCenter.x) < 6.5 && abs(px.y) < 7.2) {
     float lockAa = max(0.35, 0.68 / dpr);
     float shMask = etchedLockMask(px - (lockCenter + vec2(0.6, -0.8)), 0.625, lockAa);
     vec3 shCol = isDark > 0.5 ? vec3(0.024, 0.031, 0.063) : vec3(0.094, 0.133, 0.227);
@@ -723,6 +723,7 @@ void main() {
     let lastDrawAccent = -1;
     let lastDrawAmbient = -1;
     let lastDrawReduce = null;
+    let lastDrawHideLock = null;
     let wasProximityActive = false;
     let wasGlintActive = false;
     let wasWaking = false;
@@ -890,6 +891,7 @@ void main() {
         reduceMotion = Boolean(st.reduceMotion);
       }
       const isDark = st.isDark !== false;
+      const hideLock = Boolean(st.hideLock);
       const ambientVal = clamp(Number(st.ambientIntensity ?? 1), 0, 1);
       const prismStrengthVal = clamp(readPrismStrength(st) * ambientVal, 0, 1);
       const accentCode = resolveCrystalAccentCode(st.accentTone ?? st.spectrum ?? 'default');
@@ -973,6 +975,7 @@ void main() {
         isDark !== lastDrawDark ||
         accentCode !== lastDrawAccent ||
         reduceMotion !== lastDrawReduce ||
+        hideLock !== lastDrawHideLock ||
         Math.abs(ambientVal - lastDrawAmbient) > 0.002 ||
         Math.abs(prismStrengthVal - lastDrawStrength) > 0.002;
 
@@ -1012,7 +1015,7 @@ void main() {
           gl.uniform2f(u.pointer, -9999, -9999);
         }
         gl.uniform1f(u.proximity, currentProximity);
-        gl.uniform1f(u.reduce, reduceMotion ? 1.0 : 0.0);
+        gl.uniform1f(u.reduce, (reduceMotion ? 1.0 : 0.0) + (hideLock ? 2.0 : 0.0));
         gl.uniform4f(u.glints, glintBuf[0], glintBuf[1], glintBuf[2], glintBuf[3]);
         gl.uniform4f(u.glintU, GLINT_ANCHORS[0].u, GLINT_ANCHORS[1].u, GLINT_ANCHORS[2].u, GLINT_ANCHORS[3].u);
         gl.uniform4f(u.glintV, GLINT_ANCHORS[0].v, GLINT_ANCHORS[1].v, GLINT_ANCHORS[2].v, GLINT_ANCHORS[3].v);
@@ -1026,7 +1029,7 @@ void main() {
         const localCorner =
           pointerLocalX > -2000 ? { x: pointerLocalX, y: pointerLocalY } : { x: -9999, y: -9999 };
         drawFallback2D(ctx2d, cssW, cssH, isDark, localCorner, currentProximity, glintBuf, wakeU, wakeAmp, accentCode, ambientVal);
-        drawLaserEtchedLock(ctx2d, cssW, cssH, isDark, currentProximity);
+        if (!hideLock) drawLaserEtchedLock(ctx2d, cssW, cssH, isDark, currentProximity);
       }
 
       hasDrawnFrame = true;
@@ -1038,6 +1041,7 @@ void main() {
       lastDrawAccent = accentCode;
       lastDrawAmbient = ambientVal;
       lastDrawReduce = reduceMotion;
+      lastDrawHideLock = hideLock;
       wasProximityActive = proximityActive;
       wasGlintActive = glintVisible;
       wasWaking = wakingNow;

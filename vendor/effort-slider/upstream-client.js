@@ -94,27 +94,18 @@ var SETTINGS_KEY = "ag.codexEffortSlider.settings.v1";
 var LEGACY_SETTINGS_KEY = "dsh.codexEffortSlider.settings.v1";
 var SETTINGS_EVENT = "ag:codex-effort-slider:settings";
 var SETTINGS_VERSION = 1;
-var SETTINGS_SCHEMA = Object.freeze([
-Object.freeze({
-key: "motion",
-label: "动画效果",
-defaultValue: "fast",
-options: Object.freeze([
-Object.freeze({ value: "fast", label: "快速动画", hint: "拨过 1/3 即切档 · ~70ms 快速吸附" }),
-Object.freeze({ value: "quick", label: "简洁动画", hint: "无过渡 · 直接跳档" }),
-Object.freeze({ value: "full", label: "完整动画", hint: "匀变速追赶 + 星尘渐亮" })
-])
-}),
-Object.freeze({
-key: "ticks",
-label: "已到达档位的刻度点",
-defaultValue: "highlight",
-options: Object.freeze([
-Object.freeze({ value: "highlight", label: "亮白显示", hint: "默认 · 已滑过档位高亮" }),
-Object.freeze({ value: "dim", label: "与未到达同色", hint: "所有刻度点保持柔和半透明" }),
-Object.freeze({ value: "hidden", label: "隐藏", hint: "不显示任何刻度点" })
-])
-})
+var _F = Object.freeze;
+var SETTINGS_SCHEMA = _F([
+_F({ key: "motion", label: "动画效果", defaultValue: "fast", options: _F([
+_F({ value: "fast", label: "快速动画", hint: "拨过 1/3 即切档 · ~70ms 快速吸附" }),
+_F({ value: "quick", label: "简洁动画", hint: "无过渡 · 直接跳档" }),
+_F({ value: "full", label: "完整动画", hint: "匀变速追赶 + 星尘渐亮" })
+]) }),
+_F({ key: "ticks", label: "已到达档位的刻度点", defaultValue: "highlight", options: _F([
+_F({ value: "highlight", label: "亮白显示", hint: "默认 · 已滑过档位高亮" }),
+_F({ value: "dim", label: "与未到达同色", hint: "所有刻度点保持柔和半透明" }),
+_F({ value: "hidden", label: "隐藏", hint: "不显示任何刻度点" })
+]) })
 ]);
 function schemaDefaults() {
 var out = { v: SETTINGS_VERSION };
@@ -144,79 +135,37 @@ base.motion = "quick";
 }
 return base;
 }
+function _win(w) { return w || (typeof window !== "undefined" ? window : globalRoot); }
 function resolveStorage(win) {
-var w = win || (typeof window !== "undefined" ? window : globalRoot);
-try {
-if (w && w.localStorage) return w.localStorage;
-} catch (err) {
-// 沙箱或隐私上下文禁用 localStorage 时降级为内存模式
-}
-return null;
+try { var w = _win(win); return w && w.localStorage || null; } catch (e) { return null; }
 }
 function readSettings(win) {
-var store = resolveStorage(win);
-if (!store) return schemaDefaults();
+var s = resolveStorage(win);
+if (!s) return schemaDefaults();
 try {
-var text = store.getItem(SETTINGS_KEY) || store.getItem(LEGACY_SETTINGS_KEY);
-if (!text) return schemaDefaults();
-return normalizeSettings(JSON.parse(text));
-} catch (err) {
-return schemaDefaults();
-}
+var t = s.getItem(SETTINGS_KEY) || s.getItem(LEGACY_SETTINGS_KEY);
+return t ? normalizeSettings(JSON.parse(t)) : schemaDefaults();
+} catch (e) { return schemaDefaults(); }
 }
 function writeSettings(patch, win) {
-var w = win || (typeof window !== "undefined" ? window : globalRoot);
-var current = readSettings(w);
-var merged = Object.assign({}, current, patch || {});
-var next = normalizeSettings(merged);
-var store = resolveStorage(w);
-if (store) {
-try {
-store.setItem(SETTINGS_KEY, JSON.stringify(next));
-} catch (err) {
-// 忽略配额或权限异常
-}
-}
-try {
-if (w && typeof w.dispatchEvent === "function" && typeof w.CustomEvent === "function") {
-w.dispatchEvent(new w.CustomEvent(SETTINGS_EVENT, { detail: next }));
-}
-} catch (err) {
-// 忽略无 CustomEvent 构造器的测试环境
-}
+var w = _win(win), next = normalizeSettings(Object.assign({}, readSettings(w), patch || {}));
+var s = resolveStorage(w);
+if (s) { try { s.setItem(SETTINGS_KEY, JSON.stringify(next)); } catch (e) {} }
+try { if (w && w.dispatchEvent && w.CustomEvent) w.dispatchEvent(new w.CustomEvent(SETTINGS_EVENT, { detail: next })); } catch (e) {}
 return next;
 }
-function resetSettings(win) {
-return writeSettings(schemaDefaults(), win);
-}
-function onSettingsChange(listener, win) {
-var w = win || (typeof window !== "undefined" ? window : globalRoot);
+function resetSettings(win) { return writeSettings(schemaDefaults(), win); }
+function onSettingsChange(fn, win) {
+var w = _win(win);
 if (!w || typeof w.addEventListener !== "function") return function () {};
-function handleCustom(ev) {
-listener(ev && ev.detail ? normalizeSettings(ev.detail) : readSettings(w));
-}
-function handleStorage(ev) {
-if (!ev || (ev.key !== SETTINGS_KEY && ev.key !== LEGACY_SETTINGS_KEY)) return;
-listener(readSettings(w));
-}
-w.addEventListener(SETTINGS_EVENT, handleCustom);
-w.addEventListener("storage", handleStorage);
-return function () {
-w.removeEventListener(SETTINGS_EVENT, handleCustom);
-w.removeEventListener("storage", handleStorage);
-};
+var hC = function (ev) { fn(ev && ev.detail ? normalizeSettings(ev.detail) : readSettings(w)); };
+var hS = function (ev) { if (ev && (ev.key === SETTINGS_KEY || ev.key === LEGACY_SETTINGS_KEY)) fn(readSettings(w)); };
+w.addEventListener(SETTINGS_EVENT, hC); w.addEventListener("storage", hS);
+return function () { w.removeEventListener(SETTINGS_EVENT, hC); w.removeEventListener("storage", hS); };
 }
 function prefersReducedMotion(win) {
-var w = win || (typeof window !== "undefined" ? window : globalRoot);
-try {
-if (w && typeof w.matchMedia === "function") {
-var mq = w.matchMedia("(prefers-reduced-motion: reduce)");
-if (mq && mq.matches) return true;
-}
-} catch (err) {
-// 忽略不支持 matchMedia 的环境
-}
-return false;
+var w = _win(win);
+try { return Boolean(w && w.matchMedia && w.matchMedia("(prefers-reduced-motion: reduce)").matches); } catch (e) { return false; }
 }
 function getPrismRootAttr(doc, win, attr) {
 try {
@@ -245,60 +194,20 @@ if (mode === "full") return MOTION;
 return MOTION_FAST;
 }
 // ── 诊断环形缓冲区 ──────────────────────────────────────────────────────────
-var TRACE_CAPACITY = 200;
-var traceRingBuffer = [];
+var _tr = [];
 function tracePush(type, detail) {
-var entry = { t: Date.now(), type: String(type || "event") };
-if (detail && typeof detail === "object") {
-var keys = Object.keys(detail);
-for (var i = 0; i < keys.length; i += 1) {
-entry[keys[i]] = detail[keys[i]];
-}
-}
-traceRingBuffer.push(entry);
-if (traceRingBuffer.length > TRACE_CAPACITY) {
-traceRingBuffer.splice(0, traceRingBuffer.length - TRACE_CAPACITY);
-}
+var e = Object.assign({ t: Date.now(), type: String(type || "event") }, detail && typeof detail === "object" ? detail : null);
+_tr.push(e);
+if (_tr.length > 200) _tr.splice(0, _tr.length - 200);
 }
 function dumpTrace(win) {
-var w = win || (typeof window !== "undefined" ? window : globalRoot);
-return {
-plugin: "antigravity-codex-effort-slider@1.2.1",
-time: new Date().toISOString(),
-ua: w && w.navigator ? w.navigator.userAgent : "node",
-settings: readSettings(w),
-events: traceRingBuffer.slice()
-};
+var w = _win(win);
+return { plugin: "antigravity-codex-effort-slider@1.2.1", time: new Date().toISOString(), ua: w && w.navigator ? w.navigator.userAgent : "node", settings: readSettings(w), events: _tr.slice() };
 }
-function traceClear() {
-traceRingBuffer.length = 0;
-}
-// ── 数学、物理与刻度换算 ────────────────────────────────────────────────────
-function clamp01(value) {
-var num = Number(value);
-if (!Number.isFinite(num) || num <= 0) return 0;
-if (num >= 1) return 1;
-return num;
-}
-function clampAbs(value, limit) {
-var lim = Math.max(0, Number(limit) || 0);
-var num = Number(value) || 0;
-if (num > lim) return lim;
-if (num < -lim) return -lim;
-return num;
-}
-function pctFromIndex(index, count) {
-var n = Number(count) || 0;
-if (n <= 1) return 0;
-var idx = Math.max(0, Math.min(n - 1, Math.round(Number(index) || 0)));
-return idx / (n - 1);
-}
-function indexFromPct(pct, count) {
-var n = Number(count) || 0;
-if (n <= 1) return 0;
-var p = clamp01(pct);
-return Math.max(0, Math.min(n - 1, Math.round(p * (n - 1))));
-}
+function clamp01(v) { var n = Number(v); return !Number.isFinite(n) || n <= 0 ? 0 : n >= 1 ? 1 : n; }
+function clampAbs(v, l) { var m = Math.max(0, Number(l) || 0), n = Number(v) || 0; return n > m ? m : n < -m ? -m : n; }
+function pctFromIndex(i, c) { var n = Number(c) || 0; return n <= 1 ? 0 : Math.max(0, Math.min(n - 1, Math.round(Number(i) || 0))) / (n - 1); }
+function indexFromPct(p, c) { var n = Number(c) || 0; return n <= 1 ? 0 : Math.max(0, Math.min(n - 1, Math.round(clamp01(p) * (n - 1)))); }
 /**
 * 迟滞棘轮分档器（Hysteresis Detent）：
 * - 向新档位方向推进过 1/3 格宽即刻触发跳档，保证「拖过边界立即切档」的轻快手感；
@@ -1063,53 +972,28 @@ panel.appendChild(group);
 }
 var actions = doc.createElement("div");
 actions.className = "ces-set-actions";
-var copyBtn = doc.createElement("button");
-copyBtn.type = "button";
-copyBtn.className = "ces-set-btn";
-copyBtn.textContent = "复制诊断";
-copyBtn.addEventListener("click", function (ev) {
-ev.stopPropagation();
-var payload = JSON.stringify(dumpTrace(win), null, 2);
-try {
-if (win && win.navigator && win.navigator.clipboard && typeof win.navigator.clipboard.writeText === "function") {
-win.navigator.clipboard.writeText(payload);
+function _mkBtn(txt, fn) {
+var b = doc.createElement("button");
+b.type = "button"; b.className = "ces-set-btn"; b.textContent = txt;
+b.addEventListener("click", function (ev) { ev.stopPropagation(); fn(b); });
+actions.appendChild(b);
+return b;
 }
-} catch (err) {
-// 忽略剪贴板权限错误
-}
-copyBtn.textContent = "已复制";
+_mkBtn("复制诊断", function (b) {
+try { win && win.navigator && win.navigator.clipboard && win.navigator.clipboard.writeText && win.navigator.clipboard.writeText(JSON.stringify(dumpTrace(win), null, 2)); } catch (e) {}
+b.textContent = "已复制";
 });
-var resetBtn = doc.createElement("button");
-resetBtn.type = "button";
-resetBtn.className = "ces-set-btn";
-resetBtn.textContent = "恢复默认";
-resetBtn.addEventListener("click", function (ev) {
-ev.stopPropagation();
-resetSettings(win);
-refreshActiveButtons();
-});
-var closeBtn = doc.createElement("button");
-closeBtn.type = "button";
-closeBtn.className = "ces-set-btn";
-closeBtn.textContent = "关闭";
-actions.appendChild(copyBtn);
-actions.appendChild(resetBtn);
-actions.appendChild(closeBtn);
+_mkBtn("恢复默认", function () { resetSettings(win); refreshActiveButtons(); });
+var closeBtn = _mkBtn("关闭", function () { closePanel(); });
 panel.appendChild(actions);
 refreshActiveButtons();
-var offSettings = onSettingsChange(function () {
-refreshActiveButtons();
-}, win);
+var offSettings = onSettingsChange(function () { refreshActiveButtons(); }, win);
 function closePanel() {
 offSettings();
 doc.removeEventListener("pointerdown", onDocPointerDown, true);
 doc.removeEventListener("keydown", onDocKeyDown, true);
 if (panel.parentNode) panel.parentNode.removeChild(panel);
 }
-closeBtn.addEventListener("click", function (ev) {
-ev.stopPropagation();
-closePanel();
-});
 function onDocPointerDown(ev) {
 if (!panel.contains(ev.target)) {
 closePanel();
@@ -1145,81 +1029,42 @@ longPressTimer = null;
 }
 pressStartPos = null;
 }
-function onContextMenu(ev) {
-var host = isInsideSlider(ev.target);
-if (!host) return;
-ev.preventDefault();
-ev.stopPropagation();
+function _open(x, y) {
 if (activeClose) activeClose();
-activeClose = openSettingsPanel({
-document: doc,
-window: win,
-x: ev.clientX || 120,
-y: ev.clientY || 120
-});
+activeClose = openSettingsPanel({ document: doc, window: win, x: x || 120, y: y || 120 });
+}
+function onContextMenu(ev) {
+if (!isInsideSlider(ev.target)) return;
+ev.preventDefault(); ev.stopPropagation();
+_open(ev.clientX, ev.clientY);
 }
 function onKeyDown(ev) {
 var host = isInsideSlider(ev.target);
 if (!host) return;
 if (ev.key === "ContextMenu" || (ev.key === "F10" && ev.shiftKey)) {
-ev.preventDefault();
-ev.stopPropagation();
+ev.preventDefault(); ev.stopPropagation();
 var rect = host.getBoundingClientRect ? host.getBoundingClientRect() : { left: 120, bottom: 120 };
-if (activeClose) activeClose();
-activeClose = openSettingsPanel({
-document: doc,
-window: win,
-x: rect.left,
-y: rect.bottom + 4
-});
+_open(rect.left, rect.bottom + 4);
 }
 }
 function onPointerDown(ev) {
-var host = isInsideSlider(ev.target);
-if (!host || ev.button === 2) return;
+if (!isInsideSlider(ev.target) || ev.button === 2) return;
 clearLongPress();
 pressStartPos = { x: ev.clientX || 0, y: ev.clientY || 0 };
-longPressTimer = setTimeout(function () {
-longPressTimer = null;
-if (activeClose) activeClose();
-activeClose = openSettingsPanel({
-document: doc,
-window: win,
-x: (pressStartPos && pressStartPos.x) || 120,
-y: (pressStartPos && pressStartPos.y) || 120
-});
-}, 500);
+longPressTimer = setTimeout(function () { longPressTimer = null; _open(pressStartPos && pressStartPos.x, pressStartPos && pressStartPos.y); }, 500);
 }
 function onPointerMove(ev) {
 if (!pressStartPos || longPressTimer === null) return;
-var dx = (ev.clientX || 0) - pressStartPos.x;
-var dy = (ev.clientY || 0) - pressStartPos.y;
-if (dx * dx + dy * dy > 36) {
-clearLongPress();
+var dx = (ev.clientX || 0) - pressStartPos.x, dy = (ev.clientY || 0) - pressStartPos.y;
+if (dx * dx + dy * dy > 36) clearLongPress();
 }
-}
-function onPointerUp() {
-clearLongPress();
-}
-doc.addEventListener("contextmenu", onContextMenu, true);
-doc.addEventListener("keydown", onKeyDown, true);
-doc.addEventListener("pointerdown", onPointerDown, true);
-doc.addEventListener("pointermove", onPointerMove, true);
-doc.addEventListener("pointerup", onPointerUp, true);
-doc.addEventListener("pointercancel", onPointerUp, true);
+var evs = [["contextmenu", onContextMenu], ["keydown", onKeyDown], ["pointerdown", onPointerDown], ["pointermove", onPointerMove], ["pointerup", clearLongPress], ["pointercancel", clearLongPress]];
+evs.forEach(function (e) { doc.addEventListener(e[0], e[1], true); });
 return {
 stop: function () {
 clearLongPress();
-if (activeClose) {
-activeClose();
-activeClose = null;
-}
-doc.removeEventListener("contextmenu", onContextMenu, true);
-doc.removeEventListener("keydown", onKeyDown, true);
-doc.removeEventListener("pointerdown", onPointerDown, true);
-doc.removeEventListener("pointermove", onPointerMove, true);
-doc.removeEventListener("pointerup", onPointerUp, true);
-doc.removeEventListener("pointercancel", onPointerUp, true);
+if (activeClose) { activeClose(); activeClose = null; }
+evs.forEach(function (e) { doc.removeEventListener(e[0], e[1], true); });
 }
 };
 }
@@ -1276,107 +1121,66 @@ return null;
 }
 function findValueElement(row) {
 if (!row || typeof row.querySelector !== "function") return null;
-var explicit = row.querySelector('[data-ces-part="value"], .ces-ag-effort-value');
-if (explicit) return explicit;
-var children = row.querySelectorAll("span, div");
-var candidate = null;
-for (var i = 0; i < children.length; i += 1) {
-var child = children[i];
-if (child.closest && child.closest(".ces-inline")) continue;
-if (child.children && child.children.length > 0) continue;
-var t = (child.textContent || "").trim();
-if (!t) continue;
-var isHeaderLabel = false;
-for (var k = 0; k < INFERENCE_LABELS.length; k += 1) {
-if (t === INFERENCE_LABELS[k]) {
-isHeaderLabel = true;
-break;
+var ex = row.querySelector('[data-ces-part="value"], .ces-ag-effort-value');
+if (ex) return ex;
+var ch = row.querySelectorAll("span, div"), cand = null;
+for (var i = 0; i < ch.length; i += 1) {
+var c = ch[i], t = (c.textContent || "").trim();
+if (!t || (c.closest && c.closest(".ces-inline")) || (c.children && c.children.length)) continue;
+if (INFERENCE_LABELS.indexOf(t) < 0) cand = c;
 }
-}
-if (!isHeaderLabel) candidate = child;
-}
-return candidate;
+return cand;
 }
 function findEffortTrigger(doc) {
 var d = doc || (typeof document !== "undefined" ? document : null);
 if (!d || typeof d.querySelectorAll !== "function") return null;
-// 1. 优先匹配 Antigravity 原生模型选择器按钮中的档位 span (<span class="opacity-70"> High</span>)
-var agTrigger = findAntigravityTrigger(d);
-if (agTrigger) {
-var effortSpan = agTrigger.querySelector("span.opacity-70, [data-ces-part='trigger-effort']");
-if (effortSpan) return effortSpan;
-return agTrigger;
-}
-// 2. 兼容通用 composer 触发器（如包含 " · " 的按钮）
-var composers = d.querySelectorAll(".surface-composer, .surface-composer-card, form, body");
-for (var cIdx = 0; cIdx < composers.length; cIdx += 1) {
-var buttons = composers[cIdx].querySelectorAll('button[aria-haspopup="menu"]');
-for (var bIdx = 0; bIdx < buttons.length; bIdx += 1) {
-var btn = buttons[bIdx];
-if ((btn.textContent || "").indexOf(" · ") >= 0) return btn;
-}
+var ag = findAntigravityTrigger(d);
+if (ag) return ag.querySelector("span.opacity-70, [data-ces-part='trigger-effort']") || ag;
+var cs = d.querySelectorAll(".surface-composer, .surface-composer-card, form, body");
+for (var i = 0; i < cs.length; i += 1) {
+var bs = cs[i].querySelectorAll('button[aria-haspopup="menu"]');
+for (var j = 0; j < bs.length; j += 1) if ((bs[j].textContent || "").indexOf(" · ") >= 0) return bs[j];
 }
 return null;
 }
 function syncTriggerColor(doc, label, index, count, isMax, hasOffFirst, isClaude) {
 var d = doc || (typeof document !== "undefined" ? document : null);
 if (!d) return;
-var agTrigger = findAntigravityTrigger(d);
-var claudeFlag = typeof isClaude === "boolean" ? isClaude : isClaudeModel(agTrigger ? agTrigger.textContent : "");
-var color = valueColorFor(label, index, count, isMax, hasOffFirst, claudeFlag, resolvePrismAccentTone(d, null));
-// 1. Antigravity 原生触发按钮：只给档位后缀 span 着色，保持模型名称本身清晰易读
-if (agTrigger) {
-var effortSpan = agTrigger.querySelector("span.opacity-70, [data-ces-part='trigger-effort']");
-if (effortSpan) {
-effortSpan.setAttribute("data-ces-part", "trigger-effort");
-effortSpan.style.color = color || "";
-effortSpan.style.opacity = color ? "1" : "";
-effortSpan.style.fontWeight = color ? "600" : "";
+var ag = findAntigravityTrigger(d);
+var cf = typeof isClaude === "boolean" ? isClaude : isClaudeModel(ag ? ag.textContent : "");
+var col = valueColorFor(label, index, count, isMax, hasOffFirst, cf, resolvePrismAccentTone(d, null));
+if (ag) {
+var sp = ag.querySelector("span.opacity-70, [data-ces-part='trigger-effort']");
+if (sp) {
+sp.setAttribute("data-ces-part", "trigger-effort");
+sp.style.color = col || "";
+sp.style.opacity = col ? "1" : "";
+sp.style.fontWeight = col ? "600" : "";
 }
 return;
 }
-// 2. 兼容通用触发按钮
-var trigger = findEffortTrigger(d);
-if (!trigger) return;
-var spans = trigger.querySelectorAll("span");
-var target = spans.length > 0 ? spans[spans.length - 1] : trigger;
-target.style.color = color || "";
+var tr = findEffortTrigger(d);
+if (!tr) return;
+var sps = tr.querySelectorAll("span");
+(sps.length ? sps[sps.length - 1] : tr).style.color = col || "";
 }
 function findSeatEffort(win) {
-var w = win || (typeof window !== "undefined" ? window : globalRoot);
-var map = w && w.__dshSeats;
+var map = (win || (typeof window !== "undefined" ? window : globalRoot));
+map = map && map.__dshSeats;
 if (!map || typeof map.forEach !== "function") return null;
 var found = null;
-map.forEach(function (seat) {
-if (found) return;
-if (seat && Array.isArray(seat.effortLevels)) {
-found = seat;
-}
-});
+map.forEach(function (s) { if (!found && s && Array.isArray(s.effortLevels)) found = s; });
 return found;
 }
 function getReactFiber(el) {
 if (!el || typeof el !== "object") return null;
-var raw = null;
-var keys = Object.keys(el);
-for (var i = 0; i < keys.length; i += 1) {
-var k = keys[i];
-if (k.indexOf("__reactFiber$") === 0 || k.indexOf("__reactInternalInstance$") === 0) {
-raw = el[k];
-break;
-}
-}
+var raw = null, ks = Object.keys(el);
+for (var i = 0; i < ks.length; i += 1) if (ks[i].indexOf("__reactFiber$") === 0 || ks[i].indexOf("__reactInternalInstance$") === 0) { raw = el[ks[i]]; break; }
 if (!raw) return null;
 if (raw.alternate) {
-var root = raw;
-var guard = 0;
-while (root.return && guard < 80) {
-root = root.return;
-guard += 1;
-}
-if (root && root.stateNode && root.stateNode.current && root.stateNode.current !== root) {
-return raw.alternate;
-}
+var root = raw, g = 0;
+while (root.return && g < 80) { root = root.return; g += 1; }
+if (root && root.stateNode && root.stateNode.current && root.stateNode.current !== root) return raw.alternate;
 }
 return raw;
 }
@@ -1611,39 +1415,13 @@ ctx.setModelConfigByLabelForConversation(targetOption.label, ctx.conversationId,
 return true;
 }
 if (typeof ctx.unwrappedSetSelectedModel === "function") {
-// 核心保护：
-// 1. kKc 的 setSelectedModel 内部最后会同步调用 getLexicalEditor()?.focus() 抢夺焦点，
-//    导致 Radix Popover / @base-ui/react 菜单捕获 focusout/onFocusOutside 触发关闭；
-//    此处在调用期间临时屏蔽 Lexical editor 及全局 DOM focus 抢夺
-var doc = typeof document !== "undefined" ? document : null;
-var editable = doc && doc.querySelector ? doc.querySelector('[contenteditable="true"]') : null;
-var editorInst = editable ? editable.__lexicalEditor : null;
-var editorProto = editorInst ? Object.getPrototypeOf(editorInst) : null;
-var origEditorFocus = editorProto && typeof editorProto.focus === "function" ? editorProto.focus : null;
-var origInstFocus = editorInst && Object.prototype.hasOwnProperty.call(editorInst, "focus") ? editorInst.focus : null;
-var origHtmlFocus = typeof HTMLElement !== "undefined" && HTMLElement.prototype ? HTMLElement.prototype.focus : null;
-var origElemFocus = typeof Element !== "undefined" && Element.prototype ? Element.prototype.focus : null;
-var noop = function () {};
-if (origEditorFocus) editorProto.focus = noop;
-if (origInstFocus) editorInst.focus = noop;
-if (origHtmlFocus) HTMLElement.prototype.focus = noop;
-if (origElemFocus) Element.prototype.focus = noop;
-try {
-ctx.unwrappedSetSelectedModel(targetOption);
-} finally {
-if (origEditorFocus) editorProto.focus = origEditorFocus;
-if (origInstFocus) editorInst.focus = origInstFocus;
-if (origHtmlFocus) HTMLElement.prototype.focus = origHtmlFocus;
-if (origElemFocus) Element.prototype.focus = origElemFocus;
-}
-// 2. 强保障：确保菜单保持开启状态
-if (typeof ctx.setIsOpen === "function") {
-try {
-ctx.setIsOpen(true);
-} catch (err) {
-// 忽略外部状态同步异常
-}
-}
+var d = typeof document !== "undefined" ? document : null, ed = d && d.querySelector ? d.querySelector('[contenteditable="true"]') : null;
+var ei = ed && ed.__lexicalEditor, ep = ei && Object.getPrototypeOf(ei), noop = function () {}, saved = [];
+[ep, ei && Object.prototype.hasOwnProperty.call(ei, "focus") ? ei : null, typeof HTMLElement !== "undefined" && HTMLElement.prototype, typeof Element !== "undefined" && Element.prototype].forEach(function (o) {
+if (o && typeof o.focus === "function") { saved.push([o, o.focus]); o.focus = noop; }
+});
+try { ctx.unwrappedSetSelectedModel(targetOption); } finally { saved.forEach(function (s) { s[0].focus = s[1]; }); }
+if (typeof ctx.setIsOpen === "function") { try { ctx.setIsOpen(true); } catch (e) {} }
 return true;
 }
 if (typeof ctx.setCurrentModelConfigByLabel === "function") {
@@ -1723,65 +1501,39 @@ return { unmount: function () {}, refresh: function () {} };
 installStyles(doc);
 // 清空宿主容器并构建 DOM 树（对齐 dsh-codex-effort-slider 四层结构：fill / energy+sweep / stars+dot / knob）
 container.innerHTML = "";
-var rootEl = doc.createElement("div");
-rootEl.className = "ces-root";
+function _ce(tag, cls, part, parent) {
+var el = doc.createElement(tag);
+if (cls) el.className = cls;
+if (part) el.setAttribute("data-ces-part", part);
+if (parent) parent.appendChild(el);
+return el;
+}
+var rootEl = _ce("div", "ces-root");
 rootEl.setAttribute("role", "slider");
 rootEl.setAttribute("aria-label", resolveEffortTitle(doc, win));
-var trackEl = doc.createElement("div");
-trackEl.className = "ces-track";
-trackEl.setAttribute("data-ces-part", "track");
-var fillEl = doc.createElement("div");
-fillEl.className = "ces-fill";
-fillEl.setAttribute("data-ces-part", "fill");
-trackEl.appendChild(fillEl);
-var energyEl = doc.createElement("div");
-energyEl.className = "ces-energy";
-energyEl.setAttribute("data-ces-part", "energy");
-var sweepEl = doc.createElement("div");
-sweepEl.className = "ces-energy__sweep";
-sweepEl.setAttribute("data-ces-part", "sweep");
-energyEl.appendChild(sweepEl);
-trackEl.appendChild(energyEl);
-var starsEl = doc.createElement("div");
-starsEl.className = "ces-stars";
-starsEl.setAttribute("data-ces-part", "stars");
+var trackEl = _ce("div", "ces-track", "track", rootEl);
+var fillEl = _ce("div", "ces-fill", "fill", trackEl);
+var energyEl = _ce("div", "ces-energy", "energy", trackEl);
+_ce("div", "ces-energy__sweep", "sweep", energyEl);
+var starsEl = _ce("div", "ces-stars", "stars", trackEl);
 var starNodes = [];
 for (var sIdx = 0; sIdx < PARTICLES.length; sIdx += 1) {
 var p = PARTICLES[sIdx];
-var starEl = doc.createElement("span");
-starEl.className = "ces-star";
-starEl.setAttribute("data-ces-part", "star");
+var starEl = _ce("span", "ces-star", "star", starsEl);
 starEl.style.top = p.y + "%";
 starEl.style.display = "none";
-var dotEl = doc.createElement("span");
-dotEl.className = "ces-star__dot";
-dotEl.setAttribute("data-ces-part", "particle");
+var dotEl = _ce("span", "ces-star__dot", "particle", starEl);
 var bStr = p.brightness.toFixed(3);
 dotEl.setAttribute("data-brightness", bStr);
 dotEl.style.setProperty("--ces-b", bStr);
-starEl.appendChild(dotEl);
-starsEl.appendChild(starEl);
 starNodes.push({ el: starEl, dot: dotEl, meta: p });
 }
-trackEl.appendChild(starsEl);
-var ticksEl = doc.createElement("div");
-ticksEl.className = "ces-ticks";
-ticksEl.setAttribute("data-ces-part", "ticks");
-trackEl.appendChild(ticksEl);
-var claudeCanvasEl = doc.createElement("canvas");
-claudeCanvasEl.className = "ces-claude-canvas";
-claudeCanvasEl.setAttribute("data-ces-part", "claude-canvas");
+var ticksEl = _ce("div", "ces-ticks", "ticks", trackEl);
+var claudeCanvasEl = _ce("canvas", "ces-claude-canvas", "claude-canvas", trackEl);
 claudeCanvasEl.width = 280;
 claudeCanvasEl.height = 28;
-trackEl.appendChild(claudeCanvasEl);
-var knobEl = doc.createElement("div");
-knobEl.className = "ces-knob";
-knobEl.setAttribute("data-ces-part", "knob");
-var knobNotchEl = doc.createElement("div");
-knobNotchEl.className = "ces-knob-notch";
-knobEl.appendChild(knobNotchEl);
-trackEl.appendChild(knobEl);
-rootEl.appendChild(trackEl);
+var knobEl = _ce("div", "ces-knob", "knob", trackEl);
+_ce("div", "ces-knob-notch", null, knobEl);
 container.appendChild(rootEl);
 // ── 内部状态机 ──────────────────────────────────────────────────────────
 var destroyed = false;
@@ -2690,6 +2442,12 @@ var idx = profile.currentIndex;
 var isMax = !profile.locked && count > 1 && idx === count - 1 && !isOffLevel(profile.currentLabel);
 // 1. 同步底部折叠按钮 (button[data-testid="model-selector-trigger"])
 var triggerBtn = findAntigravityTrigger(doc);
+if (triggerBtn) {
+if (profile.isOrchestrator && profile.orchestratorTunable) {
+var pb = profile.isClaude ? "claude" : "gemini";
+if (triggerBtn.getAttribute("data-ces-orch-b") !== pb) triggerBtn.setAttribute("data-ces-orch-b", pb);
+} else triggerBtn.removeAttribute("data-ces-orch-b");
+}
 if (triggerBtn && !profile.isOrchestrator) {
 var outerSpan = triggerBtn.querySelector("span.min-w-0");
 if (outerSpan) {
@@ -2913,32 +2671,20 @@ usageHoverTimer = null;
 usageHoverAllowed = false;
 usageTriggerEl = null;
 }
-function onTriggerLeave() {
-resetUsageHover();
-}
+function _stp(ev) { ev.stopPropagation(); if (typeof ev.stopImmediatePropagation === "function") ev.stopImmediatePropagation(); }
 function onPointerEnterCapture(ev) {
 if (isDispatchingSynthetic) return;
 var trigger = findViewUsageTrigger(ev.target);
-if (!trigger) {
-resetUsageHover();
-return;
-}
-if (usageHoverAllowed && usageTriggerEl === trigger) {
-return;
-}
-ev.stopPropagation();
-if (typeof ev.stopImmediatePropagation === "function") ev.stopImmediatePropagation();
+if (!trigger) { resetUsageHover(); return; }
+if (usageHoverAllowed && usageTriggerEl === trigger) return;
+_stp(ev);
 resetUsageHover();
 usageTriggerEl = trigger;
-// 直接在目标元素上注册离开监听（W3C 规范：pointerleave 仅在离开该元素时触发且不冒泡）
 try {
-trigger.addEventListener("pointerleave", onTriggerLeave, { once: true });
-trigger.addEventListener("mouseleave", onTriggerLeave, { once: true });
+trigger.addEventListener("pointerleave", resetUsageHover, { once: true });
+trigger.addEventListener("mouseleave", resetUsageHover, { once: true });
 } catch (e) {}
-var clientX = ev.clientX;
-var clientY = ev.clientY;
-var pointerId = ev.pointerId || 1;
-var pointerType = ev.pointerType || "mouse";
+var cx = ev.clientX, cy = ev.clientY, pid = ev.pointerId || 1, pt = ev.pointerType || "mouse";
 usageHoverTimer = setTimeout(function () {
 usageHoverTimer = null;
 if (trigger && panel.contains(trigger)) {
@@ -2949,88 +2695,32 @@ var PE = (win && win.PointerEvent) || (typeof PointerEvent !== "undefined" ? Poi
 var ME = (win && win.MouseEvent) || (typeof MouseEvent !== "undefined" ? MouseEvent : null);
 var EV = (win && win.Event) || (typeof Event !== "undefined" ? Event : null);
 if (typeof PE === "function") {
-trigger.dispatchEvent(new PE("pointerenter", {
-bubbles: false,
-cancelable: true,
-pointerId: pointerId,
-pointerType: pointerType,
-clientX: clientX,
-clientY: clientY
-}));
-trigger.dispatchEvent(new PE("pointerover", {
-bubbles: true,
-cancelable: true,
-pointerId: pointerId,
-pointerType: pointerType,
-clientX: clientX,
-clientY: clientY
-}));
-trigger.dispatchEvent(new PE("pointermove", {
-bubbles: true,
-cancelable: true,
-pointerId: pointerId,
-pointerType: pointerType,
-clientX: clientX,
-clientY: clientY
-}));
-} else if (typeof ME === "function") {
-trigger.dispatchEvent(new ME("mouseenter", {
-bubbles: false,
-cancelable: true,
-clientX: clientX,
-clientY: clientY
-}));
-} else if (typeof EV === "function") {
-trigger.dispatchEvent(new EV("pointerenter", { bubbles: false, cancelable: true }));
-}
-} catch (err) {
-// 忽略派发失败
-} finally {
-isDispatchingSynthetic = false;
-}
+[["pointerenter", false], ["pointerover", true], ["pointermove", true]].forEach(function (it) {
+trigger.dispatchEvent(new PE(it[0], { bubbles: it[1], cancelable: true, pointerId: pid, pointerType: pt, clientX: cx, clientY: cy }));
+});
+} else if (typeof ME === "function") trigger.dispatchEvent(new ME("mouseenter", { bubbles: false, cancelable: true, clientX: cx, clientY: cy }));
+else if (typeof EV === "function") trigger.dispatchEvent(new EV("pointerenter", { bubbles: false, cancelable: true }));
+} catch (err) {} finally { isDispatchingSynthetic = false; }
 }
 }, 300);
 }
 function onPointerOverCapture(ev) {
 if (isDispatchingSynthetic) return;
 var trigger = findViewUsageTrigger(ev.target);
-if (!trigger) {
-// 鼠标移动到模型项或其它非 View Usage 元素，立即重置延迟状态
-if (usageHoverAllowed || usageHoverTimer) {
-resetUsageHover();
-}
-return;
-}
-if (!usageHoverAllowed) {
-ev.stopPropagation();
-if (typeof ev.stopImmediatePropagation === "function") ev.stopImmediatePropagation();
-}
+if (!trigger) { if (usageHoverAllowed || usageHoverTimer) resetUsageHover(); return; }
+if (!usageHoverAllowed) _stp(ev);
 }
 function onPointerOutCapture(ev) {
 if (isDispatchingSynthetic) return;
 var trigger = findViewUsageTrigger(ev.target);
-if (trigger) {
-var rel = ev.relatedTarget;
-// 若相关目标已不在当前 trigger 内部，说明鼠标已移出 View Usage
-if (!rel || !trigger.contains(rel)) {
-resetUsageHover();
-}
-}
+if (trigger && (!ev.relatedTarget || !trigger.contains(ev.relatedTarget))) resetUsageHover();
 }
 function onPointerMoveCapture(ev) {
 if (isDispatchingSynthetic) return;
-var trigger = findViewUsageTrigger(ev.target);
-if (trigger && !usageHoverAllowed) {
-ev.stopPropagation();
-if (typeof ev.stopImmediatePropagation === "function") ev.stopImmediatePropagation();
-}
+if (findViewUsageTrigger(ev.target) && !usageHoverAllowed) _stp(ev);
 }
 function onPointerLeaveCapture(ev) {
-// panel 自身的 pointerleave，或鼠标彻底移出面板
-var rel = ev.relatedTarget;
-if (!rel || !panel.contains(rel)) {
-resetUsageHover();
-}
+if (!ev.relatedTarget || !panel.contains(ev.relatedTarget)) resetUsageHover();
 }
 var evPairs = [
 ["pointerenter", onPointerEnterCapture],
@@ -3089,21 +2779,8 @@ _bindPnl(panel);
 var section = doc.createElement("div");
 section.className = "ces-ag-section";
 section.setAttribute("data-ces-part", "ag-section");
-section.addEventListener("pointerdown", function (ev) {
-if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation();
-});
-section.addEventListener("mousedown", function (ev) {
-if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation();
-});
-section.addEventListener("pointerup", function (ev) {
-if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation();
-});
-section.addEventListener("mouseup", function (ev) {
-if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation();
-});
-section.addEventListener("click", function (ev) {
-if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation();
-});
+var _stopProp = function (ev) { if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation(); };
+["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach(function (evName) { section.addEventListener(evName, _stopProp); });
 var sep = doc.createElement("div");
 sep.setAttribute("role", "separator");
 sep.setAttribute("aria-orientation", "horizontal");
