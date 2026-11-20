@@ -4,9 +4,9 @@
 
 # Obsidian Prism · 黑曜棱镜
 
-**Modular Optical UI, Workbench Enhancements, Omni File Viewer, Quota Telemetry & Thought Translator for Antigravity**
+**为 Google Antigravity 打造的原生光学界面套件**
 
-Antigravity 桌面端主题与工作台增强套件 · 四套深浅配色 · 内置浏览器与全格式流式检视台 · 双窗口配额遥测 · 双模思考转译
+四套深浅配色 · 会呼吸的 512K 上下文试管 · 推理等级滑块 · 像素伙伴 · Chat 对话模式（Beta）
 
 [**简体中文**](./README.md) · [**English**](./README.en.md) · [**更新日志 (CHANGELOG)**](./CHANGELOG.md) · [**下载安装包 (Releases)**](https://github.com/RMvdesi/obsidian-prism/releases) · [**问题反馈 (Issues)**](https://github.com/RMvdesi/obsidian-prism/issues)
 
@@ -19,7 +19,13 @@ Antigravity 桌面端主题与工作台增强套件 · 四套深浅配色 · 内
   <a href="./NOTICE"><img src="https://img.shields.io/badge/Attribution-Required%20(NOTICE)-8b5cf6?style=flat-square" alt="Attribution Required" /></a>
 </p>
 
-<img src="assets/screenshots/hero-obsidian-workspace.png" width="100%" alt="Obsidian Prism Workspace Showcase" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/hero-dark.webp" />
+  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/hero-light.webp" />
+  <img src="assets/screenshots/hero-dark.webp" width="100%" alt="Obsidian Prism v1.0.3 界面演示" />
+</picture>
+
+<sub>以上画面由离线渲染舞台直接运行本仓库 v1.0.3 前端源码逐帧录制，示例工作区与对话内容均为虚构。</sub>
 
 </div>
 
@@ -30,7 +36,67 @@ Antigravity 桌面端主题与工作台增强套件 · 四套深浅配色 · 内
 
 ---
 
-## 核心特性
+## 亮点
+
+- **四套配色，一键换装**：深空黑曜、暖炭玄岩两套深色，白昼冷晶、暖白画册两套浅色，可跟随系统亮暗自动切换。
+- **看得见的上下文**：输入框旁的小试管实时显示 512K 上下文用量，点开就能看到用量拆分和配额剩余预测。
+- **推理等级，一拨就换**：模型菜单里内置星空滑块；选中 Orchestrator 时，滑块会变成一条会折射光线的切工水晶。
+- **读得懂的思考过程**：模型的思考内容可以实时转译成中文，支持「沉浸译文」和「双语对照」两种看法。
+- **桌面上的像素伙伴**：Clawd、小紫猫和三只迷你蟹会在输入框上方玩叠叠乐，还藏着一个彩虹彩蛋。
+- **更顺手的工作台**：内置浏览器和大文件检视台、右键快捷菜单、长代码块折叠、会话大纲快速跳转。
+- **Chat 对话模式（Beta）**：在写代码之外，多了一个专门聊天、整理资料的空间，和工程设置互不干扰。
+- **轻、快、守规矩**：动画空闲时自动降到 0fps；本地服务只监听本机；设置改动 10 毫秒内生效，随时一键卸载还原。
+
+---
+
+## 界面预览
+
+### 1. 四套配色
+
+<p align="center">
+  <img src="assets/screenshots/palettes.webp" width="100%" alt="四套深浅配色方案" />
+</p>
+
+| 主题预设 | 配置键值 | 侧栏底色 | 主画布 | 说明 |
+| :--- | :--- | :--- | :--- | :--- |
+| **深空黑曜** | `palette: "obsidian"` | `#09090B` | `#0E0E11` | 冷调深灰底色，高对比度代码阅读配色 |
+| **暖炭玄岩** | `palette: "warm"` | `#10100F` | `#141413` | 暖炭褐底色，低蓝光夜间配色 |
+| **白昼冷晶** | `lightPreset: "crystal"` | `#E8EEF6` | `#F4F7FB` | 冷调浅灰蓝侧栏与高明度工作区 |
+| **暖白画册** | `lightPreset: "alabaster"` | `#EBE6DC` | `#F6F4EE` | 暖白纸色背景，柔和对比度浅色配色 |
+
+### 2. 光学细节：上下文试管 · 推理滑块 · 切工水晶
+
+点击底部试管可展开用量浮窗，查看上下文切片、5 小时配额与模型池余量；模型菜单里的推理等级滑块随档位点亮星辰，Orchestrator 则显示为切工水晶条。
+
+<p align="center">
+  <img src="assets/screenshots/optics.webp" width="100%" alt="512K 上下文试管、推理等级滑块与 Orchestrator 切工水晶" />
+</p>
+
+### 3. 像素伙伴
+
+输入框上方的像素伙伴可以拖拽、叠成 5 层高塔；满足特定条件时，小紫猫会披上彩虹极光（无操作时自动休眠，可在设置中关闭）。
+
+<p align="center">
+  <img src="assets/screenshots/companions.webp" width="100%" alt="像素伙伴叠叠乐与彩虹彩蛋" />
+</p>
+
+### 4. Chat 对话模式（Beta）
+
+默认关闭，可在 **设置 → 外观 → Beta 内容** 中开启。开启后侧栏顶部可在 Code 与 Chat 之间切换，用文件夹整理日常对话，权限按项目隔离，不改动全局工程设置。
+
+<p align="center">
+  <img src="assets/screenshots/chat-mode.webp" width="100%" alt="Chat 对话模式（Beta）" />
+</p>
+
+### 5. 更多能力
+
+- **外观设置中心**：集成在 **设置 → 外观**，5 种界面语言、27 项可校验配置、三档场景预设（完整光效 / 专注编码 / 静默省电）、配置备份恢复与面板内一键更新。
+- **思考转译**：免配置机器翻译，或接入本地 / 兼容接口的模型做流式转译；源码路径与行号可点击跳转。
+- **Omni 内置浏览器与检视台**：裸链接、本地路径一键在侧栏打开；超大视频、音频、PDF、表格、字体可流式预览；右键菜单复制路径、定位文件、插入引用。
+- **工作台增强**：代码块顶栏吸顶、长代码块手动折叠、左侧会话导轨章节刻度与悬停大纲、`Alt+↑` / `Alt+↓` 上下轮跳转。
+
+<details>
+<summary><strong>技术细节：性能、安全边界、遥测与配置（点击展开）</strong></summary>
 
 **Obsidian Prism (`v1.0.3`)** 在不改动宿主业务逻辑、不触碰外部插件锁文件的前提下，通过原生 Sidecar 插件架构为 Antigravity 桌面端提供界面配色、工作台交互增强、侧边栏内置浏览器与多格式流式检视台、模型配额遥测及思考过程转译：
 
@@ -44,41 +110,7 @@ Antigravity 桌面端主题与工作台增强套件 · 四套深浅配色 · 内
 - **Chat 对话模式 (Beta · 默认关闭)**：默认保持关闭，可在 **设置 → 外观 → Beta 内容** 中随时开启或关闭（`sidebarStudio: "on" | "off"`）。开启后可在侧栏顶部切换工程模式与专注日常交流、文档整理的 Chat 空间，提供独立文件夹/项目组织、多轮阅读视图与 Artifacts 侧边栏预览，并实行项目级权限隔离，避免改动全局工程设置。
 - **微内核模块化架构与毫秒级热刷新**：前端拆解为 `ui-runtime.js` 微内核与 6 个高内聚控制器模块，经 `cdp.js` 跨模块共享字符串池编译后静态主包体积 `< 670 KiB`（Omni 客户端按独立双通道加载）；设置中心覆盖 27 项可校验配置键，内置三档场景预设、分类子标签页与自动剥离私钥凭据的脱敏 JSON 导入/导出备份，配置变更通过单飞增量广播在 `< 10 ms` 内热刷新生效。
 
----
-
-## 界面与功能预览
-
-### 1. 双深色 × 双浅色：四套配色方案
-四套主题分别调校了侧栏与工作区明度层级、边框对比度与底部 WebGL2 着色器色温：
-
-<p align="center">
-  <img src="assets/screenshots/quad-palettes-matrix.png" width="100%" alt="Four Optical Palettes Matrix" />
-</p>
-
-| 主题预设 | 配置键值 | 侧栏底色 | 主画布 | 说明 |
-| :--- | :--- | :--- | :--- | :--- |
-| **深空黑曜** | `palette: "obsidian"` | `#09090B` | `#0E0E11` | 冷调深灰底色，高对比度代码阅读配色 |
-| **暖炭玄岩** | `palette: "warm"` | `#10100F` | `#141413` | 暖炭褐底色，低蓝光夜间配色 |
-| **白昼冷晶** | `lightPreset: "crystal"` | `#E8EEF6` | `#F4F7FB` | 冷调浅灰蓝侧栏与高明度工作区 |
-| **暖白画册** | `lightPreset: "alabaster"` | `#EBE6DC` | `#F6F4EE` | 暖白纸色背景，柔和对比度浅色配色 |
-
----
-
-### 2. 上下文水试管 · 推理等级滑块 · 桌面像素宠物
-底部紧凑胶囊以 1D 浅水波实时指示 512K 上下文占用比例，**点击可展开饱满光学配额浮窗**（查看上下文切片拆分、主/子代理消耗占比与 5h/周配额耗尽预测）；模型选择菜单内置推理等级滑块；输入框上方提供可独立开关的像素宠物（`Clawd` 与小猫，无操作自动休眠）：
-
-<p align="center">
-  <img src="assets/screenshots/optics-bento-details.png" width="100%" alt="Interactive Optical Craft Bento" />
-</p>
-
----
-
-### 3. 外观控制中心与思考转译配置
-集成至 **Antigravity → 设置 (Settings) → 外观 (Appearance)**，覆盖简/繁/粤/英/日 5 语种界面、27 项可校验配置键（含 `omniModule` 文件检视与右键菜单、`linkTarget` 网页链接默认打开位置，以及「Beta 内容」分组中的 Chat 对话模式开关）、三档场景预设（完整光效 / 专注编码 / 静默省电）、脱敏 JSON 备份恢复、面板内一键拉取 Git 更新，以及多渠道思考转译配置：
-
-<p align="center">
-  <img src="assets/screenshots/settings-and-thought-suite.png" width="100%" alt="Appearance Settings and Dual-Mode Thought Suite" />
-</p>
+</details>
 
 ---
 

@@ -27,3 +27,4 @@ NOTICE text eol=lf
 *.icns binary
 *.dmg binary
 *.exe binary
+*.webp binary

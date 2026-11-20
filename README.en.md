@@ -4,9 +4,9 @@
 
 # Obsidian Prism
 
-**Modular Optical UI, Workbench Enhancements, Omni File Viewer, Quota Telemetry & Thought Translator for Antigravity**
+**A native optical UI suite for Google Antigravity**
 
-Four Dark/Daylight Themes · Side-Pane Browser & Streaming File Viewer · Dual-Window Quota Telemetry · Dual-Mode Thought Translator
+Four dark & daylight themes · A living 512K context vial · Reasoning effort slider · Pixel companions · Chat Mode (Beta)
 
 [**简体中文**](./README.md) · [**English**](./README.en.md) · [**Changelog**](./CHANGELOG.md) · [**Releases**](https://github.com/RMvdesi/obsidian-prism/releases) · [**Issues**](https://github.com/RMvdesi/obsidian-prism/issues)
 
@@ -19,7 +19,13 @@ Four Dark/Daylight Themes · Side-Pane Browser & Streaming File Viewer · Dual-W
   <a href="./NOTICE"><img src="https://img.shields.io/badge/Attribution-Required%20(NOTICE)-8b5cf6?style=flat-square" alt="Attribution Required" /></a>
 </p>
 
-<img src="assets/screenshots/hero-obsidian-workspace.png" width="100%" alt="Obsidian Prism Workspace Showcase" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/hero-dark.webp" />
+  <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/hero-light.webp" />
+  <img src="assets/screenshots/hero-dark.webp" width="100%" alt="Obsidian Prism v1.0.3 showcase" />
+</picture>
+
+<sub>Footage is rendered frame by frame by an offline stage that runs this repository's v1.0.3 front-end source directly. All workspaces and conversations shown are fictional.</sub>
 
 </div>
 
@@ -30,7 +36,67 @@ Four Dark/Daylight Themes · Side-Pane Browser & Streaming File Viewer · Dual-W
 
 ---
 
-## Key Features
+## Highlights
+
+- **Four themes, one click**: Obsidian Dark and Warm Charcoal, plus Daylight Crystal and Warm Alabaster — with automatic light/dark following.
+- **Context you can see**: A tiny vial next to the composer shows live 512K context usage; click it for a usage breakdown and quota forecasts.
+- **Reasoning effort at your fingertips**: A starfield slider lives in the model menu; pick Orchestrator and it turns into a light-refracting cut-crystal bar.
+- **Thinking you can read**: Translate the model's thinking in real time, in Immersive or Stacked Bilingual view.
+- **Pixel companions**: Clawd, a little purple cat and three mini crabs stack into a tower above the composer — with a hidden rainbow easter egg.
+- **A friendlier workbench**: Built-in side-pane browser and large-file viewer, right-click actions, long code-block folding and conversation outline jumps.
+- **Chat Mode (Beta)**: A dedicated space for everyday chats and notes, kept separate from your coding workspace and its settings.
+- **Light, fast and well-behaved**: Animations idle down to 0fps, local services listen on loopback only, settings apply in under 10 ms, and everything uninstalls cleanly.
+
+---
+
+## Visual Overview
+
+### 1. Four Themes
+
+<p align="center">
+  <img src="assets/screenshots/palettes.webp" width="100%" alt="Four dark and daylight themes" />
+</p>
+
+| Theme Preset | Config Key | Sidebar | Canvas | Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| **Obsidian Dark** | `palette: "obsidian"` | `#09090B` | `#0E0E11` | Cool dark slate palette tuned for high-contrast code reading |
+| **Warm Charcoal** | `palette: "warm"` | `#10100F` | `#141413` | Warm charcoal dark palette with reduced blue-light glare |
+| **Daylight Crystal** | `lightPreset: "crystal"` | `#E8EEF6` | `#F4F7FB` | Cool slate-blue sidebar paired with a bright workspace canvas |
+| **Warm Alabaster** | `lightPreset: "alabaster"` | `#EBE6DC` | `#F6F4EE` | Warm paper-tinted daylight palette with softer contrast |
+
+### 2. Optical Details: Context Vial · Effort Slider · Cut Crystal
+
+Click the vial to open the usage popover with context slices, 5-hour quota and model-pool headroom. The effort slider lights up its starfield as you climb tiers, and Orchestrator appears as a cut-crystal bar.
+
+<p align="center">
+  <img src="assets/screenshots/optics.webp" width="100%" alt="512K context vial, reasoning effort slider and Orchestrator cut crystal" />
+</p>
+
+### 3. Pixel Companions
+
+Drag the companions above the composer and stack them five high; under the right conditions the purple cat dons a rainbow aurora cape. They doze off when idle and can be turned off in settings.
+
+<p align="center">
+  <img src="assets/screenshots/companions.webp" width="100%" alt="Pixel companions tower and rainbow easter egg" />
+</p>
+
+### 4. Chat Mode (Beta)
+
+Off by default — enable it under **Settings → Appearance → Beta**. A switcher at the top of the sidebar flips between Code and Chat, with folders for everyday conversations and project-scoped permissions that never touch global Code settings.
+
+<p align="center">
+  <img src="assets/screenshots/chat-mode.webp" width="100%" alt="Chat Mode (Beta)" />
+</p>
+
+### 5. More Capabilities
+
+- **Appearance Control Center**: Lives in **Settings → Appearance** — 5 UI languages, 27 validated settings, three scene presets (Full Visuals / Deep Focus / Silent Eco), backup/restore and one-click updates.
+- **Thought Translator**: Zero-config machine translation, or stream translations through local / compatible model endpoints, with clickable source paths and line numbers.
+- **Omni Browser & File Viewer**: Open bare links and local paths in the side pane; stream huge videos, audio, PDFs, tables and fonts; right-click to copy paths, reveal files or insert references.
+- **Workbench Enhancements**: Sticky code-block headers, manual folding for long code blocks, chapter ticks and hover outlines on the conversation rail, and `Alt+↑` / `Alt+↓` turn navigation.
+
+<details>
+<summary><strong>Technical details: performance, security, telemetry & configuration (click to expand)</strong></summary>
 
 **Obsidian Prism (`v1.0.3`)** provides dark/daylight themes, host workbench enhancements, a built-in side-pane browser and streaming multi-format file viewer, live quota telemetry, and chain-of-thought translation for the Antigravity desktop client through a native Sidecar plugin architecture — without altering host business logic or conflicting with external plugins:
 
@@ -44,41 +110,7 @@ Four Dark/Daylight Themes · Side-Pane Browser & Streaming File Viewer · Dual-W
 - **Chat Mode (Beta · Off by Default)**: Off by default and toggleable anytime in **Settings → Appearance → Beta** (`sidebarStudio: "on" | "off"`). When enabled, adds a top-sidebar switcher between the Code workspace and a dedicated Chat space for everyday conversations and document organization, complete with folder/project grouping, clean multi-turn reading views, Artifacts preview, and project-scoped permission isolation that preserves global Code settings.
 - **Microkernel Architecture & Sub-10ms Config Sync**: Splits the runtime into a lean `ui-runtime.js` microkernel and 6 focused controller modules compiled with a cross-module shared string pool (`< 670 KiB` static main bundle, with the Omni client delivered on a dedicated second channel). Covers 27 validated configuration keys with `< 10 ms` single-flight incremental `refreshConfig` broadcast, three scene presets, categorized sub-tabs, and API-key-sanitized JSON export/import.
 
----
-
-## Visual Overview
-
-### 1. Dual Dark × Dual Daylight Themes
-Each theme defines surface elevation tokens, border contrast, and matching WebGL2 horizon shader color temperature:
-
-<p align="center">
-  <img src="assets/screenshots/quad-palettes-matrix.png" width="100%" alt="Four Optical Palettes Matrix" />
-</p>
-
-| Theme Preset | Config Key | Sidebar | Canvas | Notes |
-| :--- | :--- | :--- | :--- | :--- |
-| **Obsidian Dark** | `palette: "obsidian"` | `#09090B` | `#0E0E11` | Cool dark slate palette tuned for high-contrast code reading |
-| **Warm Charcoal** | `palette: "warm"` | `#10100F` | `#141413` | Warm charcoal dark palette with reduced blue-light glare |
-| **Daylight Crystal** | `lightPreset: "crystal"` | `#E8EEF6` | `#F4F7FB` | Cool slate-blue sidebar paired with a bright workspace canvas |
-| **Warm Alabaster** | `lightPreset: "alabaster"` | `#EBE6DC` | `#F6F4EE` | Warm paper-tinted daylight palette with softer contrast |
-
----
-
-### 2. Context Vial · Effort Slider · Pixel Mascots
-Displays live 512K context usage inside a compact 1D shallow-water vial — **click to open the optical quota & breakdown popover** (showing context slice breakdown, main/subagent token split, and 5h/weekly depletion forecasts) — alongside a reasoning effort slider inside the model selector menu and optional pixel mascots (`Clawd` & cat) that sleep automatically when idle:
-
-<p align="center">
-  <img src="assets/screenshots/optics-bento-details.png" width="100%" alt="Interactive Optical Craft Bento" />
-</p>
-
----
-
-### 3. Appearance Control Center & Thought Translator Settings
-Integrated into **Antigravity → Settings → Appearance**, providing 5 UI languages (`zh-CN`, `zh-TW`, `yue`, `en`, `ja`), 27 validated configuration keys (including `omniModule` for file viewer & context menu, `linkTarget` for default web link target, and the Chat Mode (Beta) toggle under Beta), three scene presets (Full Visuals / Deep Focus / Silent Eco), sanitized JSON config backup/restore, one-click Git `pull --ff-only` updates, and multi-profile thought translation settings:
-
-<p align="center">
-  <img src="assets/screenshots/settings-and-thought-suite.png" width="100%" alt="Appearance Settings and Dual-Mode Thought Suite" />
-</p>
+</details>
 
 ---
 
