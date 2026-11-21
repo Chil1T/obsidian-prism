@@ -762,8 +762,17 @@
       return true;
     }
 
+    let foldRafId = 0;
+    function cancelFoldRaf() {
+      if (foldRafId && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(foldRafId);
+      }
+      foldRafId = 0;
+    }
+
     function foldHistoricalSteps() {
       if (isDead() || !doc) return 0;
+      cancelFoldRaf();
       const conv = findPrimaryConvView();
       if (!conv || typeof conv.querySelectorAll !== 'function') return 0;
 
@@ -788,25 +797,48 @@
         )
       );
 
-      let folded = 0;
+      const targets = [];
       for (let i = 0; i < collapsibles.length; i++) {
         const btn = collapsibles[i];
         // When there is only 1 turn total, do not fold the active latest turn; when >=2 turns, fold all prior turns
-        if ( (agentResponses.length >= 2 || userSteps.length >= 2) && isInsideLatestTurn(btn) ) {
+        if ((agentResponses.length >= 2 || userSteps.length >= 2) && isInsideLatestTurn(btn)) {
           continue;
         }
         if (agentResponses.length < 2 && userSteps.length < 2 && i === collapsibles.length - 1) {
           continue;
         }
         if (btn.getAttribute('aria-expanded') === 'true' && typeof btn.click === 'function') {
-          try {
-            btn.click();
-            folded += 1;
-          } catch {}
+          targets.push(btn);
         }
       }
-      stats.foldedStepsLastRun = folded;
-      return folded;
+
+      const clickPair = (start) => {
+        for (let k = start; k < Math.min(targets.length, start + 2); k++) {
+          const b = targets[k];
+          if (b && b.isConnected !== false && b.getAttribute('aria-expanded') === 'true') {
+            try { b.click(); } catch {}
+          }
+        }
+      };
+
+      const total = targets.length;
+      stats.foldedStepsLastRun = total;
+      if (total <= 4 || typeof requestAnimationFrame !== 'function') {
+        for (let i = 0; i < total; i += 2) clickPair(i);
+        return total;
+      }
+
+      clickPair(0);
+      let cursor = 2;
+      const stepFold = () => {
+        foldRafId = 0;
+        if (isDead()) return;
+        clickPair(cursor);
+        cursor += 2;
+        if (cursor < targets.length) foldRafId = requestAnimationFrame(stepFold);
+      };
+      foldRafId = requestAnimationFrame(stepFold);
+      return total;
     }
 
     function extractPromptSnippet(stepEl) {
@@ -1239,6 +1271,7 @@
     function destroy() {
       if (localDestroyed) return;
       localDestroyed = true;
+      cancelFoldRaf();
       cancelHideOutlineTimer();
       if (foldFeedbackTimer) {
         clearTimeout(foldFeedbackTimer);

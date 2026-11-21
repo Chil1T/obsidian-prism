@@ -7,7 +7,7 @@ const { execFile, execFileSync, spawn } = require('child_process');
 
 const STYLE_ID = 'ag-prism-css';
 const LEGACY_STYLE_ID = 'ag-claude-style-css';
-const PLUGIN_VERSION = '1.0.3';
+const PLUGIN_VERSION = '1.0.4';
 const SETTING_BINDING = '__agPrismSetting';
 const LEGACY_SETTING_BINDING = '__agClaudeStyleSetting';
 const OMNI_BINDING = '__agPrismOmniCall';
@@ -59,6 +59,7 @@ const DEFAULT_CONFIG = {
   omniModule: 'on',
   linkTarget: 'builtin',
   sidebarStudio: 'off',
+  autoUpdate: 'off',
   pollIntervalMs: 2500,
 };
 
@@ -96,6 +97,7 @@ const VALIDATORS = {
   omniModule: ['on', 'off'],
   linkTarget: ['builtin', 'external'],
   sidebarStudio: ['on', 'off'],
+  autoUpdate: ['on', 'off'],
 };
 
 function validateConfigEntry(key, value) {
@@ -4608,13 +4610,14 @@ function stripUnusedUpstreamMenuObserver(src) {
   });
   return stripped
     .replace(/\bvar\s+(?:SET_TITLE_I18N|FILL_RADIUS_CSS|TRACK_HEIGHT|BASE_SPEEDUP|MIN_HEIGHT_SLOTS|CLAUDE_ROWS|CLAUDE_KNOB_[WHR]|TRACE_CAPACITY|traceRingBuffer)\s*=\s*(?:\{[^{}]*\}|[^;\n]+);?/g, '')
+    .replace(/,\s*(?:label|hint)\s*:\s*"(?:动画效果|快速动画|拨过[^"]*|简洁动画|无过渡[^"]*|完整动画|匀变速[^"]*|已到达档位[^"]*|亮白显示|默认 · 已滑过[^"]*|与未到达同色|所有刻度点[^"]*|隐藏|不显示任何[^"]*)"/g, '')
+    .replace(/(?<!function\s)\btracePush\([^;]*\);?/g, '')
     .replace(/if\s*\(\s*typeof\s+window\s*!==\s*"undefined"\s*&&[\s\S]*?(?=\nreturn\s*\{)/, '')
     .replace(/(var\s+SLIDER_CSS\s*=\s*)("(?:\\.|[^"\\])*")/, (full, p1, lit) => {
       try {
         const rawCss = JSON.parse(lit);
         const cleaned = rawCss
-          .replace(/(?:\.ces-set(?:-[a-z-]+)?(?::hover|\.is-on)?\{[^{}]*\})+/g, '')
-          .replace(/\[role='menu(?:item)?'\]:has\([^{}]*\{[^{}]*\}/g, '');
+          .replace(/(?:\.ces-set(?:-[a-z-]+)?(?::hover|\.is-on)?\{[^{}]*\})+/g, '');
         return p1 + serializeJsValue(minifyCss(cleaned));
       } catch {
         return full;
@@ -5320,28 +5323,9 @@ function getInjectWrapperTemplate() {
           (e) => ({ ok: false, error: e }),
           { ok: false, disposed: true }
         );
-        const directMachineTranslate = async (rawText) => {
-          const text = String(rawText || '').trim();
-          if (!text) return '';
-          const codeSpans = [];
-          const masked = text.replace(/\\x60[^\\x60\\n]+\\x60/g, (m) => '__OPCODE_' + (codeSpans.push(m) - 1) + '__');
-          const res = await fetch('https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-CN&dt=t&q=' + encodeURIComponent(masked));
-          if (!res.ok) throw new Error('HTTP ' + res.status);
-          const json = await res.json();
-          const segs = Array.isArray(json && json[0]) ? json[0] : [];
-          return segs.map((s) => (Array.isArray(s) && s[0] ? String(s[0]) : '')).join('').replace(/__OPCODE_(\\d+)__/gi, (_, n) => codeSpans[Number(n)] || _).trim();
-        };
         const sendRpc = (payload, onPartial, timeoutMs = 48000) => {
           const act = (payload && payload.action) || 'get-config';
           if (typeof window.__agPrismThoughtCall !== 'function') {
-            if (act === 'translate-stream' && payload && payload.mode === 'machine' && typeof fetch === 'function') {
-              return directMachineTranslate(payload.text)
-                .then((t) => {
-                  if (t && typeof onPartial === 'function') onPartial(t);
-                  return { ok: Boolean(t), text: t, engine: 'machine-browser' };
-                })
-                .catch((e) => ({ ok: false, offline: true, error: String(e && e.message ? e.message : e) }));
-            }
             return Promise.resolve({ ok: false, offline: true, action: act, error: 'Sidecar daemon offline' });
           }
           const isCtrl = act === 'cancel-translate' || act === 'cache-stats' || act === 'clear-cache';
@@ -6154,6 +6138,7 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-cs-target-fps',
       'data-ag-cs-telemetry',
       'data-ag-cs-effort-slider',
+      'data-ces-slider-ready',
       'data-ag-cs-thought-translate',
       'data-ag-prism-thought-owner',
       'data-ag-cs-home',

@@ -1,7 +1,7 @@
 // Obsidian Prism Native Sidecar Daemon (sidecars/daemon/main.mjs)
 // - Auto-discovers DevToolsActivePort across Windows/macOS/Linux + fast Target.setDiscoverTargets push
 // - Registers Page.addScriptToEvaluateOnNewDocument + Runtime.evaluate (survives Ctrl+Shift+R reloads with zero app.asar touch!)
-// - Hot-upgrades legacy instances to Obsidian Prism v1.0.3
+// - Hot-upgrades legacy instances to Obsidian Prism v1.0.4
 // - Lazily serves real MetricsStore + DesktopUsage snapshots over __agPrismMetricsCall only when requested (0 idle CPU)
 // - Registers __agPrismRepoCall (paired with window.__agPrismRepoBridge) for live Git status & safe git pull --ff-only + hot-reload!
 
@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { OmniServer, OMNI_BINDING, isBlockedUncPath } from '../../vendor/omni-viewer/omni-server.mjs';
@@ -22,6 +22,7 @@ import {
   normalizeRendererTrajectory,
 } from '../../vendor/pulse-dashboard/sidecars/panel/renderer-rpc-adapter.mjs';
 import { discoverLocalConversations } from '../../vendor/pulse-dashboard/sidecars/panel/local-conversations.mjs';
+import { UpdateService, RELEASES_PAGE_URL } from './update-service.mjs';
 
 const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
@@ -497,6 +498,10 @@ export class PrismDaemon {
     daemonPidVerifier = null,
     noPortRelaunchThresholdMs = 8000,
     shortcutCheckIntervalMs = 300000,
+    _testUpdateService = null,
+    updateCheckInitialDelayMs = 45000,
+    updateCheckIntervalMs = 6 * 60 * 60 * 1000,
+    enableAutoUpdateTimer = true,
     silent = false,
   } = {}) {
     this.rootDir = path.resolve(rootDir);
@@ -558,6 +563,20 @@ export class PrismDaemon {
     this._promptInFlight = false;
     this._lastShortcutCheckAt = 0;
     this._lastObservedHostPid = 0;
+    this._enableAutoUpdateTimer = enableAutoUpdateTimer !== false;
+    const initDelayNum = Number(updateCheckInitialDelayMs);
+    this._updateCheckInitialDelayMs = Number.isFinite(initDelayNum) ? Math.max(0, initDelayNum) : 45000;
+    const intervalNum = Number(updateCheckIntervalMs);
+    this._updateCheckIntervalMs = Number.isFinite(intervalNum) ? Math.max(1000, intervalNum) : 6 * 60 * 60 * 1000;
+    this._updateInitialTimer = null;
+    this._updateIntervalTimer = null;
+    this._lastUpdateState = null;
+    this._updateCheckInFlight = null;
+    this.updateService =
+      _testUpdateService ||
+      new UpdateService({
+        currentVersion: this.cdp?.PLUGIN_VERSION || '1.0.4',
+      });
   }
 
   log(msg) {
@@ -675,32 +694,141 @@ export class PrismDaemon {
     }
   }
 
-  async executeRepoAction(rawInput = {}) {
-    if (rawInput?.action === 'storage-health' || rawInput?.action === 'prepare-archive') {
-      return this._handleStorageAction(rawInput.action);
+  async _handleUninstallAction(rawInput = {}) {
+    if (rawInput?.confirm !== true) {
+      return { ok: false, action: 'uninstall', error: 'confirmation_required' };
     }
-    const action = rawInput?.action === 'pull' || rawInput?.action === 'sync' ? 'pull' : 'status';
+    const purgeData = rawInput?.purgeData === true;
+    const ov = rawInput?._testOverrides && typeof rawInput._testOverrides === 'object' ? rawInput._testOverrides : null;
+    const platform = ov?.platform || process.platform;
+    const lstatFn = typeof ov?.lstatSync === 'function' ? ov.lstatSync : fs.lstatSync;
+    const spawnFn = typeof ov?.spawn === 'function' ? ov.spawn : spawn;
+
+    let installerPath = null;
+    if (ov && Object.prototype.hasOwnProperty.call(ov, 'installerPath')) {
+      installerPath = ov.installerPath || null;
+    } else if (platform === 'win32') {
+      const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+      installerPath = path.join(localAppData, 'obsidian-prism', 'obsidian-prism-installer.exe');
+    } else if (platform === 'darwin') {
+      installerPath = path.join(os.homedir(), 'Library', 'Application Support', 'obsidian-prism', 'obsidian-prism-installer');
+    }
+
+    let engine = null;
+    let spawnCmd = null;
+    let spawnArgs = [];
+    let spawnEnv = null;
+
+    if (installerPath) {
+      try {
+        const lst = lstatFn(installerPath);
+        if (lst && typeof lst.isSymbolicLink === 'function' && lst.isSymbolicLink()) {
+          return { ok: false, action: 'uninstall', error: 'refused_symlink_installer' };
+        }
+        if (lst && typeof lst.isFile === 'function' && lst.isFile()) {
+          engine = 'installer';
+          spawnCmd = installerPath;
+          spawnArgs = ['--uninstall', '--silent', ...(purgeData ? ['--purge-data'] : [])];
+        }
+      } catch (err) {
+        if (err && err.code !== 'ENOENT') {
+          return { ok: false, action: 'uninstall', error: sanitizeSecretText(err?.message || err) };
+        }
+      }
+    }
+
+    if (!spawnCmd) {
+      engine = 'source-script';
+      let scriptPath = null;
+      if (ov && Object.prototype.hasOwnProperty.call(ov, 'installScriptPath')) {
+        scriptPath = ov.installScriptPath || null;
+      } else {
+        const repoDir = this.resolveGitRepoDir();
+        const candidates = [
+          repoDir ? path.join(repoDir, 'tools', 'install-plugin.cjs') : null,
+          path.join(this.rootDir, 'tools', 'install-plugin.cjs'),
+        ].filter(Boolean);
+        for (const cand of candidates) {
+          try {
+            const st = lstatFn(cand);
+            if (st && !st.isSymbolicLink() && st.isFile()) {
+              scriptPath = cand;
+              break;
+            }
+          } catch {}
+        }
+      }
+
+      const inlineRunner = scriptPath
+        ? "setTimeout(async()=>{try{const m=require(process.env.AG_PRISM_UNINSTALL_SCRIPT);await m.uninstallPlugin({targetDir:process.env.AG_PRISM_UNINSTALL_TARGET,purgeData:process.env.AG_PRISM_PURGE_DATA==='1',cdpPort:Number(process.env.AG_PRISM_CDP_PORT)||undefined});}catch{}process.exit(0);},400);"
+        : "setTimeout(()=>{try{const fs=require('fs'),path=require('path'),os=require('os');const t=process.env.AG_PRISM_UNINSTALL_TARGET;if(t){const r=path.resolve(t),h=path.resolve(os.homedir()),segs=r.split(/[\\\\/]+/).map(s=>s.toLowerCase()),rl=['conversations_archive','prism-knowledge-space','antigravity-spark'],prot=[path.parse(r).root,h,path.join(h,'.gemini'),path.join(h,'.gemini','config'),path.join(h,'.gemini','antigravity')].map(p=>p.toLowerCase());if(!prot.includes(r.toLowerCase())&&!rl.some(k=>segs.includes(k))&&fs.existsSync(r)&&!fs.lstatSync(r).isSymbolicLink())fs.rmSync(r,{recursive:true,force:true});}const cfgDir=path.join(os.homedir(),'.gemini','config'),cfg=path.join(cfgDir,'config.json');if(fs.existsSync(cfg)&&!fs.lstatSync(cfg).isSymbolicLink()){const d=JSON.parse(fs.readFileSync(cfg,'utf8'));if(d&&typeof d==='object'){if(d.plugins)delete d.plugins['obsidian-prism'];if(d.sidecars)delete d.sidecars['obsidian-prism/daemon'];const tmp=cfg+'.tmp.'+process.pid;fs.writeFileSync(tmp,JSON.stringify(d,null,2)+'\\n',{mode:0o600});fs.renameSync(tmp,cfg);}}}catch{}process.exit(0);},400);";
+      spawnCmd = process.execPath;
+      spawnArgs = ['-e', inlineRunner];
+      spawnEnv = {
+        ...process.env,
+        AG_PRISM_UNINSTALL_TARGET: this.rootDir,
+        AG_PRISM_PURGE_DATA: purgeData ? '1' : '0',
+        ...(scriptPath ? { AG_PRISM_UNINSTALL_SCRIPT: scriptPath } : {}),
+        ...(this.cdpPort ? { AG_PRISM_CDP_PORT: String(this.cdpPort) } : {}),
+      };
+    }
+
+    const spawnOpts = {
+      detached: true,
+      cwd: os.tmpdir(),
+      stdio: 'ignore',
+      windowsHide: true,
+      ...(spawnEnv ? { env: spawnEnv } : {}),
+    };
+    const child = spawnFn(spawnCmd, spawnArgs, spawnOpts);
+    child?.unref?.();
+
+    if (!ov?.skipStop) {
+      const stopDelayMs = Number.isFinite(ov?.stopDelayMs) ? ov.stopDelayMs : 150;
+      const stopFn = typeof ov?.stop === 'function' ? ov.stop : () => this.stop(!installerPath || engine !== 'installer');
+      const exitFn = typeof ov?.exit === 'function' ? ov.exit : (code) => process.exit(code);
+      const timer = setTimeout(() => {
+        Promise.resolve(stopFn()).catch(() => {}).finally(() => exitFn(0));
+      }, stopDelayMs);
+      timer.unref?.();
+    }
+
+    return {
+      ok: true,
+      action: 'uninstall',
+      scheduled: true,
+      purgeData,
+      engine,
+    };
+  }
+
+  _getAutoUpdateSetting() {
+    try {
+      const cfg = typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null;
+      return cfg?.autoUpdate === 'on' ? 'on' : 'off';
+    } catch {
+      return 'off';
+    }
+  }
+
+  async _inspectGitRepoState({ fetchRemote = false } = {}) {
     const repoDir = this.resolveGitRepoDir();
     if (!repoDir) {
       return {
-        ok: true,
-        action,
         isGitRepo: false,
+        repoDir: null,
         repoPath: path.basename(this.rootDir),
         branch: 'standalone',
         commit: this.cdp.PLUGIN_VERSION,
-        shortHash: this.cdp.PLUGIN_VERSION,
         dirty: false,
+        remoteName: '',
         remoteUrl: '',
         hasRemote: false,
         noRemote: true,
         ahead: 0,
         behind: 0,
-        hasUpdates: false,
-        upToDate: true,
-        updated: false,
-        version: this.cdp.PLUGIN_VERSION,
-        message: 'Installed standalone plugin (no linked Git repository)',
+        netGitCfg: [],
+        blockedUnc: false,
       };
     }
 
@@ -726,6 +854,7 @@ export class PrismDaemon {
     } catch {}
 
     let isNetworkRemote = false;
+    let blockedUnc = false;
     try {
       const remotesRaw = await execGit(['remote'], repoDir, 4000);
       const remotes = remotesRaw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
@@ -733,60 +862,25 @@ export class PrismDaemon {
         remoteName = remotes.includes('origin') ? 'origin' : remotes[0];
         const rawRemoteUrl = await execGit(['remote', 'get-url', remoteName], repoDir, 4000).catch(() => '');
         if (rawRemoteUrl && isBlockedUncPath(rawRemoteUrl)) {
-          return {
-            ok: false,
-            action,
-            isGitRepo: true,
-            repoPath: path.basename(repoDir),
-            branch,
-            commit,
-            shortHash: commit,
-            dirty,
-            error: 'Remote UNC Git paths are blocked',
-            message: 'Remote UNC Git paths are blocked',
-          };
+          blockedUnc = true;
+        } else {
+          isNetworkRemote = /^(?:https?|ssh|git):\/\/|^[^/\\:\s]+@[^/\\:\s]+:/i.test(rawRemoteUrl);
+          remoteUrl = sanitizeGitRemoteUrl(rawRemoteUrl);
         }
-        isNetworkRemote = /^(?:https?|ssh|git):\/\/|^[^/\\:\s]+@[^/\\:\s]+:/i.test(rawRemoteUrl);
-        remoteUrl = sanitizeGitRemoteUrl(rawRemoteUrl);
       }
     } catch {}
 
     const netGitCfg = isNetworkRemote ? ['-c', 'protocol.file.allow=never'] : [];
-
     const safeRepoName = path.basename(repoDir);
-    const hasRemote = Boolean(remoteName && remoteUrl);
+    const hasRemote = Boolean(!blockedUnc && remoteName && remoteUrl);
 
-    if (!hasRemote) {
-      return {
-        ok: true,
-        action,
-        isGitRepo: true,
-        repoPath: safeRepoName,
-        branch,
-        commit,
-        shortHash: commit,
-        dirty,
-        remoteName: '',
-        remoteUrl: '',
-        hasRemote: false,
-        noRemote: true,
-        ahead: 0,
-        behind: 0,
-        hasUpdates: false,
-        upToDate: true,
-        updated: false,
-        version: this.cdp.PLUGIN_VERSION,
-        message: 'Local Git repository (no remote configured)',
-      };
-    }
-
-    if (action === 'status') {
-      let ahead = 0;
-      let behind = 0;
-      try {
-        await execGit(['fetch', '--quiet', '--no-recurse-submodules', remoteName], repoDir, 8000, netGitCfg);
-      } catch {
-        // Offline or unreachable remote: fall back to local tracking refs
+    let ahead = 0;
+    let behind = 0;
+    if (hasRemote) {
+      if (fetchRemote) {
+        try {
+          await execGit(['fetch', '--quiet', '--no-recurse-submodules', remoteName], repoDir, 8000, netGitCfg);
+        } catch {}
       }
       try {
         const targetRef = branch && branch !== 'HEAD' ? `${remoteName}/${branch}` : '@{u}';
@@ -795,40 +889,47 @@ export class PrismDaemon {
         if (Number.isInteger(parts[0])) ahead = parts[0];
         if (Number.isInteger(parts[1])) behind = parts[1];
       } catch {}
-
-      return {
-        ok: true,
-        action: 'status',
-        isGitRepo: true,
-        repoPath: safeRepoName,
-        branch,
-        commit,
-        shortHash: commit,
-        dirty,
-        remoteName,
-        remoteUrl,
-        hasRemote: true,
-        noRemote: false,
-        ahead,
-        behind,
-        hasUpdates: behind > 0,
-        upToDate: behind === 0,
-        updated: false,
-        version: this.cdp.PLUGIN_VERSION,
-        message: behind > 0 ? `${behind} commit(s) available from ${remoteName}` : 'Already up to date',
-      };
     }
 
-    // action === 'pull': safe fast-forward pull + hot-push updated bundle!
-    const prevCommit = commit;
+    return {
+      isGitRepo: true,
+      repoDir,
+      repoPath: safeRepoName,
+      branch,
+      commit,
+      dirty,
+      remoteName,
+      remoteUrl,
+      hasRemote,
+      noRemote: !hasRemote,
+      ahead,
+      behind,
+      netGitCfg,
+      blockedUnc,
+    };
+  }
+
+  async _executeGitPullHotReload(gitState, actionName = 'pull') {
+    const { repoDir, repoPath, branch, commit: prevCommit, dirty, remoteName, remoteUrl, netGitCfg } = gitState;
     try {
+      const prevFullSha = await execGit(['rev-parse', 'HEAD'], repoDir, 5000).catch(() => '');
       const pullArgs =
         branch && branch !== 'HEAD'
           ? ['pull', '--ff-only', '--no-recurse-submodules', remoteName, branch]
           : ['pull', '--ff-only', '--no-recurse-submodules'];
       const pullOut = await execGit(pullArgs, repoDir, 15000, netGitCfg);
       const nextCommit = await execGit(['rev-parse', '--short', 'HEAD'], repoDir, 5000).catch(() => prevCommit);
+      const nextFullSha = await execGit(['rev-parse', 'HEAD'], repoDir, 5000).catch(() => prevFullSha);
       const updated = Boolean(nextCommit && nextCommit !== prevCommit);
+
+      let changedFiles = [];
+      if (prevFullSha && nextFullSha && prevFullSha !== nextFullSha) {
+        try {
+          const diffOut = await execGit(['diff', '--name-only', `${prevFullSha}..${nextFullSha}`], repoDir, 5000);
+          changedFiles = diffOut.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+        } catch {}
+      }
+      const needsHardReload = changedFiles.some((f) => /^(?:sidecars\/|installer\/|cdp\.js$)/.test(f));
 
       let hotReloaded = false;
       if (updated) {
@@ -843,9 +944,9 @@ export class PrismDaemon {
 
       return {
         ok: true,
-        action: 'pull',
+        action: actionName,
         isGitRepo: true,
-        repoPath: safeRepoName,
+        repoPath,
         branch,
         prevCommit,
         commit: nextCommit,
@@ -861,6 +962,9 @@ export class PrismDaemon {
         upToDate: true,
         updated,
         hotReloaded,
+        needsHardReload,
+        needsHardReloadHint: needsHardReload,
+        changedFiles,
         version: this.cdp.PLUGIN_VERSION,
         message: sanitizeSecretText(pullOut || (updated ? `Updated ${prevCommit} -> ${nextCommit}` : 'Already up to date')),
       };
@@ -868,12 +972,12 @@ export class PrismDaemon {
       const safeErr = sanitizeSecretText(err?.message || 'git pull --ff-only failed');
       return {
         ok: false,
-        action: 'pull',
+        action: actionName,
         isGitRepo: true,
-        repoPath: safeRepoName,
+        repoPath,
         branch,
-        commit,
-        shortHash: commit,
+        commit: prevCommit,
+        shortHash: prevCommit,
         dirty,
         remoteName,
         remoteUrl,
@@ -885,6 +989,227 @@ export class PrismDaemon {
         message: safeErr,
       };
     }
+  }
+
+  _buildCombinedUpdateStatus({ relState = null, gitState = null, action = 'update-status' } = {}) {
+    const currentVersion = this.cdp?.PLUGIN_VERSION || this.updateService?.currentVersion || '1.0.4';
+    const rel = relState || this.updateService?.getStatus?.() || {};
+    const autoUpdate = this._getAutoUpdateSetting();
+    const isGitRemote = Boolean(gitState?.hasRemote);
+    const gitHasUpdate = Boolean(isGitRemote && gitState.behind > 0);
+    const relHasUpdate = Boolean(rel.hasUpdate);
+    const hasUpdate = gitHasUpdate || relHasUpdate;
+    const mode = isGitRemote ? 'git' : rel.mode || (process.platform === 'win32' ? 'installer' : 'manual');
+    const hotReloadCapable = isGitRemote ? true : Boolean(rel.hotReloadCapable);
+    const manualRequired = isGitRemote ? false : Boolean(rel.manualRequired);
+    return {
+      ok: true,
+      action,
+      currentVersion,
+      latestVersion: rel.latestVersion || currentVersion,
+      latestTag: rel.latestTag || null,
+      hasUpdate,
+      autoUpdate,
+      mode,
+      hotReloadCapable,
+      manualRequired,
+      releaseUrl: rel.releaseUrl || RELEASES_PAGE_URL,
+      downloadUrl: rel.downloadUrl || null,
+      checkedAt: rel.checkedAt || (isGitRemote ? Date.now() : null),
+      applying: Boolean(this.updateService?.applying),
+      lastError: rel.lastError || rel.error || null,
+      isGitRepo: Boolean(gitState?.isGitRepo),
+      hasRemote: isGitRemote,
+      behind: Number(gitState?.behind || 0),
+      branch: gitState?.branch || 'standalone',
+      commit: gitState?.commit || currentVersion,
+    };
+  }
+
+  async runUpdateCheck({ force = false, manual = false, allowAutoApply = false } = {}) {
+    if (this._updateCheckInFlight) {
+      return this._updateCheckInFlight;
+    }
+    const run = async () => {
+      try {
+        const gitState = await this._inspectGitRepoState({ fetchRemote: true });
+        let relState = null;
+        try {
+          relState = await this.updateService.checkForUpdates({ force, manual });
+        } catch (err) {
+          relState = {
+            ...(this.updateService?.getStatus?.() || {}),
+            ok: false,
+            lastError: String(err?.message || err || 'check_failed'),
+          };
+        }
+        const combined = this._buildCombinedUpdateStatus({ relState, gitState, action: manual ? 'check-update' : 'update-status' });
+        this._lastUpdateState = combined;
+
+        if (allowAutoApply && this._getAutoUpdateSetting() === 'on' && combined.hasUpdate) {
+          if (gitState.hasRemote && gitState.behind > 0) {
+            const pullRes = await this._executeGitPullHotReload(gitState, 'apply-update');
+            this._lastUpdateState = {
+              ...combined,
+              hasUpdate: false,
+              behind: 0,
+              commit: pullRes.commit || combined.commit,
+              lastAutoApply: pullRes,
+            };
+          } else if (!gitState.hasRemote && relState?.hasUpdate) {
+            const applyRes = await this.updateService.applyReleaseUpdate({ confirm: true, auto: true });
+            this._lastUpdateState = {
+              ...combined,
+              lastError: applyRes.ok ? null : applyRes.error || combined.lastError,
+              lastAutoApply: applyRes,
+            };
+          }
+        }
+        return this._lastUpdateState;
+      } finally {
+        this._updateCheckInFlight = null;
+      }
+    };
+    this._updateCheckInFlight = run();
+    return this._updateCheckInFlight;
+  }
+
+  async executeRepoAction(rawInput = {}) {
+    if (rawInput?.action === 'storage-health' || rawInput?.action === 'prepare-archive') {
+      return this._handleStorageAction(rawInput.action);
+    }
+    if (rawInput?.action === 'uninstall') {
+      return this._handleUninstallAction(rawInput);
+    }
+    if (rawInput?.action === 'update-status') {
+      const gitState = await this._inspectGitRepoState({ fetchRemote: false });
+      const relState = this.updateService?.getStatus?.() || null;
+      const state = this._lastUpdateState
+        ? { ...this._lastUpdateState, action: 'update-status', autoUpdate: this._getAutoUpdateSetting(), applying: Boolean(this.updateService?.applying) }
+        : this._buildCombinedUpdateStatus({ relState, gitState, action: 'update-status' });
+      if (!state.checkedAt) {
+        void this.runUpdateCheck({ force: false, manual: false, allowAutoApply: false }).catch(() => {});
+      }
+      return state;
+    }
+    if (rawInput?.action === 'check-update') {
+      const res = await this.runUpdateCheck({
+        force: rawInput?.force !== false,
+        manual: Boolean(rawInput?.manual),
+        allowAutoApply: false,
+      });
+      return { ...res, action: 'check-update' };
+    }
+    if (rawInput?.action === 'apply-update') {
+      if (rawInput?.confirm !== true) {
+        return { ok: false, action: 'apply-update', error: 'confirmation_required' };
+      }
+      const gitState = await this._inspectGitRepoState({ fetchRemote: false });
+      if (gitState.blockedUnc) {
+        return { ok: false, action: 'apply-update', error: 'Remote UNC Git paths are blocked' };
+      }
+      if (gitState.hasRemote) {
+        const pullRes = await this._executeGitPullHotReload(gitState, 'apply-update');
+        return {
+          ...pullRes,
+          mode: 'git',
+          hotReloadCapable: true,
+          targetVersion: pullRes.commit,
+        };
+      }
+      const applyRes = await this.updateService.applyReleaseUpdate({ confirm: true, auto: false });
+      return {
+        ...applyRes,
+        action: 'apply-update',
+        currentVersion: this.cdp?.PLUGIN_VERSION || this.updateService?.currentVersion || '1.0.4',
+      };
+    }
+
+    const action = rawInput?.action === 'pull' || rawInput?.action === 'sync' ? 'pull' : 'status';
+    const gitState = await this._inspectGitRepoState({ fetchRemote: action === 'status' });
+    if (!gitState.isGitRepo) {
+      return {
+        ok: true,
+        action,
+        isGitRepo: false,
+        repoPath: path.basename(this.rootDir),
+        branch: 'standalone',
+        commit: this.cdp.PLUGIN_VERSION,
+        shortHash: this.cdp.PLUGIN_VERSION,
+        dirty: false,
+        remoteUrl: '',
+        hasRemote: false,
+        noRemote: true,
+        ahead: 0,
+        behind: 0,
+        hasUpdates: false,
+        upToDate: true,
+        updated: false,
+        version: this.cdp.PLUGIN_VERSION,
+        message: 'Installed standalone plugin (no linked Git repository)',
+      };
+    }
+    if (gitState.blockedUnc) {
+      return {
+        ok: false,
+        action,
+        isGitRepo: true,
+        repoPath: gitState.repoPath,
+        branch: gitState.branch,
+        commit: gitState.commit,
+        shortHash: gitState.commit,
+        dirty: gitState.dirty,
+        error: 'Remote UNC Git paths are blocked',
+        message: 'Remote UNC Git paths are blocked',
+      };
+    }
+    if (!gitState.hasRemote) {
+      return {
+        ok: true,
+        action,
+        isGitRepo: true,
+        repoPath: gitState.repoPath,
+        branch: gitState.branch,
+        commit: gitState.commit,
+        shortHash: gitState.commit,
+        dirty: gitState.dirty,
+        remoteName: '',
+        remoteUrl: '',
+        hasRemote: false,
+        noRemote: true,
+        ahead: 0,
+        behind: 0,
+        hasUpdates: false,
+        upToDate: true,
+        updated: false,
+        version: this.cdp.PLUGIN_VERSION,
+        message: 'Local Git repository (no remote configured)',
+      };
+    }
+    if (action === 'status') {
+      return {
+        ok: true,
+        action: 'status',
+        isGitRepo: true,
+        repoPath: gitState.repoPath,
+        branch: gitState.branch,
+        commit: gitState.commit,
+        shortHash: gitState.commit,
+        dirty: gitState.dirty,
+        remoteName: gitState.remoteName,
+        remoteUrl: gitState.remoteUrl,
+        hasRemote: true,
+        noRemote: false,
+        ahead: gitState.ahead,
+        behind: gitState.behind,
+        hasUpdates: gitState.behind > 0,
+        upToDate: gitState.behind === 0,
+        updated: false,
+        version: this.cdp.PLUGIN_VERSION,
+        message: gitState.behind > 0 ? `${gitState.behind} commit(s) available from ${gitState.remoteName}` : 'Already up to date',
+      };
+    }
+    return this._executeGitPullHotReload(gitState, 'pull');
   }
 
   _readCdpFileSig() {
@@ -1084,7 +1409,7 @@ export class PrismDaemon {
   _getSidebarServerMeta() {
     return {
       binding: SIDEBAR_BINDING,
-      version: this.cdp?.PLUGIN_VERSION || '1.0.3',
+      version: this.cdp?.PLUGIN_VERSION || '1.0.4',
       schemaVersion: 2,
       serviceReady: !this._sidebarStopped && typeof this.sidebarService?.handleRpc === 'function' &&
         !this.sidebarService.getBootDiagnostic?.(),
@@ -2198,7 +2523,19 @@ export class PrismDaemon {
         parsed?.payload?.action ||
         'status';
 
-      const result = await this.executeRepoAction({ ...parsed?.input, action });
+      const inputPayload =
+        parsed?.input && typeof parsed.input === 'object' && !Array.isArray(parsed.input)
+          ? { ...parsed.input }
+          : parsed?.payload && typeof parsed.payload === 'object' && !Array.isArray(parsed.payload)
+            ? { ...parsed.payload }
+            : {};
+      delete inputPayload._testOverrides;
+      if (inputPayload.confirm === undefined && parsed?.confirm !== undefined) inputPayload.confirm = parsed.confirm;
+      if (inputPayload.purgeData === undefined && parsed?.purgeData !== undefined) inputPayload.purgeData = parsed.purgeData;
+      if (inputPayload.force === undefined && parsed?.force !== undefined) inputPayload.force = parsed.force;
+      if (inputPayload.manual === undefined && parsed?.manual !== undefined) inputPayload.manual = parsed.manual;
+
+      const result = await this.executeRepoAction({ ...inputPayload, action });
       if (reqId !== null) {
         const safeId = Number(reqId) | 0;
         const jsonRes = serializeJsonForEval(result);
@@ -2346,6 +2683,7 @@ export class PrismDaemon {
             requestId: input.requestId ? String(input.requestId) : '',
             force: Boolean(input.force),
             bypassCache: Boolean(input.bypassCache),
+            targetLang: input.targetLang || input.lang || '',
             onPartial: (partialText) => {
               if (!entry || entry.session.closed) return;
               pendingPartial = String(partialText || '');
@@ -3452,11 +3790,36 @@ export class PrismDaemon {
       void this.tick();
     }, this.pollIntervalMs);
     void this.tick();
+
+    if (this._enableAutoUpdateTimer) {
+      this._updateInitialTimer = setTimeout(() => {
+        this._updateInitialTimer = null;
+        if (this.running) {
+          void this.runUpdateCheck({ force: false, manual: false, allowAutoApply: true }).catch(() => {});
+        }
+      }, this._updateCheckInitialDelayMs);
+      this._updateInitialTimer?.unref?.();
+
+      this._updateIntervalTimer = setInterval(() => {
+        if (this.running) {
+          void this.runUpdateCheck({ force: false, manual: false, allowAutoApply: true }).catch(() => {});
+        }
+      }, this._updateCheckIntervalMs);
+      this._updateIntervalTimer?.unref?.();
+    }
   }
 
   async stop(cleanPageDom = false) {
     this._sidebarStopped = true;
     this.running = false;
+    if (this._updateInitialTimer) {
+      clearTimeout(this._updateInitialTimer);
+      this._updateInitialTimer = null;
+    }
+    if (this._updateIntervalTimer) {
+      clearInterval(this._updateIntervalTimer);
+      this._updateIntervalTimer = null;
+    }
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;

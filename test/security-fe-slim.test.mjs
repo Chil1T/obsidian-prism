@@ -767,7 +767,7 @@ test('settings-panel persists Beta sub-tab, localizes Conversation DB Health acr
   const state = settingsPanel.getDefaultSettingsPatch();
   const mount = () =>
     settingsPanel.mountOrSyncSettingsSection({
-      version: '1.0.3',
+      version: '1.0.4',
       getLang: () => state.language,
       uiText: (l) => i18nLocales.getUiStrings(l),
       isZh: () => state.language !== 'en' && state.language !== 'ja',
@@ -845,39 +845,112 @@ test('settings-panel persists Beta sub-tab, localizes Conversation DB Health acr
   }
 });
 
-test('Main bundle budget <= 685,000 B (< 686,080 B CI hard limit), sidebarStudio defaults off, dead CSS removed, and v1.0.3 metadata aligned', () => {
+test('Main bundle budget <= 695,000 B (< 680 KiB / 696,320 B CI hard limit), sidebarStudio defaults off, dead CSS removed, and v1.0.4 metadata aligned', () => {
   assert.equal(cdp.DEFAULT_CONFIG.sidebarStudio, 'off', 'DEFAULT_CONFIG.sidebarStudio must remain "off"');
   const expr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
   const bytes = Buffer.byteLength(expr, 'utf8');
-  assert.ok(bytes < 686080, `Bundle must stay strictly < 686,080 B, got ${bytes} B`);
-  assert.ok(bytes <= 685000, `Bundle target <= 685,000 B (headroom >= 1,080 B), got ${bytes} B`);
+  assert.ok(bytes < 680 * 1024, `Bundle must stay strictly < 696,320 B (680 KiB), got ${bytes} B`);
+  assert.ok(bytes <= 695000, `Bundle target <= 695,000 B (headroom >= 1,320 B), got ${bytes} B`);
 
   const cssRaw = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
   assert.equal(cssRaw.includes('data-ag-cs-route'), false, 'Dead selector data-ag-cs-route must be removed from style.css');
 
-  // Verify dead SLIDER_CSS role=menu*:has() rules were stripped in compiled bundle while active selection rule remains
-  assert.equal(expr.includes('model-selector-effort-option'), false, 'Dead SLIDER_CSS menu*:has option rule must be stripped from bundle');
-  assert.equal(expr.includes('group-hover\\\\:hidden'), false, 'Dead SLIDER_CSS menuitem:has group-hover rule must be stripped from bundle');
-  assert.ok(expr.includes('data-ces-model-selected'), 'Active model-selected SLIDER_CSS rule must be preserved in bundle');
+  // Verify compiled SLIDER_CSS retains html[data-ces-slider-ready='1']-gated submenu hiding rules, never emits bare ungated [role='menu']:has(), and strips dead .ces-set* CSS
+  const styles = [];
+  const mkEl = (tag) => ({
+    tagName: String(tag).toUpperCase(),
+    style: { setProperty() {}, removeProperty() {} },
+    children: [],
+    attrs: new Map(),
+    _text: '',
+    set textContent(v) {
+      this._text = String(v);
+      if (this.tagName === 'STYLE') styles.push(this._text);
+    },
+    get textContent() { return this._text; },
+    setAttribute(k, v) { this.attrs.set(k, String(v)); },
+    getAttribute(k) { return this.attrs.get(k) || null; },
+    hasAttribute(k) { return this.attrs.has(k); },
+    removeAttribute(k) { this.attrs.delete(k); },
+    appendChild(c) { this.children.push(c); return c; },
+    querySelectorAll() { return []; },
+    querySelector() { return null; },
+    addEventListener() {},
+    removeEventListener() {},
+    classList: { add() {}, remove() {}, contains() { return false; } },
+  });
+  const mockDoc = {
+    readyState: 'complete',
+    documentElement: mkEl('html'),
+    head: mkEl('head'),
+    body: mkEl('body'),
+    createElement: mkEl,
+    getElementById: () => null,
+    querySelectorAll: () => [],
+    querySelector: () => null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+  const sandbox = {
+    document: mockDoc,
+    location: { href: 'vscode-file://vscode-app/workbench.html' },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+    setInterval: () => 0,
+    clearInterval: () => {},
+    requestAnimationFrame: () => 0,
+    cancelAnimationFrame: () => {},
+    MutationObserver: function () { return { observe() {}, disconnect() {} }; },
+    ResizeObserver: function () { return { observe() {}, disconnect() {} }; },
+    matchMedia: () => ({ matches: false, addEventListener() {} }),
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    performance: { now: () => 0 },
+    navigator: { userAgent: '' },
+    URL, Map, Set, WeakMap, WeakSet, Promise, console, Math, Date, JSON, Array, Object, String, Number, Boolean, Uint8Array, Float32Array, Intl,
+  };
+  sandbox.window = sandbox;
+  sandbox.self = sandbox;
+  sandbox.globalThis = sandbox;
+  const runRes = vm.runInNewContext(expr, sandbox);
+  assert.equal(runRes?.status, 'ok');
+  const injectedCss = styles.join('\n');
+  assert.ok(
+    injectedCss.includes("html[data-ces-slider-ready='1'] [role='menu']:has([data-testid='model-selector-effort-option'])"),
+    'Compiled bundle must retain html[data-ces-slider-ready=1]-gated [role=menu]:has(model-selector-effort-option) CSS'
+  );
+  assert.ok(
+    injectedCss.includes("html[data-ces-slider-ready='1'] [role='menuitem']:has([data-testid='model-selector-effort-group'])>.group-hover"),
+    'Compiled bundle must retain gated menuitem group-hover CSS'
+  );
+  const ungatedMenuHas = [...injectedCss.matchAll(/\[role='menu(?:item)?'\]:has\(/g)].filter((m) => {
+    const before = injectedCss.slice(Math.max(0, m.index - 70), m.index);
+    return !before.includes("html[data-ces-slider-ready='1']");
+  });
+  assert.equal(ungatedMenuHas.length, 0, 'Must NEVER emit bare ungated [role=menu*]:has() rules');
+  assert.equal(injectedCss.includes('.ces-set-head'), false, 'Dead .ces-set* settings modal CSS must remain stripped');
+  assert.ok(injectedCss.includes('data-ces-model-selected'), 'Active model-selected SLIDER_CSS rule must be preserved in bundle');
 
   // Verify release metadata consistency
   const wbApp = fs.readFileSync(path.join(ROOT, 'workbench/app.js'), 'utf8');
-  assert.ok(wbApp.includes('Obsidian Prism v1.0.3') && wbApp.includes('GPL-3.0 · 7 CREDITS'), 'workbench/app.js must reflect v1.0.3 and GPL-3.0');
+  assert.ok(wbApp.includes('Obsidian Prism v1.0.4') && wbApp.includes('GPL-3.0 · 7 CREDITS'), 'workbench/app.js must reflect v1.0.4 and GPL-3.0');
   assert.equal(wbApp.includes('Obsidian Prism v1.0.0'), false);
   assert.equal(wbApp.includes('MIT · 7 CREDITS'), false);
 
   const bugTpl = fs.readFileSync(path.join(ROOT, '.github/ISSUE_TEMPLATE/bug_report.md'), 'utf8');
-  assert.ok(bugTpl.includes('`v1.0.3`'));
+  assert.ok(bugTpl.includes('`v1.0.4`'));
   const manifest = fs.readFileSync(path.join(ROOT, 'installer/setup/app.manifest'), 'utf8');
-  assert.ok(manifest.includes('version="1.0.3.0"'));
+  assert.ok(manifest.includes('version="1.0.4.0"'));
   for (const rel of [
     'vendor/omni-viewer/omni-client.js',
     'vendor/thought-translator/thought-client.js',
     'vendor/thought-translator/thought-settings-ui.js',
   ]) {
     const firstLine = fs.readFileSync(path.join(ROOT, rel), 'utf8').split(/\r?\n/)[0];
-    assert.ok(firstLine.includes('v1.0.3'), `${rel} header comment must be v1.0.3`);
+    assert.ok(firstLine.includes('v1.0.4'), `${rel} header comment must be v1.0.4`);
   }
   const changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
-  assert.ok(changelog.includes('## [1.0.3]') && changelog.includes('## [1.0.2]') && changelog.includes('archive:conversations'));
+  assert.ok(changelog.includes('## [1.0.4]') && changelog.includes('## [1.0.3]') && changelog.includes('## [1.0.2]') && changelog.includes('archive:conversations'));
 });

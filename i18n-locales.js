@@ -97,6 +97,40 @@
       'Local Git repository (no remote configured)',
       'ローカル Git リポジトリ（リモート未設定）',
     ],
+    setAutoUpdateTitle: ['自动更新', '自動更新', '自動更新', 'Auto Update', '自動アップデート'],
+    setAutoUpdateDesc: [
+      '默认关闭。后台仍静默检测新版本；开启后将自动下载并热更新。',
+      '預設關閉。背景仍靜默偵測新版本；開啟後將自動下載並熱更新。',
+      '預設關閉。背景仍靜默偵測新版本；開啟後會自動下載並熱更新。',
+      'Off by default. Still checks quietly; when On, downloads & hot-reloads.',
+      '既定オフ。裏で新バージョンを確認し、オン時に自動更新します。',
+    ],
+    updCheckBtn: ['检查更新', '檢查更新', '檢查更新', 'Check Update', '更新確認'],
+    updApplyBtn: ['立即更新（热加载）', '立即更新（熱載入）', '即刻更新（熱載入）', 'Update Now (Hot Reload)', '今すぐ更新 (ホット)'],
+    updUpToDate: ['已是最新 v{0}', '已是最新 v{0}', '已係最新 v{0}', 'Up to date v{0}', '最新 v{0}'],
+    updAvailTpl: ['发现新版本 v{0}', '發現新版本 v{0}', '發現新版本 v{0}', 'Update v{0} available', '新バージョン v{0}'],
+    updUpdating: ['正在下载并热更新…', '正在下載並熱更新…', '下載緊並熱更新…', 'Downloading & hot-reloading…', 'ダウンロード・更新中…'],
+    updHotDone: [
+      '热更新已生效（若含核心或底层变更，请按 Ctrl+R / Cmd+R 强刷或重启）',
+      '熱更新已生效（若含核心或底層變更，請按 Ctrl+R / Cmd+R 強刷或重啟）',
+      '熱更新已生效（如有核心或底層變動，請按 Ctrl+R / Cmd+R 強刷或重啟）',
+      'Hot-reloaded (hard reload Ctrl+R / Cmd+R or restart if core changed)',
+      'ホット更新完了（コア変更時は Ctrl+R / Cmd+R で再読込・再起動）',
+    ],
+    updManualHint: [
+      '请前往 Release 下载安装包手动升级 v{0}',
+      '請前往 Release 下載安裝包手動升級 v{0}',
+      '請去 Release 下載安裝包手動升級 v{0}',
+      'Download installer from Release to update to v{0}',
+      'Release からインストーラを取得し v{0} へ更新',
+    ],
+    updHotNote: [
+      '支持热加载即时生效，部分核心/样式或底层 Sidecar 变更需强刷页面（Ctrl+R / Cmd+R）或重启 Antigravity。',
+      '支援熱載入即時生效，部分核心/樣式或底層 Sidecar 變更需強刷頁面（Ctrl+R / Cmd+R）或重啟 Antigravity。',
+      '支援熱載入即時生效，部分核心/樣式或底層 Sidecar 變動需強刷頁面（Ctrl+R / Cmd+R）或重啟 Antigravity。',
+      'Hot reload applies immediately; core/style or Sidecar changes need hard reload (Ctrl+R / Cmd+R) or Antigravity restart.',
+      'ホットリロードで即時反映；コア/スタイル/Sidecar 変更時は強更新 (Ctrl+R / Cmd+R) または Antigravity 再起動が必要です。',
+    ],
     storageHealthTitle: [
       '对话库体积体检',
       '對話庫體積體檢',
@@ -161,6 +195,12 @@
       'Obsidian Prism is an independent open-source project and is not affiliated with or endorsed by Google LLC.',
       'Obsidian Prism は独立したオープンソースプロジェクトであり、Google LLC とは提携・承認関係にありません。Obsidian Prism is an independent open-source project and is not affiliated with or endorsed by Google LLC.',
     ],
+    uninstallBtn: ['卸载 Prism', '卸載 Prism', '卸載 Prism', 'Uninstall Prism', 'Prism 削除'],
+    uninstallPurge: ['清除配置、API Key 与缓存', '清除設定、API Key 與快取', '清除設定、API Key 同快取', 'Purge config, key & cache', '設定・APIキー・キャッシュ削除'],
+    uninstallKeepNote: ['保留主对话、conversations_archive 及 Spark/知识空间', '保留主對話、conversations_archive 及 Spark/知識空間', '保留主對話、conversations_archive 同 Spark/知識空間', 'Keeps chats, conversations_archive, Spark & knowledge', '会話・conversations_archive・Spark・知識空間は保持'],
+    uninstallCancelBtn: ['取消', '取消', '取消', 'Cancel', '中止'],
+    uninstallConfirmBtn: ['确认卸载', '確認卸載', '確認卸載', 'Confirm', '実行'],
+    uninstallDone: ['已发起卸载，即将恢复原生界面', '已發起卸載，即將還原原生介面', '已發起卸載，好快還原原生介面', 'Uninstalling; restoring UI', '削除開始・元UIへ戻ります'],
 
     // ── Studio Placeholder & Home Dashboard ──────────────────────────────────
     studioPlaceholder: [

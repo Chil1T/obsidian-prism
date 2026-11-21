@@ -17,6 +17,7 @@
   const HIDE_STYLE_ID = 'ag-prism-effort-slider-hide';
   const PRISM_OWNER_ATTR = 'data-ag-prism-slider';
   const THROTTLE_MS = 120;
+  const MENU_THROTTLE_MS = 32;
 
   function resolveUpstreamLib(win) {
     if (win && win.AntigravityCodexEffortSlider) return win.AntigravityCodexEffortSlider;
@@ -41,7 +42,7 @@
   }
 
   const IGNORED_CHAT_SEL =
-    '[data-testid="autoscroll-viewport"],[data-testid="planner-response-text"],[data-testid="user-message-bubble"],aside,[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-crab,.ag-cs-conv-aura-host,#ag-pulse-status-bar,#ag-prism-pulse-bar,[data-ag-prism-pulse-bar="true"]';
+    '[data-testid="autoscroll-viewport"],[data-testid="planner-response-text"],[data-testid="user-message-bubble"],aside,[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-crab,.ag-cs-conv-aura-host,#ag-pulse-status-bar,#ag-prism-pulse-bar,[data-ag-prism-pulse-bar="true"],.ag-cs-panel-row-glyph,[data-testid="orchestrator-effort-bar"],.ag-cs-smooth-caret,.ag-anim-icon';
 
   function isIgnTarget(node) {
     if (!node) return false;
@@ -104,17 +105,21 @@
       let lastRunAt = 0;
       let queuedRecords = [];
       let disconnected = false;
+      let wasMenuOpen = false;
 
-      const flush = () => {
+      const flush = (forceCloseFlush) => {
         timer = null;
         if (disconnected) return;
         const batch = queuedRecords;
         queuedRecords = [];
         const menuOpen = isModelMenuOpen(doc);
-        if (!touchesModel(batch, doc, menuOpen)) {
+        const closingNow = Boolean(forceCloseFlush || (wasMenuOpen && !menuOpen));
+        if (!closingNow && !touchesModel(batch, doc, menuOpen)) {
+          wasMenuOpen = menuOpen;
           stats.skippedIrrelevant += 1;
           return;
         }
+        wasMenuOpen = menuOpen;
         lastRunAt = Date.now();
         stats.executedScans += 1;
         callback(batch, wrapper);
@@ -128,7 +133,8 @@
           return;
         }
         const menuNow = isModelMenuOpen(doc);
-        if (!touchesModel(records, doc, menuNow)) {
+        const justClosed = wasMenuOpen && !menuNow;
+        if (!justClosed && !touchesModel(records, doc, menuNow)) {
           stats.skippedIrrelevant += 1;
           return;
         }
@@ -138,14 +144,15 @@
           }
         }
         const elapsed = Date.now() - lastRunAt;
-        if (menuNow || (elapsed >= THROTTLE_MS && timer === null)) {
+        const winMs = menuNow ? MENU_THROTTLE_MS : THROTTLE_MS;
+        if (justClosed || (menuNow && !wasMenuOpen) || (elapsed >= winMs && timer === null)) {
           if (timer !== null) {
             clearTimeout(timer);
             timer = null;
           }
-          flush();
+          flush(justClosed);
         } else if (timer === null) {
-          timer = setTimeout(flush, Math.max(16, THROTTLE_MS - elapsed));
+          timer = setTimeout(() => flush(false), Math.max(16, winMs - elapsed));
           if (timer && typeof timer.unref === 'function') timer.unref();
         }
       });

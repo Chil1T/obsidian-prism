@@ -143,8 +143,38 @@ export function usageRecords(raw,conversationId,{maxRows=Infinity,maxBytes=Infin
 const validRow=r=>r&&HASH.test(r.id)&&typeof r.model==='string'&&r.model.length<=120&&
   (r.at===null||Number.isSafeInteger(r.at)&&r.at>=0)&&keys.every(k=>r[k]===null||Number.isSafeInteger(r[k])&&r[k]>=0);
 export class UsageLedger{
-  constructor(directory=join(platformPaths().data,'usage-v1'),{timeZone='Asia/Shanghai',source='desktop-local'}={}){this.directory=directory;this.timeZone=timeZone;this.source=source;}
-  _gate=Promise.resolve();_barrier=Promise.resolve();_writes=new Set();_files=new Map();usageWrites=new Map();revision=0;_cache=null;caches=new Map();diskSummaryPending=null;_diskSummaryRetry=null;diskSummaryRetries=new Map();lastDiskWorkerDiagnostic=null;diskSummaryLastError=null;
+  constructor(directory=join(platformPaths().data,'usage-v1'),{timeZone='Asia/Shanghai',source='desktop-local',maxFiles=256}={}){this.directory=directory;this.timeZone=timeZone;this.source=source;this.maxFiles=Number.isInteger(maxFiles)&&maxFiles>0?maxFiles:256;}
+  _gate=Promise.resolve();_barrier=Promise.resolve();_writes=new Set();_files=new Map();usageWrites=new Map();revision=0;_cache=null;caches=new Map();diskSummaryPending=null;_diskSummaryRetry=null;diskSummaryRetries=new Map();lastDiskWorkerDiagnostic=null;diskSummaryLastError=null;_knownFileCount=null;_pruneWrites=0;_prunePromise=null;
+  async pruneOldFiles(maxFiles=this.maxFiles){
+    if(!Number.isInteger(maxFiles)||maxFiles<=0)return 0;
+    let scopeEntries;try{scopeEntries=await readdir(this.directory,{withFileTypes:true});}catch{return 0;}
+    const files=[];
+    for(const se of scopeEntries){
+      if(!se?.isDirectory?.())continue;
+      const scopeDir=join(this.directory,se.name);
+      let entries;try{entries=await readdir(scopeDir,{withFileTypes:true});}catch{continue;}
+      for(const e of entries){
+        if(!e?.isFile?.()||!/^[a-f0-9]{64}\.(?:json|sqlite)$/i.test(e.name))continue;
+        const full=join(scopeDir,e.name);
+        try{const st=await stat(full);files.push({path:full,mtimeMs:Number.isFinite(st?.mtimeMs)?st.mtimeMs:0});}catch{}
+      }
+    }
+    this._knownFileCount=files.length;
+    if(files.length<=maxFiles)return 0;
+    files.sort((a,b)=>a.mtimeMs-b.mtimeMs);
+    const excess=files.length-maxFiles;let removed=0;
+    for(let i=0;i<files.length&&removed<excess;i++){if(this._files.has(files[i].path))continue;try{await unlink(files[i].path);removed++;}catch{}}
+    this._knownFileCount=Math.max(0,files.length-removed);
+    return removed;
+  }
+  async _maybePrune(isNewFile){
+    if(isNewFile&&this._knownFileCount!==null)this._knownFileCount+=1;
+    this._pruneWrites+=1;
+    if(this._knownFileCount!==null&&this._knownFileCount<=this.maxFiles&&this._pruneWrites<20)return;
+    this._pruneWrites=0;
+    if(!this._prunePromise)this._prunePromise=this.pruneOldFiles().catch(()=>0).finally(()=>{this._prunePromise=null;});
+    await this._prunePromise;
+  }
   _setBounded(map,key,value,max=64){if(map.has(key))map.delete(key);map.set(key,value);while(map.size>max)map.delete(map.keys().next().value);}
   get cache(){return this._cache;}
   set cache(value){this._cache=value;if(!value)this.caches.clear();else if(value.key)this._setBounded(this.caches,value.key,value,64);}
@@ -228,7 +258,7 @@ export class UsageLedger{
       const records=[...merged.values()].sort((a,b)=>a.id.localeCompare(b.id));
       if(previous&&JSON.stringify(previous.records)===JSON.stringify(records))return;
       await mkdir(join(this.directory,scope),{recursive:true});if(isCurrent()!==true)return;const temp=file+'.'+randomUUID()+'.tmp';
-      try{await this.writeRecord(temp,JSON.stringify({schema:1,account:scope,records}));if(isCurrent()!==true)return;await rename(temp,file);}
+      try{await this.writeRecord(temp,JSON.stringify({schema:1,account:scope,records}));if(isCurrent()!==true)return;await rename(temp,file);await this._maybePrune(!previous);}
       finally{await unlink(temp).catch(()=>{});}
       // Keep the last same-account/day result as a visibly stale fallback
       // while a potentially expensive disk-backed summary is rebuilt.
@@ -282,7 +312,7 @@ export class UsageLedger{
       const staging=file+'.'+randomUUID()+'.tmp';
       try{
         const result=await this.diskJob({action:'merge',scope,previous,staging,...input},{isCurrent});if(!result||isCurrent()!==true)return;
-        if(result.changed!==false){await rename(staging,file);this.revision++;}
+        if(result.changed!==false){await rename(staging,file);this.revision++;await this._maybePrune(previous!==file);}
         this.diskSignatures??=new Map();this.diskSignatures.delete(file);
         if(signature){const info=await lstat(file);if(!info.isSymbolicLink()&&info.isFile())this.diskSignatures.set(file,{signature,size:info.size,mtimeMs:info.mtimeMs,ctimeMs:info.ctimeMs,ino:info.ino});}
         while(this.diskSignatures.size>128)this.diskSignatures.delete(this.diskSignatures.keys().next().value);

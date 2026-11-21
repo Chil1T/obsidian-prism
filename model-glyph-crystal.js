@@ -96,6 +96,7 @@
       canvas: null,
       inst: null,
       rafId: 0,
+      mountRafId: 0,
       lastStepMs: 0,
       wasOrch: false,
     };
@@ -444,12 +445,23 @@
       }
     }
 
-    function teardownCrystalMount() {
-      detachSliderWake();
+    const cancelMountRaf = () => {
+      if (crystalMount.mountRafId) {
+        cancelAnimationFrame(crystalMount.mountRafId);
+        crystalMount.mountRafId = 0;
+      }
+    };
+    const cancelStepRaf = () => {
       if (crystalMount.rafId) {
         cancelAnimationFrame(crystalMount.rafId);
         crystalMount.rafId = 0;
       }
+    };
+
+    function teardownCrystalMount() {
+      detachSliderWake();
+      cancelMountRaf();
+      cancelStepRaf();
       if (crystalMount.inst && typeof crystalMount.inst.dispose === 'function') {
         try {
           crystalMount.inst.dispose();
@@ -470,7 +482,7 @@
       if (crystalMount.bar && crystalMount.bar.parentElement) {
         crystalMount.bar.remove();
       }
-      crystalMount = { panel: null, bar: null, track: null, canvas: null, inst: null, rafId: 0, lastStepMs: 0, wasOrch: false, hideLock: false };
+      crystalMount = { panel: null, bar: null, track: null, canvas: null, inst: null, rafId: 0, mountRafId: 0, lastStepMs: 0, wasOrch: false, hideLock: false };
     }
 
     function detectPanelIsOrchestrator(panel, fallbackModelInfo) {
@@ -632,7 +644,8 @@
       }
 
       if (crystalMount.inst && crystalMount.canvas && crystalMount.canvas !== tCv) {
-        if (crystalMount.rafId) { cancelAnimationFrame(crystalMount.rafId); crystalMount.rafId = 0; }
+        cancelMountRaf();
+        cancelStepRaf();
         try { crystalMount.inst.dispose?.(); } catch {}
         crystalMount.inst = null;
       }
@@ -659,36 +672,37 @@
       setAttrIfChanged(bar, 'aria-hidden', String(!useAuto));
 
       if (isOrch) {
-        const reducedNow = motionReduced();
-        const ambientNow = readRootAmbientFloat();
-        if (
-          !crystalMount.inst &&
-          crystalMount.canvas &&
-          crystalPrismCore &&
-          typeof crystalPrismCore.mountCrystalPrismBar === 'function' &&
-          canMountRealCanvas(crystalMount.canvas)
-        ) {
-          try {
-            crystalMount.inst = crystalPrismCore.mountCrystalPrismBar(crystalMount.canvas, {
-              reduceMotion: reducedNow,
-              getState: () => {
-                const dark = isDarkTheme();
-                return {
-                  isDark: dark,
-                  prismStrength: 1,
-                  ambientIntensity: readRootAmbientFloat(),
-                  accentTone: resolveCrystalAccentMode(dark),
-                  reduceMotion: motionReduced(),
-                  hideLock: Boolean(crystalMount.hideLock),
-                  fillRatio: crystalMount.hideLock ? readTrackFillRatio(crystalMount.track) : -1,
-                };
-              },
-            });
-          } catch {
-            crystalMount.inst = null;
+        const kickCrystal = () => {
+          if (isDestroyed() || !crystalMount.wasOrch || crystalMount.panel !== panel || !panel.isConnected || !crystalMount.canvas) return;
+          const reducedNow = motionReduced();
+          const ambientNow = readRootAmbientFloat();
+          if (
+            !crystalMount.inst &&
+            crystalPrismCore &&
+            typeof crystalPrismCore.mountCrystalPrismBar === 'function' &&
+            canMountRealCanvas(crystalMount.canvas)
+          ) {
+            try {
+              crystalMount.inst = crystalPrismCore.mountCrystalPrismBar(crystalMount.canvas, {
+                reduceMotion: reducedNow,
+                getState: () => {
+                  const dark = isDarkTheme();
+                  return {
+                    isDark: dark,
+                    prismStrength: 1,
+                    ambientIntensity: readRootAmbientFloat(),
+                    accentTone: resolveCrystalAccentMode(dark),
+                    reduceMotion: motionReduced(),
+                    hideLock: Boolean(crystalMount.hideLock),
+                    fillRatio: crystalMount.hideLock ? readTrackFillRatio(crystalMount.track) : -1,
+                  };
+                },
+              });
+            } catch {
+              crystalMount.inst = null;
+            }
           }
-        }
-        if (crystalMount.inst) {
+          if (!crystalMount.inst) return;
           if (typeof crystalMount.inst.setReduceMotion === 'function') {
             crystalMount.inst.setReduceMotion(reducedNow);
           }
@@ -699,29 +713,36 @@
           } else {
             syncKnobPrismPointer(-9999, -9999);
           }
-          if (switchedIn) {
+          if (switchedIn || !crystalMount.mountedAt) {
             crystalMount.mountedAt = performance.now();
             if (!reducedNow && ambientNow > 0.001 && typeof crystalMount.inst.wake === 'function') crystalMount.inst.wake();
-          } else if (!crystalMount.mountedAt) {
-            crystalMount.mountedAt = performance.now();
           }
           try {
             crystalMount.inst.step(0.016);
           } catch {}
           const instIdle = typeof crystalMount.inst.isIdle === 'function' && Boolean(crystalMount.inst.isIdle());
           if (instIdle || document.hidden) {
-            if (crystalMount.rafId) {
-              cancelAnimationFrame(crystalMount.rafId);
-              crystalMount.rafId = 0;
-            }
+            cancelStepRaf();
           } else if (!crystalMount.rafId) {
             crystalMount.lastStepMs = performance.now();
             crystalMount.rafId = requestAnimationFrame(stepCrystalLoop);
           }
+        };
+        if (crystalMount.inst) {
+          kickCrystal();
+        } else if (!crystalMount.mountRafId) {
+          if (typeof requestAnimationFrame === 'function') {
+            crystalMount.mountRafId = requestAnimationFrame(() => {
+              crystalMount.mountRafId = 0;
+              kickCrystal();
+            });
+          } else {
+            kickCrystal();
+          }
         }
-      } else if (crystalMount.rafId) {
-        cancelAnimationFrame(crystalMount.rafId);
-        crystalMount.rafId = 0;
+      } else {
+        cancelMountRaf();
+        cancelStepRaf();
       }
     }
 

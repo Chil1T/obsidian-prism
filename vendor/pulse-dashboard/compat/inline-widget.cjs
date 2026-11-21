@@ -23,7 +23,7 @@ module.exports = function installAgPulseInlineWidget() {
   const setMarkup=(element,markup)=>{if(surface?.setMarkup)surface.setMarkup(element,markup);else element.innerHTML=markup;};
   const instances=[];
   let layoutFrame=null,disposed=false;
-  const HOVER_DELAY=250,WARM_WINDOW=350,LEAVE_DELAY=120,QUOTA_HOVER_COOLDOWN=4000;
+  const HOVER_DELAY=250,WARM_WINDOW=350,LEAVE_DELAY=120,QUOTA_HOVER_COOLDOWN=20000,MANUAL_REFRESH_COOLDOWN=5000;
   const densityMedia=matchMedia('(prefers-reduced-motion: reduce)');
   const densityEase='cubic-bezier(0.32,0.72,0,1)';
   const densitySpringEase='cubic-bezier(0.26,1.52,0.5,1)';
@@ -403,7 +403,7 @@ module.exports = function installAgPulseInlineWidget() {
   let node=null,root=null,data=null,pending=false,cardName=null,hoverTimer=null,openTimer=null,warmUntil=0,lastConversation=undefined,lastFetch=0,lastExpiredRefresh=0,resizeObserver=null,modelObserver=null,themeController=null,changingCards=false;
   const isWarm=()=>Boolean(cardName||Date.now()<warmUntil);
   let chosen=null,group=null,autoGroupId=null,lastModelSig=null,quotaSigCache=null,quotaObservedAt=0;
-  let refreshRequest=null,manualRequest=null,hoverQuotaRequest=null,lastQuotaHoverAt=0,requestEpoch=0,scopeRequestEpoch=0;
+  let refreshRequest=null,manualRequest=null,hoverQuotaRequest=null,lastQuotaHoverAt=0,lastManualRefreshAt=0,requestEpoch=0,scopeRequestEpoch=0;
   let composer=null,usageDashboard=null,updateMenu=null;
   let densityFrame=null,densityMotion=null,densityProbe=null;
   let isPrimary=false,parked=false,parkedKind=null,instDisposed=false;
@@ -476,7 +476,7 @@ module.exports = function installAgPulseInlineWidget() {
     const prevId=lastConversation;
     lastConversation=id;requestEpoch++;pending=false;refreshRequest=null;lastFetch=0;
     stopDensityMotion();densityFrame=null;densityProbe=null;
-    manualRequest=null;hoverQuotaRequest=null;lastQuotaHoverAt=0;quotaSigCache=null;setQuotaBusy(false);
+    manualRequest=null;hoverQuotaRequest=null;lastQuotaHoverAt=0;lastManualRefreshAt=0;quotaSigCache=null;setQuotaBusy(false);
     emptyCompact=true;springNextExpand=false;suppressNextMotion=false;
     if(!id){hydrated=true;seenEmptySession=true;}
     else if(prevId===null&&seenEmptySession){hydrated=false;}
@@ -1414,6 +1414,9 @@ module.exports = function installAgPulseInlineWidget() {
   }
   function refreshManually(syncUsage=false){
     if(manualRequest)return manualRequest.promise;
+    const now=Date.now();
+    if(now-lastManualRefreshAt<MANUAL_REFRESH_COOLDOWN)return Promise.resolve(null);
+    lastManualRefreshAt=now;
     setQuotaBusy(true);const started=performance.now();
     const epoch=requestEpoch,request={};manualRequest=request;
     request.promise=(async()=>{

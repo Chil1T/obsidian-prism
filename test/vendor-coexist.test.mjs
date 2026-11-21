@@ -245,14 +245,14 @@ function createLightweightDom() {
 test('Obsidian Prism brand compliance, GPL-3.0 LICENSE, NOTICE, CITATION.cff, THIRD_PARTY_NOTICES.md, plugin.json, and sidecar.json contract', () => {
   const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'));
   assert.equal(pkgJson.name, 'obsidian-prism');
-  assert.equal(pkgJson.version, '1.0.3');
+  assert.equal(pkgJson.version, '1.0.4');
   assert.equal(pkgJson.license, 'GPL-3.0-only');
 
   const pluginJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'plugin.json'), 'utf8'));
   assert.deepEqual(Object.keys(pluginJson).sort(), ['description', 'displayName', 'logo', 'name', 'version']);
   assert.equal(pluginJson.name, 'obsidian-prism');
   assert.equal(pluginJson.displayName, 'Obsidian Prism');
-  assert.equal(pluginJson.version, '1.0.3');
+  assert.equal(pluginJson.version, '1.0.4');
   assert.equal(pluginJson.logo, 'assets/logo.svg');
   assert.ok(fs.existsSync(path.join(ROOT_DIR, 'assets', 'logo.svg')));
 
@@ -937,9 +937,9 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
                       ready: true,
                       hasPrism: true,
                       hasRepoBridge: true,
-                      prismAttr: '1.0.3',
+                      prismAttr: '1.0.4',
                       hasStyle: true,
-                      version: '1.0.3',
+                      version: '1.0.4',
                       status: 'ok',
                     },
                   },
@@ -1672,7 +1672,7 @@ test('PrismDaemon ignores wcvBrowser non-host loopback pages after skipped-non-h
           if (expr.includes('const serverMeta =')) omniEvalCount += 1;
           sendWs(socket, {
             id: msg.id,
-            result: { result: { type: 'object', value: { version: '1.0.3', status: 'skipped-non-host', state: null } } },
+            result: { result: { type: 'object', value: { version: '1.0.4', status: 'skipped-non-host', state: null } } },
           });
         } else {
           sendWs(socket, { id: msg.id, result: {} });

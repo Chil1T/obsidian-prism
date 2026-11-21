@@ -372,8 +372,8 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     assert.ok(sandbox.window.__agPrism, 'Expected window.__agPrism exposed');
     assert.equal(sandbox.window.__agClaudeStyle, sandbox.window.__agPrism, 'Expected legacy alias pointing to __agPrism');
     const st = sandbox.window.__agPrism.getState();
-    assert.equal(st.version, '1.0.3');
-    assert.equal(html.getAttribute('data-ag-prism'), '1.0.3');
+    assert.equal(st.version, '1.0.4');
+    assert.equal(html.getAttribute('data-ag-prism'), '1.0.4');
     assert.equal(html.getAttribute('data-ag-cs-light-preset'), 'crystal');
     assert.equal(html.getAttribute('data-ag-cs-telemetry'), 'auto');
     assert.equal(html.getAttribute('data-ag-cs-effort-slider'), 'auto');
@@ -420,7 +420,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     const settingsSec = appearancePanel.querySelector('#ag-cs-settings-sec');
     assert.ok(settingsSec);
     assert.equal(settingsSec.querySelector('h3')?.textContent, 'Obsidian Prism · 黑曜棱镜');
-    assert.equal(settingsSec.querySelector('.ag-cs-settings-ver')?.textContent, 'v1.0.3');
+    assert.equal(settingsSec.querySelector('.ag-cs-settings-ver')?.textContent, 'v1.0.4');
     const brandMarkHtml = settingsSec.querySelector('.ag-cs-settings-brand-mark')?.innerHTML || '';
     assert.ok(
       brandMarkHtml.includes('ag-cs-brand-logo-svg') || brandMarkHtml.includes('ag-cs-settings-brand-svg'),
@@ -484,7 +484,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
         .map((b) => b.getAttribute('data-ag-cs-key'))
         .filter(Boolean)
     );
-    assert.equal(settingKeys.size, 27);
+    assert.equal(settingKeys.size, 28);
     for (const expectedKey of [
       'palette',
       'lightPreset',
@@ -504,6 +504,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
       'thoughtTrigger',
       'telemetryModule',
       'sidebarStudio',
+      'autoUpdate',
       'effortSliderModule',
       'accentTone',
       'cornerStyle',
@@ -3069,12 +3070,12 @@ test('v1.0.1 compiler safety fixes, unified shared string pool < 670KB (< 680KB 
   const partOut = cdp.prepareRuntimePart('synthetic-test.js', unicodeAndClassSrc);
   assert.equal(vm.runInNewContext(partOut, {}), 'keep:42:128302');
 
-  // 5. Unified shared pool payload < 670KB (< 680KB CI hard ceiling) & warm config rebuild < 35ms
+  // 5. Unified shared pool payload < 680 KiB CI hard ceiling (updated for Settings Uninstall & 5-lang Thought Translator) & warm config rebuild < 35ms
   const expr1 = cdp.buildInjectExpression();
   const payloadBytes = Buffer.byteLength(expr1, 'utf8');
   assert.ok(
-    payloadBytes < 670 * 1024 && payloadBytes < 680 * 1024,
-    `Expected unified bundle payload < ${670 * 1024} bytes (670 KiB), got ${payloadBytes}`
+    payloadBytes < 680 * 1024,
+    `Expected unified bundle payload < ${680 * 1024} bytes (680 KiB), got ${payloadBytes}`
   );
   // Omni modules must never bloat static RUNTIME_PARTS
   for (const part of cdp.RUNTIME_PARTS) {

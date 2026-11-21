@@ -437,13 +437,13 @@ test('perf guard 9: thought-client api.sync(cfg) is idempotent on repeated ident
   sb.__agPrismThought.destroy();
 });
 
-test('perf guard 10: ui-runtime runGuardedMut drains MO records & default bundle stays under 670 KiB', () => {
+test('perf guard 10: ui-runtime runGuardedMut drains MO records & default bundle stays under 680 KiB', () => {
   const cdp = require(path.join(ROOT, 'cdp.js'));
   const uiSrc = fs.readFileSync(path.join(ROOT, 'ui-runtime.js'), 'utf8');
   assert.ok(uiSrc.includes('mainObserver.takeRecords()'), 'runGuardedMut must synchronously drain mainObserver records');
   assert.ok(uiSrc.includes('if (!force && key === lastAbsorbedSyncKey) return;'), 'syncAbsorbedModules must gate identical calls');
   const bytes = Buffer.byteLength(cdp.buildInjectExpression(), 'utf8');
-  assert.ok(bytes < 670 * 1024, `Expected default bundle < 670 KiB, got ${bytes}`);
+  assert.ok(bytes < 680 * 1024, `Expected default bundle < 680 KiB, got ${bytes}`);
 });
 
 test('perf guard 11: style.css enables offscreen content-visibility, sidebar containment, zero global * wildcards, and runtime flattener compiles nested/:is() rules', () => {
@@ -1187,15 +1187,15 @@ test('perf guard 19: conversation-archive safely moves finished subagent DB+WAL+
   }
 });
 
-test('perf guard 20: Host Turbo alert.css dedup+restore, async img, hidden sidecar iframe skip, blur 1.2s pause / 0ms wake, idle fxCanvas 0x0 reclamation, and bundle < 670 KiB', () => {
+test('perf guard 20: Host Turbo alert.css dedup+restore, async img, hidden sidecar iframe skip, blur 1.2s pause / 0ms wake, idle fxCanvas 0x0 reclamation, and bundle < 680 KiB', () => {
   const cdp = require(path.join(ROOT, 'cdp.js'));
   const enhancerMod = require(path.join(ROOT, 'host-workbench-enhancer.js'));
   const rig = require(path.join(ROOT, 'dual-mascot-rig.js'));
 
-  // 1) Hard size budget: default bundle < 670 KiB (686,080 B) & pulse-vial-bridge.js < 31,000 B
+  // 1) Hard size budget: default bundle < 680 KiB (696,320 B) & pulse-vial-bridge.js < 31,000 B
   const defaultExpr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
   const bundleBytes = Buffer.byteLength(defaultExpr, 'utf8');
-  assert.ok(bundleBytes < 670 * 1024, `Default bundle must stay < 670 KiB (686080 B), got ${bundleBytes} B`);
+  assert.ok(bundleBytes < 680 * 1024, `Default bundle must stay < 680 KiB (696320 B), got ${bundleBytes} B`);
   const pvBytes = fs.statSync(path.join(ROOT, 'pulse-vial-bridge.js')).size;
   assert.ok(pvBytes < 31000, `pulse-vial-bridge.js must stay < 31000 B, got ${pvBytes} B`);
 
@@ -1394,7 +1394,7 @@ test('perf guard 20: Host Turbo alert.css dedup+restore, async img, hidden sidec
   };
   sbUi.globalThis = sbUi;
   vm.runInNewContext(uiSrc, sbUi);
-  sbUi.__agCsUiMain({}, { version: '1.0.3', codeHash: 'test' });
+  sbUi.__agCsUiMain({}, { version: '1.0.4', codeHash: 'test' });
 
   // Verify T1: 1 singleton hoisted in head, all 3 duplicate bubble styles kept in React DOM but disabled=true
   const singleton = doc.getElementById('ag-prism-host-alert-css');

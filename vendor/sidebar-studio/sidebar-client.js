@@ -621,6 +621,7 @@
     let probeAttempts = 0;
 
     // 动态读取的宿主插件与 MCP 目录（零硬编码私密名称，全部运行时按需拉取）
+    let cachedStartCascadeStage = null;
     const hostCapabilities = {
       plugins: [],
       mcps: [],
@@ -1957,40 +1958,56 @@
             };
             let out;
             W.__agPrismSidebarLastStartFallback = null;
-            try {
-              out = await ls.startCascade({
-                ...basePayload,
-                customAgentSpec: iso.customAgentSpec,
-              });
-              W.__agPrismSidebarLastStartStage = 'full-custom-agent';
-            } catch (specErr1) {
-              W.__agPrismSidebarLastStartFallback = `stage1:${String(specErr1 && specErr1.message ? specErr1.message : specErr1)}`;
-              try {
-                const { workspace: _omitWs, ...noWsSpec } = iso.customAgentSpec;
-                out = await ls.startCascade({
+            const stageBuilders = [
+              ['full-custom-agent', () => ({ ...basePayload, customAgentSpec: iso.customAgentSpec })],
+              [
+                'custom-agent-no-workspace',
+                () => {
+                  const { workspace: _omitWs, ...noWsSpec } = iso.customAgentSpec;
+                  return { ...basePayload, customAgentSpec: noWsSpec };
+                },
+              ],
+              [
+                'legacy-config-only',
+                () => ({
                   ...basePayload,
-                  customAgentSpec: noWsSpec,
-                });
-                W.__agPrismSidebarLastStartStage = 'custom-agent-no-workspace';
-              } catch (specErr2) {
-                W.__agPrismSidebarLastStartFallback += ` | stage2:${String(specErr2 && specErr2.message ? specErr2.message : specErr2)}`;
-                try {
-                  out = await ls.startCascade({
-                    ...basePayload,
-                    customAgentSpec: {
-                      cascadeConfig: iso.cascadeConfig,
-                      customizationConfig: iso.customizationConfig,
-                    },
-                  });
-                  W.__agPrismSidebarLastStartStage = 'legacy-config-only';
-                } catch (specErr3) {
-                  W.__agPrismSidebarLastStartFallback += ` | stage3:${String(specErr3 && specErr3.message ? specErr3.message : specErr3)}`;
-                  W.__agPrismSidebarLastStartStage = 'rejected-fail-closed';
-                  throw new Error(
-                    `chat-isolation-spec-rejected: ${String(specErr3 && specErr3.message ? specErr3.message : specErr3)}`
-                  );
-                }
+                  customAgentSpec: {
+                    cascadeConfig: iso.cascadeConfig,
+                    customizationConfig: iso.customizationConfig,
+                  },
+                }),
+              ],
+            ];
+            const orderedStages = cachedStartCascadeStage
+              ? [
+                  ...stageBuilders.filter(([name]) => name === cachedStartCascadeStage),
+                  ...stageBuilders.filter(([name]) => name !== cachedStartCascadeStage),
+                ]
+              : stageBuilders;
+            let lastSpecErr = null;
+            const fallbackNotes = [];
+            for (let si = 0; si < orderedStages.length; si++) {
+              const [stageName, makeArg] = orderedStages[si];
+              try {
+                out = await ls.startCascade(makeArg());
+                cachedStartCascadeStage = stageName;
+                W.__agPrismSidebarLastStartStage = stageName;
+                lastSpecErr = null;
+                break;
+              } catch (specErr) {
+                if (cachedStartCascadeStage === stageName) cachedStartCascadeStage = null;
+                lastSpecErr = specErr;
+                fallbackNotes.push(`stage${si + 1}:${String(specErr && specErr.message ? specErr.message : specErr)}`);
               }
+            }
+            if (fallbackNotes.length > 0) {
+              W.__agPrismSidebarLastStartFallback = fallbackNotes.join(' | ');
+            }
+            if (lastSpecErr) {
+              W.__agPrismSidebarLastStartStage = 'rejected-fail-closed';
+              throw new Error(
+                `chat-isolation-spec-rejected: ${String(lastSpecErr && lastSpecErr.message ? lastSpecErr.message : lastSpecErr)}`
+              );
             }
             const finalCid =
               typeof out?.cascadeId === 'string' && out.cascadeId.trim() ? out.cascadeId.trim() : draftCid;
@@ -5455,6 +5472,7 @@
       clearPendingAttachments();
       host.pendingFirstAttachments = [];
       sessionModelOverrides.clear();
+      cachedStartCascadeStage = null;
       host.reservedMap.clear();
       host.deliveredMap.clear();
       unbindGlobalListeners();

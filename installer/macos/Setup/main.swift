@@ -13,6 +13,7 @@ final class InstallerOptions {
     var noKillLegacy = false
     var noNativeDaemon = false
     var noRelaunchPrompt = false
+    var purgeData = false
     var installDir: String?
     var pluginDir: String?
     var cdpPort: Int?
@@ -471,6 +472,7 @@ enum InstallerCore {
 
         let installCfgPath = (installDir as NSString).appendingPathComponent("config.json")
         let pluginCfgPath = !pluginDir.isEmpty ? (pluginDir as NSString).appendingPathComponent("config.json") : ""
+        _ = restoreUserConfigBackupIfNeeded(installDir: installDir, pluginDir: pluginDir)
         var hadInstallCfg = fm.fileExists(atPath: installCfgPath)
         let hadPluginCfg = !pluginCfgPath.isEmpty && fm.fileExists(atPath: pluginCfgPath)
         if !hadInstallCfg && hadPluginCfg {
@@ -643,12 +645,199 @@ enum InstallerCore {
         return result
     }
 
+    private static func isSymbolicLink(_ path: String) -> Bool {
+        guard !path.isEmpty else { return false }
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let ftype = attrs[.type] as? FileAttributeType else {
+            return false
+        }
+        return ftype == .typeSymbolicLink
+    }
+
+    private static func isDangerousRootPath(_ dirPath: String) -> Bool {
+        let trimmed = dirPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return true }
+        let norm = URL(fileURLWithPath: trimmed).standardizedFileURL.path
+        if norm == "/" || norm == "/Users" || norm == "/Applications" || norm == "/System" || norm == "/Library" || norm == "/tmp" {
+            return true
+        }
+        let home = URL(fileURLWithPath: FileManager.default.homeDirectoryForCurrentUser.path).standardizedFileURL.path
+        let protected = [
+            home,
+            (home as NSString).appendingPathComponent("Library"),
+            (home as NSString).appendingPathComponent("Library/Application Support"),
+            (home as NSString).appendingPathComponent("Documents"),
+            (home as NSString).appendingPathComponent(".gemini"),
+            (home as NSString).appendingPathComponent(".gemini/config"),
+            (home as NSString).appendingPathComponent(".gemini/config/plugins"),
+            (home as NSString).appendingPathComponent(".gemini/antigravity"),
+        ]
+        for p in protected {
+            if norm == p || p.hasPrefix(norm + "/") { return true }
+        }
+        let redlineDirs = [
+            (home as NSString).appendingPathComponent(".gemini/antigravity/conversations_archive"),
+            (home as NSString).appendingPathComponent(".gemini/antigravity/prism-knowledge-space"),
+            (home as NSString).appendingPathComponent("Documents/Antigravity-Spark"),
+        ]
+        for p in redlineDirs {
+            if norm == p || norm.hasPrefix(p + "/") || p.hasPrefix(norm + "/") { return true }
+        }
+        return false
+    }
+
+    private static func isAllowedTelemetryOverrideDir(_ candidate: String, geminiRoot: String) -> Bool {
+        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return false }
+        let norm = URL(fileURLWithPath: trimmed).standardizedFileURL.path
+        if isDangerousRootPath(norm) { return false }
+        let home = URL(fileURLWithPath: FileManager.default.homeDirectoryForCurrentUser.path).standardizedFileURL.path
+        var allowedRoots = [
+            (home as NSString).appendingPathComponent(".gemini"),
+            URL(fileURLWithPath: NSTemporaryDirectory()).standardizedFileURL.path,
+            "/tmp",
+            "/private/tmp",
+        ]
+        if !geminiRoot.isEmpty {
+            allowedRoots.append(URL(fileURLWithPath: geminiRoot).standardizedFileURL.path)
+        }
+        let underAllowed = allowedRoots.contains { base in
+            let b = base.hasSuffix("/") ? String(base.dropLast()) : base
+            return norm.hasPrefix(b + "/")
+        }
+        if !underAllowed { return false }
+        let segments = norm.split(separator: "/").map { $0.lowercased() }
+        return segments.contains("telemetry") || segments.contains("obsidian-prism")
+    }
+
+    private static func isValidConfigJsonFile(_ path: String) -> Bool {
+        let fm = FileManager.default
+        guard !path.isEmpty, fm.fileExists(atPath: path), !isSymbolicLink(path) else { return false }
+        guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else { return false }
+        let clean = raw.replacingOccurrences(of: "\u{FEFF}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty, let _ = try? MiniJson.parseObject(clean) else { return false }
+        return true
+    }
+
+    private static func backupUserConfigBeforeUninstall(installDir: String, pluginDir: String) {
+        guard let hostCfgDir = CdpHelper.resolveHostGeminiConfigDir(pluginDir: pluginDir),
+              !hostCfgDir.isEmpty, !isSymbolicLink(hostCfgDir) else {
+            return
+        }
+        let fm = FileManager.default
+        let installCfg = (installDir as NSString).appendingPathComponent("config.json")
+        let pluginCfg = !pluginDir.isEmpty ? (pluginDir as NSString).appendingPathComponent("config.json") : ""
+        let installValid = isValidConfigJsonFile(installCfg)
+        let pluginValid = !pluginCfg.isEmpty && isValidConfigJsonFile(pluginCfg)
+        var chosen: String?
+        if installValid && pluginValid,
+           let pMtime = (try? fm.attributesOfItem(atPath: pluginCfg)[.modificationDate]) as? Date,
+           let iMtime = (try? fm.attributesOfItem(atPath: installCfg)[.modificationDate]) as? Date {
+            chosen = pMtime > iMtime ? pluginCfg : installCfg
+        } else if pluginValid {
+            chosen = pluginCfg
+        } else if installValid {
+            chosen = installCfg
+        }
+        guard let srcPath = chosen else { return }
+        do {
+            try fm.createDirectory(atPath: hostCfgDir, withIntermediateDirectories: true, attributes: nil)
+            guard !isSymbolicLink(hostCfgDir) else { return }
+            let backupPath = (hostCfgDir as NSString).appendingPathComponent("obsidian-prism-config.backup.json")
+            guard !isSymbolicLink(backupPath) else { return }
+            let tmpPath = backupPath + ".tmp.\(getpid())"
+            if fm.fileExists(atPath: tmpPath) { try? fm.removeItem(atPath: tmpPath) }
+            try fm.copyItem(atPath: srcPath, toPath: tmpPath)
+            if fm.fileExists(atPath: backupPath) { try? fm.removeItem(atPath: backupPath) }
+            try fm.moveItem(atPath: tmpPath, toPath: backupPath)
+        } catch {}
+    }
+
+    @discardableResult
+    private static func restoreUserConfigBackupIfNeeded(installDir: String, pluginDir: String) -> Bool {
+        let fm = FileManager.default
+        let installCfg = (installDir as NSString).appendingPathComponent("config.json")
+        let pluginCfg = !pluginDir.isEmpty ? (pluginDir as NSString).appendingPathComponent("config.json") : ""
+        if fm.fileExists(atPath: installCfg) || (!pluginCfg.isEmpty && fm.fileExists(atPath: pluginCfg)) {
+            return false
+        }
+        guard let hostCfgDir = CdpHelper.resolveHostGeminiConfigDir(pluginDir: pluginDir),
+              !hostCfgDir.isEmpty, !isSymbolicLink(hostCfgDir) else {
+            return false
+        }
+        let backupPath = (hostCfgDir as NSString).appendingPathComponent("obsidian-prism-config.backup.json")
+        guard isValidConfigJsonFile(backupPath), !isSymbolicLink(installCfg) else { return false }
+        do {
+            try fm.copyItem(atPath: backupPath, toPath: installCfg)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private static func purgeUserPluginData(pluginDir: String) {
+        // 绝对红线：严禁触碰 conversations_archive、Antigravity-Spark、prism-knowledge-space
+        let fm = FileManager.default
+        guard let hostCfgDir = CdpHelper.resolveHostGeminiConfigDir(pluginDir: pluginDir),
+              !hostCfgDir.isEmpty, fm.fileExists(atPath: hostCfgDir), !isSymbolicLink(hostCfgDir) else {
+            return
+        }
+        let exactFiles = [
+            "obsidian-prism-config.backup.json",
+            "obsidian-prism-thought.json",
+            "obsidian-prism-thought-cache.json",
+            "obsidian-prism-sidebar.json",
+            "obsidian-prism-sidebar.json.lock",
+        ]
+        for name in exactFiles {
+            let fp = (hostCfgDir as NSString).appendingPathComponent(name)
+            if fm.fileExists(atPath: fp) && !isSymbolicLink(fp) {
+                try? fm.removeItem(atPath: fp)
+            }
+        }
+        if let entries = try? fm.contentsOfDirectory(atPath: hostCfgDir) {
+            for name in entries {
+                if name.hasPrefix("obsidian-prism-sidebar.json.v1") && name.hasSuffix(".bak") {
+                    let fp = (hostCfgDir as NSString).appendingPathComponent(name)
+                    if !isSymbolicLink(fp) {
+                        try? fm.removeItem(atPath: fp)
+                    }
+                }
+            }
+        }
+
+        let envTel = ProcessInfo.processInfo.environment["AG_PRISM_TELEMETRY_DIR"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let geminiRoot = (hostCfgDir as NSString).deletingLastPathComponent
+        let telemetryDir: String
+        if !envTel.isEmpty {
+            telemetryDir = isAllowedTelemetryOverrideDir(envTel, geminiRoot: geminiRoot)
+                ? URL(fileURLWithPath: envTel).standardizedFileURL.path
+                : ""
+        } else {
+            telemetryDir = ((geminiRoot as NSString).appendingPathComponent("antigravity") as NSString)
+                .appendingPathComponent("sidecar_data/obsidian-prism/telemetry")
+        }
+        if !telemetryDir.isEmpty && fm.fileExists(atPath: telemetryDir) && !isDangerousRootPath(telemetryDir) {
+            let pluginDataDir = (telemetryDir as NSString).deletingLastPathComponent
+            let sidecarDataDir = (pluginDataDir as NSString).deletingLastPathComponent
+            if !isSymbolicLink(sidecarDataDir) && !isSymbolicLink(pluginDataDir) && !isSymbolicLink(telemetryDir) {
+                try? fm.removeItem(atPath: telemetryDir)
+            }
+        }
+    }
+
     static func runUninstall(opts: InstallerOptions, progress: ((Int, String) -> Void)?) -> OperationResult {
         let result = OperationResult()
         result.mode = "uninstall"
         let rawDir = (opts.installDir?.isEmpty == false) ? opts.installDir! : getDefaultInstallDir()
         let installDir = URL(fileURLWithPath: rawDir).standardizedFileURL.path
         let pluginDir = resolveNativePluginDir(opts: opts, resolvedInstallDir: installDir)
+        if isDangerousRootPath(installDir) || (!pluginDir.isEmpty && isDangerousRootPath(pluginDir)) {
+            result.ok = false
+            result.headline = "已拒绝在受保护目录执行卸载"
+            result.detail = "目标路径受保护: \(installDir)"
+            return result
+        }
         result.installDir = installDir
         result.pluginDir = pluginDir
 
@@ -701,17 +890,26 @@ enum InstallerCore {
             }
         }
 
+        if !opts.purgeData {
+            backupUserConfigBeforeUninstall(installDir: installDir, pluginDir: pluginDir)
+        }
+
         if !pluginDir.isEmpty {
             _ = CdpHelper.syncHostPluginRegistry(pluginDir: pluginDir, enable: false)
         }
-        if !pluginDir.isEmpty && FileManager.default.fileExists(atPath: pluginDir) {
+        if !pluginDir.isEmpty && FileManager.default.fileExists(atPath: pluginDir) && !isSymbolicLink(pluginDir) {
             report(80, "正在清理原生 Sidecar 插件目录: \(pluginDir)")
             try? FileManager.default.removeItem(atPath: pluginDir)
         }
 
         report(85, "正在清理安装目录: \(installDir)")
-        if FileManager.default.fileExists(atPath: installDir) {
+        if FileManager.default.fileExists(atPath: installDir) && !isSymbolicLink(installDir) {
             try? FileManager.default.removeItem(atPath: installDir)
+        }
+
+        if opts.purgeData {
+            report(92, "正在清除插件配置与遥测缓存...")
+            purgeUserPluginData(pluginDir: pluginDir)
         }
 
         result.ok = true
@@ -1245,6 +1443,7 @@ func parseInstallerArgs(_ args: [String]) -> InstallerOptions {
         else if a == "--no-kill-legacy" { opts.noKillLegacy = true }
         else if a == "--no-native-daemon" { opts.noNativeDaemon = true }
         else if a == "--no-relaunch-prompt" { opts.noRelaunchPrompt = true }
+        else if a == "--purge-data" { opts.purgeData = true }
         else if a == "--install-dir" && i + 1 < args.count { i += 1; opts.installDir = args[i] }
         else if a == "--plugin-dir" && i + 1 < args.count { i += 1; opts.pluginDir = args[i] }
         else if a == "--cdp-port" && i + 1 < args.count {

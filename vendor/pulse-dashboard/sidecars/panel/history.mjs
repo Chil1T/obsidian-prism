@@ -1,6 +1,6 @@
 // Upstream: ATtacK030130/antigrative-dashboard v0.9.1 (MIT License — Copyright (c) 2026 AG Pulse contributors)
 // Integrated & adapted for Obsidian Prism under GPL-3.0-only compatibility terms.
-import { readFile, mkdir, writeFile, rename, unlink } from 'node:fs/promises';
+import { readFile, mkdir, writeFile, rename, unlink, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { safeContext } from './context.mjs';
@@ -118,8 +118,59 @@ export function reconcileMetrics(saved, fresh, savedAt = null) {
 
 export class SessionHistory {
   pending = new Map();
-  constructor(directory = join(platformPaths().data, 'history-v1'), {io={}}={}) {
-    this.directory = directory;this.io={readFile,mkdir,writeFile,rename,unlink,...io};
+  _knownFileCount = null;
+  _pruneWrites = 0;
+  _prunePromise = null;
+  constructor(directory = join(platformPaths().data, 'history-v1'), {io={}, maxFiles=300}={}) {
+    this.directory = directory;
+    this.maxFiles = Number.isInteger(maxFiles) && maxFiles > 0 ? maxFiles : 300;
+    this.io={readFile,mkdir,writeFile,rename,unlink,readdir,stat,...io};
+  }
+  async pruneOldFiles(maxFiles = this.maxFiles) {
+    if (!Number.isInteger(maxFiles) || maxFiles <= 0) return 0;
+    let scopeEntries;
+    try { scopeEntries = await this.io.readdir(this.directory, { withFileTypes: true }); }
+    catch { return 0; }
+    const files = [];
+    for (const se of scopeEntries) {
+      if (!se?.isDirectory?.()) continue;
+      const scopeDir = join(this.directory, se.name);
+      let entries;
+      try { entries = await this.io.readdir(scopeDir, { withFileTypes: true }); }
+      catch { continue; }
+      for (const e of entries) {
+        if (!e?.isFile?.() || !e.name.endsWith('.json')) continue;
+        const full = join(scopeDir, e.name);
+        try {
+          const st = await this.io.stat(full);
+          files.push({ path: full, mtimeMs: Number.isFinite(st?.mtimeMs) ? st.mtimeMs : 0 });
+        } catch {}
+      }
+    }
+    this._knownFileCount = files.length;
+    if (files.length <= maxFiles) return 0;
+    files.sort((a, b) => a.mtimeMs - b.mtimeMs);
+    const excess = files.length - maxFiles;
+    let removed = 0;
+    for (let i = 0; i < files.length && removed < excess; i++) {
+      if (this.pending?.has(files[i].path)) continue;
+      try {
+        await this.io.unlink(files[i].path);
+        removed++;
+      } catch {}
+    }
+    this._knownFileCount = Math.max(0, files.length - removed);
+    return removed;
+  }
+  async _maybePrune(isNewFile) {
+    if (isNewFile && this._knownFileCount !== null) this._knownFileCount += 1;
+    this._pruneWrites += 1;
+    if (this._knownFileCount !== null && this._knownFileCount <= this.maxFiles && this._pruneWrites < 20) return;
+    this._pruneWrites = 0;
+    if (!this._prunePromise) {
+      this._prunePromise = this.pruneOldFiles().catch(() => 0).finally(() => { this._prunePromise = null; });
+    }
+    await this._prunePromise;
   }
   file(scope, id) {
     if (!SCOPE.test(scope) || !GUID.test(id)) throw new Error('Invalid history scope');
@@ -168,6 +219,7 @@ export class SessionHistory {
       await this.io.writeFile(temporary,JSON.stringify(record),{encoding:'utf8',mode:0o600});
       if(isCurrent()!==true){await this.io.unlink(temporary).catch(()=>{});return null;}
       await this.io.rename(temporary,file);
+      await this._maybePrune(!previous);
     }
     catch (error) { await this.io.unlink(temporary).catch(()=>{});if(isCurrent()!==true)return null;throw error; }
     return {metrics,savedAt:record.savedAt};

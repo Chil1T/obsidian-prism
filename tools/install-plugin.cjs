@@ -64,6 +64,119 @@ function resolveHostGeminiConfigDir(targetDir, explicitHostDir = null) {
   return null;
 }
 
+function isSubPath(candidate, baseDir) {
+  if (!candidate || !baseDir) return false;
+  const normCand = path.resolve(candidate);
+  const normBase = path.resolve(baseDir);
+  const cmpCand = process.platform === "win32" ? normCand.toLowerCase() : normCand;
+  const cmpBase = process.platform === "win32" ? normBase.toLowerCase() : normBase;
+  const prefix = cmpBase.endsWith(path.sep) ? cmpBase : cmpBase + path.sep;
+  return cmpCand.startsWith(prefix);
+}
+
+function isAllowedTelemetryOverrideDir(candidatePath, hostConfigDir = null) {
+  if (!candidatePath) return false;
+  const resolved = path.resolve(candidatePath);
+  if (isProtectedUserDataPath(resolved)) return false;
+  const home = path.resolve(os.homedir());
+  const allowedRoots = [path.join(home, ".gemini"), os.tmpdir()];
+  if (process.platform === "darwin") {
+    allowedRoots.push("/tmp", "/private/tmp");
+  }
+  if (hostConfigDir) {
+    const resolvedCfg = path.resolve(hostConfigDir);
+    const parent = path.dirname(resolvedCfg);
+    if (path.basename(parent).toLowerCase() === ".gemini") {
+      allowedRoots.push(parent);
+    }
+  }
+  const underAllowedRoot = allowedRoots.some((root) => isSubPath(resolved, root));
+  if (!underAllowedRoot) return false;
+  const segments = resolved
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .map((s) => s.toLowerCase());
+  return segments.includes("telemetry") || segments.includes("obsidian-prism");
+}
+
+function resolveTelemetryDir(hostConfigDir, explicitTelemetryDir = null) {
+  if (explicitTelemetryDir) return path.resolve(explicitTelemetryDir);
+  if (process.env.AG_PRISM_TELEMETRY_DIR) {
+    const envDir = process.env.AG_PRISM_TELEMETRY_DIR.trim();
+    if (!envDir || !isAllowedTelemetryOverrideDir(envDir, hostConfigDir)) {
+      return null;
+    }
+    return path.resolve(envDir);
+  }
+  if (!hostConfigDir) return null;
+  const geminiRoot = path.dirname(path.resolve(hostConfigDir));
+  return path.join(geminiRoot, "antigravity", "sidecar_data", "obsidian-prism", "telemetry");
+}
+
+function isValidConfigJsonContent(raw) {
+  try {
+    const clean = String(raw || "").replace(/^\uFEFF/, "").trim();
+    if (!clean) return false;
+    const parsed = JSON.parse(clean);
+    return Boolean(parsed && typeof parsed === "object" && !Array.isArray(parsed));
+  } catch {
+    return false;
+  }
+}
+
+function safeUnlinkNoSymlink(filePath, label = "file") {
+  const st = assertNotSymbolicLink(filePath, label);
+  if (st && st.isFile()) {
+    fs.unlinkSync(filePath);
+    return true;
+  }
+  return false;
+}
+
+function isProtectedUserDataPath(dirPath) {
+  if (!dirPath) return true;
+  const resolved = path.resolve(dirPath);
+  const parsed = path.parse(resolved);
+  if (resolved === parsed.root) return true;
+  const segments = resolved
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .map((s) => s.toLowerCase());
+  if (
+    segments.includes("conversations_archive") ||
+    segments.includes("antigravity-spark") ||
+    segments.includes("prism-knowledge-space")
+  ) {
+    return true;
+  }
+  const home = path.resolve(os.homedir());
+  const resolvedLower = resolved.toLowerCase();
+  const redlineRoots = [
+    path.join(home, ".gemini", "antigravity", "conversations_archive"),
+    path.join(home, ".gemini", "antigravity", "prism-knowledge-space"),
+    path.join(home, "Documents", "Antigravity-Spark"),
+  ];
+  for (const r of redlineRoots) {
+    const rLower = r.toLowerCase();
+    if (
+      resolvedLower === rLower ||
+      resolvedLower.startsWith(rLower + path.sep) ||
+      rLower.startsWith(resolvedLower + path.sep)
+    ) {
+      return true;
+    }
+  }
+  if (
+    resolvedLower === home.toLowerCase() ||
+    resolvedLower === path.join(home, ".gemini").toLowerCase() ||
+    resolvedLower === path.join(home, ".gemini", "config").toLowerCase() ||
+    resolvedLower === path.join(home, ".gemini", "antigravity").toLowerCase()
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function assertNotSymbolicLink(targetPath, label = "path") {
   try {
     const lst = fs.lstatSync(targetPath);
@@ -321,20 +434,23 @@ async function installPlugin(opts = {}) {
   // Migrate config & clean legacy temporary sibling directory `antigravity-prism` if present
   let cleanedLegacyPluginDir = false;
   const legacyDir = opts.cleanLegacySibling !== false ? getLegacyTempPluginDir(targetDir) : null;
-  if (legacyDir && fs.existsSync(legacyDir)) {
-    stopExistingDaemonInDir(legacyDir);
-    const legacyCfg = path.join(legacyDir, "config.json");
-    const newCfg = path.join(targetDir, "config.json");
-    const legacyCfgStat = assertNotSymbolicLink(legacyCfg, "legacy config.json");
-    if (legacyCfgStat && legacyCfgStat.isFile() && !fs.existsSync(newCfg)) {
-      try {
-        const legacyContent = fs.readFileSync(legacyCfg, "utf8");
-        atomicWriteFileSync(newCfg, legacyContent, { encoding: "utf8", mode: 0o600 });
-      } catch {}
-    }
+  if (legacyDir && !isProtectedUserDataPath(legacyDir)) {
     try {
-      fs.rmSync(legacyDir, { recursive: true, force: true });
-      cleanedLegacyPluginDir = !fs.existsSync(legacyDir);
+      const legacyStat = assertNotSymbolicLink(legacyDir, "legacy plugin directory");
+      if (legacyStat && legacyStat.isDirectory()) {
+        stopExistingDaemonInDir(legacyDir);
+        const legacyCfg = path.join(legacyDir, "config.json");
+        const newCfg = path.join(targetDir, "config.json");
+        const legacyCfgStat = assertNotSymbolicLink(legacyCfg, "legacy config.json");
+        if (legacyCfgStat && legacyCfgStat.isFile() && !fs.existsSync(newCfg)) {
+          try {
+            const legacyContent = fs.readFileSync(legacyCfg, "utf8");
+            atomicWriteFileSync(newCfg, legacyContent, { encoding: "utf8", mode: 0o600 });
+          } catch {}
+        }
+        fs.rmSync(legacyDir, { recursive: true, force: true });
+        cleanedLegacyPluginDir = !fs.existsSync(legacyDir);
+      }
     } catch {}
   }
 
@@ -373,25 +489,41 @@ async function installPlugin(opts = {}) {
     if (err && /symbolic link/i.test(err.message)) throw err;
   }
 
+  const hostConfigDir = resolveHostGeminiConfigDir(opts.targetDir ? targetDir : null, opts.hostConfigDir || null);
   const targetCfg = path.join(targetDir, "config.json");
   assertNotSymbolicLink(targetCfg, "target config.json");
   let preservedConfig = false;
+  let restoredFromBackup = false;
   if (fs.existsSync(targetCfg)) {
     preservedConfig = true;
   } else {
-    const srcLocalCfg = path.join(sourceDir, "config.json");
-    const srcExampleCfg = path.join(sourceDir, "config.example.json");
-    const localCfgStat = assertNotSymbolicLink(srcLocalCfg, "source config.json");
-    if (localCfgStat && localCfgStat.isFile()) {
-      const cfgContent = fs.readFileSync(srcLocalCfg, "utf8");
-      atomicWriteFileSync(targetCfg, cfgContent, { encoding: "utf8", mode: 0o600 });
-      copiedFiles += 1;
-    } else {
-      const exampleCfgStat = assertNotSymbolicLink(srcExampleCfg, "source config.example.json");
-      if (exampleCfgStat && exampleCfgStat.isFile()) {
-        const cfgContent = fs.readFileSync(srcExampleCfg, "utf8");
+    const backupCfgPath = hostConfigDir ? path.join(hostConfigDir, "obsidian-prism-config.backup.json") : null;
+    const backupStat = backupCfgPath ? assertNotSymbolicLink(backupCfgPath, "backup config.json") : null;
+    if (backupStat && backupStat.isFile()) {
+      try {
+        const backupRaw = fs.readFileSync(backupCfgPath, "utf8");
+        if (isValidConfigJsonContent(backupRaw)) {
+          atomicWriteFileSync(targetCfg, backupRaw, { encoding: "utf8", mode: 0o600 });
+          preservedConfig = true;
+          restoredFromBackup = true;
+        }
+      } catch {}
+    }
+    if (!fs.existsSync(targetCfg)) {
+      const srcLocalCfg = path.join(sourceDir, "config.json");
+      const srcExampleCfg = path.join(sourceDir, "config.example.json");
+      const localCfgStat = assertNotSymbolicLink(srcLocalCfg, "source config.json");
+      if (localCfgStat && localCfgStat.isFile()) {
+        const cfgContent = fs.readFileSync(srcLocalCfg, "utf8");
         atomicWriteFileSync(targetCfg, cfgContent, { encoding: "utf8", mode: 0o600 });
         copiedFiles += 1;
+      } else {
+        const exampleCfgStat = assertNotSymbolicLink(srcExampleCfg, "source config.example.json");
+        if (exampleCfgStat && exampleCfgStat.isFile()) {
+          const cfgContent = fs.readFileSync(srcExampleCfg, "utf8");
+          atomicWriteFileSync(targetCfg, cfgContent, { encoding: "utf8", mode: 0o600 });
+          copiedFiles += 1;
+        }
       }
     }
   }
@@ -417,7 +549,6 @@ async function installPlugin(opts = {}) {
   }
 
   // Ensure ~/.gemini/config/config.json (including 0-byte empty file) registers `obsidian-prism` cleanly
-  const hostConfigDir = resolveHostGeminiConfigDir(opts.targetDir ? targetDir : null, opts.hostConfigDir || null);
   syncHostPluginRegistry(hostConfigDir, true);
 
   const isDefaultTarget = path.resolve(targetDir).toLowerCase() === path.resolve(getDefaultPluginTargetDir()).toLowerCase();
@@ -537,6 +668,7 @@ async function installPlugin(opts = {}) {
     copiedFiles,
     missingOptional,
     preservedConfig,
+    restoredFromBackup,
     shortcuts,
     deferredRelaunchHost,
     sidebarStudio,
@@ -547,10 +679,19 @@ async function installPlugin(opts = {}) {
 
 async function uninstallPlugin(opts = {}) {
   const targetDir = path.resolve(opts.targetDir || getDefaultPluginTargetDir());
+  const purgeData = opts.purgeData === true;
+  if (isProtectedUserDataPath(targetDir)) {
+    throw new Error(`Refusing to uninstall protected directory: ${targetDir}`);
+  }
   const stoppedPid = stopExistingDaemonInDir(targetDir);
   const legacyDir = getLegacyTempPluginDir(targetDir);
-  if (legacyDir && fs.existsSync(legacyDir)) {
-    stopExistingDaemonInDir(legacyDir);
+  if (legacyDir && !isProtectedUserDataPath(legacyDir)) {
+    try {
+      const legStat = assertNotSymbolicLink(legacyDir, "legacy plugin directory");
+      if (legStat && legStat.isDirectory()) {
+        stopExistingDaemonInDir(legacyDir);
+      }
+    } catch {}
   }
   let removedDomPages = 0;
 
@@ -596,10 +737,84 @@ async function uninstallPlugin(opts = {}) {
   }
 
   const hostConfigDir = resolveHostGeminiConfigDir(opts.targetDir ? targetDir : null, opts.hostConfigDir || null);
+  let backedUpConfig = null;
+  if (!purgeData && hostConfigDir) {
+    const targetCfg = path.join(targetDir, "config.json");
+    try {
+      const cfgStat = assertNotSymbolicLink(targetCfg, "config.json");
+      if (cfgStat && cfgStat.isFile()) {
+        const rawCfg = fs.readFileSync(targetCfg, "utf8");
+        if (isValidConfigJsonContent(rawCfg)) {
+          const backupCfgPath = path.join(hostConfigDir, "obsidian-prism-config.backup.json");
+          atomicWriteFileSync(backupCfgPath, rawCfg, { encoding: "utf8", mode: 0o600 });
+          backedUpConfig = backupCfgPath;
+        }
+      }
+    } catch {}
+  }
+
   syncHostPluginRegistry(hostConfigDir, false);
 
   if (fs.existsSync(targetDir)) {
-    fs.rmSync(targetDir, { recursive: true, force: true });
+    const tStat = assertNotSymbolicLink(targetDir, "target directory");
+    if (tStat) {
+      fs.rmSync(targetDir, { recursive: true, force: true });
+    }
+  }
+
+  let cleanedLegacyPluginDir = false;
+  if (legacyDir && !isProtectedUserDataPath(legacyDir)) {
+    try {
+      const legStat = assertNotSymbolicLink(legacyDir, "legacy plugin directory");
+      if (legStat && legStat.isDirectory()) {
+        fs.rmSync(legacyDir, { recursive: true, force: true });
+        cleanedLegacyPluginDir = !fs.existsSync(legacyDir);
+      }
+    } catch {}
+  }
+
+  const purgedPaths = [];
+  if (purgeData) {
+    if (hostConfigDir) {
+      try {
+        assertNotSymbolicLink(hostConfigDir, "host config directory");
+        const exactFiles = [
+          "obsidian-prism-config.backup.json",
+          "obsidian-prism-thought.json",
+          "obsidian-prism-thought-cache.json",
+          "obsidian-prism-sidebar.json",
+          "obsidian-prism-sidebar.json.lock",
+        ];
+        for (const name of exactFiles) {
+          const fp = path.join(hostConfigDir, name);
+          if (safeUnlinkNoSymlink(fp, name)) purgedPaths.push(fp);
+        }
+        if (fs.existsSync(hostConfigDir)) {
+          for (const entry of fs.readdirSync(hostConfigDir, { withFileTypes: true })) {
+            if (entry.isSymbolicLink() || !entry.isFile()) continue;
+            if (/^obsidian-prism-sidebar\.json\.v1.*\.bak$/i.test(entry.name)) {
+              const fp = path.join(hostConfigDir, entry.name);
+              if (safeUnlinkNoSymlink(fp, entry.name)) purgedPaths.push(fp);
+            }
+          }
+        }
+      } catch {}
+    }
+
+    const telemetryDir = resolveTelemetryDir(hostConfigDir, opts.telemetryDir || null);
+    if (telemetryDir && !isProtectedUserDataPath(telemetryDir) && fs.existsSync(telemetryDir)) {
+      try {
+        const pluginDataDir = path.dirname(telemetryDir);
+        const sidecarDataDir = path.dirname(pluginDataDir);
+        assertNotSymbolicLink(sidecarDataDir, "sidecar_data directory");
+        assertNotSymbolicLink(pluginDataDir, "sidecar_data/obsidian-prism directory");
+        const telStat = assertNotSymbolicLink(telemetryDir, "telemetry directory");
+        if (telStat && telStat.isDirectory()) {
+          fs.rmSync(telemetryDir, { recursive: true, force: true });
+          purgedPaths.push(telemetryDir);
+        }
+      } catch {}
+    }
   }
 
   return {
@@ -607,7 +822,11 @@ async function uninstallPlugin(opts = {}) {
     targetDir,
     stoppedPid,
     removedDomPages,
+    cleanedLegacyPluginDir,
     shortcuts,
+    purgeData,
+    backedUpConfig,
+    purgedPaths,
   };
 }
 
@@ -651,6 +870,7 @@ function parseCliArgs(argv) {
   let cdpPort = null;
   let deferRelaunchPrompt = true;
   let noShortcuts = false;
+  let purgeData = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--install") action = "install";
@@ -661,10 +881,11 @@ function parseCliArgs(argv) {
     else if (a === "--defer-relaunch-prompt" || a === "--no-relaunch-prompt") deferRelaunchPrompt = true;
     else if (a === "--prompt-relaunch") deferRelaunchPrompt = false;
     else if (a === "--no-shortcuts") noShortcuts = true;
+    else if (a === "--purge-data") purgeData = true;
     else if (a === "--target" && args[i + 1]) targetDir = args[++i];
     else if (a === "--cdp-port" && args[i + 1]) cdpPort = parseInt(args[++i], 10);
   }
-  return { action, targetDir, noDaemon, noCdp, cdpPort, deferRelaunchPrompt, noShortcuts };
+  return { action, targetDir, noDaemon, noCdp, cdpPort, deferRelaunchPrompt, noShortcuts, purgeData };
 }
 
 if (require.main === module) {
@@ -680,6 +901,7 @@ if (require.main === module) {
         noCdp: cli.noCdp,
         cdpPort: cli.cdpPort,
         syncShortcuts: cli.noShortcuts ? false : undefined,
+        purgeData: cli.purgeData,
       });
       console.log(JSON.stringify(res, null, 2));
       return;
@@ -702,6 +924,8 @@ module.exports = {
   getDefaultPluginTargetDir,
   getLegacyTempPluginDir,
   resolveHostGeminiConfigDir,
+  resolveTelemetryDir,
+  isProtectedUserDataPath,
   syncHostPluginRegistry,
   atomicWriteFileSync,
   copyDirRecursiveSync,
@@ -709,4 +933,5 @@ module.exports = {
   uninstallPlugin,
   getPluginInstallStatus,
   stopExistingDaemonInDir,
+  parseCliArgs,
 };

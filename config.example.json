@@ -31,5 +31,6 @@
   "thoughtView": "immersive",
   "omniModule": "on",
   "linkTarget": "builtin",
-  "sidebarStudio": "off"
+  "sidebarStudio": "off",
+  "autoUpdate": "off"
 }

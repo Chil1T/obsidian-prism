@@ -8,6 +8,30 @@
   const STORAGE_SETTINGS_OPEN_KEY = 'ag-prism:settings-open';
   const STORAGE_SETTINGS_SUBTAB_KEY = 'ag-prism:settings-subtab';
   const SETTINGS_STYLE_ID = 'ag-prism-settings-v101-css';
+  const PRISM_STORAGE_KEYS = [
+    'ag-prism:config',
+    'ag-prism:lastFileConfig',
+    'agClaudeStyle.settings.v3',
+    'ag-claude-style:config',
+    'ag-prism:trajRollup.v1',
+    STORAGE_SETTINGS_OPEN_KEY,
+    STORAGE_SETTINGS_SUBTAB_KEY,
+    '__op_chroma_v1',
+    'agCs.pulseVialMode.v1',
+    'ag_prism_thought_zh_cache_v1',
+    'ag_prism_thought_view_mode_v1',
+    'ag_prism_thought_style_tag_v1',
+  ];
+
+  function clearPrismLocalStorage(store) {
+    const st = store || (typeof localStorage !== 'undefined' ? localStorage : null);
+    if (!st || typeof st.removeItem !== 'function') return 0;
+    let n = 0;
+    for (const k of PRISM_STORAGE_KEYS) {
+      try { st.removeItem(k); n += 1; } catch {}
+    }
+    return n;
+  }
 
   const SETTINGS_EXTRA_CSS =
     '.ag-cs-settings-topdeck{display:flex;flex-direction:column;gap:8px;margin-bottom:10px;padding:9px 11px;border-radius:var(--ag-cs-r-md,10px);border:1px solid var(--border,rgba(148,163,184,.18));background:rgba(128,138,158,.05)}' +
@@ -66,6 +90,7 @@
     omniModule: S_ON,
     linkTarget: { allowed: ['builtin', 'external'], default: 'builtin' },
     sidebarStudio: S_OFF,
+    autoUpdate: S_OFF,
   });
 
   const SCENE_PRESETS = Object.freeze({
@@ -96,18 +121,18 @@
       const normFn = G.__agCsI18n?.normalizeLanguage;
       val = typeof normFn === 'function' && nav ? normFn(nav) : /^ja\b/i.test(nav) ? 'ja' : /^en\b/i.test(nav) ? 'en' : /^zh[-_](?:HK|MO)/i.test(nav) ? 'yue' : /^zh[-_](?:TW|Hant)/i.test(nav) ? 'zh-TW' : 'zh-CN';
     }
-    if ((key === 'omniModule' || key === 'sidebarStudio') && typeof val === 'boolean') val = val ? 'on' : 'off';
+    if ((key === 'omniModule' || key === 'sidebarStudio' || key === 'autoUpdate') && typeof val === 'boolean') val = val ? 'on' : 'off';
     if (typeof spec.default === 'string' && typeof val === 'number' && Number.isFinite(val)) val = String(val);
     return spec.allowed.includes(val) ? { valid: true, value: val } : { valid: false };
   }
 
-  function buildSanitizedConfigExport(currentSettings = {}, rawThoughtCfg = null, version = '1.0.3') {
+  function buildSanitizedConfigExport(currentSettings = {}, rawThoughtCfg = null, version = '1.0.4') {
     const settings = {};
     for (const [k, spec] of Object.entries(PRISM_SETTINGS_SCHEMA)) {
       const c = sanitizeKeyVal(k, currentSettings[k]);
       settings[k] = c.valid ? c.value : spec.default;
     }
-    const out = { schema: 'obsidian-prism-config-v1', version: String(version || '1.0.3'), exportedAt: new Date().toISOString(), settings };
+    const out = { schema: 'obsidian-prism-config-v1', version: String(version || '1.0.4'), exportedAt: new Date().toISOString(), settings };
     const tSrc =
       rawThoughtCfg && typeof rawThoughtCfg === 'object' && rawThoughtCfg.config && typeof rawThoughtCfg.config === 'object'
         ? rawThoughtCfg.config
@@ -213,17 +238,16 @@
 
   let pendingCfgToast = null;
 
-  function invokePrismRepoAction(action, versionStr) {
-    const act =
-      action === 'pull' || action === 'storage-health' || action === 'prepare-archive'
-        ? action
-        : 'status';
+  function invokePrismRepoAction(action, versionStr, extra) {
+    const allowed = ['pull', 'storage-health', 'prepare-archive', 'uninstall', 'update-status', 'check-update', 'apply-update'];
+    const act = allowed.includes(action) ? action : 'status';
     const win = typeof window !== 'undefined' ? window : G;
     try {
       const bridge = win?.__agPrismRepoBridge;
-      if (typeof bridge === 'function') return Promise.resolve(bridge({ action: act }));
-      if (bridge && typeof bridge[act] === 'function') return Promise.resolve(bridge[act]());
-      if (bridge && typeof bridge.call === 'function') return Promise.resolve(bridge.call({ action: act }));
+      const arg = extra && typeof extra === 'object' ? { ...extra, action: act } : { action: act };
+      if (typeof bridge === 'function') return Promise.resolve(bridge(arg));
+      if (bridge && typeof bridge[act] === 'function') return Promise.resolve(bridge[act](extra));
+      if (bridge && typeof bridge.call === 'function') return Promise.resolve(bridge.call(arg));
     } catch (err) {
       return Promise.resolve({ ok: false, action: act, error: String(err?.message || err) });
     }
@@ -396,48 +420,50 @@
       ).map((o) => [o.id, o.label]);
 
       const [mDual, mMinis, mOff] = mascotLabels(lang, ui);
-      const onOff = [[true, ui.onLabel || 'On'], [false, ui.offLabel || 'Off']];
-      const autoOnOff = [['auto', ui.optAutoCoexist || 'Auto Coexist'], ['on', ui.onLabel || 'On'], ['off', ui.offLabel || 'Off']];
+      const U = (k, d = '') => ui[k] || d;
+      const onOff = [[true, U('onLabel', 'On')], [false, U('offLabel', 'Off')]];
+      const autoOnOff = [['auto', U('optAutoCoexist', 'Auto')], ['on', U('onLabel', 'On')], ['off', U('offLabel', 'Off')]];
       const onOffStr = autoOnOff.slice(1);
       const warmLbl = ui.optWarm || (ui.optClaude && !/claude/i.test(ui.optClaude) ? ui.optClaude : '') || 'Alabaster';
-      const R = (key, tk, dk, opts) => ({ key, title: ui[tk] || key, desc: ui[dk] || '', opts });
+      const R = (key, tk, dk, opts) => ({ key, title: U(tk, key), desc: U(dk), opts });
 
       const rowDefs = {
-        palette: R('palette', 'setPaletteTitle', 'setPaletteDesc', [['host', ui.optHost || 'Follow Host'], ['warm', warmLbl], ['obsidian', ui.optObsidian || 'Obsidian']]),
-        lightPreset: R('lightPreset', 'setLightPresetTitle', 'setLightPresetDesc', [['crystal', ui.optLightCrystal || 'Crystal'], ['alabaster', ui.optLightAlabaster || 'Alabaster']]),
-        accentTone: R('accentTone', 'setAccentToneTitle', 'setAccentToneDesc', [['follow', ui.optToneFollow || 'Follow'], ['cobalt', ui.optToneCobalt || 'Cobalt'], ['iris', ui.optToneIris || 'Iris'], ['amber', ui.optToneAmber || 'Amber'], ['mono', ui.optToneMono || 'Mono']]),
-        cornerStyle: R('cornerStyle', 'setCornerStyleTitle', 'setCornerStyleDesc', [['sharp', ui.optCornerSharp || 'Sharp'], ['balanced', ui.optCornerBalanced || 'Balanced'], ['soft', ui.optCornerSoft || 'Soft']]),
-        ambientIntensity: R('ambientIntensity', 'setAmbientIntensityTitle', 'setAmbientIntensityDesc', [['0', ui.optAmb0 || '0%'], ['35', ui.optAmb35 || '35%'], ['70', ui.optAmb70 || '70%'], ['100', ui.optAmb100 || '100%']]),
-        motionLevel: R('motionLevel', 'setMotionLevelTitle', 'setMotionLevelDesc', [['off', ui.optMotionOff || 'Off'], ['subtle', ui.optMotionSubtle || 'Subtle'], ['standard', ui.optMotionStandard || 'Standard'], ['ultra', ui.optMotionUltra || 'Ultra']]),
-        targetFps: R('targetFps', 'setTargetFpsTitle', 'setTargetFpsDesc', [['60', ui.optFps60 || '60 FPS'], ['120', ui.optFps120 || '120 FPS'], ['180', ui.optFps180 || '180 FPS'], ['native', ui.optFpsNative || 'Native Max']]),
-        homeLayout: R('homeLayout', 'setHomeLayoutTitle', 'setHomeLayoutDesc', [['studio', ui.optStudio || 'Studio'], ['classic', ui.optClassic || 'Classic'], ['off', ui.optNativeOff || 'Off']]),
+        palette: R('palette', 'setPaletteTitle', 'setPaletteDesc', [['host', U('optHost')], ['warm', warmLbl], ['obsidian', U('optObsidian')]]),
+        lightPreset: R('lightPreset', 'setLightPresetTitle', 'setLightPresetDesc', [['crystal', U('optLightCrystal')], ['alabaster', U('optLightAlabaster')]]),
+        accentTone: R('accentTone', 'setAccentToneTitle', 'setAccentToneDesc', [['follow', U('optToneFollow')], ['cobalt', U('optToneCobalt')], ['iris', U('optToneIris')], ['amber', U('optToneAmber')], ['mono', U('optToneMono')]]),
+        cornerStyle: R('cornerStyle', 'setCornerStyleTitle', 'setCornerStyleDesc', [['sharp', U('optCornerSharp')], ['balanced', U('optCornerBalanced')], ['soft', U('optCornerSoft')]]),
+        ambientIntensity: R('ambientIntensity', 'setAmbientIntensityTitle', 'setAmbientIntensityDesc', [['0', U('optAmb0', '0%')], ['35', U('optAmb35', '35%')], ['70', U('optAmb70', '70%')], ['100', U('optAmb100', '100%')]]),
+        motionLevel: R('motionLevel', 'setMotionLevelTitle', 'setMotionLevelDesc', [['off', U('optMotionOff')], ['subtle', U('optMotionSubtle')], ['standard', U('optMotionStandard')], ['ultra', U('optMotionUltra')]]),
+        targetFps: R('targetFps', 'setTargetFpsTitle', 'setTargetFpsDesc', [['60', U('optFps60', '60')], ['120', U('optFps120', '120')], ['180', U('optFps180', '180')], ['native', U('optFpsNative')]]),
+        homeLayout: R('homeLayout', 'setHomeLayoutTitle', 'setHomeLayoutDesc', [['studio', U('optStudio')], ['classic', U('optClassic')], ['off', U('optNativeOff')]]),
         homeRipple: R('homeRipple', 'setRippleTitle', 'setRippleDesc', onOff),
-        logoInk: R('logoInk', 'setLogoInkTitle', 'setLogoInkDesc', [['accent', ui.optAccent || 'Accent'], ['foreground', ui.optForeground || 'Ink']]),
+        logoInk: R('logoInk', 'setLogoInkTitle', 'setLogoInkDesc', [['accent', U('optAccent')], ['foreground', U('optForeground')]]),
         language: R('language', 'setLanguageTitle', 'setLanguageDesc', langOpts),
         composerRestyle: R('composerRestyle', 'setComposerTitle', 'setComposerDesc', onOff),
-        placeholderStyle: R('placeholderStyle', 'setPlaceholderTitle', 'setPlaceholderDesc', [['studio', 'Studio'], ['host', ui.optPlaceholderHost || 'Host']]),
+        placeholderStyle: R('placeholderStyle', 'setPlaceholderTitle', 'setPlaceholderDesc', [['studio', 'Studio'], ['host', U('optPlaceholderHost')]]),
         smoothCaret: R('smoothCaret', 'setSmoothCaretTitle', 'setSmoothCaretDesc', onOff),
-        codeFont: R('codeFont', 'setCodeFontTitle', 'setCodeFontDesc', [['default', ui.optFontDefault || 'Default'], ['jetbrains', 'JetBrains Mono'], ['cascadia', 'Cascadia Code'], ['sfmono', ui.optFontSfmono || 'SF Mono / Consolas']]),
+        codeFont: R('codeFont', 'setCodeFontTitle', 'setCodeFontDesc', [['default', U('optFontDefault')], ['jetbrains', 'JetBrains Mono'], ['cascadia', 'Cascadia Code'], ['sfmono', U('optFontSfmono', 'SF Mono')]]),
         codeLigatures: R('codeLigatures', 'setCodeLigaturesTitle', 'setCodeLigaturesDesc', onOff),
         mascot: R('mascot', 'setMascotTitle', 'setMascotDesc', [['crab', mDual], ['minis', mMinis], ['off', mOff]]),
         sidebarRestyle: R('sidebarRestyle', 'setSidebarTitle', 'setSidebarDesc', onOff),
         sidebarCompact: R('sidebarCompact', 'setSidebarCompactTitle', 'setSidebarCompactDesc', onOff),
-        thoughtTranslate: R('thoughtTranslate', 'setThoughtModeTitle', 'setThoughtModeDesc', [['off', ui.optThoughtOff || 'Off'], ['machine', ui.optThoughtMachine || 'Machine'], ['ai', ui.optThoughtAi || 'AI Polish']]),
-        thoughtTrigger: R('thoughtTrigger', 'setThoughtTriggerTitle', 'setThoughtTriggerDesc', [['preload', ui.optTriggerPreload || 'Preload'], ['expand', ui.optTriggerExpand || 'On Expand']]),
-        thoughtView: R('thoughtView', 'setThoughtViewTitle', 'setThoughtViewDesc', [['immersive', ui.optThoughtImmersive || 'Immersive'], ['bilingual', ui.optThoughtBilingual || 'Bilingual']]),
+        thoughtTranslate: R('thoughtTranslate', 'setThoughtModeTitle', 'setThoughtModeDesc', [['off', U('optThoughtOff')], ['machine', U('optThoughtMachine')], ['ai', U('optThoughtAi')]]),
+        thoughtTrigger: R('thoughtTrigger', 'setThoughtTriggerTitle', 'setThoughtTriggerDesc', [['preload', U('optTriggerPreload')], ['expand', U('optTriggerExpand')]]),
+        thoughtView: R('thoughtView', 'setThoughtViewTitle', 'setThoughtViewDesc', [['immersive', U('optThoughtImmersive')], ['bilingual', U('optThoughtBilingual')]]),
         telemetryModule: R('telemetryModule', 'setTelemetryTitle', 'setTelemetryDesc', autoOnOff),
         effortSliderModule: R('effortSliderModule', 'setEffortSliderTitle', 'setEffortSliderDesc', autoOnOff),
         omniModule: R('omniModule', 'setOmniTitle', 'setOmniDesc', onOffStr),
-        linkTarget: R('linkTarget', 'setLinkTargetTitle', 'setLinkTargetDesc', [['builtin', ui.optLinkBuiltin || 'Side Pane'], ['external', ui.optLinkExternal || 'System Browser']]),
+        linkTarget: R('linkTarget', 'setLinkTargetTitle', 'setLinkTargetDesc', [['builtin', U('optLinkBuiltin')], ['external', U('optLinkExternal')]]),
         sidebarStudio: R('sidebarStudio', 'setSidebarStudioTitle', 'setSidebarStudioDesc', onOffStr),
+        autoUpdate: R('autoUpdate', 'setAutoUpdateTitle', 'setAutoUpdateDesc', onOffStr),
       };
 
       const groups = [
-        { id: 'appearance', title: ui.grpAppearance || 'Appearance & Layout', keys: ['palette', 'lightPreset', 'accentTone', 'cornerStyle', 'ambientIntensity', 'motionLevel', 'targetFps', 'homeLayout', 'homeRipple', 'logoInk', 'language'] },
-        { id: 'interaction', title: ui.grpInteraction || 'Composer, Sidebar & Mascot', keys: ['composerRestyle', 'placeholderStyle', 'smoothCaret', 'codeFont', 'codeLigatures', 'mascot', 'sidebarRestyle', 'sidebarCompact'] },
-        { id: 'thought', title: ui.grpThought || 'Thought Translation & Polishing', keys: ['thoughtTranslate', 'thoughtTrigger', 'thoughtView'] },
-        { id: 'modules', title: ui.groupModules || 'Utility Modules', keys: ['telemetryModule', 'effortSliderModule', 'omniModule', 'linkTarget'] },
-        { id: 'beta', title: ui.grpBeta || 'Beta Features', keys: ['sidebarStudio'] },
+        { id: 'appearance', title: U('grpAppearance'), keys: ['palette', 'lightPreset', 'accentTone', 'cornerStyle', 'ambientIntensity', 'motionLevel', 'targetFps', 'homeLayout', 'homeRipple', 'logoInk', 'language'] },
+        { id: 'interaction', title: U('grpInteraction'), keys: ['composerRestyle', 'placeholderStyle', 'smoothCaret', 'codeFont', 'codeLigatures', 'mascot', 'sidebarRestyle', 'sidebarCompact'] },
+        { id: 'thought', title: U('grpThought'), keys: ['thoughtTranslate', 'thoughtTrigger', 'thoughtView'] },
+        { id: 'modules', title: U('groupModules'), keys: ['telemetryModule', 'effortSliderModule', 'omniModule', 'linkTarget'] },
+        { id: 'beta', title: U('grpBeta'), keys: ['sidebarStudio'] },
       ];
 
       const mkEl = (tag, cls, txt) => {
@@ -446,6 +472,12 @@
         if (txt !== undefined) el.textContent = txt;
         return el;
       };
+      const setVis = (el, on) => {
+        el.hidden = !on;
+        if (on) el.removeAttribute('hidden');
+        else el.setAttribute('hidden', '');
+      };
+      const fmtTpl = (tpl, args) => String(tpl || '').replace(/\{(\d)\}/g, (_, k) => String(args[k] ?? ''));
 
       const foldSummaryEl = mkEl('span', 'ag-cs-settings-fold-summary', formatSettingsSummary(lang, ui));
       foldSummaryEl.setAttribute('data-ag-cs-fold-summary', '');
@@ -516,6 +548,10 @@
       const brandTitle = ui.sectionTitle && /Obsidian Prism/i.test(ui.sectionTitle) ? ui.sectionTitle : 'Obsidian Prism';
       foldLeft.appendChild(mkEl('h3', 'm-0 text-sm font-medium', brandTitle));
       foldLeft.appendChild(mkEl('span', 'ag-cs-settings-ver', `v${version}`));
+      const updBadge = mkEl('span', 'ag-cs-update-badge', '');
+      updBadge.setAttribute('data-ag-cs-update-badge', '1');
+      setVis(updBadge, false);
+      foldLeft.appendChild(updBadge);
 
       const foldRight = mkEl('span', 'ag-cs-settings-fold-right');
       foldRight.appendChild(foldSummaryEl);
@@ -590,6 +626,12 @@
         subTabBar.appendChild(sb);
       }
       topDeck.appendChild(subTabBar);
+      const fileInput = mkEl('input');
+      fileInput.type = 'file';
+      fileInput.setAttribute('accept', '.json,application/json');
+      fileInput.hidden = true;
+      fileInput.setAttribute('hidden', '');
+      topDeck.appendChild(fileInput);
       foldBody.appendChild(topDeck);
 
       const groupsWrap = mkEl('div', 'ag-cs-settings-groups');
@@ -612,19 +654,19 @@
       const aboutGrp = mkEl('div', 'ag-cs-settings-group');
       aboutGrp.setAttribute('data-ag-cs-group', 'about');
       groupElsById.set('about', aboutGrp);
-      aboutGrp.appendChild(mkEl('div', 'ag-cs-settings-subhead', ui.aboutGroupTitle || 'About, Updates & Open-Source Credits'));
+      aboutGrp.appendChild(mkEl('div', 'ag-cs-settings-subhead', ui.aboutGroupTitle || 'About'));
 
       const aboutBox = mkEl('div', 'ag-cs-about-box');
       aboutBox.setAttribute('data-ag-cs-about', '1');
       const repoRow = mkEl('div', 'ag-cs-about-repo-row');
       const repoInfo = mkEl('div', 'ag-cs-about-repo-info');
       repoInfo.appendChild(mkEl('span', 'font-medium text-foreground', `Obsidian Prism v${version}`));
-      const repoChip = mkEl('span', 'ag-cs-repo-chip', ui.aboutRepoSyncTitle || 'Git Repository Status & Sync');
+      const repoChip = mkEl('span', 'ag-cs-repo-chip', ui.aboutRepoSyncTitle || 'Git');
       repoChip.setAttribute('data-ag-cs-repo-status', '');
       repoChip.setAttribute('data-status', 'idle');
       repoInfo.appendChild(repoChip);
 
-      const syncBtn = mkEl('button', 'ag-cs-repo-sync-btn', ui.aboutRepoSyncBtn || 'Check / Sync Git Updates');
+      const syncBtn = mkEl('button', 'ag-cs-repo-sync-btn', ui.aboutRepoSyncBtn || 'Sync');
       syncBtn.type = 'button';
       syncBtn.setAttribute('data-ag-cs-repo-sync', '1');
 
@@ -639,16 +681,16 @@
           const hasRemote = Boolean(res && !res.noRemote && res.hasRemote !== false && res.remoteUrl);
           if (!hasRemote) {
             repoChip.setAttribute('data-status', 'warn');
-            repoChip.textContent = `${ref} · ${ui.aboutRepoNoRemote || 'Local Git repository (no remote configured)'}`;
+            repoChip.textContent = `${ref} · ${ui.aboutRepoNoRemote || 'Local'}`;
           } else if (isPull && res?.updated) {
             repoChip.setAttribute('data-status', 'updated');
-            repoChip.textContent = `${ref} · ${ui.aboutRepoUpdated || 'Pulled latest commits & hot-reloaded UI'}`;
+            repoChip.textContent = `${ref} · ${ui.aboutRepoUpdated || 'Updated'}`;
           } else if (res?.ok === false && res?.error) {
             repoChip.setAttribute('data-status', 'error');
             repoChip.textContent = `${ref} · ${res.error}`;
           } else {
             repoChip.setAttribute('data-status', 'ok');
-            repoChip.textContent = `${ref} · ${ui.aboutRepoUpToDate || 'Repository is already up to date'}`;
+            repoChip.textContent = `${ref} · ${ui.aboutRepoUpToDate || 'OK'}`;
           }
         });
       };
@@ -666,7 +708,7 @@
         runGuardedMut(() => {
           syncBtn.disabled = true;
           repoChip.setAttribute('data-status', 'idle');
-          repoChip.textContent = ui.aboutRepoChecking || 'Checking Git repository status…';
+          repoChip.textContent = ui.aboutRepoChecking || '...';
         });
         void invokePrismRepoAction('status', version)
           .then((st) => {
@@ -689,16 +731,137 @@
       repoRow.appendChild(syncBtn);
       aboutBox.appendChild(repoRow);
 
+      const updRow = mkEl('div', 'ag-cs-about-repo-row');
+      updRow.setAttribute('data-ag-cs-update-row', '1');
+      const updInfo = mkEl('div', 'ag-cs-about-repo-info');
+      const updChip = mkEl('span', 'ag-cs-repo-chip', fmtTpl(ui.updUpToDate || 'v{0}', [version]));
+      updChip.setAttribute('data-ag-cs-update-status', '');
+      updChip.setAttribute('data-status', 'idle');
+      updInfo.appendChild(updChip);
+      const updLinkSlot = mkEl('span', 'ag-cs-update-link-slot');
+      updInfo.appendChild(updLinkSlot);
+
+      const updBtns = mkEl('div', 'ag-cs-thought-btn-group');
+      const checkUpdBtn = mkEl('button', 'ag-cs-repo-sync-btn', ui.updCheckBtn || 'Check Update');
+      checkUpdBtn.type = 'button';
+      checkUpdBtn.setAttribute('data-ag-cs-update-check', '1');
+      const applyUpdBtn = mkEl('button', 'ag-cs-repo-sync-btn', ui.updApplyBtn || 'Update Now');
+      applyUpdBtn.type = 'button';
+      applyUpdBtn.setAttribute('data-ag-cs-update-apply', '1');
+      setVis(applyUpdBtn, false);
+      updBtns.appendChild(checkUpdBtn);
+      updBtns.appendChild(applyUpdBtn);
+      updRow.appendChild(updInfo);
+      updRow.appendChild(updBtns);
+      aboutBox.appendChild(updRow);
+
+      const updNote = mkEl('p', 'ag-cs-thought-hint ag-cs-update-note', ui.updHotNote || '');
+      updNote.setAttribute('data-ag-cs-update-note', '1');
+      aboutBox.appendChild(updNote);
+
+      const updCfgCard = mkEl('div', 'ag-cs-settings-card bg-transparent rounded-xl border border-border overflow-hidden divide-y divide-border');
+      updCfgCard.appendChild(buildRow(rowDefs.autoUpdate));
+      aboutBox.appendChild(updCfgCard);
+
+      let updBusy = false;
+      const isSafeGhUrl = (u) => typeof u === 'string' && /^https:\/\/github\.com\/RMvdesi\/obsidian-prism(?:\/|$)/i.test(u.trim());
+      const applyUpdateView = (st) => {
+        if (!updChip.isConnected || !st || st.offline || st.timeout) return;
+        const u = uiText(getLang()) || ui;
+        runGuardedMut(() => {
+          updLinkSlot.textContent = '';
+          if (st.applied || st.hotReloaded || st.hotReloadExpected) {
+            setVis(updBadge, false);
+            setVis(applyUpdBtn, false);
+            updChip.setAttribute('data-status', 'updated');
+            updChip.textContent = u.updHotDone || 'Updated';
+            return;
+          }
+          if (st.hasUpdate) {
+            const tv = st.latestVersion || '';
+            updBadge.textContent = `v${tv}`;
+            setVis(updBadge, true);
+            updChip.setAttribute('data-status', 'warn');
+            if (st.manualRequired) {
+              updChip.textContent = fmtTpl(u.updManualHint || 'v{0}', [tv]);
+              setVis(applyUpdBtn, false);
+              const href = isSafeGhUrl(st.downloadUrl) ? st.downloadUrl : isSafeGhUrl(st.releaseUrl) ? st.releaseUrl : '';
+              if (href) {
+                const a = mkEl('a', '', `v${tv} ↗`);
+                a.setAttribute('href', href);
+                a.setAttribute('target', '_blank');
+                a.setAttribute('rel', 'noopener noreferrer');
+                a.setAttribute('data-ag-cs-update-link', '1');
+                updLinkSlot.appendChild(a);
+              }
+            } else {
+              updChip.textContent = fmtTpl(u.updAvailTpl || 'v{0}', [tv]);
+              setVis(applyUpdBtn, true);
+            }
+            return;
+          }
+          setVis(updBadge, false);
+          setVis(applyUpdBtn, false);
+          if (st.ok === false && st.error) {
+            updChip.setAttribute('data-status', 'error');
+            updChip.textContent = st.error;
+          } else {
+            updChip.setAttribute('data-status', 'ok');
+            updChip.textContent = fmtTpl(u.updUpToDate || 'v{0}', [st.currentVersion || version]);
+          }
+        });
+      };
+      const probeUpdateSilently = () => {
+        void invokePrismRepoAction('update-status', version).then((st) => st && applyUpdateView(st)).catch(() => {});
+      };
+      checkUpdBtn.addEventListener('click', (ev) => {
+        ev?.stopPropagation?.();
+        if (updBusy) return;
+        updBusy = true;
+        runGuardedMut(() => {
+          checkUpdBtn.disabled = true;
+          updChip.setAttribute('data-status', 'idle');
+          updChip.textContent = ui.aboutRepoChecking || '...';
+        });
+        void invokePrismRepoAction('check-update', version, { force: true, manual: true })
+          .then((st) => st && applyUpdateView(st))
+          .catch((e) => applyUpdateView({ ok: false, error: String(e?.message || e) }))
+          .finally(() => {
+            updBusy = false;
+            runGuardedMut(() => { if (checkUpdBtn.isConnected) checkUpdBtn.disabled = false; });
+          });
+      });
+      applyUpdBtn.addEventListener('click', (ev) => {
+        ev?.stopPropagation?.();
+        if (updBusy) return;
+        updBusy = true;
+        runGuardedMut(() => {
+          applyUpdBtn.disabled = true;
+          checkUpdBtn.disabled = true;
+          updChip.setAttribute('data-status', 'idle');
+          updChip.textContent = (uiText(getLang()) || ui).updUpdating || '...';
+        });
+        void invokePrismRepoAction('apply-update', version, { confirm: true })
+          .then((st) => st && applyUpdateView(st))
+          .catch((e) => applyUpdateView({ ok: false, error: String(e?.message || e) }))
+          .finally(() => {
+            updBusy = false;
+            runGuardedMut(() => {
+              if (applyUpdBtn.isConnected) applyUpdBtn.disabled = false;
+              if (checkUpdBtn.isConnected) checkUpdBtn.disabled = false;
+            });
+          });
+      });
+
       // 对话库健康度体检与一键安全归档入口（防止隐藏子代理 .db 撑爆 language_server 内存）
       const storageRow = mkEl('div', 'ag-cs-about-repo-row');
       const storageInfo = mkEl('div', 'ag-cs-about-repo-info');
-      const fmtTpl = (tpl, args) => tpl.replace(/\{(\d)\}/g, (_, k) => String(args[k] ?? ''));
-      storageInfo.appendChild(mkEl('span', 'font-medium text-foreground', ui.storageHealthTitle || 'Conversation DB Health'));
-      const storageChip = mkEl('span', 'ag-cs-repo-chip', ui.storageHealthIdle || 'Auto-checks DB bloat for language_server');
+      storageInfo.appendChild(mkEl('span', 'font-medium text-foreground', ui.storageHealthTitle || 'DB'));
+      const storageChip = mkEl('span', 'ag-cs-repo-chip', ui.storageHealthIdle || 'DB');
       storageChip.setAttribute('data-ag-cs-storage-status', '');
       storageChip.setAttribute('data-status', 'idle');
       storageInfo.appendChild(storageChip);
-      const archiveBtn = mkEl('button', 'ag-cs-repo-sync-btn', ui.storageArchiveBtn || 'Prepare Archive');
+      const archiveBtn = mkEl('button', 'ag-cs-repo-sync-btn', ui.storageArchiveBtn || 'Archive');
       archiveBtn.type = 'button';
       archiveBtn.setAttribute('data-ag-cs-storage-archive', '1');
       let storageBusy = false;
@@ -715,20 +878,20 @@
           if (prepared && st.archiveScriptPath) {
             storageChip.setAttribute('data-status', 'updated');
             storageChip.textContent = fmtTpl(
-              u.storageReadyTpl || 'Script ready ({0} subagents / {1}). Close Antigravity & run: {2}',
+              u.storageReadyTpl || '{0}/{1}:{2}',
               [st.archivableSubagentCount || 0, fmtMb(st.archivableSubagentMb), st.archiveScriptPath]
             );
             try { navigator?.clipboard?.writeText?.(st.archiveScriptPath)?.catch?.(() => {}); } catch {}
           } else {
             storageChip.setAttribute('data-status', st.warn ? 'warn' : 'ok');
             storageChip.textContent = fmtTpl(
-              u.storageSummaryTpl || '{0} ({1} main · {2} subagents / {3}) · {4}',
+              u.storageSummaryTpl || '{0}({1}/{2}/{3}){4}',
               [
                 fmtMb(st.totalMb),
                 st.mainCount || 0,
                 st.subagentCount || 0,
                 fmtMb(st.subagentMb),
-                st.warn ? u.storageWarn || 'Archive recommended' : u.storageOk || 'Healthy',
+                st.warn ? u.storageWarn || '!' : u.storageOk || 'OK',
               ]
             );
           }
@@ -757,17 +920,14 @@
       storageRow.appendChild(archiveBtn);
       aboutBox.appendChild(storageRow);
 
-      aboutBox.appendChild(mkEl('div', 'ag-cs-about-credits-title', ui.aboutCreditsTitle || 'Upstream Open-Source & Inspiration Credits'));
+      aboutBox.appendChild(mkEl('div', 'ag-cs-about-credits-title', ui.aboutCreditsTitle || 'Credits'));
 
       const creditsGrid = mkEl('div', 'ag-cs-about-credits');
       for (const item of UPSTREAM_CREDITS) {
         const a = mkEl('a');
         a.setAttribute('href', item.url);
-        a.href = item.url;
         a.setAttribute('target', '_blank');
-        a.target = '_blank';
         a.setAttribute('rel', 'noopener noreferrer');
-        a.rel = 'noopener noreferrer';
         a.setAttribute('data-ag-cs-credit', item.repo);
         a.appendChild(mkEl('span', 'truncate', item.repo));
         a.appendChild(mkEl('span', 'opacity-75 text-[10px] shrink-0', `${item.meta} ↗`));
@@ -776,9 +936,82 @@
       aboutBox.appendChild(creditsGrid);
 
       const licDetails = mkEl('details', 'ag-cs-about-license');
-      licDetails.appendChild(mkEl('summary', '', ui.aboutLicenseTitle || 'GPL-3.0 License & Attribution Notice'));
+      licDetails.appendChild(mkEl('summary', '', ui.aboutLicenseTitle || 'GPL-3.0'));
       licDetails.appendChild(mkEl('pre', 'ag-cs-license-pre', LICENSE_SUMMARY_TEXT));
       aboutBox.appendChild(licDetails);
+
+      const mkBtn = (txt, attr, danger) => {
+        const b = mkEl('button', 'ag-cs-thought-btn', txt);
+        b.type = 'button';
+        b.setAttribute(attr, '1');
+        if (danger) b.setAttribute('data-danger', '1');
+        return b;
+      };
+      const uRow = mkEl('div', 'ag-cs-about-repo-row');
+      const uInfo = mkEl('div', 'ag-cs-about-repo-info');
+      const uChip = mkEl('span', 'ag-cs-repo-chip', '');
+      setVis(uChip, false);
+      uChip.setAttribute('data-ag-cs-uninstall-status', '');
+      uInfo.appendChild(uChip);
+      const uBtn = mkBtn(ui.uninstallBtn || 'Uninstall', 'data-ag-cs-uninstall', 1);
+      uRow.appendChild(uInfo);
+      uRow.appendChild(uBtn);
+      aboutBox.appendChild(uRow);
+
+      const uBox = mkEl('div', 'ag-cs-thought-cfg-box');
+      setVis(uBox, false);
+      uBox.setAttribute('data-ag-cs-uninstall-box', '1');
+      const uLbl = mkEl('label', 'ag-cs-about-repo-info');
+      const uCb = mkEl('input');
+      uCb.type = 'checkbox';
+      uCb.checked = false;
+      uCb.setAttribute('data-ag-cs-uninstall-purge', '1');
+      uLbl.appendChild(uCb);
+      uLbl.appendChild(mkEl('span', '', ui.uninstallPurge || 'Purge'));
+      uBox.appendChild(uLbl);
+      uBox.appendChild(mkEl('p', 'ag-cs-thought-hint', ui.uninstallKeepNote || ''));
+      const uAct = mkEl('div', 'ag-cs-thought-actions');
+      const uBtns = mkEl('div', 'ag-cs-thought-btn-group');
+      const uCancel = mkBtn(ui.uninstallCancelBtn || 'Cancel', 'data-ag-cs-uninstall-cancel');
+      const uConfirm = mkBtn(ui.uninstallConfirmBtn || 'Confirm', 'data-ag-cs-uninstall-confirm', 1);
+      uBtns.appendChild(uCancel);
+      uBtns.appendChild(uConfirm);
+      uAct.appendChild(uBtns);
+      uBox.appendChild(uAct);
+      aboutBox.appendChild(uBox);
+
+      let uBusy = false;
+      uBtn.addEventListener('click', (ev) => { ev?.stopPropagation?.(); runGuardedMut(() => setVis(uBox, Boolean(uBox.hidden))); });
+      uCancel.addEventListener('click', (ev) => { ev?.stopPropagation?.(); runGuardedMut(() => setVis(uBox, false)); });
+      uConfirm.addEventListener('click', (ev) => {
+        ev?.stopPropagation?.();
+        if (uBusy) return;
+        uBusy = true;
+        const purgeData = Boolean(uCb.checked);
+        if (purgeData) clearPrismLocalStorage();
+        runGuardedMut(() => { uConfirm.disabled = true; });
+        void invokePrismRepoAction('uninstall', version, { confirm: true, purgeData })
+          .then((r) => {
+            if (!uChip.isConnected) return;
+            const u = uiText(getLang()) || ui;
+            runGuardedMut(() => {
+              setVis(uChip, true);
+              if (r && r.ok !== false && !r.offline) {
+                uChip.setAttribute('data-status', 'ok');
+                uChip.textContent = u.uninstallDone || 'OK';
+                setVis(uBox, false);
+              } else {
+                uChip.setAttribute('data-status', 'error');
+                uChip.textContent = r?.error || 'Err';
+              }
+            });
+          })
+          .finally(() => {
+            uBusy = false;
+            runGuardedMut(() => { if (uConfirm.isConnected) uConfirm.disabled = false; });
+          });
+      });
+
       aboutBox.appendChild(mkEl('p', 'ag-cs-about-disclaimer', ui.aboutDisclaimer || 'Obsidian Prism is an independent open-source project and is not affiliated with or endorsed by Google LLC.'));
       aboutGrp.appendChild(aboutBox);
       groupsWrap.appendChild(aboutGrp);
@@ -787,8 +1020,8 @@
       const cfgFooter = mkEl('div', 'ag-cs-cfg-footer');
       cfgFooter.setAttribute('data-ag-cs-cfg-footer', '1');
       const cfgMeta = mkEl('div', 'ag-cs-cfg-meta');
-      cfgMeta.appendChild(mkEl('span', 'ag-cs-cfg-title', ui.cfgToolbarTitle || 'Configuration Backup & Reset'));
-      const cfgHint = mkEl('span', 'ag-cs-cfg-hint', ui.cfgToolbarHint || 'Exported JSON strips all API keys automatically.');
+      cfgMeta.appendChild(mkEl('span', 'ag-cs-cfg-title', ui.cfgToolbarTitle || 'Config'));
+      const cfgHint = mkEl('span', 'ag-cs-cfg-hint', ui.cfgToolbarHint || '');
       cfgHint.setAttribute('data-ag-cs-cfg-status', '');
       cfgMeta.appendChild(cfgHint);
       const setCfgStatus = (msg, tone = '') =>
@@ -829,21 +1062,16 @@
         } catch {
           try { win?.navigator?.clipboard?.writeText?.(jsonStr); } catch {}
         }
-        setCfgStatus(uNow.cfgExportOk || 'Exported sanitized config', 'ok');
+        setCfgStatus(uNow.cfgExportOk || 'OK', 'ok');
       });
 
-      const fileInput = mkEl('input');
-      fileInput.type = 'file';
-      fileInput.setAttribute('accept', '.json,application/json');
-      fileInput.hidden = true;
-      fileInput.setAttribute('hidden', '');
       const handleImportRaw = (rawText) => {
         const lNow = getLang(), uNow = uiText(lNow), res = validateImportedConfigJson(rawText);
         if (!res.ok) {
           setCfgStatus(uNow.cfgImportErr || 'Invalid JSON', 'err');
           return false;
         }
-        pendingCfgToast = { key: 'cfgImportOk', fallback: 'Validated and restored settings', tone: 'ok', exp: Date.now() + 2500 };
+        pendingCfgToast = { key: 'cfgImportOk', fallback: 'OK', tone: 'ok', exp: Date.now() + 2500 };
         if (Object.keys(res.settings).length > 0) {
           applyBatch(res.settings);
           if (res.settings.thoughtTranslate && thoughtUiHandle) thoughtUiHandle.onModeSwitched(res.settings.thoughtTranslate);
@@ -867,7 +1095,7 @@
         if (sec.isConnected) {
           pendingCfgToast = null;
           runGuardedMut(() => syncRootState(sec, rl, ru));
-          setCfgStatus(ru.cfgImportOk || 'Validated and restored settings', 'ok');
+          setCfgStatus(ru.cfgImportOk || 'OK', 'ok');
         }
         return true;
       };
@@ -894,7 +1122,7 @@
       resetBtn.addEventListener('click', (ev) => {
         ev?.stopPropagation?.();
         const defs = getDefaultSettingsPatch();
-        pendingCfgToast = { key: 'cfgResetOk', fallback: 'Restored defaults', tone: 'ok', exp: Date.now() + 2500 };
+        pendingCfgToast = { key: 'cfgResetOk', fallback: 'OK', tone: 'ok', exp: Date.now() + 2500 };
         applyBatch(defs);
         if (thoughtUiHandle) thoughtUiHandle.onModeSwitched(defs.thoughtTranslate);
         if (thoughtUiHandle?.onViewSwitched) thoughtUiHandle.onViewSwitched(defs.thoughtView);
@@ -902,14 +1130,13 @@
         if (sec.isConnected) {
           pendingCfgToast = null;
           runGuardedMut(() => syncRootState(sec, rl, ru));
-          setCfgStatus(ru.cfgResetOk || 'Restored defaults', 'ok');
+          setCfgStatus(ru.cfgResetOk || 'OK', 'ok');
         }
       });
 
       cfgActions.appendChild(exportBtn);
       cfgActions.appendChild(importBtn);
       cfgActions.appendChild(resetBtn);
-      cfgActions.appendChild(fileInput);
       cfgFooter.appendChild(cfgMeta);
       cfgFooter.appendChild(cfgActions);
       foldBody.appendChild(cfgFooter);
@@ -938,6 +1165,7 @@
       });
 
       anchor.parentElement.appendChild(sec);
+      probeUpdateSilently();
       if (initOpen) probeRepoStatusSilently();
     });
   }
@@ -945,11 +1173,13 @@
   const exportedApi = {
     SETTINGS_SEC_ID,
     PRISM_SETTINGS_SCHEMA,
+    PRISM_STORAGE_KEYS,
     SCENE_PRESETS,
     UPSTREAM_CREDITS,
     getDefaultSettingsPatch,
     buildSanitizedConfigExport,
     validateImportedConfigJson,
+    clearPrismLocalStorage,
     mountOrSyncSettingsSection,
   };
   if (typeof module === 'object' && module.exports) module.exports = exportedApi;

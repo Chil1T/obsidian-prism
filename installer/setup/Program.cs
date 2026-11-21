@@ -25,6 +25,7 @@ namespace AgyClaudeStyle.Installer
         public bool NoKillLegacy;
         public bool NoNativeDaemon;
         public bool NoRelaunchPrompt;
+        public bool PurgeData;
         public string InstallDir;
         public string PluginDir;
         public int? CdpPort;
@@ -225,12 +226,27 @@ namespace AgyClaudeStyle.Installer
 
             string userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             if (string.IsNullOrEmpty(userHome)) userHome = Environment.GetEnvironmentVariable("USERPROFILE");
+            List<string> redlineDirs = new List<string>();
+            Action<string> addRedline = (p) =>
+            {
+                if (string.IsNullOrEmpty(p)) return;
+                try { redlineDirs.Add(NormalizeDirPath(p)); } catch { }
+            };
             if (!string.IsNullOrEmpty(userHome))
             {
                 string geminiDir = Path.Combine(userHome, ".gemini");
                 addProtected(geminiDir);
                 addProtected(Path.Combine(geminiDir, "config"));
                 addProtected(Path.Combine(geminiDir, "config", "plugins"));
+                addProtected(Path.Combine(geminiDir, "antigravity"));
+                addRedline(Path.Combine(geminiDir, "antigravity", "conversations_archive"));
+                addRedline(Path.Combine(geminiDir, "antigravity", "prism-knowledge-space"));
+                addRedline(Path.Combine(userHome, "Documents", "Antigravity-Spark"));
+            }
+            string myDocs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+            if (!string.IsNullOrEmpty(myDocs))
+            {
+                addRedline(Path.Combine(myDocs, "Antigravity-Spark"));
             }
 
             for (int i = 0; i < protectedRoots.Count; i++)
@@ -239,6 +255,58 @@ namespace AgyClaudeStyle.Installer
                 if (string.IsNullOrEmpty(p)) continue;
                 if (string.Equals(norm, p, StringComparison.OrdinalIgnoreCase)) return true;
                 if (p.StartsWith(normSlash, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            for (int i = 0; i < redlineDirs.Count; i++)
+            {
+                string p = redlineDirs[i];
+                if (string.IsNullOrEmpty(p)) continue;
+                string pSlash = p.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+                if (string.Equals(norm, p, StringComparison.OrdinalIgnoreCase)) return true;
+                if (norm.StartsWith(pSlash, StringComparison.OrdinalIgnoreCase)) return true;
+                if (p.StartsWith(normSlash, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
+        }
+
+        private static bool IsAllowedTelemetryOverrideDir(string candidate, string geminiRoot)
+        {
+            if (string.IsNullOrEmpty(candidate) || string.IsNullOrEmpty(candidate.Trim())) return false;
+            string norm;
+            try { norm = NormalizeDirPath(candidate.Trim()); }
+            catch { return false; }
+            if (IsDangerousRootPath(norm)) return false;
+
+            List<string> allowedRoots = new List<string>();
+            Action<string> addBase = (b) =>
+            {
+                if (string.IsNullOrEmpty(b)) return;
+                try { allowedRoots.Add(NormalizeDirPath(b).TrimEnd('\\', '/') + Path.DirectorySeparatorChar); } catch { }
+            };
+            if (!string.IsNullOrEmpty(geminiRoot)) addBase(geminiRoot);
+            string userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrEmpty(userHome)) userHome = Environment.GetEnvironmentVariable("USERPROFILE");
+            if (!string.IsNullOrEmpty(userHome)) addBase(Path.Combine(userHome, ".gemini"));
+            addBase(Path.GetTempPath());
+
+            bool underAllowed = false;
+            for (int i = 0; i < allowedRoots.Count; i++)
+            {
+                if (norm.StartsWith(allowedRoots[i], StringComparison.OrdinalIgnoreCase))
+                {
+                    underAllowed = true;
+                    break;
+                }
+            }
+            if (!underAllowed) return false;
+
+            string[] segs = norm.Split(new char[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < segs.Length; i++)
+            {
+                if (string.Equals(segs[i], "telemetry", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(segs[i], "obsidian-prism", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
             }
             return false;
         }
@@ -257,6 +325,186 @@ namespace AgyClaudeStyle.Installer
                 return;
             }
             Directory.Delete(dir, true);
+        }
+
+        private static void CleanInstallDirKeepingSelfExe(string dir, string selfExeFullPath)
+        {
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir) || IsReparsePoint(dir)) return;
+            try
+            {
+                string[] files = Directory.GetFiles(dir);
+                for (int i = 0; i < files.Length; i++)
+                {
+                    string fp = files[i];
+                    if (string.Equals(Path.GetFullPath(fp), selfExeFullPath, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (IsReparsePoint(fp)) continue;
+                    try { File.Delete(fp); } catch { }
+                }
+            }
+            catch { }
+
+            try
+            {
+                string[] subDirs = Directory.GetDirectories(dir);
+                for (int i = 0; i < subDirs.Length; i++)
+                {
+                    string subDir = subDirs[i];
+                    if (IsReparsePoint(subDir))
+                    {
+                        try { Directory.Delete(subDir, false); } catch { }
+                        continue;
+                    }
+                    CleanInstallDirKeepingSelfExe(subDir, selfExeFullPath);
+                    try
+                    {
+                        if (Directory.GetFileSystemEntries(subDir).Length == 0)
+                        {
+                            Directory.Delete(subDir, false);
+                        }
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+        }
+
+        private static bool IsValidConfigJsonFile(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path) || IsReparsePoint(path)) return false;
+            try
+            {
+                string raw = File.ReadAllText(path, Encoding.UTF8).TrimStart('\uFEFF').Trim();
+                if (raw.Length == 0) return false;
+                return MiniJson.ParseObject(raw) != null;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void BackupUserConfigBeforeUninstall(string installDir, string pluginDir)
+        {
+            string hostCfgDir = CdpHelper.ResolveHostGeminiConfigDir(pluginDir);
+            if (string.IsNullOrEmpty(hostCfgDir) || IsReparsePoint(hostCfgDir)) return;
+
+            string installCfg = !string.IsNullOrEmpty(installDir) ? Path.Combine(installDir, "config.json") : null;
+            string pluginCfg = !string.IsNullOrEmpty(pluginDir) ? Path.Combine(pluginDir, "config.json") : null;
+            string chosen = null;
+            bool installValid = IsValidConfigJsonFile(installCfg);
+            bool pluginValid = IsValidConfigJsonFile(pluginCfg);
+            if (installValid && pluginValid)
+            {
+                chosen = File.GetLastWriteTimeUtc(pluginCfg) > File.GetLastWriteTimeUtc(installCfg) ? pluginCfg : installCfg;
+            }
+            else if (pluginValid)
+            {
+                chosen = pluginCfg;
+            }
+            else if (installValid)
+            {
+                chosen = installCfg;
+            }
+            if (string.IsNullOrEmpty(chosen)) return;
+
+            try
+            {
+                Directory.CreateDirectory(hostCfgDir);
+                if (IsReparsePoint(hostCfgDir)) return;
+                string backupPath = Path.Combine(hostCfgDir, "obsidian-prism-config.backup.json");
+                if (IsReparsePoint(backupPath)) return;
+                string tmpPath = backupPath + ".tmp." + Process.GetCurrentProcess().Id;
+                File.Copy(chosen, tmpPath, true);
+                if (File.Exists(backupPath)) File.Delete(backupPath);
+                File.Move(tmpPath, backupPath);
+            }
+            catch { }
+        }
+
+        private static bool RestoreUserConfigBackupIfNeeded(string installDir, string pluginDir)
+        {
+            string installCfg = !string.IsNullOrEmpty(installDir) ? Path.Combine(installDir, "config.json") : null;
+            string pluginCfg = !string.IsNullOrEmpty(pluginDir) ? Path.Combine(pluginDir, "config.json") : null;
+            if ((!string.IsNullOrEmpty(installCfg) && File.Exists(installCfg)) ||
+                (!string.IsNullOrEmpty(pluginCfg) && File.Exists(pluginCfg)))
+            {
+                return false;
+            }
+            string hostCfgDir = CdpHelper.ResolveHostGeminiConfigDir(pluginDir);
+            if (string.IsNullOrEmpty(hostCfgDir) || IsReparsePoint(hostCfgDir)) return false;
+            string backupPath = Path.Combine(hostCfgDir, "obsidian-prism-config.backup.json");
+            if (!IsValidConfigJsonFile(backupPath) || string.IsNullOrEmpty(installCfg)) return false;
+            try
+            {
+                if (IsReparsePoint(installCfg)) return false;
+                File.Copy(backupPath, installCfg, false);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void SafeDeleteFileNoReparsePoint(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath) || IsReparsePoint(filePath)) return;
+            try { File.Delete(filePath); } catch { }
+        }
+
+        private static void PurgeUserPluginData(string pluginDir)
+        {
+            // 绝对红线：严禁触碰 conversations_archive、Antigravity-Spark、prism-knowledge-space
+            string hostCfgDir = CdpHelper.ResolveHostGeminiConfigDir(pluginDir);
+            if (!string.IsNullOrEmpty(hostCfgDir) && Directory.Exists(hostCfgDir) && !IsReparsePoint(hostCfgDir))
+            {
+                string[] exactFiles = new string[]
+                {
+                    "obsidian-prism-config.backup.json",
+                    "obsidian-prism-thought.json",
+                    "obsidian-prism-thought-cache.json",
+                    "obsidian-prism-sidebar.json",
+                    "obsidian-prism-sidebar.json.lock",
+                };
+                for (int i = 0; i < exactFiles.Length; i++)
+                {
+                    SafeDeleteFileNoReparsePoint(Path.Combine(hostCfgDir, exactFiles[i]));
+                }
+                try
+                {
+                    string[] bakFiles = Directory.GetFiles(hostCfgDir, "obsidian-prism-sidebar.json.v1*.bak");
+                    for (int i = 0; i < bakFiles.Length; i++)
+                    {
+                        SafeDeleteFileNoReparsePoint(bakFiles[i]);
+                    }
+                }
+                catch { }
+
+                string envTel = Environment.GetEnvironmentVariable("AG_PRISM_TELEMETRY_DIR");
+                string geminiRoot = Path.GetDirectoryName(hostCfgDir);
+                string telemetryDir = null;
+                if (!string.IsNullOrEmpty(envTel) && !string.IsNullOrEmpty(envTel.Trim()))
+                {
+                    if (IsAllowedTelemetryOverrideDir(envTel, geminiRoot))
+                    {
+                        telemetryDir = NormalizeDirPath(envTel.Trim());
+                    }
+                }
+                else if (!string.IsNullOrEmpty(geminiRoot))
+                {
+                    telemetryDir = Path.Combine(geminiRoot, "antigravity", "sidecar_data", "obsidian-prism", "telemetry");
+                }
+                if (!string.IsNullOrEmpty(telemetryDir) && Directory.Exists(telemetryDir) && !IsDangerousRootPath(telemetryDir))
+                {
+                    try
+                    {
+                        string stopRoot = Path.GetDirectoryName(hostCfgDir);
+                        AssertNoReparsePointChain(telemetryDir, stopRoot);
+                        SafeDeleteDirectory(telemetryDir);
+                    }
+                    catch { }
+                }
+            }
         }
 
         public static string ResolveNativePluginDir(InstallerOptions opts, string resolvedInstallDir)
@@ -682,7 +930,7 @@ namespace AgyClaudeStyle.Installer
                 if (key == null) return;
                 string exePath = Path.Combine(installDir, SelfInstalledExeName);
                 key.SetValue("DisplayName", "Obsidian Prism · 黑曜棱镜 (Optical UI & Motion Suite for Antigravity)", RegistryValueKind.String);
-                key.SetValue("DisplayVersion", version ?? "1.0.3", RegistryValueKind.String);
+                key.SetValue("DisplayVersion", version ?? "1.0.4", RegistryValueKind.String);
                 key.SetValue("Publisher", "Obsidian Prism Contributors", RegistryValueKind.String);
                 key.SetValue("InstallLocation", installDir, RegistryValueKind.String);
                 key.SetValue("DisplayIcon", exePath + ",0", RegistryValueKind.String);
@@ -743,6 +991,8 @@ namespace AgyClaudeStyle.Installer
                 AssertNoReparsePointChain(pluginDir, pluginDir);
                 Directory.CreateDirectory(pluginDir);
             }
+
+            RestoreUserConfigBackupIfNeeded(installDir, pluginDir);
 
             string installCfgPath = Path.Combine(installDir, "config.json");
             string pluginCfgPath = !string.IsNullOrEmpty(pluginDir) ? Path.Combine(pluginDir, "config.json") : null;
@@ -1110,6 +1360,11 @@ namespace AgyClaudeStyle.Installer
             }
             catch { }
 
+            if (!opts.PurgeData)
+            {
+                BackupUserConfigBeforeUninstall(installDir, pluginDir);
+            }
+
             if (!string.IsNullOrEmpty(pluginDir))
             {
                 CdpHelper.SyncHostPluginRegistry(pluginDir, false);
@@ -1139,14 +1394,15 @@ namespace AgyClaudeStyle.Installer
                     {
                         throw new InvalidOperationException("已拒绝清理受保护的系统或用户根目录: " + installDir);
                     }
-                    string[] files = Directory.GetFiles(installDir, "*", SearchOption.AllDirectories);
-                    for (int i = 0; i < files.Length; i++)
-                    {
-                        if (string.Equals(Path.GetFullPath(files[i]), Path.GetFullPath(selfExe), StringComparison.OrdinalIgnoreCase)) continue;
-                        try { File.Delete(files[i]); } catch { }
-                    }
+                    CleanInstallDirKeepingSelfExe(installDir, Path.GetFullPath(selfExe));
                     result.SelfDeleteScheduled = true;
                 }
+            }
+
+            if (opts.PurgeData)
+            {
+                report(92, "正在清除插件配置与遥测缓存...");
+                PurgeUserPluginData(pluginDir);
             }
 
             result.Ok = true;
@@ -1840,6 +2096,7 @@ namespace AgyClaudeStyle.Installer
                 else if (a == "--no-kill-legacy") opts.NoKillLegacy = true;
                 else if (a == "--no-native-daemon") opts.NoNativeDaemon = true;
                 else if (a == "--no-relaunch-prompt") opts.NoRelaunchPrompt = true;
+                else if (a == "--purge-data") opts.PurgeData = true;
                 else if (a == "--install-dir" && i + 1 < args.Length) opts.InstallDir = args[++i];
                 else if (a == "--plugin-dir" && i + 1 < args.Length) opts.PluginDir = args[++i];
                 else if (a == "--cdp-port" && i + 1 < args.Length)

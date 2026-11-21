@@ -1,4 +1,4 @@
-// Obsidian Prism — Unified Thought Translator & Polisher Client Runtime (v1.0.3 Upgraded)
+// Obsidian Prism — Unified Thought Translator & Polisher Client Runtime (v1.0.4 Upgraded)
 // Incorporates proven anti-jank & anti-retranslate safeguards + v1.0.1 workbench capabilities:
 // 1. Rendered-signature idempotence (`data-op-zh-sig` + `data-raw-zh`) -> 0 redundant DOM rebuilds on cache hit;
 // 2. Global `inflightBySig` flight pool across React panel remounts + pre-commit source-hash verification -> 0 duplicate requests & 0 misplacement;
@@ -285,11 +285,11 @@
   function normalizeLangCode(raw) {
     const s = String(raw || '').trim();
     if (!s) return '';
-    if (/^zh[-_](?:TW|HK|MO|Hant)/i.test(s)) return 'zh-TW';
-    if (/^(?:yue|zh[-_]yue)/i.test(s)) return 'yue';
-    if (/^ja\b/i.test(s)) return 'ja';
-    if (/^en\b/i.test(s)) return 'en';
-    if (/^zh\b/i.test(s)) return 'zh-CN';
+    if (/^(?:yue|zh[-_](?:yue|HK|MO))/i.test(s)) return 'yue';
+    if (/^zh[-_](?:TW|Hant)/i.test(s)) return 'zh-TW';
+    if (/^ja(?:\b|[-_])/i.test(s)) return 'ja';
+    if (/^en(?:\b|[-_])/i.test(s)) return 'en';
+    if (/^zh(?:\b|[-_])/i.test(s)) return 'zh-CN';
     return '';
   }
 
@@ -392,7 +392,7 @@
       .replace(/\r\n/g, '\n')
       .replace(/```[\s\S]*?```/g, ' ')
       .replace(/https?:\/\/\S+/g, ' ')
-      .replace(/[^a-zA-Z0-9\u4e00-\u9fa5]+/g, '')
+      .replace(/[^a-zA-Z0-9\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]+/g, '')
       .toLowerCase();
   }
 
@@ -407,17 +407,67 @@
     return `_v3_${(h >>> 0).toString(36)}_${skel.length}`;
   }
 
-  function isMostlyZhNorm(norm) {
-    if (!norm || norm.length < 10 || norm.length > 48000) return true;
+  function countScripts(str) {
+    return {
+      lw: (str.match(/[A-Za-z]{3,}/g) || []).length,
+      lc: (str.match(/[A-Za-z]/g) || []).length,
+      cjk: (str.match(/[\u4e00-\u9fa5]/g) || []).length,
+      kana: (str.match(/[\u3040-\u30ff]/g) || []).length,
+      han: (str.match(/[\uac00-\ud7af]/g) || []).length,
+    };
+  }
+
+  function hasForeignProseParagraph(prose, tl) {
+    const paras = prose.split(/\n+/);
+    for (let i = 0; i < paras.length; i++) {
+      const para = paras[i].trim();
+      if (!para) continue;
+      const c = countScripts(para);
+      if (tl === 'ja') {
+        if ((c.lw >= 6 && c.kana < c.lw * 1.5) || (c.cjk >= 12 && c.kana === 0)) return true;
+      } else if (tl === 'en') {
+        if (c.cjk + c.kana + c.han >= 4) return true;
+      } else if ((c.lw >= 6 && c.cjk < c.lw * 1.5) || c.kana >= 6 || c.han >= 6) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function isAlreadyTargetLang(norm, targetLang = currentLang) {
+    if (!norm || norm.length < 4 || norm.length > 48000) return true;
+    const tl = normalizeLangCode(targetLang) || 'zh-CN';
     const prose = norm
       .replace(/```[\s\S]*?```/g, ' ')
       .replace(/`[^`\n]+`/g, ' ')
       .replace(/https?:\/\/\S+/g, ' ')
       .replace(/[A-Za-z]:[\\/][^\s"'<>|]+/g, ' ')
       .replace(/(?:\/[A-Za-z0-9._-]+){2,}/g, ' ');
-    const cjk = (prose.match(/[\u4e00-\u9fa5]/g) || []).length;
-    const latin = (prose.match(/[A-Za-z]/g) || []).length;
-    return (cjk >= 24 && cjk / Math.max(1, cjk + latin) >= 0.18) || latin < 12 || cjk / Math.max(1, cjk + latin) >= 0.28;
+    if (!prose.trim()) return true;
+
+    const c = countScripts(prose);
+    const totalAlpha = c.lc + c.cjk + c.kana + c.han;
+
+    if (tl === 'en') {
+      if (c.cjk + c.kana + c.han >= 4) return false;
+      if (totalAlpha < 4) return true;
+      return c.cjk + c.kana + c.han < 4;
+    }
+
+    if (totalAlpha < 10) return true;
+
+    if (tl === 'ja') {
+      if (c.lw >= 8 || hasForeignProseParagraph(prose, 'ja')) return false;
+      return c.kana >= 8;
+    }
+
+    if (c.lw >= 8 || c.kana >= 6 || c.han >= 6 || hasForeignProseParagraph(prose, tl)) {
+      return false;
+    }
+
+    if (tl === 'zh-TW' || tl === 'yue') return false;
+
+    return c.lw < 6 && c.kana < 4 && c.han < 4 && c.cjk >= 6;
   }
 
   const getStore = () => W.localStorage || null;
@@ -760,16 +810,21 @@
 
   const PANEL_CLEAN_ATTRS = [A_RDY, A_PND, A_FLD, A_FBK, A_SIG, A_SRW, A_MRW, A_BIL, A_PNL];
 
-  function cleanSinglePanelAttributes(panel) {
+  function cleanOverlayKeepRaw(panel) {
     if (!panel) return;
     claimPanelEntry(panel, null);
     clearPanelStreamState(panel);
     unlockHeight(panel);
     clearPanelWaitTimer(panel);
-    panelMeta.delete(panel);
-    rawCacheMap.delete(panel);
     findDirectOverlay(panel)?.remove();
     raList(panel, PANEL_CLEAN_ATTRS);
+  }
+
+  function cleanSinglePanelAttributes(panel) {
+    if (!panel) return;
+    cleanOverlayKeepRaw(panel);
+    panelMeta.delete(panel);
+    rawCacheMap.delete(panel);
   }
 
   function releasePrismOverlays() {
@@ -977,15 +1032,22 @@
   function extractPanelInfo(panel) {
     const chs = panel && panel[K_CN];
     if (!chs) return { s: '', t: '', k: '', z: true };
+    const activeLang = resolveActiveLang();
     const stp = quickPanelStamp(panel);
     const hit = rawCacheMap.get(panel);
-    if (hit && hit.s === stp && panelFileMaps.has(panel)) return hit;
+    if (hit && hit.s === stp && panelFileMaps.has(panel)) {
+      if (hit.l !== activeLang) {
+        hit.z = isAlreadyTargetLang(hit.t, activeLang);
+        hit.l = activeLang;
+      }
+      return hit;
+    }
     const chunks = [];
     const fm = createEmptyFileMap();
     for (let i = 0; i < chs.length; i++) collectCleanText(chs[i], chunks, fm);
     panelFileMaps.set(panel, fm);
     const rt = normalizeTextKey(chunks.join(''));
-    const rec = { s: stp, t: rt, k: computeSkelBody(rt), z: isMostlyZhNorm(rt) };
+    const rec = { s: stp, t: rt, k: computeSkelBody(rt), z: isAlreadyTargetLang(rt, activeLang), l: activeLang };
     rawCacheMap.set(panel, rec);
     return rec;
   }
@@ -1562,10 +1624,16 @@
     if (!panel || currentMode === 'off') return;
     const inf = extractPanelInfo(panel);
     if (!inf.t) return;
-    const sig = sigFromBody(inf.k, currentMode);
+    const activeLang = resolveActiveLang();
+    const sig = sigFromBody(inf.k, currentMode, activeLang);
     failedSigs.delete(sig);
-    memCache.delete(`mt${inf.k}`);
-    memCache.delete(`${activeStyleTag || 'ai_technical'}${inf.k}`);
+    memCache.delete(`${withLangSuffix('mt', activeLang)}${inf.k}`);
+    memCache.delete(`${withLangSuffix(activeStyleTag || 'ai_technical', activeLang)}${inf.k}`);
+    const pm = panelMeta.get(panel);
+    if (pm && pm.skippedSig) {
+      delete pm.skippedSig;
+      panelMeta.set(panel, pm);
+    }
     persistLocalStorageCache();
 
     const existing = inflightBySig.get(sig);
@@ -1836,12 +1904,21 @@
     applyPanelViewMode(panel);
   }
 
-  const sigFromBody = (kb, mode) => `${mode === 'machine' ? 'mt' : activeStyleTag || 'ai_pending'}:sig${kb}`;
+  function withLangSuffix(baseTag, lang = currentLang) {
+    const tl = normalizeLangCode(lang) || 'zh-CN';
+    return tl === 'zh-CN' ? baseTag : `${baseTag}_${tl}`;
+  }
 
-  function findCachedByBody(kb, mode) {
+  const sigFromBody = (kb, mode, lang = currentLang) => {
+    const base = mode === 'machine' ? 'mt' : activeStyleTag || 'ai_pending';
+    return `${withLangSuffix(base, lang)}:sig${kb}`;
+  };
+
+  function findCachedByBody(kb, mode, lang = currentLang) {
     if (!kb) return '';
-    const tag = mode === 'machine' ? 'mt' : activeStyleTag;
-    return tag ? memCache.get(`${tag}${kb}`) || '' : '';
+    const base = mode === 'machine' ? 'mt' : activeStyleTag;
+    if (!base) return '';
+    return memCache.get(`${withLangSuffix(base, lang)}${kb}`) || '';
   }
 
   function claimPanelEntry(panel, entry) {
@@ -2082,8 +2159,9 @@
       }
     };
 
-    br.translateStream({ text: rawText, mode, priority, requestId, force }, (partial) => {
-      if (currentMode === 'off' || entry.x || typeof partial !== 'string' || !partial.trim()) return;
+    const reqLang = resolveActiveLang();
+    br.translateStream({ text: rawText, mode, priority, requestId, force, targetLang: reqLang }, (partial) => {
+      if (currentMode === 'off' || entry.x || resolveActiveLang() !== reqLang || typeof partial !== 'string' || !partial.trim()) return;
       const trimmed = partial.trimStart();
       if (!trimmed) return;
       if (canUseSmoothStream()) {
@@ -2108,12 +2186,39 @@
           }
           return;
         }
+        if (res && res.ok && res.skipped) {
+          cancelFlushHandle(entry);
+          if (inflightBySig.get(sig) === entry) inflightBySig.delete(sig);
+          for (const p of entry.ps) {
+            if (panelActiveEntry.get(p) === entry) panelActiveEntry.delete(p);
+            if (isConn(p)) {
+              cleanOverlayKeepRaw(p);
+              const inf = extractPanelInfo(p);
+              const m = panelMeta.get(p) || {};
+              m.skippedSig = sig;
+              m.rs = inf.s || quickPanelStamp(p);
+              panelMeta.set(p, m);
+            }
+          }
+          return;
+        }
         if (res && res.ok && typeof res.text === 'string' && res.text.trim()) {
           const finalZh = res.text.trim();
           const isFb = res.engine === 'machine-fallback' || Boolean(res.fallback);
           const eng = isFb ? 'machine-fallback' : res.engine || (mode === 'machine' ? 'machine' : 'ai');
           failedSigs.delete(sig);
-          putMemCache(res.key || `${isFb || mode === 'machine' ? 'mt' : activeStyleTag || 'ai_technical'}${skelBody}`, finalZh, true);
+          const fallbackBase = isFb || mode === 'machine' ? 'mt' : activeStyleTag || 'ai_technical';
+          putMemCache(res.key || `${withLangSuffix(fallbackBase, reqLang)}${skelBody}`, finalZh, true);
+
+          if (resolveActiveLang() !== reqLang) {
+            cancelFlushHandle(entry);
+            if (inflightBySig.get(sig) === entry) inflightBySig.delete(sig);
+            for (const p of entry.ps) {
+              if (panelActiveEntry.get(p) === entry) panelActiveEntry.delete(p);
+            }
+            scheduleScan(20);
+            return;
+          }
 
           if (
             !res.cached &&
@@ -2221,9 +2326,13 @@
     const inf = extractPanelInfo(panel);
     if (!inf.t || inf.z) {
       if (ga(panel, A_PND) === '1') clearPendingKeepRaw(panel);
+      if (ga(panel, A_RDY) === '1' || findDirectOverlay(panel)) {
+        cleanOverlayKeepRaw(panel);
+      }
       const m0 = panelMeta.get(panel) || {};
       m0.ps = sigFromBody(inf.k, currentMode);
       m0.rs = inf.s;
+      delete m0.skippedSig;
       panelMeta.set(panel, m0);
       return;
     }
@@ -2235,7 +2344,13 @@
       const meta = panelMeta.get(panel) || {};
       meta.ds = sig;
       meta.rs = inf.s;
+      delete meta.skippedSig;
       panelMeta.set(panel, meta);
+      return;
+    }
+
+    const curMeta = panelMeta.get(panel);
+    if (curMeta && curMeta.skippedSig === sig && curMeta.rs === inf.s) {
       return;
     }
 
@@ -2455,7 +2570,7 @@
       const hadPrevEngine = currentMode !== 'off';
       currentMode = nextMode;
       ensureInitialized();
-      if (changed) {
+      if (changed || langChanged) {
         clearHydrateQueue();
         if (hadPrevEngine) {
           clearAllWaitTimers(false);

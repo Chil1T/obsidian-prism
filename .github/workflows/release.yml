@@ -81,6 +81,13 @@ jobs:
             printf '\n**Full Changelog**: [CHANGELOG.md](https://github.com/%s/blob/%s/CHANGELOG.md) · [Commits (%s)](https://github.com/%s/commits/%s)\n' \
               "${REPO_SLUG}" "${TAG_NAME}" "${TAG_NAME}" "${REPO_SLUG}" "${TAG_NAME}"
           } > release-notes.md
+      - name: Generate SHA256SUMS.txt
+        run: |
+          (
+            cd artifacts
+            sha256sum -- windows-installer/* macos-dmg/* | sed -E 's|^([0-9a-fA-F]{64}  ).*/|\1|' > SHA256SUMS.txt
+          )
+          cat artifacts/SHA256SUMS.txt
       - name: Create or Update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -92,6 +99,7 @@ jobs:
             gh release upload "${TAG_NAME}" \
               artifacts/windows-installer/* \
               artifacts/macos-dmg/* \
+              artifacts/SHA256SUMS.txt \
               --clobber \
               --repo "${REPO_SLUG}"
             gh release edit "${TAG_NAME}" \
@@ -105,6 +113,7 @@ jobs:
               --target "${COMMIT_SHA}" \
               artifacts/windows-installer/* \
               artifacts/macos-dmg/* \
+              artifacts/SHA256SUMS.txt \
               --title "Obsidian Prism ${TAG_NAME}" \
               --notes-file release-notes.md
           fi

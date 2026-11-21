@@ -2,7 +2,7 @@
   if (typeof module === 'object' && module.exports) module.exports = factory;
   else root.__agCsUiMain = factory;
 })(typeof globalThis !== 'undefined' ? globalThis : window, function (initialConfig) {
-  const VERSION = '1.0.3';
+  const VERSION = '1.0.4';
   const LEGACY_API_VERSION = 3;
   const CODE_HASH = initialConfig?.codeHash || '';
 
@@ -1441,7 +1441,9 @@
     if (!inputBox) return;
     if (document.documentElement?.getAttribute('data-ag-prism-mode') === 'chat') active = false;
     const hasMenuPopup = Boolean(
-      active && inputBox.querySelector?.('[role="listbox"], [role="option"], [data-testid="slash-command-menu"]')
+      active &&
+        (inputBox.querySelector?.('[role="listbox"], [role="option"], [data-testid="slash-command-menu"]') ||
+          document.querySelector?.('[data-testid="model-selector-panel"]'))
     );
     if (hasMenuPopup) setAttrIfChanged(inputBox, 'data-ag-cs-menu-open', '1');
     else if (inputBox.hasAttribute?.('data-ag-cs-menu-open')) inputBox.removeAttribute('data-ag-cs-menu-open');
@@ -2033,7 +2035,7 @@
   }
 
   const OWN_PLUGIN_SELECTOR =
-    '.ag-cs-home-panel-seat, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-prism-rim-cv, .ag-cs-model-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-smooth-caret, .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-stream-chunk, .ag-cs-thought-chunk, .ag-anim-icon, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], #ag-pulse-status-bar, #context-card, #' +
+    '.ag-cs-home-panel-seat, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-prism-rim-cv, .ag-cs-model-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-smooth-caret, .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-stream-chunk, .ag-cs-thought-chunk, .ag-anim-icon, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ces-ag-section, .ces-set, #ag-codex-effort-slider-styles, #ag-pulse-status-bar, #context-card, #' +
     SETTINGS_SEC_ID +
     ', #ag-prism-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-claude-style-css, #ag-prism-motion-off-css, #ag-prism-host-alert-css';
 

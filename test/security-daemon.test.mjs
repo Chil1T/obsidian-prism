@@ -273,7 +273,7 @@ test('security-daemon 4: verifyAndHealEntry serializes via _runEntryExclusive to
   daemon.browserSession = null;
   daemon.sessions = new Map();
   daemon.cdp = {
-    PLUGIN_VERSION: '1.0.3',
+    PLUGIN_VERSION: '1.0.4',
     SETTING_BINDING: '__agPrismSet',
     readConfig: () => ({ sidebarStudio: 'off' }),
   };
@@ -322,7 +322,7 @@ test('security-daemon 4: verifyAndHealEntry serializes via _runEntryExclusive to
           ready: true,
           isHostDom: true,
           href: 'vscode-file://vscode-app/workbench.html',
-          prismAttr: '1.0.3',
+          prismAttr: '1.0.4',
           hasPrism: true,
           hasRepoBridge: true,
           hasThoughtBridge: true,

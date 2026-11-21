@@ -41,16 +41,17 @@ var ENERGY_START = 0;
 var ENERGY_END = 0.5;
 var MIN_HEIGHT_SLOTS = 2;
 // Antigravity 官方推理档位枚举与展示名映射（对应 main.js 中的 DXb / EXb / GXb）
-var AG_EFFORT_ORDER = ["off", "low", "medium", "high", "xhigh", "max"];
+var AG_EFFORT_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 var AG_EFFORT_LABELS = {
 off: "Off",
+minimal: "Minimal",
 low: "Low",
 medium: "Medium",
 high: "High",
 xhigh: "Extra",
 max: "Max"
 };
-var AG_MODEL_LABEL_RE = /^(.*?)\s*\((off|low|medium|high|xhigh|extra|max)(?:\s+thinking)?\)\s*$/i;
+var AG_MODEL_LABEL_RE = /^(.*?)\s*\((off|minimal|low|medium|high|xhigh|extra|max)(?:\s+thinking)?\)\s*$/i;
 // Claude 专属主题常量（6×60 点阵、1.6s 从右至左扫掠、Capsule 胶囊滑块）
 var CLAUDE_CELL = 28 / 6; // ≈ 4.67px
 var CLAUDE_ROWS = 6;
@@ -139,18 +140,25 @@ function _win(w) { return w || (typeof window !== "undefined" ? window : globalR
 function resolveStorage(win) {
 try { var w = _win(win); return w && w.localStorage || null; } catch (e) { return null; }
 }
+var _cfgCache = null, _cfgStorage = null;
+function _invCfg() { _cfgCache = null; _cfgStorage = null; }
 function readSettings(win) {
 var s = resolveStorage(win);
 if (!s) return schemaDefaults();
+if (_cfgCache && _cfgStorage === s) return _cfgCache;
 try {
 var t = s.getItem(SETTINGS_KEY) || s.getItem(LEGACY_SETTINGS_KEY);
-return t ? normalizeSettings(JSON.parse(t)) : schemaDefaults();
+_cfgCache = t ? normalizeSettings(JSON.parse(t)) : schemaDefaults();
+_cfgStorage = s;
+return _cfgCache;
 } catch (e) { return schemaDefaults(); }
 }
 function writeSettings(patch, win) {
 var w = _win(win), next = normalizeSettings(Object.assign({}, readSettings(w), patch || {}));
 var s = resolveStorage(w);
 if (s) { try { s.setItem(SETTINGS_KEY, JSON.stringify(next)); } catch (e) {} }
+_cfgCache = s ? next : null;
+_cfgStorage = s;
 try { if (w && w.dispatchEvent && w.CustomEvent) w.dispatchEvent(new w.CustomEvent(SETTINGS_EVENT, { detail: next })); } catch (e) {}
 return next;
 }
@@ -158,8 +166,8 @@ function resetSettings(win) { return writeSettings(schemaDefaults(), win); }
 function onSettingsChange(fn, win) {
 var w = _win(win);
 if (!w || typeof w.addEventListener !== "function") return function () {};
-var hC = function (ev) { fn(ev && ev.detail ? normalizeSettings(ev.detail) : readSettings(w)); };
-var hS = function (ev) { if (ev && (ev.key === SETTINGS_KEY || ev.key === LEGACY_SETTINGS_KEY)) fn(readSettings(w)); };
+var hC = function (ev) { _invCfg(); fn(ev && ev.detail ? normalizeSettings(ev.detail) : readSettings(w)); };
+var hS = function (ev) { if (ev && (ev.key === SETTINGS_KEY || ev.key === LEGACY_SETTINGS_KEY)) { _invCfg(); fn(readSettings(w)); } };
 w.addEventListener(SETTINGS_EVENT, hC); w.addEventListener("storage", hS);
 return function () { w.removeEventListener(SETTINGS_EVENT, hC); w.removeEventListener("storage", hS); };
 }
@@ -543,6 +551,8 @@ if (u2 < 0) u2 += 1;
 var p1 = Math.pow(1 - u1, 2.6 + 3.4 * hash01(col, row, 17));
 var p2 = Math.pow(1 - u2, 3.4);
 var pulse = Math.max(p1, p2 * (0.55 + 0.45 * hash01(col, row, 19))) * 0.85;
+var wAmt = clamp01(pulse * (0.35 + 0.65 * t)) * (0.55 + 0.45 * hash01(col, row, 71));
+if (progress < 0.999) wAmt = Math.max(wAmt, clamp01(1 - (t - front) / 0.16) * (0.55 + 0.45 * hash01(col, row, 73)));
 if (!dark) {
 var lt = clamp01((t - 0.05) / 0.2);
 if (lt <= 0) continue;
@@ -579,14 +589,9 @@ ctx.globalAlpha = lAlpha;
 ctx.fillStyle = "rgb(" + lr + "," + lg + "," + lb + ")";
 fillRoundRect(ctx, x + 0.5, y2 + 0.5, lw, lh, 1);
 // 流光脉冲是点阵“流动”的唯一来源：亮度不随强度衰减（中档只靠点更少、底色更淡、速度更慢来区分）
-var whiteAmt = clamp01(pulse * (0.35 + 0.65 * t)) * (0.55 + 0.45 * hash01(col, row, 71));
-if (progress < 0.999) {
-var flash = clamp01(1 - (t - front) / 0.16) * (0.55 + 0.45 * hash01(col, row, 73));
-whiteAmt = Math.max(whiteAmt, flash);
-}
-if (whiteAmt > 0.03) {
+if (wAmt > 0.03) {
 // 除回 alphaMul，让高光核心亮度与 High 一致
-ctx.globalAlpha = Math.min(1, (lAlpha / alphaMul) * (0.12 + 0.88 * whiteAmt));
+ctx.globalAlpha = Math.min(1, (lAlpha / alphaMul) * (0.12 + 0.88 * wAmt));
 ctx.fillStyle = "rgb(247, 243, 255)";
 var ins = lw * 0.14;
 fillRoundRect(ctx, x + 0.5 + ins, y2 + 0.5 + ins, lw - ins * 2, lh - ins * 2, 0.7);
@@ -606,13 +611,8 @@ ctx.globalAlpha = Math.min(1, gridAlpha * 0.55);
 ctx.fillStyle = "rgb(" + purple[0] + "," + purple[1] + "," + purple[2] + ")";
 fillRoundRect(ctx, x + 0.5, y + 0.5, size, size, 1.1);
 // 同浅色模式：流光亮度不随强度衰减
-var whiteAmtDark = clamp01(pulse * (0.35 + 0.65 * t)) * (0.55 + 0.45 * hash01(col, row, 71));
-if (progress < 0.999) {
-var flashDark = clamp01(1 - (t - front) / 0.16) * (0.55 + 0.45 * hash01(col, row, 73));
-whiteAmtDark = Math.max(whiteAmtDark, flashDark);
-}
-if (whiteAmtDark > 0.03) {
-ctx.globalAlpha = Math.min(1, (gridAlpha / alphaMul) * (0.1 + 0.72 * whiteAmtDark));
+if (wAmt > 0.03) {
+ctx.globalAlpha = Math.min(1, (gridAlpha / alphaMul) * (0.1 + 0.72 * wAmt));
 ctx.fillStyle = "rgb(220, 204, 255)";
 fillRoundRect(ctx, x + 0.5, y + 0.5, size, size, 0.7);
 }
@@ -767,28 +767,10 @@ var p = clamp01(pct);
 var start = typeof startOverride === "number" && Number.isFinite(startOverride) ? startOverride : ENERGY_START;
 var end = typeof endOverride === "number" && Number.isFinite(endOverride) ? endOverride : ENERGY_END;
 var tone = accentOverride || resolvePrismAccentTone(null, null);
-if (tone === "mono" || (!isClaude && TONE_PAL[tone])) {
-var tp = TONE_PAL[tone];
+var tp = tone === "mono" || (!isClaude && TONE_PAL[tone]) ? TONE_PAL[tone] : isClaude ? ["#71717a", "#a78bfa", "#704ea2"] : ["#4d93f8", "#9333ea", "#4c1d95"];
 if (p <= start + 1e-6) return tp[0];
 if (p <= end + 1e-6) return mixHex(tp[0], tp[1], (p - start) / Math.max(1e-6, end - start));
 return mixHex(tp[1], tp[2], (p - end) / Math.max(1e-6, 1 - end));
-}
-if (isClaude) {
-if (p <= start + 1e-6) return "#71717a";
-if (p <= end + 1e-6) {
-var cspan1 = Math.max(1e-6, end - start);
-return mixHex("#71717a", "#a78bfa", (p - start) / cspan1);
-}
-var cspan2 = Math.max(1e-6, 1 - end);
-return mixHex("#a78bfa", "#704ea2", (p - end) / cspan2);
-}
-if (p <= start + 1e-6) return "#4d93f8";
-if (p <= end + 1e-6) {
-var span1 = Math.max(1e-6, end - start);
-return mixHex("#4d93f8", "#9333ea", (p - start) / span1);
-}
-var span2 = Math.max(1e-6, 1 - end);
-return mixHex("#9333ea", "#4c1d95", (p - end) / span2);
 }
 /**
 * 填充区线性渐变背景：
@@ -847,33 +829,19 @@ var n = Number(count) || 0;
 if (n <= 1) return "";
 var tone = accentOverride || resolvePrismAccentTone(null, null);
 if (tone === "mono") return "";
-if (isClaude) {
-if (isMax || index === n - 1) return "#c4b5fd";
-var cIdx = typeof index === "number" && index >= 0 ? index : 0;
-var cFirstActive = hasOffFirst ? 1 : 0;
-if (cIdx <= cFirstActive) return "#94a3b8";
-if (n === 3 && cIdx === 1) return "#a78bfa";
-var cDenom = Math.max(1, n - 1 - cFirstActive);
-var cT = clamp01((cIdx - cFirstActive) / cDenom);
-return mixHex("#94a3b8", "#c4b5fd", cT);
-}
-if (TONE_PAL[tone]) {
-var tIdx = typeof index === "number" && index >= 0 ? index : 0;
-var tFirst = hasOffFirst ? 1 : 0;
-var tp = TONE_PAL[tone];
-return isMax || index === n - 1 ? tp[3] : mixHex(tp[1], tp[3], clamp01((tIdx - tFirst) / Math.max(1, n - 1 - tFirst)));
-}
-if (isMax || index === n - 1) return "#8b5cf6";
+var tp = !isClaude && TONE_PAL[tone];
+var lo = isClaude ? "#94a3b8" : tp ? tp[1] : "#4d93f8";
+var hi = isClaude ? "#c4b5fd" : tp ? tp[3] : "#8b5cf6";
+if (isMax || index === n - 1) return hi;
 var idx = typeof index === "number" && index >= 0 ? index : 0;
-var firstActive = hasOffFirst ? 1 : 0;
-if (idx <= firstActive) return "#4d93f8";
-var denom = Math.max(1, n - 1 - firstActive);
-var t = clamp01((idx - firstActive) / denom);
-return mixHex("#4d93f8", "#8b5cf6", t);
+var first = hasOffFirst ? 1 : 0;
+if (!tp && idx <= first) return lo;
+if (isClaude && n === 3 && idx === 1) return "#a78bfa";
+return mixHex(lo, hi, clamp01((idx - first) / Math.max(1, n - 1 - first)));
 }
 var FILL_RADIUS_CSS = KNOB_RADIUS + "px 0 0 " + KNOB_RADIUS + "px";
 // ── 样式表注入（对齐 dsh-codex-effort-slider 右向左星尘横穿 + 星云扫光 + Antigravity 面板适配） ──
-var SLIDER_CSS = "@keyframes ces-sweep{0%{transform:translateX(100%)}100%{transform:translateX(-100%)}}@keyframes ces-star-sweep{0%{transform:translate3d(0,0,0);opacity:0}6%{opacity:1}94%{opacity:1}100%{transform:translate3d(-100%,0,0);opacity:0}}.ces-inline{width:100%;box-sizing:border-box;padding-top:6px;user-select:none !important;-webkit-user-select:none !important}.ces-root,.ces-root:focus,.ces-root:focus-visible,.ces-root:focus-within{position:relative;width:100%;box-sizing:border-box;outline:none !important;outline-width:0 !important;box-shadow:none !important;user-select:none !important;-webkit-user-select:none !important;-webkit-tap-highlight-color:transparent !important}.ces-track{position:relative;width:100%;height:28px;border-radius:999px;background:rgba(128,128,145,0.18);box-shadow:inset 0 1px 2px rgba(0,0,0,0.24),inset 0 0 0 1px rgba(255,255,255,0.06);cursor:pointer;touch-action:none;box-sizing:border-box;transition:opacity 0.15s ease,box-shadow 0.2s ease}.ces-inline[data-energy='1'] .ces-track,.ces-root[data-energy='1'] .ces-track{box-shadow:0 0 calc(var(--ces-energy,0) * 16px) rgba(168,85,247,0.5),inset 0 1px 2px rgba(0,0,0,0.24)}.ces-inline[data-energy='0'] .ces-star,.ces-inline[data-energy='0'] .ces-energy__sweep,.ces-root[data-energy='0'] .ces-star,.ces-root[data-energy='0'] .ces-energy__sweep{animation-play-state:paused}.ces-track.is-locked{opacity:0.45;cursor:not-allowed;filter:saturate(0.25)}.ces-fill{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;background:var(--ces-fill-bg,#4d93f8);pointer-events:none;will-change:width,background}.ces-energy{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;overflow:hidden;pointer-events:none;opacity:var(--ces-energy,0);transition:opacity 0.2s ease;background:linear-gradient(90deg,#3b1178 0%,#6d28d9 30%,#9333ea 62%,#c084fc 100%)}.ces-energy__sweep{position:absolute;inset:0;background:linear-gradient(100deg,transparent 18%,rgba(255,255,255,0.30) 50%,transparent 82%);transform:translateX(100%);animation:ces-sweep 2.4s linear infinite;pointer-events:none}.ces-stars{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;opacity:var(--ces-star-opacity,0);transition:opacity 0.2s ease;pointer-events:none;overflow:hidden}.ces-star{position:absolute;left:0;right:0;height:3px;margin-top:-1.5px;pointer-events:none;animation-name:ces-star-sweep;animation-timing-function:linear;animation-iteration-count:infinite}.ces-star__dot{position:absolute;left:100%;top:0;width:3px;height:3px;margin-left:-1.5px;border-radius:50%;background:#f5f3ff;box-shadow:0 0 5px rgba(216,180,254,0.95);opacity:var(--ces-b,1);transform:scale(var(--ces-b,1))}.ces-ticks{position:absolute;inset:0;pointer-events:none}.ces-tick{position:absolute;top:50%;width:3px;height:3px;margin:-1.5px 0 0 -1.5px;border-radius:50%;background:rgba(255,255,255,0.28);pointer-events:none;transition:background-color 0.12s ease}.ces-tick.is-on{background:rgba(255,255,255,0.65)}.ces-tick.is-dim{background:rgba(255,255,255,0.28)}.ces-knob{position:absolute;top:50%;left:var(--ces-fill,14px);width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;background:#ffffff;box-shadow:0 1px 5px rgba(0,0,0,0.34),0 0 0 0.5px rgba(0,0,0,0.06);pointer-events:none;will-change:left}.ces-root[data-theme='claude'] .ces-stars,.ces-root[data-theme='claude'] .ces-energy,.ces-inline[data-theme='claude'] .ces-stars,.ces-inline[data-theme='claude'] .ces-energy{display:none !important}.ces-root[data-theme='claude'] .ces-track,.ces-inline[data-theme='claude'] .ces-track{height:28px;border-radius:999px;background:rgba(128,128,145,0.16);box-shadow:inset 0 1px 2px rgba(0,0,0,0.22),inset 0 0 0 1px rgba(255,255,255,0.08)}.ces-root[data-theme='claude'][data-energy='1'] .ces-track,.ces-inline[data-theme='claude'][data-energy='1'] .ces-track{box-shadow:0 0 16px rgba(167,139,250,0.45),inset 0 1px 2px rgba(0,0,0,0.22)}.ces-root[data-theme='claude'] .ces-knob,.ces-inline[data-theme='claude'] .ces-knob{width:24px;height:30px;margin:-15px 0 0 -12px;border-radius:7px;background:#ffffff;box-shadow:0 2px 6px rgba(0,0,0,0.4),0 0 0 0.5px rgba(0,0,0,0.12);display:flex;align-items:center;justify-content:center}.ces-knob-notch{display:none;width:2px;height:10px;border-radius:999px;background:rgba(0,0,0,0.28)}.ces-root[data-theme='claude'] .ces-knob-notch,.ces-inline[data-theme='claude'] .ces-knob-notch{display:block}.ces-claude-canvas{position:absolute;left:0;top:0;width:var(--ces-fill,0px);height:100%;border-radius:999px;display:none;pointer-events:none}.ces-root[data-theme='claude'][data-energy='1'] .ces-claude-canvas,.ces-inline[data-theme='claude'][data-energy='1'] .ces-claude-canvas{display:block}@keyframes ces-claude-rise{0%{transform:translateY(85%) scale(0.96);opacity:0}55%{opacity:1}80%{transform:translateY(-6%) scale(1.01)}100%{transform:translateY(0) scale(1);opacity:1}}.ces-ag-effort-value.is-claude-changing,.ces-ag-effort-value.ces-text-rise{animation:ces-claude-rise 0.3s cubic-bezier(0.2,0.85,0.25,1)}.ces-ag-effort-value.is-claude-changing.is-glowing,.ces-ag-effort-value.ces-text-rise.is-glowing{animation:ces-claude-rise 0.3s cubic-bezier(0.2,0.85,0.25,1),ces-text-bloom 0.4s cubic-bezier(0.16,1,0.3,1) forwards}[data-testid='model-selector-panel'].ces-ag-panel-enhanced{max-height:26rem !important}.ces-ag-section,.ces-ag-section:focus,.ces-ag-section:focus-visible,.ces-ag-section *{outline:none !important;outline-width:0 !important;user-select:none !important;-webkit-user-select:none !important;-webkit-tap-highlight-color:transparent !important}.ces-ag-section{display:flex;flex-direction:column;flex-shrink:0;width:100%;box-sizing:border-box}.ces-ag-effort-row{display:flex;flex-direction:column;width:100%;box-sizing:border-box;padding:6px 8px 8px 8px;border-radius:6px;transition:box-shadow 0.2s ease,background-color 0.2s ease}.ces-ag-effort-row:hover{background-color:rgba(128,128,145,0.08)}.ces-ag-effort-row[data-ces-max='true'],[data-ces-effort-row='true'][data-ces-max='true']{box-shadow:inset 0 0 0 1px rgba(139,92,246,0.42),0 0 14px -4px rgba(139,92,246,0.45) !important;background-color:rgba(139,92,246,0.06)}.ces-ag-effort-head{display:flex;align-items:center;justify-content:space-between;width:100%;font-size:12px;line-height:16px}.ces-ag-effort-title{display:inline-flex;align-items:center;gap:6px;color:inherit;font-weight:500;opacity:0.9}.ces-ag-effort-value{position:relative;z-index:1;display:inline-block;font-size:12px;font-weight:600;transition:color 0.15s ease}.ces-ag-effort-value::after{content:'';position:absolute;top:50%;left:50%;width:52px;height:26px;border-radius:999px;transform:translate(-50%,-50%) scale(0.6);background:radial-gradient(ellipse at center,var(--ces-glow-color,rgba(168,85,247,0.85)) 0%,var(--ces-glow-color,rgba(168,85,247,0.45)) 45%,rgba(168,85,247,0) 75%);filter:blur(8px);pointer-events:none;opacity:0;z-index:-1}@keyframes ces-glow-flash{0%{opacity:0.95;transform:translate(-50%,-50%) scale(0.65);filter:blur(6px)}25%{opacity:1;transform:translate(-50%,-50%) scale(1.15);filter:blur(8px)}100%{opacity:0;transform:translate(-50%,-50%) scale(1.5);filter:blur(14px)}}@keyframes ces-text-bloom{0%{text-shadow:0 0 8px var(--ces-glow-color,#c084fc)}30%{text-shadow:0 0 14px var(--ces-glow-color,#c084fc),0 0 3px #ffffff}100%{text-shadow:none}}.ces-ag-effort-value.is-glowing{animation:ces-text-bloom 0.4s cubic-bezier(0.16,1,0.3,1) forwards}.ces-ag-effort-value.is-glowing::after{animation:ces-glow-flash 0.4s cubic-bezier(0.16,1,0.3,1) forwards}@media (prefers-reduced-motion:reduce){.ces-panel-shaking{animation:none !important}.ces-ag-effort-value.is-glowing{animation:none !important}.ces-ag-effort-value.is-glowing::after{animation:none !important}.ces-ag-effort-value.ces-text-rise{animation:none !important}.ces-ag-effort-value.is-claude-changing{animation:none !important}}[role='menu']:has([data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])),div[role='presentation']:has(>[role='menu'] [data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])){display:none !important;visibility:hidden !important;pointer-events:none !important;opacity:0 !important}[role='menuitem']:has([data-testid='model-selector-effort-group'])>span.shrink-0:last-child{display:none !important}[role='menuitem']:has([data-testid='model-selector-effort-group'])>.group-hover\\:hidden{display:flex !important}[role='menuitem'][data-ces-model-selected='true']{background-color:rgba(128,128,145,0.14)}.ces-set{position:fixed;z-index:2147483646;width:268px;padding:12px;border-radius:10px;background:rgba(24,24,28,0.96);color:#f4f4f6;border:1px solid rgba(255,255,255,0.12);box-shadow:0 12px 32px rgba(0,0,0,0.55);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;box-sizing:border-box;user-select:none}.ces-set-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.08);font-weight:600;font-size:12.5px}.ces-set-ver{font-size:11px;font-weight:400;opacity:0.55}.ces-set-group{margin-bottom:10px}.ces-set-label{margin-bottom:5px;font-size:11px;opacity:0.72}.ces-set-opts{display:flex;gap:4px}.ces-set-opt{flex:1;padding:5px 6px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);color:#d4d4d8;font-size:11.5px;cursor:pointer;text-align:center;transition:all 0.12s ease}.ces-set-opt:hover{background:rgba(255,255,255,0.1);color:#ffffff}.ces-set-opt.is-on{background:rgba(139,92,246,0.28);border-color:rgba(139,92,246,0.75);color:#ffffff;font-weight:600}.ces-set-actions{display:flex;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.08)}.ces-set-btn{flex:1;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#e4e4e7;font-size:11px;cursor:pointer}.ces-set-btn:hover{background:rgba(255,255,255,0.14)}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']{grid-template-rows:auto auto}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>[role='separator']{grid-row:1;grid-column:1}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>:is(.ces-ag-effort-row,[data-testid='orchestrator-effort-bar']){grid-row:2!important;grid-column:1!important}";
+var SLIDER_CSS = "@keyframes ces-sweep{0%{transform:translateX(100%)}100%{transform:translateX(-100%)}}@keyframes ces-star-sweep{0%{transform:translate3d(0,0,0);opacity:0}6%{opacity:1}94%{opacity:1}100%{transform:translate3d(-100%,0,0);opacity:0}}.ces-inline{width:100%;box-sizing:border-box;padding-top:6px;user-select:none !important;-webkit-user-select:none !important}.ces-root,.ces-root:focus,.ces-root:focus-visible,.ces-root:focus-within{position:relative;width:100%;box-sizing:border-box;outline:none !important;outline-width:0 !important;box-shadow:none !important;user-select:none !important;-webkit-user-select:none !important;-webkit-tap-highlight-color:transparent !important}.ces-track{position:relative;width:100%;height:28px;border-radius:999px;background:rgba(128,128,145,0.18);box-shadow:inset 0 1px 2px rgba(0,0,0,0.24),inset 0 0 0 1px rgba(255,255,255,0.06);cursor:pointer;touch-action:none;box-sizing:border-box;transition:opacity 0.15s ease,box-shadow 0.2s ease}.ces-inline[data-energy='1'] .ces-track,.ces-root[data-energy='1'] .ces-track{box-shadow:0 0 calc(var(--ces-energy,0) * 16px) rgba(168,85,247,0.5),inset 0 1px 2px rgba(0,0,0,0.24)}.ces-inline[data-energy='0'] .ces-star,.ces-inline[data-energy='0'] .ces-energy__sweep,.ces-root[data-energy='0'] .ces-star,.ces-root[data-energy='0'] .ces-energy__sweep{animation-play-state:paused}.ces-track.is-locked{opacity:0.45;cursor:not-allowed;filter:saturate(0.25)}.ces-fill{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;background:var(--ces-fill-bg,#4d93f8);pointer-events:none;will-change:width,background}.ces-energy{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;overflow:hidden;pointer-events:none;opacity:var(--ces-energy,0);transition:opacity 0.2s ease;background:linear-gradient(90deg,#3b1178 0%,#6d28d9 30%,#9333ea 62%,#c084fc 100%)}.ces-energy__sweep{position:absolute;inset:0;background:linear-gradient(100deg,transparent 18%,rgba(255,255,255,0.30) 50%,transparent 82%);transform:translateX(100%);animation:ces-sweep 2.4s linear infinite;pointer-events:none}.ces-stars{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;opacity:var(--ces-star-opacity,0);transition:opacity 0.2s ease;pointer-events:none;overflow:hidden}.ces-star{position:absolute;left:0;right:0;height:3px;margin-top:-1.5px;pointer-events:none;animation-name:ces-star-sweep;animation-timing-function:linear;animation-iteration-count:infinite}.ces-star__dot{position:absolute;left:100%;top:0;width:3px;height:3px;margin-left:-1.5px;border-radius:50%;background:#f5f3ff;box-shadow:0 0 5px rgba(216,180,254,0.95);opacity:var(--ces-b,1);transform:scale(var(--ces-b,1))}.ces-ticks{position:absolute;inset:0;pointer-events:none}.ces-tick{position:absolute;top:50%;width:3px;height:3px;margin:-1.5px 0 0 -1.5px;border-radius:50%;background:rgba(255,255,255,0.28);pointer-events:none;transition:background-color 0.12s ease}.ces-tick.is-on{background:rgba(255,255,255,0.65)}.ces-tick.is-dim{background:rgba(255,255,255,0.28)}.ces-knob{position:absolute;top:50%;left:var(--ces-fill,14px);width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;background:#ffffff;box-shadow:0 1px 5px rgba(0,0,0,0.34),0 0 0 0.5px rgba(0,0,0,0.06);pointer-events:none;will-change:left}.ces-root[data-theme='claude'] .ces-stars,.ces-root[data-theme='claude'] .ces-energy,.ces-inline[data-theme='claude'] .ces-stars,.ces-inline[data-theme='claude'] .ces-energy{display:none !important}.ces-root[data-theme='claude'] .ces-track,.ces-inline[data-theme='claude'] .ces-track{height:28px;border-radius:999px;background:rgba(128,128,145,0.16);box-shadow:inset 0 1px 2px rgba(0,0,0,0.22),inset 0 0 0 1px rgba(255,255,255,0.08)}.ces-root[data-theme='claude'][data-energy='1'] .ces-track,.ces-inline[data-theme='claude'][data-energy='1'] .ces-track{box-shadow:0 0 16px rgba(167,139,250,0.45),inset 0 1px 2px rgba(0,0,0,0.22)}.ces-root[data-theme='claude'] .ces-knob,.ces-inline[data-theme='claude'] .ces-knob{width:24px;height:30px;margin:-15px 0 0 -12px;border-radius:7px;background:#ffffff;box-shadow:0 2px 6px rgba(0,0,0,0.4),0 0 0 0.5px rgba(0,0,0,0.12);display:flex;align-items:center;justify-content:center}.ces-knob-notch{display:none;width:2px;height:10px;border-radius:999px;background:rgba(0,0,0,0.28)}.ces-root[data-theme='claude'] .ces-knob-notch,.ces-inline[data-theme='claude'] .ces-knob-notch{display:block}.ces-claude-canvas{position:absolute;left:0;top:0;width:var(--ces-fill,0px);height:100%;border-radius:999px;display:none;pointer-events:none}.ces-root[data-theme='claude'][data-energy='1'] .ces-claude-canvas,.ces-inline[data-theme='claude'][data-energy='1'] .ces-claude-canvas{display:block}@keyframes ces-claude-rise{0%{transform:translateY(85%) scale(0.96);opacity:0}55%{opacity:1}80%{transform:translateY(-6%) scale(1.01)}100%{transform:translateY(0) scale(1);opacity:1}}.ces-ag-effort-value.is-claude-changing,.ces-ag-effort-value.ces-text-rise{animation:ces-claude-rise 0.3s cubic-bezier(0.2,0.85,0.25,1)}.ces-ag-effort-value.is-claude-changing.is-glowing,.ces-ag-effort-value.ces-text-rise.is-glowing{animation:ces-claude-rise 0.3s cubic-bezier(0.2,0.85,0.25,1),ces-text-bloom 0.4s cubic-bezier(0.16,1,0.3,1) forwards}[data-testid='model-selector-panel'].ces-ag-panel-enhanced{max-height:26rem !important}.ces-ag-section,.ces-ag-section:focus,.ces-ag-section:focus-visible,.ces-ag-section *{outline:none !important;outline-width:0 !important;user-select:none !important;-webkit-user-select:none !important;-webkit-tap-highlight-color:transparent !important}.ces-ag-section{display:flex;flex-direction:column;flex-shrink:0;width:100%;box-sizing:border-box}.ces-ag-effort-row{display:flex;flex-direction:column;width:100%;box-sizing:border-box;padding:6px 8px 8px 8px;border-radius:6px;transition:box-shadow 0.2s ease,background-color 0.2s ease}.ces-ag-effort-row:hover{background-color:rgba(128,128,145,0.08)}.ces-ag-effort-row[data-ces-max='true'],[data-ces-effort-row='true'][data-ces-max='true']{box-shadow:inset 0 0 0 1px rgba(139,92,246,0.42),0 0 14px -4px rgba(139,92,246,0.45) !important;background-color:rgba(139,92,246,0.06)}.ces-ag-effort-head{display:flex;align-items:center;justify-content:space-between;width:100%;font-size:12px;line-height:16px}.ces-ag-effort-title{display:inline-flex;align-items:center;gap:6px;color:inherit;font-weight:500;opacity:0.9}.ces-ag-effort-value{position:relative;z-index:1;display:inline-block;font-size:12px;font-weight:600;transition:color 0.15s ease}.ces-ag-effort-value::after{content:'';position:absolute;top:50%;left:50%;width:52px;height:26px;border-radius:999px;transform:translate(-50%,-50%) scale(0.6);background:radial-gradient(ellipse at center,var(--ces-glow-color,rgba(168,85,247,0.85)) 0%,var(--ces-glow-color,rgba(168,85,247,0.45)) 45%,rgba(168,85,247,0) 75%);filter:blur(8px);pointer-events:none;opacity:0;z-index:-1}@keyframes ces-glow-flash{0%{opacity:0.95;transform:translate(-50%,-50%) scale(0.65);filter:blur(6px)}25%{opacity:1;transform:translate(-50%,-50%) scale(1.15);filter:blur(8px)}100%{opacity:0;transform:translate(-50%,-50%) scale(1.5);filter:blur(14px)}}@keyframes ces-text-bloom{0%{text-shadow:0 0 8px var(--ces-glow-color,#c084fc)}30%{text-shadow:0 0 14px var(--ces-glow-color,#c084fc),0 0 3px #ffffff}100%{text-shadow:none}}.ces-ag-effort-value.is-glowing{animation:ces-text-bloom 0.4s cubic-bezier(0.16,1,0.3,1) forwards}.ces-ag-effort-value.is-glowing::after{animation:ces-glow-flash 0.4s cubic-bezier(0.16,1,0.3,1) forwards}@media (prefers-reduced-motion:reduce){.ces-panel-shaking{animation:none !important}.ces-ag-effort-value.is-glowing{animation:none !important}.ces-ag-effort-value.is-glowing::after{animation:none !important}.ces-ag-effort-value.ces-text-rise{animation:none !important}.ces-ag-effort-value.is-claude-changing{animation:none !important}}html[data-ces-slider-ready='1'] [role='menu']:has([data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])),html[data-ces-slider-ready='1'] div[role='presentation']:has(>[role='menu'] [data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])){display:none !important;visibility:hidden !important;pointer-events:none !important;opacity:0 !important}html[data-ces-slider-ready='1'] [role='menuitem']:has([data-testid='model-selector-effort-group'])>span.shrink-0:last-child{display:none !important}html[data-ces-slider-ready='1'] [role='menuitem']:has([data-testid='model-selector-effort-group'])>.group-hover\\:hidden{display:flex !important}[role='menuitem'][data-ces-model-selected='true']{background-color:rgba(128,128,145,0.14)}.ces-set{position:fixed;z-index:2147483646;width:268px;padding:12px;border-radius:10px;background:rgba(24,24,28,0.96);color:#f4f4f6;border:1px solid rgba(255,255,255,0.12);box-shadow:0 12px 32px rgba(0,0,0,0.55);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;box-sizing:border-box;user-select:none}.ces-set-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.08);font-weight:600;font-size:12.5px}.ces-set-ver{font-size:11px;font-weight:400;opacity:0.55}.ces-set-group{margin-bottom:10px}.ces-set-label{margin-bottom:5px;font-size:11px;opacity:0.72}.ces-set-opts{display:flex;gap:4px}.ces-set-opt{flex:1;padding:5px 6px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);color:#d4d4d8;font-size:11.5px;cursor:pointer;text-align:center;transition:all 0.12s ease}.ces-set-opt:hover{background:rgba(255,255,255,0.1);color:#ffffff}.ces-set-opt.is-on{background:rgba(139,92,246,0.28);border-color:rgba(139,92,246,0.75);color:#ffffff;font-weight:600}.ces-set-actions{display:flex;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.08)}.ces-set-btn{flex:1;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#e4e4e7;font-size:11px;cursor:pointer}.ces-set-btn:hover{background:rgba(255,255,255,0.14)}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']{grid-template-rows:auto auto}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>[role='separator']{grid-row:1;grid-column:1}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>:is(.ces-ag-effort-row,[data-testid='orchestrator-effort-bar']){grid-row:2!important;grid-column:1!important}";
 function installStyles(doc) {
 var d = doc || (typeof document !== "undefined" ? document : null);
 if (!d || !d.head) return null;
@@ -1084,13 +1052,29 @@ effort: effort,
 effortLabel: AG_EFFORT_LABELS[effort] || match[2]
 };
 }
+function _isSubTrigger(el) {
+return el && typeof el.closest === "function" && Boolean(el.closest('[data-testid="subagent-tab-conversation"]'));
+}
 function findAntigravityTrigger(doc) {
 var d = doc || (typeof document !== "undefined" ? document : null);
-if (!d || typeof d.querySelector !== "function") return null;
-return (
-d.querySelector('[data-testid="model-selector-trigger"]') ||
-d.querySelector('button[aria-label^="Select model"]')
-);
+if (!d) return null;
+if (typeof d.querySelectorAll === "function") {
+var list = d.querySelectorAll('[data-testid="model-selector-trigger"],button[aria-label^="Select model"]'), fb = null;
+for (var i = 0; i < list.length; i += 1) {
+var el = list[i];
+if (!el || _isSubTrigger(el)) continue;
+if (typeof el.checkVisibility === "function") {
+try { if (!el.checkVisibility()) { if (!fb) fb = el; continue; } } catch (e) {}
+}
+return el;
+}
+if (fb) return fb;
+}
+if (typeof d.querySelector === "function") {
+var q = d.querySelector('[data-testid="model-selector-trigger"]') || d.querySelector('button[aria-label^="Select model"]');
+if (q && !_isSubTrigger(q)) return q;
+}
+return null;
 }
 function findAntigravityPanel(doc) {
 var d = doc || (typeof document !== "undefined" ? document : null);
@@ -1416,11 +1400,17 @@ return true;
 }
 if (typeof ctx.unwrappedSetSelectedModel === "function") {
 var d = typeof document !== "undefined" ? document : null, ed = d && d.querySelector ? d.querySelector('[contenteditable="true"]') : null;
-var ei = ed && ed.__lexicalEditor, ep = ei && Object.getPrototypeOf(ei), noop = function () {}, saved = [];
-[ep, ei && Object.prototype.hasOwnProperty.call(ei, "focus") ? ei : null, typeof HTMLElement !== "undefined" && HTMLElement.prototype, typeof Element !== "undefined" && Element.prototype].forEach(function (o) {
-if (o && typeof o.focus === "function") { saved.push([o, o.focus]); o.focus = noop; }
-});
-try { ctx.unwrappedSetSelectedModel(targetOption); } finally { saved.forEach(function (s) { s[0].focus = s[1]; }); }
+var prevFocus = d && d.activeElement, onFocus = function (ev) { if (ev && ev.stopPropagation) ev.stopPropagation(); if (ed && typeof ed.blur === "function") { try { ed.blur(); } catch (e) {} } };
+if (ed && typeof ed.addEventListener === "function") ed.addEventListener("focus", onFocus, true);
+try {
+ctx.unwrappedSetSelectedModel(targetOption);
+if (ed && d && d.activeElement === ed && typeof ed.blur === "function") {
+try { ed.blur(); } catch (e) {}
+if (prevFocus && prevFocus !== ed && typeof prevFocus.focus === "function") { try { prevFocus.focus(); } catch (e) {} }
+}
+} finally {
+if (ed && typeof ed.removeEventListener === "function") ed.removeEventListener("focus", onFocus, true);
+}
 if (typeof ctx.setIsOpen === "function") { try { ctx.setIsOpen(true); } catch (e) {} }
 return true;
 }
@@ -1623,29 +1613,21 @@ target: initPct
 }
 return motionState;
 }
+function _sa(el, k, v) { if (el && typeof el.setAttribute === "function" && el.getAttribute(k) !== v) el.setAttribute(k, v); }
+function _rowEl() {
+return opts.row || (container.closest && container.closest('.ces-ag-effort-row,[data-ces-effort-row="true"],[role="menuitem"]'));
+}
 function _syncHeadTrig(snap, showIdx) {
 var count = snap.count;
 var safeIdx = Math.max(0, Math.min(Math.max(0, count - 1), showIdx));
 var levelItem = snap.levels[safeIdx];
 var label = levelItem ? levelItem.label : "";
 var isMax = !snap.locked && count > 1 && safeIdx === count - 1 && !isOffLevel(label);
-var rowEl =
-opts.row ||
-(container.closest &&
-(container.closest(".ces-ag-effort-row") ||
-container.closest('[data-ces-effort-row="true"]') ||
-container.closest('[role="menuitem"]')));
+var rowEl = _rowEl();
 if (rowEl) {
-if (rowEl.getAttribute("data-ces-effort-row") !== "true") {
-rowEl.setAttribute("data-ces-effort-row", "true");
-}
-if (isMax) {
-if (rowEl.getAttribute("data-ces-max") !== "true") {
-rowEl.setAttribute("data-ces-max", "true");
-}
-} else if (rowEl.hasAttribute("data-ces-max")) {
-rowEl.removeAttribute("data-ces-max");
-}
+_sa(rowEl, "data-ces-effort-row", "true");
+if (isMax) _sa(rowEl, "data-ces-max", "true");
+else if (rowEl.hasAttribute("data-ces-max")) rowEl.removeAttribute("data-ces-max");
 }
 var valEl = opts.valueElement || (rowEl && findValueElement(rowEl));
 if (valEl) {
@@ -1810,22 +1792,16 @@ var safeIdx = Math.max(0, Math.min(Math.max(0, count - 1), showIdx));
 var levelItem = snap.levels[safeIdx];
 var label = levelItem ? levelItem.label : "";
 var theme = snap.theme || "codex";
-if (rootEl.getAttribute("data-theme") !== theme) rootEl.setAttribute("data-theme", theme);
-if (trackEl.getAttribute("data-theme") !== theme) trackEl.setAttribute("data-theme", theme);
-if (container && container.setAttribute && container.getAttribute("data-theme") !== theme) {
-container.setAttribute("data-theme", theme);
-}
+_sa(rootEl, "data-theme", theme);
+_sa(trackEl, "data-theme", theme);
+_sa(container, "data-theme", theme);
 // 设为 -1，防止 Radix/Base UI FocusScope 在重新打开菜单时将焦点自动抢到推理条上导致框选
-var nextTabIndex = "-1";
-if (rootEl.getAttribute("tabindex") !== nextTabIndex) rootEl.setAttribute("tabindex", nextTabIndex);
-if (rootEl.getAttribute("aria-valuemin") !== "0") rootEl.setAttribute("aria-valuemin", "0");
-var nextValMax = String(Math.max(0, count - 1));
-if (rootEl.getAttribute("aria-valuemax") !== nextValMax) rootEl.setAttribute("aria-valuemax", nextValMax);
-var nextValNow = String(safeIdx);
-if (rootEl.getAttribute("aria-valuenow") !== nextValNow) rootEl.setAttribute("aria-valuenow", nextValNow);
-if (rootEl.getAttribute("aria-valuetext") !== label) rootEl.setAttribute("aria-valuetext", label);
-var nextDisabled = snap.locked ? "true" : "false";
-if (rootEl.getAttribute("aria-disabled") !== nextDisabled) rootEl.setAttribute("aria-disabled", nextDisabled);
+_sa(rootEl, "tabindex", "-1");
+_sa(rootEl, "aria-valuemin", "0");
+_sa(rootEl, "aria-valuemax", String(Math.max(0, count - 1)));
+_sa(rootEl, "aria-valuenow", String(safeIdx));
+_sa(rootEl, "aria-valuetext", label);
+_sa(rootEl, "aria-disabled", snap.locked ? "true" : "false");
 if (snap.locked) {
 if (!trackEl.classList.contains("is-locked")) trackEl.classList.add("is-locked");
 } else if (trackEl.classList.contains("is-locked")) {
@@ -1865,12 +1841,10 @@ _lastEng = energy;
 _lastSlow = slowdown;
 var energyOn = energy > 0 ? "1" : "0";
 var energyStr = String(Math.round(energy * 1000) / 1000);
-if (rootEl.getAttribute("data-energy") !== energyOn) rootEl.setAttribute("data-energy", energyOn);
+_sa(rootEl, "data-energy", energyOn);
 rootEl.style.setProperty("--ces-energy", energyStr);
-if (container && container.setAttribute) {
-if (container.getAttribute("data-energy") !== energyOn) container.setAttribute("data-energy", energyOn);
-if (container.style) container.style.setProperty("--ces-energy", energyStr);
-}
+_sa(container, "data-energy", energyOn);
+if (container && container.style) container.style.setProperty("--ces-energy", energyStr);
 var starLayerOpacity = starLayerOpacityFor(energy);
 trackEl.style.setProperty("--ces-star-opacity", String(starLayerOpacity));
 starsEl.style.opacity = String(starLayerOpacity);
@@ -1930,12 +1904,7 @@ stepFrame(nowMs());
 }
 }
 function clearMaxEffects() {
-var rowEl =
-opts.row ||
-(container.closest &&
-(container.closest(".ces-ag-effort-row") ||
-container.closest('[data-ces-effort-row="true"]')));
-var valEl = opts.valueElement || findValueElement(rowEl);
+var valEl = opts.valueElement || findValueElement(_rowEl());
 if (valEl && valEl.classList && valEl.classList.contains("is-glowing")) {
 valEl.classList.remove("is-glowing");
 if (valEl.__cesGlowTimer) {
@@ -1947,12 +1916,7 @@ valEl.__cesGlowTimer = null;
 function triggerMaxEffects(isClaude) {
 if (prefersReducedMotion(win)) return;
 // "High" 文字到达最高档时的模糊光斑爆散 (约 0.4s 淡淡消失)
-var rowEl =
-opts.row ||
-(container.closest &&
-(container.closest(".ces-ag-effort-row") ||
-container.closest('[data-ces-effort-row="true"]')));
-var valEl = opts.valueElement || findValueElement(rowEl);
+var valEl = opts.valueElement || findValueElement(_rowEl());
 if (valEl && valEl.classList) {
 var glowColor = isClaude ? "rgba(196, 181, 253, 0.9)" : "rgba(168, 85, 247, 0.9)";
 if (valEl.style && typeof valEl.style.setProperty === "function") {
@@ -2063,17 +2027,12 @@ draftPct = ptrPct;
 draftIndex = nowIndex;
 var m = ensureMotion(snap);
 m.target = targetPct;
-// ★ 核心交互：只要滑过档位边界（或者点击了另一档位），不用等松手，立即切换官方真实档位 ★
-if (nowIndex !== _lastCmtIdx) {
-commitAtIndex(nowIndex, isInitialDown ? "down" : "drag");
-}
-// ★ 顺滑连续跟手：拖动中圆钮直接 1:1 跟随鼠标连续浮点位置，不卡顿、不硬吸附 ★
-// 松手（endDrag）时再以 ~100ms 轻快阻尼磁吸至最终离散档位圆心
+// ★ R1：拖动过程中仅做视觉即时跟手与档位文字/能量预览，不在途中连续触发宿主 MODEL_CHANGED 脉冲 ★
 m.x = targetPct;
 m.v = 0;
 m.a = 0;
 stopFrames();
-applyVisualPct(readSeatSnapshot(), m.x, nowIndex);
+applyVisualPct(snap, m.x, nowIndex);
 }
 function endDrag(clientX) {
 if (!dragging) return;
@@ -2102,7 +2061,8 @@ detentIndex = -1;
 lastPtrPct = null;
 ptrSpeed = 0;
 snapIndex = finalIndex;
-if (finalIndex !== _lastCmtIdx) {
+// 仅在松手或单次点击且最终档位相对 officialIndex 真正改变时提交 1 次
+if (finalIndex !== snap.officialIndex) {
 commitAtIndex(finalIndex, "release");
 }
 var m = ensureMotion(snap);
@@ -2212,13 +2172,8 @@ startFrames();
 function onBlockMenuClose(ev) {
 swallowEvent(ev);
 }
-trackEl.addEventListener("pointerdown", onPointerDown);
-trackEl.addEventListener("pointermove", onPointerMove);
-trackEl.addEventListener("pointerup", onPointerUp);
-trackEl.addEventListener("pointercancel", onPointerCancel);
-trackEl.addEventListener("lostpointercapture", onPointerCancel);
-trackEl.addEventListener("click", onBlockMenuClose);
-trackEl.addEventListener("mouseup", onBlockMenuClose);
+var _trkEvs = [["pointerdown", onPointerDown], ["pointermove", onPointerMove], ["pointerup", onPointerUp], ["pointercancel", onPointerCancel], ["lostpointercapture", onPointerCancel], ["click", onBlockMenuClose], ["mouseup", onBlockMenuClose]];
+for (var _ei = 0; _ei < _trkEvs.length; _ei += 1) trackEl.addEventListener(_trkEvs[_ei][0], _trkEvs[_ei][1]);
 rootEl.addEventListener("keydown", onKeyDown);
 function syncFromExternal() {
 if (destroyed || dragging) return;
@@ -2266,25 +2221,14 @@ destroyed = true;
 stopFrames();
 _stopClRaf();
 clearMaxEffects();
-var rowEl =
-opts.row ||
-(container.closest &&
-(container.closest(".ces-ag-effort-row") ||
-container.closest('[data-ces-effort-row="true"]')));
-var valEl = opts.valueElement || findValueElement(rowEl);
+var valEl = opts.valueElement || findValueElement(_rowEl());
 if (valEl && valEl.__cesRiseTimer) {
 clearTimeout(valEl.__cesRiseTimer);
 valEl.__cesRiseTimer = null;
 }
 if (typeof offSeat === "function") offSeat();
 if (typeof offSettings === "function") offSettings();
-trackEl.removeEventListener("pointerdown", onPointerDown);
-trackEl.removeEventListener("pointermove", onPointerMove);
-trackEl.removeEventListener("pointerup", onPointerUp);
-trackEl.removeEventListener("pointercancel", onPointerCancel);
-trackEl.removeEventListener("lostpointercapture", onPointerCancel);
-trackEl.removeEventListener("click", onBlockMenuClose);
-trackEl.removeEventListener("mouseup", onBlockMenuClose);
+for (var _ri = 0; _ri < _trkEvs.length; _ri += 1) trackEl.removeEventListener(_trkEvs[_ri][0], _trkEvs[_ri][1]);
 rootEl.removeEventListener("keydown", onKeyDown);
 if (rootEl.parentNode === container) {
 container.removeChild(rootEl);
@@ -2415,10 +2359,27 @@ fn();
 }
 });
 }
+function _withMut(fn) {
+_intMut = true;
+try { return fn(); }
+finally {
+if (observer && typeof observer.takeRecords === "function") { try { observer.takeRecords(); } catch (e) {} }
+_intMut = false;
+}
+}
+function _hasValidCtx(c) {
+return Boolean(c && ((c.effortIndex && c.effortIndex.size > 0) || (c.orchPlanners && c.orchPlanners.length > 0)));
+}
+function _setReady(on) {
+var r = doc && doc.documentElement;
+if (!r) return;
+if (on) { if (typeof r.setAttribute === "function" && r.getAttribute("data-ces-slider-ready") !== "1") r.setAttribute("data-ces-slider-ready", "1"); }
+else if (typeof r.removeAttribute === "function" && (!r.hasAttribute || r.hasAttribute("data-ces-slider-ready"))) r.removeAttribute("data-ces-slider-ready");
+}
 function getLiveContext() {
-var trigger = findAntigravityTrigger(doc);
 var panel = findAntigravityPanel(doc);
-return _rdAgFiber(trigger || panel);
+var trigger = findAntigravityTrigger(doc);
+return (panel && _rdAgFiber(panel)) || (trigger && _rdAgFiber(trigger)) || null;
 }
 function getActiveProfile(ctx) {
 if (!ctx) return null;
@@ -2514,7 +2475,7 @@ if (sib.style.fontWeight !== (rc ? "600" : "")) sib.style.fontWeight = rc ? "600
 var singleItems = panel.querySelectorAll('[data-testid="model-selector-item"]');
 for (var j = 0; j < singleItems.length; j += 1) {
 var sItem = singleItems[j];
-var sLabel = sItem.getAttribute("data-model-label") || "";
+var sLabel = sItem.getAttribute("data-model-label") || (sItem.textContent || "").trim();
 _mkSel(sItem, !profile.isOrchestrator && ((profile.modelOption && profile.modelOption.label === sLabel) || profile.baseName === sLabel));
 }
 }
@@ -2535,8 +2496,7 @@ var curProf = getActiveProfile(ctx);
 if (curProf && curProf.isOrchestrator && curProf.orchestratorTunable) {
 _orchPlanOvr = targetOpt;
 _commitAgOpt(ctx, targetOpt, true);
-_intMut = true;
-try { _syncAgDom(ctx, resolveModelEffortProfile(ctx, _actOptOvr || ctx.selectedModel, _effMap, targetOpt)); notifySeatListeners(); } finally { _intMut = false; }
+_withMut(function () { _syncAgDom(ctx, resolveModelEffortProfile(ctx, _actOptOvr || ctx.selectedModel, _effMap, targetOpt)); notifySeatListeners(); });
 return;
 }
 var parsed = parseModelLabel(targetOpt.label);
@@ -2547,13 +2507,9 @@ activeBaseOverride = parsed.base;
 _actOptOvr = targetOpt;
 _orchPlanOvr = null;
 _commitAgOpt(ctx, targetOpt);
-_intMut = true;
-try {
-var updatedProfile = resolveModelEffortProfile(ctx, targetOpt, _effMap);
-_syncAgDom(ctx, updatedProfile);
-} finally {
-_intMut = false;
-}
+_withMut(function () {
+_syncAgDom(ctx, resolveModelEffortProfile(ctx, targetOpt, _effMap));
+});
 },
 subscribe: function (fn) {
 _seatLs.add(fn);
@@ -2565,79 +2521,56 @@ _seatLs.delete(fn);
 function _bindPnl(panel) {
 if (!panel || panel.__cesAgBound) return;
 panel.__cesAgBound = true;
-function findClickedModelRow(target) {
+function resolveKeepOpenAction(target) {
 if (!target || typeof target.closest !== "function") return null;
-if (target.closest(".ces-ag-section, .ces-set")) return null;
-if (target.closest('button[aria-label="Edit Model"]')) return null;
-var singleRow = target.closest('[data-testid="model-selector-item"]');
-if (singleRow && panel.contains(singleRow)) {
-return { type: "single", row: singleRow, label: singleRow.getAttribute("data-model-label") || "" };
-}
+if (target.closest('.ces-ag-section,.ces-set,button[aria-label="Edit Model"],[data-testid="model-selector-orchestrator"],[data-testid="model-selector-item"],[aria-disabled="true"],[disabled]')) return null;
+var dd = target.closest('[data-disabled]');
+if (dd && dd.getAttribute("data-disabled") !== "false") return null;
 var menuItem = target.closest('[role="menuitem"]');
-if (!menuItem || !panel.contains(menuItem)) return null;
-var groupSpan = menuItem.querySelector('[data-testid="model-selector-effort-group"]');
-if (groupSpan) {
-var base = groupSpan.getAttribute("data-model-base") || (groupSpan.textContent || "").trim();
-return { type: "group", row: menuItem, base: base };
-}
-return null;
-}
-// 捕获阶段拦截模型行 pointerup / mouseup，阻止 @base-ui/react 菜单因抬起指针而自动关闭
-function onPointerOrMouseUpCapture(ev) {
-if (ev.target && typeof ev.target.closest === "function" && ev.target.closest(".ces-ag-section")) {
-return;
-}
-var hit = findClickedModelRow(ev.target);
-if (!hit) return;
-ev.stopPropagation();
-if (typeof ev.stopImmediatePropagation === "function") ev.stopImmediatePropagation();
-}
-// 捕获阶段拦截模型行 click：切换选中模型但保持菜单常开，下方滑条即时联动该模型的档位
-function onClickCapture(ev) {
-if (ev.target && typeof ev.target.closest === "function" && ev.target.closest(".ces-ag-section")) {
-return;
-}
-var hit = findClickedModelRow(ev.target);
-if (!hit) return;
-ev.preventDefault();
-ev.stopPropagation();
-if (typeof ev.stopImmediatePropagation === "function") ev.stopImmediatePropagation();
+if (menuItem && menuItem.disabled) return null;
+var gs = menuItem && panel.contains(menuItem) && menuItem.querySelector('[data-testid="model-selector-effort-group"]');
+if (!gs) return null;
+var base = (gs.getAttribute("data-model-base") || gs.textContent || "").trim();
+var bp = parseModelLabel(base);
+if (bp && bp.base) base = bp.base;
+if (!base || _isOrch(base)) return null;
 var ctx = getLiveContext();
-if (!ctx) return;
-var targetOption = null;
-if (hit.type === "group" && hit.base) {
-var prof = resolveModelEffortProfile(ctx, hit.base, _effMap);
-if (prof && prof.modelOption) {
-targetOption = prof.modelOption;
-activeBaseOverride = hit.base;
-_actOptOvr = targetOption;
+if (!ctx || (typeof ctx.setModelConfigByLabelForConversation !== "function" && typeof ctx.unwrappedSetSelectedModel !== "function" && typeof ctx.setCurrentModelConfigByLabel !== "function")) return null;
+var prof = resolveModelEffortProfile(ctx, base, _effMap);
+if (!prof || prof.locked || !prof.levels || prof.levels.length < 2) return null;
+var opt = prof.modelOption;
+if (!opt || opt.isCustom || opt.disabled || !opt.label) return null;
+if (Array.isArray(ctx.modelOptions) && ctx.modelOptions.length) {
+var found = false;
+for (var i = 0; i < ctx.modelOptions.length; i += 1) {
+var o = ctx.modelOptions[i];
+if (o && !o.isCustom && !o.disabled && (o === opt || o.label === opt.label)) { found = true; break; }
 }
-} else if (hit.type === "single" && hit.label) {
-var optsList = Array.isArray(ctx.modelOptions) ? ctx.modelOptions : [];
-for (var i = 0; i < optsList.length; i += 1) {
-if (optsList[i] && optsList[i].label === hit.label) {
-targetOption = optsList[i];
-break;
+if (!found) return null;
 }
+var cur = getActiveProfile(ctx);
+if (cur && !cur.isOrchestrator && cur.baseName === prof.baseName) return null;
+return { ctx: ctx, base: prof.baseName || base, targetOption: opt };
 }
-if (targetOption) {
-activeBaseOverride = hit.label;
-_actOptOvr = targetOption;
+// 严格 Fail-Open：仅确认切到新的可调多档位模型时才拦 pointerup/mouseup/click 保持菜单常开
+function onPointerOrMouseUpCapture(ev) {
+if (!resolveKeepOpenAction(ev.target)) return;
+_stp(ev);
 }
-}
-if (targetOption) {
+function onClickCapture(ev) {
+var act = resolveKeepOpenAction(ev.target);
+if (!act) return;
+if (!_commitAgOpt(act.ctx, act.targetOption)) return;
+ev.preventDefault();
+_stp(ev);
+activeBaseOverride = act.base;
+_actOptOvr = act.targetOption;
 _orchPlanOvr = null;
-tracePush("ag-select-model-in-menu", { label: targetOption.label });
-_commitAgOpt(ctx, targetOption);
-_intMut = true;
-try {
-var nextProf = resolveModelEffortProfile(ctx, targetOption, _effMap);
-_syncAgDom(ctx, nextProf);
+tracePush("ag-select-model-in-menu", { label: act.targetOption.label });
+_withMut(function () {
+_syncAgDom(act.ctx, resolveModelEffortProfile(act.ctx, act.targetOption, _effMap));
 notifySeatListeners();
-} finally {
-_intMut = false;
-}
-}
+});
 }
 // 拦截 View Usage 触发项的划过展开，增加 0.3s (300ms) 停留防误触展开延迟
 var usageHoverTimer = null;
@@ -2742,36 +2675,17 @@ delete panel.__cesAgBound;
 };
 }
 function _unmntSec() {
-if (activePanel && typeof activePanel.__cesAgResetUsageHover === "function") {
-try {
-activePanel.__cesAgResetUsageHover();
-} catch (e) {}
-}
-if (activePanel && typeof activePanel.__cesAgUnbindPanel === "function") {
-try {
-activePanel.__cesAgUnbindPanel();
-} catch (e) {}
+_setReady(false);
+if (activePanel) {
+try { if (typeof activePanel.__cesAgResetUsageHover === "function") activePanel.__cesAgResetUsageHover(); } catch (e) {}
+try { if (typeof activePanel.__cesAgUnbindPanel === "function") activePanel.__cesAgUnbindPanel(); } catch (e) {}
 }
 if (doc && doc.activeElement && activeSection && activeSection.contains(doc.activeElement)) {
-try {
-doc.activeElement.blur();
-} catch (e) {}
+try { doc.activeElement.blur(); } catch (e) {}
 }
-if (activeMount) {
-activeMount.unmount();
-activeMount = null;
-}
-if (activeSection && activeSection.parentNode) {
-activeSection.parentNode.removeChild(activeSection);
-}
-activeSection = null;
-activeRow = null;
-activeValueEl = null;
-activeHostEl = null;
-activePanel = null;
-activeBaseOverride = null;
-_actOptOvr = null;
-_orchPlanOvr = null;
+if (activeMount) { activeMount.unmount(); activeMount = null; }
+if (activeSection && activeSection.parentNode) activeSection.parentNode.removeChild(activeSection);
+activeSection = activeRow = activeValueEl = activeHostEl = activePanel = activeBaseOverride = _actOptOvr = _orchPlanOvr = null;
 }
 function _mntSec(panel, ctx) {
 panel.classList.add("ces-ag-panel-enhanced");
@@ -2830,50 +2744,41 @@ seat: agSeatAdapter,
 document: doc,
 window: win,
 onVisualChange: function (vState) {
-_intMut = true;
-try {
+_withMut(function () {
 var liveCtx = getLiveContext();
-if (liveCtx) {
-_syncAgDom(liveCtx, getActiveProfile(liveCtx));
-} else {
-syncTriggerColor(doc, vState.label, vState.index, vState.count, vState.isMax, false);
-}
-} finally {
-_intMut = false;
-}
+if (liveCtx) _syncAgDom(liveCtx, getActiveProfile(liveCtx));
+else syncTriggerColor(doc, vState.label, vState.index, vState.count, vState.isMax, false);
+});
 }
 });
 try {
 if (win && typeof win.dispatchEvent === "function" && typeof win.Event === "function") {
 win.dispatchEvent(new win.Event("resize"));
 }
-} catch (err) {
-// 忽略 resize 触发失败
-}
+} catch (err) {}
 }
 function scan() {
 if (_intMut) return;
-_intMut = true;
-try {
+_withMut(function () {
 var ctx = getLiveContext();
 var panel = findAntigravityPanel(doc);
 if (!panel) {
-if (activeSection) {
-_unmntSec();
+if (activeSection || activePanel) _unmntSec();
+else _setReady(false);
+if (ctx) _syncAgDom(ctx, resolveModelEffortProfile(ctx, ctx.selectedModel, _effMap));
+return;
 }
-if (ctx) {
-_syncAgDom(ctx, resolveModelEffortProfile(ctx, ctx.selectedModel, _effMap));
-}
+if (!_hasValidCtx(ctx)) {
+if (activeSection || activePanel) _unmntSec();
+else _setReady(false);
 return;
 }
 // 若外部修改了 selectedModel，清除临时 override 对齐最新模型
-if (ctx && ctx.selectedModel && _actOptOvr) {
-if (ctx.selectedModel.label === _actOptOvr.label) {
+if (ctx.selectedModel && _actOptOvr && ctx.selectedModel.label === _actOptOvr.label) {
 _actOptOvr = null;
 activeBaseOverride = null;
 }
-}
-if (ctx && _orchPlanOvr) {
+if (_orchPlanOvr) {
 var lp = _isOrch(ctx.selectedModel) ? _resOrch(ctx) : null;
 if (!lp || (lp.opt && lp.opt.value === _orchPlanOvr.value)) _orchPlanOvr = null;
 }
@@ -2886,13 +2791,10 @@ var tSpan = activeSection.querySelector(".ces-ag-effort-title");
 if (tSpan && tSpan.textContent !== nextTitle) tSpan.textContent = nextTitle;
 if (activeMount && typeof activeMount.refresh === "function") activeMount.refresh();
 }
-if (ctx) {
+_setReady(Boolean(activeMount && activeSection));
 _syncAgDom(ctx, getActiveProfile(ctx));
-}
 notifySeatListeners();
-} finally {
-_intMut = false;
-}
+});
 }
 scan();
 var MO = opts.MutationObserver || (win && win.MutationObserver) || (typeof MutationObserver === "function" ? MutationObserver : null);
@@ -2949,6 +2851,8 @@ win.__agCodexEffortSliderInstance.stop();
 }
 }
 installStyles(doc);
+var _onStoInv = function (ev) { if (!ev || ev.key === SETTINGS_KEY || ev.key === LEGACY_SETTINGS_KEY) _invCfg(); };
+if (win && typeof win.addEventListener === "function") { win.addEventListener("storage", _onStoInv); win.addEventListener(SETTINGS_EVENT, _invCfg); }
 var settingsUi = opts.disableContextMenuSettings ? { stop: function () {} } : installSettingsUi({ document: doc, window: win });
 var agObs = installAntigravityObserver({ document: doc, window: win, MutationObserver: opts.MutationObserver });
 var _actGenMnt = null;
@@ -2982,6 +2886,8 @@ _actGenMnt = null;
 menuObs.stop();
 agObs.stop();
 settingsUi.stop();
+if (win && typeof win.removeEventListener === "function") { win.removeEventListener("storage", _onStoInv); win.removeEventListener(SETTINGS_EVENT, _invCfg); }
+_invCfg();
 if (win && win.__agCodexEffortSliderInstance === instance) {
 delete win.__agCodexEffortSliderInstance;
 }
