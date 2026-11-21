@@ -123,6 +123,10 @@
   };
   const ra = (e, k) => { if (e && e.removeAttribute && hasAttr(e, k)) e.removeAttribute(k); };
   const raList = (e, ks) => { for (let i = 0; i < ks.length; i++) ra(e, ks[i]); };
+  const markNoTr = (e) => {
+    for (const s of 'translate=no,data-no-translate=true,data-ag-localization-skip=true,data-agy-no-translate=true,data-antigravity-zh-skip=1'.split(',')) { const p = s.split('='); sa(e, p[0], p[1]); }
+    return e;
+  };
   const ce = (d, t, cls) => { const e = d.createElement(t); if (cls) e.className = cls; return e; };
   const ctn = (d, s) => d.createTextNode(s);
   const ap = (p, c) => p.appendChild(c);
@@ -1650,16 +1654,16 @@
     if (ov) return ov;
 
     const t = getClientPack();
-    ov = ce(doc, 'div', C_OV);
+    ov = markNoTr(ce(doc, 'div', C_OV));
     sa(ov, 'data-op-thought', '1');
     sa(ov, 'data-prism-ignore', '1');
     sa(ov, 'data-ag-no-i18n', '');
 
-    const body = ce(doc, 'span', C_BD);
+    const body = markNoTr(ce(doc, 'span', C_BD));
     sa(body, 'data-ag-no-i18n', '');
     ap(ov, body);
 
-    const fb = ce(doc, 'span', C_FB);
+    const fb = markNoTr(ce(doc, 'span', C_FB));
     sa(fb, 'data-testid', 'thought-fallback-badge');
     fb.hidden = true;
     stc(fb, t[2]);
@@ -1667,7 +1671,7 @@
     if (fb[K_ST]) fb[K_ST].display = 'none';
     ap(ov, fb);
 
-    const rb = ce(doc, 'button', C_RB);
+    const rb = markNoTr(ce(doc, 'button', C_RB));
     rb.type = 'button';
     sa(rb, 'data-no-press-spring', '1');
     sa(rb, 'data-testid', 'thought-retranslate-btn');
@@ -1682,7 +1686,7 @@
     });
     ap(ov, rb);
 
-    const tb = ce(doc, 'button', C_TB);
+    const tb = markNoTr(ce(doc, 'button', C_TB));
     tb.type = 'button';
     sa(tb, 'data-no-press-spring', '1');
     const showingRaw = ga(panel, A_SRW) === '1';
@@ -1745,7 +1749,7 @@
       let hint = findChildByClass(body, C_PH);
       if (!hint) {
         clearEl(body);
-        hint = ap(body, ce(docOf(panel), 'span', C_PH));
+        hint = ap(body, markNoTr(ce(docOf(panel), 'span', C_PH)));
       }
       if (pendingKind) sa(hint, 'data-pending-kind', pendingKind);
       if (tc(hint) !== message) stc(hint, message);
@@ -1791,12 +1795,12 @@
     if (body) {
       ra(body, 'data-raw-zh');
       clearEl(body);
-      const errBar = ce(doc, 'span', C_EB);
+      const errBar = markNoTr(ce(doc, 'span', C_EB));
       const errTxt = ce(doc, 'span', C_ET);
       stc(errTxt, t[5]);
       ap(errBar, errTxt);
 
-      const retryBtn = ce(doc, 'button', C_RT);
+      const retryBtn = markNoTr(ce(doc, 'button', C_RT));
       retryBtn.type = 'button';
       sa(retryBtn, 'data-testid', 'thought-retry-btn');
       sa(retryBtn, 'data-no-press-spring', '1');

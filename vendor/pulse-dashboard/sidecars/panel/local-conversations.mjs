@@ -7,10 +7,22 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 export const conversationId=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const digest=value=>createHash('sha256').update(value).digest('hex');
-async function stamp(file,directory=false){
- try{const s=await lstat(file,{bigint:true});if(s.isSymbolicLink()||!(directory?s.isDirectory():s.isFile()))return null;
-  return [s.size,s.mtimeNs,s.ctimeNs,s.ino].map(String).join(':');
- }catch(e){if(e.code==='ENOENT'||e.code==='ENOTDIR')return null;throw e;}
+const DISCOVERY_LSTAT_CONCURRENCY = 24;
+async function stampInfo(file, directory = false) {
+ try {
+  const s = await lstat(file, { bigint: true });
+  if (s.isSymbolicLink() || !(directory ? s.isDirectory() : s.isFile())) return null;
+  const token = [s.size, s.mtimeNs, s.ctimeNs, s.ino].map(String).join(':');
+  const mtimeMs = Number(s.mtimeNs) / 1e6;
+  return { token, mtimeMs: Number.isFinite(mtimeMs) && mtimeMs > 0 ? mtimeMs : 0 };
+ } catch (e) {
+  if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return null;
+  throw e;
+ }
+}
+async function stamp(file, directory = false) {
+ const info = await stampInfo(file, directory);
+ return info ? info.token : null;
 }
 export async function discoverLocalConversations({host,home=homedir(),limit=20000}={}){
  if(!['app','ide'].includes(host))throw Error('Explicit conversation host is required');
@@ -33,18 +45,48 @@ export async function discoverLocalConversations({host,home=homedir(),limit=2000
   }catch(e){if(!['ENOENT','ENOTDIR'].includes(e.code))errors++;}
   if(visited>limit)break;
  }
+ const entries=[...files.entries()];
+ const results=new Array(entries.length).fill(null);
+ let cursor=0;
+ const workerCount=Math.min(DISCOVERY_LSTAT_CONCURRENCY,entries.length);
+ const runWorker=async()=>{
+  while(true){
+   const idx=cursor++;
+   if(idx>=entries.length)return;
+   const [id,parts]=entries[idx];
+   const readSignatureWithMeta=async()=>{
+    const values=[];
+    let dbMtimeMs=0,fallbackMtimeMs=0;
+    for(const {file,directory}of parts){
+     const info=await stampInfo(file,directory);
+     if(info===null)return null;
+     values.push([directory?'brain':'db',info.token]);
+     if(!directory){
+      if(info.mtimeMs>dbMtimeMs)dbMtimeMs=info.mtimeMs;
+      const walInfo=await stampInfo(file+'-wal');
+      values.push(['wal',walInfo?walInfo.token:null]);
+     }else if(info.mtimeMs>fallbackMtimeMs){
+      fallbackMtimeMs=info.mtimeMs;
+     }
+    }
+    return {signature:digest(JSON.stringify(values)),mtimeMs:dbMtimeMs>0?dbMtimeMs:fallbackMtimeMs,dbMtimeMs};
+   };
+   const readSignature=async()=>{
+    const meta=await readSignatureWithMeta();
+    return meta?meta.signature:null;
+   };
+   try{
+    const meta=await readSignatureWithMeta();
+    if(meta)results[idx]={id,signature:meta.signature,mtimeMs:meta.mtimeMs,dbMtimeMs:meta.dbMtimeMs,readSignature};
+   }catch{errors++;}
+  }
+ };
+ if(workerCount>0){
+  await Promise.all(Array.from({length:workerCount},()=>runWorker()));
+ }
  const conversations=[];
- for(const [id,parts]of files){
-  const readSignature=async()=>{
-   const values=[];
-   for(const {file,directory}of parts){const value=await stamp(file,directory);if(value===null)return null;
-    values.push([directory?'brain':'db',value]);
-    if(!directory)values.push(['wal',await stamp(file+'-wal')]);
-   }
-   return digest(JSON.stringify(values));
-  };
-  try{const signature=await readSignature();if(signature)conversations.push({id,signature,readSignature});}
-  catch{errors++;}
+ for(let i=0;i<results.length;i++){
+  if(results[i])conversations.push(results[i]);
  }
  return {conversations,errors};
 }

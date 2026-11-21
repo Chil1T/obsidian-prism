@@ -4,9 +4,17 @@
 // - Live Upstream Discovery: GET /v1/models & real-time latency test message
 // - Privacy & Open-Source Cleanliness: Keys & custom prompts live strictly in ~/.gemini/config/ (0600), NEVER in Git!
 
+import { execFile, execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
+import https from 'node:https';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable } from 'node:stream';
+import tls from 'node:tls';
+import zlib from 'node:zlib';
 
 export const SYSTEM_PROMPTS = Object.freeze({
   technical:
@@ -68,8 +76,9 @@ export function normalizeTargetLang(lang) {
 }
 
 const KEY_REDACT_RE =
-  /(sk-[A-Za-z0-9_\-]{6,}|gsk_[A-Za-z0-9_\-]{12,}|hf_[A-Za-z0-9_\-]{12,}|pplx-[A-Za-z0-9_\-]{12,}|csk-[A-Za-z0-9_\-]{12,}|nvapi-[A-Za-z0-9_\-]{12,}|AIza[A-Za-z0-9_\-]{12,}|xai-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+[A-Za-z0-9._\-:+/=]{6,})/gi;
+  /(sk-[A-Za-z0-9_\-]{6,}|gsk_[A-Za-z0-9_\-]{12,}|hf_[A-Za-z0-9_\-]{12,}|pplx-[A-Za-z0-9_\-]{12,}|csk-[A-Za-z0-9_\-]{12,}|nvapi-[A-Za-z0-9_\-]{12,}|AIza[A-Za-z0-9_\-]{12,}|xai-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+[A-Za-z0-9._\-:+/=]{6,}|(?:Proxy-)?Authorization\s*:\s*Basic\s+[A-Za-z0-9+/=]{4,})/gi;
 const URL_KEY_PARAM_RE = /([?&](?:api_key|apikey|key|token|access_token)=)[^&\s"'<>]+/gi;
+const URL_USERINFO_PASS_RE = /(https?:\/\/[^:@\s/"'<>]+:)[^@\s/"'<>]+@/gi;
 
 const BLOCKED_AI_PORTS = new Set([
   21, 22, 23, 25, 53, 110, 135, 139, 143, 445, 1433, 3306, 3389, 5432, 6379, 11211, 27017,
@@ -218,7 +227,8 @@ export function maskApiKey(rawKey) {
 export function redactSecrets(text, explicitKey = '') {
   let out = String(text || '')
     .replace(KEY_REDACT_RE, '***REDACTED***')
-    .replace(URL_KEY_PARAM_RE, '$1***REDACTED***');
+    .replace(URL_KEY_PARAM_RE, '$1***REDACTED***')
+    .replace(URL_USERINFO_PASS_RE, '$1***REDACTED***@');
   const k = String(explicitKey || '').trim();
   if (k && k.length >= 4 && out.includes(k)) {
     out = out.split(k).join('***REDACTED***');
@@ -453,13 +463,453 @@ export function computePromptStyleTag(store = {}) {
   return preset === 'concise' ? 'ai_concise' : 'ai_technical';
 }
 
+export const SYSTEM_PROXY_CACHE_TTL_MS = 30_000;
+const MAX_CONNECT_HEADER_BYTES = 16 * 1024;
+
+export function parseProxyUrl(rawProxy) {
+  const s = String(rawProxy || '').trim();
+  if (!s || /[\r\n\0]/.test(s)) return null;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s)) {
+    if (!/^https?:\/\//i.test(s)) return null;
+  } else if (s.includes('=') || /^[a-zA-Z][a-zA-Z0-9+.-]*:(?!\d+$)/.test(s)) {
+    // 排除未拆分的协议前缀（如 socks=127.0.0.1:1080 或 socks5:host:port）
+    return null;
+  }
+  const withScheme = /^https?:\/\//i.test(s) ? s : `http://${s}`;
+  try {
+    const u = new URL(withScheme);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    const hostname = u.hostname.replace(/^\[|\]$/g, '');
+    if (!hostname || /[\r\n\s=\0]/.test(hostname)) return null;
+    const port = u.port ? Number(u.port) : u.protocol === 'https:' ? 443 : 80;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+    let username = '';
+    let password = '';
+    try {
+      username = decodeURIComponent(u.username || '');
+    } catch {
+      username = u.username || '';
+    }
+    try {
+      password = decodeURIComponent(u.password || '');
+    } catch {
+      password = u.password || '';
+    }
+    return {
+      href: u.href,
+      protocol: u.protocol,
+      hostname,
+      port,
+      username,
+      password,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function parseNoProxyList(rawList) {
+  if (Array.isArray(rawList)) {
+    return rawList.map((s) => String(s || '').trim()).filter(Boolean);
+  }
+  return String(rawList || '')
+    .split(/[,;\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function isLoopbackOrLocalHost(rawHost) {
+  const host = String(rawHost || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (!host) return true;
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+  if (/^127(?:\.\d{1,3}){3}$/.test(host)) return true;
+  if (host === '::1' || host === '0:0:0:0:0:0:0:1') return true;
+  if (host.includes(':')) {
+    const h = parseIpv6Hextets(host);
+    if (h) {
+      if (h[0] === 0 && h[1] === 0 && h[2] === 0 && h[3] === 0 && h[4] === 0 && h[5] === 0 && h[6] === 0 && h[7] === 1) {
+        return true;
+      }
+      if (h[0] === 0 && h[1] === 0 && h[2] === 0 && h[3] === 0 && h[4] === 0 && h[5] === 0xffff && (h[6] >> 8) === 127) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function matchIpv4Cidr(host, rule) {
+  const m = /^(\d{1,3}(?:\.\d{1,3}){0,3})\/(\d{1,2})$/.exec(rule);
+  if (!m) return false;
+  const hostOctets = parseIpv4Octets(host);
+  if (!hostOctets) return false;
+  const prefix = Number(m[2]);
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) return false;
+  const rawParts = m[1].split('.');
+  while (rawParts.length < 4) rawParts.push('0');
+  const ruleOctets = parseIpv4Octets(rawParts.join('.'));
+  if (!ruleOctets) return false;
+  const hostInt = (((hostOctets[0] << 24) >>> 0) | (hostOctets[1] << 16) | (hostOctets[2] << 8) | hostOctets[3]) >>> 0;
+  const ruleInt = (((ruleOctets[0] << 24) >>> 0) | (ruleOctets[1] << 16) | (ruleOctets[2] << 8) | ruleOctets[3]) >>> 0;
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+  return (hostInt & mask) === (ruleInt & mask);
+}
+
+function splitRuleHostPort(pat) {
+  if (pat.startsWith('[')) {
+    const closeIdx = pat.indexOf(']');
+    if (closeIdx > 0) {
+      const h = pat.slice(1, closeIdx);
+      const rest = pat.slice(closeIdx + 1);
+      if (rest.startsWith(':') && /^\d+$/.test(rest.slice(1))) {
+        return { ruleHost: h, rulePort: Number(rest.slice(1)) };
+      }
+      return { ruleHost: h, rulePort: null };
+    }
+  }
+  const firstColon = pat.indexOf(':');
+  const lastColon = pat.lastIndexOf(':');
+  if (firstColon > 0 && firstColon === lastColon) {
+    const portStr = pat.slice(lastColon + 1);
+    if (/^\d+$/.test(portStr)) {
+      return { ruleHost: pat.slice(0, lastColon), rulePort: Number(portStr) };
+    }
+  }
+  return { ruleHost: pat, rulePort: null };
+}
+
+export function shouldBypassProxy(targetUrl, bypassEntries = []) {
+  let parsed;
+  try {
+    parsed = targetUrl instanceof URL ? targetUrl : new URL(String(targetUrl || ''));
+  } catch {
+    return true;
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  const targetPort = parsed.port ? Number(parsed.port) : parsed.protocol === 'https:' ? 443 : 80;
+  if (isLoopbackOrLocalHost(host)) return true;
+
+  const list = parseNoProxyList(bypassEntries);
+  for (const rawEntry of list) {
+    const pat = rawEntry.toLowerCase();
+    if (!pat) continue;
+    if (pat === '*') return true;
+    if (pat === '<local>') {
+      if (!host.includes('.')) return true;
+      continue;
+    }
+    if (pat.includes('/') && matchIpv4Cidr(host, pat)) {
+      return true;
+    }
+    const { ruleHost: rawRuleHost, rulePort } = splitRuleHostPort(pat);
+    if (rulePort !== null && rulePort !== targetPort) continue;
+    const ruleHost = rawRuleHost.replace(/^\[|\]$/g, '').replace(/\.$/, '');
+    if (!ruleHost) continue;
+    if (ruleHost.includes('*')) {
+      const escaped = ruleHost.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+      if (new RegExp(`^${escaped}$`, 'i').test(host)) return true;
+      continue;
+    }
+    if (ruleHost.startsWith('.')) {
+      const suffix = ruleHost.slice(1);
+      if (suffix && (host === suffix || host.endsWith(`.${suffix}`))) return true;
+      continue;
+    }
+    if (net.isIP(ruleHost)) {
+      if (host === ruleHost) return true;
+    } else if (host === ruleHost || host.endsWith(`.${ruleHost}`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function parseWindowsRegProxyOutput(stdout) {
+  const empty = { enabled: false, http: null, https: null, bypass: [] };
+  const text = Buffer.isBuffer(stdout) ? stdout.toString('utf8') : String(stdout || '');
+  if (!text.trim()) return empty;
+
+  let proxyEnable = 0;
+  let proxyServerRaw = '';
+  let proxyOverrideRaw = '';
+
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^\s*([A-Za-z0-9_]+)\s+REG_[A-Z_]+\s*(.*)$/i.exec(line);
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    const val = m[2].trim();
+    if (key === 'proxyenable') {
+      proxyEnable = /^0x/i.test(val) ? parseInt(val, 16) : Number(val);
+    } else if (key === 'proxyserver') {
+      proxyServerRaw = val;
+    } else if (key === 'proxyoverride') {
+      proxyOverrideRaw = val;
+    }
+  }
+
+  if (proxyEnable !== 1 || !proxyServerRaw) return empty;
+
+  const bypass = parseNoProxyList(proxyOverrideRaw);
+  let httpProxy = null;
+  let httpsProxy = null;
+
+  if (proxyServerRaw.includes('=')) {
+    for (const part of proxyServerRaw.split(';')) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const kv = /^([a-z0-9_-]+)=(.+)$/i.exec(trimmed);
+      if (!kv) continue;
+      const proto = kv[1].toLowerCase();
+      const addr = kv[2].trim();
+      if (proto === 'http') {
+        httpProxy = parseProxyUrl(addr);
+      } else if (proto === 'https') {
+        httpsProxy = parseProxyUrl(addr);
+      }
+      // socks / socks4 / socks5 / ftp 等非 HTTP(S) 代理安全忽略不崩溃
+    }
+  } else {
+    const shared = parseProxyUrl(proxyServerRaw);
+    httpProxy = shared;
+    httpsProxy = shared;
+  }
+
+  return {
+    enabled: Boolean(httpProxy || httpsProxy),
+    http: httpProxy,
+    https: httpsProxy,
+    bypass,
+  };
+}
+
+export function parseMacScutilProxyOutput(stdout) {
+  const empty = { enabled: false, http: null, https: null, bypass: [] };
+  const text = Buffer.isBuffer(stdout) ? stdout.toString('utf8') : String(stdout || '');
+  if (!text.trim()) return empty;
+
+  const map = new Map();
+  const bypass = [];
+  let inExceptions = false;
+
+  for (const line of text.split(/\r?\n/)) {
+    if (inExceptions) {
+      if (/^\s*\}/.test(line)) {
+        inExceptions = false;
+        continue;
+      }
+      const arrItem = /^\s*\d+\s*:\s*(.+)$/.exec(line);
+      if (arrItem && arrItem[1].trim()) {
+        bypass.push(arrItem[1].trim());
+      }
+      continue;
+    }
+    if (/^\s*ExceptionsList\s*:\s*<array>\s*\{/i.test(line)) {
+      inExceptions = true;
+      continue;
+    }
+    const m = /^\s*([A-Za-z0-9_]+)\s*:\s*(.+)$/.exec(line);
+    if (!m) continue;
+    const val = m[2].trim();
+    if (val.startsWith('<')) continue;
+    map.set(m[1], val);
+  }
+
+  const buildProxy = (enableKey, hostKey, portKey) => {
+    if (map.get(enableKey) !== '1') return null;
+    const rawHost = (map.get(hostKey) || '').trim();
+    if (!rawHost) return null;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(rawHost)) {
+      return parseProxyUrl(rawHost);
+    }
+    const rawPort = (map.get(portKey) || '').trim();
+    const formattedHost = rawHost.includes(':') && !rawHost.startsWith('[') ? `[${rawHost}]` : rawHost;
+    return parseProxyUrl(rawPort ? `${formattedHost}:${rawPort}` : formattedHost);
+  };
+
+  const httpProxy = buildProxy('HTTPEnable', 'HTTPProxy', 'HTTPPort');
+  const httpsProxy = buildProxy('HTTPSEnable', 'HTTPSProxy', 'HTTPSPort');
+
+  return {
+    enabled: Boolean(httpProxy || httpsProxy),
+    http: httpProxy,
+    https: httpsProxy,
+    bypass,
+  };
+}
+
+export function detectOsSystemProxy(opts = {}) {
+  const platform = opts.platform || process.platform;
+  const execFn = typeof opts.execFileSyncFn === 'function' ? opts.execFileSyncFn : execFileSync;
+  const empty = { enabled: false, http: null, https: null, bypass: [] };
+  try {
+    if (platform === 'win32') {
+      const raw = execFn(
+        'reg',
+        ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'],
+        { encoding: 'utf8', timeout: 1500, windowsHide: true }
+      );
+      return parseWindowsRegProxyOutput(raw);
+    }
+    if (platform === 'darwin') {
+      const raw = execFn('scutil', ['--proxy'], { encoding: 'utf8', timeout: 1500 });
+      return parseMacScutilProxyOutput(raw);
+    }
+  } catch {
+    return empty;
+  }
+  return empty;
+}
+
+export async function detectOsSystemProxyAsync(opts = {}) {
+  const platform = opts.platform || process.platform;
+  const empty = { enabled: false, http: null, https: null, bypass: [] };
+  const runAsync = (file, args, execOpts) => {
+    if (typeof opts.execFileAsyncFn === 'function') {
+      return Promise.resolve(opts.execFileAsyncFn(file, args, execOpts));
+    }
+    const fn = typeof opts.execFileFn === 'function' ? opts.execFileFn : execFile;
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const done = (err, stdout) => {
+        if (settled) return;
+        settled = true;
+        if (err) reject(err);
+        else resolve(stdout);
+      };
+      try {
+        const ret = fn(file, args, execOpts, done);
+        if (ret && typeof ret.then === 'function') {
+          ret.then((out) => done(null, out), (err) => done(err));
+        }
+      } catch (err) {
+        done(err);
+      }
+    });
+  };
+  try {
+    if (platform === 'win32') {
+      const raw = await runAsync(
+        'reg',
+        ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'],
+        { encoding: 'utf8', timeout: 1500, windowsHide: true }
+      );
+      return parseWindowsRegProxyOutput(raw);
+    }
+    if (platform === 'darwin') {
+      const raw = await runAsync('scutil', ['--proxy'], { encoding: 'utf8', timeout: 1500 });
+      return parseMacScutilProxyOutput(raw);
+    }
+  } catch {
+    return empty;
+  }
+  return empty;
+}
+
+export function resolveSystemProxy(targetUrl, opts = {}) {
+  let parsed;
+  try {
+    parsed = targetUrl instanceof URL ? targetUrl : new URL(String(targetUrl || ''));
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+
+  const env = opts.env || process.env;
+  const envBypass = parseNoProxyList(env.NO_PROXY || env.no_proxy || '');
+  if (shouldBypassProxy(parsed, envBypass)) return null;
+
+  const isHttps = parsed.protocol === 'https:';
+  const envOrder = isHttps
+    ? ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']
+    : ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy'];
+
+  for (const key of envOrder) {
+    const raw = env[key];
+    if (!raw || !String(raw).trim()) continue;
+    const candidate = parseProxyUrl(raw);
+    if (candidate) return candidate;
+  }
+
+  let osCfg = null;
+  if (typeof opts.getOsConfig === 'function') {
+    osCfg = opts.getOsConfig();
+  } else if (opts.osConfig !== undefined) {
+    osCfg = opts.osConfig;
+  } else {
+    osCfg = detectOsSystemProxy({
+      platform: opts.platform || process.platform,
+      execFileSyncFn: opts.execFileSyncFn || execFileSync,
+    });
+  }
+
+  if (!osCfg || !osCfg.enabled) return null;
+  if (osCfg.bypass && osCfg.bypass.length > 0 && shouldBypassProxy(parsed, osCfg.bypass)) {
+    return null;
+  }
+  return isHttps ? osCfg.https || osCfg.http || null : osCfg.http || osCfg.https || null;
+}
+
+function normalizeProxyRequestHeaders(rawHeaders) {
+  const out = {};
+  if (!rawHeaders) return out;
+  const entries =
+    typeof rawHeaders.forEach === 'function'
+      ? (() => {
+          const arr = [];
+          rawHeaders.forEach((v, k) => arr.push([k, v]));
+          return arr;
+        })()
+      : Array.isArray(rawHeaders)
+      ? rawHeaders
+      : Object.entries(rawHeaders);
+
+  for (const [k, v] of entries) {
+    if (v === undefined || v === null) continue;
+    const key = String(k).trim();
+    const val = String(v);
+    if (!key || /[\r\n\0]/.test(key) || /[\r\n\0]/.test(val)) continue;
+    out[key] = val;
+  }
+  return out;
+}
+
+function hasHeaderIgnoreCase(headersObj, targetLower) {
+  for (const k of Object.keys(headersObj)) {
+    if (k.toLowerCase() === targetLower) return true;
+  }
+  return false;
+}
+
+function redactProxyErr(err, proxyInfo) {
+  const raw = err?.message || String(err);
+  let out = redactSecrets(raw, proxyInfo?.password || '');
+  if (proxyInfo && (proxyInfo.username || proxyInfo.password)) {
+    const b64 = Buffer.from(`${proxyInfo.username}:${proxyInfo.password}`, 'utf8').toString('base64');
+    if (b64 && out.includes(b64)) {
+      out = out.split(b64).join('***REDACTED***');
+    }
+  }
+  return new Error(out);
+}
+
 export class ThoughtTranslatorService {
   constructor(opts = {}) {
     const home = opts.homeDir || os.homedir();
     const cfgDir = opts.configDir || path.join(home, '.gemini', 'config');
     this.configFile = opts.configFile || path.join(cfgDir, 'obsidian-prism-thought.json');
     this.cacheFile = opts.cacheFile || path.join(cfgDir, 'obsidian-prism-thought-cache.json');
-    this.fetchImpl = opts.fetchImpl || globalThis.fetch;
+    this._hasCustomFetch = typeof opts.fetchImpl === 'function';
+    this.fetchImpl = this._hasCustomFetch ? opts.fetchImpl : globalThis.fetch;
+    this._customResolveSystemProxy =
+      typeof opts.resolveSystemProxy === 'function' ? opts.resolveSystemProxy : null;
+    this._proxyEnv = opts.proxyEnv || null;
+    this._proxyPlatform = opts.proxyPlatform || null;
+    this._proxyExecFileSync = typeof opts.proxyExecFileSync === 'function' ? opts.proxyExecFileSync : null;
+    this._proxyExecFile = typeof opts.proxyExecFile === 'function' ? opts.proxyExecFile : null;
+    this._proxyExecFileAsync = typeof opts.proxyExecFileAsync === 'function' ? opts.proxyExecFileAsync : null;
+    this._proxyTlsOptions = opts.proxyTlsOptions || null;
+    this._proxyCache = { ts: 0, value: null, loaded: false };
+    this._proxyInflightPromise = null;
     this.maxCacheEntries = opts.maxCacheEntries || 400;
     this.maxConcurrency = Math.max(1, Number(opts.maxConcurrency) || MAX_CONCURRENCY);
 
@@ -469,6 +919,7 @@ export class ThoughtTranslatorService {
     this._queue = [];
     this._queueSeq = 0;
     this._cacheLoaded = false;
+    this._cacheLoadPromise = null;
     this._saveCacheTimer = null;
     this._flushPromise = null;
     this._flushDirty = false;
@@ -552,15 +1003,29 @@ export class ThoughtTranslatorService {
   }
 
   _persistStore(store) {
-    const tmp = `${this.configFile}.${process.pid}.tmp`;
+    const tmp = `${this.configFile}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
     try {
       fs.mkdirSync(path.dirname(this.configFile), { recursive: true });
       fs.writeFileSync(tmp, JSON.stringify(store, null, 2), { encoding: 'utf8', mode: 0o600 });
-      fs.renameSync(tmp, this.configFile);
-    } catch {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          fs.renameSync(tmp, this.configFile);
+          break;
+        } catch (err) {
+          if (process.platform !== 'win32' || attempt >= 3 || !['EBUSY', 'EPERM', 'EACCES'].includes(err?.code)) {
+            throw err;
+          }
+          try {
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15 * (attempt + 1));
+          } catch {}
+        }
+      }
+      return { ok: true };
+    } catch (err) {
       try {
         if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
       } catch {}
+      return { ok: false, error: redactSecrets(err?.message || String(err)) };
     }
   }
 
@@ -612,8 +1077,12 @@ export class ThoughtTranslatorService {
     };
 
     this._config = this._normalizeStore(nextRaw);
-    this._persistStore(this._config);
-    return this.getSanitizedConfig();
+    const persisted = this._persistStore(this._config);
+    const out = this.getSanitizedConfig();
+    if (persisted && persisted.ok === false) {
+      return { ...out, ok: false, error: persisted.error || 'Failed to persist translator config' };
+    }
+    return out;
   }
 
   _resolveEffectiveCredentials(input = {}) {
@@ -644,9 +1113,614 @@ export class ThoughtTranslatorService {
       }
     }
     const rawKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : '';
-    const apiKey = rawKey && !rawKey.includes('••••') ? rawKey : saved?.apiKey || '';
+    let canReuseSavedKey = Boolean(saved?.apiKey);
+    if (hasInputUrl && canReuseSavedKey) {
+      if (!baseUrl) {
+        canReuseSavedKey = false;
+      } else {
+        try {
+          const savedChecked = validateOpenAiBaseUrl(saved?.baseUrl || '');
+          if (!savedChecked.ok || new URL(baseUrl).origin !== new URL(savedChecked.url).origin) {
+            canReuseSavedKey = false;
+          }
+        } catch {
+          canReuseSavedKey = false;
+        }
+      }
+    }
+    const apiKey = rawKey && !rawKey.includes('••••') ? rawKey : canReuseSavedKey ? saved.apiKey : '';
     const model = String(input.model || saved?.model || '').trim();
     return { baseUrl, baseUrlError, apiKey, model, store };
+  }
+
+  async _readResponseTextBounded(res, maxBytes = 4 * 1024 * 1024) {
+    if (res?.body && typeof res.body.getReader === 'function') {
+      const reader = res.body.getReader();
+      const chunks = [];
+      let total = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const buf = Buffer.from(value);
+          total += buf.byteLength;
+          if (total > maxBytes) {
+            try { await reader.cancel(); } catch {}
+            throw new Error('Upstream response exceeded size limit');
+          }
+          chunks.push(buf);
+        }
+      } finally {
+        try { reader.releaseLock(); } catch {}
+      }
+      return Buffer.concat(chunks, total).toString('utf8');
+    }
+    const text = await res.text();
+    if (Buffer.byteLength(text, 'utf8') > maxBytes) {
+      throw new Error('Upstream response exceeded size limit');
+    }
+    return text;
+  }
+
+  _getCachedOsProxyConfig() {
+    const now = Date.now();
+    if (this._proxyCache.loaded && now - this._proxyCache.ts < SYSTEM_PROXY_CACHE_TTL_MS) {
+      return this._proxyCache.value;
+    }
+    const cfg = detectOsSystemProxy({
+      platform: this._proxyPlatform || process.platform,
+      execFileSyncFn: this._proxyExecFileSync || execFileSync,
+    });
+    this._proxyCache = { ts: now, value: cfg, loaded: true };
+    return cfg;
+  }
+
+  async _getCachedOsProxyConfigAsync() {
+    const now = Date.now();
+    if (this._proxyCache.loaded && now - this._proxyCache.ts < SYSTEM_PROXY_CACHE_TTL_MS) {
+      return this._proxyCache.value;
+    }
+    if (this._proxyInflightPromise) {
+      return this._proxyInflightPromise;
+    }
+    const task = (async () => {
+      let cfg;
+      if (!this._proxyExecFile && !this._proxyExecFileAsync && this._proxyExecFileSync) {
+        cfg = detectOsSystemProxy({
+          platform: this._proxyPlatform || process.platform,
+          execFileSyncFn: this._proxyExecFileSync,
+        });
+      } else {
+        cfg = await detectOsSystemProxyAsync({
+          platform: this._proxyPlatform || process.platform,
+          execFileFn: this._proxyExecFile || execFile,
+          execFileAsyncFn: this._proxyExecFileAsync,
+        });
+      }
+      this._proxyCache = { ts: Date.now(), value: cfg, loaded: true };
+      return cfg;
+    })();
+    this._proxyInflightPromise = task;
+    try {
+      return await task;
+    } finally {
+      if (this._proxyInflightPromise === task) {
+        this._proxyInflightPromise = null;
+      }
+    }
+  }
+
+  _resolveProxyForUrl(targetUrl) {
+    try {
+      const env = this._proxyEnv || process.env;
+      const envBypass = parseNoProxyList(env.NO_PROXY || env.no_proxy || '');
+      if (shouldBypassProxy(targetUrl, envBypass)) return null;
+
+      if (this._customResolveSystemProxy) {
+        const custom = this._customResolveSystemProxy(targetUrl);
+        if (!custom) return null;
+        if (typeof custom === 'string') {
+          return parseProxyUrl(custom);
+        }
+        if (typeof custom === 'object') {
+          const extraBypass = parseNoProxyList(custom.bypass || '');
+          if (extraBypass.length > 0 && shouldBypassProxy(targetUrl, extraBypass)) {
+            return null;
+          }
+          if (custom.href && custom.hostname && custom.port) {
+            return parseProxyUrl(custom.href);
+          }
+          return parseProxyUrl(custom.url || custom.proxy || '');
+        }
+        return null;
+      }
+
+      return resolveSystemProxy(targetUrl, {
+        env,
+        getOsConfig: () => this._getCachedOsProxyConfig(),
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async _resolveProxyForUrlAsync(targetUrl) {
+    try {
+      const env = this._proxyEnv || process.env;
+      const envBypass = parseNoProxyList(env.NO_PROXY || env.no_proxy || '');
+      if (shouldBypassProxy(targetUrl, envBypass)) return null;
+
+      if (this._customResolveSystemProxy) {
+        const custom = await this._customResolveSystemProxy(targetUrl);
+        if (!custom) return null;
+        if (typeof custom === 'string') {
+          return parseProxyUrl(custom);
+        }
+        if (typeof custom === 'object') {
+          const extraBypass = parseNoProxyList(custom.bypass || '');
+          if (extraBypass.length > 0 && shouldBypassProxy(targetUrl, extraBypass)) {
+            return null;
+          }
+          if (custom.href && custom.hostname && custom.port) {
+            return parseProxyUrl(custom.href);
+          }
+          return parseProxyUrl(custom.url || custom.proxy || '');
+        }
+        return null;
+      }
+
+      let parsed;
+      try {
+        parsed = targetUrl instanceof URL ? targetUrl : new URL(String(targetUrl || ''));
+      } catch {
+        return null;
+      }
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+
+      // 优先命中环境变量代理，无需拉起 OS 系统代理探测
+      const envHit = resolveSystemProxy(parsed, { env, osConfig: null });
+      if (envHit) return envHit;
+
+      const osCfg = await this._getCachedOsProxyConfigAsync();
+      return resolveSystemProxy(parsed, { env, osConfig: osCfg });
+    } catch {
+      return null;
+    }
+  }
+
+  _openConnectTunnel(proxyInfo, authority, proxyAuthHeader, signal) {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new Error('Request aborted'));
+        return;
+      }
+      if (!authority || /[\r\n\0\s]/.test(authority)) {
+        reject(new Error('Invalid CONNECT target authority'));
+        return;
+      }
+
+      const socket =
+        proxyInfo.protocol === 'https:'
+          ? tls.connect({
+              host: proxyInfo.hostname,
+              port: proxyInfo.port,
+              servername: net.isIP(proxyInfo.hostname) ? undefined : proxyInfo.hostname,
+              ...(this._proxyTlsOptions || {}),
+            })
+          : net.connect({
+              host: proxyInfo.hostname,
+              port: proxyInfo.port,
+            });
+
+      let settled = false;
+      let headerBuf = Buffer.alloc(0);
+
+      const cleanupListeners = () => {
+        socket.removeListener('connect', onConnect);
+        socket.removeListener('secureConnect', onConnect);
+        socket.removeListener('data', onData);
+        socket.removeListener('error', onError);
+        socket.removeListener('end', onPrematureClose);
+        socket.removeListener('close', onPrematureClose);
+        if (signal && typeof signal.removeEventListener === 'function') {
+          try {
+            signal.removeEventListener('abort', onAbort);
+          } catch {}
+        }
+      };
+
+      const fail = (err) => {
+        if (settled) return;
+        settled = true;
+        cleanupListeners();
+        socket.on('error', () => {});
+        try {
+          socket.destroy();
+        } catch {}
+        reject(redactProxyErr(err, proxyInfo));
+      };
+
+      const onAbort = () => fail(new Error('Request aborted'));
+      const onError = (err) => fail(err);
+      const onPrematureClose = () => fail(new Error('Proxy closed connection during CONNECT'));
+
+      const onConnect = () => {
+        if (settled) return;
+        const lines = [
+          `CONNECT ${authority} HTTP/1.1`,
+          `Host: ${authority}`,
+          'Proxy-Connection: Keep-Alive',
+        ];
+        if (proxyAuthHeader) {
+          lines.push(`Proxy-Authorization: ${proxyAuthHeader}`);
+        }
+        lines.push('', '');
+        socket.write(lines.join('\r\n'));
+      };
+
+      const onData = (chunk) => {
+        if (settled) return;
+        headerBuf = headerBuf.length ? Buffer.concat([headerBuf, chunk]) : Buffer.from(chunk);
+        let sepIdx = headerBuf.indexOf('\r\n\r\n');
+        let sepLen = 4;
+        if (sepIdx === -1) {
+          sepIdx = headerBuf.indexOf('\n\n');
+          sepLen = 2;
+        }
+        if (sepIdx === -1) {
+          if (headerBuf.length > MAX_CONNECT_HEADER_BYTES) {
+            fail(new Error('Proxy CONNECT response header exceeded size limit'));
+          }
+          return;
+        }
+
+        const headerText = headerBuf.subarray(0, sepIdx).toString('latin1');
+        const remainder = headerBuf.subarray(sepIdx + sepLen);
+        const statusLine = headerText.split(/\r?\n/)[0] || '';
+        const statusMatch = /^HTTP\/\d\.\d\s+(\d{3})(?:\s+(.*))?$/i.exec(statusLine.trim());
+        const statusCode = statusMatch ? Number(statusMatch[1]) : 0;
+        if (statusCode !== 200) {
+          const reason = statusMatch && statusMatch[2] ? ` ${statusMatch[2].trim()}` : '';
+          fail(new Error(`Proxy CONNECT rejected (HTTP ${statusCode || 'invalid'}${reason})`));
+          return;
+        }
+
+        settled = true;
+        cleanupListeners();
+        socket.pause();
+        if (remainder.length > 0) {
+          socket.unshift(remainder);
+        }
+        resolve(socket);
+      };
+
+      if (signal && typeof signal.addEventListener === 'function') {
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+      socket.once(proxyInfo.protocol === 'https:' ? 'secureConnect' : 'connect', onConnect);
+      socket.on('data', onData);
+      socket.once('error', onError);
+      socket.once('end', onPrematureClose);
+      socket.once('close', onPrematureClose);
+    });
+  }
+
+  async _fetchViaProxy(urlStr, init = {}, proxyInfo) {
+    let target;
+    try {
+      target = new URL(String(urlStr || ''));
+    } catch {
+      throw new Error('Invalid request URL');
+    }
+    if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+      throw new Error(`Unsupported protocol for proxy request: ${target.protocol}`);
+    }
+
+    const targetHost = target.hostname.replace(/^\[|\]$/g, '');
+    const defaultPort = target.protocol === 'https:' ? 443 : 80;
+    const targetPort = target.port ? Number(target.port) : defaultPort;
+    if (
+      !targetHost ||
+      /[\r\n\0\s]/.test(targetHost) ||
+      !Number.isInteger(targetPort) ||
+      targetPort < 1 ||
+      targetPort > 65535
+    ) {
+      throw new Error('Invalid target host or port for proxy request');
+    }
+
+    const signal = init.signal || null;
+    if (signal?.aborted) {
+      throw new Error('Request aborted');
+    }
+
+    const method = String(init.method || 'GET').toUpperCase();
+    const reqHeaders = normalizeProxyRequestHeaders(init.headers);
+    const formattedHost = targetHost.includes(':') ? `[${targetHost}]` : targetHost;
+    const hostHeader = targetPort === defaultPort ? formattedHost : `${formattedHost}:${targetPort}`;
+    if (!hasHeaderIgnoreCase(reqHeaders, 'host')) {
+      reqHeaders.Host = hostHeader;
+    }
+    if (!hasHeaderIgnoreCase(reqHeaders, 'accept-encoding')) {
+      reqHeaders['Accept-Encoding'] = 'identity';
+    }
+    if (!hasHeaderIgnoreCase(reqHeaders, 'connection')) {
+      reqHeaders.Connection = 'close';
+    }
+
+    let bodyBuf = null;
+    if (init.body !== undefined && init.body !== null) {
+      if (typeof init.body === 'string') {
+        bodyBuf = Buffer.from(init.body, 'utf8');
+      } else if (Buffer.isBuffer(init.body)) {
+        bodyBuf = init.body;
+      } else if (ArrayBuffer.isView(init.body)) {
+        bodyBuf = Buffer.from(init.body.buffer, init.body.byteOffset, init.body.byteLength);
+      } else {
+        bodyBuf = Buffer.from(String(init.body), 'utf8');
+      }
+      if (!hasHeaderIgnoreCase(reqHeaders, 'content-length')) {
+        reqHeaders['Content-Length'] = String(bodyBuf.byteLength);
+      }
+    }
+
+    const proxyAuthHeader =
+      proxyInfo.username || proxyInfo.password
+        ? `Basic ${Buffer.from(`${proxyInfo.username}:${proxyInfo.password}`, 'utf8').toString('base64')}`
+        : '';
+
+    const isHttpsTarget = target.protocol === 'https:';
+    let tunnelSocket = null;
+    let tlsSocket = null;
+
+    if (isHttpsTarget) {
+      const authority = `${formattedHost}:${targetPort}`;
+      tunnelSocket = await this._openConnectTunnel(proxyInfo, authority, proxyAuthHeader, signal);
+    }
+
+    return await new Promise((resolve, reject) => {
+      let settled = false;
+      let activeReq = null;
+      let activeIncomingRes = null;
+      let activeBodyStream = null;
+      let abortListenerAttached = false;
+
+      const destroyAll = (destroyErr) => {
+        if (activeBodyStream && activeBodyStream !== activeIncomingRes) {
+          try {
+            activeBodyStream.destroy(destroyErr);
+          } catch {}
+        }
+        if (activeIncomingRes) {
+          activeIncomingRes.on('error', () => {});
+          try {
+            activeIncomingRes.destroy();
+          } catch {}
+        }
+        if (activeReq) {
+          activeReq.on('error', () => {});
+          try {
+            activeReq.destroy();
+          } catch {}
+        }
+        if (tlsSocket) {
+          tlsSocket.on('error', () => {});
+          try {
+            tlsSocket.destroy();
+          } catch {}
+        }
+        if (tunnelSocket) {
+          tunnelSocket.on('error', () => {});
+          try {
+            tunnelSocket.destroy();
+          } catch {}
+        }
+      };
+
+      const cleanupAbort = () => {
+        if (abortListenerAttached && signal && typeof signal.removeEventListener === 'function') {
+          abortListenerAttached = false;
+          try {
+            signal.removeEventListener('abort', onAbort);
+          } catch {}
+        }
+      };
+
+      const failBeforeResponse = (err) => {
+        if (settled) return;
+        settled = true;
+        cleanupAbort();
+        destroyAll();
+        reject(redactProxyErr(err, proxyInfo));
+      };
+
+      const onAbort = () => {
+        const abortErr = new Error('Request aborted');
+        if (!settled) {
+          failBeforeResponse(abortErr);
+        } else {
+          cleanupAbort();
+          destroyAll(abortErr);
+        }
+      };
+
+      if (signal) {
+        if (signal.aborted) {
+          failBeforeResponse(new Error('Request aborted'));
+          return;
+        }
+        if (typeof signal.addEventListener === 'function') {
+          signal.addEventListener('abort', onAbort, { once: true });
+          abortListenerAttached = true;
+        }
+      }
+
+      const onResponse = (incomingRes) => {
+        if (settled) {
+          incomingRes.on('error', () => {});
+          incomingRes.destroy();
+          return;
+        }
+        activeIncomingRes = incomingRes;
+        const status = Number(incomingRes.statusCode) || 0;
+        const redirectMode = init.redirect || 'error';
+        if (redirectMode !== 'manual' && status >= 300 && status < 400) {
+          failBeforeResponse(new Error(`Redirect blocked (HTTP ${status})`));
+          return;
+        }
+
+        const headers = new Headers();
+        for (const [k, v] of Object.entries(incomingRes.headers || {})) {
+          if (v === undefined) continue;
+          if (Array.isArray(v)) {
+            for (const item of v) headers.append(k, String(item));
+          } else {
+            headers.append(k, String(v));
+          }
+        }
+
+        const enc = String(incomingRes.headers['content-encoding'] || '').trim().toLowerCase();
+        let streamForBody = incomingRes;
+        if (enc === 'gzip' || enc === 'x-gzip') {
+          const gunzip = zlib.createGunzip();
+          incomingRes.on('error', (err) => gunzip.destroy(err));
+          streamForBody = incomingRes.pipe(gunzip);
+        } else if (enc === 'deflate') {
+          const inflate = zlib.createInflate();
+          incomingRes.on('error', (err) => inflate.destroy(err));
+          streamForBody = incomingRes.pipe(inflate);
+        } else if (enc === 'br') {
+          const brotli = zlib.createBrotliDecompress();
+          incomingRes.on('error', (err) => brotli.destroy(err));
+          streamForBody = incomingRes.pipe(brotli);
+        }
+        activeBodyStream = streamForBody;
+
+        streamForBody.once('close', () => {
+          cleanupAbort();
+          if (streamForBody !== incomingRes && !incomingRes.destroyed) {
+            incomingRes.destroy();
+          }
+        });
+        streamForBody.once('end', cleanupAbort);
+
+        const webBody = Readable.toWeb(streamForBody);
+        let consumed = false;
+        const readAllText = async () => {
+          if (consumed) throw new Error('Body already consumed');
+          consumed = true;
+          const reader = webBody.getReader();
+          const chunks = [];
+          let total = 0;
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              const buf = Buffer.from(value);
+              total += buf.byteLength;
+              chunks.push(buf);
+            }
+          } finally {
+            try {
+              reader.releaseLock();
+            } catch {}
+            cleanupAbort();
+          }
+          return Buffer.concat(chunks, total).toString('utf8');
+        };
+
+        settled = true;
+        resolve({
+          ok: status >= 200 && status < 300,
+          status,
+          statusText: String(incomingRes.statusMessage || ''),
+          headers,
+          body: webBody,
+          async text() {
+            return readAllText();
+          },
+          async json() {
+            return JSON.parse(await readAllText());
+          },
+        });
+      };
+
+      try {
+        if (isHttpsTarget) {
+          // 注意：不得传 agent: false，否则 Node ClientRequest 会创建默认 Agent 并忽略 createConnection！
+          activeReq = http.request(
+            {
+              host: targetHost,
+              port: targetPort,
+              method,
+              path: `${target.pathname || '/'}${target.search || ''}`,
+              headers: reqHeaders,
+              createConnection: () => {
+                tlsSocket = tls.connect({
+                  socket: tunnelSocket,
+                  servername: net.isIP(targetHost) ? undefined : targetHost,
+                  ...(this._proxyTlsOptions || {}),
+                });
+                tlsSocket.once('close', () => {
+                  if (tunnelSocket && !tunnelSocket.destroyed) {
+                    tunnelSocket.destroy();
+                  }
+                });
+                return tlsSocket;
+              },
+            },
+            onResponse
+          );
+        } else {
+          const httpHeaders = { ...reqHeaders };
+          if (proxyAuthHeader && !hasHeaderIgnoreCase(httpHeaders, 'proxy-authorization')) {
+            httpHeaders['Proxy-Authorization'] = proxyAuthHeader;
+          }
+          const reqFn = proxyInfo.protocol === 'https:' ? https.request : http.request;
+          activeReq = reqFn(
+            {
+              host: proxyInfo.hostname,
+              port: proxyInfo.port,
+              method,
+              path: target.href,
+              headers: httpHeaders,
+              agent: false,
+              ...(proxyInfo.protocol === 'https:' ? this._proxyTlsOptions || {} : {}),
+            },
+            onResponse
+          );
+        }
+      } catch (err) {
+        failBeforeResponse(err);
+        return;
+      }
+
+      activeReq.on('error', (err) => {
+        if (!settled) {
+          failBeforeResponse(err);
+        } else if (activeBodyStream && !activeBodyStream.destroyed) {
+          activeBodyStream.destroy(redactProxyErr(err, proxyInfo));
+        }
+      });
+
+      if (bodyBuf && bodyBuf.byteLength > 0) {
+        activeReq.write(bodyBuf);
+      }
+      activeReq.end();
+    });
+  }
+
+  async _request(url, init = {}) {
+    if (!this._hasCustomFetch) {
+      const proxy = await this._resolveProxyForUrlAsync(url);
+      if (proxy) {
+        return this._fetchViaProxy(url, init, proxy);
+      }
+    }
+    if (!this.fetchImpl) {
+      throw new Error('Fetch unavailable in runtime');
+    }
+    return this.fetchImpl(url, init);
   }
 
   _resolveSystemPrompt(store, targetLang = 'zh-CN') {
@@ -693,14 +1767,14 @@ export class ThoughtTranslatorService {
 
     const t0 = Date.now();
     try {
-      const res = await this.fetchImpl(`${baseUrl}/models`, {
+      const res = await this._request(`${baseUrl}/models`, {
         method: 'GET',
         headers,
         redirect: 'error',
         signal: AbortSignal.timeout(12000),
       });
       const latencyMs = Date.now() - t0;
-      const text = await res.text();
+      const text = await this._readResponseTextBounded(res, 4 * 1024 * 1024);
       if (!res.ok) {
         return {
           ok: false,
@@ -770,7 +1844,7 @@ export class ThoughtTranslatorService {
       if (includeNoThink && noThinkParams) {
         Object.assign(payload, noThinkParams);
       }
-      return this.fetchImpl(`${baseUrl}/chat/completions`, {
+      return this._request(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers,
         redirect: 'error',
@@ -783,10 +1857,11 @@ export class ThoughtTranslatorService {
     try {
       let res = await sendTest(Boolean(noThinkParams));
       if (!res.ok && noThinkParams && (res.status === 400 || res.status === 422)) {
+        try { await res.body?.cancel?.(); } catch {}
         res = await sendTest(false);
       }
       const latencyMs = Date.now() - t0;
-      const text = await res.text();
+      const text = await this._readResponseTextBounded(res, 4 * 1024 * 1024);
       if (!res.ok) {
         return {
           ok: false,
@@ -815,27 +1890,64 @@ export class ThoughtTranslatorService {
     }
   }
 
+  _ingestDiskCacheText(raw) {
+    this._lastDiskBytes = Buffer.byteLength(raw, 'utf8');
+    this._hasDiskFile = this._lastDiskBytes > 0;
+    const obj = JSON.parse(raw);
+    const entries = obj?.entries && typeof obj.entries === 'object' ? obj.entries : obj;
+    if (!entries || typeof entries !== 'object') return;
+    const preExisting = this.memCache.size > 0 ? Array.from(this.memCache.entries()) : null;
+    if (preExisting) this.memCache.clear();
+    for (const [k, v] of Object.entries(entries)) {
+      const val = typeof v === 'string' ? v : v?.text;
+      if (k && typeof val === 'string' && val.trim()) {
+        this.memCache.set(k, val);
+      }
+    }
+    if (preExisting) {
+      for (const [k, v] of preExisting) {
+        this.memCache.delete(k);
+        this.memCache.set(k, v);
+      }
+    }
+  }
+
   _ensureCacheLoaded() {
     if (this._cacheLoaded) return;
     this._cacheLoaded = true;
+    this._cacheLoadPromise = null;
     try {
       if (fs.existsSync(this.cacheFile)) {
         const raw = fs.readFileSync(this.cacheFile, 'utf8');
-        this._lastDiskBytes = Buffer.byteLength(raw, 'utf8');
-        this._hasDiskFile = this._lastDiskBytes > 0;
-        const obj = JSON.parse(raw);
-        const entries = obj?.entries && typeof obj.entries === 'object' ? obj.entries : obj;
-        if (entries && typeof entries === 'object') {
-          for (const [k, v] of Object.entries(entries)) {
-            const val = typeof v === 'string' ? v : v?.text;
-            if (k && typeof val === 'string' && val.trim()) {
-              this.memCache.set(k, val);
-            }
-          }
-        }
+        this._ingestDiskCacheText(raw);
       }
     } catch {}
     this._trimCache();
+  }
+
+  async _ensureCacheLoadedAsync() {
+    if (this._cacheLoaded) return;
+    if (this._cacheLoadPromise) return this._cacheLoadPromise;
+    const epoch = this._cacheEpoch;
+    const task = (async () => {
+      try {
+        const raw = await fs.promises.readFile(this.cacheFile, 'utf8');
+        if (this._cacheLoaded || epoch !== this._cacheEpoch) return;
+        this._ingestDiskCacheText(raw);
+      } catch {
+        // 文件不存在或 JSON 损坏时静默降级为空缓存
+      } finally {
+        if (epoch === this._cacheEpoch) {
+          this._cacheLoaded = true;
+          this._trimCache();
+        }
+        if (this._cacheLoadPromise === task) {
+          this._cacheLoadPromise = null;
+        }
+      }
+    })();
+    this._cacheLoadPromise = task;
+    return task;
   }
 
   _trimCache() {
@@ -1191,14 +2303,18 @@ export class ThoughtTranslatorService {
     const url =
       `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(gtxTl)}&dt=t&q=` +
       encodeURIComponent(masked);
-    const res = await this.fetchImpl(url, {
+    const res = await this._request(url, {
       method: 'GET',
       headers: { 'User-Agent': 'Mozilla/5.0' },
       redirect: 'error',
       signal: composeAbortSignal(9000, abortSignal),
     });
-    if (!res.ok) throw new Error(`Machine translate HTTP ${res.status}`);
-    const json = await res.json();
+    if (!res.ok) {
+      try { await res.body?.cancel?.(); } catch {}
+      throw new Error(`Machine translate HTTP ${res.status}`);
+    }
+    const rawJsonText = await this._readResponseTextBounded(res, 4 * 1024 * 1024);
+    const json = JSON.parse(rawJsonText);
     const segs = Array.isArray(json?.[0]) ? json[0] : [];
     let translated = segs.map((s) => (Array.isArray(s) && s[0] ? String(s[0]) : '')).join('');
     translated = translated.replace(/__OPCODE_(\d+)__/gi, (_, n) => codeSpans[Number(n)] || _);
@@ -1284,7 +2400,10 @@ export class ThoughtTranslatorService {
     }
 
     const sysPrompt = this._resolveSystemPrompt(store, tl) + this._buildBoundaryNote(tl);
-    const cleanedSource = String(rawText || '').trim().slice(0, 64000);
+    const cleanedSource = String(rawText || '')
+      .trim()
+      .slice(0, 64000)
+      .replace(/<\/?thought_source\b[^>]*>/gi, '');
     const userContent = `<thought_source>\n${cleanedSource}\n</thought_source>`;
 
     const noThinkParams = buildNoThinkingParams(model, baseUrl);
@@ -1309,7 +2428,7 @@ export class ThoughtTranslatorService {
       if (includeDisableThinking && noThinkParams) {
         Object.assign(payload, noThinkParams);
       }
-      return this.fetchImpl(`${baseUrl}/chat/completions`, {
+      return this._request(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers,
         redirect: 'error',
@@ -1320,17 +2439,19 @@ export class ThoughtTranslatorService {
 
     let res = await sendCompletion(Boolean(noThinkParams));
     if (!res.ok && noThinkParams && (res.status === 400 || res.status === 422)) {
+      try { await res.body?.cancel?.(); } catch {}
       res = await sendCompletion(false);
     }
 
     if (!res.ok) {
-      const errBody = await res.text().catch(() => '');
+      const errBody = await this._readResponseTextBounded(res, 4 * 1024 * 1024).catch(() => '');
       throw new Error(`AI HTTP ${res.status}: ${redactSecrets(errBody.slice(0, 200), apiKey)}`);
     }
 
     const ctype = String(res.headers?.get?.('content-type') || '').toLowerCase();
     if (!ctype.includes('text/event-stream') || !res.body) {
-      const json = await res.json();
+      const jsonText = await this._readResponseTextBounded(res, 4 * 1024 * 1024);
+      const json = JSON.parse(jsonText);
       const full = stripThinkTagsAndQuotes(json?.choices?.[0]?.message?.content || '').slice(0, MAX_STREAM_CHARS);
       if (full && onPartial) onPartial(full);
       return { text: full, engine: 'ai', fallback: false };
@@ -1415,7 +2536,7 @@ export class ThoughtTranslatorService {
     if (!raw) return { ok: true, text: '', skipped: true };
     if (isAlreadyTargetLang(raw, tl)) return { ok: true, text: raw, skipped: true };
 
-    this._ensureCacheLoaded();
+    await this._ensureCacheLoadedAsync();
     const { apiKey, store } = this._resolveEffectiveCredentials({});
     const baseModeTag = mode === 'machine' ? 'mt' : computePromptStyleTag(store);
     const modeTag = tl === 'zh-CN' ? baseModeTag : `${baseModeTag}_${tl}`;

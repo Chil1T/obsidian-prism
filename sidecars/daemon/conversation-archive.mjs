@@ -66,6 +66,49 @@ function isDarwinSystemRootSymlink(curPath) {
   return false;
 }
 
+async function isDarwinSystemRootSymlinkAsync(curPath) {
+  if (process.platform !== 'darwin') return false;
+  if (curPath !== '/var' && curPath !== '/tmp') return false;
+  try {
+    const linkTarget = await fs.promises.readlink(curPath);
+    if (curPath === '/var') return linkTarget === 'private/var' || linkTarget === '/private/var';
+    if (curPath === '/tmp') return linkTarget === 'private/tmp' || linkTarget === '/private/tmp';
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+async function assertPathChainNoSymlinksAsync(targetPath, label = 'path') {
+  const resolved = path.resolve(targetPath);
+  const parsed = path.parse(resolved);
+  const rel = resolved.slice(parsed.root.length);
+  const parts = rel.split(/[\\/]+/).filter(Boolean);
+  let cur = parsed.root;
+  let lastStat = null;
+  for (let i = 0; i < parts.length; i++) {
+    cur = path.join(cur, parts[i]);
+    try {
+      const st = await fs.promises.lstat(cur);
+      if (st.isSymbolicLink()) {
+        if (await isDarwinSystemRootSymlinkAsync(cur)) {
+          lastStat = await fs.promises.stat(cur);
+          continue;
+        }
+        throw new Error(`Refusing symbolic link in ${label} chain: ${cur}`);
+      }
+      lastStat = st;
+    } catch (err) {
+      if (err && err.code === 'ENOENT') {
+        lastStat = null;
+        break;
+      }
+      throw err;
+    }
+  }
+  return lastStat;
+}
+
 function assertPathChainNoSymlinks(targetPath, label = 'path') {
   const resolved = path.resolve(targetPath);
   const parsed = path.parse(resolved);
@@ -409,6 +452,21 @@ export function loadCatalogIndex(archiveDir) {
   }
 }
 
+export async function loadCatalogIndexAsync(archiveDir) {
+  try {
+    const indexPath = path.join(path.resolve(archiveDir), INDEX_FILENAME);
+    const st = await assertPathChainNoSymlinksAsync(indexPath, 'catalog index');
+    if (!st || !st.isFile()) return null;
+    const parsed = JSON.parse(await fs.promises.readFile(indexPath, 'utf8'));
+    if (!parsed || parsed.schema !== 1 || !parsed.entries || typeof parsed.entries !== 'object') {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeNonNegativeThreshold(value, fallback, { integer = false } = {}) {
   if (value === null || value === undefined || typeof value === 'boolean') return fallback;
   if (typeof value === 'string' && value.trim() === '') return fallback;
@@ -417,72 +475,23 @@ function normalizeNonNegativeThreshold(value, fallback, { integer = false } = {}
   return integer ? Math.floor(n) : n;
 }
 
-export function scanConversationStorage({
-  convDir = getDefaultConversationsDir(),
-  archiveDir = getDefaultArchiveDir(),
-  summaries = null,
-  subagentMaxAgeHours = DEFAULT_SUBAGENT_MAX_AGE_HOURS,
-  mainMaxAgeDays = DEFAULT_MAIN_MAX_AGE_DAYS,
-  keepRecentMain = DEFAULT_KEEP_RECENT_MAIN,
-  excludeIds = [],
-  now = Date.now(),
-} = {}) {
-  const safeConvDir = path.resolve(convDir);
-  const safeArchiveDir = path.resolve(archiveDir);
-  const convStat = assertPathChainNoSymlinks(safeConvDir, 'conversations directory');
-  const excluded = new Set((excludeIds || []).map((x) => String(x || '').trim().toLowerCase()).filter(Boolean));
+const ASYNC_SCAN_LSTAT_CONCURRENCY = 24;
 
-  let catalogEntries = null;
-  let catalogUpdatedAt = null;
-  if (summaries && typeof summaries === 'object') {
-    catalogEntries = extractCatalogIndexFromSummaries(summaries);
-    catalogUpdatedAt = new Date(now).toISOString();
-  } else {
-    const loaded = loadCatalogIndex(safeArchiveDir);
-    if (loaded) {
-      catalogEntries = loaded.entries;
-      catalogUpdatedAt = loaded.updatedAt || null;
-    }
-  }
-
-  const groups = new Map();
-  let totalBytes = 0;
-  let walBytes = 0;
-  let fileCount = 0;
-
-  if (convStat && convStat.isDirectory()) {
-    for (const dirent of fs.readdirSync(safeConvDir, { withFileTypes: true })) {
-      if (dirent.isSymbolicLink() || !dirent.isFile()) continue;
-      const m = DB_FILE_RE.exec(dirent.name);
-      if (!m) continue;
-      const id = m[1].toLowerCase();
-      const suffix = m[2] ? m[2].toLowerCase() : 'db';
-      const fullPath = path.join(safeConvDir, dirent.name);
-      let st;
-      try {
-        st = fs.lstatSync(fullPath);
-        if (st.isSymbolicLink() || !st.isFile()) continue;
-      } catch {
-        continue;
-      }
-      fileCount++;
-      totalBytes += st.size;
-      if (suffix === 'wal' || suffix === 'shm') walBytes += st.size;
-      let g = groups.get(id);
-      if (!g) {
-        g = { id, files: [], bytes: 0, mtimeMs: 0, dbMtimeMs: 0, hasDb: false };
-        groups.set(id, g);
-      }
-      g.files.push({ name: dirent.name, bytes: st.size, suffix });
-      g.bytes += st.size;
-      if (suffix === 'db') {
-        g.hasDb = true;
-        if (st.mtimeMs > g.dbMtimeMs) g.dbMtimeMs = st.mtimeMs;
-      }
-      if (suffix !== 'shm' && st.mtimeMs > g.mtimeMs) g.mtimeMs = st.mtimeMs;
-    }
-  }
-
+function buildStorageScanReport({
+  safeConvDir,
+  safeArchiveDir,
+  catalogEntries,
+  catalogUpdatedAt,
+  groups,
+  totalBytes,
+  walBytes,
+  fileCount,
+  subagentMaxAgeHours,
+  mainMaxAgeDays,
+  keepRecentMain,
+  excluded,
+  now,
+}) {
   const items = [];
   for (const g of groups.values()) {
     const info = catalogEntries ? catalogEntries[g.id] || null : null;
@@ -585,6 +594,196 @@ export function scanConversationStorage({
     archivableSubagents,
     archivableOldMain,
   };
+}
+
+export function scanConversationStorage({
+  convDir = getDefaultConversationsDir(),
+  archiveDir = getDefaultArchiveDir(),
+  summaries = null,
+  subagentMaxAgeHours = DEFAULT_SUBAGENT_MAX_AGE_HOURS,
+  mainMaxAgeDays = DEFAULT_MAIN_MAX_AGE_DAYS,
+  keepRecentMain = DEFAULT_KEEP_RECENT_MAIN,
+  excludeIds = [],
+  now = Date.now(),
+} = {}) {
+  const safeConvDir = path.resolve(convDir);
+  const safeArchiveDir = path.resolve(archiveDir);
+  const convStat = assertPathChainNoSymlinks(safeConvDir, 'conversations directory');
+  const excluded = new Set((excludeIds || []).map((x) => String(x || '').trim().toLowerCase()).filter(Boolean));
+
+  let catalogEntries = null;
+  let catalogUpdatedAt = null;
+  if (summaries && typeof summaries === 'object') {
+    catalogEntries = extractCatalogIndexFromSummaries(summaries);
+    catalogUpdatedAt = new Date(now).toISOString();
+  } else {
+    const loaded = loadCatalogIndex(safeArchiveDir);
+    if (loaded) {
+      catalogEntries = loaded.entries;
+      catalogUpdatedAt = loaded.updatedAt || null;
+    }
+  }
+
+  const groups = new Map();
+  let totalBytes = 0;
+  let walBytes = 0;
+  let fileCount = 0;
+
+  if (convStat && convStat.isDirectory()) {
+    for (const dirent of fs.readdirSync(safeConvDir, { withFileTypes: true })) {
+      if (dirent.isSymbolicLink() || !dirent.isFile()) continue;
+      const m = DB_FILE_RE.exec(dirent.name);
+      if (!m) continue;
+      const id = m[1].toLowerCase();
+      const suffix = m[2] ? m[2].toLowerCase() : 'db';
+      const fullPath = path.join(safeConvDir, dirent.name);
+      let st;
+      try {
+        st = fs.lstatSync(fullPath);
+        if (st.isSymbolicLink() || !st.isFile()) continue;
+      } catch {
+        continue;
+      }
+      fileCount++;
+      totalBytes += st.size;
+      if (suffix === 'wal' || suffix === 'shm') walBytes += st.size;
+      let g = groups.get(id);
+      if (!g) {
+        g = { id, files: [], bytes: 0, mtimeMs: 0, dbMtimeMs: 0, hasDb: false };
+        groups.set(id, g);
+      }
+      g.files.push({ name: dirent.name, bytes: st.size, suffix });
+      g.bytes += st.size;
+      if (suffix === 'db') {
+        g.hasDb = true;
+        if (st.mtimeMs > g.dbMtimeMs) g.dbMtimeMs = st.mtimeMs;
+      }
+      if (suffix !== 'shm' && st.mtimeMs > g.mtimeMs) g.mtimeMs = st.mtimeMs;
+    }
+  }
+
+  return buildStorageScanReport({
+    safeConvDir,
+    safeArchiveDir,
+    catalogEntries,
+    catalogUpdatedAt,
+    groups,
+    totalBytes,
+    walBytes,
+    fileCount,
+    subagentMaxAgeHours,
+    mainMaxAgeDays,
+    keepRecentMain,
+    excluded,
+    now,
+  });
+}
+
+export async function scanConversationStorageAsync({
+  convDir = getDefaultConversationsDir(),
+  archiveDir = getDefaultArchiveDir(),
+  summaries = null,
+  subagentMaxAgeHours = DEFAULT_SUBAGENT_MAX_AGE_HOURS,
+  mainMaxAgeDays = DEFAULT_MAIN_MAX_AGE_DAYS,
+  keepRecentMain = DEFAULT_KEEP_RECENT_MAIN,
+  excludeIds = [],
+  now = Date.now(),
+  concurrency = ASYNC_SCAN_LSTAT_CONCURRENCY,
+} = {}) {
+  const safeConvDir = path.resolve(convDir);
+  const safeArchiveDir = path.resolve(archiveDir);
+  const convStat = await assertPathChainNoSymlinksAsync(safeConvDir, 'conversations directory');
+  const excluded = new Set((excludeIds || []).map((x) => String(x || '').trim().toLowerCase()).filter(Boolean));
+
+  let catalogEntries = null;
+  let catalogUpdatedAt = null;
+  if (summaries && typeof summaries === 'object') {
+    catalogEntries = extractCatalogIndexFromSummaries(summaries);
+    catalogUpdatedAt = new Date(now).toISOString();
+  } else {
+    const loaded = await loadCatalogIndexAsync(safeArchiveDir);
+    if (loaded) {
+      catalogEntries = loaded.entries;
+      catalogUpdatedAt = loaded.updatedAt || null;
+    }
+  }
+
+  const groups = new Map();
+  let totalBytes = 0;
+  let walBytes = 0;
+  let fileCount = 0;
+
+  if (convStat && convStat.isDirectory()) {
+    const dirents = await fs.promises.readdir(safeConvDir, { withFileTypes: true });
+    const candidates = [];
+    for (const dirent of dirents) {
+      if (dirent.isSymbolicLink() || !dirent.isFile()) continue;
+      const m = DB_FILE_RE.exec(dirent.name);
+      if (!m) continue;
+      candidates.push({
+        name: dirent.name,
+        id: m[1].toLowerCase(),
+        suffix: m[2] ? m[2].toLowerCase() : 'db',
+        fullPath: path.join(safeConvDir, dirent.name),
+      });
+    }
+
+    const stats = new Array(candidates.length).fill(null);
+    const maxWorkers = Math.max(1, Math.min(Number(concurrency) || ASYNC_SCAN_LSTAT_CONCURRENCY, candidates.length));
+    let cursor = 0;
+    const worker = async () => {
+      while (true) {
+        const idx = cursor++;
+        if (idx >= candidates.length) return;
+        try {
+          const st = await fs.promises.lstat(candidates[idx].fullPath);
+          if (!st.isSymbolicLink() && st.isFile()) {
+            stats[idx] = st;
+          }
+        } catch {}
+      }
+    };
+    if (candidates.length > 0) {
+      await Promise.all(Array.from({ length: maxWorkers }, () => worker()));
+    }
+
+    for (let i = 0; i < candidates.length; i++) {
+      const st = stats[i];
+      if (!st) continue;
+      const { name, id, suffix } = candidates[i];
+      fileCount++;
+      totalBytes += st.size;
+      if (suffix === 'wal' || suffix === 'shm') walBytes += st.size;
+      let g = groups.get(id);
+      if (!g) {
+        g = { id, files: [], bytes: 0, mtimeMs: 0, dbMtimeMs: 0, hasDb: false };
+        groups.set(id, g);
+      }
+      g.files.push({ name, bytes: st.size, suffix });
+      g.bytes += st.size;
+      if (suffix === 'db') {
+        g.hasDb = true;
+        if (st.mtimeMs > g.dbMtimeMs) g.dbMtimeMs = st.mtimeMs;
+      }
+      if (suffix !== 'shm' && st.mtimeMs > g.mtimeMs) g.mtimeMs = st.mtimeMs;
+    }
+  }
+
+  return buildStorageScanReport({
+    safeConvDir,
+    safeArchiveDir,
+    catalogEntries,
+    catalogUpdatedAt,
+    groups,
+    totalBytes,
+    walBytes,
+    fileCount,
+    subagentMaxAgeHours,
+    mainMaxAgeDays,
+    keepRecentMain,
+    excluded,
+    now,
+  });
 }
 
 function collectLiveCompanionFiles(convDir, id) {

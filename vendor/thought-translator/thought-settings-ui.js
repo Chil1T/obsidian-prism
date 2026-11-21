@@ -7,7 +7,7 @@
   if (!G) return;
 
   const WB_STR_KEYS =
-    'defaultProfName|customProfPrefix|viewLabel|optImmersive|optBilingual|styleLabel|optTech|optConcise|optCustom|customPromptPh|profilesLabel|addProfile|delProfile|fieldName|fieldNamePh|fetchModels|saveBtn|testBtn|clearCacheBtn|privacyHint|keylessPh|keylessBadge|clearKeyBtn|keyClearedBadge|fetchingModels|fetchErr|savingCfg|saveErr|testingConn|testErr|clearDualOk|clearLocalOk'.split(
+    'defaultProfName|customProfPrefix|viewLabel|optImmersive|optBilingual|styleLabel|optTech|optConcise|optCustom|customPromptPh|profilesLabel|addProfile|delProfile|fieldName|fieldNamePh|fetchModels|saveBtn|testBtn|clearCacheBtn|privacyHint|keylessPh|keylessBadge|clearKeyBtn|keyClearedBadge|fetchingModels|fetchErr|savingCfg|saveErr|testingConn|testErr|clearDualOk|clearLocalOk|usageHint|bridgeOfflineHint'.split(
       '|'
     );
   const wbFmt = (t, args) => t.replace(/\{(\d)\}/g, (_, i) => String(args[i] ?? ''));
@@ -22,31 +22,31 @@
   ];
   const WB_DATA = {
     'zh-CN': [
-      'OpenAI 兼容主力渠道|自定义渠道|译文阅读视图|纯译文沉浸|译文+原文对照|润色文风预设|专业工程手稿|精炼核心要点|自定义提示词|在此输入仅保存在本机私密配置 (~/.gemini/config/) 的自定义系统提示词，绝不写入 Git 仓库…|OpenAI 兼容渠道预设|+ 新增渠道|删除当前|渠道名称|例如：主力网关 / 本地 Ollama|拉取模型列表|保存渠道配置|发送测试消息|清空缓存|密钥与自定义提示词以 0600 权限独立保存在本机 ~/.gemini/config/，脱敏回显，不进入公开 Git 仓库。|本地渠道可留空免密|本地免密|清除密钥|待保存清除|正在拉取上游模型列表…|拉取模型失败|正在保存配置…|保存失败（守护进程离线）|正在保存并发送测试消息…|测试连接失败|✓ 已清空双端转译缓存|✓ 已清空前端缓存',
+      'OpenAI 兼容主力渠道|自定义渠道|译文阅读视图|纯译文沉浸|译文+原文对照|润色文风预设|专业工程手稿|精炼核心要点|自定义提示词|在此输入仅保存在本机私密配置 (~/.gemini/config/) 的自定义系统提示词，绝不写入 Git 仓库…|OpenAI 兼容渠道预设|+ 新增渠道|删除当前|渠道名称|例如：主力网关 / 本地 Ollama|拉取模型列表|保存渠道配置|发送测试消息|清空缓存|密钥与自定义提示词以 0600 权限独立保存在本机 ~/.gemini/config/，脱敏回显，不进入公开 Git 仓库。|本地渠道可留空免密|本地免密|清除密钥|待保存清除|正在拉取上游模型列表…|拉取模型失败|正在保存配置…|保存失败（守护进程离线）|正在保存并发送测试消息…|测试连接失败|✓ 已清空双端转译缓存|✓ 已清空前端缓存|开启后点击展开英文思考块可见译文；本身已是目标语言的思考块自动保留原文；免费机翻在代理环境下会自动跟随系统代理。|Prism 后台服务未连接，请确认插件守护进程已启动。',
       ['已保存 {0}（留空保持不变）', '缓存 {0} 条', '前端缓存 {0} 条 / 磁盘缓存 {1} 条', '▾ 从已拉取的 {0} 个上游模型中快速选择…', '✓ 成功拉取 {0} 个模型 · {1}ms', '✓ 已保存（{0} · {1}）', '✓ 连通正常 · {0}ms · {1} 回复: 「{2}」'],
       '渠道',
       '未设模型',
     ],
     'zh-TW': [
-      'OpenAI 相容主力管道|自訂管道|譯文閱讀視圖|純譯文沉浸|譯文+原文對照|潤飾文風預設|專業工程手稿|精煉核心要點|自訂提示詞|在此輸入僅儲存在本機私密設定 (~/.gemini/config/) 的自訂系統提示詞，絕不寫入 Git 儲存庫…|OpenAI 相容管道預設|+ 新增管道|刪除目前|管道名稱|例如：主力閘道 / 本機 Ollama|擷取模型清單|儲存管道設定|傳送測試訊息|清除快取|金鑰與自訂提示詞以 0600 權限獨立儲存在本機 ~/.gemini/config/，遮罩回顯，不進入公開 Git 儲存庫。|本機管道可留空免密|本機免密|清除金鑰|待儲存清除|正在擷取上游模型清單…|擷取模型失敗|正在儲存設定…|儲存失敗（守護行程離線）|正在儲存並傳送測試訊息…|測試連線失敗|✓ 已清除雙端轉譯快取|✓ 已清除前端快取',
+      'OpenAI 相容主力管道|自訂管道|譯文閱讀視圖|純譯文沉浸|譯文+原文對照|潤飾文風預設|專業工程手稿|精煉核心要點|自訂提示詞|在此輸入僅儲存在本機私密設定 (~/.gemini/config/) 的自訂系統提示詞，絕不寫入 Git 儲存庫…|OpenAI 相容管道預設|+ 新增管道|刪除目前|管道名稱|例如：主力閘道 / 本機 Ollama|擷取模型清單|儲存管道設定|傳送測試訊息|清除快取|金鑰與自訂提示詞以 0600 權限獨立儲存在本機 ~/.gemini/config/，遮罩回顯，不進入公開 Git 儲存庫。|本機管道可留空免密|本機免密|清除金鑰|待儲存清除|正在擷取上游模型清單…|擷取模型失敗|正在儲存設定…|儲存失敗（守護行程離線）|正在儲存並傳送測試訊息…|測試連線失敗|✓ 已清除雙端轉譯快取|✓ 已清除前端快取|開啟後點擊展開英文思考區塊即可見譯文；本身已是目標語言的思考區塊自動保留原文；免費機翻在代理環境下會自動跟隨系統代理。|Prism 背景服務未連線，請確認外掛守護行程已啟動。',
       ['已儲存 {0}（留空維持不變）', '快取 {0} 筆', '前端快取 {0} 筆 / 磁碟快取 {1} 筆', '▾ 從已擷取的 {0} 個上游模型中快速選擇…', '✓ 成功擷取 {0} 個模型 · {1}ms', '✓ 已儲存（{0} · {1}）', '✓ 連線正常 · {0}ms · {1} 回覆: 「{2}」'],
       '管道',
       '未設模型',
     ],
     yue: [
-      'OpenAI 兼容主力渠道|自訂渠道|譯文閱讀視圖|純譯文沉浸|譯文+原文對照|潤飾文風預設|專業工程手稿|精煉核心要點|自訂提示詞|喺度輸入只會儲存喺本機私密設定 (~/.gemini/config/) 嘅自訂系統提示詞，絕唔寫入 Git 倉庫…|OpenAI 兼容渠道預設|+ 新增渠道|刪除而家呢個|渠道名稱|例如：主力網關 / 本機 Ollama|拉取模型清單|儲存渠道設定|發送測試訊息|清空快取|金鑰同自訂提示詞以 0600 權限獨立保存喺本機 ~/.gemini/config/，遮罩顯示，唔會寫入公開 Git 倉庫。|本機渠道可留空免密|本機免密|清除金鑰|待儲存清除|正在拉取上游模型清單…|拉取模型失敗|正在儲存設定…|儲存失敗（守護進程離線）|正在儲存並發送測試訊息…|測試連接失敗|✓ 已清空雙端轉譯快取|✓ 已清空前端快取',
+      'OpenAI 兼容主力渠道|自訂渠道|譯文閱讀視圖|純譯文沉浸|譯文+原文對照|潤飾文風預設|專業工程手稿|精煉核心要點|自訂提示詞|喺度輸入只會儲存喺本機私密設定 (~/.gemini/config/) 嘅自訂系統提示詞，絕唔寫入 Git 倉庫…|OpenAI 兼容渠道預設|+ 新增渠道|刪除而家呢個|渠道名稱|例如：主力網關 / 本機 Ollama|拉取模型清單|儲存渠道設定|發送測試訊息|清空快取|金鑰同自訂提示詞以 0600 權限獨立保存喺本機 ~/.gemini/config/，遮罩顯示，唔會寫入公開 Git 倉庫。|本機渠道可留空免密|本機免密|清除金鑰|待儲存清除|正在拉取上游模型清單…|拉取模型失敗|正在儲存設定…|儲存失敗（守護進程離線）|正在儲存並發送測試訊息…|測試連接失敗|✓ 已清空雙端轉譯快取|✓ 已清空前端快取|開啟後撳開英文思考區塊就睇到譯文；本身已經係目標語言嘅思考區塊會自動保留原文；免費機翻喺代理環境下會自動跟隨系統代理。|Prism 後台服務未連接，請確認外掛守護進程已經啟動。',
       ['已儲存 {0}（留空保持唔變）', '快取 {0} 條', '前端快取 {0} 條 / 磁碟快取 {1} 條', '▾ 由已拉取嘅 {0} 個上游模型入面快速揀選…', '✓ 成功拉取 {0} 個模型 · {1}ms', '✓ 已儲存（{0} · {1}）', '✓ 連通正常 · {0}ms · {1} 回覆: 「{2}」'],
       '渠道',
       '未設模型',
     ],
     en: [
-      'Primary OpenAI Profile|Profile|Reading View|Translated Only|Bilingual Stacked|Polishing Style|Technical Manuscript|Concise Key Points|Custom Prompt|Enter local-only custom system prompt (saved in ~/.gemini/config/, never in Git)…|OpenAI Endpoint Profiles|+ New|Delete|Profile Name|e.g. Primary Gateway / Local Ollama|Fetch Models|Save Config|Send Test Message|Clear Cache|API keys & custom prompts are stored locally in ~/.gemini/config/ (0600) and never touch Git.|Optional for local endpoint|Keyless OK|Clear|Pending clear|Fetching upstream /models…|Failed to fetch models|Saving configuration…|Save failed (daemon offline)|Testing endpoint latency…|Connection test failed|✓ Cleared translation cache|✓ Cleared local cache',
+      'Primary OpenAI Profile|Profile|Reading View|Translated Only|Bilingual Stacked|Polishing Style|Technical Manuscript|Concise Key Points|Custom Prompt|Enter local-only custom system prompt (saved in ~/.gemini/config/, never in Git)…|OpenAI Endpoint Profiles|+ New|Delete|Profile Name|e.g. Primary Gateway / Local Ollama|Fetch Models|Save Config|Send Test Message|Clear Cache|API keys & custom prompts are stored locally in ~/.gemini/config/ (0600) and never touch Git.|Optional for local endpoint|Keyless OK|Clear|Pending clear|Fetching upstream /models…|Failed to fetch models|Saving configuration…|Save failed (daemon offline)|Testing endpoint latency…|Connection test failed|✓ Cleared translation cache|✓ Cleared local cache|Expand an English thinking block to view translations; blocks already in your target language keep the original text; free machine translation automatically follows your system proxy.|Prism background service is disconnected. Please make sure the plugin daemon is running.',
       ['Saved {0} (leave blank to keep)', 'Cache: {0}', 'Frontend: {0} / Daemon: {1}', '▾ Quick-select from {0} models…', '✓ Loaded {0} models · {1}ms', '✓ Saved ({0} · {1})', '✓ Connected · {0}ms · Reply: "{2}"'],
       'Profile',
       'No model',
     ],
     ja: [
-      'OpenAI 互換メインプロファイル|カスタム接続先|翻訳表示モード|翻訳のみ|翻訳＋原文対照|文体プリセット|技術ノート調|要点簡潔|カスタムプロンプト|ローカル専用システムプロンプトを入力（~/.gemini/config/ に保存され、Gitには含まれません）…|OpenAI 互換接続先プリセット|+ 追加|削除|接続先名|例: メインGW / ローカル Ollama|モデル一覧取得|設定を保存|接続テスト送信|キャッシュ消去|APIキーとカスタムプロンプトは ~/.gemini/config/ (0600) にローカル保存され、Gitには一切書き込まれません。|ローカル接続先は空欄可|キー不要|キー消去|保存時に消去|上流のモデル一覧を取得中…|モデル一覧の取得に失敗しました|設定を保存中…|保存失敗（デーモンオフライン）|保存して接続テストを送信中…|接続テストに失敗しました|✓ 翻訳キャッシュを消去しました|✓ ローカルキャッシュを消去しました',
+      'OpenAI 互換メインプロファイル|カスタム接続先|翻訳表示モード|翻訳のみ|翻訳＋原文対照|文体プリセット|技術ノート調|要点簡潔|カスタムプロンプト|ローカル専用システムプロンプトを入力（~/.gemini/config/ に保存され、Gitには含まれません）…|OpenAI 互換接続先プリセット|+ 追加|削除|接続先名|例: メインGW / ローカル Ollama|モデル一覧取得|設定を保存|接続テスト送信|キャッシュ消去|APIキーとカスタムプロンプトは ~/.gemini/config/ (0600) にローカル保存され、Gitには一切書き込まれません。|ローカル接続先は空欄可|キー不要|キー消去|保存時に消去|上流のモデル一覧を取得中…|モデル一覧の取得に失敗しました|設定を保存中…|保存失敗（デーモンオフライン）|保存して接続テストを送信中…|接続テストに失敗しました|✓ 翻訳キャッシュを消去しました|✓ ローカルキャッシュを消去しました|有効化後に英語の思考ブロックを展開すると訳文が表示されます。既に対象言語の思考ブロックは原文を保持し、無料機械翻訳はシステムプロキシに自動追従します。|Prism バックグラウンドサービスに接続されていません。プラグインのデーモンが起動しているか確認してください。',
       ['保存済み {0}（空欄で維持）', 'キャッシュ {0} 件', 'フロント {0} 件 / デーモン {1} 件', '▾ 取得した {0} 個のモデルから選択…', '✓ {0} 個のモデルを取得 · {1}ms', '✓ 保存完了（{0} · {1}）', '✓ 接続正常 · {0}ms · {1} 応答: 「{2}」'],
       'プロファイル',
       'モデル未設定',
@@ -138,6 +138,12 @@
     return G.__agPrism || null;
   }
 
+  function hasThoughtBridge() {
+    const br =
+      (typeof window !== 'undefined' && window.__agPrismThoughtBridge) || G.__agPrismThoughtBridge || null;
+    return Boolean(br && typeof br === 'object');
+  }
+
   // Strictly prioritize `__agPrismThoughtBridge` over raw V8 CDP binding `__agPrismThoughtCall(jsonStr) -> void`!
   function resolveThoughtRpcCall() {
     const br =
@@ -225,6 +231,8 @@
 
     const box = mkEl('div', 'ag-cs-thought-cfg-box');
     box.setAttribute('data-testid', 'prism-thought-ai-config');
+    box.setAttribute('data-ag-no-i18n', '');
+    for (const s of 'translate=no,data-no-translate=true,data-ag-localization-skip=true,data-agy-no-translate=true,data-antigravity-zh-skip=1'.split(',')) { const p = s.split('='); box.setAttribute(p[0], p[1]); }
     box.hidden = modeFn() !== 'ai';
 
     const hostCfgView = resolveHostPrism()?.getState?.()?.cfg?.thoughtView;
@@ -258,6 +266,46 @@
         },
       ],
       fetchedModels: [],
+    };
+
+    // -1) Usage Hint & Background Bridge Status Banner
+    const usageBanner = mkEl('div', 'ag-cs-thought-hint');
+    usageBanner.setAttribute('data-testid', 'thought-usage-banner');
+    if (usageBanner.style) {
+      usageBanner.style.display = 'flex';
+      usageBanner.style.flexDirection = 'column';
+      usageBanner.style.gap = '4px';
+      usageBanner.style.padding = '7px 10px';
+      usageBanner.style.borderRadius = 'var(--ag-cs-r-md, 8px)';
+      usageBanner.style.border = '1px solid var(--ag-cs-border-1, rgba(128, 128, 128, 0.22))';
+      usageBanner.style.background = 'var(--ag-cs-pill-bg, rgba(128, 128, 128, 0.06))';
+    }
+    const usageHintEl = mkEl('p', 'ag-cs-thought-hint');
+    usageHintEl.setAttribute('data-testid', 'thought-usage-hint');
+    usageHintEl.textContent = ui.thoughtUsageHint || initialPack.usageHint;
+
+    const bridgeWarnEl = mkEl('p', 'ag-cs-thought-hint');
+    bridgeWarnEl.setAttribute('data-testid', 'thought-bridge-warning');
+    bridgeWarnEl.setAttribute('role', 'status');
+    if (bridgeWarnEl.style) {
+      bridgeWarnEl.style.color = 'var(--warning, #D97706)';
+      bridgeWarnEl.style.fontWeight = '500';
+      bridgeWarnEl.style.opacity = '1';
+    }
+    usageBanner.appendChild(usageHintEl);
+    usageBanner.appendChild(bridgeWarnEl);
+    box.appendChild(usageBanner);
+
+    const syncUsageBanner = () => {
+      const pack = getPack();
+      const offline = !hasThoughtBridge();
+      guard(() => {
+        usageHintEl.textContent = ui.thoughtUsageHint || pack.usageHint;
+        usageBanner.setAttribute('data-bridge-state', offline ? 'offline' : 'online');
+        bridgeWarnEl.textContent = offline ? ui.thoughtBridgeOfflineHint || pack.bridgeOfflineHint : '';
+        bridgeWarnEl.hidden = !offline;
+        if (bridgeWarnEl.style) bridgeWarnEl.style.display = offline ? '' : 'none';
+      });
     };
 
     // 0) Reading View Bar: kept in DOM for standalone/test usage; auto-hidden when parent settings-panel already renders thoughtView row
@@ -734,6 +782,7 @@
         clearCacheBtn.textContent = ui.thoughtClearCacheBtn || pack.clearCacheBtn;
         privHint.textContent = ui.thoughtPrivacyHint || pack.privacyHint;
       });
+      syncUsageBanner();
       syncViewModeUi();
       syncStyleUi();
       renderProfilePillsAndForm();
@@ -830,6 +879,7 @@
 
     const reloadConfig = () => {
       state.loaded = false;
+      syncUsageBanner();
       const hostView = resolveHostPrism()?.getState?.()?.cfg?.thoughtView;
       if (hostView === 'bilingual' || hostView === 'immersive') {
         state.viewMode = hostView;
@@ -847,6 +897,7 @@
     };
 
     const ensureLoaded = () => {
+      syncUsageBanner();
       const hostView = resolveHostPrism()?.getState?.()?.cfg?.thoughtView;
       if (hostView === 'bilingual' || hostView === 'immersive') {
         state.viewMode = hostView;
@@ -1012,6 +1063,7 @@
         });
     });
 
+    syncUsageBanner();
     syncViewModeUi();
     syncStyleUi();
     renderProfilePillsAndForm();
@@ -1035,6 +1087,7 @@
         guard(() => {
           box.hidden = nextMode !== 'ai';
         });
+        syncUsageBanner();
         if (nextMode === 'ai') ensureLoaded();
       },
     };
