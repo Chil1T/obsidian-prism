@@ -355,9 +355,14 @@ test('mountOrSyncSettingsSection mounts all 27 settings (including omniModule, l
     let sec = doc.getElementById(settingsPanel.SETTINGS_SEC_ID);
     assert.ok(sec, 'Settings section must mount into Appearance dialog');
 
-    // 1. Verify all 29 setting rows mount cleanly, with 4 rows in modules group and sidebarStudio (Beta) in beta group
+    // 1. Verify all 30 setting rows mount cleanly, external zh-plugin no-translate markers are stamped, and updateChannel mounts in About
+    assert.equal(sec.getAttribute('translate'), 'no');
+    assert.equal(sec.getAttribute('data-no-translate'), 'true');
+    assert.equal(sec.getAttribute('data-ag-localization-skip'), 'true');
+    assert.equal(sec.getAttribute('data-agy-no-translate'), 'true');
+    assert.equal(sec.getAttribute('data-antigravity-zh-skip'), '1');
     const allRows = sec.querySelectorAll('[data-ag-cs-row]');
-    assert.equal(allRows.length, 29, 'Must render all 29 setting rows');
+    assert.equal(allRows.length, 30, 'Must render all 30 setting rows');
     const modulesGrp = sec.querySelector('[data-ag-cs-group="modules"]');
     const moduleRowKeys = modulesGrp.querySelectorAll('[data-ag-cs-row]').map((r) => r.getAttribute('data-ag-cs-row'));
     assert.deepEqual(moduleRowKeys, ['telemetryModule', 'effortSliderModule', 'omniModule', 'linkTarget']);
@@ -393,6 +398,14 @@ test('mountOrSyncSettingsSection mounts all 27 settings (including omniModule, l
     sidebarOnBtn.click();
     assert.equal(state.sidebarStudio, 'on');
 
+    const chBetaBtn = findSegBtn('updateChannel', 'beta');
+    const chStableBtn = findSegBtn('updateChannel', 'stable');
+    assert.ok(chBetaBtn && chStableBtn, 'updateChannel stable/beta buttons must mount in About group');
+    chBetaBtn.click();
+    assert.equal(state.updateChannel, 'beta');
+    chStableBtn.click();
+    assert.equal(state.updateChannel, 'stable');
+
     // 3. Scene presets: focus enables sidebarCompact=true; switching to ultra resets sidebarCompact=false & highlights ultra pill
     sec.querySelector('button[data-ag-cs-preset="focus"]').click();
     assert.equal(state.sidebarCompact, true);
@@ -403,13 +416,14 @@ test('mountOrSyncSettingsSection mounts all 27 settings (including omniModule, l
     assert.equal(sec.querySelector('button[data-ag-cs-preset="ultra"]').getAttribute('data-active'), '1');
     assert.equal(sec.querySelector('button[data-ag-cs-preset="focus"]').getAttribute('data-active'), '0');
 
-    // 4. Async Export JSON awaits __agPrismThought.getConfig() Promise, normalizes 'tech' -> 'technical', strips secrets, and includes 27 keys
+    // 4. Async Export JSON awaits __agPrismThought.getConfig() Promise, normalizes 'tech' -> 'technical', strips secrets, and includes 30 keys
     const exportBtn = sec.querySelector('button[data-ag-cs-cfg-action="export"]');
     exportBtn.click();
     await new Promise((r) => setTimeout(r, 25));
     assert.equal(clipboardWrites.length, 1);
     const exportedObj = JSON.parse(clipboardWrites[0]);
-    assert.equal(Object.keys(exportedObj.settings).length, 29);
+    assert.equal(Object.keys(exportedObj.settings).length, 30);
+    assert.equal(exportedObj.settings.updateChannel, 'stable');
     assert.equal(exportedObj.settings.hostLocalization, 'auto');
     assert.equal(exportedObj.settings.omniModule, 'on');
     assert.equal(exportedObj.settings.linkTarget, 'external');
@@ -593,5 +607,95 @@ test('UX-A2 Effort Slider full Prism integration: data-ag-cs-motion="off", data-
   } finally {
     if (prevDoc === undefined) delete globalThis.document;
     else globalThis.document = prevDoc;
+  }
+});
+
+test('settings-panel lazy foldBody deferral on collapsed mount, memoized syncRootState, and zero duplicate style injection when #ag-prism-css exists', async () => {
+  const prevDoc = globalThis.document;
+  const prevWin = globalThis.window;
+  const prevStorage = globalThis.localStorage;
+
+  const { doc, win, storage } = createMockDomEnv('dark');
+  storage.removeItem('ag-prism:settings-open'); // initOpen === false (default collapsed)
+  const mainCss = doc.createElement('style');
+  mainCss.id = 'ag-prism-css';
+  doc.head.appendChild(mainCss);
+
+  globalThis.document = doc;
+  globalThis.window = win;
+  globalThis.localStorage = storage;
+
+  const state = settingsPanel.getDefaultSettingsPatch();
+  let matchCalls = 0;
+  const mountOrSync = () =>
+    settingsPanel.mountOrSyncSettingsSection({
+      version: '1.0.6',
+      getLang: () => state.language,
+      uiText: (l) => i18nLocales.getUiStrings(l),
+      isZh: () => true,
+      i18nCore,
+      formatSettingsSummary: (l) => `${l}:${state.palette}:${state.motionLevel}`,
+      resolveSettingRowActiveValue: (k) => state[k],
+      isSettingButtonMatch: (_k, valJson, cur) => {
+        matchCalls += 1;
+        return JSON.parse(valJson) === cur;
+      },
+      saveSetting: (k, v) => { state[k] = v; },
+      saveSettingsBatch: (p) => Object.assign(state, p),
+      getThoughtTranslateMode: () => state.thoughtTranslate,
+      handledGroupClicks: new WeakSet(),
+      runSettingsGroupGlide: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+
+  try {
+    mountOrSync();
+    assert.equal(doc.getElementById('ag-prism-settings-v101-css'), null, 'Must skip extra <style> injection when #ag-prism-css is present');
+
+    const sec = doc.getElementById(settingsPanel.SETTINGS_SEC_ID);
+    const foldHead = sec.querySelector('[data-ag-cs-fold-toggle="1"]');
+    const foldBody = sec.querySelector('.ag-cs-settings-fold-body');
+    const summaryEl = sec.querySelector('[data-ag-cs-fold-summary]');
+    assert.ok(sec && foldHead && foldBody && summaryEl);
+    assert.equal(sec.getAttribute('data-open'), '0');
+    assert.equal(foldBody.children.length, 0, 'Default collapsed mount must defer building internal setting rows');
+    assert.equal(matchCalls, 0, 'Default collapsed mount must perform 0 button match evaluations');
+
+    // Updating state while collapsed updates fold summary in O(1) without building or scanning buttons
+    state.palette = 'warm';
+    mountOrSync();
+    assert.equal(summaryEl.textContent, 'zh-CN:warm:ultra');
+    assert.equal(foldBody.children.length, 0);
+    assert.equal(matchCalls, 0);
+
+    // First click on foldHead lazily constructs all 30 rows and 6 groups
+    foldHead.click();
+    assert.equal(sec.getAttribute('data-open'), '1');
+    assert.equal(sec.getAttribute('data-body-built'), '1');
+    assert.equal(sec.querySelectorAll('[data-ag-cs-row]').length, 30);
+    assert.equal(sec.querySelectorAll('.ag-cs-settings-group').length, 6);
+    const callsAfterExpand = matchCalls;
+    assert.ok(callsAfterExpand > 0);
+
+    // Repeated sync with unchanged state signature short-circuits with 0 button scans
+    mountOrSync();
+    mountOrSync();
+    assert.equal(matchCalls, callsAfterExpand, 'Memoized syncRootState must skip DOM button traversal when state is unchanged');
+
+    // State change invalidates signature and updates pressed state cleanly
+    state.motionLevel = 'subtle';
+    mountOrSync();
+    assert.ok(matchCalls > callsAfterExpand);
+    const subtleBtn = sec
+      .querySelectorAll('button[data-ag-cs-key="motionLevel"]')
+      .find((b) => b.getAttribute('data-ag-cs-val') === '"subtle"');
+    assert.equal(subtleBtn.getAttribute('aria-pressed'), 'true');
+  } finally {
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevWin === undefined) delete globalThis.window;
+    else globalThis.window = prevWin;
+    if (prevStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevStorage;
   }
 });

@@ -315,11 +315,9 @@
     setAttrIfChanged,
     runGuardedMut,
   }) {
-    let convAura = null;
-    let overrideAmbient = null;
-    let overrideSpectrum = null;
-    let externalAwaiting = null;
-    let externalErrorPending = false;
+    let convAura = null, overrideAmbient = null, overrideSpectrum = null, externalAwaiting = null, externalErrorPending = false, wb = false;
+    const WB = 'data-ag-cs-win-blur', isAB = () => typeof document !== 'undefined' && document.documentElement?.getAttribute?.(WB) === '1';
+    const isP = () => Boolean((typeof document !== 'undefined' && document.hidden) || isAB() || wb);
 
     function normAmbientVal(v) {
       if (v === null || v === undefined || v === '') return 1;
@@ -510,17 +508,14 @@
 
     function unmount() {
       if (!convAura) return;
-      detachFocusWakeListeners(convAura);
-      if (convAura.timer) clearTimeout(convAura.timer);
-      if (convAura.rafId && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(convAura.rafId);
-      if (convAura.ro) convAura.ro.disconnect();
-      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', convAura.onVis);
-      if (convAura.glow && typeof convAura.glow.dispose === 'function') {
-        try {
-          convAura.glow.dispose();
-        } catch {}
-      }
-      if (convAura.host) convAura.host.remove();
+      const a = convAura;
+      detachFocusWakeListeners(a);
+      if (a.timer) clearTimeout(a.timer);
+      if (a.rafId && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(a.rafId);
+      a.ro?.disconnect();
+      a.uW?.();
+      try { a.glow?.dispose?.(); } catch {}
+      a.host?.remove();
       convAura = null;
     }
 
@@ -612,9 +607,10 @@
         }
         const prevPhase = convAura.phase;
         const nextPhase = advancePhase(readNowMs());
+        if (!isAB()) wb = false;
         const shouldResumeFromMotionOrVis =
           isMotionStandardOrUltra() &&
-          !document.hidden &&
+          !isP() &&
           convAura.sleeping &&
           convAura.sleepReason !== 'settled' &&
           convAura.sleepReason !== 'ambient-zero';
@@ -671,14 +667,13 @@
         drawCount: 0,
         lastOptics: null,
         wasRunning: initRunning,
-        glow:
-          rippleCore && typeof rippleCore.mountBrandHorizonGlow === 'function'
-            ? rippleCore.mountBrandHorizonGlow(glowCanvas)
-            : { mode: 'none', resize() {}, clear() {}, draw() {}, drawStaticSnapshot() {}, dispose() {} },
+        glow: rippleCore?.mountBrandHorizonGlow
+          ? rippleCore.mountBrandHorizonGlow(glowCanvas)
+          : { mode: 'none', resize() {}, clear() {}, draw() {}, drawStaticSnapshot() {}, dispose() {} },
         timer: 0,
         rafId: 0,
         ro: null,
-        onVis: null,
+        uW: null,
         wake: null,
         refreshTheme: null,
       };
@@ -746,7 +741,7 @@
           return;
         }
 
-        const allowLivingFlow = isMotionStandardOrUltra() && !document.hidden;
+        const allowLivingFlow = isMotionStandardOrUltra() && !isP();
         const liftElapsed = state.liftoffAt > 0 ? now - state.liftoffAt : -1;
         const inLiftoffEbb = allowLivingFlow && liftElapsed >= 0 && liftElapsed < 520;
         if (state.liftoffAt > 0 && !inLiftoffEbb) {
@@ -775,15 +770,24 @@
           };
         }
 
-        // Split-Rate 300Hz VSync throttle: only short burst transients run high-rate; steady running/breathing strictly obey opt.frameMs (~30fps)
+        // Split-Rate 300Hz VSync throttle: burst transients capped >=16-20ms; non-burst steady idle >=160ms; running ~30fps
         const isGpuGlow = Boolean(state.glow && state.glow.mode === 'webgl2');
         const minGap = isGpuGlow && typeof getMinFrameGapMs === 'function' ? Number(getMinFrameGapMs() || 0) : 0;
         const isBurstTransient = inLiftoffEbb || phase === 'start';
+        const schedFrameMs = phase === 'idle' ? Math.max(160, opt.frameMs || 160) : opt.frameMs || 32;
+        const burstGap = Math.max(minGap, inLiftoffEbb ? 16 : 20);
         const effectiveMinGap = isBurstTransient
-          ? minGap
-          : Math.max(minGap, Math.max(0, (opt.frameMs || 32) - 2));
+          ? burstGap
+          : Math.max(minGap, Math.max(0, schedFrameMs - 2));
 
-        const bypassThrottle = forceImmediateDraw || phaseJustChanged || !drawnOnce;
+        const phaseElapsed = now - state.phaseAt;
+        const settleDecisionHold = allowLivingFlow && phase === 'awaiting-decision' && phaseElapsed >= CONV_AURA_DECISION_BREATH_MS;
+        const settleErrorZero = Boolean(state.pendingErrorClear) || (phase === 'error-halted' && phaseElapsed >= CONV_AURA_ERROR_MS);
+        const settleLongComplete = allowLivingFlow && phase === 'long-task-complete' && phaseElapsed >= CONV_AURA_LONG_COMPLETE_MS;
+        const settleIdleSleep = allowLivingFlow && phase === 'idle' && !inLiftoffEbb && phaseElapsed >= CONV_AURA_IDLE_SLEEP_MS;
+
+        const bypassThrottle =
+          forceImmediateDraw || phaseJustChanged || !drawnOnce || settleDecisionHold || settleErrorZero || settleLongComplete || settleIdleSleep;
         forceImmediateDraw = false;
 
         if (!bypassThrottle && allowLivingFlow && effectiveMinGap > 0 && lastGpuDrawAt > 0 && now - lastGpuDrawAt < effectiveMinGap) {
@@ -795,13 +799,6 @@
 
         lastGpuDrawAt = now;
         layout();
-
-        // Check terminal 0fps snapshot conditions before/at render
-        const phaseElapsed = now - state.phaseAt;
-        const settleDecisionHold = allowLivingFlow && phase === 'awaiting-decision' && phaseElapsed >= CONV_AURA_DECISION_BREATH_MS;
-        const settleErrorZero = Boolean(state.pendingErrorClear) || (phase === 'error-halted' && phaseElapsed >= CONV_AURA_ERROR_MS);
-        const settleLongComplete = allowLivingFlow && phase === 'long-task-complete' && phaseElapsed >= CONV_AURA_LONG_COMPLETE_MS;
-        const settleIdleSleep = allowLivingFlow && phase === 'idle' && !inLiftoffEbb && phaseElapsed >= CONV_AURA_IDLE_SLEEP_MS;
 
         if (settleErrorZero) {
           state.pendingErrorClear = false;
@@ -889,7 +886,7 @@
         }
 
         if (isDestroyed() || !allowLivingFlow || settleIdleSleep) {
-          const reason = !allowLivingFlow ? (document.hidden ? 'hidden' : 'motion-still') : 'settled';
+          const reason = !allowLivingFlow ? (isP() ? 'hidden' : 'motion-still') : 'settled';
           enterAuraSleep(reason);
           return;
         }
@@ -898,14 +895,9 @@
         state.sleepReason = '';
         if (host.hasAttribute('data-aura-sleep')) host.removeAttribute('data-aura-sleep');
 
-        if (isGpuGlow && isBurstTransient) {
-          wake(false);
-          return;
-        }
-
-        let nextDelay = opt.frameMs || 32;
+        let nextDelay = isBurstTransient ? burstGap : schedFrameMs;
         if (inLiftoffEbb) {
-          nextDelay = Math.min(16, Math.max(8, 520 - liftElapsed + 4));
+          nextDelay = Math.min(nextDelay, Math.max(8, 520 - liftElapsed + 4));
         } else if (phase === 'start') {
           nextDelay = Math.min(nextDelay, Math.max(16, CONV_AURA_START_MS - phaseElapsed + 4));
         } else if (phase === 'complete') {
@@ -929,7 +921,7 @@
           state.timer = 0;
         }
         if (isDestroyed() || convAura !== state) return;
-        if (document.hidden) {
+        if (isP()) {
           if (!drawnOnce) {
             forceImmediateDraw = true;
             drawNow(readNowMs());
@@ -973,17 +965,29 @@
           wake(true);
         }
       };
-      state.onVis = () => {
-        if (!document.hidden) {
-          if (state.sleepReason === 'hidden') {
-            state.sleepReason = '';
-            wake(true);
-          }
-        } else {
-          enterAuraSleep('hidden');
-        }
+      const onVis = () => {
+        if (!isP()) { if (state.sleepReason === 'hidden') { state.sleepReason = ''; wake(true); } }
+        else enterAuraSleep('hidden');
       };
-      document.addEventListener('visibilitychange', state.onVis);
+      const onBlur = () => { wb = true; enterAuraSleep('hidden'); };
+      const onFocus = () => { wb = false; onVis(); };
+      document.addEventListener('visibilitychange', onVis);
+      const wRef = typeof window !== 'undefined' ? window : null;
+      wRef?.addEventListener?.('blur', onBlur);
+      wRef?.addEventListener?.('focus', onFocus);
+      let bMo = null;
+      if (typeof MutationObserver === 'function' && document.documentElement) {
+        try {
+          bMo = new MutationObserver(() => { if (!isAB()) wb = false; onVis(); });
+          bMo.observe(document.documentElement, { attributes: true, attributeFilter: [WB] });
+        } catch {}
+      }
+      state.uW = () => {
+        if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVis);
+        wRef?.removeEventListener?.('blur', onBlur);
+        wRef?.removeEventListener?.('focus', onFocus);
+        bMo?.disconnect();
+      };
 
       if (typeof ResizeObserver === 'function') {
         state.ro = new ResizeObserver((entries) => {

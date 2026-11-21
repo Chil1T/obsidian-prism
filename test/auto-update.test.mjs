@@ -10,8 +10,11 @@ import { fileURLToPath } from 'node:url';
 
 import {
   UpdateService,
+  LATEST_RELEASE_API,
+  RELEASES_LIST_API,
   compareSemver,
   isTrustedReleaseAssetUrl,
+  normalizeUpdateChannel,
   parseSha256Sums,
 } from '../sidecars/daemon/update-service.mjs';
 import { PrismDaemon } from '../sidecars/daemon/main.mjs';
@@ -867,4 +870,199 @@ test('settings-panel & 5-language i18n render autoUpdate(off default), update co
     if (prevStorage === undefined) delete globalThis.localStorage;
     else globalThis.localStorage = prevStorage;
   }
+});
+
+test('dual update channels (stable / beta): prerelease selection, automatic stable promotion, gentle channel switch-back, cache invalidation & release.yml --prerelease', async () => {
+  assert.equal(normalizeUpdateChannel('beta'), 'beta');
+  assert.equal(normalizeUpdateChannel('stable'), 'stable');
+  assert.equal(normalizeUpdateChannel('invalid'), 'stable');
+
+  const requestedUrls = [];
+  let releasesList = [
+    {
+      tag_name: 'v1.0.8-beta.1',
+      draft: true,
+      prerelease: true,
+      html_url: 'https://github.com/RMvdesi/obsidian-prism/releases/tag/v1.0.8-beta.1',
+      assets: [],
+    },
+    {
+      tag_name: 'v1.0.7-beta.1',
+      draft: false,
+      prerelease: true,
+      html_url: 'https://github.com/RMvdesi/obsidian-prism/releases/tag/v1.0.7-beta.1',
+      assets: [
+        {
+          name: 'obsidian-prism-installer.exe',
+          digest: `sha256:${'1'.repeat(64)}`,
+          browser_download_url: 'https://github.com/RMvdesi/obsidian-prism/releases/download/v1.0.7-beta.1/obsidian-prism-installer.exe',
+        },
+      ],
+    },
+    {
+      tag_name: 'v1.0.6',
+      draft: false,
+      prerelease: false,
+      html_url: 'https://github.com/RMvdesi/obsidian-prism/releases/tag/v1.0.6',
+      assets: [
+        {
+          name: 'obsidian-prism-installer.exe',
+          digest: `sha256:${'2'.repeat(64)}`,
+          browser_download_url: 'https://github.com/RMvdesi/obsidian-prism/releases/download/v1.0.6/obsidian-prism-installer.exe',
+        },
+      ],
+    },
+  ];
+  let latestStable = releasesList[2];
+
+  const mockFetch = async (url) => {
+    requestedUrls.push(url);
+    if (url === LATEST_RELEASE_API) {
+      return { ok: true, status: 200, json: async () => latestStable };
+    }
+    if (url === RELEASES_LIST_API) {
+      return { ok: true, status: 200, json: async () => releasesList };
+    }
+    return { ok: false, status: 404, json: async () => ({}) };
+  };
+
+  // 1) Default stable channel queries /releases/latest and skips prereleases
+  const svc = new UpdateService({
+    platform: 'win32',
+    currentVersion: '1.0.6',
+    channel: 'stable',
+    fetchFn: mockFetch,
+  });
+  assert.equal(svc.getStatus().channel, 'stable');
+  assert.equal(svc.getStatus().isPrerelease, false);
+
+  const st1 = await svc.checkForUpdates({ force: false });
+  assert.equal(st1.ok, true);
+  assert.equal(st1.channel, 'stable');
+  assert.equal(st1.hasUpdate, false);
+  assert.equal(st1.isPrerelease, false);
+  assert.equal(requestedUrls.at(-1), LATEST_RELEASE_API);
+
+  // If /releases/latest returns a prerelease on stable channel, it must be skipped
+  latestStable = releasesList[1];
+  const stSkipPre = await svc.checkForUpdates({ force: true });
+  assert.equal(stSkipPre.hasUpdate, false);
+  assert.equal(stSkipPre.skippedPrerelease, true);
+  assert.equal(stSkipPre.isPrerelease, false);
+  latestStable = releasesList[2];
+
+  // 2) Switching to beta channel invalidates cache immediately and picks highest non-draft semver (1.0.7-beta.1 > 1.0.6, skipping 1.0.8-beta.1 draft)
+  assert.equal(svc.setChannel('beta'), true);
+  assert.equal(svc.getStatus().checkedAt, null, 'setChannel must invalidate cached check result');
+  const betaRes = await svc.checkForUpdates({ force: false, manual: true });
+  assert.equal(betaRes.ok, true);
+  assert.equal(betaRes.channel, 'beta');
+  assert.equal(betaRes.hasUpdate, true);
+  assert.equal(betaRes.latestTag, 'v1.0.7-beta.1');
+  assert.equal(betaRes.latestVersion, '1.0.7-beta.1');
+  assert.equal(betaRes.isPrerelease, true);
+  assert.equal(requestedUrls.at(-1), RELEASES_LIST_API);
+
+  // 3) Seamless promotion: when official v1.0.7 ships (> v1.0.7-beta.2), beta channel automatically picks v1.0.7
+  releasesList = [
+    {
+      tag_name: 'v1.0.7',
+      draft: false,
+      prerelease: false,
+      html_url: 'https://github.com/RMvdesi/obsidian-prism/releases/tag/v1.0.7',
+      assets: [],
+    },
+    {
+      tag_name: 'v1.0.7-beta.2',
+      draft: false,
+      prerelease: true,
+      html_url: 'https://github.com/RMvdesi/obsidian-prism/releases/tag/v1.0.7-beta.2',
+      assets: [],
+    },
+    ...releasesList,
+  ];
+  const promotedRes = await svc.checkForUpdates({ force: true });
+  assert.equal(promotedRes.latestVersion, '1.0.7');
+  assert.equal(promotedRes.isPrerelease, false, 'Official release outranking beta must clear isPrerelease');
+
+  // 4) Gentle switch-back: user on 1.0.7-beta.1 switching back to stable must NOT downgrade to 1.0.6, and upgrades cleanly when 1.0.7 stable arrives
+  const svcOnBetaBuild = new UpdateService({
+    platform: 'win32',
+    currentVersion: '1.0.7-beta.1',
+    channel: 'stable',
+    fetchFn: mockFetch,
+  });
+  latestStable = {
+    tag_name: 'v1.0.6',
+    draft: false,
+    prerelease: false,
+    html_url: 'https://github.com/RMvdesi/obsidian-prism/releases/tag/v1.0.6',
+    assets: [],
+  };
+  const gentleNoDowngrade = await svcOnBetaBuild.checkForUpdates({ force: true });
+  assert.equal(gentleNoDowngrade.hasUpdate, false, 'Switching back to stable must never force a downgrade from 1.0.7-beta.1 to 1.0.6');
+
+  latestStable = {
+    tag_name: 'v1.0.7',
+    draft: false,
+    prerelease: false,
+    html_url: 'https://github.com/RMvdesi/obsidian-prism/releases/tag/v1.0.7',
+    assets: [],
+  };
+  const gentlePromote = await svcOnBetaBuild.checkForUpdates({ force: true });
+  assert.equal(gentlePromote.hasUpdate, true, 'Stable channel must offer upgrade once 1.0.7 official is published');
+  assert.equal(gentlePromote.latestVersion, '1.0.7');
+
+  // 5) PrismDaemon wires config.updateChannel into UpdateService & executeRepoAction / broadcastConfigRefresh
+  const workDir = makeTempDir('prism-upd-channel-daemon-');
+  const pluginDir = path.join(workDir, 'plugin');
+  fs.mkdirSync(pluginDir, { recursive: true });
+  let activeCfgChannel = 'stable';
+  fs.writeFileSync(
+    path.join(pluginDir, 'cdp.js'),
+    "let ch='stable';module.exports={PLUGIN_VERSION:'1.0.6',DEFAULT_CONFIG:{autoUpdate:'off',updateChannel:'stable'},readConfig:()=>({autoUpdate:'off',updateChannel:global.__testUpdCh||ch,omniModule:'off'}),validateConfigEntry:()=>true,buildInjectExpression:()=>'(()=>{})()',buildConfigRefreshExpression:()=>'(()=>({refreshed:true}))()'};\n",
+    'utf8'
+  );
+  global.__testUpdCh = activeCfgChannel;
+  try {
+    const dSvc = new UpdateService({
+      platform: 'win32',
+      currentVersion: '1.0.6',
+      fetchFn: mockFetch,
+    });
+    latestStable = releasesList.find((r) => r.tag_name === 'v1.0.6');
+    releasesList = releasesList.filter((r) => r.tag_name !== 'v1.0.7');
+
+    const daemon = new PrismDaemon({
+      rootDir: pluginDir,
+      silent: true,
+      enableAutoUpdateTimer: false,
+      _testUpdateService: dSvc,
+    });
+
+    const sInit = await daemon.executeRepoAction({ action: 'check-update' });
+    assert.equal(sInit.channel, 'stable');
+    assert.equal(sInit.updateChannel, 'stable');
+    assert.equal(sInit.hasUpdate, false);
+
+    // Switch config to beta & broadcast refresh -> must sync UpdateService channel & detect 1.0.7-beta.2
+    activeCfgChannel = 'beta';
+    global.__testUpdCh = 'beta';
+    await daemon.broadcastConfigRefresh();
+    const sBeta = await daemon.executeRepoAction({ action: 'check-update' });
+    assert.equal(sBeta.channel, 'beta');
+    assert.equal(sBeta.updateChannel, 'beta');
+    assert.equal(sBeta.hasUpdate, true);
+    assert.equal(sBeta.isPrerelease, true);
+    assert.equal(sBeta.latestVersion, '1.0.7-beta.2');
+  } finally {
+    delete global.__testUpdCh;
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+
+  // 6) Verify .github/workflows/release.yml attaches --prerelease for hyphenated tags & supports hyphenated CHANGELOG headers
+  const wfYml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  assert.ok(wfYml.includes('[[ "${TAG_NAME#v}" == *-* ]]'), 'release.yml must detect prerelease hyphenated tags');
+  assert.ok(wfYml.includes('--prerelease'), 'release.yml must pass --prerelease to gh release');
+  assert.ok(wfYml.includes('index(trimmed, "## [" ver "]") == 1'), 'release.yml must extract exact hyphenated version headers from CHANGELOG.md');
 });

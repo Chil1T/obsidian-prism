@@ -7,7 +7,7 @@ const { execFile, execFileSync, spawn } = require('child_process');
 
 const STYLE_ID = 'ag-prism-css';
 const LEGACY_STYLE_ID = 'ag-claude-style-css';
-const PLUGIN_VERSION = '1.0.5';
+const PLUGIN_VERSION = '1.0.6';
 const SETTING_BINDING = '__agPrismSetting';
 const LEGACY_SETTING_BINDING = '__agClaudeStyleSetting';
 const OMNI_BINDING = '__agPrismOmniCall';
@@ -61,6 +61,7 @@ const DEFAULT_CONFIG = {
   sidebarStudio: 'off',
   hostLocalization: 'auto',
   autoUpdate: 'off',
+  updateChannel: 'stable',
   pollIntervalMs: 2500,
 };
 
@@ -100,6 +101,7 @@ const VALIDATORS = {
   sidebarStudio: ['on', 'off'],
   hostLocalization: ['auto', 'on', 'off'],
   autoUpdate: ['on', 'off'],
+  updateChannel: ['stable', 'beta'],
 };
 
 function validateConfigEntry(key, value) {
@@ -5099,11 +5101,15 @@ function compileUnifiedBundle() {
     if (pIdx === 0) {
       finalPartCode = bootstrapHeader + finalPartCode;
     }
+    if (pIdx === compiledParts.length - 1) {
+      finalPartCode += '\ndelete globalThis.__agSP;delete globalThis.__agM;';
+    }
     partCodeByName.set(cp.partName, finalPartCode);
     orderedCodes.push(finalPartCode);
   }
 
   const bundleCode = orderedCodes.join('\n');
+  if (process.env.AG_PRISM_DEV_WATCH !== '1') _mangledUnitCache.clear();
   _unifiedBundleCache = { sig: totalSig, bundleCode, partCodeByName };
   return _unifiedBundleCache;
 }
@@ -5419,6 +5425,13 @@ function getInjectWrapperTemplate() {
     const stripForeignMount = () => {
       destroyModules(true);
       try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}
+      try {
+        document.documentElement?.removeAttribute?.('data-ag-cs-model-menu');
+        document.querySelectorAll?.('[data-ag-cs-aux-dual],[data-ag-cs-model-overlay]').forEach((el) => {
+          el.removeAttribute('data-ag-cs-aux-dual');
+          el.removeAttribute('data-ag-cs-model-overlay');
+        });
+      } catch {}
       for (const k of ['__agPrismRepoBridge', '__agPrismThoughtBridge', '__agPrismUsageBridge', '__agPrismOmniBridge']) {
         try { window[k]?.dispose?.(); } catch {}
       }
@@ -6387,6 +6400,7 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-cs-sidebar-compact',
       'data-ag-cs-sidebar-collapsed',
       'data-ag-cs-has-crab',
+      'data-ag-cs-model-menu',
       'data-ag-cs-lang',
       'data-ag-cs-cjk',
       'data-ag-cs-effort-accent',
@@ -6461,6 +6475,8 @@ const REMOVE_EXPRESSION = `(() => {
     'data-ag-cs-spark-streaming',
     'data-ag-cs-prism-cv',
     'data-ag-cs-code-folded',
+    'data-ag-cs-aux-dual',
+    'data-ag-cs-model-overlay',
   ].forEach((attr) => {
     document.querySelectorAll('[' + attr + ']').forEach((el) => el.removeAttribute(attr));
   });

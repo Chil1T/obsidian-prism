@@ -5,7 +5,7 @@
  *      1200ms delayed-plugin recheck, and 3000ms ping-pong conflict circuit breaker)
  *   2. 100% reversible destroy() using WeakMap snapshots (zero DOM property pollution)
  *   3. Strict Prism-owned UI, model-selector, code/editor, and chat-prose isolation
- *   4. 0fps visibility/blur hibernation + single-rAF batched scheduling (max 160 nodes/frame)
+ *   4. 0fps visibility/blur/win-blur hibernation + time-sliced rAF scheduling (<= 80 nodes & < 5ms/frame)
  *
  * Upstream Credit:
  *   Dictionary & DOM localization approach inspired by yiheng8023/antigravity-chinese (v3.3.19)
@@ -60,6 +60,14 @@
     'editor-instance',
   ];
 
+  function toLookupMap(arr) {
+    var map = Object.create(null);
+    for (var i = 0; i < arr.length; i++) map[arr[i]] = 1;
+    return map;
+  }
+
+  var IGNORED_CLASS_MAP = toLookupMap(IGNORED_CLASSES);
+
   var MODEL_SELECTOR_TESTIDS = {
     'model-selector-trigger': 1,
     'model-selector-panel': 1,
@@ -89,7 +97,17 @@
 
   var PRISM_CLASS_PREFIXES = ['ag-cs-', 'ag-prism-', 'ag-v2-', 'ag-omni-', 'ag-ss-', 'ces-', 'ag-anim-'];
 
+  var EXTERNAL_OWNED_IDS = {
+    'agy-theme-switcher': 1,
+    'agy-theme-menu': 1,
+    'antigravity-quota-widget': 1,
+    'antigravity-translation-audit': 1,
+  };
+
+  var EXTERNAL_OWNED_ATTRS = ['data-agy-hans-ui'];
+
   var CHAT_PROSE_CLASSES = ['prose', 'markdown-body', 'chat-markdown-message', 'rendered-markdown'];
+  var CHAT_PROSE_CLASS_MAP = toLookupMap(CHAT_PROSE_CLASSES);
   var CHAT_PROSE_ATTRS = ['data-markdown-root', 'data-message-content', 'data-message-id'];
   var CHAT_PROSE_TESTIDS = {
     'user-message': 1,
@@ -130,18 +148,35 @@
     classes: ['tabs-container', 'tab-label', 'monaco-icon-label', 'editor-tabs', 'file-tabs'],
     attrs: ['data-resource-name', 'data-uri', 'data-file-path'],
   };
+  var USER_CONTENT_CLASS_MAP = toLookupMap(USER_CONTENT_BOUNDARY.classes);
+
+  var MAX_SAFE_BOUNDARY_DEPTH = 128;
 
   var TRANSLATABLE_ATTRS = ['title', 'placeholder', 'aria-label', 'data-tooltip', 'alt', 'aria-description'];
 
-  var KNOWN_EXTERNAL_GLOBALS = [
-    '__AGY_I18N_INITIALIZED__',
-    '__AGY_I18N__',
-    '__ANTIGRAVITY_CN__',
-    '__ANTIGRAVITY_I18N__',
-    '__AG_I18N__',
-    '__AG_CN_PATCH__',
-    '__AGY_CN__',
-    '__I18N_PATCHED__',
+  var EXTERNAL_GLOBAL_SIGNATURE_GROUPS = [
+    { provider: 'antigravity-cn-community', keys: ['__agySidebarDragFixInstalled'] },
+    {
+      provider: 'yuexps/Antigravity-Hans',
+      keys: ['__antigravityZhPatchInstalled', '__antigravityZhSetLang', '__antigravityZhPatchObserver'],
+    },
+    {
+      provider: 'yiheng8023',
+      keys: ['__AGY_I18N_INITIALIZED__', '__AGY_I18N_DATA__', '__AGY_CREATE_ENGINE__', '__AGY_SWARM_I18N__', '__AGY_I18N__'],
+    },
+    { provider: '3169657175', keys: ['__agyI18n', '__agyTranslateEnhancementText'] },
+    {
+      provider: 'renkeshui',
+      keys: ['__antigravity_i18n_runner_active', '__ANTIGRAVITY_I18N_DATA__', '__ANTIGRAVITY_REVERSE_MAP__'],
+    },
+    { provider: 'nianshou555qiansui', keys: ['__ag_hanhua_engine__'] },
+    { provider: 'Ace2025001', keys: ['__AGY_ZHCN__', '__AGY_ZHCN_LOOKUP__'] },
+    { provider: 'Zero-Touch', keys: ['__antigravityZh', '__antigravityZhDict'] },
+    { provider: 'yunjuanyunshu', keys: ['__AG_ZH__'] },
+    {
+      provider: 'generic-external',
+      keys: ['__ANTIGRAVITY_CN__', '__ANTIGRAVITY_I18N__', '__AG_I18N__', '__AG_CN_PATCH__', '__AGY_CN__', '__I18N_PATCHED__'],
+    },
   ];
 
   var KNOWN_EXTERNAL_ATTRS = ['data-agy-i18n', 'data-ag-cn', 'data-i18n-patched', 'data-translated'];
@@ -175,17 +210,43 @@
     if (!el) return [];
     var raw = typeof el.className === 'string' ? el.className : '';
     if (!raw) return [];
-    return raw.trim().split(/\s+/);
+    var trimmed = raw.trim();
+    if (!trimmed) return [];
+    return trimmed.indexOf(' ') === -1 && !/\s/.test(trimmed) ? [trimmed] : trimmed.split(/\s+/);
   }
 
-  function isPrismOwnedSelf(el) {
+  function hasElementChild(el) {
+    if (!el) return false;
+    if (el.firstElementChild !== undefined) return Boolean(el.firstElementChild);
+    var ch = el.firstChild;
+    while (ch) {
+      if (ch.nodeType === 1) return true;
+      ch = ch.nextSibling;
+    }
+    return false;
+  }
+
+  function getChildElementCount(el) {
+    if (!el) return 0;
+    if (typeof el.childElementCount === 'number') return el.childElementCount;
+    if (el.children) return el.children.length;
+    var cnt = 0;
+    var ch = el.firstChild;
+    while (ch) {
+      if (ch.nodeType === 1) cnt++;
+      ch = ch.nextSibling;
+    }
+    return cnt;
+  }
+
+  function isPrismOwnedSelf(el, preTokens) {
     if (!el || el.nodeType !== 1) return false;
     var id = el.id || getAttr(el, 'id') || '';
     if (id && hasOwn.call(PRISM_OWNED_IDS, id)) return true;
     for (var i = 0; i < PRISM_OWNED_ATTRS.length; i++) {
       if (hasAttr(el, PRISM_OWNED_ATTRS[i])) return true;
     }
-    var tokens = getClassTokens(el);
+    var tokens = preTokens || getClassTokens(el);
     for (var t = 0; t < tokens.length; t++) {
       var cls = tokens[t];
       for (var p = 0; p < PRISM_CLASS_PREFIXES.length; p++) {
@@ -198,7 +259,7 @@
   function isPrismOwnedElement(el) {
     var cur = el && el.nodeType === 3 ? el.parentElement || el.parentNode : el;
     var depth = 0;
-    while (cur && depth < 128) {
+    while (cur && depth < MAX_SAFE_BOUNDARY_DEPTH) {
       if (cur.nodeType === 1 && isPrismOwnedSelf(cur)) return true;
       cur = cur.parentElement || cur.parentNode;
       depth++;
@@ -206,42 +267,38 @@
     return false;
   }
 
-  function isModelSelectorSelf(el) {
+  function isModelSelectorSelf(el, preTid) {
     if (!el || el.nodeType !== 1) return false;
-    var tid = getAttr(el, 'data-testid');
+    var tid = preTid !== undefined ? preTid : getAttr(el, 'data-testid');
     if (tid && hasOwn.call(MODEL_SELECTOR_TESTIDS, tid)) return true;
     if (hasAttr(el, 'data-effort')) return true;
     return false;
   }
 
-  function isChatProseSelf(el) {
+  function isChatProseSelf(el, preTokens, preTid) {
     if (!el || el.nodeType !== 1) return false;
-    var tid = getAttr(el, 'data-testid');
+    var tid = preTid !== undefined ? preTid : getAttr(el, 'data-testid');
     if (tid && hasOwn.call(CHAT_PROSE_TESTIDS, tid)) return true;
     for (var i = 0; i < CHAT_PROSE_ATTRS.length; i++) {
       if (hasAttr(el, CHAT_PROSE_ATTRS[i])) return true;
     }
-    var tokens = getClassTokens(el);
+    var tokens = preTokens || getClassTokens(el);
     for (var t = 0; t < tokens.length; t++) {
-      for (var c = 0; c < CHAT_PROSE_CLASSES.length; c++) {
-        if (tokens[t] === CHAT_PROSE_CLASSES[c]) return true;
-      }
+      if (CHAT_PROSE_CLASS_MAP[tokens[t]]) return true;
     }
     return false;
   }
 
-  function isUserContentBoundarySelf(el) {
+  function isUserContentBoundarySelf(el, preTokens, preTid) {
     if (!el || el.nodeType !== 1) return false;
-    var tid = getAttr(el, 'data-testid');
+    var tid = preTid !== undefined ? preTid : getAttr(el, 'data-testid');
     if (tid && hasOwn.call(USER_CONTENT_BOUNDARY.testids, tid)) return true;
     for (var i = 0; i < USER_CONTENT_BOUNDARY.attrs.length; i++) {
       if (hasAttr(el, USER_CONTENT_BOUNDARY.attrs[i])) return true;
     }
-    var tokens = getClassTokens(el);
+    var tokens = preTokens || getClassTokens(el);
     for (var t = 0; t < tokens.length; t++) {
-      for (var c = 0; c < USER_CONTENT_BOUNDARY.classes.length; c++) {
-        if (tokens[t] === USER_CONTENT_BOUNDARY.classes[c]) return true;
-      }
+      if (USER_CONTENT_CLASS_MAP[tokens[t]]) return true;
     }
     return false;
   }
@@ -249,7 +306,7 @@
   function isUserContentBoundary(el) {
     var cur = el && el.nodeType === 3 ? el.parentElement || el.parentNode : el;
     var depth = 0;
-    while (cur && depth < 128) {
+    while (cur && depth < MAX_SAFE_BOUNDARY_DEPTH) {
       if (cur.nodeType === 1 && isUserContentBoundarySelf(cur)) return true;
       cur = cur.parentElement || cur.parentNode;
       depth++;
@@ -265,9 +322,9 @@
     return false;
   }
 
-  function isInteractiveChatChromeSelf(el) {
+  function isInteractiveChatChromeSelf(el, skipDirectCheck) {
     if (!el || el.nodeType !== 1) return false;
-    if (isDirectIgnoredSelf(el)) return false;
+    if (!skipDirectCheck && isDirectIgnoredSelf(el)) return false;
     var tag = el.tagName ? String(el.tagName).toUpperCase() : '';
     if (tag === 'BUTTON') return true;
     var role = getAttr(el, 'role');
@@ -279,45 +336,113 @@
     return false;
   }
 
+  function isExternalPluginOwnedSelf(el) {
+    if (!el || el.nodeType !== 1) return false;
+    var id = el.id || getAttr(el, 'id') || '';
+    if (id && hasOwn.call(EXTERNAL_OWNED_IDS, id)) return true;
+    for (var i = 0; i < EXTERNAL_OWNED_ATTRS.length; i++) {
+      if (hasAttr(el, EXTERNAL_OWNED_ATTRS[i])) return true;
+    }
+    return false;
+  }
+
   function isDirectIgnoredSelf(el) {
     if (!el || el.nodeType !== 1) return false;
     var tag = el.tagName ? String(el.tagName).toUpperCase() : '';
     if (IGNORED_TAGS[tag]) return true;
     if (el.isContentEditable === true || getAttr(el, 'contenteditable') === 'true') return true;
-    if (isPrismOwnedSelf(el)) return true;
-    if (isModelSelectorSelf(el)) return true;
-    if (isChatProseSelf(el)) return true;
-    if (isUserContentBoundarySelf(el)) return true;
     var tokens = getClassTokens(el);
+    var tid = getAttr(el, 'data-testid');
+    if (isPrismOwnedSelf(el, tokens)) return true;
+    if (isExternalPluginOwnedSelf(el)) return true;
+    if (isModelSelectorSelf(el, tid)) return true;
+    if (isChatProseSelf(el, tokens, tid)) return true;
+    if (isUserContentBoundarySelf(el, tokens, tid)) return true;
     for (var i = 0; i < tokens.length; i++) {
-      for (var j = 0; j < IGNORED_CLASSES.length; j++) {
-        if (tokens[i] === IGNORED_CLASSES[j]) return true;
-      }
+      if (IGNORED_CLASS_MAP[tokens[i]]) return true;
     }
     return false;
   }
 
-  function isIgnoredBoundary(el) {
-    if (!el) return false;
+  /**
+   * Measures ancestor boundary state and remaining safe depth budget once at a subtree root,
+   * allowing child traversal to propagate state in amortized O(1) without re-climbing parents.
+   * States:
+   *   -1: hard-ignored (DirectIgnored ancestor or >128 depth Fail-Closed)
+   *    0: normal host UI (safe to translate)
+   *    1: inside conversation stream without interactive chrome exemption (skip self/text, descend elements)
+   *    2: inside interactive chrome control within conversation stream (safe to translate)
+   */
+  function measureSafeBoundaryDepth(el) {
+    if (!el) return { blocked: false, canDescendConv: false, state: 0, remDepth: MAX_SAFE_BOUNDARY_DEPTH };
     var startEl = el.nodeType === 3 ? el.parentElement || el.parentNode : el;
-    if (!startEl || startEl.nodeType !== 1) return false;
+    if (!startEl || startEl.nodeType !== 1) {
+      return { blocked: false, canDescendConv: false, state: 0, remDepth: MAX_SAFE_BOUNDARY_DEPTH };
+    }
 
     var cur = startEl;
     var sawInteractiveChrome = false;
+    var sawConvStream = false;
+    var blockedByConvStream = false;
     var depth = 0;
-    while (cur && depth < 128) {
+    while (cur && depth < MAX_SAFE_BOUNDARY_DEPTH) {
       if (cur.nodeType === 1) {
-        if (isDirectIgnoredSelf(cur)) return true;
-        if (isInteractiveChatChromeSelf(cur)) sawInteractiveChrome = true;
-        if (isConversationStreamSelf(cur) && !sawInteractiveChrome) {
-          return true;
+        if (isDirectIgnoredSelf(cur)) {
+          return { blocked: true, canDescendConv: false, state: -1, remDepth: -1 };
+        }
+        if (isInteractiveChatChromeSelf(cur, true)) {
+          sawInteractiveChrome = true;
+        }
+        if (isConversationStreamSelf(cur)) {
+          sawConvStream = true;
+          if (!sawInteractiveChrome) {
+            blockedByConvStream = true;
+          }
         }
       }
       cur = cur.parentElement || cur.parentNode;
       depth++;
     }
-    if (cur) return true;
-    return false;
+    if (cur) {
+      return { blocked: true, canDescendConv: false, state: -1, remDepth: -1 };
+    }
+    var remDepth = MAX_SAFE_BOUNDARY_DEPTH - depth;
+    if (blockedByConvStream) {
+      return { blocked: true, canDescendConv: true, state: 1, remDepth: remDepth };
+    }
+    return {
+      blocked: false,
+      canDescendConv: false,
+      state: sawConvStream ? 2 : 0,
+      remDepth: remDepth,
+    };
+  }
+
+  function advanceBoundaryForChild(parentCtx, childEl) {
+    var nextRem = parentCtx.remDepth - 1;
+    if (nextRem < 0 || parentCtx.state === -1) return null;
+    if (isDirectIgnoredSelf(childEl)) return null;
+    var pState = parentCtx.state;
+    var isInter = isInteractiveChatChromeSelf(childEl, true);
+    var isConv = isConversationStreamSelf(childEl);
+    var nextState = pState;
+    if (pState === 0) {
+      if (isConv) nextState = isInter ? 2 : 1;
+    } else if (pState === 1) {
+      nextState = isInter ? 2 : 1;
+    } else if (pState === 2) {
+      if (isConv && !isInter) nextState = 1;
+    }
+    return {
+      blocked: nextState === 1,
+      canDescendConv: nextState === 1,
+      state: nextState,
+      remDepth: nextRem,
+    };
+  }
+
+  function isIgnoredBoundary(el) {
+    return measureSafeBoundaryDepth(el).blocked;
   }
 
   function isInsideConversationStream(el) {
@@ -388,30 +513,117 @@
     return false;
   }
 
+  function safeReadLocalStorage(rootObj, key) {
+    try {
+      var ls = (rootObj && rootObj.localStorage) || (typeof localStorage !== 'undefined' ? localStorage : null);
+      if (ls && typeof ls.getItem === 'function') {
+        return ls.getItem(key);
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function hasElementClassToken(el, token) {
+    if (!el) return false;
+    if (el.classList && typeof el.classList.contains === 'function') {
+      try {
+        if (el.classList.contains(token)) return true;
+      } catch (e) {}
+    }
+    var tokens = getClassTokens(el);
+    for (var i = 0; i < tokens.length; i++) {
+      if (tokens[i] === token) return true;
+    }
+    return false;
+  }
+
   function detectLayer1External(rootObj, doc) {
     if (rootObj) {
-      for (var i = 0; i < KNOWN_EXTERNAL_GLOBALS.length; i++) {
-        var key = KNOWN_EXTERNAL_GLOBALS[i];
-        if (rootObj[key]) return { hit: true, detail: 'global:' + key };
+      for (var g = 0; g < EXTERNAL_GLOBAL_SIGNATURE_GROUPS.length; g++) {
+        var grp = EXTERNAL_GLOBAL_SIGNATURE_GROUPS[g];
+        for (var i = 0; i < grp.keys.length; i++) {
+          var key = grp.keys[i];
+          try {
+            if (rootObj[key]) {
+              return { hit: true, provider: grp.provider, detail: 'global:' + key };
+            }
+          } catch (e) {}
+        }
       }
     }
+
+    var hansLang = safeReadLocalStorage(rootObj, 'antigravityHansLang');
+    if (hansLang !== null) {
+      var normHans = String(hansLang).trim().toLowerCase();
+      if (normHans && normHans !== 'en' && normHans !== 'en-us' && normHans !== 'off' && normHans !== 'false' && normHans !== '0') {
+        return { hit: true, provider: 'yuexps/Antigravity-Hans', detail: 'storage:antigravityHansLang' };
+      }
+    }
+
+    var lucasDict = safeReadLocalStorage(rootObj, 'antigravity_chinese_patch_dict');
+    if (lucasDict !== null && String(lucasDict).trim() !== '') {
+      return { hit: true, provider: 'LucasvonLiu', detail: 'storage:antigravity_chinese_patch_dict' };
+    }
+
     if (doc) {
       var docEl = doc.documentElement;
       var body = doc.body;
+
+      if (docEl && (hasElementClassToken(docEl, 'agy-theme-active') || hasElementClassToken(docEl, 'agy-theme-active-v2'))) {
+        return { hit: true, provider: '3169657175', detail: 'class:agy-theme-active' };
+      }
+
+      if (typeof doc.querySelector === 'function') {
+        try {
+          if (doc.querySelector('[data-agy-hans-ui]')) {
+            return { hit: true, provider: 'yuexps/Antigravity-Hans', detail: 'dom:[data-agy-hans-ui]' };
+          }
+        } catch (e) {}
+        try {
+          if (doc.querySelector('#agy-theme-switcher, #antigravity-quota-widget')) {
+            return { hit: true, provider: '3169657175', detail: 'dom:#agy-theme-switcher|#antigravity-quota-widget' };
+          }
+        } catch (e) {}
+        try {
+          if (doc.querySelector('[data-model-selector-badge="true"]')) {
+            return { hit: true, provider: 'Ace2025001', detail: 'dom:[data-model-selector-badge="true"]' };
+          }
+        } catch (e) {}
+        try {
+          if (doc.querySelector('script[src*="ag_agent_hanhua.js"]')) {
+            return { hit: true, provider: 'cshitian', detail: 'script:ag_agent_hanhua.js' };
+          }
+        } catch (e) {}
+      }
+
+      if (typeof doc.querySelectorAll === 'function') {
+        try {
+          var scripts = doc.querySelectorAll('script');
+          if (scripts && scripts.length > 0) {
+            for (var sIdx = 0; sIdx < scripts.length; sIdx++) {
+              var sSrc = String(getAttr(scripts[sIdx], 'src') || scripts[sIdx].src || '');
+              if (sSrc.indexOf('ag_agent_hanhua.js') !== -1) {
+                return { hit: true, provider: 'cshitian', detail: 'script:ag_agent_hanhua.js' };
+              }
+            }
+          }
+        } catch (e) {}
+      }
+
       for (var j = 0; j < KNOWN_EXTERNAL_ATTRS.length; j++) {
         var attr = KNOWN_EXTERNAL_ATTRS[j];
         if ((docEl && hasAttr(docEl, attr)) || (body && hasAttr(body, attr))) {
-          return { hit: true, detail: 'attr:' + attr };
+          return { hit: true, provider: 'generic-external', detail: 'attr:' + attr };
         }
       }
       if (docEl && !hasAttr(docEl, 'data-ag-prism-lang-owned')) {
         var htmlLang = String(getAttr(docEl, 'lang') || docEl.lang || '').trim();
         if (/^zh(?:$|[-_])/i.test(htmlLang)) {
-          return { hit: true, detail: 'html-lang:' + htmlLang };
+          return { hit: true, provider: 'html-lang-zh', detail: 'html-lang:' + htmlLang };
         }
       }
     }
-    return { hit: false, detail: null };
+    return { hit: false, provider: null, detail: null };
   }
 
   function collectTextSkippingIgnored(el, outChunks, textSnapshots) {
@@ -514,13 +726,409 @@
   function detectExternalLocalization(rootObj, doc, options) {
     var l1 = detectLayer1External(rootObj, doc);
     if (l1.hit) {
-      return { detected: true, layer: 1, reason: 'external-ui-zh', detail: l1.detail };
+      return {
+        detected: true,
+        layer: 1,
+        reason: 'external-ui-zh',
+        provider: l1.provider || 'generic-external',
+        detail: l1.detail,
+      };
     }
     var l2 = detectLayer2ChromeZh(doc, options);
     if (l2.hit) {
-      return { detected: true, layer: 2, reason: 'external-ui-zh', detail: l2 };
+      return {
+        detected: true,
+        layer: 2,
+        reason: 'external-ui-zh',
+        provider: 'generic-zh-dom',
+        detail: l2,
+      };
     }
-    return { detected: false, layer: 0, reason: null, detail: l2 };
+    return { detected: false, layer: 0, reason: null, provider: null, detail: l2 };
+  }
+
+  /**
+   * Bounded 2-generation LRU cache backed exclusively by Object.create(null).
+   * 100% immune to external monkey-patching of Map.prototype.has/get/set (e.g. renkeshui)
+   * and Object.prototype keys (__proto__, constructor, toString).
+   */
+  function createNullProtoBoundedCache(maxSize) {
+    var cap = maxSize > 4 ? maxSize : 2048;
+    var genCap = cap >> 1;
+    var hot = Object.create(null);
+    var cold = Object.create(null);
+    var hotSize = 0;
+    var coldSize = 0;
+
+    return {
+      has: function (key) {
+        return key in hot || key in cold;
+      },
+      get: function (key) {
+        if (key in hot) return hot[key];
+        if (key in cold) {
+          var val = cold[key];
+          delete cold[key];
+          coldSize--;
+          if (hotSize >= genCap) {
+            cold = hot;
+            coldSize = hotSize;
+            hot = Object.create(null);
+            hotSize = 0;
+          }
+          hot[key] = val;
+          hotSize++;
+          return val;
+        }
+        return undefined;
+      },
+      set: function (key, val) {
+        if (key in hot) {
+          hot[key] = val;
+          return;
+        }
+        if (key in cold) {
+          delete cold[key];
+          coldSize--;
+        }
+        if (hotSize >= genCap && hotSize + coldSize >= cap) {
+          cold = hot;
+          coldSize = hotSize;
+          hot = Object.create(null);
+          hotSize = 0;
+        } else if (hotSize >= cap) {
+          cold = hot;
+          coldSize = hotSize;
+          hot = Object.create(null);
+          hotSize = 0;
+        }
+        hot[key] = val;
+        hotSize++;
+      },
+      delete: function (key) {
+        var removed = false;
+        if (key in hot) {
+          delete hot[key];
+          hotSize--;
+          removed = true;
+        }
+        if (key in cold) {
+          delete cold[key];
+          coldSize--;
+          removed = true;
+        }
+        return removed;
+      },
+      clear: function () {
+        hot = Object.create(null);
+        cold = Object.create(null);
+        hotSize = 0;
+        coldSize = 0;
+      },
+      get size() {
+        return hotSize + coldSize;
+      },
+    };
+  }
+
+  function readRegexQuantifier(src, pos) {
+    if (pos >= src.length) return { kind: 'one', end: pos };
+    var q = src.charAt(pos);
+    if (q === '?' || q === '*') {
+      return { kind: 'zero', end: pos + (src.charAt(pos + 1) === '?' ? 2 : 1) };
+    }
+    if (q === '+') {
+      return { kind: 'plus', end: pos + (src.charAt(pos + 1) === '?' ? 2 : 1) };
+    }
+    if (q === '{') {
+      var closeIdx = pos + 1;
+      while (closeIdx < src.length && src.charAt(closeIdx) !== '}') closeIdx++;
+      if (closeIdx < src.length) {
+        var afterBrace = closeIdx + 1;
+        if (src.charAt(afterBrace) === '?') afterBrace++;
+        return { kind: 'brace', end: afterBrace };
+      }
+      return { kind: 'brace', end: pos + 1 };
+    }
+    return { kind: 'one', end: pos };
+  }
+
+  function extractPatternIndexMeta(src, flags) {
+    if (flags && (flags.indexOf('i') !== -1 || flags.indexOf('m') !== -1)) {
+      return { anchor1: '', anchor2: '', bucketType: 'general', startChars: null };
+    }
+    var depth = 0;
+    var inClass = false;
+    var hasTopAlt = false;
+    for (var k = 0; k < src.length; k++) {
+      var ch = src.charAt(k);
+      if (ch === '\\') {
+        k++;
+        continue;
+      }
+      if (inClass) {
+        if (ch === ']') inClass = false;
+        continue;
+      }
+      if (ch === '[') {
+        inClass = true;
+        continue;
+      }
+      if (ch === '(') depth++;
+      else if (ch === ')') {
+        if (depth > 0) depth--;
+      } else if (ch === '|' && depth === 0) {
+        hasTopAlt = true;
+        break;
+      }
+    }
+    if (hasTopAlt) {
+      return { anchor1: '', anchor2: '', bucketType: 'general', startChars: null };
+    }
+
+    var runs = [];
+    var cur = '';
+    function flushRun() {
+      if (cur.length > 0) {
+        if (cur.length >= 2 || !/^\s+$/.test(cur)) {
+          runs.push(cur);
+        }
+        cur = '';
+      }
+    }
+
+    var i = 0;
+    while (i < src.length) {
+      var c = src.charAt(i);
+      if (c === '\\') {
+        if (i + 1 >= src.length) {
+          flushRun();
+          break;
+        }
+        var nx = src.charAt(i + 1);
+        if (nx === 'u') {
+          flushRun();
+          if (src.charAt(i + 2) === '{') {
+            var uEnd = i + 3;
+            while (uEnd < src.length && src.charAt(uEnd) !== '}') uEnd++;
+            i = readRegexQuantifier(src, uEnd < src.length ? uEnd + 1 : uEnd).end;
+          } else {
+            i = readRegexQuantifier(src, Math.min(src.length, i + 6)).end;
+          }
+          continue;
+        }
+        if (nx === 'x') {
+          flushRun();
+          i = readRegexQuantifier(src, Math.min(src.length, i + 4)).end;
+          continue;
+        }
+        if (nx === 'c') {
+          flushRun();
+          i = readRegexQuantifier(src, Math.min(src.length, i + 3)).end;
+          continue;
+        }
+        if ((nx === 'p' || nx === 'P') && src.charAt(i + 2) === '{') {
+          flushRun();
+          var pEnd = i + 3;
+          while (pEnd < src.length && src.charAt(pEnd) !== '}') pEnd++;
+          i = readRegexQuantifier(src, pEnd < src.length ? pEnd + 1 : pEnd).end;
+          continue;
+        }
+        if (nx === 'k' && src.charAt(i + 2) === '<') {
+          flushRun();
+          var kEnd = i + 3;
+          while (kEnd < src.length && src.charAt(kEnd) !== '>') kEnd++;
+          i = readRegexQuantifier(src, kEnd < src.length ? kEnd + 1 : kEnd).end;
+          continue;
+        }
+        if (/[a-zA-Z0-9]/.test(nx)) {
+          flushRun();
+          var escEnd = i + 2;
+          if (/[0-9]/.test(nx)) {
+            while (escEnd < src.length && /[0-9]/.test(src.charAt(escEnd))) escEnd++;
+          }
+          i = readRegexQuantifier(src, escEnd).end;
+          continue;
+        }
+        var qEsc = readRegexQuantifier(src, i + 2);
+        if (qEsc.kind === 'one') {
+          cur += nx;
+        } else if (qEsc.kind === 'plus') {
+          cur += nx;
+          flushRun();
+        } else {
+          flushRun();
+        }
+        i = qEsc.end;
+        continue;
+      }
+
+      if (c === '[') {
+        flushRun();
+        i++;
+        while (i < src.length) {
+          if (src.charAt(i) === '\\') {
+            i += 2;
+            continue;
+          }
+          if (src.charAt(i) === ']') {
+            i++;
+            break;
+          }
+          i++;
+        }
+        i = readRegexQuantifier(src, i).end;
+        continue;
+      }
+
+      if (c === '(') {
+        flushRun();
+        i++;
+        var gDepth = 1;
+        var gClass = false;
+        while (i < src.length && gDepth > 0) {
+          var gc = src.charAt(i);
+          if (gc === '\\') {
+            i += 2;
+            continue;
+          }
+          if (gClass) {
+            if (gc === ']') gClass = false;
+            i++;
+            continue;
+          }
+          if (gc === '[') {
+            gClass = true;
+            i++;
+            continue;
+          }
+          if (gc === '(') gDepth++;
+          else if (gc === ')') gDepth--;
+          i++;
+        }
+        i = readRegexQuantifier(src, i).end;
+        continue;
+      }
+
+      if (c === '^' || c === '$' || c === '.' || c === '?' || c === '*' || c === '+' || c === ')' || c === ']') {
+        flushRun();
+        i++;
+        continue;
+      }
+      if (c === '{') {
+        flushRun();
+        i = readRegexQuantifier(src, i).end;
+        continue;
+      }
+
+      var qLit = readRegexQuantifier(src, i + 1);
+      if (qLit.kind === 'one') {
+        cur += c;
+      } else if (qLit.kind === 'plus') {
+        cur += c;
+        flushRun();
+      } else {
+        flushRun();
+      }
+      i = qLit.end;
+    }
+    flushRun();
+
+    var multiCharRuns = [];
+    var singleCharRuns = [];
+    for (var rIdx = 0; rIdx < runs.length; rIdx++) {
+      var r = runs[rIdx];
+      if (r.length >= 2 && !/^\s+$/.test(r)) multiCharRuns.push(r);
+      else if (r.length === 1 && !/\s/.test(r)) singleCharRuns.push(r);
+    }
+    multiCharRuns.sort(function (a, b) {
+      return b.length - a.length;
+    });
+
+    var anchor1 = '';
+    var anchor2 = '';
+    if (multiCharRuns.length > 0) {
+      anchor1 = multiCharRuns[0];
+      for (var mIdx = 1; mIdx < multiCharRuns.length; mIdx++) {
+        if (anchor1.indexOf(multiCharRuns[mIdx]) === -1) {
+          anchor2 = multiCharRuns[mIdx];
+          break;
+        }
+      }
+    } else if (singleCharRuns.length > 0) {
+      anchor1 = singleCharRuns[0];
+    }
+
+    var bucketType = 'general';
+    var startChars = null;
+    if (src.charAt(0) === '^') {
+      var mLit = /^\^([^\\^$.*+?()[\]{}|])(?![?*{])/.exec(src);
+      var mEsc = !mLit ? /^\^\\([^a-zA-Z0-9])(?![?*{])/.exec(src) : null;
+      if (mLit) {
+        bucketType = 'chars';
+        startChars = [mLit[1]];
+      } else if (mEsc) {
+        bucketType = 'chars';
+        startChars = [mEsc[1]];
+      } else if (/^\^(?:\\d(?![?*]|\\{0)|\(\\d(?:\+|\{[1-9]\d*(?:,\d*)?\})[^()\\|]*\)(?![?*{]))/.test(src)) {
+        bucketType = 'digit';
+      } else {
+        var mPair = /^\^\[([A-Za-z])([A-Za-z])\](?![?*{])/.exec(src);
+        if (mPair) {
+          bucketType = 'chars';
+          startChars = mPair[1] === mPair[2] ? [mPair[1]] : [mPair[1], mPair[2]];
+        } else {
+          var mAltGroup = /^\^\((?:\?:)?([^()[\]{}^$.*+?]+)\)(?![?*{])/.exec(src);
+          if (mAltGroup && mAltGroup[1].indexOf('\\|') === -1) {
+            var alts = mAltGroup[1].split('|');
+            var charMap = Object.create(null);
+            var charList = [];
+            var allValid = alts.length > 0;
+            for (var aIdx = 0; aIdx < alts.length; aIdx++) {
+              var alt = alts[aIdx];
+              if (!alt || !/^[A-Za-z0-9\u4e00-\u9fa5]/.test(alt)) {
+                allValid = false;
+                break;
+              }
+              var fc = alt.charAt(0);
+              if (!charMap[fc]) {
+                charMap[fc] = 1;
+                charList.push(fc);
+              }
+            }
+            if (allValid && charList.length > 0) {
+              bucketType = 'chars';
+              startChars = charList;
+            }
+          }
+        }
+      }
+    }
+
+    return {
+      anchor1: anchor1,
+      anchor2: anchor2,
+      bucketType: bucketType,
+      startChars: startChars,
+    };
+  }
+
+  function mergeSortedPatternLists(listA, listB, listC) {
+    var combined = [];
+    if (listA && listA.length) combined = combined.concat(listA);
+    if (listB && listB.length) combined = combined.concat(listB);
+    if (listC && listC.length) combined = combined.concat(listC);
+    if (combined.length <= 1) return combined;
+    combined.sort(function (a, b) {
+      return a.order - b.order;
+    });
+    var dedup = [combined[0]];
+    for (var i = 1; i < combined.length; i++) {
+      if (combined[i].order !== combined[i - 1].order) {
+        dedup.push(combined[i]);
+      }
+    }
+    return dedup;
   }
 
   function createHostI18nEngine(dictData) {
@@ -528,39 +1136,76 @@
     var exactDict = data.exact || {};
     var rawPatterns = (data.patterns || []).concat(data.rules || []);
     var patterns = [];
+    var charBuckets = Object.create(null);
+    var digitBucket = [];
+    var generalBucket = [];
+    var mergedByFirstChar = Object.create(null);
+
     for (var i = 0; i < rawPatterns.length; i++) {
       var p = rawPatterns[i];
       if (!p || typeof p.regex !== 'string' || typeof p.replacement !== 'string') continue;
       try {
-        patterns.push({
-          regex: new RegExp(p.regex),
+        var compiledRe = new RegExp(p.regex);
+        var meta = extractPatternIndexMeta(p.regex, compiledRe.flags || '');
+        var entry = {
+          regex: compiledRe,
           replacement: p.replacement,
-        });
+          order: patterns.length,
+          anchor1: meta.anchor1,
+          anchor2: meta.anchor2,
+        };
+        patterns.push(entry);
+        if (meta.bucketType === 'chars' && meta.startChars) {
+          for (var sc = 0; sc < meta.startChars.length; sc++) {
+            var chKey = meta.startChars[sc];
+            if (!charBuckets[chKey]) charBuckets[chKey] = [];
+            charBuckets[chKey].push(entry);
+          }
+        } else if (meta.bucketType === 'digit') {
+          digitBucket.push(entry);
+        } else {
+          generalBucket.push(entry);
+        }
       } catch (e) {}
     }
 
+    function getCandidatesForText(text) {
+      if (!text) return generalBucket;
+      var ch0 = text.charAt(0);
+      var cachedList = mergedByFirstChar[ch0];
+      if (cachedList !== undefined) return cachedList;
+      var cBucket = charBuckets[ch0] || null;
+      var dBucket = ch0 >= '0' && ch0 <= '9' ? digitBucket : null;
+      var merged = !cBucket && !dBucket ? generalBucket : mergeSortedPatternLists(cBucket, dBucket, generalBucket);
+      mergedByFirstChar[ch0] = merged;
+      return merged;
+    }
+
+    function matchesPatternAnchors(text, pat) {
+      if (pat.anchor1 && text.indexOf(pat.anchor1) === -1) return false;
+      if (pat.anchor2 && text.indexOf(pat.anchor2) === -1) return false;
+      return true;
+    }
+
+    var exactLookup = Object.create(null);
     var translatedValues = Object.create(null);
     for (var k in exactDict) {
       if (hasOwn.call(exactDict, k)) {
+        exactLookup[k] = exactDict[k];
         translatedValues[exactDict[k]] = true;
       }
     }
+    // Release strong references to external input dictionary objects (~0.6 MiB/window saved)
+    dictData = null;
+    data = null;
+    exactDict = null;
+    rawPatterns = null;
 
-    var translationCache = typeof Map !== 'undefined' ? new Map() : null;
-    var MAX_CACHE_SIZE = 10000;
+    var MAX_UNIT_CACHE_SIZE = 2048;
+    var unitCache = createNullProtoBoundedCache(MAX_UNIT_CACHE_SIZE);
 
     function cacheAndReturn(key, value) {
-      if (translationCache) {
-        if (translationCache.size >= MAX_CACHE_SIZE) {
-          var iter = translationCache.keys();
-          for (var ci = 0; ci < 1000; ci++) {
-            var oldK = iter.next().value;
-            if (oldK !== undefined) translationCache.delete(oldK);
-            else break;
-          }
-        }
-        translationCache.set(key, value);
-      }
+      unitCache.set(key, value);
       return value;
     }
 
@@ -569,18 +1214,41 @@
     }
 
     function applyPatterns(text) {
-      for (var idx = 0; idx < patterns.length; idx++) {
-        var pat = patterns[idx];
+      if (!text || patterns.length === 0) return null;
+      var cands = getCandidatesForText(text);
+      for (var ci = 0; ci < cands.length; ci++) {
+        var pat = cands[ci];
+        if (!matchesPatternAnchors(text, pat)) continue;
         pat.regex.lastIndex = 0;
         if (pat.regex.test(text)) {
           pat.regex.lastIndex = 0;
           var result = text.replace(pat.regex, pat.replacement);
-          for (var pi = 0; pi < patterns.length; pi++) {
-            patterns[pi].regex.lastIndex = 0;
-            if (patterns[pi].regex.test(result)) {
-              patterns[pi].regex.lastIndex = 0;
-              result = result.replace(patterns[pi].regex, patterns[pi].replacement);
+          if (!result) return result;
+          var cands2 = getCandidatesForText(result);
+          var c2Idx = 0;
+          while (c2Idx < cands2.length) {
+            var pat2 = cands2[c2Idx];
+            if (!matchesPatternAnchors(result, pat2)) {
+              c2Idx++;
+              continue;
             }
+            pat2.regex.lastIndex = 0;
+            if (pat2.regex.test(result)) {
+              pat2.regex.lastIndex = 0;
+              var prevCh0 = result.charAt(0);
+              var matchedOrder = pat2.order;
+              result = result.replace(pat2.regex, pat2.replacement);
+              if (!result) break;
+              if (result.charAt(0) !== prevCh0) {
+                cands2 = getCandidatesForText(result);
+                c2Idx = 0;
+                while (c2Idx < cands2.length && cands2[c2Idx].order <= matchedOrder) {
+                  c2Idx++;
+                }
+                continue;
+              }
+            }
+            c2Idx++;
           }
           return result;
         }
@@ -593,12 +1261,12 @@
       var normalized = normalizeWhitespace(rawStr);
       if (!normalized) return null;
 
-      if (translationCache && translationCache.has(normalized)) {
-        return translationCache.get(normalized);
+      if (unitCache.has(normalized)) {
+        return unitCache.get(normalized);
       }
 
-      if (hasOwn.call(exactDict, normalized)) {
-        return cacheAndReturn(normalized, exactDict[normalized]);
+      if (normalized in exactLookup) {
+        return cacheAndReturn(normalized, exactLookup[normalized]);
       }
 
       if (!EN_ALPHA_RE.test(normalized)) {
@@ -618,23 +1286,28 @@
         return cacheAndReturn(normalized, patRes);
       }
 
-      var punctuationMatch = normalized.match(/^([\w\s\-\/]+)([:：…\.？\?!！]+)$/);
-      if (punctuationMatch) {
-        var base = punctuationMatch[1].trim();
-        var punc = punctuationMatch[2];
-        if (hasOwn.call(exactDict, base)) {
-          return cacheAndReturn(normalized, exactDict[base] + (punc === ':' ? '：' : punc));
+      var lastCh = normalized.charAt(normalized.length - 1);
+      if (':：….？?!！'.indexOf(lastCh) !== -1) {
+        var punctuationMatch = normalized.match(/^([\w\s\-\/]+)([:：…\.？\?!！]+)$/);
+        if (punctuationMatch) {
+          var base = punctuationMatch[1].trim();
+          var punc = punctuationMatch[2];
+          if (base in exactLookup) {
+            return cacheAndReturn(normalized, exactLookup[base] + (punc === ':' ? '：' : punc));
+          }
         }
       }
 
-      var hotkeyMatch = normalized.match(
-        /(\((?:Ctrl|Cmd|Alt|Shift)\+[^\s\)]+\)|\b(?:Ctrl|Cmd|Alt|Shift)\+[\w;:,\\/+\-]+)$/i
-      );
-      if (hotkeyMatch && hotkeyMatch.index > 0) {
-        var cmdBase = normalized.slice(0, hotkeyMatch.index).trim();
-        var hotkey = hotkeyMatch[1].trim();
-        if (cmdBase && /^[\w\s\-\/]+$/.test(cmdBase) && hasOwn.call(exactDict, cmdBase)) {
-          return cacheAndReturn(normalized, exactDict[cmdBase] + ' ' + hotkey);
+      if (normalized.indexOf('+') !== -1) {
+        var hotkeyMatch = normalized.match(
+          /(\((?:Ctrl|Cmd|Alt|Shift)\+[^\s\)]+\)|\b(?:Ctrl|Cmd|Alt|Shift)\+[\w;:,\\/+\-]+)$/i
+        );
+        if (hotkeyMatch && hotkeyMatch.index > 0) {
+          var cmdBase = normalized.slice(0, hotkeyMatch.index).trim();
+          var hotkey = hotkeyMatch[1].trim();
+          if (cmdBase && /^[\w\s\-\/]+$/.test(cmdBase) && cmdBase in exactLookup) {
+            return cacheAndReturn(normalized, exactLookup[cmdBase] + ' ' + hotkey);
+          }
         }
       }
 
@@ -656,15 +1329,18 @@
             continue;
           }
           var transPart =
-            (hasOwn.call(exactDict, trimmedPart) ? exactDict[trimmedPart] : null) ||
-            (hasOwn.call(exactDict, trimmedPart + '.') ? exactDict[trimmedPart + '.'] : null);
+            (trimmedPart in exactLookup ? exactLookup[trimmedPart] : null) ||
+            (trimmedPart + '.' in exactLookup ? exactLookup[trimmedPart + '.'] : null);
           if (!transPart) {
             transPart = applyPatterns(trimmedPart);
           }
           if (!transPart) {
-            var pMatch = trimmedPart.match(/^([\w\s\-\/]+)([:：…\.？\?!！]+)$/);
-            if (pMatch && hasOwn.call(exactDict, pMatch[1].trim())) {
-              transPart = exactDict[pMatch[1].trim()] + (pMatch[2] === ':' ? '：' : pMatch[2]);
+            var pLast = trimmedPart.charAt(trimmedPart.length - 1);
+            if (':：….？?!！'.indexOf(pLast) !== -1) {
+              var pMatch = trimmedPart.match(/^([\w\s\-\/]+)([:：…\.？\?!！]+)$/);
+              if (pMatch && pMatch[1].trim() in exactLookup) {
+                transPart = exactLookup[pMatch[1].trim()] + (pMatch[2] === ':' ? '：' : pMatch[2]);
+              }
             }
           }
           if (transPart) {
@@ -672,7 +1348,7 @@
             translatedParts.push(transPart);
           } else {
             allTranslated = false;
-            translatedParts.push(part);
+            break;
           }
         }
         if (anyTranslated && allTranslated) {
@@ -688,12 +1364,30 @@
 
     return {
       translate: translateSingleUnit,
-      exactDict: exactDict,
+      exactDict: exactLookup,
       patterns: patterns,
+      patternIndex: {
+        charBuckets: charBuckets,
+        digitBucket: digitBucket,
+        generalBucket: generalBucket,
+        getCandidatesForText: getCandidatesForText,
+      },
       translatedValues: translatedValues,
-      cache: translationCache,
+      cache: unitCache,
+      unitCache: unitCache,
+      maxCacheSize: MAX_UNIT_CACHE_SIZE,
       normalizeWhitespace: normalizeWhitespace,
     };
+  }
+
+  function isDialogOrPortalWrappingDialog(el) {
+    if (!el || el.nodeType !== 1) return false;
+    var role = getAttr(el, 'role');
+    if (role === 'dialog') return true;
+    if (hasAttr(el, 'data-floating-ui-portal') && typeof el.querySelector === 'function') {
+      if (el.querySelector('[role="dialog"]')) return true;
+    }
+    return false;
   }
 
   function isFloatingElement(el, doc) {
@@ -704,8 +1398,12 @@
     if (cls && cls.indexOf('monaco-workbench') !== -1) return false;
 
     var role = getAttr(el, 'role') || '';
-    if (role === 'tooltip' || role === 'menu' || role === 'dialog') return true;
-    if (hasAttr(el, 'data-floating-ui-portal') || hasAttr(el, 'data-radix-popper-content-wrapper')) return true;
+    if (role === 'dialog') return false;
+    if (role === 'tooltip' || role === 'menu' || role === 'listbox') return true;
+    if (hasAttr(el, 'data-floating-ui-portal')) {
+      return !isDialogOrPortalWrappingDialog(el);
+    }
+    if (hasAttr(el, 'data-radix-popper-content-wrapper')) return true;
     if (cls) {
       if (
         cls.indexOf('popover') !== -1 ||
@@ -826,6 +1524,55 @@
     };
   }
 
+  function isInsideDialog(el) {
+    var cur = el && el.nodeType === 3 ? el.parentElement || el.parentNode : el;
+    var depth = 0;
+    while (cur && depth < 48) {
+      if (cur.nodeType === 1 && getAttr(cur, 'role') === 'dialog') return true;
+      cur = cur.parentElement || cur.parentNode;
+      depth++;
+    }
+    return false;
+  }
+
+  function isSmallHoverControlSelf(el) {
+    if (!el || el.nodeType !== 1) return false;
+    var tag = el.tagName ? String(el.tagName).toUpperCase() : '';
+    if (tag === 'BUTTON' || tag === 'A' || tag === 'SUMMARY') return true;
+    var role = getAttr(el, 'role');
+    if (
+      role === 'button' ||
+      role === 'menuitem' ||
+      role === 'menuitemcheckbox' ||
+      role === 'menuitemradio' ||
+      role === 'option' ||
+      role === 'tab' ||
+      role === 'switch' ||
+      role === 'checkbox' ||
+      role === 'combobox' ||
+      role === 'tooltip'
+    ) {
+      return true;
+    }
+    if (
+      getChildElementCount(el) <= 4 &&
+      (hasAttr(el, 'title') || hasAttr(el, 'aria-label') || hasAttr(el, 'data-tooltip'))
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  function isSmallHoverControl(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (isSmallHoverControlSelf(el)) return true;
+    var p = el.parentElement;
+    if (p && p.nodeType === 1 && getAttr(p, 'role') !== 'dialog' && isSmallHoverControlSelf(p)) {
+      return true;
+    }
+    return false;
+  }
+
   function mountHostI18n(options) {
     var opts = options || {};
     var win = opts.root || (typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : null);
@@ -842,6 +1589,14 @@
         : function () {
             return Date.now();
           };
+    var perfNowFn =
+      typeof opts.perfNowFn === 'function'
+        ? opts.perfNowFn
+        : typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? function () {
+            return performance.now();
+          }
+        : nowFn;
     var setTimeoutFn =
       typeof opts.setTimeoutFn === 'function'
         ? opts.setTimeoutFn
@@ -854,6 +1609,8 @@
         : function (id) {
             clearTimeout(id);
           };
+    var hasRafSupport =
+      typeof opts.rafFn === 'function' || Boolean(win && typeof win.requestAnimationFrame === 'function');
     var rafFn =
       typeof opts.rafFn === 'function'
         ? opts.rafFn
@@ -875,7 +1632,11 @@
             clearTimeoutFn(id);
           };
 
+    var customMutationObserver = opts.MutationObserver || null;
     var engine = createHostI18nEngine(opts.dict || { exact: {}, patterns: [] });
+    // Sever closure retention of options / options.dict after engine construction
+    options = null;
+    opts = null;
     var translateSingleUnit = engine.translate;
     var translatedValues = engine.translatedValues || Object.create(null);
 
@@ -884,6 +1645,7 @@
       mode: mode,
       status: 'off',
       reason: null,
+      detectedProvider: null,
       yielded: false,
       destroyed: false,
     };
@@ -902,10 +1664,12 @@
 
     var observer = null;
     var observing = false;
+    var winBlurObserver = null;
     var pendingNodes = [];
     var pendingNodeSet = new Set();
     var rafId = null;
     var hoverScanTimer = null;
+    var focusWakeTimer = null;
     var layer2bTimers = [];
     var domReadyHandler = null;
     var hoverHandler = null;
@@ -917,14 +1681,28 @@
     var delayedExternalNodes = new Set();
     var globalConflictRecords = [];
     var lastHoverTime = 0;
-    var pausedByVisibilityOrBlur = false;
+    var pausedByWindowBlur = false;
+    var hibernating = false;
     var missedWhilePaused = false;
 
-    var MAX_NODES_PER_FRAME = 160;
+    var MAX_NODES_PER_FRAME = 80;
+    var FRAME_BUDGET_MS = 5;
+    var INITIAL_SYNC_MAX_NODES = 160;
+    var INITIAL_SYNC_BUDGET_MS = 5;
+    var MAX_PENDING_NODES = 4096;
     var LAYER2B_WINDOW_MS = 1200;
     var CONFLICT_WINDOW_MS = 3000;
     var NODE_CONFLICT_THRESHOLD = 3;
     var GLOBAL_CONFLICT_NODE_THRESHOLD = 5;
+
+    function isWinBlurAttrSet() {
+      return Boolean(doc && doc.documentElement && getAttr(doc.documentElement, 'data-ag-cs-win-blur') === '1');
+    }
+
+    function isPaused() {
+      var hidden = Boolean(doc && doc.hidden === true);
+      return hidden || pausedByWindowBlur || isWinBlurAttrSet();
+    }
 
     function setRootStatusAttr(val) {
       try {
@@ -940,8 +1718,8 @@
       modifiedAttrElements.prune();
       modifiedAttrElements.forEachAll(function (el) {
         if (el.isConnected === false) return;
-        var map = attrSnapshots.get(el);
-        if (map) attrCount += map.size;
+        var mapRec = attrSnapshots.get(el);
+        if (mapRec) attrCount += mapRec.count;
       });
       return textCount + attrCount;
     }
@@ -982,11 +1760,23 @@
         } catch (e) {}
         hoverScanTimer = null;
       }
+      if (focusWakeTimer !== null) {
+        try {
+          clearTimeoutFn(focusWakeTimer);
+        } catch (e) {}
+        focusWakeTimer = null;
+      }
       while (layer2bTimers.length > 0) {
         var tid = layer2bTimers.pop();
         try {
           clearTimeoutFn(tid);
         } catch (e) {}
+      }
+      if (winBlurObserver) {
+        try {
+          winBlurObserver.disconnect();
+        } catch (e) {}
+        winBlurObserver = null;
       }
       if (doc && typeof doc.removeEventListener === 'function') {
         if (domReadyHandler) doc.removeEventListener('DOMContentLoaded', domReadyHandler);
@@ -1023,27 +1813,31 @@
       modifiedTextNodes.clear();
 
       modifiedAttrElements.forEachAll(function (el) {
-        var attrMap = attrSnapshots.get(el);
-        if (attrMap) {
-          attrMap.forEach(function (snap, attr) {
+        var mapRec = attrSnapshots.get(el);
+        if (mapRec && mapRec.entries) {
+          for (var attr in mapRec.entries) {
+            var snap = mapRec.entries[attr];
             try {
-              if (el.getAttribute(attr) === snap.expected && typeof el.setAttribute === 'function') {
+              if (snap && el.getAttribute(attr) === snap.expected && typeof el.setAttribute === 'function') {
                 el.setAttribute(attr, snap.orig);
               }
             } catch (e) {}
-          });
+          }
           attrSnapshots.delete(el);
         }
       });
       modifiedAttrElements.clear();
     }
 
-    function teardownRuntime(nextStatus, nextReason, yieldedFlag) {
+    function teardownRuntime(nextStatus, nextReason, yieldedFlag, providerName) {
       state.active = false;
       state.destroyed = true;
       state.status = nextStatus;
       state.reason = nextReason;
+      state.detectedProvider = yieldedFlag ? providerName || null : null;
       state.yielded = Boolean(yieldedFlag);
+      hibernating = false;
+      pausedByWindowBlur = false;
 
       clearAllTimersAndListeners();
       rollbackAllSnapshots();
@@ -1055,9 +1849,17 @@
       setRootStatusAttr(nextStatus);
     }
 
-    function yieldAndRollback(reason) {
+    function yieldAndRollback(reason, providerName) {
       if (state.yielded || state.status === 'yielded') return;
-      teardownRuntime('yielded', reason, true);
+      var resolvedProvider = providerName || null;
+      if (!resolvedProvider && reason === 'external-ui-zh') {
+        var l1Now = detectLayer1External(win, doc);
+        resolvedProvider = l1Now.hit ? l1Now.provider : 'generic-zh-dom';
+      } else if (!resolvedProvider && reason === 'conflict-breaker') {
+        var l1Conflict = detectLayer1External(win, doc);
+        resolvedProvider = l1Conflict.hit ? l1Conflict.provider : 'conflict-breaker';
+      }
+      teardownRuntime('yielded', reason, true, resolvedProvider);
     }
 
     function recordGlobalConflict(el, now) {
@@ -1186,7 +1988,7 @@
         ZH_CHAR_RE.test(curText) &&
         curText !== st.lastExpected &&
         (!st.lastExpected || curText.indexOf(st.lastExpected) === -1) &&
-        (!el.children || el.children.length === 0);
+        !hasElementChild(el);
       if (isBackToOrig || isExternalZh) {
         if (recordElementConflict(el, curText, st.lastExpected, isBackToOrig ? curText : undefined, st.lastTranslatedAt)) {
           return true;
@@ -1248,7 +2050,74 @@
       };
     }
 
-    function translateTextNode(node) {
+    function enqueueNode(node) {
+      if (!node || !state.active || state.destroyed) return;
+      if (node.isConnected === false) return;
+      if (pendingNodeSet.has(node)) return;
+      if (pendingNodes.length < MAX_PENDING_NODES) {
+        pendingNodes.push(node);
+        pendingNodeSet.add(node);
+      }
+    }
+
+    function createScanBudget(maxNodes, budgetMs) {
+      var start = perfNowFn();
+      return {
+        processed: 0,
+        maxNodes: maxNodes,
+        deadline: start + budgetMs,
+        exhausted: false,
+        tick: function () {
+          this.processed++;
+          if (this.processed >= this.maxNodes) {
+            this.exhausted = true;
+            return true;
+          }
+          if ((this.processed & 3) === 0 || this.processed === 1) {
+            if (perfNowFn() >= this.deadline) {
+              this.exhausted = true;
+              return true;
+            }
+          }
+          return false;
+        },
+        isExhausted: function () {
+          if (this.exhausted) return true;
+          if (this.processed >= this.maxNodes) {
+            this.exhausted = true;
+            return true;
+          }
+          if (this.processed > 0 && perfNowFn() >= this.deadline) {
+            this.exhausted = true;
+            return true;
+          }
+          return false;
+        },
+      };
+    }
+
+    function deferRemainingChildren(ownerEl, startChild) {
+      var hasLaterText = false;
+      var probe = startChild.nextSibling;
+      while (probe) {
+        if (probe.nodeType === 3 && (probe.nodeValue || '').trim()) {
+          hasLaterText = true;
+          break;
+        }
+        probe = probe.nextSibling;
+      }
+      if (hasLaterText) {
+        enqueueNode(ownerEl);
+      } else {
+        var rem = startChild;
+        while (rem) {
+          if (rem.nodeType === 1) enqueueNode(rem);
+          rem = rem.nextSibling;
+        }
+      }
+    }
+
+    function translateTextNode(node, knownSafeParent) {
       if (!state.active || state.destroyed) return;
       if (!node || node.nodeType !== 3) return;
       if (node.isConnected === false) return;
@@ -1256,7 +2125,7 @@
 
       var parent = node.parentElement || node.parentNode;
       if (parent && exemptElements.has(parent)) return;
-      if (parent && isIgnoredBoundary(parent)) return;
+      if (!knownSafeParent && parent && isIgnoredBoundary(parent)) return;
 
       if (checkNodeConflict(node) || !state.active) return;
 
@@ -1303,65 +2172,74 @@
         var val = getAttr(el, attr);
         if (!val) continue;
 
-        var attrMap = attrSnapshots.get(el);
-        var snap = attrMap ? attrMap.get(attr) : null;
+        var mapRec = attrSnapshots.get(el);
+        var snap = mapRec && attr in mapRec.entries ? mapRec.entries[attr] : null;
         if (snap && snap.expected === val) continue;
         if (snap && snap.expected !== val) {
-          attrMap.delete(attr);
-          if (attrMap.size === 0) {
+          delete mapRec.entries[attr];
+          mapRec.count--;
+          if (mapRec.count <= 0) {
             attrSnapshots.delete(el);
             modifiedAttrElements.delete(el);
-            attrMap = null;
+            mapRec = null;
           }
           snap = null;
         }
 
         var untransMap = attrUntranslatedCache.get(el);
-        if (!snap && untransMap && untransMap.get(attr) === val) continue;
+        if (!snap && untransMap && attr in untransMap && untransMap[attr] === val) continue;
 
         var trans = translateSingleUnit(val);
         if (trans !== null && trans !== val && typeof el.setAttribute === 'function') {
           var baseOrig = val;
           el.setAttribute(attr, trans);
-          if (!attrMap) {
-            attrMap = new Map();
-            attrSnapshots.set(el, attrMap);
+          if (!mapRec) {
+            mapRec = { count: 0, entries: Object.create(null) };
+            attrSnapshots.set(el, mapRec);
           }
-          attrMap.set(attr, { orig: baseOrig, expected: trans });
+          if (!(attr in mapRec.entries)) mapRec.count++;
+          mapRec.entries[attr] = { orig: baseOrig, expected: trans };
           modifiedAttrElements.add(el);
-          if (untransMap) untransMap.delete(attr);
+          if (untransMap && attr in untransMap) delete untransMap[attr];
         } else {
           if (!untransMap) {
-            untransMap = new Map();
+            untransMap = Object.create(null);
             attrUntranslatedCache.set(el, untransMap);
           }
-          untransMap.set(attr, val);
+          untransMap[attr] = val;
         }
       }
     }
 
-    function translateElement(el, visitedSet) {
+    function translateElement(el, visitedSet, boundaryCtx, budget) {
       if (!state.active || state.destroyed) return;
       if (!el || el.nodeType !== 1) return;
       if (el.isConnected === false) return;
       if (exemptElements.has(el)) return;
-      if (isDirectIgnoredSelf(el)) return;
+
+      var ctx = boundaryCtx || measureSafeBoundaryDepth(el);
+      if (!ctx || ctx.state === -1 || ctx.remDepth < 0) return;
 
       if (visitedSet) {
         if (visitedSet.has(el)) return;
         visitedSet.add(el);
       }
 
-      if (isIgnoredBoundary(el)) {
-        // If this is a conversation stream wrapper (e.g. conversation-view / data-cascade-id),
-        // skip its own text/attrs and prose children, but still descend into child interactive buttons/toolbars.
-        if (isConversationStreamSelf(el) || isInsideConversationStream(el)) {
-          var sub = el.firstChild;
-          while (sub) {
-            if (!state.active || state.destroyed) return;
-            if (sub.nodeType === 1) translateElement(sub, visitedSet);
-            sub = sub.nextSibling;
+      if (ctx.state === 1) {
+        // Inside conversation stream without interactive chrome exemption:
+        // skip self text/attrs, descend only into element children to locate interactive buttons/toolbars.
+        var sub = el.firstChild;
+        while (sub) {
+          if (!state.active || state.destroyed) return;
+          if (sub.nodeType === 1) {
+            if (budget && budget.isExhausted()) {
+              deferRemainingChildren(el, sub);
+              return;
+            }
+            var subCtx = advanceBoundaryForChild(ctx, sub);
+            if (subCtx) translateElement(sub, visitedSet, subCtx, budget);
           }
+          sub = sub.nextSibling;
         }
         return;
       }
@@ -1423,34 +2301,25 @@
         }
       }
 
+      if (budget) budget.tick();
+
       var child = el.firstChild;
       while (child) {
         if (!state.active || state.destroyed) return;
         if (child.nodeType === 3) {
-          translateTextNode(child);
+          translateTextNode(child, true);
         } else if (child.nodeType === 1) {
-          translateElement(child, visitedSet);
+          if (budget && budget.isExhausted()) {
+            deferRemainingChildren(el, child);
+            return;
+          }
+          var childCtx = advanceBoundaryForChild(ctx, child);
+          if (childCtx) {
+            translateElement(child, visitedSet, childCtx, budget);
+          }
         }
         child = child.nextSibling;
       }
-    }
-
-    function safeTranslateNodes(nodes) {
-      if (!state.active || state.destroyed) return;
-      disconnectObserver();
-      try {
-        for (var i = 0; i < nodes.length; i++) {
-          if (!state.active || state.destroyed) break;
-          var node = nodes[i];
-          if (!node || node.isConnected === false) continue;
-          if (node.nodeType === 1) {
-            translateElement(node);
-          } else if (node.nodeType === 3) {
-            translateTextNode(node);
-          }
-        }
-      } catch (e) {}
-      reconnectObserver();
     }
 
     function safeFullScan() {
@@ -1458,23 +2327,26 @@
       var visitedSet = new WeakSet();
       disconnectObserver();
       try {
-        translateElement(doc.documentElement, visitedSet);
+        translateElement(doc.documentElement, visitedSet, null, null);
       } catch (e) {}
       reconnectObserver();
     }
 
-    function isPaused() {
-      var hidden = Boolean(doc && doc.hidden === true);
-      return hidden || pausedByVisibilityOrBlur;
-    }
-
-    function enqueueNode(node) {
-      if (!node || !state.active || state.destroyed) return;
-      if (node.isConnected === false) return;
-      if (pendingNodeSet.has(node)) return;
-      if (pendingNodes.length < 640) {
-        pendingNodes.push(node);
-        pendingNodeSet.add(node);
+    function safeBudgetedScan() {
+      if (!state.active || state.destroyed || !doc || !doc.documentElement) return;
+      if (!hasRafSupport) {
+        safeFullScan();
+        return;
+      }
+      var visitedSet = new WeakSet();
+      var budget = createScanBudget(INITIAL_SYNC_MAX_NODES, INITIAL_SYNC_BUDGET_MS);
+      disconnectObserver();
+      try {
+        translateElement(doc.documentElement, visitedSet, null, budget);
+      } catch (e) {}
+      reconnectObserver();
+      if (state.active && !state.destroyed && pendingNodes.length > 0) {
+        scheduleFlush();
       }
     }
 
@@ -1482,17 +2354,44 @@
       rafId = null;
       if (!state.active || state.destroyed) return;
       if (isPaused()) {
-        missedWhilePaused = true;
+        if (!hibernating) enterHibernation();
+        else missedWhilePaused = true;
         return;
       }
       modifiedTextNodes.prune();
       modifiedAttrElements.prune();
       if (pendingNodes.length === 0) return;
-      var batch = pendingNodes.splice(0, MAX_NODES_PER_FRAME);
-      for (var i = 0; i < batch.length; i++) {
-        pendingNodeSet.delete(batch[i]);
+
+      var takeCount = Math.min(pendingNodes.length, MAX_NODES_PER_FRAME);
+      var batch = pendingNodes.splice(0, takeCount);
+      for (var b = 0; b < batch.length; b++) {
+        pendingNodeSet.delete(batch[b]);
       }
-      safeTranslateNodes(batch);
+
+      var budget = createScanBudget(MAX_NODES_PER_FRAME, FRAME_BUDGET_MS);
+      var visitedSet = new WeakSet();
+      disconnectObserver();
+      try {
+        for (var i = 0; i < batch.length; i++) {
+          if (!state.active || state.destroyed) break;
+          var node = batch[i];
+          if (!node || node.isConnected === false) continue;
+          if (i > 0 && budget.isExhausted()) {
+            for (var r = i; r < batch.length; r++) {
+              enqueueNode(batch[r]);
+            }
+            break;
+          }
+          if (node.nodeType === 1) {
+            translateElement(node, visitedSet, null, budget);
+          } else if (node.nodeType === 3) {
+            translateTextNode(node, false);
+            budget.tick();
+          }
+        }
+      } catch (e) {}
+      reconnectObserver();
+
       if (state.active && !state.destroyed && pendingNodes.length > 0) {
         scheduleFlush();
       }
@@ -1501,7 +2400,8 @@
     function scheduleFlush() {
       if (!state.active || state.destroyed) return;
       if (isPaused()) {
-        missedWhilePaused = true;
+        if (!hibernating) enterHibernation();
+        else missedWhilePaused = true;
         return;
       }
       if (rafId === null) {
@@ -1575,26 +2475,48 @@
     }
 
     function scanFloatingContainers() {
-      if (!state.active || state.destroyed || isPaused() || !doc || !doc.body) return;
+      if (!state.active || state.destroyed || !doc || !doc.body) return;
+      if (isPaused()) {
+        if (!hibernating) enterHibernation();
+        return;
+      }
+
+      var candidates = [];
+      var candidateSet = new Set();
+      function addCandidate(el) {
+        if (!el || el.nodeType !== 1 || el.isConnected === false) return;
+        if (candidateSet.has(el) || exemptElements.has(el)) return;
+        if (isDialogOrPortalWrappingDialog(el) || isDirectIgnoredSelf(el)) return;
+        candidateSet.add(el);
+        candidates.push(el);
+      }
+
+      var last = doc.body.lastElementChild;
+      if (last && isFloatingElement(last, doc)) {
+        addCandidate(last);
+      }
+      if (last && last.previousElementSibling && isFloatingElement(last.previousElementSibling, doc)) {
+        addCandidate(last.previousElementSibling);
+      }
+      if (typeof doc.querySelectorAll === 'function') {
+        var popups = doc.querySelectorAll(
+          '[role="tooltip"], [role="menu"], [role="listbox"], [data-floating-ui-portal], [data-radix-popper-content-wrapper], .popover, .tooltip, .context-view, .monaco-hover'
+        );
+        if (popups && popups.length > 0) {
+          for (var pIdx = 0; pIdx < popups.length; pIdx++) {
+            addCandidate(popups[pIdx]);
+          }
+        }
+      }
+
+      if (candidates.length === 0) return;
+
+      var visitedSet = new WeakSet();
       disconnectObserver();
       try {
-        var last = doc.body.lastElementChild;
-        if (last && isFloatingElement(last, doc)) {
-          translateElement(last);
-        }
-        if (last && last.previousElementSibling && isFloatingElement(last.previousElementSibling, doc)) {
-          translateElement(last.previousElementSibling);
-        }
-        if (typeof doc.querySelectorAll === 'function') {
-          var tooltips = doc.querySelectorAll(
-            '[role="tooltip"], [role="menu"], [role="dialog"], [data-floating-ui-portal], [data-radix-popper-content-wrapper], .popover, .tooltip, .context-view, .monaco-hover'
-          );
-          if (tooltips && tooltips.length > 0) {
-            for (var tIdx = 0; tIdx < tooltips.length; tIdx++) {
-              if (!state.active) break;
-              translateElement(tooltips[tIdx]);
-            }
-          }
+        for (var cIdx = 0; cIdx < candidates.length; cIdx++) {
+          if (!state.active || state.destroyed) break;
+          translateElement(candidates[cIdx], visitedSet, null, null);
         }
       } catch (e) {}
       reconnectObserver();
@@ -1602,21 +2524,35 @@
 
     function runHoverTargetScan(target) {
       if (!state.active || state.destroyed || isPaused() || !target || target.nodeType !== 1) return;
-      if (target.isConnected === false) return;
+      if (target.isConnected === false || exemptElements.has(target)) return;
+      if (isDialogOrPortalWrappingDialog(target) || isWorkbenchOrRoot(target, doc)) return;
+
+      var targetCtx = measureSafeBoundaryDepth(target);
+      if (targetCtx.blocked) return;
+
+      var scanTarget = getChildElementCount(target) <= 12;
+      var parent = target.parentElement;
+      var parentCtx = null;
+      if (
+        parent &&
+        !isWorkbenchOrRoot(parent, doc) &&
+        !isDialogOrPortalWrappingDialog(parent) &&
+        getChildElementCount(parent) <= 8
+      ) {
+        var pCtx = measureSafeBoundaryDepth(parent);
+        if (!pCtx.blocked) parentCtx = pCtx;
+      }
+
+      if (!scanTarget && !parentCtx) return;
+
+      var visitedSet = new WeakSet();
       disconnectObserver();
       try {
-        translateElement(target);
-        var parent = target.parentElement;
-        if (parent && !isWorkbenchOrRoot(parent, doc)) {
-          var childCnt =
-            typeof parent.childElementCount === 'number'
-              ? parent.childElementCount
-              : parent.children
-              ? parent.children.length
-              : 99;
-          if (childCnt <= 8) {
-            translateElement(parent);
-          }
+        if (scanTarget) {
+          translateElement(target, visitedSet, targetCtx, null);
+        }
+        if (parentCtx && state.active && !state.destroyed) {
+          translateElement(parent, visitedSet, parentCtx, null);
         }
       } catch (err) {}
       reconnectObserver();
@@ -1624,7 +2560,7 @@
 
     function enterHibernation() {
       if (!state.active || state.destroyed) return;
-      pausedByVisibilityOrBlur = true;
+      hibernating = true;
       if (rafId !== null) {
         cancelRafFn(rafId);
         rafId = null;
@@ -1633,25 +2569,27 @@
         clearTimeoutFn(hoverScanTimer);
         hoverScanTimer = null;
       }
+      if (focusWakeTimer !== null) {
+        clearTimeoutFn(focusWakeTimer);
+        focusWakeTimer = null;
+      }
       missedWhilePaused = true;
       pendingNodes.length = 0;
       pendingNodeSet.clear();
-      if (nowFn() - bootAt > LAYER2B_WINDOW_MS) {
+      if (state.mode !== 'auto' || nowFn() - bootAt > LAYER2B_WINDOW_MS) {
         disconnectObserver();
       }
     }
 
     function wakeFromHibernation() {
       if (!state.active || state.destroyed) return;
-      if (doc && doc.hidden) return;
-      pausedByVisibilityOrBlur = false;
+      if (isPaused()) return;
+      hibernating = false;
       if (missedWhilePaused || pendingNodes.length > 0 || !observing) {
         missedWhilePaused = false;
         pendingNodes.length = 0;
         pendingNodeSet.clear();
-        safeFullScan();
-        pendingNodes.length = 0;
-        pendingNodeSet.clear();
+        safeBudgetedScan();
         reconnectObserver();
       }
     }
@@ -1659,49 +2597,136 @@
     function attachListenersAndObserver() {
       if (!doc || !doc.documentElement || state.destroyed || !state.active) return;
 
-      if (!isPaused()) {
-        safeFullScan();
-      } else {
-        missedWhilePaused = true;
-      }
-      if (!state.active || state.destroyed) return;
-
       var MutationObserverClass =
-        opts.MutationObserver ||
+        customMutationObserver ||
         (win && win.MutationObserver) ||
         (typeof MutationObserver !== 'undefined' ? MutationObserver : null);
 
       if (MutationObserverClass) {
         observer = new MutationObserverClass(function (mutations) {
           if (!state.active || state.destroyed) return;
+          var inLayer2b = state.mode === 'auto' && nowFn() - bootAt <= LAYER2B_WINDOW_MS;
+          var pausedNow = isPaused();
+          if (pausedNow) {
+            if (!hibernating) enterHibernation();
+            else missedWhilePaused = true;
+            if (!inLayer2b) return;
+          }
+
+          var batchBoundaryCache = new WeakMap();
+          function getCachedBoundary(el) {
+            var hit = batchBoundaryCache.get(el);
+            if (hit !== undefined) return hit;
+            var res = measureSafeBoundaryDepth(el);
+            batchBoundaryCache.set(el, res);
+            return res;
+          }
+
           for (var i = 0; i < mutations.length; i++) {
             if (!state.active || state.destroyed) return;
             var mutation = mutations[i];
             if (mutation.type === 'childList') {
               var targetEl = mutation.target;
-              var added = mutation.addedNodes || [];
-              if (targetEl && targetEl.nodeType === 1 && checkChildListConflict(targetEl)) {
-                continue;
-              }
-              if (!state.active || state.destroyed) return;
-              for (var j = 0; j < added.length; j++) {
-                if (inspectExternalDelayedMutation(added[j])) return;
-                enqueueNode(added[j]);
+              var added = mutation.addedNodes;
+              if (targetEl && targetEl.nodeType === 1) {
+                if (targetEl.isConnected === false || exemptElements.has(targetEl)) continue;
+                var targetBound = getCachedBoundary(targetEl);
+                if (targetBound.blocked && !targetBound.canDescendConv) {
+                  continue;
+                }
+                if (!pausedNow && !targetBound.blocked && checkChildListConflict(targetEl)) {
+                  continue;
+                }
+                if (!state.active || state.destroyed) return;
+                if (!added || added.length === 0) continue;
+                for (var j = 0; j < added.length; j++) {
+                  var addedNode = added[j];
+                  if (!addedNode || addedNode.isConnected === false) continue;
+                  if (addedNode.nodeType === 3) {
+                    if (targetBound.blocked || exemptNodes.has(addedNode)) continue;
+                  } else if (addedNode.nodeType === 1) {
+                    if (exemptElements.has(addedNode) || isDirectIgnoredSelf(addedNode)) continue;
+                    if (
+                      targetBound.canDescendConv &&
+                      !isInteractiveChatChromeSelf(addedNode, true) &&
+                      !hasElementChild(addedNode)
+                    ) {
+                      continue;
+                    }
+                  } else {
+                    continue;
+                  }
+                  if (inLayer2b && inspectExternalDelayedMutation(addedNode)) return;
+                  if (!pausedNow) enqueueNode(addedNode);
+                }
+              } else if (added && added.length > 0) {
+                for (var k = 0; k < added.length; k++) {
+                  var rootAdded = added[k];
+                  if (!rootAdded || rootAdded.isConnected === false) continue;
+                  if (inLayer2b && inspectExternalDelayedMutation(rootAdded)) return;
+                  if (!pausedNow) enqueueNode(rootAdded);
+                }
               }
             } else if (mutation.type === 'characterData' && mutation.target) {
               var target = mutation.target;
-              if (inspectExternalDelayedMutation(target)) return;
+              if (target.isConnected === false || exemptNodes.has(target)) continue;
+              var parent = target.parentElement || target.parentNode;
+              if (!parent || parent.nodeType !== 1 || parent.isConnected === false || exemptElements.has(parent)) {
+                continue;
+              }
+              var snap = textSnapshots.get(target);
+              if (snap && snap.expected === target.nodeValue) continue;
+              var parentBound = getCachedBoundary(parent);
+              if (parentBound.blocked) continue;
+              if (inLayer2b && inspectExternalDelayedMutation(target)) return;
+              if (pausedNow) continue;
               if (checkNodeConflict(target)) continue;
               if (!state.active || state.destroyed) return;
               enqueueNode(target);
             }
           }
-          if (pendingNodes.length > 0) {
+          if (!pausedNow && pendingNodes.length > 0) {
             scheduleFlush();
           }
         });
-        if (!isPaused() || nowFn() - bootAt <= LAYER2B_WINDOW_MS) {
-          reconnectObserver();
+      }
+
+      if (!isPaused()) {
+        safeBudgetedScan();
+      } else {
+        hibernating = true;
+        missedWhilePaused = true;
+      }
+      if (!state.active || state.destroyed) return;
+
+      if (observer && (!isPaused() || (state.mode === 'auto' && nowFn() - bootAt <= LAYER2B_WINDOW_MS))) {
+        reconnectObserver();
+      }
+
+      if (MutationObserverClass && doc.documentElement) {
+        try {
+          winBlurObserver = new MutationObserverClass(function (muts) {
+            if (!state.active || state.destroyed) return;
+            var sawBlurAttr = false;
+            for (var wi = 0; wi < muts.length; wi++) {
+              if (muts[wi].type === 'attributes' && (!muts[wi].attributeName || muts[wi].attributeName === 'data-ag-cs-win-blur')) {
+                sawBlurAttr = true;
+                break;
+              }
+            }
+            if (!sawBlurAttr) return;
+            if (isPaused()) {
+              enterHibernation();
+            } else if (hibernating) {
+              wakeFromHibernation();
+            }
+          });
+          winBlurObserver.observe(doc.documentElement, {
+            attributes: true,
+            attributeFilter: ['data-ag-cs-win-blur'],
+          });
+        } catch (e) {
+          winBlurObserver = null;
         }
       }
 
@@ -1715,12 +2740,12 @@
               if (nowFn() - bootAt > LAYER2B_WINDOW_MS + 100) return;
               var l1 = detectLayer1External(win, doc);
               if (l1.hit) {
-                yieldAndRollback('external-ui-zh');
+                yieldAndRollback('external-ui-zh', l1.provider);
                 return;
               }
               var l2 = detectLayer2ChromeZh(doc, { textSnapshots: textSnapshots });
               if (l2.hit) {
-                yieldAndRollback('external-ui-zh');
+                yieldAndRollback('external-ui-zh', 'generic-zh-dom');
                 return;
               }
               if (delayMs >= 1150 && isPaused()) {
@@ -1734,8 +2759,25 @@
 
       // Hover & ContextMenu targeted floating scan (leading + trailing 120ms throttle)
       hoverHandler = function (e) {
-        if (!state.active || state.destroyed || isPaused()) return;
-        var target = e && e.target;
+        if (!state.active || state.destroyed) return;
+        if (isPaused()) {
+          if (!hibernating) enterHibernation();
+          return;
+        }
+        if (hibernating) {
+          wakeFromHibernation();
+        }
+        var rawTarget = e && e.target;
+        var target = rawTarget && rawTarget.nodeType === 3 ? rawTarget.parentElement || rawTarget.parentNode : rawTarget;
+        if (!target || target.nodeType !== 1 || target.isConnected === false) return;
+
+        if (e && e.type === 'pointerenter') {
+          if (exemptElements.has(target) || isDialogOrPortalWrappingDialog(target)) return;
+          var hoverBound = measureSafeBoundaryDepth(target);
+          if (hoverBound.blocked) return;
+          if (isInsideDialog(target) && !isSmallHoverControl(target)) return;
+        }
+
         var now = nowFn();
         var elapsed = now - lastHoverTime;
         var ranImmediate = false;
@@ -1764,7 +2806,7 @@
 
         visibilityHandler = function () {
           if (!state.active || state.destroyed) return;
-          if (doc.hidden) {
+          if (isPaused()) {
             enterHibernation();
           } else {
             wakeFromHibernation();
@@ -1775,10 +2817,20 @@
 
       if (win && typeof win.addEventListener === 'function') {
         blurHandler = function () {
+          pausedByWindowBlur = true;
           enterHibernation();
         };
         focusHandler = function () {
-          wakeFromHibernation();
+          pausedByWindowBlur = false;
+          if (!isPaused()) {
+            wakeFromHibernation();
+          } else if (isWinBlurAttrSet() && focusWakeTimer === null) {
+            // Allow companion runtime's focus handler to clear data-ag-cs-win-blur in the same turn
+            focusWakeTimer = setTimeoutFn(function () {
+              focusWakeTimer = null;
+              if (!isPaused()) wakeFromHibernation();
+            }, 0);
+          }
         };
         win.addEventListener('blur', blurHandler);
         win.addEventListener('focus', focusHandler);
@@ -1797,8 +2849,10 @@
       state.destroyed = false;
       state.yielded = false;
       state.reason = null;
+      state.detectedProvider = null;
       bootAt = nowFn();
-      pausedByVisibilityOrBlur = Boolean(doc && doc.hidden === true);
+      pausedByWindowBlur = false;
+      hibernating = Boolean((doc && doc.hidden === true) || isWinBlurAttrSet());
       missedWhilePaused = false;
       delayedExternalNodes.clear();
       globalConflictRecords.length = 0;
@@ -1809,6 +2863,7 @@
           state.active = false;
           state.status = 'yielded';
           state.reason = extCheck.reason || 'external-ui-zh';
+          state.detectedProvider = extCheck.provider || 'generic-external';
           state.yielded = true;
           setRootStatusAttr('yielded');
           return;
@@ -1826,7 +2881,7 @@
             if (state.mode === 'auto') {
               var recheck = detectExternalLocalization(win, doc);
               if (recheck.detected) {
-                yieldAndRollback(recheck.reason || 'external-ui-zh');
+                yieldAndRollback(recheck.reason || 'external-ui-zh', recheck.provider);
                 return;
               }
             }
@@ -1848,6 +2903,7 @@
           mode: state.mode,
           status: state.status,
           reason: state.reason,
+          detectedProvider: state.detectedProvider,
           translatedCount: countTranslatedUnits(),
           yielded: state.yielded,
         };
@@ -1866,7 +2922,11 @@
       },
       scan: function () {
         if (state.active && !state.destroyed) {
-          safeFullScan();
+          if (!isPaused() && hibernating) {
+            wakeFromHibernation();
+          } else if (!isPaused()) {
+            safeFullScan();
+          }
         }
         return instance.getStatus();
       },
@@ -1888,5 +2948,6 @@
     isPrismOwnedElement: isPrismOwnedElement,
     isUserContentBoundary: isUserContentBoundary,
     isIgnoredBoundary: isIgnoredBoundary,
+    measureSafeBoundaryDepth: measureSafeBoundaryDepth,
   };
 });

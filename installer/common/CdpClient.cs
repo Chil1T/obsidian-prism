@@ -44,7 +44,7 @@ namespace AgyClaudeStyle
             string manifestPath = Path.Combine(baseDir, "manifest.json");
             Dictionary<string, object> raw = MiniJson.ParseObject(File.ReadAllText(manifestPath, Encoding.UTF8));
             PluginManifest m = new PluginManifest();
-            m.Version = GetString(raw, "version", "1.0.5");
+            m.Version = GetString(raw, "version", "1.0.6");
             m.StyleId = GetString(raw, "styleId", "ag-prism-css");
             m.SettingBinding = GetString(raw, "settingBinding", "__agPrismSetting");
             m.RemoveExpression = GetString(raw, "removeExpression", "");
@@ -2058,6 +2058,7 @@ namespace AgyClaudeStyle
             sb.Append("      try { window.__agPrismThought?.destroy?.(); } catch {}\n");
             sb.Append("      try { window.__agPrismOmni?.destroy?.(); } catch {}\n");
             sb.Append("      try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}\n");
+            sb.Append("      try { document.documentElement?.removeAttribute?.('data-ag-cs-model-menu'); document.querySelectorAll?.('[data-ag-cs-aux-dual],[data-ag-cs-model-overlay]').forEach((el) => { el.removeAttribute('data-ag-cs-aux-dual'); el.removeAttribute('data-ag-cs-model-overlay'); }); } catch {}\n");
             sb.Append("      try { window.__agPrism?.destroy?.(); } catch {}\n");
             sb.Append("      try { document.getElementById(").Append(styleIdJson).Append(")?.remove(); } catch {}\n");
             sb.Append("      try { document.getElementById('ag-claude-style-css')?.remove(); } catch {}\n");

@@ -20,7 +20,7 @@
   const peOf = (n) => n?.[K_PE] || null;
   const clHas = (e, c) => Boolean(e?.[K_CL]?.contains?.(c));
   const clRm = (e, c) => e?.[K_CL]?.remove?.(c);
-  const isConn = (e) => Boolean(e && e[K_IC] !== false);
+  const isConn = (e) => !!(e && e[K_IC] !== false);
   const ga = (e, k) => e?.getAttribute?.(k);
   const sa = (e, k, v) => e?.setAttribute?.(k, v);
   const ra = (e, k) => e?.removeAttribute?.(k);
@@ -36,8 +36,10 @@
   const cAF = (id) => {
     if (id && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(id);
   };
+  const ST = (fn, ms) => setTimeout(fn, ms);
+  const CT = (id) => clearTimeout(id), AF = Array.from, isFin = Number.isFinite;
 
-  function createStreamChoreographyController({
+  const createStreamChoreographyController = ({
     motionEngine,
     isDestroyed,
     isMotionStandardOrUltra,
@@ -54,7 +56,7 @@
     rippleCtl,
     convAuraCtl,
     notifyMascot,
-  }) {
+  }) => {
     let hydrateRaf = 0;
     let sparkQueue = [];
     let iconQueue = [];
@@ -114,7 +116,7 @@
       return typeof isMotionStandardOrUltra === 'function' ? Boolean(isMotionStandardOrUltra()) : Boolean(isMotionUltra());
     };
 
-    function getHlBuckets() {
+    const getHlBuckets = () => {
       const cssObj = typeof CSS !== 'undefined' ? CSS : G.CSS;
       const HlCtor = typeof Highlight === 'function' ? Highlight : G.Highlight;
       const d = docOf();
@@ -134,34 +136,34 @@
         }
       }
       return hlBuckets;
-    }
+    };
 
-    function dropBucketItem(it) {
+    const dropBucketItem = (it) => {
       if (hlBuckets && it.b >= 0 && it.b < 5) {
         try {
           hlBuckets[it.b].delete(it.r);
         } catch {}
       }
       it.b = -1;
-    }
+    };
 
-    function clearFadeTimer() {
+    const clearFadeTimer = () => {
       if (fadeTimer) {
-        clearTimeout(fadeTimer);
+        CT(fadeTimer);
         fadeTimer = 0;
       }
-    }
+    };
 
-    function clearHighlightFade() {
+    const clearHighlightFade = () => {
       clearFadeTimer();
       cAF(fadeRaf);
       fadeRaf = 0;
       nextFadeDueAt = 0;
       for (let i = 0; i < fadeItems.length; i++) dropBucketItem(fadeItems[i]);
       fadeItems.length = 0;
-    }
+    };
 
-    function scheduleFadeStep(now, useTimer) {
+    const scheduleFadeStep = (now, useTimer) => {
       if (isDestroyed() || fadeItems.length === 0) return;
       if (docOf()?.hidden) {
         clearHighlightFade();
@@ -171,7 +173,7 @@
       const delay = nextFadeDueAt > 0 ? nextFadeDueAt - now : 0;
       if (useTimer && delay > 18 && typeof setTimeout === 'function') {
         if (fadeTimer) return;
-        fadeTimer = setTimeout(() => {
+        fadeTimer = ST(() => {
           fadeTimer = 0;
           if (isDestroyed() || !canStreamMotion() || fadeItems.length === 0 || docOf()?.hidden) {
             clearHighlightFade();
@@ -187,7 +189,7 @@
       clearFadeTimer();
       fadeRaf = rAF(stepHighlightFade);
       if (!fadeRaf) clearHighlightFade();
-    }
+    };
 
     function stepHighlightFade(ts) {
       clearFadeTimer();
@@ -196,7 +198,7 @@
         clearHighlightFade();
         return;
       }
-      const now = typeof ts === 'number' && Number.isFinite(ts) ? ts : nowOf();
+      const now = typeof ts === 'number' && isFin(ts) ? ts : nowOf();
       if (nextFadeDueAt > 0 && now < nextFadeDueAt - 1) {
         scheduleFadeStep(now, true);
         return;
@@ -233,14 +235,14 @@
       }
       fadeItems.length = w;
       if (w > 0) {
-        nextFadeDueAt = Number.isFinite(earliestDue) ? earliestDue : 0;
+        nextFadeDueAt = isFin(earliestDue) ? earliestDue : 0;
         scheduleFadeStep(now, false);
       } else {
         clearHighlightFade();
       }
     }
 
-    function enqueueFadeRange(tn, sOff, eOff, now) {
+    const enqueueFadeRange = (tn, sOff, eOff, now) => {
       if (!tn || eOff <= sOff) return false;
       const d = docOf();
       if (!d || d.hidden) return false;
@@ -276,9 +278,9 @@
       } catch {
         return false;
       }
-    }
+    };
 
-    function snapTextLens(node, limit = 24) {
+    const snapTextLens = (node, limit = 24) => {
       if (!node) return;
       let c = 0;
       const walk = (n) => {
@@ -293,9 +295,9 @@
         for (let i = ks.length - 1; i >= 0 && c < limit; i--) walk(ks[i]);
       };
       walk(node);
-    }
+    };
 
-    function flushExpiredClasses() {
+    const flushExpiredClasses = () => {
       sweepTimer = 0;
       if (expirableClasses.size === 0) return;
       const now = Date.now();
@@ -311,13 +313,13 @@
           if (map.size === 0) expirableClasses.delete(el);
         }
       });
-      if (!isDestroyed() && expirableClasses.size > 0 && Number.isFinite(nextDue)) {
-        sweepTimer = setTimeout(flushExpiredClasses, Math.max(16, Math.ceil(nextDue - Date.now())));
+      if (!isDestroyed() && expirableClasses.size > 0 && isFin(nextDue)) {
+        sweepTimer = ST(flushExpiredClasses, Math.max(16, Math.ceil(nextDue - Date.now())));
       }
-    }
+    };
 
-    function scheduleTransient(fn, ms) {
-      const id = setTimeout(() => {
+    const scheduleTransient = (fn, ms) => {
+      const id = ST(() => {
         transientTimers.delete(id);
         if (!isDestroyed()) {
           try {
@@ -327,12 +329,12 @@
       }, ms);
       transientTimers.add(id);
       return id;
-    }
+    };
 
-    function clearTransientTimers() {
+    const clearTransientTimers = () => {
       convEntrySeq++;
       if (convEntryTimer) {
-        clearTimeout(convEntryTimer);
+        CT(convEntryTimer);
         convEntryTimer = 0;
       }
       if (convEntryRaf) {
@@ -340,22 +342,22 @@
         convEntryRaf = 0;
       }
       if (wfClickTimer) {
-        clearTimeout(wfClickTimer);
+        CT(wfClickTimer);
         wfClickTimer = 0;
       }
       if (sweepTimer) {
-        clearTimeout(sweepTimer);
+        CT(sweepTimer);
         sweepTimer = 0;
       }
       expirableClasses.clear();
-      for (const id of transientTimers) clearTimeout(id);
+      for (const id of transientTimers) CT(id);
       transientTimers.clear();
-    }
+    };
 
-    function cancelDeferredHydration() {
+    const cancelDeferredHydration = () => {
       convEntrySeq++;
       if (convEntryTimer) {
-        clearTimeout(convEntryTimer);
+        CT(convEntryTimer);
         convEntryTimer = 0;
       }
       if (convEntryRaf) {
@@ -369,9 +371,9 @@
       sparkQueue = [];
       iconQueue = [];
       unfoldQueue = [];
-    }
+    };
 
-    function applySingleSpark(trig, brand, st) {
+    const applySingleSpark = (trig, brand, st) => {
       const d = docOf();
       if (!d || !isConn(trig)) return;
       if (st === 'streaming') setAttrIfChanged(trig, 'data-ag-cs-spark-streaming', '1');
@@ -395,9 +397,9 @@
         if (cloned && typeof spark.replaceChildren === 'function') spark.replaceChildren(cloned);
         else spark.innerHTML = svgStr;
       }
-    }
+    };
 
-    function stepHydration() {
+    const stepHydration = () => {
       hydrateRaf = 0;
       if (isDestroyed()) return;
       runGuardedMut(() => {
@@ -414,14 +416,14 @@
         }
       });
       if (sparkQueue.length > 0 || iconQueue.length > 0) hydrateRaf = rAF(stepHydration);
-    }
+    };
 
-    function enqueueDeferredIcons(items) {
+    const enqueueDeferredIcons = (items) => {
       iconQueue = items;
       if (!isDestroyed() && !hydrateRaf) hydrateRaf = rAF(stepHydration);
-    }
+    };
 
-    function syncThinkingSparks(primaryModelInfo) {
+    const syncThinkingSparks = (primaryModelInfo) => {
       const d = docOf();
       if (isDestroyed() || !d) return;
       const conv = findFormalConvView();
@@ -473,16 +475,16 @@
         sparkQueue = pending.slice(0, syncStart);
         if (!hydrateRaf) hydrateRaf = rAF(stepHydration);
       }
-    }
+    };
 
-    function clearWorkedForAutoUnfoldAttrs() {
+    const clearWorkedForAutoUnfoldAttrs = () => {
       const d = docOf();
       if (!d) return;
       for (const el of qsa(d, '[data-ag-cs-auto-unfolded]')) ra(el, 'data-ag-cs-auto-unfolded');
       for (const el of qsa(d, '[data-ag-cs-outer-open]')) ra(el, 'data-ag-cs-outer-open');
-    }
+    };
 
-    function pumpUnfoldQueue() {
+    const pumpUnfoldQueue = () => {
       unfoldRaf = 0;
       if (isDestroyed() || unfoldQueue.length === 0) {
         unfoldQueue = [];
@@ -502,9 +504,9 @@
       if (unfoldQueue.length > 0 && !isDestroyed()) {
         unfoldRaf = rAF(pumpUnfoldQueue);
       }
-    }
+    };
 
-    function processOuterWf(btn, pendingClicks) {
+    const processOuterWf = (btn, pendingClicks) => {
       if (!isConn(btn)) return;
       const expanded = ga(btn, 'aria-expanded') === 'true';
       let scope = btn.nextElementSibling;
@@ -533,9 +535,9 @@
           for (const el of qsa(p, '[data-ag-cs-auto-unfolded]')) ra(el, 'data-ag-cs-auto-unfolded');
         }
       }
-    }
+    };
 
-    function flushPendingUnfoldClicks(pendingClicks) {
+    const flushPendingUnfoldClicks = (pendingClicks) => {
       if (!pendingClicks.length) return;
       if (pendingClicks.length <= 2 || typeof requestAnimationFrame !== 'function') {
         for (let i = 0; i < pendingClicks.length; i++) {
@@ -559,9 +561,9 @@
       }
       for (let i = 0; i < pendingClicks.length; i++) unfoldQueue.push(pendingClicks[i]);
       if (!unfoldRaf && unfoldQueue.length > 0) unfoldRaf = rAF(pumpUnfoldQueue);
-    }
+    };
 
-    function syncWorkedForAutoUnfold(dirtyTargets = null) {
+    const syncWorkedForAutoUnfold = (dirtyTargets = null) => {
       const d = docOf();
       if (isDestroyed()) {
         clearWorkedForAutoUnfoldAttrs();
@@ -596,16 +598,16 @@
       }
       for (const btn of qsa(d, '[data-testid="worked-for-collapsible"]')) processOuterWf(btn, pendingClicks);
       flushPendingUnfoldClicks(pendingClicks);
-    }
+    };
 
-    function scheduleWorkedForClickSync() {
+    const scheduleWorkedForClickSync = () => {
       if (isDestroyed()) return;
-      if (wfClickTimer) clearTimeout(wfClickTimer);
-      wfClickTimer = setTimeout(() => {
+      if (wfClickTimer) CT(wfClickTimer);
+      wfClickTimer = ST(() => {
         wfClickTimer = 0;
         if (!isDestroyed()) syncWorkedForAutoUnfold();
       }, 28);
-    }
+    };
 
     function findFormalConvView() {
       const d = docOf();
@@ -617,7 +619,7 @@
       return null;
     }
 
-    function sampleHomeComposerRect() {
+    const sampleHomeComposerRect = () => {
       const home = qs(docOf(), '.agy-home');
       if (!home) return null;
       const r = rectOf(qs(home, '[data-testid="agent-input-box"]') || qs(home, '.surface-composer-card'));
@@ -625,16 +627,16 @@
         lastHomeRect = { left: r.left, top: r.top, width: r.width, height: r.height };
       }
       return lastHomeRect;
-    }
+    };
 
-    function triggerHomeLiftoffRippleBurst() {
+    const triggerHomeLiftoffRippleBurst = () => {
       const home = qs(docOf(), '.agy-home');
       if (!home) return;
       const r = sampleHomeComposerRect();
       if (isMotionUltra() && rippleCtl) rippleCtl.triggerLiftoffBurst(r);
-    }
+    };
 
-    function markLiftoffBubble(conv) {
+    const markLiftoffBubble = (conv) => {
       const bubble = qs(conv, '[data-testid="user-message-bubble"]');
       if (!bubble) return false;
       sa(bubble, 'data-ag-cs-liftoff-bubble', '1');
@@ -642,9 +644,9 @@
         if (isConn(bubble)) ra(bubble, 'data-ag-cs-liftoff-bubble');
       }, 500);
       return true;
-    }
+    };
 
-    function triggerHeroALiftoff(formalConv, measuredRect = null) {
+    const triggerHeroALiftoff = (formalConv, measuredRect = null) => {
       const d = docOf();
       if (!isMotionUltra() || !formalConv || !d) return;
       const now = nowOf();
@@ -677,9 +679,9 @@
       }
       liftoffBubbleUntil = markLiftoffBubble(formalConv) ? 0 : now + 900;
       convAuraCtl?.triggerLiftoffEbb?.(now);
-    }
+    };
 
-    function triggerHeroBHomeReturn() {
+    const triggerHeroBHomeReturn = () => {
       if (!isMotionUltra()) return;
       const home = qs(docOf(), '.agy-home');
       if (!home) return;
@@ -701,9 +703,9 @@
           } catch {}
         }
       }
-    }
+    };
 
-    function measureSidebarSelectionSnapshot() {
+    const measureSidebarSelectionSnapshot = () => {
       const rows = qsa(docOf(), '[data-testid="conversation-row-sidebar"]');
       if (!rows.length) return { e: true };
       let selIdx = -1;
@@ -734,9 +736,9 @@
           }
         : null;
       return { e: false, i: selIdx, cid: curCid, r: selRow, s: snap, l: lr, t: stTop, st: states };
-    }
+    };
 
-    function syncSidebarSelectionGlide(snap) {
+    const syncSidebarSelectionGlide = (snap) => {
       const d = docOf();
       if (!snap || !d) return;
       if (ga(d.documentElement, 'data-ag-cs-sidebar') === 'off') {
@@ -806,7 +808,7 @@
           for (const vp of qsa(d, '[data-testid="autoscroll-viewport"]')) {
             if (closestOf(vp, '[data-testid="subagent-tab-conversation"]')) continue;
             sa(vp, 'data-ag-cs-stage-glide', dir);
-            const kids = vp.children ? Array.from(vp.children) : [];
+            const kids = vp.children ? AF(vp.children) : [];
             const glideKids = kids.slice(Math.max(0, kids.length - 3));
             for (const ch of glideKids) sa(ch, 'data-ag-cs-glide-item', dir);
             scheduleTransient(() => {
@@ -822,17 +824,17 @@
       sbIndex = selIdx;
       sbCid = curCid;
       sbRect = curSnap;
-    }
+    };
 
-    function applyCaustic(el) {
+    const applyCaustic = (el) => {
       if (!el || !isMotionUltra()) return;
       sa(el, 'data-ag-cs-caustic', '1');
       scheduleTransient(() => {
         if (isConn(el)) ra(el, 'data-ag-cs-caustic');
       }, 920);
-    }
+    };
 
-    function measureVisibleChangedHeaders() {
+    const measureVisibleChangedHeaders = () => {
       const out = [];
       const vh = typeof window !== 'undefined' && window.innerHeight > 0 ? window.innerHeight : 1080;
       for (const hdr of qsa(docOf(), '[data-testid="changed-files-card-header"]')) {
@@ -841,9 +843,9 @@
         if (!r || r.height <= 0 || (r.bottom > 0 && r.top < vh)) out.push(hdr);
       }
       return out;
-    }
+    };
 
-    function syncHeaderOpenStates(scope = null) {
+    const syncHeaderOpenStates = (scope = null) => {
       const root = scope || docOf();
       if (!root) return;
       for (const hdr of qsa(root, '[data-testid="changed-files-card-header"]')) {
@@ -851,9 +853,9 @@
         if (next && tagOf(next) === 'DIV') setAttrIfChanged(hdr, 'data-ag-cs-hdr-open', '1');
         else if (ha(hdr, 'data-ag-cs-hdr-open')) ra(hdr, 'data-ag-cs-hdr-open');
       }
-    }
+    };
 
-    function syncHeroCCaustics(measuredHeaders) {
+    const syncHeroCCaustics = (measuredHeaders) => {
       const d = docOf();
       const now = nowOf();
       syncHeaderOpenStates(d);
@@ -883,7 +885,7 @@
           d,
           '[data-testid="conversation-view"] [data-testid="agent-error-banner"], [data-testid="conversation-view"] [data-testid="error-message"]'
         );
-        if (auraPhase === 'error-halted' || Boolean(errDom)) {
+        if (auraPhase === 'error-halted' || !!(errDom)) {
           convAuraCtl?.triggerErrorHalted?.(now);
           notifyMascot('streamDone', { error: true, durationMs: elapsed });
         } else {
@@ -899,13 +901,13 @@
           notifyMascot('complete', { durationMs: elapsed });
         }
       }
-    }
+    };
 
-    function triggerHeroDFiberPulse(card, modelBtn, brand) {
+    const triggerHeroDFiberPulse = (card, modelBtn, brand) => {
       if (!card || !isMotionUltra()) return;
       const camp = brand === 'antigravity' || brand === 'claude' || brand === 'openai' ? brand : 'gemini';
       if (fiberTimer) {
-        clearTimeout(fiberTimer);
+        CT(fiberTimer);
         transientTimers.delete(fiberTimer);
         fiberTimer = 0;
       }
@@ -928,9 +930,9 @@
           );
         } catch {}
       }
-    }
+    };
 
-    function triggerHeroESonar(navTurn) {
+    const triggerHeroESonar = (navTurn) => {
       if (!navTurn || !isMotionUltra()) return;
       const conv = closestOf(navTurn, '[data-testid="conversation-view"]') || findFormalConvView();
       if (!conv) return;
@@ -948,7 +950,7 @@
       } else {
         const navRoot = closestOf(navTurn, '[data-testid="conversation-navigator"]') || peOf(navTurn);
         if (navRoot) {
-          const sibs = Array.from(qsa(navRoot, '[data-testid="conversation-navigator-turn"]'));
+          const sibs = AF(qsa(navRoot, '[data-testid="conversation-navigator-turn"]'));
           const relIdx = sibs.indexOf(navTurn);
           if (relIdx >= 0) idx = Math.min(turns.length - 1, Math.max(0, turns.length - sibs.length) + relIdx);
         }
@@ -959,13 +961,13 @@
       scheduleTransient(() => {
         if (isConn(target)) ra(target, 'data-ag-cs-sonar');
       }, 720);
-    }
+    };
 
-    function syncHeroRouteChoreography(measured) {
+    const syncHeroRouteChoreography = (measured) => {
       const d = docOf();
       const inHome = measured ? measured.inHome : Boolean(qs(d, '.agy-home'));
       const formalConv = measured ? measured.formalConv : !inHome ? findFormalConvView() : null;
-      const inFormalConv = Boolean(formalConv);
+      const inFormalConv = !!(formalConv);
 
       if (inHome) {
         const sheet = closestOf(qs(d, '.agy-home'), '.agy-sheet');
@@ -1002,9 +1004,9 @@
       }
       if (measured?.sidebarSnap) syncSidebarSelectionGlide(measured.sidebarSnap);
       if (!measured || measured.checkCaustics !== false) syncHeroCCaustics(measured?.visibleChangedHeaders);
-    }
+    };
 
-    function isBlockCode(el, stopAt) {
+    const isBlockCode = (el, stopAt) => {
       if (!isEl(el)) return false;
       const t = tagOf(el);
       if (t === 'PRE' || clHas(el, 'code-block') || clHas(el, 'code-line')) return true;
@@ -1016,34 +1018,34 @@
         }
       }
       return false;
-    }
+    };
 
-    function insideCodeOrTable(node, stopAt) {
+    const insideCodeOrTable = (node, stopAt) => {
       let cur = isEl(node) ? node : peOf(node);
       while (cur && cur !== stopAt) {
         if (TABLE_TAGS.has(tagOf(cur)) || isBlockCode(cur, stopAt)) return cur;
         cur = peOf(cur);
       }
       return null;
-    }
+    };
 
-    function findRowAnc(node, stopAt) {
+    const findRowAnc = (node, stopAt) => {
       let cur = isEl(node) ? node : peOf(node);
       while (cur && cur !== stopAt) {
         if (tagOf(cur) === 'TR') return cur;
         cur = peOf(cur);
       }
       return null;
-    }
+    };
 
-    function flushAllStreamArtifacts(immediate = true) {
+    const flushAllStreamArtifacts = (immediate = true) => {
       scannedNodes = new WeakSet();
       seenBlocks = new WeakSet();
       const force = immediate || !canStreamMotion() || isDestroyed();
       if (force) {
         clearHighlightFade();
         if (sweepTimer) {
-          clearTimeout(sweepTimer);
+          CT(sweepTimer);
           sweepTimer = 0;
         }
       }
@@ -1079,11 +1081,11 @@
           for (const el of qsa(d, '.ag-cs-sidebar-glide-pill')) el.remove();
         }
       });
-    }
+    };
 
     const PROSE_SEL = '[data-testid="planner-response-text"],[data-testid="agent-response"] [data-markdown-root]';
 
-    function findStreamingThoughtBody(node) {
+    const findStreamingThoughtBody = (node) => {
       const body = docOf()?.body;
       let cur = isEl(node) ? node : peOf(node);
       while (cur && cur !== body) {
@@ -1104,9 +1106,9 @@
         cur = peOf(cur);
       }
       return null;
-    }
+    };
 
-    function markStreamClass(el, cls, dur = 300) {
+    const markStreamClass = (el, cls, dur = 300) => {
       if (!el?.[K_CL] || clHas(el, cls)) return false;
       runGuardedMut(() => el[K_CL].add(cls));
       let map = expirableClasses.get(el);
@@ -1115,11 +1117,11 @@
         expirableClasses.set(el, map);
       }
       map.set(cls, Date.now() + dur);
-      if (!sweepTimer) sweepTimer = setTimeout(flushExpiredClasses, dur);
+      if (!sweepTimer) sweepTimer = ST(flushExpiredClasses, dur);
       return true;
-    }
+    };
 
-    function fadeLeafTexts(node, now, max = 4) {
+    const fadeLeafTexts = (node, now, max = 4) => {
       if (!node || isThoughtIsolatedNode(node)) return;
       let c = 0;
       const walk = (cur) => {
@@ -1137,9 +1139,9 @@
         for (let i = 0; i < cur.childNodes.length && c < max; i++) walk(cur.childNodes[i]);
       };
       walk(node);
-    }
+    };
 
-    function onStreamMutations(mutations) {
+    const onStreamMutations = (mutations) => {
       if (isDestroyed() || streamMutating || !canStreamMotion()) return;
       const now = nowOf();
       let newBlocks = 0;
@@ -1193,7 +1195,7 @@
                 markStreamClass(added, 'ag-cs-thought-chunk', 290);
               }
             }
-          }
+          };
           continue;
         }
 
@@ -1286,9 +1288,9 @@
           }
         }
       }
-    }
+    };
 
-    function syncDualStreamEngine() {
+    const syncDualStreamEngine = () => {
       const active = canStreamMotion() && isConvRunning();
       const conv = active ? findFormalConvView() : null;
       if (!active || !conv) {
@@ -1330,19 +1332,19 @@
           streamRoot = conv;
         } catch {}
       }
-    }
+    };
 
-    function isFreshTriggerOrigin(trig) {
-      if (!trig || !Number.isFinite(trig.at)) return false;
+    const isFreshTriggerOrigin = (trig) => {
+      if (!trig || !isFin(trig.at)) return false;
       const age = nowOf() - trig.at;
       return age >= 0 && age <= 900;
-    }
+    };
 
-    function measureNewLensOverlays() {
+    const measureNewLensOverlays = () => {
       const d = docOf();
       if (!isMotionStandardOrUltra() || !d) return [];
       const cands = new Set([
-        ...qsa(d, '.agy-overlay, .agy-fastpick, div[role="dialog"], [data-testid="context-menu-popup"], [data-testid="context-menu-submenu-popup"]'),
+        ...qsa(d, '.agy-overlay, .agy-fastpick, [data-testid="context-menu-popup"], [data-testid="context-menu-submenu-popup"]'),
       ]);
       for (const el of qsa(d, '[data-testid="overview-panel"]')) {
         const p = peOf(el);
@@ -1354,9 +1356,9 @@
         if (!ha(ov, 'data-hover-card-popup') && !seenOverlays.has(ov)) out.push({ ov, rect: needRect ? rectOf(ov) : null });
       }
       return out;
-    }
+    };
 
-    function syncLensOverlayOrigins(measuredOverlays) {
+    const syncLensOverlayOrigins = (measuredOverlays) => {
       const d = docOf();
       if (!d) return;
       for (const el of qsa(d, '[data-testid="overview-panel"]')) {
@@ -1389,16 +1391,16 @@
           }
         }
       }
-    }
+    };
 
-    function scheduleDeferredConvEntry(fn, delayMs = 65, frame2Fn = null) {
+    const scheduleDeferredConvEntry = (fn, delayMs = 65, frame2Fn = null) => {
       const seq = ++convEntrySeq;
-      if (convEntryTimer) clearTimeout(convEntryTimer);
+      if (convEntryTimer) CT(convEntryTimer);
       if (convEntryRaf) {
         cAF(convEntryRaf);
         convEntryRaf = 0;
       }
-      convEntryTimer = setTimeout(() => {
+      convEntryTimer = ST(() => {
         convEntryTimer = 0;
         if (isDestroyed() || seq !== convEntrySeq) return;
         const cont = fn();
@@ -1409,9 +1411,9 @@
           });
         }
       }, delayMs);
-    }
+    };
 
-    function disconnectStreamObserver() {
+    const disconnectStreamObserver = () => {
       if (streamObs) {
         try {
           streamObs.disconnect();
@@ -1420,7 +1422,7 @@
         streamRoot = null;
       }
       flushAllStreamArtifacts(true);
-    }
+    };
 
     return {
       heroState,
@@ -1457,16 +1459,16 @@
       },
       isEntryMotionSuppressed: () => suppressEntryMotionUntil > nowOf(),
       isStreamMutating: () => streamMutating,
-      hasStreamObserver: () => Boolean(streamObs && streamRoot),
+      hasStreamObserver: () => !!(streamObs && streamRoot),
       stepHighlightFade,
       clearHighlightFade,
       getHighlightFadeState: () => ({
         activeCount: fadeItems.length,
-        rafActive: Boolean(fadeRaf || fadeTimer),
+        rafActive: !!(fadeRaf || fadeTimer),
         buckets: hlBuckets ? hlBuckets.map((h) => h.size ?? 0) : [],
       }),
     };
-  }
+  };
 
   const api = { STREAM_BATCH_MS, STREAM_FADE_MS, HIGHLIGHT_NAMES, createStreamChoreographyController };
   if (typeof module === 'object' && module.exports) module.exports = api;

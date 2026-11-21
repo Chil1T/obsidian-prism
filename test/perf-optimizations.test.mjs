@@ -300,12 +300,13 @@ test('perf guard 6: upstream-client unbind clears __cesAgBound so reused panel r
   assert.equal(up.includes('__cesAgPanelBound'), false);
 });
 
-test('perf guard 7: style.css & omni-client have zero hot :has(), unscoped ::highlight(), universal * motion-off, or *:nth-last-child', () => {
+test('perf guard 7: style.css & omni-client have zero :has(), unscoped ::highlight(), universal * motion-off, or *:nth-last-child', () => {
   const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
-  const strippedHas = css
-    .replace(/\[data-testid="aux-pane-split"\]:has\([^\n{}]+\)(?=\{)/g, '')
-    .replace(/(?:html|\.agy-overlay):has\(\[data-testid="model-selector-panel"\]\)/g, '');
-  assert.equal((strippedHas.match(/:has\(/g) || []).length, 0, 'style.css must contain zero hot :has() selectors');
+  assert.equal((css.match(/:has\(/g) || []).length, 0, 'style.css must contain zero :has() selectors (avoid Blink full-subtree RecalcStyle)');
+  assert.equal(/[^\x00-\x7F]/.test(css), false, 'style.css must contain zero non-ASCII characters');
+  assert.ok(css.includes('[data-testid="aux-pane-split"][data-ag-cs-aux-dual="1"]'), 'aux-pane-split dual layout must use O(1) data-ag-cs-aux-dual attribute');
+  assert.ok(css.includes('html[data-ag-cs-model-menu="1"] .ag-cs-crab'), 'model menu crab click-through must use O(1) root attribute');
+  assert.ok(css.includes('.agy-overlay[data-ag-cs-model-overlay="1"]'), 'model menu overlay z-index must use O(1) overlay attribute');
   assert.equal(/^\s*::highlight\(/m.test(css), false, 'style.css must anchor ::highlight() to :root (not universal *)');
   assert.ok(css.includes(':root::highlight(ag-stream-f0)'), 'style.css must use O(1) :root::highlight() inheritance');
   assert.equal(css.includes('&,& *,& *::before,& *::after'), false, 'motion=off universal * rule must be mounted on demand only');
@@ -1397,7 +1398,7 @@ test('perf guard 20: Host Turbo alert.css dedup+restore, async img, hidden sidec
   };
   sbUi.globalThis = sbUi;
   vm.runInNewContext(uiSrc, sbUi);
-  sbUi.__agCsUiMain({}, { version: '1.0.5', codeHash: 'test' });
+  sbUi.__agCsUiMain({}, { version: '1.0.6', codeHash: 'test' });
 
   // Verify T1: 1 singleton hoisted in head, all 3 duplicate bubble styles kept in React DOM but disabled=true
   const singleton = doc.getElementById('ag-prism-host-alert-css');
@@ -1602,4 +1603,367 @@ test('perf guard 20: Host Turbo alert.css dedup+restore, async img, hidden sidec
     globalThis.setTimeout = origSetTo;
     globalThis.clearTimeout = origClrTo;
   }
+});
+
+test('perf guard 21: Issues #2/#3/#5/#7/#8 + PR #6 + #35 queued-message 3-gears fix + #36 external zh coexistence & bundle <= 704KB', () => {
+  const cdp = require(path.join(ROOT, 'cdp.js'));
+  const mgc = require(path.join(ROOT, 'model-glyph-crystal.js'));
+  const scMod = require(path.join(ROOT, 'stream-choreography.js'));
+  const settingsPanel = require(path.join(ROOT, 'settings-panel.js'));
+  const i18nCore = require(path.join(ROOT, 'i18n-core.js'));
+  const i18nLocales = require(path.join(ROOT, 'i18n-locales.js'));
+  const uiMainFactory = require(path.join(ROOT, 'ui-runtime.js'));
+  const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
+
+  // 1) CSS & REMOVE_EXPRESSION hygiene: 0 :has(), 0 non-ASCII, stepped animations, blur/off backdrop-filter:none, fold-body contain:layout style, Issue #8 scrollbar fix
+  assert.equal((css.match(/:has\(/g) || []).length, 0, 'style.css must contain zero :has() selectors');
+  assert.equal(/[^\x00-\x7F]/.test(css), false, 'style.css must contain zero non-ASCII characters');
+  assert.ok(css.includes('ag-cs-spark-orbit 2.4s steps(36) infinite'), 'PR #6: spark orbit must use discrete steps(36)');
+  assert.ok(css.includes('ag-cs-orbit-spin 2.4s steps(36) infinite'), 'PR #6: spinner orbit must use discrete steps(36)');
+  assert.ok(css.includes('ag-cs-comet-tip 1.1s steps(18) infinite'), 'PR #6: streaming comet tip must use discrete steps(18)');
+  assert.ok(
+    css.includes('html[data-ag-cs-style]:is([data-ag-cs-win-blur="1"],[data-ag-cs-motion="off"])') &&
+      css.includes('backdrop-filter:none !important;'),
+    'Issue #2: win-blur & motion=off must disable backdrop-filter on transient overlays'
+  );
+  assert.ok(
+    css.includes('& .ag-cs-settings-fold-body{display:none;') && css.includes('contain:layout style;}'),
+    'Issue #3: .ag-cs-settings-fold-body must use display:none + contain:layout style instead of max-height transition'
+  );
+  assert.ok(
+    css.includes('& div[role="dialog"]:not(.agy-overlay){animation:ag-cs-subtle-in'),
+    'Issue #3: plain dialogs must use lightweight ag-cs-subtle-in'
+  );
+  assert.equal(css.includes(',[data-testid="autoscroll-viewport"],'), false, 'Issue #8: scrollbar rule must exclude autoscroll-viewport');
+  assert.equal(css.includes('scrollbar-width:thin'), false, 'Issue #8: scrollbar rule must omit scrollbar-width:thin so ::-webkit-scrollbar stays active on Windows');
+  for (const attr of ['data-ag-cs-model-menu', 'data-ag-cs-aux-dual', 'data-ag-cs-model-overlay']) {
+    assert.ok(cdp.REMOVE_EXPRESSION.includes(attr) || cdp.REMOVE_EXPRESSION.includes(attr.replace('data-ag-cs-', '')), `REMOVE_EXPRESSION must clean ${attr}`);
+  }
+
+  // 2) Issue #3: stream-choreography measureNewLensOverlays() must NOT measure div[role="dialog"]
+  let dialogRectReads = 0;
+  const prevDoc = globalThis.document;
+  globalThis.document = {
+    documentElement: { getAttribute: () => 'ultra' },
+    querySelectorAll: (sel) => {
+      assert.equal(sel.includes('role="dialog"'), false, 'measureNewLensOverlays selector must omit div[role="dialog"]');
+      if (sel.includes('.agy-overlay')) return [];
+      return [{ getBoundingClientRect: () => { dialogRectReads += 1; return { left: 0, top: 0, width: 400, height: 300 }; } }];
+    },
+  };
+  try {
+    const scCtl = scMod.createStreamChoreographyController({ isDestroyed: () => false, isMotionStandardOrUltra: () => true });
+    assert.equal(scCtl.measureNewLensOverlays().length, 0);
+    assert.equal(dialogRectReads, 0);
+  } finally {
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+  }
+
+  // 3) #36 External zh effort suffix normalization in model-glyph-crystal
+  assert.deepEqual(mgc.parseModelLabelInfo('Claude Opus 4.6 (高思考)'), { brand: 'claude', tier: 'high', isOrchestrator: false, camp: 'claude' });
+  assert.deepEqual(mgc.parseModelLabelInfo('Gemini 3.1 Pro（中等）'), { brand: 'gemini', tier: 'medium', isOrchestrator: false, camp: 'gemini' });
+  assert.deepEqual(mgc.parseModelLabelInfo('GPT-5.2 (低)'), { brand: 'openai', tier: 'low', isOrchestrator: false, camp: 'gemini' });
+  assert.equal(mgc.parseModelLabelInfo('Orchestrator (自动)').isOrchestrator, true);
+
+  // 4) Live VM check for Issue #5 aux-pane-split guard, #35 queued-message 3-gears fix, #36 external zh UI skip, and Issue #7 zero 600-btn rescan & Read-then-Write settings click
+  let moCb = null;
+  let totalRectReads = 0;
+  const makeDomNode = (tag, attrs = {}) => {
+    const attrMap = new Map(Object.entries(attrs).map(([k, v]) => [k, String(v)]));
+    const clsSet = new Set(String(attrs.class || '').split(/\s+/).filter(Boolean));
+    const node = {
+      nodeType: 1,
+      tagName: String(tag).toUpperCase(),
+      id: attrs.id || '',
+      className: attrs.class || '',
+      textContent: '',
+      innerHTML: '',
+      hidden: false,
+      disabled: false,
+      isConnected: true,
+      parentElement: null,
+      parentNode: null,
+      children: [],
+      childNodes: [],
+      style: {
+        display: '',
+        width: '',
+        opacity: '',
+        setProperty(k, v) { this[k] = v; },
+        removeProperty(k) { delete this[k]; },
+        getPropertyValue(k) { return this[k] || ''; },
+      },
+      classList: {
+        add: (...cs) => cs.forEach((c) => clsSet.add(c)),
+        remove: (...cs) => cs.forEach((c) => clsSet.delete(c)),
+        contains: (c) => clsSet.has(c),
+        toggle: (c, f) => (f ? clsSet.add(c) : clsSet.delete(c)),
+      },
+      _listeners: new Map(),
+      addEventListener(ev, fn) {
+        if (!this._listeners.has(ev)) this._listeners.set(ev, []);
+        this._listeners.get(ev).push(fn);
+      },
+      removeEventListener() {},
+      click() {
+        const ls = this._listeners.get('click') || [];
+        const ev = { type: 'click', target: this, stopPropagation() {}, preventDefault() {} };
+        for (const fn of ls) fn(ev);
+      },
+      getAttribute: (k) => (attrMap.has(k) ? attrMap.get(k) : null),
+      setAttribute(k, v) {
+        attrMap.set(k, String(v));
+        if (k === 'id') this.id = String(v);
+        if (k === 'class') {
+          this.className = String(v);
+          clsSet.clear();
+          String(v).split(/\s+/).filter(Boolean).forEach((c) => clsSet.add(c));
+        }
+      },
+      hasAttribute: (k) => attrMap.has(k),
+      removeAttribute: (k) => attrMap.delete(k),
+      appendChild(ch) {
+        if (!ch) return ch;
+        if (ch.parentElement && ch.parentElement !== this) {
+          const idx = ch.parentElement.children.indexOf(ch);
+          if (idx >= 0) ch.parentElement.children.splice(idx, 1);
+        }
+        ch.parentElement = ch.parentNode = this;
+        if (!this.children.includes(ch)) this.children.push(ch);
+        return ch;
+      },
+      insertBefore(ch, ref) {
+        if (!ch) return ch;
+        ch.parentElement = ch.parentNode = this;
+        const idx = ref ? this.children.indexOf(ref) : -1;
+        if (idx >= 0) this.children.splice(idx, 0, ch);
+        else this.children.push(ch);
+        return ch;
+      },
+      removeChild(ch) {
+        const i = this.children.indexOf(ch);
+        if (i >= 0) this.children.splice(i, 1);
+        ch.parentElement = ch.parentNode = null;
+        return ch;
+      },
+      remove() {
+        this.parentElement?.removeChild(this);
+      },
+      get firstElementChild() { return this.children[0] || null; },
+      get lastElementChild() { return this.children[this.children.length - 1] || null; },
+      get firstChild() { return this.children[0] || null; },
+      get childElementCount() { return this.children.length; },
+      getBoundingClientRect() {
+        totalRectReads += 1;
+        return { left: 10, top: 10, width: 64, height: 26 };
+      },
+      matches(sel) {
+        return sel.split(',').some((raw) => {
+          const s = raw.trim();
+          if (!s) return false;
+          if (s.startsWith('#')) return this.id === s.slice(1);
+          if (s === 'button') return this.tagName === 'BUTTON';
+          if (s === 'svg') return this.tagName === 'SVG';
+          if (s === 'h2') return this.tagName === 'H2';
+          if (s === 'div.p-6') return this.tagName === 'DIV' && clsSet.has('p-6');
+          if (s === 'div.space-y-2') return this.tagName === 'DIV' && clsSet.has('space-y-2');
+          if (s === '[role="dialog"] h2') return this.tagName === 'H2' && Boolean(this.closest('[role="dialog"]'));
+          if (s === 'button[data-ag-cs-key]') return this.tagName === 'BUTTON' && attrMap.has('data-ag-cs-key');
+          if (s === 'button[data-ag-cs-preset]') return this.tagName === 'BUTTON' && attrMap.has('data-ag-cs-preset');
+          const mBtnKey = s.match(/^button\[data-ag-cs-key="([^"]+)"\]$/);
+          if (mBtnKey) return this.tagName === 'BUTTON' && attrMap.get('data-ag-cs-key') === mBtnKey[1];
+          const mAttrVal = s.match(/^\[([a-zA-Z0-9_-]+)="([^"]+)"\]$/);
+          if (mAttrVal) return attrMap.get(mAttrVal[1]) === mAttrVal[2];
+          const mAttrOnly = s.match(/^\[([a-zA-Z0-9_-]+)\]$/);
+          if (mAttrOnly) return attrMap.has(mAttrOnly[1]);
+          if (s.startsWith('.')) return clsSet.has(s.slice(1));
+          return false;
+        });
+      },
+      closest(sel) {
+        let cur = this;
+        while (cur) {
+          if (cur.matches?.(sel)) return cur;
+          cur = cur.parentElement;
+        }
+        return null;
+      },
+      querySelectorAll(sel) {
+        const res = [];
+        const walk = (n) => {
+          for (const c of n.children) {
+            if (c.matches(sel)) res.push(c);
+            walk(c);
+          }
+        };
+        walk(this);
+        return res;
+      },
+      querySelector(sel) {
+        return this.querySelectorAll(sel)[0] || null;
+      },
+    };
+    return node;
+  };
+
+  const htmlEl = makeDomNode('html');
+  const headEl = makeDomNode('head');
+  const mainStyle = makeDomNode('style', { id: 'ag-prism-css' });
+  headEl.appendChild(mainStyle);
+  const bodyEl = makeDomNode('body', { class: 'dark' });
+  htmlEl.appendChild(headEl);
+  htmlEl.appendChild(bodyEl);
+
+  // Aux split with 2 visible panes
+  const auxSplit = makeDomNode('div', { 'data-testid': 'aux-pane-split' });
+  const auxLeft = makeDomNode('div');
+  const auxDivider = makeDomNode('div');
+  const auxRight = makeDomNode('div');
+  auxSplit.appendChild(auxLeft);
+  auxSplit.appendChild(auxDivider);
+  auxSplit.appendChild(auxRight);
+  bodyEl.appendChild(auxSplit);
+
+  // Queued messages 3 action buttons (#35) + external zh widget (#36) + real settings button
+  const makeIconBtn = (attrs, svgCls) => {
+    const b = makeDomNode('button', attrs);
+    b.appendChild(makeDomNode('svg', { class: svgCls, width: '15' }));
+    return b;
+  };
+  const qEdit = makeIconBtn({ 'aria-label': 'Edit queued message: 在设置里可选择模型与动效配置' }, 'lucide lucide-pencil');
+  const qDel = makeIconBtn({ 'aria-label': 'Delete queued message: Check settings panel' }, 'lucide lucide-trash-2');
+  const qSend = makeIconBtn({ 'aria-label': 'Send now: copy settings json' }, 'lucide lucide-send');
+  const extZhBtn = makeIconBtn({ id: 'agy-theme-switcher', 'aria-label': '设置' }, '');
+  const realSetBtn = makeIconBtn({ 'data-testid': 'settings-button', 'aria-label': 'Settings' }, 'lucide lucide-settings');
+  for (const b of [qEdit, qDel, qSend, extZhBtn, realSetBtn]) bodyEl.appendChild(b);
+
+  // Settings dialog
+  const dlg = makeDomNode('div', { role: 'dialog' });
+  const dlgBody = makeDomNode('div', { class: 'p-6' });
+  const h2 = makeDomNode('h2');
+  h2.textContent = '外观';
+  const hostSec = makeDomNode('div', { class: 'space-y-2' });
+  dlgBody.appendChild(h2);
+  dlgBody.appendChild(hostSec);
+  dlg.appendChild(dlgBody);
+  bodyEl.appendChild(dlg);
+
+  const storeMap = new Map([['ag-prism:settings-open', '1']]);
+  const storageObj = {
+    getItem: (k) => (storeMap.has(k) ? storeMap.get(k) : null),
+    setItem: (k, v) => storeMap.set(k, String(v)),
+    removeItem: (k) => storeMap.delete(k),
+  };
+  const findById = (root, id) => {
+    if (root.id === id) return root;
+    for (const c of root.children) {
+      const f = findById(c, id);
+      if (f) return f;
+    }
+    return null;
+  };
+  const fakeDoc = {
+    documentElement: htmlEl,
+    head: headEl,
+    body: bodyEl,
+    hidden: false,
+    activeElement: null,
+    hasFocus: () => true,
+    createElement: (t) => makeDomNode(t),
+    getElementById: (id) => findById(htmlEl, id),
+    querySelector: (s) => htmlEl.querySelector(s),
+    querySelectorAll: (s) => htmlEl.querySelectorAll(s),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const rafQueue = [];
+  const flushRaf = () => {
+    while (rafQueue.length) rafQueue.shift()(16);
+  };
+  const sb = {
+    document: fakeDoc,
+    window: {
+      document: fakeDoc,
+      localStorage: storageObj,
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent() {},
+    },
+    localStorage: storageObj,
+    navigator: { language: 'zh-CN' },
+    location: { pathname: '/' },
+    performance: { now: () => 100 },
+    MutationObserver: class {
+      constructor(cb) { if (!moCb) moCb = cb; }
+      observe() {}
+      disconnect() {}
+      takeRecords() { return []; }
+    },
+    requestAnimationFrame: (cb) => { rafQueue.push(cb); return rafQueue.length; },
+    cancelAnimationFrame() {},
+    setTimeout: () => 1,
+    clearTimeout() {},
+    setInterval: () => 1,
+    clearInterval() {},
+    __agCsI18nCore: i18nCore,
+    __agCsLocales: i18nLocales,
+    __agMotionEngine: { glideIndicator() {}, bindMicroInteractions: () => ({ unbind() {} }) },
+    __agAnimatedIcons: { renderIcon: (name) => `<svg class="ag-anim-icon" data-icon="${name}"></svg>` },
+    Set, WeakSet, Map, WeakMap, Array, Object, Number, Math, String, Boolean, JSON, Promise, Proxy,
+  };
+  sb.globalThis = sb;
+  sb.window.globalThis = sb;
+
+  vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'settings-panel.js'), 'utf8'), sb);
+  vm.runInNewContext(`(${uiMainFactory.toString()})(${JSON.stringify(cdp.DEFAULT_CONFIG)})`, sb);
+  const api = sb.window.__agPrism;
+  assert.ok(api, 'ui-runtime must initialize cleanly');
+
+  // Verify Issue #5 aux-pane-split O(1) attribute guard
+  assert.equal(auxSplit.getAttribute('data-ag-cs-aux-dual'), '1', 'Dual visible aux panes must receive data-ag-cs-aux-dual="1"');
+  auxRight.hidden = true;
+  api.sync();
+  assert.equal(auxSplit.hasAttribute('data-ag-cs-aux-dual'), false, 'Collapsing right aux pane must clear data-ag-cs-aux-dual');
+
+  // Verify #35 queued-message buttons & #36 external zh widget NEVER receive settings-gear
+  assert.equal(qEdit.hasAttribute('data-ag-cs-icon-injected'), false, 'Queued message Edit button must NOT turn into settings-gear');
+  assert.equal(qDel.hasAttribute('data-ag-cs-icon-injected'), false, 'Queued message Delete button must NOT turn into settings-gear');
+  assert.equal(qSend.hasAttribute('data-ag-cs-icon-injected'), false, 'Queued message Send button must NOT turn into settings-gear');
+  assert.equal(extZhBtn.hasAttribute('data-ag-cs-icon-injected'), false, 'External zh switcher must be skipped');
+  assert.equal(realSetBtn.getAttribute('data-ag-cs-icon-injected'), 'settings-gear', 'Genuine settings button must still receive settings-gear');
+
+  // Verify Issue #7: clicking a setting button triggers ZERO iconFullRuns and <= 2 Read-then-Write rect reads (not 238x)
+  const fullRunsBefore = api.getState().perf.iconFullRuns;
+  totalRectReads = 0;
+  const sec = fakeDoc.getElementById('ag-cs-settings-sec');
+  assert.ok(sec, 'Settings section must be mounted');
+  const cobaltBtn = sec.querySelectorAll('button[data-ag-cs-key="accentTone"]').find((b) => b.getAttribute('data-ag-cs-val') === '"cobalt"');
+  assert.ok(cobaltBtn, 'accentTone=cobalt button must exist');
+  cobaltBtn.click();
+  flushRaf();
+  assert.equal(api.getState().cfg.accentTone, 'cobalt');
+  assert.equal(api.getState().perf.iconFullRuns, fullRunsBefore, 'Issue #7: clicking setting row must NOT trigger full-app 600-button icon rescan');
+  assert.ok(totalRectReads <= 2, `Issue #7: clicking setting row must read <= 2 rects (Read-then-Write), got ${totalRectReads}`);
+
+  // Clicking an already-selected setting button performs 0 rect reads and 0 extra syncs
+  totalRectReads = 0;
+  const syncsBeforeRepeat = api.getState().perf.syncCount;
+  cobaltBtn.click();
+  flushRaf();
+  assert.equal(totalRectReads, 0, 'Re-clicking already active setting button must perform 0 rect reads');
+  assert.equal(api.getState().perf.syncCount, syncsBeforeRepeat, 'Re-clicking already active setting button must be a no-op');
+
+  // Plain dialog inner childList / attribute mutations must NOT dirty buttons or trigger icon rescans
+  const innerSpan = makeDomNode('span');
+  dlgBody.appendChild(innerSpan);
+  moCb?.([{ type: 'childList', target: dlgBody, addedNodes: [innerSpan], removedNodes: [] }]);
+  flushRaf();
+  assert.equal(api.getState().perf.iconFullRuns, fullRunsBefore);
+
+  api.destroy();
+
+  // 5) Hard bundle size gate <= 704,000 B
+  const finalBytes = Buffer.byteLength(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), 'utf8');
+  assert.ok(finalBytes <= 704000, `Expected buildInjectExpression <= 704,000 B, got ${finalBytes} B`);
 });

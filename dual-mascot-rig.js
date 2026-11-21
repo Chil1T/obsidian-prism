@@ -124,14 +124,18 @@
     },
   };
 
-  const F = (rows, ox = 0, oy = 0, extra = null) =>
-    extra ? { rows, ox, oy, ...extra } : { rows, ox, oy };
+  const F = (rows, ox = 0, oy = 0, extra = null) => ({
+    rows: typeof rows === 'string' ? (rows ? rows.split('|') : []) : rows,
+    ox,
+    oy,
+    ...(extra === true ? { grounded: true } : extra || {}),
+  });
   const rep = (s, n) => Array(n).fill(s);
 
   function mirrorFrame(fr, partW) {
     const w = Math.max(...fr.rows.map((r) => r.length));
     const rows = fr.rows.map((r) => r.padEnd(w, '.').split('').reverse().join(''));
-    return F(rows, partW - (fr.ox + w), fr.oy, fr.grounded ? { grounded: true } : null);
+    return F(rows, partW - (fr.ox + w), fr.oy, fr.grounded ? true : null);
   }
 
   function recolorFrame(fr, map) {
@@ -144,82 +148,77 @@
   // ── Claude 官方 Clawd 分件点阵（16x10 标准画框，y=9 着地） ──────────────
   const CLAWD_PARTS = {
     shadow: {
-      w12: { ox: 2, oy: 10, grounded: true, rows: ['hhhhhhhhhhhh'] },
-      w14: { ox: 1, oy: 10, grounded: true, rows: ['hhhhhhhhhhhhhh'] },
-      w10: { ox: 3, oy: 10, grounded: true, rows: ['hhhhhhhhhh'] },
+      w12: F('hhhhhhhhhhhh', 2, 10, true),
+      w14: F('hhhhhhhhhhhhhh', 1, 10, true),
+      w10: F('hhhhhhhhhh', 3, 10, true),
     },
     body: {
-      stand: { ox: 2, oy: 0, rows: rep('############', 8) },
-      tall: { ox: 2, oy: -1, rows: rep('############', 9) },
-      squash: { ox: 1, oy: 2, rows: ['.ssssssssssss.', ...rep('##############', 5)] },
-      squash2: { ox: 1, oy: 4, rows: ['.ssssssssssss.', ...rep('##############', 4)] },
-      flat: { ox: 2, oy: 7, rows: ['ssssssssssss', '############', '############'] },
-      turnL: { ox: 2, oy: 0, rows: rep('###########s', 8) },
-      turnR: { ox: 2, oy: 0, rows: rep('s###########', 8) },
-      leanR: { ox: 2, oy: 0, rows: [...rep('.############', 4), ...rep('############.', 4)] },
-      leanL: { ox: 1, oy: 0, rows: [...rep('############.', 4), ...rep('.############', 4)] },
-      peek: { ox: 2, oy: 4, rows: ['############', '############', '############', '############'] },
+      stand: F(rep('############', 8), 2, 0),
+      tall: F(rep('############', 9), 2, -1),
+      squash: F(['.ssssssssssss.', ...rep('##############', 5)], 1, 2),
+      squash2: F(['.ssssssssssss.', ...rep('##############', 4)], 1, 4),
+      flat: F('ssssssssssss|############|############', 2, 7),
+      turnL: F(rep('###########s', 8), 2, 0),
+      turnR: F(rep('s###########', 8), 2, 0),
+      leanR: F([...rep('.############', 4), ...rep('############.', 4)], 2, 0),
+      leanL: F([...rep('############.', 4), ...rep('.############', 4)], 1, 0),
+      peek: F(rep('############', 4), 2, 4),
     },
     eyes: {
-      open: { ox: 4, oy: 2, rows: ['o......o', 'o......o'] },
-      openL: { ox: 3, oy: 2, rows: ['o......o', 'o......o'] },
-      openR: { ox: 5, oy: 2, rows: ['o......o', 'o......o'] },
-      half: { ox: 4, oy: 3, rows: ['o......o'] },
-      shut: { ox: 3, oy: 3, rows: ['oo......oo'] },
-      happy: { ox: 3, oy: 2, rows: ['.o......o.', 'o.o....o.o'] },
-      squint: { ox: 4, oy: 2, rows: ['o......o', '.o....o.', 'o......o'] },
-      wide: { ox: 3, oy: 2, rows: ['oo......oo', 'oo......oo'] },
-      peekOpen: { ox: 4, oy: 6, rows: ['o......o', 'o......o'] },
-      peekHalf: { ox: 4, oy: 7, rows: ['o......o'] },
-      flatEyes: { ox: 4, oy: 8, rows: ['oo....oo'] },
-      // 随机眨眼闭眼帧：仅用暗面色 s 的 1 格高横线（零眼白高光）
-      blink: { ox: 3, oy: 3, rows: ['ss......ss'] },
-      // 抬头扫视：竖瞳整体上移 1 格（左上 / 正上 / 右上）
-      upL: { ox: 3, oy: 1, rows: ['o......o', 'o......o'] },
-      up: { ox: 4, oy: 1, rows: ['o......o', 'o......o'] },
-      upR: { ox: 5, oy: 1, rows: ['o......o', 'o......o'] },
+      open: F('o......o|o......o', 4, 2),
+      openL: F('o......o|o......o', 3, 2),
+      openR: F('o......o|o......o', 5, 2),
+      half: F('o......o', 4, 3),
+      shut: F('oo......oo', 3, 3),
+      happy: F('.o......o.|o.o....o.o', 3, 2),
+      squint: F('o......o|.o....o.|o......o', 4, 2),
+      wide: F('oo......oo|oo......oo', 3, 2),
+      peekOpen: F('o......o|o......o', 4, 6),
+      peekHalf: F('o......o', 4, 7),
+      flatEyes: F('oo....oo', 4, 8),
+      blink: F('ss......ss', 3, 3),
+      upL: F('o......o|o......o', 3, 1),
+      up: F('o......o|o......o', 4, 1),
+      upR: F('o......o|o......o', 5, 1),
     },
-    // 嘴部（打哈欠）：仅用暗面色 s 在身体中部开口
     mouth: {
-      small: { ox: 6, oy: 5, rows: ['.ss.'] },
-      yawn: { ox: 6, oy: 5, rows: ['ssss', '.ss.'] },
+      small: F('.ss.', 6, 5),
+      yawn: F('ssss|.ss.', 6, 5),
     },
     legs: {
-      stand: { ox: 2, oy: 8, rows: ['.#.#....#.#.', '.#.#....#.#.'] },
-      crouch: { ox: 2, oy: 9, rows: ['.#.#....#.#.'] },
-      tuck: { ox: 2, oy: 8, rows: ['..#.#..#.#..'] },
-      walkA: { ox: 2, oy: 8, rows: ['.#.s....#.s.', '.#......#...'] },
-      walkB: { ox: 2, oy: 8, rows: ['.s.#....s.#.', '...#......#.'] },
-      dangle: { ox: 2, oy: 8, rows: ['.#.#....#.#.', '.#.#........', '.#.#........'] },
-      dangle2: { ox: 2, oy: 8, rows: ['.#.#....#.#.', '........#.#.', '........#.#.'] },
-      flailA: { ox: 2, oy: 8, rows: ['#...#..#...#', '#..........#'] },
-      flailB: { ox: 2, oy: 8, rows: ['..#.#..#.#..', '....#..#....'] },
-      flailC: { ox: 2, oy: 8, rows: ['#..#....#..#', '...#....#..#'] },
+      stand: F('.#.#....#.#.|.#.#....#.#.', 2, 8),
+      crouch: F('.#.#....#.#.', 2, 9),
+      tuck: F('..#.#..#.#..', 2, 8),
+      walkA: F('.#.s....#.s.|.#......#...', 2, 8),
+      walkB: F('.s.#....s.#.|...#......#.', 2, 8),
+      dangle: F('.#.#....#.#.|.#.#........|.#.#........', 2, 8),
+      dangle2: F('.#.#....#.#.|........#.#.|........#.#.', 2, 8),
+      flailA: F('#...#..#...#|#..........#', 2, 8),
+      flailB: F('..#.#..#.#..|....#..#....', 2, 8),
+      flailC: F('#..#....#..#|...#....#..#', 2, 8),
     },
     clawL: {
-      stub: { ox: 0, oy: 5, rows: ['##', '##'] },
-      front: { ox: 0, oy: 5, rows: ['ss', 'ss'] },
-      up: { ox: 0, oy: -2, rows: ['##', '##', '#.'] },
-      low: { ox: -1, oy: 8, rows: ['###', '###'] },
-      peekGrip: { ox: 3, oy: 7, rows: ['ss'] },
-      flatLeft: { ox: 0, oy: 8, rows: ['ss'] },
-      // 单钳张开（朝外的「<」形钳口），用于偶发开合与叠叠乐平衡张钳
-      open: { ox: 0, oy: 4, rows: ['##', '.#', '##'] },
+      stub: F('##|##', 0, 5),
+      front: F('ss|ss', 0, 5),
+      up: F('##|##|#.', 0, -2),
+      low: F('###|###', -1, 8),
+      peekGrip: F('ss', 3, 7),
+      flatLeft: F('ss', 0, 8),
+      open: F('##|.#|##', 0, 4),
     },
     clawR: {
-      stub: { ox: 14, oy: 5, rows: ['##', '##'] },
-      front: { ox: 14, oy: 5, rows: ['ss', 'ss'] },
-      up: { ox: 14, oy: -2, rows: ['##', '##', '.#'] },
-      low: { ox: 14, oy: 8, rows: ['###', '###'] },
-      reach1: { ox: 14, oy: 4, rows: ['...##', '#####'] },
-      reach2: { ox: 14, oy: 3, rows: ['......##', '########'] },
-      write1: { ox: 13, oy: 6, rows: ['ss', 'ss'] },
-      write2: { ox: 14, oy: 5, rows: ['ss', 'ss'] },
-      peekGrip: { ox: 11, oy: 7, rows: ['ss'] },
-      flatRight: { ox: 14, oy: 8, rows: ['ss'] },
-      open: { ox: 14, oy: 4, rows: ['##', '#.', '##'] },
-      // 挥手外摆帧：举起的右钳向外倾 1 格（与 up 交替形成挥手）
-      waveOut: { ox: 14, oy: -1, rows: ['.##', '.##', '#..'] },
+      stub: F('##|##', 14, 5),
+      front: F('ss|ss', 14, 5),
+      up: F('##|##|.#', 14, -2),
+      low: F('###|###', 14, 8),
+      reach1: F('...##|#####', 14, 4),
+      reach2: F('......##|########', 14, 3),
+      write1: F('ss|ss', 13, 6),
+      write2: F('ss|ss', 14, 5),
+      peekGrip: F('ss', 11, 7),
+      flatRight: F('ss', 14, 8),
+      open: F('##|#.|##', 14, 4),
+      waveOut: F('.##|.##|#..', 14, -1),
     },
   };
 
@@ -227,151 +226,117 @@
   const CAT_PARTS = {
     shadow: CLAWD_PARTS.shadow,
     ears: {
-      stand: { ox: 2, oy: -1, rows: ['#..........#', '##........##'] },
-      nod: { ox: 2, oy: 0, rows: ['#..........#', '##........##'] },
-      loaf: { ox: 2, oy: 2, rows: ['#..........#', '##........##'] },
-      airplane: { ox: 0, oy: 0, rows: ['##............##', '###..........###'] },
-      peek: { ox: 2, oy: 3, rows: ['#..........#', '##........##'] },
-      flat: { ox: 1, oy: 6, rows: ['#............#'] },
-      // 偶发耳尖抖动：单侧耳尖瞬间收起 1~2 拍
-      twitchL: { ox: 2, oy: -1, rows: ['...........#', '##........##'] },
-      twitchR: { ox: 2, oy: -1, rows: ['#...........', '##........##'] },
+      stand: F('#..........#|##........##', 2, -1),
+      nod: F('#..........#|##........##', 2, 0),
+      loaf: F('#..........#|##........##', 2, 2),
+      airplane: F('##............##|###..........###', 0, 0),
+      peek: F('#..........#|##........##', 2, 3),
+      flat: F('#............#', 1, 6),
+      twitchL: F('...........#|##........##', 2, -1),
+      twitchR: F('#...........|##........##', 2, -1),
     },
     body: {
-      stand: { ox: 2, oy: 1, rows: rep('############', 7) },
-      squash: { ox: 1, oy: 3, rows: ['.ssssssssssss.', ...rep('##############', 4)] },
-      loaf: { ox: 1, oy: 4, rows: ['.ssssssssssss.', ...rep('##############', 4), '##############'] },
-      flat: { ox: 2, oy: 7, rows: ['ssssssssssss', '############', '############'] },
-      stretch: {
-        ox: 2,
-        oy: 0,
-        rows: [
-          's###########',
-          '############',
-          '############',
-          '.###########',
-          '.###########',
-          '..##########',
-          '############',
-        ],
-      },
-      turnL: { ox: 2, oy: 1, rows: rep('###########s', 7) },
-      turnR: { ox: 2, oy: 1, rows: rep('s###########', 7) },
-      leanR: { ox: 2, oy: 1, rows: [...rep('.############', 4), ...rep('############.', 3)] },
-      leanL: { ox: 1, oy: 1, rows: [...rep('############.', 4), ...rep('.############', 3)] },
-      peek: { ox: 2, oy: 4, rows: ['############', '############', '############', '############'] },
+      stand: F(rep('############', 7), 2, 1),
+      squash: F(['.ssssssssssss.', ...rep('##############', 4)], 1, 3),
+      loaf: F(['.ssssssssssss.', ...rep('##############', 5)], 1, 4),
+      flat: F('ssssssssssss|############|############', 2, 7),
+      stretch: F('s###########|############|############|.###########|.###########|..##########|############', 2, 0),
+      turnL: F(rep('###########s', 7), 2, 1),
+      turnR: F(rep('s###########', 7), 2, 1),
+      leanR: F([...rep('.############', 4), ...rep('############.', 3)], 2, 1),
+      leanL: F([...rep('############.', 4), ...rep('.############', 3)], 1, 1),
+      peek: F(rep('############', 4), 2, 4),
     },
     eyes: {
-      open: { ox: 4, oy: 3, rows: ['o......o', 'o......o'] },
-      openL: { ox: 3, oy: 3, rows: ['o......o', 'o......o'] },
-      openR: { ox: 5, oy: 3, rows: ['o......o', 'o......o'] },
-      half: { ox: 4, oy: 4, rows: ['o......o'] },
-      shut: { ox: 3, oy: 4, rows: ['oo......oo'] },
-      happy: { ox: 3, oy: 3, rows: ['.o......o.', 'o.o....o.o'] },
-      squint: { ox: 4, oy: 3, rows: ['o......o', '.o....o.', 'o......o'] },
-      wide: { ox: 3, oy: 3, rows: ['oo......oo', 'oo......oo'] },
-      loafShut: { ox: 3, oy: 6, rows: ['oo......oo'] },
-      loafHalf: { ox: 4, oy: 6, rows: ['o......o'] },
-      peekOpen: { ox: 4, oy: 6, rows: ['o......o', 'o......o'] },
-      flatEyes: { ox: 4, oy: 8, rows: ['oo....oo'] },
-      blink: { ox: 3, oy: 4, rows: ['ss......ss'] },
-      upL: { ox: 3, oy: 2, rows: ['o......o', 'o......o'] },
-      up: { ox: 4, oy: 2, rows: ['o......o', 'o......o'] },
-      upR: { ox: 5, oy: 2, rows: ['o......o', 'o......o'] },
+      open: F('o......o|o......o', 4, 3),
+      openL: F('o......o|o......o', 3, 3),
+      openR: F('o......o|o......o', 5, 3),
+      half: F('o......o', 4, 4),
+      shut: F('oo......oo', 3, 4),
+      happy: F('.o......o.|o.o....o.o', 3, 3),
+      squint: F('o......o|.o....o.|o......o', 4, 3),
+      wide: F('oo......oo|oo......oo', 3, 3),
+      loafShut: F('oo......oo', 3, 6),
+      loafHalf: F('o......o', 4, 6),
+      peekOpen: F('o......o|o......o', 4, 6),
+      flatEyes: F('oo....oo', 4, 8),
+      blink: F('ss......ss', 3, 4),
+      upL: F('o......o|o......o', 3, 2),
+      up: F('o......o|o......o', 4, 2),
+      upR: F('o......o|o......o', 5, 2),
     },
     mouth: {
-      small: { ox: 6, oy: 5, rows: ['.ss.'] },
-      yawn: { ox: 6, oy: 5, rows: ['ssss', '.ss.'] },
+      small: F('.ss.', 6, 5),
+      yawn: F('ssss|.ss.', 6, 5),
     },
     legs: CLAWD_PARTS.legs,
     paws: {
-      none: { ox: 0, oy: 0, rows: [] },
-      groom1: { ox: 12, oy: 4, rows: ['ss', 'ss'] },
-      groom2: { ox: 12, oy: 3, rows: ['ss', 'ss'] },
-      cheer: { ox: 0, oy: 2, rows: ['#..............#', '#..............#'] },
-      up: { ox: 0, oy: -1, rows: ['##............##', '##............##'] },
-      peekGrip: { ox: 3, oy: 7, rows: ['ss......ss'] },
-      write1: { ox: 13, oy: 5, rows: ['ss', 'ss'] },
-      write2: { ox: 14, oy: 6, rows: ['ss', 'ss'] },
-      // 单爪举起（敬礼 / 挥手）
-      upR: { ox: 14, oy: 0, rows: ['##', '##'] },
+      none: F('', 0, 0),
+      groom1: F('ss|ss', 12, 4),
+      groom2: F('ss|ss', 12, 3),
+      cheer: F('#..............#|#..............#', 0, 2),
+      up: F('##............##|##............##', 0, -1),
+      peekGrip: F('ss......ss', 3, 7),
+      write1: F('ss|ss', 13, 5),
+      write2: F('ss|ss', 14, 6),
+      upR: F('##|##', 14, 0),
     },
     tail: {
-      up: { ox: 14, oy: 3, rows: ['.s', '.#', '.#', '##'] },
-      sway: { ox: 14, oy: 3, rows: ['.#', '.#', 's#', '#.'] },
-      curl: { ox: 14, oy: 4, rows: ['##', '.#', 's#'] },
-      loaf: { ox: 14, oy: 6, rows: ['.#', '.#', 's#'] },
-      puff: { ox: 14, oy: 2, rows: ['.#', '##', '##', 's#', '#.'] },
+      up: F('.s|.#|.#|##', 14, 3),
+      sway: F('.#|.#|s#|#.', 14, 3),
+      curl: F('##|.#|s#', 14, 4),
+      loaf: F('.#|.#|s#', 14, 6),
+      puff: F('.#|##|##|s#|#.', 14, 2),
     },
   };
 
   // ── 道具与剧场精灵（迁移自 TauriTavern 并新增猫专属鱼盘/激光点） ─────────
   const PROPS = {
-    quill1: F(['..B', '.B.', 'k..'], 15, 3),
-    quill2: F(['..B', '.B.', 'k..'], 16, 4),
-    sheet: F(['cccccc', 'ckkccc', 'gggggg'], 12, 8),
-
-    // 擦杯子
-    mug: F(['..DDDD', 'DDDbwD', 'D.DbbD', 'DDDbbD', '..DDDD'], 13, 4),
-    cloth1: F(['cw..', 'wccc', '.cwc', '..c.'], 13, 2),
-    cloth2: F(['..cw', 'cccw', '.cwc', '..c.'], 14, 3),
-
-    // 吃饭（碗 + 筷子）
-    bowl: F(['wwwww', 'DBwBD', '.DDD.'], 12, 7),
-    bowlEmpty: F(['DgggD', '.DDD.'], 12, 8),
-    chop1: F(['...n', '..n.', '.n..', 'n...'], 12, 4),
-    chop2: F(['...n', '..n.', '.n..', 'w...'], 12, 3),
-
-    // 小紫猫吃小鱼
-    fishDish: F(['.PPsPP.', 'DDDDDDD', '.DDDDD.'], 11, 7),
-    fishBone: F(['.M.M.M.', 'DDDDDDD', '.DDDDD.'], 11, 7),
-
-    // 读信
-    envS: F(['dddddd', 'ddwwdd', 'dwddwd', 'dwwwwd', 'dddddd'], 12, 5),
-    envSOpen: F(['..dd..', '.dwwd.', 'dddddd', 'dwwwwd', 'dwwwwd', 'dddddd'], 12, 4),
-    letter: F(['ddddddd', 'dcccccd', 'dgggccd', 'dcccccd', 'dggggcd', 'dcccccd', 'dggccrd', 'ddddddd'], 12, 1),
-
-    // 种节点（沿右旁地面生长与枯萎）
-    seed: F(['On', 'nO'], 15, 8, { grounded: true }),
-    p1: F(['O', 'l', 'l'], 16, 7, { grounded: true }),
-    p2: F(['O', 'l', 'l', 'l'], 16, 6, { grounded: true }),
-    p3: F(['..O..', '..l..', 'O.l.O', '.lll.', '..l..'], 14, 5, { grounded: true }),
-    p4: F(['..O..', 'O.l.O', '.lll.', 'O.l.O', '.lll.', '..l..', '..l..'], 14, 3, { grounded: true }),
-    d1: F(['...O...', 'O.....O', '.O...O.', '.......', 'O.....O', '.......', '.......', '...O...'], 13, 0, { grounded: true }),
-    d2: F(['.q...q.', '...q...', 'q.....q', '.......', '.q...q.', '.......', '...q...'], 13, -2, { grounded: true }),
-    wilt1: F(['..q..', 'q.l.q', '.lll.', 'q.l.q', '.lll.', '..l..', '..l..'], 14, 3, { grounded: true }),
-    wilt2: F(['q....', '.q.q.', '..ll.', '.q.l.', '..ll.', '..l..'], 14, 4, { grounded: true }),
-    wilt3: F(['Q.Q', '.l.', 'Ql.', '.l.'], 15, 6, { grounded: true }),
-
-    // 追蝴蝶
-    bfUp: F(['B...B', 'BB.BB', '.BkB.', '..k..'], 13, -4),
-    bfDn: F(['.....', '.....', 'BBkBB', '.BkB.'], 13, -4),
-    bfLeftUp: F(['B...B', 'BB.BB', '.BkB.', '..k..'], 1, -5),
-    bfLeftDn: F(['.....', '.....', 'BBkBB', '.BkB.'], 1, -5),
-    bfRest: F(['..B..', '.BB..', '..k..'], 7, -3),
-
-    // 荧光棒（右手绿，再镜像变色成左手紫粉）
-    stickUp: F(['WW', 'GG', 'GG', 'GG', 'GG', 'GG', 'GG'], 14, -9),
-    stickLT: F(['.....tt', 'WG...tt', '.GG..tt', '..GG.tt', '...GGtt', '....GGt', '.....GG'], 9, -9),
-    stickRT: F(['tt.....', 'tt...GW', 'tt..GG.', 'tt.GG..', 'ttGG...', 'tGG....', 'GG.....'], 14, -9),
-
-    // 警笛与光束（坐落头顶正中）
-    sirenDim: F(['..LL..', '.xxxx.', '.xxxx.', 'llllll'], 5, -4),
-    sirenL: F(['..Lx..', '.HLxx.', '.LLxx.', 'llllll'], 5, -4),
-    sirenF: F(['..HH..', '.LHHL.', '.LLLL.', 'llllll'], 5, -4),
-    sirenR: F(['..xL..', '.xxLH.', '.xxLL.', 'llllll'], 5, -4),
-    beamL: F(['J.....', '.j....', '..j...', '......', 'Jjjj..', '......', '.Jjj..'], -1, -7),
-    beamF: F(['J..JJ..J', '.j.jj.j.'], 4, -7),
-
-    // Rickroll 立麦底座（grounded=true，身体左右摇晃时底座与麦克风立在舞台地面不动）
-    micStand: F(['......ZZ......', '......Zz......', '......ZZ......', '......Z.......', '......Z.......', '.....ZZZZ.....'], 1, 4, { grounded: true }),
-    micSink1: F(['......ZZ......', '......Zz......', '......ZZ......', '.....ZZZZ.....'], 1, 6, { grounded: true }),
-    micSink2: F(['......ZZ......', '.....ZZZZ.....'], 1, 8, { grounded: true }),
-    smoke: F(['.m.', 'mm.', '.mm', '.m.'], 6, -4),
-
-    // 编排器冰晶（Orchestrator 模式常驻 Clawd 头顶）：6×5 菱形，左上冰白 a / 右下冷灰 v
-    iceCrystal: F(['..av..', '.aavv.', 'aaavvv', '.aavv.', '..av..'], 5, -6),
-    iceCrystalHi: F(['..av..', '.aavv.', 'aaavvv', '.aavv.', '..av..'], 5, -7),
+    quill1: F('..B|.B.|k..', 15, 3),
+    quill2: F('..B|.B.|k..', 16, 4),
+    sheet: F('cccccc|ckkccc|gggggg', 12, 8),
+    mug: F('..DDDD|DDDbwD|D.DbbD|DDDbbD|..DDDD', 13, 4),
+    cloth1: F('cw..|wccc|.cwc|..c.', 13, 2),
+    cloth2: F('..cw|cccw|.cwc|..c.', 14, 3),
+    bowl: F('wwwww|DBwBD|.DDD.', 12, 7),
+    bowlEmpty: F('DgggD|.DDD.', 12, 8),
+    chop1: F('...n|..n.|.n..|n...', 12, 4),
+    chop2: F('...n|..n.|.n..|w...', 12, 3),
+    fishDish: F('.PPsPP.|DDDDDDD|.DDDDD.', 11, 7),
+    fishBone: F('.M.M.M.|DDDDDDD|.DDDDD.', 11, 7),
+    envS: F('dddddd|ddwwdd|dwddwd|dwwwwd|dddddd', 12, 5),
+    envSOpen: F('..dd..|.dwwd.|dddddd|dwwwwd|dwwwwd|dddddd', 12, 4),
+    letter: F('ddddddd|dcccccd|dgggccd|dcccccd|dggggcd|dcccccd|dggccrd|ddddddd', 12, 1),
+    seed: F('On|nO', 15, 8, true),
+    p1: F('O|l|l', 16, 7, true),
+    p2: F('O|l|l|l', 16, 6, true),
+    p3: F('..O..|..l..|O.l.O|.lll.|..l..', 14, 5, true),
+    p4: F('..O..|O.l.O|.lll.|O.l.O|.lll.|..l..|..l..', 14, 3, true),
+    d1: F('...O...|O.....O|.O...O.|.......|O.....O|.......|.......|...O...', 13, 0, true),
+    d2: F('.q...q.|...q...|q.....q|.......|.q...q.|.......|...q...', 13, -2, true),
+    wilt1: F('..q..|q.l.q|.lll.|q.l.q|.lll.|..l..|..l..', 14, 3, true),
+    wilt2: F('q....|.q.q.|..ll.|.q.l.|..ll.|..l..', 14, 4, true),
+    wilt3: F('Q.Q|.l.|Ql.|.l.', 15, 6, true),
+    bfUp: F('B...B|BB.BB|.BkB.|..k..', 13, -4),
+    bfDn: F('.....|.....|BBkBB|.BkB.', 13, -4),
+    bfLeftUp: F('B...B|BB.BB|.BkB.|..k..', 1, -5),
+    bfLeftDn: F('.....|.....|BBkBB|.BkB.', 1, -5),
+    bfRest: F('..B..|.BB..|..k..', 7, -3),
+    stickUp: F('WW|GG|GG|GG|GG|GG|GG', 14, -9),
+    stickLT: F('.....tt|WG...tt|.GG..tt|..GG.tt|...GGtt|....GGt|.....GG', 9, -9),
+    stickRT: F('tt.....|tt...GW|tt..GG.|tt.GG..|ttGG...|tGG....|GG.....', 14, -9),
+    sirenDim: F('..LL..|.xxxx.|.xxxx.|llllll', 5, -4),
+    sirenL: F('..Lx..|.HLxx.|.LLxx.|llllll', 5, -4),
+    sirenF: F('..HH..|.LHHL.|.LLLL.|llllll', 5, -4),
+    sirenR: F('..xL..|.xxLH.|.xxLL.|llllll', 5, -4),
+    beamL: F('J.....|.j....|..j...|......|Jjjj..|......|.Jjj..', -1, -7),
+    beamF: F('J..JJ..J|.j.jj.j.', 4, -7),
+    micStand: F('......ZZ......|......Zz......|......ZZ......|......Z.......|......Z.......|.....ZZZZ.....', 1, 4, true),
+    micSink1: F('......ZZ......|......Zz......|......ZZ......|.....ZZZZ.....', 1, 6, true),
+    micSink2: F('......ZZ......|.....ZZZZ.....', 1, 8, true),
+    smoke: F('.m.|mm.|.mm|.m.', 6, -4),
+    iceCrystal: F('..av..|.aavv.|aaavvv|.aavv.|..av..', 5, -6),
+    iceCrystalHi: F('..av..|.aavv.|aaavvv|.aavv.|..av..', 5, -7),
   };
 
   ['stickUp', 'stickLT', 'stickRT'].forEach((k) => {
@@ -451,20 +416,19 @@
   })();
 
   const SYMS = {
-    heart: F(['.r.r.', 'rrrrr', '.rrr.', '..r..'], 5, -7),
-    spark: F(['..y..', '..y..', 'yyyyy', '..y..', '..y..'], 5, -8),
-    z1: F(['kkkk', '..k.', '.k..', 'kkkk'], 10, -6),
-    z2: F(['kkk', '.k.', 'kkk'], 12, -9),
-    vein: F(['.r.r.', 'rr.rr', '.....', 'rr.rr', '.r.r.'], 5, -7),
-    bang: F(['.r.', '.r.', '.r.', '...', '.r.'], 6, -8),
-    q: F(['.kkk.', 'k...k', '...k.', '..k..', '.....', '..k..'], 5, -9),
-    note: F(['..kk.', '..k.k', '..k..', 'kkk..', 'kk...'], 5, -8),
-    sweat: F(['.B.', 'BbB', 'BbB', '.B.'], 13, -4),
-    tilde: F(['.k...', 'k.k.k', '...k.'], 5, -7),
-    // 打盹 z：从头顶右侧逐级变大上浮（3×3 → 4×4 → 5×5，块状无描边）
-    dozeZ0: F(['kkk', '.k.', 'kkk'], 12, -3),
-    dozeZ1: F(['kkkk', '..k.', '.k..', 'kkkk'], 13, -7),
-    dozeZ2: F(['kkkkk', '...k.', '..k..', '.k...', 'kkkkk'], 14, -12),
+    heart: F('.r.r.|rrrrr|.rrr.|..r..', 5, -7),
+    spark: F('..y..|..y..|yyyyy|..y..|..y..', 5, -8),
+    z1: F('kkkk|..k.|.k..|kkkk', 10, -6),
+    z2: F('kkk|.k.|kkk', 12, -9),
+    vein: F('.r.r.|rr.rr|.....|rr.rr|.r.r.', 5, -7),
+    bang: F('.r.|.r.|.r.|...|.r.', 6, -8),
+    q: F('.kkk.|k...k|...k.|..k..|.....|..k..', 5, -9),
+    note: F('..kk.|..k.k|..k..|kkk..|kk...', 5, -8),
+    sweat: F('.B.|BbB|BbB|.B.', 13, -4),
+    tilde: F('.k...|k.k.k|...k.', 5, -7),
+    dozeZ0: F('kkk|.k.|kkk', 12, -3),
+    dozeZ1: F('kkkk|..k.|.k..|kkkk', 13, -7),
+    dozeZ2: F('kkkkk|...k.|..k..|.k...|kkkkk', 14, -12),
   };
 
   // ── 刚体层登记：道具与符号在整数格挤压时只做整格平移、不参与行列增删 ────
@@ -493,102 +457,23 @@
 
   // ── 3 只迷你装扮小蟹（PX = 2 彩蛋堆，保持 MINI_SPRITES 三键契约） ─────────
   const MINI_SPRITES = {
-    cowboy: F([
-      '.....HHHHHH.....',
-      '...HHHHHHHHHH...',
-      '..RRRRRRRRRRRR..',
-      '..############..',
-      '..##o######o##..',
-      '################',
-      '..############..',
-      '...#.#....#.#...',
-    ], 0, -2),
-    shades: F([
-      '..############..',
-      '..GGGGg##gGGGG..',
-      '..GGGGGGGGGGGG..',
-      '################',
-      '..############..',
-      '...#.#....#.#...',
-    ], 0, 0),
-    wizard: F([
-      '.......MM.......',
-      '......MyMM......',
-      '.....MMMMMM.....',
-      '..MMMMMMMMMMMM..',
-      '..############..',
-      '..##o######o##..',
-      '################',
-      '..############..',
-      '...#.#....#.#...',
-    ], 0, -3),
+    cowboy: F('.....HHHHHH.....|...HHHHHHHHHH...|..RRRRRRRRRRRR..|..############..|..##o######o##..|################|..############..|...#.#....#.#...', 0, -2),
+    shades: F('..############..|..GGGGg##gGGGG..|..GGGGGGGGGGGG..|################|..############..|...#.#....#.#...', 0, 0),
+    wizard: F('.......MM.......|......MyMM......|.....MMMMMM.....|..MMMMMMMMMMMM..|..############..|..##o######o##..|################|..############..|...#.#....#.#...', 0, -3),
   };
 
-  // 迷你蟹行走帧与招牌小把戏
   const MINI_ANIM_FRAMES = {
     cowboy: {
-      walkB: F([
-        '.....HHHHHH.....',
-        '...HHHHHHHHHH...',
-        '..RRRRRRRRRRRR..',
-        '..############..',
-        '..##o######o##..',
-        '################',
-        '..############..',
-        '..s#.#....#.#s..',
-      ], 0, -2),
-      trick: F([
-        '....HHHHHH......',
-        '..HHHHHHHHHH....',
-        '.RRRRRRRRRRRR...',
-        '..############..',
-        '..##o######o##..',
-        '################',
-        '..############..',
-        '..#..#....#..#..',
-      ], 0, -3),
+      walkB: F('.....HHHHHH.....|...HHHHHHHHHH...|..RRRRRRRRRRRR..|..############..|..##o######o##..|################|..############..|..s#.#....#.#s..', 0, -2),
+      trick: F('....HHHHHH......|..HHHHHHHHHH....|.RRRRRRRRRRRR...|..############..|..##o######o##..|################|..############..|..#..#....#..#..', 0, -3),
     },
     shades: {
-      walkB: F([
-        '..############..',
-        '..GGGGg##gGGGG..',
-        '..GGGGGGGGGGGG..',
-        '################',
-        '..############..',
-        '..s#.#....#.#s..',
-      ], 0, 0),
-      trick: F([
-        '..############..',
-        '..GwGGw##GwGGw..',
-        '..GGGGGGGGGGGG..',
-        '################',
-        '..############..',
-        '...#.#....#.#...',
-      ], 0, 0),
+      walkB: F('..############..|..GGGGg##gGGGG..|..GGGGGGGGGGGG..|################|..############..|..s#.#....#.#s..', 0, 0),
+      trick: F('..############..|..GwGGw##GwGGw..|..GGGGGGGGGGGG..|################|..############..|...#.#....#.#...', 0, 0),
     },
     wizard: {
-      walkB: F([
-        '.......MM.......',
-        '......MyMM......',
-        '.....MMMMMM.....',
-        '..MMMMMMMMMMMM..',
-        '..############..',
-        '..##o######o##..',
-        '################',
-        '..############..',
-        '..s#.#....#.#s..',
-      ], 0, -3),
-      trick: F([
-        '.....y..........',
-        '....yMyMM.......',
-        '.....MMMMMM.....',
-        '..MMMMMMMMMMMM..',
-        '..############..',
-        '..##o######o##..',
-        '################',
-        '..############y.',
-        '...#.#....#.#.y.',
-      ], 0, -3),
+      walkB: F('.......MM.......|......MyMM......|.....MMMMMM.....|..MMMMMMMMMMMM..|..############..|..##o######o##..|################|..############..|..s#.#....#.#s..', 0, -3),
+      trick: F('.....y..........|....yMyMM.......|.....MMMMMM.....|..MMMMMMMMMMMM..|..############..|..##o######o##..|################|..############y.|...#.#....#.#.y.', 0, -3),
     },
   };
 
@@ -615,19 +500,27 @@
   }
 
   function drawLayerSet(ctx, oxGrid, oyGrid, pxSize, palette, layers, colorResolver = null) {
+    let lf = '';
     for (const part of layers) {
       if (!part || !part.rows || !part.rows.length) continue;
       for (let ry = 0; ry < part.rows.length; ry++) {
-        const row = part.rows[ry];
+        const row = part.rows[ry], py = (oyGrid + part.oy + ry) * pxSize, gy = part.oy + ry;
         for (let rx = 0; rx < row.length; rx++) {
           const ch = row[rx];
           if (ch === '.' || ch === ' ') continue;
           const gx = part.ox + rx;
-          const gy = part.oy + ry;
           const color = colorResolver ? colorResolver(ch, gx, gy, palette) : palette[ch];
           if (!color) continue;
-          ctx.fillStyle = color;
-          ctx.fillRect((oxGrid + gx) * pxSize, (oyGrid + gy) * pxSize, pxSize, pxSize);
+          let r = 1;
+          while (rx + r < row.length) {
+            const nc = row[rx + r];
+            if (nc === '.' || nc === ' ') break;
+            if ((colorResolver ? colorResolver(nc, gx + r, gy, palette) : palette[nc]) !== color) break;
+            r++;
+          }
+          if (color !== lf) ctx.fillStyle = lf = color;
+          ctx.fillRect((oxGrid + gx) * pxSize, py, pxSize * r, pxSize);
+          rx += r - 1;
         }
       }
     }
@@ -782,7 +675,7 @@
   }
 
   function renderPixelLayers(canvas, dpr, oxGrid, oyGrid, pxSize, palette, layers, options = {}) {
-    const ctx = canvas.getContext('2d');
+    const ctx = options.ctx || canvas._ctx || (canvas._ctx = canvas.getContext('2d'));
     if (!ctx) return;
     const cssW = canvas.width / dpr;
     const cssH = canvas.height / dpr;
@@ -876,7 +769,7 @@
         off = docRef.createElement('canvas');
         canvas.__agRotOff = off;
       }
-      const offCtx = off ? off.getContext('2d') : null;
+      const offCtx = off ? off._ctx || (off._ctx = off.getContext('2d')) : null;
       if (!offCtx) {
         ctx.translate(anchorX, anchorY);
         ctx.rotate((rotDeg * Math.PI) / 180);
@@ -1314,7 +1207,7 @@
         body = c.body.loaf;
         eyes = poseKey === 'sleep' || phase4 === 3 ? c.eyes.loafShut : c.eyes.loafHalf;
         legs = null;
-        tail = frameMod ? c.tail.loaf : c.tail.curl;
+        tail = poseKey === 'sleep' ? c.tail.loaf : Math.floor(tickIdx / 4) % 2 ? c.tail.loaf : c.tail.curl;
         break;
       case 'dangle':
         shadow = null;
@@ -2213,6 +2106,7 @@
       }
       miniGroupEl.appendChild(cv);
       mc.canvas = cv;
+      mc._ctx = typeof cv.getContext === 'function' ? (cv._ctx = cv.getContext('2d')) : null;
       mc.el = cv;
     });
     hostEl.appendChild(miniGroupEl);
@@ -2232,6 +2126,7 @@
       btn.appendChild(cv);
       actor.el = btn;
       actor.canvas = cv;
+      actor._ctx = typeof cv.getContext === 'function' ? (cv._ctx = cv.getContext('2d')) : null;
       hostEl.appendChild(btn);
     };
 
@@ -3154,7 +3049,7 @@
         fxCanvas.height = th;
         if (fxCanvas.style) { fxCanvas.style.width = `${wCss}px`; fxCanvas.style.height = `${hCss}px`; }
       }
-      const ctx = fxCanvas.getContext('2d');
+      const ctx = fxCanvas._ctx || (fxCanvas._ctx = fxCanvas.getContext('2d'));
       if (!ctx) { chromaSparks.length = 0; releaseFxCanvas(); return; }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, wCss, hCss);
@@ -3254,8 +3149,7 @@
                 : pose === 'angry'
                   ? 'vein'
                   : null;
-        const speedMul = pose === 'write' ? (streamTier === 3 ? 2 : 1) : 1;
-        const localTick = Math.floor(tickIdx * speedMul);
+        const localTick = pose === 'write' ? (streamTier >= 3 ? tickIdx : Math.floor(tickIdx / 2)) : tickIdx;
         const fx = updateIdleFx(a, pose, now);
         a.lastFx = fx;
         const hasRider = Boolean(findDirectRider(id));
@@ -3363,6 +3257,7 @@
                 }
               : null;
           renderPixelLayers(a.canvas, dpr, OX, OY, PX, PALETTES[a.kind], layers, {
+            ctx: a._ctx,
             mirror: flip,
             tyPx: snappedTy,
             sqW,
@@ -3524,6 +3419,7 @@
           if (mc.lastFrameKey !== mKey) {
             mc.lastFrameKey = mKey;
             renderPixelLayers(mc.canvas, dpr, 2, 5, 2, PALETTES[mc.id], [targetSprite], {
+              ctx: mc._ctx,
               mirror: targetMirror,
               tyPx: targetTy,
             });
@@ -4772,35 +4668,59 @@
     bindActorEvents(actors.clawd);
     miniCrabs.forEach(bindMiniCrabEvents);
 
-    const onWindowBlur = () => {
+    let wb = false;
+    const WB = 'data-ag-cs-win-blur';
+    const isDocHidden = () => Boolean(doc && doc.hidden);
+    const isAttrB = () => doc?.documentElement?.getAttribute?.(WB) === '1';
+    const isWindowBlurred = () => Boolean(isDocHidden() || isAttrB() || wb);
+    const hasDozeTransition = (now) =>
+      (actors.cat.overridePose && now < actors.cat.overrideUntil) ||
+      (actors.clawd.overridePose && now < actors.clawd.overrideUntil);
+    const inTrans = () =>
+      [actors.cat, actors.clawd, ...miniCrabs].some((e) => e.dragging || e.leap || e.y < -0.4 || Math.abs(e.vy) > 0.01) ||
+      Boolean(reboundTm);
+    const syncPwr = () => {
       if (disposed) return;
-      for (let i = 0; i < dragReleaseHooks.length; i++) dragReleaseHooks[i]();
+      if (!isAttrB()) {
+        wb = false;
+        if (dozing && !isDocHidden()) { wakeUp(); return; }
+      }
+      syncHeartbeat();
+      if (!isWindowBlurred()) renderAllFrames(performance.now());
     };
+    const onWBlur = () => {
+      if (disposed) return;
+      wb = true;
+      for (let i = 0; i < dragReleaseHooks.length; i++) dragReleaseHooks[i]();
+      syncHeartbeat();
+    };
+    const onWFocus = () => { wb = false; syncPwr(); };
     if (win && typeof win.addEventListener === 'function') {
-      win.addEventListener('blur', onWindowBlur);
-      cleanups.push(() => {
-        if (typeof win.removeEventListener === 'function') win.removeEventListener('blur', onWindowBlur);
-      });
+      win.addEventListener('blur', onWBlur);
+      win.addEventListener('focus', onWFocus);
+      cleanups.push(() => { win.removeEventListener?.('blur', onWBlur); win.removeEventListener?.('focus', onWFocus); });
+    }
+    const MO0 = win?.MutationObserver || (typeof MutationObserver === 'function' ? MutationObserver : null);
+    if (MO0 && doc?.documentElement) {
+      try {
+        const mo = new MO0(syncPwr);
+        mo.observe(doc.documentElement, { attributes: true, attributeFilter: [WB] });
+        cleanups.push(() => mo.disconnect());
+      } catch (_) {}
     }
 
-    // ── 生态联动：活动唤醒 / 打盹 / 领衔交接 / 外部事件 notify ───────────────
     const leaderActor = () => (camp === 'claude' ? actors.clawd : actors.cat);
     const partnerActor = () => (camp === 'claude' ? actors.cat : actors.clawd);
     const faceToward = (from, to) => (to.x >= from.x ? 'right' : 'left');
 
-    const isDocHidden = () => Boolean(doc && doc.hidden);
-    const hasDozeTransition = (now) =>
-      (actors.cat.overridePose && now < actors.cat.overrideUntil) ||
-      (actors.clawd.overridePose && now < actors.clawd.overrideUntil);
-
     const onHeartbeat = () => {
       if (disposed) return;
-      if (isDocHidden()) {
-        syncHeartbeat();
+      const now = performance.now();
+      if (isDocHidden() || (isWindowBlurred() && (dozing || !inTrans()))) {
+        syncHeartbeat(now);
         return;
       }
       tickIdx += 1;
-      const now = performance.now();
       updateBalance();
       ecoTick(now);
       renderAllFrames(now);
@@ -4809,7 +4729,7 @@
 
     function syncHeartbeat(now = performance.now()) {
       let targetMs = TICK;
-      if (disposed || isDocHidden() || (reducedMotion && !stageBusy())) {
+      if (disposed || isDocHidden() || (isWindowBlurred() && (dozing || !inTrans())) || (reducedMotion && !stageBusy())) {
         targetMs = 0;
       } else if (dozing && !stageBusy() && !hasDozeTransition(now)) {
         targetMs = DOZE_TICK;
@@ -4846,6 +4766,7 @@
     }
 
     function markActivity() {
+      if (!isAttrB()) wb = false;
       lastActivityAt = performance.now();
       if (dozing) wakeUp();
       else syncHeartbeat();
@@ -5350,7 +5271,7 @@
           },
           perf: {
             timerIntervalMs: currentTickMs,
-            timerPaused: isDocHidden() || currentTickMs === 0,
+            timerPaused: isWindowBlurred() || currentTickMs === 0,
             canvasDraws: perfStats.canvasDraws,
             canvasSkips: perfStats.canvasSkips,
             domTransformWrites: perfStats.domTransformWrites,
@@ -5405,6 +5326,7 @@
           }),
         };
       },
+      syncPowerState: syncPwr,
       dispose() {
         disposed = true;
         if (tickTimer !== null) {
@@ -5432,10 +5354,13 @@
         }
         pairCooldowns.clear();
         try {
-          if (fxCanvas) { fxCanvas.width = 0; fxCanvas.height = 0; }
+          if (fxCanvas) { fxCanvas.width = 0; fxCanvas.height = 0; fxCanvas._ctx = null; }
           for (const a of [actors.cat, actors.clawd]) {
-            if (a?.canvas?.__agRotOff) { a.canvas.__agRotOff.width = 0; a.canvas.__agRotOff.height = 0; a.canvas.__agRotOff = null; }
+            if (a) a._ctx = null;
+            if (a?.canvas) a.canvas._ctx = null;
+            if (a?.canvas?.__agRotOff) { a.canvas.__agRotOff.width = 0; a.canvas.__agRotOff.height = 0; a.canvas.__agRotOff._ctx = null; a.canvas.__agRotOff = null; }
           }
+          miniCrabs.forEach((mc) => { mc._ctx = null; if (mc.canvas) mc.canvas._ctx = null; });
         } catch (_) {}
         cleanups.forEach((fn) => fn());
         for (const node of [miniGroupEl, actors.cat.el, actors.clawd.el, fxCanvas]) {
@@ -5465,6 +5390,8 @@
     PROPS,
     SYMS,
     resolveClawdStandGrid,
+    drawLayerSet,
+    renderPixelLayers,
     buildClipLayers,
     classifyPairEncounter,
     stepMiniCrabCorridor,

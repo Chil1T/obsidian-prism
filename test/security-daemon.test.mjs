@@ -9,7 +9,9 @@ import { createRequire } from 'node:module';
 import * as arch from '../sidecars/daemon/conversation-archive.mjs';
 import {
   PrismDaemon,
+  OMNI_BINDING,
   SIDEBAR_BINDING,
+  THOUGHT_BINDING,
   writeFileAtomicSync,
 } from '../sidecars/daemon/main.mjs';
 
@@ -273,7 +275,7 @@ test('security-daemon 4: verifyAndHealEntry serializes via _runEntryExclusive to
   daemon.browserSession = null;
   daemon.sessions = new Map();
   daemon.cdp = {
-    PLUGIN_VERSION: '1.0.5',
+    PLUGIN_VERSION: '1.0.6',
     SETTING_BINDING: '__agPrismSet',
     readConfig: () => ({ sidebarStudio: 'off' }),
   };
@@ -322,7 +324,7 @@ test('security-daemon 4: verifyAndHealEntry serializes via _runEntryExclusive to
           ready: true,
           isHostDom: true,
           href: 'vscode-file://vscode-app/workbench.html',
-          prismAttr: '1.0.5',
+          prismAttr: '1.0.6',
           hasPrism: true,
           hasRepoBridge: true,
           hasThoughtBridge: true,
@@ -751,5 +753,418 @@ test('security-daemon 8: install-plugin atomicWriteFileSync uses crypto.randomBy
     assert.equal(fs.existsSync(path.join(dstDir, '__pycache__')), false);
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('security-daemon 9: omniModule="off" lazy-start skips ensureOmniServer & omniExpr, start() avoids recursive root fs.watch by default, and verifyAndHealEntry backs off up to 45s with __agPrism host short-circuit', async () => {
+  const workDir = makeTempDir('ag-prism-sec-omni-lazy-');
+  const targetPluginDir = path.join(workDir, 'obsidian-prism');
+  let daemon = null;
+  const origWatch = fs.watch;
+  const prevDevWatch = process.env.AG_PRISM_DEV_WATCH;
+  try {
+    delete process.env.AG_PRISM_DEV_WATCH;
+    await installPluginTool.installPlugin({
+      targetDir: targetPluginDir,
+      noCdp: true,
+      skipHostConfig: true,
+      startDaemon: false,
+    });
+    fs.writeFileSync(
+      path.join(targetPluginDir, 'config.json'),
+      JSON.stringify({ omniModule: 'off', sidebarStudio: 'off', hostLocalization: 'off' }, null, 2),
+      'utf8'
+    );
+
+    const watchCalls = [];
+    fs.watch = (dir, opts, listener) => {
+      const actualOpts = typeof opts === 'function' ? {} : (opts || {});
+      watchCalls.push({ dir: path.resolve(String(dir)), recursive: Boolean(actualOpts.recursive) });
+      return { close() {}, unref() {}, on() {} };
+    };
+
+    daemon = new PrismDaemon({
+      rootDir: targetPluginDir,
+      overridePort: 19997,
+      pollIntervalMs: 5000,
+      enabledCheck: () => true,
+      enableAutoUpdateTimer: false,
+      silent: true,
+    });
+
+    let omniStartCount = 0;
+    const origEnsureOmni = daemon.ensureOmniServer.bind(daemon);
+    daemon.ensureOmniServer = async () => {
+      omniStartCount += 1;
+      return origEnsureOmni();
+    };
+
+    // 1) Default start({ watchFiles: true }) must NOT open { recursive: true } on rootDir
+    daemon.start({ claimPid: false, watchFiles: true });
+    assert.equal(watchCalls.length, 1);
+    assert.equal(watchCalls[0].recursive, false, 'Default production watchFiles must NOT watch rootDir recursively');
+    assert.equal(daemon.omniExpr, '', 'rebuildBundle must skip omniExpr when omniModule==="off"');
+
+    // Verify AG_PRISM_DEV_WATCH=1 enables recursive source watching for dev mode
+    await daemon.stop(false);
+    process.env.AG_PRISM_DEV_WATCH = '1';
+    daemon.start({ claimPid: false, watchFiles: true });
+    assert.equal(watchCalls.at(-1).recursive, true, 'AG_PRISM_DEV_WATCH=1 must opt into recursive dev watching');
+    delete process.env.AG_PRISM_DEV_WATCH;
+    await daemon.stop(false);
+    fs.watch = origWatch;
+
+    // 2) With omniModule==="off", attachTarget + verifyAndHealEntry + broadcastConfigRefresh never start OmniServer
+    const evaluatedOmni = [];
+    const addedOmniBindings = [];
+    let probeScriptSeen = '';
+    const listeners = new Map();
+    const fakeSession = {
+      closed: false,
+      on(ev, fn) {
+        if (!listeners.has(ev)) listeners.set(ev, []);
+        listeners.get(ev).push(fn);
+      },
+      async send(method, params = {}) {
+        if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'MAIN_F' } } };
+        if (method === 'Runtime.enable') {
+          for (const fn of listeners.get('Runtime.executionContextCreated') || []) {
+            fn({ context: { id: 1, auxData: { frameId: 'MAIN_F', isDefault: true, type: 'default' } } });
+          }
+          return {};
+        }
+        if (method === 'Runtime.addBinding' && params.name === OMNI_BINDING) {
+          addedOmniBindings.push(params.name);
+        }
+        if (method === 'Runtime.evaluate') return {};
+        if (method === 'Page.addScriptToEvaluateOnNewDocument') return { identifier: 'doc-sc-1' };
+        return {};
+      },
+      async evaluate(expr) {
+        const s = String(expr || '');
+        if (s.includes('ag-omni-url')) {
+          evaluatedOmni.push('omni-client');
+        }
+        if (s.includes('needsDashboardSync')) {
+          probeScriptSeen = s;
+          return {
+            ready: true,
+            isHostDom: true,
+            href: 'vscode-file://vscode-app/workbench.html',
+            prismAttr: daemon.cdp.PLUGIN_VERSION,
+            hasPrism: true,
+            hasRepoBridge: true,
+            hasThoughtBridge: true,
+            hasUsageBridge: true,
+            hasOmniBridge: false,
+            hasOmniServerMeta: false,
+            hasOmni: false,
+            omniMode: 'off',
+            hasSidebarBridge: false,
+            hasSidebar: false,
+            sidebarMode: 'off',
+            hasHostI18n: false,
+            codeHash: daemon.codeHash,
+            hasLegacyCss: false,
+            needsDashboardSync: false,
+          };
+        }
+        return { status: 'ok', refreshed: true };
+      },
+      close() { this.closed = true; },
+    };
+
+    const origConnect = daemon.cdp.CdpSession.connect;
+    daemon.cdp.CdpSession.connect = async () => fakeSession;
+    const entry = await daemon.attachTarget({
+      id: 'T_OMNI_OFF',
+      title: 'Antigravity',
+      url: 'vscode-file://vscode-app/workbench.html',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:19997/devtools/page/T_OMNI_OFF',
+    });
+    daemon.cdp.CdpSession.connect = origConnect;
+
+    assert.equal(omniStartCount, 0, 'attachTarget must NOT start OmniServer when omniModule==="off"');
+    assert.equal(daemon.omniServer, null);
+    assert.equal(addedOmniBindings.length, 0, 'attachTarget must skip OMNI_BINDING when omniModule==="off"');
+    assert.equal(evaluatedOmni.length, 0, 'attachTarget must NOT inject omniExpr when omniModule==="off"');
+
+    await daemon.verifyAndHealEntry(entry, true);
+    assert.equal(omniStartCount, 0, 'verifyAndHealEntry must NOT start OmniServer when omniModule==="off"');
+    assert.equal(evaluatedOmni.length, 0, 'verifyAndHealEntry must NOT inject omniExpr when omniModule==="off"');
+    assert.ok(
+      probeScriptSeen.indexOf('const api = window.__agPrism') < probeScriptSeen.indexOf('document.querySelector('),
+      'Health probe isHostDom must short-circuit on window.__agPrism before running document.querySelector'
+    );
+
+    // 3) Verify 45s exponential backoff ceiling when browserSession is live & healthyStreak >= 5
+    daemon.browserSession = { closed: false };
+    entry.healthyStreak = 5;
+    entry.verifyDirty = false;
+    entry.lastVerifiedCodeHash = daemon.codeHash;
+    entry.lastVerifyAt = Date.now() - 30000;
+    const skippedProbe = await daemon.verifyAndHealEntry(entry, false);
+    assert.equal(skippedProbe.skipped, true, 'Healthy entry at 30s must skip probe under 45s backoff ceiling');
+
+    await daemon.broadcastConfigRefresh();
+    assert.equal(omniStartCount, 0, 'broadcastConfigRefresh with omniModule==="off" must keep OmniServer lazy/unstarted');
+
+    // 4) Toggling omniModule off -> on lazily starts OmniServer & injects omniExpr; on -> off stops server cleanly
+    daemon.updateConfigSetting('omniModule', 'on');
+    await daemon.broadcastConfigRefresh();
+    assert.equal(omniStartCount, 1, 'Toggling omniModule->"on" must lazily start OmniServer');
+    assert.equal(Boolean(daemon.omniServer?.running), true);
+    assert.ok(addedOmniBindings.length >= 1, 'Toggling omniModule->"on" must bind OMNI_BINDING');
+    assert.ok(evaluatedOmni.length >= 1, 'Toggling omniModule->"on" must evaluate omniExpr');
+
+    daemon.updateConfigSetting('omniModule', 'off');
+    await daemon.broadcastConfigRefresh();
+    assert.equal(daemon.omniServer, null, 'Toggling omniModule->"off" must stop & release OmniServer');
+
+    // 5) fetchUsageRollupBatch with gmOffset===0 in renderer-proxy mode passes force: false to reuse trajectory cache
+    let capturedForce = null;
+    daemon._lazyLsClient = {
+      server: { mode: 'renderer-proxy' },
+      call: async () => ({ results: [] }),
+      trajectory: async (_id, opts) => {
+        capturedForce = opts?.force;
+        return { numTotalSteps: 1, numTotalGeneratorMetadata: 0, trajectory: { cascadeId: _id, steps: [], generatorMetadata: [] } };
+      },
+    };
+    await daemon.fetchUsageRollupBatch([{ id: '66666666-7777-8888-9999-aaaaaaaaaaaa', gmOffset: 0 }]);
+    assert.equal(capturedForce, false, 'fetchUsageRollupBatch must not force-bypass proxy trajectory cache when gmOffset === 0');
+  } finally {
+    fs.watch = origWatch;
+    if (prevDevWatch === undefined) delete process.env.AG_PRISM_DEV_WATCH;
+    else process.env.AG_PRISM_DEV_WATCH = prevDevWatch;
+    if (daemon) await daemon.stop(false).catch(() => {});
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test('security-daemon 10: self-heals missing mainFrameId after initial Page.getFrameTree timeout while keeping sub-iframes 100% fail-closed', async () => {
+  const workDir = makeTempDir('ag-prism-sec-ft-heal-');
+  const targetPluginDir = path.join(workDir, 'obsidian-prism');
+  await installPluginTool.installPlugin({
+    targetDir: targetPluginDir,
+    noCdp: true,
+    skipHostConfig: true,
+    startDaemon: false,
+  });
+
+  let daemon = null;
+  try {
+    const cfgPath = path.join(targetPluginDir, 'config.json');
+    fs.writeFileSync(
+      cfgPath,
+      JSON.stringify(
+        {
+          omniModule: 'off',
+          sidebarStudio: 'off',
+          hostLocalization: 'off',
+          updateChannel: 'stable',
+          telemetryModule: 'auto',
+        },
+        null,
+        2
+      ) + '\n',
+      'utf8'
+    );
+
+    daemon = new PrismDaemon({
+      rootDir: targetPluginDir,
+      overridePort: 19996,
+      pollIntervalMs: 5000,
+      enableAutoUpdateTimer: false,
+      silent: true,
+    });
+
+    let getFrameTreeCalls = 0;
+    let shouldFailFrameTree = true;
+    const runtimeMethods = [];
+    const evalResponses = [];
+    const listeners = new Map();
+
+    const fakeSession = {
+      closed: false,
+      on(ev, fn) {
+        if (!listeners.has(ev)) listeners.set(ev, []);
+        listeners.get(ev).push(fn);
+      },
+      emit(ev, params) {
+        for (const fn of listeners.get(ev) || []) fn(params);
+      },
+      async send(method, params = {}) {
+        if (method === 'Page.getFrameTree') {
+          getFrameTreeCalls += 1;
+          if (shouldFailFrameTree) {
+            throw new Error('CDP timeout: Page.getFrameTree');
+          }
+          await new Promise((r) => setTimeout(r, 15));
+          return { frameTree: { frame: { id: 'MAIN_F' } } };
+        }
+        if (method === 'Runtime.disable' || method === 'Runtime.enable') {
+          runtimeMethods.push(method);
+        }
+        if (method === 'Runtime.enable') {
+          this.emit('Runtime.executionContextCreated', {
+            context: { id: 1, auxData: { frameId: 'MAIN_F', isDefault: true, type: 'default' } },
+          });
+          this.emit('Runtime.executionContextCreated', {
+            context: { id: 2, auxData: { frameId: 'SUB_IFRAME_F', isDefault: true, type: 'default' } },
+          });
+          this.emit('Runtime.executionContextCreated', {
+            context: { id: 3, auxData: { frameId: 'MAIN_F', isDefault: false, type: 'isolated' } },
+          });
+          return {};
+        }
+        if (method === 'Runtime.evaluate') {
+          evalResponses.push({ contextId: params.contextId, expression: String(params.expression || '') });
+          return {};
+        }
+        if (method === 'Page.addScriptToEvaluateOnNewDocument') {
+          return { identifier: 'doc-sc-ft' };
+        }
+        return {};
+      },
+      async evaluate(expr) {
+        const s = String(expr || '');
+        if (s.includes('needsDashboardSync')) {
+          return {
+            ready: true,
+            isHostDom: true,
+            href: 'vscode-file://vscode-app/workbench.html',
+            prismAttr: daemon.cdp.PLUGIN_VERSION,
+            hasPrism: true,
+            hasRepoBridge: true,
+            hasThoughtBridge: true,
+            hasUsageBridge: true,
+            hasOmniBridge: false,
+            hasOmniServerMeta: false,
+            hasOmni: false,
+            omniMode: 'off',
+            hasSidebarBridge: false,
+            hasSidebar: false,
+            sidebarMode: 'off',
+            hasHostI18n: false,
+            codeHash: daemon.codeHash,
+            hasLegacyCss: false,
+            needsDashboardSync: false,
+          };
+        }
+        return { status: 'ok', refreshed: true };
+      },
+      close() {
+        this.closed = true;
+      },
+    };
+
+    const origConnect = daemon.cdp.CdpSession.connect;
+    daemon.cdp.CdpSession.connect = async () => fakeSession;
+    const entry = await daemon.attachTarget({
+      id: 'T_FT_TIMEOUT',
+      title: 'Antigravity',
+      url: 'vscode-file://vscode-app/workbench.html',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:19996/devtools/page/T_FT_TIMEOUT',
+    });
+    daemon.cdp.CdpSession.connect = origConnect;
+
+    // 1) attachTarget retries once on initial Page.getFrameTree timeout (2 attempts total), leaving mainFrameId null
+    assert.equal(getFrameTreeCalls, 2, 'attachTarget must retry Page.getFrameTree once on initial timeout');
+    assert.equal(entry.mainFrameId, null, 'entry.mainFrameId remains null when initial Page.getFrameTree times out');
+
+    // 2) Non-default isolated world context is rejected immediately without even triggering Page.getFrameTree RPC
+    await daemon.handleBindingCall(entry, {
+      name: daemon.cdp.SETTING_BINDING,
+      payload: JSON.stringify({ key: 'updateChannel', value: 'beta' }),
+      executionContextId: 3,
+    });
+    assert.equal(getFrameTreeCalls, 2, 'Isolated world binding call must not trigger Page.getFrameTree RPC');
+    assert.equal(daemon.cdp.readConfig().updateChannel, 'stable');
+
+    // 3) FrameTree recovers: concurrent sub-iframe + main-frame binding calls coalesce into 1 Page.getFrameTree RPC;
+    //    sub-iframe stays 100% fail-closed while main-frame THOUGHT_BINDING & SETTING_BINDING succeed immediately!
+    shouldFailFrameTree = false;
+    await Promise.all([
+      daemon.handleBindingCall(entry, {
+        name: daemon.cdp.SETTING_BINDING,
+        payload: JSON.stringify({ key: 'updateChannel', value: 'beta' }),
+        executionContextId: 2,
+      }),
+      daemon.handleBindingCall(entry, {
+        name: THOUGHT_BINDING,
+        payload: JSON.stringify({ id: 999, action: 'cache-stats' }),
+        executionContextId: 2,
+      }),
+      daemon.handleBindingCall(entry, {
+        name: THOUGHT_BINDING,
+        payload: JSON.stringify({ id: 101, action: 'cache-stats' }),
+        executionContextId: 1,
+      }),
+      daemon.handleBindingCall(entry, {
+        name: daemon.cdp.SETTING_BINDING,
+        payload: JSON.stringify({ key: 'telemetryModule', value: 'off' }),
+        executionContextId: 1,
+      }),
+    ]);
+
+    assert.equal(getFrameTreeCalls, 3, 'Concurrent binding self-heal must coalesce into a single Page.getFrameTree call');
+    assert.equal(entry.mainFrameId, 'MAIN_F');
+    assert.equal(entry.hasFrameTree, true);
+    assert.equal(entry.sidebarHostContextId, 1, '_ensureMainFrameId must backfill sidebarHostContextId when host was already verified');
+
+    // Sub-iframe calls must be 100% dropped (fail-closed)
+    assert.equal(daemon.cdp.readConfig().updateChannel, 'stable', 'Sub-iframe SETTING_BINDING must remain 100% blocked');
+    assert.equal(
+      evalResponses.some((r) => r.contextId === 2 || r.expression.includes('999')),
+      false,
+      'Sub-iframe THOUGHT_BINDING must never receive a response'
+    );
+
+    // Main-frame calls must succeed after self-healing mainFrameId
+    assert.equal(daemon.cdp.readConfig().telemetryModule, 'off', 'Main-frame SETTING_BINDING must succeed after mainFrameId self-heal');
+    assert.equal(
+      evalResponses.some((r) => r.contextId === 1 && r.expression.includes('__agPrismThoughtResolve(101,')),
+      true,
+      'Main-frame THOUGHT_BINDING must resolve cleanly after mainFrameId self-heal'
+    );
+
+    // 4) _verifyAndHealEntryUnlocked resyncs Runtime contexts via Runtime.disable -> Runtime.enable if main default context is missing
+    entry.contextFrames.delete(1);
+    daemon.browserSession = { closed: false };
+    entry.healthyStreak = 5;
+    entry.verifyDirty = false;
+    entry.lastVerifiedCodeHash = daemon.codeHash;
+    entry.lastVerifyAt = Date.now() - 1000;
+    runtimeMethods.length = 0;
+
+    const healRes = await daemon.verifyAndHealEntry(entry, false);
+    assert.equal(Boolean(healRes.skipped), false, 'verifyAndHealEntry must bypass backoff skip when main default context is missing');
+    assert.deepEqual(
+      runtimeMethods.slice(0, 2),
+      ['Runtime.disable', 'Runtime.enable'],
+      'verifyAndHealEntry must run Runtime.disable -> Runtime.enable to resync missing main default context'
+    );
+    assert.equal(daemon._hasMainDefaultContext(entry), true, 'Main default context must be restored after Runtime resync');
+
+    await daemon.handleBindingCall(entry, {
+      name: THOUGHT_BINDING,
+      payload: JSON.stringify({ id: 102, action: 'cache-stats' }),
+      executionContextId: 1,
+    });
+    await daemon.handleBindingCall(entry, {
+      name: daemon.cdp.SETTING_BINDING,
+      payload: JSON.stringify({ key: 'updateChannel', value: 'beta' }),
+      executionContextId: 2,
+    });
+    assert.equal(
+      evalResponses.some((r) => r.contextId === 1 && r.expression.includes('__agPrismThoughtResolve(102,')),
+      true,
+      'Main-frame THOUGHT_BINDING must work after Runtime context resync'
+    );
+    assert.equal(daemon.cdp.readConfig().updateChannel, 'stable', 'Sub-iframe must remain 100% blocked after Runtime context resync');
+  } finally {
+    if (daemon) await daemon.stop(false).catch(() => {});
+    fs.rmSync(workDir, { recursive: true, force: true });
   }
 });

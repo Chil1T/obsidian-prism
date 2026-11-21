@@ -16,32 +16,49 @@
       'M20.562 10.188c.25-.688.313-1.376.25-2.063c-.062-.687-.312-1.375-.625-2c-.562-.937-1.375-1.687-2.312-2.125c-1-.437-2.063-.562-3.125-.312c-.5-.5-1.063-.938-1.688-1.25S11.687 2 11 2a5.17 5.17 0 0 0-3 .938c-.875.624-1.5 1.5-1.813 2.5c-.75.187-1.375.5-2 .875c-.562.437-1 1-1.375 1.562c-.562.938-.75 2-.625 3.063a5.44 5.44 0 0 0 1.25 2.874a4.7 4.7 0 0 0-.25 2.063c.063.688.313 1.375.625 2c.563.938 1.375 1.688 2.313 2.125c1 .438 2.062.563 3.125.313c.5.5 1.062.937 1.687 1.25S12.312 22 13 22a5.17 5.17 0 0 0 3-.937c.875-.625 1.5-1.5 1.812-2.5a4.54 4.54 0 0 0 1.938-.875c.562-.438 1.062-.938 1.375-1.563c.562-.937.75-2 .625-3.062c-.125-1.063-.5-2.063-1.188-2.876m-7.5 10.5c-1 0-1.75-.313-2.437-.875c0 0 .062-.063.125-.063l4-2.312a.5.5 0 0 0 .25-.25a.57.57 0 0 0 .062-.313V11.25l1.688 1v4.625a3.685 3.685 0 0 1-3.688 3.813M5 17.25c-.438-.75-.625-1.625-.438-2.5c0 0 .063.063.125.063l4 2.312a.56.56 0 0 0 .313.063c.125 0 .25 0 .312-.063l4.875-2.812v1.937l-4.062 2.375A3.7 3.7 0 0 1 7.312 19c-1-.25-1.812-.875-2.312-1.75M3.937 8.563a3.8 3.8 0 0 1 1.938-1.626v4.751c0 .124 0 .25.062.312a.5.5 0 0 0 .25.25l4.875 2.813l-1.687 1l-4-2.313a3.7 3.7 0 0 1-1.75-2.25c-.25-.937-.188-2.062.312-2.937M17.75 11.75l-4.875-2.812l1.687-1l4 2.312c.625.375 1.125.875 1.438 1.5s.5 1.313.437 2.063a3.7 3.7 0 0 1-.75 1.937c-.437.563-1 1-1.687 1.25v-4.75c0-.125 0-.25-.063-.312c0 0-.062-.126-.187-.188m1.687-2.5s-.062-.062-.125-.062l-4-2.313c-.125-.062-.187-.062-.312-.062s-.25 0-.313.062L9.812 9.688V7.75l4.063-2.375c.625-.375 1.312-.5 2.062-.5c.688 0 1.375.25 2 .688c.563.437 1.063 1 1.313 1.625s.312 1.375.187 2.062m-10.5 3.5l-1.687-1V7.063c0-.688.187-1.438.562-2C8.187 4.438 8.75 4 9.375 3.688a3.37 3.37 0 0 1 2.062-.313c.688.063 1.375.375 1.938.813c0 0-.063.062-.125.062l-4 2.313a.5.5 0 0 0-.25.25c-.063.125-.063.187-.063.312zm.875-2L12 9.5l2.187 1.25v2.5L12 14.5l-2.188-1.25z',
   };
 
-  const PANEL_MODEL_ROW_RE = /orchestrator|编排|gemini|claude|sonnet|opus|haiku|gpt|openai|\bo[134]\b|deepseek/i;
+  const PANEL_MODEL_ROW_RE = /orchestrator|编排|调度|gemini|claude|sonnet|opus|haiku|gpt|openai|\bo[134]\b|deepseek/i;
+  const ZH_EFFORT_PAREN_RE = /\s*[（(]\s*(超高|极高|超深|高思考|中思考|低思考|极低|最低|深度思考|思考中?|中等|高|中|低|自动)\s*[)）]/g;
 
-  function readButtonLabelWithoutGlyph(el) {
+  const stripTranslatedEffortSuffix = (rawText) => {
+    return String(rawText || '').replace(ZH_EFFORT_PAREN_RE, '').trim();
+  };
+
+  const normalizeModelEffortLabel = (rawText) => {
+    return String(rawText || '').replace(ZH_EFFORT_PAREN_RE, (_, t) =>
+      t === '超高' || t === '极高' || t === '超深'
+        ? ' (xhigh)'
+        : t === '中' || t === '中等' || t === '中思考'
+        ? ' (medium)'
+        : t === '低' || t === '低思考' || t === '极低' || t === '最低'
+        ? ' (low)'
+        : t === '自动'
+        ? ' (auto)'
+        : ' (high)'
+    );
+  };
+
+  const readButtonLabelWithoutGlyph = (el) => {
     if (!el) return '';
     const parts = [];
+    const isG = (n) => n?.classList?.contains?.('ag-cs-model-glyph');
     const collect = (node) => {
-      if (!node) return;
+      if (!node || isG(node)) return;
       if (node.nodeType === 3) {
         parts.push(node.nodeValue || '');
         return;
       }
-      if (node.classList && node.classList.contains('ag-cs-model-glyph')) return;
-      if (node.childNodes && node.childNodes.length > 0) {
+      if (node.childNodes?.length > 0) {
         for (const cn of node.childNodes) collect(cn);
         return;
       }
-      if (node.children && node.children.length > 0) {
+      if (node.children?.length > 0) {
         let nonGlyph = 0;
         for (const ch of node.children) {
-          if (ch.classList && ch.classList.contains('ag-cs-model-glyph')) continue;
+          if (isG(ch)) continue;
           nonGlyph++;
           collect(ch);
         }
-        if (nonGlyph === 0 && typeof node._text === 'string' && node._text) {
-          parts.push(node._text);
-        }
+        if (!nonGlyph && typeof node._text === 'string' && node._text) parts.push(node._text);
         return;
       }
       parts.push(node.textContent || '');
@@ -50,33 +67,34 @@
     const aria = el.getAttribute?.('aria-label') || '';
     if (aria) parts.push(aria);
     return parts.join(' ').trim();
-  }
+  };
 
-  function parseModelLabelInfo(rawText) {
-    const raw = String(rawText || '').toLowerCase();
-    const isOrchestrator = /\borchestrator\b|编排/.test(raw);
+  const parseModelLabelInfo = (rawText) => {
+    const norm = normalizeModelEffortLabel(rawText).toLowerCase();
+    const base = stripTranslatedEffortSuffix(rawText).toLowerCase();
+    const isOrchestrator = /\borchestrator\b|编排|调度器/.test(base);
     let brand = 'gemini';
-    if (/\bclaude\b|\banthropic\b|\bsonnet\b|\bopus\b|\bhaiku\b/.test(raw)) {
+    if (/\bclaude\b|\banthropic\b|\bsonnet\b|\bopus\b|\bhaiku\b/.test(base)) {
       brand = 'claude';
-    } else if (/\bgpt\b|\bopenai\b|\bo1\b|\bo3\b|\bo4\b|\bcodex\b|\bdeepseek\b/.test(raw)) {
+    } else if (/\bgpt\b|\bopenai\b|\bo1\b|\bo3\b|\bo4\b|\bcodex\b|\bdeepseek\b/.test(base)) {
       brand = 'openai';
     } else if (isOrchestrator) {
       brand = 'antigravity';
-    } else if (/\bantigravity\b/.test(raw) && !/\bgemini\b|\bneon\b|\bargon\b|\bcarbon\b|\bhydrogen\b|\bflash\b/.test(raw)) {
+    } else if (/\bantigravity\b/.test(base) && !/\bgemini\b|\bneon\b|\bargon\b|\bcarbon\b|\bhydrogen\b|\bflash\b/.test(base)) {
       brand = 'antigravity';
     }
 
     let tier = 'medium';
-    if (/\bgpt-oss\b|\bfixed\b|固定/.test(raw)) tier = 'fixed';
-    else if (/\bxhigh\b|\bextra\b|超深|极高/.test(raw)) tier = 'xhigh';
-    else if (/\bhigh\b|\bmax\b|\bthinking\b|高/.test(raw)) tier = 'high';
-    else if (/\blow\b|\blite\b|\bminimal\b|低/.test(raw)) tier = 'low';
-    else if (/\bmedium\b|\bmed\b|中/.test(raw)) tier = 'medium';
+    if (/\bgpt-oss\b|\bfixed\b|固定/.test(norm)) tier = 'fixed';
+    else if (/\bxhigh\b|\bextra\b|超高|极高|超深/.test(norm)) tier = 'xhigh';
+    else if (/\bhigh\b|\bmax\b|\bthinking\b|深度思考|高思考|思考|高/.test(norm)) tier = 'high';
+    else if (/\blow\b|\blite\b|\bminimal\b|低思考|极低|最低|低/.test(norm)) tier = 'low';
+    else if (/\bmedium\b|\bmed\b|中思考|中等|中/.test(norm)) tier = 'medium';
     else if (isOrchestrator) tier = 'auto';
     return { brand, tier, isOrchestrator, camp: brand === 'claude' ? 'claude' : 'gemini' };
-  }
+  };
 
-  function createModelGlyphCrystalController({
+  const createModelGlyphCrystalController = ({
     animatedIcons,
     crystalPrismCore,
     isDestroyed,
@@ -88,55 +106,91 @@
     canMountRealCanvas,
     getLastPointerPos,
     setAttrIfChanged,
-  }) {
-    let crystalMount = {
-      panel: null,
-      bar: null,
-      track: null,
-      canvas: null,
-      inst: null,
-      rafId: 0,
-      mountRafId: 0,
-      lastStepMs: 0,
-      wasOrch: false,
-    };
+  }) => {
+    let mPanel = null,
+      mOv = null,
+      mBar = null,
+      mTrk = null,
+      mCv = null,
+      mInst = null,
+      mRaf = 0,
+      mMountRaf = 0,
+      mLastMs = 0,
+      mWasOrch = false,
+      mHideLock = false,
+      mWakeTrk = null,
+      mWakeFn = null,
+      mMountedAt = 0;
 
     const svgElementProtoCache = new Map();
+    const K_IC = 'isConnected', K_PE = 'parentElement', K_CL = 'classList';
+    const ga = (e, k) => e?.getAttribute?.(k);
+    const sa = (e, k, v = '') => e?.setAttribute?.(k, String(v));
+    const ra = (e, k) => e?.removeAttribute?.(k);
+    const ha = (e, k) => Boolean(e?.hasAttribute?.(k));
+    const qs = (e, s) => (e && e.querySelector ? e.querySelector(s) : null);
+    const qa = (e, s) => (e && e.querySelectorAll ? e.querySelectorAll(s) : []);
+    const cl = (e, s) => (e && e.closest ? e.closest(s) : null);
+    const sp = (e, k, v) => e?.style?.setProperty?.(k, v);
+    const clHas = (e, c) => Boolean(e?.[K_CL]?.contains?.(c));
+    const rc = (e) => (typeof e?.getBoundingClientRect === 'function' ? e.getBoundingClientRect() : null);
+    const docOf = () => (typeof document !== 'undefined' ? document : null);
+    const rAF = (fn) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : 0);
+    const cAF = (id) => { if (id && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(id); };
+    const mk = (tag, cls, txt) => {
+      const e = docOf().createElement(tag);
+      if (cls) e.className = cls;
+      if (txt !== undefined) e.textContent = txt;
+      return e;
+    };
 
-    function getRootHtml() {
+    const getRootHtml = () => {
       return typeof document !== 'undefined' ? document.documentElement : null;
-    }
+    };
 
-    function readRootAccentTone() {
-      return getRootHtml()?.getAttribute?.('data-ag-cs-accent') || 'follow';
-    }
-
-    function resolveCrystalAccentMode(dark) {
-      const html = getRootHtml();
-      const tone = html?.getAttribute?.('data-ag-cs-accent') || 'follow';
-      if (tone === 'mono' || tone === 'cobalt' || tone === 'iris' || tone === 'amber') {
-        return tone;
+    const syncModelMenuAttrs = (panel) => {
+      const h = getRootHtml(), ov = cl(panel, '.agy-overlay');
+      if (panel) {
+        h && setAttrIfChanged(h, 'data-ag-cs-model-menu', '1');
+        mOv && mOv !== ov && ra(mOv, 'data-ag-cs-model-overlay');
+        ov && setAttrIfChanged(ov, 'data-ag-cs-model-overlay', '1');
+        mOv = ov;
+      } else {
+        ra(h, 'data-ag-cs-model-menu');
+        ra(mOv, 'data-ag-cs-model-overlay');
+        mOv = null;
+        qa(docOf(), '[data-ag-cs-model-overlay]').forEach((e) => ra(e, 'data-ag-cs-model-overlay'));
       }
-      const pal = html?.getAttribute?.('data-ag-cs-palette') || 'obsidian';
-      if (pal === 'warm' || pal === 'claude') return 'warm';
-      if (!dark && html?.getAttribute?.('data-ag-cs-light-preset') === 'alabaster') return 'warm';
-      return 'default';
-    }
+    };
 
-    function readRootAmbientFloat() {
-      const raw = getRootHtml()?.getAttribute?.('data-ag-cs-ambient');
+    const readRootAccentTone = () => {
+      return ga(getRootHtml(), 'data-ag-cs-accent') || 'follow';
+    };
+
+    const resolveCrystalAccentMode = (dark) => {
+      const html = getRootHtml();
+      const tone = ga(html, 'data-ag-cs-accent') || 'follow';
+      if (tone === 'mono' || tone === 'cobalt' || tone === 'iris' || tone === 'amber') return tone;
+      const pal = ga(html, 'data-ag-cs-palette') || 'obsidian';
+      if (pal === 'warm' || pal === 'claude') return 'warm';
+      if (!dark && ga(html, 'data-ag-cs-light-preset') === 'alabaster') return 'warm';
+      return 'default';
+    };
+
+    const readRootAmbientFloat = () => {
+      const raw = ga(getRootHtml(), 'data-ag-cs-ambient');
       if (G.__agPrismRipple?.parseAmbientScale) return G.__agPrismRipple.parseAmbientScale(raw);
       if (raw === null || raw === undefined || raw === '') return 1;
       const n = Number(raw);
       return !Number.isFinite(n) ? 1 : n <= 0 ? 0 : n > 1 ? Math.min(1, n / 100) : n;
-    }
+    };
 
-    function cloneCachedSvgElement(cacheKey, htmlStr) {
+    const cloneCachedSvgElement = (cacheKey, htmlStr) => {
       if (!htmlStr) return null;
-      if (typeof HTMLTemplateElement !== 'undefined' && typeof document.createElement === 'function') {
+      if (typeof HTMLTemplateElement !== 'undefined' && typeof docOf()?.createElement === 'function') {
         let proto = svgElementProtoCache.get(cacheKey);
         if (!proto) {
-          const tpl = document.createElement('template');
+          const tpl = mk('template');
           tpl.innerHTML = htmlStr;
           proto = tpl.content ? tpl.content.firstElementChild || tpl.content.firstChild : null;
           if (proto && typeof proto.cloneNode === 'function') {
@@ -144,152 +198,123 @@
             svgElementProtoCache.set(cacheKey, proto);
           }
         }
-        if (proto && typeof proto.cloneNode === 'function') {
-          return proto.cloneNode(true);
-        }
+        if (proto && typeof proto.cloneNode === 'function') return proto.cloneNode(true);
       }
-      const tmp = document.createElement('span');
+      const tmp = mk('span');
       tmp.innerHTML = htmlStr;
       return tmp.firstElementChild || tmp.firstChild || null;
-    }
+    };
 
-    function parseModelTriggerInfo(btn) {
+    const parseModelTriggerInfo = (btn) => {
       const info = parseModelLabelInfo(readButtonLabelWithoutGlyph(btn));
-      if (info.isOrchestrator && btn?.getAttribute?.('data-ces-orch-b') === 'claude') {
+      if (info.isOrchestrator && ga(btn, 'data-ces-orch-b') === 'claude') {
         info.brand = 'claude';
         info.camp = 'claude';
       }
       return info;
-    }
+    };
 
-    function renderSparkSvg(size = 16, tier = 'auto', monochrome = false, className = '') {
-      if (animatedIcons && typeof animatedIcons.renderGoogleSparkOrbitSvg === 'function') {
-        const svg = animatedIcons.renderGoogleSparkOrbitSvg({ size, tier, monochrome, className });
-        if (svg) return svg;
-      }
-      const cls = className ? ` class="${className}"` : '';
-      const fill = monochrome ? 'currentColor' : '#669DF6';
-      return `<svg${cls} width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 1.2c.25 0 .47.17.53.41c.21.79.48 1.56.8 2.31c1.23 2.86 3.39 5.02 6.25 6.25c.75.32 1.52.59 2.31.8c.24.06.41.28.41.53s-.17.47-.41.53a16 16 0 0 0-2.31.8c-2.86 1.23-5.02 3.39-6.25 6.25c-.32.75-.59 1.52-.8 2.31a.55.55 0 0 1-.53.41a.55.55 0 0 1-.53-.41a16 16 0 0 0-.8-2.31c-1.23-2.86-3.39-5.02-6.25-6.25a16 16 0 0 0-2.31-.8A.55.55 0 0 1 1.2 12c0-.25.17-.47.41-.53c.79-.21 1.56-.48 2.31-.8c2.86-1.23 5.02-3.39 6.25-6.25c.32-.75.59-1.52.8-2.31c.06-.24.28-.41.53-.41Z" fill="${fill}"/></svg>`;
-    }
+    const svgW = (cls, sz, vb, inner) =>
+      `<svg${cls ? ` class="${cls}"` : ''} width="${sz}" height="${sz}" viewBox="${vb}" fill="none" aria-hidden="true">${inner}</svg>`;
 
-    function buildBrandMarkSvg(brand, size = 14, tier = 'auto', monochrome = false) {
-      const useMono = Boolean(monochrome || readRootAccentTone() === 'mono');
+    const renderSparkSvg = (size = 16, tier = 'auto', monochrome = false, className = '') => {
+      const extSvg = animatedIcons?.renderGoogleSparkOrbitSvg?.({ size, tier, monochrome, className });
+      if (extSvg) return extSvg;
+      return svgW(
+        className,
+        size,
+        '0 0 24 24',
+        `<path d="M12 1.2c.25 0 .47.17.53.41c.21.79.48 1.56.8 2.31c1.23 2.86 3.39 5.02 6.25 6.25c.75.32 1.52.59 2.31.8c.24.06.41.28.41.53s-.17.47-.41.53a16 16 0 0 0-2.31.8c-2.86 1.23-5.02 3.39-6.25 6.25c-.32.75-.59 1.52-.8 2.31a.55.55 0 0 1-.53.41a.55.55 0 0 1-.53-.41a16 16 0 0 0-.8-2.31c-1.23-2.86-3.39-5.02-6.25-6.25a16 16 0 0 0-2.31-.8A.55.55 0 0 1 1.2 12c0-.25.17-.47.41-.53c.79-.21 1.56-.48 2.31-.8c2.86-1.23 5.02-3.39 6.25-6.25c.32-.75.59-1.52.8-2.31c.06-.24.28-.41.53-.41Z" fill="${monochrome ? 'currentColor' : '#669DF6'}"/>`
+      );
+    };
+
+    const buildBrandMarkSvg = (brand, size = 14, tier = 'auto', monochrome = false) => {
+      const useMono = !!(monochrome || readRootAccentTone() === 'mono');
       if (brand === 'antigravity') return renderSparkSvg(size, tier, useMono, '');
-      const d = BRAND_PATHS[brand] || BRAND_PATHS.gemini;
-      return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="${d}" fill="currentColor" fill-rule="evenodd"/></svg>`;
-    }
+      return svgW('', size, '0 0 24 24', `<path d="${BRAND_PATHS[brand] || BRAND_PATHS.gemini}" fill="currentColor" fill-rule="evenodd"/>`);
+    };
 
-    function buildModelGlyphInnerSvg(brand, tier, isMono = false) {
-      if (brand === 'antigravity') {
-        return renderSparkSvg(16, tier || 'auto', isMono, 'ag-cs-model-glyph-svg');
-      }
+    const buildModelGlyphInnerSvg = (brand, tier, isMono = false) => {
+      if (brand === 'antigravity') return renderSparkSvg(16, tier || 'auto', isMono, 'ag-cs-model-glyph-svg');
       const d = BRAND_PATHS[brand] || BRAND_PATHS.gemini;
-      const coreR = brand === 'gemini' ? '2.7' : '2.1';
       const fixedLock =
         tier === 'fixed'
           ? '<g class="ag-cs-glyph-lock"><rect x="15.2" y="16.2" width="8.6" height="6.8" rx="1.6"/><path d="M17.3 16.2v-1.7a2.2 2.2 0 1 1 4.4 0v1.7" fill="none" stroke-width="1.5"/></g>'
           : '';
-      return (
-        '<svg class="ag-cs-model-glyph-svg" width="16" height="16" viewBox="-4 -4 32 32" fill="none" aria-hidden="true">' +
-        '<g class="ag-cs-glyph-orbit-group">' +
-        '<ellipse class="ag-cs-glyph-orbit" cx="12" cy="12" rx="14.5" ry="6.2" transform="rotate(-24 12 12)"/>' +
-        '<circle class="ag-cs-glyph-sat is-a" cx="25.2" cy="6.1" r="1.65"/>' +
-        '<circle class="ag-cs-glyph-sat is-b" cx="-1.2" cy="17.9" r="1.25"/>' +
-        '</g>' +
-        `<path class="ag-cs-glyph-body" d="${d}" fill-rule="evenodd"/>` +
-        `<circle class="ag-cs-glyph-core" cx="12" cy="12" r="${coreR}"/>` +
-        fixedLock +
-        '</svg>'
+      return svgW(
+        'ag-cs-model-glyph-svg',
+        16,
+        '-4 -4 32 32',
+        '<g class="ag-cs-glyph-orbit-group"><ellipse class="ag-cs-glyph-orbit" cx="12" cy="12" rx="14.5" ry="6.2" transform="rotate(-24 12 12)"/><circle class="ag-cs-glyph-sat is-a" cx="25.2" cy="6.1" r="1.65"/><circle class="ag-cs-glyph-sat is-b" cx="-1.2" cy="17.9" r="1.25"/></g>' +
+          `<path class="ag-cs-glyph-body" d="${d}" fill-rule="evenodd"/><circle class="ag-cs-glyph-core" cx="12" cy="12" r="${brand === 'gemini' ? '2.7' : '2.1'}"/>` +
+          fixedLock
       );
-    }
+    };
 
-    function syncModelGlyphOnButton(modelBtn) {
+    const syncModelGlyphOnButton = (modelBtn) => {
       if (!modelBtn) return null;
-      modelBtn.querySelectorAll('.ag-cs-effort-badge, [data-ag-cs-effort]').forEach((el) => {
-        el.removeAttribute('data-ag-cs-effort');
-        el.classList.remove('ag-cs-effort-badge');
+      qa(modelBtn, '.ag-cs-effort-badge, [data-ag-cs-effort]').forEach((el) => {
+        ra(el, 'data-ag-cs-effort');
+        el[K_CL].remove('ag-cs-effort-badge');
       });
 
       const info = parseModelTriggerInfo(modelBtn);
       if (!isComposerRestyleEnabled()) {
-        modelBtn.querySelectorAll('.ag-cs-model-glyph').forEach((n) => n.remove());
+        qa(modelBtn, '.ag-cs-model-glyph').forEach((n) => n.remove());
         return info;
       }
 
-      let glyph = modelBtn.querySelector('.ag-cs-model-glyph');
+      let glyph = qs(modelBtn, '.ag-cs-model-glyph');
       let created = false;
       if (!glyph) {
-        glyph = document.createElement('span');
-        glyph.className = 'ag-cs-model-glyph';
-        glyph.setAttribute('data-icon', '1');
-        glyph.setAttribute('aria-hidden', 'true');
-        glyph.setAttribute('data-ag-no-i18n', '');
+        glyph = mk('span', 'ag-cs-model-glyph');
+        sa(glyph, 'data-icon', '1');
+        sa(glyph, 'aria-hidden', 'true');
+        sa(glyph, 'data-ag-no-i18n');
         created = true;
       }
-      if (modelBtn.firstChild !== glyph) {
-        modelBtn.insertBefore(glyph, modelBtn.firstChild);
-      }
+      if (modelBtn.firstChild !== glyph) modelBtn.insertBefore(glyph, modelBtn.firstChild);
       const isMono = readRootAccentTone() === 'mono';
       const monoStr = isMono ? '1' : '0';
-      const prevBrand = glyph.getAttribute('data-brand');
-      const prevTier = glyph.getAttribute('data-tier');
-      const prevMono = glyph.getAttribute('data-mono');
-      if (created || prevBrand !== info.brand || prevTier !== info.tier || prevMono !== monoStr) {
-        glyph.setAttribute('data-brand', info.brand);
-        glyph.setAttribute('data-tier', info.tier);
-        glyph.setAttribute('data-mono', monoStr);
+      const prevMono = ga(glyph, 'data-mono');
+      if (created || ga(glyph, 'data-brand') !== info.brand || ga(glyph, 'data-tier') !== info.tier || prevMono !== monoStr) {
+        sa(glyph, 'data-brand', info.brand);
+        sa(glyph, 'data-tier', info.tier);
+        sa(glyph, 'data-mono', monoStr);
         glyph.innerHTML = buildModelGlyphInnerSvg(info.brand, info.tier, isMono);
-        if (!created && prevMono === monoStr && !motionReduced() && typeof requestAnimationFrame === 'function') {
-          glyph.classList.remove('is-pulsing');
-          requestAnimationFrame(() => {
-            if (glyph.isConnected) glyph.classList.add('is-pulsing');
-          });
+        if (!created && prevMono === monoStr && !motionReduced()) {
+          glyph[K_CL].remove('is-pulsing');
+          rAF(() => { if (glyph[K_IC]) glyph[K_CL].add('is-pulsing'); });
         }
       }
       return info;
-    }
+    };
 
-    function buildPanelRowGlyphSvg(brand, tier, isSelected, isMono = false) {
+    const buildPanelRowGlyphSvg = (brand, tier, isSelected, isMono = false) => {
       if (brand === 'antigravity') {
         return renderSparkSvg(15, isSelected ? tier || 'auto' : 'low', !isSelected || isMono, 'ag-cs-model-glyph-svg');
       }
-      const d = BRAND_PATHS[brand] || BRAND_PATHS.gemini;
       const fillAttr = isSelected && !isMono
         ? 'style="fill:var(--glyph-color-hi);fill-opacity:1"'
-        : isSelected
-        ? 'fill="currentColor" fill-opacity="0.95"'
-        : 'fill="currentColor" fill-opacity="0.72"';
-      return `<svg class="ag-cs-model-glyph-svg" width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="${d}" ${fillAttr} fill-rule="evenodd"/></svg>`;
-    }
+        : `fill="currentColor" fill-opacity="${isSelected ? '0.95' : '0.72'}"`;
+      return svgW('ag-cs-model-glyph-svg', 15, '0 0 24 24', `<path d="${BRAND_PATHS[brand] || BRAND_PATHS.gemini}" ${fillAttr} fill-rule="evenodd"/>`);
+    };
 
-    function clearPanelRowGlyphs(rootNode = document) {
-      rootNode?.querySelectorAll?.('.ag-cs-panel-row-glyph').forEach((n) => n.remove());
-    }
+    const clearPanelRowGlyphs = (rootNode = docOf()) => {
+      qa(rootNode, '.ag-cs-panel-row-glyph').forEach((n) => n.remove());
+    };
 
-    function isPanelRowSelected(row) {
+    const isPanelRowSelected = (row) => {
       if (!row) return false;
-      if (
-        row.getAttribute?.('data-selected') === 'true' ||
-        row.getAttribute?.('aria-checked') === 'true' ||
-        row.getAttribute?.('data-state') === 'checked'
-      ) {
-        return true;
-      }
-      if (row.hasAttribute?.('data-ces-model-selected')) {
-        return row.getAttribute('data-ces-model-selected') === 'true';
-      }
-      return Boolean(
-        row.classList?.contains?.('text-foreground') &&
-          !row.classList?.contains?.('text-secondary-foreground')
-      );
-    }
+      if (ga(row, 'data-selected') === 'true' || ga(row, 'aria-checked') === 'true' || ga(row, 'data-state') === 'checked') return true;
+      if (ha(row, 'data-ces-model-selected')) return ga(row, 'data-ces-model-selected') === 'true';
+      return clHas(row, 'text-foreground') && !clHas(row, 'text-secondary-foreground');
+    };
 
-    function syncPanelRowGlyphs(panel) {
+    const syncPanelRowGlyphs = (panel) => {
       if (!panel) return;
-      const rows = panel.querySelectorAll('[role="menuitem"], [role="option"], button');
-      for (const row of rows) {
-        if (row.closest?.('.ces-ag-section, [data-testid="orchestrator-effort-bar"]')) continue;
-        if (row.parentElement?.closest?.('[role="menuitem"], [role="option"], button')) continue;
+      for (const row of qa(panel, '[role="menuitem"], [role="option"], button')) {
+        if (cl(row, '.ces-ag-section, [data-testid="orchestrator-effort-bar"]') || cl(row[K_PE], '[role="menuitem"], [role="option"], button')) continue;
         const label = readButtonLabelWithoutGlyph(row);
         if (!PANEL_MODEL_ROW_RE.test(label)) {
           clearPanelRowGlyphs(row);
@@ -301,28 +326,27 @@
         let firstChildEl = null;
         if (row.children) {
           for (const ch of row.children) {
-            if (ch.classList && ch.classList.contains('ag-cs-model-glyph')) continue;
+            if (clHas(ch, 'ag-cs-model-glyph')) continue;
             firstChildEl = ch;
             break;
           }
         }
         const targetParent =
           firstChildEl &&
-          (firstChildEl.querySelector?.('[data-testid="model-selector-effort-group"]') ||
+          (qs(firstChildEl, '[data-testid="model-selector-effort-group"]') ||
             /\bflex\b|\bitems-center\b/.test(String(firstChildEl.className || '')))
             ? firstChildEl
             : row;
 
-        let glyph = row.querySelector('.ag-cs-panel-row-glyph');
+        let glyph = qs(row, '.ag-cs-panel-row-glyph');
         let created = false;
         if (!glyph) {
-          glyph = document.createElement('span');
-          glyph.className = 'ag-cs-model-glyph ag-cs-panel-row-glyph';
-          glyph.setAttribute('data-ag-no-i18n', '');
-          glyph.setAttribute('aria-hidden', 'true');
+          glyph = mk('span', 'ag-cs-model-glyph ag-cs-panel-row-glyph');
+          sa(glyph, 'data-ag-no-i18n');
+          sa(glyph, 'aria-hidden', 'true');
           created = true;
         }
-        if (glyph.parentElement !== targetParent || targetParent.firstChild !== glyph) {
+        if (glyph[K_PE] !== targetParent || targetParent.firstChild !== glyph) {
           targetParent.insertBefore(glyph, targetParent.firstChild);
         }
 
@@ -331,66 +355,63 @@
         const monoStr = isMono ? '1' : '0';
         if (
           created ||
-          glyph.getAttribute('data-brand') !== info.brand ||
-          glyph.getAttribute('data-tier') !== info.tier ||
-          glyph.getAttribute('data-selected') !== selStr ||
-          glyph.getAttribute('data-mono') !== monoStr
+          ga(glyph, 'data-brand') !== info.brand ||
+          ga(glyph, 'data-tier') !== info.tier ||
+          ga(glyph, 'data-selected') !== selStr ||
+          ga(glyph, 'data-mono') !== monoStr
         ) {
-          glyph.setAttribute('data-brand', info.brand);
-          glyph.setAttribute('data-tier', info.tier);
-          glyph.setAttribute('data-selected', selStr);
-          glyph.setAttribute('data-mono', monoStr);
+          sa(glyph, 'data-brand', info.brand);
+          sa(glyph, 'data-tier', info.tier);
+          sa(glyph, 'data-selected', selStr);
+          sa(glyph, 'data-mono', monoStr);
           glyph.innerHTML = buildPanelRowGlyphSvg(info.brand, info.tier, isSelected, isMono);
           if (isSelected) {
-            glyph.style.setProperty('opacity', '1');
-            if (info.brand === 'openai' || isMono) glyph.style.setProperty('filter', 'none');
-            else glyph.style.setProperty('filter', 'drop-shadow(0 0 3px var(--glyph-glow))');
+            sp(glyph, 'opacity', '1');
+            sp(glyph, 'filter', info.brand === 'openai' || isMono ? 'none' : 'drop-shadow(0 0 3px var(--glyph-glow))');
           } else {
-            glyph.style.setProperty('filter', 'none');
-            glyph.style.setProperty('opacity', '0.78');
+            sp(glyph, 'filter', 'none');
+            sp(glyph, 'opacity', '0.78');
           }
         }
       }
-    }
+    };
 
-    function detachSliderWake() {
-      if (crystalMount.wakeTrk && crystalMount.wakeFn) {
-        try { crystalMount.wakeTrk.removeEventListener('pointerdown', crystalMount.wakeFn); } catch {}
+    const detachSliderWake = () => {
+      if (mWakeTrk && mWakeFn) {
+        try { mWakeTrk.removeEventListener('pointerdown', mWakeFn); } catch {}
       }
-      crystalMount.wakeTrk = null;
-      crystalMount.wakeFn = null;
-    }
+      mWakeTrk = mWakeFn = null;
+    };
 
-    function clearSliderPrismOverlay(panel) {
+    const EFF_ROW_SEL = '.ces-ag-effort-row:not([data-testid="orchestrator-effort-bar"])';
+    const ORCH_CV_SEL = 'canvas[data-orch-crystal-canvas="true"]';
+
+    const clearSliderPrismOverlay = (panel) => {
       detachSliderWake();
       if (!panel) return;
-      panel.querySelectorAll('.ces-ag-effort-row[data-ag-orch-p]').forEach((row) => {
-        row.removeAttribute('data-ag-orch-p');
-        const trk = row.querySelector('.ces-track');
+      qa(panel, '.ces-ag-effort-row[data-ag-orch-p]').forEach((row) => {
+        ra(row, 'data-ag-orch-p');
+        const trk = qs(row, '.ces-track');
         if (trk) {
-          trk.classList.remove('ag-cs-orch-track');
-          trk.querySelectorAll('canvas[data-orch-crystal-canvas="true"]').forEach((c) => c.remove());
-          const knob = trk.querySelector('.ces-knob');
+          trk[K_CL].remove('ag-cs-orch-track');
+          qa(trk, ORCH_CV_SEL).forEach((c) => c.remove());
+          const knob = qs(trk, '.ces-knob');
           if (knob) {
             knob.style.removeProperty('--knob-px');
             knob.style.removeProperty('--knob-py');
           }
         }
       });
-    }
+    };
 
-    function readTrackFillRatio(trk) {
+    const readTrackFillRatio = (trk) => {
       if (!trk) return 1;
-      const w = trk.clientWidth || (typeof trk.getBoundingClientRect === 'function' ? trk.getBoundingClientRect().width : 0) || 220;
-      const raw = trk.style && typeof trk.style.getPropertyValue === 'function'
-        ? trk.style.getPropertyValue('--ces-fill').trim()
-        : '';
+      const w = trk.clientWidth || rc(trk)?.width || 220;
+      const raw = trk.style && typeof trk.style.getPropertyValue === 'function' ? trk.style.getPropertyValue('--ces-fill').trim() : '';
       if (raw && w > 4) {
         const mCalc = raw.match(/calc\(\s*([0-9.]+)px\s*\+\s*\(100%\s*-\s*([0-9.]+)px\)\s*\*\s*([0-9.eE+-]+)\s*\)/);
         if (mCalc) {
-          const r = parseFloat(mCalc[1]);
-          const span = parseFloat(mCalc[2]);
-          const p = parseFloat(mCalc[3]);
+          const r = parseFloat(mCalc[1]), span = parseFloat(mCalc[2]), p = parseFloat(mCalc[3]);
           if (Number.isFinite(r) && Number.isFinite(span) && Number.isFinite(p)) {
             return Math.max(0, Math.min(1, (r + (w - span) * p) / w));
           }
@@ -398,292 +419,238 @@
         const px = parseFloat(raw);
         if (Number.isFinite(px)) return Math.max(0, Math.min(1, px / w));
       }
-      const knob = typeof trk.querySelector === 'function' ? trk.querySelector('.ces-knob') : null;
+      const knob = qs(trk, '.ces-knob');
       if (knob && typeof knob.offsetLeft === 'number' && knob.offsetLeft > 0 && w > 4) {
         return Math.max(0, Math.min(1, knob.offsetLeft / w));
       }
       if (typeof trk.getAttribute === 'function' && w > 4) {
-        const maxV = parseFloat(trk.getAttribute('aria-valuemax'));
-        const nowV = parseFloat(trk.getAttribute('aria-valuenow'));
+        const maxV = parseFloat(ga(trk, 'aria-valuemax')), nowV = parseFloat(ga(trk, 'aria-valuenow'));
         if (Number.isFinite(maxV) && maxV > 0 && Number.isFinite(nowV)) {
           return Math.max(0, Math.min(1, (14 + (w - 28) * (nowV / maxV)) / w));
         }
       }
       return 1;
-    }
+    };
 
     let knobPrismHot = false;
-    function syncKnobPrismPointer(clientX, clientY) {
-      const trk = crystalMount.hideLock ? crystalMount.track : null;
-      const knob = trk && trk.isConnected !== false ? trk.querySelector('.ces-knob') : null;
+    const syncKnobPrismPointer = (clientX, clientY) => {
+      const trk = mHideLock ? mTrk : null;
+      const knob = trk && trk[K_IC] !== false ? qs(trk, '.ces-knob') : null;
       if (!knob) {
         knobPrismHot = false;
         return;
       }
-      const off = motionReduced() || readRootAmbientFloat() <= 0.001 || !(clientX > -1000 && clientY > -1000);
-      if (off) {
+      if (motionReduced() || readRootAmbientFloat() <= 0.001 || !(clientX > -1000 && clientY > -1000)) {
         if (knobPrismHot) {
-          knob.style.setProperty('--knob-px', '-9999px');
-          knob.style.setProperty('--knob-py', '-9999px');
+          sp(knob, '--knob-px', '-9999px');
+          sp(knob, '--knob-py', '-9999px');
           knobPrismHot = false;
         }
         return;
       }
-      const rect = typeof knob.getBoundingClientRect === 'function' ? knob.getBoundingClientRect() : null;
+      const rect = rc(knob);
       if (!rect || rect.width < 4) return;
-      const lx = clientX - rect.left;
-      const ly = clientY - rect.top;
-      const dist = Math.hypot(lx - rect.width * 0.5, ly - rect.height * 0.5);
-      if (dist <= 56) {
-        knob.style.setProperty('--knob-px', `${lx.toFixed(1)}px`);
-        knob.style.setProperty('--knob-py', `${ly.toFixed(1)}px`);
+      const lx = clientX - rect.left, ly = clientY - rect.top;
+      if (Math.hypot(lx - rect.width * 0.5, ly - rect.height * 0.5) <= 56) {
+        sp(knob, '--knob-px', `${lx.toFixed(1)}px`);
+        sp(knob, '--knob-py', `${ly.toFixed(1)}px`);
         knobPrismHot = true;
       } else if (knobPrismHot) {
-        knob.style.setProperty('--knob-px', '-9999px');
-        knob.style.setProperty('--knob-py', '-9999px');
+        sp(knob, '--knob-px', '-9999px');
+        sp(knob, '--knob-py', '-9999px');
         knobPrismHot = false;
       }
-    }
+    };
 
     const cancelMountRaf = () => {
-      if (crystalMount.mountRafId) {
-        cancelAnimationFrame(crystalMount.mountRafId);
-        crystalMount.mountRafId = 0;
+      if (mMountRaf) {
+        cAF(mMountRaf);
+        mMountRaf = 0;
       }
     };
     const cancelStepRaf = () => {
-      if (crystalMount.rafId) {
-        cancelAnimationFrame(crystalMount.rafId);
-        crystalMount.rafId = 0;
+      if (mRaf) {
+        cAF(mRaf);
+        mRaf = 0;
       }
     };
 
-    function teardownCrystalMount() {
+    const teardownCrystalMount = () => {
       detachSliderWake();
       cancelMountRaf();
       cancelStepRaf();
-      if (crystalMount.inst && typeof crystalMount.inst.dispose === 'function') {
-        try {
-          crystalMount.inst.dispose();
-        } catch {}
-      }
-      if (crystalMount.panel && crystalMount.panel.isConnected) {
-        clearPanelRowGlyphs(crystalMount.panel);
-        clearSliderPrismOverlay(crystalMount.panel);
-        crystalMount.panel.removeAttribute('data-ag-cs-orch-active');
-        crystalMount.panel
-          .querySelectorAll('.ces-ag-effort-row:not([data-testid="orchestrator-effort-bar"])')
-          .forEach((row) => {
-            row.removeAttribute('data-row-hidden');
-            row.removeAttribute('aria-hidden');
-          });
+      try { mInst?.dispose?.(); } catch {}
+      if (mPanel?.[K_IC]) {
+        clearPanelRowGlyphs(mPanel);
+        clearSliderPrismOverlay(mPanel);
+        ra(mPanel, 'data-ag-cs-orch-active');
+        qa(mPanel, EFF_ROW_SEL).forEach((row) => {
+          ra(row, 'data-row-hidden');
+          ra(row, 'aria-hidden');
+        });
       }
       clearPanelRowGlyphs();
-      if (crystalMount.bar && crystalMount.bar.parentElement) {
-        crystalMount.bar.remove();
-      }
-      crystalMount = { panel: null, bar: null, track: null, canvas: null, inst: null, rafId: 0, mountRafId: 0, lastStepMs: 0, wasOrch: false, hideLock: false };
-    }
+      syncModelMenuAttrs(null);
+      if (mBar?.[K_PE]) mBar.remove();
+      mPanel = mOv = mBar = mTrk = mCv = mInst = null;
+      mRaf = mMountRaf = mLastMs = mMountedAt = 0;
+      mWasOrch = mHideLock = false;
+    };
 
-    function detectPanelIsOrchestrator(panel, fallbackModelInfo) {
-      if (fallbackModelInfo && typeof fallbackModelInfo.isOrchestrator === 'boolean') {
-        return fallbackModelInfo.isOrchestrator;
-      }
+    const detectPanelIsOrchestrator = (panel, fallbackModelInfo) => {
+      if (fallbackModelInfo && typeof fallbackModelInfo.isOrchestrator === 'boolean') return fallbackModelInfo.isOrchestrator;
       if (panel) {
-        let sel = panel.querySelector(
-          '[data-selected="true"], [aria-checked="true"], [data-state="checked"], [data-ces-model-selected="true"]'
-        );
+        let sel = qs(panel, '[data-selected="true"], [aria-checked="true"], [data-state="checked"], [data-ces-model-selected="true"]');
         if (!sel) {
-          for (const r of panel.querySelectorAll('[role="menuitem"], [role="option"], button')) {
-            if (isPanelRowSelected(r)) {
-              sel = r;
-              break;
-            }
+          for (const r of qa(panel, '[role="menuitem"], [role="option"], button')) {
+            if (isPanelRowSelected(r)) { sel = r; break; }
           }
         }
-        if (sel) {
-          const txt = readButtonLabelWithoutGlyph(sel);
-          return /\borchestrator\b|编排/i.test(txt);
-        }
+        if (sel) return /\borchestrator\b|编排|调度器/i.test(stripTranslatedEffortSuffix(readButtonLabelWithoutGlyph(sel)));
       }
       return false;
-    }
+    };
 
-    function stepCrystalLoop(now) {
-      crystalMount.rafId = 0;
-      if (isDestroyed() || !crystalMount.inst || !crystalMount.panel || !crystalMount.panel.isConnected || !crystalMount.wasOrch) {
+    const stepCrystalLoop = (now) => {
+      mRaf = 0;
+      if (isDestroyed() || !mInst || !mPanel?.[K_IC] || !mWasOrch) return;
+      const minGap = getMinFrameGapMs();
+      if (minGap > 0 && mLastMs > 0 && now - mLastMs < minGap) {
+        if (!motionReduced() && !docOf()?.hidden) mRaf = rAF(stepCrystalLoop);
         return;
       }
-      const minGap = getMinFrameGapMs();
-      if (minGap > 0 && crystalMount.lastStepMs > 0 && now - crystalMount.lastStepMs < minGap) {
-        if (!motionReduced() && !document.hidden) {
-          crystalMount.rafId = requestAnimationFrame(stepCrystalLoop);
+      const dt = mLastMs > 0 ? Math.min(0.05, Math.max(0.002, (now - mLastMs) / 1000)) : 0.016;
+      mLastMs = now;
+      const ptrNow = getLastPointerPos ? getLastPointerPos() : null;
+      if (ptrNow) syncKnobPrismPointer(ptrNow.x, ptrNow.y);
+      try { mInst.step(dt); } catch {}
+      if (!mInst.isIdle?.() && !docOf()?.hidden) mRaf = rAF(stepCrystalLoop);
+    };
+
+    const syncModelSelectorPanel = (primaryModelInfo) => {
+      const panel = qs(docOf(), '[data-testid="model-selector-panel"]');
+      syncModelMenuAttrs(panel);
+      if (!isComposerRestyleEnabled() || !panel) {
+        clearPanelRowGlyphs();
+        if (mPanel || mBar) {
+          teardownCrystalMount();
+          if (panel) syncModelMenuAttrs(panel);
         }
         return;
       }
-      const dt = crystalMount.lastStepMs > 0 ? Math.min(0.05, Math.max(0.002, (now - crystalMount.lastStepMs) / 1000)) : 0.016;
-      crystalMount.lastStepMs = now;
-      const ptrNow = getLastPointerPos ? getLastPointerPos() : null;
-      if (ptrNow) syncKnobPrismPointer(ptrNow.x, ptrNow.y);
-      try {
-        crystalMount.inst.step(dt);
-      } catch {}
-      const instIdle = typeof crystalMount.inst.isIdle === 'function' && Boolean(crystalMount.inst.isIdle());
-      if (!instIdle && !document.hidden) {
-        crystalMount.rafId = requestAnimationFrame(stepCrystalLoop);
-      }
-    }
-
-    function syncModelSelectorPanel(primaryModelInfo) {
-      if (!isComposerRestyleEnabled()) {
-        clearPanelRowGlyphs();
-        if (crystalMount.panel || crystalMount.bar) teardownCrystalMount();
-        return;
-      }
-      const panel = document.querySelector('[data-testid="model-selector-panel"]');
-      if (!panel) {
-        clearPanelRowGlyphs();
-        if (crystalMount.panel || crystalMount.bar) teardownCrystalMount();
-        return;
-      }
-      const modelOverlay = panel.closest?.('.agy-overlay');
-      if (modelOverlay) setAttrIfChanged(modelOverlay, 'data-ag-cs-model-overlay', '1');
-      if (crystalMount.panel && crystalMount.panel !== panel) {
+      if (mPanel && mPanel !== panel) {
         teardownCrystalMount();
+        syncModelMenuAttrs(panel);
       }
 
       const isOrch = detectPanelIsOrchestrator(panel, primaryModelInfo);
-      const isOrchTunable = isOrch && panel.getAttribute('data-ces-orch-tunable') === 'true';
+      const isOrchTunable = isOrch && ga(panel, 'data-ces-orch-tunable') === 'true';
       syncPanelRowGlyphs(panel);
-      const cesSec = panel.querySelector('.ces-ag-section');
+      const cesSec = qs(panel, '.ces-ag-section');
       if (cesSec) {
-        if (cesSec.getAttribute('data-effort-slot') !== 'true') {
-          cesSec.setAttribute('data-effort-slot', 'true');
-        }
-        if (cesSec.querySelector('[role="separator"]')) {
-          setAttrIfChanged(cesSec, 'data-has-sep', '1');
-        } else if (cesSec.hasAttribute('data-has-sep')) {
-          cesSec.removeAttribute('data-has-sep');
-        }
+        if (ga(cesSec, 'data-effort-slot') !== 'true') sa(cesSec, 'data-effort-slot', 'true');
+        if (qs(cesSec, '[role="separator"]')) setAttrIfChanged(cesSec, 'data-has-sep', '1');
+        else if (ha(cesSec, 'data-has-sep')) ra(cesSec, 'data-has-sep');
       }
       const slot = cesSec || panel;
 
-      let bar = panel.querySelector('[data-testid="orchestrator-effort-bar"]');
+      let bar = qs(panel, '[data-testid="orchestrator-effort-bar"]');
       if (!bar) {
-        bar = document.createElement('div');
-        bar.className = 'ces-ag-effort-row ag-cs-orch-row';
-        bar.setAttribute('data-testid', 'orchestrator-effort-bar');
-        bar.setAttribute('data-ag-no-i18n', '');
+        bar = mk('div', 'ces-ag-effort-row ag-cs-orch-row');
+        sa(bar, 'data-testid', 'orchestrator-effort-bar');
+        sa(bar, 'data-ag-no-i18n');
 
-        const head = document.createElement('div');
-        head.className = 'ces-ag-effort-head ag-cs-orch-head';
-        const title = document.createElement('span');
-        title.className = 'ces-ag-effort-title';
-        title.textContent = isZh() ? '推理等级' : 'Reasoning Effort';
-        const val = document.createElement('span');
-        val.className = 'ces-ag-effort-value ag-cs-orch-value';
-        val.textContent = 'Auto';
-        head.appendChild(title);
-        head.appendChild(val);
+        const head = mk('div', 'ces-ag-effort-head ag-cs-orch-head');
+        head.appendChild(mk('span', 'ces-ag-effort-title', isZh() ? '推理等级' : 'Reasoning Effort'));
+        head.appendChild(mk('span', 'ces-ag-effort-value ag-cs-orch-value', 'Auto'));
 
-        const inline = document.createElement('div');
-        inline.className = 'ces-inline';
-        const track = document.createElement('div');
-        track.className = 'ag-cs-orch-track';
-        track.setAttribute('role', 'status');
-        track.setAttribute('aria-label', 'Orchestrator Auto');
-        const cv = document.createElement('canvas');
-        cv.className = 'ag-cs-orch-canvas';
-        cv.setAttribute('data-orch-crystal-canvas', 'true');
-        cv.setAttribute('aria-hidden', 'true');
+        const inline = mk('div', 'ces-inline');
+        const track = mk('div', 'ag-cs-orch-track');
+        sa(track, 'role', 'status');
+        sa(track, 'aria-label', 'Orchestrator Auto');
+        const cv = mk('canvas', 'ag-cs-orch-canvas');
+        sa(cv, 'data-orch-crystal-canvas', 'true');
+        sa(cv, 'aria-hidden', 'true');
         track.appendChild(cv);
         inline.appendChild(track);
 
         bar.appendChild(head);
         bar.appendChild(inline);
         slot.appendChild(bar);
-      } else if (bar.parentElement !== slot) {
+      } else if (bar[K_PE] !== slot) {
         slot.appendChild(bar);
       }
 
-      const sRow = panel.querySelector('.ces-ag-effort-row:not([data-testid="orchestrator-effort-bar"])');
-      const sTrk = sRow && sRow.querySelector('.ces-track');
-      const useSP = Boolean(isOrch && isOrchTunable && sRow && sTrk);
-      const useAuto = Boolean(isOrch && !useSP);
+      const sRow = qs(panel, EFF_ROW_SEL);
+      const sTrk = sRow && qs(sRow, '.ces-track');
+      const useSP = !!(isOrch && isOrchTunable && sRow && sTrk);
+      const useAuto = !!(isOrch && !useSP);
 
-      let tTrk = bar.querySelector('.ag-cs-orch-track');
-      let tCv = bar.querySelector('canvas[data-orch-crystal-canvas="true"]');
+      let tTrk = qs(bar, '.ag-cs-orch-track');
+      let tCv = qs(bar, ORCH_CV_SEL);
       if (useSP) {
         setAttrIfChanged(sRow, 'data-ag-orch-p', '1');
-        sTrk.classList.add('ag-cs-orch-track');
-        let c = sTrk.querySelector('canvas[data-orch-crystal-canvas="true"]');
+        sTrk[K_CL].add('ag-cs-orch-track');
+        let c = qs(sTrk, ORCH_CV_SEL);
         if (!c) {
-          c = document.createElement('canvas');
-          c.className = 'ag-cs-orch-canvas';
-          c.setAttribute('data-orch-crystal-canvas', 'true');
-          c.setAttribute('aria-hidden', 'true');
+          c = mk('canvas', 'ag-cs-orch-canvas');
+          sa(c, 'data-orch-crystal-canvas', 'true');
+          sa(c, 'aria-hidden', 'true');
           sTrk.insertBefore(c, sTrk.firstChild);
         }
         tTrk = sTrk;
         tCv = c;
-        if (crystalMount.wakeTrk !== sTrk) {
+        if (mWakeTrk !== sTrk) {
           detachSliderWake();
           const onWake = (ev) => {
             if (ev && typeof ev.clientX === 'number') syncKnobPrismPointer(ev.clientX, ev.clientY);
-            if (!crystalMount.rafId && crystalMount.inst && !document.hidden) {
-              crystalMount.lastStepMs = performance.now();
-              crystalMount.rafId = requestAnimationFrame(stepCrystalLoop);
+            if (!mRaf && mInst && !docOf()?.hidden) {
+              mLastMs = performance.now();
+              mRaf = rAF(stepCrystalLoop);
             }
           };
           try { sTrk.addEventListener('pointerdown', onWake, { passive: true }); } catch {}
-          crystalMount.wakeTrk = sTrk;
-          crystalMount.wakeFn = onWake;
+          mWakeTrk = sTrk;
+          mWakeFn = onWake;
         }
       } else {
         clearSliderPrismOverlay(panel);
       }
 
-      if (crystalMount.inst && crystalMount.canvas && crystalMount.canvas !== tCv) {
+      if (mInst && mCv && mCv !== tCv) {
         cancelMountRaf();
         cancelStepRaf();
-        try { crystalMount.inst.dispose?.(); } catch {}
-        crystalMount.inst = null;
+        try { mInst.dispose?.(); } catch {}
+        mInst = null;
       }
 
-      crystalMount.panel = panel;
-      crystalMount.bar = bar;
-      crystalMount.track = tTrk;
-      crystalMount.canvas = tCv;
-      crystalMount.hideLock = useSP;
+      mPanel = panel;
+      mBar = bar;
+      mTrk = tTrk;
+      mCv = tCv;
+      mHideLock = useSP;
 
       if (useAuto) setAttrIfChanged(panel, 'data-ag-cs-orch-active', '1');
-      else panel.removeAttribute('data-ag-cs-orch-active');
+      else ra(panel, 'data-ag-cs-orch-active');
 
-      panel
-        .querySelectorAll('.ces-ag-effort-row:not([data-testid="orchestrator-effort-bar"])')
-        .forEach((row) => {
-          setAttrIfChanged(row, 'data-row-hidden', String(useAuto));
-          setAttrIfChanged(row, 'aria-hidden', String(useAuto));
-        });
+      qa(panel, EFF_ROW_SEL).forEach((row) => {
+        setAttrIfChanged(row, 'data-row-hidden', String(useAuto));
+        setAttrIfChanged(row, 'aria-hidden', String(useAuto));
+      });
 
-      const switchedIn = isOrch && !crystalMount.wasOrch;
-      crystalMount.wasOrch = isOrch;
+      const switchedIn = isOrch && !mWasOrch;
+      mWasOrch = isOrch;
       setAttrIfChanged(bar, 'data-row-hidden', String(!useAuto));
       setAttrIfChanged(bar, 'aria-hidden', String(!useAuto));
 
       if (isOrch) {
         const kickCrystal = () => {
-          if (isDestroyed() || !crystalMount.wasOrch || crystalMount.panel !== panel || !panel.isConnected || !crystalMount.canvas) return;
+          if (isDestroyed() || !mWasOrch || mPanel !== panel || !panel[K_IC] || !mCv) return;
           const reducedNow = motionReduced();
           const ambientNow = readRootAmbientFloat();
-          if (
-            !crystalMount.inst &&
-            crystalPrismCore &&
-            typeof crystalPrismCore.mountCrystalPrismBar === 'function' &&
-            canMountRealCanvas(crystalMount.canvas)
-          ) {
+          if (!mInst && crystalPrismCore?.mountCrystalPrismBar && canMountRealCanvas(mCv)) {
             try {
-              crystalMount.inst = crystalPrismCore.mountCrystalPrismBar(crystalMount.canvas, {
+              mInst = crystalPrismCore.mountCrystalPrismBar(mCv, {
                 reduceMotion: reducedNow,
                 getState: () => {
                   const dark = isDarkTheme();
@@ -693,47 +660,42 @@
                     ambientIntensity: readRootAmbientFloat(),
                     accentTone: resolveCrystalAccentMode(dark),
                     reduceMotion: motionReduced(),
-                    hideLock: Boolean(crystalMount.hideLock),
-                    fillRatio: crystalMount.hideLock ? readTrackFillRatio(crystalMount.track) : -1,
+                    hideLock: !!(mHideLock),
+                    fillRatio: mHideLock ? readTrackFillRatio(mTrk) : -1,
                   };
                 },
               });
             } catch {
-              crystalMount.inst = null;
+              mInst = null;
             }
           }
-          if (!crystalMount.inst) return;
-          if (typeof crystalMount.inst.setReduceMotion === 'function') {
-            crystalMount.inst.setReduceMotion(reducedNow);
-          }
+          if (!mInst) return;
+          mInst.setReduceMotion?.(reducedNow);
           const ptr = getLastPointerPos ? getLastPointerPos() : null;
           if (ptr && ptr.x > -1000) {
-            crystalMount.inst.setPointerClient(ptr.x, ptr.y);
+            mInst.setPointerClient(ptr.x, ptr.y);
             syncKnobPrismPointer(ptr.x, ptr.y);
           } else {
             syncKnobPrismPointer(-9999, -9999);
           }
-          if (switchedIn || !crystalMount.mountedAt) {
-            crystalMount.mountedAt = performance.now();
-            if (!reducedNow && ambientNow > 0.001 && typeof crystalMount.inst.wake === 'function') crystalMount.inst.wake();
+          if (switchedIn || !mMountedAt) {
+            mMountedAt = performance.now();
+            if (!reducedNow && ambientNow > 0.001) mInst.wake?.();
           }
-          try {
-            crystalMount.inst.step(0.016);
-          } catch {}
-          const instIdle = typeof crystalMount.inst.isIdle === 'function' && Boolean(crystalMount.inst.isIdle());
-          if (instIdle || document.hidden) {
+          try { mInst.step(0.016); } catch {}
+          if (mInst.isIdle?.() || docOf()?.hidden) {
             cancelStepRaf();
-          } else if (!crystalMount.rafId) {
-            crystalMount.lastStepMs = performance.now();
-            crystalMount.rafId = requestAnimationFrame(stepCrystalLoop);
+          } else if (!mRaf) {
+            mLastMs = performance.now();
+            mRaf = rAF(stepCrystalLoop);
           }
         };
-        if (crystalMount.inst) {
+        if (mInst) {
           kickCrystal();
-        } else if (!crystalMount.mountRafId) {
+        } else if (!mMountRaf) {
           if (typeof requestAnimationFrame === 'function') {
-            crystalMount.mountRafId = requestAnimationFrame(() => {
-              crystalMount.mountRafId = 0;
+            mMountRaf = requestAnimationFrame(() => {
+              mMountRaf = 0;
               kickCrystal();
             });
           } else {
@@ -744,10 +706,12 @@
         cancelMountRaf();
         cancelStepRaf();
       }
-    }
+    };
 
     return {
       readButtonLabelWithoutGlyph,
+      stripTranslatedEffortSuffix,
+      normalizeModelEffortLabel,
       parseModelLabelInfo,
       parseModelTriggerInfo,
       renderSparkSvg,
@@ -759,33 +723,25 @@
       teardownCrystalMount,
       syncModelSelectorPanel,
       getActiveCrystalTrack: () =>
-        crystalMount.track && crystalMount.wasOrch && crystalMount.track.isConnected !== false ? crystalMount.track : null,
+        mTrk && mWasOrch && mTrk[K_IC] !== false ? mTrk : null,
       setCrystalPointerClient: (x, y) => {
         syncKnobPrismPointer(x, y);
-        if (crystalMount.inst && typeof crystalMount.inst.setPointerClient === 'function') {
-          crystalMount.inst.setPointerClient(x, y);
-          if (
-            !crystalMount.rafId &&
-            crystalMount.wasOrch &&
-            crystalMount.panel &&
-            crystalMount.panel.isConnected !== false &&
-            !motionReduced() &&
-            !document.hidden
-          ) {
-            const stillIdle = typeof crystalMount.inst.isIdle === 'function' && Boolean(crystalMount.inst.isIdle());
-            if (!stillIdle) {
-              crystalMount.lastStepMs = performance.now();
-              crystalMount.rafId = requestAnimationFrame(stepCrystalLoop);
-            }
+        if (mInst?.setPointerClient) {
+          mInst.setPointerClient(x, y);
+          if (!mRaf && mWasOrch && mPanel?.[K_IC] !== false && !motionReduced() && !docOf()?.hidden && !mInst.isIdle?.()) {
+            mLastMs = performance.now();
+            mRaf = rAF(stepCrystalLoop);
           }
         }
       },
     };
-  }
+  };
 
   const api = {
     BRAND_PATHS,
     readButtonLabelWithoutGlyph,
+    stripTranslatedEffortSuffix,
+    normalizeModelEffortLabel,
     parseModelLabelInfo,
     createModelGlyphCrystalController,
   };

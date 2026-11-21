@@ -19,9 +19,12 @@
   const THROTTLE_MS = 120;
   const MENU_THROTTLE_MS = 32;
 
-  function resolveUpstreamLib(win) {
-    if (win && win.AntigravityCodexEffortSlider) return win.AntigravityCodexEffortSlider;
-    if (globalRoot && globalRoot.AntigravityCodexEffortSlider) return globalRoot.AntigravityCodexEffortSlider;
+  const ga = (e, k) => e?.getAttribute?.(k), sa = (e, k, v) => e?.setAttribute?.(k, v), ra = (e, k) => e?.removeAttribute?.(k);
+  const qs = (e, s) => e?.querySelector?.(s), qa = (e, s) => e?.querySelectorAll?.(s) || [];
+
+  function resLib(win) {
+    if (win?.AntigravityCodexEffortSlider) return win.AntigravityCodexEffortSlider;
+    if (globalRoot?.AntigravityCodexEffortSlider) return globalRoot.AntigravityCodexEffortSlider;
     if (typeof require === 'function') {
       try {
         globalRoot.__agCodexEffortSliderDisableAutoBoot = true;
@@ -32,17 +35,62 @@
     return null;
   }
 
-  function isModelMenuOpen(doc) {
-    if (!doc || typeof doc.querySelector !== 'function') return false;
-    return Boolean(
-      doc.querySelector(
-        '[data-testid="model-selector-panel"], .ces-menu-section, [data-ces-effort-row="true"], [role="dialog"] [data-ces-settings]'
-      )
-    );
-  }
+  const isMenu = (doc) => Boolean(qs(doc, '[data-testid="model-selector-panel"], .ces-menu-section, [data-ces-effort-row="true"], [role="dialog"] [data-ces-settings]'));
 
   const IGNORED_CHAT_SEL =
-    '[data-testid="autoscroll-viewport"],[data-testid="planner-response-text"],[data-testid="user-message-bubble"],aside,[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-crab,.ag-cs-conv-aura-host,#ag-pulse-status-bar,#ag-prism-pulse-bar,[data-ag-prism-pulse-bar="true"],.ag-cs-panel-row-glyph,[data-testid="orchestrator-effort-bar"],.ag-cs-smooth-caret,.ag-anim-icon';
+    '[data-testid="autoscroll-viewport"],[data-testid="planner-response-text"],[data-testid="agent-response"],[data-markdown-root],[data-testid="user-message-bubble"],aside,[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-crab,.ag-cs-conv-aura-host,#ag-pulse-status-bar,#ag-prism-pulse-bar,[data-ag-prism-pulse-bar="true"],.ag-cs-panel-row-glyph,[data-testid="orchestrator-effort-bar"],.ag-cs-smooth-caret,.ag-anim-icon,[data-agy-hans-ui],#agy-theme-switcher,#agy-theme-menu,#antigravity-quota-widget,#antigravity-translation-audit';
+
+  const EFF_MAP = Object.create(null);
+  for (const g of 'xhigh:xhigh|extra|超高|极高|特高|超高思考;high:high|高|高思考|高推理|高强度;medium:medium|med|中|中等|中思考|中等思考|中推理;low:low|低|低思考|低推理;minimal:minimal|极低|最小|最低;max:max|最高|最大;off:off|关闭|关;auto:auto|自动;thinking:thinking|深度思考|思考中|思考'.split(';')) {
+    const [k, vs] = g.split(':');
+    for (const v of vs.split('|')) EFF_MAP[v] = k;
+  }
+  const EFF_LABELS = { off: 'Off', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max', auto: 'Auto', thinking: 'Thinking' };
+  const NO_TR_ATTRS = [['translate', 'no'], ['data-no-translate', 'true'], ['data-ag-localization-skip', 'true'], ['data-agy-no-translate', 'true'], ['data-antigravity-zh-skip', '1']];
+
+  function normalizeEffortToken(raw) {
+    const s = String(raw || '').trim().replace(/^[(\uff08]+|[)\uff09]+$/g, '').trim().replace(/\s+thinking$/i, '').toLowerCase();
+    return EFF_MAP[s] || '';
+  }
+
+  function parseLocalizedModelLabel(raw) {
+    const s = String(raw || '').trim().replace(/^(?:Select model|选择模型)\s*[:：]\s*/i, '').trim();
+    if (!s) return null;
+    const m = /^(.*?)\s*[\(\uff08]([^()\uff08\uff09]+)[\)\uff09]\s*$/.exec(s);
+    const eff = m ? normalizeEffortToken(m[2]) : '';
+    if (!m || !eff) return { base: s, rawBase: s, effort: '', effortLabel: '', canonicalLabel: s, isThinking: false };
+    const rawBase = m[1].trim(), isThinking = eff === 'thinking', effortLabel = EFF_LABELS[eff] || m[2].trim();
+    return { base: isThinking ? `${rawBase} (Thinking)` : rawBase, rawBase, effort: eff, effortLabel, canonicalLabel: `${rawBase} (${effortLabel})`, isThinking };
+  }
+
+  function markOwnedNoTr(doc) {
+    for (const el of qa(doc, '.ces-ag-section, .ces-set')) {
+      if (ga(el, 'data-antigravity-zh-skip') === '1') continue;
+      for (const [k, v] of NO_TR_ATTRS) sa(el, k, v);
+    }
+  }
+
+  function syncBilingualDom(doc) {
+    const p = qs(doc, '[data-testid="model-selector-panel"]');
+    if (!p) return;
+    for (const g of qa(p, '[data-testid="model-selector-effort-group"]')) {
+      if (!ga(g, 'data-model-base')) {
+        const pr = parseLocalizedModelLabel(g.textContent);
+        if (pr?.rawBase && pr.effort && !pr.isThinking) sa(g, 'data-model-base', pr.rawBase);
+      }
+      const sib = g.nextElementSibling;
+      if (sib?.tagName === 'SPAN') {
+        const ek = normalizeEffortToken(sib.textContent);
+        if (ek && EFF_LABELS[ek] && sib.textContent.trim() !== EFF_LABELS[ek]) sa(sib, 'data-ces-eff-key', ek);
+      }
+    }
+    for (const it of qa(p, '[data-testid="model-selector-item"]')) {
+      if (!ga(it, 'data-model-label')) {
+        const pr = parseLocalizedModelLabel(it.textContent);
+        if (pr?.effort) sa(it, 'data-model-label', pr.canonicalLabel);
+      }
+    }
+  }
 
   function isIgnTarget(node) {
     if (!node) return false;
@@ -61,35 +109,26 @@
     return true;
   }
 
-  function touchesModel(records, doc, menuOpenCached) {
+  function touchesModel(records, doc, mOpen) {
     if (!Array.isArray(records) || records.length === 0) return true;
-    const menuOpen = typeof menuOpenCached === 'boolean' ? menuOpenCached : isModelMenuOpen(doc);
-    if (menuOpen) return true;
+    if (typeof mOpen === 'boolean' ? mOpen : isMenu(doc)) return true;
     for (let i = 0; i < records.length; i++) {
-      const rec = records[i];
-      const t = rec && rec.target;
+      const rec = records[i], t = rec && rec.target;
       if (t && isIgnTarget(t)) continue;
-      if (t && typeof t.getAttribute === 'function') {
-        const tid = t.getAttribute('data-testid') || '';
-        if (tid.includes('model-selector')) return true;
-        if (typeof t.closest === 'function' && t.closest('[data-testid="model-selector-trigger"], [data-testid="model-selector-panel"], [role="menu"], [role="listbox"]')) {
-          return true;
-        }
+      const el = t && (t.nodeType === 1 ? t : t.parentElement);
+      if (el && typeof el.getAttribute === 'function') {
+        if ((el.getAttribute('data-testid') || '').includes('model-selector')) return true;
+        if (el.closest?.('[data-testid="model-selector-trigger"], [data-testid="model-selector-panel"], [role="menu"], [role="listbox"]')) return true;
       }
       const added = rec && rec.addedNodes;
       if (added && added.length) {
         for (let j = 0; j < added.length; j++) {
           const n = added[j];
           if (!n || n.nodeType !== 1) continue;
-          const tid = n.getAttribute?.('data-testid') || '';
-          if (tid.includes('model-selector')) return true;
+          if ((n.getAttribute?.('data-testid') || '').includes('model-selector')) return true;
           const role = n.getAttribute?.('role') || '';
           if (role === 'menu' || role === 'listbox' || role === 'dialog') return true;
-          if (
-            (n.tagName === 'DIV' || n.tagName === 'BUTTON') &&
-            typeof n.querySelector === 'function' &&
-            n.querySelector('[data-testid="model-selector-panel"], [data-testid="model-selector-trigger"]')
-          ) {
+          if ((n.tagName === 'DIV' || n.tagName === 'BUTTON') && n.querySelector?.('[data-testid="model-selector-panel"], [data-testid="model-selector-trigger"]')) {
             return true;
           }
         }
@@ -100,114 +139,88 @@
 
   function mkThrottledMO(BaseMO, doc, stats) {
     if (typeof BaseMO !== 'function') return null;
-    return function ThrottledPrismMutationObserver(callback) {
-      let timer = null;
-      let lastRunAt = 0;
-      let queuedRecords = [];
-      let disconnected = false;
-      let wasMenuOpen = false;
-
-      const flush = (forceCloseFlush) => {
-        timer = null;
-        if (disconnected) return;
-        const batch = queuedRecords;
-        queuedRecords = [];
-        const menuOpen = isModelMenuOpen(doc);
-        const closingNow = Boolean(forceCloseFlush || (wasMenuOpen && !menuOpen));
-        if (!closingNow && !touchesModel(batch, doc, menuOpen)) {
-          wasMenuOpen = menuOpen;
-          stats.skippedIrrelevant += 1;
-          return;
-        }
-        wasMenuOpen = menuOpen;
-        lastRunAt = Date.now();
-        stats.executedScans += 1;
-        callback(batch, wrapper);
+    return function TMO(cb) {
+      let tm = null, closeTm = null, lastAt = 0, q = [], disc = false, wasOpen = false, curTrig = null;
+      const syncTrig = () => {
+        if (disc) return;
+        const tr = qs(doc, '[data-testid="model-selector-trigger"],button[aria-label^="Select model"]');
+        if (!tr || tr === curTrig) return;
+        curTrig = tr;
+        try { inner.observe(tr, { characterData: true, subtree: true }); } catch {}
       };
-
-      const inner = new BaseMO((records) => {
-        if (disconnected) return;
+      const flush = (fSync) => {
+        tm = null;
+        if (disc) return;
+        const batch = q;
+        q = [];
+        const open = isMenu(doc), closed = wasOpen && !open;
+        if (!Boolean(fSync || closed) && !touchesModel(batch, doc, open)) {
+          wasOpen = open;
+          stats.skippedIrrelevant += 1;
+          return;
+        }
+        wasOpen = open;
+        lastAt = Date.now();
+        stats.executedScans += 1;
+        syncBilingualDom(doc);
+        cb(batch, wrap);
+        markOwnedNoTr(doc);
+        syncTrig();
+        if (closed) {
+          if (closeTm !== null) clearTimeout(closeTm);
+          closeTm = setTimeout(() => { closeTm = null; if (!disc) flush(true); }, 48);
+          closeTm?.unref?.();
+        }
+      };
+      const inner = new BaseMO((recs) => {
+        if (disc) return;
         stats.rawMutations += 1;
-        if (allIgn(records)) {
-          stats.skippedIrrelevant += 1;
-          return;
-        }
-        const menuNow = isModelMenuOpen(doc);
-        const justClosed = wasMenuOpen && !menuNow;
-        if (!justClosed && !touchesModel(records, doc, menuNow)) {
-          stats.skippedIrrelevant += 1;
-          return;
-        }
-        if (Array.isArray(records)) {
-          for (let i = 0; i < records.length && queuedRecords.length < 48; i++) {
-            queuedRecords.push(records[i]);
-          }
-        }
-        const elapsed = Date.now() - lastRunAt;
-        const winMs = menuNow ? MENU_THROTTLE_MS : THROTTLE_MS;
-        if (justClosed || (menuNow && !wasMenuOpen) || (elapsed >= winMs && timer === null)) {
-          if (timer !== null) {
-            clearTimeout(timer);
-            timer = null;
-          }
-          flush(justClosed);
-        } else if (timer === null) {
-          timer = setTimeout(() => flush(false), Math.max(16, winMs - elapsed));
-          if (timer && typeof timer.unref === 'function') timer.unref();
+        if (allIgn(recs)) { stats.skippedIrrelevant += 1; return; }
+        const open = isMenu(doc), closed = wasOpen && !open;
+        if (!closed && !touchesModel(recs, doc, open)) { stats.skippedIrrelevant += 1; return; }
+        if (Array.isArray(recs)) for (let i = 0; i < recs.length && q.length < 48; i++) q.push(recs[i]);
+        const el = Date.now() - lastAt, wMs = open ? MENU_THROTTLE_MS : THROTTLE_MS;
+        if (closed || (open && !wasOpen) || (el >= wMs && tm === null)) {
+          if (tm !== null) { clearTimeout(tm); tm = null; }
+          flush(closed);
+        } else if (tm === null) {
+          tm = setTimeout(() => flush(false), Math.max(16, wMs - el));
+          tm?.unref?.();
         }
       });
-
-      const wrapper = {
-        observe(target, options) {
-          disconnected = false;
-          // Drop characterData:true when observing document.body to eliminate streaming text overhead
-          const safeOpts =
-            target === doc?.body && options && options.characterData
-              ? { ...options, characterData: false }
-              : options;
-          return inner.observe(target, safeOpts);
+      const wrap = {
+        observe(t, o) {
+          disc = false;
+          const r = inner.observe(t, t === doc?.body && o?.characterData ? { ...o, characterData: false } : o);
+          syncTrig();
+          return r;
         },
         disconnect() {
-          disconnected = true;
-          if (timer !== null) {
-            clearTimeout(timer);
-            timer = null;
-          }
-          queuedRecords = [];
+          disc = true;
+          if (tm !== null) { clearTimeout(tm); tm = null; }
+          if (closeTm !== null) { clearTimeout(closeTm); closeTm = null; }
+          curTrig = null;
+          q = [];
           return inner.disconnect();
         },
-        takeRecords() {
-          return typeof inner.takeRecords === 'function' ? inner.takeRecords() : [];
-        },
+        takeRecords: () => (typeof inner.takeRecords === 'function' ? inner.takeRecords() : []),
       };
-      return wrapper;
+      return wrap;
     };
   }
 
   function createEffortSliderController(envOpts) {
-    const getWin = () => (envOpts && envOpts.window) || (typeof window !== 'undefined' ? window : globalRoot);
-    const getDoc = () => (envOpts && envOpts.document) || getWin()?.document || null;
-
-    let currentMode = 'auto';
-    let prismInstance = null;
-    let yieldedToExternal = false;
-    const perfStats = {
-      rawMutations: 0,
-      executedScans: 0,
-      skippedIrrelevant: 0,
-    };
+    const gW = () => (envOpts && envOpts.window) || (typeof window !== 'undefined' ? window : globalRoot);
+    const gD = () => (envOpts && envOpts.document) || gW()?.document || null;
+    let mode = 'auto', inst = null, yielded = false;
+    const perfStats = { rawMutations: 0, executedScans: 0, skippedIrrelevant: 0 };
 
     function hasExtInst() {
-      const win = getWin();
-      const doc = getDoc();
-      if (!win) return false;
-      const inst = win.__agCodexEffortSliderInstance;
-      if (inst && !inst.__prismOwned) return true;
-      const styleEl = doc?.getElementById?.(SLIDER_STYLE_ID);
-      if (styleEl && styleEl.getAttribute(PRISM_OWNER_ATTR) !== '1' && !prismInstance) {
-        return true;
-      }
-      return false;
+      const w = gW(), d = gD();
+      if (!w) return false;
+      if (w.__agCodexEffortSliderInstance && !w.__agCodexEffortSliderInstance.__prismOwned) return true;
+      const st = d?.getElementById?.(SLIDER_STYLE_ID);
+      return Boolean(st && st.getAttribute(PRISM_OWNER_ATTR) !== '1' && !inst);
     }
 
     const HIDE_CSS_TEXT =
@@ -215,41 +228,20 @@
       '[data-ces-part="trigger-effort"]{color:inherit!important;opacity:.7!important;font-weight:inherit!important}';
 
     function clrTint(doc) {
-      if (!doc || typeof doc.querySelectorAll !== 'function') return;
-      const spans = doc.querySelectorAll(
-        '[data-ces-part="trigger-effort"], [data-testid="model-selector-trigger"] span[style]'
-      );
-      for (let i = 0; i < spans.length; i++) {
-        const sp = spans[i];
-        if (sp.style) {
-          sp.style.color = '';
-          sp.style.opacity = '';
-          sp.style.fontWeight = '';
-        }
-        sp.removeAttribute?.('data-ces-part');
+      for (const sp of qa(doc, '[data-ces-part="trigger-effort"], [data-testid="model-selector-trigger"] span[style]')) {
+        if (sp.style) sp.style.color = sp.style.opacity = sp.style.fontWeight = '';
+        ra(sp, 'data-ces-part');
       }
-      const panels = doc.querySelectorAll('.ces-ag-panel-enhanced');
-      for (let i = 0; i < panels.length; i++) {
-        panels[i].classList?.remove?.('ces-ag-panel-enhanced');
-      }
-      const selectedItems = doc.querySelectorAll('[data-ces-model-selected]');
-      for (let i = 0; i < selectedItems.length; i++) {
-        selectedItems[i].removeAttribute?.('data-ces-model-selected');
-      }
+      for (const p of qa(doc, '.ces-ag-panel-enhanced')) p.classList?.remove?.('ces-ag-panel-enhanced');
+      for (const it of qa(doc, '[data-ces-model-selected]')) ra(it, 'data-ces-model-selected');
     }
 
     function setHideCss(hidden) {
-      const doc = getDoc();
+      const doc = gD();
       if (!doc || typeof doc.getElementById !== 'function') return;
-      const existing = doc.getElementById(HIDE_STYLE_ID);
-      if (!hidden) {
-        if (existing) existing.remove();
-        return;
-      }
-      if (existing) {
-        if (existing.textContent !== HIDE_CSS_TEXT) existing.textContent = HIDE_CSS_TEXT;
-        return;
-      }
+      const ex = doc.getElementById(HIDE_STYLE_ID);
+      if (!hidden) { ex?.remove?.(); return; }
+      if (ex) { if (ex.textContent !== HIDE_CSS_TEXT) ex.textContent = HIDE_CSS_TEXT; return; }
       if (doc.head || doc.documentElement) {
         const st = doc.createElement('style');
         st.id = HIDE_STYLE_ID;
@@ -259,92 +251,77 @@
     }
 
     function stopInst() {
-      const win = getWin();
-      const doc = getDoc();
-      if (prismInstance) {
-        try {
-          prismInstance.stop();
-        } catch {}
-        if (win && win.__agCodexEffortSliderInstance === prismInstance) {
-          delete win.__agCodexEffortSliderInstance;
-        }
-        prismInstance = null;
+      const w = gW(), d = gD();
+      if (inst) {
+        try { inst.stop(); } catch {}
+        if (w && w.__agCodexEffortSliderInstance === inst) delete w.__agCodexEffortSliderInstance;
+        inst = null;
       }
-      clrTint(doc);
-      const styleEl = doc?.getElementById?.(SLIDER_STYLE_ID);
-      if (styleEl && styleEl.getAttribute(PRISM_OWNER_ATTR) === '1') {
-        styleEl.remove();
-      }
+      clrTint(d);
+      const st = d?.getElementById?.(SLIDER_STYLE_ID);
+      if (st && st.getAttribute(PRISM_OWNER_ATTR) === '1') st.remove();
     }
 
     function mountBuiltIn() {
-      const win = getWin();
-      const doc = getDoc();
-      if (!win || !doc || !doc.body) return false;
-      const lib = resolveUpstreamLib(win);
+      const w = gW(), d = gD();
+      if (!w || !d || !d.body) return false;
+      const lib = resLib(w);
       if (!lib || typeof lib.installCodexEffortSlider !== 'function') return false;
-
-      const BaseMO = win.MutationObserver || (typeof MutationObserver === 'function' ? MutationObserver : null);
-      const ThrottledMO = mkThrottledMO(BaseMO, doc, perfStats);
-
-      const inst = lib.installCodexEffortSlider({
-        document: doc,
-        window: win,
-        MutationObserver: ThrottledMO || undefined,
+      const BaseMO = w.MutationObserver || (typeof MutationObserver === 'function' ? MutationObserver : null);
+      const next = lib.installCodexEffortSlider({
+        document: d,
+        window: w,
+        MutationObserver: mkThrottledMO(BaseMO, d, perfStats) || undefined,
         skipGenericMenuObserver: true,
       });
-      if (!inst) return false;
-      inst.__prismOwned = true;
-      win.__agCodexEffortSliderInstance = inst;
-      prismInstance = inst;
-
-      const styleEl = doc.getElementById?.(SLIDER_STYLE_ID);
-      if (styleEl) styleEl.setAttribute(PRISM_OWNER_ATTR, '1');
+      if (!next) return false;
+      next.__prismOwned = true;
+      w.__agCodexEffortSliderInstance = prismSyncRef(next);
+      d.getElementById?.(SLIDER_STYLE_ID)?.setAttribute(PRISM_OWNER_ATTR, '1');
       return true;
+    }
+
+    function prismSyncRef(v) {
+      inst = v;
+      return v;
     }
 
     function sync(cfg) {
       const raw = cfg && cfg.effortSliderModule;
-      currentMode = raw === 'on' || raw === 'off' ? raw : 'auto';
-
-      if (currentMode === 'off') {
-        yieldedToExternal = false;
+      mode = raw === 'on' || raw === 'off' ? raw : 'auto';
+      if (mode === 'off') {
+        yielded = false;
         stopInst();
-        clrTint(getDoc());
+        clrTint(gD());
         setHideCss(true);
         return getState();
       }
-
       setHideCss(false);
-
       if (hasExtInst()) {
-        // Yield politely to external slider (e.g., app.asar Codex slider) to prevent duplicate body observers
-        yieldedToExternal = true;
+        yielded = true;
         stopInst();
-        try { getWin()?.__agCodexEffortSliderInstance?.rescan?.(); } catch {}
+        try { gW()?.__agCodexEffortSliderInstance?.rescan?.(); } catch {}
         return getState();
       }
-
-      yieldedToExternal = false;
-      if (!prismInstance) {
-        mountBuiltIn();
-      } else {
-        try { prismInstance.rescan?.(); } catch {}
-      }
+      yielded = false;
+      syncBilingualDom(gD());
+      if (!inst) mountBuiltIn();
+      else try { inst.rescan?.(); } catch {}
+      markOwnedNoTr(gD());
       return getState();
     }
 
     function destroy() {
       stopInst();
       setHideCss(false);
-      yieldedToExternal = false;
+      yielded = false;
     }
 
     function getState() {
       return {
-        mode: currentMode,
-        mountedPrism: Boolean(prismInstance),
-        yieldedToExternal: Boolean(yieldedToExternal || (currentMode !== 'off' && hasExtInst())),
+        mode,
+        mountedPrism: Boolean(inst),
+        yieldedToExternal: Boolean(yielded || (mode !== 'off' && hasExtInst())),
         hasExternal: hasExtInst(),
         throttleMs: THROTTLE_MS,
         perfStats: { ...perfStats },
@@ -353,6 +330,9 @@
 
     return {
       THROTTLE_MS,
+      normalizeEffortToken,
+      parseLocalizedModelLabel,
+      syncBilingualDom,
       sync,
       destroy,
       getState,

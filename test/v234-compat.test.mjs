@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import vm from 'node:vm';
 import { createRequire } from 'node:module';
 
 import {
@@ -22,6 +23,7 @@ import { formatModelName } from '../vendor/pulse-dashboard/sidecars/panel/contex
 const require = createRequire(import.meta.url);
 globalThis.__agCodexEffortSliderDisableAutoBoot = true;
 const effortSlider = require('../vendor/effort-slider/upstream-client.js');
+const sliderCoexist = require('../vendor/effort-slider/slider-coexist.js');
 const usageCore = require('../usage-core.js');
 
 test('v2.34.0 Effort Slider: normalizes kebab-case slug effortIndex and unlocks all multi-effort models', () => {
@@ -519,5 +521,418 @@ test('v2.34.0 Orchestrator patch: Claude planner shows Claude icon & tunable Orc
   assert.equal(cssSrc.includes('32px circle at var(--knob-px'), true);
   assert.equal(cssSrc.includes('.ces-tick.is-on'), true);
   assert.equal(cssSrc.includes('.ces-knob-notch'), true);
+});
+
+test('v2.34.0 renderer-proxy perf: WeakRef LS cache, stale fallback rescan, in-flight coalescing & settled/summary TTL avoid redundant full trajectory deserializations', async () => {
+  const cidIdle = '44444444-5555-6666-7777-888888888888';
+  const cidRun = '55555555-6666-7777-8888-999999999999';
+  const probeExpr = buildRendererRpcExpression('Probe', {});
+  assert.equal(probeExpr.includes('__agPrismLsRef'), true, 'renderer-rpc-adapter must cache discovered LS wrapper via WeakRef');
+
+  // Execute buildRendererRpcExpression in VM to verify 0-Fiber-walk WeakRef cache hit + automatic rescan on stale LS error
+  let fiberVisits = 0;
+  let activeLsBroken = false;
+  const ls1 = {
+    getUserStatus: async () => {
+      if (activeLsBroken) throw new Error('disposed_ls_instance');
+      return { userStatus: { email: 'first@example.com', cascadeModelConfigData: { clientModelConfigs: [] } } };
+    },
+    getCascadeTrajectory: async () => ({ trajectory: { steps: [], generatorMetadata: [] } }),
+  };
+  const ls2 = {
+    getUserStatus: async () => ({ userStatus: { email: 'rebound@example.com', cascadeModelConfigData: { clientModelConfigs: [] } } }),
+    getCascadeTrajectory: async () => ({ trajectory: { steps: [], generatorMetadata: [] } }),
+  };
+  let mountedLs = ls1;
+  const fiberRoot = {
+    get child() {
+      fiberVisits += 1;
+      return {
+        get memoizedProps() {
+          fiberVisits += 1;
+          return { value: mountedLs };
+        },
+        child: null,
+        sibling: null,
+      };
+    },
+    sibling: null,
+  };
+  const domRoot = { '__reactContainer$test': fiberRoot };
+  const sandbox = vm.createContext({
+    document: { getElementById: (id) => (id === 'root' ? domRoot : null), body: domRoot },
+    WeakRef: globalThis.WeakRef,
+    Promise,
+  });
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+
+  const userStatusExpr = buildRendererRpcExpression('GetUserStatus', {});
+  const r1 = await vm.runInContext(userStatusExpr, sandbox);
+  assert.equal(r1.ok, true);
+  assert.equal(r1.data.userStatus.email, 'first@example.com');
+  const visitsAfterFirst = fiberVisits;
+  assert.ok(visitsAfterFirst >= 2, 'First RPC must walk React Fiber tree');
+
+  // Second RPC must hit WeakRef cache with ZERO Fiber node visits
+  const r2 = await vm.runInContext(userStatusExpr, sandbox);
+  assert.equal(r2.ok, true);
+  assert.equal(fiberVisits, visitsAfterFirst, 'Cached LS wrapper must avoid React Fiber traversal');
+
+  // Simulate React remount invalidating ls1 -> must clear cache, rescan Fiber tree & succeed with ls2
+  activeLsBroken = true;
+  mountedLs = ls2;
+  const r3 = await vm.runInContext(userStatusExpr, sandbox);
+  assert.equal(r3.ok, true);
+  assert.equal(r3.data.userStatus.email, 'rebound@example.com');
+  assert.ok(fiberVisits > visitsAfterFirst, 'Failed cached LS call must fall back to Fiber rescan');
+
+  let nowMs = 2_000_000;
+  let trajCalls = 0;
+  let releasePending = null;
+  const rendererRpc = async (method, body) => {
+    if (method === 'Probe') return { available: true };
+    if (method === 'GetCascadeTrajectory') {
+      trajCalls += 1;
+      if (body.cascadeId === cidRun && trajCalls === 1) {
+        await new Promise((r) => { releasePending = r; });
+      }
+      return {
+        status: body.cascadeId === cidIdle ? 'CASCADE_RUN_STATUS_1' : 'CASCADE_RUN_STATUS_2',
+        numTotalSteps: 2,
+        numTotalGeneratorMetadata: 1,
+        trajectory: { cascadeId: body.cascadeId, steps: [], generatorMetadata: [] },
+      };
+    }
+    return {};
+  };
+
+  const client = new AntigravityClient({
+    now: () => nowMs,
+    paths: () => ({ log: '/nonexistent/ls.log', logCandidates: ['/nonexistent/ls.log'] }),
+    readLog: async () => 'Language server listening on http://127.0.0.1:11244\n',
+    processes: async () => [{ ProcessId: 99, CommandLine: 'language_server --standalone', Ports: [11244] }],
+    rendererRpc,
+  });
+
+  try {
+    // 1) Concurrent calls to same cascadeId coalesce into a single renderer RPC
+    const p1 = client.trajectory(cidRun);
+    const p2 = client.trajectory(cidRun);
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(trajCalls, 1, 'Concurrent trajectory() calls must coalesce');
+    releasePending();
+    await Promise.all([p1, p2]);
+
+    // 2) Active trajectory caches for 4s (not bypassed by unconditional force=true)
+    nowMs += 2000;
+    await client.trajectory(cidRun);
+    assert.equal(trajCalls, 1, 'Active trajectory must reuse cache within 4s');
+    nowMs += 3000;
+    await client.trajectory(cidRun);
+    assert.equal(trajCalls, 2, 'Active trajectory must refresh after 4s');
+
+    // 3) Settled (status=1 / IDLE) trajectory reuses cache for 20s, and 60s when summary stamp matches
+    const sum = { stepCount: 2, lastModifiedTime: { seconds: '1795214500', nanos: 0 } };
+    await client.trajectory(cidIdle, { summary: sum });
+    assert.equal(trajCalls, 3);
+    nowMs += 15000;
+    await client.trajectory(cidIdle, { summary: sum });
+    assert.equal(trajCalls, 3, 'Settled trajectory must reuse cache at 15s');
+    nowMs += 30000;
+    await client.trajectory(cidIdle, { summary: sum });
+    assert.equal(trajCalls, 3, 'Settled trajectory with unchanged summary stamp must reuse cache up to 60s');
+    // Force bypasses cache immediately
+    await client.trajectory(cidIdle, { force: true, summary: sum });
+    assert.equal(trajCalls, 4, 'force: true must bypass proxy cache immediately');
+  } finally {
+    client.dispose();
+  }
+});
+
+test('v2.34.0 Effort Slider: switching from Gemini 4 Neon (XHigh) to Gemini 4 Carbon preserves React HostText nodes and never leaks Extra badge', async () => {
+  const neonLow = { label: 'Gemini 4 Neon (Low)', modelId: 'gemini-4-neon-low', value: 1534 };
+  const neonMed = { label: 'Gemini 4 Neon (Medium)', modelId: 'gemini-4-neon-medium', value: 1533 };
+  const neonHigh = { label: 'Gemini 4 Neon (High)', modelId: 'gemini-4-neon-high', value: 1532 };
+  const neonXHigh = { label: 'Gemini 4 Neon (XHigh)', modelId: 'gemini-4-neon-xhigh', value: 1535 };
+  const carbonLow = { label: 'Gemini 4 Carbon (Low)', modelId: 'gemini-4-carbon-low', value: 1601 };
+  const carbonMed = { label: 'Gemini 4 Carbon (Medium)', modelId: 'gemini-4-carbon-medium', value: 1602 };
+  const carbonHigh = { label: 'Gemini 4 Carbon (High)', modelId: 'gemini-4-carbon-high', value: 1603 };
+  const carbonSingle = { label: 'Gemini 4 Carbon', modelId: 'gemini-4-carbon', value: 1610 };
+
+  const slugEffortIndex = new Map([
+    ['gemini-4-neon', new Map([['low', neonLow], ['medium', neonMed], ['high', neonHigh], ['xhigh', neonXHigh]])],
+    ['gemini-4-carbon', new Map([['low', carbonLow], ['medium', carbonMed], ['high', carbonHigh]])],
+  ]);
+  const modelOptions = [neonLow, neonMed, neonHigh, neonXHigh, carbonLow, carbonMed, carbonHigh, carbonSingle];
+
+  // Minimal DOM + FakeMutationObserver modeling React 19 HostText in-place nodeValue updates
+  const observers = new Set();
+  function notifyMutation(target, type, extra = {}) {
+    for (const obs of observers) obs._deliver({ target, type, ...extra });
+  }
+  class FakeMO {
+    constructor(cb) {
+      this._cb = cb;
+      this._targets = [];
+      this._queue = [];
+      observers.add(this);
+    }
+    observe(target, opts = {}) {
+      this._targets.push({ target, opts });
+    }
+    disconnect() {
+      this._targets = [];
+      this._queue = [];
+    }
+    takeRecords() {
+      const q = this._queue;
+      this._queue = [];
+      return q;
+    }
+    _deliver(rec) {
+      for (const { target, opts } of this._targets) {
+        if (!containsNode(target, rec.target)) continue;
+        if (rec.type === 'characterData' && !opts.characterData) continue;
+        if (rec.type === 'childList' && !opts.childList) continue;
+        this._queue.push(rec);
+        queueMicrotask(() => {
+          if (this._queue.length) {
+            const batch = this.takeRecords();
+            this._cb(batch, this);
+          }
+        });
+        break;
+      }
+    }
+  }
+  function containsNode(anc, cur) {
+    let p = cur;
+    while (p) {
+      if (p === anc) return true;
+      p = p.parentNode || p.parentElement || null;
+    }
+    return false;
+  }
+  function makeTextNode(initial) {
+    const node = {
+      nodeType: 3,
+      parentNode: null,
+      parentElement: null,
+      _val: String(initial),
+      get nodeValue() { return this._val; },
+      set nodeValue(v) {
+        const s = String(v);
+        if (this._val === s) return;
+        this._val = s;
+        notifyMutation(this, 'characterData');
+      },
+      get textContent() { return this._val; },
+      set textContent(v) { this.nodeValue = v; },
+    };
+    return node;
+  }
+  function makeElement(tag, attrs = {}) {
+    const attrMap = new Map(Object.entries(attrs));
+    const classes = new Set(String(attrs.class || '').split(/\s+/).filter(Boolean));
+    const el = {
+      nodeType: 1,
+      tagName: tag.toUpperCase(),
+      parentNode: null,
+      parentElement: null,
+      style: { setProperty() {}, removeProperty() {}, color: '', opacity: '', fontWeight: '' },
+      children: [],
+      childNodes: [],
+      classList: {
+        add: (...cs) => cs.forEach((c) => classes.add(c)),
+        remove: (...cs) => cs.forEach((c) => classes.delete(c)),
+        contains: (c) => classes.has(c),
+        toggle: (c, force) => {
+          const on = force === undefined ? !classes.has(c) : Boolean(force);
+          if (on) classes.add(c);
+          else classes.delete(c);
+          return on;
+        },
+      },
+      get firstChild() { return this.childNodes[0] || null; },
+      get nextElementSibling() {
+        if (!this.parentNode) return null;
+        const idx = this.parentNode.children.indexOf(this);
+        return idx >= 0 ? this.parentNode.children[idx + 1] || null : null;
+      },
+      get textContent() {
+        return this.childNodes.map((c) => c.textContent).join('');
+      },
+      set textContent(v) {
+        this.childNodes = [];
+        this.children = [];
+        const tn = makeTextNode(v);
+        tn.parentNode = this;
+        tn.parentElement = this;
+        this.childNodes.push(tn);
+        notifyMutation(this, 'childList', { addedNodes: [tn], removedNodes: [] });
+      },
+      appendChild(child) {
+        child.parentNode = this;
+        child.parentElement = this;
+        this.childNodes.push(child);
+        if (child.nodeType === 1) this.children.push(child);
+        notifyMutation(this, 'childList', { addedNodes: [child], removedNodes: [] });
+        return child;
+      },
+      removeChild(child) {
+        this.childNodes = this.childNodes.filter((c) => c !== child);
+        this.children = this.children.filter((c) => c !== child);
+        child.parentNode = null;
+        child.parentElement = null;
+        notifyMutation(this, 'childList', { addedNodes: [], removedNodes: [child] });
+        return child;
+      },
+      remove() {
+        if (this.parentNode) this.parentNode.removeChild(this);
+      },
+      getAttribute: (k) => (attrMap.has(k) ? attrMap.get(k) : null),
+      setAttribute: (k, v) => attrMap.set(k, String(v)),
+      hasAttribute: (k) => attrMap.has(k),
+      removeAttribute: (k) => attrMap.delete(k),
+      contains: (other) => containsNode(el, other),
+      matches(sel) {
+        return sel.split(',').some((raw) => {
+          const s = raw.trim();
+          if (!s) return false;
+          if (s === 'span.min-w-0') return this.tagName === 'SPAN' && classes.has('min-w-0');
+          if (s === 'span.opacity-70') return this.tagName === 'SPAN' && classes.has('opacity-70');
+          if (s === '[data-ces-part=\'trigger-effort\']' || s === '[data-ces-part="trigger-effort"]') {
+            return attrMap.get('data-ces-part') === 'trigger-effort';
+          }
+          if (s === '[data-testid="model-selector-trigger"]') return attrMap.get('data-testid') === 'model-selector-trigger';
+          if (s === '[data-testid="model-selector-panel"]') return attrMap.get('data-testid') === 'model-selector-panel';
+          if (s === '[data-testid="model-selector-effort-group"]') return attrMap.get('data-testid') === 'model-selector-effort-group';
+          if (s === '[data-testid="model-selector-item"]') return attrMap.get('data-testid') === 'model-selector-item';
+          if (s === '[role="menuitem"]') return attrMap.get('role') === 'menuitem';
+          if (s === '.ces-ag-section') return classes.has('ces-ag-section');
+          if (s === '.ces-set') return classes.has('ces-set');
+          if (s === '.ces-ag-effort-title') return classes.has('ces-ag-effort-title');
+          if (s === 'span') return this.tagName === 'SPAN';
+          return false;
+        });
+      },
+      closest(sel) {
+        let p = this;
+        while (p && p.nodeType === 1) {
+          if (p.matches(sel)) return p;
+          p = p.parentElement;
+        }
+        return null;
+      },
+      querySelector(sel) {
+        return this.querySelectorAll(sel)[0] || null;
+      },
+      querySelectorAll(sel) {
+        const res = [];
+        const walk = (n) => {
+          for (const ch of n.children || []) {
+            if (ch.matches?.(sel)) res.push(ch);
+            walk(ch);
+          }
+        };
+        walk(this);
+        return res;
+      },
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    return el;
+  }
+
+  let currentSelected = neonHigh;
+  const selectorState = {
+    effortIndex: slugEffortIndex,
+    modelOptions,
+    get selectedModel() { return currentSelected; },
+    setSelectedModel: (m) => { currentSelected = m; },
+    setIsOpen: () => {},
+  };
+
+  const docEl = makeElement('html');
+  const head = makeElement('head');
+  const body = makeElement('body');
+  docEl.appendChild(head);
+  docEl.appendChild(body);
+
+  const triggerBtn = makeElement('button', { 'data-testid': 'model-selector-trigger' });
+  const outerSpan = makeElement('span', { class: 'min-w-0' });
+  const reactModelText = makeTextNode('Gemini 4 Neon');
+  const effortSpan = makeElement('span', { class: 'opacity-70' });
+  const reactEffortText = makeTextNode(' High');
+  outerSpan.appendChild(reactModelText);
+  effortSpan.appendChild(reactEffortText);
+  outerSpan.appendChild(effortSpan);
+  triggerBtn.appendChild(outerSpan);
+  triggerBtn['__reactFiber$test'] = { memoizedProps: { value: selectorState }, return: null };
+  body.appendChild(triggerBtn);
+
+  const doc = {
+    documentElement: docEl,
+    head,
+    body,
+    createElement: (t) => makeElement(t),
+    getElementById: (id) => head.children.find((c) => c.id === id) || null,
+    querySelector: (s) => docEl.querySelector(s),
+    querySelectorAll: (s) => docEl.querySelectorAll(s),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const win = {
+    document: doc,
+    MutationObserver: FakeMO,
+    AntigravityCodexEffortSlider: effortSlider,
+    setTimeout,
+    clearTimeout,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  const ctrl = sliderCoexist.createEffortSliderController({ window: win, document: doc });
+  try {
+    ctrl.sync({ effortSliderModule: 'auto' });
+
+    // 1) User selects Neon Extra (XHigh): trigger shows "Gemini 4 Neon Extra" while keeping exact React HostText nodes!
+    currentSelected = neonXHigh;
+    win.__agCodexEffortSliderInstance.rescan();
+    assert.equal(outerSpan.textContent, 'Gemini 4 Neon Extra');
+    assert.equal(outerSpan.firstChild, reactModelText, 'Model base TextNode reference must be preserved');
+    assert.equal(effortSpan.firstChild, reactEffortText, 'Effort Span HostText reference must NEVER be replaced via textContent');
+    assert.equal(effortSpan.style.color, '#8b5cf6', 'Neon Extra should display max-tier purple');
+
+    // 2) Host switches to 3-tier Gemini 4 Carbon (Medium) via React HostText characterData update ONLY (even if effort text wasn't updated yet!)
+    currentSelected = carbonMed;
+    reactModelText.nodeValue = 'Gemini 4 Carbon';
+    await new Promise((r) => setTimeout(r, 150));
+
+    assert.equal(outerSpan.firstChild, reactModelText);
+    assert.equal(effortSpan.firstChild, reactEffortText, 'HostText node must remain intact across model switches');
+    assert.equal(outerSpan.textContent, 'Gemini 4 Carbon Medium', 'Trigger must update to Carbon Medium via localized characterData MO and never retain Extra');
+
+    // Also switch to Carbon (High) via characterData
+    currentSelected = carbonHigh;
+    reactEffortText.nodeValue = ' High';
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(outerSpan.textContent, 'Gemini 4 Carbon High', 'Trigger must display Gemini 4 Carbon High');
+
+    // 3) Host switches to single-tier locked Gemini 4 Carbon (no effort levels in effortIndex or modelOptions): clears effort text AND purple inline style
+    slugEffortIndex.delete('gemini-4-carbon');
+    modelOptions.splice(4, 3);
+    currentSelected = carbonSingle;
+    reactModelText.nodeValue = 'Gemini 4 Carbon ';
+    reactModelText.nodeValue = 'Gemini 4 Carbon';
+    await new Promise((r) => setTimeout(r, 150));
+
+    assert.equal(outerSpan.textContent, 'Gemini 4 Carbon', 'Locked single-tier Carbon must clear stale effort suffix');
+    assert.equal(effortSpan.firstChild, reactEffortText, 'Clearing effort text on locked model must still preserve HostText node');
+    assert.equal(effortSpan.style.color, '', 'Locked single-tier Carbon must clear residual purple inline color');
+  } finally {
+    ctrl.destroy();
+  }
 });
 

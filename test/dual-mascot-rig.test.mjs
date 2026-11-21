@@ -1327,3 +1327,235 @@ test('Red-team regressions: wide rebound (reducedMotion=false), narrower restore
     ctl.destroy();
   }
 });
+
+test('Issue #2/#4/#5 regressions: RLE fillRect batching pixel-equivalence, tier-3 write animation, Cat sleep 100% static cache hit, and win-blur 0fps pause/wake', async () => {
+  // 1) RLE batching significantly cuts fillRect & fillStyle calls while producing 100% identical per-pixel output
+  const makeRaster = (w, h) => {
+    const grid = Array.from({ length: h }, () => Array(w).fill(''));
+    let fillRectCalls = 0;
+    let fillStyleWrites = 0;
+    let curFill = '';
+    const ctx = {
+      get fillStyle() { return curFill; },
+      set fillStyle(v) { curFill = String(v); fillStyleWrites += 1; },
+      fillRect(x, y, rw, rh) {
+        fillRectCalls += 1;
+        for (let py = y; py < y + rh; py++) {
+          if (py < 0 || py >= h) continue;
+          for (let px = x; px < x + rw; px++) {
+            if (px >= 0 && px < w) grid[py][px] = curFill;
+          }
+        }
+      },
+    };
+    return { grid, ctx, stats: () => ({ fillRectCalls, fillStyleWrites }) };
+  };
+
+  const drawNaive = (ctx, oxGrid, oyGrid, pxSize, palette, layers, colorResolver = null) => {
+    for (const part of layers) {
+      if (!part || !part.rows || !part.rows.length) continue;
+      for (let ry = 0; ry < part.rows.length; ry++) {
+        const row = part.rows[ry];
+        for (let rx = 0; rx < row.length; rx++) {
+          const ch = row[rx];
+          if (ch === '.' || ch === ' ') continue;
+          const gx = part.ox + rx;
+          const gy = part.oy + ry;
+          const color = colorResolver ? colorResolver(ch, gx, gy, palette) : palette[ch];
+          if (!color) continue;
+          ctx.fillStyle = color;
+          ctx.fillRect((oxGrid + gx) * pxSize, (oyGrid + gy) * pxSize, pxSize, pxSize);
+        }
+      }
+    }
+  };
+
+  let totalNaiveRects = 0;
+  let totalRleRects = 0;
+  let totalNaiveFills = 0;
+  let totalRleFills = 0;
+  for (const kind of ['clawd', 'cat']) {
+    for (const pose of ['idle', 'write', 'sleep', 'walk', 'onFire', 'cheerSticks']) {
+      const layers = rig.buildClipLayers(kind, pose, 3, { clipTick: 3 });
+      const resolver =
+        kind === 'cat' && pose === 'idle'
+          ? (ch, gx, gy, pal) =>
+              ch === '#'
+                ? rig.evalChromaColorAt(gx, gy, 0.25, false)
+                : ch === 's'
+                  ? rig.evalChromaColorAt(gx, gy, 0.25, true)
+                  : pal[ch]
+          : null;
+      const rNaive = makeRaster(96, 84);
+      const rRle = makeRaster(96, 84);
+      drawNaive(rNaive.ctx, 8, 17, 3, rig.PALETTES[kind], layers, resolver);
+      rig.drawLayerSet(rRle.ctx, 8, 17, 3, rig.PALETTES[kind], layers, resolver);
+      assert.deepEqual(rRle.grid, rNaive.grid, `RLE pixel grid must match cell-by-cell draw 100% for ${kind}:${pose}`);
+      if (!resolver) {
+        totalNaiveRects += rNaive.stats().fillRectCalls;
+        totalRleRects += rRle.stats().fillRectCalls;
+        totalNaiveFills += rNaive.stats().fillStyleWrites;
+        totalRleFills += rRle.stats().fillStyleWrites;
+      }
+    }
+  }
+  for (const id of ['cowboy', 'shades', 'wizard']) {
+    const layers = [rig.MINI_SPRITES[id]];
+    const rNaive = makeRaster(40, 32);
+    const rRle = makeRaster(40, 32);
+    drawNaive(rNaive.ctx, 2, 5, 2, rig.PALETTES[id], layers);
+    rig.drawLayerSet(rRle.ctx, 2, 5, 2, rig.PALETTES[id], layers);
+    assert.deepEqual(rRle.grid, rNaive.grid, `RLE mini-crab pixel grid must match 100% for ${id}`);
+    totalNaiveRects += rNaive.stats().fillRectCalls;
+    totalRleRects += rRle.stats().fillRectCalls;
+  }
+  assert.ok(totalRleRects < totalNaiveRects * 0.35, `Expected >65% fillRect reduction (${totalRleRects} vs ${totalNaiveRects})`);
+  assert.ok(totalRleFills < totalNaiveFills * 0.15, `Expected >85% fillStyle reduction (${totalRleFills} vs ${totalNaiveFills})`);
+
+  // 2) Cat 'sleep' pose keeps static tail across all ticks so static frame cache hits 100%
+  const sleepRef = rig.buildClipLayers('cat', 'sleep', 0);
+  for (let t = 1; t <= 16; t++) {
+    assert.deepEqual(
+      rig.buildClipLayers('cat', 'sleep', t),
+      sleepRef,
+      `Cat sleep layers must not flip tail at tick=${t}`
+    );
+  }
+
+  // 3) Live stage: Cached 2D context, write pose streamTier===3 frame alternation, Cat sleep 0 redraws, and win-blur 0fps pause/wake
+  let getCtxCalls = 0;
+  let catClears = 0;
+  const winListeners = new Map();
+  let moCb = null;
+  let moDisconnected = false;
+  const htmlAttrs = new Map();
+  const mockHtml = {
+    getAttribute: (k) => (htmlAttrs.has(k) ? htmlAttrs.get(k) : null),
+    setAttribute(k, v) { htmlAttrs.set(k, String(v)); if (moCb) moCb([{ attributeName: k }]); },
+    removeAttribute(k) { htmlAttrs.delete(k); if (moCb) moCb([{ attributeName: k }]); },
+  };
+  const mockWin = {
+    devicePixelRatio: 1,
+    matchMedia: () => ({ matches: false }),
+    MutationObserver: class {
+      constructor(cb) { moCb = cb; }
+      observe() {}
+      disconnect() { moDisconnected = true; }
+    },
+    addEventListener(t, fn) {
+      if (!winListeners.has(t)) winListeners.set(t, new Set());
+      winListeners.get(t).add(fn);
+    },
+    removeEventListener(t, fn) { winListeners.get(t)?.delete(fn); },
+    dispatch(t) { for (const fn of [...(winListeners.get(t) || [])]) fn({ type: t }); },
+  };
+  const makeEl = (tag) => {
+    const attrs = new Map();
+    const listeners = new Map();
+    const children = [];
+    const el = {
+      tagName: tag.toUpperCase(),
+      ownerDocument: null,
+      parentNode: null,
+      clientWidth: 720,
+      width: 96,
+      height: 84,
+      className: '',
+      dataset: {},
+      style: {},
+      children,
+      get firstChild() { return children[0] || null; },
+      setAttribute(k, v) { attrs.set(k, String(v)); },
+      getAttribute(k) { return attrs.get(k) ?? null; },
+      removeAttribute(k) { attrs.delete(k); },
+      appendChild(c) { c.parentNode = el; children.push(c); return c; },
+      removeChild(c) { const i = children.indexOf(c); if (i >= 0) children.splice(i, 1); return c; },
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 720, bottom: 84, width: 720, height: 84 }),
+      addEventListener(t, fn) { if (!listeners.has(t)) listeners.set(t, new Set()); listeners.get(t).add(fn); },
+      removeEventListener(t, fn) { listeners.get(t)?.delete(fn); },
+      getContext(kind) {
+        if (kind !== '2d') return null;
+        getCtxCalls += 1;
+        return {
+          imageSmoothingEnabled: false,
+          fillStyle: '',
+          save() {}, restore() {}, setTransform() {},
+          clearRect() {
+            if (el.parentNode?.getAttribute?.('data-mascot-id') === 'cat') catClears += 1;
+          },
+          beginPath() {}, rect() {}, clip() {}, translate() {}, scale() {}, rotate() {}, fillRect() {}, drawImage() {},
+        };
+      },
+    };
+    return el;
+  };
+  const mockDoc = {
+    hidden: false,
+    documentElement: mockHtml,
+    defaultView: mockWin,
+    createElement(t) { const n = makeEl(t); n.ownerDocument = mockDoc; return n; },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const host = mockDoc.createElement('div');
+  const stage = rig.mountDualMascotStage(host, {
+    camp: 'gemini',
+    streaming: true,
+    streamTier: 3,
+    miniPileEnabled: true,
+    reducedMotion: false,
+  });
+
+  try {
+    const initialCtxCalls = getCtxCalls;
+    assert.equal(initialCtxCalls, 5, 'Should acquire 2D context exactly once for 2 main actors + 3 mini crabs');
+
+    // Verify streamTier === 3 write pose alternates frames across ticks instead of freezing on even localTick
+    const seenWriteFrames = new Set([
+      stage.getLayoutSnapshot().actors.find((a) => a.id === 'cat').renderCache.frameIdx,
+    ]);
+    await new Promise((r) => setTimeout(r, 240));
+    seenWriteFrames.add(stage.getLayoutSnapshot().actors.find((a) => a.id === 'cat').renderCache.frameIdx);
+    await new Promise((r) => setTimeout(r, 110));
+    seenWriteFrames.add(stage.getLayoutSnapshot().actors.find((a) => a.id === 'cat').renderCache.frameIdx);
+    assert.ok(seenWriteFrames.size >= 2, 'write pose at streamTier===3 must alternate frames smoothly instead of freezing');
+    assert.equal(getCtxCalls, initialCtxCalls, 'Cached _ctx must avoid redundant canvas.getContext("2d") calls across ticks');
+
+    // Enter doze sleep (stop streaming) -> Cat sleep pose hits static frame cache 100% across consecutive doze ticks
+    stage.setState({ streaming: false });
+    stage.triggerDemo('doze');
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 400);
+    const catClearsAtSleepStart = catClears;
+    const skipsAtSleepStart = stage.getLayoutSnapshot().perf.canvasSkips;
+    await new Promise((r) => setTimeout(r, 860)); // ~2 doze ticks within same Zzz phase
+    assert.equal(catClears, catClearsAtSleepStart, 'Cat sleep must hit static frame cache with 0 Canvas clearRect redraws');
+    assert.ok(stage.getLayoutSnapshot().perf.canvasSkips >= skipsAtSleepStart + 2, 'Cat & Clawd sleep must increment canvasSkips');
+
+    // macOS data-ag-cs-win-blur="1" -> pauses heartbeat to 0fps even from doze state, and removal restores 100ms TICK!
+    mockHtml.setAttribute('data-ag-cs-win-blur', '1');
+    const blurSnap = stage.getLayoutSnapshot();
+    assert.equal(blurSnap.perf.timerIntervalMs, 0, 'data-ag-cs-win-blur="1" must stop mascot timer to 0fps');
+    assert.equal(blurSnap.perf.timerPaused, true);
+    const tickAtBlur = blurSnap.actors[0].tick;
+    await new Promise((r) => setTimeout(r, 230));
+    assert.equal(stage.getLayoutSnapshot().actors[0].tick, tickAtBlur, 'Zero ticks may fire while data-ag-cs-win-blur="1"');
+
+    mockHtml.removeAttribute('data-ag-cs-win-blur');
+    const wokeSnap = stage.getLayoutSnapshot();
+    assert.equal(wokeSnap.perf.timerIntervalMs, 100, 'Removing data-ag-cs-win-blur must immediately restore 100ms TICK');
+    assert.equal(wokeSnap.perf.timerPaused, false);
+
+    // Direct window.blur / window.focus events also pause to 0fps and wake back to 100ms TICK
+    mockWin.dispatch('blur');
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 0);
+    assert.equal(stage.getLayoutSnapshot().perf.timerPaused, true);
+    mockWin.dispatch('focus');
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 100);
+    assert.equal(stage.getLayoutSnapshot().perf.timerPaused, false);
+  } finally {
+    stage.dispose();
+  }
+  assert.equal(moDisconnected, true, 'dispose() must disconnect win-blur MutationObserver');
+  assert.equal(winListeners.get('blur')?.size || 0, 0, 'dispose() must unbind window blur listeners');
+  assert.equal(winListeners.get('focus')?.size || 0, 0, 'dispose() must unbind window focus listeners');
+});

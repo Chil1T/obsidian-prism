@@ -245,14 +245,14 @@ function createLightweightDom() {
 test('Obsidian Prism brand compliance, GPL-3.0 LICENSE, NOTICE, CITATION.cff, THIRD_PARTY_NOTICES.md, plugin.json, and sidecar.json contract', () => {
   const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'));
   assert.equal(pkgJson.name, 'obsidian-prism');
-  assert.equal(pkgJson.version, '1.0.5');
+  assert.equal(pkgJson.version, '1.0.6');
   assert.equal(pkgJson.license, 'GPL-3.0-only');
 
   const pluginJson = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'plugin.json'), 'utf8'));
   assert.deepEqual(Object.keys(pluginJson).sort(), ['description', 'displayName', 'logo', 'name', 'version']);
   assert.equal(pluginJson.name, 'obsidian-prism');
   assert.equal(pluginJson.displayName, 'Obsidian Prism');
-  assert.equal(pluginJson.version, '1.0.5');
+  assert.equal(pluginJson.version, '1.0.6');
   assert.equal(pluginJson.logo, 'assets/logo.svg');
   assert.ok(fs.existsSync(path.join(ROOT_DIR, 'assets', 'logo.svg')));
 
@@ -937,9 +937,9 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
                       ready: true,
                       hasPrism: true,
                       hasRepoBridge: true,
-                      prismAttr: '1.0.5',
+                      prismAttr: '1.0.6',
                       hasStyle: true,
-                      version: '1.0.5',
+                      version: '1.0.6',
                       status: 'ok',
                     },
                   },
@@ -1672,7 +1672,7 @@ test('PrismDaemon ignores wcvBrowser non-host loopback pages after skipped-non-h
           if (expr.includes('const serverMeta =')) omniEvalCount += 1;
           sendWs(socket, {
             id: msg.id,
-            result: { result: { type: 'object', value: { version: '1.0.5', status: 'skipped-non-host', state: null } } },
+            result: { result: { type: 'object', value: { version: '1.0.6', status: 'skipped-non-host', state: null } } },
           });
         } else {
           sendWs(socket, { id: msg.id, result: {} });
@@ -2151,5 +2151,254 @@ test('PrismDaemon security hardening: fail-closed iframe/context revocation, dis
     }
     if (daemon) await daemon.stop(false).catch(() => {});
     fs.rmSync(workDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 80 });
+  }
+});
+
+test('inline-fallback & slider-coexist v2.34 perf: win-blur poll suspension + immediate focus resume, single findExtBars per batch, TIER_CSS subagent badge width & streaming ignore selectors', async () => {
+  const fbSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'pulse-dashboard', 'inline-fallback.js'), 'utf8');
+  assert.ok(fbSrc.includes('.bar>[data-card="cache"]{max-width:240px}'), 'TIER_CSS must give cache chip 240px max-width so multi-subagent badge never clips');
+  assert.ok(fbSrc.includes('max-width:132px'), 'TIER_CSS must widen default chip max-width to 132px');
+  assert.ok(fbSrc.includes('max-width:108px;flex-shrink:0'), 'TIER_CSS must prevent inner flex items from shrinking/clipping when expanded');
+  assert.ok(fbSrc.includes('max-width:0!important;flex-shrink:1!important'), 'Collapsed tiers must restore flex-shrink:1!important');
+
+  const env = createLightweightDom();
+  const winListeners = new Map();
+  env.win.addEventListener = (ev, fn) => {
+    if (!winListeners.has(ev)) winListeners.set(ev, new Set());
+    winListeners.get(ev).add(fn);
+  };
+  env.win.removeEventListener = (ev, fn) => winListeners.get(ev)?.delete(fn);
+  const emitWin = (ev) => { for (const fn of winListeners.get(ev) || []) fn(); };
+
+  const moList = [];
+  env.win.MutationObserver = class {
+    constructor(cb) { this.cb = cb; this.target = null; this.opts = null; moList.push(this); }
+    observe(target, opts) { this.target = target; this.opts = opts; }
+    disconnect() { this.target = null; }
+  };
+
+  let metricsCalls = 0;
+  env.win.__agPrismMetricsCall = (payloadStr) => {
+    metricsCalls += 1;
+    const req = JSON.parse(payloadStr);
+    env.win.__agPrismMetricsResolve(req.id, {
+      connection: 'live',
+      speed: { model: 'Gemini 4', tps: 55, rounds: 2, cacheHitRate: 0.968, taskUsage: { subagents: 24, total: { totalTokens: 120000 } }, context: { usedTokens: 64000, maxTokens: 256000, usedFraction: 0.25, sampledAt: Date.now() } },
+    });
+  };
+
+  const ctl = telemetryMod.createTelemetryController({ window: env.win, document: env.doc });
+  try {
+    ctl.sync({ telemetryModule: 'on' });
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(ctl.getState().mountedFallback, true);
+    assert.equal(ctl.getState().pollSuspended, false);
+    const afterMountCalls = metricsCalls;
+    assert.ok(afterMountCalls >= 1);
+
+    // 1) data-ag-cs-win-blur="1" suspends background telemetry polling; removing it immediately resumes & refreshes
+    env.doc.documentElement.setAttribute('data-ag-cs-win-blur', '1');
+    const blurMo = moList.find((m) => m.opts?.attributeFilter?.includes('data-ag-cs-win-blur'));
+    blurMo?.cb([{ type: 'attributes', attributeName: 'data-ag-cs-win-blur' }]);
+    assert.equal(ctl.getState().pollSuspended, true, 'data-ag-cs-win-blur="1" must suspend telemetry poll');
+
+    env.doc.documentElement.removeAttribute('data-ag-cs-win-blur');
+    blurMo?.cb([{ type: 'attributes', attributeName: 'data-ag-cs-win-blur' }]);
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(ctl.getState().pollSuspended, false, 'Clearing data-ag-cs-win-blur must resume telemetry poll');
+    assert.ok(metricsCalls > afterMountCalls, 'Resuming from win-blur must trigger immediate telemetry refresh');
+
+    // 2) window blur / focus events also suspend & immediately resume polling
+    const beforeWinBlurCalls = metricsCalls;
+    emitWin('blur');
+    assert.equal(ctl.getState().pollSuspended, true, 'window.blur must suspend telemetry poll');
+    emitWin('focus');
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(ctl.getState().pollSuspended, false, 'window.focus must restore telemetry poll');
+    assert.ok(metricsCalls > beforeWinBlurCalls, 'window.focus must immediately refresh telemetry');
+
+    // 3) seatObs ignores v2.34 [data-testid="agent-response"] / [data-markdown-root] & calls findExtBars at most once per batch
+    const seatMo = moList.find((m) => m.opts?.childList && m.opts?.subtree);
+    assert.ok(seatMo, 'Expected seatObs MutationObserver');
+    const origQsa = env.doc.querySelectorAll.bind(env.doc);
+    let extBarQsaCount = 0;
+    env.doc.querySelectorAll = (sel) => {
+      if (String(sel).includes('ag-pulse-status-bar')) extBarQsaCount += 1;
+      return origQsa(sel);
+    };
+
+    const withClosest = (node) => {
+      node.closest = (sel) => {
+        const parts = String(sel).split(',').map((s) => s.trim()).filter(Boolean);
+        let cur = node;
+        while (cur) {
+          for (const p of parts) {
+            if (p.startsWith('.') && String(cur.className || '').split(/\s+/).includes(p.slice(1))) return cur;
+            const am = p.match(/^\[([a-zA-Z0-9_-]+)(?:="([^"]+)")?\]$/);
+            if (am && cur.hasAttribute?.(am[1]) && (am[2] === undefined || cur.getAttribute(am[1]) === am[2])) return cur;
+          }
+          cur = cur.parentElement;
+        }
+        return null;
+      };
+      return node;
+    };
+
+    const agentResp = withClosest(env.makeEl('div'));
+    agentResp.setAttribute('data-testid', 'agent-response');
+    const mdRoot = withClosest(env.makeEl('div'));
+    mdRoot.setAttribute('data-markdown-root', 'true');
+    agentResp.appendChild(mdRoot);
+    env.composerToolbar.parentElement.appendChild(agentResp);
+
+    seatMo.cb([{ target: agentResp }, { target: mdRoot }]);
+    assert.equal(extBarQsaCount, 0, 'Streaming mutations inside agent-response / data-markdown-root must fast-skip with 0 DOM bar queries');
+
+    const genericNode = withClosest(env.makeEl('div'));
+    env.composerToolbar.parentElement.appendChild(genericNode);
+    seatMo.cb([{ target: genericNode }]);
+    assert.equal(extBarQsaCount, 1, 'Non-streaming mutation batch must reuse cached findExtBars(doc) at most once');
+    env.doc.querySelectorAll = origQsa;
+  } finally {
+    ctl.destroy();
+  }
+
+  // 4) slider-coexist ignores v2.34 [data-testid="agent-response"] & [data-markdown-root]
+  const envSlider = createLightweightDom();
+  let capturedSliderMo = null;
+  envSlider.win.MutationObserver = class {
+    constructor(cb) { capturedSliderMo = cb; }
+    observe() {}
+    disconnect() {}
+    takeRecords() { return []; }
+  };
+  envSlider.win.AntigravityCodexEffortSlider = {
+    installCodexEffortSlider(opts) {
+      const obs = new opts.MutationObserver(() => {});
+      obs.observe(opts.document.body, { childList: true, subtree: true });
+      return { stop() {}, rescan() {} };
+    },
+  };
+  const sCtl = sliderMod.createEffortSliderController({ window: envSlider.win, document: envSlider.doc });
+  try {
+    sCtl.sync({ effortSliderModule: 'on' });
+    const attachClosest = (node) => {
+      node.closest = (sel) => {
+        const parts = String(sel).split(',').map((s) => s.trim()).filter(Boolean);
+        let cur = node;
+        while (cur) {
+          for (const p of parts) {
+            const am = p.match(/^\[([a-zA-Z0-9_-]+)(?:="([^"]+)")?\]$/);
+            if (am && cur.hasAttribute?.(am[1]) && (am[2] === undefined || cur.getAttribute(am[1]) === am[2])) return cur;
+          }
+          cur = cur.parentElement;
+        }
+        return null;
+      };
+      return node;
+    };
+    const ar = attachClosest(envSlider.makeEl('div'));
+    ar.setAttribute('data-testid', 'agent-response');
+    const md = attachClosest(envSlider.makeEl('div'));
+    md.setAttribute('data-markdown-root', '');
+    ar.appendChild(md);
+    envSlider.composerToolbar.parentElement.appendChild(ar);
+
+    const beforeScans = sCtl.getState().perfStats.executedScans;
+    capturedSliderMo([{ target: ar }, { target: md }]);
+    assert.equal(sCtl.getState().perfStats.executedScans, beforeScans, 'slider-coexist must skip v2.34 agent-response/markdown-root mutations');
+    assert.ok(sCtl.getState().perfStats.skippedIrrelevant >= 1);
+  } finally {
+    sCtl.destroy();
+  }
+});
+
+test('13-provider localization coexistence: slider bilingual effort/model parsing, 5 no-translate exemption attributes on pulse/omni/slider roots & external widget ignore', async () => {
+  // 1) slider-coexist bilingual effort token & parenthesized Chinese model label normalization
+  assert.equal(sliderMod.normalizeEffortToken('High'), 'high');
+  assert.equal(sliderMod.normalizeEffortToken('高'), 'high');
+  assert.equal(sliderMod.normalizeEffortToken('高思考'), 'high');
+  assert.equal(sliderMod.normalizeEffortToken('Medium'), 'medium');
+  assert.equal(sliderMod.normalizeEffortToken('中'), 'medium');
+  assert.equal(sliderMod.normalizeEffortToken('中等'), 'medium');
+  assert.equal(sliderMod.normalizeEffortToken('中思考'), 'medium');
+  assert.equal(sliderMod.normalizeEffortToken('Low'), 'low');
+  assert.equal(sliderMod.normalizeEffortToken('低'), 'low');
+  assert.equal(sliderMod.normalizeEffortToken('低思考'), 'low');
+  assert.equal(sliderMod.normalizeEffortToken('Auto'), 'auto');
+  assert.equal(sliderMod.normalizeEffortToken('自动'), 'auto');
+  assert.equal(sliderMod.normalizeEffortToken('Thinking'), 'thinking');
+  assert.equal(sliderMod.normalizeEffortToken('深度思考'), 'thinking');
+  assert.equal(sliderMod.normalizeEffortToken('思考'), 'thinking');
+  assert.equal(sliderMod.normalizeEffortToken('思考中'), 'thinking');
+
+  const pFlash = sliderMod.parseLocalizedModelLabel('Gemini 3.8 Flash (高)');
+  assert.equal(pFlash.base, 'Gemini 3.8 Flash');
+  assert.equal(pFlash.effort, 'high');
+  assert.equal(pFlash.canonicalLabel, 'Gemini 3.8 Flash (High)');
+
+  const pGpt = sliderMod.parseLocalizedModelLabel('GPT-OSS 120B (中)');
+  assert.equal(pGpt.base, 'GPT-OSS 120B');
+  assert.equal(pGpt.effort, 'medium');
+  assert.equal(pGpt.canonicalLabel, 'GPT-OSS 120B (Medium)');
+
+  const pClaudeThink = sliderMod.parseLocalizedModelLabel('Claude Opus 4.6 (深度思考)');
+  assert.equal(pClaudeThink.base, 'Claude Opus 4.6 (Thinking)');
+  assert.equal(pClaudeThink.effort, 'thinking');
+  assert.equal(pClaudeThink.isThinking, true);
+  assert.equal(pClaudeThink.canonicalLabel, 'Claude Opus 4.6 (Thinking)');
+
+  const pFullWidth = sliderMod.parseLocalizedModelLabel('选择模型：Gemini 4 Carbon（高思考）');
+  assert.equal(pFullWidth.base, 'Gemini 4 Carbon');
+  assert.equal(pFullWidth.effort, 'high');
+
+  // Verify syncBilingualDom populates data-model-base & data-model-label for translated panel rows
+  const envDom = createLightweightDom();
+  const panel = envDom.makeEl('div');
+  panel.setAttribute('data-testid', 'model-selector-panel');
+  const gSpan = envDom.makeEl('span');
+  gSpan.setAttribute('data-testid', 'model-selector-effort-group');
+  gSpan.textContent = 'Gemini 3.8 Flash (高)';
+  const sItem = envDom.makeEl('div');
+  sItem.setAttribute('data-testid', 'model-selector-item');
+  sItem.textContent = 'Claude Opus 4.6 (深度思考)';
+  panel.appendChild(gSpan);
+  panel.appendChild(sItem);
+  envDom.doc.body.appendChild(panel);
+  sliderMod.syncBilingualDom(envDom.doc);
+  assert.equal(gSpan.getAttribute('data-model-base'), 'Gemini 3.8 Flash');
+  assert.equal(sItem.getAttribute('data-model-label'), 'Claude Opus 4.6 (Thinking)');
+
+  // 2) Verify all 5 external localization skip attributes on #ag-prism-pulse-bar & omni-client owned UI roots
+  const EXPECT_NO_TR = [
+    ['translate', 'no'],
+    ['data-no-translate', 'true'],
+    ['data-ag-localization-skip', 'true'],
+    ['data-agy-no-translate', 'true'],
+    ['data-antigravity-zh-skip', '1'],
+  ];
+  const assertNoTranslateAttrs = (el, label) => {
+    for (const [k, v] of EXPECT_NO_TR) {
+      assert.equal(el.getAttribute(k), v, `${label} missing ${k}="${v}"`);
+    }
+  };
+
+  const envPulse = createLightweightDom();
+  const ctlPulse = telemetryMod.createTelemetryController({ window: envPulse.win, document: envPulse.doc });
+  try {
+    ctlPulse.sync({ telemetryModule: 'on' });
+    const bar = envPulse.doc.getElementById('ag-prism-pulse-bar');
+    assert.ok(bar);
+    assertNoTranslateAttrs(bar, '#ag-prism-pulse-bar');
+  } finally {
+    ctlPulse.destroy();
+  }
+
+  const omniSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'omni-viewer', 'omni-client.js'), 'utf8');
+  for (const [k, v] of EXPECT_NO_TR) {
+    assert.ok(omniSrc.includes(`setAttribute('${k}', '${v}')`), `omni-client markNoTranslate must set ${k}="${v}"`);
+  }
+  for (const extWidget of ['data-agy-hans-ui', 'agy-theme-switcher', 'agy-theme-menu', 'antigravity-quota-widget', 'antigravity-translation-audit']) {
+    assert.ok(omniSrc.includes(extWidget), `omni-client must ignore external localization widget ${extWidget}`);
   }
 });

@@ -767,7 +767,7 @@ test('settings-panel persists Beta sub-tab, localizes Conversation DB Health acr
   const state = settingsPanel.getDefaultSettingsPatch();
   const mount = () =>
     settingsPanel.mountOrSyncSettingsSection({
-      version: '1.0.5',
+      version: '1.0.6',
       getLang: () => state.language,
       uiText: (l) => i18nLocales.getUiStrings(l),
       isZh: () => state.language !== 'en' && state.language !== 'ja',
@@ -845,7 +845,7 @@ test('settings-panel persists Beta sub-tab, localizes Conversation DB Health acr
   }
 });
 
-test('Main bundle budget <= 704,000 B (< 690 KiB / 706,560 B CI hard limit), sidebarStudio defaults off, dead CSS removed, and v1.0.5 metadata aligned', () => {
+test('Main bundle budget <= 704,000 B (< 690 KiB / 706,560 B CI hard limit), sidebarStudio defaults off, dead CSS removed, and v1.0.6 metadata aligned', () => {
   assert.equal(cdp.DEFAULT_CONFIG.sidebarStudio, 'off', 'DEFAULT_CONFIG.sidebarStudio must remain "off"');
   const expr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
   const bytes = Buffer.byteLength(expr, 'utf8');
@@ -935,22 +935,22 @@ test('Main bundle budget <= 704,000 B (< 690 KiB / 706,560 B CI hard limit), sid
 
   // Verify release metadata consistency
   const wbApp = fs.readFileSync(path.join(ROOT, 'workbench/app.js'), 'utf8');
-  assert.ok(wbApp.includes('Obsidian Prism v1.0.5') && wbApp.includes('GPL-3.0 · 7 CREDITS'), 'workbench/app.js must reflect v1.0.5 and GPL-3.0');
+  assert.ok(wbApp.includes('Obsidian Prism v1.0.6') && wbApp.includes('GPL-3.0 · 7 CREDITS'), 'workbench/app.js must reflect v1.0.6 and GPL-3.0');
   assert.equal(wbApp.includes('Obsidian Prism v1.0.0'), false);
   assert.equal(wbApp.includes('MIT · 7 CREDITS'), false);
 
   const bugTpl = fs.readFileSync(path.join(ROOT, '.github/ISSUE_TEMPLATE/bug_report.md'), 'utf8');
-  assert.ok(bugTpl.includes('`v1.0.5`'));
+  assert.ok(bugTpl.includes('`v1.0.6`'));
   const manifest = fs.readFileSync(path.join(ROOT, 'installer/setup/app.manifest'), 'utf8');
-  assert.ok(manifest.includes('version="1.0.5.0"'));
+  assert.ok(manifest.includes('version="1.0.6.0"'));
   for (const rel of [
     'vendor/omni-viewer/omni-client.js',
     'vendor/thought-translator/thought-client.js',
     'vendor/thought-translator/thought-settings-ui.js',
   ]) {
     const firstLine = fs.readFileSync(path.join(ROOT, rel), 'utf8').split(/\r?\n/)[0];
-    assert.ok(firstLine.includes('v1.0.5'), `${rel} header comment must be v1.0.5`);
+    assert.ok(firstLine.includes('v1.0.6'), `${rel} header comment must be v1.0.6`);
   }
   const changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
-  assert.ok(changelog.includes('## [1.0.5]') && changelog.includes('## [1.0.4]') && changelog.includes('## [1.0.3]') && changelog.includes('## [1.0.2]') && changelog.includes('archive:conversations'));
+  assert.ok(changelog.includes('## [1.0.6]') && changelog.includes('## [1.0.5]') && changelog.includes('## [1.0.4]') && changelog.includes('## [1.0.3]') && changelog.includes('## [1.0.2]') && changelog.includes('archive:conversations'));
 });

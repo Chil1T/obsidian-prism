@@ -518,7 +518,7 @@ test('settings-panel.js inline uninstall UI works across 5 languages and purgeDa
 
   const mount = () =>
     settingsPanel.mountOrSyncSettingsSection({
-      version: '1.0.5',
+      version: '1.0.6',
       getLang: () => state.language,
       uiText: (l) => i18nLocales.getUiStrings(l),
       isZh: () => state.language !== 'en' && state.language !== 'ja',

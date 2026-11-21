@@ -61,8 +61,12 @@ jobs:
         run: |
           VERSION="${TAG_NAME#v}"
           SECTION_BODY="$(awk -v ver="${VERSION}" '
-            index($0, "## [" ver "]") == 1 { found=1; next }
-            found && index($0, "## [") == 1 { exit }
+            {
+              trimmed = $0
+              sub(/^[[:space:]]+/, "", trimmed)
+            }
+            index(trimmed, "## [" ver "]") == 1 || index(trimmed, "## [v" ver "]") == 1 { found=1; next }
+            found && index(trimmed, "## [") == 1 { exit }
             found { print }
           ' CHANGELOG.md)"
 
@@ -95,6 +99,12 @@ jobs:
           REPO_SLUG: ${{ github.repository }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
+          PRERELEASE_CREATE_ARGS=()
+          PRERELEASE_EDIT_ARGS=(--prerelease=false)
+          if [[ "${TAG_NAME#v}" == *-* ]]; then
+            PRERELEASE_CREATE_ARGS=(--prerelease)
+            PRERELEASE_EDIT_ARGS=(--prerelease)
+          fi
           if gh release view "${TAG_NAME}" --repo "${REPO_SLUG}" >/dev/null 2>&1; then
             gh release upload "${TAG_NAME}" \
               artifacts/windows-installer/* \
@@ -106,7 +116,8 @@ jobs:
               --repo "${REPO_SLUG}" \
               --target "${COMMIT_SHA}" \
               --title "Obsidian Prism ${TAG_NAME}" \
-              --notes-file release-notes.md
+              --notes-file release-notes.md \
+              "${PRERELEASE_EDIT_ARGS[@]}"
           else
             gh release create "${TAG_NAME}" \
               --repo "${REPO_SLUG}" \
@@ -115,5 +126,6 @@ jobs:
               artifacts/macos-dmg/* \
               artifacts/SHA256SUMS.txt \
               --title "Obsidian Prism ${TAG_NAME}" \
-              --notes-file release-notes.md
+              --notes-file release-notes.md \
+              "${PRERELEASE_CREATE_ARGS[@]}"
           fi

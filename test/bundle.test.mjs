@@ -372,8 +372,8 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     assert.ok(sandbox.window.__agPrism, 'Expected window.__agPrism exposed');
     assert.equal(sandbox.window.__agClaudeStyle, sandbox.window.__agPrism, 'Expected legacy alias pointing to __agPrism');
     const st = sandbox.window.__agPrism.getState();
-    assert.equal(st.version, '1.0.5');
-    assert.equal(html.getAttribute('data-ag-prism'), '1.0.5');
+    assert.equal(st.version, '1.0.6');
+    assert.equal(html.getAttribute('data-ag-prism'), '1.0.6');
     assert.equal(html.getAttribute('data-ag-cs-light-preset'), 'crystal');
     assert.equal(html.getAttribute('data-ag-cs-telemetry'), 'auto');
     assert.equal(html.getAttribute('data-ag-cs-effort-slider'), 'auto');
@@ -420,7 +420,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     const settingsSec = appearancePanel.querySelector('#ag-cs-settings-sec');
     assert.ok(settingsSec);
     assert.equal(settingsSec.querySelector('h3')?.textContent, 'Obsidian Prism · 黑曜棱镜');
-    assert.equal(settingsSec.querySelector('.ag-cs-settings-ver')?.textContent, 'v1.0.5');
+    assert.equal(settingsSec.querySelector('.ag-cs-settings-ver')?.textContent, 'v1.0.6');
     const brandMarkHtml = settingsSec.querySelector('.ag-cs-settings-brand-mark')?.innerHTML || '';
     assert.ok(
       brandMarkHtml.includes('ag-cs-brand-logo-svg') || brandMarkHtml.includes('ag-cs-settings-brand-svg'),
@@ -433,9 +433,11 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     assert.ok(foldHead && foldBody, 'Expected collapsible banner header and body');
     assert.equal(settingsSec.getAttribute('data-open'), '0');
     assert.equal(foldHead.getAttribute('aria-expanded'), 'false');
+    assert.equal(foldBody.children.length, 0, 'Collapsed settings foldBody must be lazily deferred until first expand');
     foldHead.dispatch('click');
     assert.equal(settingsSec.getAttribute('data-open'), '1');
     assert.equal(foldHead.getAttribute('aria-expanded'), 'true');
+    assert.ok(foldBody.children.length > 0, 'Expanding foldHead must lazily hydrate settings foldBody');
     assert.equal(sandbox.localStorage.getItem('ag-prism:settings-open'), '1');
 
     const settingGroups = settingsSec.querySelectorAll('.ag-cs-settings-group');
@@ -485,7 +487,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
         .map((b) => b.getAttribute('data-ag-cs-key'))
         .filter(Boolean)
     );
-    assert.equal(settingKeys.size, 29);
+    assert.equal(settingKeys.size, 30);
     for (const expectedKey of [
       'palette',
       'lightPreset',
@@ -507,6 +509,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
       'telemetryModule',
       'sidebarStudio',
       'autoUpdate',
+      'updateChannel',
       'effortSliderModule',
       'accentTone',
       'cornerStyle',
@@ -2280,6 +2283,7 @@ test('v3.7 orchestrates 4-tier motionLevel, Hero A~E optical transitions, dual-t
     // Settings motionLevel row switches tier & glides indicator; 'off' restores original host SVGs!
     let glideCalls = 0;
     const origGlide = sandbox.__agMotionEngine.glideIndicator;
+    appPanel.querySelector('[data-ag-cs-fold-toggle]')?.dispatch('click');
     const motionBtns = appPanel.querySelectorAll('#ag-cs-settings-sec button').filter((b) => b.getAttribute('data-ag-cs-key') === 'motionLevel');
     assert.equal(motionBtns.length, 4);
     const stdBtn = motionBtns.find((b) => b.getAttribute('data-ag-cs-val') === '"standard"');
@@ -2875,6 +2879,7 @@ test('Prism v1.0 regression guard: Thought Translator overlay (.ag-prism-thought
     assert.equal(sandbox.window.__agPrism.getState().convAuraSleeping, false);
 
     // Also test About Git Repo Sync button with mocked __agPrismRepoBridge (no-remote & remote pull)
+    appPanel.querySelector('[data-ag-cs-fold-toggle]')?.dispatch('click');
     const repoSyncBtn = appPanel.querySelector('button[data-ag-cs-repo-sync]');
     const repoChip = appPanel.querySelector('[data-ag-cs-repo-status]');
     assert.ok(repoSyncBtn && repoChip, 'Expected Git sync button & status chip');

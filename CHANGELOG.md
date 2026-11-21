@@ -5,6 +5,38 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 本项目遵循语义化版本（SemVer）规范，记录各正式版本的新增功能、架构变更、安全加固与缺陷修复。
 
+## [1.0.6] - 2026-11-21
+
+### Performance / 全链路性能大跃升（#2 / #3 / #4 / #5 / #7 / PR #6）
+
+- **宿主汉化引擎重构与交互零卡顿**：内置 327 条正则规则快速索引与 `2048` 容量的有界正/负向缓存（冷启动提速 **3.2x**、未命中负缓存提速 **25.9x**）；消除弹窗/悬停 `pointerenter` 递归深扫（0 重扫），引入 `5ms` 帧预算时间切片。
+  - *Host Localization Engine Overhaul*: Adds 327-regex fast indexing and `2048`-entry bounded positive/negative caches (**3.2x** faster cold start, **25.9x** faster negative-cache lookups), eliminates `pointerenter` recursive DOM rescans (0 rescans), and adds `5ms` frame-budget time slicing.
+- **零顶层 `:has()` 与设置面板零回流**：彻底清零 `style.css` 顶层 `:has()` 选择器，改由精准属性标记（`data-ag-cs-aux-dual`、`data-ag-cs-model-menu`）驱动，压降 Blink `RecalcStyle` 开销约 **80%**；设置面板实行折叠态懒构建与 Read-then-Write 批量读写，消除 238 次点击强制回流与 600 按钮全量扫描。
+  - *Zero Top-Level `:has()` & Zero-Reflow Settings Panel*: Eliminates all top-level `:has()` selectors in `style.css` via targeted `O(1)` attributes (reducing Blink `RecalcStyle` by ~80%), and introduces collapsed lazy-building plus Read-then-Write updates in `settings-panel.js` (eliminating 238 click-time layout reflows and 600-button full scans).
+- **桌面双宠 RLE Canvas 批处理与真 `0fps` 休眠**：桌面像素双宠改为水平行程编码（RLE）`fillRect` 批处理与 2D 上下文缓存（CPU 占用 **-90%**）；完善高刷屏与 macOS 失焦（`data-ag-cs-win-blur="1"`）下的真 `0fps` / 0 RPC 休眠与获焦瞬时唤醒。
+  - *Mascot RLE Canvas Batching & True `0fps` Blur Hibernation*: Batches pixel draws via horizontal RLE `fillRect` + `lastFill` skip + cached 2D context (**-90%** CPU), and honors `data-ag-cs-win-blur="1"` for true `0fps` / zero-RPC hibernation on macOS and high-refresh displays.
+- **`v2.34.0` `renderer-proxy` 分级缓存与 Daemon / 安装包瘦身**：`vendor/pulse-dashboard/` 引入 `WeakRef` Language Server 包装器缓存、并发请求合并（in-flight coalescing）与分级 TTL 缓存；Daemon 常驻堆内存降低 **35.5 MiB**，安装器打包自动排除宣传图体积瘦身至 **~1.6 MB（-85%）**。
+  - *`v2.34.0` `renderer-proxy` Tiered Caching, Daemon Heap & Installer Slimming*: Caches LS wrapper via `WeakRef` with request coalescing and tiered TTLs; trims daemon resident heap by **35.5 MiB** and excludes promo screenshots from installer bundles (**~1.6 MB**, **-85%**).
+
+### Fixed / 关键稳定性与界面修复（#8 等）
+
+- **根治 CDP 主 Frame 失联 P0 Bug**：修复 `Page.getFrameTree` 超时导致 `mainFrameId === null` 进而使全部 CDP Privileged Binding（含 AI 思考转译）永久瘫痪的致命问题。
+  - *Fix P0 `mainFrameId === null` CDP Binding Paralysis*: Resolves `Page.getFrameTree` timeouts that permanently disabled all privileged CDP bindings (including Thought Translator).
+- **修复窗口滚动条与界面细节回归**：修复 Windows 下 `autoscroll-viewport` 同时渲染原生与自定义双滚动条及底部原生箭头外露问题（[#8](https://github.com/RMvdesi/obsidian-prism/issues/8)）；修复遥测栏子代理文字截断、排队消息按钮 3 齿轮误替换，以及从 `XHigh` 切换至 `Carbon` 时残留紫色 `Extra` 徽章的问题。
+  - *Fix Scrollbars & UI Regressions*: Fixes Windows dual scrollbars and exposed native arrows ([#8](https://github.com/RMvdesi/obsidian-prism/issues/8)), telemetry subagent label truncation, queued-message 3-gear button mis-replacement, and stale purple `Extra` badge when switching from `XHigh` to `Carbon`.
+
+### Compatibility & Release Channels / 生态兼容与双更新通道
+
+- **13 家主流汉化插件礼让与防误翻免疫**：内置 GitHub Top 13 家主流活跃汉化插件精准指纹识别自动礼让、零 `Map.prototype` 劫持免疫、5 项反向防误翻豁免属性，以及中英双语模型名称与思考强度解析。
+  - *13-Provider Localization Coexistence & Hardening*: Adds fingerprinting to politely yield to the top 13 active community localization plugins on GitHub, zero `Map.prototype` hijacking immunity, 5 anti-mistranslation exemption attributes, and bilingual model/effort parsing.
+- **正式版 / Beta 双更新通道与社区讨论模板**：设置面板扩展至 **30 项**可校验配置，上线「正式版（Stable）/ Beta 尝鲜版」双更新通道（`updateChannel`）与 CI 自动 `--prerelease` 标签识别；新增社区「讨论」Issue 模板（`.github/ISSUE_TEMPLATE/discussion.md`）。
+  - *Stable / Beta Update Channels & Discussion Template*: Expands validated settings to **30** keys with `updateChannel` (`stable` / `beta`), automatic CI `--prerelease` tagging, and a new community Discussion issue template.
+
+### Acknowledgements / 社区致谢
+
+- 特别感谢 **[PR #6](https://github.com/RMvdesi/obsidian-prism/pull/6)** 作者 **[@TheSixPasserby](https://github.com/TheSixPasserby)**（ハチケイ，已通过 `Co-authored-by` 正式纳入 Contributors 榜单）对 Blink `:has()`、RLE Canvas、macOS `0fps` 休眠与 `v2.34.0` `renderer-proxy` 缓存的重大贡献，以及提交深度剖析与缺陷反馈的社区贡献者 **[@Gruu6y](https://github.com/Gruu6y)**（[#2](https://github.com/RMvdesi/obsidian-prism/issues/2) / [#3](https://github.com/RMvdesi/obsidian-prism/issues/3) / [#8](https://github.com/RMvdesi/obsidian-prism/issues/8)）、**[@Gyf0402](https://github.com/Gyf0402)**（[#4](https://github.com/RMvdesi/obsidian-prism/issues/4)）、**[@TheSixPasserby](https://github.com/TheSixPasserby)**（[#5](https://github.com/RMvdesi/obsidian-prism/issues/5)）和 **[@boy14204367](https://github.com/boy14204367)**（[#7](https://github.com/RMvdesi/obsidian-prism/issues/7)）。
+  - *Special thanks to [@TheSixPasserby](https://github.com/TheSixPasserby) (PR #6, credited via `Co-authored-by`) and community contributors [@Gruu6y](https://github.com/Gruu6y) (#2/#3/#8), [@Gyf0402](https://github.com/Gyf0402) (#4), [@TheSixPasserby](https://github.com/TheSixPasserby) (#5), and [@boy14204367](https://github.com/boy14204367) (#7) for their profiling, PRs, and actionable bug reports.*
+
 ## [1.0.5] - 2026-11-21
 
 ### Added / 新增特性

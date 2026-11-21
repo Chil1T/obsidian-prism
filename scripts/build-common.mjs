@@ -218,6 +218,7 @@ function collectNativePluginEntries(activeConfigFile) {
         continue;
       }
       const nextRel = `${subRel}/${name}`;
+      if (nextRel === 'assets/screenshots') continue;
       const nextAbs = path.join(absDir, name);
       if (dirent.isDirectory()) {
         walkSubDir(nextRel);

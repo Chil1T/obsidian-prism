@@ -9,7 +9,12 @@ import { spawn } from 'node:child_process';
 
 export const GITHUB_REPO = 'RMvdesi/obsidian-prism';
 export const LATEST_RELEASE_API = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+export const RELEASES_LIST_API = `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=15`;
 export const RELEASES_PAGE_URL = `https://github.com/${GITHUB_REPO}/releases`;
+
+export function normalizeUpdateChannel(raw) {
+  return raw === 'beta' ? 'beta' : 'stable';
+}
 
 export const CHECK_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 export const MANUAL_COOLDOWN_MS = 10_000; // 10 seconds
@@ -204,7 +209,8 @@ export class UpdateService {
     fetchFn = globalThis.fetch,
     spawnFn = spawn,
     platform = process.platform,
-    currentVersion = '1.0.5',
+    currentVersion = '1.0.6',
+    channel = 'stable',
     checkTtlMs = CHECK_TTL_MS,
     manualCooldownMs = MANUAL_COOLDOWN_MS,
     tmpRoot = os.tmpdir(),
@@ -215,7 +221,8 @@ export class UpdateService {
     this.fetchFn = fetchFn;
     this.spawnFn = spawnFn;
     this.platform = platform;
-    this.currentVersion = normalizeVersionStr(currentVersion) || '1.0.5';
+    this.currentVersion = normalizeVersionStr(currentVersion) || '1.0.6';
+    this.channel = normalizeUpdateChannel(channel);
     this.checkTtlMs = Math.max(0, Number(checkTtlMs) || 0);
     this.manualCooldownMs = Math.max(0, Number(manualCooldownMs) || 0);
     this.tmpRoot = tmpRoot || os.tmpdir();
@@ -228,10 +235,23 @@ export class UpdateService {
     this._lastCheckResult = null;
     this._lastRelease = null;
     this._checkInFlight = null;
+    this._inFlightChannel = null;
     this._applyInFlight = null;
     this._failedAutoTags = new Set();
     this._lastError = null;
     this.applying = false;
+  }
+
+  setChannel(nextChannel) {
+    const norm = normalizeUpdateChannel(nextChannel);
+    if (norm === this.channel) return false;
+    this.channel = norm;
+    this._lastCheckAt = 0;
+    this._lastManualCheckAt = 0;
+    this._lastCheckResult = null;
+    this._lastRelease = null;
+    this._lastError = null;
+    return true;
   }
 
   async _trustedFetch(rawUrl, opts = {}, redirectCount = 0) {
@@ -346,16 +366,36 @@ export class UpdateService {
     }
   }
 
+  _pickBestBetaOrStableRelease(rawList) {
+    const list = Array.isArray(rawList) ? rawList : rawList && typeof rawList === 'object' ? [rawList] : [];
+    let best = null;
+    let bestTag = '';
+    for (const rel of list) {
+      if (!rel || typeof rel !== 'object' || rel.draft === true) continue;
+      const tag = String(rel.tag_name || '').trim();
+      if (!tag || !parseSemver(tag)) continue;
+      if (!best || compareSemver(tag, bestTag) > 0) {
+        best = rel;
+        bestTag = tag;
+      }
+    }
+    return best;
+  }
+
   getStatus() {
-    if (this._lastCheckResult) {
+    if (this._lastCheckResult && this._lastCheckResult.channel === this.channel) {
       return {
         ...this._lastCheckResult,
+        channel: this.channel,
+        isPrerelease: Boolean(this._lastCheckResult.isPrerelease),
         applying: this.applying,
         lastError: this._lastError,
       };
     }
     return {
       ok: true,
+      channel: this.channel,
+      isPrerelease: false,
       currentVersion: this.currentVersion,
       latestVersion: this.currentVersion,
       latestTag: null,
@@ -371,15 +411,27 @@ export class UpdateService {
     };
   }
 
-  async checkForUpdates({ force = false, manual = false } = {}) {
-    if (this._checkInFlight) {
+  async checkForUpdates({ force = false, manual = false, channel = null } = {}) {
+    if (channel !== null && channel !== undefined) {
+      this.setChannel(channel);
+    }
+    const targetChannel = this.channel;
+    if (this._checkInFlight && this._inFlightChannel === targetChannel) {
       return this._checkInFlight;
     }
 
     const now = this.nowFn();
-    if (!force && this._lastCheckResult && this._lastCheckAt > 0 && now - this._lastCheckAt < this.checkTtlMs) {
+    if (
+      !force &&
+      this._lastCheckResult &&
+      this._lastCheckResult.channel === targetChannel &&
+      this._lastCheckAt > 0 &&
+      now - this._lastCheckAt < this.checkTtlMs
+    ) {
       return {
         ...this._lastCheckResult,
+        channel: targetChannel,
+        isPrerelease: Boolean(this._lastCheckResult.isPrerelease),
         cached: true,
         applying: this.applying,
         lastError: this._lastError,
@@ -389,11 +441,14 @@ export class UpdateService {
     if (
       manual &&
       this._lastCheckResult &&
+      this._lastCheckResult.channel === targetChannel &&
       this._lastManualCheckAt > 0 &&
       now - this._lastManualCheckAt < this.manualCooldownMs
     ) {
       return {
         ...this._lastCheckResult,
+        channel: targetChannel,
+        isPrerelease: Boolean(this._lastCheckResult.isPrerelease),
         cached: true,
         throttled: true,
         applying: this.applying,
@@ -404,7 +459,8 @@ export class UpdateService {
     const run = async () => {
       void this._cleanupStaleTempDirs().catch(() => {});
       try {
-        const res = await this._trustedFetch(LATEST_RELEASE_API, {
+        const apiUrl = targetChannel === 'beta' ? RELEASES_LIST_API : LATEST_RELEASE_API;
+        const res = await this._trustedFetch(apiUrl, {
           headers: {
             Accept: 'application/vnd.github+json',
             'User-Agent': 'Obsidian-Prism-Updater',
@@ -413,54 +469,93 @@ export class UpdateService {
         });
         if (!res.ok) {
           const errCode = `http_${res.status}`;
-          this._lastError = errCode;
+          if (this.channel === targetChannel) this._lastError = errCode;
           return {
             ...this.getStatus(),
+            channel: targetChannel,
             ok: false,
             error: errCode,
             lastError: errCode,
             checkedAt: this.nowFn(),
           };
         }
-        const rel = await res.json();
+        const payload = await res.json();
         const checkedAt = this.nowFn();
-        if (rel?.draft === true || rel?.prerelease === true) {
-          this._lastError = null;
-          this._lastRelease = null;
-          const skippedRes = {
-            ok: true,
-            currentVersion: this.currentVersion,
-            latestVersion: this.currentVersion,
-            latestTag: null,
-            hasUpdate: false,
-            skippedPrerelease: true,
-            mode: this.platform === 'win32' ? 'installer' : 'manual',
-            hotReloadCapable: this.platform === 'win32',
-            manualRequired: this.platform !== 'win32',
-            releaseUrl: RELEASES_PAGE_URL,
-            downloadUrl: null,
-            checkedAt,
-            applying: this.applying,
-            lastError: null,
-          };
-          this._lastCheckAt = checkedAt;
-          if (manual) this._lastManualCheckAt = checkedAt;
-          this._lastCheckResult = skippedRes;
-          return skippedRes;
+
+        let rel = null;
+        if (targetChannel === 'beta') {
+          rel = this._pickBestBetaOrStableRelease(payload);
+          if (!rel) {
+            const emptyBetaRes = {
+              ok: true,
+              channel: targetChannel,
+              isPrerelease: false,
+              currentVersion: this.currentVersion,
+              latestVersion: this.currentVersion,
+              latestTag: null,
+              hasUpdate: false,
+              mode: this.platform === 'win32' ? 'installer' : 'manual',
+              hotReloadCapable: this.platform === 'win32',
+              manualRequired: this.platform !== 'win32',
+              releaseUrl: RELEASES_PAGE_URL,
+              downloadUrl: null,
+              checkedAt,
+              applying: this.applying,
+              lastError: null,
+            };
+            if (this.channel === targetChannel) {
+              this._lastError = null;
+              this._lastRelease = null;
+              this._lastCheckAt = checkedAt;
+              if (manual) this._lastManualCheckAt = checkedAt;
+              this._lastCheckResult = emptyBetaRes;
+            }
+            return emptyBetaRes;
+          }
+        } else {
+          rel = payload;
+          if (rel?.draft === true || rel?.prerelease === true) {
+            const skippedRes = {
+              ok: true,
+              channel: targetChannel,
+              isPrerelease: false,
+              currentVersion: this.currentVersion,
+              latestVersion: this.currentVersion,
+              latestTag: null,
+              hasUpdate: false,
+              skippedPrerelease: true,
+              mode: this.platform === 'win32' ? 'installer' : 'manual',
+              hotReloadCapable: this.platform === 'win32',
+              manualRequired: this.platform !== 'win32',
+              releaseUrl: RELEASES_PAGE_URL,
+              downloadUrl: null,
+              checkedAt,
+              applying: this.applying,
+              lastError: null,
+            };
+            if (this.channel === targetChannel) {
+              this._lastError = null;
+              this._lastRelease = null;
+              this._lastCheckAt = checkedAt;
+              if (manual) this._lastManualCheckAt = checkedAt;
+              this._lastCheckResult = skippedRes;
+            }
+            return skippedRes;
+          }
         }
 
         const latestTag = String(rel?.tag_name || '').trim();
         const latestVersion = normalizeVersionStr(latestTag) || this.currentVersion;
+        const parsedLatest = parseSemver(latestTag);
+        const isPrerelease = Boolean(rel?.prerelease === true || (parsedLatest && parsedLatest.pre.length > 0));
+        // Gentle channel switch: compareSemver > 0 ensures switching beta -> stable never forces a downgrade
         const hasUpdate = Boolean(latestTag && compareSemver(latestTag, this.currentVersion) > 0);
         const sel = this._selectReleaseAssets(rel);
 
-        this._lastError = null;
-        this._lastRelease = rel;
-        this._lastCheckAt = checkedAt;
-        if (manual) this._lastManualCheckAt = checkedAt;
-
         const out = {
           ok: true,
+          channel: targetChannel,
+          isPrerelease,
           currentVersion: this.currentVersion,
           latestVersion,
           latestTag: latestTag || null,
@@ -476,25 +571,37 @@ export class UpdateService {
           applying: this.applying,
           lastError: null,
         };
-        this._lastCheckResult = out;
+        if (this.channel === targetChannel) {
+          this._lastError = null;
+          this._lastRelease = rel;
+          this._lastCheckAt = checkedAt;
+          if (manual) this._lastManualCheckAt = checkedAt;
+          this._lastCheckResult = out;
+        }
         return out;
       } catch (err) {
         const msg = String(err?.message || err || 'check_failed');
-        this._lastError = msg;
+        if (this.channel === targetChannel) this._lastError = msg;
         return {
           ...this.getStatus(),
+          channel: targetChannel,
           ok: false,
           error: msg,
           lastError: msg,
           checkedAt: this.nowFn(),
         };
       } finally {
-        this._checkInFlight = null;
+        if (this._checkInFlight === p) {
+          this._checkInFlight = null;
+          this._inFlightChannel = null;
+        }
       }
     };
 
-    this._checkInFlight = run();
-    return this._checkInFlight;
+    const p = run();
+    this._checkInFlight = p;
+    this._inFlightChannel = targetChannel;
+    return p;
   }
 
   async _resolveExpectedSha256(sel) {
@@ -539,6 +646,8 @@ export class UpdateService {
         if (!status.hasUpdate) {
           return {
             ok: true,
+            channel: this.channel,
+            isPrerelease: Boolean(status.isPrerelease),
             applied: false,
             upToDate: true,
             currentVersion: this.currentVersion,
@@ -550,6 +659,8 @@ export class UpdateService {
         if (auto && latestTag && this._failedAutoTags.has(latestTag)) {
           return {
             ok: false,
+            channel: this.channel,
+            isPrerelease: Boolean(status.isPrerelease),
             applied: false,
             skippedFailedTag: true,
             targetVersion: status.latestVersion,
@@ -561,6 +672,8 @@ export class UpdateService {
         if (this.platform !== 'win32') {
           return {
             ok: true,
+            channel: this.channel,
+            isPrerelease: Boolean(status.isPrerelease),
             applied: false,
             manualRequired: true,
             mode: 'manual',

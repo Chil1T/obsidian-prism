@@ -33,5 +33,6 @@
   "linkTarget": "builtin",
   "sidebarStudio": "off",
   "hostLocalization": "auto",
-  "autoUpdate": "off"
+  "autoUpdate": "off",
+  "updateChannel": "stable"
 }

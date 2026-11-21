@@ -367,7 +367,32 @@ export function buildRendererRpcExpression(method, body = {}) {
   }
   const argLiteral = serializeJsonForEval(safeParams);
   return `(async (params) => {
-    const findLs = () => {
+    const g = typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : null;
+    const isLs = (v) => Boolean(v && typeof v === 'object' && typeof v.getUserStatus === 'function' && typeof v.getCascadeTrajectory === 'function');
+    const clearCachedLs = () => { try { if (g) delete g.__agPrismLsRef; } catch {} };
+    const saveCachedLs = (v) => {
+      if (!g || !v) return;
+      const box = typeof WeakRef === 'function' ? new WeakRef(v) : v;
+      try {
+        Object.defineProperty(g, '__agPrismLsRef', { value: box, configurable: true, writable: true, enumerable: false });
+      } catch {
+        try { g.__agPrismLsRef = box; } catch {}
+      }
+    };
+    let usedCache = false;
+    const findLs = (forceRescan = false) => {
+      if (!forceRescan) {
+        try {
+          const ref = g && g.__agPrismLsRef;
+          const cached = ref && typeof ref.deref === 'function' ? ref.deref() : ref && ref.value ? ref.value : ref;
+          if (isLs(cached)) {
+            usedCache = true;
+            return cached;
+          }
+          if (ref) clearCachedLs();
+        } catch {}
+      }
+      usedCache = false;
       const root = document.getElementById('root') || document.body;
       if (!root) return null;
       const fk = Object.keys(root).find((k) => k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$'));
@@ -381,7 +406,8 @@ export function buildRendererRpcExpression(method, body = {}) {
         seen.add(f);
         visited += 1;
         const v = f.memoizedProps && f.memoizedProps.value;
-        if (v && typeof v === 'object' && typeof v.getUserStatus === 'function' && typeof v.getCascadeTrajectory === 'function') {
+        if (isLs(v)) {
+          saveCachedLs(v);
           return v;
         }
         if (f.child) q.push(f.child);
@@ -389,7 +415,7 @@ export function buildRendererRpcExpression(method, body = {}) {
       }
       return null;
     };
-    const ls = findLs();
+    let ls = findLs(false);
     if (!ls) return { ok: false, error: 'renderer_ls_unavailable' };
     if (params.method === 'Probe') return { ok: true, data: { available: true } };
     const ts = (v) => {
@@ -421,9 +447,9 @@ export function buildRendererRpcExpression(method, body = {}) {
       if (typeof v === 'object' && v.seconds !== undefined) { const s = Number(v.seconds); return Number.isFinite(s) ? s : 0; }
       return 0;
     };
-    try {
+    const execWithLs = async (activeLs) => {
       if (params.method === 'GetUserStatus') {
-        const r = await ls.getUserStatus({});
+        const r = await activeLs.getUserStatus({});
         const us = (r && r.userStatus) || {};
         const cfgs = (us.cascadeModelConfigData && us.cascadeModelConfigData.clientModelConfigs) || [];
         return {
@@ -445,7 +471,7 @@ export function buildRendererRpcExpression(method, body = {}) {
         };
       }
       if (params.method === 'RetrieveUserQuotaSummary') {
-        const r = await ls.retrieveUserQuotaSummary(params.forceRefresh ? { forceRefresh: true } : {});
+        const r = await activeLs.retrieveUserQuotaSummary(params.forceRefresh ? { forceRefresh: true } : {});
         const root = (r && r.response) || r || {};
         const groups = Array.isArray(root.groups) ? root.groups.map((g) => ({
           displayName: g && g.displayName,
@@ -465,8 +491,8 @@ export function buildRendererRpcExpression(method, body = {}) {
         return { ok: true, data: { response: { groups } } };
       }
       if (params.method === 'GetAllCascadeTrajectories') {
-        if (typeof ls.getAllCascadeTrajectories === 'function') {
-          const r = await ls.getAllCascadeTrajectories({ excludeSubtrajectories: false });
+        if (typeof activeLs.getAllCascadeTrajectories === 'function') {
+          const r = await activeLs.getAllCascadeTrajectories({ excludeSubtrajectories: false });
           const sums = (r && r.trajectorySummaries) || {};
           const out = {};
           const keys = Object.keys(sums)
@@ -491,8 +517,8 @@ export function buildRendererRpcExpression(method, body = {}) {
           }
           return { ok: true, data: { trajectorySummaries: out } };
         }
-        if (typeof ls.searchConversations === 'function') {
-          const r = await ls.searchConversations({ query: '' });
+        if (typeof activeLs.searchConversations === 'function') {
+          const r = await activeLs.searchConversations({ query: '' });
           const rawList = Array.isArray(r && r.results) ? r.results.slice() : [];
           rawList.sort((a, b) => tsSec(b && b.lastModifiedTime) - tsSec(a && a.lastModifiedTime));
           const list = rawList.slice(0, 1024);
@@ -512,7 +538,7 @@ export function buildRendererRpcExpression(method, body = {}) {
         return { ok: false, error: 'renderer_summaries_unavailable' };
       }
       if (params.method === 'GetCascadeTrajectory') {
-        const t = await ls.getCascadeTrajectory({ cascadeId: params.cascadeId });
+        const t = await activeLs.getCascadeTrajectory({ cascadeId: params.cascadeId });
         const traj = (t && t.trajectory) || {};
         const rawSteps = Array.isArray(traj.steps) ? traj.steps : [];
         const rawGms = Array.isArray(traj.generatorMetadata) ? traj.generatorMetadata : [];
@@ -617,7 +643,27 @@ export function buildRendererRpcExpression(method, body = {}) {
         };
       }
       return { ok: false, error: 'unsupported_method' };
+    };
+    try {
+      const firstRes = await execWithLs(ls);
+      if (firstRes && !firstRes.ok && usedCache && firstRes.error === 'renderer_summaries_unavailable') {
+        clearCachedLs();
+        const retryLs = findLs(true);
+        if (retryLs && retryLs !== ls) return await execWithLs(retryLs);
+      }
+      return firstRes;
     } catch (err) {
+      if (usedCache) {
+        clearCachedLs();
+        const retryLs = findLs(true);
+        if (retryLs && retryLs !== ls) {
+          try {
+            return await execWithLs(retryLs);
+          } catch (retryErr) {
+            return { ok: false, error: String((retryErr && retryErr.message) || retryErr || 'renderer_rpc_failed') };
+          }
+        }
+      }
       return { ok: false, error: String((err && err.message) || err || 'renderer_rpc_failed') };
     }
   })(${argLiteral})`;

@@ -65,37 +65,15 @@ return /claude/i.test(name);
 }
 // ── 连续物理运动参数 ────────────────────────────────────────────────────────
 // full: 完整星云阻尼变速动画；fast: 快速 ~70ms 跟手吸附（默认）；quick: 0 动画直接跳格
-var MOTION = Object.freeze({
-maxSpeed: 3.2,
-accel: 28,
-decel: 18,
-snapEps: 0.0015,
-velEps: 0.01
-});
-var MOTION_REDUCED = Object.freeze({
-maxSpeed: 1e6,
-accel: 1e9,
-decel: 1e9,
-snapEps: 1e-4,
-velEps: 1e6
-});
-var MOTION_FAST = Object.freeze({
-maxSpeed: 18,
-accel: 260,
-decel: 180,
-snapEps: 0.002,
-velEps: 0.04
-});
-var _REL_PRJ = 0.09;
-var _PS_EMA = 0.45;
-var _PS_STL = 0.05;
-var _PS_TAU = 0.035;
-// ── 用户设置 Schema 与持久化 ────────────────────────────────────────────────
+var _F = Object.freeze;
+var MOTION = _F({ maxSpeed: 3.2, accel: 28, decel: 18, snapEps: 0.0015, velEps: 0.01 });
+var MOTION_REDUCED = _F({ maxSpeed: 1e6, accel: 1e9, decel: 1e9, snapEps: 1e-4, velEps: 1e6 });
+var MOTION_FAST = _F({ maxSpeed: 18, accel: 260, decel: 180, snapEps: 0.002, velEps: 0.04 });
+var _REL_PRJ = 0.09, _PS_EMA = 0.45, _PS_STL = 0.05, _PS_TAU = 0.035;
 var SETTINGS_KEY = "ag.codexEffortSlider.settings.v1";
 var LEGACY_SETTINGS_KEY = "dsh.codexEffortSlider.settings.v1";
 var SETTINGS_EVENT = "ag:codex-effort-slider:settings";
 var SETTINGS_VERSION = 1;
-var _F = Object.freeze;
 var SETTINGS_SCHEMA = _F([
 _F({ key: "motion", label: "动画效果", defaultValue: "fast", options: _F([
 _F({ value: "fast", label: "快速动画", hint: "拨过 1/3 即切档 · ~70ms 快速吸附" }),
@@ -342,71 +320,23 @@ return ((value >>> 8) % 1000) / 1000;
 * - 相位：黄金比低差异序列（任意前缀均匀铺开）
 * - 高度：与相位排名解耦的确定性哈希排列，且相位相邻两星高度至少差 MIN_HEIGHT_SLOTS 槽
 */
-var PARTICLES = (function buildParticles() {
-var count = PARTICLE_COUNT;
-var minSlots = 3;
-var out = [];
-var i;
+var PARTICLES = (function () {
+var count = PARTICLE_COUNT, out = [], byPhase = [], i;
 for (i = 0; i < count; i += 1) {
 var b = STARFIELD_MIN + (1 - STARFIELD_MIN) * starHash01(i, 61);
-out.push({
-id: i,
-y: 0,
-phase: ((i + 1) * GOLDEN_RATIO) % 1,
-threshold: i / count,
-brightness: Math.round(b * 1000) / 1000
-});
+out.push({ id: i, y: 0, phase: ((i + 1) * GOLDEN_RATIO) % 1, threshold: i / count, brightness: Math.round(b * 1000) / 1000 });
+byPhase.push(i);
 }
-var byPhase = [];
-for (i = 0; i < count; i += 1) byPhase.push(i);
-byPhase.sort(function (a, b) {
-return out[a].phase - out[b].phase;
-});
-var slots = null;
-for (var salt = 71; salt < 4000 && slots === null; salt += 1) {
-var candidate = [];
-for (i = 0; i < count; i += 1) candidate.push(i);
-candidate.sort(function (a, b) {
-var ha = starHash01(a, salt);
-var hb = starHash01(b, salt);
-return ha === hb ? a - b : ha - hb;
-});
-var ok = true;
-for (var k = 1; k < count && ok; k += 1) {
-if (Math.abs(candidate[k] - candidate[k - 1]) < minSlots) ok = false;
-}
-if (ok) slots = candidate;
-}
-if (slots === null) {
-slots = [];
-for (i = 0; i < count; i += 1) slots.push((i * 5) % count);
-}
-for (var rank = 0; rank < count; rank += 1) {
-var yVal = 8 + (slots[rank] / (count - 1)) * 84;
-out[byPhase[rank]].y = Math.round(yVal * 100) / 100;
-}
-for (i = 0; i < count; i += 1) {
-Object.freeze(out[i]);
-}
-return Object.freeze(out);
+byPhase.sort(function (a, b) { return out[a].phase - out[b].phase; });
+var slots = [10, 21, 1, 8, 19, 6, 17, 4, 15, 2, 13, 20, 0, 11, 18, 9, 16, 7, 14, 5, 12, 3];
+for (var r = 0; r < count; r += 1) out[byPhase[r]].y = Math.round((8 + (slots[r] / (count - 1)) * 84) * 100) / 100;
+for (i = 0; i < count; i += 1) _F(out[i]);
+return _F(out);
 })();
 function isOffLevel(text) {
 if (text === null || text === undefined) return false;
-if (typeof text === "object") {
-return isOffLevel(text.id || text.name || text.effort || text.label || "");
-}
-var s = String(text).trim().toLowerCase();
-if (!s) return false;
-return (
-s === "off" ||
-s === "none" ||
-s === "disabled" ||
-s === "0" ||
-s === "关闭" ||
-s === "关" ||
-s === "不推理" ||
-s === "无"
-);
+if (typeof text === "object") return isOffLevel(text.id || text.name || text.effort || text.label || "");
+return /^(?:off|none|disabled|0|关闭|关|不推理|无)$/.test(String(text).trim().toLowerCase());
 }
 /* ── Claude Ultracode 像素点阵抖动引擎 ──────────────────────────────── */
 function hash01(a, b, c) {
@@ -497,122 +427,77 @@ return true;
 */
 function paintDither(ctx, w, h, dark, progress, timeSec, intensity) {
 if (!ctx) return;
+var _mx = Math.max, _mn = Math.min, _rd = Math.round, _fl = Math.floor, _pw = Math.pow, _PI2 = Math.PI * 2;
 var strength = typeof intensity === "number" ? clamp01(intensity) : 1;
 ctx.clearRect(0, 0, w, h);
 if (strength <= 0 || w <= 0) return;
-// 密度阈值：strength=1 → 1.0（全保留）；strength=0.35 → ~0.51（约一半格子）
-var keepRatio = strength >= 1 ? 1 : 0.25 + 0.75 * strength;
-var alphaMul = 0.45 + 0.55 * strength;
-var k = 1 - progress;
-var s1 = Math.max(0, Math.min(1, k - 0.08));
-var s2 = Math.max(s1, Math.min(1, k + 0.18));
+var keepRatio = strength >= 1 ? 1 : 0.25 + 0.75 * strength, alphaMul = 0.45 + 0.55 * strength;
+var k = 1 - progress, s1 = _mx(0, _mn(1, k - 0.08)), s2 = _mx(s1, _mn(1, k + 0.18));
 var wash = ctx.createLinearGradient(0, 0, w, 0);
-if (dark) {
-wash.addColorStop(0, "rgba(112, 78, 162, 0)");
-wash.addColorStop(s1, "rgba(112, 78, 162, 0)");
-wash.addColorStop(s2, "rgba(118, 84, 169, 0.3)");
-wash.addColorStop(1, "rgba(116, 84, 170, 0.75)");
-} else {
-wash.addColorStop(0, "rgba(142, 118, 192, 0)");
-wash.addColorStop(s1, "rgba(142, 118, 192, 0)");
-wash.addColorStop(s2, "rgba(142, 118, 192, 0.45)");
-wash.addColorStop(1, "rgba(142, 118, 192, 1)");
-}
+var stops = dark
+? [[0, "rgba(112,78,162,0)"], [s1, "rgba(112,78,162,0)"], [s2, "rgba(118,84,169,0.3)"], [1, "rgba(116,84,170,0.75)"]]
+: [[0, "rgba(142,118,192,0)"], [s1, "rgba(142,118,192,0)"], [s2, "rgba(142,118,192,0.45)"], [1, "rgba(142,118,192,1)"]];
+for (var si = 0; si < 4; si += 1) wash.addColorStop(stops[si][0], stops[si][1]);
 ctx.globalAlpha = strength;
 ctx.fillStyle = wash;
 ctx.fillRect(0, 0, w, h);
-var purple = dark ? [208, 192, 246] : [150, 130, 205];
-var cell = h / 6 > 0 ? h / 6 : CLAUDE_CELL;
-var cols = Math.ceil(w / cell);
-var rows = 6;
+var purple = dark ? "rgb(208,192,246)" : "rgb(150,130,205)";
+var cell = h / 6 > 0 ? h / 6 : CLAUDE_CELL, cols = Math.ceil(w / cell), rows = 6;
 for (var col = 0; col < cols; col += 1) {
-var x = col * cell;
-var t = clamp01(x / Math.max(1, w));
-var fade = clamp01((t - 0.02) / 0.48);
+var x = col * cell, t = clamp01(x / _mx(1, w)), fade = clamp01((t - 0.02) / 0.48);
 for (var row = 0; row < rows; row += 1) {
-// 确定性稀疏：同一格在同一强度下始终同样保留/剔除，避免拖动时整片闪烁
 if (keepRatio < 1 && hash01(col, row, 101) > keepRatio) continue;
 var base = ditherAlphaAt(x, w, col, row) * alphaMul;
 if (base < 0.05) continue;
-var front = 1 - progress;
-var edgeJit = (hash01(col, row, 31) - 0.5) * 0.05;
+var front = 1 - progress, edgeJit = (hash01(col, row, 31) - 0.5) * 0.05;
 if (t < front + edgeJit) continue;
 var appear = (0.35 + 0.65 * clamp01((t - front - edgeJit) / 0.04)) * (dark ? 1 : alphaMul);
-var rowWaves = 3 + Math.floor(hash01(0, row, 47) * 5);
-var rowSpeed = 5.0 + 10.0 * hash01(0, row, 43);
-var rowPhase = hash01(0, row, 53) * Math.PI * 2;
-var rowWaves2 = 2 + Math.floor(hash01(0, row, 61) * 4);
-var rowSpeed2 = rowSpeed * (rowWaves2 / rowWaves);
-var rowPhase2 = hash01(0, row, 71) * Math.PI * 2;
-var u1 = ((t * rowWaves * Math.PI * 2 + timeSec * rowSpeed + rowPhase) / (Math.PI * 2)) % 1;
+var rowWaves = 3 + _fl(hash01(0, row, 47) * 5), rowSpeed = 5 + 10 * hash01(0, row, 43), rowPhase = hash01(0, row, 53) * _PI2;
+var rowWaves2 = 2 + _fl(hash01(0, row, 61) * 4), rowSpeed2 = rowSpeed * (rowWaves2 / rowWaves), rowPhase2 = hash01(0, row, 71) * _PI2;
+var u1 = ((t * rowWaves * _PI2 + timeSec * rowSpeed + rowPhase) / _PI2) % 1;
 if (u1 < 0) u1 += 1;
-var u2 = ((t * rowWaves2 * Math.PI * 2 + timeSec * rowSpeed2 + rowPhase2) / (Math.PI * 2)) % 1;
+var u2 = ((t * rowWaves2 * _PI2 + timeSec * rowSpeed2 + rowPhase2) / _PI2) % 1;
 if (u2 < 0) u2 += 1;
-var p1 = Math.pow(1 - u1, 2.6 + 3.4 * hash01(col, row, 17));
-var p2 = Math.pow(1 - u2, 3.4);
-var pulse = Math.max(p1, p2 * (0.55 + 0.45 * hash01(col, row, 19))) * 0.85;
+var p1 = _pw(1 - u1, 2.6 + 3.4 * hash01(col, row, 17)), p2 = _pw(1 - u2, 3.4);
+var pulse = _mx(p1, p2 * (0.55 + 0.45 * hash01(col, row, 19))) * 0.85;
 var wAmt = clamp01(pulse * (0.35 + 0.65 * t)) * (0.55 + 0.45 * hash01(col, row, 71));
-if (progress < 0.999) wAmt = Math.max(wAmt, clamp01(1 - (t - front) / 0.16) * (0.55 + 0.45 * hash01(col, row, 73)));
+if (progress < 0.999) wAmt = _mx(wAmt, clamp01(1 - (t - front) / 0.16) * (0.55 + 0.45 * hash01(col, row, 73)));
 if (!dark) {
 var lt = clamp01((t - 0.05) / 0.2);
 if (lt <= 0) continue;
-var lmap = getMergeMap(cols, rows);
-var mi = row * cols + col;
-var mv = lmap[mi];
-if (mv === 2) continue;
-if (hash01(col, row, 95) < 0.03) continue;
-var wide = mv === 3 || mv === 1;
-var tall = mv === 4 || mv === 1;
-var y2 = row * cell;
-var u = hash01(col, row, 93);
-var sp = 22 + 66 * t;
-var off = (u - 0.42) * sp;
+var lmap = getMergeMap(cols, rows), mv = lmap[row * cols + col];
+if (mv === 2 || hash01(col, row, 95) < 0.03) continue;
+var y2 = row * cell, off = (hash01(col, row, 93) - 0.42) * (22 + 66 * t);
 if (off > 0) off *= 1.1;
-var br = 187 - 32 * t;
-var bg = 184 - 46 * t;
-var bb = 206 + 4 * t;
-var lr = br + off;
-var lg = bg + (off < 0 ? off : off * 1.05);
-var lb = bb + (off < 0 ? off : off * 0.65);
-lr = Math.max(124, Math.min(240, Math.round(lr + 12 * pulse)));
-lg = Math.max(100, Math.min(232, Math.round(lg + 12 * pulse)));
-lb = Math.max(180, Math.min(252, Math.round(lb + 8 * pulse)));
-var lw = cell * (wide ? 2 : 1) * 0.88;
-var lh = cell * (tall ? 2 : 1) * 0.88;
-var flicker = valueNoise(col, row, timeSec, 0.9, 83);
-var density = clamp01((t - 0.12) / 0.35);
-var threshold = 0.2 + 0.8 * density;
-var presence = density > 0.9 ? 1 : clamp01((threshold - flicker) / 0.2);
+var lr = _mx(124, _mn(240, _rd(187 - 32 * t + off + 12 * pulse)));
+var lg = _mx(100, _mn(232, _rd(184 - 46 * t + (off < 0 ? off : off * 1.05) + 12 * pulse)));
+var lb = _mx(180, _mn(252, _rd(206 + 4 * t + (off < 0 ? off : off * 0.65) + 8 * pulse)));
+var lw = cell * (mv === 3 || mv === 1 ? 2 : 1) * 0.88, lh = cell * (mv === 4 || mv === 1 ? 2 : 1) * 0.88;
+var flicker = valueNoise(col, row, timeSec, 0.9, 83), density = clamp01((t - 0.12) / 0.35);
+var presence = density > 0.9 ? 1 : clamp01((0.2 + 0.8 * density - flicker) / 0.2);
 if (presence <= 0.01) continue;
 var lAlpha = clamp01(lt * appear * presence * (0.7 + 0.3 * (1 - flicker)) * (0.85 + 0.15 * hash01(col, row, 29)));
 ctx.globalAlpha = lAlpha;
 ctx.fillStyle = "rgb(" + lr + "," + lg + "," + lb + ")";
 fillRoundRect(ctx, x + 0.5, y2 + 0.5, lw, lh, 1);
-// 流光脉冲是点阵“流动”的唯一来源：亮度不随强度衰减（中档只靠点更少、底色更淡、速度更慢来区分）
 if (wAmt > 0.03) {
-// 除回 alphaMul，让高光核心亮度与 High 一致
-ctx.globalAlpha = Math.min(1, (lAlpha / alphaMul) * (0.12 + 0.88 * wAmt));
-ctx.fillStyle = "rgb(247, 243, 255)";
+ctx.globalAlpha = _mn(1, (lAlpha / alphaMul) * (0.12 + 0.88 * wAmt));
+ctx.fillStyle = "rgb(247,243,255)";
 var ins = lw * 0.14;
 fillRoundRect(ctx, x + 0.5 + ins, y2 + 0.5 + ins, lw - ins * 2, lh - ins * 2, 0.7);
 }
 continue;
 }
-var flick = valueNoise(col, row, timeSec, 1.5, 5);
-var gap = 0.6 + 0.4 * clamp01((flick - (1 - fade) * 0.5) / 0.3);
-var vis = clamp01((t - 0.2) / 0.18);
-var ghost = 0.06 * clamp01((flick - 0.5) / 0.5) * (1 - vis);
-var baseAlpha = 0.04 + 0.96 * vis + ghost;
+var flick = valueNoise(col, row, timeSec, 1.5, 5), gap = 0.6 + 0.4 * clamp01((flick - (1 - fade) * 0.5) / 0.3);
+var vis = clamp01((t - 0.2) / 0.18), baseAlpha = 0.04 + 0.96 * vis + 0.06 * clamp01((flick - 0.5) / 0.5) * (1 - vis);
 var gridAlpha = clamp01(base * baseAlpha * gap * appear * 1.15 * (0.9 + 0.1 * hash01(col, row, 29)));
 if (gridAlpha < 0.008) continue;
-var y = row * cell;
-var size = cell * 0.72;
-ctx.globalAlpha = Math.min(1, gridAlpha * 0.55);
-ctx.fillStyle = "rgb(" + purple[0] + "," + purple[1] + "," + purple[2] + ")";
+var y = row * cell, size = cell * 0.72;
+ctx.globalAlpha = _mn(1, gridAlpha * 0.55);
+ctx.fillStyle = purple;
 fillRoundRect(ctx, x + 0.5, y + 0.5, size, size, 1.1);
-// 同浅色模式：流光亮度不随强度衰减
 if (wAmt > 0.03) {
-ctx.globalAlpha = Math.min(1, (gridAlpha / alphaMul) * (0.1 + 0.72 * wAmt));
+ctx.globalAlpha = _mn(1, (gridAlpha / alphaMul) * (0.1 + 0.72 * wAmt));
 ctx.fillStyle = "rgb(220, 204, 255)";
 fillRoundRect(ctx, x + 0.5, y + 0.5, size, size, 0.7);
 }
@@ -841,7 +726,7 @@ return mixHex(lo, hi, clamp01((idx - first) / Math.max(1, n - 1 - first)));
 }
 var FILL_RADIUS_CSS = KNOB_RADIUS + "px 0 0 " + KNOB_RADIUS + "px";
 // ── 样式表注入（对齐 dsh-codex-effort-slider 右向左星尘横穿 + 星云扫光 + Antigravity 面板适配） ──
-var SLIDER_CSS = "@keyframes ces-sweep{0%{transform:translateX(100%)}100%{transform:translateX(-100%)}}@keyframes ces-star-sweep{0%{transform:translate3d(0,0,0);opacity:0}6%{opacity:1}94%{opacity:1}100%{transform:translate3d(-100%,0,0);opacity:0}}.ces-inline{width:100%;box-sizing:border-box;padding-top:6px;user-select:none !important;-webkit-user-select:none !important}.ces-root,.ces-root:focus,.ces-root:focus-visible,.ces-root:focus-within{position:relative;width:100%;box-sizing:border-box;outline:none !important;outline-width:0 !important;box-shadow:none !important;user-select:none !important;-webkit-user-select:none !important;-webkit-tap-highlight-color:transparent !important}.ces-track{position:relative;width:100%;height:28px;border-radius:999px;background:rgba(128,128,145,0.18);box-shadow:inset 0 1px 2px rgba(0,0,0,0.24),inset 0 0 0 1px rgba(255,255,255,0.06);cursor:pointer;touch-action:none;box-sizing:border-box;transition:opacity 0.15s ease,box-shadow 0.2s ease}.ces-inline[data-energy='1'] .ces-track,.ces-root[data-energy='1'] .ces-track{box-shadow:0 0 calc(var(--ces-energy,0) * 16px) rgba(168,85,247,0.5),inset 0 1px 2px rgba(0,0,0,0.24)}.ces-inline[data-energy='0'] .ces-star,.ces-inline[data-energy='0'] .ces-energy__sweep,.ces-root[data-energy='0'] .ces-star,.ces-root[data-energy='0'] .ces-energy__sweep{animation-play-state:paused}.ces-track.is-locked{opacity:0.45;cursor:not-allowed;filter:saturate(0.25)}.ces-fill{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;background:var(--ces-fill-bg,#4d93f8);pointer-events:none;will-change:width,background}.ces-energy{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;overflow:hidden;pointer-events:none;opacity:var(--ces-energy,0);transition:opacity 0.2s ease;background:linear-gradient(90deg,#3b1178 0%,#6d28d9 30%,#9333ea 62%,#c084fc 100%)}.ces-energy__sweep{position:absolute;inset:0;background:linear-gradient(100deg,transparent 18%,rgba(255,255,255,0.30) 50%,transparent 82%);transform:translateX(100%);animation:ces-sweep 2.4s linear infinite;pointer-events:none}.ces-stars{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;opacity:var(--ces-star-opacity,0);transition:opacity 0.2s ease;pointer-events:none;overflow:hidden}.ces-star{position:absolute;left:0;right:0;height:3px;margin-top:-1.5px;pointer-events:none;animation-name:ces-star-sweep;animation-timing-function:linear;animation-iteration-count:infinite}.ces-star__dot{position:absolute;left:100%;top:0;width:3px;height:3px;margin-left:-1.5px;border-radius:50%;background:#f5f3ff;box-shadow:0 0 5px rgba(216,180,254,0.95);opacity:var(--ces-b,1);transform:scale(var(--ces-b,1))}.ces-ticks{position:absolute;inset:0;pointer-events:none}.ces-tick{position:absolute;top:50%;width:3px;height:3px;margin:-1.5px 0 0 -1.5px;border-radius:50%;background:rgba(255,255,255,0.28);pointer-events:none;transition:background-color 0.12s ease}.ces-tick.is-on{background:rgba(255,255,255,0.65)}.ces-tick.is-dim{background:rgba(255,255,255,0.28)}.ces-knob{position:absolute;top:50%;left:var(--ces-fill,14px);width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;background:#ffffff;box-shadow:0 1px 5px rgba(0,0,0,0.34),0 0 0 0.5px rgba(0,0,0,0.06);pointer-events:none;will-change:left}.ces-root[data-theme='claude'] .ces-stars,.ces-root[data-theme='claude'] .ces-energy,.ces-inline[data-theme='claude'] .ces-stars,.ces-inline[data-theme='claude'] .ces-energy{display:none !important}.ces-root[data-theme='claude'] .ces-track,.ces-inline[data-theme='claude'] .ces-track{height:28px;border-radius:999px;background:rgba(128,128,145,0.16);box-shadow:inset 0 1px 2px rgba(0,0,0,0.22),inset 0 0 0 1px rgba(255,255,255,0.08)}.ces-root[data-theme='claude'][data-energy='1'] .ces-track,.ces-inline[data-theme='claude'][data-energy='1'] .ces-track{box-shadow:0 0 16px rgba(167,139,250,0.45),inset 0 1px 2px rgba(0,0,0,0.22)}.ces-root[data-theme='claude'] .ces-knob,.ces-inline[data-theme='claude'] .ces-knob{width:24px;height:30px;margin:-15px 0 0 -12px;border-radius:7px;background:#ffffff;box-shadow:0 2px 6px rgba(0,0,0,0.4),0 0 0 0.5px rgba(0,0,0,0.12);display:flex;align-items:center;justify-content:center}.ces-knob-notch{display:none;width:2px;height:10px;border-radius:999px;background:rgba(0,0,0,0.28)}.ces-root[data-theme='claude'] .ces-knob-notch,.ces-inline[data-theme='claude'] .ces-knob-notch{display:block}.ces-claude-canvas{position:absolute;left:0;top:0;width:var(--ces-fill,0px);height:100%;border-radius:999px;display:none;pointer-events:none}.ces-root[data-theme='claude'][data-energy='1'] .ces-claude-canvas,.ces-inline[data-theme='claude'][data-energy='1'] .ces-claude-canvas{display:block}@keyframes ces-claude-rise{0%{transform:translateY(85%) scale(0.96);opacity:0}55%{opacity:1}80%{transform:translateY(-6%) scale(1.01)}100%{transform:translateY(0) scale(1);opacity:1}}.ces-ag-effort-value.is-claude-changing,.ces-ag-effort-value.ces-text-rise{animation:ces-claude-rise 0.3s cubic-bezier(0.2,0.85,0.25,1)}.ces-ag-effort-value.is-claude-changing.is-glowing,.ces-ag-effort-value.ces-text-rise.is-glowing{animation:ces-claude-rise 0.3s cubic-bezier(0.2,0.85,0.25,1),ces-text-bloom 0.4s cubic-bezier(0.16,1,0.3,1) forwards}[data-testid='model-selector-panel'].ces-ag-panel-enhanced{max-height:26rem !important}.ces-ag-section,.ces-ag-section:focus,.ces-ag-section:focus-visible,.ces-ag-section *{outline:none !important;outline-width:0 !important;user-select:none !important;-webkit-user-select:none !important;-webkit-tap-highlight-color:transparent !important}.ces-ag-section{display:flex;flex-direction:column;flex-shrink:0;width:100%;box-sizing:border-box}.ces-ag-effort-row{display:flex;flex-direction:column;width:100%;box-sizing:border-box;padding:6px 8px 8px 8px;border-radius:6px;transition:box-shadow 0.2s ease,background-color 0.2s ease}.ces-ag-effort-row:hover{background-color:rgba(128,128,145,0.08)}.ces-ag-effort-row[data-ces-max='true'],[data-ces-effort-row='true'][data-ces-max='true']{box-shadow:inset 0 0 0 1px rgba(139,92,246,0.42),0 0 14px -4px rgba(139,92,246,0.45) !important;background-color:rgba(139,92,246,0.06)}.ces-ag-effort-head{display:flex;align-items:center;justify-content:space-between;width:100%;font-size:12px;line-height:16px}.ces-ag-effort-title{display:inline-flex;align-items:center;gap:6px;color:inherit;font-weight:500;opacity:0.9}.ces-ag-effort-value{position:relative;z-index:1;display:inline-block;font-size:12px;font-weight:600;transition:color 0.15s ease}.ces-ag-effort-value::after{content:'';position:absolute;top:50%;left:50%;width:52px;height:26px;border-radius:999px;transform:translate(-50%,-50%) scale(0.6);background:radial-gradient(ellipse at center,var(--ces-glow-color,rgba(168,85,247,0.85)) 0%,var(--ces-glow-color,rgba(168,85,247,0.45)) 45%,rgba(168,85,247,0) 75%);filter:blur(8px);pointer-events:none;opacity:0;z-index:-1}@keyframes ces-glow-flash{0%{opacity:0.95;transform:translate(-50%,-50%) scale(0.65);filter:blur(6px)}25%{opacity:1;transform:translate(-50%,-50%) scale(1.15);filter:blur(8px)}100%{opacity:0;transform:translate(-50%,-50%) scale(1.5);filter:blur(14px)}}@keyframes ces-text-bloom{0%{text-shadow:0 0 8px var(--ces-glow-color,#c084fc)}30%{text-shadow:0 0 14px var(--ces-glow-color,#c084fc),0 0 3px #ffffff}100%{text-shadow:none}}.ces-ag-effort-value.is-glowing{animation:ces-text-bloom 0.4s cubic-bezier(0.16,1,0.3,1) forwards}.ces-ag-effort-value.is-glowing::after{animation:ces-glow-flash 0.4s cubic-bezier(0.16,1,0.3,1) forwards}@media (prefers-reduced-motion:reduce){.ces-panel-shaking{animation:none !important}.ces-ag-effort-value.is-glowing{animation:none !important}.ces-ag-effort-value.is-glowing::after{animation:none !important}.ces-ag-effort-value.ces-text-rise{animation:none !important}.ces-ag-effort-value.is-claude-changing{animation:none !important}}html[data-ces-slider-ready='1'] [role='menu']:has([data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])),html[data-ces-slider-ready='1'] div[role='presentation']:has(>[role='menu'] [data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])){display:none !important;visibility:hidden !important;pointer-events:none !important;opacity:0 !important}html[data-ces-slider-ready='1'] [role='menuitem']:has([data-testid='model-selector-effort-group'])>span.shrink-0:last-child{display:none !important}html[data-ces-slider-ready='1'] [role='menuitem']:has([data-testid='model-selector-effort-group'])>.group-hover\\:hidden{display:flex !important}[role='menuitem'][data-ces-model-selected='true']{background-color:rgba(128,128,145,0.14)}.ces-set{position:fixed;z-index:2147483646;width:268px;padding:12px;border-radius:10px;background:rgba(24,24,28,0.96);color:#f4f4f6;border:1px solid rgba(255,255,255,0.12);box-shadow:0 12px 32px rgba(0,0,0,0.55);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;box-sizing:border-box;user-select:none}.ces-set-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.08);font-weight:600;font-size:12.5px}.ces-set-ver{font-size:11px;font-weight:400;opacity:0.55}.ces-set-group{margin-bottom:10px}.ces-set-label{margin-bottom:5px;font-size:11px;opacity:0.72}.ces-set-opts{display:flex;gap:4px}.ces-set-opt{flex:1;padding:5px 6px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.04);color:#d4d4d8;font-size:11.5px;cursor:pointer;text-align:center;transition:all 0.12s ease}.ces-set-opt:hover{background:rgba(255,255,255,0.1);color:#ffffff}.ces-set-opt.is-on{background:rgba(139,92,246,0.28);border-color:rgba(139,92,246,0.75);color:#ffffff;font-weight:600}.ces-set-actions{display:flex;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.08)}.ces-set-btn{flex:1;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06);color:#e4e4e7;font-size:11px;cursor:pointer}.ces-set-btn:hover{background:rgba(255,255,255,0.14)}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']{grid-template-rows:auto auto}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>[role='separator']{grid-row:1;grid-column:1}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>:is(.ces-ag-effort-row,[data-testid='orchestrator-effort-bar']){grid-row:2!important;grid-column:1!important}";
+var SLIDER_CSS = "@keyframes ces-sweep{0%{transform:translateX(100%)}100%{transform:translateX(-100%)}}@keyframes ces-star-sweep{0%{transform:translate3d(0,0,0);opacity:0}6%{opacity:1}94%{opacity:1}100%{transform:translate3d(-100%,0,0);opacity:0}}.ces-inline{width:100%;box-sizing:border-box;padding-top:6px;user-select:none!important;-webkit-user-select:none!important}.ces-root,.ces-root:focus,.ces-root:focus-visible,.ces-root:focus-within{position:relative;width:100%;box-sizing:border-box;outline:none!important;outline-width:0!important;box-shadow:none!important;user-select:none!important;-webkit-user-select:none!important;-webkit-tap-highlight-color:transparent!important}.ces-track{position:relative;width:100%;height:28px;border-radius:999px;background:rgba(128,128,145,.18);box-shadow:inset 0 1px 2px rgba(0,0,0,.24),inset 0 0 0 1px rgba(255,255,255,.06);cursor:pointer;touch-action:none;box-sizing:border-box;transition:opacity .15s ease,box-shadow .2s ease}.ces-inline[data-energy='1'] .ces-track,.ces-root[data-energy='1'] .ces-track{box-shadow:0 0 calc(var(--ces-energy,0) * 16px) rgba(168,85,247,.5),inset 0 1px 2px rgba(0,0,0,.24)}.ces-inline[data-energy='0'] .ces-star,.ces-inline[data-energy='0'] .ces-energy__sweep,.ces-root[data-energy='0'] .ces-star,.ces-root[data-energy='0'] .ces-energy__sweep{animation-play-state:paused}.ces-track.is-locked{opacity:.45;cursor:not-allowed;filter:saturate(.25)}.ces-fill{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;background:var(--ces-fill-bg,#4d93f8);pointer-events:none;will-change:width,background}.ces-energy{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;overflow:hidden;pointer-events:none;opacity:var(--ces-energy,0);transition:opacity .2s ease;background:linear-gradient(90deg,#3b1178 0%,#6d28d9 30%,#9333ea 62%,#c084fc 100%)}.ces-energy__sweep{position:absolute;inset:0;background:linear-gradient(100deg,transparent 18%,rgba(255,255,255,.3) 50%,transparent 82%);transform:translateX(100%);animation:ces-sweep 2.4s linear infinite;pointer-events:none}.ces-stars{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;opacity:var(--ces-star-opacity,0);transition:opacity .2s ease;pointer-events:none;overflow:hidden}.ces-star{position:absolute;left:0;right:0;height:3px;margin-top:-1.5px;pointer-events:none;animation-name:ces-star-sweep;animation-timing-function:linear;animation-iteration-count:infinite}.ces-star__dot{position:absolute;left:100%;top:0;width:3px;height:3px;margin-left:-1.5px;border-radius:50%;background:#f5f3ff;box-shadow:0 0 5px rgba(216,180,254,.95);opacity:var(--ces-b,1);transform:scale(var(--ces-b,1))}.ces-ticks{position:absolute;inset:0;pointer-events:none}.ces-tick{position:absolute;top:50%;width:3px;height:3px;margin:-1.5px 0 0 -1.5px;border-radius:50%;background:rgba(255,255,255,.28);pointer-events:none;transition:background-color .12s ease}.ces-tick.is-on{background:rgba(255,255,255,.65)}.ces-tick.is-dim{background:rgba(255,255,255,.28)}.ces-knob{position:absolute;top:50%;left:var(--ces-fill,14px);width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;background:#fff;box-shadow:0 1px 5px rgba(0,0,0,.34),0 0 0 .5px rgba(0,0,0,.06);pointer-events:none;will-change:left}.ces-root[data-theme='claude'] .ces-stars,.ces-root[data-theme='claude'] .ces-energy,.ces-inline[data-theme='claude'] .ces-stars,.ces-inline[data-theme='claude'] .ces-energy{display:none!important}.ces-root[data-theme='claude'] .ces-track,.ces-inline[data-theme='claude'] .ces-track{height:28px;border-radius:999px;background:rgba(128,128,145,.16);box-shadow:inset 0 1px 2px rgba(0,0,0,.22),inset 0 0 0 1px rgba(255,255,255,.08)}.ces-root[data-theme='claude'][data-energy='1'] .ces-track,.ces-inline[data-theme='claude'][data-energy='1'] .ces-track{box-shadow:0 0 16px rgba(167,139,250,.45),inset 0 1px 2px rgba(0,0,0,.22)}.ces-root[data-theme='claude'] .ces-knob,.ces-inline[data-theme='claude'] .ces-knob{width:24px;height:30px;margin:-15px 0 0 -12px;border-radius:7px;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.4),0 0 0 .5px rgba(0,0,0,.12);display:flex;align-items:center;justify-content:center}.ces-knob-notch{display:none;width:2px;height:10px;border-radius:999px;background:rgba(0,0,0,.28)}.ces-root[data-theme='claude'] .ces-knob-notch,.ces-inline[data-theme='claude'] .ces-knob-notch{display:block}.ces-claude-canvas{position:absolute;left:0;top:0;width:var(--ces-fill,0px);height:100%;border-radius:999px;display:none;pointer-events:none}.ces-root[data-theme='claude'][data-energy='1'] .ces-claude-canvas,.ces-inline[data-theme='claude'][data-energy='1'] .ces-claude-canvas{display:block}@keyframes ces-claude-rise{0%{transform:translateY(85%) scale(.96);opacity:0}55%{opacity:1}80%{transform:translateY(-6%) scale(1.01)}100%{transform:translateY(0) scale(1);opacity:1}}.ces-ag-effort-value.is-claude-changing,.ces-ag-effort-value.ces-text-rise{animation:ces-claude-rise .3s cubic-bezier(.2,.85,.25,1)}.ces-ag-effort-value.is-claude-changing.is-glowing,.ces-ag-effort-value.ces-text-rise.is-glowing{animation:ces-claude-rise .3s cubic-bezier(.2,.85,.25,1),ces-text-bloom .4s cubic-bezier(.16,1,.3,1) forwards}[data-testid='model-selector-panel'].ces-ag-panel-enhanced{max-height:26rem!important}.ces-ag-section,.ces-ag-section:focus,.ces-ag-section:focus-visible,.ces-ag-section *{outline:none!important;outline-width:0!important;user-select:none!important;-webkit-user-select:none!important;-webkit-tap-highlight-color:transparent!important}.ces-ag-section{display:flex;flex-direction:column;flex-shrink:0;width:100%;box-sizing:border-box}.ces-ag-effort-row{display:flex;flex-direction:column;width:100%;box-sizing:border-box;padding:6px 8px 8px;border-radius:6px;transition:box-shadow .2s ease,background-color .2s ease}.ces-ag-effort-row:hover{background-color:rgba(128,128,145,.08)}.ces-ag-effort-row[data-ces-max='true'],[data-ces-effort-row='true'][data-ces-max='true']{box-shadow:inset 0 0 0 1px rgba(139,92,246,.42),0 0 14px -4px rgba(139,92,246,.45)!important;background-color:rgba(139,92,246,.06)}.ces-ag-effort-head{display:flex;align-items:center;justify-content:space-between;width:100%;font-size:12px;line-height:16px}.ces-ag-effort-title{display:inline-flex;align-items:center;gap:6px;color:inherit;font-weight:500;opacity:.9}.ces-ag-effort-value{position:relative;z-index:1;display:inline-block;font-size:12px;font-weight:600;transition:color .15s ease}.ces-ag-effort-value::after{content:'';position:absolute;top:50%;left:50%;width:52px;height:26px;border-radius:999px;transform:translate(-50%,-50%) scale(.6);background:radial-gradient(ellipse at center,var(--ces-glow-color,rgba(168,85,247,.85)) 0%,var(--ces-glow-color,rgba(168,85,247,.45)) 45%,rgba(168,85,247,0) 75%);filter:blur(8px);pointer-events:none;opacity:0;z-index:-1}@keyframes ces-glow-flash{0%{opacity:.95;transform:translate(-50%,-50%) scale(.65);filter:blur(6px)}25%{opacity:1;transform:translate(-50%,-50%) scale(1.15);filter:blur(8px)}100%{opacity:0;transform:translate(-50%,-50%) scale(1.5);filter:blur(14px)}}@keyframes ces-text-bloom{0%{text-shadow:0 0 8px var(--ces-glow-color,#c084fc)}30%{text-shadow:0 0 14px var(--ces-glow-color,#c084fc),0 0 3px #fff}100%{text-shadow:none}}.ces-ag-effort-value.is-glowing{animation:ces-text-bloom .4s cubic-bezier(.16,1,.3,1) forwards}.ces-ag-effort-value.is-glowing::after{animation:ces-glow-flash .4s cubic-bezier(.16,1,.3,1) forwards}@media (prefers-reduced-motion:reduce){.ces-panel-shaking,.ces-ag-effort-value.is-glowing,.ces-ag-effort-value.is-glowing::after,.ces-ag-effort-value.ces-text-rise,.ces-ag-effort-value.is-claude-changing{animation:none!important}}html[data-ces-slider-ready='1'] [role='menu']:has([data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])),html[data-ces-slider-ready='1'] div[role='presentation']:has(>[role='menu'] [data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])){display:none!important;visibility:hidden!important;pointer-events:none!important;opacity:0!important}html[data-ces-slider-ready='1'] [role='menuitem']:has([data-testid='model-selector-effort-group'])>span.shrink-0:last-child{display:none!important}html[data-ces-slider-ready='1'] [role='menuitem']:has([data-testid='model-selector-effort-group'])>.group-hover\\:hidden{display:flex!important}[role='menuitem'][data-ces-model-selected='true']{background-color:rgba(128,128,145,.14)}.ces-set{position:fixed;z-index:2147483646;width:268px;padding:12px;border-radius:10px;background:rgba(24,24,28,.96);color:#f4f4f6;border:1px solid rgba(255,255,255,.12);box-shadow:0 12px 32px rgba(0,0,0,.55);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;box-sizing:border-box;user-select:none}.ces-set-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,.08);font-weight:600;font-size:12.5px}.ces-set-ver{font-size:11px;font-weight:400;opacity:.55}.ces-set-group{margin-bottom:10px}.ces-set-label{margin-bottom:5px;font-size:11px;opacity:.72}.ces-set-opts{display:flex;gap:4px}.ces-set-opt{flex:1;padding:5px 6px;border-radius:6px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.04);color:#d4d4d8;font-size:11.5px;cursor:pointer;text-align:center;transition:all .12s ease}.ces-set-opt:hover{background:rgba(255,255,255,.1);color:#fff}.ces-set-opt.is-on{background:rgba(139,92,246,.28);border-color:rgba(139,92,246,.75);color:#fff;font-weight:600}.ces-set-actions{display:flex;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08)}.ces-set-btn{flex:1;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:#e4e4e7;font-size:11px;cursor:pointer}.ces-set-btn:hover{background:rgba(255,255,255,.14)}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']{grid-template-rows:auto auto}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>[role='separator']{grid-row:1;grid-column:1}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>:is(.ces-ag-effort-row,[data-testid='orchestrator-effort-bar']){grid-row:2!important;grid-column:1!important}";
 function installStyles(doc) {
 var d = doc || (typeof document !== "undefined" ? document : null);
 if (!d || !d.head) return null;
@@ -2348,8 +2233,15 @@ var _seatLs = new Set();
 var activeBaseOverride = null;
 var _actOptOvr = null;
 var _orchPlanOvr = null;
+var _lastHostLbl = "";
 var observer = null;
 var _intMut = false;
+function _setTxt(el, s) {
+if (!el || el.textContent === s) return;
+var f = el.firstChild;
+if (f && f.nodeType === 3 && (!el.childNodes || el.childNodes.length === 1)) f.nodeValue = s;
+else el.textContent = s;
+}
 function notifySeatListeners() {
 _seatLs.forEach(function (fn) {
 try {
@@ -2419,21 +2311,24 @@ outerSpan.removeChild(allSpans[sIdx]);
 }
 }
 var effortSpan = outerSpan.querySelector("span.opacity-70, [data-ces-part='trigger-effort']");
-if (!profile.locked && profile.baseName) {
 var firstNode = outerSpan.firstChild;
+if (!profile.locked && profile.baseName) {
 if (firstNode && firstNode.nodeType === 3 && firstNode.nodeValue !== profile.baseName) {
 firstNode.nodeValue = profile.baseName;
 }
-if (effortSpan) {
-var nextEffortText = " " + profile.currentLabel;
-if (effortSpan.textContent !== nextEffortText) {
-effortSpan.textContent = nextEffortText;
+if (effortSpan) _setTxt(effortSpan, " " + profile.currentLabel);
+} else if (profile.locked) {
+var lp = profile.modelOption && parseModelLabel(profile.modelOption.label);
+var lBase = lp ? lp.base : (profile.modelOption && profile.modelOption.label) || profile.baseName;
+if (lBase && firstNode && firstNode.nodeType === 3 && firstNode.nodeValue !== lBase) {
+firstNode.nodeValue = lBase;
+}
+if (effortSpan) _setTxt(effortSpan, lp ? " " + lp.effortLabel : "");
 }
 }
 }
-}
-}
-syncTriggerColor(doc, profile.currentLabel, idx, count, isMax, false, Boolean(profile.isClaude));
+var trigLbl = profile.locked ? (profile.modelOption && parseModelLabel(profile.modelOption.label) ? profile.currentLabel : "") : profile.currentLabel;
+syncTriggerColor(doc, trigLbl, idx, count, isMax, false, Boolean(profile.isClaude));
 // 2. 同步展开菜单中的各模型行
 var panel = findAntigravityPanel(doc);
 if (!panel) return;
@@ -2465,7 +2360,7 @@ _mkSel(gSpan.closest('[role="menuitem"]'), sel);
 var sib = gSpan.nextElementSibling;
 if (sib && sib.tagName === "SPAN") {
 var dE = sel ? profile.currentLabel : rowProf.currentLabel, dI = sel ? profile.currentIndex : rowProf.currentIndex, dC = rowProf.levels.length;
-if (sib.textContent !== dE) sib.textContent = dE;
+_setTxt(sib, dE);
 var rc = valueColorFor(dE, dI, dC, dC > 1 && dI === dC - 1, false) || "";
 if (sib.style.color !== rc) sib.style.color = rc;
 if (sib.style.opacity !== (rc ? "1" : "")) sib.style.opacity = rc ? "1" : "";
@@ -2505,6 +2400,7 @@ _effMap.set(parsed.base, parsed.effort);
 activeBaseOverride = parsed.base;
 }
 _actOptOvr = targetOpt;
+_lastHostLbl = (ctx.selectedModel && ctx.selectedModel.label) || "";
 _orchPlanOvr = null;
 _commitAgOpt(ctx, targetOpt);
 _withMut(function () {
@@ -2565,6 +2461,7 @@ ev.preventDefault();
 _stp(ev);
 activeBaseOverride = act.base;
 _actOptOvr = act.targetOption;
+_lastHostLbl = (act.ctx.selectedModel && act.ctx.selectedModel.label) || "";
 _orchPlanOvr = null;
 tracePush("ag-select-model-in-menu", { label: act.targetOption.label });
 _withMut(function () {
@@ -2761,11 +2658,23 @@ function scan() {
 if (_intMut) return;
 _withMut(function () {
 var ctx = getLiveContext();
+var curLbl = (ctx && ctx.selectedModel && ctx.selectedModel.label) || "";
+if (_actOptOvr || activeBaseOverride) {
+if (!curLbl || (_actOptOvr && curLbl === _actOptOvr.label) || curLbl !== _lastHostLbl) {
+_actOptOvr = null;
+activeBaseOverride = null;
+}
+}
+_lastHostLbl = curLbl;
+if (_orchPlanOvr) {
+var lp = ctx && _isOrch(ctx.selectedModel) ? _resOrch(ctx) : null;
+if (!lp || (lp.opt && lp.opt.value === _orchPlanOvr.value)) _orchPlanOvr = null;
+}
 var panel = findAntigravityPanel(doc);
 if (!panel) {
 if (activeSection || activePanel) _unmntSec();
 else _setReady(false);
-if (ctx) _syncAgDom(ctx, resolveModelEffortProfile(ctx, ctx.selectedModel, _effMap));
+if (ctx) _syncAgDom(ctx, getActiveProfile(ctx));
 return;
 }
 if (!_hasValidCtx(ctx)) {
@@ -2773,22 +2682,13 @@ if (activeSection || activePanel) _unmntSec();
 else _setReady(false);
 return;
 }
-// 若外部修改了 selectedModel，清除临时 override 对齐最新模型
-if (ctx.selectedModel && _actOptOvr && ctx.selectedModel.label === _actOptOvr.label) {
-_actOptOvr = null;
-activeBaseOverride = null;
-}
-if (_orchPlanOvr) {
-var lp = _isOrch(ctx.selectedModel) ? _resOrch(ctx) : null;
-if (!lp || (lp.opt && lp.opt.value === _orchPlanOvr.value)) _orchPlanOvr = null;
-}
 if (activePanel !== panel || !activeSection || !panel.contains(activeSection)) {
 _unmntSec();
 _mntSec(panel, ctx);
 } else if (activeSection) {
 var nextTitle = resolveEffortTitle(doc, win);
 var tSpan = activeSection.querySelector(".ces-ag-effort-title");
-if (tSpan && tSpan.textContent !== nextTitle) tSpan.textContent = nextTitle;
+_setTxt(tSpan, nextTitle);
 if (activeMount && typeof activeMount.refresh === "function") activeMount.refresh();
 }
 _setReady(Boolean(activeMount && activeSection));
@@ -2909,12 +2809,7 @@ typeof document !== "undefined" &&
 !window.__agCodexEffortSliderDisableAutoBoot && !(globalRoot && globalRoot.__agCodexEffortSliderDisableAutoBoot)
 ) {
 var boot = function () {
-if (document.body && (findAntigravityTrigger(document) || window.__agCodexEffortSliderForceBoot)) {
-installCodexEffortSlider({ document: document, window: window });
-} else if (document.body) {
-// 页面还在异步挂载 React 根节点时，启动守护观察器
-installCodexEffortSlider({ document: document, window: window });
-}
+if (document.body) installCodexEffortSlider({ document: document, window: window });
 };
 if (document.readyState === "loading") {
 document.addEventListener("DOMContentLoaded", boot, { once: true });

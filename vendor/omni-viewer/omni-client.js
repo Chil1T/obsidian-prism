@@ -1,4 +1,4 @@
-// Obsidian Prism — Omni Native Browser Router, Context Menu & Streaming Workbench Client (v1.0.5)
+// Obsidian Prism — Omni Native Browser Router, Context Menu & Streaming Workbench Client (v1.0.6)
 // Second-channel runtime (`window.__agPrismOmni`) + CommonJS factory for deterministic unit tests.
 // Engineering & security guarantees:
 // 1. ZERO custom side-dock DOM or rogue `wcvBrowser` calls: 100% native integration with Antigravity's
@@ -32,7 +32,7 @@
 })(typeof window !== 'undefined' ? window : globalThis, function () {
   'use strict';
 
-  const VERSION = '1.0.5';
+  const VERSION = '1.0.6';
   const STYLE_EL_ID = 'ag-prism-omni-css';
   const HL_URL_NAME = 'ag-omni-url';
   const HL_PATH_NAME = 'ag-omni-path';
@@ -105,6 +105,11 @@
     '.ag-omni-autolink',
     '.ag-omni-menu',
     '.ag-omni-aux-bar',
+    '[data-agy-hans-ui]',
+    '#agy-theme-switcher',
+    '#agy-theme-menu',
+    '#antigravity-quota-widget',
+    '#antigravity-translation-audit',
   ].join(', ');
   const STREAMING_EXCLUDED_SELECTOR = '[data-ag-cs-spark-streaming="1"], [data-ag-cs-thought-streaming="1"]';
   const EXCLUDED_ANCESTOR_SELECTOR = `${STATIC_EXCLUDED_SELECTOR}, ${STREAMING_EXCLUDED_SELECTOR}`;
@@ -1539,11 +1544,21 @@
       });
     }
 
+    function markNoTranslate(el) {
+      if (!el || typeof el.setAttribute !== 'function') return el;
+      el.setAttribute('translate', 'no');
+      el.setAttribute('data-no-translate', 'true');
+      el.setAttribute('data-ag-localization-skip', 'true');
+      el.setAttribute('data-agy-no-translate', 'true');
+      el.setAttribute('data-antigravity-zh-skip', '1');
+      return el;
+    }
+
     function openContextMenuAt(clientX, clientY, headerLabel, entries) {
       if (!D) return;
       closeContextMenu();
 
-      const menu = D.createElement('div');
+      const menu = markNoTranslate(D.createElement('div'));
       menu.className = 'ag-omni-menu ag-prism-omni-menu';
       menu.setAttribute('role', 'menu');
       menu.setAttribute('data-testid', 'ag-omni-context-menu');
@@ -1824,8 +1839,15 @@
         if (hoverTokenActive) setHoverTokenCursor(false);
         return;
       }
+      const rawTarget = ev?.target || null;
+      const targetEl = rawTarget && rawTarget.nodeType === 1 ? rawTarget : rawTarget?.parentElement;
+      if (!targetEl || !targetEl.isConnected || !highlightedParentCount.get(targetEl)) {
+        if (pointerMoveRaf !== null) cancelPendingPointerRaf();
+        if (hoverTokenActive) setHoverTokenCursor(false);
+        return;
+      }
       if (typeof W?.requestAnimationFrame === 'function') {
-        pendingPointerTarget = ev.target || null;
+        pendingPointerTarget = targetEl;
         pendingPointerX = ev.clientX;
         pendingPointerY = ev.clientY;
         if (pointerMoveRaf === null) {
@@ -1833,7 +1855,7 @@
         }
         return;
       }
-      evalPointerHoverAt(ev.target, ev.clientX, ev.clientY);
+      evalPointerHoverAt(targetEl, ev.clientX, ev.clientY);
     }
 
     function onDocClickCapture(ev) {
@@ -2199,7 +2221,7 @@
           processedTextNodes.add(tn);
           frag.appendChild(tn);
         } else {
-          const span = D.createElement('span');
+          const span = markNoTranslate(D.createElement('span'));
           span.className = 'ag-omni-autolink';
           span.setAttribute('role', 'link');
           span.tabIndex = 0;
@@ -2270,7 +2292,7 @@
         if (prevPos) box.setAttribute('data-omni-orig-pos', prevPos);
         if (box.style && (!prevPos || prevPos === 'static')) box.style.position = 'relative';
 
-        const btn = D.createElement('button');
+        const btn = markNoTranslate(D.createElement('button'));
         btn.type = 'button';
         btn.className = 'ag-omni-mermaid-zoom-btn';
         btn.setAttribute('data-testid', 'ag-omni-mermaid-zoom');
@@ -2516,7 +2538,7 @@
         }
 
         const s = getStrings();
-        const bar = D.createElement('div');
+        const bar = markNoTranslate(D.createElement('div'));
         bar.className = 'ag-omni-aux-bar';
         bar.setAttribute('data-testid', 'ag-omni-aux-switcher');
         bar.setAttribute('data-ag-prism-omni-owned', '1');
@@ -2563,7 +2585,7 @@
               }
             }
             if (!rec.iframe) {
-              const ifr = D.createElement('iframe');
+              const ifr = markNoTranslate(D.createElement('iframe'));
               ifr.className = 'ag-omni-aux-overlay';
               ifr.setAttribute('data-testid', 'ag-omni-aux-iframe');
               ifr.setAttribute('data-ag-prism-omni-owned', '1');
@@ -2623,11 +2645,32 @@
 
     function isIgnoredMutationTarget(node) {
       let cur = node && node.nodeType === 1 ? node : node?.parentElement;
-      for (let d = 0; cur && d < 6; d++, cur = cur.parentElement) {
+      let sawExplicitScan = false;
+      for (let d = 0; cur && d < 24; d++, cur = cur.parentElement) {
+        const scanAttr = cur.getAttribute?.('data-omni-scan');
+        if (scanAttr !== null && scanAttr !== undefined && scanAttr !== 'false' && scanAttr !== '0') {
+          sawExplicitScan = true;
+        }
         const id = cur.id;
-        if (id === 'ag-prism-pulse-bar' || id === 'ag-pulse-status-bar') return true;
+        if (
+          id === 'ag-prism-pulse-bar' ||
+          id === 'ag-pulse-status-bar' ||
+          id === 'ag-cs-settings-sec' ||
+          id === 'agy-theme-switcher' ||
+          id === 'agy-theme-menu' ||
+          id === 'antigravity-quota-widget' ||
+          id === 'antigravity-translation-audit'
+        ) {
+          return true;
+        }
+        if (cur.hasAttribute?.('data-agy-hans-ui')) {
+          return true;
+        }
+        if (!sawExplicitScan && cur.getAttribute?.('role') === 'dialog') {
+          return true;
+        }
         const tid = cur.getAttribute?.('data-testid');
-        if (tid === 'agent-input-box') return true;
+        if (tid === 'agent-input-box' || tid === 'conversation-row-sidebar') return true;
         const cls = typeof cur.className === 'string' ? cur.className : '';
         if (
           cls &&
@@ -2641,7 +2684,10 @@
             cls.indexOf('ag-cs-ripple-host') !== -1 ||
             cls.indexOf('ag-anim-icon') !== -1 ||
             cls.indexOf('ag-cs-thinking-spark') !== -1 ||
-            cls.indexOf('ag-cs-prism-rim-cv') !== -1)
+            cls.indexOf('ag-cs-prism-rim-cv') !== -1 ||
+            cls.indexOf('ag-cs-smooth-caret') !== -1 ||
+            cls.indexOf('ag-v2-mascot-') !== -1 ||
+            cls.indexOf('ag-v2-chroma-fx') !== -1)
         ) {
           return true;
         }
@@ -2652,10 +2698,14 @@
     function scheduleTextNodeHighlight(textNode) {
       if (!enabled || !textNode || textNode.nodeType !== 3) return;
       const raw = textNode.nodeValue || '';
-      if (!mayContainBareToken(raw) && !textNodeTokenMap.has(textNode)) return;
+      const tracked = textNodeTokenMap.has(textNode);
+      if (!mayContainBareToken(raw) && !tracked) return;
+      if (!tracked && (!textNode.parentElement || !findClosest(textNode.parentElement, SCAN_CONTAINER_SELECTOR))) {
+        return;
+      }
       pendingTextNodes.add(textNode);
       if (textScanTimer) return;
-      const delay = D?.documentElement?.hasAttribute?.('data-ag-cs-stream-active') ? 320 : 120;
+      const delay = D?.documentElement?.hasAttribute?.('data-ag-cs-stream-active') ? 480 : 120;
       textScanTimer = setTimeout(() => {
         textScanTimer = null;
         if (!enabled) {
@@ -2686,7 +2736,7 @@
       const el = node && node.nodeType === 1 ? node : node?.parentElement;
       if (el) pendingScanRoots.add(el);
       if (scanTimer) return;
-      const delay = D.documentElement?.hasAttribute?.('data-ag-cs-stream-active') ? 120 : 60;
+      const delay = D.documentElement?.hasAttribute?.('data-ag-cs-stream-active') ? 280 : 60;
       scanTimer = setTimeout(() => {
         scanTimer = null;
         if (!enabled) {
@@ -2847,11 +2897,16 @@
             const m = mutations[i];
             if (isIgnoredMutationTarget(m.target)) continue;
             if (m.type === 'childList') {
+              const useHl = supportsHighlightApi();
               for (let j = 0; j < m.addedNodes.length; j++) {
                 const n = m.addedNodes[j];
                 if (n.nodeType !== 1 && n.nodeType !== 3) continue;
                 if (isIgnoredMutationTarget(n)) continue;
-                scheduleIncrementalScan(n);
+                if (useHl && n.nodeType === 3) {
+                  scheduleTextNodeHighlight(n);
+                } else {
+                  scheduleIncrementalScan(n);
+                }
               }
             } else if (m.type === 'characterData' && m.target) {
               if (supportsHighlightApi() && m.target.nodeType === 3) {

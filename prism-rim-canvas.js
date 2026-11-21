@@ -143,19 +143,13 @@
     }
 
     function readAmbientScale() {
-      if (typeof getAmbientIntensity === 'function') {
-        return parseAmbientScale(getAmbientIntensity());
-      }
-      const html = getRootHtml();
-      return parseAmbientScale(html?.getAttribute?.('data-ag-cs-ambient'));
+      if (getAmbientIntensity) return parseAmbientScale(getAmbientIntensity());
+      return parseAmbientScale(getRootHtml()?.getAttribute?.('data-ag-cs-ambient'));
     }
 
     function resolveRimToneKey(dark) {
       const html = getRootHtml();
-      const rawTone =
-        (typeof getAccentTone === 'function' ? getAccentTone() : null) ||
-        html?.getAttribute?.('data-ag-cs-accent') ||
-        'follow';
+      const rawTone = getAccentTone?.() || html?.getAttribute?.('data-ag-cs-accent') || 'follow';
       if (rawTone === 'mono' || rawTone === 'cobalt' || rawTone === 'iris' || rawTone === 'amber') {
         return rawTone;
       }
@@ -166,32 +160,29 @@
     }
 
     function isRimMotionDisabled() {
-      if (motionReduced && motionReduced()) return true;
+      if (motionReduced?.()) return true;
       const mv = getRootHtml()?.getAttribute?.('data-ag-cs-motion') || '';
       return mv === 'off' || mv === 'subtle';
     }
 
+    const isWB = () => Boolean((typeof document !== 'undefined' && document.hidden) || getRootHtml()?.getAttribute?.('data-ag-cs-win-blur') === '1');
+
     function clearRimEntry(entry) {
       if (!entry) return;
+      entry._s = '';
       if (entry.ctx && entry.cv && entry.cv.width > 0 && entry.cv.height > 0 && !entry.wasCleared) {
-        try {
-          entry.ctx.clearRect(0, 0, entry.cv.width, entry.cv.height);
-        } catch {}
+        try { entry.ctx.clearRect(0, 0, entry.cv.width, entry.cv.height); } catch {}
         entry.wasCleared = true;
       }
     }
 
     function clearAllRimCanvases() {
-      for (let i = 0; i < cachedPrismBoxes.length; i++) {
-        clearRimEntry(cachedPrismBoxes[i]);
-      }
-      if (cachedOrchEntry) {
-        clearRimEntry(cachedOrchEntry);
-      }
-      if (typeof document !== 'undefined' && typeof document.querySelectorAll === 'function') {
-        document.querySelectorAll('.ag-cs-prism-rim-cv').forEach((cv) => {
+      for (let i = 0; i < cachedPrismBoxes.length; i++) clearRimEntry(cachedPrismBoxes[i]);
+      if (cachedOrchEntry) clearRimEntry(cachedOrchEntry);
+      if (typeof document !== 'undefined') {
+        document.querySelectorAll?.('.ag-cs-prism-rim-cv')?.forEach?.((cv) => {
           try {
-            const ctx = typeof cv.getContext === 'function' ? cv.getContext('2d') : null;
+            const ctx = cv.getContext?.('2d');
             if (ctx && cv.width > 0 && cv.height > 0) ctx.clearRect(0, 0, cv.width, cv.height);
           } catch {}
         });
@@ -205,13 +196,11 @@
       trackedRimCanvases.delete(cv);
       const host = cv.parentElement;
       try {
-        const ctx = typeof cv.getContext === 'function' ? cv.getContext('2d') : null;
+        const ctx = cv.getContext?.('2d');
         if (ctx && cv.width > 0 && cv.height > 0) ctx.clearRect(0, 0, cv.width, cv.height);
       } catch {}
       cv.remove?.();
-      if (host?.hasAttribute?.('data-ag-cs-prism-cv')) {
-        host.removeAttribute('data-ag-cs-prism-cv');
-      }
+      if (host?.hasAttribute?.('data-ag-cs-prism-cv')) host.removeAttribute('data-ag-cs-prism-cv');
     }
 
     function pruneOrphanRimCanvases(fullScan = true) {
@@ -297,22 +286,25 @@
     function paintPrismRimCanvas(entry, active, localX, localY, radius, dark, toneKey = 'default', ambientScale = 1) {
       if (!entry || !entry.ctx || !entry.cv || !entry.rect) return false;
       if (!active || ambientScale <= 0.001) {
+        entry._s = '';
         if (!entry.wasCleared) {
-          if (entry.cv.width > 0 && entry.cv.height > 0) {
-            entry.ctx.clearRect(0, 0, entry.cv.width, entry.cv.height);
-          }
+          if (entry.cv.width > 0 && entry.cv.height > 0) entry.ctx.clearRect(0, 0, entry.cv.width, entry.cv.height);
           entry.wasCleared = true;
         }
         return true;
       }
-      const dpr = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, 2);
+      const dpr = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, 1.5);
       const w = Math.max(4, Math.round((entry.rect.width + (entry.insetPad || 0)) * dpr));
       const h = Math.max(4, Math.round((entry.rect.height + (entry.insetPad || 0)) * dpr));
-      if (entry.cv.width !== w || entry.cv.height !== h) {
-        entry.cv.width = w;
-        entry.cv.height = h;
+      const cssRadius = entry.borderRadius > 0 ? entry.borderRadius : 10;
+      const effAlpha = Math.max(0, Math.min(1, ambientScale * (toneKey === 'mono' ? 0.58 : 1)));
+      const sig = `${w}|${h}|${radius}|${dark ? 1 : 0}|${toneKey}|${effAlpha.toFixed(3)}|${cssRadius}|${entry.insetPad || 0}`;
+      if (!entry.wasCleared && entry.cv.width === w && entry.cv.height === h && entry._s === sig && Math.abs(localX - entry._x) < 1.5 && Math.abs(localY - entry._y) < 1.5) {
+        return true;
       }
+      if (entry.cv.width !== w || entry.cv.height !== h) { entry.cv.width = w; entry.cv.height = h; }
       entry.wasCleared = false;
+      entry._s = sig; entry._x = localX; entry._y = localY;
       const ctx = entry.ctx;
       ctx.clearRect(0, 0, w, h);
       const padOffset = entry.insetPad ? entry.insetPad * 0.5 : 0;
@@ -328,10 +320,8 @@
       const strokeInset = (entry.insetPad ? 1.0 : 0.7) * dpr;
       const rw = Math.max(2, w - strokeInset * 2);
       const rh = Math.max(2, h - strokeInset * 2);
-      const cssRadius = entry.borderRadius > 0 ? entry.borderRadius : 10;
       const rr = Math.min(rw * 0.5, rh * 0.5, cssRadius * dpr);
       const prevAlpha = ctx.globalAlpha;
-      const effAlpha = Math.max(0, Math.min(1, ambientScale * (toneKey === 'mono' ? 0.58 : 1)));
       ctx.globalAlpha = effAlpha;
       strokeRoundedRectPath(ctx, strokeInset, strokeInset, rw, rh, rr);
       ctx.lineWidth = 1.45 * dpr;
@@ -407,6 +397,9 @@
             insetPad: 2,
             borderRadius,
             wasCleared: prev ? prev.wasCleared : false,
+            _s: prev ? prev._s || '' : '',
+            _x: prev ? prev._x ?? -9999 : -9999,
+            _y: prev ? prev._y ?? -9999 : -9999,
             pxStr: prev ? prev.pxStr : '',
             pyStr: prev ? prev.pyStr : '',
           });
@@ -415,10 +408,7 @@
         if (trackEl) {
           nextObserved.add(trackEl);
           if (ro && !observedPrismSet.has(trackEl)) {
-            try {
-              ro.observe(trackEl);
-              observedPrismSet.add(trackEl);
-            } catch {}
+            try { ro.observe(trackEl); observedPrismSet.add(trackEl); } catch {}
           }
           const prevOrch = cachedOrchEntry && cachedOrchEntry.box === trackEl ? cachedOrchEntry : null;
           const rim = prevOrch && prevOrch.cv && prevOrch.cv.isConnected ? { cv: prevOrch.cv, ctx: prevOrch.ctx } : ensurePrismRimCanvas(trackEl);
@@ -430,6 +420,9 @@
             insetPad: 0,
             borderRadius: 999,
             wasCleared: prevOrch ? prevOrch.wasCleared : false,
+            _s: prevOrch ? prevOrch._s || '' : '',
+            _x: prevOrch ? prevOrch._x ?? -9999 : -9999,
+            _y: prevOrch ? prevOrch._y ?? -9999 : -9999,
             pxStr: prevOrch ? prevOrch.pxStr : '',
             pyStr: prevOrch ? prevOrch.pyStr : '',
           };
@@ -456,18 +449,15 @@
 
     function flushPrismPointer(rafNow) {
       prismRaf = 0;
-      if (isDestroyed()) return;
+      if (isDestroyed() || isWB()) return;
       const disabled = isRimMotionDisabled();
       const ambientScale = readAmbientScale();
       if (disabled || ambientScale <= 0.001) {
-        runGuardedMut(() => {
-          pruneOrphanRimCanvases();
-          clearAllRimCanvases();
-        });
+        runGuardedMut(() => { pruneOrphanRimCanvases(); clearAllRimCanvases(); });
         return;
       }
       const now = typeof rafNow === 'number' && rafNow > 0 ? rafNow : performance.now();
-      const minGap = getMinFrameGapMs();
+      const minGap = Math.max(16, Number(getMinFrameGapMs?.() || 0));
       if (minGap > 0 && lastPrismDrawAt > 0 && now - lastPrismDrawAt < minGap) {
         if (typeof requestAnimationFrame === 'function') {
           prismRaf = requestAnimationFrame(flushPrismPointer);
@@ -565,7 +555,7 @@
     }
 
     function onPointerMove(ev) {
-      if (isDestroyed()) return;
+      if (isDestroyed() || isWB()) return;
       const x = Number(ev.clientX), y = Number(ev.clientY);
       lastPointerPos.x = x;
       lastPointerPos.y = y;
@@ -637,9 +627,9 @@
       }
       observedPrismSet.clear();
       if (typeof document !== 'undefined') {
-        document.getElementById('ag-prism-dyn-vars')?.remove?.();
-        document.querySelectorAll('.ag-cs-prism-rim-cv').forEach((n) => n.remove());
-        document.querySelectorAll('[data-ag-cs-prism-cv]').forEach((el) => el.removeAttribute('data-ag-cs-prism-cv'));
+        document.getElementById?.('ag-prism-dyn-vars')?.remove?.();
+        document.querySelectorAll?.('.ag-cs-prism-rim-cv')?.forEach?.((n) => n.remove?.());
+        document.querySelectorAll?.('[data-ag-cs-prism-cv]')?.forEach?.((el) => el.removeAttribute?.('data-ag-cs-prism-cv'));
       }
       cachedPrismBoxes = [];
       cachedOrchEntry = null;

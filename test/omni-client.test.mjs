@@ -1234,6 +1234,110 @@ test('auto-replaces host >20MB File Pane error (UHc without data-testid) with in
   client.destroy();
 });
 
+// ── 6b. 0-rAF Pointer Fast Path, Dialog/Mascot Mutation Filtering & Streaming Debounce ─
+test('pointermove takes 0-rAF fast path over non-highlighted DOM, ignores [role="dialog"] unless [data-omni-scan], and routes childList TextNodes to CSS.highlights', async () => {
+  const env = createFakeDomEnvironment({ enableCssHighlights: true });
+  const { window, document, FakeEvent, setCaretHit } = env;
+  mountMockHostRoot(document, { withBrowserCtx: true, withV2: true });
+
+  let rafCalls = 0;
+  window.requestAnimationFrame = (cb) => {
+    rafCalls += 1;
+    const id = rafCalls;
+    queueMicrotask(() => cb(Date.now()));
+    return id;
+  };
+  window.cancelAnimationFrame = () => {};
+
+  const resp = document.createElement('div');
+  resp.setAttribute('data-testid', 'agent-response');
+  const hlPara = document.createElement('p');
+  const hlText = document.createTextNode('Visit https://fastpath.example.com/docs now');
+  hlPara.appendChild(hlText);
+  const plainPara = document.createElement('p');
+  plainPara.textContent = 'Plain paragraph without any bare links or file paths';
+  resp.appendChild(hlPara);
+  resp.appendChild(plainPara);
+  document.body.appendChild(resp);
+
+  const client = omniMod.createOmniClient({ window, document });
+  client.sync({ omniModule: 'on', linkTarget: 'builtin' }, { baseUrl: 'http://127.0.0.1:47000', token: 'tok_perf' });
+
+  const urlHl = window.CSS.highlights.get('ag-omni-url');
+  assert.equal(urlHl.size, 1);
+
+  // 1) Moving pointer across non-highlighted elements schedules ZERO requestAnimationFrame callbacks
+  rafCalls = 0;
+  for (let i = 0; i < 12; i++) {
+    plainPara.dispatchEvent(new FakeEvent('mousemove', { bubbles: true, clientX: 40 + i, clientY: 30 }));
+    document.body.dispatchEvent(new FakeEvent('mousemove', { bubbles: true, clientX: 50 + i, clientY: 60 }));
+  }
+  assert.equal(rafCalls, 0, 'Pointer moving over ordinary non-highlighted elements must return synchronously with 0 rAF');
+
+  // Moving onto highlighted parent schedules rAF and activates hover cursor
+  setCaretHit(hlText, 10);
+  hlPara.dispatchEvent(new FakeEvent('mousemove', { bubbles: true, clientX: 80, clientY: 20 }));
+  assert.equal(rafCalls, 1, 'Pointer over highlighted parent element must schedule 1 rAF');
+  await new Promise((r) => queueMicrotask(r));
+  assert.equal(document.documentElement.getAttribute('data-ag-omni-hover-token'), '1');
+
+  // Moving back onto plain element clears hover cursor synchronously with 0 new rAF
+  plainPara.dispatchEvent(new FakeEvent('mousemove', { bubbles: true, clientX: 40, clientY: 30 }));
+  assert.equal(rafCalls, 1, 'Leaving highlighted element to ordinary region must not schedule extra rAF');
+  assert.equal(document.documentElement.getAttribute('data-ag-omni-hover-token'), null);
+
+  // 2) Unmarked [role="dialog"], #ag-cs-settings-sec, sidebar rows, smooth caret & mascot nodes are ignored
+  const dialog = document.createElement('div');
+  dialog.setAttribute('role', 'dialog');
+  const dialogResp = document.createElement('div');
+  dialogResp.setAttribute('data-testid', 'planner-response-text');
+  dialogResp.textContent = 'https://ignored-dialog.example.com';
+  dialog.appendChild(dialogResp);
+  document.body.appendChild(dialog);
+
+  const settingsSec = document.createElement('section');
+  settingsSec.id = 'ag-cs-settings-sec';
+  const secInner = document.createElement('div');
+  secInner.className = 'markdown-body';
+  secInner.textContent = 'https://ignored-settings.example.com';
+  settingsSec.appendChild(secInner);
+  document.body.appendChild(settingsSec);
+
+  const sidebarRow = document.createElement('button');
+  sidebarRow.setAttribute('data-testid', 'conversation-row-sidebar');
+  sidebarRow.textContent = 'https://ignored-sidebar.example.com';
+  document.body.appendChild(sidebarRow);
+
+  const mascot = document.createElement('div');
+  mascot.className = 'ag-v2-mascot-actor ag-v2-chroma-fx ag-cs-smooth-caret';
+  mascot.textContent = 'https://ignored-mascot.example.com';
+  document.body.appendChild(mascot);
+
+  await new Promise((r) => setTimeout(r, 90));
+  assert.equal(urlHl.size, 1, 'Mutations in unmarked [role="dialog"], #ag-cs-settings-sec, sidebar & mascot must be skipped');
+
+  // Explicitly opted-in [role="dialog"][data-omni-scan="true"] is still scanned!
+  const optInDialog = document.createElement('div');
+  optInDialog.setAttribute('role', 'dialog');
+  optInDialog.setAttribute('data-omni-scan', 'true');
+  optInDialog.appendChild(document.createTextNode('Opt-in https://dialog-optin.example.com/ok'));
+  document.body.appendChild(optInDialog);
+
+  await new Promise((r) => setTimeout(r, 150));
+  assert.equal(urlHl.size, 2, 'Dialog explicitly marked with data-omni-scan="true" must still be highlighted');
+
+  // 3) Streaming childList new TextNode routes through 480ms text highlight debounce
+  document.documentElement.setAttribute('data-ag-cs-stream-active', '1');
+  const streamedText = document.createTextNode('Streamed https://streamed-fast.example.com/v1');
+  plainPara.appendChild(streamedText);
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(urlHl.size, 2, 'Streaming TextNode highlight must debounce past 200ms (480ms window)');
+  await new Promise((r) => setTimeout(r, 340));
+  assert.equal(urlHl.size, 3, 'Streaming TextNode must highlight cleanly after 480ms debounce');
+
+  client.destroy();
+});
+
 // ── 7. CSS Token Alignment, Zero Legacy Dock Residue, vm.Script & Bundle Budget ─
 test('omni-client.js has zero persist:ag-prism-omni or custom dock creation, aligns style.css tokens, passes vm.Script + buildOmniClientExpression', () => {
   const clientCode = fs.readFileSync(CLIENT_PATH, 'utf8');

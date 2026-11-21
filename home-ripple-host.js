@@ -130,19 +130,20 @@
 
     function unmountRipple() {
       if (!rippleMount) return;
-      if (rippleMount.timer) clearTimeout(rippleMount.timer);
-      if (rippleMount.rafId) cancelAnimationFrame(rippleMount.rafId);
-      if (rippleMount.ro) rippleMount.ro.disconnect();
-      if (rippleMount.root) {
-        rippleMount.root.removeEventListener('pointerdown', rippleMount.onPress);
-        if (rippleMount.onMove) rippleMount.root.removeEventListener('pointermove', rippleMount.onMove);
-        if (rippleMount.onLeave) rippleMount.root.removeEventListener('pointerleave', rippleMount.onLeave);
-        rippleMount.root = null;
+      const m = rippleMount;
+      if (m.timer) clearTimeout(m.timer);
+      if (m.rafId) cancelAnimationFrame(m.rafId);
+      m.ro?.disconnect();
+      m.uW?.();
+      if (m.root) {
+        m.root.removeEventListener('pointerdown', m.onPress);
+        m.onMove && m.root.removeEventListener('pointermove', m.onMove);
+        m.onLeave && m.root.removeEventListener('pointerleave', m.onLeave);
+        m.root = null;
       }
-      document.removeEventListener('visibilitychange', rippleMount.onVis);
-      rippleMount.field.dispose();
-      if (rippleMount.glow && typeof rippleMount.glow.dispose === 'function') rippleMount.glow.dispose();
-      rippleMount.host.remove();
+      m.field.dispose();
+      m.glow?.dispose?.();
+      m.host.remove();
       rippleMount = null;
     }
 
@@ -216,27 +217,21 @@
         aura: { reach: 0.47, strength: 1.0 },
         tideSwellAt: 0,
         waves: { height: new Float32Array(0), active: () => false, disturb() {}, skimmer() {}, advance() {} },
-        glow:
-          typeof rippleCore.mountBrandHorizonGlow === 'function'
-            ? rippleCore.mountBrandHorizonGlow(glowCanvas)
-            : { mode: 'none', resize() {}, draw() {}, dispose() {} },
+        glow: rippleCore.mountBrandHorizonGlow ? rippleCore.mountBrandHorizonGlow(glowCanvas) : { mode: 'none', resize() {}, draw() {}, dispose() {} },
         field: { mode: 'none', dispose() {}, invalidate() {}, setCalmZones() {}, draw() {}, needsDraw: () => false, busy: () => false },
         timer: 0,
         rafId: 0,
         ro: null,
+        uW: null,
         onPress: null,
         onMove: null,
         onLeave: null,
-        onVis: null,
         wake: null,
         reattach: null,
         refreshTheme: null,
       };
-      let previous = state.mountedAt;
-      let lastRippleRenderAt = 0;
-      let frameWanted = false;
-      let drawnOnce = false;
-      let forceSingleDraw = true;
+      let previous = state.mountedAt, lastRippleRenderAt = 0, frameWanted = false, drawnOnce = false, forceSingleDraw = true, wb = false;
+      const WB = 'data-ag-cs-win-blur', isAB = () => getRootHtml()?.getAttribute?.(WB) === '1', hP = () => Boolean(document.hidden || wb || isAB());
 
       function updateCalmZones() {
         const curHome = state.root;
@@ -289,23 +284,19 @@
       }
 
       function enterIdleSleep() {
-        if (state.timer) {
-          clearTimeout(state.timer);
-          state.timer = 0;
-        }
+        if (state.timer) { clearTimeout(state.timer); state.timer = 0; }
+        if (state.rafId) { cancelAnimationFrame(state.rafId); state.rafId = 0; }
+        frameWanted = false;
         state.sleeping = true;
         setAttrIfChanged(host, 'data-ripple-sleep', '1');
       }
 
       function wake() {
-        if (state.timer) {
-          clearTimeout(state.timer);
-          state.timer = 0;
-        }
+        if (state.timer) { clearTimeout(state.timer); state.timer = 0; }
         if (isDestroyed() || state.parked || frameWanted) return;
         state.sleeping = false;
         if (host.hasAttribute('data-ripple-sleep')) host.removeAttribute('data-ripple-sleep');
-        if (document.hidden) {
+        if (hP()) {
           if (!drawnOnce && canvas.width > 0) drawFrame(performance.now());
           enterIdleSleep();
           return;
@@ -319,8 +310,10 @@
         frameWanted = false;
         if (isDestroyed() || state.parked || (rippleMount !== state && rippleMount !== null)) return;
         const still = motionReduced();
-        const minGap = getMinFrameGapMs();
-        if (!still && drawnOnce && !forceSingleDraw && minGap > 0 && lastRippleRenderAt > 0 && now - lastRippleRenderAt < minGap && !document.hidden) {
+        const rawGap = Number(getMinFrameGapMs?.() || 0);
+        const minGap = state.waves?.active?.() || (auraState.active && lastSkimAt > 0 && now - lastSkimAt < 180) || (state.tideSwellAt > 0 && now - state.tideSwellAt < 480)
+          ? Math.max(16, rawGap) : Math.max(33, rawGap);
+        if (!still && drawnOnce && !forceSingleDraw && minGap > 0 && lastRippleRenderAt > 0 && now - lastRippleRenderAt < minGap && !hP()) {
           wake();
           return;
         }
@@ -388,7 +381,7 @@
           drawnOnce = true;
         }
 
-        if (isDestroyed() || document.hidden || still) {
+        if (isDestroyed() || hP() || still) {
           enterIdleSleep();
           return;
         }
@@ -433,6 +426,8 @@
 
       state.onMove = (ev) => {
         if (motionReduced()) return;
+        if (!isAB()) wb = false;
+        if (hP()) return;
         const nowRect = performance.now();
         if (!cachedCanvasRect || nowRect - cachedCanvasRectAt > 1500) {
           cachedCanvasRect = canvas.getBoundingClientRect();
@@ -523,19 +518,29 @@
       home.addEventListener('pointermove', state.onMove, { passive: true });
       home.addEventListener('pointerleave', state.onLeave, { passive: true });
 
-      state.onVis = () => {
-        if (!document.hidden) {
-          previous = performance.now();
-          forceSingleDraw = true;
-          wake();
-        } else {
-          if (state.rafId) cancelAnimationFrame(state.rafId);
-          state.rafId = 0;
-          frameWanted = false;
-          enterIdleSleep();
-        }
+      const onVis = () => {
+        if (!hP()) { if (!state.parked) { previous = performance.now(); forceSingleDraw = true; wake(); } }
+        else enterIdleSleep();
       };
-      document.addEventListener('visibilitychange', state.onVis);
+      const onBlur = () => { wb = true; enterIdleSleep(); };
+      const onFocus = () => { wb = false; onVis(); };
+      document.addEventListener('visibilitychange', onVis);
+      const wRef = typeof window !== 'undefined' ? window : null;
+      wRef?.addEventListener?.('blur', onBlur);
+      wRef?.addEventListener?.('focus', onFocus);
+      let bMo = null;
+      if (typeof MutationObserver === 'function' && getRootHtml()) {
+        try {
+          bMo = new MutationObserver(() => { if (!isAB()) wb = false; onVis(); });
+          bMo.observe(getRootHtml(), { attributes: true, attributeFilter: [WB] });
+        } catch {}
+      }
+      state.uW = () => {
+        document.removeEventListener('visibilitychange', onVis);
+        wRef?.removeEventListener?.('blur', onBlur);
+        wRef?.removeEventListener?.('focus', onFocus);
+        bMo?.disconnect();
+      };
 
       if (typeof ResizeObserver === 'function') {
         state.ro = new ResizeObserver(() => {

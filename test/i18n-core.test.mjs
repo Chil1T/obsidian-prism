@@ -344,6 +344,10 @@ test('v1.0.1 i18n keys cover all 5 languages for scene presets, 6 new config key
     'omniReload',
     'omniBack',
     'omniForward',
+    'setUpdateChannelTitle',
+    'setUpdateChannelDesc',
+    'optChannelStable',
+    'optChannelBeta',
   ];
   for (const lang of ['zh-CN', 'zh-TW', 'yue', 'en', 'ja']) {
     const ui = i18nLocales.getUiStrings(lang);
@@ -354,10 +358,10 @@ test('v1.0.1 i18n keys cover all 5 languages for scene presets, 6 new config key
 });
 
 test('settings-panel schema, scene presets, strict apiKey-stripping JSON export, and allowlist-validated JSON import', () => {
-  // Verify all 29 global config keys (including hostLocalization, omniModule, linkTarget, sidebarStudio & autoUpdate) match exact contract
+  // Verify all 30 global config keys (including hostLocalization, omniModule, linkTarget, sidebarStudio, autoUpdate & updateChannel) match exact contract
   const { PRISM_SETTINGS_SCHEMA, SCENE_PRESETS, buildSanitizedConfigExport, validateImportedConfigJson, getDefaultSettingsPatch } =
     settingsPanel;
-  assert.equal(Object.keys(PRISM_SETTINGS_SCHEMA).length, 29);
+  assert.equal(Object.keys(PRISM_SETTINGS_SCHEMA).length, 30);
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.hostLocalization.allowed, ['auto', 'on', 'off']);
   assert.equal(PRISM_SETTINGS_SCHEMA.hostLocalization.default, 'auto');
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.accentTone.allowed, ['follow', 'cobalt', 'iris', 'amber', 'mono']);
@@ -374,6 +378,8 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
   assert.equal(PRISM_SETTINGS_SCHEMA.sidebarStudio.default, 'off');
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.autoUpdate.allowed, ['on', 'off']);
   assert.equal(PRISM_SETTINGS_SCHEMA.autoUpdate.default, 'off');
+  assert.deepEqual(PRISM_SETTINGS_SCHEMA.updateChannel.allowed, ['stable', 'beta']);
+  assert.equal(PRISM_SETTINGS_SCHEMA.updateChannel.default, 'stable');
   assert.ok(SCENE_PRESETS.ultra && SCENE_PRESETS.focus && SCENE_PRESETS.eco);
 
   // Export MUST strip apiKey, secret fields, and embedded sk-... tokens
@@ -451,7 +457,7 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
 
   assert.equal(validateImportedConfigJson('not-json').ok, false);
   assert.equal(validateImportedConfigJson('{"unknownOnly": 1}').ok, false);
-  assert.equal(Object.keys(getDefaultSettingsPatch()).length, 29);
+  assert.equal(Object.keys(getDefaultSettingsPatch()).length, 30);
 });
 
 test('UX-1 / OP-5 / UX-4 / UX-9 regressions: async thought config export, tech->technical normalization, preset sidebarCompact reset, lightPreset context hints, and Effort Slider off/i18n', () => {

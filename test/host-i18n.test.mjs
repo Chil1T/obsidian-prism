@@ -919,6 +919,7 @@ test('settings-panel renders hostLocalization 3-state control and displays yield
       runSettingsGroupGlide: () => {},
       runGuardedMut: (fn) => fn(),
     });
+    env.doc.getElementById('ag-cs-settings-sec')?.__ensureFoldBody?.();
   } finally {
     globalThis.document = origDoc;
   }
@@ -1392,6 +1393,7 @@ test('[P1-1 & P2-1] settings-panel shows yield hint only when mode=auto, and dae
       runSettingsGroupGlide: () => {},
       runGuardedMut: (fn) => fn(),
     });
+    env.doc.getElementById('ag-cs-settings-sec')?.__ensureFoldBody?.();
   } finally {
     globalThis.document = origDoc;
   }
@@ -1439,4 +1441,1028 @@ test('[P2-2 & P2-4] ReDoS patterns complete in linear time, English sentences ar
   assert.equal(inst.getStatus().status, 'active');
   assert.equal(engine.translate('__proto__'), null);
   inst.destroy();
+});
+
+function createBruteForceReferenceTranslator(dictData) {
+  const exactDict = dictData.exact || {};
+  const patterns = (dictData.patterns || []).concat(dictData.rules || []).map((p) => ({
+    regex: new RegExp(p.regex),
+    replacement: p.replacement,
+  }));
+  const translatedValues = Object.create(null);
+  for (const k of Object.keys(exactDict)) translatedValues[exactDict[k]] = true;
+  const hasOwn = Object.prototype.hasOwnProperty;
+  const ZH_CHAR_RE = /[\u4e00-\u9fa5]/;
+  const EN_ALPHA_RE = /[a-zA-Z]/;
+
+  function applyPatternsBrute(text) {
+    for (let idx = 0; idx < patterns.length; idx++) {
+      const pat = patterns[idx];
+      pat.regex.lastIndex = 0;
+      if (pat.regex.test(text)) {
+        pat.regex.lastIndex = 0;
+        let result = text.replace(pat.regex, pat.replacement);
+        for (let pi = 0; pi < patterns.length; pi++) {
+          patterns[pi].regex.lastIndex = 0;
+          if (patterns[pi].regex.test(result)) {
+            patterns[pi].regex.lastIndex = 0;
+            result = result.replace(patterns[pi].regex, patterns[pi].replacement);
+          }
+        }
+        return result;
+      }
+    }
+    return null;
+  }
+
+  return function bruteTranslate(rawStr) {
+    if (!rawStr || typeof rawStr !== 'string' || rawStr.length > 512) return null;
+    const normalized = rawStr.replace(/\s+/g, ' ').trim();
+    if (!normalized) return null;
+    if (hasOwn.call(exactDict, normalized)) return exactDict[normalized];
+    if (!EN_ALPHA_RE.test(normalized)) return null;
+    if (translatedValues[normalized]) return null;
+    if (ZH_CHAR_RE.test(normalized) && !/[a-zA-Z]{2,}/.test(normalized)) return null;
+
+    const patRes = applyPatternsBrute(normalized);
+    if (patRes !== null) return patRes;
+
+    const punctuationMatch = normalized.match(/^([\w\s\-\/]+)([:：…\.？\?!！]+)$/);
+    if (punctuationMatch) {
+      const base = punctuationMatch[1].trim();
+      const punc = punctuationMatch[2];
+      if (hasOwn.call(exactDict, base)) return exactDict[base] + (punc === ':' ? '：' : punc);
+    }
+
+    const hotkeyMatch = normalized.match(
+      /(\((?:Ctrl|Cmd|Alt|Shift)\+[^\s\)]+\)|\b(?:Ctrl|Cmd|Alt|Shift)\+[\w;:,\\/+\-]+)$/i
+    );
+    if (hotkeyMatch && hotkeyMatch.index > 0) {
+      const cmdBase = normalized.slice(0, hotkeyMatch.index).trim();
+      const hotkey = hotkeyMatch[1].trim();
+      if (cmdBase && /^[\w\s\-\/]+$/.test(cmdBase) && hasOwn.call(exactDict, cmdBase)) {
+        return exactDict[cmdBase] + ' ' + hotkey;
+      }
+    }
+
+    if (
+      normalized.includes('. ') ||
+      normalized.includes('! ') ||
+      normalized.includes('? ') ||
+      normalized.includes('。')
+    ) {
+      const sentences = normalized.split(/([.!?]\s+|[。！？]\s*)/);
+      let anyTranslated = false;
+      let allTranslated = true;
+      const translatedParts = [];
+      for (let sIdx = 0; sIdx < sentences.length; sIdx++) {
+        const part = sentences[sIdx];
+        const trimmedPart = part.trim();
+        if (!trimmedPart || /^[.!?。！？\s]+$/.test(part)) {
+          translatedParts.push(part.replace(/\.\s*/g, '。 '));
+          continue;
+        }
+        let transPart =
+          (hasOwn.call(exactDict, trimmedPart) ? exactDict[trimmedPart] : null) ||
+          (hasOwn.call(exactDict, trimmedPart + '.') ? exactDict[trimmedPart + '.'] : null);
+        if (!transPart) transPart = applyPatternsBrute(trimmedPart);
+        if (!transPart) {
+          const pMatch = trimmedPart.match(/^([\w\s\-\/]+)([:：…\.？\?!！]+)$/);
+          if (pMatch && hasOwn.call(exactDict, pMatch[1].trim())) {
+            transPart = exactDict[pMatch[1].trim()] + (pMatch[2] === ':' ? '：' : pMatch[2]);
+          }
+        }
+        if (transPart) {
+          anyTranslated = true;
+          translatedParts.push(transPart);
+        } else {
+          allTranslated = false;
+          translatedParts.push(part);
+        }
+      }
+      if (anyTranslated && allTranslated) {
+        return translatedParts.join('').replace(/([。！？])[。！？.]*\s*/g, '$1 ').trim();
+      }
+    }
+    return null;
+  };
+}
+
+test('[Perf-1] pattern precheck index + bounded LRU unitCache (<= 2048) matches 327 brute-force patterns 100% byte-for-byte across full corpus + 250+ edge strings', () => {
+  const dict = JSON.parse(fs.readFileSync(path.join(ROOT, 'vendor', 'host-i18n', 'zh-CN.json'), 'utf8'));
+  const brute = createBruteForceReferenceTranslator(dict);
+  const engine = runtime.createHostI18nEngine(dict);
+
+  const edgeAndPatternCorpus = [
+    ...Object.keys(dict.exact),
+    ...Object.values(dict.exact).slice(0, 120),
+    'Thought for 1h 23m 45.6s',
+    'Thought for 2h 10m',
+    'Thought for 3h',
+    'Thought for 12m 3.5s',
+    'Thought for 5m',
+    'Thought for 0.8s',
+    'See all (18)',
+    'See all 9',
+    '(4 subagents)',
+    '(1 subagent)',
+    '7 subagents',
+    '1 subagent',
+    '5 seconds ago',
+    '1 second ago',
+    '12 minutes ago',
+    '3 hours ago',
+    '2 days ago',
+    '4 weeks ago',
+    '6 months ago',
+    '2 years ago',
+    '15s ago',
+    '8M ago',
+    '2h ago',
+    '9d ago',
+    '09:15 / 12:30',
+    '01:02:03 / 04:05:06',
+    'Jan 5 - Feb 19',
+    'Mar 3 – 12',
+    'Apr 14, 2026, 10:30:00 AM',
+    'Dec 1, 9:05 PM',
+    'Nov 21, 2026',
+    'Oct 8',
+    'Jan 15日',
+    'Sep 3日',
+    'AM 09:30',
+    'PM 11:05',
+    '10:45 PM',
+    '08:00:12 AM',
+    '84.5% of the customization budget is available.',
+    '100% of the customization budget is available',
+    'of the customization budget is available.',
+    'Show 6 breakdowns',
+    'Hide 1 breakdown',
+    'You have used some of your weekly limit, it will fully refresh in 3 days.',
+    'You have used some of your 5 hour limit, it will fully refresh in 2h 10m.',
+    'You have used some of your 5-hour limit, it will fully refresh in 45m',
+    'You have hit your 5-hour limit, so the weekly limit does not currently apply. Your 5-hour limit will refresh in 1h.',
+    'You have hit your 5-hour limit, it will refresh in 2h 15m. If on a supported paid plan, you can use AI credits in the interim.',
+    'You have hit your weekly limit, it will refresh in 4 days',
+    '3 days, 4 hours',
+    '2 hours, 15 minutes',
+    '7 days',
+    '1 hour',
+    '45 minutes',
+    '12 files changed',
+    '40 insertions(+)',
+    '8 deletions(-)',
+    'Step 2 of 5',
+    'Task 7 running',
+    'Saved at 14:22:09',
+    '3 active subagents',
+    'Created 4 files',
+    'Modified 1 file',
+    'Thinking for 1h 2m 3s',
+    'Thinking for 2m 10s',
+    'Stopped after 8 steps',
+    'Scan the code to open this device in ',
+    'to browse the store, or add a custom server via the MCP config.',
+    '了解更多关于 Inherit General',
+    'Also includes global settings when working in this project',
+    'Mode: Inherit General',
+    'It requires Docker Desktop to be installed.',
+    'Configure browser subagent',
+    'Configure the browser subagent.',
+    '配置浏览器子智能体。 It requires Node',
+    'Configure the browser subagent. It requires Chrome',
+    'It requires',
+    'Manage project folders, agent settings, and permissions.',
+    'No folders added yet',
+    '+ Add Folder',
+    'Permanently delete my-workspace?',
+    '快捷键 for quick navigation and control.',
+    'Shortcuts for quick navigation and control.',
+    'for quick navigation and control',
+    'LAYOUT CONTROLS',
+    'Layout CONTROLS',
+    'Attach screenshot (optional)',
+    'Attach a screenshots (optional)',
+    'Please list the steps to reproduce the issue',
+    'Describe the bug you encountered...',
+    'Describe the bug you encountered',
+    'STEPS TO REPRODUCE',
+    'Steps to Reproduce',
+    'Steps to reproduce',
+    'Enter Queues after the turn',
+    'Alt+Enter Sends immediately',
+    'Shift+Enter On empty prompt, sends next in queue',
+    'Ctrl+Enter Queues after the turn',
+    'Cmd+Enter Sends immediately',
+    'On empty prompt, sends next in queue',
+    'Queues after the turn',
+    'Sends immediately',
+    'Models within this group: Gemini, Claude',
+    'Inherits your General settings 在此项目中工作时。',
+    'Inherits default settings.',
+    'Inherits your General settings',
+    'Your quota for this model is running low.',
+    'Your quota for this model has run out',
+    'View Usage',
+    'Sends after agent finishes working.',
+    'Send Now',
+    'Select Project Ctrl+K',
+    'Select Model Cmd+M',
+    'Cancel (Ctrl+C)',
+    'Copy 项目名称',
+    'Copy Project Name',
+    '4 tasks running',
+    'Ran npm test',
+    'Explored 12 files',
+    'Explored src/core',
+    'Edited cdp.js',
+    'Viewed README.md',
+    'Ran 3 commands',
+    'Explored 2 tasks',
+    'Timed 30 seconds',
+    'Timed 5 minutes',
+    '  Timer has expired',
+    'Inherits your "General" settings when working in this project.',
+    '继承您的“通用”设置 when working in this project.',
+    'Browser settings have moved to the Browser section of General settings.',
+    'Worked for 1h 5m 9s',
+    'Stopped after 2d 3h 4m',
+    'Worked for 1d 2h 3m',
+    'Message from coordinator',
+    'Executing task: lint & test',
+    'Record Audio Ctrl+R',
+    'Create New Project',
+    'Create Project',
+    'New Terminal Ctrl+Shift+`',
+    'Add Terminal Ctrl+Shift+P',
+    'Add Context @file',
+    '2 agents running',
+    '继承您的全局权限，在此项目中工作时。',
+    'Inherits your global permissions when working in this project.',
+    'Also includes Global Permissions when working in this project. Learn more.',
+    '也包含全局权限，在此项目中工作时',
+    'Resets in 2d 5h 12m.',
+    'resets in 4h, 20m',
+    'Resets in 15 mins, 30 secs',
+    'Resets in less than a minute.',
+    'resets in a few seconds',
+    'Resets soon.',
+    'Refreshes in 1d 2h 3m',
+    'refreshes in 10m',
+    'Refreshes soon',
+    'All scheduled tasks run as Flash.',
+    '全部 plugins run as Pro.',
+    'All automations run as Carbon.',
+    'Search tasks...',
+    'Search conversations…',
+    'Project + Worktree',
+    'Workspace + Worktree',
+    'Undo to this point.',
+    'Undo to here',
+    'Failed to add plugin. Please try again.',
+    'Failed to add plugin',
+    'Mark all 12 conversations as read',
+    'Mark 1 conversation as read',
+    'Are you sure you want to mark all 8 conversations as read? This action cannot be undone.',
+    '5 active conversations',
+    '3 archived conversations',
+    'Try Remote Control',
+    'Try 远程控制',
+    '14 tools enabled',
+    '2 tools disabled',
+    'Disable bash tool for guest',
+    'Enable mcp tool for workspace',
+    'See less in Sidebar',
+    '收起 in Sidebar',
+    'More actions for Agent',
+    '更多操作 for Agent',
+    'Unnamed agent 3',
+    'Unnamed Skill 1',
+    'UI Extension 2',
+    'Automation 4',
+    'Rule 9',
+    'GitHub MCP, setup required',
+    'Model quota will refresh on May 1.',
+    'Your quota will refresh on tomorrow.',
+    '12,345 / 256,000 tokens (4.8%)',
+    '(8,192 tokens) 3.2%',
+    '(1,024 tokens)',
+    'Rules: 1,240 tokens',
+    'Custom Group: 512 tokens',
+    '3 demoted',
+    '2 excluded',
+    '1 tool excluded',
+    '8 tools',
+    '2 rules exceeded the rules budget and were demoted from full inline content to a file-path pointer.',
+    '1 item in MCP exceeded the customization budget and was excluded from context.',
+    'Send feedback as user@example.com',
+    'Branch feat/host-i18n-v2.0',
+    'All changes since main',
+    '3 commits to push',
+    '1 commit to pull',
+    'Send message Enter',
+    'Send Message (Cmd+Enter)',
+    'Settings:',
+    'Save...',
+    'Cancel?',
+    'Open Settings (Ctrl+,)',
+    'Settings Ctrl+Shift+P',
+    'Settings. Save! Cancel?',
+    'Save. Cancel.',
+    '',
+    '   ',
+    '123456',
+    'C:\\projects\\demo-app\\src\\index.js',
+    '/usr/local/lib/node_modules/npm/bin/npm-cli.js',
+    'v1.0.4-rc.2+build.20261121',
+    '__proto__',
+    'constructor',
+    'hasOwnProperty',
+    'A'.repeat(600),
+  ];
+
+  // Add 220 diverse unmatched/near-miss boundary strings (optional quantifiers, partial anchors, multi-sentence docs)
+  for (let i = 0; i < 220; i++) {
+    edgeAndPatternCorpus.push(
+      `Experimental option #${i}: Controls whether background worker #${i} caches AST symbols. Requires restart when toggled.`
+    );
+    edgeAndPatternCorpus.push(`Thought about ${i} items without matching duration format`);
+    edgeAndPatternCorpus.push(`Janitor ${i} cleaned 10 rooms - Decibel ${i}`);
+  }
+
+  assert.ok(edgeAndPatternCorpus.length >= 4200, `Corpus should be comprehensive, got ${edgeAndPatternCorpus.length}`);
+
+  for (const sample of edgeAndPatternCorpus) {
+    const expected = brute(sample);
+    const actual = engine.translate(sample);
+    assert.strictEqual(actual, expected, `Mismatch for input ${JSON.stringify(sample)}: actual=${actual} vs expected=${expected}`);
+  }
+
+  // Verify bounded LRU unitCache stores null negative hits and strictly caps size <= 2048
+  assert.equal(engine.maxCacheSize, 2048);
+  for (let i = 0; i < 2600; i++) {
+    const missKey = `Unmatched unique setting description line item #${i} with English words`;
+    assert.equal(engine.translate(missKey), null);
+  }
+  assert.ok(engine.unitCache.size <= 2048, `unitCache must stay bounded <= 2048, got ${engine.unitCache.size}`);
+  const recentMiss = 'Unmatched unique setting description line item #2599 with English words';
+  assert.equal(engine.unitCache.has(recentMiss), true, 'Negative null result must be cached in unitCache');
+  assert.equal(engine.unitCache.get(recentMiss), null);
+});
+
+test('[Perf-2] 500 unmatched long English descriptions run significantly faster with index + negative cache (0 regex on warm pass) & O(1) boundary depth propagation', () => {
+  const dict = JSON.parse(fs.readFileSync(path.join(ROOT, 'vendor', 'host-i18n', 'zh-CN.json'), 'utf8'));
+  const brute = createBruteForceReferenceTranslator(dict);
+  const engine = runtime.createHostI18nEngine(dict);
+
+  const unmatchedDescriptions = Array.from({ length: 500 }, (_, i) =>
+    `Configure workspace indexing strategy for partition #${i}. When enabled, background watchers coalesce rapid filesystem events and skip generated build directories during active compilation.`
+  );
+
+  // Warm up JIT minimally
+  for (let i = 0; i < 10; i++) {
+    brute(unmatchedDescriptions[i]);
+  }
+
+  const tBrute0 = performance.now();
+  for (let pass = 0; pass < 3; pass++) {
+    for (let i = 0; i < unmatchedDescriptions.length; i++) {
+      assert.equal(brute(unmatchedDescriptions[i]), null);
+    }
+  }
+  const bruteElapsedMs = performance.now() - tBrute0;
+
+  const tOpt0 = performance.now();
+  // Pass 1: cold pass (exercises first-char bucket + literal anchor indexOf precheck + multi-sentence break)
+  for (let i = 0; i < unmatchedDescriptions.length; i++) {
+    assert.equal(engine.translate(unmatchedDescriptions[i]), null);
+  }
+  const optColdMs = performance.now() - tOpt0;
+
+  // Instrument regex.test to prove 0 regex executions on subsequent passes via negative unitCache
+  let warmRegexCalls = 0;
+  const origTests = engine.patterns.map((p) => p.regex.test);
+  for (const p of engine.patterns) {
+    const orig = p.regex.test;
+    p.regex.test = function (str) {
+      warmRegexCalls++;
+      return orig.call(this, str);
+    };
+  }
+
+  let optWarmMs = 0;
+  try {
+    const tWarm0 = performance.now();
+    for (let pass = 0; pass < 2; pass++) {
+      for (let i = 0; i < unmatchedDescriptions.length; i++) {
+        assert.equal(engine.translate(unmatchedDescriptions[i]), null);
+      }
+    }
+    optWarmMs = performance.now() - tWarm0;
+  } finally {
+    engine.patterns.forEach((p, idx) => {
+      p.regex.test = origTests[idx];
+    });
+  }
+
+  const optTotalMs = optColdMs + optWarmMs;
+  assert.equal(warmRegexCalls, 0, 'Second encounter of unmatched strings must hit negative unitCache with 0 regex executions');
+  assert.ok(
+    optTotalMs < bruteElapsedMs * 0.45,
+    `Expected indexed + negative-cached engine (${optTotalMs.toFixed(2)}ms) to be >2.2x faster than brute-force (${bruteElapsedMs.toFixed(2)}ms)`
+  );
+
+  // Verify O(1) amortized boundary depth propagation eliminates O(N * D) repeated parent walks
+  const env = createTestEnv();
+  let cur = env.doc.body;
+  for (let d = 0; d < 35; d++) {
+    const wrap = env.makeEl('div');
+    cur.append(wrap);
+    cur = wrap;
+  }
+  let parentReads = 0;
+  const countWrappedParent = (node) => {
+    let _p = node.parentElement;
+    Object.defineProperty(node, 'parentElement', {
+      get() {
+        parentReads++;
+        return _p;
+      },
+      set(v) {
+        _p = v;
+      },
+      configurable: true,
+    });
+  };
+  let anc = cur;
+  while (anc && anc !== env.doc.documentElement) {
+    countWrappedParent(anc);
+    anc = anc.parentNode;
+  }
+  for (let i = 0; i < 80; i++) {
+    const btn = env.makeEl('button', { text: 'Settings' });
+    cur.append(btn);
+    countWrappedParent(btn);
+  }
+  parentReads = 0;
+  const inst = runtime.mountHostI18n({
+    root: env.win,
+    doc: env.doc,
+    dict: { exact: { Settings: '设置' }, patterns: [] },
+    mode: 'on',
+  });
+  assert.equal(inst.getStatus().translatedCount, 80);
+  // Old O(N * D) climbed 35 ancestors * (80 elements + 80 text nodes) > 5,600 parentElement reads.
+  // Amortized O(1) propagation only reads parentElement for applyTextWrite conflict state (~80 reads).
+  assert.ok(parentReads < 350, `Expected amortized O(1) parent reads (< 350), got ${parentReads}`);
+  inst.destroy();
+});
+
+test('[Perf-3] scanFloatingContainers skips [role="dialog"] & dialog portals, performs 0 disconnect/reconnect when empty, and hoverHandler early-exits on dialog body', () => {
+  const env = createTestEnv(1000);
+  const dict = {
+    exact: { Settings: '设置', Save: '保存', Copy: '复制', Open: '打开', Delete: '删除' },
+    patterns: [],
+  };
+
+  const topBtn = env.makeEl('button', { text: 'Settings' });
+  const dialog = env.makeEl('div', { attrs: { role: 'dialog' } });
+  const dialogBody = env.makeEl('div', { className: 'p-6' });
+  for (let i = 0; i < 6; i++) dialogBody.append(env.makeEl('div', { text: `Section ${i}` }));
+  const dialogLabel = env.makeEl('span', { text: 'Save' });
+  dialogBody.append(dialogLabel);
+  dialog.append(dialogBody);
+
+  const dialogPortal = env.makeEl('div', { attrs: { 'data-floating-ui-portal': '' } });
+  const innerDialog = env.makeEl('div', { attrs: { role: 'dialog' } });
+  const innerDialogSpan = env.makeEl('span', { text: 'Open' });
+  innerDialog.append(innerDialogSpan);
+  dialogPortal.append(innerDialog);
+
+  const ignoredPrism = env.makeEl('div', { className: 'ag-cs-panel', text: 'Copy' });
+  env.doc.body.append(topBtn, dialog, dialogPortal, ignoredPrism);
+
+  const inst = runtime.mountHostI18n({
+    root: env.win,
+    doc: env.doc,
+    dict,
+    mode: 'on',
+    nowFn: env.nowFn,
+    setTimeoutFn: env.setTimeoutFn,
+    clearTimeoutFn: env.clearTimeoutFn,
+    rafFn: env.rafFn,
+    cancelRafFn: env.cancelRafFn,
+  });
+
+  assert.equal(dialogLabel.textContent, '保存');
+  assert.equal(innerDialogSpan.textContent, '打开');
+
+  // Quietly reset raw _nodeValue without firing MO to detect if hover/scanFloatingContainers re-scans dialogs
+  dialogLabel.firstChild._nodeValue = 'Save';
+  innerDialogSpan.firstChild._nodeValue = 'Open';
+
+  const obs = env.observerInstances[0];
+  let disconnectCalls = 0;
+  let observeCalls = 0;
+  const origDisconnect = obs.disconnect.bind(obs);
+  const origObserve = obs.observe.bind(obs);
+  obs.disconnect = () => {
+    disconnectCalls++;
+    origDisconnect();
+  };
+  obs.observe = (t, o) => {
+    observeCalls++;
+    origObserve(t, o);
+  };
+
+  // 1. Hovering disconnected node, Prism-owned node, [role="dialog"] root, or dialog layout container -> early exit (0 timers, 0 disconnect)
+  const detached = env.makeEl('button', { text: 'Delete' });
+  detached.isConnected = false;
+  env.doc.dispatchEvent({ type: 'pointerenter', target: detached });
+  env.doc.dispatchEvent({ type: 'pointerenter', target: ignoredPrism });
+  env.doc.dispatchEvent({ type: 'pointerenter', target: dialog });
+  env.doc.dispatchEvent({ type: 'pointerenter', target: dialogBody });
+  assert.equal(env.timers.size, 0, 'Early-exited pointerenter must not schedule hover timers');
+  assert.equal(disconnectCalls, 0);
+  assert.equal(observeCalls, 0);
+
+  // 2. Hovering topBtn runs leading target scan (1 disconnect/observe), then trailing scanFloatingContainers finds 0 non-dialog candidates -> 0 extra disconnect/observe!
+  env.advanceTime(200);
+  disconnectCalls = 0;
+  observeCalls = 0;
+  env.doc.dispatchEvent({ type: 'pointerenter', target: topBtn });
+  assert.equal(disconnectCalls, 1, 'Leading small-target hover scan runs once');
+  assert.equal(observeCalls, 1);
+
+  // Now advance past trailing 50ms timer -> scanFloatingContainers runs with only dialog & dialogPortal in DOM
+  disconnectCalls = 0;
+  observeCalls = 0;
+  env.advanceTime(100);
+  assert.equal(disconnectCalls, 0, 'scanFloatingContainers with empty non-dialog candidates must do 0 disconnectObserver()');
+  assert.equal(observeCalls, 0, 'scanFloatingContainers with empty non-dialog candidates must do 0 reconnectObserver()');
+  assert.equal(dialogLabel.textContent, 'Save', '[role="dialog"] must NOT be re-scanned by scanFloatingContainers');
+  assert.equal(innerDialogSpan.textContent, 'Open', '[data-floating-ui-portal] wrapping [role="dialog"] must NOT be re-scanned');
+
+  // 3. Genuine small floating listbox / menu portal still translates cleanly
+  const listbox = env.makeEl('div', { attrs: { role: 'listbox' } });
+  const optItem = env.makeEl('div', { attrs: { role: 'option' }, text: 'Delete' });
+  listbox.append(optItem);
+  env.doc.body.append(listbox);
+  // Simulate un-observed late render by resetting before hover trailing scan
+  env.timers.clear();
+  env.advanceTime(200);
+  const latePopup = env.makeEl('div', { attrs: { 'data-floating-ui-portal': '' } });
+  const lateMenu = env.makeEl('div', { attrs: { role: 'menu' }, text: 'Copy' });
+  latePopup.append(lateMenu);
+  // Insert while observer temporarily off to prove scanFloatingContainers itself translates both without duplicate work
+  origDisconnect();
+  obs.connected = true;
+  observingHack: {
+    env.doc.body.childNodes.push(latePopup);
+    latePopup.parentElement = env.doc.body;
+    latePopup.parentNode = env.doc.body;
+  }
+  env.doc.dispatchEvent({ type: 'pointerenter', target: topBtn });
+  env.advanceTime(120);
+  assert.equal(lateMenu.textContent, '复制', 'Non-dialog floating portal / menu must still translate on hover');
+
+  inst.destroy();
+});
+
+test('[Perf-4] macOS data-ag-cs-win-blur="1" 0fps hibernation & wake, streaming MO fast-path 0-rAF, and 5ms / <=80-node time-slicing', () => {
+  let perfClock = 1000;
+  const env = createTestEnv(1000);
+  const dict = {
+    exact: { Settings: '设置', Save: '保存', Cancel: '取消', Copy: '复制', Open: '打开' },
+    patterns: [],
+  };
+
+  const convView = env.makeEl('div', { attrs: { 'data-testid': 'conversation-view' } });
+  const prose = env.makeEl('div', { className: 'markdown-body' });
+  const streamText = env.makeText('Streaming token 0');
+  const streamP = env.makeEl('p');
+  streamP.append(streamText);
+  prose.append(streamP);
+  convView.append(prose);
+  env.doc.body.append(convView);
+
+  const inst = runtime.mountHostI18n({
+    root: env.win,
+    doc: env.doc,
+    dict,
+    mode: 'auto',
+    nowFn: env.nowFn,
+    perfNowFn: () => perfClock,
+    setTimeoutFn: env.setTimeoutFn,
+    clearTimeoutFn: env.clearTimeoutFn,
+    rafFn: env.rafFn,
+    cancelRafFn: env.cancelRafFn,
+  });
+
+  // Advance past 1200ms Layer 2b window
+  env.advanceTime(1300);
+  assert.equal(env.timers.size, 0);
+
+  // 1. Streaming MO fast-path: 40 characterData + childList mutations inside conversation prose must queue 0 rAFs!
+  for (let i = 1; i <= 40; i++) {
+    streamText.nodeValue = `Streaming token ${i} Settings Save`;
+    prose.append(env.makeEl('span', { text: 'Cancel' }));
+  }
+  env.flushObservers();
+  assert.equal(env.timers.size, 0, 'Streaming mutations inside ignored/conversation prose must fast-skip with 0 rAF scheduled');
+
+  // 2. macOS CalculateNativeWinOcclusion: data-ag-cs-win-blur="1" triggers true MO disconnect 0fps sleep
+  env.doc.documentElement.setAttribute('data-ag-cs-win-blur', '1');
+  const sleepBtn = env.makeEl('button', { text: 'Save' });
+  env.doc.body.append(sleepBtn);
+  env.flushObservers();
+  assert.equal(env.observerInstances[0].connected, false, 'MO must disconnect when data-ag-cs-win-blur="1" is detected');
+  assert.equal(env.timers.size, 0, '0 rAF/timers while hibernating on data-ag-cs-win-blur="1"');
+  assert.equal(sleepBtn.textContent, 'Save');
+
+  // Clearing data-ag-cs-win-blur and firing focus immediately wakes, reconnects MO, and catches up missed DOM
+  env.doc.documentElement.removeAttribute('data-ag-cs-win-blur');
+  env.win.dispatchEvent({ type: 'focus' });
+  assert.equal(env.observerInstances[0].connected, true, 'MO must reconnect immediately when win-blur clears on focus');
+  assert.equal(sleepBtn.textContent, '保存', 'Missed button during win-blur hibernation must translate on wake');
+
+  // 3. Frame node cap (<= 80 nodes/frame): inserting 180 buttons processes at most 80 in frame 1, finishing across frames
+  const bulkBtns = [];
+  for (let i = 0; i < 180; i++) {
+    const b = env.makeEl('button', { text: 'Copy' });
+    bulkBtns.push(b);
+    env.doc.body.append(b);
+  }
+  env.flushObservers();
+  assert.ok(env.timers.size >= 1, 'Pending rAF scheduled for bulk mutation');
+  env.flushRafOnly();
+  const translatedAfterFrame1 = bulkBtns.filter((b) => b.textContent === '复制').length;
+  assert.ok(
+    translatedAfterFrame1 > 0 && translatedAfterFrame1 <= 80,
+    `Single frame must cap at <= 80 nodes, got ${translatedAfterFrame1}`
+  );
+  env.advanceTime(100);
+  assert.equal(bulkBtns.filter((b) => b.textContent === '复制').length, 180, 'All 180 buttons finish across subsequent rAF frames');
+
+  // 4. Time-slice budget (< 5ms/frame): simulate 1.5ms per 4 nodes so 5ms budget slices a 40-button batch across multiple frames
+  const origGetAttr = env.makeEl('div').getAttribute;
+  const slowBtns = [];
+  for (let i = 0; i < 40; i++) {
+    const b = env.makeEl('button', { text: 'Open' });
+    const rawGet = b.getAttribute.bind(b);
+    b.getAttribute = (k) => {
+      if (k === 'data-testid') perfClock += 0.45;
+      return rawGet(k);
+    };
+    slowBtns.push(b);
+    env.doc.body.append(b);
+  }
+  env.flushObservers();
+  env.flushRafOnly();
+  const slowDoneFrame1 = slowBtns.filter((b) => b.textContent === '打开').length;
+  assert.ok(
+    slowDoneFrame1 >= 1 && slowDoneFrame1 < 40,
+    `5ms frame budget must yield mid-batch before 40 slow nodes finish, processed ${slowDoneFrame1}`
+  );
+  env.advanceTime(200);
+  assert.equal(slowBtns.filter((b) => b.textContent === '打开').length, 40, 'Remaining time-sliced nodes complete cleanly in next frames');
+  void origGetAttr;
+
+  inst.destroy();
+
+  // 5. Lightweight initial scan on huge DOM (> 160 nodes) translates core top bar immediately and slices remainder into rAF
+  const bigEnv = createTestEnv(2000);
+  const bigBtns = [];
+  for (let i = 0; i < 230; i++) {
+    const b = bigEnv.makeEl('button', { text: 'Settings' });
+    bigBtns.push(b);
+    bigEnv.doc.body.append(b);
+  }
+  const bigInst = runtime.mountHostI18n({
+    root: bigEnv.win,
+    doc: bigEnv.doc,
+    dict,
+    mode: 'on',
+    nowFn: bigEnv.nowFn,
+    setTimeoutFn: bigEnv.setTimeoutFn,
+    clearTimeoutFn: bigEnv.clearTimeoutFn,
+    rafFn: bigEnv.rafFn,
+    cancelRafFn: bigEnv.cancelRafFn,
+  });
+  assert.equal(bigBtns[0].textContent, '设置', 'First-screen header/nav controls translate synchronously on mount');
+  const syncCount = bigBtns.filter((b) => b.textContent === '设置').length;
+  assert.ok(syncCount >= 100 && syncCount < 230, `Initial sync scan should stay within budget (~160), got ${syncCount}`);
+  bigEnv.advanceTime(100);
+  assert.equal(bigBtns.filter((b) => b.textContent === '设置').length, 230, 'Deferred initial scan nodes complete via rAF');
+  bigInst.destroy();
+});
+
+test('[Coexist-13] Layer 1 detects all Top 13 external localization fingerprints with detectedProvider, exempts external widgets, and resists Map.prototype hijacking', async () => {
+  const dict = { exact: { Settings: '设置', Save: '保存', Cancel: '取消' }, patterns: [] };
+
+  const signatureCases = [
+    // 1. antigravity-cn-community (1422★)
+    {
+      label: 'antigravity-cn-community global',
+      expectedProvider: 'antigravity-cn-community',
+      setup: (env) => { env.win.__agySidebarDragFixInstalled = true; },
+    },
+    // 2 & 3. yuexps/Antigravity-Hans (432★) & kdczyz (134★)
+    {
+      label: 'yuexps/Antigravity-Hans __antigravityZhPatchInstalled',
+      expectedProvider: 'yuexps/Antigravity-Hans',
+      setup: (env) => { env.win.__antigravityZhPatchInstalled = true; },
+    },
+    {
+      label: 'yuexps/Antigravity-Hans __antigravityZhSetLang',
+      expectedProvider: 'yuexps/Antigravity-Hans',
+      setup: (env) => { env.win.__antigravityZhSetLang = () => {}; },
+    },
+    {
+      label: 'yuexps/Antigravity-Hans __antigravityZhPatchObserver',
+      expectedProvider: 'yuexps/Antigravity-Hans',
+      setup: (env) => { env.win.__antigravityZhPatchObserver = {}; },
+    },
+    {
+      label: 'yuexps/Antigravity-Hans [data-agy-hans-ui]',
+      expectedProvider: 'yuexps/Antigravity-Hans',
+      setup: (env) => { env.doc.body.append(env.makeEl('div', { attrs: { 'data-agy-hans-ui': '1' } })); },
+    },
+    {
+      label: 'yuexps/Antigravity-Hans localStorage antigravityHansLang',
+      expectedProvider: 'yuexps/Antigravity-Hans',
+      setup: (env) => {
+        env.win.localStorage = { getItem: (k) => (k === 'antigravityHansLang' ? 'zh-CN' : null) };
+      },
+    },
+    // 4. yiheng8023 (238★, v3.3.59+)
+    {
+      label: 'yiheng8023 __AGY_I18N_DATA__',
+      expectedProvider: 'yiheng8023',
+      setup: (env) => { env.win.__AGY_I18N_DATA__ = {}; },
+    },
+    {
+      label: 'yiheng8023 __AGY_CREATE_ENGINE__',
+      expectedProvider: 'yiheng8023',
+      setup: (env) => { env.win.__AGY_CREATE_ENGINE__ = () => {}; },
+    },
+    {
+      label: 'yiheng8023 __AGY_SWARM_I18N__',
+      expectedProvider: 'yiheng8023',
+      setup: (env) => { env.win.__AGY_SWARM_I18N__ = true; },
+    },
+    // 5. 3169657175 (91★)
+    {
+      label: '3169657175 __agyI18n',
+      expectedProvider: '3169657175',
+      setup: (env) => { env.win.__agyI18n = {}; },
+    },
+    {
+      label: '3169657175 __agyTranslateEnhancementText',
+      expectedProvider: '3169657175',
+      setup: (env) => { env.win.__agyTranslateEnhancementText = () => {}; },
+    },
+    {
+      label: '3169657175 #agy-theme-switcher',
+      expectedProvider: '3169657175',
+      setup: (env) => { env.doc.body.append(env.makeEl('div', { id: 'agy-theme-switcher' })); },
+    },
+    {
+      label: '3169657175 #antigravity-quota-widget',
+      expectedProvider: '3169657175',
+      setup: (env) => { env.doc.body.append(env.makeEl('div', { id: 'antigravity-quota-widget' })); },
+    },
+    {
+      label: '3169657175 html.agy-theme-active-v2',
+      expectedProvider: '3169657175',
+      setup: (env) => { env.doc.documentElement.classList.add('agy-theme-active-v2'); },
+    },
+    // 6. renkeshui (90★)
+    {
+      label: 'renkeshui __antigravity_i18n_runner_active',
+      expectedProvider: 'renkeshui',
+      setup: (env) => { env.win.__antigravity_i18n_runner_active = true; },
+    },
+    {
+      label: 'renkeshui __ANTIGRAVITY_I18N_DATA__',
+      expectedProvider: 'renkeshui',
+      setup: (env) => { env.win.__ANTIGRAVITY_I18N_DATA__ = {}; },
+    },
+    {
+      label: 'renkeshui __ANTIGRAVITY_REVERSE_MAP__',
+      expectedProvider: 'renkeshui',
+      setup: (env) => { env.win.__ANTIGRAVITY_REVERSE_MAP__ = {}; },
+    },
+    // 7. cshitian (84★)
+    {
+      label: 'cshitian script[src*="ag_agent_hanhua.js"]',
+      expectedProvider: 'cshitian',
+      setup: (env) => {
+        env.doc.head.append(
+          env.makeEl('script', { attrs: { src: 'vscode-file://vscode-app/out/ag_agent_hanhua.js?v=1' } })
+        );
+      },
+    },
+    // 8. nianshou555qiansui (33★)
+    {
+      label: 'nianshou555qiansui __ag_hanhua_engine__',
+      expectedProvider: 'nianshou555qiansui',
+      setup: (env) => { env.win.__ag_hanhua_engine__ = {}; },
+    },
+    // 9. Ace2025001 (32★)
+    {
+      label: 'Ace2025001 __AGY_ZHCN__',
+      expectedProvider: 'Ace2025001',
+      setup: (env) => { env.win.__AGY_ZHCN__ = true; },
+    },
+    {
+      label: 'Ace2025001 __AGY_ZHCN_LOOKUP__',
+      expectedProvider: 'Ace2025001',
+      setup: (env) => { env.win.__AGY_ZHCN_LOOKUP__ = {}; },
+    },
+    {
+      label: 'Ace2025001 [data-model-selector-badge="true"]',
+      expectedProvider: 'Ace2025001',
+      setup: (env) => {
+        env.doc.body.append(env.makeEl('span', { attrs: { 'data-model-selector-badge': 'true' } }));
+      },
+    },
+    // 10. LucasvonLiu (23★)
+    {
+      label: 'LucasvonLiu localStorage antigravity_chinese_patch_dict',
+      expectedProvider: 'LucasvonLiu',
+      setup: (env) => {
+        env.win.localStorage = {
+          getItem: (k) => (k === 'antigravity_chinese_patch_dict' ? '{"Settings":"设置"}' : null),
+        };
+      },
+    },
+    // 11. Zero-Touch (20★)
+    {
+      label: 'Zero-Touch __antigravityZh',
+      expectedProvider: 'Zero-Touch',
+      setup: (env) => { env.win.__antigravityZh = true; },
+    },
+    {
+      label: 'Zero-Touch __antigravityZhDict',
+      expectedProvider: 'Zero-Touch',
+      setup: (env) => { env.win.__antigravityZhDict = {}; },
+    },
+    // 12. yunjuanyunshu (20★)
+    {
+      label: 'yunjuanyunshu __AG_ZH__',
+      expectedProvider: 'yunjuanyunshu',
+      setup: (env) => { env.win.__AG_ZH__ = true; },
+    },
+    // 13. good9527 / zero-marker IIFE via Layer 2a generic DOM sniffing
+    {
+      label: 'good9527 zero-marker Layer 2a Chrome zh sampling',
+      expectedProvider: 'generic-zh-dom',
+      setup: (env) => {
+        const nav = env.makeEl('nav');
+        nav.append(env.makeEl('button', { text: '设置' }), env.makeEl('button', { text: '新建对话' }));
+        env.doc.body.append(nav);
+      },
+    },
+  ];
+
+  for (const sc of signatureCases) {
+    const env = createTestEnv();
+    const hostBtn = env.makeEl('button', { text: 'Settings' });
+    env.doc.body.append(hostBtn);
+    sc.setup(env);
+
+    const inst = runtime.mountHostI18n({
+      root: env.win,
+      doc: env.doc,
+      dict,
+      mode: 'auto',
+      nowFn: env.nowFn,
+      setTimeoutFn: env.setTimeoutFn,
+      clearTimeoutFn: env.clearTimeoutFn,
+      rafFn: env.rafFn,
+      cancelRafFn: env.cancelRafFn,
+    });
+    const st = inst.getStatus();
+    assert.equal(st.status, 'yielded', `Case [${sc.label}] must yield`);
+    assert.equal(st.yielded, true, `Case [${sc.label}] yielded flag must be true`);
+    assert.equal(st.reason, 'external-ui-zh', `Case [${sc.label}] must preserve reason='external-ui-zh'`);
+    assert.equal(st.detectedProvider, sc.expectedProvider, `Case [${sc.label}] provider mismatch`);
+    assert.equal(env.observerInstances.length, 0, `Case [${sc.label}] must mount 0 observers`);
+    assert.equal(hostBtn.textContent, 'Settings');
+    inst.destroy();
+    assert.equal(inst.getStatus().detectedProvider, null);
+  }
+
+  // Disabled antigravityHansLang='en' or throwing localStorage must NOT false-yield
+  const safeLsEnv = createTestEnv();
+  safeLsEnv.win.localStorage = {
+    getItem: (k) => {
+      if (k === 'antigravityHansLang') return 'en';
+      throw new Error('SecurityError');
+    },
+  };
+  const okBtn = safeLsEnv.makeEl('button', { text: 'Settings' });
+  safeLsEnv.doc.body.append(okBtn);
+  const safeInst = runtime.mountHostI18n({ root: safeLsEnv.win, doc: safeLsEnv.doc, dict, mode: 'auto' });
+  assert.equal(safeInst.getStatus().status, 'active');
+  assert.equal(safeInst.getStatus().detectedProvider, null);
+  assert.equal(okBtn.textContent, '设置');
+  safeInst.destroy();
+
+  // External localization widgets exemption in forced mode='on'
+  const exEnv = createTestEnv();
+  const hansUi = exEnv.makeEl('div', { attrs: { 'data-agy-hans-ui': 'true' } });
+  hansUi.append(exEnv.makeEl('button', { text: 'Settings' }));
+  const themeSw = exEnv.makeEl('div', { id: 'agy-theme-switcher', text: 'Save' });
+  const themeMenu = exEnv.makeEl('div', { id: 'agy-theme-menu', text: 'Cancel' });
+  const quotaW = exEnv.makeEl('div', { id: 'antigravity-quota-widget', text: 'Settings' });
+  const auditW = exEnv.makeEl('div', { id: 'antigravity-translation-audit', text: 'Save' });
+  const realHostBtn = exEnv.makeEl('button', { text: 'Settings' });
+  exEnv.doc.body.append(hansUi, themeSw, themeMenu, quotaW, auditW, realHostBtn);
+
+  const exInst = runtime.mountHostI18n({ root: exEnv.win, doc: exEnv.doc, dict, mode: 'on' });
+  assert.equal(hansUi.textContent, 'Settings', '[data-agy-hans-ui] must be exempted');
+  assert.equal(themeSw.textContent, 'Save', '#agy-theme-switcher must be exempted');
+  assert.equal(themeMenu.textContent, 'Cancel', '#agy-theme-menu must be exempted');
+  assert.equal(quotaW.textContent, 'Settings', '#antigravity-quota-widget must be exempted');
+  assert.equal(auditW.textContent, 'Save', '#antigravity-translation-audit must be exempted');
+  assert.equal(realHostBtn.textContent, '设置', 'Normal host button still translates');
+  exInst.destroy();
+
+  // Defense against renkeshui monkey-patching Map.prototype.has / Map.prototype.get
+  const rtSrc = fs.readFileSync(path.join(ROOT, 'vendor', 'host-i18n', 'host-i18n-runtime.js'), 'utf8');
+  assert.equal(/new\s+Map\s*\(/.test(rtSrc), false, 'host-i18n-runtime.js must not use new Map() for string/lookup caches');
+
+  const origMapHas = Map.prototype.has;
+  const origMapGet = Map.prototype.get;
+  const hijackedDictKeys = new Set([
+    'Settings',
+    'Save',
+    'Cancel',
+    'Unmatched English Label',
+    'Unmatched English sentence.',
+  ]);
+  try {
+    Map.prototype.has = function (k) {
+      if (typeof k === 'string' && hijackedDictKeys.has(k)) return true;
+      return origMapHas.call(this, k);
+    };
+    Map.prototype.get = function (k) {
+      if (typeof k === 'string' && hijackedDictKeys.has(k)) return 'POISONED_BY_EXTERNAL_MAP_HOOK';
+      return origMapGet.call(this, k);
+    };
+
+    const mpEnv = createTestEnv();
+    const mpBtn = mpEnv.makeEl('button', {
+      text: 'Save',
+      attrs: { title: 'Settings', 'aria-label': 'Unmatched English Label' },
+    });
+    const mpUnmatched = mpEnv.makeEl('span', { text: 'Unmatched English sentence.' });
+    mpEnv.doc.body.append(mpBtn, mpUnmatched);
+
+    const mpInst = runtime.mountHostI18n({ root: mpEnv.win, doc: mpEnv.doc, dict, mode: 'on' });
+    assert.equal(mpBtn.textContent, '保存');
+    assert.equal(mpBtn.getAttribute('title'), '设置');
+    assert.equal(mpBtn.getAttribute('aria-label'), 'Unmatched English Label');
+    assert.equal(mpUnmatched.textContent, 'Unmatched English sentence.');
+
+    // Second scan hits unitCache & attrSnapshots without touching Map.prototype
+    mpInst.scan();
+    assert.equal(mpBtn.textContent, '保存');
+    assert.equal(mpBtn.getAttribute('title'), '设置');
+    assert.equal(mpUnmatched.textContent, 'Unmatched English sentence.');
+
+    mpInst.destroy();
+    assert.equal(mpBtn.textContent, 'Save');
+    assert.equal(mpBtn.getAttribute('title'), 'Settings');
+  } finally {
+    Map.prototype.has = origMapHas;
+    Map.prototype.get = origMapGet;
+  }
+
+  // Verify input dict/exact strong references are severed after engine creation (~0.6 MiB/window saved)
+  // and no local machine workspace paths exist in host-i18n runtime or test files
+  const { inputExactRef, detachedEngine } = (() => {
+    const transientInput = { exact: { Settings: '设置' }, patterns: [{ regex: '^(\\d+)m$', replacement: '$1分钟' }] };
+    const ref = new WeakRef(transientInput.exact);
+    const eng = runtime.createHostI18nEngine(transientInput);
+    assert.equal(Object.getPrototypeOf(eng.exactDict), null);
+    assert.notEqual(eng.exactDict, transientInput.exact);
+    transientInput.exact.Settings = 'MUTATED_EXTERNALLY';
+    assert.equal(eng.translate('Settings'), '设置');
+    return { inputExactRef: ref, detachedEngine: eng };
+  })();
+  if (typeof globalThis.gc === 'function') {
+    await new Promise((r) => setTimeout(r, 0));
+    globalThis.gc();
+    assert.equal(inputExactRef.deref(), undefined, 'External dict.exact must be reclaimed by GC');
+    assert.equal(detachedEngine.translate('Settings'), '设置');
+  }
+
+  const localWorkspaceLeak = 'workspace_' + 'program';
+  const testSelfSrc = fs.readFileSync(path.join(ROOT, 'test', 'host-i18n.test.mjs'), 'utf8');
+  assert.equal(rtSrc.includes(localWorkspaceLeak), false, 'Runtime must not contain local workspace path');
+  assert.equal(testSelfSrc.includes(localWorkspaceLeak), false, 'Test file must not contain local workspace path');
 });
