@@ -588,6 +588,26 @@ namespace AgyClaudeStyle
                     res["codeLigatures"] = cls != null && (string.Equals(cls, "on", StringComparison.OrdinalIgnoreCase) || string.Equals(cls, "true", StringComparison.OrdinalIgnoreCase));
                 }
             }
+            string[] boolOnOffKeys = new string[] { "telemetryModule", "effortSliderModule", "omniModule", "sidebarStudio", "autoUpdate" };
+            for (int i = 0; i < boolOnOffKeys.Length; i++)
+            {
+                string k = boolOnOffKeys[i];
+                object bv;
+                if (res.TryGetValue(k, out bv) && bv is bool)
+                {
+                    res[k] = (bool)bv ? "on" : "off";
+                }
+            }
+            object palVal;
+            if (res.TryGetValue("palette", out palVal) && string.Equals(palVal as string, "claude", StringComparison.Ordinal))
+            {
+                res["palette"] = "warm";
+            }
+            object mascotVal;
+            if (res.TryGetValue("mascot", out mascotVal) && string.Equals(mascotVal as string, "dual", StringComparison.Ordinal))
+            {
+                res["mascot"] = "crab";
+            }
             return res;
         }
 
@@ -1962,6 +1982,10 @@ namespace AgyClaudeStyle
             sb.Append("    try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}\n");
             sb.Append("    try { if (effectiveCfg.omniModule === 'off') window.__agPrismOmni?.destroy?.(); else window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}\n");
             sb.Append("    try { if (effectiveCfg.hostLocalization === 'off' || (effectiveCfg.hostLocalization !== 'on' && effectiveCfg.language && effectiveCfg.language !== 'zh-CN' && effectiveCfg.language !== 'auto')) window.__agPrismHostI18n?.destroy?.(); } catch {}\n");
+            sb.Append("    if (document.documentElement) {\n");
+            sb.Append("      if (effectiveCfg && effectiveCfg.thoughtTranslate && effectiveCfg.thoughtTranslate !== 'off') document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');\n");
+            sb.Append("      else document.documentElement.removeAttribute('data-ag-prism-thought-view');\n");
+            sb.Append("    }\n");
             sb.Append("    return { ok: true, refreshed: true, state: liveState };\n");
             sb.Append("  })()");
             return sb.ToString();

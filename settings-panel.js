@@ -224,20 +224,20 @@
 
   let pendingCfgToast = null;
 
-  const invokePrismRepoAction = (action, versionStr, extra) => {
-    const allowed = ['pull', 'storage-health', 'prepare-archive', 'uninstall', 'update-status', 'check-update', 'apply-update'];
-    const act = allowed.includes(action) ? action : 'status';
+  const invokePrismRepoAction = (action, ver, extra) => {
+    const act = ['pull', 'storage-health', 'prepare-archive', 'uninstall', 'update-status', 'check-update', 'apply-update'].includes(action) ? action : 'status';
+    const isObj = ver && typeof ver === 'object';
+    const ext = isObj ? { ...ver, ...(extra && typeof extra === 'object' ? extra : null) } : extra && typeof extra === 'object' ? extra : null;
     const win = typeof window !== 'undefined' ? window : G;
     try {
-      const bridge = win?.__agPrismRepoBridge;
-      const arg = extra && typeof extra === 'object' ? { ...extra, action: act } : { action: act };
-      if (typeof bridge === 'function') return Promise.resolve(bridge(arg));
-      if (bridge && typeof bridge[act] === 'function') return Promise.resolve(bridge[act](extra));
-      if (bridge && typeof bridge.call === 'function') return Promise.resolve(bridge.call(arg));
+      const b = win?.__agPrismRepoBridge, arg = ext ? { ...ext, action: act } : { action: act };
+      if (typeof b === 'function') return Promise.resolve(b(arg));
+      if (typeof b?.[act] === 'function') return Promise.resolve(b[act](ext || extra));
+      if (typeof b?.call === 'function') return Promise.resolve(b.call(arg));
     } catch (err) {
       return Promise.resolve({ ok: false, action: act, error: String(err?.message || err) });
     }
-    return Promise.resolve({ ok: false, offline: true, action: act, noRemote: true, hasRemote: false, branch: 'local', shortHash: versionStr });
+    return Promise.resolve({ ok: false, offline: true, action: act, noRemote: true, hasRemote: false, branch: 'local', shortHash: isObj ? ver.version : ver });
   };
 
   const readStore = (k) => {
@@ -387,8 +387,19 @@
         const tb = qs(rootEl, '[data-testid="prism-thought-ai-config"]');
         if (tb) tb.hidden = tmMode !== 'ai';
       }
-      const ltRow = qs(rootEl, '[data-ag-cs-row="linkTarget"]');
-      if (ltRow?.style) ltRow.style.opacity = effVal('omniModule', l) === 'off' ? '0.55' : '';
+      for (const [dk, dim] of [
+        ['placeholderStyle', effVal('composerRestyle', l) === false],
+        ['sidebarCompact', effVal('sidebarRestyle', l) === false],
+        ['thoughtTrigger', tmMode === 'off'],
+        ['thoughtView', tmMode === 'off'],
+        ['homeRipple', effVal('homeLayout', l) === 'off'],
+        ['linkTarget', effVal('omniModule', l) === 'off'],
+      ]) {
+        const dr = qs(rootEl, `[data-ag-cs-row="${dk}"]`);
+        if (!dr) continue;
+        if (dr.style) dr.style.opacity = dim ? '0.55' : '';
+        if (dim) sa(dr, 'data-ag-cs-dimmed', '1'); else ra(dr, 'data-ag-cs-dimmed');
+      }
       const lpDescEl = qs(rootEl, '[data-ag-cs-row="lightPreset"] [data-k="d"]');
       if (lpDescEl) {
         const curPal = effVal('palette', l);
@@ -693,7 +704,7 @@
                 }
                 if (r.key === 'thoughtView') getThoughtUiHandle()?.onViewSwitched?.(val);
                 if (r.key === 'updateChannel' && applyUpdateViewRef) {
-                  setTimeout(() => { void invokePrismRepoAction('update-status', version).then((st) => st && applyUpdateViewRef(st)).catch(() => {}); }, 40);
+                  void invokePrismRepoAction('update-status', { version, channel: val }).then((st) => st && applyUpdateViewRef(st)).catch(() => {});
                 }
                 const lNow = getLang();
                 syncRootState(sec, lNow, uiText(lNow));

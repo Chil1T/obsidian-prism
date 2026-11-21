@@ -1485,11 +1485,11 @@ test('PrismDaemon HS-1 & SEC-2: 68 rapid-fire setting updates, multi-window cros
     }
     await waitBroadcastDrain(daemon);
 
-    assert.equal(stB.vmWin.__agPrism.getState().cfg.palette, 'claude', 'Window B must not suffer stale rebound');
+    assert.equal(stB.vmWin.__agPrism.getState().cfg.palette, 'warm', 'Window B must normalize claude->warm without stale rebound');
     assert.equal(stB.vmWin.__agPrism.getState().cfg.accentTone, 'amber');
     assert.equal(
       stA.vmWin.__agPrism.getState().cfg.palette,
-      'claude',
+      'warm',
       'Window A (with localWriteEpoch=68) must never drop sibling Window B updates (baseRefreshExpr omits __ackEpoch)'
     );
     assert.equal(stA.vmWin.__agPrism.getState().cfg.accentTone, 'amber');

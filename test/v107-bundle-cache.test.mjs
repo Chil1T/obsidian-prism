@@ -164,7 +164,7 @@ test('v107 A2-3: config changes miss cache cleanly, cap retained variants at BUN
     const variants = [
       { ...cdp.DEFAULT_CONFIG, palette: 'obsidian' },
       { ...cdp.DEFAULT_CONFIG, palette: 'warm' },
-      { ...cdp.DEFAULT_CONFIG, palette: 'claude' },
+      { ...cdp.DEFAULT_CONFIG, palette: 'warm', cornerStyle: 'sharp' },
       { ...cdp.DEFAULT_CONFIG, palette: 'host' },
       { ...cdp.DEFAULT_CONFIG, palette: 'obsidian', motionLevel: 'off' },
       { ...cdp.DEFAULT_CONFIG, palette: 'warm', language: 'en' },

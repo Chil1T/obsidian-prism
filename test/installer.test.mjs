@@ -1163,3 +1163,150 @@ test('Windows C# installer & Watcher Channel 5 contracts and cdp.js REMOVE_EXPRE
     'Executing cdp.REMOVE_EXPRESSION must strip data-ces-model-selected from DOM nodes'
   );
 });
+
+test('Windows C# CdpClient ReconcileConfigAliases (#5) & BuildConfigRefreshExpression thoughtView off removal (#7b)', () => {
+  const cdpCs = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs'), 'utf8');
+
+  // Static contract parity
+  for (const key of ['telemetryModule', 'effortSliderModule', 'omniModule', 'sidebarStudio', 'autoUpdate']) {
+    assert.ok(cdpCs.includes(`"${key}"`), `C# ReconcileConfigAliases must handle boolean->on/off for ${key}`);
+  }
+  assert.ok(cdpCs.includes('"claude"') && cdpCs.includes('"warm"'), 'C# ReconcileConfigAliases maps palette claude->warm');
+  assert.ok(cdpCs.includes('"dual"') && cdpCs.includes('"crab"'), 'C# ReconcileConfigAliases maps mascot dual->crab');
+  assert.ok(
+    cdpCs.includes("removeAttribute('data-ag-prism-thought-view')"),
+    'C# BuildConfigRefreshExpression removes data-ag-prism-thought-view when thoughtTranslate is off'
+  );
+
+  // Live C# execution verification on Windows via csc.exe
+  if (process.platform === 'win32') {
+    const winDir = process.env.WINDIR || 'C:\\Windows';
+    const csc = [
+      path.join(winDir, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'),
+      path.join(winDir, 'Microsoft.NET', 'Framework', 'v4.0.30319', 'csc.exe'),
+    ].find((p) => fs.existsSync(p));
+    assert.ok(csc, 'Expected .NET Framework csc.exe on Windows');
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-cs-alias-'));
+    try {
+      const probeCs = path.join(tmpDir, 'Probe.cs');
+      const probeExe = path.join(tmpDir, 'probe.exe');
+      const cfgDir = path.join(tmpDir, 'plugin');
+      fs.mkdirSync(cfgDir, { recursive: true });
+      fs.writeFileSync(path.join(cfgDir, 'style.css'), '/* stub */', 'utf8');
+      fs.writeFileSync(path.join(cfgDir, 'ui-runtime.js'), '/* stub */', 'utf8');
+      fs.writeFileSync(
+        path.join(cfgDir, 'config.json'),
+        JSON.stringify({
+          palette: 'claude',
+          mascot: 'dual',
+          telemetryModule: true,
+          effortSliderModule: false,
+          omniModule: false,
+          sidebarStudio: true,
+          autoUpdate: true,
+          thoughtTranslate: 'off',
+          thoughtView: 'bilingual',
+        }),
+        'utf8'
+      );
+
+      fs.writeFileSync(
+        probeCs,
+        [
+          'using System;',
+          'using System.Collections.Generic;',
+          'using AgyClaudeStyle;',
+          'class Probe {',
+          '  static void Main(string[] args) {',
+          '    var m = new PluginManifest();',
+          '    m.Version = "1.0.6";',
+          '    m.SettingBinding = "__agPrismSetting";',
+          '    m.Parts = new List<string> { "ui-runtime.js" };',
+          '    m.DefaultConfig = new Dictionary<string, object>(StringComparer.Ordinal) {',
+          '      { "palette", "obsidian" }, { "mascot", "crab" }, { "thoughtTranslate", "off" }, { "thoughtView", "immersive" }',
+          '    };',
+          '    var cfg = CdpHelper.ReadConfig(args[0], m);',
+          '    var exprOff = CdpHelper.BuildConfigRefreshExpression(args[0], m);',
+          '    var outObj = new Dictionary<string, object>(StringComparer.Ordinal) {',
+          '      { "cfg", cfg },',
+          '      { "exprOff", exprOff }',
+          '    };',
+          '    Console.Write(MiniJson.Stringify(outObj, false));',
+          '  }',
+          '}',
+        ].join('\n'),
+        'utf8'
+      );
+
+      execFileSync(
+        csc,
+        [
+          '/nologo',
+          '/utf8output',
+          '/codepage:65001',
+          '/target:exe',
+          `/out:${probeExe}`,
+          '/r:System.dll',
+          '/r:System.Core.dll',
+          '/r:System.Net.Http.dll',
+          path.join(ROOT_DIR, 'installer', 'common', 'MiniJson.cs'),
+          path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs'),
+          probeCs,
+        ],
+        { stdio: 'pipe' }
+      );
+
+      const rawOut = execFileSync(probeExe, [cfgDir], { encoding: 'utf8' });
+      const parsed = JSON.parse(rawOut);
+      assert.equal(parsed.cfg.palette, 'warm', 'C# ReadConfig/ReconcileConfigAliases must normalize palette claude->warm');
+      assert.equal(parsed.cfg.mascot, 'crab', 'C# ReadConfig/ReconcileConfigAliases must normalize mascot dual->crab');
+      assert.equal(parsed.cfg.telemetryModule, 'on');
+      assert.equal(parsed.cfg.effortSliderModule, 'off');
+      assert.equal(parsed.cfg.omniModule, 'off');
+      assert.equal(parsed.cfg.sidebarStudio, 'on');
+      assert.equal(parsed.cfg.autoUpdate, 'on');
+
+      // Execute C#-generated BuildConfigRefreshExpression in VM for off vs ai
+      assert.doesNotThrow(() => new vm.Script(parsed.exprOff), 'C# BuildConfigRefreshExpression must be valid JS');
+      const attrs = new Map([['data-ag-prism-thought-view', 'bilingual']]);
+      let liveCfg = null;
+      const htmlEl = {
+        hasAttribute: (k) => attrs.has(k),
+        getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+        setAttribute: (k, v) => attrs.set(k, String(v)),
+        removeAttribute: (k) => attrs.delete(k),
+      };
+      const vmCtx = {
+        document: { documentElement: htmlEl },
+        window: {
+          __agPrism: {
+            version: '1.0.6',
+            refreshConfig(c) {
+              liveCfg = c;
+            },
+            getState() {
+              return { cfg: liveCfg };
+            },
+          },
+        },
+      };
+      const resOff = vm.runInNewContext(parsed.exprOff, vmCtx);
+      assert.equal(resOff.refreshed, true);
+      assert.equal(htmlEl.hasAttribute('data-ag-prism-thought-view'), false, 'C# refresh expr must strip thought-view when off');
+
+      // Re-run with thoughtTranslate='ai' -> sets data-ag-prism-thought-view='bilingual'
+      fs.writeFileSync(
+        path.join(cfgDir, 'config.json'),
+        JSON.stringify({ thoughtTranslate: 'ai', thoughtView: 'bilingual' }),
+        'utf8'
+      );
+      const parsedOn = JSON.parse(execFileSync(probeExe, [cfgDir], { encoding: 'utf8' }));
+      const resOn = vm.runInNewContext(parsedOn.exprOff, vmCtx);
+      assert.equal(resOn.refreshed, true);
+      assert.equal(htmlEl.getAttribute('data-ag-prism-thought-view'), 'bilingual');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
+});

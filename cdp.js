@@ -194,6 +194,12 @@ function reconcileConfigAliases(raw) {
       out[k] = out[k] ? 'on' : 'off';
     }
   }
+  if (has('palette') && out.palette === 'claude') {
+    out.palette = 'warm';
+  }
+  if (has('mascot') && out.mascot === 'dual') {
+    out.mascot = 'crab';
+  }
   return out;
 }
 
@@ -5457,7 +5463,11 @@ function buildConfigRefreshExpression(customConfig, extraMeta = null) {
         }
       } catch {}
       if (document.documentElement) {
-        document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg?.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
+        if (effectiveCfg?.thoughtTranslate && effectiveCfg.thoughtTranslate !== 'off') {
+          document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
+        } else {
+          document.documentElement.removeAttribute('data-ag-prism-thought-view');
+        }
         document.documentElement.setAttribute('data-ag-prism-sidebar-studio', effectiveCfg?.sidebarStudio === 'on' ? 'on' : 'off');
       }
       return { refreshed: true, version: api.version };
@@ -5818,10 +5828,9 @@ function getInjectWrapperTemplate() {
           try { window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}
         }
         if (document.documentElement) {
-          if (!document.documentElement.hasAttribute('data-ag-prism')) {
-            document.documentElement.setAttribute('data-ag-prism', ${JSON.stringify(PLUGIN_VERSION)});
-          }
-          document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg?.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
+          if (!document.documentElement.hasAttribute('data-ag-prism')) document.documentElement.setAttribute('data-ag-prism', ${JSON.stringify(PLUGIN_VERSION)});
+          if (effectiveCfg?.thoughtTranslate && effectiveCfg.thoughtTranslate !== 'off') document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
+          else document.documentElement.removeAttribute('data-ag-prism-thought-view');
         }
       } catch (e) {
         status = 'error: ' + (e && e.message ? e.message : String(e));

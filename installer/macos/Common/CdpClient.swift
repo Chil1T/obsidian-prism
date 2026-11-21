@@ -535,6 +535,17 @@ enum CdpHelper {
                 out["codeLigatures"] = .bool(s == "on" || s == "true")
             }
         }
+        for k in ["telemetryModule", "effortSliderModule", "omniModule", "sidebarStudio", "autoUpdate"] {
+            if let v = out[k], case .bool(let b) = v {
+                out[k] = .string(b ? "on" : "off")
+            }
+        }
+        if out["palette"]?.stringValue == "claude" {
+            out["palette"] = .string("warm")
+        }
+        if out["mascot"]?.stringValue == "dual" {
+            out["mascot"] = .string("crab")
+        }
         return out
     }
 
@@ -1185,6 +1196,10 @@ enum CdpHelper {
         sb.append("    try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}\n")
         sb.append("    try { if (effectiveCfg.omniModule === 'off') window.__agPrismOmni?.destroy?.(); else window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}\n")
         sb.append("    try { if (effectiveCfg.hostLocalization === 'off' || (effectiveCfg.hostLocalization !== 'on' && effectiveCfg.language && effectiveCfg.language !== 'zh-CN' && effectiveCfg.language !== 'auto')) window.__agPrismHostI18n?.destroy?.(); } catch {}\n")
+        sb.append("    if (document.documentElement) {\n")
+        sb.append("      if (effectiveCfg && effectiveCfg.thoughtTranslate && effectiveCfg.thoughtTranslate !== 'off') document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');\n")
+        sb.append("      else document.documentElement.removeAttribute('data-ag-prism-thought-view');\n")
+        sb.append("    }\n")
         sb.append("    return { ok: true, refreshed: true, state: liveState };\n")
         sb.append("  })()")
         return sb

@@ -247,6 +247,7 @@
 
     const HIDE_CSS_TEXT =
       '.ces-ag-section,.ces-menu-section,[data-ces-effort-row="true"],.ces-set,.ces-settings-panel{display:none!important}' +
+      '[data-testid="orchestrator-effort-bar"]{display:none!important}' +
       '[data-ces-part="trigger-effort"]{color:inherit!important;opacity:.7!important;font-weight:inherit!important}';
 
     function clrTint(doc) {
@@ -327,7 +328,7 @@
         return getState();
       }
       setHideCss(false);
-      if (hasExtInst()) {
+      if (mode === 'auto' && hasExtInst()) {
         yielded = true;
         stopInst();
         try { gW()?.__agCodexEffortSliderInstance?.rescan?.(); } catch {}
@@ -335,8 +336,12 @@
       }
       yielded = false;
       syncBilingualDom(gD());
-      if (!inst) mountBuiltIn();
-      else try { inst.rescan?.(); } catch {}
+      if (!inst || hasExtInst()) {
+        if (inst) stopInst();
+        mountBuiltIn();
+      } else {
+        try { inst.rescan?.(); } catch {}
+      }
       markOwnedNoTr(gD());
       return getState();
     }
@@ -351,7 +356,7 @@
       return {
         mode,
         mountedPrism: Boolean(inst),
-        yieldedToExternal: Boolean(yielded || (mode !== 'off' && hasExtInst())),
+        yieldedToExternal: Boolean(yielded || (mode === 'auto' && hasExtInst())),
         hasExternal: hasExtInst(),
         throttleMs: THROTTLE_MS,
         perfStats: { ...perfStats },

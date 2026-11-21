@@ -362,6 +362,44 @@ test('macOS Swift installer & LaunchAgent contracts enforce KeepAlive <true/>, n
   assert.ok(buildMacosSrc.includes('collectNativePluginEntries'), 'macOS app payload must bundle native-plugin Sidecar directory');
   assert.ok(buildMacosSrc.includes('collectOptionalOmniTopEntries'), 'macOS app payload must bundle top-level omni-client.js');
   assert.ok(buildMacosSrc.includes("'-volname', 'Obsidian Prism'"), 'macOS DMG volume name must be Obsidian Prism');
+
+  // SetFix #5 & #7b: Swift reconcileConfigAliases parity & buildConfigRefreshExpression thoughtView off removal
+  const reconcileMatch = cdpSwift.match(/static func reconcileConfigAliases\([\s\S]*?\n    \}/);
+  assert.ok(reconcileMatch, 'macOS CdpClient must define reconcileConfigAliases');
+  const reconcileBlock = reconcileMatch[0];
+  for (const key of ['telemetryModule', 'effortSliderModule', 'omniModule', 'sidebarStudio', 'autoUpdate']) {
+    assert.ok(reconcileBlock.includes(`"${key}"`), `Swift reconcileConfigAliases must normalize boolean ${key} -> on/off`);
+  }
+  assert.ok(reconcileBlock.includes('out["palette"]?.stringValue == "claude"') && reconcileBlock.includes('.string("warm")'));
+  assert.ok(reconcileBlock.includes('out["mascot"]?.stringValue == "dual"') && reconcileBlock.includes('.string("crab")'));
+
+  const refreshFnMatch = cdpSwift.match(/static func buildConfigRefreshExpression\([\s\S]*?\n    \}/);
+  assert.ok(refreshFnMatch, 'macOS CdpClient must define buildConfigRefreshExpression');
+  const refreshFnBlock = refreshFnMatch[0];
+  assert.ok(
+    refreshFnBlock.includes("effectiveCfg.thoughtTranslate !== 'off'") &&
+      refreshFnBlock.includes("removeAttribute('data-ag-prism-thought-view')"),
+    'Swift buildConfigRefreshExpression must remove data-ag-prism-thought-view when thoughtTranslate is off'
+  );
+  // Extract the JS lines emitted for document.documentElement thoughtView sync and verify in VM
+  const tvJsSnippet = `((effectiveCfg) => {
+    if (document.documentElement) {
+      if (effectiveCfg && effectiveCfg.thoughtTranslate && effectiveCfg.thoughtTranslate !== 'off') document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
+      else document.documentElement.removeAttribute('data-ag-prism-thought-view');
+    }
+  })`;
+  const swiftAttrs = new Map([['data-ag-prism-thought-view', 'bilingual']]);
+  const swiftHtml = {
+    hasAttribute: (k) => swiftAttrs.has(k),
+    getAttribute: (k) => (swiftAttrs.has(k) ? swiftAttrs.get(k) : null),
+    setAttribute: (k, v) => swiftAttrs.set(k, String(v)),
+    removeAttribute: (k) => swiftAttrs.delete(k),
+  };
+  const runThoughtSync = vm.runInNewContext(tvJsSnippet, { document: { documentElement: swiftHtml } });
+  runThoughtSync({ thoughtTranslate: 'off', thoughtView: 'bilingual' });
+  assert.equal(swiftHtml.hasAttribute('data-ag-prism-thought-view'), false);
+  runThoughtSync({ thoughtTranslate: 'machine', thoughtView: 'bilingual' });
+  assert.equal(swiftHtml.getAttribute('data-ag-prism-thought-view'), 'bilingual');
 });
 
 test(
@@ -476,16 +514,18 @@ test(
       assert.equal(onceResult.ok, true);
       assert.deepEqual(onceResult.pages, ['Antigravity']);
 
-      // 3. Test Runtime.bindingCalled -> config.json update & hot-reload
+      // 3. Test Runtime.bindingCalled -> config.json update (including legacy alias normalization) & hot-reload
       const beforeCallCount = mockCdp.getCalls().length;
       mockCdp.emitBindingCalled(cdp.SETTING_BINDING, { key: 'palette', value: 'hacker-invalid' });
       mockCdp.emitBindingCalled(cdp.SETTING_BINDING, { key: 'palette', value: 'claude' });
+      mockCdp.emitBindingCalled(cdp.SETTING_BINDING, { key: 'mascot', value: 'dual' });
 
       const updatedCfg = await waitFor(() => {
         const parsed = JSON.parse(fs.readFileSync(path.join(installDir, 'config.json'), 'utf8'));
-        return parsed.palette === 'claude' ? parsed : null;
+        return parsed.palette === 'warm' && parsed.mascot === 'crab' ? parsed : null;
       });
-      assert.equal(updatedCfg.palette, 'claude');
+      assert.equal(updatedCfg.palette, 'warm');
+      assert.equal(updatedCfg.mascot, 'crab');
 
       // Confirm hot-reload fired on watcher
       await waitFor(() => {
@@ -514,7 +554,8 @@ test(
       assert.equal(upgradeResult.ok, true);
       assert.equal(upgradeResult.preservedExistingConfig, true);
       const cfgAfterUpgrade = JSON.parse(fs.readFileSync(path.join(installDir, 'config.json'), 'utf8'));
-      assert.equal(cfgAfterUpgrade.palette, 'claude');
+      assert.equal(cfgAfterUpgrade.palette, 'warm');
+      assert.equal(cfgAfterUpgrade.mascot, 'crab');
 
       // 5. Test --uninstall from installed copy inside installDir
       const installedSelf = path.join(installDir, 'obsidian-prism-installer');

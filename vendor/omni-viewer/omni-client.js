@@ -2961,6 +2961,10 @@
         try { domObserver.disconnect(); } catch (_) {}
         domObserver = null;
       }
+      if (removeRootAttrs && rootAttrObserver) {
+        try { rootAttrObserver.disconnect(); } catch (_) {}
+        rootAttrObserver = null;
+      }
       closeContextMenu();
       purgeLegacyOmniDock();
       unwrapAllModifications();
@@ -2973,10 +2977,12 @@
         D.removeEventListener('visibilitychange', onWindowBlurOrScroll);
         D.removeEventListener('scroll', onWindowBlurOrScroll, true);
         try { D.getElementById?.(STYLE_EL_ID)?.remove?.(); } catch (_) {}
-        if (removeRootAttrs && D.documentElement) {
-          D.documentElement.removeAttribute?.('data-ag-prism-omni');
-          D.documentElement.removeAttribute?.('data-ag-prism-link-target');
+        if (D.documentElement) {
           D.documentElement.removeAttribute?.('data-ag-omni-hover-token');
+          if (removeRootAttrs) {
+            D.documentElement.removeAttribute?.('data-ag-prism-omni');
+            D.documentElement.removeAttribute?.('data-ag-prism-link-target');
+          }
         }
       }
       if (W) {
@@ -3006,7 +3012,6 @@
 
       if (destroyed && !nextEnabled) return getState();
       destroyed = false;
-      ensureRootAttrObserver();
 
       const rawTarget =
         cfg && cfg.linkTarget !== undefined
@@ -3015,18 +3020,19 @@
       linkTarget = rawTarget === 'external' ? 'external' : 'builtin';
 
       enabled = nextEnabled;
+      if (!enabled) {
+        detachRuntime(true);
+        return getState();
+      }
+
+      ensureRootAttrObserver();
       if (rootEl?.setAttribute) {
-        if (rootEl.getAttribute('data-ag-prism-omni') !== (enabled ? 'on' : 'off')) {
-          rootEl.setAttribute('data-ag-prism-omni', enabled ? 'on' : 'off');
+        if (rootEl.getAttribute('data-ag-prism-omni') !== 'on') {
+          rootEl.setAttribute('data-ag-prism-omni', 'on');
         }
         if (rootEl.getAttribute('data-ag-prism-link-target') !== linkTarget) {
           rootEl.setAttribute('data-ag-prism-link-target', linkTarget);
         }
-      }
-
-      if (!enabled) {
-        detachRuntime(false);
-        return getState();
       }
 
       attachRuntime();

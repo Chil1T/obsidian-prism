@@ -655,6 +655,7 @@ export class PrismDaemon {
     this._updateIntervalTimer = null;
     this._lastUpdateState = null;
     this._updateCheckInFlight = null;
+    this._updateCheckInFlightChannel = null;
     const initialUpdateChannel = this._getUpdateChannelSetting();
     this.updateService =
       _testUpdateService ||
@@ -1125,12 +1126,33 @@ export class PrismDaemon {
     return { channel: ch, changed };
   }
 
-  _buildCombinedUpdateStatus({ relState = null, gitState = null, action = 'update-status' } = {}) {
+  _extractExplicitUpdateChannel(rawInput) {
+    if (!rawInput || typeof rawInput !== 'object') return null;
+    const candidates = [
+      rawInput.channel,
+      rawInput.updateChannel,
+      rawInput.version && typeof rawInput.version === 'object' ? rawInput.version.channel : undefined,
+      rawInput.version && typeof rawInput.version === 'object' ? rawInput.version.updateChannel : undefined,
+      rawInput.input && typeof rawInput.input === 'object' ? rawInput.input.channel : undefined,
+      rawInput.input && typeof rawInput.input === 'object' ? rawInput.input.updateChannel : undefined,
+      rawInput.payload && typeof rawInput.payload === 'object' ? rawInput.payload.channel : undefined,
+      rawInput.payload && typeof rawInput.payload === 'object' ? rawInput.payload.updateChannel : undefined,
+    ];
+    for (const c of candidates) {
+      if (c === 'stable' || c === 'beta') return c;
+    }
+    return null;
+  }
+
+  _buildCombinedUpdateStatus({ relState = null, gitState = null, action = 'update-status', channelOverride = null } = {}) {
     const currentVersion = this.cdp?.PLUGIN_VERSION || this.updateService?.currentVersion || '1.0.6';
     const rel = relState || this.updateService?.getStatus?.() || {};
     const autoUpdate = this._getAutoUpdateSetting();
-    const updateChannel = this._getUpdateChannelSetting();
-    const channel = rel.channel === 'beta' || rel.channel === 'stable' ? rel.channel : updateChannel;
+    const explicitChannel = channelOverride === 'beta' || channelOverride === 'stable' ? channelOverride : null;
+    const updateChannel = explicitChannel || this._getUpdateChannelSetting();
+    const channel =
+      explicitChannel ||
+      (rel.channel === 'beta' || rel.channel === 'stable' ? rel.channel : updateChannel);
     const isGitRemote = Boolean(gitState?.hasRemote);
     const isPrerelease = isGitRemote ? false : Boolean(rel.isPrerelease);
     const gitHasUpdate = Boolean(isGitRemote && gitState.behind > 0);
@@ -1167,12 +1189,12 @@ export class PrismDaemon {
   }
 
   async runUpdateCheck({ force = false, manual = false, allowAutoApply = false, channel = null } = {}) {
-    const { channel: activeChannel, changed: channelChanged } =
-      channel !== null && channel !== undefined
-        ? this._syncUpdateServiceChannel({ updateChannel: channel })
-        : this._syncUpdateServiceChannel();
+    const explicitChannel = channel === 'beta' || channel === 'stable' ? channel : null;
+    const { channel: activeChannel, changed: channelChanged } = explicitChannel
+      ? this._syncUpdateServiceChannel({ updateChannel: explicitChannel })
+      : this._syncUpdateServiceChannel();
     const effectiveForce = Boolean(force || channelChanged);
-    if (this._updateCheckInFlight && !channelChanged) {
+    if (this._updateCheckInFlight && !channelChanged && this._updateCheckInFlightChannel === activeChannel) {
       return this._updateCheckInFlight;
     }
     const run = async () => {
@@ -1193,12 +1215,19 @@ export class PrismDaemon {
             lastError: String(err?.message || err || 'check_failed'),
           };
         }
-        const combined = this._buildCombinedUpdateStatus({ relState, gitState, action: manual ? 'check-update' : 'update-status' });
-        if (this._getUpdateChannelSetting() === activeChannel || channel !== null) {
+        const combined = this._buildCombinedUpdateStatus({
+          relState,
+          gitState,
+          action: manual ? 'check-update' : 'update-status',
+          channelOverride: activeChannel,
+        });
+        const svcChannel = this.updateService?.channel;
+        const channelStillCurrent = !svcChannel || svcChannel === activeChannel;
+        if (channelStillCurrent && (this._getUpdateChannelSetting() === activeChannel || explicitChannel !== null)) {
           this._lastUpdateState = combined;
         }
 
-        if (allowAutoApply && this._getAutoUpdateSetting() === 'on' && combined.hasUpdate) {
+        if (channelStillCurrent && allowAutoApply && this._getAutoUpdateSetting() === 'on' && combined.hasUpdate) {
           if (gitState.hasRemote && gitState.behind > 0) {
             const pullRes = await this._executeGitPullHotReload(gitState, 'apply-update');
             this._lastUpdateState = {
@@ -1217,19 +1246,30 @@ export class PrismDaemon {
             };
           }
         }
-        return this._lastUpdateState || combined;
+        return channelStillCurrent ? this._lastUpdateState || combined : combined;
       } finally {
         if (this._updateCheckInFlight === p) {
           this._updateCheckInFlight = null;
+          this._updateCheckInFlightChannel = null;
         }
       }
     };
     const p = run();
     this._updateCheckInFlight = p;
+    this._updateCheckInFlightChannel = activeChannel;
     return p;
   }
 
-  async executeRepoAction(rawInput = {}) {
+  async executeRepoAction(rawInput = {}, secondArg = undefined) {
+    if (typeof rawInput === 'string') {
+      const extra =
+        secondArg && typeof secondArg === 'object' && !Array.isArray(secondArg)
+          ? secondArg
+          : typeof secondArg === 'string'
+            ? { version: secondArg }
+            : {};
+      rawInput = { ...extra, action: rawInput };
+    }
     if (rawInput?.action === 'storage-health' || rawInput?.action === 'prepare-archive') {
       return this._handleStorageAction(rawInput.action);
     }
@@ -1237,34 +1277,92 @@ export class PrismDaemon {
       return this._handleUninstallAction(rawInput);
     }
     if (rawInput?.action === 'update-status') {
-      const { channel, changed } =
-        rawInput?.channel !== undefined
-          ? this._syncUpdateServiceChannel({ updateChannel: rawInput.channel })
-          : this._syncUpdateServiceChannel();
+      const explicitChannel = this._extractExplicitUpdateChannel(rawInput);
+      const { channel, changed } = explicitChannel
+        ? this._syncUpdateServiceChannel({ updateChannel: explicitChannel })
+        : this._syncUpdateServiceChannel();
       const gitState = await this._inspectGitRepoState({ fetchRemote: false });
       const relState = this.updateService?.getStatus?.() || null;
-      const state =
-        this._lastUpdateState && !changed && this._lastUpdateState.channel === channel
-          ? {
-              ...this._lastUpdateState,
-              action: 'update-status',
-              channel,
-              updateChannel: channel,
-              autoUpdate: this._getAutoUpdateSetting(),
-              applying: Boolean(this.updateService?.applying),
-            }
-          : this._buildCombinedUpdateStatus({ relState, gitState, action: 'update-status' });
-      if (!state.checkedAt || changed) {
-        void this.runUpdateCheck({ force: changed, manual: false, allowAutoApply: false, channel }).catch(() => {});
+      const hasFreshCached = Boolean(
+        this._lastUpdateState &&
+          !changed &&
+          this._lastUpdateState.channel === channel &&
+          this._lastUpdateState.checkedAt
+      );
+      if (hasFreshCached) {
+        return {
+          ...this._lastUpdateState,
+          action: 'update-status',
+          channel,
+          updateChannel: channel,
+          checking: false,
+          autoUpdate: this._getAutoUpdateSetting(),
+          applying: Boolean(this.updateService?.applying),
+        };
       }
-      return state;
+      const baseState = this._buildCombinedUpdateStatus({
+        relState,
+        gitState,
+        action: 'update-status',
+        channelOverride: channel,
+      });
+      const shouldAwaitFreshCheck = changed || (explicitChannel !== null && !baseState.checkedAt);
+      if (shouldAwaitFreshCheck) {
+        const rawWait = Number(rawInput?.waitTimeoutMs);
+        const waitMs = Number.isFinite(rawWait) && rawWait >= 0 ? Math.min(10000, rawWait) : 2500;
+        const checkPromise = this.runUpdateCheck({
+          force: changed,
+          manual: false,
+          allowAutoApply: false,
+          channel,
+        });
+        let timedOut = false;
+        let timer = null;
+        const settled = await Promise.race([
+          checkPromise.then((res) => ({ done: true, res })).catch(() => ({ done: false, res: null })),
+          new Promise((resolve) => {
+            timer = setTimeout(() => {
+              timedOut = true;
+              resolve({ done: false, res: null });
+            }, waitMs);
+            if (typeof timer.unref === 'function') timer.unref();
+          }),
+        ]);
+        if (timer) clearTimeout(timer);
+        if (settled?.done && settled.res && settled.res.channel === channel) {
+          return {
+            ...settled.res,
+            action: 'update-status',
+            channel,
+            updateChannel: channel,
+            checking: false,
+            autoUpdate: this._getAutoUpdateSetting(),
+            applying: Boolean(this.updateService?.applying),
+          };
+        }
+        return {
+          ...baseState,
+          action: 'update-status',
+          channel,
+          updateChannel: channel,
+          checking: Boolean(
+            timedOut || (this._updateCheckInFlight && this._updateCheckInFlightChannel === channel)
+          ),
+        };
+      }
+      if (!baseState.checkedAt) {
+        void this.runUpdateCheck({ force: false, manual: false, allowAutoApply: false, channel }).catch(() => {});
+        return { ...baseState, checking: true };
+      }
+      return { ...baseState, checking: false };
     }
     if (rawInput?.action === 'check-update') {
+      const explicitChannel = this._extractExplicitUpdateChannel(rawInput);
       const res = await this.runUpdateCheck({
         force: rawInput?.force !== false,
         manual: Boolean(rawInput?.manual),
         allowAutoApply: false,
-        channel: rawInput?.channel !== undefined ? rawInput.channel : null,
+        channel: explicitChannel,
       });
       return { ...res, action: 'check-update' };
     }
@@ -1272,10 +1370,10 @@ export class PrismDaemon {
       if (rawInput?.confirm !== true) {
         return { ok: false, action: 'apply-update', error: 'confirmation_required' };
       }
-      const { channel } =
-        rawInput?.channel !== undefined
-          ? this._syncUpdateServiceChannel({ updateChannel: rawInput.channel })
-          : this._syncUpdateServiceChannel();
+      const explicitChannel = this._extractExplicitUpdateChannel(rawInput);
+      const { channel } = explicitChannel
+        ? this._syncUpdateServiceChannel({ updateChannel: explicitChannel })
+        : this._syncUpdateServiceChannel();
       const gitState = await this._inspectGitRepoState({ fetchRemote: false });
       if (gitState.blockedUnc) {
         return { ok: false, action: 'apply-update', error: 'Remote UNC Git paths are blocked' };
@@ -2704,9 +2802,9 @@ export class PrismDaemon {
         if (currentCfg?.telemetryModule === 'off') {
           this._releaseIdleTelemetry(true);
         }
-        const { changed: updateChannelChanged } = this._syncUpdateServiceChannel(currentCfg);
+        const { channel: syncedUpdateChannel, changed: updateChannelChanged } = this._syncUpdateServiceChannel(currentCfg);
         if (updateChannelChanged && this.running) {
-          void this.runUpdateCheck({ force: true, manual: false, allowAutoApply: false }).catch(() => {});
+          void this.runUpdateCheck({ force: true, manual: false, allowAutoApply: false, channel: syncedUpdateChannel }).catch(() => {});
         }
         const omniEnabled = this._isOmniEnabled(currentCfg);
         const sidebarEnabled = currentCfg?.sidebarStudio === 'on';
@@ -3304,6 +3402,10 @@ export class PrismDaemon {
       if (inputPayload.purgeData === undefined && parsed?.purgeData !== undefined) inputPayload.purgeData = parsed.purgeData;
       if (inputPayload.force === undefined && parsed?.force !== undefined) inputPayload.force = parsed.force;
       if (inputPayload.manual === undefined && parsed?.manual !== undefined) inputPayload.manual = parsed.manual;
+      if (inputPayload.channel === undefined && parsed?.channel !== undefined) inputPayload.channel = parsed.channel;
+      if (inputPayload.updateChannel === undefined && parsed?.updateChannel !== undefined) inputPayload.updateChannel = parsed.updateChannel;
+      if (inputPayload.version === undefined && parsed?.version !== undefined) inputPayload.version = parsed.version;
+      if (inputPayload.version === undefined && typeof parsed?.input === 'string') inputPayload.version = parsed.input;
 
       const result = await this.executeRepoAction({ ...inputPayload, action });
       if (reqId !== null) {

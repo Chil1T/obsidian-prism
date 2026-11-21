@@ -157,7 +157,7 @@
       }
       const pal = html?.getAttribute?.('data-ag-cs-palette') || 'obsidian';
       if (pal === 'warm' || pal === 'claude') return 'warm';
-      if (!dark && html?.getAttribute?.('data-ag-cs-light-preset') === 'alabaster') return 'warm';
+      if (!dark && pal === 'obsidian' && html?.getAttribute?.('data-ag-cs-light-preset') === 'alabaster') return 'warm';
       return 'default';
     }
 
@@ -463,7 +463,7 @@
         return;
       }
       const now = typeof rafNow === 'number' && rafNow > 0 ? rafNow : performance.now();
-      const minGap = Math.max(16, Number(getMinFrameGapMs?.() || 0));
+      const minGap = Math.max(0, Number(getMinFrameGapMs?.() ?? 0) || 0);
       if (minGap > 0 && lastPrismDrawAt > 0 && now - lastPrismDrawAt < minGap) {
         schedRaf();
         return;

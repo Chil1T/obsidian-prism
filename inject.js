@@ -103,6 +103,146 @@ function updateConfigSetting(key, value) {
   return updateConfigBatch({ [key]: value });
 }
 
+function createFastConfigRefreshBroadcaster({
+  attached,
+  readConfig: readCfg = readConfig,
+  buildInjectExpression: buildInj = buildInjectExpression,
+  buildConfigRefreshExpression: buildRefresh = buildConfigRefreshExpression,
+  buildOmniClientExpression: buildOmni = buildOmniClientExpression,
+  buildSidebarStudioExpression: buildSidebar = buildSidebarStudioExpression,
+  shouldEnableHostI18n: shouldHostI18n = shouldEnableHostI18n,
+  buildHostI18nExpression: buildHostI18n = buildHostI18nExpression,
+  hostI18nRemoveExpression = HOST_I18N_REMOVE_EXPRESSION,
+  getThoughtHooks = () => ({
+    shouldEnable: shouldEnableThought,
+    buildExpression: buildThoughtExpression,
+    removeExpression: THOUGHT_REMOVE_EXPRESSION || FALLBACK_THOUGHT_REMOVE_EXPRESSION,
+  }),
+  getOmniServerInfo = () => null,
+  getSidebarServiceReady = () => false,
+  sidebarBinding = SIDEBAR_BINDING,
+  ensureSidebarBinding = async () => false,
+  onExpressionsUpdated = null,
+} = {}) {
+  return async function broadcastFastConfigRefresh() {
+    const perEntryAck = new Map();
+    for (const entry of attached.values()) {
+      if (!entry || entry.session.closed) continue;
+      const ack = Number.isSafeInteger(entry.pendingAckEpoch) && entry.pendingAckEpoch > 0 ? entry.pendingAckEpoch : 0;
+      entry.pendingAckEpoch = 0;
+      perEntryAck.set(entry, ack);
+    }
+    const cfgNow = typeof readCfg === 'function' ? readCfg() : {};
+    const omniEnabled = cfgNow?.omniModule !== 'off';
+    const sidebarEnabled = cfgNow?.sidebarStudio === 'on';
+    const expr = buildInj();
+    const omniExpr =
+      omniEnabled && typeof buildOmni === 'function'
+        ? buildOmni(getOmniServerInfo())
+        : '';
+    const sidebarExpr =
+      sidebarEnabled && typeof buildSidebar === 'function'
+        ? buildSidebar({ binding: sidebarBinding, serviceReady: Boolean(getSidebarServiceReady()) })
+        : '';
+    const hostI18nEnabled = typeof shouldHostI18n === 'function' ? shouldHostI18n(cfgNow) : false;
+    const hostI18nExpr =
+      hostI18nEnabled && typeof buildHostI18n === 'function'
+        ? buildHostI18n(cfgNow)
+        : '';
+    const thoughtHooks = getThoughtHooks() || {};
+    const thoughtEnabled = isThoughtEnabledForConfig(cfgNow, thoughtHooks.shouldEnable);
+    const thoughtExpr =
+      thoughtEnabled && typeof thoughtHooks.buildExpression === 'function'
+        ? thoughtHooks.buildExpression(cfgNow)
+        : '';
+    const thoughtRemoveExpr = thoughtHooks.removeExpression || FALLBACK_THOUGHT_REMOVE_EXPRESSION;
+    if (typeof onExpressionsUpdated === 'function') {
+      onExpressionsUpdated({ expr, omniExpr, sidebarExpr, hostI18nExpr, thoughtExpr });
+    }
+    const canFastRefresh = typeof buildRefresh === 'function';
+    const baseRefreshExpr = canFastRefresh ? buildRefresh() : null;
+    for (const entry of attached.values()) {
+      if (!entry || entry.session.closed) continue;
+      try {
+        await ensureSidebarBinding(entry.session, entry, cfgNow);
+        const entryAck = perEntryAck.get(entry) || 0;
+        const refreshExpr =
+          canFastRefresh && entryAck > 0
+            ? buildRefresh(null, { __ackEpoch: entryAck })
+            : baseRefreshExpr;
+        if (refreshExpr) {
+          const fast = await entry.session.evaluate(refreshExpr).catch(() => null);
+          if (fast && fast.refreshed) {
+            if (omniEnabled && omniExpr && !fast.skippedStale) await entry.session.evaluate(omniExpr).catch(() => {});
+            if (sidebarEnabled && sidebarExpr && !fast.skippedStale) await entry.session.evaluate(sidebarExpr).catch(() => {});
+            if (!fast.skippedStale) {
+              if (hostI18nExpr && hostI18nEnabled) await entry.session.evaluate(hostI18nExpr).catch(() => {});
+              else if (hostI18nRemoveExpression) await entry.session.evaluate(hostI18nRemoveExpression).catch(() => {});
+              if (thoughtExpr && thoughtEnabled) {
+                const thRes = await entry.session.evaluate(thoughtExpr).catch(() => null);
+                if (thRes && thRes.ok) entry.thoughtMounted = true;
+              } else if (entry.thoughtScriptId || entry.thoughtMounted) {
+                if (thoughtRemoveExpr) await entry.session.evaluate(thoughtRemoveExpr).catch(() => {});
+                entry.thoughtMounted = false;
+              }
+            }
+          } else {
+            await entry.session.evaluate(expr).catch(() => {});
+            if (omniEnabled && omniExpr) await entry.session.evaluate(omniExpr).catch(() => {});
+            if (sidebarEnabled && sidebarExpr) await entry.session.evaluate(sidebarExpr).catch(() => {});
+            if (hostI18nExpr && hostI18nEnabled) await entry.session.evaluate(hostI18nExpr).catch(() => {});
+            else if (hostI18nRemoveExpression) await entry.session.evaluate(hostI18nRemoveExpression).catch(() => {});
+            if (thoughtExpr && thoughtEnabled) {
+              const thRes = await entry.session.evaluate(thoughtExpr).catch(() => null);
+              if (thRes && thRes.ok) entry.thoughtMounted = true;
+            } else if (entry.thoughtScriptId || entry.thoughtMounted) {
+              if (thoughtRemoveExpr) await entry.session.evaluate(thoughtRemoveExpr).catch(() => {});
+              entry.thoughtMounted = false;
+            }
+          }
+        }
+        if (entry.scriptId) {
+          await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId }).catch(() => {});
+        }
+        const addRes = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: expr }).catch(() => null);
+        entry.scriptId = addRes && addRes.identifier ? addRes.identifier : null;
+        if (entry.omniScriptId) {
+          await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId }).catch(() => {});
+          entry.omniScriptId = null;
+        }
+        if (omniEnabled && omniExpr) {
+          const omniAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: omniExpr }).catch(() => null);
+          entry.omniScriptId = omniAdd && omniAdd.identifier ? omniAdd.identifier : null;
+        }
+        if (entry.sidebarScriptId) {
+          await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId }).catch(() => {});
+          entry.sidebarScriptId = null;
+        }
+        if (sidebarEnabled && sidebarExpr) {
+          const sbAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: sidebarExpr }).catch(() => null);
+          entry.sidebarScriptId = sbAdd && sbAdd.identifier ? sbAdd.identifier : null;
+        }
+        if (entry.hostI18nScriptId) {
+          await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId }).catch(() => {});
+          entry.hostI18nScriptId = null;
+        }
+        if (hostI18nExpr && hostI18nEnabled) {
+          const hiAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: hostI18nExpr }).catch(() => null);
+          entry.hostI18nScriptId = hiAdd && hiAdd.identifier ? hiAdd.identifier : null;
+        }
+        if (entry.thoughtScriptId) {
+          await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId }).catch(() => {});
+          entry.thoughtScriptId = null;
+        }
+        if (thoughtExpr && thoughtEnabled) {
+          const thAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: thoughtExpr }).catch(() => null);
+          entry.thoughtScriptId = thAdd && thAdd.identifier ? thAdd.identifier : null;
+        }
+      } catch {}
+    }
+  };
+}
+
 async function injectOnce() {
   const port = readPort();
   if (!port) {
@@ -118,20 +258,22 @@ async function injectOnce() {
   if (targets.length === 0) throw new Error('未找到 Antigravity 窗口页面');
 
   log(`[+] 调试端口 ${port}，发现 ${targets.length} 个窗口`);
+  const cfgNow = typeof readConfig === 'function' ? readConfig() : {};
+  const omniEnabled = cfgNow?.omniModule !== 'off';
+  const sidebarEnabled = cfgNow?.sidebarStudio === 'on';
   const expr = buildInjectExpression();
-  const omniExpr = typeof buildOmniClientExpression === 'function' ? buildOmniClientExpression(null) : '';
+  const omniExpr = omniEnabled && typeof buildOmniClientExpression === 'function' ? buildOmniClientExpression(null) : '';
   const sidebarExpr =
-    typeof buildSidebarStudioExpression === 'function'
+    sidebarEnabled && typeof buildSidebarStudioExpression === 'function'
       ? buildSidebarStudioExpression({ binding: SIDEBAR_BINDING })
       : '';
   const hostI18nExpr =
     typeof buildHostI18nExpression === 'function'
       ? buildHostI18nExpression()
       : '';
-  const thoughtCfg = typeof readConfig === 'function' ? readConfig() : {};
   const thoughtExpr =
-    isThoughtEnabledForConfig(thoughtCfg) && typeof buildThoughtExpression === 'function'
-      ? buildThoughtExpression(thoughtCfg)
+    isThoughtEnabledForConfig(cfgNow) && typeof buildThoughtExpression === 'function'
+      ? buildThoughtExpression(cfgNow)
       : '';
   for (const page of targets) {
     let session = null;
@@ -257,13 +399,14 @@ async function watch() {
     log(`[!] Sidebar Studio 后端服务启动跳过: ${err.message}`);
   }
 
+  const initCfg = readConfig();
   let expr = buildInjectExpression();
   let omniExpr =
-    typeof buildOmniClientExpression === 'function'
+    initCfg?.omniModule !== 'off' && typeof buildOmniClientExpression === 'function'
       ? buildOmniClientExpression(omniServer ? omniServer.getServerInfo() : null)
       : '';
   let sidebarExpr =
-    typeof buildSidebarStudioExpression === 'function'
+    initCfg?.sidebarStudio === 'on' && typeof buildSidebarStudioExpression === 'function'
       ? buildSidebarStudioExpression({ binding: SIDEBAR_BINDING, serviceReady: Boolean(sidebarService) })
       : '';
   let hostI18nExpr =
@@ -312,116 +455,33 @@ async function watch() {
     return pending;
   }
 
-  async function broadcastFastConfigRefresh() {
-    const perEntryAck = new Map();
-    for (const entry of attached.values()) {
-      if (!entry || entry.session.closed) continue;
-      const ack = Number.isSafeInteger(entry.pendingAckEpoch) && entry.pendingAckEpoch > 0 ? entry.pendingAckEpoch : 0;
-      entry.pendingAckEpoch = 0;
-      perEntryAck.set(entry, ack);
-    }
-    expr = buildInjectExpression();
-    omniExpr =
-      typeof buildOmniClientExpression === 'function'
-        ? buildOmniClientExpression(omniServer ? omniServer.getServerInfo() : null)
-        : '';
-    sidebarExpr =
-      typeof buildSidebarStudioExpression === 'function'
-        ? buildSidebarStudioExpression({ binding: SIDEBAR_BINDING, serviceReady: Boolean(sidebarService) })
-        : '';
-    const cfgNow = readConfig();
-    const sidebarEnabled = cfgNow?.sidebarStudio === 'on';
-    const hostI18nEnabled = typeof shouldEnableHostI18n === 'function' ? shouldEnableHostI18n(cfgNow) : false;
-    hostI18nExpr =
-      hostI18nEnabled && typeof buildHostI18nExpression === 'function'
-        ? buildHostI18nExpression(cfgNow)
-        : '';
-    const thoughtEnabled = isThoughtEnabledForConfig(cfgNow, activeShouldEnableThought);
-    thoughtExpr =
-      thoughtEnabled && typeof activeBuildThoughtExpression === 'function'
-        ? activeBuildThoughtExpression(cfgNow)
-        : '';
-    const canFastRefresh = typeof buildConfigRefreshExpression === 'function';
-    const baseRefreshExpr = canFastRefresh ? buildConfigRefreshExpression() : null;
-    for (const entry of attached.values()) {
-      if (!entry || entry.session.closed) continue;
-      try {
-        await ensureSidebarBinding(entry.session, entry, cfgNow);
-        const entryAck = perEntryAck.get(entry) || 0;
-        const refreshExpr =
-          canFastRefresh && entryAck > 0
-            ? buildConfigRefreshExpression(null, { __ackEpoch: entryAck })
-            : baseRefreshExpr;
-        if (refreshExpr) {
-          const fast = await entry.session.evaluate(refreshExpr).catch(() => null);
-          if (fast && fast.refreshed) {
-            if (omniExpr && !fast.skippedStale) await entry.session.evaluate(omniExpr).catch(() => {});
-            if (sidebarExpr && !fast.skippedStale) await entry.session.evaluate(sidebarExpr).catch(() => {});
-            if (!fast.skippedStale) {
-              if (hostI18nExpr && hostI18nEnabled) await entry.session.evaluate(hostI18nExpr).catch(() => {});
-              else if (HOST_I18N_REMOVE_EXPRESSION) await entry.session.evaluate(HOST_I18N_REMOVE_EXPRESSION).catch(() => {});
-              if (thoughtExpr && thoughtEnabled) {
-                const thRes = await entry.session.evaluate(thoughtExpr).catch(() => null);
-                if (thRes && thRes.ok) entry.thoughtMounted = true;
-              } else if (entry.thoughtScriptId || entry.thoughtMounted) {
-                if (activeThoughtRemoveExpression) await entry.session.evaluate(activeThoughtRemoveExpression).catch(() => {});
-                entry.thoughtMounted = false;
-              }
-            }
-          } else {
-            await entry.session.evaluate(expr).catch(() => {});
-            if (omniExpr) await entry.session.evaluate(omniExpr).catch(() => {});
-            if (sidebarExpr) await entry.session.evaluate(sidebarExpr).catch(() => {});
-            if (hostI18nExpr && hostI18nEnabled) await entry.session.evaluate(hostI18nExpr).catch(() => {});
-            else if (HOST_I18N_REMOVE_EXPRESSION) await entry.session.evaluate(HOST_I18N_REMOVE_EXPRESSION).catch(() => {});
-            if (thoughtExpr && thoughtEnabled) {
-              const thRes = await entry.session.evaluate(thoughtExpr).catch(() => null);
-              if (thRes && thRes.ok) entry.thoughtMounted = true;
-            } else if (entry.thoughtScriptId || entry.thoughtMounted) {
-              if (activeThoughtRemoveExpression) await entry.session.evaluate(activeThoughtRemoveExpression).catch(() => {});
-              entry.thoughtMounted = false;
-            }
-          }
-        }
-        if (entry.scriptId) {
-          await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId }).catch(() => {});
-        }
-        const addRes = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: expr }).catch(() => null);
-        entry.scriptId = addRes && addRes.identifier ? addRes.identifier : null;
-        if (entry.omniScriptId) {
-          await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId }).catch(() => {});
-        }
-        if (omniExpr) {
-          const omniAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: omniExpr }).catch(() => null);
-          entry.omniScriptId = omniAdd && omniAdd.identifier ? omniAdd.identifier : null;
-        }
-        if (entry.sidebarScriptId) {
-          await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId }).catch(() => {});
-          entry.sidebarScriptId = null;
-        }
-        if (sidebarExpr && sidebarEnabled) {
-          const sbAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: sidebarExpr }).catch(() => null);
-          entry.sidebarScriptId = sbAdd && sbAdd.identifier ? sbAdd.identifier : null;
-        }
-        if (entry.hostI18nScriptId) {
-          await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId }).catch(() => {});
-          entry.hostI18nScriptId = null;
-        }
-        if (hostI18nExpr && hostI18nEnabled) {
-          const hiAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: hostI18nExpr }).catch(() => null);
-          entry.hostI18nScriptId = hiAdd && hiAdd.identifier ? hiAdd.identifier : null;
-        }
-        if (entry.thoughtScriptId) {
-          await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId }).catch(() => {});
-          entry.thoughtScriptId = null;
-        }
-        if (thoughtExpr && thoughtEnabled) {
-          const thAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: thoughtExpr }).catch(() => null);
-          entry.thoughtScriptId = thAdd && thAdd.identifier ? thAdd.identifier : null;
-        }
-      } catch {}
-    }
-  }
+  const broadcastFastConfigRefresh = createFastConfigRefreshBroadcaster({
+    attached,
+    readConfig,
+    buildInjectExpression,
+    buildConfigRefreshExpression,
+    buildOmniClientExpression,
+    buildSidebarStudioExpression,
+    shouldEnableHostI18n,
+    buildHostI18nExpression,
+    hostI18nRemoveExpression: HOST_I18N_REMOVE_EXPRESSION,
+    getThoughtHooks: () => ({
+      shouldEnable: activeShouldEnableThought,
+      buildExpression: activeBuildThoughtExpression,
+      removeExpression: activeThoughtRemoveExpression,
+    }),
+    getOmniServerInfo: () => (omniServer ? omniServer.getServerInfo() : null),
+    getSidebarServiceReady: () => Boolean(sidebarService),
+    sidebarBinding: SIDEBAR_BINDING,
+    ensureSidebarBinding,
+    onExpressionsUpdated: (next) => {
+      expr = next.expr;
+      omniExpr = next.omniExpr;
+      sidebarExpr = next.sidebarExpr;
+      hostI18nExpr = next.hostI18nExpr;
+      thoughtExpr = next.thoughtExpr;
+    },
+  });
 
   async function apply(entry) {
     if (entry.scriptId) {
@@ -437,13 +497,16 @@ async function watch() {
     const res = await entry.session.evaluate(expr);
     entry.sidebarHostVerified = Boolean(res && res.status === 'ok');
 
+    const cfgNow = readConfig();
+    const omniEnabled = cfgNow?.omniModule !== 'off';
+    const sidebarEnabled = cfgNow?.sidebarStudio === 'on';
     if (entry.omniScriptId) {
       await entry.session
         .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId })
         .catch(() => {});
       entry.omniScriptId = null;
     }
-    if (omniExpr) {
+    if (omniEnabled && omniExpr) {
       const omniAdd = await entry.session
         .send('Page.addScriptToEvaluateOnNewDocument', { source: omniExpr })
         .catch(() => null);
@@ -457,16 +520,12 @@ async function watch() {
         .catch(() => {});
       entry.sidebarScriptId = null;
     }
-    const cfgNow = readConfig();
-    const sidebarEnabled = cfgNow?.sidebarStudio === 'on';
     await ensureSidebarBinding(entry.session, entry, cfgNow);
-    if (sidebarExpr) {
-      if (sidebarEnabled) {
-        const sbAdd = await entry.session
-          .send('Page.addScriptToEvaluateOnNewDocument', { source: sidebarExpr })
-          .catch(() => null);
-        if (sbAdd && sbAdd.identifier) entry.sidebarScriptId = sbAdd.identifier;
-      }
+    if (sidebarEnabled && sidebarExpr) {
+      const sbAdd = await entry.session
+        .send('Page.addScriptToEvaluateOnNewDocument', { source: sidebarExpr })
+        .catch(() => null);
+      if (sbAdd && sbAdd.identifier) entry.sidebarScriptId = sbAdd.identifier;
       await entry.session.evaluate(sidebarExpr).catch(() => {});
     }
     if (entry.hostI18nScriptId) {
@@ -738,13 +797,14 @@ async function watch() {
       try {
         delete require.cache[require.resolve('./cdp')];
         const freshCdp = require('./cdp');
+        const freshCfg = typeof freshCdp.readConfig === 'function' ? freshCdp.readConfig() : readConfig();
         expr = freshCdp.buildInjectExpression();
         omniExpr =
-          typeof freshCdp.buildOmniClientExpression === 'function'
+          freshCfg?.omniModule !== 'off' && typeof freshCdp.buildOmniClientExpression === 'function'
             ? freshCdp.buildOmniClientExpression(omniServer ? omniServer.getServerInfo() : null)
             : '';
         sidebarExpr =
-          typeof freshCdp.buildSidebarStudioExpression === 'function'
+          freshCfg?.sidebarStudio === 'on' && typeof freshCdp.buildSidebarStudioExpression === 'function'
             ? freshCdp.buildSidebarStudioExpression({ binding: SIDEBAR_BINDING, serviceReady: Boolean(sidebarService) })
             : '';
         hostI18nExpr =
@@ -754,7 +814,6 @@ async function watch() {
         activeShouldEnableThought = freshCdp.shouldEnableThought;
         activeBuildThoughtExpression = freshCdp.buildThoughtExpression;
         activeThoughtRemoveExpression = freshCdp.THOUGHT_REMOVE_EXPRESSION || FALLBACK_THOUGHT_REMOVE_EXPRESSION;
-        const freshCfg = typeof freshCdp.readConfig === 'function' ? freshCdp.readConfig() : readConfig();
         thoughtExpr =
           isThoughtEnabledForConfig(freshCfg, activeShouldEnableThought) && typeof activeBuildThoughtExpression === 'function'
             ? activeBuildThoughtExpression(freshCfg)
@@ -793,6 +852,7 @@ module.exports = {
   watch,
   updateConfigBatch,
   updateConfigSetting,
+  _createFastConfigRefreshBroadcaster: createFastConfigRefreshBroadcaster,
 };
 
 if (require.main === module) {

@@ -15,6 +15,11 @@ import {
   isPluginEnabledInHostConfig,
 } from '../sidecars/daemon/main.mjs';
 import {
+  UpdateService,
+  LATEST_RELEASE_API,
+  RELEASES_LIST_API,
+} from '../sidecars/daemon/update-service.mjs';
+import {
   ThoughtTranslatorService,
   detectOsSystemProxy,
   detectOsSystemProxyAsync,
@@ -1084,6 +1089,367 @@ test('Audit P0-1, P1-4c & P1-5b: inject.js equal-length config write invalidates
     assert.equal(orchBtnEl.hasAttribute('data-ces-orch-b'), false, 'REMOVE_EXPRESSION must strip data-ces-orch-b');
     assert.equal(orchBtnEl.hasAttribute('data-ces-model-selected'), false, 'REMOVE_EXPRESSION must strip data-ces-model-selected');
     assert.equal(orchPanelEl.hasAttribute('data-ces-orch-tunable'), false, 'REMOVE_EXPRESSION must strip data-ces-orch-tunable');
+  } finally {
+    try {
+      delete require.cache[require.resolve(injectPath)];
+    } catch {}
+    snap.cleanup();
+  }
+});
+
+test('SetFix #5/#6/#7b/#7d: legacy alias normalization, thoughtView off removal, update-status channel race elimination, and inject.js disabled-module zero-eval', async () => {
+  const snap = await createIsolatedPlugin('prism-setfix-backend-');
+  const injectPath = path.join(snap.pluginDir, 'inject.js');
+  try {
+    const cdp = loadFreshCdp(snap.cdpPath);
+
+    // 1) #5: reconcileConfigAliases normalizes palette:'claude'->'warm' & mascot:'dual'->'crab' while keeping validators compatible
+    assert.equal(cdp.validateConfigEntry('palette', 'claude'), true);
+    assert.equal(cdp.validateConfigEntry('mascot', 'dual'), true);
+    const normLegacy = cdp.reconcileConfigAliases({ palette: 'claude', mascot: 'dual' });
+    assert.equal(normLegacy.palette, 'warm');
+    assert.equal(normLegacy.mascot, 'crab');
+    assert.equal(cdp.reconcileConfigAliases({ palette: 'obsidian', mascot: 'minis' }).mascot, 'minis');
+    assert.equal(cdp.reconcileConfigAliases({ palette: 'host', mascot: 'off' }).palette, 'host');
+
+    cdp.writeConfig({ ...cdp.DEFAULT_CONFIG, palette: 'claude', mascot: 'dual' });
+    const persistedCfg = cdp.readConfig();
+    assert.equal(persistedCfg.palette, 'warm');
+    assert.equal(persistedCfg.mascot, 'crab');
+    const diskJson = JSON.parse(fs.readFileSync(path.join(snap.pluginDir, 'config.json'), 'utf8'));
+    assert.equal(diskJson.palette, 'warm');
+    assert.equal(diskJson.mascot, 'crab');
+
+    // 2) #7b: buildConfigRefreshExpression & buildInjectExpression remove data-ag-prism-thought-view when thoughtTranslate === 'off'
+    const makeThoughtAttrHarness = (initialAttrs = {}) => {
+      const attrs = new Map(Object.entries(initialAttrs));
+      const setCalls = [];
+      const removeCalls = [];
+      const htmlEl = {
+        getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+        hasAttribute(k) { return attrs.has(k); },
+        setAttribute(k, v) {
+          setCalls.push([k, String(v)]);
+          attrs.set(k, String(v));
+        },
+        removeAttribute(k) {
+          removeCalls.push(k);
+          attrs.delete(k);
+        },
+      };
+      return { attrs, setCalls, removeCalls, htmlEl };
+    };
+
+    const refreshHarness = makeThoughtAttrHarness({ 'data-ag-prism-thought-view': 'bilingual' });
+    let activeCfgState = { ...cdp.DEFAULT_CONFIG, thoughtTranslate: 'off', thoughtView: 'bilingual' };
+    const offRefreshExpr = cdp.buildConfigRefreshExpression(activeCfgState);
+    const codeHash = offRefreshExpr.match(/"codeHash":"([^"]+)"/)[1];
+    const refreshCtx = {
+      document: { documentElement: refreshHarness.htmlEl },
+      window: {
+        __agPrism: {
+          version: cdp.PLUGIN_VERSION,
+          codeHash,
+          refreshConfig(next) {
+            activeCfgState = next;
+            return true;
+          },
+          getState() {
+            return { cfg: activeCfgState };
+          },
+        },
+      },
+      navigator: { language: 'zh-CN' },
+    };
+    const offRes = vm.runInNewContext(offRefreshExpr, refreshCtx);
+    assert.equal(offRes.refreshed, true);
+    assert.equal(
+      refreshHarness.htmlEl.hasAttribute('data-ag-prism-thought-view'),
+      false,
+      'buildConfigRefreshExpression must remove data-ag-prism-thought-view when thoughtTranslate=off'
+    );
+    assert.equal(
+      refreshHarness.setCalls.some(([k]) => k === 'data-ag-prism-thought-view'),
+      false,
+      'buildConfigRefreshExpression must NOT write data-ag-prism-thought-view when thoughtTranslate=off'
+    );
+
+    const onRefreshExpr = cdp.buildConfigRefreshExpression({
+      ...cdp.DEFAULT_CONFIG,
+      thoughtTranslate: 'ai',
+      thoughtView: 'bilingual',
+    });
+    const onRes = vm.runInNewContext(onRefreshExpr, refreshCtx);
+    assert.equal(onRes.refreshed, true);
+    assert.equal(refreshHarness.htmlEl.getAttribute('data-ag-prism-thought-view'), 'bilingual');
+
+    const backOffExpr = cdp.buildConfigRefreshExpression({
+      ...cdp.DEFAULT_CONFIG,
+      thoughtTranslate: 'off',
+      thoughtView: 'bilingual',
+    });
+    vm.runInNewContext(backOffExpr, refreshCtx);
+    assert.equal(refreshHarness.htmlEl.hasAttribute('data-ag-prism-thought-view'), false);
+
+    // 3) #6: update-status { version, channel } eliminates 40ms config-write race, supports legacy string version, timeout fallback & concurrent channel isolation
+    cdp.writeConfig({ ...cdp.DEFAULT_CONFIG, updateChannel: 'stable', autoUpdate: 'off' });
+    let fetchDelayByChannel = { stable: 5, beta: 5 };
+    const fetchLog = [];
+    const mockFetch = async (url) => {
+      const ch = url === RELEASES_LIST_API ? 'beta' : 'stable';
+      fetchLog.push(ch);
+      const delay = fetchDelayByChannel[ch] || 0;
+      if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+      if (url === LATEST_RELEASE_API) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            tag_name: 'v1.0.6',
+            draft: false,
+            prerelease: false,
+            html_url: 'https://github.com/RMvdesi/obsidian-prism/releases/tag/v1.0.6',
+            assets: [],
+          }),
+        };
+      }
+      if (url === RELEASES_LIST_API) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [
+            {
+              tag_name: 'v1.0.7-beta.1',
+              draft: false,
+              prerelease: true,
+              html_url: 'https://github.com/RMvdesi/obsidian-prism/releases/tag/v1.0.7-beta.1',
+              assets: [],
+            },
+          ],
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    };
+
+    const updSvc = new UpdateService({
+      platform: 'win32',
+      currentVersion: '1.0.6',
+      channel: 'stable',
+      fetchFn: mockFetch,
+    });
+    const daemon = new PrismDaemon({
+      rootDir: snap.pluginDir,
+      silent: true,
+      enableAutoUpdateTimer: false,
+      _testUpdateService: updSvc,
+    });
+    // Isolate from host git repository so update-status exercises release channel logic offline without git fetch
+    daemon._inspectGitRepoState = async () => ({
+      isGitRepo: false,
+      repoDir: null,
+      repoPath: 'plugin',
+      branch: 'standalone',
+      commit: '1.0.6',
+      dirty: false,
+      remoteName: '',
+      remoteUrl: '',
+      hasRemote: false,
+      noRemote: true,
+      ahead: 0,
+      behind: 0,
+      netGitCfg: [],
+      blockedUnc: false,
+    });
+
+    // Warm stable cache first
+    const stableCheck = await daemon.executeRepoAction({ action: 'check-update' });
+    assert.equal(stableCheck.channel, 'stable');
+    assert.equal(stableCheck.hasUpdate, false);
+
+    // Simulate 40ms race: config.json is STILL 'stable' on disk, but UI invokes update-status with { version, channel: 'beta' }
+    assert.equal(cdp.readConfig().updateChannel, 'stable');
+    const raceBeta = await daemon.executeRepoAction({
+      action: 'update-status',
+      version: '1.0.6',
+      channel: 'beta',
+    });
+    assert.equal(raceBeta.ok, true);
+    assert.equal(raceBeta.channel, 'beta', 'Explicit channel must immediately override stale config.json');
+    assert.equal(raceBeta.updateChannel, 'beta');
+    assert.equal(raceBeta.hasUpdate, true);
+    assert.equal(raceBeta.latestVersion, '1.0.7-beta.1');
+    assert.equal(raceBeta.isPrerelease, true);
+    assert.equal(raceBeta.checking, false);
+    assert.equal(updSvc.channel, 'beta');
+
+    // Compatibility with 2-arg object form, nested version object form, and legacy string version form
+    const twoArgStable = await daemon.executeRepoAction('update-status', { version: '1.0.6', channel: 'stable' });
+    assert.equal(twoArgStable.channel, 'stable');
+    assert.equal(twoArgStable.hasUpdate, false);
+
+    const nestedObjBeta = await daemon.executeRepoAction({
+      action: 'update-status',
+      version: { version: '1.0.6', channel: 'beta' },
+    });
+    assert.equal(nestedObjBeta.channel, 'beta');
+    assert.equal(nestedObjBeta.latestVersion, '1.0.7-beta.1');
+
+    const legacyStrStatus = await daemon.executeRepoAction('update-status', '1.0.6');
+    assert.equal(legacyStrStatus.ok, true);
+    assert.equal(legacyStrStatus.channel, 'stable', 'Legacy string version falls back to config.json channel');
+
+    // REPO_BINDING forwards top-level & input channel/version cleanly
+    const bindingReplies = [];
+    const fakeRepoEntry = {
+      session: {
+        send: async (method, params) => {
+          if (method === 'Runtime.evaluate') bindingReplies.push(params.expression);
+        },
+      },
+      mainFrameId: 'f-main',
+      contextFrames: new Map([[1, { isDefault: true, type: 'default', frameId: 'f-main' }]]),
+    };
+    await daemon.handleBindingCall(fakeRepoEntry, {
+      name: '__agPrismRepoCall',
+      payload: JSON.stringify({ id: 91, action: 'update-status', version: '1.0.6', channel: 'beta' }),
+      executionContextId: 1,
+    });
+    assert.equal(bindingReplies.length, 1);
+    assert.ok(bindingReplies[0].includes('"channel":"beta"'));
+    assert.ok(bindingReplies[0].includes('"latestVersion":"1.0.7-beta.1"'));
+
+    // Short timeout fallback prevents blocking UI while still returning target channel + checking=true
+    fetchDelayByChannel = { stable: 220, beta: 180 };
+    const t0 = Date.now();
+    const timedOutStable = await daemon.executeRepoAction({
+      action: 'update-status',
+      version: '1.0.6',
+      channel: 'stable',
+      waitTimeoutMs: 35,
+    });
+    const elapsedMs = Date.now() - t0;
+    assert.ok(elapsedMs < 150, `Timeout fallback must return promptly without blocking UI (took ${elapsedMs}ms)`);
+    assert.equal(timedOutStable.channel, 'stable');
+    assert.equal(timedOutStable.updateChannel, 'stable');
+    assert.equal(timedOutStable.checking, true);
+
+    // Concurrent switch back to beta while slow stable check is still in flight must NOT reuse stable promise or let slow stable overwrite beta cache
+    fetchDelayByChannel = { stable: 220, beta: 15 };
+    const fastBetaDuringSlowStable = await daemon.executeRepoAction({
+      action: 'update-status',
+      version: '1.0.6',
+      channel: 'beta',
+      waitTimeoutMs: 1000,
+    });
+    assert.equal(fastBetaDuringSlowStable.channel, 'beta');
+    assert.equal(fastBetaDuringSlowStable.latestVersion, '1.0.7-beta.1');
+    assert.equal(fastBetaDuringSlowStable.checking, false);
+    await new Promise((r) => setTimeout(r, 260));
+    assert.equal(daemon._lastUpdateState?.channel, 'beta', 'Late slow stable check must never overwrite newer beta state');
+
+    // 4) #7d: inject.js broadcastFastConfigRefresh does ZERO omni/sidebar compilation or evaluation when disabled
+    delete require.cache[require.resolve(injectPath)];
+    const injectMod = require(injectPath);
+    assert.equal(typeof injectMod._createFastConfigRefreshBroadcaster, 'function');
+
+    let activeBroadCfg = {
+      ...cdp.DEFAULT_CONFIG,
+      omniModule: 'off',
+      sidebarStudio: 'off',
+      hostLocalization: 'off',
+      thoughtTranslate: 'off',
+    };
+    let omniBuildCount = 0;
+    let sidebarBuildCount = 0;
+    const evalHistory = [];
+    const cdpSendHistory = [];
+    let refreshReturnsRefreshed = true;
+    const mockEntry = {
+      session: {
+        closed: false,
+        async evaluate(code) {
+          evalHistory.push(code);
+          if (code === '__REFRESH__') return { refreshed: refreshReturnsRefreshed };
+          return { ok: true };
+        },
+        async send(method, params) {
+          cdpSendHistory.push({ method, params });
+          if (method === 'Page.addScriptToEvaluateOnNewDocument') {
+            return { identifier: `id:${params.source}` };
+          }
+          return {};
+        },
+      },
+      scriptId: 'old-main',
+      omniScriptId: 'old-omni',
+      sidebarScriptId: 'old-sidebar',
+      hostI18nScriptId: null,
+      thoughtScriptId: null,
+      thoughtMounted: false,
+      pendingAckEpoch: 0,
+    };
+    const attached = new Map([['p1', mockEntry]]);
+    const broadcast = injectMod._createFastConfigRefreshBroadcaster({
+      attached,
+      readConfig: () => activeBroadCfg,
+      buildInjectExpression: () => '__MAIN__',
+      buildConfigRefreshExpression: () => '__REFRESH__',
+      buildOmniClientExpression: () => {
+        omniBuildCount += 1;
+        return '__OMNI__';
+      },
+      buildSidebarStudioExpression: () => {
+        sidebarBuildCount += 1;
+        return '__SIDEBAR__';
+      },
+      shouldEnableHostI18n: () => false,
+      buildHostI18nExpression: () => '__HOST_I18N__',
+      hostI18nRemoveExpression: '',
+      getThoughtHooks: () => ({
+        shouldEnable: () => false,
+        buildExpression: () => '__THOUGHT__',
+        removeExpression: '',
+      }),
+    });
+
+    // Disabled state (fast refresh path): 0 builds, 0 evals, old omni/sidebar scripts removed & nulled
+    await broadcast();
+    assert.equal(omniBuildCount, 0, 'inject.js must NOT build omniExpr when omniModule=off');
+    assert.equal(sidebarBuildCount, 0, 'inject.js must NOT build sidebarExpr when sidebarStudio=off');
+    assert.deepEqual(evalHistory, ['__REFRESH__'], 'Disabled omni/sidebar must trigger 0 extra evaluate calls');
+    assert.equal(mockEntry.omniScriptId, null);
+    assert.equal(mockEntry.sidebarScriptId, null);
+    assert.ok(
+      cdpSendHistory.some((c) => c.method === 'Page.removeScriptToEvaluateOnNewDocument' && c.params.identifier === 'old-omni')
+    );
+    assert.ok(
+      cdpSendHistory.some((c) => c.method === 'Page.removeScriptToEvaluateOnNewDocument' && c.params.identifier === 'old-sidebar')
+    );
+    assert.equal(
+      cdpSendHistory.some((c) => c.method === 'Page.addScriptToEvaluateOnNewDocument' && (c.params.source === '__OMNI__' || c.params.source === '__SIDEBAR__')),
+      false
+    );
+
+    // Disabled state (fallback full inject path): still 0 omni/sidebar evals
+    evalHistory.length = 0;
+    cdpSendHistory.length = 0;
+    refreshReturnsRefreshed = false;
+    await broadcast();
+    assert.equal(omniBuildCount, 0);
+    assert.equal(sidebarBuildCount, 0);
+    assert.deepEqual(evalHistory, ['__REFRESH__', '__MAIN__']);
+
+    // Enabled state: builds, evaluates, and registers both omniExpr and sidebarExpr
+    evalHistory.length = 0;
+    cdpSendHistory.length = 0;
+    refreshReturnsRefreshed = true;
+    activeBroadCfg = { ...activeBroadCfg, omniModule: 'on', sidebarStudio: 'on' };
+    await broadcast();
+    assert.equal(omniBuildCount, 1);
+    assert.equal(sidebarBuildCount, 1);
+    assert.deepEqual(evalHistory, ['__REFRESH__', '__OMNI__', '__SIDEBAR__']);
+    assert.equal(mockEntry.omniScriptId, 'id:__OMNI__');
+    assert.equal(mockEntry.sidebarScriptId, 'id:__SIDEBAR__');
   } finally {
     try {
       delete require.cache[require.resolve(injectPath)];

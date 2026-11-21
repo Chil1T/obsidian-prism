@@ -52,7 +52,7 @@
       }
       const pal = html?.getAttribute?.('data-ag-cs-palette') || 'obsidian';
       if (pal === 'warm' || pal === 'claude') return 'warm';
-      if (!dark && html?.getAttribute?.('data-ag-cs-light-preset') === 'alabaster') return 'warm';
+      if (!dark && pal === 'obsidian' && html?.getAttribute?.('data-ag-cs-light-preset') === 'alabaster') return 'warm';
       return 'default';
     }
 
@@ -334,9 +334,9 @@
         const still = motionReduced();
         const vsyncDt = lastRafTs > 0 && now > lastRafTs ? now - lastRafTs : now - lastRippleRenderAt;
         lastRafTs = now;
-        const rawGap = Number(getMinFrameGapMs?.() || 0);
+        const rawGap = Math.max(0, Number(getMinFrameGapMs?.() ?? 0) || 0);
         const minGap = state.waves?.active?.() || (auraState.active && lastSkimAt > 0 && now - lastSkimAt < 180) || (state.tideSwellAt > 0 && now - state.tideSwellAt < 480)
-          ? Math.max(16, rawGap) : Math.max(33, rawGap);
+          ? rawGap : Math.max(33, rawGap);
         if (!still && drawnOnce && !forceSingleDraw && minGap > 0 && lastRippleRenderAt > 0 && now - lastRippleRenderAt < minGap && !hP()) {
           const rem = minGap - (now - lastRippleRenderAt);
           if (typeof setTimeout === 'function' && rem > Math.max(8, vsyncDt + 2)) {
@@ -521,7 +521,7 @@
       };
 
       state.onPress = (ev) => {
-        if (ev.button !== 0 || motionReduced()) return;
+        if (ev.button !== 0 || motionReduced() || resolveAmbientScale() <= 0.001) return;
         const rect = canvas.getBoundingClientRect();
         cachedCanvasRect = rect;
         cachedCanvasRectAt = performance.now();

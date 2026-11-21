@@ -114,7 +114,7 @@
 
   const normalizeConfigShape = (rawCfg) => {
     const out = { ...(rawCfg || {}) };
-    if (!['host', 'obsidian', 'warm', 'claude'].includes(out.palette)) out.palette = 'obsidian';
+    out.palette = out.palette === 'claude' ? 'warm' : ['host', 'obsidian', 'warm'].includes(out.palette) ? out.palette : 'obsidian';
     out.lightPreset = out.lightPreset === 'alabaster' ? 'alabaster' : 'crystal';
     if (!['off', 'subtle', 'standard', 'ultra'].includes(out.motionLevel)) out.motionLevel = 'ultra';
     if (!['60', '120', '180', 'native'].includes(out.targetFps)) out.targetFps = '180';
@@ -134,7 +134,7 @@
     }
 
     out.placeholderStyle = out.promptStyle = (out.placeholderStyle ?? out.promptStyle ?? 'studio') === 'host' ? 'host' : 'studio';
-    out.mascot = out.mascot === 'off' || out.mascot === false ? 'off' : out.mascot === 'minis' || out.mascot === 'dual' ? out.mascot : 'crab';
+    out.mascot = out.mascot === 'off' || out.mascot === false ? 'off' : out.mascot === 'minis' ? 'minis' : 'crab';
     out.sidebarCompact = out.sidebarCompact === true || out.sidebarCompact === 'on';
     out.smoothCaret = out.smoothCaret === undefined ? true : out.smoothCaret !== false && out.smoothCaret !== 'off';
     out.contextMenu = out.contextMenu === undefined ? true : out.contextMenu !== false && out.contextMenu !== 'off';
@@ -158,6 +158,8 @@
 
   const expandSettingAliases = (rawPatch) => {
     const patch = { ...(rawPatch || {}) };
+    if (patch.palette === 'claude') patch.palette = 'warm';
+    if (patch.mascot === 'dual') patch.mascot = 'crab';
     for (const [a, b] of [['language', 'lang'], ['homeLayout', 'homeMode'], ['placeholderStyle', 'promptStyle']]) {
       if (a in patch) patch[b] = patch[a];
       else if (b in patch) patch[a] = patch[b];
@@ -173,11 +175,8 @@
     for (const k of ['sidebarCompact', 'codeLigatures']) {
       if (k in patch && typeof patch[k] === 'string') patch[k] = patch[k] === 'on' || patch[k] === 'true';
     }
-    if ('smoothCaret' in patch && typeof patch.smoothCaret === 'string') {
-      patch.smoothCaret = patch.smoothCaret !== 'off' && patch.smoothCaret !== 'false';
-    }
-    if ('contextMenu' in patch && typeof patch.contextMenu === 'string') {
-      patch.contextMenu = patch.contextMenu !== 'off' && patch.contextMenu !== 'false';
+    for (const k of ['smoothCaret', 'contextMenu']) {
+      if (k in patch && typeof patch[k] === 'string') patch[k] = patch[k] !== 'off' && patch[k] !== 'false';
     }
     for (const k of ['telemetryModule', 'effortSliderModule', 'omniModule', 'sidebarStudio', 'autoUpdate']) {
       if (k in patch && typeof patch[k] === 'boolean') patch[k] = patch[k] ? 'on' : 'off';
@@ -299,7 +298,8 @@
     if ((key === 'telemetryModule' || key === 'effortSliderModule' || key === 'omniModule' || key === 'sidebarStudio' || key === 'autoUpdate') && typeof value === 'boolean') {
       return [key, value ? 'on' : 'off'];
     }
-    if (key === 'mascot') return ['mascot', base.mascot === 'dual' && value === 'crab' ? 'dual' : value];
+    if (key === 'palette' && value === 'claude') return ['palette', 'warm'];
+    if (key === 'mascot') return ['mascot', value === 'dual' ? 'crab' : value];
     return [key, value];
   };
 
@@ -416,8 +416,8 @@
   };
 
   const getEffectivePalette = () => {
-    const p = cfg.palette;
-    return p === 'obsidian' || p === 'warm' || p === 'claude' || p === 'host' ? p : 'obsidian';
+    const p = cfg.palette === 'claude' ? 'warm' : cfg.palette;
+    return p === 'obsidian' || p === 'warm' || p === 'host' ? p : 'obsidian';
   };
 
   const getLightPreset = () => {
@@ -518,14 +518,12 @@
     const acc = getAccentTone();
     if (acc !== 'follow') return acc;
     const pal = getEffectivePalette();
-    if (pal === 'warm' || pal === 'claude') return 'warm';
-    if (!isDarkTheme() && getLightPreset() === 'alabaster') return 'warm';
+    if (pal === 'warm') return 'warm';
+    if (pal === 'obsidian' && !isDarkTheme() && getLightPreset() === 'alabaster') return 'warm';
     return 'default';
   };
 
-  const isMascotEnabled = () => {
-    return cfg.mascot === 'crab' || cfg.mascot === 'dual' || cfg.mascot === 'minis';
-  };
+  const isMascotEnabled = () => cfg.mascot !== 'off';
 
   const motionReduced = () => {
     if (cfg.motionLevel === 'off') return true;
@@ -873,7 +871,7 @@
   const convAuraCtl = convAuraMod?.createConvAuraController
     ? convAuraMod.createConvAuraController({
         isDestroyed: () => destroyed,
-        isHomeRippleEnabled: () => cfg.homeRipple !== false && getAmbientFloat() > 0,
+        isHomeRippleEnabled: () => getAmbientFloat() > 0,
         isMotionStandardOrUltra,
         isDarkTheme,
         getMinFrameGapMs,
@@ -1273,7 +1271,10 @@
 
       syncMotionOffStyle(motionLv === 'off');
       syncAbsorbedModules(forceAbsorbed);
-      setAttrIfChanged(html, 'data-ag-prism-thought-view', getThoughtView());
+      const tv = 'data-ag-prism-thought-view';
+      if (getThoughtTranslateMode() === 'off') { if (ha(html, tv)) ra(html, tv); }
+      else setAttrIfChanged(html, tv, getThoughtView());
+      syncCaretListeners(cfg.smoothCaret !== false);
 
       if (telemetryMod !== lastAppliedTelemetry) {
         const prevTel = lastAppliedTelemetry;
@@ -1655,7 +1656,7 @@
 
   function syncHostAnimatedIcons(roots = null) {
     if (!animatedIcons || typeof animatedIcons.renderIcon !== 'function' || !isMotionStandardOrUltra()) {
-      if (motionReduced()) restoreAllHostAnimatedIcons();
+      restoreAllHostAnimatedIcons();
       return;
     }
 
@@ -1752,7 +1753,7 @@
     const palLabel =
       pal === 'host'
         ? ui.optHost || (isZh() ? '跟随主题' : 'Host')
-        : pal === 'warm' || pal === 'claude'
+        : pal === 'warm'
         ? ui.optWarm || (isZh() ? 'Alabaster 暖岩' : 'Alabaster')
         : ui.optObsidian || (isZh() ? 'Obsidian 深空' : 'Obsidian');
     const lp =
@@ -1789,13 +1790,8 @@
     if (key === 'codeLigatures') return isCodeLigaturesEnabled();
     if (key === 'contextMenu') return isContextMenuEnabled();
     if (key === 'ambientIntensity') return getAmbientIntensitySetting();
-    if (key === 'palette') {
-      const p = getEffectivePalette();
-      return p === 'claude' ? 'warm' : p;
-    }
-    if (key === 'mascot') {
-      return cfg.mascot === 'dual' ? 'crab' : cfg.mascot;
-    }
+    if (key === 'palette') return getEffectivePalette();
+    if (key === 'mascot') return cfg.mascot === 'dual' ? 'crab' : cfg.mascot;
     return cfg[key];
   };
 
@@ -2073,7 +2069,7 @@
     }
     return Boolean(cl(el, '[data-testid="bottom-terminal-panel-resize-handle"]'));
   };
-  const AX_H = /(?:^|[;\s])(?:width\s*:\s*0(?:\s|;|px|%|!|$)|display\s*:\s*none)/i;
+  const AX_H = /(?:^|[;\s])(?:width\s*:\s*0(?:\s|;|px|%|!|$)|display\s*:\s*none|position\s*:\s*absolute)/i;
   const axV = (e) =>
     Boolean(
       e &&
@@ -2081,7 +2077,9 @@
         !e.hidden &&
         !ha(e, 'hidden') &&
         ga(e, 'aria-hidden') !== 'true' &&
+        ga(e, 'data-split-overlaid') !== 'true' &&
         e.style?.display !== 'none' &&
+        e.style?.position !== 'absolute' &&
         e.style?.width !== '0' &&
         e.style?.width !== '0px' &&
         !AX_H.test(ga(e, 'style') || '')
@@ -2094,7 +2092,8 @@
     if (!s || s.isConnected === false) return false;
     const prev = ha(s, AX_A);
     const [f, l] = axCh(s);
-    const next = Boolean(f && l && f !== l && axV(f) && axV(l));
+    const tr = ga(s, 'data-split-transition');
+    const next = Boolean(tr !== 'maximizing' && tr !== 'restoring' && tr !== 'closing' && f && l && f !== l && axV(f) && axV(l));
     if (next) setAttrIfChanged(s, AX_A, '1');
     else if (prev) ra(s, AX_A);
     return next !== prev;
@@ -2107,12 +2106,12 @@
       if (axE?.isConnected !== false) ra(axE, AX_A);
       axE = s;
       if (s && typeof MutationObserver === 'function') {
-        const o = { attributes: true, attributeFilter: ['hidden', 'aria-hidden', 'style', 'class'] };
+        const o = { attributes: true, attributeFilter: ['hidden', 'aria-hidden', 'style', 'class', 'data-split-overlaid'] };
         const rb = () => {
           if (!destroyed && axO && axE) {
             axO.disconnect();
             try {
-              axO.observe(axE, { childList: true });
+              axO.observe(axE, { childList: true, attributes: true, attributeFilter: ['data-split-transition'] });
               const [f, l] = axCh(axE);
               if (f) axO.observe(f, o);
               if (l && l !== f) axO.observe(l, o);
@@ -2868,7 +2867,7 @@
       }
     }
     notifyMascot('activity', {});
-    smoothCaretCtl.queue(false);
+    if (cfg.smoothCaret !== false) smoothCaretCtl.queue(false);
   };
 
   const MODIFIER_ONLY_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'NumLock', 'ScrollLock']);
@@ -2902,7 +2901,7 @@
   };
 
   const onDocTransitionEnd = (ev) => {
-    if (cl(ev?.target, '[data-testid="agent-input-box"]')) {
+    if (cfg.smoothCaret !== false && cl(ev?.target, '[data-testid="agent-input-box"]')) {
       smoothCaretCtl.queue(false, true, false);
     }
   };
@@ -3039,20 +3038,24 @@
 
   // Strict test contract: NEVER register 'click' or 'mousedown' on D!
   const CAP_PASSIVE = { capture: true, passive: true };
+  const CARET_LISTENERS = 'keyup:1|mouseup:0|input:1|selectionchange:1|focusin:0|focusout:0|scroll:0|compositionupdate:1|compositionend:1'.split('|');
   const DOC_LISTENERS = [
     ['pointerdown', onDocPointerDown, CAP_PASSIVE],
-    ['keyup', onDocCaretEvent, true],
-    ['mouseup', onDocCaretEvent, CAP_PASSIVE],
-    ['input', onDocCaretEvent, true],
-    ['selectionchange', onDocCaretEvent, true],
-    ['focusin', onDocCaretEvent, CAP_PASSIVE],
-    ['focusout', onDocCaretEvent, CAP_PASSIVE],
-    ['scroll', onDocCaretEvent, CAP_PASSIVE],
-    ['compositionupdate', onDocCaretEvent, true],
-    ['compositionend', onDocCaretEvent, true],
     ['transitionend', onDocTransitionEnd, CAP_PASSIVE],
     ['visibilitychange', onDocVisibilityChange, true],
   ];
+  let caretListenersBound = false;
+  const syncCaretListeners = (enabled) => {
+    const want = Boolean(enabled && !destroyed && lifecycleStarted);
+    if (want === caretListenersBound) return;
+    caretListenersBound = want;
+    const fn = want ? 'addEventListener' : 'removeEventListener';
+    for (const s of CARET_LISTENERS) {
+      const [ev, cap] = s.split(':');
+      try { D[fn](ev, onDocCaretEvent, cap === '1' ? true : CAP_PASSIVE); } catch {}
+    }
+    if (!want && !destroyed) smoothCaretCtl.teardown();
+  };
 
   const WIN_LISTENERS = [
     ['pointermove', onWinPointerMove, { passive: true }],
@@ -3113,6 +3116,7 @@
       axE?.removeAttribute?.(AX_A);
     } catch {}
     axO = axE = null;
+    syncCaretListeners(false);
     for (const [evName, handler, opts] of DOC_LISTENERS) {
       try {
         D.removeEventListener(evName, handler, opts);
@@ -3187,6 +3191,7 @@
     for (const [evName, handler, opts] of DOC_LISTENERS) {
       D.addEventListener(evName, handler, opts);
     }
+    syncCaretListeners(cfg.smoothCaret !== false);
     if (typeof W.addEventListener === 'function') {
       for (const [evName, handler, opts] of WIN_LISTENERS) {
         W.addEventListener(evName, handler, opts);

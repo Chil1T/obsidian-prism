@@ -768,23 +768,27 @@ test('Issue #2/#4/#5 high-Hz & win-blur guards: pulse-vial-bridge (<31,000B) 33m
     assert.equal(fakeCv.width, Math.round((200 + 2) * 1.5), 'Prism rim DPR must cap at 1.5 even on 3x Retina displays');
     assert.equal(rimGradCalls, 1);
 
-    // >=16ms frame clamp skips 180Hz +6ms tick
+    // 180Hz targetFps (4.8ms gap) skips sub-gap +3ms tick and renders on +6ms tick
     rimCtl.onPointerMove({ clientX: 180, clientY: 140 });
+    nowT = 2003;
+    rimRaf(2003);
+    assert.equal(rimGradCalls, 1, 'flushPrismPointer must honor 4.8ms gap and skip +3ms tick');
+
     nowT = 2006;
     rimRaf(2006);
-    assert.equal(rimGradCalls, 1, 'flushPrismPointer must clamp frame gap >= 16ms on 180Hz screens');
+    assert.equal(rimGradCalls, 2, 'flushPrismPointer must render 180Hz +6ms tick once gap >= 4.8ms');
 
-    // At +20ms, micro-movement < 1.5px from (150,130) -> (151.1, 130.8) skips redundant canvas redraw
-    rimCtl.onPointerMove({ clientX: 151.1, clientY: 130.8 });
+    // At +20ms, micro-movement < 1.5px from (180,140) -> (181.1, 140.8) skips redundant canvas redraw
+    rimCtl.onPointerMove({ clientX: 181.1, clientY: 140.8 });
     nowT = 2020;
     rimRaf(2020);
-    assert.equal(rimGradCalls, 1, '<1.5px pointer micro-jitter with unchanged signature must skip redraw');
+    assert.equal(rimGradCalls, 2, '<1.5px pointer micro-jitter with unchanged signature must skip redraw');
 
     // Real pointer move >= 1.5px redraws cleanly
     rimCtl.onPointerMove({ clientX: 170, clientY: 145 });
     nowT = 2040;
     rimRaf(2040);
-    assert.equal(rimGradCalls, 2);
+    assert.equal(rimGradCalls, 3);
 
     // data-ag-cs-win-blur="1" skips scheduling rAF on pointermove
     rimRaf = null;

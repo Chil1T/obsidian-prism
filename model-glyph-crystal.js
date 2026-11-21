@@ -106,6 +106,7 @@
     canMountRealCanvas,
     getLastPointerPos,
     setAttrIfChanged,
+    getCfg,
   }) => {
     let mPanel = null,
       mOv = null,
@@ -176,9 +177,12 @@
       if (tone === 'mono' || tone === 'cobalt' || tone === 'iris' || tone === 'amber') return tone;
       const pal = ga(html, 'data-ag-cs-palette') || 'obsidian';
       if (pal === 'warm' || pal === 'claude') return 'warm';
-      if (!dark && ga(html, 'data-ag-cs-light-preset') === 'alabaster') return 'warm';
+      if (!dark && pal === 'obsidian' && ga(html, 'data-ag-cs-light-preset') === 'alabaster') return 'warm';
       return 'default';
     };
+
+    const isEffortSliderOff = () =>
+      ga(getRootHtml(), 'data-ag-cs-effort-slider') === 'off' || getCfg?.()?.effortSliderModule === 'off';
 
     const readRootAmbientFloat = () => {
       const raw = ga(getRootHtml(), 'data-ag-cs-ambient');
@@ -571,9 +575,28 @@
         syncModelMenuAttrs(panel);
       }
 
+      syncPanelRowGlyphs(panel);
+      if (isEffortSliderOff()) {
+        detachSliderWake();
+        cancelMountRaf();
+        cancelStepRaf();
+        try { mInst?.dispose?.(); } catch {}
+        clearSliderPrismOverlay(panel);
+        ra(panel, 'data-ag-cs-orch-active');
+        qa(panel, EFF_ROW_SEL).forEach((row) => {
+          ra(row, 'data-row-hidden');
+          ra(row, 'aria-hidden');
+        });
+        qa(panel, '[data-testid="orchestrator-effort-bar"]').forEach((b) => b.remove?.());
+        if (mBar?.[K_PE]) mBar.remove();
+        mPanel = mBar = mTrk = mCv = mInst = mKnob = null;
+        mRaf = mMountRaf = mLastMs = mMountedAt = mTrkWidth = 0;
+        mStepFillRatio = null;
+        mWasOrch = mHideLock = false;
+        return;
+      }
       const isOrch = detectPanelIsOrchestrator(panel, primaryModelInfo);
       const isOrchTunable = isOrch && ga(panel, 'data-ces-orch-tunable') === 'true';
-      syncPanelRowGlyphs(panel);
       const cesSec = qs(panel, '.ces-ag-section');
       if (cesSec) {
         if (ga(cesSec, 'data-effort-slot') !== 'true') sa(cesSec, 'data-effort-slot', 'true');
@@ -680,7 +703,7 @@
 
       if (isOrch) {
         const kickCrystal = () => {
-          if (isDestroyed() || !mWasOrch || mPanel !== panel || !panel[K_IC] || !mCv) return;
+          if (isDestroyed() || isEffortSliderOff() || !mWasOrch || mPanel !== panel || !panel[K_IC] || !mCv) return;
           const reducedNow = motionReduced();
           const ambientNow = readRootAmbientFloat();
           if (!mInst && crystalPrismCore?.mountCrystalPrismBar && canMountRealCanvas(mCv)) {

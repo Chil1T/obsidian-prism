@@ -577,9 +577,9 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     );
     appearanceH2.textContent = '外观';
 
-    // Switching palette/mascot externally syncs root attrs & setting button active state immediately (warm & claude alias compat)
+    // Switching palette/mascot externally syncs root attrs & setting button active state immediately (claude alias normalized to warm)
     sandbox.window.__agPrism.refreshConfig({ ...cdp.DEFAULT_CONFIG, palette: 'claude' });
-    assert.equal(html.getAttribute('data-ag-cs-palette'), 'claude');
+    assert.equal(html.getAttribute('data-ag-cs-palette'), 'warm');
     const warmBtn = appearancePanel
       .querySelectorAll('#ag-cs-settings-sec button')
       .find((b) => b.getAttribute('data-ag-cs-key') === 'palette' && b.getAttribute('data-ag-cs-val') === '"warm"');
@@ -595,7 +595,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     assert.equal(html.getAttribute('data-ag-cs-code-font'), 'default');
     assert.equal(html.getAttribute('data-ag-cs-ligatures'), '0');
     assert.equal(html.getAttribute('data-ag-cs-ambient'), '1');
-    assert.equal(html.getAttribute('data-ag-prism-thought-view'), 'immersive');
+    assert.equal(html.getAttribute('data-ag-prism-thought-view'), null);
 
     const beforeBatchLen = bindingCalls.length;
     sandbox.window.__agPrism.saveSettingsBatch({
@@ -604,6 +604,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
       codeFont: 'jetbrains',
       codeLigatures: true,
       ambientIntensity: '70',
+      thoughtTranslate: 'machine',
       thoughtView: 'bilingual',
     });
     assert.equal(html.getAttribute('data-ag-cs-accent'), 'iris');
