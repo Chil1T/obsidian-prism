@@ -256,7 +256,7 @@
         ra(sp, 'data-ces-part');
       }
       for (const p of qa(doc, '.ces-ag-panel-enhanced')) p.classList?.remove?.('ces-ag-panel-enhanced');
-      for (const attr of ['data-ces-model-selected', 'data-ag-cs-model-submenu', 'data-ag-cs-orch-l2', 'data-ag-cs-orch-l3', 'data-ces-orch-row']) {
+      for (const attr of ['data-ces-model-selected', 'data-ag-cs-model-submenu', 'data-ag-cs-orch-l2', 'data-ag-cs-orch-l3', 'data-ces-orch-row', 'data-ces-orch-b', 'data-ces-orch-tunable']) {
         for (const it of qa(doc, `[${attr}]`)) ra(it, attr);
       }
       ra(doc.documentElement, 'data-ces-slider-ready');

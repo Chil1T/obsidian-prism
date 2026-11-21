@@ -21,6 +21,7 @@ namespace AgyClaudeStyle.Watcher
         public CdpSession Session;
         public string ScriptId;
         public string OmniScriptId;
+        public string ThoughtScriptId;
         public string Title;
         public string MainFrameId;
         public bool HasFrameTree;
@@ -231,8 +232,12 @@ namespace AgyClaudeStyle.Watcher
                 return 1;
             }
 
+            Dictionary<string, object> onceCfg = CdpHelper.ReadConfig(_baseDir, manifest);
             string expr = CdpHelper.BuildInjectExpression(_baseDir, manifest);
             string omniExpr = CdpHelper.BuildOmniClientExpression(_baseDir, manifest);
+            string thoughtExpr = CdpHelper.ShouldEnableThought(onceCfg)
+                ? CdpHelper.BuildThoughtExpression(_baseDir, onceCfg)
+                : "";
             List<string> injectedTitles = new List<string>();
             for (int i = 0; i < pages.Count; i++)
             {
@@ -243,6 +248,10 @@ namespace AgyClaudeStyle.Watcher
                     if (!string.IsNullOrEmpty(omniExpr))
                     {
                         try { await session.EvaluateAsync(omniExpr, false).ConfigureAwait(false); } catch { }
+                    }
+                    if (!string.IsNullOrEmpty(thoughtExpr))
+                    {
+                        try { await session.EvaluateAsync(thoughtExpr, false).ConfigureAwait(false); } catch { }
                     }
                     injectedTitles.Add(CdpHelper.ShortTitle(page));
                 }
@@ -325,6 +334,24 @@ namespace AgyClaudeStyle.Watcher
             try { if (File.Exists(pidFile)) File.Delete(pidFile); } catch { }
         }
 
+        private static bool IsWatchedHotReloadFile(string relativeName)
+        {
+            if (string.IsNullOrEmpty(relativeName)) return false;
+            string norm = relativeName.Replace('\\', '/');
+            if (norm.StartsWith(".", StringComparison.Ordinal) || norm.IndexOf("/.", StringComparison.Ordinal) >= 0)
+            {
+                return false;
+            }
+            if (norm.StartsWith("vendor/thought-translator/", StringComparison.OrdinalIgnoreCase) &&
+                norm.EndsWith(".js", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            return norm.EndsWith(".css", StringComparison.OrdinalIgnoreCase) ||
+                   norm.EndsWith(".js", StringComparison.OrdinalIgnoreCase) ||
+                   norm.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
+        }
+
         private static async Task<int> RunWatchAsync(int? overridePort)
         {
             string dirHash = GetDirHash(_baseDir);
@@ -343,8 +370,12 @@ namespace AgyClaudeStyle.Watcher
                 PluginManifest manifest = PluginManifest.Load(_baseDir);
                 Log(string.Format("[*] Obsidian Prism (obsidian-prism) 守护模式启动 (PID {0})，每 2 秒检查一次窗口", selfPid));
 
+                Dictionary<string, object> initialCfg = CdpHelper.ReadConfig(_baseDir, manifest);
                 string currentExpr = CdpHelper.BuildInjectExpression(_baseDir, manifest);
                 string currentOmniExpr = CdpHelper.BuildOmniClientExpression(_baseDir, manifest);
+                string currentThoughtExpr = CdpHelper.ShouldEnableThought(initialCfg)
+                    ? CdpHelper.BuildThoughtExpression(_baseDir, initialCfg)
+                    : "";
                 object exprLock = new object();
                 ConcurrentDictionary<string, AttachedEntry> attached = new ConcurrentDictionary<string, AttachedEntry>(StringComparer.Ordinal);
                 ManualResetEventSlim exitEvent = new ManualResetEventSlim(false);
@@ -361,7 +392,7 @@ namespace AgyClaudeStyle.Watcher
                     ReleasePidFile(selfPid);
                 };
 
-                Func<AttachedEntry, string, string, Task<Dictionary<string, object>>> applyAsync = async (entry, exprToUse, omniExprToUse) =>
+                Func<AttachedEntry, string, string, string, Task<Dictionary<string, object>>> applyAsync = async (entry, exprToUse, omniExprToUse, thoughtExprToUse) =>
                 {
                     if (!string.IsNullOrEmpty(entry.ScriptId))
                     {
@@ -395,6 +426,28 @@ namespace AgyClaudeStyle.Watcher
                             catch { }
                             entry.ScriptId = null;
                         }
+                        if (!string.IsNullOrEmpty(entry.OmniScriptId))
+                        {
+                            try
+                            {
+                                Dictionary<string, object> rmOmniSkip = new Dictionary<string, object>(StringComparer.Ordinal);
+                                rmOmniSkip["identifier"] = entry.OmniScriptId;
+                                await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmOmniSkip, 5000).ConfigureAwait(false);
+                            }
+                            catch { }
+                            entry.OmniScriptId = null;
+                        }
+                        if (!string.IsNullOrEmpty(entry.ThoughtScriptId))
+                        {
+                            try
+                            {
+                                Dictionary<string, object> rmThoughtSkip = new Dictionary<string, object>(StringComparer.Ordinal);
+                                rmThoughtSkip["identifier"] = entry.ThoughtScriptId;
+                                await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmThoughtSkip, 5000).ConfigureAwait(false);
+                            }
+                            catch { }
+                            entry.ThoughtScriptId = null;
+                        }
                         return evalDict;
                     }
 
@@ -419,6 +472,40 @@ namespace AgyClaudeStyle.Watcher
                             object omniIdVal;
                             if (omniRes.TryGetValue("identifier", out omniIdVal)) entry.OmniScriptId = omniIdVal as string;
                             await entry.Session.EvaluateAsync(omniExprToUse, false).ConfigureAwait(false);
+                        }
+                        catch { }
+                    }
+
+                    bool hadThought = !string.IsNullOrEmpty(entry.ThoughtScriptId);
+                    if (hadThought)
+                    {
+                        try
+                        {
+                            Dictionary<string, object> rmThought = new Dictionary<string, object>(StringComparer.Ordinal);
+                            rmThought["identifier"] = entry.ThoughtScriptId;
+                            await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmThought, 5000).ConfigureAwait(false);
+                        }
+                        catch { }
+                        entry.ThoughtScriptId = null;
+                    }
+                    if (!string.IsNullOrEmpty(thoughtExprToUse))
+                    {
+                        try
+                        {
+                            Dictionary<string, object> addThought = new Dictionary<string, object>(StringComparer.Ordinal);
+                            addThought["source"] = thoughtExprToUse;
+                            Dictionary<string, object> thoughtRes = await entry.Session.SendAsync("Page.addScriptToEvaluateOnNewDocument", addThought, 15000).ConfigureAwait(false);
+                            object thoughtIdVal;
+                            if (thoughtRes.TryGetValue("identifier", out thoughtIdVal)) entry.ThoughtScriptId = thoughtIdVal as string;
+                            await entry.Session.EvaluateAsync(thoughtExprToUse, false).ConfigureAwait(false);
+                        }
+                        catch { }
+                    }
+                    else if (hadThought)
+                    {
+                        try
+                        {
+                            await entry.Session.EvaluateAsync(CdpHelper.ThoughtRemoveExpression, false).ConfigureAwait(false);
                         }
                         catch { }
                     }
@@ -595,12 +682,14 @@ namespace AgyClaudeStyle.Watcher
 
                         string exprSnapshot;
                         string omniSnapshot;
+                        string thoughtSnapshot;
                         lock (exprLock)
                         {
                             exprSnapshot = currentExpr;
                             omniSnapshot = currentOmniExpr;
+                            thoughtSnapshot = currentThoughtExpr;
                         }
-                        Dictionary<string, object> res = await applyAsync(entry, exprSnapshot, omniSnapshot).ConfigureAwait(false);
+                        Dictionary<string, object> res = await applyAsync(entry, exprSnapshot, omniSnapshot, thoughtSnapshot).ConfigureAwait(false);
                         string status = (res != null && res.ContainsKey("status")) ? Convert.ToString(res["status"]) : "ok";
                         Log(string.Format("[✓] 已注入 obsidian-prism: {0} ({1})", entry.Title, status));
                     }
@@ -632,10 +721,7 @@ namespace AgyClaudeStyle.Watcher
                     FileSystemEventHandler onFsChange = (sender, e) =>
                     {
                         string name = e.Name;
-                        if (string.IsNullOrEmpty(name) || name.StartsWith(".", StringComparison.Ordinal)) return;
-                        if (!name.EndsWith(".css", StringComparison.OrdinalIgnoreCase) &&
-                            !name.EndsWith(".js", StringComparison.OrdinalIgnoreCase) &&
-                            !name.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                        if (!IsWatchedHotReloadFile(name))
                         {
                             return;
                         }
@@ -651,15 +737,22 @@ namespace AgyClaudeStyle.Watcher
                                     try
                                     {
                                         manifest = PluginManifest.Load(_baseDir);
+                                        Dictionary<string, object> nextCfg = CdpHelper.ReadConfig(_baseDir, manifest);
                                         string nextExpr = CdpHelper.BuildInjectExpression(_baseDir, manifest);
                                         string nextOmniExpr = CdpHelper.BuildOmniClientExpression(_baseDir, manifest);
+                                        string nextThoughtExpr = CdpHelper.ShouldEnableThought(nextCfg)
+                                            ? CdpHelper.BuildThoughtExpression(_baseDir, nextCfg)
+                                            : "";
                                         string fastCfgExpr = string.Equals(Path.GetFileName(changedName ?? ""), "config.json", StringComparison.OrdinalIgnoreCase)
                                             ? CdpHelper.BuildConfigRefreshExpression(_baseDir, manifest)
                                             : null;
+                                        string prevThoughtExpr;
                                         lock (exprLock)
                                         {
+                                            prevThoughtExpr = currentThoughtExpr;
                                             currentExpr = nextExpr;
                                             currentOmniExpr = nextOmniExpr;
+                                            currentThoughtExpr = nextThoughtExpr;
                                         }
 
                                         int n = 0;
@@ -711,6 +804,31 @@ namespace AgyClaudeStyle.Watcher
                                                         catch { }
                                                     }
 
+                                                    bool hadThought = !string.IsNullOrEmpty(entry.ThoughtScriptId) || !string.IsNullOrEmpty(prevThoughtExpr);
+                                                    if (!string.IsNullOrEmpty(entry.ThoughtScriptId))
+                                                    {
+                                                        try
+                                                        {
+                                                            Dictionary<string, object> rmT = new Dictionary<string, object>(StringComparer.Ordinal);
+                                                            rmT["identifier"] = entry.ThoughtScriptId;
+                                                            await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmT, 5000).ConfigureAwait(false);
+                                                        }
+                                                        catch { }
+                                                        entry.ThoughtScriptId = null;
+                                                    }
+                                                    if (!string.IsNullOrEmpty(nextThoughtExpr))
+                                                    {
+                                                        try
+                                                        {
+                                                            Dictionary<string, object> addT = new Dictionary<string, object>(StringComparer.Ordinal);
+                                                            addT["source"] = nextThoughtExpr;
+                                                            Dictionary<string, object> thoughtR = await entry.Session.SendAsync("Page.addScriptToEvaluateOnNewDocument", addT, 15000).ConfigureAwait(false);
+                                                            object tIdV;
+                                                            if (thoughtR.TryGetValue("identifier", out tIdV)) entry.ThoughtScriptId = tIdV as string;
+                                                        }
+                                                        catch { }
+                                                    }
+
                                                     Dictionary<string, object> fastRes = await entry.Session.EvaluateAsync(fastCfgExpr, false).ConfigureAwait(false) as Dictionary<string, object>;
                                                     object refVal;
                                                     if (fastRes != null && fastRes.TryGetValue("refreshed", out refVal) && refVal is bool && (bool)refVal)
@@ -718,6 +836,14 @@ namespace AgyClaudeStyle.Watcher
                                                         if (!string.IsNullOrEmpty(nextOmniExpr))
                                                         {
                                                             try { await entry.Session.EvaluateAsync(nextOmniExpr, false).ConfigureAwait(false); } catch { }
+                                                        }
+                                                        if (!string.IsNullOrEmpty(nextThoughtExpr))
+                                                        {
+                                                            try { await entry.Session.EvaluateAsync(nextThoughtExpr, false).ConfigureAwait(false); } catch { }
+                                                        }
+                                                        else if (hadThought)
+                                                        {
+                                                            try { await entry.Session.EvaluateAsync(CdpHelper.ThoughtRemoveExpression, false).ConfigureAwait(false); } catch { }
                                                         }
                                                         n++;
                                                         continue;
@@ -727,11 +853,19 @@ namespace AgyClaudeStyle.Watcher
                                                     {
                                                         try { await entry.Session.EvaluateAsync(nextOmniExpr, false).ConfigureAwait(false); } catch { }
                                                     }
+                                                    if (!string.IsNullOrEmpty(nextThoughtExpr))
+                                                    {
+                                                        try { await entry.Session.EvaluateAsync(nextThoughtExpr, false).ConfigureAwait(false); } catch { }
+                                                    }
+                                                    else if (hadThought)
+                                                    {
+                                                        try { await entry.Session.EvaluateAsync(CdpHelper.ThoughtRemoveExpression, false).ConfigureAwait(false); } catch { }
+                                                    }
                                                     n++;
                                                 }
                                                 else
                                                 {
-                                                    await applyAsync(entry, nextExpr, nextOmniExpr).ConfigureAwait(false);
+                                                    await applyAsync(entry, nextExpr, nextOmniExpr, nextThoughtExpr).ConfigureAwait(false);
                                                     n++;
                                                 }
                                             }

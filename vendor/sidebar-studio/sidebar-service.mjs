@@ -10,7 +10,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile as cpExecFile } from 'node:child_process';
-import { isBlockedUncPath } from '../omni-viewer/omni-server.mjs';
 
 import {
   SCHEMA_VERSION,
@@ -161,6 +160,62 @@ function cloneJson(value) {
 function normalizePathForCompare(p) {
   const resolved = path.resolve(p);
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/**
+ * 拦截远程 Windows UNC / SMB / NT 设备路径（独立纯函数，消除对 omni-viewer 的跨频道耦合）
+ */
+export function isBlockedUncPath(rawInput) {
+  if (!rawInput || typeof rawInput !== 'string') return false;
+  let s = rawInput.trim();
+  if (!s) return false;
+  if (s.startsWith('@') && s.length > 1 && !s.startsWith('@/')) s = s.slice(1).trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    s = s.slice(1, -1).trim();
+  }
+  if (/^file:\/\//i.test(s)) {
+    const afterScheme = s.slice(7);
+    if (!afterScheme.startsWith('/')) {
+      const host = afterScheme.split(/[/?#\\]/)[0].toLowerCase();
+      if (
+        host &&
+        host !== 'localhost' &&
+        host !== '127.0.0.1' &&
+        host !== '[::1]' &&
+        host !== 'wsl.localhost' &&
+        host !== 'wsl$' &&
+        !/^[a-z]:$/i.test(host)
+      ) {
+        return true;
+      }
+    }
+    try {
+      s = decodeURIComponent(afterScheme);
+    } catch {
+      s = afterScheme;
+    }
+  }
+  if (/^[\\/]{2}/.test(s)) {
+    const rest = s.replace(/^[\\/]+/, '');
+    if (/^[?.][\\/]/.test(rest)) {
+      const inner = rest.slice(2).replace(/^[\\/]+/, '');
+      if (/^[A-Za-z]:(?:[\\/]|$)/.test(inner)) {
+        return false;
+      }
+      const uncMatch = inner.match(/^(?:global[\\/]+)*unc[\\/]+(.+)$/i);
+      if (uncMatch) {
+        const uncHost = uncMatch[1].split(/[\\/]/)[0].toLowerCase();
+        return uncHost !== 'localhost' && uncHost !== '127.0.0.1' && uncHost !== 'wsl.localhost' && uncHost !== 'wsl$';
+      }
+      return true;
+    }
+    const host = rest.split(/[\\/]/)[0].toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host === 'wsl.localhost' || host === 'wsl$') {
+      return false;
+    }
+    return true;
+  }
+  return false;
 }
 
 function makeScopeRefFromPath(realDirPath) {
@@ -4075,11 +4130,14 @@ export class SidebarStudioService {
     const safeTitle = (rawTitle || '选择工作区文件夹').replace(/[\u0000-\u001f]/g, '').slice(0, 120);
     let safeInitDir = '';
     if (typeof params?.initialDir === 'string' && params.initialDir.trim() && !params.initialDir.includes('\0') && !isBlockedUncPath(params.initialDir)) {
-      try {
-        const resolved = fs.realpathSync(params.initialDir.trim());
-        if (!isBlockedUncPath(resolved) && fs.statSync(resolved).isDirectory()) safeInitDir = resolved;
-      } catch {
-        safeInitDir = '';
+      const candidateInitDir = path.resolve(params.initialDir.trim());
+      if (!isBlockedUncPath(candidateInitDir)) {
+        try {
+          const resolved = fs.realpathSync(candidateInitDir);
+          if (!isBlockedUncPath(resolved) && fs.statSync(resolved).isDirectory()) safeInitDir = resolved;
+        } catch {
+          safeInitDir = '';
+        }
       }
     }
 
@@ -4151,9 +4209,14 @@ export class SidebarStudioService {
       return { ok: false, error: '无效的目录路径' };
     }
 
+    const candidatePath = path.resolve(rawPath.trim());
+    if (isBlockedUncPath(candidatePath)) {
+      return { ok: false, error: '无效的目录路径' };
+    }
+
     let realPath;
     try {
-      realPath = fs.realpathSync(rawPath.trim());
+      realPath = fs.realpathSync(candidatePath);
       if (isBlockedUncPath(realPath) || !fs.statSync(realPath).isDirectory()) {
         return { ok: false, error: '目标路径不是有效目录' };
       }

@@ -1131,9 +1131,8 @@
       lastOutlineActiveIdx = activeIdx;
       activeOutlineBtn = null;
       outlineItemBtnByIdx.clear();
-      if (outlineTitleEl) outlineTitleEl.textContent = ui.outlineTitle(model.totalTurns);
-
       runGuardedMut(() => {
+        if (outlineTitleEl) outlineTitleEl.textContent = ui.outlineTitle(model.totalTurns);
         while (outlineListEl.firstChild) outlineListEl.removeChild(outlineListEl.firstChild);
 
         let renderedCount = 0;

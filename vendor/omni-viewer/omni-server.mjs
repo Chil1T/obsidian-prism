@@ -189,19 +189,20 @@ export function isBlockedUncPath(rawInput) {
       s = afterScheme;
     }
   }
-  if (/^(?:\\\\|\/\/)/.test(s)) {
-    const rest = s.replace(/^[\\/]{2}/, '');
+  if (/^[\\/]{2}/.test(s)) {
+    const rest = s.replace(/^[\\/]+/, '');
     if (/^[?.][\\/]/.test(rest)) {
-      const inner = rest.slice(2);
-      const uncMatch = inner.match(/^(?:global[\\/])*unc[\\/](.+)$/i);
+      const inner = rest.slice(2).replace(/^[\\/]+/, '');
+      if (/^[A-Za-z]:(?:[\\/]|$)/.test(inner)) {
+        return false;
+      }
+      const uncMatch = inner.match(/^(?:global[\\/]+)*unc[\\/]+(.+)$/i);
       if (uncMatch) {
         const uncHost = uncMatch[1].split(/[\\/]/)[0].toLowerCase();
         return uncHost !== 'localhost' && uncHost !== '127.0.0.1' && uncHost !== 'wsl.localhost' && uncHost !== 'wsl$';
       }
-      if (/^(?:global[\\/])*globalroot[\\/]device[\\/]mup[\\/]/i.test(inner)) {
-        return true;
-      }
-      return false;
+      // 除本地盘符与本地回环 UNC 白名单外，拦截全部 NT 设备路径（如 GLOBALROOT\Device\LanmanRedirector / WebDavRedirector / Mup 等）
+      return true;
     }
     const host = rest.split(/[\\/]/)[0].toLowerCase();
     if (host === 'localhost' || host === '127.0.0.1' || host === 'wsl.localhost' || host === 'wsl$') {
@@ -740,6 +741,8 @@ export class OmniServer {
     };
     if (isSandbox && (ext === '.html' || ext === '.htm')) {
       delete baseHeaders['X-Content-Type-Options'];
+    } else if (!isSandbox && (ext === '.html' || ext === '.htm' || ext === '.xhtml' || ext === '.svg')) {
+      baseHeaders['Content-Security-Policy'] = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
     }
 
     const rangeInfo = parseHttpByteRange(req.headers.range, st.size);

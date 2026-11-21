@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import {
   ThoughtTranslatorService,
@@ -12,6 +14,7 @@ import {
   SYSTEM_PROMPTS_BY_LANG,
   MAX_CONCURRENCY,
   MAX_STREAM_CHARS,
+  MAX_STREAM_BYTES,
   maskApiKey,
   redactSecrets,
   normalizeOpenAiBaseUrl,
@@ -26,6 +29,8 @@ import {
   shouldBypassProxy,
   parseWindowsRegProxyOutput,
   parseMacScutilProxyOutput,
+  detectOsSystemProxy,
+  detectOsSystemProxyAsync,
   resolveSystemProxy,
 } from '../vendor/thought-translator/translator-service.mjs';
 
@@ -3198,4 +3203,390 @@ test('Issue #14 thought-settings-ui: renders 5-locale usage hint, 5+1 anti-trans
   assert.equal(bridgeWarn.hidden, true);
   assert.equal(bridgeWarn.textContent, '');
   assert.ok(usageHint.textContent.length > 10);
+});
+
+test('Red-team security hardening: HTTPS proxy SNI servername, microtask queue cancel slot release, 8 MiB stream/zlib bomb cap, single-segment credential redaction, NO_PROXY ReDoS & absolute OS proxy commands', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-redteam-'));
+  const activeSockets = new Set();
+  const trackSocket = (s) => {
+    activeSockets.add(s);
+    s.once('close', () => activeSockets.delete(s));
+  };
+
+  try {
+    // 1) High #1: HTTPS proxy forwarding HTTP target must send SNI=proxyInfo.hostname (never target Host) and omit SNI for IP proxy
+    {
+      const capturedHellos = [];
+      const tlsPeekServer = net.createServer((sock) => {
+        trackSocket(sock);
+        sock.once('data', (chunk) => {
+          capturedHellos.push(Buffer.from(chunk));
+          sock.destroy();
+        });
+      });
+      await new Promise((r) => tlsPeekServer.listen(0, '127.0.0.1', r));
+      const peekPort = tlsPeekServer.address().port;
+
+      try {
+        const localLookup = (_hostname, opts, cb) => {
+          const done = typeof opts === 'function' ? opts : cb;
+          if (opts && typeof opts === 'object' && opts.all) {
+            done(null, [{ address: '127.0.0.1', family: 4 }]);
+          } else {
+            done(null, '127.0.0.1', 4);
+          }
+        };
+
+        // 1A) Domain HTTPS proxy -> ClientHello SNI MUST be proxy.corp.example and NEVER target.upstream.test
+        const domainProxySvc = new ThoughtTranslatorService({
+          configDir: tmpDir,
+          proxyEnv: {},
+          resolveSystemProxy: () => `https://proxy.corp.example:${peekPort}`,
+          proxyTlsOptions: { lookup: localLookup, rejectUnauthorized: false },
+        });
+        await assert.rejects(() =>
+          domainProxySvc._request('http://target.upstream.test/v1/models', { method: 'GET', redirect: 'error' })
+        );
+        domainProxySvc.dispose();
+
+        assert.equal(capturedHellos.length, 1);
+        assert.equal(capturedHellos[0][0], 0x16, 'Expected TLS ClientHello to HTTPS proxy');
+        assert.equal(capturedHellos[0][1], 0x03);
+        assert.ok(
+          capturedHellos[0].includes(Buffer.from('proxy.corp.example', 'ascii')),
+          'HTTPS proxy forwarding HTTP must set TLS servername === proxyInfo.hostname'
+        );
+        assert.equal(
+          capturedHellos[0].includes(Buffer.from('target.upstream.test', 'ascii')),
+          false,
+          'HTTPS proxy forwarding HTTP must NEVER send target Host header as TLS SNI'
+        );
+
+        // 1B) IP HTTPS proxy -> must NEVER fall back to headers.Host as SNI and must omit IP SNI
+        const ipProxySvc = new ThoughtTranslatorService({
+          configDir: tmpDir,
+          proxyEnv: {},
+          resolveSystemProxy: () => `https://127.0.0.1:${peekPort}`,
+          proxyTlsOptions: { rejectUnauthorized: false },
+        });
+        await assert.rejects(() =>
+          ipProxySvc._request('http://target.upstream.test/v1/models', { method: 'GET', redirect: 'error' })
+        );
+        ipProxySvc.dispose();
+
+        assert.equal(capturedHellos.length, 2);
+        assert.equal(capturedHellos[1][0], 0x16);
+        assert.equal(
+          capturedHellos[1].includes(Buffer.from('target.upstream.test', 'ascii')),
+          false,
+          'IP HTTPS proxy must NEVER leak HTTP target Host into TLS SNI'
+        );
+        assert.equal(
+          capturedHellos[1].includes(Buffer.from('127.0.0.1', 'ascii')),
+          false,
+          'IP HTTPS proxy must not send literal IP in TLS SNI extension'
+        );
+      } finally {
+        await new Promise((r) => tlsPeekServer.close(r));
+      }
+    }
+
+    // 2) Medium #1: Microtask-gap cancellation after dequeue MUST release _activeCount slot (5 consecutive cancels -> 6th succeeds)
+    {
+      const gates = new Map();
+      const fetchedTexts = [];
+      const mockFetch = async (_url, init = {}) => {
+        const body = JSON.parse(init.body || '{}');
+        const userText = body?.messages?.[1]?.content || '';
+        fetchedTexts.push(userText);
+        const match = /slot-holder-(\d+)/.exec(userText);
+        if (match) {
+          const id = match[1];
+          await new Promise((resolve) => gates.set(id, resolve));
+        }
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: '第六次正常完成。' } }] }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      };
+
+      const slotSvc = new ThoughtTranslatorService({
+        configDir: tmpDir,
+        maxConcurrency: 1,
+        fetchImpl: mockFetch,
+      });
+      slotSvc.saveConfig({
+        activeProfileId: 'p1',
+        profiles: [{ id: 'p1', name: 'Slot', baseUrl: 'https://mock.slot.test/v1', apiKey: 'sk-slot-test-1234', model: 'gpt-4o-mini' }],
+      });
+
+      const origRelease = slotSvc._releaseSlot.bind(slotSvc);
+      let cancelOnNextRelease = null;
+      slotSvc._releaseSlot = () => {
+        origRelease();
+        if (cancelOnNextRelease) {
+          const targetId = cancelOnNextRelease;
+          cancelOnNextRelease = null;
+          // At this exact synchronous point, victim was just popped from _queue, _activeCount++ occurred,
+          // and its acquireSlot promise resolved into the microtask queue (not yet resumed).
+          slotSvc.cancelPending(targetId);
+        }
+      };
+
+      for (let i = 1; i <= 5; i++) {
+        const holderProm = slotSvc.translateThought({
+          text: `Occupying single slot with slot-holder-${i} reasoning payload.`,
+          mode: 'ai',
+          requestId: `holder-${i}`,
+          force: true,
+        });
+        // Wait until holder enters mockFetch and registers its gate
+        for (let spin = 0; spin < 40 && !gates.has(String(i)); spin++) {
+          await new Promise((r) => setTimeout(r, 5));
+        }
+        assert.ok(gates.has(String(i)), `holder-${i} should be active`);
+        assert.equal(slotSvc.getQueueStats().active, 1);
+
+        const victimReqId = `victim-microtask-${i}`;
+        const victimProm = slotSvc.translateThought({
+          text: `Queued victim number ${i} waiting for slot release microtask gap.`,
+          mode: 'ai',
+          requestId: victimReqId,
+          force: true,
+        });
+        for (let spin = 0; spin < 40 && slotSvc.getQueueStats().queued < 1; spin++) {
+          await new Promise((r) => setTimeout(r, 5));
+        }
+        assert.equal(slotSvc.getQueueStats().queued, 1);
+
+        cancelOnNextRelease = victimReqId;
+        gates.get(String(i))();
+        const [holderRes, victimRes] = await Promise.all([holderProm, victimProm]);
+        assert.equal(holderRes.ok, true);
+        assert.equal(victimRes.cancelled, true, `victim-${i} must resolve as cancelled`);
+        assert.equal(slotSvc.getQueueStats().active, 0, `slot must NOT leak after microtask cancel #${i}`);
+        assert.equal(slotSvc.getQueueStats().queued, 0);
+      }
+
+      // None of the 5 cancelled victims should ever have hit upstream fetch
+      assert.equal(
+        fetchedTexts.some((t) => t.includes('Queued victim number')),
+        false,
+        'Microtask-cancelled queued requests must not invoke upstream fetch'
+      );
+
+      // 6th request MUST complete normally without deadlocking
+      const sixthRes = await Promise.race([
+        slotSvc.translateThought({
+          text: 'Sixth request verifying zero concurrency slot deadlock after 5 microtask cancels.',
+          mode: 'ai',
+          force: true,
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Deadlocked on 6th request due to leaked slot')), 1000)),
+      ]);
+      assert.equal(sixthRes.ok, true);
+      assert.equal(sixthRes.text, '第六次正常完成。');
+      assert.equal(slotSvc.getQueueStats().active, 0);
+      slotSvc.dispose();
+    }
+
+    // 3) Medium #2: 8 MiB hard byte cap on SSE stream + zlib decompression bomb guard in _fetchViaProxy
+    {
+      assert.equal(MAX_STREAM_BYTES, 8 * 1024 * 1024);
+      let sseCancelled = false;
+      let sseChunksPushed = 0;
+      const oneMiBComment = new TextEncoder().encode(`: ${'k'.repeat(1024 * 1024 - 4)}\n\n`);
+
+      const bombStreamSvc = new ThoughtTranslatorService({
+        configDir: tmpDir,
+        fetchImpl: async () => {
+          const stream = new ReadableStream({
+            pull(controller) {
+              if (sseChunksPushed >= 20) {
+                controller.close();
+                return;
+              }
+              sseChunksPushed++;
+              controller.enqueue(oneMiBComment);
+            },
+            cancel() {
+              sseCancelled = true;
+            },
+          });
+          return new Response(stream, {
+            status: 200,
+            headers: { 'Content-Type': 'text/event-stream' },
+          });
+        },
+      });
+      bombStreamSvc.saveConfig({
+        activeProfileId: 'p1',
+        profiles: [{ id: 'p1', name: 'Bomb', baseUrl: 'https://mock.bomb.test/v1', apiKey: 'sk-bomb-test-1234', model: 'gpt-4o-mini' }],
+      });
+
+      const sseBombRes = await bombStreamSvc.translateThought({
+        text: 'Triggering SSE byte cap defense with infinite keepalive comments.',
+        mode: 'ai',
+        force: true,
+      });
+      assert.equal(sseBombRes.ok, false);
+      assert.match(sseBombRes.error, /exceeded size limit/i);
+      assert.equal(sseCancelled, true, 'SSE stream exceeding 8 MiB must invoke reader.cancel() immediately');
+      assert.ok(sseChunksPushed <= 10, `SSE pull must stop right after exceeding 8 MiB, pushed=${sseChunksPushed}`);
+      bombStreamSvc.dispose();
+
+      // 3B) Proxy gzip / deflate / br decompression bomb (> 8 MiB uncompressed payload from tiny compressed body)
+      const rawBomb = Buffer.alloc(MAX_STREAM_BYTES + 256 * 1024, 0x41);
+      const bombPayloads = {
+        gzip: zlib.gzipSync(rawBomb),
+        deflate: zlib.deflateSync(rawBomb),
+        br: zlib.brotliCompressSync(rawBomb),
+      };
+      const gzProxyServer = http.createServer((req, res) => {
+        const m = /\/bomb-(gzip|deflate|br)/.exec(req.url || '');
+        if (m) {
+          const enc = m[1];
+          const payload = bombPayloads[enc];
+          res.writeHead(200, {
+            'Content-Type': 'text/plain',
+            'Content-Encoding': enc,
+            'Content-Length': String(payload.byteLength),
+          });
+          res.end(payload);
+          return;
+        }
+        res.writeHead(407, { 'Content-Type': 'text/plain' });
+        res.end('Proxy auth rejected');
+      });
+      gzProxyServer.on('connection', trackSocket);
+      await new Promise((r) => gzProxyServer.listen(0, '127.0.0.1', r));
+      const gzPort = gzProxyServer.address().port;
+
+      try {
+        const gzSvc = new ThoughtTranslatorService({
+          configDir: tmpDir,
+          proxyEnv: {},
+          resolveSystemProxy: () => `http://127.0.0.1:${gzPort}`,
+        });
+        for (const enc of ['gzip', 'deflate', 'br']) {
+          const bombResp = await gzSvc._request(`http://bomb-upstream.example/bomb-${enc}`, {
+            method: 'GET',
+            redirect: 'error',
+          });
+          await assert.rejects(() => bombResp.text(), /exceeded size limit/i);
+        }
+        gzSvc.dispose();
+      } finally {
+        await new Promise((r) => gzProxyServer.close(r));
+      }
+    }
+
+    // 4) Low hardening: single-segment / empty-username URL redaction, redactProxyErr username+password, NO_PROXY ReDoS & absolute probe binaries
+    {
+      // 4A) URL_USERINFO_PASS_RE covers :pass@ and single-segment token@
+      const rEmptyUser = redactSecrets('Failed connecting to http://:emptyUserPass99@127.0.0.1:7890/api');
+      assert.equal(rEmptyUser.includes('emptyUserPass99'), false);
+      assert.ok(rEmptyUser.includes('http://***REDACTED***@127.0.0.1:7890/api'));
+
+      const rSoloToken = redactSecrets('Failed connecting to https://soloProxyToken88@proxy.corp:8443/v1');
+      assert.equal(rSoloToken.includes('soloProxyToken88'), false);
+      assert.ok(rSoloToken.includes('https://***REDACTED***@proxy.corp:8443/v1'));
+
+      // 4B) redactProxyErr redacts BOTH proxyInfo.username and proxyInfo.password in CONNECT 407 errors
+      const authProxyServer = http.createServer((_req, res) => {
+        res.writeHead(407);
+        res.end();
+      });
+      authProxyServer.on('connection', trackSocket);
+      authProxyServer.on('connect', (_req, sock) => {
+        trackSocket(sock);
+        sock.end('HTTP/1.1 407 Denied for soloTokenUser77 and emptyUserSecret66\r\n\r\n');
+      });
+      await new Promise((r) => authProxyServer.listen(0, '127.0.0.1', r));
+      const authPort = authProxyServer.address().port;
+      try {
+        const soloUserSvc = new ThoughtTranslatorService({
+          configDir: tmpDir,
+          proxyEnv: {},
+          resolveSystemProxy: () => `http://soloTokenUser77@127.0.0.1:${authPort}`,
+        });
+        await assert.rejects(
+          () => soloUserSvc._request('https://connect-redact.example/v1/models', { method: 'GET', redirect: 'error' }),
+          (err) => {
+            assert.match(err.message, /407/);
+            assert.equal(err.message.includes('soloTokenUser77'), false, 'Single-segment proxy username token must be redacted');
+            return true;
+          }
+        );
+        soloUserSvc.dispose();
+
+        const emptyUserSvc = new ThoughtTranslatorService({
+          configDir: tmpDir,
+          proxyEnv: {},
+          resolveSystemProxy: () => `http://:emptyUserSecret66@127.0.0.1:${authPort}`,
+        });
+        await assert.rejects(
+          () => emptyUserSvc._request('https://connect-redact.example/v1/models', { method: 'GET', redirect: 'error' }),
+          (err) => {
+            assert.match(err.message, /407/);
+            assert.equal(err.message.includes('emptyUserSecret66'), false, 'Empty-username proxy password must be redacted');
+            return true;
+          }
+        );
+        emptyUserSvc.dispose();
+      } finally {
+        await new Promise((r) => authProxyServer.close(r));
+      }
+
+      // 4C) NO_PROXY collapses repeated wildcards & skips entries > 256 chars
+      const overlongRule = `${'a'.repeat(260)}.example.com`;
+      assert.equal(
+        shouldBypassProxy(`https://${overlongRule}/v1`, [overlongRule]),
+        false,
+        'NO_PROXY entries longer than 256 chars must be skipped'
+      );
+      const t0 = Date.now();
+      assert.equal(shouldBypassProxy('https://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.test/v1', [`${'*'.repeat(60)}a`]), false);
+      assert.ok(Date.now() - t0 < 250, 'Collapsed wildcard NO_PROXY entry must evaluate without catastrophic backtracking');
+      assert.equal(shouldBypassProxy('https://sub.example.com/v1', ['***example.com']), true);
+
+      // 4D) Win32 & macOS OS proxy probes invoke absolute system binary paths
+      const expectedWinReg = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'reg.exe');
+      const seenCmds = [];
+      detectOsSystemProxy({
+        platform: 'win32',
+        execFileSyncFn: (cmd) => {
+          seenCmds.push(cmd);
+          return '';
+        },
+      });
+      detectOsSystemProxy({
+        platform: 'darwin',
+        execFileSyncFn: (cmd) => {
+          seenCmds.push(cmd);
+          return '';
+        },
+      });
+      await detectOsSystemProxyAsync({
+        platform: 'win32',
+        execFileAsyncFn: async (cmd) => {
+          seenCmds.push(cmd);
+          return '';
+        },
+      });
+      await detectOsSystemProxyAsync({
+        platform: 'darwin',
+        execFileAsyncFn: async (cmd) => {
+          seenCmds.push(cmd);
+          return '';
+        },
+      });
+      assert.deepEqual(seenCmds, [expectedWinReg, '/usr/sbin/scutil', expectedWinReg, '/usr/sbin/scutil']);
+    }
+  } finally {
+    for (const sock of activeSockets) {
+      try { sock.destroy(); } catch {}
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });

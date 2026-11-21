@@ -148,6 +148,7 @@
     out.omniModule = out.omniModule === 'off' || out.omniModule === false ? 'off' : 'on';
     out.sidebarStudio = out.sidebarStudio === 'on' || out.sidebarStudio === true ? 'on' : 'off';
     out.linkTarget = out.linkTarget === 'external' ? 'external' : 'builtin';
+    out.autoUpdate = out.autoUpdate === 'on' || out.autoUpdate === true ? 'on' : 'off';
     out.updateChannel = out.updateChannel === 'beta' ? 'beta' : 'stable';
 
     const rawLang = (out.language && out.language !== 'auto' ? out.language : '') || (out.lang && out.lang !== 'auto' ? out.lang : '');
@@ -178,7 +179,7 @@
     if ('contextMenu' in patch && typeof patch.contextMenu === 'string') {
       patch.contextMenu = patch.contextMenu !== 'off' && patch.contextMenu !== 'false';
     }
-    for (const k of ['telemetryModule', 'effortSliderModule', 'omniModule', 'sidebarStudio']) {
+    for (const k of ['telemetryModule', 'effortSliderModule', 'omniModule', 'sidebarStudio', 'autoUpdate']) {
       if (k in patch && typeof patch[k] === 'boolean') patch[k] = patch[k] ? 'on' : 'off';
     }
     return patch;
@@ -295,7 +296,7 @@
     if (key === 'sidebarRestyle' && 'sidebar' in base && !('sidebarRestyle' in base)) return ['sidebar', value ? 'on' : 'off'];
     if ((key === 'sidebarCompact' || key === 'smoothCaret' || key === 'contextMenu') && typeof base[key] === 'string') return [key, value ? 'on' : 'off'];
     if (key === 'language' && 'lang' in base && !('language' in base)) return ['lang', value];
-    if ((key === 'telemetryModule' || key === 'effortSliderModule' || key === 'omniModule' || key === 'sidebarStudio') && typeof value === 'boolean') {
+    if ((key === 'telemetryModule' || key === 'effortSliderModule' || key === 'omniModule' || key === 'sidebarStudio' || key === 'autoUpdate') && typeof value === 'boolean') {
       return [key, value ? 'on' : 'off'];
     }
     if (key === 'mascot') return ['mascot', base.mascot === 'dual' && value === 'crab' ? 'dual' : value];
@@ -3273,6 +3274,7 @@
           omniModule: getOmniMode(),
           linkTarget: getLinkTarget(),
           sidebarStudio: cfg.sidebarStudio === 'on' ? 'on' : 'off',
+          autoUpdate: cfg.autoUpdate === 'on' ? 'on' : 'off',
           updateChannel: cfg.updateChannel === 'beta' ? 'beta' : 'stable',
         },
         motionLevel: getMotionLevel(),
@@ -3349,6 +3351,14 @@
         ra(el, 'data-ag-cs-queued');
         ra(el, 'data-ag-cs-takeover');
         rp(el, 'margin-bottom');
+      });
+      qa(D, '[data-ag-row-stagger]').forEach((el) => {
+        ra(el, 'data-ag-row-stagger');
+        rp(el, '--ag-row-i');
+      });
+      qa(D, '.agy-overlay, .agy-fastpick, [data-testid="context-menu-popup"], [data-testid="context-menu-submenu-popup"], [data-ag-cs-overview-shell]').forEach((el) => {
+        rp(el, '--ag-origin-x');
+        rp(el, '--ag-origin-y');
       });
       for (const s of 'orch-active|model-overlay|aux-dual|overview-shell|conv-seat|vp-wrap|home-sheet|row-running|menu-open|auto-unfolded|outer-open|caustic|fiber-camp|sonar|stage-glide|liftoff-bubble|thought-streaming|spark-streaming|prism-cv|code-folded|bg-cmd-wrap|input-layer|hdr-open|rich-pre|glide-item'.split('|')) {
         const a = 'data-ag-cs-' + s;

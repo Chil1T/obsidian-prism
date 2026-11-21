@@ -2077,11 +2077,20 @@ function bootPrismWorkbench(INIT_STATE, I18N_TABLE) {
   }
 
   // ── Engine 3: HTML Responsive Sandbox & PDF Native Stream ─────────────────
+  // 严格核验目标资源确实为真实 PDF（文件后缀 .pdf 或后端确认 application/pdf），严禁显式 kind=pdf 绕过沙盒加载 HTML/SVG
+  function isVerifiedPdfResource() {
+    const cleanPath = String(state.path || '').split(/[?#]/)[0].trim().toLowerCase();
+    if (/\.(?:html?|xhtml|svg)$/i.test(cleanPath)) return false;
+    const mime = String(state.meta?.mime || '').split(';')[0].trim().toLowerCase();
+    if (mime) return mime === 'application/pdf';
+    return Boolean(cleanPath) && cleanPath.endsWith('.pdf');
+  }
+
   function mountHtmlOrPdfStage(isPdf) {
     toolsEl.replaceChildren();
     stageEl.replaceChildren();
 
-    if (isPdf) {
+    if (isPdf && isVerifiedPdfResource()) {
       const frame = el('iframe', 'wb-pdf-frame');
       frame.src = buildApiUrl('/stream');
       const btnReload = el('button', 'wb-btn', tr('reloadBtn'));
@@ -2568,6 +2577,9 @@ function bootPrismWorkbench(INIT_STATE, I18N_TABLE) {
         }
         if (state.kind === 'auto' || !state.kind) {
           state.kind = detectWorkbenchKind(state.path, meta.mime || '');
+        } else if (state.kind === 'pdf' && !isVerifiedPdfResource()) {
+          state.kind = detectWorkbenchKind(state.path, meta.mime || '');
+          if (state.kind === 'pdf') state.kind = 'text';
         }
         state.textBuffer = typeof meta.textSlice === 'string' ? meta.textSlice : '';
         state.truncated = Boolean(meta.truncated);
@@ -2576,10 +2588,16 @@ function bootPrismWorkbench(INIT_STATE, I18N_TABLE) {
         if (seq !== loadSeq) return;
         if (state.kind === 'auto' || !state.kind) {
           state.kind = detectWorkbenchKind(state.path, '');
+        } else if (state.kind === 'pdf' && !isVerifiedPdfResource()) {
+          state.kind = detectWorkbenchKind(state.path, '');
+          if (state.kind === 'pdf') state.kind = 'text';
         }
       }
     } else if (state.kind === 'auto' || !state.kind) {
       state.kind = state.rawContent.includes('<svg') ? 'mermaid' : detectWorkbenchKind(state.path, '');
+    } else if (state.kind === 'pdf' && !isVerifiedPdfResource()) {
+      state.kind = state.rawContent.includes('<svg') ? 'mermaid' : detectWorkbenchKind(state.path, state.meta?.mime || '');
+      if (state.kind === 'pdf') state.kind = 'text';
     }
 
     badgeEl.textContent = String(state.kind || 'FILE').toUpperCase();
@@ -2683,6 +2701,7 @@ function bootPrismWorkbench(INIT_STATE, I18N_TABLE) {
       }
       if (typeof d.path === 'string' && d.path !== state.path) {
         state.path = d.path;
+        state.meta = null;
         state.name = d.title || '';
         state.rawContent = '';
         state.sandboxUrl = '';

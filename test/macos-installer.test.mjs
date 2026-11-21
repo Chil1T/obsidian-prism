@@ -317,6 +317,47 @@ test('macOS Swift installer & LaunchAgent contracts enforce KeepAlive <true/>, n
   assert.ok(cdpSwift.includes('__fromFile'), 'macOS CdpClient marks file-driven config refresh with __fromFile');
   assert.ok(watcherSwift.includes('isTrustedMainFrameBinding'), 'macOS Watcher isolates privileged CDP bindings to top-level frame');
 
+  // Channel 5 (thought-translator on-demand injection) & stripForeignMount full-module destroy parity
+  assert.ok(cdpSwift.includes('static func shouldEnableThought('), 'macOS CdpClient implements shouldEnableThought');
+  assert.ok(cdpSwift.includes('static func buildThoughtExpression('), 'macOS CdpClient implements buildThoughtExpression');
+  assert.ok(cdpSwift.includes('static let thoughtRemoveExpression'), 'macOS CdpClient defines thoughtRemoveExpression');
+  assert.ok(cdpSwift.includes('vendor/thought-translator/thought-client.js'), 'macOS CdpClient loads thought-client.js');
+  assert.ok(cdpSwift.includes('vendor/thought-translator/thought-settings-ui.js'), 'macOS CdpClient loads thought-settings-ui.js');
+  assert.ok(cdpSwift.includes('resolveSafePluginFile'), 'macOS CdpClient validates thought asset paths safely');
+
+  const thoughtRemoveMatch = cdpSwift.match(/static let thoughtRemoveExpression:\s*String\s*=\s*"""\r?\n([\s\S]*?)\r?\n\s*"""/);
+  assert.ok(thoughtRemoveMatch, 'macOS CdpClient thoughtRemoveExpression literal must be parseable');
+  const swiftThoughtRemoveJs = thoughtRemoveMatch[1];
+  assert.doesNotThrow(() => new vm.Script(swiftThoughtRemoveJs), 'macOS thoughtRemoveExpression must be valid JS');
+  assert.ok(swiftThoughtRemoveJs.includes('window.__agPrismThought?.destroy?.()'));
+  assert.ok(swiftThoughtRemoveJs.includes('prism-thought-ai-config'));
+  assert.ok(swiftThoughtRemoveJs.includes('delete window.__agPrismThoughtSettingsUi'));
+
+  const stripMatch = cdpSwift.match(/const stripForeignMount = \(\) => \{[\s\S]*?sb\.append\("    \};\\n"\)/);
+  assert.ok(stripMatch, 'macOS CdpClient must define stripForeignMount');
+  const stripBlock = stripMatch[0];
+  for (const modDestroy of [
+    'window.__agPrismTelemetry?.destroy?.()',
+    'window.__agPrismEffortSlider?.destroy?.()',
+    'window.__agPrismThought?.destroy?.()',
+    'window.__agPrismOmni?.destroy?.()',
+    'window.__agPrismContextMenu?.destroy?.()',
+    'window.__agPrism?.destroy?.()',
+  ]) {
+    assert.ok(stripBlock.includes(modDestroy), `macOS stripForeignMount must destroy ${modDestroy}`);
+  }
+  assert.ok(stripBlock.includes('delete window.__agPrismOmni'), 'macOS stripForeignMount clears window.__agPrismOmni');
+  assert.ok(stripBlock.includes('delete window.__agPrism;'), 'macOS stripForeignMount clears window.__agPrism');
+
+  assert.ok(watcherSwift.includes('var thoughtScriptId: String?'), 'macOS Watcher tracks thoughtScriptId per page');
+  assert.ok(watcherSwift.includes('CdpHelper.shouldEnableThought('), 'macOS Watcher checks shouldEnableThought before injecting Channel 5');
+  assert.ok(watcherSwift.includes('CdpHelper.buildThoughtExpression('), 'macOS Watcher builds Channel 5 thought expression on demand');
+  assert.ok(watcherSwift.includes('CdpHelper.thoughtRemoveExpression'), 'macOS Watcher cleans up Channel 5 with thoughtRemoveExpression when disabled');
+  const stampMatch = watcherSwift.match(/private func computeDirStamp\(\)[\s\S]*?\n    \}/);
+  assert.ok(stampMatch, 'macOS Watcher defines computeDirStamp()');
+  assert.ok(stampMatch[0].includes('vendor/thought-translator/thought-client.js'), 'macOS Watcher computeDirStamp scans thought-client.js');
+  assert.ok(stampMatch[0].includes('vendor/thought-translator/thought-settings-ui.js'), 'macOS Watcher computeDirStamp scans thought-settings-ui.js');
+
   const buildMacosSrc = fs.readFileSync(path.join(ROOT_DIR, 'scripts', 'build-macos.mjs'), 'utf8');
   assert.ok(buildMacosSrc.includes('collectNativePluginEntries'), 'macOS app payload must bundle native-plugin Sidecar directory');
   assert.ok(buildMacosSrc.includes('collectOptionalOmniTopEntries'), 'macOS app payload must bundle top-level omni-client.js');

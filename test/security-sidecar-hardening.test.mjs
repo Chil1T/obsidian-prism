@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import EventEmitter from 'node:events';
 import fs from 'node:fs';
+import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -1007,6 +1008,10 @@ test('security-sidecar 5: inject.js isolates injectOnce errors (preserving Chann
       reconcileConfigAliases: (patch) => patch,
       isEligibleTarget: () => true,
       readConfig: () => ({ ...configState }),
+      writeConfig: (next) => {
+        configState = { ...next };
+        writtenFiles.set('/mock/config.json', JSON.stringify(next, null, 2) + '\n');
+      },
       readPidFromLockFile: () => null,
       isExpectedDaemonProcess: () => false,
       readPort: () => 9222,
@@ -1266,6 +1271,339 @@ test('security-sidecar 5: inject.js isolates injectOnce errors (preserving Chann
       s2.sent.filter((c) => c.method === 'Runtime.addBinding' && c.params?.name === '__agPrismSidebarCall').length,
       1,
       'apply() during hot reload must dynamically register SIDEBAR_BINDING on previously off windows'
+    );
+  }
+});
+
+test('security-sidecar 6: red-team hardening for NT device/mixed-slash UNC whitelist, sidebar-service decoupling, /stream active-doc CSP, kind=pdf sandbox bypass defense & Win32 updater cwd', async (t) => {
+  const { OmniServer, isBlockedUncPath: omniIsBlockedUncPath } = await importRel('vendor/omni-viewer/omni-server.mjs');
+  const { renderWorkbenchHtml } = await importRel('vendor/omni-viewer/workbench-page.mjs');
+  const { SidebarStudioService, isBlockedUncPath: sidebarIsBlockedUncPath } = await importRel('vendor/sidebar-studio/sidebar-service.mjs');
+  const { UpdateService } = await importRel('sidecars/daemon/update-service.mjs');
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-sec-redteam6-'));
+  t.after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  // 1) Strict UNC / NT device whitelist & mixed-slash blocking in BOTH omni-server and decoupled sidebar-service
+  const sidebarSrc = fs.readFileSync(path.join(ROOT, 'vendor', 'sidebar-studio', 'sidebar-service.mjs'), 'utf8');
+  assert.equal(
+    /omni-viewer\/omni-server\.mjs/.test(sidebarSrc),
+    false,
+    'sidebar-service.mjs must inline isBlockedUncPath and never import ../omni-viewer/omni-server.mjs'
+  );
+
+  const blockedBypassPaths = [
+    '\\\\?\\GLOBALROOT\\Device\\LanmanRedirector\\evil.invalid\\share\\a.txt',
+    '\\\\?\\GLOBALROOT\\Device\\WebDavRedirector\\evil.invalid\\share\\a.txt',
+    '\\\\?\\GLOBALROOT\\Device\\Mup\\evil.invalid\\share\\a.txt',
+    '\\\\?\\GLOBALROOT\\Device\\Mup\\;LanmanRedirector\\;Z:0\\evil.invalid\\share',
+    '//?/GLOBALROOT/Device/LanmanRedirector/evil.invalid/share/a.txt',
+    '\\\\.\\Device\\Mup\\evil.invalid\\share',
+    '\\\\.\\pipe\\malicious',
+    '/\\evil.invalid\\share\\a.txt',
+    '\\/evil.invalid/share/a.txt',
+    '/\\?\\GLOBALROOT\\Device\\LanmanRedirector\\evil.invalid\\share',
+    'file:///\\evil.invalid\\share\\a.txt',
+  ];
+  for (const p of blockedBypassPaths) {
+    assert.equal(omniIsBlockedUncPath(p), true, `omni-server must block NT device / mixed-slash UNC: ${p}`);
+    assert.equal(sidebarIsBlockedUncPath(p), true, `sidebar-service must block NT device / mixed-slash UNC: ${p}`);
+  }
+
+  const allowedWhitelistPaths = [
+    '\\\\?\\C:\\Users\\demo\\notes.md',
+    '\\\\?\\GLOBAL\\UNC\\localhost\\share\\a.txt',
+    '\\\\?\\GLOBAL\\UNC\\127.0.0.1\\share\\a.txt',
+    '\\\\?\\GLOBAL\\UNC\\wsl.localhost\\Ubuntu\\home\\a.txt',
+    '\\\\?\\GLOBAL\\UNC\\wsl$\\Ubuntu\\home\\a.txt',
+    '\\\\?\\UNC\\localhost\\share\\a.txt',
+    'C:\\Users\\demo\\notes.md',
+  ];
+  for (const p of allowedWhitelistPaths) {
+    assert.equal(omniIsBlockedUncPath(p), false, `omni-server must allow local whitelist path: ${p}`);
+    assert.equal(sidebarIsBlockedUncPath(p), false, `sidebar-service must allow local whitelist path: ${p}`);
+  }
+
+  // 2) sidebar-service pickFolder & revealFolder must reject mixed-slash / NT device paths BEFORE fs.realpathSync
+  {
+    let capturedPickEnv = null;
+    const sbSvc = new SidebarStudioService({
+      statePath: path.join(tmpDir, 'sidebar-decoupled.json'),
+      sandboxMode: false,
+      execFile: async (_cmd, _args, opts) => {
+        capturedPickEnv = opts?.env || null;
+        return { stdout: '' };
+      },
+    });
+    t.after(async () => {
+      await sbSvc.dispose();
+    });
+
+    const origRealpathSync = fs.realpathSync;
+    let realpathHits = 0;
+    fs.realpathSync = (...args) => {
+      realpathHits += 1;
+      return origRealpathSync.apply(fs, args);
+    };
+    try {
+      for (const badPath of [
+        '/\\remote.invalid\\share',
+        '\\/remote.invalid/share',
+        '\\\\?\\GLOBALROOT\\Device\\LanmanRedirector\\remote.invalid\\share',
+        '\\\\?\\GLOBALROOT\\Device\\WebDavRedirector\\remote.invalid\\share',
+        '\\\\?\\GLOBALROOT\\Device\\Mup\\remote.invalid\\share',
+      ]) {
+        const rev = await sbSvc.revealFolder({ path: badPath });
+        assert.equal(rev.ok, false, `revealFolder must reject ${badPath}`);
+        const pick = await sbSvc.pickFolder({ initialDir: badPath });
+        assert.equal(pick.ok, true);
+        assert.equal(capturedPickEnv?.AG_PRISM_PICK_INIT_DIR, '', `pickFolder must strip blocked initialDir ${badPath}`);
+      }
+      assert.equal(
+        realpathHits,
+        0,
+        'pickFolder & revealFolder must block mixed-slash and NT device paths BEFORE invoking fs.realpathSync'
+      );
+    } finally {
+      fs.realpathSync = origRealpathSync;
+    }
+  }
+
+  // 3) OmniServer /stream attaches strict sandbox CSP for non-sandbox .html/.htm/.xhtml/.svg (and NOT for /sandbox/ or .pdf)
+  {
+    const omni = new OmniServer({ rootDir: tmpDir });
+    t.after(async () => {
+      await omni.stop();
+    });
+    const info = await omni.start();
+
+    const httpGet = (urlStr) =>
+      new Promise((resolve, reject) => {
+        http
+          .get(urlStr, (res) => {
+            const chunks = [];
+            res.on('data', (c) => chunks.push(c));
+            res.on('end', () =>
+              resolve({
+                statusCode: res.statusCode,
+                headers: res.headers,
+                body: Buffer.concat(chunks).toString('utf8'),
+              })
+            );
+          })
+          .on('error', reject);
+      });
+
+    const expectedCsp = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+    for (const [name, content] of [
+      ['page.html', '<html><body><script>alert(1)</script></body></html>'],
+      ['page.htm', '<html><body>htm</body></html>'],
+      ['page.xhtml', '<html xmlns="http://www.w3.org/1999/xhtml"><body>xhtml</body></html>'],
+      ['vec.svg', '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'],
+    ]) {
+      const f = path.join(tmpDir, name);
+      fs.writeFileSync(f, content, 'utf8');
+      const r = await httpGet(`${info.baseUrl}/stream?token=${info.token}&path=${encodeURIComponent(f)}`);
+      assert.equal(r.statusCode, 200);
+      assert.equal(
+        r.headers['content-security-policy'],
+        expectedCsp,
+        `/stream must attach strict sandbox CSP header for ${name}`
+      );
+    }
+
+    const pdfFile = path.join(tmpDir, 'sample.pdf');
+    fs.writeFileSync(pdfFile, '%PDF-1.4\n%%EOF\n', 'utf8');
+    const pdfRes = await httpGet(`${info.baseUrl}/stream?token=${info.token}&path=${encodeURIComponent(pdfFile)}`);
+    assert.equal(pdfRes.statusCode, 200);
+    assert.equal(pdfRes.headers['content-security-policy'], undefined, '/stream for .pdf must not force sandbox CSP');
+
+    // Sandbox HTML route (/sandbox/<tok>/<mountId>/page.html) must keep normal interactive preview without default-src none
+    const htmlFile = path.join(tmpDir, 'page.html');
+    const initResp = await httpGet(`${info.baseUrl}/sandbox-init?token=${info.token}&path=${encodeURIComponent(htmlFile)}`);
+    assert.equal(initResp.statusCode, 200);
+    const initJson = JSON.parse(initResp.body);
+    const sbResp = await httpGet(initJson.sandboxUrl);
+    assert.equal(sbResp.statusCode, 200);
+    assert.equal(sbResp.headers['content-security-policy'], undefined, 'Isolated /sandbox/ HTML must not set default-src none CSP');
+  }
+
+  // 4) Workbench kind=pdf must NEVER render unsandboxed .wb-pdf-frame for .html or .svg
+  {
+    // 4A) kind=pdf pointing at .html -> downgraded to sandboxed HTML via /sandbox-init
+    const fetchedHtml = [];
+    const htmlPage = renderWorkbenchHtml({
+      kind: 'pdf',
+      path: '/tmp/evil.html',
+      baseUrl: 'http://127.0.0.1:43210',
+      token: 'tok-master',
+      lang: 'en',
+    });
+    const htmlScript = extractInlineWorkbenchScript(htmlPage);
+    const domHtml = createWorkbenchMockDom({
+      fetchImpl: async (url) => {
+        const s = String(url);
+        fetchedHtml.push(s);
+        if (s.includes('/meta')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ ok: true, kind: 'html', size: 64, mime: 'text/html', textSlice: '<script>steal()</script>' }),
+          };
+        }
+        if (s.includes('/sandbox-init')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ ok: true, url: 'http://127.0.0.1:43210/sandbox/scoped/m1/evil.html' }),
+          };
+        }
+        throw new Error(`Unexpected fetch URL: ${s}`);
+      },
+    });
+    vm.runInNewContext(htmlScript, domHtml.win, { filename: 'wb-kind-pdf-html.js' });
+    await flushAsync(40);
+    assert.equal(domHtml.stage.querySelector('.wb-pdf-frame'), null, 'kind=pdf must NEVER mount unsandboxed .wb-pdf-frame for .html');
+    const sbFrame = domHtml.stage.querySelector('.wb-sandbox-frame');
+    assert.ok(sbFrame, 'kind=pdf with .html must fall back to sandboxed HTML iframe');
+    assert.ok(String(sbFrame.getAttribute('sandbox') || '').includes('allow-scripts'));
+    assert.ok(fetchedHtml.some((u) => u.includes('/sandbox-init')));
+
+    // 4B) kind=pdf pointing at .svg -> downgraded to sanitized SVG stage (zero .wb-pdf-frame)
+    const svgPage = renderWorkbenchHtml({
+      kind: 'pdf',
+      path: '/tmp/evil.svg',
+      baseUrl: 'http://127.0.0.1:43210',
+      token: 'tok-master',
+      lang: 'en',
+    });
+    const svgScript = extractInlineWorkbenchScript(svgPage);
+    const domSvg = createWorkbenchMockDom({
+      fetchImpl: async (url) => {
+        const s = String(url);
+        if (s.includes('/meta')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              ok: true,
+              kind: 'svg',
+              size: 80,
+              mime: 'image/svg+xml',
+              textSlice: '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><circle r="5"/></svg>',
+            }),
+          };
+        }
+        return { ok: false, status: 404 };
+      },
+    });
+    vm.runInNewContext(svgScript, domSvg.win, { filename: 'wb-kind-pdf-svg.js' });
+    await flushAsync(40);
+    assert.equal(domSvg.stage.querySelector('.wb-pdf-frame'), null, 'kind=pdf must NEVER mount unsandboxed .wb-pdf-frame for .svg');
+    assert.equal(domSvg.stage.querySelector('script'), null, 'Downgraded SVG must sanitize inline <script>');
+    assert.ok(domSvg.stage.querySelector('circle'), 'Downgraded SVG must render sanitized vector elements');
+
+    // 4C) kind=pdf pointing at .html when /meta fails -> still must NEVER mount .wb-pdf-frame
+    const errPage = renderWorkbenchHtml({
+      kind: 'pdf',
+      path: '/tmp/offline-evil.html',
+      baseUrl: 'http://127.0.0.1:43210',
+      token: 'tok-master',
+      lang: 'en',
+    });
+    const errScript = extractInlineWorkbenchScript(errPage);
+    const domErr = createWorkbenchMockDom({
+      fetchImpl: async () => {
+        throw new Error('network error');
+      },
+    });
+    vm.runInNewContext(errScript, domErr.win, { filename: 'wb-kind-pdf-offline.js' });
+    await flushAsync(40);
+    assert.equal(domErr.stage.querySelector('.wb-pdf-frame'), null, 'kind=pdf with .html must NEVER mount .wb-pdf-frame even if /meta fails');
+
+    // 4D) Legitimate .pdf + application/pdf continues to mount native .wb-pdf-frame
+    const realPdfPage = renderWorkbenchHtml({
+      kind: 'pdf',
+      path: '/tmp/spec.pdf',
+      baseUrl: 'http://127.0.0.1:43210',
+      token: 'tok-master',
+      lang: 'en',
+    });
+    const realPdfScript = extractInlineWorkbenchScript(realPdfPage);
+    const domRealPdf = createWorkbenchMockDom({
+      fetchImpl: async (url) => {
+        if (String(url).includes('/meta')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ ok: true, kind: 'pdf', size: 1024, mime: 'application/pdf' }),
+          };
+        }
+        return { ok: false, status: 404 };
+      },
+    });
+    vm.runInNewContext(realPdfScript, domRealPdf.win, { filename: 'wb-real-pdf.js' });
+    await flushAsync(40);
+    const pdfFrame = domRealPdf.stage.querySelector('.wb-pdf-frame');
+    assert.ok(pdfFrame, 'Verified .pdf with application/pdf must still render native .wb-pdf-frame');
+    assert.ok(String(pdfFrame.src || '').includes('/stream'));
+  }
+
+  // 5) UpdateService on Win32 spawns installer with cwd set to System32 (never writable tmpRoot)
+  {
+    const updRoot = fs.mkdtempSync(path.join(tmpDir, 'upd-cwd-'));
+    const payload = Buffer.from('MZ-installer-cwd-check');
+    const sha = crypto.createHash('sha256').update(payload).digest('hex');
+    let capturedSpawnOpts = null;
+    const fakeChild = new EventEmitter();
+    fakeChild.unref = () => {};
+
+    const updSvc = new UpdateService({
+      currentVersion: '1.0.6',
+      platform: 'win32',
+      tmpRoot: updRoot,
+      fetchFn: async (url) => {
+        if (String(url).includes('/releases/latest')) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Map(),
+            json: async () => ({
+              tag_name: 'v1.0.7',
+              draft: false,
+              prerelease: false,
+              html_url: 'https://github.com/RMvdesi/obsidian-prism/releases/tag/v1.0.7',
+              assets: [
+                {
+                  name: 'obsidian-prism-installer.exe',
+                  browser_download_url: 'https://github.com/RMvdesi/obsidian-prism/releases/download/v1.0.7/obsidian-prism-installer.exe',
+                  digest: `sha256:${sha}`,
+                },
+              ],
+            }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Map(),
+          arrayBuffer: async () => payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength),
+        };
+      },
+      spawnFn: (_exe, _args, opts) => {
+        capturedSpawnOpts = opts;
+        return fakeChild;
+      },
+    });
+
+    const applyRes = await updSvc.applyReleaseUpdate({ confirm: true });
+    assert.equal(applyRes.ok, true);
+    assert.equal(
+      capturedSpawnOpts?.cwd,
+      path.join(process.env.SystemRoot || 'C:\\Windows', 'System32'),
+      'Win32 installer spawn must use System32 as cwd to prevent DLL preloading from TEMP'
     );
   }
 });

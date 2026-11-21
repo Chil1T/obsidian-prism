@@ -157,7 +157,7 @@
     return out;
   }
 
-  function computeConvAuraOptics(phase, phaseAt, now, dark, wasRunning, out = OPTICS_BUF) {
+  function computeConvAuraOptics(phase, phaseAt, now, dark, wasRunning, out = {}) {
     const idleStr = dark ? 0.21 : 0.52;
     const runBase = dark ? 0.31 : 0.64;
     const idlePrism = dark ? 0.14 : 0.26;
@@ -827,7 +827,7 @@
         const dark = isDarkTheme();
         const spectrum = resolveSpectrum();
 
-        let opt = computeConvAuraOptics(phase, state.phaseAt, now, dark, state.wasRunning);
+        let opt = computeConvAuraOptics(phase, state.phaseAt, now, dark, state.wasRunning, OPTICS_BUF);
         if (inLiftoffEbb) {
           const p = Math.max(0, Math.min(1, liftElapsed / 520));
           const ease = 1 - Math.pow(1 - p, 2.25);
@@ -913,7 +913,7 @@
           state.phase = 'idle';
           state.phaseAt = now - CONV_AURA_IDLE_SLEEP_MS;
           setAttrIfChanged(host, 'data-aura-phase', 'idle');
-          const idleSnapOpt = computeConvAuraOptics('idle', state.phaseAt, now, dark, false);
+          const idleSnapOpt = computeConvAuraOptics('idle', state.phaseAt, now, dark, false, OPTICS_BUF);
           state.lastOptics = idleSnapOpt;
           paint(idleSnapOpt, true);
           return enterAuraSleep();

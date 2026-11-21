@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import vm from 'node:vm';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -310,18 +311,48 @@ test('Wave3 P1-6b & P2-7a: Channel 2~5 share .bundle-cache.json, detect same-len
       assert.match(parsed.channels[ch].payloadSha256, /^[0-9a-f]{64}$/);
     }
 
-    // 2) Fresh cold reload hits all 5 channels byte-identically with 0 channel compilation
+    // 2) Fresh cold reload hits all 5 channels byte-identically with 0 channel compilation and ONLY 1 readFileSync + 1 JSON.parse
+    const origReadFileSync = fs.readFileSync;
+    const origJsonParse = JSON.parse;
+    const resolvedCachePath = path.resolve(cachePath);
+    let cacheFileReads = 0;
+    let cacheJsonParses = 0;
     const cdpHit = loadFreshCdp(snap.cdpPath);
-    const ch1Hit = cdpHit.buildInjectExpression(cdpHit.DEFAULT_CONFIG, { cachePath });
-    assert.equal(ch1Hit, ch1Cold);
+    let ch1Hit;
+    let omniHit;
+    let sidebarHit;
+    let hostI18nHit;
+    let thoughtHit;
+    let hitMs = 0;
+    fs.readFileSync = function spyCacheRead(p, ...rest) {
+      if (typeof p === 'string' && path.resolve(p) === resolvedCachePath) {
+        cacheFileReads += 1;
+      }
+      return origReadFileSync.call(this, p, ...rest);
+    };
+    JSON.parse = function spyJsonParse(text, ...rest) {
+      if (typeof text === 'string' && text.includes('"schemaVersion"') && text.includes('"basePrefix"')) {
+        cacheJsonParses += 1;
+      }
+      return origJsonParse.call(this, text, ...rest);
+    };
+    try {
+      ch1Hit = cdpHit.buildInjectExpression(cdpHit.DEFAULT_CONFIG, { cachePath });
+      assert.equal(ch1Hit, ch1Cold);
 
-    const tHit0 = performance.now();
-    const omniHit = cdpHit.buildOmniClientExpression({ baseUrl: 'http://127.0.0.1:43123', token: 't1' }, null, { cachePath });
-    const sidebarHit = cdpHit.buildSidebarStudioExpression({ binding: '__agPrismSidebarCall' }, null, { cachePath });
-    const hostI18nHit = cdpHit.buildHostI18nExpression({ ...cdpHit.DEFAULT_CONFIG, hostLocalization: 'on' }, null, { cachePath });
-    const thoughtHit = cdpHit.buildThoughtExpression({ ...cdpHit.DEFAULT_CONFIG, thoughtTranslate: 'ai' }, { cachePath });
-    const hitMs = performance.now() - tHit0;
+      const tHit0 = performance.now();
+      omniHit = cdpHit.buildOmniClientExpression({ baseUrl: 'http://127.0.0.1:43123', token: 't1' }, null, { cachePath });
+      sidebarHit = cdpHit.buildSidebarStudioExpression({ binding: '__agPrismSidebarCall' }, null, { cachePath });
+      hostI18nHit = cdpHit.buildHostI18nExpression({ ...cdpHit.DEFAULT_CONFIG, hostLocalization: 'on' }, null, { cachePath });
+      thoughtHit = cdpHit.buildThoughtExpression({ ...cdpHit.DEFAULT_CONFIG, thoughtTranslate: 'ai' }, { cachePath });
+      hitMs = performance.now() - tHit0;
+    } finally {
+      fs.readFileSync = origReadFileSync;
+      JSON.parse = origJsonParse;
+    }
 
+    assert.equal(cacheFileReads, 1, '5-channel cold reload must execute fs.readFileSync on .bundle-cache.json exactly once');
+    assert.equal(cacheJsonParses, 1, '5-channel cold reload must execute JSON.parse on .bundle-cache.json exactly once');
     assert.equal(omniHit, omniCold);
     assert.equal(sidebarHit, sidebarCold);
     assert.equal(hostI18nHit, hostI18nCold);
@@ -931,5 +962,132 @@ test('Wave3 P2-6a & P2-6b: discoverLocalConversations bounded concurrency + mtim
     assert.deepEqual(asyncInline, syncInline);
   } finally {
     fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test('Audit P0-1, P1-4c & P1-5b: inject.js equal-length config write invalidates readConfig cache, autoUpdate boolean normalization, and REMOVE_EXPRESSION fallback cleanup', async () => {
+  const snap = await createIsolatedPlugin('prism-audit-fix-');
+  const injectPath = path.join(snap.pluginDir, 'inject.js');
+  try {
+    const cdp = loadFreshCdp(snap.cdpPath);
+    delete require.cache[require.resolve(injectPath)];
+    const injectMod = require(injectPath);
+
+    // 1) P0-1: inject.js updateConfigBatch uses cdp.writeConfig (atomic replace + invalidateConfigCache)
+    cdp.writeConfig({ ...cdp.DEFAULT_CONFIG, palette: 'warm' });
+    assert.equal(cdp.readConfig().palette, 'warm');
+
+    // Same-millisecond, EXACT same byte-length update ('warm' -> 'host') must NOT read stale cached config
+    assert.equal(injectMod.updateConfigBatch({ palette: 'host' }), true);
+    assert.equal(cdp.readConfig().palette, 'host', 'inject.js updateConfigBatch must immediately invalidate readConfig cache');
+
+    assert.equal(injectMod.updateConfigSetting('palette', 'warm'), true);
+    assert.equal(cdp.readConfig().palette, 'warm', 'inject.js updateConfigSetting must immediately invalidate readConfig cache');
+
+    const strayConfigTmps = fs
+      .readdirSync(snap.pluginDir)
+      .filter((n) => n.startsWith('.config.json.') && n.endsWith('.tmp'));
+    assert.deepEqual(strayConfigTmps, [], 'Atomic writeConfig must leave zero temporary config files');
+
+    // 2) P1-5b: reconcileConfigAliases aligns boolean autoUpdate & module toggles to 'on'/'off'
+    assert.equal(cdp.reconcileConfigAliases({ autoUpdate: true }).autoUpdate, 'on');
+    assert.equal(cdp.reconcileConfigAliases({ autoUpdate: false }).autoUpdate, 'off');
+    assert.equal(cdp.reconcileConfigAliases({ autoUpdate: 'on' }).autoUpdate, 'on');
+    assert.equal(cdp.reconcileConfigAliases({ autoUpdate: 'off' }).autoUpdate, 'off');
+    assert.equal(cdp.reconcileConfigAliases({ omniModule: false }).omniModule, 'off');
+    assert.equal(cdp.reconcileConfigAliases({ sidebarStudio: true }).sidebarStudio, 'on');
+    assert.equal(cdp.reconcileConfigAliases({ telemetryModule: true }).telemetryModule, 'on');
+    assert.equal(cdp.reconcileConfigAliases({ effortSliderModule: false }).effortSliderModule, 'off');
+
+    cdp.writeConfig({ ...cdp.DEFAULT_CONFIG, autoUpdate: true });
+    assert.equal(cdp.readConfig().autoUpdate, 'on');
+
+    // 3) P1-4c: REMOVE_EXPRESSION removes root drag/resize attrs, element attrs, and --ag-row-i / --ag-origin-* inline styles
+    const makeEl = (tag, attrs = {}, styles = {}) => {
+      const attrMap = new Map(Object.entries(attrs));
+      const styleMap = new Map(Object.entries(styles));
+      return {
+        tagName: tag.toUpperCase(),
+        attributes: [],
+        classList: {
+          length: 0,
+          remove() {},
+        },
+        style: {
+          setProperty(k, v) { styleMap.set(k, String(v)); },
+          getPropertyValue(k) { return styleMap.get(k) || ''; },
+          removeProperty(k) { styleMap.delete(k); },
+        },
+        getAttribute(k) { return attrMap.has(k) ? attrMap.get(k) : null; },
+        hasAttribute(k) { return attrMap.has(k); },
+        setAttribute(k, v) { attrMap.set(k, String(v)); },
+        removeAttribute(k) { attrMap.delete(k); },
+        querySelectorAll() { return []; },
+        remove() {},
+      };
+    };
+
+    const rootEl = makeEl('html', {
+      'data-ag-prism': cdp.PLUGIN_VERSION,
+      'data-ag-cs-resizing': '1',
+      'data-ag-cs-mascot-drag': '1',
+      'data-ag-cs-win-blur': '1',
+    });
+    const rowRunningEl = makeEl('div', { 'data-ag-cs-row-running': '1' });
+    const rowStaggerEl = makeEl('div', { 'data-ag-row-stagger': '1' }, { '--ag-row-i': '4' });
+    const overviewShellEl = makeEl(
+      'div',
+      { 'data-ag-cs-overview-shell': '1' },
+      { '--ag-origin-x': '120px', '--ag-origin-y': '48px' }
+    );
+    const orchBtnEl = makeEl('button', { 'data-ces-orch-b': 'claude', 'data-ces-model-selected': '1' });
+    const orchPanelEl = makeEl('div', { 'data-ces-orch-tunable': 'true' });
+    const allEls = [rowRunningEl, rowStaggerEl, overviewShellEl, orchBtnEl, orchPanelEl];
+
+    const matchesSingleAttr = (el, sel) => {
+      const m = /^\[([a-z0-9-]+)(?:="([^"]*)")?\]$/i.exec(sel.trim());
+      if (!m) return false;
+      const [, attr, expectedVal] = m;
+      if (!el.hasAttribute(attr)) return false;
+      return expectedVal === undefined ? true : el.getAttribute(attr) === expectedVal;
+    };
+
+    const mockDoc = {
+      documentElement: rootEl,
+      getElementById() { return null; },
+      querySelector() { return null; },
+      querySelectorAll(sel) {
+        return allEls.filter((el) => matchesSingleAttr(el, sel));
+      },
+    };
+    const sandbox = {
+      document: mockDoc,
+      window: {},
+      globalThis: {},
+      CSS: undefined,
+    };
+    sandbox.window = sandbox;
+    sandbox.globalThis = sandbox;
+
+    const removeRes = vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
+    assert.equal(typeof removeRes?.removed, 'number');
+
+    assert.equal(rootEl.hasAttribute('data-ag-cs-resizing'), false, 'REMOVE_EXPRESSION must strip data-ag-cs-resizing');
+    assert.equal(rootEl.hasAttribute('data-ag-cs-mascot-drag'), false, 'REMOVE_EXPRESSION must strip data-ag-cs-mascot-drag');
+    assert.equal(rootEl.hasAttribute('data-ag-cs-win-blur'), false);
+    assert.equal(rowRunningEl.hasAttribute('data-ag-cs-row-running'), false, 'REMOVE_EXPRESSION must strip data-ag-cs-row-running');
+    assert.equal(rowStaggerEl.hasAttribute('data-ag-row-stagger'), false, 'REMOVE_EXPRESSION must strip data-ag-row-stagger');
+    assert.equal(rowStaggerEl.style.getPropertyValue('--ag-row-i'), '', 'REMOVE_EXPRESSION must clear inline --ag-row-i');
+    assert.equal(overviewShellEl.hasAttribute('data-ag-cs-overview-shell'), false, 'REMOVE_EXPRESSION must strip data-ag-cs-overview-shell');
+    assert.equal(overviewShellEl.style.getPropertyValue('--ag-origin-x'), '', 'REMOVE_EXPRESSION must clear inline --ag-origin-x');
+    assert.equal(overviewShellEl.style.getPropertyValue('--ag-origin-y'), '', 'REMOVE_EXPRESSION must clear inline --ag-origin-y');
+    assert.equal(orchBtnEl.hasAttribute('data-ces-orch-b'), false, 'REMOVE_EXPRESSION must strip data-ces-orch-b');
+    assert.equal(orchBtnEl.hasAttribute('data-ces-model-selected'), false, 'REMOVE_EXPRESSION must strip data-ces-model-selected');
+    assert.equal(orchPanelEl.hasAttribute('data-ces-orch-tunable'), false, 'REMOVE_EXPRESSION must strip data-ces-orch-tunable');
+  } finally {
+    try {
+      delete require.cache[require.resolve(injectPath)];
+    } catch {}
+    snap.cleanup();
   }
 });

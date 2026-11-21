@@ -575,15 +575,22 @@ test('Wave 3 P1-1c & P2-4 conv-aura: park() releases VRAM & sync() restores clea
   sb.globalThis = sb;
   vm.runInNewContext(src, sb);
 
-  // P2-4a: computeConvAuraOptics reuses static buffer across all phases
+  // P2-4a: computeConvAuraOptics isolates default callers (out={}) and reuses caller-supplied out buffer with zero GC
   const api = sb.__agPrismConvAura;
-  const oRun = api.computeConvAuraOptics('running', 1000, 1200, true, true);
+  const isoA = api.computeConvAuraOptics('running', 1000, 1200, true, true);
+  const isoB = api.computeConvAuraOptics('idle', 1000, 1400, true, false);
+  assert.notEqual(isoA, isoB, 'default computeConvAuraOptics call must not mutate previous caller snapshot');
+  assert.equal(isoA.semantic, 'none');
+  assert.equal(isoB.frameMs, 110);
+  const sharedBuf = {};
+  const oRun = api.computeConvAuraOptics('running', 1000, 1200, true, true, sharedBuf);
+  assert.equal(oRun, sharedBuf);
   assert.equal(oRun.semantic, 'none');
-  const oIdle = api.computeConvAuraOptics('idle', 1000, 1400, true, false);
-  assert.equal(oRun, oIdle, 'computeConvAuraOptics must reuse static buffer object');
+  const oIdle = api.computeConvAuraOptics('idle', 1000, 1400, true, false, sharedBuf);
+  assert.equal(oIdle, sharedBuf, 'computeConvAuraOptics must reuse explicit out buffer object');
   assert.equal(oIdle.frameMs, 110);
-  const oDec = api.computeConvAuraOptics('awaiting-decision', 1000, 1300, false, false);
-  assert.equal(oDec, oRun);
+  const oDec = api.computeConvAuraOptics('awaiting-decision', 1000, 1300, false, false, sharedBuf);
+  assert.equal(oDec, sharedBuf);
   assert.equal(oDec.semantic, 'awaiting-decision');
 
   // P2-4b: invokeConvGlowDraw reuses extra buffer across running frames & clears spectrum when undefined

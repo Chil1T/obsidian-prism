@@ -17,6 +17,7 @@ const {
   reconcileConfigAliases,
   isEligibleTarget,
   readConfig,
+  writeConfig,
   readPidFromLockFile,
   isExpectedDaemonProcess,
   readPort,
@@ -94,7 +95,7 @@ function updateConfigBatch(entriesObj) {
   if (count === 0) return false;
   const reconciledPatch = typeof reconcileConfigAliases === 'function' ? reconcileConfigAliases(patch) : patch;
   const next = { ...readConfig(), ...reconciledPatch };
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+  writeConfig(next);
   return true;
 }
 
@@ -790,6 +791,8 @@ async function watch() {
 module.exports = {
   injectOnce,
   watch,
+  updateConfigBatch,
+  updateConfigSetting,
 };
 
 if (require.main === module) {

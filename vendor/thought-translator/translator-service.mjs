@@ -12,7 +12,7 @@ import https from 'node:https';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { Readable } from 'node:stream';
+import { Readable, Transform } from 'node:stream';
 import tls from 'node:tls';
 import zlib from 'node:zlib';
 
@@ -78,7 +78,7 @@ export function normalizeTargetLang(lang) {
 const KEY_REDACT_RE =
   /(sk-[A-Za-z0-9_\-]{6,}|gsk_[A-Za-z0-9_\-]{12,}|hf_[A-Za-z0-9_\-]{12,}|pplx-[A-Za-z0-9_\-]{12,}|csk-[A-Za-z0-9_\-]{12,}|nvapi-[A-Za-z0-9_\-]{12,}|AIza[A-Za-z0-9_\-]{12,}|xai-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+[A-Za-z0-9._\-:+/=]{6,}|(?:Proxy-)?Authorization\s*:\s*Basic\s+[A-Za-z0-9+/=]{4,})/gi;
 const URL_KEY_PARAM_RE = /([?&](?:api_key|apikey|key|token|access_token)=)[^&\s"'<>]+/gi;
-const URL_USERINFO_PASS_RE = /(https?:\/\/[^:@\s/"'<>]+:)[^@\s/"'<>]+@/gi;
+const URL_USERINFO_PASS_RE = /(https?:\/\/)[^@\s/"'<>]+@/gi;
 
 const BLOCKED_AI_PORTS = new Set([
   21, 22, 23, 25, 53, 110, 135, 139, 143, 445, 1433, 3306, 3389, 5432, 6379, 11211, 27017,
@@ -280,6 +280,7 @@ export function normalizeOpenAiBaseUrl(rawUrl) {
 
 export const MAX_CONCURRENCY = 3;
 export const MAX_STREAM_CHARS = 96000;
+export const MAX_STREAM_BYTES = 8 * 1024 * 1024;
 
 export function isKeylessAllowedEndpoint(rawUrl) {
   const raw = String(rawUrl || '').trim();
@@ -591,6 +592,7 @@ export function shouldBypassProxy(targetUrl, bypassEntries = []) {
 
   const list = parseNoProxyList(bypassEntries);
   for (const rawEntry of list) {
+    if (!rawEntry || rawEntry.length > 256) continue;
     const pat = rawEntry.toLowerCase();
     if (!pat) continue;
     if (pat === '*') return true;
@@ -606,7 +608,7 @@ export function shouldBypassProxy(targetUrl, bypassEntries = []) {
     const ruleHost = rawRuleHost.replace(/^\[|\]$/g, '').replace(/\.$/, '');
     if (!ruleHost) continue;
     if (ruleHost.includes('*')) {
-      const escaped = ruleHost.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+      const escaped = ruleHost.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*+/g, '.*');
       if (new RegExp(`^${escaped}$`, 'i').test(host)) return true;
       continue;
     }
@@ -743,15 +745,16 @@ export function detectOsSystemProxy(opts = {}) {
   const empty = { enabled: false, http: null, https: null, bypass: [] };
   try {
     if (platform === 'win32') {
+      const regExe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'reg.exe');
       const raw = execFn(
-        'reg',
+        regExe,
         ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'],
         { encoding: 'utf8', timeout: 1500, windowsHide: true }
       );
       return parseWindowsRegProxyOutput(raw);
     }
     if (platform === 'darwin') {
-      const raw = execFn('scutil', ['--proxy'], { encoding: 'utf8', timeout: 1500 });
+      const raw = execFn('/usr/sbin/scutil', ['--proxy'], { encoding: 'utf8', timeout: 1500 });
       return parseMacScutilProxyOutput(raw);
     }
   } catch {
@@ -788,15 +791,16 @@ export async function detectOsSystemProxyAsync(opts = {}) {
   };
   try {
     if (platform === 'win32') {
+      const regExe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'reg.exe');
       const raw = await runAsync(
-        'reg',
+        regExe,
         ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'],
         { encoding: 'utf8', timeout: 1500, windowsHide: true }
       );
       return parseWindowsRegProxyOutput(raw);
     }
     if (platform === 'darwin') {
-      const raw = await runAsync('scutil', ['--proxy'], { encoding: 'utf8', timeout: 1500 });
+      const raw = await runAsync('/usr/sbin/scutil', ['--proxy'], { encoding: 'utf8', timeout: 1500 });
       return parseMacScutilProxyOutput(raw);
     }
   } catch {
@@ -883,10 +887,22 @@ function hasHeaderIgnoreCase(headersObj, targetLower) {
 function redactProxyErr(err, proxyInfo) {
   const raw = err?.message || String(err);
   let out = redactSecrets(raw, proxyInfo?.password || '');
-  if (proxyInfo && (proxyInfo.username || proxyInfo.password)) {
-    const b64 = Buffer.from(`${proxyInfo.username}:${proxyInfo.password}`, 'utf8').toString('base64');
-    if (b64 && out.includes(b64)) {
-      out = out.split(b64).join('***REDACTED***');
+  if (proxyInfo) {
+    if (proxyInfo.username) {
+      out = redactSecrets(out, proxyInfo.username);
+    }
+    for (const rawPart of [proxyInfo.username, proxyInfo.password]) {
+      if (!rawPart) continue;
+      const encoded = encodeURIComponent(rawPart);
+      if (encoded !== rawPart && encoded.length >= 4 && out.includes(encoded)) {
+        out = out.split(encoded).join('***REDACTED***');
+      }
+    }
+    if (proxyInfo.username || proxyInfo.password) {
+      const b64 = Buffer.from(`${proxyInfo.username || ''}:${proxyInfo.password || ''}`, 'utf8').toString('base64');
+      if (b64 && out.includes(b64)) {
+        out = out.split(b64).join('***REDACTED***');
+      }
     }
   }
   return new Error(out);
@@ -1581,18 +1597,42 @@ export class ThoughtTranslatorService {
 
         const enc = String(incomingRes.headers['content-encoding'] || '').trim().toLowerCase();
         let streamForBody = incomingRes;
+        let decompressor = null;
         if (enc === 'gzip' || enc === 'x-gzip') {
-          const gunzip = zlib.createGunzip();
-          incomingRes.on('error', (err) => gunzip.destroy(err));
-          streamForBody = incomingRes.pipe(gunzip);
+          decompressor = zlib.createGunzip({ maxOutputLength: MAX_STREAM_BYTES });
         } else if (enc === 'deflate') {
-          const inflate = zlib.createInflate();
-          incomingRes.on('error', (err) => inflate.destroy(err));
-          streamForBody = incomingRes.pipe(inflate);
+          decompressor = zlib.createInflate({ maxOutputLength: MAX_STREAM_BYTES });
         } else if (enc === 'br') {
-          const brotli = zlib.createBrotliDecompress();
-          incomingRes.on('error', (err) => brotli.destroy(err));
-          streamForBody = incomingRes.pipe(brotli);
+          decompressor = zlib.createBrotliDecompress({ maxOutputLength: MAX_STREAM_BYTES });
+        }
+        if (decompressor) {
+          let decompressedBytes = 0;
+          const limiter = new Transform({
+            transform(chunk, _encoding, cb) {
+              decompressedBytes += chunk.byteLength;
+              if (decompressedBytes > MAX_STREAM_BYTES) {
+                const limitErr = new Error(
+                  `Decompressed proxy response exceeded size limit (${MAX_STREAM_BYTES} bytes)`
+                );
+                if (!decompressor.destroyed) decompressor.destroy(limitErr);
+                if (!incomingRes.destroyed) incomingRes.destroy();
+                cb(limitErr);
+                return;
+              }
+              cb(null, chunk);
+            },
+          });
+          incomingRes.on('error', (err) => {
+            if (!decompressor.destroyed) decompressor.destroy(err);
+            if (!limiter.destroyed) limiter.destroy(err);
+          });
+          decompressor.on('error', (err) => {
+            if (!limiter.destroyed) limiter.destroy(err);
+          });
+          streamForBody = incomingRes.pipe(decompressor).pipe(limiter);
+          streamForBody.once('close', () => {
+            if (!decompressor.destroyed) decompressor.destroy();
+          });
         }
         activeBodyStream = streamForBody;
 
@@ -1618,6 +1658,12 @@ export class ThoughtTranslatorService {
               if (done) break;
               const buf = Buffer.from(value);
               total += buf.byteLength;
+              if (total > MAX_STREAM_BYTES) {
+                try {
+                  await reader.cancel();
+                } catch {}
+                throw new Error(`Proxy response body exceeded size limit (${MAX_STREAM_BYTES} bytes)`);
+              }
               chunks.push(buf);
             }
           } finally {
@@ -1685,7 +1731,14 @@ export class ThoughtTranslatorService {
               path: target.href,
               headers: httpHeaders,
               agent: false,
-              ...(proxyInfo.protocol === 'https:' ? this._proxyTlsOptions || {} : {}),
+              ...(proxyInfo.protocol === 'https:'
+                ? {
+                    // Node https.request 在 servername 为 undefined 时会回退取 headers.Host（即目标 HTTP 域名）；
+                    // 代理为 IP 时传入空串 '' 以禁发 SNI 并按 options.host 校验证书，域名代理则显式绑定 proxyInfo.hostname。
+                    servername: net.isIP(proxyInfo.hostname) ? '' : proxyInfo.hostname,
+                    ...(this._proxyTlsOptions || {}),
+                  }
+                : {}),
             },
             onResponse
           );
@@ -2461,15 +2514,27 @@ export class ThoughtTranslatorService {
     let buf = '';
     let acc = '';
     let lastEmitAt = 0;
+    let totalBytes = 0;
 
-    for await (const chunk of res.body) {
+    const processChunk = async (chunk, cancelStream) => {
       if (abortSignal?.aborted) {
         try {
-          await res.body.cancel?.();
+          await cancelStream();
         } catch {}
         throw new Error('Translation aborted');
       }
-      buf += decoder.decode(chunk, { stream: true });
+      const chunkBytes =
+        typeof chunk === 'string'
+          ? Buffer.byteLength(chunk, 'utf8')
+          : chunk?.byteLength ?? chunk?.length ?? 0;
+      totalBytes += chunkBytes;
+      if (totalBytes > MAX_STREAM_BYTES) {
+        try {
+          await cancelStream();
+        } catch {}
+        throw new Error(`AI stream exceeded size limit (${MAX_STREAM_BYTES} bytes)`);
+      }
+      buf += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
       if (buf.length > MAX_STREAM_CHARS) {
         buf = buf.slice(0, MAX_STREAM_CHARS);
       }
@@ -2497,9 +2562,9 @@ export class ThoughtTranslatorService {
       if (acc.length >= MAX_STREAM_CHARS) {
         acc = acc.slice(0, MAX_STREAM_CHARS);
         try {
-          await res.body.cancel?.();
+          await cancelStream();
         } catch {}
-        break;
+        return true;
       }
       if (appended && onPartial) {
         const now = Date.now();
@@ -2511,7 +2576,59 @@ export class ThoughtTranslatorService {
           }
         }
       }
-      if (reachedDone) break;
+      if (reachedDone) {
+        try {
+          await cancelStream();
+        } catch {}
+        return true;
+      }
+      return false;
+    };
+
+    if (typeof res.body.getReader === 'function') {
+      const reader = res.body.getReader();
+      const cancelReader = () => reader.cancel();
+      const onStreamAbort = () => {
+        try {
+          void reader.cancel().catch(() => {});
+        } catch {}
+      };
+      if (abortSignal && typeof abortSignal.addEventListener === 'function') {
+        if (abortSignal.aborted) onStreamAbort();
+        else abortSignal.addEventListener('abort', onStreamAbort, { once: true });
+      }
+      try {
+        while (true) {
+          if (abortSignal?.aborted) {
+            try {
+              await reader.cancel();
+            } catch {}
+            throw new Error('Translation aborted');
+          }
+          const { done, value } = await reader.read();
+          if (done) {
+            if (abortSignal?.aborted) throw new Error('Translation aborted');
+            break;
+          }
+          const shouldStop = await processChunk(value, cancelReader);
+          if (shouldStop) break;
+        }
+      } finally {
+        if (abortSignal && typeof abortSignal.removeEventListener === 'function') {
+          try {
+            abortSignal.removeEventListener('abort', onStreamAbort);
+          } catch {}
+        }
+        try {
+          reader.releaseLock();
+        } catch {}
+      }
+    } else {
+      const cancelBody = () => res.body.cancel?.();
+      for await (const chunk of res.body) {
+        const shouldStop = await processChunk(chunk, cancelBody);
+        if (shouldStop) break;
+      }
     }
 
     const finalClean = stripThinkTagsAndQuotes(acc).slice(0, MAX_STREAM_CHARS);
@@ -2597,8 +2714,11 @@ export class ThoughtTranslatorService {
       const slot = await this._acquireSlot(entry, priority, abortController.signal);
       entry.queueItem = null;
       if (!slot.acquired || entry.aborted || abortController.signal.aborted) {
+        if (slot.acquired) this._releaseSlot();
         if (detachExternalAbort) detachExternalAbort();
-        this.inflight.delete(cacheKey);
+        if (this.inflight.get(cacheKey) === entry) {
+          this.inflight.delete(cacheKey);
+        }
         return { ok: false, cancelled: true, key: cacheKey };
       }
 

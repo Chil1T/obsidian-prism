@@ -13,16 +13,18 @@ final class AttachedEntry {
     let session: CdpSession
     var scriptId: String?
     var omniScriptId: String?
+    var thoughtScriptId: String?
     let title: String
     private let ctxLock = NSLock()
     var mainFrameId: String = ""
     var hasFrameTree: Bool = false
     var contextFrames: [Int: FrameContextMeta] = [:]
 
-    init(session: CdpSession, scriptId: String? = nil, omniScriptId: String? = nil, title: String) {
+    init(session: CdpSession, scriptId: String? = nil, omniScriptId: String? = nil, thoughtScriptId: String? = nil, title: String) {
         self.session = session
         self.scriptId = scriptId
         self.omniScriptId = omniScriptId
+        self.thoughtScriptId = thoughtScriptId
         self.title = title
     }
 
@@ -157,8 +159,12 @@ final class WatcherApp {
                 Self.writeResult(outFile: outFile, ok: false, message: "未找到 Antigravity 窗口页面", pages: nil)
                 return 1
             }
+            let onceCfg = CdpHelper.readConfig(baseDir: baseDir, manifest: manifest)
             let expr = try CdpHelper.buildInjectExpression(baseDir: baseDir, manifest: manifest)
             let omniExpr = CdpHelper.buildOmniClientExpression(baseDir: baseDir, manifest: manifest)
+            let thoughtExpr = CdpHelper.shouldEnableThought(onceCfg)
+                ? CdpHelper.buildThoughtExpression(baseDir: baseDir, cfg: onceCfg)
+                : ""
             var injectedTitles: [String] = []
             for page in pages {
                 let session = try CdpSession.connect(wsUrl: page.webSocketDebuggerUrl, timeoutMs: 4000)
@@ -166,6 +172,9 @@ final class WatcherApp {
                 _ = try session.evaluate(expr, awaitPromise: false)
                 if !omniExpr.isEmpty {
                     _ = try? session.evaluate(omniExpr, awaitPromise: false)
+                }
+                if !thoughtExpr.isEmpty {
+                    _ = try? session.evaluate(thoughtExpr, awaitPromise: false)
                 }
                 injectedTitles.append(CdpHelper.shortTitle(page))
             }
@@ -234,12 +243,17 @@ final class WatcherApp {
                 stamp[name] = "\(mtime):\(size)"
             }
         }
-        let omniRel = "vendor/omni-viewer/omni-client.js"
-        let omniFull = (baseDir as NSString).appendingPathComponent(omniRel)
-        if let attrs = try? fm.attributesOfItem(atPath: omniFull) {
-            let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
-            let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
-            stamp[omniRel] = "\(mtime):\(size)"
+        for vendorRel in [
+            "vendor/omni-viewer/omni-client.js",
+            "vendor/thought-translator/thought-client.js",
+            "vendor/thought-translator/thought-settings-ui.js",
+        ] {
+            let vendorFull = (baseDir as NSString).appendingPathComponent(vendorRel)
+            if let attrs = try? fm.attributesOfItem(atPath: vendorFull) {
+                let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+                let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+                stamp[vendorRel] = "\(mtime):\(size)"
+            }
         }
         return stamp
     }
@@ -272,10 +286,15 @@ final class WatcherApp {
         var manifest: PluginManifest
         var currentExpr: String
         var currentOmniExpr: String
+        var currentThoughtExpr: String
         do {
             manifest = try PluginManifest.load(baseDir: baseDir)
+            let initCfg = CdpHelper.readConfig(baseDir: baseDir, manifest: manifest)
             currentExpr = try CdpHelper.buildInjectExpression(baseDir: baseDir, manifest: manifest)
             currentOmniExpr = CdpHelper.buildOmniClientExpression(baseDir: baseDir, manifest: manifest)
+            currentThoughtExpr = CdpHelper.shouldEnableThought(initCfg)
+                ? CdpHelper.buildThoughtExpression(baseDir: baseDir, cfg: initCfg)
+                : ""
         } catch {
             log("[!] 初始化加载失败: \(error.localizedDescription)")
             releasePidFile(selfPid: selfPid)
@@ -320,7 +339,7 @@ final class WatcherApp {
         intSource.setEventHandler(handler: requestExit)
         intSource.resume()
 
-        let applyToEntry: (AttachedEntry, String, String) throws -> JsonValue = { entry, exprToUse, omniExprToUse in
+        let applyToEntry: (AttachedEntry, String, String, String) throws -> JsonValue = { entry, exprToUse, omniExprToUse, thoughtExprToUse in
             if let oldId = entry.scriptId, !oldId.isEmpty {
                 _ = try? entry.session.send(
                     "Page.removeScriptToEvaluateOnNewDocument",
@@ -354,6 +373,14 @@ final class WatcherApp {
                     )
                     entry.omniScriptId = nil
                 }
+                if let oldThoughtId = entry.thoughtScriptId, !oldThoughtId.isEmpty {
+                    _ = try? entry.session.send(
+                        "Page.removeScriptToEvaluateOnNewDocument",
+                        params: ["identifier": .string(oldThoughtId)],
+                        timeoutMs: 5000
+                    )
+                    entry.thoughtScriptId = nil
+                }
                 return mainVal
             }
 
@@ -374,6 +401,28 @@ final class WatcherApp {
                     entry.omniScriptId = omniId
                 }
                 _ = try? entry.session.evaluate(omniExprToUse, awaitPromise: false)
+            }
+
+            let hadThought = (entry.thoughtScriptId?.isEmpty == false)
+            if let oldThoughtId = entry.thoughtScriptId, !oldThoughtId.isEmpty {
+                _ = try? entry.session.send(
+                    "Page.removeScriptToEvaluateOnNewDocument",
+                    params: ["identifier": .string(oldThoughtId)],
+                    timeoutMs: 5000
+                )
+                entry.thoughtScriptId = nil
+            }
+            if !thoughtExprToUse.isEmpty {
+                if let thoughtRes = try? entry.session.send(
+                    "Page.addScriptToEvaluateOnNewDocument",
+                    params: ["source": .string(thoughtExprToUse)],
+                    timeoutMs: 15000
+                ), let thoughtId = thoughtRes["identifier"]?.stringValue {
+                    entry.thoughtScriptId = thoughtId
+                }
+                _ = try? entry.session.evaluate(thoughtExprToUse, awaitPromise: false)
+            } else if hadThought {
+                _ = try? entry.session.evaluate(CdpHelper.thoughtRemoveExpression, awaitPromise: false)
             }
             return mainVal
         }
@@ -472,6 +521,7 @@ final class WatcherApp {
                 let bindingName = manifest.settingBinding
                 let exprSnap = currentExpr
                 let omniSnap = currentOmniExpr
+                let thoughtSnap = currentThoughtExpr
                 stateLock.unlock()
 
                 _ = try s.send("Runtime.addBinding", params: ["name": .string(bindingName)], timeoutMs: 5000)
@@ -484,7 +534,7 @@ final class WatcherApp {
                 attaching.remove(page.id)
                 stateLock.unlock()
 
-                let evalVal = try applyToEntry(entry, exprSnap, omniSnap)
+                let evalVal = try applyToEntry(entry, exprSnap, omniSnap, thoughtSnap)
                 let status = evalVal.objectValue?["status"]?.stringValue ?? "ok"
                 self.log("[✓] 已注入 obsidian-prism: \(title) (\(status))")
             } catch {
@@ -520,15 +570,21 @@ final class WatcherApp {
             let changedName = detectedChange ?? hintName ?? "config.json"
             do {
                 let nextManifest = try PluginManifest.load(baseDir: self.baseDir)
+                let nextCfg = CdpHelper.readConfig(baseDir: self.baseDir, manifest: nextManifest)
                 let nextExpr = try CdpHelper.buildInjectExpression(baseDir: self.baseDir, manifest: nextManifest)
                 let nextOmniExpr = CdpHelper.buildOmniClientExpression(baseDir: self.baseDir, manifest: nextManifest)
+                let nextThoughtExpr = CdpHelper.shouldEnableThought(nextCfg)
+                    ? CdpHelper.buildThoughtExpression(baseDir: self.baseDir, cfg: nextCfg)
+                    : ""
                 let fastCfgExpr: String? = ((changedName as NSString).lastPathComponent.caseInsensitiveCompare("config.json") == .orderedSame)
                     ? CdpHelper.buildConfigRefreshExpression(baseDir: self.baseDir, manifest: nextManifest)
                     : nil
                 stateLock.lock()
+                let prevThoughtExpr = currentThoughtExpr
                 manifest = nextManifest
                 currentExpr = nextExpr
                 currentOmniExpr = nextOmniExpr
+                currentThoughtExpr = nextThoughtExpr
                 let entries = Array(attached.values)
                 stateLock.unlock()
 
@@ -552,10 +608,25 @@ final class WatcherApp {
                            let omniId = omniAdd["identifier"]?.stringValue {
                             entry.omniScriptId = omniId
                         }
+                        let hadThought = (entry.thoughtScriptId?.isEmpty == false) || !prevThoughtExpr.isEmpty
+                        if let oldThoughtId = entry.thoughtScriptId, !oldThoughtId.isEmpty {
+                            _ = try? entry.session.send("Page.removeScriptToEvaluateOnNewDocument", params: ["identifier": .string(oldThoughtId)], timeoutMs: 5000)
+                            entry.thoughtScriptId = nil
+                        }
+                        if !nextThoughtExpr.isEmpty,
+                           let thoughtAdd = try? entry.session.send("Page.addScriptToEvaluateOnNewDocument", params: ["source": .string(nextThoughtExpr)], timeoutMs: 15000),
+                           let thoughtId = thoughtAdd["identifier"]?.stringValue {
+                            entry.thoughtScriptId = thoughtId
+                        }
                         if let fastRes = try? entry.session.evaluate(fastExpr, awaitPromise: false),
                            fastRes.objectValue?["refreshed"]?.boolValue == true {
                             if !nextOmniExpr.isEmpty {
                                 _ = try? entry.session.evaluate(nextOmniExpr, awaitPromise: false)
+                            }
+                            if !nextThoughtExpr.isEmpty {
+                                _ = try? entry.session.evaluate(nextThoughtExpr, awaitPromise: false)
+                            } else if hadThought {
+                                _ = try? entry.session.evaluate(CdpHelper.thoughtRemoveExpression, awaitPromise: false)
                             }
                             n += 1
                             continue
@@ -564,10 +635,15 @@ final class WatcherApp {
                             if !nextOmniExpr.isEmpty {
                                 _ = try? entry.session.evaluate(nextOmniExpr, awaitPromise: false)
                             }
+                            if !nextThoughtExpr.isEmpty {
+                                _ = try? entry.session.evaluate(nextThoughtExpr, awaitPromise: false)
+                            } else if hadThought {
+                                _ = try? entry.session.evaluate(CdpHelper.thoughtRemoveExpression, awaitPromise: false)
+                            }
                             n += 1
                         }
                     } else {
-                        if (try? applyToEntry(entry, nextExpr, nextOmniExpr)) != nil {
+                        if (try? applyToEntry(entry, nextExpr, nextOmniExpr, nextThoughtExpr)) != nil {
                             n += 1
                         }
                     }

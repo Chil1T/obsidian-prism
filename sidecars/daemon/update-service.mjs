@@ -745,9 +745,13 @@ export class UpdateService {
           throw new Error('asset_too_large');
         }
 
+        const spawnCwd =
+          this.platform === 'win32'
+            ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32')
+            : path.dirname(exePath);
         const child = this.spawnFn(exePath, ['--install', '--silent', '--no-relaunch-prompt'], {
           detached: true,
-          cwd: this.tmpRoot,
+          cwd: spawnCwd,
           stdio: 'ignore',
           windowsHide: true,
         });

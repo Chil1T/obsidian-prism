@@ -979,3 +979,162 @@ test('12. Red-team robustness: Phase-1 upward .return store lookup beats deep 65
   assert.equal(rmSb.__agPrismContextMenu, undefined);
   assert.equal(rmEnv.doc.querySelectorAll('.ag-cs-ctx-menu,.ag-cs-ctx-toast').length, 0, 'REMOVE_EXPRESSION must strip .ag-cs-ctx-menu & .ag-cs-ctx-toast');
 });
+
+test('13. P0 triggerSlashCommand concurrency mutex (busy) and mid-flight cascadeId / composer detach abort (zero accidental send)', async () => {
+  const env = createMockEnv({ pathname: '/c/session-alpha' });
+  const composerBox = env.makeEl('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const mainEd = env.makeEl('div', { attrs: { contenteditable: 'true' }, text: '' });
+  const sendBtn = env.makeEl('button', { attrs: { 'data-testid': 'input-send-button' } });
+  let sendClicks = 0;
+  sendBtn.addEventListener('click', () => { sendClicks++; });
+  composerBox.appendChild(mainEd);
+  composerBox.appendChild(sendBtn);
+  env.rootEl.appendChild(composerBox);
+
+  const ctl = ctxMenuMod.createContextMenuController({ doc: env.doc, win: env.win, nav: env.nav, loc: env.loc, stepDelayMs: 12 });
+
+  // (a) Concurrent re-entry while in flight returns { ok: false, reason: 'busy' } without disturbing first command
+  const p1 = ctl.triggerSlashCommand('/plan', 'first quote');
+  const p2 = ctl.triggerSlashCommand('/compact');
+  const r2 = await p2;
+  assert.equal(r2.ok, false);
+  assert.equal(r2.reason, 'busy');
+  assert.equal(r2.command, '/compact');
+
+  const r1 = await p1;
+  assert.equal(r1.ok, true);
+  assert.equal(r1.command, '/plan');
+  assert.equal(sendClicks, 1);
+
+  // (b) Mid-flight cascadeId switch aborts before submit (zero send click, zero Enter keydown) and releases mutex
+  mainEd.textContent = '';
+  mainEd._dispatched.length = 0;
+  sendClicks = 0;
+  const pSwitch = ctl.triggerSlashCommand('/plan', 'must not send to session-beta');
+  setTimeout(() => { env.loc.pathname = '/c/session-beta'; }, 6);
+  const rSwitch = await pSwitch;
+  assert.equal(rSwitch.ok, false);
+  assert.equal(rSwitch.reason, 'session-changed');
+  assert.equal(rSwitch.command, '/plan');
+  assert.equal(sendClicks, 0, 'must NEVER click send button after switching conversation mid-flight');
+  assert.equal(
+    mainEd._dispatched.some((e) => e.type === 'keydown' && e.key === 'Enter'),
+    false,
+    'must NEVER dispatch Enter after switching conversation mid-flight'
+  );
+
+  // (c) Mid-flight editor detach (ed.isConnected === false) also aborts cleanly and releases mutex
+  mainEd.textContent = '';
+  mainEd._dispatched.length = 0;
+  sendClicks = 0;
+  const pDetach = ctl.triggerSlashCommand('/learn', 'detach guard');
+  setTimeout(() => { composerBox.remove(); }, 6);
+  const rDetach = await pDetach;
+  assert.equal(rDetach.ok, false);
+  assert.equal(rDetach.reason, 'session-changed');
+  assert.equal(sendClicks, 0, 'must NEVER submit after composer detaches');
+
+  // Lock must be released in finally: subsequent call succeeds once composer is remounted & cleared
+  env.rootEl.appendChild(composerBox);
+  mainEd.textContent = '';
+  const rAfter = await ctl.triggerSlashCommand('/compact');
+  assert.equal(rAfter.ok, true);
+  assert.equal(sendClicks, 1);
+
+  ctl.destroy();
+});
+
+test('14. P0 Redux resilience: findStore throw, store.dispatch TypeError, and no-op action rename silently fallback to native-button / fallback-composer with zero uncaught errors', async () => {
+  // (a) store.dispatch throws TypeError -> fallback to native-button first, then fallback-composer
+  const env = createMockEnv({ pathname: '/c/conv-resilient-1' });
+  const composerBox = env.makeEl('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const mainEd = env.makeEl('div', { attrs: { contenteditable: 'true' }, text: '' });
+  composerBox.appendChild(mainEd);
+  env.rootEl.appendChild(composerBox);
+
+  let nativeClicks = 0;
+  const nativeBtn = env.makeEl('button', { attrs: { 'data-testid': 'selection-btw-button' } });
+  nativeBtn.addEventListener('click', () => { nativeClicks++; });
+  env.rootEl.appendChild(nativeBtn);
+
+  let dispatchAttempts = 0;
+  const throwingStore = {
+    dispatch() { dispatchAttempts++; throw new TypeError('Redux store signature changed'); },
+    getState() { return { v: 1 }; },
+  };
+  env.convView.__reactFiber$err = { memoizedProps: { value: { store: throwingStore } }, return: null };
+
+  const ctl = ctxMenuMod.createContextMenuController({
+    doc: env.doc,
+    win: env.win,
+    nav: env.nav,
+    loc: env.loc,
+    stepDelayMs: 0,
+    copyText: async () => { throw new Error('copy rejected'); },
+  });
+
+  const r1 = ctl.triggerBtw('quote with throwing dispatch');
+  assert.deepEqual(r1, { ok: true, mode: 'native-button', quoted: true });
+  assert.equal(dispatchAttempts, 4, 'all 4 dispatches are isolated individually via safe()');
+  assert.equal(nativeClicks, 1);
+  assert.equal(mainEd.textContent, '');
+
+  // Without native-button -> smooth fallback to empty composer
+  nativeBtn.remove();
+  const r2 = ctl.triggerBtw('composer fallback quote');
+  assert.deepEqual(r2, { ok: true, mode: 'fallback-composer', quoted: true });
+  assert.equal(mainEd.textContent, '/btw composer fallback quote');
+
+  // (b) Action renamed in future host -> store.dispatch succeeds without throwing, but store.getState() returns identical ref and no side panel appears -> fallback
+  const frozenState = { sidePanel: { open: false } };
+  let noopDispatches = 0;
+  const noopStore = {
+    dispatch() { noopDispatches++; },
+    getState() { return frozenState; },
+  };
+  env.convView.__reactFiber$err = { memoizedProps: { value: { store: noopStore } }, return: null };
+
+  env.rootEl.appendChild(nativeBtn);
+  const r3 = ctl.triggerBtw('renamed action native fallback');
+  assert.deepEqual(r3, { ok: true, mode: 'native-button', quoted: true });
+  assert.equal(noopDispatches, 4);
+  assert.equal(nativeClicks, 2);
+
+  nativeBtn.remove();
+  mainEd.textContent = '';
+  const r4 = ctl.triggerBtw('renamed action composer fallback');
+  assert.deepEqual(r4, { ok: true, mode: 'fallback-composer', quoted: true });
+  assert.equal(mainEd.textContent, '/btw renamed action composer fallback');
+
+  // If side panel IS present in DOM, unchanged getState still recognizes redux success
+  const sidePanel = env.makeEl('div', { attrs: { 'data-testid': 'side-question-panel' } });
+  env.rootEl.appendChild(sidePanel);
+  const r5 = ctl.triggerBtw('side panel visible');
+  assert.deepEqual(r5, { ok: true, mode: 'redux', cascadeId: 'conv-resilient-1', quoted: true });
+  sidePanel.remove();
+
+  // (c) findStore() getter throws -> safe() catches and falls back to composer
+  Object.defineProperty(env.convView, '__reactFiber$err', {
+    configurable: true,
+    enumerable: true,
+    get() { throw new Error('Fiber proxy trap'); },
+  });
+  mainEd.textContent = '';
+  const r6 = ctl.triggerBtw('fiber getter throw fallback');
+  assert.deepEqual(r6, { ok: true, mode: 'fallback-composer', quoted: true });
+  assert.equal(mainEd.textContent, '/btw fiber getter throw fallback');
+
+  // (d) runAction swallows rejected Promise without UnhandledPromiseRejection
+  let unhandled = 0;
+  const onUnhandled = () => { unhandled++; };
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    const m = ctl.openAt(120, 120, { selectedText: 'trigger copy rejection' });
+    m.querySelector('[data-ctx-action="copy"]').click();
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(unhandled, 0, 'runAction must attach .catch(() => {}) to prevent unhandled rejections');
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+    ctl.destroy();
+  }
+});

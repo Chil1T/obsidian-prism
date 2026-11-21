@@ -728,8 +728,34 @@ test('Wave 3 ui-runtime: P1-1 mascot power sync, P1-2a narrowed dirtyFlags, P1-2
   assert.equal(item1.style.getPropertyValue('--ag-row-i'), '1');
   assert.equal(item1.getAttribute('data-ag-row-stagger'), '1');
 
-  // Teardown removes all DOC_LISTENERS cleanly with matching opts
+  // Also mount an overview-panel shell to verify destroy() cleans --ag-origin-x/--ag-origin-y & data-ag-row-stagger/--ag-row-i
+  const ovShell = makeDomNode('div', {}, { left: 100, top: 80, width: 420, height: 320, right: 520, bottom: 400 });
+  const ovPanel = makeDomNode('div', { 'data-testid': 'overview-panel' });
+  const ovRow = makeDomNode('div', { 'data-testid': 'artifact-row' });
+  ovPanel.appendChild(ovRow);
+  ovShell.appendChild(ovPanel);
+  body.appendChild(ovShell);
+  mainMo.cb([{ type: 'childList', target: body, addedNodes: [ovShell], removedNodes: [] }]);
+  flushRafs();
+  assert.equal(ovShell.getAttribute('data-ag-cs-overview-shell'), '1');
+  assert.ok(ovShell.style.getPropertyValue('--ag-origin-x'));
+  assert.ok(ovShell.style.getPropertyValue('--ag-origin-y'));
+  assert.equal(ovRow.getAttribute('data-ag-row-stagger'), '1');
+  assert.equal(ovRow.style.getPropertyValue('--ag-row-i'), '0');
+
+  // Teardown removes all DOC_LISTENERS cleanly with matching opts AND cleans row-stagger / origin styles
   api.destroy();
+  assert.equal(item0.hasAttribute('data-ag-row-stagger'), false, 'destroy() must strip data-ag-row-stagger');
+  assert.equal(item0.style.getPropertyValue('--ag-row-i'), '', 'destroy() must clear --ag-row-i');
+  assert.equal(item1.hasAttribute('data-ag-row-stagger'), false);
+  assert.equal(item1.style.getPropertyValue('--ag-row-i'), '');
+  assert.equal(ovRow.hasAttribute('data-ag-row-stagger'), false);
+  assert.equal(ovRow.style.getPropertyValue('--ag-row-i'), '');
+  assert.equal(overlay.style.getPropertyValue('--ag-origin-x'), '', 'destroy() must clear overlay --ag-origin-x');
+  assert.equal(overlay.style.getPropertyValue('--ag-origin-y'), '', 'destroy() must clear overlay --ag-origin-y');
+  assert.equal(ovShell.hasAttribute('data-ag-cs-overview-shell'), false);
+  assert.equal(ovShell.style.getPropertyValue('--ag-origin-x'), '', 'destroy() must clear overview-shell --ag-origin-x');
+  assert.equal(ovShell.style.getPropertyValue('--ag-origin-y'), '', 'destroy() must clear overview-shell --ag-origin-y');
   for (const evName of passiveExpected) {
     const rem = docRemoveRecords.find((r) => r.type === evName);
     assert.ok(rem, `destroy() must remove ${evName}`);
@@ -1424,4 +1450,244 @@ test('Wave 3 pulse inline-fallback P2-5: seatObs merges duplicate isConv() and f
   assert.equal(timers.size, 1, 'seatObs must schedule fast heal when anchor is ready');
 
   sb.__agPrismTelemetry.destroy();
+});
+
+// ── 8. ui-runtime autoUpdate 归一化 & 布尔兼容 ─────────────────────────────
+test('P1 ui-runtime autoUpdate normalization (default off, boolean true/false -> on/off, wire binding alignment)', () => {
+  const cdp = require(path.join(ROOT, 'cdp.js'));
+  const uiMainFactory = require(path.join(ROOT, 'ui-runtime.js'));
+  const i18nCore = require(path.join(ROOT, 'i18n-core.js'));
+  const i18nLocales = require(path.join(ROOT, 'i18n-locales.js'));
+
+  const html = makeDomNode('html');
+  const head = makeDomNode('head');
+  const body = makeDomNode('body');
+  html.appendChild(head);
+  html.appendChild(body);
+  const fakeDoc = {
+    hidden: false,
+    documentElement: html,
+    head,
+    body,
+    hasFocus: () => true,
+    createElement: (t) => makeDomNode(t),
+    getElementById: (id) => html.querySelector(`#${id}`),
+    querySelector: (s) => html.querySelector(s),
+    querySelectorAll: (s) => html.querySelectorAll(s),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const wiredPayloads = [];
+  const storage = new Map();
+  const sb = {
+    window: null,
+    document: fakeDoc,
+    location: { pathname: '/', href: 'http://localhost/' },
+    localStorage: {
+      getItem: (k) => (storage.has(k) ? storage.get(k) : null),
+      setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: (k) => storage.delete(k),
+    },
+    performance: { now: () => 1000 },
+    navigator: { language: 'zh-CN' },
+    innerWidth: 1280,
+    innerHeight: 800,
+    devicePixelRatio: 1,
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+    addEventListener() {},
+    removeEventListener() {},
+    MutationObserver: class { observe() {} disconnect() {} takeRecords() { return []; } },
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame() {},
+    setTimeout: () => 1,
+    clearTimeout() {},
+    setInterval: () => 1,
+    clearInterval() {},
+    __agCsI18nCore: i18nCore,
+    __agCsLocales: i18nLocales,
+    __agPrismSetting: (raw) => { wiredPayloads.push(JSON.parse(raw)); },
+    Set, WeakSet, Map, WeakMap, Array, Object, Math, Number, String, Boolean, Date, RegExp, JSON, Promise, Proxy,
+  };
+  sb.window = sb;
+  sb.globalThis = sb;
+
+  const initCfg = { ...cdp.DEFAULT_CONFIG, autoUpdate: true };
+  vm.runInNewContext(`(${uiMainFactory.toString()})(${JSON.stringify(initCfg)})`, sb);
+  const api = sb.window.__agPrism;
+
+  // Initial boolean true normalizes to 'on'
+  assert.equal(api.getState().cfg.autoUpdate, 'on');
+
+  // refreshConfig with invalid value falls back to default 'off'
+  api.refreshConfig({ autoUpdate: 'bogus-value' });
+  assert.equal(api.getState().cfg.autoUpdate, 'off');
+
+  // saveSettingsBatch with boolean true/false normalizes and emits 'on'/'off' to host wire binding
+  wiredPayloads.length = 0;
+  api.saveSettingsBatch({ autoUpdate: true });
+  assert.equal(api.getState().cfg.autoUpdate, 'on');
+  assert.equal(wiredPayloads[wiredPayloads.length - 1]?.entries?.autoUpdate, 'on');
+
+  api.saveSettingsBatch({ autoUpdate: false });
+  assert.equal(api.getState().cfg.autoUpdate, 'off');
+  assert.equal(wiredPayloads[wiredPayloads.length - 1]?.entries?.autoUpdate, 'off');
+
+  // Default omitted config also resolves to 'off'
+  api.refreshConfig({ autoUpdate: undefined });
+  assert.equal(api.getState().cfg.autoUpdate, 'off');
+
+  api.destroy();
+});
+
+// ── 9. Effort Slider 卸载属性对称 + conv-aura 外部调用隔离 + enhancer guarded title ──
+test('P1 Effort Slider cleanup strips data-ces-orch-b/tunable, conv-aura computeConvAuraOptics isolates external callers, and host-workbench-enhancer guards outlineTitleEl mutation', () => {
+  // (a) slider-coexist clrTint & upstream-client _clrAgDom strip data-ces-orch-b and data-ces-orch-tunable
+  const sliderCoexist = require(path.join(ROOT, 'vendor', 'effort-slider', 'slider-coexist.js'));
+  const upstreamClient = require(path.join(ROOT, 'vendor', 'effort-slider', 'upstream-client.js'));
+
+  const html = makeDomNode('html', { 'data-ces-slider-ready': '1' });
+  const head = makeDomNode('head');
+  const body = makeDomNode('body');
+  html.appendChild(head);
+  html.appendChild(body);
+
+  const panel = makeDomNode('div', {
+    'data-testid': 'model-selector-panel',
+    'data-ces-orch-tunable': 'true',
+    'data-ces-orch-b': '1',
+    'data-ces-orch-row': '1',
+  });
+  const orchRow = makeDomNode('div', {
+    role: 'menuitem',
+    'data-ces-model-selected': 'true',
+    'data-ces-orch-b': 'true',
+    'data-ces-orch-tunable': '1',
+  });
+  panel.appendChild(orchRow);
+  body.appendChild(panel);
+
+  const fakeDoc = {
+    documentElement: html,
+    head,
+    body,
+    createElement: (t) => makeDomNode(t),
+    getElementById: (id) => html.querySelector(`#${id}`),
+    querySelector: (s) => html.querySelector(s),
+    querySelectorAll: (s) => html.querySelectorAll(s),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const fakeWin = {
+    document: fakeDoc,
+    __agCodexEffortSlider: upstreamClient,
+    addEventListener() {},
+    removeEventListener() {},
+    MutationObserver: class { observe() {} disconnect() {} },
+    setTimeout: () => 1,
+    clearTimeout() {},
+  };
+
+  // slider-coexist sync({ effortSliderModule: 'off' }) strips data-ces-orch-b & data-ces-orch-tunable
+  const sliderCtl = sliderCoexist.createEffortSliderController({ window: fakeWin, document: fakeDoc });
+  sliderCtl.sync({ effortSliderModule: 'off' });
+  assert.equal(panel.hasAttribute('data-ces-orch-tunable'), false, 'slider-coexist clrTint must strip data-ces-orch-tunable');
+  assert.equal(panel.hasAttribute('data-ces-orch-b'), false, 'slider-coexist clrTint must strip data-ces-orch-b');
+  assert.equal(orchRow.hasAttribute('data-ces-orch-tunable'), false);
+  assert.equal(orchRow.hasAttribute('data-ces-orch-b'), false);
+  sliderCtl.destroy();
+
+  // upstream-client installCodexEffortSlider(...).stop() -> _clrAgDom also strips both attributes
+  panel.setAttribute('data-ces-orch-tunable', 'true');
+  panel.setAttribute('data-ces-orch-b', '1');
+  orchRow.setAttribute('data-ces-orch-tunable', '1');
+  orchRow.setAttribute('data-ces-orch-b', 'true');
+  const rawInst = upstreamClient.installCodexEffortSlider({
+    document: fakeDoc,
+    window: fakeWin,
+    MutationObserver: fakeWin.MutationObserver,
+    skipGenericMenuObserver: true,
+  });
+  rawInst.stop();
+  assert.equal(panel.hasAttribute('data-ces-orch-tunable'), false, 'upstream-client _clrAgDom must strip data-ces-orch-tunable');
+  assert.equal(panel.hasAttribute('data-ces-orch-b'), false, 'upstream-client _clrAgDom must strip data-ces-orch-b');
+  assert.equal(orchRow.hasAttribute('data-ces-orch-tunable'), false);
+  assert.equal(orchRow.hasAttribute('data-ces-orch-b'), false);
+
+  // (b) conv-aura computeConvAuraOptics defaults to fresh {} per call (no aliasing / clobbering across external calls)
+  const auraSrc = fs.readFileSync(path.join(ROOT, 'conv-aura.js'), 'utf8');
+  const auraSb = { Math, Number, String, Boolean, Array, Object, Set, WeakSet, Map, WeakMap };
+  auraSb.window = auraSb;
+  auraSb.globalThis = auraSb;
+  vm.runInNewContext(auraSrc, auraSb);
+  const o1 = auraSb.__agPrismConvAura.computeConvAuraOptics('start', 0, 150, true, true);
+  const snapO1 = { ...o1 };
+  const o2 = auraSb.__agPrismConvAura.computeConvAuraOptics('error-halted', 0, 100, false, false);
+  assert.notEqual(o1, o2, 'external computeConvAuraOptics calls must not share mutable OPTICS_BUF');
+  assert.deepEqual({ ...o1 }, snapO1, 'second computeConvAuraOptics call must not mutate first returned object');
+  assert.equal(o2.semantic, 'error-halted');
+
+  // (c) host-workbench-enhancer writes outlineTitleEl.textContent inside runGuardedMut
+  const enhMod = require(path.join(ROOT, 'host-workbench-enhancer.js'));
+  const eHtml = makeDomNode('html', { 'data-ag-cs-style': '1', 'data-ag-cs-lang': 'en' });
+  const eBody = makeDomNode('body');
+  eHtml.appendChild(eBody);
+  const eConv = makeDomNode('div', { 'data-testid': 'conversation-view' });
+  const eRail = makeDomNode('nav', { 'data-testid': 'conversation-navigator' });
+  const eDot = makeDomNode('button', { 'data-testid': 'conversation-navigator-turn', 'aria-label': 'Turn 1' });
+  eRail.appendChild(eDot);
+  const eVp = makeDomNode('div', { 'data-testid': 'autoscroll-viewport' }, { left: 0, top: 0, width: 800, height: 600 });
+  const eTurn = makeDomNode('div', { 'data-testid': 'user-input-step' }, { left: 0, top: 80, width: 600, height: 40 });
+  eTurn.textContent = 'Check guarded outline title';
+  eVp.appendChild(eTurn);
+  eConv.appendChild(eRail);
+  eConv.appendChild(eVp);
+  eBody.appendChild(eConv);
+
+  let guardedDepth = 0;
+  let titleWritesOutsideGuard = 0;
+  let titleWritesInsideGuard = 0;
+  const eDoc = {
+    documentElement: eHtml,
+    body: eBody,
+    activeElement: null,
+    createElement(tag) {
+      const n = makeDomNode(tag);
+      const origDesc = Object.getOwnPropertyDescriptor(n, 'textContent');
+      Object.defineProperty(n, 'textContent', {
+        get() { return origDesc.get.call(this); },
+        set(v) {
+          if (this.className && this.className.includes('ag-cs-nav-outline-title')) {
+            if (guardedDepth > 0) titleWritesInsideGuard += 1;
+            else titleWritesOutsideGuard += 1;
+          }
+          return origDesc.set.call(this, v);
+        },
+        configurable: true,
+      });
+      return n;
+    },
+    querySelector: (s) => eHtml.querySelector(s),
+    querySelectorAll: (s) => eHtml.querySelectorAll(s),
+  };
+  const eWin = {
+    innerHeight: 800,
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const eCtl = enhMod.createHostEnhancerController({
+    doc: eDoc,
+    win: eWin,
+    getLang: () => 'en',
+    runGuardedMut: (fn) => {
+      guardedDepth += 1;
+      try { return fn(); } finally { guardedDepth -= 1; }
+    },
+  });
+  eCtl.sync();
+  eRail.dispatchEvent({ type: 'pointerenter', target: eDot });
+  assert.ok(titleWritesInsideGuard >= 1, 'outlineTitleEl.textContent update must run inside runGuardedMut');
+  assert.equal(titleWritesOutsideGuard, 0, 'outlineTitleEl.textContent must never mutate outside runGuardedMut');
+  eCtl.destroy();
 });

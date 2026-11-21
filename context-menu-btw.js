@@ -82,6 +82,7 @@
     let destroyed = false;
     let bound = false;
     let openBound = false;
+    let slashBusy = false;
     const autoLang = (fb) => rLang(de?.getAttribute?.('data-ag-cs-lang') || de?.lang || nav?.language || fb);
     let lang = env.lang && env.lang !== 'auto' ? rLang(env.lang) : autoLang('zh-CN');
     let motionLevel = String(env.motionLevel || de?.getAttribute?.('data-ag-cs-motion') || 'ultra');
@@ -106,7 +107,11 @@
       clean.add(c = () => (isRaf ? cxlRaf?.(id) : clrT(id)));
       return c;
     };
-    const waitStep = () => new Promise((r) => defer(r, stepMs));
+    const waitStep = () => new Promise((r) => {
+      let c;
+      const id = setT(() => { clean.delete(c); r(); }, stepMs);
+      clean.add(c = () => { clrT(id); r(); });
+    });
 
     const clearToast = () => {
       if (toastTid) { safe(toastTid); clean.delete(toastTid); toastTid = null; }
@@ -125,7 +130,7 @@
     };
 
     // 两阶段 Fiber 探测：Phase 1 沿 .return 向上直达根节点 O(depth)，Phase 2 从根向下 BFS 兜底
-    const findStore = () => {
+    const findStore = () => safe(() => {
       if (!doc) return null;
       const pick = (f) => [f?.memoizedProps?.value?.store, f?.pendingProps?.value?.store, f?.memoizedProps?.store].find((s) => s?.dispatch && s?.getState);
       const seen = new WeakSet();
@@ -155,7 +160,7 @@
         add(f.sibling);
       }
       return null;
-    };
+    }) || null;
 
     const getCascadeId = () => {
       const m = String((env.loc || win?.location || G.location)?.pathname || '').match(/\/c\/([^/?#]+)/);
@@ -215,22 +220,27 @@
       const store = findStore();
       const tryBtn = () => {
         const b = text && qs('[data-testid="selection-btw-button"]');
-        return b?.click ? (b.click(), { ok: true, mode: 'native-button', quoted: true }) : null;
+        return b?.click && safe(() => (b.click(), 1)) ? { ok: true, mode: 'native-button', quoted: true } : null;
       };
       if (store) {
         const cascadeId = getCascadeId();
         if (!cascadeId) return tryBtn() || (showToast(P()[9], 'warn'), fail('no-cascade-id', { mode: 'no-conversation' }));
         const ps = { kind: 'cascadeId', cascadeId };
         const pl = { panelScope: ps, content: { type: 'sideQuestionView', sideQuestionView: {} }, tabId: 'side_question__draft' };
+        const hasGet = typeof store.getState === 'function';
+        const s0 = hasGet ? safe(() => store.getState()) : null;
+        let dispatched = 0;
         for (const [type, payload] of [
           ['sidePanelV2/setContent', pl],
           ['sidePanel/setContent', pl],
           ['sidePanel/setSidePanelOpen', { panelScope: ps, isOpen: true }],
           ...(text ? [['sideQuestion/enqueueDraftSideQuestionQuote', { parentCascadeId: cascadeId, text }]] : []),
-        ]) store.dispatch({ type, payload });
-        const foc = () => { const el = qs(SIDE_IN); return !!(el?.focus && (safe(() => el.focus()), 1)); };
-        defer(() => { if (!foc()) defer(foc, -1); }, -1);
-        return { ok: true, mode: 'redux', cascadeId, quoted: !!text };
+        ]) if (safe(() => (store.dispatch({ type, payload }), 1))) dispatched++;
+        if (dispatched > 0 && (!hasGet || safe(() => store.getState()) !== s0 || qs(SIDE))) {
+          const foc = () => { const el = qs(SIDE_IN); return !!(el?.focus && (safe(() => el.focus()), 1)); };
+          defer(() => { if (!foc()) defer(foc, -1); }, -1);
+          return { ok: true, mode: 'redux', cascadeId, quoted: !!text };
+        }
       }
       const nb = tryBtn();
       if (nb) return nb;
@@ -247,46 +257,60 @@
       if (norm === '/btw') return triggerBtw(selectedText);
       const cx = { command: norm };
       if (!CMDS.has(norm)) return fail('unsupported-command', cx);
-      const { ed, err } = findEmptyComposer(cx);
-      if (err) return err;
+      if (slashBusy) return fail('busy', cx);
+      slashBusy = true;
+      try {
+        const { ed, err } = findEmptyComposer(cx);
+        if (err) return err;
+        const startCid = getCascadeId();
+        const guard = () => (destroyed ? fail('destroyed', cx) : ed.isConnected === false || (startCid && getCascadeId() !== startCid) ? fail('session-changed', cx) : null);
 
-      const quote = norm === '/compact' ? '' : clip(selectedText, 1200, 1);
-      insertText(ed, norm);
+        const quote = norm === '/compact' ? '' : clip(selectedText, 1200, 1);
+        insertText(ed, norm);
 
-      // 最多 4 轮短探测原生斜杠菜单（覆盖 40~160ms React 渲染窗口，命中即停）
-      const re = new RegExp('(?:^|\\s)' + norm + '(?:\\s|$)', 'i');
-      let opt = null;
-      for (let t = 0; t < 4 && !opt; t++) {
+        // 最多 4 轮短探测原生斜杠菜单（覆盖 40~160ms React 渲染窗口，命中即停）
+        const re = new RegExp('(?:^|\\s)' + norm + '(?:\\s|$)', 'i');
+        let opt = null;
+        for (let t = 0; t < 4 && !opt; t++) {
+          await waitStep();
+          const ab = guard();
+          if (ab) return ab;
+          for (const o of qa(SLASH)) {
+            const lbl = String(o.textContent || o.getAttribute?.('data-value') || '').trim();
+            if (re.test(lbl)) { opt = o; break; }
+            if (!opt && lbl.toLowerCase().includes(norm)) opt = o;
+          }
+        }
+        const pickedFromMenu = !!opt?.click;
+        if (pickedFromMenu) safe(() => opt.click());
+
+        if (quote) {
+          if (pickedFromMenu) {
+            await waitStep();
+            const ab = guard();
+            if (ab) return ab;
+          }
+          insertText(ed, '\n' + quote);
+        }
+
         await waitStep();
-        if (destroyed) return fail('destroyed', cx);
-        for (const o of qa(SLASH)) {
-          const lbl = String(o.textContent || o.getAttribute?.('data-value') || '').trim();
-          if (re.test(lbl)) { opt = o; break; }
-          if (!opt && lbl.toLowerCase().includes(norm)) opt = o;
+        const ab = guard();
+        if (ab) return ab;
+
+        let sendBtn = null;
+        for (const sc of [ed.closest?.(BOX), doc]) {
+          for (const b of qa(SEND, sc)) {
+            if (!inSide(b) && !b.disabled && b.getAttribute?.('aria-disabled') !== 'true' && !b.hasAttribute?.('disabled')) { sendBtn = b; break; }
+          }
+          if (sendBtn) break;
         }
+        let submitMethod = 'enter-key';
+        if (sendBtn?.click) { safe(() => sendBtn.click()); submitMethod = 'click-send-button'; }
+        else fireEvt(ed, 'KeyboardEvent', 'keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
+        return { ok: true, command: norm, pickedFromMenu, hasQuote: !!quote, submitMethod };
+      } finally {
+        slashBusy = false;
       }
-      const pickedFromMenu = !!opt?.click;
-      if (pickedFromMenu) opt.click();
-
-      if (quote) {
-        if (pickedFromMenu) { await waitStep(); if (destroyed) return fail('destroyed', cx); }
-        insertText(ed, '\n' + quote);
-      }
-
-      await waitStep();
-      if (destroyed) return fail('destroyed', cx);
-
-      let sendBtn = null;
-      for (const sc of [ed.closest?.(BOX), doc]) {
-        for (const b of qa(SEND, sc)) {
-          if (!inSide(b) && !b.disabled && b.getAttribute?.('aria-disabled') !== 'true' && !b.hasAttribute?.('disabled')) { sendBtn = b; break; }
-        }
-        if (sendBtn) break;
-      }
-      let submitMethod = 'enter-key';
-      if (sendBtn?.click) { sendBtn.click(); submitMethod = 'click-send-button'; }
-      else fireEvt(ed, 'KeyboardEvent', 'keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
-      return { ok: true, command: norm, pickedFromMenu, hasQuote: !!quote, submitMethod };
     };
 
     const copySelection = async (text) => {
@@ -313,7 +337,13 @@
       });
     };
 
-    const runAction = (id) => { const sel = curSel; close(); return id === 'copy' ? copySelection(sel) : id === 'btw' ? triggerBtw(sel) : triggerSlashCommand('/' + id, id === 'compact' ? '' : sel); };
+    const runAction = (id) => {
+      const sel = curSel;
+      close();
+      const r = safe(() => (id === 'copy' ? copySelection(sel) : id === 'btw' ? triggerBtw(sel) : triggerSlashCommand('/' + id, id === 'compact' ? '' : sel)));
+      if (typeof r?.catch === 'function') r.catch(() => {});
+      return r;
+    };
 
     const toggleOpen = (on) => {
       if (openBound === on) return;
@@ -441,7 +471,7 @@
 
     const destroy = () => {
       if (destroyed) return;
-      destroyed = true; enabled = false;
+      destroyed = true; enabled = false; slashBusy = false;
       close(); clearToast(); toggleCtx(false);
       clean.forEach((f) => safe(f)); clean.clear();
       qa('.ag-cs-ctx-menu,.ag-cs-ctx-toast').forEach((n) => safe(() => n.remove()));

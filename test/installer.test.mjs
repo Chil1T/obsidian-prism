@@ -49,6 +49,9 @@ function createMockCdpServer(options = {}) {
   let prismMounted = false;
   let lastInjectedExpr = null;
   let lastRemovedExpr = null;
+  const thoughtInjectExprs = [];
+  const thoughtRemoveExprs = [];
+  const addedScriptsById = new Map();
 
   function encodeWsTextFrame(str) {
     const payload = Buffer.from(str, 'utf8');
@@ -82,7 +85,9 @@ function createMockCdpServer(options = {}) {
     receivedCalls.push(msg);
     let result = {};
     if (msg.method === 'Page.addScriptToEvaluateOnNewDocument') {
-      result = { identifier: 'script-' + receivedCalls.length };
+      const id = 'script-' + receivedCalls.length;
+      addedScriptsById.set(id, (msg.params && msg.params.source) || '');
+      result = { identifier: id };
     } else if (msg.method === 'Page.getFrameTree') {
       result = { frameTree: { frame: { id: 'MAIN_FRAME' } } };
     } else if (msg.method === 'Runtime.enable') {
@@ -130,6 +135,26 @@ function createMockCdpServer(options = {}) {
           result: {
             type: 'object',
             value: { ok: true, status: 'mounted' },
+          },
+        };
+      } else if (expr.includes('const targetHash =') && expr.includes('__agPrismThoughtSettingsUi')) {
+        thoughtInjectExprs.push(expr);
+        result = {
+          result: {
+            type: 'object',
+            value: { ok: true, status: 'mounted' },
+          },
+        };
+      } else if (
+        expr.includes('delete window.__agPrismThoughtSettingsUi') &&
+        expr.includes("status: 'off'") &&
+        !expr.includes('const targetHash =')
+      ) {
+        thoughtRemoveExprs.push(expr);
+        result = {
+          result: {
+            type: 'object',
+            value: { ok: true, status: 'off' },
           },
         };
       } else if (
@@ -317,6 +342,15 @@ function createMockCdpServer(options = {}) {
     getLastRemovedExpr() {
       return lastRemovedExpr;
     },
+    getThoughtInjectExprs() {
+      return thoughtInjectExprs;
+    },
+    getThoughtRemoveExprs() {
+      return thoughtRemoveExprs;
+    },
+    getAddedScriptsById() {
+      return addedScriptsById;
+    },
     async close() {
       for (const s of sockets) s.destroy();
       await new Promise((resolve) => server.close(resolve));
@@ -460,6 +494,8 @@ test(
       assert.ok(fs.existsSync(path.join(installDir, 'host-workbench-enhancer.js')));
       assert.ok(fs.existsSync(path.join(installDir, 'vendor', 'pulse-dashboard', 'inline-fallback.js')));
       assert.ok(fs.existsSync(path.join(installDir, 'vendor', 'effort-slider', 'slider-coexist.js')));
+      assert.ok(fs.existsSync(path.join(installDir, 'vendor', 'thought-translator', 'thought-client.js')));
+      assert.ok(fs.existsSync(path.join(installDir, 'vendor', 'thought-translator', 'thought-settings-ui.js')));
       assert.ok(fs.existsSync(path.join(installDir, '.watch.pid')));
 
       // Verify full 5-channel native Sidecar plugin directory deployed cleanly
@@ -559,6 +595,39 @@ test(
         const newer = mockCdp.getCalls().slice(beforeCallCount);
         return newer.some((c) => c.method === 'Page.removeScriptToEvaluateOnNewDocument') ? true : null;
       });
+
+      // 3a. Channel 5 (thought-translator): default off must not inject; hot-toggle ai -> off injects then removes cleanly
+      assert.equal(
+        mockCdp.getThoughtInjectExprs().length,
+        0,
+        'Channel 5 thought expression must NOT be injected when thoughtTranslate defaults to off'
+      );
+      mockCdp.emitBindingCalled(cdp.SETTING_BINDING, { key: 'thoughtTranslate', value: 'ai' });
+      const thoughtInjected = await waitFor(() => {
+        const arr = mockCdp.getThoughtInjectExprs();
+        return arr.length > 0 ? arr[arr.length - 1] : null;
+      }, 6000, 100);
+      assert.doesNotThrow(() => new vm.Script(thoughtInjected), 'C# Channel 5 thought JS must compile cleanly');
+      assert.ok(thoughtInjected.includes('"thoughtTranslate":"ai"'), 'C# Channel 5 bootCfg reflects ai mode');
+      const registeredThoughtScriptId = Array.from(mockCdp.getAddedScriptsById().entries())
+        .reverse()
+        .find(([, src]) => src.includes('const targetHash =') && src.includes('__agPrismThoughtSettingsUi'))?.[0];
+      assert.ok(registeredThoughtScriptId, 'C# Watcher must register Channel 5 via Page.addScriptToEvaluateOnNewDocument');
+
+      const beforeDisableCallIdx = mockCdp.getCalls().length;
+      mockCdp.emitBindingCalled(cdp.SETTING_BINDING, { key: 'thoughtTranslate', value: 'off' });
+      await waitFor(() => {
+        const removedExprs = mockCdp.getThoughtRemoveExprs();
+        const removedScript = mockCdp
+          .getCalls()
+          .slice(beforeDisableCallIdx)
+          .some(
+            (c) =>
+              c.method === 'Page.removeScriptToEvaluateOnNewDocument' &&
+              c.params?.identifier === registeredThoughtScriptId
+          );
+        return removedExprs.length > 0 && removedScript ? true : null;
+      }, 6000, 100);
 
       // 3b. Test Watcher polite yield when native Sidecar daemon (.daemon.pid) is alive & auto-resume on exit
       const daemonPidPath = path.join(nativePluginDir, '.daemon.pid');
@@ -1042,4 +1111,55 @@ test('interactive GUI installers require explicit user confirmation before insta
   assert.match(macInitMatch[0], /prepareInstallChoice\s*\(/);
   assert.match(macSrc, /#selector\(handleInstallClick\)/);
   assert.match(macSrc, /closeBtn\s*=\s*NSButton\(title:\s*"取消"/);
+});
+
+test('Windows C# installer & Watcher Channel 5 contracts and cdp.js REMOVE_EXPRESSION data-ces-model-selected cleanup', () => {
+  const cdpCs = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs'), 'utf8');
+  const watcherCs = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'watcher', 'Program.cs'), 'utf8');
+
+  assert.ok(cdpCs.includes('public static bool ShouldEnableThought(Dictionary<string, object> cfg)'));
+  assert.ok(cdpCs.includes('public static string BuildThoughtExpression(string pluginDir, Dictionary<string, object> cfg)'));
+  assert.ok(cdpCs.includes('public const string ThoughtRemoveExpression'));
+  assert.ok(cdpCs.includes('ResolveSafePluginFile'));
+  assert.ok(cdpCs.includes('vendor/thought-translator/thought-client.js'));
+  assert.ok(cdpCs.includes('vendor/thought-translator/thought-settings-ui.js'));
+
+  assert.ok(watcherCs.includes('public string ThoughtScriptId;'));
+  assert.ok(watcherCs.includes('CdpHelper.ShouldEnableThought('));
+  assert.ok(watcherCs.includes('CdpHelper.BuildThoughtExpression('));
+  assert.ok(watcherCs.includes('CdpHelper.ThoughtRemoveExpression'));
+  assert.ok(watcherCs.includes('vendor/thought-translator/'));
+
+  // Verify cdp.js REMOVE_EXPRESSION statically includes & strips data-ces-model-selected
+  assert.ok(
+    cdp.REMOVE_EXPRESSION.includes("'data-ces-model-selected'"),
+    'cdp.REMOVE_EXPRESSION static attribute cleanup list must include data-ces-model-selected'
+  );
+  const removedAttrs = [];
+  const fakeRow = {
+    removeAttribute(attr) {
+      removedAttrs.push(attr);
+    },
+  };
+  const fakeDoc = {
+    documentElement: {
+      removeAttribute() {},
+      getAttribute() { return null; },
+      style: { removeProperty() {} },
+    },
+    getElementById() { return null; },
+    querySelector() { return null; },
+    querySelectorAll(sel) {
+      if (sel === '[data-ces-model-selected]') return [fakeRow];
+      return [];
+    },
+  };
+  const ctx = { window: {}, globalThis: {}, document: fakeDoc };
+  ctx.window = ctx;
+  ctx.globalThis = ctx;
+  vm.runInNewContext(cdp.REMOVE_EXPRESSION, ctx);
+  assert.ok(
+    removedAttrs.includes('data-ces-model-selected'),
+    'Executing cdp.REMOVE_EXPRESSION must strip data-ces-model-selected from DOM nodes'
+  );
 });

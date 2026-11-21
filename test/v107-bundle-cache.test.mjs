@@ -515,3 +515,110 @@ test('v107 A2-7: default buildInjectExpression never pollutes repo, and PrismDae
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 });
+
+test('v107 A2-8: single-pass PrismDaemon.rebuildBundle cold hit parses .bundle-cache.json once across all 5 channels and detects same-length same-mtime disk tampering', async () => {
+  const snap = await createIsolatedPluginSnapshot('prism-v107-cache-root-');
+  const cachePath = path.join(snap.pluginDir, '.bundle-cache.json');
+  const origReadFileSync = fs.readFileSync;
+  const origJsonParse = JSON.parse;
+  try {
+    // 1) Enable all 5 channels and cold-compile into .bundle-cache.json via PrismDaemon.rebuildBundle()
+    const cdpSeed = loadFreshCdp(snap.cdpPath);
+    cdpSeed.writeConfig({
+      ...cdpSeed.DEFAULT_CONFIG,
+      omniModule: 'on',
+      sidebarStudio: 'on',
+      hostLocalization: 'on',
+      thoughtTranslate: 'ai',
+    });
+
+    const dCold = new PrismDaemon({
+      rootDir: snap.pluginDir,
+      bundleCachePath: cachePath,
+      silent: true,
+      enableAutoUpdateTimer: false,
+    });
+    const coldInjectExpr = dCold.rebuildBundle();
+    assert.equal(fs.existsSync(cachePath), true);
+    assert.ok(dCold.omniExpr.length > 0);
+    assert.ok(dCold.sidebarExpr.length > 0);
+    assert.ok(dCold.hostI18nExpr.length > 0);
+    assert.ok(dCold.thoughtExpr.length > 0);
+
+    // 2) Simulate cold daemon restart: all 5 channels hit disk cache with ONLY 1 readFileSync + 1 JSON.parse
+    delete require.cache[require.resolve(snap.cdpPath)];
+    const dHit = new PrismDaemon({
+      rootDir: snap.pluginDir,
+      bundleCachePath: cachePath,
+      silent: true,
+      enableAutoUpdateTimer: false,
+    });
+
+    const resolvedCachePath = path.resolve(cachePath);
+    let cacheReads = 0;
+    let cacheParses = 0;
+    fs.readFileSync = function spyDaemonCacheRead(p, ...rest) {
+      if (typeof p === 'string' && path.resolve(p) === resolvedCachePath) {
+        cacheReads += 1;
+      }
+      return origReadFileSync.call(this, p, ...rest);
+    };
+    JSON.parse = function spyDaemonJsonParse(text, ...rest) {
+      if (typeof text === 'string' && text.includes('"schemaVersion"') && text.includes('"basePrefix"')) {
+        cacheParses += 1;
+      }
+      return origJsonParse.call(this, text, ...rest);
+    };
+    let hitInjectExpr;
+    try {
+      hitInjectExpr = dHit.rebuildBundle();
+    } finally {
+      fs.readFileSync = origReadFileSync;
+      JSON.parse = origJsonParse;
+    }
+
+    assert.equal(hitInjectExpr, coldInjectExpr);
+    assert.equal(dHit.omniExpr, dCold.omniExpr);
+    assert.equal(dHit.sidebarExpr, dCold.sidebarExpr);
+    assert.equal(dHit.hostI18nExpr, dCold.hostI18nExpr);
+    assert.equal(dHit.thoughtExpr, dCold.thoughtExpr);
+    assert.equal(cacheReads, 1, 'rebuildBundle() cold hit across 5 channels must read .bundle-cache.json only once');
+    assert.equal(cacheParses, 1, 'rebuildBundle() cold hit across 5 channels must JSON.parse .bundle-cache.json only once');
+
+    const hitStats = dHit.cdp.getBundleCacheStats();
+    assert.equal(hitStats.diskHits, 1);
+    assert.equal(hitStats.channelDiskHits, 4);
+    assert.equal(hitStats.compileUnifiedRuns, 0);
+    assert.equal(hitStats.channelCompileRuns, 0);
+
+    // 3) Same-process same-length same-mtime tampering on .bundle-cache.json (WITHOUT resetBundleCacheStats) must NOT reuse stale cached root
+    const stBefore = fs.statSync(cachePath);
+    const rawBefore = fs.readFileSync(cachePath, 'utf8');
+    const tamperedRaw = rawBefore.replace('\\"obsidian\\"', '\\"Obsidian\\"');
+    assert.notEqual(tamperedRaw, rawBefore);
+    assert.equal(Buffer.byteLength(tamperedRaw, 'utf8'), Buffer.byteLength(rawBefore, 'utf8'));
+    fs.writeFileSync(cachePath, tamperedRaw, 'utf8');
+    fs.utimesSync(cachePath, stBefore.atime, stBefore.mtime);
+
+    const prevMisses = dHit.cdp.getBundleCacheStats().diskMisses;
+    const prevWrites = dHit.cdp.getBundleCacheStats().diskWrites;
+    const recoveredExpr = dHit.cdp.buildInjectExpression(dHit.cdp.readConfig(), { cachePath });
+    assert.equal(recoveredExpr, coldInjectExpr, 'Same-length same-mtime tampered cache must fail open to valid bundle');
+    const afterTamperStats = dHit.cdp.getBundleCacheStats();
+    assert.equal(afterTamperStats.diskMisses, prevMisses + 1, 'Tampered cache must register a miss instead of reusing stale root cache');
+    assert.equal(afterTamperStats.diskWrites, prevWrites + 1, 'Tampered cache must self-heal on disk');
+
+    // 4) Deleting cache file clears root cache immediately and triggers clean rebuild
+    fs.unlinkSync(cachePath);
+    const afterUnlink = dHit.cdp.buildInjectExpression(dHit.cdp.readConfig(), { cachePath });
+    assert.equal(afterUnlink, coldInjectExpr);
+    assert.equal(fs.existsSync(cachePath), true);
+
+    await dCold.stop(false);
+    await dHit.stop(false);
+  } finally {
+    fs.readFileSync = origReadFileSync;
+    JSON.parse = origJsonParse;
+    snap.cleanup();
+  }
+});

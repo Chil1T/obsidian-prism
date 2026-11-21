@@ -1394,7 +1394,7 @@ var panels = doc.querySelectorAll(".ces-ag-panel-enhanced");
 for (var p = 0; p < panels.length; p += 1) {
 if (panels[p].classList) panels[p].classList.remove("ces-ag-panel-enhanced");
 }
-var attrs = ["data-ces-model-selected", "data-ag-cs-model-submenu", "data-ag-cs-orch-l2", "data-ag-cs-orch-l3", "data-ces-orch-row"];
+var attrs = ["data-ces-model-selected", "data-ag-cs-model-submenu", "data-ag-cs-orch-l2", "data-ag-cs-orch-l3", "data-ces-orch-row", "data-ces-orch-b", "data-ces-orch-tunable"];
 for (var a = 0; a < attrs.length; a += 1) {
 var nodes = doc.querySelectorAll("[" + attrs[a] + "]");
 for (var m = 0; m < nodes.length; m += 1) nodes[m].removeAttribute(attrs[a]);
