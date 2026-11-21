@@ -74,6 +74,7 @@
     homeRipple: S_T,
     logoInk: { allowed: ['accent', 'foreground'], default: 'accent' },
     language: { allowed: ['zh-CN', 'zh-TW', 'yue', 'en', 'ja'], default: 'zh-CN' },
+    hostLocalization: S_AUTO,
     composerRestyle: S_T,
     placeholderStyle: { allowed: ['studio', 'host'], default: 'studio' },
     smoothCaret: S_T,
@@ -126,13 +127,13 @@
     return spec.allowed.includes(val) ? { valid: true, value: val } : { valid: false };
   }
 
-  function buildSanitizedConfigExport(currentSettings = {}, rawThoughtCfg = null, version = '1.0.4') {
+  function buildSanitizedConfigExport(currentSettings = {}, rawThoughtCfg = null, version = '1.0.5') {
     const settings = {};
     for (const [k, spec] of Object.entries(PRISM_SETTINGS_SCHEMA)) {
       const c = sanitizeKeyVal(k, currentSettings[k]);
       settings[k] = c.valid ? c.value : spec.default;
     }
-    const out = { schema: 'obsidian-prism-config-v1', version: String(version || '1.0.4'), exportedAt: new Date().toISOString(), settings };
+    const out = { schema: 'obsidian-prism-config-v1', version: String(version || '1.0.5'), exportedAt: new Date().toISOString(), settings };
     const tSrc =
       rawThoughtCfg && typeof rawThoughtCfg === 'object' && rawThoughtCfg.config && typeof rawThoughtCfg.config === 'object'
         ? rawThoughtCfg.config
@@ -211,6 +212,7 @@
     { repo: '0DNANCY/agy-claude-style', url: 'https://github.com/0DNANCY/agy-claude-style', meta: 'MIT · 0DNANCY' },
     { repo: 'ATtacK030130/antigrative-dashboard', url: 'https://github.com/ATtacK030130/antigrative-dashboard', meta: 'MIT · AG Pulse' },
     { repo: 'LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider', url: 'https://github.com/LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider', meta: 'MIT · 月上寒' },
+    { repo: 'yiheng8023/antigravity-chinese', url: 'https://github.com/yiheng8023/antigravity-chinese', meta: 'MIT · yiheng8023' },
     { repo: 'Nwflower/dsh-claude-style', url: 'https://github.com/Nwflower/dsh-claude-style', meta: 'Inspiration' },
     { repo: 'Microqian2th/dsh-codex-effort-slider', url: 'https://github.com/Microqian2th/dsh-codex-effort-slider', meta: 'Upstream' },
     { repo: 'mobius/dsh-performance-slider', url: 'https://github.com/mobius/dsh-performance-slider', meta: 'Upstream' },
@@ -232,6 +234,7 @@
     '  - Copyright (c) 2026 0DNANCY (agy-claude-style)',
     '  - Copyright (c) 2026 AG Pulse contributors (antigrative-dashboard)',
     '  - Copyright (c) 2026 月上寒 / LLYSH-HANNARI (antigravity-Codex-Claude-effort-slider)',
+    '  - Copyright (c) 2026 Antigravity Chinese Localization Contributors (yiheng8023/antigravity-chinese)',
     '',
     'See LICENSE, NOTICE, CITATION.cff, and THIRD_PARTY_NOTICES.md in the repository.',
   ].join('\n');
@@ -362,6 +365,12 @@
         else if (isLightTheme && curPal === 'host' && u.lightPresetHintHost) lpText = u.lightPresetHintHost;
         if (lpDescEl.textContent !== lpText) lpDescEl.textContent = lpText;
       }
+      const hiDescEl = rootEl.querySelector('[data-ag-cs-row="hostLocalization"] [data-k="d"]');
+      if (hiDescEl) {
+        const hiState = doc.documentElement?.getAttribute?.('data-ag-prism-host-i18n');
+        const hiText = effVal('hostLocalization', l) === 'auto' && hiState === 'yielded' && u.hostI18nYieldHint ? u.hostI18nYieldHint : (u.setHostI18nDesc || '');
+        if (hiDescEl.textContent !== hiText) hiDescEl.textContent = hiText;
+      }
       const sumEl = rootEl.querySelector('[data-ag-cs-fold-summary]');
       if (sumEl) {
         const ns = formatSettingsSummary(l, u);
@@ -439,6 +448,7 @@
         homeRipple: R('homeRipple', 'setRippleTitle', 'setRippleDesc', onOff),
         logoInk: R('logoInk', 'setLogoInkTitle', 'setLogoInkDesc', [['accent', U('optAccent')], ['foreground', U('optForeground')]]),
         language: R('language', 'setLanguageTitle', 'setLanguageDesc', langOpts),
+        hostLocalization: R('hostLocalization', 'setHostI18nTitle', 'setHostI18nDesc', [['auto', U('optHostI18nAuto', 'Auto')], ['on', U('onLabel', 'On')], ['off', U('offLabel', 'Off')]]),
         composerRestyle: R('composerRestyle', 'setComposerTitle', 'setComposerDesc', onOff),
         placeholderStyle: R('placeholderStyle', 'setPlaceholderTitle', 'setPlaceholderDesc', [['studio', 'Studio'], ['host', U('optPlaceholderHost')]]),
         smoothCaret: R('smoothCaret', 'setSmoothCaretTitle', 'setSmoothCaretDesc', onOff),
@@ -459,7 +469,7 @@
       };
 
       const groups = [
-        { id: 'appearance', title: U('grpAppearance'), keys: ['palette', 'lightPreset', 'accentTone', 'cornerStyle', 'ambientIntensity', 'motionLevel', 'targetFps', 'homeLayout', 'homeRipple', 'logoInk', 'language'] },
+        { id: 'appearance', title: U('grpAppearance'), keys: ['palette', 'lightPreset', 'accentTone', 'cornerStyle', 'ambientIntensity', 'motionLevel', 'targetFps', 'homeLayout', 'homeRipple', 'logoInk', 'language', 'hostLocalization'] },
         { id: 'interaction', title: U('grpInteraction'), keys: ['composerRestyle', 'placeholderStyle', 'smoothCaret', 'codeFont', 'codeLigatures', 'mascot', 'sidebarRestyle', 'sidebarCompact'] },
         { id: 'thought', title: U('grpThought'), keys: ['thoughtTranslate', 'thoughtTrigger', 'thoughtView'] },
         { id: 'modules', title: U('groupModules'), keys: ['telemetryModule', 'effortSliderModule', 'omniModule', 'linkTarget'] },

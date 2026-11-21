@@ -263,6 +263,28 @@
       'Switch language for Obsidian Prism dashboard and settings UI.',
       'ホームダッシュボードと設定パネルの表示言語を切り替えます。',
     ],
+    setHostI18nTitle: [
+      '界面汉化（内置简体中文）',
+      '介面漢化（內建簡體中文）',
+      '介面漢化（內置簡體中文）',
+      'Host UI Localization (zh-CN)',
+      'ホストUI簡体字化 (zh-CN)',
+    ],
+    setHostI18nDesc: [
+      '按需汉化宿主原生界面；「自动」仅在简中下自动启用并礼让外部汉化。',
+      '按需漢化宿主原生介面；「自動」僅於簡中介面自動啟用並禮讓外部漢化。',
+      '按需漢化宿主原生介面；「自動」僅喺簡中介面自動啟用並禮讓外部漢化。',
+      'Translate host UI to zh-CN; Auto activates only in zh-CN UI and yields to external plugins.',
+      'ホストUIを簡体字化。自動は簡体字UI時のみ有効化し外部翻訳へ譲歩。',
+    ],
+    optHostI18nAuto: ['自动', '自動', '自動', 'Auto', '自動'],
+    hostI18nYieldHint: [
+      '已检测外部汉化并自动礼让',
+      '已偵測外部漢化並自動禮讓',
+      '已偵測外部漢化並自動禮讓',
+      'Detected external localization — auto-yielded',
+      '外部翻訳を検出し自動譲歩中',
+    ],
     setHomeLayoutTitle: ['首页版面', '首頁版面', '首頁版面', 'Home Layout', 'ホームレイアウト'],
     setHomeLayoutDesc: [
       '切换新对话首页的显示布局（简洁看板 / 居中 / 默认）。',

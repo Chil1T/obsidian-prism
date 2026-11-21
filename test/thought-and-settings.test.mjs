@@ -355,9 +355,9 @@ test('mountOrSyncSettingsSection mounts all 27 settings (including omniModule, l
     let sec = doc.getElementById(settingsPanel.SETTINGS_SEC_ID);
     assert.ok(sec, 'Settings section must mount into Appearance dialog');
 
-    // 1. Verify all 28 setting rows mount cleanly, with 4 rows in modules group and sidebarStudio (Beta) in beta group
+    // 1. Verify all 29 setting rows mount cleanly, with 4 rows in modules group and sidebarStudio (Beta) in beta group
     const allRows = sec.querySelectorAll('[data-ag-cs-row]');
-    assert.equal(allRows.length, 28, 'Must render all 28 setting rows');
+    assert.equal(allRows.length, 29, 'Must render all 29 setting rows');
     const modulesGrp = sec.querySelector('[data-ag-cs-group="modules"]');
     const moduleRowKeys = modulesGrp.querySelectorAll('[data-ag-cs-row]').map((r) => r.getAttribute('data-ag-cs-row'));
     assert.deepEqual(moduleRowKeys, ['telemetryModule', 'effortSliderModule', 'omniModule', 'linkTarget']);
@@ -409,7 +409,8 @@ test('mountOrSyncSettingsSection mounts all 27 settings (including omniModule, l
     await new Promise((r) => setTimeout(r, 25));
     assert.equal(clipboardWrites.length, 1);
     const exportedObj = JSON.parse(clipboardWrites[0]);
-    assert.equal(Object.keys(exportedObj.settings).length, 28);
+    assert.equal(Object.keys(exportedObj.settings).length, 29);
+    assert.equal(exportedObj.settings.hostLocalization, 'auto');
     assert.equal(exportedObj.settings.omniModule, 'on');
     assert.equal(exportedObj.settings.linkTarget, 'external');
     assert.equal(exportedObj.settings.sidebarStudio, 'on');

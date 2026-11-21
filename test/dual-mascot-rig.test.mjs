@@ -854,3 +854,476 @@ test('OP-1 & OP-3 regressions: streamDone error worry pose, window blur drag rel
   stage.dispose();
   assert.equal(hostEl.children.length, 0, 'dispose() must detach all stage children from hostEl');
 });
+
+test('Issue #1 & perf guard: dual mascots (cat + clawd) track side-panel push/drag-snap/close-rebound via rAF, skip unaffected pets, and pulse bar uses 0-reflow ResizeObserver tiers', async () => {
+  const winListeners = new Map();
+  let roCb = null, roDisconnected = false, rafQueue = [], passiveCount = 0;
+  const prevRO = globalThis.ResizeObserver;
+  class FakeRO {
+    constructor(cb) { roCb = cb; }
+    observe() {}
+    disconnect() { roDisconnected = true; }
+  }
+  globalThis.ResizeObserver = FakeRO;
+  const mockWin = {
+    devicePixelRatio: 1,
+    ResizeObserver: FakeRO,
+    matchMedia: () => ({ matches: false }),
+    requestAnimationFrame(fn) { rafQueue.push(fn); return rafQueue.length; },
+    cancelAnimationFrame() {},
+    addEventListener(type, fn, opts) {
+      if (opts && typeof opts === 'object' && opts.passive) passiveCount++;
+      if (!winListeners.has(type)) winListeners.set(type, new Set());
+      winListeners.get(type).add(fn);
+    },
+    removeEventListener(type, fn) { winListeners.get(type)?.delete(fn); },
+    dispatch(type) { for (const fn of [...(winListeners.get(type) || [])]) fn({ type }); },
+  };
+  const flushRaf = () => { const q = rafQueue.splice(0); for (const fn of q) fn(performance.now()); };
+  const makeNode = (tag) => {
+    const listeners = new Map(), attrs = new Map(), children = [];
+    const node = {
+      nodeType: 1,
+      tagName: tag.toUpperCase(),
+      ownerDocument: null,
+      width: 96,
+      height: 84,
+      className: '',
+      dataset: {},
+      style: {},
+      children,
+      get firstChild() { return children[0] || null; },
+      setAttribute(k, v) { attrs.set(k, String(v)); },
+      getAttribute(k) { return attrs.get(k) ?? null; },
+      removeAttribute(k) { attrs.delete(k); },
+      appendChild(c) { children.push(c); return c; },
+      removeChild(c) { const i = children.indexOf(c); if (i >= 0) children.splice(i, 1); return c; },
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 720, bottom: 84, width: 720, height: 84 }),
+      addEventListener(t, f) { if (!listeners.has(t)) listeners.set(t, new Set()); listeners.get(t).add(f); },
+      removeEventListener(t, f) { listeners.get(t)?.delete(f); },
+      getContext: (k) => k === '2d' ? { save() {}, restore() {}, setTransform() {}, clearRect() {}, beginPath() {}, rect() {}, clip() {}, translate() {}, scale() {}, rotate() {}, fillRect() {}, drawImage() {} } : null,
+    };
+    return node;
+  };
+  const doc = { hidden: false, defaultView: mockWin, createElement(tag) { const n = makeNode(tag); n.ownerDocument = doc; return n; }, addEventListener() {}, removeEventListener() {} };
+  const hostEl = doc.createElement('div');
+  Object.setPrototypeOf(hostEl, { get clientWidth() { return 720; } });
+
+  try {
+    const stage = rig.mountDualMascotStage(hostEl, { miniPileEnabled: false, reducedMotion: true });
+    assert.ok(roCb, 'Must attach ResizeObserver to stage host');
+    assert.ok(passiveCount >= 3, 'Window pointer listeners must be passive');
+
+    const snap0 = stage.getLayoutSnapshot();
+    const cat0 = snap0.actors.find((a) => a.id === 'cat').x;
+    const clawd0 = snap0.actors.find((a) => a.id === 'clawd').x;
+    const draws0 = snap0.perf.canvasDraws;
+
+    // 1) Side panel widens (stage shrinks 720 -> 360): BOTH cat & clawd get pushed left cleanly in a single rAF batch
+    roCb([{ contentRect: { width: 520 } }]);
+    roCb([{ contentRect: { width: 360 } }]);
+    assert.equal(rafQueue.length, 1, 'Multiple ResizeObserver ticks in same frame must coalesce into 1 rAF');
+    flushRaf();
+    const snapNarrow = stage.getLayoutSnapshot();
+    const catN = snapNarrow.actors.find((a) => a.id === 'cat').x;
+    const clawdN = snapNarrow.actors.find((a) => a.id === 'clawd').x;
+    assert.ok(catN < cat0 - 150 && clawdN < clawd0 - 150, `Both cat (${cat0}->${catN}) and clawd (${clawd0}->${clawdN}) must be pushed left`);
+    assert.equal(snapNarrow.perf.canvasDraws, draws0, 'Side-panel push only updates GPU translate3d and must not trigger redundant canvasDraws');
+
+    // 2) Dragging side panel back right (pointerdown active): BOTH follow right edge smoothly
+    mockWin.dispatch('pointerdown');
+    roCb([{ contentRect: { width: 500 } }]);
+    flushRaf();
+    const snapMid = stage.getLayoutSnapshot();
+    assert.ok(snapMid.actors.find((a) => a.id === 'cat').x > catN + 80, 'cat must snap-follow right edge during drag');
+    assert.ok(snapMid.actors.find((a) => a.id === 'clawd').x > clawdN + 80, 'clawd must snap-follow right edge during drag');
+    assert.equal(snapMid.perf.canvasDraws, draws0, 'Side-panel drag-snap must not trigger redundant canvasDraws');
+
+    // 3) Closing side panel (pointerup + wide jump to 720): BOTH rebound back to original right-side positions
+    mockWin.dispatch('pointerup');
+    roCb([{ contentRect: { width: 620 } }]);
+    flushRaf();
+    roCb([{ contentRect: { width: 720 } }]);
+    flushRaf();
+    await new Promise((r) => setTimeout(r, 340));
+    const snapBack = stage.getLayoutSnapshot();
+    assert.ok(Math.abs(snapBack.actors.find((a) => a.id === 'cat').x - cat0) <= 6, 'cat must rebound back to original right position');
+    assert.ok(Math.abs(snapBack.actors.find((a) => a.id === 'clawd').x - clawd0) <= 6, 'clawd must rebound back to original right position');
+
+    // 4) Clean dispose removes ResizeObserver & all passive window listeners
+    stage.dispose();
+    assert.equal(roDisconnected, true, 'dispose() must disconnect ResizeObserver');
+    assert.equal((winListeners.get('pointerdown')?.size || 0), 0, 'dispose() must remove pointerdown listener');
+  } finally {
+    globalThis.ResizeObserver = prevRO;
+  }
+
+  // 5) Verify inline-fallback 5-tier 0-reflow ResizeObserver behavior
+  const fbMod = require('../vendor/pulse-dashboard/inline-fallback.js');
+  let ftRoCb = null, rectCalls = 0, ftRoDisc = false;
+  class PulseRO {
+    constructor(cb) { ftRoCb = cb; }
+    observe() {}
+    disconnect() { ftRoDisc = true; }
+  }
+  const ftAttrs = new Map(), barAttrs = new Map();
+  const footer = {
+    isConnected: true, className: 'agy-composer-footer', hidden: false, children: [],
+    getAttribute: (k) => ftAttrs.get(k) ?? null,
+    setAttribute: (k, v) => ftAttrs.set(k, String(v)),
+    removeAttribute: (k) => ftAttrs.delete(k),
+    getBoundingClientRect: () => { rectCalls++; return { width: 700, height: 30 }; },
+    appendChild(c) { this.children.push(c); c.parentElement = this; },
+    closest: () => null,
+  };
+  let injectedTierCss = '';
+  const extBar = {
+    id: 'ag-pulse-status-bar', isConnected: true, hidden: false,
+    shadowRoot: { querySelector: () => null, appendChild(el) { if (el?.textContent) injectedTierCss = el.textContent; } },
+    getAttribute: (k) => barAttrs.get(k) ?? null,
+    setAttribute: (k, v) => barAttrs.set(k, String(v)),
+    removeAttribute: (k) => barAttrs.delete(k),
+    getBoundingClientRect: () => ({ width: 180, height: 24 }),
+  };
+  const pDoc = {
+    hidden: false,
+    documentElement: { getAttribute: () => 'zh-CN' },
+    body: {},
+    createElement: (tag) => ({ tagName: tag, setAttribute() {}, textContent: '' }),
+    querySelector: (sel) => (sel.includes('agy-composer-footer') ? footer : sel.includes('conversation-view') ? {} : null),
+    querySelectorAll: (sel) => (sel.includes('ag-pulse-status-bar') ? [extBar] : []),
+    contains: () => true,
+  };
+  const pWin = {
+    document: pDoc,
+    location: { pathname: '/c/11111111-2222-3333-4444-555555555555' },
+    ResizeObserver: PulseRO,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const ctl = fbMod.createTelemetryController({ window: pWin, document: pDoc });
+  ctl.sync({ telemetryModule: 'auto', language: 'zh-CN' });
+  assert.equal(ftAttrs.get('data-t'), '0');
+  const callsAfterInit = rectCalls;
+  ftRoCb([{ contentRect: { width: 610 } }]);
+  assert.equal(ftAttrs.get('data-t'), '1');
+  ftRoCb([{ contentRect: { width: 340 } }]);
+  assert.equal(ftAttrs.get('data-t'), '1 2 3 4 5');
+  assert.equal(barAttrs.get('data-t'), '1 2 3 4 5');
+  assert.equal(rectCalls, callsAfterInit, 'ResizeObserver path must use contentRect.width with 0 getBoundingClientRect reflows');
+  assert.equal(/(?<![a-z-])width:0!important/.test(injectedTierCss), false, 'TIER_CSS must not use non-interpolable width:0!important');
+  assert.equal(injectedTierCss.includes('flex:0 0 0!important'), false, 'TIER_CSS must not use non-interpolable flex:0 0 0!important');
+  assert.ok(injectedTierCss.includes('transform:scale(1.27)'), 'Tier 5 context-ring must scale via GPU transform');
+  ctl.destroy();
+  assert.equal(ftRoDisc, true, 'destroy() must disconnect pulse ResizeObserver');
+});
+
+test('Red-team regressions: wide rebound (reducedMotion=false), narrower restore order, mini tower syncTower, TIER_CSS specificity, and late/rebuild ResizeObserver rebind', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { performance } = require('node:perf_hooks');
+
+  // Helper to mount a stage with controllable ResizeObserver + rAF
+  const createStageHarness = (initW, opts = {}) => {
+    let roCb = null;
+    let curW = initW;
+    const rafQueue = [];
+    const winListeners = new Map();
+    const prevRO = globalThis.ResizeObserver;
+    class TestRO {
+      constructor(cb) { roCb = cb; }
+      observe() {}
+      disconnect() {}
+    }
+    globalThis.ResizeObserver = TestRO;
+    const mockWin = {
+      devicePixelRatio: 1,
+      ResizeObserver: TestRO,
+      matchMedia: () => ({ matches: false }),
+      requestAnimationFrame(fn) { rafQueue.push(fn); return rafQueue.length; },
+      cancelAnimationFrame() {},
+      addEventListener(type, fn) {
+        if (!winListeners.has(type)) winListeners.set(type, new Set());
+        winListeners.get(type).add(fn);
+      },
+      removeEventListener(type, fn) { winListeners.get(type)?.delete(fn); },
+    };
+    const makeNode = (tag) => {
+      const listeners = new Map(), attrs = new Map(), children = [];
+      return {
+        nodeType: 1,
+        tagName: tag.toUpperCase(),
+        ownerDocument: null,
+        width: 96,
+        height: 84,
+        className: '',
+        dataset: {},
+        style: {},
+        children,
+        get firstChild() { return children[0] || null; },
+        setAttribute(k, v) { attrs.set(k, String(v)); },
+        getAttribute(k) { return attrs.get(k) ?? null; },
+        removeAttribute(k) { attrs.delete(k); },
+        appendChild(c) { children.push(c); return c; },
+        removeChild(c) { const i = children.indexOf(c); if (i >= 0) children.splice(i, 1); return c; },
+        getBoundingClientRect: () => ({ left: 0, top: 0, right: curW, bottom: 84, width: curW, height: 84 }),
+        addEventListener(t, f) { if (!listeners.has(t)) listeners.set(t, new Set()); listeners.get(t).add(f); },
+        removeEventListener(t, f) { listeners.get(t)?.delete(f); },
+        getContext: (k) => (k === '2d' ? { save() {}, restore() {}, setTransform() {}, clearRect() {}, beginPath() {}, rect() {}, clip() {}, translate() {}, scale() {}, rotate() {}, fillRect() {}, drawImage() {} } : null),
+      };
+    };
+    const doc = {
+      hidden: false,
+      defaultView: mockWin,
+      createElement(tag) { const n = makeNode(tag); n.ownerDocument = doc; return n; },
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    const hostEl = doc.createElement('div');
+    Object.setPrototypeOf(hostEl, { get clientWidth() { return curW; } });
+    const stage = rig.mountDualMascotStage(hostEl, { miniPileEnabled: Boolean(opts.miniPileEnabled), reducedMotion: Boolean(opts.reducedMotion) });
+    const resizeTo = (nextW) => {
+      curW = nextW;
+      roCb([{ contentRect: { width: nextW } }]);
+      const q = rafQueue.splice(0);
+      for (const fn of q) fn(performance.now());
+    };
+    const flushBallistic = async (steps = 90) => {
+      let now = performance.now();
+      for (let i = 0; i < steps && rafQueue.length > 0; i++) {
+        now += 16.7;
+        const q = rafQueue.splice(0);
+        for (const fn of q) fn(now);
+      }
+    };
+    const cleanup = () => {
+      stage.dispose();
+      globalThis.ResizeObserver = prevRO;
+    };
+    return { stage, resizeTo, flushBallistic, cleanup };
+  };
+
+  // ① reducedMotion: false wide screen (1100 -> 360 -> 1100) rebounds accurately without stalling at 351px
+  {
+    const h = createStageHarness(1100, { miniPileEnabled: false, reducedMotion: false });
+    try {
+      const snap0 = h.stage.getLayoutSnapshot();
+      const cat0 = snap0.actors.find((a) => a.id === 'cat').x;
+      const clawd0 = snap0.actors.find((a) => a.id === 'clawd').x;
+      assert.ok(cat0 > 950 && clawd0 > 880, `Wide stage should place mascots near right edge (cat=${cat0}, clawd=${clawd0})`);
+
+      h.resizeTo(360);
+      const snapN = h.stage.getLayoutSnapshot();
+      assert.ok(snapN.actors.find((a) => a.id === 'clawd').x <= 270, 'Clawd must push left at 360px');
+
+      // Multi-step expand with debounce reset
+      h.resizeTo(700);
+      await new Promise((r) => setTimeout(r, 60));
+      h.resizeTo(1100);
+      await new Promise((r) => setTimeout(r, 220));
+      await h.flushBallistic(100);
+
+      const snapBack = h.stage.getLayoutSnapshot();
+      const catBack = snapBack.actors.find((a) => a.id === 'cat').x;
+      const clawdBack = snapBack.actors.find((a) => a.id === 'clawd').x;
+      assert.ok(Math.abs(catBack - cat0) <= 2, `cat must rebound accurately on 1100px wide screen (${cat0} vs ${catBack})`);
+      assert.ok(Math.abs(clawdBack - clawd0) <= 2, `clawd must rebound accurately on 1100px wide screen (${clawd0} vs ${clawdBack})`);
+      assert.notEqual(snapBack.lastInteraction.type, 'ballisticBump', 'Rebound flights must not mid-air bump each other');
+    } finally {
+      h.cleanup();
+    }
+  }
+
+  // ② Restore to narrower window (720 -> 360 -> 580): no overlap and no order inversion
+  {
+    const h = createStageHarness(720, { miniPileEnabled: false, reducedMotion: false });
+    try {
+      const snap0 = h.stage.getLayoutSnapshot();
+      const cat0 = snap0.actors.find((a) => a.id === 'cat').x;
+      const clawd0 = snap0.actors.find((a) => a.id === 'clawd').x;
+      assert.ok(cat0 > clawd0, 'Baseline gemini camp puts cat right of clawd');
+
+      h.resizeTo(360);
+      h.resizeTo(580);
+      await new Promise((r) => setTimeout(r, 220));
+      await h.flushBallistic(100);
+
+      const snap580 = h.stage.getLayoutSnapshot();
+      const cat1 = snap580.actors.find((a) => a.id === 'cat').x;
+      const clawd1 = snap580.actors.find((a) => a.id === 'clawd').x;
+      assert.ok(cat1 - clawd1 >= 56, `Restoring to narrower 580px must preserve >= 56px gap without order flip (cat=${cat1}, clawd=${clawd1})`);
+    } finally {
+      h.cleanup();
+    }
+  }
+
+  // ③ Mini-crab tower push/pull syncTower keeps exact worldCx without 16px left offset
+  {
+    const h = createStageHarness(720, { miniPileEnabled: true, reducedMotion: true });
+    try {
+      assert.equal(h.stage.stackOnto('cowboy', 'clawd'), true);
+      h.resizeTo(360);
+      const snapN = h.stage.getLayoutSnapshot();
+      const clawdN = snapN.actors.find((a) => a.id === 'clawd');
+      const cowboyN = snapN.minis.find((m) => m.id === 'cowboy');
+      assert.ok(Math.abs(cowboyN.worldCx - clawdN.worldCx) <= 1, `Stacked mini crab worldCx (${cowboyN.worldCx}) must match clawd worldCx (${clawdN.worldCx}) during push`);
+
+      h.resizeTo(720);
+      await new Promise((r) => setTimeout(r, 220));
+      const snapR = h.stage.getLayoutSnapshot();
+      const clawdR = snapR.actors.find((a) => a.id === 'clawd');
+      const cowboyR = snapR.minis.find((m) => m.id === 'cowboy');
+      assert.ok(Math.abs(cowboyR.worldCx - clawdR.worldCx) <= 1, `Stacked mini crab worldCx (${cowboyR.worldCx}) must match clawd worldCx (${clawdR.worldCx}) after rebound`);
+    } finally {
+      h.cleanup();
+    }
+  }
+
+  // ④ Verify TIER_CSS against real inline-widget.cjs CSS: never overrides .collection-label{display:none} or .card positioning
+  {
+    const widgetSrc = fs.readFileSync(require.resolve('../vendor/pulse-dashboard/compat/inline-widget.cjs'), 'utf8');
+    assert.ok(widgetSrc.includes('.collection-label{display:none}'), 'Real inline-widget.cjs must hide .collection-label by default');
+    assert.ok(widgetSrc.includes('.rounds,.group,.dot.live{display:none}'), 'Real inline-widget.cjs must hide .rounds/.group by default');
+    assert.ok(widgetSrc.includes(':host(.icons-only) .chip>:not(svg):not(.context-ring){display:none}'), 'Real inline-widget.cjs must hide chip text in icons-only mode');
+
+    const fbMod = require('../vendor/pulse-dashboard/inline-fallback.js');
+    let injectedTierCss = '';
+    const barAttrs = new Map();
+    const ftAttrs = new Map();
+    const extBar = {
+      id: 'ag-pulse-status-bar',
+      isConnected: true,
+      hidden: false,
+      shadowRoot: {
+        querySelector: () => null,
+        appendChild(el) { if (el?.textContent) injectedTierCss = el.textContent; },
+      },
+      getAttribute: (k) => barAttrs.get(k) ?? null,
+      setAttribute: (k, v) => barAttrs.set(k, String(v)),
+      removeAttribute: (k) => barAttrs.delete(k),
+      getBoundingClientRect: () => ({ width: 180, height: 24 }),
+    };
+    const ft = {
+      isConnected: true,
+      getAttribute: (k) => ftAttrs.get(k) ?? null,
+      setAttribute: (k, v) => ftAttrs.set(k, String(v)),
+      removeAttribute: (k) => ftAttrs.delete(k),
+      getBoundingClientRect: () => ({ width: 420, height: 30 }),
+    };
+    const pDoc = {
+      hidden: false,
+      documentElement: { getAttribute: () => 'zh-CN' },
+      body: {},
+      createElement: (tag) => ({ tagName: tag, setAttribute() {}, textContent: '' }),
+      querySelector: (sel) => (sel.includes('agy-composer-footer') ? ft : sel.includes('conversation-view') ? {} : null),
+      querySelectorAll: (sel) => (sel.includes('ag-pulse-status-bar') ? [extBar] : []),
+      contains: () => true,
+    };
+    const pWin = {
+      document: pDoc,
+      location: { pathname: '/c/11111111-2222-3333-4444-555555555555' },
+      ResizeObserver: class { observe() {} disconnect() {} },
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    const ctl = fbMod.createTelemetryController({ window: pWin, document: pDoc });
+    ctl.sync({ telemetryModule: 'auto', language: 'zh-CN' });
+    assert.ok(injectedTierCss.includes(':where(.bar>.chip>*:not(.context-ring):not(svg))'), 'TIER_CSS must downgrade chip children with :where() (0,0,0 specificity)');
+    assert.ok(injectedTierCss.includes('[hidden]{display:none!important}'), 'TIER_CSS must reinforce [hidden]{display:none!important}');
+    assert.equal(injectedTierCss.includes('display:inline-flex'), false, 'TIER_CSS must not inject display:inline-flex onto external widget children');
+    assert.equal(injectedTierCss.includes(':host([data-t~="4"]) .card'), false, 'TIER_CSS must not override external fixed .card positioning');
+    ctl.destroy();
+  }
+
+  // ⑤ External bar late mount + SPA session switch rebuilding footer triggers ResizeObserver rebind & style[data-pt="1"] re-injection
+  {
+    const fbMod = require('../vendor/pulse-dashboard/inline-fallback.js');
+    const observedEls = [];
+    let disconnectedCount = 0;
+    let moCb = null;
+    class TrackRO {
+      constructor(cb) { this.cb = cb; }
+      observe(el) { observedEls.push(el); }
+      disconnect() { disconnectedCount++; }
+    }
+    class FakeMO {
+      constructor(cb) { moCb = cb; }
+      observe() {}
+      disconnect() {}
+    }
+    const mkFt = (w) => {
+      const attrs = new Map();
+      return {
+        isConnected: true,
+        className: 'agy-composer-footer',
+        children: [],
+        getAttribute: (k) => attrs.get(k) ?? null,
+        setAttribute: (k, v) => attrs.set(k, String(v)),
+        removeAttribute: (k) => attrs.delete(k),
+        getBoundingClientRect: () => ({ width: w, height: 30 }),
+        appendChild(c) { this.children.push(c); c.parentElement = this; },
+        closest: () => null,
+      };
+    };
+    const mkExtBar = (id) => {
+      const attrs = new Map();
+      let styleNode = null;
+      return {
+        id,
+        isConnected: true,
+        hidden: false,
+        shadowRoot: {
+          querySelector: (sel) => (sel.includes('data-pt') ? styleNode : null),
+          appendChild(el) { styleNode = el; },
+        },
+        getAttribute: (k) => attrs.get(k) ?? null,
+        setAttribute: (k, v) => attrs.set(k, String(v)),
+        removeAttribute: (k) => attrs.delete(k),
+        getBoundingClientRect: () => ({ width: 180, height: 24 }),
+        hasStyle() { return Boolean(styleNode); },
+      };
+    };
+
+    let activeFt = mkFt(500);
+    let activeBar = null; // External bar not mounted yet at sync()!
+    const pDoc = {
+      hidden: false,
+      documentElement: { getAttribute: () => 'zh-CN' },
+      body: {},
+      createElement: (tag) => ({ tagName: tag, setAttribute() {}, textContent: '' }),
+      querySelector: (sel) => (sel.includes('agy-composer-footer') ? activeFt : sel.includes('conversation-view') ? {} : null),
+      querySelectorAll: (sel) => (sel.includes('ag-pulse-status-bar') && activeBar ? [activeBar] : []),
+      contains: () => true,
+    };
+    const pWin = {
+      document: pDoc,
+      location: { pathname: '/c/11111111-2222-3333-4444-555555555555' },
+      ResizeObserver: TrackRO,
+      MutationObserver: FakeMO,
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    const ctl = fbMod.createTelemetryController({ window: pWin, document: pDoc });
+    ctl.sync({ telemetryModule: 'auto', language: 'zh-CN', __fallbackDelayMs: 40 });
+    // External bar mounts right before waitTimerDone fires
+    activeBar = mkExtBar('ag-pulse-status-bar-1');
+    await new Promise((r) => setTimeout(r, 70));
+    assert.equal(observedEls[0], activeFt, 'waitTimerDone() yielding to late external bar must bind ResizeObserver to footer');
+    assert.equal(activeBar.hasStyle(), true, 'Late external bar must receive TIER_CSS style[data-pt="1"]');
+
+    // Simulate SPA conversation switch: old footer detached, new footer + fresh external bar mounted
+    activeFt.isConnected = false;
+    const newFt = mkFt(340);
+    const newBar = mkExtBar('ag-pulse-status-bar-2');
+    activeFt = newFt;
+    activeBar = newBar;
+    moCb([{ target: pDoc.body }]);
+    await new Promise((r) => setTimeout(r, 80));
+
+    assert.ok(disconnectedCount >= 1, 'Session switch rebuilding footer must disconnect stale ResizeObserver');
+    assert.equal(observedEls[observedEls.length - 1], newFt, 'Session switch must rebind ResizeObserver to rebuilt footer');
+    assert.equal(newBar.hasStyle(), true, 'Rebuilt external bar must receive style[data-pt="1"]');
+    assert.equal(newFt.getAttribute('data-t'), '1 2 3 4 5', 'Rebuilt narrow footer must immediately compute tier 5');
+    ctl.destroy();
+  }
+});

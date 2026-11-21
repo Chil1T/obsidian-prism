@@ -12,7 +12,7 @@ Four dark & daylight themes · A living 512K context vial · Reasoning effort sl
 
 <p>
   <a href="https://github.com/RMvdesi/obsidian-prism/releases"><img src="https://img.shields.io/github/v/release/RMvdesi/obsidian-prism?style=flat-square&color=3186ff&label=Release" alt="Latest Release" /></a>
-  <img src="https://img.shields.io/badge/Version-1.0.4-0f172a?style=flat-square" alt="Version 1.0.4" />
+  <img src="https://img.shields.io/badge/Version-1.0.5-0f172a?style=flat-square" alt="Version 1.0.5" />
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20Universal-1e293b?style=flat-square" alt="Platform" />
   <a href="https://github.com/RMvdesi/obsidian-prism/actions"><img src="https://img.shields.io/github/actions/workflow/status/RMvdesi/obsidian-prism/ci.yml?branch=main&style=flat-square&label=CI" alt="CI Status" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-2563eb?style=flat-square" alt="License: GPL-3.0" /></a>
@@ -22,10 +22,10 @@ Four dark & daylight themes · A living 512K context vial · Reasoning effort sl
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/hero-dark.webp" />
   <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/hero-light.webp" />
-  <img src="assets/screenshots/hero-dark.webp" width="100%" alt="Obsidian Prism v1.0.4 showcase" />
+  <img src="assets/screenshots/hero-dark.webp" width="100%" alt="Obsidian Prism v1.0.5 showcase" />
 </picture>
 
-<sub>Footage is rendered frame by frame by an offline stage that runs this repository's v1.0.4 front-end source directly. All workspaces and conversations shown are fictional.</sub>
+<sub>Footage is rendered frame by frame by an offline stage that runs this repository's v1.0.5 front-end source directly. All workspaces and conversations shown are fictional.</sub>
 
 </div>
 
@@ -90,7 +90,7 @@ Off by default — enable it under **Settings → Appearance → Beta**. A switc
 
 ### 5. More Capabilities
 
-- **Appearance Control Center**: Lives in **Settings → Appearance** — 5 UI languages, 27 validated settings, three scene presets (Full Visuals / Deep Focus / Silent Eco), backup/restore and one-click updates.
+- **Appearance Control Center**: Lives in **Settings → Appearance** — 5 UI languages, 29 validated settings, three scene presets (Full Visuals / Deep Focus / Silent Eco), backup/restore and one-click updates.
 - **Thought Translator**: Zero-config machine translation, or stream translations through local / compatible model endpoints, with clickable source paths and line numbers.
 - **Omni Browser & File Viewer**: Open bare links and local paths in the side pane; stream huge videos, audio, PDFs, tables and fonts; right-click to copy paths, reveal files or insert references.
 - **Workbench Enhancements**: Sticky code-block headers, manual folding for long code blocks, chapter ticks and hover outlines on the conversation rail, and `Alt+↑` / `Alt+↓` turn navigation.
@@ -98,7 +98,7 @@ Off by default — enable it under **Settings → Appearance → Beta**. A switc
 <details>
 <summary><strong>Technical details: performance, security, telemetry & configuration (click to expand)</strong></summary>
 
-**Obsidian Prism (`v1.0.4`)** provides dark/daylight themes, host workbench enhancements, a built-in side-pane browser and streaming multi-format file viewer, live quota telemetry, and chain-of-thought translation for the Antigravity desktop client through a native Sidecar plugin architecture — without altering host business logic or conflicting with external plugins:
+**Obsidian Prism (`v1.0.5`)** provides dark/daylight themes, host workbench enhancements, a built-in side-pane browser and streaming multi-format file viewer, live quota telemetry, and chain-of-thought translation for the Antigravity desktop client through a native Sidecar plugin architecture — without altering host business logic or conflicting with external plugins:
 
 - **Four Dark/Daylight Themes & Fine-Grained Controls**: Includes two dark palettes (**Obsidian Dark** & **Warm Charcoal**) and two daylight presets (**Daylight Crystal** & **Warm Alabaster**) with automatic host light/dark tracking, plus 5 accent tones (Follow Model, Cobalt, Iris, Amber, and Graphite Monochrome `mono`), 3 corner radius scales, 4 code monospace font stacks with ligature toggle, and ambient glow intensity controls.
 - **300Hz Split-Rate Pipeline, 5-Step Ink Streaming & `0fps` Semantic Afterglow**: Removes persistent multi-layer `backdrop-filter` blur passes; renders streaming responses with a `CSS.highlights`-based **5-step ink fade-in** (zero wrapper nodes, zero forced layout reflow, maintaining smooth high-refresh frame pacing even in `34k+`-node long sessions); caps steady-state background aurora rendering to `~30fps` on 300Hz displays and enters `0fps` idle sleep `1.2s` after activity ends. Provides non-intrusive three-state semantic edge cues (awaiting user decision, error halted, and background long-task completion) that freeze into `0fps` static snapshots.
@@ -108,7 +108,7 @@ Off by default — enable it under **Settings → Appearance → Beta**. A switc
 - **Dual-Window Quota Telemetry & 512K Context Vial**: Aligns `vendor/pulse-dashboard/` with upstream [`ATtacK030130/antigrative-dashboard`](https://github.com/ATtacK030130/antigrative-dashboard) `v0.9.1` (MIT), supporting **5-hour and weekly quota pool tracking with linear depletion forecasts**, **main session vs. Swarm/subagent token attribution**, **cache hit rate** metrics, and CDP process-lineage multi-instance discovery. Exposes Overview, Trends, and Quotas views with workspace filtering on the Studio home dashboard, stores telemetry in an isolated sidecar directory, and yields automatically when standalone external plugins are active.
 - **Dual-Mode Thought Translator**: Supports zero-config **Machine Translation** and **OpenAI-Compatible Streaming Translation**, allowing keyless local endpoints (`localhost` / LAN Ollama, LM Studio, vLLM without requiring an API key); safely restores `file://` source paths and `#L` line-number jump pills under a strict `file://`-only protocol allowlist; adds a concurrency-limited (`max = 3`) viewport-priority queue, per-block retry/re-translate controls, **Immersive vs. Stacked Bilingual** view modes, and cache management. API keys and custom prompts are stored locally in `~/.gemini/config/` (`0600` permissions).
 - **Chat Mode (Beta · Off by Default)**: Off by default and toggleable anytime in **Settings → Appearance → Beta** (`sidebarStudio: "on" | "off"`). When enabled, adds a top-sidebar switcher between the Code workspace and a dedicated Chat space for everyday conversations and document organization, complete with folder/project grouping, clean multi-turn reading views, Artifacts preview, and project-scoped permission isolation that preserves global Code settings.
-- **Microkernel Architecture & Sub-10ms Config Sync**: Splits the runtime into a lean `ui-runtime.js` microkernel and 6 focused controller modules compiled with a cross-module shared string pool (`< 670 KiB` static main bundle, with the Omni client delivered on a dedicated second channel). Covers 27 validated configuration keys with `< 10 ms` single-flight incremental `refreshConfig` broadcast, three scene presets, categorized sub-tabs, and API-key-sanitized JSON export/import.
+- **Microkernel Architecture & Sub-10ms Config Sync**: Splits the runtime into a lean `ui-runtime.js` microkernel and 6 focused controller modules compiled with a cross-module shared string pool (`< 690 KiB` static main bundle, with Omni viewer, Chat sidebar, and Host i18n delivered on-demand over dedicated channels). Covers 29 validated configuration keys with `< 10 ms` single-flight incremental `refreshConfig` broadcast, three scene presets, categorized sub-tabs, and API-key-sanitized JSON export/import.
 
 </details>
 
@@ -163,11 +163,11 @@ npm run build:macos            # Build standalone macOS Universal bundle (.dmg)
 #### Core Repository Layout
 ```text
 obsidian-prism/
-├── plugin.json                         # Antigravity native plugin manifest (obsidian-prism@1.0.4)
+├── plugin.json                         # Antigravity native plugin manifest (obsidian-prism@1.0.5)
 ├── LICENSE / NOTICE / CITATION.cff     # GPL-3.0 license, attribution terms & citation metadata
 ├── THIRD_PARTY_NOTICES.md              # Preserved copyright & license notices for MIT upstreams
 ├── assets/                             # Vector plugin icon & documentation screenshots
-├── cdp.js / inject.js / remove.js      # Shared-pool bundle compiler (<670KiB), dual-channel attach & removal
+├── cdp.js / inject.js / remove.js      # Shared-pool bundle compiler (<690KiB), multi-channel attach & removal
 ├── style.css                           # Four themes, accent/corner tokens & workbench surface styles
 ├── i18n-locales.js / i18n-core.js      # 5-language localization tables (zh-CN/zh-TW/yue/en/ja)
 ├── motion-engine.js / animated-icons.js# 4-tier damped spring physics & animated UI icons
@@ -175,7 +175,7 @@ obsidian-prism/
 ├── smooth-caret.js / dual-mascot-rig.js# Read/write-separated caret tracking & pixel mascot rig
 ├── usage-core.js / vial-core.js        # Quota forecast functions & 512K shallow-water vial renderer
 ├── pulse-vial-bridge.js                # Context slice breakdown & 5h/weekly quota popover bridge
-├── settings-panel.js                   # Settings UI (27 keys, scene presets, sanitized JSON backup)
+├── settings-panel.js                   # Settings UI (29 keys, scene presets, sanitized JSON backup)
 ├── home-studio-panel.js                # Controller 1: Studio home dashboard (Overview/Trends/Quotas)
 ├── home-ripple-host.js                 # Controller 2: Home glyph ripple matrix host controller
 ├── model-glyph-crystal.js              # Controller 3: Model glyph & WebGL2 prism bar controller
@@ -184,7 +184,7 @@ obsidian-prism/
 ├── host-workbench-enhancer.js          # Controller 6: Sidecar theme bridge, code fold & rail outline
 ├── ui-runtime.js                       # Frontend microkernel: fast config sync & lifecycle orchestration
 ├── sidecars/daemon/                    # Multi-channel native daemon (settings/metrics/usage/repo/storage archiver/thought/omni)
-├── vendor/                             # Telemetry (v0.9.1), effort-slider, thought-translator & omni-viewer
+├── vendor/                             # Telemetry (v0.9.1), effort-slider, thought-translator, omni-viewer, sidebar-studio & host-i18n
 └── installer/ & tools/                 # Windows (C#) / macOS (Swift) native-plugin installers & scripts
 ```
 </details>
@@ -212,7 +212,7 @@ Any fork, modification, port, or redistribution must comply with all three requi
   author       = {RMvdesi},
   title        = {{Obsidian Prism: Modular Optical UI, Workbench Enhancements, Omni File Viewer, Quota Telemetry & Thought Translator for Antigravity}},
   year         = {2026},
-  version      = {1.0.4},
+  version      = {1.0.5},
   license      = {GPL-3.0-only},
   url          = {https://github.com/RMvdesi/obsidian-prism}
 }
@@ -227,7 +227,8 @@ Absorbed and adapted third-party components were originally released under the *
 1. **[0DNANCY/agy-claude-style](https://github.com/0DNANCY/agy-claude-style)** — `MIT License`, `Copyright (c) 2026 0DNANCY` (Base palette tokens, spring physics foundation, WebGL2 horizon/glyph wavefield, pixel mascot foundation, and initial bundler).
 2. **[ATtacK030130/antigrative-dashboard](https://github.com/ATtacK030130/antigrative-dashboard)** (`v0.9.1`) — `MIT License`, `Copyright (c) 2026 AG Pulse contributors` (Absorbed and adapted in `vendor/pulse-dashboard/` for live token throughput, cache hit rate, 5h/weekly quota forecasting, main/subagent token attribution, and CDP process-lineage discovery).
 3. **[LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider](https://github.com/LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider)** — `MIT License`, `Copyright (c) 2026 LLYSH-HANNARI` (Absorbed and adapted in `vendor/effort-slider/` for model-menu reasoning effort slider and smart coexistence yielding).
-4. **[Nwflower/dsh-claude-style](https://github.com/Nwflower/dsh-claude-style)** — Minimalist Studio layout, composer framing, and warm alabaster daylight palette reference.
-5. **[Microqian2th/dsh-codex-effort-slider](https://github.com/Microqian2th/dsh-codex-effort-slider)** — Detent track snapping, hysteresis thresholds, and damped motion curve reference.
-6. **[mobius/dsh-performance-slider](https://github.com/mobius/dsh-performance-slider)** — Performance tier slider interaction and live visual feedback reference.
-7. **[claudenoshujin/claude-web](https://github.com/claudenoshujin/claude-web)** (by `lulu`) — Mascot stacking interaction reference (clean-room independent physics implementation).
+4. **[yiheng8023/antigravity-chinese](https://github.com/yiheng8023/antigravity-chinese)** (`v3.3.19`) — `MIT License`, `Copyright (c) 2026 Antigravity Chinese Localization Contributors` (Upstream `zh-CN` dictionary source & DOM localization pattern reference; re-architected in `vendor/host-i18n/` as a Zero-ASAR pure CDP Channel 4 on-demand channel with universal 4-layer auto-yield, ping-pong circuit breaker, and `WeakMap` lossless `destroy()`).
+5. **[Nwflower/dsh-claude-style](https://github.com/Nwflower/dsh-claude-style)** — Minimalist Studio layout, composer framing, and warm alabaster daylight palette reference.
+6. **[Microqian2th/dsh-codex-effort-slider](https://github.com/Microqian2th/dsh-codex-effort-slider)** — Detent track snapping, hysteresis thresholds, and damped motion curve reference.
+7. **[mobius/dsh-performance-slider](https://github.com/mobius/dsh-performance-slider)** — Performance tier slider interaction and live visual feedback reference.
+8. **[claudenoshujin/claude-web](https://github.com/claudenoshujin/claude-web)** (by `lulu`) — Mascot stacking interaction reference (clean-room independent physics implementation).

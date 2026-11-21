@@ -54,7 +54,7 @@ final class PluginManifest {
         let manifestPath = (baseDir as NSString).appendingPathComponent("manifest.json")
         let text = try String(contentsOfFile: manifestPath, encoding: .utf8)
         let raw = try MiniJson.parseObject(text)
-        let version = raw["version"]?.stringValue ?? "1.0.4"
+        let version = raw["version"]?.stringValue ?? "1.0.5"
         let styleId = raw["styleId"]?.stringValue ?? "ag-prism-css"
         let settingBinding = raw["settingBinding"]?.stringValue ?? "__agPrismSetting"
         let removeExpression = raw["removeExpression"]?.stringValue ?? ""
@@ -1181,6 +1181,7 @@ enum CdpHelper {
         sb.append("    try { window.__agPrismEffortSlider?.sync?.(effectiveCfg); } catch {}\n")
         sb.append("    try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}\n")
         sb.append("    try { if (effectiveCfg.omniModule === 'off') window.__agPrismOmni?.destroy?.(); else window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}\n")
+        sb.append("    try { if (effectiveCfg.hostLocalization === 'off' || (effectiveCfg.hostLocalization !== 'on' && effectiveCfg.language && effectiveCfg.language !== 'zh-CN' && effectiveCfg.language !== 'auto')) window.__agPrismHostI18n?.destroy?.(); } catch {}\n")
         sb.append("    return { ok: true, refreshed: true, state: liveState };\n")
         sb.append("  })()")
         return sb
@@ -1263,6 +1264,7 @@ enum CdpHelper {
         sb.append("      try { const oldApi = window.__agClaudeStyle; if (oldApi && (!window.__agPrism || Number(oldApi.version) <= 2)) { if (typeof oldApi.destroy === 'function') oldApi.destroy(); delete window.__agClaudeStyle; } } catch {}\n")
         sb.append("    };\n")
         sb.append("    const stripForeignMount = () => {\n")
+        sb.append("      try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}\n")
         sb.append("      try { const st = document.getElementById(")
         sb.append(styleIdJson)
         sb.append("); if (st) st.remove(); } catch {}\n")

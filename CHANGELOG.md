@@ -5,6 +5,30 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 本项目遵循语义化版本（SemVer）规范，记录各正式版本的新增功能、架构变更、安全加固与缺陷修复。
 
+## [1.0.5] - 2026-11-21
+
+### Added / 新增特性
+
+- **内置宿主汉化包（Channel 4 纯 CDP 按需通道）**：零篡改官方 `app.asar`，通过独立按需通道（`vendor/host-i18n/`）注入而不占用主包体积，内置 `3,361` 精确词条与 `327` 正则规则。设置面板提供三态开关（`自动 / 开启 / 关闭`，默认 `自动`），并集成四层通用外部汉化自动礼让机制与防死循环熔断器（`3000ms` 乒乓冲突熔断）；基于 `WeakRef` / `WeakMap` 零泄漏快照实现 `0fps` 失焦休眠与 100% 无损原文还原。
+  - *Built-in Host Localization (Channel 4 Pure CDP On-Demand Channel)*: Zero modification to official `app.asar`; injected on-demand via an isolated Channel 4 runtime (`vendor/host-i18n/`) with zero static main-bundle overhead, shipping `3,361` exact entries and `327` regex rules. Exposes a tri-state setting (`auto` / `on` / `off`, defaulting to `auto`), a universal 4-layer auto-yield and `3000ms` ping-pong circuit breaker for external localization plugins, `WeakRef`/`WeakMap`-backed zero-leak snapshots, `0fps` blur hibernation, and 100% lossless original-text restoration.
+
+### Fixed / 核心缺陷修复
+
+- **修复 GitHub Issue #1（窄屏或侧栏打开时底部栏拥挤与抽搐）**：落地 5 阶流体折叠动效（Tier 1 优先优雅收起模型名并保留图标/配额/箭头，逐级收拢至 `26×26` 磨砂玻璃上下文圆环）、`0-Reflow` `ResizeObserver` 与 GPU `transform: scale(1.27)` 平滑缩放，并新增相对容器宽度 `min(332px, 46%)` 右侧分栏防坍缩保护（完全兼容最大化面板）。
+  - *Fix GitHub Issue #1 (Narrow-Screen & Side-Panel Bottom Bar Crowding / Jitter)*: Introduces 5-tier fluid collapse choreography (Tier 1 gracefully collapses the model name first while retaining icon, quota, and chevron, progressively compacting down to a `26×26` frosted-glass context ring), `0-Reflow` `ResizeObserver` sizing with GPU `transform: scale(1.27)`, and container-relative `min(332px, 46%)` right-pane anti-collapse protection (compatible with maximized panels).
+- **双桌宠（Cat + Clawd）侧栏推拉吸附、防抖抛物线回弹 & 模型选择器保留交接动画**：优化窄屏及侧栏开合/拖拽过程中双宠避让与接管动画，支持滑行期抓宠不瞬移、宽屏精准落点、迷你蟹叠塔对齐，以及点击穿透不拦截模型菜单关闭。
+  - *Dual-Mascot (Cat + Clawd) Side-Panel Snap, Debounced Parabolic Rebound & Model-Selector Handoff Animation*: Eliminates teleportation when grabbing sliding mascots, stabilizes wide-screen landing positions, aligns mini-crab totem stacks, and ensures click-through never blocks model-menu dismissal.
+
+### Security & Quality / 安全与质量加固
+
+- **CodeQL 清零与三路红队审计收口**：消除 CodeQL Alerts #30/#31 与正则多项式回溯隐患，三路红队审计发现的 7 P0 + 12 P1 + 8 P2 问题全部清零。
+  - *CodeQL & Red-Team Audit Hardening*: Resolves CodeQL Alerts #30/#31 and polynomial regex backtracking risks, closing all 7 P0, 12 P1, and 8 P2 findings from three parallel red-team audits.
+
+### Acknowledgements / 开源致谢
+
+- 明确致谢 **[yiheng8023/antigravity-chinese](https://github.com/yiheng8023/antigravity-chinese)**（`v3.3.19`, `MIT License`, `Copyright (c) 2026 Antigravity Chinese Localization Contributors`）提供的中文本地化词库与前端 DOM 翻译匹配思路参考。
+  - *Acknowledgements*: Gratefully acknowledges **[yiheng8023/antigravity-chinese](https://github.com/yiheng8023/antigravity-chinese)** (`v3.3.19`, `MIT License`, `Copyright (c) 2026 Antigravity Chinese Localization Contributors`) for the Chinese localization dictionary and frontend DOM translation pattern reference.
+
 ## [1.0.4] - 2026-11-21
 
 ### Added / 新增特性

@@ -7,7 +7,7 @@ const { execFile, execFileSync, spawn } = require('child_process');
 
 const STYLE_ID = 'ag-prism-css';
 const LEGACY_STYLE_ID = 'ag-claude-style-css';
-const PLUGIN_VERSION = '1.0.4';
+const PLUGIN_VERSION = '1.0.5';
 const SETTING_BINDING = '__agPrismSetting';
 const LEGACY_SETTING_BINDING = '__agClaudeStyleSetting';
 const OMNI_BINDING = '__agPrismOmniCall';
@@ -59,6 +59,7 @@ const DEFAULT_CONFIG = {
   omniModule: 'on',
   linkTarget: 'builtin',
   sidebarStudio: 'off',
+  hostLocalization: 'auto',
   autoUpdate: 'off',
   pollIntervalMs: 2500,
 };
@@ -97,6 +98,7 @@ const VALIDATORS = {
   omniModule: ['on', 'off'],
   linkTarget: ['builtin', 'external'],
   sidebarStudio: ['on', 'off'],
+  hostLocalization: ['auto', 'on', 'off'],
   autoUpdate: ['on', 'off'],
 };
 
@@ -5191,6 +5193,14 @@ function buildConfigRefreshExpression(customConfig, extraMeta = null) {
       } else {
         try { window.__agPrismSidebar?.sync?.(effectiveCfg, window.__agPrismSidebarMeta || null); } catch {}
       }
+      try {
+        const hiMode = effectiveCfg?.hostLocalization;
+        const hiLang = effectiveCfg?.language;
+        const navL = String((typeof navigator !== 'undefined' && navigator.language) || '').trim();
+        if (hiMode === 'off' || (hiMode !== 'on' && ((hiLang && hiLang !== 'zh-CN' && hiLang !== 'auto') || (hiLang === 'auto' && navL && !/^zh(?:$|-(?:cn|hans|sg)(?:-|$))/i.test(navL))))) {
+          window.__agPrismHostI18n?.destroy?.();
+        }
+      } catch {}
       if (document.documentElement) {
         document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg?.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
         document.documentElement.setAttribute('data-ag-prism-sidebar-studio', effectiveCfg?.sidebarStudio === 'on' ? 'on' : 'off');
@@ -5408,6 +5418,7 @@ function getInjectWrapperTemplate() {
 
     const stripForeignMount = () => {
       destroyModules(true);
+      try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}
       for (const k of ['__agPrismRepoBridge', '__agPrismThoughtBridge', '__agPrismUsageBridge', '__agPrismOmniBridge']) {
         try { window[k]?.dispose?.(); } catch {}
       }
@@ -5997,6 +6008,225 @@ function buildSidebarStudioExpression(serverMeta = null, customClientSource = nu
   })()`;
 }
 
+let _hostI18nCache = { sig: '', minRuntime: '', dictRaw: '', codeHash: '' };
+
+function shouldEnableHostI18n(config, hostLocaleHint = null) {
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  const mode = cfg.hostLocalization || 'auto';
+  if (mode === 'off') return false;
+  if (mode === 'on') return true;
+  const lang = cfg.language || cfg.lang || 'zh-CN';
+  if (lang === 'zh-CN') return true;
+  if (lang === 'auto') {
+    let sysLocale = hostLocaleHint;
+    if (!sysLocale) {
+      try {
+        const candidates = [process.env.LC_ALL, process.env.LC_MESSAGES, process.env.LANG];
+        for (let i = 0; i < candidates.length; i++) {
+          const val = String(candidates[i] || '').trim();
+          if (val && !/^(?:c|posix)(?:[.@]|$)/i.test(val)) {
+            sysLocale = val;
+            break;
+          }
+        }
+        if (!sysLocale) {
+          sysLocale = Intl.DateTimeFormat().resolvedOptions().locale || '';
+        }
+      } catch {
+        sysLocale = '';
+      }
+    }
+    const stripped = String(sysLocale || '').trim().split(/[.@]/)[0];
+    const norm = stripped.toLowerCase().replace(/_/g, '-');
+    return norm === 'zh' || /^zh-(?:cn|hans|sg)(?:-|$)/.test(norm);
+  }
+  return false;
+}
+
+function readCompiledHostI18nAssets() {
+  const rtPath = path.join(__dirname, 'vendor', 'host-i18n', 'host-i18n-runtime.js');
+  const dictPath = path.join(__dirname, 'vendor', 'host-i18n', 'zh-CN.json');
+  if (!fs.existsSync(rtPath) || !fs.existsSync(dictPath)) {
+    return { minRuntime: '', dictRaw: '', codeHash: '' };
+  }
+  const sig = `${getFileSig(rtPath)}|${getFileSig(dictPath)}`;
+  if (_hostI18nCache.sig === sig) {
+    return _hostI18nCache;
+  }
+  const rawRuntime = fs.readFileSync(rtPath, 'utf8');
+  const minRuntime = minifySingleSource(rawRuntime);
+  const parsedDict = JSON.parse(fs.readFileSync(dictPath, 'utf8'));
+  const dictRaw = JSON.stringify(parsedDict).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+  const codeHash = computeHash(`${minRuntime}:${dictRaw}`);
+  _hostI18nCache = { sig, minRuntime, dictRaw, codeHash };
+  return _hostI18nCache;
+}
+
+const HOST_I18N_REMOVE_EXPRESSION = `(() => {
+  try { window.__agPrismHostI18n?.destroy?.(); } catch {}
+  try { document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}
+  try { delete window.__agPrismHostI18n; } catch {}
+  try { delete globalThis.__agPrismHostI18n; } catch {}
+  try { delete window.__agPrismHostI18nFactory; } catch {}
+  try { delete globalThis.__agPrismHostI18nFactory; } catch {}
+  return { ok: true, status: 'off' };
+})()`;
+
+// 第四通道独立注入（Host UI 简体中文按需本地化）：绝不打入静态主包，支持 4 层通用自动礼让与 100% 无损卸载
+function buildHostI18nExpression(config = null, hostLocaleHint = null) {
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  if (!shouldEnableHostI18n(cfg, hostLocaleHint)) {
+    return '';
+  }
+  const { minRuntime, dictRaw, codeHash } = readCompiledHostI18nAssets();
+  if (!minRuntime || !dictRaw) {
+    return '';
+  }
+  const mode = cfg.hostLocalization === 'on' ? 'on' : 'auto';
+  const modeJson = serializeJsonForEval(mode);
+  const hashJson = serializeJsonForEval(codeHash);
+
+  return `(() => {
+    try {
+      if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };
+    } catch {
+      return { ok: false, status: 'skipped-subframe' };
+    }
+    const hasDomMarker = () => {
+      try {
+        if (
+          document.body &&
+          document.body.classList &&
+          (document.body.classList.contains('theme-standalone') || document.body.classList.contains('monaco-workbench'))
+        ) {
+          return true;
+        }
+        return Boolean(
+          typeof document.querySelector === 'function' &&
+            document.querySelector(
+              '.agy-shell, .agy-home, [data-testid="aux-pane-split"], [data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="model-selector-trigger"], .monaco-workbench'
+            )
+        );
+      } catch {
+        return false;
+      }
+    };
+    let needDomMarkerOnReady = false;
+    let isPlainHttpLocalhost = false;
+    try {
+      const loc = typeof window !== 'undefined' && window.location;
+      const href = loc && typeof loc.href === 'string' ? loc.href : '';
+      if (href) {
+        const low = href.toLowerCase();
+        if (low.startsWith('devtools://') || low.startsWith('data:') || low.startsWith('chrome:') || low.startsWith('chrome-extension:') || low.startsWith('edge:') || low.startsWith('blob:') || low.startsWith('plugin:')) {
+          return { ok: false, status: 'skipped-non-host' };
+        }
+        if (low.startsWith('vscode-file://') || low.startsWith('app://') || low.startsWith('about:')) {
+          const ttl = String(document.title || '').trim();
+          if (/^(?:untitled|launchpad)$/i.test(ttl) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(low)) {
+            return { ok: false, status: 'skipped-non-host' };
+          }
+        }
+        if (low.startsWith('http:') || low.startsWith('https:')) {
+          const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);
+          if (!m) return { ok: false, status: 'skipped-non-host' };
+          const pathname = (m[3] || '/').toLowerCase();
+          if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test(pathname)) {
+            return { ok: false, status: 'skipped-non-host' };
+          }
+          if (!hasDomMarker()) {
+            isPlainHttpLocalhost = m[1].toLowerCase() === 'http';
+            const rs = String(document.readyState || '');
+            if (isPlainHttpLocalhost) {
+              if (rs === 'loading') needDomMarkerOnReady = true;
+              else return { ok: false, status: 'skipped-non-host' };
+            } else if (!/\\bantigravity\\b/i.test(String(document.title || ''))) {
+              if (rs === 'loading') needDomMarkerOnReady = true;
+              else return { ok: false, status: 'skipped-non-host' };
+            }
+          }
+        }
+      }
+    } catch {}
+
+    let targetMode = ${modeJson};
+    try {
+      const liveCfg = window.__agPrism?.getState?.()?.cfg;
+      if (liveCfg && typeof liveCfg === 'object') {
+        if (liveCfg.hostLocalization === 'off') {
+          try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}
+          return { ok: true, status: 'off', skippedByLiveCfg: true };
+        }
+        if (liveCfg.hostLocalization === 'on') {
+          targetMode = 'on';
+        } else {
+          targetMode = 'auto';
+          const liveLang = liveCfg.language || liveCfg.lang || '';
+          if (liveLang && liveLang !== 'zh-CN' && liveLang !== 'auto') {
+            try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}
+            return { ok: true, status: 'off', skippedByLiveCfg: true };
+          }
+          if (liveLang === 'auto') {
+            const navLang = String(
+              (typeof navigator !== 'undefined' && (navigator.language || (navigator.languages && navigator.languages[0]))) || ''
+            )
+              .trim()
+              .split(/[.@]/)[0]
+              .toLowerCase()
+              .replace(/_/g, '-');
+            if (navLang && navLang !== 'zh' && !/^zh-(?:cn|hans|sg)(?:-|$)/.test(navLang)) {
+              try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}
+              return { ok: true, status: 'off', skippedByLiveCfg: true };
+            }
+          }
+        }
+      }
+    } catch {}
+
+    const targetHash = ${hashJson};
+    const mountOrReuse = () => {
+      if (needDomMarkerOnReady && !hasDomMarker() && (isPlainHttpLocalhost || !/\\bantigravity\\b/i.test(String(document.title || '')))) {
+        return { ok: false, status: 'skipped-non-host' };
+      }
+      const existing = window.__agPrismHostI18n;
+      if (existing && existing.__prismCodeHash === targetHash && typeof existing.getStatus === 'function') {
+        const st = existing.getStatus();
+        if (st && st.mode === targetMode) {
+          return { ok: true, reused: true, codeHash: targetHash, ...st };
+        }
+        if (typeof existing.setMode === 'function') {
+          const switched = existing.setMode(targetMode);
+          return { ok: true, modeSwitched: true, codeHash: targetHash, ...switched };
+        }
+      }
+      try { existing?.destroy?.(); } catch {}
+
+      ${minRuntime};
+      const factory = window.__agPrismHostI18nFactory || globalThis.__agPrismHostI18nFactory;
+      if (!factory || typeof factory.mountHostI18n !== 'function') {
+        return { ok: false, status: 'factory-missing' };
+      }
+      const inst = factory.mountHostI18n({
+        root: window,
+        doc: document,
+        mode: targetMode,
+        dict: ${dictRaw},
+      });
+      if (inst && typeof inst === 'object') {
+        inst.__prismCodeHash = targetHash;
+      }
+      const cur = inst && typeof inst.getStatus === 'function' ? inst.getStatus() : { status: 'active' };
+      return { ok: true, codeHash: targetHash, ...cur };
+    };
+
+    if (needDomMarkerOnReady && typeof document.addEventListener === 'function') {
+      document.addEventListener('DOMContentLoaded', () => { try { mountOrReuse(); } catch {} }, { once: true });
+      return { ok: true, status: 'deferred', codeHash: targetHash };
+    }
+    return mountOrReuse();
+  })()`;
+}
+
 const REMOVE_EXPRESSION = `(() => {
   try {
     if (window.__agPrismTelemetry && typeof window.__agPrismTelemetry.destroy === 'function') {
@@ -6021,6 +6251,11 @@ const REMOVE_EXPRESSION = `(() => {
   try {
     if (window.__agPrismSidebar && typeof window.__agPrismSidebar.destroy === 'function') {
       window.__agPrismSidebar.destroy({ preserveRuntimeState: false });
+    }
+  } catch (e) {}
+  try {
+    if (window.__agPrismHostI18n && typeof window.__agPrismHostI18n.destroy === 'function') {
+      window.__agPrismHostI18n.destroy();
     }
   } catch (e) {}
   if (Array.isArray(globalThis.__agCsCleanups)) {
@@ -6089,10 +6324,14 @@ const REMOVE_EXPRESSION = `(() => {
   delete window.__agPrismUsageBridge;
   delete window.__agPrismUsageResolve;
   delete window.__agPrismBrandLogoSvg;
+  delete window.__agPrismHostI18n;
+  delete window.__agPrismHostI18nFactory;
   delete window.__agCsI18n;
   delete globalThis.__agSP;
   delete globalThis.__agM;
   delete globalThis.__agPrismBrandLogoSvg;
+  delete globalThis.__agPrismHostI18n;
+  delete globalThis.__agPrismHostI18nFactory;
   delete globalThis.__agPrismTelemetry;
   delete globalThis.__agPrismEffortSlider;
   delete globalThis.__agPrismThought;
@@ -6161,6 +6400,7 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-prism-omni',
       'data-ag-prism-link-target',
       'data-ag-prism-sidebar-studio',
+      'data-ag-prism-host-i18n',
       'data-ag-prism-mode',
       'data-ag-prism-sidebar-host-sync',
       'data-ag-prism-sidebar-space',
@@ -6344,5 +6584,8 @@ module.exports = {
   buildInjectExpression,
   buildOmniClientExpression,
   buildSidebarStudioExpression,
+  shouldEnableHostI18n,
+  buildHostI18nExpression,
+  HOST_I18N_REMOVE_EXPRESSION,
   isSafeV2SidebarClientSource,
 };

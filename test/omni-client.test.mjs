@@ -1268,7 +1268,7 @@ test('omni-client.js has zero persist:ag-prism-omni or custom dock creation, ali
 
   const cdp = require(path.join(ROOT_DIR, 'cdp.js'));
   const staticExpr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
-  assert.ok(Buffer.byteLength(staticExpr, 'utf8') < 680 * 1024);
+  assert.ok(Buffer.byteLength(staticExpr, 'utf8') < 690 * 1024);
 
   if (typeof cdp.buildOmniClientExpression === 'function') {
     const omniExpr = cdp.buildOmniClientExpression({ baseUrl: 'http://127.0.0.1:48123', token: 'tok_2nd' });

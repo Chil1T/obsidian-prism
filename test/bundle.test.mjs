@@ -9,13 +9,13 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const cdp = require('../cdp.js');
 
-test('buildInjectExpression and REMOVE_EXPRESSION compile cleanly and stay within budget (< 680KB)', () => {
+test('buildInjectExpression and REMOVE_EXPRESSION compile cleanly and stay within budget (< 690 KiB)', () => {
   const injectExpr = cdp.buildInjectExpression();
   const removeExpr = cdp.REMOVE_EXPRESSION;
   const payloadBytes = Buffer.byteLength(injectExpr, 'utf8');
   assert.doesNotThrow(() => new vm.Script(injectExpr));
   assert.doesNotThrow(() => new vm.Script(removeExpr));
-  assert.ok(payloadBytes < 680 * 1024, `Expected unified Prism payload < 680KB, got ${payloadBytes} bytes`);
+  assert.ok(payloadBytes < 690 * 1024, `Expected unified Prism payload < 690KB, got ${payloadBytes} bytes`);
   assert.ok(injectExpr.includes('ag-prism-css'));
   assert.ok(injectExpr.includes('ag-cs-home-panel'));
   assert.equal(injectExpr.includes('__agCsPerfAssets'), false);
@@ -372,8 +372,8 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     assert.ok(sandbox.window.__agPrism, 'Expected window.__agPrism exposed');
     assert.equal(sandbox.window.__agClaudeStyle, sandbox.window.__agPrism, 'Expected legacy alias pointing to __agPrism');
     const st = sandbox.window.__agPrism.getState();
-    assert.equal(st.version, '1.0.4');
-    assert.equal(html.getAttribute('data-ag-prism'), '1.0.4');
+    assert.equal(st.version, '1.0.5');
+    assert.equal(html.getAttribute('data-ag-prism'), '1.0.5');
     assert.equal(html.getAttribute('data-ag-cs-light-preset'), 'crystal');
     assert.equal(html.getAttribute('data-ag-cs-telemetry'), 'auto');
     assert.equal(html.getAttribute('data-ag-cs-effort-slider'), 'auto');
@@ -420,7 +420,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     const settingsSec = appearancePanel.querySelector('#ag-cs-settings-sec');
     assert.ok(settingsSec);
     assert.equal(settingsSec.querySelector('h3')?.textContent, 'Obsidian Prism · 黑曜棱镜');
-    assert.equal(settingsSec.querySelector('.ag-cs-settings-ver')?.textContent, 'v1.0.4');
+    assert.equal(settingsSec.querySelector('.ag-cs-settings-ver')?.textContent, 'v1.0.5');
     const brandMarkHtml = settingsSec.querySelector('.ag-cs-settings-brand-mark')?.innerHTML || '';
     assert.ok(
       brandMarkHtml.includes('ag-cs-brand-logo-svg') || brandMarkHtml.includes('ag-cs-settings-brand-svg'),
@@ -448,17 +448,18 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     assert.ok(thoughtCfgBox, 'Expected built-in OpenAI thought translator config card');
     assert.equal(thoughtCfgBox.hidden, true, 'Thought AI config card should start hidden when mode is off');
 
-    // Verify About section: Git status/sync button + 7 upstream repo external links + GPL-3.0 & upstream MIT notices + Google disclaimer
+    // Verify About section: Git status/sync button + 8 upstream repo external links + GPL-3.0 & upstream MIT notices + Google disclaimer
     const aboutBox = settingsSec.querySelector('.ag-cs-about-box');
     assert.ok(aboutBox, 'Expected .ag-cs-about-box inside About group');
     const creditLinks = aboutBox.querySelectorAll('a');
-    assert.equal(creditLinks.length, 7, 'Expected all 7 upstream credited repository links');
+    assert.equal(creditLinks.length, 8, 'Expected all 8 upstream credited repository links');
     assert.deepEqual(
       creditLinks.map((a) => a.getAttribute('href')),
       [
         'https://github.com/0DNANCY/agy-claude-style',
         'https://github.com/ATtacK030130/antigrative-dashboard',
         'https://github.com/LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider',
+        'https://github.com/yiheng8023/antigravity-chinese',
         'https://github.com/Nwflower/dsh-claude-style',
         'https://github.com/Microqian2th/dsh-codex-effort-slider',
         'https://github.com/mobius/dsh-performance-slider',
@@ -484,7 +485,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
         .map((b) => b.getAttribute('data-ag-cs-key'))
         .filter(Boolean)
     );
-    assert.equal(settingKeys.size, 28);
+    assert.equal(settingKeys.size, 29);
     for (const expectedKey of [
       'palette',
       'lightPreset',
@@ -494,6 +495,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
       'homeRipple',
       'logoInk',
       'language',
+      'hostLocalization',
       'composerRestyle',
       'placeholderStyle',
       'smoothCaret',
@@ -1498,10 +1500,10 @@ test('v3.5.1 mounts dual mascot stage, brand optical glyphs, Orchestrator crysta
   }
 });
 
-test('v3.6.1 auto-unfolds inner thinking & tool collapsibles idempotently and drives 4-state conversation horizon aura (< 680KB)', async () => {
+test('v3.6.1 auto-unfolds inner thinking & tool collapsibles idempotently and drives 4-state conversation horizon aura (< 690 KiB)', async () => {
   const injectExpr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
   const totalBytes = Buffer.byteLength(injectExpr, 'utf8');
-  assert.ok(totalBytes < 680 * 1024, `Expected total bundle < 680KB, got ${totalBytes}`);
+  assert.ok(totalBytes < 690 * 1024, `Expected total bundle < 690KB, got ${totalBytes}`);
 
   const timers = new Set();
   const winListeners = new Map();
@@ -3013,7 +3015,7 @@ test('Prism v1.0 regression guard: Thought Translator overlay (.ag-prism-thought
   }
 });
 
-test('v1.0.1 compiler safety fixes, unified shared string pool < 670KB (< 680KB CI budget), warm cache < 35ms, and 6-module microkernel + Omni second channel', async () => {
+test('v1.0.1 compiler safety fixes, unified shared string pool (< 690 KiB CI budget), warm cache < 35ms, and 6-module microkernel + Omni second channel', async () => {
   // 1. Property keyword `.in / w / 2` division must NOT be mis-tokenized as regex literal
   const propKeywordSrc = `
     function compute(state, width) {
@@ -3070,12 +3072,12 @@ test('v1.0.1 compiler safety fixes, unified shared string pool < 670KB (< 680KB 
   const partOut = cdp.prepareRuntimePart('synthetic-test.js', unicodeAndClassSrc);
   assert.equal(vm.runInNewContext(partOut, {}), 'keep:42:128302');
 
-  // 5. Unified shared pool payload < 680 KiB CI hard ceiling (updated for Settings Uninstall & 5-lang Thought Translator) & warm config rebuild < 35ms
+  // 5. Unified shared pool payload < 690 KiB CI hard ceiling (updated for Settings Uninstall & 5-lang Thought Translator) & warm config rebuild < 35ms
   const expr1 = cdp.buildInjectExpression();
   const payloadBytes = Buffer.byteLength(expr1, 'utf8');
   assert.ok(
-    payloadBytes < 680 * 1024,
-    `Expected unified bundle payload < ${680 * 1024} bytes (680 KiB), got ${payloadBytes}`
+    payloadBytes < 690 * 1024,
+    `Expected unified bundle payload < ${690 * 1024} bytes (690 KiB), got ${payloadBytes}`
   );
   // Omni modules must never bloat static RUNTIME_PARTS
   for (const part of cdp.RUNTIME_PARTS) {

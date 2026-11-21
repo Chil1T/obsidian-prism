@@ -354,10 +354,12 @@ test('v1.0.1 i18n keys cover all 5 languages for scene presets, 6 new config key
 });
 
 test('settings-panel schema, scene presets, strict apiKey-stripping JSON export, and allowlist-validated JSON import', () => {
-  // Verify all 28 global config keys (including omniModule, linkTarget, sidebarStudio & autoUpdate) match exact contract
+  // Verify all 29 global config keys (including hostLocalization, omniModule, linkTarget, sidebarStudio & autoUpdate) match exact contract
   const { PRISM_SETTINGS_SCHEMA, SCENE_PRESETS, buildSanitizedConfigExport, validateImportedConfigJson, getDefaultSettingsPatch } =
     settingsPanel;
-  assert.equal(Object.keys(PRISM_SETTINGS_SCHEMA).length, 28);
+  assert.equal(Object.keys(PRISM_SETTINGS_SCHEMA).length, 29);
+  assert.deepEqual(PRISM_SETTINGS_SCHEMA.hostLocalization.allowed, ['auto', 'on', 'off']);
+  assert.equal(PRISM_SETTINGS_SCHEMA.hostLocalization.default, 'auto');
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.accentTone.allowed, ['follow', 'cobalt', 'iris', 'amber', 'mono']);
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.cornerStyle.allowed, ['sharp', 'balanced', 'soft']);
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.codeFont.allowed, ['default', 'jetbrains', 'cascadia', 'sfmono']);
@@ -449,7 +451,7 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
 
   assert.equal(validateImportedConfigJson('not-json').ok, false);
   assert.equal(validateImportedConfigJson('{"unknownOnly": 1}').ok, false);
-  assert.equal(Object.keys(getDefaultSettingsPatch()).length, 28);
+  assert.equal(Object.keys(getDefaultSettingsPatch()).length, 29);
 });
 
 test('UX-1 / OP-5 / UX-4 / UX-9 regressions: async thought config export, tech->technical normalization, preset sidebarCompact reset, lightPreset context hints, and Effort Slider off/i18n', () => {

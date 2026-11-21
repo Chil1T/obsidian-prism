@@ -44,7 +44,7 @@ namespace AgyClaudeStyle
             string manifestPath = Path.Combine(baseDir, "manifest.json");
             Dictionary<string, object> raw = MiniJson.ParseObject(File.ReadAllText(manifestPath, Encoding.UTF8));
             PluginManifest m = new PluginManifest();
-            m.Version = GetString(raw, "version", "1.0.4");
+            m.Version = GetString(raw, "version", "1.0.5");
             m.StyleId = GetString(raw, "styleId", "ag-prism-css");
             m.SettingBinding = GetString(raw, "settingBinding", "__agPrismSetting");
             m.RemoveExpression = GetString(raw, "removeExpression", "");
@@ -1957,6 +1957,7 @@ namespace AgyClaudeStyle
             sb.Append("    try { window.__agPrismEffortSlider?.sync?.(effectiveCfg); } catch {}\n");
             sb.Append("    try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}\n");
             sb.Append("    try { if (effectiveCfg.omniModule === 'off') window.__agPrismOmni?.destroy?.(); else window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}\n");
+            sb.Append("    try { if (effectiveCfg.hostLocalization === 'off' || (effectiveCfg.hostLocalization !== 'on' && effectiveCfg.language && effectiveCfg.language !== 'zh-CN' && effectiveCfg.language !== 'auto')) window.__agPrismHostI18n?.destroy?.(); } catch {}\n");
             sb.Append("    return { ok: true, refreshed: true, state: liveState };\n");
             sb.Append("  })()");
             return sb.ToString();
@@ -2056,6 +2057,7 @@ namespace AgyClaudeStyle
             sb.Append("      try { window.__agPrismEffortSlider?.destroy?.(); } catch {}\n");
             sb.Append("      try { window.__agPrismThought?.destroy?.(); } catch {}\n");
             sb.Append("      try { window.__agPrismOmni?.destroy?.(); } catch {}\n");
+            sb.Append("      try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}\n");
             sb.Append("      try { window.__agPrism?.destroy?.(); } catch {}\n");
             sb.Append("      try { document.getElementById(").Append(styleIdJson).Append(")?.remove(); } catch {}\n");
             sb.Append("      try { document.getElementById('ag-claude-style-css')?.remove(); } catch {}\n");

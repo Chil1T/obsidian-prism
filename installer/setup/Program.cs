@@ -930,7 +930,7 @@ namespace AgyClaudeStyle.Installer
                 if (key == null) return;
                 string exePath = Path.Combine(installDir, SelfInstalledExeName);
                 key.SetValue("DisplayName", "Obsidian Prism · 黑曜棱镜 (Optical UI & Motion Suite for Antigravity)", RegistryValueKind.String);
-                key.SetValue("DisplayVersion", version ?? "1.0.4", RegistryValueKind.String);
+                key.SetValue("DisplayVersion", version ?? "1.0.5", RegistryValueKind.String);
                 key.SetValue("Publisher", "Obsidian Prism Contributors", RegistryValueKind.String);
                 key.SetValue("InstallLocation", installDir, RegistryValueKind.String);
                 key.SetValue("DisplayIcon", exePath + ",0", RegistryValueKind.String);

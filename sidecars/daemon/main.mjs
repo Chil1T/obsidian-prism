@@ -1,7 +1,7 @@
 // Obsidian Prism Native Sidecar Daemon (sidecars/daemon/main.mjs)
 // - Auto-discovers DevToolsActivePort across Windows/macOS/Linux + fast Target.setDiscoverTargets push
 // - Registers Page.addScriptToEvaluateOnNewDocument + Runtime.evaluate (survives Ctrl+Shift+R reloads with zero app.asar touch!)
-// - Hot-upgrades legacy instances to Obsidian Prism v1.0.4
+// - Hot-upgrades legacy instances to Obsidian Prism v1.0.5
 // - Lazily serves real MetricsStore + DesktopUsage snapshots over __agPrismMetricsCall only when requested (0 idle CPU)
 // - Registers __agPrismRepoCall (paired with window.__agPrismRepoBridge) for live Git status & safe git pull --ff-only + hot-reload!
 
@@ -575,7 +575,7 @@ export class PrismDaemon {
     this.updateService =
       _testUpdateService ||
       new UpdateService({
-        currentVersion: this.cdp?.PLUGIN_VERSION || '1.0.4',
+        currentVersion: this.cdp?.PLUGIN_VERSION || '1.0.5',
       });
   }
 
@@ -992,7 +992,7 @@ export class PrismDaemon {
   }
 
   _buildCombinedUpdateStatus({ relState = null, gitState = null, action = 'update-status' } = {}) {
-    const currentVersion = this.cdp?.PLUGIN_VERSION || this.updateService?.currentVersion || '1.0.4';
+    const currentVersion = this.cdp?.PLUGIN_VERSION || this.updateService?.currentVersion || '1.0.5';
     const rel = relState || this.updateService?.getStatus?.() || {};
     const autoUpdate = this._getAutoUpdateSetting();
     const isGitRemote = Boolean(gitState?.hasRemote);
@@ -1121,7 +1121,7 @@ export class PrismDaemon {
       return {
         ...applyRes,
         action: 'apply-update',
-        currentVersion: this.cdp?.PLUGIN_VERSION || this.updateService?.currentVersion || '1.0.4',
+        currentVersion: this.cdp?.PLUGIN_VERSION || this.updateService?.currentVersion || '1.0.5',
       };
     }
 
@@ -1249,6 +1249,14 @@ export class PrismDaemon {
     } else {
       this.sidebarExpr = '';
     }
+    const shouldBuildHostI18n =
+      typeof this.cdp.buildHostI18nExpression === 'function' &&
+      this._isHostI18nEnabled();
+    if (shouldBuildHostI18n) {
+      this.hostI18nExpr = this.cdp.buildHostI18nExpression();
+    } else {
+      this.hostI18nExpr = '';
+    }
     return this.injectExpr;
   }
 
@@ -1283,6 +1291,34 @@ export class PrismDaemon {
     } catch {
       return false;
     }
+  }
+
+  _isHostI18nEnabled(cfgOverride = null) {
+    try {
+      const cfg = cfgOverride || this.cdp?.readConfig?.();
+      if (typeof this.cdp?.shouldEnableHostI18n === 'function') {
+        return Boolean(this.cdp.shouldEnableHostI18n(cfg));
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  _getHostI18nCfgSig(cfgOverride = null) {
+    try {
+      const cfg = cfgOverride || this.cdp?.readConfig?.() || {};
+      return `${cfg.hostLocalization || 'auto'}:${cfg.language || cfg.lang || 'zh-CN'}`;
+    } catch {
+      return '';
+    }
+  }
+
+  _getHostI18nCleanupExpression() {
+    return (
+      this.cdp?.HOST_I18N_REMOVE_EXPRESSION ||
+      "(() => { try { window.__agPrismHostI18n?.destroy?.(); } catch {} return { ok: true, status: 'off' }; })()"
+    );
   }
 
   _isTelemetryDisabled() {
@@ -1409,7 +1445,7 @@ export class PrismDaemon {
   _getSidebarServerMeta() {
     return {
       binding: SIDEBAR_BINDING,
-      version: this.cdp?.PLUGIN_VERSION || '1.0.4',
+      version: this.cdp?.PLUGIN_VERSION || '1.0.5',
       schemaVersion: 2,
       serviceReady: !this._sidebarStopped && typeof this.sidebarService?.handleRpc === 'function' &&
         !this.sidebarService.getBootDiagnostic?.(),
@@ -2187,11 +2223,14 @@ export class PrismDaemon {
         const injectSnap = this.injectExpr;
         const omniSnap = this.omniExpr;
         const sidebarSnap = this.sidebarExpr;
+        const hostI18nSnap = this.hostI18nExpr;
         const currentCfg = typeof this.cdp.readConfig === 'function' ? this.cdp.readConfig() : {};
         if (currentCfg?.telemetryModule === 'off') {
           this._releaseIdleTelemetry(true);
         }
         const sidebarEnabled = currentCfg?.sidebarStudio === 'on';
+        const hostI18nEnabled = this._isHostI18nEnabled(currentCfg);
+        const hostI18nSig = hostI18nEnabled ? this._getHostI18nCfgSig(currentCfg) : '';
         const canFastRefresh = typeof this.cdp.buildConfigRefreshExpression === 'function';
         const baseRefreshExpr = canFastRefresh ? this.cdp.buildConfigRefreshExpression() : null;
         if (activeItems.length === 0) continue;
@@ -2256,6 +2295,26 @@ export class PrismDaemon {
                 await this._removeSidebarBinding(entry);
                 entry.sidebarMounted = false;
               }
+              if (abortIfStale()) return;
+              const hadHostI18n = Boolean(entry.hostI18nScriptId || entry.hostI18nMounted);
+              const hostI18nChanged = Boolean(
+                hostI18nEnabled &&
+                  hostI18nSnap &&
+                  (entry.lastHostI18nSig !== hostI18nSig || !entry.hostI18nScriptId || !entry.hostI18nMounted)
+              );
+              if (hostI18nEnabled && hostI18nSnap) {
+                if (!skippedStale && !entry.session.closed && (!refreshedFast || hostI18nChanged)) {
+                  const evalRes = await entry.session.evaluate(hostI18nSnap).catch(() => null);
+                  if (evalRes && evalRes.ok) {
+                    entry.hostI18nMounted = true;
+                    entry.lastHostI18nSig = hostI18nSig;
+                  }
+                }
+              } else if (hadHostI18n && !skippedStale && !entry.session.closed) {
+                await entry.session.evaluate(this._getHostI18nCleanupExpression()).catch(() => {});
+                entry.hostI18nMounted = false;
+                entry.lastHostI18nSig = '';
+              }
 
               // Coalesce persistent NewDocument script replacement if a newer mutation is already queued!
               if (this._broadcastPending || this._configSeq !== snapSeq || entry.session.closed) {
@@ -2308,6 +2367,29 @@ export class PrismDaemon {
                   .catch(() => null);
                 if (sbAdd && sbAdd.identifier) {
                   entry.sidebarScriptId = sbAdd.identifier;
+                }
+              }
+              if (!hostI18nEnabled || !hostI18nSnap) {
+                if (entry.hostI18nScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId })
+                    .catch(() => {});
+                  entry.hostI18nScriptId = null;
+                }
+                entry.lastHostI18nScriptSig = '';
+              } else if ((entry.lastHostI18nScriptSig !== hostI18nSig || !entry.hostI18nScriptId) && !entry.session.closed) {
+                if (entry.hostI18nScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId })
+                    .catch(() => {});
+                  entry.hostI18nScriptId = null;
+                }
+                const hiAdd = await entry.session
+                  .send('Page.addScriptToEvaluateOnNewDocument', { source: hostI18nSnap })
+                  .catch(() => null);
+                if (hiAdd && hiAdd.identifier) {
+                  entry.hostI18nScriptId = hiAdd.identifier;
+                  entry.lastHostI18nScriptSig = hostI18nSig;
                 }
               }
             })
@@ -2388,6 +2470,9 @@ export class PrismDaemon {
         if (sidebarEnabledInit && !this.sidebarExpr && typeof this.cdp.buildSidebarStudioExpression === 'function') {
           this.sidebarExpr = this._buildSidebarExprForCurrentClient();
         }
+        if (!this.hostI18nExpr && this._isHostI18nEnabled() && typeof this.cdp.buildHostI18nExpression === 'function') {
+          this.hostI18nExpr = this.cdp.buildHostI18nExpression();
+        }
       }
       if (entry.scriptId) {
         await entry.session
@@ -2424,7 +2509,16 @@ export class PrismDaemon {
             .catch(() => {});
           entry.sidebarScriptId = null;
         }
+        if (entry.hostI18nScriptId) {
+          await entry.session
+            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId })
+            .catch(() => {});
+          entry.hostI18nScriptId = null;
+        }
         entry.sidebarMounted = false;
+        entry.hostI18nMounted = false;
+        entry.lastHostI18nSig = '';
+        entry.lastHostI18nScriptSig = '';
         return mainRes;
       }
 
@@ -2477,6 +2571,43 @@ export class PrismDaemon {
         // 关闭态免向新页面下发完整 sidebar-client.js 载荷；仅对已有残留或此前已挂载页面执行轻量清理
         await entry.session.evaluate(this._buildSidebarCleanupExpression(hadSidebarBefore)).catch(() => null);
         entry.sidebarMounted = false;
+      }
+      const hadHostI18nBefore = Boolean(entry.hostI18nScriptId || entry.hostI18nMounted);
+      if (entry.hostI18nScriptId) {
+        await entry.session
+          .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId })
+          .catch(() => {});
+        entry.hostI18nScriptId = null;
+      }
+      const hostI18nEnabledNow = this._isHostI18nEnabled();
+      if (hostI18nEnabledNow) {
+        if (!this.hostI18nExpr && typeof this.cdp.buildHostI18nExpression === 'function') {
+          this.hostI18nExpr = this.cdp.buildHostI18nExpression();
+        }
+        if (this.hostI18nExpr) {
+          const hiAdd = await entry.session
+            .send('Page.addScriptToEvaluateOnNewDocument', { source: this.hostI18nExpr })
+            .catch(() => null);
+          if (hiAdd && hiAdd.identifier) {
+            entry.hostI18nScriptId = hiAdd.identifier;
+          }
+          const evalRes = await entry.session.evaluate(this.hostI18nExpr).catch(() => null);
+          const hiSig = this._getHostI18nCfgSig();
+          if (evalRes && evalRes.ok) {
+            entry.hostI18nMounted = true;
+            entry.lastHostI18nSig = hiSig;
+          }
+          if (hiAdd && hiAdd.identifier) {
+            entry.lastHostI18nScriptSig = hiSig;
+          }
+        }
+      } else {
+        if (hadHostI18nBefore) {
+          await entry.session.evaluate(this._getHostI18nCleanupExpression()).catch(() => null);
+        }
+        entry.hostI18nMounted = false;
+        entry.lastHostI18nSig = '';
+        entry.lastHostI18nScriptSig = '';
       }
       entry.lastVerifyAt = Date.now();
       entry.healthyStreak = 1;
@@ -2857,6 +2988,10 @@ export class PrismDaemon {
       sidebarScriptId: null,
       sidebarBindingAdded: false,
       sidebarMounted: false,
+      hostI18nScriptId: null,
+      hostI18nMounted: false,
+      lastHostI18nSig: '',
+      lastHostI18nScriptSig: '',
       sidebarHostVerified: false,
       sidebarVerifiedDocument: -1,
       sidebarHostContextId: null,
@@ -3023,6 +3158,9 @@ export class PrismDaemon {
         if (entry.sidebarScriptId) {
           await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId });
         }
+        if (entry.hostI18nScriptId) {
+          await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId });
+        }
       } catch {}
       session.close();
       this.sessions.delete(wsUrl);
@@ -3089,6 +3227,7 @@ export class PrismDaemon {
           hasSidebarBridge: Boolean(window.__agPrismSidebarBridge && typeof window.__agPrismSidebarBridge.call === 'function'),
           hasSidebar: Boolean(window.__agPrismSidebar),
           sidebarMode,
+          hasHostI18n: Boolean(window.__agPrismHostI18n),
           codeHash: (api && api.codeHash) || '',
           hasLegacyCss: Boolean(document.getElementById('ag-claude-style-css')),
           needsDashboardSync: Boolean(api && telMode !== 'off' && !isHome && hasModelBtn && !hasPulseBar),
@@ -3110,6 +3249,10 @@ export class PrismDaemon {
         sidebarEnabled && (!probe.hasSidebarBridge || (hasSafeSidebarOnDisk && !probe.hasSidebar));
       const needsSidebarCleanup =
         !sidebarEnabled && Boolean(probe.hasSidebar || entry.sidebarScriptId || entry.sidebarMounted || entry.sidebarBindingAdded);
+      const hostI18nEnabled = this._isHostI18nEnabled();
+      const needsHostI18nHeal = hostI18nEnabled && (!probe.hasHostI18n || !entry.hostI18nScriptId);
+      const needsHostI18nCleanup =
+        !hostI18nEnabled && Boolean(probe.hasHostI18n || entry.hostI18nScriptId || entry.hostI18nMounted);
       let healed = false;
       if (
         (entry.sidebarHostVerified === false && probe.isHostDom) ||
@@ -3151,8 +3294,13 @@ export class PrismDaemon {
             await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId }).catch(() => {});
             entry.sidebarScriptId = null;
           }
+          if (entry.hostI18nScriptId) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId }).catch(() => {});
+            entry.hostI18nScriptId = null;
+          }
           await this._removeSidebarBinding(entry);
           entry.sidebarMounted = false;
+          entry.hostI18nMounted = false;
           this._markTargetIgnored({ id: entry.pageId, webSocketDebuggerUrl: entry.wsUrl }, probe.href || entry.url);
           entry.session.close();
           this.sessions.delete(entry.wsUrl);
@@ -3178,6 +3326,41 @@ export class PrismDaemon {
           await this._removeSidebarBinding(entry);
           await entry.session.evaluate(this._buildSidebarCleanupExpression(true), false, 3500).catch(() => {});
           entry.sidebarMounted = false;
+        }
+        if (hostI18nEnabled) {
+          if (!probe.hasHostI18n || !entry.hostI18nScriptId) {
+            if (!this.hostI18nExpr && typeof this.cdp.buildHostI18nExpression === 'function') {
+              this.hostI18nExpr = this.cdp.buildHostI18nExpression();
+            }
+            if (this.hostI18nExpr) {
+              const hiSig = this._getHostI18nCfgSig();
+              if (!entry.hostI18nScriptId) {
+                const hiAdd = await entry.session
+                  .send('Page.addScriptToEvaluateOnNewDocument', { source: this.hostI18nExpr })
+                  .catch(() => null);
+                if (hiAdd && hiAdd.identifier) {
+                  entry.hostI18nScriptId = hiAdd.identifier;
+                  entry.lastHostI18nScriptSig = hiSig;
+                }
+              }
+              if (!probe.hasHostI18n) {
+                const evalRes = await entry.session.evaluate(this.hostI18nExpr, false, 4500).catch(() => null);
+                if (evalRes && evalRes.ok) {
+                  entry.hostI18nMounted = true;
+                  entry.lastHostI18nSig = hiSig;
+                }
+              }
+            }
+          }
+        } else if (needsHostI18nCleanup) {
+          if (entry.hostI18nScriptId) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId }).catch(() => {});
+            entry.hostI18nScriptId = null;
+          }
+          await entry.session.evaluate(this._getHostI18nCleanupExpression(), false, 3500).catch(() => {});
+          entry.hostI18nMounted = false;
+          entry.lastHostI18nSig = '';
+          entry.lastHostI18nScriptSig = '';
         }
         this.log(`[↻] Hot-healed window to Obsidian Prism v${this.cdp.PLUGIN_VERSION}: ${entry.title}`);
       } else {
@@ -3209,6 +3392,41 @@ export class PrismDaemon {
           await this._removeSidebarBinding(entry);
           await entry.session.evaluate(this._buildSidebarCleanupExpression(true), false, 3500).catch(() => {});
           entry.sidebarMounted = false;
+        }
+        if (needsHostI18nHeal) {
+          healed = true;
+          if (!this.hostI18nExpr && typeof this.cdp.buildHostI18nExpression === 'function') {
+            this.hostI18nExpr = this.cdp.buildHostI18nExpression();
+          }
+          if (this.hostI18nExpr) {
+            const hiSig = this._getHostI18nCfgSig();
+            if (!entry.hostI18nScriptId) {
+              const hiAdd = await entry.session
+                .send('Page.addScriptToEvaluateOnNewDocument', { source: this.hostI18nExpr })
+                .catch(() => null);
+              if (hiAdd && hiAdd.identifier) {
+                entry.hostI18nScriptId = hiAdd.identifier;
+                entry.lastHostI18nScriptSig = hiSig;
+              }
+            }
+            if (!probe.hasHostI18n) {
+              const evalRes = await entry.session.evaluate(this.hostI18nExpr, false, 4500).catch(() => null);
+              if (evalRes && evalRes.ok) {
+                entry.hostI18nMounted = true;
+                entry.lastHostI18nSig = hiSig;
+              }
+            }
+          }
+        } else if (needsHostI18nCleanup) {
+          healed = true;
+          if (entry.hostI18nScriptId) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId }).catch(() => {});
+            entry.hostI18nScriptId = null;
+          }
+          await entry.session.evaluate(this._getHostI18nCleanupExpression(), false, 3500).catch(() => {});
+          entry.hostI18nMounted = false;
+          entry.lastHostI18nSig = '';
+          entry.lastHostI18nScriptSig = '';
         }
         if (probe.needsDashboardSync) {
           healed = true;
@@ -3327,6 +3545,9 @@ export class PrismDaemon {
           }
           if (entry.sidebarScriptId && !entry.session.closed) {
             await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId }).catch(() => {});
+          }
+          if (entry.hostI18nScriptId && !entry.session.closed) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId }).catch(() => {});
           }
           if (cleanPageDom && !entry.session.closed) {
             await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
@@ -3588,6 +3809,9 @@ export class PrismDaemon {
             }
             if (entry.sidebarScriptId) {
               await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId }).catch(() => {});
+            }
+            if (entry.hostI18nScriptId) {
+              await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId }).catch(() => {});
             }
             await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
           }

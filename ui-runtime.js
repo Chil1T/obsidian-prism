@@ -2,7 +2,7 @@
   if (typeof module === 'object' && module.exports) module.exports = factory;
   else root.__agCsUiMain = factory;
 })(typeof globalThis !== 'undefined' ? globalThis : window, function (initialConfig) {
-  const VERSION = '1.0.4';
+  const VERSION = '1.0.5';
   const LEGACY_API_VERSION = 3;
   const CODE_HASH = initialConfig?.codeHash || '';
 
@@ -188,6 +188,8 @@
     out.omniModule = out.omniModule === 'off' || out.omniModule === false ? 'off' : 'on';
     out.sidebarStudio = out.sidebarStudio === 'on' || out.sidebarStudio === true ? 'on' : 'off';
     out.linkTarget = out.linkTarget === 'external' ? 'external' : 'builtin';
+    out.hostLocalization =
+      out.hostLocalization === 'on' || out.hostLocalization === 'off' ? out.hostLocalization : 'auto';
 
     const rawLang =
       (out.language && out.language !== 'auto' ? out.language : '') ||
@@ -1442,8 +1444,7 @@
     if (document.documentElement?.getAttribute('data-ag-prism-mode') === 'chat') active = false;
     const hasMenuPopup = Boolean(
       active &&
-        (inputBox.querySelector?.('[role="listbox"], [role="option"], [data-testid="slash-command-menu"]') ||
-          document.querySelector?.('[data-testid="model-selector-panel"]'))
+        inputBox.querySelector?.('[role="listbox"], [role="option"], [data-testid="slash-command-menu"]')
     );
     if (hasMenuPopup) setAttrIfChanged(inputBox, 'data-ag-cs-menu-open', '1');
     else if (inputBox.hasAttribute?.('data-ag-cs-menu-open')) inputBox.removeAttribute('data-ag-cs-menu-open');
@@ -2907,6 +2908,11 @@
       if (isOwnPluginMutation(m)) continue;
 
       if (m.type === 'attributes') {
+        if (m.attributeName === 'data-ag-prism-host-i18n') {
+          dirtyFlags.settings = true;
+          anyRelevant = true;
+          continue;
+        }
         const tgt = m.target;
         if (tgt === document.body || tgt === document.documentElement) {
           dirtyFlags.theme = true;
@@ -3134,7 +3140,7 @@
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['class', 'aria-expanded', 'data-selected', 'data-cascade-id'],
+      attributeFilter: ['class', 'aria-expanded', 'data-selected', 'data-cascade-id', 'data-ag-prism-host-i18n'],
     });
     for (const [evName, handler] of DOC_LISTENERS) {
       document.addEventListener(evName, handler, true);

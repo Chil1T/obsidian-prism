@@ -26,6 +26,9 @@ const {
   buildConfigRefreshExpression,
   buildOmniClientExpression,
   buildSidebarStudioExpression,
+  shouldEnableHostI18n,
+  buildHostI18nExpression,
+  HOST_I18N_REMOVE_EXPRESSION,
 } = require('./cdp');
 
 const WATCH = process.argv.includes('--watch');
@@ -104,6 +107,10 @@ async function injectOnce() {
     typeof buildSidebarStudioExpression === 'function'
       ? buildSidebarStudioExpression({ binding: SIDEBAR_BINDING })
       : '';
+  const hostI18nExpr =
+    typeof buildHostI18nExpression === 'function'
+      ? buildHostI18nExpression()
+      : '';
   for (const page of targets) {
     const session = await CdpSession.connect(page.webSocketDebuggerUrl);
     try {
@@ -113,6 +120,11 @@ async function injectOnce() {
       }
       if (sidebarExpr) {
         await session.evaluate(sidebarExpr).catch(() => {});
+      }
+      if (hostI18nExpr) {
+        await session.evaluate(hostI18nExpr).catch(() => {});
+      } else if (HOST_I18N_REMOVE_EXPRESSION) {
+        await session.evaluate(HOST_I18N_REMOVE_EXPRESSION).catch(() => {});
       }
       log(`[✓] ${shortTitle(page)} (obsidian-prism ${res.version} · 状态: ${res.status})`);
     } finally {
@@ -224,6 +236,10 @@ async function watch() {
     typeof buildSidebarStudioExpression === 'function'
       ? buildSidebarStudioExpression({ binding: SIDEBAR_BINDING, serviceReady: Boolean(sidebarService) })
       : '';
+  let hostI18nExpr =
+    typeof buildHostI18nExpression === 'function'
+      ? buildHostI18nExpression()
+      : '';
 
   let selfConfigWriteUntil = 0;
 
@@ -260,7 +276,13 @@ async function watch() {
       typeof buildSidebarStudioExpression === 'function'
         ? buildSidebarStudioExpression({ binding: SIDEBAR_BINDING, serviceReady: Boolean(sidebarService) })
         : '';
-    const sidebarEnabled = readConfig()?.sidebarStudio === 'on';
+    const cfgNow = readConfig();
+    const sidebarEnabled = cfgNow?.sidebarStudio === 'on';
+    const hostI18nEnabled = typeof shouldEnableHostI18n === 'function' ? shouldEnableHostI18n(cfgNow) : false;
+    hostI18nExpr =
+      hostI18nEnabled && typeof buildHostI18nExpression === 'function'
+        ? buildHostI18nExpression(cfgNow)
+        : '';
     const canFastRefresh = typeof buildConfigRefreshExpression === 'function';
     const baseRefreshExpr = canFastRefresh ? buildConfigRefreshExpression() : null;
     for (const entry of attached.values()) {
@@ -276,10 +298,16 @@ async function watch() {
           if (fast && fast.refreshed) {
             if (omniExpr && !fast.skippedStale) await entry.session.evaluate(omniExpr).catch(() => {});
             if (sidebarExpr && !fast.skippedStale) await entry.session.evaluate(sidebarExpr).catch(() => {});
+            if (!fast.skippedStale) {
+              if (hostI18nExpr && hostI18nEnabled) await entry.session.evaluate(hostI18nExpr).catch(() => {});
+              else if (HOST_I18N_REMOVE_EXPRESSION) await entry.session.evaluate(HOST_I18N_REMOVE_EXPRESSION).catch(() => {});
+            }
           } else {
             await entry.session.evaluate(expr).catch(() => {});
             if (omniExpr) await entry.session.evaluate(omniExpr).catch(() => {});
             if (sidebarExpr) await entry.session.evaluate(sidebarExpr).catch(() => {});
+            if (hostI18nExpr && hostI18nEnabled) await entry.session.evaluate(hostI18nExpr).catch(() => {});
+            else if (HOST_I18N_REMOVE_EXPRESSION) await entry.session.evaluate(HOST_I18N_REMOVE_EXPRESSION).catch(() => {});
           }
         }
         if (entry.scriptId) {
@@ -301,6 +329,14 @@ async function watch() {
         if (sidebarExpr && sidebarEnabled) {
           const sbAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: sidebarExpr }).catch(() => null);
           entry.sidebarScriptId = sbAdd && sbAdd.identifier ? sbAdd.identifier : null;
+        }
+        if (entry.hostI18nScriptId) {
+          await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId }).catch(() => {});
+          entry.hostI18nScriptId = null;
+        }
+        if (hostI18nExpr && hostI18nEnabled) {
+          const hiAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: hostI18nExpr }).catch(() => null);
+          entry.hostI18nScriptId = hiAdd && hiAdd.identifier ? hiAdd.identifier : null;
         }
       } catch {}
     }
@@ -350,6 +386,21 @@ async function watch() {
       }
       await entry.session.evaluate(sidebarExpr).catch(() => {});
     }
+    if (entry.hostI18nScriptId) {
+      await entry.session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId })
+        .catch(() => {});
+      entry.hostI18nScriptId = null;
+    }
+    if (hostI18nExpr) {
+      const hiAdd = await entry.session
+        .send('Page.addScriptToEvaluateOnNewDocument', { source: hostI18nExpr })
+        .catch(() => null);
+      if (hiAdd && hiAdd.identifier) entry.hostI18nScriptId = hiAdd.identifier;
+      await entry.session.evaluate(hostI18nExpr).catch(() => {});
+    } else if (HOST_I18N_REMOVE_EXPRESSION) {
+      await entry.session.evaluate(HOST_I18N_REMOVE_EXPRESSION).catch(() => {});
+    }
     return res;
   }
 
@@ -363,6 +414,7 @@ async function watch() {
         scriptId: null,
         omniScriptId: null,
         sidebarScriptId: null,
+        hostI18nScriptId: null,
         mainFrameId: null,
         hasFrameTree: false,
         sidebarHostVerified: false,
@@ -535,6 +587,7 @@ async function watch() {
           if (entry.scriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId });
           if (entry.omniScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId });
           if (entry.sidebarScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId });
+          if (entry.hostI18nScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId });
         } catch {}
         entry.session.close();
       }
@@ -586,6 +639,10 @@ async function watch() {
         sidebarExpr =
           typeof freshCdp.buildSidebarStudioExpression === 'function'
             ? freshCdp.buildSidebarStudioExpression({ binding: SIDEBAR_BINDING, serviceReady: Boolean(sidebarService) })
+            : '';
+        hostI18nExpr =
+          typeof freshCdp.buildHostI18nExpression === 'function'
+            ? freshCdp.buildHostI18nExpression()
             : '';
       } catch (err) {
         log(`[!] 读取文件失败: ${err.message}`);

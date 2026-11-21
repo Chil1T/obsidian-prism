@@ -204,7 +204,7 @@ export class UpdateService {
     fetchFn = globalThis.fetch,
     spawnFn = spawn,
     platform = process.platform,
-    currentVersion = '1.0.4',
+    currentVersion = '1.0.5',
     checkTtlMs = CHECK_TTL_MS,
     manualCooldownMs = MANUAL_COOLDOWN_MS,
     tmpRoot = os.tmpdir(),
@@ -215,7 +215,7 @@ export class UpdateService {
     this.fetchFn = fetchFn;
     this.spawnFn = spawnFn;
     this.platform = platform;
-    this.currentVersion = normalizeVersionStr(currentVersion) || '1.0.4';
+    this.currentVersion = normalizeVersionStr(currentVersion) || '1.0.5';
     this.checkTtlMs = Math.max(0, Number(checkTtlMs) || 0);
     this.manualCooldownMs = Math.max(0, Number(manualCooldownMs) || 0);
     this.tmpRoot = tmpRoot || os.tmpdir();

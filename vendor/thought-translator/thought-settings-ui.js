@@ -1,4 +1,4 @@
-// Obsidian Prism — OpenAI-Compatible Thought Translator Settings Workbench UI (v1.0.4 Five-Locale & Sync Hardened)
+// Obsidian Prism — OpenAI-Compatible Thought Translator Settings Workbench UI (v1.0.5 Five-Locale & Sync Hardened)
 // Extracted modular UI component mounted on globalThis.__agPrismThoughtSettingsUi
 
 (function (root) {

@@ -23,31 +23,12 @@
   const GRACE_MS = 3500;
   const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-  const SHADOW_CSS = [
-    ':host,*,::before,::after{box-sizing:border-box}',
-    ':host,.bar,.chip{display:inline-flex;align-items:center}',
-    ':host{flex:0 0 auto;position:relative;font:11px/16px Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--foreground,#dae2f0);user-select:none;z-index:20}',
-    ':host([hidden]),.sub-badge[hidden],.card[hidden],.footnote[hidden],.footnote:empty,:host([data-layout="blocked"])>.bar{display:none!important}',
-    ':host([data-layout="blocked"]){position:fixed!important;left:-9999px!important;top:-9999px!important;width:0!important;height:0!important;margin:0!important;padding:0!important;overflow:hidden!important;visibility:hidden!important;pointer-events:none!important}',
-    '.bar{gap:3px}',
-    '.chip{gap:3.5px;height:24px;padding:0 6px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;cursor:pointer;font-variant-numeric:tabular-nums;transition:background .15s,color .15s}',
-    '.chip:hover,.chip[aria-expanded="true"]{background:rgba(128,138,158,.12)}',
-    '.chip svg{width:12px;height:12px;stroke:currentColor;stroke-width:1.5;fill:none;opacity:.75;flex:none}',
-    '.dim{opacity:.64;font-size:10px}',
-    '.sub-badge{font-size:10px;opacity:.78;color:var(--primary,#38bdf8);font-weight:500}',
-    '.context-ring{width:11px;height:11px;border-radius:50%;background:conic-gradient(var(--pv-tint,#3186ff) var(--used-angle,36deg),rgba(148,163,184,.28) 0);display:inline-block;position:relative;flex:none}',
-    '.context-ring::after{content:"";position:absolute;inset:2.2px;border-radius:50%;background:var(--card,#141720)}',
-    '.card{position:absolute;right:0;left:auto;bottom:calc(100% + 10px);width:min(304px,calc(100vw - 24px));padding:12px 13px;border-radius:10px;border:1px solid rgba(148,163,184,.22);background:var(--card,#12151ef5);color:var(--foreground,#eef1f7);box-shadow:0 16px 40px rgba(0,0,0,.36);z-index:9999}',
-    '.heading{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:11px;font-weight:600;margin-bottom:6px}',
-    '.heading>span:first-child{white-space:nowrap}',
-    '#context-summary{display:block;font-size:13px;font-weight:600;margin-bottom:2px}',
-    '#context-tokens{margin:0 0 8px;font-size:11px;opacity:.76}',
-    '.track{height:5px;border-radius:999px;background:rgba(148,163,184,.18);overflow:hidden;margin:6px 0 10px}',
-    '.track>i{display:block;height:100%;width:0%;border-radius:999px;background:linear-gradient(90deg,#2563eb,#38bdf8)}',
-    'dl{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;margin:8px 0;font-size:11px}',
-    'dt{opacity:.64}dd{margin:0;text-align:right;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-    '.footnote{margin:6px 0 0;font-size:10px;opacity:.58}',
-  ].join('');
+  const TIER_ATTR = 'data-t';
+  const TIER_STYLE_ATTR = 'data-pt';
+  const TIER_VALS = ['0', '1', '1 2', '1 2 3', '1 2 3 4', '1 2 3 4 5'];
+  const TIER_CSS = '[hidden]{display:none!important}:host{--e:cubic-bezier(.22,1,.36,1);--c:var(--pv-tint,var(--pulse-ring,#3186ff))}.bar{transition:gap .28s var(--e)}.bar>:is(.chip,.dot){overflow:hidden;white-space:nowrap;max-width:96px;opacity:1;transform-origin:right;transition:max-width .28s var(--e),opacity .17s ease-out,padding .28s var(--e),margin .28s var(--e),gap .28s var(--e),transform .28s var(--e),background .16s,border-color .22s,box-shadow .22s}.bar>[data-card="context"]{max-width:112px}.bar>.dot{max-width:16px}:where(.bar>.chip>*:not(.context-ring):not(svg)){overflow:hidden;white-space:nowrap;max-width:68px;opacity:1;transform-origin:right;transition:max-width .28s var(--e),opacity .17s ease-out,margin .28s var(--e),padding .28s var(--e),transform .28s var(--e)}.context-ring{will-change:transform;transition:transform .28s var(--e)}:host([data-t~="2"]) :is(.cache-total,.sub-badge,[data-card="cache"] .dim,.countdown),:host([data-t~="4"]) [data-card="context"] .context-label,:host([data-t~="5"]) [data-card="context"]>:not(.context-ring){max-width:0!important;opacity:0!important;margin:0!important;padding:0!important;transform:scale(.9) translateX(4px);pointer-events:none!important}:host([data-t~="3"]) .bar>:is([data-card="cache"],[data-card="week"]),:host([data-t~="4"]) .bar>:is([data-card="speed"],[data-card="five"],.dot){max-width:0!important;min-width:0!important;flex-shrink:1!important;opacity:0!important;padding:0!important;margin:0!important;gap:0!important;border:0!important;transform:scale(.9) translateX(4px);pointer-events:none!important}:host([data-t~="4"]) .bar{gap:0}:host([data-t~="5"]) [data-card="context"]{width:26px!important;min-width:26px!important;height:26px!important;padding:0!important;gap:0!important;border-radius:999px!important;justify-content:center!important;background:color-mix(in srgb,var(--c) 9%,transparent);border:1px solid color-mix(in srgb,var(--c) 28%,rgba(148,163,184,.28))}:host([data-t~="5"]) [data-card="context"]:is(:hover,[aria-expanded="true"]){background:color-mix(in srgb,var(--c) 17%,transparent);border-color:color-mix(in srgb,var(--c) 48%,rgba(148,163,184,.4));box-shadow:0 0 10px -2px color-mix(in srgb,var(--c) 45%,transparent)}:host([data-t~="5"]) .context-ring{transform:scale(1.27)}:host([data-pv-motion="off"]) :is(.bar,.bar *){transition:none!important}@media (prefers-reduced-motion:reduce){:is(.bar,.bar *){transition:none!important}}';
+
+  const SHADOW_CSS = ':host,*,::before,::after{box-sizing:border-box}:host,.bar,.chip{display:inline-flex;align-items:center}:host{flex:0 0 auto;position:relative;font:11px/16px Inter,system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--foreground,#dae2f0);user-select:none;z-index:20}:host([hidden]),.sub-badge[hidden],.card[hidden],.footnote[hidden],.footnote:empty,:host([data-layout="blocked"])>.bar{display:none!important}:host([data-layout="blocked"]){position:fixed!important;left:-9999px!important;top:-9999px!important;width:0!important;height:0!important;margin:0!important;padding:0!important;overflow:hidden!important;visibility:hidden!important;pointer-events:none!important}.bar{gap:3px}.chip{gap:3.5px;height:24px;padding:0 6px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;cursor:pointer;font-variant-numeric:tabular-nums;transition:background .15s,color .15s}.chip:hover,.chip[aria-expanded="true"]{background:rgba(128,138,158,.12)}.chip svg{width:12px;height:12px;stroke:currentColor;stroke-width:1.5;fill:none;opacity:.75;flex:none}.dim{opacity:.64;font-size:10px}.sub-badge{font-size:10px;opacity:.78;color:var(--primary,#38bdf8);font-weight:500}.context-ring{width:11px;height:11px;border-radius:50%;background:conic-gradient(var(--pv-tint,#3186ff) var(--used-angle,36deg),rgba(148,163,184,.28) 0);display:inline-block;position:relative;flex:none}.context-ring::after{content:"";position:absolute;inset:2.2px;border-radius:50%;background:var(--card,#141720)}.card{position:absolute;right:0;left:auto;bottom:calc(100% + 10px);width:min(304px,calc(100vw - 24px));padding:12px 13px;border-radius:10px;border:1px solid rgba(148,163,184,.22);background:var(--card,#12151ef5);color:var(--foreground,#eef1f7);box-shadow:0 16px 40px rgba(0,0,0,.36);z-index:9999}:host([data-t~="4"]) .card{right:-84px;width:min(296px,calc(100vw - 32px))}.heading{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:11px;font-weight:600;margin-bottom:6px}.heading>span:first-child{white-space:nowrap}#context-summary{display:block;font-size:13px;font-weight:600;margin-bottom:2px}#context-tokens{margin:0 0 8px;font-size:11px;opacity:.76}.track{height:5px;border-radius:999px;background:rgba(148,163,184,.18);overflow:hidden;margin:6px 0 10px}.track>i{display:block;height:100%;width:0%;border-radius:999px;background:linear-gradient(90deg,#2563eb,#38bdf8)}dl{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;margin:8px 0;font-size:11px}dt{opacity:.64}dd{margin:0;text-align:right;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.footnote{margin:6px 0 0;font-size:10px;opacity:.58}' + TIER_CSS;
 
   const isFin = (v) => typeof v === 'number' && Number.isFinite(v);
   const FB_ROWS = {
@@ -104,7 +85,54 @@
     let hasHost = false, yielded = false, lastSig = '', detAt = 0;
     let docOff = null, popOff = null, lastSnap = null, mApi = null, mRes = null, seatObs = null, healTm = null;
     let locSnap = null, locAt = 0, expLang = '';
+    let tierRo = null, tierEl = null, tierRaf = 0, curTier = 0, pendTierW = 0, lastTv = '', winResOff = null;
     const pend = new Map();
+
+    const TIER_CUTS = [640, 515, 450, 395, 345], FT_SEL = '.agy-composer-footer,[data-testid="input-box-bottom-toolbar"]';
+    const clrTier = () => {
+      try { if (tierRaf) gW()?.cancelAnimationFrame?.(tierRaf); tierRo?.disconnect(); winResOff?.(); tierEl?.removeAttribute?.(TIER_ATTR); } catch {}
+      tierRaf = 0; tierRo = winResOff = tierEl = null; curTier = 0; pendTierW = 0; lastTv = '';
+      for (const b of gD()?.querySelectorAll?.(`#${PRISM_BAR_ID},[${PRISM_BAR_ATTR}],#${BAR_ID},[id^="${BAR_ID}"],[data-ag-pulse-bar]`) || []) {
+        try { b.removeAttribute?.(TIER_ATTR); b.shadowRoot?.querySelector?.(`style[${TIER_STYLE_ATTR}="1"]`)?.remove?.(); } catch {}
+      }
+    };
+    const applyTierNow = (force = false) => {
+      tierRaf = 0;
+      const doc = gD(), ft = mode !== 'off' && (tierEl?.isConnected ? tierEl : doc?.querySelector?.(FT_SEL));
+      const w = pendTierW > 0 ? pendTierW : ft?.getBoundingClientRect?.().width;
+      pendTierW = 0;
+      if (!ft || !isFin(w) || w <= 0) return;
+      let t = curTier;
+      while (t < 5 && w < TIER_CUTS[t]) t++;
+      while (t > 0 && w >= TIER_CUTS[t - 1] + 12) t--;
+      const tv = TIER_VALS[(curTier = t)] || '0';
+      // 阶梯未变且非强制同步时 0 DOM 查询直接早退，拖动期间 0 Reflow / 0 querySelectorAll
+      if (!force && tv === lastTv && ft.getAttribute?.(TIER_ATTR) === tv) return;
+      lastTv = tv;
+      if (ft.getAttribute?.(TIER_ATTR) !== tv) ft.setAttribute?.(TIER_ATTR, tv);
+      for (const b of fbEl ? [fbEl, ...findExtBars(doc)] : findExtBars(doc)) {
+        if (!b || b.getAttribute?.(HID_ATTR) === '1') continue;
+        if (b.getAttribute?.(TIER_ATTR) !== tv) b.setAttribute?.(TIER_ATTR, tv);
+        if (b !== fbEl && b.shadowRoot && !b.shadowRoot.querySelector?.(`style[${TIER_STYLE_ATTR}="1"]`)) {
+          try { const st = doc.createElement('style'); st.setAttribute(TIER_STYLE_ATTR, '1'); st.textContent = TIER_CSS; b.shadowRoot.appendChild(st); } catch {}
+        }
+      }
+    };
+    const schedTier = (entries) => {
+      const rw = Array.isArray(entries) && entries[0]?.contentRect?.width;
+      if (isFin(rw) && rw > 0) pendTierW = rw;
+      if (!tierRaf && mode !== 'off') { const w = gW(); tierRaf = w?.requestAnimationFrame ? w.requestAnimationFrame(() => applyTierNow(false)) : (applyTierNow(false), 0); }
+    };
+    const ensTierObs = () => {
+      const w = gW(), ft = mode !== 'off' && gD()?.querySelector?.(FT_SEL);
+      if (!w || !ft) return;
+      if (tierEl !== ft) {
+        try { tierRo?.disconnect(); } catch {} tierRo = null; tierEl = ft; lastTv = '';
+        if (typeof w.ResizeObserver === 'function') { try { tierRo = new w.ResizeObserver(schedTier); tierRo.observe(ft); } catch {} }
+      }
+      if (!winResOff && typeof w.addEventListener === 'function') { const onR = () => schedTier(null); w.addEventListener('resize', onR, { passive: true }); winResOff = () => w.removeEventListener?.('resize', onR); }
+      applyTierNow(true);
+    };
 
     const bindHook = () => {
       const w = gW();
@@ -132,6 +160,7 @@
       if (healTm !== null) { clearTimeout(healTm); healTm = null; }
       if (seatObs) { try { seatObs.disconnect(); } catch {} seatObs = null; }
       if (popOff) { try { popOff(); } catch {} popOff = null; }
+      clrTier();
     };
 
     const isConv = (doc, w, anc) => {
@@ -522,6 +551,7 @@
           hideExt(true);
           if (fbEl) {
             if (!isConn(d, fbEl) && seatFb(d)) try { wn.__agPulseExternalBridge?.({ event: 'mount' }); } catch {}
+            ensTierObs();
           } else if (findAnchor(d)) {
             mountFb();
           }
@@ -531,10 +561,12 @@
         if (hasExt()) {
           yielded = true;
           if (fbEl) unmountFb(true);
+          ensTierObs();
           return;
         }
         if (fbEl) {
           if (!isConn(d, fbEl) && seatFb(d)) try { wn.__agPulseExternalBridge?.({ event: 'mount' }); } catch {}
+          ensTierObs();
         } else if (waitTm === null && findAnchor(d)) {
           mountFb();
         }
@@ -564,6 +596,10 @@
             schedHeal(!fbEl);
             return;
           }
+          if (inC && ((tierEl && !tierEl.isConnected) || findExtBars(doc).some((b) => b && b.getAttribute?.(HID_ATTR) !== '1' && b.shadowRoot && !b.shadowRoot.querySelector?.(`style[${TIER_STYLE_ATTR}="1"]`)))) {
+            schedHeal(false);
+            return;
+          }
           if (inC && mode === 'on' && findExtBars(doc).some((b) => b && b.getAttribute?.(FALLBACK_ATTR) !== '1' && b.getAttribute?.(HID_ATTR) !== '1')) {
             schedHeal(false);
           }
@@ -589,7 +625,7 @@
       if (mode === 'on') hideExt(true);
       else {
         showExt();
-        if (hasExt()) { yielded = true; unmountFb(true); return null; }
+        if (hasExt()) { yielded = true; unmountFb(true); ensTierObs(); return null; }
       }
       if (mode !== 'off' && fbEl) {
         purgeOrphans(doc, fbEl);
@@ -599,6 +635,7 @@
         if (mode !== 'off' && (mode === 'on' || !hasExt()) && waitTm === null && findAnchor(doc)) mountFb();
         if (!fbEl || !isConn(doc, fbEl)) return null;
       }
+      ensTierObs();
       const snap = await reqSnap({ conversationId: detCid(fbEl), force: false });
       applySnap(snap);
       return snap;
@@ -706,6 +743,7 @@
 
       ensSeatObs();
       ensHost();
+      ensTierObs();
       try { w.__agPulseExternalBridge?.({ event: 'mount' }); } catch {}
       void refresh();
       clrPoll();
@@ -759,6 +797,7 @@
         yielded = true;
         unmountFb(true);
         ensHost();
+        ensTierObs();
         if (detAt > 0 && rescTm === null) {
           rescTm = setTimeout(() => {
             rescTm = null;
@@ -788,7 +827,7 @@
       waitTm = null;
       if (mode !== 'auto') return;
       if (!isConv(gD(), gW())) { unmountFb(true); hideExt(); return; }
-      if (hasExt()) { yielded = true; unmountFb(true); ensHost(); return; }
+      if (hasExt()) { yielded = true; unmountFb(true); ensHost(); ensTierObs(); return; }
       mountFb();
     }
 
