@@ -936,3 +936,686 @@ test('v2.34.0 Effort Slider: switching from Gemini 4 Neon (XHigh) to Gemini 4 Ca
   }
 });
 
+test('Issue #11: multi-HostText effortSpan (React 19 [" ", "Medium"]) & extra spans never detach; disabling effortSliderModule syncs trigger live to High', async () => {
+  const argonLow = { label: 'Gemini 4 Argon (Low)', modelId: 'gemini-4-argon-low', value: 1610 };
+  const argonMed = { label: 'Gemini 4 Argon (Medium)', modelId: 'gemini-4-argon-medium', value: 1611 };
+  const argonHigh = { label: 'Gemini 4 Argon (High)', modelId: 'gemini-4-argon-high', value: 1612 };
+  const argonXHigh = { label: 'Gemini 4 Argon (XHigh)', modelId: 'gemini-4-argon-xhigh', value: 1613 };
+  const carbonLow = { label: 'Gemini 4 Carbon (Low)', modelId: 'gemini-4-carbon-low', value: 1520 };
+  const carbonMed = { label: 'Gemini 4 Carbon (Medium)', modelId: 'gemini-4-carbon-medium', value: 1521 };
+  const carbonHigh = { label: 'Gemini 4 Carbon (High)', modelId: 'gemini-4-carbon-high', value: 1522 };
+  const carbonSingle = { label: 'Gemini 4 Carbon', modelId: 'gemini-4-carbon', value: 1525 };
+
+  const slugEffortIndex = new Map([
+    ['gemini-4-argon', new Map([['low', argonLow], ['medium', argonMed], ['high', argonHigh], ['xhigh', argonXHigh]])],
+    ['gemini-4-carbon', new Map([['low', carbonLow], ['medium', carbonMed], ['high', carbonHigh]])],
+  ]);
+  const modelOptions = [argonLow, argonMed, argonHigh, argonXHigh, carbonLow, carbonMed, carbonHigh];
+
+  const moInstances = [];
+  function notifyMutation(target, type, extra = {}) {
+    for (const mo of moInstances) mo._deliver({ target, type, addedNodes: [], removedNodes: [], ...extra });
+  }
+  class FakeMO {
+    constructor(cb) {
+      this._cb = cb;
+      this._targets = [];
+      this._queue = [];
+      moInstances.push(this);
+    }
+    observe(target, opts = {}) {
+      this._targets.push({ target, opts });
+    }
+    disconnect() {
+      this._targets = [];
+      this._queue = [];
+    }
+    takeRecords() {
+      const q = this._queue.slice();
+      this._queue = [];
+      return q;
+    }
+    _deliver(rec) {
+      for (const { target, opts } of this._targets) {
+        if (!containsNode(target, rec.target)) continue;
+        if (rec.type === 'characterData' && !opts.characterData) continue;
+        if (rec.type === 'childList' && !opts.childList) continue;
+        this._queue.push(rec);
+        queueMicrotask(() => {
+          if (this._queue.length) {
+            const batch = this.takeRecords();
+            this._cb(batch, this);
+          }
+        });
+        break;
+      }
+    }
+  }
+  function containsNode(anc, cur) {
+    let p = cur;
+    while (p) {
+      if (p === anc) return true;
+      p = p.parentNode || p.parentElement || null;
+    }
+    return false;
+  }
+
+  let docEl = null;
+  function makeTextNode(initial) {
+    const node = {
+      nodeType: 3,
+      parentNode: null,
+      parentElement: null,
+      _val: String(initial),
+      get isConnected() { return Boolean(docEl && containsNode(docEl, this)); },
+      get nodeValue() { return this._val; },
+      set nodeValue(v) {
+        const s = String(v);
+        if (this._val === s) return;
+        this._val = s;
+        notifyMutation(this, 'characterData');
+      },
+      get textContent() { return this._val; },
+      set textContent(v) { this.nodeValue = v; },
+    };
+    return node;
+  }
+  function makeElement(tag, attrs = {}) {
+    const attrMap = new Map(Object.entries(attrs));
+    const classes = new Set(String(attrs.class || '').split(/\s+/).filter(Boolean));
+    const el = {
+      nodeType: 1,
+      tagName: tag.toUpperCase(),
+      parentNode: null,
+      parentElement: null,
+      style: { setProperty() {}, removeProperty() {}, color: '', opacity: '', fontWeight: '' },
+      children: [],
+      childNodes: [],
+      get isConnected() { return Boolean(docEl && containsNode(docEl, this)); },
+      classList: {
+        add: (...cs) => cs.forEach((c) => classes.add(c)),
+        remove: (...cs) => cs.forEach((c) => classes.delete(c)),
+        contains: (c) => classes.has(c),
+        toggle: (c, force) => {
+          const on = force === undefined ? !classes.has(c) : Boolean(force);
+          if (on) classes.add(c);
+          else classes.delete(c);
+          return on;
+        },
+      },
+      get firstChild() { return this.childNodes[0] || null; },
+      get nextElementSibling() {
+        if (!this.parentNode) return null;
+        const idx = this.parentNode.children.indexOf(this);
+        return idx >= 0 ? this.parentNode.children[idx + 1] || null : null;
+      },
+      get textContent() {
+        return this.childNodes.map((c) => c.textContent).join('');
+      },
+      set textContent(v) {
+        for (const ch of this.childNodes) { ch.parentNode = null; ch.parentElement = null; }
+        this.childNodes = [];
+        this.children = [];
+        const tn = makeTextNode(v);
+        tn.parentNode = this;
+        tn.parentElement = this;
+        this.childNodes.push(tn);
+        notifyMutation(this, 'childList', { addedNodes: [tn], removedNodes: [] });
+      },
+      appendChild(child) {
+        child.parentNode = this;
+        child.parentElement = this;
+        this.childNodes.push(child);
+        if (child.nodeType === 1) this.children.push(child);
+        notifyMutation(this, 'childList', { addedNodes: [child], removedNodes: [] });
+        return child;
+      },
+      removeChild(child) {
+        this.childNodes = this.childNodes.filter((c) => c !== child);
+        this.children = this.children.filter((c) => c !== child);
+        child.parentNode = null;
+        child.parentElement = null;
+        notifyMutation(this, 'childList', { addedNodes: [], removedNodes: [child] });
+        return child;
+      },
+      remove() {
+        if (this.parentNode) this.parentNode.removeChild(this);
+      },
+      getAttribute: (k) => (attrMap.has(k) ? attrMap.get(k) : null),
+      setAttribute: (k, v) => attrMap.set(k, String(v)),
+      hasAttribute: (k) => attrMap.has(k),
+      removeAttribute: (k) => attrMap.delete(k),
+      contains: (other) => containsNode(el, other),
+      matches(sel) {
+        return sel.split(',').some((raw) => {
+          const s = raw.trim();
+          if (!s) return false;
+          if (s === 'span.min-w-0') return this.tagName === 'SPAN' && classes.has('min-w-0');
+          if (s === 'span.opacity-70') return this.tagName === 'SPAN' && classes.has('opacity-70');
+          if (s === "[data-ces-part='trigger-effort']" || s === '[data-ces-part="trigger-effort"]') {
+            return attrMap.get('data-ces-part') === 'trigger-effort';
+          }
+          if (s === '[data-testid="model-selector-trigger"]') return attrMap.get('data-testid') === 'model-selector-trigger';
+          if (s === '[data-testid="model-selector-panel"]') return attrMap.get('data-testid') === 'model-selector-panel';
+          if (s === 'span') return this.tagName === 'SPAN';
+          const attrOnly = /^\[([a-zA-Z0-9_-]+)\]$/.exec(s);
+          if (attrOnly) return attrMap.has(attrOnly[1]);
+          return false;
+        });
+      },
+      closest(sel) {
+        let p = this;
+        while (p && p.nodeType === 1) {
+          if (p.matches(sel)) return p;
+          p = p.parentElement;
+        }
+        return null;
+      },
+      querySelector(sel) {
+        return this.querySelectorAll(sel)[0] || null;
+      },
+      querySelectorAll(sel) {
+        const res = [];
+        const walk = (n) => {
+          for (const ch of n.children || []) {
+            if (ch.matches?.(sel)) res.push(ch);
+            walk(ch);
+          }
+        };
+        walk(this);
+        return res;
+      },
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    return el;
+  }
+
+  let currentSelected = argonMed;
+  const selectorState = {
+    effortIndex: slugEffortIndex,
+    modelOptions,
+    get selectedModel() { return currentSelected; },
+    setSelectedModel: (m) => { currentSelected = m; },
+    setIsOpen: () => {},
+  };
+
+  docEl = makeElement('html');
+  const head = makeElement('head');
+  const body = makeElement('body');
+  docEl.appendChild(head);
+  docEl.appendChild(body);
+
+  // React 19 JSX `<span className="min-w-0">{base}<span className="opacity-70"> {effort}</span><span className="native-icon" /></span>`
+  const triggerBtn = makeElement('button', { 'data-testid': 'model-selector-trigger' });
+  const outerSpan = makeElement('span', { class: 'min-w-0' });
+  const reactModelText = makeTextNode('Gemini 4 Argon');
+  const effortSpan = makeElement('span', { class: 'opacity-70' });
+  const reactSpaceText = makeTextNode(' ');
+  const reactEffortText = makeTextNode('Medium');
+  const extraNativeSpan = makeElement('span', { class: 'native-icon' });
+  effortSpan.appendChild(reactSpaceText);
+  effortSpan.appendChild(reactEffortText);
+  outerSpan.appendChild(reactModelText);
+  outerSpan.appendChild(effortSpan);
+  outerSpan.appendChild(extraNativeSpan);
+  triggerBtn.appendChild(outerSpan);
+  triggerBtn['__reactFiber$test'] = { memoizedProps: { value: selectorState }, return: null };
+  body.appendChild(triggerBtn);
+
+  const doc = {
+    documentElement: docEl,
+    head,
+    body,
+    createElement: (t) => makeElement(t),
+    createTextNode: (t) => makeTextNode(t),
+    getElementById: (id) => head.children.find((c) => c.id === id) || null,
+    querySelector: (s) => docEl.querySelector(s),
+    querySelectorAll: (s) => docEl.querySelectorAll(s),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const win = {
+    document: doc,
+    MutationObserver: FakeMO,
+    AntigravityCodexEffortSlider: effortSlider,
+    setTimeout,
+    clearTimeout,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  const ctrl = sliderCoexist.createEffortSliderController({ window: win, document: doc });
+  try {
+    ctrl.sync({ effortSliderModule: 'auto' });
+
+    // 1) 滑块开启态：切到 Argon Extra (XHigh) -> 两枚 React HostText 均保持挂载且额外原生 span 不被删除
+    currentSelected = argonXHigh;
+    win.__agCodexEffortSliderInstance.rescan();
+    assert.equal(outerSpan.textContent, 'Gemini 4 Argon Extra');
+    assert.equal(reactSpaceText.isConnected, true, 'Leading space HostText must remain connected');
+    assert.equal(reactEffortText.isConnected, true, 'Effort HostText must NEVER be detached by _setTxt');
+    assert.equal(extraNativeSpan.isConnected, true, 'Extra native <span> inside outerSpan must NEVER be removed');
+    assert.equal(extraNativeSpan.parentNode, outerSpan);
+
+    // 2) 切到无 Extra 档位的 3 档模型 Gemini 4 Carbon (Medium) -> HostText 与额外 span 仍 100% 保留
+    currentSelected = carbonMed;
+    reactModelText.nodeValue = 'Gemini 4 Carbon';
+    win.__agCodexEffortSliderInstance.rescan();
+    assert.equal(outerSpan.textContent, 'Gemini 4 Carbon Medium');
+    assert.equal(reactSpaceText.isConnected, true);
+    assert.equal(reactEffortText.isConnected, true);
+    assert.equal(extraNativeSpan.isConnected, true);
+
+    // 3) 切到单档位锁定 Gemini 4 Carbon（清空 effort 文本）再切回 Argon Medium -> 空白 HostText 节点自动恢复 ' '，始终不断联
+    slugEffortIndex.delete('gemini-4-carbon');
+    modelOptions.splice(4, 3);
+    currentSelected = carbonSingle;
+    win.__agCodexEffortSliderInstance.rescan();
+    assert.equal(outerSpan.textContent, 'Gemini 4 Carbon');
+    assert.equal(reactSpaceText.isConnected, true);
+    assert.equal(reactEffortText.isConnected, true);
+
+    currentSelected = argonMed;
+    reactModelText.nodeValue = 'Gemini 4 Argon';
+    win.__agCodexEffortSliderInstance.rescan();
+    assert.equal(outerSpan.textContent, 'Gemini 4 Argon Medium');
+    assert.equal(reactSpaceText.nodeValue, ' ', 'Leading space HostText must be restored to single space');
+    assert.equal(reactEffortText.nodeValue, 'Medium');
+    assert.equal(reactSpaceText.isConnected, true);
+    assert.equal(reactEffortText.isConnected, true);
+
+    // 4) 关闭推理等级滑块 (effortSliderModule: 'off') -> 彻底卸载并交还控制权给 React，同时清理残留属性
+    triggerBtn.setAttribute('data-ag-cs-model-submenu', '1');
+    triggerBtn.setAttribute('data-ag-cs-orch-l2', '1');
+    triggerBtn.setAttribute('data-ag-cs-orch-l3', '1');
+    triggerBtn.setAttribute('data-ces-orch-row', '1');
+    docEl.setAttribute('data-ces-slider-ready', '1');
+    ctrl.sync({ effortSliderModule: 'off' });
+    assert.equal(win.__agCodexEffortSliderInstance, undefined, 'Built-in instance must be fully removed when off');
+    assert.equal(docEl.hasAttribute('data-ces-slider-ready'), false);
+    assert.equal(triggerBtn.hasAttribute('data-ag-cs-model-submenu'), false);
+    assert.equal(triggerBtn.hasAttribute('data-ag-cs-orch-l2'), false);
+    assert.equal(triggerBtn.hasAttribute('data-ag-cs-orch-l3'), false);
+    assert.equal(triggerBtn.hasAttribute('data-ces-orch-row'), false);
+    assert.equal(effortSpan.style.color, '');
+
+    // 验证即使存在另一个残留的 __prismOwned 实例，sync('off') 也能兜底 stop 并清理
+    let orphanStopped = false;
+    win.__agCodexEffortSliderInstance = { __prismOwned: true, stop() { orphanStopped = true; } };
+    ctrl.sync({ effortSliderModule: 'off' });
+    assert.equal(orphanStopped, true, 'Orphan __prismOwned instance must be stopped when off');
+    assert.equal(win.__agCodexEffortSliderInstance, undefined);
+
+    // 5) 模拟 React 19 在滑块关闭后仅修改原始 HostText 引用 nodeValue = 'High' -> 底部按钮文本立刻同步为 'Gemini 4 Argon High'！
+    currentSelected = argonHigh;
+    reactEffortText.nodeValue = 'High';
+    assert.equal(reactEffortText.isConnected, true);
+    assert.equal(outerSpan.textContent, 'Gemini 4 Argon High', 'Trigger button must immediately reflect React 19 High update instead of freezing on Medium');
+  } finally {
+    ctrl.destroy();
+  }
+});
+
+test('Issue #16 + PR #12 + Issue #11: React 19 multi-HostText [" ", "Medium"] -> [" ", "中等"] & menu sib have 0 ping-pong loop under live i18n, preserve HostText, and reset cache across off/on toggle', async () => {
+  const argonLow = { label: 'Gemini 4 Argon (Low)', modelId: 'gemini-4-argon-low', value: 1610 };
+  const argonMed = { label: 'Gemini 4 Argon (Medium)', modelId: 'gemini-4-argon-medium', value: 1611 };
+  const argonHigh = { label: 'Gemini 4 Argon (High)', modelId: 'gemini-4-argon-high', value: 1612 };
+  const argonXHigh = { label: 'Gemini 4 Argon (XHigh)', modelId: 'gemini-4-argon-xhigh', value: 1613 };
+  const carbonSingle = { label: 'Gemini 4 Carbon', modelId: 'gemini-4-carbon', value: 1525 };
+
+  const slugEffortIndex = new Map([
+    ['gemini-4-argon', new Map([['low', argonLow], ['medium', argonMed], ['high', argonHigh], ['xhigh', argonXHigh]])],
+  ]);
+  const modelOptions = [argonLow, argonMed, argonHigh, argonXHigh, carbonSingle];
+
+  const moInstances = [];
+  function notifyMutation(target, type, extra = {}) {
+    for (const mo of moInstances) mo._deliver({ target, type, addedNodes: [], removedNodes: [], ...extra });
+  }
+  class FakeMO {
+    constructor(cb) {
+      this._cb = cb;
+      this._targets = [];
+      this._queue = [];
+      moInstances.push(this);
+    }
+    observe(target, opts = {}) { this._targets.push({ target, opts }); }
+    disconnect() { this._targets = []; this._queue = []; }
+    takeRecords() { const q = this._queue.slice(); this._queue = []; return q; }
+    _deliver(rec) {
+      for (const { target, opts } of this._targets) {
+        if (!containsNode(target, rec.target)) continue;
+        if (rec.type === 'characterData' && !opts.characterData) continue;
+        if (rec.type === 'childList' && !opts.childList) continue;
+        this._queue.push(rec);
+        queueMicrotask(() => {
+          if (this._queue.length) {
+            const batch = this.takeRecords();
+            this._cb(batch, this);
+          }
+        });
+        break;
+      }
+    }
+  }
+  function containsNode(anc, cur) {
+    let p = cur;
+    while (p) {
+      if (p === anc) return true;
+      p = p.parentNode || p.parentElement || null;
+    }
+    return false;
+  }
+
+  let docEl = null;
+  function makeTextNode(initial) {
+    return {
+      nodeType: 3,
+      parentNode: null,
+      parentElement: null,
+      _val: String(initial),
+      _writes: 0,
+      get isConnected() { return Boolean(docEl && containsNode(docEl, this)); },
+      get nodeValue() { return this._val; },
+      set nodeValue(v) {
+        const s = String(v);
+        if (this._val === s) return;
+        this._val = s;
+        this._writes += 1;
+        notifyMutation(this, 'characterData');
+      },
+      get textContent() { return this._val; },
+      set textContent(v) { this.nodeValue = v; },
+    };
+  }
+  function makeElement(tag, attrs = {}) {
+    const attrMap = new Map(Object.entries(attrs));
+    const classes = new Set(String(attrs.class || '').split(/\s+/).filter(Boolean));
+    const el = {
+      nodeType: 1,
+      tagName: tag.toUpperCase(),
+      parentNode: null,
+      parentElement: null,
+      style: { setProperty() {}, removeProperty() {}, color: '', opacity: '', fontWeight: '', display: '' },
+      children: [],
+      childNodes: [],
+      get isConnected() { return Boolean(docEl && containsNode(docEl, this)); },
+      get className() { return Array.from(classes).join(' '); },
+      set className(v) {
+        classes.clear();
+        String(v || '').split(/\s+/).filter(Boolean).forEach((c) => classes.add(c));
+      },
+      classList: {
+        add: (...cs) => cs.forEach((c) => classes.add(c)),
+        remove: (...cs) => cs.forEach((c) => classes.delete(c)),
+        contains: (c) => classes.has(c),
+        toggle: (c, force) => {
+          const on = force === undefined ? !classes.has(c) : Boolean(force);
+          if (on) classes.add(c);
+          else classes.delete(c);
+          return on;
+        },
+      },
+      get firstChild() { return this.childNodes[0] || null; },
+      get firstElementChild() { return this.children[0] || null; },
+      get nextSibling() {
+        if (!this.parentNode) return null;
+        const idx = this.parentNode.childNodes.indexOf(this);
+        return idx >= 0 ? this.parentNode.childNodes[idx + 1] || null : null;
+      },
+      get nextElementSibling() {
+        if (!this.parentNode) return null;
+        const idx = this.parentNode.children.indexOf(this);
+        return idx >= 0 ? this.parentNode.children[idx + 1] || null : null;
+      },
+      get textContent() { return this.childNodes.map((c) => c.textContent).join(''); },
+      set textContent(v) {
+        for (const ch of this.childNodes) { ch.parentNode = null; ch.parentElement = null; }
+        this.childNodes = [];
+        this.children = [];
+        const tn = makeTextNode(v);
+        tn.parentNode = this;
+        tn.parentElement = this;
+        this.childNodes.push(tn);
+        notifyMutation(this, 'childList', { addedNodes: [tn], removedNodes: [] });
+      },
+      get innerHTML() { return ''; },
+      set innerHTML(v) {
+        if (!v) {
+          for (const ch of this.childNodes) { ch.parentNode = null; ch.parentElement = null; }
+          this.childNodes = [];
+          this.children = [];
+        }
+      },
+      appendChild(child) {
+        child.parentNode = this;
+        child.parentElement = this;
+        this.childNodes.push(child);
+        if (child.nodeType === 1) this.children.push(child);
+        notifyMutation(this, 'childList', { addedNodes: [child], removedNodes: [] });
+        return child;
+      },
+      insertBefore(child, ref) {
+        if (!ref) return this.appendChild(child);
+        child.parentNode = this;
+        child.parentElement = this;
+        const ci = this.childNodes.indexOf(ref);
+        if (ci >= 0) this.childNodes.splice(ci, 0, child);
+        else this.childNodes.push(child);
+        if (child.nodeType === 1) this.children = this.childNodes.filter((n) => n.nodeType === 1);
+        notifyMutation(this, 'childList', { addedNodes: [child], removedNodes: [] });
+        return child;
+      },
+      removeChild(child) {
+        this.childNodes = this.childNodes.filter((c) => c !== child);
+        this.children = this.children.filter((c) => c !== child);
+        child.parentNode = null;
+        child.parentElement = null;
+        notifyMutation(this, 'childList', { addedNodes: [], removedNodes: [child] });
+        return child;
+      },
+      remove() { if (this.parentNode) this.parentNode.removeChild(this); },
+      getAttribute: (k) => (attrMap.has(k) ? attrMap.get(k) : null),
+      setAttribute: (k, v) => attrMap.set(k, String(v)),
+      hasAttribute: (k) => attrMap.has(k),
+      removeAttribute: (k) => attrMap.delete(k),
+      contains: (other) => containsNode(el, other),
+      matches(sel) {
+        return sel.split(',').some((raw) => {
+          const s = raw.trim();
+          if (!s) return false;
+          if (s === 'span.min-w-0') return this.tagName === 'SPAN' && classes.has('min-w-0');
+          if (s === 'span.opacity-70') return this.tagName === 'SPAN' && classes.has('opacity-70');
+          if (s === "[data-ces-part='trigger-effort']" || s === '[data-ces-part="trigger-effort"]') return attrMap.get('data-ces-part') === 'trigger-effort';
+          if (s === '[data-ces-part="value"]') return attrMap.get('data-ces-part') === 'value';
+          if (s === '.ces-ag-effort-value') return classes.has('ces-ag-effort-value');
+          if (s === '.ces-ag-section') return classes.has('ces-ag-section');
+          if (s === '.ces-ag-effort-title') return classes.has('ces-ag-effort-title');
+          if (s === '.ces-ag-panel-enhanced') return classes.has('ces-ag-panel-enhanced');
+          if (s === '.ces-set') return classes.has('ces-set');
+          if (s === '[data-testid="model-selector-trigger"]') return attrMap.get('data-testid') === 'model-selector-trigger';
+          if (s === '[data-testid="model-selector-panel"]') return attrMap.get('data-testid') === 'model-selector-panel';
+          if (s === '[data-testid="model-selector-effort-group"]') return attrMap.get('data-testid') === 'model-selector-effort-group';
+          if (s === '[data-testid="model-selector-item"]') return attrMap.get('data-testid') === 'model-selector-item';
+          if (s === '[role="menuitem"]') return attrMap.get('role') === 'menuitem';
+          if (s === 'span') return this.tagName === 'SPAN';
+          const attrOnly = /^\[([a-zA-Z0-9_-]+)\]$/.exec(s);
+          if (attrOnly) return attrMap.has(attrOnly[1]);
+          return false;
+        });
+      },
+      closest(sel) {
+        let p = this;
+        while (p && p.nodeType === 1) {
+          if (p.matches(sel)) return p;
+          p = p.parentElement;
+        }
+        return null;
+      },
+      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+      querySelectorAll(sel) {
+        const res = [];
+        const walk = (n) => {
+          for (const ch of n.children || []) {
+            if (ch.matches?.(sel)) res.push(ch);
+            walk(ch);
+          }
+        };
+        walk(this);
+        return res;
+      },
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    return el;
+  }
+
+  let currentSelected = argonMed;
+  const selectorState = {
+    effortIndex: slugEffortIndex,
+    modelOptions,
+    get selectedModel() { return currentSelected; },
+    setSelectedModel: (m) => { currentSelected = m; },
+    setIsOpen: () => {},
+  };
+
+  docEl = makeElement('html');
+  const head = makeElement('head');
+  const body = makeElement('body');
+  docEl.appendChild(head);
+  docEl.appendChild(body);
+
+  // React 19 multi-HostText trigger button + open panel with effort-group row sib
+  const triggerBtn = makeElement('button', { 'data-testid': 'model-selector-trigger' });
+  const outerSpan = makeElement('span', { class: 'min-w-0' });
+  const reactModelText = makeTextNode('Gemini 4 Argon');
+  const effortSpan = makeElement('span', { class: 'opacity-70' });
+  const reactSpaceText = makeTextNode(' ');
+  const reactEffortText = makeTextNode('Medium');
+  const extraNativeSpan = makeElement('span', { class: 'native-icon' });
+  effortSpan.appendChild(reactSpaceText);
+  effortSpan.appendChild(reactEffortText);
+  outerSpan.appendChild(reactModelText);
+  outerSpan.appendChild(effortSpan);
+  outerSpan.appendChild(extraNativeSpan);
+  triggerBtn.appendChild(outerSpan);
+  triggerBtn['__reactFiber$test'] = { memoizedProps: { value: selectorState }, return: null };
+  body.appendChild(triggerBtn);
+
+  const panel = makeElement('div', { 'data-testid': 'model-selector-panel' });
+  const listWrap = makeElement('div');
+  const menuItem = makeElement('div', { role: 'menuitem' });
+  const groupSpan = makeElement('span', { 'data-testid': 'model-selector-effort-group', 'data-model-base': 'Gemini 4 Argon' });
+  groupSpan.appendChild(makeTextNode('Gemini 4 Argon'));
+  const sibSpan = makeElement('span');
+  const sibText = makeTextNode('Medium');
+  sibSpan.appendChild(sibText);
+  menuItem.appendChild(groupSpan);
+  menuItem.appendChild(sibSpan);
+  listWrap.appendChild(menuItem);
+  panel.appendChild(listWrap);
+  panel['__reactFiber$test'] = { memoizedProps: { value: selectorState }, return: null };
+  body.appendChild(panel);
+
+  const doc = {
+    documentElement: docEl,
+    head,
+    body,
+    createElement: (t) => makeElement(t),
+    createTextNode: (t) => makeTextNode(t),
+    getElementById: (id) => head.children.find((c) => c.id === id) || null,
+    querySelector: (s) => docEl.querySelector(s),
+    querySelectorAll: (s) => docEl.querySelectorAll(s),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const win = {
+    document: doc,
+    MutationObserver: FakeMO,
+    AntigravityCodexEffortSlider: effortSlider,
+    matchMedia: () => ({ matches: false }),
+    setTimeout,
+    clearTimeout,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  const ctrl = sliderCoexist.createEffortSliderController({ window: win, document: doc });
+  try {
+    ctrl.sync({ effortSliderModule: 'auto' });
+    const valEl = panel.querySelector('.ces-ag-effort-value');
+    assert.ok(valEl);
+    assert.equal(valEl.textContent, 'Medium');
+
+    // Simulate external Chinese i18n translating React 19 HostText [" ", "Medium"] -> [" ", "中等"], sib -> "中等", valEl -> "中等"
+    reactEffortText.nodeValue = '中等';
+    sibText.nodeValue = '中等';
+    valEl.textContent = '中等';
+    const trigWritesAfterZh = reactEffortText._writes;
+    const sibWritesAfterZh = sibText._writes;
+
+    // Wait past slider-coexist throttle window (120ms) and trigger explicit rescan: must produce ZERO ping-pong overwrites
+    await new Promise((r) => setTimeout(r, 180));
+    win.__agCodexEffortSliderInstance.rescan();
+    await new Promise((r) => setTimeout(r, 60));
+
+    assert.equal(reactEffortText._writes, trigWritesAfterZh, 'React 19 effort HostText must have 0 ping-pong overwrites');
+    assert.equal(sibText._writes, sibWritesAfterZh, 'Menu row sib HostText must have 0 ping-pong overwrites');
+    assert.equal(outerSpan.textContent, 'Gemini 4 Argon 中等');
+    assert.equal(sibSpan.textContent, '中等');
+    assert.equal(valEl.textContent, '中等');
+    assert.equal(reactSpaceText.isConnected, true);
+    assert.equal(reactEffortText.isConnected, true);
+    assert.equal(extraNativeSpan.isConnected, true);
+
+    // Real tier change Medium -> Extra updates all 3 sites while keeping React 19 HostText nodes intact
+    currentSelected = argonXHigh;
+    win.__agCodexEffortSliderInstance.rescan();
+    assert.equal(outerSpan.textContent, 'Gemini 4 Argon Extra');
+    assert.equal(sibSpan.textContent, 'Extra');
+    assert.equal(valEl.textContent, 'Extra');
+    assert.equal(reactSpaceText.nodeValue, ' ');
+    assert.equal(reactSpaceText.isConnected, true);
+    assert.equal(reactEffortText.isConnected, true);
+
+    // Re-localize Extra -> 超高 -> still 0 ping-pong overwrites
+    reactEffortText.nodeValue = '超高';
+    sibText.nodeValue = '超高思考';
+    valEl.textContent = '超高';
+    const tw2 = reactEffortText._writes;
+    const sw2 = sibText._writes;
+    await new Promise((r) => setTimeout(r, 160));
+    assert.equal(reactEffortText._writes, tw2);
+    assert.equal(sibText._writes, sw2);
+    assert.equal(outerSpan.textContent, 'Gemini 4 Argon 超高');
+
+    // Switch to locked single-tier Carbon clears localized suffix cleanly without detaching HostText
+    currentSelected = carbonSingle;
+    reactModelText.nodeValue = 'Gemini 4 Carbon';
+    win.__agCodexEffortSliderInstance.rescan();
+    assert.equal(outerSpan.textContent, 'Gemini 4 Carbon');
+    assert.equal(reactSpaceText.isConnected, true);
+    assert.equal(reactEffortText.isConnected, true);
+
+    // Toggle off clears __cesLastText / __cesLastLabel and lets React update freely; toggling back on must sync cleanly
+    ctrl.sync({ effortSliderModule: 'off' });
+    assert.equal(effortSpan.__cesLastText, undefined, 'sync(off) must clear effortSpan.__cesLastText');
+    assert.equal(sibSpan.__cesLastText, undefined, 'sync(off) must clear sibSpan.__cesLastText');
+    currentSelected = argonHigh;
+    reactModelText.nodeValue = 'Gemini 4 Argon';
+    reactSpaceText.nodeValue = ' ';
+    reactEffortText.nodeValue = 'High';
+    assert.equal(outerSpan.textContent, 'Gemini 4 Argon High', 'React 19 HostText updates must apply immediately while slider is off');
+
+    // Re-enable slider: stale cache must not prevent syncing sib & valEl to current High tier
+    ctrl.sync({ effortSliderModule: 'auto' });
+    assert.equal(sibSpan.textContent, 'High', 'Re-enabling slider after off must sync sib to current High tier');
+    assert.equal(panel.querySelector('.ces-ag-effort-value').textContent, 'High');
+    assert.equal(outerSpan.textContent, 'Gemini 4 Argon High');
+    assert.equal(reactSpaceText.isConnected, true);
+    assert.equal(reactEffortText.isConnected, true);
+  } finally {
+    ctrl.destroy();
+  }
+});

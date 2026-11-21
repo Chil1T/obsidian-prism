@@ -52,6 +52,20 @@ xhigh: "Extra",
 max: "Max"
 };
 var AG_MODEL_LABEL_RE = /^(.*?)\s*\((off|minimal|low|medium|high|xhigh|extra|max)(?:\s+thinking)?\)\s*$/i;
+var _EFF_ALIAS = Object.create(null);
+"xhigh:xhigh|extra|extra high|超高|极高|極高|特高|很高;high:high|高;medium:medium|med|中|中等;low:low|低;minimal:minimal|极低|極低|最小|最低|极简|極簡;max:max|最高|最大|极限|極限;off:off|关闭|關閉|关|關|不推理|无|無|none|disabled;auto:auto|自动|自動;thinking:thinking|深度思考|思考中|思考;fixed:fixed|固定".split(";").forEach(function (g) {
+var p = g.split(":"), k = p[0], vs = p[1].split("|");
+for (var i = 0; i < vs.length; i += 1) _EFF_ALIAS[vs[i]] = k;
+});
+function _normEffTxt(raw) {
+var s = String(raw || "").trim().replace(/^[(\uff08]+|[)\uff09]+$/g, "").trim().replace(/\s+thinking$/i, "").toLowerCase();
+return _EFF_ALIAS[s] || _EFF_ALIAS[s.replace(/(.+?)(?:思考|推理|强度|強度)$/, "$1")] || "";
+}
+function _sameEffTxt(a, b) {
+if (a === b) return true;
+var ka = _normEffTxt(a), kb = _normEffTxt(b);
+return Boolean(ka && kb && ka === kb);
+}
 // Claude 专属主题常量（6×60 点阵、1.6s 从右至左扫掠、Capsule 胶囊滑块）
 var CLAUDE_CELL = 28 / 6; // ≈ 4.67px
 var CLAUDE_ROWS = 6;
@@ -425,6 +439,7 @@ return true;
 * - 像素亮度：整体 alpha 乘以 (0.45 + 0.55 * intensity)。
 * intensity = 1 时三项系数均为 1，输出与旧版完全一致。
 */
+var _ditherWashCache = typeof WeakMap === "function" ? new WeakMap() : null;
 function paintDither(ctx, w, h, dark, progress, timeSec, intensity) {
 if (!ctx) return;
 var _mx = Math.max, _mn = Math.min, _rd = Math.round, _fl = Math.floor, _pw = Math.pow, _PI2 = Math.PI * 2;
@@ -432,12 +447,20 @@ var strength = typeof intensity === "number" ? clamp01(intensity) : 1;
 ctx.clearRect(0, 0, w, h);
 if (strength <= 0 || w <= 0) return;
 var keepRatio = strength >= 1 ? 1 : 0.25 + 0.75 * strength, alphaMul = 0.45 + 0.55 * strength;
+var wash = null, wKey = progress >= 1 ? w + "|" + (dark ? 1 : 0) : "";
+if (wKey && _ditherWashCache) {
+var _wc = _ditherWashCache.get(ctx);
+if (_wc && _wc.k === wKey) wash = _wc.g;
+}
+if (!wash) {
 var k = 1 - progress, s1 = _mx(0, _mn(1, k - 0.08)), s2 = _mx(s1, _mn(1, k + 0.18));
-var wash = ctx.createLinearGradient(0, 0, w, 0);
+wash = ctx.createLinearGradient(0, 0, w, 0);
 var stops = dark
 ? [[0, "rgba(112,78,162,0)"], [s1, "rgba(112,78,162,0)"], [s2, "rgba(118,84,169,0.3)"], [1, "rgba(116,84,170,0.75)"]]
 : [[0, "rgba(142,118,192,0)"], [s1, "rgba(142,118,192,0)"], [s2, "rgba(142,118,192,0.45)"], [1, "rgba(142,118,192,1)"]];
 for (var si = 0; si < 4; si += 1) wash.addColorStop(stops[si][0], stops[si][1]);
+if (wKey && _ditherWashCache) _ditherWashCache.set(ctx, { k: wKey, g: wash });
+}
 ctx.globalAlpha = strength;
 ctx.fillStyle = wash;
 ctx.fillRect(0, 0, w, h);
@@ -726,7 +749,7 @@ return mixHex(lo, hi, clamp01((idx - first) / Math.max(1, n - 1 - first)));
 }
 var FILL_RADIUS_CSS = KNOB_RADIUS + "px 0 0 " + KNOB_RADIUS + "px";
 // ── 样式表注入（对齐 dsh-codex-effort-slider 右向左星尘横穿 + 星云扫光 + Antigravity 面板适配） ──
-var SLIDER_CSS = "@keyframes ces-sweep{0%{transform:translateX(100%)}100%{transform:translateX(-100%)}}@keyframes ces-star-sweep{0%{transform:translate3d(0,0,0);opacity:0}6%{opacity:1}94%{opacity:1}100%{transform:translate3d(-100%,0,0);opacity:0}}.ces-inline{width:100%;box-sizing:border-box;padding-top:6px;user-select:none!important;-webkit-user-select:none!important}.ces-root,.ces-root:focus,.ces-root:focus-visible,.ces-root:focus-within{position:relative;width:100%;box-sizing:border-box;outline:none!important;outline-width:0!important;box-shadow:none!important;user-select:none!important;-webkit-user-select:none!important;-webkit-tap-highlight-color:transparent!important}.ces-track{position:relative;width:100%;height:28px;border-radius:999px;background:rgba(128,128,145,.18);box-shadow:inset 0 1px 2px rgba(0,0,0,.24),inset 0 0 0 1px rgba(255,255,255,.06);cursor:pointer;touch-action:none;box-sizing:border-box;transition:opacity .15s ease,box-shadow .2s ease}.ces-inline[data-energy='1'] .ces-track,.ces-root[data-energy='1'] .ces-track{box-shadow:0 0 calc(var(--ces-energy,0) * 16px) rgba(168,85,247,.5),inset 0 1px 2px rgba(0,0,0,.24)}.ces-inline[data-energy='0'] .ces-star,.ces-inline[data-energy='0'] .ces-energy__sweep,.ces-root[data-energy='0'] .ces-star,.ces-root[data-energy='0'] .ces-energy__sweep{animation-play-state:paused}.ces-track.is-locked{opacity:.45;cursor:not-allowed;filter:saturate(.25)}.ces-fill{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;background:var(--ces-fill-bg,#4d93f8);pointer-events:none;will-change:width,background}.ces-energy{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;overflow:hidden;pointer-events:none;opacity:var(--ces-energy,0);transition:opacity .2s ease;background:linear-gradient(90deg,#3b1178 0%,#6d28d9 30%,#9333ea 62%,#c084fc 100%)}.ces-energy__sweep{position:absolute;inset:0;background:linear-gradient(100deg,transparent 18%,rgba(255,255,255,.3) 50%,transparent 82%);transform:translateX(100%);animation:ces-sweep 2.4s linear infinite;pointer-events:none}.ces-stars{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;opacity:var(--ces-star-opacity,0);transition:opacity .2s ease;pointer-events:none;overflow:hidden}.ces-star{position:absolute;left:0;right:0;height:3px;margin-top:-1.5px;pointer-events:none;animation-name:ces-star-sweep;animation-timing-function:linear;animation-iteration-count:infinite}.ces-star__dot{position:absolute;left:100%;top:0;width:3px;height:3px;margin-left:-1.5px;border-radius:50%;background:#f5f3ff;box-shadow:0 0 5px rgba(216,180,254,.95);opacity:var(--ces-b,1);transform:scale(var(--ces-b,1))}.ces-ticks{position:absolute;inset:0;pointer-events:none}.ces-tick{position:absolute;top:50%;width:3px;height:3px;margin:-1.5px 0 0 -1.5px;border-radius:50%;background:rgba(255,255,255,.28);pointer-events:none;transition:background-color .12s ease}.ces-tick.is-on{background:rgba(255,255,255,.65)}.ces-tick.is-dim{background:rgba(255,255,255,.28)}.ces-knob{position:absolute;top:50%;left:var(--ces-fill,14px);width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;background:#fff;box-shadow:0 1px 5px rgba(0,0,0,.34),0 0 0 .5px rgba(0,0,0,.06);pointer-events:none;will-change:left}.ces-root[data-theme='claude'] .ces-stars,.ces-root[data-theme='claude'] .ces-energy,.ces-inline[data-theme='claude'] .ces-stars,.ces-inline[data-theme='claude'] .ces-energy{display:none!important}.ces-root[data-theme='claude'] .ces-track,.ces-inline[data-theme='claude'] .ces-track{height:28px;border-radius:999px;background:rgba(128,128,145,.16);box-shadow:inset 0 1px 2px rgba(0,0,0,.22),inset 0 0 0 1px rgba(255,255,255,.08)}.ces-root[data-theme='claude'][data-energy='1'] .ces-track,.ces-inline[data-theme='claude'][data-energy='1'] .ces-track{box-shadow:0 0 16px rgba(167,139,250,.45),inset 0 1px 2px rgba(0,0,0,.22)}.ces-root[data-theme='claude'] .ces-knob,.ces-inline[data-theme='claude'] .ces-knob{width:24px;height:30px;margin:-15px 0 0 -12px;border-radius:7px;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.4),0 0 0 .5px rgba(0,0,0,.12);display:flex;align-items:center;justify-content:center}.ces-knob-notch{display:none;width:2px;height:10px;border-radius:999px;background:rgba(0,0,0,.28)}.ces-root[data-theme='claude'] .ces-knob-notch,.ces-inline[data-theme='claude'] .ces-knob-notch{display:block}.ces-claude-canvas{position:absolute;left:0;top:0;width:var(--ces-fill,0px);height:100%;border-radius:999px;display:none;pointer-events:none}.ces-root[data-theme='claude'][data-energy='1'] .ces-claude-canvas,.ces-inline[data-theme='claude'][data-energy='1'] .ces-claude-canvas{display:block}@keyframes ces-claude-rise{0%{transform:translateY(85%) scale(.96);opacity:0}55%{opacity:1}80%{transform:translateY(-6%) scale(1.01)}100%{transform:translateY(0) scale(1);opacity:1}}.ces-ag-effort-value.is-claude-changing,.ces-ag-effort-value.ces-text-rise{animation:ces-claude-rise .3s cubic-bezier(.2,.85,.25,1)}.ces-ag-effort-value.is-claude-changing.is-glowing,.ces-ag-effort-value.ces-text-rise.is-glowing{animation:ces-claude-rise .3s cubic-bezier(.2,.85,.25,1),ces-text-bloom .4s cubic-bezier(.16,1,.3,1) forwards}[data-testid='model-selector-panel'].ces-ag-panel-enhanced{max-height:26rem!important}.ces-ag-section,.ces-ag-section:focus,.ces-ag-section:focus-visible,.ces-ag-section *{outline:none!important;outline-width:0!important;user-select:none!important;-webkit-user-select:none!important;-webkit-tap-highlight-color:transparent!important}.ces-ag-section{display:flex;flex-direction:column;flex-shrink:0;width:100%;box-sizing:border-box}.ces-ag-effort-row{display:flex;flex-direction:column;width:100%;box-sizing:border-box;padding:6px 8px 8px;border-radius:6px;transition:box-shadow .2s ease,background-color .2s ease}.ces-ag-effort-row:hover{background-color:rgba(128,128,145,.08)}.ces-ag-effort-row[data-ces-max='true'],[data-ces-effort-row='true'][data-ces-max='true']{box-shadow:inset 0 0 0 1px rgba(139,92,246,.42),0 0 14px -4px rgba(139,92,246,.45)!important;background-color:rgba(139,92,246,.06)}.ces-ag-effort-head{display:flex;align-items:center;justify-content:space-between;width:100%;font-size:12px;line-height:16px}.ces-ag-effort-title{display:inline-flex;align-items:center;gap:6px;color:inherit;font-weight:500;opacity:.9}.ces-ag-effort-value{position:relative;z-index:1;display:inline-block;font-size:12px;font-weight:600;transition:color .15s ease}.ces-ag-effort-value::after{content:'';position:absolute;top:50%;left:50%;width:52px;height:26px;border-radius:999px;transform:translate(-50%,-50%) scale(.6);background:radial-gradient(ellipse at center,var(--ces-glow-color,rgba(168,85,247,.85)) 0%,var(--ces-glow-color,rgba(168,85,247,.45)) 45%,rgba(168,85,247,0) 75%);filter:blur(8px);pointer-events:none;opacity:0;z-index:-1}@keyframes ces-glow-flash{0%{opacity:.95;transform:translate(-50%,-50%) scale(.65);filter:blur(6px)}25%{opacity:1;transform:translate(-50%,-50%) scale(1.15);filter:blur(8px)}100%{opacity:0;transform:translate(-50%,-50%) scale(1.5);filter:blur(14px)}}@keyframes ces-text-bloom{0%{text-shadow:0 0 8px var(--ces-glow-color,#c084fc)}30%{text-shadow:0 0 14px var(--ces-glow-color,#c084fc),0 0 3px #fff}100%{text-shadow:none}}.ces-ag-effort-value.is-glowing{animation:ces-text-bloom .4s cubic-bezier(.16,1,.3,1) forwards}.ces-ag-effort-value.is-glowing::after{animation:ces-glow-flash .4s cubic-bezier(.16,1,.3,1) forwards}@media (prefers-reduced-motion:reduce){.ces-panel-shaking,.ces-ag-effort-value.is-glowing,.ces-ag-effort-value.is-glowing::after,.ces-ag-effort-value.ces-text-rise,.ces-ag-effort-value.is-claude-changing{animation:none!important}}html[data-ces-slider-ready='1'] [role='menu']:has([data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])),html[data-ces-slider-ready='1'] div[role='presentation']:has(>[role='menu'] [data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])){display:none!important;visibility:hidden!important;pointer-events:none!important;opacity:0!important}html[data-ces-slider-ready='1'] [role='menuitem']:has([data-testid='model-selector-effort-group'])>span.shrink-0:last-child{display:none!important}html[data-ces-slider-ready='1'] [role='menuitem']:has([data-testid='model-selector-effort-group'])>.group-hover\\:hidden{display:flex!important}[role='menuitem'][data-ces-model-selected='true']{background-color:rgba(128,128,145,.14)}.ces-set{position:fixed;z-index:2147483646;width:268px;padding:12px;border-radius:10px;background:rgba(24,24,28,.96);color:#f4f4f6;border:1px solid rgba(255,255,255,.12);box-shadow:0 12px 32px rgba(0,0,0,.55);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;box-sizing:border-box;user-select:none}.ces-set-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,.08);font-weight:600;font-size:12.5px}.ces-set-ver{font-size:11px;font-weight:400;opacity:.55}.ces-set-group{margin-bottom:10px}.ces-set-label{margin-bottom:5px;font-size:11px;opacity:.72}.ces-set-opts{display:flex;gap:4px}.ces-set-opt{flex:1;padding:5px 6px;border-radius:6px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.04);color:#d4d4d8;font-size:11.5px;cursor:pointer;text-align:center;transition:all .12s ease}.ces-set-opt:hover{background:rgba(255,255,255,.1);color:#fff}.ces-set-opt.is-on{background:rgba(139,92,246,.28);border-color:rgba(139,92,246,.75);color:#fff;font-weight:600}.ces-set-actions{display:flex;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08)}.ces-set-btn{flex:1;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:#e4e4e7;font-size:11px;cursor:pointer}.ces-set-btn:hover{background:rgba(255,255,255,.14)}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']{grid-template-rows:auto auto}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>[role='separator']{grid-row:1;grid-column:1}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>:is(.ces-ag-effort-row,[data-testid='orchestrator-effort-bar']){grid-row:2!important;grid-column:1!important}";
+var SLIDER_CSS = "@keyframes ces-sweep{0%{transform:translateX(100%)}100%{transform:translateX(-100%)}}@keyframes ces-star-sweep{0%{transform:translate3d(0,0,0);opacity:0}6%{opacity:1}94%{opacity:1}100%{transform:translate3d(-100%,0,0);opacity:0}}.ces-inline{width:100%;box-sizing:border-box;padding-top:6px;user-select:none!important;-webkit-user-select:none!important}.ces-root,.ces-root:focus,.ces-root:focus-visible,.ces-root:focus-within{position:relative;width:100%;box-sizing:border-box;outline:none!important;outline-width:0!important;box-shadow:none!important;user-select:none!important;-webkit-user-select:none!important;-webkit-tap-highlight-color:transparent!important}.ces-track{position:relative;width:100%;height:28px;border-radius:999px;background:rgba(128,128,145,.18);box-shadow:inset 0 1px 2px rgba(0,0,0,.24),inset 0 0 0 1px rgba(255,255,255,.06);cursor:pointer;touch-action:none;box-sizing:border-box;transition:opacity .15s ease,box-shadow .2s ease}.ces-inline[data-energy='1'] .ces-track,.ces-root[data-energy='1'] .ces-track{box-shadow:0 0 calc(var(--ces-energy,0) * 16px) rgba(168,85,247,.5),inset 0 1px 2px rgba(0,0,0,.24)}.ces-inline[data-energy='0'] .ces-star,.ces-inline[data-energy='0'] .ces-energy__sweep,.ces-root[data-energy='0'] .ces-star,.ces-root[data-energy='0'] .ces-energy__sweep{animation-play-state:paused}.ces-track.is-locked{opacity:.45;cursor:not-allowed;filter:saturate(.25)}.ces-fill{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;background:var(--ces-fill-bg,#4d93f8);pointer-events:none;will-change:width,background}.ces-energy{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;overflow:hidden;pointer-events:none;opacity:var(--ces-energy,0);transition:opacity .2s ease;background:linear-gradient(90deg,#3b1178 0%,#6d28d9 30%,#9333ea 62%,#c084fc 100%)}.ces-energy__sweep{position:absolute;inset:0;background:linear-gradient(100deg,transparent 18%,rgba(255,255,255,.3) 50%,transparent 82%);transform:translateX(100%);animation:ces-sweep 2.4s linear infinite;pointer-events:none}.ces-stars{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;opacity:var(--ces-star-opacity,0);transition:opacity .2s ease;pointer-events:none;overflow:hidden}.ces-star{position:absolute;left:0;right:0;height:3px;margin-top:-1.5px;pointer-events:none;animation-name:ces-star-sweep;animation-timing-function:linear;animation-iteration-count:infinite}.ces-star__dot{position:absolute;left:100%;top:0;width:3px;height:3px;margin-left:-1.5px;border-radius:50%;background:#f5f3ff;box-shadow:0 0 5px rgba(216,180,254,.95);opacity:var(--ces-b,1);transform:scale(var(--ces-b,1))}.ces-ticks{position:absolute;inset:0;pointer-events:none}.ces-tick{position:absolute;top:50%;width:3px;height:3px;margin:-1.5px 0 0 -1.5px;border-radius:50%;background:rgba(255,255,255,.28);pointer-events:none;transition:background-color .12s ease}.ces-tick.is-on{background:rgba(255,255,255,.65)}.ces-tick.is-dim{background:rgba(255,255,255,.28)}.ces-knob{position:absolute;top:50%;left:var(--ces-fill,14px);width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;background:#fff;box-shadow:0 1px 5px rgba(0,0,0,.34),0 0 0 .5px rgba(0,0,0,.06);pointer-events:none;will-change:left}.ces-root[data-theme='claude'] .ces-stars,.ces-root[data-theme='claude'] .ces-energy,.ces-inline[data-theme='claude'] .ces-stars,.ces-inline[data-theme='claude'] .ces-energy{display:none!important}.ces-root[data-theme='claude'] .ces-track,.ces-inline[data-theme='claude'] .ces-track{height:28px;border-radius:999px;background:rgba(128,128,145,.16);box-shadow:inset 0 1px 2px rgba(0,0,0,.22),inset 0 0 0 1px rgba(255,255,255,.08)}.ces-root[data-theme='claude'][data-energy='1'] .ces-track,.ces-inline[data-theme='claude'][data-energy='1'] .ces-track{box-shadow:0 0 16px rgba(167,139,250,.45),inset 0 1px 2px rgba(0,0,0,.22)}.ces-root[data-theme='claude'] .ces-knob,.ces-inline[data-theme='claude'] .ces-knob{width:24px;height:30px;margin:-15px 0 0 -12px;border-radius:7px;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.4),0 0 0 .5px rgba(0,0,0,.12);display:flex;align-items:center;justify-content:center}.ces-knob-notch{display:none;width:2px;height:10px;border-radius:999px;background:rgba(0,0,0,.28)}.ces-root[data-theme='claude'] .ces-knob-notch,.ces-inline[data-theme='claude'] .ces-knob-notch{display:block}.ces-claude-canvas{position:absolute;left:0;top:0;width:var(--ces-fill,0px);height:100%;border-radius:999px;display:none;pointer-events:none}.ces-root[data-theme='claude'][data-energy='1'] .ces-claude-canvas,.ces-inline[data-theme='claude'][data-energy='1'] .ces-claude-canvas{display:block}@keyframes ces-claude-rise{0%{transform:translateY(85%) scale(.96);opacity:0}55%{opacity:1}80%{transform:translateY(-6%) scale(1.01)}100%{transform:translateY(0) scale(1);opacity:1}}.ces-ag-effort-value.is-claude-changing,.ces-ag-effort-value.ces-text-rise{animation:ces-claude-rise .3s cubic-bezier(.2,.85,.25,1)}.ces-ag-effort-value.is-claude-changing.is-glowing,.ces-ag-effort-value.ces-text-rise.is-glowing{animation:ces-claude-rise .3s cubic-bezier(.2,.85,.25,1),ces-text-bloom .4s cubic-bezier(.16,1,.3,1) forwards}[data-testid='model-selector-panel'].ces-ag-panel-enhanced{max-height:26rem!important}.ces-ag-section,.ces-ag-section:focus,.ces-ag-section:focus-visible,.ces-ag-section *{outline:none!important;outline-width:0!important;user-select:none!important;-webkit-user-select:none!important;-webkit-tap-highlight-color:transparent!important}.ces-ag-section{display:flex;flex-direction:column;flex-shrink:0;width:100%;box-sizing:border-box}.ces-ag-effort-row{display:flex;flex-direction:column;width:100%;box-sizing:border-box;padding:6px 8px 8px;border-radius:6px;transition:box-shadow .2s ease,background-color .2s ease}.ces-ag-effort-row:hover{background-color:rgba(128,128,145,.08)}.ces-ag-effort-row[data-ces-max='true'],[data-ces-effort-row='true'][data-ces-max='true']{box-shadow:inset 0 0 0 1px rgba(139,92,246,.42),0 0 14px -4px rgba(139,92,246,.45)!important;background-color:rgba(139,92,246,.06)}.ces-ag-effort-head{display:flex;align-items:center;justify-content:space-between;width:100%;font-size:12px;line-height:16px}.ces-ag-effort-title{display:inline-flex;align-items:center;gap:6px;color:inherit;font-weight:500;opacity:.9}.ces-ag-effort-value{position:relative;z-index:1;display:inline-block;font-size:12px;font-weight:600;transition:color .15s ease}.ces-ag-effort-value::after{content:'';position:absolute;top:50%;left:50%;width:52px;height:26px;border-radius:999px;transform:translate(-50%,-50%) scale(.6);background:radial-gradient(ellipse at center,var(--ces-glow-color,rgba(168,85,247,.85)) 0%,var(--ces-glow-color,rgba(168,85,247,.45)) 45%,rgba(168,85,247,0) 75%);filter:blur(8px);pointer-events:none;opacity:0;z-index:-1}@keyframes ces-glow-flash{0%{opacity:.95;transform:translate(-50%,-50%) scale(.65);filter:blur(6px)}25%{opacity:1;transform:translate(-50%,-50%) scale(1.15);filter:blur(8px)}100%{opacity:0;transform:translate(-50%,-50%) scale(1.5);filter:blur(14px)}}@keyframes ces-text-bloom{0%{text-shadow:0 0 8px var(--ces-glow-color,#c084fc)}30%{text-shadow:0 0 14px var(--ces-glow-color,#c084fc),0 0 3px #fff}100%{text-shadow:none}}.ces-ag-effort-value.is-glowing{animation:ces-text-bloom .4s cubic-bezier(.16,1,.3,1) forwards}.ces-ag-effort-value.is-glowing::after{animation:ces-glow-flash .4s cubic-bezier(.16,1,.3,1) forwards}@media (prefers-reduced-motion:reduce){.ces-panel-shaking,.ces-ag-effort-value.is-glowing,.ces-ag-effort-value.is-glowing::after,.ces-ag-effort-value.ces-text-rise,.ces-ag-effort-value.is-claude-changing{animation:none!important}}html[data-ces-slider-ready='1'] [role='menu']:has([data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])),html[data-ces-slider-ready='1'] div[role='presentation']:has(>[role='menu'] [data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])){display:none!important;visibility:hidden!important;pointer-events:none!important;opacity:0!important}html[data-ces-slider-ready='1'] [role='menuitem']:has([data-testid='model-selector-effort-group'])>span.shrink-0:last-child{display:none!important}html[data-ces-slider-ready='1'] [role='menuitem']:has([data-testid='model-selector-effort-group'])>.group-hover\\:hidden{display:flex!important}[role='menuitem'][data-ces-model-selected='true']{background-color:rgba(128,128,145,.14)}.ces-set{position:fixed;z-index:2147483646;width:268px;padding:12px;border-radius:10px;background:rgba(24,24,28,.96);color:#f4f4f6;border:1px solid rgba(255,255,255,.12);box-shadow:0 12px 32px rgba(0,0,0,.55);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;box-sizing:border-box;user-select:none}.ces-set-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,.08);font-weight:600;font-size:12.5px}.ces-set-ver{font-size:11px;font-weight:400;opacity:.55}.ces-set-group{margin-bottom:10px}.ces-set-label{margin-bottom:5px;font-size:11px;opacity:.72}.ces-set-opts{display:flex;gap:4px}.ces-set-opt{flex:1;padding:5px 6px;border-radius:6px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.04);color:#d4d4d8;font-size:11.5px;cursor:pointer;text-align:center;transition:all .12s ease}.ces-set-opt:hover{background:rgba(255,255,255,.1);color:#fff}.ces-set-opt.is-on{background:rgba(139,92,246,.28);border-color:rgba(139,92,246,.75);color:#fff;font-weight:600}.ces-set-actions{display:flex;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08)}.ces-set-btn{flex:1;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:#e4e4e7;font-size:11px;cursor:pointer}.ces-set-btn:hover{background:rgba(255,255,255,.14)}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']{grid-template-rows:auto auto}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>[role='separator']{grid-row:1;grid-column:1}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>:is(.ces-ag-effort-row,[data-testid='orchestrator-effort-bar']){grid-row:2!important;grid-column:1!important}html[data-ces-slider-ready='1'] [data-ag-cs-orch-l3='1']{display:none!important;visibility:hidden!important;pointer-events:none!important;opacity:0!important}html[data-ces-slider-ready='1'] [data-ces-orch-row='1']>svg:last-child:not(:first-child):not(.lucide-check),html[data-ces-slider-ready='1'] [data-ces-orch-row='1']>span:last-child:not(:first-child):has(>svg:only-child:not(.lucide-check)),html[data-ces-slider-ready='1'] [data-ces-orch-row='1']>*:last-child>svg:last-child:not(.lucide-check){display:none!important}[data-ces-orch-row='1'][data-ces-model-selected='true']{background-color:rgba(128,128,145,.14)}";
 function installStyles(doc) {
 var d = doc || (typeof document !== "undefined" ? document : null);
 if (!d || !d.head) return null;
@@ -1349,6 +1372,10 @@ if (ui && ui.effortTitle) return String(ui.effortTitle);
 } catch (e) {}
 return EFFORT_TITLE_I18N[lang] || EFFORT_TITLE_I18N["zh-CN"];
 }
+function _clrSibs(r) {
+var gs = r && typeof r.querySelectorAll === "function" ? r.querySelectorAll('[data-testid="model-selector-effort-group"]') : null;
+if (gs) for (var g = 0; g < gs.length; g += 1) if (gs[g] && gs[g].nextElementSibling) delete gs[g].nextElementSibling.__cesLastText;
+}
 function _clrAgDom(doc) {
 if (!doc || typeof doc.querySelectorAll !== "function") return;
 var spans = doc.querySelectorAll('[data-ces-part="trigger-effort"], [data-testid="model-selector-trigger"] span[style]');
@@ -1356,13 +1383,25 @@ for (var i = 0; i < spans.length; i += 1) {
 var sp = spans[i];
 if (sp.style) { sp.style.color = ""; sp.style.opacity = ""; sp.style.fontWeight = ""; }
 if (typeof sp.removeAttribute === "function") sp.removeAttribute("data-ces-part");
+delete sp.__cesLastText;
 }
+var tr = findAntigravityTrigger(doc), te = tr && tr.querySelector && tr.querySelector("span.opacity-70, [data-ces-part='trigger-effort']");
+if (te) delete te.__cesLastText;
+_clrSibs(doc);
+var vs = doc.querySelectorAll('[data-ces-part="value"], .ces-ag-effort-value');
+for (var v = 0; v < vs.length; v += 1) delete vs[v].__cesLastLabel;
 var panels = doc.querySelectorAll(".ces-ag-panel-enhanced");
 for (var p = 0; p < panels.length; p += 1) {
 if (panels[p].classList) panels[p].classList.remove("ces-ag-panel-enhanced");
 }
-var items = doc.querySelectorAll("[data-ces-model-selected]");
-for (var m = 0; m < items.length; m += 1) items[m].removeAttribute("data-ces-model-selected");
+var attrs = ["data-ces-model-selected", "data-ag-cs-model-submenu", "data-ag-cs-orch-l2", "data-ag-cs-orch-l3", "data-ces-orch-row"];
+for (var a = 0; a < attrs.length; a += 1) {
+var nodes = doc.querySelectorAll("[" + attrs[a] + "]");
+for (var m = 0; m < nodes.length; m += 1) nodes[m].removeAttribute(attrs[a]);
+}
+if (doc.documentElement && typeof doc.documentElement.removeAttribute === "function") {
+doc.documentElement.removeAttribute("data-ces-slider-ready");
+}
 }
 function mountCodexEffortSlider(options) {
 var opts = options || {};
@@ -1516,10 +1555,18 @@ else if (rowEl.hasAttribute("data-ces-max")) rowEl.removeAttribute("data-ces-max
 }
 var valEl = opts.valueElement || (rowEl && findValueElement(rowEl));
 if (valEl) {
-if (label && valEl.textContent !== label) {
+var hadLastLabel = typeof valEl.__cesLastLabel === "string";
+var curVal = valEl.textContent || "";
+var logicalChanged = Boolean(label) && valEl.__cesLastLabel !== label;
+var ka = _normEffTxt(curVal), kb = _normEffTxt(label);
+var staleTier = Boolean(label && ka && kb && ka !== kb);
+if (logicalChanged || (label && !curVal.trim()) || staleTier) {
+valEl.__cesLastLabel = label;
+if (!_sameEffTxt(curVal, label)) {
 valEl.textContent = label;
+}
 // 无论是 Claude 还是 Codex (Argon / Flash)，文字切换时统一触发顺滑向上翻转动效
-if (!prefersReducedMotion(win)) {
+if (hadLastLabel && logicalChanged && !prefersReducedMotion(win)) {
 if (valEl.__cesRiseTimer) {
 clearTimeout(valEl.__cesRiseTimer);
 valEl.__cesRiseTimer = null;
@@ -1600,6 +1647,7 @@ var cachedTrackRectAt = 0;
 var cachedSurfaceDark = true;
 var cachedSurfaceDarkAt = 0;
 var lastClaudePaintAt = 0;
+var cachedClaudeCtx = null;
 function _stopClRaf() {
 if (claudeRafId !== null && win && typeof win.cancelAnimationFrame === "function") {
 win.cancelAnimationFrame(claudeRafId);
@@ -1612,7 +1660,7 @@ lastClaudePaintAt = 0;
 function stepClaudeCanvas(nowTs) {
 claudeRafId = null;
 if (destroyed) return;
-if (doc && doc.hidden) {
+if (doc && (doc.hidden || (doc.documentElement && doc.documentElement.getAttribute && doc.documentElement.getAttribute("data-ag-cs-win-blur") === "1"))) {
 _stopClRaf();
 return;
 }
@@ -1654,7 +1702,7 @@ var curPct = motionState ? clamp01(motionState.x) : 0;
 var tw = Math.max(1, Math.round(KNOB_RADIUS + (trackW - KNOB_RADIUS * 2) * curPct));
 if (claudeCanvasEl.width !== tw) claudeCanvasEl.width = tw;
 if (claudeCanvasEl.height !== th) claudeCanvasEl.height = th;
-var cctx = claudeCanvasEl.getContext && claudeCanvasEl.getContext("2d");
+var cctx = cachedClaudeCtx || (claudeCanvasEl.getContext && (cachedClaudeCtx = claudeCanvasEl.getContext("2d")));
 if (cctx) {
 paintDither(cctx, tw, th, isDark, progress, claudeFlowTime, claudeIntensity);
 }
@@ -2105,11 +2153,15 @@ unmount: function () {
 destroyed = true;
 stopFrames();
 _stopClRaf();
+cachedClaudeCtx = null;
 clearMaxEffects();
 var valEl = opts.valueElement || findValueElement(_rowEl());
-if (valEl && valEl.__cesRiseTimer) {
+if (valEl) {
+if (valEl.__cesRiseTimer) {
 clearTimeout(valEl.__cesRiseTimer);
 valEl.__cesRiseTimer = null;
+}
+delete valEl.__cesLastLabel;
 }
 if (typeof offSeat === "function") offSeat();
 if (typeof offSettings === "function") offSettings();
@@ -2234,13 +2286,67 @@ var activeBaseOverride = null;
 var _actOptOvr = null;
 var _orchPlanOvr = null;
 var _lastHostLbl = "";
+var _boundSubs = new Set();
+var _hiddenL3 = new Map();
 var observer = null;
 var _intMut = false;
 function _setTxt(el, s) {
-if (!el || el.textContent === s) return;
-var f = el.firstChild;
-if (f && f.nodeType === 3 && (!el.childNodes || el.childNodes.length === 1)) f.nodeValue = s;
-else el.textContent = s;
+var txt = String(s == null ? "" : s);
+if (!el || el.textContent === txt) return;
+var tNodes = [], cn = el.childNodes;
+if (cn && cn.length) {
+for (var i = 0; i < cn.length; i += 1) {
+if (cn[i] && cn[i].nodeType === 3) tNodes.push(cn[i]);
+}
+} else if (el.firstChild && el.firstChild.nodeType === 3) {
+tNodes.push(el.firstChild);
+}
+if (tNodes.length === 1) {
+tNodes[0].nodeValue = txt;
+return;
+}
+if (tNodes.length >= 2) {
+if (txt === "") {
+for (var k = 0; k < tNodes.length; k += 1) if (tNodes[k].nodeValue !== "") tNodes[k].nodeValue = "";
+return;
+}
+var last = tNodes.length - 1;
+if (txt.charAt(0) === " " && /^\s*$/.test(tNodes[0].nodeValue || "")) {
+if (tNodes[0].nodeValue !== " ") tNodes[0].nodeValue = " ";
+for (var m = 1; m < last; m += 1) if (tNodes[m].nodeValue !== "") tNodes[m].nodeValue = "";
+if (tNodes[last].nodeValue !== txt.slice(1)) tNodes[last].nodeValue = txt.slice(1);
+} else {
+for (var n = 0; n < last; n += 1) if (tNodes[n].nodeValue !== "") tNodes[n].nodeValue = "";
+if (tNodes[last].nodeValue !== txt) tNodes[last].nodeValue = txt;
+}
+return;
+}
+if (!txt) {
+if ((!cn || !cn.length) && (!el.children || !el.children.length)) el.textContent = "";
+return;
+}
+var d = el.ownerDocument || doc;
+if (d && typeof d.createTextNode === "function" && typeof el.appendChild === "function") {
+el.appendChild(d.createTextNode(txt));
+} else if (!el.children || !el.children.length) {
+el.textContent = txt;
+}
+}
+function _setEffTxt(el, s) {
+if (!el) return;
+var txt = String(s == null ? "" : s), cur = el.textContent || "";
+if (!txt.trim()) {
+el.__cesLastText = txt;
+if (cur !== txt) _setTxt(el, txt);
+return;
+}
+var ka = _normEffTxt(cur), kb = _normEffTxt(txt);
+if (cur.trim() && ((ka && kb && ka === kb) || (el.__cesLastText === txt && !(ka && kb && ka !== kb)))) {
+el.__cesLastText = txt;
+return;
+}
+el.__cesLastText = txt;
+_setTxt(el, txt);
 }
 function notifySeatListeners() {
 _seatLs.forEach(function (fn) {
@@ -2304,26 +2410,32 @@ if (triggerBtn.getAttribute("data-ces-orch-b") !== pb) triggerBtn.setAttribute("
 if (triggerBtn && !profile.isOrchestrator) {
 var outerSpan = triggerBtn.querySelector("span.min-w-0");
 if (outerSpan) {
-var allSpans = outerSpan.querySelectorAll("span");
-for (var sIdx = 1; sIdx < allSpans.length; sIdx += 1) {
-if (allSpans[sIdx].parentNode === outerSpan) {
-outerSpan.removeChild(allSpans[sIdx]);
-}
-}
 var effortSpan = outerSpan.querySelector("span.opacity-70, [data-ces-part='trigger-effort']");
 var firstNode = outerSpan.firstChild;
+var expBase = "", expEff = "", hasExp = false;
 if (!profile.locked && profile.baseName) {
-if (firstNode && firstNode.nodeType === 3 && firstNode.nodeValue !== profile.baseName) {
-firstNode.nodeValue = profile.baseName;
-}
-if (effortSpan) _setTxt(effortSpan, " " + profile.currentLabel);
+expBase = profile.baseName;
+expEff = " " + profile.currentLabel;
+hasExp = true;
 } else if (profile.locked) {
 var lp = profile.modelOption && parseModelLabel(profile.modelOption.label);
-var lBase = lp ? lp.base : (profile.modelOption && profile.modelOption.label) || profile.baseName;
-if (lBase && firstNode && firstNode.nodeType === 3 && firstNode.nodeValue !== lBase) {
-firstNode.nodeValue = lBase;
+expBase = lp ? lp.base : (profile.modelOption && profile.modelOption.label) || profile.baseName || "";
+expEff = lp ? " " + lp.effortLabel : "";
+hasExp = true;
 }
-if (effortSpan) _setTxt(effortSpan, lp ? " " + lp.effortLabel : "");
+if (hasExp) {
+var selMatch = !_actOptOvr && !activeBaseOverride && ctx.selectedModel &&
+(((!expBase || (firstNode && firstNode.nodeType === 3 && firstNode.nodeValue.trim() === expBase.trim())) &&
+(!effortSpan || _sameEffTxt(effortSpan.textContent, expEff))) ||
+String(outerSpan.textContent || "").replace(/\s+/g, " ").trim() === (expBase + expEff).replace(/\s+/g, " ").trim());
+if (selMatch) {
+if (effortSpan) effortSpan.__cesLastText = expEff;
+} else {
+if (expBase && firstNode && firstNode.nodeType === 3 && firstNode.nodeValue !== expBase) {
+firstNode.nodeValue = expBase;
+}
+if (effortSpan) _setEffTxt(effortSpan, expEff);
+}
 }
 }
 }
@@ -2349,7 +2461,11 @@ _sa(ob, "data-row-hidden", "true");
 _sa(ob, "aria-hidden", "true");
 } else panel.removeAttribute("data-ces-orch-tunable");
 var orchRows = panel.querySelectorAll('[data-testid="model-selector-orchestrator"]');
-for (var oi = 0; oi < orchRows.length; oi += 1) _sa(orchRows[oi], "data-ces-model-selected", profile.isOrchestrator ? "true" : "false");
+for (var oi = 0; oi < orchRows.length; oi += 1) {
+var oRow = orchRows[oi], oMenuItem = oRow.closest ? (oRow.closest('[role^="menuitem"]') || oRow) : oRow;
+_mkSel(oMenuItem, Boolean(profile.isOrchestrator));
+if (oMenuItem !== oRow) _sa(oRow, "data-ces-model-selected", profile.isOrchestrator ? "true" : "false");
+}
 var groupSpans = panel.querySelectorAll('[data-testid="model-selector-effort-group"]');
 for (var i = 0; i < groupSpans.length; i += 1) {
 var gSpan = groupSpans[i], base = gSpan.getAttribute("data-model-base") || (gSpan.textContent || "").trim();
@@ -2360,7 +2476,7 @@ _mkSel(gSpan.closest('[role="menuitem"]'), sel);
 var sib = gSpan.nextElementSibling;
 if (sib && sib.tagName === "SPAN") {
 var dE = sel ? profile.currentLabel : rowProf.currentLabel, dI = sel ? profile.currentIndex : rowProf.currentIndex, dC = rowProf.levels.length;
-_setTxt(sib, dE);
+_setEffTxt(sib, dE);
 var rc = valueColorFor(dE, dI, dC, dC > 1 && dI === dC - 1, false) || "";
 if (sib.style.color !== rc) sib.style.color = rc;
 if (sib.style.opacity !== (rc ? "1" : "")) sib.style.opacity = rc ? "1" : "";
@@ -2391,7 +2507,7 @@ var curProf = getActiveProfile(ctx);
 if (curProf && curProf.isOrchestrator && curProf.orchestratorTunable) {
 _orchPlanOvr = targetOpt;
 _commitAgOpt(ctx, targetOpt, true);
-_withMut(function () { _syncAgDom(ctx, resolveModelEffortProfile(ctx, _actOptOvr || ctx.selectedModel, _effMap, targetOpt)); notifySeatListeners(); });
+_withMut(function () { var np = resolveModelEffortProfile(ctx, _actOptOvr || ctx.selectedModel, _effMap, targetOpt); _syncAgDom(ctx, np); _sySubs(activePanel, ctx, np); notifySeatListeners(); });
 return;
 }
 var parsed = parseModelLabel(targetOpt.label);
@@ -2414,58 +2530,245 @@ _seatLs.delete(fn);
 };
 }
 };
+function _stp(ev) { ev.stopPropagation(); if (typeof ev.stopImmediatePropagation === "function") ev.stopImmediatePropagation(); }
+function _okOpt(o) { return Boolean(o && !o.disabled && !o.isCustom && o.label); }
+function _canCm(c) { return Boolean(c && (typeof c.setModelConfigByLabelForConversation === "function" || typeof c.unwrappedSetSelectedModel === "function" || typeof c.setCurrentModelConfigByLabel === "function")); }
+function _hasOrch(c) { return Boolean(c && c.orchPick && typeof c.orchPick.select === "function" && Array.isArray(c.orchPlanners) && c.orchPlanners.length); }
+function _fOrch(c) {
+if (!c) return null;
+if (_okOpt(c.selectedModel) && _isOrch(c.selectedModel)) return c.selectedModel;
+var os = Array.isArray(c.modelOptions) ? c.modelOptions : [], f = null, dp = c.orchDef && parseModelLabel(c.orchDef.label), dt = dp ? (_slug(dp.base).split("-").pop() || "") : "";
+for (var i = 0; i < os.length; i += 1) {
+var o = os[i];
+if (!_okOpt(o) || !_isOrch(o)) continue;
+if (!f) f = o;
+if (dt && _slug(o.label).indexOf(dt) !== -1) return o;
+}
+return f;
+}
+function _isDis(t, it) {
+if (!t || typeof t.closest !== "function") return true;
+if (t.closest('[aria-disabled="true"],[disabled]')) return true;
+var d = t.closest("[data-disabled]");
+return Boolean((d && d.getAttribute("data-disabled") !== "false") || (it && it.disabled));
+}
+function _mPlan(it, c) {
+if (!it || !_hasOrch(c)) return null;
+var g = it.querySelector && it.querySelector('[data-testid="model-selector-effort-group"]');
+var raw = (g && (g.getAttribute("data-model-base") || g.textContent)) || it.getAttribute("data-model-label") || it.getAttribute("data-model-base") || it.textContent || "";
+var cl = String(raw).replace(/\b(?:new|notice|beta|preview|recommended|default)\b|默认|自动/gi, " ").replace(/\s+/g, " ").trim();
+if (_isOrch(cl)) return null;
+if (!cl) {
+if (!/^(?:default|auto|默认|自动)\b/i.test(String(raw).trim())) return null;
+var d = c.orchDef || c.orchPlanners[0];
+return _okOpt(d) ? { opt: d, base: (parseModelLabel(d.label) || {}).base || d.label, fam: true } : null;
+}
+var ps = c.orchPlanners, es = _slug(cl), bp = parseModelLabel(cl), bc = bp ? bp.base : cl.replace(/\s+(?:off|minimal|low|medium|high|xhigh|extra|max)\s*$/i, "").trim(), bs = _slug(bc);
+var mb = "", bl = 0, fb = null, i, p, ep;
+for (i = 0; i < ps.length; i += 1) {
+p = ps[i];
+if (!_okOpt(p)) continue;
+ep = parseModelLabel(p.label);
+var ob = ep ? ep.base : p.label;
+if (p.label === cl || _slug(p.label) === es) return { opt: p, base: ob, fam: false };
+var os = _slug(ob);
+if (os && (os === bs || (os.length > bl && (es === os || es.indexOf(os) !== -1)))) { bl = os === bs ? 999 : os.length; mb = ob; fb = p; }
+}
+if (!mb) return null;
+var by = _luEff(c.orchIdx instanceof Map && c.orchIdx.size ? c.orchIdx : c.effortIndex, mb);
+if (by && by.size) {
+var ok = function (k) { return k && by.has(k) && _okOpt(by.get(k)); }, cur = getActiveProfile(c), dp2 = c.orchDef && parseModelLabel(c.orchDef.label), ek = "";
+if (bp && ok(bp.effort)) ek = bp.effort;
+else if (cur && cur.isOrchestrator && ok(cur.currentEffort)) ek = cur.currentEffort;
+else if (dp2 && _slug(dp2.base) === _slug(mb) && ok(dp2.effort)) ek = dp2.effort;
+else if (ok("medium")) ek = "medium";
+for (i = 0; !ek && i < AG_EFFORT_ORDER.length; i += 1) if (ok(AG_EFFORT_ORDER[i])) ek = AG_EFFORT_ORDER[i];
+p = ek ? by.get(ek) : fb;
+return _okOpt(p) ? { opt: p, base: mb, fam: true } : null;
+}
+return _okOpt(fb) ? { opt: fb, base: mb, fam: true } : null;
+}
+var _SUB_BOX = '[role="menu"],[role="listbox"],[data-testid="context-menu-submenu-popup"],.agy-overlay,[data-side]';
+var _SUB_IT = '[role^="menuitem"],[role="option"],.agy-overlay-item';
+var _L3_RE = /^(?:off|minimal|low|medium|high|xhigh|extra|max)(?:\s+thinking)?$|^(?:关闭|关|极低|最低|最小|低|中|中等|高|超高|极高|特高|最高|最大)(?:思考|推理|强度)?$/i;
+function _subIts(m) {
+if (!m || !m.querySelectorAll) return [];
+var raw = m.querySelectorAll(_SUB_IT);
+if (!raw.length) raw = m.querySelectorAll("button,[tabindex]");
+var out = [], i, j, el;
+for (i = 0; i < raw.length; i += 1) {
+el = raw[i];
+if (!el || (el.closest && el.closest(".ces-ag-section")) || !String(el.textContent || "").trim()) continue;
+for (j = 0; j < out.length; j += 1) if (out[j].contains && out[j].contains(el)) { el = null; break; }
+if (el) out.push(el);
+}
+return out;
+}
+function _badBox(m) {
+return !m || !activePanel || m === activePanel || Boolean(m.contains && m.contains(activePanel)) || Boolean(m.querySelector && m.querySelector('[data-testid="model-selector-panel"],[data-testid="model-selector-orchestrator"],.ces-ag-section'));
+}
+function _isSub(m, c) {
+if (_badBox(m) || !_hasOrch(c)) return false;
+var its = _subIts(m), n = 0, i;
+for (i = 0; i < its.length; i += 1) if (_mPlan(its[i], c)) n += 1;
+return n >= 1 && n * 2 >= its.length;
+}
+function _isL3(m, c) {
+if (_badBox(m) || !_hasOrch(c)) return false;
+var its = _subIts(m), i;
+if (its.length < 2 || its.length > 7) return false;
+for (i = 0; i < its.length; i += 1) if (!_L3_RE.test(String(its[i].textContent || "").replace(/[✓✔•·]/g, " ").replace(/\s+/g, " ").trim())) return false;
+return true;
+}
+function _wrapOv(m) {
+var o = (m.closest && m.closest('.agy-overlay,[data-radix-popper-content-wrapper],[role="presentation"],[data-side]')) || (m.parentElement && m.parentElement !== doc.body ? m.parentElement : null);
+if (!o || o === activePanel || (o.contains && o.contains(activePanel)) || (o.querySelector && o.querySelector('[data-testid="model-selector-panel"]'))) return null;
+if ((o.getAttribute && o.getAttribute("data-ag-cs-orch-l2") === "1") || (o.querySelector && o.querySelector('[data-ag-cs-orch-l2="1"]'))) return null;
+var hasL2 = false;
+_boundSubs.forEach(function (b) { if (b && (b === o || (o.contains && o.contains(b)))) hasL2 = true; });
+return hasL2 ? null : o;
+}
+function _ubSub(m) { if (m) { try { if (typeof m.__cesSubUb === "function") m.__cesSubUb(); } catch (e) {} _boundSubs.delete(m); } }
+function _clrL3(ov, m) {
+try { m && m.removeAttribute("data-ag-cs-orch-l3"); if (ov && ov !== m) ov.removeAttribute("data-ag-cs-orch-l3"); } catch (e) {}
+_hiddenL3.delete(m);
+}
+function _sySubDom(m, c, p) {
+if (!m || !c || !p) return;
+var its = _subIts(m), i, h, v;
+for (i = 0; i < its.length; i += 1) {
+h = _mPlan(its[i], c);
+if (!h) continue;
+if (its[i].getAttribute("data-ces-orch-row") !== "1") its[i].setAttribute("data-ces-orch-row", "1");
+v = p.isOrchestrator && p.baseName && _slug(p.baseName) === _slug(h.base) ? "true" : "false";
+if (its[i].getAttribute("data-ces-model-selected") !== v) its[i].setAttribute("data-ces-model-selected", v);
+}
+}
+function _bdSub(m) {
+if (!m || m.__cesSubBd) return;
+m.__cesSubBd = true;
+var ov = _wrapOv(m);
+try {
+m.setAttribute("data-ag-cs-model-submenu", "1");
+m.setAttribute("data-ag-cs-orch-l2", "1");
+if (ov && ov !== m) {
+ov.setAttribute("data-ag-cs-model-submenu", "1");
+if (ov.getAttribute && ov.getAttribute("data-ag-cs-orch-l3") === "1") ov.removeAttribute("data-ag-cs-orch-l3");
+}
+} catch (e) {}
+function rAct(t) {
+if (!t || typeof t.closest !== "function" || t.closest('button[aria-label="Edit Model"],a[href]')) return null;
+var it = t.closest(_SUB_IT);
+if (!it || !m.contains(it)) it = t.closest("button,[tabindex]");
+if (!it || !m.contains(it) || _isDis(t, it)) return null;
+var c = getLiveContext() || _rdAgFiber(m), h = _mPlan(it, c);
+if (!h || !h.opt) return null;
+var cur = getActiveProfile(c), need = !cur || !cur.isOrchestrator, oo = need ? _fOrch(c) : (_actOptOvr || c.selectedModel || _fOrch(c));
+if (need && (!_canCm(c) || !oo)) return null;
+if (!need && cur && cur.baseName && _slug(cur.baseName) === _slug(h.base) && (h.fam || (cur.modelOption && cur.modelOption.value === h.opt.value))) return null;
+return { ctx: c, oo: oo, po: h.opt, need: need };
+}
+function onUp(ev) { if (rAct(ev.target)) _stp(ev); }
+function onMd(ev) { if (rAct(ev.target)) { ev.preventDefault(); _stp(ev); } }
+function onCk(ev) {
+var a = rAct(ev.target);
+if (!a || (a.need && !_commitAgOpt(a.ctx, a.oo, false)) || !_commitAgOpt(a.ctx, a.po, true)) return;
+ev.preventDefault(); _stp(ev);
+activeBaseOverride = null; _actOptOvr = a.oo; _lastHostLbl = (a.ctx.selectedModel && a.ctx.selectedModel.label) || ""; _orchPlanOvr = a.po;
+_withMut(function () {
+var p = resolveModelEffortProfile(a.ctx, a.oo, _effMap, a.po);
+_syncAgDom(a.ctx, p); _sySubDom(m, a.ctx, p); _sySubs(activePanel, a.ctx, p); notifySeatListeners();
+});
+}
+var evs = [["pointerdown", onUp], ["mousedown", onMd], ["pointerup", onUp], ["mouseup", onUp], ["click", onCk]], i;
+for (i = 0; i < evs.length; i += 1) m.addEventListener(evs[i][0], evs[i][1], true);
+m.__cesSubUb = function () {
+for (var u = 0; u < evs.length; u += 1) m.removeEventListener(evs[u][0], evs[u][1], true);
+try {
+m.removeAttribute("data-ag-cs-model-submenu"); m.removeAttribute("data-ag-cs-orch-l2");
+if (ov && ov !== m) ov.removeAttribute("data-ag-cs-model-submenu");
+var rs = m.querySelectorAll ? m.querySelectorAll("[data-ces-orch-row]") : [];
+for (var r = 0; r < rs.length; r += 1) { rs[r].removeAttribute("data-ces-orch-row"); rs[r].removeAttribute("data-ces-model-selected"); }
+} catch (e) {}
+delete m.__cesSubUb; delete m.__cesSubBd;
+};
+_boundSubs.add(m);
+}
+function _sySubs(panel, c, p) {
+_boundSubs.forEach(function (m) { if (!m || m.isConnected === false || !panel || !_isSub(m, c)) _ubSub(m); });
+_hiddenL3.forEach(function (ov, m) { if (!m || m.isConnected === false || !panel || !_isL3(m, c)) _clrL3(ov, m); });
+if (!panel || !_hasOrch(c)) return;
+var seen = new Set(), cands = [], qm = doc && doc.querySelectorAll ? doc.querySelectorAll(_SUB_BOX) : [], mis = doc && doc.querySelectorAll ? doc.querySelectorAll(_SUB_IT) : [], i, j;
+for (i = 0; i < qm.length; i += 1) if (!seen.has(qm[i])) { seen.add(qm[i]); cands.push(qm[i]); }
+for (i = 0; i < mis.length; i += 1) { var pr = mis[i].parentElement; if (pr && !seen.has(pr) && !_badBox(pr)) { seen.add(pr); cands.push(pr); } }
+var l2 = cands.filter(function (x) { return _isSub(x, c); });
+for (i = 0; i < l2.length; i += 1) {
+for (j = 0; j < l2.length; j += 1) if (i !== j && l2[i].contains && l2[i].contains(l2[j])) { l2[i] = null; break; }
+if (l2[i]) { _bdSub(l2[i]); _sySubDom(l2[i], c, p); }
+}
+if (_boundSubs.size > 0 || panel.getAttribute("data-ces-orch-tunable") === "true") {
+for (i = 0; i < cands.length; i += 1) {
+var m3 = cands[i], inL2 = false;
+if (_boundSubs.has(m3) || !_isL3(m3, c)) continue;
+_boundSubs.forEach(function (b) { if (b === m3 || (b.contains && b.contains(m3)) || (m3.contains && m3.contains(b))) inL2 = true; });
+if (inL2) continue;
+var ov3 = _wrapOv(m3);
+try {
+if (m3.getAttribute("data-ag-cs-orch-l3") !== "1") m3.setAttribute("data-ag-cs-orch-l3", "1");
+if (ov3 && ov3 !== m3 && ov3.getAttribute("data-ag-cs-orch-l3") !== "1") ov3.setAttribute("data-ag-cs-orch-l3", "1");
+} catch (e) {}
+_hiddenL3.set(m3, ov3);
+}
+}
+}
 function _bindPnl(panel) {
 if (!panel || panel.__cesAgBound) return;
 panel.__cesAgBound = true;
 function resolveKeepOpenAction(target) {
-if (!target || typeof target.closest !== "function") return null;
-if (target.closest('.ces-ag-section,.ces-set,button[aria-label="Edit Model"],[data-testid="model-selector-orchestrator"],[data-testid="model-selector-item"],[aria-disabled="true"],[disabled]')) return null;
-var dd = target.closest('[data-disabled]');
-if (dd && dd.getAttribute("data-disabled") !== "false") return null;
-var menuItem = target.closest('[role="menuitem"]');
-if (menuItem && menuItem.disabled) return null;
+if (!target || typeof target.closest !== "function" || target.closest('.ces-ag-section,.ces-set,button[aria-label="Edit Model"]')) return null;
+var menuItem = target.closest('[role^="menuitem"]');
+if (_isDis(target, menuItem)) return null;
+var oe = target.closest('[data-testid="model-selector-orchestrator"]') || (menuItem && menuItem.querySelector && menuItem.querySelector('[data-testid="model-selector-orchestrator"]'));
+if (!oe && menuItem && panel.contains(menuItem) && !menuItem.querySelector('[data-testid="model-selector-effort-group"],[data-testid="model-selector-item"]') && _isOrch(menuItem.textContent)) oe = menuItem;
+if (oe && panel.contains(oe)) {
+var oc = getLiveContext();
+if (!_canCm(oc)) return null;
+var oCur = getActiveProfile(oc);
+if (oCur && oCur.isOrchestrator) return null;
+var oo = _fOrch(oc);
+return oo ? { ctx: oc, base: null, targetOption: oo, isOrch: true } : null;
+}
+if (target.closest('[data-testid="model-selector-item"]')) return null;
 var gs = menuItem && panel.contains(menuItem) && menuItem.querySelector('[data-testid="model-selector-effort-group"]');
 if (!gs) return null;
-var base = (gs.getAttribute("data-model-base") || gs.textContent || "").trim();
-var bp = parseModelLabel(base);
+var base = (gs.getAttribute("data-model-base") || gs.textContent || "").trim(), bp = parseModelLabel(base);
 if (bp && bp.base) base = bp.base;
 if (!base || _isOrch(base)) return null;
 var ctx = getLiveContext();
-if (!ctx || (typeof ctx.setModelConfigByLabelForConversation !== "function" && typeof ctx.unwrappedSetSelectedModel !== "function" && typeof ctx.setCurrentModelConfigByLabel !== "function")) return null;
-var prof = resolveModelEffortProfile(ctx, base, _effMap);
-if (!prof || prof.locked || !prof.levels || prof.levels.length < 2) return null;
-var opt = prof.modelOption;
-if (!opt || opt.isCustom || opt.disabled || !opt.label) return null;
-if (Array.isArray(ctx.modelOptions) && ctx.modelOptions.length) {
-var found = false;
-for (var i = 0; i < ctx.modelOptions.length; i += 1) {
-var o = ctx.modelOptions[i];
-if (o && !o.isCustom && !o.disabled && (o === opt || o.label === opt.label)) { found = true; break; }
-}
-if (!found) return null;
-}
+if (!_canCm(ctx)) return null;
+var prof = resolveModelEffortProfile(ctx, base, _effMap), opt = prof && !prof.locked && prof.levels && prof.levels.length >= 2 ? prof.modelOption : null;
+if (!_okOpt(opt)) return null;
+if (Array.isArray(ctx.modelOptions) && ctx.modelOptions.length && !ctx.modelOptions.some(function (o) { return _okOpt(o) && (o === opt || o.label === opt.label); })) return null;
 var cur = getActiveProfile(ctx);
 if (cur && !cur.isOrchestrator && cur.baseName === prof.baseName) return null;
-return { ctx: ctx, base: prof.baseName || base, targetOption: opt };
+return { ctx: ctx, base: prof.baseName || base, targetOption: opt, isOrch: false };
 }
-// 严格 Fail-Open：仅确认切到新的可调多档位模型时才拦 pointerup/mouseup/click 保持菜单常开
 function onPointerOrMouseUpCapture(ev) {
-if (!resolveKeepOpenAction(ev.target)) return;
-_stp(ev);
+if (resolveKeepOpenAction(ev.target)) _stp(ev);
 }
 function onClickCapture(ev) {
 var act = resolveKeepOpenAction(ev.target);
-if (!act) return;
-if (!_commitAgOpt(act.ctx, act.targetOption)) return;
+if (!act || !_commitAgOpt(act.ctx, act.targetOption)) return;
 ev.preventDefault();
 _stp(ev);
-activeBaseOverride = act.base;
+activeBaseOverride = act.isOrch ? null : act.base;
 _actOptOvr = act.targetOption;
 _lastHostLbl = (act.ctx.selectedModel && act.ctx.selectedModel.label) || "";
 _orchPlanOvr = null;
-tracePush("ag-select-model-in-menu", { label: act.targetOption.label });
 _withMut(function () {
-_syncAgDom(act.ctx, resolveModelEffortProfile(act.ctx, act.targetOption, _effMap));
+var nextProf = resolveModelEffortProfile(act.ctx, act.targetOption, _effMap);
+_syncAgDom(act.ctx, nextProf);
+_sySubs(panel, act.ctx, nextProf);
 notifySeatListeners();
 });
 }
@@ -2476,22 +2779,12 @@ var usageHoverAllowed = false;
 var isDispatchingSynthetic = false;
 function findViewUsageTrigger(target) {
 if (!target || typeof target.closest !== "function") return null;
-var item = target.closest('[role="menuitem"], .agy-overlay-item, button');
+var item = target.closest('[role="menuitem"],.agy-overlay-item,button'), uRe = /View Usage|查看用量|\bUsage\b/;
 if (!item) {
-var div = target.closest('div');
-if (div && div !== panel && panel.contains(div)) {
-var text = (div.textContent || "").trim();
-if ((text.startsWith("View Usage") || text === "Usage" || text.startsWith("查看用量")) && !text.includes("Claude") && !text.includes("Gemini") && !text.includes("GPT")) {
-item = div;
+var div = target.closest("div"), dt = div && div !== panel && panel.contains(div) ? (div.textContent || "").trim() : "";
+if (dt && /^(?:View Usage|Usage$|查看用量)/.test(dt) && !/Claude|Gemini|GPT/.test(dt)) item = div;
 }
-}
-}
-if (!item || !panel.contains(item) || item === panel) return null;
-var itemText = (item.textContent || "").trim();
-if (itemText.includes("View Usage") || itemText.includes("Usage") || itemText.includes("查看用量")) {
-return item;
-}
-return null;
+return item && item !== panel && panel.contains(item) && uRe.test((item.textContent || "").trim()) ? item : null;
 }
 function resetUsageHover() {
 if (usageHoverTimer) {
@@ -2501,7 +2794,6 @@ usageHoverTimer = null;
 usageHoverAllowed = false;
 usageTriggerEl = null;
 }
-function _stp(ev) { ev.stopPropagation(); if (typeof ev.stopImmediatePropagation === "function") ev.stopImmediatePropagation(); }
 function onPointerEnterCapture(ev) {
 if (isDispatchingSynthetic) return;
 var trigger = findViewUsageTrigger(ev.target);
@@ -2573,6 +2865,10 @@ delete panel.__cesAgBound;
 }
 function _unmntSec() {
 _setReady(false);
+_boundSubs.forEach(_ubSub);
+_boundSubs.clear();
+_hiddenL3.forEach(_clrL3);
+_hiddenL3.clear();
 if (activePanel) {
 try { if (typeof activePanel.__cesAgResetUsageHover === "function") activePanel.__cesAgResetUsageHover(); } catch (e) {}
 try { if (typeof activePanel.__cesAgUnbindPanel === "function") activePanel.__cesAgUnbindPanel(); } catch (e) {}
@@ -2580,6 +2876,8 @@ try { if (typeof activePanel.__cesAgUnbindPanel === "function") activePanel.__ce
 if (doc && doc.activeElement && activeSection && activeSection.contains(doc.activeElement)) {
 try { doc.activeElement.blur(); } catch (e) {}
 }
+if (activeValueEl) delete activeValueEl.__cesLastLabel;
+_clrSibs(activePanel);
 if (activeMount) { activeMount.unmount(); activeMount = null; }
 if (activeSection && activeSection.parentNode) activeSection.parentNode.removeChild(activeSection);
 activeSection = activeRow = activeValueEl = activeHostEl = activePanel = activeBaseOverride = _actOptOvr = _orchPlanOvr = null;
@@ -2611,6 +2909,7 @@ valueEl.setAttribute("data-ces-part", "value");
 var initProf = getActiveProfile(ctx);
 if (initProf && initProf.currentLabel) {
 valueEl.textContent = initProf.currentLabel;
+valueEl.__cesLastLabel = initProf.currentLabel;
 }
 head.appendChild(title);
 head.appendChild(valueEl);
@@ -2667,8 +2966,9 @@ activeBaseOverride = null;
 }
 _lastHostLbl = curLbl;
 if (_orchPlanOvr) {
-var lp = ctx && _isOrch(ctx.selectedModel) ? _resOrch(ctx) : null;
-if (!lp || (lp.opt && lp.opt.value === _orchPlanOvr.value)) _orchPlanOvr = null;
+var effModel = _actOptOvr || (ctx && ctx.selectedModel);
+var lp = ctx && _isOrch(effModel) ? _resOrch(ctx) : null;
+if (!ctx || !_isOrch(effModel) || (lp && lp.opt && lp.opt.value === _orchPlanOvr.value)) _orchPlanOvr = null;
 }
 var panel = findAntigravityPanel(doc);
 if (!panel) {
@@ -2692,7 +2992,9 @@ _setTxt(tSpan, nextTitle);
 if (activeMount && typeof activeMount.refresh === "function") activeMount.refresh();
 }
 _setReady(Boolean(activeMount && activeSection));
-_syncAgDom(ctx, getActiveProfile(ctx));
+var liveProf = getActiveProfile(ctx);
+_syncAgDom(ctx, liveProf);
+_sySubs(panel, ctx, liveProf);
 notifySeatListeners();
 });
 }
@@ -2701,7 +3003,16 @@ var MO = opts.MutationObserver || (win && win.MutationObserver) || (typeof Mutat
 if (typeof MO === "function") {
 observer = new MO(function (recs) {
 if (_intMut) return;
-if (Array.isArray(recs) && recs.length && !activePanel) {
+if (Array.isArray(recs) && recs.length) {
+if (activeSection && activePanel && activePanel.contains(activeSection)) {
+var allInsideSlider = true;
+for (var si = 0; si < recs.length; si += 1) {
+var sr = recs[si], st = sr && sr.target, sel = st && (st.nodeType === 1 ? st : st.parentElement);
+if (!sel || !activeSection.contains(sel)) { allInsideSlider = false; break; }
+}
+if (allInsideSlider) return;
+}
+if (!activePanel) {
 var rel = false;
 var ctrlSel = '[data-testid="model-selector-trigger"],button[aria-label^="Select model"],[data-testid="model-selector-panel"],[role="menu"]';
 var noiseSel = '[data-testid="autoscroll-viewport"],.toast-viewport,[data-testid="sidebar-split"]>div:first-child';
@@ -2713,6 +3024,7 @@ if (el.closest(ctrlSel)) { rel = true; break; }
 } else if (el.closest(ctrlSel) || !el.closest(noiseSel)) { rel = true; break; }
 }
 if (!rel) return;
+}
 }
 scan();
 });

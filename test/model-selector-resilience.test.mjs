@@ -419,17 +419,17 @@ function createSimEnv(options = {}) {
     const pu = { type: 'pointerup', button: 0, bubbles: true };
     const mu = { type: 'mouseup', button: 0, bubbles: true };
     const ck = { type: 'click', button: 0, bubbles: true };
-    const panel = target.closest('[data-testid="model-selector-panel"]');
+    const host = target.closest('[data-testid="model-selector-panel"],[role="menu"],[role="listbox"],.agy-overlay');
     let nativeCalled = false;
     const handler = (ev) => {
       nativeCalled = true;
       if (typeof nativeOnClick === 'function') nativeOnClick(ev);
     };
-    if (panel) panel.addEventListener('click', handler, false);
+    if (host) host.addEventListener('click', handler, false);
     target.dispatchEvent(pu);
     target.dispatchEvent(mu);
     target.dispatchEvent(ck);
-    if (panel) panel.removeEventListener('click', handler, false);
+    if (host) host.removeEventListener('click', handler, false);
     return { pu, mu, ck, nativeCalled };
   }
 
@@ -1178,4 +1178,431 @@ test('Scenario 7 (R1~R5 防风控加固): 拖动松手单次提交 + 零原型�
   assert.equal(foldClicks, 4, 'R5: destroy() must cancel remaining pending foldRafId');
 });
 
+test('Scenario 8 (Orchestrator 集群切入 + 右侧子菜单选型保持常开): 点击集群行与子菜单均不退出选择页且严格 Fail-Open（含中英 L3 与共享外层防误伤）', () => {
+  const env = createSimEnv();
+  const neonLow = { label: 'Gemini 4 Neon (Low)', modelId: 'gemini-4-neon-low', value: 1534 };
+  const neonMed = { label: 'Gemini 4 Neon (Medium)', modelId: 'gemini-4-neon-medium', value: 1533 };
+  const neonHigh = { label: 'Gemini 4 Neon (High)', modelId: 'gemini-4-neon-high', value: 1532 };
+  const neonXHigh = { label: 'Gemini 4 Neon (XHigh)', modelId: 'gemini-4-neon-xhigh', value: 1535 };
+  const carbLow = { label: 'Gemini 4 Carbon (Low)', modelId: 'gemini-4-carbon-low', value: 1520 };
+  const carbMed = { label: 'Gemini 4 Carbon (Medium)', modelId: 'gemini-4-carbon-medium', value: 1521 };
+  const carbHigh = { label: 'Gemini 4 Carbon (High)', modelId: 'gemini-4-carbon-high', value: 1522 };
+  const opusLow = { label: 'Claude Opus 5.5 (Low)', modelId: 'claude-opus-5-5-low', value: 1400 };
+  const opusMed = { label: 'Claude Opus 5.5 (Medium)', modelId: 'claude-opus-5-5-medium', value: 1401 };
+  const opusHigh = { label: 'Claude Opus 5.5 (High)', modelId: 'claude-opus-5-5-high', value: 1402 };
+  const orchNeon = { label: 'Orchestrator (Neon)', modelId: 'gemini-pro-orchestrator-neon', value: 1537 };
 
+  const planners = [neonLow, neonMed, neonHigh, neonXHigh, carbLow, carbMed, carbHigh, opusLow, opusMed, opusHigh];
+  const modelOptions = [...planners, orchNeon];
+  let selectedModel = neonXHigh;
+  let isOpen = true;
+  const commits = [];
+  const orchPicks = [];
+
+  const plannerIdx = new Map([
+    ['gemini-4-neon', new Map([['low', neonLow], ['medium', neonMed], ['high', neonHigh], ['xhigh', neonXHigh]])],
+    ['gemini-4-carbon', new Map([['low', carbLow], ['medium', carbMed], ['high', carbHigh]])],
+    ['claude-opus-5-5', new Map([['low', opusLow], ['medium', opusMed], ['high', opusHigh]])],
+  ]);
+  const selectorCtx = {
+    effortIndex: plannerIdx,
+    modelOptions,
+    get selectedModel() { return selectedModel; },
+    orchestratorPlanners: planners,
+    orchestratorPlannerIndex: plannerIdx,
+    orchestratorDefaultPlanner: neonXHigh,
+    orchestratorPick: {
+      model: null,
+      select(v) { orchPicks.push(v); this.model = v === 0 ? null : v; },
+    },
+  };
+  const globalModelCtx = {
+    setModelConfigByLabelForConversation(label, convId, keepOpen) {
+      commits.push({ label, convId, keepOpen });
+      selectedModel = modelOptions.find((o) => o.label === label) || selectedModel;
+    },
+  };
+
+  const trigger = env.makeTrigger('Gemini 4 Neon', 'Extra');
+  env.body.appendChild(trigger);
+  const { panel, listWrap } = env.makePanel();
+  const neonRow = env.addGroupRow(listWrap, 'Gemini 4 Neon', 'Extra');
+  const orchRow = env.makeEl('div', { attrs: { role: 'menuitem', 'data-testid': 'model-selector-orchestrator' }, text: 'Orchestrator Gemini 4 Neon Extra New' });
+  listWrap.appendChild(orchRow);
+  env.body.appendChild(panel);
+  env.attachFiberChain(panel, { selectorCtx, convId: 'conv-orch-8', globalModelCtx });
+
+  const agObs = upstreamLib.installAntigravityObserver({ document: env.doc, window: env.win, MutationObserver: env.win.MutationObserver });
+
+  // 校验 SLIDER_CSS 使用标准合法的顶层选择器（不含 Chromium 静默丢弃的 :is(>svg...)）
+  const sliderStyle = env.doc.getElementById('ag-codex-effort-slider-styles');
+  assert.ok(sliderStyle, 'Slider style tag must be injected');
+  assert.equal(sliderStyle.textContent.includes(':is(>svg'), false, 'SLIDER_CSS must NOT contain invalid :is(>svg...) relative selector');
+  assert.equal(
+    sliderStyle.textContent.includes("[data-ces-orch-row='1']>svg:last-child:not(:first-child):not(.lucide-check)"),
+    true,
+    'SLIDER_CSS must use standard top-level selector to hide L2 chevron arrow'
+  );
+
+  // 1) 从普通模型 (Gemini 4 Neon) 初次点击 Orchestrator 行 -> 拦截关闭并保持选择页常开
+  const rEnterOrch = env.simulateNativeClick(orchRow, () => { isOpen = false; });
+  assert.equal(rEnterOrch.pu._stopped, true);
+  assert.equal(rEnterOrch.ck.defaultPrevented, true);
+  assert.equal(rEnterOrch.nativeCalled, false, 'Switching from normal model to Orchestrator must keep menu open');
+  assert.equal(isOpen, true);
+  assert.equal(selectedModel, orchNeon);
+  assert.equal(panel.getAttribute('data-ces-orch-tunable'), 'true');
+  assert.equal(orchRow.getAttribute('data-ces-model-selected'), 'true');
+  assert.equal(neonRow.row.getAttribute('data-ces-model-selected'), 'false');
+
+  // 2) 再次点击已选中的 Orchestrator 行 -> 放行原生事件关闭菜单
+  const rSecondOrch = env.simulateNativeClick(orchRow, () => { isOpen = false; });
+  assert.equal(rSecondOrch.ck.defaultPrevented, false);
+  assert.equal(rSecondOrch.nativeCalled, true);
+  assert.equal(isOpen, false);
+  isOpen = true;
+
+  // 3) 挂载右侧 Orchestrator Layer 2 规划模型子菜单（sibling portal）+ Layer 3 推理档位子菜单（Low / Medium ✓ / High）+ 无关右键菜单
+  const subOverlay = env.makeEl('div', { className: 'agy-overlay' });
+  const subMenu = env.makeEl('div', { attrs: { role: 'menu' } });
+  const subNeon = env.makeEl('div', { attrs: { role: 'menuitemradio' }, text: 'Gemini 4 Neon Medium' });
+  const subCarb = env.makeEl('div', { attrs: { role: 'menuitemradio' }, text: 'Gemini 4 Carbon Medium' });
+  const subOpus = env.makeEl('div', { attrs: { role: 'menuitemradio' }, text: 'Claude Opus 5.5 Medium' });
+  const subDis = env.makeEl('div', { attrs: { role: 'menuitemradio', 'aria-disabled': 'true' }, text: 'Gemini 4 Carbon Medium' });
+  subMenu.appendChild(subNeon);
+  subMenu.appendChild(subCarb);
+  subMenu.appendChild(subOpus);
+  subMenu.appendChild(subDis);
+  subOverlay.appendChild(subMenu);
+  env.body.appendChild(subOverlay);
+
+  const l3Overlay = env.makeEl('div', { className: 'agy-overlay' });
+  const l3Menu = env.makeEl('div', { attrs: { role: 'menu' } });
+  l3Menu.appendChild(env.makeEl('div', { attrs: { role: 'menuitem' }, text: 'Low' }));
+  l3Menu.appendChild(env.makeEl('div', { attrs: { role: 'menuitem' }, text: 'Medium ✓' }));
+  l3Menu.appendChild(env.makeEl('div', { attrs: { role: 'menuitem' }, text: 'High' }));
+  l3Overlay.appendChild(l3Menu);
+  env.body.appendChild(l3Overlay);
+
+  // 中文汉化后的 L3 纯档位子菜单，且与 L2 共享同一外层 .agy-overlay 容器 -> 必须仅隐藏中文 L3 菜单，绝不可误藏共享的 subOverlay！
+  const zhL3Menu = env.makeEl('div', { attrs: { role: 'menu' } });
+  zhL3Menu.appendChild(env.makeEl('div', { attrs: { role: 'menuitem' }, text: '低' }));
+  zhL3Menu.appendChild(env.makeEl('div', { attrs: { role: 'menuitem' }, text: '中等 ✓' }));
+  zhL3Menu.appendChild(env.makeEl('div', { attrs: { role: 'menuitem' }, text: '高思考' }));
+  zhL3Menu.appendChild(env.makeEl('div', { attrs: { role: 'menuitem' }, text: '超高' }));
+  subOverlay.appendChild(zhL3Menu);
+
+  const unrelatedMenu = env.makeEl('div', { attrs: { role: 'menu' } });
+  const copyItem = env.makeEl('div', { attrs: { role: 'menuitem' }, text: 'Copy' });
+  const pasteItem = env.makeEl('div', { attrs: { role: 'menuitem' }, text: 'Paste' });
+  unrelatedMenu.appendChild(copyItem);
+  unrelatedMenu.appendChild(pasteItem);
+  env.body.appendChild(unrelatedMenu);
+
+  agObs.rescan();
+  assert.equal(subMenu.getAttribute('data-ag-cs-model-submenu'), '1');
+  assert.equal(subMenu.getAttribute('data-ag-cs-orch-l2'), '1');
+  assert.equal(subOverlay.getAttribute('data-ag-cs-model-submenu'), '1');
+  assert.equal(subNeon.getAttribute('data-ces-orch-row'), '1');
+  assert.equal(subNeon.getAttribute('data-ces-model-selected'), 'true');
+  assert.equal(l3Menu.getAttribute('data-ag-cs-orch-l3'), '1', 'Redundant Layer 3 effort submenu must be hidden');
+  assert.equal(l3Overlay.getAttribute('data-ag-cs-orch-l3'), '1', 'Layer 3 dedicated overlay must be hidden');
+  assert.equal(zhL3Menu.getAttribute('data-ag-cs-orch-l3'), '1', 'Localized Chinese Layer 3 effort submenu must be hidden');
+  assert.equal(subOverlay.hasAttribute('data-ag-cs-orch-l3'), false, 'Shared overlay containing Layer 2 must NEVER be hidden as Layer 3');
+  assert.equal(unrelatedMenu.hasAttribute('data-ag-cs-model-submenu'), false, 'Unrelated context menu must never be touched');
+  assert.equal(unrelatedMenu.hasAttribute('data-ag-cs-orch-l3'), false, 'Unrelated context menu must never be hidden as Layer 3');
+
+  // 4) 在 Layer 2 子菜单中点击 Claude Opus 5.5 -> 拦截 pointerdown/mousedown/pointerup/mouseup/click、保持常开并切到 claude 主题
+  const pdEv = { type: 'pointerdown', button: 0, bubbles: true };
+  const mdEv = { type: 'mousedown', button: 0, bubbles: true };
+  subOpus.dispatchEvent(pdEv);
+  subOpus.dispatchEvent(mdEv);
+  assert.equal(pdEv._stopped, true, 'pointerdown on Layer 2 planner must be stopped');
+  assert.equal(mdEv._stopped, true, 'mousedown on Layer 2 planner must be stopped');
+  assert.equal(mdEv.defaultPrevented, true, 'mousedown on Layer 2 planner must preventDefault to avoid blur-close');
+
+  const rPickOpus = env.simulateNativeClick(subOpus, () => { isOpen = false; });
+  assert.equal(rPickOpus.pu._stopped, true);
+  assert.equal(rPickOpus.ck.defaultPrevented, true);
+  assert.equal(rPickOpus.nativeCalled, false, 'Clicking new Orchestrator planner in submenu must keep model selector open');
+  assert.equal(isOpen, true);
+  assert.equal(orchPicks[orchPicks.length - 1], opusMed.value);
+  assert.equal(subOpus.getAttribute('data-ces-model-selected'), 'true');
+  assert.equal(subNeon.getAttribute('data-ces-model-selected'), 'false');
+  assert.equal(panel.querySelector('.ces-root').getAttribute('data-theme'), 'claude');
+
+  // 立即拖动/按键调整刚刚切到的 Claude Opus 5.5 档位 (Home -> Low)
+  panel.querySelector('.ces-root').dispatchEvent({ type: 'keydown', key: 'Home' });
+  assert.equal(orchPicks[orchPicks.length - 1], opusLow.value);
+
+  // 5) 禁用 planner 与无关菜单 100% Fail-Open
+  const picksBeforeDis = orchPicks.length;
+  const rDis = env.simulateNativeClick(subDis, () => { isOpen = false; });
+  assert.equal(rDis.ck.defaultPrevented, false);
+  assert.equal(rDis.nativeCalled, true);
+  assert.equal(orchPicks.length, picksBeforeDis);
+
+  isOpen = true;
+  const rCopy = env.simulateNativeClick(copyItem, () => { isOpen = false; });
+  assert.equal(rCopy.ck.defaultPrevented, false);
+  assert.equal(rCopy.nativeCalled, true);
+
+  // 6) 先切回普通模型 Gemini 4 Neon，再直接点无 role="menu" 的 .agy-overlay + <button> 形态 Layer 2 -> 真正拦截冒泡、同时切入 Orchestrator + Carbon 且保持常开
+  subOverlay.remove();
+  agObs.rescan();
+  const btnOverlay = env.makeEl('div', { className: 'agy-overlay' });
+  const btnNeon = env.makeEl('button', { text: 'Gemini 4 Neon Medium' });
+  const btnCarb = env.makeEl('button', { text: 'Gemini 4 Carbon Medium' });
+  btnOverlay.appendChild(btnNeon);
+  btnOverlay.appendChild(btnCarb);
+  env.body.appendChild(btnOverlay);
+  agObs.rescan();
+  assert.equal(btnOverlay.getAttribute('data-ag-cs-orch-l2'), '1', 'Overlay without role=menu containing button planner rows must still be detected as Layer 2');
+
+  isOpen = true;
+  const rBackNeon = env.simulateNativeClick(neonRow.groupSpan, () => { isOpen = false; });
+  assert.equal(rBackNeon.ck.defaultPrevented, true);
+  assert.equal(selectedModel.label.startsWith('Gemini 4 Neon'), true);
+  assert.equal(isOpen, true);
+
+  // 校验 simulateNativeClick 对 .agy-overlay 真正挂载了冒泡监听，且点击未选中的 btnCarb 会被拦截，再次点击已选中的 btnCarb 会 Fail-Open 触发原生冒泡
+  const rDirectCarb = env.simulateNativeClick(btnCarb, () => { isOpen = false; });
+  assert.equal(rDirectCarb.ck.defaultPrevented, true);
+  assert.equal(rDirectCarb.nativeCalled, false, 'Clicking .agy-overlay button planner must intercept click before bubbling to .agy-overlay');
+  assert.equal(isOpen, true);
+  assert.equal(selectedModel, orchNeon);
+  assert.equal(orchPicks[orchPicks.length - 1], carbMed.value);
+  assert.equal(btnCarb.getAttribute('data-ces-model-selected'), 'true');
+
+  const rRepeatCarb = env.simulateNativeClick(btnCarb, () => { isOpen = false; });
+  assert.equal(rRepeatCarb.ck.defaultPrevented, false, 'Re-clicking already selected planner must Fail-Open');
+  assert.equal(rRepeatCarb.nativeCalled, true, 'simulateNativeClick must actually observe bubbling on .agy-overlay when Fail-Open');
+
+  // 7) 面板关闭后自动解绑 Layer 2 监听并清理 Layer 2 / Layer 3 标记
+  panel.remove();
+  agObs.rescan();
+  assert.equal(btnOverlay.hasAttribute('data-ag-cs-model-submenu'), false);
+  assert.equal(btnOverlay.hasAttribute('data-ag-cs-orch-l2'), false);
+  assert.equal(btnCarb.hasAttribute('data-ces-orch-row'), false);
+  assert.equal(l3Menu.hasAttribute('data-ag-cs-orch-l3'), false);
+  assert.equal(l3Overlay.hasAttribute('data-ag-cs-orch-l3'), false);
+
+  // 8) 残留脏属性时 stop() 必须通过 _clrAgDom 彻底兜底清理
+  btnOverlay.setAttribute('data-ag-cs-model-submenu', '1');
+  btnOverlay.setAttribute('data-ag-cs-orch-l2', '1');
+  l3Menu.setAttribute('data-ag-cs-orch-l3', '1');
+  btnCarb.setAttribute('data-ces-orch-row', '1');
+  env.html.setAttribute('data-ces-slider-ready', '1');
+  agObs.stop();
+  assert.equal(btnOverlay.hasAttribute('data-ag-cs-model-submenu'), false);
+  assert.equal(btnOverlay.hasAttribute('data-ag-cs-orch-l2'), false);
+  assert.equal(l3Menu.hasAttribute('data-ag-cs-orch-l3'), false);
+  assert.equal(btnCarb.hasAttribute('data-ces-orch-row'), false);
+  assert.equal(env.html.hasAttribute('data-ces-slider-ready'), false);
+});
+
+test('Scenario 9 (PR #12 + Issue #16): valEl 逻辑档位追踪 + _sameEffTxt 覆盖简繁英别名，首次挂载零闪英文/零 rise 闪烁且卸载清缓存', () => {
+  const env = createSimEnv();
+  const rowEl = env.makeEl('div', { className: 'ces-ag-effort-row' });
+  const valEl = env.makeEl('span', { className: 'ces-ag-effort-value' });
+  const container = env.makeEl('div', { className: 'ces-inline' });
+  rowEl.appendChild(valEl);
+  rowEl.appendChild(container);
+  env.body.appendChild(rowEl);
+
+  let official = 'medium';
+  const mount = upstreamLib.mountCodexEffortSlider({
+    container,
+    row: rowEl,
+    valueElement: valEl,
+    document: env.doc,
+    window: env.win,
+    seat: {
+      isClaude: false,
+      locked: false,
+      effortLevels: [
+        { effort: 'minimal', label: 'Minimal' },
+        { effort: 'low', label: 'Low' },
+        { effort: 'medium', label: 'Medium' },
+        { effort: 'high', label: 'High' },
+        { effort: 'xhigh', label: 'Extra' },
+      ],
+      get currentEffort() { return official; },
+      selectEffort() {},
+    },
+  });
+
+  // 1) Initial mount fills empty valEl without replaying ces-text-rise
+  assert.equal(valEl.textContent, 'Medium');
+  assert.equal(valEl.classList.contains('ces-text-rise'), false, 'Initial mount must not trigger rise flicker');
+
+  // 2) External i18n rewrites (Simplified/Traditional/Parenthesized/Unknown locale) cause 0 overwrites and 0 rise animations
+  for (const localized of ['中', '中等', '（中等）', '中等思考', 'Moyen']) {
+    valEl.textContent = localized;
+    mount.refresh();
+    assert.equal(valEl.textContent, localized, `refresh() must preserve external translation "${localized}"`);
+    assert.equal(valEl.classList.contains('ces-text-rise'), false);
+    assert.equal(valEl.classList.contains('is-claude-changing'), false);
+  }
+
+  // 3) Empty DOM with non-empty target must self-heal back to target label
+  valEl.textContent = '';
+  mount.refresh();
+  assert.equal(valEl.textContent, 'Medium', 'Empty valEl must be rewritten when logical label is non-empty');
+
+  // 4) Genuine tier transition updates text and triggers rise animation once
+  valEl.textContent = '中等';
+  official = 'high';
+  mount.refresh();
+  assert.equal(valEl.textContent, 'High');
+  assert.equal(valEl.classList.contains('ces-text-rise'), true, 'Real tier transition must still trigger rise animation');
+
+  // Traditional Chinese alias for xhigh pre-populated before mount must not flash English or replay rise
+  mount.unmount();
+  assert.equal(valEl.__cesLastLabel, undefined, 'unmount() must clear __cesLastLabel to avoid stale cache on remount');
+
+  valEl.classList.remove('ces-text-rise', 'is-claude-changing');
+  valEl.textContent = '（極高思考）';
+  official = 'xhigh';
+  const remount = upstreamLib.mountCodexEffortSlider({
+    container,
+    row: rowEl,
+    valueElement: valEl,
+    document: env.doc,
+    window: env.win,
+    seat: {
+      isClaude: false,
+      locked: false,
+      effortLevels: [
+        { effort: 'low', label: 'Low' },
+        { effort: 'medium', label: 'Medium' },
+        { effort: 'high', label: 'High' },
+        { effort: 'xhigh', label: 'Extra' },
+      ],
+      get currentEffort() { return official; },
+      selectEffort() {},
+    },
+  });
+  assert.equal(valEl.textContent, '（極高思考）', 'Initial mount on pre-localized Traditional Chinese valEl must not flash English');
+  assert.equal(valEl.classList.contains('ces-text-rise'), false, 'Initial mount on pre-localized valEl must not trigger rise');
+  remount.unmount();
+});
+
+test('Scenario 10 (PR #12 + Issue #16): 三处统一防乒乓 (valEl / effortSpan / sib) + allInsideSlider 自激抑制 + 关滑块清缓存', () => {
+  const env = createSimEnv();
+  const neonLow = { label: 'Gemini 4 Neon (Low)', modelId: 'gemini-4-neon-low', value: 1534 };
+  const neonMed = { label: 'Gemini 4 Neon (Medium)', modelId: 'gemini-4-neon-medium', value: 1533 };
+  const neonHigh = { label: 'Gemini 4 Neon (High)', modelId: 'gemini-4-neon-high', value: 1532 };
+  const neonXHigh = { label: 'Gemini 4 Neon (XHigh)', modelId: 'gemini-4-neon-xhigh', value: 1535 };
+  const carbLow = { label: 'Gemini 4 Carbon (Low)', modelId: 'gemini-4-carbon-low', value: 1520 };
+  const carbMed = { label: 'Gemini 4 Carbon (Medium)', modelId: 'gemini-4-carbon-medium', value: 1521 };
+  const carbHigh = { label: 'Gemini 4 Carbon (High)', modelId: 'gemini-4-carbon-high', value: 1522 };
+  const modelOptions = [neonLow, neonMed, neonHigh, neonXHigh, carbLow, carbMed, carbHigh];
+  let selectedModel = neonMed;
+
+  const selectorCtx = {
+    effortIndex: new Map([
+      ['gemini-4-neon', new Map([['low', neonLow], ['medium', neonMed], ['high', neonHigh], ['xhigh', neonXHigh]])],
+      ['gemini-4-carbon', new Map([['low', carbLow], ['medium', carbMed], ['high', carbHigh]])],
+    ]),
+    modelOptions,
+    get selectedModel() { return selectedModel; },
+  };
+  const globalModelCtx = {
+    setModelConfigByLabelForConversation(label) {
+      selectedModel = modelOptions.find((o) => o.label === label) || selectedModel;
+    },
+  };
+
+  const trigger = env.makeTrigger('Gemini 4 Neon', 'Medium');
+  const effortSpan = trigger.querySelector('span.opacity-70');
+  env.body.appendChild(trigger);
+
+  const { panel, listWrap } = env.makePanel();
+  const neonRow = env.addGroupRow(listWrap, 'Gemini 4 Neon', 'Medium');
+  const carbRow = env.addGroupRow(listWrap, 'Gemini 4 Carbon', 'Medium');
+  env.body.appendChild(panel);
+  env.attachFiberChain(panel, { selectorCtx, convId: 'conv-i18n-10', globalModelCtx });
+  env.attachFiberChain(trigger, { selectorCtx, convId: 'conv-i18n-10', globalModelCtx });
+
+  const agObs = upstreamLib.installAntigravityObserver({
+    document: env.doc,
+    window: env.win,
+    MutationObserver: env.win.MutationObserver,
+  });
+
+  const valEl = panel.querySelector('.ces-ag-effort-value');
+  assert.ok(valEl, 'Slider value element must be mounted');
+  assert.equal(valEl.textContent, 'Medium');
+  assert.equal(valEl.classList.contains('ces-text-rise'), false, 'Panel mount must not replay ces-text-rise');
+
+  // Simulate external Chinese i18n rewriting all three sites simultaneously
+  valEl.textContent = '中等';
+  effortSpan.textContent = ' 中等';
+  neonRow.effortSpan.textContent = '中等';
+  carbRow.effortSpan.textContent = '中思考';
+
+  let valWrites = 0, trigWrites = 0, sibWrites = 0;
+  const wrapTextWrite = (el, onWrite) => {
+    const desc = Object.getOwnPropertyDescriptor(el, 'textContent');
+    Object.defineProperty(el, 'textContent', {
+      configurable: true,
+      get: desc.get,
+      set(v) { onWrite(v); desc.set.call(this, v); },
+    });
+  };
+  wrapTextWrite(valEl, () => { valWrites += 1; });
+  wrapTextWrite(effortSpan, () => { trigWrites += 1; });
+  wrapTextWrite(neonRow.effortSpan, () => { sibWrites += 1; });
+
+  // Multiple rescans with unchanged tier must cause ZERO overwrites on all 3 sites
+  for (let i = 0; i < 5; i += 1) agObs.rescan();
+  assert.equal(valWrites, 0, 'valEl must have 0 ping-pong overwrites');
+  assert.equal(trigWrites, 0, 'trigger effortSpan must have 0 ping-pong overwrites');
+  assert.equal(sibWrites, 0, 'menu row sib must have 0 ping-pong overwrites');
+  assert.equal(valEl.textContent, '中等');
+  assert.equal(effortSpan.textContent, ' 中等');
+  assert.equal(neonRow.effortSpan.textContent, '中等');
+  assert.equal(carbRow.effortSpan.textContent, '中思考');
+
+  // allInsideSlider self-trigger guard: mutations strictly inside .ces-ag-section must skip scan()
+  const mo = env.observers[env.observers.length - 1];
+  let getSelectedReads = 0;
+  const origSelDesc = Object.getOwnPropertyDescriptor(selectorCtx, 'selectedModel');
+  Object.defineProperty(selectorCtx, 'selectedModel', {
+    configurable: true,
+    get() { getSelectedReads += 1; return origSelDesc.get(); },
+  });
+  const readsBeforeInsideMut = getSelectedReads;
+  mo.trigger([{ type: 'characterData', target: valEl }]);
+  assert.equal(getSelectedReads, readsBeforeInsideMut, 'allInsideSlider mutation must skip scan() completely');
+
+  // Genuine tier switch Medium -> Extra (xhigh) must update all 3 sites cleanly
+  selectedModel = neonXHigh;
+  agObs.rescan();
+  assert.equal(valEl.textContent, 'Extra');
+  assert.equal(effortSpan.textContent, ' Extra');
+  assert.equal(neonRow.effortSpan.textContent, 'Extra');
+
+  // External i18n translates Extra -> 極高 (Traditional Chinese) -> again 0 ping-pong overwrites
+  valEl.textContent = '極高';
+  effortSpan.textContent = ' 極高';
+  neonRow.effortSpan.textContent = '極高思考';
+  const w1 = valWrites, w2 = trigWrites, w3 = sibWrites;
+  agObs.rescan();
+  agObs.rescan();
+  assert.equal(valWrites, w1);
+  assert.equal(trigWrites, w2);
+  assert.equal(sibWrites, w3);
+
+  // Empty DOM on sib must still be restored when logical label is non-empty
+  neonRow.effortSpan.textContent = '';
+  agObs.rescan();
+  assert.equal(neonRow.effortSpan.textContent, 'Extra', 'Empty sib must be restored even if __cesLastText matched');
+
+  // Stopping observer clears __cesLastText & __cesLastLabel so remount never sees stale cache
+  agObs.stop();
+  assert.equal(effortSpan.__cesLastText, undefined, '_clrAgDom must clear effortSpan.__cesLastText');
+  assert.equal(neonRow.effortSpan.__cesLastText, undefined, '_clrAgDom/_unmntSec must clear sib.__cesLastText');
+  assert.equal(valEl.__cesLastLabel, undefined, '_unmntSec must clear valEl.__cesLastLabel');
+});

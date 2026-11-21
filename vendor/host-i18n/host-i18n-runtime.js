@@ -271,7 +271,7 @@
     if (!el || el.nodeType !== 1) return false;
     var tid = preTid !== undefined ? preTid : getAttr(el, 'data-testid');
     if (tid && hasOwn.call(MODEL_SELECTOR_TESTIDS, tid)) return true;
-    if (hasAttr(el, 'data-effort')) return true;
+    if (hasAttr(el, 'data-effort') || hasAttr(el, 'data-ag-cs-model-submenu')) return true;
     return false;
   }
 
@@ -1664,7 +1664,10 @@
 
     var observer = null;
     var observing = false;
+    var dirtyObserver = null;
+    var dirtyProbeActive = false;
     var winBlurObserver = null;
+    var pendingFullFloatScan = false;
     var pendingNodes = [];
     var pendingNodeSet = new Set();
     var rafId = null;
@@ -1747,7 +1750,48 @@
       }
     }
 
+    function disconnectDirtyObserver() {
+      if (dirtyObserver && dirtyProbeActive) {
+        try {
+          dirtyObserver.disconnect();
+        } catch (e) {}
+      }
+      dirtyProbeActive = false;
+    }
+
+    function armDirtyObserver() {
+      if (state.destroyed || !state.active || dirtyProbeActive || !doc || !doc.documentElement) return;
+      var MOClass =
+        customMutationObserver ||
+        (win && win.MutationObserver) ||
+        (typeof MutationObserver !== 'undefined' ? MutationObserver : null);
+      if (!MOClass) {
+        missedWhilePaused = true;
+        return;
+      }
+      try {
+        if (!dirtyObserver) {
+          dirtyObserver = new MOClass(function () {
+            missedWhilePaused = true;
+            disconnectDirtyObserver();
+          });
+        }
+        dirtyObserver.observe(doc.documentElement, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+        });
+        dirtyProbeActive = true;
+      } catch (e) {
+        dirtyProbeActive = false;
+        missedWhilePaused = true;
+      }
+    }
+
     function clearAllTimersAndListeners() {
+      disconnectDirtyObserver();
+      dirtyObserver = null;
+      pendingFullFloatScan = false;
       if (rafId !== null) {
         try {
           cancelRafFn(rafId);
@@ -2354,7 +2398,7 @@
       rafId = null;
       if (!state.active || state.destroyed) return;
       if (isPaused()) {
-        if (!hibernating) enterHibernation();
+        if (!hibernating) enterHibernation(true);
         else missedWhilePaused = true;
         return;
       }
@@ -2400,7 +2444,7 @@
     function scheduleFlush() {
       if (!state.active || state.destroyed) return;
       if (isPaused()) {
-        if (!hibernating) enterHibernation();
+        if (!hibernating) enterHibernation(true);
         else missedWhilePaused = true;
         return;
       }
@@ -2474,7 +2518,43 @@
       return false;
     }
 
-    function scanFloatingContainers() {
+    var FLOATING_CONTAINER_SEL =
+      '[role="tooltip"], [role="menu"], [role="listbox"], [data-floating-ui-portal], [data-radix-popper-content-wrapper], .popover, .tooltip, .context-view, .monaco-hover';
+
+    function hasFloatingShellHint(el) {
+      if (!el || el.nodeType !== 1) return false;
+      if (isDialogOrPortalWrappingDialog(el) || isDirectIgnoredSelf(el)) return false;
+      if (isFloatingElement(el, doc)) return true;
+      if (hasAttr(el, 'data-radix-portal') || hasAttr(el, 'data-floating-ui-focus-guard')) return true;
+      var idStr = typeof el.id === 'string' ? el.id.toLowerCase() : '';
+      return Boolean(idStr && (idStr.indexOf('portal') !== -1 || idStr.indexOf('tooltip') !== -1 || idStr.indexOf('popover') !== -1));
+    }
+
+    function collectTriggerFloatingHint(target, addCandidate) {
+      var hit = false;
+      var cur = target;
+      for (var depth = 0; depth < 2 && cur && cur.nodeType === 1; depth++) {
+        var desc = getAttr(cur, 'aria-describedby') || getAttr(cur, 'aria-controls') || '';
+        if (desc) {
+          hit = true;
+          if (typeof doc.getElementById === 'function') {
+            var parts = desc.trim().split(/\s+/);
+            for (var i = 0; i < parts.length; i++) {
+              if (!parts[i]) continue;
+              var refEl = doc.getElementById(parts[i]);
+              if (refEl) addCandidate(refEl);
+            }
+          }
+        }
+        if (getAttr(cur, 'data-state') === 'open' || getAttr(cur, 'aria-expanded') === 'true') {
+          hit = true;
+        }
+        cur = cur.parentElement;
+      }
+      return hit;
+    }
+
+    function scanFloatingContainers(fullScan, triggerTarget) {
       if (!state.active || state.destroyed || !doc || !doc.body) return;
       if (isPaused()) {
         if (!hibernating) enterHibernation();
@@ -2491,17 +2571,21 @@
         candidates.push(el);
       }
 
-      var last = doc.body.lastElementChild;
-      if (last && isFloatingElement(last, doc)) {
-        addCandidate(last);
+      var hasFloatHint = Boolean(fullScan);
+      var tail = doc.body.lastElementChild;
+      for (var step = 0; tail && step < 4; step++, tail = tail.previousElementSibling) {
+        if (isFloatingElement(tail, doc)) {
+          addCandidate(tail);
+          hasFloatHint = true;
+        } else if (!hasFloatHint && hasFloatingShellHint(tail)) {
+          hasFloatHint = true;
+        }
       }
-      if (last && last.previousElementSibling && isFloatingElement(last.previousElementSibling, doc)) {
-        addCandidate(last.previousElementSibling);
+      if (!fullScan && triggerTarget && collectTriggerFloatingHint(triggerTarget, addCandidate)) {
+        hasFloatHint = true;
       }
-      if (typeof doc.querySelectorAll === 'function') {
-        var popups = doc.querySelectorAll(
-          '[role="tooltip"], [role="menu"], [role="listbox"], [data-floating-ui-portal], [data-radix-popper-content-wrapper], .popover, .tooltip, .context-view, .monaco-hover'
-        );
+      if ((fullScan || hasFloatHint) && typeof doc.querySelectorAll === 'function') {
+        var popups = doc.querySelectorAll(FLOATING_CONTAINER_SEL);
         if (popups && popups.length > 0) {
           for (var pIdx = 0; pIdx < popups.length; pIdx++) {
             addCandidate(popups[pIdx]);
@@ -2558,9 +2642,11 @@
       reconnectObserver();
     }
 
-    function enterHibernation() {
+    function enterHibernation(markMissed) {
       if (!state.active || state.destroyed) return;
+      var wasCovered = observing || dirtyProbeActive;
       hibernating = true;
+      pendingFullFloatScan = false;
       if (rafId !== null) {
         cancelRafFn(rafId);
         rafId = null;
@@ -2573,11 +2659,31 @@
         clearTimeoutFn(focusWakeTimer);
         focusWakeTimer = null;
       }
-      missedWhilePaused = true;
+      if (markMissed || pendingNodes.length > 0 || !wasCovered) {
+        missedWhilePaused = true;
+      }
       pendingNodes.length = 0;
       pendingNodeSet.clear();
+      var hiddenNow = Boolean(doc && doc.hidden === true);
+      if (hiddenNow) {
+        missedWhilePaused = true;
+        disconnectDirtyObserver();
+      }
       if (state.mode !== 'auto' || nowFn() - bootAt > LAYER2B_WINDOW_MS) {
+        if (observer && observing) {
+          try {
+            if (typeof observer.takeRecords === 'function') {
+              var recs = observer.takeRecords();
+              if (recs && recs.length > 0) missedWhilePaused = true;
+            }
+          } catch (e) {}
+        }
         disconnectObserver();
+        if (!hiddenNow && !missedWhilePaused) {
+          armDirtyObserver();
+        } else {
+          disconnectDirtyObserver();
+        }
       }
     }
 
@@ -2585,13 +2691,23 @@
       if (!state.active || state.destroyed) return;
       if (isPaused()) return;
       hibernating = false;
-      if (missedWhilePaused || pendingNodes.length > 0 || !observing) {
+      var hadProbe = dirtyProbeActive;
+      if (dirtyObserver && dirtyProbeActive) {
+        try {
+          if (typeof dirtyObserver.takeRecords === 'function') {
+            var recs = dirtyObserver.takeRecords();
+            if (recs && recs.length > 0) missedWhilePaused = true;
+          }
+        } catch (e) {}
+        disconnectDirtyObserver();
+      }
+      if (missedWhilePaused || pendingNodes.length > 0 || (!observing && !hadProbe)) {
         missedWhilePaused = false;
         pendingNodes.length = 0;
         pendingNodeSet.clear();
         safeBudgetedScan();
-        reconnectObserver();
       }
+      reconnectObserver();
     }
 
     function attachListenersAndObserver() {
@@ -2608,7 +2724,7 @@
           var inLayer2b = state.mode === 'auto' && nowFn() - bootAt <= LAYER2B_WINDOW_MS;
           var pausedNow = isPaused();
           if (pausedNow) {
-            if (!hibernating) enterHibernation();
+            if (!hibernating) enterHibernation(true);
             else missedWhilePaused = true;
             if (!inLayer2b) return;
           }
@@ -2750,6 +2866,11 @@
               }
               if (delayMs >= 1150 && isPaused()) {
                 disconnectObserver();
+                if (doc && doc.hidden === true) {
+                  missedWhilePaused = true;
+                } else if (!missedWhilePaused) {
+                  armDirtyObserver();
+                }
               }
             }, delayMs);
             layer2bTimers.push(tid);
@@ -2771,7 +2892,10 @@
         var target = rawTarget && rawTarget.nodeType === 3 ? rawTarget.parentElement || rawTarget.parentNode : rawTarget;
         if (!target || target.nodeType !== 1 || target.isConnected === false) return;
 
-        if (e && e.type === 'pointerenter') {
+        var isContextMenu = Boolean(e && e.type === 'contextmenu');
+        if (isContextMenu) {
+          pendingFullFloatScan = true;
+        } else if (e && e.type === 'pointerenter') {
           if (exemptElements.has(target) || isDialogOrPortalWrappingDialog(target)) return;
           var hoverBound = measureSafeBoundaryDepth(target);
           if (hoverBound.blocked) return;
@@ -2796,7 +2920,9 @@
           if (!ranImmediate) {
             runHoverTargetScan(target);
           }
-          scanFloatingContainers();
+          var doFull = pendingFullFloatScan;
+          pendingFullFloatScan = false;
+          scanFloatingContainers(doFull, target);
         }, delay);
       };
 
@@ -2854,6 +2980,8 @@
       pausedByWindowBlur = false;
       hibernating = Boolean((doc && doc.hidden === true) || isWinBlurAttrSet());
       missedWhilePaused = false;
+      dirtyProbeActive = false;
+      pendingFullFloatScan = false;
       delayedExternalNodes.clear();
       globalConflictRecords.length = 0;
 

@@ -180,7 +180,29 @@
         if (!closed && !touchesModel(recs, doc, open)) { stats.skippedIrrelevant += 1; return; }
         if (Array.isArray(recs)) for (let i = 0; i < recs.length && q.length < 48; i++) q.push(recs[i]);
         const el = Date.now() - lastAt, wMs = open ? MENU_THROTTLE_MS : THROTTLE_MS;
-        if (closed || (open && !wasOpen) || (el >= wMs && tm === null)) {
+        let subAdded = false;
+        if (open && Array.isArray(recs)) {
+          for (let ri = 0; ri < recs.length && !subAdded; ri++) {
+            const an = recs[ri]?.addedNodes;
+            if (!an) continue;
+            for (let aj = 0; aj < an.length; aj++) {
+              const nd = an[aj];
+              const nr = nd && nd.nodeType === 1 ? nd.getAttribute?.('role') : '';
+              if (
+                nd &&
+                nd.nodeType === 1 &&
+                (nr === 'menu' ||
+                  nr === 'listbox' ||
+                  nd.classList?.contains('agy-overlay') ||
+                  nd.querySelector?.('[role="menu"],[role="listbox"],[role^="menuitem"],[data-testid="context-menu-submenu-popup"],.agy-overlay'))
+              ) {
+                subAdded = true;
+                break;
+              }
+            }
+          }
+        }
+        if (closed || subAdded || (open && !wasOpen) || (el >= wMs && tm === null)) {
           if (tm !== null) { clearTimeout(tm); tm = null; }
           flush(closed);
         } else if (tm === null) {
@@ -228,12 +250,16 @@
       '[data-ces-part="trigger-effort"]{color:inherit!important;opacity:.7!important;font-weight:inherit!important}';
 
     function clrTint(doc) {
+      if (!doc) return;
       for (const sp of qa(doc, '[data-ces-part="trigger-effort"], [data-testid="model-selector-trigger"] span[style]')) {
         if (sp.style) sp.style.color = sp.style.opacity = sp.style.fontWeight = '';
         ra(sp, 'data-ces-part');
       }
       for (const p of qa(doc, '.ces-ag-panel-enhanced')) p.classList?.remove?.('ces-ag-panel-enhanced');
-      for (const it of qa(doc, '[data-ces-model-selected]')) ra(it, 'data-ces-model-selected');
+      for (const attr of ['data-ces-model-selected', 'data-ag-cs-model-submenu', 'data-ag-cs-orch-l2', 'data-ag-cs-orch-l3', 'data-ces-orch-row']) {
+        for (const it of qa(doc, `[${attr}]`)) ra(it, attr);
+      }
+      ra(doc.documentElement, 'data-ces-slider-ready');
     }
 
     function setHideCss(hidden) {
@@ -256,6 +282,10 @@
         try { inst.stop(); } catch {}
         if (w && w.__agCodexEffortSliderInstance === inst) delete w.__agCodexEffortSliderInstance;
         inst = null;
+      }
+      if (w && w.__agCodexEffortSliderInstance && w.__agCodexEffortSliderInstance.__prismOwned) {
+        try { w.__agCodexEffortSliderInstance.stop?.(); } catch {}
+        delete w.__agCodexEffortSliderInstance;
       }
       clrTint(d);
       const st = d?.getElementById?.(SLIDER_STYLE_ID);
