@@ -158,6 +158,13 @@
           if (!it) return;
           clearTimeout(it.timer);
           pend.delete(id);
+          if (pl && pl.connection !== 'local-estimate' && pl.groups?.length > 0) {
+            const keepSpeed = !pl.speed && lastSnap?.speed;
+            const keepConvs = !pl.conversations?.length && lastSnap?.conversations?.length;
+            lastSnap = keepSpeed || keepConvs
+              ? { ...pl, ...(keepSpeed ? { speed: lastSnap.speed } : {}), ...(keepConvs ? { conversations: lastSnap.conversations } : {}) }
+              : pl;
+          }
           it.resolve(pl);
         };
       }
@@ -455,7 +462,8 @@
         return new Promise((resolve) => {
           if (pend.size >= 6) { resolve(lastSnap || estSnap()); return; }
           const id = ++reqSeq;
-          const timer = setTimeout(() => { pend.delete(id); resolve(lastSnap || estSnap()); }, 3500);
+          const timeoutMs = si.force || si.quotaRefresh ? 10000 : 4500;
+          const timer = setTimeout(() => { pend.delete(id); resolve(lastSnap || estSnap()); }, timeoutMs);
           pend.set(id, { resolve, timer });
           try {
             w[METRICS_BINDING](JSON.stringify({ id, input: si }));

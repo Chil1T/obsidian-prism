@@ -65,9 +65,14 @@
     setAttrIfChanged,
     runGuardedMut,
   }) {
+    const QUOTA_SUCCESS_COOLDOWN_MS = 45000;
+    const QUOTA_FAIL_COOLDOWN_MS = 15000;
+    const QUOTA_TAB_COOLDOWN_MS = 20000;
+    const MANUAL_REFRESH_COOLDOWN_MS = 5000;
     const usageRecords = new Map();
     let usageLoading = false, quotaLoading = false, usageHasData = false;
-    let lastUsageFetchAt = 0, lastQuotaFetchAt = 0, liveQuotaSnap = null, quotaEpoch = 0;
+    let lastUsageFetchAt = 0, lastQuotaFetchAt = 0, lastQuotaFailAt = 0, lastQuotaTabTriggerAt = 0, lastManualRefreshAt = 0;
+    let liveQuotaSnap = null, quotaEpoch = 0, quotaPending = null, quotaBindingSeq = 0;
     let bookPick = 0.07, activeTab = 'overview', activeRange = 'all', activeWorkspace = 'all', detectedCurrentWorkspace = '';
     let modelsExpanded = false, lastPanelRenderKey = '', usageDataEpoch = 0, cachedAggKey = '', cachedAggData = null;
     let deferredUsageTimer = 0, saveUsageTimer = 0, saveUsageIdle = 0, wasHero = false;
@@ -178,28 +183,133 @@
       return latestWs;
     }
 
-    async function refreshLiveTelemetrySnapshot(force = false) {
-      if (isDestroyed() || quotaLoading) return liveQuotaSnap;
+    const inCooldown = (at, ms, now) => at > 0 && now >= at && now - at < ms;
+
+    function hasUsableQuotas(snap) {
+      return (
+        Array.isArray(snap?.groups) &&
+        snap.groups.length > 0 &&
+        snap.groups.some((g) => g && (!usageCore?.quotaWindows || usageCore.quotaWindows(g).length > 0))
+      );
+    }
+
+    function withTimeout(fn, ms, onTimeout) {
+      return new Promise((resolve) => {
+        let settled = false;
+        const done = (val) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(val);
+        };
+        const timer = setTimeout(() => {
+          try { onTimeout?.(); } catch {}
+          done(null);
+        }, ms);
+        timer?.unref?.();
+        Promise.resolve().then(fn).then((v) => done(v || null), () => done(null));
+      });
+    }
+
+    function callPrismMetricsBinding(win, input) {
+      const callName = '__agPrismMetricsCall', resName = '__agPrismMetricsResolve';
+      const reqId = 800000000 + (++quotaBindingSeq);
+      const prev = win[resName];
+      let cb = null, restored = false;
+      const restore = () => {
+        if (restored) return;
+        restored = true;
+        if (win[resName] === cb) {
+          if (prev !== undefined) win[resName] = prev;
+          else delete win[resName];
+        }
+      };
+      return withTimeout(() => new Promise((resolve) => {
+        cb = (id, payload) => {
+          if (id === reqId) {
+            restore();
+            resolve(payload && typeof payload === 'object' ? payload : null);
+          } else if (typeof prev === 'function') {
+            prev(id, payload);
+          }
+        };
+        win[resName] = cb;
+        try {
+          win[callName](JSON.stringify({ id: reqId, input }));
+        } catch {
+          restore();
+          resolve(null);
+        }
+      }), 10500, restore);
+    }
+
+    async function refreshLiveTelemetrySnapshot(force = false, opts = null) {
+      if (isDestroyed()) return liveQuotaSnap;
+      if (quotaLoading && quotaPending) return quotaPending;
       const now = Date.now();
-      if (!force && liveQuotaSnap && now - lastQuotaFetchAt < 45000) return liveQuotaSnap;
+      if (!force) {
+        if (hasUsableQuotas(liveQuotaSnap) && inCooldown(lastQuotaFetchAt, QUOTA_SUCCESS_COOLDOWN_MS, now)) return liveQuotaSnap;
+        if (!opts?.ignoreFailCooldown && inCooldown(lastQuotaFailAt, QUOTA_FAIL_COOLDOWN_MS, now)) return liveQuotaSnap;
+      }
       const win = typeof window !== 'undefined' ? window : G;
       if (!win) return null;
+      const doc = typeof document !== 'undefined' ? document : win.document || null;
+      const telemetryOff = doc?.documentElement?.getAttribute?.('data-ag-cs-telemetry') === 'off';
       quotaLoading = true;
       if (activeTab === 'quotas') renderHomePanel();
-      try {
-        const snap = win.agPulseHost?.getMetrics
-          ? await win.agPulseHost.getMetrics({ conversationId: null, force: Boolean(force) })
-          : win.__agPrismTelemetry?.refresh
-          ? await win.__agPrismTelemetry.refresh()
-          : win.__agPrismTelemetry?.getLatestSnapshot?.() || null;
-        if (snap && typeof snap === 'object') { liveQuotaSnap = snap; lastQuotaFetchAt = Date.now(); quotaEpoch += 1; }
-        return liveQuotaSnap;
-      } catch {
-        return liveQuotaSnap;
-      } finally {
-        quotaLoading = false;
-        if (!isDestroyed() && activeTab === 'quotas') renderHomePanel();
-      }
+      const pending = (async () => {
+        try {
+          const forceFlag = Boolean(force);
+          const req = {
+            conversationId: null,
+            force: forceFlag,
+            quotaRefresh: Boolean(opts?.quotaRefresh ?? forceFlag),
+            selectLatest: false,
+          };
+          const host = win.agPulseHost;
+          const isPrismHost = Boolean(host?.__prismFallback);
+          const hasExternalHost = typeof host?.getMetrics === 'function' && !isPrismHost;
+          const bridge = win.__agPrismMetricsBridge;
+          const tel = win.__agPrismTelemetry;
+          let snap = null;
+          const pick = (v) => { if (hasUsableQuotas(v)) snap = v; };
+
+          if (hasExternalHost) {
+            pick(await withTimeout(() => host.getMetrics(req), 3000));
+          }
+          if (!hasUsableQuotas(snap) && !telemetryOff) {
+            if (isPrismHost && typeof host?.getMetrics === 'function') {
+              pick(await withTimeout(() => host.getMetrics(req), 10500));
+            } else if (typeof bridge?.getMetrics === 'function') {
+              pick(await withTimeout(() => bridge.getMetrics(req), 10500));
+            } else if (typeof win.__agPrismMetricsCall === 'function') {
+              pick(await callPrismMetricsBinding(win, req));
+            } else if (!host?.getMetrics && typeof tel?.refresh === 'function') {
+              pick(await withTimeout(() => tel.refresh(), 4500));
+            }
+            if (!hasUsableQuotas(snap)) pick(tel?.getLatestSnapshot?.());
+          }
+
+          if (hasUsableQuotas(snap)) {
+            liveQuotaSnap = snap;
+            lastQuotaFetchAt = Date.now();
+            lastQuotaFailAt = 0;
+            quotaEpoch += 1;
+          } else {
+            lastQuotaFailAt = Date.now();
+          }
+          return liveQuotaSnap;
+        } catch {
+          lastQuotaFailAt = Date.now();
+          return liveQuotaSnap;
+        } finally {
+          quotaLoading = false;
+          quotaPending = null;
+          if (!isDestroyed() && activeTab === 'quotas') renderHomePanel();
+        }
+      })();
+      quotaPending = pending;
+      return pending;
     }
 
     function scheduleUsageRollupRefresh(delayMs = 1800) {
@@ -461,7 +571,13 @@
       const refreshBtn = mk('button', 'ag-cs-quota-refresh', quotaLoading ? ui.thinkingEllipsis || 'Loading…' : ui.refreshBtnTitle || 'Refresh');
       refreshBtn.type = 'button';
       refreshBtn.disabled = quotaLoading;
-      refreshBtn.addEventListener('click', () => void refreshLiveTelemetrySnapshot(true));
+      refreshBtn.addEventListener('click', () => {
+        const now = Date.now();
+        if (quotaLoading || inCooldown(lastManualRefreshAt, MANUAL_REFRESH_COOLDOWN_MS, now)) return;
+        lastManualRefreshAt = now;
+        lastQuotaTabTriggerAt = now;
+        void refreshLiveTelemetrySnapshot(true);
+      });
       toolbar.appendChild(refreshBtn);
       wrap.appendChild(toolbar);
 
@@ -573,7 +689,13 @@
           if (activeTab === id) btn.setAttribute('data-active', '');
           btn.addEventListener('click', () => {
             activeTab = id;
-            if (id === 'quotas' && !liveQuotaSnap) void refreshLiveTelemetrySnapshot(true);
+            if (id === 'quotas' && !hasUsableQuotas(liveQuotaSnap)) {
+              const now = Date.now();
+              if (!inCooldown(lastQuotaTabTriggerAt, QUOTA_TAB_COOLDOWN_MS, now)) {
+                lastQuotaTabTriggerAt = now;
+                void refreshLiveTelemetrySnapshot(false, { quotaRefresh: true, ignoreFailCooldown: true });
+              }
+            }
             renderHomePanel();
           });
           tabs.appendChild(btn);

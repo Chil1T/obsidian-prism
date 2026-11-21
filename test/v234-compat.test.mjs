@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 import {
   buildRendererRpcExpression,
@@ -19,6 +20,7 @@ import { MetricsStore } from '../vendor/pulse-dashboard/sidecars/panel/store.mjs
 import { quotaMetrics, trajectoryMetrics } from '../vendor/pulse-dashboard/sidecars/panel/metrics.mjs';
 import { quotaModelFamily } from '../vendor/pulse-dashboard/sidecars/panel/usage.mjs';
 import { formatModelName } from '../vendor/pulse-dashboard/sidecars/panel/context.mjs';
+import { PrismDaemon } from '../sidecars/daemon/main.mjs';
 
 const require = createRequire(import.meta.url);
 globalThis.__agCodexEffortSliderDisableAutoBoot = true;
@@ -1617,5 +1619,655 @@ test('Issue #16 + PR #12 + Issue #11: React 19 multi-HostText [" ", "Medium"] ->
     assert.equal(reactEffortText.isConnected, true);
   } finally {
     ctrl.destroy();
+  }
+});
+
+test('PR #17 Home Studio Quotas: fallback resilience, telemetry-off veto, no double-fire, R3 cooldowns, inline-fallback lastSnap/timeouts & daemon forwarding', async () => {
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const inlineFallback = require('../vendor/pulse-dashboard/inline-fallback.js');
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevStorage = globalThis.localStorage;
+  const origDateNow = Date.now;
+  const origSetTimeout = globalThis.setTimeout;
+
+  function makeQuotaDom() {
+    const storeMem = new Map();
+    function makeNode(tag) {
+      const attrs = new Map();
+      const listeners = new Map();
+      const children = [];
+      const el = {
+        nodeType: 1,
+        tagName: String(tag).toUpperCase(),
+        children,
+        parentNode: null,
+        parentElement: null,
+        isConnected: true,
+        disabled: false,
+        type: '',
+        value: '',
+        id: '',
+        className: '',
+        _text: '',
+        style: { setProperty() {}, removeProperty() {}, transform: '', width: '' },
+        set textContent(v) { children.length = 0; this._text = String(v); },
+        get textContent() { return children.length ? children.map((c) => c.textContent).join('') : this._text; },
+        set innerHTML(v) { children.length = 0; this._text = String(v); },
+        get innerHTML() { return this._text; },
+        get childElementCount() { return children.length; },
+        get firstChild() { return children[0] || null; },
+        get nextSibling() {
+          if (!this.parentElement) return null;
+          const idx = this.parentElement.children.indexOf(this);
+          return idx >= 0 ? this.parentElement.children[idx + 1] || null : null;
+        },
+        get previousSibling() {
+          if (!this.parentElement) return null;
+          const idx = this.parentElement.children.indexOf(this);
+          return idx > 0 ? this.parentElement.children[idx - 1] || null : null;
+        },
+        appendChild(ch) {
+          if (ch.parentElement) ch.parentElement.removeChild(ch);
+          ch.parentElement = el;
+          ch.parentNode = el;
+          children.push(ch);
+          return ch;
+        },
+        insertBefore(ch, ref) {
+          if (ch.parentElement) ch.parentElement.removeChild(ch);
+          ch.parentElement = el;
+          ch.parentNode = el;
+          const idx = ref ? children.indexOf(ref) : -1;
+          if (idx >= 0) children.splice(idx, 0, ch);
+          else children.push(ch);
+          return ch;
+        },
+        removeChild(ch) {
+          const idx = children.indexOf(ch);
+          if (idx >= 0) children.splice(idx, 1);
+          ch.parentElement = null;
+          ch.parentNode = null;
+          return ch;
+        },
+        setAttribute(k, v) { attrs.set(k, String(v)); if (k === 'id') this.id = String(v); },
+        getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+        hasAttribute(k) { return attrs.has(k); },
+        removeAttribute(k) { attrs.delete(k); },
+        addEventListener(ev, fn) { if (!listeners.has(ev)) listeners.set(ev, []); listeners.get(ev).push(fn); },
+        click() { for (const fn of listeners.get('click') || []) fn({ type: 'click' }); },
+        querySelector(sel) { return el.querySelectorAll(sel)[0] || null; },
+        querySelectorAll(sel) {
+          const out = [];
+          const walk = (n) => {
+            for (const c of n.children || []) {
+              if (sel.startsWith('.') && String(c.className || '').split(/\s+/).includes(sel.slice(1))) out.push(c);
+              else if (sel === '[data-testid="home-greeting"]' && c.getAttribute('data-testid') === 'home-greeting') out.push(c);
+              else if (sel.startsWith('[data-tab="') && c.getAttribute('data-tab') === sel.slice(11, -2)) out.push(c);
+              walk(c);
+            }
+          };
+          walk(el);
+          return out;
+        },
+      };
+      return el;
+    }
+    const root = makeNode('html');
+    const head = makeNode('head');
+    const body = makeNode('body');
+    const home = makeNode('div');
+    home.className = 'agy-home';
+    const greeting = makeNode('div');
+    greeting.setAttribute('data-testid', 'home-greeting');
+    home.appendChild(greeting);
+    body.appendChild(home);
+    root.appendChild(head);
+    root.appendChild(body);
+    const doc = {
+      title: 'obsidian-prism - Antigravity',
+      documentElement: root,
+      head,
+      body,
+      createElement: (t) => makeNode(t),
+      getElementById: (id) => root.children.flatMap((c) => [c, ...c.children]).find((c) => c.id === id) || null,
+      querySelector: (s) => root.querySelector(s),
+      querySelectorAll: (s) => root.querySelectorAll(s),
+    };
+    const storage = {
+      getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+      setItem: (k, v) => storeMem.set(k, String(v)),
+    };
+    return { doc, root, home, storage };
+  }
+
+  const future5h = new Date(Date.now() + 2 * 3600 * 1000).toISOString();
+  const futureWeek = new Date(Date.now() + 4 * 86400 * 1000).toISOString();
+  const liveGroups = [
+    {
+      id: 'gemini',
+      name: 'Gemini Models',
+      windows: {
+        '5h': { available: true, id: 'gemini-5h', remaining: 0.88, resetAt: future5h },
+        weekly: { available: true, id: 'gemini-weekly', remaining: 0.91, resetAt: futureWeek },
+      },
+    },
+    {
+      id: '3p',
+      name: 'Claude and GPT models',
+      windows: {
+        '5h': { available: true, id: '3p-5h', remaining: 1, resetAt: future5h },
+        weekly: { available: true, id: '3p-weekly', remaining: 0.5, resetAt: futureWeek },
+      },
+    },
+  ];
+
+  const makeCtl = () => homeStudioPanel.createHomeStudioPanelController({
+    usageCore,
+    storageUsageCacheKey: 'test:quotas:v234',
+    isDestroyed: () => false,
+    getHomeLayout: () => 'studio',
+    getLang: () => 'zh-CN',
+    uiText: () => ({ quotaEmptyHint: '暂未获取到实时配额池快照', tabQuotas: '模型配额', tabOverview: '概览' }),
+    getDisplayName: () => 'Dev',
+    ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: {} } }) }, svc: {} }),
+    canMountRealCanvas: () => false,
+    setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+    runGuardedMut: (fn) => fn(),
+  });
+
+  try {
+    // 1a) External agPulseHost returns offline empty groups -> falls back to __agPrismMetricsBridge & renders quota cards
+    {
+      const { doc, home, storage } = makeQuotaDom();
+      const bridgeInputs = [];
+      globalThis.document = doc;
+      globalThis.localStorage = storage;
+      globalThis.window = {
+        agPulseHost: {
+          getMetrics: async () => ({ connection: 'offline', error: '当前版本未提供可用的本地检测凭据', groups: [] }),
+        },
+        __agPrismMetricsBridge: {
+          getMetrics: async (inp) => {
+            bridgeInputs.push(inp);
+            return { connection: 'live', groups: liveGroups };
+          },
+        },
+        __agPrismTelemetry: {
+          refresh: async () => null,
+          getLatestSnapshot: () => null,
+        },
+      };
+      const ctl = makeCtl();
+      ctl.renderHomePanel(true);
+      const quotasTab = home.querySelector('[data-tab="quotas"]');
+      assert.ok(quotasTab);
+      quotasTab.click();
+      await new Promise((r) => origSetTimeout(r, 30));
+      assert.equal(bridgeInputs.length, 1);
+      assert.equal(bridgeInputs[0].selectLatest, false);
+      assert.equal(bridgeInputs[0].quotaRefresh, true);
+      assert.equal(home.querySelectorAll('.ag-cs-quota-card').length, 2, 'Must render 2 live quota cards via __agPrismMetricsBridge fallback');
+      assert.equal(home.querySelectorAll('.ag-cs-home-models-empty').length, 0);
+    }
+
+    // 1b) External agPulseHost hangs (>3s timeout) -> times out at ~3000ms and falls back to __agPrismMetricsBridge
+    {
+      const { doc, home, storage } = makeQuotaDom();
+      let bridgeCalls = 0;
+      globalThis.document = doc;
+      globalThis.localStorage = storage;
+      globalThis.window = {
+        agPulseHost: {
+          getMetrics: () => new Promise(() => {}),
+        },
+        __agPrismMetricsBridge: {
+          getMetrics: async (inp) => {
+            bridgeCalls += 1;
+            assert.equal(inp.selectLatest, false);
+            return { connection: 'live', groups: liveGroups };
+          },
+        },
+      };
+      const ctl = makeCtl();
+      ctl.renderHomePanel(true);
+      const t0 = origDateNow();
+      const snap = await ctl.refreshLiveTelemetrySnapshot(true);
+      const elapsed = origDateNow() - t0;
+      assert.equal(bridgeCalls, 1, 'Stalled external agPulseHost must fall back to __agPrismMetricsBridge after 3s timeout');
+      assert.equal(snap?.groups?.length, 2);
+      assert.ok(elapsed >= 2800 && elapsed < 7000, `Expected ~3000ms timeout fallback, got ${elapsed}ms`);
+    }
+
+    // 1c) External agPulseHost throws AND __agPrismMetricsBridge missing -> falls back to __agPrismMetricsCall;
+    //     restores __agPrismMetricsResolve with ownership check; empty snapshot does NOT wipe cached live groups.
+    {
+      const { doc, home, storage } = makeQuotaDom();
+      let hostCalls = 0;
+      let bindingCalls = 0;
+      let returnLiveFromBinding = false;
+      let swapResolveMidflight = false;
+      const prevResolveMarker = () => {};
+      const externalReplacementResolve = () => {};
+      globalThis.document = doc;
+      globalThis.localStorage = storage;
+      globalThis.window = {
+        agPulseHost: {
+          getMetrics: () => {
+            hostCalls += 1;
+            if (hostCalls === 1) throw new Error('boom');
+            return Promise.reject(new Error('offline'));
+          },
+        },
+        __agPrismMetricsResolve: prevResolveMarker,
+        __agPrismMetricsCall: (payloadStr) => {
+          bindingCalls += 1;
+          const req = JSON.parse(payloadStr);
+          const capturedCb = globalThis.window.__agPrismMetricsResolve;
+          origSetTimeout(() => {
+            if (swapResolveMidflight) {
+              globalThis.window.__agPrismMetricsResolve = externalReplacementResolve;
+            }
+            capturedCb?.(
+              req.id,
+              returnLiveFromBinding ? { connection: 'live', groups: liveGroups } : { connection: 'offline', groups: [] }
+            );
+          }, 5);
+        },
+      };
+      const ctl = makeCtl();
+      ctl.renderHomePanel(true);
+      const initialSnap = await ctl.refreshLiveTelemetrySnapshot(false);
+      assert.equal(Array.isArray(initialSnap?.groups) ? initialSnap.groups.length : 0, 0);
+      assert.equal(globalThis.window.__agPrismMetricsResolve, prevResolveMarker, 'Must restore previous __agPrismMetricsResolve');
+
+      // First Quotas tab click retries because previous snapshot had no usable groups
+      returnLiveFromBinding = true;
+      home.querySelector('[data-tab="quotas"]').click();
+      await new Promise((r) => origSetTimeout(r, 40));
+      assert.equal(bindingCalls, 2);
+      assert.equal(home.querySelectorAll('.ag-cs-quota-card').length, 2, 'Must populate cards from __agPrismMetricsCall fallback on retry');
+
+      // Subsequent empty/offline snapshot must NOT overwrite previously cached live quota groups,
+      // and ownership check must NOT clobber a replacement __agPrismMetricsResolve installed mid-flight!
+      returnLiveFromBinding = false;
+      swapResolveMidflight = true;
+      const afterEmpty = await ctl.refreshLiveTelemetrySnapshot(true);
+      assert.equal(afterEmpty.groups.length, 2, 'Must retain previously fetched valid quota groups when refresh returns empty');
+      assert.equal(home.querySelectorAll('.ag-cs-quota-card').length, 2);
+      assert.equal(
+        globalThis.window.__agPrismMetricsResolve,
+        externalReplacementResolve,
+        'Ownership check must not overwrite replacement __agPrismMetricsResolve installed during flight'
+      );
+    }
+
+    // 2) Healthy external agPulseHost returning valid groups -> adopted directly with 0 fallback calls
+    {
+      const { doc, home, storage } = makeQuotaDom();
+      let extCalls = 0;
+      let bridgeCalls = 0;
+      let bindingCalls = 0;
+      let telRefreshCalls = 0;
+      globalThis.document = doc;
+      globalThis.localStorage = storage;
+      globalThis.window = {
+        agPulseHost: {
+          getMetrics: async () => {
+            extCalls += 1;
+            return { connection: 'live', groups: liveGroups };
+          },
+        },
+        __agPrismMetricsBridge: {
+          getMetrics: async () => {
+            bridgeCalls += 1;
+            return { connection: 'live', groups: liveGroups };
+          },
+        },
+        __agPrismMetricsCall: () => {
+          bindingCalls += 1;
+        },
+        __agPrismTelemetry: {
+          refresh: async () => {
+            telRefreshCalls += 1;
+            return { connection: 'live', groups: liveGroups };
+          },
+          getLatestSnapshot: () => null,
+        },
+      };
+      const ctl = makeCtl();
+      ctl.renderHomePanel(true);
+      const snap = await ctl.refreshLiveTelemetrySnapshot(true);
+      assert.equal(extCalls, 1);
+      assert.equal(snap?.groups?.length, 2);
+      assert.equal(bridgeCalls, 0, 'Healthy external agPulseHost must NEVER pierce through to __agPrismMetricsBridge');
+      assert.equal(bindingCalls, 0, 'Healthy external agPulseHost must NEVER pierce through to __agPrismMetricsCall');
+      assert.equal(telRefreshCalls, 0, 'Healthy external agPulseHost must NEVER pierce through to __agPrismTelemetry.refresh');
+    }
+
+    // 3) No double-fire: when __agPrismMetricsBridge.getMetrics returns empty, NEVER invoke __agPrismMetricsCall
+    {
+      const { doc, storage } = makeQuotaDom();
+      let bridgeCalls = 0;
+      let bindingCalls = 0;
+      let telRefreshCalls = 0;
+      globalThis.document = doc;
+      globalThis.localStorage = storage;
+      globalThis.window = {
+        agPulseHost: {
+          getMetrics: async () => ({ connection: 'offline', groups: [] }),
+        },
+        __agPrismMetricsBridge: {
+          getMetrics: async () => {
+            bridgeCalls += 1;
+            return { connection: 'offline', groups: [] };
+          },
+        },
+        __agPrismMetricsCall: () => {
+          bindingCalls += 1;
+        },
+        __agPrismTelemetry: {
+          refresh: async () => {
+            telRefreshCalls += 1;
+            return null;
+          },
+          getLatestSnapshot: () => null,
+        },
+      };
+      const ctl = makeCtl();
+      await ctl.refreshLiveTelemetrySnapshot(true);
+      assert.equal(bridgeCalls, 1);
+      assert.equal(bindingCalls, 0, 'Must NOT double-fire __agPrismMetricsCall when __agPrismMetricsBridge.getMetrics returned empty');
+      assert.equal(telRefreshCalls, 0, 'Must NOT cascade to __agPrismTelemetry.refresh after bridge call');
+    }
+
+    // 4) data-ag-cs-telemetry="off" strict veto:
+    //    4a) external host empty -> 0 Prism bridge/binding/telemetry calls;
+    //    4b) external host healthy -> read-only allowed, 0 Prism calls;
+    //    4c) __prismFallback host -> 0 host/bridge/binding calls.
+    {
+      const { doc, root, storage } = makeQuotaDom();
+      root.setAttribute('data-ag-cs-telemetry', 'off');
+      let extCalls = 0;
+      let bridgeCalls = 0;
+      let bindingCalls = 0;
+      let telRefreshCalls = 0;
+      globalThis.document = doc;
+      globalThis.localStorage = storage;
+      globalThis.window = {
+        agPulseHost: {
+          getMetrics: async () => {
+            extCalls += 1;
+            return { connection: 'offline', groups: [] };
+          },
+        },
+        __agPrismMetricsBridge: {
+          getMetrics: async () => {
+            bridgeCalls += 1;
+            return { connection: 'live', groups: liveGroups };
+          },
+        },
+        __agPrismMetricsCall: () => {
+          bindingCalls += 1;
+        },
+        __agPrismTelemetry: {
+          refresh: async () => {
+            telRefreshCalls += 1;
+            return { connection: 'live', groups: liveGroups };
+          },
+          getLatestSnapshot: () => ({ connection: 'live', groups: liveGroups }),
+        },
+      };
+      const ctl = makeCtl();
+      const emptySnap = await ctl.refreshLiveTelemetrySnapshot(true);
+      assert.equal(extCalls, 1);
+      assert.equal(emptySnap, null);
+      assert.equal(bridgeCalls, 0, 'telemetry="off" must veto __agPrismMetricsBridge fallback');
+      assert.equal(bindingCalls, 0, 'telemetry="off" must veto __agPrismMetricsCall fallback');
+      assert.equal(telRefreshCalls, 0, 'telemetry="off" must veto __agPrismTelemetry.refresh');
+
+      // 4b) external non-prismFallback agPulseHost returning live groups is still readable
+      globalThis.window.agPulseHost = {
+        getMetrics: async () => ({ connection: 'live', groups: liveGroups }),
+      };
+      const okSnap = await ctl.refreshLiveTelemetrySnapshot(true);
+      assert.equal(okSnap?.groups?.length, 2, 'telemetry="off" allows read-only external non-fallback agPulseHost');
+      assert.equal(bridgeCalls, 0);
+      assert.equal(bindingCalls, 0);
+
+      // 4c) __prismFallback host is blocked when telemetry="off"
+      let prismHostCalls = 0;
+      globalThis.window.agPulseHost = {
+        __prismFallback: true,
+        getMetrics: async () => {
+          prismHostCalls += 1;
+          return { connection: 'live', groups: liveGroups };
+        },
+      };
+      const ctl2 = makeCtl();
+      const blockedSnap = await ctl2.refreshLiveTelemetrySnapshot(true);
+      assert.equal(blockedSnap, null);
+      assert.equal(prismHostCalls, 0, 'telemetry="off" must not call __prismFallback agPulseHost');
+      assert.equal(bridgeCalls, 0);
+      assert.equal(bindingCalls, 0);
+    }
+
+    // 5) Google R3 cooldown enforcement:
+    //    - 15s fail cooldown for non-force auto refresh
+    //    - 20s tab-switch cooldown for Quotas tab
+    //    - 5s manual button cooldown (while programmatic refreshLiveTelemetrySnapshot(true) bypasses UI button cooldown)
+    //    - in-flight deduplication without unthrottled follow-up retry in finally
+    {
+      let fakeNow = 100000;
+      Date.now = () => fakeNow;
+      try {
+        const { doc, home, storage } = makeQuotaDom();
+        let bridgeCalls = 0;
+        let pendingResolve = null;
+        globalThis.document = doc;
+        globalThis.localStorage = storage;
+        globalThis.window = {
+          __agPrismMetricsBridge: {
+            getMetrics: () => {
+              bridgeCalls += 1;
+              if (pendingResolve === 'HOLD') {
+                return new Promise((resolve) => { pendingResolve = resolve; });
+              }
+              return Promise.resolve({ connection: 'offline', groups: [] });
+            },
+          },
+        };
+        const ctl = makeCtl();
+        ctl.renderHomePanel(true);
+
+        // 5a) Auto refresh fail cooldown (15s)
+        await ctl.refreshLiveTelemetrySnapshot(false);
+        assert.equal(bridgeCalls, 1);
+        fakeNow += 14999;
+        await ctl.refreshLiveTelemetrySnapshot(false);
+        assert.equal(bridgeCalls, 1, 'Non-force refresh within 15s of empty/fail must be throttled');
+        fakeNow += 1;
+        await ctl.refreshLiveTelemetrySnapshot(false);
+        assert.equal(bridgeCalls, 2, 'Non-force refresh after 15s cooldown must proceed');
+
+        // 5b) Quotas tab-switch cooldown (20s)
+        home.querySelector('[data-tab="quotas"]').click();
+        await new Promise((r) => origSetTimeout(r, 15));
+        assert.equal(bridgeCalls, 3, 'First Quotas tab switch triggers one quotaRefresh');
+        fakeNow += 19999;
+        home.querySelector('[data-tab="overview"]').click();
+        home.querySelector('[data-tab="quotas"]').click();
+        await new Promise((r) => origSetTimeout(r, 15));
+        assert.equal(bridgeCalls, 3, 'Repeated Quotas tab switch within 20s must be throttled');
+        fakeNow += 1;
+        home.querySelector('[data-tab="overview"]').click();
+        home.querySelector('[data-tab="quotas"]').click();
+        await new Promise((r) => origSetTimeout(r, 15));
+        assert.equal(bridgeCalls, 4, 'Quotas tab switch after 20s cooldown may retry');
+
+        // 5c) Refresh button manual cooldown (5s)
+        const getRefreshBtn = () => home.querySelector('.ag-cs-quota-refresh');
+        getRefreshBtn().click();
+        await new Promise((r) => origSetTimeout(r, 15));
+        assert.equal(bridgeCalls, 5, 'First manual refresh button click proceeds');
+        fakeNow += 4999;
+        getRefreshBtn().click();
+        await new Promise((r) => origSetTimeout(r, 15));
+        assert.equal(bridgeCalls, 5, 'Rapid manual refresh button clicks within 5s must be throttled');
+        fakeNow += 1;
+        getRefreshBtn().click();
+        await new Promise((r) => origSetTimeout(r, 15));
+        assert.equal(bridgeCalls, 6, 'Manual refresh button after 5s cooldown proceeds');
+
+        // 5d) Direct programmatic refreshLiveTelemetrySnapshot(true) is NOT blocked by 5s UI button cooldown
+        await ctl.refreshLiveTelemetrySnapshot(true);
+        await ctl.refreshLiveTelemetrySnapshot(true);
+        assert.equal(bridgeCalls, 8, 'Programmatic refreshLiveTelemetrySnapshot(true) must bypass UI button cooldown');
+
+        // 5e) In-flight dedupe: concurrent force call during pending request must NOT fire unthrottled second request in finally
+        fakeNow += 16000;
+        pendingResolve = 'HOLD';
+        const p1 = ctl.refreshLiveTelemetrySnapshot(false);
+        const p2 = ctl.refreshLiveTelemetrySnapshot(true);
+        await new Promise((r) => origSetTimeout(r, 10));
+        assert.equal(bridgeCalls, 9);
+        assert.equal(typeof pendingResolve, 'function');
+        pendingResolve({ connection: 'offline', groups: [] });
+        pendingResolve = null;
+        await Promise.all([p1, p2]);
+        await new Promise((r) => origSetTimeout(r, 15));
+        assert.equal(bridgeCalls, 9, 'Must not fire unthrottled follow-up retry in finally after concurrent call');
+      } finally {
+        Date.now = origDateNow;
+      }
+    }
+
+    // 6a) inline-fallback.js: mRes updates lastSnap (preserving speed & conversations) and selects 10000ms / 4500ms timeout
+    {
+      const recordedTimeouts = [];
+      const sentPayloads = [];
+      const { doc } = makeQuotaDom();
+      const fakeWin = {
+        document: doc,
+        location: { pathname: '/' },
+        __agPrismMetricsCall: (payloadStr) => {
+          sentPayloads.push(JSON.parse(payloadStr));
+        },
+      };
+      const tel = inlineFallback.createTelemetryController({ window: fakeWin, document: doc });
+      globalThis.setTimeout = (fn, ms, ...rest) => {
+        recordedTimeouts.push(ms);
+        return origSetTimeout(fn, ms, ...rest);
+      };
+      try {
+        tel.sync({ telemetryModule: 'auto' });
+        assert.ok(fakeWin.__agPrismMetricsBridge && typeof fakeWin.__agPrismMetricsBridge.getMetrics === 'function');
+
+        // Normal request -> 4500ms timeout; resolves with live speed + conversations + groups
+        const pNormal = fakeWin.__agPrismMetricsBridge.getMetrics({ conversationId: null, force: false });
+        assert.equal(recordedTimeouts.at(-1), 4500, 'Normal reqSnap must use 4500ms timeout');
+        const id1 = sentPayloads.at(-1).id;
+        const speedObj = { model: 'Gemini 4 Carbon', tps: 52.3, rounds: 4 };
+        const convList = [{ id: '11111111-1111-1111-1111-111111111111', title: 'Chat A' }];
+        fakeWin.__agPrismMetricsResolve(id1, {
+          connection: 'live',
+          speed: speedObj,
+          conversations: convList,
+          groups: [liveGroups[0]],
+        });
+        await pNormal;
+        assert.equal(tel.getLatestSnapshot().groups.length, 1);
+        assert.deepEqual(tel.getLatestSnapshot().speed, speedObj);
+        assert.deepEqual(tel.getLatestSnapshot().conversations, convList);
+
+        // quotaRefresh request -> 10000ms timeout; resolves with groups only (speed: null, conversations: [])
+        const pQuota = fakeWin.__agPrismMetricsBridge.getMetrics({ conversationId: null, force: false, quotaRefresh: true, selectLatest: false });
+        assert.equal(recordedTimeouts.at(-1), 10000, 'quotaRefresh reqSnap must use 10000ms timeout');
+        const id2 = sentPayloads.at(-1).id;
+        fakeWin.__agPrismMetricsResolve(id2, {
+          connection: 'live',
+          speed: null,
+          conversations: [],
+          groups: liveGroups,
+        });
+        await pQuota;
+        assert.equal(tel.getLatestSnapshot().groups.length, 2, 'mRes must update lastSnap with live groups');
+        assert.deepEqual(tel.getLatestSnapshot().speed, speedObj, 'mRes must preserve lastSnap.speed when incoming speed is null');
+        assert.deepEqual(tel.getLatestSnapshot().conversations, convList, 'mRes must preserve lastSnap.conversations when incoming conversations is empty');
+
+        // force request -> 10000ms timeout; local-estimate / empty groups must NOT overwrite lastSnap
+        const pForce = fakeWin.__agPrismMetricsBridge.getMetrics({ conversationId: null, force: true });
+        assert.equal(recordedTimeouts.at(-1), 10000, 'force reqSnap must use 10000ms timeout');
+        const id3 = sentPayloads.at(-1).id;
+        fakeWin.__agPrismMetricsResolve(id3, { connection: 'local-estimate', speed: { model: 'est' }, groups: liveGroups });
+        await pForce;
+        assert.deepEqual(tel.getLatestSnapshot().speed, speedObj, 'local-estimate must not overwrite lastSnap');
+      } finally {
+        globalThis.setTimeout = origSetTimeout;
+        tel.destroy();
+      }
+    }
+
+    // 6b) PrismDaemon.ensureMetricsCollector forwards selectLatest:false & quotaRefresh:true, and defaults selectLatest:true
+    {
+      const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+      const tmpDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-daemon-quota-'));
+      try {
+        const daemon = new PrismDaemon({ rootDir: repoRoot, enableAutoUpdateTimer: false });
+        const rpcCalls = [];
+        const fakeClient = {
+          server: { port: 0, csrf: '', pid: 1, mode: 'renderer-proxy' },
+          setCdpPort() {},
+          async discover() { return this.server; },
+          async call(method, body) {
+            rpcCalls.push([method, body || null]);
+            if (method === 'GetUserStatus') return { userStatus: { email: 'dev@example.com' } };
+            if (method === 'RetrieveUserQuotaSummary') {
+              return {
+                response: {
+                  groups: [{
+                    displayName: 'Gemini Models',
+                    buckets: [{ bucketId: 'gemini-5h', window: '5h', remainingFraction: 0.77, resetTime: future5h }],
+                  }],
+                },
+              };
+            }
+            if (method === 'GetAllCascadeTrajectories') return { trajectorySummaries: {} };
+            throw new Error(`Unexpected RPC ${method}`);
+          },
+          dispose() {},
+        };
+        daemon._lazyStore = new MetricsStore(fakeClient, { dataDir: tmpDataDir });
+        const collector = await daemon.ensureMetricsCollector();
+
+        // selectLatest: false + quotaRefresh: true skips GetAllCascadeTrajectories and sends forceRefresh:true
+        const res = await collector({ conversationId: null, force: false, quotaRefresh: true, selectLatest: false });
+        assert.equal(res.connection, 'live');
+        assert.equal(res.groups.length, 1);
+        assert.equal(res.speed, null);
+        assert.deepEqual(rpcCalls.map(([m]) => m), ['GetUserStatus', 'RetrieveUserQuotaSummary']);
+        assert.deepEqual(rpcCalls[1][1], { forceRefresh: true });
+
+        // Default call (omitting selectLatest) preserves selectLatest:true and fetches summaries for conversation bar
+        rpcCalls.length = 0;
+        await collector({ conversationId: null, force: false });
+        assert.ok(
+          rpcCalls.some(([m]) => m === 'GetAllCascadeTrajectories'),
+          'Default ensureMetricsCollector call must preserve selectLatest:true'
+        );
+        daemon._lazyStore.dispose();
+      } finally {
+        fs.rmSync(tmpDataDir, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    Date.now = origDateNow;
+    globalThis.setTimeout = origSetTimeout;
+    if (prevWin === undefined) delete globalThis.window;
+    else globalThis.window = prevWin;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevStorage;
   }
 });
