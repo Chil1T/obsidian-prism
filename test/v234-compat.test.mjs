@@ -507,9 +507,17 @@ test('v2.34.0 Orchestrator patch: Claude planner shows Claude icon & tunable Orc
   assert.equal(trigInfo.brand, 'claude');
   assert.equal(trigInfo.camp, 'claude');
 
-  // 3) crystal-prism-core supports hideLock without adding new GLSL uniforms
+  // 3) crystal-prism-core supports hideLock + Scheme-A fillRatio split without adding new GLSL uniforms
   const cpSrc = fs.readFileSync(new URL('../crystal-prism-core.js', import.meta.url), 'utf8');
   assert.equal(cpSrc.includes('u_reduce < 1.5'), true);
+  assert.equal(cpSrc.includes('u_reduce > 1.5'), true);
   assert.equal(cpSrc.includes('if (!hideLock) drawLaserEtchedLock'), true);
+  assert.equal(cpSrc.includes('sliderFillRatio'), true);
+
+  // 4) style.css defines frosted crystal knob with compact 32px mouse-tracking prism rim & crisp detent ticks
+  const cssSrc = fs.readFileSync(new URL('../style.css', import.meta.url), 'utf8');
+  assert.equal(cssSrc.includes('32px circle at var(--knob-px'), true);
+  assert.equal(cssSrc.includes('.ces-tick.is-on'), true);
+  assert.equal(cssSrc.includes('.ces-knob-notch'), true);
 });
 

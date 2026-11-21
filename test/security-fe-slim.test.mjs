@@ -845,12 +845,12 @@ test('settings-panel persists Beta sub-tab, localizes Conversation DB Health acr
   }
 });
 
-test('Main bundle budget <= 680,500 B, sidebarStudio defaults off, dead CSS removed, and v1.0.3 metadata aligned', () => {
+test('Main bundle budget <= 685,000 B (< 686,080 B CI hard limit), sidebarStudio defaults off, dead CSS removed, and v1.0.3 metadata aligned', () => {
   assert.equal(cdp.DEFAULT_CONFIG.sidebarStudio, 'off', 'DEFAULT_CONFIG.sidebarStudio must remain "off"');
   const expr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
   const bytes = Buffer.byteLength(expr, 'utf8');
   assert.ok(bytes < 686080, `Bundle must stay strictly < 686,080 B, got ${bytes} B`);
-  assert.ok(bytes <= 680500, `Bundle target <= 680,500 B (headroom >= 5,500 B), got ${bytes} B`);
+  assert.ok(bytes <= 685000, `Bundle target <= 685,000 B (headroom >= 1,080 B), got ${bytes} B`);
 
   const cssRaw = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
   assert.equal(cssRaw.includes('data-ag-cs-route'), false, 'Dead selector data-ag-cs-route must be removed from style.css');

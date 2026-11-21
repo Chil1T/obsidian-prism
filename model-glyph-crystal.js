@@ -352,7 +352,16 @@
       }
     }
 
+    function detachSliderWake() {
+      if (crystalMount.wakeTrk && crystalMount.wakeFn) {
+        try { crystalMount.wakeTrk.removeEventListener('pointerdown', crystalMount.wakeFn); } catch {}
+      }
+      crystalMount.wakeTrk = null;
+      crystalMount.wakeFn = null;
+    }
+
     function clearSliderPrismOverlay(panel) {
+      detachSliderWake();
       if (!panel) return;
       panel.querySelectorAll('.ces-ag-effort-row[data-ag-orch-p]').forEach((row) => {
         row.removeAttribute('data-ag-orch-p');
@@ -360,11 +369,83 @@
         if (trk) {
           trk.classList.remove('ag-cs-orch-track');
           trk.querySelectorAll('canvas[data-orch-crystal-canvas="true"]').forEach((c) => c.remove());
+          const knob = trk.querySelector('.ces-knob');
+          if (knob) {
+            knob.style.removeProperty('--knob-px');
+            knob.style.removeProperty('--knob-py');
+          }
         }
       });
     }
 
+    function readTrackFillRatio(trk) {
+      if (!trk) return 1;
+      const w = trk.clientWidth || (typeof trk.getBoundingClientRect === 'function' ? trk.getBoundingClientRect().width : 0) || 220;
+      const raw = trk.style && typeof trk.style.getPropertyValue === 'function'
+        ? trk.style.getPropertyValue('--ces-fill').trim()
+        : '';
+      if (raw && w > 4) {
+        const mCalc = raw.match(/calc\(\s*([0-9.]+)px\s*\+\s*\(100%\s*-\s*([0-9.]+)px\)\s*\*\s*([0-9.eE+-]+)\s*\)/);
+        if (mCalc) {
+          const r = parseFloat(mCalc[1]);
+          const span = parseFloat(mCalc[2]);
+          const p = parseFloat(mCalc[3]);
+          if (Number.isFinite(r) && Number.isFinite(span) && Number.isFinite(p)) {
+            return Math.max(0, Math.min(1, (r + (w - span) * p) / w));
+          }
+        }
+        const px = parseFloat(raw);
+        if (Number.isFinite(px)) return Math.max(0, Math.min(1, px / w));
+      }
+      const knob = typeof trk.querySelector === 'function' ? trk.querySelector('.ces-knob') : null;
+      if (knob && typeof knob.offsetLeft === 'number' && knob.offsetLeft > 0 && w > 4) {
+        return Math.max(0, Math.min(1, knob.offsetLeft / w));
+      }
+      if (typeof trk.getAttribute === 'function' && w > 4) {
+        const maxV = parseFloat(trk.getAttribute('aria-valuemax'));
+        const nowV = parseFloat(trk.getAttribute('aria-valuenow'));
+        if (Number.isFinite(maxV) && maxV > 0 && Number.isFinite(nowV)) {
+          return Math.max(0, Math.min(1, (14 + (w - 28) * (nowV / maxV)) / w));
+        }
+      }
+      return 1;
+    }
+
+    let knobPrismHot = false;
+    function syncKnobPrismPointer(clientX, clientY) {
+      const trk = crystalMount.hideLock ? crystalMount.track : null;
+      const knob = trk && trk.isConnected !== false ? trk.querySelector('.ces-knob') : null;
+      if (!knob) {
+        knobPrismHot = false;
+        return;
+      }
+      const off = motionReduced() || readRootAmbientFloat() <= 0.001 || !(clientX > -1000 && clientY > -1000);
+      if (off) {
+        if (knobPrismHot) {
+          knob.style.setProperty('--knob-px', '-9999px');
+          knob.style.setProperty('--knob-py', '-9999px');
+          knobPrismHot = false;
+        }
+        return;
+      }
+      const rect = typeof knob.getBoundingClientRect === 'function' ? knob.getBoundingClientRect() : null;
+      if (!rect || rect.width < 4) return;
+      const lx = clientX - rect.left;
+      const ly = clientY - rect.top;
+      const dist = Math.hypot(lx - rect.width * 0.5, ly - rect.height * 0.5);
+      if (dist <= 56) {
+        knob.style.setProperty('--knob-px', `${lx.toFixed(1)}px`);
+        knob.style.setProperty('--knob-py', `${ly.toFixed(1)}px`);
+        knobPrismHot = true;
+      } else if (knobPrismHot) {
+        knob.style.setProperty('--knob-px', '-9999px');
+        knob.style.setProperty('--knob-py', '-9999px');
+        knobPrismHot = false;
+      }
+    }
+
     function teardownCrystalMount() {
+      detachSliderWake();
       if (crystalMount.rafId) {
         cancelAnimationFrame(crystalMount.rafId);
         crystalMount.rafId = 0;
@@ -430,11 +511,13 @@
       }
       const dt = crystalMount.lastStepMs > 0 ? Math.min(0.05, Math.max(0.002, (now - crystalMount.lastStepMs) / 1000)) : 0.016;
       crystalMount.lastStepMs = now;
+      const ptrNow = getLastPointerPos ? getLastPointerPos() : null;
+      if (ptrNow) syncKnobPrismPointer(ptrNow.x, ptrNow.y);
       try {
         crystalMount.inst.step(dt);
       } catch {}
       const instIdle = typeof crystalMount.inst.isIdle === 'function' && Boolean(crystalMount.inst.isIdle());
-      if (!instIdle && !motionReduced() && !document.hidden) {
+      if (!instIdle && !document.hidden) {
         crystalMount.rafId = requestAnimationFrame(stepCrystalLoop);
       }
     }
@@ -531,6 +614,19 @@
         }
         tTrk = sTrk;
         tCv = c;
+        if (crystalMount.wakeTrk !== sTrk) {
+          detachSliderWake();
+          const onWake = (ev) => {
+            if (ev && typeof ev.clientX === 'number') syncKnobPrismPointer(ev.clientX, ev.clientY);
+            if (!crystalMount.rafId && crystalMount.inst && !document.hidden) {
+              crystalMount.lastStepMs = performance.now();
+              crystalMount.rafId = requestAnimationFrame(stepCrystalLoop);
+            }
+          };
+          try { sTrk.addEventListener('pointerdown', onWake, { passive: true }); } catch {}
+          crystalMount.wakeTrk = sTrk;
+          crystalMount.wakeFn = onWake;
+        }
       } else {
         clearSliderPrismOverlay(panel);
       }
@@ -584,6 +680,7 @@
                   accentTone: resolveCrystalAccentMode(dark),
                   reduceMotion: motionReduced(),
                   hideLock: Boolean(crystalMount.hideLock),
+                  fillRatio: crystalMount.hideLock ? readTrackFillRatio(crystalMount.track) : -1,
                 };
               },
             });
@@ -598,6 +695,9 @@
           const ptr = getLastPointerPos ? getLastPointerPos() : null;
           if (ptr && ptr.x > -1000) {
             crystalMount.inst.setPointerClient(ptr.x, ptr.y);
+            syncKnobPrismPointer(ptr.x, ptr.y);
+          } else {
+            syncKnobPrismPointer(-9999, -9999);
           }
           if (switchedIn) {
             crystalMount.mountedAt = performance.now();
@@ -608,17 +708,15 @@
           try {
             crystalMount.inst.step(0.016);
           } catch {}
-          if (reducedNow || ambientNow <= 0.001) {
+          const instIdle = typeof crystalMount.inst.isIdle === 'function' && Boolean(crystalMount.inst.isIdle());
+          if (instIdle || document.hidden) {
             if (crystalMount.rafId) {
               cancelAnimationFrame(crystalMount.rafId);
               crystalMount.rafId = 0;
             }
           } else if (!crystalMount.rafId) {
-            const instIdle = typeof crystalMount.inst.isIdle === 'function' && Boolean(crystalMount.inst.isIdle());
-            if (!instIdle) {
-              crystalMount.lastStepMs = performance.now();
-              crystalMount.rafId = requestAnimationFrame(stepCrystalLoop);
-            }
+            crystalMount.lastStepMs = performance.now();
+            crystalMount.rafId = requestAnimationFrame(stepCrystalLoop);
           }
         }
       } else if (crystalMount.rafId) {
@@ -642,6 +740,7 @@
       getActiveCrystalTrack: () =>
         crystalMount.track && crystalMount.wasOrch && crystalMount.track.isConnected !== false ? crystalMount.track : null,
       setCrystalPointerClient: (x, y) => {
+        syncKnobPrismPointer(x, y);
         if (crystalMount.inst && typeof crystalMount.inst.setPointerClient === 'function') {
           crystalMount.inst.setPointerClient(x, y);
           if (

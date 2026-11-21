@@ -443,6 +443,66 @@ void main() {
     col = mix(col, vec3(0.47, 0.52, 0.59), tiLine * 0.88);
   }
 
+  // ── 9. 可调滑块模式：右侧凹陷「晶床原胚 + 轻液态母液」 × 左侧长出的高光泽切割水晶 ──
+  if (u_reduce > 1.5) {
+    float fillU = clamp(u_reduce > 3.5 ? (u_reduce - 4.0) : (u_reduce - 2.0), 0.0, 1.0);
+    float actMask = 1.0 - smoothstep(fillU - 0.012, fillU + 0.012, vUv.x);
+    vec3 specTint = u_accent > 4.5
+      ? vec3(0.90, 0.95, 1.0)
+      : cauchySpectrum(clamp(vUv.x * 0.82 + 0.08, 0.0, 1.0), u_accent);
+
+    // 右侧未激活段：凹陷晶床原胚底槽（非纯黑）+ 轻微类液体待结晶母液流动
+    float topShadow = smoothstep(0.14, 0.96, yN);
+    float wallShadow = 1.0 - smoothstep(0.0, 5.2, rimD);
+    float botBevel = exp(-pow((yN + 0.86) / 0.14, 2.0));
+    float knobCast = exp(-pow(max(0.0, vUv.x - fillU) / 0.065, 2.0));
+    float bedWire = (1.0 - smoothstep(0.0, 1.15 + aaPx, pxD)) * (0.30 + 0.50 * edgeGain);
+    float tLiq = u_reduce > 3.5 ? 0.0 : u_time * 0.65;
+    float w1 = sin(px.x * 0.056 - tLiq * 1.15 + sin(px.y * 0.16 + tLiq * 0.72) * 1.35);
+    float w2 = sin(px.x * 0.094 + px.y * 0.13 + tLiq * 0.84 + h1 * 1.5);
+    float liqFlow = 0.5 + 0.5 * (w1 * 0.58 + w2 * 0.42);
+    float liqCaustic = pow(clamp(liqFlow, 0.0, 1.0), 2.8);
+    float liqBand = exp(-pow((yN + 0.10 - 0.16 * sin(px.x * 0.044 - tLiq)) / 0.48, 2.0));
+    float liqAmp = (0.32 + 0.68 * u_ambient);
+    vec3 liqTint = mix(vec3(0.36, 0.52, 0.82), specTint, u_accent > 4.5 ? 0.15 : 0.42);
+    vec3 grooveCol;
+    if (isDark > 0.5) {
+      // 深冷岩曜石凹槽（保留透气蓝灰基调，告别死黑）+ 晶床原胚斜切微刻痕
+      grooveCol = mix(vec3(0.092, 0.108, 0.152), vec3(0.040, 0.048, 0.072), topShadow * 0.86);
+      grooveCol += vec3(0.030, 0.036, 0.054) * (h1 - 0.5);
+      grooveCol += vec3(0.28, 0.36, 0.52) * bedWire * (0.20 + 0.24 * liqFlow) * (1.0 - topShadow * 0.45);
+      // 轻柔慢流的类液体待结晶母液光晕 + 凹槽下唇倒角微光
+      grooveCol += liqTint * (liqCaustic * 0.22 + liqFlow * 0.07) * liqBand * liqAmp;
+      grooveCol *= 1.0 - wallShadow * 0.48;
+      grooveCol *= 1.0 - knobCast * 0.52;
+      grooveCol += vec3(0.28, 0.35, 0.48) * botBevel * 0.24 * (1.0 - knobCast * 0.68);
+    } else {
+      grooveCol = mix(vec3(0.75, 0.79, 0.87), vec3(0.58, 0.64, 0.74), topShadow * 0.78);
+      grooveCol += vec3(0.035) * (h1 - 0.5);
+      grooveCol -= vec3(0.10, 0.12, 0.16) * bedWire * 0.24;
+      grooveCol += mix(vec3(0.88, 0.94, 1.0), liqTint, 0.35) * liqCaustic * liqBand * 0.18 * liqAmp;
+      grooveCol *= 1.0 - wallShadow * 0.20;
+      grooveCol *= 1.0 - knobCast * 0.24;
+      grooveCol += vec3(1.0) * botBevel * 0.28;
+    }
+
+    // 左侧已激活段：凸起长出的高光泽切割水晶（立体切面 + 锐利玻璃高光丝 + 充能光谱）
+    float eBoost = 0.25 + 0.75 * fillU;
+    float glossMul = isDark > 0.5 ? 1.0 : 0.72;
+    vec3 actCol = pow(max(col, vec3(0.0)), vec3(1.06)) * (isDark > 0.5 ? 1.08 : 1.02);
+    float topBroad = exp(-pow((yN - 0.52 - N.x * 0.14) / 0.14, 2.0));
+    float topKnife = exp(-pow((yN - 0.65 - N.x * 0.07) / 0.036, 2.0));
+    float botBounce = exp(-pow((yN + 0.72 - N.x * 0.06) / 0.085, 2.0));
+    actCol += vec3(0.96, 0.985, 1.0) * (topBroad * 0.14 + topKnife * 0.38) * glossMul;
+    actCol += mix(vec3(0.72, 0.86, 1.0), specTint, 0.50) * botBounce * 0.26 * eBoost * glossMul;
+    actCol += vec3(0.98, 0.99, 1.0) * blade * ridgeSpec * edgeGain * (isDark > 0.5 ? 0.68 : 0.44);
+    actCol += specTint * (0.10 + 0.16 * eBoost) * (0.40 + 0.60 * crown) * (0.35 + 0.65 * u_ambient) * glossMul;
+    float seam = exp(-pow(max(0.0, fillU - vUv.x) / 0.07, 2.0)) * actMask;
+    actCol += mix(vec3(0.90, 0.96, 1.0), specTint, 0.42) * seam * (isDark > 0.5 ? 0.26 : 0.16);
+
+    col = mix(grooveCol, actCol, actMask);
+  }
+
   // Reinhard 色调映射（压缩系数 0.12，保住高光峰值）
   col = max(col, vec3(0.0));
   col = col / (1.0 + col * 0.12);
@@ -513,7 +573,7 @@ void main() {
   /**
    * 2D 降级切面绘制（无 WebGL2 时）：更少更大的斜切长切面 + 全局明暗梯度 + 仅朝光棱亮起。
    */
-  function drawFallback2D(ctx, cssW, cssH, isDark, pointerLocal, proximityFactor, glintIntensities, wakeU, wakeAmp, accentCode = 0, ambientScale = 1) {
+  function drawFallback2D(ctx, cssW, cssH, isDark, pointerLocal, proximityFactor, glintIntensities, wakeU, wakeAmp, accentCode = 0, ambientScale = 1, sliderFillRatio = -1) {
     const r = cssH * 0.5;
     ctx.save();
     ctx.beginPath();
@@ -681,6 +741,35 @@ void main() {
       ctx.restore();
     }
 
+    // 2D 降级滑块分区：右侧凹陷暗色空槽 × 左侧顶部镜面高光水晶
+    if (sliderFillRatio >= 0) {
+      const splitX = clamp(sliderFillRatio, 0, 1) * cssW;
+      if (splitX < cssW) {
+        const gr = ctx.createLinearGradient(0, 0, 0, cssH);
+        if (isDark) {
+          gr.addColorStop(0, '#07090f');
+          gr.addColorStop(0.45, '#10141f');
+          gr.addColorStop(0.92, '#141a28');
+          gr.addColorStop(1, '#263046');
+        } else {
+          gr.addColorStop(0, '#96a2b6');
+          gr.addColorStop(0.55, '#bcc6d6');
+          gr.addColorStop(1, '#e4eaf4');
+        }
+        ctx.fillStyle = gr;
+        ctx.fillRect(splitX, 0, cssW - splitX, cssH);
+      }
+      if (splitX > 1) {
+        const gloss = ctx.createLinearGradient(0, 0, 0, cssH);
+        gloss.addColorStop(0, 'rgba(255, 255, 255, 0.10)');
+        gloss.addColorStop(0.22, isDark ? 'rgba(255, 255, 255, 0.42)' : 'rgba(255, 255, 255, 0.34)');
+        gloss.addColorStop(0.42, 'rgba(255, 255, 255, 0.03)');
+        gloss.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = gloss;
+        ctx.fillRect(0, 0, splitX, cssH);
+      }
+    }
+
     // 外缘：暗色主题朝光亮缘，Light 主题 0.8px 冷钛灰棱线
     ctx.beginPath();
     ctx.roundRect(0.4, 0.4, cssW - 0.8, cssH - 0.8, r - 0.4);
@@ -724,6 +813,10 @@ void main() {
     let lastDrawAmbient = -1;
     let lastDrawReduce = null;
     let lastDrawHideLock = null;
+    let lastDrawFillRatio = -1;
+    let fillSettleSec = 0;
+    let liquidAccumSec = 0;
+    let wasLiquidFlow = false;
     let wasProximityActive = false;
     let wasGlintActive = false;
     let wasWaking = false;
@@ -892,6 +985,13 @@ void main() {
       }
       const isDark = st.isDark !== false;
       const hideLock = Boolean(st.hideLock);
+      const fillRatio = hideLock ? clamp(Number(st.fillRatio ?? 1), 0, 1) : -1;
+      const fillChanged = Math.abs(fillRatio - lastDrawFillRatio) > 0.0008;
+      if (fillChanged && hasDrawnFrame) {
+        fillSettleSec = 0.24;
+      } else if (fillSettleSec > 0) {
+        fillSettleSec = Math.max(0, fillSettleSec - dt);
+      }
       const ambientVal = clamp(Number(st.ambientIntensity ?? 1), 0, 1);
       const prismStrengthVal = clamp(readPrismStrength(st) * ambientVal, 0, 1);
       const accentCode = resolveCrystalAccentCode(st.accentTone ?? st.spectrum ?? 'default');
@@ -959,7 +1059,10 @@ void main() {
         if (gd > maxGlintDelta) maxGlintDelta = gd;
       }
       glintAccumSec += dt;
+      liquidAccumSec += dt;
       const proximityActive = currentProximity > 0.001;
+      const liquidFlowActive = hideLock && !reduceMotion && ambientVal > 0.001 && fillRatio >= 0 && fillRatio < 0.985;
+      const liquidDirty = liquidFlowActive && liquidAccumSec >= 0.036;
       const glintVisible = !glintMotionOff && maxGlint > 0.015;
       const glintDirty =
         !glintMotionOff &&
@@ -976,6 +1079,7 @@ void main() {
         accentCode !== lastDrawAccent ||
         reduceMotion !== lastDrawReduce ||
         hideLock !== lastDrawHideLock ||
+        fillChanged ||
         Math.abs(ambientVal - lastDrawAmbient) > 0.002 ||
         Math.abs(prismStrengthVal - lastDrawStrength) > 0.002;
 
@@ -984,6 +1088,7 @@ void main() {
         proximityActive ||
         wasProximityActive ||
         glintDirty ||
+        liquidDirty ||
         wakingNow ||
         wasWaking;
 
@@ -1015,7 +1120,7 @@ void main() {
           gl.uniform2f(u.pointer, -9999, -9999);
         }
         gl.uniform1f(u.proximity, currentProximity);
-        gl.uniform1f(u.reduce, (reduceMotion ? 1.0 : 0.0) + (hideLock ? 2.0 : 0.0));
+        gl.uniform1f(u.reduce, hideLock ? (reduceMotion ? 4.0 : 2.0) + fillRatio : (reduceMotion ? 1.0 : 0.0));
         gl.uniform4f(u.glints, glintBuf[0], glintBuf[1], glintBuf[2], glintBuf[3]);
         gl.uniform4f(u.glintU, GLINT_ANCHORS[0].u, GLINT_ANCHORS[1].u, GLINT_ANCHORS[2].u, GLINT_ANCHORS[3].u);
         gl.uniform4f(u.glintV, GLINT_ANCHORS[0].v, GLINT_ANCHORS[1].v, GLINT_ANCHORS[2].v, GLINT_ANCHORS[3].v);
@@ -1028,7 +1133,7 @@ void main() {
         ctx2d.clearRect(0, 0, cssW, cssH);
         const localCorner =
           pointerLocalX > -2000 ? { x: pointerLocalX, y: pointerLocalY } : { x: -9999, y: -9999 };
-        drawFallback2D(ctx2d, cssW, cssH, isDark, localCorner, currentProximity, glintBuf, wakeU, wakeAmp, accentCode, ambientVal);
+        drawFallback2D(ctx2d, cssW, cssH, isDark, localCorner, currentProximity, glintBuf, wakeU, wakeAmp, accentCode, ambientVal, fillRatio);
         if (!hideLock) drawLaserEtchedLock(ctx2d, cssW, cssH, isDark, currentProximity);
       }
 
@@ -1042,18 +1147,22 @@ void main() {
       lastDrawAmbient = ambientVal;
       lastDrawReduce = reduceMotion;
       lastDrawHideLock = hideLock;
+      lastDrawFillRatio = fillRatio;
       wasProximityActive = proximityActive;
       wasGlintActive = glintVisible;
+      wasLiquidFlow = liquidFlowActive;
       wasWaking = wakingNow;
       glintAccumSec = 0;
+      liquidAccumSec = 0;
       for (let i = 0; i < 4; i++) lastDrawnGlint[i] = glintBuf[i];
       drawCount += 1;
       return true;
     };
 
     const isIdle = () => {
-      if (!hasDrawnFrame || wakeT >= 0 || currentProximity > 0.001 || targetProximity > 0.001) return false;
+      if (!hasDrawnFrame || wakeT >= 0 || fillSettleSec > 0 || currentProximity > 0.001 || targetProximity > 0.001) return false;
       if (reduceMotion || lastDrawAmbient === 0) return true;
+      if (wasLiquidFlow) return false;
       fillGlintIntensities(elapsedTime, false, glintBuf);
       return Math.max(glintBuf[0], glintBuf[1], glintBuf[2], glintBuf[3]) <= 0.015;
     };
