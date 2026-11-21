@@ -29,7 +29,23 @@ const {
   shouldEnableHostI18n,
   buildHostI18nExpression,
   HOST_I18N_REMOVE_EXPRESSION,
+  shouldEnableThought,
+  buildThoughtExpression,
+  THOUGHT_REMOVE_EXPRESSION,
 } = require('./cdp');
+
+const FALLBACK_THOUGHT_REMOVE_EXPRESSION =
+  "(() => { try { window.__agPrismThought?.destroy?.(); } catch {} try { document.querySelectorAll('[data-testid=\"prism-thought-ai-config\"]').forEach((n) => n.remove()); } catch {} try { delete window.__agPrismThought; } catch {} try { delete globalThis.__agPrismThought; } catch {} try { delete window.__agPrismThoughtSettingsUi; } catch {} try { delete globalThis.__agPrismThoughtSettingsUi; } catch {} return { ok: true, status: 'off' }; })()";
+
+function isThoughtEnabledForConfig(cfg, checker = shouldEnableThought) {
+  try {
+    if (typeof checker === 'function') return Boolean(checker(cfg));
+    const mode = typeof cfg?.thoughtTranslate === 'string' ? cfg.thoughtTranslate.trim().toLowerCase() : 'off';
+    return Boolean(mode && mode !== 'off');
+  } catch {
+    return false;
+  }
+}
 
 const WATCH = process.argv.includes('--watch');
 const LOG_FILE = path.join(__dirname, 'watch.log');
@@ -111,9 +127,15 @@ async function injectOnce() {
     typeof buildHostI18nExpression === 'function'
       ? buildHostI18nExpression()
       : '';
+  const thoughtCfg = typeof readConfig === 'function' ? readConfig() : {};
+  const thoughtExpr =
+    isThoughtEnabledForConfig(thoughtCfg) && typeof buildThoughtExpression === 'function'
+      ? buildThoughtExpression(thoughtCfg)
+      : '';
   for (const page of targets) {
-    const session = await CdpSession.connect(page.webSocketDebuggerUrl);
+    let session = null;
     try {
+      session = await CdpSession.connect(page.webSocketDebuggerUrl);
       const res = await session.evaluate(expr);
       if (omniExpr) {
         await session.evaluate(omniExpr).catch(() => {});
@@ -126,9 +148,16 @@ async function injectOnce() {
       } else if (HOST_I18N_REMOVE_EXPRESSION) {
         await session.evaluate(HOST_I18N_REMOVE_EXPRESSION).catch(() => {});
       }
+      if (thoughtExpr) {
+        await session.evaluate(thoughtExpr).catch(() => {});
+      } else if (THOUGHT_REMOVE_EXPRESSION) {
+        await session.evaluate(THOUGHT_REMOVE_EXPRESSION).catch(() => {});
+      }
       log(`[✓] ${shortTitle(page)} (obsidian-prism ${res.version} · 状态: ${res.status})`);
+    } catch (err) {
+      log(`[!] 跳过异常窗口 ${shortTitle(page)}: ${err.message}`);
     } finally {
-      session.close();
+      if (session) session.close();
     }
   }
 }
@@ -240,23 +269,46 @@ async function watch() {
     typeof buildHostI18nExpression === 'function'
       ? buildHostI18nExpression()
       : '';
+  let activeShouldEnableThought = shouldEnableThought;
+  let activeBuildThoughtExpression = buildThoughtExpression;
+  let activeThoughtRemoveExpression = THOUGHT_REMOVE_EXPRESSION || FALLBACK_THOUGHT_REMOVE_EXPRESSION;
+  let thoughtExpr = (() => {
+    const cfg = readConfig();
+    return isThoughtEnabledForConfig(cfg, activeShouldEnableThought) && typeof activeBuildThoughtExpression === 'function'
+      ? activeBuildThoughtExpression(cfg)
+      : '';
+  })();
 
   let selfConfigWriteUntil = 0;
 
   function isTrustedMainFrameContext(entry, executionContextId) {
-    if (!entry) return false;
-    const hasCtxId = typeof executionContextId === 'number';
-    if (hasCtxId && entry.contextFrames && entry.contextFrames.has(executionContextId)) {
-      const meta = entry.contextFrames.get(executionContextId);
-      if (!meta.isDefault || (meta.type && meta.type !== 'default')) return false;
-      if (entry.mainFrameId && meta.frameId && meta.frameId !== entry.mainFrameId) return false;
-      return true;
+    if (!entry || typeof executionContextId !== 'number') return false;
+    if (!entry.hasFrameTree || !entry.mainFrameId || !entry.contextFrames || !entry.contextFrames.has(executionContextId)) {
+      return false;
     }
-    if (entry.hasFrameTree) {
-      if (!hasCtxId) return false;
-      if (entry.contextFrames && entry.contextFrames.size > 0) return false;
-    }
+    const meta = entry.contextFrames.get(executionContextId);
+    if (!meta || !meta.isDefault || (meta.type && meta.type !== 'default')) return false;
+    if (!meta.frameId || meta.frameId !== entry.mainFrameId) return false;
     return true;
+  }
+
+  async function ensureSidebarBinding(session, entry, cfg = readConfig()) {
+    if (!SIDEBAR_BINDING || !session || session.closed || !entry) return false;
+    if (cfg?.sidebarStudio !== 'on') return false;
+    if (entry.sidebarBindingAdded) return true;
+    if (entry.sidebarBindingPending) return entry.sidebarBindingPending;
+    const pending = session
+      .send('Runtime.addBinding', { name: SIDEBAR_BINDING })
+      .then(() => {
+        entry.sidebarBindingAdded = true;
+        return true;
+      })
+      .catch(() => false)
+      .finally(() => {
+        if (entry.sidebarBindingPending === pending) entry.sidebarBindingPending = null;
+      });
+    entry.sidebarBindingPending = pending;
+    return pending;
   }
 
   async function broadcastFastConfigRefresh() {
@@ -283,11 +335,17 @@ async function watch() {
       hostI18nEnabled && typeof buildHostI18nExpression === 'function'
         ? buildHostI18nExpression(cfgNow)
         : '';
+    const thoughtEnabled = isThoughtEnabledForConfig(cfgNow, activeShouldEnableThought);
+    thoughtExpr =
+      thoughtEnabled && typeof activeBuildThoughtExpression === 'function'
+        ? activeBuildThoughtExpression(cfgNow)
+        : '';
     const canFastRefresh = typeof buildConfigRefreshExpression === 'function';
     const baseRefreshExpr = canFastRefresh ? buildConfigRefreshExpression() : null;
     for (const entry of attached.values()) {
       if (!entry || entry.session.closed) continue;
       try {
+        await ensureSidebarBinding(entry.session, entry, cfgNow);
         const entryAck = perEntryAck.get(entry) || 0;
         const refreshExpr =
           canFastRefresh && entryAck > 0
@@ -301,6 +359,13 @@ async function watch() {
             if (!fast.skippedStale) {
               if (hostI18nExpr && hostI18nEnabled) await entry.session.evaluate(hostI18nExpr).catch(() => {});
               else if (HOST_I18N_REMOVE_EXPRESSION) await entry.session.evaluate(HOST_I18N_REMOVE_EXPRESSION).catch(() => {});
+              if (thoughtExpr && thoughtEnabled) {
+                const thRes = await entry.session.evaluate(thoughtExpr).catch(() => null);
+                if (thRes && thRes.ok) entry.thoughtMounted = true;
+              } else if (entry.thoughtScriptId || entry.thoughtMounted) {
+                if (activeThoughtRemoveExpression) await entry.session.evaluate(activeThoughtRemoveExpression).catch(() => {});
+                entry.thoughtMounted = false;
+              }
             }
           } else {
             await entry.session.evaluate(expr).catch(() => {});
@@ -308,6 +373,13 @@ async function watch() {
             if (sidebarExpr) await entry.session.evaluate(sidebarExpr).catch(() => {});
             if (hostI18nExpr && hostI18nEnabled) await entry.session.evaluate(hostI18nExpr).catch(() => {});
             else if (HOST_I18N_REMOVE_EXPRESSION) await entry.session.evaluate(HOST_I18N_REMOVE_EXPRESSION).catch(() => {});
+            if (thoughtExpr && thoughtEnabled) {
+              const thRes = await entry.session.evaluate(thoughtExpr).catch(() => null);
+              if (thRes && thRes.ok) entry.thoughtMounted = true;
+            } else if (entry.thoughtScriptId || entry.thoughtMounted) {
+              if (activeThoughtRemoveExpression) await entry.session.evaluate(activeThoughtRemoveExpression).catch(() => {});
+              entry.thoughtMounted = false;
+            }
           }
         }
         if (entry.scriptId) {
@@ -337,6 +409,14 @@ async function watch() {
         if (hostI18nExpr && hostI18nEnabled) {
           const hiAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: hostI18nExpr }).catch(() => null);
           entry.hostI18nScriptId = hiAdd && hiAdd.identifier ? hiAdd.identifier : null;
+        }
+        if (entry.thoughtScriptId) {
+          await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId }).catch(() => {});
+          entry.thoughtScriptId = null;
+        }
+        if (thoughtExpr && thoughtEnabled) {
+          const thAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: thoughtExpr }).catch(() => null);
+          entry.thoughtScriptId = thAdd && thAdd.identifier ? thAdd.identifier : null;
         }
       } catch {}
     }
@@ -376,8 +456,10 @@ async function watch() {
         .catch(() => {});
       entry.sidebarScriptId = null;
     }
+    const cfgNow = readConfig();
+    const sidebarEnabled = cfgNow?.sidebarStudio === 'on';
+    await ensureSidebarBinding(entry.session, entry, cfgNow);
     if (sidebarExpr) {
-      const sidebarEnabled = readConfig()?.sidebarStudio === 'on';
       if (sidebarEnabled) {
         const sbAdd = await entry.session
           .send('Page.addScriptToEvaluateOnNewDocument', { source: sidebarExpr })
@@ -401,6 +483,27 @@ async function watch() {
     } else if (HOST_I18N_REMOVE_EXPRESSION) {
       await entry.session.evaluate(HOST_I18N_REMOVE_EXPRESSION).catch(() => {});
     }
+    const hadThought = Boolean(entry.thoughtScriptId || entry.thoughtMounted);
+    if (entry.thoughtScriptId) {
+      await entry.session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId })
+        .catch(() => {});
+      entry.thoughtScriptId = null;
+    }
+    const thoughtEnabledNow = isThoughtEnabledForConfig(readConfig(), activeShouldEnableThought);
+    if (thoughtExpr && thoughtEnabledNow) {
+      const thAdd = await entry.session
+        .send('Page.addScriptToEvaluateOnNewDocument', { source: thoughtExpr })
+        .catch(() => null);
+      if (thAdd && thAdd.identifier) entry.thoughtScriptId = thAdd.identifier;
+      const thRes = await entry.session.evaluate(thoughtExpr).catch(() => null);
+      entry.thoughtMounted = Boolean(thRes && thRes.ok);
+    } else {
+      if (hadThought && activeThoughtRemoveExpression) {
+        await entry.session.evaluate(activeThoughtRemoveExpression).catch(() => {});
+      }
+      entry.thoughtMounted = false;
+    }
     return res;
   }
 
@@ -414,7 +517,11 @@ async function watch() {
         scriptId: null,
         omniScriptId: null,
         sidebarScriptId: null,
+        sidebarBindingAdded: false,
+        sidebarBindingPending: null,
         hostI18nScriptId: null,
+        thoughtScriptId: null,
+        thoughtMounted: false,
         mainFrameId: null,
         hasFrameTree: false,
         sidebarHostVerified: false,
@@ -432,7 +539,7 @@ async function watch() {
         const aux = ctx.auxData && typeof ctx.auxData === 'object' ? ctx.auxData : {};
         entry.contextFrames.set(ctx.id, {
           frameId: typeof aux.frameId === 'string' ? aux.frameId : '',
-          isDefault: aux.isDefault !== false,
+          isDefault: aux.isDefault === true,
           type: typeof aux.type === 'string' ? aux.type : 'default',
         });
       });
@@ -575,9 +682,7 @@ async function watch() {
       if (OMNI_BINDING) {
         await session.send('Runtime.addBinding', { name: OMNI_BINDING }).catch(() => {});
       }
-      if (SIDEBAR_BINDING) {
-        await session.send('Runtime.addBinding', { name: SIDEBAR_BINDING }).catch(() => {});
-      }
+      await ensureSidebarBinding(session, entry, readConfig());
       const res = await apply(entry);
       log(`[✓] 已注入 obsidian-prism: ${shortTitle(page)} (${res.status})`);
     } catch (err) {
@@ -588,6 +693,7 @@ async function watch() {
           if (entry.omniScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId });
           if (entry.sidebarScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId });
           if (entry.hostI18nScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId });
+          if (entry.thoughtScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId });
         } catch {}
         entry.session.close();
       }
@@ -644,6 +750,14 @@ async function watch() {
           typeof freshCdp.buildHostI18nExpression === 'function'
             ? freshCdp.buildHostI18nExpression()
             : '';
+        activeShouldEnableThought = freshCdp.shouldEnableThought;
+        activeBuildThoughtExpression = freshCdp.buildThoughtExpression;
+        activeThoughtRemoveExpression = freshCdp.THOUGHT_REMOVE_EXPRESSION || FALLBACK_THOUGHT_REMOVE_EXPRESSION;
+        const freshCfg = typeof freshCdp.readConfig === 'function' ? freshCdp.readConfig() : readConfig();
+        thoughtExpr =
+          isThoughtEnabledForConfig(freshCfg, activeShouldEnableThought) && typeof activeBuildThoughtExpression === 'function'
+            ? activeBuildThoughtExpression(freshCfg)
+            : '';
       } catch (err) {
         log(`[!] 读取文件失败: ${err.message}`);
         return;
@@ -673,7 +787,14 @@ async function watch() {
   setInterval(tick, 2000);
 }
 
-(WATCH ? watch() : injectOnce()).catch((err) => {
-  console.error(`[✗] ${err.message}`);
-  process.exit(1);
-});
+module.exports = {
+  injectOnce,
+  watch,
+};
+
+if (require.main === module) {
+  (WATCH ? watch() : injectOnce()).catch((err) => {
+    console.error(`[✗] ${err.message}`);
+    process.exit(1);
+  });
+}

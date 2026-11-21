@@ -23,6 +23,7 @@
   "sidebar": "on",
   "sidebarCompact": false,
   "smoothCaret": true,
+  "contextMenu": true,
   "accentTone": "follow",
   "cornerStyle": "balanced",
   "codeFont": "default",

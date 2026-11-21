@@ -1,5 +1,6 @@
 // Chrome DevTools Protocol (CDP) & zero-dependency bundle compiler for Obsidian Prism (obsidian-prism).
 // Node >= 22: uses built-in fetch and WebSocket (zero external dependencies).
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -50,6 +51,7 @@ const DEFAULT_CONFIG = {
   sidebar: 'on',
   sidebarCompact: false,
   smoothCaret: true,
+  contextMenu: true,
   accentTone: 'follow',
   cornerStyle: 'balanced',
   codeFont: 'default',
@@ -90,6 +92,7 @@ const VALIDATORS = {
   sidebar: ['on', 'off'],
   sidebarCompact: 'boolean',
   smoothCaret: 'boolean',
+  contextMenu: 'boolean',
   accentTone: ['follow', 'cobalt', 'iris', 'amber', 'mono'],
   cornerStyle: ['sharp', 'balanced', 'soft'],
   codeFont: ['default', 'jetbrains', 'cascadia', 'sfmono'],
@@ -180,19 +183,98 @@ function reconcileConfigAliases(raw) {
   if (has('smoothCaret') && typeof out.smoothCaret === 'string') {
     out.smoothCaret = out.smoothCaret !== 'off' && out.smoothCaret !== 'false';
   }
+  if (has('contextMenu') && typeof out.contextMenu === 'string') {
+    out.contextMenu = out.contextMenu !== 'off' && out.contextMenu !== 'false';
+  }
   if (has('codeLigatures') && typeof out.codeLigatures === 'string') {
     out.codeLigatures = out.codeLigatures === 'on' || out.codeLigatures === 'true';
   }
   return out;
 }
 
+let _configCache = { sig: '', value: null };
+
+function invalidateConfigCache() {
+  _configCache = { sig: '', value: null };
+}
+
 function readConfig() {
   try {
+    const st = fs.statSync(CONFIG_FILE);
+    if (!st.isFile()) {
+      _configCache = { sig: '', value: null };
+      return { ...DEFAULT_CONFIG };
+    }
+    const sig = `${st.mtimeMs}:${st.size}:${st.ctimeMs}`;
+    if (_configCache.value && _configCache.sig === sig) {
+      return { ..._configCache.value };
+    }
     const diskRaw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-    return reconcileConfigAliases({ ...DEFAULT_CONFIG, ...reconcileConfigAliases(diskRaw) });
+    const merged = reconcileConfigAliases({ ...DEFAULT_CONFIG, ...reconcileConfigAliases(diskRaw) });
+    _configCache = { sig, value: merged };
+    return { ...merged };
   } catch {
+    _configCache = { sig: '', value: null };
     return { ...DEFAULT_CONFIG };
   }
+}
+
+function writeConfig(nextConfig) {
+  const normalized = reconcileConfigAliases({
+    ...DEFAULT_CONFIG,
+    ...(nextConfig && typeof nextConfig === 'object' ? reconcileConfigAliases(nextConfig) : {}),
+  });
+  const resolved = path.resolve(CONFIG_FILE);
+  const dir = path.dirname(resolved);
+  if (isSymlinkPathSync(dir) || isSymlinkPathSync(resolved)) {
+    throw new Error(`Refusing symbolic link config path: ${resolved}`);
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  const content = JSON.stringify(normalized, null, 2) + '\n';
+  const tmpPath = path.join(dir, `.config.json.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`);
+  let fd = null;
+  try {
+    fd = fs.openSync(tmpPath, 'wx', 0o600);
+    fs.writeFileSync(fd, content, 'utf8');
+    fs.closeSync(fd);
+    fd = null;
+    try { fs.chmodSync(tmpPath, 0o600); } catch {}
+    let renamed = false;
+    let lastErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        fs.renameSync(tmpPath, resolved);
+        renamed = true;
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (!IS_WIN || !['EBUSY', 'EPERM', 'EACCES', 'EEXIST'].includes(err && err.code)) {
+          throw err;
+        }
+      }
+    }
+    if (!renamed) {
+      if (IS_WIN && ['EBUSY', 'EPERM', 'EACCES', 'EEXIST'].includes(lastErr && lastErr.code)) {
+        if (isSymlinkPathSync(dir) || isSymlinkPathSync(resolved)) {
+          throw new Error(`Refusing symbolic link config path: ${resolved}`);
+        }
+        fs.copyFileSync(tmpPath, resolved);
+        try { fs.unlinkSync(tmpPath); } catch {}
+      } else {
+        throw lastErr;
+      }
+    }
+    try { fs.chmodSync(resolved, 0o600); } catch {}
+  } catch (err) {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+    try { fs.unlinkSync(tmpPath); } catch {}
+    throw err;
+  }
+  // 写盘成功后立即失效缓存，防止同一毫秒写入后读到陈旧值
+  invalidateConfigCache();
+  return { ...normalized };
 }
 
 function readPort() {
@@ -288,39 +370,27 @@ function matchesExpectedDaemonSignature(imageName, commandLine = '', opts = null
   return false;
 }
 
-// 终止旧守护前核验进程映像名与启动时间/命令行，防止系统重启后 PID 复用误杀无关进程或宿主主窗口
-function isExpectedDaemonProcess(pid, probeOverride = null) {
+// 单次系统探针同时获取进程映像名、启动时间与命令行，消除启动抢锁时连续拉起两次 powershell.exe
+function inspectProcessSync(pid, opts = null) {
   const n = Number(pid);
-  if (!Number.isInteger(n) || n <= 0 || n === process.pid) return false;
-  const customLock = typeof probeOverride === 'string' ? probeOverride : null;
-  const lockMeta = findDaemonLockMetaForPid(n, customLock);
-  if (typeof probeOverride === 'function') {
-    const info = probeOverride(n);
-    if (!info) return false;
-    return matchesExpectedDaemonSignature(info.imageName, info.commandLine, {
-      matchedLockPid: Boolean(info.matchedLockPid ?? lockMeta.matchedPid),
-      lockStartedAt: Number(info.lockStartedAt ?? lockMeta.startedAt ?? 0),
-      processStartMs: Number(info.processStartMs || 0),
-    });
-  }
+  if (!Number.isInteger(n) || n <= 0) return null;
   try {
     process.kill(n, 0);
   } catch (err) {
-    return Boolean(err && err.code === 'EPERM');
+    if (!err || err.code !== 'EPERM') return null;
   }
+  const execFn = opts && typeof opts.execFileSyncFn === 'function' ? opts.execFileSyncFn : execFileSync;
+  const platform = (opts && opts.platform) || process.platform;
   try {
-    if (IS_WIN) {
+    if (platform === 'win32') {
       const psScript =
         `$p = Get-Process -Id ${n} -ErrorAction SilentlyContinue; ` +
         `if (-not $p) { exit 0 }; ` +
         `$nm = [string]$p.ProcessName; ` +
-        `$st = 0; try { $st = ([DateTimeOffset]$p.StartTime).ToUnixTimeMilliseconds() } catch {}; ` +
-        `if ($nm -match '^(?:node|nodejs|obsidian-prism|obsidian-prism-watcher|watcher|agy-claude-style)$') { Write-Output ($nm + '|' + $st + '|'); exit 0 }; ` +
-        `if ($nm -match '^(?:antigravity|electron|agy)$') { ` +
-        `$cl = (Get-CimInstance Win32_Process -Filter 'ProcessId = ${n}' -ErrorAction SilentlyContinue).CommandLine; Write-Output ($nm + '|' + $st + '|' + [string]$cl); exit 0 ` +
-        `}; ` +
-        `Write-Output ($nm + '|' + $st + '|')`;
-      const out = execFileSync(
+        `$st = 0; try { $st = [long]([DateTimeOffset]$p.StartTime).ToUnixTimeMilliseconds() } catch {}; ` +
+        `$cl = ''; try { $cl = [string](Get-CimInstance Win32_Process -Filter 'ProcessId = ${n}' -ErrorAction SilentlyContinue).CommandLine } catch {}; ` +
+        `Write-Output ($nm + '|' + $st + '|' + $cl)`;
+      const out = execFn(
         'powershell.exe',
         ['-NoProfile', '-NonInteractive', '-Command', psScript],
         {
@@ -331,45 +401,113 @@ function isExpectedDaemonProcess(pid, probeOverride = null) {
         }
       );
       const trimmed = String(out || '').trim();
-      if (!trimmed) return false;
+      if (!trimmed) return null;
       const p1 = trimmed.indexOf('|');
       const p2 = p1 >= 0 ? trimmed.indexOf('|', p1 + 1) : -1;
-      const imgName = p1 >= 0 ? trimmed.slice(0, p1) : trimmed;
-      const procStartMs = p1 >= 0 && p2 > p1 ? Number(trimmed.slice(p1 + 1, p2)) || 0 : 0;
-      const cmdLine = p2 >= 0 ? trimmed.slice(p2 + 1) : '';
-      return matchesExpectedDaemonSignature(imgName, cmdLine, {
-        matchedLockPid: lockMeta.matchedPid,
-        lockStartedAt: lockMeta.startedAt,
-        processStartMs: procStartMs,
-      });
+      const imageName = p1 >= 0 ? trimmed.slice(0, p1).trim() : trimmed;
+      const processStartMs = p1 >= 0 && p2 > p1 ? Number(trimmed.slice(p1 + 1, p2)) || 0 : 0;
+      const commandLine = p2 >= 0 ? trimmed.slice(p2 + 1).trim() : '';
+      if (!imageName) return null;
+      return {
+        pid: n,
+        imageName,
+        startTime: processStartMs,
+        processStartMs,
+        commandLine,
+      };
     }
-    const out = execFileSync('ps', ['-p', String(n), '-o', 'comm='], {
+    if (platform === 'linux') {
+      let imageName = '';
+      let commandLine = '';
+      try {
+        imageName = fs.readFileSync(`/proc/${n}/comm`, 'utf8').trim();
+      } catch {}
+      try {
+        const rawCmd = fs.readFileSync(`/proc/${n}/cmdline`);
+        if (rawCmd && rawCmd.length > 0) {
+          commandLine = rawCmd.toString('utf8').replace(/\0+/g, ' ').trim();
+        }
+      } catch {}
+      if (!imageName && !commandLine) return null;
+      return {
+        pid: n,
+        imageName: imageName || commandLine.split(/\s+/)[0] || '',
+        startTime: 0,
+        processStartMs: 0,
+        commandLine,
+      };
+    }
+    // macOS / 其他 POSIX：使用 ps 单次读取 args 与 comm
+    const commOut = execFn('ps', ['-p', String(n), '-o', 'comm='], {
       encoding: 'utf8',
-      timeout: 2000,
+      timeout: 2500,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
-    const low = String(out || '').trim().toLowerCase();
-    if (!low) return false;
-    if (/node|nodejs|obsidian-prism|watcher|agy-claude-style/.test(low)) return true;
-    if (/antigravity|electron|agy/.test(low)) {
-      try {
-        const argsOut = execFileSync('ps', ['-p', String(n), '-o', 'args='], {
-          encoding: 'utf8',
-          timeout: 2000,
-          stdio: ['ignore', 'pipe', 'ignore'],
-        });
-        return matchesExpectedDaemonSignature(low, argsOut, {
-          matchedLockPid: lockMeta.matchedPid,
-          lockStartedAt: lockMeta.startedAt,
-        });
-      } catch {
-        return false;
-      }
-    }
-    return false;
+    const imageName = String(commOut || '').trim();
+    if (!imageName) return null;
+    let commandLine = '';
+    try {
+      const argsOut = execFn('ps', ['-p', String(n), '-o', 'args='], {
+        encoding: 'utf8',
+        timeout: 2500,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      commandLine = String(argsOut || '').trim();
+    } catch {}
+    return {
+      pid: n,
+      imageName,
+      startTime: 0,
+      processStartMs: 0,
+      commandLine,
+    };
   } catch {
-    return false;
+    return null;
   }
+}
+
+// 终止旧守护前核验进程映像名与启动时间/命令行，防止系统重启后 PID 复用误杀无关进程或宿主主窗口
+function isExpectedDaemonProcess(pid, probeOverride = null) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0 || n === process.pid) return false;
+  const isObjOverride = Boolean(probeOverride && typeof probeOverride === 'object');
+  const customLock =
+    typeof probeOverride === 'string'
+      ? probeOverride
+      : isObjOverride && typeof probeOverride.lockFile === 'string'
+      ? probeOverride.lockFile
+      : null;
+  const lockMeta = findDaemonLockMetaForPid(n, customLock);
+  if (typeof probeOverride === 'function') {
+    const info = probeOverride(n);
+    if (!info) return false;
+    return matchesExpectedDaemonSignature(info.imageName, info.commandLine, {
+      matchedLockPid: Boolean(info.matchedLockPid ?? lockMeta.matchedPid),
+      lockStartedAt: Number(info.lockStartedAt ?? lockMeta.startedAt ?? 0),
+      processStartMs: Number(info.processStartMs ?? info.startTime ?? 0),
+    });
+  }
+  if (isObjOverride && Object.prototype.hasOwnProperty.call(probeOverride, 'procInfo')) {
+    const info = probeOverride.procInfo;
+    if (!info) return false;
+    return matchesExpectedDaemonSignature(info.imageName, info.commandLine, {
+      matchedLockPid: Boolean(info.matchedLockPid ?? lockMeta.matchedPid),
+      lockStartedAt: Number(info.lockStartedAt ?? lockMeta.startedAt ?? 0),
+      processStartMs: Number(info.processStartMs ?? info.startTime ?? 0),
+    });
+  }
+  try {
+    process.kill(n, 0);
+  } catch (err) {
+    return Boolean(err && err.code === 'EPERM');
+  }
+  const info = inspectProcessSync(n);
+  if (!info) return false;
+  return matchesExpectedDaemonSignature(info.imageName, info.commandLine, {
+    matchedLockPid: lockMeta.matchedPid,
+    lockStartedAt: lockMeta.startedAt,
+    processStartMs: Number(info.processStartMs ?? info.startTime ?? 0),
+  });
 }
 
 const CDP_OPT_IN_SWITCH = '--remote-debugging-port=0';
@@ -4462,8 +4600,6 @@ const RUNTIME_PARTS = [
   'pulse-vial-bridge.js',
   'vendor/pulse-dashboard/inline-fallback.js',
   'vendor/effort-slider/slider-coexist.js',
-  'vendor/thought-translator/thought-client.js',
-  'vendor/thought-translator/thought-settings-ui.js',
   'settings-panel.js',
   'home-studio-panel.js',
   'home-ripple-host.js',
@@ -4471,6 +4607,7 @@ const RUNTIME_PARTS = [
   'stream-choreography.js',
   'prism-rim-canvas.js',
   'host-workbench-enhancer.js',
+  'context-menu-btw.js',
   'ui-runtime.js',
 ];
 
@@ -4492,6 +4629,50 @@ const _mangledUnitCache = new Map();
 let _unifiedBundleCache = { sig: '', bundleCode: '', partCodeByName: new Map() };
 let _cssCache = { sig: '', minCss: '', packedExpr: '' };
 
+const BUNDLE_CACHE_SCHEMA_VERSION = 1;
+const BUNDLE_CACHE_FILENAME = '.bundle-cache.json';
+const BUNDLE_CACHE_MAX_ENTRIES = 4;
+const BUNDLE_CACHE_MAX_FILE_BYTES = 4 * 1024 * 1024;
+const BUNDLE_CACHE_MAX_EXPR_BYTES = 2 * 1024 * 1024;
+const BUNDLE_CACHE_MAX_BOOTCFG_BYTES = 64 * 1024;
+const CHANNEL_CACHE_MAX_PAYLOAD_BYTES = 1024 * 1024;
+const CHANNEL_CACHE_NAMES = ['omni', 'sidebar', 'hostI18n', 'thought'];
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+const CODE_HASH_RE = /^[0-9a-z]{1,16}$/;
+
+const _bundleCacheStats = {
+  diskHits: 0,
+  diskBaseHits: 0,
+  diskMisses: 0,
+  diskWrites: 0,
+  diskWriteFailures: 0,
+  diskReadFallbacks: 0,
+  compileUnifiedRuns: 0,
+  mangledUnitRuns: 0,
+  cssMinifyRuns: 0,
+  deferredExprHashRuns: 0,
+  channelDiskHits: 0,
+  channelDiskMisses: 0,
+  channelCompileRuns: 0,
+  channelHitsByName: { omni: 0, sidebar: 0, hostI18n: 0, thought: 0 },
+  lastOutcome: 'none',
+  lastCachePath: null,
+};
+
+let _diskCacheLastSource = { sourceHash: '', codeHash: '' };
+let _warmBaseCache = {
+  statSig: '',
+  sourceHash: '',
+  codeHash: '',
+  basePrefix: '',
+  baseSuffix: '',
+  baseSha256: '',
+};
+let _pendingDiskCachePersist = null;
+const _pendingChannelCacheWrites = new Map();
+let _cdpSelfHashCache = { sig: '', hash: '' };
+let _lastCompiledSourceHash = '';
+
 function getFileSig(filePath) {
   const st = fs.statSync(filePath);
   return `${st.mtimeMs}:${st.size}`;
@@ -4501,6 +4682,7 @@ function readCss() {
   const p = path.join(__dirname, 'style.css');
   const sig = getFileSig(p);
   if (_cssCache.sig !== sig) {
+    _bundleCacheStats.cssMinifyRuns += 1;
     const minCss = minifyCss(fs.readFileSync(p, 'utf8'));
     _cssCache = { sig, minCss, packedExpr: '' };
   }
@@ -4951,6 +5133,7 @@ function foldStaticCssConstTokens(tokens) {
 function getMangledUnit(unitKey, sig, src) {
   const hit = _mangledUnitCache.get(unitKey);
   if (hit && hit.sig === sig) return hit;
+  _bundleCacheStats.mangledUnitRuns += 1;
   const tokens = desugarInterpolatedTemplateTokens(mangleSafeLocals(foldStaticCssConstTokens(tokenizeJs(src))));
   const occs = scanModulePoolCandidates(tokens, true);
   const entry = { sig, tokens, occs };
@@ -4979,6 +5162,7 @@ function compileUnifiedBundle() {
   if (_unifiedBundleCache.sig === totalSig) {
     return _unifiedBundleCache;
   }
+  _bundleCacheStats.compileUnifiedRuns += 1;
 
   const SEP = '\x7f';
   const POOL_IDX_BASE = 0x00a1;
@@ -5159,10 +5343,30 @@ function computeHash(str) {
   return (h >>> 0).toString(36);
 }
 
+function resolveCurrentBundleCodeHash() {
+  if (_unifiedBundleCache.bundleCode) {
+    return computeHash(readRuntimeBundle());
+  }
+  if (_warmBaseCache.codeHash && _warmBaseCache.statSig) {
+    try {
+      if (getBundleSourceStatSig() === _warmBaseCache.statSig) {
+        return _warmBaseCache.codeHash;
+      }
+    } catch {}
+  }
+  if (_diskCacheLastSource.sourceHash && _diskCacheLastSource.codeHash) {
+    try {
+      if (computeBundleSourceHash() === _diskCacheLastSource.sourceHash) {
+        return _diskCacheLastSource.codeHash;
+      }
+    } catch {}
+  }
+  return computeHash(readRuntimeBundle());
+}
+
 function buildConfigRefreshExpression(customConfig, extraMeta = null) {
   const config = customConfig ? reconcileConfigAliases(customConfig) : readConfig();
-  const bundle = readRuntimeBundle();
-  const codeHash = computeHash(bundle);
+  const codeHash = resolveCurrentBundleCodeHash();
   const bootCfg = {
     ...config,
     ...(extraMeta && typeof extraMeta === 'object' ? extraMeta : {}),
@@ -5415,8 +5619,8 @@ function getInjectWrapperTemplate() {
 
     const destroyModules = (includeMain) => {
       const ks = includeMain
-        ? ['__agPrismTelemetry', '__agPrismEffortSlider', '__agPrismThought', '__agPrismOmni', '__agPrism']
-        : ['__agPrismTelemetry', '__agPrismEffortSlider', '__agPrismThought', '__agPrismOmni'];
+        ? ['__agPrismTelemetry', '__agPrismEffortSlider', '__agPrismThought', '__agPrismOmni', '__agPrismContextMenu', '__agPrism']
+        : ['__agPrismTelemetry', '__agPrismEffortSlider', '__agPrismThought', '__agPrismOmni', '__agPrismContextMenu'];
       for (const k of ks) {
         try { window[k]?.destroy?.(); } catch {}
       }
@@ -5424,6 +5628,7 @@ function getInjectWrapperTemplate() {
 
     const stripForeignMount = () => {
       destroyModules(true);
+      try { window.__agPrismContextMenu?.destroy?.(); } catch {}
       try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}
       try {
         document.documentElement?.removeAttribute?.('data-ag-cs-model-menu');
@@ -5438,7 +5643,13 @@ function getInjectWrapperTemplate() {
       for (const id of [${JSON.stringify(STYLE_ID)}, ${JSON.stringify(LEGACY_STYLE_ID)}, 'ag-prism-settings-v101-css', 'ag-prism-omni-css']) {
         try { document.getElementById(id)?.remove(); } catch {}
       }
+      try { document.querySelectorAll?.('[data-testid="prism-thought-ai-config"], .ag-cs-ctx-menu, .ag-cs-ctx-toast')?.forEach?.((el) => el.remove()); } catch {}
+      delete window.__agPrismThought;
+      delete window.__agPrismThoughtSettingsUi;
+      delete globalThis.__agPrismThoughtSettingsUi;
       delete window.__agPrismOmni;
+      delete window.__agPrismContextMenu;
+      delete globalThis.__agPrismContextMenu;
       delete window.__agPrism;
       delete window.__agClaudeStyle;
     };
@@ -5535,8 +5746,7 @@ function getInjectWrapperTemplate() {
             existingPrism.version === ${JSON.stringify(PLUGIN_VERSION)} &&
             existingPrism.codeHash === __AG_INJ_CODEHASH__ &&
             window.__agPrismTelemetry &&
-            window.__agPrismEffortSlider &&
-            window.__agPrismThought
+            window.__agPrismEffortSlider
         );
         if (bundleUnchanged) {
           existingPrism.refreshConfig(bootCfg);
@@ -5602,49 +5812,987 @@ function getInjectWrapperTemplate() {
   return _injectWrapperTemplate;
 }
 
-function buildInjectExpression(customConfig) {
-  const config = customConfig ? reconcileConfigAliases(customConfig) : readConfig();
+function sha256Text(str) {
+  return crypto.createHash('sha256').update(str, 'utf8').digest('hex');
+}
+
+function getBundleSourceFiles() {
+  const files = [
+    { rel: 'cdp.js', fullPath: __filename, optional: false },
+    { rel: 'style.css', fullPath: path.join(__dirname, 'style.css'), optional: false },
+    { rel: 'assets/brand-mark-svg.js', fullPath: path.join(__dirname, 'assets', 'brand-mark-svg.js'), optional: true },
+  ];
+  for (const partName of RUNTIME_PARTS) {
+    files.push({ rel: partName, fullPath: path.join(__dirname, partName), optional: false });
+    if (partName === 'vendor/effort-slider/slider-coexist.js') {
+      files.push({
+        rel: 'vendor/effort-slider/upstream-client.js',
+        fullPath: path.join(__dirname, 'vendor', 'effort-slider', 'upstream-client.js'),
+        optional: true,
+      });
+    }
+  }
+  return files;
+}
+
+// 快速 stat 指纹（仅用于同进程热路径配合 _warmBaseCache 毫秒级刷新 config，跨进程冷启一律使用 SHA-256）
+function getBundleSourceStatSig() {
+  const parts = [];
+  for (const item of getBundleSourceFiles()) {
+    if (item.optional && !fs.existsSync(item.fullPath)) {
+      parts.push(`${item.rel}:MISSING`);
+      continue;
+    }
+    parts.push(`${item.rel}:${getFileSig(item.fullPath)}`);
+  }
+  return parts.join(';');
+}
+
+// 计算全部打包输入源文件的 SHA-256 内容指纹（100% 免疫 mtime 抖动与 git checkout）
+function computeBundleSourceHash() {
+  const hash = crypto.createHash('sha256');
+  hash.update(`schema:${BUNDLE_CACHE_SCHEMA_VERSION}\0`);
+  hash.update(`version:${PLUGIN_VERSION}\0`);
+  hash.update(`consts:${STYLE_ID}:${LEGACY_STYLE_ID}:${SETTING_BINDING}\0`);
+  for (const item of getBundleSourceFiles()) {
+    hash.update(`file:${item.rel}\0`);
+    if (item.optional && !fs.existsSync(item.fullPath)) {
+      hash.update('MISSING\0');
+      continue;
+    }
+    const buf = fs.readFileSync(item.fullPath);
+    hash.update(`len:${buf.length}\0`);
+    hash.update(buf);
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
+// 计算规范化后的有效 bootCfg 指纹（确保缓存命中输出与现场编译逐字节 100% 一致）
+function computeBundleConfigHash(config) {
+  const effective = {
+    ...(config && typeof config === 'object' ? config : {}),
+    binding: SETTING_BINDING,
+    codeHash: '',
+    __fromFile: true,
+  };
+  const serialized = JSON.stringify(effective);
+  return crypto
+    .createHash('sha256')
+    .update(`cfg:v${BUNDLE_CACHE_SCHEMA_VERSION}\0`)
+    .update(serialized)
+    .digest('hex');
+}
+
+function resolveBundleCachePathOption(opts) {
+  if (opts && (opts.cachePath === false || opts.cachePath === null || opts.noDiskCache === true)) {
+    return null;
+  }
+  if (opts && typeof opts.cachePath === 'string') {
+    const trimmed = opts.cachePath.trim();
+    return trimmed ? path.resolve(trimmed) : null;
+  }
+  const envRaw = process.env.AG_PRISM_BUNDLE_CACHE_PATH;
+  if (typeof envRaw === 'string' && envRaw.trim()) {
+    const trimmed = envRaw.trim();
+    if (/^(?:0|off|false|none)$/i.test(trimmed)) return null;
+    return path.resolve(trimmed);
+  }
+  return null;
+}
+
+function isSymlinkPathSync(targetPath) {
+  try {
+    return fs.lstatSync(targetPath).isSymbolicLink();
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return false;
+    return true;
+  }
+}
+
+function isValidBundleBaseTemplate(parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  const hasOwn = (k) => Object.prototype.hasOwnProperty.call(parsed, k);
+  if (!hasOwn('codeHash') || typeof parsed.codeHash !== 'string' || !CODE_HASH_RE.test(parsed.codeHash)) {
+    return false;
+  }
+  if (!hasOwn('basePrefix') || typeof parsed.basePrefix !== 'string' || parsed.basePrefix.length === 0) {
+    return false;
+  }
+  if (!hasOwn('baseSuffix') || typeof parsed.baseSuffix !== 'string' || parsed.baseSuffix.length === 0) {
+    return false;
+  }
+  if (!hasOwn('baseSha256') || typeof parsed.baseSha256 !== 'string' || !SHA256_HEX_RE.test(parsed.baseSha256)) {
+    return false;
+  }
+  const totalBytes = Buffer.byteLength(parsed.basePrefix, 'utf8') + Buffer.byteLength(parsed.baseSuffix, 'utf8');
+  if (totalBytes <= 0 || totalBytes > BUNDLE_CACHE_MAX_EXPR_BYTES) return false;
+  if (!parsed.baseSuffix.includes(JSON.stringify(parsed.codeHash))) return false;
+  if (sha256Text(`${parsed.basePrefix}\0${parsed.baseSuffix}`) !== parsed.baseSha256) return false;
+  return true;
+}
+
+function isValidBundleCacheEntry(entry, baseTemplate) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+  if (!baseTemplate) return false;
+  const hasOwn = (k) => Object.prototype.hasOwnProperty.call(entry, k);
+  if (!hasOwn('configHash') || typeof entry.configHash !== 'string' || !SHA256_HEX_RE.test(entry.configHash)) {
+    return false;
+  }
+  if (
+    !hasOwn('codeHash') ||
+    typeof entry.codeHash !== 'string' ||
+    !CODE_HASH_RE.test(entry.codeHash) ||
+    entry.codeHash !== baseTemplate.codeHash
+  ) {
+    return false;
+  }
+  if (!hasOwn('exprSha256') || typeof entry.exprSha256 !== 'string' || !SHA256_HEX_RE.test(entry.exprSha256)) {
+    return false;
+  }
+  if (!hasOwn('bootCfgJson') || typeof entry.bootCfgJson !== 'string' || entry.bootCfgJson.length === 0) {
+    return false;
+  }
+  const cfgBytes = Buffer.byteLength(entry.bootCfgJson, 'utf8');
+  if (cfgBytes <= 0 || cfgBytes > BUNDLE_CACHE_MAX_BOOTCFG_BYTES) return false;
+  if (!entry.bootCfgJson.includes(`"codeHash":${JSON.stringify(entry.codeHash)}`)) return false;
+  const assembled = baseTemplate.basePrefix + entry.bootCfgJson + baseTemplate.baseSuffix;
+  const exprBytes = Buffer.byteLength(assembled, 'utf8');
+  if (exprBytes <= 0 || exprBytes > BUNDLE_CACHE_MAX_EXPR_BYTES) return false;
+  if (sha256Text(assembled) !== entry.exprSha256) return false;
+  return true;
+}
+
+function tryReadBundleCacheHitSync(cachePath, expectedSourceHash, expectedConfigHash) {
+  try {
+    const resolved = path.resolve(cachePath);
+    const dir = path.dirname(resolved);
+    if (isSymlinkPathSync(dir)) {
+      return { hit: false, reason: 'symlink-dir', existingEntries: [], baseTemplate: null };
+    }
+    let st;
+    try {
+      st = fs.lstatSync(resolved);
+    } catch (err) {
+      if (err && err.code === 'ENOENT') {
+        return { hit: false, reason: 'missing', existingEntries: [], baseTemplate: null };
+      }
+      return { hit: false, reason: 'stat-error', existingEntries: [], baseTemplate: null };
+    }
+    if (st.isSymbolicLink() || !st.isFile()) {
+      return { hit: false, reason: 'not-regular-file', existingEntries: [], baseTemplate: null };
+    }
+    if (st.size <= 0 || st.size > BUNDLE_CACHE_MAX_FILE_BYTES) {
+      return { hit: false, reason: 'size-out-of-range', existingEntries: [], baseTemplate: null };
+    }
+    const raw = fs.readFileSync(resolved, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { hit: false, reason: 'invalid-root', existingEntries: [], baseTemplate: null };
+    }
+    const hasOwn = (k) => Object.prototype.hasOwnProperty.call(parsed, k);
+    if (!hasOwn('schemaVersion') || parsed.schemaVersion !== BUNDLE_CACHE_SCHEMA_VERSION) {
+      return { hit: false, reason: 'schema-mismatch', existingEntries: [], baseTemplate: null };
+    }
+    if (!hasOwn('pluginVersion') || parsed.pluginVersion !== PLUGIN_VERSION) {
+      return { hit: false, reason: 'version-mismatch', existingEntries: [], baseTemplate: null };
+    }
+    if (
+      !hasOwn('sourceHash') ||
+      typeof parsed.sourceHash !== 'string' ||
+      !SHA256_HEX_RE.test(parsed.sourceHash) ||
+      parsed.sourceHash !== expectedSourceHash
+    ) {
+      return { hit: false, reason: 'source-hash-mismatch', existingEntries: [], baseTemplate: null };
+    }
+    if (!hasOwn('entries') || !Array.isArray(parsed.entries)) {
+      return { hit: false, reason: 'invalid-entries', existingEntries: [], baseTemplate: null };
+    }
+    if (!isValidBundleBaseTemplate(parsed)) {
+      return { hit: false, reason: 'invalid-base-template', existingEntries: [], baseTemplate: null };
+    }
+    const baseTemplate = {
+      codeHash: parsed.codeHash,
+      basePrefix: parsed.basePrefix,
+      baseSuffix: parsed.baseSuffix,
+      baseSha256: parsed.baseSha256,
+    };
+    for (const ent of parsed.entries) {
+      if (
+        ent &&
+        typeof ent === 'object' &&
+        !Array.isArray(ent) &&
+        Object.prototype.hasOwnProperty.call(ent, 'configHash') &&
+        ent.configHash === expectedConfigHash
+      ) {
+        if (isValidBundleCacheEntry(ent, baseTemplate)) {
+          return {
+            hit: true,
+            reason: 'hit',
+            expr: baseTemplate.basePrefix + ent.bootCfgJson + baseTemplate.baseSuffix,
+            codeHash: ent.codeHash,
+            existingEntries: [],
+            baseTemplate,
+          };
+        }
+        return { hit: false, reason: 'corrupt-matching-entry', existingEntries: [], baseTemplate: null };
+      }
+    }
+    return { hit: false, reason: 'config-miss', existingEntries: parsed.entries, baseTemplate };
+  } catch {
+    return { hit: false, reason: 'parse-or-read-error', existingEntries: [], baseTemplate: null };
+  }
+}
+
+function writeBundleCacheAtomicSync(cachePath, payloadObj) {
+  let tmpPath = null;
+  let fd = null;
+  try {
+    const resolved = path.resolve(cachePath);
+    const dir = path.dirname(resolved);
+    if (isSymlinkPathSync(dir) || isSymlinkPathSync(resolved)) {
+      return false;
+    }
+    fs.mkdirSync(dir, { recursive: true });
+    const dirStat = fs.lstatSync(dir);
+    if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
+      return false;
+    }
+    try {
+      const existingStat = fs.lstatSync(resolved);
+      if (existingStat.isSymbolicLink() || !existingStat.isFile()) {
+        return false;
+      }
+    } catch (err) {
+      if (!err || err.code !== 'ENOENT') return false;
+    }
+
+    const jsonText = JSON.stringify(payloadObj);
+    if (Buffer.byteLength(jsonText, 'utf8') > BUNDLE_CACHE_MAX_FILE_BYTES) {
+      return false;
+    }
+
+    const base = path.basename(resolved);
+    const safeBase = base.startsWith('.') ? base.slice(1) : base;
+    const rand = crypto.randomBytes(6).toString('hex');
+    tmpPath = path.join(dir, `.${safeBase}.${process.pid}.${rand}.tmp`);
+    fd = fs.openSync(tmpPath, 'wx', 0o600);
+    fs.writeFileSync(fd, jsonText, 'utf8');
+    fs.closeSync(fd);
+    fd = null;
+    try { fs.chmodSync(tmpPath, 0o600); } catch {}
+
+    if (isSymlinkPathSync(dir) || isSymlinkPathSync(resolved)) {
+      try { fs.unlinkSync(tmpPath); } catch {}
+      return false;
+    }
+
+    let renamed = false;
+    let lastErr = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        fs.renameSync(tmpPath, resolved);
+        renamed = true;
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (!IS_WIN || !['EBUSY', 'EPERM', 'EACCES', 'EEXIST'].includes(err && err.code)) {
+          throw err;
+        }
+      }
+    }
+    if (!renamed) {
+      if (IS_WIN && ['EBUSY', 'EPERM', 'EACCES', 'EEXIST'].includes(lastErr && lastErr.code)) {
+        if (isSymlinkPathSync(dir) || isSymlinkPathSync(resolved)) {
+          try { fs.unlinkSync(tmpPath); } catch {}
+          return false;
+        }
+        fs.copyFileSync(tmpPath, resolved);
+        try { fs.unlinkSync(tmpPath); } catch {}
+      } else {
+        throw lastErr;
+      }
+    }
+    try { fs.chmodSync(resolved, 0o600); } catch {}
+    return true;
+  } catch {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+    if (tmpPath) {
+      try { fs.unlinkSync(tmpPath); } catch {}
+    }
+    return false;
+  }
+}
+
+function getBundleCacheStats() {
+  return {
+    ..._bundleCacheStats,
+    channelHitsByName: { ..._bundleCacheStats.channelHitsByName },
+  };
+}
+
+function resetBundleCacheStats() {
+  _bundleCacheStats.diskHits = 0;
+  _bundleCacheStats.diskBaseHits = 0;
+  _bundleCacheStats.diskMisses = 0;
+  _bundleCacheStats.diskWrites = 0;
+  _bundleCacheStats.diskWriteFailures = 0;
+  _bundleCacheStats.diskReadFallbacks = 0;
+  _bundleCacheStats.compileUnifiedRuns = 0;
+  _bundleCacheStats.mangledUnitRuns = 0;
+  _bundleCacheStats.cssMinifyRuns = 0;
+  _bundleCacheStats.deferredExprHashRuns = 0;
+  _bundleCacheStats.channelDiskHits = 0;
+  _bundleCacheStats.channelDiskMisses = 0;
+  _bundleCacheStats.channelCompileRuns = 0;
+  _bundleCacheStats.channelHitsByName = { omni: 0, sidebar: 0, hostI18n: 0, thought: 0 };
+  _bundleCacheStats.lastOutcome = 'none';
+  _bundleCacheStats.lastCachePath = null;
+  try { _omniClientCache.cachedPaths?.clear?.(); } catch {}
+  try { _sidebarClientCache.cachedPaths?.clear?.(); } catch {}
+  try { _hostI18nCache.cachedPaths?.clear?.(); } catch {}
+  try { _thoughtAssetsCache.cachedPaths?.clear?.(); } catch {}
+}
+
+function getCdpSelfSourceHash() {
+  try {
+    const sig = getFileSig(__filename);
+    if (_cdpSelfHashCache.sig === sig && _cdpSelfHashCache.hash) {
+      return _cdpSelfHashCache.hash;
+    }
+    const hash = crypto.createHash('sha256').update(fs.readFileSync(__filename)).digest('hex');
+    _cdpSelfHashCache = { sig, hash };
+    return hash;
+  } catch {
+    return PLUGIN_VERSION;
+  }
+}
+
+function computeChannelSourceHash(channelName, fileEntries, extraTag = '') {
+  const hash = crypto.createHash('sha256');
+  hash.update(`schema:${BUNDLE_CACHE_SCHEMA_VERSION}\0version:${PLUGIN_VERSION}\0channel:${channelName}\0`);
+  hash.update(`cdp:${getCdpSelfSourceHash()}\0`);
+  if (extraTag) {
+    hash.update(`extra:${extraTag}\0`);
+  }
+  for (const item of fileEntries) {
+    hash.update(`file:${item.rel}\0`);
+    const buf = Buffer.isBuffer(item.content) ? item.content : Buffer.from(String(item.content || ''), 'utf8');
+    hash.update(`len:${buf.length}\0`);
+    hash.update(buf);
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
+function isValidChannelCacheEntry(channelName, entry) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+  const hasOwn = (k) => Object.prototype.hasOwnProperty.call(entry, k);
+  if (!hasOwn('sourceHash') || typeof entry.sourceHash !== 'string' || !SHA256_HEX_RE.test(entry.sourceHash)) {
+    return false;
+  }
+  if (!hasOwn('codeHash') || typeof entry.codeHash !== 'string' || !CODE_HASH_RE.test(entry.codeHash)) {
+    return false;
+  }
+  if (!hasOwn('payloadSha256') || typeof entry.payloadSha256 !== 'string' || !SHA256_HEX_RE.test(entry.payloadSha256)) {
+    return false;
+  }
+  if (channelName === 'omni' || channelName === 'sidebar') {
+    if (!hasOwn('minCode') || typeof entry.minCode !== 'string' || entry.minCode.length === 0) return false;
+    if (Buffer.byteLength(entry.minCode, 'utf8') > CHANNEL_CACHE_MAX_PAYLOAD_BYTES) return false;
+    if (channelName === 'sidebar' && /setPrefValues?/i.test(entry.minCode)) return false;
+    if (computeHash(entry.minCode) !== entry.codeHash) return false;
+    return sha256Text(`${entry.codeHash}\0${entry.minCode}`) === entry.payloadSha256;
+  }
+  if (channelName === 'hostI18n') {
+    if (!hasOwn('minRuntime') || typeof entry.minRuntime !== 'string' || entry.minRuntime.length === 0) return false;
+    if (!hasOwn('dictRaw') || typeof entry.dictRaw !== 'string' || entry.dictRaw.length === 0) return false;
+    const totalBytes = Buffer.byteLength(entry.minRuntime, 'utf8') + Buffer.byteLength(entry.dictRaw, 'utf8');
+    if (totalBytes > CHANNEL_CACHE_MAX_PAYLOAD_BYTES) return false;
+    if (computeHash(`${entry.minRuntime}:${entry.dictRaw}`) !== entry.codeHash) return false;
+    return sha256Text(`${entry.codeHash}\0${entry.minRuntime}\0${entry.dictRaw}`) === entry.payloadSha256;
+  }
+  if (channelName === 'thought') {
+    if (!hasOwn('minClient') || typeof entry.minClient !== 'string' || entry.minClient.length === 0) return false;
+    if (!hasOwn('minSettingsUi') || typeof entry.minSettingsUi !== 'string' || entry.minSettingsUi.length === 0) return false;
+    const totalBytes = Buffer.byteLength(entry.minClient, 'utf8') + Buffer.byteLength(entry.minSettingsUi, 'utf8');
+    if (totalBytes > CHANNEL_CACHE_MAX_PAYLOAD_BYTES) return false;
+    if (computeHash(`${entry.minClient}\n${entry.minSettingsUi}`) !== entry.codeHash) return false;
+    return sha256Text(`${entry.codeHash}\0${entry.minClient}\0${entry.minSettingsUi}`) === entry.payloadSha256;
+  }
+  return false;
+}
+
+function readValidBundleCacheRootSync(cachePath) {
+  try {
+    const resolved = path.resolve(cachePath);
+    const dir = path.dirname(resolved);
+    if (isSymlinkPathSync(dir)) return null;
+    const st = fs.lstatSync(resolved);
+    if (st.isSymbolicLink() || !st.isFile()) return null;
+    if (st.size <= 0 || st.size > BUNDLE_CACHE_MAX_FILE_BYTES) return null;
+    const parsed = JSON.parse(fs.readFileSync(resolved, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    if (parsed.schemaVersion !== BUNDLE_CACHE_SCHEMA_VERSION || parsed.pluginVersion !== PLUGIN_VERSION) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function extractValidChannelsMap(rawChannels) {
+  const out = {};
+  if (!rawChannels || typeof rawChannels !== 'object' || Array.isArray(rawChannels)) {
+    return out;
+  }
+  for (const name of CHANNEL_CACHE_NAMES) {
+    if (!Object.prototype.hasOwnProperty.call(rawChannels, name)) continue;
+    const ent = rawChannels[name];
+    if (isValidChannelCacheEntry(name, ent)) {
+      out[name] = ent;
+    }
+  }
+  return out;
+}
+
+function tryReadChannelCacheHitSync(cachePath, channelName, expectedSourceHash) {
+  const root = readValidBundleCacheRootSync(cachePath);
+  if (!root || !root.channels || typeof root.channels !== 'object' || Array.isArray(root.channels)) {
+    return { hit: false, reason: 'missing' };
+  }
+  if (!Object.prototype.hasOwnProperty.call(root.channels, channelName)) {
+    return { hit: false, reason: 'channel-missing' };
+  }
+  const ent = root.channels[channelName];
+  if (!ent || typeof ent !== 'object' || ent.sourceHash !== expectedSourceHash) {
+    return { hit: false, reason: 'source-hash-mismatch' };
+  }
+  if (!isValidChannelCacheEntry(channelName, ent)) {
+    return { hit: false, reason: 'corrupt-channel-entry' };
+  }
+  return { hit: true, entry: ent };
+}
+
+function queuePendingChannelCacheWrite(cachePath, channelName, record) {
+  if (!cachePath || !channelName || !record) return;
+  const resolved = path.resolve(cachePath);
+  let bucket = _pendingChannelCacheWrites.get(resolved);
+  if (!bucket) {
+    bucket = {};
+    _pendingChannelCacheWrites.set(resolved, bucket);
+  }
+  bucket[channelName] = record;
+}
+
+function persistChannelsOnlySync(cachePath, channelUpdates) {
+  if (!cachePath || !channelUpdates || typeof channelUpdates !== 'object') return false;
+  const resolved = path.resolve(cachePath);
+  const existing = readValidBundleCacheRootSync(resolved);
+  const mergedChannels = {
+    ...extractValidChannelsMap(existing?.channels),
+    ...extractValidChannelsMap(channelUpdates),
+  };
+  if (Object.keys(mergedChannels).length === 0) return false;
+  const payload =
+    existing &&
+    typeof existing.sourceHash === 'string' &&
+    SHA256_HEX_RE.test(existing.sourceHash) &&
+    Array.isArray(existing.entries) &&
+    isValidBundleBaseTemplate(existing)
+      ? {
+          schemaVersion: BUNDLE_CACHE_SCHEMA_VERSION,
+          pluginVersion: PLUGIN_VERSION,
+          sourceHash: existing.sourceHash,
+          codeHash: existing.codeHash,
+          basePrefix: existing.basePrefix,
+          baseSuffix: existing.baseSuffix,
+          baseSha256: existing.baseSha256,
+          entries: existing.entries,
+          channels: mergedChannels,
+        }
+      : {
+          schemaVersion: BUNDLE_CACHE_SCHEMA_VERSION,
+          pluginVersion: PLUGIN_VERSION,
+          channels: mergedChannels,
+        };
+  if (writeBundleCacheAtomicSync(resolved, payload)) {
+    _bundleCacheStats.diskWrites += 1;
+    return true;
+  }
+  _bundleCacheStats.diskWriteFailures += 1;
+  return false;
+}
+
+function resolveChannelAssetsWithDiskCache({
+  channelName,
+  memCache,
+  setMemCache,
+  sig,
+  fileEntries,
+  extraTag = '',
+  opts = null,
+  compileFn,
+  toCacheEntry,
+  fromCacheEntry,
+}) {
+  const cachePath = resolveBundleCachePathOption(opts);
+  const deferCacheWrite = Boolean(opts && opts.deferCacheWrite === true);
+  if (!cachePath) {
+    if (memCache && memCache.sig === sig && memCache.codeHash) {
+      return memCache;
+    }
+    _bundleCacheStats.channelCompileRuns += 1;
+    const compiled = compileFn();
+    const nextMem = { ...compiled, sig, sourceHash: '', cachedPaths: new Set() };
+    setMemCache(nextMem);
+    return nextMem;
+  }
+
+  const resolvedCachePath = path.resolve(cachePath);
+  _bundleCacheStats.lastCachePath = resolvedCachePath;
+  const sourceHash = computeChannelSourceHash(channelName, fileEntries, extraTag);
+
+  if (
+    memCache &&
+    memCache.sourceHash === sourceHash &&
+    memCache.cachedPaths &&
+    memCache.cachedPaths.has(resolvedCachePath)
+  ) {
+    return memCache;
+  }
+
+  const diskHit = tryReadChannelCacheHitSync(resolvedCachePath, channelName, sourceHash);
+  if (diskHit.hit) {
+    _bundleCacheStats.channelDiskHits += 1;
+    _bundleCacheStats.channelHitsByName[channelName] =
+      (_bundleCacheStats.channelHitsByName[channelName] || 0) + 1;
+    const restored = fromCacheEntry(diskHit.entry);
+    const cachedPaths =
+      memCache && memCache.sourceHash === sourceHash && memCache.cachedPaths
+        ? memCache.cachedPaths
+        : new Set();
+    cachedPaths.add(resolvedCachePath);
+    const nextMem = { ...restored, sig, sourceHash, cachedPaths };
+    setMemCache(nextMem);
+    return nextMem;
+  }
+
+  _bundleCacheStats.channelDiskMisses += 1;
+  let assets;
+  if (memCache && memCache.sourceHash === sourceHash && memCache.codeHash) {
+    assets = memCache;
+  } else {
+    _bundleCacheStats.channelCompileRuns += 1;
+    assets = compileFn();
+  }
+  const record = toCacheEntry(assets, sourceHash);
+  const cachedPaths =
+    memCache && memCache.sourceHash === sourceHash && memCache.cachedPaths
+      ? memCache.cachedPaths
+      : new Set();
+  if (deferCacheWrite) {
+    queuePendingChannelCacheWrite(resolvedCachePath, channelName, record);
+  } else if (persistChannelsOnlySync(resolvedCachePath, { [channelName]: record })) {
+    cachedPaths.add(resolvedCachePath);
+  }
+  const nextMem = { ...assets, sig, sourceHash, cachedPaths };
+  setMemCache(nextMem);
+  return nextMem;
+}
+
+function compileBaseInjectTemplate() {
   const packedCss = readPackedCssExpr();
   const bundle = readRuntimeBundle();
   const codeHash = computeHash(bundle);
   const cssHashJson = JSON.stringify(computeHash(packedCss));
-  const bootCfgJson = JSON.stringify({ ...config, binding: SETTING_BINDING, codeHash, __fromFile: true });
   const codeHashJson = JSON.stringify(codeHash);
-  return getInjectWrapperTemplate()
-    .replace('__AG_INJ_CSS__', () => packedCss)
-    .replace('__AG_INJ_CSSHASH__', () => cssHashJson)
-    .replace('__AG_INJ_BOOTCFG__', () => bootCfgJson)
-    .replace('__AG_INJ_CODEHASH__', () => codeHashJson)
-    .replace('__AG_INJ_BUNDLE__();', () => bundle);
+  const tpl = getInjectWrapperTemplate();
+  const marker = '__AG_INJ_BOOTCFG__';
+  const idx = tpl.indexOf(marker);
+  const hasUniqueMarker = idx >= 0 && tpl.indexOf(marker, idx + marker.length) === -1;
+  if (hasUniqueMarker) {
+    const tokenMap = {
+      __AG_INJ_CSS__: packedCss,
+      __AG_INJ_CSSHASH__: cssHashJson,
+      __AG_INJ_CODEHASH__: codeHashJson,
+      '__AG_INJ_BUNDLE__();': bundle,
+    };
+    const applyTokens = (s) =>
+      s.replace(/__AG_INJ_CSSHASH__|__AG_INJ_CSS__|__AG_INJ_CODEHASH__|__AG_INJ_BUNDLE__\(\);/g, (m) => tokenMap[m]);
+    const basePrefix = applyTokens(tpl.slice(0, idx));
+    const baseSuffix = applyTokens(tpl.slice(idx + marker.length));
+    const baseSha256 = sha256Text(`${basePrefix}\0${baseSuffix}`);
+    return { codeHash, basePrefix, baseSuffix, baseSha256 };
+  }
+  return { codeHash, basePrefix: null, baseSuffix: null, baseSha256: null, packedCss, bundle, cssHashJson, codeHashJson };
 }
 
-let _omniClientCache = { sig: '', minCode: '', codeHash: '' };
+function persistBundleCacheRecordSync(
+  cachePath,
+  sourceHash,
+  baseForDisk,
+  newEntry,
+  existingRawEntries = null,
+  extraChannels = null
+) {
+  if (!cachePath || !sourceHash || !baseForDisk || !newEntry) return false;
+  const resolved = path.resolve(cachePath);
+  let rawEntries = Array.isArray(existingRawEntries) ? existingRawEntries : null;
+  let existingChannels = {};
+  const existingRoot = readValidBundleCacheRootSync(resolved);
+  if (existingRoot) {
+    existingChannels = extractValidChannelsMap(existingRoot.channels);
+    if (rawEntries === null && existingRoot.sourceHash === sourceHash && Array.isArray(existingRoot.entries)) {
+      rawEntries = existingRoot.entries;
+    }
+  }
+  if (rawEntries === null) {
+    rawEntries = [];
+  }
+  const retained = [];
+  const seen = new Set([newEntry.configHash]);
+  for (const rawEnt of rawEntries) {
+    if (retained.length >= BUNDLE_CACHE_MAX_ENTRIES - 1) break;
+    if (
+      rawEnt &&
+      typeof rawEnt === 'object' &&
+      !Array.isArray(rawEnt) &&
+      Object.prototype.hasOwnProperty.call(rawEnt, 'configHash') &&
+      typeof rawEnt.configHash === 'string' &&
+      !seen.has(rawEnt.configHash) &&
+      isValidBundleCacheEntry(rawEnt, baseForDisk)
+    ) {
+      seen.add(rawEnt.configHash);
+      retained.push({
+        configHash: rawEnt.configHash,
+        codeHash: rawEnt.codeHash,
+        bootCfgJson: rawEnt.bootCfgJson,
+        exprSha256: rawEnt.exprSha256,
+        updatedAt: Number.isFinite(Number(rawEnt.updatedAt)) ? Number(rawEnt.updatedAt) : 0,
+      });
+    }
+  }
+  const pendingForPath = _pendingChannelCacheWrites.get(resolved) || null;
+  if (pendingForPath) {
+    _pendingChannelCacheWrites.delete(resolved);
+  }
+  const mergedChannels = {
+    ...existingChannels,
+    ...extractValidChannelsMap(pendingForPath),
+    ...extractValidChannelsMap(extraChannels),
+  };
+  const payload = {
+    schemaVersion: BUNDLE_CACHE_SCHEMA_VERSION,
+    pluginVersion: PLUGIN_VERSION,
+    sourceHash,
+    codeHash: baseForDisk.codeHash,
+    basePrefix: baseForDisk.basePrefix,
+    baseSuffix: baseForDisk.baseSuffix,
+    baseSha256: baseForDisk.baseSha256,
+    entries: [newEntry, ...retained],
+    ...(Object.keys(mergedChannels).length > 0 ? { channels: mergedChannels } : {}),
+  };
+  if (writeBundleCacheAtomicSync(resolved, payload)) {
+    _bundleCacheStats.diskWrites += 1;
+    return true;
+  }
+  _bundleCacheStats.diskWriteFailures += 1;
+  return false;
+}
 
-function readCompiledOmniClient() {
+function markChannelCachedOnPath(cachePath, chMap) {
+  if (!cachePath || !chMap || typeof chMap !== 'object') return;
+  const resolved = path.resolve(cachePath);
+  const byName = {
+    omni: _omniClientCache,
+    sidebar: _sidebarClientCache,
+    hostI18n: _hostI18nCache,
+    thought: _thoughtAssetsCache,
+  };
+  for (const name of CHANNEL_CACHE_NAMES) {
+    const rec = chMap[name];
+    const mem = byName[name];
+    if (rec && mem && mem.sourceHash && mem.sourceHash === rec.sourceHash && mem.cachedPaths) {
+      mem.cachedPaths.add(resolved);
+    }
+  }
+}
+
+function flushPendingBundleCache() {
+  const pending = _pendingDiskCachePersist;
+  _pendingDiskCachePersist = null;
+  const pendingChannelsSnapshot = new Map(_pendingChannelCacheWrites);
+  _pendingChannelCacheWrites.clear();
+
+  let anyWritten = false;
+  if (pending) {
+    const resolved = path.resolve(pending.cachePath);
+    const matchedChannels = pendingChannelsSnapshot.get(resolved) || null;
+    if (matchedChannels) {
+      pendingChannelsSnapshot.delete(resolved);
+    }
+    if (!pending.newEntry.exprSha256) {
+      const exprText =
+        typeof pending.deferredExpr === 'string'
+          ? pending.deferredExpr
+          : pending.baseForDisk.basePrefix + pending.newEntry.bootCfgJson + pending.baseForDisk.baseSuffix;
+      pending.newEntry.exprSha256 = sha256Text(exprText);
+      _bundleCacheStats.deferredExprHashRuns += 1;
+    }
+    if (
+      persistBundleCacheRecordSync(
+        resolved,
+        pending.sourceHash,
+        pending.baseForDisk,
+        pending.newEntry,
+        null,
+        matchedChannels
+      )
+    ) {
+      markChannelCachedOnPath(resolved, matchedChannels);
+      anyWritten = true;
+    }
+  }
+
+  for (const [chPath, chMap] of pendingChannelsSnapshot.entries()) {
+    if (persistChannelsOnlySync(chPath, chMap)) {
+      markChannelCachedOnPath(chPath, chMap);
+      anyWritten = true;
+    }
+  }
+  return anyWritten;
+}
+
+function buildInjectExpression(customConfig, opts = null) {
+  const config = customConfig ? reconcileConfigAliases(customConfig) : readConfig();
+  const cachePath = resolveBundleCachePathOption(opts);
+  const deferCacheWrite = Boolean(opts && opts.deferCacheWrite === true);
+
+  // 同进程配置热刷新快路径（broadcastConfigRefresh）：源 stat 未变化时直接复用已验签的内存基础模板（< 1ms，零磁盘阻塞）
+  // P2-7a: 延迟对 676 KB 字符串计算 exprSha256 至 flushPendingBundleCache() 实际落盘时再执行，避免防抖期内重复白算哈希
+  if (cachePath && deferCacheWrite && _warmBaseCache.basePrefix && _warmBaseCache.statSig) {
+    try {
+      if (getBundleSourceStatSig() === _warmBaseCache.statSig) {
+        const codeHash = _warmBaseCache.codeHash;
+        const bootCfgJson = JSON.stringify({ ...config, binding: SETTING_BINDING, codeHash, __fromFile: true });
+        const expr = _warmBaseCache.basePrefix + bootCfgJson + _warmBaseCache.baseSuffix;
+        const configHash = computeBundleConfigHash(config);
+        _bundleCacheStats.diskBaseHits += 1;
+        _bundleCacheStats.lastOutcome = 'warm-base-hit';
+        _bundleCacheStats.lastCachePath = cachePath;
+        _pendingDiskCachePersist = {
+          cachePath,
+          sourceHash: _warmBaseCache.sourceHash,
+          baseForDisk: {
+            codeHash,
+            basePrefix: _warmBaseCache.basePrefix,
+            baseSuffix: _warmBaseCache.baseSuffix,
+            baseSha256: _warmBaseCache.baseSha256,
+          },
+          newEntry: {
+            configHash,
+            codeHash,
+            bootCfgJson,
+            exprSha256: null,
+            updatedAt: Date.now(),
+          },
+          deferredExpr: expr,
+        };
+        return expr;
+      }
+    } catch {}
+  }
+
+  let sourceHash = '';
+  let configHash = '';
+  let existingRawEntries = [];
+  let cachedBaseTemplate = null;
+  let forceInvalidateMem = false;
+
+  if (cachePath) {
+    _bundleCacheStats.lastCachePath = cachePath;
+    try {
+      sourceHash = computeBundleSourceHash();
+      configHash = computeBundleConfigHash(config);
+      const lookup = tryReadBundleCacheHitSync(cachePath, sourceHash, configHash);
+      if (lookup.hit) {
+        _bundleCacheStats.diskHits += 1;
+        _bundleCacheStats.lastOutcome = 'disk-hit';
+        _diskCacheLastSource = { sourceHash, codeHash: lookup.codeHash };
+        if (lookup.baseTemplate) {
+          try {
+            _warmBaseCache = {
+              statSig: getBundleSourceStatSig(),
+              sourceHash,
+              ...lookup.baseTemplate,
+            };
+          } catch {}
+        }
+        return lookup.expr;
+      }
+      _bundleCacheStats.diskMisses += 1;
+      if (lookup.reason === 'source-hash-mismatch') {
+        forceInvalidateMem = true;
+      } else if (lookup.reason !== 'missing' && lookup.reason !== 'config-miss') {
+        _bundleCacheStats.diskReadFallbacks += 1;
+      }
+      if (Array.isArray(lookup.existingEntries)) {
+        existingRawEntries = lookup.existingEntries;
+      }
+      if (lookup.reason === 'config-miss' && lookup.baseTemplate) {
+        cachedBaseTemplate = lookup.baseTemplate;
+      }
+    } catch {
+      _bundleCacheStats.diskMisses += 1;
+      _bundleCacheStats.diskReadFallbacks += 1;
+      sourceHash = '';
+      configHash = '';
+      existingRawEntries = [];
+      cachedBaseTemplate = null;
+    }
+  }
+
+  let codeHash = '';
+  let bootCfgJson = '';
+  let expr = '';
+  let baseForDisk = null;
+
+  if (cachedBaseTemplate) {
+    codeHash = cachedBaseTemplate.codeHash;
+    bootCfgJson = JSON.stringify({ ...config, binding: SETTING_BINDING, codeHash, __fromFile: true });
+    expr = cachedBaseTemplate.basePrefix + bootCfgJson + cachedBaseTemplate.baseSuffix;
+    baseForDisk = cachedBaseTemplate;
+    _bundleCacheStats.diskBaseHits += 1;
+    _bundleCacheStats.lastOutcome = 'disk-base-hit';
+  } else {
+    if (forceInvalidateMem || (sourceHash && _lastCompiledSourceHash && sourceHash !== _lastCompiledSourceHash)) {
+      _cssCache = { sig: '', minCss: '', packedExpr: '' };
+      _unifiedBundleCache = { sig: '', bundleCode: '', partCodeByName: new Map() };
+      _mangledUnitCache.clear();
+    }
+
+    const compiledBase = compileBaseInjectTemplate();
+    codeHash = compiledBase.codeHash;
+    bootCfgJson = JSON.stringify({ ...config, binding: SETTING_BINDING, codeHash, __fromFile: true });
+    if (compiledBase.basePrefix !== null && compiledBase.baseSuffix !== null) {
+      expr = compiledBase.basePrefix + bootCfgJson + compiledBase.baseSuffix;
+      baseForDisk = {
+        codeHash,
+        basePrefix: compiledBase.basePrefix,
+        baseSuffix: compiledBase.baseSuffix,
+        baseSha256: compiledBase.baseSha256,
+      };
+    } else {
+      expr = getInjectWrapperTemplate()
+        .replace('__AG_INJ_CSS__', () => compiledBase.packedCss)
+        .replace('__AG_INJ_CSSHASH__', () => compiledBase.cssHashJson)
+        .replace('__AG_INJ_BOOTCFG__', () => bootCfgJson)
+        .replace('__AG_INJ_CODEHASH__', () => compiledBase.codeHashJson)
+        .replace('__AG_INJ_BUNDLE__();', () => compiledBase.bundle);
+    }
+    if (sourceHash) {
+      _lastCompiledSourceHash = sourceHash;
+    }
+    _bundleCacheStats.lastOutcome = 'compiled';
+  }
+
+  if (sourceHash && codeHash) {
+    _diskCacheLastSource = { sourceHash, codeHash };
+    if (baseForDisk) {
+      try {
+        _warmBaseCache = {
+          statSig: getBundleSourceStatSig(),
+          sourceHash,
+          ...baseForDisk,
+        };
+      } catch {}
+    }
+  }
+
+  if (cachePath && sourceHash && configHash && baseForDisk) {
+    if (deferCacheWrite) {
+      _pendingDiskCachePersist = {
+        cachePath,
+        sourceHash,
+        baseForDisk,
+        newEntry: {
+          configHash,
+          codeHash,
+          bootCfgJson,
+          exprSha256: null,
+          updatedAt: Date.now(),
+        },
+        deferredExpr: expr,
+      };
+    } else {
+      const newEntry = {
+        configHash,
+        codeHash,
+        bootCfgJson,
+        exprSha256: sha256Text(expr),
+        updatedAt: Date.now(),
+      };
+      _pendingDiskCachePersist = null;
+      persistBundleCacheRecordSync(cachePath, sourceHash, baseForDisk, newEntry, existingRawEntries);
+    }
+  }
+
+  return expr;
+}
+
+let _omniClientCache = { sig: '', sourceHash: '', minCode: '', codeHash: '', cachedPaths: new Set() };
+
+function readCompiledOmniClient(opts = null) {
   const omniPath = path.join(__dirname, 'vendor', 'omni-viewer', 'omni-client.js');
   if (!fs.existsSync(omniPath)) {
     return { minCode: '', codeHash: '' };
   }
   const sig = getFileSig(omniPath);
-  if (_omniClientCache.sig === sig) {
+  const cachePath = resolveBundleCachePathOption(opts);
+  if (!cachePath && _omniClientCache.sig === sig && _omniClientCache.codeHash) {
     return _omniClientCache;
   }
-  const raw = fs.readFileSync(omniPath, 'utf8');
-  const minCode = minifySingleSource(raw);
-  const codeHash = computeHash(minCode);
-  _omniClientCache = { sig, minCode, codeHash };
-  return _omniClientCache;
+  const rawBuf = fs.readFileSync(omniPath);
+  return resolveChannelAssetsWithDiskCache({
+    channelName: 'omni',
+    memCache: _omniClientCache,
+    setMemCache: (v) => { _omniClientCache = v; },
+    sig,
+    fileEntries: [{ rel: 'vendor/omni-viewer/omni-client.js', content: rawBuf }],
+    opts,
+    compileFn: () => {
+      const minCode = minifySingleSource(rawBuf.toString('utf8'));
+      const codeHash = computeHash(minCode);
+      return { minCode, codeHash };
+    },
+    toCacheEntry: (assets, sourceHash) => ({
+      sourceHash,
+      codeHash: assets.codeHash,
+      minCode: assets.minCode,
+      payloadSha256: sha256Text(`${assets.codeHash}\0${assets.minCode}`),
+      updatedAt: Date.now(),
+    }),
+    fromCacheEntry: (entry) => ({
+      minCode: entry.minCode,
+      codeHash: entry.codeHash,
+    }),
+  });
 }
 
 // 第二通道独立注入：绝不挤占静态主包 680KiB 配额，支持服务端 serverMeta 热同步与 codeHash 快速跳过重挂载
-function buildOmniClientExpression(serverMeta = null, customClientSource = null) {
+function buildOmniClientExpression(serverMeta = null, customClientSource = null, opts = null) {
+  const resolvedOpts = opts || (customClientSource && typeof customClientSource === 'object' ? customClientSource : null);
   let minCode = '';
   let codeHash = '';
   if (typeof customClientSource === 'string') {
     minCode = customClientSource ? minifySingleSource(customClientSource) : '';
     codeHash = minCode ? computeHash(minCode) : '';
   } else {
-    const compiled = readCompiledOmniClient();
+    const compiled = readCompiledOmniClient(resolvedOpts);
     minCode = compiled.minCode;
     codeHash = compiled.codeHash;
   }
@@ -5806,7 +6954,7 @@ function serializeJsonForEval(val) {
   );
 }
 
-let _sidebarClientCache = { sig: '', minCode: '', codeHash: '' };
+let _sidebarClientCache = { sig: '', sourceHash: '', minCode: '', codeHash: '', cachedPaths: new Set() };
 
 function isSafeV2SidebarClientSource(src) {
   if (typeof src !== 'string' || !src.trim()) return false;
@@ -5816,27 +6964,51 @@ function isSafeV2SidebarClientSource(src) {
   return true;
 }
 
-function readCompiledSidebarClient() {
+function readCompiledSidebarClient(opts = null) {
   const sidebarPath = path.join(__dirname, 'vendor', 'sidebar-studio', 'sidebar-client.js');
   if (!fs.existsSync(sidebarPath)) {
     return { minCode: '', codeHash: '' };
   }
   const sig = getFileSig(sidebarPath);
-  if (_sidebarClientCache.sig === sig) {
+  const cachePath = resolveBundleCachePathOption(opts);
+  if (!cachePath && _sidebarClientCache.sig === sig && _sidebarClientCache.codeHash) {
     return _sidebarClientCache;
   }
-  const raw = fs.readFileSync(sidebarPath, 'utf8');
-  if (!isSafeV2SidebarClientSource(raw)) {
+  const rawBuf = fs.readFileSync(sidebarPath);
+  const rawText = rawBuf.toString('utf8');
+  if (!isSafeV2SidebarClientSource(rawText)) {
     return { minCode: '', codeHash: '' };
   }
-  const minCode = minifySingleSource(raw);
-  const codeHash = computeHash(minCode);
-  _sidebarClientCache = { sig, minCode, codeHash };
-  return _sidebarClientCache;
+  return resolveChannelAssetsWithDiskCache({
+    channelName: 'sidebar',
+    memCache: _sidebarClientCache,
+    setMemCache: (v) => { _sidebarClientCache = v; },
+    sig,
+    fileEntries: [{ rel: 'vendor/sidebar-studio/sidebar-client.js', content: rawBuf }],
+    extraTag: 'v2safe',
+    opts,
+    compileFn: () => {
+      const minCode = minifySingleSource(rawText);
+      const codeHash = computeHash(minCode);
+      return { minCode, codeHash };
+    },
+    toCacheEntry: (assets, sourceHash) => ({
+      sourceHash,
+      codeHash: assets.codeHash,
+      minCode: assets.minCode,
+      payloadSha256: sha256Text(`${assets.codeHash}\0${assets.minCode}`),
+      updatedAt: Date.now(),
+    }),
+    fromCacheEntry: (entry) => ({
+      minCode: entry.minCode,
+      codeHash: entry.codeHash,
+    }),
+  });
 }
 
 // 第三通道独立注入（Sidebar Studio）：绝不挤占静态主包 670KiB 配额，支持服务端 meta 热同步、codeHash 快速跳过与热启停卸载
-function buildSidebarStudioExpression(serverMeta = null, customClientSource = null) {
+function buildSidebarStudioExpression(serverMeta = null, customClientSource = null, opts = null) {
+  const resolvedOpts = opts || (customClientSource && typeof customClientSource === 'object' ? customClientSource : null);
   let minCode = '';
   let codeHash = '';
   if (typeof customClientSource === 'string') {
@@ -5845,7 +7017,7 @@ function buildSidebarStudioExpression(serverMeta = null, customClientSource = nu
       : '';
     codeHash = minCode ? computeHash(minCode) : '';
   } else {
-    const compiled = readCompiledSidebarClient();
+    const compiled = readCompiledSidebarClient(resolvedOpts);
     minCode = compiled.minCode;
     codeHash = compiled.codeHash;
   }
@@ -6021,7 +7193,7 @@ function buildSidebarStudioExpression(serverMeta = null, customClientSource = nu
   })()`;
 }
 
-let _hostI18nCache = { sig: '', minRuntime: '', dictRaw: '', codeHash: '' };
+let _hostI18nCache = { sig: '', sourceHash: '', minRuntime: '', dictRaw: '', codeHash: '', cachedPaths: new Set() };
 
 function shouldEnableHostI18n(config, hostLocaleHint = null) {
   const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
@@ -6056,23 +7228,50 @@ function shouldEnableHostI18n(config, hostLocaleHint = null) {
   return false;
 }
 
-function readCompiledHostI18nAssets() {
+function readCompiledHostI18nAssets(opts = null) {
   const rtPath = path.join(__dirname, 'vendor', 'host-i18n', 'host-i18n-runtime.js');
   const dictPath = path.join(__dirname, 'vendor', 'host-i18n', 'zh-CN.json');
   if (!fs.existsSync(rtPath) || !fs.existsSync(dictPath)) {
     return { minRuntime: '', dictRaw: '', codeHash: '' };
   }
   const sig = `${getFileSig(rtPath)}|${getFileSig(dictPath)}`;
-  if (_hostI18nCache.sig === sig) {
+  const cachePath = resolveBundleCachePathOption(opts);
+  if (!cachePath && _hostI18nCache.sig === sig && _hostI18nCache.codeHash) {
     return _hostI18nCache;
   }
-  const rawRuntime = fs.readFileSync(rtPath, 'utf8');
-  const minRuntime = minifySingleSource(rawRuntime);
-  const parsedDict = JSON.parse(fs.readFileSync(dictPath, 'utf8'));
-  const dictRaw = JSON.stringify(parsedDict).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
-  const codeHash = computeHash(`${minRuntime}:${dictRaw}`);
-  _hostI18nCache = { sig, minRuntime, dictRaw, codeHash };
-  return _hostI18nCache;
+  const rtBuf = fs.readFileSync(rtPath);
+  const dictBuf = fs.readFileSync(dictPath);
+  return resolveChannelAssetsWithDiskCache({
+    channelName: 'hostI18n',
+    memCache: _hostI18nCache,
+    setMemCache: (v) => { _hostI18nCache = v; },
+    sig,
+    fileEntries: [
+      { rel: 'vendor/host-i18n/host-i18n-runtime.js', content: rtBuf },
+      { rel: 'vendor/host-i18n/zh-CN.json', content: dictBuf },
+    ],
+    opts,
+    compileFn: () => {
+      const minRuntime = minifySingleSource(rtBuf.toString('utf8'));
+      const parsedDict = JSON.parse(dictBuf.toString('utf8'));
+      const dictRaw = JSON.stringify(parsedDict).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+      const codeHash = computeHash(`${minRuntime}:${dictRaw}`);
+      return { minRuntime, dictRaw, codeHash };
+    },
+    toCacheEntry: (assets, sourceHash) => ({
+      sourceHash,
+      codeHash: assets.codeHash,
+      minRuntime: assets.minRuntime,
+      dictRaw: assets.dictRaw,
+      payloadSha256: sha256Text(`${assets.codeHash}\0${assets.minRuntime}\0${assets.dictRaw}`),
+      updatedAt: Date.now(),
+    }),
+    fromCacheEntry: (entry) => ({
+      minRuntime: entry.minRuntime,
+      dictRaw: entry.dictRaw,
+      codeHash: entry.codeHash,
+    }),
+  });
 }
 
 const HOST_I18N_REMOVE_EXPRESSION = `(() => {
@@ -6086,12 +7285,18 @@ const HOST_I18N_REMOVE_EXPRESSION = `(() => {
 })()`;
 
 // 第四通道独立注入（Host UI 简体中文按需本地化）：绝不打入静态主包，支持 4 层通用自动礼让与 100% 无损卸载
-function buildHostI18nExpression(config = null, hostLocaleHint = null) {
+function buildHostI18nExpression(config = null, hostLocaleHint = null, opts = null) {
+  let resolvedLocaleHint = hostLocaleHint;
+  let resolvedOpts = opts;
+  if (hostLocaleHint && typeof hostLocaleHint === 'object' && !resolvedOpts) {
+    resolvedOpts = hostLocaleHint;
+    resolvedLocaleHint = null;
+  }
   const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
-  if (!shouldEnableHostI18n(cfg, hostLocaleHint)) {
+  if (!shouldEnableHostI18n(cfg, resolvedLocaleHint)) {
     return '';
   }
-  const { minRuntime, dictRaw, codeHash } = readCompiledHostI18nAssets();
+  const { minRuntime, dictRaw, codeHash } = readCompiledHostI18nAssets(resolvedOpts);
   if (!minRuntime || !dictRaw) {
     return '';
   }
@@ -6240,6 +7445,254 @@ function buildHostI18nExpression(config = null, hostLocaleHint = null) {
   })()`;
 }
 
+let _thoughtAssetsCache = { sig: '', sourceHash: '', minClient: '', minSettingsUi: '', codeHash: '', cachedPaths: new Set() };
+
+function shouldEnableThought(config = null) {
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  const raw = typeof cfg.thoughtTranslate === 'string' ? cfg.thoughtTranslate.trim().toLowerCase() : '';
+  if (!raw || raw === 'off' || raw === 'false' || raw === '0' || raw === 'none') {
+    return false;
+  }
+  return VALIDATORS.thoughtTranslate.includes(raw) || raw === 'on' || raw === 'auto';
+}
+
+function readCompiledThoughtAssets(opts = null) {
+  const clientPath = path.join(__dirname, 'vendor', 'thought-translator', 'thought-client.js');
+  const settingsUiPath = path.join(__dirname, 'vendor', 'thought-translator', 'thought-settings-ui.js');
+  if (!fs.existsSync(clientPath) || !fs.existsSync(settingsUiPath)) {
+    return { sig: '', minClient: '', minSettingsUi: '', codeHash: '' };
+  }
+  const sig = `${getFileSig(clientPath)}|${getFileSig(settingsUiPath)}`;
+  const cachePath = resolveBundleCachePathOption(opts);
+  if (!cachePath && _thoughtAssetsCache.sig === sig && _thoughtAssetsCache.codeHash) {
+    return _thoughtAssetsCache;
+  }
+  const clientBuf = fs.readFileSync(clientPath);
+  const settingsBuf = fs.readFileSync(settingsUiPath);
+  return resolveChannelAssetsWithDiskCache({
+    channelName: 'thought',
+    memCache: _thoughtAssetsCache,
+    setMemCache: (v) => { _thoughtAssetsCache = v; },
+    sig,
+    fileEntries: [
+      { rel: 'vendor/thought-translator/thought-client.js', content: clientBuf },
+      { rel: 'vendor/thought-translator/thought-settings-ui.js', content: settingsBuf },
+    ],
+    opts,
+    compileFn: () => {
+      const minClient = minifySingleSource(clientBuf.toString('utf8'));
+      const minSettingsUi = minifySingleSource(settingsBuf.toString('utf8'));
+      const codeHash = computeHash(`${minClient}\n${minSettingsUi}`);
+      return { minClient, minSettingsUi, codeHash };
+    },
+    toCacheEntry: (assets, sourceHash) => ({
+      sourceHash,
+      codeHash: assets.codeHash,
+      minClient: assets.minClient,
+      minSettingsUi: assets.minSettingsUi,
+      payloadSha256: sha256Text(`${assets.codeHash}\0${assets.minClient}\0${assets.minSettingsUi}`),
+      updatedAt: Date.now(),
+    }),
+    fromCacheEntry: (entry) => ({
+      minClient: entry.minClient,
+      minSettingsUi: entry.minSettingsUi,
+      codeHash: entry.codeHash,
+    }),
+  });
+}
+
+const THOUGHT_REMOVE_EXPRESSION = `(() => {
+  try { window.__agPrismThought?.destroy?.(); } catch {}
+  try { document.querySelectorAll?.('[data-testid="prism-thought-ai-config"]')?.forEach?.((el) => el.remove()); } catch {}
+  try { delete window.__agPrismThought; } catch {}
+  try { delete globalThis.__agPrismThought; } catch {}
+  try { delete window.__agPrismThoughtSettingsUi; } catch {}
+  try { delete globalThis.__agPrismThoughtSettingsUi; } catch {}
+  try {
+    const sec = document.getElementById?.('ag-cs-settings-sec') || document.getElementById?.('ag-prism-settings-sec');
+    if (sec) {
+      sec.__prismThoughtUiHandle = null;
+      sec.__prismMountThoughtUi?.();
+    }
+  } catch {}
+  return { ok: true, status: 'off' };
+})()`;
+
+// 第五通道独立注入（思维链实时转译 + AI 渠道工作台 UI）：默认 off 态 0 B Fail-Closed，支持零刷新热插拔与无损卸载
+function buildThoughtExpression(config = null, opts = null) {
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  if (!shouldEnableThought(cfg)) {
+    return '';
+  }
+  const { minClient, minSettingsUi, codeHash } = readCompiledThoughtAssets(opts);
+  if (!minClient || !minSettingsUi) {
+    return '';
+  }
+  const rawMode = String(cfg.thoughtTranslate || '').trim().toLowerCase();
+  const normalizedBootMode = rawMode === 'machine' ? 'machine' : 'ai';
+  const bootCfg = {
+    ...cfg,
+    thoughtTranslate: normalizedBootMode,
+  };
+  const bootCfgJson = serializeJsonForEval(bootCfg);
+  const hashJson = serializeJsonForEval(codeHash);
+
+  return `(() => {
+    try {
+      if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };
+    } catch {
+      return { ok: false, status: 'skipped-subframe' };
+    }
+    const hasDomMarker = () => {
+      try {
+        if (
+          document.body &&
+          document.body.classList &&
+          (document.body.classList.contains('theme-standalone') || document.body.classList.contains('monaco-workbench'))
+        ) {
+          return true;
+        }
+        return Boolean(
+          typeof document.querySelector === 'function' &&
+            document.querySelector(
+              '.agy-shell, .agy-home, [data-testid="aux-pane-split"], [data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="model-selector-trigger"], .monaco-workbench'
+            )
+        );
+      } catch {
+        return false;
+      }
+    };
+    let needDomMarkerOnReady = false;
+    let isPlainHttpLocalhost = false;
+    try {
+      const loc = typeof window !== 'undefined' && window.location;
+      const href = loc && typeof loc.href === 'string' ? loc.href : '';
+      if (href) {
+        const low = href.toLowerCase();
+        if (low.startsWith('devtools://') || low.startsWith('data:') || low.startsWith('chrome:') || low.startsWith('chrome-extension:') || low.startsWith('edge:') || low.startsWith('blob:') || low.startsWith('plugin:')) {
+          return { ok: false, status: 'skipped-non-host' };
+        }
+        if (low.startsWith('vscode-file://') || low.startsWith('app://') || low.startsWith('about:')) {
+          const ttl = String(document.title || '').trim();
+          if (/^(?:untitled|launchpad)$/i.test(ttl) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(low)) {
+            return { ok: false, status: 'skipped-non-host' };
+          }
+        }
+        if (low.startsWith('http:') || low.startsWith('https:')) {
+          const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);
+          if (!m) return { ok: false, status: 'skipped-non-host' };
+          const pathname = (m[3] || '/').toLowerCase();
+          if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test(pathname)) {
+            return { ok: false, status: 'skipped-non-host' };
+          }
+          if (!hasDomMarker()) {
+            isPlainHttpLocalhost = m[1].toLowerCase() === 'http';
+            const rs = String(document.readyState || '');
+            if (isPlainHttpLocalhost) {
+              if (rs === 'loading') needDomMarkerOnReady = true;
+              else return { ok: false, status: 'skipped-non-host' };
+            } else if (!/\\bantigravity\\b/i.test(String(document.title || ''))) {
+              if (rs === 'loading') needDomMarkerOnReady = true;
+              else return { ok: false, status: 'skipped-non-host' };
+            }
+          }
+        }
+      }
+    } catch {}
+
+    const getSettingsSec = () => {
+      try {
+        return document.getElementById?.('ag-cs-settings-sec') || document.getElementById?.('ag-prism-settings-sec') || null;
+      } catch {
+        return null;
+      }
+    };
+    const cleanupThought = () => {
+      try { window.__agPrismThought?.destroy?.(); } catch {}
+      try { document.querySelectorAll?.('[data-testid="prism-thought-ai-config"]')?.forEach?.((el) => el.remove()); } catch {}
+      try { delete window.__agPrismThought; } catch {}
+      try { delete globalThis.__agPrismThought; } catch {}
+      try { delete window.__agPrismThoughtSettingsUi; } catch {}
+      try { delete globalThis.__agPrismThoughtSettingsUi; } catch {}
+      try {
+        const sec = getSettingsSec();
+        if (sec) {
+          sec.__prismThoughtUiHandle = null;
+          sec.__prismMountThoughtUi?.();
+        }
+      } catch {}
+    };
+    const getLiveCfg = () => {
+      try {
+        const st = window.__agPrism?.getState?.();
+        return st && st.cfg && typeof st.cfg === 'object' ? st.cfg : null;
+      } catch {
+        return null;
+      }
+    };
+
+    const bootCfg = ${bootCfgJson};
+    const initialLiveCfg = getLiveCfg();
+    if (initialLiveCfg && initialLiveCfg.thoughtTranslate === 'off') {
+      cleanupThought();
+      return { ok: true, status: 'off', skippedByLiveCfg: true };
+    }
+
+    const targetHash = ${hashJson};
+    const mountOrReuse = () => {
+      if (needDomMarkerOnReady && !hasDomMarker() && (isPlainHttpLocalhost || !/\\bantigravity\\b/i.test(String(document.title || '')))) {
+        return { ok: false, status: 'skipped-non-host' };
+      }
+      const liveCfg = getLiveCfg();
+      if (liveCfg && liveCfg.thoughtTranslate === 'off') {
+        cleanupThought();
+        return { ok: true, status: 'off', skippedByLiveCfg: true };
+      }
+      const effectiveCfg = liveCfg || bootCfg;
+      const existingThought = window.__agPrismThought;
+      const existingUi = window.__agPrismThoughtSettingsUi || globalThis.__agPrismThoughtSettingsUi;
+      if (
+        existingThought &&
+        existingThought.__prismCodeHash === targetHash &&
+        existingUi &&
+        existingUi.__prismCodeHash === targetHash
+      ) {
+        try { existingThought.sync?.(effectiveCfg); } catch {}
+        try { window.__agPrism?.syncAbsorbed?.(); } catch {}
+        try { getSettingsSec()?.__prismMountThoughtUi?.(); } catch {}
+        return { ok: true, reused: true, codeHash: targetHash };
+      }
+
+      cleanupThought();
+      ;${minClient};
+      ;${minSettingsUi};
+
+      const mountedThought = window.__agPrismThought || globalThis.__agPrismThought;
+      const mountedUi = window.__agPrismThoughtSettingsUi || globalThis.__agPrismThoughtSettingsUi;
+      if (mountedThought && typeof mountedThought === 'object') {
+        mountedThought.__prismCodeHash = targetHash;
+        try { window.__agPrismThought = mountedThought; } catch {}
+        try { globalThis.__agPrismThought = mountedThought; } catch {}
+      }
+      if (mountedUi && typeof mountedUi === 'object') {
+        mountedUi.__prismCodeHash = targetHash;
+        try { window.__agPrismThoughtSettingsUi = mountedUi; } catch {}
+        try { globalThis.__agPrismThoughtSettingsUi = mountedUi; } catch {}
+      }
+      try { mountedThought?.sync?.(effectiveCfg); } catch {}
+      try { window.__agPrism?.syncAbsorbed?.(); } catch {}
+      try { getSettingsSec()?.__prismMountThoughtUi?.(); } catch {}
+      return { ok: true, status: 'mounted', codeHash: targetHash };
+    };
+
+    if ((needDomMarkerOnReady || !document.documentElement) && typeof document.addEventListener === 'function') {
+      document.addEventListener('DOMContentLoaded', () => { try { mountOrReuse(); } catch {} }, { once: true });
+      return { ok: true, status: 'deferred', codeHash: targetHash };
+    }
+    return mountOrReuse();
+  })()`;
+}
+
 const REMOVE_EXPRESSION = `(() => {
   try {
     if (window.__agPrismTelemetry && typeof window.__agPrismTelemetry.destroy === 'function') {
@@ -6270,6 +7723,9 @@ const REMOVE_EXPRESSION = `(() => {
     if (window.__agPrismHostI18n && typeof window.__agPrismHostI18n.destroy === 'function') {
       window.__agPrismHostI18n.destroy();
     }
+  } catch (e) {}
+  try {
+    window.__agPrismContextMenu?.destroy?.();
   } catch (e) {}
   if (Array.isArray(globalThis.__agCsCleanups)) {
     while (globalThis.__agCsCleanups.length) {
@@ -6320,6 +7776,7 @@ const REMOVE_EXPRESSION = `(() => {
   delete window.__agPrismTelemetry;
   delete window.__agPrismEffortSlider;
   delete window.__agPrismThought;
+  delete window.__agPrismThoughtSettingsUi;
   delete window.__agPrismOmni;
   delete window.__agPrismOmniBridge;
   delete window.__agPrismOmniResolve;
@@ -6339,12 +7796,14 @@ const REMOVE_EXPRESSION = `(() => {
   delete window.__agPrismBrandLogoSvg;
   delete window.__agPrismHostI18n;
   delete window.__agPrismHostI18nFactory;
+  delete window.__agPrismContextMenu;
   delete window.__agCsI18n;
   delete globalThis.__agSP;
   delete globalThis.__agM;
   delete globalThis.__agPrismBrandLogoSvg;
   delete globalThis.__agPrismHostI18n;
   delete globalThis.__agPrismHostI18nFactory;
+  delete globalThis.__agPrismContextMenu;
   delete globalThis.__agPrismTelemetry;
   delete globalThis.__agPrismEffortSlider;
   delete globalThis.__agPrismThought;
@@ -6477,6 +7936,10 @@ const REMOVE_EXPRESSION = `(() => {
     'data-ag-cs-code-folded',
     'data-ag-cs-aux-dual',
     'data-ag-cs-model-overlay',
+    'data-ag-cs-model-submenu',
+    'data-ag-cs-orch-l2',
+    'data-ag-cs-orch-l3',
+    'data-ces-orch-row',
   ].forEach((attr) => {
     document.querySelectorAll('[' + attr + ']').forEach((el) => el.removeAttribute(attr));
   });
@@ -6539,7 +8002,7 @@ const REMOVE_EXPRESSION = `(() => {
   const nodes = document.querySelectorAll(
     '#' + ${JSON.stringify(STYLE_ID)} +
     ', #' + ${JSON.stringify(LEGACY_STYLE_ID)} +
-    ', #ag-prism-host-alert-css, #ag-prism-settings-v101-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-cs-settings-sec, .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ag-prism-sidebar-studio, .ag-prism-sidebar-rail, .ag-prism-sidebar-popover, .ag-prism-sidebar-modal, .ag-cs-home-panel, .ag-cs-home-panel-seat, .ag-cs-ripple-layer, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-mascot, .ag-v2-mascot-stage, .ag-cs-crystal-bar, [data-testid="orchestrator-effort-bar"], .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-smooth-caret, .ag-cs-perf-backdrop'
+    ', #ag-prism-host-alert-css, #ag-prism-settings-v101-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-cs-settings-sec, [data-testid="prism-thought-ai-config"], .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ag-prism-sidebar-studio, .ag-prism-sidebar-rail, .ag-prism-sidebar-popover, .ag-prism-sidebar-modal, .ag-cs-home-panel, .ag-cs-home-panel-seat, .ag-cs-ripple-layer, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-mascot, .ag-v2-mascot-stage, .ag-cs-crystal-bar, [data-testid="orchestrator-effort-bar"], .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-smooth-caret, .ag-cs-perf-backdrop, .ag-cs-ctx-menu, .ag-cs-ctx-toast'
   );
   nodes.forEach((n) => n.remove());
   return { removed: nodes.length };
@@ -6562,6 +8025,7 @@ module.exports = {
   reconcileConfigAliases,
   isEligibleTarget,
   readPidFromLockFile,
+  inspectProcessSync,
   matchesExpectedDaemonSignature,
   isExpectedDaemonProcess,
   CDP_OPT_IN_SWITCH,
@@ -6585,6 +8049,8 @@ module.exports = {
   SYNC_ROOT_FILES,
   REMOVE_EXPRESSION,
   readConfig,
+  writeConfig,
+  invalidateConfigCache,
   readCss,
   readPort,
   listPages,
@@ -6598,10 +8064,21 @@ module.exports = {
   computeHash,
   buildConfigRefreshExpression,
   buildInjectExpression,
+  BUNDLE_CACHE_SCHEMA_VERSION,
+  BUNDLE_CACHE_FILENAME,
+  BUNDLE_CACHE_MAX_ENTRIES,
+  computeBundleSourceHash,
+  computeBundleConfigHash,
+  getBundleCacheStats,
+  resetBundleCacheStats,
+  flushPendingBundleCache,
   buildOmniClientExpression,
   buildSidebarStudioExpression,
   shouldEnableHostI18n,
   buildHostI18nExpression,
   HOST_I18N_REMOVE_EXPRESSION,
+  shouldEnableThought,
+  buildThoughtExpression,
+  THOUGHT_REMOVE_EXPRESSION,
   isSafeV2SidebarClientSource,
 };

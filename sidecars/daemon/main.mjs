@@ -380,6 +380,18 @@ export function resolvePortFileCandidates() {
   return candidates;
 }
 
+const _portFileCache = new Map();
+const _hostCfgEnabledCache = new Map();
+
+function _setBoundedFileCache(map, key, val, limit = 16) {
+  if (map.has(key)) map.delete(key);
+  else if (map.size >= limit) {
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) map.delete(oldest);
+  }
+  map.set(key, val);
+}
+
 export function discoverActivePort(overridePort = null, customPortFile = null) {
   if (overridePort && Number.isInteger(Number(overridePort)) && Number(overridePort) > 0) {
     return Number(overridePort);
@@ -390,13 +402,41 @@ export function discoverActivePort(overridePort = null, customPortFile = null) {
   }
   const files = customPortFile ? [customPortFile] : resolvePortFileCandidates();
   for (const file of files) {
+    const key = path.resolve(file);
     try {
-      if (!fs.existsSync(file)) continue;
+      let st;
+      try {
+        st = fs.statSync(file);
+      } catch {
+        _portFileCache.delete(key);
+        continue;
+      }
+      if (!st.isFile()) {
+        _portFileCache.delete(key);
+        continue;
+      }
+      const sig = `${st.mtimeMs}:${st.size}:${st.ctimeMs}`;
+      const cached = _portFileCache.get(key);
+      if (cached && cached.sig === sig) {
+        if (cached.port) return cached.port;
+        continue;
+      }
+      if (st.size > 2048) {
+        _setBoundedFileCache(_portFileCache, key, { sig, port: null });
+        continue;
+      }
       const text = fs.readFileSync(file, 'utf8');
-      if (text.length > 2048) continue;
+      if (text.length > 2048) {
+        _setBoundedFileCache(_portFileCache, key, { sig, port: null });
+        continue;
+      }
       const port = parseInt(text.split(/\r?\n/)[0].trim(), 10);
-      if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
-    } catch {}
+      const validPort = Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
+      _setBoundedFileCache(_portFileCache, key, { sig, port: validPort });
+      if (validPort) return validPort;
+    } catch {
+      _portFileCache.delete(key);
+    }
   }
   return null;
 }
@@ -406,14 +446,33 @@ export function isEligibleTarget(target) {
 }
 
 export function isPluginEnabledInHostConfig(customConfigPath = null) {
+  const cfgPath = customConfigPath || path.join(os.homedir(), '.gemini', 'config', 'config.json');
+  const key = path.resolve(cfgPath);
   try {
-    const cfgPath = customConfigPath || path.join(os.homedir(), '.gemini', 'config', 'config.json');
-    if (!fs.existsSync(cfgPath)) return true;
+    let st;
+    try {
+      st = fs.statSync(cfgPath);
+    } catch {
+      _hostCfgEnabledCache.delete(key);
+      return true;
+    }
+    if (!st.isFile()) {
+      _hostCfgEnabledCache.delete(key);
+      return true;
+    }
+    const sig = `${st.mtimeMs}:${st.size}:${st.ctimeMs}`;
+    const cached = _hostCfgEnabledCache.get(key);
+    if (cached && cached.sig === sig) {
+      return cached.enabled;
+    }
     const raw = JSON.parse(fs.readFileSync(cfgPath, 'utf8').replace(/^\uFEFF/, ''));
-    if (raw?.plugins?.['obsidian-prism']?.enabled === false) return false;
-    if (raw?.plugins?.['antigravity-prism']?.enabled === false && !raw?.plugins?.['obsidian-prism']) return false;
-    return true;
+    let enabled = true;
+    if (raw?.plugins?.['obsidian-prism']?.enabled === false) enabled = false;
+    else if (raw?.plugins?.['antigravity-prism']?.enabled === false && !raw?.plugins?.['obsidian-prism']) enabled = false;
+    _setBoundedFileCache(_hostCfgEnabledCache, key, { sig, enabled });
+    return enabled;
   } catch {
+    _hostCfgEnabledCache.delete(key);
     return true;
   }
 }
@@ -486,6 +545,7 @@ export class PrismDaemon {
   constructor({
     rootDir = DEFAULT_ROOT_DIR,
     gitRepoDir = null,
+    bundleCachePath = undefined,
     overridePort = null,
     portFile = null,
     pollIntervalMs = 3000,
@@ -498,6 +558,8 @@ export class PrismDaemon {
     daemonPidVerifier = null,
     noPortRelaunchThresholdMs = 8000,
     shortcutCheckIntervalMs = 300000,
+    shortcutBackoffIntervalMs = 45 * 60 * 1000,
+    listPagesFallbackIntervalMs = 12000,
     _testUpdateService = null,
     updateCheckInitialDelayMs = 45000,
     updateCheckIntervalMs = 6 * 60 * 60 * 1000,
@@ -506,6 +568,7 @@ export class PrismDaemon {
   } = {}) {
     this.rootDir = path.resolve(rootDir);
     this.gitRepoDir = gitRepoDir ? path.resolve(gitRepoDir) : null;
+    this._bundleCachePathOpt = bundleCachePath;
     this.overridePort = overridePort;
     this.portFile = portFile;
     this.pollIntervalMs = Math.max(200, Number(pollIntervalMs) || 3000);
@@ -524,8 +587,14 @@ export class PrismDaemon {
     this.ignoredTargets = new Map();
     this.browserSession = null;
     this.browserPort = null;
+    this._browserDiscoverySubscribed = false;
+    this._lastListPagesAt = 0;
+    this._forceListPagesNextTick = false;
+    const fallbackListMs = Number(listPagesFallbackIntervalMs);
+    this._listPagesFallbackIntervalMs = Number.isFinite(fallbackListMs) ? Math.max(100, fallbackListMs) : 12000;
     this._discoverTimer = null;
     this._reloadTimer = null;
+    this._bundleCacheFlushTimer = null;
     this._managedTimers = new Set();
     this._pendingTick = false;
     this.running = false;
@@ -535,10 +604,17 @@ export class PrismDaemon {
     this.injectExpr = '';
     this.omniExpr = '';
     this.sidebarExpr = '';
+    this.hostI18nExpr = '';
+    this.thoughtExpr = '';
+    this.thoughtCodeHash = '';
+    this._thoughtHashSource = '';
     this.codeHash = '';
     this.ownerToken = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     this.pidFile = path.join(this.rootDir, '.daemon.pid');
     this.logFile = path.join(this.rootDir, 'daemon.log');
+    this._logBytes = -1;
+    this._ownerFileCache = null;
+    this._safeSidebarFileCache = null;
     this._lazyStore = null;
     this._lazyUsage = null;
     this._lazyLsClient = null;
@@ -559,6 +635,13 @@ export class PrismDaemon {
     this._relaunchHooks = relaunchHooks;
     this.noPortRelaunchThresholdMs = Math.max(50, Number(noPortRelaunchThresholdMs) || 8000);
     this.shortcutCheckIntervalMs = Math.max(1000, Number(shortcutCheckIntervalMs) || 300000);
+    const backoffMs = Number(shortcutBackoffIntervalMs);
+    this._shortcutBackoffIntervalMs = Math.max(
+      this.shortcutCheckIntervalMs,
+      Number.isFinite(backoffMs) && backoffMs > 0 ? backoffMs : 45 * 60 * 1000
+    );
+    this._shortcutAllClean = false;
+    this._hasActiveCdpPort = false;
     this._noPortSinceMs = 0;
     this._promptInFlight = false;
     this._lastShortcutCheckAt = 0;
@@ -589,9 +672,20 @@ export class PrismDaemon {
   log(msg) {
     if (!this.silent) {
       try {
-        const fi = fs.existsSync(this.logFile) ? fs.statSync(this.logFile) : null;
-        if (fi && fi.size > 512 * 1024) fs.writeFileSync(this.logFile, '', 'utf8');
-        fs.appendFileSync(this.logFile, `[${new Date().toISOString()}] ${msg}\n`, 'utf8');
+        if (this._logBytes < 0) {
+          try {
+            this._logBytes = fs.statSync(this.logFile).size;
+          } catch {
+            this._logBytes = 0;
+          }
+        }
+        if (this._logBytes > 512 * 1024) {
+          fs.writeFileSync(this.logFile, '', 'utf8');
+          this._logBytes = 0;
+        }
+        const line = `[${new Date().toISOString()}] ${msg}\n`;
+        fs.appendFileSync(this.logFile, line, 'utf8');
+        this._logBytes += Buffer.byteLength(line, 'utf8');
       } catch {}
     }
   }
@@ -664,13 +758,22 @@ export class PrismDaemon {
         }
       }
 
-      const scan = arch.scanConversationStorage({
-        convDir,
-        archiveDir,
-        summaries: liveSummaries,
-        subagentMaxAgeHours: action === 'prepare-archive' ? 1 : 6,
-        now,
-      });
+      const scan =
+        typeof arch.scanConversationStorageAsync === 'function'
+          ? await arch.scanConversationStorageAsync({
+              convDir,
+              archiveDir,
+              summaries: liveSummaries,
+              subagentMaxAgeHours: action === 'prepare-archive' ? 1 : 6,
+              now,
+            })
+          : arch.scanConversationStorage({
+              convDir,
+              archiveDir,
+              summaries: liveSummaries,
+              subagentMaxAgeHours: action === 'prepare-archive' ? 1 : 6,
+              now,
+            });
       const base = {
         ok: true,
         action,
@@ -1292,10 +1395,105 @@ export class PrismDaemon {
     }
   }
 
-  rebuildBundle({ forceReloadCdp = false } = {}) {
+  _isGitSourceDir(dirPath) {
+    if (!dirPath) return false;
+    try {
+      const resolved = path.resolve(dirPath);
+      if (this.gitRepoDir && resolved.toLowerCase() === this.gitRepoDir.toLowerCase()) {
+        return true;
+      }
+      // 兼容普通仓库 .git 目录与 git worktree .git 文件，杜绝向源码目录写入缓存文件
+      if (fs.existsSync(path.join(resolved, '.git'))) {
+        return true;
+      }
+    } catch {}
+    return false;
+  }
+
+  _isWritableCacheDir(dirPath) {
+    if (!dirPath) return false;
+    try {
+      const st = fs.lstatSync(dirPath);
+      if (st.isSymbolicLink() || !st.isDirectory()) return false;
+      fs.accessSync(dirPath, fs.constants.W_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  resolveBundleCachePath() {
+    if (this._bundleCachePathOpt === false || this._bundleCachePathOpt === null) {
+      return null;
+    }
+    if (typeof this._bundleCachePathOpt === 'string') {
+      const trimmed = this._bundleCachePathOpt.trim();
+      return trimmed ? path.resolve(trimmed) : null;
+    }
+    const envRaw = process.env.AG_PRISM_BUNDLE_CACHE_PATH;
+    if (typeof envRaw === 'string' && envRaw.trim()) {
+      const trimmed = envRaw.trim();
+      if (/^(?:0|off|false|none)$/i.test(trimmed)) return null;
+      return path.resolve(trimmed);
+    }
+    const cacheFileName =
+      typeof this.cdp?.BUNDLE_CACHE_FILENAME === 'string' && this.cdp.BUNDLE_CACHE_FILENAME
+        ? this.cdp.BUNDLE_CACHE_FILENAME
+        : '.bundle-cache.json';
+
+    // 1) 首选非 Git 源码且可写的已安装插件目录（如 ~/.gemini/config/plugins/obsidian-prism/.bundle-cache.json）：
+    //    与 .daemon.pid / daemon.log / config.json 同目录，普通卸载与 --purge-data 均会随插件目录一并自动清理。
+    if (!this._isGitSourceDir(this.rootDir) && this._isWritableCacheDir(this.rootDir)) {
+      return path.join(this.rootDir, cacheFileName);
+    }
+
+    // 2) 自动化测试环境中若 rootDir 是 Git 源码目录或只读目录且未显式指定缓存路径，禁止触碰真实用户主目录
+    if (isAutomatedTestRuntime()) {
+      return null;
+    }
+
+    // 3) 若 rootDir 为 Git 源码目录（开发直跑）或只读安装目录，回退至用户可写 sidecar_data 状态目录
+    //    （~/.gemini/antigravity/sidecar_data/obsidian-prism/telemetry/.bundle-cache.json，--purge-data 时可清理）
+    try {
+      const stateDir = this.resolveTelemetryDataDir();
+      if (stateDir && this._isWritableCacheDir(stateDir)) {
+        return path.join(stateDir, cacheFileName);
+      }
+    } catch {}
+    return null;
+  }
+
+  _scheduleBundleCacheFlush() {
+    if (this._bundleCacheFlushTimer) {
+      clearTimeout(this._bundleCacheFlushTimer);
+      this._bundleCacheFlushTimer = null;
+    }
+    this._bundleCacheFlushTimer = setTimeout(() => {
+      this._bundleCacheFlushTimer = null;
+      if (!this.running) return;
+      try {
+        this.cdp?.flushPendingBundleCache?.();
+      } catch {}
+    }, 350);
+    if (this._bundleCacheFlushTimer && typeof this._bundleCacheFlushTimer.unref === 'function') {
+      this._bundleCacheFlushTimer.unref();
+    }
+  }
+
+  _getChannelCacheOpts(deferCacheWrite = true) {
+    const cachePath = this.resolveBundleCachePath();
+    if (!cachePath) return null;
+    return deferCacheWrite ? { cachePath, deferCacheWrite: true } : { cachePath };
+  }
+
+  rebuildBundle({ forceReloadCdp = false, deferDiskCacheWrite = false } = {}) {
     const cdpPath = path.join(this.rootDir, 'cdp.js');
     const nextSig = this._readCdpFileSig();
     if (forceReloadCdp || !this.cdp || (nextSig && nextSig !== this._cdpFileSig)) {
+      if (this._bundleCacheFlushTimer) {
+        clearTimeout(this._bundleCacheFlushTimer);
+        this._bundleCacheFlushTimer = null;
+      }
       try {
         delete require.cache[require.resolve(cdpPath)];
       } catch {}
@@ -1303,33 +1501,61 @@ export class PrismDaemon {
       this._loadedCdpVerifier = typeof this.cdp?.isExpectedDaemonProcess === 'function' ? this.cdp.isExpectedDaemonProcess : null;
       this._cdpFileSig = nextSig;
     }
-    this.injectExpr = this.cdp.buildInjectExpression();
+    const hasReadConfig = typeof this.cdp.readConfig === 'function';
+    const cfg = hasReadConfig ? this.cdp.readConfig() : null;
+    const bundleCachePath = this.resolveBundleCachePath();
+    const canBatchFlush = Boolean(bundleCachePath && typeof this.cdp.flushPendingBundleCache === 'function');
+    const useDeferWrite = Boolean(deferDiskCacheWrite || canBatchFlush);
+    const cacheOpts = bundleCachePath
+      ? useDeferWrite
+        ? { cachePath: bundleCachePath, deferCacheWrite: true }
+        : { cachePath: bundleCachePath }
+      : null;
+
+    this.injectExpr = cacheOpts
+      ? this.cdp.buildInjectExpression(cfg || undefined, cacheOpts)
+      : this.cdp.buildInjectExpression(cfg || undefined);
     const m = this.injectExpr.match(/"codeHash":"([^"]+)"/);
     this.codeHash = m ? m[1] : '';
     const shouldBuildOmni =
       typeof this.cdp.buildOmniClientExpression === 'function' &&
-      this._isOmniEnabled();
+      this._isOmniEnabled(cfg);
     if (shouldBuildOmni) {
       const meta = this.omniServer && this.omniServer.running ? this.omniServer.getServerInfo() : null;
-      this.omniExpr = this.cdp.buildOmniClientExpression(meta);
+      this.omniExpr = cacheOpts
+        ? this.cdp.buildOmniClientExpression(meta, null, cacheOpts)
+        : this.cdp.buildOmniClientExpression(meta);
     } else {
       this.omniExpr = '';
     }
     const shouldBuildSidebar =
       typeof this.cdp.buildSidebarStudioExpression === 'function' &&
-      (typeof this.cdp.readConfig !== 'function' || this._isSidebarStudioEnabled());
+      (!hasReadConfig || this._isSidebarStudioEnabled(cfg));
     if (shouldBuildSidebar) {
-      this.sidebarExpr = this._buildSidebarExprForCurrentClient();
+      this.sidebarExpr = this._buildSidebarExprForCurrentClient(cacheOpts);
     } else {
       this.sidebarExpr = '';
     }
     const shouldBuildHostI18n =
       typeof this.cdp.buildHostI18nExpression === 'function' &&
-      this._isHostI18nEnabled();
+      this._isHostI18nEnabled(cfg);
     if (shouldBuildHostI18n) {
-      this.hostI18nExpr = this.cdp.buildHostI18nExpression();
+      this.hostI18nExpr = cacheOpts
+        ? this.cdp.buildHostI18nExpression(cfg, null, cacheOpts)
+        : this.cdp.buildHostI18nExpression(cfg);
     } else {
       this.hostI18nExpr = '';
+    }
+    this._buildThoughtExprForConfig(cfg, cacheOpts);
+
+    if (bundleCachePath) {
+      if (deferDiskCacheWrite) {
+        this._scheduleBundleCacheFlush();
+      } else if (canBatchFlush) {
+        try {
+          this.cdp.flushPendingBundleCache();
+        } catch {}
+      }
     }
     return this.injectExpr;
   }
@@ -1345,16 +1571,31 @@ export class PrismDaemon {
   _hasSafeV2SidebarClientFile() {
     try {
       const p = path.join(this.rootDir, 'vendor', 'sidebar-studio', 'sidebar-client.js');
-      if (!fs.existsSync(p)) return false;
-      const src = fs.readFileSync(p, 'utf8');
-      if (typeof this.cdp?.isSafeV2SidebarClientSource === 'function') {
-        return this.cdp.isSafeV2SidebarClientSource(src);
+      let st;
+      try {
+        st = fs.statSync(p);
+      } catch {
+        this._safeSidebarFileCache = { path: p, sig: '', ok: false };
+        return false;
       }
-      // 严禁挂载任何含旧版全局权限写入（setPrefValue/setPrefValues 任意形式）的客户端，仅放行 v2 零全局写渲染端
-      if (!src.includes('SIDEBAR_STUDIO_CLIENT_V2')) return false;
-      if (/setPrefValues?/i.test(src)) return false;
-      return true;
+      if (!st.isFile()) {
+        this._safeSidebarFileCache = { path: p, sig: '', ok: false };
+        return false;
+      }
+      const sig = `${st.mtimeMs}:${st.size}:${st.ctimeMs}`;
+      if (this._safeSidebarFileCache && this._safeSidebarFileCache.path === p && this._safeSidebarFileCache.sig === sig) {
+        return this._safeSidebarFileCache.ok;
+      }
+      const src = fs.readFileSync(p, 'utf8');
+      const ok =
+        typeof this.cdp?.isSafeV2SidebarClientSource === 'function'
+          ? Boolean(this.cdp.isSafeV2SidebarClientSource(src))
+          : // 严禁挂载任何含旧版全局权限写入（setPrefValue/setPrefValues 任意形式）的客户端，仅放行 v2 零全局写渲染端
+            src.includes('SIDEBAR_STUDIO_CLIENT_V2') && !/setPrefValues?/i.test(src);
+      this._safeSidebarFileCache = { path: p, sig, ok };
+      return ok;
     } catch {
+      this._safeSidebarFileCache = null;
       return false;
     }
   }
@@ -1372,9 +1613,10 @@ export class PrismDaemon {
     return "(() => { try { if (document.documentElement) document.documentElement.setAttribute('data-ag-prism-omni', 'off'); window.__agPrismOmni?.destroy?.(); delete window.__agPrismOmni; delete window.__agPrismOmniServerMeta; } catch {} return { ok: true, status: 'off' }; })()";
   }
 
-  _isSidebarStudioEnabled() {
+  _isSidebarStudioEnabled(cfgOverride = null) {
     try {
-      return this.cdp?.readConfig?.()?.sidebarStudio === 'on';
+      const cfg = cfgOverride || this.cdp?.readConfig?.();
+      return cfg?.sidebarStudio === 'on';
     } catch {
       return false;
     }
@@ -1408,9 +1650,79 @@ export class PrismDaemon {
     );
   }
 
-  _isTelemetryDisabled() {
+  _setThoughtExpr(expr) {
+    const next = typeof expr === 'string' ? expr : '';
+    this.thoughtExpr = next;
+    this._thoughtHashSource = next;
+    this.thoughtCodeHash = next
+      ? crypto.createHash('sha256').update(next).digest('hex').slice(0, 16)
+      : '';
+    return next;
+  }
+
+  _buildThoughtExprForConfig(cfgOverride = null, cacheOpts = undefined) {
+    const cfg = cfgOverride || (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
+    if (!this._isThoughtEnabled(cfg) || typeof this.cdp?.buildThoughtExpression !== 'function') {
+      return this._setThoughtExpr('');
+    }
+    const opts = cacheOpts !== undefined ? cacheOpts : this._getChannelCacheOpts(true);
+    const expr = opts ? this.cdp.buildThoughtExpression(cfg, opts) : this.cdp.buildThoughtExpression(cfg);
+    if (cacheOpts === undefined && opts && this.running) {
+      this._scheduleBundleCacheFlush();
+    }
+    return this._setThoughtExpr(expr);
+  }
+
+  _getThoughtExprHash(expr = this.thoughtExpr) {
+    const str = typeof expr === 'string' ? expr : '';
+    if (!str) return '';
+    if (str === this._thoughtHashSource && this.thoughtCodeHash) {
+      return this.thoughtCodeHash;
+    }
+    const hash = crypto.createHash('sha256').update(str).digest('hex').slice(0, 16);
+    if (str === this.thoughtExpr) {
+      this._thoughtHashSource = str;
+      this.thoughtCodeHash = hash;
+    }
+    return hash;
+  }
+
+  _isThoughtEnabled(cfgOverride = null) {
     try {
-      return this.cdp?.readConfig?.()?.telemetryModule === 'off';
+      const cfg = cfgOverride || this.cdp?.readConfig?.();
+      if (typeof this.cdp?.shouldEnableThought === 'function') {
+        return Boolean(this.cdp.shouldEnableThought(cfg));
+      }
+      const mode = typeof cfg?.thoughtTranslate === 'string' ? cfg.thoughtTranslate.trim().toLowerCase() : 'off';
+      return Boolean(mode && mode !== 'off');
+    } catch {
+      return false;
+    }
+  }
+
+  _getThoughtCfgSig(cfgOverride = null, exprOverride = null) {
+    try {
+      const cfg = cfgOverride || this.cdp?.readConfig?.() || {};
+      if (!this._isThoughtEnabled(cfg)) return '';
+      const mode = typeof cfg.thoughtTranslate === 'string' ? cfg.thoughtTranslate.trim().toLowerCase() : 'off';
+      const exprHash = this._getThoughtExprHash(typeof exprOverride === 'string' ? exprOverride : this.thoughtExpr);
+      return `1:${mode}:${exprHash}`;
+    } catch {
+      return '';
+    }
+  }
+
+  _getThoughtCleanupExpression() {
+    return (
+      this.cdp?.THOUGHT_REMOVE_EXPRESSION ||
+      "(() => { try { window.__agPrismThought?.destroy?.(); } catch {} try { document.querySelectorAll('[data-testid=\"prism-thought-ai-config\"]').forEach((n) => n.remove()); } catch {} try { delete window.__agPrismThought; } catch {} try { delete globalThis.__agPrismThought; } catch {} try { delete window.__agPrismThoughtSettingsUi; } catch {} try { delete globalThis.__agPrismThoughtSettingsUi; } catch {} return { ok: true, status: 'off' }; })()"
+    );
+  }
+
+  _isTelemetryDisabled(cfgOverride = null) {
+    try {
+      const cfg = cfgOverride || this.cdp?.readConfig?.();
+      return cfg?.telemetryModule === 'off';
     } catch {
       return false;
     }
@@ -1512,12 +1824,20 @@ export class PrismDaemon {
     }
   }
 
-  _buildSidebarExprForCurrentClient() {
+  _buildSidebarExprForCurrentClient(cacheOpts = undefined) {
     if (typeof this.cdp.buildSidebarStudioExpression !== 'function') return '';
     const meta = this._getSidebarServerMeta();
-    return this._hasSafeV2SidebarClientFile()
-      ? this.cdp.buildSidebarStudioExpression(meta)
-      : this.cdp.buildSidebarStudioExpression(meta, '');
+    if (!this._hasSafeV2SidebarClientFile()) {
+      return this.cdp.buildSidebarStudioExpression(meta, '');
+    }
+    const opts = cacheOpts !== undefined ? cacheOpts : this._getChannelCacheOpts(true);
+    const expr = opts
+      ? this.cdp.buildSidebarStudioExpression(meta, null, opts)
+      : this.cdp.buildSidebarStudioExpression(meta);
+    if (cacheOpts === undefined && opts && this.running) {
+      this._scheduleBundleCacheFlush();
+    }
+    return expr;
   }
 
   _pickActiveSidebarHostEntry() {
@@ -1617,7 +1937,13 @@ export class PrismDaemon {
       await srv.start();
       this.omniServer = srv;
       if (typeof this.cdp.buildOmniClientExpression === 'function') {
-        this.omniExpr = this.cdp.buildOmniClientExpression(srv.getServerInfo());
+        const opts = this._getChannelCacheOpts(true);
+        this.omniExpr = opts
+          ? this.cdp.buildOmniClientExpression(srv.getServerInfo(), null, opts)
+          : this.cdp.buildOmniClientExpression(srv.getServerInfo());
+        if (opts && this.running) {
+          this._scheduleBundleCacheFlush();
+        }
       }
       return srv;
     })();
@@ -1926,20 +2252,16 @@ export class PrismDaemon {
         const subMap = this._discoveredSubagents || null;
         try {
           const localRes = await discoverLocalConversations({ host: 'app' });
-          const convRoot = path.join(os.homedir(), '.gemini', 'antigravity', 'conversations');
-          const convRootStat = await fs.promises.lstat(convRoot).catch(() => null);
-          const rootSafe = Boolean(convRootStat && !convRootStat.isSymbolicLink() && convRootStat.isDirectory());
           for (const entry of localRes?.conversations || []) {
             const lid = String(entry?.id || '').toLowerCase();
             if (!GUID_RE.test(lid) || byId.has(lid)) continue;
-            let mtimeSec = 0;
-            if (rootSafe) {
-              const dbFile = path.join(convRoot, `${lid}.db`);
-              const st = await fs.promises.lstat(dbFile).catch(() => null);
-              if (st && !st.isSymbolicLink() && st.isFile() && Number.isFinite(st.mtimeMs) && st.mtimeMs > 0) {
-                mtimeSec = Math.floor(st.mtimeMs / 1000);
-              }
-            }
+            // 直接复用 discoverLocalConversations 并发 lstat 返回的 mtimeMs，省去二次串行 lstat
+            const rawMtimeMs = Number.isFinite(entry?.dbMtimeMs)
+              ? entry.dbMtimeMs
+              : Number.isFinite(entry?.mtimeMs)
+              ? entry.mtimeMs
+              : 0;
+            const mtimeSec = rawMtimeMs > 0 ? Math.floor(rawMtimeMs / 1000) : 0;
             const knownSub = subMap?.get(lid) || null;
             const localItem = {
               id: lid,
@@ -2212,6 +2534,7 @@ export class PrismDaemon {
     const next = { ...current, ...expandedPatch };
     this._selfConfigWriteUntil = Date.now() + 650;
     writeFileAtomicSync(cfgPath, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
+    this.cdp?.invalidateConfigCache?.();
     this._configSeq += 1;
     return true;
   }
@@ -2366,11 +2689,12 @@ export class PrismDaemon {
           }
         }
         // Warm-cache rebuild updates `this.injectExpr` bootCfg in < 3ms without re-minifying modules!
-        this.rebuildBundle();
+        this.rebuildBundle({ deferDiskCacheWrite: true });
         const injectSnap = this.injectExpr;
         const omniSnap = this.omniExpr;
         const sidebarSnap = this.sidebarExpr;
         const hostI18nSnap = this.hostI18nExpr;
+        let thoughtSnap = this.thoughtExpr;
         const currentCfg = typeof this.cdp.readConfig === 'function' ? this.cdp.readConfig() : {};
         if (currentCfg?.telemetryModule === 'off') {
           this._releaseIdleTelemetry(true);
@@ -2383,6 +2707,11 @@ export class PrismDaemon {
         const sidebarEnabled = currentCfg?.sidebarStudio === 'on';
         const hostI18nEnabled = this._isHostI18nEnabled(currentCfg);
         const hostI18nSig = hostI18nEnabled ? this._getHostI18nCfgSig(currentCfg) : '';
+        const thoughtEnabled = this._isThoughtEnabled(currentCfg);
+        if (thoughtEnabled && !thoughtSnap && typeof this.cdp.buildThoughtExpression === 'function') {
+          thoughtSnap = this._buildThoughtExprForConfig(currentCfg);
+        }
+        const thoughtSig = thoughtEnabled ? this._getThoughtCfgSig(currentCfg, thoughtSnap) : '';
         const canFastRefresh = typeof this.cdp.buildConfigRefreshExpression === 'function';
         const baseRefreshExpr = canFastRefresh ? this.cdp.buildConfigRefreshExpression() : null;
         if (activeItems.length === 0) continue;
@@ -2473,6 +2802,27 @@ export class PrismDaemon {
                 entry.hostI18nMounted = false;
                 entry.lastHostI18nSig = '';
               }
+              if (abortIfStale()) return;
+              const hadThought = Boolean(entry.thoughtScriptId || entry.thoughtMounted);
+              const thoughtChanged = Boolean(
+                thoughtEnabled &&
+                  thoughtSnap &&
+                  (entry.lastThoughtSig !== thoughtSig || !entry.thoughtScriptId || !entry.thoughtMounted)
+              );
+              if (thoughtEnabled && thoughtSnap) {
+                if (!skippedStale && !entry.session.closed && (!refreshedFast || thoughtChanged)) {
+                  await entry.session.send('Runtime.addBinding', { name: THOUGHT_BINDING }).catch(() => {});
+                  const evalRes = await entry.session.evaluate(thoughtSnap).catch(() => null);
+                  if (evalRes && evalRes.ok) {
+                    entry.thoughtMounted = true;
+                    entry.lastThoughtSig = thoughtSig;
+                  }
+                }
+              } else if (hadThought && !skippedStale && !entry.session.closed) {
+                await entry.session.evaluate(this._getThoughtCleanupExpression()).catch(() => {});
+                entry.thoughtMounted = false;
+                entry.lastThoughtSig = '';
+              }
 
               // Coalesce persistent NewDocument script replacement if a newer mutation is already queued!
               if (this._broadcastPending || this._configSeq !== snapSeq || entry.session.closed) {
@@ -2550,6 +2900,29 @@ export class PrismDaemon {
                   entry.lastHostI18nScriptSig = hostI18nSig;
                 }
               }
+              if (!thoughtEnabled || !thoughtSnap) {
+                if (entry.thoughtScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId })
+                    .catch(() => {});
+                  entry.thoughtScriptId = null;
+                }
+                entry.lastThoughtScriptSig = '';
+              } else if ((entry.lastThoughtScriptSig !== thoughtSig || !entry.thoughtScriptId) && !entry.session.closed) {
+                if (entry.thoughtScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId })
+                    .catch(() => {});
+                  entry.thoughtScriptId = null;
+                }
+                const thoughtAdd = await entry.session
+                  .send('Page.addScriptToEvaluateOnNewDocument', { source: thoughtSnap })
+                  .catch(() => null);
+                if (thoughtAdd && thoughtAdd.identifier) {
+                  entry.thoughtScriptId = thoughtAdd.identifier;
+                  entry.lastThoughtScriptSig = thoughtSig;
+                }
+              }
             })
           )
         );
@@ -2615,26 +2988,53 @@ export class PrismDaemon {
   async applyToEntry(entry) {
     return this._runEntryExclusive(entry, async () => {
       if (!entry || entry.session.closed) return null;
-      const omniEnabledInit = this._isOmniEnabled();
+      const readCfg = () => (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
+      let cfgSeq = this._configSeq;
+      let cfg = readCfg();
+      const getCurrentCfg = () => {
+        if (this._configSeq !== cfgSeq) {
+          cfgSeq = this._configSeq;
+          cfg = readCfg();
+        }
+        return cfg;
+      };
+      const omniEnabledInit = this._isOmniEnabled(cfg);
       if (omniEnabledInit) {
         await this.ensureOmniServer().catch(() => null);
       }
-      const sidebarEnabledInit = this._isSidebarStudioEnabled();
+      const sidebarEnabledInit = this._isSidebarStudioEnabled(cfg);
       if (sidebarEnabledInit) {
         await this.ensureSidebarService().catch(() => null);
       }
       if (!this.injectExpr) this.rebuildBundle();
       else {
+        const curCfg = getCurrentCfg();
+        const chOpts = this._getChannelCacheOpts(true);
+        let usedChCache = false;
         if (!omniEnabledInit) {
           this.omniExpr = '';
         } else if (this.omniServer && !this.omniExpr && typeof this.cdp.buildOmniClientExpression === 'function') {
-          this.omniExpr = this.cdp.buildOmniClientExpression(this.omniServer.getServerInfo());
+          this.omniExpr = chOpts
+            ? this.cdp.buildOmniClientExpression(this.omniServer.getServerInfo(), null, chOpts)
+            : this.cdp.buildOmniClientExpression(this.omniServer.getServerInfo());
+          if (chOpts) usedChCache = true;
         }
         if (sidebarEnabledInit && !this.sidebarExpr && typeof this.cdp.buildSidebarStudioExpression === 'function') {
-          this.sidebarExpr = this._buildSidebarExprForCurrentClient();
+          this.sidebarExpr = this._buildSidebarExprForCurrentClient(chOpts);
+          if (chOpts) usedChCache = true;
         }
-        if (!this.hostI18nExpr && this._isHostI18nEnabled() && typeof this.cdp.buildHostI18nExpression === 'function') {
-          this.hostI18nExpr = this.cdp.buildHostI18nExpression();
+        if (!this.hostI18nExpr && this._isHostI18nEnabled(curCfg) && typeof this.cdp.buildHostI18nExpression === 'function') {
+          this.hostI18nExpr = chOpts
+            ? this.cdp.buildHostI18nExpression(curCfg, null, chOpts)
+            : this.cdp.buildHostI18nExpression(curCfg);
+          if (chOpts) usedChCache = true;
+        }
+        if (!this.thoughtExpr && this._isThoughtEnabled(curCfg) && typeof this.cdp.buildThoughtExpression === 'function') {
+          this._buildThoughtExprForConfig(curCfg, chOpts);
+          if (chOpts) usedChCache = true;
+        }
+        if (usedChCache && this.running) {
+          this._scheduleBundleCacheFlush();
         }
       }
       if (entry.scriptId) {
@@ -2678,13 +3078,23 @@ export class PrismDaemon {
             .catch(() => {});
           entry.hostI18nScriptId = null;
         }
+        if (entry.thoughtScriptId) {
+          await entry.session
+            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId })
+            .catch(() => {});
+          entry.thoughtScriptId = null;
+        }
         entry.sidebarMounted = false;
         entry.hostI18nMounted = false;
         entry.lastHostI18nSig = '';
         entry.lastHostI18nScriptSig = '';
+        entry.thoughtMounted = false;
+        entry.lastThoughtSig = '';
+        entry.lastThoughtScriptSig = '';
         return mainRes;
       }
 
+      const cfgNow = getCurrentCfg();
       const hadOmniBefore = Boolean(entry.omniScriptId || entry.lastOmniExpr);
       if (entry.omniScriptId) {
         await entry.session
@@ -2692,7 +3102,7 @@ export class PrismDaemon {
           .catch(() => {});
         entry.omniScriptId = null;
       }
-      const omniEnabledNow = this._isOmniEnabled();
+      const omniEnabledNow = this._isOmniEnabled(cfgNow);
       if (omniEnabledNow && this.omniExpr) {
         await entry.session.send('Runtime.addBinding', { name: OMNI_BINDING }).catch(() => {});
         const omniAdd = await entry.session
@@ -2716,7 +3126,7 @@ export class PrismDaemon {
           .catch(() => {});
         entry.sidebarScriptId = null;
       }
-      const sidebarEnabledNow = this._isSidebarStudioEnabled();
+      const sidebarEnabledNow = this._isSidebarStudioEnabled(cfgNow);
       if (sidebarEnabledNow) {
         if (!this.sidebarService) {
           await this.ensureSidebarService().catch(() => null);
@@ -2748,10 +3158,14 @@ export class PrismDaemon {
           .catch(() => {});
         entry.hostI18nScriptId = null;
       }
-      const hostI18nEnabledNow = this._isHostI18nEnabled();
+      const hostI18nEnabledNow = this._isHostI18nEnabled(cfgNow);
       if (hostI18nEnabledNow) {
         if (!this.hostI18nExpr && typeof this.cdp.buildHostI18nExpression === 'function') {
-          this.hostI18nExpr = this.cdp.buildHostI18nExpression();
+          const chOpts = this._getChannelCacheOpts(true);
+          this.hostI18nExpr = chOpts
+            ? this.cdp.buildHostI18nExpression(cfgNow, null, chOpts)
+            : this.cdp.buildHostI18nExpression(cfgNow);
+          if (chOpts && this.running) this._scheduleBundleCacheFlush();
         }
         if (this.hostI18nExpr) {
           const hiAdd = await entry.session
@@ -2761,7 +3175,7 @@ export class PrismDaemon {
             entry.hostI18nScriptId = hiAdd.identifier;
           }
           const evalRes = await entry.session.evaluate(this.hostI18nExpr).catch(() => null);
-          const hiSig = this._getHostI18nCfgSig();
+          const hiSig = this._getHostI18nCfgSig(cfgNow);
           if (evalRes && evalRes.ok) {
             entry.hostI18nMounted = true;
             entry.lastHostI18nSig = hiSig;
@@ -2777,6 +3191,50 @@ export class PrismDaemon {
         entry.hostI18nMounted = false;
         entry.lastHostI18nSig = '';
         entry.lastHostI18nScriptSig = '';
+      }
+      const hadThoughtBefore = Boolean(entry.thoughtScriptId || entry.thoughtMounted);
+      if (entry.thoughtScriptId) {
+        await entry.session
+          .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId })
+          .catch(() => {});
+        entry.thoughtScriptId = null;
+      }
+      const thoughtCfgNow = getCurrentCfg();
+      const thoughtEnabledNow = this._isThoughtEnabled(thoughtCfgNow);
+      if (thoughtEnabledNow) {
+        if (!this.thoughtExpr && typeof this.cdp.buildThoughtExpression === 'function') {
+          this._buildThoughtExprForConfig(thoughtCfgNow);
+        }
+        if (this.thoughtExpr) {
+          await entry.session.send('Runtime.addBinding', { name: THOUGHT_BINDING }).catch(() => {});
+          const thoughtAdd = await entry.session
+            .send('Page.addScriptToEvaluateOnNewDocument', { source: this.thoughtExpr })
+            .catch(() => null);
+          if (thoughtAdd && thoughtAdd.identifier) {
+            entry.thoughtScriptId = thoughtAdd.identifier;
+          }
+          const evalRes = await entry.session.evaluate(this.thoughtExpr).catch(() => null);
+          const thoughtSig = this._getThoughtCfgSig(thoughtCfgNow);
+          if (evalRes && evalRes.ok) {
+            entry.thoughtMounted = true;
+            entry.lastThoughtSig = thoughtSig;
+          } else {
+            entry.thoughtMounted = false;
+            entry.lastThoughtSig = '';
+          }
+          if (thoughtAdd && thoughtAdd.identifier) {
+            entry.lastThoughtScriptSig = thoughtSig;
+          } else {
+            entry.lastThoughtScriptSig = '';
+          }
+        }
+      } else {
+        if (hadThoughtBefore) {
+          await entry.session.evaluate(this._getThoughtCleanupExpression()).catch(() => null);
+        }
+        entry.thoughtMounted = false;
+        entry.lastThoughtSig = '';
+        entry.lastThoughtScriptSig = '';
       }
       entry.lastVerifyAt = Date.now();
       entry.healthyStreak = 1;
@@ -2929,11 +3387,17 @@ export class PrismDaemon {
         } else if (action === 'save-config') {
           result = svc.saveConfig(input);
         } else if (action === 'get-cache') {
+          if (typeof svc._ensureCacheLoadedAsync === 'function') {
+            await svc._ensureCacheLoadedAsync();
+          }
           result = svc.getWarmCacheSnapshot(
             Number(input.limit) > 0 ? Number(input.limit) : 40,
             Number(input.maxChars) > 0 ? Number(input.maxChars) : 80000
           );
         } else if (action === 'cache-stats') {
+          if (typeof svc._ensureCacheLoadedAsync === 'function') {
+            await svc._ensureCacheLoadedAsync();
+          }
           result = svc.getCacheStats();
         } else if (action === 'clear-cache') {
           result = svc.clearCache();
@@ -3172,6 +3636,10 @@ export class PrismDaemon {
       hostI18nMounted: false,
       lastHostI18nSig: '',
       lastHostI18nScriptSig: '',
+      thoughtScriptId: null,
+      thoughtMounted: false,
+      lastThoughtSig: '',
+      lastThoughtScriptSig: '',
       sidebarHostVerified: false,
       sidebarVerifiedDocument: -1,
       sidebarHostContextId: null,
@@ -3338,6 +3806,13 @@ export class PrismDaemon {
         if (entry.hostI18nScriptId) {
           await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId });
         }
+        if (entry.thoughtScriptId) {
+          await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId });
+          entry.thoughtScriptId = null;
+        }
+        entry.thoughtMounted = false;
+        entry.lastThoughtSig = '';
+        entry.lastThoughtScriptSig = '';
       } catch {}
       session.close();
       this.sessions.delete(wsUrl);
@@ -3352,13 +3827,19 @@ export class PrismDaemon {
 
   async _verifyAndHealEntryUnlocked(entry, force = false) {
     if (!entry || entry.session.closed) return { alive: false, ready: false, isHostDom: false };
+    const cfg = typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null;
+    const thoughtEnabled = this._isThoughtEnabled(cfg);
     const hasCtxMap = entry.contextFrames instanceof Map;
     const needsBindingHeal = hasCtxMap && (!entry.mainFrameId || !this._hasMainDefaultContext(entry));
+    const thoughtNeedsSync = thoughtEnabled
+      ? !entry.thoughtScriptId || !entry.thoughtMounted
+      : Boolean(entry.thoughtScriptId || entry.thoughtMounted);
     const now = Date.now();
     const hashMatches = !this.codeHash || entry.lastVerifiedCodeHash === this.codeHash;
     if (
       !force &&
       !needsBindingHeal &&
+      !thoughtNeedsSync &&
       !entry.verifyDirty &&
       hashMatches &&
       entry.lastVerifyAt > 0 &&
@@ -3430,6 +3911,8 @@ export class PrismDaemon {
           hasSidebar: Boolean(window.__agPrismSidebar),
           sidebarMode,
           hasHostI18n: Boolean(window.__agPrismHostI18n),
+          hasThought: Boolean(window.__agPrismThought),
+          hasThoughtSettingsUi: Boolean(window.__agPrismThoughtSettingsUi),
           codeHash: (api && api.codeHash) || '',
           hasLegacyCss: Boolean(document.getElementById('ag-claude-style-css')),
           needsDashboardSync: Boolean(api && telMode !== 'off' && !isHome && hasModelBtn && !hasPulseBar),
@@ -3440,7 +3923,7 @@ export class PrismDaemon {
       );
       if (!probe || !probe.ready) return { alive: true, ready: false, isHostDom: true };
       if (probe.href) entry.url = probe.href;
-      const omniEnabled = this._isOmniEnabled() && probe.omniMode !== 'off';
+      const omniEnabled = this._isOmniEnabled(cfg) && probe.omniMode !== 'off';
       const hasClientOnDisk = omniEnabled && this._hasOmniClientFile();
       const needsOmniHeal =
         omniEnabled &&
@@ -3449,16 +3932,22 @@ export class PrismDaemon {
           (hasClientOnDisk && !probe.hasOmni));
       const needsOmniCleanup =
         !omniEnabled && Boolean(probe.hasOmni || entry.omniScriptId || entry.lastOmniExpr);
-      const sidebarEnabled = this._isSidebarStudioEnabled();
-      const hasSafeSidebarOnDisk = this._hasSafeV2SidebarClientFile();
+      const sidebarEnabled = this._isSidebarStudioEnabled(cfg);
+      const hasSafeSidebarOnDisk = sidebarEnabled && this._hasSafeV2SidebarClientFile();
       const needsSidebarHeal =
         sidebarEnabled && (!probe.hasSidebarBridge || (hasSafeSidebarOnDisk && !probe.hasSidebar));
       const needsSidebarCleanup =
         !sidebarEnabled && Boolean(probe.hasSidebar || entry.sidebarScriptId || entry.sidebarMounted || entry.sidebarBindingAdded);
-      const hostI18nEnabled = this._isHostI18nEnabled();
+      const hostI18nEnabled = this._isHostI18nEnabled(cfg);
       const needsHostI18nHeal = hostI18nEnabled && (!probe.hasHostI18n || !entry.hostI18nScriptId);
       const needsHostI18nCleanup =
         !hostI18nEnabled && Boolean(probe.hasHostI18n || entry.hostI18nScriptId || entry.hostI18nMounted);
+      const needsThoughtHeal =
+        thoughtEnabled &&
+        (!probe.hasThought || !probe.hasThoughtSettingsUi || !entry.thoughtScriptId || !entry.thoughtMounted);
+      const needsThoughtCleanup =
+        !thoughtEnabled &&
+        Boolean(probe.hasThought || probe.hasThoughtSettingsUi || entry.thoughtScriptId || entry.thoughtMounted);
       let healed = false;
       if (
         (entry.sidebarHostVerified === false && probe.isHostDom) ||
@@ -3508,9 +3997,18 @@ export class PrismDaemon {
             await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId }).catch(() => {});
             entry.hostI18nScriptId = null;
           }
+          if (entry.thoughtScriptId) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId }).catch(() => {});
+            entry.thoughtScriptId = null;
+          }
           await this._removeSidebarBinding(entry);
           entry.sidebarMounted = false;
           entry.hostI18nMounted = false;
+          entry.lastHostI18nSig = '';
+          entry.lastHostI18nScriptSig = '';
+          entry.thoughtMounted = false;
+          entry.lastThoughtSig = '';
+          entry.lastThoughtScriptSig = '';
           this._markTargetIgnored({ id: entry.pageId, webSocketDebuggerUrl: entry.wsUrl }, probe.href || entry.url);
           entry.session.close();
           this.sessions.delete(entry.wsUrl);
@@ -3519,7 +4017,11 @@ export class PrismDaemon {
         }
         if (omniEnabled) {
           if (!this.omniExpr && this.omniServer && typeof this.cdp.buildOmniClientExpression === 'function') {
-            this.omniExpr = this.cdp.buildOmniClientExpression(this.omniServer.getServerInfo());
+            const chOpts = this._getChannelCacheOpts(true);
+            this.omniExpr = chOpts
+              ? this.cdp.buildOmniClientExpression(this.omniServer.getServerInfo(), null, chOpts)
+              : this.cdp.buildOmniClientExpression(this.omniServer.getServerInfo());
+            if (chOpts && this.running) this._scheduleBundleCacheFlush();
           }
           if (this.omniExpr) {
             if (!entry.omniScriptId) {
@@ -3561,10 +4063,14 @@ export class PrismDaemon {
         if (hostI18nEnabled) {
           if (!probe.hasHostI18n || !entry.hostI18nScriptId) {
             if (!this.hostI18nExpr && typeof this.cdp.buildHostI18nExpression === 'function') {
-              this.hostI18nExpr = this.cdp.buildHostI18nExpression();
+              const chOpts = this._getChannelCacheOpts(true);
+              this.hostI18nExpr = chOpts
+                ? this.cdp.buildHostI18nExpression(cfg, null, chOpts)
+                : this.cdp.buildHostI18nExpression(cfg);
+              if (chOpts && this.running) this._scheduleBundleCacheFlush();
             }
             if (this.hostI18nExpr) {
-              const hiSig = this._getHostI18nCfgSig();
+              const hiSig = this._getHostI18nCfgSig(cfg);
               if (!entry.hostI18nScriptId) {
                 const hiAdd = await entry.session
                   .send('Page.addScriptToEvaluateOnNewDocument', { source: this.hostI18nExpr })
@@ -3593,6 +4099,40 @@ export class PrismDaemon {
           entry.lastHostI18nSig = '';
           entry.lastHostI18nScriptSig = '';
         }
+        if (thoughtEnabled) {
+          if (!this.thoughtExpr && typeof this.cdp.buildThoughtExpression === 'function') {
+            this._buildThoughtExprForConfig(cfg);
+          }
+          if (this.thoughtExpr) {
+            const thoughtSig = this._getThoughtCfgSig(cfg);
+            if (!entry.thoughtScriptId) {
+              const thoughtAdd = await entry.session
+                .send('Page.addScriptToEvaluateOnNewDocument', { source: this.thoughtExpr })
+                .catch(() => null);
+              if (thoughtAdd && thoughtAdd.identifier) {
+                entry.thoughtScriptId = thoughtAdd.identifier;
+                entry.lastThoughtScriptSig = thoughtSig;
+              }
+            }
+            const evalRes = await entry.session.evaluate(this.thoughtExpr, false, 4500).catch(() => null);
+            if (evalRes && evalRes.ok) {
+              entry.thoughtMounted = true;
+              entry.lastThoughtSig = thoughtSig;
+            } else {
+              entry.thoughtMounted = false;
+              entry.lastThoughtSig = '';
+            }
+          }
+        } else if (needsThoughtCleanup) {
+          if (entry.thoughtScriptId) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId }).catch(() => {});
+            entry.thoughtScriptId = null;
+          }
+          await entry.session.evaluate(this._getThoughtCleanupExpression(), false, 3500).catch(() => {});
+          entry.thoughtMounted = false;
+          entry.lastThoughtSig = '';
+          entry.lastThoughtScriptSig = '';
+        }
         this.log(`[↻] Hot-healed window to Obsidian Prism v${this.cdp.PLUGIN_VERSION}: ${entry.title}`);
       } else {
         if (needsOmniHeal) {
@@ -3600,7 +4140,11 @@ export class PrismDaemon {
           await this.ensureOmniServer().catch(() => null);
           await entry.session.send('Runtime.addBinding', { name: OMNI_BINDING }, 2600).catch(() => {});
           if (!this.omniExpr && this.omniServer && typeof this.cdp.buildOmniClientExpression === 'function') {
-            this.omniExpr = this.cdp.buildOmniClientExpression(this.omniServer.getServerInfo());
+            const chOpts = this._getChannelCacheOpts(true);
+            this.omniExpr = chOpts
+              ? this.cdp.buildOmniClientExpression(this.omniServer.getServerInfo(), null, chOpts)
+              : this.cdp.buildOmniClientExpression(this.omniServer.getServerInfo());
+            if (chOpts && this.running) this._scheduleBundleCacheFlush();
           }
           if (this.omniExpr) {
             if (!entry.omniScriptId) {
@@ -3647,10 +4191,14 @@ export class PrismDaemon {
         if (needsHostI18nHeal) {
           healed = true;
           if (!this.hostI18nExpr && typeof this.cdp.buildHostI18nExpression === 'function') {
-            this.hostI18nExpr = this.cdp.buildHostI18nExpression();
+            const chOpts = this._getChannelCacheOpts(true);
+            this.hostI18nExpr = chOpts
+              ? this.cdp.buildHostI18nExpression(cfg, null, chOpts)
+              : this.cdp.buildHostI18nExpression(cfg);
+            if (chOpts && this.running) this._scheduleBundleCacheFlush();
           }
           if (this.hostI18nExpr) {
-            const hiSig = this._getHostI18nCfgSig();
+            const hiSig = this._getHostI18nCfgSig(cfg);
             if (!entry.hostI18nScriptId) {
               const hiAdd = await entry.session
                 .send('Page.addScriptToEvaluateOnNewDocument', { source: this.hostI18nExpr })
@@ -3678,6 +4226,42 @@ export class PrismDaemon {
           entry.hostI18nMounted = false;
           entry.lastHostI18nSig = '';
           entry.lastHostI18nScriptSig = '';
+        }
+        if (needsThoughtHeal) {
+          healed = true;
+          await entry.session.send('Runtime.addBinding', { name: THOUGHT_BINDING }, 2600).catch(() => {});
+          if (!this.thoughtExpr && typeof this.cdp.buildThoughtExpression === 'function') {
+            this._buildThoughtExprForConfig(cfg);
+          }
+          if (this.thoughtExpr) {
+            const thoughtSig = this._getThoughtCfgSig(cfg);
+            if (!entry.thoughtScriptId) {
+              const thoughtAdd = await entry.session
+                .send('Page.addScriptToEvaluateOnNewDocument', { source: this.thoughtExpr })
+                .catch(() => null);
+              if (thoughtAdd && thoughtAdd.identifier) {
+                entry.thoughtScriptId = thoughtAdd.identifier;
+                entry.lastThoughtScriptSig = thoughtSig;
+              }
+            }
+            if (!probe.hasThought || !probe.hasThoughtSettingsUi || !entry.thoughtMounted) {
+              const evalRes = await entry.session.evaluate(this.thoughtExpr, false, 4500).catch(() => null);
+              if (evalRes && evalRes.ok) {
+                entry.thoughtMounted = true;
+                entry.lastThoughtSig = thoughtSig;
+              }
+            }
+          }
+        } else if (needsThoughtCleanup) {
+          healed = true;
+          if (entry.thoughtScriptId) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId }).catch(() => {});
+            entry.thoughtScriptId = null;
+          }
+          await entry.session.evaluate(this._getThoughtCleanupExpression(), false, 3500).catch(() => {});
+          entry.thoughtMounted = false;
+          entry.lastThoughtSig = '';
+          entry.lastThoughtScriptSig = '';
         }
         if (probe.needsDashboardSync) {
           healed = true;
@@ -3708,6 +4292,8 @@ export class PrismDaemon {
   }
 
   closeBrowserDiscovery() {
+    this._browserDiscoverySubscribed = false;
+    this._lastListPagesAt = 0;
     if (this._discoverTimer) {
       clearTimeout(this._discoverTimer);
       this._discoverTimer = null;
@@ -3752,10 +4338,13 @@ export class PrismDaemon {
       }
       this.browserSession = bSession;
       this.browserPort = port;
+      this._browserDiscoverySubscribed = false;
       bSession.onClose = () => {
         if (this.browserSession === bSession) {
           this.browserSession = null;
           this.browserPort = null;
+          this._browserDiscoverySubscribed = false;
+          this._lastListPagesAt = 0;
         }
       };
       const onTargetEvent = (params) => {
@@ -3774,11 +4363,18 @@ export class PrismDaemon {
           }
         }
         if (!this._isEligibleDaemonTarget({ ...info, id: tid, webSocketDebuggerUrl: 'ws://check' })) return;
+        this._forceListPagesNextTick = true;
         this.scheduleImmediateTick(45);
       };
       bSession.on('Target.targetCreated', onTargetEvent);
       bSession.on('Target.targetInfoChanged', onTargetEvent);
-      await bSession.send('Target.setDiscoverTargets', { discover: true }, 1500).catch(() => {});
+      const subOk = await bSession
+        .send('Target.setDiscoverTargets', { discover: true }, 1500)
+        .then(() => true)
+        .catch(() => false);
+      if (this.browserSession === bSession && !bSession.closed && subOk) {
+        this._browserDiscoverySubscribed = true;
+      }
     } catch {}
   }
 
@@ -3800,6 +4396,13 @@ export class PrismDaemon {
           if (entry.hostI18nScriptId && !entry.session.closed) {
             await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId }).catch(() => {});
           }
+          if (entry.thoughtScriptId && !entry.session.closed) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId }).catch(() => {});
+          }
+          entry.thoughtScriptId = null;
+          entry.thoughtMounted = false;
+          entry.lastThoughtSig = '';
+          entry.lastThoughtScriptSig = '';
           if (cleanPageDom && !entry.session.closed) {
             await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
           }
@@ -3828,7 +4431,7 @@ export class PrismDaemon {
     }
   }
 
-  _maybeSyncShortcuts(force = false) {
+  _maybeSyncShortcuts(force = false, opts = null) {
     if (!this._isRelaunchGuardAllowed()) return null;
     if (process.env.PRISM_DISABLE_SHORTCUT_SYNC === '1' && !this._relaunchHooks?.syncShortcuts) return null;
     if (this._shortcutSyncInFlight) {
@@ -3836,11 +4439,28 @@ export class PrismDaemon {
       return null;
     }
     const now = Date.now();
-    if (!force && this._lastShortcutCheckAt > 0 && now - this._lastShortcutCheckAt < this.shortcutCheckIntervalMs) {
+    const hasActivePort =
+      opts && typeof opts.hasActivePort === 'boolean' ? opts.hasActivePort : Boolean(this._hasActiveCdpPort);
+    const effectiveIntervalMs =
+      this._shortcutAllClean && hasActivePort
+        ? this._shortcutBackoffIntervalMs
+        : this.shortcutCheckIntervalMs;
+    if (!force && this._lastShortcutCheckAt > 0 && now - this._lastShortcutCheckAt < effectiveIntervalMs) {
       return null;
     }
     const onDone = (res) => {
-      if (res && !res.error) this._lastShortcutCheckAt = Date.now();
+      if (res && !res.error) {
+        this._lastShortcutCheckAt = Date.now();
+        const patchedLen = Array.isArray(res.patched) ? res.patched.length : 0;
+        const skippedLen = Array.isArray(res.skipped) ? res.skipped.length : 0;
+        const alreadyLen = Array.isArray(res.alreadySet) ? res.alreadySet.length : 0;
+        const matched = Number(res.matched || 0);
+        // 全部快捷方式已确认 alreadySet 且无跳过/新修补时，开启智能退避（30~60 分钟）
+        this._shortcutAllClean =
+          patchedLen === 0 && skippedLen === 0 && (alreadyLen > 0 || matched === 0);
+      } else {
+        this._shortcutAllClean = false;
+      }
       if (res && Array.isArray(res.patched) && res.patched.length > 0) {
         this.log(`[shortcut-guard] Ensured --remote-debugging-port=0 on ${res.patched.length} shortcut(s)`);
       }
@@ -3881,6 +4501,8 @@ export class PrismDaemon {
   }
 
   async _handleMissingCdpPort() {
+    this._hasActiveCdpPort = false;
+    this._shortcutAllClean = false;
     if (!this.running || !this.timer || this._promptInFlight) return;
     if (!this._isRelaunchGuardAllowed()) return;
 
@@ -3888,7 +4510,7 @@ export class PrismDaemon {
     if (this._noPortSinceMs <= 0) {
       this._noPortSinceMs = now;
     }
-    this._maybeSyncShortcuts(false);
+    this._maybeSyncShortcuts(false, { hasActivePort: false });
 
     if (now - this._noPortSinceMs < this.noPortRelaunchThresholdMs) {
       return;
@@ -3916,6 +4538,7 @@ export class PrismDaemon {
 
     if (host.pid !== this._lastObservedHostPid) {
       this._lastObservedHostPid = host.pid;
+      this._shortcutAllClean = false;
       this._maybeSyncShortcuts(true);
     }
 
@@ -4003,6 +4626,7 @@ export class PrismDaemon {
 
       if (!this.enabledCheck()) {
         this._noPortSinceMs = 0;
+        this._hasActiveCdpPort = false;
         if (this.sessions.size > 0 || this.browserSession) {
           await this.detachAll(true);
         }
@@ -4011,14 +4635,58 @@ export class PrismDaemon {
 
       const port = discoverActivePort(this.overridePort, this.portFile);
       if (!port) {
+        this._hasActiveCdpPort = false;
         await this._handleMissingCdpPort();
         return { attached: 0, port: null };
+      }
+
+      const now = Date.now();
+      const canSkipListPoll =
+        this.timer != null &&
+        Boolean(this.browserSession && !this.browserSession.closed && this._browserDiscoverySubscribed) &&
+        this.browserPort === port &&
+        this.sessions.size > 0 &&
+        !this._forceListPagesNextTick &&
+        this._lastListPagesAt > 0 &&
+        now - this._lastListPagesAt < this._listPagesFallbackIntervalMs;
+
+      if (canSkipListPoll) {
+        this._noPortSinceMs = 0;
+        this._hasActiveCdpPort = true;
+        this._maybeSyncShortcuts(false, { hasActivePort: true });
+
+        const liveEntries = [];
+        for (const [wsUrl, entry] of this.sessions.entries()) {
+          if (entry.session.closed) {
+            this.sessions.delete(wsUrl);
+            continue;
+          }
+          liveEntries.push(entry);
+        }
+
+        if (liveEntries.length > 0) {
+          await Promise.allSettled(liveEntries.map((entry) => this.verifyAndHealEntry(entry)));
+          if (this._isTelemetryDisabled()) {
+            this._releaseIdleTelemetry(true);
+          } else {
+            this._releaseIdleTelemetry(false);
+          }
+          return {
+            attached: this.sessions.size,
+            port,
+            pages: [...this.sessions.values()].map((e) => e.title || e.url),
+            skippedListPoll: true,
+          };
+        }
       }
 
       let rawPages = [];
       try {
         rawPages = await this.cdp.listPages(port);
+        this._lastListPagesAt = Date.now();
+        this._forceListPagesNextTick = false;
       } catch {
+        this._hasActiveCdpPort = false;
         this.closeBrowserDiscovery();
         if (this.sessions.size === 0) {
           await this._handleMissingCdpPort();
@@ -4027,8 +4695,9 @@ export class PrismDaemon {
       }
 
       this._noPortSinceMs = 0;
+      this._hasActiveCdpPort = true;
       if (this.timer) {
-        this._maybeSyncShortcuts(false);
+        this._maybeSyncShortcuts(false, { hasActivePort: true });
       }
 
       // Subscribe to Browser-level Target.setDiscoverTargets when persistent daemon is running
@@ -4064,6 +4733,13 @@ export class PrismDaemon {
             if (entry.hostI18nScriptId) {
               await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId }).catch(() => {});
             }
+            if (entry.thoughtScriptId) {
+              await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId }).catch(() => {});
+              entry.thoughtScriptId = null;
+            }
+            entry.thoughtMounted = false;
+            entry.lastThoughtSig = '';
+            entry.lastThoughtScriptSig = '';
             await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
           }
           entry.session.close();
@@ -4098,7 +4774,7 @@ export class PrismDaemon {
     }
   }
 
-  stopExistingDaemon({ verifyPid = null, inspectCommandLine = null, killProcess = null } = {}) {
+  stopExistingDaemon({ verifyPid = null, inspectCommandLine = null, inspectProcess = null, killProcess = null } = {}) {
     try {
       if (!this.pidFile) return false;
       let pidStat;
@@ -4135,19 +4811,34 @@ export class PrismDaemon {
         const isDefaultVerifier =
           this.cdp.isExpectedDaemonProcess === this._loadedCdpVerifier ||
           this.cdp.isExpectedDaemonProcess === defaultCdp.isExpectedDaemonProcess;
-        const cdpVerified = Boolean(this.cdp.isExpectedDaemonProcess(prevPid, this.pidFile));
-        if (!cdpVerified) {
-          safeToKill = false;
-        } else if (!isDefaultVerifier) {
+        if (!isDefaultVerifier) {
           // 兼容单测显式覆写 this.cdp.isExpectedDaemonProcess 注入校验钩子
-          safeToKill = true;
+          safeToKill = Boolean(this.cdp.isExpectedDaemonProcess(prevPid, this.pidFile));
         } else {
-          // 标准 cdp.isExpectedDaemonProcess 对 node.exe 仅核对映像名，补充命令行身份复核防误杀无关 node 进程
-          const cmd =
-            typeof inspectCommandLine === 'function'
-              ? inspectCommandLine(prevPid)
-              : queryProcessCommandLineSync(prevPid);
-          safeToKill = isObsidianPrismDaemonCommandLine(cmd);
+          // P2-5: 复用 cdp.js 单次进程探针，避免 Windows 启动抢锁连续拉起两次 powershell.exe
+          const hasUnifiedProbe =
+            typeof inspectProcess === 'function' || typeof this.cdp.inspectProcessSync === 'function';
+          const procInfo =
+            typeof inspectProcess === 'function'
+              ? inspectProcess(prevPid)
+              : typeof this.cdp.inspectProcessSync === 'function'
+              ? this.cdp.inspectProcessSync(prevPid)
+              : null;
+          const cdpVerified = hasUnifiedProbe
+            ? Boolean(this.cdp.isExpectedDaemonProcess(prevPid, { procInfo, lockFile: this.pidFile }))
+            : Boolean(this.cdp.isExpectedDaemonProcess(prevPid, this.pidFile));
+          if (!cdpVerified) {
+            safeToKill = false;
+          } else {
+            // 标准 cdp.isExpectedDaemonProcess 对 node.exe 仅核对映像名，补充命令行身份复核防误杀无关 node 进程
+            const cmd =
+              typeof inspectCommandLine === 'function'
+                ? inspectCommandLine(prevPid)
+                : hasUnifiedProbe
+                ? procInfo?.commandLine || ''
+                : queryProcessCommandLineSync(prevPid);
+            safeToKill = isObsidianPrismDaemonCommandLine(cmd);
+          }
         }
       } else {
         // 无有效身份校验钩子时严格 fail-closed，绝不盲杀无关 PID
@@ -4169,6 +4860,7 @@ export class PrismDaemon {
 
   claimOwnership() {
     this.stopExistingDaemon();
+    this._ownerFileCache = null;
     try {
       try {
         const st = fs.lstatSync(this.pidFile);
@@ -4181,20 +4873,39 @@ export class PrismDaemon {
         JSON.stringify({ pid: process.pid, token: this.ownerToken, startedAt: Date.now() }),
         { mode: 0o600 }
       );
+      this._ownerFileCache = null;
     } catch {}
   }
 
   isCurrentOwner() {
     try {
-      if (!fs.existsSync(this.pidFile)) return true;
+      let st;
+      try {
+        st = fs.statSync(this.pidFile);
+      } catch {
+        this._ownerFileCache = null;
+        return true;
+      }
+      if (!st.isFile()) {
+        this._ownerFileCache = null;
+        return true;
+      }
+      const sig = `${st.mtimeMs}:${st.size}:${st.ctimeMs}`;
+      if (this._ownerFileCache && this._ownerFileCache.path === this.pidFile && this._ownerFileCache.sig === sig) {
+        return this._ownerFileCache.owned;
+      }
       const cur = JSON.parse(fs.readFileSync(this.pidFile, 'utf8'));
-      return !cur || !cur.token || cur.token === this.ownerToken;
+      const owned = !cur || !cur.token || cur.token === this.ownerToken;
+      this._ownerFileCache = { path: this.pidFile, sig, owned };
+      return owned;
     } catch {
+      this._ownerFileCache = null;
       return true;
     }
   }
 
   releaseOwnership() {
+    this._ownerFileCache = null;
     try {
       let st;
       try {
@@ -4329,6 +5040,10 @@ export class PrismDaemon {
     if (this._reloadTimer) {
       clearTimeout(this._reloadTimer);
       this._reloadTimer = null;
+    }
+    if (this._bundleCacheFlushTimer) {
+      clearTimeout(this._bundleCacheFlushTimer);
+      this._bundleCacheFlushTimer = null;
     }
     if (this._discoverTimer) {
       clearTimeout(this._discoverTimer);

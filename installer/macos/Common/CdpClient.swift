@@ -525,6 +525,9 @@ enum CdpHelper {
         if out["smoothCaret"] != nil {
             out["smoothCaret"] = .bool(toBoolOnOff(out["smoothCaret"]))
         }
+        if out["contextMenu"] != nil {
+            out["contextMenu"] = .bool(toBoolOnOff(out["contextMenu"]))
+        }
         if let cl = out["codeLigatures"] {
             if case .bool(let b) = cl {
                 out["codeLigatures"] = .bool(b)
@@ -1264,6 +1267,10 @@ enum CdpHelper {
         sb.append("      try { const oldApi = window.__agClaudeStyle; if (oldApi && (!window.__agPrism || Number(oldApi.version) <= 2)) { if (typeof oldApi.destroy === 'function') oldApi.destroy(); delete window.__agClaudeStyle; } } catch {}\n")
         sb.append("    };\n")
         sb.append("    const stripForeignMount = () => {\n")
+        sb.append("      try { window.__agPrismThought?.destroy?.(); } catch {}\n")
+        sb.append("      try { window.__agPrismContextMenu?.destroy?.(); } catch {}\n")
+        sb.append("      try { document.querySelectorAll?.('[data-testid=\"prism-thought-ai-config\"], .ag-cs-ctx-menu, .ag-cs-ctx-toast')?.forEach?.((el) => el.remove()); } catch {}\n")
+        sb.append("      try { delete window.__agPrismThought; delete window.__agPrismThoughtSettingsUi; delete globalThis.__agPrismThoughtSettingsUi; delete window.__agPrismContextMenu; delete globalThis.__agPrismContextMenu; } catch {}\n")
         sb.append("      try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}\n")
         sb.append("      try { document.documentElement?.removeAttribute?.('data-ag-cs-model-menu'); document.querySelectorAll?.('[data-ag-cs-aux-dual],[data-ag-cs-model-overlay]').forEach((el) => { el.removeAttribute('data-ag-cs-aux-dual'); el.removeAttribute('data-ag-cs-model-overlay'); }); } catch {}\n")
         sb.append("      try { const st = document.getElementById(")
@@ -1366,8 +1373,7 @@ enum CdpHelper {
         sb.append("          existingPrism.codeHash === bootCfg.codeHash &&\n")
         sb.append("          typeof existingPrism.refreshConfig === 'function' &&\n")
         sb.append("          window.__agPrismTelemetry &&\n")
-        sb.append("          window.__agPrismEffortSlider &&\n")
-        sb.append("          window.__agPrismThought\n")
+        sb.append("          window.__agPrismEffortSlider\n")
         sb.append("        );\n")
         sb.append("        if (bundleUnchanged) {\n")
         sb.append("          existingPrism.refreshConfig(bootCfg);\n")
@@ -1377,6 +1383,7 @@ enum CdpHelper {
         sb.append("          try { window.__agPrismEffortSlider?.destroy?.(); } catch {}\n")
         sb.append("          try { window.__agPrismThought?.destroy?.(); } catch {}\n")
         sb.append("          try { window.__agPrismOmni?.destroy?.(); } catch {}\n")
+        sb.append("          try { window.__agPrismContextMenu?.destroy?.(); } catch {}\n")
         sb.append("          try { document.querySelectorAll('[data-ag-prism-fallback=\"1\"]').forEach((n) => n.remove()); } catch {}\n")
         sb.append("          ")
         sb.append(bundle)

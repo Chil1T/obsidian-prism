@@ -445,6 +445,20 @@
       'Enable smooth gliding caret interpolation in composer input.',
       '入力欄のテキストカーソル移動を滑らかにアニメーション化します。',
     ],
+    rowContextMenuTitle: [
+      '会话直触右键菜单 (/btw)',
+      '會話直觸右鍵選單 (/btw)',
+      '會話直觸右鍵選單 (/btw)',
+      'Conversation Quick Menu (/btw)',
+      '会話クイック右クリック (/btw)',
+    ],
+    rowContextMenuDesc: [
+      '在会话任意位置右键直接拉起 /btw 侧边会话并预填选区，及一键直触 /compact 等指令；按住 Shift+右键保留系统菜单。',
+      '在對話任意位置右鍵直接拉起 /btw 側邊對話並預填選區，及一鍵直觸 /compact 等指令；按住 Shift+右鍵保留系統選單。',
+      '喺對話任何位置右鍵直接開 /btw 側邊對話並預填選取內容，同一鍵直觸 /compact 等指令；撳住 Shift+右鍵保留系統選單。',
+      'Right-click anywhere in a conversation to launch /btw side chat with selected text or run /compact; hold Shift+Right-Click for the native menu.',
+      '会話内の任意箇所を右クリックして選択テキスト付きで /btw サイド会話や /compact を即起動（Shift+右クリックで標準メニュー）。',
+    ],
     setMotionLevelTitle: ['动效档位', '動效檔位', '動效級別', 'Motion Level', 'モーション強度'],
     setMotionLevelDesc: [
       '控制交互动画、流式吐字与场景切换的动效丰富度。',

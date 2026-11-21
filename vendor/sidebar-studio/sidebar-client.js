@@ -13,6 +13,11 @@
   const SIDEBAR_STUDIO_CLIENT_V2 = '2.4.0';
   const STYLE_ID = 'ag-prism-sidebar-studio-css';
   const ROOT_ATTR = 'data-ag-prism-sidebar-owned';
+  const NO_TR_ATTRS = [['translate', 'no'], ['data-no-translate', 'true'], ['data-ag-localization-skip', 'true'], ['data-agy-no-translate', 'true'], ['data-antigravity-zh-skip', '1']];
+  function markOwnedRoot(n) {
+    if (n && n.setAttribute) { n.setAttribute(ROOT_ATTR, '1'); for (const [k, v] of NO_TR_ATTRS) n.setAttribute(k, v); }
+    return n;
+  }
   const SVG_NS = 'http://www.w3.org/2000/svg';
 
   // 官方原版彩色 Brand SVG（DOMParser 挂载并重写唯一 ID 前缀，纯安全 DOM 注入）
@@ -683,8 +688,7 @@
       runGuarded(() => {
         const old = document.querySelector('.ag-prism-sb-toast');
         if (old) old.remove();
-        const t = el('div', 'ag-prism-sb-toast', msg);
-        t.setAttribute(ROOT_ATTR, '1');
+        const t = markOwnedRoot(el('div', 'ag-prism-sb-toast', msg));
         document.body && document.body.appendChild(t);
         if (toastTimer) clearTimeout(toastTimer);
         toastTimer = setTimeout(() => {
@@ -714,8 +718,7 @@
       closePopover();
       closeModal();
       runGuarded(() => {
-        const backdrop = el('div', 'ag-prism-modal-backdrop');
-        backdrop.setAttribute(ROOT_ATTR, '1');
+        const backdrop = markOwnedRoot(el('div', 'ag-prism-modal-backdrop'));
         backdrop.setAttribute('role', 'dialog');
         backdrop.setAttribute('aria-modal', 'true');
         const box = el('div', 'ag-prism-modal');
@@ -745,7 +748,7 @@
     function mountPopover(pop, anchorEl, preferAbove) {
       closePopover();
       runGuarded(() => {
-        pop.setAttribute(ROOT_ATTR, '1');
+        markOwnedRoot(pop);
         document.body.appendChild(pop);
         activePopover = pop;
         const vw = W.innerWidth || 1280;
@@ -2796,8 +2799,7 @@
       let bar = host.topbarActsEl;
       if (!bar || !bar.isConnected || bar.parentElement !== anchor) {
         if (bar) bar.remove();
-        bar = el('div', 'ag-prism-chat-topbar-acts');
-        bar.setAttribute(ROOT_ATTR, '1');
+        bar = markOwnedRoot(el('div', 'ag-prism-chat-topbar-acts'));
         bar.setAttribute('data-testid', 'prism-chat-topbar-acts');
 
         const pinBtn = el('button', 'ag-prism-chat-topbar-btn');
@@ -2911,9 +2913,8 @@
         let chip = host.composerChipEl;
         if (!chip || !chip.isConnected || chip.parentElement !== box) {
           if (chip) chip.remove();
-          chip = el('button', 'ag-prism-chat-policy-chip');
+          chip = markOwnedRoot(el('button', 'ag-prism-chat-policy-chip'));
           chip.type = 'button';
-          chip.setAttribute(ROOT_ATTR, '1');
           chip.setAttribute('data-testid', 'prism-chat-policy-chip');
           const dot = el('span', 'ag-prism-chat-policy-dot');
           const lbl = el('span', '', '');
@@ -3616,8 +3617,7 @@
       const insertBeforeNode = headerSlot ? headerSlot.nextSibling : nav.firstChild;
       if (!host.modeDockEl || host.modeDockEl.parentElement !== nav) {
         if (host.modeDockEl) host.modeDockEl.remove();
-        const dock = el('div', 'ag-prism-mode-dock');
-        dock.setAttribute(ROOT_ATTR, '1');
+        const dock = markOwnedRoot(el('div', 'ag-prism-mode-dock'));
         dock.setAttribute('data-testid', 'prism-bipolar-mode-dock');
 
         const seg = el('div', 'ag-prism-sb-seg');
@@ -3700,8 +3700,7 @@
       const anchorAfterDock = host.modeDockEl ? host.modeDockEl.nextSibling : nav.firstChild;
       if (!host.chatPaneEl || host.chatPaneEl.parentElement !== nav) {
         if (host.chatPaneEl) host.chatPaneEl.remove();
-        const pane = el('div', 'ag-prism-chat-pane');
-        pane.setAttribute(ROOT_ATTR, '1');
+        const pane = markOwnedRoot(el('div', 'ag-prism-chat-pane'));
         pane.setAttribute('data-testid', 'prism-bipolar-chat-pane');
         pane.setAttribute('data-active', '0');
 
@@ -4876,8 +4875,7 @@
         const detached = Boolean(host.chatHomeEl && host.chatHomeEl.isConnected === false);
         if (!host.chatHomeEl || detached || host.chatHomeHostEl !== mainHost) {
           if (host.chatHomeEl) host.chatHomeEl.remove();
-          const container = el('div', 'ag-prism-chat-home');
-          container.setAttribute(ROOT_ATTR, '1');
+          const container = markOwnedRoot(el('div', 'ag-prism-chat-home'));
           container.setAttribute('data-testid', 'prism-live-chat-home');
           container.setAttribute('data-visible', '0');
 

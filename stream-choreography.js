@@ -8,6 +8,12 @@
   const STREAM_FADE_MS = 300;
   const STREAM_FADE_STEP_MS = 60;
   const MAX_FADE_RANGES = 48;
+  const SIDEBAR_RUN_HOLD_MS = 450;
+  const STOP_TID_RE = /(?:^|[^a-z])(?:stop|cancel|abort)(?:[^a-z]|$)/i;
+  const STOP_CAMEL_RE = /(?:^|[^a-zA-Z])(?:stop|cancel|abort)(?=[A-Z])|(?:Stop|Cancel|Abort)(?:[A-Z0-9_-]|$)/;
+  const STOP_LABEL_RE = /(?:^|\b)(?:stop|cancel|abort)(?:\b|$)|停止|取消|中止/i;
+  const NON_STOP_RE =
+    /取消置顶|取消固定|取消收藏|unpin|\b(?:pin|menu|more|options|delete|trash|archive|rename|close|dismiss)\b|置顶|固定|更多|菜单|选项|删除|归档|重命名/i;
   const HIGHLIGHT_NAMES = [0, 1, 2, 3, 4].map((i) => 'ag-stream-f' + i);
   const TABLE_TAGS = new Set('TABLE|THEAD|TBODY|TFOOT|TR|TH|TD'.split('|'));
   const INLINE_TAGS = new Set('SPAN|STRONG|EM|B|I|A|CODE|MARK|DEL|SUB|SUP'.split('|'));
@@ -88,6 +94,10 @@
     let sbIndex = -1;
     let sbCid = '';
     let sbRect = null;
+    let sbRunning = false;
+    const runningCidMap = new Map();
+    const runningRowMap = new WeakMap();
+    let runHoldTimer = 0;
 
     const seenHeaders = new WeakSet();
     const seenOverlays = new WeakSet();
@@ -349,6 +359,11 @@
         CT(sweepTimer);
         sweepTimer = 0;
       }
+      if (runHoldTimer) {
+        CT(runHoldTimer);
+        runHoldTimer = 0;
+      }
+      runningCidMap.clear();
       expirableClasses.clear();
       for (const id of transientTimers) CT(id);
       transientTimers.clear();
@@ -384,6 +399,7 @@
         spark.className = 'ag-cs-thinking-spark';
         sa(spark, 'aria-hidden', 'true');
         sa(spark, 'data-ag-no-i18n', '');
+        sa(spark, 'data-ag-owned', '1');
         trig.insertBefore(spark, trig.firstChild);
       }
       const isMono = ga(d.documentElement, 'data-ag-cs-accent') === 'mono';
@@ -423,6 +439,13 @@
       if (!isDestroyed() && !hydrateRaf) hydrateRaf = rAF(stepHydration);
     };
 
+    const STREAM_THOUGHT_RE = /(?:\.\.\.|…)\s*$|正在思考|思考中/i;
+    const isStreamingThoughtTrigger = (trig, isLast) => {
+      if (ga(trig, 'data-op-thought-state') === 'streaming') return true;
+      if (!isLast) return false;
+      return STREAM_THOUGHT_RE.test(String(trig.textContent || '').trim());
+    };
+
     const syncThinkingSparks = (primaryModelInfo) => {
       const d = docOf();
       if (isDestroyed() || !d) return;
@@ -435,9 +458,11 @@
       const pending = [];
       for (let i = 0; i < len; i++) {
         const trig = triggers[i];
-        if (i < len - 1 && doneSparkCache.get(trig) === cacheSig) continue;
+        const explicitStreaming = ga(trig, 'data-op-thought-state') === 'streaming';
+        if (!explicitStreaming && i < len - 1 && doneSparkCache.get(trig) === cacheSig) continue;
         const spark = clHas(trig.firstElementChild, 'ag-cs-thinking-spark') ? trig.firstElementChild : qs(trig, '.ag-cs-thinking-spark');
         if (
+          !explicitStreaming &&
           i < len - 1 &&
           spark &&
           ga(spark, 'data-state') === 'done' &&
@@ -448,7 +473,7 @@
           doneSparkCache.set(trig, cacheSig);
           continue;
         }
-        const st = /\.\.\.|…|正在|思考中|thinking/i.test(String(trig.textContent || '')) ? 'streaming' : 'done';
+        const st = explicitStreaming || isStreamingThoughtTrigger(trig, i === len - 1) ? 'streaming' : 'done';
         if (
           spark &&
           ga(spark, 'data-brand') === brand &&
@@ -655,6 +680,7 @@
       veil.className = 'ag-cs-liftoff-veil';
       sa(veil, 'aria-hidden', 'true');
       sa(veil, 'data-ag-no-i18n', '');
+      sa(veil, 'data-ag-owned', '1');
       const r = lastHomeRect;
       setProp(veil, '--ag-lift-x', r && r.width > 0 ? `${Math.round(r.left + r.width / 2)}px` : '50%');
       setProp(veil, '--ag-lift-y', r && r.height > 0 ? `${Math.round(r.top + r.height / 2)}px` : '58%');
@@ -705,22 +731,150 @@
       }
     };
 
+    const guardMut = (fn) => (typeof runGuardedMut === 'function' ? runGuardedMut(fn) : fn());
+    const setAttrSafe = (el, k, v) =>
+      typeof setAttrIfChanged === 'function' ? setAttrIfChanged(el, k, v) : ga(el, k) !== v && sa(el, k, v);
+
+    const getSidebarRowCid = (row) =>
+      String(ga(row, 'data-cascade-id') || ga(qs(row, 'a[href]'), 'href') || ga(row, 'data-conversation-id') || '').trim();
+
+    const isSidebarRowRunning = (row) => {
+      if (!row) return false;
+      if (qs(row, '[data-testid="status-loading-spinner"]')) return true;
+      const btns = qsa(row, 'button, [role="button"]');
+      for (let i = 0; i < btns.length; i++) {
+        const b = btns[i];
+        if (!b || b.hidden === true || ga(b, 'aria-hidden') === 'true') continue;
+        if (ga(b, 'aria-haspopup') || ga(b, 'role') === 'checkbox') continue;
+        const rawTid = String(ga(b, 'data-testid') || '').trim();
+        const label = String(ga(b, 'aria-label') || ga(b, 'title') || '').trim();
+        if (NON_STOP_RE.test(rawTid + ' ' + label)) continue;
+        if (rawTid && (STOP_TID_RE.test(rawTid) || STOP_CAMEL_RE.test(rawTid))) return true;
+        if (label && STOP_LABEL_RE.test(label)) return true;
+        if (qs(b, '.lucide-square, .lucide-circle-stop')) return true;
+      }
+      return false;
+    };
+
+    const pruneRunningCidMap = (now) => {
+      for (const [k, ts] of runningCidMap) {
+        if (now - ts > SIDEBAR_RUN_HOLD_MS) runningCidMap.delete(k);
+      }
+      if (runningCidMap.size > 256) {
+        let drop = runningCidMap.size - 256;
+        for (const k of runningCidMap.keys()) {
+          runningCidMap.delete(k);
+          if (--drop <= 0) break;
+        }
+      }
+    };
+
+    const scheduleRunningHoldExpiry = (delayMs) => {
+      if (isDestroyed() || runHoldTimer) return;
+      const wait = Math.max(24, Math.min(SIDEBAR_RUN_HOLD_MS + 40, Math.ceil(delayMs) + 16));
+      runHoldTimer = ST(() => {
+        runHoldTimer = 0;
+        if (isDestroyed()) return;
+        const d = docOf();
+        if (!d || ga(d.documentElement, 'data-ag-cs-sidebar') === 'off') return;
+        const now = nowOf();
+        pruneRunningCidMap(now);
+        let minRem = Infinity;
+        guardMut(() => {
+          const rows = qsa(d, '[data-testid="conversation-row-sidebar"]');
+          for (let i = 0; i < rows.length; i++) {
+            const r = rows[i];
+            const cid = getSidebarRowCid(r);
+            if (isSidebarRowRunning(r)) {
+              runningRowMap.set(r, now);
+              if (cid) runningCidMap.set(cid, now);
+              setAttrSafe(r, 'data-ag-cs-row-running', '1');
+              continue;
+            }
+            const lastAt = Math.max(cid ? runningCidMap.get(cid) || 0 : 0, runningRowMap.get(r) || 0);
+            const rem = lastAt > 0 ? SIDEBAR_RUN_HOLD_MS - (now - lastAt) : -1;
+            if (rem > 0) {
+              if (rem < minRem) minRem = rem;
+              setAttrSafe(r, 'data-ag-cs-row-running', '1');
+            } else {
+              if (cid && runningCidMap.get(cid) === lastAt) runningCidMap.delete(cid);
+              runningRowMap.delete(r);
+              if (ha(r, 'data-ag-cs-row-running')) ra(r, 'data-ag-cs-row-running');
+            }
+          }
+        });
+        if (isFin(minRem)) scheduleRunningHoldExpiry(minRem);
+      }, wait);
+    };
+
+    const resolveSidebarRowRunning = (row, domRunning, now) => {
+      const cid = getSidebarRowCid(row);
+      if (domRunning) {
+        runningRowMap.set(row, now);
+        if (cid) runningCidMap.set(cid, now);
+        return true;
+      }
+      const lastAt = Math.max(cid ? runningCidMap.get(cid) || 0 : 0, runningRowMap.get(row) || 0);
+      if (lastAt > 0) {
+        const elapsed = now - lastAt;
+        if (elapsed >= 0 && elapsed <= SIDEBAR_RUN_HOLD_MS) {
+          scheduleRunningHoldExpiry(SIDEBAR_RUN_HOLD_MS - elapsed);
+          return true;
+        }
+        if (cid && runningCidMap.get(cid) === lastAt) runningCidMap.delete(cid);
+        runningRowMap.delete(row);
+      }
+      return false;
+    };
+
+    const lockSidebarRowRunningOnPointerDown = (row) => {
+      const d = docOf();
+      if (!row || !d || ga(d.documentElement, 'data-ag-cs-sidebar') === 'off') return false;
+      const now = nowOf();
+      const cid = getSidebarRowCid(row);
+      const heldAt = Math.max(cid ? runningCidMap.get(cid) || 0 : 0, runningRowMap.get(row) || 0);
+      const isRun =
+        ha(row, 'data-ag-cs-row-running') ||
+        isSidebarRowRunning(row) ||
+        (heldAt > 0 && now - heldAt <= SIDEBAR_RUN_HOLD_MS);
+      if (!isRun) return false;
+      runningRowMap.set(row, now);
+      if (cid) runningCidMap.set(cid, now);
+      guardMut(() => setAttrSafe(row, 'data-ag-cs-row-running', '1'));
+      scheduleRunningHoldExpiry(SIDEBAR_RUN_HOLD_MS);
+      return true;
+    };
+
+    const stampSidebarRowRunningImmediate = (row) => {
+      const d = docOf();
+      if (!row || !d || ga(d.documentElement, 'data-ag-cs-sidebar') === 'off') return false;
+      const now = nowOf();
+      const run = resolveSidebarRowRunning(row, isSidebarRowRunning(row), now);
+      if (run) guardMut(() => setAttrSafe(row, 'data-ag-cs-row-running', '1'));
+      return run;
+    };
+
     const measureSidebarSelectionSnapshot = () => {
       const rows = qsa(docOf(), '[data-testid="conversation-row-sidebar"]');
       if (!rows.length) return { e: true };
+      const now = nowOf();
+      pruneRunningCidMap(now);
       let selIdx = -1;
       let selRow = null;
+      let selRun = false;
       const states = [];
       for (let i = 0; i < rows.length; i++) {
         const r = rows[i];
+        const run = resolveSidebarRowRunning(r, isSidebarRowRunning(r), now);
         if (selIdx < 0 && ga(r, 'data-selected') === 'true') {
           selIdx = i;
           selRow = r;
+          selRun = run;
         }
-        states.push([r, Boolean(qs(r, '[data-testid="status-loading-spinner"]'))]);
+        states.push([r, run]);
       }
-      if (!selRow) return { e: false, i: -1, cid: '', r: null, s: null, l: null, t: 0, st: states };
-      const curCid = String(ga(selRow, 'data-cascade-id') || ga(qs(selRow, 'a[href]'), 'href') || '').trim();
+      if (!selRow) return { e: false, i: -1, cid: '', r: null, rn: false, s: null, l: null, t: 0, st: states };
+      const curCid = getSidebarRowCid(selRow);
       const list = peOf(selRow);
       const rr = rectOf(selRow);
       const lr = rectOf(list);
@@ -735,7 +889,7 @@
             rx: lr ? rr.left - lr.left : rr.left,
           }
         : null;
-      return { e: false, i: selIdx, cid: curCid, r: selRow, s: snap, l: lr, t: stTop, st: states };
+      return { e: false, i: selIdx, cid: curCid, r: selRow, rn: selRun, s: snap, l: lr, t: stTop, st: states };
     };
 
     const syncSidebarSelectionGlide = (snap) => {
@@ -746,15 +900,21 @@
         if (snap.st) {
           for (const [row] of snap.st) if (ha(row, 'data-ag-cs-row-running')) ra(row, 'data-ag-cs-row-running');
         }
+        if (runHoldTimer) {
+          CT(runHoldTimer);
+          runHoldTimer = 0;
+        }
+        runningCidMap.clear();
         sbInit = false;
         sbIndex = -1;
         sbCid = '';
         sbRect = null;
+        sbRunning = false;
         return;
       }
       if (snap.st) {
         for (const [row, run] of snap.st) {
-          if (run) setAttrIfChanged(row, 'data-ag-cs-row-running', '1');
+          if (run) setAttrSafe(row, 'data-ag-cs-row-running', '1');
           else if (ha(row, 'data-ag-cs-row-running')) ra(row, 'data-ag-cs-row-running');
         }
       }
@@ -763,15 +923,18 @@
         sbIndex = -1;
         sbCid = '';
         sbRect = null;
+        sbRunning = false;
         return;
       }
-      const { i: selIdx, cid: curCid, r: selRow, s: curSnap, l: listRect, t: scrollTop } = snap;
+      const { i: selIdx, cid: curCid, r: selRow, rn: selRun, s: curSnap, l: listRect, t: scrollTop } = snap;
       if (!selRow) return;
+      const targetRun = Boolean(selRun || ha(selRow, 'data-ag-cs-row-running'));
       if (!sbInit) {
         sbInit = true;
         sbIndex = selIdx;
         sbCid = curCid;
         sbRect = curSnap;
+        sbRunning = targetRun;
         return;
       }
       // 虚拟滚动增删上下行会让同一会话的 DOM 下标 selIdx 漂移；仅在真实切换会话 ID 时触发滑条与主区转场，消除滚动闪烁
@@ -786,6 +949,9 @@
           pill.className = 'ag-cs-sidebar-glide-pill';
           sa(pill, 'aria-hidden', 'true');
           sa(pill, 'data-ag-no-i18n', '');
+          sa(pill, 'data-ag-owned', '1');
+          if (targetRun) sa(pill, 'data-ag-cs-glide-running', '1');
+          else if (sbRunning) sa(pill, 'data-ag-cs-glide-from-running', '1');
           for (const [k, v] of [
             ['position', 'fixed'],
             ['z-index', '38'],
@@ -799,7 +965,7 @@
           }
           d.body?.appendChild(pill);
           try {
-            motionEngine?.glideIndicator?.(pill, fromRect, curSnap, { durationMs: 240 });
+            motionEngine?.glideIndicator?.(pill, fromRect, curSnap, { durationMs: 240, stiffness: 390, damping: 32, mass: 0.9 });
           } catch {}
           scheduleTransient(() => pill.remove(), 260);
         }
@@ -824,6 +990,7 @@
       sbIndex = selIdx;
       sbCid = curCid;
       sbRect = curSnap;
+      sbRunning = targetRun;
     };
 
     const applyCaustic = (el) => {
@@ -1311,9 +1478,7 @@
         if (!bodyDiv || tagOf(bodyDiv) !== 'DIV') continue;
         const streaming =
           ga(trig, 'aria-expanded') === 'true' &&
-          (ga(trig, 'data-op-thought-state') === 'streaming' ||
-            /\.\.\.|…|正在|思考中|thinking/i.test(String(trig.textContent || '')) ||
-            i === triggers.length - 1);
+          isStreamingThoughtTrigger(trig, i === triggers.length - 1);
         if (streaming) setAttrIfChanged(bodyDiv, 'data-ag-cs-thought-streaming', '1');
         else if (ha(bodyDiv, 'data-ag-cs-thought-streaming')) ra(bodyDiv, 'data-ag-cs-thought-streaming');
       }
@@ -1340,6 +1505,22 @@
       return age >= 0 && age <= 900;
     };
 
+    const resolveTriggerOriginCoords = (trig) => {
+      if (!isFreshTriggerOrigin(trig)) return null;
+      if (trig.el && !trig._measured) {
+        trig._measured = true;
+        if (trig.el.isConnected !== false) {
+          const r = rectOf(trig.el);
+          if (r && r.width > 0 && r.height > 0) {
+            trig.x = r.left + r.width / 2;
+            trig.y = r.top + r.height / 2;
+          }
+        }
+        trig.el = null;
+      }
+      return isFin(trig.x) && isFin(trig.y) ? trig : null;
+    };
+
     const measureNewLensOverlays = () => {
       const d = docOf();
       if (!isMotionStandardOrUltra() || !d) return [];
@@ -1350,10 +1531,16 @@
         const p = peOf(el);
         if (p && tagOf(p) === 'DIV') cands.add(p);
       }
-      const needRect = isFreshTriggerOrigin(heroState.lastTriggerOrigin);
-      const out = [];
+      const freshNew = [];
       for (const ov of cands) {
-        if (!ha(ov, 'data-hover-card-popup') && !seenOverlays.has(ov)) out.push({ ov, rect: needRect ? rectOf(ov) : null });
+        if (!ha(ov, 'data-hover-card-popup') && !seenOverlays.has(ov)) freshNew.push(ov);
+      }
+      if (freshNew.length === 0) return [];
+      // 仅在真有新浮层弹出时才懒测距点击源，消除普通正文点击时的同步回流
+      const trig = resolveTriggerOriginCoords(heroState.lastTriggerOrigin);
+      const out = [];
+      for (const ov of freshNew) {
+        out.push({ ov, rect: trig ? rectOf(ov) : null });
       }
       return out;
     };
@@ -1366,8 +1553,10 @@
         if (p && tagOf(p) === 'DIV') setAttrIfChanged(p, 'data-ag-cs-overview-shell', '1');
       }
       if (!isMotionStandardOrUltra()) return;
-      const trig = isFreshTriggerOrigin(heroState.lastTriggerOrigin) ? heroState.lastTriggerOrigin : null;
-      for (const { ov, rect: r } of measuredOverlays || measureNewLensOverlays()) {
+      const list = measuredOverlays || measureNewLensOverlays();
+      if (!list.length) return;
+      const trig = resolveTriggerOriginCoords(heroState.lastTriggerOrigin);
+      for (const { ov, rect: r } of list) {
         if (seenOverlays.has(ov)) continue;
         if (trig && r && (r.width <= 0 || r.height <= 0)) continue;
         seenOverlays.add(ov);
@@ -1387,6 +1576,7 @@
             tid === 'artifact-row'
           ) {
             setProp(item, '--ag-row-i', String(idx++));
+            setAttrIfChanged(item, 'data-ag-row-stagger', '1');
             if (idx >= 12) break;
           }
         }
@@ -1439,7 +1629,11 @@
       triggerHomeLiftoffRippleBurst,
       triggerHeroDFiberPulse,
       triggerHeroESonar,
+      isSidebarRowRunning,
+      lockSidebarRowRunningOnPointerDown,
+      stampSidebarRowRunningImmediate,
       measureSidebarSelectionSnapshot,
+      syncSidebarSelectionGlide,
       measureVisibleChangedHeaders,
       syncHeaderOpenStates,
       syncHeroCCaustics,
@@ -1470,7 +1664,7 @@
     };
   };
 
-  const api = { STREAM_BATCH_MS, STREAM_FADE_MS, HIGHLIGHT_NAMES, createStreamChoreographyController };
+  const api = { STREAM_BATCH_MS, STREAM_FADE_MS, SIDEBAR_RUN_HOLD_MS, HIGHLIGHT_NAMES, createStreamChoreographyController };
   if (typeof module === 'object' && module.exports) module.exports = api;
   G.__agPrismStreamChoreography = api;
 })(typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : this);

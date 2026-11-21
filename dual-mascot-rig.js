@@ -1705,8 +1705,20 @@
   ];
   const CHROMA_HEX = ['#4285F4', '#9B72CB', '#EA4335', '#FBBC04', '#5CC6FC'];
 
+  const CHROMA_CACHE = Object.create(null);
+
   function evalChromaColorAt(gx, gy, phase = 0, isShadow = false) {
-    const raw = ((gx + gy) * 0.068 - phase) % 1;
+    const sum = gx + gy;
+    const pNorm = ((phase % 1) + 1) % 1;
+    const pStep = Math.round(pNorm * 12);
+    const cacheable = Number.isInteger(sum) && sum >= -64 && sum <= 128 && Math.abs(pNorm * 12 - pStep) < 1e-5;
+    let cKey = 0;
+    if (cacheable) {
+      cKey = ((pStep % 12) << 9) | ((sum + 64) << 1) | (isShadow ? 1 : 0);
+      const hit = CHROMA_CACHE[cKey];
+      if (hit) return hit;
+    }
+    const raw = (sum * 0.068 - (cacheable ? (pStep % 12) / 12 : phase)) % 1;
     const u = (raw < 0 ? raw + 1 : raw) * CHROMA_STOPS.length;
     const i0 = Math.floor(u) % CHROMA_STOPS.length;
     const i1 = (i0 + 1) % CHROMA_STOPS.length;
@@ -1723,7 +1735,9 @@
       b = b * 0.72 + 40 * 0.14;
     }
     const hex = (v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
-    return `#${hex(r)}${hex(g)}${hex(b)}`;
+    const out = `#${hex(r)}${hex(g)}${hex(b)}`;
+    if (cacheable) CHROMA_CACHE[cKey] = out;
+    return out;
   }
 
   /**
@@ -1834,6 +1848,7 @@
 
     let tickIdx = 0;
     let disposed = false;
+    const isHostDetached = () => Boolean(hostEl && hostEl.isConnected === false);
 
     // ── prefers-reduced-motion：无 window / matchMedia 时安全降级为 false ──
     let reducedMotion = false;
@@ -1890,6 +1905,7 @@
       sym: null,
       symUntil: 0,
       dragging: false,
+      ballisticActive: false,
       flying: 0,
       stackedOn: null,
       throws: 0,
@@ -1939,6 +1955,7 @@
       lastDomX: null,
       lastDomY: null,
       lastDomZ: null,
+      lastDomRot: 0,
       lastRender: {
         poseKey: null,
         frameIdx: null,
@@ -1976,6 +1993,7 @@
       mc.rot = 0;
       mc.balRot = 0;
       mc.dragging = false;
+      mc.ballisticActive = false;
       mc.stackedOn = null;
       mc.flying = 0;
       mc.leap = null;
@@ -1989,6 +2007,7 @@
       mc.lastDomX = null;
       mc.lastDomY = null;
       mc.lastDomZ = null;
+      mc.lastDomRot = 0;
       mc.lastFrameKey = null;
     });
 
@@ -2103,6 +2122,7 @@
         cv.style.pointerEvents = 'auto';
         cv.style.cursor = 'grab';
         cv.style.touchAction = 'none';
+        cv.style.transformOrigin = '20px 26px';
       }
       miniGroupEl.appendChild(cv);
       mc.canvas = cv;
@@ -2123,6 +2143,9 @@
       cv.className = 'ag-v2-mascot-canvas';
       cv.width = Math.round(CANVAS_W * dpr);
       cv.height = Math.round(CANVAS_H * dpr);
+      if (cv.style) {
+        cv.style.transformOrigin = `${(OX + 8) * PX}px ${(OY + 10) * PX}px`;
+      }
       btn.appendChild(cv);
       actor.el = btn;
       actor.canvas = cv;
@@ -2182,9 +2205,55 @@
     };
 
     const cleanups = [];
-    let cachedHostWidth = typeof hostEl.clientWidth === 'number' && hostEl.clientWidth > 0 ? hostEl.clientWidth : 720;
+    const MASCOT_DRAG_ATTR = 'data-ag-cs-mascot-drag';
+    const RESIZE_ATTR = 'data-ag-cs-resizing';
+    let rootMascotDragAttr = false;
+    const syncMascotDragRootAttr = () => {
+      const anyDragging =
+        !disposed &&
+        (Boolean(actors.cat.dragging) ||
+          Boolean(actors.clawd.dragging) ||
+          miniCrabs.some((mc) => Boolean(mc.dragging)));
+      if (rootMascotDragAttr === anyDragging) return;
+      rootMascotDragAttr = anyDragging;
+      const htmlEl = doc && doc.documentElement;
+      if (!htmlEl) return;
+      try {
+        if (anyDragging) htmlEl.setAttribute?.(MASCOT_DRAG_ATTR, '1');
+        else htmlEl.removeAttribute?.(MASCOT_DRAG_ATTR);
+      } catch (_) {}
+    };
+    const initHostW = hostEl.clientWidth;
+    let hasMeasuredHostWidth = typeof initHostW === 'number' && initHostW > 0;
+    let cachedHostWidth = hasMeasuredHostWidth ? initHostW : 0;
     const isMockHostWidth = Object.prototype.hasOwnProperty.call(hostEl, 'clientWidth');
     let pdOn = false, reboundTm = null, resizeRaf = 0, pendPrevW = 0, pendNextW = 0;
+    const isStageResizing = () =>
+      Boolean(pdOn || (doc && doc.documentElement && doc.documentElement.getAttribute?.(RESIZE_ATTR) === '1'));
+    const snapRot = (deg) => {
+      const v = Number(deg) || 0;
+      return Math.abs(v) < 0.05 ? 0 : Math.round(v * 100) / 100;
+    };
+    const applyMiniTransform = (mc, tx, ty, tz, rot = 0) => {
+      const dom = mc.canvas || mc.el;
+      if (!dom || !dom.style) return;
+      const nextRot = snapRot(rot);
+      if (mc.lastDomX !== tx || mc.lastDomY !== ty || mc.lastDomRot !== nextRot) {
+        mc.lastDomX = tx;
+        mc.lastDomY = ty;
+        mc.lastDomRot = nextRot;
+        dom.style.transform = nextRot
+          ? `translate3d(${tx}px, ${ty}px, 0) rotate(${nextRot}deg)`
+          : `translate3d(${tx}px, ${ty}px, 0)`;
+        perfStats.domTransformWrites += 1;
+      } else {
+        perfStats.domTransformSkips += 1;
+      }
+      if (tz != null && mc.lastDomZ !== tz) {
+        mc.lastDomZ = tz;
+        dom.style.zIndex = tz;
+      }
+    };
     if (win && typeof win.addEventListener === 'function') {
       const onPd = () => { pdOn = true; }, onPu = () => { pdOn = false; }, pOpt = { capture: true, passive: true };
       win.addEventListener('pointerdown', onPd, pOpt);
@@ -2201,8 +2270,20 @@
       });
     }
     const maxXFor = (w) => Math.max(8, Math.max(96, w - 14 - (popoverRightWidth > 0 ? Math.min(w - 150, popoverRightWidth + 16) : 0)) - 80);
-    const syncTower = (a) => {
-      applyActorTransform(a);
+    const syncTower = (a, now = performance.now()) => {
+      if (isMiniEnt(a)) {
+        const dom = a.canvas || a.el;
+        if (dom) {
+          const direct = syncDirectMotionDomAttr(a, dom);
+          const tx = snapCoord(Number.isFinite(a.px) ? a.px : a.x, direct);
+          const ty = snapCoord(a.y || 0, direct);
+          const depth = a.stackedOn ? getStackDepth(a.id) : 0;
+          const tz = a.dragging ? '39' : depth > 0 ? String(25 + depth * 2) : '25';
+          applyMiniTransform(a, tx, ty, tz, a.dragging || a.ballisticActive ? a.rot : 0);
+        }
+      } else {
+        applyActorTransform(a, now);
+      }
       for (const cid of getTowerMembers(a.id)) {
         if (cid === a.id) continue;
         const r = getEnt(cid);
@@ -2217,20 +2298,9 @@
           const tz = r.dragging ? '39' : depth > 0 ? String(25 + depth * 2) : '25';
           r.px = tx;
           r.lastX = Math.round(tx);
-          if (r.lastDomX !== tx || r.lastDomY !== ty) {
-            r.lastDomX = tx;
-            r.lastDomY = ty;
-            dom.style.transform = `translate3d(${tx}px, ${ty}px, 0)`;
-            perfStats.domTransformWrites += 1;
-          } else {
-            perfStats.domTransformSkips += 1;
-          }
-          if (r.lastDomZ !== tz) {
-            r.lastDomZ = tz;
-            dom.style.zIndex = tz;
-          }
+          applyMiniTransform(r, tx, ty, tz, 0);
         } else {
-          applyActorTransform(r);
+          applyActorTransform(r, now);
         }
       }
     };
@@ -2289,9 +2359,51 @@
         syncTower(a);
       }
     };
+    const scheduleRebound = () => {
+      if (reboundTm) { clearTimeout(reboundTm); pendingTimers.delete(reboundTm); reboundTm = null; }
+      reboundTm = later(120, () => {
+        reboundTm = null;
+        if (isStageResizing()) return;
+        const fm = maxXFor(Math.max(readStageWidth(), cachedHostWidth));
+        const mains = [actors.cat, actors.clawd];
+        const list = mains
+          .filter((a) => freeMain(a) && a.sideEdgeSnap && a.sidePushOriginX != null)
+          .sort((u, v) => v.sidePushOriginX - u.sidePushOriginX);
+        let capX = fm;
+        const targets = list.map((a) => {
+          const tx = Math.max(8, Math.min(a.sidePushOriginX, capX));
+          capX = Math.max(8, tx - 56);
+          return { a, tx };
+        });
+        targets.forEach(({ a, tx }, idx) => (idx ? later(55 * idx, () => launchRebound(a, tx)) : launchRebound(a, tx)));
+      });
+    };
+    const onStageResizeReleased = () => {
+      if (disposed || isStageResizing()) return;
+      const mains = [actors.cat, actors.clawd];
+      const snapped = mains
+        .filter((a) => freeMain(a) && a.sideEdgeSnap && a.sidePushOriginX != null)
+        .sort((u, v) => v.sidePushOriginX - u.sidePushOriginX);
+      if (!snapped.length) return;
+      let capX = maxXFor(Math.max(readStageWidth(), cachedHostWidth));
+      let needReb = false;
+      for (const a of snapped) {
+        const tx = Math.max(8, Math.min(a.sidePushOriginX, capX));
+        capX = Math.max(8, tx - 56);
+        if (tx > a.x + 2) needReb = true;
+      }
+      if (needReb) {
+        scheduleRebound();
+      } else {
+        for (const a of snapped) {
+          a.sideEdgeDirectUntil = 0;
+          syncDirectMotionDomAttr(a, a.el);
+        }
+      }
+    };
     const handleStageWidthResize = (prevW, nw) => {
       if (disposed || !Number.isFinite(nw) || nw <= 0 || nw === prevW) return;
-      const now = performance.now(), nextMaxX = maxXFor(nw), mains = [actors.cat, actors.clawd];
+      const now = performance.now(), nextMaxX = maxXFor(nw), mains = [actors.cat, actors.clawd], resizingNow = isStageResizing();
       if (nw < prevW) {
         if (reboundTm) { clearTimeout(reboundTm); pendingTimers.delete(reboundTm); reboundTm = null; }
         // 快路径：两只主角均远离右边界时 0 计算早退
@@ -2313,8 +2425,8 @@
             if (a.sidePushOriginX == null) a.sidePushOriginX = beforeX[i];
             a.sideEdgeSnap = true;
             a.sideEdgeOffset = Math.max(0, nextMaxX - a.x);
-            a.sideEdgeDirectUntil = now + 180;
-            syncTower(a);
+            a.sideEdgeDirectUntil = now + (resizingNow ? 220 : 180);
+            syncTower(a, now);
           }
         }
         return;
@@ -2327,33 +2439,18 @@
         const off = a.sideEdgeOffset || 0;
         if (!reboundTm && a.x < prevMaxX - off - 64) { a.sideEdgeSnap = false; a.sidePushOriginX = null; continue; }
         const tx = Math.min(a.sidePushOriginX, Math.max(8, nextMaxX - off));
-        if (pdOn) {
+        if (resizingNow) {
           if (reboundTm) { clearTimeout(reboundTm); pendingTimers.delete(reboundTm); reboundTm = null; }
-          a.sideEdgeDirectUntil = now + 180;
+          a.sideEdgeDirectUntil = now + 220;
           a.x = tx;
-          syncTower(a);
+          syncTower(a, now);
           if (tx >= a.sidePushOriginX - 1) { a.sideEdgeSnap = false; a.sidePushOriginX = null; a.sideEdgeOffset = 0; }
         } else {
           needReb = true;
         }
       }
       if (needReb) {
-        if (reboundTm) { clearTimeout(reboundTm); pendingTimers.delete(reboundTm); reboundTm = null; }
-        reboundTm = later(120, () => {
-          reboundTm = null;
-          if (pdOn) return;
-          const fm = maxXFor(Math.max(readStageWidth(), cachedHostWidth));
-          const list = mains
-            .filter((a) => freeMain(a) && a.sideEdgeSnap && a.sidePushOriginX != null)
-            .sort((u, v) => v.sidePushOriginX - u.sidePushOriginX);
-          let capX = fm;
-          const targets = list.map((a) => {
-            const tx = Math.max(8, Math.min(a.sidePushOriginX, capX));
-            capX = Math.max(8, tx - 56);
-            return { a, tx };
-          });
-          targets.forEach(({ a, tx }, idx) => (idx ? later(55 * idx, () => launchRebound(a, tx)) : launchRebound(a, tx)));
-        });
+        scheduleRebound();
       }
     };
     const schedStageResize = (prevW, nw) => {
@@ -2372,15 +2469,19 @@
     if (!isMockHostWidth && typeof ResizeObserver === 'function' && hostEl && hostEl.nodeType === 1) {
       try {
         const hostRo = new ResizeObserver((entries) => {
-          const cr = entries && entries[0] && entries[0].contentRect;
-          const nw = cr && cr.width > 0 ? Math.round(cr.width) : hostEl.clientWidth;
+          if (disposed) return;
+          const lastEntry = entries && entries.length ? entries[entries.length - 1] : null;
+          const cr = lastEntry && lastEntry.contentRect;
+          // 仅读取 contentRect.width，杜绝折叠/空帧回退读 hostEl.clientWidth 触发同步回流
+          const nw = cr && typeof cr.width === 'number' ? Math.round(cr.width) : 0;
           const dprChanged = syncStageDpr();
-          if (nw > 0 && nw !== cachedHostWidth) {
-            const prevW = cachedHostWidth;
+          if (nw > 0) {
+            const prevW = cachedHostWidth || 720;
+            hasMeasuredHostWidth = true;
             cachedHostWidth = nw;
-            schedStageResize(prevW, nw);
+            if (nw !== prevW) schedStageResize(prevW, nw);
           }
-          if (dprChanged && !disposed) renderAllFrames(performance.now());
+          if (dprChanged) renderAllFrames(performance.now());
         });
         hostRo.observe(hostEl);
         cleanups.push(() => hostRo.disconnect());
@@ -2388,8 +2489,12 @@
     }
     const readStageWidth = () => {
       if (isMockHostWidth) return hostEl.clientWidth || 720;
-      if (cachedHostWidth <= 0 && typeof hostEl.clientWidth === 'number' && hostEl.clientWidth > 0) {
-        cachedHostWidth = hostEl.clientWidth;
+      if (!hasMeasuredHostWidth) {
+        const w = hostEl.clientWidth;
+        if (typeof w === 'number' && w > 0) {
+          cachedHostWidth = w;
+          hasMeasuredHostWidth = true;
+        }
       }
       return cachedHostWidth || 720;
     };
@@ -2530,7 +2635,7 @@
       const { minX, maxX } = stageBoundsX();
       const groundList = [];
       for (const e of allActiveEnts()) {
-        if (e.stackedOn || e.dragging) continue;
+        if (e.stackedOn || e.dragging || e.ballisticActive) continue;
         if ((e.y || 0) < -3 || e.leap) continue;
         if (isMiniEnt(e) && e.act && (e.act.type === 'ride' || e.act.type === 'leap')) continue;
         groundList.push({
@@ -2667,10 +2772,32 @@
 
     const isEntDirectMotion = (ent) => {
       if (!ent) return false;
-      if (ent.dragging || ent.leap || (ent.sideEdgeDirectUntil > 0 && performance.now() < ent.sideEdgeDirectUntil) || (!ent.stackedOn && (ent.y || 0) < -0.4)) return true;
+      const now = performance.now();
+      const resizingNow = isStageResizing();
+      if (
+        ent.dragging ||
+        ent.ballisticActive ||
+        ent.leap ||
+        (ent.sideEdgeSnap && resizingNow) ||
+        (ent.sideEdgeDirectUntil > 0 && now < ent.sideEdgeDirectUntil) ||
+        (!ent.stackedOn && (ent.y || 0) < -0.4)
+      ) {
+        return true;
+      }
       if (ent.stackedOn) {
         const root = getTowerRoot(ent.id);
-        if (root && root !== ent && (root.dragging || root.leap || (root.sideEdgeDirectUntil > 0 && performance.now() < root.sideEdgeDirectUntil) || (root.y || 0) < -0.4)) return true;
+        if (
+          root &&
+          root !== ent &&
+          (root.dragging ||
+            root.ballisticActive ||
+            root.leap ||
+            (root.sideEdgeSnap && resizingNow) ||
+            (root.sideEdgeDirectUntil > 0 && now < root.sideEdgeDirectUntil) ||
+            (root.y || 0) < -0.4)
+        ) {
+          return true;
+        }
       }
       return false;
     };
@@ -2699,12 +2826,13 @@
           domEl.style.cursor = 'grab';
         }
       }
+      syncMascotDragRootAttr();
       return direct;
     };
 
     const snapCoord = (v, direct) => (direct ? Math.round(v * 100) / 100 : Math.round(v));
 
-    const applyActorTransform = (actor) => {
+    const applyActorTransform = (actor, now = performance.now()) => {
       if (!actor.el) return;
       let yPx = actor.y;
       if (actor.stackedOn) {
@@ -2729,6 +2857,16 @@
         perfStats.domTransformWrites += 1;
       } else {
         perfStats.domTransformSkips += 1;
+      }
+      // 60fps GPU 倾角同步到内层 canvas（外层 actor.el 维持纯 translate3d 兼容），静止 rot=0 清回 ''
+      const nextRot = snapRot(effectiveRot(actor, now));
+      if (actor.lastDomRot !== nextRot) {
+        actor.lastDomRot = nextRot;
+        actor.lastRender.lastRot = nextRot;
+        if (actor.canvas && actor.canvas.style) {
+          actor.canvas.style.transform = nextRot ? `rotate(${nextRot}deg)` : '';
+        }
+        perfStats.domTransformWrites += 1;
       }
       if (actor.lastDomZ !== tz) {
         actor.lastDomZ = tz;
@@ -2887,7 +3025,7 @@
         .filter((mc) => !mc.act || tickIdx - mc.act.start < 0)
         .sort((m1, m2) => Math.abs(crabHostCenter(m1) - hx) - Math.abs(crabHostCenter(m2) - hx))[0] || null;
     const actorFree = (a, now) =>
-      !a.dragging && !a.stackedOn && !a.seq && a.y === 0 && !(a.overridePose === 'dangle' && now < a.overrideUntil);
+      !a.dragging && !a.ballisticActive && !a.stackedOn && !a.seq && a.y === 0 && !(a.overridePose === 'dangle' && now < a.overrideUntil);
 
     // 迎宾：三蟹集体挥手（复用 trick 帧，错峰 2 拍起手）
     const crabsWave = () => {
@@ -3161,7 +3299,6 @@
         let sqH = st ? st.sqH : 0;
         if (!st && hasRider && pose !== 'idle') sqH = -1;
         a.lastSq = { w: sqW, h: sqH };
-        const rot = effectiveRot(a, now);
         const clipBottomY = yieldMode === 'peek' && !a.dragging ? (OY + 8) * PX : undefined;
         const ftk = tickIdx - a.forceTwitchStart;
         const forcedTwitch = ftk >= 0 && ftk < 4 && ftk !== 2 ? a.forceTwitchSide : null;
@@ -3198,15 +3335,9 @@
         const tintState = `${a.kind}:${crystalActive ? 1 : 0}:${isChromaCat ? `p${phaseBucket}_${earSparkPhase}` : '0'}`;
         const snappedTy = Math.round(Number(nodOffset || 0) / PX) * PX;
         const frameIdx = computeLayersFrameIdx(layers);
-        const hasPhysicalMotion =
-          a.dragging ||
-          Boolean(a.leap) ||
-          Math.abs(a.vx) > 0.01 ||
-          Math.abs(a.vy) > 0.01 ||
-          (effectivePose === 'walk' && now < a.overrideUntil && !reducedMotion);
         const rc = a.lastRender;
+        // 像素层仅在精灵帧/朝向/表情/挤压/尺寸等真实像素内容变化时重绘，物理位移与倾角 rot 由 GPU transform 实时驱动
         if (
-          !hasPhysicalMotion &&
           rc.poseKey === effectivePose &&
           rc.frameIdx === frameIdx &&
           rc.flip === flip &&
@@ -3214,7 +3345,6 @@
           rc.tyPx === snappedTy &&
           rc.sqW === sqW &&
           rc.sqH === sqH &&
-          rc.lastRot === rot &&
           rc.clipBottomY === clipBottomY &&
           rc.cw === a.canvas.width &&
           rc.ch === a.canvas.height
@@ -3228,7 +3358,6 @@
           rc.tyPx = snappedTy;
           rc.sqW = sqW;
           rc.sqH = sqH;
-          rc.lastRot = rot;
           rc.clipBottomY = clipBottomY;
           rc.cw = a.canvas.width;
           rc.ch = a.canvas.height;
@@ -3262,7 +3391,7 @@
             tyPx: snappedTy,
             sqW,
             sqH,
-            rotDeg: rot,
+            rotDeg: 0,
             clipBottomY,
             colorResolver,
             overlayPainter,
@@ -3280,7 +3409,7 @@
         const safeRight = Math.max(48, (stageBoundsX().maxX || 680) - 48);
         if (!reducedMotion && !dozing && lastCrabStepTick !== tickIdx) {
           lastCrabStepTick = tickIdx;
-          const freeCorridorCrabs = miniCrabs.filter((mc) => !mc.dragging && !mc.stackedOn && !mc.leap && mc.y === 0);
+          const freeCorridorCrabs = miniCrabs.filter((mc) => !mc.dragging && !mc.ballisticActive && !mc.stackedOn && !mc.leap && mc.y === 0);
           const crabEvs = stepMiniCrabCorridor(freeCorridorCrabs, {
             minX: 2,
             maxX: safeRight,
@@ -3424,23 +3553,18 @@
               tyPx: targetTy,
             });
           }
-          if (mc.lastDomX !== targetX || mc.lastDomY !== targetY) {
-            mc.lastDomX = targetX;
-            mc.lastDomY = targetY;
-            mc.canvas.style.transform = `translate3d(${targetX}px, ${targetY}px, 0)`;
-          }
-          if (mc.lastDomZ !== mz) {
-            mc.lastDomZ = mz;
-            mc.canvas.style.zIndex = mz;
-          }
+          applyMiniTransform(mc, targetX, targetY, mz, mc.dragging || mc.ballisticActive ? mc.rot : 0);
         });
       } else {
         miniCrabs.forEach((mc) => {
           mc.act = null;
           mc.stackedOn = null;
           mc.dragging = false;
+          mc.ballisticActive = false;
+          mc.rot = 0;
           mc.y = 0;
         });
+        syncMascotDragRootAttr();
       }
 
       enforceGroundSeparation(
@@ -3451,18 +3575,14 @@
             : (miniCrabs.find((m) => m.dragging) || {}).id || null
       );
       // 二次刷新被防重叠微调后的 DOM transform（若未变则自动命中缓存 0 写入）
-      applyActorTransform(actors.cat);
-      applyActorTransform(actors.clawd);
+      applyActorTransform(actors.cat, now);
+      applyActorTransform(actors.clawd, now);
       if (miniPileEnabled) {
         for (const mc of miniCrabs) {
-          if (!mc.dragging && !mc.stackedOn && !mc.act && !mc.leap && mc.y === 0) {
+          if (!mc.dragging && !mc.ballisticActive && !mc.stackedOn && !mc.act && !mc.leap && mc.y === 0) {
             syncDirectMotionDomAttr(mc, mc.canvas);
             const tx = Math.round(mc.px);
-            if (mc.lastDomX !== tx || mc.lastDomY !== 0) {
-              mc.lastDomX = tx;
-              mc.lastDomY = 0;
-              mc.canvas.style.transform = `translate3d(${tx}px, 0px, 0)`;
-            }
+            applyMiniTransform(mc, tx, 0, null, 0);
           }
         }
       }
@@ -3490,6 +3610,7 @@
       for (const id of ['cat', 'clawd']) {
         const a = actors[id];
         a.flying += 1;
+        a.ballisticActive = false;
         a.leap = null;
         a.seq = null;
         a.seqThen = null;
@@ -3503,6 +3624,8 @@
       }
       miniCrabs.forEach((mc) => {
         mc.flying += 1;
+        mc.ballisticActive = false;
+        mc.rot = 0;
         mc.leap = null;
         if (mc.act && mc.act.type !== 'wave') mc.act = null;
         mc.bumpUntilTick = -1;
@@ -3689,7 +3812,10 @@
     };
 
     const pickNextTheater = () => {
-      if (disposed) return;
+      if (disposed || isHostDetached()) {
+        theaterTimer = 0;
+        return;
+      }
       // 减少动态：冻结自主巡逻与剧场，只保留静态待机与眨眼；打盹期间不排剧目
       if (!stageBusy() && !reducedMotion && !dozing) {
         const now = performance.now();
@@ -3733,7 +3859,7 @@
           }
         }
       }
-      if (!doc || !doc.hidden) {
+      if (!disposed && !dozing && !isHostDetached() && (!doc || !doc.hidden)) {
         theaterTimer = setTimeout(pickNextTheater, 4600 + Math.round(Math.random() * 2600));
       } else {
         theaterTimer = 0;
@@ -3742,7 +3868,7 @@
     const scheduleTheater = (delayMs) => {
       clearTimeout(theaterTimer);
       theaterTimer = 0;
-      if (disposed || dozing || (doc && doc.hidden)) return;
+      if (disposed || dozing || isHostDetached() || (doc && doc.hidden)) return;
       theaterTimer = setTimeout(pickNextTheater, delayMs ?? 4600 + Math.round(Math.random() * 2600));
     };
     scheduleTheater(3800);
@@ -3760,25 +3886,26 @@
         const root = getTowerRoot(cand.id);
         if (!root || seenRoots.has(root.id)) continue;
         seenRoots.add(root.id);
-        if (root.dragging || root.leap || (root.y || 0) < -4) continue;
+        if (root.dragging || root.ballisticActive || root.leap || (root.y || 0) < -4) continue;
         if (!isMiniEnt(root) && now < root.overrideUntil && ['onFire', 'siren', 'spinHop'].includes(root.overridePose)) {
           continue;
         }
         const baseChain = getTowerMembers(root.id);
         if (baseChain.length + moverChain.length > maxDepth) continue;
         const top = getEnt(baseChain[baseChain.length - 1]);
-        if (!top || top.dragging || top.leap || (top.y || 0) < -2 && !top.stackedOn) continue;
+        if (!top || top.dragging || top.ballisticActive || top.leap || ((top.y || 0) < -2 && !top.stackedOn)) continue;
 
         const perchY = computeWorldFootY(top) - mountStepH(top.id);
         const dx = Math.abs(moverCx - getEntWorldCx(top));
         if (dx <= 28 && moverFootY >= perchY - 24 && moverFootY <= perchY + 20) {
+          mover.ballisticActive = false;
           mover.stackedOn = top.id;
           mover.y = 0;
           mover.vx = 0;
           mover.vy = 0;
+          mover.rot = 0;
           mover.perchUntil = 0;
           if (!isMiniEnt(mover)) {
-            mover.rot = 0;
             mover.overridePose = 'happy';
             mover.overrideUntil = now + 950;
             mover.sym = 'heart';
@@ -3798,6 +3925,7 @@
       const subLen = getTowerMembers(subRoot.id).length;
       if (reducedMotion) {
         subRoot.flying += 1;
+        subRoot.ballisticActive = false;
         const holder = targetHolderId ? getEnt(targetHolderId) : null;
         if (holder && !holder.dragging && getTowerMembers(holder.id).length + subLen <= maxTowerDepthAllowed()) {
           subRoot.stackedOn = holder.id;
@@ -3810,15 +3938,21 @@
         }
         subRoot.vx = 0;
         subRoot.vy = 0;
+        subRoot.rot = 0;
         renderAllFrames(performance.now());
         return;
       }
 
       const settleId = (subRoot.flying += 1);
+      subRoot.ballisticActive = true;
+      syncDirectMotionDomAttr(subRoot, isMiniEnt(subRoot) ? subRoot.canvas : subRoot.el);
       let vy = 0.65;
       let prev = performance.now();
       const step = (now) => {
-        if (disposed || settleId !== subRoot.flying || subRoot.dragging) return;
+        if (disposed || settleId !== subRoot.flying || subRoot.dragging) {
+          if (disposed || subRoot.dragging) subRoot.ballisticActive = false;
+          return;
+        }
         const k = Math.max(0.5, Math.min(2.5, (now - prev) / 16.6667));
         prev = now;
 
@@ -3832,6 +3966,23 @@
           holder = null;
         }
         const goalY = holder ? computeWorldFootY(holder) - mountStepH(holder.id) : 0;
+        if (doc && doc.hidden) {
+          subRoot.ballisticActive = false;
+          subRoot.vx = 0;
+          subRoot.vy = 0;
+          subRoot.rot = 0;
+          if (holder) {
+            subRoot.stackedOn = holder.id;
+            subRoot.y = 0;
+            syncAllStackedFollowers();
+          } else {
+            subRoot.stackedOn = null;
+            subRoot.y = 0;
+            enforceGroundSeparation();
+          }
+          renderAllFrames(now);
+          return;
+        }
         if (holder) {
           const curCx = getEntWorldCx(subRoot);
           const dstCx = getEntWorldCx(holder);
@@ -3843,13 +3994,14 @@
         subRoot.vy = vy;
 
         if (subRoot.y >= goalY) {
+          subRoot.ballisticActive = false;
           subRoot.vx = 0;
           subRoot.vy = 0;
+          subRoot.rot = 0;
           if (holder) {
             subRoot.stackedOn = holder.id;
             subRoot.y = 0;
             if (!isMiniEnt(subRoot)) {
-              subRoot.rot = 0;
               playSeq(subRoot, [['idle', 1, 2, -1]]);
             }
             syncAllStackedFollowers();
@@ -3857,7 +4009,6 @@
             subRoot.stackedOn = null;
             subRoot.y = 0;
             if (!isMiniEnt(subRoot)) {
-              subRoot.rot = 0;
               playSeq(subRoot, landingSteps(1));
             }
             enforceGroundSeparation();
@@ -3867,7 +4018,7 @@
         }
 
         syncAllStackedFollowers();
-        renderAllFrames(now);
+        syncTower(subRoot, now);
         rAF(step);
       };
       rAF(step);
@@ -3901,9 +4052,11 @@
       mc.leap = null;
       if (reducedMotion) {
         mc.flying += 1;
+        mc.ballisticActive = false;
         mc.y = 0;
         mc.vx = 0;
         mc.vy = 0;
+        mc.rot = 0;
         if (mopts.noSnap || !trySnapOntoTower(mc, performance.now())) {
           enforceGroundSeparation();
           renderAllFrames(performance.now());
@@ -3911,13 +4064,28 @@
         return;
       }
       const flightId = (mc.flying += 1);
+      mc.ballisticActive = true;
+      syncDirectMotionDomAttr(mc, mc.canvas);
       let vx = Math.max(-14, Math.min(14, vx0));
       let vy = Math.max(-14, Math.min(14, vy0));
       let bounces = 0;
       let prev = performance.now();
 
       const step = (now) => {
-        if (disposed || flightId !== mc.flying || mc.dragging) return;
+        if (disposed || flightId !== mc.flying || mc.dragging) {
+          if (disposed || mc.dragging) mc.ballisticActive = false;
+          return;
+        }
+        if (doc && doc.hidden) {
+          mc.ballisticActive = false;
+          mc.y = 0;
+          mc.vx = 0;
+          mc.vy = 0;
+          mc.rot = 0;
+          enforceGroundSeparation();
+          renderAllFrames(now);
+          return;
+        }
         const k = Math.max(0.5, Math.min(2.5, (now - prev) / 16.6667));
         prev = now;
         vy += 0.46 * k;
@@ -3950,15 +4118,18 @@
             vx *= 0.78;
             bounces += 1;
           } else {
+            mc.ballisticActive = false;
             mc.vx = 0;
             mc.vy = 0;
+            mc.rot = 0;
             enforceGroundSeparation();
             renderAllFrames(now);
             return;
           }
         }
+        mc.rot = Math.max(-14, Math.min(14, -vx * 0.65));
         syncAllStackedFollowers();
-        renderAllFrames(now);
+        syncTower(mc, now);
         rAF(step);
       };
       rAF(step);
@@ -4112,6 +4283,7 @@
       if (reducedMotion) {
         // 减少动态：不做抛物线与弹跳，若在塔顶上方则吸附叠塔，否则静止落回地面并防重叠
         actor.flying += 1;
+        actor.ballisticActive = false;
         actor.seq = null;
         actor.vx = 0;
         actor.vy = 0;
@@ -4131,6 +4303,7 @@
       if (bopts.anticipate && actor.y === 0 && !actor.stackedOn) {
         // 起跳前 1 拍下蹲预备（整数格压扁加宽）
         const prepId = (actor.flying += 1);
+        actor.ballisticActive = false;
         playSeq(actor, [['squash', 2, 2, -1]]);
         later(TICK * 2, () => {
           if (actor.flying === prepId && !actor.dragging) launch(actor, vx0, vy0, bopts);
@@ -4148,19 +4321,26 @@
       let vy = Math.max(-18, Math.min(18, vy0));
       let bounces = 0;
       let scattered = false;
+      actor.ballisticActive = true;
       actor.reboundNoBump = Boolean(bopts.reboundNoBump);
       actor.leap = null;
       actor.seq = null;
       actor.overridePose = 'dangle';
       actor.overrideUntil = performance.now() + 3000;
+      // 起跳瞬间立刻锁死 data-direct="1" 与 transition: none，防止首帧落入 220ms CSS transition
+      syncDirectMotionDomAttr(actor, actor.el);
 
       let prev = performance.now();
       const step = (now) => {
-        if (disposed || flightId !== actor.flying || actor.dragging) return;
+        if (disposed || flightId !== actor.flying || actor.dragging) {
+          if (disposed || actor.dragging) actor.ballisticActive = false;
+          return;
+        }
         if (doc && doc.hidden) {
           if (hasReboundTarget) {
             actor.x = Math.max(8, Math.min(maxXFor(readStageWidth()), bopts.reboundTargetX));
           }
+          actor.ballisticActive = false;
           actor.reboundNoBump = false;
           actor.y = 0;
           actor.vx = 0;
@@ -4169,7 +4349,7 @@
           actor.overridePose = null;
           actor.overrideRot = 0;
           enforceGroundSeparation();
-          applyActorTransform(actor);
+          applyActorTransform(actor, now);
           return;
         }
         const k = Math.max(0.5, Math.min(2.5, (now - prev) / 16.6667));
@@ -4245,13 +4425,14 @@
             vy = -vy * 0.36;
             vx *= 0.82;
             bounces += 1;
-            // 中途弹跳：1 拍整格压扁触地，随后继续腾空
+            // 中途弹跳：1 拍整格压扁触地，随后继续腾空（ballisticActive 保持 true 锁死 data-direct）
             playSeq(actor, [['flat', 1, 2, 0]]);
           } else {
             const impact = Math.abs(vy);
             if (hasReboundTarget) {
               actor.x = Math.max(minX, Math.min(maxX, bopts.reboundTargetX));
             }
+            actor.ballisticActive = false;
             actor.reboundNoBump = false;
             actor.vx = 0;
             actor.vy = 0;
@@ -4265,7 +4446,7 @@
               startClip(actor, 'angry', 1400 + seqTotalMs(steps), { sym: 'vein' });
             }
             enforceGroundSeparation();
-            applyActorTransform(actor);
+            applyActorTransform(actor, now);
             renderAllFrames(now);
             return;
           }
@@ -4274,7 +4455,11 @@
         actor.vx = vx;
         actor.vy = vy;
         syncAllStackedFollowers();
-        applyActorTransform(actor);
+        applyActorTransform(actor, now);
+        // 仅在姿态真正切变（如起跳进 dangle 或触地切 flat）时重绘精灵，避免 60fps 软件重绘
+        if (resolvePoseFor(actor, now) !== actor.lastRender.poseKey) {
+          renderAllFrames(now);
+        }
         rAF(step);
       };
       rAF(step);
@@ -4313,7 +4498,7 @@
         if (evt.button !== 0) return;
         evt.preventDefault();
         evt.stopPropagation();
-        cachedStageW = hostEl.clientWidth || 720;
+        cachedStageW = readStageWidth();
         try {
           actor.el.setPointerCapture?.(evt.pointerId);
         } catch (_) {}
@@ -4355,6 +4540,7 @@
         petTriggered = false;
         markActivity();
         actor.flying += 1;
+        actor.ballisticActive = false;
         actor.leap = null;
         actor.seq = null;
         actor.seqThen = null;
@@ -4386,8 +4572,10 @@
           actor.sideEdgeSnap = false;
           actor.sidePushOriginX = null;
           actor.sideEdgeDirectUntil = 0;
+          actor.ballisticActive = false;
           actor.dragging = true;
           syncDirectMotionDomAttr(actor, actor.el);
+          syncMascotDragRootAttr();
         }
         if (!moved) return;
         evt.stopPropagation?.();
@@ -4406,8 +4594,8 @@
         const maxDragX = Math.max(24, cachedStageW - 88 - rightReserve);
         actor.x = Math.max(4, Math.min(maxDragX, startX + dxTotal));
         actor.y = Math.max(-180, Math.min(0, startY + dyTotal));
-        // 0ms 直通 GPU 合成层更新亚像素坐标，不等待全舞台重绘
-        applyActorTransform(actor);
+        // 0ms 直通 GPU 合成层更新亚像素坐标与 60fps 倾角，不等待全舞台重绘
+        applyActorTransform(actor, now);
         if (justStartedDrag) {
           renderAllFrames(now);
         } else {
@@ -4451,6 +4639,7 @@
 
         if (moved) {
           actor.dragging = false;
+          syncMascotDragRootAttr();
           const pNow = performance.now();
           if (pNow - prevMoveT > 35) {
             actor.vx = 0;
@@ -4481,8 +4670,11 @@
         if (moved || actor.dragging) {
           moved = false;
           actor.dragging = false;
+          actor.ballisticActive = false;
           actor.vx = 0;
           actor.vy = 0;
+          actor.rot = 0;
+          syncMascotDragRootAttr();
           syncDirectMotionDomAttr(actor, actor.el);
           if (!disposed) startBallistic(actor, 0, 0, { noSnap: true });
         }
@@ -4554,10 +4746,12 @@
         moved = false;
         markActivity();
         mc.flying += 1;
+        mc.ballisticActive = false;
         mc.leap = null;
         mc.act = null;
         mc.vx = 0;
         mc.vy = 0;
+        mc.rot = 0;
       };
 
       const onMove = (evt) => {
@@ -4569,8 +4763,10 @@
           moved = true;
           justStartedDrag = true;
           detachWithGravitySettle(mc.id);
+          mc.ballisticActive = false;
           mc.dragging = true;
           syncDirectMotionDomAttr(mc, mc.canvas);
+          syncMascotDragRootAttr();
         }
         if (!moved) return;
         evt.stopPropagation?.();
@@ -4580,11 +4776,12 @@
         const instVy = ((evt.clientY - lastMoveY) / dt) * 16;
         mc.vx = mc.vx * 0.4 + instVx * 0.6;
         mc.vy = mc.vy * 0.4 + instVy * 0.6;
+        mc.rot = Math.max(-14, Math.min(14, -mc.vx * 0.7));
         lastMoveX = evt.clientX;
         lastMoveY = evt.clientY;
         lastMoveT = now;
 
-        // 零 DOM 读取，0ms 直推亚像素浮点 transform 至 GPU 合成层
+        // 零 DOM 读取，0ms 直推亚像素浮点 transform + GPU 倾角至 GPU 合成层
         const clampedCx = Math.max(cachedMinCx, Math.min(cachedMaxCx, startCx + dxTotal));
         const nextPx = Math.max(2, clampedCx - 32);
         const nextY = Math.max(-180, Math.min(0, startY + dyTotal));
@@ -4594,15 +4791,7 @@
 
         const tx = snapCoord(nextPx, true);
         const ty = snapCoord(nextY, true);
-        if (mc.lastDomX !== tx || mc.lastDomY !== ty) {
-          mc.lastDomX = tx;
-          mc.lastDomY = ty;
-          mc.canvas.style.transform = `translate3d(${tx}px, ${ty}px, 0)`;
-        }
-        if (mc.lastDomZ !== '39') {
-          mc.lastDomZ = '39';
-          mc.canvas.style.zIndex = '39';
-        }
+        applyMiniTransform(mc, tx, ty, '39', mc.rot);
 
         if (justStartedDrag) {
           renderAllFrames(now);
@@ -4618,6 +4807,7 @@
         lastMoveT = 0;
         if (moved) {
           mc.dragging = false;
+          syncMascotDragRootAttr();
           const now = performance.now();
           if (now - prevMoveT > 35) {
             mc.vx = 0;
@@ -4644,8 +4834,11 @@
         if (moved || mc.dragging) {
           moved = false;
           mc.dragging = false;
+          mc.ballisticActive = false;
           mc.vx = 0;
           mc.vy = 0;
+          mc.rot = 0;
+          syncMascotDragRootAttr();
           syncDirectMotionDomAttr(mc, mc.canvas);
           if (!disposed) startMiniBallistic(mc, 0, 0, { noSnap: true });
         }
@@ -4677,15 +4870,21 @@
       (actors.cat.overridePose && now < actors.cat.overrideUntil) ||
       (actors.clawd.overridePose && now < actors.clawd.overrideUntil);
     const inTrans = () =>
-      [actors.cat, actors.clawd, ...miniCrabs].some((e) => e.dragging || e.leap || e.y < -0.4 || Math.abs(e.vy) > 0.01) ||
-      Boolean(reboundTm);
+      [actors.cat, actors.clawd, ...miniCrabs].some(
+        (e) => e.dragging || e.ballisticActive || e.leap || e.y < -0.4 || Math.abs(e.vy) > 0.01
+      ) || Boolean(reboundTm);
     const syncPwr = () => {
       if (disposed) return;
+      if (isHostDetached()) {
+        syncHeartbeat();
+        return;
+      }
       if (!isAttrB()) {
         wb = false;
         if (dozing && !isDocHidden()) { wakeUp(); return; }
       }
       syncHeartbeat();
+      if (!theaterTimer && currentTickMs > 0 && !dozing && !reducedMotion) scheduleTheater();
       if (!isWindowBlurred()) renderAllFrames(performance.now());
     };
     const onWBlur = () => {
@@ -4703,8 +4902,17 @@
     const MO0 = win?.MutationObserver || (typeof MutationObserver === 'function' ? MutationObserver : null);
     if (MO0 && doc?.documentElement) {
       try {
-        const mo = new MO0(syncPwr);
-        mo.observe(doc.documentElement, { attributes: true, attributeFilter: [WB] });
+        let wasResizingAttr = Boolean(doc.documentElement.getAttribute?.(RESIZE_ATTR) === '1');
+        const mo = new MO0((records) => {
+          if (disposed) return;
+          const nowResizingAttr = Boolean(doc.documentElement.getAttribute?.(RESIZE_ATTR) === '1');
+          const resizeEnded = wasResizingAttr && !nowResizingAttr;
+          wasResizingAttr = nowResizingAttr;
+          if (resizeEnded) onStageResizeReleased();
+          const hasBlurMut = !Array.isArray(records) || records.some((r) => !r || !r.attributeName || r.attributeName === WB);
+          if (hasBlurMut) syncPwr();
+        });
+        mo.observe(doc.documentElement, { attributes: true, attributeFilter: [WB, RESIZE_ATTR] });
         cleanups.push(() => mo.disconnect());
       } catch (_) {}
     }
@@ -4716,7 +4924,7 @@
     const onHeartbeat = () => {
       if (disposed) return;
       const now = performance.now();
-      if (isDocHidden() || (isWindowBlurred() && (dozing || !inTrans()))) {
+      if (isHostDetached() || isDocHidden() || (isWindowBlurred() && (dozing || !inTrans()))) {
         syncHeartbeat(now);
         return;
       }
@@ -4729,7 +4937,7 @@
 
     function syncHeartbeat(now = performance.now()) {
       let targetMs = TICK;
-      if (disposed || isDocHidden() || (isWindowBlurred() && (dozing || !inTrans())) || (reducedMotion && !stageBusy())) {
+      if (disposed || isHostDetached() || isDocHidden() || (isWindowBlurred() && (dozing || !inTrans())) || (reducedMotion && !stageBusy())) {
         targetMs = 0;
       } else if (dozing && !stageBusy() && !hasDozeTransition(now)) {
         targetMs = DOZE_TICK;
@@ -4808,7 +5016,18 @@
 
       const clawd = actors.clawd;
       const cat = actors.cat;
-      if (!clawd.dragging && !cat.dragging && !clawd.stackedOn && !cat.stackedOn && !clawd.leap && !cat.leap && clawd.y === 0 && cat.y === 0) {
+      if (
+        !clawd.dragging &&
+        !cat.dragging &&
+        !clawd.ballisticActive &&
+        !cat.ballisticActive &&
+        !clawd.stackedOn &&
+        !cat.stackedOn &&
+        !clawd.leap &&
+        !cat.leap &&
+        clawd.y === 0 &&
+        cat.y === 0
+      ) {
         const cPose = resolvePoseFor(clawd, now);
         const kPose = resolvePoseFor(cat, now);
         const cWalking = cPose === 'walk' && now < clawd.overrideUntil;
@@ -4867,10 +5086,10 @@
       // 场景 4 · 5 宠散步遇障（主宠与自由迷你蟹相遇时触发撑跳越过 / 自动搭便车 / 驻足眨眼转身）
       if (miniPileEnabled) {
         for (const a of [clawd, cat]) {
-          if (a.dragging || a.stackedOn || a.leap || a.y !== 0) continue;
+          if (a.dragging || a.ballisticActive || a.stackedOn || a.leap || a.y !== 0) continue;
           const aWalk = resolvePoseFor(a, now) === 'walk' && now < a.overrideUntil;
           for (const mc of miniCrabs) {
-            if (mc.dragging || mc.stackedOn || mc.leap || mc.act || mc.y !== 0) continue;
+            if (mc.dragging || mc.ballisticActive || mc.stackedOn || mc.leap || mc.act || mc.y !== 0) continue;
             const d = getEntWorldCx(mc) - getEntWorldCx(a);
             if (Math.abs(d) < 40 && canTriggerPair(`obs:${a.id}:${mc.id}`, now, 1600)) {
               if (aWalk && d * a.patrolDir > 0) {
@@ -5071,12 +5290,14 @@
         detachWithGravitySettle(rider.id);
       }
       rider.flying += 1;
+      rider.ballisticActive = false;
       rider.leap = null;
       if (isMiniEnt(rider)) rider.act = null;
       rider.stackedOn = top.id;
       rider.y = 0;
       rider.vx = 0;
       rider.vy = 0;
+      rider.rot = 0;
       rider.perchUntil = 0;
       if (!isMiniEnt(rider)) {
         rider.seq = null;
@@ -5160,10 +5381,12 @@
         const origCx = getEntWorldCx(ent);
         detachWithGravitySettle(ent.id);
         ent.flying += 1;
+        ent.ballisticActive = false;
         ent.leap = null;
         ent.y = 0;
         ent.vx = 0;
         ent.vy = 0;
+        ent.rot = 0;
         setEntWorldCx(ent, origCx - 64);
         enforceGroundSeparation();
         renderAllFrames(performance.now());
@@ -5199,6 +5422,8 @@
             e.stackedOn = null;
             e.perchUntil = 0;
             e.leap = null;
+            e.ballisticActive = false;
+            e.rot = 0;
             e.y = 0;
           });
           actors.cat.overridePose = null;
@@ -5271,7 +5496,7 @@
           },
           perf: {
             timerIntervalMs: currentTickMs,
-            timerPaused: isWindowBlurred() || currentTickMs === 0,
+            timerPaused: isHostDetached() || isWindowBlurred() || currentTickMs === 0,
             canvasDraws: perfStats.canvasDraws,
             canvasSkips: perfStats.canvasSkips,
             domTransformWrites: perfStats.domTransformWrites,
@@ -5329,6 +5554,19 @@
       syncPowerState: syncPwr,
       dispose() {
         disposed = true;
+        for (const a of [actors.cat, actors.clawd]) {
+          if (a) {
+            a.dragging = false;
+            a.ballisticActive = false;
+            a.rot = 0;
+          }
+        }
+        miniCrabs.forEach((mc) => {
+          mc.dragging = false;
+          mc.ballisticActive = false;
+          mc.rot = 0;
+        });
+        syncMascotDragRootAttr();
         if (tickTimer !== null) {
           clearInterval(tickTimer);
           tickTimer = null;

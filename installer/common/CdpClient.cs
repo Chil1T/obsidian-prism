@@ -571,6 +571,10 @@ namespace AgyClaudeStyle
             {
                 res["smoothCaret"] = ToBoolOnOff(res["smoothCaret"]);
             }
+            if (res.ContainsKey("contextMenu"))
+            {
+                res["contextMenu"] = ToBoolOnOff(res["contextMenu"]);
+            }
             if (res.ContainsKey("codeLigatures"))
             {
                 object cl = res["codeLigatures"];
@@ -2056,7 +2060,10 @@ namespace AgyClaudeStyle
             sb.Append("      try { window.__agPrismTelemetry?.destroy?.(); } catch {}\n");
             sb.Append("      try { window.__agPrismEffortSlider?.destroy?.(); } catch {}\n");
             sb.Append("      try { window.__agPrismThought?.destroy?.(); } catch {}\n");
+            sb.Append("      try { document.querySelectorAll?.('[data-testid=\"prism-thought-ai-config\"]')?.forEach?.((el) => el.remove()); } catch {}\n");
             sb.Append("      try { window.__agPrismOmni?.destroy?.(); } catch {}\n");
+            sb.Append("      try { window.__agPrismContextMenu?.destroy?.(); } catch {}\n");
+            sb.Append("      try { document.querySelectorAll?.('.ag-cs-ctx-menu, .ag-cs-ctx-toast')?.forEach?.((el) => el.remove()); } catch {}\n");
             sb.Append("      try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}\n");
             sb.Append("      try { document.documentElement?.removeAttribute?.('data-ag-cs-model-menu'); document.querySelectorAll?.('[data-ag-cs-aux-dual],[data-ag-cs-model-overlay]').forEach((el) => { el.removeAttribute('data-ag-cs-aux-dual'); el.removeAttribute('data-ag-cs-model-overlay'); }); } catch {}\n");
             sb.Append("      try { window.__agPrism?.destroy?.(); } catch {}\n");
@@ -2064,7 +2071,7 @@ namespace AgyClaudeStyle
             sb.Append("      try { document.getElementById('ag-claude-style-css')?.remove(); } catch {}\n");
             sb.Append("      try { document.getElementById('ag-prism-settings-v101-css')?.remove(); } catch {}\n");
             sb.Append("      try { document.getElementById('ag-prism-omni-css')?.remove(); } catch {}\n");
-            sb.Append("      delete window.__agPrismOmni; delete window.__agPrism; delete window.__agClaudeStyle;\n");
+            sb.Append("      delete window.__agPrismThought; delete window.__agPrismThoughtSettingsUi; delete globalThis.__agPrismThoughtSettingsUi; delete window.__agPrismOmni; delete window.__agPrismContextMenu; delete globalThis.__agPrismContextMenu; delete window.__agPrism; delete window.__agClaudeStyle;\n");
             sb.Append("    };\n");
             sb.Append("    const hasDomWorkbenchMarkers = () => {\n");
             sb.Append("      try {\n");
@@ -2116,8 +2123,7 @@ namespace AgyClaudeStyle
             sb.Append("          existingPrism.codeHash === bootCfg.codeHash &&\n");
             sb.Append("          typeof existingPrism.refreshConfig === 'function' &&\n");
             sb.Append("          window.__agPrismTelemetry &&\n");
-            sb.Append("          window.__agPrismEffortSlider &&\n");
-            sb.Append("          window.__agPrismThought\n");
+            sb.Append("          window.__agPrismEffortSlider\n");
             sb.Append("        );\n");
             sb.Append("        if (bundleUnchanged) {\n");
             sb.Append("          existingPrism.refreshConfig(bootCfg);\n");
@@ -2126,6 +2132,7 @@ namespace AgyClaudeStyle
             sb.Append("          try { window.__agPrismEffortSlider?.destroy?.(); } catch {}\n");
             sb.Append("          try { window.__agPrismThought?.destroy?.(); } catch {}\n");
             sb.Append("          try { window.__agPrismOmni?.destroy?.(); } catch {}\n");
+            sb.Append("          try { window.__agPrismContextMenu?.destroy?.(); } catch {}\n");
             sb.Append("          try { document.querySelectorAll?.('[data-ag-prism-fallback=\"1\"]').forEach((n) => n.remove()); } catch {}\n");
             sb.Append("          ").Append(bundle).Append('\n');
             sb.Append("          if (typeof globalThis.__agCsUiMain === 'function') {\n");

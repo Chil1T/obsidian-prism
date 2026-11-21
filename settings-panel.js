@@ -59,6 +59,7 @@
     composerRestyle: S_T,
     placeholderStyle: { allowed: ['studio', 'host'], default: 'studio' },
     smoothCaret: S_T,
+    contextMenu: S_T,
     codeFont: { allowed: ['default', 'jetbrains', 'cascadia', 'sfmono'], default: 'default' },
     codeLigatures: S_F,
     mascot: { allowed: ['crab', 'minis', 'off'], default: 'crab', aliases: { dual: 'crab' } },
@@ -331,6 +332,9 @@
       const ns = formatSettingsSummary(l, u);
       if (sumEl && sumEl[K_TC] !== ns) sumEl[K_TC] = ns;
       if (ga(rootEl, 'data-body-built') !== '1') return;
+      if (typeof rootEl.__prismMountThoughtUi === 'function') {
+        try { rootEl.__prismMountThoughtUi(); } catch {}
+      }
 
       const de = doc.documentElement;
       const themeAttr = de?.getAttribute?.('data-ag-cs-theme') || '';
@@ -339,7 +343,9 @@
         (!themeAttr && (Boolean(de?.[K_CL]?.contains?.('light')) || Boolean(doc.body?.[K_CL]?.contains?.('light'))));
       const hiState = de?.getAttribute?.('data-ag-prism-host-i18n') || '';
       const tmMode = getThoughtTranslateMode();
-      const sigParts = [l, isLightTheme ? 1 : 0, hiState, tmMode, ns];
+      const thLive = rootEl.__prismThoughtUiHandle;
+      const hasThUi = Boolean(thLive && thLive.box?.[K_IC]);
+      const sigParts = [l, isLightTheme ? 1 : 0, hiState, tmMode, hasThUi ? 1 : 0, ns];
       for (const k of SCHEMA_KEYS) sigParts.push(effVal(k, l));
       const nextSig = sigParts.join('\x1f');
       if (rootEl.__lastSyncSig === nextSig) return;
@@ -369,10 +375,18 @@
         sa(pBtn, 'data-active', m ? '1' : '0');
         sa(pBtn, 'aria-pressed', m);
       }
-      const th = rootEl.__prismThoughtUiHandle;
+      const th = hasThUi ? thLive : null;
+      if (th?.onLanguageChanged && th.__agLang !== l) {
+        th.onLanguageChanged(l);
+        th.__agLang = l;
+      }
       if (th?.onViewSwitched) th.onViewSwitched(effVal('thoughtView', l));
-      const tb = qs(rootEl, '[data-testid="prism-thought-ai-config"]');
-      if (tb) tb.hidden = tmMode !== 'ai';
+      if (th?.onModeSwitched) {
+        th.onModeSwitched(tmMode);
+      } else {
+        const tb = qs(rootEl, '[data-testid="prism-thought-ai-config"]');
+        if (tb) tb.hidden = tmMode !== 'ai';
+      }
       const ltRow = qs(rootEl, '[data-ag-cs-row="linkTarget"]');
       if (ltRow?.style) ltRow.style.opacity = effVal('omniModule', l) === 'off' ? '0.55' : '';
       const lpDescEl = qs(rootEl, '[data-ag-cs-row="lightPreset"] [data-k="d"]');
@@ -493,6 +507,70 @@
       let cachedUpdStatus = null;
       let applyUpdateViewRef = null;
       let probeRepoRef = null;
+      let thoughtListEl = null;
+      let thoughtUiHandle = null;
+
+      const getThoughtUiHandle = () => {
+        const live = sec.__prismThoughtUiHandle || thoughtUiHandle;
+        if (live && live.box?.[K_IC]) {
+          thoughtUiHandle = live;
+          return live;
+        }
+        return null;
+      };
+
+      const mountThoughtUiIfReady = () => {
+        const curUi = (typeof window !== 'undefined' && window.__agPrismThoughtSettingsUi) || G.__agPrismThoughtSettingsUi;
+        const hasFactory = typeof curUi?.createThoughtAiConfigBox === 'function';
+        if (thoughtUiHandle && !thoughtUiHandle.box?.[K_IC]) {
+          thoughtUiHandle = null;
+          if (sec.__prismThoughtUiHandle && !sec.__prismThoughtUiHandle.box?.[K_IC]) {
+            sec.__prismThoughtUiHandle = null;
+          }
+          if (!hasFactory) return null;
+        }
+        if (thoughtUiHandle && thoughtUiHandle.box?.[K_IC]) {
+          sec.__prismThoughtUiHandle = thoughtUiHandle;
+          return thoughtUiHandle;
+        }
+        const hostList = thoughtListEl?.[K_IC] ? thoughtListEl : qs(sec, '[data-ag-cs-group="thought"] .ag-cs-settings-card');
+        if (!hostList?.[K_IC] || !hasFactory) {
+          if (!hasFactory) {
+            thoughtUiHandle = null;
+            sec.__prismThoughtUiHandle = null;
+          }
+          return null;
+        }
+        thoughtListEl = hostList;
+        const curLang = getLang();
+        const curUiText = uiText(curLang) || ui;
+        const curMode = getThoughtTranslateMode();
+        const handle = curUi.createThoughtAiConfigBox({
+          mkEl,
+          btnClass: BTN,
+          ui: curUiText,
+          lang: curLang,
+          getLang,
+          isZh,
+          getMode: getThoughtTranslateMode,
+          runGuardedMut,
+        });
+        if (!handle || !handle.box) return null;
+        runGuardedMut(() => {
+          qa(hostList, '[data-testid="prism-thought-ai-config"]').forEach((oldBox) => oldBox.remove());
+          ap(hostList, handle.box);
+        });
+        handle.__agLang = curLang;
+        thoughtUiHandle = handle;
+        sec.__prismThoughtUiHandle = handle;
+        try {
+          handle.onLanguageChanged?.(curLang);
+          handle.onViewSwitched?.(effVal('thoughtView', curLang));
+          handle.onModeSwitched?.(curMode);
+        } catch {}
+        return handle;
+      };
+      sec.__prismMountThoughtUi = mountThoughtUiIfReady;
 
       const syncFoldBadgeOnly = (st) => {
         if (!updBadge[K_IC] || !st || st.offline || st.timeout) return;
@@ -547,6 +625,7 @@
             composerRestyle: RS('composerRestyle', 'Composer', onOff),
             placeholderStyle: RS('placeholderStyle', 'Placeholder', [['studio', 'Studio'], ['host', U('optPlaceholderHost')]]),
             smoothCaret: RS('smoothCaret', 'SmoothCaret', onOff),
+            contextMenu: R('contextMenu', 'rowContextMenuTitle', 'rowContextMenuDesc', onOff),
             codeFont: RS('codeFont', 'CodeFont', [['default', U('optFontDefault')], ['jetbrains', 'JetBrains Mono'], ['cascadia', 'Cascadia Code'], ['sfmono', U('optFontSfmono', 'SF Mono')]]),
             codeLigatures: RS('codeLigatures', 'CodeLigatures', onOff),
             mascot: RS('mascot', 'Mascot', [['crab', mDual], ['minis', mMinis], ['off', mOff]]),
@@ -566,13 +645,11 @@
 
           const groups = [
             { id: 'appearance', title: U('grpAppearance'), keys: ['palette', 'lightPreset', 'accentTone', 'cornerStyle', 'ambientIntensity', 'motionLevel', 'targetFps', 'homeLayout', 'homeRipple', 'logoInk', 'language', 'hostLocalization'] },
-            { id: 'interaction', title: U('grpInteraction'), keys: ['composerRestyle', 'placeholderStyle', 'smoothCaret', 'codeFont', 'codeLigatures', 'mascot', 'sidebarRestyle', 'sidebarCompact'] },
+            { id: 'interaction', title: U('grpInteraction'), keys: ['composerRestyle', 'placeholderStyle', 'smoothCaret', 'contextMenu', 'codeFont', 'codeLigatures', 'mascot', 'sidebarRestyle', 'sidebarCompact'] },
             { id: 'thought', title: U('grpThought'), keys: ['thoughtTranslate', 'thoughtTrigger', 'thoughtView'] },
             { id: 'modules', title: U('groupModules'), keys: ['telemetryModule', 'effortSliderModule', 'omniModule', 'linkTarget'] },
             { id: 'beta', title: U('grpBeta'), keys: ['sidebarStudio'] },
           ];
-
-          let thoughtUiHandle = null;
 
           const buildRow = (r) => {
             const row = mkEl('div');
@@ -610,8 +687,11 @@
                   else ra(sib, 'data-pressed');
                 }
                 saveSetting(r.key, val);
-                if (r.key === 'thoughtTranslate' && thoughtUiHandle) thoughtUiHandle.onModeSwitched(val);
-                if (r.key === 'thoughtView' && thoughtUiHandle?.onViewSwitched) thoughtUiHandle.onViewSwitched(val);
+                if (r.key === 'thoughtTranslate') {
+                  mountThoughtUiIfReady();
+                  getThoughtUiHandle()?.onModeSwitched?.(val);
+                }
+                if (r.key === 'thoughtView') getThoughtUiHandle()?.onViewSwitched?.(val);
                 if (r.key === 'updateChannel' && applyUpdateViewRef) {
                   setTimeout(() => { void invokePrismRepoAction('update-status', version).then((st) => st && applyUpdateViewRef(st)).catch(() => {}); }, 40);
                 }
@@ -678,10 +758,8 @@
             groupElsById.set(grp.id, grpEl);
             const list = mkEl('div', CARD_CLS);
             for (const k of grp.keys) if (rowDefs[k]) ap(list, buildRow(rowDefs[k]));
-            if (grp.id === 'thought' && G.__agPrismThoughtSettingsUi?.createThoughtAiConfigBox) {
-              thoughtUiHandle = G.__agPrismThoughtSettingsUi.createThoughtAiConfigBox({ mkEl, btnClass: BTN, ui, lang, getLang, isZh, getMode: getThoughtTranslateMode, runGuardedMut });
-              sec.__prismThoughtUiHandle = thoughtUiHandle;
-              ap(list, thoughtUiHandle?.box);
+            if (grp.id === 'thought') {
+              thoughtListEl = list;
             }
             ap(groupsWrap, ap(grpEl, mkEl('div', 'ag-cs-settings-subhead', grp.title), list));
           }
@@ -944,6 +1022,7 @@
           );
           ap(groupsWrap, ap(aboutGrp, mkEl('div', 'ag-cs-settings-subhead', U('aboutGroupTitle', 'About')), aboutBox));
           ap(foldBody, groupsWrap);
+          mountThoughtUiIfReady();
 
           let uBusy = false;
           onClk(uBtn, () => runGuardedMut(() => setVis(uBox, !!(uBox.hidden))));
@@ -998,7 +1077,9 @@
             const lNow = getLang(), uNow = uiText(lNow), cur = {};
             for (const k of SCHEMA_KEYS) cur[k] = effVal(k, lNow);
             const win = typeof window !== 'undefined' ? window : G;
-            const rawThought = await Promise.resolve(win?.__agPrismThought?.getConfig?.()).catch(() => null);
+            const rawThought = await Promise.resolve(
+              win?.__agPrismThought?.getConfig ? win.__agPrismThought.getConfig() : win?.__agPrismThoughtBridge?.call?.({ action: 'get-config' })
+            ).catch(() => null);
             const jsonStr = JSON.stringify(buildSanitizedConfigExport(cur, rawThought || null, version), null, 2);
             try {
               if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
@@ -1024,21 +1105,28 @@
             pendingCfgToast = { key: 'cfgImportOk', fallback: 'OK', tone: 'ok', exp: Date.now() + 2500 };
             if (O.keys(res.settings).length > 0) {
               applyBatch(res.settings);
-              if (res.settings.thoughtTranslate && thoughtUiHandle) thoughtUiHandle.onModeSwitched(res.settings.thoughtTranslate);
-              if (res.settings.thoughtView && thoughtUiHandle?.onViewSwitched) thoughtUiHandle.onViewSwitched(res.settings.thoughtView);
+              if (res.settings.thoughtTranslate) {
+                mountThoughtUiIfReady();
+                getThoughtUiHandle()?.onModeSwitched?.(res.settings.thoughtTranslate);
+              }
+              if (res.settings.thoughtView) getThoughtUiHandle()?.onViewSwitched?.(res.settings.thoughtView);
             }
             if (res.thought) {
               const win = typeof window !== 'undefined' ? window : G;
               try {
-                void Promise.resolve(win?.__agPrismThought?.saveConfig?.(res.thought))
+                void Promise.resolve(
+                  win?.__agPrismThought?.saveConfig
+                    ? win.__agPrismThought.saveConfig(res.thought)
+                    : win?.__agPrismThoughtBridge?.call?.({ action: 'save-config', ...res.thought })
+                )
                   .then(() => {
-                    const liveTh = doc.getElementById(SETTINGS_SEC_ID)?.__prismThoughtUiHandle || thoughtUiHandle;
+                    const liveTh = doc.getElementById(SETTINGS_SEC_ID)?.__prismThoughtUiHandle || getThoughtUiHandle();
                     liveTh?.reloadConfig?.();
                     liveTh?.ensureLoaded?.(true);
                   })
                   .catch(() => {});
               } catch {}
-              thoughtUiHandle?.reloadConfig?.();
+              getThoughtUiHandle()?.reloadConfig?.();
             }
             const rl = getLang(), ru = uiText(rl);
             if (sec.isConnected) {
@@ -1068,8 +1156,11 @@
             const defs = getDefaultSettingsPatch();
             pendingCfgToast = { key: 'cfgResetOk', fallback: 'OK', tone: 'ok', exp: Date.now() + 2500 };
             applyBatch(defs);
-            if (thoughtUiHandle) thoughtUiHandle.onModeSwitched(defs.thoughtTranslate);
-            if (thoughtUiHandle?.onViewSwitched) thoughtUiHandle.onViewSwitched(defs.thoughtView);
+            const curTh = getThoughtUiHandle();
+            if (curTh) {
+              curTh.onModeSwitched?.(defs.thoughtTranslate);
+              curTh.onViewSwitched?.(defs.thoughtView);
+            }
             const rl = getLang(), ru = uiText(rl);
             if (sec.isConnected) {
               pendingCfgToast = null;

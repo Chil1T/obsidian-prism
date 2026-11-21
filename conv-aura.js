@@ -143,7 +143,21 @@
     return hitFresh;
   }
 
-  function computeConvAuraOptics(phase, phaseAt, now, dark, wasRunning) {
+  const OPTICS_BUF = { strength: 0, reach: 0.5, prism: 0, surge: 0, speed: 0, semantic: 'none', frameMs: 110 };
+  const DRAW_EXTRA_BUF = { reach: 0.5, prism: 0, surge: 0, speed: 0, semantic: 'none', ambientIntensity: 1, still: false, spectrum: undefined };
+
+  function fillOptics(out, strength, reach, prism, surge, speed, semantic, frameMs) {
+    out.strength = strength;
+    out.reach = reach;
+    out.prism = prism;
+    out.surge = surge;
+    out.speed = speed;
+    out.semantic = semantic;
+    out.frameMs = frameMs;
+    return out;
+  }
+
+  function computeConvAuraOptics(phase, phaseAt, now, dark, wasRunning, out = OPTICS_BUF) {
     const idleStr = dark ? 0.21 : 0.52;
     const runBase = dark ? 0.31 : 0.64;
     const idlePrism = dark ? 0.14 : 0.26;
@@ -157,140 +171,146 @@
       const endPrism = wasRunning ? 0.70 : idlePrism;
       const settleEase = Math.pow(p, 2.4);
       const endSpeed = wasRunning ? 1.45 : 0.72;
-      return {
-        strength: p <= 0.5 ? idleStr + (peakStr - idleStr) * s : endStr + (peakStr - endStr) * s,
-        reach: scaleConvReach(rawReach),
-        prism: p <= 0.5 ? idlePrism + (0.74 - idlePrism) * s : endPrism + (0.74 - endPrism) * s,
-        surge: Number((0.50 * (1 - 0.32 * settleEase)).toFixed(4)),
-        speed: Number((1.95 - (1.95 - endSpeed) * settleEase).toFixed(4)),
-        semantic: 'none',
-        frameMs: 22,
-      };
+      return fillOptics(
+        out,
+        p <= 0.5 ? idleStr + (peakStr - idleStr) * s : endStr + (peakStr - endStr) * s,
+        scaleConvReach(rawReach),
+        p <= 0.5 ? idlePrism + (0.74 - idlePrism) * s : endPrism + (0.74 - endPrism) * s,
+        Number((0.50 * (1 - 0.32 * settleEase)).toFixed(4)),
+        Number((1.95 - (1.95 - endSpeed) * settleEase).toFixed(4)),
+        'none',
+        22
+      );
     }
     if (phase === 'running') {
-      return {
-        strength: runBase + (dark ? 0.035 : 0.045) * Math.sin(now * 0.0021),
-        reach: scaleConvReach(0.22),
-        prism: 0.70,
-        surge: 0.06 * Math.sin(now * 0.0024),
-        speed: 1.45,
-        semantic: 'none',
-        frameMs: 32,
-      };
+      return fillOptics(
+        out,
+        runBase + (dark ? 0.035 : 0.045) * Math.sin(now * 0.0021),
+        scaleConvReach(0.22),
+        0.70,
+        0.06 * Math.sin(now * 0.0024),
+        1.45,
+        'none',
+        32
+      );
     }
     if (phase === 'awaiting-decision') {
       const elapsed = Math.max(0, now - phaseAt);
       const p = Math.min(1, elapsed / CONV_AURA_DECISION_BREATH_MS);
       const wave = p < 1 ? Math.sin(p * Math.PI * 2) * (1 - 0.35 * p) : 0;
       const baseHold = dark ? 0.22 : 0.42;
-      return {
-        strength: Math.max(0.08, baseHold + (dark ? 0.045 : 0.065) * wave),
-        reach: scaleConvReach(0.18 + 0.025 * Math.max(0, wave)),
-        prism: 0.32,
-        surge: p < 1 ? Number((0.12 * wave).toFixed(4)) : 0,
-        speed: p < 1 ? 0.85 : 0,
-        semantic: 'awaiting-decision',
-        frameMs: 36,
-      };
+      return fillOptics(
+        out,
+        Math.max(0.08, baseHold + (dark ? 0.045 : 0.065) * wave),
+        scaleConvReach(0.18 + 0.025 * Math.max(0, wave)),
+        0.32,
+        p < 1 ? Number((0.12 * wave).toFixed(4)) : 0,
+        p < 1 ? 0.85 : 0,
+        'awaiting-decision',
+        36
+      );
     }
     if (phase === 'decision-clear') {
       const p = Math.max(0, Math.min(1, (now - phaseAt) / CONV_AURA_DECISION_CLEAR_MS));
       const ease = 1 - Math.pow(1 - p, 2);
       const startHold = dark ? 0.22 : 0.42;
-      return {
-        strength: startHold * (1 - ease),
-        reach: scaleConvReach(0.18 - 0.04 * ease),
-        prism: 0.24 * (1 - ease),
-        surge: -0.14 * (1 - ease),
-        speed: 0.65 * (1 - ease),
-        semantic: 'awaiting-decision',
-        frameMs: 28,
-      };
+      return fillOptics(
+        out,
+        startHold * (1 - ease),
+        scaleConvReach(0.18 - 0.04 * ease),
+        0.24 * (1 - ease),
+        -0.14 * (1 - ease),
+        0.65 * (1 - ease),
+        'awaiting-decision',
+        28
+      );
     }
     if (phase === 'error-halted') {
       const p = Math.max(0, Math.min(1, (now - phaseAt) / CONV_AURA_ERROR_MS));
       const ease = 1 - Math.pow(1 - p, 2.2);
       const peakErr = dark ? 0.26 : 0.46;
-      return {
-        strength: peakErr * (1 - ease),
-        reach: scaleConvReach(0.21 - 0.09 * ease),
-        prism: 0.36 * (1 - ease),
-        surge: Number((-0.44 * (1 - ease)).toFixed(4)),
-        speed: 0.9 * (1 - 0.6 * ease),
-        semantic: 'error-halted',
-        frameMs: 28,
-      };
+      return fillOptics(
+        out,
+        peakErr * (1 - ease),
+        scaleConvReach(0.21 - 0.09 * ease),
+        0.36 * (1 - ease),
+        Number((-0.44 * (1 - ease)).toFixed(4)),
+        0.9 * (1 - 0.6 * ease),
+        'error-halted',
+        28
+      );
     }
     if (phase === 'long-task-complete') {
       const p = Math.max(0, Math.min(1, (now - phaseAt) / CONV_AURA_LONG_COMPLETE_MS));
       const ease = 1 - Math.pow(1 - p, 2.05);
       const startStr = dark ? 0.36 : 0.62;
       const holdStr = dark ? 0.16 : 0.30;
-      return {
-        strength: startStr + (holdStr - startStr) * ease,
-        reach: scaleConvReach(0.24 + (0.17 - 0.24) * ease),
-        prism: 0.52 + (0.24 - 0.52) * ease,
-        surge: Number((-0.48 * (1 - ease * 0.92)).toFixed(4)),
-        speed: 1.25 + (0.55 - 1.25) * ease,
-        semantic: 'long-task-complete',
-        frameMs: 28,
-      };
+      return fillOptics(
+        out,
+        startStr + (holdStr - startStr) * ease,
+        scaleConvReach(0.24 + (0.17 - 0.24) * ease),
+        0.52 + (0.24 - 0.52) * ease,
+        Number((-0.48 * (1 - ease * 0.92)).toFixed(4)),
+        1.25 + (0.55 - 1.25) * ease,
+        'long-task-complete',
+        28
+      );
     }
     if (phase === 'focus-fade') {
       const p = Math.max(0, Math.min(1, (now - phaseAt) / CONV_AURA_FOCUS_FADE_MS));
       const ease = 1 - Math.pow(1 - p, 2);
       const holdStr = dark ? 0.16 : 0.30;
-      return {
-        strength: holdStr + (idleStr - holdStr) * ease,
-        reach: scaleConvReach(0.17 + (0.16 - 0.17) * ease),
-        prism: 0.24 + (idlePrism - 0.24) * ease,
-        surge: 0,
-        speed: 0.55 + (0.72 - 0.55) * ease,
-        semantic: p < 0.7 ? 'long-task-complete' : 'none',
-        frameMs: 32,
-      };
+      return fillOptics(
+        out,
+        holdStr + (idleStr - holdStr) * ease,
+        scaleConvReach(0.17 + (0.16 - 0.17) * ease),
+        0.24 + (idlePrism - 0.24) * ease,
+        0,
+        0.55 + (0.72 - 0.55) * ease,
+        p < 0.7 ? 'long-task-complete' : 'none',
+        32
+      );
     }
     if (phase === 'complete') {
       const p = Math.max(0, Math.min(1, (now - phaseAt) / CONV_AURA_COMPLETE_MS));
       const ease = 1 - Math.pow(1 - p, 2.1);
       const startStr = dark ? 0.38 : 0.70;
       const rawReach = 0.24 + (0.16 - 0.24) * ease;
-      return {
-        strength: startStr + (idleStr - startStr) * ease,
-        reach: scaleConvReach(rawReach),
-        prism: 0.76 + (idlePrism - 0.76) * ease,
-        surge: -0.36 * (1 - ease * 0.85),
-        speed: 1.45 + (0.72 - 1.45) * ease,
-        semantic: 'none',
-        frameMs: 28,
-      };
+      return fillOptics(
+        out,
+        startStr + (idleStr - startStr) * ease,
+        scaleConvReach(rawReach),
+        0.76 + (idlePrism - 0.76) * ease,
+        -0.36 * (1 - ease * 0.85),
+        1.45 + (0.72 - 1.45) * ease,
+        'none',
+        28
+      );
     }
-    return {
-      strength: idleStr + (dark ? 0.024 : 0.038) * Math.sin(now * 0.0018),
-      reach: scaleConvReach(0.16),
-      prism: idlePrism,
-      surge: 0,
-      speed: 0.72,
-      semantic: 'none',
-      frameMs: 110,
-    };
+    return fillOptics(
+      out,
+      idleStr + (dark ? 0.024 : 0.038) * Math.sin(now * 0.0018),
+      scaleConvReach(0.16),
+      idlePrism,
+      0,
+      0.72,
+      'none',
+      110
+    );
   }
 
   function invokeConvGlowDraw(glow, now, dark, still, opt, ambientIntensity = 1, spectrum = undefined) {
     if (!glow) return;
     try {
-      const extra = {
-        reach: opt.reach,
-        prism: opt.prism,
-        surge: opt.surge,
-        speed: opt.speed,
-        semantic: opt.semantic || 'none',
-        ambientIntensity,
-        still,
-      };
-      if (spectrum !== undefined && spectrum !== null) {
-        extra.spectrum = spectrum;
-      }
+      const extra = DRAW_EXTRA_BUF;
+      extra.reach = opt.reach;
+      extra.prism = opt.prism;
+      extra.surge = opt.surge;
+      extra.speed = opt.speed;
+      extra.semantic = opt.semantic || 'none';
+      extra.ambientIntensity = ambientIntensity;
+      extra.still = Boolean(still);
+      extra.spectrum = spectrum !== undefined && spectrum !== null ? spectrum : undefined;
       if (still && typeof glow.drawStaticSnapshot === 'function') {
         extra.still = true;
         glow.drawStaticSnapshot(now, dark, opt.strength, extra);
@@ -315,9 +335,16 @@
     setAttrIfChanged,
     runGuardedMut,
   }) {
-    let convAura = null, overrideAmbient = null, overrideSpectrum = null, externalAwaiting = null, externalErrorPending = false, wb = false;
-    const WB = 'data-ag-cs-win-blur', isAB = () => typeof document !== 'undefined' && document.documentElement?.getAttribute?.(WB) === '1';
-    const isP = () => Boolean((typeof document !== 'undefined' && document.hidden) || isAB() || wb);
+    let convAura = null;
+    let overrideAmbient = null;
+    let overrideSpectrum = null;
+    let externalAwaiting = null;
+    let externalErrorPending = false;
+    let wb = false;
+    const WB = 'data-ag-cs-win-blur';
+    const isAB = () => typeof document !== 'undefined' && document.documentElement?.getAttribute?.(WB) === '1';
+    const isH = () => Boolean(typeof document !== 'undefined' && document.hidden);
+    const isP = () => Boolean(isH() || isAB() || wb);
 
     function normAmbientVal(v) {
       if (v === null || v === undefined || v === '') return 1;
@@ -374,17 +401,12 @@
     }
 
     function detachFocusWakeListeners(st) {
-      if (!st || !st.onUserReturn) return;
-      const fn = st.onUserReturn;
+      const fn = st?.onUserReturn;
+      if (!fn) return;
       st.onUserReturn = null;
       try {
-        if (typeof window !== 'undefined' && window.removeEventListener) {
-          window.removeEventListener('focus', fn);
-          window.removeEventListener('pointermove', fn);
-        }
-        if (typeof document !== 'undefined' && document.removeEventListener) {
-          document.removeEventListener('pointerenter', fn);
-        }
+        if (typeof window !== 'undefined') { window.removeEventListener?.('focus', fn); window.removeEventListener?.('pointermove', fn); }
+        if (typeof document !== 'undefined') document.removeEventListener?.('pointerenter', fn);
       } catch {}
     }
 
@@ -401,14 +423,10 @@
         st.wake(true);
       };
       st.onUserReturn = onReturn;
+      const opt = { once: true, passive: true };
       try {
-        if (typeof window !== 'undefined' && window.addEventListener) {
-          window.addEventListener('focus', onReturn, { once: true, passive: true });
-          window.addEventListener('pointermove', onReturn, { once: true, passive: true });
-        }
-        if (typeof document !== 'undefined' && document.addEventListener) {
-          document.addEventListener('pointerenter', onReturn, { once: true, passive: true });
-        }
+        if (typeof window !== 'undefined') { window.addEventListener?.('focus', onReturn, opt); window.addEventListener?.('pointermove', onReturn, opt); }
+        if (typeof document !== 'undefined') document.addEventListener?.('pointerenter', onReturn, opt);
       } catch {}
     }
 
@@ -511,6 +529,7 @@
       const a = convAura;
       detachFocusWakeListeners(a);
       if (a.timer) clearTimeout(a.timer);
+      if (a.resizeTimer) { clearTimeout(a.resizeTimer); a.resizeTimer = 0; }
       if (a.rafId && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(a.rafId);
       a.ro?.disconnect();
       a.uW?.();
@@ -522,24 +541,14 @@
     function park() {
       if (!convAura) return;
       detachFocusWakeListeners(convAura);
-      if (convAura.timer) {
-        clearTimeout(convAura.timer);
-        convAura.timer = 0;
-      }
-      if (convAura.rafId && typeof cancelAnimationFrame === 'function') {
-        cancelAnimationFrame(convAura.rafId);
-        convAura.rafId = 0;
-      }
-      if (convAura.ro) {
-        try {
-          convAura.ro.disconnect();
-        } catch {}
-      }
-      if (convAura.host) convAura.host.remove();
-      convAura.seatParent = null;
-      convAura.convView = null;
-      convAura.sleeping = true;
-      convAura.parked = true;
+      if (convAura.timer) { clearTimeout(convAura.timer); convAura.timer = 0; }
+      if (convAura.resizeTimer) { clearTimeout(convAura.resizeTimer); convAura.resizeTimer = 0; }
+      if (convAura.rafId && typeof cancelAnimationFrame === 'function') { cancelAnimationFrame(convAura.rafId); convAura.rafId = 0; }
+      try { convAura.ro?.disconnect(); } catch {}
+      convAura.host?.remove();
+      convAura.seatParent = convAura.convView = null;
+      convAura.releaseBacking?.();
+      convAura.sleeping = convAura.parked = true;
     }
 
     function prime() {
@@ -586,6 +595,7 @@
             } catch {}
           }
           const canDeferRelayout =
+            !convAura.backingReleased &&
             Boolean(convAura.ro) &&
             convAura.width > 0 &&
             convAura.height > 0 &&
@@ -614,7 +624,7 @@
           convAura.sleeping &&
           convAura.sleepReason !== 'settled' &&
           convAura.sleepReason !== 'ambient-zero';
-        if (nextPhase !== prevPhase || shouldResumeFromMotionOrVis) {
+        if (nextPhase !== prevPhase || shouldResumeFromMotionOrVis || (!isH() && convAura.backingReleased)) {
           if (shouldResumeFromMotionOrVis && nextPhase === 'idle') {
             convAura.phaseAt = readNowMs();
           }
@@ -660,6 +670,7 @@
         liftoffAt: 0,
         sleeping: false,
         sleepReason: '',
+        backingReleased: false,
         decisionHolding: false,
         unfocusedHold: false,
         pendingErrorClear: false,
@@ -671,6 +682,7 @@
           ? rippleCore.mountBrandHorizonGlow(glowCanvas)
           : { mode: 'none', resize() {}, clear() {}, draw() {}, drawStaticSnapshot() {}, dispose() {} },
         timer: 0,
+        resizeTimer: 0,
         rafId: 0,
         ro: null,
         uW: null,
@@ -682,31 +694,93 @@
       let drawnOnce = false;
       let lastGpuDrawAt = 0;
       let forceImmediateDraw = false;
+      let bkRel = false;
+      let pendingW = 0;
+      let pendingH = 0;
+      let hasPendingResize = false;
+      let lastRoAt = -1;
 
-      function applySize(w, parentH) {
-        const h = parentH > 0 ? Math.max(1, Math.round(parentH * CONV_AURA_HEIGHT_RATIO)) : 0;
-        const rawDpr = (typeof window !== 'undefined' && Number(window.devicePixelRatio)) || 1;
-        const dpr =
-          rippleCore && typeof rippleCore.resolveHorizonDpr === 'function'
-            ? rippleCore.resolveHorizonDpr(rawDpr, 0.72)
-            : Math.min(rawDpr, 1) * 0.72;
-        if (w === state.width && h === state.height && dpr === state.dpr) return;
-        state.width = w;
-        state.height = h;
-        state.dpr = dpr;
-        if (state.glow && typeof state.glow.resize === 'function' && w > 0 && h > 0) {
-          try {
-            state.glow.resize(w, h, dpr);
-          } catch {}
+      const RESIZE_DEBOUNCE_MS = 120;
+      const RESIZE_BURST_WINDOW_MS = 180;
+      const isResizing = () =>
+        typeof document !== 'undefined' && document.documentElement?.getAttribute?.('data-ag-cs-resizing') === '1';
+
+      function clearResizeTimer() {
+        if (state.resizeTimer) {
+          clearTimeout(state.resizeTimer);
+          state.resizeTimer = 0;
         }
+      }
+
+      function flushPendingResize() {
+        state.resizeTimer = 0;
+        if (isDestroyed() || convAura !== state) return;
+        if (isH()) {
+          hasPendingResize = false;
+          pendingW = pendingH = 0;
+          return releaseBacking();
+        }
+        if (isResizing()) {
+          state.resizeTimer = setTimeout(flushPendingResize, RESIZE_DEBOUNCE_MS);
+          return;
+        }
+        if (!hasPendingResize) return;
+        const tw = pendingW;
+        const th = pendingH;
+        hasPendingResize = false;
+        pendingW = pendingH = 0;
+        const prevW = state.width;
+        const prevH = state.height;
+        if (tw > 0 && th > 0) applySize(tw, th);
+        else layout(true);
+        if (state.width !== prevW || state.height !== prevH) wake(false);
+      }
+
+      function releaseBacking() {
+        clearResizeTimer();
+        hasPendingResize = false;
+        pendingW = pendingH = 0;
+        enterAuraSleep('hidden');
+        if (bkRel && !glowCanvas.width && !glowCanvas.height) return;
+        try { state.glow?.releaseBackingStore?.(); } catch {}
+        glowCanvas.width = glowCanvas.height = 0;
+        bkRel = state.backingReleased = true;
         drawnOnce = false;
       }
 
+      function resizeGlow(w, h, dpr) {
+        if (w <= 0 || h <= 0) return;
+        try { state.glow?.resize?.(w, h, dpr); } catch {}
+        if (!glowCanvas.width || !glowCanvas.height) {
+          glowCanvas.width = Math.max(1, Math.round(w * dpr));
+          glowCanvas.height = Math.max(1, Math.round(h * dpr));
+        }
+      }
+
+      function applySize(w, parentH) {
+        if (isH()) return releaseBacking();
+        const h = parentH > 0 ? Math.max(1, Math.round(parentH * CONV_AURA_HEIGHT_RATIO)) : 0;
+        const rawDpr = (typeof window !== 'undefined' && Number(window.devicePixelRatio)) || 1;
+        const dpr = rippleCore?.resolveHorizonDpr ? rippleCore.resolveHorizonDpr(rawDpr, 0.72) : Math.min(rawDpr, 1) * 0.72;
+        const need = bkRel || (w > 0 && h > 0 && (!glowCanvas.width || !glowCanvas.height));
+        if (!need && w === state.width && h === state.height && dpr === state.dpr) return;
+        state.width = w;
+        state.height = h;
+        state.dpr = dpr;
+        bkRel = state.backingReleased = drawnOnce = false;
+        resizeGlow(w, h, dpr);
+      }
+
       function layout(forceRead = false) {
-        if (!forceRead && state.ro && state.width > 0 && state.height > 0) return;
-        const w = seatParent.clientWidth || convView.clientWidth || 0;
-        const parentH = seatParent.clientHeight || convView.clientHeight || 0;
-        applySize(w, parentH);
+        if (isH()) return releaseBacking();
+        if (!forceRead && !bkRel && state.ro && state.width > 0 && state.height > 0) return;
+        const sp = state.seatParent || seatParent, cv = state.convView || convView;
+        const w = sp?.clientWidth || cv?.clientWidth || 0, parentH = sp?.clientHeight || cv?.clientHeight || 0;
+        if (w > 0 && parentH > 0) applySize(w, parentH);
+        else if (bkRel && state.width > 0 && state.height > 0) {
+          bkRel = state.backingReleased = drawnOnce = false;
+          resizeGlow(state.width, state.height, state.dpr || 0.72);
+        } else if (!bkRel) applySize(w, parentH);
       }
 
       function enterAuraSleep(reason = 'settled') {
@@ -728,15 +802,14 @@
         state.rafId = 0;
         frameWanted = false;
         if (isDestroyed() || convAura !== state) return;
+        if (isH()) { releaseBacking(); return; }
 
         const ambient = resolveAmbient();
         if (ambient <= 0) {
-          if (state.glow && typeof state.glow.clear === 'function') {
-            try {
-              state.glow.clear();
-            } catch {}
+          if (glowCanvas.width > 0 && glowCanvas.height > 0) {
+            try { state.glow?.clear?.(); } catch {}
           }
-          state.lastOptics = { strength: 0, reach: 0.08, prism: 0, surge: 0, speed: 0, semantic: 'none', frameMs: 0 };
+          state.lastOptics = fillOptics(OPTICS_BUF, 0, 0.08, 0, 0, 0, 'none', 0);
           enterAuraSleep('ambient-zero');
           return;
         }
@@ -759,15 +832,16 @@
           const p = Math.max(0, Math.min(1, liftElapsed / 520));
           const ease = 1 - Math.pow(1 - p, 2.25);
           const endStr = dark ? 0.31 : 0.64;
-          opt = {
-            strength: 0.92 + (endStr - 0.92) * ease,
-            reach: scaleConvReach(0.31 + (0.22 - 0.31) * ease),
-            prism: 0.78 + (0.70 - 0.78) * ease,
-            surge: 0.38 * (1 - ease),
-            speed: 1.65 + (1.45 - 1.65) * ease,
-            semantic: 'none',
-            frameMs: 16,
-          };
+          opt = fillOptics(
+            OPTICS_BUF,
+            0.92 + (endStr - 0.92) * ease,
+            scaleConvReach(0.31 + (0.22 - 0.31) * ease),
+            0.78 + (0.70 - 0.78) * ease,
+            0.38 * (1 - ease),
+            1.65 + (1.45 - 1.65) * ease,
+            'none',
+            16
+          );
         }
 
         // Split-Rate 300Hz VSync throttle: burst transients capped >=16-20ms; non-burst steady idle >=160ms; running ~30fps
@@ -799,91 +873,55 @@
 
         lastGpuDrawAt = now;
         layout();
+        const hasBuf = state.width > 0 && state.height > 0 && glowCanvas.width > 0 && glowCanvas.height > 0;
+        const paint = (o, st) => {
+          if (!hasBuf) return;
+          if (st) state.glow?.invalidate?.();
+          invokeConvGlowDraw(state.glow, now, dark, st, o, ambient, spectrum);
+          state.drawCount += 1;
+          drawnOnce = true;
+        };
 
         if (settleErrorZero) {
           state.pendingErrorClear = false;
-          if (state.glow && typeof state.glow.clear === 'function') {
-            try {
-              state.glow.clear();
-            } catch {}
-          }
+          if (glowCanvas.width > 0 && glowCanvas.height > 0) try { state.glow?.clear?.(); } catch {}
           state.phase = 'idle';
           state.phaseAt = now - CONV_AURA_IDLE_SLEEP_MS;
           setAttrIfChanged(host, 'data-aura-phase', 'idle');
-          state.lastOptics = { ...opt, strength: 0, surge: 0, speed: 0 };
-          enterAuraSleep();
-          return;
+          opt.strength = opt.surge = opt.speed = 0;
+          state.lastOptics = opt;
+          return enterAuraSleep();
         }
 
         if (settleDecisionHold) {
-          const holdOpt = {
-            strength: dark ? 0.22 : 0.42,
-            reach: scaleConvReach(0.18),
-            prism: 0.30,
-            surge: 0,
-            speed: 0,
-            semantic: 'awaiting-decision',
-            frameMs: 0,
-          };
+          const holdOpt = fillOptics(OPTICS_BUF, dark ? 0.22 : 0.42, scaleConvReach(0.18), 0.30, 0, 0, 'awaiting-decision', 0);
           state.lastOptics = holdOpt;
           state.decisionHolding = true;
-          if (state.width > 0 && state.height > 0) {
-            invokeConvGlowDraw(state.glow, now, dark, true, holdOpt, ambient, spectrum);
-            state.drawCount += 1;
-            drawnOnce = true;
-          }
-          enterAuraSleep();
-          return;
+          paint(holdOpt, true);
+          return enterAuraSleep();
         }
 
         if (settleLongComplete) {
-          const focused = checkWindowFocused();
-          if (!focused) {
-            const jadeHoldOpt = {
-              strength: dark ? 0.16 : 0.30,
-              reach: scaleConvReach(0.17),
-              prism: 0.24,
-              surge: 0,
-              speed: 0,
-              semantic: 'long-task-complete',
-              frameMs: 0,
-            };
+          if (!checkWindowFocused()) {
+            const jadeHoldOpt = fillOptics(OPTICS_BUF, dark ? 0.16 : 0.30, scaleConvReach(0.17), 0.24, 0, 0, 'long-task-complete', 0);
             state.lastOptics = jadeHoldOpt;
             state.unfocusedHold = true;
-            if (state.width > 0 && state.height > 0) {
-              invokeConvGlowDraw(state.glow, now, dark, true, jadeHoldOpt, ambient, spectrum);
-              state.drawCount += 1;
-              drawnOnce = true;
-            }
+            paint(jadeHoldOpt, true);
             attachFocusWakeListeners(state);
-            enterAuraSleep('settled');
-            return;
+            return enterAuraSleep('settled');
           }
           state.phase = 'idle';
           state.phaseAt = now - CONV_AURA_IDLE_SLEEP_MS;
           setAttrIfChanged(host, 'data-aura-phase', 'idle');
           const idleSnapOpt = computeConvAuraOptics('idle', state.phaseAt, now, dark, false);
           state.lastOptics = idleSnapOpt;
-          if (state.width > 0 && state.height > 0) {
-            invokeConvGlowDraw(state.glow, now, dark, true, idleSnapOpt, ambient, spectrum);
-            state.drawCount += 1;
-            drawnOnce = true;
-          }
-          enterAuraSleep();
-          return;
+          paint(idleSnapOpt, true);
+          return enterAuraSleep();
         }
 
         const still = !allowLivingFlow || settleIdleSleep;
         state.lastOptics = opt;
-
-        if (state.width > 0 && state.height > 0) {
-          if (still && state.glow && typeof state.glow.invalidate === 'function') {
-            state.glow.invalidate();
-          }
-          invokeConvGlowDraw(state.glow, now, dark, still, opt, ambient, spectrum);
-          state.drawCount += 1;
-          drawnOnce = true;
-        }
+        paint(opt, still);
 
         if (isDestroyed() || !allowLivingFlow || settleIdleSleep) {
           const reason = !allowLivingFlow ? (isP() ? 'hidden' : 'motion-still') : 'settled';
@@ -916,58 +954,45 @@
       }
 
       function wake(immediate = false) {
-        if (state.timer) {
-          clearTimeout(state.timer);
-          state.timer = 0;
-        }
+        if (state.timer) { clearTimeout(state.timer); state.timer = 0; }
         if (isDestroyed() || convAura !== state) return;
+        if (isH()) return releaseBacking();
+        if (bkRel) layout(true);
         if (isP()) {
-          if (!drawnOnce) {
-            forceImmediateDraw = true;
-            drawNow(readNowMs());
-          }
-          enterAuraSleep('hidden');
-          return;
+          if (!drawnOnce && glowCanvas.width > 0 && glowCanvas.height > 0) { forceImmediateDraw = true; drawNow(readNowMs()); }
+          return enterAuraSleep('hidden');
         }
         if (immediate) {
-          if (state.rafId && typeof cancelAnimationFrame === 'function') {
-            cancelAnimationFrame(state.rafId);
-            state.rafId = 0;
-          }
+          if (state.rafId && typeof cancelAnimationFrame === 'function') { cancelAnimationFrame(state.rafId); state.rafId = 0; }
           frameWanted = false;
           forceImmediateDraw = true;
-          drawNow(readNowMs());
-          return;
+          return drawNow(readNowMs());
         }
         if (frameWanted) return;
         frameWanted = true;
-        if (typeof requestAnimationFrame === 'function') {
-          state.rafId = requestAnimationFrame(drawNow);
-        } else {
-          drawNow(readNowMs());
-        }
+        if (typeof requestAnimationFrame === 'function') state.rafId = requestAnimationFrame(drawNow);
+        else drawNow(readNowMs());
       }
 
       state.wake = wake;
-      state.relayout = () => {
-        state.width = -1;
-        state.height = -1;
-        drawnOnce = false;
-        layout(true);
-      };
+      state.releaseBacking = releaseBacking;
+      state.relayout = () => { if (!bkRel) state.width = state.height = -1; drawnOnce = false; layout(true); };
       state.refreshTheme = () => {
-        if (state.glow && typeof state.glow.invalidate === 'function') state.glow.invalidate();
-        if (state.decisionHolding || state.unfocusedHold || state.sleepReason === 'settled') {
-          forceImmediateDraw = true;
-          drawNow(readNowMs());
-        } else {
-          state.sleepReason = '';
-          wake(true);
-        }
+        state.glow?.invalidate?.();
+        if (isH()) return releaseBacking();
+        if (bkRel) layout(true);
+        if (state.decisionHolding || state.unfocusedHold || state.sleepReason === 'settled') { forceImmediateDraw = true; drawNow(readNowMs()); }
+        else { state.sleepReason = ''; wake(true); }
       };
       const onVis = () => {
-        if (!isP()) { if (state.sleepReason === 'hidden') { state.sleepReason = ''; wake(true); } }
-        else enterAuraSleep('hidden');
+        if (isH()) return releaseBacking();
+        const r = bkRel;
+        if (r) { layout(true); state.glow?.invalidate?.(); }
+        if (!isP()) { if (r || state.sleepReason === 'hidden') { state.sleepReason = ''; wake(true); } }
+        else {
+          if (r && !drawnOnce && glowCanvas.width > 0 && glowCanvas.height > 0) { forceImmediateDraw = true; drawNow(readNowMs()); }
+          enterAuraSleep('hidden');
+        }
       };
       const onBlur = () => { wb = true; enterAuraSleep('hidden'); };
       const onFocus = () => { wb = false; onVis(); };
@@ -991,11 +1016,34 @@
 
       if (typeof ResizeObserver === 'function') {
         state.ro = new ResizeObserver((entries) => {
+          if (isH()) return releaseBacking();
+          const cr = entries && entries[0] && entries[0].contentRect;
+          const hasCr = Boolean(cr && cr.width > 0 && cr.height > 0);
+          const nextW = hasCr ? Math.round(cr.width) : 0;
+          const nextH = hasCr ? Math.round(cr.height) : 0;
+          const now = readNowMs();
+          const hasLiveBuf = !bkRel && state.width > 0 && state.height > 0 && glowCanvas.width > 0 && glowCanvas.height > 0;
+          const defer = hasLiveBuf && (isResizing() || hasPendingResize || (lastRoAt >= 0 && now - lastRoAt <= RESIZE_BURST_WINDOW_MS));
+          lastRoAt = now;
+          if (defer) {
+            hasPendingResize = true;
+            if (hasCr) {
+              pendingW = nextW;
+              pendingH = nextH;
+            } else {
+              pendingW = pendingH = 0;
+            }
+            clearResizeTimer();
+            state.resizeTimer = setTimeout(flushPendingResize, RESIZE_DEBOUNCE_MS);
+            return;
+          }
+          clearResizeTimer();
+          hasPendingResize = false;
+          pendingW = pendingH = 0;
           const prevW = state.width;
           const prevH = state.height;
-          const cr = entries && entries[0] && entries[0].contentRect;
-          if (cr && cr.width > 0 && cr.height > 0) {
-            applySize(Math.round(cr.width), Math.round(cr.height));
+          if (hasCr) {
+            applySize(nextW, nextH);
           } else {
             layout(true);
           }

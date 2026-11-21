@@ -355,14 +355,14 @@ test('mountOrSyncSettingsSection mounts all 27 settings (including omniModule, l
     let sec = doc.getElementById(settingsPanel.SETTINGS_SEC_ID);
     assert.ok(sec, 'Settings section must mount into Appearance dialog');
 
-    // 1. Verify all 30 setting rows mount cleanly, external zh-plugin no-translate markers are stamped, and updateChannel mounts in About
+    // 1. Verify all 31 setting rows mount cleanly, external zh-plugin no-translate markers are stamped, and updateChannel mounts in About
     assert.equal(sec.getAttribute('translate'), 'no');
     assert.equal(sec.getAttribute('data-no-translate'), 'true');
     assert.equal(sec.getAttribute('data-ag-localization-skip'), 'true');
     assert.equal(sec.getAttribute('data-agy-no-translate'), 'true');
     assert.equal(sec.getAttribute('data-antigravity-zh-skip'), '1');
     const allRows = sec.querySelectorAll('[data-ag-cs-row]');
-    assert.equal(allRows.length, 30, 'Must render all 30 setting rows');
+    assert.equal(allRows.length, 31, 'Must render all 31 setting rows');
     const modulesGrp = sec.querySelector('[data-ag-cs-group="modules"]');
     const moduleRowKeys = modulesGrp.querySelectorAll('[data-ag-cs-row]').map((r) => r.getAttribute('data-ag-cs-row'));
     assert.deepEqual(moduleRowKeys, ['telemetryModule', 'effortSliderModule', 'omniModule', 'linkTarget']);
@@ -416,13 +416,13 @@ test('mountOrSyncSettingsSection mounts all 27 settings (including omniModule, l
     assert.equal(sec.querySelector('button[data-ag-cs-preset="ultra"]').getAttribute('data-active'), '1');
     assert.equal(sec.querySelector('button[data-ag-cs-preset="focus"]').getAttribute('data-active'), '0');
 
-    // 4. Async Export JSON awaits __agPrismThought.getConfig() Promise, normalizes 'tech' -> 'technical', strips secrets, and includes 30 keys
+    // 4. Async Export JSON awaits __agPrismThought.getConfig() Promise, normalizes 'tech' -> 'technical', strips secrets, and includes 31 keys
     const exportBtn = sec.querySelector('button[data-ag-cs-cfg-action="export"]');
     exportBtn.click();
     await new Promise((r) => setTimeout(r, 25));
     assert.equal(clipboardWrites.length, 1);
     const exportedObj = JSON.parse(clipboardWrites[0]);
-    assert.equal(Object.keys(exportedObj.settings).length, 30);
+    assert.equal(Object.keys(exportedObj.settings).length, 31);
     assert.equal(exportedObj.settings.updateChannel, 'stable');
     assert.equal(exportedObj.settings.hostLocalization, 'auto');
     assert.equal(exportedObj.settings.omniModule, 'on');
@@ -668,11 +668,11 @@ test('settings-panel lazy foldBody deferral on collapsed mount, memoized syncRoo
     assert.equal(foldBody.children.length, 0);
     assert.equal(matchCalls, 0);
 
-    // First click on foldHead lazily constructs all 30 rows and 6 groups
+    // First click on foldHead lazily constructs all 31 rows and 6 groups
     foldHead.click();
     assert.equal(sec.getAttribute('data-open'), '1');
     assert.equal(sec.getAttribute('data-body-built'), '1');
-    assert.equal(sec.querySelectorAll('[data-ag-cs-row]').length, 30);
+    assert.equal(sec.querySelectorAll('[data-ag-cs-row]').length, 31);
     assert.equal(sec.querySelectorAll('.ag-cs-settings-group').length, 6);
     const callsAfterExpand = matchCalls;
     assert.ok(callsAfterExpand > 0);

@@ -69,6 +69,7 @@
   const streamChoreoMod = GT.__agPrismStreamChoreography;
   const prismRimMod = GT.__agPrismRimCanvas;
   const hostEnhancerMod = GT.__agPrismHostEnhancer;
+  let ownedCtxMenu = W.__agPrismContextMenu || GT.__agPrismContextMenu || null;
 
   // 新品牌 Obsidian Prism 主存储键 + 旧版历史键平滑迁移兼容
   const STORAGE_PRISM_KEY = 'ag-prism:config';
@@ -136,6 +137,7 @@
     out.mascot = out.mascot === 'off' || out.mascot === false ? 'off' : out.mascot === 'minis' || out.mascot === 'dual' ? out.mascot : 'crab';
     out.sidebarCompact = out.sidebarCompact === true || out.sidebarCompact === 'on';
     out.smoothCaret = out.smoothCaret === undefined ? true : out.smoothCaret !== false && out.smoothCaret !== 'off';
+    out.contextMenu = out.contextMenu === undefined ? true : out.contextMenu !== false && out.contextMenu !== 'off';
     if (!['follow', 'cobalt', 'iris', 'amber', 'mono'].includes(out.accentTone)) out.accentTone = 'follow';
     if (!['sharp', 'balanced', 'soft'].includes(out.cornerStyle)) out.cornerStyle = 'balanced';
     if (!['default', 'jetbrains', 'cascadia', 'sfmono'].includes(out.codeFont)) out.codeFont = 'default';
@@ -172,6 +174,9 @@
     }
     if ('smoothCaret' in patch && typeof patch.smoothCaret === 'string') {
       patch.smoothCaret = patch.smoothCaret !== 'off' && patch.smoothCaret !== 'false';
+    }
+    if ('contextMenu' in patch && typeof patch.contextMenu === 'string') {
+      patch.contextMenu = patch.contextMenu !== 'off' && patch.contextMenu !== 'false';
     }
     for (const k of ['telemetryModule', 'effortSliderModule', 'omniModule', 'sidebarStudio']) {
       if (k in patch && typeof patch[k] === 'boolean') patch[k] = patch[k] ? 'on' : 'off';
@@ -265,6 +270,8 @@
     b: false,
     o: false,
     l: false,
+    tk: false,
+    cf: false,
     g: false,
     m: false,
   };
@@ -276,7 +283,7 @@
   };
 
   const markAllDirty = () => {
-    dirtyFlags.f = dirtyFlags.t = dirtyFlags.r = dirtyFlags.s = dirtyFlags.a = dirtyFlags.c = dirtyFlags.b = dirtyFlags.o = dirtyFlags.l = dirtyFlags.g = dirtyFlags.m = true;
+    dirtyFlags.f = dirtyFlags.t = dirtyFlags.r = dirtyFlags.s = dirtyFlags.a = dirtyFlags.c = dirtyFlags.b = dirtyFlags.o = dirtyFlags.l = dirtyFlags.tk = dirtyFlags.cf = dirtyFlags.g = dirtyFlags.m = true;
   };
 
   const resolveWireSettingPair = (key, value) => {
@@ -286,7 +293,7 @@
     if (key === 'composerRestyle' && 'composer' in base && !('composerRestyle' in base)) return ['composer', value ? 'on' : 'off'];
     if (key === 'placeholderStyle' && 'promptStyle' in base && !('placeholderStyle' in base)) return ['promptStyle', value];
     if (key === 'sidebarRestyle' && 'sidebar' in base && !('sidebarRestyle' in base)) return ['sidebar', value ? 'on' : 'off'];
-    if ((key === 'sidebarCompact' || key === 'smoothCaret') && typeof base[key] === 'string') return [key, value ? 'on' : 'off'];
+    if ((key === 'sidebarCompact' || key === 'smoothCaret' || key === 'contextMenu') && typeof base[key] === 'string') return [key, value ? 'on' : 'off'];
     if (key === 'language' && 'lang' in base && !('language' in base)) return ['lang', value];
     if ((key === 'telemetryModule' || key === 'effortSliderModule' || key === 'omniModule' || key === 'sidebarStudio') && typeof value === 'boolean') {
       return [key, value ? 'on' : 'off'];
@@ -306,7 +313,7 @@
     }
     if (chg('homeLayout') || chg('homeRipple') || chg('language')) dirtyFlags.r = true;
     if (chg('sidebarRestyle') || chg('sidebarCompact')) dirtyFlags.s = true;
-    if (chg('thoughtTranslate') || chg('thoughtTrigger') || chg('thoughtView')) dirtyFlags.l = true;
+    if (chg('thoughtTranslate') || chg('thoughtTrigger') || chg('thoughtView')) dirtyFlags.l = dirtyFlags.tk = true;
   };
 
   const persistAndApplyConfigPatch = (rawPatch, emitSingleKey = null) => {
@@ -467,6 +474,10 @@
 
   const isCodeLigaturesEnabled = () => {
     return cfg.codeLigatures === true || cfg.codeLigatures === 'on';
+  };
+
+  const isContextMenuEnabled = () => {
+    return cfg.contextMenu !== false && cfg.contextMenu !== 'off';
   };
 
   const getAmbientIntensitySetting = () => {
@@ -735,6 +746,7 @@
     const html = de();
     if (!activeCard) {
       msRoot?.[K_PE]?.removeChild(msRoot);
+      try { msRig?.syncPowerState?.(); } catch {}
       if (msAnc) {
         ra(msAnc, 'data-ag-cs-crab-anchor');
         msAnc = null;
@@ -761,13 +773,16 @@
       sa(stage, 'data-mascot-stage', 'true');
       sa(stage, 'aria-hidden', 'true');
       sa(stage, 'data-ag-no-i18n');
+      sa(stage, 'data-ag-owned', '1');
       msRoot = stage;
     }
+    let reattached = false;
     if (msRoot[K_PE] !== activeCard) {
       ra(msAnc, 'data-ag-cs-crab-anchor');
       sa(activeCard, 'data-ag-cs-crab-anchor', 'composer');
       activeCard.appendChild(msRoot);
       msAnc = activeCard;
+      reattached = true;
     }
     if (html) setAttrIfChanged(html, 'data-ag-cs-has-crab', '1');
 
@@ -796,6 +811,9 @@
       }
     } else {
       try { msRig?.setState?.(nextState); } catch {}
+      if (reattached) {
+        try { msRig?.syncPowerState?.(); } catch {}
+      }
     }
 
     if (msOrch !== null && msOrch !== isOrch) {
@@ -968,6 +986,7 @@
       if (iconName === 'copy-check') sa(animSvg, 'data-icon-state', 'copy');
       animSvg.innerHTML = htmlStr;
     }
+    sa(animSvg, 'data-ag-owned', '1');
     origSvg.parentNode.insertBefore(animSvg, origSvg);
     sa(btn, 'data-ag-cs-icon-injected', iconName);
   };
@@ -1103,6 +1122,7 @@
     if (!el && typeof D.createElement === 'function') {
       const s = D.createElement('style');
       s.id = MOTION_OFF_STYLE_ID;
+      sa(s, 'data-ag-owned', '1');
       s.textContent = 'html[data-ag-cs-style][data-ag-cs-motion="off"]{&,& *,& *::before,& *::after{animation:none!important;transition:none!important}}';
       (D.head || D.documentElement)?.appendChild?.(s);
     }
@@ -1144,13 +1164,19 @@
     const tel = W.__agPrismTelemetry;
     const eff = W.__agPrismEffortSlider;
     const th = W.__agPrismThought;
+    const thUi = W.__agPrismThoughtSettingsUi;
     const omni = W.__agPrismOmni;
     const meta = W.__agPrismOmniServerMeta || null;
     const sb = W.__agPrismSidebar;
     const sbMeta = W.__agPrismSidebarMeta || null;
+    const ctxMenu = W.__agPrismContextMenu || GT.__agPrismContextMenu;
+    if (ctxMenu && !ownedCtxMenu) ownedCtxMenu = ctxMenu;
+    const motionLv = getMotionLevel();
+    const ctxEnabled = isContextMenuEnabled() && !destroyed;
     const key = [
       VERSION,
       getLang(),
+      motionLv,
       getTelemetryMode(),
       getEffortSliderMode(),
       getThoughtTranslateMode(),
@@ -1159,14 +1185,17 @@
       getOmniMode(),
       getLinkTarget(),
       cfg.sidebarStudio === 'on' ? 1 : 0,
+      ctxEnabled ? 1 : 0,
       meta?.baseUrl || '',
       sbMeta?.version || '',
       sbMeta?.serviceReady ? 1 : 0,
       tel ? 1 : 0,
       eff ? 1 : 0,
       th ? 1 : 0,
+      thUi ? 1 : 0,
       omni ? 1 : 0,
       sb ? 1 : 0,
+      ctxMenu ? 1 : 0,
     ].join('|');
     if (!force && key === lastAbsorbedSyncKey) return;
     lastAbsorbedSyncKey = key;
@@ -1179,6 +1208,16 @@
     } catch {}
     try {
       sb?.sync?.(cfg, sbMeta);
+    } catch {}
+    try {
+      ctxMenu?.sync?.({
+        enabled: ctxEnabled,
+        lang: getLang(),
+        motionLevel: motionLv,
+      });
+    } catch {}
+    try {
+      D.getElementById?.(SETTINGS_SEC_ID)?.__prismMountThoughtUi?.();
     } catch {}
   }
 
@@ -1683,6 +1722,7 @@
     pill.className = 'ag-cs-pill-glide';
     sa(pill, 'aria-hidden', 'true');
     sa(pill, 'data-ag-no-i18n');
+    sa(pill, 'data-ag-owned', '1');
     if (nextRect && nextRect.width > 0 && nextRect.height > 0) {
       for (const [k, v] of [
         ['position', 'fixed'],
@@ -1746,6 +1786,7 @@
     if (key === 'cornerStyle') return getCornerStyle();
     if (key === 'codeFont') return getCodeFont();
     if (key === 'codeLigatures') return isCodeLigaturesEnabled();
+    if (key === 'contextMenu') return isContextMenuEnabled();
     if (key === 'ambientIntensity') return getAmbientIntensitySetting();
     if (key === 'palette') {
       const p = getEffectivePalette();
@@ -1869,7 +1910,7 @@
   };
 
   const OWN_PLUGIN_SELECTOR =
-    '.ag-cs-home-panel-seat, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-prism-rim-cv, .ag-cs-model-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-smooth-caret, .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-stream-chunk, .ag-cs-thought-chunk, .ag-anim-icon, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ces-ag-section, .ces-set, #ag-codex-effort-slider-styles, #ag-pulse-status-bar, #context-card, #' +
+    '.ag-cs-home-panel-seat, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-prism-rim-cv, .ag-cs-model-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-smooth-caret, .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-stream-chunk, .ag-cs-thought-chunk, .ag-anim-icon, .ag-prism-omni-menu, .ag-prism-omni-pane, .ag-cs-ctx-menu, .ag-cs-ctx-toast, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ces-ag-section, .ces-set, #ag-codex-effort-slider-styles, #ag-pulse-status-bar, #context-card, #' +
     SETTINGS_SEC_ID +
     ', #ag-prism-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-claude-style-css, #ag-prism-motion-off-css, #ag-prism-host-alert-css, ' +
     EXT_ZH_UI_SEL;
@@ -1878,6 +1919,7 @@
     if (!target) return false;
     const el = target.closest ? target : target.parentElement;
     if (!el || !el.closest) return false;
+    if (el.closest('[data-ag-owned],[data-prism-ignore]')) return true;
     return Boolean(el.closest(OWN_PLUGIN_SELECTOR));
   };
 
@@ -1942,6 +1984,7 @@
         const g = D.createElement('style');
         g.id = AH_ID;
         sa(g, 'data-ag-prism-turbo', '1');
+        sa(g, 'data-ag-owned', '1');
         g.textContent = t;
         h.appendChild(g);
       }
@@ -1981,6 +2024,54 @@
   let axE = null;
   let axO = null;
   const AX_A = 'data-ag-cs-aux-dual';
+  const RESIZE_ATTR = 'data-ag-cs-resizing';
+  const MASCOT_DRAG_ATTR = 'data-ag-cs-mascot-drag';
+  const RESIZE_DEBOUNCE_MS = 120;
+  let resizeEndTm = 0;
+  let splitDragActive = false;
+  const isDragSuspendedRoot = () => {
+    const h = de();
+    return ga(h, RESIZE_ATTR) === '1' || ga(h, MASCOT_DRAG_ATTR) === '1';
+  };
+  const finishResizing = (triggerSync = true) => {
+    if (resizeEndTm) {
+      CT(resizeEndTm);
+      resizeEndTm = 0;
+    }
+    splitDragActive = false;
+    const h = de();
+    const had = ha(h, RESIZE_ATTR);
+    if (had) runGuardedMut(() => ra(h, RESIZE_ATTR));
+    if (had && triggerSync && !destroyed) {
+      prismRimCtl.markDirty();
+      dirtyFlags.a = true;
+      scheduleSync();
+    }
+  };
+  const scheduleResizingEnd = () => {
+    if (resizeEndTm) CT(resizeEndTm);
+    resizeEndTm = ST(() => finishResizing(true), RESIZE_DEBOUNCE_MS);
+  };
+  const bumpResizingPulse = () => {
+    if (destroyed) return;
+    const h = de();
+    if (h && ga(h, RESIZE_ATTR) !== '1') runGuardedMut(() => sa(h, RESIZE_ATTR, '1'));
+    if (!splitDragActive) scheduleResizingEnd();
+  };
+  const isSplitResizeHandle = (el) => {
+    if (!el) return false;
+    const split = cl(el, '[data-testid="aux-pane-split"], [data-testid="sidebar-split"]');
+    if (split) {
+      const sep = split.children?.[1] || null;
+      if (sep && (el === sep || sep.contains?.(el))) return true;
+      const roleHit = cl(
+        el,
+        '[role="separator"], [data-testid*="resize"], [data-testid*="sash"], [data-resize-handle], [class*="resiz"], [class*="sash"]'
+      );
+      if (roleHit && split.contains?.(roleHit)) return true;
+    }
+    return Boolean(cl(el, '[data-testid="bottom-terminal-panel-resize-handle"]'));
+  };
   const AX_H = /(?:^|[;\s])(?:width\s*:\s*0(?:\s|;|px|%|!|$)|display\s*:\s*none)/i;
   const axV = (e) =>
     Boolean(
@@ -1999,10 +2090,13 @@
     s.lastElementChild !== undefined ? s.lastElementChild : s.children?.[s.children.length - 1] || null,
   ];
   const axU = (s) => {
-    if (!s || s.isConnected === false) return;
+    if (!s || s.isConnected === false) return false;
+    const prev = ha(s, AX_A);
     const [f, l] = axCh(s);
-    if (f && l && f !== l && axV(f) && axV(l)) setAttrIfChanged(s, AX_A, '1');
-    else if (ha(s, AX_A)) ra(s, AX_A);
+    const next = Boolean(f && l && f !== l && axV(f) && axV(l));
+    if (next) setAttrIfChanged(s, AX_A, '1');
+    else if (prev) ra(s, AX_A);
+    return next !== prev;
   };
   const syncAuxSplit = () => {
     const s = qs(D, '[data-testid="aux-pane-split"]');
@@ -2027,7 +2121,11 @@
         axO = new MutationObserver((rs) => {
           if (!destroyed && axE) {
             if (rs?.some?.((r) => r.type === 'childList')) rb();
-            runGuardedMut(() => axU(axE));
+            let dualChanged = false;
+            runGuardedMut(() => { dualChanged = axU(axE); });
+            if (!dualChanged && rs?.some?.((r) => r.type === 'attributes' && r.attributeName === 'style')) {
+              bumpResizingPulse();
+            }
           }
         });
         rb();
@@ -2112,7 +2210,7 @@
         tid === 'home-greeting' ||
         q(isAdded ? '.agy-home, [data-testid="conversation-view"], [data-testid="home-greeting"]' : '.agy-home, [data-testid="conversation-view"]')
       ) {
-        dirtyFlags.r = dirtyFlags.c = dirtyFlags.l = touchedButtons = true;
+        dirtyFlags.r = dirtyFlags.c = dirtyFlags.l = dirtyFlags.tk = dirtyFlags.cf = touchedButtons = true;
       }
 
       if (tid === 'conversation-row-sidebar' || ancSide || q('[data-testid="conversation-row-sidebar"]')) {
@@ -2173,17 +2271,45 @@
       dirtyBgCmds.add(el);
     }
 
-    if (isAdded && (tg === 'STYLE' || tg === 'IMG' || q(`style:not([id]):not([${TS_A}]),img:not([${TI_A}])`))) {
-      dirtyTurboRoots.add(el);
+    if (isAdded) {
+      if (tg === 'STYLE' || tg === 'IMG') {
+        dirtyTurboRoots.add(el);
+      } else if (hasChildEl) {
+        if (inConvStream && typeof el.getElementsByTagName === 'function') {
+          if (el.getElementsByTagName('img').length > 0 || el.getElementsByTagName('style').length > 0) {
+            dirtyTurboRoots.add(el);
+          }
+        } else if (q(`style:not([id]):not([${TS_A}]),img:not([${TI_A}])`)) {
+          dirtyTurboRoots.add(el);
+        }
+      }
     }
 
-    if (
-      COLL_TIDS.has(tid) ||
-      tg === 'PRE' ||
-      q('[data-testid="worked-for-collapsible"], [data-testid="thinking-collapsible-trigger"], [data-testid="changed-files-card-header"], [data-testid="sidecar-iframe"], [data-testid="artifact-view"], pre')
-    ) {
+    if (tid === 'thinking-collapsible-trigger') {
+      dirtyFlags.l = dirtyFlags.tk = true;
+      if (isAdded) dirtyCollapsibleTargets.add(el);
+    } else if (tid === 'changed-files-card-header') {
+      dirtyFlags.l = dirtyFlags.cf = true;
+      if (isAdded) dirtyCollapsibleTargets.add(el);
+    } else if (tg === 'PRE' || COLL_TIDS.has(tid)) {
       dirtyFlags.l = true;
       if (isAdded) dirtyCollapsibleTargets.add(el);
+    } else if (hasChildEl) {
+      const collHit = qs(
+        el,
+        '[data-testid="worked-for-collapsible"], [data-testid="thinking-collapsible-trigger"], [data-testid="changed-files-card-header"], [data-testid="sidecar-iframe"], [data-testid="artifact-view"], pre'
+      );
+      if (collHit) {
+        dirtyFlags.l = true;
+        if (isAdded) dirtyCollapsibleTargets.add(el);
+        const hitTid = tidOf(collHit);
+        if (hitTid === 'thinking-collapsible-trigger' || qs(el, '[data-testid="thinking-collapsible-trigger"]')) {
+          dirtyFlags.tk = true;
+        }
+        if (hitTid === 'changed-files-card-header' || qs(el, '[data-testid="changed-files-card-header"]')) {
+          dirtyFlags.cf = true;
+        }
+      }
     }
 
     if (!inPlainDialog) {
@@ -2222,7 +2348,7 @@
 
     const sidebarSnap = flags.f || flags.s || flags.r ? streamChoreoCtl.measureSidebarSelectionSnapshot() : null;
     const visibleChangedHeaders =
-      !isAsyncConvEntry && (flags.f || flags.l || flags.r) ? streamChoreoCtl.measureVisibleChangedHeaders() : [];
+      !isAsyncConvEntry && (flags.f || flags.cf || flags.r) ? streamChoreoCtl.measureVisibleChangedHeaders() : [];
     const lensOverlays = (flags.f || flags.o) && isMotionStandardOrUltra() ? streamChoreoCtl.measureNewLensOverlays() : [];
     const caretList =
       !isAsyncConvEntry && (flags.f || flags.c) && cfg.smoothCaret !== false
@@ -2249,30 +2375,63 @@
   };
 
   let enhancerSyncTimer = 0;
+  let enhancerSyncRaf = 0;
   let lastEnhancerSyncAt = 0;
-  const flushHostEnhancerSync = () => {
+  const cancelHostEnhancerSync = () => {
     if (enhancerSyncTimer) {
       CT(enhancerSyncTimer);
       enhancerSyncTimer = 0;
     }
+    if (enhancerSyncRaf) {
+      try {
+        if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(enhancerSyncRaf);
+      } catch {}
+      enhancerSyncRaf = 0;
+    }
+  };
+  const flushHostEnhancerSync = () => {
+    cancelHostEnhancerSync();
     if (destroyed) return;
     lastEnhancerSyncAt = Date.now();
     try {
       hostEnhancerCtl.sync?.();
     } catch {}
   };
+  const queueHostEnhancerAsync = () => {
+    if (destroyed || enhancerSyncRaf) return;
+    if (!D.hidden && typeof requestAnimationFrame === 'function') {
+      enhancerSyncRaf = requestAnimationFrame(() => {
+        enhancerSyncRaf = 0;
+        flushHostEnhancerSync();
+      });
+    } else if (!enhancerSyncTimer) {
+      enhancerSyncTimer = ST(flushHostEnhancerSync, 0);
+    }
+  };
   const scheduleHostEnhancerSync = (immediate) => {
+    if (destroyed) return;
     if (immediate || !isConvRunning()) {
-      flushHostEnhancerSync();
+      if (enhancerSyncTimer) {
+        CT(enhancerSyncTimer);
+        enhancerSyncTimer = 0;
+      }
+      queueHostEnhancerAsync();
       return;
     }
     const elapsed = Date.now() - lastEnhancerSyncAt;
     if (elapsed >= 200) {
-      flushHostEnhancerSync();
+      if (enhancerSyncTimer) {
+        CT(enhancerSyncTimer);
+        enhancerSyncTimer = 0;
+      }
+      queueHostEnhancerAsync();
       return;
     }
-    if (!enhancerSyncTimer) {
-      enhancerSyncTimer = ST(flushHostEnhancerSync, Math.max(32, 200 - elapsed));
+    if (!enhancerSyncTimer && !enhancerSyncRaf) {
+      enhancerSyncTimer = ST(() => {
+        enhancerSyncTimer = 0;
+        queueHostEnhancerAsync();
+      }, Math.max(32, 200 - elapsed));
     }
   };
 
@@ -2345,7 +2504,7 @@
       if (flags.f || flags.r || flags.t) {
         rippleCtl.sync();
       }
-      if (flags.f || flags.r || flags.c || flags.l || flags.t) {
+      if (flags.f || flags.r || flags.c || flags.t) {
         convAuraCtl.sync(true);
       }
       const modelPanelNow = effectiveFull || flags.c || flags.o ? qs(D, MODEL_PANEL_SEL) : null;
@@ -2354,12 +2513,14 @@
         hadModelPanelOpen = !!(modelPanelNow);
         syncModelMenuRootAttrs(modelPanelNow);
       }
-      if (flags.f || flags.c || modelOverlayChanged || flags.l) {
+      if (flags.f || flags.c || modelOverlayChanged) {
         syncComposers(measured, deferHeavyConvWork);
+      } else if (!deferHeavyConvWork && flags.tk) {
+        streamChoreoCtl.syncThinkingSparks(latestPrimaryModelInfo);
       }
       if (flags.f || flags.r || flags.s || flags.c) {
         streamChoreoCtl.syncHeroRouteChoreography(measured);
-      } else if (flags.l) {
+      } else if (flags.cf) {
         streamChoreoCtl.syncHeroCCaustics(measured.visibleChangedHeaders);
       }
       if (!deferHeavyConvWork && (flags.f || flags.r || flags.c || flags.l)) {
@@ -2443,10 +2604,10 @@
       if (flags.f || flags.r || flags.c || flags.t) {
         ensurePulseBridge(!!(flags.f || flags.t));
       }
-      if (!deferHeavyConvWork && (flags.f || flags.r || flags.l || flags.c || flags.b || flags.t)) {
-        scheduleHostEnhancerSync(!!(flags.f || routeJumped || flags.t));
-      }
     });
+    if (!deferHeavyConvWork && (flags.f || flags.r || flags.l || flags.c || flags.b || flags.t)) {
+      scheduleHostEnhancerSync(!!(flags.f || routeJumped || flags.t));
+    }
     if (!deferHeavyConvWork) {
       if (flags.f || routeJumped) {
         streamChoreoCtl.syncWorkedForAutoUnfold();
@@ -2536,6 +2697,10 @@
     }
   };
   function onWinBlur() {
+    if (splitDragActive) {
+      splitDragActive = false;
+      scheduleResizingEnd();
+    }
     if (destroyed || blurTm) return;
     blurTm = ST(() => {
       blurTm = 0;
@@ -2548,7 +2713,13 @@
   }
   const onWinPointerMove = (ev) => {
     wakeWinBlur();
+    if (isDragSuspendedRoot()) return;
     prismRimCtl.onPointerMove(ev);
+  };
+  const onWinPointerUp = () => {
+    if (destroyed || !splitDragActive) return;
+    splitDragActive = false;
+    scheduleResizingEnd();
   };
 
   const onWinResize = () => {
@@ -2661,13 +2832,29 @@
 
   const onDocPointerDown = (ev) => {
     wakeWinBlur();
+    if (ev?.target?.closest) {
+      const sbRow = cl(ev.target, '[data-testid="conversation-row-sidebar"]');
+      if (sbRow) streamChoreoCtl.lockSidebarRowRunningOnPointerDown?.(sbRow);
+      if (isSplitResizeHandle(ev.target)) {
+        splitDragActive = true;
+        const h = de();
+        if (h && ga(h, RESIZE_ATTR) !== '1') runGuardedMut(() => sa(h, RESIZE_ATTR, '1'));
+        if (resizeEndTm) CT(resizeEndTm);
+        resizeEndTm = ST(() => finishResizing(true), 10000);
+      }
+    }
     if (isMotionStandardOrUltra() && ev?.target?.closest) {
       if (!cl(ev.target, '[role="dialog"]')) {
-        const r = rc(cl(ev.target, 'button, [role="button"], [data-testid]'));
-        if (r && r.width > 0 && r.height > 0) {
-          streamChoreoCtl.heroState.lastTriggerOrigin = { x: r.left + r.width / 2, y: r.top + r.height / 2, at: performance.now() };
-        } else if (Number.isFinite(ev.clientX) && Number.isFinite(ev.clientY)) {
-          streamChoreoCtl.heroState.lastTriggerOrigin = { x: ev.clientX, y: ev.clientY, at: performance.now() };
+        // 懒测距：不在此处同步调用 getBoundingClientRect()，仅记录元素引用与点击坐标，延后到真有新浮层弹出时再测距
+        const triggerEl = cl(ev.target, 'button, [role="button"], [data-testid]');
+        const hasXY = Number.isFinite(ev.clientX) && Number.isFinite(ev.clientY);
+        if (triggerEl || hasXY) {
+          streamChoreoCtl.heroState.lastTriggerOrigin = {
+            el: triggerEl || null,
+            x: hasXY ? ev.clientX : NaN,
+            y: hasXY ? ev.clientY : NaN,
+            at: performance.now(),
+          };
         }
       } else if (!cl(ev.target, '#' + SETTINGS_SEC_ID)) {
         const grp = cl(ev.target, '[role="dialog"] [role="group"]');
@@ -2761,7 +2948,10 @@
           continue;
         }
         if (tidOf(tgt?.[K_PE]) === 'aux-pane-split') {
-          dirtyFlags.a = anyRelevant = true;
+          let dualChanged = false;
+          runGuardedMut(() => { dualChanged = axU(tgt[K_PE]); });
+          if (dualChanged) dirtyFlags.a = anyRelevant = true;
+          else if (m.attributeName === 'style') bumpResizingPulse();
           continue;
         }
         const tid = tidOf(tgt);
@@ -2770,9 +2960,14 @@
         if (tid === 'conversation-view') {
           if (m.attributeName === 'data-cascade-id') dirtyFlags.r = dirtyFlags.c = anyRelevant = true;
         } else if (tid === 'conversation-row-sidebar') {
+          if (m.attributeName === 'data-selected' && ga(tgt, 'data-selected') === 'true') {
+            streamChoreoCtl.stampSidebarRowRunningImmediate?.(tgt);
+          }
           dirtyFlags.s = anyRelevant = true;
         } else if (tid === 'worked-for-collapsible' || tid === 'thinking-collapsible-trigger' || tid === 'changed-files-card-header') {
           dirtyFlags.l = anyRelevant = true;
+          if (tid === 'thinking-collapsible-trigger') dirtyFlags.tk = true;
+          else if (tid === 'changed-files-card-header') dirtyFlags.cf = true;
           dirtyCollapsibleTargets.add(tgt);
         } else if (tid === 'running-items-panel') {
           dirtyFlags.c = anyRelevant = true;
@@ -2816,6 +3011,9 @@
           for (let j = 0; j < list.length; j++) {
             const node = list[j];
             if (!isElementLike(node) || isThoughtIsolatedNode(node) || isOwnPluginNode(node) || isHoverCardNode(node)) continue;
+            if (isAdd && tidOf(node) === 'conversation-row-sidebar' && ga(node, 'data-selected') === 'true') {
+              streamChoreoCtl.stampSidebarRowRunningImmediate?.(node);
+            }
             classifyDirtySubtree(node, isAdd, pCtx);
             if (inComposerBox) dirtyFlags.c = dirtyFlags.r = true;
             anyRelevant = true;
@@ -2839,23 +3037,26 @@
   mainObserver = observer;
 
   // Strict test contract: NEVER register 'click' or 'mousedown' on D!
+  const CAP_PASSIVE = { capture: true, passive: true };
   const DOC_LISTENERS = [
-    ['pointerdown', onDocPointerDown],
-    ['keyup', onDocCaretEvent],
-    ['mouseup', onDocCaretEvent],
-    ['input', onDocCaretEvent],
-    ['selectionchange', onDocCaretEvent],
-    ['focusin', onDocCaretEvent],
-    ['focusout', onDocCaretEvent],
-    ['scroll', onDocCaretEvent],
-    ['compositionupdate', onDocCaretEvent],
-    ['compositionend', onDocCaretEvent],
-    ['transitionend', onDocTransitionEnd],
-    ['visibilitychange', onDocVisibilityChange],
+    ['pointerdown', onDocPointerDown, CAP_PASSIVE],
+    ['keyup', onDocCaretEvent, true],
+    ['mouseup', onDocCaretEvent, CAP_PASSIVE],
+    ['input', onDocCaretEvent, true],
+    ['selectionchange', onDocCaretEvent, true],
+    ['focusin', onDocCaretEvent, CAP_PASSIVE],
+    ['focusout', onDocCaretEvent, CAP_PASSIVE],
+    ['scroll', onDocCaretEvent, CAP_PASSIVE],
+    ['compositionupdate', onDocCaretEvent, true],
+    ['compositionend', onDocCaretEvent, true],
+    ['transitionend', onDocTransitionEnd, CAP_PASSIVE],
+    ['visibilitychange', onDocVisibilityChange, true],
   ];
 
   const WIN_LISTENERS = [
     ['pointermove', onWinPointerMove, { passive: true }],
+    ['pointerup', onWinPointerUp, { passive: true }],
+    ['pointercancel', onWinPointerUp, { passive: true }],
     ['resize', onWinResize, { passive: true }],
     ['keydown', onWinKeyDown, false],
     ['click', onWinClick, true],
@@ -2877,6 +3078,7 @@
     dirtyBgCmds.clear();
     dirtyTurboRoots.clear();
     clearWinBlur();
+    finishResizing(false);
     if (crabRemoveAttrTimer) {
       CT(crabRemoveAttrTimer);
       crabRemoveAttrTimer = 0;
@@ -2889,10 +3091,7 @@
       clearInterval(pollTimer);
       pollTimer = null;
     }
-    if (enhancerSyncTimer) {
-      CT(enhancerSyncTimer);
-      enhancerSyncTimer = 0;
-    }
+    cancelHostEnhancerSync();
     if (storeDebounce) {
       CT(storeDebounce);
       storeDebounce = null;
@@ -2913,9 +3112,9 @@
       axE?.removeAttribute?.(AX_A);
     } catch {}
     axO = axE = null;
-    for (const [evName, handler] of DOC_LISTENERS) {
+    for (const [evName, handler, opts] of DOC_LISTENERS) {
       try {
-        D.removeEventListener(evName, handler, true);
+        D.removeEventListener(evName, handler, opts);
       } catch {}
     }
     if (typeof W.removeEventListener === 'function') {
@@ -2984,8 +3183,8 @@
       attributes: true,
       attributeFilter: ['class', 'aria-expanded', 'data-selected', 'data-cascade-id', 'data-ag-prism-host-i18n'],
     });
-    for (const [evName, handler] of DOC_LISTENERS) {
-      D.addEventListener(evName, handler, true);
+    for (const [evName, handler, opts] of DOC_LISTENERS) {
+      D.addEventListener(evName, handler, opts);
     }
     if (typeof W.addEventListener === 'function') {
       for (const [evName, handler, opts] of WIN_LISTENERS) {
@@ -3045,6 +3244,7 @@
         runSync(true);
       }
     },
+    syncAbsorbed: () => syncAbsorbedModules(true),
     getState() {
       const convAura = convAuraCtl.getInstance();
       const auraConnected = !!(convAura && convAura.host && convAura.host.isConnected);
@@ -3068,6 +3268,7 @@
           cornerStyle: getCornerStyle(),
           codeFont: getCodeFont(),
           codeLigatures: isCodeLigaturesEnabled(),
+          contextMenu: isContextMenuEnabled(),
           ambientIntensity: getAmbientIntensitySetting(),
           omniModule: getOmniMode(),
           linkTarget: getLinkTarget(),
@@ -3079,6 +3280,7 @@
         hasThoughtModule: !!(W.__agPrismThought),
         hasOmniModule: !!(W.__agPrismOmni),
         hasSidebarStudio: !!(W.__agPrismSidebar),
+        hasContextMenu: !!(W.__agPrismContextMenu || GT.__agPrismContextMenu),
         hasHostEnhancer: !!(hostEnhancerCtl && typeof hostEnhancerCtl.getDebugState === 'function'),
         usageRecordsCount: homeStudioCtl.getUsageRecordsCount(),
         hasPanel: homeStudioCtl.hasConnectedPanel(),
@@ -3110,6 +3312,10 @@
           W[k]?.destroy?.();
         } catch {}
       }
+      const targetCtxMenu = ownedCtxMenu || W.__agPrismContextMenu || GT.__agPrismContextMenu;
+      try {
+        targetCtxMenu?.destroy?.();
+      } catch {}
       for (const fn of [
         () => streamChoreoCtl.cancelDeferredHydration(),
         () => homeStudioCtl.flushUsageCacheNow(),
@@ -3151,12 +3357,12 @@
       qa(D, '[data-has-sep]').forEach((el) => ra(el, 'data-has-sep'));
       qa(
         D,
-        '#ag-prism-settings-v101-css, #ag-prism-omni-css, #ag-prism-motion-off-css, .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-conv-aura-host, .ag-cs-conv-glow, .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-model-glyph, .ag-cs-panel-row-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-orbital-backdrop, .ag-cs-perf-backdrop, #' +
+        '#ag-prism-settings-v101-css, #ag-prism-omni-css, #ag-prism-motion-off-css, .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, .ag-cs-ctx-menu, .ag-cs-ctx-toast, [data-ag-prism-omni-owned="1"], .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-conv-aura-host, .ag-cs-conv-glow, .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-model-glyph, .ag-cs-panel-row-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-orbital-backdrop, .ag-cs-perf-backdrop, #' +
           SETTINGS_SEC_ID
       ).forEach((el) => el.remove());
       const html = de();
       if (html) {
-        for (const s of 'style|theme|palette|light-preset|motion|target-fps|telemetry|effort-slider|thought-translate|home|composer|logo-ink|sidebar|sidebar-compact|sidebar-collapsed|has-crab|model-menu|lang|cjk|accent|corners|code-font|ligatures|ambient|win-blur'.split('|')) {
+        for (const s of 'style|theme|palette|light-preset|motion|target-fps|telemetry|effort-slider|thought-translate|home|composer|logo-ink|sidebar|sidebar-compact|sidebar-collapsed|has-crab|model-menu|lang|cjk|accent|corners|code-font|ligatures|ambient|win-blur|resizing|mascot-drag'.split('|')) {
           ra(html, 'data-ag-cs-' + s);
         }
         for (const s of '|thought-view|omni|link-target|sidebar-studio|sidebar-host-sync'.split('|')) {

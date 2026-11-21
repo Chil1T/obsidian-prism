@@ -446,9 +446,21 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
       settingGroups.map((g) => g.getAttribute('data-ag-cs-group')),
       ['appearance', 'interaction', 'thought', 'modules', 'beta', 'about']
     );
+    const thoughtCfgBoxBefore = settingsSec.querySelector('[data-testid="prism-thought-ai-config"]');
+    assert.equal(thoughtCfgBoxBefore, null, 'Default off mode must NOT bundle or mount Channel 5 thought AI config card');
+    assert.equal(sandbox.window.__agPrismThought, undefined, 'Default off mode must have 0 thought runtime');
+    assert.equal(sandbox.window.__agPrismThoughtSettingsUi, undefined, 'Default off mode must have 0 thought UI runtime');
+
+    // Hot-plug Channel 5 while settings panel is already open
+    sandbox.window.__agPrism.refreshConfig({ ...cdp.DEFAULT_CONFIG, thoughtTranslate: 'ai' });
+    const thoughtExprAi = cdp.buildThoughtExpression({ ...cdp.DEFAULT_CONFIG, thoughtTranslate: 'ai' });
+    assert.ok(thoughtExprAi.length > 0, 'Expected non-empty Channel 5 expression in ai mode');
+    const thoughtMountRes = vm.runInNewContext(thoughtExprAi, sandbox);
+    assert.equal(thoughtMountRes.ok, true);
+    assert.equal(thoughtMountRes.status, 'mounted');
     const thoughtCfgBox = settingsSec.querySelector('[data-testid="prism-thought-ai-config"]');
-    assert.ok(thoughtCfgBox, 'Expected built-in OpenAI thought translator config card');
-    assert.equal(thoughtCfgBox.hidden, true, 'Thought AI config card should start hidden when mode is off');
+    assert.ok(thoughtCfgBox, 'Expected built-in OpenAI thought translator config card hot-mounted into open settingsSec');
+    assert.equal(thoughtCfgBox.hidden, false, 'Thought AI config card should be visible when mode is ai');
 
     // Verify About section: Git status/sync button + 8 upstream repo external links + GPL-3.0 & upstream MIT notices + Google disclaimer
     const aboutBox = settingsSec.querySelector('.ag-cs-about-box');
@@ -487,7 +499,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
         .map((b) => b.getAttribute('data-ag-cs-key'))
         .filter(Boolean)
     );
-    assert.equal(settingKeys.size, 30);
+    assert.equal(settingKeys.size, 31);
     for (const expectedKey of [
       'palette',
       'lightPreset',
@@ -501,6 +513,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
       'composerRestyle',
       'placeholderStyle',
       'smoothCaret',
+      'contextMenu',
       'mascot',
       'sidebarRestyle',
       'sidebarCompact',
@@ -3084,10 +3097,21 @@ test('v1.0.1 compiler safety fixes, unified shared string pool (< 690 KiB CI bud
     payloadBytes < 690 * 1024,
     `Expected unified bundle payload < ${690 * 1024} bytes (690 KiB), got ${payloadBytes}`
   );
-  // Omni modules must never bloat static RUNTIME_PARTS
+  // Omni & Channel 5 Thought modules must never bloat static RUNTIME_PARTS
   for (const part of cdp.RUNTIME_PARTS) {
     assert.equal(part.includes('omni-viewer'), false, `Omni module ${part} must load via second channel, not RUNTIME_PARTS`);
+    assert.equal(part.includes('thought-translator'), false, `Thought module ${part} must load via Channel 5, not RUNTIME_PARTS`);
   }
+  assert.equal(
+    cdp.RUNTIME_PARTS.includes('vendor/thought-translator/thought-client.js'),
+    false,
+    'vendor/thought-translator/thought-client.js must not appear in cdp.RUNTIME_PARTS'
+  );
+  assert.equal(
+    cdp.RUNTIME_PARTS.includes('vendor/thought-translator/thought-settings-ui.js'),
+    false,
+    'vendor/thought-translator/thought-settings-ui.js must not appear in cdp.RUNTIME_PARTS'
+  );
   const tWarm0 = performance.now();
   const expr2 = cdp.buildInjectExpression({ palette: 'warm', motionLevel: 'subtle', accentTone: 'iris' });
   const warmElapsed = performance.now() - tWarm0;

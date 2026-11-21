@@ -11,6 +11,10 @@
   const MIN_CODE_FOLD_LINES = 48;
   const SONAR_DURATION_MS = 720;
   const OUTLINE_HIDE_DELAY_MS = 220;
+  function markNoTr(e) {
+    if (e && e.setAttribute) for (const s of 'translate=no,data-no-translate=true,data-ag-localization-skip=true,data-agy-no-translate=true,data-antigravity-zh-skip=1'.split(',')) { const p = s.split('='); e.setAttribute(p[0], p[1]); }
+    return e;
+  }
 
   const SIDECAR_THEME_VARS = [
     '--background',
@@ -151,6 +155,7 @@
     let cachedThemeSample = null;
     let lastSyncedLang = '';
     let iframePushedSig = new WeakMap();
+    let iframeSizeCache = new WeakMap();
     const boundIframes = new WeakSet();
     const iframeUnsubscribers = [];
     let iframeRo = null;
@@ -181,7 +186,10 @@
     let outlineFoldBtn = null;
     let outlineFilterText = '';
     let outlineOpen = false;
-    let lastOutlineSig = '';
+    let lastOutlineStructSig = '';
+    let lastOutlineActiveIdx = -1;
+    let activeOutlineBtn = null;
+    const outlineItemBtnByIdx = new Map();
     let hideOutlineTimer = 0;
     let foldFeedbackTimer = 0;
     const sonarTimers = new Set();
@@ -368,14 +376,18 @@
       return Array.from(set);
     }
 
-    function isIframeHidden(f) {
+    function isIframeHidden(f, rectHint = null) {
       if (!f || f.hidden === true || f.getAttribute?.('aria-hidden') === 'true') return true;
-      const r = f.getBoundingClientRect?.();
+      const cached =
+        rectHint && (rectHint.width !== undefined || rectHint.height !== undefined)
+          ? rectHint
+          : iframeSizeCache.get(f);
+      const r = cached || f.getBoundingClientRect?.();
       return Boolean(r && r.width <= 0 && r.height <= 0);
     }
 
-    function pushIfVis(f, force) {
-      if (isDead() || isIframeHidden(f)) return;
+    function pushIfVis(f, force, rectHint = null) {
+      if (isDead() || isIframeHidden(f, rectHint)) return;
       const s = sampleRootTheme(false);
       if (s) pushThemeToIframe(f, s, force);
     }
@@ -390,8 +402,18 @@
       pruneUnsubs(iframeUnsubscribers, false, boundIframes);
       if (!iframeRo && win?.ResizeObserver) {
         iframeRo = new win.ResizeObserver((es) => {
+          if (isDead()) return;
           for (const e of es || []) {
-            if (e?.contentRect && (e.contentRect.width > 0 || e.contentRect.height > 0)) pushIfVis(e.target, false);
+            const f = e?.target;
+            if (!f) continue;
+            const cr = e?.contentRect;
+            if (cr && (cr.width !== undefined || cr.height !== undefined)) {
+              iframeSizeCache.set(f, { width: cr.width, height: cr.height });
+              if (cr.width > 0 || cr.height > 0) pushIfVis(f, false, cr);
+            } else {
+              iframeSizeCache.delete(f);
+              pushIfVis(f, false);
+            }
           }
         });
       }
@@ -405,6 +427,7 @@
           iframeUnsubscribers.push({
             el: frame,
             unsub: () => {
+              iframeSizeCache.delete(frame);
               try { frame.removeEventListener('load', onLoad); } catch {}
               try { iframeRo?.unobserve?.(frame); } catch {}
             },
@@ -473,14 +496,20 @@
         if (lineNodes && lineNodes.length > 0) return lineNodes.length;
       }
       const rawText = String(bodyEl.textContent || '');
+      const len = rawText.length;
       const cached = codeLineCache.get(bodyEl);
-      if (cached && cached.textLen === rawText.length) return cached.lineCount;
+      if (cached && cached.textLen === len) return cached.lineCount;
       let count = 0;
-      if (rawText.length > 0) {
-        const trimmed = rawText.endsWith('\n') ? rawText.slice(0, -1) : rawText;
-        count = trimmed.length === 0 ? 0 : trimmed.split('\n').length;
+      const end = len > 0 && rawText.charCodeAt(len - 1) === 10 ? len - 1 : len;
+      if (end > 0) {
+        count = 1;
+        let pos = 0;
+        while ((pos = rawText.indexOf('\n', pos)) !== -1 && pos < end) {
+          count += 1;
+          pos += 1;
+        }
       }
-      codeLineCache.set(bodyEl, { textLen: rawText.length, lineCount: count });
+      codeLineCache.set(bodyEl, { textLen: len, lineCount: count });
       return count;
     }
 
@@ -539,6 +568,16 @@
       return `t:${String(target.textContent || '').length}`;
     }
 
+    function hasFollowingSiblingInResp(pre, resp) {
+      if (!pre || !resp) return false;
+      let cur = pre;
+      while (cur && cur !== resp) {
+        if (cur.nextElementSibling) return true;
+        cur = cur.parentElement;
+      }
+      return false;
+    }
+
     function syncCodeBlocks() {
       if (isDead() || !doc || typeof doc.querySelectorAll !== 'function') return;
       const conv = findPrimaryConvView();
@@ -552,7 +591,7 @@
       if (isRunning && lastResp) {
         const rPres = lastResp.querySelectorAll?.('pre');
         const tailPre = rPres && rPres.length > 0 ? rPres[rPres.length - 1] : null;
-        if (tailPre && !tailPre.nextElementSibling) streamingPre = tailPre;
+        if (tailPre && !hasFollowingSiblingInResp(tailPre, lastResp)) streamingPre = tailPre;
       }
 
       const pres = doc.querySelectorAll(
@@ -564,10 +603,19 @@
       runGuardedMut(() => {
         for (let i = 0; i < pres.length; i++) {
           const pre = pres[i];
+          if (pre === streamingPre) {
+            // 流式尾块提前短路，仅首帧保留单边框属性避免双重边框闪烁
+            if (
+              pre.getAttribute?.('data-ag-cs-rich-pre') !== '1' &&
+              String(pre.firstElementChild?.tagName || '').toUpperCase() === 'DIV'
+            ) {
+              setAttrIfChanged(pre, 'data-ag-cs-rich-pre', '1');
+            }
+            continue;
+          }
           const prevRec = preSyncCache.get(pre);
           const recValid =
             prevRec &&
-            pre !== streamingPre &&
             prevRec.lang === curLang &&
             prevRec.header?.getAttribute?.('data-ag-cs-code-sticky') === '1' &&
             (prevRec.lineCount < MIN_CODE_FOLD_LINES || (prevRec.btn && prevRec.btn.isConnected !== false && prevRec.btn.parentElement));
@@ -581,20 +629,20 @@
           }
           if (hasDirectDiv) setAttrIfChanged(pre, 'data-ag-cs-rich-pre', '1');
           else if (pre.hasAttribute?.('data-ag-cs-rich-pre')) pre.removeAttribute('data-ag-cs-rich-pre');
+          const canSeal = Boolean(
+            lastResp &&
+              !pre.closest?.('[data-testid="artifact-view"]') &&
+              (!lastResp.contains?.(pre) || hasFollowingSiblingInResp(pre, lastResp))
+          );
           if (recValid && prevRec.stamp === getPreBodyStamp(prevRec.body)) {
-            if (lastResp && !lastResp.contains?.(pre) && !pre.closest?.('[data-testid="artifact-view"]')) {
-              prevRec.sealed = true;
-            }
+            if (canSeal) prevRec.sealed = true;
             continue;
           }
-          const inHistoricalTurn = Boolean(lastResp && !lastResp.contains?.(pre) && !pre.closest?.('[data-testid="artifact-view"]'));
 
           const parts = resolveCodeCardParts(pre);
           if (!parts) continue;
           const { card, header, body } = parts;
           setAttrIfChanged(header, 'data-ag-cs-code-sticky', '1');
-
-          if (pre === streamingPre) continue;
 
           const lineCount = countCodeLines(body);
           let btn = prevRec?.btn && prevRec.btn.parentElement ? prevRec.btn : header.querySelector?.('.ag-cs-code-fold-btn');
@@ -610,7 +658,7 @@
               lineCount,
               lang: curLang,
               stamp: getPreBodyStamp(body),
-              sealed: inHistoricalTurn,
+              sealed: canSeal,
             });
             continue;
           }
@@ -622,10 +670,11 @@
             const expectedText = formatFoldBtnLabel(folded, lineCount);
             if (btn.textContent !== expectedText) btn.textContent = expectedText;
           } else {
-            btn = doc.createElement('button');
+            btn = markNoTr(doc.createElement('button'));
             btn.type = 'button';
             btn.className = 'ag-cs-code-fold-btn';
             btn.setAttribute('data-ag-no-i18n', '');
+            btn.setAttribute('data-ag-owned', '1');
             btn.setAttribute('data-no-press-spring', '1');
             btn.setAttribute('data-lines', String(lineCount));
             btn.setAttribute('aria-expanded', folded ? 'false' : 'true');
@@ -655,7 +704,7 @@
             lineCount,
             lang: curLang,
             stamp: getPreBodyStamp(body),
-            sealed: inHistoricalTurn,
+            sealed: canSeal,
           });
         }
       });
@@ -967,10 +1016,11 @@
       if (!doc || !hostParent) return null;
 
       const ui = getStrings();
-      const pop = doc.createElement('div');
+      const pop = markNoTr(doc.createElement('div'));
       pop.className = 'ag-cs-nav-outline-popover';
       pop.setAttribute('role', 'region');
       pop.setAttribute('data-ag-no-i18n', '');
+      pop.setAttribute('data-ag-owned', '1');
       pop.hidden = true;
 
       const head = doc.createElement('div');
@@ -1037,6 +1087,10 @@
       outlineFoldBtn = foldBtn;
       outlineSearchInput = search;
       outlineListEl = list;
+      lastOutlineStructSig = '';
+      lastOutlineActiveIdx = -1;
+      activeOutlineBtn = null;
+      outlineItemBtnByIdx.clear();
       return pop;
     }
 
@@ -1045,17 +1099,38 @@
       const ui = getStrings();
       const model = collectOutlineModel(activeNavRail);
       const q = outlineFilterText;
-      const sigParts = [lastSyncedLang, model.totalTurns, q, model.chapters.length, model.items.length];
-      for (let i = 0; i < model.chapters.length; i++) sigParts.push(model.chapters[i].label);
+      const structParts = [lastSyncedLang, model.totalTurns, q, model.chapters.length, model.items.length];
+      for (let i = 0; i < model.chapters.length; i++) structParts.push(model.chapters[i].label);
+      let activeIdx = -1;
       for (let i = 0; i < model.items.length; i++) {
         const it = model.items[i];
-        sigParts.push(`${it.turnNum}:${it.active ? 1 : 0}:${it.text}`);
+        if (it.active) activeIdx = i;
+        structParts.push(`${it.turnNum}:${it.text}`);
       }
-      const nextSig = sigParts.join('\x1f');
-      if (!forceRebuild && nextSig === lastOutlineSig && outlineListEl.firstChild) {
+      const nextStructSig = structParts.join('\x1f');
+      if (!forceRebuild && nextStructSig === lastOutlineStructSig && outlineListEl.firstChild) {
+        // 结构未变：仅刷新目标元素引用并按需切换旧/新按钮的 data-active="1"，零 DOM 重建
+        for (let i = 0; i < model.items.length; i++) {
+          const btn = outlineItemBtnByIdx.get(i);
+          if (btn) btn.__agTurnEl = model.items[i].el;
+        }
+        if (activeIdx !== lastOutlineActiveIdx) {
+          const nextBtn = activeIdx >= 0 ? outlineItemBtnByIdx.get(activeIdx) || null : null;
+          runGuardedMut(() => {
+            if (activeOutlineBtn && activeOutlineBtn !== nextBtn) {
+              activeOutlineBtn.removeAttribute('data-active');
+            }
+            if (nextBtn) setAttrIfChanged(nextBtn, 'data-active', '1');
+          });
+          activeOutlineBtn = nextBtn;
+          lastOutlineActiveIdx = activeIdx;
+        }
         return;
       }
-      lastOutlineSig = nextSig;
+      lastOutlineStructSig = nextStructSig;
+      lastOutlineActiveIdx = activeIdx;
+      activeOutlineBtn = null;
+      outlineItemBtnByIdx.clear();
       if (outlineTitleEl) outlineTitleEl.textContent = ui.outlineTitle(model.totalTurns);
 
       runGuardedMut(() => {
@@ -1102,7 +1177,12 @@
           row.className = 'ag-cs-nav-outline-item';
           row.setAttribute('data-no-press-spring', '1');
           row.setAttribute('data-turn-num', String(it.turnNum));
-          if (it.active) row.setAttribute('data-active', '1');
+          row.__agTurnEl = it.el;
+          if (it.active) {
+            row.setAttribute('data-active', '1');
+            activeOutlineBtn = row;
+          }
+          outlineItemBtnByIdx.set(i, row);
 
           const idxSpan = doc.createElement('span');
           idxSpan.className = 'ag-cs-nav-outline-num';
@@ -1117,8 +1197,9 @@
           row.addEventListener('click', (ev) => {
             ev?.preventDefault?.();
             ev?.stopPropagation?.();
-            scrollElementToTopInViewport(it.el);
-            pulseSonarOnElement(it.el);
+            const targetEl = row.__agTurnEl || it.el;
+            scrollElementToTopInViewport(targetEl);
+            pulseSonarOnElement(targetEl);
             stats.jumpCount += 1;
           });
           outlineListEl.appendChild(row);
@@ -1184,35 +1265,51 @@
       if (isDead() || !doc || typeof doc.querySelectorAll !== 'function') return;
       pruneUnsubs(navRailUnsubscribers, false, boundNavRails);
       const rails = doc.querySelectorAll('[data-testid="conversation-navigator"]');
+      const PASSIVE_OPT = { passive: true };
       for (let i = 0; i < rails.length; i++) {
         const rail = rails[i];
         if (boundNavRails.has(rail) || typeof rail.addEventListener !== 'function') continue;
         boundNavRails.add(rail);
+        let lastHoverTarget = null;
+        let lastHoverAt = 0;
         const onPointerHover = (ev) => {
-          const onGroupBtn = Boolean(ev?.target?.closest?.('[data-testid="conversation-navigator-group"]'));
-          if (onGroupBtn || isHostGroupCardVisible()) {
+          const tgt = ev?.target || null;
+          const onGroupBtn = Boolean(tgt?.closest?.('[data-testid="conversation-navigator-group"]'));
+          if (onGroupBtn) {
+            lastHoverTarget = tgt;
             if (outlineOpen && doc.activeElement !== outlineSearchInput) {
               closeNavOutline();
             }
             return;
           }
+          // 轻量短路前置到 isHostGroupCardVisible() 之前：大纲已展开且悬停在同轨上直接续期
           if (outlineOpen && activeNavRail === rail && outlinePopover && outlinePopover.isConnected !== false) {
             cancelHideOutlineTimer();
+            lastHoverTarget = tgt;
             return;
           }
+          // 同帧 pointerenter + pointerover 双触发防重复查询
+          const now = Date.now();
+          if (tgt && tgt === lastHoverTarget && now - lastHoverAt < 24) return;
+          lastHoverTarget = tgt;
+          lastHoverAt = now;
+          if (isHostGroupCardVisible()) return;
           openNavOutline(rail);
         };
-        const onLeave = () => scheduleHideOutline();
-        rail.addEventListener('pointerenter', onPointerHover);
-        rail.addEventListener('pointerover', onPointerHover);
-        rail.addEventListener('pointerleave', onLeave);
+        const onLeave = () => {
+          lastHoverTarget = null;
+          scheduleHideOutline();
+        };
+        rail.addEventListener('pointerenter', onPointerHover, PASSIVE_OPT);
+        rail.addEventListener('pointerover', onPointerHover, PASSIVE_OPT);
+        rail.addEventListener('pointerleave', onLeave, PASSIVE_OPT);
         navRailUnsubscribers.push({
           el: rail,
           unsub: () => {
             try {
-              rail.removeEventListener('pointerenter', onPointerHover);
-              rail.removeEventListener('pointerover', onPointerHover);
-              rail.removeEventListener('pointerleave', onLeave);
+              rail.removeEventListener('pointerenter', onPointerHover, PASSIVE_OPT);
+              rail.removeEventListener('pointerover', onPointerHover, PASSIVE_OPT);
+              rail.removeEventListener('pointerleave', onLeave, PASSIVE_OPT);
             } catch {}
           },
         });
@@ -1286,9 +1383,14 @@
         } catch {}
       }
       pruneUnsubs(iframeUnsubscribers, true, boundIframes);
+      iframeSizeCache = new WeakMap();
       try { iframeRo?.disconnect?.(); } catch {}
       iframeRo = null;
       pruneUnsubs(navRailUnsubscribers, true, boundNavRails);
+      lastOutlineStructSig = '';
+      lastOutlineActiveIdx = -1;
+      activeOutlineBtn = null;
+      outlineItemBtnByIdx.clear();
 
       if (doc && typeof doc.querySelectorAll === 'function') {
         runGuardedMut(() => {

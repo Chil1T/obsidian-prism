@@ -106,41 +106,33 @@
       };
     }
 
+    function unbindRoot(m) {
+      if (!m?.root) return;
+      m.root.removeEventListener('pointerdown', m.onPress);
+      m.onMove && m.root.removeEventListener('pointermove', m.onMove);
+      m.onLeave && m.root.removeEventListener('pointerleave', m.onLeave);
+      m.root = null;
+    }
+
     function parkRipple() {
       if (!rippleMount) return;
-      if (rippleMount.timer) {
-        clearTimeout(rippleMount.timer);
-        rippleMount.timer = 0;
-      }
-      if (rippleMount.rafId) {
-        cancelAnimationFrame(rippleMount.rafId);
-        rippleMount.rafId = 0;
-      }
-      if (rippleMount.ro) rippleMount.ro.disconnect();
-      if (rippleMount.root) {
-        rippleMount.root.removeEventListener('pointerdown', rippleMount.onPress);
-        if (rippleMount.onMove) rippleMount.root.removeEventListener('pointermove', rippleMount.onMove);
-        if (rippleMount.onLeave) rippleMount.root.removeEventListener('pointerleave', rippleMount.onLeave);
-        rippleMount.root = null;
-      }
+      if (rippleMount.timer) { clearTimeout(rippleMount.timer); rippleMount.timer = 0; }
+      if (rippleMount.rafId) { cancelAnimationFrame(rippleMount.rafId); rippleMount.rafId = 0; }
+      rippleMount.ro?.disconnect();
+      unbindRoot(rippleMount);
       rippleMount.host.remove();
-      rippleMount.sleeping = true;
-      rippleMount.parked = true;
+      rippleMount.reclaim?.();
+      rippleMount.sleeping = rippleMount.parked = true;
     }
 
     function unmountRipple() {
       if (!rippleMount) return;
       const m = rippleMount;
-      if (m.timer) clearTimeout(m.timer);
+      if (m.timer) { clearTimeout(m.timer); m.timer = 0; }
       if (m.rafId) cancelAnimationFrame(m.rafId);
       m.ro?.disconnect();
       m.uW?.();
-      if (m.root) {
-        m.root.removeEventListener('pointerdown', m.onPress);
-        m.onMove && m.root.removeEventListener('pointermove', m.onMove);
-        m.onLeave && m.root.removeEventListener('pointerleave', m.onLeave);
-        m.root = null;
-      }
+      unbindRoot(m);
       m.field.dispose();
       m.glow?.dispose?.();
       m.host.remove();
@@ -160,12 +152,8 @@
       }
       if (rippleMount) {
         if (rippleMount.parked || rippleMount.root !== home || !rippleMount.canvas.isConnected) {
-          if (rippleMount.ro) rippleMount.ro.disconnect();
-          if (rippleMount.root && rippleMount.root !== home) {
-            rippleMount.root.removeEventListener('pointerdown', rippleMount.onPress);
-            if (rippleMount.onMove) rippleMount.root.removeEventListener('pointermove', rippleMount.onMove);
-            if (rippleMount.onLeave) rippleMount.root.removeEventListener('pointerleave', rippleMount.onLeave);
-          }
+          rippleMount.ro?.disconnect();
+          if (rippleMount.root && rippleMount.root !== home) unbindRoot(rippleMount);
           rippleMount.root = home;
           rippleMount.parked = false;
           rippleMount.mountedAt = performance.now();
@@ -173,8 +161,8 @@
           home.addEventListener('pointerdown', rippleMount.onPress, { passive: true });
           home.addEventListener('pointermove', rippleMount.onMove, { passive: true });
           home.addEventListener('pointerleave', rippleMount.onLeave, { passive: true });
-          if (rippleMount.ro) rippleMount.ro.observe(home);
-          if (typeof rippleMount.reattach === 'function') rippleMount.reattach();
+          rippleMount.ro?.observe(home);
+          rippleMount.reattach?.();
         }
         return;
       }
@@ -227,60 +215,91 @@
         onMove: null,
         onLeave: null,
         wake: null,
+        reclaim: null,
         reattach: null,
         refreshTheme: null,
       };
-      let previous = state.mountedAt, lastRippleRenderAt = 0, frameWanted = false, drawnOnce = false, forceSingleDraw = true, wb = false;
-      const WB = 'data-ag-cs-win-blur', isAB = () => getRootHtml()?.getAttribute?.(WB) === '1', hP = () => Boolean(document.hidden || wb || isAB());
+      let previous = state.mountedAt;
+      let lastRippleRenderAt = 0;
+      let lastRafTs = 0;
+      let frameWanted = false;
+      let drawnOnce = false;
+      let forceSingleDraw = true;
+      let wb = false;
+      let pw = 0;
+      let ph = 0;
+      let shrunk = false;
+      const WB = 'data-ag-cs-win-blur';
+      const isAB = () => getRootHtml()?.getAttribute?.(WB) === '1';
+      const hP = () => Boolean(document.hidden || wb || isAB());
+
+      const syncG = (w, h) => {
+        if (w <= 0 || h <= 0) return;
+        state.glow?.resize?.(w, h, 0.6);
+        if (!glowCanvas.width || !glowCanvas.height) {
+          glowCanvas.width = Math.max(1, Math.round(w * 0.6));
+          glowCanvas.height = Math.max(1, Math.round(h * 0.6));
+        }
+      };
+      const reclaim = () => {
+        enterIdleSleep();
+        if (shrunk && !canvas.width && !canvas.height && !glowCanvas.width && !glowCanvas.height) return;
+        try { state.glow?.releaseBackingStore?.(); } catch {}
+        canvas.width = canvas.height = glowCanvas.width = glowCanvas.height = 0;
+        shrunk = forceSingleDraw = true;
+        drawnOnce = false;
+      };
 
       function updateCalmZones() {
         const curHome = state.root;
-        if (!curHome || !state.field || typeof state.field.setCalmZones !== 'function') return;
+        if (!curHome || !state.field?.setCalmZones) return;
         const greet = curHome.querySelector('[data-testid="home-greeting"]');
-        if (!greet) {
-          state.field.setCalmZones([]);
-          return;
-        }
+        if (!greet) return state.field.setCalmZones([]);
         const c = canvas.getBoundingClientRect();
         cachedCanvasRect = c;
         cachedCanvasRectAt = performance.now();
         const g = greet.getBoundingClientRect();
         if (!c.width || !g.width) return;
-        state.field.setCalmZones([
-          { x: g.left - c.left - 28, y: g.top - c.top - 14, w: g.width + 56, h: g.height + 28 },
-        ]);
+        state.field.setCalmZones([{ x: g.left - c.left - 28, y: g.top - c.top - 14, w: g.width + 56, h: g.height + 28 }]);
       }
 
       function layout() {
         const curHome = state.root;
         if (!curHome) return;
-        const w = curHome.clientWidth;
-        const h = curHome.clientHeight;
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        if (document.hidden) return reclaim();
+        const w = curHome.clientWidth, h = curHome.clientHeight, dpr = Math.min(window.devicePixelRatio || 1, 2);
         if (w === state.width && h === state.height && dpr === state.dpr) {
           cachedCanvasRect = null;
+          if (shrunk || (pw > 0 && ph > 0 && (!canvas.width || !canvas.height || !glowCanvas.width || !glowCanvas.height))) {
+            shrunk = drawnOnce = false;
+            forceSingleDraw = true;
+            canvas.width = pw;
+            canvas.height = ph;
+            syncG(w, h);
+            state.field.invalidate?.();
+            state.glow?.invalidate?.();
+          }
           return;
         }
-        const cols = Math.ceil(w / rippleCore.RIPPLE.cellWidth);
-        const rows = Math.ceil(h / rippleCore.RIPPLE.cellHeight);
+        const cols = Math.ceil(w / rippleCore.RIPPLE.cellWidth), rows = Math.ceil(h / rippleCore.RIPPLE.cellHeight);
         state.width = w;
         state.height = h;
         state.dpr = dpr;
-        canvas.width = Math.round(cols * rippleCore.RIPPLE.cellWidth * dpr);
-        canvas.height = Math.round(rows * rippleCore.RIPPLE.cellHeight * dpr);
+        pw = Math.round(cols * rippleCore.RIPPLE.cellWidth * dpr);
+        ph = Math.round(rows * rippleCore.RIPPLE.cellHeight * dpr);
+        shrunk = drawnOnce = false;
+        forceSingleDraw = true;
+        canvas.width = pw;
+        canvas.height = ph;
         canvas.style.width = `${cols * rippleCore.RIPPLE.cellWidth}px`;
         canvas.style.height = `${rows * rippleCore.RIPPLE.cellHeight}px`;
-        if (state.glow && typeof state.glow.resize === 'function') {
-          state.glow.resize(w, h, 0.6);
-        }
+        syncG(w, h);
         state.field.dispose();
         state.waves = rippleCore.createWaveField(cols, rows);
         state.field = rippleCore.createGlyphField(canvas, cols, rows, state.waves);
         cachedThemeTokens = sampleRippleThemeTokens(canvas);
         cachedCanvasRect = null;
         updateCalmZones();
-        drawnOnce = false;
-        forceSingleDraw = true;
       }
 
       function enterIdleSleep() {
@@ -294,10 +313,12 @@
       function wake() {
         if (state.timer) { clearTimeout(state.timer); state.timer = 0; }
         if (isDestroyed() || state.parked || frameWanted) return;
+        if (document.hidden) { reclaim(); return; }
+        if (shrunk) layout();
         state.sleeping = false;
         if (host.hasAttribute('data-ripple-sleep')) host.removeAttribute('data-ripple-sleep');
         if (hP()) {
-          if (!drawnOnce && canvas.width > 0) drawFrame(performance.now());
+          if (!drawnOnce && canvas.width > 0 && canvas.height > 0) drawFrame(performance.now());
           enterIdleSleep();
           return;
         }
@@ -309,12 +330,21 @@
         state.rafId = 0;
         frameWanted = false;
         if (isDestroyed() || state.parked || (rippleMount !== state && rippleMount !== null)) return;
+        if (document.hidden) { reclaim(); return; }
         const still = motionReduced();
+        const vsyncDt = lastRafTs > 0 && now > lastRafTs ? now - lastRafTs : now - lastRippleRenderAt;
+        lastRafTs = now;
         const rawGap = Number(getMinFrameGapMs?.() || 0);
         const minGap = state.waves?.active?.() || (auraState.active && lastSkimAt > 0 && now - lastSkimAt < 180) || (state.tideSwellAt > 0 && now - state.tideSwellAt < 480)
           ? Math.max(16, rawGap) : Math.max(33, rawGap);
         if (!still && drawnOnce && !forceSingleDraw && minGap > 0 && lastRippleRenderAt > 0 && now - lastRippleRenderAt < minGap && !hP()) {
-          wake();
+          const rem = minGap - (now - lastRippleRenderAt);
+          if (typeof setTimeout === 'function' && rem > Math.max(8, vsyncDt + 2)) {
+            if (state.timer) clearTimeout(state.timer);
+            state.timer = setTimeout(() => { state.timer = 0; wake(); }, Math.max(4, Math.ceil(rem)));
+          } else {
+            wake();
+          }
           return;
         }
         lastRippleRenderAt = now;
@@ -352,22 +382,20 @@
           auraActiveRecent ||
           (state.field && state.field.needsDraw(now, still));
 
-        if (canvas.width > 0 && needsRender) {
+        if (canvas.width > 0 && canvas.height > 0 && needsRender) {
           forceSingleDraw = false;
           if (!cachedThemeTokens) cachedThemeTokens = sampleRippleThemeTokens(canvas);
           const spectrumMode = resolveSpectrumMode(cachedThemeTokens.dark);
           const pal = buildRipplePalette(cachedThemeTokens, auraState, now, ambientScale, spectrumMode);
-          if (ambientScale <= 0.001) {
-            if (!state.glowClearedAtZero) {
-              if (state.glow && typeof state.glow.clear === 'function') {
-                state.glow.clear();
+          if (glowCanvas.width > 0 && glowCanvas.height > 0) {
+            if (ambientScale <= 0.001) {
+              if (!state.glowClearedAtZero) {
+                state.glow?.clear?.();
+                state.glowClearedAtZero = true;
               }
-              state.glowClearedAtZero = true;
-            }
-          } else {
-            state.glowClearedAtZero = false;
-            if (state.glow && typeof state.glow.draw === 'function') {
-              state.glow.draw(now, {
+            } else {
+              state.glowClearedAtZero = false;
+              state.glow?.draw?.(now, {
                 dark: pal.dark,
                 still,
                 strength: inTideSwell ? state.aura.strength : 1,
@@ -393,7 +421,9 @@
       }
 
       state.wake = wake;
+      state.reclaim = reclaim;
       state.reattach = () => {
+        if (state.timer) { clearTimeout(state.timer); state.timer = 0; }
         previous = performance.now();
         frameWanted = false;
         forceSingleDraw = true;
@@ -406,24 +436,20 @@
           const prevW = state.width;
           const prevH = state.height;
           layout();
-          if (state.width !== prevW || state.height !== prevH) {
-            updateCalmZones();
-          }
+          if (state.width !== prevW || state.height !== prevH) updateCalmZones();
           state.field.invalidate();
-          if (state.glow && typeof state.glow.invalidate === 'function') state.glow.invalidate();
+          state.glow?.invalidate?.();
           wake();
         };
-        if (state.width > 0 && state.height > 0 && !document.hidden && typeof requestAnimationFrame === 'function') {
+        if (!shrunk && state.width > 0 && state.height > 0 && !document.hidden && typeof requestAnimationFrame === 'function') {
           if (state.rafId) cancelAnimationFrame(state.rafId);
-          state.rafId = requestAnimationFrame(() => {
-            state.rafId = 0;
-            runReattachLayout();
-          });
+          state.rafId = requestAnimationFrame(() => { state.rafId = 0; runReattachLayout(); });
         } else {
           runReattachLayout();
         }
       };
 
+      const invNonGl = () => { if (state.field?.mode !== 'webgl2') state.field?.invalidate?.(); };
       state.onMove = (ev) => {
         if (motionReduced()) return;
         if (!isAB()) wb = false;
@@ -437,13 +463,12 @@
         const x = ev.clientX - rect.left;
         const y = ev.clientY - rect.top;
         if (x < 0 || y < 0 || x > rect.width || y > rect.height) {
-          lastSkimX = null;
-          lastSkimY = null;
+          lastSkimX = lastSkimY = null;
           skimCarryDist = 0;
           if (auraState.active) {
             auraState.active = false;
             forceSingleDraw = true;
-            if (!state.field || state.field.mode !== 'webgl2') state.field.invalidate();
+            invNonGl();
             wake();
           }
           return;
@@ -460,9 +485,7 @@
               const speedNorm = Math.max(0.05, Math.min(1, (pxPerSec - 220) / 1800));
               const col = Math.floor(x / rippleCore.RIPPLE.cellWidth);
               const row = Math.floor(y / rippleCore.RIPPLE.cellHeight);
-              if (typeof state.waves.skimmer === 'function') {
-                state.waves.skimmer(col, row, speedNorm);
-              }
+              state.waves.skimmer?.(col, row, speedNorm);
             }
           } else {
             skimCarryDist *= 0.85;
@@ -477,7 +500,7 @@
           auraState.y = y;
           auraState.active = true;
           if (state.sleeping) previous = now;
-          if (!state.field || state.field.mode !== 'webgl2') state.field.invalidate();
+          invNonGl();
           wake();
         } else if (state.waves.active()) {
           if (state.sleeping) previous = now;
@@ -487,13 +510,12 @@
       };
 
       state.onLeave = () => {
-        lastSkimX = null;
-        lastSkimY = null;
+        lastSkimX = lastSkimY = null;
         skimCarryDist = 0;
         if (auraState.active) {
           auraState.active = false;
           forceSingleDraw = true;
-          if (!state.field || state.field.mode !== 'webgl2') state.field.invalidate();
+          invNonGl();
           wake();
         }
       };
@@ -509,9 +531,7 @@
         state.waves.disturb(col, row);
         state.field.invalidate();
         wake();
-        if (typeof onPointerPressMascot === 'function') {
-          onPointerPressMascot(ev.clientX);
-        }
+        onPointerPressMascot?.(ev.clientX);
       };
 
       home.addEventListener('pointerdown', state.onPress, { passive: true });
@@ -519,7 +539,13 @@
       home.addEventListener('pointerleave', state.onLeave, { passive: true });
 
       const onVis = () => {
-        if (!hP()) { if (!state.parked) { previous = performance.now(); forceSingleDraw = true; wake(); } }
+        if (document.hidden) return reclaim();
+        if (state.parked) return;
+        const s = shrunk;
+        if (s || !canvas.width || !canvas.height) layout();
+        const ok = s && canvas.width > 0 && canvas.height > 0;
+        if (!hP()) { previous = performance.now(); forceSingleDraw = true; ok ? drawFrame(previous) : wake(); }
+        else if (ok && !drawnOnce) drawFrame(performance.now());
         else enterIdleSleep();
       };
       const onBlur = () => { wb = true; enterIdleSleep(); };
@@ -555,18 +581,14 @@
         cachedThemeTokens = sampleRippleThemeTokens(canvas);
         forceSingleDraw = true;
         state.field.invalidate();
-        if (state.glow && typeof state.glow.invalidate === 'function') state.glow.invalidate();
-        if (document.hidden && canvas.width > 0) drawFrame(performance.now());
-        else wake();
+        state.glow?.invalidate?.();
+        if (document.hidden) { reclaim(); return; }
+        wake();
       };
       wake();
     }
 
-    function refreshTheme() {
-      if (rippleMount && typeof rippleMount.refreshTheme === 'function') {
-        rippleMount.refreshTheme();
-      }
-    }
+    function refreshTheme() { rippleMount?.refreshTheme?.(); }
 
     function triggerLiftoffBurst(composerRect) {
       if (!rippleMount || typeof rippleMount.field?.triggerLiftoffBurst !== 'function') return;

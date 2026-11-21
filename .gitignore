@@ -12,6 +12,7 @@ Obsidian Prism.app/
 *.tmp
 .watch.pid
 .daemon.pid
+.bundle-cache.json
 config.json
 repo-meta.json
 .env
