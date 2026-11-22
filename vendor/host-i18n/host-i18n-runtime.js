@@ -1592,6 +1592,8 @@
     var perfNowFn =
       typeof opts.perfNowFn === 'function'
         ? opts.perfNowFn
+        : typeof opts.nowFn === 'function'
+        ? nowFn
         : typeof performance !== 'undefined' && typeof performance.now === 'function'
         ? function () {
             return performance.now();

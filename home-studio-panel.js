@@ -206,7 +206,6 @@
           try { onTimeout?.(); } catch {}
           done(null);
         }, ms);
-        timer?.unref?.();
         Promise.resolve().then(fn).then((v) => done(v || null), () => done(null));
       });
     }
