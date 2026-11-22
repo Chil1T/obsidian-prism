@@ -2481,6 +2481,7 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
         || dark !== lastDark
         || spectrumCode !== lastSpectrum
         || semanticCode !== lastSemantic
+        || Math.abs((semanticCode > 0 ? 1 : 0) - semMix) > 0.005
         || Math.abs(strength - lastStrength) >= 0.005
         || Math.abs(reach - lastReach) >= 0.002
         || Math.abs(prism - lastPrism) >= 0.002

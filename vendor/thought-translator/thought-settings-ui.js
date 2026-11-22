@@ -568,7 +568,7 @@
           proxyHintEl.setAttribute('data-state', 'idle');
           proxyHintEl.textContent = pack.proxyHintDirect;
           if (proxyHintEl.style) proxyHintEl.style.color = '';
-        } else if (!rawVal) {
+        } else if (state.proxyMode === 'auto' || !rawVal) {
           proxyHintEl.setAttribute('data-state', 'idle');
           proxyHintEl.textContent = pack.proxyHintAuto;
           if (proxyHintEl.style) proxyHintEl.style.color = '';
@@ -601,7 +601,7 @@
 
     proxyInput.addEventListener('input', () => {
       state.customProxyUrl = proxyInput.value;
-      if (state.customProxyUrl.trim() && state.proxyMode === 'direct') {
+      if (state.customProxyUrl.trim() && state.proxyMode !== 'custom') {
         state.proxyMode = 'custom';
       }
       if (state.customProxyUrl.trim() !== state.savedMaskedProxy) {
@@ -1085,6 +1085,14 @@
       }
     });
 
+    const syncActionButtons = () => {
+      const waitingLoad = hasThoughtBridge() && !state.loaded;
+      guard(() => {
+        saveBtn.disabled = state.busy || waitingLoad;
+        testBtn.disabled = state.busy || waitingLoad;
+      });
+    };
+
     const applySanitizedConfig = (res) => {
       if (!res || !res.ok) return;
       state.loaded = true;
@@ -1130,16 +1138,21 @@
       syncProxyUi();
       syncStyleUi();
       renderProfilePillsAndForm();
+      syncActionButtons();
     };
 
     const buildSavePayload = () => {
       syncFormIntoProfile();
-      return {
+      const trimmedProxy = String(state.customProxyUrl || '').trim();
+      const includeProxyUrl =
+        state.proxyMode === 'custom' ||
+        !trimmedProxy ||
+        validateCustomProxyInput(trimmedProxy, state.savedMaskedProxy).ok;
+      const payload = {
         stylePreset: state.stylePreset,
         viewMode: state.viewMode,
         customPrompt: state.customPrompt,
         proxyMode: state.proxyMode,
-        customProxyUrl: String(state.customProxyUrl || '').trim(),
         translateToolSummaries: Boolean(state.translateToolSummaries),
         activeProfileId: state.activeProfileId,
         profiles: state.profiles.map((p) => ({
@@ -1151,11 +1164,16 @@
           keepExistingKey: Boolean(!p.draftKey && !p.clearSavedKey),
         })),
       };
+      if (includeProxyUrl) {
+        payload.customProxyUrl = trimmedProxy;
+      }
+      return payload;
     };
 
     const reloadConfig = () => {
       state.loaded = false;
       syncUsageBanner();
+      syncActionButtons();
       const hostView = resolveHostPrism()?.getState?.()?.cfg?.thoughtView;
       if (hostView === 'bilingual' || hostView === 'immersive') {
         state.viewMode = hostView;
@@ -1168,12 +1186,14 @@
       }
       return api.getConfig().then((res) => {
         if (res && res.ok) applySanitizedConfig(res);
+        else syncActionButtons();
         return res;
       });
     };
 
     const ensureLoaded = () => {
       syncUsageBanner();
+      syncActionButtons();
       const hostView = resolveHostPrism()?.getState?.()?.cfg?.thoughtView;
       if (hostView === 'bilingual' || hostView === 'immersive') {
         state.viewMode = hostView;
@@ -1185,6 +1205,7 @@
       if (!api || typeof api.getConfig !== 'function') return;
       void api.getConfig().then((res) => {
         if (res && res.ok) applySanitizedConfig(res);
+        else syncActionButtons();
       });
     };
 
@@ -1195,12 +1216,13 @@
       syncFormIntoProfile();
       const cur = getActiveProfile();
       const pack = getPack();
-      if (state.proxyMode !== 'direct' && !validateCustomProxyInput(state.customProxyUrl, state.savedMaskedProxy).ok) {
+      if (state.proxyMode === 'custom' && !validateCustomProxyInput(state.customProxyUrl, state.savedMaskedProxy).ok) {
         setStatus('err', pack.proxyHintInvalid);
         return;
       }
       state.busy = true;
       fetchModelsBtn.disabled = true;
+      syncActionButtons();
       setStatus('idle', pack.fetchingModels);
       void api
         .fetchModels({
@@ -1208,7 +1230,7 @@
           baseUrl: cur?.baseUrl,
           apiKey: cur?.draftKey || '',
           proxyMode: state.proxyMode,
-          customProxyUrl: String(state.customProxyUrl || '').trim(),
+          customProxyUrl: state.proxyMode === 'custom' ? String(state.customProxyUrl || '').trim() : '',
         })
         .then((res) => {
           const curPack = getPack();
@@ -1245,6 +1267,7 @@
         .finally(() => {
           state.busy = false;
           if (fetchModelsBtn.isConnected !== false) fetchModelsBtn.disabled = false;
+          syncActionButtons();
         });
     });
 
@@ -1252,13 +1275,14 @@
       if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
       const api = resolveThoughtApi();
       if (!api || typeof api.saveConfig !== 'function' || state.busy) return;
+      if (hasThoughtBridge() && !state.loaded) return;
       const pack = getPack();
-      if (state.proxyMode !== 'direct' && !validateCustomProxyInput(state.customProxyUrl, state.savedMaskedProxy).ok) {
+      if (state.proxyMode === 'custom' && !validateCustomProxyInput(state.customProxyUrl, state.savedMaskedProxy).ok) {
         setStatus('err', pack.proxyHintInvalid);
         return;
       }
       state.busy = true;
-      saveBtn.disabled = true;
+      syncActionButtons();
       setStatus('idle', pack.savingCfg);
       void api
         .saveConfig(buildSavePayload())
@@ -1277,7 +1301,7 @@
         })
         .finally(() => {
           state.busy = false;
-          if (saveBtn.isConnected !== false) saveBtn.disabled = false;
+          syncActionButtons();
         });
     });
 
@@ -1285,13 +1309,14 @@
       if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
       const api = resolveThoughtApi();
       if (!api || typeof api.testConnection !== 'function' || state.busy) return;
+      if (hasThoughtBridge() && !state.loaded) return;
       const pack = getPack();
-      if (state.proxyMode !== 'direct' && !validateCustomProxyInput(state.customProxyUrl, state.savedMaskedProxy).ok) {
+      if (state.proxyMode === 'custom' && !validateCustomProxyInput(state.customProxyUrl, state.savedMaskedProxy).ok) {
         setStatus('err', pack.proxyHintInvalid);
         return;
       }
       state.busy = true;
-      testBtn.disabled = true;
+      syncActionButtons();
       setStatus('idle', pack.testingConn);
       const payload = buildSavePayload();
       void api
@@ -1304,7 +1329,7 @@
             baseUrl: cur?.baseUrl,
             model: cur?.model,
             proxyMode: state.proxyMode,
-            customProxyUrl: String(state.customProxyUrl || '').trim(),
+            customProxyUrl: state.proxyMode === 'custom' ? String(state.customProxyUrl || '').trim() : '',
           });
         })
         .then((res) => {
@@ -1317,7 +1342,7 @@
         })
         .finally(() => {
           state.busy = false;
-          if (testBtn.isConnected !== false) testBtn.disabled = false;
+          syncActionButtons();
         });
     });
 
@@ -1404,6 +1429,7 @@
     syncProxyUi();
     syncStyleUi();
     renderProfilePillsAndForm();
+    syncActionButtons();
     if (!box.hidden) ensureLoaded();
 
     return {
@@ -1423,6 +1449,7 @@
       onModeSwitched(nextMode) {
         syncModeLayout(nextMode);
         syncUsageBanner();
+        syncActionButtons();
         if (nextMode === 'ai' || nextMode === 'machine') ensureLoaded();
       },
     };

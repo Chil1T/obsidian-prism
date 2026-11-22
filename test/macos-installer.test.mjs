@@ -434,6 +434,107 @@ test('macOS Swift installer & LaunchAgent contracts enforce KeepAlive <true/>, n
   assert.equal(swiftHtml.getAttribute('data-ag-prism-thought-view'), 'bilingual');
 });
 
+test('macOS main.swift P1-4: normalizes /tmp & /var system symlink prefixes and fails closed on non-ENOENT attributesOfItem errors', () => {
+  const setupSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Setup', 'main.swift'), 'utf8');
+  assert.equal(setupSwift.includes('\r\n'), false, 'main.swift must use pure LF line endings');
+  assert.equal(setupSwift.startsWith('\uFEFF'), false, 'main.swift must not contain UTF-8 BOM');
+
+  // 1) Must normalize macOS system root symlinks (/tmp -> /private/tmp, /var -> /private/var) without loosening user symlinks under /private/tmp
+  const normFnMatch = setupSwift.match(/private static func normalizeSystemRootPrefix\([\s\S]*?\n    \}/);
+  assert.ok(normFnMatch, 'main.swift must define normalizeSystemRootPrefix');
+  const normFn = normFnMatch[0];
+  assert.ok(normFn.includes('if clean == "/tmp" { return "/private/tmp" }'));
+  assert.ok(normFn.includes('if clean.hasPrefix("/tmp/") { return "/private" + clean }'));
+  assert.ok(normFn.includes('if clean == "/var" { return "/private/var" }'));
+  assert.ok(normFn.includes('if clean.hasPrefix("/var/") { return "/private" + clean }'));
+
+  // 2) isSymbolicLink must NOT fail open via `try?` on non-ENOENT errors (EACCES / ELOOP / ENOTDIR -> true)
+  const noSuchMatch = setupSwift.match(/private static func isNoSuchFileError\([\s\S]*?\n    \}/);
+  assert.ok(noSuchMatch, 'main.swift must define isNoSuchFileError');
+  assert.ok(noSuchMatch[0].includes('NSFileReadNoSuchFileError'));
+  assert.ok(noSuchMatch[0].includes('NSFileNoSuchFileError'));
+  assert.ok(noSuchMatch[0].includes('ENOENT'));
+
+  const isSymMatch = setupSwift.match(/private static func isSymbolicLink\([\s\S]*?\n    \}/);
+  assert.ok(isSymMatch, 'main.swift must define isSymbolicLink');
+  const isSymBlock = isSymMatch[0];
+  assert.equal(isSymBlock.includes('try? FileManager.default.attributesOfItem'), false, 'isSymbolicLink must not fail-open with try?');
+  assert.ok(isSymBlock.includes('try FileManager.default.attributesOfItem(atPath: path)'));
+  assert.ok(isSymBlock.includes('return !isNoSuchFileError(error)'), 'isSymbolicLink must fail-closed on non-ENOENT errors');
+  assert.ok(isSymBlock.includes('guard !path.isEmpty else { return true }'), 'empty path must fail-closed');
+
+  // 3) resolveAllowedUsageCacheOverrideFile & hasSymbolicLinkInChain must normalize prefixes and enforce reachedStop fail-closed
+  const resolveMatch = setupSwift.match(/private static func resolveAllowedUsageCacheOverrideFile\([\s\S]*?\n    \}/);
+  assert.ok(resolveMatch, 'main.swift must define resolveAllowedUsageCacheOverrideFile');
+  assert.ok(resolveMatch[0].includes('normalizeSystemRootPrefix(trimmed)'));
+  assert.ok(resolveMatch[0].includes('normalizeSystemRootPrefix(NSTemporaryDirectory())'));
+  assert.ok(resolveMatch[0].includes('"/private/tmp"'));
+  assert.equal(resolveMatch[0].includes('"/tmp",'), false, 'allowedRoots must store canonical /private/tmp instead of /tmp symlink');
+
+  const chainMatch = setupSwift.match(/private static func hasSymbolicLinkInChain\([\s\S]*?\n    \}/);
+  assert.ok(chainMatch, 'main.swift must define hasSymbolicLinkInChain');
+  const chainBlock = chainMatch[0];
+  assert.ok(chainBlock.includes('var cur = normalizeSystemRootPrefix(targetDir)'));
+  assert.ok(chainBlock.includes('let stop = normalizeSystemRootPrefix(stopRoot)'));
+  assert.ok(chainBlock.includes('if isSymbolicLink(cur) { return true }'));
+  assert.ok(chainBlock.includes('reachedStop = true'));
+  assert.ok(chainBlock.includes('return !reachedStop'), 'hasSymbolicLinkInChain must fail-closed if stopRoot is never reached');
+
+  // 4) purgeUserPluginData must guard override removal with chain check, symlink check, and regular file check
+  const purgeMatch = setupSwift.match(/private static func purgeUserPluginData\([\s\S]*?\n    \}/);
+  assert.ok(purgeMatch, 'main.swift must define purgeUserPluginData');
+  assert.ok(purgeMatch[0].includes('!hasSymbolicLinkInChain(parentDir, stopRoot: allowed.stopRoot)'));
+  assert.ok(purgeMatch[0].includes('!isSymbolicLink(allowed.path)'));
+  assert.ok(purgeMatch[0].includes('isRegularFileNoSymlink(allowed.path)'));
+  assert.ok(purgeMatch[0].includes('normalizeSystemRootPrefix(envTel)'), 'telemetry override must also normalize /tmp -> /private/tmp');
+
+  // 5) Semantic equivalence check for /tmp/sub vs /tmp/evil-link & non-ENOENT fail-closed state machine
+  const normalizeSystemRootPrefix = (rawPath) => {
+    const trimmed = String(rawPath || '').trim();
+    if (!trimmed) return '';
+    let clean = path.posix.normalize(trimmed);
+    if (clean.length > 1 && clean.endsWith('/')) clean = clean.slice(0, -1);
+    if (clean === '/tmp') return '/private/tmp';
+    if (clean.startsWith('/tmp/')) return '/private' + clean;
+    if (clean === '/var') return '/private/var';
+    if (clean.startsWith('/var/')) return '/private' + clean;
+    return clean;
+  };
+  const evalChain = (targetDir, stopRoot, lstatMap) => {
+    let cur = normalizeSystemRootPrefix(targetDir);
+    const stop = normalizeSystemRootPrefix(stopRoot);
+    if (!cur || !stop) return true;
+    let reachedStop = false;
+    for (let i = 0; i < 64; i++) {
+      const st = lstatMap.get(cur);
+      if (st === 'SYMLINK' || st === 'EACCES' || st === 'ELOOP') return true;
+      if (cur === stop) {
+        reachedStop = true;
+        break;
+      }
+      const parent = path.posix.dirname(cur);
+      if (!parent || parent === cur) break;
+      cur = parent;
+    }
+    return !reachedStop;
+  };
+
+  // Normal /tmp/sub/obsidian-prism-usage-rollup-cache.json -> /private/tmp/sub -> allowed (false = no symlink)
+  const fsState = new Map([
+    ['/tmp', 'SYMLINK'],
+    ['/private', 'DIR'],
+    ['/private/tmp', 'DIR'],
+    ['/private/tmp/sub', 'DIR'],
+    ['/private/tmp/evil-link', 'SYMLINK'],
+    ['/private/tmp/locked', 'EACCES'],
+  ]);
+  assert.equal(normalizeSystemRootPrefix('/tmp/sub/obsidian-prism-usage-rollup-cache.json'), '/private/tmp/sub/obsidian-prism-usage-rollup-cache.json');
+  assert.equal(evalChain('/tmp/sub', '/tmp', fsState), false, '/tmp/sub must pass after /private/tmp normalization');
+  assert.equal(evalChain('/tmp/evil-link', '/tmp', fsState), true, 'user symlink /tmp/evil-link under /private/tmp must still be blocked');
+  assert.equal(evalChain('/tmp/locked', '/tmp', fsState), true, 'EACCES during chain check must fail-closed');
+  assert.equal(evalChain('/etc/sub', '/tmp', fsState), true, 'path outside stopRoot must fail-closed');
+});
+
 test(
   'macOS .app builds cleanly as universal binary and executes full install, CDP injection, setting sync, upgrade, and uninstall lifecycle',
   { skip: process.platform !== 'darwin' ? 'macOS-only .app E2E test' : false },

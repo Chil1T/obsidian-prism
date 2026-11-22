@@ -645,23 +645,69 @@ enum InstallerCore {
         return result
     }
 
+    private static func normalizeSystemRootPrefix(_ rawPath: String) -> String {
+        let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "" }
+        let std = URL(fileURLWithPath: trimmed).standardizedFileURL.path
+        let clean = (std.count > 1 && std.hasSuffix("/")) ? String(std.dropLast()) : std
+        if clean == "/tmp" { return "/private/tmp" }
+        if clean.hasPrefix("/tmp/") { return "/private" + clean }
+        if clean == "/var" { return "/private/var" }
+        if clean.hasPrefix("/var/") { return "/private" + clean }
+        return clean
+    }
+
+    private static func isNoSuchFileError(_ error: Error) -> Bool {
+        let nsErr = error as NSError
+        if nsErr.domain == NSCocoaErrorDomain &&
+           (nsErr.code == NSFileReadNoSuchFileError || nsErr.code == NSFileNoSuchFileError) {
+            return true
+        }
+        if nsErr.domain == NSPOSIXErrorDomain && nsErr.code == Int(ENOENT) {
+            return true
+        }
+        if let underlying = nsErr.userInfo[NSUnderlyingErrorKey] as? NSError,
+           underlying.domain == NSPOSIXErrorDomain && underlying.code == Int(ENOENT) {
+            return true
+        }
+        return false
+    }
+
+    /// 检查路径是否为符号链接；除明确 ENOENT（目标不存在）外，所有 attributesOfItem 异常均 Fail-Closed 返回 true（视为不安全）。
     private static func isSymbolicLink(_ path: String) -> Bool {
+        guard !path.isEmpty else { return true }
+        do {
+            let attrs = try FileManager.default.attributesOfItem(atPath: path)
+            guard let ftype = attrs[.type] as? FileAttributeType else {
+                return true
+            }
+            return ftype == .typeSymbolicLink
+        } catch {
+            return !isNoSuchFileError(error)
+        }
+    }
+
+    private static func isRegularFileNoSymlink(_ path: String) -> Bool {
         guard !path.isEmpty else { return false }
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-              let ftype = attrs[.type] as? FileAttributeType else {
+        do {
+            let attrs = try FileManager.default.attributesOfItem(atPath: path)
+            guard let ftype = attrs[.type] as? FileAttributeType else {
+                return false
+            }
+            return ftype == .typeRegular
+        } catch {
             return false
         }
-        return ftype == .typeSymbolicLink
     }
 
     private static func isDangerousRootPath(_ dirPath: String) -> Bool {
         let trimmed = dirPath.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return true }
-        let norm = URL(fileURLWithPath: trimmed).standardizedFileURL.path
-        if norm == "/" || norm == "/Users" || norm == "/Applications" || norm == "/System" || norm == "/Library" || norm == "/tmp" {
+        let norm = normalizeSystemRootPrefix(trimmed)
+        if norm == "/" || norm == "/Users" || norm == "/Applications" || norm == "/System" || norm == "/Library" || norm == "/tmp" || norm == "/private/tmp" || norm == "/var" || norm == "/private/var" {
             return true
         }
-        let home = URL(fileURLWithPath: FileManager.default.homeDirectoryForCurrentUser.path).standardizedFileURL.path
+        let home = normalizeSystemRootPrefix(FileManager.default.homeDirectoryForCurrentUser.path)
         let protected = [
             home,
             (home as NSString).appendingPathComponent("Library"),
@@ -689,21 +735,20 @@ enum InstallerCore {
     private static func isAllowedTelemetryOverrideDir(_ candidate: String, geminiRoot: String) -> Bool {
         let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return false }
-        let norm = URL(fileURLWithPath: trimmed).standardizedFileURL.path
+        let norm = normalizeSystemRootPrefix(trimmed)
         if isDangerousRootPath(norm) { return false }
-        let home = URL(fileURLWithPath: FileManager.default.homeDirectoryForCurrentUser.path).standardizedFileURL.path
+        let home = normalizeSystemRootPrefix(FileManager.default.homeDirectoryForCurrentUser.path)
         var allowedRoots = [
             (home as NSString).appendingPathComponent(".gemini"),
-            URL(fileURLWithPath: NSTemporaryDirectory()).standardizedFileURL.path,
-            "/tmp",
+            normalizeSystemRootPrefix(NSTemporaryDirectory()),
             "/private/tmp",
         ]
         if !geminiRoot.isEmpty {
-            allowedRoots.append(URL(fileURLWithPath: geminiRoot).standardizedFileURL.path)
+            allowedRoots.append(normalizeSystemRootPrefix(geminiRoot))
         }
         let underAllowed = allowedRoots.contains { base in
-            let b = base.hasSuffix("/") ? String(base.dropLast()) : base
-            return norm.hasPrefix(b + "/")
+            let b = (base.count > 1 && base.hasSuffix("/")) ? String(base.dropLast()) : base
+            return !b.isEmpty && norm.hasPrefix(b + "/")
         }
         if !underAllowed { return false }
         let segments = norm.split(separator: "/").map { $0.lowercased() }
@@ -713,8 +758,8 @@ enum InstallerCore {
     private static func resolveAllowedUsageCacheOverrideFile(_ candidate: String, hostCfgDir: String?, geminiRoot: String?) -> (path: String, stopRoot: String)? {
         let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return nil }
-        let normFile = URL(fileURLWithPath: trimmed).standardizedFileURL.path
-        if (normFile as NSString).lastPathComponent.lowercased() != "obsidian-prism-usage-rollup-cache.json" {
+        let normFile = normalizeSystemRootPrefix(trimmed)
+        if normFile.isEmpty || (normFile as NSString).lastPathComponent.lowercased() != "obsidian-prism-usage-rollup-cache.json" {
             return nil
         }
         let parentDir = (normFile as NSString).deletingLastPathComponent
@@ -725,22 +770,21 @@ enum InstallerCore {
            segments.contains("antigravity-spark") {
             return nil
         }
-        let home = URL(fileURLWithPath: FileManager.default.homeDirectoryForCurrentUser.path).standardizedFileURL.path
+        let home = normalizeSystemRootPrefix(FileManager.default.homeDirectoryForCurrentUser.path)
         var allowedRoots = [
             (home as NSString).appendingPathComponent(".gemini"),
-            URL(fileURLWithPath: NSTemporaryDirectory()).standardizedFileURL.path,
-            "/tmp",
+            normalizeSystemRootPrefix(NSTemporaryDirectory()),
             "/private/tmp",
         ]
         if let hc = hostCfgDir, !hc.isEmpty {
-            allowedRoots.append(URL(fileURLWithPath: hc).standardizedFileURL.path)
+            allowedRoots.append(normalizeSystemRootPrefix(hc))
         }
         if let gr = geminiRoot, !gr.isEmpty {
-            allowedRoots.append(URL(fileURLWithPath: gr).standardizedFileURL.path)
+            allowedRoots.append(normalizeSystemRootPrefix(gr))
         }
         for base in allowedRoots {
-            let b = base.hasSuffix("/") ? String(base.dropLast()) : base
-            if parentDir == b || parentDir.hasPrefix(b + "/") {
+            let b = (base.count > 1 && base.hasSuffix("/")) ? String(base.dropLast()) : base
+            if !b.isEmpty && (parentDir == b || parentDir.hasPrefix(b + "/")) {
                 return (normFile, b)
             }
         }
@@ -748,16 +792,21 @@ enum InstallerCore {
     }
 
     private static func hasSymbolicLinkInChain(_ targetDir: String, stopRoot: String) -> Bool {
-        var cur = URL(fileURLWithPath: targetDir).standardizedFileURL.path
-        let stop = stopRoot.hasSuffix("/") ? String(stopRoot.dropLast()) : stopRoot
+        var cur = normalizeSystemRootPrefix(targetDir)
+        let stop = normalizeSystemRootPrefix(stopRoot)
+        if cur.isEmpty || stop.isEmpty { return true }
+        var reachedStop = false
         for _ in 0..<64 {
             if isSymbolicLink(cur) { return true }
-            if cur == stop { break }
+            if cur == stop {
+                reachedStop = true
+                break
+            }
             let parent = (cur as NSString).deletingLastPathComponent
             if parent.isEmpty || parent == cur { break }
             cur = parent
         }
-        return false
+        return !reachedStop
     }
 
     private static func isValidConfigJsonFile(_ path: String) -> Bool {
@@ -867,7 +916,7 @@ enum InstallerCore {
             let telemetryDir: String
             if !envTel.isEmpty {
                 telemetryDir = isAllowedTelemetryOverrideDir(envTel, geminiRoot: gRoot)
-                    ? URL(fileURLWithPath: envTel).standardizedFileURL.path
+                    ? normalizeSystemRootPrefix(envTel)
                     : ""
             } else if !gRoot.isEmpty {
                 telemetryDir = ((gRoot as NSString).appendingPathComponent("antigravity") as NSString)
@@ -887,9 +936,9 @@ enum InstallerCore {
         let envUsageCache = ProcessInfo.processInfo.environment["PRISM_USAGE_CACHE_PATH"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if let allowed = resolveAllowedUsageCacheOverrideFile(envUsageCache, hostCfgDir: hostCfgDir, geminiRoot: geminiRoot) {
             let parentDir = (allowed.path as NSString).deletingLastPathComponent
-            if fm.fileExists(atPath: allowed.path) &&
-               !hasSymbolicLinkInChain(parentDir, stopRoot: allowed.stopRoot) &&
-               !isSymbolicLink(allowed.path) {
+            if !hasSymbolicLinkInChain(parentDir, stopRoot: allowed.stopRoot) &&
+               !isSymbolicLink(allowed.path) &&
+               isRegularFileNoSymlink(allowed.path) {
                 try? fm.removeItem(atPath: allowed.path)
             }
         }

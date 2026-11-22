@@ -3663,6 +3663,9 @@ export class PrismDaemon {
         !preferredEntry.session.closed &&
         !/^(?:devtools|chrome-extension|chrome|about):/i.test(String(preferredEntry.url || ''))
     );
+    if (opts?.strictEntry === true) {
+      return preferredValid ? [preferredEntry] : [];
+    }
     const targetScope = explicitScope || (preferredValid ? this._resolveEntryScopeKey(preferredEntry) : '');
     const out = [];
     if (preferredValid) {
@@ -3690,14 +3693,29 @@ export class PrismDaemon {
     return out;
   }
 
-  _createScopedRendererClient(entry, scopeKey) {
+  _createScopedRendererClient(entry, scopeKey, extraOpts = null) {
     const safeScope = normalizeUsageScopeKey(scopeKey) || 'local';
-    const routeOpts = { preferredEntry: entry, scopeKey: safeScope };
+    const routeOpts = {
+      preferredEntry: entry,
+      scopeKey: safeScope,
+      ...(extraOpts?.strictEntry ? { strictEntry: true } : {}),
+    };
     return {
       server: { port: 0, csrf: '', pid: 0, mode: 'renderer-proxy', scopeKey: safeScope },
       call: (method, body = {}) => this._invokeRendererLsRpc(method, body, routeOpts),
       trajectory: (cascadeId) => this._invokeRendererLsRpc('GetCascadeTrajectory', { cascadeId }, routeOpts),
     };
+  }
+
+  _resolveActiveRpcScope() {
+    const asyncCtx = RPC_ROUTE_STORAGE.getStore();
+    if (asyncCtx && asyncCtx.daemon === this) {
+      const sc =
+        normalizeUsageScopeKey(asyncCtx.scopeKey || '') ||
+        (asyncCtx.preferredEntry ? this._resolveEntryScopeKey(asyncCtx.preferredEntry) : '');
+      return sc || 'local';
+    }
+    return 'local';
   }
 
   async _invokeRendererLsRpc(method, body = {}, opts = null) {
@@ -3736,10 +3754,19 @@ export class PrismDaemon {
         }
         if (method === 'GetAllCascadeTrajectories') {
           const scopeHint = normalizeUsageScopeKey(raw?.scopeHint || '');
-          if (scopeHint && scopeHint !== 'local') {
-            entry.detectedScopeKey = scopeHint;
-          }
           const normalized = normalizeRendererSummaries(raw);
+          const inferredRemote =
+            (scopeHint && scopeHint !== 'local' ? scopeHint : '') ||
+            inferRemoteScopeFromSummariesOrItems(Object.values(normalized?.trajectorySummaries || {}));
+          if (inferredRemote) {
+            entry.detectedScopeKey = inferredRemote;
+            entry._usageScopeVerified = true;
+            // 若调用方显式锁定 local（如本机 MetricsStore）且未指定该窗口探针，严禁把远程窗口会话写入本机遥测
+            if (routeOpts?.scopeKey === 'local' && !routeOpts?.preferredEntry) {
+              lastErr = new Error('renderer_scope_mismatch');
+              continue;
+            }
+          }
           if (scopeHint) {
             Object.defineProperty(normalized, '_scopeHint', {
               value: scopeHint,
@@ -3793,7 +3820,7 @@ export class PrismDaemon {
     const { MetricsStore } = await import(storeModUrl.href);
     this._lazyStore = new MetricsStore({
       dataDir: telemetryDataDir,
-      rendererRpc: (m, b) => this._invokeRendererLsRpc(m, b),
+      rendererRpc: (m, b) => this._invokeRendererLsRpc(m, b, { scopeKey: 'local' }),
       ...(activePort ? { cdpPort: activePort } : {}),
     });
     return this.ensureMetricsCollector();
@@ -3814,6 +3841,7 @@ export class PrismDaemon {
     }
     if (this._lazyStore && this._lazyStore.client) {
       this._lazyLsClient = this._lazyStore.client;
+      this._lazyLsClient.setScopeResolver?.(() => this._resolveActiveRpcScope());
       this.syncClientCdpPort(this._lazyLsClient);
       return this._lazyLsClient;
     }
@@ -3822,6 +3850,7 @@ export class PrismDaemon {
     const { AntigravityClient } = await import(clientModUrl.href);
     this._lazyLsClient = new AntigravityClient({
       rendererRpc: (m, b) => this._invokeRendererLsRpc(m, b),
+      scopeResolver: () => this._resolveActiveRpcScope(),
       ...(activePort ? { cdpPort: activePort } : {}),
     });
     return this._lazyLsClient;
@@ -3986,14 +4015,31 @@ export class PrismDaemon {
         });
         if (inferredScope && inferredScope !== 'local') {
           scopeKey = inferredScope;
-          if (entry && typeof entry === 'object') entry.detectedScopeKey = scopeKey;
+          if (entry && typeof entry === 'object') {
+            entry.detectedScopeKey = scopeKey;
+            entry._usageScopeVerified = true;
+          }
+        } else if (entry && typeof entry === 'object') {
+          // 仅当渲染器明确返回 local scopeHint 或包含本机 file:// 工作区路径时，才确认该窗口为可信 local
+          const hasExplicitLocalHint = normalizeUsageScopeKey(raw?._scopeHint || '') === 'local';
+          const hasLocalFileWs = list.some(
+            (it) =>
+              Array.isArray(it.workspaces) &&
+              it.workspaces.some((u) => /^file:\/\//i.test(String(u || '')) || /^[a-z]:[\\/]/i.test(String(u || '')))
+          );
+          if (hasExplicitLocalHint || hasLocalFileWs) {
+            entry._usageScopeVerified = true;
+          }
         }
+      } else if (entry && typeof entry === 'object') {
+        entry._usageScopeVerified = true;
       }
 
       if (client?.server?.mode === 'renderer-proxy') {
         const subMap = this._getDiscoveredSubagents(scopeKey);
-        // 严格隔离：仅本地窗口允许补充扫描本机磁盘会话；Remote-SSH 等远程窗口绝不混入本机磁盘对话
-        if (scopeKey === 'local') {
+        // 严格隔离：仅已确认的本地窗口（或无 entry 直调）允许补充扫描本机磁盘会话；未验证窗口与 Remote-SSH 窗口绝不混入本机磁盘对话
+        const allowLocalDiskScan = scopeKey === 'local' && (!entry || entry._usageScopeVerified === true);
+        if (allowLocalDiskScan) {
           try {
             const localRes = await this._discoverLocalAppConversations();
             for (const localEntry of localRes?.conversations || []) {
@@ -4249,6 +4295,7 @@ export class PrismDaemon {
       }
 
       // 3) 序列化并严格保证 <= 4 MB 上限（超限时按最老条目逐步裁剪）
+      normalizedScopes.sort((a, b) => (b.newestSec || 0) - (a.newestSec || 0));
       const buildPayload = () => {
         const scopesObj = Object.create(null);
         for (const s of normalizedScopes) {
@@ -4266,6 +4313,16 @@ export class PrismDaemon {
           if (s.entries.length > 1) {
             s.entries = s.entries.slice(0, Math.max(1, Math.floor(s.entries.length * 0.8)));
             trimmed = true;
+          }
+        }
+        if (!trimmed) {
+          // 各 scope 均仅剩 <=1 条仍超 4MB 时，从最老 scope 起弹出尾部记录，避免死锁放弃落盘
+          for (let i = normalizedScopes.length - 1; i >= 0; i--) {
+            if (normalizedScopes[i].entries.length > 0) {
+              normalizedScopes[i].entries.pop();
+              trimmed = true;
+              break;
+            }
           }
         }
         if (!trimmed) break;
@@ -4291,9 +4348,10 @@ export class PrismDaemon {
 
     return RPC_ROUTE_STORAGE.run(routeState, async () => {
       const hasEntrySession = Boolean(entry && entry.session && !entry.session.closed);
+      const entryScopeVerified = Boolean(entry && entry._usageScopeVerified === true);
       let client =
-        scopeKey !== 'local' && hasEntrySession
-          ? this._createScopedRendererClient(entry, scopeKey)
+        hasEntrySession && (scopeKey !== 'local' || !entryScopeVerified)
+          ? this._createScopedRendererClient(entry, scopeKey, { strictEntry: !entryScopeVerified })
           : await this.ensureLsClient();
 
       const backendPack = await this._fetchBackendTrajectorySummaries(
@@ -4310,7 +4368,8 @@ export class PrismDaemon {
           client = this._createScopedRendererClient(entry, scopeKey);
         }
       }
-      const diskCache = this._getUsageDiskCacheScope(scopeKey, false);
+      const allowDiskCache = !(hasEntrySession && scopeKey === 'local' && entry?._usageScopeVerified !== true);
+      const diskCache = allowDiskCache ? this._getUsageDiskCacheScope(scopeKey, false) : new Map();
 
       if (action === 'list-summaries') {
         const cachedRecords = [];
@@ -4411,7 +4470,7 @@ export class PrismDaemon {
               );
               if (workspace && deltaRec && typeof deltaRec === 'object' && !deltaRec.workspace) deltaRec.workspace = workspace;
               if (parentId && deltaRec && typeof deltaRec === 'object' && !deltaRec.parentId) deltaRec.parentId = parentId;
-              if (diskHit?.record?.days && typeof usageCore.mergeUsageRecordDelta === 'function') {
+              if (allowDiskCache && diskHit?.record?.days && typeof usageCore.mergeUsageRecordDelta === 'function') {
                 const merged = usageCore.mergeUsageRecordDelta(diskHit.record, deltaRec, {
                   cascadeId: id,
                   stepCount: Number(item.stepCount || realStepCount),
@@ -4444,13 +4503,15 @@ export class PrismDaemon {
               const fullRec = usageCore.analyzeTrajectoryForUsage(fullTraj, enrichedStub, id);
               if (workspace && fullRec && typeof fullRec === 'object' && !fullRec.workspace) fullRec.workspace = workspace;
               if (parentId && fullRec && typeof fullRec === 'object' && !fullRec.parentId) fullRec.parentId = parentId;
-              this._putUsageDiskCache(
-                id,
-                Number(item.stepCount || realStepCount),
-                Number(item.lastModifiedSec || realLastModSec),
-                fullRec,
-                scopeKey
-              );
+              if (allowDiskCache) {
+                this._putUsageDiskCache(
+                  id,
+                  Number(item.stepCount || realStepCount),
+                  Number(item.lastModifiedSec || realLastModSec),
+                  fullRec,
+                  scopeKey
+                );
+              }
               records.push({
                 id,
                 mode: 'full',
@@ -4485,7 +4546,7 @@ export class PrismDaemon {
               const fullRec = usageCore.analyzeTrajectoryForUsage(fullMeta, summaryStub, id);
               if (workspace && fullRec && typeof fullRec === 'object' && !fullRec.workspace) fullRec.workspace = workspace;
               if (parentId && fullRec && typeof fullRec === 'object' && !fullRec.parentId) fullRec.parentId = parentId;
-              this._putUsageDiskCache(id, stepCount, lastModifiedSec, fullRec, scopeKey);
+              if (allowDiskCache) this._putUsageDiskCache(id, stepCount, lastModifiedSec, fullRec, scopeKey);
               records.push({
                 id,
                 mode: 'full',
@@ -4517,7 +4578,7 @@ export class PrismDaemon {
               );
               if (workspace && deltaRec && typeof deltaRec === 'object' && !deltaRec.workspace) deltaRec.workspace = workspace;
               if (parentId && deltaRec && typeof deltaRec === 'object' && !deltaRec.parentId) deltaRec.parentId = parentId;
-              if (diskHit?.record?.days && typeof usageCore.mergeUsageRecordDelta === 'function') {
+              if (allowDiskCache && diskHit?.record?.days && typeof usageCore.mergeUsageRecordDelta === 'function') {
                 const merged = usageCore.mergeUsageRecordDelta(diskHit.record, deltaRec, {
                   cascadeId: id,
                   stepCount,
@@ -4546,7 +4607,7 @@ export class PrismDaemon {
             const fullRec = usageCore.analyzeTrajectoryForUsage(fullMeta, summaryStub, id);
             if (workspace && fullRec && typeof fullRec === 'object' && !fullRec.workspace) fullRec.workspace = workspace;
             if (parentId && fullRec && typeof fullRec === 'object' && !fullRec.parentId) fullRec.parentId = parentId;
-            this._putUsageDiskCache(id, stepCount, lastModifiedSec, fullRec, scopeKey);
+            if (allowDiskCache) this._putUsageDiskCache(id, stepCount, lastModifiedSec, fullRec, scopeKey);
             records.push({
               id,
               mode: 'full',
@@ -5855,6 +5916,7 @@ export class PrismDaemon {
       url: String(target.url || ''),
       title: target.title || target.url || 'Antigravity',
       detectedScopeKey: '',
+      _usageScopeVerified: false,
       session,
       scriptId: null,
       omniScriptId: null,
@@ -6179,7 +6241,7 @@ export class PrismDaemon {
       if (probe.title) entry.title = probe.title;
       if (probe.scopeAttr) {
         const probedScope = normalizeUsageScopeKey(probe.scopeAttr);
-        if (probedScope) entry.detectedScopeKey = probedScope;
+        if (probedScope && probedScope !== 'local') entry.detectedScopeKey = probedScope;
       }
       const omniEnabled = this._isOmniEnabled(cfg) && probe.omniMode !== 'off';
       const hasClientOnDisk = omniEnabled && this._hasOmniClientFile();
@@ -6694,11 +6756,15 @@ export class PrismDaemon {
             if (typeof info.title === 'string' && info.title && info.title !== existing.title) {
               existing.title = info.title;
               const titleScope = extractScopeKeyFromTitle(info.title);
-              if (titleScope) existing.detectedScopeKey = titleScope;
+              if (titleScope && titleScope !== existing.detectedScopeKey) {
+                existing.detectedScopeKey = titleScope;
+                existing._usageScopeVerified = false;
+              }
             }
             if (typeof info.url === 'string' && info.url && info.url !== existing.url) {
               existing.url = info.url;
               existing.detectedScopeKey = '';
+              existing._usageScopeVerified = false;
               existing.verifyDirty = true;
               existing.healthyStreak = 0;
               this.scheduleImmediateTick(45);

@@ -53,7 +53,7 @@ export function serverFromDiscovery(log, processes) {
 }
 
 export class AntigravityClient {
-  constructor({ paths = platformPaths, readLog = readFile, logStat = stat, processes = discoverProcesses, now = Date.now, onRpc = null, cdpPort = null, debugPort = null, rendererRpc = null } = {}) {
+  constructor({ paths = platformPaths, readLog = readFile, logStat = stat, processes = discoverProcesses, now = Date.now, onRpc = null, cdpPort = null, debugPort = null, rendererRpc = null, scopeResolver = null } = {}) {
     this.paths = paths;
     this.readLog = readLog;
     this.logStat = logStat;
@@ -62,6 +62,8 @@ export class AntigravityClient {
     this.onRpc = onRpc;
     this.cdpPort = cdpPort ?? debugPort ?? null;
     this.rendererRpc = typeof rendererRpc === 'function' ? rendererRpc : null;
+    this.scopeResolver = typeof scopeResolver === 'function' ? scopeResolver : null;
+    this._scopedDiscovery = new Map();
     this._proxyTrajCache = new Map();
     this._proxyTrajInFlight = new Map();
     this.agent = new HttpAgent({ keepAlive: true, keepAliveMsecs: 15000, maxSockets: 2, maxFreeSockets: 2, timeout: 25000 });
@@ -79,6 +81,43 @@ export class AntigravityClient {
     this.rendererRpc = typeof fn === 'function' ? fn : null;
   }
 
+  setScopeResolver(fn) {
+    this.scopeResolver = typeof fn === 'function' ? fn : null;
+  }
+
+  _resolveScopeKey(explicitScope = '') {
+    const raw = typeof explicitScope === 'string' ? explicitScope.trim() : '';
+    if (raw) return raw;
+    if (typeof this.scopeResolver === 'function') {
+      try {
+        const resolved = this.scopeResolver();
+        if (typeof resolved === 'string' && resolved.trim()) return resolved.trim();
+      } catch {}
+    }
+    return 'local';
+  }
+
+  _discoverySlot(scope = 'local') {
+    if (!scope || scope === 'local') return this;
+    let slot = this._scopedDiscovery.get(scope);
+    if (!slot) {
+      slot = {
+        server: null,
+        discoveredAt: 0,
+        discovering: null,
+        lastScanAt: -Infinity,
+        retryAt: 0,
+        discoveryFailures: 0,
+        discoveryError: null,
+      };
+      this._scopedDiscovery.set(scope, slot);
+      while (this._scopedDiscovery.size > 32) {
+        this._scopedDiscovery.delete(this._scopedDiscovery.keys().next().value);
+      }
+    }
+    return slot;
+  }
+
   setCdpPort(port) {
     const next = typeof port === 'function' ? port : (Number.isInteger(Number(port)) && Number(port) > 0 ? Number(port) : null);
     if (next !== this.cdpPort) {
@@ -92,34 +131,51 @@ export class AntigravityClient {
     return Number.isInteger(p) && p > 0 && p <= 65535 ? p : null;
   }
 
-  async discover(force = false) {
-    const cacheTtl = this.server?.mode === 'renderer-proxy' ? 120000 : 15000;
-    if (!force && this.server && this.now() - this.discoveredAt < cacheTtl) return this.server;
-    if (this.discovering) return this.discovering;
-    if (!force && this.discoveryError && this.now() < this.retryAt) throw this.discoveryError;
-    this.lastScanAt = this.now();
-    this.discovering = this.discoverNow()
+  async discover(force = false, explicitScope = '') {
+    const scope = this._resolveScopeKey(explicitScope);
+    const slot = this._discoverySlot(scope);
+    const cacheTtl = slot.server?.mode === 'renderer-proxy' ? 120000 : 15000;
+    if (!force && slot.server && this.now() - slot.discoveredAt < cacheTtl) return slot.server;
+    if (slot.discovering) return slot.discovering;
+    if (!force && slot.discoveryError && this.now() < slot.retryAt) throw slot.discoveryError;
+    slot.lastScanAt = this.now();
+    slot.discovering = this.discoverNow(scope, slot)
       .then(server => {
-        this.discoveredAt = this.now();
-        this.discoveryFailures = 0;
-        this.discoveryError = null;
-        this.retryAt = 0;
+        slot.discoveredAt = this.now();
+        slot.discoveryFailures = 0;
+        slot.discoveryError = null;
+        slot.retryAt = 0;
         return server;
       })
       .catch(error => {
-        this.discoveryError = error;
-        this.discoveryFailures++;
-        this.retryAt = this.now() + Math.min(30000, 3000 * 2 ** Math.min(4, this.discoveryFailures - 1));
+        slot.discoveryError = error;
+        slot.discoveryFailures++;
+        slot.retryAt = this.now() + Math.min(30000, 3000 * 2 ** Math.min(4, slot.discoveryFailures - 1));
         throw error;
       })
       .finally(() => {
-        this.discovering = null;
+        slot.discovering = null;
       });
-    return this.discovering;
+    return slot.discovering;
   }
 
-  async discoverNow() {
-    this.server = null;
+  async discoverNow(scope = 'local', slot = this) {
+    slot.server = null;
+    const cdpPort = this._resolveCdpPort();
+    // 远程/独立 scope 严禁扫描本机日志或连接本机 HTTP LS，仅通过对应渲染器通道探测
+    if (scope && scope !== 'local') {
+      if (typeof this.rendererRpc === 'function') {
+        try {
+          const probe = await this.rendererRpc('Probe', {});
+          if (probe && probe.available) {
+            slot.server = { port: 0, csrf: '', pid: cdpPort || 1, mode: 'renderer-proxy', scopeKey: scope };
+            slot.discoveredAt = this.now();
+            return slot.server;
+          }
+        } catch {}
+      }
+      throw new Error(`远程窗口 ${scope} 渲染器通道暂不可用`);
+    }
     const paths = this.paths(), logs = [], files = [...new Set(paths.logCandidates || [paths.log])];
     for (const file of files) {
       try {
@@ -142,16 +198,15 @@ export class AntigravityClient {
       });
     }
     const expectedPorts = [...new Set(logs.flatMap(log => log.ports || []))];
-    const cdpPort = this._resolveCdpPort();
     const parsed = await this.processes({ expectedPorts, ...(cdpPort ? { cdpPort } : {}) });
     if (!parsed || (Array.isArray(parsed) && !parsed.length)) {
       if (typeof this.rendererRpc === 'function') {
         try {
           const probe = await this.rendererRpc('Probe', {});
           if (probe && probe.available) {
-            this.server = { port: 0, csrf: '', pid: cdpPort || 1, mode: 'renderer-proxy' };
-            this.discoveredAt = this.now();
-            return this.server;
+            slot.server = { port: 0, csrf: '', pid: cdpPort || 1, mode: 'renderer-proxy' };
+            slot.discoveredAt = this.now();
+            return slot.server;
           }
         } catch {}
       }
@@ -161,9 +216,9 @@ export class AntigravityClient {
     // Allow hub-port resolution even if log files are absent
     if (Array.isArray(parsed) && parsed.some(r => r?.HubPort)) {
       try {
-        this.server = serverFromPorts(expectedPorts, parsed);
-        this.discoveredAt = this.now();
-        return this.server;
+        slot.server = serverFromPorts(expectedPorts, parsed);
+        slot.discoveredAt = this.now();
+        return slot.server;
       } catch {}
     }
 
@@ -172,29 +227,29 @@ export class AntigravityClient {
       try {
         if (entry.error) throw entry.error;
         foundLog = true;
-        this.server = serverFromPorts(entry.ports, parsed);
+        slot.server = serverFromPorts(entry.ports, parsed);
         break;
       } catch (error) {
         if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') lastError = error;
       }
     }
-    if (!this.server) {
+    if (!slot.server) {
       const primaryErr = lastError || new Error(foundLog ? '等待 Antigravity 本地接口启动' : '未找到 Antigravity 语言服务日志，请检查日志路径');
       if (typeof this.rendererRpc === 'function') {
         try {
           const probe = await this.rendererRpc('Probe', {});
           if (probe && probe.available) {
             const firstPid = Array.isArray(parsed) && parsed[0]?.ProcessId ? Number(parsed[0].ProcessId) : (cdpPort || 1);
-            this.server = { port: 0, csrf: '', pid: firstPid, mode: 'renderer-proxy' };
-            this.discoveredAt = this.now();
-            return this.server;
+            slot.server = { port: 0, csrf: '', pid: firstPid, mode: 'renderer-proxy' };
+            slot.discoveredAt = this.now();
+            return slot.server;
           }
         } catch {}
       }
       throw primaryErr;
     }
-    this.discoveredAt = this.now();
-    return this.server;
+    slot.discoveredAt = this.now();
+    return slot.server;
   }
 
   _isProxySettled(data) {
@@ -217,10 +272,15 @@ export class AntigravityClient {
   }
 
   async _getProxyTrajectory(cascadeId, force = false, summaryOrOpts = null) {
-    const key = String(cascadeId || '').toLowerCase();
+    const explicitScope =
+      summaryOrOpts && typeof summaryOrOpts === 'object' && typeof summaryOrOpts.scopeKey === 'string'
+        ? summaryOrOpts.scopeKey
+        : '';
+    const scope = this._resolveScopeKey(explicitScope);
+    const key = `${scope}::${String(cascadeId || '').toLowerCase()}`;
     const now = this.now();
     const summary =
-      summaryOrOpts && typeof summaryOrOpts === 'object' && ('summary' in summaryOrOpts || 'isCurrent' in summaryOrOpts)
+      summaryOrOpts && typeof summaryOrOpts === 'object' && ('summary' in summaryOrOpts || 'isCurrent' in summaryOrOpts || 'scopeKey' in summaryOrOpts)
         ? summaryOrOpts.summary || null
         : summaryOrOpts;
     const sumStamp = this._proxySummaryStamp(summary);
@@ -294,18 +354,20 @@ export class AntigravityClient {
   }
 
   async call(method, body = {}, retry = true) {
-    const server = await this.discover();
+    const scope = this._resolveScopeKey();
+    const slot = this._discoverySlot(scope);
+    const server = await this.discover(false, scope);
     if (server && server.mode === 'renderer-proxy') {
       try {
         return await this._callRendererProxy(method, body);
       } catch (error) {
-        if (this.server === server) {
-          this.server = null;
-          this.discoveryError = error;
-          this.retryAt = Math.max(this.retryAt, this.lastScanAt + 3000);
+        if (slot.server === server) {
+          slot.server = null;
+          slot.discoveryError = error;
+          slot.retryAt = Math.max(slot.retryAt, slot.lastScanAt + 3000);
         }
         if (retry) {
-          await this.discover(true);
+          await this.discover(true, scope);
           return this.call(method, body, false);
         }
         throw error;
@@ -382,13 +444,13 @@ export class AntigravityClient {
     } catch (error) {
       const endpointLost = [401, 403].includes(error.status) || ['ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ENOTCONN'].includes(error.code);
       if (!endpointLost) throw error;
-      if (this.server === server) {
-        this.server = null;
-        this.discoveryError = error;
-        this.retryAt = Math.max(this.retryAt, this.lastScanAt + 3000);
+      if (slot.server === server) {
+        slot.server = null;
+        slot.discoveryError = error;
+        slot.retryAt = Math.max(slot.retryAt, slot.lastScanAt + 3000);
       }
       if (retry) {
-        await this.discover();
+        await this.discover(false, scope);
         return this.call(method, body, false);
       }
       throw error;
@@ -538,12 +600,16 @@ export class AntigravityClient {
     this.reader.reset();
   }
   async trajectory(id, options = {}) {
-    const server = await this.discover();
+    const scope = this._resolveScopeKey(options?.scopeKey || '');
+    const server = await this.discover(false, scope);
     if (server && server.mode === 'renderer-proxy') {
       if (options?.isCurrent && options.isCurrent() !== true) {
         throw new Error('后台已重新连接，请等待刷新');
       }
-      const data = await this._getProxyTrajectory(id, Boolean(options?.force), options?.summary || null);
+      const data = await this._getProxyTrajectory(id, Boolean(options?.force), {
+        summary: options?.summary || null,
+        scopeKey: scope,
+      });
       if (options?.isCurrent && options.isCurrent() !== true) {
         throw new Error('后台已重新连接，请等待刷新');
       }
@@ -553,6 +619,7 @@ export class AntigravityClient {
   }
   dispose() {
     try { this.agent?.destroy?.(); } catch {}
+    this._scopedDiscovery?.clear?.();
     this._proxyTrajCache?.clear?.();
     this._proxyTrajInFlight?.clear?.();
     this.reader?.reset?.();

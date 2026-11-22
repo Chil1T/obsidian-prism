@@ -184,14 +184,101 @@ function purgeUserPluginData(opts = {}) {
   return purgedPaths;
 }
 
-function stopPidFile(filePath, label) {
+const DAEMON_STOP_POLL_MS = 30;
+const DAEMON_STOP_GRACEFUL_TIMEOUT_MS = 800;
+const DAEMON_STOP_SIGKILL_WAIT_MS = 200;
+
+function isPidAlive(pid) {
+  const num = Number(pid);
+  if (!Number.isInteger(num) || num <= 0) return false;
   try {
-    if (!fs.existsSync(filePath)) return;
+    process.kill(num, 0);
+    return true;
+  } catch (err) {
+    return Boolean(err && err.code === 'EPERM');
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 发送 SIGTERM 后轮询等待守护彻底退出（超时则升级 SIGKILL 再短等），防止退出中临终 flush 复活已清理的缓存文件
+async function terminatePidAndWait(pid, opts = {}) {
+  const num = Number(pid);
+  if (!Number.isInteger(num) || num <= 0 || num === process.pid) {
+    return { signaled: false, exited: false, escalated: false };
+  }
+  const killFn = typeof opts.kill === 'function' ? opts.kill : (p, sig) => process.kill(p, sig);
+  const aliveFn = typeof opts.isPidAlive === 'function' ? opts.isPidAlive : isPidAlive;
+  const pollMs = Math.max(5, Number(opts.pollIntervalMs) || DAEMON_STOP_POLL_MS);
+  const gracefulTimeoutMs = Math.max(
+    0,
+    opts.gracefulTimeoutMs !== undefined ? Number(opts.gracefulTimeoutMs) : DAEMON_STOP_GRACEFUL_TIMEOUT_MS
+  );
+  const killWaitMs = Math.max(
+    0,
+    opts.killWaitMs !== undefined ? Number(opts.killWaitMs) : DAEMON_STOP_SIGKILL_WAIT_MS
+  );
+
+  try {
+    killFn(num, 'SIGTERM');
+  } catch (err) {
+    if (err && err.code === 'ESRCH') {
+      return { signaled: false, exited: true, escalated: false };
+    }
+    throw err;
+  }
+
+  const gracefulDeadline = Date.now() + gracefulTimeoutMs;
+  while (aliveFn(num)) {
+    if (Date.now() >= gracefulDeadline) break;
+    const remaining = gracefulDeadline - Date.now();
+    await sleep(Math.min(pollMs, Math.max(1, remaining)));
+  }
+
+  if (!aliveFn(num)) {
+    return { signaled: true, exited: true, escalated: false };
+  }
+
+  let escalated = false;
+  try {
+    killFn(num, 'SIGKILL');
+    escalated = true;
+  } catch (err) {
+    if (err && err.code === 'ESRCH') {
+      return { signaled: true, exited: true, escalated: false };
+    }
+  }
+
+  const killDeadline = Date.now() + killWaitMs;
+  while (aliveFn(num)) {
+    if (Date.now() >= killDeadline) break;
+    const remaining = killDeadline - Date.now();
+    await sleep(Math.min(pollMs, Math.max(1, remaining)));
+  }
+
+  return { signaled: true, exited: !aliveFn(num), escalated };
+}
+
+async function stopPidFile(filePath, label, opts = {}) {
+  let stoppedPid = null;
+  try {
+    if (!fs.existsSync(filePath)) return null;
     const pid = readPidFromLockFile(filePath);
-    if (pid && isExpectedDaemonProcess(pid)) {
+    const checkExpected =
+      typeof opts.isExpectedDaemonProcess === 'function'
+        ? opts.isExpectedDaemonProcess
+        : (p) => isExpectedDaemonProcess(p, filePath);
+    if (pid && checkExpected(pid)) {
       try {
-        process.kill(pid);
-        console.log(`[✓] 已停止${label} (PID ${pid})`);
+        const res = await terminatePidAndWait(pid, opts);
+        if (res.signaled) {
+          stoppedPid = pid;
+          console.log(`[✓] 已停止${label} (PID ${pid})`);
+        } else {
+          console.log(`[i] ${label}未在运行`);
+        }
       } catch {
         console.log(`[i] ${label}未在运行`);
       }
@@ -200,17 +287,21 @@ function stopPidFile(filePath, label) {
       fs.unlinkSync(filePath);
     } catch {}
   } catch {}
+  return stoppedPid;
 }
 
-function stopWatcher() {
-  stopPidFile(PID_FILE, '守护进程');
-  stopPidFile(path.join(__dirname, '.daemon.pid'), 'Sidecar 守护进程');
+async function stopWatcher(opts = {}) {
+  const watchPidFile = opts.watchPidFile || PID_FILE;
+  const daemonPidFile = opts.daemonPidFile || path.join(__dirname, '.daemon.pid');
+  const stoppedWatchPid = await stopPidFile(watchPidFile, '守护进程', opts);
+  const stoppedDaemonPid = await stopPidFile(daemonPidFile, 'Sidecar 守护进程', opts);
+  return { stoppedWatchPid, stoppedDaemonPid };
 }
 
-async function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2), opts = {}) {
   const cli = parseCliArgs(argv);
-  stopWatcher();
-  const port = readPort();
+  await stopWatcher(opts);
+  const port = opts.noCdp ? null : readPort();
   if (!port) {
     console.log('[i] Antigravity 未运行，无需清理窗口');
   } else {
@@ -234,7 +325,7 @@ async function main(argv = process.argv.slice(2)) {
   }
 
   if (cli.purgeData) {
-    const purged = purgeUserPluginData();
+    const purged = purgeUserPluginData(opts);
     console.log(`[✓] 已彻底清理用户插件配置与缓存 (${purged.length} 项)`);
   }
 }
@@ -248,7 +339,13 @@ if (require.main === module) {
 
 module.exports = {
   USAGE_ROLLUP_CACHE_FILENAME,
+  DAEMON_STOP_POLL_MS,
+  DAEMON_STOP_GRACEFUL_TIMEOUT_MS,
+  DAEMON_STOP_SIGKILL_WAIT_MS,
   parseCliArgs,
   purgeUserPluginData,
+  terminatePidAndWait,
+  stopPidFile,
+  stopWatcher,
   main,
 };

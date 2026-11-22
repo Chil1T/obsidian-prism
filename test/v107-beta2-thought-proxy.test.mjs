@@ -1462,3 +1462,629 @@ test('7) Workspace cleanliness: zero .bundle-cache.json leftover in repository r
     'Repository root must not contain leftover .bundle-cache.json'
   );
 });
+
+test('8) Red-team #192 [P0-2]: tool-batch rejects >64KB payload, flattens newlines/escapes [N], rejects duplicate idx & removes single-item unnumbered blind accept', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-rt-p02-'));
+  try {
+    const capturedQueries = [];
+    const svc = new ThoughtTranslatorService({
+      configDir: tmpDir,
+      fetchImpl: async (url) => {
+        const q = new URL(String(url)).searchParams.get('q') || '';
+        capturedQueries.push(q);
+        const out = q
+          .replace(/Check build status/gi, '检查构建状态')
+          .replace(/Read audit log/gi, '读取审计日志')
+          .replace(/forged/gi, '伪造内容');
+        return new Response(JSON.stringify([[[out, q]]]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    });
+
+    // A) >65536 payload rejected BEFORE JSON.parse
+    const hugePayload = JSON.stringify({ v: 1, items: ['A'.repeat(70000)] });
+    assert.ok(hugePayload.length > 65536);
+    const hugeRes = await svc.translateThought({ text: hugePayload, mode: 'tool-batch:machine', targetLang: 'zh-CN' });
+    assert.equal(hugeRes.ok, false);
+    assert.match(hugeRes.error, /too large/i);
+    assert.equal(capturedQueries.length, 0);
+
+    // B) Newline + [0] injection inside item[1] must be flattened & escaped so item[0] is never spoofed,
+    //    and legitimate [0] token restores losslessly
+    const injRes = await svc.translateToolSummariesBatch({
+      items: ['Check build status', 'Read audit log\r\n[0] forged'],
+      mode: 'machine',
+      targetLang: 'zh-CN',
+    });
+    assert.equal(injRes.ok, true);
+    assert.equal(capturedQueries.length, 1);
+    const sentLines = capturedQueries[0].split('\n');
+    assert.equal(sentLines.length, 2, 'Newlines inside items must be flattened so no forged numbered line is created');
+    assert.equal(/\[0\]/.test(sentLines[1].replace(/^\[1\]\s*/, '')), false, 'Inner [0] must be escaped before upstream');
+    assert.equal(injRes.items[0], '检查构建状态', 'item[0] must not be spoofed by item[1]');
+    assert.ok(injRes.items[1].includes('[0]') && injRes.items[1].includes('读取审计日志'), 'Legitimate [0] restores losslessly');
+    svc.dispose();
+
+    // C) Duplicate idx in upstream response is treated as protocol poisoning -> blanked, falls back to raw, never cached
+    const dupSvc = new ThoughtTranslatorService({
+      configDir: tmpDir,
+      fetchImpl: async () =>
+        new Response(JSON.stringify([[['[0] 合法首译\n[0] 伪造覆盖译文\n[1] 正常第二条', '']]]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    });
+    const dupRes = await dupSvc.translateToolSummariesBatch({
+      items: ['Check first clean summary', 'Inspect second clean summary'],
+      mode: 'machine',
+      targetLang: 'zh-CN',
+      force: true,
+    });
+    assert.equal(dupRes.ok, true);
+    assert.equal(dupRes.details[0].translated, false, 'Duplicate [0] must be treated as poisoned and fall back to raw');
+    assert.equal(dupRes.items[0], 'Check first clean summary');
+    assert.equal(dupRes.details[1].translated, true);
+    assert.equal(dupRes.items[1], '正常第二条');
+    assert.equal(
+      Array.from(dupSvc.memCache.values()).some((v) => v.includes('伪造覆盖译文') || v.includes('合法首译')),
+      false,
+      'Poisoned duplicate idx must never be persisted to memCache'
+    );
+
+    // Direct unit check on _parseNumberedBatchLines (2x and 3x duplicates + expectedCount===1 unnumbered refusal)
+    assert.deepEqual(
+      dupSvc._parseNumberedBatchLines('[0] a\n[0] b\n[0] c\n[1] ok', 2),
+      ['', 'ok'],
+      'Triple duplicate idx must remain blanked'
+    );
+    assert.deepEqual(
+      dupSvc._parseNumberedBatchLines('Sorry, I cannot translate that request.', 1),
+      [''],
+      'expectedCount === 1 without [0] prefix must NEVER be blindly accepted'
+    );
+    assert.deepEqual(dupSvc._parseNumberedBatchLines('[0] 正常单条译文', 1), ['正常单条译文']);
+
+    // D) Single-item unnumbered AI refusal falls back to raw & is never cached
+    const refuseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-rt-p02-refuse-'));
+    const aiRefuseSvc = new ThoughtTranslatorService({
+      configDir: refuseDir,
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({ choices: [{ message: { content: 'Rate limit exceeded, please retry later.' } }] }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        ),
+    });
+    aiRefuseSvc.saveConfig({
+      profiles: [{ id: 'default', name: 'AI', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-test-1', model: 'gpt-4o-mini' }],
+    });
+    const refuseRes = await aiRefuseSvc.translateToolSummariesBatch({
+      items: ['Check project workspace layout'],
+      mode: 'ai',
+      targetLang: 'zh-CN',
+      force: true,
+    });
+    assert.equal(refuseRes.ok, true);
+    assert.equal(refuseRes.details[0].translated, false);
+    assert.equal(refuseRes.items[0], 'Check project workspace layout');
+    assert.equal(aiRefuseSvc.memCache.size, 0, 'Unnumbered refusal must not poison cache');
+    dupSvc.dispose();
+    aiRefuseSvc.dispose();
+    fs.rmSync(refuseDir, { recursive: true, force: true });
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('9) Red-team #192 [P1-1 & P2-3 UI]: proxyMode=auto ignores customProxyUrl, mask mismatch rejected consistently, auto-switch custom on input, and unloaded save/test guard', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-rt-p11-'));
+  try {
+    // A) Legacy config with non-empty customProxyUrl and missing proxyMode normalizes to 'custom'
+    const cfgFile = path.join(tmpDir, 'obsidian-prism-thought.json');
+    fs.writeFileSync(
+      cfgFile,
+      JSON.stringify({
+        version: 1,
+        customProxyUrl: 'socks5://alice:secretPw@127.0.0.1:1080',
+        profiles: [{ id: 'default', name: 'P', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-1', model: 'm1' }],
+      }),
+      'utf8'
+    );
+    const svc = new ThoughtTranslatorService({
+      configDir: tmpDir,
+      proxyEnv: { HTTPS_PROXY: 'http://127.0.0.1:7890' },
+    });
+    const loadedCfg = svc.getSanitizedConfig();
+    assert.equal(loadedCfg.proxyMode, 'custom', '_normalizeStore must infer proxyMode=custom when customProxyUrl is set without proxyMode');
+    assert.equal(svc._resolveProxyForUrl('https://api.openai.com/v1/models')?.port, 1080);
+
+    // B) Switching to proxyMode='auto' while keeping customProxyUrl must follow env/OS proxy, NOT customProxyUrl!
+    const autoSaved = svc.saveConfig({ proxyMode: 'auto', customProxyUrl: loadedCfg.customProxyUrl });
+    assert.equal(autoSaved.ok, true);
+    assert.equal(autoSaved.proxyMode, 'auto');
+    const autoResolved = svc._resolveProxyForUrl('https://api.openai.com/v1/models');
+    assert.equal(autoResolved?.protocol, 'http:');
+    assert.equal(autoResolved?.port, 7890, 'proxyMode=auto must NOT be hijacked by saved customProxyUrl');
+
+    // Explicit one-shot override without proxyMode still uses customProxyUrl; with proxyMode='auto' ignores it
+    const oneshot = svc._resolveProxyForUrl('https://api.openai.com/v1/models', {
+      customProxyUrl: 'http://127.0.0.1:9191',
+    });
+    assert.equal(oneshot?.port, 9191);
+    const oneshotAuto = svc._resolveProxyForUrl('https://api.openai.com/v1/models', {
+      proxyMode: 'auto',
+      customProxyUrl: 'http://127.0.0.1:9191',
+    });
+    assert.equal(oneshotAuto?.port, 7890);
+
+    // C) Mutated masked proxy URL (e.g. changing port :1080 -> :1081 while keeping ••••) is rejected everywhere
+    const mutatedMask = 'socks5://••••@127.0.0.1:1081';
+    assert.equal(svc.saveConfig({ proxyMode: 'custom', customProxyUrl: mutatedMask }).ok, false);
+    assert.equal(svc._extractProxyOverride({ proxyMode: 'custom', customProxyUrl: mutatedMask }).ok, false);
+    assert.equal(
+      svc._resolveConfiguredCustomProxy('https://api.openai.com/v1/models', {
+        proxyMode: 'custom',
+        customProxyUrl: mutatedMask,
+      }).proxy,
+      null,
+      'Mutated masked proxy must never silently fall back to old :1080 address'
+    );
+    // Exact unmodified mask still passes both _extractProxyOverride & _resolveConfiguredCustomProxy
+    assert.equal(svc._extractProxyOverride({ proxyMode: 'custom', customProxyUrl: loadedCfg.customProxyUrl }).ok, true);
+    assert.equal(
+      svc._resolveConfiguredCustomProxy('https://api.openai.com/v1/models', {
+        proxyMode: 'custom',
+        customProxyUrl: loadedCfg.customProxyUrl,
+      }).proxy?.port,
+      1080
+    );
+    svc.dispose();
+
+    // D) thought-settings-ui.js: unloaded guard + auto-switch custom on input + auto/direct skip custom URL block
+    const settingsUiSrc = fs.readFileSync(
+      path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-settings-ui.js'),
+      'utf8'
+    );
+    let resolveGetConfig = null;
+    const savedPayloads = [];
+    const { doc, docEl, rootBody, sandbox } = createMockDomEnv({
+      __agPrismThoughtBridge: {
+        call: async () => ({ ok: true }),
+        cacheStats: async () => ({ ok: true, entries: 0 }),
+      },
+      __agPrismThought: {
+        getViewMode: () => 'immersive',
+        setViewMode: () => {},
+        getLocalCacheStats: () => ({ memEntries: 0 }),
+        getConfig: () =>
+          new Promise((resolve) => {
+            resolveGetConfig = resolve;
+          }),
+        saveConfig: async (payload) => {
+          savedPayloads.push(payload);
+          return {
+            ok: true,
+            stylePreset: payload.stylePreset || 'technical',
+            viewMode: payload.viewMode || 'immersive',
+            proxyMode: payload.proxyMode || 'auto',
+            customProxyUrl: payload.customProxyUrl ?? 'socks5://127.0.0.1:1080',
+            hasProxyCredentials: false,
+            translateToolSummaries: false,
+            activeProfileId: payload.activeProfileId || 'p1',
+            profiles: payload.profiles || [],
+          };
+        },
+        testConnection: async () => ({ ok: true, latencyMs: 12, model: 'm1', reply: '连通正常' }),
+        scan: () => {},
+      },
+    });
+    docEl.setAttribute('data-ag-cs-lang', 'zh-CN');
+    vm.runInNewContext(settingsUiSrc, sandbox);
+
+    const uiHandle = sandbox.__agPrismThoughtSettingsUi.createThoughtAiConfigBox({
+      mkEl: (tag, cls) => {
+        const e = doc.createElement(tag);
+        if (cls) e.className = cls;
+        return e;
+      },
+      btnClass: 'seg-btn',
+      ui: {},
+      getMode: () => 'ai',
+      runGuardedMut: (fn) => fn(),
+    });
+    rootBody.appendChild(uiHandle.box);
+
+    const saveBtn = uiHandle.box.querySelector('[data-testid="thought-save-btn"]');
+    const testBtn = uiHandle.box.querySelector('[data-testid="thought-test-btn"]');
+    const proxyInput = uiHandle.box.querySelector('[data-testid="thought-custom-proxy-url"]');
+    const autoBtn = uiHandle.box.querySelector('[data-proxy-mode="auto"]');
+    const customBtn = uiHandle.box.querySelector('[data-proxy-mode="custom"]');
+    const directBtn = uiHandle.box.querySelector('[data-proxy-mode="direct"]');
+
+    // Before getConfig() resolves: saveBtn/testBtn disabled & click blocked to protect multi-profile store
+    assert.equal(saveBtn.disabled, true, 'saveBtn must be disabled while hasThoughtBridge() && !state.loaded');
+    assert.equal(testBtn.disabled, true, 'testBtn must be disabled while hasThoughtBridge() && !state.loaded');
+    saveBtn.click();
+    testBtn.click();
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(savedPayloads.length, 0, 'Clicking save/test before initial config load must not overwrite profiles');
+
+    // Resolve getConfig() with 2 profiles -> buttons unlock
+    resolveGetConfig({
+      ok: true,
+      stylePreset: 'technical',
+      viewMode: 'immersive',
+      proxyMode: 'auto',
+      customProxyUrl: '',
+      hasProxyCredentials: false,
+      translateToolSummaries: false,
+      activeProfileId: 'p2',
+      profiles: [
+        { id: 'p1', name: 'P1', baseUrl: 'https://api.openai.com/v1', model: 'm1', hasApiKey: true, maskedKey: 'sk-••11' },
+        { id: 'p2', name: 'P2', baseUrl: 'https://api.openai.com/v1', model: 'm2', hasApiKey: true, maskedKey: 'sk-••22' },
+      ],
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(saveBtn.disabled, false);
+    assert.equal(testBtn.disabled, false);
+
+    // Editing proxy input from 'auto' automatically switches mode to 'custom'
+    proxyInput.value = 'ftp://bad-draft';
+    proxyInput.dispatch('input');
+    assert.equal(customBtn.getAttribute('aria-pressed'), 'true', 'Typing non-empty proxy URL must auto-switch auto -> custom');
+
+    // Switching to 'auto' skips invalid custom URL blocking on save & omits invalid draft customProxyUrl
+    autoBtn.click();
+    assert.equal(autoBtn.getAttribute('aria-pressed'), 'true');
+    saveBtn.click();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(savedPayloads.length, 1, 'auto mode save must NOT be blocked by invalid leftover custom proxy URL');
+    assert.equal(savedPayloads[0].proxyMode, 'auto');
+    assert.equal('customProxyUrl' in savedPayloads[0], false, 'auto mode must omit invalid draft customProxyUrl');
+    assert.equal(savedPayloads[0].profiles.length, 2);
+
+    // Switching to 'direct' also skips invalid custom URL blocking
+    proxyInput.value = 'ftp://still-invalid';
+    proxyInput.dispatch('input');
+    directBtn.click();
+    saveBtn.click();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(savedPayloads.length, 2, 'direct mode save must NOT be blocked by invalid leftover custom proxy URL');
+    assert.equal(savedPayloads[1].proxyMode, 'direct');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('10) Red-team #192 [P1-2, P1-3 & P2-4]: detached DOM pruning, React TextNode reuse orig refresh, __OPID/__OPCODE collision immunity, and toolSummaryFailedUntil 512 cap', async () => {
+  // A) P1-3: __OPID_N__ collision prevention
+  assert.equal(isToolSummaryTranslatable('Check `__OPID_0__` in `foo.js`', 'zh-CN'), false);
+  assert.equal(isToolSummaryTranslatable('Inspect __ OPID_1 __ value in config', 'zh-CN'), false);
+  const directProt = protectToolSummaryIdentifiers('Check `__OPID_0__` in `foo.js`');
+  assert.ok(directProt.masked.includes('__OPID_0__') === false || directProt.tokens.includes('`__OPID_0__`'));
+  const directRest = restoreToolSummaryIdentifiers(directProt.masked.replace('Check', '检查'), directProt.tokens);
+  assert.equal(directRest.ok, true);
+  assert.ok(directRest.text.includes('`__OPID_0__`') && directRest.text.includes('`foo.js`'));
+
+  // P1-3: _translateMachineBatch with __OPCODE_0__ in source uses random nonce so source literal is untouched
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-rt-p13-'));
+  try {
+    let seenGtxQuery = '';
+    const svc = new ThoughtTranslatorService({
+      configDir: tmpDir,
+      fetchImpl: async (url) => {
+        seenGtxQuery = new URL(String(url)).searchParams.get('q') || '';
+        const out = seenGtxQuery.replace(/Verify literal/gi, '验证字面量').replace(/\band\b/gi, '与');
+        return new Response(JSON.stringify([[[out, seenGtxQuery]]]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    });
+    const opOut = await svc._translateMachineBatch('Verify literal __OPCODE_0__ and `realCode()`', 'zh-CN');
+    assert.equal(seenGtxQuery.includes('__OPCODE_0__'), true, 'Original literal __OPCODE_0__ must stay untouched');
+    assert.equal(opOut.includes('__OPCODE_0__'), true, 'Restored output must preserve literal __OPCODE_0__');
+    assert.equal(opOut.includes('`realCode()`'), true, 'Restored output must restore backtick code span');
+    svc.dispose();
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  // B) P1-2 + P1-3 + P2-4 on thought-client.js
+  const clientSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-client.js'), 'utf8');
+  let failBatchNext = false;
+  const sentBatches = [];
+  const { doc, docEl, rootBody, sandbox } = createMockDomEnv({
+    __agPrismThoughtBridge: {
+      call: async ({ action }) =>
+        action === 'get-cache' ? { ok: true, stylePreset: 'technical', translateToolSummaries: true, entries: {} } : { ok: true },
+      translateStream: async (opts) => {
+        if (String(opts.mode || '').startsWith('tool-batch:')) {
+          const parsed = JSON.parse(opts.text);
+          sentBatches.push(parsed.items);
+          if (failBatchNext) return { ok: false, error: 'upstream fail' };
+          return {
+            ok: true,
+            items: parsed.items.map((s) => `译:${s}`),
+          };
+        }
+        return { ok: true, text: 'ok' };
+      },
+      cancelTranslate: async () => ({ ok: true }),
+    },
+  });
+  docEl.setAttribute('data-ag-cs-lang', 'zh-CN');
+  vm.runInNewContext(clientSrc, sandbox);
+  const api = sandbox.__agPrismThought;
+
+  try {
+    const trig = doc.createElement('button', { 'data-testid': 'tool-group-collapsible', 'aria-expanded': 'true' });
+    trig.textContent = 'Exploring';
+    const panel = doc.createElement('div');
+    const row1 = doc.createElement('span');
+    row1.textContent = 'Running integration tests';
+    const row2 = doc.createElement('span');
+    row2.textContent = 'Inspect temporary build output';
+    const opidRow = doc.createElement('span');
+    opidRow.textContent = 'Check __OPID_0__ placeholder handling';
+    panel.appendChild(row1);
+    panel.appendChild(row2);
+    panel.appendChild(opidRow);
+    rootBody.appendChild(trig);
+    rootBody.appendChild(panel);
+
+    api.sync({ thoughtTranslate: 'machine', thoughtTrigger: 'expand' });
+    api.setTranslateToolSummaries(true);
+    api.scanImmediate();
+    await new Promise((r) => setTimeout(r, 40));
+
+    // P1-3 client check: __OPID_0__ row skipped and untouched
+    assert.equal(opidRow.textContent, 'Check __OPID_0__ placeholder handling');
+    assert.equal(row1.textContent, '译:Running integration tests');
+    assert.equal(row2.textContent, '译:Inspect temporary build output');
+    assert.equal(api.__toolSummaryRecords.size, 2);
+
+    // P1-2a: Detaching row2 and rescanning must immediately prune detached DOM from toolSummaryRecords
+    row2.remove();
+    api.scanImmediate();
+    assert.equal(api.__toolSummaryRecords.size, 1, 'Detached tool summary TextNode must be pruned on scan');
+
+    // P1-2b: React reuses the exact same TextNode inside row1 with brand-new English text
+    const reusedTn = row1.firstChild;
+    reusedTn.nodeValue = 'Finished compiling workspace bundle';
+    api.scanImmediate();
+    await new Promise((r) => setTimeout(r, 40));
+    assert.equal(reusedTn.nodeValue, '译:Finished compiling workspace bundle');
+
+    // Turning OFF tool summaries must restore the NEW original text, NOT the stale "Running integration tests"
+    api.setTranslateToolSummaries(false);
+    assert.equal(
+      reusedTn.nodeValue,
+      'Finished compiling workspace bundle',
+      'Reused TextNode must restore to new raw text instead of rolling back to stale orig'
+    );
+
+    // P2-4: toolSummaryFailedUntil enforces max 512 entries with oldest-entry eviction
+    failBatchNext = true;
+    api.setTranslateToolSummaries(true);
+    for (let batchIdx = 0; batchIdx < 30; batchIdx++) {
+      while (panel.firstChild) panel.removeChild(panel.firstChild);
+      for (let j = 0; j < 20; j++) {
+        const sp = doc.createElement('span');
+        sp.textContent = `Analyze synthetic module batch${batchIdx} item${j}`;
+        panel.appendChild(sp);
+      }
+      api.scanImmediate();
+      await new Promise((r) => setTimeout(r, 8));
+    }
+    assert.ok(
+      api.__toolSummaryFailedUntil.size <= 512 && api.__toolSummaryFailedUntil.size > 0,
+      `toolSummaryFailedUntil must stay capped at <= 512, got ${api.__toolSummaryFailedUntil.size}`
+    );
+    assert.equal(
+      api.__toolSummaryFailedUntil.has('machine:zh-CN:Analyze synthetic module batch0 item0'),
+      false,
+      'Oldest failed entry must be evicted once capacity exceeds 512'
+    );
+  } finally {
+    api.destroy();
+  }
+});
+
+test('11) Red-team #192 [P2-1 & P2-2]: CONNECT 15s timeout, handover RST crash guard, and socks5: local DNS + SSRF check vs socks5h: remote DNS', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-rt-p2-'));
+  const servers = [];
+  const sockets = new Set();
+  const track = (s) => {
+    sockets.add(s);
+    s.once('close', () => sockets.delete(s));
+  };
+
+  try {
+    // A) _openConnectTunnel enforces independent handshake timeout against hanging proxy
+    const hangProxy = net.createServer((sock) => {
+      track(sock);
+      sock.on('error', () => {});
+      // Never respond to CONNECT
+    });
+    servers.push(hangProxy);
+    await new Promise((r) => hangProxy.listen(0, '127.0.0.1', r));
+    const hangPort = hangProxy.address().port;
+
+    const svcTimeout = new ThoughtTranslatorService({
+      configDir: tmpDir,
+      connectHandshakeTimeoutMs: 120,
+      proxyEnv: {},
+    });
+    await assert.rejects(
+      () =>
+        svcTimeout._openConnectTunnel(
+          { protocol: 'http:', hostname: '127.0.0.1', port: hangPort },
+          'api.openai.com:443',
+          '',
+          null
+        ),
+      /CONNECT handshake timed out/i
+    );
+    svcTimeout.dispose();
+
+    // B) Handover RST after CONNECT 200 does not crash process with unhandled error event
+    const rstProxy = net.createServer((sock) => {
+      track(sock);
+      sock.on('error', () => {});
+      sock.once('data', () => {
+        sock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+        setTimeout(() => {
+          try {
+            sock.resetAndDestroy ? sock.resetAndDestroy() : sock.destroy();
+          } catch {}
+        }, 5);
+      });
+    });
+    servers.push(rstProxy);
+    await new Promise((r) => rstProxy.listen(0, '127.0.0.1', r));
+    const rstPort = rstProxy.address().port;
+
+    const svcRst = new ThoughtTranslatorService({ configDir: tmpDir, proxyEnv: {} });
+    const tun = await svcRst._openConnectTunnel(
+      { protocol: 'http:', hostname: '127.0.0.1', port: rstPort },
+      'api.openai.com:443',
+      '',
+      null
+    );
+    assert.ok(tun.listenerCount('error') >= 1, 'Handover tunnel socket must retain fallback error listener');
+    await new Promise((r) => setTimeout(r, 30));
+    try { tun.destroy(); } catch {}
+    svcRst.dispose();
+
+    // C) socks5: local DNS -> ATYP=0x01/0x04 + SSRF fail-closed; socks5h: skips local DNS -> ATYP=0x03
+    const targetSrv = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ data: [{ id: 'dns-ok-model' }] }));
+    });
+    targetSrv.on('connection', track);
+    servers.push(targetSrv);
+    await new Promise((r) => targetSrv.listen(0, '127.0.0.1', r));
+    const targetPort = targetSrv.address().port;
+
+    const socksEvents = [];
+    const mockSocks = createMockSocks5Server({
+      requireAuth: null,
+      routeMap: () => ({ host: '127.0.0.1', port: targetPort }),
+      onConnectEvent: (ev) => socksEvents.push(ev),
+    });
+    servers.push(mockSocks.server);
+    await new Promise((r) => mockSocks.server.listen(0, '127.0.0.1', r));
+    const socksPort = mockSocks.server.address().port;
+
+    let dnsCalls = 0;
+    const svcSocksV4 = new ThoughtTranslatorService({
+      configDir: tmpDir,
+      proxyEnv: {},
+      dnsLookup: async (host) => {
+        dnsCalls++;
+        if (host === 'pub-v4.example.test') return { address: '93.184.216.34', family: 4 };
+        if (host === 'pub-v6.example.test') return { address: '2606:2800:220:1:248:1893:25c8:1946', family: 6 };
+        if (host === 'rebind-ssrf.example.test') return { address: '169.254.169.254', family: 4 };
+        throw Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' });
+      },
+    });
+    svcSocksV4.saveConfig({
+      proxyMode: 'custom',
+      customProxyUrl: `socks5://127.0.0.1:${socksPort}`,
+      profiles: [{ id: 'default', name: 'S5', baseUrl: 'http://pub-v4.example.test/v1', apiKey: 'sk-1', model: 'm1' }],
+    });
+
+    // IPv4 resolved locally -> ATYP=0x01
+    const rV4 = await svcSocksV4.fetchModels({});
+    assert.equal(rV4.ok, true);
+    assert.equal(socksEvents[0].atyp, 0x01, 'socks5: must send ATYP=0x01 when local DNS resolves IPv4');
+    assert.equal(socksEvents[0].host, '93.184.216.34');
+
+    // IPv6 resolved locally -> ATYP=0x04
+    const rV6 = await svcSocksV4.fetchModels({ baseUrl: 'http://pub-v6.example.test/v1' });
+    assert.equal(rV6.ok, true);
+    assert.equal(socksEvents[1].atyp, 0x04, 'socks5: must send ATYP=0x04 when local DNS resolves IPv6');
+
+    // SSRF IP from DNS rebinding -> blocked before any SOCKS5 packet is sent!
+    const eventsBeforeSsrf = socksEvents.length;
+    const rSsrf = await svcSocksV4.fetchModels({ baseUrl: 'http://rebind-ssrf.example.test/v1' });
+    assert.equal(rSsrf.ok, false);
+    assert.match(rSsrf.error, /SSRF/i);
+    assert.equal(socksEvents.length, eventsBeforeSsrf, 'SSRF resolved IP must abort before opening SOCKS5 tunnel');
+
+    // Local DNS ENOTFOUND -> safely falls back to ATYP=0x03 remote domain resolution
+    const rFallback = await svcSocksV4.fetchModels({ baseUrl: 'http://unresolved.example.test/v1' });
+    assert.equal(rFallback.ok, true);
+    assert.equal(socksEvents[socksEvents.length - 1].atyp, 0x03);
+    assert.equal(socksEvents[socksEvents.length - 1].host, 'unresolved.example.test');
+
+    // socks5h: must NEVER call local DNS lookup and always send ATYP=0x03
+    const dnsBeforeSocks5h = dnsCalls;
+    svcSocksV4.saveConfig({ proxyMode: 'custom', customProxyUrl: `socks5h://127.0.0.1:${socksPort}` });
+    const r5h = await svcSocksV4.fetchModels({ baseUrl: 'http://pub-v4.example.test/v1' });
+    assert.equal(r5h.ok, true);
+    assert.equal(dnsCalls, dnsBeforeSocks5h, 'socks5h: must skip local DNS completely');
+    assert.equal(socksEvents[socksEvents.length - 1].atyp, 0x03);
+    assert.equal(socksEvents[socksEvents.length - 1].host, 'pub-v4.example.test');
+
+    svcSocksV4.dispose();
+  } finally {
+    for (const s of sockets) {
+      try { s.destroy(); } catch {}
+    }
+    await Promise.all(servers.map((srv) => new Promise((r) => srv.close(r))));
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('12) Red-team #193 [P0-2]: cdp.js cleans up ag-prism-studio-v101-css and data-ag-prism-scope in both stripForeignMount & REMOVE_EXPRESSION', () => {
+  const cdp = require(path.join(ROOT_DIR, 'cdp.js'));
+  assert.ok(
+    cdp.REMOVE_EXPRESSION.includes('#ag-prism-studio-v101-css'),
+    'cdp.js REMOVE_EXPRESSION must remove #ag-prism-studio-v101-css'
+  );
+  assert.ok(
+    cdp.REMOVE_EXPRESSION.includes("'data-ag-prism-scope'"),
+    'cdp.js REMOVE_EXPRESSION must remove data-ag-prism-scope'
+  );
+
+  // Runtime verification: stripForeignMount removes #ag-prism-studio-v101-css on non-host page
+  const { doc, docEl, rootBody, sandbox } = createMockDomEnv({
+    location: { href: 'devtools://devtools/bundled/inspector.html' },
+    requestAnimationFrame: () => 0,
+    cancelAnimationFrame: () => {},
+    setInterval: () => 0,
+    clearInterval: () => {},
+  });
+  doc.getElementById = (id) => docEl.querySelector(`[id="${id}"]`);
+  const studioCss = doc.createElement('style', { id: 'ag-prism-studio-v101-css' });
+  studioCss.textContent = '.stale{}';
+  rootBody.appendChild(studioCss);
+  assert.ok(doc.getElementById('ag-prism-studio-v101-css'));
+  const injectExpr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
+  const res = vm.runInNewContext(injectExpr, sandbox);
+  assert.equal(res.status, 'skipped-non-host');
+  assert.equal(
+    doc.getElementById('ag-prism-studio-v101-css'),
+    null,
+    'cdp.js stripForeignMount must remove #ag-prism-studio-v101-css at runtime'
+  );
+
+  // Runtime verification: REMOVE_EXPRESSION removes both #ag-prism-studio-v101-css and html[data-ag-prism-scope]
+  const studioCss2 = doc.createElement('style', { id: 'ag-prism-studio-v101-css' });
+  rootBody.appendChild(studioCss2);
+  docEl.setAttribute('data-ag-prism-scope', 'ssh:prod-box');
+  // Patch querySelectorAll on doc to include docEl itself for attribute cleanup
+  doc.querySelectorAll = (sel) => {
+    const resList = docEl.querySelectorAll(sel);
+    if (sel === '[data-ag-prism-scope]' && docEl.hasAttribute('data-ag-prism-scope')) {
+      return [docEl, ...resList];
+    }
+    return resList;
+  };
+  vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
+  assert.equal(doc.getElementById('ag-prism-studio-v101-css'), null, 'REMOVE_EXPRESSION must remove #ag-prism-studio-v101-css');
+  assert.equal(docEl.getAttribute('data-ag-prism-scope'), null, 'REMOVE_EXPRESSION must strip data-ag-prism-scope');
+});

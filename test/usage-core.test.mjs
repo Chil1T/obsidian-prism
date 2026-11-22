@@ -1039,6 +1039,17 @@ function createMockStudioDom(initialTitle = 'obsidian-prism — Antigravity') {
       return child;
     }
     matches(sel) {
+      const parts = String(sel || '').trim().split(/\s+/);
+      if (parts.length > 1) {
+        if (!this.matches(parts[parts.length - 1])) return false;
+        let cur = this.parentElement;
+        for (let i = parts.length - 2; i >= 0; i--) {
+          while (cur && !cur.matches(parts[i])) cur = cur.parentElement;
+          if (!cur) return false;
+          cur = cur.parentElement;
+        }
+        return true;
+      }
       if (sel.startsWith('.')) return this.className.split(/\s+/).includes(sel.slice(1));
       const attrEq = sel.match(/^\[([^=\]]+)="([^"]*)"\]$/);
       if (attrEq) return this.getAttribute(attrEq[1]) === attrEq[2];
@@ -1485,8 +1496,21 @@ test('PR #22 edge fixes: offline/0-session exits skeleton within bounded wait an
     const afterOffline = JSON.parse(storeMem.get('test:pr22:bigConv') || '{}')['big-conv-1'];
     assert.equal(afterOffline.calls, 12, 'Existing real call count must be preserved when offline skips >240-step conversation');
     assert.equal(afterOffline.days[dKey].total, 98000, 'Existing real token total must NEVER be overwritten with 0');
-    assert.equal(afterOffline.stepCount, 250, 'Cursor must not advance past un-fetched steps during offline skip');
+    assert.equal(afterOffline.stepCount, 265, 'Cursor must advance stepCount during offline skip to prevent repeated spin/write storms');
+    assert.equal(afterOffline.lastModifiedSec, 1763400200, 'Cursor must advance lastModifiedSec during offline skip');
     assert.equal(afterOffline._do, 1, 'Deferred offline flag must be set to guarantee future backfill');
+
+    // Subsequent offline pass with unchanged steps must NOT re-write localStorage in a spin loop
+    let offlineWrites = 0;
+    const origSetItem = globalThis.localStorage.setItem;
+    globalThis.localStorage.setItem = (k, v) => { offlineWrites += 1; origSetItem(k, v); };
+    try {
+      await ctlB.refreshUsageRollup(false);
+      await new Promise((r) => setTimeout(r, 30));
+    } finally {
+      globalThis.localStorage.setItem = origSetItem;
+    }
+    assert.equal(offlineWrites, 0, 'Offline refresh must not spin-write localStorage for unchanged >240-step conversation');
 
     // Once bridge comes back online, big-conv-1 auto-backfills via fetchBatch and clears _do
     online = true;
@@ -1934,6 +1958,517 @@ test('Todo 3: Frontend home-studio-panel namespaces localStorage by scopeKey and
     const panelSrc = fs.readFileSync(new URL('../home-studio-panel.js', import.meta.url), 'utf8');
     const badgeLine = panelSrc.split('\n').find((l) => l.includes('ag-cs-home-scope-badge') && l.includes('markNoTr'));
     assert.ok(badgeLine && !badgeLine.includes('innerHTML'), 'Scope badge must be built via pure DOM textContent with 0 innerHTML');
+  } finally {
+    if (prevWin === undefined) delete globalThis.window;
+    else globalThis.window = prevWin;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevStorage;
+  }
+});
+
+test('Redteam #192 [P0-1 & P2-4]: unverified SSH window bypasses local HTTP LS, AntigravityClient isolates concurrent scopes, MetricsStore pins local, and >4MB cache evicts oldest scope', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { AsyncLocalStorage } = await import('node:async_hooks');
+  const { fileURLToPath } = await import('node:url');
+  const { PrismDaemon } = await import('../sidecars/daemon/main.mjs');
+  const { AntigravityClient } = await import('../vendor/pulse-dashboard/sidecars/panel/client.mjs');
+
+  const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-rt192-'));
+  const cacheFile = path.join(tmpBase, 'usage-cache.json');
+  const localCid = '44444444-4444-4444-8444-444444444401';
+  const sshCid = '44444444-4444-4444-8444-444444444402';
+  const sharedCid = '44444444-4444-4444-8444-444444444499';
+  const dSec = 1763400500;
+
+  const makeEntry = (pageId, title, url, rpcHandler) => {
+    const responses = [];
+    return {
+      pageId,
+      wsUrl: `ws://127.0.0.1:9222/devtools/page/${pageId}`,
+      title,
+      url,
+      mainFrameId: `f-${pageId}`,
+      contextFrames: new Map([[1, { frameId: `f-${pageId}`, isDefault: true, type: 'default' }]]),
+      detectedScopeKey: '',
+      _usageScopeVerified: false,
+      responses,
+      session: {
+        closed: false,
+        evaluate: async (expr) => {
+          const m = String(expr || '').match(/\}\)\((\{[\s\S]*\})\)\s*$/);
+          if (!m) return null;
+          const p = JSON.parse(m[1]);
+          return await rpcHandler(p.method, p);
+        },
+        send: async (method, params) => {
+          if (method === 'Runtime.evaluate') {
+            const rm = String(params?.expression || '').match(/__agPrismUsageResolve\((\d+),\s*(\{[\s\S]*\})\)/);
+            if (rm) responses.push({ id: Number(rm[1]), payload: JSON.parse(rm[2]) });
+          }
+          return { result: { value: true } };
+        },
+      },
+    };
+  };
+
+  try {
+    // 1) Title-less unverified Remote-SSH window while local HTTP LS is active must NEVER hit ensureLsClient() or localEntry!
+    let localHttpLsCalls = 0;
+    let localEntryRpcCalls = 0;
+    let hiddenSshRpcCalls = 0;
+    let localDiskScanCalls = 0;
+    let hiddenShouldFail = false;
+
+    const localEntry = makeEntry(
+      'page-local',
+      'obsidian-prism — Antigravity',
+      'vscode-file://vscode-app/workbench.html',
+      async (method) => {
+        localEntryRpcCalls += 1;
+        if (method === 'GetAllCascadeTrajectories') {
+          return {
+            ok: true,
+            data: {
+              trajectorySummaries: {
+                [localCid]: {
+                  stepCount: 4,
+                  lastModifiedTime: { seconds: String(dSec) },
+                  workspaces: [{ workspaceFolderAbsoluteUri: 'file:///c:/proj/local-app' }],
+                },
+              },
+            },
+          };
+        }
+        return { ok: false, error: 'local-only' };
+      }
+    );
+
+    const hiddenSshEntry = makeEntry(
+      'page-ssh-first',
+      'Antigravity',
+      'vscode-file://vscode-app/workbench.html',
+      async (method) => {
+        hiddenSshRpcCalls += 1;
+        if (hiddenShouldFail) return { ok: false, error: 'renderer_ls_unavailable' };
+        if (method === 'GetAllCascadeTrajectories') {
+          return {
+            ok: true,
+            data: {
+              scopeHint: 'ssh:gpu-node-9',
+              trajectorySummaries: {
+                [sshCid]: {
+                  stepCount: 9,
+                  lastModifiedTime: { seconds: String(dSec) },
+                  workspaces: [{ workspaceFolderAbsoluteUri: 'vscode-remote://ssh-remote+gpu-node-9/srv/ml' }],
+                },
+              },
+            },
+          };
+        }
+        return { ok: false, error: 'not-found' };
+      }
+    );
+
+    const daemon = new PrismDaemon({ rootDir: repoRoot, usageCachePath: cacheFile, silent: true });
+    daemon.sessions.set(localEntry.wsUrl, localEntry);
+    daemon.sessions.set(hiddenSshEntry.wsUrl, hiddenSshEntry);
+    daemon._discoverLocalAppConversations = async () => {
+      localDiskScanCalls += 1;
+      return { conversations: [{ id: '44444444-4444-4444-8444-444444444488', mtimeMs: dSec * 1000 }] };
+    };
+    daemon._lazyLsClient = {
+      server: { port: 51234, csrf: 'local-csrf', mode: 'http' },
+      call: async () => {
+        localHttpLsCalls += 1;
+        return {
+          trajectorySummaries: {
+            [localCid]: {
+              stepCount: 4,
+              lastModifiedTime: { seconds: String(dSec) },
+              workspaces: [{ workspaceFolderAbsoluteUri: 'file:///c:/proj/local-app' }],
+            },
+          },
+        };
+      },
+    };
+
+    // 1a) Even when unverified SSH renderer temporarily fails, must fail closed and NEVER fall back to localEntry or local HTTP LS
+    hiddenShouldFail = true;
+    await daemon.handleBindingCall(hiddenSshEntry, {
+      name: '__agPrismUsageCall',
+      payload: JSON.stringify({ id: 101, action: 'list-summaries' }),
+      executionContextId: 1,
+    });
+    assert.equal(localHttpLsCalls, 0, 'Unverified window must NEVER bypass renderer to hit local HTTP LS');
+    assert.equal(localEntryRpcCalls, 0, 'Unverified SSH probe failure must NEVER fall back to localEntry');
+    assert.equal(localDiskScanCalls, 0, 'Unverified failed probe must NEVER scan local disk');
+    assert.equal(hiddenSshEntry._usageScopeVerified, false);
+
+    // 1b) Once SSH renderer responds, scope calibrates to ssh:gpu-node-9 with 0 local LS or local disk touches
+    hiddenShouldFail = false;
+    await daemon.handleBindingCall(hiddenSshEntry, {
+      name: '__agPrismUsageCall',
+      payload: JSON.stringify({ id: 102, action: 'list-summaries' }),
+      executionContextId: 1,
+    });
+    const calibrated = hiddenSshEntry.responses[hiddenSshEntry.responses.length - 1].payload;
+    assert.equal(calibrated.ok, true);
+    assert.equal(calibrated.scopeKey, 'ssh:gpu-node-9');
+    assert.deepEqual(calibrated.summaries.map((s) => s.id), [sshCid]);
+    assert.equal(localHttpLsCalls, 0, 'First calibrated SSH packet must make 0 calls to local HTTP ensureLsClient()');
+    assert.equal(localEntryRpcCalls, 0, 'First calibrated SSH packet must make 0 RPCs to localEntry');
+    assert.equal(localDiskScanCalls, 0, 'Calibrated SSH scope must make 0 local disk scan calls');
+    assert.equal(hiddenSshEntry.detectedScopeKey, 'ssh:gpu-node-9');
+    assert.equal(hiddenSshEntry._usageScopeVerified, true);
+    assert.ok(hiddenSshRpcCalls >= 2);
+
+    // 2) AntigravityClient isolates concurrent multi-scope discover() & _proxyTrajInFlight/_proxyTrajCache
+    const scopeAls = new AsyncLocalStorage();
+    let procScans = 0;
+    const probeScopes = [];
+    const trajScopes = [];
+    const sharedClient = new AntigravityClient({
+      processes: async () => {
+        procScans += 1;
+        return [];
+      },
+      scopeResolver: () => scopeAls.getStore() || 'local',
+      rendererRpc: async (method, body) => {
+        const cur = scopeAls.getStore() || 'local';
+        await new Promise((r) => setTimeout(r, 15));
+        if (method === 'Probe') {
+          probeScopes.push(cur);
+          return { available: true };
+        }
+        if (method === 'GetCascadeTrajectory') {
+          trajScopes.push({ scope: cur, id: body.cascadeId });
+          return { status: 'IDLE', numTotalSteps: 1, trajectory: { cascadeId: body.cascadeId, steps: [], generatorMetadata: [], _tag: cur } };
+        }
+        return {};
+      },
+    });
+    try {
+      const [trajA, trajB] = await Promise.all([
+        scopeAls.run('ssh:host-a', () => sharedClient.trajectory(sharedCid)),
+        scopeAls.run('ssh:host-b', () => sharedClient.trajectory(sharedCid)),
+      ]);
+      assert.equal(procScans, 0, 'Scoped remote discover() must never scan local processes');
+      assert.deepEqual(probeScopes.slice().sort(), ['ssh:host-a', 'ssh:host-b'], 'Concurrent discover() must not coalesce across different scopes');
+      assert.equal(trajScopes.length, 2, 'Concurrent _proxyTrajInFlight must not coalesce same cascadeId across different scopes');
+      assert.equal(trajA.trajectory._tag, 'ssh:host-a');
+      assert.equal(trajB.trajectory._tag, 'ssh:host-b');
+      // Cached hit must also stay isolated per scope
+      const cachedA = await scopeAls.run('ssh:host-a', () => sharedClient.trajectory(sharedCid));
+      const cachedB = await scopeAls.run('ssh:host-b', () => sharedClient.trajectory(sharedCid));
+      assert.equal(cachedA.trajectory._tag, 'ssh:host-a');
+      assert.equal(cachedB.trajectory._tag, 'ssh:host-b');
+      assert.equal(trajScopes.length, 2, 'Per-scope proxy cache hits must not cross-serve');
+    } finally {
+      sharedClient.dispose();
+    }
+
+    // 3) ensureMetricsCollector rendererRpc pins { scopeKey: 'local' } so SSH-only session is never scraped into local telemetryDataDir
+    const sshOnlyDaemon = new PrismDaemon({ rootDir: repoRoot, usageCachePath: cacheFile, silent: true });
+    let explicitSshScrapes = 0;
+    const onlySshEntry = makeEntry(
+      'page-only-ssh',
+      'ml [SSH: remote-only] — Antigravity',
+      'vscode-file://vscode-app/workbench.html?remoteAuthority=ssh-remote%2Bremote-only',
+      async () => {
+        explicitSshScrapes += 1;
+        return { ok: true, data: { available: true } };
+      }
+    );
+    const hiddenOnlySshEntry = makeEntry(
+      'page-only-hidden-ssh',
+      'Antigravity',
+      'vscode-file://vscode-app/workbench.html',
+      async (method) => {
+        if (method === 'GetAllCascadeTrajectories') {
+          return {
+            ok: true,
+            data: {
+              trajectorySummaries: {
+                [sshCid]: {
+                  stepCount: 3,
+                  lastModifiedTime: { seconds: String(dSec) },
+                  workspaces: [{ workspaceFolderAbsoluteUri: 'vscode-remote://ssh-remote+stealth/srv/app' }],
+                },
+              },
+            },
+          };
+        }
+        return { ok: false, error: 'unavail' };
+      }
+    );
+    sshOnlyDaemon.sessions.set(onlySshEntry.wsUrl, onlySshEntry);
+    await sshOnlyDaemon.ensureMetricsCollector();
+    try {
+      await assert.rejects(
+        () => sshOnlyDaemon._lazyStore.client.rendererRpc('Probe', {}),
+        /等待 Antigravity 主窗口连接/,
+        'MetricsStore local-pinned rendererRpc must reject when only SSH window is open'
+      );
+      assert.equal(explicitSshScrapes, 0, 'MetricsStore must make 0 RPCs to SSH window');
+
+      // Even if a title-less hidden SSH window is the only session, local-pinned GetAllCascadeTrajectories must reject remote summaries
+      sshOnlyDaemon.sessions.set(hiddenOnlySshEntry.wsUrl, hiddenOnlySshEntry);
+      await assert.rejects(
+        () => sshOnlyDaemon._lazyStore.client.rendererRpc('GetAllCascadeTrajectories', {}),
+        /renderer_scope_mismatch/,
+        'Local-pinned MetricsStore must reject remote summaries from an unlabelled SSH window'
+      );
+      assert.equal(hiddenOnlySshEntry.detectedScopeKey, 'ssh:stealth');
+    } finally {
+      sshOnlyDaemon._lazyStore?.dispose?.();
+    }
+
+    // 4) [P2-4] _flushUsageDiskCache >4MB deadlock guard evicts oldest scope's single oversized record instead of dropping flush
+    const bigCacheFile = path.join(tmpBase, 'big-4mb-cache.json');
+    const daemonBig = new PrismDaemon({ rootDir: repoRoot, usageCachePath: bigCacheFile, silent: true });
+    const hugeStr = 'x'.repeat(4 * 1024 * 1024 + 4096);
+    daemonBig._putUsageDiskCache(
+      sshCid,
+      5,
+      1700000100,
+      { cascadeId: sshCid, stepCount: 5, lastModifiedSec: 1700000100, calls: 1, days: { '2026-11-18': { calls: 1, total: 100, blob: hugeStr } } },
+      'ssh:old-oversized'
+    );
+    daemonBig._putUsageDiskCache(
+      localCid,
+      6,
+      1700000900,
+      { cascadeId: localCid, stepCount: 6, lastModifiedSec: 1700000900, calls: 2, days: { '2026-11-18': { calls: 2, total: 5000 } } },
+      'local'
+    );
+    daemonBig._flushUsageDiskCache();
+    assert.equal(fs.existsSync(bigCacheFile), true, '>4MB single-entry scope must evict oldest scope instead of aborting flush');
+    const rawSaved = fs.readFileSync(bigCacheFile, 'utf8');
+    assert.ok(Buffer.byteLength(rawSaved, 'utf8') <= 4 * 1024 * 1024, 'Flushed cache must stay strictly <= 4MB');
+    const parsedSaved = JSON.parse(rawSaved);
+    assert.equal(parsedSaved.scopes['ssh:old-oversized'], undefined, 'Oldest oversized scope entry must be evicted');
+    assert.ok(parsedSaved.scopes.local[localCid], 'Newer normal local record must survive flush intact');
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+});
+
+test('Redteam #193 [P0-2, P1-3, P2-1]: style hot-upgrade overwrite, data-ag-prism-scope unlock, canPrune tightening, fetchBatch catch exit, ja punctuation & null body guard', async () => {
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevStorage = globalThis.localStorage;
+  const storeMem = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+    setItem: (k, v) => { storeMem.set(k, String(v)); },
+    removeItem: (k) => { storeMem.delete(k); },
+  };
+  const dKey = usageCore.homeDayKey(new Date(1763400600 * 1000));
+  const makeRec = (id, total) => ({
+    cascadeId: id,
+    stepCount: 5,
+    lastModifiedSec: 1763400600,
+    gmCount: 2,
+    subagent: false,
+    workspace: 'proj',
+    parentId: '',
+    calls: 2,
+    days: {
+      [dKey]: {
+        calls: 2,
+        input: Math.floor(total * 0.7),
+        output: Math.floor(total * 0.3),
+        cacheRead: 0,
+        cacheWrite: 0,
+        total,
+        hours: new Array(24).fill(0),
+        models: { 'Gemini 4 Carbon': { input: Math.floor(total * 0.7), output: Math.floor(total * 0.3), cacheRead: 0, cacheWrite: 0, total, calls: 2 } },
+      },
+    },
+  });
+
+  try {
+    // 1) Hot-upgrade: existing stale <style id="ag-prism-studio-v101-css"> must be overwritten in-place
+    const dom1 = createMockStudioDom('obsidian-prism — Antigravity');
+    const staleStyle = dom1.doc.createElement('style');
+    staleStyle.id = 'ag-prism-studio-v101-css';
+    staleStyle.textContent = '.legacy-v100{color:red}';
+    dom1.doc.head.appendChild(staleStyle);
+    // Pre-seed stale data-ag-prism-scope attribute on <html> to verify self-lock removal
+    dom1.doc.documentElement.setAttribute('data-ag-prism-scope', 'ssh:stale-host');
+
+    let activeLang = 'ja';
+    let activeName = '太郎';
+    let bridgeScope = 'local';
+    let bridgeOnline = true;
+    let shouldThrowBatch = false;
+    let reduxSums = {
+      'stale-rem-1': {
+        stepCount: 2,
+        lastModifiedTime: { seconds: 1763400600 },
+        workspaces: [{ workspaceFolderAbsoluteUri: 'vscode-remote://ssh-remote+stale-host/srv/old' }],
+      },
+    };
+    globalThis.document = dom1.doc;
+    globalThis.window = {
+      document: dom1.doc,
+      location: { href: 'vscode-file://vscode-app/workbench.html' },
+      __agPrismUsageBridge: {
+        isOnline: () => bridgeOnline,
+        listSummaries: async () => ({
+          ok: true,
+          scopeKey: bridgeScope,
+          summaries: [{ id: 'local-fresh-1', stepCount: 5, lastModifiedSec: 1763400600 }],
+          records: [],
+        }),
+        fetchBatch: async (items) => {
+          if (shouldThrowBatch) throw new Error('bridge_fetch_boom');
+          return {
+            ok: true,
+            scopeKey: bridgeScope,
+            records: items.map((it) => ({ id: it.id, mode: 'full', record: makeRec(it.id, 15000) })),
+          };
+        },
+      },
+    };
+
+    const ctl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:rt193:v1',
+      waitTickMs: 5,
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => activeLang,
+      uiText: () => ({}),
+      getDisplayName: () => activeName,
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: reduxSums } }) }, svc: {} }),
+      canMountRealCanvas: () => true,
+      setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+
+    ctl.renderHomePanel(true);
+    assert.equal(staleStyle.textContent.includes('.legacy-v100'), false, 'Hot-upgrade must overwrite stale #ag-prism-studio-v101-css');
+    assert.ok(staleStyle.textContent.includes('.ag-cs-home-panel-head{flex-wrap:wrap;row-gap:8px}'), 'Updated CSS must include narrow-screen header wrap rule');
+    assert.ok(staleStyle.textContent.includes('.ag-cs-home-tab,.ag-cs-home-range{white-space:nowrap}'), 'Updated CSS must prevent tab/range wrap');
+    assert.ok(staleStyle.textContent.includes('.ag-cs-home-ws-select option{background:var(--card,#141418);color:var(--foreground,#F2F2F5);}'));
+
+    // 2) Authoritative bScope='local' overrides stale Redux remote summary & removes data-ag-prism-scope attribute
+    await ctl.refreshUsageRollup(true);
+    assert.equal(ctl.getScopeKey(), 'local', 'Authoritative bScope="local" must override stale data-ag-prism-scope & Redux heuristic');
+    assert.equal(dom1.doc.documentElement.getAttribute('data-ag-prism-scope'), null, 'Switching to local must remove data-ag-prism-scope');
+
+    // Switching to another remote host works (never self-locked) and switching back removes attribute again
+    bridgeScope = 'ssh:host-b';
+    await ctl.refreshUsageRollup(true);
+    assert.equal(ctl.getScopeKey(), 'ssh:host-b');
+    assert.equal(dom1.doc.documentElement.getAttribute('data-ag-prism-scope'), 'ssh:host-b');
+    bridgeScope = 'local';
+    await ctl.refreshUsageRollup(true);
+    assert.equal(ctl.getScopeKey(), 'local');
+    assert.equal(dom1.doc.documentElement.getAttribute('data-ag-prism-scope'), null);
+
+    // 3) [P2-1] Japanese greeting uses Japanese ideographic comma '、' while zh-CN uses '，'
+    ctl.syncGreeting(true);
+    const h1 = dom1.doc.querySelector('[data-testid="home-greeting"] h1');
+    assert.equal(h1.textContent, '次は何をしますか、太郎？', 'Japanese greeting must use Japanese comma 、');
+    activeLang = 'zh-CN';
+    activeName = '小明';
+    ctl.syncGreeting(true);
+    assert.equal(h1.textContent, '接下来做什么，小明？', 'zh-CN greeting must use Chinese comma ，');
+
+    // 4) [P0-2] canPrune tightened to bridgeOnline only (missing bridge never prunes archived cache)
+    storeMem.set('test:rt193:prune', JSON.stringify({ 'archived-port-1': makeRec('archived-port-1', 88000) }));
+    globalThis.window.__agPrismUsageBridge = null;
+    reduxSums = { 'live-only-1': { stepCount: 3, lastModifiedTime: { seconds: 1763400650 } } };
+    const ctlNoBridge = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:rt193:prune',
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'en',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: reduxSums } }) }, svc: {} }),
+      canMountRealCanvas: () => true,
+      setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+    await ctlNoBridge.refreshUsageRollup(true);
+    assert.equal(ctlNoBridge.getUsageRecordsCount(), 2, 'Missing __agPrismUsageBridge must NEVER prune cached cross-port localStorage records');
+
+    // 5) [P0-2] Title-less window with offline usageBridge and no explicit scope signal must NOT overwrite default local cache key
+    storeMem.set('test:rt193:titleless', JSON.stringify({ 'pure-local-1': makeRec('pure-local-1', 50000) }));
+    const domTitleless = createMockStudioDom('Antigravity');
+    globalThis.document = domTitleless.doc;
+    globalThis.window = {
+      document: domTitleless.doc,
+      location: { href: 'vscode-file://vscode-app/workbench.html' },
+      __agPrismUsageBridge: { isOnline: () => false, listSummaries: async () => ({ ok: false }), fetchBatch: async () => ({ ok: false }) },
+    };
+    const ctlTitleless = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:rt193:titleless',
+      waitTickMs: 5,
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'en',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({
+        store: { getState: () => ({ trajectorySummaries: { summaries: { 'mystery-ssh-1': { stepCount: 300, lastModifiedTime: { seconds: 1763400700 } } } } }) },
+        svc: {},
+      }),
+      canMountRealCanvas: () => true,
+      setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+    await ctlTitleless.refreshUsageRollup(true);
+    ctlTitleless.flushUsageCacheNow();
+    const persistedTitleless = JSON.parse(storeMem.get('test:rt193:titleless') || '{}');
+    assert.ok(persistedTitleless['pure-local-1'], 'Existing local cache entry must remain untouched');
+    assert.equal(persistedTitleless['mystery-ssh-1'], undefined, 'Title-less offline window with no explicit scope must NEVER pollute default local cache key');
+
+    // 6) [P1-3] fetchBatch throwing must exit skeleton cleanly (never deadlock) & [P2-1] null doc.body guard
+    const domErr = createMockStudioDom('obsidian-prism — Antigravity');
+    globalThis.document = domErr.doc;
+    globalThis.window = {
+      document: domErr.doc,
+      location: { href: 'vscode-file://vscode-app/workbench.html' },
+      __agPrismUsageBridge: {
+        isOnline: () => true,
+        listSummaries: async () => ({ ok: true, scopeKey: 'local', summaries: [{ id: 'boom-1', stepCount: 5, lastModifiedSec: 1763400800 }], records: [] }),
+        fetchBatch: async () => { throw new Error('simulated_rpc_crash'); },
+      },
+    };
+    const ctlErr = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:rt193:err',
+      waitTickMs: 5,
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'en',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: {} } }) }, svc: {} }),
+      canMountRealCanvas: () => true,
+      setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+    ctlErr.renderHomePanel(true);
+    assert.ok(domErr.doc.querySelectorAll('[data-skeleton]').length >= 6, 'Initially in skeleton state');
+    await assert.doesNotReject(() => ctlErr.refreshUsageRollup(true));
+    assert.equal(domErr.doc.querySelectorAll('[data-skeleton]').length, 0, 'Throwing fetchBatch must still exit skeleton cleanly');
+
+    // Null document.body safety in scheduleUsageRollupRefresh
+    globalThis.document = null;
+    assert.doesNotThrow(() => ctlErr.scheduleUsageRollupRefresh(10));
   } finally {
     if (prevWin === undefined) delete globalThis.window;
     else globalThis.window = prevWin;

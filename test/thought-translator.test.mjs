@@ -38,6 +38,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 
+async function waitUntil(pred, timeoutMs = 1500, stepMs = 15) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (pred()) return true;
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+  return Boolean(pred());
+}
+
 function createMockDomEnv(extraWindowProps = {}) {
   function makeEl(tag) {
     const attrs = new Map();
@@ -1200,7 +1209,7 @@ test('UX-3 & UX-6 regression: prioritizes data-ag-cs-lang over host lang="en", l
 
   // 1) Start in machine mode + preload: must use zh-CN despite host lang="en"!
   api.sync({ thoughtTranslate: 'machine', thoughtTrigger: 'preload', language: 'zh-CN' });
-  await new Promise((r) => setTimeout(r, 90));
+  await waitUntil(() => panel1.getAttribute('data-op-zh-ready') === '1', 1500);
 
   const ov1 = panel1.querySelector('.ag-prism-thought-overlay');
   const rawBtn1 = ov1.children.find((c) => c.classList.contains('ag-prism-thought-raw-toggle'));
@@ -1249,7 +1258,7 @@ test('UX-3 & UX-6 regression: prioritizes data-ag-cs-lang over host lang="en", l
 
   // 3) Switch engine machine -> ai: must clear old sigs and retranslate with AI!
   api.sync({ thoughtTranslate: 'ai', thoughtTrigger: 'expand', language: 'zh-CN' });
-  await new Promise((r) => setTimeout(r, 90));
+  await waitUntil(() => panel1.textContent.includes('AI 精修版本内容。'), 1500);
   assert.ok(panel1.textContent.includes('AI 精修版本内容。'));
 
   // 4) Switch -> off: must restore clean raw English immediately
@@ -1976,7 +1985,7 @@ test('Cache jank root-cause guards: persisted custom styleTag 0ms hit, collapsed
     // Scroll far block into [-800, vh+800] warm band -> capture scroll listener hydrates smoothly!
     blkFar.panel._boundingRect = { top: -520, bottom: -320, left: 20, right: 620, width: 600, height: 200 };
     scrollHook.fn();
-    await new Promise((r) => setTimeout(r, 140));
+    await waitUntil(() => blkFar.panel.getAttribute('data-op-zh-ready') === '1', 1500);
     assert.equal(blkFar.panel.getAttribute('data-op-zh-ready'), '1');
     assert.ok(blkFar.panel.textContent.includes('远端历史块滚入视口懒挂载译文'));
 

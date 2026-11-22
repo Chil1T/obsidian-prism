@@ -980,8 +980,10 @@
       })
     : noopStub();
 
-  const applySingleHostIcon = (btn, iconName, origSvg, size) => {
+  const iconPendSig = new WeakMap();
+  const applySingleHostIcon = (btn, iconName, origSvg, size, eqSig) => {
     if (!btn || btn.isConnected === false || !origSvg || !origSvg.parentNode || !animatedIcons) return;
+    if (ga(btn, 'data-ag-cs-icon-injected') || qs(btn, '.ag-anim-icon')) return;
     const htmlStr = animatedIcons.renderIcon(iconName, { size });
     if (!htmlStr) return;
 
@@ -1005,6 +1007,9 @@
     sa(animSvg, 'data-ag-owned', '1');
     origSvg.parentNode.insertBefore(animSvg, origSvg);
     sa(btn, 'data-ag-cs-icon-injected', iconName);
+    const sig = eqSig || iconPendSig.get(btn);
+    iconPendSig.delete(btn);
+    if (sig) iconSigMap.set(btn, { s: sig, p: btn.parentElement, v: origSvg });
   };
 
   const streamChoreoCtl = streamChoreoMod?.createStreamChoreographyController
@@ -1696,6 +1701,7 @@
       ra(orig, 'data-ag-cs-orig-svg');
     });
     ra(btn, 'data-ag-cs-icon-injected');
+    iconPendSig.delete(btn);
   };
 
   const restoreAllHostAnimatedIcons = () => {
@@ -1757,31 +1763,35 @@
       const bSig = `${tidOf(btn)}|${ga(btn, 'aria-label') || ''}|${ga(btn, 'title') || ''}|${ga(btn, 'data-tooltip-id') || ''}|${ga(btn, 'role') || ''}|${ha(btn, 'data-ag-cs-filter-btn') ? 1 : 0}|${rawSvgCls}`;
       const eqSig = '=' + bSig;
       const hit = iconSigMap.get(btn);
-      if (hit === (ex ? eqSig : bSig) && (!ex || qs(btn, '.ag-anim-icon'))) continue;
+      const p = btn.parentElement;
+      const origOk = !origSvg || ha(origSvg, 'data-ag-cs-orig-svg');
+      const hasAnim = ex ? Boolean(qs(btn, '.ag-anim-icon')) : false;
+      if (hit && hit.s === (ex ? eqSig : bSig) && hit.p === p && hit.v === origSvg && (!ex || (origOk && hasAnim))) continue;
       const iconName = detectHostIconTarget(btn);
       if (ex) {
-        if (ex !== iconName) restoreHostButtonIcon(btn);
-        else if (qs(btn, '.ag-anim-icon')) { iconSigMap.set(btn, eqSig); continue; }
+        if (ex !== iconName || !origOk) restoreHostButtonIcon(btn);
+        else if (hasAnim) { iconSigMap.set(btn, { s: eqSig, p, v: origSvg }); continue; }
         else ra(btn, 'data-ag-cs-icon-injected');
       }
-      if (!iconName) { iconSigMap.set(btn, bSig); continue; }
+      if (!iconName) { iconSigMap.set(btn, { s: bSig, p, v: origSvg }); continue; }
       if (!origSvg || !origSvg.parentNode) continue;
-      iconSigMap.set(btn, eqSig);
 
       const rawSize = parseInt(ga(origSvg, 'width') || '15', 10);
       const size = Number.isFinite(rawSize) && rawSize >= 12 && rawSize <= 20 ? rawSize : 15;
-      pendingIcons.push({ btn, iconName, origSvg, size });
+      pendingIcons.push({ btn, iconName, origSvg, size, eqSig });
     }
 
     if (pendingIcons.length <= 20 || typeof requestAnimationFrame !== 'function') {
-      for (const it of pendingIcons) applySingleHostIcon(it.btn, it.iconName, it.origSvg, it.size);
+      for (const it of pendingIcons) applySingleHostIcon(it.btn, it.iconName, it.origSvg, it.size, it.eqSig);
     } else {
       const syncStart = pendingIcons.length - 16;
       for (let i = syncStart; i < pendingIcons.length; i++) {
         const it = pendingIcons[i];
-        applySingleHostIcon(it.btn, it.iconName, it.origSvg, it.size);
+        applySingleHostIcon(it.btn, it.iconName, it.origSvg, it.size, it.eqSig);
       }
-      streamChoreoCtl.enqueueDeferredIcons(pendingIcons.slice(0, syncStart));
+      const def = pendingIcons.slice(0, syncStart);
+      for (let i = 0; i < def.length; i++) iconPendSig.set(def[i].btn, def[i].eqSig);
+      streamChoreoCtl.enqueueDeferredIcons(def);
     }
   }
 

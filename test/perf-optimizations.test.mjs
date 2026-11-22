@@ -2077,6 +2077,65 @@ test('perf guard 22: home-ripple-host coalesces burst ResizeObserver ticks via r
   ctl.unmount();
   assert.equal(rafs.size, 0, 'unmount() must cancel pending ResizeObserver rAF');
 
+  // enterIdleSleep() via window blur must also cancel any pending ResizeObserver rAF cleanly (#193 P2-2)
+  const winListeners = new Map();
+  sb.window.addEventListener = (t, fn) => {
+    if (!winListeners.has(t)) winListeners.set(t, []);
+    winListeners.get(t).push(fn);
+  };
+  sb.window.removeEventListener = (t, fn) => {
+    const a = winListeners.get(t);
+    if (a) { const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); }
+  };
+  ctl.sync();
+  for (const [id, fn] of Array.from(rafs.entries())) { rafs.delete(id); fn(1048); }
+  homeEl.clientWidth = 1100;
+  roCb([]);
+  assert.ok(rafs.size >= 1, 'ResizeObserver should enqueue rRaf before blur enterIdleSleep()');
+  for (const fn of [...(winListeners.get('blur') || [])]) fn();
+  assert.equal(rafs.size, 0, 'enterIdleSleep() must cancel pending ResizeObserver rAF');
+  ctl.unmount();
+
+  // 1b) #193 [P2-2]: ripple-core dirty check includes semMix convergence guard so 2D/still never short-circuits mid-fade
+  const rippleCoreMod = require(path.join(ROOT, 'ripple-core.js'));
+  let draws2d = 0;
+  const mockCtx2d = {
+    clearRect() {},
+    save() {},
+    restore() {},
+    fillRect() { draws2d += 1; },
+    createImageData(w, h) { return { data: new Uint8ClampedArray(Math.max(4, w * h * 4)), width: w, height: h }; },
+    putImageData() { draws2d += 1; },
+    createRadialGradient() { return { addColorStop() {} }; },
+    createLinearGradient() { return { addColorStop() {} }; },
+    setTransform() {},
+  };
+  const mockCanvas = {
+    width: 320,
+    height: 180,
+    style: {},
+    getContext: (t) => (t === '2d' ? mockCtx2d : null),
+  };
+  const glow = rippleCoreMod.mountBrandHorizonGlow(mockCanvas, { dark: true });
+  assert.equal(glow.mode, '2d');
+  // First draw enters awaiting-decision semantic (semMix advances from 0 -> 0.04, unconverged < 1)
+  assert.equal(glow.draw(1000, { dark: true, semantic: 'awaiting-decision' }), true);
+  // 5ms later (< 2D frameGap 14ms) with identical semanticCode, dirty MUST stay true because |1 - semMix| > 0.005
+  assert.equal(
+    glow.draw(1005, { dark: true, semantic: 'awaiting-decision' }),
+    true,
+    'unconverged semMix must keep dirty=true so semantic transition does not stall mid-fade'
+  );
+  // Static still draw snaps semMix to target 1; subsequent still draw with converged semMix returns false
+  assert.equal(glow.draw(1020, { dark: true, semantic: 'awaiting-decision', still: true }), true);
+  assert.equal(
+    glow.draw(1025, { dark: true, semantic: 'awaiting-decision', still: true }),
+    false,
+    'converged semMix on still frame must skip redundant redraw'
+  );
+  assert.ok(draws2d >= 3);
+  glow.dispose();
+
   // 2) ui-runtime iconSigMap WeakMap fast-path presence, thought-isolation ordering & full signature guard
   const uiSrc = fs.readFileSync(path.join(ROOT, 'ui-runtime.js'), 'utf8');
   const fnIdx = uiSrc.indexOf('function syncHostAnimatedIcons(');

@@ -402,17 +402,86 @@ function copyDirRecursiveSync(srcDir, dstDir) {
   return copied;
 }
 
-function stopExistingDaemonInDir(targetDir) {
+const DAEMON_STOP_POLL_MS = 30;
+const DAEMON_STOP_GRACEFUL_TIMEOUT_MS = 800;
+const DAEMON_STOP_SIGKILL_WAIT_MS = 200;
+
+// 发送 SIGTERM 后轮询等待守护彻底退出（超时则升级 SIGKILL 再短等），防止退出中临终 flush 复活已清理的缓存文件
+async function terminatePidAndWait(pid, opts = {}) {
+  const num = Number(pid);
+  if (!Number.isInteger(num) || num <= 0 || num === process.pid) {
+    return { signaled: false, exited: false, escalated: false };
+  }
+  const killFn = typeof opts.kill === "function" ? opts.kill : (p, sig) => process.kill(p, sig);
+  const aliveFn = typeof opts.isPidAlive === "function" ? opts.isPidAlive : isPidAlive;
+  const pollMs = Math.max(5, Number(opts.pollIntervalMs) || DAEMON_STOP_POLL_MS);
+  const gracefulTimeoutMs = Math.max(
+    0,
+    opts.gracefulTimeoutMs !== undefined ? Number(opts.gracefulTimeoutMs) : DAEMON_STOP_GRACEFUL_TIMEOUT_MS
+  );
+  const killWaitMs = Math.max(
+    0,
+    opts.killWaitMs !== undefined ? Number(opts.killWaitMs) : DAEMON_STOP_SIGKILL_WAIT_MS
+  );
+
+  try {
+    killFn(num, "SIGTERM");
+  } catch (err) {
+    if (err && err.code === "ESRCH") {
+      return { signaled: false, exited: true, escalated: false };
+    }
+    throw err;
+  }
+
+  const gracefulDeadline = Date.now() + gracefulTimeoutMs;
+  while (aliveFn(num)) {
+    if (Date.now() >= gracefulDeadline) break;
+    const remaining = gracefulDeadline - Date.now();
+    await sleep(Math.min(pollMs, Math.max(1, remaining)));
+  }
+
+  if (!aliveFn(num)) {
+    return { signaled: true, exited: true, escalated: false };
+  }
+
+  let escalated = false;
+  try {
+    killFn(num, "SIGKILL");
+    escalated = true;
+  } catch (err) {
+    if (err && err.code === "ESRCH") {
+      return { signaled: true, exited: true, escalated: false };
+    }
+  }
+
+  const killDeadline = Date.now() + killWaitMs;
+  while (aliveFn(num)) {
+    if (Date.now() >= killDeadline) break;
+    const remaining = killDeadline - Date.now();
+    await sleep(Math.min(pollMs, Math.max(1, remaining)));
+  }
+
+  return { signaled: true, exited: !aliveFn(num), escalated };
+}
+
+async function stopExistingDaemonInDir(targetDir, opts = {}) {
   if (!targetDir || !fs.existsSync(targetDir)) return null;
   const pidFile = path.join(targetDir, ".daemon.pid");
   if (!fs.existsSync(pidFile)) return null;
   let killedPid = null;
+  const aliveFn = typeof opts.isPidAlive === "function" ? opts.isPidAlive : isPidAlive;
+  const checkExpected =
+    typeof opts.isExpectedDaemonProcess === "function"
+      ? opts.isExpectedDaemonProcess
+      : (p) => isExpectedDaemonProcess(p, pidFile);
   try {
     const pid = readPidFromLockFile(pidFile);
-    if (pid && isPidAlive(pid) && isExpectedDaemonProcess(pid)) {
+    if (pid && aliveFn(pid) && checkExpected(pid)) {
       try {
-        process.kill(pid);
-        killedPid = pid;
+        const res = await terminatePidAndWait(pid, opts);
+        if (res.signaled) {
+          killedPid = pid;
+        }
       } catch {}
     }
   } catch {}
@@ -485,7 +554,7 @@ async function installPlugin(opts = {}) {
     try {
       const legacyStat = assertNotSymbolicLink(legacyDir, "legacy plugin directory");
       if (legacyStat && legacyStat.isDirectory()) {
-        stopExistingDaemonInDir(legacyDir);
+        await stopExistingDaemonInDir(legacyDir, opts.daemonStopOpts);
         const legacyCfg = path.join(legacyDir, "config.json");
         const newCfg = path.join(targetDir, "config.json");
         const legacyCfgStat = assertNotSymbolicLink(legacyCfg, "legacy config.json");
@@ -501,7 +570,7 @@ async function installPlugin(opts = {}) {
     } catch {}
   }
 
-  const stoppedOldPid = stopExistingDaemonInDir(targetDir);
+  const stoppedOldPid = await stopExistingDaemonInDir(targetDir, opts.daemonStopOpts);
 
   let copiedFiles = 0;
   const missingOptional = [];
@@ -730,13 +799,13 @@ async function uninstallPlugin(opts = {}) {
   if (isProtectedUserDataPath(targetDir)) {
     throw new Error(`Refusing to uninstall protected directory: ${targetDir}`);
   }
-  const stoppedPid = stopExistingDaemonInDir(targetDir);
+  const stoppedPid = await stopExistingDaemonInDir(targetDir, opts.daemonStopOpts);
   const legacyDir = getLegacyTempPluginDir(targetDir);
   if (legacyDir && !isProtectedUserDataPath(legacyDir)) {
     try {
       const legStat = assertNotSymbolicLink(legacyDir, "legacy plugin directory");
       if (legStat && legStat.isDirectory()) {
-        stopExistingDaemonInDir(legacyDir);
+        await stopExistingDaemonInDir(legacyDir, opts.daemonStopOpts);
       }
     } catch {}
   }
@@ -978,6 +1047,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  DAEMON_STOP_POLL_MS,
+  DAEMON_STOP_GRACEFUL_TIMEOUT_MS,
+  DAEMON_STOP_SIGKILL_WAIT_MS,
   getDefaultPluginTargetDir,
   getLegacyTempPluginDir,
   resolveHostGeminiConfigDir,
@@ -989,6 +1061,7 @@ module.exports = {
   installPlugin,
   uninstallPlugin,
   getPluginInstallStatus,
+  terminatePidAndWait,
   stopExistingDaemonInDir,
   parseCliArgs,
 };

@@ -5,12 +5,15 @@
   if (!G) return;
 
   const STUDIO_STYLE_ID = 'ag-prism-studio-v101-css';
+  const isFn = (v) => typeof v === 'function';
+  const isFin = (v) => typeof v === 'number' && Number.isFinite(v);
   function markNoTr(e) {
-    if (e && e.setAttribute) for (const s of 'translate=no,data-no-translate=true,data-ag-localization-skip=true,data-agy-no-translate=true,data-antigravity-zh-skip=1'.split(',')) { const p = s.split('='); e.setAttribute(p[0], p[1]); }
+    if (e?.setAttribute) for (const s of 'translate=no,data-no-translate=true,data-ag-localization-skip=true,data-agy-no-translate=true,data-antigravity-zh-skip=1'.split(',')) { const p = s.split('='); e.setAttribute(p[0], p[1]); }
     return e;
   }
 
-  const STUDIO_EXTRA_CSS = '.agy-home{--_a:var(--ag-cs-accent,var(--primary,#2563eb));--_m:var(--muted-foreground);--_b:var(--ag-cs-border-1,rgba(148,163,184,.2));--_p:var(--ag-cs-pill-bg,rgba(128,138,158,.08))}.ag-cs-home-head-left,.ag-cs-home-head-right{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}.ag-cs-home-head-left{min-width:0}.ag-cs-home-scope-badge,.ag-cs-home-stat-sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ag-cs-home-scope-badge,.ag-cs-quota-pace,.ag-cs-quota-bar,.ag-cs-qbar-solid{border-radius:999px}.ag-cs-home-ws-select,.ag-cs-quota-refresh,.ag-cs-quota-card{border:1px solid var(--_b);background:var(--_p)}.ag-cs-quota-wrap,.ag-cs-quota-card,.ag-cs-quota-win{display:flex;flex-direction:column}.ag-cs-home-stat-sub,.ag-cs-quota-card,.ag-cs-quota-win-val{font-variant-numeric:tabular-nums}.ag-cs-home-scope-badge{display:inline-flex;align-items:center;height:20px;max-width:168px;padding:0 7px;font-size:10.5px;font-weight:600;color:var(--_a);border:1px solid color-mix(in srgb,currentColor 32%,transparent);background:color-mix(in srgb,currentColor 11%,transparent)}.ag-cs-home-ws-select{height:24px;max-width:156px;padding:0 20px 0 8px;border-radius:var(--ag-cs-r-sm,6px);color:var(--foreground);color-scheme:inherit;font-size:11px;font-weight:500;outline:none;cursor:pointer;text-overflow:ellipsis}.ag-cs-home-ws-select option{background:var(--card,#141418);color:var(--foreground,#F2F2F5);}.ag-cs-home-stat-sub{display:block;margin-top:2px;font-size:10px;line-height:1.25;color:var(--_m);opacity:.82}.ag-cs-quota-wrap{gap:10px;margin-top:4px;position:relative;z-index:1}.ag-cs-quota-toolbar,.ag-cs-quota-card-head,.ag-cs-quota-win-row{display:flex;align-items:center;justify-content:space-between;gap:6px}.ag-cs-quota-toolbar{font-size:11px;color:var(--_m)}.ag-cs-quota-refresh{height:23px;padding:0 9px;border-radius:var(--ag-cs-r-sm,6px);color:var(--foreground);font-size:11px;cursor:pointer}.ag-cs-quota-refresh:hover{background:rgba(128,138,158,.16)}.ag-cs-quota-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}.ag-cs-quota-card{padding:11px 12px;border-radius:var(--ag-cs-r-md,10px);gap:8px}.ag-cs-quota-name{font-size:12px;font-weight:600;color:var(--foreground)}.ag-cs-quota-pace{padding:1.5px 6.5px;font-size:10px;font-weight:600;border:1px solid rgba(148,163,184,.24);color:var(--_m)}.ag-cs-quota-pace[data-pace="ok"]{color:var(--_a);border-color:color-mix(in srgb,currentColor 30%,transparent);background:color-mix(in srgb,currentColor 10%,transparent)}.ag-cs-quota-pace[data-pace="tight"]{color:#d97706;border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.12)}.dark .ag-cs-quota-pace[data-pace="tight"]{color:#fbbf24}.ag-cs-quota-pace[data-pace="low"]{color:#dc2626;border-color:rgba(239,68,68,.38);background:rgba(239,68,68,.12)}.dark .ag-cs-quota-pace[data-pace="low"]{color:#f87171}.ag-cs-quota-win{gap:4px}.ag-cs-quota-win-row{align-items:baseline;font-size:11px}.ag-cs-quota-win-lbl{color:var(--_m);font-size:10.5px}.ag-cs-quota-win-val{font-weight:600;color:var(--foreground);font-size:11px}.ag-cs-quota-bar{position:relative;height:6px;background:rgba(148,163,184,.18);overflow:hidden}.ag-cs-qbar-solid{position:absolute;inset:0 auto 0 0;color:var(--_a);background:linear-gradient(90deg,currentColor,color-mix(in srgb,currentColor 68%,#fff))}.ag-cs-quota-win[data-warn="1"] .ag-cs-qbar-solid{background:linear-gradient(90deg,#d97706,#fbbf24)}.ag-cs-quota-win[data-warn="2"] .ag-cs-qbar-solid{background:linear-gradient(90deg,#dc2626,#f87171)}.ag-cs-quota-foot{font-size:10px;color:var(--_m);opacity:.82}';
+  const STUDIO_HEAD_CSS = '.ag-cs-home-panel-head{flex-wrap:wrap;row-gap:8px}';
+  const STUDIO_EXTRA_CSS = STUDIO_HEAD_CSS + '.agy-home{--_a:var(--ag-cs-accent,var(--primary,#2563eb));--_m:var(--muted-foreground);--_b:var(--ag-cs-border-1,rgba(148,163,184,.2));--_p:var(--ag-cs-pill-bg,rgba(128,138,158,.08))}.ag-cs-home-tab,.ag-cs-home-range{white-space:nowrap}.ag-cs-home-head-left,.ag-cs-home-head-right{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}.ag-cs-home-head-left{min-width:0}.ag-cs-home-scope-badge,.ag-cs-home-stat-sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ag-cs-home-scope-badge,.ag-cs-quota-pace,.ag-cs-quota-bar,.ag-cs-qbar-solid{border-radius:999px}.ag-cs-home-ws-select,.ag-cs-quota-refresh,.ag-cs-quota-card{border:1px solid var(--_b);background:var(--_p)}.ag-cs-home-ws-select,.ag-cs-quota-refresh{border-radius:var(--ag-cs-r-sm,6px);cursor:pointer}.ag-cs-home-ws-select,.ag-cs-quota-toolbar,.ag-cs-quota-refresh,.ag-cs-quota-win-row,.ag-cs-quota-win-val{font-size:11px}.ag-cs-home-ws-select,.ag-cs-quota-refresh,.ag-cs-quota-name,.ag-cs-quota-win-val{color:var(--foreground)}.ag-cs-home-scope-badge,.ag-cs-quota-name,.ag-cs-quota-pace,.ag-cs-quota-win-val{font-weight:600}.ag-cs-quota-wrap,.ag-cs-quota-card,.ag-cs-quota-win{display:flex;flex-direction:column}.ag-cs-home-stat-sub,.ag-cs-quota-card,.ag-cs-quota-win-val{font-variant-numeric:tabular-nums}.ag-cs-home-stat-sub,.ag-cs-quota-foot{font-size:10px;color:var(--_m);opacity:.82}.ag-cs-home-scope-badge{display:inline-flex;align-items:center;height:20px;max-width:168px;padding:0 7px;font-size:10.5px;color:var(--_a);border:1px solid color-mix(in srgb,currentColor 32%,transparent);background:color-mix(in srgb,currentColor 11%,transparent)}.ag-cs-home-ws-select{height:24px;max-width:156px;padding:0 20px 0 8px;color-scheme:inherit;font-weight:500;outline:none;text-overflow:ellipsis}.ag-cs-home-ws-select option{background:var(--card,#141418);color:var(--foreground,#F2F2F5);}.ag-cs-home-stat-sub{display:block;margin-top:2px;line-height:1.25}.ag-cs-quota-wrap{gap:10px;margin-top:4px;position:relative;z-index:1}.ag-cs-quota-toolbar,.ag-cs-quota-card-head,.ag-cs-quota-win-row{display:flex;align-items:center;justify-content:space-between;gap:6px}.ag-cs-quota-toolbar{color:var(--_m)}.ag-cs-quota-refresh{height:23px;padding:0 9px}.ag-cs-quota-refresh:hover{background:rgba(128,138,158,.16)}.ag-cs-quota-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}.ag-cs-quota-card{padding:11px 12px;border-radius:var(--ag-cs-r-md,10px);gap:8px}.ag-cs-quota-name{font-size:12px}.ag-cs-quota-pace{padding:1.5px 6.5px;font-size:10px;border:1px solid rgba(148,163,184,.24);color:var(--_m)}.ag-cs-quota-pace[data-pace="ok"]{color:var(--_a);border-color:color-mix(in srgb,currentColor 30%,transparent);background:color-mix(in srgb,currentColor 10%,transparent)}.ag-cs-quota-pace[data-pace="tight"]{color:#d97706;border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.12)}.dark .ag-cs-quota-pace[data-pace="tight"]{color:#fbbf24}.ag-cs-quota-pace[data-pace="low"]{color:#dc2626;border-color:rgba(239,68,68,.38);background:rgba(239,68,68,.12)}.dark .ag-cs-quota-pace[data-pace="low"]{color:#f87171}.ag-cs-quota-win{gap:4px}.ag-cs-quota-win-row{align-items:baseline}.ag-cs-quota-win-lbl{color:var(--_m);font-size:10.5px}.ag-cs-quota-bar{position:relative;height:6px;background:rgba(148,163,184,.18);overflow:hidden}.ag-cs-qbar-solid{position:absolute;inset:0 auto 0 0;color:var(--_a);background:linear-gradient(90deg,currentColor,color-mix(in srgb,currentColor 68%,#fff))}.ag-cs-quota-win[data-warn="1"] .ag-cs-qbar-solid{background:linear-gradient(90deg,#d97706,#fbbf24)}.ag-cs-quota-win[data-warn="2"] .ag-cs-qbar-solid{background:linear-gradient(90deg,#dc2626,#f87171)}';
 
   const ORBITAL_SVG_HTML = '<svg class="ag-cs-orbital-svg" viewBox="0 0 760 280" fill="none" preserveAspectRatio="none"><ellipse class="ag-cs-orbit-arc is-primary" cx="468" cy="136" rx="348" ry="118" transform="rotate(-10 468 136)"/><ellipse class="ag-cs-orbit-arc is-dashed" cx="468" cy="136" rx="252" ry="82" stroke-dasharray="2.5 5.5" transform="rotate(-10 468 136)"/><g class="ag-cs-orbit-reticle" transform="translate(466 36)"><path d="M-4 0H4M0 -4V4"/></g><g class="ag-cs-orbit-reticle" transform="translate(216 184)"><path d="M-3.5 0H3.5M0 -3.5V3.5"/></g><g class="ag-cs-orbit-reticle" transform="translate(698 92)"><path d="M-3.5 0H3.5M0 -3.5V3.5"/></g><circle class="ag-cs-orbit-node is-cobalt" cx="634" cy="54" r="2.2"/><circle class="ag-cs-orbit-node is-iris" cx="308" cy="64" r="1.8"/><circle class="ag-cs-orbit-node is-amber" cx="566" cy="212" r="1.8"/></svg>';
 
@@ -36,7 +39,7 @@
     return extractScopeFromUri(s);
   };
   const formatScopeBadge = (sc) => (!sc || sc === 'local' ? '' : sc.startsWith('ssh:') ? 'SSH · ' + sc.slice(4) : sc.startsWith('remote:') ? 'Remote' + (sc.slice(7) ? ' · ' + sc.slice(7) : '') : '');
-  const hasRealUsage = (r) => Boolean(r?.days && (Number(r.calls || 0) > 0 || Object.values(r.days).some((d) => d && (Number(d.total || d.tokens || 0) > 0 || Number(d.calls || 0) > 0))));
+  const hasRealUsage = (r) => !!(r?.days && ((+r.calls || 0) > 0 || Object.values(r.days).some((d) => d && ((+(d.total || d.tokens) || 0) > 0 || (+d.calls || 0) > 0))));
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const getDoc = () => (typeof document !== 'undefined' ? document : null);
   const getWin = () => (typeof window !== 'undefined' ? window : G);
@@ -57,41 +60,43 @@
     runGuardedMut,
   }) {
     const usageRecords = new Map();
+    const replacedGreetings = new Map();
     let usageLoading = false;
     let quotaLoading = false;
     let usageHasData = false;
+    let modelsExpanded = false;
+    let wasHero = false;
+    let localSaveBlocked = false;
     let lastUsageFetchAt = 0;
     let lastQuotaFetchAt = 0;
     let lastQuotaFailAt = 0;
     let lastQuotaTabTriggerAt = 0;
     let lastManualRefreshAt = 0;
     let lastOfflineWaitAt = 0;
-    let liveQuotaSnap = null;
     let quotaEpoch = 0;
-    let quotaPending = null;
     let quotaBindingSeq = 0;
-    let bookPick = 0.07;
-    let activeTab = 'overview';
-    let activeRange = 'all';
-    let activeWorkspace = 'all';
-    let detectedCurrentWorkspace = '';
-    let modelsExpanded = false;
-    let lastPanelRenderKey = '';
     let usageDataEpoch = 0;
-    let cachedAggKey = '';
-    let cachedAggData = null;
     let deferredUsageTimer = 0;
     let saveUsageTimer = 0;
     let saveUsageIdle = 0;
-    let wasHero = false;
-    const replacedGreetings = new Map();
+    let heatTipRaf = 0;
+    let liveQuotaSnap = null;
+    let quotaPending = null;
+    let cachedAggData = null;
     let panelSeat = null;
     let panelEl = null;
     let heatTipEl = null;
     let shownHeatCell = null;
     let pendingHeatCell = null;
     let pendingHeatGrid = null;
-    let heatTipRaf = 0;
+    let bookPick = 0.07;
+    let activeTab = 'overview';
+    let activeRange = 'all';
+    let activeWorkspace = 'all';
+    let detectedCurrentWorkspace = '';
+    let lastPanelRenderKey = '';
+    let cachedAggKey = '';
+    let curScope = 'local';
     const modelColours = usageCore?.createHomeModelColours ? usageCore.createHomeModelColours() : () => ({});
     const mk = (tag, cls, txt, attrs) => {
       if (txt && typeof txt === 'object') { attrs = txt; txt = null; }
@@ -108,7 +113,7 @@
     const scopeStorageKey = (sc) => (sc && sc !== 'local' ? `${storageUsageCacheKey}:${sc}` : storageUsageCacheKey);
     const clearSaveTimers = () => {
       if (saveUsageTimer) { clearTimeout(saveUsageTimer); saveUsageTimer = 0; }
-      if (saveUsageIdle) { try { if (typeof cancelIdleCallback === 'function') cancelIdleCallback(saveUsageIdle); } catch {} saveUsageIdle = 0; }
+      if (saveUsageIdle) { try { if (isFn(G.cancelIdleCallback)) G.cancelIdleCallback(saveUsageIdle); } catch {} saveUsageIdle = 0; }
     };
     const wsUrisOf = (s) => {
       const o = [];
@@ -122,10 +127,12 @@
     const detectScope = (entries, st, bScope) => {
       const w = getWin();
       const d = getDoc() || w?.document || null;
-      for (const c of [scOpt, w?.__agPrismScopeKey, d?.documentElement?.getAttribute?.('data-ag-prism-scope'), bScope, w?.location?.href, d?.title, st?.remoteAuthority, st?.workspace?.uri, st?.workspaceUri]) {
+      const bn = normalizeScopeKey(bScope);
+      for (const c of [scOpt, w?.__agPrismScopeKey, bn, w?.location?.href, d?.title, st?.remoteAuthority, st?.workspace?.uri, st?.workspaceUri]) {
         const sc = normalizeScopeKey(c);
         if (sc && sc !== 'local') return sc;
       }
+      if (bn === 'local') return 'local';
       let rem = '';
       let rc = 0;
       let lc = 0;
@@ -141,9 +148,15 @@
       }
       return rem && rc > 0 && rc >= lc ? rem : 'local';
     };
-    let curScope = 'local';
     try { const st = ensureHooks?.()?.store?.getState?.(); curScope = detectScope(st?.trajectorySummaries?.summaries ? Object.entries(st.trajectorySummaries.summaries) : null, st, ''); } catch { curScope = detectScope(null, null, ''); }
-    const syncScopeAttr = (sc) => { try { const de = getDoc()?.documentElement; if (sc && sc !== 'local' && de) setAttrIfChanged?.(de, 'data-ag-prism-scope', sc); } catch {} };
+    const syncScopeAttr = (sc) => {
+      try {
+        const de = getDoc()?.documentElement;
+        if (!de) return;
+        if (sc && sc !== 'local') setAttrIfChanged?.(de, 'data-ag-prism-scope', sc);
+        else de.removeAttribute?.('data-ag-prism-scope');
+      } catch {}
+    };
     syncScopeAttr(curScope);
 
     const getLs = () => (typeof localStorage !== 'undefined' && localStorage) || null;
@@ -151,12 +164,10 @@
       usageRecords.clear(); usageHasData = false;
       try {
         const ls = getLs();
-        if (ls) {
-          const raw = JSON.parse(ls.getItem(scopeStorageKey(sc)) || '{}');
-          if (raw && typeof raw === 'object') {
-            for (const [id, rec] of Object.entries(raw)) if (rec?.days) usageRecords.set(id, rec);
-            if (usageRecords.size > 0) { usageHasData = true; usageDataEpoch += 1; }
-          }
+        const raw = ls && JSON.parse(ls.getItem(scopeStorageKey(sc)) || '{}');
+        if (raw && typeof raw === 'object') {
+          for (const [id, rec] of Object.entries(raw)) if (rec?.days) usageRecords.set(id, rec);
+          if (usageRecords.size > 0) { usageHasData = true; usageDataEpoch += 1; }
         }
       } catch {}
     };
@@ -166,20 +177,21 @@
       const norm = normalizeScopeKey(next) || 'local';
       if (norm === curScope) return false;
       clearSaveTimers();
-      curScope = norm; syncScopeAttr(curScope);
-      activeWorkspace = 'all'; detectedCurrentWorkspace = ''; lastUsageFetchAt = 0; cachedAggKey = ''; cachedAggData = null; lastPanelRenderKey = ''; usageDataEpoch += 1;
+      curScope = norm; localSaveBlocked = false; syncScopeAttr(curScope);
+      activeWorkspace = 'all'; detectedCurrentWorkspace = cachedAggKey = lastPanelRenderKey = ''; lastUsageFetchAt = 0; cachedAggData = null; usageDataEpoch += 1;
       loadScopeCache(curScope);
       return true;
     };
 
     const flushUsageCacheNow = () => {
       clearSaveTimers();
+      if (curScope === 'local' && localSaveBlocked) return;
       try {
         const ls = getLs();
         if (!ls) return;
-        let entries = Array.from(usageRecords.entries());
+        let entries = [...usageRecords];
         if (entries.length > 1200) {
-          entries.sort((a, b) => Number(b[1]?.lastModifiedSec || 0) - Number(a[1]?.lastModifiedSec || 0));
+          entries.sort((a, b) => (+b[1]?.lastModifiedSec || 0) - (+a[1]?.lastModifiedSec || 0));
           entries = entries.slice(0, 1200);
         }
         const obj = {};
@@ -188,34 +200,30 @@
       } catch {}
     };
     const saveUsageCache = () => {
-      if (isDestroyed() || typeof setTimeout !== 'function') { flushUsageCacheNow(); return; }
+      if (curScope === 'local' && localSaveBlocked) return;
+      if (isDestroyed() || !isFn(setTimeout)) { flushUsageCacheNow(); return; }
       clearSaveTimers();
       saveUsageTimer = setTimeout(() => {
         saveUsageTimer = 0;
         if (isDestroyed()) return;
-        if (typeof requestIdleCallback === 'function') {
-          saveUsageIdle = requestIdleCallback(() => { saveUsageIdle = 0; if (!isDestroyed()) flushUsageCacheNow(); }, { timeout: 2500 });
-        } else {
-          flushUsageCacheNow();
-        }
+        if (isFn(G.requestIdleCallback)) saveUsageIdle = G.requestIdleCallback(() => { saveUsageIdle = 0; if (!isDestroyed()) flushUsageCacheNow(); }, { timeout: 2500 });
+        else flushUsageCacheNow();
       }, 1200);
     };
 
+    const toSec = (n, o, iso) => (+(n || o?.seconds) || 0) || (typeof iso === 'string' ? Math.floor((Date.parse(iso) || 0) / 1000) : 0);
     const extractMeta = (sum) => {
+      const tm = sum?.trajectoryMetadata;
       const workspace = usageCore?.extractWorkspaceId ? usageCore.extractWorkspaceId(sum) : String(sum?.workspace || '');
-      const workspaceUris = wsUrisOf(sum);
-      const parentId = String(sum?.trajectoryMetadata?.parentConversationId || sum?.parentConversationId || sum?.parentId || sum?.rootConversationId || sum?.rootId || '').trim();
-      const subagent = Boolean(sum?.subagent || parentId) || (usageCore?.isSubagentSummary ? usageCore.isSubagentSummary(sum) : false);
-      const lastModifiedSec = Number(sum?.lastModifiedSec || sum?.lastModifiedTime?.seconds || 0) || (typeof sum?.modifiedAt === 'string' ? Math.floor((Date.parse(sum.modifiedAt) || 0) / 1000) : 0);
-      const createdSec = Number(sum?.createdSec || sum?.createdTime?.seconds || 0) || (typeof sum?.createdAt === 'string' ? Math.floor((Date.parse(sum.createdAt) || 0) / 1000) : 0);
-      return { workspace, workspaceUris, parentId, subagent, lastModifiedSec, createdSec, stepCount: Number(sum?.stepCount ?? sum?.steps ?? 0) };
+      const parentId = String(tm?.parentConversationId || sum?.parentConversationId || sum?.parentId || sum?.rootConversationId || sum?.rootId || '').trim();
+      return { workspace, u: wsUrisOf(sum), parentId, subagent: !!(sum?.subagent || parentId || usageCore?.isSubagentSummary?.(sum)), lastModifiedSec: toSec(sum?.lastModifiedSec, sum?.lastModifiedTime, sum?.modifiedAt), createdSec: toSec(sum?.createdSec, sum?.createdTime, sum?.createdAt), stepCount: +(sum?.stepCount ?? sum?.steps ?? 0) || 0 };
     };
 
     const advanceCachedCursor = (prev, id, sum, defer) => {
       const m = extractMeta(sum);
+      const tail = defer ? { _do: 1 } : null;
       if (prev?.days) {
-        const keep = defer || hasRealUsage(prev);
-        return { ...prev, stepCount: keep ? Number(prev.stepCount || 0) : m.stepCount, lastModifiedSec: keep ? Number(prev.lastModifiedSec || 0) : m.lastModifiedSec, subagent: prev.subagent || m.subagent, workspace: m.workspace || prev.workspace || '', parentId: m.parentId || prev.parentId || '', ...(defer ? { _do: 1 } : {}) };
+        return { ...prev, stepCount: m.stepCount, lastModifiedSec: m.lastModifiedSec, subagent: prev.subagent || m.subagent, workspace: m.workspace || prev.workspace || '', parentId: m.parentId || prev.parentId || '', ...tail };
       }
       const sec = m.lastModifiedSec || m.createdSec || 0;
       const days = {};
@@ -225,7 +233,7 @@
         hours[d.getHours()] = 1;
         days[usageCore.homeDayKey(d)] = { calls: 1, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, hours, models: {} };
       }
-      return { cascadeId: String(id || ''), stepCount: defer ? 0 : m.stepCount, lastModifiedSec: defer ? 0 : m.lastModifiedSec, gmCount: 0, subagent: m.subagent, workspace: m.workspace, parentId: m.parentId, calls: 0, days, ...(defer ? { _do: 1 } : {}) };
+      return { cascadeId: String(id || ''), stepCount: m.stepCount, lastModifiedSec: m.lastModifiedSec, gmCount: 0, subagent: m.subagent, workspace: m.workspace, parentId: m.parentId, calls: 0, days, ...tail };
     };
 
     const detectCurrentWorkspaceName = (entries) => {
@@ -254,7 +262,6 @@
       Promise.resolve().then(fn).then((v) => done(v || null), () => done(null));
     });
     const callPrismMetricsBinding = (win, input) => {
-      const callName = '__agPrismMetricsCall';
       const resName = '__agPrismMetricsResolve';
       const reqId = 800000000 + (++quotaBindingSeq);
       const prev = win[resName];
@@ -268,10 +275,10 @@
       return withTimeout(() => new Promise((resolve) => {
         cb = (id, payload) => {
           if (id === reqId) { restore(); resolve(payload && typeof payload === 'object' ? payload : null); }
-          else if (typeof prev === 'function') prev(id, payload);
+          else if (isFn(prev)) prev(id, payload);
         };
         win[resName] = cb;
-        try { win[callName](JSON.stringify({ id: reqId, input })); } catch { restore(); resolve(null); }
+        try { win.__agPrismMetricsCall(JSON.stringify({ id: reqId, input })); } catch { restore(); resolve(null); }
       }), 10500, restore);
     };
 
@@ -291,23 +298,23 @@
       if (activeTab === 'quotas') renderHomePanel();
       const pending = (async () => {
         try {
-          const forceFlag = Boolean(force);
-          const req = { conversationId: null, force: forceFlag, quotaRefresh: Boolean(opts?.quotaRefresh ?? forceFlag), selectLatest: false };
+          const ff = !!force;
+          const req = { conversationId: null, force: ff, quotaRefresh: !!(opts?.quotaRefresh ?? ff), selectLatest: false };
           const host = win.agPulseHost;
-          const isPrismHost = Boolean(host?.__prismFallback);
-          const hasExternalHost = typeof host?.getMetrics === 'function' && !isPrismHost;
+          const isPrismHost = !!host?.__prismFallback;
+          const hm = host?.getMetrics;
           const bridge = win.__agPrismMetricsBridge;
           const tel = win.__agPrismTelemetry;
           let snap = null;
           const pick = (v) => { if (hasUsableQuotas(v)) snap = v; };
           const tryPick = async (fn, ms) => pick(await withTimeout(fn, ms));
 
-          if (hasExternalHost) await tryPick(() => host.getMetrics(req), 3000);
+          if (isFn(hm) && !isPrismHost) await tryPick(() => hm.call(host, req), 3000);
           if (!hasUsableQuotas(snap) && !telemetryOff) {
-            if (isPrismHost && typeof host?.getMetrics === 'function') await tryPick(() => host.getMetrics(req), 10500);
-            else if (typeof bridge?.getMetrics === 'function') await tryPick(() => bridge.getMetrics(req), 10500);
-            else if (typeof win.__agPrismMetricsCall === 'function') pick(await callPrismMetricsBinding(win, req));
-            else if (!host?.getMetrics && typeof tel?.refresh === 'function') await tryPick(() => tel.refresh(), 4500);
+            if (isPrismHost && isFn(hm)) await tryPick(() => hm.call(host, req), 10500);
+            else if (isFn(bridge?.getMetrics)) await tryPick(() => bridge.getMetrics(req), 10500);
+            else if (isFn(win.__agPrismMetricsCall)) pick(await callPrismMetricsBinding(win, req));
+            else if (!hm && isFn(tel?.refresh)) await tryPick(() => tel.refresh(), 4500);
             if (!hasUsableQuotas(snap)) pick(tel?.getLatestSnapshot?.());
           }
           if (hasUsableQuotas(snap)) { liveQuotaSnap = snap; lastQuotaFetchAt = Date.now(); lastQuotaFailAt = 0; quotaEpoch += 1; }
@@ -321,21 +328,19 @@
           if (!isDestroyed() && activeTab === 'quotas') renderHomePanel();
         }
       })();
-      quotaPending = pending;
-      return pending;
+      return (quotaPending = pending);
     };
 
     const scheduleUsageRollupRefresh = (delayMs = 1800) => {
       if (isDestroyed() || usageLoading || getHomeLayout() !== 'studio') return;
-      const d = getDoc();
-      if (!usageHasData && !canMountRealCanvas(d.body)) { void refreshUsageRollup(false); return; }
+      if (!usageHasData && !canMountRealCanvas(getDoc()?.body)) { void refreshUsageRollup(false); return; }
       if (deferredUsageTimer) return;
       const onHome = () => !isDestroyed() && getDoc()?.querySelector('.agy-home') && getHomeLayout() === 'studio';
       deferredUsageTimer = setTimeout(() => {
         deferredUsageTimer = 0;
         if (!onHome()) return;
         const run = () => { if (onHome()) void refreshUsageRollup(false); };
-        if (usageHasData && typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 2200 });
+        if (usageHasData && isFn(G.requestIdleCallback)) G.requestIdleCallback(run, { timeout: 2200 });
         else run();
       }, usageHasData ? Math.max(400, delayMs) : 80);
     };
@@ -355,7 +360,7 @@
       const win = getWin();
       const usageBridge = win?.__agPrismUsageBridge || null;
       if (!usageHasData && canMountRealCanvas(getDoc()?.body) && usageBridge && !usageBridge.isOnline?.() && !inCooldown(lastOfflineWaitAt, 15000, now)) {
-        const wTick = Math.max(5, Number(waitTickMs) || 120);
+        const wTick = Math.max(5, +waitTickMs || 120);
         usageLoading = true; renderHomePanel();
         for (let w = 0; w < 10 && !isDestroyed() && !usageBridge.isOnline?.(); w++) await sleep(wTick);
         usageLoading = false;
@@ -369,12 +374,13 @@
       let seededCache = false;
       let bridgeScopeKey = '';
       let bridgeRecs = null;
-      const bridgeOnline = Boolean(usageBridge?.isOnline?.());
-      if (bridgeOnline && typeof usageBridge.listSummaries === 'function') {
+      const bridgeOnline = !!usageBridge?.isOnline?.();
+      if (bridgeOnline && isFn(usageBridge.listSummaries)) {
         try {
           const sumRes = await usageBridge.listSummaries(8000);
           if (typeof sumRes?.scopeKey === 'string' && sumRes.scopeKey) bridgeScopeKey = normalizeScopeKey(sumRes.scopeKey);
-          const bList = Array.isArray(sumRes?.summaries) ? sumRes.summaries : sumRes?.summaries && typeof sumRes.summaries === 'object' ? Object.entries(sumRes.summaries).map(([k, v]) => ({ id: k, ...v })) : [];
+          const bs = sumRes?.summaries;
+          const bList = Array.isArray(bs) ? bs : bs && typeof bs === 'object' ? Object.entries(bs).map(([k, v]) => ({ id: k, ...v })) : [];
           for (const item of bList) {
             const sid = String(item?.id || item?.cascadeId || '').trim();
             if (!sid) continue;
@@ -384,7 +390,7 @@
               const im = extractMeta(item);
               const cm = extractMeta(cur);
               if (item.workspace && !cur.workspace && !cur.workspaces) cur.workspace = item.workspace;
-              if (im.workspaceUris.length && !cur.workspaces) cur.workspaces = im.workspaceUris;
+              if (im.u.length && !cur.workspaces) cur.workspaces = im.u;
               if (im.parentId && !cm.parentId) cur.parentId = im.parentId;
             }
           }
@@ -392,7 +398,7 @@
         } catch {}
       } else if (!liveQuotaSnap) { try { await liveSnapProm; } catch {} }
 
-      const resolvedScope = detectScope(Array.from(sumsMap.entries()), st, bridgeScopeKey);
+      const resolvedScope = detectScope([...sumsMap], st, bridgeScopeKey);
       if (resolvedScope !== curScope) switchScope(resolvedScope);
       for (const hit of Array.isArray(bridgeRecs) ? bridgeRecs : []) {
         if (!hit?.id || !hit.record?.days) continue;
@@ -401,10 +407,12 @@
       }
 
       if (curScope === 'local' && Array.isArray(liveQuotaSnap?.conversations)) {
-        for (const c of liveQuotaSnap.conversations) if (c?.id && !sumsMap.has(c.id)) sumsMap.set(c.id, { stepCount: Number(c.steps || 0), subagent: Boolean(c.subagent), parentConversationId: c.parentConversationId || '', rootConversationId: c.rootConversationId || '', workspace: c.workspace || '', modifiedAt: c.modifiedAt || '' });
+        for (const c of liveQuotaSnap.conversations) if (c?.id && !sumsMap.has(c.id)) sumsMap.set(c.id, { stepCount: +c.steps || 0, subagent: !!c.subagent, parentConversationId: c.parentConversationId || '', rootConversationId: c.rootConversationId || '', workspace: c.workspace || '', modifiedAt: c.modifiedAt || '' });
       }
-      const entries = Array.from(sumsMap.entries());
-      const canPrune = !usageBridge || bridgeOnline;
+      const entries = [...sumsMap];
+      const canPrune = bridgeOnline;
+      const rawTitle = String((getDoc() || win?.document)?.title || '').trim();
+      localSaveBlocked = curScope === 'local' && !!(usageBridge && !bridgeOnline) && (!rawTitle || /^antigravity$/i.test(rawTitle)) && !normalizeScopeKey(scOpt) && !normalizeScopeKey(win?.__agPrismScopeKey) && !bridgeScopeKey && !entries.some(([, s]) => wsUrisOf(s).some((u) => /^(?:file:\/\/|[a-z]:[\\/])/i.test(u)));
       detectedCurrentWorkspace = detectCurrentWorkspaceName(entries) || detectedCurrentWorkspace;
       if (entries.length === 0) { usageHasData = true; if (canPrune) lastUsageFetchAt = now; renderHomePanel(); return; }
 
@@ -416,14 +424,14 @@
         const m = extractMeta(sum);
         const cached = usageRecords.get(id);
         if (!cached || (bridgeOnline && cached._do) || cached.stepCount !== m.stepCount || cached.lastModifiedSec !== m.lastModifiedSec) staleIds.push([id, sum]);
-        else if ((m.workspace && !cached.workspace) || (m.parentId && !cached.parentId)) { cached.workspace = m.workspace || cached.workspace || ''; cached.parentId = m.parentId || cached.parentId || ''; patchedMeta = true; }
+        else if ((m.workspace && !cached.workspace) || (m.parentId && !cached.parentId)) { cached.workspace ||= m.workspace; cached.parentId ||= m.parentId; patchedMeta = true; }
       }
       if (patchedMeta) usageDataEpoch += 1;
       staleIds.sort((a, b) => extractMeta(b[1]).lastModifiedSec - extractMeta(a[1]).lastModifiedSec);
 
       let deletedAny = false;
       if (canPrune) {
-        for (const oldId of Array.from(usageRecords.keys())) {
+        for (const oldId of [...usageRecords.keys()]) {
           if (!presentIds.has(oldId)) {
             const oldRec = usageRecords.get(oldId);
             if (oldRec?.subagent && oldRec?.parentId && presentIds.has(oldRec.parentId)) continue;
@@ -438,16 +446,16 @@
       if (!usageHasData) renderHomePanel();
       const applyRecord = (id, sum, prev, rec, m) => {
         if (hasRealUsage(prev) && !hasRealUsage(rec)) usageRecords.set(id, advanceCachedCursor(prev, id, sum, true));
-        else { const n = { ...rec, subagent: Boolean(rec.subagent || m.subagent), workspace: rec.workspace || m.workspace || '', parentId: rec.parentId || m.parentId || '' }; delete n._do; usageRecords.set(id, n); }
+        else { const n = { ...rec, subagent: !!(rec.subagent || m.subagent), workspace: rec.workspace || m.workspace || '', parentId: rec.parentId || m.parentId || '' }; delete n._do; usageRecords.set(id, n); }
       };
       try {
-        if (usageBridge && typeof usageBridge.fetchBatch === 'function' && bridgeOnline) {
+        if (usageBridge && isFn(usageBridge.fetchBatch) && bridgeOnline) {
           for (let i = 0; i < staleIds.length && !isDestroyed(); i += 6) {
             const slice = staleIds.slice(i, i + 6);
             const reqItems = slice.map(([id, sum]) => {
               const c = usageRecords.get(id);
               const m = extractMeta(sum);
-              return { id, stepCount: m.stepCount, lastModifiedSec: m.lastModifiedSec, createdSec: m.createdSec, subagent: m.subagent, workspace: m.workspace, ...(m.workspaceUris.length ? { workspaces: m.workspaceUris } : {}), parentId: m.parentId, gmOffset: c && !c._do && Number.isInteger(c.gmCount) && c.gmCount > 0 ? c.gmCount : 0 };
+              return { id, stepCount: m.stepCount, lastModifiedSec: m.lastModifiedSec, createdSec: m.createdSec, subagent: m.subagent, workspace: m.workspace, ...(m.u.length ? { workspaces: m.u } : {}), parentId: m.parentId, gmOffset: c && !c._do && Number.isInteger(c.gmCount) && c.gmCount > 0 ? c.gmCount : 0 };
             });
             const res = await usageBridge.fetchBatch(reqItems, 18000);
             const byId = res?.ok && Array.isArray(res.records) ? new Map(res.records.map((r) => [r.id, r])) : null;
@@ -457,7 +465,7 @@
               const m = extractMeta(sum);
               if (hit?.mode === 'full' && hit.record) applyRecord(id, sum, prev, hit.record, m);
               else if (hit?.mode === 'delta' && hit.delta && usageCore.mergeUsageRecordDelta) {
-                const nr = usageCore.mergeUsageRecordDelta(prev, hit.delta, { cascadeId: id, stepCount: m.stepCount, lastModifiedSec: m.lastModifiedSec, gmCount: Number(hit.gmCount || 0), subagent: m.subagent, workspace: m.workspace, parentId: m.parentId });
+                const nr = usageCore.mergeUsageRecordDelta(prev, hit.delta, { cascadeId: id, stepCount: m.stepCount, lastModifiedSec: m.lastModifiedSec, gmCount: +hit.gmCount || 0, subagent: m.subagent, workspace: m.workspace, parentId: m.parentId });
                 if (nr && typeof nr === 'object') delete nr._do;
                 usageRecords.set(id, nr);
               } else usageRecords.set(id, advanceCachedCursor(prev, id, sum, true));
@@ -466,7 +474,7 @@
           }
         } else {
           const CONC = usageHasData ? 1 : 2;
-          const canDirect = typeof h.svc?.getCascadeTrajectory === 'function';
+          const canDirect = isFn(h.svc?.getCascadeTrajectory);
           for (let i = 0; i < staleIds.length && !isDestroyed(); i += CONC) {
             await Promise.all(staleIds.slice(i, i + CONC).map(async ([id, sum]) => {
               const prev = usageRecords.get(id);
@@ -483,6 +491,8 @@
           }
         }
         if (!isDestroyed()) { usageHasData = true; usageDataEpoch += 1; if (canPrune) lastUsageFetchAt = Date.now(); saveUsageCache(); }
+      } catch {
+        if (!isDestroyed()) usageHasData = true;
       } finally {
         usageLoading = false;
         if (!isDestroyed()) renderHomePanel();
@@ -494,7 +504,7 @@
         if (!usageHasData) bookPick = Math.random();
         if (getHomeLayout() === 'studio') scheduleUsageRollupRefresh(1800);
       } else if (!inHero && deferredUsageTimer) { clearTimeout(deferredUsageTimer); deferredUsageTimer = 0; }
-      wasHero = Boolean(inHero);
+      wasHero = !!inHero;
 
       const h1 = getDoc()?.querySelector('[data-testid="home-greeting"] h1');
       if (!h1) return;
@@ -507,7 +517,7 @@
       const lang = getLang();
       const name = getDisplayName();
       const gMap = { 'zh-CN': '接下来做什么', 'zh-TW': '接下來做什麼', yue: '跟住想做啲咩', ja: '次は何をしますか' };
-      const target = gMap[lang] ? gMap[lang] + (name ? '，' + name : '') + '？' : "What's up next" + (name ? ', ' + name : '') + '?';
+      const target = gMap[lang] ? gMap[lang] + (name ? (lang === 'ja' ? '、' : '，') + name : '') + '？' : "What's up next" + (name ? ', ' + name : '') + '?';
       setAttrIfChanged(h1, 'data-ag-no-i18n', '');
       if (h1.textContent !== target) {
         const prev = replacedGreetings.get(h1);
@@ -518,7 +528,7 @@
     };
 
     const restoreGreetings = () => {
-      for (const [el, rec] of replacedGreetings.entries()) {
+      for (const [el, rec] of replacedGreetings) {
         el.removeAttribute('data-ag-no-i18n');
         if (el.isConnected && el.textContent === rec.written) el.textContent = rec.host;
       }
@@ -527,7 +537,7 @@
 
     const hideHeatTip = () => {
       shownHeatCell = pendingHeatCell = null;
-      if (heatTipRaf && typeof cancelAnimationFrame === 'function') { cancelAnimationFrame(heatTipRaf); heatTipRaf = 0; }
+      if (heatTipRaf && isFn(G.cancelAnimationFrame)) { G.cancelAnimationFrame(heatTipRaf); heatTipRaf = 0; }
       if (heatTipEl) heatTipEl.removeAttribute('data-shown');
     };
 
@@ -547,8 +557,7 @@
       const cH = cell.offsetHeight || 10;
       const estW = Math.max(88, Math.min(240, tipText.length * 6.8 + 18));
       const left = Math.min(Math.max(cL + cW * 0.5 - estW * 0.5, 0), Math.max(0, gW - estW));
-      const below = gH - (cT + cH);
-      const top = below > cT && below >= 30 ? cT + cH + 6 : cT - 30;
+      const top = gH - cT - cH > cT && gH - cT - cH >= 30 ? cT + cH + 6 : cT - 30;
       runGuardedMut(() => {
         if (heatTipEl.textContent !== tipText) heatTipEl.textContent = tipText;
         heatTipEl.style.transform = `translate3d(${Math.round(left)}px,${Math.round(top)}px,0)`;
@@ -559,7 +568,7 @@
     const showHeatTip = (cell, grid) => {
       if (!cell || !heatTipEl || cell === shownHeatCell) return;
       pendingHeatCell = cell; pendingHeatGrid = grid;
-      if (typeof requestAnimationFrame === 'function') { if (!heatTipRaf) heatTipRaf = requestAnimationFrame(flushHeatTip); }
+      if (isFn(G.requestAnimationFrame)) { if (!heatTipRaf) heatTipRaf = G.requestAnimationFrame(flushHeatTip); }
       else flushHeatTip();
     };
 
@@ -570,22 +579,19 @@
 
     const unmountPanelSeat = () => {
       if (deferredUsageTimer) { clearTimeout(deferredUsageTimer); deferredUsageTimer = 0; }
-      if (panelSeat?.parentElement) panelSeat.parentElement.removeChild(panelSeat);
-      panelSeat = panelEl = heatTipEl = shownHeatCell = null;
-      if (heatTipRaf && typeof cancelAnimationFrame === 'function') { cancelAnimationFrame(heatTipRaf); heatTipRaf = 0; }
+      parkPanelSeat();
+      panelSeat = panelEl = heatTipEl = null;
       lastPanelRenderKey = '';
     };
 
     const ensurePanelSeat = () => {
       if (getHomeLayout() !== 'studio') { unmountPanelSeat(); return null; }
       const d = getDoc();
-      if (d?.head && !d.getElementById(STUDIO_STYLE_ID)) {
+      const st = d?.head && d.getElementById(STUDIO_STYLE_ID);
+      if (d?.head && (!st || st.textContent !== STUDIO_EXTRA_CSS)) {
         runGuardedMut(() => {
-          if (!d.getElementById(STUDIO_STYLE_ID)) {
-            const st = mk('style', '', STUDIO_EXTRA_CSS, { 'data-ag-owned': '1' });
-            st.id = STUDIO_STYLE_ID;
-            ap(d.head, st);
-          }
+          if (st) st.textContent = STUDIO_EXTRA_CSS;
+          else { const s = mk('style', '', STUDIO_EXTRA_CSS, { 'data-ag-owned': '1' }); s.id = STUDIO_STYLE_ID; ap(d.head, s); }
         });
       }
       const home = d?.querySelector('.agy-home');
@@ -605,6 +611,7 @@
 
     const renderQuotasView = (panel, lang, ui) => {
       const fmtTok = usageCore.formatCompactTokens;
+      const qWin = usageCore.quotaWindows;
       const wrap = dv('ag-cs-quota-wrap');
       const refreshBtn = bt('ag-cs-quota-refresh', quotaLoading ? ui.thinkingEllipsis || 'Loading…' : ui.refreshBtnTitle || 'Refresh', () => {
         const now = Date.now();
@@ -615,7 +622,7 @@
       refreshBtn.disabled = quotaLoading;
       ap(wrap, ap(dv('ag-cs-quota-toolbar'), sp('', ui.quotaPoolsTitle || 'Model Quota Pools Remaining'), refreshBtn));
 
-      const groups = Array.isArray(liveQuotaSnap?.groups) ? liveQuotaSnap.groups.filter((g) => g && (!usageCore.quotaWindows || usageCore.quotaWindows(g).length > 0)) : [];
+      const groups = Array.isArray(liveQuotaSnap?.groups) ? liveQuotaSnap.groups.filter((g) => g && (!qWin || qWin(g).length > 0)) : [];
       if (groups.length === 0) { ap(panel, ap(wrap, dv('ag-cs-home-models-empty', quotaLoading ? ui.quotaLoading || 'Loading…' : ui.quotaEmptyHint || 'Waiting for live quota snapshot…'))); return; }
 
       const grid = dv('ag-cs-quota-grid');
@@ -628,10 +635,10 @@
         const card = dv('ag-cs-quota-card', { 'data-quota-kind': usageCore.quotaGroupKind ? usageCore.quotaGroupKind(grp) : 'other' });
         const winEntries = [];
         let minRem = 2;
-        for (const [wk, bucket] of usageCore.quotaWindows ? usageCore.quotaWindows(grp) : []) {
-          const fc = usageCore.quotaForecast ? usageCore.quotaForecast(bucket, wk) : null;
+        for (const [wk, bucket] of qWin ? qWin(grp) : []) {
+          const fc = usageCore.quotaForecast?.(bucket, wk);
           if (!fc) continue;
-          const rem = typeof fc.remaining === 'number' && Number.isFinite(fc.remaining) ? Math.max(0, Math.min(1, fc.remaining)) : 0;
+          const rem = isFin(fc.remaining) ? Math.max(0, Math.min(1, fc.remaining)) : 0;
           if (rem < minRem) minRem = rem;
           winEntries.push([wk, fc, rem]);
         }
@@ -664,7 +671,7 @@
       const aggKey = `${usageDataEpoch}|${usageRecords.size}|${activeRange}|${activeWorkspace}|${lang}|${bookPick}`;
       let data = cachedAggData;
       if (!data || cachedAggKey !== aggKey) {
-        data = usageCore.aggregateUsageRollup(Array.from(usageRecords.values()), activeRange, bookPick, lang, undefined, { workspace: activeWorkspace });
+        data = usageCore.aggregateUsageRollup([...usageRecords.values()], activeRange, bookPick, lang, undefined, { workspace: activeWorkspace });
         cachedAggKey = aggKey; cachedAggData = data;
       }
       const wsList = Array.isArray(data.workspaces) ? data.workspaces : [];
@@ -673,7 +680,7 @@
         return renderHomePanel(true);
       }
       const isQuotasTab = activeTab === 'quotas';
-      const renderKey = [curScope, lang, activeTab, activeRange, activeWorkspace, modelsExpanded ? 1 : 0, skeleton ? 1 : 0, isQuotasTab ? (quotaLoading ? 1 : 0) : 0, isQuotasTab ? quotaEpoch : 0, usageRecords.size, data.sessions, data.calls, data.tokens, data.subagentTokens || 0, data.cacheHitRate != null ? data.cacheHitRate.toFixed(3) : '-', data.activeDays, data.model || ''].join('|');
+      const renderKey = [curScope, lang, activeTab, activeRange, activeWorkspace, +modelsExpanded, +skeleton, isQuotasTab ? +quotaLoading : 0, isQuotasTab ? quotaEpoch : 0, usageRecords.size, data.sessions, data.calls, data.tokens, data.subagentTokens || 0, data.cacheHitRate != null ? data.cacheHitRate.toFixed(3) : '-', data.activeDays, data.model || ''].join('|');
       if (!force && renderKey === lastPanelRenderKey && panel.childElementCount > 0) return;
       lastPanelRenderKey = renderKey;
 
@@ -704,16 +711,16 @@
         }
 
         const headRight = dv('ag-cs-home-head-right');
-        if (activeTab !== 'quotas' && wsList.length > 0) {
-          const sel = mk('select', 'ag-cs-home-ws-select', { 'data-ag-cs-ws-filter': '1', 'aria-label': ui.workspaceFilterAria || 'Workspace filter' });
-          const addOpt = (v, t) => { const o = mk('option', '', t); o.value = v; ap(sel, o); };
-          addOpt('all', ui.workspaceAll || 'All Projects');
-          for (const ws of wsList) addOpt(ws.id, `${detectedCurrentWorkspace && ws.id === detectedCurrentWorkspace ? '● ' : ''}${ws.id} (${fmtTok(ws.tokens)})`);
-          sel.value = activeWorkspace;
-          sel.addEventListener('change', () => { activeWorkspace = sel.value || 'all'; renderHomePanel(); });
-          ap(headRight, sel);
-        }
-        if (activeTab !== 'quotas') {
+        if (!isQuotasTab) {
+          if (wsList.length > 0) {
+            const sel = mk('select', 'ag-cs-home-ws-select', { 'data-ag-cs-ws-filter': '1', 'aria-label': ui.workspaceFilterAria || 'Workspace filter' });
+            const addOpt = (v, t) => { const o = mk('option', '', t); o.value = v; ap(sel, o); };
+            addOpt('all', ui.workspaceAll || 'All Projects');
+            for (const ws of wsList) addOpt(ws.id, `${detectedCurrentWorkspace && ws.id === detectedCurrentWorkspace ? '● ' : ''}${ws.id} (${fmtTok(ws.tokens)})`);
+            sel.value = activeWorkspace;
+            sel.addEventListener('change', () => { activeWorkspace = sel.value || 'all'; renderHomePanel(); });
+            ap(headRight, sel);
+          }
           const ranges = dv('ag-cs-home-ranges');
           for (const r of usageCore.HOME_RANGES) {
             ap(ranges, bt('ag-cs-home-range', usageCore.homeRangeLabel ? usageCore.homeRangeLabel(r, lang) : r.labelEn, () => { activeRange = r.id; renderHomePanel(); }, activeRange === r.id ? { 'data-range': r.id, 'data-active': '' } : { 'data-range': r.id }));
@@ -722,19 +729,18 @@
         }
         ap(panel, ap(dv('ag-cs-home-panel-head'), headLeft, headRight));
 
-        if (activeTab === 'quotas') { renderQuotasView(panel, lang, ui); return; }
+        if (isQuotasTab) { renderQuotasView(panel, lang, ui); return; }
 
         if (activeTab === 'overview') {
           const stats = dv('ag-cs-home-stats');
-          const hasCache = typeof data.cacheHitRate === 'number' && Number.isFinite(data.cacheHitRate);
-          const cacheVal = hasCache ? usageCore.fmtPct(data.cacheHitRate * 100, 1) : '—';
+          const cacheVal = isFin(data.cacheHitRate) ? usageCore.fmtPct(data.cacheHitRate * 100, 1) : '—';
           const cacheTitle = typeof data.cacheHitRate === 'number' ? `${ui.cacheRead || 'Cache'}: ${fmtTok(data.cacheReadTokens || 0)} / ${fmtTok(data.totalInput || 0)}${data.peakHour ? ` · ${data.peakHour}` : ''}` : data.peakHour || '—';
-          const subTok = Number(data.subagentTokens || 0);
-          const subSes = Number(data.subagentSessions || 0);
+          const subTok = +data.subagentTokens || 0;
+          const subSes = +data.subagentSessions || 0;
           const subPct = data.tokens > 0 && subTok > 0 ? Math.round((subTok / data.tokens) * 100) : 0;
-          const swarmSub = subTok > 0 ? (typeof ui.swarmSplitSub === 'function' ? ui.swarmSplitSub(100 - subPct, subPct) : `Main ${100 - subPct}% · Swarm ${subPct}%`) : '';
+          const swarmSub = subTok > 0 ? (isFn(ui.swarmSplitSub) ? ui.swarmSplitSub(100 - subPct, subPct) : `Main ${100 - subPct}% · Swarm ${subPct}%`) : '';
 
-          for (const [k, label, valText, titleText, subTxt] of [
+          for (const [k, lb, vt, tt, stx] of [
             ['sessions', ui.kpiSessions || 'Sessions', fmtCnt(data.sessions), subSes > 0 ? `${data.sessions} + ${subSes} subagents` : String(data.sessions)],
             ['calls', ui.kpiCalls || 'Messages', fmtCnt(data.calls), String(data.calls)],
             ['tokens', ui.kpiTokens || 'Total tokens', fmtTok(data.tokens), `${fmtCnt(data.tokens)} tokens${swarmSub ? ` (${swarmSub})` : ''}`, swarmSub],
@@ -743,21 +749,22 @@
             ['model', ui.kpiFavModel || 'Favorite model', data.model || '—', data.model || '—'],
           ]) {
             const cell = dv('ag-cs-home-stat', skeleton ? { 'data-stat': k, 'data-skeleton': '' } : { 'data-stat': k });
-            const val = sp('ag-cs-home-stat-value', skeleton ? '' : valText);
-            if (!skeleton) val.title = titleText;
+            const val = sp('ag-cs-home-stat-value', skeleton ? '' : vt);
+            if (!skeleton) val.title = tt;
             let sEl = null;
-            if (!skeleton && subTxt) { sEl = sp('ag-cs-home-stat-sub', subTxt); sEl.title = titleText; }
-            ap(stats, ap(cell, sp('ag-cs-home-stat-label', label), val, sEl));
+            if (!skeleton && stx) { sEl = sp('ag-cs-home-stat-sub', stx); sEl.title = tt; }
+            ap(stats, ap(cell, sp('ag-cs-home-stat-label', lb), val, sEl));
           }
           ap(panel, stats);
 
           const heat = dv('ag-cs-home-heat', skeleton ? { 'data-skeleton': '' } : null);
           const fmt = usageCore.homeShortDateFormat(lang);
           const d = getDoc();
-          const heatFrag = typeof d?.createDocumentFragment === 'function' ? d.createDocumentFragment() : heat;
+          const heatFrag = isFn(d?.createDocumentFragment) ? d.createDocumentFragment() : heat;
           for (const c of data.grid.cells) {
-            const tip = !skeleton ? `${usageCore.homeShortDate(fmt, c.date)} — ${fmtTok(c.tokens)} ${ui.tokenUnit || 'tokens'}` : '';
-            ap(heatFrag, sp('ag-cs-home-heat-cell', !skeleton ? { 'data-level': String(c.level), 'data-tip': tip, 'aria-label': tip } : { 'data-level': String(c.level) }));
+            const lv = String(c.level);
+            const tip = skeleton ? '' : `${usageCore.homeShortDate(fmt, c.date)} — ${fmtTok(c.tokens)} ${ui.tokenUnit || 'tokens'}`;
+            ap(heatFrag, sp('ag-cs-home-heat-cell', skeleton ? { 'data-level': lv } : { 'data-level': lv, 'data-tip': tip, 'aria-label': tip }));
           }
           if (heatFrag !== heat) ap(heat, heatFrag);
           heatTipEl = sp('ag-cs-home-heat-hint', { 'aria-hidden': 'true' });
@@ -769,22 +776,22 @@
           const models = data.models || [];
           if (models.length === 0) { ap(panel, dv('ag-cs-home-models-empty', ui.noModelUsage || 'No model usage data yet')); return; }
           const ids = models.map((m) => m.id);
-          for (const col of data.modelDays || []) for (const id of Object.keys(col.models || {})) ids.push(id);
-          const colours = modelColours(ids);
           const columns = data.modelDays || [];
           const fmt = usageCore.homeShortDateFormat(lang);
+          for (const col of columns) for (const id of Object.keys(col.models || {})) ids.push(id);
+          const colours = modelColours(ids);
 
           if (columns.length > 0) {
             let peak = 0;
             for (const col of columns) { let sum = 0; for (const t of Object.values(col.models)) sum += t; if (sum > peak) peak = sum; }
             const top = usageCore.axisMax(peak);
             const plot = dv('ag-cs-home-chart-plot');
+            const bars = dv('ag-cs-home-chart-bars');
             for (const at of [1, 0.75, 0.5, 0.25, 0]) {
               const tick = sp('ag-cs-home-chart-tick', top > 0 ? fmtTok(top * at) : '');
               tick.style.bottom = `${at * 100}%`;
               ap(plot, tick);
             }
-            const bars = dv('ag-cs-home-chart-bars');
             for (const col of columns) {
               let dayTotal = 0;
               const stack = [];
@@ -802,11 +809,10 @@
             }
             const axis = dv('ag-cs-home-chart-axis');
             ap(panel, ap(dv('ag-cs-home-chart'), ap(plot, bars), axis));
-            requestAnimationFrame(() => {
+            G.requestAnimationFrame?.(() => {
               if (!axis.isConnected) return;
-              const plotW = plot.clientWidth || 420;
               const labels = columns.map((c) => usageCore.homeShortDate(fmt, c.date));
-              const ticks = usageCore.homeChartTicks(labels.map((l) => Math.max(32, l.length * 6.5)), plotW);
+              const ticks = usageCore.homeChartTicks(labels.map((l) => Math.max(32, l.length * 6.5)), plot.clientWidth || 420);
               runGuardedMut(() => {
                 axis.innerHTML = '';
                 for (const tk of ticks) { const lb = sp('ag-cs-home-chart-label', labels[tk.index]); lb.style.left = `${tk.left}px`; ap(axis, lb); }
@@ -816,19 +822,20 @@
 
           let totalAll = 0;
           for (const m of models) totalAll += m.tokens;
-          const shown = modelsExpanded ? models : models.slice(0, usageCore.HOME_MODEL_ROWS);
+          const rowCap = usageCore.HOME_MODEL_ROWS;
+          const shown = modelsExpanded ? models : models.slice(0, rowCap);
           const listEl = dv('ag-cs-home-models');
           for (const m of shown) {
             const row = dv('ag-cs-home-model');
             const subShare = m.tokens > 0 && m.subagentTokens > 0 ? ` · Swarm ${Math.round((m.subagentTokens / m.tokens) * 100)}%` : '';
             row.title = `${m.id} · ${m.sessions} ${ui.sessionsUnit || 'sessions'}${subShare}`;
             const inp = (m.input || 0) + (m.cacheRead || 0) + (m.cacheWrite || 0);
-            const cacheTag = typeof m.cacheHitRate === 'number' && Number.isFinite(m.cacheHitRate) ? ` · ${Math.round(m.cacheHitRate * 100)}% ${ui.cacheShort || 'Cache'}` : '';
+            const cacheTag = isFin(m.cacheHitRate) ? ` · ${Math.round(m.cacheHitRate * 100)}% ${ui.cacheShort || 'Cache'}` : '';
             ap(listEl, ap(row, sp('ag-cs-home-model-swatch', { 'data-color': String(colours[m.id] ?? 0) }), sp('ag-cs-home-model-name', m.id), sp('ag-cs-home-model-split', `${fmtTok(inp)} in · ${fmtTok(m.output || 0)} out${cacheTag}`), sp('ag-cs-home-model-share', totalAll > 0 ? (Math.round((m.tokens / totalAll) * 1000) / 10).toFixed(1) + '%' : '—')));
           }
-          if (models.length > usageCore.HOME_MODEL_ROWS) {
+          if (models.length > rowCap) {
             const hc = models.length - shown.length;
-            ap(listEl, bt('ag-cs-home-models-more', modelsExpanded ? ui.showLess || 'Show less' : typeof ui.showMoreN === 'function' ? ui.showMoreN(hc) : `Show ${hc} more`, () => { modelsExpanded = !modelsExpanded; renderHomePanel(); }));
+            ap(listEl, bt('ag-cs-home-models-more', modelsExpanded ? ui.showLess || 'Show less' : isFn(ui.showMoreN) ? ui.showMoreN(hc) : `Show ${hc} more`, () => { modelsExpanded = !modelsExpanded; renderHomePanel(); }));
           }
           ap(panel, listEl);
         }

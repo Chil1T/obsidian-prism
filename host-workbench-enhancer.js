@@ -24,101 +24,38 @@
     return e;
   }
 
-  const SIDECAR_THEME_VARS = [
-    '--background',
-    '--content',
-    '--shell',
-    '--body-background',
-    '--sidebar',
-    '--sidebar-muted',
-    '--sidebar-secondary',
-    '--card',
-    '--card-border',
-    '--border',
-    '--secondary',
-    '--secondary-foreground',
-    '--muted',
-    '--muted-foreground',
-    '--foreground',
-    '--placeholder',
-    '--primary',
-    '--primary-foreground',
-    '--accent',
-    '--link',
-    '--error',
-    '--warning',
-    '--success',
-    '--scrim',
-    '--ag-cs-tonal-0',
-    '--ag-cs-tonal-1',
-    '--ag-cs-tonal-2',
-    '--ag-cs-tonal-3',
-    '--ag-cs-tonal-4',
-    '--font-sans',
-  ];
+  const SIDECAR_THEME_VARS =
+    '--background,--content,--shell,--body-background,--sidebar,--sidebar-muted,--sidebar-secondary,--card,--card-border,--border,--secondary,--secondary-foreground,--muted,--muted-foreground,--foreground,--placeholder,--primary,--primary-foreground,--accent,--link,--error,--warning,--success,--scrim,--ag-cs-tonal-0,--ag-cs-tonal-1,--ag-cs-tonal-2,--ag-cs-tonal-3,--ag-cs-tonal-4,--font-sans'.split(',');
+  const S_VP = '[data-testid="autoscroll-viewport"]';
+  const S_CV = '[data-testid="conversation-view"]';
+  const S_NT = '[data-testid="conversation-navigator-turn"]';
+  const S_NG = '[data-testid="conversation-navigator-group"]';
+  const S_TRIG = '.ag-cs-nav-outline-trigger';
+  const A_OVC = 'data-ag-ov-sec-closing';
 
-  const UI_STRINGS = {
-    zh: {
-      foldCode: (n) => `折叠 (${n}行)`,
-      expandCode: (n) => `展开 (${n}行)`,
-      outlineTitle: (n) => `提问导航 · ${n} 轮`,
-      foldSteps: '收起步骤',
-      foldedFeedback: (n) => (n > 0 ? `已收起 ${n} 项` : '已是最简'),
-      searchPlaceholder: '过滤本会话提问...',
-      emptyMatch: '无匹配提问',
-      chapterBadge: '章节',
-    },
-    'zh-TW': {
-      foldCode: (n) => `摺疊 (${n}行)`,
-      expandCode: (n) => `展開 (${n}行)`,
-      outlineTitle: (n) => `提問導覽 · ${n} 輪`,
-      foldSteps: '收起步驟',
-      foldedFeedback: (n) => (n > 0 ? `已收起 ${n} 項` : '已是最簡'),
-      searchPlaceholder: '過濾本會話提問...',
-      emptyMatch: '無匹配提問',
-      chapterBadge: '章節',
-    },
-    yue: {
-      foldCode: (n) => `摺埋 (${n}行)`,
-      expandCode: (n) => `展開 (${n}行)`,
-      outlineTitle: (n) => `提問導覽 · ${n} 輪`,
-      foldSteps: '收埋步驟',
-      foldedFeedback: (n) => (n > 0 ? `已收埋 ${n} 項` : '已係最簡'),
-      searchPlaceholder: '篩選呢個對話嘅提問...',
-      emptyMatch: '冇符合嘅提問',
-      chapterBadge: '章節',
-    },
-    ja: {
-      foldCode: (n) => `折りたたむ (${n}行)`,
-      expandCode: (n) => `展開 (${n}行)`,
-      outlineTitle: (n) => `プロンプト目次 · ${n}`,
-      foldSteps: '手順を畳む',
-      foldedFeedback: (n) => (n > 0 ? `${n}件畳みました` : '完了'),
-      searchPlaceholder: '質問を絞り込む...',
-      emptyMatch: '一致なし',
-      chapterBadge: '章',
-    },
-    ko: {
-      foldCode: (n) => `접기 (${n}줄)`,
-      expandCode: (n) => `펼치기 (${n}줄)`,
-      outlineTitle: (n) => `질문 목차 · ${n}`,
-      foldSteps: '단계 접기',
-      foldedFeedback: (n) => (n > 0 ? `${n}개 접힘` : '완료'),
-      searchPlaceholder: '질문 검색...',
-      emptyMatch: '일치 항목 없음',
-      chapterBadge: '챕터',
-    },
-    en: {
-      foldCode: (n) => `Fold (${n}L)`,
-      expandCode: (n) => `Expand (${n}L)`,
-      outlineTitle: (n) => `Prompts · ${n} turns`,
-      foldSteps: 'Fold Steps',
-      foldedFeedback: (n) => (n > 0 ? `Folded ${n}` : 'All clean'),
-      searchPlaceholder: 'Filter prompts...',
-      emptyMatch: 'No matching prompts',
-      chapterBadge: 'Chapter',
-    },
+  const UI_RAW = {
+    zh: '折叠|展开|行|提问导航| 轮|收起步骤|已收起 | 项|已是最简|过滤本会话提问...|无匹配提问|章节|',
+    'zh-TW': '摺疊|展開|行|提問導覽| 輪|收起步驟|已收起 | 項|已是最簡|過濾本會話提問...|無匹配提問|章節|',
+    yue: '摺埋|展開|行|提問導覽| 輪|收埋步驟|已收埋 | 項|已係最簡|篩選呢個對話嘅提問...|冇符合嘅提問|章節|',
+    ja: '折りたたむ|展開|行|プロンプト目次||手順を畳む||件畳みました|完了|質問を絞り込む...|一致なし|章|',
+    ko: '접기|펼치기|줄|질문 목차||단계 접기||개 접힘|완료|질문 검색...|일치 항목 없음|챕터|',
+    en: 'Fold|Expand|L|Outline| turns|Fold Steps|Folded ||All clean|Filter prompts...|No matching prompts|Chapter|Prompts',
   };
+  const UI_STRINGS = {};
+  for (const k in UI_RAW) {
+    const a = UI_RAW[k].split('|');
+    UI_STRINGS[k] = {
+      foldCode: (n) => `${a[0]} (${n}${a[2]})`,
+      expandCode: (n) => `${a[1]} (${n}${a[2]})`,
+      outlineBtn: a[3],
+      outlineTitle: (n) => `${a[12] || a[3]} · ${n}${a[4]}`,
+      foldSteps: a[5],
+      foldedFeedback: (n) => (n > 0 ? `${a[6]}${n}${a[7]}` : a[8]),
+      searchPlaceholder: a[9],
+      emptyMatch: a[10],
+      chapterBadge: a[11],
+    };
+  }
 
   function isElementLike(n) {
     return Boolean(n && (n.nodeType === 1 || (n.nodeType === undefined && typeof n.tagName === 'string')));
@@ -490,15 +427,15 @@
 
     function findScrollViewport(startEl) {
       if (startEl?.closest) {
-        const vp = startEl.closest('[data-testid="autoscroll-viewport"]');
+        const vp = startEl.closest(S_VP);
         if (vp) return vp;
       }
       const cv = findPrimaryConvView();
       if (cv?.querySelector) {
-        const vp = cv.querySelector('[data-testid="autoscroll-viewport"]');
+        const vp = cv.querySelector(S_VP);
         if (vp) return vp;
       }
-      return doc?.querySelector?.('[data-testid="autoscroll-viewport"]') || null;
+      return doc?.querySelector?.(S_VP) || null;
     }
 
     // ── 1. Sidecar (`plugin://*`) 4-Theme PostMessage Bridge ───────────────
@@ -705,6 +642,7 @@
       mut(() => {
         if (outlineSearchInput) outlineSearchInput.placeholder = ui.searchPlaceholder;
         if (outlineFoldBtn && !foldFeedbackTimer) outlineFoldBtn.textContent = ui.foldSteps;
+        qa(doc, S_TRIG).forEach((b) => setA(b, 'aria-label', ui.outlineBtn || 'Outline'));
       });
       if (outlineOpen) {
         renderOutlinePopover();
@@ -1130,14 +1068,14 @@
     }
 
     function collectOutlineModel(navRail) {
-      const conv = cl(navRail, '[data-testid="conversation-view"]') || findPrimaryConvView();
+      const conv = cl(navRail, S_CV) || findPrimaryConvView();
       const chapters = navRail
-        ? Array.from(qa(navRail, '[data-testid="conversation-navigator-group"]')).map((btn) => ({
+        ? Array.from(qa(navRail, S_NG)).map((btn) => ({
             btn,
             label: String(ga(btn, 'aria-label') || ga(btn, 'data-group-key') || '').trim(),
           }))
         : [];
-      const dots = navRail ? Array.from(qa(navRail, '[data-testid="conversation-navigator-turn"]')) : [],
+      const dots = navRail ? Array.from(qa(navRail, S_NT)) : [],
         pd = dots.map(parseTurnDotMeta);
       let total = 0,
         actTurn = 0;
@@ -1425,12 +1363,12 @@
         const rail = rails[i];
         if (boundNavRails.has(rail) || typeof rail.addEventListener !== 'function') continue;
         boundNavRails.add(rail);
-        let trigBtn = qs(rail, '.ag-cs-nav-outline-trigger') || null;
+        let trigBtn = qs(rail, S_TRIG) || null;
         if (!trigBtn && doc.createElement && rail.appendChild) {
           trigBtn = markNoTr(mk('button', 'ag-cs-nav-outline-trigger', '☰'));
           trigBtn.type = 'button';
           sa(trigBtn, 'data-ag-owned', '1');
-          sa(trigBtn, 'aria-label', 'Outline');
+          sa(trigBtn, 'aria-label', getStrings().outlineBtn || 'Outline');
           sa(trigBtn, 'data-no-press-spring', '1');
           trigBtn.addEventListener('pointerenter', () => openNavOutline(rail), PASSIVE_OPT);
           trigBtn.addEventListener('click', (ev) => {
@@ -1443,19 +1381,18 @@
         let lastHoverAt = 0;
         const onPointerHover = (ev) => {
           const tgt = ev?.target || null;
-          const onTrig = Boolean(cl(tgt, '.ag-cs-nav-outline-trigger'));
+          const onTrig = Boolean(cl(tgt, S_TRIG));
+          const onGrp = !onTrig && Boolean(cl(tgt, S_NG));
           if (
             !onTrig &&
-            (Boolean(
-              qs(
-                rail,
-                '[data-testid="conversation-navigator-turn"][data-base-ui-tooltip-trigger], [data-testid="conversation-navigator-turn"][data-trigger-disabled], [data-testid="conversation-navigator-turn"][data-turn-index]'
-              )
-            ) ||
-              cl(tgt, '[data-testid="conversation-navigator-group"]'))
+            (onGrp ||
+              qs(rail, `${S_NT}[data-base-ui-tooltip-trigger],${S_NT}[data-trigger-disabled],${S_NT}[data-turn-index]`))
           ) {
             lastHoverTarget = tgt;
-            if (outlineOpen && doc.activeElement !== outlineSearchInput) closeNavOutline();
+            if (outlineOpen && doc.activeElement !== outlineSearchInput) {
+              if (onGrp || cl(tgt, S_NT)) closeNavOutline();
+              else scheduleHideOutline();
+            }
             return;
           }
           if (outlineOpen && activeNavRail === rail && outlinePopover && outlinePopover.isConnected !== false) {
@@ -1604,9 +1541,7 @@
       if (cfg.scrollBottomMotion === 'instant' || cfg.motionLevel === 'off' || win.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
         return false;
       }
-      const vp =
-        qs(cl(btnEl, '[data-testid="conversation-view"]') || doc, '[data-testid="autoscroll-viewport"]') ||
-        qs(doc, '[data-testid="autoscroll-viewport"]');
+      const vp = qs(cl(btnEl, S_CV) || doc, S_VP) || qs(doc, S_VP);
       if (!vp) return false;
       const maxS = Math.max(0, (vp.scrollHeight || 0) - (vp.clientHeight || 0)),
         start = vp.scrollTop || 0,
@@ -1809,7 +1744,7 @@
       const tid = setTimeout(() => {
         nonDiffAnimTimers.delete(tid);
         secEl._agOvOpenTimer = 0;
-        if (isDead() || secEl.isConnected === false || ga(secEl, 'data-ag-ov-sec-closing') === '1') return;
+        if (isDead() || secEl.isConnected === false || ga(secEl, A_OVC) === '1') return;
         mut(() => {
           for (const ch of secEl.children || []) {
             if (ch && ch !== btn && ga(ch, 'data-ag-ov-sec-anim') === 'open') ra(ch, 'data-ag-ov-sec-anim');
@@ -1831,9 +1766,9 @@
         return true;
       }
       if (!shouldAnimateNonDiff()) {
-        if (ga(secEl, 'data-ag-ov-sec-closing') === '1') {
+        if (ga(secEl, A_OVC) === '1') {
           clearOvSecTimers(secEl);
-          mut(() => ra(secEl, 'data-ag-ov-sec-closing'));
+          mut(() => ra(secEl, A_OVC));
           setOvSecSiblingsAnim(secEl, btn, null);
         }
         return false;
@@ -1843,19 +1778,19 @@
         ev.preventDefault?.();
         ev.stopImmediatePropagation?.();
         clearOvSecTimers(secEl);
-        if (ga(secEl, 'data-ag-ov-sec-closing') === '1') {
-          mut(() => ra(secEl, 'data-ag-ov-sec-closing'));
+        if (ga(secEl, A_OVC) === '1') {
+          mut(() => ra(secEl, A_OVC));
           if (setOvSecSiblingsAnim(secEl, btn, 'open')) scheduleOvSecOpenCleanup(secEl, btn);
           return true;
         }
-        mut(() => sa(secEl, 'data-ag-ov-sec-closing', '1'));
+        mut(() => sa(secEl, A_OVC, '1'));
         setOvSecSiblingsAnim(secEl, btn, 'closing');
         const closeTid = setTimeout(() => {
           nonDiffAnimTimers.delete(closeTid);
           secEl._agOvCloseTimer = 0;
           if (isDead() || secEl.isConnected === false) return;
           mut(() => {
-            if (ha(secEl, 'data-ag-ov-sec-closing')) ra(secEl, 'data-ag-ov-sec-closing');
+            if (ha(secEl, A_OVC)) ra(secEl, A_OVC);
           });
           setOvSecSiblingsAnim(secEl, btn, null);
           secEl._agOvBypassClick = true;
@@ -1872,7 +1807,7 @@
 
       clearOvSecTimers(secEl);
       const tryOpen = (allowRaf) => {
-        if (isDead() || secEl.isConnected === false || ga(secEl, 'data-ag-ov-sec-closing') === '1') return;
+        if (isDead() || secEl.isConnected === false || ga(secEl, A_OVC) === '1') return;
         if ((secEl.children?.length || 0) > 1) {
           if (setOvSecSiblingsAnim(secEl, btn, 'open')) scheduleOvSecOpenCleanup(secEl, btn);
           return;

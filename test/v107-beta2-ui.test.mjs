@@ -51,6 +51,12 @@ test('v1.0.7-beta.2 Task 1 (PR #20): .ag-cs-nav-outline-trigger positioning and 
   assert.equal(trigZ, 20);
   assert.equal(popZ, 35);
   assert.ok(trigZ < popZ, 'trigger z-index must remain strictly below outline popover z-index');
+  const bridgeLine = css.split(/\r?\n/).find((l) => l.includes('& .ag-cs-nav-outline-popover::before{'));
+  assert.ok(bridgeLine, 'style.css must define .ag-cs-nav-outline-popover::before bridge');
+  assert.ok(
+    bridgeLine.includes('left:-6px;top:0;bottom:0;width:8px;'),
+    'outline popover ::before must span only left:-6px;width:8px (24..32px) so trigger click area (4..24px) has zero occlusion'
+  );
 });
 
 test('v1.0.7-beta.2 Task 2 (PR #21 hardening): conv-aura caps pre-sleep WebGL2 phases (idle/awaiting-decision/long-task-complete) to ~30fps (33ms), keeps running at smooth 60fps, and enforces 0fps sleep in motion=off & hostSleep', () => {
@@ -475,6 +481,115 @@ test('v1.0.7-beta.2 Task 3 (PR #23 hardening): syncHostAnimatedIcons detects Rea
     settingsBtn.removeAttribute('data-tooltip-id');
     runtimeApi.sync();
     assert.equal(settingsBtn.getAttribute('data-ag-cs-icon-injected'), null, 'data-tooltip-id removal must invalidate iconSigMap');
+
+    // Pass 7 (#193 P1-1): Inline SVG without lucide-* class replaced wholesale by React ->
+    // iconSigMap must invalidate on origSvg ref / missing data-ag-cs-orig-svg so new <svg> never sits beside .ag-anim-icon!
+    const inlineCopyBtn = makeNode('button', { 'aria-label': 'Copy' });
+    const inlineSvg1 = makeNode('svg', { width: '16' });
+    inlineCopyBtn.appendChild(inlineSvg1);
+    body.appendChild(inlineCopyBtn);
+    runtimeApi.sync();
+    assert.equal(inlineCopyBtn.getAttribute('data-ag-cs-icon-injected'), 'copy-check');
+    assert.equal(inlineSvg1.getAttribute('data-ag-cs-orig-svg'), '1');
+    assert.equal(inlineCopyBtn.querySelectorAll('.ag-anim-icon').length, 1);
+
+    // React unmounts inlineSvg1 and inserts a brand-new visible inlineSvg2 (still no class!)
+    inlineSvg1.remove();
+    const inlineSvg2 = makeNode('svg', { width: '16' });
+    inlineCopyBtn.appendChild(inlineSvg2);
+    runtimeApi.sync();
+    assert.equal(inlineSvg2.getAttribute('data-ag-cs-orig-svg'), '1', 'replacement <svg> must be hidden with data-ag-cs-orig-svg="1"');
+    assert.equal(inlineSvg2.hidden, true, 'replacement <svg> must be hidden so dual icons never render side by side');
+    assert.equal(inlineCopyBtn.querySelectorAll('.ag-anim-icon').length, 1, 'must keep strictly 1 .ag-anim-icon after SVG replacement');
+
+    // Pass 8 (#193 P1-1): Container migration (parentElement change into [role="dialog"] and back) invalidates iconSigMap
+    const dlg = makeNode('div', { role: 'dialog' });
+    body.appendChild(dlg);
+    dlg.appendChild(inlineCopyBtn);
+    runtimeApi.sync();
+    assert.equal(inlineCopyBtn.getAttribute('data-ag-cs-icon-injected'), null, 'moving button into [role="dialog"] must invalidate iconSigMap and restore native icon');
+    assert.equal(inlineCopyBtn.querySelectorAll('.ag-anim-icon').length, 0);
+    assert.equal(inlineSvg2.hidden, false);
+    body.appendChild(inlineCopyBtn);
+    runtimeApi.sync();
+    assert.equal(inlineCopyBtn.getAttribute('data-ag-cs-icon-injected'), 'copy-check', 'moving button back out of [role="dialog"] must re-inject animated icon');
+    assert.equal(inlineCopyBtn.querySelectorAll('.ag-anim-icon').length, 1);
+
+    // Pass 9 (#193 P1-1): Deferred queue (>20 buttons) concurrent sync + duplicate replay stays idempotent (strictly 1 .ag-anim-icon)
+    let deferredBatch = [];
+    let capturedApply = null;
+    const sb2 = {
+      document: null,
+      window: null,
+      location: { pathname: '/' },
+      navigator: { language: 'zh-CN' },
+      performance: { now: () => 1000 },
+      localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+      getComputedStyle: () => ({ getPropertyValue: () => '', backgroundColor: 'rgb(14,16,22)' }),
+      requestAnimationFrame: () => 1,
+      cancelAnimationFrame() {},
+      setTimeout,
+      clearTimeout,
+      setInterval: () => 1,
+      clearInterval() {},
+      MutationObserver: class { observe() {} disconnect() {} },
+      ResizeObserver: class { observe() {} disconnect() {} },
+      __agAnimatedIcons: sb.__agAnimatedIcons,
+      Map, Set, WeakMap, WeakSet, Math, Number, String, Boolean, Array, Object, Date, JSON, RegExp, Promise,
+      __agPrismStreamChoreography: {
+        createStreamChoreographyController(deps) {
+          capturedApply = deps.applySingleHostIcon;
+          const base = {
+            heroState: {},
+            isEntryMotionSuppressed: () => false,
+            measureVisibleChangedHeaders: () => [],
+            measureNewLensOverlays: () => [],
+            enqueueDeferredIcons(items) { deferredBatch.push(...items); },
+          };
+          return new Proxy(base, { get: (t, k) => (k in t ? t[k] : () => null) });
+        },
+      },
+    };
+    sb2.window = sb2;
+    sb2.globalThis = sb2;
+    const html2 = makeNode('html', { 'data-ag-cs-motion': 'ultra' });
+    const body2 = makeNode('body');
+    html2.appendChild(body2);
+    const bulkBtns = [];
+    for (let i = 0; i < 24; i++) {
+      const b = makeNode('button', { 'aria-label': 'Copy' });
+      b.appendChild(makeNode('svg', { class: 'lucide lucide-copy', width: '16' }));
+      body2.appendChild(b);
+      bulkBtns.push(b);
+    }
+    sb2.document = { ...doc, documentElement: html2, body: body2, head: makeNode('head'), querySelector: (s) => html2.querySelector(s), querySelectorAll: (s) => html2.querySelectorAll(s) };
+    vm.runInNewContext(uiSrc, sb2);
+    sb2.__agCsUiMain({ motionLevel: 'ultra' });
+    const rt2 = sb2.__agPrism;
+    try {
+      // Initial boot already ran sync(): 16 applied synchronously, 8 deferred (not yet injected)
+      assert.equal(deferredBatch.length, 8, '24 buttons must synchronously apply 16 and defer 8');
+      assert.equal(bulkBtns.filter((b) => b.getAttribute('data-ag-cs-icon-injected') === 'copy-check').length, 16);
+      // Before deferred queue drains, another sync() runs: because eqSig was NOT written prematurely,
+      // the remaining 8 unmounted buttons are scanned and applied synchronously (<= 20)
+      rt2.sync();
+      assert.equal(bulkBtns.filter((b) => b.getAttribute('data-ag-cs-icon-injected') === 'copy-check').length, 24);
+      // Now the stale deferred queue fires and replays applySingleHostIcon on those same 8 buttons ->
+      // applySingleHostIcon idempotency guard must prevent duplicate .ag-anim-icon!
+      for (const it of deferredBatch) capturedApply(it.btn, it.iconName, it.origSvg, it.size);
+      for (const b of bulkBtns) {
+        assert.equal(b.getAttribute('data-ag-cs-icon-injected'), 'copy-check');
+        assert.equal(b.querySelectorAll('.ag-anim-icon').length, 1, 'applySingleHostIcon idempotency guard must prevent duplicate .ag-anim-icon');
+      }
+      // Subsequent sync hits post-mount eqSig cache with 0 new renders
+      deferredBatch = [];
+      const rendersBeforeCached = renderCount;
+      rt2.sync();
+      assert.equal(deferredBatch.length, 0);
+      assert.equal(renderCount, rendersBeforeCached, 'post-mount eqSig must hit iconSigMap cache with 0 re-renders');
+    } finally {
+      rt2.destroy?.();
+    }
   } finally {
     runtimeApi.destroy?.();
   }
@@ -705,6 +820,21 @@ test('v1.0.7-beta.2 Task 6 (/btw context menu capture phase): beats host #root s
     win.dispatchEvent({ type: 'ag-prism:ctx-open', detail: { source: 'inline-diff' } });
     assert.equal(ctl.isOpen(), false, 'ag-prism:ctx-open from inline-diff must close /btw menu');
 
+    // 8b (#193 P1-4): Native media elements & host selection pill inside conversation must pass through untouched
+    for (const mediaNode of [
+      makeEl('img'),
+      makeEl('video'),
+      makeEl('audio'),
+      makeEl('canvas'),
+      makeEl('iframe'),
+      makeEl('div', { class: 'agy-selection-pill' }),
+    ]) {
+      conv.appendChild(mediaNode);
+      const mev = dispatchRealContextMenu(mediaNode);
+      assert.equal(mev.defaultPrevented, false, `capture-phase handler must let native menu pass through on ${mediaNode.tagName}/${mediaNode.className}`);
+      assert.equal(ctl.isOpen(), false);
+    }
+
     // 9) Hostile throwing target is safely caught by try/catch without propagating
     const hostileTarget = { nodeType: 1, tagName: 'DIV', closest() { throw new Error('boom'); } };
     assert.doesNotThrow(() => dispatchRealContextMenu(hostileTarget));
@@ -736,6 +866,35 @@ test('v1.0.7-beta.2 Task 7 (Issue #18 Layer A): vendor/host-i18n/zh-CN.json cove
   for (const key of expectedKeys) {
     assert.equal(eng.translate(key), dict.exact[key], `Host i18n engine must translate "${key}"`);
   }
+});
+
+test('v1.0.7-beta.2 #192 [P2-3]: settings-panel.js remount & inject.js fallback remove expression both purge prism-thought-general-config companion card', () => {
+  const settingsSrc = fs.readFileSync(path.join(ROOT, 'settings-panel.js'), 'utf8');
+  const injectSrc = fs.readFileSync(path.join(ROOT, 'inject.js'), 'utf8');
+  assert.ok(
+    settingsSrc.includes('[data-testid="prism-thought-ai-config"],[data-testid="prism-thought-general-config"]'),
+    'settings-panel.js mountThoughtUiIfReady must clean stale prism-thought-general-config alongside prism-thought-ai-config'
+  );
+  const fbMatch = injectSrc.match(/const FALLBACK_THOUGHT_REMOVE_EXPRESSION\s*=\s*("(?:\\.|[^"\\])*");/);
+  assert.ok(fbMatch, 'inject.js must define FALLBACK_THOUGHT_REMOVE_EXPRESSION');
+  const fbExpr = JSON.parse(fbMatch[1]);
+  assert.ok(
+    fbExpr.includes('prism-thought-general-config'),
+    'inject.js FALLBACK_THOUGHT_REMOVE_EXPRESSION must clean prism-thought-general-config'
+  );
+  const removed = [];
+  const res = vm.runInNewContext(fbExpr, {
+    window: { __agPrismThought: { destroy() {} } },
+    globalThis: {},
+    document: {
+      querySelectorAll(sel) {
+        assert.ok(sel.includes('prism-thought-ai-config') && sel.includes('prism-thought-general-config'));
+        return [{ remove: () => removed.push('ai') }, { remove: () => removed.push('general') }];
+      },
+    },
+  });
+  assert.deepEqual(removed, ['ai', 'general']);
+  assert.equal(res.ok, true);
 });
 
 test('v1.0.7-beta.2 CSS hygiene & Channel 1 payload budget gate', () => {

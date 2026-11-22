@@ -37,8 +37,37 @@ test('light-theme overlays avoid specificity inversion and dark fallback leaks a
     .find((l) => l.includes('var(--ag-cs-menu-bg-l,rgba(252,253,255,.95))'));
   assert.ok(lightMenuOverrideLine, 'light-theme overlay override rule must exist');
   assert.ok(
-    lightMenuOverrideLine.includes('.agy-overlay:not([data-hover-card-popup]):not([data-testid="model-selector-panel"])'),
-    'light override must include negated .agy-overlay selector to beat dark overlay specificity (0,5,1)'
+    lightMenuOverrideLine.includes('.agy-overlay[data-hover-card-popup],.agy-overlay:not([data-hover-card-popup]):not([data-testid="model-selector-panel"])'),
+    'light override must scope hover-card overlay and preserve negated .agy-overlay selector so model-selector-panel stays exempt'
+  );
+  assert.equal(
+    lightMenuOverrideLine.includes(':is(.agy-overlay,'),
+    false,
+    'light override must NOT include bare .agy-overlay that swallows model-selector-panel exemption'
+  );
+
+  // 2b. palette="host" light block must define light fallbacks for --ag-cs-panel-bg (#FFFFFF) and --ag-cs-popover-bg (#FCFDFF)
+  const hostLightVarsLine = baseSection
+    .split(/\r?\n/)
+    .find((l) => l.includes('&[data-ag-cs-palette="host"]{color-scheme:dark;'));
+  assert.ok(hostLightVarsLine, 'palette="host" light variable override line must exist');
+  assert.ok(
+    hostLightVarsLine.includes('--ag-cs-panel-bg:color-mix(in srgb,var(--vscode-editorWidget-background,var(--card,#FFFFFF)) 96%,transparent);'),
+    'palette="host" light block must declare light --ag-cs-panel-bg fallback (#FFFFFF)'
+  );
+  assert.ok(
+    hostLightVarsLine.includes('--ag-cs-popover-bg:color-mix(in srgb,var(--vscode-editorWidget-background,var(--card,#FCFDFF)) 94%,transparent);'),
+    'palette="host" light block must declare light --ag-cs-popover-bg fallback (#FCFDFF)'
+  );
+
+  // 2c. #193 [P0-1]: nav outline popover ::before bridge must only span 24..32px (left:-6px; width:8px) without occluding 4..24px trigger
+  const outlineBridgeLine = baseSection
+    .split(/\r?\n/)
+    .find((l) => l.includes('.ag-cs-nav-outline-popover::before{'));
+  assert.ok(outlineBridgeLine, 'style.css must define .ag-cs-nav-outline-popover::before bridge');
+  assert.ok(
+    outlineBridgeLine.includes('left:-6px;top:0;bottom:0;width:8px'),
+    'outline popover ::before bridge must be left:-6px;width:8px to avoid occluding trigger click zone'
   );
 
   // 3. .agy-toast & .toast-root must be included in the light override so they beat dark rule (0,3,1) in non-host light modes.

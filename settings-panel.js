@@ -37,46 +37,47 @@
   const SETTINGS_FALLBACK_CSS =
     '.ag-cs-settings-fold-body:not(.is-open),.ag-cs-settings-group[hidden]{display:none!important}';
 
-  const S_ON = O.freeze({ allowed: ['on', 'off'], default: 'on' });
-  const S_OFF = O.freeze({ allowed: ['on', 'off'], default: 'off' });
-  const S_AUTO = O.freeze({ allowed: ['auto', 'on', 'off'], default: 'auto' });
-  const S_T = O.freeze({ allowed: [true, false], default: true });
-  const S_F = O.freeze({ allowed: [true, false], default: false });
+  const mkSp = (allowed, d, aliases) => (aliases ? { allowed, default: d ?? allowed[0], aliases } : { allowed, default: d ?? allowed[0] });
+  const S_ON = O.freeze(mkSp(['on', 'off']));
+  const S_OFF = O.freeze(mkSp(['on', 'off'], 'off'));
+  const S_AUTO = O.freeze(mkSp(['auto', 'on', 'off']));
+  const S_T = O.freeze(mkSp([true, false]));
+  const S_F = O.freeze(mkSp([true, false], false));
 
   const PRISM_SETTINGS_SCHEMA = O.freeze({
-    palette: { allowed: ['obsidian', 'host', 'warm'], default: 'obsidian', aliases: { claude: 'warm' } },
-    lightPreset: { allowed: ['crystal', 'alabaster'], default: 'crystal' },
-    accentTone: { allowed: ['follow', 'cobalt', 'iris', 'amber', 'mono'], default: 'follow' },
-    cornerStyle: { allowed: ['sharp', 'balanced', 'soft'], default: 'balanced' },
-    ambientIntensity: { allowed: ['0', '35', '70', '100'], default: '100' },
-    motionLevel: { allowed: ['off', 'subtle', 'standard', 'ultra'], default: 'ultra' },
-    targetFps: { allowed: ['60', '120', '180', 'native'], default: '180' },
-    homeLayout: { allowed: ['studio', 'classic', 'off'], default: 'studio' },
+    palette: mkSp(['obsidian', 'host', 'warm'], null, { claude: 'warm' }),
+    lightPreset: mkSp(['crystal', 'alabaster']),
+    accentTone: mkSp(['follow', 'cobalt', 'iris', 'amber', 'mono']),
+    cornerStyle: mkSp(['sharp', 'balanced', 'soft'], 'balanced'),
+    ambientIntensity: mkSp(['0', '35', '70', '100'], '100'),
+    motionLevel: mkSp(['off', 'subtle', 'standard', 'ultra'], 'ultra'),
+    targetFps: mkSp(['60', '120', '180', 'native'], '180'),
+    homeLayout: mkSp(['studio', 'classic', 'off']),
     homeRipple: S_T,
-    logoInk: { allowed: ['accent', 'foreground'], default: 'accent' },
-    language: { allowed: ['zh-CN', 'zh-TW', 'yue', 'en', 'ja'], default: 'zh-CN' },
+    logoInk: mkSp(['accent', 'foreground']),
+    language: mkSp(['zh-CN', 'zh-TW', 'yue', 'en', 'ja']),
     hostLocalization: S_AUTO,
     composerRestyle: S_T,
-    placeholderStyle: { allowed: ['studio', 'host'], default: 'studio' },
+    placeholderStyle: mkSp(['studio', 'host']),
     smoothCaret: S_T,
-    scrollBottomMotion: { allowed: ['smooth', 'instant'], default: 'smooth' },
+    scrollBottomMotion: mkSp(['smooth', 'instant']),
     contextMenu: S_T,
-    codeFont: { allowed: ['default', 'jetbrains', 'cascadia', 'sfmono'], default: 'default' },
+    codeFont: mkSp(['default', 'jetbrains', 'cascadia', 'sfmono']),
     codeLigatures: S_F,
-    mascot: { allowed: ['crab', 'minis', 'off'], default: 'crab', aliases: { dual: 'crab' } },
+    mascot: mkSp(['crab', 'minis', 'off'], null, { dual: 'crab' }),
     sidebarRestyle: S_T,
     sidebarCompact: S_F,
-    sidebarNavFold: { allowed: ['off', 'on'], default: 'off' },
-    thoughtTranslate: { allowed: ['off', 'machine', 'ai'], default: 'off' },
-    thoughtTrigger: { allowed: ['preload', 'expand'], default: 'preload' },
-    thoughtView: { allowed: ['immersive', 'bilingual'], default: 'immersive' },
+    sidebarNavFold: mkSp(['off', 'on']),
+    thoughtTranslate: mkSp(['off', 'machine', 'ai']),
+    thoughtTrigger: mkSp(['preload', 'expand']),
+    thoughtView: mkSp(['immersive', 'bilingual']),
     telemetryModule: S_AUTO,
     effortSliderModule: S_AUTO,
     omniModule: S_ON,
-    linkTarget: { allowed: ['builtin', 'external'], default: 'builtin' },
+    linkTarget: mkSp(['builtin', 'external']),
     sidebarStudio: S_OFF,
     autoUpdate: S_OFF,
-    updateChannel: { allowed: ['stable', 'beta'], default: 'stable' },
+    updateChannel: mkSp(['stable', 'beta']),
   });
 
   const SCENE_PRESETS = O.freeze({
@@ -588,7 +589,7 @@
         });
         if (!handle || !handle.box) return null;
         runGuardedMut(() => {
-          qa(hostList, '[data-testid="prism-thought-ai-config"]').forEach((oldBox) => oldBox.remove());
+          qa(hostList, '[data-testid="prism-thought-ai-config"],[data-testid="prism-thought-general-config"]').forEach((oldBox) => oldBox.remove());
           ap(hostList, handle.box);
         });
         handle.__agLang = curLang;
@@ -638,43 +639,44 @@
           const onOffStr = autoOnOff.slice(1);
           const warmLbl = ui.optWarm || (ui.optClaude && !/claude/i.test(ui.optClaude) ? ui.optClaude : '') || 'Alabaster';
           const R = (key, tk, dk, opts) => ({ key, title: U(tk, key), desc: U(dk), opts });
-          const RS = (key, s, opts) => R(key, 'set' + s + 'Title', 'set' + s + 'Desc', opts);
+          const RS = (key, opts, s = key[0].toUpperCase() + key.slice(1)) => R(key, 'set' + s + 'Title', 'set' + s + 'Desc', opts);
 
-          const rowDefs = {
-            palette: RS('palette', 'Palette', [['host', U('optHost')], ['warm', warmLbl], ['obsidian', U('optObsidian')]]),
-            lightPreset: RS('lightPreset', 'LightPreset', [['crystal', U('optLightCrystal')], ['alabaster', U('optLightAlabaster')]]),
-            accentTone: RS('accentTone', 'AccentTone', [['follow', U('optToneFollow')], ['cobalt', U('optToneCobalt')], ['iris', U('optToneIris')], ['amber', U('optToneAmber')], ['mono', U('optToneMono')]]),
-            cornerStyle: RS('cornerStyle', 'CornerStyle', [['sharp', U('optCornerSharp')], ['balanced', U('optCornerBalanced')], ['soft', U('optCornerSoft')]]),
-            ambientIntensity: RS('ambientIntensity', 'AmbientIntensity', [['0', U('optAmb0', '0%')], ['35', U('optAmb35', '35%')], ['70', U('optAmb70', '70%')], ['100', U('optAmb100', '100%')]]),
-            motionLevel: RS('motionLevel', 'MotionLevel', [['off', U('optMotionOff')], ['subtle', U('optMotionSubtle')], ['standard', U('optMotionStandard')], ['ultra', U('optMotionUltra')]]),
-            targetFps: RS('targetFps', 'TargetFps', [['60', U('optFps60', '60')], ['120', U('optFps120', '120')], ['180', U('optFps180', '180')], ['native', U('optFpsNative')]]),
-            homeLayout: RS('homeLayout', 'HomeLayout', [['studio', U('optStudio')], ['classic', U('optClassic')], ['off', U('optNativeOff')]]),
-            homeRipple: RS('homeRipple', 'Ripple', onOff),
-            logoInk: RS('logoInk', 'LogoInk', [['accent', U('optAccent')], ['foreground', U('optForeground')]]),
-            language: RS('language', 'Language', langOpts),
-            hostLocalization: RS('hostLocalization', 'HostI18n', [['auto', U('optHostI18nAuto', 'Auto')], ['on', U('onLabel', 'On')], ['off', U('offLabel', 'Off')]]),
-            composerRestyle: RS('composerRestyle', 'Composer', onOff),
-            placeholderStyle: RS('placeholderStyle', 'Placeholder', [['studio', 'Studio'], ['host', U('optPlaceholderHost')]]),
-            smoothCaret: RS('smoothCaret', 'SmoothCaret', onOff),
-            scrollBottomMotion: RS('scrollBottomMotion', 'ScrollBottom', [['smooth', U('optScrollBottomSmooth', 'Glide')], ['instant', U('optScrollBottomInstant', 'Instant')]]),
-            contextMenu: R('contextMenu', 'rowContextMenuTitle', 'rowContextMenuDesc', onOff),
-            codeFont: RS('codeFont', 'CodeFont', [['default', U('optFontDefault')], ['jetbrains', 'JetBrains Mono'], ['cascadia', 'Cascadia Code'], ['sfmono', U('optFontSfmono', 'SF Mono')]]),
-            codeLigatures: RS('codeLigatures', 'CodeLigatures', onOff),
-            mascot: RS('mascot', 'Mascot', [['crab', mDual], ['minis', mMinis], ['off', mOff]]),
-            sidebarRestyle: RS('sidebarRestyle', 'Sidebar', onOff),
-            sidebarCompact: RS('sidebarCompact', 'SidebarCompact', onOff),
-            sidebarNavFold: R('sidebarNavFold', 'setSidebarNavFoldLabel', 'setSidebarNavFoldDesc', [['off', U('optSidebarNavFoldOff', 'Show All')], ['on', U('optSidebarNavFoldOn', 'Fold Extra')]]),
-            thoughtTranslate: RS('thoughtTranslate', 'ThoughtMode', [['off', U('optThoughtOff')], ['machine', U('optThoughtMachine')], ['ai', U('optThoughtAi')]]),
-            thoughtTrigger: RS('thoughtTrigger', 'ThoughtTrigger', [['preload', U('optTriggerPreload')], ['expand', U('optTriggerExpand')]]),
-            thoughtView: RS('thoughtView', 'ThoughtView', [['immersive', U('optThoughtImmersive')], ['bilingual', U('optThoughtBilingual')]]),
-            telemetryModule: RS('telemetryModule', 'Telemetry', autoOnOff),
-            effortSliderModule: RS('effortSliderModule', 'EffortSlider', autoOnOff),
-            omniModule: RS('omniModule', 'Omni', onOffStr),
-            linkTarget: RS('linkTarget', 'LinkTarget', [['builtin', U('optLinkBuiltin')], ['external', U('optLinkExternal')]]),
-            sidebarStudio: RS('sidebarStudio', 'SidebarStudio', onOffStr),
-            autoUpdate: RS('autoUpdate', 'AutoUpdate', onOffStr),
-            updateChannel: RS('updateChannel', 'UpdateChannel', [['stable', U('optChannelStable', 'Stable')], ['beta', U('optChannelBeta', 'Beta')]]),
-          };
+          const rowDefs = {};
+          for (const r of [
+            RS('palette', [['host', U('optHost')], ['warm', warmLbl], ['obsidian', U('optObsidian')]]),
+            RS('lightPreset', [['crystal', U('optLightCrystal')], ['alabaster', U('optLightAlabaster')]]),
+            RS('accentTone', [['follow', U('optToneFollow')], ['cobalt', U('optToneCobalt')], ['iris', U('optToneIris')], ['amber', U('optToneAmber')], ['mono', U('optToneMono')]]),
+            RS('cornerStyle', [['sharp', U('optCornerSharp')], ['balanced', U('optCornerBalanced')], ['soft', U('optCornerSoft')]]),
+            RS('ambientIntensity', [['0', U('optAmb0', '0%')], ['35', U('optAmb35', '35%')], ['70', U('optAmb70', '70%')], ['100', U('optAmb100', '100%')]]),
+            RS('motionLevel', [['off', U('optMotionOff')], ['subtle', U('optMotionSubtle')], ['standard', U('optMotionStandard')], ['ultra', U('optMotionUltra')]]),
+            RS('targetFps', [['60', U('optFps60', '60')], ['120', U('optFps120', '120')], ['180', U('optFps180', '180')], ['native', U('optFpsNative')]]),
+            RS('homeLayout', [['studio', U('optStudio')], ['classic', U('optClassic')], ['off', U('optNativeOff')]]),
+            RS('homeRipple', onOff, 'Ripple'),
+            RS('logoInk', [['accent', U('optAccent')], ['foreground', U('optForeground')]]),
+            RS('language', langOpts),
+            RS('hostLocalization', [['auto', U('optHostI18nAuto', 'Auto')], ['on', U('onLabel', 'On')], ['off', U('offLabel', 'Off')]], 'HostI18n'),
+            RS('composerRestyle', onOff, 'Composer'),
+            RS('placeholderStyle', [['studio', 'Studio'], ['host', U('optPlaceholderHost')]], 'Placeholder'),
+            RS('smoothCaret', onOff),
+            RS('scrollBottomMotion', [['smooth', U('optScrollBottomSmooth', 'Glide')], ['instant', U('optScrollBottomInstant', 'Instant')]], 'ScrollBottom'),
+            R('contextMenu', 'rowContextMenuTitle', 'rowContextMenuDesc', onOff),
+            RS('codeFont', [['default', U('optFontDefault')], ['jetbrains', 'JetBrains Mono'], ['cascadia', 'Cascadia Code'], ['sfmono', U('optFontSfmono', 'SF Mono')]]),
+            RS('codeLigatures', onOff),
+            RS('mascot', [['crab', mDual], ['minis', mMinis], ['off', mOff]]),
+            RS('sidebarRestyle', onOff, 'Sidebar'),
+            RS('sidebarCompact', onOff),
+            R('sidebarNavFold', 'setSidebarNavFoldLabel', 'setSidebarNavFoldDesc', [['off', U('optSidebarNavFoldOff', 'Show All')], ['on', U('optSidebarNavFoldOn', 'Fold Extra')]]),
+            RS('thoughtTranslate', [['off', U('optThoughtOff')], ['machine', U('optThoughtMachine')], ['ai', U('optThoughtAi')]], 'ThoughtMode'),
+            RS('thoughtTrigger', [['preload', U('optTriggerPreload')], ['expand', U('optTriggerExpand')]]),
+            RS('thoughtView', [['immersive', U('optThoughtImmersive')], ['bilingual', U('optThoughtBilingual')]]),
+            RS('telemetryModule', autoOnOff, 'Telemetry'),
+            RS('effortSliderModule', autoOnOff, 'EffortSlider'),
+            RS('omniModule', onOffStr, 'Omni'),
+            RS('linkTarget', [['builtin', U('optLinkBuiltin')], ['external', U('optLinkExternal')]]),
+            RS('sidebarStudio', onOffStr),
+            RS('autoUpdate', onOffStr),
+            RS('updateChannel', [['stable', U('optChannelStable', 'Stable')], ['beta', U('optChannelBeta', 'Beta')]]),
+          ]) rowDefs[r.key] = r;
 
           const groups = [
             { id: 'appearance', title: U('grpAppearance'), keys: ['palette', 'lightPreset', 'accentTone', 'cornerStyle', 'ambientIntensity', 'motionLevel', 'targetFps', 'homeLayout', 'homeRipple', 'logoInk', 'language', 'hostLocalization'] },

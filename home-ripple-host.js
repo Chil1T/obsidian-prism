@@ -308,6 +308,7 @@
       function enterIdleSleep() {
         if (state.timer) { clearTimeout(state.timer); state.timer = 0; }
         if (state.rafId) { cancelAnimationFrame(state.rafId); state.rafId = 0; }
+        if (state.rRaf) { cancelAnimationFrame(state.rRaf); state.rRaf = 0; }
         frameWanted = false;
         state.sleeping = true;
         setAttrIfChanged(host, 'data-ripple-sleep', '1');

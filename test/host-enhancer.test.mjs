@@ -2080,7 +2080,7 @@ test('Wave D20: ui-runtime mounts bottom prism-reflect on interaction-takeover-c
   assert.ok(pulseZ > takeoverZ, '#ag-prism-pulse-bar must layer strictly above interaction-takeover-card so context preview is never occluded');
 });
 
-test('Navigator outline mounts dedicated trigger, yields to Base UI turn tooltips without overlap, keeps legacy turn compat, and cleans up', () => {
+test('Navigator outline mounts dedicated trigger, yields to Base UI turn tooltips without overlap, keeps legacy turn compat, and cleans up', async () => {
   const cdp = require(path.join(__dirname, '..', 'cdp.js'));
   const env = createMockEnv();
   const conv = env.createElement('div', { 'data-testid': 'conversation-view' });
@@ -2102,18 +2102,32 @@ test('Navigator outline mounts dedicated trigger, yields to Base UI turn tooltip
     'data-base-ui-tooltip-trigger': '',
     'aria-label': 'Turn 1 of 2',
   });
+  const groupBtn = env.createElement('button', {
+    'data-testid': 'conversation-navigator-group',
+    'aria-label': 'Chapter 1',
+  });
   gapWrap.appendChild(baseUiDot);
   rail.appendChild(gapWrap);
+  rail.appendChild(groupBtn);
   conv.appendChild(rail);
   conv.appendChild(vp);
   env.body.appendChild(conv);
 
-  const ctl = enhancerMod.createHostEnhancerController({ doc: env.doc, win: env.win, getLang: () => 'zh-CN' });
+  let curLang = 'zh-CN';
+  const ctl = enhancerMod.createHostEnhancerController({ doc: env.doc, win: env.win, getLang: () => curLang });
   try {
     ctl.sync();
     const trig = rail.querySelector('.ag-cs-nav-outline-trigger');
     assert.ok(trig, 'nav rail must mount dedicated .ag-cs-nav-outline-trigger button');
     assert.equal(trig.getAttribute('data-ag-owned'), '1');
+    // #193 [P2-3]: localized aria-label on mount & live language switch
+    assert.equal(trig.getAttribute('aria-label'), '提问导航', 'trigger aria-label must follow getStrings() on mount');
+    curLang = 'en';
+    ctl.sync();
+    assert.equal(trig.getAttribute('aria-label'), 'Outline', 'trigger aria-label must update when language switches to en');
+    curLang = 'ja';
+    ctl.onThemeChange(false);
+    assert.equal(trig.getAttribute('aria-label'), 'プロンプト目次', 'trigger aria-label must update on onThemeChange language switch');
 
     // On Base UI rails, hovering turn dot, gap wrapper, OR rail padding must NEVER flash/open outline
     rail.dispatchEvent({ type: 'pointerenter', target: rail });
@@ -2126,9 +2140,31 @@ test('Navigator outline mounts dedicated trigger, yields to Base UI turn tooltip
     const pop = env.doc.querySelector('.ag-cs-nav-outline-popover');
     assert.ok(pop && !pop.hidden && pop.getAttribute('data-open') === '1', 'Trigger hover must open outline');
 
-    // Moving onto Base UI turn dot OR rail gap closes outline immediately to prevent overlap/flicker
+    // #193 [P0-1]: Diagonal travel across Base UI rail blank/gap schedules grace hide (NOT 0ms close),
+    // and entering popover cancels the hide timer cleanly!
     rail.dispatchEvent({ type: 'pointerover', target: gapWrap });
-    assert.equal(pop.hidden, true, 'Moving from trigger onto Base UI rail gap must close outline immediately');
+    assert.equal(pop.hidden, false, 'Diagonal travel over Base UI rail blank/gap must keep outline open during grace delay');
+    pop.dispatchEvent({ type: 'pointerenter', target: pop });
+    await new Promise((r) => setTimeout(r, 260));
+    assert.equal(pop.hidden, false, 'Entering popover within grace delay must cancel scheduled hide');
+
+    // Leaving trigger onto rail blank WITHOUT entering popover closes after grace delay
+    rail.dispatchEvent({ type: 'pointerover', target: rail });
+    assert.equal(pop.hidden, false, 'Hovering rail blank must not close at 0ms');
+    await new Promise((r) => setTimeout(r, 260));
+    assert.equal(pop.hidden, true, 'Hovering rail blank without entering popover must close after grace delay');
+
+    // Moving directly onto a Base UI turn dot closes immediately (0ms) for native tooltip
+    trig.dispatchEvent({ type: 'pointerenter', target: trig });
+    assert.equal(pop.hidden, false);
+    rail.dispatchEvent({ type: 'pointerover', target: baseUiDot });
+    assert.equal(pop.hidden, true, 'Moving directly onto a Base UI turn dot must close outline immediately (0ms)');
+
+    // Moving directly onto a navigator group also closes immediately (0ms)
+    trig.dispatchEvent({ type: 'pointerenter', target: trig });
+    assert.equal(pop.hidden, false);
+    rail.dispatchEvent({ type: 'pointerover', target: groupBtn });
+    assert.equal(pop.hidden, true, 'Moving directly onto a navigator group must close outline immediately (0ms)');
 
     // Trigger click toggles closed -> open -> closed
     trig.dispatchEvent({ type: 'click', target: trig });

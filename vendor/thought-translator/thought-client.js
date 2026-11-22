@@ -719,6 +719,7 @@
   function isToolSummaryCandidate(raw, targetLang = currentLang) {
     const norm = trm(raw);
     if (!norm || norm.length < 4 || norm.length > 280) return false;
+    if (/__\s*OPID/i.test(norm)) return false;
     const tl = normalizeLangCode(targetLang) || 'zh-CN';
     const { masked, tokens } = protectToolSummaryTokens(norm);
     const prose = masked.replace(/__OPID_\d+__/g, ' ').replace(/\s+/g, ' ').trim();
@@ -2749,11 +2750,11 @@
       }
     };
 
-    const reqLang = resolveActiveLang();
+    const reqLang = currentLang || resolveActiveLang();
     br.translateStream(
       { text: sendPlan.text, mode, priority, requestId, force, bypassCache, targetLang: reqLang },
       (partial) => {
-        if (currentMode === 'off' || entry.x || resolveActiveLang() !== reqLang || typeof partial !== 'string' || !partial.trim()) return;
+        if (currentMode === 'off' || entry.x || (currentLang || resolveActiveLang()) !== reqLang || typeof partial !== 'string' || !partial.trim()) return;
         const trimmed = partial.trimStart();
         if (!trimmed) return;
         if (canUseSmoothStream()) {
@@ -2809,7 +2810,7 @@
               ? { truncated: true, totalChars: res.originalLength || rawText.length, sentChars: res.translatedLength || sendPlan.sentChars }
               : null);
 
-          if (resolveActiveLang() !== reqLang) {
+          if ((currentLang || resolveActiveLang()) !== reqLang) {
             cancelFlushHandle(entry);
             if (inflightBySig.get(sig) === entry) inflightBySig.delete(sig);
             for (const p of entry.ps) {
@@ -3112,7 +3113,7 @@
     if (nextVal === item.raw) return;
 
     const oldRec = toolSummaryNodeMap.get(item.tn);
-    const orig = oldRec ? oldRec.orig : item.raw;
+    const orig = oldRec && item.raw === oldRec.trans ? oldRec.orig : item.raw;
     if (oldRec) toolSummaryRecords.delete(oldRec);
 
     setTn(item.tn, nextVal);
@@ -3122,7 +3123,28 @@
     toolSummaryRecords.add(rec);
   }
 
+  function markToolSummaryFailed(key, until) {
+    if (toolSummaryFailedUntil.has(key)) toolSummaryFailedUntil.delete(key);
+    toolSummaryFailedUntil.set(key, until);
+    while (toolSummaryFailedUntil.size > 512) {
+      const oldest = toolSummaryFailedUntil.keys().next().value;
+      if (oldest === undefined) break;
+      toolSummaryFailedUntil.delete(oldest);
+    }
+  }
+
+  function pruneDetachedToolSummaryRecords() {
+    if (!toolSummaryRecords.size) return;
+    for (const rec of Array.from(toolSummaryRecords)) {
+      if (!rec || !rec.tn || !isConn(rec.tn)) {
+        if (rec && rec.tn) toolSummaryNodeMap.delete(rec.tn);
+        toolSummaryRecords.delete(rec);
+      }
+    }
+  }
+
   function scanToolSummaryContainers() {
+    pruneDetachedToolSummaryRecords();
     if (!translateToolSummaries || currentMode === 'off' || typeof document === 'undefined') return;
     const br = getBridge();
     if (!br || typeof br.translateStream !== 'function') return;
@@ -3220,7 +3242,10 @@
           continue;
         }
         const failUntil = toolSummaryFailedUntil.get(cacheKey);
-        if (failUntil && now < failUntil) continue;
+        if (failUntil) {
+          if (now < failUntil) continue;
+          toolSummaryFailedUntil.delete(cacheKey);
+        }
         uncached.push(cand);
         if (!uniqueIdxMap.has(cand.trimmed)) {
           uniqueIdxMap.set(cand.trimmed, uniqueTrimmed.length);
@@ -3262,7 +3287,7 @@
           if (!outItems || outItems.length !== uniqueTrimmed.length) {
             const until = nowMs() + 20000;
             for (let k = 0; k < uniqueTrimmed.length; k++) {
-              toolSummaryFailedUntil.set(`${modePrefix}${uniqueTrimmed[k]}`, until);
+              markToolSummaryFailed(`${modePrefix}${uniqueTrimmed[k]}`, until);
             }
             return;
           }
@@ -3289,7 +3314,7 @@
           toolBatchInflight.delete(batchKey);
           const until = nowMs() + 20000;
           for (let k = 0; k < uniqueTrimmed.length; k++) {
-            toolSummaryFailedUntil.set(`${modePrefix}${uniqueTrimmed[k]}`, until);
+            markToolSummaryFailed(`${modePrefix}${uniqueTrimmed[k]}`, until);
           }
         });
     }
@@ -3451,7 +3476,14 @@
           if (!p) return;
           clearTriggerStatusBadge(p);
           raList(p, RESET_SIG_ATTRS);
-          panelMeta.delete(p);
+          const m = panelMeta.get(p);
+          if (m && (m.s || m.m)) {
+            m.ds = '';
+            m.ps = '';
+            delete m.skippedSig;
+          } else {
+            panelMeta.delete(p);
+          }
         };
         qsa(SEL_TRIGGER).forEach((b) => resetPanelSig(nextSib(b)));
         qsa(SEL_OVERLAY).forEach((ov) => resetPanelSig(parEl(ov)));
@@ -3549,6 +3581,8 @@
     fetchModels: (input) => brCall('fetch-models', input),
     testConnection: (input) => brCall('test-connection', input),
     __memCache: memCache,
+    __toolSummaryRecords: toolSummaryRecords,
+    __toolSummaryFailedUntil: toolSummaryFailedUntil,
     destroy() {
       currentMode = 'off';
       syncedOnce = false;

@@ -6,6 +6,7 @@
 
 import { execFile, execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
+import dns from 'node:dns';
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
@@ -566,7 +567,13 @@ export function protectToolSummaryIdentifiers(text) {
   if (!src) return { masked: '', tokens: [] };
   const tokens = [];
   let masked = src;
-  const tokenPrefix = '__OPID_';
+  let tag = 'OPID';
+  if (/__\s*OPID/i.test(src)) {
+    do {
+      tag = `OPID_${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    } while (src.toUpperCase().includes(tag));
+  }
+  const tokenPrefix = `__${tag}_`;
   for (const re of TOOL_SUMMARY_PROTECT_PATTERNS) {
     re.lastIndex = 0;
     masked = masked.replace(re, (match) => {
@@ -574,6 +581,9 @@ export function protectToolSummaryIdentifiers(text) {
       const idx = tokens.push(match) - 1;
       return `${tokenPrefix}${idx}__`;
     });
+  }
+  if (tag !== 'OPID') {
+    Object.defineProperty(tokens, '__opidTag', { value: tag, enumerable: false, configurable: true });
   }
   return { masked, tokens };
 }
@@ -583,8 +593,11 @@ export function restoreToolSummaryIdentifiers(translated, tokens = []) {
   if (!tokens || tokens.length === 0) {
     return { ok: true, text: raw, missing: [] };
   }
+  const tag =
+    typeof tokens.__opidTag === 'string' && /^[A-Z0-9_]+$/.test(tokens.__opidTag) ? tokens.__opidTag : 'OPID';
+  const restoreRe = new RegExp(`__\\s*${tag}\\s*_?\\s*(\\d+)\\s*__`, 'gi');
   const seen = new Set();
-  const restored = raw.replace(/__\s*OPID\s*_?\s*(\d+)\s*__/gi, (full, numStr) => {
+  const restored = raw.replace(restoreRe, (full, numStr) => {
     const idx = Number(numStr);
     if (!Number.isInteger(idx) || idx < 0 || idx >= tokens.length) return full;
     seen.add(idx);
@@ -594,7 +607,8 @@ export function restoreToolSummaryIdentifiers(translated, tokens = []) {
   for (let i = 0; i < tokens.length; i++) {
     if (!seen.has(i)) missing.push(i);
   }
-  if (missing.length > 0 || /__\s*OPID\s*_?\s*\d+\s*__/i.test(restored)) {
+  const leftoverRe = new RegExp(`__\\s*${tag}\\s*_?\\s*\\d+\\s*__`, 'i');
+  if (missing.length > 0 || leftoverRe.test(restored)) {
     return { ok: false, text: '', missing };
   }
   return { ok: true, text: restored, missing: [] };
@@ -606,6 +620,7 @@ const TOOL_SUMMARY_ACTION_VERB_RE =
 export function isToolSummaryTranslatable(text, targetLang = 'zh-CN') {
   const norm = String(text || '').trim();
   if (!norm || norm.length < 4 || norm.length > 320) return false;
+  if (/__\s*OPID/i.test(norm)) return false;
   const tl = normalizeTargetLang(targetLang);
   const { masked, tokens } = protectToolSummaryIdentifiers(norm);
   const prose = masked.replace(/__OPID_\d+__/g, ' ').replace(/\s+/g, ' ').trim();
@@ -631,6 +646,8 @@ export function isToolSummaryTranslatable(text, targetLang = 'zh-CN') {
 export const SYSTEM_PROXY_CACHE_TTL_MS = 30_000;
 const MAX_CONNECT_HEADER_BYTES = 16 * 1024;
 const SOCKS5_HANDSHAKE_TIMEOUT_MS = 15_000;
+const CONNECT_HANDSHAKE_TIMEOUT_MS = 15_000;
+const SOCKS5_DNS_LOOKUP_TIMEOUT_MS = 3_000;
 const ALLOWED_PROXY_PROTOCOLS = new Set(['http:', 'https:', 'socks5:', 'socks5h:']);
 
 export function validateProxyUrl(rawProxy) {
@@ -1156,6 +1173,9 @@ export class ThoughtTranslatorService {
     this._proxyExecFile = typeof opts.proxyExecFile === 'function' ? opts.proxyExecFile : null;
     this._proxyExecFileAsync = typeof opts.proxyExecFileAsync === 'function' ? opts.proxyExecFileAsync : null;
     this._proxyTlsOptions = opts.proxyTlsOptions || null;
+    this._dnsLookup = typeof opts.dnsLookup === 'function' ? opts.dnsLookup : null;
+    this._socks5HandshakeTimeoutMs = Number(opts.socks5HandshakeTimeoutMs) || 0;
+    this._connectHandshakeTimeoutMs = Number(opts.connectHandshakeTimeoutMs) || 0;
     this._proxyCache = { ts: 0, value: null, loaded: false };
     this._proxyInflightPromise = null;
     this.maxCacheEntries = opts.maxCacheEntries || 400;
@@ -1220,7 +1240,6 @@ export class ThoughtTranslatorService {
     const stylePreset = ['technical', 'concise', 'custom'].includes(mappedPreset) ? mappedPreset : 'technical';
     const viewMode = raw.viewMode === 'bilingual' ? 'bilingual' : 'immersive';
     const customPrompt = typeof raw.customPrompt === 'string' ? raw.customPrompt.slice(0, 6000) : '';
-    const proxyMode = ['auto', 'custom', 'direct'].includes(raw.proxyMode) ? raw.proxyMode : 'auto';
     let customProxyUrl = '';
     if (typeof raw.customProxyUrl === 'string' && raw.customProxyUrl.trim()) {
       const checkedProxy = validateProxyUrl(raw.customProxyUrl);
@@ -1228,6 +1247,11 @@ export class ThoughtTranslatorService {
         customProxyUrl = raw.customProxyUrl.trim().slice(0, 512);
       }
     }
+    const proxyMode = ['auto', 'custom', 'direct'].includes(raw.proxyMode)
+      ? raw.proxyMode
+      : customProxyUrl
+      ? 'custom'
+      : 'auto';
     const translateToolSummaries = Boolean(raw.translateToolSummaries);
     const profiles = [];
     const seen = new Set();
@@ -1359,12 +1383,20 @@ export class ThoughtTranslatorService {
       }
     }
 
-    const nextProxyMode =
-      input.proxyMode !== undefined
-        ? ['auto', 'custom', 'direct'].includes(input.proxyMode)
-          ? input.proxyMode
-          : prev.proxyMode || 'auto'
+    let nextProxyMode;
+    if (input.proxyMode !== undefined) {
+      nextProxyMode = ['auto', 'custom', 'direct'].includes(input.proxyMode)
+        ? input.proxyMode
         : prev.proxyMode || 'auto';
+    } else if (input.customProxyUrl !== undefined) {
+      if (nextCustomProxyUrl) {
+        nextProxyMode = 'custom';
+      } else {
+        nextProxyMode = prev.proxyMode === 'direct' ? 'direct' : 'auto';
+      }
+    } else {
+      nextProxyMode = prev.proxyMode || 'auto';
+    }
 
     const nextRaw = {
       stylePreset: input.stylePreset ?? prev.stylePreset,
@@ -1545,23 +1577,33 @@ export class ThoughtTranslatorService {
     }
 
     const store = this.loadStore();
-    const effMode =
-      overrideOpts && overrideOpts.proxyMode !== undefined
-        ? overrideOpts.proxyMode
-        : store.proxyMode || 'auto';
+    const hasOverrideMode = Boolean(overrideOpts && overrideOpts.proxyMode !== undefined);
+    const hasOverrideUrl = Boolean(overrideOpts && typeof overrideOpts.customProxyUrl === 'string');
+    const overrideTrimmed = hasOverrideUrl ? overrideOpts.customProxyUrl.trim() : '';
+    const effMode = hasOverrideMode
+      ? overrideOpts.proxyMode
+      : overrideTrimmed
+      ? 'custom'
+      : store.proxyMode || 'auto';
     if (effMode === 'direct') {
       return { handled: true, proxy: null };
     }
+    if (effMode !== 'custom') {
+      return { handled: false, proxy: null };
+    }
 
     let rawCustom = store.customProxyUrl || '';
-    if (overrideOpts && typeof overrideOpts.customProxyUrl === 'string') {
-      const candidateRaw = overrideOpts.customProxyUrl.trim();
-      if (!candidateRaw) {
+    if (hasOverrideUrl) {
+      if (!overrideTrimmed) {
         rawCustom = '';
-      } else if (candidateRaw.includes('••••')) {
-        rawCustom = store.customProxyUrl || '';
+      } else if (overrideTrimmed.includes('••••')) {
+        if (store.customProxyUrl && maskProxyUrl(store.customProxyUrl) === overrideTrimmed) {
+          rawCustom = store.customProxyUrl;
+        } else {
+          rawCustom = '';
+        }
       } else {
-        rawCustom = candidateRaw;
+        rawCustom = overrideTrimmed;
       }
     }
 
@@ -1656,6 +1698,42 @@ export class ThoughtTranslatorService {
     } catch {
       return null;
     }
+  }
+
+  async _resolveSocks5ConnectHost(proxyInfo, targetHost, signal) {
+    if (proxyInfo.protocol !== 'socks5:' || net.isIP(targetHost)) {
+      return targetHost;
+    }
+    if (signal?.aborted) {
+      throw new Error('Request aborted');
+    }
+    const lookupFn = this._dnsLookup || dns.promises.lookup;
+    let lookupResult = null;
+    let timer = null;
+    try {
+      const lookupPromise = Promise.resolve().then(() => lookupFn(targetHost, { verbatim: true }));
+      lookupPromise.catch(() => {});
+      const timeoutPromise = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('DNS lookup timeout')), SOCKS5_DNS_LOOKUP_TIMEOUT_MS);
+        if (timer.unref) timer.unref();
+      });
+      lookupResult = await Promise.race([lookupPromise, timeoutPromise]);
+    } catch {
+      return targetHost;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    if (signal?.aborted) {
+      throw new Error('Request aborted');
+    }
+    const resolvedIp = typeof lookupResult === 'string' ? lookupResult : lookupResult?.address;
+    if (!resolvedIp || !net.isIP(resolvedIp)) {
+      return targetHost;
+    }
+    if (isBlockedSsrfHost(resolvedIp)) {
+      throw new Error('Blocked target host for proxy request (SSRF protection)');
+    }
+    return resolvedIp;
   }
 
   _openSocks5Tunnel(proxyInfo, targetHost, targetPort, signal) {
@@ -1861,6 +1939,9 @@ export class ThoughtTranslatorService {
             const remainder = rxBuf.subarray(needTail);
             settled = true;
             cleanupListeners();
+            socket.on('error', (err) => {
+              if (!socket.__opHandoverErr) socket.__opHandoverErr = err;
+            });
             socket.pause();
             if (remainder.length > 0) {
               socket.unshift(remainder);
@@ -1871,7 +1952,8 @@ export class ThoughtTranslatorService {
         }
       };
 
-      handshakeTimer = setTimeout(() => fail(new Error('SOCKS5 handshake timed out')), SOCKS5_HANDSHAKE_TIMEOUT_MS);
+      const socksTimeoutMs = this._socks5HandshakeTimeoutMs > 0 ? this._socks5HandshakeTimeoutMs : SOCKS5_HANDSHAKE_TIMEOUT_MS;
+      handshakeTimer = setTimeout(() => fail(new Error('SOCKS5 handshake timed out')), socksTimeoutMs);
       if (handshakeTimer.unref) handshakeTimer.unref();
       if (signal && typeof signal.addEventListener === 'function') {
         signal.addEventListener('abort', onAbort, { once: true });
@@ -1910,8 +1992,13 @@ export class ThoughtTranslatorService {
 
       let settled = false;
       let headerBuf = Buffer.alloc(0);
+      let handshakeTimer = null;
 
       const cleanupListeners = () => {
+        if (handshakeTimer) {
+          clearTimeout(handshakeTimer);
+          handshakeTimer = null;
+        }
         socket.removeListener('connect', onConnect);
         socket.removeListener('secureConnect', onConnect);
         socket.removeListener('data', onData);
@@ -1983,6 +2070,9 @@ export class ThoughtTranslatorService {
 
         settled = true;
         cleanupListeners();
+        socket.on('error', (err) => {
+          if (!socket.__opHandoverErr) socket.__opHandoverErr = err;
+        });
         socket.pause();
         if (remainder.length > 0) {
           socket.unshift(remainder);
@@ -1990,6 +2080,10 @@ export class ThoughtTranslatorService {
         resolve(socket);
       };
 
+      const connectTimeoutMs =
+        this._connectHandshakeTimeoutMs > 0 ? this._connectHandshakeTimeoutMs : CONNECT_HANDSHAKE_TIMEOUT_MS;
+      handshakeTimer = setTimeout(() => fail(new Error('Proxy CONNECT handshake timed out')), connectTimeoutMs);
+      if (handshakeTimer.unref) handshakeTimer.unref();
       if (signal && typeof signal.addEventListener === 'function') {
         signal.addEventListener('abort', onAbort, { once: true });
       }
@@ -2077,10 +2171,19 @@ export class ThoughtTranslatorService {
     let tlsSocket = null;
 
     if (isSocks5) {
-      tunnelSocket = await this._openSocks5Tunnel(proxyInfo, targetHost, targetPort, signal);
+      const socksConnectHost = await this._resolveSocks5ConnectHost(proxyInfo, targetHost, signal);
+      tunnelSocket = await this._openSocks5Tunnel(proxyInfo, socksConnectHost, targetPort, signal);
     } else if (isHttpsTarget) {
       const authority = `${formattedHost}:${targetPort}`;
       tunnelSocket = await this._openConnectTunnel(proxyInfo, authority, proxyAuthHeader, signal);
+    }
+
+    if (tunnelSocket && (tunnelSocket.__opHandoverErr || tunnelSocket.destroyed)) {
+      const handoverErr = tunnelSocket.__opHandoverErr || new Error('Proxy tunnel closed before request handover');
+      try {
+        tunnelSocket.destroy();
+      } catch {}
+      throw redactProxyErr(handoverErr, proxyInfo);
     }
 
     return await new Promise((resolve, reject) => {
@@ -2424,19 +2527,34 @@ export class ThoughtTranslatorService {
     if (input.customProxyUrl === undefined && input.proxyMode === undefined) {
       return { ok: true, override: null };
     }
+    const nextMode =
+      input.proxyMode !== undefined && ['auto', 'custom', 'direct'].includes(input.proxyMode)
+        ? input.proxyMode
+        : undefined;
     const rawInputProxy = typeof input.customProxyUrl === 'string' ? input.customProxyUrl : '';
+    if (/[\r\n\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(rawInputProxy)) {
+      return { ok: false, error: 'Invalid proxy URL (control characters or newlines are not allowed)' };
+    }
     const rawProxy = rawInputProxy.trim();
-    if (rawInputProxy && !rawProxy.includes('••••')) {
-      const checked = validateProxyUrl(rawInputProxy);
-      if (!checked.ok) {
-        return { ok: false, error: checked.error || 'Invalid proxy URL' };
+    const needsCustomValidation = nextMode === 'custom' || nextMode === undefined;
+    if (needsCustomValidation && rawProxy) {
+      if (rawProxy.includes('••••')) {
+        const store = this.loadStore();
+        if (!store.customProxyUrl || maskProxyUrl(store.customProxyUrl) !== rawProxy) {
+          return { ok: false, error: 'Invalid proxy URL' };
+        }
+      } else {
+        const checked = validateProxyUrl(rawInputProxy);
+        if (!checked.ok) {
+          return { ok: false, error: checked.error || 'Invalid proxy URL' };
+        }
       }
     }
     return {
       ok: true,
       override: {
         customProxyUrl: input.customProxyUrl,
-        proxyMode: input.proxyMode,
+        proxyMode: nextMode,
       },
     };
   }
@@ -2994,9 +3112,15 @@ export class ThoughtTranslatorService {
   async _translateMachineBatch(text, gtxTl, abortSignal) {
     if (abortSignal?.aborted) throw new Error('Translation aborted');
     const codeSpans = [];
+    let opTag = 'OPCODE';
+    if (/__\s*OPCODE/i.test(text)) {
+      do {
+        opTag = `OPCODE_${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+      } while (text.toUpperCase().includes(opTag));
+    }
     const masked = text.replace(/`[^`\n]+`/g, (m) => {
       const idx = codeSpans.push(m) - 1;
-      return `__OPCODE_${idx}__`;
+      return `__${opTag}_${idx}__`;
     });
     const url =
       `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(gtxTl)}&dt=t&q=` +
@@ -3015,7 +3139,11 @@ export class ThoughtTranslatorService {
     const json = JSON.parse(rawJsonText);
     const segs = Array.isArray(json?.[0]) ? json[0] : [];
     let translated = segs.map((s) => (Array.isArray(s) && s[0] ? String(s[0]) : '')).join('');
-    translated = translated.replace(/__OPCODE_(\d+)__/gi, (_, n) => codeSpans[Number(n)] || _);
+    const restoreRe = new RegExp(`__\\s*${opTag}\\s*_?\\s*(\\d+)\\s*__`, 'gi');
+    translated = translated.replace(restoreRe, (full, n) => {
+      const idx = Number(n);
+      return Number.isInteger(idx) && idx >= 0 && idx < codeSpans.length ? codeSpans[idx] : full;
+    });
     return translated.trim();
   }
 
@@ -3283,23 +3411,35 @@ export class ThoughtTranslatorService {
 
   _parseNumberedBatchLines(rawOut, expectedCount) {
     const out = new Array(expectedCount).fill('');
+    if (!Number.isInteger(expectedCount) || expectedCount <= 0) return out;
     const lines = String(rawOut || '')
-      .replace(/\r\n/g, '\n')
+      .replace(/\r\n?/g, '\n')
       .split('\n')
       .map((l) => l.trim())
       .filter(Boolean);
+    const seen = new Set();
+    const poisoned = new Set();
     let matchedCount = 0;
     for (const line of lines) {
       const m = /^(?:\[|【)\s*(\d+)\s*(?:\]|】)\s*(.*)$/.exec(line);
       if (m) {
         const idx = Number(m[1]);
         if (Number.isInteger(idx) && idx >= 0 && idx < expectedCount) {
-          out[idx] = m[2].trim();
           matchedCount++;
+          if (seen.has(idx)) {
+            poisoned.add(idx);
+            out[idx] = '';
+          } else {
+            seen.add(idx);
+            out[idx] = m[2].trim();
+          }
         }
       }
     }
-    if (matchedCount === 0 && lines.length === expectedCount) {
+    for (const idx of poisoned) {
+      out[idx] = '';
+    }
+    if (expectedCount > 1 && matchedCount === 0 && lines.length === expectedCount) {
       for (let i = 0; i < expectedCount; i++) {
         out[i] = lines[i];
       }
@@ -3319,7 +3459,9 @@ export class ThoughtTranslatorService {
     signal = null,
   } = {}) {
     const tl = normalizeTargetLang(targetLang || lang);
-    const list = Array.isArray(items) ? items.slice(0, 40).map((s) => String(s || '').trim().slice(0, 320)) : [];
+    const list = Array.isArray(items)
+      ? items.slice(0, 40).map((s) => String(s || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 320))
+      : [];
     if (!list.length) {
       return { ok: true, items: [], details: [], engine: mode === 'machine' ? 'machine' : 'ai', batch: true };
     }
@@ -3364,7 +3506,12 @@ export class ThoughtTranslatorService {
         existing.indices.push(i);
         continue;
       }
-      const { masked, tokens } = protectToolSummaryIdentifiers(raw);
+      const { masked: protectedMasked, tokens } = protectToolSummaryIdentifiers(raw);
+      const opTag = typeof tokens.__opidTag === 'string' ? tokens.__opidTag : 'OPID';
+      const masked = protectedMasked.replace(/(?:\[|【)\s*\d+\s*(?:\]|】)/g, (m) => {
+        const idx = tokens.push(m) - 1;
+        return `__${opTag}_${idx}__`;
+      });
       const rec = { raw, masked, tokens, key: itemKey, indices: [i] };
       pendingByRaw.set(raw, rec);
       pendingList.push(rec);
@@ -3553,6 +3700,9 @@ export class ThoughtTranslatorService {
     if (!raw) return { ok: true, text: '', skipped: true };
 
     if (mode === 'tool-batch:machine' || mode === 'tool-batch:ai') {
+      if (raw.length > 65536 || String(text || '').length > 65536) {
+        return { ok: false, error: 'Tool-summary batch payload too large', batch: true };
+      }
       let batchItems = [];
       try {
         const parsedBatch = JSON.parse(raw);

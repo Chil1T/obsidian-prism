@@ -1474,6 +1474,122 @@ test('remove.js preserves usage rollup cache by default and --purge-data safely 
   }
 });
 
+test('remove.js P1-5: --purge-data waits for slow-exiting daemon flush before deleting usage cache and escalates to SIGKILL on timeout', async () => {
+  const removeMod = require(path.join(ROOT_DIR, 'remove.js'));
+  assert.ok(
+    removeMod.DAEMON_STOP_POLL_MS >= 25 && removeMod.DAEMON_STOP_POLL_MS <= 40,
+    `Expected poll interval within 25..40ms, got ${removeMod.DAEMON_STOP_POLL_MS}`
+  );
+  assert.equal(removeMod.DAEMON_STOP_GRACEFUL_TIMEOUT_MS, 800);
+
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-remove-p1-5-'));
+  const spawnedChildren = [];
+  try {
+    const geminiDir = path.join(workDir, '.gemini');
+    const cfgDir = path.join(geminiDir, 'config');
+    fs.mkdirSync(cfgDir, { recursive: true });
+
+    const usageCachePath = path.join(cfgDir, 'obsidian-prism-usage-rollup-cache.json');
+    const flushMarkerPath = path.join(workDir, 'remove-flushed.marker');
+    const triggerFilePath = path.join(workDir, 'remove-sigterm.trigger');
+    const daemonPidFile = path.join(workDir, '.daemon.pid');
+    const watchPidFile = path.join(workDir, '.watch.pid');
+    fs.writeFileSync(usageCachePath, '{"version":2,"scopes":{"local":{"stale":true}}}', 'utf8');
+
+    const slowDaemonScript = `
+      const fs = require('node:fs');
+      const [cachePath, markerPath, triggerPath] = process.argv.slice(1);
+      let stopping = false;
+      function gracefulStop() {
+        if (stopping) return;
+        stopping = true;
+        setTimeout(() => {
+          try { fs.writeFileSync(cachePath, '{"version":2,"scopes":{"local":{"revivedByRemove":true}}}', 'utf8'); } catch {}
+          try { fs.writeFileSync(markerPath, String(Date.now()), 'utf8'); } catch {}
+          setTimeout(() => process.exit(0), 25);
+        }, 160);
+      }
+      process.on('SIGTERM', gracefulStop);
+      setInterval(() => {
+        if (fs.existsSync(triggerPath)) gracefulStop();
+      }, 10);
+    `;
+    const child = spawn(process.execPath, ['-e', slowDaemonScript, usageCachePath, flushMarkerPath, triggerFilePath], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    spawnedChildren.push(child);
+    let childExited = false;
+    child.once('exit', () => {
+      childExited = true;
+    });
+
+    fs.writeFileSync(daemonPidFile, JSON.stringify({ pid: child.pid, startedAt: Date.now() }), 'utf8');
+
+    const signals = [];
+    const stopOpts = {
+      hostConfigDir: cfgDir,
+      watchPidFile,
+      daemonPidFile,
+      noCdp: true,
+      pollIntervalMs: 25,
+      gracefulTimeoutMs: 800,
+      killWaitMs: 200,
+      kill: (p, sig) => {
+        signals.push(sig);
+        if (process.platform === 'win32' && sig === 'SIGTERM') {
+          fs.writeFileSync(triggerFilePath, '1', 'utf8');
+          return;
+        }
+        process.kill(p, sig);
+      },
+    };
+
+    const startedAt = Date.now();
+    await removeMod.main(['--purge-data'], stopOpts);
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.deepEqual(signals, ['SIGTERM'], 'gracefully exiting daemon must not require SIGKILL escalation');
+    assert.equal(fs.existsSync(flushMarkerPath), true, 'slow daemon must have flushed before remove.js purged data');
+    assert.ok(elapsedMs >= 140, `remove.js must wait for daemon exit before purging cache (${elapsedMs}ms)`);
+    assert.equal(fs.existsSync(daemonPidFile), false, '.daemon.pid lock file must be removed');
+    assert.equal(fs.existsSync(usageCachePath), false, 'usage cache written during daemon shutdown must be purged');
+
+    await new Promise((r) => setTimeout(r, 250));
+    assert.equal(childExited, true, 'slow daemon child process must have exited');
+    assert.equal(fs.existsSync(usageCachePath), false, 'usage cache must NOT resurrect after remove.js --purge-data');
+
+    // Timeout escalation to SIGKILL
+    const stubborn = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    spawnedChildren.push(stubborn);
+    const stubbornSignals = [];
+    const termRes = await removeMod.terminatePidAndWait(stubborn.pid, {
+      pollIntervalMs: 25,
+      gracefulTimeoutMs: 120,
+      killWaitMs: 400,
+      kill: (p, sig) => {
+        stubbornSignals.push(sig);
+        if (process.platform === 'win32' && sig === 'SIGTERM') return;
+        process.kill(p, sig);
+      },
+    });
+    assert.deepEqual(stubbornSignals, ['SIGTERM', 'SIGKILL'], 'remove.js must escalate to SIGKILL after graceful timeout');
+    assert.equal(termRes.signaled, true);
+    assert.equal(termRes.escalated, true);
+    assert.equal(termRes.exited, true);
+  } finally {
+    for (const c of spawnedChildren) {
+      try {
+        process.kill(c.pid, 'SIGKILL');
+      } catch {}
+    }
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
 test(
   'Windows installer.exe --uninstall --purge-data removes obsidian-prism-usage-rollup-cache.json & safe PRISM_USAGE_CACHE_PATH while sparing redline/hijacked files',
   { skip: process.platform !== 'win32' ? 'Windows-only installer.exe --purge-data E2E test' : false },

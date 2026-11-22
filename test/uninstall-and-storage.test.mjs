@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { PrismDaemon } from '../sidecars/daemon/main.mjs';
@@ -735,4 +736,149 @@ test('Windows Program.cs and macOS main.swift source contracts support --purge-d
   assert.ok(swift.includes('obsidian-prism-sidebar.json'));
   assert.ok(swift.includes('telemetry'));
   assert.ok(swift.includes('unloadLaunchAgent'));
+  assert.ok(swift.includes('normalizeSystemRootPrefix'));
+  assert.ok(swift.includes('isNoSuchFileError'));
+  assert.ok(swift.includes('NSFileReadNoSuchFileError'));
+  assert.ok(swift.includes('NSFileNoSuchFileError'));
+  assert.ok(swift.includes('isRegularFileNoSymlink'));
+});
+
+test('tools/install-plugin.cjs P1-5: waits for slow-exiting daemon to finish flushing before --purge-data deletes usage cache and escalates to SIGKILL on timeout', async () => {
+  assert.ok(
+    installTool.DAEMON_STOP_POLL_MS >= 25 && installTool.DAEMON_STOP_POLL_MS <= 40,
+    `Expected poll interval within 25..40ms, got ${installTool.DAEMON_STOP_POLL_MS}`
+  );
+  assert.equal(installTool.DAEMON_STOP_GRACEFUL_TIMEOUT_MS, 800);
+
+  const rootTmp = mkTempDir('prism-p1-5-install-');
+  const spawnedChildren = [];
+  try {
+    const geminiDir = path.join(rootTmp, '.gemini');
+    const hostConfigDir = path.join(geminiDir, 'config');
+    const targetDir = path.join(hostConfigDir, 'plugins', 'obsidian-prism');
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    const usageCachePath = path.join(hostConfigDir, 'obsidian-prism-usage-rollup-cache.json');
+    const flushMarkerPath = path.join(rootTmp, 'flushed.marker');
+    const triggerFilePath = path.join(rootTmp, 'sigterm.trigger');
+    fs.writeFileSync(usageCachePath, '{"version":2,"scopes":{"local":{"stale":true}}}', 'utf8');
+
+    // 1) Spawn a real child process simulating a Daemon that flushes dirty usage cache ~160ms after SIGTERM, then exits
+    const slowDaemonScript = `
+      const fs = require('node:fs');
+      const [cachePath, markerPath, triggerPath] = process.argv.slice(1);
+      let stopping = false;
+      function gracefulStop() {
+        if (stopping) return;
+        stopping = true;
+        setTimeout(() => {
+          try { fs.writeFileSync(cachePath, '{"version":2,"scopes":{"local":{"revived":true}}}', 'utf8'); } catch {}
+          try { fs.writeFileSync(markerPath, String(Date.now()), 'utf8'); } catch {}
+          setTimeout(() => process.exit(0), 25);
+        }, 160);
+      }
+      process.on('SIGTERM', gracefulStop);
+      const timer = setInterval(() => {
+        if (fs.existsSync(triggerPath)) gracefulStop();
+      }, 10);
+      timer.unref && false;
+    `;
+    const child = spawn(process.execPath, ['-e', slowDaemonScript, usageCachePath, flushMarkerPath, triggerFilePath], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    spawnedChildren.push(child);
+    let childExited = false;
+    child.once('exit', () => {
+      childExited = true;
+    });
+
+    const pidFile = path.join(targetDir, '.daemon.pid');
+    fs.writeFileSync(pidFile, JSON.stringify({ pid: child.pid, startedAt: Date.now() }), 'utf8');
+
+    const signals = [];
+    const daemonStopOpts =
+      process.platform === 'win32'
+        ? {
+            pollIntervalMs: 25,
+            gracefulTimeoutMs: 800,
+            killWaitMs: 200,
+            kill: (p, sig) => {
+              signals.push(sig);
+              if (sig === 'SIGTERM') {
+                fs.writeFileSync(triggerFilePath, '1', 'utf8');
+                return;
+              }
+              process.kill(p, sig);
+            },
+          }
+        : {
+            pollIntervalMs: 25,
+            gracefulTimeoutMs: 800,
+            killWaitMs: 200,
+            kill: (p, sig) => {
+              signals.push(sig);
+              process.kill(p, sig);
+            },
+          };
+
+    const startedAt = Date.now();
+    const unRes = await installTool.uninstallPlugin({
+      targetDir,
+      hostConfigDir,
+      noCdp: true,
+      syncShortcuts: false,
+      purgeData: true,
+      daemonStopOpts,
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    assert.equal(unRes.ok, true);
+    assert.equal(unRes.stoppedPid, child.pid);
+    assert.deepEqual(signals, ['SIGTERM'], 'gracefully exiting daemon must not require SIGKILL escalation');
+    assert.equal(fs.existsSync(flushMarkerPath), true, 'slow daemon must have executed its shutdown flush before uninstall finished');
+    assert.ok(elapsedMs >= 140, `uninstallPlugin must wait for daemon exit instead of racing ahead (${elapsedMs}ms)`);
+    assert.equal(fs.existsSync(usageCachePath), false, 'usage rollup cache flushed during daemon shutdown must be purged cleanly');
+
+    // Wait past any possible late flush and verify cache never resurrects
+    await new Promise((r) => setTimeout(r, 250));
+    assert.equal(childExited, true, 'slow daemon child process must have exited');
+    assert.equal(fs.existsSync(usageCachePath), false, 'usage rollup cache must NOT resurrect after --purge-data');
+
+    // 2) Stubborn process ignoring graceful SIGTERM must escalate to SIGKILL after timeout and exit cleanly
+    const stubbornScript = `
+      process.on('SIGTERM', () => {});
+      setInterval(() => {}, 1000);
+    `;
+    const stubborn = spawn(process.execPath, ['-e', stubbornScript], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    spawnedChildren.push(stubborn);
+    const stubbornSignals = [];
+    const termRes = await installTool.terminatePidAndWait(stubborn.pid, {
+      pollIntervalMs: 25,
+      gracefulTimeoutMs: 120,
+      killWaitMs: 400,
+      kill: (p, sig) => {
+        stubbornSignals.push(sig);
+        if (process.platform === 'win32' && sig === 'SIGTERM') {
+          // Simulate POSIX process ignoring SIGTERM
+          return;
+        }
+        process.kill(p, sig);
+      },
+    });
+    assert.deepEqual(stubbornSignals, ['SIGTERM', 'SIGKILL'], 'must escalate to SIGKILL after graceful timeout');
+    assert.equal(termRes.signaled, true);
+    assert.equal(termRes.escalated, true);
+    assert.equal(termRes.exited, true);
+  } finally {
+    for (const c of spawnedChildren) {
+      try {
+        process.kill(c.pid, 'SIGKILL');
+      } catch {}
+    }
+    fs.rmSync(rootTmp, { recursive: true, force: true });
+  }
 });
