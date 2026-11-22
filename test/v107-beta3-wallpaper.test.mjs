@@ -1181,7 +1181,7 @@ test('wallpaper-settings-ui.js: 0 innerHTML, 5 locales, 5+1 anti-translation, an
     globalThis.document = env.doc;
     const mountPanel = () =>
       settingsPanelMod.mountOrSyncSettingsSection({
-        version: '1.0.7-beta.2',
+        version: '1.0.7-beta.3',
         lazyFold: false,
         getLang: () => activeLang,
         uiText: () => ({
@@ -1815,7 +1815,7 @@ test('red-team #229 [P1-2] & #230 [P0-1, P1-7, P2-3, P2-4]: no bootWpCfg token i
   try {
     const mountPanel = () =>
       settingsPanelMod.mountOrSyncSettingsSection({
-        version: '1.0.7-beta.2',
+        version: '1.0.7-beta.3',
         lazyFold: false,
         getLang: () => activeLang,
         uiText: () => ({ grpAppearance: 'Appearance', sectionTitle: 'Obsidian Prism' }),

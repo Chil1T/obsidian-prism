@@ -5,6 +5,55 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 本项目遵循语义化版本（SemVer）规范，记录各正式版本的新增功能、架构变更、安全加固与缺陷修复。
 
+## [1.0.7-beta.3] - 2026-11-23
+
+> 本版本作为 **Beta 热修预发布版（`v1.0.7-beta.3`）** 推送至「Beta 尝鲜版」更新通道，重点吸收并加固了社区高优 PR（[#33](https://github.com/RMvdesi/obsidian-prism/pull/33) / [#35](https://github.com/RMvdesi/obsidian-prism/pull/35)）与新 Issue（[#31](https://github.com/RMvdesi/obsidian-prism/issues/31) / [#32](https://github.com/RMvdesi/obsidian-prism/issues/32) / [#34](https://github.com/RMvdesi/obsidian-prism/issues/34) / [#36](https://github.com/RMvdesi/obsidian-prism/issues/36)），修复问答卡遮挡/选中态、浅色 Token 面板视觉观感、子代理运行图标与三端安装器/CI/CodeQL 问题，并将「背景壁纸」归入「Beta 内容」分类加以明确占位提示。
+
+### Critical Fixes & Community PRs / 关键缺陷修复与社区 PR 融合
+
+- **修复 Antigravity v2.34 首页概览因 Protobuf `BigInt` 崩溃卡骨架屏 & Redux 回退（[PR #33](https://github.com/RMvdesi/obsidian-prism/pull/33) · [#32](https://github.com/RMvdesi/obsidian-prism/issues/32) · [@zzirui321-rgb](https://github.com/zzirui321-rgb)）**：
+  - 恢复并全量加固 `home-studio-panel.js` 与 `usage-core.js` 的数值安全转换，彻底消除 `@bufbuild/protobuf` `BigInt` 时间戳/步数触发一元 `+` 抛 `TypeError` 导致首页永久卡在 `[data-skeleton]` 的问题；`flushUsageCacheNow()` 增加空载守卫与 `BigInt` 序列化兼容防热重注覆盖缓存；
+  - 在 `renderer-rpc-adapter.mjs` 新增 `WeakRef` 缓存的 Redux `trajectorySummaries` 回退并与 `searchConversations` 标题互补合并，统一先全量合并再按最新时间降序截断 1024 条（不挤丢刚新建的活跃会话），补齐裸 `bigint` 时间戳支持与 `Object.create(null)` 原型防护。
+  - *Fixes Home Studio Overview `BigInt` Crash & Adds v2.34 Redux Summary Fallback ([PR #33](https://github.com/RMvdesi/obsidian-prism/pull/33) / [#32](https://github.com/RMvdesi/obsidian-prism/issues/32))*: Eliminates `TypeError: Cannot convert a BigInt value to a number` across `home-studio-panel.js` and `usage-core.js`, guards `flushUsageCacheNow()` against clobbering `localStorage` on hot-reload, and merges `WeakRef`-cached Redux summaries with `searchConversations` before descending-time 1024 capping.
+- **修复点击模型菜单「View Usage / 查看用量」弹层意外切到 `Orchestrator`（[PR #35](https://github.com/RMvdesi/obsidian-prism/pull/35) · [#34](https://github.com/RMvdesi/obsidian-prism/issues/34) · [@zzirui321-rgb](https://github.com/zzirui321-rgb)）**：
+  - 拦截嵌套 Base-UI `role="menu"` / `.agy-overlay` 容器与 `[data-testid="quota-progress-circle"]` 配额弹层被误判为 Orchestrator 二级规划器菜单项；收紧 `_mPlan` 长度上限与前缀匹配，并将尾部档位剥离改写为 $O(n)$ 线性循环彻底杜绝 ReDoS 风险。
+  - *Prevents `View Usage` Popup Clicks from Switching Active Model to `Orchestrator` ([PR #35](https://github.com/RMvdesi/obsidian-prism/pull/35) / [#34](https://github.com/RMvdesi/obsidian-prism/issues/34))*: Excludes nested menu/overlay wrappers and quota popups from Orchestrator L2 binding, tightens `_mPlan` prefix matching, and uses an $O(n)$ linear effort-suffix stripper.
+- **修复执行 `/compact` 后底部 `Ctx %` 与实体试管水位不自动刷新（[#36](https://github.com/RMvdesi/obsidian-prism/issues/36) · [@zzirui321-rgb](https://github.com/zzirui321-rgb)）**：
+  - 对齐 Antigravity v2.34 原生 `contextWindowUsage`（含 `estimatedAfterCompaction`）、`compactedAtStepIndices` 与非 `intentOnly` `CortexStepCheckpoint`，引入零对话原文泄露的纯数值投影与零 LS RPC 纯内存探针 `PeekContextState`，`/compact` 完成后秒级自动刷新上下文水位并解除高占比红警（下一条新消息无缝切回 `chatStartMetadata` 精确读数，同步加固 proto3 零值锚点防历史 checkpoint 误清高水位）。
+  - *Auto-Refreshes Context Occupancy & Vial Level After `/compact` ([#36](https://github.com/RMvdesi/obsidian-prism/issues/36))*: Reads native v2.34 `contextWindowUsage` / `compactedAtStepIndices` / completed `CortexStepCheckpoint` via zero-content-leak numeric projection and a zero-LS-RPC in-memory `PeekContextState` probe so `Ctx %` and the context vial drop immediately once compaction completes.
+- **根治模型推理等级滑块文字向下偏移闪动（[#31](https://github.com/RMvdesi/obsidian-prism/issues/31) · [@baihao2006](https://github.com/baihao2006)）**：
+  - 插入 `.ces-ag-section` 首帧即同步自带完整 5+1 防翻译属性且幂等短路零冗余 MutationRecord；档位变更改用语义等价比对（新增 `Adaptive` / 自适应与单档固定 `"fixed"` 映射，消除中英双语反复触发 `_reAnim` 闪动）；收敛 `ces-claude-rise` 位移幅度并采用 `overflow-y: clip` 既防穿入滑块轨道又不硬切最高档光晕。
+  - *Eliminates Effort Slider Label Drop/Flicker ([#31](https://github.com/RMvdesi/obsidian-prism/issues/31))*: Applies 5+1 anti-translation attributes synchronously before mount with idempotent guards, switches label-change detection to semantic equivalence (adding `Adaptive` and `fixed`), and tames `ces-claude-rise` displacement with `overflow-y: clip`.
+
+### UI / UX & Settings Polish / 界面交互打磨与设置分类调整
+
+- **问答选项卡（`ask_question`）防双桌宠遮挡 & 已选选项高对比度区分**：
+  - 重构 `syncCrabClearance`（Phase 1 批量只读测量 + Phase 2 纯写入零回流），修复 Tailwind `.contents` 包装层、展开首帧、多窗格互相抹除及非直接兄弟嵌套问题，问答卡抬高并自动将双桌宠降层且不截断右下角「提交」按钮点击；
+  - 对齐 Antigravity v2.34 `ask-question-option` 与手写项真实选中类 `.bg-secondary.border-border`，在深浅双主题与全 Accent 下显著强化选中底色、边框、左侧 `2.5px` 发光条与序号徽章高亮（同时兼顾禁用项不亮化、无左右跳动）。
+  - *Q&A Card Mascot Clearance & High-Contrast Selected State*: Refactors clearance into Phase 1 read / Phase 2 write (zero reflow), fixes `.contents`/multi-composer edge cases, lowers mascots while Q&A cards are open so Submit is never blocked, and styles real v2.34 `.bg-secondary.border-border` selections across dark/light themes.
+- **移除 Home Studio 浅色模式“头发丝”轨道弧线**：彻底移除首页 Token 面板背景椭圆细线与准星装饰（JS + CSS 同步清理），浅色与深色模式均回归清爽通透，并净回收主包体积。
+  - *Removes Hairline Orbital Arcs from Home Studio*: Strips `ORBITAL_SVG_HTML` and dead orbital CSS so light-mode KPI cards and heatmaps stay clean while reclaiming Channel 1 bytes.
+- **子代理运行中图标核心恢复精致短横线**：**仅**子代理运行中旋转环（`subagent-node` / `running-row` / `background-task-row`）中心核心改回居中发光圆角短横线（`7px × 2px`），主会话运行环保持 `4px × 4px` 发光圆点不变，视觉层次一目了然。
+  - *Restores Luminous Dash Core for Subagent Spinners Only*: Updates only subagent/background running spinners to a centered `7px × 2px` luminous pill dash while keeping primary conversation spinners as `4px × 4px` dots.
+- **设置面板「背景壁纸」移入「Beta 内容」类别并明示占位状态**：将壁纸设置卡片从「外观」迁入「Beta 内容」分类，并在「Beta 内容」顶部与壁纸卡片说明中以五语清晰提示当前 Beta 内容几乎仅作占位展示、尚未成熟、大多不太能正常使用。
+  - *Moves Wallpaper Card into Settings "Beta" Tab with Explicit Placeholder Notice*: Relocates `[data-testid="prism-wallpaper-slot"]` from Appearance to Beta and adds a 5-locale amber warning banner clarifying that Beta items are currently placeholders not ready for normal reliable use.
+
+### Installer Hardening, CI & Security / 三端安装器加固、CI 漂绿与安全清零
+
+- **Windows / macOS / CLI 三端安装器 5 大更新后失败根因加固**：
+  - Windows `IsUnsafeReparsePoint` 升级为 `FindFirstFileW` 精准 Tag 白名单（放行 CompactOS `WOF` / OneDrive `Cloud` / `Dedup` 等合法非重定向标签，同时对 Symlink / Junction / 悬空软链 / 长路径 / 通配符严格真 Fail-Closed）；
+  - 覆盖部署增清只读属性、退避重试、PE `.old` 绕锁失败自动回滚与安全递归清残骸；外围开机自启/注册表/Defender 瞬时锁降级为非致命警告，报错弹窗与日志结构化展示失败步骤与根因；
+  - Windows & macOS 孤儿进程清理与 `.daemon.pid`/`.watch.pid` PID 复用校验全面升级为精确入口路径 + 可执行名白名单 + daemon 特征 Fail-Closed 校验，绝不误杀宿主主窗口或无关 `node` 进程；macOS `CdpClient.swift` 补齐祖先链 `lstat` 软链保护与 `O_CREAT|O_EXCL|O_NOFOLLOW` `0o600` 原子写；CLI POSIX 保持最小权限绝不放宽为 `0o666`。
+  - *Cross-Platform Installer Hardening (Win / macOS / CLI)*: Adds `FindFirstFileW` WOF/Cloud/Dedup safe reparse tag checks (strict fail-closed on symlinks/junctions), readonly-clear retries with PE `.old` rollback, non-fatal peripheral step degradation with structured failure diagnostics, exact-command Fail-Closed PID reuse & orphan cleanup guards, macOS `O_NOFOLLOW` `0o600` atomic host registry writes, and minimal POSIX permissions in CLI.
+- **三端 Node 22 CI 漂绿 & CodeQL 告警清零（`#35` / `#36`）**：
+  - 根治 `translator-service.mjs` 中原生 `AbortSignal.timeout()` 的 unref 定时器在 Node 22 导致事件循环提前排空问题（全文件替换为 ref'd 受控超时 + `try...finally { cleanup(); }`）；修复 Ubuntu/macOS 卸载测试 `SIGTERM` 就绪竞态；清零测试文件 CodeQL `#35/#36` URL 子串告警，修复 `style.css` 选择器与 CI 秘钥正则前缀撞车并合并 `prefers-reduced-motion` 块将 Channel 1 稳守在 **`~684.7 KB`**（全量单测增至 **`569 pass / 0 fail`**）。
+  - *All-OS Node 22 CI Green & Zero CodeQL Alerts (`#35/#36`)*: Replaces all `AbortSignal.timeout()` calls in `translator-service.mjs` with managed ref'd timers cleaned in `finally`, eliminates Linux/macOS `SIGTERM` readiness races in tests, resolves CodeQL `#35/#36` via strict `new URL().hostname`, guards the CI secret regex against CSS `sk-` prefix clashes, and grows the test suite to **`569 pass / 0 fail`**.
+
+### Acknowledgements / 社区致谢（Community Credits）
+
+- 衷心感谢本版本通过高质量 PR、深度定位与细心视觉反馈帮助打磨 Obsidian Prism 的社区伙伴：**[@zzirui321-rgb](https://github.com/zzirui321-rgb)**（[PR #33](https://github.com/RMvdesi/obsidian-prism/pull/33) & [#32](https://github.com/RMvdesi/obsidian-prism/issues/32)、[PR #35](https://github.com/RMvdesi/obsidian-prism/pull/35) & [#34](https://github.com/RMvdesi/obsidian-prism/issues/34)、[#36](https://github.com/RMvdesi/obsidian-prism/issues/36)）、**[@baihao2006](https://github.com/baihao2006)**（[#31](https://github.com/RMvdesi/obsidian-prism/issues/31)），以及反馈浅色 Token 面板弧线观感与客户端更新后安装排查线索的社区朋友们！
+  - *Special thanks to [@zzirui321-rgb](https://github.com/zzirui321-rgb) (PR #33/#35 & Issues #32/#34/#36), [@baihao2006](https://github.com/baihao2006) (#31), and community members who reported light-mode Home Studio visuals and post-update installer feedback.*
+
 ## [1.0.7-beta.2] - 2026-11-23
 
 > 本版本作为 **Beta 预发布版（`v1.0.7-beta.2`）** 推送至「Beta 尝鲜版」更新通道，全面吸收并加固了近期 7 个社区 PR（`#19` / `#20` / `#21` / `#22` / `#23` / `#29` / `#30`），修复多项高频痛点与全部 CodeQL High 安全告警，并上线 **Channel 7 自定义静态 / 动态视频背景壁纸（Beta）**、会话标题自动翻译与思考翻译一键诊断能力。

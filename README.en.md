@@ -12,7 +12,7 @@ Four dark & daylight themes · A living 512K context vial · Reasoning effort sl
 
 <p>
   <a href="https://github.com/RMvdesi/obsidian-prism/releases"><img src="https://img.shields.io/github/v/release/RMvdesi/obsidian-prism?style=flat-square&color=3186ff&label=Release" alt="Latest Release" /></a>
-  <img src="https://img.shields.io/badge/Version-1.0.7--beta.2-0f172a?style=flat-square" alt="Version 1.0.7-beta.2" />
+  <img src="https://img.shields.io/badge/Version-1.0.7--beta.3-0f172a?style=flat-square" alt="Version 1.0.7-beta.3" />
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20Universal-1e293b?style=flat-square" alt="Platform" />
   <a href="https://github.com/RMvdesi/obsidian-prism/actions"><img src="https://img.shields.io/github/actions/workflow/status/RMvdesi/obsidian-prism/ci.yml?branch=main&style=flat-square&label=CI" alt="CI Status" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-2563eb?style=flat-square" alt="License: GPL-3.0" /></a>
@@ -22,7 +22,7 @@ Four dark & daylight themes · A living 512K context vial · Reasoning effort sl
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/hero-dark.webp" />
   <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/hero-light.webp" />
-  <img src="assets/screenshots/hero-dark.webp" width="100%" alt="Obsidian Prism v1.0.7-beta.2 showcase" />
+  <img src="assets/screenshots/hero-dark.webp" width="100%" alt="Obsidian Prism v1.0.7-beta.3 showcase" />
 </picture>
 
 <sub>Footage is rendered frame by frame by an offline stage that runs this repository's front-end source directly. All workspaces and conversations shown are fictional.</sub>
@@ -42,7 +42,7 @@ Four dark & daylight themes · A living 512K context vial · Reasoning effort sl
 - **Context you can see**: A tiny vial next to the composer shows live 512K context usage; click it for a usage breakdown and quota forecasts.
 - **Reasoning effort at your fingertips**: A starfield slider lives in the model menu; pick Orchestrator and it turns into a light-refracting cut-crystal bar.
 - **Thinking & titles you can read**: Translate the model's thinking in real time (Immersive or Stacked Bilingual) with 1-Click Diagnose, manual HTTP/SOCKS5 proxy, and optional tool-summary & session-title translation.
-- **Custom Static / Live Video Wallpaper (Beta)**: 100% local image (JPG/PNG/WebP/GIF/AVIF) and live video (MP4/WebM) wallpapers, off by default with zero overhead and automatic 0fps pause on blur or chat.
+- **Custom Static / Live Video Wallpaper (Beta Placeholder)**: Located under Settings → **Beta** (currently a placeholder preview, not yet ready for normal reliable use), off by default with zero overhead.
 - **Pixel companions**: Clawd, a little purple cat and three mini crabs stack into a tower above the composer — with a hidden rainbow easter egg.
 - **A friendlier workbench**: Built-in side-pane browser and large-file viewer, right-click actions, long code-block folding and conversation outline jumps.
 - **Chat Mode (Beta)**: A dedicated space for everyday chats and notes, kept separate from your coding workspace and its settings.
@@ -100,7 +100,7 @@ Off by default — enable it under **Settings → Appearance → Beta**. A switc
 <details>
 <summary><strong>Technical details: performance, security, telemetry & configuration (click to expand)</strong></summary>
 
-**Obsidian Prism (`v1.0.7-beta.2`)** provides Smoked Obsidian dark/daylight themes, host workbench & inline diff enhancements, a built-in side-pane browser and streaming multi-format file viewer, live quota telemetry, chain-of-thought translation, and experimental static/video wallpapers (Beta) for the Antigravity desktop client through a native 7-channel Sidecar plugin architecture — without altering host business logic or conflicting with external plugins:
+**Obsidian Prism (`v1.0.7-beta.3`)** provides Smoked Obsidian dark/daylight themes, host workbench & inline diff enhancements, a built-in side-pane browser and streaming multi-format file viewer, live quota telemetry, chain-of-thought translation, and experimental static/video wallpapers (Beta) for the Antigravity desktop client through a native 7-channel Sidecar plugin architecture — without altering host business logic or conflicting with external plugins:
 
 - **Four Dark/Daylight Themes & Fine-Grained Controls**: Includes two dark palettes (**Obsidian Dark** & **Warm Charcoal**) and two daylight presets (**Daylight Crystal** & **Warm Alabaster**) with automatic host light/dark tracking, unified Smoked Obsidian faceted surfaces (message bubbles, file-change strips, Artifact cards, graphite keycaps, and single-frame inline file chips), plus 5 accent tones (Follow Model, Cobalt, Iris, Amber, and Graphite Monochrome `mono`), 3 corner radius scales, 4 code monospace font stacks with ligature toggle, and ambient glow intensity controls.
 - **300Hz Split-Rate Pipeline, 5-Step Ink Streaming & `0fps` Semantic Afterglow**: Removes persistent multi-layer `backdrop-filter` blur passes and reclaims Canvas VRAM (`0x0`) during sleep; renders streaming responses with a `CSS.highlights`-based **5-step ink fade-in** (zero wrapper nodes, zero forced layout reflow, maintaining smooth high-refresh frame pacing even in `34k+`-node long sessions); caps steady-state background aurora rendering to `~30fps` on 300Hz displays and enters `0fps` idle sleep `1.2s` after activity ends. Provides non-intrusive three-state semantic edge cues (awaiting user decision, error halted, and background long-task completion) that freeze into `0fps` static snapshots.
@@ -184,7 +184,7 @@ npm run build:macos            # Build standalone macOS Universal bundle (.dmg)
 #### Core Repository Layout
 ```text
 obsidian-prism/
-├── plugin.json                         # Antigravity native plugin manifest (obsidian-prism@1.0.7-beta.2)
+├── plugin.json                         # Antigravity native plugin manifest (obsidian-prism@1.0.7-beta.3)
 ├── LICENSE / NOTICE / CITATION.cff     # GPL-3.0 license, attribution terms & citation metadata
 ├── THIRD_PARTY_NOTICES.md              # Preserved copyright & license notices for MIT upstreams
 ├── assets/                             # Vector plugin icon & documentation screenshots
@@ -233,7 +233,7 @@ Any fork, modification, port, or redistribution must comply with all three requi
   author       = {RMvdesi},
   title        = {{Obsidian Prism: Modular Optical UI, Workbench Enhancements, Omni File Viewer, Quota Telemetry & Thought Translator for Antigravity}},
   year         = {2026},
-  version      = {1.0.7-beta.2},
+  version      = {1.0.7-beta.3},
   license      = {GPL-3.0-only},
   url          = {https://github.com/RMvdesi/obsidian-prism}
 }
