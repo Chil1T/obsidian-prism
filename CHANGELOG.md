@@ -5,6 +5,49 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 本项目遵循语义化版本（SemVer）规范，记录各正式版本的新增功能、架构变更、安全加固与缺陷修复。
 
+## [1.0.7-beta.1] - 2026-11-22
+
+> 燃尽了，睡一觉 😴
+>
+> 本版本作为 **Beta 预发布版（`v1.0.7-beta.1`）** 率先推送至「Beta 尝鲜版」更新通道，涵盖了近期视觉大重塑、多通道性能重构、安全红队加固与多项社区 PR/Issue 闭环。体验中遇到任何问题或想法，都非常欢迎直接多填 Issue 反馈，睡醒后逐条跟进！
+
+### Visual Overhaul & Interaction / Smoked Obsidian 视觉大重塑与交互升级
+
+- **统一 Smoked Obsidian 烟熏黑曜切面**：全面重塑用户消息气泡、文件变更条、Artifact 卡片、石墨键帽风格「允许执行」按钮，并消除行内文件芯片双层边框；增强底部问答/排队卡片二次反光与嵌套滚动条阶梯错位，上下文烧杯置顶显示并加入 80% 迟滞告警。
+  - *Unified Smoked Obsidian Faceted Surfaces*: Refines user message bubbles, file-change strips, Artifact cards, graphite keycap "Allow" buttons, and single-frame inline file chips; adds secondary sheen to composer/queued cards, staggered nested scrollbars, and a pinned context vial with 80% hysteresis alerts.
+- **设置中心双栏重塑与 33 项配置端到端实效**：升级为双栏大弹窗布局，配备 10 项滑动拇指开关与 5 色光学强调圆点；新增 `sidebarNavFold`（侧栏导航折叠）与 `scrollBottomMotion`（滚底动效）两项设置，全部 **33 项**配置端到端完整生效（含父子联动、动效关闭真 `0fps` 与 180Hz 帧率解锁）。
+  - *Two-Column Settings Overhaul & 33 End-to-End Settings*: Redesigns the settings modal with a two-column layout, 10 sliding-thumb switches, and 5 optical accent dots; adds `sidebarNavFold` and `scrollBottomMotion`, bringing all **33** settings to full end-to-end effect (parent-child sync, true `0fps` motion-off, and 180Hz unlock).
+- **行内 Diff 预览 & 双吉祥物像素微剧场**：新增代码变更行内 Diff 预览能力；桌面双吉祥物新增 `0fps` 像素栖息地摆件、投喂彩蛋与 9 大 Slash 命令微剧场。
+  - *Inline Diff Preview & Dual-Mascot Pixel Micro-Theaters*: Introduces inline diff previews for file edits alongside `0fps` pixel habitat props, feeding easter eggs, and 9 slash-command micro-theaters for the desktop companions.
+
+### Architecture & Performance / 架构瘦身与极致性能（Channel 5/6 · 6 通道磁盘缓存 · 零-eval LZSS）
+
+- **Channel 5 / Channel 6 按需拆分与零-`eval` LZSS 瘦身**：将思考转译拆出为独立 **Channel 5**（关闭态默认 `0 B` 注入，支持热插拔），将行内 Diff 预览拆出为独立 **Channel 6**；结合零-`eval` 同步 UTF-16 LZSS 压缩，将 Channel 1 静态主包稳守在 **`~681 KB`**（远低于 `704 KB` 红线）。
+  - *On-Demand Channel 5/6 Split & Zero-`eval` LZSS*: Extracts Thought Translator into on-demand **Channel 5** (`0 B` injected when off, hot-pluggable) and Inline Diff Preview into **Channel 6**; paired with zero-`eval` synchronous UTF-16 LZSS compression, keeping Channel 1 around **`~681 KB`** (well below the `704 KB` ceiling).
+- **6 通道统一磁盘缓存（冷启动提速 45x）与全链路零空转**：引入 6 通道统一磁盘缓存（`.bundle-cache.json`），跨进程冷启动编译降至 **`~26 ms`**；同步落地 Canvas VRAM `0x0` 休眠回收、左栏运行中会话悬停零蓝闪、右栏拖拽防风暴、小螃蟹 60fps 拖甩、Daemon 空闲零空转及跨平台 C#/Swift 监控器同步。
+  - *Unified 6-Channel Disk Cache (45x Cold Start) & Zero-Idle Runtime*: Adds `.bundle-cache.json` cutting cross-process cold-start builds to **`~26 ms`**; adds `0x0` Canvas VRAM sleep reclamation, zero blue-flash on active sidebar items, right-pane drag anti-storm throttling, 60fps crab drag/fling, zero-idle daemon loops, and C#/Swift watcher parity.
+
+### Fixed & Polish / 问题修复与体验打磨（#11 / #14 / #15 / #16 / PR #10 / #12 / #17）
+
+- **右侧栏最大化布局与控件对比度修复**：修复右侧栏点击「全屏 / 最大化」按钮无法占满整个会话的布局挤压 Bug；修复深色与浅色模式下原生 `<select>/<option>` 下拉及 Effort Slider 设置面板对比度问题（[#15](https://github.com/RMvdesi/obsidian-prism/issues/15)）。
+  - *Fix Side-Pane Maximize Layout & Native Control Contrast*: Resolves right-pane maximize squeeze bugs and fixes native `<select>/<option>` and Effort Slider panel contrast across dark and daylight themes ([#15](https://github.com/RMvdesi/obsidian-prism/issues/15)).
+- **模型选择器、推理滑块与双语稳定性修复**：修复 Orchestrator 模型选择器 L1/L2 悬停过快关闭与冗余 L3 子菜单（[PR #10](https://github.com/RMvdesi/obsidian-prism/pull/10)）；修复 React 19 多文本节点推理强度滑块切换异常（[#11](https://github.com/RMvdesi/obsidian-prism/issues/11)）及中文界面下「中等 ↔ Medium」乒乓闪烁（[PR #12](https://github.com/RMvdesi/obsidian-prism/pull/12)、[#16](https://github.com/RMvdesi/obsidian-prism/issues/16)）。
+  - *Fix Orchestrator Submenu, React 19 Effort Slider & Bilingual Ping-Pong*: Fixes premature L1/L2 close and redundant L3 submenu in Orchestrator ([PR #10](https://github.com/RMvdesi/obsidian-prism/pull/10)), multi-text-node effort switching in React 19 ([#11](https://github.com/RMvdesi/obsidian-prism/issues/11)), and Chinese "中等 ↔ Medium" flicker ([PR #12](https://github.com/RMvdesi/obsidian-prism/pull/12), [#16](https://github.com/RMvdesi/obsidian-prism/issues/16)).
+- **思考转译系统代理自动检测、Home Studio 配额回退与 `/btw` 基础能力**：思考转译新增零依赖异步 OS 系统代理自动检测（Windows/macOS）与 5 语使用引导（[#14](https://github.com/RMvdesi/obsidian-prism/issues/14)）；修复 Home Studio 在外部 `agPulseHost` 返回空配额时未回退 Prism 自带指标桥接的问题（[PR #17](https://github.com/RMvdesi/obsidian-prism/pull/17)）；新增 `/btw` 侧边提问基础能力（注：会话区全场景右键菜单触发优化与思考转译手动代理地址栏已排入下个版本）。
+  - *OS Proxy Auto-Detection, Home Studio Quota Fallback & `/btw` Foundation*: Adds zero-dependency async Windows/macOS system proxy auto-detection and 5-locale guidance for Thought Translator ([#14](https://github.com/RMvdesi/obsidian-prism/issues/14)), falls back to Prism's metrics bridge when external `agPulseHost` returns empty quotas ([PR #17](https://github.com/RMvdesi/obsidian-prism/pull/17)), and ships `/btw` side-question fundamentals (full-scene conversation context menu and manual proxy input for Thought Translator are slated for the next release).
+
+### Security & Host Hardening / 安全与宿主风控五维深度加固（PR #13 等）
+
+- **Sidecar 与网关纵深加固**：采纳并深化 [PR #13](https://github.com/RMvdesi/obsidian-prism/pull/13)，全面强化 Sidecar UNC/NT 设备路径拦截、Fail-Closed `Host` 校验、下载更新预写内存 SHA-256 校验、防跨源 `apiKey` 复用及顶层 `mainFrame` 门禁。
+  - *Sidecar & Gateway Defense-in-Depth*: Adopts and extends [PR #13](https://github.com/RMvdesi/obsidian-prism/pull/13) with UNC/NT device-path blocking, fail-closed `Host` checks, in-memory pre-write SHA-256 verification, cross-origin `apiKey` reuse prevention, and strict top-level `mainFrame` gating.
+- **行内 Diff RPC 安全边界与输入法/异常容错**：行内 Diff RPC 强制校验 Git 仓库边界，实施 `.git` gitfile/UNC Fail-Closed、`--literal-pathspecs` 防 glob 绕过、`--no-optional-locks` 防抢锁与 `[filter]` 仓库安全降级、并发限流及 Google/Antigravity 核心凭据目录保护；全量全局事件回调补充顶层异常防护与中文 IME 回车保护。
+  - *Inline Diff RPC Sandboxing, Crash Guards & IME Protection*: Enforces Git repo boundaries, fail-closed `.git` gitfile/UNC checks, `--literal-pathspecs`, `--no-optional-locks`, safe `[filter]` downgrade, concurrency limits, and Google/Antigravity credential directory blocks; wraps all global event handlers and guards Chinese IME Enter composition.
+
+### Acknowledgements / 社区致谢（Community Credits）
+
+- 特别感谢提交 PR 与深度排查反馈的社区贡献者：**[@yzd05](https://github.com/yzd05)**（[PR #10](https://github.com/RMvdesi/obsidian-prism/pull/10)、[PR #13](https://github.com/RMvdesi/obsidian-prism/pull/13)）、**[@DDykarc](https://github.com/DDykarc)**（[PR #12](https://github.com/RMvdesi/obsidian-prism/pull/12)）、**[@SuzumiyaHaruhi719](https://github.com/SuzumiyaHaruhi719)**（[PR #17](https://github.com/RMvdesi/obsidian-prism/pull/17)）、**[@boy14204367](https://github.com/boy14204367)**（[#11](https://github.com/RMvdesi/obsidian-prism/issues/11)、[#14](https://github.com/RMvdesi/obsidian-prism/issues/14)、[#15](https://github.com/RMvdesi/obsidian-prism/issues/15)）和 **[@Freezecatmeow](https://github.com/Freezecatmeow)**（[#16](https://github.com/RMvdesi/obsidian-prism/issues/16)）。
+  - *Special thanks to community contributors [@yzd05](https://github.com/yzd05) (PR #10, PR #13), [@DDykarc](https://github.com/DDykarc) (PR #12), [@SuzumiyaHaruhi719](https://github.com/SuzumiyaHaruhi719) (PR #17), [@boy14204367](https://github.com/boy14204367) (#11, #14, #15), and [@Freezecatmeow](https://github.com/Freezecatmeow) (#16) for their pull requests, security hardening, and root-cause diagnostics.*
+
 ## [1.0.6] - 2026-11-21
 
 ### Performance / 全链路性能大跃升（#2 / #3 / #4 / #5 / #7 / PR #6）
