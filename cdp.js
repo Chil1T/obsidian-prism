@@ -8745,6 +8745,7 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-cs-sb-fold',
       'data-ag-cs-has-crab',
       'data-ag-cs-model-menu',
+      'data-ag-cs-takeover-open',
       'data-ag-cs-lang',
       'data-ag-cs-cjk',
       'data-ag-cs-effort-accent',

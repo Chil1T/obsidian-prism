@@ -11,7 +11,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 const cdp = require(path.join(ROOT, 'cdp.js'));
 
-function createMiniDom({ hasLayout = false } = {}) {
+function createMiniDom({ hasLayout = false, hooks = null } = {}) {
   const makeEl = (tag, opts = {}) => {
     const attrs = new Map(Object.entries(opts.attrs || {}));
     if (opts.id) attrs.set('id', opts.id);
@@ -28,6 +28,9 @@ function createMiniDom({ hasLayout = false } = {}) {
       _rect: opts.rect || null,
       _offsetHeight: opts.offsetHeight,
       _checkVis: opts.checkVisibility,
+      _csDisplay: opts.csDisplay,
+      _csVisibility: opts.csVisibility,
+      _csPosition: opts.csPosition,
       get id() { return attrs.get('id') || ''; },
       set id(v) { attrs.set('id', String(v)); },
       get className() { return attrs.get('class') || ''; },
@@ -37,6 +40,7 @@ function createMiniDom({ hasLayout = false } = {}) {
       get childElementCount() { return children.length; },
       get firstElementChild() { return children[0] || null; },
       get offsetHeight() {
+        hooks?.onRead?.('offsetHeight', this);
         if (typeof this._offsetHeight === 'number') return this._offsetHeight;
         if (this._rect) return this._rect.height;
         return hasLayout ? 40 : 0;
@@ -74,24 +78,40 @@ function createMiniDom({ hasLayout = false } = {}) {
         set display(v) { if (v) styles.set('display', String(v)); else styles.delete('display'); },
         get visibility() { return styles.get('visibility') || ''; },
         set visibility(v) { if (v) styles.set('visibility', String(v)); else styles.delete('visibility'); },
-        setProperty(k, v) { styles.set(String(k), String(v)); },
+        get position() { return styles.get('position') || ''; },
+        set position(v) { if (v) styles.set('position', String(v)); else styles.delete('position'); },
+        setProperty(k, v) {
+          hooks?.onWrite?.('style.setProperty', node, String(k));
+          styles.set(String(k), String(v));
+        },
         getPropertyValue(k) { return styles.get(String(k)) || ''; },
-        removeProperty(k) { styles.delete(String(k)); },
+        removeProperty(k) {
+          hooks?.onWrite?.('style.removeProperty', node, String(k));
+          styles.delete(String(k));
+        },
       },
       getBoundingClientRect() {
+        hooks?.onRead?.('getBoundingClientRect', this);
         if (this._rect) return { left: 0, top: 0, width: 320, height: 40, ...this._rect };
         if (hasLayout) return { left: 0, top: 0, width: 320, height: 40, right: 320, bottom: 40 };
         return { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 };
       },
       checkVisibility() {
+        hooks?.onRead?.('checkVisibility', this);
         if (typeof this._checkVis === 'function') return this._checkVis();
         if (typeof this._checkVis === 'boolean') return this._checkVis;
         return !this.hidden && styles.get('display') !== 'none' && styles.get('visibility') !== 'hidden';
       },
       getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
-      setAttribute: (k, v) => attrs.set(k, String(v)),
+      setAttribute: (k, v) => {
+        hooks?.onWrite?.('setAttribute', node, String(k));
+        attrs.set(k, String(v));
+      },
       hasAttribute: (k) => attrs.has(k),
-      removeAttribute: (k) => attrs.delete(k),
+      removeAttribute: (k) => {
+        hooks?.onWrite?.('removeAttribute', node, String(k));
+        attrs.delete(k);
+      },
       appendChild(child) {
         if (child.parentElement) child.remove();
         child.parentElement = this;
@@ -195,11 +215,15 @@ function createMiniDom({ hasLayout = false } = {}) {
       setItem(k, v) { this._m[k] = String(v); },
       removeItem(k) { delete this._m[k]; },
     },
-    getComputedStyle: (el) => ({
-      display: el?.style?.display || '',
-      visibility: el?.style?.visibility || '',
-      getPropertyValue: (k) => el?.style?.getPropertyValue?.(k) || '',
-    }),
+    getComputedStyle: (el) => {
+      hooks?.onRead?.('getComputedStyle', el);
+      return {
+        display: el?._csDisplay !== undefined ? el._csDisplay : (el?.style?.display || ''),
+        visibility: el?._csVisibility !== undefined ? el._csVisibility : (el?.style?.visibility || ''),
+        position: el?._csPosition !== undefined ? el._csPosition : (el?.style?.position || ''),
+        getPropertyValue: (k) => el?.style?.getPropertyValue?.(k) || '',
+      };
+    },
     matchMedia: () => ({ matches: false }),
     MutationObserver: class {
       constructor(cb) { this.cb = cb; this.opts = null; observers.push(this); }
@@ -432,10 +456,18 @@ test('Task 2, 3, 4 & Invariants: Q&A selected contrast (.bg-secondary.border-bor
     false,
     'Takeover rule must not set conflicting padding-bottom:14px overridden by padding:0'
   );
+  assert.equal(
+    css.includes('& [data-ag-cs-takeover="1"] [data-testid="interaction-takeover-card"]{margin-bottom:6px !important;}'),
+    false,
+    'Takeover rule must not rely on collapsible child margin-bottom:6px inside non-flex block wrappers'
+  );
   assert.ok(
-    css.includes('& [data-ag-cs-takeover="1"] [data-testid="interaction-takeover-card"]{margin-bottom:6px !important;}') &&
-      css.includes('& [data-testid="interaction-takeover-card"][data-ag-cs-takeover="1"]{margin-bottom:52px !important;}'),
-    'Takeover card must receive 52px net bottom clearance in both wrapper and direct modes'
+    css.includes('& [data-ag-cs-takeover="1"]{margin-bottom:52px !important;position:relative !important;z-index:12 !important;&:not([data-testid="interaction-takeover-card"]):not([data-testid="side-question-panel"]){padding-bottom:6px !important;}}'),
+    'Takeover rule must guarantee 52px net bottom clearance without margin collapsing in both wrapper and direct modes'
+  );
+  assert.ok(
+    cdp.REMOVE_EXPRESSION.includes("'data-ag-cs-takeover-open'"),
+    'cdp.js REMOVE_EXPRESSION must strip data-ag-cs-takeover-open as fallback even if destroy() is skipped'
   );
 
   // ── Task 2: Q&A option selected state contrast (dark + light + write-in) ──
@@ -452,7 +484,18 @@ test('Task 2, 3, 4 & Invariants: Q&A selected contrast (.bg-secondary.border-bor
   assert.ok(darkQa.includes('width:2.5px'), 'Selected Q&A option must render a prominent 2.5px glowing left indicator bar');
   assert.ok(darkQa.includes('[data-testid$="-shortcut-badge"]'), 'Q&A rule must highlight shortcut badge on selected options');
   assert.ok(darkQa.includes('[data-testid="ask-question-option-text"]'), 'Q&A rule must brighten selected option text vs dimmed unselected text');
-  assert.ok(darkQa.includes('var(--primary,#669DF6)') && lightQa.includes('var(--primary,#2563EB)'), 'Q&A selected tokens must adapt to accent / --primary in dark & light themes');
+  assert.ok(
+    darkQa.includes('&:hover:where(:not(.cursor-not-allowed))'),
+    'Q&A hover rule must exclude disabled .cursor-not-allowed options without raising specificity above ARIA selected states'
+  );
+  assert.ok(
+    css.includes('& [data-testid="ask-question-writein"]{background-color:transparent !important;border:0 !important;box-shadow:none !important;color:var(--foreground) !important;outline:none !important;}'),
+    'ask-question-writein textarea must remain transparent and borderless inside the selected write-in option capsule'
+  );
+  assert.ok(
+    darkQa.includes('var(--primary,#669DF6)') && lightQa.includes('var(--primary,#2563EB)'),
+    'Q&A selected tokens must adapt to accent / --primary in dark & light themes'
+  );
 
   // ── Task 3: Subagent-only running spinner dash (primary stays 4x4 dot) ──
   const baseSpinnerLine = css.split('\n').find((l) => l.startsWith('html[data-ag-cs-style] [data-testid="status-loading-spinner"]{')) || '';
@@ -555,4 +598,352 @@ test('Task 2, 3, 4 & Invariants: Q&A selected contrast (.bg-secondary.border-bor
       styleEl.textContent.includes('html[data-ag-cs-style] [data-ag-sub-running="1"] [data-testid="status-loading-spinner"] [data-agent-state-dot]:first-child{width:7px !important;height:2px !important;}'),
     'Flattener must expand subagent-only spinner dash rule cleanly'
   );
+});
+
+test('Red-Team P0 #1A: display:contents wrappers (0x0 rect & checkVisibility=false) never break takeover or beforeShell queued clearance', () => {
+  const { makeEl, html, body, sandbox, observers, flushRaf, cleanupTimers } = createMiniDom({ hasLayout: true });
+
+  const convView = makeEl('div', { attrs: { 'data-testid': 'conversation-view' } });
+  const rtcWrap = makeEl('div', { className: 'relative z-10 flex flex-col gap-1 min-h-0' });
+
+  // Takeover card wrapped by a CSS display:contents intermediate node (0x0 & checkVisibility()===false per CSSOM)
+  const takeoverWrap = makeEl('div', { className: 'relative z-[1] mb-1' });
+  const tkContents = makeEl('div', {
+    className: 'contents',
+    csDisplay: 'contents',
+    rect: { width: 0, height: 0 },
+    offsetHeight: 0,
+    checkVisibility: false,
+  });
+  const takeoverCard = makeEl('div', { className: 'agy-takeover-frame', attrs: { 'data-testid': 'interaction-takeover-card' } });
+  tkContents.appendChild(takeoverCard);
+  takeoverWrap.appendChild(tkContents);
+
+  // Input box wrapped in .contents; beforeShell contains a queued-messages-card inside a .contents wrapper
+  const inputSlot = makeEl('div', {
+    className: 'contents',
+    csDisplay: 'contents',
+    rect: { width: 0, height: 0 },
+    offsetHeight: 0,
+    checkVisibility: false,
+  });
+  const inputBox = makeEl('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const queuedOuter = makeEl('div', { className: 'relative z-[1]' });
+  const queuedContents = makeEl('div', {
+    className: 'contents',
+    csDisplay: 'contents',
+    rect: { width: 0, height: 0 },
+    offsetHeight: 0,
+    checkVisibility: false,
+  });
+  const queuedCard = makeEl('div', { attrs: { 'data-testid': 'queued-messages-card' }, text: '1 queued message' });
+  queuedContents.appendChild(queuedCard);
+  queuedOuter.appendChild(queuedContents);
+
+  // A .contents wrapper explicitly forced display:none must STILL be treated as hidden
+  const hiddenContents = makeEl('div', {
+    className: 'contents',
+    rect: { width: 0, height: 0 },
+    offsetHeight: 0,
+    checkVisibility: false,
+  });
+  hiddenContents.style.display = 'none';
+  hiddenContents.appendChild(makeEl('div', { attrs: { 'data-testid': 'queued-messages-card' }, text: 'hidden queued' }));
+
+  const composerShell = makeEl('div', { id: 'antigravity.agentSidePanelInputBox', className: 'surface-composer' });
+  const card = makeEl('div', { className: 'surface-composer-card', rect: { height: 96, width: 640 }, offsetHeight: 96 });
+  card.appendChild(makeEl('div', { className: 'agy-composer-footer' }));
+  composerShell.appendChild(card);
+
+  inputBox.appendChild(hiddenContents);
+  inputBox.appendChild(queuedOuter);
+  inputBox.appendChild(composerShell);
+  inputSlot.appendChild(inputBox);
+  rtcWrap.appendChild(takeoverWrap);
+  rtcWrap.appendChild(inputSlot);
+  convView.appendChild(rtcWrap);
+  body.appendChild(convView);
+
+  try {
+    const res = vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), sandbox);
+    assert.equal(res.status, 'ok');
+
+    // Queued card inside .contents is detected (lower clearance), while display:none .contents stays ignored
+    assert.equal(queuedOuter.getAttribute('data-ag-cs-queued'), '1');
+    assert.equal(hiddenContents.hasAttribute('data-ag-cs-queued'), false);
+    // Takeover card inside .contents is NOT misclassified as hidden -> html[data-ag-cs-takeover-open="1"] is set
+    assert.equal(html.getAttribute('data-ag-cs-takeover-open'), '1');
+
+    // Removing queuedCard hands clearance cleanly to takeoverWrap (not the .contents intermediate node)
+    const mainMo = observers.find((o) => Array.isArray(o.opts?.attributeFilter) && o.opts.attributeFilter.includes('hidden'));
+    assert.ok(mainMo, 'Main MutationObserver must include hidden in attributeFilter');
+    queuedCard.remove();
+    mainMo.cb([{ type: 'childList', target: queuedContents, addedNodes: [], removedNodes: [queuedCard] }]);
+    flushRaf();
+    assert.equal(queuedOuter.hasAttribute('data-ag-cs-queued'), false);
+    assert.equal(tkContents.hasAttribute('data-ag-cs-takeover'), false, 'display:contents wrapper must never receive margin-bottom clearance');
+    assert.equal(takeoverWrap.getAttribute('data-ag-cs-takeover'), '1');
+    assert.equal(html.getAttribute('data-ag-cs-takeover-open'), '1');
+
+    // Direct .contents parent with no non-contents wrapper falls back to card itself (52px)
+    takeoverWrap.remove();
+    const directContents = makeEl('div', {
+      className: 'contents',
+      csDisplay: 'contents',
+      rect: { width: 0, height: 0 },
+      offsetHeight: 0,
+      checkVisibility: false,
+    });
+    const directCard = makeEl('div', { attrs: { 'data-testid': 'interaction-takeover-card' } });
+    directContents.appendChild(directCard);
+    rtcWrap.insertBefore(directContents, inputSlot);
+    mainMo.cb([{ type: 'childList', target: rtcWrap, addedNodes: [directContents], removedNodes: [takeoverWrap] }]);
+    flushRaf();
+    assert.equal(directContents.hasAttribute('data-ag-cs-takeover'), false);
+    assert.equal(directCard.getAttribute('data-ag-cs-takeover'), '1');
+    assert.equal(directCard.style.getPropertyValue('margin-bottom'), '52px');
+    assert.equal(html.getAttribute('data-ag-cs-takeover-open'), '1');
+  } finally {
+    cleanupTimers();
+  }
+});
+
+test('Red-Team P0 #1B & P1 #4: running-items-panel grid-rows-[1fr] at 0px frame 0 keeps clearance in both shell!==inputBox and shell===inputBox layouts', () => {
+  for (const sameShell of [false, true]) {
+    const { makeEl, body, sandbox, observers, flushRaf, cleanupTimers } = createMiniDom({ hasLayout: true });
+
+    const convView = makeEl('div', { attrs: { 'data-testid': 'conversation-view' } });
+    const inputBox = makeEl('div', { attrs: { 'data-testid': 'agent-input-box' } });
+    const runningWrap = makeEl('div', {
+      className: 'relative z-[1]',
+      rect: { width: 320, height: 0 },
+      offsetHeight: 0,
+    });
+    const runningPanel = makeEl('div', {
+      className: 'grid grid-rows-[0fr]',
+      attrs: { 'data-testid': 'running-items-panel' },
+      rect: { width: 320, height: 0 },
+      offsetHeight: 0,
+    });
+    runningWrap.appendChild(runningPanel);
+
+    const card = makeEl('div', { className: 'surface-composer-card', rect: { height: 96, width: 640 }, offsetHeight: 96 });
+    card.appendChild(makeEl('div', { className: 'agy-composer-footer' }));
+
+    if (sameShell) {
+      // shell === inputBox (no #antigravity.agentSidePanelInputBox intermediate shell)
+      inputBox.appendChild(runningWrap);
+      inputBox.appendChild(card);
+    } else {
+      const composerShell = makeEl('div', { id: 'antigravity.agentSidePanelInputBox', className: 'surface-composer' });
+      composerShell.appendChild(runningWrap);
+      composerShell.appendChild(card);
+      inputBox.appendChild(composerShell);
+    }
+    convView.appendChild(inputBox);
+    body.appendChild(convView);
+
+    try {
+      const res = vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), sandbox);
+      assert.equal(res.status, 'ok');
+      assert.equal(runningWrap.hasAttribute('data-ag-cs-queued'), false, `Collapsed 0fr panel must not take clearance (sameShell=${sameShell})`);
+
+      // Transition frame 0: class flips to grid-rows-[1fr] while rect.height is still 0
+      const mainMo = observers.find((o) => Array.isArray(o.opts?.attributeFilter) && o.opts.attributeFilter.includes('hidden'));
+      assert.ok(mainMo);
+      runningPanel.className = 'grid grid-rows-[1fr]';
+      mainMo.cb([{ type: 'attributes', target: runningPanel, attributeName: 'class' }]);
+      flushRaf();
+      assert.equal(
+        runningWrap.getAttribute('data-ag-cs-queued'),
+        '1',
+        `Expanded 1fr running-items-panel at 0px frame 0 must immediately take clearance (sameShell=${sameShell})`
+      );
+      assert.equal(runningWrap.style.getPropertyValue('margin-bottom'), '46px');
+
+      // Explicit hidden attr on expanded panel must still suppress clearance
+      runningPanel.hidden = true;
+      mainMo.cb([{ type: 'attributes', target: runningPanel, attributeName: 'hidden' }]);
+      flushRaf();
+      assert.equal(runningWrap.hasAttribute('data-ag-cs-queued'), false, `Hidden 1fr panel must clear queued attr (sameShell=${sameShell})`);
+
+      // Unhide restores clearance immediately even at 0px frame 0
+      runningPanel.hidden = false;
+      mainMo.cb([{ type: 'attributes', target: runningPanel, attributeName: 'hidden' }]);
+      flushRaf();
+      assert.equal(runningWrap.getAttribute('data-ag-cs-queued'), '1');
+    } finally {
+      cleanupTimers();
+    }
+  }
+});
+
+test('Red-Team P0 #2 & P1 #5 & P2 #8: dual non-subagent composers preserve primary takeover-open, hidden wrapper triggers cleanup & recovery, REMOVE_EXPRESSION fallback strips takeover-open, and fixed/absolute wrappers are skipped', () => {
+  const { makeEl, html, body, sandbox, observers, flushRaf, cleanupTimers } = createMiniDom({ hasLayout: true });
+
+  // Primary composer inside conversation-view with visible takeover card
+  const convView1 = makeEl('div', { attrs: { 'data-testid': 'conversation-view' } });
+  const rtcWrap1 = makeEl('div', { className: 'relative z-10 flex flex-col gap-1 min-h-0' });
+  const takeoverWrap1 = makeEl('div', { className: 'relative z-[1] mb-1' });
+  const takeoverCard1 = makeEl('div', { className: 'agy-takeover-frame', attrs: { 'data-testid': 'interaction-takeover-card' } });
+  takeoverWrap1.appendChild(takeoverCard1);
+  const inputBox1 = makeEl('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const card1 = makeEl('div', { className: 'surface-composer-card', rect: { height: 96, width: 640 }, offsetHeight: 96 });
+  card1.appendChild(makeEl('div', { className: 'agy-composer-footer' }));
+  inputBox1.appendChild(card1);
+  rtcWrap1.appendChild(takeoverWrap1);
+  rtcWrap1.appendChild(inputBox1);
+  convView1.appendChild(rtcWrap1);
+
+  // Second NON-subagent composer outside any conversation-view (tests scope must stay limited to wrap2, never fallback to document)
+  const auxPaneWrap = makeEl('div', { className: 'flex flex-col' });
+  const staleAuxTakeover = makeEl('div', { attrs: { 'data-testid': 'interaction-takeover-card', 'data-ag-cs-takeover': '1' } });
+  staleAuxTakeover.style.setProperty('margin-bottom', '52px', 'important');
+  const inputBox2 = makeEl('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const card2 = makeEl('div', { className: 'surface-composer-card', rect: { height: 80, width: 420 }, offsetHeight: 80 });
+  inputBox2.appendChild(card2);
+  auxPaneWrap.appendChild(staleAuxTakeover);
+  auxPaneWrap.appendChild(inputBox2);
+
+  body.appendChild(convView1);
+  body.appendChild(auxPaneWrap);
+
+  try {
+    const res = vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), sandbox);
+    assert.equal(res.status, 'ok');
+
+    // Non-primary card2 must NEVER erase html[data-ag-cs-takeover-open] or primary card1's takeoverWrap1 clearance
+    assert.equal(html.getAttribute('data-ag-cs-takeover-open'), '1', 'Secondary non-subagent card must not erase html[data-ag-cs-takeover-open]');
+    assert.equal(takeoverWrap1.getAttribute('data-ag-cs-takeover'), '1', 'Secondary non-subagent card must not clear primary takeover clearance');
+    assert.equal(staleAuxTakeover.hasAttribute('data-ag-cs-takeover'), false, 'Secondary card should still clear stale takeover inside its own wrap');
+
+    const mainMo = observers.find((o) => Array.isArray(o.opts?.attributeFilter) && o.opts.attributeFilter.includes('hidden'));
+    assert.ok(mainMo);
+
+    // P1 #5: hiding untagged wrapper via class="hidden" triggers MO cleanup and clears html[data-ag-cs-takeover-open]
+    takeoverWrap1.classList.add('hidden');
+    mainMo.cb([{ type: 'attributes', target: takeoverWrap1, attributeName: 'class' }]);
+    flushRaf();
+    assert.equal(takeoverWrap1.hasAttribute('data-ag-cs-takeover'), false);
+    assert.equal(html.hasAttribute('data-ag-cs-takeover-open'), false);
+
+    // Removing class="hidden" on the same wrapper restores clearance & takeover-open
+    takeoverWrap1.classList.remove('hidden');
+    mainMo.cb([{ type: 'attributes', target: takeoverWrap1, attributeName: 'class' }]);
+    flushRaf();
+    assert.equal(takeoverWrap1.getAttribute('data-ag-cs-takeover'), '1');
+    assert.equal(html.getAttribute('data-ag-cs-takeover-open'), '1');
+
+    // Hiding wrapper via hidden attribute also triggers cleanup and recovery
+    takeoverWrap1.hidden = true;
+    mainMo.cb([{ type: 'attributes', target: takeoverWrap1, attributeName: 'hidden' }]);
+    flushRaf();
+    assert.equal(takeoverWrap1.hasAttribute('data-ag-cs-takeover'), false);
+    assert.equal(html.hasAttribute('data-ag-cs-takeover-open'), false);
+
+    takeoverWrap1.hidden = false;
+    mainMo.cb([{ type: 'attributes', target: takeoverWrap1, attributeName: 'hidden' }]);
+    flushRaf();
+    assert.equal(takeoverWrap1.getAttribute('data-ag-cs-takeover'), '1');
+    assert.equal(html.getAttribute('data-ag-cs-takeover-open'), '1');
+
+    // P2 #8: fallback single-child wrapper with position:fixed/absolute must be skipped so floating layout is untouched
+    takeoverWrap1.remove();
+    const floatHost = makeEl('div', { className: 'floating-layer' });
+    const fixedWrap = makeEl('div', { className: 'fixed bottom-4 right-4', csPosition: 'fixed' });
+    const sidePanel = makeEl('div', { attrs: { 'data-testid': 'side-question-panel' } });
+    fixedWrap.appendChild(sidePanel);
+    floatHost.appendChild(fixedWrap);
+    convView1.appendChild(floatHost);
+    mainMo.cb([{ type: 'childList', target: convView1, addedNodes: [floatHost], removedNodes: [takeoverWrap1] }]);
+    flushRaf();
+    assert.equal(fixedWrap.hasAttribute('data-ag-cs-takeover'), false, 'position:fixed wrapper must NEVER receive data-ag-cs-takeover');
+    assert.equal(sidePanel.getAttribute('data-ag-cs-takeover'), '1', 'Clearance must fall back to side-question-panel itself');
+    assert.equal(html.getAttribute('data-ag-cs-takeover-open'), '1');
+
+    // P1 #5: Even if __agPrism.destroy() throws/skips, cdp.REMOVE_EXPRESSION fallback strips html[data-ag-cs-takeover-open]
+    sandbox.window.__agPrism = { destroy() { throw new Error('simulated destroy crash'); } };
+    sandbox.window.__agClaudeStyle = sandbox.window.__agPrism;
+    vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
+    assert.equal(html.hasAttribute('data-ag-cs-takeover-open'), false, 'REMOVE_EXPRESSION fallback must clear data-ag-cs-takeover-open');
+  } finally {
+    cleanupTimers();
+  }
+});
+
+test('Red-Team P1 #3: syncCrabClearance performs zero layout reads after clearance writes (no Phase 2 Forced Reflow) and short-circuits inline display:none & checkVisibility()===false', () => {
+  const events = [];
+  let tracking = false;
+  const hooks = {
+    onRead(kind, el) {
+      if (tracking) events.push({ op: 'R', kind, el });
+    },
+    onWrite(kind, el, detail) {
+      if (tracking && (detail === 'data-ag-cs-queued' || detail === 'data-ag-cs-takeover' || detail === 'data-ag-cs-takeover-open' || detail === 'data-ag-cs-menu-open' || detail === 'margin-bottom')) {
+        events.push({ op: 'W', kind, el, detail });
+      }
+    },
+  };
+
+  const { makeEl, body, sandbox, observers, flushRaf, cleanupTimers } = createMiniDom({ hasLayout: true, hooks });
+
+  const convView = makeEl('div', { attrs: { 'data-testid': 'conversation-view' } });
+  const rtcWrap = makeEl('div', { className: 'relative z-10 flex flex-col gap-1 min-h-0' });
+  const takeoverWrap = makeEl('div', { className: 'relative z-[1] mb-1' });
+  const takeoverCard = makeEl('div', { className: 'agy-takeover-frame', attrs: { 'data-testid': 'interaction-takeover-card' } });
+  takeoverWrap.appendChild(takeoverCard);
+
+  const inputBox = makeEl('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const inlineNoneNode = makeEl('div', { text: 'inline hidden' });
+  inlineNoneNode.style.display = 'none';
+  const checkVisFalseNode = makeEl('div', { text: 'offscreen hidden', checkVisibility: false });
+  const queuedNode = makeEl('div', { attrs: { 'data-testid': 'queued-messages-card' }, text: 'queued' });
+  const composerShell = makeEl('div', { id: 'antigravity.agentSidePanelInputBox', className: 'surface-composer' });
+  const card = makeEl('div', { className: 'surface-composer-card', rect: { height: 96, width: 640 }, offsetHeight: 96 });
+  card.appendChild(makeEl('div', { className: 'agy-composer-footer' }));
+  composerShell.appendChild(card);
+
+  inputBox.appendChild(inlineNoneNode);
+  inputBox.appendChild(checkVisFalseNode);
+  inputBox.appendChild(queuedNode);
+  inputBox.appendChild(composerShell);
+  rtcWrap.appendChild(takeoverWrap);
+  rtcWrap.appendChild(inputBox);
+  convView.appendChild(rtcWrap);
+  body.appendChild(convView);
+
+  try {
+    const res = vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), sandbox);
+    assert.equal(res.status, 'ok');
+
+    const mainMo = observers.find((o) => Array.isArray(o.opts?.attributeFilter) && o.opts.attributeFilter.includes('hidden'));
+    assert.ok(mainMo);
+
+    // Toggle queuedNode off so syncComposers performs real clearance writes in a normal incremental MO frame
+    queuedNode.classList.add('hidden');
+    events.length = 0;
+    tracking = true;
+    mainMo.cb([{ type: 'attributes', target: queuedNode, attributeName: 'class' }]);
+    flushRaf();
+    tracking = false;
+
+    const firstWriteIdx = events.findIndex((e) => e.op === 'W');
+    assert.ok(firstWriteIdx >= 0, 'Expected clearance DOM writes during incremental sync');
+    const readsAfterWrite = events.slice(firstWriteIdx + 1).filter((e) => e.op === 'R');
+    assert.equal(
+      readsAfterWrite.length,
+      0,
+      `Phase 2 must perform 0 layout/style reads after clearance writes, got: ${JSON.stringify(readsAfterWrite.map((r) => r.kind))}`
+    );
+
+    // Inline display:none node must short-circuit without calling getComputedStyle/getBoundingClientRect
+    const inlineNoneReads = events.filter((e) => e.op === 'R' && e.el === inlineNoneNode);
+    assert.equal(inlineNoneReads.length, 0, 'Inline style.display="none" must short-circuit before getComputedStyle/rc');
+
+    // checkVisibility()===false node must short-circuit before calling getBoundingClientRect
+    const cvFalseRectReads = events.filter((e) => e.op === 'R' && e.el === checkVisFalseNode && e.kind === 'getBoundingClientRect');
+    assert.equal(cvFalseRectReads.length, 0, 'checkVisibility()===false must short-circuit before getBoundingClientRect');
+  } finally {
+    cleanupTimers();
+  }
 });
