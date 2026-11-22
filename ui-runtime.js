@@ -7,48 +7,22 @@
   const LEGACY_API_VERSION = 3;
   const CODE_HASH = initialConfig?.codeHash || '';
 
-  if (W.__agTokenHud) {
-    try {
-      W.__agTokenHud.destroy();
-    } catch {}
-    delete W.__agTokenHud;
-  }
-
+  for (const k of ['__agTokenHud']) { try { W[k]?.destroy?.(); } catch {} delete W[k]; }
   const existingRuntime = W.__agPrism || W.__agClaudeStyle;
-  if (
-    existingRuntime &&
-    existingRuntime.version === VERSION &&
-    (!CODE_HASH || existingRuntime.codeHash === CODE_HASH)
-  ) {
+  if (existingRuntime && existingRuntime.version === VERSION && (!CODE_HASH || existingRuntime.codeHash === CODE_HASH)) {
     existingRuntime.refreshConfig(initialConfig);
     return;
   }
   if (Array.isArray(GT.__agCsCleanups)) {
     while (GT.__agCsCleanups.length) {
       const fn = GT.__agCsCleanups.pop();
-      try {
-        if (typeof fn === 'function') fn();
-      } catch {}
+      try { typeof fn === 'function' && fn(); } catch {}
     }
   }
-  if (W.__agPrism && typeof W.__agPrism.destroy === 'function') {
-    try {
-      W.__agPrism.destroy();
-    } catch {}
-  }
-  if (W.__agClaudeStyle && W.__agClaudeStyle !== W.__agPrism && typeof W.__agClaudeStyle.destroy === 'function') {
-    try {
-      W.__agClaudeStyle.destroy();
-    } catch {}
-  }
-  delete W.__agPrism;
-  delete W.__agClaudeStyle;
-
-  if (W.__agCsI18n && typeof W.__agCsI18n.destroy === 'function') {
-    try {
-      W.__agCsI18n.destroy();
-    } catch {}
-    delete W.__agCsI18n;
+  if (W.__agClaudeStyle === W.__agPrism) delete W.__agClaudeStyle;
+  for (const k of ['__agPrism', '__agClaudeStyle', '__agCsI18n']) {
+    try { W[k]?.destroy?.(); } catch {}
+    delete W[k];
   }
 
   const usageCore = GT.__agCsUsageCore;
@@ -112,48 +86,38 @@
   };
 
   const BOOL_ALIAS_PAIRS = [['homeRipple', 'ripple'], ['composerRestyle', 'composer'], ['sidebarRestyle', 'sidebar']];
+  const pickOf = (v, s, d) => (s.split('|').includes(v) ? v : d);
 
   const normalizeConfigShape = (rawCfg) => {
     const out = { ...(rawCfg || {}) };
-    out.palette = out.palette === 'claude' ? 'warm' : ['host', 'obsidian', 'warm'].includes(out.palette) ? out.palette : 'obsidian';
+    out.palette = pickOf(out.palette === 'claude' ? 'warm' : out.palette, 'host|obsidian|warm', 'obsidian');
     out.lightPreset = out.lightPreset === 'alabaster' ? 'alabaster' : 'crystal';
-    if (!['off', 'subtle', 'standard', 'ultra'].includes(out.motionLevel)) out.motionLevel = 'ultra';
-    if (!['60', '120', '180', 'native'].includes(out.targetFps)) out.targetFps = '180';
-    for (const k of ['telemetryModule', 'effortSliderModule', 'hostLocalization']) {
-      out[k] = out[k] === 'on' || out[k] === 'off' ? out[k] : 'auto';
-    }
-    out.thoughtTranslate = out.thoughtTranslate === 'machine' || out.thoughtTranslate === 'ai' ? out.thoughtTranslate : 'off';
+    out.motionLevel = pickOf(out.motionLevel, 'off|subtle|standard|ultra', 'ultra');
+    out.targetFps = pickOf(out.targetFps, '60|120|180|native', '180');
+    for (const k of ['telemetryModule', 'effortSliderModule', 'hostLocalization']) out[k] = pickOf(out[k], 'on|off', 'auto');
+    out.thoughtTranslate = pickOf(out.thoughtTranslate, 'machine|ai', 'off');
     out.thoughtTrigger = out.thoughtTrigger === 'expand' ? 'expand' : 'preload';
-
-    const rawHome = out.homeLayout ?? out.homeMode ?? 'studio';
-    out.homeLayout = out.homeMode = rawHome === 'classic' ? 'classic' : rawHome === 'off' ? 'off' : 'studio';
-
+    out.homeLayout = out.homeMode = pickOf(out.homeLayout ?? out.homeMode, 'classic|off', 'studio');
     for (const [bKey, sKey] of BOOL_ALIAS_PAIRS) {
-      const on = out[bKey] !== undefined ? out[bKey] !== false && out[bKey] !== 'off' : out[sKey] !== undefined ? out[sKey] !== 'off' && out[sKey] !== false : true;
+      const v = out[bKey] !== undefined ? out[bKey] : out[sKey];
+      const on = v === undefined ? true : v !== false && v !== 'off';
       out[bKey] = on;
       out[sKey] = on ? 'on' : 'off';
     }
-
-    out.placeholderStyle = out.promptStyle = (out.placeholderStyle ?? out.promptStyle ?? 'studio') === 'host' ? 'host' : 'studio';
+    out.placeholderStyle = out.promptStyle = (out.placeholderStyle ?? out.promptStyle) === 'host' ? 'host' : 'studio';
     out.mascot = out.mascot === 'off' || out.mascot === false ? 'off' : out.mascot === 'minis' ? 'minis' : 'crab';
-    out.sidebarCompact = out.sidebarCompact === true || out.sidebarCompact === 'on';
-    out.sidebarNavFold = out.sidebarNavFold === 'on' || out.sidebarNavFold === true ? 'on' : 'off';
-    out.smoothCaret = out.smoothCaret === undefined ? true : out.smoothCaret !== false && out.smoothCaret !== 'off';
-    out.contextMenu = out.contextMenu === undefined ? true : out.contextMenu !== false && out.contextMenu !== 'off';
-    if (!['follow', 'cobalt', 'iris', 'amber', 'mono'].includes(out.accentTone)) out.accentTone = 'follow';
-    if (!['sharp', 'balanced', 'soft'].includes(out.cornerStyle)) out.cornerStyle = 'balanced';
+    for (const k of ['sidebarCompact', 'codeLigatures']) out[k] = out[k] === true || out[k] === 'on';
+    for (const k of ['sidebarNavFold', 'sidebarStudio', 'autoUpdate']) out[k] = out[k] === 'on' || out[k] === true ? 'on' : 'off';
+    for (const k of ['smoothCaret', 'contextMenu']) out[k] = out[k] === undefined ? true : out[k] !== false && out[k] !== 'off';
+    out.accentTone = pickOf(out.accentTone, 'follow|cobalt|iris|amber|mono', 'follow');
+    out.cornerStyle = pickOf(out.cornerStyle, 'sharp|balanced|soft', 'balanced');
     out.scrollBottomMotion = out.scrollBottomMotion === 'instant' ? 'instant' : 'smooth';
-    if (!['default', 'jetbrains', 'cascadia', 'sfmono'].includes(out.codeFont)) out.codeFont = 'default';
-    out.codeLigatures = out.codeLigatures === true || out.codeLigatures === 'on';
-    const rawAmb = String(out.ambientIntensity ?? '100');
-    out.ambientIntensity = ['0', '35', '70', '100'].includes(rawAmb) ? rawAmb : '100';
+    out.codeFont = pickOf(out.codeFont, 'default|jetbrains|cascadia|sfmono', 'default');
+    out.ambientIntensity = pickOf(String(out.ambientIntensity ?? '100'), '0|35|70|100', '100');
     out.thoughtView = out.thoughtView === 'bilingual' ? 'bilingual' : 'immersive';
     out.omniModule = out.omniModule === 'off' || out.omniModule === false ? 'off' : 'on';
-    out.sidebarStudio = out.sidebarStudio === 'on' || out.sidebarStudio === true ? 'on' : 'off';
     out.linkTarget = out.linkTarget === 'external' ? 'external' : 'builtin';
-    out.autoUpdate = out.autoUpdate === 'on' || out.autoUpdate === true ? 'on' : 'off';
     out.updateChannel = out.updateChannel === 'beta' ? 'beta' : 'stable';
-
     const rawLang = (out.language && out.language !== 'auto' ? out.language : '') || (out.lang && out.lang !== 'auto' ? out.lang : '');
     if (rawLang) out.language = out.lang = rawLang;
     return out;
@@ -188,12 +152,7 @@
   };
 
   const stripRuntimeMetaKeys = (obj) => {
-    const clean = { ...(obj || {}) };
-    delete clean.binding;
-    delete clean.pollIntervalMs;
-    delete clean.codeHash;
-    delete clean.__fromFile;
-    delete clean.__ackEpoch;
+    const { binding, pollIntervalMs, codeHash, __fromFile, __ackEpoch, ...clean } = obj || {};
     return clean;
   };
 
@@ -286,21 +245,23 @@
   };
 
   const markAllDirty = () => {
-    dirtyFlags.f = dirtyFlags.t = dirtyFlags.r = dirtyFlags.s = dirtyFlags.a = dirtyFlags.c = dirtyFlags.b = dirtyFlags.o = dirtyFlags.l = dirtyFlags.tk = dirtyFlags.cf = dirtyFlags.g = dirtyFlags.m = true;
+    for (const k of O.keys(dirtyFlags)) dirtyFlags[k] = true;
   };
 
   const resolveWireSettingPair = (key, value) => {
     const base = currentBaseConfig || {};
-    if (key === 'homeLayout' && 'homeMode' in base && !('homeLayout' in base)) return ['homeMode', value];
-    if (key === 'homeRipple' && 'ripple' in base && !('homeRipple' in base)) return ['ripple', value ? 'on' : 'off'];
-    if (key === 'composerRestyle' && 'composer' in base && !('composerRestyle' in base)) return ['composer', value ? 'on' : 'off'];
-    if (key === 'placeholderStyle' && 'promptStyle' in base && !('placeholderStyle' in base)) return ['promptStyle', value];
-    if (key === 'sidebarRestyle' && 'sidebar' in base && !('sidebarRestyle' in base)) return ['sidebar', value ? 'on' : 'off'];
-    if ((key === 'sidebarCompact' || key === 'smoothCaret' || key === 'contextMenu') && typeof base[key] === 'string') return [key, value ? 'on' : 'off'];
-    if (key === 'language' && 'lang' in base && !('language' in base)) return ['lang', value];
-    if ((key === 'telemetryModule' || key === 'effortSliderModule' || key === 'omniModule' || key === 'sidebarStudio' || key === 'autoUpdate' || key === 'sidebarNavFold') && typeof value === 'boolean') {
-      return [key, value ? 'on' : 'off'];
+    for (const [a, b, boolStr] of [
+      ['homeLayout', 'homeMode'],
+      ['homeRipple', 'ripple', 1],
+      ['composerRestyle', 'composer', 1],
+      ['placeholderStyle', 'promptStyle'],
+      ['sidebarRestyle', 'sidebar', 1],
+      ['language', 'lang'],
+    ]) {
+      if (key === a && b in base && !(a in base)) return [b, boolStr ? (value ? 'on' : 'off') : value];
     }
+    if ('sidebarCompact|smoothCaret|contextMenu'.split('|').includes(key) && typeof base[key] === 'string') return [key, value ? 'on' : 'off'];
+    if ('telemetryModule|effortSliderModule|omniModule|sidebarStudio|autoUpdate|sidebarNavFold'.split('|').includes(key) && typeof value === 'boolean') return [key, value ? 'on' : 'off'];
     if (key === 'palette' && value === 'claude') return ['palette', 'warm'];
     if (key === 'mascot') return ['mascot', value === 'dual' ? 'crab' : value];
     return [key, value];
@@ -308,16 +269,12 @@
 
   const routeConfigDirtyFlags = (prevCfg, nextCfg, patch) => {
     dirtyFlags.g = true;
-    const chg = (k) => prevCfg[k] !== nextCfg[k] || O.hasOwn(patch, k);
-    if (chg('palette') || chg('lightPreset') || chg('accentTone') || chg('ambientIntensity') || chg('cornerStyle') || chg('codeFont') || chg('codeLigatures')) {
-      dirtyFlags.t = true;
-    };
-    if (chg('accentTone') || chg('composerRestyle') || chg('placeholderStyle') || chg('mascot') || chg('smoothCaret') || chg('telemetryModule') || chg('motionLevel') || chg('language')) {
-      dirtyFlags.c = true;
-    }
-    if (chg('homeLayout') || chg('homeRipple') || chg('language')) dirtyFlags.r = true;
-    if (chg('sidebarRestyle') || chg('sidebarCompact') || chg('sidebarNavFold')) dirtyFlags.s = true;
-    if (chg('thoughtTranslate') || chg('thoughtTrigger') || chg('thoughtView')) dirtyFlags.l = dirtyFlags.tk = true;
+    const any = (s) => s.split('|').some((k) => prevCfg[k] !== nextCfg[k] || O.hasOwn(patch, k));
+    if (any('palette|lightPreset|accentTone|ambientIntensity|cornerStyle|codeFont|codeLigatures')) dirtyFlags.t = true;
+    if (any('accentTone|composerRestyle|placeholderStyle|mascot|smoothCaret|telemetryModule|motionLevel|language')) dirtyFlags.c = true;
+    if (any('homeLayout|homeRipple|language')) dirtyFlags.r = true;
+    if (any('sidebarRestyle|sidebarCompact|sidebarNavFold')) dirtyFlags.s = true;
+    if (any('thoughtTranslate|thoughtTrigger|thoughtView')) dirtyFlags.l = dirtyFlags.tk = true;
   };
 
   const persistAndApplyConfigPatch = (rawPatch, emitSingleKey = null) => {
@@ -409,113 +366,33 @@
   };
 
   const isDarkTheme = () => {
-    const b = D.body?.classList;
-    const h = D.documentElement?.classList;
-    if (b?.contains('theme-light') || b?.contains('light-theme') || b?.contains('light')) return false;
-    if (b?.contains('theme-dark') || b?.contains('dark') || b?.contains('dark-theme')) return true;
-    if (h?.contains('theme-light') || h?.contains('light-theme') || h?.contains('light')) return false;
-    if (h?.contains('theme-dark') || h?.contains('dark') || h?.contains('dark-theme')) return true;
+    for (const l of [D.body?.[K_CL], de()?.[K_CL]]) {
+      if (l?.contains('theme-light') || l?.contains('light-theme') || l?.contains('light')) return false;
+      if (l?.contains('theme-dark') || l?.contains('dark') || l?.contains('dark-theme')) return true;
+    }
     return true;
   };
 
-  const getEffectivePalette = () => {
-    const p = cfg.palette === 'claude' ? 'warm' : cfg.palette;
-    return p === 'obsidian' || p === 'warm' || p === 'host' ? p : 'obsidian';
-  };
-
-  const getLightPreset = () => {
-    return cfg.lightPreset === 'alabaster' ? 'alabaster' : 'crystal';
-  };
-
-  const getMotionLevel = () => {
-    const v = cfg.motionLevel;
-    return v === 'off' || v === 'subtle' || v === 'standard' || v === 'ultra' ? v : 'ultra';
-  };
-
-  const getTargetFps = () => {
-    const v = String(cfg.targetFps || '');
-    return v === '60' || v === '120' || v === '180' || v === 'native' ? v : '180';
-  };
-
-  const getMinFrameGapMs = () => {
-    const fps = getTargetFps();
-    if (fps === 'native') return 0;
-    if (fps === '60') return 15.2;
-    if (fps === '120') return 7.5;
-    return 4.8;
-  };
-
-  const getTelemetryMode = () => {
-    return cfg.telemetryModule === 'on' || cfg.telemetryModule === 'off' ? cfg.telemetryModule : 'auto';
-  };
-
-  const getEffortSliderMode = () => {
-    return cfg.effortSliderModule === 'on' || cfg.effortSliderModule === 'off' ? cfg.effortSliderModule : 'auto';
-  };
-
-  const getThoughtTranslateMode = () => {
-    return cfg.thoughtTranslate === 'machine' || cfg.thoughtTranslate === 'ai' ? cfg.thoughtTranslate : 'off';
-  };
-
-  const getThoughtTriggerTiming = () => {
-    return cfg.thoughtTrigger === 'expand' ? 'expand' : 'preload';
-  };
-
-  const getAccentTone = () => {
-    const v = cfg.accentTone;
-    return v === 'cobalt' || v === 'iris' || v === 'amber' || v === 'mono' ? v : 'follow';
-  };
-
-  const getCornerStyle = () => {
-    const v = cfg.cornerStyle;
-    return v === 'sharp' || v === 'soft' ? v : 'balanced';
-  };
-
-  const getCodeFont = () => {
-    const v = cfg.codeFont;
-    return v === 'jetbrains' || v === 'cascadia' || v === 'sfmono' ? v : 'default';
-  };
-
-  const isCodeLigaturesEnabled = () => {
-    return cfg.codeLigatures === true || cfg.codeLigatures === 'on';
-  };
-
-  const isContextMenuEnabled = () => {
-    return cfg.contextMenu !== false && cfg.contextMenu !== 'off';
-  };
-
-  const getAmbientIntensitySetting = () => {
-    const v = String(cfg.ambientIntensity ?? '100');
-    return v === '0' || v === '35' || v === '70' || v === '100' ? v : '100';
-  };
-
-  const getAmbientCssValue = () => {
-    const v = getAmbientIntensitySetting();
-    if (v === '0') return '0';
-    if (v === '35') return '0.35';
-    if (v === '70') return '0.7';
-    return '1';
-  };
-
-  const getAmbientFloat = () => {
-    const v = getAmbientIntensitySetting();
-    if (v === '0') return 0;
-    if (v === '35') return 0.35;
-    if (v === '70') return 0.7;
-    return 1;
-  };
-
-  const getThoughtView = () => {
-    return cfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive';
-  };
-
-  const getOmniMode = () => {
-    return cfg.omniModule === 'off' || cfg.omniModule === false ? 'off' : 'on';
-  };
-
-  const getLinkTarget = () => {
-    return cfg.linkTarget === 'external' ? 'external' : 'builtin';
-  };
+  const getEffectivePalette = () => pickOf(cfg.palette === 'claude' ? 'warm' : cfg.palette, 'obsidian|warm|host', 'obsidian');
+  const getLightPreset = () => (cfg.lightPreset === 'alabaster' ? 'alabaster' : 'crystal');
+  const getMotionLevel = () => pickOf(cfg.motionLevel, 'off|subtle|standard|ultra', 'ultra');
+  const getTargetFps = () => pickOf(String(cfg.targetFps || ''), '60|120|180|native', '180');
+  const getMinFrameGapMs = () => ({ native: 0, 60: 15.2, 120: 7.5 })[getTargetFps()] ?? 4.8;
+  const getTelemetryMode = () => pickOf(cfg.telemetryModule, 'on|off', 'auto');
+  const getEffortSliderMode = () => pickOf(cfg.effortSliderModule, 'on|off', 'auto');
+  const getThoughtTranslateMode = () => pickOf(cfg.thoughtTranslate, 'machine|ai', 'off');
+  const getThoughtTriggerTiming = () => (cfg.thoughtTrigger === 'expand' ? 'expand' : 'preload');
+  const getAccentTone = () => pickOf(cfg.accentTone, 'cobalt|iris|amber|mono', 'follow');
+  const getCornerStyle = () => pickOf(cfg.cornerStyle, 'sharp|soft', 'balanced');
+  const getCodeFont = () => pickOf(cfg.codeFont, 'jetbrains|cascadia|sfmono', 'default');
+  const isCodeLigaturesEnabled = () => cfg.codeLigatures === true || cfg.codeLigatures === 'on';
+  const isContextMenuEnabled = () => cfg.contextMenu !== false && cfg.contextMenu !== 'off';
+  const getAmbientIntensitySetting = () => pickOf(String(cfg.ambientIntensity ?? '100'), '0|35|70|100', '100');
+  const getAmbientFloat = () => Number(getAmbientIntensitySetting()) / 100;
+  const getAmbientCssValue = () => String(getAmbientFloat());
+  const getThoughtView = () => (cfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
+  const getOmniMode = () => (cfg.omniModule === 'off' || cfg.omniModule === false ? 'off' : 'on');
+  const getLinkTarget = () => (cfg.linkTarget === 'external' ? 'external' : 'builtin');
 
   const resolveAuraSpectrumMode = () => {
     const acc = getAccentTone();
@@ -1255,35 +1132,20 @@
     const dark = isDarkTheme();
 
     runGuardedMut(() => {
-      for (const [k, v] of [
-        ['data-ag-prism', VERSION],
-        ['data-ag-cs-style', '1'],
-        ['data-ag-cs-theme', dark ? 'dark' : 'light'],
-        ['data-ag-cs-palette', palette],
-        ['data-ag-cs-light-preset', lightPreset],
-        ['data-ag-cs-motion', motionLv],
-        ['data-ag-cs-target-fps', targetFps],
-        ['data-ag-cs-telemetry', telemetryMod],
-        ['data-ag-cs-effort-slider', effortSliderMod],
-        ['data-ag-cs-thought-translate', getThoughtTranslateMode()],
-        ['data-ag-prism-omni', getOmniMode()],
-        ['data-ag-prism-link-target', getLinkTarget()],
-        ['data-ag-prism-sidebar-studio', cfg.sidebarStudio === 'on' ? 'on' : 'off'],
-        ['data-ag-cs-accent', getAccentTone()],
-        ['data-ag-cs-corners', getCornerStyle()],
-        ['data-ag-cs-scroll-bottom', cfg.scrollBottomMotion === 'instant' ? 'instant' : 'smooth'],
-        ['data-ag-cs-code-font', getCodeFont()],
-        ['data-ag-cs-ligatures', isCodeLigaturesEnabled() ? '1' : '0'],
-        ['data-ag-cs-ambient', getAmbientCssValue()],
-        ['data-ag-cs-home', cfg.homeLayout === 'classic' ? 'classic' : cfg.homeLayout === 'off' ? 'off' : 'studio'],
-        ['data-ag-cs-composer', cfg.composerRestyle === false ? 'off' : 'on'],
-        ['data-ag-cs-logo-ink', cfg.logoInk === 'foreground' ? 'foreground' : 'accent'],
-        ['data-ag-cs-sidebar', cfg.sidebarRestyle === false ? 'off' : 'on'],
-        ['data-ag-cs-sidebar-compact', cfg.sidebarCompact === true ? 'on' : 'off'],
-        ['data-ag-cs-sb-fold', cfg.sidebarNavFold === 'on' ? 'on' : 'off'],
-        ['data-ag-cs-lang', lang],
-      ]) {
-        setAttrIfChanged(html, k, v);
+      const csA = {
+        style: '1', theme: dark ? 'dark' : 'light', palette, 'light-preset': lightPreset, motion: motionLv,
+        'target-fps': targetFps, telemetry: telemetryMod, 'effort-slider': effortSliderMod,
+        'thought-translate': getThoughtTranslateMode(), accent: getAccentTone(), corners: getCornerStyle(),
+        'scroll-bottom': cfg.scrollBottomMotion === 'instant' ? 'instant' : 'smooth', 'code-font': getCodeFont(),
+        ligatures: isCodeLigaturesEnabled() ? '1' : '0', ambient: getAmbientCssValue(),
+        home: cfg.homeLayout === 'classic' ? 'classic' : cfg.homeLayout === 'off' ? 'off' : 'studio',
+        composer: cfg.composerRestyle === false ? 'off' : 'on', 'logo-ink': cfg.logoInk === 'foreground' ? 'foreground' : 'accent',
+        sidebar: cfg.sidebarRestyle === false ? 'off' : 'on', 'sidebar-compact': cfg.sidebarCompact === true ? 'on' : 'off',
+        'sb-fold': cfg.sidebarNavFold === 'on' ? 'on' : 'off', lang,
+      };
+      for (const [k, v] of O.entries(csA)) setAttrIfChanged(html, 'data-ag-cs-' + k, v);
+      for (const [k, v] of [['', VERSION], ['-omni', getOmniMode()], ['-link-target', getLinkTarget()], ['-sidebar-studio', cfg.sidebarStudio === 'on' ? 'on' : 'off']]) {
+        setAttrIfChanged(html, 'data-ag-prism' + k, v);
       }
       if (cfg.sidebarRestyle === false) {
         if (ha(html, 'data-ag-cs-sidebar-collapsed')) ra(html, 'data-ag-cs-sidebar-collapsed');
@@ -1308,14 +1170,17 @@
         }
       }
 
-      const prevMotion = lastAppliedMotion;
-      if (motionLv !== prevMotion) {
-        lastAppliedMotion = motionLv;
+      const refreshOptics = () => {
         rippleCtl.refreshTheme();
         convAuraCtl.sync();
         convAuraCtl.refreshTheme();
         prismRimCtl.invalidateMetrics?.();
         prismRimCtl.markDirty();
+      };
+      const prevMotion = lastAppliedMotion;
+      if (motionLv !== prevMotion) {
+        lastAppliedMotion = motionLv;
+        refreshOptics();
         if (prevMotion !== '') {
           dirtyFlags.c = true;
           syncHostAnimatedIcons(null);
@@ -1333,11 +1198,7 @@
       const themeKey = `${palette}|${lightPreset}|${dark ? 'd' : 'l'}|${getAccentTone()}|${getAmbientIntensitySetting()}|${getCornerStyle()}`;
       if (themeKey !== lastThemeKey) {
         lastThemeKey = themeKey;
-        rippleCtl.refreshTheme();
-        convAuraCtl.sync();
-        convAuraCtl.refreshTheme();
-        prismRimCtl.invalidateMetrics?.();
-        prismRimCtl.markDirty();
+        refreshOptics();
         try {
           hostEnhancerCtl.onThemeChange?.();
         } catch {}
@@ -1358,17 +1219,34 @@
   }
 
   // ── Composer Prism Box, Placeholder, Glyph & Mascot Clearance ──────────
-  const setCrabClearanceAttr = (el, attrName, active) => {
+  const T_TK = 'interaction-takeover-card', S_SUB = '[data-testid="subagent-tab-conversation"]';
+  const TK_SEL = `[data-testid="${T_TK}"], [data-testid="side-question-panel"]`, A_Q = 'data-ag-cs-queued', A_TK = 'data-ag-cs-takeover', A_TKO = A_TK + '-open';
+  const setClr = (el, a, on, gap = '46px') => {
     if (!el) return;
-    if (active) {
-      setAttrIfChanged(el, attrName, '1');
-      if (el.style.getPropertyValue('margin-bottom') !== '46px') {
-        el.style.setProperty('margin-bottom', '46px', 'important');
-      }
-    } else if (ha(el, attrName)) {
-      ra(el, attrName);
-      rp(el, 'margin-bottom');
-    }
+    if (on) {
+      setAttrIfChanged(el, a, '1');
+      if (el.style.getPropertyValue('margin-bottom') !== gap) el.style.setProperty('margin-bottom', gap, 'important');
+    } else if (ha(el, a)) { ra(el, a); rp(el, 'margin-bottom'); }
+  };
+  const isHidEl = (el, lay) => {
+    if (!isElementLike(el) || el.hidden || ha(el, 'hidden') || ga(el, 'aria-hidden') === 'true' || /(?:^|\s)(?:hidden|sr-only|grid-rows-\[0fr\]|h-0|max-h-0)(?:\s|$)/.test(el.className || '')) return true;
+    const st = el.style;
+    let cs;
+    try { cs = W.getComputedStyle?.(el); } catch {}
+    if ((st?.getPropertyValue?.('display') || st?.display || cs?.display) === 'none' || (st?.getPropertyValue?.('visibility') || st?.visibility || cs?.visibility) === 'hidden') return true;
+    if (!lay) return false;
+    const r = rc(el);
+    return (typeof el.checkVisibility === 'function' && !el.checkVisibility()) || !!(r && (r.height <= 1 || r.width <= 1));
+  };
+  const hasVisQ = (el, lay, d = 0) => {
+    if (!el || d > 4 || /(?:^|\s)ag-(?:cs|v2|prism|omni|pulse)-/.test((el.className || '') + ' ' + (el.id || '')) || isHidEl(el, lay)) return false;
+    const t = tidOf(el);
+    if (t === 'running-items-panel') return String(el.className || '').includes('grid-rows-[1fr]');
+    if (t === 'queued-messages-card') return true;
+    const ks = AF(el.children || []);
+    if (!ks.length) return !!(el[K_TC] || '').trim() || /^(?:IMG|SVG|CANVAS|INPUT|TEXTAREA|BUTTON)$/.test(tagU(el));
+    if (AF(el.childNodes || []).some((n) => n?.nodeType === 3 && String(n.nodeValue || '').trim())) return true;
+    return ks.some((k) => hasVisQ(k, lay, d + 1));
   };
 
   const syncModelMenuRootAttrs = (panel) => {
@@ -1385,57 +1263,63 @@
 
   const syncCrabClearance = (card, inputBox, active) => {
     if (!inputBox) return;
-    if (ga(de(), 'data-ag-prism-mode') === 'chat') active = false;
+    const inSub = Boolean(cl(inputBox, S_SUB));
+    if (inSub || ga(de(), 'data-ag-prism-mode') === 'chat') active = false;
     syncModelMenuRootAttrs(qs(D, MODEL_PANEL_SEL));
     if (active && qs(inputBox, '[role="listbox"], [role="option"], [data-testid="slash-command-menu"]')) {
       setAttrIfChanged(inputBox, 'data-ag-cs-menu-open', '1');
     } else if (ha(inputBox, 'data-ag-cs-menu-open')) ra(inputBox, 'data-ag-cs-menu-open');
-    const composerShell = cl(card, '#antigravity\\.agentSidePanelInputBox') || card[K_PE];
-    let hasLowerClearance = false;
+    let _lay;
+    const getLay = () => (_lay ??= (card?.offsetHeight || rc(card)?.height || 0) > 0);
+    const shell = cl(card, '#antigravity\\.agentSidePanelInputBox') || card[K_PE];
+    let low = false;
+    const applyQ = (el, ok) => { const on = active && ok && !low; setClr(el, A_Q, on); if (on) low = true; };
 
-    if (composerShell) {
-      for (const ch of AF(composerShell.children)) {
+    if (shell) {
+      for (const ch of AF(shell.children)) {
         if (ch === card) break;
-        const panel = tidOf(ch) === 'running-items-panel' ? ch : qs(ch, '[data-testid="running-items-panel"]');
-        const isActivePanel = Boolean(panel && String(panel.className || '').includes('grid-rows-[1fr]'));
-        const shouldClear = active && isActivePanel && !hasLowerClearance;
-        setCrabClearanceAttr(ch, 'data-ag-cs-queued', shouldClear);
-        if (shouldClear) hasLowerClearance = true;
+        const p = tidOf(ch) === 'running-items-panel' ? ch : qs(ch, '[data-testid="running-items-panel"]');
+        applyQ(ch, Boolean(p && String(p.className || '').includes('grid-rows-[1fr]') && !isHidEl(ch, getLay()) && !isHidEl(p, getLay())));
       }
     }
 
-    const ibChildren = AF(inputBox.children);
-    const shellIdx = ibChildren.indexOf(composerShell);
-    const beforeShell = shellIdx >= 0 ? ibChildren.slice(0, shellIdx) : ibChildren;
-    for (let i = beforeShell.length - 1; i >= 0; i--) {
-      const ch = beforeShell[i];
-      if (clHas(ch, 'ag-cs-hud-top-bar') || clHas(ch, 'ag-cs-hud-bottom-bar')) continue;
-      const hasQueued = ch.childElementCount > 0 || (ch[K_TC] || '').trim().length > 0;
-      const shouldClear = active && hasQueued && !hasLowerClearance;
-      setCrabClearanceAttr(ch, 'data-ag-cs-queued', shouldClear);
-      if (shouldClear) hasLowerClearance = true;
-    }
+    let stop = shell && shell !== inputBox ? shell : card;
+    while (stop && stop[K_PE] && stop[K_PE] !== inputBox) stop = stop[K_PE];
+    const ibC = AF(inputBox.children), si = ibC.indexOf(stop);
+    for (let i = si - 1; i >= 0; i--) applyQ(ibC[i], hasVisQ(ibC[i], getLay()));
 
-    const inputSlot = clHas(inputBox[K_PE], 'contents') ? inputBox[K_PE] : inputBox;
-    const hostWrap = inputSlot[K_PE];
-    if (hostWrap) {
-      const siblings = AF(hostWrap.children);
-      const slotIdx = siblings.indexOf(inputSlot);
-      for (let i = slotIdx - 1; i >= 0; i--) {
-        const sib = siblings[i];
-        const stid = tidOf(sib);
-        const isTakeoverOrSideQ =
-          stid === 'interaction-takeover-card' ||
-          stid === 'side-question-panel' ||
-          Boolean(qs(sib, '[data-testid="interaction-takeover-card"], [data-testid="side-question-panel"]'));
-        if (!isTakeoverOrSideQ) {
-          if (ha(sib, 'data-ag-cs-takeover')) setCrabClearanceAttr(sib, 'data-ag-cs-takeover', false);
-          continue;
-        }
-        const shouldClear = active && !hasLowerClearance;
-        setCrabClearanceAttr(sib, 'data-ag-cs-takeover', shouldClear);
-        if (shouldClear) hasLowerClearance = true;
+    const slot = clHas(inputBox[K_PE], 'contents') ? inputBox[K_PE] : inputBox;
+    const wrap = slot[K_PE];
+    const scope = inSub ? wrap : cl(inputBox, '[data-testid="conversation-view"]') || D;
+    if (!scope) return;
+    const seen = new Set();
+    let visTk = false;
+    const all = AF(qa(scope, TK_SEL));
+    for (let i = all.length - 1; i >= 0; i--) {
+      const c = all[i];
+      if (!inSub && cl(c, S_SUB)) continue;
+      let tgt = c, hid = false;
+      const lay = getLay();
+      for (let cur = c, d = 0; cur && cur !== scope && cur !== D.body && d < 5; cur = cur[K_PE], d++) {
+        if (isHidEl(cur, lay)) hid = true;
+        if (wrap && cur[K_PE] === wrap && cur !== slot && !qs(cur, '[data-testid="agent-input-box"]')) tgt = cur;
       }
+      if (tgt === c) {
+        const p = c[K_PE];
+        if (p && p !== scope && p !== wrap && p !== D.body && p !== inputBox && !tidOf(p) && AF(p.children).length === 1 && !qs(p, '[data-testid="agent-input-box"]')) tgt = p;
+      }
+      if (!hid) visTk = true;
+      if (seen.has(tgt)) continue;
+      const on = active && !hid && !low;
+      setClr(tgt, A_TK, on, tgt === c && tidOf(c) === T_TK ? '52px' : '46px');
+      if (on) low = true;
+      seen.add(tgt);
+    }
+    for (const s of AF(qa(scope, `[${A_TK}]`))) if (!seen.has(s) && (inSub || !cl(s, S_SUB))) setClr(s, A_TK, false);
+    if (!inSub) {
+      const h = de();
+      if (active && visTk) setAttrIfChanged(h, A_TKO, '1');
+      else if (ha(h, A_TKO)) ra(h, A_TKO);
     }
   };
 
@@ -1444,9 +1328,8 @@
   let lastSyncedHasError = false;
 
   const detectVisibleDecisionTakeover = () => {
-    for (const el of qa(D, '[data-testid="interaction-takeover-card"], [data-testid="side-question-panel"]')) {
-      if (cl(el, '[data-testid="subagent-tab-conversation"]') || el.hidden || ga(el, 'aria-hidden') === 'true') continue;
-      if ((el.style?.getPropertyValue?.('display') || el.style?.display || '') === 'none') continue;
+    for (const el of qa(D, TK_SEL)) {
+      if (cl(el, S_SUB) || isHidEl(el, false)) continue;
       return true;
     }
     return false;
@@ -1526,6 +1409,10 @@
       }
     }
     if (!primaryCard && cards.length > 0) primaryCard = cards[0];
+    if (!primaryCard || cl(primaryCard, '[data-testid="subagent-tab-conversation"]')) {
+      const h = de();
+      if (ha(h, 'data-ag-cs-takeover-open')) ra(h, 'data-ag-cs-takeover-open');
+    }
 
     const mascotOn = isMascotEnabled();
     let primaryModelInfo = null;
@@ -2302,7 +2189,7 @@
         if (isAdded) touchedButtons = true;
       }
 
-      if (COMP_TIDS.has(tid) || cls.includes('surface-composer-card') || ancComp || q('[data-testid="agent-input-box"], [data-testid="input-cancel-button"], [data-testid="interaction-takeover-card"], [data-testid="queued-messages-card"], .surface-composer-card')) {
+      if (COMP_TIDS.has(tid) || cls.includes('surface-composer-card') || ancComp || q('[data-testid="agent-input-box"], [data-testid="input-cancel-button"], [data-testid="interaction-takeover-card"], [data-testid="side-question-panel"], [data-testid="queued-messages-card"], .surface-composer-card')) {
         dirtyFlags.c = dirtyFlags.r = true;
         if (isAdded) touchedButtons = true;
       }
@@ -2465,24 +2352,12 @@
   let enhancerSyncTimer = 0;
   let enhancerSyncRaf = 0;
   let lastEnhancerSyncAt = 0;
+  const ENH_KEYS = 'frlcbtsgo'.split('');
   const enhancerDirty = { f: false, r: false, l: false, c: false, b: false, t: false, s: false, g: false, o: false };
-  const resetEnhancerDirty = () => {
-    enhancerDirty.f = enhancerDirty.r = enhancerDirty.l = enhancerDirty.c = enhancerDirty.b = enhancerDirty.t = enhancerDirty.s = enhancerDirty.g = enhancerDirty.o = false;
-  };
+  const resetEnhancerDirty = () => { for (const k of ENH_KEYS) enhancerDirty[k] = false; };
   const mergeEnhancerDirty = (src) => {
-    if (!src) {
-      enhancerDirty.f = true;
-      return;
-    }
-    if (src.f) enhancerDirty.f = true;
-    if (src.r) enhancerDirty.r = true;
-    if (src.l) enhancerDirty.l = true;
-    if (src.c) enhancerDirty.c = true;
-    if (src.b) enhancerDirty.b = true;
-    if (src.t) enhancerDirty.t = true;
-    if (src.s) enhancerDirty.s = true;
-    if (src.g) enhancerDirty.g = true;
-    if (src.o) enhancerDirty.o = true;
+    if (!src) { enhancerDirty.f = true; return; }
+    for (const k of ENH_KEYS) if (src[k]) enhancerDirty[k] = true;
   };
   const cancelHostEnhancerSync = () => {
     if (enhancerSyncTimer) {
@@ -3103,6 +2978,9 @@
     'thinking-collapsible-trigger',
     'changed-files-card-header',
     'running-items-panel',
+    'interaction-takeover-card',
+    'side-question-panel',
+    'queued-messages-card',
     'toggle-aux-sidebar',
     'toggle-maximize-pane',
   ]);
@@ -3161,7 +3039,7 @@
             if (tid === 'thinking-collapsible-trigger') dirtyFlags.tk = true;
             else if (tid === 'changed-files-card-header') dirtyFlags.cf = true;
             dirtyCollapsibleTargets.add(tgt);
-          } else if (tid === 'running-items-panel') {
+          } else if (tid === 'running-items-panel' || tid === 'interaction-takeover-card' || tid === 'side-question-panel' || tid === 'queued-messages-card') {
             dirtyFlags.c = anyRelevant = true;
           } else if (tid === 'toggle-aux-sidebar' || tid === 'toggle-maximize-pane') {
             dirtyFlags.a = anyRelevant = true;
@@ -3266,82 +3144,37 @@
   let coreTornDown = false;
   const teardownCore = () => {
     if (coreTornDown) return;
-    coreTornDown = true;
-    destroyed = true;
+    coreTornDown = destroyed = true;
+    const safe = (fn) => { try { fn?.(); } catch {} };
     cancelScheduledSync();
     streamChoreoCtl.clearTransientTimers();
-    dirtyAddedRoots.clear();
-    dirtyCollapsibleTargets.clear();
-    dirtyBgCmds.clear();
-    dirtyTurboRoots.clear();
+    for (const s of [dirtyAddedRoots, dirtyCollapsibleTargets, dirtyBgCmds, dirtyTurboRoots]) s.clear();
     clearWinBlur();
     finishResizing(false);
     unmountCrab();
     msLastHostSleep = false;
-    if (crabRemoveAttrTimer) {
-      CT(crabRemoveAttrTimer);
-      crabRemoveAttrTimer = 0;
-    }
+    if (crabRemoveAttrTimer) { CT(crabRemoveAttrTimer); crabRemoveAttrTimer = 0; }
     for (const t of pulseHealTimers) CT(t);
     pulseHealTimers.clear();
     syncMotionOffStyle(false);
     streamChoreoCtl.disconnectStreamObserver();
-    if (pollTimer !== null) {
-      clearInterval(pollTimer);
-      pollTimer = null;
-    }
+    if (pollTimer !== null) { clearInterval(pollTimer); pollTimer = null; }
     cancelHostEnhancerSync();
     resetEnhancerDirty();
-    if (storeDebounce) {
-      CT(storeDebounce);
-      storeDebounce = null;
-    }
+    if (storeDebounce) { CT(storeDebounce); storeDebounce = null; }
     smoothCaretCtl.teardown();
     prismRimCtl.cancelPendingRaf();
-    if (storeUnsub) {
-      try {
-        storeUnsub();
-      } catch {}
-      storeUnsub = null;
-    }
-    try {
-      observer.disconnect();
-    } catch {}
-    try {
-      axO?.disconnect?.();
-      axE?.removeAttribute?.(AX_A);
-    } catch {}
+    safe(storeUnsub); storeUnsub = null;
+    safe(() => observer.disconnect());
+    safe(() => { axO?.disconnect?.(); axE?.removeAttribute?.(AX_A); });
     axO = axE = null;
     syncCaretListeners(false);
-    for (const [evName, handler, opts] of DOC_LISTENERS) {
-      try {
-        D.removeEventListener(evName, handler, opts);
-      } catch {}
-    }
-    if (typeof W.removeEventListener === 'function') {
-      for (const [evName, handler, opts] of WIN_LISTENERS) {
-        try {
-          W.removeEventListener(evName, handler, opts);
-        } catch {}
-      }
-    }
-    if (motionBinding && typeof motionBinding.unbind === 'function') {
-      try {
-        motionBinding.unbind();
-      } catch {}
-      motionBinding = null;
-    }
-    if (pulseBridgeInst && typeof pulseBridgeInst.destroy === 'function') {
-      try {
-        pulseBridgeInst.destroy();
-      } catch {}
-      pulseBridgeInst = null;
-    }
-    try {
-      hostEnhancerCtl.destroy?.();
-    } catch {}
+    for (const [ev, fn, opt] of DOC_LISTENERS) safe(() => D.removeEventListener(ev, fn, opt));
+    if (typeof W.removeEventListener === 'function') for (const [ev, fn, opt] of WIN_LISTENERS) safe(() => W.removeEventListener(ev, fn, opt));
+    safe(() => motionBinding?.unbind?.()); motionBinding = null;
+    safe(() => pulseBridgeInst?.destroy?.()); pulseBridgeInst = null;
+    safe(() => hostEnhancerCtl.destroy?.());
     modelGlyphCtl.teardownCrystalMount();
-
     if (Array.isArray(GT.__agCsCleanups)) {
       const idx = GT.__agCsCleanups.indexOf(teardownCore);
       if (idx >= 0) GT.__agCsCleanups.splice(idx, 1);
@@ -3543,36 +3376,16 @@
           fn();
         } catch {}
       }
-      qa(D, '[data-ag-cs-placeholder]').forEach((el) => ra(el, 'data-ag-cs-placeholder'));
-      qa(D, '[data-ag-cs-prism-box]').forEach((el) => {
-        ra(el, 'data-ag-cs-prism-box');
-        rp(el, '--ag-px');
-        rp(el, '--ag-py');
-      });
-      qa(D, '[data-ag-cs-effort]').forEach((el) => {
-        ra(el, 'data-ag-cs-effort');
-        el[K_CL].remove('ag-cs-effort-badge');
-      });
-      qa(D, '[data-ag-cs-queued], [data-ag-cs-takeover]').forEach((el) => {
-        ra(el, 'data-ag-cs-queued');
-        ra(el, 'data-ag-cs-takeover');
-        rp(el, 'margin-bottom');
-      });
-      qa(D, '[data-ag-row-stagger]').forEach((el) => {
-        ra(el, 'data-ag-row-stagger');
-        rp(el, '--ag-row-i');
-      });
-      qa(D, '.agy-overlay, .agy-fastpick, [data-testid="context-menu-popup"], [data-testid="context-menu-submenu-popup"], [data-ag-cs-overview-shell]').forEach((el) => {
-        rp(el, '--ag-origin-x');
-        rp(el, '--ag-origin-y');
-      });
-      for (const s of 'orch-active|model-overlay|aux-dual|overview-shell|prism-mirror|prism-reflect|settings-dlg|settings-nav|nav-active|conv-seat|vp-wrap|home-sheet|row-running|menu-open|auto-unfolded|outer-open|caustic|fiber-camp|sonar|stage-glide|liftoff-bubble|thought-streaming|spark-streaming|prism-cv|code-folded|bg-cmd-wrap|input-layer|hdr-open|rich-pre|glide-item'.split('|')) {
+      qa(D, '[data-ag-cs-prism-box]').forEach((el) => { ra(el, 'data-ag-cs-prism-box'); rp(el, '--ag-px'); rp(el, '--ag-py'); });
+      qa(D, '[data-ag-cs-effort]').forEach((el) => { ra(el, 'data-ag-cs-effort'); el[K_CL].remove('ag-cs-effort-badge'); });
+      qa(D, `[${A_Q}], [${A_TK}]`).forEach((el) => { ra(el, A_Q); ra(el, A_TK); rp(el, 'margin-bottom'); });
+      qa(D, '[data-ag-row-stagger]').forEach((el) => { ra(el, 'data-ag-row-stagger'); rp(el, '--ag-row-i'); });
+      qa(D, '.agy-overlay, .agy-fastpick, [data-testid="context-menu-popup"], [data-testid="context-menu-submenu-popup"], [data-ag-cs-overview-shell]').forEach((el) => { rp(el, '--ag-origin-x'); rp(el, '--ag-origin-y'); });
+      for (const s of 'placeholder|orch-active|model-overlay|aux-dual|overview-shell|prism-mirror|prism-reflect|settings-dlg|settings-nav|nav-active|conv-seat|vp-wrap|home-sheet|row-running|menu-open|auto-unfolded|outer-open|caustic|fiber-camp|sonar|stage-glide|liftoff-bubble|thought-streaming|spark-streaming|prism-cv|code-folded|bg-cmd-wrap|input-layer|hdr-open|rich-pre|glide-item'.split('|')) {
         const a = 'data-ag-cs-' + s;
         qa(D, `[${a}]`).forEach((el) => ra(el, a));
       }
-      for (const a of ['data-has-sep', 'data-pv-warn']) {
-        qa(D, `[${a}]`).forEach((el) => ra(el, a));
-      }
+      for (const a of ['data-has-sep', 'data-pv-warn']) qa(D, `[${a}]`).forEach((el) => ra(el, a));
       qa(
         D,
         '#ag-prism-settings-v101-css, #ag-prism-omni-css, #ag-prism-motion-off-css, .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, .ag-cs-ctx-menu, .ag-cs-ctx-toast, .ag-cs-sb-more-wrap, [data-ag-prism-omni-owned="1"], .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-conv-aura-host, .ag-cs-conv-glow, .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-model-glyph, .ag-cs-panel-row-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-orbital-backdrop, .ag-cs-perf-backdrop, .ag-v2-habitat-prop, #' +
@@ -3580,7 +3393,7 @@
       ).forEach((el) => el.remove());
       const html = de();
       if (html) {
-        for (const s of 'style|theme|palette|light-preset|motion|target-fps|telemetry|effort-slider|thought-translate|home|composer|logo-ink|sidebar|sidebar-compact|sidebar-collapsed|sb-fold|has-crab|model-menu|lang|cjk|accent|corners|code-font|ligatures|ambient|win-blur|scroll-bottom|resizing|mascot-drag'.split('|')) {
+        for (const s of 'style|theme|palette|light-preset|motion|target-fps|telemetry|effort-slider|thought-translate|home|composer|logo-ink|sidebar|sidebar-compact|sidebar-collapsed|sb-fold|has-crab|model-menu|takeover-open|lang|cjk|accent|corners|code-font|ligatures|ambient|win-blur|scroll-bottom|resizing|mascot-drag'.split('|')) {
           ra(html, 'data-ag-cs-' + s);
         }
         for (const s of '|thought-view|omni|link-target|sidebar-studio|sidebar-host-sync'.split('|')) {
