@@ -1655,12 +1655,37 @@ namespace AgyClaudeStyle
             {
                 string name = (proc.ProcessName ?? "").ToLowerInvariant();
                 if (string.IsNullOrEmpty(name)) return false;
-                if (name.Contains("node") ||
-                    name.Contains("watcher") ||
+                if (name == "obsidian-prism-watcher" ||
                     name.Contains("obsidian-prism") ||
                     name.Contains("agy-claude-style"))
                 {
                     return true;
+                }
+                if (name.Contains("node") || name.Contains("watcher"))
+                {
+                    bool accessDenied;
+                    string cmd = (QueryWindowsProcessCommandLine(proc.Id, false, out accessDenied) ?? "")
+                        .Replace('\\', '/')
+                        .ToLowerInvariant();
+                    if (string.IsNullOrEmpty(cmd)) return false;
+                    if (cmd.Contains("obsidian-prism") ||
+                        cmd.Contains("antigravity-prism") ||
+                        cmd.Contains("agy-claude-style") ||
+                        cmd.Contains("sidecars/daemon/main.mjs") ||
+                        cmd.Contains("daemon/main.mjs") ||
+                        cmd.Contains("watch.js"))
+                    {
+                        return true;
+                    }
+                    if (!string.IsNullOrEmpty(pluginDir))
+                    {
+                        string normPlugin = pluginDir.Replace('\\', '/').TrimEnd('/').ToLowerInvariant();
+                        if (!string.IsNullOrEmpty(normPlugin) && cmd.Contains(normPlugin))
+                        {
+                            return true;
+                        }
+                    }
+                    return false;
                 }
                 if (name.Contains("antigravity") || name.Contains("electron") || name == "agy")
                 {

@@ -125,6 +125,42 @@ namespace AgyClaudeStyle.Installer
             return CdpHelper.IsUnsafeReparsePoint(path, out reparseTag);
         }
 
+        private static string ResolveInstallChainStopRoot(string dirPath)
+        {
+            if (string.IsNullOrEmpty(dirPath)) return dirPath;
+            string norm = NormalizeDirPath(dirPath);
+            string[] candidates = new string[]
+            {
+                Environment.GetEnvironmentVariable("LOCALAPPDATA"),
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                Environment.GetEnvironmentVariable("USERPROFILE"),
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            };
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                string cand = candidates[i];
+                if (string.IsNullOrEmpty(cand) || string.IsNullOrEmpty(cand.Trim())) continue;
+                try
+                {
+                    string candNorm = NormalizeDirPath(cand.Trim());
+                    string candPrefix = candNorm.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+                    if (string.Equals(norm, candNorm, StringComparison.OrdinalIgnoreCase) ||
+                        norm.StartsWith(candPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return candNorm;
+                    }
+                }
+                catch { }
+            }
+            try
+            {
+                string root = Path.GetPathRoot(norm);
+                if (!string.IsNullOrEmpty(root)) return NormalizeDirPath(root);
+            }
+            catch { }
+            return norm;
+        }
+
         private static void AssertNoReparsePointChain(string dirPath, string stopAtRoot)
         {
             if (string.IsNullOrEmpty(dirPath)) return;
@@ -1674,12 +1710,12 @@ namespace AgyClaudeStyle.Installer
                 currentStepLabel = "校验并准备安装目录";
                 report(45, "正在部署原生 Sidecar 插件与独立守护资源...");
                 currentTargetPath = installDir;
-                AssertNoReparsePointChain(installDir, installDir);
+                AssertNoReparsePointChain(installDir, ResolveInstallChainStopRoot(installDir));
                 Directory.CreateDirectory(installDir);
                 if (!string.IsNullOrEmpty(pluginDir))
                 {
                     currentTargetPath = pluginDir;
-                    AssertNoReparsePointChain(pluginDir, pluginDir);
+                    AssertNoReparsePointChain(pluginDir, ResolveInstallChainStopRoot(pluginDir));
                     Directory.CreateDirectory(pluginDir);
                     TryCleanupLegacySiblingPluginDir(pluginDir, (m) => report(46, m));
                 }

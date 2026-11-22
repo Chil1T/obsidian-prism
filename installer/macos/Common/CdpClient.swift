@@ -659,11 +659,36 @@ enum CdpHelper {
         guard pid > 0 else { return false }
         let comm = runPsQuery(pid: pid, format: "comm=").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if comm.isEmpty { return false }
-        if comm.contains("node") ||
-           comm.contains("watcher") ||
+        let commBase = (comm as NSString).lastPathComponent
+        if commBase == "obsidian-prism-watcher" ||
            comm.contains("obsidian-prism") ||
            comm.contains("agy-claude-style") {
             return true
+        }
+        if comm.contains("node") || comm.contains("watcher") {
+            let cmd = runPsQuery(pid: pid, format: "command=")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "\\", with: "/")
+                .lowercased()
+            if cmd.isEmpty { return false }
+            if cmd.contains("obsidian-prism") ||
+               cmd.contains("antigravity-prism") ||
+               cmd.contains("agy-claude-style") ||
+               cmd.contains("sidecars/daemon/main.mjs") ||
+               cmd.contains("daemon/main.mjs") ||
+               cmd.contains("watch.js") {
+                return true
+            }
+            if !pluginDir.isEmpty {
+                let normPlugin = pluginDir
+                    .replacingOccurrences(of: "\\", with: "/")
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                    .lowercased()
+                if !normPlugin.isEmpty && cmd.contains(normPlugin) {
+                    return true
+                }
+            }
+            return false
         }
         if comm.contains("antigravity") || comm.contains("electron") || comm.hasSuffix("/agy") || comm == "agy" {
             let args = runPsQuery(pid: pid, format: "args=").replacingOccurrences(of: "\\", with: "/").lowercased()

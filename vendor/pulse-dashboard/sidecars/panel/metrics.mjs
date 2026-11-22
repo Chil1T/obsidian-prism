@@ -491,7 +491,7 @@ export function trajectoryMetrics(response, storage = null) {
       chat: lastChat,
       maxStepIndex: null,
       startStepIndex,
-      anchorStepIndex: startStepIndex,
+      anchorStepIndex: startStepIndex !== null && startStepIndex > 0 ? startStepIndex : null,
       checkpointIndex,
       createdAt,
       createdMs: createdAt ? Date.parse(createdAt) : NaN,

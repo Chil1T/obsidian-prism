@@ -395,24 +395,45 @@ enum InstallerCore {
         guard fm.fileExists(atPath: dir) else { return }
 
         let pidFile = (dir as NSString).appendingPathComponent(".watch.pid")
-        if let pidStr = try? String(contentsOfFile: pidFile, encoding: .utf8),
-           let pid = Int32(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)),
-           pid > 0 {
-            if CdpHelper.isExpectedDaemonProcess(pid: pid) && terminatePid(pid) {
-                log?("已停止运行中的守护进程 (PID \(pid))")
+        if !isSymbolicLink(pidFile) {
+            if let pidStr = try? String(contentsOfFile: pidFile, encoding: .utf8),
+               let pid = Int32(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)),
+               pid > 0 {
+                if CdpHelper.isExpectedDaemonProcess(pid: pid) && terminatePid(pid) {
+                    log?("已停止运行中的守护进程 (PID \(pid))")
+                }
             }
-            try? fm.removeItem(atPath: pidFile)
+            if fm.fileExists(atPath: pidFile) {
+                clearReadOnlyPermissionsNoSymlink(pidFile)
+                try? fm.removeItem(atPath: pidFile)
+            }
         }
 
-        let normalizedDir = URL(fileURLWithPath: dir).standardizedFileURL.path
+        let rawStdDir = URL(fileURLWithPath: dir).standardizedFileURL.path
+        let stdDirClean = (rawStdDir.count > 1 && rawStdDir.hasSuffix("/")) ? String(rawStdDir.dropLast()) : rawStdDir
+        let sysNormDir = normalizeSystemRootPrefix(dir)
+        var dirCandidates: [String] = []
+        if !stdDirClean.isEmpty {
+            dirCandidates.append(stdDirClean.lowercased())
+        }
+        let sysNormLower = sysNormDir.lowercased()
+        if !sysNormLower.isEmpty && !dirCandidates.contains(sysNormLower) {
+            dirCandidates.append(sysNormLower)
+        }
+        let watcherNameLower = watcherExeName.lowercased()
         let ps = runProcessSync(executable: "/bin/ps", arguments: ["-ax", "-o", "pid=,command="])
         for rawLine in ps.stdout.components(separatedBy: CharacterSet.newlines) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
             if line.isEmpty { continue }
             let parts = line.split(maxSplits: 1, omittingEmptySubsequences: true, whereSeparator: { $0.isWhitespace })
             guard parts.count == 2, let pid = Int32(parts[0]) else { continue }
-            let cmd = String(parts[1])
-            if cmd.contains(watcherExeName) && cmd.contains(normalizedDir) {
+            let cmd = String(parts[1]).replacingOccurrences(of: "\\", with: "/").lowercased()
+            let matchesWatcher = dirCandidates.contains { base in
+                let expectedExe = (base == "/" ? "" : base) + "/" + watcherNameLower
+                return matchesExactCommandPath(cmd, exactPath: expectedExe) ||
+                    (cmd.contains(watcherNameLower) && cmd.contains("--dir") && matchesExactCommandPath(cmd, exactPath: base))
+            }
+            if matchesWatcher {
                 _ = terminatePid(pid)
             }
         }

@@ -653,16 +653,25 @@ test(
       // 3b. Test Watcher polite yield when native Sidecar daemon (.daemon.pid) is alive & auto-resume on exit
       const daemonPidPath = path.join(nativePluginDir, '.daemon.pid');
       const watchLogPath = path.join(installDir, 'watch.log');
-      fs.writeFileSync(daemonPidPath, JSON.stringify({ pid: process.pid }), 'utf8');
-      await waitFor(() => {
-        const logText = fs.existsSync(watchLogPath) ? fs.readFileSync(watchLogPath, 'utf8') : '';
-        return logText.includes('检测到原生 Sidecar Daemon 运行中') ? true : null;
-      }, 6000, 120);
-      fs.unlinkSync(daemonPidPath);
-      await waitFor(() => {
-        const logText = fs.existsSync(watchLogPath) ? fs.readFileSync(watchLogPath, 'utf8') : '';
-        return logText.includes('原生 Sidecar Daemon 已离线') ? true : null;
-      }, 6000, 120);
+      const mockDaemonProc = spawn(
+        process.execPath,
+        ['-e', 'setInterval(() => {}, 1000)', path.join(nativePluginDir, 'sidecars', 'daemon', 'main.mjs')],
+        { stdio: 'ignore', windowsHide: true }
+      );
+      try {
+        fs.writeFileSync(daemonPidPath, JSON.stringify({ pid: mockDaemonProc.pid }), 'utf8');
+        await waitFor(() => {
+          const logText = fs.existsSync(watchLogPath) ? fs.readFileSync(watchLogPath, 'utf8') : '';
+          return logText.includes('检测到原生 Sidecar Daemon 运行中') ? true : null;
+        }, 6000, 120);
+        fs.unlinkSync(daemonPidPath);
+        await waitFor(() => {
+          const logText = fs.existsSync(watchLogPath) ? fs.readFileSync(watchLogPath, 'utf8') : '';
+          return logText.includes('原生 Sidecar Daemon 已离线') ? true : null;
+        }, 6000, 120);
+      } finally {
+        try { mockDaemonProc.kill(); } catch {}
+      }
 
       // 4. Test re-install / upgrade preserves existing user config.json across both dirs
       await runExe(

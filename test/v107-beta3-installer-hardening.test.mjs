@@ -924,3 +924,205 @@ test(
   }
 );
 
+test('PID reuse & ancestor-chain hardening contracts across Windows C# and macOS Swift installers', () => {
+  const cdpCs = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs'), 'utf8');
+  assert.ok(
+    cdpCs.includes('QueryWindowsProcessCommandLine(proc.Id, false, out accessDenied)'),
+    'CdpClient.cs IsExpectedPrismDaemonProcess must inspect PEB command line for node/watcher processes'
+  );
+  assert.ok(
+    cdpCs.includes('name == "obsidian-prism-watcher"'),
+    'CdpClient.cs must require exact obsidian-prism-watcher name before bypassing PEB command line check'
+  );
+
+  const setupCs = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'setup', 'Program.cs'), 'utf8');
+  assert.ok(
+    setupCs.includes('AssertNoReparsePointChain(installDir, ResolveInstallChainStopRoot(installDir))'),
+    'setup Program.cs must validate installDir ancestor chain up to ResolveInstallChainStopRoot'
+  );
+  assert.ok(
+    setupCs.includes('AssertNoReparsePointChain(pluginDir, ResolveInstallChainStopRoot(pluginDir))'),
+    'setup Program.cs must validate pluginDir ancestor chain up to ResolveInstallChainStopRoot'
+  );
+
+  const macCdp = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'CdpClient.swift'), 'utf8');
+  assert.ok(
+    macCdp.includes('runPsQuery(pid: pid, format: "command=")'),
+    'CdpClient.swift isExpectedDaemonProcess must inspect ps command= for node/watcher processes'
+  );
+
+  const macMain = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Setup', 'main.swift'), 'utf8');
+  assert.match(
+    macMain,
+    /func stopWatcherInDir[\s\S]*?if !isSymbolicLink\(pidFile\)/,
+    'main.swift stopWatcherInDir must guard .watch.pid read/delete with !isSymbolicLink(pidFile)'
+  );
+  assert.match(
+    macMain,
+    /func stopWatcherInDir[\s\S]*?matchesExactCommandPath\(/,
+    'main.swift stopWatcherInDir must use matchesExactCommandPath for watcher process boundary matching'
+  );
+});
+
+test(
+  'Windows C# IsExpectedPrismDaemonProcess blocks PID reuse on unrelated node.exe and setup rejects ancestor NTFS junction under installDir',
+  { skip: process.platform !== 'win32' ? 'Windows-only PID reuse & ancestor junction probe' : false },
+  async () => {
+    const csc = findCsc();
+    assert.ok(csc, 'Expected .NET Framework csc.exe on Windows');
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-pid-reuse-'));
+    const children = [];
+    const junctionPath = path.join(tmpDir, 'ancestor-junction');
+    try {
+      const fakePluginDir = path.join(tmpDir, 'custom-plugin-dir');
+      const unrelatedReady = path.join(tmpDir, 'unrelated.ready');
+      const prismReady = path.join(tmpDir, 'prism.ready');
+
+      const waitReady = async (file, proc) => {
+        const deadline = Date.now() + 5000;
+        while (Date.now() < deadline) {
+          if (fs.existsSync(file)) return;
+          if (proc.exitCode !== null) throw new Error(`Child exited early with ${proc.exitCode}`);
+          await new Promise((r) => setTimeout(r, 15));
+        }
+        throw new Error(`Timed out waiting for ${file}`);
+      };
+
+      const unrelatedNode = spawn(
+        process.execPath,
+        [
+          '-e',
+          `require('node:fs').writeFileSync(process.argv[1], '1'); setInterval(() => {}, 1000);`,
+          unrelatedReady,
+        ],
+        { stdio: 'ignore', windowsHide: true }
+      );
+      children.push(unrelatedNode);
+
+      const prismNode = spawn(
+        process.execPath,
+        [
+          '-e',
+          `require('node:fs').writeFileSync(process.argv[1], '1'); setInterval(() => {}, 1000);`,
+          prismReady,
+          path.join(fakePluginDir, 'sidecars', 'daemon', 'main.mjs'),
+        ],
+        { stdio: 'ignore', windowsHide: true }
+      );
+      children.push(prismNode);
+
+      await waitReady(unrelatedReady, unrelatedNode);
+      await waitReady(prismReady, prismNode);
+
+      const probeCs = path.join(tmpDir, 'PidReuseProbe.cs');
+      const probeExe = path.join(tmpDir, 'pid-reuse-probe.exe');
+      fs.writeFileSync(
+        probeCs,
+        [
+          'using System;',
+          'using System.Collections.Generic;',
+          'using System.Diagnostics;',
+          'using AgyClaudeStyle;',
+          'class PidReuseProbe {',
+          '  static void Main(string[] args) {',
+          '    int unrelatedPid = int.Parse(args[0]);',
+          '    int prismPid = int.Parse(args[1]);',
+          '    string pDir = args[2];',
+          '    bool unrelatedWithPlugin = false;',
+          '    bool unrelatedNoPlugin = false;',
+          '    bool prismWithPlugin = false;',
+          '    using (Process p1 = Process.GetProcessById(unrelatedPid)) {',
+          '      unrelatedWithPlugin = CdpHelper.IsExpectedPrismDaemonProcess(p1, pDir);',
+          '      unrelatedNoPlugin = CdpHelper.IsExpectedPrismDaemonProcess(p1, null);',
+          '    }',
+          '    using (Process p2 = Process.GetProcessById(prismPid)) {',
+          '      prismWithPlugin = CdpHelper.IsExpectedPrismDaemonProcess(p2, pDir);',
+          '    }',
+          '    var res = new Dictionary<string, object>(StringComparer.Ordinal) {',
+          '      { "unrelatedWithPlugin", unrelatedWithPlugin },',
+          '      { "unrelatedNoPlugin", unrelatedNoPlugin },',
+          '      { "prismWithPlugin", prismWithPlugin }',
+          '    };',
+          '    Console.Write(MiniJson.Stringify(res, false));',
+          '  }',
+          '}',
+        ].join('\n'),
+        'utf8'
+      );
+
+      execFileSync(
+        csc,
+        [
+          '/nologo',
+          '/utf8output',
+          '/codepage:65001',
+          '/warnaserror',
+          '/target:exe',
+          '/main:PidReuseProbe',
+          `/out:${probeExe}`,
+          '/r:System.dll',
+          '/r:System.Core.dll',
+          '/r:System.Net.Http.dll',
+          path.join(ROOT_DIR, 'installer', 'common', 'MiniJson.cs'),
+          path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs'),
+          probeCs,
+        ],
+        { stdio: 'pipe' }
+      );
+
+      const probeOut = JSON.parse(
+        execFileSync(probeExe, [String(unrelatedNode.pid), String(prismNode.pid), fakePluginDir], { encoding: 'utf8' })
+      );
+      assert.equal(probeOut.unrelatedWithPlugin, false, 'Unrelated node.exe PID reuse must be rejected');
+      assert.equal(probeOut.unrelatedNoPlugin, false, 'Unrelated node.exe without pluginDir must be rejected');
+      assert.equal(probeOut.prismWithPlugin, true, 'Genuine Prism sidecar node.exe must be accepted');
+
+      // Also verify setup rejects an ancestor NTFS junction under installDir
+      const installerExe = path.join(tmpDir, 'installer.exe');
+      buildInstaller({ outputPath: installerExe });
+      const victimTarget = path.join(tmpDir, 'victim-target');
+      fs.mkdirSync(victimTarget, { recursive: true });
+      execFileSync('cmd.exe', ['/c', 'mklink', '/J', junctionPath, victimTarget], { stdio: 'ignore' });
+      const nestedInstallDir = path.join(junctionPath, 'nested', 'obsidian-prism');
+      const safePluginDir = path.join(tmpDir, 'safe-plugin');
+      const outErr = path.join(tmpDir, 'ancestor-err.json');
+      const testEnv = {
+        ...process.env,
+        APPDATA: path.join(tmpDir, 'appdata'),
+        AG_PRISM_GEMINI_CONFIG_DIR: path.join(tmpDir, '.gemini', 'config'),
+        AG_PRISM_SHORTCUT_DIRS: path.join(tmpDir, 'shortcuts'),
+        PRISM_NO_RELAUNCH_PROMPT: '1',
+      };
+      delete testEnv.NODE_ENV;
+      const run = await runExeAllowFail(
+        installerExe,
+        [
+          '--silent',
+          '--no-autostart',
+          '--no-kill-legacy',
+          '--no-native-daemon',
+          '--install-dir',
+          nestedInstallDir,
+          '--plugin-dir',
+          safePluginDir,
+          '--out',
+          outErr,
+        ],
+        20000,
+        testEnv
+      );
+      assert.notEqual(run.code, 0, 'installer.exe must reject installDir with ancestor NTFS junction');
+      assert.deepEqual(fs.readdirSync(victimTarget), [], 'Ancestor junction target must remain untouched');
+      const errJson = JSON.parse(fs.readFileSync(outErr, 'utf8'));
+      assert.equal(errJson.failedStep, 'prepare-dirs');
+      assert.ok(errJson.error.includes('0xA0000003'), `Expected Junction tag in error, got: ${errJson.error}`);
+    } finally {
+      for (const c of children) {
+        try { c.kill(); } catch {}
+      }
+      try { execFileSync('cmd.exe', ['/c', 'rmdir', junctionPath], { stdio: 'ignore' }); } catch {}
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
+);
+
