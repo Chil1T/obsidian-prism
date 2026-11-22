@@ -1,6 +1,6 @@
 // Obsidian Prism — Channel 6 Inline Tool-Chain Diff Client (vendor/inline-diff/inline-diff-client.js)
 // Decoupled from Channel 1 static bundle: mounts its own <style id="ag-prism-inline-diff-css">,
-// handles diff chip decoration, right-click menu, hover prefetch, RPC (__agPrismInlineDiffCall / Resolve),
+// handles diff chip decoration, right-click menu cooperation, hover prefetch, RPC (__agPrismInlineDiffCall / Resolve),
 // and GPU unfold/fold inline diff preview with full 5+1 anti-translation & lossless destroy().
 
 (function (root) {
@@ -13,6 +13,10 @@
   const INLINE_DIFF_TIMEOUT_MS = 5500;
   const INLINE_DIFF_CACHE_MAX = 32;
   const INLINE_DIFF_CACHE_TTL_MS = 15000;
+  const INLINE_DIFF_NEG_TTL_MS = 8000;
+  const MAX_CLIENT_DIFF_BYTES = 131072;
+  const MAX_CLIENT_LINE_CHARS = 240;
+  const DETERMINISTIC_ERR_RE = /^(?:not_found|blocked|outside_git_repo|invalid_uri|not_a_file|binary)/i;
 
   // Strictly pure ASCII, 0 :has(), balanced braces, zero pseudo-elements inside :is()
   const INLINE_DIFF_CSS = [
@@ -55,7 +59,7 @@
     '& .ag-cs-inline-diff-line.is-hunk{background-color:rgba(15,23,42,.025);border-color:rgba(15,23,42,.06);& .ag-cs-inline-diff-ln{background-color:#EEF1F6;color:rgba(71,85,105,.55);}}',
     '& .ag-cs-inline-diff-gap-rule{background:linear-gradient(90deg,rgba(15,23,42,.12),rgba(15,23,42,.03));}',
     '}',
-    '@media (prefers-reduced-motion:reduce){.ag-cs-inline-diff-loading::before{animation:none !important;}html[data-ag-cs-style]:not([data-ag-cs-motion="ultra"]):not([data-ag-cs-motion="standard"]) .ag-cs-inline-diff-box{animation:none !important;filter:none !important;}}',
+    '@media (prefers-reduced-motion:reduce){.ag-cs-inline-diff-loading::before,.ag-cs-diff-ctx-menu{animation:none !important;}.ag-cs-diff-ctx-menu{backdrop-filter:none !important;}html[data-ag-cs-style]:not([data-ag-cs-motion="ultra"]):not([data-ag-cs-motion="standard"]) .ag-cs-inline-diff-box{animation:none !important;filter:none !important;}}',
     'html[data-ag-cs-style][data-ag-cs-win-blur="1"] .ag-cs-inline-diff-loading::before{animation-play-state:paused !important;}',
     'html[data-ag-cs-style][data-ag-cs-motion="off"] .ag-cs-inline-diff-box,html[data-ag-cs-style][data-ag-cs-motion="off"] .ag-cs-inline-diff-loading::before,html[data-ag-cs-style][data-ag-cs-motion="off"] .ag-cs-diff-ctx-menu{animation:none !important;transition:none !important;}',
     'html[data-ag-cs-style]:is([data-ag-cs-win-blur="1"],[data-ag-cs-motion="off"]) .ag-cs-diff-ctx-menu{backdrop-filter:none !important;}',
@@ -93,6 +97,11 @@
   const cl = (e, s) => e?.closest?.(s) || null;
   const tagU = (e) => String(e?.tagName || '').toUpperCase();
 
+  function truncateDiffLine(str) {
+    const s = String(str ?? '');
+    return s.length > MAX_CLIENT_LINE_CHARS ? s.slice(0, MAX_CLIENT_LINE_CHARS - 1) + '…' : s;
+  }
+
   function basenameFromUri(uri) {
     const s = String(uri || '').replace(/\\/g, '/').replace(/^file:\/\/\/?/i, '');
     const parts = s.split('/').filter(Boolean);
@@ -100,7 +109,9 @@
   }
 
   function parseUnifiedDiffLines(rawText, maxLines = 160) {
-    const lines = String(rawText || '').replace(/\r\n/g, '\n').split('\n');
+    const raw = String(rawText || '');
+    if (raw.length > MAX_CLIENT_DIFF_BYTES) return [];
+    const lines = raw.replace(/\r\n/g, '\n').split('\n');
     const out = [];
     let oldLn = 1;
     let newLn = 1;
@@ -111,15 +122,15 @@
       if (hm) {
         oldLn = Number(hm[1]) || 1;
         newLn = Number(hm[2]) || 1;
-        out.push({ kind: 'hunk', ln: '', sign: '@@', text: line });
+        out.push({ kind: 'hunk', ln: '', sign: '@@', text: truncateDiffLine(line) });
         continue;
       }
       if (line.startsWith('+')) {
-        out.push({ kind: 'add', ln: String(newLn++), sign: '+', text: line.slice(1) });
+        out.push({ kind: 'add', ln: String(newLn++), sign: '+', text: truncateDiffLine(line.slice(1)) });
       } else if (line.startsWith('-')) {
-        out.push({ kind: 'del', ln: String(oldLn++), sign: '-', text: line.slice(1) });
+        out.push({ kind: 'del', ln: String(oldLn++), sign: '-', text: truncateDiffLine(line.slice(1)) });
       } else if (line.length || out.length) {
-        out.push({ kind: 'ctx', ln: String(newLn++), sign: ' ', text: line.startsWith(' ') ? line.slice(1) : line });
+        out.push({ kind: 'ctx', ln: String(newLn++), sign: ' ', text: truncateDiffLine(line.startsWith(' ') ? line.slice(1) : line) });
         oldLn++;
       }
     }
@@ -127,8 +138,11 @@
   }
 
   function buildPairDiffLines(oldText, newText, startLine = 1, maxLines = 160) {
-    const a = String(oldText || '').replace(/\r\n/g, '\n').split('\n');
-    const b = String(newText || '').replace(/\r\n/g, '\n').split('\n');
+    const sOld = String(oldText || '');
+    const sNew = String(newText || '');
+    if (sOld.length + sNew.length > MAX_CLIENT_DIFF_BYTES) return [];
+    const a = sOld.replace(/\r\n/g, '\n').split('\n');
+    const b = sNew.replace(/\r\n/g, '\n').split('\n');
     const out = [];
     let p = 0;
     while (p < a.length && p < b.length && a[p] === b[p]) p++;
@@ -140,17 +154,17 @@
     }
     const ctxStart = Math.max(0, p - 2);
     for (let i = ctxStart; i < p && out.length < maxLines; i++) {
-      out.push({ kind: 'ctx', ln: String(startLine + i), sign: ' ', text: a[i] });
+      out.push({ kind: 'ctx', ln: String(startLine + i), sign: ' ', text: truncateDiffLine(a[i]) });
     }
     for (let i = p; i <= saIdx && out.length < maxLines; i++) {
-      out.push({ kind: 'del', ln: String(startLine + i), sign: '-', text: a[i] });
+      out.push({ kind: 'del', ln: String(startLine + i), sign: '-', text: truncateDiffLine(a[i]) });
     }
     for (let i = p; i <= sbIdx && out.length < maxLines; i++) {
-      out.push({ kind: 'add', ln: String(startLine + i), sign: '+', text: b[i] });
+      out.push({ kind: 'add', ln: String(startLine + i), sign: '+', text: truncateDiffLine(b[i]) });
     }
     const tailEnd = Math.min(b.length, sbIdx + 3);
     for (let i = sbIdx + 1; i < tailEnd && out.length < maxLines; i++) {
-      out.push({ kind: 'ctx', ln: String(startLine + i), sign: ' ', text: b[i] });
+      out.push({ kind: 'ctx', ln: String(startLine + i), sign: ' ', text: truncateDiffLine(b[i]) });
     }
     return out;
   }
@@ -164,23 +178,35 @@
       const ext = extGetConfig ? extGetConfig() : null;
       return ext && typeof ext === 'object' ? { ...currentConfig, ...ext } : currentConfig;
     };
-    const getLang =
-      typeof options.getLang === 'function'
-        ? options.getLang
-        : () =>
-            currentConfig.language ||
-            currentConfig.lang ||
-            doc?.documentElement?.getAttribute?.('data-ag-cs-lang') ||
-            'en';
+
+    const baseGetLang = typeof options.getLang === 'function' ? options.getLang : null;
+    const baseTFn = typeof options.t === 'function' ? options.t : null;
+    const baseMut = typeof options.runGuardedMut === 'function' ? options.runGuardedMut : null;
+    const baseSetA = typeof options.setAttrIfChanged === 'function' ? options.setAttrIfChanged : null;
+
+    let hookGetLang = baseGetLang;
+    let hookTFn = baseTFn;
+    let hookMut = baseMut;
+    let hookSetA = baseSetA;
+
+    const getLang = () => {
+      if (typeof hookGetLang === 'function') {
+        try {
+          const v = String(hookGetLang() || '').trim();
+          if (v && v !== 'auto') return v;
+        } catch {}
+      }
+      const cfgLang = String(currentConfig.language || currentConfig.lang || '').trim();
+      if (cfgLang && cfgLang !== 'auto') return cfgLang;
+      return String(doc?.documentElement?.getAttribute?.('data-ag-cs-lang') || 'en').trim() || 'en';
+    };
+    const mut = (fn) => (typeof hookMut === 'function' ? hookMut(fn) : fn());
+    const setA = (el, name, val) => {
+      if (typeof hookSetA === 'function') return hookSetA(el, name, val);
+      if (el && ga(el, name) !== val) sa(el, name, val);
+    };
+
     const extIsDestroyed = typeof options.isDestroyed === 'function' ? options.isDestroyed : () => false;
-    const mut = typeof options.runGuardedMut === 'function' ? options.runGuardedMut : (fn) => fn();
-    const setA =
-      typeof options.setAttrIfChanged === 'function'
-        ? options.setAttrIfChanged
-        : (el, name, val) => {
-            if (el && ga(el, name) !== val) sa(el, name, val);
-          };
-    const tFn = typeof options.t === 'function' ? options.t : null;
 
     let localDestroyed = false;
     const isDead = () => localDestroyed || extIsDestroyed();
@@ -190,10 +216,12 @@
     const inlineDiffInflight = new Map();
     const inlineDiffAnimTimers = new Set();
     let inlineDiffHoverTimer = 0;
+    let chipSyncDebounceTimer = 0;
     let inlineDiffReqSeq = 1;
     let allowNativeDiffClick = false;
     let diffCtxMenuEl = null;
     let styleEl = null;
+    let selfApi = null;
 
     const stats = {
       inlineDiffToggleCount: 0,
@@ -208,27 +236,43 @@
     };
 
     function getUiText(key, fallback) {
-      if (tFn) {
-        const v = tFn(key);
-        if (typeof v === 'string' && v && v !== key) return v;
+      if (typeof hookTFn === 'function') {
+        try {
+          const v = hookTFn(key);
+          if (typeof v === 'string' && v && v !== key) return v;
+        } catch {}
       }
-      const l = String(getLang() || '');
-      const isZh = /^zh|^yue/i.test(l);
-      const isJa = /^ja/i.test(l);
+      const l = String(getLang() || '').toLowerCase();
+      const isZh = l.startsWith('zh') || l === 'yue';
+      const isJa = l.startsWith('ja');
       const map = {
-        inlineDiffOpenSidebar: isZh ? '在侧栏打开' : isJa ? 'サイドバーで開く' : 'Open in Sidebar',
+        inlineDiffOpenSidebar: isZh ? '在侧栏打开完整对比' : isJa ? 'サイドバーで完全な差分を開く' : 'Open full diff in Sidebar',
         inlineDiffCollapse: isZh ? '收起' : isJa ? '閉じる' : 'Collapse',
         inlineDiffLoading: isZh ? '正在读取差异...' : isJa ? '差分を読み込み中...' : 'Loading diff...',
         inlineDiffBinary: isZh
-          ? '二进制文件暂不支持行内预览，请点击右上角图标在侧栏查看。'
+          ? '二进制文件暂不支持行内预览，请右键在侧栏打开。'
           : isJa
-            ? 'バイナリファイルはインライン表示できません。右上のアイコンからサイドバーで開けます。'
-            : 'Binary file cannot be previewed inline. Use the top-right icon to open in Sidebar.',
+            ? 'バイナリファイルはインライン表示できません。右クリックでサイドバーから開けます。'
+            : 'Binary file cannot be previewed inline. Right-click to open in Sidebar.',
         inlineDiffNoPreview: isZh
-          ? '当前步骤暂无行内差异，可点击右上角图标在侧栏查看。'
+          ? '当前步骤暂无行内差异，请右键在侧栏打开。'
           : isJa
-            ? 'このステップには差分テキストがありません。右上のアイコンからサイドバーで開けます。'
-            : 'Inline diff is unavailable for this step. Use the top-right icon for Sidebar.',
+            ? 'このステップには差分テキストがありません。右クリックでサイドバーから開けます。'
+            : 'Inline diff is unavailable for this step. Right-click to open in Sidebar.',
+        inlineDiffSnapshotNotice: isZh
+          ? '未受 Git 追踪 · 预览当前文件内容（右键可在侧栏打开完整对比）'
+          : isJa
+            ? 'Git 未追跡 · 現在のファイルを表示中（右クリックでサイドバーで完全な差分を開く）'
+            : 'Not tracked by Git · previewing current file (right-click to open full diff in Sidebar)',
+        inlineDiffLongLinesTag: isZh ? '单行长改' : isJa ? '長行' : 'long line',
+        inlineDiffMenuExpand: isZh ? '展开行内对比' : isJa ? 'インライン差分を展開' : 'Expand inline diff',
+        inlineDiffMenuCollapse: isZh ? '收起行内对比' : isJa ? 'インライン差分を閉じる' : 'Collapse inline diff',
+        inlineDiffMenuCopyPath: isZh ? '复制文件路径' : isJa ? 'ファイルパスをコピー' : 'Copy file path',
+        inlineDiffLargeExpandBtn: isZh
+          ? '⋯ 大文件仅节选关键片段 · 点击在右侧栏查看完整对比'
+          : isJa
+            ? '⋯ 大きなファイルのため一部のみ表示 · クリックしてサイドバーで全体を見る'
+            : '⋯ Showing key hunks · Click to open full diff in Sidebar',
       };
       return map[key] || fallback || key;
     }
@@ -274,6 +318,11 @@
 
     function ensureStyleMounted() {
       if (isDead() || !doc || typeof doc.createElement !== 'function') return null;
+      if (styleEl && styleEl.isConnected !== false) {
+        if (typeof doc.getElementById !== 'function' || doc.getElementById(INLINE_DIFF_STYLE_ID) === styleEl) {
+          return styleEl;
+        }
+      }
       const existing = typeof doc.getElementById === 'function' ? doc.getElementById(INLINE_DIFF_STYLE_ID) : null;
       if (existing) {
         if (existing.textContent !== INLINE_DIFF_CSS) {
@@ -315,6 +364,15 @@
       } catch {}
     }
 
+    function normalizeLinesArray(arr) {
+      return arr.slice(0, 160).map((it) => ({
+        kind: it && (it.kind === 'add' || it.kind === 'del' || it.kind === 'hunk') ? it.kind : 'ctx',
+        ln: String(it?.ln ?? ''),
+        sign: String(it?.sign ?? (it?.kind === 'add' ? '+' : it?.kind === 'del' ? '-' : ' ')),
+        text: truncateDiffLine(it?.text ?? ''),
+      }));
+    }
+
     function extractInlineDiffPayload(badgeEl, rowEl) {
       let uri = '',
         fileName = '',
@@ -327,7 +385,7 @@
         fileName = basenameFromUri(uri);
       }
       const rawJson = ga(badgeEl, 'data-ag-diff-json') || ga(rowEl, 'data-ag-diff-json');
-      if (rawJson) {
+      if (rawJson && rawJson.length <= MAX_CLIENT_DIFF_BYTES) {
         try {
           const p = JSON.parse(rawJson);
           if (p && typeof p === 'object') {
@@ -340,12 +398,7 @@
             if (typeof p.additions === 'number') additions = p.additions;
             if (typeof p.deletions === 'number') deletions = p.deletions;
             if (Array.isArray(p.lines)) {
-              lines = p.lines.slice(0, 160).map((it) => ({
-                kind: it.kind === 'add' || it.kind === 'del' || it.kind === 'hunk' ? it.kind : 'ctx',
-                ln: String(it.ln ?? ''),
-                sign: String(it.sign ?? (it.kind === 'add' ? '+' : it.kind === 'del' ? '-' : ' ')),
-                text: String(it.text ?? ''),
-              }));
+              lines = normalizeLinesArray(p.lines);
             } else if (typeof p.unified === 'string') {
               lines = parseUnifiedDiffLines(p.unified);
             } else if (typeof p.oldText === 'string' || typeof p.newText === 'string') {
@@ -397,7 +450,7 @@
           }
           if (!lines.length && typeof win?.__agPrismResolveInlineDiff === 'function') {
             const ext = win.__agPrismResolveInlineDiff({ uri, fileName, additions, deletions, diffContext: stepCtx, badgeEl, rowEl });
-            if (Array.isArray(ext?.lines)) lines = ext.lines.slice(0, 160);
+            if (Array.isArray(ext?.lines)) lines = normalizeLinesArray(ext.lines);
             else if (typeof ext?.unified === 'string') lines = parseUnifiedDiffLines(ext.unified);
           }
         } catch {}
@@ -478,7 +531,8 @@
     function getCachedInlineDiff(cacheKey) {
       const hit = inlineDiffCache.get(cacheKey);
       if (!hit) return null;
-      if (Date.now() - hit.at > INLINE_DIFF_CACHE_TTL_MS) {
+      const ttl = hit.ttl || INLINE_DIFF_CACHE_TTL_MS;
+      if (Date.now() - hit.at > ttl) {
         inlineDiffCache.delete(cacheKey);
         return null;
       }
@@ -486,13 +540,18 @@
     }
 
     function putCachedInlineDiff(cacheKey, resp) {
-      if (!resp || !resp.ok) return;
+      if (!resp || typeof resp !== 'object') return;
+      const errCode = String(resp.error || resp.reason || '');
+      const isDeterministicNeg =
+        (!resp.ok && DETERMINISTIC_ERR_RE.test(errCode)) || (resp.ok && resp.mode === 'binary');
+      if (!resp.ok && !isDeterministicNeg) return;
+      const ttl = isDeterministicNeg ? INLINE_DIFF_NEG_TTL_MS : INLINE_DIFF_CACHE_TTL_MS;
       while (inlineDiffCache.size >= INLINE_DIFF_CACHE_MAX) {
         const oldest = inlineDiffCache.keys().next().value;
         if (oldest === undefined) break;
         inlineDiffCache.delete(oldest);
       }
-      inlineDiffCache.set(cacheKey, { at: Date.now(), resp });
+      inlineDiffCache.set(cacheKey, { at: Date.now(), ttl, resp });
     }
 
     function requestInlineDiffFromDaemon(uri, hints) {
@@ -531,7 +590,7 @@
         inlineDiffPending.set(reqId, {
           resolve: (resp) => {
             inlineDiffInflight.delete(key);
-            if (resp?.ok) putCachedInlineDiff(key, resp);
+            if (resp) putCachedInlineDiff(key, resp);
             resolve(resp);
           },
           timer,
@@ -560,18 +619,8 @@
       const P = 'ag-cs-inline-diff-';
 
       if (Array.isArray(lines) && lines.length > 0) {
-        const l = String(getLang() || '').toLowerCase(),
-          isZh = l.startsWith('zh') || l === 'yue';
         if (metaMode === 'snapshot') {
-          bodyEl.appendChild(
-            mk(
-              'div',
-              P + 'note',
-              isZh
-                ? '未受 Git 追踪 · 预览当前文件内容（右键可在侧栏打开完整对比）'
-                : 'Not tracked by Git · previewing current file (right-click to open full diff in Sidebar)'
-            )
-          );
+          bodyEl.appendChild(mk('div', P + 'note', getUiText('inlineDiffSnapshotNotice')));
         }
         const rows = [];
         let seen = false,
@@ -593,9 +642,10 @@
             kind,
             ln: String(r.ln ?? ''),
             sign: String(r.sign ?? (kind === 'add' ? '+' : kind === 'del' ? '-' : ' ')),
-            text: String(r.text ?? ''),
+            text: truncateDiffLine(r.text ?? ''),
           });
         }
+        const longLineLbl = getUiText('inlineDiffLongLinesTag', 'long line');
         for (let i = 0; i < rows.length; i++) {
           const r = rows[i];
           if (r.kind === 'hunk') {
@@ -614,16 +664,12 @@
               mk('span', P + 'ln', r.ln),
               mk('span', pSame ? P + 'sign is-cont' : P + 'sign', pSame ? '┆' : r.sign),
               mk('span', P + 'code', r.text),
-              r.text.endsWith('…') ? mk('span', P + 'wrap-tag', isZh ? '单行长改' : 'long line') : null
+              r.text.endsWith('…') ? mk('span', P + 'wrap-tag', longLineLbl) : null
             )
           );
         }
         if (totalStats?.truncated && typeof onOpenSidebar === 'function') {
-          const mb = mk(
-            'button',
-            P + 'more-bar',
-            isZh ? '⋯ 大文件仅节选关键片段 · 点击在右侧栏查看完整对比' : '⋯ Showing key hunks · Click to open full diff in Sidebar'
-          );
+          const mb = mk('button', P + 'more-bar', getUiText('inlineDiffLargeExpandBtn'));
           mb.type = 'button';
           mb.addEventListener('click', (ev) => {
             ev.preventDefault?.();
@@ -642,9 +688,7 @@
         mk(
           'div',
           P + 'empty',
-          stateKind === 'binary'
-            ? getUiText('inlineDiffBinary', 'Binary file cannot be previewed inline.')
-            : getUiText('inlineDiffNoPreview', 'Inline diff is unavailable for this step.')
+          stateKind === 'binary' ? getUiText('inlineDiffBinary') : getUiText('inlineDiffNoPreview')
         )
       );
     }
@@ -686,6 +730,15 @@
       mut(() => {
         for (const b of badges) {
           if (!b || cl(b, '[data-testid="changed-files-card"]')) continue;
+          const bTxt = String(b.textContent || '');
+          const prevChip = b._agSyncedChip;
+          if (
+            b._agSyncedTxt === bTxt &&
+            !ga(b, 'data-tooltip-id') &&
+            (!prevChip || (prevChip.isConnected !== false && ga(prevChip, 'data-ag-diff-chip') === '1'))
+          ) {
+            continue;
+          }
           const tip = ga(b, 'data-tooltip-id');
           if (tip) {
             b._agOrigTooltipId = tip;
@@ -699,6 +752,8 @@
             else if (/^[+-]?0$/.test(st)) setA(sp, 'data-ag-diff-stat', 'zero');
           }
           const chip = findDiffChipContainer(b);
+          b._agSyncedTxt = bTxt;
+          b._agSyncedChip = chip || null;
           if (!chip) continue;
           setA(chip, 'data-ag-diff-chip', '1');
           for (let k = 0, anc = chip.parentElement; k < 3 && anc; k++, anc = anc.parentElement) {
@@ -731,14 +786,22 @@
       return true;
     }
 
+    function dispatchCtxOpenBus() {
+      if (!win || typeof win.dispatchEvent !== 'function') return;
+      try {
+        const Ctor = win.CustomEvent || (typeof CustomEvent === 'function' ? CustomEvent : null);
+        const ev = Ctor ? new Ctor('ag-prism:ctx-open', { detail: { source: 'inline-diff' } }) : { type: 'ag-prism:ctx-open', detail: { source: 'inline-diff' } };
+        win.dispatchEvent(ev);
+      } catch {}
+    }
+
     function openDiffContextMenu(ev, badgeEl) {
       if (isDead() || !doc?.body || !badgeEl) return false;
       closeDiffContextMenu();
+      dispatchCtxOpenBus();
       const rowEl = findInlineDiffHostRow(badgeEl),
         isOpen = ga(badgeEl, 'data-ag-inline-diff-open') === '1',
         payload = extractInlineDiffPayload(badgeEl, rowEl);
-      const l = String(getLang() || '').toLowerCase(),
-        isZh = l.startsWith('zh') || l === 'yue';
       const menu = markNoTrOwned(mk('div', 'ag-cs-diff-ctx-menu'));
       sa(menu, 'role', 'menu');
       const addItem = (ic, lbl, fn) => {
@@ -755,10 +818,10 @@
       };
       addItem(
         isOpen ? 'close' : 'chevDown',
-        isOpen ? (isZh ? '收起行内对比' : 'Collapse inline diff') : isZh ? '展开行内对比' : 'Expand inline diff',
+        isOpen ? getUiText('inlineDiffMenuCollapse') : getUiText('inlineDiffMenuExpand'),
         () => toggleInlineDiffPreview(badgeEl)
       );
-      addItem('external', isZh ? '在侧栏打开完整对比' : getUiText('inlineDiffOpenSidebar', 'Open full diff in Sidebar'), () => {
+      addItem('external', getUiText('inlineDiffOpenSidebar'), () => {
         allowNativeDiffClick = true;
         try {
           badgeEl.click?.();
@@ -767,7 +830,7 @@
         }
       });
       if (payload.uri) {
-        addItem('moreDots', isZh ? '复制文件路径' : 'Copy file path', () => {
+        addItem('moreDots', getUiText('inlineDiffMenuCopyPath'), () => {
           try {
             win?.navigator?.clipboard?.writeText?.(String(payload.uri).replace(/^file:\/\/\/?/i, ''));
           } catch {}
@@ -885,8 +948,13 @@
 
       if (opts && opts.closeOnly) return false;
 
-      const payload = extractInlineDiffPayload(badgeEl, rowEl),
-        stepStats = { additions: payload.additions || 0, deletions: payload.deletions || 0 };
+      const payload = extractInlineDiffPayload(badgeEl, rowEl);
+      // Graceful fallback when neither local diff lines nor Daemon RPC is available: yield to native host Sidebar click
+      if (!payload.lines.length && !(payload.uri && typeof win?.__agPrismInlineDiffCall === 'function')) {
+        return false;
+      }
+
+      const stepStats = { additions: payload.additions || 0, deletions: payload.deletions || 0 };
       const body = mk('div', 'ag-cs-inline-diff-body'),
         box = markNoTrOwned(mk('div', BC, null, mk('div', 'ag-cs-inline-diff-card', null, body)));
       sa(box, 'data-ag-cs-inline-diff', '1');
@@ -910,7 +978,7 @@
       let pendingRpc = null;
       if (payload.lines.length) {
         renderInlineDiffBody(body, payload.lines, 'lines', null, stepStats, null, openSb);
-      } else if (payload.uri && typeof win?.__agPrismInlineDiffCall === 'function') {
+      } else {
         pendingRpc = requestInlineDiffFromDaemon(payload.uri, stepStats);
         if (pendingRpc?.cached) {
           applyResp(pendingRpc.cached);
@@ -919,8 +987,6 @@
           renderInlineDiffBody(body, [], 'loading');
           if (pendingRpc) box._agDiffReqId = pendingRpc.reqId;
         }
-      } else {
-        renderInlineDiffBody(body, [], 'empty');
       }
 
       sa(box, AS, 'open');
@@ -956,74 +1022,186 @@
       return cl(t, '.ag-cs-inline-diff-box')?._agDiffBadge || null;
     }
 
+    function clearHoverPrefetchTimer() {
+      if (inlineDiffHoverTimer) {
+        clearTimeout(inlineDiffHoverTimer);
+        inlineDiffHoverTimer = 0;
+      }
+    }
+
+    function scheduleChipSyncDebounce() {
+      if (chipSyncDebounceTimer) clearTimeout(chipSyncDebounceTimer);
+      chipSyncDebounceTimer = setTimeout(() => {
+        chipSyncDebounceTimer = 0;
+        if (!isDead()) syncInlineDiffChips();
+      }, 24);
+    }
+
     function onDocClickCapture(ev) {
-      const t = ev?.target;
-      if (isDead() || !t?.closest) return;
-      if (diffCtxMenuEl && !cl(t, '.ag-cs-diff-ctx-menu')) closeDiffContextMenu();
-      if (!allowNativeDiffClick && !cl(t, '.ag-cs-inline-diff-box')) {
-        const db = resolveDiffBadgeFromTarget(t);
-        if (db) {
-          if (toggleInlineDiffPreview(db)) {
-            ev.preventDefault?.();
-            ev.stopPropagation?.();
+      try {
+        const t = ev?.target;
+        if (isDead() || !t?.closest) return;
+        if (diffCtxMenuEl && !cl(t, '.ag-cs-diff-ctx-menu')) closeDiffContextMenu();
+        if (!allowNativeDiffClick && !cl(t, '.ag-cs-inline-diff-box')) {
+          const db = resolveDiffBadgeFromTarget(t);
+          if (db) {
+            if (toggleInlineDiffPreview(db)) {
+              ev.preventDefault?.();
+              ev.stopPropagation?.();
+            }
+            return;
           }
-          return;
         }
-      }
-      if (cl(t, 'button, [role="button"]')) {
-        const tid = setTimeout(() => {
-          inlineDiffAnimTimers.delete(tid);
-          if (!isDead()) syncInlineDiffChips();
-        }, 24);
-        inlineDiffAnimTimers.add(tid);
-      }
+        if (cl(t, 'button, [role="button"]')) {
+          scheduleChipSyncDebounce();
+        }
+      } catch {}
+    }
+
+    function onWinPointerDownCapture(ev) {
+      try {
+        if (isDead() || !diffCtxMenuEl) return;
+        const t = ev?.target;
+        if (!t?.closest || !cl(t, '.ag-cs-diff-ctx-menu')) {
+          closeDiffContextMenu();
+        }
+      } catch {}
     }
 
     function onWinContextMenu(ev) {
-      if (isDead() || !ev?.target?.closest) return;
-      const db = resolveDiffBadgeFromTarget(ev.target);
-      if (db && openDiffContextMenu(ev, db)) {
-        ev.preventDefault?.();
-        ev.stopPropagation?.();
-      }
+      try {
+        if (isDead() || !ev?.target?.closest) return;
+        const t = ev.target;
+        const db = resolveDiffBadgeFromTarget(t);
+        if (!db) {
+          closeDiffContextMenu();
+          return;
+        }
+        if (ev.shiftKey) {
+          closeDiffContextMenu();
+          return;
+        }
+        if (cl(t, '.ag-cs-inline-diff-box')) {
+          const selText = String(win?.getSelection?.() || '').trim();
+          if (selText.length > 0) {
+            closeDiffContextMenu();
+            return;
+          }
+        }
+        if (openDiffContextMenu(ev, db)) {
+          ev.preventDefault?.();
+          ev.stopPropagation?.();
+        }
+      } catch {}
     }
 
-    function onWinKeyDown(ev) {
-      if (isDead() || !ev) return;
-      if (ev.key === 'Escape' && diffCtxMenuEl) {
-        closeDiffContextMenu();
-      }
+    function onWinKeyDownCapture(ev) {
+      try {
+        if (isDead() || !ev) return;
+        if (ev.key === 'Escape' && diffCtxMenuEl) {
+          if (closeDiffContextMenu()) {
+            ev.preventDefault?.();
+            ev.stopPropagation?.();
+          }
+        }
+      } catch {}
     }
 
     function onWinPointerOver(ev) {
-      const t = ev?.target;
-      if (isDead() || !t?.closest || typeof win?.__agPrismInlineDiffCall !== 'function' || cl(t, '.ag-cs-inline-diff-box')) return;
-      const db = resolveDiffBadgeFromTarget(t);
-      if (!db || ga(db, 'data-ag-inline-diff-open') === '1') return;
-      if (inlineDiffHoverTimer) clearTimeout(inlineDiffHoverTimer);
-      inlineDiffHoverTimer = setTimeout(() => {
-        inlineDiffHoverTimer = 0;
-        if (isDead() || db.isConnected === false) return;
-        const p = extractInlineDiffPayload(db, null);
-        if (p.uri && !p.lines.length) {
-          requestInlineDiffFromDaemon(p.uri, { additions: p.additions || 0, deletions: p.deletions || 0 });
+      try {
+        const t = ev?.target;
+        if (isDead() || !t?.closest) return;
+        if (typeof win?.__agPrismInlineDiffCall !== 'function' || cl(t, '.ag-cs-inline-diff-box')) {
+          clearHoverPrefetchTimer();
+          return;
         }
-      }, 110);
+        const db = resolveDiffBadgeFromTarget(t);
+        if (!db || ga(db, 'data-ag-inline-diff-open') === '1') {
+          clearHoverPrefetchTimer();
+          return;
+        }
+        clearHoverPrefetchTimer();
+        inlineDiffHoverTimer = setTimeout(() => {
+          inlineDiffHoverTimer = 0;
+          if (isDead() || db.isConnected === false) return;
+          const p = extractInlineDiffPayload(db, null);
+          if (p.uri && !p.lines.length) {
+            requestInlineDiffFromDaemon(p.uri, { additions: p.additions || 0, deletions: p.deletions || 0 });
+          }
+        }, 110);
+      } catch {}
+    }
+
+    function onWinPointerOut(ev) {
+      try {
+        if (!inlineDiffHoverTimer) return;
+        const rel = ev?.relatedTarget;
+        if (!rel || !rel.closest || !resolveDiffBadgeFromTarget(rel)) {
+          clearHoverPrefetchTimer();
+        }
+      } catch {}
+    }
+
+    function onWinScrollCapture(ev) {
+      try {
+        if (!diffCtxMenuEl) return;
+        const t = ev?.target;
+        if (t && diffCtxMenuEl.contains?.(t)) return;
+        closeDiffContextMenu();
+      } catch {}
+    }
+
+    function onWinBlurOrResize() {
+      try {
+        if (diffCtxMenuEl) closeDiffContextMenu();
+      } catch {}
+    }
+
+    function onCtxOpenBus(ev) {
+      try {
+        if (ev?.detail?.source !== 'inline-diff') {
+          closeDiffContextMenu();
+        }
+      } catch {}
     }
 
     if (win && typeof win.addEventListener === 'function') {
       win.addEventListener('click', onDocClickCapture, true);
+      win.addEventListener('pointerdown', onWinPointerDownCapture, true);
       win.addEventListener('contextmenu', onWinContextMenu, true);
-      win.addEventListener('keydown', onWinKeyDown);
+      win.addEventListener('keydown', onWinKeyDownCapture, true);
       win.addEventListener('pointerover', onWinPointerOver, { passive: true });
+      win.addEventListener('pointerout', onWinPointerOut, { passive: true });
+      win.addEventListener('scroll', onWinScrollCapture, true);
+      win.addEventListener('blur', onWinBlurOrResize);
+      win.addEventListener('resize', onWinBlurOrResize);
+      win.addEventListener('ag-prism:ctx-open', onCtxOpenBus);
     }
 
     ensureStyleMounted();
 
-    function sync(cfg) {
+    function bindHooks(hooks) {
+      if (!hooks || typeof hooks !== 'object') return;
+      if (typeof hooks.t === 'function') hookTFn = hooks.t;
+      if (typeof hooks.getLang === 'function') hookGetLang = hooks.getLang;
+      if (typeof hooks.runGuardedMut === 'function') hookMut = hooks.runGuardedMut;
+      if (typeof hooks.setAttrIfChanged === 'function') hookSetA = hooks.setAttrIfChanged;
+    }
+
+    function unbindHooks() {
+      hookTFn = baseTFn;
+      hookGetLang = baseGetLang;
+      hookMut = baseMut;
+      hookSetA = baseSetA;
+    }
+
+    function sync(cfg, hooks) {
       if (isDead()) return;
       if (cfg && typeof cfg === 'object') {
         currentConfig = { ...currentConfig, ...cfg };
+      }
+      if (hooks && typeof hooks === 'object') {
+        bindHooks(hooks);
       }
       ensureStyleMounted();
       syncInlineDiffChips();
@@ -1040,7 +1218,7 @@
         pendingSize: inlineDiffPending.size,
         menuOpen: Boolean(diffCtxMenuEl),
         styleMounted: Boolean(doc?.getElementById?.(INLINE_DIFF_STYLE_ID)),
-        destroyed: localDestroyed,
+        destroyed: Boolean(localDestroyed),
       };
     }
 
@@ -1049,11 +1227,12 @@
       localDestroyed = true;
       for (const tid of inlineDiffAnimTimers) clearTimeout(tid);
       inlineDiffAnimTimers.clear();
-      closeDiffContextMenu();
-      if (inlineDiffHoverTimer) {
-        clearTimeout(inlineDiffHoverTimer);
-        inlineDiffHoverTimer = 0;
+      clearHoverPrefetchTimer();
+      if (chipSyncDebounceTimer) {
+        clearTimeout(chipSyncDebounceTimer);
+        chipSyncDebounceTimer = 0;
       }
+      closeDiffContextMenu();
       for (const entry of inlineDiffPending.values()) {
         if (entry?.timer) clearTimeout(entry.timer);
         try {
@@ -1071,9 +1250,15 @@
       if (win && typeof win.removeEventListener === 'function') {
         try {
           win.removeEventListener('click', onDocClickCapture, true);
+          win.removeEventListener('pointerdown', onWinPointerDownCapture, true);
           win.removeEventListener('contextmenu', onWinContextMenu, true);
-          win.removeEventListener('keydown', onWinKeyDown);
+          win.removeEventListener('keydown', onWinKeyDownCapture, true);
           win.removeEventListener('pointerover', onWinPointerOver);
+          win.removeEventListener('pointerout', onWinPointerOut);
+          win.removeEventListener('scroll', onWinScrollCapture, true);
+          win.removeEventListener('blur', onWinBlurOrResize);
+          win.removeEventListener('resize', onWinBlurOrResize);
+          win.removeEventListener('ag-prism:ctx-open', onCtxOpenBus);
         } catch {}
       }
       if (doc && typeof doc.querySelectorAll === 'function') {
@@ -1086,6 +1271,8 @@
               sa(el, 'data-tooltip-id', el._agOrigTooltipId);
               delete el._agOrigTooltipId;
             }
+            delete el._agSyncedTxt;
+            delete el._agSyncedChip;
           });
           for (const k of 'diff-chip|diff-chip-file|diff-chip-row|diff-stat|inline-diff-open|inline-diff-host|diff-anim|diff-state|cs-inline-diff'.split(
             '|'
@@ -1102,15 +1289,28 @@
         } catch {}
       });
       styleEl = null;
+      unbindHooks();
+      if (win && win.__agPrismInlineDiff === selfApi) {
+        try {
+          delete win.__agPrismInlineDiff;
+        } catch {}
+      }
+      if (G && G.__agPrismInlineDiff === selfApi) {
+        try {
+          delete G.__agPrismInlineDiff;
+        } catch {}
+      }
     }
 
-    return {
+    selfApi = {
       sync,
+      unbindHooks,
       toggleInlineDiffPreview,
       closeMenuIfOpen,
       getDebugState,
       destroy,
     };
+    return selfApi;
   }
 
   const W = typeof window !== 'undefined' ? window : G;

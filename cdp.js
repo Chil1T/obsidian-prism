@@ -4870,16 +4870,6 @@ const SYNC_ROOT_FILES = [
   ...RUNTIME_PARTS.filter((p) => !p.includes('/')),
 ];
 
-const SYNC_VENDOR_FILES = [
-  'vendor/omni-viewer/omni-client.js',
-  'vendor/sidebar-studio/sidebar-client.js',
-  'vendor/host-i18n/host-i18n-runtime.js',
-  'vendor/host-i18n/zh-CN.json',
-  'vendor/thought-translator/thought-client.js',
-  'vendor/thought-translator/thought-settings-ui.js',
-  'vendor/inline-diff/inline-diff-client.js',
-];
-
 const _mangledUnitCache = new Map();
 let _unifiedBundleCache = { sig: '', bundleCode: '', partCodeByName: new Map() };
 let _cssCache = { sig: '', minCss: '', packedExpr: '' };
@@ -8227,7 +8217,7 @@ function buildInlineDiffInjectExpression(config = null, opts = null) {
       }
       const effectiveCfg = getLiveCfg() || bootCfg;
       const existing = window.__agPrismInlineDiff || globalThis.__agPrismInlineDiff;
-      if (existing && existing.__prismCodeHash === targetHash && typeof existing.sync === 'function') {
+      if (existing && !existing.getDebugState?.()?.destroyed && existing.__prismCodeHash === targetHash && typeof existing.sync === 'function') {
         try { existing.sync(effectiveCfg); } catch {}
         return { ok: true, reused: true, codeHash: targetHash };
       }
@@ -8557,6 +8547,12 @@ const REMOVE_EXPRESSION = `(() => {
     'data-ag-sub-running',
     'data-ag-sub-sec-running',
     'data-ag-overview-running',
+    'data-ag-queued-act',
+    'data-ag-ov-sec-anim',
+    'data-ag-ov-sec-closing',
+    'data-ag-diff-anim',
+    'data-ag-diff-state',
+    'data-ag-cs-inline-diff',
   ].forEach((attr) => {
     document.querySelectorAll('[' + attr + ']').forEach((el) => el.removeAttribute(attr));
   });
@@ -8666,7 +8662,6 @@ module.exports = {
   spawnDetachedHostRelaunchHelper,
   RUNTIME_PARTS,
   SYNC_ROOT_FILES,
-  SYNC_VENDOR_FILES,
   REMOVE_EXPRESSION,
   readConfig,
   writeConfig,

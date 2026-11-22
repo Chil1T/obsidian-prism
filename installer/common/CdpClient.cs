@@ -34,7 +34,6 @@ namespace AgyClaudeStyle
         public string Version;
         public string StyleId;
         public string SettingBinding;
-        public string InlineDiffBinding;
         public List<string> Parts;
         public Dictionary<string, object> DefaultConfig;
         public Dictionary<string, object> Validators;
@@ -48,7 +47,6 @@ namespace AgyClaudeStyle
             m.Version = GetString(raw, "version", "1.0.6");
             m.StyleId = GetString(raw, "styleId", "ag-prism-css");
             m.SettingBinding = GetString(raw, "settingBinding", "__agPrismSetting");
-            m.InlineDiffBinding = GetString(raw, "inlineDiffBinding", "__agPrismInlineDiffCall");
             m.RemoveExpression = GetString(raw, "removeExpression", "");
             m.Parts = new List<string>();
             List<object> partsObj = raw.ContainsKey("parts") ? raw["parts"] as List<object> : null;
@@ -1984,10 +1982,19 @@ namespace AgyClaudeStyle
             sb.Append("    try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}\n");
             sb.Append("    try { window.__agPrismInlineDiff?.sync?.(effectiveCfg); } catch {}\n");
             sb.Append("    try { if (effectiveCfg.omniModule === 'off') window.__agPrismOmni?.destroy?.(); else window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}\n");
+            sb.Append("    if (effectiveCfg && effectiveCfg.sidebarStudio !== 'on') {\n");
+            sb.Append("      try { window.__agPrismSidebar?.sync?.(effectiveCfg, window.__agPrismSidebarMeta || null); } catch {}\n");
+            sb.Append("      try { window.__agPrismSidebar?.destroy?.(); } catch {}\n");
+            sb.Append("      try { delete window.__agPrismSidebar; } catch {}\n");
+            sb.Append("      try { if (document.documentElement) ['data-ag-prism-mode', 'data-ag-prism-chat-kind', 'data-ag-prism-chat-telemetry', 'data-ag-cs-space', 'data-ag-cs-space-palette', 'data-ag-cs-space-accent'].forEach((a) => document.documentElement.removeAttribute(a)); } catch {}\n");
+            sb.Append("    } else {\n");
+            sb.Append("      try { window.__agPrismSidebar?.sync?.(effectiveCfg, window.__agPrismSidebarMeta || null); } catch {}\n");
+            sb.Append("    }\n");
             sb.Append("    try { if (effectiveCfg.hostLocalization === 'off' || (effectiveCfg.hostLocalization !== 'on' && effectiveCfg.language && effectiveCfg.language !== 'zh-CN' && effectiveCfg.language !== 'auto')) window.__agPrismHostI18n?.destroy?.(); } catch {}\n");
             sb.Append("    if (document.documentElement) {\n");
             sb.Append("      if (effectiveCfg && effectiveCfg.thoughtTranslate && effectiveCfg.thoughtTranslate !== 'off') document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');\n");
             sb.Append("      else document.documentElement.removeAttribute('data-ag-prism-thought-view');\n");
+            sb.Append("      document.documentElement.setAttribute('data-ag-prism-sidebar-studio', effectiveCfg && effectiveCfg.sidebarStudio === 'on' ? 'on' : 'off');\n");
             sb.Append("    }\n");
             sb.Append("    return { ok: true, refreshed: true, state: liveState };\n");
             sb.Append("  })()");
@@ -2419,7 +2426,7 @@ namespace AgyClaudeStyle
             sb.Append("    }\n");
             sb.Append("    const effectiveCfg = getLiveCfg() || bootCfg;\n");
             sb.Append("    const existing = window.__agPrismInlineDiff || globalThis.__agPrismInlineDiff;\n");
-            sb.Append("    if (existing && existing.__prismCodeHash === targetHash && typeof existing.sync === 'function') {\n");
+            sb.Append("    if (existing && !existing.getDebugState?.()?.destroyed && existing.__prismCodeHash === targetHash && typeof existing.sync === 'function') {\n");
             sb.Append("      try { existing.sync(effectiveCfg); } catch {}\n");
             sb.Append("      return { ok: true, reused: true, codeHash: targetHash };\n");
             sb.Append("    }\n");

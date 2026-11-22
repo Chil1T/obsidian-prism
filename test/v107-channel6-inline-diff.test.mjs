@@ -197,7 +197,7 @@ function createDomSandbox() {
 
 test('Channel 6 inline-diff standalone compilation, idempotent mount, missing-file fail-closed, and full uninstall cleanup', () => {
   assert.equal(cdp.INLINE_DIFF_BINDING, '__agPrismInlineDiffCall');
-  assert.ok(cdp.SYNC_VENDOR_FILES.includes('vendor/inline-diff/inline-diff-client.js'));
+  assert.equal(cdp.SYNC_VENDOR_FILES, undefined, 'Dead SYNC_VENDOR_FILES export must remain removed');
 
   // 1) Compiles cleanly & mounts idempotently in a sandbox
   const expr = cdp.buildInlineDiffInjectExpression(cdp.DEFAULT_CONFIG);

@@ -291,32 +291,18 @@
     const ui = uiText(lang);
     const targetTitles = ['Appearance', '外观', '外觀', '外観'];
     let panel = null;
-    let matchedH2 = null;
     for (const h2 of doc.querySelectorAll('[role="dialog"] h2')) {
       if (targetTitles.includes((h2.textContent || '').trim())) {
         panel = h2.closest('div.p-6') || h2.parentElement?.parentElement;
-        if (panel) { matchedH2 = h2; break; }
+        if (panel) break;
       }
     }
     if (!panel) return;
     if (typeof syncChrome !== 'function') {
       const dlg = panel.closest?.('[role="dialog"]');
-      if (dlg) runGuardedMut(() => {
-        if (dlg.getAttribute?.('data-ag-cs-settings-dlg') !== '1') dlg.setAttribute?.('data-ag-cs-settings-dlg', '1');
-        let nav = null;
-        for (let c = panel; c && c !== dlg && !nav; c = c.parentElement) {
-          for (const k of c.parentElement?.children || []) {
-            if (k === c) break;
-            if ((k.querySelectorAll?.('button, [role="tab"]') || []).length >= 2) { nav = k; break; }
-          }
-        }
-        if (nav) {
-          if (nav.getAttribute?.('data-ag-cs-settings-nav') !== '1') nav.setAttribute?.('data-ag-cs-settings-nav', '1');
-          const ht = (matchedH2?.textContent || '').trim().toLowerCase(), bs = Array.from(nav.querySelectorAll?.('button, [role="tab"]') || []);
-          const act = bs.find((b) => (b.getAttribute?.('aria-current') && b.getAttribute('aria-current') !== 'false') || b.getAttribute?.('aria-selected') === 'true') || bs.find((b) => (b.textContent || '').trim().toLowerCase() === ht) || bs.find((b) => String(b.className || '').split(/\s+/).some((t) => /^(?:(?:dark|light):)?(?:bg-secondary|bg-sidebar-secondary)(?:\/\d+)?$/.test(t)));
-          for (const b of bs) b === act ? b.setAttribute?.('data-ag-cs-nav-active', '1') : b.removeAttribute?.('data-ag-cs-nav-active');
-        }
-      });
+      if (dlg && dlg.getAttribute?.('data-ag-cs-settings-dlg') !== '1') {
+        runGuardedMut(() => dlg.setAttribute?.('data-ag-cs-settings-dlg', '1'));
+      }
     }
 
     const effVal = (k, l) => {
@@ -397,6 +383,8 @@
         else ra(btn, 'data-pressed');
         const grp = btn.parentElement;
         if (grp && ga(grp, 'data-ui-kind') === 'switch') {
+          btn.tabIndex = act ? -1 : 0;
+          sa(btn, 'tabindex', act ? '-1' : '0');
           const swOn = isSwitchValOn(cur) ? '1' : '0';
           if (ga(grp, 'data-switch-on') !== swOn) sa(grp, 'data-switch-on', swOn);
         }
@@ -421,6 +409,7 @@
       for (const [dk, dim] of [
         ['placeholderStyle', effVal('composerRestyle', l) === false],
         ['sidebarCompact', effVal('sidebarRestyle', l) === false],
+        ['sidebarNavFold', effVal('sidebarRestyle', l) === false],
         ['thoughtTrigger', tmMode === 'off'],
         ['thoughtView', tmMode === 'off'],
         ['homeRipple', effVal('homeLayout', l) === 'off'],
@@ -733,6 +722,10 @@
               b.__agOn = act;
               sa(b, 'aria-pressed', act);
               if (act) sa(b, 'data-pressed');
+              if (isSwitch) {
+                b.tabIndex = act ? -1 : 0;
+                sa(b, 'tabindex', act ? '-1' : '0');
+              }
               on(b, 'click', (ev) => {
                 if (ev && typeof ev === 'object' && handledGroupClicks) handledGroupClicks.add(ev);
                 const prevBtn = Array.from(group.children).find((s) => s.tagName === 'BUTTON' && (ga(s, 'aria-pressed') === 'true' || s.hasAttribute('data-pressed')));
@@ -741,6 +734,7 @@
                 const needGlide = !isSwitch && !!(prevBtn && prevBtn !== b && typeof runSettingsGroupGlide === 'function');
                 const prevRect = needGlide ? rc(prevBtn) : null;
                 const nextRect = needGlide ? rc(b) : null;
+                let nextFocusBtn = null;
                 for (const sib of group.children) {
                   if (sib.tagName !== 'BUTTON') continue;
                   const isCur = sib === b;
@@ -748,8 +742,18 @@
                   sa(sib, 'aria-pressed', isCur);
                   if (isCur) sa(sib, 'data-pressed');
                   else ra(sib, 'data-pressed');
+                  if (isSwitch) {
+                    sib.tabIndex = isCur ? -1 : 0;
+                    sa(sib, 'tabindex', isCur ? '-1' : '0');
+                    if (!isCur) nextFocusBtn = sib;
+                  }
                 }
-                if (isSwitch) sa(group, 'data-switch-on', isSwitchValOn(val) ? '1' : '0');
+                if (isSwitch) {
+                  sa(group, 'data-switch-on', isSwitchValOn(val) ? '1' : '0');
+                  if (nextFocusBtn && (doc.activeElement === b || ev?.detail === 0)) {
+                    try { nextFocusBtn.focus?.(); } catch {}
+                  }
+                }
                 saveSetting(r.key, val);
                 if (r.key === 'thoughtTranslate') {
                   mountThoughtUiIfReady();

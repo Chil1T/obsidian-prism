@@ -40,6 +40,142 @@
     stopSquare: '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
   };
 
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const SVG_TAG_MAP = {
+    svg: 'svg',
+    g: 'g',
+    path: 'path',
+    circle: 'circle',
+    ellipse: 'ellipse',
+    rect: 'rect',
+    line: 'line',
+    polyline: 'polyline',
+    polygon: 'polygon',
+    defs: 'defs',
+    lineargradient: 'linearGradient',
+    radialgradient: 'radialGradient',
+    stop: 'stop',
+    clippath: 'clipPath',
+    mask: 'mask',
+    title: 'title',
+  };
+  const SVG_ATTR_MAP = {
+    viewbox: 'viewBox',
+    width: 'width',
+    height: 'height',
+    fill: 'fill',
+    'fill-rule': 'fill-rule',
+    'fill-opacity': 'fill-opacity',
+    'clip-rule': 'clip-rule',
+    'clip-path': 'clip-path',
+    stroke: 'stroke',
+    'stroke-width': 'stroke-width',
+    'stroke-linecap': 'stroke-linecap',
+    'stroke-linejoin': 'stroke-linejoin',
+    'stroke-miterlimit': 'stroke-miterlimit',
+    'stroke-dasharray': 'stroke-dasharray',
+    'stroke-dashoffset': 'stroke-dashoffset',
+    'stroke-opacity': 'stroke-opacity',
+    opacity: 'opacity',
+    d: 'd',
+    cx: 'cx',
+    cy: 'cy',
+    r: 'r',
+    rx: 'rx',
+    ry: 'ry',
+    x: 'x',
+    y: 'y',
+    x1: 'x1',
+    y1: 'y1',
+    x2: 'x2',
+    y2: 'y2',
+    points: 'points',
+    transform: 'transform',
+    class: 'class',
+    xmlns: 'xmlns',
+    'aria-hidden': 'aria-hidden',
+    focusable: 'focusable',
+    role: 'role',
+    offset: 'offset',
+    'stop-color': 'stop-color',
+    'stop-opacity': 'stop-opacity',
+    gradientunits: 'gradientUnits',
+    gradienttransform: 'gradientTransform',
+    id: 'id',
+    preserveaspectratio: 'preserveAspectRatio',
+    color: 'color',
+  };
+  const SVG_UNSAFE_VAL_RE = /(?:javascript|vbscript|data)\s*:|expression\s*\(/i;
+  const SVG_URL_RE = /url\s*\(([^)]*)\)/gi;
+
+  function isSafeSvgAttrValue(attrName, val) {
+    const v = String(val ?? '').trim();
+    if (!v || v.length > 4096) return false;
+    if (SVG_UNSAFE_VAL_RE.test(v)) return false;
+    if (/url\s*\(/i.test(v)) {
+      if (attrName !== 'clip-path' && attrName !== 'fill' && attrName !== 'stroke' && attrName !== 'mask') return false;
+      SVG_URL_RE.lastIndex = 0;
+      let m;
+      while ((m = SVG_URL_RE.exec(v)) !== null) {
+        const inner = m[1].trim().replace(/^['"]|['"]$/g, '');
+        if (!/^#[A-Za-z0-9_-]+$/.test(inner)) return false;
+      }
+    }
+    return true;
+  }
+
+  function cloneCleanSvgNode(srcNode, outDoc) {
+    if (!srcNode || srcNode.nodeType !== 1) return null;
+    const canonTag = SVG_TAG_MAP[String(srcNode.localName || srcNode.tagName || '').toLowerCase()];
+    if (!canonTag) return null;
+    const cleanEl = outDoc.createElementNS(SVG_NS, canonTag);
+    for (const attr of Array.from(srcNode.attributes || [])) {
+      const low = String(attr.name || '').toLowerCase();
+      if (!low || low.startsWith('on') || low === 'style' || low === 'href' || low === 'xlink:href' || low === 'src') continue;
+      const canonAttr = SVG_ATTR_MAP[low];
+      if (!canonAttr) continue;
+      if (!isSafeSvgAttrValue(canonAttr, attr.value)) continue;
+      cleanEl.setAttribute(canonAttr, attr.value);
+    }
+    if (canonTag === 'title') {
+      const txt = String(srcNode.textContent || '').trim();
+      if (txt) cleanEl.textContent = txt.slice(0, 120);
+      return cleanEl;
+    }
+    for (const child of Array.from(srcNode.children || [])) {
+      const sub = cloneCleanSvgNode(child, outDoc);
+      if (sub) cleanEl.appendChild(sub);
+    }
+    return cleanEl;
+  }
+
+  function parseCleanSvgElement(rawSvg, targetDoc) {
+    if (typeof rawSvg !== 'string' || !rawSvg.trim() || rawSvg.length > 65536) return null;
+    if (typeof DOMParser !== 'function') return null;
+    try {
+      const parsed = new DOMParser().parseFromString(rawSvg, 'image/svg+xml');
+      if (!parsed || parsed.querySelector('parsererror')) return null;
+      const rootEl = parsed.documentElement;
+      if (!rootEl || String(rootEl.localName || rootEl.tagName || '').toLowerCase() !== 'svg') return null;
+      return cloneCleanSvgNode(rootEl, targetDoc || document);
+    } catch {
+      return null;
+    }
+  }
+
+  function sanitizeSvgMarkup(rawSvg) {
+    const cleanEl = parseCleanSvgElement(rawSvg, document);
+    if (!cleanEl) return '';
+    try {
+      if (typeof XMLSerializer === 'function') {
+        return new XMLSerializer().serializeToString(cleanEl);
+      }
+      return cleanEl.outerHTML || '';
+    } catch {
+      return '';
+    }
+  }
+
   let hostSvgIcons = { ...FALLBACK_SVG };
 
   function iconHtml(name) {
@@ -49,7 +185,10 @@
   function hydrateStaticHostIcons() {
     document.querySelectorAll('[data-host-icon]').forEach((el) => {
       const key = el.getAttribute('data-host-icon');
-      if (key) el.innerHTML = iconHtml(key);
+      if (!key) return;
+      const cleanEl = parseCleanSvgElement(iconHtml(key), document);
+      if (cleanEl) el.replaceChildren(cleanEl);
+      else el.replaceChildren();
     });
   }
 
@@ -325,7 +464,8 @@
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function getActiveConv() {
@@ -1257,7 +1397,7 @@
         syncComposerPopovers();
         return;
       }
-      if (ev.key === 'Enter' && !ev.shiftKey) {
+      if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && ev.keyCode !== 229) {
         if (sim.slashMenuOpen) {
           ev.preventDefault();
           const chosen = SLASH_COMMANDS[sim.slashActiveIdx] || SLASH_COMMANDS[0];
@@ -1638,7 +1778,13 @@
       if (resp.ok) {
         const bp = await resp.json();
         if (bp && bp.parts && bp.parts.svgIcons && Object.keys(bp.parts.svgIcons).length > 0) {
-          hostSvgIcons = { ...FALLBACK_SVG, ...bp.parts.svgIcons };
+          const cleanIcons = { ...FALLBACK_SVG };
+          for (const [k, raw] of Object.entries(bp.parts.svgIcons)) {
+            if (typeof k !== 'string' || !k || k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+            const cleaned = sanitizeSvgMarkup(raw);
+            if (cleaned) cleanIcons[k] = cleaned;
+          }
+          hostSvgIcons = cleanIcons;
           sim.mirrorLive = !bp.meta?.fallback;
         }
       }

@@ -40,7 +40,14 @@ export { OmniServer, OMNI_BINDING };
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function execGit(args, cwd, timeoutMs = 12000, extraConfigs = []) {
-  const cfgFlags = ['-c', 'protocol.ext.allow=never', '-c', 'submodule.recurse=false'];
+  const cfgFlags = [
+    '-c',
+    'protocol.ext.allow=never',
+    '-c',
+    'submodule.recurse=false',
+    '-c',
+    'core.fsmonitor=false',
+  ];
   for (const flag of extraConfigs) cfgFlags.push(flag);
   return new Promise((resolve, reject) => {
     execFile(
@@ -383,6 +390,13 @@ const INLINE_DIFF_SENSITIVE_BASENAMES = new Set([
   'model-hub.config.json',
   'secrets.json',
   'credentials.json',
+  'auth.json',
+  'token.json',
+  'mcp_config.json',
+  'transcript.jsonl',
+  'transcript_full.jsonl',
+  'state.vscdb',
+  '.claude.json',
   'keys.txt',
   '.npmrc',
   '.pypirc',
@@ -408,6 +422,10 @@ const INLINE_DIFF_SENSITIVE_EXTS = new Set([
   '.keystore',
   '.ppk',
   '.ovpn',
+  '.vscdb',
+  '.sqlite',
+  '.sqlite3',
+  '.db',
 ]);
 
 const INLINE_DIFF_SENSITIVE_DIRS = new Set([
@@ -415,6 +433,10 @@ const INLINE_DIFF_SENSITIVE_DIRS = new Set([
   '.aws',
   '.gnupg',
   '.kube',
+  '.gemini',
+  '.azure',
+  '.claude',
+  '.codex',
 ]);
 
 const INLINE_DIFF_SENSITIVE_SSH_KEYS = new Set([
@@ -422,7 +444,15 @@ const INLINE_DIFF_SENSITIVE_SSH_KEYS = new Set([
   'id_ed25519',
   'id_ecdsa',
   'id_dsa',
+  'id_ed25519_sk',
+  'id_ecdsa_sk',
 ]);
+
+const INLINE_DIFF_SENSITIVE_SYS_PREFIX_RE =
+  /^(?:\/(?:proc|sys|dev|etc)(?:\/|$)|(?:[a-z]:)?\/(?:windows|program files(?: \(x86\))?|programdata)(?:\/|$))/;
+
+const INLINE_DIFF_SENSITIVE_SUBPATH_RE =
+  /(?:^|\/)(?:\.config\/(?:gcloud|gh)|appdata\/roaming|appdata\/local\/google|library\/application support\/google|library\/keychains)(?:\/|$)/;
 
 const INLINE_DIFF_SENSITIVE_SYS_SUFFIXES = [
   '/etc/shadow',
@@ -480,6 +510,7 @@ function isSensitiveInlineDiffPath(filePath) {
   for (const b of basesToCheck) {
     // 拦截 .env* 及隐私配置与凭据文件
     if (b.startsWith('.env')) return true;
+    if (b.endsWith('_history')) return true;
     if (b.startsWith('obsidian-prism-thought') && (b.endsWith('.json') || b.endsWith('.json.tmp'))) {
       return true;
     }
@@ -488,6 +519,15 @@ function isSensitiveInlineDiffPath(filePath) {
     const ext = path.posix.extname(b);
     if (ext && INLINE_DIFF_SENSITIVE_EXTS.has(ext)) return true;
   }
+  const cleanLower = lower.replace(/[. ]+$/, '');
+  if (
+    INLINE_DIFF_SENSITIVE_SYS_PREFIX_RE.test(lower) ||
+    INLINE_DIFF_SENSITIVE_SYS_PREFIX_RE.test(cleanLower) ||
+    INLINE_DIFF_SENSITIVE_SUBPATH_RE.test(lower) ||
+    INLINE_DIFF_SENSITIVE_SUBPATH_RE.test(cleanLower)
+  ) {
+    return true;
+  }
   const segs = lower.split('/').filter(Boolean);
   for (let i = 0; i < segs.length; i += 1) {
     const seg = segs[i];
@@ -495,7 +535,6 @@ function isSensitiveInlineDiffPath(filePath) {
     if (i < segs.length - 1 && seg === '.git') return true;
     if (seg === 'thought-translator' && basesToCheck.some((b) => b.endsWith('.json'))) return true;
   }
-  const cleanLower = lower.replace(/[. ]+$/, '');
   for (const suffix of INLINE_DIFF_SENSITIVE_SYS_SUFFIXES) {
     if (lower === suffix || lower.endsWith(suffix) || cleanLower === suffix || cleanLower.endsWith(suffix)) {
       return true;
@@ -610,17 +649,16 @@ function resolveInlineDiffCandidatePath(rawUri) {
   return { ok: true, candidatePath };
 }
 
-function resolveSafeGitCwd(cwd) {
-  if (cwd == null) {
-    return os.tmpdir();
-  }
-  if (typeof cwd !== 'string' || !cwd || cwd.includes('\0') || hasBlockedInlineDiffUnc(cwd)) {
+function resolveSafeGitCwd() {
+  const tmp = os.tmpdir();
+  if (typeof tmp !== 'string' || !tmp || tmp.includes('\0') || hasBlockedInlineDiffUnc(tmp)) {
     return null;
   }
   try {
-    const st = fs.lstatSync(cwd);
-    if (st.isSymbolicLink() || !st.isDirectory()) return null;
-    return cwd;
+    const realTmp = canonicalRealpathSync(tmp);
+    const st = fs.lstatSync(realTmp);
+    if (st.isSymbolicLink() || !st.isDirectory() || hasBlockedInlineDiffUnc(realTmp)) return null;
+    return realTmp;
   } catch {
     return null;
   }
@@ -628,13 +666,15 @@ function resolveSafeGitCwd(cwd) {
 
 function execGitInlineDiff(
   args,
-  { cwd = null, timeoutMs = INLINE_DIFF_REV_PARSE_TIMEOUT_MS, maxBuffer = INLINE_DIFF_GIT_MAX_BUFFER } = {}
+  { timeoutMs = INLINE_DIFF_REV_PARSE_TIMEOUT_MS, maxBuffer = INLINE_DIFF_GIT_MAX_BUFFER } = {}
 ) {
-  const safeCwd = resolveSafeGitCwd(cwd);
+  const safeCwd = resolveSafeGitCwd();
   if (!safeCwd) {
     return Promise.resolve({ ok: false, code: 'INVALID_CWD', stdout: '' });
   }
   const fullArgs = [
+    '--no-optional-locks',
+    '--literal-pathspecs',
     '-c',
     'protocol.ext.allow=never',
     '-c',
@@ -643,6 +683,8 @@ function execGitInlineDiff(
     'core.fsmonitor=false',
     '-c',
     'core.pager=cat',
+    '-c',
+    'diff.external=',
     ...args,
   ];
   return new Promise((resolve) => {
@@ -655,7 +697,13 @@ function execGitInlineDiff(
         windowsHide: true,
         timeout: timeoutMs,
         maxBuffer,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+        env: {
+          ...process.env,
+          GIT_TERMINAL_PROMPT: '0',
+          GIT_LITERAL_PATHSPECS: '1',
+          GIT_OPTIONAL_LOCKS: '0',
+          NoDefaultCurrentDirectoryInExePath: '1',
+        },
       },
       (err, stdout) => {
         resolve({
@@ -666,6 +714,125 @@ function execGitInlineDiff(
       }
     );
   });
+}
+
+function unescapeGitQuotedPath(rawToken) {
+  if (typeof rawToken !== 'string') return '';
+  let s = rawToken.trim();
+  if (!s) return '';
+  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+    s = s.slice(1, -1);
+    const bytes = [];
+    for (let i = 0; i < s.length; i += 1) {
+      const ch = s[i];
+      if (ch === '\\' && i + 1 < s.length) {
+        const next = s[i + 1];
+        if (next >= '0' && next <= '7') {
+          let oct = next;
+          if (i + 2 < s.length && s[i + 2] >= '0' && s[i + 2] <= '7') {
+            oct += s[i + 2];
+            if (i + 3 < s.length && s[i + 3] >= '0' && s[i + 3] <= '7') {
+              oct += s[i + 3];
+            }
+          }
+          bytes.push(parseInt(oct, 8) & 0xff);
+          i += oct.length;
+          continue;
+        }
+        const escMap = { n: 0x0a, r: 0x0d, t: 0x09, b: 0x08, f: 0x0c, a: 0x07, v: 0x0b, '"': 0x22, '\\': 0x5c };
+        if (Object.prototype.hasOwnProperty.call(escMap, next)) {
+          bytes.push(escMap[next]);
+        } else {
+          const encoded = Buffer.from(next, 'utf8');
+          for (const b of encoded) bytes.push(b);
+        }
+        i += 1;
+      } else {
+        const encoded = Buffer.from(ch, 'utf8');
+        for (const b of encoded) bytes.push(b);
+      }
+    }
+    return Buffer.from(bytes).toString('utf8');
+  }
+  return s;
+}
+
+function stripGitDiffPrefix(p) {
+  const s = unescapeGitQuotedPath(p);
+  if (!s || s === '/dev/null') return '';
+  return s.replace(/^(?:a|b|i|w|c|o|1|2)\//, '');
+}
+
+function parseDiffGitHeaderPaths(line) {
+  const rest = line.slice('diff --git '.length).trim();
+  if (!rest) return null;
+  const candidates = [];
+  // 解析 C-style 引号或空白分隔的 2 个 token
+  const tokens = [];
+  let idx = 0;
+  while (idx < rest.length && tokens.length < 3) {
+    while (idx < rest.length && rest[idx] === ' ') idx += 1;
+    if (idx >= rest.length) break;
+    if (rest[idx] === '"') {
+      let end = idx + 1;
+      while (end < rest.length) {
+        if (rest[end] === '\\' && end + 1 < rest.length) {
+          end += 2;
+          continue;
+        }
+        if (rest[end] === '"') {
+          end += 1;
+          break;
+        }
+        end += 1;
+      }
+      tokens.push(rest.slice(idx, end));
+      idx = end;
+    } else {
+      let end = idx;
+      while (end < rest.length && rest[end] !== ' ') end += 1;
+      tokens.push(rest.slice(idx, end));
+      idx = end;
+    }
+  }
+  if (tokens.length === 2 && idx >= rest.length) {
+    const p1 = stripGitDiffPrefix(tokens[0]);
+    const p2 = stripGitDiffPrefix(tokens[1]);
+    if (p1) candidates.push(p1);
+    if (p2) candidates.push(p2);
+  }
+  // 兜底：无引号且文件名含空格时枚举所有 " b/" 切分点，宁严勿漏
+  let splitPos = rest.indexOf(' b/');
+  while (splitPos !== -1) {
+    const left = stripGitDiffPrefix(rest.slice(0, splitPos));
+    const right = stripGitDiffPrefix(rest.slice(splitPos + 1));
+    if (left) candidates.push(left);
+    if (right) candidates.push(right);
+    splitPos = rest.indexOf(' b/', splitPos + 3);
+  }
+  return candidates.length > 0 ? candidates : null;
+}
+
+function isBlockedDiffHeaderPath(relPath) {
+  if (typeof relPath !== 'string' || !relPath) return true;
+  if (/[\x00-\x1f\x7f]/.test(relPath)) return true;
+  if (hasBlockedInlineDiffUnc(relPath) || hasDotDotPathSegment(relPath)) return true;
+  if (isSensitiveInlineDiffPath(relPath)) return true;
+  return false;
+}
+
+function makeBlockedDiffParseResult() {
+  return {
+    ok: false,
+    reason: 'blocked',
+    blocked: true,
+    isBinary: false,
+    additions: 0,
+    deletions: 0,
+    truncated: false,
+    focusedByHint: false,
+    lines: [],
+  };
 }
 
 function parseInlineUnifiedDiff(rawDiff, { maxLines = INLINE_DIFF_MAX_DIFF_LINES, maxLineChars = INLINE_DIFF_MAX_LINE_CHARS, hints = null } = {}) {
@@ -680,13 +847,60 @@ function parseInlineUnifiedDiff(rawDiff, { maxLines = INLINE_DIFF_MAX_DIFF_LINES
   let deletions = 0;
   let isBinary = false;
   let inHunk = false;
+  let seenDiffHeaders = 0;
   let oldLn = 1;
   let newLn = 1;
 
   for (let i = 0; i < rawLines.length; i += 1) {
     const line = rawLines[i];
+    if (line.startsWith('diff --git ')) {
+      // 强制单文件输出：遇到第二个 diff --git 立即截断停止，防 glob/pathspec 多文件泄露
+      if (seenDiffHeaders >= 1) {
+        break;
+      }
+      seenDiffHeaders += 1;
+      inHunk = false;
+      curHunk = null;
+      const headerPaths = parseDiffGitHeaderPaths(line);
+      if (!headerPaths || headerPaths.some((p) => isBlockedDiffHeaderPath(p))) {
+        return makeBlockedDiffParseResult();
+      }
+      continue;
+    }
     if (!inHunk) {
+      if (seenDiffHeaders >= 1 || /^(?:---|\+\+\+)\s+"?(?:a|b)\//.test(line)) {
+        if (line.startsWith('--- ') || line.startsWith('+++ ')) {
+          const rawHeaderPath = line.slice(4).split('\t', 1)[0].trim();
+          if (rawHeaderPath && rawHeaderPath !== '/dev/null') {
+            const p = stripGitDiffPrefix(rawHeaderPath);
+            if (!p || isBlockedDiffHeaderPath(p)) {
+              return makeBlockedDiffParseResult();
+            }
+          }
+          continue;
+        }
+        if (seenDiffHeaders >= 1) {
+          const metaPrefix = /^(?:rename from |rename to |copy from |copy to )/.exec(line);
+          if (metaPrefix) {
+            const p = unescapeGitQuotedPath(line.slice(metaPrefix[0].length));
+            if (!p || isBlockedDiffHeaderPath(p)) {
+              return makeBlockedDiffParseResult();
+            }
+            continue;
+          }
+        }
+      }
       if ((line.startsWith('Binary files ') && line.endsWith(' differ')) || line === 'GIT binary patch') {
+        if (line.startsWith('Binary files ')) {
+          const bm = /^Binary files (.+) and (.+) differ$/.exec(line);
+          if (bm) {
+            const p1 = stripGitDiffPrefix(bm[1]);
+            const p2 = stripGitDiffPrefix(bm[2]);
+            if ((p1 && isBlockedDiffHeaderPath(p1)) || (p2 && isBlockedDiffHeaderPath(p2))) {
+              return makeBlockedDiffParseResult();
+            }
+          }
+        }
         isBinary = true;
         break;
       }
@@ -705,11 +919,6 @@ function parseInlineUnifiedDiff(rawDiff, { maxLines = INLINE_DIFF_MAX_DIFF_LINES
       continue;
     }
 
-    if (line.startsWith('diff --git ')) {
-      inHunk = false;
-      curHunk = null;
-      continue;
-    }
     const hm = /^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/.exec(line);
     if (hm) {
       oldLn = Number(hm[1]);
@@ -755,7 +964,7 @@ function parseInlineUnifiedDiff(rawDiff, { maxLines = INLINE_DIFF_MAX_DIFF_LINES
   }
 
   if (isBinary) {
-    return { isBinary: true, additions: 0, deletions: 0, truncated: false, focusedByHint: false, lines: [] };
+    return { blocked: false, isBinary: true, additions: 0, deletions: 0, truncated: false, focusedByHint: false, lines: [] };
   }
 
   let totalRowCount = 0;
@@ -773,7 +982,7 @@ function parseInlineUnifiedDiff(rawDiff, { maxLines = INLINE_DIFF_MAX_DIFF_LINES
         lines.push(rows[j]);
       }
     }
-    return { isBinary: false, additions, deletions, truncated: totalRowCount > maxLines, focusedByHint: false, lines };
+    return { blocked: false, isBinary: false, additions, deletions, truncated: totalRowCount > maxLines, focusedByHint: false, lines };
   }
 
   // Hint-Aware Hunk Windowing：当步骤徽章带 -N 删除但文件很大时，优先挑选含红色删除/替换的变更块，避免被文件头部纯绿新增塞满切丢
@@ -814,6 +1023,7 @@ function parseInlineUnifiedDiff(rawDiff, { maxLines = INLINE_DIFF_MAX_DIFF_LINES
   }
   const skippedLeading = picked.length > 0 && picked[0].idx > 0;
   return {
+    blocked: false,
     isBinary: false,
     additions,
     deletions,
@@ -837,44 +1047,229 @@ function canonicalRealpathSync(targetPath) {
 }
 
 const INLINE_DIFF_CACHE_MAX = 48;
+const INLINE_DIFF_MAX_CONCURRENCY = 3;
+const INLINE_DIFF_MAX_QUEUE = 16;
+const INLINE_DIFF_MAX_GIT_CONFIG_BYTES = 64 * 1024;
+const INLINE_DIFF_UNSAFE_GIT_CONFIG_FILTER_RE = /(^|\r?\n)\s*\[filter\s+/i;
+const INLINE_DIFF_UNSAFE_GIT_CONFIG_FSMONITOR_RE = /\bfsmonitor\s*=/i;
+
 const inlineDiffLruCache = new Map();
+const inlineDiffInFlight = new Map();
+let inlineDiffActiveCount = 0;
+const inlineDiffWaitQueue = [];
+
+function normalizeComparablePath(p) {
+  let norm = path.normalize(String(p || ''));
+  if (norm.length > 1 && (norm.endsWith(path.sep) || norm.endsWith('/'))) {
+    norm = norm.slice(0, -1);
+  }
+  return process.platform === 'win32' ? norm.toLowerCase() : norm;
+}
+
+function isSameCanonicalPath(candidatePath, realPath, allowDarwinSystemRootAlias = false) {
+  const a = normalizeComparablePath(candidatePath);
+  const b = normalizeComparablePath(realPath);
+  if (a === b) return true;
+  if (allowDarwinSystemRootAlias && process.platform === 'darwin') {
+    if ((a.startsWith('/var/') && `/private${a}` === b) || (a.startsWith('/tmp/') && `/private${a}` === b)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function readSmallNoFollowFileSync(filePath, maxBytes) {
+  let fd = null;
+  try {
+    const openFlags =
+      process.platform !== 'win32' && typeof fs.constants?.O_NOFOLLOW === 'number'
+        ? fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
+        : 'r';
+    fd = fs.openSync(filePath, openFlags);
+    const fdStat = fs.fstatSync(fd);
+    if (!fdStat.isFile() || fdStat.size > maxBytes) return null;
+    const postStat = fs.lstatSync(filePath);
+    if (postStat.isSymbolicLink() || !postStat.isFile()) return null;
+    if (process.platform !== 'win32' && (fdStat.ino !== postStat.ino || fdStat.dev !== postStat.dev)) {
+      return null;
+    }
+    const buf = Buffer.alloc(fdStat.size);
+    let offset = 0;
+    while (offset < fdStat.size) {
+      const n = fs.readSync(fd, buf, offset, fdStat.size - offset, offset);
+      if (n <= 0) break;
+      offset += n;
+    }
+    return buf.subarray(0, offset).toString('utf8');
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
+}
+
+function resolveValidatedCommonGitDir(realGitDir) {
+  const commonPtrPath = path.join(realGitDir, 'commondir');
+  let st;
+  try {
+    st = fs.lstatSync(commonPtrPath);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return realGitDir;
+    return null;
+  }
+  if (st.isSymbolicLink() || !st.isFile() || st.size <= 0 || st.size > INLINE_DIFF_MAX_GIT_POINTER_BYTES) {
+    return null;
+  }
+  const rawCommon = readSmallNoFollowFileSync(commonPtrPath, INLINE_DIFF_MAX_GIT_POINTER_BYTES);
+  if (typeof rawCommon !== 'string') return null;
+  const trimmed = rawCommon.trim();
+  if (!trimmed || /[\x00-\x1f\x7f]/.test(trimmed) || hasBlockedInlineDiffUnc(trimmed)) return null;
+  const commonPath = path.resolve(realGitDir, trimmed);
+  if (hasBlockedInlineDiffUnc(commonPath)) return null;
+  try {
+    const cst = fs.lstatSync(commonPath);
+    if (cst.isSymbolicLink() || !cst.isDirectory()) return null;
+    const realCommon = canonicalRealpathSync(commonPath);
+    if (hasBlockedInlineDiffUnc(realCommon)) return null;
+    const rcst = fs.lstatSync(realCommon);
+    if (rcst.isSymbolicLink() || !rcst.isDirectory()) return null;
+    if (!isSameCanonicalPath(commonPath, realCommon, path.isAbsolute(trimmed))) return null;
+    return realCommon;
+  } catch {
+    return null;
+  }
+}
+
+function readGitIndexMtimeSafe(realGitDir) {
+  const idxPath = path.join(realGitDir, 'index');
+  try {
+    const idxSt = fs.lstatSync(idxPath);
+    if (idxSt.isSymbolicLink() || !idxSt.isFile()) return null;
+    return idxSt.mtimeMs || 0;
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return 0;
+    return null;
+  }
+}
 
 function findGitRootFast(startDir) {
   let cur = startDir;
   for (let depth = 0; depth < 24 && cur; depth += 1) {
     const gitMarker = path.join(cur, '.git');
+    let gst;
     try {
-      const gst = fs.lstatSync(gitMarker);
-      if (gst.isSymbolicLink()) {
-        // 拒绝符号链接 .git 指向不可信目录
-      } else if (gst.isDirectory() || gst.isFile()) {
-        let indexMtimeMs = 0;
-        try {
-          if (gst.isDirectory()) {
-            indexMtimeMs = fs.statSync(path.join(gitMarker, 'index')).mtimeMs || 0;
-          } else if (gst.size > 0 && gst.size <= INLINE_DIFF_MAX_GIT_POINTER_BYTES) {
-            const gitPtr = fs.readFileSync(gitMarker, 'utf8').trim();
-            const m = /^gitdir:\s*(.+)$/i.exec(gitPtr);
-            if (m && m[1]) {
-              const rawPtr = m[1].trim();
-              const gitDirPath = path.resolve(cur, rawPtr);
-              if (!hasBlockedInlineDiffUnc(rawPtr) && !hasBlockedInlineDiffUnc(gitDirPath)) {
-                const idxSt = fs.lstatSync(path.join(gitDirPath, 'index'));
-                if (!idxSt.isSymbolicLink() && idxSt.isFile()) {
-                  indexMtimeMs = idxSt.mtimeMs || 0;
-                }
-              }
-            }
-          }
-        } catch {}
-        return { root: cur, indexMtimeMs };
+      gst = fs.lstatSync(gitMarker);
+    } catch (err) {
+      if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
+        const parent = path.dirname(cur);
+        if (!parent || parent === cur) break;
+        cur = parent;
+        continue;
       }
-    } catch {}
-    const parent = path.dirname(cur);
-    if (!parent || parent === cur) break;
-    cur = parent;
+      return null;
+    }
+
+    // 严格 Fail-Closed：.git 为符号链接或非常规文件/目录时一律立即拒绝
+    if (gst.isSymbolicLink()) {
+      return null;
+    }
+
+    let realCur;
+    try {
+      realCur = canonicalRealpathSync(cur);
+    } catch {
+      return null;
+    }
+    if (hasBlockedInlineDiffUnc(realCur)) return null;
+
+    if (gst.isDirectory()) {
+      let realGitDir;
+      try {
+        realGitDir = canonicalRealpathSync(gitMarker);
+        const rgst = fs.lstatSync(realGitDir);
+        if (rgst.isSymbolicLink() || !rgst.isDirectory()) return null;
+      } catch {
+        return null;
+      }
+      if (hasBlockedInlineDiffUnc(realGitDir)) return null;
+      if (!isSameCanonicalPath(path.join(realCur, '.git'), realGitDir, false)) return null;
+      const commonGitDir = resolveValidatedCommonGitDir(realGitDir);
+      if (!commonGitDir) return null;
+      const indexMtimeMs = readGitIndexMtimeSafe(realGitDir);
+      if (indexMtimeMs === null) return null;
+      return { root: realCur, gitDir: realGitDir, commonGitDir, indexMtimeMs };
+    }
+
+    if (gst.isFile()) {
+      // gitfile 指针严格 Fail-Closed：超 4KB、非合法 gitdir:、UNC、含符号链接或 realpath 失败均立即 return null
+      if (gst.size <= 0 || gst.size > INLINE_DIFF_MAX_GIT_POINTER_BYTES) {
+        return null;
+      }
+      const gitPtrRaw = readSmallNoFollowFileSync(gitMarker, INLINE_DIFF_MAX_GIT_POINTER_BYTES);
+      if (typeof gitPtrRaw !== 'string') return null;
+      const gitPtr = gitPtrRaw.trim();
+      const m = /^gitdir:\s*([^\r\n]+)$/i.exec(gitPtr);
+      if (!m || !m[1]) return null;
+      const rawPtr = m[1].trim();
+      if (!rawPtr || /[\x00-\x1f\x7f]/.test(rawPtr) || hasBlockedInlineDiffUnc(rawPtr)) {
+        return null;
+      }
+      const gitDirPath = path.resolve(realCur, rawPtr);
+      if (hasBlockedInlineDiffUnc(gitDirPath)) return null;
+      let realGitDir;
+      try {
+        const gdLstat = fs.lstatSync(gitDirPath);
+        if (gdLstat.isSymbolicLink() || !gdLstat.isDirectory()) return null;
+        realGitDir = canonicalRealpathSync(gitDirPath);
+        if (hasBlockedInlineDiffUnc(realGitDir)) return null;
+        const rgst = fs.lstatSync(realGitDir);
+        if (rgst.isSymbolicLink() || !rgst.isDirectory()) return null;
+      } catch {
+        return null;
+      }
+      if (!isSameCanonicalPath(gitDirPath, realGitDir, path.isAbsolute(rawPtr))) {
+        return null;
+      }
+      const commonGitDir = resolveValidatedCommonGitDir(realGitDir);
+      if (!commonGitDir) return null;
+      const indexMtimeMs = readGitIndexMtimeSafe(realGitDir);
+      if (indexMtimeMs === null) return null;
+      return { root: realCur, gitDir: realGitDir, commonGitDir, indexMtimeMs };
+    }
+
+    return null;
   }
   return null;
+}
+
+function hasUnsafeGitConfig(gitDir, commonGitDir = null) {
+  const dirs = [];
+  if (gitDir) dirs.push(gitDir);
+  if (commonGitDir && commonGitDir !== gitDir) dirs.push(commonGitDir);
+  for (const dir of dirs) {
+    const cfgPath = path.join(dir, 'config');
+    let st;
+    try {
+      st = fs.lstatSync(cfgPath);
+    } catch (err) {
+      if (err && err.code === 'ENOENT') continue;
+      return true;
+    }
+    if (st.isSymbolicLink() || !st.isFile() || st.size > INLINE_DIFF_MAX_GIT_CONFIG_BYTES) {
+      return true;
+    }
+    const content = readSmallNoFollowFileSync(cfgPath, INLINE_DIFF_MAX_GIT_CONFIG_BYTES);
+    if (typeof content !== 'string') return true;
+    if (
+      INLINE_DIFF_UNSAFE_GIT_CONFIG_FILTER_RE.test(content) ||
+      INLINE_DIFF_UNSAFE_GIT_CONFIG_FSMONITOR_RE.test(content)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function getInlineDiffCached(cacheKey) {
@@ -896,7 +1291,103 @@ function setInlineDiffCached(cacheKey, value) {
   return value;
 }
 
-// 受限只读行内 Diff 读取器：严防 UNC/NT 设备路径/路径穿越/符号链接逃逸/敏感凭据读取与 Shell 注入
+async function runWithInlineDiffSemaphore(taskFn) {
+  if (inlineDiffActiveCount >= INLINE_DIFF_MAX_CONCURRENCY) {
+    if (inlineDiffWaitQueue.length >= INLINE_DIFF_MAX_QUEUE) {
+      return { ok: false, reason: 'busy', error: 'busy' };
+    }
+    await new Promise((resolve) => {
+      inlineDiffWaitQueue.push(resolve);
+    });
+  } else {
+    inlineDiffActiveCount += 1;
+  }
+  try {
+    return await taskFn();
+  } finally {
+    const next = inlineDiffWaitQueue.shift();
+    if (typeof next === 'function') {
+      next();
+    } else {
+      inlineDiffActiveCount = Math.max(0, inlineDiffActiveCount - 1);
+    }
+  }
+}
+
+function projectInlineDiffEntry(rawEntry, { maxDiffLines, maxSnapshotLines, maxLineChars, hintAdd, hintDel }) {
+  if (!rawEntry || !rawEntry.ok) {
+    return rawEntry || { ok: false, error: 'read_failed' };
+  }
+  if (rawEntry.kind === 'binary') {
+    return {
+      ok: true,
+      mode: 'binary',
+      fileName: rawEntry.fileName,
+      additions: 0,
+      deletions: 0,
+      truncated: false,
+      lines: [],
+    };
+  }
+  if (rawEntry.kind === 'git-diff') {
+    const parsed = parseInlineUnifiedDiff(rawEntry.rawDiff, {
+      maxLines: maxDiffLines,
+      maxLineChars,
+      hints: hintAdd > 0 || hintDel > 0 ? { additions: hintAdd, deletions: hintDel } : null,
+    });
+    if (parsed.ok === false || parsed.blocked) {
+      return { ok: false, reason: 'blocked', error: 'blocked' };
+    }
+    if (parsed.isBinary) {
+      return {
+        ok: true,
+        mode: 'binary',
+        fileName: rawEntry.fileName,
+        additions: 0,
+        deletions: 0,
+        truncated: false,
+        lines: [],
+      };
+    }
+    return {
+      ok: true,
+      mode: 'git-diff',
+      fileName: rawEntry.fileName,
+      additions: parsed.additions,
+      deletions: parsed.deletions,
+      truncated: parsed.truncated || Boolean(rawEntry.bufferTruncated),
+      focused: Boolean(parsed.focusedByHint),
+      lines: parsed.lines,
+    };
+  }
+  const textLines = rawEntry.rawText.length > 0 ? rawEntry.rawText.split('\n') : [];
+  if (!rawEntry.byteTruncated && textLines.length > 0 && textLines[textLines.length - 1] === '') {
+    textLines.pop();
+  }
+  const lineTruncated = textLines.length > maxSnapshotLines;
+  const capped = lineTruncated ? textLines.slice(0, maxSnapshotLines) : textLines;
+  const isNewFile = Boolean(rawEntry.isUntracked || (hintAdd > 0 && hintDel === 0));
+  const mode = isNewFile ? 'new-file' : 'snapshot';
+  const kind = isNewFile ? 'add' : 'ctx';
+  const sign = isNewFile ? '+' : ' ';
+  const lines = capped.map((line, idx) => ({
+    kind,
+    ln: String(idx + 1),
+    sign,
+    text: truncateInlineDiffLine(line, maxLineChars),
+  }));
+  return {
+    ok: true,
+    mode,
+    fileName: rawEntry.fileName,
+    additions: isNewFile ? lines.length : 0,
+    deletions: 0,
+    truncated: Boolean(rawEntry.byteTruncated || lineTruncated),
+    lines,
+  };
+}
+
+// 受限只读行内 Diff 读取器：严防 UNC/NT 设备路径/路径穿越/符号链接逃逸/敏感凭据读取、非 Git 越界读取与 Shell 注入
 export async function readSafeInlineDiff(rawUri, opts = {}) {
   const maxDiffLines = clampPositiveInt(opts?.maxDiffLines, INLINE_DIFF_MAX_DIFF_LINES, INLINE_DIFF_MAX_DIFF_LINES);
   const maxSnapshotLines = clampPositiveInt(
@@ -956,12 +1447,14 @@ export async function readSafeInlineDiff(rawUri, opts = {}) {
   const fileName = path.basename(realPath);
   const dir = path.dirname(realPath);
 
-  // 0.1ms 纯 Node 向上探测 .git 仓根（消除 ~200ms git rev-parse 冷启动开销）
+  // 0.1ms 纯 Node 向上探测 .git 仓根（严格 Fail-Closed，非 Git 仓库强制拒绝）
   let realRepoRoot = null;
+  let realGitDir = null;
+  let realCommonGitDir = null;
   let gitRelPath = '';
   let gitIndexMtimeMs = 0;
   const fastGit = findGitRootFast(dir);
-  if (fastGit && fastGit.root && !hasBlockedInlineDiffUnc(fastGit.root)) {
+  if (fastGit && fastGit.root && fastGit.gitDir && !hasBlockedInlineDiffUnc(fastGit.root)) {
     try {
       const candidateRoot = canonicalRealpathSync(fastGit.root);
       const rootStat = fs.lstatSync(candidateRoot);
@@ -975,6 +1468,8 @@ export async function readSafeInlineDiff(rawUri, opts = {}) {
         const relPosix = relNative.split(path.sep).join('/');
         if (relPosix && !relPosix.includes('\0') && !path.isAbsolute(relNative) && !hasDotDotPathSegment(relPosix)) {
           realRepoRoot = candidateRoot;
+          realGitDir = fastGit.gitDir;
+          realCommonGitDir = fastGit.commonGitDir || fastGit.gitDir;
           gitRelPath = relPosix;
           gitIndexMtimeMs = fastGit.indexMtimeMs || 0;
         }
@@ -982,167 +1477,155 @@ export async function readSafeInlineDiff(rawUri, opts = {}) {
     } catch {}
   }
 
-  const cacheKey = `${realPath}|${st.mtimeMs}|${st.size}|${gitIndexMtimeMs}|${hintAdd}:${hintDel}|${maxDiffLines}:${maxSnapshotLines}`;
+  if (!realRepoRoot || !gitRelPath || !realGitDir) {
+    return { ok: false, reason: 'outside_git_repo', error: 'outside_git_repo' };
+  }
+
+  // 调用 git 前扫描 <gitDir>/config（限 64 KiB），含 [filter 或 fsmonitor= 时跳过 git 子进程降级安全纯文件只读切片
+  const skipGitSubprocess = hasUnsafeGitConfig(realGitDir, realCommonGitDir);
+  const wantCommitFallback = hintDel > 0 ? 1 : 0;
+  // rawDiff 缓存键彻底解耦客户端可控整数 hints 与输出窗口行数，防变换 hints 穿透缓存触发 git log 风暴
+  const rawCacheKey = `${realPath}|${st.mtimeMs}|${st.size}|${gitIndexMtimeMs}|${skipGitSubprocess ? 1 : 0}|${wantCommitFallback}|${maxReadBytes}|${gitMaxBuffer}`;
+  const projectionOpts = { maxDiffLines, maxSnapshotLines, maxLineChars, hintAdd, hintDel };
+
   if (!opts?.noCache) {
-    const cached = getInlineDiffCached(cacheKey);
-    if (cached) return cached;
-  }
-
-  const finalize = (res) => (opts?.noCache ? res : setInlineDiffCached(cacheKey, res));
-
-  if (realRepoRoot && gitRelPath) {
-    // 单次 git diff HEAD 同时覆盖工作区未暂存与已暂存变更，直接砍半子进程冷启动时间
-    let diffRes = await execGitInlineDiff(
-      ['-C', realRepoRoot, 'diff', 'HEAD', '--no-color', '--no-ext-diff', '--no-textconv', '--unified=2', '--', gitRelPath],
-      { cwd: realRepoRoot, timeoutMs: diffTimeoutMs, maxBuffer: gitMaxBuffer }
-    );
-    let rawDiff = diffRes.ok || diffRes.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? diffRes.stdout : '';
-    let bufferTruncated = diffRes.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
-
-    // 兼容刚 git init 尚无 HEAD 的仓库：回退一次 --cached
-    if (!diffRes.ok && !rawDiff.trim()) {
-      diffRes = await execGitInlineDiff(
-        ['-C', realRepoRoot, 'diff', '--cached', '--no-color', '--no-ext-diff', '--no-textconv', '--unified=2', '--', gitRelPath],
-        { cwd: realRepoRoot, timeoutMs: diffTimeoutMs, maxBuffer: gitMaxBuffer }
-      );
-      rawDiff = diffRes.ok || diffRes.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? diffRes.stdout : '';
-      bufferTruncated = diffRes.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+    const cachedRaw = getInlineDiffCached(rawCacheKey);
+    if (cachedRaw) {
+      return projectInlineDiffEntry(cachedRaw, projectionOpts);
     }
-
-    // 若工作区已提交干净但徽章明确提示有删改（历史步骤），拉取该文件最近一次真实 commit diff
-    if (!rawDiff.trim() && (hintDel > 0 || (hintAdd > 0 && hintDel > 0))) {
-      const logRes = await execGitInlineDiff(
-        ['-C', realRepoRoot, 'log', '-n', '1', '-p', '--no-color', '--no-ext-diff', '--no-textconv', '--unified=2', '--', gitRelPath],
-        { cwd: realRepoRoot, timeoutMs: diffTimeoutMs, maxBuffer: gitMaxBuffer }
-      );
-      if (logRes.ok || logRes.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
-        rawDiff = logRes.stdout || '';
-        bufferTruncated = logRes.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
-      }
-    }
-
-    if (rawDiff.trim()) {
-      const parsed = parseInlineUnifiedDiff(rawDiff, {
-        maxLines: maxDiffLines,
-        maxLineChars,
-        hints: hintAdd > 0 || hintDel > 0 ? { additions: hintAdd, deletions: hintDel } : null,
-      });
-      if (parsed.isBinary) {
-        return finalize({
-          ok: true,
-          mode: 'binary',
-          fileName,
-          additions: 0,
-          deletions: 0,
-          truncated: false,
-          lines: [],
-        });
-      }
-      if (parsed.lines.length > 0) {
-        return finalize({
-          ok: true,
-          mode: 'git-diff',
-          fileName,
-          additions: parsed.additions,
-          deletions: parsed.deletions,
-          truncated: parsed.truncated || bufferTruncated,
-          focused: Boolean(parsed.focusedByHint),
-          lines: parsed.lines,
-        });
-      }
+    const existingInFlight = inlineDiffInFlight.get(rawCacheKey);
+    if (existingInFlight) {
+      const sharedRaw = await existingInFlight;
+      return projectInlineDiffEntry(sharedRaw, projectionOpts);
     }
   }
 
-  // 未命中 git diff 时执行有界只读切片（最多 24 KiB），防符号链接 TOCTOU 替换并区分未追踪/新建文件与普通快照
-  const buf = Buffer.alloc(maxReadBytes);
-  let bytesRead = 0;
-  let fileSize = st.size;
-  let fd = null;
-  try {
-    const openFlags =
-      process.platform !== 'win32' && typeof fs.constants?.O_NOFOLLOW === 'number'
-        ? fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
-        : 'r';
-    fd = fs.openSync(realPath, openFlags);
-    const fdStat = fs.fstatSync(fd);
-    if (!fdStat.isFile()) {
-      return { ok: false, error: 'not_a_file' };
-    }
-    const postStat = fs.lstatSync(realPath);
-    if (postStat.isSymbolicLink() || !postStat.isFile()) {
-      return { ok: false, error: 'not_a_file' };
-    }
-    if (process.platform !== 'win32' && (fdStat.ino !== postStat.ino || fdStat.dev !== postStat.dev)) {
-      return { ok: false, error: 'read_failed' };
-    }
-    fileSize = fdStat.size;
-    bytesRead = fs.readSync(fd, buf, 0, maxReadBytes, 0);
-  } catch (err) {
-    const code = err?.code;
-    if (code === 'ELOOP') return { ok: false, error: 'not_a_file' };
-    if (code === 'EACCES' || code === 'EPERM') return { ok: false, error: 'access_denied' };
-    return { ok: false, error: 'read_failed' };
-  } finally {
-    if (fd !== null) {
-      try { fs.closeSync(fd); } catch {}
-    }
-  }
+  const fetchRaw = () =>
+    runWithInlineDiffSemaphore(async () => {
+      if (!skipGitSubprocess) {
+        // 单次 git diff HEAD 同时覆盖工作区未暂存与已暂存变更，直接砍半子进程冷启动时间
+        let diffRes = await execGitInlineDiff(
+          ['-C', realRepoRoot, 'diff', 'HEAD', '--no-color', '--no-ext-diff', '--no-textconv', '--unified=2', '--', gitRelPath],
+          { timeoutMs: diffTimeoutMs, maxBuffer: gitMaxBuffer }
+        );
+        let rawDiff = diffRes.ok || diffRes.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? diffRes.stdout : '';
+        let bufferTruncated = diffRes.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
 
-  const slice = buf.subarray(0, bytesRead);
-  if (slice.includes(0)) {
-    return finalize({
-      ok: true,
-      mode: 'binary',
-      fileName,
-      additions: 0,
-      deletions: 0,
-      truncated: false,
-      lines: [],
+        // 兼容刚 git init 尚无 HEAD 的仓库：回退一次 --cached
+        if (!diffRes.ok && !rawDiff.trim()) {
+          diffRes = await execGitInlineDiff(
+            ['-C', realRepoRoot, 'diff', '--cached', '--no-color', '--no-ext-diff', '--no-textconv', '--unified=2', '--', gitRelPath],
+            { timeoutMs: diffTimeoutMs, maxBuffer: gitMaxBuffer }
+          );
+          rawDiff = diffRes.ok || diffRes.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? diffRes.stdout : '';
+          bufferTruncated = diffRes.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+        }
+
+        // 若工作区已提交干净但徽章明确提示有删改（历史步骤），拉取该文件最近一次真实 commit diff
+        if (!rawDiff.trim() && wantCommitFallback) {
+          const logRes = await execGitInlineDiff(
+            ['-C', realRepoRoot, 'log', '-n', '1', '-p', '--no-color', '--no-ext-diff', '--no-textconv', '--unified=2', '--', gitRelPath],
+            { timeoutMs: diffTimeoutMs, maxBuffer: gitMaxBuffer }
+          );
+          if (logRes.ok || logRes.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+            rawDiff = logRes.stdout || '';
+            bufferTruncated = logRes.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER';
+          }
+        }
+
+        if (rawDiff.trim()) {
+          const probeParsed = parseInlineUnifiedDiff(rawDiff, { maxLines: 1, maxLineChars: 32 });
+          if (probeParsed.ok === false || probeParsed.blocked) {
+            return { ok: false, reason: 'blocked', error: 'blocked' };
+          }
+          if (probeParsed.isBinary) {
+            return { ok: true, kind: 'binary', fileName };
+          }
+          if (probeParsed.lines.length > 0) {
+            return { ok: true, kind: 'git-diff', fileName, rawDiff, bufferTruncated };
+          }
+        }
+      }
+
+      // 未命中 git diff（或跳过不安全 git config）时执行有界只读切片（最多 24 KiB），防符号链接 TOCTOU 替换
+      const buf = Buffer.alloc(maxReadBytes);
+      let bytesRead = 0;
+      let fileSize = st.size;
+      let fd = null;
+      try {
+        const openFlags =
+          process.platform !== 'win32' && typeof fs.constants?.O_NOFOLLOW === 'number'
+            ? fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
+            : 'r';
+        fd = fs.openSync(realPath, openFlags);
+        const fdStat = fs.fstatSync(fd);
+        if (!fdStat.isFile()) {
+          return { ok: false, error: 'not_a_file' };
+        }
+        const postStat = fs.lstatSync(realPath);
+        if (postStat.isSymbolicLink() || !postStat.isFile()) {
+          return { ok: false, error: 'not_a_file' };
+        }
+        if (process.platform !== 'win32' && (fdStat.ino !== postStat.ino || fdStat.dev !== postStat.dev)) {
+          return { ok: false, error: 'read_failed' };
+        }
+        fileSize = fdStat.size;
+        bytesRead = fs.readSync(fd, buf, 0, maxReadBytes, 0);
+      } catch (err) {
+        const code = err?.code;
+        if (code === 'ELOOP') return { ok: false, error: 'not_a_file' };
+        if (code === 'EACCES' || code === 'EPERM') return { ok: false, error: 'access_denied' };
+        return { ok: false, error: 'read_failed' };
+      } finally {
+        if (fd !== null) {
+          try { fs.closeSync(fd); } catch {}
+        }
+      }
+
+      const slice = buf.subarray(0, bytesRead);
+      if (slice.includes(0)) {
+        return { ok: true, kind: 'binary', fileName };
+      }
+
+      let isUntracked = false;
+      if (!skipGitSubprocess) {
+        const statusRes = await execGitInlineDiff(
+          ['-C', realRepoRoot, 'status', '--porcelain', '-uall', '--', gitRelPath],
+          { timeoutMs: revParseTimeoutMs, maxBuffer: 64 * 1024 }
+        );
+        if (statusRes.ok && statusRes.stdout) {
+          const firstLine = statusRes.stdout.replace(/^[\r\n]+/, '').split(/\r?\n/, 1)[0] || '';
+          if (firstLine.startsWith('?? ')) {
+            isUntracked = true;
+          }
+        }
+      }
+
+      const rawText = slice.toString('utf8').replace(/\r\n/g, '\n');
+      const byteTruncated = bytesRead < fileSize;
+      return { ok: true, kind: 'file', fileName, rawText, byteTruncated, isUntracked };
     });
+
+  if (opts?.noCache) {
+    const rawResult = await fetchRaw();
+    return projectInlineDiffEntry(rawResult, projectionOpts);
   }
 
-  // 若步骤明确为纯新增文件（+N -0，包括被 .gitignore 忽略的新文件），免额外 git status 子进程直接标绿
-  let isNewFile = hintAdd > 0 && hintDel === 0;
-  if (!isNewFile && realRepoRoot && gitRelPath) {
-    const statusRes = await execGitInlineDiff(
-      ['-C', realRepoRoot, 'status', '--porcelain', '-uall', '--', gitRelPath],
-      { cwd: realRepoRoot, timeoutMs: revParseTimeoutMs, maxBuffer: 64 * 1024 }
-    );
-    if (statusRes.ok && statusRes.stdout) {
-      const firstLine = statusRes.stdout.replace(/^[\r\n]+/, '').split(/\r?\n/, 1)[0] || '';
-      if (firstLine.startsWith('?? ')) {
-        isNewFile = true;
-      }
+  const inFlightPromise = fetchRaw().then((rawResult) => {
+    if (rawResult && rawResult.ok) {
+      setInlineDiffCached(rawCacheKey, rawResult);
+    }
+    return rawResult;
+  });
+  inlineDiffInFlight.set(rawCacheKey, inFlightPromise);
+  try {
+    const rawResult = await inFlightPromise;
+    return projectInlineDiffEntry(rawResult, projectionOpts);
+  } finally {
+    if (inlineDiffInFlight.get(rawCacheKey) === inFlightPromise) {
+      inlineDiffInFlight.delete(rawCacheKey);
     }
   }
-
-  const rawText = slice.toString('utf8').replace(/\r\n/g, '\n');
-  const textLines = rawText.length > 0 ? rawText.split('\n') : [];
-  const byteTruncated = bytesRead < fileSize;
-  if (!byteTruncated && textLines.length > 0 && textLines[textLines.length - 1] === '') {
-    textLines.pop();
-  }
-  const lineTruncated = textLines.length > maxSnapshotLines;
-  const capped = lineTruncated ? textLines.slice(0, maxSnapshotLines) : textLines;
-  const mode = isNewFile ? 'new-file' : 'snapshot';
-  const kind = isNewFile ? 'add' : 'ctx';
-  const sign = isNewFile ? '+' : ' ';
-  const lines = capped.map((line, idx) => ({
-    kind,
-    ln: String(idx + 1),
-    sign,
-    text: truncateInlineDiffLine(line, maxLineChars),
-  }));
-
-  return finalize({
-    ok: true,
-    mode,
-    fileName,
-    additions: isNewFile ? lines.length : 0,
-    deletions: 0,
-    truncated: byteTruncated || lineTruncated,
-    lines,
-  });
 }
 
 export function resolvePortFileCandidates() {
@@ -2820,6 +3303,47 @@ export class PrismDaemon {
     entry.sidebarBindingAdded = false;
   }
 
+  async _ensureInlineDiffBinding(entry, timeoutMs = 2600, force = false) {
+    if (!entry || entry.session.closed) return false;
+    if (!force && entry.inlineDiffBindingAdded) return true;
+    const ok = await entry.session
+      .send('Runtime.addBinding', { name: INLINE_DIFF_BINDING }, timeoutMs)
+      .then(() => true)
+      .catch(() => false);
+    if (ok) entry.inlineDiffBindingAdded = true;
+    return ok;
+  }
+
+  async _removeInlineDiffBinding(entry, timeoutMs = 2000) {
+    if (!entry || entry.session.closed) return;
+    await entry.session
+      .send('Runtime.removeBinding', { name: INLINE_DIFF_BINDING }, timeoutMs)
+      .catch(() => {});
+    entry.inlineDiffBindingAdded = false;
+  }
+
+  async _recordInlineDiffEvalOutcome(entry, evalRes, inlineDiffHash) {
+    const isSkipped = Boolean(
+      evalRes && typeof evalRes.status === 'string' && evalRes.status.startsWith('skipped-')
+    );
+    if (evalRes && evalRes.ok) {
+      entry.inlineDiffMounted = true;
+      entry.inlineDiffSkipped = false;
+      entry.lastInlineDiffHash = inlineDiffHash;
+    } else if (isSkipped) {
+      entry.inlineDiffMounted = false;
+      entry.inlineDiffSkipped = true;
+      entry.lastInlineDiffHash = inlineDiffHash;
+      if (evalRes.status === 'skipped-non-host') {
+        await this._removeInlineDiffBinding(entry);
+      }
+    } else {
+      entry.inlineDiffMounted = false;
+      entry.inlineDiffSkipped = false;
+      entry.lastInlineDiffHash = '';
+    }
+  }
+
   async ensureSidebarService() {
     if (this._sidebarStopped) return null;
     if (this.sidebarService) return this.sidebarService;
@@ -3778,20 +4302,19 @@ export class PrismDaemon {
               const hadInlineDiff = Boolean(entry.inlineDiffScriptId || entry.inlineDiffMounted);
               const inlineDiffChanged = Boolean(
                 inlineDiffSnap &&
+                  !entry.inlineDiffSkipped &&
                   (entry.lastInlineDiffHash !== inlineDiffHash || !entry.inlineDiffScriptId || !entry.inlineDiffMounted)
               );
               if (inlineDiffSnap) {
-                if (!skippedStale && !entry.session.closed && (!refreshedFast || inlineDiffChanged)) {
-                  await entry.session.send('Runtime.addBinding', { name: INLINE_DIFF_BINDING }).catch(() => {});
+                if (!skippedStale && !entry.session.closed && !entry.inlineDiffSkipped && (!refreshedFast || inlineDiffChanged)) {
+                  await this._ensureInlineDiffBinding(entry);
                   const evalRes = await entry.session.evaluate(inlineDiffSnap).catch(() => null);
-                  if (evalRes && evalRes.ok) {
-                    entry.inlineDiffMounted = true;
-                    entry.lastInlineDiffHash = inlineDiffHash;
-                  }
+                  await this._recordInlineDiffEvalOutcome(entry, evalRes, inlineDiffHash);
                 }
               } else if (hadInlineDiff && !skippedStale && !entry.session.closed) {
                 await entry.session.evaluate(this._getInlineDiffCleanupExpression()).catch(() => {});
                 entry.inlineDiffMounted = false;
+                entry.inlineDiffSkipped = false;
                 entry.lastInlineDiffHash = '';
               }
 
@@ -4088,6 +4611,8 @@ export class PrismDaemon {
             .catch(() => {});
           entry.inlineDiffScriptId = null;
         }
+        await this._removeSidebarBinding(entry);
+        await this._removeInlineDiffBinding(entry);
         entry.sidebarMounted = false;
         entry.hostI18nMounted = false;
         entry.lastHostI18nSig = '';
@@ -4096,6 +4621,7 @@ export class PrismDaemon {
         entry.lastThoughtSig = '';
         entry.lastThoughtScriptSig = '';
         entry.inlineDiffMounted = false;
+        entry.inlineDiffSkipped = true;
         entry.lastInlineDiffHash = '';
         entry.lastInlineDiffScriptHash = '';
         return mainRes;
@@ -4255,7 +4781,7 @@ export class PrismDaemon {
         this._buildInlineDiffExprForConfig(inlineDiffCfgNow);
       }
       if (this.inlineDiffExpr) {
-        await entry.session.send('Runtime.addBinding', { name: INLINE_DIFF_BINDING }).catch(() => {});
+        await this._ensureInlineDiffBinding(entry);
         const inlineDiffAdd = await entry.session
           .send('Page.addScriptToEvaluateOnNewDocument', { source: this.inlineDiffExpr })
           .catch(() => null);
@@ -4264,13 +4790,7 @@ export class PrismDaemon {
         }
         const evalRes = await entry.session.evaluate(this.inlineDiffExpr).catch(() => null);
         const inlineDiffHash = this._getInlineDiffExprHash(this.inlineDiffExpr);
-        if (evalRes && evalRes.ok) {
-          entry.inlineDiffMounted = true;
-          entry.lastInlineDiffHash = inlineDiffHash;
-        } else {
-          entry.inlineDiffMounted = false;
-          entry.lastInlineDiffHash = '';
-        }
+        await this._recordInlineDiffEvalOutcome(entry, evalRes, inlineDiffHash);
         if (inlineDiffAdd && inlineDiffAdd.identifier) {
           entry.lastInlineDiffScriptHash = inlineDiffHash;
         } else {
@@ -4281,6 +4801,7 @@ export class PrismDaemon {
           await entry.session.evaluate(this._getInlineDiffCleanupExpression()).catch(() => null);
         }
         entry.inlineDiffMounted = false;
+        entry.inlineDiffSkipped = false;
         entry.lastInlineDiffHash = '';
         entry.lastInlineDiffScriptHash = '';
       }
@@ -4571,6 +5092,7 @@ export class PrismDaemon {
       const expectedDocGen = typeof entry.sidebarDocument === 'number' ? entry.sidebarDocument : null;
       const isCurrentContext = () => {
         if (!entry || entry.session?.closed) return false;
+        if (entry.sidebarHostVerified !== true) return false;
         if (!this._isTrustedMainFrameBindingCall(entry, executionContextId)) return false;
         if (typeof executionContextId !== 'number' || !context) return false;
         if (context.isDefault !== true || (context.type && context.type !== 'default')) return false;
@@ -4578,10 +5100,18 @@ export class PrismDaemon {
         if (!(entry.contextFrames instanceof Map) || entry.contextFrames.get(executionContextId) !== context) {
           return false;
         }
-        if (expectedDocGen !== null && typeof entry.sidebarDocument === 'number' && entry.sidebarDocument !== expectedDocGen) {
-          return false;
+        if (typeof entry.sidebarDocument === 'number') {
+          if (typeof entry.sidebarVerifiedDocument === 'number' && entry.sidebarVerifiedDocument !== entry.sidebarDocument) {
+            return false;
+          }
+          if (expectedDocGen !== null && entry.sidebarDocument !== expectedDocGen) {
+            return false;
+          }
+          if (typeof context.docGen === 'number' && context.docGen !== entry.sidebarDocument) {
+            return false;
+          }
         }
-        if (typeof context.docGen === 'number' && typeof entry.sidebarDocument === 'number' && context.docGen !== entry.sidebarDocument) {
+        if (typeof entry.sidebarHostContextId === 'number' && entry.sidebarHostContextId !== executionContextId) {
           return false;
         }
         return true;
@@ -4756,7 +5286,9 @@ export class PrismDaemon {
       lastThoughtSig: '',
       lastThoughtScriptSig: '',
       inlineDiffScriptId: null,
+      inlineDiffBindingAdded: false,
       inlineDiffMounted: false,
+      inlineDiffSkipped: false,
       lastInlineDiffHash: '',
       lastInlineDiffScriptHash: '',
       sidebarHostVerified: false,
@@ -4794,6 +5326,7 @@ export class PrismDaemon {
         entry.sidebarVerifiedDocument = -1;
         entry.sidebarHostContextId = null;
         entry.sidebarDocument += 1;
+        entry.inlineDiffSkipped = false;
       };
       session.on('Runtime.executionContextCreated', (params) => {
         const ctx = params?.context;
@@ -4872,6 +5405,7 @@ export class PrismDaemon {
       await session.send('Runtime.addBinding', { name: THOUGHT_BINDING });
       await session.send('Runtime.addBinding', { name: USAGE_BINDING });
       await session.send('Runtime.addBinding', { name: INLINE_DIFF_BINDING });
+      entry.inlineDiffBindingAdded = true;
       if (this._isOmniEnabled()) {
         await session.send('Runtime.addBinding', { name: OMNI_BINDING });
       }
@@ -4963,7 +5497,7 @@ export class PrismDaemon {
       : Boolean(entry.thoughtScriptId || entry.thoughtMounted);
     const inlineDiffAvailable = Boolean(this.inlineDiffExpr || this._hasInlineDiffClientFile());
     const inlineDiffNeedsSync = inlineDiffAvailable
-      ? !entry.inlineDiffScriptId || !entry.inlineDiffMounted
+      ? !entry.inlineDiffSkipped && (!entry.inlineDiffScriptId || !entry.inlineDiffMounted)
       : Boolean(entry.inlineDiffScriptId || entry.inlineDiffMounted);
     const now = Date.now();
     const hashMatches = !this.codeHash || entry.lastVerifiedCodeHash === this.codeHash;
@@ -5045,7 +5579,7 @@ export class PrismDaemon {
           hasHostI18n: Boolean(window.__agPrismHostI18n),
           hasThought: Boolean(window.__agPrismThought),
           hasThoughtSettingsUi: Boolean(window.__agPrismThoughtSettingsUi),
-          hasInlineDiff: Boolean(window.__agPrismInlineDiff),
+          hasInlineDiff: Boolean(window.__agPrismInlineDiff && !window.__agPrismInlineDiff.getDebugState?.()?.destroyed),
           codeHash: (api && api.codeHash) || '',
           hasLegacyCss: Boolean(document.getElementById('ag-claude-style-css')),
           needsDashboardSync: Boolean(api && telMode !== 'off' && !isHome && hasModelBtn && !hasPulseBar),
@@ -5082,7 +5616,9 @@ export class PrismDaemon {
         !thoughtEnabled &&
         Boolean(probe.hasThought || probe.hasThoughtSettingsUi || entry.thoughtScriptId || entry.thoughtMounted);
       const needsInlineDiffHeal =
-        inlineDiffAvailable && (!probe.hasInlineDiff || !entry.inlineDiffScriptId || !entry.inlineDiffMounted);
+        inlineDiffAvailable &&
+        !entry.inlineDiffSkipped &&
+        (!probe.hasInlineDiff || !entry.inlineDiffScriptId || !entry.inlineDiffMounted);
       const needsInlineDiffCleanup =
         !inlineDiffAvailable && Boolean(probe.hasInlineDiff || entry.inlineDiffScriptId || entry.inlineDiffMounted);
       let healed = false;
@@ -5108,7 +5644,7 @@ export class PrismDaemon {
         await entry.session.send('Runtime.addBinding', { name: REPO_BINDING }, 2600).catch(() => {});
         await entry.session.send('Runtime.addBinding', { name: THOUGHT_BINDING }, 2600).catch(() => {});
         await entry.session.send('Runtime.addBinding', { name: USAGE_BINDING }, 2600).catch(() => {});
-        await entry.session.send('Runtime.addBinding', { name: INLINE_DIFF_BINDING }, 2600).catch(() => {});
+        await this._ensureInlineDiffBinding(entry, 2600, true);
         if (omniEnabled) {
           await entry.session.send('Runtime.addBinding', { name: OMNI_BINDING }, 2600).catch(() => {});
         }
@@ -5144,6 +5680,7 @@ export class PrismDaemon {
             entry.inlineDiffScriptId = null;
           }
           await this._removeSidebarBinding(entry);
+          await this._removeInlineDiffBinding(entry);
           entry.sidebarMounted = false;
           entry.hostI18nMounted = false;
           entry.lastHostI18nSig = '';
@@ -5152,6 +5689,7 @@ export class PrismDaemon {
           entry.lastThoughtSig = '';
           entry.lastThoughtScriptSig = '';
           entry.inlineDiffMounted = false;
+          entry.inlineDiffSkipped = true;
           entry.lastInlineDiffHash = '';
           entry.lastInlineDiffScriptHash = '';
           this._markTargetIgnored({ id: entry.pageId, webSocketDebuggerUrl: entry.wsUrl }, probe.href || entry.url);
@@ -5294,13 +5832,7 @@ export class PrismDaemon {
               }
             }
             const evalRes = await entry.session.evaluate(this.inlineDiffExpr, false, 4500).catch(() => null);
-            if (evalRes && evalRes.ok) {
-              entry.inlineDiffMounted = true;
-              entry.lastInlineDiffHash = inlineDiffHash;
-            } else {
-              entry.inlineDiffMounted = false;
-              entry.lastInlineDiffHash = '';
-            }
+            await this._recordInlineDiffEvalOutcome(entry, evalRes, inlineDiffHash);
           }
         } else if (needsInlineDiffCleanup) {
           if (entry.inlineDiffScriptId) {
@@ -5309,6 +5841,7 @@ export class PrismDaemon {
           }
           await entry.session.evaluate(this._getInlineDiffCleanupExpression(), false, 3500).catch(() => {});
           entry.inlineDiffMounted = false;
+          entry.inlineDiffSkipped = false;
           entry.lastInlineDiffHash = '';
           entry.lastInlineDiffScriptHash = '';
         }
@@ -5444,7 +5977,7 @@ export class PrismDaemon {
         }
         if (needsInlineDiffHeal) {
           healed = true;
-          await entry.session.send('Runtime.addBinding', { name: INLINE_DIFF_BINDING }, 2600).catch(() => {});
+          await this._ensureInlineDiffBinding(entry, 2600, true);
           if (!this.inlineDiffExpr && typeof this.cdp.buildInlineDiffInjectExpression === 'function') {
             this._buildInlineDiffExprForConfig(cfg);
           }
@@ -5461,10 +5994,7 @@ export class PrismDaemon {
             }
             if (!probe.hasInlineDiff || !entry.inlineDiffMounted) {
               const evalRes = await entry.session.evaluate(this.inlineDiffExpr, false, 4500).catch(() => null);
-              if (evalRes && evalRes.ok) {
-                entry.inlineDiffMounted = true;
-                entry.lastInlineDiffHash = inlineDiffHash;
-              }
+              await this._recordInlineDiffEvalOutcome(entry, evalRes, inlineDiffHash);
             }
           }
         } else if (needsInlineDiffCleanup) {
@@ -5475,6 +6005,7 @@ export class PrismDaemon {
           }
           await entry.session.evaluate(this._getInlineDiffCleanupExpression(), false, 3500).catch(() => {});
           entry.inlineDiffMounted = false;
+          entry.inlineDiffSkipped = false;
           entry.lastInlineDiffHash = '';
           entry.lastInlineDiffScriptHash = '';
         }

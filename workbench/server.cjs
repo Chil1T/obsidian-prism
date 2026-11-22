@@ -43,6 +43,63 @@ const ROOT_WATCH_FILES = [
   path.join('vendor', 'inline-diff', 'inline-diff-client.js'),
 ];
 
+const PRISM_CACHE_SOURCE_PATHS = Array.from(
+  new Set([
+    CDP_MODULE_PATH,
+    ...ROOT_WATCH_FILES.map((rel) => path.join(REPO_ROOT, rel)),
+    VENDOR_SLIDER_PATH,
+    path.join(REPO_ROOT, 'i18n-locales.js'),
+    path.join(REPO_ROOT, 'context-menu-btw.js'),
+    path.join(REPO_ROOT, 'prism-rim-canvas.js'),
+    path.join(REPO_ROOT, 'vial-core.js'),
+    path.join(REPO_ROOT, 'ripple-core.js'),
+    path.join(REPO_ROOT, 'motion-engine.js'),
+    path.join(REPO_ROOT, 'animated-icons.js'),
+    path.join(REPO_ROOT, 'model-glyph-crystal.js'),
+    path.join(REPO_ROOT, 'crystal-prism-core.js'),
+    path.join(REPO_ROOT, 'vendor', 'omni-viewer', 'omni-client.js'),
+    path.join(REPO_ROOT, 'vendor', 'omni-viewer', 'workbench-page.mjs'),
+  ])
+);
+
+const MAX_PRISM_CACHE_ENTRIES = 24;
+let cachedPrismSig = '';
+let cachedCdpMod = null;
+const prismCompileCache = new Map();
+
+function computePrismSourceSig() {
+  const parts = [];
+  for (let i = 0; i < PRISM_CACHE_SOURCE_PATHS.length; i++) {
+    const p = PRISM_CACHE_SOURCE_PATHS[i];
+    try {
+      const st = fs.statSync(p);
+      parts.push(`${Math.trunc(st.mtimeMs)}:${st.size}`);
+    } catch {
+      parts.push('0:0');
+    }
+  }
+  return parts.join('|');
+}
+
+function getCachedCdpAndCache() {
+  const sig = computePrismSourceSig();
+  if (!cachedCdpMod || sig !== cachedPrismSig) {
+    cachedCdpMod = loadFreshCdp();
+    cachedPrismSig = sig;
+    prismCompileCache.clear();
+  }
+  return { cdpMod: cachedCdpMod, cache: prismCompileCache };
+}
+
+function putPrismCache(cache, key, val) {
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, val);
+  while (cache.size > MAX_PRISM_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    cache.delete(oldest);
+  }
+}
+
 function loadFreshCdp() {
   try {
     const resolved = require.resolve(CDP_MODULE_PATH);
@@ -120,19 +177,6 @@ const MIME_TYPES = {
 
 const LOOPBACK_HOST_RE = /^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i;
 const MAX_BODY_BYTES = 65536;
-
-function isLoopbackOriginAllowed(req) {
-  const host = String(req.headers.host || '').trim();
-  if (host && !LOOPBACK_HOST_RE.test(host)) return false;
-  const origin = String(req.headers.origin || '').trim();
-  if (!origin) return true;
-  try {
-    const parsed = new URL(origin);
-    return LOOPBACK_HOST_RE.test(parsed.host);
-  } catch {
-    return false;
-  }
-}
 
 function getAllowedStudioHosts(server) {
   const addr = server && typeof server.address === 'function' ? server.address() : null;
@@ -480,6 +524,8 @@ function createWorkbenchServer(options = {}) {
   }
 
   const server = http.createServer((req, res) => {
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+
     let pathname;
     try {
       const reqUrl = new URL(req.url || '/', 'http://127.0.0.1');
@@ -490,8 +536,9 @@ function createWorkbenchServer(options = {}) {
       return;
     }
 
-    if (!isLoopbackOriginAllowed(req)) {
-      sendJson(res, 403, { ok: false, error: 'Forbidden origin or host' });
+    const loopSec = verifyLoopbackHostAndOrigin(req, server, { requireOrigin: false });
+    if (!loopSec.ok) {
+      sendJson(res, loopSec.status, { ok: false, error: loopSec.error });
       return;
     }
 
@@ -603,11 +650,6 @@ function createWorkbenchServer(options = {}) {
         return;
       }
       if (req.method === 'POST') {
-        const sec = verifyLoopbackHostAndOrigin(req, server, { requireOrigin: false });
-        if (!sec.ok) {
-          sendJson(res, sec.status, { ok: false, error: sec.error });
-          return;
-        }
         const ctype = String(req.headers['content-type'] || '').toLowerCase();
         if (ctype && !ctype.includes('application/json')) {
           sendJson(res, 415, { ok: false, error: 'Content-Type must be application/json' });
@@ -687,21 +729,26 @@ function createWorkbenchServer(options = {}) {
     if (req.method === 'GET' && pathname === '/api/prism-inject.js') {
       try {
         const reqUrl = new URL(req.url || '/api/prism-inject.js', 'http://127.0.0.1');
-        const cdpMod = loadFreshCdp();
         const cfg = parseReplicaPrismConfig(reqUrl.searchParams);
-        let expr = cdpMod.buildInjectExpression(cfg);
-        if (typeof cdpMod.buildInlineDiffInjectExpression === 'function') {
-          const ch6 = cdpMod.buildInlineDiffInjectExpression(cfg);
-          if (ch6) expr = `${expr};\n${ch6}`;
+        const { cdpMod, cache } = getCachedCdpAndCache();
+        const cacheKey = `inject|${JSON.stringify(cfg)}`;
+        let expr = cache.get(cacheKey);
+        if (expr === undefined) {
+          expr = cdpMod.buildInjectExpression(cfg);
+          if (typeof cdpMod.buildInlineDiffInjectExpression === 'function') {
+            const ch6 = cdpMod.buildInlineDiffInjectExpression(cfg);
+            if (ch6) expr = `${expr};\n${ch6}`;
+          }
+          putPrismCache(cache, cacheKey, expr);
         }
         res.writeHead(200, {
           'Content-Type': 'application/javascript; charset=utf-8',
           'Cache-Control': 'no-store',
         });
         res.end(expr);
-      } catch (err) {
+      } catch {
         res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
-        res.end('Failed to compile Prism bundle: ' + String(err && err.message ? err.message : err));
+        res.end('Failed to compile Prism bundle');
       }
       return;
     }
@@ -709,35 +756,46 @@ function createWorkbenchServer(options = {}) {
     if (req.method === 'GET' && pathname === '/api/prism-inline-diff.js') {
       try {
         const reqUrl = new URL(req.url || '/api/prism-inline-diff.js', 'http://127.0.0.1');
-        const cdpMod = loadFreshCdp();
         const cfg = parseReplicaPrismConfig(reqUrl.searchParams);
-        const expr =
-          typeof cdpMod.buildInlineDiffInjectExpression === 'function'
-            ? String(cdpMod.buildInlineDiffInjectExpression(cfg) || '')
-            : '';
+        const { cdpMod, cache } = getCachedCdpAndCache();
+        const cacheKey = `inline-diff|${JSON.stringify(cfg)}`;
+        let expr = cache.get(cacheKey);
+        if (expr === undefined) {
+          expr =
+            typeof cdpMod.buildInlineDiffInjectExpression === 'function'
+              ? String(cdpMod.buildInlineDiffInjectExpression(cfg) || '')
+              : '';
+          putPrismCache(cache, cacheKey, expr);
+        }
         res.writeHead(200, {
           'Content-Type': 'application/javascript; charset=utf-8',
           'Cache-Control': 'no-store',
         });
         res.end(expr);
-      } catch (err) {
+      } catch {
         res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
-        res.end('Failed to compile Prism Channel 6 bundle: ' + String(err && err.message ? err.message : err));
+        res.end('Failed to compile Prism Channel 6 bundle');
       }
       return;
     }
 
     if (req.method === 'GET' && pathname === '/api/prism-remove.js') {
       try {
-        const cdpMod = loadFreshCdp();
+        const { cdpMod, cache } = getCachedCdpAndCache();
+        const cacheKey = 'remove';
+        let expr = cache.get(cacheKey);
+        if (expr === undefined) {
+          expr = String(cdpMod.REMOVE_EXPRESSION || '');
+          putPrismCache(cache, cacheKey, expr);
+        }
         res.writeHead(200, {
           'Content-Type': 'application/javascript; charset=utf-8',
           'Cache-Control': 'no-store',
         });
-        res.end(String(cdpMod.REMOVE_EXPRESSION || ''));
-      } catch (err) {
+        res.end(expr);
+      } catch {
         res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
-        res.end('Failed to read REMOVE_EXPRESSION: ' + String(err && err.message ? err.message : err));
+        res.end('Failed to read REMOVE_EXPRESSION');
       }
       return;
     }
@@ -763,7 +821,7 @@ function createWorkbenchServer(options = {}) {
     }
 
     if (SHARED_MODULE_MAP[pathname]) {
-      serveFile(res, SHARED_MODULE_MAP[pathname]);
+      serveFile(res, SHARED_MODULE_MAP[pathname], {}, REPO_ROOT);
       return;
     }
 

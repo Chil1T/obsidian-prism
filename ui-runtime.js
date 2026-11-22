@@ -700,7 +700,7 @@
   };
 
   // ── Official Dual Mascot Stage ─────────────────────────────────────────
-  let msRoot = null, msRig = null, msAnc = null, msOrch = null, msLastTier, msActAt = 0;
+  let msRoot = null, msRig = null, msAnc = null, msOrch = null, msLastTier, msLastHostSleep = false, msActAt = 0;
 
   const notifyMascot = (eventName, payload) => {
     try { msRig?.notify?.(eventName, payload || {}); } catch {}
@@ -742,6 +742,7 @@
     if (ha(de(), 'data-ag-cs-has-crab')) ra(de(), 'data-ag-cs-has-crab');
     msRoot = msRig = msAnc = msOrch = null;
     msLastTier = undefined;
+    msLastHostSleep = false;
   };
 
   const syncCrab = (activeCard, activeInfo, modelInfo) => {
@@ -828,8 +829,10 @@
       notifyMascot('effort-tier', { tier: curTier });
     }
     msLastTier = curTier;
-    if (ga(html, 'data-ag-prism-mode') === 'chat' || ha(html, BLUR_ATTR)) {
-      notifyMascot('host-sleep', { sleep: true });
+    const chatSleep = ga(html, 'data-ag-prism-mode') === 'chat';
+    if (msLastHostSleep !== chatSleep) {
+      msLastHostSleep = chatSleep;
+      notifyMascot('host-sleep', { sleep: chatSleep });
     }
   };
 
@@ -2441,6 +2444,25 @@
   let enhancerSyncTimer = 0;
   let enhancerSyncRaf = 0;
   let lastEnhancerSyncAt = 0;
+  const enhancerDirty = { f: false, r: false, l: false, c: false, b: false, t: false, s: false, g: false, o: false };
+  const resetEnhancerDirty = () => {
+    enhancerDirty.f = enhancerDirty.r = enhancerDirty.l = enhancerDirty.c = enhancerDirty.b = enhancerDirty.t = enhancerDirty.s = enhancerDirty.g = enhancerDirty.o = false;
+  };
+  const mergeEnhancerDirty = (src) => {
+    if (!src) {
+      enhancerDirty.f = true;
+      return;
+    }
+    if (src.f) enhancerDirty.f = true;
+    if (src.r) enhancerDirty.r = true;
+    if (src.l) enhancerDirty.l = true;
+    if (src.c) enhancerDirty.c = true;
+    if (src.b) enhancerDirty.b = true;
+    if (src.t) enhancerDirty.t = true;
+    if (src.s) enhancerDirty.s = true;
+    if (src.g) enhancerDirty.g = true;
+    if (src.o) enhancerDirty.o = true;
+  };
   const cancelHostEnhancerSync = () => {
     if (enhancerSyncTimer) {
       CT(enhancerSyncTimer);
@@ -2457,8 +2479,10 @@
     cancelHostEnhancerSync();
     if (destroyed) return;
     lastEnhancerSyncAt = Date.now();
+    const mask = { ...enhancerDirty };
+    resetEnhancerDirty();
     try {
-      hostEnhancerCtl.sync?.();
+      hostEnhancerCtl.sync?.(mask.f ? undefined : mask);
     } catch {}
   };
   const queueHostEnhancerAsync = () => {
@@ -2472,8 +2496,9 @@
       enhancerSyncTimer = ST(flushHostEnhancerSync, 0);
     }
   };
-  const scheduleHostEnhancerSync = (immediate) => {
+  const scheduleHostEnhancerSync = (immediate, srcFlags) => {
     if (destroyed) return;
+    mergeEnhancerDirty(srcFlags);
     if (immediate || !isConvRunning()) {
       if (enhancerSyncTimer) {
         CT(enhancerSyncTimer);
@@ -2633,7 +2658,7 @@
               streamChoreoCtl.syncDualStreamEngine();
               streamChoreoCtl.syncHeroCCaustics();
             });
-            scheduleHostEnhancerSync(false);
+            scheduleHostEnhancerSync(false, { f: true });
             smoothCaretCtl.queue(false, false, false);
             return true;
           },
@@ -2675,8 +2700,9 @@
         ensurePulseBridge(!!(flags.f || flags.t));
       }
     });
-    if (!deferHeavyConvWork && (flags.f || flags.r || flags.l || flags.c || flags.b || flags.t || flags.s)) {
-      scheduleHostEnhancerSync(!!(flags.f || routeJumped || flags.t));
+    if (!deferHeavyConvWork && (flags.f || flags.r || flags.l || flags.c || flags.b || flags.t || flags.s || flags.g || flags.o)) {
+      const enhFlags = routeJumped ? { ...flags, f: true } : flags;
+      scheduleHostEnhancerSync(!!(flags.f || routeJumped || flags.g || flags.o || (flags.t && !isConvRunning())), enhFlags);
     }
     if (!deferHeavyConvWork) {
       if (flags.f || routeJumped) {
@@ -2750,75 +2776,91 @@
   // ── Event Handlers ─────────────────────────────────────────────────────
   let blurTm = 0;
   const clearWinBlur = () => {
-    if (blurTm) { CT(blurTm); blurTm = 0; }
-    const h = de();
-    if (ha(h, BLUR_ATTR)) {
-      runGuardedMut(() => ra(h, BLUR_ATTR));
-      notifyMascot('host-sleep', { sleep: false });
-      try { msRig?.syncPowerState?.(); } catch {}
-      try { convAuraCtl.wake?.(false); } catch {}
-      try { convAuraCtl.sync(true); } catch {}
-      try { W.__agPrismTelemetry?.refresh?.(); } catch {}
-    }
+    try {
+      if (blurTm) { CT(blurTm); blurTm = 0; }
+      const h = de();
+      if (ha(h, BLUR_ATTR)) {
+        runGuardedMut(() => ra(h, BLUR_ATTR));
+        try { msRig?.syncPowerState?.(); } catch {}
+        try { convAuraCtl.wake?.(false); } catch {}
+        try { convAuraCtl.sync(true); } catch {}
+        try { W.__agPrismTelemetry?.refresh?.(); } catch {}
+      }
+    } catch {}
   };
   const wakeWinBlur = () => {
-    if (blurTm || ha(de(), BLUR_ATTR)) {
-      clearWinBlur();
-      if (typeof document.hasFocus === 'function' && !document.hasFocus()) onWinBlur();
-    }
+    try {
+      if (blurTm || ha(de(), BLUR_ATTR)) {
+        clearWinBlur();
+        if (typeof document.hasFocus === 'function' && !document.hasFocus()) onWinBlur();
+      }
+    } catch {}
   };
   function onWinBlur() {
-    if (splitDragActive) {
-      splitDragActive = false;
-      scheduleResizingEnd();
-    }
-    if (destroyed || blurTm) return;
-    blurTm = ST(() => {
-      blurTm = 0;
-      const h = de();
-      if (!destroyed && (!D.hasFocus || !D.hasFocus()) && ga(h, BLUR_ATTR) !== '1') {
-        runGuardedMut(() => sa(h, BLUR_ATTR, '1'));
-        notifyMascot('host-sleep', { sleep: true });
-        try { msRig?.syncPowerState?.(); } catch {}
+    try {
+      if (splitDragActive) {
+        splitDragActive = false;
+        scheduleResizingEnd();
       }
-    }, 1200);
+      if (destroyed || blurTm) return;
+      blurTm = ST(() => {
+        try {
+          blurTm = 0;
+          const h = de();
+          if (!destroyed && (!D.hasFocus || !D.hasFocus()) && ga(h, BLUR_ATTR) !== '1') {
+            runGuardedMut(() => sa(h, BLUR_ATTR, '1'));
+            try { msRig?.syncPowerState?.(); } catch {}
+          }
+        } catch {}
+      }, 1200);
+    } catch {}
   }
   const onWinPointerMove = (ev) => {
-    wakeWinBlur();
-    if (isDragSuspendedRoot()) return;
-    prismRimCtl.onPointerMove(ev);
+    try {
+      wakeWinBlur();
+      if (isDragSuspendedRoot()) return;
+      prismRimCtl.onPointerMove(ev);
+    } catch {}
   };
   const onWinPointerUp = () => {
-    if (destroyed || !splitDragActive) return;
-    splitDragActive = false;
-    scheduleResizingEnd();
+    try {
+      if (destroyed || !splitDragActive) return;
+      splitDragActive = false;
+      scheduleResizingEnd();
+    } catch {}
   };
 
   const onWinResize = () => {
-    if (destroyed) return;
-    prismRimCtl.markDirty();
-    smoothCaretCtl.bumpMetricsEpoch();
-    smoothCaretCtl.queue(false, false, true);
+    try {
+      if (destroyed) return;
+      prismRimCtl.markDirty();
+      smoothCaretCtl.bumpMetricsEpoch();
+      smoothCaretCtl.queue(false, false, true);
+    } catch {}
   };
 
   const onWinStorage = (ev) => {
-    if (destroyed || !ev) return;
-    if (ev.key === STORAGE_PRISM_KEY || ev.key === STORAGE_FILE_CFG_KEY) {
-      cfg = loadSettings(currentBaseConfig);
-      markAllDirty();
-      applyRootAttrs();
-      scheduleSync();
-    }
+    try {
+      if (destroyed || !ev) return;
+      if (ev.key === STORAGE_PRISM_KEY || ev.key === STORAGE_FILE_CFG_KEY) {
+        cfg = loadSettings(currentBaseConfig);
+        markAllDirty();
+        applyRootAttrs();
+        scheduleSync();
+      }
+    } catch {}
   };
 
   const onDocVisibilityChange = () => {
-    if (destroyed || D.hidden) return;
-    if (typeof D.hasFocus !== 'function' || D.hasFocus()) clearWinBlur();
-    if (pendingHiddenFullSync) {
-      pendingHiddenFullSync = false;
-      markAllDirty();
-      scheduleSync();
-    }
+    try {
+      if (destroyed || D.hidden) return;
+      if (typeof D.hasFocus !== 'function' || D.hasFocus()) clearWinBlur();
+      if (pendingHiddenFullSync) {
+        pendingHiddenFullSync = false;
+        markAllDirty();
+        scheduleSync();
+      }
+    } catch {}
   };
 
   const isEditableTarget = (el) => {
@@ -2837,8 +2879,11 @@
   let lastSlashNotifyAt = 0;
   let lastSlashNotifyCmd = '';
   const dispatchComposerSubmit = (scopeEl) => {
-    const box = cl(scopeEl, '[data-testid="agent-input-box"]') || qs(D, '[data-testid="agent-input-box"]');
-    const editable = qs(box, '[contenteditable="true"], textarea, input') || scopeEl;
+    const box =
+      cl(scopeEl, '[data-testid="agent-input-box"]') ||
+      cl(scopeEl, '.surface-composer-card') ||
+      cl(scopeEl, '[data-testid="side-question-panel"], [data-side-panel-focus-scope="true"]');
+    const editable = (box && qs(box, '[contenteditable="true"], textarea, input')) || scopeEl;
     const text = String(editable?.innerText ?? editable?.[K_TC] ?? editable?.value ?? '').trim();
     const m = SLASH_CMD_RE.exec(text);
     if (m) {
@@ -2855,150 +2900,176 @@
   };
 
   const onWinKeyDown = (ev) => {
-    if (destroyed || !ev) return;
-    wakeWinBlur();
-    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && cl(ev.target, '[data-testid="agent-input-box"] [contenteditable="true"]')) {
-      const slashMenu = qs(D, '[data-testid="slash-command-menu"]');
-      if (slashMenu && (!slashMenu.getClientRects || slashMenu.getClientRects().length > 0)) return;
-      if (cl(ev.target, '.agy-home')) streamChoreoCtl.triggerHomeLiftoffRippleBurst();
-      convAuraCtl.triggerStart();
-      dispatchComposerSubmit(ev.target);
-      return;
-    }
-    if (ev.key === '[' && !ev.ctrlKey && !ev.metaKey && !ev.altKey && !isEditableTarget(ev.target)) {
-      const html = de();
-      if (!html || cfg.sidebarRestyle === false) return;
-      if (ga(html, 'data-ag-cs-sidebar-collapsed') === '1') ra(html, 'data-ag-cs-sidebar-collapsed');
-      else sa(html, 'data-ag-cs-sidebar-collapsed', '1');
-    }
+    try {
+      if (destroyed || !ev) return;
+      wakeWinBlur();
+      if (
+        ev.key === 'Enter' &&
+        !ev.shiftKey &&
+        !ev.ctrlKey &&
+        !ev.altKey &&
+        !ev.metaKey &&
+        !ev.isComposing &&
+        ev.keyCode !== 229 &&
+        cl(ev.target, '[data-testid="agent-input-box"] [contenteditable="true"]')
+      ) {
+        const slashMenu = qs(D, '[data-testid="slash-command-menu"]');
+        if (slashMenu && (!slashMenu.getClientRects || slashMenu.getClientRects().length > 0)) return;
+        if (cl(ev.target, '.agy-home')) streamChoreoCtl.triggerHomeLiftoffRippleBurst();
+        convAuraCtl.triggerStart();
+        dispatchComposerSubmit(ev.target);
+        return;
+      }
+      if (
+        ev.key === '[' &&
+        !ev.ctrlKey &&
+        !ev.metaKey &&
+        !ev.altKey &&
+        !isEditableTarget(ev.target) &&
+        !cl(ev.target, '[role="dialog"], .monaco-editor')
+      ) {
+        const html = de();
+        if (!html || cfg.sidebarRestyle === false) return;
+        if (ga(html, 'data-ag-cs-sidebar-collapsed') === '1') ra(html, 'data-ag-cs-sidebar-collapsed');
+        else sa(html, 'data-ag-cs-sidebar-collapsed', '1');
+      }
+    } catch {}
   };
 
   const onWinClick = (ev) => {
-    if (destroyed || !ev?.target?.closest || isThoughtIsolatedNode(ev.target)) return;
-    const t = ev.target;
-    const isPulseNode = (n) => n?.id === 'ag-prism-pulse-bar' || n?.id === 'ag-pulse-status-bar';
-    if (
-      isPulseNode(t) ||
-      cl(t, '#ag-prism-pulse-bar,#ag-pulse-status-bar') ||
-      (typeof ev.composedPath === 'function' && ev.composedPath().some(isPulseNode))
-    ) {
-      ST(() => { if (!destroyed) syncContextCardOpenNotify(); }, 28);
-    };
-
-    if (cl(t, '[data-testid="thinking-collapsible-trigger"]') && getThoughtTranslateMode() !== 'off') {
-      ST(() => { try { W.__agPrismThought?.scan?.(); } catch {} }, 25);
-    }
-
-    const sendBtn = cl(t, '[data-testid="input-send-button"], [data-testid="send-button"]');
-    if (sendBtn && !sendBtn.disabled) {
-      if (cl(sendBtn, '.agy-home')) streamChoreoCtl.triggerHomeLiftoffRippleBurst();
-      if (ga(sendBtn, 'data-ag-cs-icon-injected') === 'arrow-up-launch' && isMotionStandardOrUltra()) {
-        try { motionEngine?.triggerIcon?.(sendBtn, 'launch'); } catch {}
+    try {
+      if (destroyed || !ev?.target?.closest || isThoughtIsolatedNode(ev.target)) return;
+      const t = ev.target;
+      const isPulseNode = (n) => n?.id === 'ag-prism-pulse-bar' || n?.id === 'ag-pulse-status-bar';
+      if (
+        isPulseNode(t) ||
+        cl(t, '#ag-prism-pulse-bar,#ag-pulse-status-bar') ||
+        (typeof ev.composedPath === 'function' && ev.composedPath().some(isPulseNode))
+      ) {
+        ST(() => { if (!destroyed) syncContextCardOpenNotify(); }, 28);
       }
-      convAuraCtl.triggerStart();
-      dispatchComposerSubmit(sendBtn);
-    }
 
-    const copyBtn = cl(t, '[data-ag-cs-icon-injected="copy-check"]') || cl(t, 'pre button, button[aria-label*="Copy" i], button[aria-label*="复制"]');
-    if (copyBtn && !copyBtn.disabled && !isThoughtIsolatedNode(copyBtn)) {
-      if (ga(copyBtn, 'data-ag-cs-icon-injected') === 'copy-check' && !motionReduced() && typeof motionEngine?.triggerIcon === 'function') {
-        try { motionEngine.triggerIcon(copyBtn, 'check', { revertAfterMs: 1600 }); } catch {}
+      if (cl(t, '[data-testid="thinking-collapsible-trigger"]') && getThoughtTranslateMode() !== 'off') {
+        ST(() => { try { W.__agPrismThought?.scan?.(); } catch {} }, 25);
       }
-      notifyMascot('code-copied');
-    }
 
-    const navTurn = cl(t, '[data-testid="conversation-navigator-turn"], [data-testid="conversation-navigator-group"]');
-    if (navTurn) streamChoreoCtl.triggerHeroESonar(navTurn);
-
-    const grpBtn = cl(t, '[role="dialog"] [role="group"] button');
-    if (grpBtn && !ha(grpBtn, 'data-ag-cs-key') && !handledGroupClicks.has(ev)) {
-      handledGroupClicks.add(ev);
-      const grp = cl(grpBtn, '[role="group"]');
-      const gp = streamChoreoCtl.heroState.lastGroupPress;
-      if (gp && gp.group === grp && gp.prevBtn && gp.prevBtn !== grpBtn) {
-        runSettingsGroupGlide(grp, gp.prevBtn, grpBtn, gp.prevRect);
+      const sendBtn = cl(t, '[data-testid="input-send-button"], [data-testid="send-button"]');
+      if (sendBtn && !sendBtn.disabled) {
+        if (cl(sendBtn, '.agy-home')) streamChoreoCtl.triggerHomeLiftoffRippleBurst();
+        if (ga(sendBtn, 'data-ag-cs-icon-injected') === 'arrow-up-launch' && isMotionStandardOrUltra()) {
+          try { motionEngine?.triggerIcon?.(sendBtn, 'launch'); } catch {}
+        }
+        convAuraCtl.triggerStart();
+        dispatchComposerSubmit(sendBtn);
       }
-    }
 
-    if (cl(t, '[data-testid="worked-for-collapsible"]') && cfg.composerRestyle !== false) {
-      streamChoreoCtl.scheduleWorkedForClickSync();
-    }
+      const copyBtn = cl(t, '[data-ag-cs-icon-injected="copy-check"]') || cl(t, 'pre button, button[aria-label*="Copy" i], button[aria-label*="复制"]');
+      if (copyBtn && !copyBtn.disabled && !isThoughtIsolatedNode(copyBtn)) {
+        if (ga(copyBtn, 'data-ag-cs-icon-injected') === 'copy-check' && !motionReduced() && typeof motionEngine?.triggerIcon === 'function') {
+          try { motionEngine.triggerIcon(copyBtn, 'check', { revertAfterMs: 1600 }); } catch {}
+        }
+        notifyMascot('code-copied');
+      }
+
+      const navTurn = cl(t, '[data-testid="conversation-navigator-turn"], [data-testid="conversation-navigator-group"]');
+      if (navTurn) streamChoreoCtl.triggerHeroESonar(navTurn);
+
+      const grpBtn = cl(t, '[role="dialog"] [role="group"] button');
+      if (grpBtn && !ha(grpBtn, 'data-ag-cs-key') && !handledGroupClicks.has(ev)) {
+        handledGroupClicks.add(ev);
+        const grp = cl(grpBtn, '[role="group"]');
+        const gp = streamChoreoCtl.heroState.lastGroupPress;
+        if (gp && gp.group === grp && gp.prevBtn && gp.prevBtn !== grpBtn) {
+          runSettingsGroupGlide(grp, gp.prevBtn, grpBtn, gp.prevRect);
+        }
+      }
+
+      if (cl(t, '[data-testid="worked-for-collapsible"]') && cfg.composerRestyle !== false) {
+        streamChoreoCtl.scheduleWorkedForClickSync();
+      }
+    } catch {}
   };
 
   const onDocPointerDown = (ev) => {
-    wakeWinBlur();
-    if (ev?.target?.closest) {
-      const sbRow = cl(ev.target, '[data-testid="conversation-row-sidebar"]');
-      if (sbRow) streamChoreoCtl.lockSidebarRowRunningOnPointerDown?.(sbRow);
-      if (isSplitResizeHandle(ev.target)) {
-        splitDragActive = true;
-        const h = de();
-        if (h && ga(h, RESIZE_ATTR) !== '1') runGuardedMut(() => sa(h, RESIZE_ATTR, '1'));
-        if (resizeEndTm) CT(resizeEndTm);
-        resizeEndTm = ST(() => finishResizing(true), 10000);
-      }
-    }
-    if (isMotionStandardOrUltra() && ev?.target?.closest) {
-      if (!cl(ev.target, '[role="dialog"]')) {
-        // 懒测距：不在此处同步调用 getBoundingClientRect()，仅记录元素引用与点击坐标，延后到真有新浮层弹出时再测距
-        const triggerEl = cl(ev.target, 'button, [role="button"], [data-testid]');
-        const hasXY = Number.isFinite(ev.clientX) && Number.isFinite(ev.clientY);
-        if (triggerEl || hasXY) {
-          streamChoreoCtl.heroState.lastTriggerOrigin = {
-            el: triggerEl || null,
-            x: hasXY ? ev.clientX : NaN,
-            y: hasXY ? ev.clientY : NaN,
-            at: performance.now(),
-          };
-        }
-      } else if (!cl(ev.target, '#' + SETTINGS_SEC_ID)) {
-        const grp = cl(ev.target, '[role="dialog"] [role="group"]');
-        if (grp?.children) {
-          const prevBtn = AF(grp.children).find(
-            (sib) => ga(sib, 'aria-pressed') === 'true' || ha(sib, 'data-pressed') || ga(sib, 'aria-checked') === 'true' || ga(sib, 'data-state') === 'on'
-          );
-          streamChoreoCtl.heroState.lastGroupPress = { group: grp, prevBtn: prevBtn || null, prevRect: rc(prevBtn) };
+    try {
+      wakeWinBlur();
+      if (ev?.target?.closest) {
+        const sbRow = cl(ev.target, '[data-testid="conversation-row-sidebar"]');
+        if (sbRow) streamChoreoCtl.lockSidebarRowRunningOnPointerDown?.(sbRow);
+        if (isSplitResizeHandle(ev.target)) {
+          splitDragActive = true;
+          const h = de();
+          if (h && ga(h, RESIZE_ATTR) !== '1') runGuardedMut(() => sa(h, RESIZE_ATTR, '1'));
+          if (resizeEndTm) CT(resizeEndTm);
+          resizeEndTm = ST(() => finishResizing(true), 10000);
         }
       }
-    }
-    notifyMascot('activity', {});
-    if (cfg.smoothCaret !== false) smoothCaretCtl.queue(false);
+      if (isMotionStandardOrUltra() && ev?.target?.closest) {
+        if (!cl(ev.target, '[role="dialog"]')) {
+          // 懒测距：不在此处同步调用 getBoundingClientRect()，仅记录元素引用与点击坐标，延后到真有新浮层弹出时再测距
+          const triggerEl = cl(ev.target, 'button, [role="button"], [data-testid]');
+          const hasXY = Number.isFinite(ev.clientX) && Number.isFinite(ev.clientY);
+          if (triggerEl || hasXY) {
+            streamChoreoCtl.heroState.lastTriggerOrigin = {
+              el: triggerEl || null,
+              x: hasXY ? ev.clientX : NaN,
+              y: hasXY ? ev.clientY : NaN,
+              at: performance.now(),
+            };
+          }
+        } else if (!cl(ev.target, '#' + SETTINGS_SEC_ID)) {
+          const grp = cl(ev.target, '[role="dialog"] [role="group"]');
+          if (grp?.children) {
+            const prevBtn = AF(grp.children).find(
+              (sib) => ga(sib, 'aria-pressed') === 'true' || ha(sib, 'data-pressed') || ga(sib, 'aria-checked') === 'true' || ga(sib, 'data-state') === 'on'
+            );
+            streamChoreoCtl.heroState.lastGroupPress = { group: grp, prevBtn: prevBtn || null, prevRect: rc(prevBtn) };
+          }
+        }
+      }
+      notifyMascot('activity', {});
+      if (cfg.smoothCaret !== false) smoothCaretCtl.queue(false);
+    } catch {}
   };
 
   const MODIFIER_ONLY_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'NumLock', 'ScrollLock']);
 
   const onDocCaretEvent = (ev) => {
-    const type = ev?.type || '';
-    if ((type === 'keydown' || type === 'keyup') && ev?.key && MODIFIER_ONLY_KEYS.has(ev.key)) return;
-    if (type === 'scroll' || type === 'selectionchange' || type === 'keydown' || type === 'keyup') {
-      const ae = D.activeElement;
-      if (!cl(ae, '[data-testid="agent-input-box"]')) return;
-      if (type === 'scroll') {
-        const st = ev?.target;
-        if (
-          st &&
-          st !== ae &&
-          !ae.contains?.(st) &&
-          (st === D || st === de() || st === D.body || tidOf(st) === 'autoscroll-viewport' || !st.contains?.(ae))
-        ) {
-          return;
+    try {
+      const type = ev?.type || '';
+      if ((type === 'keydown' || type === 'keyup') && ev?.key && MODIFIER_ONLY_KEYS.has(ev.key)) return;
+      if (type === 'scroll' || type === 'selectionchange' || type === 'keydown' || type === 'keyup') {
+        const ae = D.activeElement;
+        if (!cl(ae, '[data-testid="agent-input-box"]')) return;
+        if (type === 'scroll') {
+          const st = ev?.target;
+          if (
+            st &&
+            st !== ae &&
+            !ae.contains?.(st) &&
+            (st === D || st === de() || st === D.body || tidOf(st) === 'autoscroll-viewport' || !st.contains?.(ae))
+          ) {
+            return;
+          }
         }
       }
-    }
-    const isTyping = type === 'input' || type === 'keyup' || type === 'compositionupdate' || type === 'compositionend';
-    const immediate = type === 'focusin' || type === 'mouseup' || type === 'transitionend';
-    smoothCaretCtl.queue(isTyping, immediate, type === 'focusin', type === 'scroll');
-    if (type === 'input' && cl(ev?.target, '[data-testid="agent-input-box"]')) {
-      try {
-        msRig?.onUserType?.((cl(ev.target, '[contenteditable="true"]') || ev.target)?.[K_TC] || '');
-      } catch {}
-    }
+      const isTyping = type === 'input' || type === 'keyup' || type === 'compositionupdate' || type === 'compositionend';
+      const immediate = type === 'focusin' || type === 'mouseup' || type === 'transitionend';
+      smoothCaretCtl.queue(isTyping, immediate, type === 'focusin', type === 'scroll');
+      if (type === 'input' && cl(ev?.target, '[data-testid="agent-input-box"]')) {
+        try {
+          msRig?.onUserType?.((cl(ev.target, '[contenteditable="true"]') || ev.target)?.[K_TC] || '');
+        } catch {}
+      }
+    } catch {}
   };
 
   const onDocTransitionEnd = (ev) => {
-    if (cfg.smoothCaret !== false && cl(ev?.target, '[data-testid="agent-input-box"]')) {
-      smoothCaretCtl.queue(false, true, false);
-    }
+    try {
+      if (cfg.smoothCaret !== false && cl(ev?.target, '[data-testid="agent-input-box"]')) {
+        smoothCaretCtl.queue(false, true, false);
+      }
+    } catch {}
   };
 
   const ATTR_OBSERVED_TIDS = new Set([
@@ -3013,122 +3084,124 @@
   ]);
 
   const observer = new MutationObserver((mutations) => {
-    if (destroyed || internalDomMutating || streamChoreoCtl.isStreamMutating() || !mutations || mutations.length === 0) return;
+    try {
+      if (destroyed || internalDomMutating || streamChoreoCtl.isStreamMutating() || !mutations || mutations.length === 0) return;
 
-    // 后台隐藏窗口挂起深扫：避免 Swarm 多窗口后台刷屏触发海量 querySelector，切回前台时由 visibilitychange 合并一次同步！
-    if (D.hidden) {
+      // 后台隐藏窗口挂起深扫：避免 Swarm 多窗口后台刷屏触发海量 querySelector，切回前台时由 visibilitychange 合并一次同步！
+      if (D.hidden) {
+        for (let i = 0; i < mutations.length; i++) {
+          const m = mutations[i];
+          if (!isThoughtMutationRecord(m) && !isOwnPluginMutation(m)) {
+            pendingHiddenFullSync = true;
+            break;
+          }
+        }
+        return;
+      }
+
+      let anyRelevant = false;
+      let ctxCache = null;
       for (let i = 0; i < mutations.length; i++) {
         const m = mutations[i];
-        if (!isThoughtMutationRecord(m) && !isOwnPluginMutation(m)) {
-          pendingHiddenFullSync = true;
-          break;
-        }
-      }
-      return;
-    }
 
-    let anyRelevant = false;
-    let ctxCache = null;
-    for (let i = 0; i < mutations.length; i++) {
-      const m = mutations[i];
-
-      if (m.type === 'attributes') {
-        if (m.attributeName === 'data-ag-prism-host-i18n') {
-          dirtyFlags.g = anyRelevant = true;
-          continue;
-        }
-        const tgt = m.target;
-        if (tgt === D.body || tgt === de()) {
-          if (m.attributeName === 'data-ag-prism-mode') dirtyFlags.c = true;
-          dirtyFlags.t = anyRelevant = true;
-          continue;
-        }
-        if (tidOf(tgt?.[K_PE]) === 'aux-pane-split') {
-          let dualChanged = false;
-          runGuardedMut(() => { dualChanged = axU(tgt[K_PE]); });
-          if (dualChanged) dirtyFlags.a = anyRelevant = true;
-          else if (m.attributeName === 'style') bumpResizingPulse();
-          continue;
-        }
-        const tid = tidOf(tgt);
-        if (!ATTR_OBSERVED_TIDS.has(tid)) continue;
-        if (isThoughtIsolatedNode(tgt) || isOwnPluginNode(tgt) || isHoverCardNode(tgt)) continue;
-        if (tid === 'conversation-view') {
-          if (m.attributeName === 'data-cascade-id') dirtyFlags.r = dirtyFlags.c = anyRelevant = true;
-        } else if (tid === 'conversation-row-sidebar') {
-          if (m.attributeName === 'data-selected' && ga(tgt, 'data-selected') === 'true') {
-            streamChoreoCtl.stampSidebarRowRunningImmediate?.(tgt);
+        if (m.type === 'attributes') {
+          if (m.attributeName === 'data-ag-prism-host-i18n') {
+            dirtyFlags.g = anyRelevant = true;
+            continue;
           }
-          dirtyFlags.s = anyRelevant = true;
-        } else if (tid === 'worked-for-collapsible' || tid === 'thinking-collapsible-trigger' || tid === 'changed-files-card-header') {
-          dirtyFlags.l = anyRelevant = true;
-          if (tid === 'thinking-collapsible-trigger') dirtyFlags.tk = true;
-          else if (tid === 'changed-files-card-header') dirtyFlags.cf = true;
-          dirtyCollapsibleTargets.add(tgt);
-        } else if (tid === 'running-items-panel') {
-          dirtyFlags.c = anyRelevant = true;
-        } else if (tid === 'toggle-aux-sidebar' || tid === 'toggle-maximize-pane') {
-          dirtyFlags.a = anyRelevant = true;
-        }
-        continue;
-      }
-
-      if (m.type === 'childList') {
-        const tgt = m.target;
-        if (tagU(tgt) === 'STYLE' && !tgt.id && ga(tgt, TS_A) !== '1') {
-          dirtyTurboRoots.add(tgt);
-          anyRelevant = true;
-          continue;
-        }
-        let pCtx = null;
-        if (isElementLike(tgt)) {
-          if (!ctxCache) ctxCache = new Map();
-          pCtx = ctxCache.get(tgt);
-          if (!pCtx) {
-            pCtx =
-              isThoughtIsolatedNode(tgt) || isOwnPluginNode(tgt) || isHoverCardNode(tgt)
-                ? { skip: true }
-                : {
-                    skip: false,
-                    inConv: Boolean(cl(tgt, '[data-testid="conversation-view"]')),
-                    inComp: Boolean(cl(tgt, '[data-testid="agent-input-box"]')),
-                    inSide: Boolean(cl(tgt, 'aside')),
-                    inDlg: Boolean(cl(tgt, '[role="dialog"]')),
-                    inMdl: Boolean(cl(tgt, MODEL_PANEL_SEL)),
-                  };
-            ctxCache.set(tgt, pCtx);
+          const tgt = m.target;
+          if (tgt === D.body || tgt === de()) {
+            if (m.attributeName === 'data-ag-prism-mode') dirtyFlags.c = true;
+            dirtyFlags.t = anyRelevant = true;
+            continue;
           }
-          if (pCtx.skip) continue;
-          if (tidOf(tgt) === 'aux-pane-split') dirtyFlags.a = anyRelevant = true;
-        }
-        const inComposerBox = !!(pCtx && pCtx.inComp);
-        const scanList = (list, isAdd) => {
-          if (!list || !list.length) return;
-          for (let j = 0; j < list.length; j++) {
-            const node = list[j];
-            if (!isElementLike(node) || isThoughtIsolatedNode(node) || isOwnPluginNode(node) || isHoverCardNode(node)) continue;
-            if (isAdd && tidOf(node) === 'conversation-row-sidebar' && ga(node, 'data-selected') === 'true') {
-              streamChoreoCtl.stampSidebarRowRunningImmediate?.(node);
+          if (tidOf(tgt?.[K_PE]) === 'aux-pane-split') {
+            let dualChanged = false;
+            runGuardedMut(() => { dualChanged = axU(tgt[K_PE]); });
+            if (dualChanged) dirtyFlags.a = anyRelevant = true;
+            else if (m.attributeName === 'style') bumpResizingPulse();
+            continue;
+          }
+          const tid = tidOf(tgt);
+          if (!ATTR_OBSERVED_TIDS.has(tid)) continue;
+          if (isThoughtIsolatedNode(tgt) || isOwnPluginNode(tgt) || isHoverCardNode(tgt)) continue;
+          if (tid === 'conversation-view') {
+            if (m.attributeName === 'data-cascade-id') dirtyFlags.r = dirtyFlags.c = anyRelevant = true;
+          } else if (tid === 'conversation-row-sidebar') {
+            if (m.attributeName === 'data-selected' && ga(tgt, 'data-selected') === 'true') {
+              streamChoreoCtl.stampSidebarRowRunningImmediate?.(tgt);
             }
-            classifyDirtySubtree(node, isAdd, pCtx);
-            if (inComposerBox) dirtyFlags.c = dirtyFlags.r = true;
+            dirtyFlags.s = anyRelevant = true;
+          } else if (tid === 'worked-for-collapsible' || tid === 'thinking-collapsible-trigger' || tid === 'changed-files-card-header') {
+            dirtyFlags.l = anyRelevant = true;
+            if (tid === 'thinking-collapsible-trigger') dirtyFlags.tk = true;
+            else if (tid === 'changed-files-card-header') dirtyFlags.cf = true;
+            dirtyCollapsibleTargets.add(tgt);
+          } else if (tid === 'running-items-panel') {
+            dirtyFlags.c = anyRelevant = true;
+          } else if (tid === 'toggle-aux-sidebar' || tid === 'toggle-maximize-pane') {
+            dirtyFlags.a = anyRelevant = true;
+          }
+          continue;
+        }
+
+        if (m.type === 'childList') {
+          const tgt = m.target;
+          if (tagU(tgt) === 'STYLE' && !tgt.id && ga(tgt, TS_A) !== '1') {
+            dirtyTurboRoots.add(tgt);
             anyRelevant = true;
+            continue;
           }
-        };
-        scanList(m.addedNodes, true);
-        if (m.removedNodes && m.removedNodes.length > 0) {
-          if (isElementLike(tgt) && ha(tgt, 'data-ag-cs-bg-cmd-wrap')) {
-            dirtyFlags.m = anyRelevant = true;
-            dirtyBgCmds.add(tgt);
+          let pCtx = null;
+          if (isElementLike(tgt)) {
+            if (!ctxCache) ctxCache = new Map();
+            pCtx = ctxCache.get(tgt);
+            if (!pCtx) {
+              pCtx =
+                isThoughtIsolatedNode(tgt) || isOwnPluginNode(tgt) || isHoverCardNode(tgt)
+                  ? { skip: true }
+                  : {
+                      skip: false,
+                      inConv: Boolean(cl(tgt, '[data-testid="conversation-view"]')),
+                      inComp: Boolean(cl(tgt, '[data-testid="agent-input-box"]')),
+                      inSide: Boolean(cl(tgt, 'aside')),
+                      inDlg: Boolean(cl(tgt, '[role="dialog"]')),
+                      inMdl: Boolean(cl(tgt, MODEL_PANEL_SEL)),
+                    };
+              ctxCache.set(tgt, pCtx);
+            }
+            if (pCtx.skip) continue;
+            if (tidOf(tgt) === 'aux-pane-split') dirtyFlags.a = anyRelevant = true;
           }
-          scanList(m.removedNodes, false);
+          const inComposerBox = !!(pCtx && pCtx.inComp);
+          const scanList = (list, isAdd) => {
+            if (!list || !list.length) return;
+            for (let j = 0; j < list.length; j++) {
+              const node = list[j];
+              if (!isElementLike(node) || isThoughtIsolatedNode(node) || isOwnPluginNode(node) || isHoverCardNode(node)) continue;
+              if (isAdd && tidOf(node) === 'conversation-row-sidebar' && ga(node, 'data-selected') === 'true') {
+                streamChoreoCtl.stampSidebarRowRunningImmediate?.(node);
+              }
+              classifyDirtySubtree(node, isAdd, pCtx);
+              if (inComposerBox) dirtyFlags.c = dirtyFlags.r = true;
+              anyRelevant = true;
+            }
+          };
+          scanList(m.addedNodes, true);
+          if (m.removedNodes && m.removedNodes.length > 0) {
+            if (isElementLike(tgt) && ha(tgt, 'data-ag-cs-bg-cmd-wrap')) {
+              dirtyFlags.m = anyRelevant = true;
+              dirtyBgCmds.add(tgt);
+            }
+            scanList(m.removedNodes, false);
+          }
         }
       }
-    }
 
-    if (anyRelevant && (O.values(dirtyFlags).some(Boolean) || dirtyTurboRoots.size > 0)) {
-      scheduleSync();
-    }
+      if (anyRelevant && (O.values(dirtyFlags).some(Boolean) || dirtyTurboRoots.size > 0)) {
+        scheduleSync();
+      }
+    } catch {}
   });
   mainObserver = observer;
 
@@ -3180,6 +3253,7 @@
     clearWinBlur();
     finishResizing(false);
     unmountCrab();
+    msLastHostSleep = false;
     if (crabRemoveAttrTimer) {
       CT(crabRemoveAttrTimer);
       crabRemoveAttrTimer = 0;
@@ -3193,6 +3267,7 @@
       pollTimer = null;
     }
     cancelHostEnhancerSync();
+    resetEnhancerDirty();
     if (storeDebounce) {
       CT(storeDebounce);
       storeDebounce = null;
@@ -3413,11 +3488,14 @@
     },
     destroy() {
       teardownCore();
-      for (const k of ['__agPrismTelemetry', '__agPrismEffortSlider', '__agPrismThought', '__agPrismOmni', '__agPrismSidebar', '__agPrismInlineDiff']) {
+      for (const k of ['__agPrismTelemetry', '__agPrismEffortSlider', '__agPrismThought', '__agPrismOmni', '__agPrismSidebar']) {
         try {
           W[k]?.destroy?.();
         } catch {}
       }
+      try {
+        W.__agPrismInlineDiff?.unbindHooks?.();
+      } catch {}
       const targetCtxMenu = ownedCtxMenu || W.__agPrismContextMenu || GT.__agPrismContextMenu;
       try {
         targetCtxMenu?.destroy?.();
@@ -3473,7 +3551,7 @@
       }
       qa(
         D,
-        '#ag-prism-settings-v101-css, #ag-prism-omni-css, #ag-prism-motion-off-css, #ag-prism-inline-diff-css, .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, .ag-cs-ctx-menu, .ag-cs-ctx-toast, .ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu, .ag-cs-sb-more-wrap, [data-ag-prism-omni-owned="1"], .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-conv-aura-host, .ag-cs-conv-glow, .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-model-glyph, .ag-cs-panel-row-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-orbital-backdrop, .ag-cs-perf-backdrop, .ag-v2-habitat-prop, #' +
+        '#ag-prism-settings-v101-css, #ag-prism-omni-css, #ag-prism-motion-off-css, .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, .ag-cs-ctx-menu, .ag-cs-ctx-toast, .ag-cs-sb-more-wrap, [data-ag-prism-omni-owned="1"], .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-conv-aura-host, .ag-cs-conv-glow, .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-model-glyph, .ag-cs-panel-row-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-orbital-backdrop, .ag-cs-perf-backdrop, .ag-v2-habitat-prop, #' +
           SETTINGS_SEC_ID
       ).forEach((el) => el.remove());
       const html = de();
@@ -3497,11 +3575,13 @@
     startLifecycle();
   } else if (typeof D.addEventListener === 'function') {
     const onReady = () => {
-      if (D.documentElement) {
-        D.removeEventListener('readystatechange', onReady);
-        D.removeEventListener('DOMContentLoaded', onReady);
-        startLifecycle();
-      }
+      try {
+        if (D.documentElement) {
+          D.removeEventListener('readystatechange', onReady);
+          D.removeEventListener('DOMContentLoaded', onReady);
+          startLifecycle();
+        }
+      } catch {}
     };
     D.addEventListener('readystatechange', onReady);
     D.addEventListener('DOMContentLoaded', onReady);

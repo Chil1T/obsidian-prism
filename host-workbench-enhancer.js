@@ -3,7 +3,7 @@
 // 2. Code block glass sticky header companion + manual [Fold (N lines)] / [Expand] toggle (>= 48 lines, scrollTop anchored, zero auto-fold).
 // 3. Long-conversation rail (`[data-testid="conversation-navigator"]`) hover outline popover + Alt+Up/Down instant turn jump.
 // 4. Native Antigravity chrome polish (Settings dialog rail, Subagent ambient, Sidebar overflow fold, Fast scroll-to-bottom,
-//    Permissions menu state, Overlay prism mirrors, Queued row feedback, OverviewSection GPU fold) + Channel 6 Inline Diff light delegation.
+//    Permissions menu state, Queued row feedback, OverviewSection GPU fold) + Channel 6 Inline Diff light delegation.
 
 (function (root) {
   'use strict';
@@ -721,6 +721,14 @@
       refreshCodeFoldLabels();
       refreshOutlineLocaleTexts();
       syncSidebarOverflowTools();
+      try {
+        win?.__agPrismInlineDiff?.sync?.(getConfig(), {
+          t: tFn,
+          getLang,
+          runGuardedMut: mut,
+          setAttrIfChanged: setA,
+        });
+      } catch {}
     }
 
     // ── 2. Code Block Sticky Header & Manual Fold (>= 48 Lines) ────────────
@@ -1613,7 +1621,8 @@
       const nav = qs(doc, '[data-testid="sidebar-navigation-items"]');
       if (!nav) return;
       const items = Array.from(nav.children || []).filter((ch) => isElementLike(ch) && !ch.classList?.contains('ag-cs-sb-more-wrap'));
-      const on = (getConfig() || {}).sidebarNavFold === 'on',
+      const cfg = getConfig() || {};
+      const on = cfg.sidebarRestyle !== false && cfg.sidebarNavFold === 'on',
         ov = on ? items.slice(1) : [];
       const AH = 'data-ag-sb-more-hidden',
         AI = 'data-ag-sb-more-item';
@@ -1678,20 +1687,6 @@
             const txt = sidebarMoreExpanded ? getUiText('sidebarLessLabel', 'Less') : `${getUiText('sidebarMoreLabel', 'More')} (${ov.length})`;
             if (lbl.textContent !== txt) lbl.textContent = txt;
           }
-        }
-      });
-    }
-
-    function syncOverlayPrismMirrors() {
-      if (isDead() || !doc?.querySelectorAll) return;
-      const ovs = doc.querySelectorAll('.agy-overlay');
-      if (!ovs?.length) return;
-      mut(() => {
-        for (const ov of ovs) {
-          if (!ov || ha(ov, 'data-hover-card-popup') || ga(ov, 'data-testid') === 'model-selector-panel') continue;
-          if (ga(ov, 'role') !== 'menu' && !ov.classList?.contains?.('max-h-48')) continue;
-          setA(ov, 'data-ag-cs-prism-box', '1');
-          setA(ov, 'data-ag-cs-prism-mirror', '1');
         }
       });
     }
@@ -1881,53 +1876,57 @@
     }
 
     function onDocClickCapture(ev) {
-      const t = ev?.target;
-      if (isDead() || !t?.closest) return;
-      if (cl(t, '[data-testid="permissions-selector-trigger"]')) {
-        win?.requestAnimationFrame?.(() => {
-          if (!isDead()) syncPermissionsMenuState();
-        });
-        schedNonDiffTimer(syncPermissionsMenuState, 20);
-        schedNonDiffTimer(syncPermissionsMenuState, 90);
-        return;
-      }
-      const sb = cl(t, '.agy-scroll-bottom');
-      if (sb) {
-        if (runFastScrollToBottom(sb)) {
-          ev.preventDefault?.();
-          ev.stopPropagation?.();
+      try {
+        const t = ev?.target;
+        if (isDead() || !t?.closest) return;
+        if (cl(t, '[data-testid="permissions-selector-trigger"]')) {
+          win?.requestAnimationFrame?.(() => {
+            if (!isDead()) syncPermissionsMenuState();
+          });
+          schedNonDiffTimer(syncPermissionsMenuState, 20);
+          schedNonDiffTimer(syncPermissionsMenuState, 90);
+          return;
         }
-        return;
-      }
-      if (handleOverviewSectionClick(ev)) return;
-      const qb = cl(t, 'button'),
-        qc = cl(qb, '[data-testid="queued-messages-card"]');
-      if (qb && qc) return triggerQueuedRowActionFeedback(qb, qc);
-      const dh = cl(t, '[data-ag-cs-settings-dlg="1"] button, [role="dialog"] button, [role="dialog"] [role="tab"]');
-      if (dh && !cl(dh, '#ag-cs-settings-sec')) {
-        win?.requestAnimationFrame?.(() => {
-          if (!isDead()) syncSettingsDialogChrome(doc, mut, setA);
-        });
-        schedNonDiffTimer(() => syncSettingsDialogChrome(doc, mut, setA), 36);
-      }
+        const sb = cl(t, '.agy-scroll-bottom');
+        if (sb) {
+          if (runFastScrollToBottom(sb)) {
+            ev.preventDefault?.();
+            ev.stopPropagation?.();
+          }
+          return;
+        }
+        if (handleOverviewSectionClick(ev)) return;
+        const qb = cl(t, 'button'),
+          qc = cl(qb, '[data-testid="queued-messages-card"]');
+        if (qb && qc) return triggerQueuedRowActionFeedback(qb, qc);
+        const dh = cl(t, '[data-ag-cs-settings-dlg="1"] button, [role="dialog"] button, [role="dialog"] [role="tab"]');
+        if (dh && !cl(dh, '#ag-cs-settings-sec')) {
+          win?.requestAnimationFrame?.(() => {
+            if (!isDead()) syncSettingsDialogChrome(doc, mut, setA);
+          });
+          schedNonDiffTimer(() => syncSettingsDialogChrome(doc, mut, setA), 36);
+        }
+      } catch {}
     }
 
     function onWinKeyDown(ev) {
-      if (isDead() || !ev) return;
-      if (ev.key === 'Escape') {
-        if (win?.__agPrismInlineDiff?.closeMenuIfOpen?.()) return;
-        if (outlineOpen) return closeNavOutline();
-      }
-      if (
-        ev.altKey &&
-        !ev.ctrlKey &&
-        !ev.metaKey &&
-        !ev.shiftKey &&
-        (ev.key === 'ArrowUp' || ev.key === 'ArrowDown') &&
-        !isEditableElement(ev.target)
-      ) {
-        if (jumpUserTurn(ev.key === 'ArrowUp' ? -1 : 1)) ev.preventDefault?.();
-      }
+      try {
+        if (isDead() || !ev) return;
+        if (ev.key === 'Escape') {
+          if (win?.__agPrismInlineDiff?.closeMenuIfOpen?.()) return;
+          if (outlineOpen) return closeNavOutline();
+        }
+        if (
+          ev.altKey &&
+          !ev.ctrlKey &&
+          !ev.metaKey &&
+          !ev.shiftKey &&
+          (ev.key === 'ArrowUp' || ev.key === 'ArrowDown') &&
+          !isEditableElement(ev.target)
+        ) {
+          if (jumpUserTurn(ev.key === 'ArrowUp' ? -1 : 1)) ev.preventDefault?.();
+        }
+      } catch {}
     }
 
     if (win && typeof win.addEventListener === 'function') {
@@ -1936,23 +1935,42 @@
     }
 
     // ── Public Lifecycle API ───────────────────────────────────────────────
-    function sync() {
+    function sync(flags = null) {
       if (isDead()) return;
+      const hasFlags = Boolean(flags && typeof flags === 'object');
+      const isFull =
+        !hasFlags ||
+        Boolean(flags.f) ||
+        (!flags.g && !flags.o && !flags.s && !flags.c && !flags.t && !flags.l && !flags.b && !flags.r);
       const curLang = String(getLang() || '');
       const langChanged = Boolean(lastSyncedLang && curLang !== lastSyncedLang);
       lastSyncedLang = curLang;
-      syncCascadeChange(true);
-      syncSidecarThemeBridge(false);
-      syncCodeBlocks();
-      syncNavRails();
-      syncSidebarOverflowTools();
-      syncPermissionsMenuState();
-      syncSubagentRunningAmbient();
-      syncOverlayPrismMirrors();
-      syncSettingsDialogChrome(doc, mut, setA);
-      try {
-        win?.__agPrismInlineDiff?.sync?.(getConfig());
-      } catch {}
+      if (isFull || flags.c || flags.l || flags.r || flags.s) syncCascadeChange(true);
+      if (isFull || flags.t || flags.r) syncSidecarThemeBridge(false);
+      if (isFull || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged) {
+        syncCodeBlocks();
+        syncNavRails();
+        syncSubagentRunningAmbient();
+      }
+      if (isFull || flags.s || flags.r || flags.t || langChanged) {
+        syncSidebarOverflowTools();
+      }
+      if (isFull || flags.o || flags.c || flags.b || flags.r) {
+        syncPermissionsMenuState();
+      }
+      if (isFull || flags.g || flags.o || flags.r) {
+        syncSettingsDialogChrome(doc, mut, setA);
+      }
+      if (isFull || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged) {
+        try {
+          win?.__agPrismInlineDiff?.sync?.(getConfig(), {
+            t: tFn,
+            getLang,
+            runGuardedMut: mut,
+            setAttrIfChanged: setA,
+          });
+        } catch {}
+      }
       if (langChanged) {
         refreshCodeFoldLabels();
         refreshOutlineLocaleTexts();
@@ -1983,7 +2001,7 @@
       ovSecAnimRafs.clear();
 
       try {
-        win?.__agPrismInlineDiff?.destroy?.();
+        win?.__agPrismInlineDiff?.unbindHooks?.();
       } catch {}
 
       if (win && typeof win.removeEventListener === 'function') {
@@ -2025,12 +2043,6 @@
             delete el._agOvCloseTimer;
             delete el._agOvOpenTimer;
             delete el._agOvOpenRaf;
-          });
-          qa(doc, '.agy-overlay').forEach((el) => {
-            if (ga(el, 'data-ag-cs-prism-mirror') === '1') {
-              ra(el, 'data-ag-cs-prism-mirror');
-              ra(el, 'data-ag-cs-prism-box');
-            }
           });
         });
       }

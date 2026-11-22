@@ -205,21 +205,46 @@ function createFastConfigRefreshBroadcaster({
                 entry.thoughtMounted = false;
               }
               if (inlineDiffExpr) {
-                if (!entry.inlineDiffMounted || !entry.inlineDiffScriptId || entry.lastInlineDiffHash !== inlineDiffHash) {
+                if (!entry.inlineDiffSkipped && (!entry.inlineDiffMounted || !entry.inlineDiffScriptId || entry.lastInlineDiffHash !== inlineDiffHash)) {
                   const idRes = await entry.session.evaluate(inlineDiffExpr).catch(() => null);
+                  const idSkipped = Boolean(idRes && typeof idRes.status === 'string' && idRes.status.startsWith('skipped-'));
                   if (idRes && idRes.ok) {
                     entry.inlineDiffMounted = true;
+                    entry.inlineDiffSkipped = false;
                     entry.lastInlineDiffHash = inlineDiffHash;
+                  } else if (idSkipped) {
+                    entry.inlineDiffMounted = false;
+                    entry.inlineDiffSkipped = true;
+                    entry.lastInlineDiffHash = inlineDiffHash;
+                    if (idRes.status === 'skipped-non-host' && INLINE_DIFF_BINDING) {
+                      await entry.session.send('Runtime.removeBinding', { name: INLINE_DIFF_BINDING }).catch(() => {});
+                      entry.inlineDiffBindingAdded = false;
+                    }
                   }
                 }
               } else if (entry.inlineDiffScriptId || entry.inlineDiffMounted) {
                 if (inlineDiffRemoveExpr) await entry.session.evaluate(inlineDiffRemoveExpr).catch(() => {});
                 entry.inlineDiffMounted = false;
+                entry.inlineDiffSkipped = false;
                 entry.lastInlineDiffHash = '';
               }
             }
           } else {
-            await entry.session.evaluate(expr).catch(() => {});
+            const reRes = await entry.session.evaluate(expr).catch(() => null);
+            entry.sidebarHostVerified = Boolean(reRes && reRes.status === 'ok');
+            if (reRes && reRes.status === 'skipped-non-host') {
+              if (entry.sidebarBindingAdded && sidebarBinding) {
+                await entry.session.send('Runtime.removeBinding', { name: sidebarBinding }).catch(() => {});
+                entry.sidebarBindingAdded = false;
+              }
+              if (INLINE_DIFF_BINDING) {
+                await entry.session.send('Runtime.removeBinding', { name: INLINE_DIFF_BINDING }).catch(() => {});
+                entry.inlineDiffBindingAdded = false;
+              }
+              entry.inlineDiffMounted = false;
+              entry.inlineDiffSkipped = true;
+              continue;
+            }
             if (omniEnabled && omniExpr) await entry.session.evaluate(omniExpr).catch(() => {});
             if (sidebarEnabled && sidebarExpr) await entry.session.evaluate(sidebarExpr).catch(() => {});
             if (hostI18nExpr && hostI18nEnabled) await entry.session.evaluate(hostI18nExpr).catch(() => {});
@@ -233,13 +258,24 @@ function createFastConfigRefreshBroadcaster({
             }
             if (inlineDiffExpr) {
               const idRes = await entry.session.evaluate(inlineDiffExpr).catch(() => null);
+              const idSkipped = Boolean(idRes && typeof idRes.status === 'string' && idRes.status.startsWith('skipped-'));
               if (idRes && idRes.ok) {
                 entry.inlineDiffMounted = true;
+                entry.inlineDiffSkipped = false;
                 entry.lastInlineDiffHash = inlineDiffHash;
+              } else if (idSkipped) {
+                entry.inlineDiffMounted = false;
+                entry.inlineDiffSkipped = true;
+                entry.lastInlineDiffHash = inlineDiffHash;
+                if (idRes.status === 'skipped-non-host' && INLINE_DIFF_BINDING) {
+                  await entry.session.send('Runtime.removeBinding', { name: INLINE_DIFF_BINDING }).catch(() => {});
+                  entry.inlineDiffBindingAdded = false;
+                }
               }
             } else if (entry.inlineDiffScriptId || entry.inlineDiffMounted) {
               if (inlineDiffRemoveExpr) await entry.session.evaluate(inlineDiffRemoveExpr).catch(() => {});
               entry.inlineDiffMounted = false;
+              entry.inlineDiffSkipped = false;
               entry.lastInlineDiffHash = '';
             }
           }
@@ -578,6 +614,29 @@ async function watch() {
     entry.scriptId = identifier;
     const res = await entry.session.evaluate(expr);
     entry.sidebarHostVerified = Boolean(res && res.status === 'ok');
+    if (res && res.status === 'skipped-non-host') {
+      for (const key of ['scriptId', 'omniScriptId', 'sidebarScriptId', 'hostI18nScriptId', 'thoughtScriptId', 'inlineDiffScriptId']) {
+        if (entry[key]) {
+          await entry.session
+            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry[key] })
+            .catch(() => {});
+          entry[key] = null;
+        }
+      }
+      if (entry.sidebarBindingAdded && SIDEBAR_BINDING) {
+        await entry.session.send('Runtime.removeBinding', { name: SIDEBAR_BINDING }).catch(() => {});
+        entry.sidebarBindingAdded = false;
+      }
+      if (INLINE_DIFF_BINDING) {
+        await entry.session.send('Runtime.removeBinding', { name: INLINE_DIFF_BINDING }).catch(() => {});
+        entry.inlineDiffBindingAdded = false;
+      }
+      entry.thoughtMounted = false;
+      entry.inlineDiffMounted = false;
+      entry.inlineDiffSkipped = true;
+      entry.lastInlineDiffHash = '';
+      return res;
+    }
 
     const cfgNow = readConfig();
     const omniEnabled = cfgNow?.omniModule !== 'off';
@@ -656,6 +715,7 @@ async function watch() {
     if (inlineDiffExpr) {
       if (INLINE_DIFF_BINDING) {
         await entry.session.send('Runtime.addBinding', { name: INLINE_DIFF_BINDING }).catch(() => {});
+        entry.inlineDiffBindingAdded = true;
       }
       const idAdd = await entry.session
         .send('Page.addScriptToEvaluateOnNewDocument', { source: inlineDiffExpr })
@@ -663,13 +723,30 @@ async function watch() {
       if (idAdd && idAdd.identifier) entry.inlineDiffScriptId = idAdd.identifier;
       const idRes = await entry.session.evaluate(inlineDiffExpr).catch(() => null);
       const idHashMatch = /const targetHash = "([^"]+)"/.exec(inlineDiffExpr);
-      entry.inlineDiffMounted = Boolean(idRes && idRes.ok);
-      entry.lastInlineDiffHash = idHashMatch ? idHashMatch[1] : inlineDiffExpr;
+      const idSkipped = Boolean(idRes && typeof idRes.status === 'string' && idRes.status.startsWith('skipped-'));
+      if (idRes && idRes.ok) {
+        entry.inlineDiffMounted = true;
+        entry.inlineDiffSkipped = false;
+        entry.lastInlineDiffHash = idHashMatch ? idHashMatch[1] : inlineDiffExpr;
+      } else if (idSkipped) {
+        entry.inlineDiffMounted = false;
+        entry.inlineDiffSkipped = true;
+        entry.lastInlineDiffHash = idHashMatch ? idHashMatch[1] : inlineDiffExpr;
+        if (idRes.status === 'skipped-non-host' && INLINE_DIFF_BINDING) {
+          await entry.session.send('Runtime.removeBinding', { name: INLINE_DIFF_BINDING }).catch(() => {});
+          entry.inlineDiffBindingAdded = false;
+        }
+      } else {
+        entry.inlineDiffMounted = false;
+        entry.inlineDiffSkipped = false;
+        entry.lastInlineDiffHash = '';
+      }
     } else {
       if (hadInlineDiff && activeInlineDiffRemoveExpression) {
         await entry.session.evaluate(activeInlineDiffRemoveExpression).catch(() => {});
       }
       entry.inlineDiffMounted = false;
+      entry.inlineDiffSkipped = false;
       entry.lastInlineDiffHash = '';
     }
     return res;
@@ -691,7 +768,9 @@ async function watch() {
         thoughtScriptId: null,
         thoughtMounted: false,
         inlineDiffScriptId: null,
+        inlineDiffBindingAdded: false,
         inlineDiffMounted: false,
+        inlineDiffSkipped: false,
         lastInlineDiffHash: '',
         docGen: 0,
         mainFrameId: null,
@@ -724,6 +803,7 @@ async function watch() {
         entry.docGen += 1;
         entry.pendingAckEpoch = 0;
         entry.sidebarHostVerified = false;
+        entry.inlineDiffSkipped = false;
       });
       session.on('Page.frameNavigated', (params) => {
         const frame = params?.frame;
@@ -733,6 +813,7 @@ async function watch() {
           entry.docGen += 1;
           entry.pendingAckEpoch = 0;
           entry.sidebarHostVerified = false;
+          entry.inlineDiffSkipped = false;
         }
       });
       await session.send('Page.enable');
@@ -831,6 +912,7 @@ async function watch() {
           const expectedDocGen = entry.docGen;
           const isCurrentContext = () =>
             !session.closed &&
+            entry.sidebarHostVerified === true &&
             isTrustedMainFrameContext(entry, executionContextId) &&
             Boolean(context) &&
             entry.contextFrames.get(executionContextId) === context &&
@@ -910,6 +992,7 @@ async function watch() {
       }
       if (INLINE_DIFF_BINDING) {
         await session.send('Runtime.addBinding', { name: INLINE_DIFF_BINDING }).catch(() => {});
+        entry.inlineDiffBindingAdded = true;
       }
       await ensureSidebarBinding(session, entry, readConfig());
       const res = await apply(entry);

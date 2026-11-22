@@ -2052,6 +2052,7 @@
       pendNextW = nw;
       if (resizeRaf) return;
       const flush = () => {
+        if (disposed) return;
         resizeRaf = 0;
         const p = pendPrevW, n = pendNextW;
         pendPrevW = pendNextW = 0;
@@ -4312,7 +4313,14 @@
     const onHeartbeat = () => {
       if (disposed) return;
       const now = performance.now();
-      if (isHostDetached() || parked || isDocHidden() || isHostSleeping() || (isWindowBlurred() && (dozing || !inTrans()))) {
+      if (
+        isHostDetached() ||
+        parked ||
+        isDocHidden() ||
+        isHostSleeping() ||
+        (isWindowBlurred() && (dozing || !inTrans())) ||
+        (reducedMotion && !inTrans())
+      ) {
         syncHeartbeat(now);
         if (isVramSleepState()) reclaimStageVram();
         return;
@@ -4333,7 +4341,7 @@
         isDocHidden() ||
         isHostSleeping() ||
         (isWindowBlurred() && (dozing || !inTrans())) ||
-        (reducedMotion && !stageBusy())
+        (reducedMotion && !inTrans())
       ) {
         targetMs = 0;
       } else if (dozing && !stageBusy() && !hasDozeTransition(now)) {
@@ -5210,6 +5218,10 @@
           dragRafId = 0;
         }
         dragRafPending = false;
+        if (resizeRaf && cAF) {
+          try { cAF(resizeRaf); } catch (_) {}
+          resizeRaf = 0;
+        }
         clearTimeout(pauseTimer);
         clearTimeout(theaterTimer);
         pendingTimers.forEach((t) => clearTimeout(t));

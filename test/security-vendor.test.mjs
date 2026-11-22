@@ -705,9 +705,14 @@ test('P2 pulse-dashboard: store LRU preserves processing background sessions & b
     });
     const reqOk = bg.request(LOCAL_SCOPE, bgId, { port: 4321, csrf: 'tok' });
     assert.equal(reqOk, true);
-    await new Promise((r) => setTimeout(r, 25));
+    for (let i = 0; i < 300 && fakeWorker.listenerCount('error') === 0; i += 1) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    assert.ok(fakeWorker.listenerCount('error') > 0, 'BackgroundStatistics must attach worker error listener');
     fakeWorker.emit('error', Object.assign(new Error('Worker terminated due to reaching memory limit'), { code: 'ERR_WORKER_OUT_OF_MEMORY' }));
-    await new Promise((r) => setTimeout(r, 25));
+    for (let i = 0; i < 100 && bg.state(bgId)?.state !== 'limited'; i += 1) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
     const st = bg.state(bgId);
     assert.equal(st?.state, 'limited');
     assert.equal(st?.reason, 'worker-oom');

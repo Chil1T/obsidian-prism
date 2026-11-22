@@ -754,9 +754,10 @@ test('reducedMotion pauses idle heartbeat to 0fps (timerIntervalMs=0) and revive
     assert.equal(pausedSnap.perf.timerIntervalMs, 0, 'Idle reducedMotion must stop 100ms heartbeat to 0fps');
     assert.equal(pausedSnap.perf.timerPaused, true);
 
-    // 若在 reducedMotion 下进入流式忙碌态 -> 按需维持状态同步，流式结束后再次回到 0fps
+    // 在 reducedMotion (motionLevel='off') 下即使进入流式忙碌态，仍保持 0fps 停摆并同步一次单帧姿态
     h.stage.setState({ streaming: true });
-    assert.equal(h.stage.getLayoutSnapshot().perf.timerIntervalMs, 100);
+    assert.equal(h.stage.getLayoutSnapshot().perf.timerIntervalMs, 0);
+    assert.equal(h.stage.getLayoutSnapshot().perf.timerPaused, true);
     h.stage.setState({ streaming: false });
     assert.equal(h.stage.getLayoutSnapshot().perf.timerIntervalMs, 0);
 

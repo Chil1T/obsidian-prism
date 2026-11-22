@@ -15,7 +15,7 @@
   const SIDE = SA + ',' + SB;
   const SIDE_IN = SA + ' ' + CE + ',' + SB + ' ' + CE;
   const EDIT = BOX + ',' + CE + ',input,textarea,select,[role="textbox"],.monaco-editor,.cm-editor';
-  const EXCL = EDIT + ',a[href],button,[role="button"],aside,[data-testid="conversation-row-sidebar"],' + SIDE + ',[role="dialog"],[role="menu"],.ag-cs-ctx-menu,.ag-omni-menu,#ag-prism-settings-sec,#ag-cs-settings-sec,.ces-set,.agy-overlay,[data-ag-zh-widget],.ag-zh-widget,#ag-zh-panel,[data-testid="host-i18n-widget"]';
+  const EXCL = EDIT + ',a[href],button,[role="button"],aside,[data-testid="conversation-row-sidebar"],' + SIDE + ',[role="dialog"],[role="menu"],.ag-cs-ctx-menu,.ag-cs-diff-ctx-menu,.ag-omni-menu,#ag-prism-settings-sec,#ag-cs-settings-sec,.ces-set,.agy-overlay,[data-ag-zh-widget],.ag-zh-widget,#ag-zh-panel,[data-testid="host-i18n-widget"]';
   const SLASH = '[role="listbox"] [role="option"],[data-testid="slash-command-menu"] [role="option"]';
   const SEND = '[data-testid="input-send-button"],[data-testid="send-button"],' + BOX + ' button[type="submit"]';
 
@@ -345,6 +345,20 @@
       return r;
     };
 
+    const onOtherCtxOpen = (ev) => {
+      safe(() => {
+        if (ev?.detail?.source !== 'btw') close();
+      });
+    };
+    const emitCtxOpen = () => {
+      safe(() => W.__agPrismInlineDiff?.closeMenuIfOpen?.());
+      safe(() => {
+        if (!win?.dispatchEvent) return;
+        const CE = typeof W.CustomEvent === 'function' ? W.CustomEvent : typeof CustomEvent === 'function' ? CustomEvent : null;
+        win.dispatchEvent(CE ? new CE('ag-prism:ctx-open', { detail: { source: 'btw' } }) : { type: 'ag-prism:ctx-open', detail: { source: 'btw' } });
+      });
+    };
+
     const toggleOpen = (on) => {
       if (openBound === on) return;
       openBound = on;
@@ -354,6 +368,7 @@
       doc?.[m]?.('scroll', onScroll, true);
       win?.[m]?.('blur', close);
       win?.[m]?.('resize', close);
+      win?.[m]?.('ag-prism:ctx-open', onOtherCtxOpen);
     };
 
     const close = () => {
@@ -370,6 +385,7 @@
     const openAt = (x, y, opts = {}) => {
       if (destroyed || !doc?.body) return null;
       close();
+      emitCtxOpen();
       if (opts.lang) lang = rLang(opts.lang);
       const s = getSel();
       const autoSel = !s || s.isCollapsed === true || toEl(s.anchorNode)?.closest?.(EDIT) ? '' : clip(s.toString?.());
@@ -400,7 +416,7 @@
         const [id, li, ii] = row;
         const btn = sa(mk('button'), { role: 'menuitem', 'data-ctx-action': id, type: 'button' });
         const idx = items.length;
-        if (id === 'btw') btn.className = 'is-primary';
+        btn.className = id === 'btw' ? 'ag-cs-ctx-item is-primary' : 'ag-cs-ctx-item';
         const svg = sa(mkS('svg'), { width: '14', height: '14', viewBox: '0 0 16 16', 'aria-hidden': 'true' });
         svg.appendChild(sa(mkS('path'), { d: ICONS[ii] }));
         btn.appendChild(svg);
@@ -430,21 +446,25 @@
     };
 
     const onCtx = (ev) => {
-      if (destroyed || !enabled || !ev || ev.shiftKey === true) return;
-      const el = toEl(ev.target);
-      if (!el || el.isContentEditable === true || !el.closest?.(CONV) || el.closest?.(EXCL)) return;
-      stop(ev);
-      openAt(ev.clientX, ev.clientY);
+      safe(() => {
+        if (destroyed || !enabled || !ev || ev.shiftKey === true) return;
+        const el = toEl(ev.target);
+        if (!el || el.isContentEditable === true || !el.closest?.(CONV) || el.closest?.(EXCL)) return;
+        stop(ev);
+        openAt(ev.clientX, ev.clientY);
+      });
     };
-    const onOutside = (ev) => { const t = ev?.target; if (menuEl && !(t && (menuEl.contains?.(t) || toEl(t)?.closest?.('.ag-cs-ctx-menu') === menuEl))) close(); };
-    const onScroll = (ev) => { if (menuEl && ev?.target !== menuEl) close(); };
+    const onOutside = (ev) => { safe(() => { const t = ev?.target; if (menuEl && !(t && (menuEl.contains?.(t) || toEl(t)?.closest?.('.ag-cs-ctx-menu') === menuEl))) close(); }); };
+    const onScroll = (ev) => { safe(() => { if (menuEl && ev?.target !== menuEl) close(); }); };
     const onKey = (ev) => {
-      if (!menuEl || !ev) return;
-      const k = ev.key;
-      const navMap = { Home: 0, End: items.length - 1, ArrowDown: activeIdx < 0 ? 0 : activeIdx + 1, ArrowUp: activeIdx < 0 ? items.length - 1 : activeIdx - 1 };
-      if (k === 'Escape') { stop(ev); close(); }
-      else if (k in navMap) { ev.preventDefault?.(); setActive(navMap[k]); }
-      else if ((k === 'Enter' || k === ' ') && items[activeIdx]) { stop(ev); runAction(items[activeIdx].id); }
+      safe(() => {
+        if (!isOpen() || !ev) return;
+        const k = ev.key;
+        const navMap = { Home: 0, End: items.length - 1, ArrowDown: activeIdx < 0 ? 0 : activeIdx + 1, ArrowUp: activeIdx < 0 ? items.length - 1 : activeIdx - 1 };
+        if (k === 'Escape') { stop(ev); close(); }
+        else if (k in navMap) { ev.preventDefault?.(); setActive(navMap[k]); }
+        else if ((k === 'Enter' || k === ' ') && items[activeIdx]) { stop(ev); runAction(items[activeIdx].id); }
+      });
     };
 
     const toggleCtx = (on) => {

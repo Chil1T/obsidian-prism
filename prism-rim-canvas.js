@@ -181,7 +181,10 @@
       if (!all && isDestroyed()) return;
       for (const e of cachedPrismBoxes) zEnt(e, all);
       zEnt(cachedOrchEntry, all);
-      if (all) for (const c of trackedRimCanvases) zCv(c);
+      if (all) {
+        for (const c of trackedRimCanvases) zCv(c);
+        getDoc()?.querySelectorAll?.('.ag-cs-prism-rim-cv')?.forEach?.(zCv);
+      }
     };
     const armIdle = () => {
       if (isDestroyed() || typeof setTimeout !== 'function') return;
@@ -199,13 +202,14 @@
       }
     }
 
-    function clearAllRimCanvases() {
+    function clearAllRimCanvases(immediateShrink = false) {
       cachedPrismBoxes.forEach(clearRimEntry);
       clearRimEntry(cachedOrchEntry);
       getDoc()?.querySelectorAll?.('.ag-cs-prism-rim-cv')?.forEach?.((cv) => {
         try { const ctx = cv.getContext?.('2d'); if (ctx && cv.width > 0 && cv.height > 0) ctx.clearRect(0, 0, cv.width, cv.height); } catch {}
       });
-      armIdle();
+      if (immediateShrink) shrinkRims(1);
+      else armIdle();
     }
 
     const trackedRimCanvases = new Set();
@@ -222,18 +226,59 @@
       if (host?.hasAttribute?.('data-ag-cs-prism-cv')) host.removeAttribute('data-ag-cs-prism-cv');
     }
 
+    function pruneDetachedBoxes(activeTrack) {
+      const keepBox = (b) => Boolean(b && b.isConnected !== false && b.getAttribute?.('data-ag-cs-prism-box') === '1');
+      if (cachedPrismBoxes.length > 0) {
+        let kept = null;
+        for (let i = 0; i < cachedPrismBoxes.length; i++) {
+          const e = cachedPrismBoxes[i];
+          if (e && keepBox(e.box)) {
+            if (kept) kept.push(e);
+          } else {
+            if (!kept) kept = cachedPrismBoxes.slice(0, i);
+            if (e?.cv) removeSingleRimCanvas(e.cv);
+            if (e?.box && observedPrismSet.has(e.box)) {
+              try { prismBoxRo?.unobserve?.(e.box); } catch {}
+              observedPrismSet.delete(e.box);
+            }
+          }
+        }
+        if (kept) cachedPrismBoxes = kept;
+      }
+      if (
+        cachedOrchEntry &&
+        (!cachedOrchEntry.box || cachedOrchEntry.box.isConnected === false || (activeTrack && cachedOrchEntry.box !== activeTrack))
+      ) {
+        if (cachedOrchEntry.cv) removeSingleRimCanvas(cachedOrchEntry.cv);
+        if (cachedOrchEntry.box && observedPrismSet.has(cachedOrchEntry.box)) {
+          try { prismBoxRo?.unobserve?.(cachedOrchEntry.box); } catch {}
+          observedPrismSet.delete(cachedOrchEntry.box);
+        }
+        cachedOrchEntry = null;
+      }
+      if (observedPrismSet.size > 0) {
+        for (const box of Array.from(observedPrismSet)) {
+          if (!box || box.isConnected === false || (box.getAttribute?.('data-ag-cs-prism-box') !== '1' && box !== activeTrack)) {
+            try { prismBoxRo?.unobserve?.(box); } catch {}
+            observedPrismSet.delete(box);
+          }
+        }
+      }
+    }
+
     function pruneOrphanRimCanvases(fullScan = true) {
+      const activeTrack = getActiveCrystalTrack?.() || null;
+      pruneDetachedBoxes(activeTrack);
       const d = getDoc();
       if (!d || typeof d.querySelectorAll !== 'function') return;
-      const activeTrack = getActiveCrystalTrack?.() || null;
-      const keepHost = (h) => Boolean(h && (h.getAttribute?.('data-ag-cs-prism-box') === '1' || (activeTrack && h === activeTrack)));
+      const keepHost = (h) => Boolean(h && h.isConnected !== false && (h.getAttribute?.('data-ag-cs-prism-box') === '1' || (activeTrack && h === activeTrack)));
       if (!fullScan) {
-        for (const cv of trackedRimCanvases) {
-          if (cv.isConnected === false || !keepHost(cv.parentElement)) removeSingleRimCanvas(cv);
+        for (const cv of Array.from(trackedRimCanvases)) {
+          if (!cv || cv.isConnected === false || !keepHost(cv.parentElement)) removeSingleRimCanvas(cv);
         }
         return;
       }
-      for (const cv of trackedRimCanvases) {
+      for (const cv of Array.from(trackedRimCanvases)) {
         if (!cv || cv.isConnected === false) trackedRimCanvases.delete(cv);
       }
       d.querySelectorAll('.ag-cs-prism-rim-cv').forEach((cv) => {
@@ -293,7 +338,21 @@
       ctx.closePath();
     }
 
+    function traceCursorGhostPath(ctx, s) {
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, 13.8 * s);
+      ctx.lineTo(3.6 * s, 10.5 * s);
+      ctx.lineTo(6.1 * s, 15.6 * s);
+      ctx.lineTo(8.0 * s, 14.7 * s);
+      ctx.lineTo(5.5 * s, 9.6 * s);
+      ctx.lineTo(10.1 * s, 9.6 * s);
+      ctx.closePath();
+    }
+
     function drawMirrorCursorReflection(ctx, gx, gy, w, h, dpr, dark, effAlpha, rectW, rectH, localX, localY) {
+      // 面积超过 120,000 px² 的大容器（如 overview-panel）跳过光标倒影以规避全画幅逐帧重绘开销
+      if ((rectW || 0) * (rectH || 0) > 120000) return;
       const distX = localX < 0 ? -localX : localX > rectW ? localX - rectW : 0;
       const distY = localY < 0 ? -localY : localY > rectH ? localY - rectH : 0;
       const distOut = Math.hypot(distX, distY);
@@ -320,31 +379,36 @@
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, w, h);
 
-      // 2) Soft-focus coated glass cursor ghost reflection (depth-blurred, zero harsh stroke)
-      const s = 1.06 * dpr;
+      // 2) 双层低透明度软渐变模拟虚焦倒影（零 ctx.filter 离屏高斯表面分配）
+      const sOuter = 1.18 * dpr;
       ctx.save();
-      try {
-        if ('filter' in ctx) ctx.filter = `blur(${(1.25 * dpr).toFixed(2)}px)`;
-      } catch {}
-      ctx.translate(rx, ry);
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(0, 13.8 * s);
-      ctx.lineTo(3.6 * s, 10.5 * s);
-      ctx.lineTo(6.1 * s, 15.6 * s);
-      ctx.lineTo(8.0 * s, 14.7 * s);
-      ctx.lineTo(5.5 * s, 9.6 * s);
-      ctx.lineTo(10.1 * s, 9.6 * s);
-      ctx.closePath();
+      ctx.translate(rx - 0.55 * dpr, ry - 0.55 * dpr);
+      traceCursorGhostPath(ctx, sOuter);
+      const og = ctx.createLinearGradient(0, 0, 8 * sOuter, 16 * sOuter);
+      if (dark) {
+        og.addColorStop(0, `rgba(232,242,255,${(0.055 * reflAlpha).toFixed(4)})`);
+        og.addColorStop(0.55, `rgba(204,224,248,${(0.024 * reflAlpha).toFixed(4)})`);
+        og.addColorStop(1, 'rgba(180,205,238,0)');
+      } else {
+        og.addColorStop(0, `rgba(15,23,42,${(0.032 * reflAlpha).toFixed(4)})`);
+        og.addColorStop(1, 'rgba(15,23,42,0)');
+      }
+      ctx.fillStyle = og;
+      ctx.fill();
+      ctx.restore();
 
+      const s = 1.04 * dpr;
+      ctx.save();
+      ctx.translate(rx, ry);
+      traceCursorGhostPath(ctx, s);
       const cg = ctx.createLinearGradient(0, 0, 7 * s, 15 * s);
       if (dark) {
-        cg.addColorStop(0, `rgba(252,254,255,${(0.14 * reflAlpha).toFixed(4)})`);
-        cg.addColorStop(0.45, `rgba(222,235,252,${(0.065 * reflAlpha).toFixed(4)})`);
-        cg.addColorStop(1, `rgba(190,210,240,${(0.008 * reflAlpha).toFixed(4)})`);
+        cg.addColorStop(0, `rgba(252,254,255,${(0.115 * reflAlpha).toFixed(4)})`);
+        cg.addColorStop(0.45, `rgba(222,235,252,${(0.048 * reflAlpha).toFixed(4)})`);
+        cg.addColorStop(1, `rgba(190,210,240,${(0.006 * reflAlpha).toFixed(4)})`);
       } else {
-        cg.addColorStop(0, `rgba(15,23,42,${(0.075 * reflAlpha).toFixed(4)})`);
-        cg.addColorStop(1, 'rgba(15,23,42,0.005)');
+        cg.addColorStop(0, `rgba(15,23,42,${(0.06 * reflAlpha).toFixed(4)})`);
+        cg.addColorStop(1, 'rgba(15,23,42,0.004)');
       }
       ctx.fillStyle = cg;
       ctx.fill();
@@ -370,7 +434,7 @@
       const cssRadius = entry.borderRadius > 0 ? entry.borderRadius : 10;
       const effAlpha = Math.max(0, Math.min(1, ambientScale * (!isMirror && toneKey === 'mono' ? 0.58 : 1)));
       const sig = `${w}|${h}|${radius}|${dark ? 1 : 0}|${isMirror ? 'mirror' : toneKey}|${isReflectBottom ? 'reflB' : ''}|${effAlpha.toFixed(3)}|${cssRadius}|${entry.insetPad || 0}`;
-      const moveEps = isMirror ? 0.8 : 1.5;
+      const moveEps = 1.5;
       if (!entry.wasCleared && entry.cv.width === w && entry.cv.height === h && entry._s === sig && Math.abs(localX - entry._x) < moveEps && Math.abs(localY - entry._y) < moveEps) {
         return true;
       }
@@ -549,16 +613,8 @@
       }
     }
 
-    function isMirrorPopupOverlay(el) {
-      if (!el || !el.classList?.contains?.('agy-overlay')) return false;
-      if (el.hasAttribute?.('data-hover-card-popup')) return false;
-      if (el.getAttribute?.('data-testid') === 'model-selector-panel') return false;
-      return el.getAttribute?.('role') === 'menu' || Boolean(el.classList?.contains?.('max-h-48'));
-    }
-
     function refreshPrismBoxRectCache(now, allowReadRect) {
       const boxes = document.querySelectorAll('[data-ag-cs-prism-box="1"]');
-      const popupOverlays = document.querySelectorAll('.agy-overlay');
       const ro = ensurePrismBoxRo();
       const prevMap = new Map();
       for (let i = 0; i < cachedPrismBoxes.length; i++) {
@@ -570,19 +626,7 @@
       let nextOrch = null;
 
       // Phase A: Batch all layout/style reads BEFORE DOM mutations to prevent forced write->read reflows!
-      const boxSet = new Set(Array.from(boxes || []));
-      const pendingMirrorOverlays = [];
-      if (popupOverlays && popupOverlays.length) {
-        for (let i = 0; i < popupOverlays.length; i++) {
-          const ov = popupOverlays[i];
-          if (!isMirrorPopupOverlay(ov)) continue;
-          if (ov.getAttribute?.('data-ag-cs-prism-box') !== '1' || ov.getAttribute?.('data-ag-cs-prism-mirror') !== '1') {
-            pendingMirrorOverlays.push(ov);
-          }
-          boxSet.add(ov);
-        }
-      }
-      const boxList = Array.from(boxSet);
+      const boxList = Array.from(boxes || []);
       const preMeasured = boxList.map((box) => {
         const prev = prevMap.get(box);
         return {
@@ -613,11 +657,6 @@
 
       // Phase B: Batch all DOM mutations (canvas mounts, ResizeObserver bindings, orphan prune) after reads!
       runGuardedMut(() => {
-        for (let i = 0; i < pendingMirrorOverlays.length; i++) {
-          const ov = pendingMirrorOverlays[i];
-          setAttrIfChanged(ov, 'data-ag-cs-prism-box', '1');
-          setAttrIfChanged(ov, 'data-ag-cs-prism-mirror', '1');
-        }
         for (let i = 0; i < preMeasured.length; i++) {
           const { box, prev, borderRadius, rect } = preMeasured[i];
           const mirrorMode = box.getAttribute?.('data-ag-cs-prism-mirror') === '1';
@@ -660,7 +699,7 @@
       const disabled = isRimMotionDisabled();
       const ambientScale = readAmbientScale();
       if (disabled || ambientScale <= 0.001) {
-        runGuardedMut(() => { pruneOrphanRimCanvases(); clearAllRimCanvases(); });
+        runGuardedMut(() => { pruneOrphanRimCanvases(); clearAllRimCanvases(true); });
         return;
       }
       const now = typeof rafNow === 'number' && rafNow > 0 ? rafNow : performance.now();
@@ -806,7 +845,7 @@
       runGuardedMut(() => {
         pruneOrphanRimCanvases();
         if (isH()) { cancelPendingRaf(); shrinkRims(1); }
-        else if (isRimMotionDisabled() || readAmbientScale() <= 0.001) { cancelPendingRaf(); clearAllRimCanvases(); }
+        else if (isRimMotionDisabled() || readAmbientScale() <= 0.001) { cancelPendingRaf(); clearAllRimCanvases(true); }
         else if (!isWB() && !isDragSuspended() && lastPointerPos.x >= -1000) { lastPrismDrawAt = 0; schedRaf(); }
       });
     }
@@ -816,7 +855,7 @@
       if (isDestroyed()) return;
       runGuardedMut(() => {
         pruneOrphanRimCanvases(false);
-        if (isRimMotionDisabled() || readAmbientScale() <= 0.001) { cancelPendingRaf(); clearAllRimCanvases(); }
+        if (isRimMotionDisabled() || readAmbientScale() <= 0.001) { cancelPendingRaf(); clearAllRimCanvases(true); }
       });
     }
 

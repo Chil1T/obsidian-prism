@@ -897,7 +897,8 @@ test('style.css covers all 6 Wave-2 config hooks, eliminates double borders & en
     '.ag-cs-diff-ctx-menu',
     '.ag-cs-inline-diff-loading',
   ]) {
-    assert.equal(css.includes(ch6Sel), false, `Channel 1 style.css must decouple Inline Diff rule ${ch6Sel} into Channel 6`);
+    const hasOwnRule = ch6Sel.startsWith('.') ? css.includes(`${ch6Sel}{`) : css.includes(ch6Sel);
+    assert.equal(hasOwnRule, false, `Channel 1 style.css must decouple Inline Diff rule ${ch6Sel} into Channel 6`);
     assert.ok(inlineDiffMod.INLINE_DIFF_CSS.includes(ch6Sel), `Channel 6 inline-diff-client.js CSS must cover ${ch6Sel}`);
   }
   for (const d11Sel of [
@@ -1431,10 +1432,17 @@ test('D11: vertical flex-row->flex-col inline diff (no header bar + floating SVG
     assert.equal(navBox.querySelector('.ag-cs-sb-more-wrap'), null, 'destroy must remove More button');
     assert.equal(navBtns[1].hasAttribute('data-ag-sb-more-hidden'), false, 'destroy must unhide folded nav items');
     assert.equal(navBtns[1].hasAttribute('data-ag-sb-more-item'), false, 'destroy must clear overflow rail markers');
-    assert.equal(env.win.__agPrismInlineDiffResolve, undefined, 'destroy must clean __agPrismInlineDiffResolve');
-    assert.equal(diffBadge.getAttribute('data-tooltip-id'), 'tip-open-diff', 'destroy must restore original tooltip id');
-    assert.equal(spanWrap.hasAttribute('data-ag-diff-chip'), false, 'destroy must clear diff chip marker');
     assert.equal(optTurbo.hasAttribute('data-ag-perm-selected'), false, 'destroy must clear perm selected marker');
+    // Channel 1 destroy() must unbindHooks only and keep independent Channel 6 alive
+    assert.equal(env.win.__agPrismInlineDiff.getDebugState().destroyed, false, 'Channel 1 destroy must NOT kill Channel 6');
+    assert.equal(typeof env.win.__agPrismInlineDiffResolve, 'function', 'Channel 1 destroy must keep __agPrismInlineDiffResolve alive');
+    const ch6 = env.win.__agPrismInlineDiff;
+    ch6.destroy();
+    assert.equal(ch6.getDebugState().destroyed, true);
+    assert.equal(env.win.__agPrismInlineDiff, undefined, 'Channel 6 destroy must delete win.__agPrismInlineDiff');
+    assert.equal(env.win.__agPrismInlineDiffResolve, undefined, 'Channel 6 destroy must clean __agPrismInlineDiffResolve');
+    assert.equal(diffBadge.getAttribute('data-tooltip-id'), 'tip-open-diff', 'Channel 6 destroy must restore original tooltip id');
+    assert.equal(spanWrap.hasAttribute('data-ag-diff-chip'), false, 'Channel 6 destroy must clear diff chip marker');
   }
 });
 
@@ -1543,8 +1551,11 @@ test('D11-1: async inline diff extracts Fiber fileDiff.uri, displays loading pul
     assert.ok(boxB.querySelector('.ag-cs-inline-diff-empty')?.textContent.includes('二进制'), 'Binary response must show concise binary hint');
   } finally {
     ctl.destroy();
-    assert.equal(env.win.__agPrismInlineDiffResolve, undefined, 'destroy must remove __agPrismInlineDiffResolve');
-    assert.equal(colList.querySelectorAll('.ag-cs-inline-diff-box').length, 0, 'destroy must remove all inline diff boxes');
+    assert.equal(env.win.__agPrismInlineDiff.getDebugState().destroyed, false, 'Channel 1 destroy must NOT kill Channel 6');
+    assert.equal(typeof env.win.__agPrismInlineDiffResolve, 'function');
+    env.win.__agPrismInlineDiff.destroy();
+    assert.equal(env.win.__agPrismInlineDiffResolve, undefined, 'Channel 6 destroy must remove __agPrismInlineDiffResolve');
+    assert.equal(colList.querySelectorAll('.ag-cs-inline-diff-box').length, 0, 'Channel 6 destroy must remove all inline diff boxes');
   }
 });
 
@@ -1715,9 +1726,11 @@ test('D13: inline diff escapes narrow 255px inner block to full-width 754px step
     assert.equal(ovShell.hasAttribute('data-ag-overview-running'), false, 'Completed overview returns to pure obsidian 0fps');
   } finally {
     ctl.destroy();
-    assert.equal(innerActionRow.hasAttribute('data-ag-diff-chip-row'), false, 'destroy must remove data-ag-diff-chip-row');
-    assert.equal(statAdd.hasAttribute('data-ag-diff-stat'), false, 'destroy must remove data-ag-diff-stat');
     assert.equal(sep.hasAttribute('data-ag-perm-sandbox-sep'), false, 'destroy must remove data-ag-perm-sandbox-sep');
+    assert.equal(env.win.__agPrismInlineDiff.getDebugState().destroyed, false, 'Channel 1 destroy must NOT kill Channel 6');
+    env.win.__agPrismInlineDiff.destroy();
+    assert.equal(innerActionRow.hasAttribute('data-ag-diff-chip-row'), false, 'Channel 6 destroy must remove data-ag-diff-chip-row');
+    assert.equal(statAdd.hasAttribute('data-ag-diff-stat'), false, 'Channel 6 destroy must remove data-ag-diff-stat');
   }
 });
 

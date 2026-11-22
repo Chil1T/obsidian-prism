@@ -27,7 +27,6 @@ final class PluginManifest {
     let version: String
     let styleId: String
     let settingBinding: String
-    let inlineDiffBinding: String
     let parts: [String]
     let defaultConfig: [String: JsonValue]
     let validators: [String: JsonValue]
@@ -37,7 +36,6 @@ final class PluginManifest {
         version: String,
         styleId: String,
         settingBinding: String,
-        inlineDiffBinding: String = "__agPrismInlineDiffCall",
         parts: [String],
         defaultConfig: [String: JsonValue],
         validators: [String: JsonValue],
@@ -46,7 +44,6 @@ final class PluginManifest {
         self.version = version
         self.styleId = styleId
         self.settingBinding = settingBinding
-        self.inlineDiffBinding = inlineDiffBinding
         self.parts = parts
         self.defaultConfig = defaultConfig
         self.validators = validators
@@ -60,7 +57,6 @@ final class PluginManifest {
         let version = raw["version"]?.stringValue ?? "1.0.6"
         let styleId = raw["styleId"]?.stringValue ?? "ag-prism-css"
         let settingBinding = raw["settingBinding"]?.stringValue ?? "__agPrismSetting"
-        let inlineDiffBinding = raw["inlineDiffBinding"]?.stringValue ?? "__agPrismInlineDiffCall"
         let removeExpression = raw["removeExpression"]?.stringValue ?? ""
         var parts: [String] = []
         if let arr = raw["parts"]?.arrayValue {
@@ -76,7 +72,6 @@ final class PluginManifest {
             version: version,
             styleId: styleId,
             settingBinding: settingBinding,
-            inlineDiffBinding: inlineDiffBinding,
             parts: parts,
             defaultConfig: defaultConfig,
             validators: validators,
@@ -1201,10 +1196,19 @@ enum CdpHelper {
         sb.append("    try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}\n")
         sb.append("    try { window.__agPrismInlineDiff?.sync?.(effectiveCfg); } catch {}\n")
         sb.append("    try { if (effectiveCfg.omniModule === 'off') window.__agPrismOmni?.destroy?.(); else window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}\n")
+        sb.append("    if (effectiveCfg && effectiveCfg.sidebarStudio !== 'on') {\n")
+        sb.append("      try { window.__agPrismSidebar?.sync?.(effectiveCfg, window.__agPrismSidebarMeta || null); } catch {}\n")
+        sb.append("      try { window.__agPrismSidebar?.destroy?.(); } catch {}\n")
+        sb.append("      try { delete window.__agPrismSidebar; } catch {}\n")
+        sb.append("      try { if (document.documentElement) ['data-ag-prism-mode', 'data-ag-prism-chat-kind', 'data-ag-prism-chat-telemetry', 'data-ag-cs-space', 'data-ag-cs-space-palette', 'data-ag-cs-space-accent'].forEach((a) => document.documentElement.removeAttribute(a)); } catch {}\n")
+        sb.append("    } else {\n")
+        sb.append("      try { window.__agPrismSidebar?.sync?.(effectiveCfg, window.__agPrismSidebarMeta || null); } catch {}\n")
+        sb.append("    }\n")
         sb.append("    try { if (effectiveCfg.hostLocalization === 'off' || (effectiveCfg.hostLocalization !== 'on' && effectiveCfg.language && effectiveCfg.language !== 'zh-CN' && effectiveCfg.language !== 'auto')) window.__agPrismHostI18n?.destroy?.(); } catch {}\n")
         sb.append("    if (document.documentElement) {\n")
         sb.append("      if (effectiveCfg && effectiveCfg.thoughtTranslate && effectiveCfg.thoughtTranslate !== 'off') document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');\n")
         sb.append("      else document.documentElement.removeAttribute('data-ag-prism-thought-view');\n")
+        sb.append("      document.documentElement.setAttribute('data-ag-prism-sidebar-studio', effectiveCfg && effectiveCfg.sidebarStudio === 'on' ? 'on' : 'off');\n")
         sb.append("    }\n")
         sb.append("    return { ok: true, refreshed: true, state: liveState };\n")
         sb.append("  })()")
@@ -1601,7 +1605,7 @@ enum CdpHelper {
         sb.append("    }\n")
         sb.append("    const effectiveCfg = getLiveCfg() || bootCfg;\n")
         sb.append("    const existing = window.__agPrismInlineDiff || globalThis.__agPrismInlineDiff;\n")
-        sb.append("    if (existing && existing.__prismCodeHash === targetHash && typeof existing.sync === 'function') {\n")
+        sb.append("    if (existing && !existing.getDebugState?.()?.destroyed && existing.__prismCodeHash === targetHash && typeof existing.sync === 'function') {\n")
         sb.append("      try { existing.sync(effectiveCfg); } catch {}\n")
         sb.append("      return { ok: true, reused: true, codeHash: targetHash };\n")
         sb.append("    }\n")
