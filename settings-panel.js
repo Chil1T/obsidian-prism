@@ -3,7 +3,7 @@
   'use strict';
   const G = root || (typeof globalThis !== 'undefined' ? globalThis : window);
   if (!G) return;
-  const O = Object, isArr = Array.isArray, hasOwn = (o, k) => O.prototype.hasOwnProperty.call(o, k);
+  const O = Object, isArr = Array.isArray, hasOwn = (o, k) => O.prototype.hasOwnProperty.call(o, k), isFn = (v) => typeof v === 'function', isObj = (v) => Boolean(v && typeof v === 'object'), getWin = () => (typeof window !== 'undefined' ? window : G);
 
   const SETTINGS_SEC_ID = 'ag-cs-settings-sec';
   const STORAGE_SETTINGS_OPEN_KEY = 'ag-prism:settings-open';
@@ -26,7 +26,7 @@
 
   const clearPrismLocalStorage = (store) => {
     const st = store || (typeof localStorage !== 'undefined' ? localStorage : null);
-    if (!st || typeof st.removeItem !== 'function') return 0;
+    if (!st || !isFn(st.removeItem)) return 0;
     let n = 0;
     for (const k of PRISM_STORAGE_KEYS) {
       try { st.removeItem(k); n += 1; } catch {}
@@ -120,18 +120,15 @@
       settings[k] = c.valid ? c.value : spec.default;
     }
     const out = { schema: 'obsidian-prism-config-v1', version: String(version || '1.0.7-beta.1'), exportedAt: new Date().toISOString(), settings };
-    const tSrc =
-      rawThoughtCfg && typeof rawThoughtCfg === 'object' && rawThoughtCfg.config && typeof rawThoughtCfg.config === 'object'
-        ? rawThoughtCfg.config
-        : rawThoughtCfg;
-    if (tSrc && typeof tSrc === 'object' && !isArr(tSrc) && typeof tSrc.then !== 'function' && tSrc.ok !== false) {
+    const tSrc = isObj(rawThoughtCfg) && isObj(rawThoughtCfg.config) ? rawThoughtCfg.config : rawThoughtCfg;
+    if (isObj(tSrc) && !isArr(tSrc) && !isFn(tSrc.then) && tSrc.ok !== false) {
       out.thought = {
         stylePreset: normThoughtStyle(tSrc.stylePreset) || 'technical',
         customPrompt: typeof tSrc.customPrompt === 'string' ? redactSecrets(tSrc.customPrompt.slice(0, 4000)) : '',
         activeProfileId: typeof tSrc.activeProfileId === 'string' ? tSrc.activeProfileId.slice(0, 64) : '',
         profiles: isArr(tSrc.profiles)
           ? tSrc.profiles
-              .filter((p) => p && typeof p === 'object' && !isArr(p))
+              .filter((p) => isObj(p) && !isArr(p))
               .slice(0, 16)
               .map((p, i) => ({
                 id: String(p.id || `p-${i + 1}`).slice(0, 64),
@@ -155,8 +152,8 @@
         return { ok: false, error: 'invalid-json' };
       }
     }
-    if (!parsed || typeof parsed !== 'object' || isArr(parsed)) return { ok: false, error: 'invalid-root' };
-    const src = parsed.settings && typeof parsed.settings === 'object' && !isArr(parsed.settings) ? parsed.settings : parsed;
+    if (!isObj(parsed) || isArr(parsed)) return { ok: false, error: 'invalid-root' };
+    const src = isObj(parsed.settings) && !isArr(parsed.settings) ? parsed.settings : parsed;
     const cleanPatch = {};
     for (const k of O.keys(src)) {
       if (k === '__proto__' || k === 'constructor' || k === 'prototype' || /apikey|secret|token|password/i.test(k)) continue;
@@ -164,13 +161,13 @@
       if (c.valid) cleanPatch[k] = c.value;
     }
     let cleanThought = null;
-    if (parsed.thought && typeof parsed.thought === 'object' && !isArr(parsed.thought)) {
+    if (isObj(parsed.thought) && !isArr(parsed.thought)) {
       const t = parsed.thought;
       const stylePreset = normThoughtStyle(t.stylePreset) || undefined;
       const customPrompt = typeof t.customPrompt === 'string' ? redactSecrets(t.customPrompt.slice(0, 4000)) : undefined;
       const profiles = isArr(t.profiles)
         ? t.profiles
-            .filter((p) => p && typeof p === 'object' && !isArr(p))
+            .filter((p) => isObj(p) && !isArr(p))
             .slice(0, 16)
             .map((p, i) => ({
               id: String(p.id || `p-${i + 1}`).slice(0, 64),
@@ -229,18 +226,17 @@
 
   const invokePrismRepoAction = (action, ver, extra) => {
     const act = ['pull', 'storage-health', 'prepare-archive', 'uninstall', 'update-status', 'check-update', 'apply-update'].includes(action) ? action : 'status';
-    const isObj = ver && typeof ver === 'object';
-    const ext = isObj ? { ...ver, ...(extra && typeof extra === 'object' ? extra : null) } : extra && typeof extra === 'object' ? extra : null;
-    const win = typeof window !== 'undefined' ? window : G;
+    const vObj = isObj(ver);
+    const ext = vObj ? { ...ver, ...(isObj(extra) ? extra : null) } : isObj(extra) ? extra : null;
     try {
-      const b = win?.__agPrismRepoBridge, arg = ext ? { ...ext, action: act } : { action: act };
-      if (typeof b === 'function') return Promise.resolve(b(arg));
-      if (typeof b?.[act] === 'function') return Promise.resolve(b[act](ext || extra));
-      if (typeof b?.call === 'function') return Promise.resolve(b.call(arg));
+      const b = getWin()?.__agPrismRepoBridge, arg = ext ? { ...ext, action: act } : { action: act };
+      if (isFn(b)) return Promise.resolve(b(arg));
+      if (isFn(b?.[act])) return Promise.resolve(b[act](ext || extra));
+      if (isFn(b?.call)) return Promise.resolve(b.call(arg));
     } catch (err) {
       return Promise.resolve({ ok: false, action: act, error: String(err?.message || err) });
     }
-    return Promise.resolve({ ok: false, offline: true, action: act, noRemote: true, hasRemote: false, branch: 'local', shortHash: isObj ? ver.version : ver });
+    return Promise.resolve({ ok: false, offline: true, action: act, noRemote: true, hasRemote: false, branch: 'local', shortHash: vObj ? ver.version : ver });
   };
 
   const readStore = (k) => {
@@ -252,8 +248,8 @@
 
   const renderObsidianPrismBrandSvg = (size = 20) => {
     try {
-      const ext = G.__agPrismBrandLogoSvg || (typeof window !== 'undefined' && window.__agPrismBrandLogoSvg);
-      const out = typeof ext === 'function' ? ext(size) : ext;
+      const ext = G.__agPrismBrandLogoSvg || getWin()?.__agPrismBrandLogoSvg;
+      const out = isFn(ext) ? ext(size) : ext;
       if (typeof out === 'string' && out.includes('<svg')) return out;
     } catch {}
     return '';
@@ -287,7 +283,7 @@
     const doc = typeof document !== 'undefined' ? document : null;
     if (!doc) return;
     const syncChrome = G.__agPrismHostEnhancer?.syncSettingsDialogChrome;
-    if (typeof syncChrome === 'function') syncChrome(doc, runGuardedMut);
+    if (isFn(syncChrome)) syncChrome(doc, runGuardedMut);
     const lang = getLang();
     const ui = uiText(lang);
     const targetTitles = ['Appearance', '外观', '外觀', '外観'];
@@ -299,7 +295,7 @@
       }
     }
     if (!panel) return;
-    if (typeof syncChrome !== 'function') {
+    if (!isFn(syncChrome)) {
       const dlg = panel.closest?.('[role="dialog"]');
       if (dlg && dlg.getAttribute?.('data-ag-cs-settings-dlg') !== '1') {
         runGuardedMut(() => dlg.setAttribute?.('data-ag-cs-settings-dlg', '1'));
@@ -307,11 +303,11 @@
     }
 
     const effVal = (k, l) => {
-      const v = typeof resolveSettingRowActiveValue === 'function' ? resolveSettingRowActiveValue(k, l) : undefined;
+      const v = isFn(resolveSettingRowActiveValue) ? resolveSettingRowActiveValue(k, l) : undefined;
       return v !== undefined && v !== null && v !== '' ? v : PRISM_SETTINGS_SCHEMA[k]?.default;
     };
     const matchBtn = (k, valJson, cur) => {
-      if (typeof isSettingButtonMatch === 'function') {
+      if (isFn(isSettingButtonMatch)) {
         const r = isSettingButtonMatch(k, valJson, cur);
         if (r === true) return true;
         if (cur !== undefined && cur !== null) return false;
@@ -319,17 +315,17 @@
       try { return JSON.parse(valJson) === cur; } catch { return String(valJson) === String(cur); }
     };
     const applyBatch = (patch) => {
-      if (!patch || typeof patch !== 'object') return;
-      if (typeof saveSettingsBatch === 'function') saveSettingsBatch(patch);
-      else if (typeof saveSetting === 'function') for (const [k, v] of O.entries(patch)) saveSetting(k, v);
+      if (!isObj(patch)) return;
+      if (isFn(saveSettingsBatch)) saveSettingsBatch(patch);
+      else if (isFn(saveSetting)) for (const [k, v] of O.entries(patch)) saveSetting(k, v);
     };
-    const K_IC = 'isConnected', K_TC = 'textContent', K_CL = 'classList';
+    const K_IC = 'isConnected', K_TC = 'textContent', K_CL = 'classList', K_WP = 'prism-wallpaper-slot';
     const sa = (e, k, v = '') => e.setAttribute(k, String(v));
     const ga = (e, k) => e.getAttribute(k);
     const ra = (e, k) => e.removeAttribute(k);
     const qs = (e, s) => e.querySelector(s);
     const qa = (e, s) => e.querySelectorAll(s);
-    const rc = (e) => (typeof e?.getBoundingClientRect === 'function' ? e.getBoundingClientRect() : null);
+    const rc = (e) => (isFn(e?.getBoundingClientRect) ? e.getBoundingClientRect() : null);
     const ap = (p, ...cs) => {
       for (const c of cs) if (c) p.appendChild(c);
       return p;
@@ -455,6 +451,7 @@
           syncRootState(existing, lang, ui);
           return;
         }
+        try { qs(existing, `[data-testid="${K_WP}"]`)?.__agPrismWpUiHandle?.destroy?.(); } catch {}
         existing.remove();
       }
 
@@ -554,8 +551,8 @@
       };
 
       const mountThoughtUiIfReady = () => {
-        const curUi = (typeof window !== 'undefined' && window.__agPrismThoughtSettingsUi) || G.__agPrismThoughtSettingsUi;
-        const hasFactory = typeof curUi?.createThoughtAiConfigBox === 'function';
+        const curUi = getWin()?.__agPrismThoughtSettingsUi || G.__agPrismThoughtSettingsUi;
+        const hasFactory = isFn(curUi?.createThoughtAiConfigBox);
         if (thoughtUiHandle && !thoughtUiHandle.box?.[K_IC]) {
           thoughtUiHandle = null;
           if (sec.__prismThoughtUiHandle && !sec.__prismThoughtUiHandle.box?.[K_IC]) {
@@ -840,7 +837,7 @@
             ap(groupsWrap, ap(grpEl, mkEl('div', 'ag-cs-settings-subhead', grp.title), list));
             if (grp.id === 'appearance') {
               wpSlot = mkEl('div');
-              sa(wpSlot, 'data-testid', 'prism-wallpaper-slot');
+              sa(wpSlot, 'data-testid', K_WP);
               setVis(wpSlot, false);
               ap(grpEl, wpSlot);
             }
@@ -1117,7 +1114,7 @@
             runGuardedMut(() => { uConfirm.disabled = true; });
             void invokePrismRepoAction('uninstall', version, { confirm: true, purgeData })
               .then((r) => {
-                if (!uChip.isConnected) return;
+                if (!uChip[K_IC]) return;
                 const u = uiText(getLang()) || ui;
                 runGuardedMut(() => {
                   setVis(uChip, true);
@@ -1131,7 +1128,7 @@
               })
               .finally(() => {
                 uBusy = false;
-                runGuardedMut(() => { if (uConfirm.isConnected) uConfirm.disabled = false; });
+                runGuardedMut(() => { if (uConfirm[K_IC]) uConfirm.disabled = false; });
               });
           });
 
@@ -1141,7 +1138,7 @@
           sa(cfgHint, 'data-ag-cs-cfg-status');
           const setCfgStatus = (msg, tone = '') =>
             runGuardedMut(() => {
-              cfgHint.textContent = msg;
+              cfgHint[K_TC] = msg;
               if (tone) sa(cfgHint, 'data-tone', tone);
               else ra(cfgHint, 'data-tone');
             });
@@ -1152,19 +1149,19 @@
             if (toastMsg) setCfgStatus(toastMsg, toastTone);
           } else {
             pendingCfgToast = null;
-          };
+          }
 
           const exportBtn = mkB('ag-cs-cfg-btn', U('cfgExportBtn', 'Export JSON'), 'data-ag-cs-cfg-action', 'export');
           onClk(exportBtn, async () => {
             const lNow = getLang(), uNow = uiText(lNow), cur = {};
             for (const k of SCHEMA_KEYS) cur[k] = effVal(k, lNow);
-            const win = typeof window !== 'undefined' ? window : G;
+            const win = getWin();
             const rawThought = await Promise.resolve(
               win?.__agPrismThought?.getConfig ? win.__agPrismThought.getConfig() : win?.__agPrismThoughtBridge?.call?.({ action: 'get-config' })
             ).catch(() => null);
             const jsonStr = JSON.stringify(buildSanitizedConfigExport(cur, rawThought || null, version), null, 2);
             try {
-              if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+              if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && isFn(URL.createObjectURL)) {
                 const url = URL.createObjectURL(new Blob([jsonStr], { type: 'application/json;charset=utf-8' }));
                 const dl = mkEl('a');
                 dl.href = url;
@@ -1174,7 +1171,7 @@
               } else win?.navigator?.clipboard?.writeText?.(jsonStr);
             } catch {
               try { win?.navigator?.clipboard?.writeText?.(jsonStr); } catch {}
-            };
+            }
             setCfgStatus(uNow.cfgExportOk || 'OK', 'ok');
           });
 
@@ -1194,7 +1191,7 @@
               if (res.settings.thoughtView) getThoughtUiHandle()?.onViewSwitched?.(res.settings.thoughtView);
             }
             if (res.thought) {
-              const win = typeof window !== 'undefined' ? window : G;
+              const win = getWin();
               try {
                 void Promise.resolve(
                   win?.__agPrismThought?.saveConfig
@@ -1211,7 +1208,7 @@
               getThoughtUiHandle()?.reloadConfig?.();
             }
             const rl = getLang(), ru = uiText(rl);
-            if (sec.isConnected) {
+            if (sec[K_IC]) {
               pendingCfgToast = null;
               runGuardedMut(() => syncRootState(sec, rl, ru));
               setCfgStatus(ru.cfgImportOk || 'OK', 'ok');
@@ -1221,8 +1218,8 @@
           on(fileInput, 'change', () => {
             const f = fileInput.files?.[0];
             if (!f) return;
-            if (typeof f.text === 'function') void f.text().then(handleImportRaw).catch(() => handleImportRaw(''));
-            else if (typeof FileReader === 'function') {
+            if (isFn(f.text)) void f.text().then(handleImportRaw).catch(() => handleImportRaw(''));
+            else if (isFn(FileReader)) {
               const rd = new FileReader();
               rd.onload = () => handleImportRaw(String(rd.result || ''));
               rd.readAsText(f);
@@ -1244,7 +1241,7 @@
               curTh.onViewSwitched?.(defs.thoughtView);
             }
             const rl = getLang(), ru = uiText(rl);
-            if (sec.isConnected) {
+            if (sec[K_IC]) {
               pendingCfgToast = null;
               runGuardedMut(() => syncRootState(sec, rl, ru));
               setCfgStatus(ru.cfgResetOk || 'OK', 'ok');
@@ -1272,14 +1269,13 @@
         runGuardedMut(() => {
           sa(sec, 'data-open', openStr);
           sa(sec, 'data-ag-cs-open', openStr);
-          if (nextOpen) sec.classList?.add?.('is-open');
-          else sec.classList?.remove?.('is-open');
+          const clOp = nextOpen ? 'add' : 'remove';
+          sec[K_CL]?.[clOp]?.('is-open');
           sa(foldHead, 'aria-expanded', nextOpen);
           sa(foldHead, 'aria-label', nextOpen ? ui.foldCollapseHint || 'Collapse' : ui.foldExpandHint || 'Expand');
           sa(foldBody, 'data-open', openStr);
           sa(foldBody, 'aria-hidden', !nextOpen);
-          if (nextOpen) foldBody.classList?.add?.('is-open');
-          else foldBody.classList?.remove?.('is-open');
+          foldBody[K_CL]?.[clOp]?.('is-open');
         });
         if (nextOpen && probeRepoRef) probeRepoRef();
       });

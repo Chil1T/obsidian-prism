@@ -998,6 +998,9 @@ namespace AgyClaudeStyle.Watcher
 
                 int? lastPort = null;
                 int? lastLoggedStalePort = null;
+                int consecutiveProbeFailures = 0;
+                int? consecutiveProbePort = null;
+                HashSet<string> promptedHostKeysInProcess = new HashSet<string>(StringComparer.Ordinal);
                 bool yieldingToDaemon = false;
                 long lastDaemonBootTick = 0L;
                 long lastShortcutCheckTick = 0L;
@@ -1021,11 +1024,27 @@ namespace AgyClaudeStyle.Watcher
                                 );
                             }
 
+                            bool hasActiveAttached = false;
+                            foreach (KeyValuePair<string, AttachedEntry> kv in attached)
+                            {
+                                if (kv.Value != null && kv.Value.Session != null && !kv.Value.Session.IsClosed)
+                                {
+                                    hasActiveAttached = true;
+                                    break;
+                                }
+                            }
+                            int? previewRawPort = CdpHelper.ReadPort(overridePort);
+                            if (!previewRawPort.HasValue || (consecutiveProbePort.HasValue && consecutiveProbePort.Value != previewRawPort.Value))
+                            {
+                                consecutiveProbeFailures = 0;
+                                consecutiveProbePort = previewRawPort;
+                            }
+
                             bool nativeAlive = !string.IsNullOrEmpty(_pluginDir) && CdpHelper.IsNativeDaemonAlive(_pluginDir);
                             ActivePortProbeResult portProbe = null;
                             if (!nativeAlive)
                             {
-                                portProbe = await CdpHelper.ProbeActivePortAsync(overridePort).ConfigureAwait(false);
+                                portProbe = await CdpHelper.ProbeActivePortAsync(overridePort, hasActiveAttached, consecutiveProbeFailures).ConfigureAwait(false);
                                 if (!_noNativeDaemon && !string.IsNullOrEmpty(_pluginDir))
                                 {
                                     long nowTick = Environment.TickCount & int.MaxValue;
@@ -1064,6 +1083,8 @@ namespace AgyClaudeStyle.Watcher
                                     }
                                     lastPort = null;
                                     lastLoggedStalePort = null;
+                                    consecutiveProbeFailures = 0;
+                                    consecutiveProbePort = null;
                                     if (!yieldingToDaemon)
                                     {
                                         yieldingToDaemon = true;
@@ -1081,7 +1102,23 @@ namespace AgyClaudeStyle.Watcher
 
                             if (portProbe == null)
                             {
-                                portProbe = await CdpHelper.ProbeActivePortAsync(overridePort).ConfigureAwait(false);
+                                portProbe = await CdpHelper.ProbeActivePortAsync(overridePort, hasActiveAttached, consecutiveProbeFailures).ConfigureAwait(false);
+                            }
+
+                            if (portProbe.LivePort.HasValue)
+                            {
+                                consecutiveProbeFailures = 0;
+                                consecutiveProbePort = portProbe.LivePort;
+                            }
+                            else if (portProbe.RawPort.HasValue)
+                            {
+                                consecutiveProbePort = portProbe.RawPort;
+                                consecutiveProbeFailures = portProbe.ConsecutiveFailures;
+                            }
+                            else
+                            {
+                                consecutiveProbeFailures = 0;
+                                consecutiveProbePort = null;
                             }
 
                             if (portProbe.IsStalePort && portProbe.RawPort.HasValue)
@@ -1117,7 +1154,11 @@ namespace AgyClaudeStyle.Watcher
                             }
 
                             int? livePort = portProbe.LivePort;
-                            if (!livePort.HasValue && !overridePort.HasValue)
+                            bool isTransientProbeGrace = !livePort.HasValue &&
+                                                         !portProbe.IsStalePort &&
+                                                         portProbe.RawPort.HasValue &&
+                                                         hasActiveAttached;
+                            if (!livePort.HasValue && !overridePort.HasValue && !isTransientProbeGrace)
                             {
                                 string noPromptEnv1 = Environment.GetEnvironmentVariable("PRISM_NO_RELAUNCH_PROMPT");
                                 string noPromptEnv2 = Environment.GetEnvironmentVariable("AG_PRISM_NO_RELAUNCH_PROMPT");
@@ -1155,9 +1196,16 @@ namespace AgyClaudeStyle.Watcher
                                             shortcutStateDir,
                                             Log
                                         );
+                                        string bareHostKey = bare.Pid + ":" + bare.StartTimeMs;
                                         if (bare.UptimeMs >= 8000L &&
+                                            !promptedHostKeysInProcess.Contains(bareHostKey) &&
                                             !CdpHelper.HasPromptedForHost(bare.Pid, bare.StartTimeMs, _baseDir, _pluginDir))
                                         {
+                                            if (promptedHostKeysInProcess.Count >= 256)
+                                            {
+                                                promptedHostKeysInProcess.Clear();
+                                            }
+                                            promptedHostKeysInProcess.Add(bareHostKey);
                                             CdpHelper.RecordPromptedForHost(bare.Pid, bare.StartTimeMs, "prompted", _baseDir, _pluginDir);
                                             bool confirmed = CdpHelper.PromptUserForCdpRelaunch();
                                             CdpHelper.RecordPromptedForHost(bare.Pid, bare.StartTimeMs, confirmed ? "yes" : "no", _baseDir, _pluginDir);

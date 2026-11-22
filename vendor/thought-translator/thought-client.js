@@ -34,6 +34,8 @@
   let currentLang = 'zh-CN';
   let translateToolSummaries = false;
   let translateTitles = false;
+  let hasExplicitToolSummaries = false;
+  let hasExplicitTitles = false;
   let activeStyleTag = '';
   let storedCount = 0;
   let cacheDirty = false;
@@ -916,7 +918,7 @@
 
   function sanitizeClientErrorText(rawErr) {
     return String(rawErr || '')
-      .replace(/((?:https?|socks5h?):\/\/)[^@\s/\x22\x27<>]+@/gi, '$1***REDACTED***@')
+      .replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^@\s\x2f\x22\x27<>]+@/gi, '$1***REDACTED***@')
       .replace(/(sk-[A-Za-z0-9_\-]{6,}|Bearer\s+[A-Za-z0-9._\-:+/=]{6,}|(?:Proxy-)?Authorization\s*:\s*Basic\s+[A-Za-z0-9+/=]{4,})/gi, '***REDACTED***')
       .slice(0, 180);
   }
@@ -1152,10 +1154,10 @@
   function syncRemoteCfgMeta(res) {
     const nextTag = res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : '');
     const tagChanged = setActiveStyleTag(nextTag);
-    if (res && typeof res.translateToolSummaries === 'boolean') {
+    if (!hasExplicitToolSummaries && res && typeof res.translateToolSummaries === 'boolean') {
       setTranslateToolSummariesFlag(res.translateToolSummaries, false);
     }
-    if (res && typeof res.translateTitles === 'boolean') {
+    if (!hasExplicitTitles && res && typeof res.translateTitles === 'boolean') {
       setTranslateTitlesFlag(res.translateTitles, false);
     }
     if (!hasExplicitHostView && (res?.viewMode === 'bilingual' || res?.viewMode === 'immersive')) {
@@ -3147,6 +3149,15 @@
     return false;
   }
 
+  function wrapWithRawWhitespace(rawStr, translatedStr) {
+    const raw = String(rawStr || '');
+    const trimmedStart = raw.trimStart();
+    if (!trimmedStart) return raw;
+    const lead = raw.slice(0, raw.length - trimmedStart.length);
+    const trail = raw.slice(raw.trimEnd().length);
+    return `${lead}${translatedStr}${trail}`;
+  }
+
   function collectToolSummaryTextNodes(rootNode, outList, visitedNodes, thoughtPanelSet) {
     if (!rootNode || outList.length >= 24) return;
     const nt = rootNode.nodeType;
@@ -3158,6 +3169,7 @@
       if (prevRec && prevRec.trans === val && prevRec.lang === resolveActiveLang() && prevRec.mode === currentMode) {
         return;
       }
+      if (val.length > 1024) return;
       const trimmed = trm(val);
       if (!trimmed || trimmed.length < 4 || trimmed.length > 280) return;
       if (!isToolSummaryCandidate(trimmed, resolveActiveLang())) return;
@@ -3176,11 +3188,7 @@
     if (!item || !item.tn || !isConn(item.tn) || !translatedStr) return;
     const curVal = getTnStr(item.tn);
     if (curVal !== item.raw) return;
-    const leadMatch = /^\s*/.exec(item.raw);
-    const trailMatch = /\s*$/.exec(item.raw);
-    const lead = leadMatch ? leadMatch[0] : '';
-    const trail = trailMatch ? trailMatch[0] : '';
-    const nextVal = `${lead}${translatedStr}${trail}`;
+    const nextVal = wrapWithRawWhitespace(item.raw, translatedStr);
     if (nextVal === item.raw) return;
 
     const oldRec = toolSummaryNodeMap.get(item.tn);
@@ -3392,17 +3400,19 @@
   }
 
   const TITLE_SKIP_TAGS = new Set('SCRIPT,STYLE,SVG,NOSCRIPT,PRE,CODE,INPUT,TEXTAREA,SELECT,TIME,KBD,SAMP'.split(','));
+  const TITLE_HEADING_TAGS = new Set('H1,H2,H3,H4,H5,H6'.split(','));
   const TITLE_CHILD_BADGE_CLS_RE =
-    /\b(?:badge|pill|chip|timestamp|time|meta|count|counter|hotkey|shortcut|avatar|icon|spinner|status|actions?|ag-prism-sb-)\b/i;
-  const TITLE_CHILD_BADGE_TID_RE = /badge|time|date|action|menu|delete|pin|archive|count|status|icon/i;
+    /\b(?:badge|pill|chip|timestamp|time|meta|metadata|count|counter|hotkey|shortcut|avatar|icon|spinner|status|actions?|subtitle|sub-title|subtext|preview|excerpt|snippet|description|desc|caption|footnote|workspace|folder|repo|branch|ag-prism-sb-)\b/i;
+  const TITLE_CHILD_BADGE_TID_RE =
+    /badge|time|date|action|menu|delete|pin|archive|count|status|icon|subtitle|sub-title|preview|excerpt|summary|desc|meta|workspace|folder|repo|branch|pill|chip|avatar|spinner/i;
+  const TITLE_PRIMARY_TID_RE = /(?:^|[-_])title(?:$|[-_])/i;
+  const TITLE_STATUS_WORD_RE =
+    /^(?:new|active|running|working|thinking|generating|pending|queued|idle|done|completed|finished|failed|error|paused|stopped|draft|pinned|unread|archived|updated|edited|in\s+progress|waiting)$/i;
 
   function isSidebarStudioActive() {
     try {
       const rootEl = docRoot();
-      if (
-        rootEl &&
-        (ga(rootEl, 'data-ag-prism-sidebar') === 'on' || ga(rootEl, 'data-ag-sidebar-studio') === 'on')
-      ) {
+      if (rootEl && ga(rootEl, 'data-ag-prism-sidebar-studio') === 'on') {
         return true;
       }
       return W.__agPrism?.getState?.()?.cfg?.sidebarStudio === 'on';
@@ -3445,6 +3455,7 @@
     if (sidebarOn && (cls.includes('ag-prism-sb-') || cls.includes('ag-sb-'))) return true;
     if (el !== containerRoot) {
       if (tag === 'BUTTON') return true;
+      if (ga(el, 'aria-hidden') === 'true') return true;
       const role = low(ga(el, 'role'));
       if (role === 'button' || role === 'status' || role === 'badge') return true;
       if (TITLE_CHILD_BADGE_CLS_RE.test(cls)) return true;
@@ -3454,46 +3465,102 @@
     return false;
   }
 
-  function collectTitleTextNodes(rootNode, containerRoot, outList, visitedNodes, sidebarOn, activeLang) {
-    if (!rootNode || outList.length >= 40) return;
+  function findExplicitPrimaryTitleEl(rootEl, containerRoot, sidebarOn) {
+    if (!rootEl || rootEl.nodeType !== 1) return null;
+    const chs = rootEl[K_CN];
+    if (!chs || !chs.length) return null;
+    for (let i = 0; i < chs.length; i++) {
+      const ch = chs[i];
+      if (!ch || ch.nodeType !== 1) continue;
+      if (isExcludedTitleChild(ch, containerRoot, sidebarOn)) continue;
+      const tid = ga(ch, 'data-testid') || '';
+      if (tid && TITLE_PRIMARY_TID_RE.test(tid) && !/subtitle|sub-title/i.test(tid)) return ch;
+      const tag = ch.tagName ? String(ch.tagName).toUpperCase() : '';
+      if (TITLE_HEADING_TAGS.has(tag)) return ch;
+      const nested = findExplicitPrimaryTitleEl(ch, containerRoot, sidebarOn);
+      if (nested) return nested;
+    }
+    return null;
+  }
+
+  function findBreadcrumbGroupRoot(el) {
+    let cur = parEl(el);
+    while (cur && cur.nodeType === 1) {
+      const tag = cur.tagName ? String(cur.tagName).toUpperCase() : '';
+      if (tag === 'NAV' || tag === 'HEADER' || tag === 'OL' || tag === 'UL') return cur;
+      const role = low(ga(cur, 'role'));
+      if (role === 'navigation' || role === 'banner' || role === 'list') return cur;
+      const aria = low(ga(cur, 'aria-label'));
+      if (aria.includes('breadcrumb')) return cur;
+      const tid = low(ga(cur, 'data-testid'));
+      if (tid.includes('breadcrumb') && tid !== 'breadcrumb-segment') return cur;
+      const cls = low(ga(cur, 'class') || cur.className || '');
+      if (cls.includes('breadcrumb')) return cur;
+      cur = parEl(cur);
+    }
+    return document.body || docRoot() || '__default_bc__';
+  }
+
+  function unbindStaleTitleRec(tn, prevRec, curVal) {
+    if (prevRec && prevRec.trans !== curVal) {
+      titleNodeMap.delete(tn);
+      titleRecords.delete(prevRec);
+      if (prevRec.el) ra(prevRec.el, 'data-op-title-tr');
+    }
+  }
+
+  function isIgnorableTitlePrefixText(trimmed) {
+    if (!trimmed || trimmed.length < 2) return true;
+    return TITLE_TIME_RE.test(trimmed) || TITLE_NUM_SYM_RE.test(trimmed) || TITLE_STATUS_WORD_RE.test(trimmed);
+  }
+
+  function collectTitleTextNodes(rootNode, containerRoot, outList, visitedNodes, sidebarOn, activeLang, primaryOnly = false) {
+    if (!rootNode || outList.length >= 40) return false;
     const nt = rootNode.nodeType;
     if (nt === 3) {
-      if (visitedNodes.has(rootNode)) return;
+      if (visitedNodes.has(rootNode)) return false;
       visitedNodes.add(rootNode);
       const val = getTnStr(rootNode);
       const prevRec = titleNodeMap.get(rootNode);
       if (prevRec && prevRec.trans === val && prevRec.lang === activeLang && prevRec.mode === currentMode) {
-        return;
+        return primaryOnly;
+      }
+      if (val.length > 1024) {
+        unbindStaleTitleRec(rootNode, prevRec, val);
+        return primaryOnly;
       }
       const trimmed = trm(val);
-      if (!trimmed || !isTitleCandidate(trimmed, activeLang)) {
-        if (prevRec && prevRec.trans !== val) {
-          titleNodeMap.delete(rootNode);
-          titleRecords.delete(prevRec);
-          if (prevRec.el) ra(prevRec.el, 'data-op-title-tr');
-        }
-        return;
+      if (!trimmed) {
+        unbindStaleTitleRec(rootNode, prevRec, val);
+        return false;
+      }
+      if (primaryOnly && isIgnorableTitlePrefixText(trimmed)) {
+        unbindStaleTitleRec(rootNode, prevRec, val);
+        return false;
+      }
+      if (!isTitleCandidate(trimmed, activeLang)) {
+        unbindStaleTitleRec(rootNode, prevRec, val);
+        return primaryOnly;
       }
       outList.push({ tn: rootNode, el: parEl(rootNode), raw: val, trimmed });
-      return;
+      return primaryOnly;
     }
-    if (nt !== 1 || isExcludedTitleChild(rootNode, containerRoot, sidebarOn)) return;
+    if (nt !== 1 || isExcludedTitleChild(rootNode, containerRoot, sidebarOn)) return false;
     const chs = rootNode[K_CN];
-    if (!chs || !chs.length) return;
+    if (!chs || !chs.length) return false;
     for (let i = 0; i < chs.length && outList.length < 40; i++) {
-      collectTitleTextNodes(chs[i], containerRoot, outList, visitedNodes, sidebarOn, activeLang);
+      if (collectTitleTextNodes(chs[i], containerRoot, outList, visitedNodes, sidebarOn, activeLang, primaryOnly)) {
+        return true;
+      }
     }
+    return false;
   }
 
   function applyTitleText(item, translatedStr, activeLang, mode) {
     if (!item || !item.tn || !isConn(item.tn) || !translatedStr) return;
     const curVal = getTnStr(item.tn);
     if (curVal !== item.raw) return;
-    const leadMatch = /^\s*/.exec(item.raw);
-    const trailMatch = /\s*$/.exec(item.raw);
-    const lead = leadMatch ? leadMatch[0] : '';
-    const trail = trailMatch ? trailMatch[0] : '';
-    const nextVal = `${lead}${translatedStr}${trail}`;
+    const nextVal = wrapWithRawWhitespace(item.raw, translatedStr);
     if (nextVal === item.raw) return;
 
     const oldRec = titleNodeMap.get(item.tn);
@@ -3545,17 +3612,41 @@
     const modePrefix = `${activeMode}:${activeLang}:`;
     const visitedNodes = new Set();
     const candidates = [];
+    const bcGroups = new Map();
     let sawOffscreen = false;
 
     for (let i = 0; i < nodes.length && candidates.length < 40; i++) {
       const c = nodes[i];
       if (!c || !isConn(c) || isHiddenByAncestor(null, c)) continue;
       if (isTitleContainerExcluded(c, sidebarOn)) continue;
+      const tid = ga(c, 'data-testid') || '';
+      if (tid === 'breadcrumb-segment') {
+        const gRoot = findBreadcrumbGroupRoot(c);
+        let segs = bcGroups.get(gRoot);
+        if (!segs) {
+          segs = [];
+          bcGroups.set(gRoot, segs);
+        }
+        segs.push(c);
+        continue;
+      }
       if (probeViewportBand(c) === 0) {
         sawOffscreen = true;
         continue;
       }
-      collectTitleTextNodes(c, c, candidates, visitedNodes, sidebarOn, activeLang);
+      const explicitTitleEl = findExplicitPrimaryTitleEl(c, c, sidebarOn);
+      collectTitleTextNodes(explicitTitleEl || c, c, candidates, visitedNodes, sidebarOn, activeLang, true);
+    }
+
+    for (const segs of bcGroups.values()) {
+      if (candidates.length >= 40) break;
+      if (!segs || segs.length < 2) continue;
+      const lastSeg = segs[segs.length - 1];
+      if (probeViewportBand(lastSeg) === 0) {
+        sawOffscreen = true;
+        continue;
+      }
+      collectTitleTextNodes(lastSeg, lastSeg, candidates, visitedNodes, sidebarOn, activeLang, true);
     }
     hasOffscreenTitles = sawOffscreen;
     if (!candidates.length) return;
@@ -3774,11 +3865,13 @@
 
       let toolSummaryChanged = false;
       if (typeof cfg.translateToolSummaries === 'boolean') {
+        hasExplicitToolSummaries = true;
         toolSummaryChanged = setTranslateToolSummariesFlag(cfg.translateToolSummaries, false);
       }
 
       let titleChanged = false;
       if (typeof cfg.translateTitles === 'boolean') {
+        hasExplicitTitles = true;
         titleChanged = setTranslateTitlesFlag(cfg.translateTitles, false);
       }
 
@@ -3870,6 +3963,7 @@
     },
     setTranslateToolSummaries(enabled, opts = {}) {
       const next = Boolean(enabled);
+      hasExplicitToolSummaries = true;
       const changed = setTranslateToolSummariesFlag(next, true);
       if (changed && opts.persistDaemon === true) {
         void callDaemonRpc({ action: 'save-config', translateToolSummaries: next }).catch(() => {});
@@ -3881,6 +3975,7 @@
     },
     setTranslateTitles(enabled, opts = {}) {
       const next = Boolean(enabled);
+      hasExplicitTitles = true;
       const changed = setTranslateTitlesFlag(next, true);
       if (changed && opts.persistDaemon === true) {
         void callDaemonRpc({ action: 'save-config', translateTitles: next }).catch(() => {});
@@ -3915,6 +4010,12 @@
     },
     getConfig: () => brCall('get-config').then((res) => (syncRemoteCfgMeta(res), res)),
     saveConfig(input) {
+      if (input && typeof input.translateToolSummaries === 'boolean') {
+        hasExplicitToolSummaries = true;
+      }
+      if (input && typeof input.translateTitles === 'boolean') {
+        hasExplicitTitles = true;
+      }
       return brCall('save-config', input).then((res) => {
         const nextTag = res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : '');
         const tagChanged = setActiveStyleTag(nextTag);

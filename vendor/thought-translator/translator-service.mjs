@@ -79,7 +79,7 @@ export function normalizeTargetLang(lang) {
 const KEY_REDACT_RE =
   /(sk-[A-Za-z0-9_\-]{6,}|gsk_[A-Za-z0-9_\-]{12,}|hf_[A-Za-z0-9_\-]{12,}|pplx-[A-Za-z0-9_\-]{12,}|csk-[A-Za-z0-9_\-]{12,}|nvapi-[A-Za-z0-9_\-]{12,}|AIza[A-Za-z0-9_\-]{12,}|xai-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+[A-Za-z0-9._\-:+/=]{6,}|(?:Proxy-)?Authorization\s*:\s*Basic\s+[A-Za-z0-9+/=]{4,})/gi;
 const URL_KEY_PARAM_RE = /([?&](?:api_key|apikey|key|token|access_token)=)[^&\s"'<>]+/gi;
-const URL_USERINFO_PASS_RE = /((?:https?|socks5h?):\/\/)[^@\s/"'<>]+@/gi;
+const URL_USERINFO_PASS_RE = /([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^@\s/"'<>]+@/gi;
 
 const BLOCKED_AI_PORTS = new Set([
   21, 22, 23, 25, 53, 110, 135, 139, 143, 445, 1433, 3306, 3389, 5432, 6379, 11211, 27017,
@@ -231,8 +231,16 @@ export function redactSecrets(text, explicitKey = '') {
     .replace(URL_KEY_PARAM_RE, '$1***REDACTED***')
     .replace(URL_USERINFO_PASS_RE, '$1***REDACTED***@');
   const k = String(explicitKey || '').trim();
-  if (k && k.length >= 4 && out.includes(k)) {
-    out = out.split(k).join('***REDACTED***');
+  if (k && k.length >= 4) {
+    if (out.includes(k)) {
+      out = out.split(k).join('***REDACTED***');
+    }
+    try {
+      const encK = encodeURIComponent(k);
+      if (encK !== k && encK.length >= 4 && out.includes(encK)) {
+        out = out.split(encK).join('***REDACTED***');
+      }
+    } catch {}
   }
   return out;
 }
@@ -265,8 +273,13 @@ export function validateOpenAiBaseUrl(rawUrl) {
     parsed.password = '';
     parsed.hash = '';
     parsed.search = '';
-    let pathname = parsed.pathname.replace(/\/+$/, '');
-    pathname = pathname.replace(/\/chat\/completions$/i, '').replace(/\/models$/i, '').replace(/\/+$/, '');
+    const stripTrailingSlashes = (p) => {
+      let s = String(p || '');
+      while (s.endsWith('/')) s = s.slice(0, -1);
+      return s;
+    };
+    let pathname = stripTrailingSlashes(parsed.pathname);
+    pathname = stripTrailingSlashes(pathname.replace(/\/chat\/completions$/i, '').replace(/\/models$/i, ''));
     if (!pathname) pathname = '/v1';
     return { ok: true, url: `${parsed.origin}${pathname}`, isDefault: false };
   } catch {
@@ -2740,35 +2753,114 @@ export class ThoughtTranslatorService {
         : store.proxyMode || 'auto';
 
     const secretTokens = [];
-    const addSecretToken = (s) => {
-      const t = String(s || '').trim();
+    const addRawSecretToken = (s) => {
+      const t = String(s || '');
       if (t.length >= 3 && !secretTokens.includes(t)) secretTokens.push(t);
     };
+    const addSecretToken = (s) => {
+      const raw = String(s || '');
+      const t = raw.trim();
+      if (t.length < 3) return;
+      addRawSecretToken(t);
+      if (raw !== t) addRawSecretToken(raw);
+      try {
+        const encT = encodeURIComponent(t);
+        if (encT !== t) addRawSecretToken(encT);
+        if (raw !== t) {
+          const encRaw = encodeURIComponent(raw);
+          if (encRaw !== raw) addRawSecretToken(encRaw);
+        }
+      } catch {}
+    };
     addSecretToken(apiKey);
+    if (activeProf && activeProf.apiKey && activeProf.apiKey !== apiKey) {
+      addSecretToken(activeProf.apiKey);
+    }
+
+    const addProxyUserPassSecrets = (user, pass, rawUser = '', rawPass = '') => {
+      const u = String(user || '');
+      const p = String(pass || '');
+      const ru = String(rawUser || '');
+      const rp = String(rawPass || '');
+      if (p) addSecretToken(p);
+      if (rp && rp !== p) addSecretToken(rp);
+      if (u && p) {
+        addSecretToken(`${u}:${p}`);
+        try {
+          addRawSecretToken(`${encodeURIComponent(u)}:${encodeURIComponent(p)}`);
+        } catch {}
+      }
+      if (ru && rp && (ru !== u || rp !== p)) {
+        addRawSecretToken(`${ru}:${rp}`);
+      }
+      if (u || p) {
+        addRawSecretToken(Buffer.from(`${u}:${p}`, 'utf8').toString('base64'));
+      }
+      if ((ru || rp) && (ru !== u || rp !== p)) {
+        addRawSecretToken(Buffer.from(`${ru}:${rp}`, 'utf8').toString('base64'));
+      }
+    };
+
     const collectProxySecrets = (raw) => {
       if (!raw) return;
-      const parsed = typeof raw === 'string' ? parseProxyUrl(raw) : raw;
-      if (parsed && typeof parsed === 'object') {
-        addSecretToken(parsed.password);
-        if (parsed.username && parsed.password) addSecretToken(`${parsed.username}:${parsed.password}`);
+      if (typeof raw === 'string') {
+        const s = raw.trim();
+        if (!s) return;
+        let rawUser = '';
+        let rawPass = '';
+        try {
+          const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s);
+          const u = new URL(hasScheme ? s : `http://${s}`);
+          rawUser = u.username || '';
+          rawPass = u.password || '';
+          let decUser = rawUser;
+          let decPass = rawPass;
+          try { decUser = decodeURIComponent(rawUser); } catch {}
+          try { decPass = decodeURIComponent(rawPass); } catch {}
+          if (decUser || decPass || rawUser || rawPass) {
+            addProxyUserPassSecrets(decUser, decPass, rawUser, rawPass);
+          }
+        } catch {}
+        const parsed = parseProxyUrl(s);
+        if (parsed && typeof parsed === 'object') {
+          addProxyUserPassSecrets(parsed.username, parsed.password, rawUser, rawPass);
+        }
+        return;
+      }
+      if (typeof raw === 'object') {
+        if (typeof raw.href === 'string') collectProxySecrets(raw.href);
+        if (typeof raw.url === 'string') collectProxySecrets(raw.url);
+        if (typeof raw.proxy === 'string') collectProxySecrets(raw.proxy);
+        if (raw.username || raw.password) {
+          addProxyUserPassSecrets(raw.username, raw.password);
+        }
       }
     };
     collectProxySecrets(store.customProxyUrl);
     if (typeof input.customProxyUrl === 'string') collectProxySecrets(input.customProxyUrl);
+    const proxyEnv = this._proxyEnv || process.env;
+    if (proxyEnv && typeof proxyEnv === 'object') {
+      for (const envKey of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']) {
+        if (proxyEnv[envKey]) collectProxySecrets(proxyEnv[envKey]);
+      }
+    }
 
     const safeRedact = (text) => {
       let out = redactSecrets(text, apiKey);
-      for (const tok of secretTokens) {
-        if (out.includes(tok)) out = out.split(tok).join('***REDACTED***');
+      if (secretTokens.length > 0) {
+        const ordered = secretTokens.length > 1 ? [...secretTokens].sort((a, b) => b.length - a.length) : secretTokens;
+        for (const tok of ordered) {
+          if (out.includes(tok)) out = out.split(tok).join('***REDACTED***');
+        }
       }
       return out;
     };
 
     const maskParsedProxy = (p) => {
       if (!p) return '';
+      collectProxySecrets(p);
       if (typeof p === 'string') return maskProxyUrl(p);
       if (typeof p === 'object') {
-        collectProxySecrets(p);
         if (p.href) return maskProxyUrl(p.href);
         if (p.url || p.proxy) return maskProxyUrl(p.url || p.proxy);
         if (p.protocol && p.hostname && p.port) {
@@ -2791,6 +2883,11 @@ export class ThoughtTranslatorService {
         if (customOs) osProxyDetected = maskParsedProxy(customOs);
       } else {
         const osCfg = await this._getCachedOsProxyConfigAsync();
+        if (osCfg && typeof osCfg === 'object') {
+          collectProxySecrets(osCfg.https);
+          collectProxySecrets(osCfg.http);
+          collectProxySecrets(osCfg.socks);
+        }
         const pickedOs = osCfg && (osCfg.https || osCfg.http || osCfg.socks);
         if (pickedOs) {
           osProxyDetected = maskParsedProxy(pickedOs);
@@ -2867,38 +2964,42 @@ export class ThoughtTranslatorService {
             proxyOverride
           );
           const latencyMs = Date.now() - t0;
-          const bodySnippet = await this._readResponseTextBounded(res, 65536).catch(() => '');
           if (res.ok) {
+            try { await res.body?.cancel?.(); } catch {}
             connectivity = { ok: true, target: 'ai', status: res.status, latencyMs, reason: 'ok' };
           } else if (res.status === 404 || res.status === 405) {
+            try { await res.body?.cancel?.(); } catch {}
             connectivity = { ok: true, target: 'ai', status: res.status, latencyMs, reason: 'endpoint_reachable' };
-          } else if (res.status === 401 || res.status === 403) {
-            connectivity = {
-              ok: false,
-              target: 'ai',
-              status: res.status,
-              latencyMs,
-              reason: 'auth_error',
-              error: `HTTP ${res.status}: ${safeRedact(bodySnippet.slice(0, 180))}`,
-            };
-          } else if (res.status === 429) {
-            connectivity = {
-              ok: false,
-              target: 'ai',
-              status: res.status,
-              latencyMs,
-              reason: 'rate_limited',
-              error: `HTTP 429: ${safeRedact(bodySnippet.slice(0, 180))}`,
-            };
           } else {
-            connectivity = {
-              ok: false,
-              target: 'ai',
-              status: res.status,
-              latencyMs,
-              reason: 'http_error',
-              error: `HTTP ${res.status}: ${safeRedact(bodySnippet.slice(0, 180))}`,
-            };
+            const bodySnippet = await this._readResponseTextBounded(res, 65536).catch(() => '');
+            if (res.status === 401 || res.status === 403) {
+              connectivity = {
+                ok: false,
+                target: 'ai',
+                status: res.status,
+                latencyMs,
+                reason: 'auth_error',
+                error: `HTTP ${res.status}: ${safeRedact(bodySnippet.slice(0, 180))}`,
+              };
+            } else if (res.status === 429) {
+              connectivity = {
+                ok: false,
+                target: 'ai',
+                status: res.status,
+                latencyMs,
+                reason: 'rate_limited',
+                error: `HTTP 429: ${safeRedact(bodySnippet.slice(0, 180))}`,
+              };
+            } else {
+              connectivity = {
+                ok: false,
+                target: 'ai',
+                status: res.status,
+                latencyMs,
+                reason: 'http_error',
+                error: `HTTP ${res.status}: ${safeRedact(bodySnippet.slice(0, 180))}`,
+              };
+            }
           }
         } catch (err) {
           connectivity = {
@@ -2926,27 +3027,30 @@ export class ThoughtTranslatorService {
           proxyOverride
         );
         const latencyMs = Date.now() - t0;
-        const bodySnippet = await this._readResponseTextBounded(res, 16384).catch(() => '');
         if (res.ok) {
+          try { await res.body?.cancel?.(); } catch {}
           connectivity = { ok: true, target: 'gtx', status: res.status, latencyMs, reason: 'ok' };
-        } else if (res.status === 429) {
-          connectivity = {
-            ok: false,
-            target: 'gtx',
-            status: res.status,
-            latencyMs,
-            reason: 'rate_limited',
-            error: `HTTP 429: ${safeRedact(bodySnippet.slice(0, 160))}`,
-          };
         } else {
-          connectivity = {
-            ok: false,
-            target: 'gtx',
-            status: res.status,
-            latencyMs,
-            reason: 'http_error',
-            error: `HTTP ${res.status}: ${safeRedact(bodySnippet.slice(0, 160))}`,
-          };
+          const bodySnippet = await this._readResponseTextBounded(res, 16384).catch(() => '');
+          if (res.status === 429) {
+            connectivity = {
+              ok: false,
+              target: 'gtx',
+              status: res.status,
+              latencyMs,
+              reason: 'rate_limited',
+              error: `HTTP 429: ${safeRedact(bodySnippet.slice(0, 160))}`,
+            };
+          } else {
+            connectivity = {
+              ok: false,
+              target: 'gtx',
+              status: res.status,
+              latencyMs,
+              reason: 'http_error',
+              error: `HTTP ${res.status}: ${safeRedact(bodySnippet.slice(0, 160))}`,
+            };
+          }
         }
       } catch (err) {
         connectivity = {

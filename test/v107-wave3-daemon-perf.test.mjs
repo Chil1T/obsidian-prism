@@ -376,7 +376,7 @@ test('Wave3 P1-6b & P2-7a: Channel 2~5 share .bundle-cache.json, detect same-len
     assert.equal(hitStats.compileUnifiedRuns, 0);
     assert.equal(hitStats.channelDiskHits, 5);
     assert.equal(hitStats.channelCompileRuns, 0);
-    assert.deepEqual(hitStats.channelHitsByName, { omni: 1, sidebar: 1, hostI18n: 1, thought: 1, inlineDiff: 1 });
+    assert.deepEqual(hitStats.channelHitsByName, { omni: 1, sidebar: 1, hostI18n: 1, thought: 1, inlineDiff: 1, wallpaper: 0 });
     assert.ok(hitMs < coldMs, `Expected Channel 2~6 cache hit (${hitMs.toFixed(1)}ms) faster than cold compile (${coldMs.toFixed(1)}ms)`);
 
     // 3) P2-7a: Repeated warm-base-hit config updates defer 676KB exprSha256 until actual flush

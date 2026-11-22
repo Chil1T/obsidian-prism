@@ -147,7 +147,7 @@ function createFakeCdpSession(options = {}) {
             needsDashboardSync: false,
           };
         }
-        if (s.includes('__prismMountWallpaperUi') || s.includes('__agPrismWallpaper')) {
+        if (!s.includes('globalThis.__agCsUiMain') && (s.includes('__prismMountWallpaperUi') || s.includes('__agPrismWallpaper'))) {
           return isNonHost ? { ok: false, status: 'skipped-non-host' } : { ok: true, status: 'mounted' };
         }
         return isNonHost
@@ -699,91 +699,93 @@ test('任务 2: Daemon 透传思考 diagnose、接入 Channel 7 壁纸通道（m
   });
   daemon.running = true;
 
-  // 确认 cdp.js 导出与常量对齐
-  assert.equal(WALLPAPER_BINDING, '__agPrismWallpaperCall');
-  assert.equal(cdp.WALLPAPER_BINDING, '__agPrismWallpaperCall');
-  assert.equal(typeof cdp.buildWallpaperExpression, 'function');
-  assert.equal(typeof cdp.WALLPAPER_REMOVE_EXPRESSION, 'string');
-  assert.doesNotThrow(() => new vm.Script(cdp.buildWallpaperExpression()), 'Channel 7 expression must parse cleanly');
-  assert.doesNotThrow(() => new vm.Script(cdp.WALLPAPER_REMOVE_EXPRESSION), 'Channel 7 remove expression must parse cleanly');
+  try {
+    // 确认 cdp.js 导出与常量对齐
+    assert.equal(WALLPAPER_BINDING, '__agPrismWallpaperCall');
+    assert.equal(cdp.WALLPAPER_BINDING, '__agPrismWallpaperCall');
+    assert.equal(typeof cdp.buildWallpaperExpression, 'function');
+    assert.equal(typeof cdp.WALLPAPER_REMOVE_EXPRESSION, 'string');
+    assert.doesNotThrow(() => new vm.Script(cdp.buildWallpaperExpression()), 'Channel 7 expression must parse cleanly');
+    assert.doesNotThrow(() => new vm.Script(cdp.WALLPAPER_REMOVE_EXPRESSION), 'Channel 7 remove expression must parse cleanly');
 
-  // 1) attachTarget 两个合法主窗口 + 一个非宿主页面
-  const hostSession1 = createFakeCdpSession({ mainFrameId: 'MAIN_1', mainCtxId: 11, title: 'Antigravity 1' });
-  const hostSession2 = createFakeCdpSession({ mainFrameId: 'MAIN_2', mainCtxId: 22, title: 'Antigravity 2' });
-  const nonHostSession = createFakeCdpSession({ mainFrameId: 'OTHER_1', mainCtxId: 33, title: 'External', nonHost: true });
+    // 1) attachTarget 两个合法主窗口 + 一个非宿主页面
+    const hostSession1 = createFakeCdpSession({ mainFrameId: 'MAIN_1', mainCtxId: 11, title: 'Antigravity 1' });
+    const hostSession2 = createFakeCdpSession({ mainFrameId: 'MAIN_2', mainCtxId: 22, title: 'Antigravity 2' });
+    const nonHostSession = createFakeCdpSession({ mainFrameId: 'OTHER_1', mainCtxId: 33, title: 'External', nonHost: true });
 
-  const sessionQueue = {
-    'ws://host/1': hostSession1,
-    'ws://host/2': hostSession2,
-    'ws://other/1': nonHostSession,
-  };
-  daemon.cdp = {
-    ...daemon.cdp,
-    CdpSession: {
-      connect: async (wsUrl) => sessionQueue[wsUrl],
-    },
-  };
+    const sessionQueue = {
+      'ws://host/1': hostSession1,
+      'ws://host/2': hostSession2,
+      'ws://other/1': nonHostSession,
+    };
+    daemon.cdp = {
+      ...daemon.cdp,
+      CdpSession: {
+        connect: async (wsUrl) => sessionQueue[wsUrl],
+      },
+    };
 
-  const entry1 = await daemon.attachTarget({ id: 'H1', type: 'page', title: 'Antigravity 1', url: 'https://127.0.0.1:9999/', webSocketDebuggerUrl: 'ws://host/1' });
-  const entry2 = await daemon.attachTarget({ id: 'H2', type: 'page', title: 'Antigravity 2', url: 'https://127.0.0.1:9999/', webSocketDebuggerUrl: 'ws://host/2' });
-  const ignoredRes = await daemon.attachTarget({ id: 'N1', type: 'page', title: 'External', url: 'https://127.0.0.1:9999/', webSocketDebuggerUrl: 'ws://other/1' });
+    const entry1 = await daemon.attachTarget({ id: 'H1', type: 'page', title: 'Antigravity 1', url: 'https://127.0.0.1:9999/', webSocketDebuggerUrl: 'ws://host/1' });
+    const entry2 = await daemon.attachTarget({ id: 'H2', type: 'page', title: 'Antigravity 2', url: 'https://127.0.0.1:9999/', webSocketDebuggerUrl: 'ws://host/2' });
+    const ignoredRes = await daemon.attachTarget({ id: 'N1', type: 'page', title: 'External', url: 'https://127.0.0.1:9999/', webSocketDebuggerUrl: 'ws://other/1' });
 
-  assert.ok(entry1 && entry2, 'Valid host targets must attach');
-  assert.equal(ignoredRes, null, 'Non-host target must be skipped and detached');
-  assert.ok(
-    hostSession1.getCalls().some((c) => c.method === 'Runtime.addBinding' && c.params?.name === WALLPAPER_BINDING),
-    'Host window must register WALLPAPER_BINDING'
-  );
-  assert.ok(
-    nonHostSession.getCalls().some((c) => c.method === 'Runtime.removeBinding' && c.params?.name === WALLPAPER_BINDING),
-    'Non-host target must call Runtime.removeBinding for WALLPAPER_BINDING'
-  );
-  assert.equal(entry1.wallpaperMounted, true);
-  assert.ok(entry1.wallpaperScriptId, 'Host window must register Channel 7 via Page.addScriptToEvaluateOnNewDocument');
+    assert.ok(entry1 && entry2, 'Valid host targets must attach');
+    assert.equal(ignoredRes, null, 'Non-host target must be skipped and detached');
+    assert.ok(
+      hostSession1.getCalls().some((c) => c.method === 'Runtime.addBinding' && c.params?.name === WALLPAPER_BINDING),
+      'Host window must register WALLPAPER_BINDING'
+    );
+    assert.ok(
+      nonHostSession.getCalls().some((c) => c.method === 'Runtime.removeBinding' && c.params?.name === WALLPAPER_BINDING),
+      'Non-host target must call Runtime.removeBinding for WALLPAPER_BINDING'
+    );
+    assert.equal(entry1.wallpaperMounted, true);
+    assert.ok(entry1.wallpaperScriptId, 'Host window must register Channel 7 via Page.addScriptToEvaluateOnNewDocument');
 
-  // 2) THOUGHT_BINDING action === 'diagnose' 正确透传到 translatorService.diagnose
-  await daemon.handleBindingCall(entry1, {
-    name: THOUGHT_BINDING,
-    payload: JSON.stringify({ id: 7, action: 'diagnose', input: { mode: 'ai', timeoutMs: 3000 } }),
-    executionContextId: 11,
-  });
-  assert.equal(diagCalls.length, 1);
-  assert.equal(diagCalls[0].mode, 'ai');
-  assert.ok(
-    hostSession1.getEvals().some((e) => String(e.expression).includes('__agPrismThoughtResolve(7,') && String(e.expression).includes('"profileReady":true')),
-    'diagnose result must resolve back to __agPrismThoughtResolve'
-  );
+    // 2) THOUGHT_BINDING action === 'diagnose' 正确透传到 translatorService.diagnose
+    await daemon.handleBindingCall(entry1, {
+      name: THOUGHT_BINDING,
+      payload: JSON.stringify({ id: 7, action: 'diagnose', input: { mode: 'ai', timeoutMs: 3000 } }),
+      executionContextId: 11,
+    });
+    assert.equal(diagCalls.length, 1);
+    assert.equal(diagCalls[0].mode, 'ai');
+    assert.ok(
+      hostSession1.getEvals().some((e) => String(e.expression).includes('__agPrismThoughtResolve(7,') && String(e.expression).includes('"profileReady":true')),
+      'diagnose result must resolve back to __agPrismThoughtResolve'
+    );
 
-  // 3) 子 iframe 尝试调用 WALLPAPER_BINDING 必须被 mainFrame 门禁严格拒绝
-  hostSession1.emit('Runtime.executionContextCreated', {
-    context: { id: 99, auxData: { frameId: 'SUB_IFRAME', isDefault: true, type: 'default' } },
-  });
-  await daemon.handleBindingCall(entry1, {
-    name: WALLPAPER_BINDING,
-    payload: JSON.stringify({ id: 101, action: 'get-config' }),
-    executionContextId: 99,
-  });
-  assert.equal(wallpaperActions.length, 0, 'Sub-iframe WALLPAPER_BINDING call must be strictly blocked');
+    // 3) 子 iframe 尝试调用 WALLPAPER_BINDING 必须被 mainFrame 门禁严格拒绝
+    hostSession1.emit('Runtime.executionContextCreated', {
+      context: { id: 99, auxData: { frameId: 'SUB_IFRAME', isDefault: true, type: 'default' } },
+    });
+    await daemon.handleBindingCall(entry1, {
+      name: WALLPAPER_BINDING,
+      payload: JSON.stringify({ id: 101, action: 'get-config' }),
+      executionContextId: 99,
+    });
+    assert.equal(wallpaperActions.length, 0, 'Sub-iframe WALLPAPER_BINDING call must be strictly blocked');
 
-  // 4) 合法主 Frame 调用 WALLPAPER_BINDING save-config -> 响应当前窗口并多窗口广播到 entry2
-  await daemon.handleBindingCall(entry1, {
-    name: WALLPAPER_BINDING,
-    payload: JSON.stringify({ id: 102, action: 'save-config', payload: { enabled: true, opacity: 0.42 } }),
-    executionContextId: 11,
-  });
-  assert.equal(wallpaperActions.length, 1);
-  assert.equal(wallpaperActions[0].action, 'save-config');
-  assert.ok(
-    hostSession1.getEvals().some((e) => String(e.expression).includes('__agPrismWallpaperResolve(102,') && String(e.expression).includes('"opacity":0.42')),
-    'Main-frame WALLPAPER_BINDING call must resolve via __agPrismWallpaperResolve'
-  );
-  assert.ok(
-    hostSession2.getEvals().some((e) => String(e.expression).includes('window.__agPrismWallpaper?.applyConfig?.(') && String(e.expression).includes('"opacity":0.42')),
-    'save-config must broadcast updated wallpaper config to other attached host windows'
-  );
-
-  // 5) stop() 必须释放 wallpaperService.dispose()
-  await daemon.stop(false);
+    // 4) 合法主 Frame 调用 WALLPAPER_BINDING save-config -> 响应当前窗口并多窗口广播到 entry2
+    await daemon.handleBindingCall(entry1, {
+      name: WALLPAPER_BINDING,
+      payload: JSON.stringify({ id: 102, action: 'save-config', payload: { enabled: true, opacity: 0.42 } }),
+      executionContextId: 11,
+    });
+    assert.equal(wallpaperActions.length, 1);
+    assert.equal(wallpaperActions[0].action, 'save-config');
+    assert.ok(
+      hostSession1.getEvals().some((e) => String(e.expression).includes('__agPrismWallpaperResolve(102,') && String(e.expression).includes('"opacity":0.42')),
+      'Main-frame WALLPAPER_BINDING call must resolve via __agPrismWallpaperResolve'
+    );
+    assert.ok(
+      hostSession2.getEvals().some((e) => String(e.expression).includes('window.__agPrismWallpaper?.applyConfig?.(') && String(e.expression).includes('"opacity":0.42') && e.contextId === 22),
+      'save-config must broadcast updated wallpaper config to other attached host windows with explicit contextId'
+    );
+  } finally {
+    // 5) stop() 必须释放 wallpaperService.dispose()
+    await daemon.stop(false);
+  }
   assert.equal(disposedWallpaper, 1, 'daemon.stop() must call wallpaperService.dispose()');
 });
 
@@ -846,4 +848,242 @@ test('任务 2 & 3: 四端 --purge-data 补齐 obsidian-prism-wallpaper.json（�
   assert.ok(readmeEn.includes('npm run install:plugin') && readmeEn.includes('node tools/install-plugin.cjs --status'));
   assert.ok(readmeEn.includes('Do NOT use `npm run inject`'));
   assert.ok(readmeEn.includes('1-Click Diagnose'));
+});
+
+test('#229 [P1-6] (Windows C#): 内存级 hostKey 去重兜底、ACCESS_DENIED/无窗跳过 PowerShell 风暴、连续 2 次探活判死与 ConnectionRefused 立即判死', {
+  skip: process.platform !== 'win32' ? 'Windows-only C# probe' : false,
+}, async () => {
+  const csc = getWindowsCscPath();
+  assert.ok(csc, 'Expected .NET Framework csc.exe');
+
+  const tmpDir = mkTempDir('ag-prism-p16-');
+  const openSockets = new Set();
+  const hangingServer = http.createServer((req, res) => {
+    // 故意挂起 /json/list 请求以触发 HttpClient 2s 瞬态超时
+  });
+  hangingServer.on('connection', (sock) => {
+    openSockets.add(sock);
+    sock.on('close', () => openSockets.delete(sock));
+  });
+
+  try {
+    await new Promise((resolve) => hangingServer.listen(0, '127.0.0.1', resolve));
+    const hangPort = hangingServer.address().port;
+    const deadPort = await allocateClosedLoopbackPort();
+
+    // 构造一个占位的普通文件作为“不可写目录”，使磁盘 .relaunch-prompt-state.json 写入必然失败
+    const blockedDirFile = path.join(tmpDir, 'readonly-blocker-file');
+    fs.writeFileSync(blockedDirFile, 'not-a-directory', 'utf8');
+
+    const probeCs = path.join(tmpDir, 'ProbeP16.cs');
+    const probeExe = path.join(tmpDir, 'probe-p16.exe');
+    fs.writeFileSync(
+      probeCs,
+      [
+        'using System;',
+        'using System.Collections.Generic;',
+        'using System.Diagnostics;',
+        'using System.IO;',
+        'using AgyClaudeStyle;',
+        'class ProbeP16 {',
+        '  static void Main(string[] args) {',
+        '    int deadPort = int.Parse(args[0]);',
+        '    int hangPort = int.Parse(args[1]);',
+        '    string blockedDir = args[2];',
+        '',
+        '    // 1) 内存级 HashSet<string> 已提示 hostKey 兜底（即使磁盘写盘失败也绝不无限重弹）',
+        '    bool beforeRecord = CdpHelper.HasPromptedForHost(77777, 1700000000000L, blockedDir, blockedDir);',
+        '    CdpHelper.RecordPromptedForHost(77777, 1700000000000L, "prompted", blockedDir, blockedDir);',
+        '    bool afterRecordExact = CdpHelper.HasPromptedForHost(77777, 1700000000000L, blockedDir, blockedDir);',
+        '    bool afterRecordJitter = CdpHelper.HasPromptedForHost(77777, 1700000005000L, blockedDir, blockedDir);',
+        '    bool differentPid = CdpHelper.HasPromptedForHost(77778, 1700000000000L, blockedDir, blockedDir);',
+        '    bool reusedPidLaterStart = CdpHelper.HasPromptedForHost(77777, 1700000030000L, blockedDir, blockedDir);',
+        '',
+        '    // 2) QueryProcessCommandLineFast / QueryWindowsProcessCommandLine 区分 ACCESS_DENIED 并立即跳过 PowerShell',
+        '    bool selfDenied;',
+        '    string selfCmd = CdpHelper.QueryProcessCommandLineFast(Process.GetCurrentProcess().Id, out selfDenied);',
+        '    int deniedPid = -1;',
+        '    Process[] allProcs = Process.GetProcesses();',
+        '    for (int i = 0; i < allProcs.Length; i++) {',
+        '      int pid = allProcs[i].Id;',
+        '      try { allProcs[i].Dispose(); } catch { }',
+        '      if (pid <= 0 || pid == Process.GetCurrentProcess().Id) continue;',
+        '      bool d;',
+        '      string c = CdpHelper.QueryProcessCommandLineFast(pid, out d);',
+        '      if (d && string.IsNullOrEmpty(c)) {',
+        '        deniedPid = pid;',
+        '        break;',
+        '      }',
+        '    }',
+        '    bool deniedQueryFlag = false;',
+        '    string deniedCmd = "";',
+        '    long deniedElapsedMs = -1;',
+        '    if (deniedPid > 0) {',
+        '      Stopwatch sw = Stopwatch.StartNew();',
+        '      deniedCmd = CdpHelper.QueryWindowsProcessCommandLine(deniedPid, true, out deniedQueryFlag);',
+        '      sw.Stop();',
+        '      deniedElapsedMs = sw.ElapsedMilliseconds;',
+        '    }',
+        '    Stopwatch swNoWin = Stopwatch.StartNew();',
+        '    bool noWinDenied;',
+        '    string noWinCmd = CdpHelper.QueryWindowsProcessCommandLine(999999, false, out noWinDenied);',
+        '    swNoWin.Stop();',
+        '',
+        '    // 3) ProbeActivePortAsync: ConnectionRefused 立即判死 vs 瞬态超时有活跃会话时需连续 2 次失败判死',
+        '    ActivePortProbeResult refusedWithActive = CdpHelper.ProbeActivePortAsync(deadPort, true, 0).GetAwaiter().GetResult();',
+        '    ActivePortProbeResult timeoutFirstWithActive = CdpHelper.ProbeActivePortAsync(hangPort, true, 0).GetAwaiter().GetResult();',
+        '    ActivePortProbeResult timeoutSecondWithActive = CdpHelper.ProbeActivePortAsync(hangPort, true, timeoutFirstWithActive.ConsecutiveFailures).GetAwaiter().GetResult();',
+        '    ActivePortProbeResult timeoutWithoutActive = CdpHelper.ProbeActivePortAsync(hangPort, false, 0).GetAwaiter().GetResult();',
+        '',
+        '    var obj = new Dictionary<string, object>(StringComparer.Ordinal) {',
+        '      { "beforeRecord", beforeRecord },',
+        '      { "afterRecordExact", afterRecordExact },',
+        '      { "afterRecordJitter", afterRecordJitter },',
+        '      { "differentPid", differentPid },',
+        '      { "reusedPidLaterStart", reusedPidLaterStart },',
+        '      { "selfDenied", selfDenied },',
+        '      { "selfCmdNonEmpty", !string.IsNullOrEmpty(selfCmd) },',
+        '      { "deniedPid", deniedPid },',
+        '      { "deniedQueryFlag", deniedQueryFlag },',
+        '      { "deniedCmdEmpty", string.IsNullOrEmpty(deniedCmd) },',
+        '      { "deniedElapsedMs", deniedElapsedMs },',
+        '      { "noWinCmdEmpty", string.IsNullOrEmpty(noWinCmd) },',
+        '      { "noWinElapsedMs", swNoWin.ElapsedMilliseconds },',
+        '      { "refusedIsRefused", refusedWithActive.IsConnectionRefused },',
+        '      { "refusedIsTimeout", refusedWithActive.IsTransientTimeout },',
+        '      { "refusedIsStale", refusedWithActive.IsStalePort },',
+        '      { "timeout1IsRefused", timeoutFirstWithActive.IsConnectionRefused },',
+        '      { "timeout1IsTimeout", timeoutFirstWithActive.IsTransientTimeout },',
+        '      { "timeout1Consecutive", timeoutFirstWithActive.ConsecutiveFailures },',
+        '      { "timeout1IsStale", timeoutFirstWithActive.IsStalePort },',
+        '      { "timeout2IsRefused", timeoutSecondWithActive.IsConnectionRefused },',
+        '      { "timeout2IsTimeout", timeoutSecondWithActive.IsTransientTimeout },',
+        '      { "timeout2Consecutive", timeoutSecondWithActive.ConsecutiveFailures },',
+        '      { "timeout2IsStale", timeoutSecondWithActive.IsStalePort },',
+        '      { "timeoutNoActiveIsTimeout", timeoutWithoutActive.IsTransientTimeout },',
+        '      { "timeoutNoActiveIsStale", timeoutWithoutActive.IsStalePort }',
+        '    };',
+        '    Console.Write(MiniJson.Stringify(obj, false));',
+        '  }',
+        '}',
+      ].join('\n'),
+      'utf8'
+    );
+
+    execFileSync(
+      csc,
+      [
+        '/nologo',
+        '/utf8output',
+        '/codepage:65001',
+        '/target:exe',
+        `/out:${probeExe}`,
+        '/r:System.dll',
+        '/r:System.Core.dll',
+        '/r:System.Net.Http.dll',
+        path.join(ROOT_DIR, 'installer', 'common', 'MiniJson.cs'),
+        path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs'),
+        probeCs,
+      ],
+      { stdio: 'pipe' }
+    );
+
+    const out = await execFileAsync(probeExe, [String(deadPort), String(hangPort), blockedDirFile], {
+      encoding: 'utf8',
+    });
+    const res = JSON.parse(out);
+
+    // 1) 内存级去重兜底验证
+    assert.equal(res.beforeRecord, false, 'Unseen hostKey must return false before record');
+    assert.equal(res.afterRecordExact, true, 'Memory HashSet<string> must remember hostKey even when disk write fails');
+    assert.equal(res.afterRecordJitter, true, 'Memory hostKey check must tolerate <=15s startTime jitter');
+    assert.equal(res.differentPid, false, 'Different PID must not be muted');
+    assert.equal(res.reusedPidLaterStart, false, 'Reused PID with shifted startTime (>15s) must not be muted');
+
+    // 2) ACCESS_DENIED 与无窗快速跳过 PowerShell 重试验证
+    assert.equal(res.selfDenied, false);
+    assert.equal(res.selfCmdNonEmpty, true);
+    if (res.deniedPid > 0) {
+      assert.equal(res.deniedQueryFlag, true, 'ACCESS_DENIED process must report accessDenied=true');
+      assert.equal(res.deniedCmdEmpty, true);
+      assert.ok(
+        res.deniedElapsedMs >= 0 && res.deniedElapsedMs < 1000,
+        `ACCESS_DENIED query must skip PowerShell immediately (<1000ms), got ${res.deniedElapsedMs}ms`
+      );
+    }
+    assert.equal(res.noWinCmdEmpty, true);
+    assert.ok(
+      res.noWinElapsedMs >= 0 && res.noWinElapsedMs < 500,
+      `Windowless / missing PID query must skip PowerShell (<500ms), got ${res.noWinElapsedMs}ms`
+    );
+
+    // 3) 探活区分 ConnectionRefused 与连续 2 次瞬态超时判死
+    assert.equal(res.refusedIsRefused, true, 'Closed port must be classified as IsConnectionRefused=true');
+    assert.equal(res.refusedIsTimeout, false);
+    assert.equal(res.refusedIsStale, true, 'ConnectionRefused must mark IsStalePort=true immediately even with active session');
+
+    assert.equal(res.timeout1IsRefused, false);
+    assert.equal(res.timeout1IsTimeout, true, 'Hanging port must be classified as IsTransientTimeout=true');
+    assert.equal(res.timeout1Consecutive, 1);
+    assert.equal(res.timeout1IsStale, false, 'First transient timeout with active attached session must NOT mark IsStalePort=true');
+
+    assert.equal(res.timeout2IsRefused, false);
+    assert.equal(res.timeout2IsTimeout, true);
+    assert.equal(res.timeout2Consecutive, 2);
+    assert.equal(res.timeout2IsStale, true, 'Second consecutive timeout with active session must mark IsStalePort=true');
+
+    assert.equal(res.timeoutNoActiveIsTimeout, true);
+    assert.equal(res.timeoutNoActiveIsStale, true, 'Timeout without active attached session must mark IsStalePort=true');
+
+    // 4) 源码防误判与 Watcher 循环联动契约
+    const cdpClientSrc = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs'), 'utf8');
+    const watcherProgSrc = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'watcher', 'Program.cs'), 'utf8');
+    assert.ok(
+      cdpClientSrc.includes('if (!accessDenied && windowFallbackCandidate == null && hasMainWindow)'),
+      'FindBareAntigravityMainProcess must never activate windowFallbackCandidate on ACCESS_DENIED'
+    );
+    assert.ok(
+      watcherProgSrc.includes('HashSet<string> promptedHostKeysInProcess'),
+      'Windows Watcher loop must maintain in-memory HashSet<string> fallback for prompted hostKeys'
+    );
+    assert.ok(
+      watcherProgSrc.includes('ProbeActivePortAsync(overridePort, hasActiveAttached, consecutiveProbeFailures)'),
+      'Windows Watcher loop must pass active-session & consecutive-failure context to ProbeActivePortAsync'
+    );
+    assert.ok(
+      watcherProgSrc.includes('!isTransientProbeGrace'),
+      'Windows Watcher must suppress bare-host prompt during single transient probe timeout grace'
+    );
+  } finally {
+    for (const s of openSockets) {
+      try { s.destroy(); } catch {}
+    }
+    await new Promise((resolve) => hangingServer.close(resolve));
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('#229 [P1-6] (macOS Swift): 进程内 Set<String> 去重兜底与写盘前清理悬空软链(lstat/unlink)', () => {
+  const watcherSwift = fs.readFileSync(
+    path.join(ROOT_DIR, 'installer', 'macos', 'Watcher', 'main.swift'),
+    'utf8'
+  );
+  assert.equal(watcherSwift.includes('\r\n'), false, 'main.swift must remain pure LF');
+  assert.equal(watcherSwift.startsWith('\uFEFF'), false, 'main.swift must not have UTF-8 BOM');
+
+  // 1) 进程内 Set<String> 去重兜底
+  assert.ok(watcherSwift.includes('private var promptedHostKeys: Set<String> = []'), 'macOS Watcher must keep in-memory Set<String> of prompted hostKeys');
+  assert.ok(watcherSwift.includes('if isPromptedInMemory(pid: bare.pid, startTimeMs: bare.startTimeMs, hostVersion: hostVersion)'), 'hasPromptedForHostWithVersion must check in-memory Set<String> first');
+  assert.ok(watcherSwift.includes('rememberPromptedInMemory(pid: bare.pid, startTimeMs: bare.startTimeMs, hostVersion: hostVersion)'), 'recordPromptedForHostWithVersion must record into in-memory Set<String> before disk write');
+
+  // 2) 写盘前无条件清理旧路径（含 lstat 存在但目标失效的悬空软链），不再依赖 fm.fileExists 门控
+  assert.ok(watcherSwift.includes('if lstat(path, stPtr) == 0'), 'macOS Watcher must check lstat to remove dangling symlinks');
+  assert.ok(watcherSwift.includes('_ = unlink(path)'), 'macOS Watcher must unlink dangling symlinks before atomic move/rename');
+  assert.ok(watcherSwift.includes('removePathIncludingDanglingSymlink(statePath)'), 'recordPromptedForHostWithVersion must unconditionally remove old path/dangling symlink before atomic write');
+  assert.equal(
+    /if\s+fm\.fileExists\(atPath:\s*statePath\)\s*\{\s*try\?\s*fm\.removeItem\(atPath:\s*statePath\)\s*\}/.test(watcherSwift),
+    false,
+    'recordPromptedForHostWithVersion must NOT gate statePath removal behind fm.fileExists (fails on dangling symlink)'
+  );
+  assert.ok(watcherSwift.includes('try? fm.removeItem(atPath: tmpPath)'), 'Failed atomic write must clean up leftover tmpPath');
 });

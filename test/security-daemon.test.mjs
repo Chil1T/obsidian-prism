@@ -12,6 +12,7 @@ import {
   OMNI_BINDING,
   SIDEBAR_BINDING,
   THOUGHT_BINDING,
+  WALLPAPER_BINDING,
   writeFileAtomicSync,
 } from '../sidecars/daemon/main.mjs';
 
@@ -1165,6 +1166,339 @@ test('security-daemon 10: self-heals missing mainFrameId after initial Page.getF
       'Main-frame THOUGHT_BINDING must work after Runtime context resync'
     );
     assert.equal(daemon.cdp.readConfig().updateChannel, 'stable', 'Sub-iframe must remain 100% blocked after Runtime context resync');
+  } finally {
+    if (daemon) await daemon.stop(false).catch(() => {});
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test('security-daemon 11 (#229 P1-2, P1-4, P2-4): WALLPAPER_BINDING 禁内联 Token、多窗严判 contextId 广播、detachAll/tick 移除绑定及无帧树非测试态 fail-closed', async () => {
+  const workDir = makeTempDir('ag-sec-wp-p1-');
+  const portFile = path.join(workDir, 'DevToolsActivePort');
+  fs.writeFileSync(portFile, '49991\n/devtools/browser/test\n', 'utf8');
+
+  const secretToken = 'SECRET_BEARER_TOKEN_DO_NOT_INLINE_987654';
+  const secretPath = 'C:\\Users\\Private\\wallpaper-secret.mp4';
+  let currentWpCfg = {
+    enabled: true,
+    mediaPath: secretPath,
+    mediaType: 'video',
+    mediaUrl: `http://127.0.0.1:45555/media?token=${secretToken}`,
+    opacity: 0.35,
+    blurPx: 0,
+    dimOverlay: 0.3,
+    fit: 'cover',
+    pauseOnBlur: true,
+  };
+  let actionCalls = 0;
+
+  const mockWallpaperSvc = {
+    getConfigSync() {
+      return { ...currentWpCfg };
+    },
+    isEnabledSync() {
+      return Boolean(currentWpCfg.enabled);
+    },
+    async handleAction(action, payload) {
+      actionCalls += 1;
+      if (action === 'save-config') {
+        currentWpCfg = {
+          ...currentWpCfg,
+          ...payload,
+          mediaUrl: 'http://127.0.0.1:45555/media?token=ROTATED_TOKEN_NEW_111',
+        };
+      }
+      return { ok: true, action, config: this.getConfigSync() };
+    },
+    dispose() {},
+  };
+
+  function makeHostSession({ mainFrameId, mainCtxId, isHostDom = true }) {
+    const listeners = new Map();
+    const calls = [];
+    const evals = [];
+    let domAliveIsHost = isHostDom;
+    return {
+      closed: false,
+      onClose: null,
+      setHostDom(v) {
+        domAliveIsHost = Boolean(v);
+      },
+      on(ev, fn) {
+        if (!listeners.has(ev)) listeners.set(ev, []);
+        listeners.get(ev).push(fn);
+      },
+      emit(ev, params) {
+        for (const fn of listeners.get(ev) || []) fn(params);
+      },
+      async send(method, params = {}) {
+        calls.push({ method, params });
+        if (method === 'Page.getFrameTree') {
+          return { frameTree: { frame: { id: mainFrameId, url: 'vscode-file://vscode-app/workbench.html' } } };
+        }
+        if (method === 'Runtime.enable') {
+          this.emit('Runtime.executionContextCreated', {
+            context: {
+              id: mainCtxId,
+              auxData: { frameId: mainFrameId, isDefault: true, type: 'default' },
+            },
+          });
+          return {};
+        }
+        if (method === 'Page.addScriptToEvaluateOnNewDocument') {
+          return { identifier: `sc-${calls.length}` };
+        }
+        if (method === 'Runtime.evaluate') {
+          evals.push({ expression: String(params.expression || ''), contextId: params.contextId, viaSend: true });
+          return { result: { type: 'undefined' } };
+        }
+        return {};
+      },
+      async evaluate(expr) {
+        const s = String(expr || '');
+        evals.push({ expression: s, contextId: undefined, viaSend: false });
+        if (s.includes('needsDashboardSync') || (s.includes('isHostDom') && s.includes('hasWallpaper'))) {
+          return {
+            ready: true,
+            isHostDom: domAliveIsHost,
+            href: 'vscode-file://vscode-app/workbench.html',
+            prismAttr: '1.0.7',
+            hasPrism: domAliveIsHost,
+            hasRepoBridge: domAliveIsHost,
+            hasThoughtBridge: domAliveIsHost,
+            hasUsageBridge: domAliveIsHost,
+            hasOmniBridge: false,
+            hasOmniServerMeta: false,
+            hasOmni: false,
+            omniMode: 'off',
+            hasSidebarBridge: false,
+            hasSidebar: false,
+            sidebarMode: 'off',
+            hasHostI18n: false,
+            hasInlineDiff: domAliveIsHost,
+            hasWallpaper: domAliveIsHost,
+            hasWallpaperUi: domAliveIsHost,
+            codeHash: '',
+            hasLegacyCss: false,
+            needsDashboardSync: false,
+          };
+        }
+        return domAliveIsHost ? { ok: true, status: 'ok' } : { ok: false, status: 'skipped-non-host' };
+      },
+      close() {
+        if (this.closed) return;
+        this.closed = true;
+        if (typeof this.onClose === 'function') this.onClose();
+      },
+      getCalls: () => calls,
+      getEvals: () => evals,
+    };
+  }
+
+  let daemon = null;
+  try {
+    daemon = new PrismDaemon({
+      rootDir: ROOT_DIR,
+      bundleCachePath: false,
+      portFile,
+      enabledCheck: () => true,
+      enableAutoUpdateTimer: false,
+      silent: true,
+      wallpaperService: mockWallpaperSvc,
+    });
+    daemon.running = true;
+
+    // 1) P1-2: _buildWallpaperExprForConfig 严禁将 initialWallpaperConfig / Bearer Token / mediaPath 内联到 NewDocument 表达式
+    const capturedOpts = [];
+    const origBuildWp = daemon.cdp.buildWallpaperExpression;
+    daemon.cdp = {
+      ...daemon.cdp,
+      buildWallpaperExpression(cfg, opts) {
+        capturedOpts.push(opts);
+        return origBuildWp(cfg, opts);
+      },
+    };
+    const expr1 = daemon._buildWallpaperExprForConfig();
+    assert.ok(expr1 && expr1.length > 0, 'buildWallpaperExpression must still return valid script');
+    assert.equal(expr1.includes(secretToken), false, 'NewDocument wallpaperExpr must NOT inline mediaUrl Bearer Token');
+    assert.equal(expr1.includes(secretPath), false, 'NewDocument wallpaperExpr must NOT inline mediaPath');
+    assert.equal(
+      capturedOpts.some((o) => o && typeof o === 'object' && 'initialWallpaperConfig' in o),
+      false,
+      '_buildWallpaperExprForConfig must NOT pass initialWallpaperConfig to buildWallpaperExpression'
+    );
+    // 即使外部 cacheOpts 意外夹带 initialWallpaperConfig 也必须被剥离
+    const expr2 = daemon._buildWallpaperExprForConfig(null, {
+      initialWallpaperConfig: { mediaUrl: 'http://127.0.0.1:45555/media?token=LEAKED_FROM_OPTS' },
+    });
+    assert.equal(expr2.includes('LEAKED_FROM_OPTS'), false, 'Explicit initialWallpaperConfig in cacheOpts must be stripped');
+
+    // 2) P1-4: 多窗口广播必须正判 sidebarHostVerified === true 且显式绑定 contextId: other.sidebarHostContextId
+    const sHost1 = makeHostSession({ mainFrameId: 'F_HOST_1', mainCtxId: 11 });
+    const sHost2 = makeHostSession({ mainFrameId: 'F_HOST_2', mainCtxId: 22 });
+    const sUndef = makeHostSession({ mainFrameId: 'F_UNDEF', mainCtxId: 33 });
+    const sFalse = makeHostSession({ mainFrameId: 'F_FALSE', mainCtxId: 44 });
+    const sNoCtx = makeHostSession({ mainFrameId: 'F_NOCTX', mainCtxId: 55 });
+    const sStaleDoc = makeHostSession({ mainFrameId: 'F_STALE', mainCtxId: 66 });
+
+    const connectMap = {
+      'ws://127.0.0.1:49991/h1': sHost1,
+      'ws://127.0.0.1:49991/h2': sHost2,
+    };
+    daemon.cdp = {
+      ...daemon.cdp,
+      listPages: async () => [
+        { id: 'H1', type: 'page', title: 'Antigravity 1', url: 'vscode-file://vscode-app/workbench.html', webSocketDebuggerUrl: 'ws://127.0.0.1:49991/h1' },
+      ],
+      CdpSession: {
+        connect: async (wsUrl) => connectMap[wsUrl],
+      },
+    };
+
+    const entry1 = await daemon.attachTarget({ id: 'H1', type: 'page', title: 'Antigravity 1', url: 'vscode-file://vscode-app/workbench.html', webSocketDebuggerUrl: 'ws://127.0.0.1:49991/h1' });
+    const entry2 = await daemon.attachTarget({ id: 'H2', type: 'page', title: 'Antigravity 2', url: 'vscode-file://vscode-app/workbench.html', webSocketDebuggerUrl: 'ws://127.0.0.1:49991/h2' });
+    assert.equal(entry1.sidebarHostVerified, true);
+    assert.equal(entry2.sidebarHostVerified, true);
+    assert.equal(entry2.sidebarHostContextId, 22);
+
+    // 注入 4 个未通过验证/导航中/代际失配会话，验证广播全部严格跳过
+    daemon.sessions.set('ws://127.0.0.1:49991/undef', {
+      wsUrl: 'ws://127.0.0.1:49991/undef',
+      session: sUndef,
+      sidebarHostVerified: undefined,
+      sidebarHostContextId: 33,
+      mainFrameId: 'F_UNDEF',
+      contextFrames: new Map([[33, { frameId: 'F_UNDEF', isDefault: true, type: 'default', docGen: 0 }]]),
+      sidebarDocument: 0,
+      sidebarVerifiedDocument: 0,
+      wallpaperSkipped: false,
+    });
+    daemon.sessions.set('ws://127.0.0.1:49991/false', {
+      wsUrl: 'ws://127.0.0.1:49991/false',
+      session: sFalse,
+      sidebarHostVerified: false,
+      sidebarHostContextId: 44,
+      mainFrameId: 'F_FALSE',
+      contextFrames: new Map([[44, { frameId: 'F_FALSE', isDefault: true, type: 'default', docGen: 0 }]]),
+      sidebarDocument: 0,
+      sidebarVerifiedDocument: 0,
+      wallpaperSkipped: false,
+    });
+    daemon.sessions.set('ws://127.0.0.1:49991/noctx', {
+      wsUrl: 'ws://127.0.0.1:49991/noctx',
+      session: sNoCtx,
+      sidebarHostVerified: true,
+      sidebarHostContextId: null,
+      mainFrameId: 'F_NOCTX',
+      contextFrames: new Map(),
+      sidebarDocument: 0,
+      sidebarVerifiedDocument: 0,
+      wallpaperSkipped: false,
+    });
+    daemon.sessions.set('ws://127.0.0.1:49991/staledoc', {
+      wsUrl: 'ws://127.0.0.1:49991/staledoc',
+      session: sStaleDoc,
+      sidebarHostVerified: true,
+      sidebarHostContextId: 66,
+      mainFrameId: 'F_STALE',
+      contextFrames: new Map([[66, { frameId: 'F_STALE', isDefault: true, type: 'default', docGen: 1 }]]),
+      sidebarDocument: 2,
+      sidebarVerifiedDocument: 1,
+      wallpaperSkipped: false,
+    });
+
+    await daemon.handleBindingCall(entry1, {
+      name: WALLPAPER_BINDING,
+      payload: JSON.stringify({ id: 201, action: 'save-config', payload: { opacity: 0.55 } }),
+      executionContextId: 11,
+    });
+    assert.equal(actionCalls, 1);
+
+    const h2Broadcast = sHost2.getEvals().find((e) => e.expression.includes('window.__agPrismWallpaper?.applyConfig?.('));
+    assert.ok(h2Broadcast, 'Verified host2 must receive wallpaper config broadcast');
+    assert.equal(h2Broadcast.viaSend, true, 'Broadcast must use Runtime.evaluate with explicit contextId');
+    assert.equal(h2Broadcast.contextId, 22, 'Broadcast must strictly bind contextId = other.sidebarHostContextId');
+
+    for (const [label, sess] of [
+      ['sidebarHostVerified=undefined', sUndef],
+      ['sidebarHostVerified=false', sFalse],
+      ['sidebarHostContextId=null', sNoCtx],
+      ['stale sidebarVerifiedDocument', sStaleDoc],
+    ]) {
+      assert.equal(
+        sess.getEvals().some((e) => e.expression.includes('applyConfig') || e.expression.includes('ROTATED_TOKEN')),
+        false,
+        `Unverified/navigating session (${label}) must NEVER receive wallpaper Token broadcast`
+      );
+    }
+
+    // 清理测试占位会话，保留 entry1 / entry2 测试生命周期剥离
+    daemon.sessions.delete('ws://127.0.0.1:49991/undef');
+    daemon.sessions.delete('ws://127.0.0.1:49991/false');
+    daemon.sessions.delete('ws://127.0.0.1:49991/noctx');
+    daemon.sessions.delete('ws://127.0.0.1:49991/staledoc');
+
+    // 3) P1-4: tick() 剥离清理路径必须调用 _removeWallpaperBinding(entry2)
+    sHost2.setHostDom(false);
+    await daemon.tick();
+    assert.equal(
+      sHost2.getCalls().some((c) => c.method === 'Runtime.removeBinding' && c.params?.name === WALLPAPER_BINDING),
+      true,
+      'tick() detach path must invoke Runtime.removeBinding for WALLPAPER_BINDING'
+    );
+    assert.equal(entry2.wallpaperBindingAdded, false);
+
+    // 4) P1-4: detachAll() 必须调用 _removeWallpaperBinding(entry1)
+    await daemon.detachAll(false);
+    assert.equal(
+      sHost1.getCalls().some((c) => c.method === 'Runtime.removeBinding' && c.params?.name === WALLPAPER_BINDING),
+      true,
+      'detachAll() must invoke Runtime.removeBinding for WALLPAPER_BINDING'
+    );
+    assert.equal(entry1.wallpaperBindingAdded, false);
+
+    // 5) P2-4: hasTrackedFrames === false 分支必须在 sidebarHostVerified !== true 时拒绝，且在非测试运行时 100% fail-closed
+    const noFrameUnverifiedEntry = {
+      session: makeHostSession({ mainFrameId: 'NONE', mainCtxId: 1 }),
+      hasFrameTree: false,
+      mainFrameId: null,
+      contextFrames: new Map(),
+      sidebarHostVerified: false,
+    };
+    const prevActionCalls = actionCalls;
+    await daemon.handleBindingCall(noFrameUnverifiedEntry, {
+      name: WALLPAPER_BINDING,
+      payload: JSON.stringify({ id: 301, action: 'get-config' }),
+    });
+    assert.equal(actionCalls, prevActionCalls, 'WALLPAPER_BINDING must reject unverified entry even when hasTrackedFrames === false');
+
+    // 在干净的非测试子进程中验证 hasTrackedFrames === false 即使 sidebarHostVerified=true 也因 !isAutomatedTestRuntime() 强制 fail-closed
+    const cleanEnv = { ...process.env };
+    delete cleanEnv.NODE_ENV;
+    delete cleanEnv.NODE_TEST_CONTEXT;
+    const daemonModuleUrl = new URL('../sidecars/daemon/main.mjs', import.meta.url).href;
+    const probeOut = execFileSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        [
+          `import { PrismDaemon, WALLPAPER_BINDING } from ${JSON.stringify(daemonModuleUrl)};`,
+          'let called = 0;',
+          `const d = new PrismDaemon({ rootDir: ${JSON.stringify(ROOT_DIR)}, bundleCachePath: false, enableAutoUpdateTimer: false, silent: true, wallpaperService: { async handleAction() { called += 1; return { ok: true }; }, dispose() {} } });`,
+          'const entry = { session: { closed: false, async send() { return {}; } }, hasFrameTree: false, mainFrameId: null, contextFrames: new Map(), sidebarHostVerified: true };',
+          'await d.handleBindingCall(entry, { name: WALLPAPER_BINDING, payload: JSON.stringify({ id: 1, action: "get-config" }) });',
+          'console.log(JSON.stringify({ called }));',
+          'await d.stop(false);',
+        ].join('\n'),
+      ],
+      { encoding: 'utf8', env: cleanEnv }
+    ).trim();
+    assert.deepEqual(
+      JSON.parse(probeOut),
+      { called: 0 },
+      'WALLPAPER_BINDING hasTrackedFrames===false branch must fail-closed when !isAutomatedTestRuntime()'
+    );
   } finally {
     if (daemon) await daemon.stop(false).catch(() => {});
     fs.rmSync(workDir, { recursive: true, force: true });

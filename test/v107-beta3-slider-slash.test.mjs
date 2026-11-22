@@ -20,12 +20,12 @@ function matchesSingle(el, rawSel) {
   if (!el || el.nodeType !== 1) return false;
   const sel = rawSel.trim();
   if (!sel) return false;
-  if (sel.includes(' ')) {
-    const parts = sel.split(/\s+/).filter(Boolean);
-    if (!matchesSingle(el, parts[parts.length - 1])) return false;
+  const descParts = sel.match(/(?:"[^"]*"|[^\s])+/g) || [];
+  if (descParts.length > 1) {
+    if (!matchesSingle(el, descParts[descParts.length - 1])) return false;
     let cur = el.parentElement;
-    for (let i = parts.length - 2; i >= 0; i--) {
-      while (cur && !matchesSingle(cur, parts[i])) cur = cur.parentElement;
+    for (let i = descParts.length - 2; i >= 0; i--) {
+      while (cur && !matchesSingle(cur, descParts[i])) cur = cur.parentElement;
       if (!cur) return false;
       cur = cur.parentElement;
     }
@@ -36,7 +36,11 @@ function matchesSingle(el, rawSel) {
     if (nm[2] !== undefined) { if (el.getAttribute(nm[1]) === nm[2]) return false; }
     else if (el.hasAttribute(nm[1])) return false;
   }
-  rem = rem.replace(/:not\(\[[a-zA-Z0-9_-]+(?:="[^"]*")?\]\)/g, '');
+  let prevRem;
+  do {
+    prevRem = rem;
+    rem = rem.replace(/:not\(\[[a-zA-Z0-9_-]+(?:="[^"]*")?\]\)/g, '');
+  } while (rem !== prevRem);
   const tagM = rem.match(/^[a-zA-Z0-9-]+/);
   if (tagM) {
     if (el.tagName.toLowerCase() !== tagM[0].toLowerCase()) return false;
@@ -72,7 +76,9 @@ function matchesAny(el, selList) {
 function createDomEnv(opts = {}) {
   let fakeNow = opts.startNow || 1000;
   let rafSeq = 0;
+  let timerSeq = 0;
   const rafs = new Map();
+  const timers = new Map();
   const winListeners = new Map();
   const docListeners = new Map();
   const winDispatched = [];
@@ -102,10 +108,13 @@ function createDomEnv(opts = {}) {
       _qsaCalls: 0,
       _styleSets: [],
       _dispatched: [],
+      _clientWidth: init.clientWidth,
+      _clientHeight: init.clientHeight,
       get _rect() { return _rect; },
       set _rect(v) { _rect = { ..._rect, ...v }; },
-      get offsetWidth() { el._offsetWidthReads += 1; return _rect.width; },
-      get clientWidth() { return _rect.width; },
+      get offsetWidth() { el._offsetWidthReads += 1; return el._clientWidth !== undefined ? el._clientWidth : _rect.width; },
+      get clientWidth() { return el._clientWidth !== undefined ? el._clientWidth : _rect.width; },
+      get clientHeight() { return el._clientHeight !== undefined ? el._clientHeight : _rect.height; },
       get offsetLeft() { return _rect.left; },
       style: {
         display: '',
@@ -293,8 +302,14 @@ function createDomEnv(opts = {}) {
     CustomEvent: class FakeCustomEvent { constructor(t, o) { this.type = t; this.detail = o?.detail; } },
     getComputedStyle: () => ({ backgroundColor: 'rgb(14, 14, 18)' }),
     matchMedia: () => ({ matches: false }),
-    setTimeout,
-    clearTimeout,
+    setTimeout: opts.virtualTimers
+      ? (cb, ms = 0) => {
+          const id = ++timerSeq;
+          timers.set(id, { cb, dueAt: fakeNow + Math.max(0, Number(ms) || 0), delay: Number(ms) || 0 });
+          return id;
+        }
+      : setTimeout,
+    clearTimeout: opts.virtualTimers ? (id) => { timers.delete(id); } : clearTimeout,
     requestAnimationFrame(cb) {
       const id = ++rafSeq;
       rafs.set(id, cb);
@@ -320,12 +335,26 @@ function createDomEnv(opts = {}) {
     return batch.length;
   }
 
+  function flushTimers(dtMs = 0) {
+    fakeNow += dtMs;
+    let fired = 0;
+    for (const [id, rec] of [...timers.entries()]) {
+      if (rec.dueAt <= fakeNow) {
+        timers.delete(id);
+        rec.cb();
+        fired += 1;
+      }
+    }
+    return fired;
+  }
+
   return {
-    html, head, body, doc, win, makeEl, rafs, observers, winDispatched, execCalls,
+    html, head, body, doc, win, makeEl, rafs, timers, observers, winDispatched, execCalls,
     setExecCommandHandler(fn) { execCommandHandler = fn; },
     getNow: () => fakeNow,
     advanceNow(ms) { fakeNow += ms; },
     flushRafs,
+    flushTimers,
   };
 }
 
@@ -616,13 +645,14 @@ test('4. upstream-client: mounting emits 0 global window resize events; dragging
   inst.stop();
 });
 
-// ── Test 5: Claude dither canvas fillRect + fixed backing store + idle throttle + motion=off 0fps ──
-test('5. upstream-client: Claude paintDither uses fillRect (0 quadraticCurveTo) + precomputed light LUT; stepClaudeCanvas keeps fixed trackW backing store, throttles when idle, and enforces 0fps in motion=off', () => {
-  const env = createDomEnv();
+// ── Test 5: Claude dither canvas HiDPI + fillRect + fixed backing store + idle timer throttle + motion=off 0fps ──
+test('5. upstream-client: Claude paintDither uses fillRect (0 quadraticCurveTo) + precomputed light LUT; stepClaudeCanvas renders crisp HiDPI inside .ces-fill, paces idle via setTimeout (0 idle rAF churn), and enforces 0fps in motion=off', () => {
+  const env = createDomEnv({ virtualTimers: true });
   let fillRectCalls = 0;
   let bezierCalls = 0;
   let clipCalls = 0;
   let widthWrites = 0;
+  const transformArgs = [];
   const lightFillStyles = new Set();
   const darkFillStyles = new Set();
 
@@ -634,6 +664,7 @@ test('5. upstream-client: Claude paintDither uses fillRect (0 quadraticCurveTo) 
     clearRect() {},
     createLinearGradient: () => ({ addColorStop() {} }),
     fillRect(_x, _y, w, h) { if (w < 20 && h < 20) fillRectCalls += 1; },
+    setTransform(...args) { transformArgs.push(args); },
     save() {},
     restore() {},
     beginPath() {},
@@ -656,7 +687,7 @@ test('5. upstream-client: Claude paintDither uses fillRect (0 quadraticCurveTo) 
   assert.equal(bezierCalls, 0);
   assert.ok([...lightFillStyles].some((s) => /^rgb\(\d+,\d+,\d+\)$/.test(s)), 'Light mode must paint via precomputed rgb LUT');
 
-  // 2) Fixed backing store on drag + idle throttling + motion=off 0fps
+  // 2) HiDPI backing store inside .ces-fill + fixed backing store on drag + idle timer pacing + motion=off 0fps
   const origCreateEl = env.doc.createElement;
   let canvasCtx = null;
   let canvasEl = null;
@@ -680,6 +711,8 @@ test('5. upstream-client: Claude paintDither uses fillRect (0 quadraticCurveTo) 
     return node;
   };
 
+  let curEffort = 'high';
+  let seatSub = null;
   const container = env.makeEl('div', { className: 'ces-inline' });
   env.body.appendChild(container);
   const mount = upstreamLib.mountCodexEffortSlider({
@@ -695,48 +728,103 @@ test('5. upstream-client: Claude paintDither uses fillRect (0 quadraticCurveTo) 
         { effort: 'medium', label: 'Medium' },
         { effort: 'high', label: 'High' },
       ],
-      currentEffort: 'high',
-      selectEffort() {},
+      get currentEffort() { return curEffort; },
+      selectEffort(item) { curEffort = typeof item === 'string' ? item : item.effort; },
+      subscribe(fn) { seatSub = fn; return () => { seatSub = null; }; },
     },
   });
 
   const track = container.querySelector('.ces-track');
+  const fillEl = container.querySelector('.ces-fill');
+  assert.equal(canvasEl.parentNode, fillEl, 'Claude canvas must be mounted inside .ces-fill so overflow:hidden clips cleanly');
   track._rect = { left: 0, top: 0, width: 220, height: 28, right: 220, bottom: 28 };
   widthWrites = 0;
   clipCalls = 0;
 
-  // Initial paint sets backing store width once to trackW (220)
+  // Initial paint at dpr=1 sets backing store width once to trackW (220)
   env.flushRafs(20);
-  assert.equal(canvasEl.width, 220, 'Canvas backing store width must match fixed trackW');
+  assert.equal(canvasEl.width, 220, 'Canvas backing store width must match fixed trackW at dpr=1');
+  assert.equal(canvasEl.height, 28);
+  assert.equal(canvasEl.style.width, '220px');
+  assert.equal(canvasEl.style.height, '28px');
   assert.equal(widthWrites, 1, 'Canvas backing store should allocate width once');
+  assert.deepEqual(transformArgs.at(-1), [1, 0, 0, 1, 0, 0]);
 
-  // Dragging across 10 positions must perform 0 backing store width reallocations and use clip
+  // HiDPI verification: dpr = 1.5 and dpr = 2 scale backing store while pinning CSS dimensions
+  env.win.devicePixelRatio = 1.5;
+  env.flushRafs(20);
+  assert.equal(canvasEl.width, Math.round(220 * 1.5), 'dpr=1.5 backing store width must equal Math.round(fullW * 1.5)');
+  assert.equal(canvasEl.height, Math.round(28 * 1.5), 'dpr=1.5 backing store height must equal Math.round(th * 1.5)');
+  assert.equal(canvasEl.style.width, '220px', 'CSS width must stay fixed at fullW px');
+  assert.equal(canvasEl.style.height, '28px', 'CSS height must stay fixed at th px');
+  assert.deepEqual(transformArgs.at(-1), [1.5, 0, 0, 1.5, 0, 0], 'cctx.setTransform(dpr,0,0,dpr,0,0) must run before paint');
+
+  env.win.devicePixelRatio = 2;
+  env.flushRafs(20);
+  assert.equal(canvasEl.width, 440, 'dpr=2 backing store width must equal 440');
+  assert.equal(canvasEl.height, 56, 'dpr=2 backing store height must equal 56');
+  assert.equal(canvasEl.style.width, '220px');
+  assert.equal(canvasEl.style.height, '28px');
+  assert.deepEqual(transformArgs.at(-1), [2, 0, 0, 2, 0, 0]);
+
+  // Dragging across 10 positions at dpr=2 must perform 0 backing store width reallocations and use clip
+  const writesBeforeDrag = widthWrites;
   track.dispatchEvent({ type: 'pointerdown', button: 0, clientX: 160, pointerId: 1 });
   for (let i = 0; i < 10; i++) {
     track.dispatchEvent({ type: 'pointermove', buttons: 1, clientX: 110 + i * 8, pointerId: 1 });
     env.flushRafs(20);
   }
-  assert.equal(widthWrites, 1, 'Dragging must NOT reallocate canvas.width on every pixel move');
+  assert.equal(widthWrites, writesBeforeDrag, 'Dragging must NOT reallocate canvas.width on every pixel move');
   assert.ok(clipCalls >= 5, 'Partial-width draw must clip cleanly on fixed backing store');
   track.dispatchEvent({ type: 'pointerup', button: 0, clientX: 206, pointerId: 1 });
 
-  // After sweep finishes (progress >= 1) and idle at high tier, ~30fps throttle skips 18ms frames
+  // After sweep finishes (progress >= 1) and idle at high tier, uses 32ms setTimeout pacing with ZERO idle rAF churn
   env.advanceNow(2000);
   env.flushRafs(40);
   const paintsAtIdle = fillRectCalls;
-  env.flushRafs(18);
-  assert.equal(fillRectCalls, paintsAtIdle, 'Idle high-tier Claude canvas must throttle below 60fps (skip 18ms tick)');
-  env.flushRafs(20);
-  assert.ok(fillRectCalls > paintsAtIdle, 'Idle high-tier Claude canvas must resume painting past 32ms gap');
+  assert.equal(env.rafs.size, 0, 'Idle high-tier Claude canvas must NOT spin rAF every VSync frame');
+  assert.equal(env.timers.size, 1, 'Idle high-tier Claude canvas must schedule a 32ms setTimeout');
+  assert.equal([...env.timers.values()][0].delay, 32);
 
-  // motion="off" enforces strict 0fps halt
+  // 18ms later: timer has not fired yet -> 0 paints, 0 rAF
+  env.flushTimers(18);
+  env.flushRafs(0);
+  assert.equal(fillRectCalls, paintsAtIdle, 'Idle high-tier Claude canvas must skip 18ms tick');
+  assert.equal(env.rafs.size, 0);
+
+  // Past 32ms gap: timer queues 1 rAF -> resumes painting cleanly and sleeps again
+  env.flushTimers(16);
+  assert.equal(env.rafs.size, 1, 'Timer expiry must schedule exactly 1 VSync-aligned rAF');
+  env.flushRafs(1);
+  assert.ok(fillRectCalls > paintsAtIdle, 'Idle high-tier Claude canvas must resume painting past 32ms gap');
+  assert.equal(env.rafs.size, 0, 'Must return to setTimeout sleep immediately after idle paint');
+
+  // Medium tier (claudeIntensity < 0.7) uses 50ms idle pacing
+  curEffort = 'medium';
+  env.html.setAttribute('data-ag-cs-motion', 'ultra');
+  seatSub?.();
+  env.flushTimers(50);
+  env.flushRafs(60);
+  // Settle motion spring to medium if still stepping
+  for (let k = 0; k < 20 && env.rafs.size > 0; k++) env.flushRafs(20);
+  env.flushTimers(60);
+  env.flushRafs(60);
+  if (env.timers.size > 0) {
+    assert.equal([...env.timers.values()][0].delay, 50, 'Medium-tier idle Claude canvas must pace at 50ms');
+  }
+
+  // motion="off" enforces strict 0fps halt (0 pending rAFs AND 0 pending timers)
   env.html.setAttribute('data-ag-cs-motion', 'off');
   const paintsBeforeOff = fillRectCalls;
+  env.flushTimers(100);
   env.flushRafs(60);
   assert.equal(fillRectCalls, paintsBeforeOff, 'motion="off" must paint 0 frames');
   assert.equal(env.rafs.size, 0, 'motion="off" must leave 0 pending Claude canvas rAFs');
+  assert.equal(env.timers.size, 0, 'motion="off" must leave 0 pending Claude canvas timers');
 
   mount.unmount();
+  assert.equal(env.rafs.size, 0);
+  assert.equal(env.timers.size, 0);
 });
 
 // ── Test 6: slider-coexist anti-self-MO + model-glyph-crystal knob rect cache + Channel 1 budget ──
@@ -847,4 +935,175 @@ test('6. slider-coexist skips self-injected glyphs/owned nodes in open menu, mod
   const bytes = Buffer.byteLength(expr, 'utf8');
   assert.ok(bytes < 685000, `Channel 1 bundle must stay < 685,000 B, got ${bytes} B`);
   assert.doesNotThrow(() => new vm.Script(expr), 'Channel 1 bundle must parse cleanly');
+});
+
+// ── Test 7: P1-2 Orchestrator L2 planner switch syncs brand color, crystal bar & __agPrism.sync() ──
+test('7. upstream-client (P1-2): Orchestrator L2 planner switch triggers __agPrism.sync() and restores orchestrator-effort-bar when switching back to non-tunable planner', () => {
+  const env = createDomEnv();
+  let prismSyncCalls = 0;
+  env.win.__agPrism = { sync() { prismSyncCalls += 1; } };
+
+  const neonLow = { label: 'Gemini 4 Neon (Low)', modelId: 'n-low', value: 11 };
+  const neonHigh = { label: 'Gemini 4 Neon (High)', modelId: 'n-high', value: 12 };
+  const opusLow = { label: 'Claude Opus 5.5 (Low)', modelId: 'c-low', value: 21 };
+  const opusHigh = { label: 'Claude Opus 5.5 (High)', modelId: 'c-high', value: 22 };
+  const autoSingle = { label: 'Gemini Auto', modelId: 'g-auto', value: 31 };
+  const orchOpt = { label: 'Orchestrator', modelId: 'orch', value: 100 };
+  const planners = [neonLow, neonHigh, opusLow, opusHigh, autoSingle];
+  const plannerIdx = new Map([
+    ['gemini-4-neon', new Map([['low', neonLow], ['high', neonHigh]])],
+    ['claude-opus-5-5', new Map([['low', opusLow], ['high', opusHigh]])],
+  ]);
+
+  let selectedModel = orchOpt;
+  const selectorCtx = {
+    effortIndex: plannerIdx,
+    modelOptions: [...planners, orchOpt],
+    get selectedModel() { return selectedModel; },
+    orchestratorPlanners: planners,
+    orchestratorPlannerIndex: plannerIdx,
+    orchestratorDefaultPlanner: neonHigh,
+    orchestratorPick: {
+      model: neonHigh.value,
+      select(v) { this.model = v; },
+    },
+    setModelConfigByLabelForConversation(lbl) {
+      selectedModel = [orchOpt, ...planners].find((o) => o.label === lbl) || selectedModel;
+    },
+  };
+
+  const trigger = env.makeEl('button', { attrs: { 'data-testid': 'model-selector-trigger' } });
+  const trigSpan = env.makeEl('span', { className: 'min-w-0', text: 'Orchestrator' });
+  trigger.appendChild(trigSpan);
+  env.body.appendChild(trigger);
+
+  const panel = env.makeEl('div', { attrs: { 'data-testid': 'model-selector-panel' } });
+  const listWrap = env.makeEl('div');
+  const orchRow = env.makeEl('div', { attrs: { role: 'menuitem', 'data-testid': 'model-selector-orchestrator' }, text: 'Orchestrator' });
+  listWrap.appendChild(orchRow);
+  panel.appendChild(listWrap);
+  // Pre-existing crystal Auto bar (created by model-glyph-crystal.js in live runtime)
+  const orchBar = env.makeEl('div', { attrs: { 'data-testid': 'orchestrator-effort-bar', 'data-row-hidden': 'false', 'aria-hidden': 'false' } });
+  panel.appendChild(orchBar);
+  env.body.appendChild(panel);
+  panel.__reactFiber$p12 = { memoizedProps: { value: selectorCtx }, return: null };
+
+  const inst = upstreamLib.installAntigravityObserver({ document: env.doc, window: env.win, MutationObserver: env.win.MutationObserver });
+  const activeRow = panel.querySelector('.ces-ag-effort-row');
+  assert.ok(activeRow, 'slider row must mount');
+  assert.equal(trigger.getAttribute('data-ces-orch-b'), 'gemini');
+  assert.equal(panel.getAttribute('data-ces-orch-tunable'), 'true');
+  assert.equal(activeRow.getAttribute('data-row-hidden'), 'false');
+  assert.equal(orchBar.getAttribute('data-row-hidden'), 'true');
+
+  // Mount L2 submenu with Claude planner and non-tunable Gemini Auto planner
+  const subOverlay = env.makeEl('div', { className: 'agy-overlay' });
+  const subMenu = env.makeEl('div', { attrs: { role: 'menu' } });
+  const subNeon = env.makeEl('div', { attrs: { role: 'menuitemradio' }, text: 'Gemini 4 Neon High' });
+  const subClaude = env.makeEl('div', { attrs: { role: 'menuitemradio' }, text: 'Claude Opus 5.5 High' });
+  const subAuto = env.makeEl('div', { attrs: { role: 'menuitemradio' }, text: 'Gemini Auto' });
+  subMenu.appendChild(subNeon);
+  subMenu.appendChild(subClaude);
+  subMenu.appendChild(subAuto);
+  subOverlay.appendChild(subMenu);
+  env.body.appendChild(subOverlay);
+  inst.rescan();
+
+  // 1) Switch Orchestrator planner from Gemini -> Claude while staying in Orchestrator mode (a.need === false)
+  const syncBeforeClaude = prismSyncCalls;
+  subMenu.dispatchEvent({ type: 'click', target: subClaude });
+  assert.equal(trigger.getAttribute('data-ces-orch-b'), 'claude', 'Trigger brand attr must switch to claude immediately');
+  assert.equal(panel.getAttribute('data-ces-orch-tunable'), 'true');
+  assert.ok(prismSyncCalls > syncBeforeClaude, 'onCk must invoke win.__agPrism.sync() to refresh trigger badge & crystal bar');
+
+  // 2) Adjusting effort via selectEffort (keyboard Home) must also invoke win.__agPrism.sync()
+  const syncBeforeEff = prismSyncCalls;
+  const sliderRoot = panel.querySelector('.ces-root');
+  sliderRoot.dispatchEvent({ type: 'keydown', key: 'Home' });
+  assert.ok(prismSyncCalls > syncBeforeEff, 'selectEffort must invoke win.__agPrism.sync()');
+
+  // 3) Switch back from tunable Claude planner to non-tunable single-tier Gemini Auto planner
+  const syncBeforeAuto = prismSyncCalls;
+  subMenu.dispatchEvent({ type: 'click', target: subAuto });
+  assert.equal(panel.hasAttribute('data-ces-orch-tunable'), false, 'data-ces-orch-tunable must be removed for non-tunable planner');
+  assert.equal(panel.getAttribute('data-ag-cs-orch-active'), '1', 'data-ag-cs-orch-active must be restored for crystal Auto bar');
+  assert.equal(orchBar.getAttribute('data-row-hidden'), 'false', 'orchestrator-effort-bar must be unhidden when switching to Auto planner');
+  assert.equal(orchBar.getAttribute('aria-hidden'), 'false');
+  assert.equal(activeRow.getAttribute('data-row-hidden'), 'true', 'slider row must be hidden when switching to non-tunable Auto planner');
+  assert.equal(activeRow.getAttribute('aria-hidden'), 'true');
+  assert.ok(prismSyncCalls > syncBeforeAuto, 'switching to Auto planner must invoke win.__agPrism.sync()');
+
+  inst.stop();
+});
+
+// ── Test 8: P2-1 entry scale(.965) drag width + window blur cancel, P1-3 slider-coexist MDL_SEL, P1-5 ui-runtime title scan ──
+test('8. P2-1/P1-3/P1-5 regressions: drag translate3d uses trackEl.clientWidth under scale(.965) + cancels on window blur; slider-coexist accepts fallback trigger & context-menu-submenu-popup; ui-runtime triggers title scan on flags.s/g/o', () => {
+  // (a) P2-1: Entry animation scale(0.965) yields smaller boundingClientRect.width (212.3) than layout clientWidth (220)
+  const env = createDomEnv();
+  const container = env.makeEl('div', { className: 'ces-inline' });
+  env.body.appendChild(container);
+  const mount = upstreamLib.mountCodexEffortSlider({
+    container,
+    document: env.doc,
+    window: env.win,
+    seat: {
+      isClaude: false,
+      locked: false,
+      effortLevels: [
+        { effort: 'low', label: 'Low' },
+        { effort: 'high', label: 'High' },
+      ],
+      currentEffort: 'low',
+      selectEffort() {},
+    },
+  });
+  const track = container.querySelector('.ces-track');
+  const knob = container.querySelector('.ces-knob');
+  track._clientWidth = 220;
+  track._rect = { left: 10, top: 0, width: 212.3, height: 27, right: 222.3, bottom: 27 };
+
+  // Pointer down & drag to visual right end (p = 1) -> translate3d must use layout clientWidth 220 -> 206.0px (NOT scaled 198.3px)
+  track.dispatchEvent({ type: 'pointerdown', button: 0, clientX: 10 + 14, pointerId: 1 });
+  track.dispatchEvent({ type: 'pointermove', buttons: 1, clientX: 10 + 212.3 - 14, pointerId: 1 });
+  env.flushRafs(16.67);
+  assert.equal(knob.style.transform, 'translate3d(206.0px,0,0)', 'translate3d must use unscaled trackEl.clientWidth under scale(.965)');
+
+  // Window blur while dragging cancels drag cleanly and resets knob positioning
+  env.win.dispatchEvent(new env.win.Event('blur'));
+  assert.equal(knob.style.transform, '', 'window blur must cancel active drag and clear knob transform');
+  assert.equal(knob.style.left, '', 'window blur must clear knob left override');
+  mount.unmount();
+
+  // (b) P1-3: slider-coexist MDL_SEL covers fallback button[aria-label^="Select model"] & [data-testid="context-menu-submenu-popup"]
+  const cEnv = createDomEnv();
+  const fbTrig = cEnv.makeEl('button', { attrs: { 'aria-label': 'Select model: Claude' }, text: 'Claude Opus 4.6 (Medium)' });
+  cEnv.body.appendChild(fbTrig);
+  const ctl = sliderCoexist.createEffortSliderController({ window: cEnv.win, document: cEnv.doc });
+  ctl.sync({ effortSliderModule: 'on' });
+  const mo = cEnv.observers[0];
+  const baseScans = ctl.getState().perfStats.executedScans;
+
+  // characterData mutation on text node inside fallback Select model button must NOT be dropped
+  const fakeTextNode = { nodeType: 3, parentElement: fbTrig };
+  mo.trigger([{ type: 'characterData', target: fakeTextNode, addedNodes: [], removedNodes: [] }]);
+  assert.equal(ctl.getState().perfStats.executedScans, baseScans + 1, 'Fallback Select model trigger characterData mutation must pass touchesModel');
+
+  // Open model menu, then insert portal submenu with ONLY data-testid="context-menu-submenu-popup" (no role="menu" / .agy-overlay)
+  const mPanel = cEnv.makeEl('div', { attrs: { 'data-testid': 'model-selector-panel' } });
+  cEnv.body.appendChild(mPanel);
+  mo.trigger([{ type: 'childList', target: cEnv.body, addedNodes: [mPanel], removedNodes: [] }]);
+  const scansAfterPanel = ctl.getState().perfStats.executedScans;
+
+  const subPopup = cEnv.makeEl('div', { attrs: { 'data-testid': 'context-menu-submenu-popup' } });
+  mo.trigger([{ type: 'childList', target: cEnv.body, addedNodes: [subPopup], removedNodes: [] }]);
+  assert.equal(ctl.getState().perfStats.executedScans, scansAfterPanel + 1, 'context-menu-submenu-popup without role="menu" must trigger immediate scan');
+  ctl.destroy();
+
+  // (c) P1-5: ui-runtime.js triggers W.__agPrismThought?.scan?.() on sidebar/history/overlay flags (flags.s || flags.g || flags.o) when getTranslateTitles() is active
+  const uiSrc = fs.readFileSync(path.join(ROOT, 'ui-runtime.js'), 'utf8');
+  assert.match(
+    uiSrc,
+    /\(\(flags\.s\s*\|\|\s*flags\.g\s*\|\|\s*flags\.o\)\s*&&\s*W\.__agPrismThought\?\.getTranslateTitles\?\.\(\)\)/,
+    'ui-runtime.js must trigger thought title scan incrementally on flags.s || flags.g || flags.o when getTranslateTitles() is enabled'
+  );
 });

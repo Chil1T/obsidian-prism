@@ -54,12 +54,12 @@
   }
 
   function resolveLang(doc, ctx) {
-    if (ctx && typeof ctx.getLang === 'function') {
-      const l = normalizeLang(ctx.getLang());
-      if (l) return l;
-    }
     if (ctx && ctx.lang) {
       const l = normalizeLang(ctx.lang);
+      if (l) return l;
+    }
+    if (ctx && typeof ctx.getLang === 'function') {
+      const l = normalizeLang(ctx.getLang());
       if (l) return l;
     }
     try {

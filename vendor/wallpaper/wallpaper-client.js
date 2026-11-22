@@ -30,17 +30,20 @@
 
   // Strictly pure ASCII, 0 :has(), balanced braces, 0 style impact when html[data-ag-prism-wallpaper="on"] is absent
   const WALLPAPER_CSS = [
-    '#ag-prism-wallpaper-root{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;contain:strict;opacity:0;visibility:hidden;transition:opacity 180ms ease;}',
+    '#ag-prism-wallpaper-root{position:fixed;inset:0;z-index:-1;background:var(--body-background,var(--background,#0B0B0E));pointer-events:none;overflow:hidden;contain:strict;opacity:0;visibility:hidden;transition:opacity 180ms ease;}',
     'html[data-ag-prism-wallpaper="on"] #ag-prism-wallpaper-root{opacity:1;visibility:visible;}',
     'html[data-ag-prism-wallpaper="on"][data-ag-cs-motion="off"] #ag-prism-wallpaper-root{transition:none !important;}',
-    '#ag-prism-wallpaper-root .ag-prism-wp-media{position:absolute;inset:calc(-1 * var(--ag-prism-wp-blur-pad,0px));width:calc(100% + 2 * var(--ag-prism-wp-blur-pad,0px));height:calc(100% + 2 * var(--ag-prism-wp-blur-pad,0px));object-fit:var(--ag-prism-wp-fit,cover);object-position:center;opacity:var(--ag-prism-wp-opacity,0.28);filter:blur(var(--ag-prism-wp-blur,4px));transform:translateZ(0);pointer-events:none;user-select:none;display:block;}',
+    '#ag-prism-wallpaper-root .ag-prism-wp-media{position:absolute;inset:calc(-1 * var(--ag-prism-wp-blur-pad,0px));width:calc(100% + 2 * var(--ag-prism-wp-blur-pad,0px));height:calc(100% + 2 * var(--ag-prism-wp-blur-pad,0px));object-fit:var(--ag-prism-wp-fit,cover);object-position:center;opacity:var(--ag-prism-wp-opacity,0.28);filter:var(--ag-prism-wp-filter,blur(4px));transform:translateZ(0);pointer-events:none;user-select:none;display:block;}',
     '#ag-prism-wallpaper-root .ag-prism-wp-dim{position:absolute;inset:0;pointer-events:none;background:rgba(8,10,14,var(--ag-prism-wp-dim,0.45));}',
     'html[data-ag-cs-theme="light"] #ag-prism-wallpaper-root .ag-prism-wp-dim,html>body:is(.theme-light,.light-theme,.light) #ag-prism-wallpaper-root .ag-prism-wp-dim{background:rgba(246,248,252,var(--ag-prism-wp-dim,0.45));}',
-    'html[data-ag-prism-wallpaper="on"] body>:not(#ag-prism-wallpaper-root):not(style):not(script){position:relative;z-index:1;}',
-    'html[data-ag-prism-wallpaper="on"] :is(.agy-shell,[data-ag-cs-home-sheet="1"]):not([data-has-browser-hole="true"]){background:color-mix(in srgb,var(--background,#0B0B0E) 64%,transparent) !important;}',
-    'html[data-ag-prism-wallpaper="on"] [data-ag-cs-conv-seat="1"]:not([data-has-browser-hole="true"]){background-color:color-mix(in srgb,var(--background,#0B0B0E) 76%,transparent) !important;}',
-    'html[data-ag-prism-wallpaper="on"][data-ag-cs-theme="light"] :is(.agy-shell,[data-ag-cs-home-sheet="1"]):not([data-has-browser-hole="true"]),html[data-ag-prism-wallpaper="on"]>body:is(.theme-light,.light-theme,.light) :is(.agy-shell,[data-ag-cs-home-sheet="1"]):not([data-has-browser-hole="true"]){background:color-mix(in srgb,var(--background,#F4F7FB) 72%,transparent) !important;}',
-    'html[data-ag-prism-wallpaper="on"][data-ag-cs-theme="light"] [data-ag-cs-conv-seat="1"]:not([data-has-browser-hole="true"]),html[data-ag-prism-wallpaper="on"]>body:is(.theme-light,.light-theme,.light) [data-ag-cs-conv-seat="1"]:not([data-has-browser-hole="true"]){background-color:color-mix(in srgb,var(--background,#F4F7FB) 82%,transparent) !important;}',
+    'html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"])>body:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background:transparent !important;background-color:transparent !important;}',
+    'html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"]) :is(.agy-shell,[data-ag-cs-home-sheet="1"],[data-main-content-body]):not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background:color-mix(in srgb,var(--background,#0B0B0E) 64%,transparent) !important;}',
+    'html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"]) :is(aside,[data-testid="sidebar-split"]>div:first-child):not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background:color-mix(in srgb,var(--sidebar,var(--ag-cs-sidebar,var(--background,#0B0B0E))) 72%,transparent) !important;background-color:color-mix(in srgb,var(--sidebar,var(--ag-cs-sidebar,var(--background,#0B0B0E))) 72%,transparent) !important;}',
+    'html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"]) [data-ag-cs-conv-seat="1"]:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background-color:color-mix(in srgb,var(--background,#0B0B0E) 76%,transparent) !important;}',
+    'html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"]) [data-testid="conversation-view"]::before{display:none !important;background:none !important;}',
+    'html[data-ag-prism-wallpaper="on"][data-ag-cs-theme="light"]:not([data-ag-prism-wallpaper-hole="1"]) :is(.agy-shell,[data-ag-cs-home-sheet="1"],[data-main-content-body]):not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]),html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"])>body:is(.theme-light,.light-theme,.light) :is(.agy-shell,[data-ag-cs-home-sheet="1"],[data-main-content-body]):not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background:color-mix(in srgb,var(--background,#F4F7FB) 72%,transparent) !important;}',
+    'html[data-ag-prism-wallpaper="on"][data-ag-cs-theme="light"]:not([data-ag-prism-wallpaper-hole="1"]) :is(aside,[data-testid="sidebar-split"]>div:first-child):not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]),html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"])>body:is(.theme-light,.light-theme,.light) :is(aside,[data-testid="sidebar-split"]>div:first-child):not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background:color-mix(in srgb,var(--sidebar,var(--ag-cs-sidebar,var(--background,#F4F7FB))) 78%,transparent) !important;background-color:color-mix(in srgb,var(--sidebar,var(--ag-cs-sidebar,var(--background,#F4F7FB))) 78%,transparent) !important;}',
+    'html[data-ag-prism-wallpaper="on"][data-ag-cs-theme="light"]:not([data-ag-prism-wallpaper-hole="1"]) [data-ag-cs-conv-seat="1"]:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]),html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"])>body:is(.theme-light,.light-theme,.light) [data-ag-cs-conv-seat="1"]:not([data-has-browser-hole="true"]):not([data-has-drawer-browser-hole="true"]){background-color:color-mix(in srgb,var(--background,#F4F7FB) 82%,transparent) !important;}',
     'body[data-has-browser-hole="true"] #ag-prism-wallpaper-root,body[data-has-drawer-browser-hole="true"] #ag-prism-wallpaper-root,html[data-ag-prism-wallpaper-hole="1"] #ag-prism-wallpaper-root{display:none !important;visibility:hidden !important;opacity:0 !important;}',
     '[data-testid="prism-wallpaper-slot"]{margin-top:10px;}',
     '.ag-prism-wp-card{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border-radius:var(--ag-cs-r-md,10px);border:1px solid var(--ag-cs-border-1,rgba(128,128,128,0.22));background:var(--ag-cs-tonal-2,rgba(20,22,28,0.72));}',
@@ -67,6 +70,7 @@
   const CSS_VARS = [
     '--ag-prism-wp-opacity',
     '--ag-prism-wp-blur',
+    '--ag-prism-wp-filter',
     '--ag-prism-wp-blur-pad',
     '--ag-prism-wp-dim',
     '--ag-prism-wp-fit',
@@ -238,6 +242,11 @@
 
     let destroyed = false;
     let winBlurred = false;
+    try {
+      if (typeof doc.hasFocus === 'function' && doc.hasFocus() === false) {
+        winBlurred = true;
+      }
+    } catch {}
     let rootEl = null;
     let dimEl = null;
     let mediaEl = null;
@@ -365,6 +374,7 @@
       const blurPad = blurPx > 0 ? Math.min(48, Math.ceil(blurPx * 2)) : 0;
       html.style.setProperty('--ag-prism-wp-opacity', String(opacity));
       html.style.setProperty('--ag-prism-wp-blur', `${blurPx}px`);
+      html.style.setProperty('--ag-prism-wp-filter', blurPx > 0 ? `blur(${blurPx}px)` : 'none');
       html.style.setProperty('--ag-prism-wp-blur-pad', `${blurPad}px`);
       html.style.setProperty('--ag-prism-wp-dim', String(dimOverlay));
       html.style.setProperty('--ag-prism-wp-fit', fit);
@@ -588,12 +598,20 @@
       winBlurred = false;
       syncVideoPlayback();
     };
+    const onDocPointerDown = () => {
+      if (destroyed) return;
+      if (winBlurred) {
+        winBlurred = false;
+        syncVideoPlayback();
+      }
+    };
 
     function bindObserversAndListeners() {
       if (destroyed || listenersBound) return;
       listenersBound = true;
       try {
         doc.addEventListener?.('visibilitychange', onVisibilityChange);
+        doc.addEventListener?.('pointerdown', onDocPointerDown, { passive: true });
       } catch {}
       try {
         win.addEventListener?.('blur', onWindowBlur);
@@ -639,6 +657,9 @@
 
     function applyConfig(nextCfg) {
       if (destroyed || !nextCfg || typeof nextCfg !== 'object') return getState();
+      if (bridge.isOnline() && lastError === 'bridge-offline') {
+        lastError = '';
+      }
       const prevRev = state.rev;
       const prevUrl = state.mediaUrl;
       state = {
@@ -685,8 +706,13 @@
       if (destroyed) return { ok: false, destroyed: true };
       const res = await bridge.getConfig();
       if (destroyed) return { ok: false, destroyed: true };
-      if (res && res.ok && res.config) {
-        applyConfig(res.config);
+      if (res && res.ok) {
+        if (lastError === 'bridge-offline') lastError = '';
+        if (res.config) {
+          applyConfig(res.config);
+        } else {
+          notifySubscribers();
+        }
       } else if (res && res.offline) {
         lastError = 'bridge-offline';
         notifySubscribers();
@@ -704,7 +730,7 @@
         syncHoleAvoidance();
         syncVideoPlayback();
       }
-      if (bridge.isOnline() && (!bootCfg || !bootCfg.mediaUrl)) {
+      if (bridge.isOnline()) {
         void refresh();
       }
     }
@@ -759,6 +785,7 @@
         listenersBound = false;
         try {
           doc.removeEventListener?.('visibilitychange', onVisibilityChange);
+          doc.removeEventListener?.('pointerdown', onDocPointerDown);
         } catch {}
         try {
           win.removeEventListener?.('blur', onWindowBlur);

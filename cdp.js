@@ -8378,11 +8378,6 @@ function buildWallpaperExpression(config = null, opts = null) {
     return '';
   }
 
-  const initialWpCfg =
-    opts && opts.initialWallpaperConfig && typeof opts.initialWallpaperConfig === 'object'
-      ? opts.initialWallpaperConfig
-      : null;
-  const bootWpCfgJson = serializeJsonForEval(initialWpCfg);
   const hashJson = serializeJsonForEval(codeHash);
 
   return `(() => {
@@ -8496,7 +8491,6 @@ function buildWallpaperExpression(config = null, opts = null) {
       try { delete globalThis.__agPrismWallpaperResolve; } catch {}
     };
 
-    const bootWpCfg = ${bootWpCfgJson};
     const targetHash = ${hashJson};
     const mountOrReuse = () => {
       if (needDomMarkerOnReady && !hasDomMarker() && (isPlainHttpLocalhost || !/\\bantigravity\\b/i.test(String(document.title || '')))) {
@@ -8511,7 +8505,7 @@ function buildWallpaperExpression(config = null, opts = null) {
         existingUi &&
         existingUi.__prismCodeHash === targetHash
       ) {
-        try { existing.sync?.(bootWpCfg); } catch {}
+        try { existing.sync?.(); } catch {}
         mountSettingsSlot();
         return { ok: true, reused: true, codeHash: targetHash };
       }
@@ -8538,7 +8532,7 @@ function buildWallpaperExpression(config = null, opts = null) {
         try { window.__agPrismWallpaperSettingsUi = mountedUi; } catch {}
         try { globalThis.__agPrismWallpaperSettingsUi = mountedUi; } catch {}
       }
-      try { mounted?.sync?.(bootWpCfg); } catch {}
+      try { mounted?.sync?.(); } catch {}
       mountSettingsSlot();
       return { ok: true, status: 'mounted', codeHash: targetHash };
     };

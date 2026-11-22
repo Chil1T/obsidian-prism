@@ -86,6 +86,8 @@ final class WatcherApp {
     private let noNativeDaemon: Bool
     private let noRelaunchPrompt: Bool
     private let logLock = NSLock()
+    private let promptedHostsLock = NSLock()
+    private var promptedHostKeys: Set<String> = []
 
     init(baseDir: String, pluginDir: String, isWatch: Bool, noNativeDaemon: Bool = false, noRelaunchPrompt: Bool = false) {
         self.baseDir = baseDir
@@ -1001,8 +1003,60 @@ final class WatcherApp {
         return true
     }
 
+    private func makePromptHostKey(pid: Int32, startTimeMs: Int64, hostVersion: String) -> String {
+        return hostVersion.isEmpty
+            ? "\(pid):\(startTimeMs)"
+            : "\(pid):\(startTimeMs):\(hostVersion)"
+    }
+
+    private func isPromptedInMemory(pid: Int32, startTimeMs: Int64, hostVersion: String) -> Bool {
+        let currentKey = makePromptHostKey(pid: pid, startTimeMs: startTimeMs, hostVersion: hostVersion)
+        let pidPrefix = "\(pid):"
+        promptedHostsLock.lock()
+        defer { promptedHostsLock.unlock() }
+        if promptedHostKeys.contains(currentKey) {
+            return true
+        }
+        for existing in promptedHostKeys where existing.hasPrefix(pidPrefix) {
+            let parts = existing.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)
+            let savedStart = parts.count >= 2 ? (Int64(parts[1]) ?? 0) : 0
+            let savedVer = parts.count >= 3 ? String(parts[2]) : ""
+            if !hostVersion.isEmpty && !savedVer.isEmpty && savedVer != hostVersion {
+                continue
+            }
+            if savedStart <= 0 || startTimeMs <= 0 || abs(savedStart - startTimeMs) <= 15000 {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func rememberPromptedInMemory(pid: Int32, startTimeMs: Int64, hostVersion: String) {
+        let hostKey = makePromptHostKey(pid: pid, startTimeMs: startTimeMs, hostVersion: hostVersion)
+        promptedHostsLock.lock()
+        if promptedHostKeys.count >= 256 {
+            promptedHostKeys.removeAll(keepingCapacity: true)
+        }
+        promptedHostKeys.insert(hostKey)
+        promptedHostsLock.unlock()
+    }
+
+    private func removePathIncludingDanglingSymlink(_ path: String) {
+        #if canImport(Darwin)
+        let stPtr = UnsafeMutablePointer<Darwin.stat>.allocate(capacity: 1)
+        defer { stPtr.deallocate() }
+        if lstat(path, stPtr) == 0 {
+            _ = unlink(path)
+        }
+        #endif
+        try? FileManager.default.removeItem(atPath: path)
+    }
+
     private func hasPromptedForHostWithVersion(bare: BareHostAppInfo, hostVersion: String) -> Bool {
         guard bare.pid > 0 else { return true }
+        if isPromptedInMemory(pid: bare.pid, startTimeMs: bare.startTimeMs, hostVersion: hostVersion) {
+            return true
+        }
         let fm = FileManager.default
         var dirs: [String] = []
         if !self.pluginDir.isEmpty { dirs.append(self.pluginDir) }
@@ -1022,6 +1076,7 @@ final class WatcherApp {
             }
             if stateObjMatchesCurrentHost(obj, pid: bare.pid, startTimeMs: bare.startTimeMs, hostVersion: hostVersion) {
                 matched = true
+                rememberPromptedInMemory(pid: bare.pid, startTimeMs: bare.startTimeMs, hostVersion: hostVersion)
             } else {
                 // 新进程 PID 或新版本出现时自动复位旧的跳过记录，防止旧“稍后”永久静音
                 try? fm.removeItem(atPath: statePath)
@@ -1036,9 +1091,9 @@ final class WatcherApp {
 
     private func recordPromptedForHostWithVersion(bare: BareHostAppInfo, hostVersion: String, decision: String) {
         guard bare.pid > 0 else { return }
-        let hostKey = hostVersion.isEmpty
-            ? "\(bare.pid):\(bare.startTimeMs)"
-            : "\(bare.pid):\(bare.startTimeMs):\(hostVersion)"
+        // 先记入进程内 Set<String> 兜底，即使磁盘只读/满或写盘失败也绝不每 2s 无限弹窗
+        rememberPromptedInMemory(pid: bare.pid, startTimeMs: bare.startTimeMs, hostVersion: hostVersion)
+        let hostKey = makePromptHostKey(pid: bare.pid, startTimeMs: bare.startTimeMs, hostVersion: hostVersion)
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000.0)
         let obj: [String: JsonValue] = [
             "hostPid": .int(Int64(bare.pid)),
@@ -1052,17 +1107,28 @@ final class WatcherApp {
         ]
         let payload = MiniJson.stringify(.object(obj), pretty: true) + "\n"
         let fm = FileManager.default
-        for dir in [self.pluginDir, self.baseDir] where !dir.isEmpty {
+        var targetDirs: [String] = []
+        if !self.pluginDir.isEmpty { targetDirs.append(self.pluginDir) }
+        if !self.baseDir.isEmpty && self.baseDir != self.pluginDir { targetDirs.append(self.baseDir) }
+        for dir in targetDirs {
+            let statePath = (dir as NSString).appendingPathComponent(".relaunch-prompt-state.json")
+            let tmpPath = statePath + ".tmp.\(getpid())"
             do {
                 try fm.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil)
-                let statePath = (dir as NSString).appendingPathComponent(".relaunch-prompt-state.json")
-                let tmpPath = statePath + ".tmp.\(getpid())"
                 try payload.write(toFile: tmpPath, atomically: true, encoding: .utf8)
-                if fm.fileExists(atPath: statePath) {
-                    try? fm.removeItem(atPath: statePath)
+                // 写盘前无条件移除旧路径（含 lstat 存在但目标失效的悬空软链，避免 fileExists 为 false 导致 moveItem 报 EEXIST）
+                removePathIncludingDanglingSymlink(statePath)
+                try? fm.removeItem(atPath: statePath)
+                #if canImport(Darwin)
+                if rename(tmpPath, statePath) != 0 {
+                    try fm.moveItem(atPath: tmpPath, toPath: statePath)
                 }
+                #else
                 try fm.moveItem(atPath: tmpPath, toPath: statePath)
-            } catch {}
+                #endif
+            } catch {
+                try? fm.removeItem(atPath: tmpPath)
+            }
         }
     }
 }

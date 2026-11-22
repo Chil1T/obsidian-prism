@@ -1138,3 +1138,86 @@ test('14. P0 Redux resilience: findStore throw, store.dispatch TypeError, and no
     ctl.destroy();
   }
 });
+
+test('15. P1-4 regressions: pre-quote duplicate guard never false-blocks <p>/<br> collapsed /plan quotes & React controlled <textarea> uses native prototype value setter', async () => {
+  // (a) Simulate contenteditable/Lexical turning '\n' into <p>/<br> so ed.textContent has NO newline separator
+  const env = createMockEnv();
+  const box = env.makeEl('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const ed = env.makeEl('div', { attrs: { contenteditable: 'true' }, text: '' });
+  const sendBtn = env.makeEl('button', { attrs: { 'data-testid': 'input-send-button' } });
+  let sendClicks = 0;
+  sendBtn.addEventListener('click', () => { sendClicks += 1; });
+  box.appendChild(ed);
+  box.appendChild(sendBtn);
+  env.rootEl.appendChild(box);
+
+  env.setExecCommandHandler((cmd, val) => {
+    if (cmd !== 'insertText') return false;
+    // Strip '\n' as W3C textContent does across <p>/<br> block boundaries
+    ed.textContent = String(ed.textContent || '') + String(val).replace(/\n/g, '');
+    return true;
+  });
+
+  const ctl = ctxMenuMod.createContextMenuController({ doc: env.doc, win: env.win, nav: env.nav, loc: env.loc, stepDelayMs: 0 });
+  const validCollapsed = await ctl.triggerSlashCommand('/plan', '/plan refactor auth token flow');
+  assert.equal(validCollapsed.ok, true, 'Valid quote starting with /plan must NOT be falsely blocked when <p>/<br> collapses newline in textContent');
+  assert.equal(validCollapsed.pickedFromMenu, false);
+  assert.equal(ed.textContent, '/plan/plan refactor auth token flow');
+  assert.equal(sendClicks, 1);
+
+  // Real double-write of the command itself is STILL intercepted BEFORE quote insertion
+  ed.textContent = '';
+  sendClicks = 0;
+  let quoteInserted = false;
+  env.setExecCommandHandler((cmd, val) => {
+    if (cmd !== 'insertText') return false;
+    if (val === '/learn') ed.textContent = '/learn/learn';
+    else { quoteInserted = true; ed.textContent += val; }
+    return true;
+  });
+  const dupBlocked = await ctl.triggerSlashCommand('/learn', 'valid quote should never be inserted');
+  assert.equal(dupBlocked.ok, false);
+  assert.equal(dupBlocked.reason, 'duplicate-command');
+  assert.equal(quoteInserted, false, 'Pre-quote guard must abort before inserting quote');
+  assert.equal(sendClicks, 0);
+
+  // (b) React controlled <textarea>: prototype value setter must be invoked instead of instance wrapper
+  box.remove();
+  const taBox = env.makeEl('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const ta = env.makeEl('textarea', { value: '' });
+  let nativeBacking = '';
+  let protoSetterCalls = 0;
+  let instanceSetterCalls = 0;
+  let reactTracker = '';
+  let reactChangeEvents = 0;
+  function FakeHTMLTextAreaElement() {}
+  Object.defineProperty(FakeHTMLTextAreaElement.prototype, 'value', {
+    configurable: true,
+    get() { return nativeBacking; },
+    set(v) { protoSetterCalls += 1; nativeBacking = String(v); },
+  });
+  env.win.HTMLTextAreaElement = FakeHTMLTextAreaElement;
+  Object.setPrototypeOf(ta, FakeHTMLTextAreaElement.prototype);
+  // React attaches an instance descriptor that advances _valueTracker when written directly
+  Object.defineProperty(ta, 'value', {
+    configurable: true,
+    get() { return nativeBacking; },
+    set(v) { instanceSetterCalls += 1; nativeBacking = String(v); reactTracker = nativeBacking; },
+  });
+  ta.addEventListener('input', () => {
+    if (nativeBacking !== reactTracker) {
+      reactChangeEvents += 1;
+      reactTracker = nativeBacking;
+    }
+  });
+  taBox.appendChild(ta);
+  env.rootEl.appendChild(taBox);
+
+  const taRes = await ctl.triggerSlashCommand('/plan', 'Controlled textarea quote');
+  assert.equal(taRes.ok, true);
+  assert.equal(nativeBacking, '/plan\nControlled textarea quote');
+  assert.equal(protoSetterCalls, 2, 'insertText must write via HTMLTextAreaElement.prototype value setter (command + quote)');
+  assert.equal(instanceSetterCalls, 0, 'insertText must bypass instance value setter so React _valueTracker sees dirty diff');
+  assert.equal(reactChangeEvents, 2, 'React controlled onChange must fire on each input event');
+  ctl.destroy();
+});

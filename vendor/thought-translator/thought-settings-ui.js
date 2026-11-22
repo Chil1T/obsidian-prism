@@ -531,6 +531,7 @@
       ],
       fetchedModels: [],
     };
+    let loadConfigPromise = null;
 
     // -1) Usage Hint, Background Bridge Status Banner & One-Click Diagnostics Strip
     const usageBanner = mkEl('div', 'ag-cs-thought-hint');
@@ -692,8 +693,11 @@
 
     const redactUiDiagText = (raw) =>
       String(raw || '')
-        .replace(/((?:https?|socks5h?):\/\/)[^@\s\x2f\x22\x27<>]+@/gi, '$1***REDACTED***@')
-        .replace(/(sk-[A-Za-z0-9_\-]{6,}|Bearer\s+[A-Za-z0-9._\-:+/=]{6,})/gi, '***REDACTED***')
+        .replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^@\s\x2f\x22\x27<>]+@/gi, '$1***REDACTED***@')
+        .replace(
+          /(sk-[A-Za-z0-9_\-]{6,}|Bearer\s+[A-Za-z0-9._\-:+/=]{6,}|(?:Proxy-)?Authorization\s*:\s*Basic\s+[A-Za-z0-9+/=]{4,})/gi,
+          '***REDACTED***'
+        )
         .slice(0, 160);
 
     const renderDiagnostics = () => {
@@ -838,29 +842,39 @@
         syncUsageBanner();
         return Promise.resolve(state.lastDiag);
       }
-      syncFormIntoProfile();
-      const cur = getActiveProfile();
       state.diagnosing = true;
       renderDiagnostics();
-      const reqPayload = {
-        mode: curMode,
-        profileId: cur?.id,
-        baseUrl: cur?.baseUrl,
-        model: cur?.model,
-        apiKey: cur?.draftKey || '',
-        proxyMode: state.proxyMode,
-        customProxyUrl: state.proxyMode === 'custom' ? String(state.customProxyUrl || '').trim() : '',
+      const waitLoad = () => {
+        if (state.loaded) return Promise.resolve();
+        let tm = null;
+        return Promise.race([
+          ensureConfigLoaded().catch(() => {}),
+          new Promise((resolve) => {
+            tm = setTimeout(resolve, 1500);
+          }),
+        ]).finally(() => {
+          if (tm) clearTimeout(tm);
+        });
       };
-      const api = resolveThoughtApi();
-      const rpcCall = resolveThoughtRpcCall();
-      const invoke =
-        api && typeof api.diagnose === 'function'
-          ? () => api.diagnose(reqPayload)
-          : rpcCall
-          ? () => rpcCall({ action: 'diagnose', ...reqPayload })
-          : () => Promise.resolve({ ok: false, offline: true });
-      return Promise.resolve()
-        .then(invoke)
+      return waitLoad()
+        .then(() => {
+          const reqPayload = { mode: curMode };
+          if (state.loaded) {
+            syncFormIntoProfile();
+            const cur = getActiveProfile();
+            reqPayload.profileId = cur?.id;
+            reqPayload.baseUrl = cur?.baseUrl;
+            reqPayload.model = cur?.model;
+            reqPayload.apiKey = cur?.draftKey || '';
+            reqPayload.proxyMode = state.proxyMode;
+            reqPayload.customProxyUrl = state.proxyMode === 'custom' ? String(state.customProxyUrl || '').trim() : '';
+          }
+          const api = resolveThoughtApi();
+          const rpcCall = resolveThoughtRpcCall();
+          if (api && typeof api.diagnose === 'function') return api.diagnose(reqPayload);
+          if (rpcCall) return rpcCall({ action: 'diagnose', ...reqPayload });
+          return { ok: false, offline: true };
+        })
         .then((res) => {
           if (res && res.ok) {
             state.lastDiag = { ...res, bridgeOnline: true };
@@ -1762,8 +1776,33 @@
       return payload;
     };
 
+    const ensureConfigLoaded = () => {
+      if (state.loaded) return Promise.resolve({ ok: true });
+      if (loadConfigPromise) return loadConfigPromise;
+      const api = resolveThoughtApi();
+      if (!api || typeof api.getConfig !== 'function') {
+        return Promise.resolve({ ok: false });
+      }
+      loadConfigPromise = Promise.resolve()
+        .then(() => api.getConfig())
+        .then((res) => {
+          if (res && res.ok) applySanitizedConfig(res);
+          else syncActionButtons();
+          return res || { ok: false };
+        })
+        .catch(() => {
+          syncActionButtons();
+          return { ok: false };
+        })
+        .finally(() => {
+          loadConfigPromise = null;
+        });
+      return loadConfigPromise;
+    };
+
     const reloadConfig = () => {
       state.loaded = false;
+      loadConfigPromise = null;
       state.dirtyToolSum = false;
       state.dirtyTitles = false;
       syncUsageBanner();
@@ -1774,15 +1813,7 @@
         syncViewModeUi();
       }
       void refreshCacheStats();
-      const api = resolveThoughtApi();
-      if (!api || typeof api.getConfig !== 'function') {
-        return Promise.resolve({ ok: false });
-      }
-      return api.getConfig().then((res) => {
-        if (res && res.ok) applySanitizedConfig(res);
-        else syncActionButtons();
-        return res;
-      });
+      return ensureConfigLoaded();
     };
 
     const ensureLoaded = () => {
@@ -1795,12 +1826,7 @@
       }
       void refreshCacheStats();
       if (state.loaded) return;
-      const api = resolveThoughtApi();
-      if (!api || typeof api.getConfig !== 'function') return;
-      void api.getConfig().then((res) => {
-        if (res && res.ok) applySanitizedConfig(res);
-        else syncActionButtons();
-      });
+      void ensureConfigLoaded();
     };
 
     fetchModelsBtn.addEventListener('click', (ev) => {

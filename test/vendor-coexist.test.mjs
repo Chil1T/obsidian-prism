@@ -760,7 +760,11 @@ test('vendor/effort-slider/slider-coexist.js yields 100% to external __agCodexEf
   assert.equal(claudeContainer.querySelectorAll('.ces-tick').length, 3, 'Must render all 3 level ticks in Claude mode');
   assert.equal(claudeRow.getAttribute('data-ces-max'), 'true', 'Claude High must activate data-ces-max="true" violet glow border');
   const styleElStrict = envStrict.doc.getElementById('ag-codex-effort-slider-styles');
-  assert.match(styleElStrict.textContent, /\.ces-claude-canvas\s*\{[^}]*width:\s*var\(--ces-fill,\s*0px\)/, 'Authentic .ces-claude-canvas width: var(--ces-fill, 0px) must be preserved');
+  assert.match(styleElStrict.textContent, /\.ces-fill\s*\{[^}]*overflow:\s*hidden/, '.ces-fill must clip HiDPI Claude canvas cleanly via overflow:hidden');
+  assert.doesNotMatch(styleElStrict.textContent, /\.ces-claude-canvas\s*\{[^}]*object-fit:\s*none/, '.ces-claude-canvas must not use object-fit:none which breaks HiDPI backing store scaling');
+  const strictFillEl = claudeContainer.querySelector('.ces-fill');
+  const strictCanvasEl = claudeContainer.querySelector('.ces-claude-canvas');
+  assert.equal(strictCanvasEl.parentNode, strictFillEl, '.ces-claude-canvas must be mounted inside .ces-fill');
   mountedClaude.unmount();
   ctlStrict.destroy();
 

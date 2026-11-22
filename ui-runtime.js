@@ -2708,7 +2708,10 @@
           syncHostAnimatedIcons(addedRoots);
         }
 
-        if ((flags.f || flags.l || routeJumped) && getThoughtTranslateMode() !== 'off') {
+        if (
+          (flags.f || flags.l || routeJumped || ((flags.s || flags.g || flags.o) && W.__agPrismThought?.getTranslateTitles?.())) &&
+          getThoughtTranslateMode() !== 'off'
+        ) {
           try {
             W.__agPrismThought?.scan?.();
           } catch {}

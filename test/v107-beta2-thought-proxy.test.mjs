@@ -2098,8 +2098,17 @@ test('13) CodeQL High alerts zero-regression: 0 rejectUnauthorized:false, 0 HTML
   );
 
   const secHardeningSrc = fs.readFileSync(path.join(ROOT_DIR, 'test', 'security-sidecar-hardening.test.mjs'), 'utf8');
+  const openScriptRegexMarker = '/<' + 'script';
+  const closeScriptRegexMarker = 'script>/';
+  const hasHtmlScriptFilterRegex = secHardeningSrc
+    .split(/\r?\n/)
+    .some((line) => {
+      const lower = line.toLowerCase();
+      const idx = lower.indexOf(openScriptRegexMarker);
+      return idx >= 0 && lower.indexOf(closeScriptRegexMarker, idx + openScriptRegexMarker.length) > idx;
+    });
   assert.equal(
-    /\/<script[\s\S]*?<\\\/script>\//i.test(secHardeningSrc),
+    hasHtmlScriptFilterRegex,
     false,
     'test/security-sidecar-hardening.test.mjs must not use HTML <script> filtering regex (CodeQL #34)'
   );
@@ -2112,6 +2121,7 @@ test('13) CodeQL High alerts zero-regression: 0 rejectUnauthorized:false, 0 HTML
   const uiSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-settings-ui.js'), 'utf8');
   assert.equal(/\.innerHTML\s*=/.test(clientSrc), false, 'thought-client.js must have 0 innerHTML writes');
   assert.equal(/\.innerHTML\s*=/.test(uiSrc), false, 'thought-settings-ui.js must have 0 innerHTML writes');
+  assert.equal(clientSrc.includes('/\\s*$/'), false, 'thought-client.js must not contain unanchored /\\s*$/ regex (CodeQL polynomial-redos)');
 
   const cdp = require(path.join(ROOT_DIR, 'cdp.js'));
   const ch1Expr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
@@ -2217,7 +2227,7 @@ test('14) Conversation titles auto-translation: config persistence, safe filteri
       },
     });
     docEl.setAttribute('data-ag-cs-lang', 'zh-CN');
-    docEl.setAttribute('data-ag-prism-sidebar', 'on');
+    docEl.setAttribute('data-ag-prism-sidebar-studio', 'on');
     vm.runInNewContext(clientSrc, sandbox);
     const api = sandbox.__agPrismThought;
 
@@ -2625,6 +2635,501 @@ test('15) One-click Thought Diagnostics: all states, 5s bounded timeout, strict 
       diagBtnLabels.add(`${loc}:${diagBtn.textContent}:${bridgeItem.textContent}`);
     }
     assert.equal(diagBtnLabels.size, 5, 'All 5 locales must refresh diagnose button & 4-item panel');
+
+    svc.dispose();
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('16) Red-team #229 regressions: full secret redaction (URL-encoded/Base64/env/osCfg/socks4), diagnose body cancel on 200/404/405 & zero-ReDoS whitespace slicing', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-rt229-'));
+  try {
+    const customApiKey = 'gw_secret+token/99=end';
+    const encApiKey = encodeURIComponent(customApiKey);
+    const envPass = 'EnvP@ss!42/abc';
+    const encEnvPass = encodeURIComponent(envPass);
+    const envB64 = Buffer.from(`envUser:${envPass}`, 'utf8').toString('base64');
+    const osSocksPass = 'OsSocks#88!';
+    const encOsSocksPass = encodeURIComponent(osSocksPass);
+    const osSocksB64 = Buffer.from(`osSocks:${osSocksPass}`, 'utf8').toString('base64');
+    const socks4Raw = 'socks4://legacyUser:LegacySocks4Pass!@127.0.0.1:1080';
+
+    let cancelCount = 0;
+    let readBodyCount = 0;
+    const makeTrackableResponse = (status, bodyText) => ({
+      ok: status >= 200 && status < 300,
+      status,
+      body: {
+        cancel: async () => {
+          cancelCount++;
+        },
+        getReader: () => {
+          readBodyCount++;
+          let done = false;
+          const bytes = Buffer.from(String(bodyText || ''), 'utf8');
+          return {
+            read: async () => {
+              if (done) return { done: true, value: undefined };
+              done = true;
+              return { done: false, value: bytes };
+            },
+            cancel: async () => {
+              cancelCount++;
+            },
+          };
+        },
+      },
+      text: async () => {
+        readBodyCount++;
+        return String(bodyText || '');
+      },
+    });
+
+    const svc = new ThoughtTranslatorService({
+      configDir: tmpDir,
+      proxyPlatform: 'win32',
+      proxyExecFileAsync: async () =>
+        [
+          'HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings',
+          '    ProxyEnable    REG_DWORD    0x1',
+          `    ProxyServer    REG_SZ    http=http://osHttp:OsHttpPass77!@127.0.0.1:8118;socks=socks5h://osSocks:${encOsSocksPass}@127.0.0.1:1089`,
+        ].join('\r\n'),
+      proxyEnv: {
+        HTTPS_PROXY: `http://envUser:${encEnvPass}@127.0.0.1:7891`,
+        ALL_PROXY: socks4Raw,
+      },
+      fetchImpl: async (url) => {
+        const u = String(url);
+        if (u.includes('leak-a.example.test')) {
+          return makeTrackableResponse(401, `k=${encApiKey} e=${encEnvPass} b=${envB64}`);
+        }
+        if (u.includes('leak-b.example.test')) {
+          return makeTrackableResponse(401, `s=${encOsSocksPass} sb=${osSocksB64} u=${socks4Raw}`);
+        }
+        if (u.includes('ok-200.example.test')) {
+          return makeTrackableResponse(200, '{"data":[' + '{"id":"m"},'.repeat(5000) + ']}');
+        }
+        if (u.includes('notfound-404.example.test')) {
+          return makeTrackableResponse(404, 'not found giant body');
+        }
+        if (u.includes('method-405.example.test')) {
+          return makeTrackableResponse(405, 'method not allowed giant body');
+        }
+        if (u.includes('translate.googleapis.com')) {
+          return makeTrackableResponse(200, JSON.stringify([[['好的', 'ok']]]));
+        }
+        return makeTrackableResponse(200, '{}');
+      },
+    });
+
+    // 1) All encoded/Base64/env/osCfg/socks4 secrets (each < 180 chars, well inside snippet window) must be 100% redacted
+    const diagLeakA = await svc.diagnose({
+      mode: 'ai',
+      baseUrl: 'https://leak-a.example.test/v1',
+      model: 'custom-model',
+      apiKey: customApiKey,
+      proxyMode: 'direct',
+    });
+    const diagLeakB = await svc.diagnose({
+      mode: 'ai',
+      baseUrl: 'https://leak-b.example.test/v1',
+      model: 'custom-model',
+      apiKey: customApiKey,
+      proxyMode: 'direct',
+    });
+    assert.equal(diagLeakA.connectivity.ok, false);
+    assert.equal(diagLeakA.connectivity.reason, 'auth_error');
+    assert.equal(diagLeakB.connectivity.ok, false);
+    assert.equal(diagLeakB.connectivity.reason, 'auth_error');
+    assert.ok(diagLeakA.connectivity.error.includes('k=***REDACTED*** e=***REDACTED*** b=***REDACTED***'));
+    assert.ok(diagLeakB.connectivity.error.includes('s=***REDACTED*** sb=***REDACTED***'));
+    assert.ok(diagLeakB.connectivity.error.includes('socks4://***REDACTED***@127.0.0.1:1080'));
+    const leakStr = JSON.stringify([diagLeakA, diagLeakB]);
+    for (const forbidden of [
+      customApiKey,
+      encApiKey,
+      envPass,
+      encEnvPass,
+      envB64,
+      'OsHttpPass77!',
+      osSocksPass,
+      encOsSocksPass,
+      osSocksB64,
+      'LegacySocks4Pass!',
+      'legacyUser:LegacySocks4Pass!',
+    ]) {
+      assert.equal(leakStr.includes(forbidden), false, `diagnose output must redact secret form: ${forbidden}`);
+    }
+
+    // 2) HTTP 200 / 404 / 405 & GTX 200 must cancel response body without reading 64KB payload
+    cancelCount = 0;
+    readBodyCount = 0;
+    const d200 = await svc.diagnose({ mode: 'ai', baseUrl: 'https://ok-200.example.test/v1', model: 'm', apiKey: 'sk-test123456', proxyMode: 'direct' });
+    const d404 = await svc.diagnose({ mode: 'ai', baseUrl: 'https://notfound-404.example.test/v1', model: 'm', apiKey: 'sk-test123456', proxyMode: 'direct' });
+    const d405 = await svc.diagnose({ mode: 'ai', baseUrl: 'https://method-405.example.test/v1', model: 'm', apiKey: 'sk-test123456', proxyMode: 'direct' });
+    const dGtx = await svc.diagnose({ mode: 'machine', proxyMode: 'direct' });
+    assert.equal(d200.connectivity.ok, true);
+    assert.equal(d404.connectivity.ok, true);
+    assert.equal(d404.connectivity.reason, 'endpoint_reachable');
+    assert.equal(d405.connectivity.ok, true);
+    assert.equal(d405.connectivity.reason, 'endpoint_reachable');
+    assert.equal(dGtx.connectivity.ok, true);
+    assert.equal(readBodyCount, 0, 'HTTP 200/404/405 diagnose probes must NOT read response body');
+    assert.equal(cancelCount, 4, 'HTTP 200/404/405/GTX-200 diagnose probes must cancel response body stream');
+
+    // 3) Wide-scheme userinfo redaction in thought-settings-ui.js & thought-client.js
+    const uiSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-settings-ui.js'), 'utf8');
+    const uiEnv = createMockDomEnv({
+      __agPrismThoughtBridge: { call: async () => ({ ok: true }) },
+      __agPrismThought: {
+        getViewMode: () => 'immersive',
+        getLocalCacheStats: () => ({ memEntries: 0 }),
+        getConfig: async () => svc.getSanitizedConfig(),
+        diagnose: async () => ({
+          ok: true,
+          bridgeOnline: true,
+          mode: 'ai',
+          proxyMode: 'custom',
+          effectiveProxy: '',
+          osProxyDetected: '',
+          profileReady: true,
+          profileIssues: [],
+          connectivity: {
+            ok: false,
+            latencyMs: 12,
+            reason: 'proxy_error',
+            error: 'dial socks4://bob:TopSecretSocks4@127.0.0.1:1080 failed',
+          },
+        }),
+      },
+    });
+    vm.runInNewContext(uiSrc, uiEnv.sandbox);
+    const uiHandle = uiEnv.sandbox.__agPrismThoughtSettingsUi.createThoughtAiConfigBox({
+      mkEl: (t, c) => uiEnv.doc.createElement(t, c ? { class: c } : {}),
+      btnClass: 'btn',
+      getMode: () => 'ai',
+      getLang: () => 'zh-CN',
+    });
+    uiEnv.rootBody.appendChild(uiHandle.box);
+    uiHandle.box.querySelector('[data-testid="thought-diagnose-btn"]').click();
+    await new Promise((r) => setTimeout(r, 30));
+    const connText = uiHandle.box.querySelector('[data-testid="thought-diag-connectivity"]').textContent;
+    assert.equal(connText.includes('TopSecretSocks4'), false, 'UI diagnostics must redact socks4:// userinfo');
+    assert.ok(connText.includes('socks4://***REDACTED***@127.0.0.1:1080'), 'UI diagnostics must mask socks4:// userinfo');
+
+    // thought-client.js sanitizeClientErrorText wide-scheme redaction + zero-ReDoS oversized whitespace skipping
+    const clientSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-client.js'), 'utf8');
+    const cEnv = createMockDomEnv({
+      __agPrismThoughtBridge: {
+        call: async () => ({ ok: true, entries: {}, translateTitles: true }),
+        translateStream: async (opts) => {
+          if (String(opts.mode || '').startsWith('tool-batch:')) {
+            const items = JSON.parse(opts.text).items;
+            return { ok: true, items: items.map((s) => s.replace('Optimize project performance', '优化项目性能')) };
+          }
+          return { ok: false, error: 'proxy socks4://bob:ClientSocks4Pass@127.0.0.1:1080 refused' };
+        },
+        cancelTranslate: async () => ({ ok: true }),
+      },
+    });
+    cEnv.docEl.setAttribute('data-ag-cs-lang', 'zh-CN');
+    vm.runInNewContext(clientSrc, cEnv.sandbox);
+    const cApi = cEnv.sandbox.__agPrismThought;
+
+    const trig = cEnv.doc.createElement('button', { 'data-testid': 'thinking-collapsible-trigger', 'aria-expanded': 'true' });
+    trig.textContent = 'Thought for 2s';
+    const panel = cEnv.doc.createElement('div');
+    const pNode = cEnv.doc.createElement('p');
+    pNode.textContent = 'Analyzing proxy settings for upstream OpenAI requests now.';
+    panel.appendChild(pNode);
+    cEnv.rootBody.appendChild(trig);
+    cEnv.rootBody.appendChild(panel);
+
+    const rowWhitespace = cEnv.doc.createElement('div', { 'data-testid': 'conversation-row-sidebar' });
+    const paddedTitle = cEnv.doc.createElement('span');
+    paddedTitle.textContent = '  Optimize project performance  ';
+    rowWhitespace.appendChild(paddedTitle);
+    cEnv.rootBody.appendChild(rowWhitespace);
+
+    const rowHuge = cEnv.doc.createElement('div', { 'data-testid': 'conversation-row-sidebar' });
+    const hugeSpan = cEnv.doc.createElement('span');
+    hugeSpan.textContent = `${' '.repeat(25000)}Optimize project performance${' '.repeat(25000)}`;
+    rowHuge.appendChild(hugeSpan);
+    cEnv.rootBody.appendChild(rowHuge);
+
+    const t0 = Date.now();
+    cApi.sync({ thoughtTranslate: 'ai', thoughtTrigger: 'expand', language: 'zh-CN', translateTitles: true });
+    cApi.scanImmediate();
+    await new Promise((r) => setTimeout(r, 40));
+    const elapsed = Date.now() - t0;
+    assert.ok(elapsed < 1000, `Zero-ReDoS title scan must stay linear & fast (got ${elapsed}ms)`);
+    assert.equal(paddedTitle.textContent, '  优化项目性能  ', 'Zero-regex slicing must preserve leading & trailing whitespace');
+    assert.equal(hugeSpan.textContent.includes('优化项目性能'), false, 'Oversized (>1024) title TextNode must be skipped');
+    const errTextEl = panel.querySelector('.ag-prism-thought-error-text');
+    assert.ok(errTextEl, 'Failed thought panel should render error bar');
+    assert.equal(errTextEl.textContent.includes('ClientSocks4Pass'), false, 'thought-client error UI must never leak socks4 password');
+    cApi.destroy();
+
+    svc.dispose();
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('17) Red-team #230 regressions: sidebarStudio attr, breadcrumb last-segment-only, sidebar primary-title-only, unloaded diagnose & late get-cache race', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-rt230-'));
+  try {
+    // A) #230 [P1-5]: data-ag-prism-sidebar-studio attr (without W.__agPrism), multi-segment breadcrumbs & sidebar primary title only
+    const clientSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-client.js'), 'utf8');
+    const translatedInputs = [];
+    const { doc, docEl, rootBody, sandbox } = createMockDomEnv({
+      __agPrismThoughtBridge: {
+        call: async () => ({ ok: true, entries: {}, translateTitles: false, translateToolSummaries: false }),
+        translateStream: async (opts) => {
+          const items = JSON.parse(opts.text).items;
+          translatedInputs.push(...items);
+          return { ok: true, items: items.map((s) => `[译] ${s}`) };
+        },
+        cancelTranslate: async () => ({ ok: true }),
+      },
+    });
+    docEl.setAttribute('data-ag-cs-lang', 'zh-CN');
+    docEl.setAttribute('data-ag-prism-sidebar-studio', 'on');
+    vm.runInNewContext(clientSrc, sandbox);
+    const api = sandbox.__agPrismThought;
+
+    // 1) Sidebar Studio node without data-ag-prism-sidebar-owned but with .ag-prism-sb-* class -> must be skipped via data-ag-prism-sidebar-studio="on"
+    const sbStudioWrap = doc.createElement('div', { class: 'ag-prism-sb-chat-list' });
+    const sbStudioRow = doc.createElement('div', { 'data-testid': 'conversation-row-sidebar' });
+    const sbStudioTitle = doc.createElement('span');
+    sbStudioTitle.textContent = 'Sidebar Studio duplicate row';
+    sbStudioRow.appendChild(sbStudioTitle);
+    sbStudioWrap.appendChild(sbStudioRow);
+    rootBody.appendChild(sbStudioWrap);
+
+    // 2) Single-segment breadcrumb (workspace folder only) inside <header> -> MUST NOT translate
+    const singleBcHeader = doc.createElement('header');
+    const singleBcSeg = doc.createElement('span', { 'data-testid': 'breadcrumb-segment' });
+    singleBcSeg.textContent = 'Client Portal';
+    singleBcHeader.appendChild(singleBcSeg);
+    rootBody.appendChild(singleBcHeader);
+
+    // 3) Three-segment wrapped breadcrumb inside <nav> -> MUST translate ONLY the last segment
+    const multiBcNav = doc.createElement('nav', { 'aria-label': 'Breadcrumb' });
+    const bcWrap1 = doc.createElement('div');
+    const bcSeg1 = doc.createElement('span', { 'data-testid': 'breadcrumb-segment' });
+    bcSeg1.textContent = 'Client Portal';
+    bcWrap1.appendChild(bcSeg1);
+    const bcWrap2 = doc.createElement('div');
+    const bcSeg2 = doc.createElement('span', { 'data-testid': 'breadcrumb-segment' });
+    bcSeg2.textContent = 'Build Tools';
+    bcWrap2.appendChild(bcSeg2);
+    const bcWrap3 = doc.createElement('div');
+    const bcSeg3 = doc.createElement('span', { 'data-testid': 'breadcrumb-segment' });
+    bcSeg3.textContent = 'Fix login redirect flow';
+    bcWrap3.appendChild(bcSeg3);
+    multiBcNav.appendChild(bcWrap1);
+    multiBcNav.appendChild(bcWrap2);
+    multiBcNav.appendChild(bcWrap3);
+    rootBody.appendChild(multiBcNav);
+
+    // 4) Sidebar row with prefix status/time + primary title + plain English subtitle line -> ONLY primary title translated
+    const sbRow1 = doc.createElement('div', { 'data-testid': 'conversation-row-sidebar' });
+    const sbStatus = doc.createElement('span');
+    sbStatus.textContent = 'Active';
+    const sbPrimary = doc.createElement('div');
+    sbPrimary.textContent = 'Optimize project performance';
+    const sbSubtitle = doc.createElement('div');
+    sbSubtitle.textContent = 'Updated auth middleware in Client Portal';
+    sbRow1.appendChild(sbStatus);
+    sbRow1.appendChild(sbPrimary);
+    sbRow1.appendChild(sbSubtitle);
+    rootBody.appendChild(sbRow1);
+
+    // 5) Sidebar row whose primary title is already Chinese + English subtitle -> MUST NOT fall through to translate subtitle
+    const sbRowZh = doc.createElement('div', { 'data-testid': 'conversation-row-sidebar' });
+    const sbZhPrimary = doc.createElement('span');
+    sbZhPrimary.textContent = '优化登录重定向流程';
+    const sbZhSubtitle = doc.createElement('span');
+    sbZhSubtitle.textContent = 'Working on payment gateway webhook';
+    sbRowZh.appendChild(sbZhPrimary);
+    sbRowZh.appendChild(sbZhSubtitle);
+    rootBody.appendChild(sbRowZh);
+
+    // 6) History row with explicit data-testid="conversation-title" & subtitle -> ONLY explicit title translated
+    const histRow = doc.createElement('div', { 'data-testid': 'conversation-row-history' });
+    const histWs = doc.createElement('span');
+    histWs.textContent = 'Client Portal';
+    const histTitle = doc.createElement('span', { 'data-testid': 'conversation-title' });
+    histTitle.textContent = 'Debug memory leak in daemon';
+    const histSub = doc.createElement('span', { 'data-testid': 'conversation-subtitle' });
+    histSub.textContent = 'Modified five files yesterday';
+    histRow.appendChild(histWs);
+    histRow.appendChild(histTitle);
+    histRow.appendChild(histSub);
+    rootBody.appendChild(histRow);
+
+    api.sync({ thoughtTranslate: 'machine', thoughtTrigger: 'expand', language: 'zh-CN' });
+    api.setTranslateTitles(true);
+    api.scanImmediate();
+    await new Promise((r) => setTimeout(r, 40));
+
+    assert.equal(sbStudioTitle.textContent, 'Sidebar Studio duplicate row', 'data-ag-prism-sidebar-studio="on" must exclude .ag-prism-sb-* rows');
+    assert.equal(singleBcSeg.textContent, 'Client Portal', 'Single-segment breadcrumb workspace name must never be translated');
+    assert.equal(bcSeg1.textContent, 'Client Portal', 'First breadcrumb segment workspace folder name must never be translated');
+    assert.equal(bcSeg2.textContent, 'Build Tools', 'Middle breadcrumb segment must never be translated');
+    assert.equal(bcSeg3.textContent, '[译] Fix login redirect flow', 'Last segment of multi-segment breadcrumb must be translated');
+    assert.equal(sbStatus.textContent, 'Active');
+    assert.equal(sbPrimary.textContent, '[译] Optimize project performance', 'Sidebar primary title must be translated');
+    assert.equal(sbSubtitle.textContent, 'Updated auth middleware in Client Portal', 'Sidebar subtitle line must never be translated');
+    assert.equal(sbZhPrimary.textContent, '优化登录重定向流程');
+    assert.equal(sbZhSubtitle.textContent, 'Working on payment gateway webhook', 'English subtitle under Chinese primary title must never be translated');
+    assert.equal(histWs.textContent, 'Client Portal');
+    assert.equal(histTitle.textContent, '[译] Debug memory leak in daemon');
+    assert.equal(histSub.textContent, 'Modified five files yesterday');
+    assert.equal(translatedInputs.includes('Client Portal'), false);
+    assert.equal(translatedInputs.includes('Build Tools'), false);
+    assert.equal(translatedInputs.includes('Updated auth middleware in Client Portal'), false);
+    assert.equal(translatedInputs.includes('Working on payment gateway webhook'), false);
+    api.destroy();
+
+    // B) #230 [P1-6] Part 1: thought-client.js late get-cache must NOT overwrite explicit user toggle for translateTitles / translateToolSummaries
+    let resolveLateCache;
+    const lateCachePromise = new Promise((r) => {
+      resolveLateCache = r;
+    });
+    const raceEnv = createMockDomEnv({
+      __agPrismThoughtBridge: {
+        call: async ({ action }) => {
+          if (action === 'get-cache') return lateCachePromise;
+          return { ok: true };
+        },
+        translateStream: async (opts) => {
+          const items = JSON.parse(opts.text).items;
+          return { ok: true, items: items.map((s) => `[译] ${s}`) };
+        },
+        cancelTranslate: async () => ({ ok: true }),
+      },
+    });
+    raceEnv.docEl.setAttribute('data-ag-cs-lang', 'zh-CN');
+    vm.runInNewContext(clientSrc, raceEnv.sandbox);
+    const raceApi = raceEnv.sandbox.__agPrismThought;
+    const raceRow = raceEnv.doc.createElement('div', { 'data-testid': 'conversation-row-sidebar' });
+    const raceTitle = raceEnv.doc.createElement('span');
+    raceTitle.textContent = 'Refactor proxy timeout handling';
+    raceRow.appendChild(raceTitle);
+    raceEnv.rootBody.appendChild(raceRow);
+
+    // Boot triggers get-cache (still pending), then user explicitly enables both switches before get-cache resolves
+    raceApi.sync({ thoughtTranslate: 'machine', thoughtTrigger: 'expand', language: 'zh-CN' });
+    raceApi.setTranslateTitles(true);
+    raceApi.setTranslateToolSummaries(true);
+    raceApi.scanImmediate();
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(raceTitle.textContent, '[译] Refactor proxy timeout handling');
+
+    // Now stale get-cache response arrives with old false values
+    resolveLateCache({ ok: true, entries: {}, translateTitles: false, translateToolSummaries: false });
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(raceApi.getTranslateTitles(), true, 'Late stale get-cache must not overwrite explicit translateTitles=true');
+    assert.equal(raceApi.getTranslateToolSummaries(), true, 'Late stale get-cache must not overwrite explicit translateToolSummaries=true');
+    assert.equal(raceTitle.textContent, '[译] Refactor proxy timeout handling', 'Late stale get-cache must not trigger restoreAllTitles()');
+    raceApi.destroy();
+
+    // C) #230 [P1-6] Part 2: thought-settings-ui.js runDiagnostics before state.loaded waits for real config and never sends OpenAI placeholders
+    const svc = new ThoughtTranslatorService({
+      configDir: tmpDir,
+      proxyEnv: {},
+      fetchImpl: async (url) => {
+        if (String(url).includes('11434/v1/models')) {
+          return new Response(JSON.stringify({ data: [{ id: 'qwen2.5:7b' }] }), { status: 200 });
+        }
+        return new Response('Unauthorized', { status: 401 });
+      },
+    });
+    svc.saveConfig({
+      proxyMode: 'direct',
+      activeProfileId: 'ollama',
+      profiles: [
+        { id: 'ollama', name: 'Local Ollama', baseUrl: 'http://127.0.0.1:11434/v1', apiKey: '', model: 'qwen2.5:7b' },
+      ],
+    });
+
+    const uiSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-settings-ui.js'), 'utf8');
+
+    // Case C1: getConfig() resolves slightly after clicking Diagnose -> waits for real config before calling diagnose()
+    const diagPayloads1 = [];
+    const uiEnv1 = createMockDomEnv({
+      __agPrismThoughtBridge: { call: async () => ({ ok: true }) },
+      __agPrismThought: {
+        getViewMode: () => 'immersive',
+        getLocalCacheStats: () => ({ memEntries: 0 }),
+        getConfig: async () => {
+          await new Promise((r) => setTimeout(r, 35));
+          return svc.getSanitizedConfig();
+        },
+        diagnose: async (payload) => {
+          diagPayloads1.push(payload);
+          return svc.diagnose(payload);
+        },
+      },
+    });
+    vm.runInNewContext(uiSrc, uiEnv1.sandbox);
+    const ui1 = uiEnv1.sandbox.__agPrismThoughtSettingsUi.createThoughtAiConfigBox({
+      mkEl: (t, c) => uiEnv1.doc.createElement(t, c ? { class: c } : {}),
+      btnClass: 'btn',
+      getMode: () => 'ai',
+      getLang: () => 'zh-CN',
+    });
+    uiEnv1.rootBody.appendChild(ui1.box);
+    // Click immediately while state.loaded === false
+    const waitDiagState = async (box, expected, timeoutMs = 1500) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (box.querySelector('[data-testid="thought-diag-connectivity"]').getAttribute('data-state') === expected) return;
+        await new Promise((r) => setTimeout(r, 15));
+      }
+    };
+    ui1.box.querySelector('[data-testid="thought-diagnose-btn"]').click();
+    await waitDiagState(ui1.box, 'ok');
+    assert.equal(diagPayloads1.length, 1);
+    assert.equal(diagPayloads1[0].baseUrl, 'http://127.0.0.1:11434/v1', 'runDiagnostics must await real config instead of sending OpenAI placeholder');
+    assert.equal(diagPayloads1[0].model, 'qwen2.5:7b');
+    assert.equal(ui1.box.querySelector('[data-testid="thought-diag-profile"]').getAttribute('data-state'), 'ok');
+    assert.equal(ui1.box.querySelector('[data-testid="thought-diag-connectivity"]').getAttribute('data-state'), 'ok');
+
+    // Case C2: getConfig() fails (state.loaded stays false) -> runDiagnostics omits placeholder profileId/baseUrl/model/proxyMode so backend uses persisted disk config
+    const diagPayloads2 = [];
+    const uiEnv2 = createMockDomEnv({
+      __agPrismThoughtBridge: { call: async () => ({ ok: true }) },
+      __agPrismThought: {
+        getViewMode: () => 'immersive',
+        getLocalCacheStats: () => ({ memEntries: 0 }),
+        getConfig: async () => ({ ok: false }),
+        diagnose: async (payload) => {
+          diagPayloads2.push(payload);
+          return svc.diagnose(payload);
+        },
+      },
+    });
+    vm.runInNewContext(uiSrc, uiEnv2.sandbox);
+    const ui2 = uiEnv2.sandbox.__agPrismThoughtSettingsUi.createThoughtAiConfigBox({
+      mkEl: (t, c) => uiEnv2.doc.createElement(t, c ? { class: c } : {}),
+      btnClass: 'btn',
+      getMode: () => 'ai',
+      getLang: () => 'zh-CN',
+    });
+    uiEnv2.rootBody.appendChild(ui2.box);
+    ui2.box.querySelector('[data-testid="thought-diagnose-btn"]').click();
+    await waitDiagState(ui2.box, 'ok');
+    assert.equal(diagPayloads2.length, 1);
+    assert.equal('baseUrl' in diagPayloads2[0], false, 'Unloaded runDiagnostics must omit placeholder baseUrl');
+    assert.equal('model' in diagPayloads2[0], false, 'Unloaded runDiagnostics must omit placeholder model');
+    assert.equal('profileId' in diagPayloads2[0], false, 'Unloaded runDiagnostics must omit placeholder profileId');
+    assert.equal('proxyMode' in diagPayloads2[0], false, 'Unloaded runDiagnostics must omit placeholder proxyMode');
+    assert.equal(ui2.box.querySelector('[data-testid="thought-diag-profile"]').getAttribute('data-state'), 'ok');
+    assert.equal(ui2.box.querySelector('[data-testid="thought-diag-connectivity"]').getAttribute('data-state'), 'ok');
 
     svc.dispose();
   } finally {

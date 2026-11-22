@@ -15,6 +15,7 @@ import {
   resolveWallpaperConfigPath,
   validateWallpaperMediaPath,
   verifyMediaMagicBytes,
+  writeConfigFileAtomicSync,
   createWallpaperService,
 } from '../vendor/wallpaper/wallpaper-service.mjs';
 
@@ -1301,5 +1302,529 @@ test('cdp.js Channel 7: WALLPAPER_BINDING, 0 in RUNTIME_PARTS, vm.Script parse, 
     assert.equal(freshCdp.getBundleCacheStats().channelHitsByName.wallpaper, 1);
   } finally {
     fs.rmSync(cacheDir, { recursive: true, force: true });
+  }
+});
+
+// ── 7. Red-Team Regressions (#229 Security + #230 Perf/Compat) ─────────────
+
+test('red-team #229 [P0-1, P1-1, P2-1, P2-3]: NTFS 8.3 short paths, AppData/Local/Antigravity, ReDoS-free strip, malformed ftyp boxSize, DereferenceLinks', () => {
+  const tmpDir = mkTempDir('prism-wp-rt-p01-');
+  try {
+    // 1) /appdata/local/antigravity must be blocked
+    const localAgy = path.join(tmpDir, 'AppData', 'Local', 'Antigravity', 'cache.png');
+    const localRes = validateWallpaperMediaPath(localAgy);
+    assert.equal(localRes.ok, false);
+    assert.equal(localRes.code, 'blocked-sensitive-path');
+
+    // 2) Unexpanded Windows 8.3 short segment (e.g. 1PASSW~1 directory) must fail-closed on Windows
+    const shortDir = path.join(tmpDir, '1PASSW~1');
+    fs.mkdirSync(shortDir, { recursive: true });
+    const shortPng = path.join(shortDir, 'secret.png');
+    fs.writeFileSync(shortPng, makeValidPngBuffer());
+    const shortRes = validateWallpaperMediaPath(shortPng);
+    if (process.platform === 'win32') {
+      assert.equal(shortRes.ok, false, 'Windows 8.3 short segment must fail-closed');
+      assert.equal(shortRes.code, 'blocked-sensitive-path');
+
+      // Real NTFS 8.3 short alias C:\PROGRA~3 expands via realpathSync.native to C:\ProgramData
+      if (fs.existsSync('C:\\PROGRA~3')) {
+        const progDataRes = validateWallpaperMediaPath('C:\\PROGRA~3\\fake-not-used.png');
+        // Either blocked before/after resolution or ENOENT; verify any existing file under PROGRA~3 would be blocked
+        assert.equal(progDataRes.ok, false);
+      }
+    }
+
+    // 3) ReDoS hygiene: zero polynomial /.replace(\/\/+\$/, '')/ in wallpaper-service.mjs + fast linear handling of 40k trailing slashes
+    const svcSrc = fs.readFileSync(path.join(ROOT, 'vendor', 'wallpaper', 'wallpaper-service.mjs'), 'utf8');
+    assert.equal(svcSrc.includes(".replace(/\\/+$/, '')"), false, 'Must not contain polynomial trailing-slash regex');
+    assert.equal(svcSrc.includes('$dlg.DereferenceLinks = $true'), true, 'Windows OpenFileDialog must set DereferenceLinks = $true');
+
+    const t0 = Date.now();
+    const slashDir = 'C:/safe-dir' + '/'.repeat(40000);
+    const slashPng = path.join(tmpDir, 'ok.png');
+    fs.writeFileSync(slashPng, makeValidPngBuffer());
+    const slashRes = validateWallpaperMediaPath(slashPng, { extraBlockedDirs: [slashDir] });
+    const elapsedMs = Date.now() - t0;
+    assert.equal(slashRes.ok, true);
+    assert.ok(elapsedMs < 500, `Trailing slash normalization must be linear, took ${elapsedMs}ms`);
+
+    // 4) Malformed ftyp boxSize (1 or 2..15) must reject even if trailing payload contains valid brand words like 'dash'/'isom'/'avif'
+    for (const badSize of [1, 2, 8, 12, 15]) {
+      const crafted = Buffer.alloc(32, 0);
+      crafted.writeUInt32BE(badSize, 0);
+      crafted.write('ftyp', 4, 'ascii');
+      crafted.write('xxxx', 8, 'ascii');
+      crafted.write('dash', 16, 'ascii');
+      crafted.write('isom', 20, 'ascii');
+      crafted.write('avif', 24, 'ascii');
+      assert.equal(verifyMediaMagicBytes('.mp4', crafted, crafted.length), false, `Must reject .mp4 with boxSize=${badSize}`);
+      assert.equal(verifyMediaMagicBytes('.avif', crafted, crafted.length), false, `Must reject .avif with boxSize=${badSize}`);
+    }
+    // Valid boxSize=16 (minimal ftyp box with major brand only) and boxSize=0 still pass
+    const minValidMp4 = Buffer.alloc(16, 0);
+    minValidMp4.writeUInt32BE(16, 0);
+    minValidMp4.write('ftyp', 4, 'ascii');
+    minValidMp4.write('isom', 8, 'ascii');
+    assert.equal(verifyMediaMagicBytes('.mp4', minValidMp4, minValidMp4.length), true);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('red-team #229 [P0-2, P2-1]: handleHttpRequest prevents read-time TOCTOU (magic spoof, size DoS, parent junction swap), adds sandbox CSP, leaks 0 fds', async () => {
+  const tmpDir = mkTempDir('prism-wp-rt-p02-');
+  const cfgPath = path.join(tmpDir, WALLPAPER_CONFIG_FILENAME);
+  const subDir = path.join(tmpDir, 'media-box');
+  const sensitiveDir = path.join(tmpDir, '.gemini');
+  fs.mkdirSync(subDir, { recursive: true });
+  fs.mkdirSync(sensitiveDir, { recursive: true });
+
+  const mediaFile = path.join(subDir, 'wall.png');
+  const validPng = makeValidPngBuffer(64);
+  fs.writeFileSync(mediaFile, validPng);
+  fs.writeFileSync(path.join(sensitiveDir, 'wall.png'), makeValidPngBuffer(32));
+
+  const svc = createWallpaperService({ configPath: cfgPath, maxImageBytes: 512 });
+  try {
+    const saved = await svc.handleAction('save-config', { enabled: true, mediaPath: mediaFile });
+    assert.equal(saved.ok, true);
+    const url = saved.config.mediaUrl;
+
+    // 1) Normal GET & HEAD carry sandbox CSP header
+    const okRes = await httpRequestRaw(url);
+    assert.equal(okRes.statusCode, 200);
+    assert.equal(okRes.headers['content-security-policy'], "default-src 'none'; sandbox");
+    assert.deepEqual(okRes.body, validPng);
+
+    const headRes = await httpRequestRaw(url, { method: 'HEAD' });
+    assert.equal(headRes.statusCode, 200);
+    assert.equal(headRes.headers['content-security-policy'], "default-src 'none'; sandbox");
+    assert.equal(headRes.body.length, 0);
+
+    // 2) TOCTOU in-place overwrite with sensitive non-media payload -> 403 Invalid media signature
+    fs.writeFileSync(mediaFile, 'PRIVATE_KEY=super-secret-credential-token-12345');
+    const spoofRes = await httpRequestRaw(url);
+    assert.equal(spoofRes.statusCode, 403);
+    assert.equal(spoofRes.body.toString('utf8').includes('super-secret'), false);
+
+    // 3) TOCTOU size inflation beyond maxImageBytes -> 413 Payload Too Large
+    fs.writeFileSync(mediaFile, makeValidPngBuffer(1024));
+    const oversizeRes = await httpRequestRaw(url);
+    assert.equal(oversizeRes.statusCode, 413);
+
+    // 4) Restore valid file then swap parent directory with junction/symlink into .gemini -> 403 Invalid target
+    fs.rmSync(subDir, { recursive: true, force: true });
+    fs.symlinkSync(sensitiveDir, subDir, process.platform === 'win32' ? 'junction' : 'dir');
+    const swapRes = await httpRequestRaw(url);
+    assert.equal(swapRes.statusCode, 403, 'Parent directory junction swap to .gemini must be blocked at read time');
+
+    // 5) Zero fd leak check: swap link & temp files can be removed immediately without EBUSY on Windows
+    fs.rmSync(subDir, { recursive: true, force: true });
+  } finally {
+    await svc.dispose();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('red-team #229 [P0-3]: PRISM_WALLPAPER_CONFIG_PATH boundary enforcement, nlink>1 copyFileSync guard, and caught config-write-failed errors', async () => {
+  const tmpDir = mkTempDir('prism-wp-rt-p03-');
+  const defaultExpected = path.join(os.homedir(), '.gemini', 'config', WALLPAPER_CONFIG_FILENAME);
+  const prevEnv = process.env.PRISM_WALLPAPER_CONFIG_PATH;
+  try {
+    // 1) Disallowed PRISM_WALLPAPER_CONFIG_PATH values must safely fall back to defaultPath
+    const externalDir = path.join(os.homedir(), 'Documents');
+    const symEscapeDir = path.join(tmpDir, 'sym-escape');
+    const outsideTargetDir = path.join(tmpDir, 'real-target');
+    fs.mkdirSync(outsideTargetDir, { recursive: true });
+    fs.symlinkSync(outsideTargetDir, symEscapeDir, process.platform === 'win32' ? 'junction' : 'dir');
+
+    const dangerousEnvPaths = [
+      path.join(os.homedir(), '.gitconfig'),
+      path.join(ROOT, 'package.json'),
+      path.join(os.homedir(), '.gemini', 'config', 'settings.json'),
+      path.join(externalDir, WALLPAPER_CONFIG_FILENAME),
+      '\\\\evil-host\\share\\' + WALLPAPER_CONFIG_FILENAME,
+      '\\\\?\\C:\\temp\\' + WALLPAPER_CONFIG_FILENAME,
+      path.join(tmpDir, 'CON', WALLPAPER_CONFIG_FILENAME),
+      path.join(os.homedir(), '.gemini', 'conversations_archive', WALLPAPER_CONFIG_FILENAME),
+      path.join(os.homedir(), '.gemini', 'prism-knowledge-space', WALLPAPER_CONFIG_FILENAME),
+      path.join(os.homedir(), '.gemini', 'antigravity-spark', WALLPAPER_CONFIG_FILENAME),
+      path.join(tmpDir, '.ssh', WALLPAPER_CONFIG_FILENAME),
+      path.join(symEscapeDir, WALLPAPER_CONFIG_FILENAME),
+    ];
+    for (const badEnv of dangerousEnvPaths) {
+      process.env.PRISM_WALLPAPER_CONFIG_PATH = badEnv;
+      assert.equal(
+        resolveWallpaperConfigPath(),
+        defaultExpected,
+        `Dangerous PRISM_WALLPAPER_CONFIG_PATH must fall back to default: ${badEnv}`
+      );
+    }
+
+    // Valid overrides inside ~/.gemini or os.tmpdir() with exact filename are accepted
+    const validTmpCfg = path.join(tmpDir, 'nested-ok', WALLPAPER_CONFIG_FILENAME);
+    process.env.PRISM_WALLPAPER_CONFIG_PATH = validTmpCfg;
+    assert.equal(resolveWallpaperConfigPath(), path.resolve(validTmpCfg));
+
+    const validGeminiCfg = path.join(os.homedir(), '.gemini', 'config', WALLPAPER_CONFIG_FILENAME);
+    process.env.PRISM_WALLPAPER_CONFIG_PATH = validGeminiCfg;
+    assert.equal(resolveWallpaperConfigPath(), path.resolve(validGeminiCfg));
+
+    // 2) copyFileSync fallback refuses hardlinked target (nlink > 1) and preserves original file
+    const originalFile = path.join(tmpDir, 'precious-original.txt');
+    const hardlinkCfg = path.join(tmpDir, WALLPAPER_CONFIG_FILENAME);
+    fs.writeFileSync(originalFile, 'ORIGINAL_UNTOUCHED_CONTENT');
+    let hardlinkCreated = false;
+    try {
+      fs.linkSync(originalFile, hardlinkCfg);
+      hardlinkCreated = true;
+    } catch {}
+    if (hardlinkCreated && process.platform === 'win32') {
+      const busyFs = {
+        ...fs,
+        renameSync() {
+          const e = new Error('EBUSY simulated');
+          e.code = 'EBUSY';
+          throw e;
+        },
+      };
+      assert.throws(
+        () => writeConfigFileAtomicSync(hardlinkCfg, { ...DEFAULT_WALLPAPER_CONFIG, enabled: true }, busyFs),
+        /hardlinked|nlink/i
+      );
+      assert.equal(fs.readFileSync(originalFile, 'utf8'), 'ORIGINAL_UNTOUCHED_CONTENT');
+    }
+
+    // 3) savePatch & clear-media catch write errors and return { ok: false, code: 'config-write-failed' }
+    const unwritableCfgPath = path.join(tmpDir, 'dir-collision', WALLPAPER_CONFIG_FILENAME);
+    fs.mkdirSync(unwritableCfgPath, { recursive: true }); // directory occupies target file path
+    const errSvc = createWallpaperService({ configPath: unwritableCfgPath });
+    try {
+      const saveFail = await errSvc.handleAction('save-config', { opacity: 0.5 });
+      assert.equal(saveFail.ok, false);
+      assert.equal(saveFail.code, 'config-write-failed');
+
+      const clearFail = await errSvc.handleAction('clear-media');
+      assert.equal(clearFail.ok, false);
+      assert.equal(clearFail.code, 'config-write-failed');
+    } finally {
+      await errSvc.dispose();
+    }
+  } finally {
+    if (prevEnv === undefined) delete process.env.PRISM_WALLPAPER_CONFIG_PATH;
+    else process.env.PRISM_WALLPAPER_CONFIG_PATH = prevEnv;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('red-team #229 [P1-3]: pick-media single-flight mutex, dispose() kills orphan picker child, and get-media-blob async single-flight with concurrency <= 1', async () => {
+  const tmpDir = mkTempDir('prism-wp-rt-p13-');
+  const pngA = path.join(tmpDir, 'a.png');
+  const pngB = path.join(tmpDir, 'b.png');
+  fs.writeFileSync(pngA, makeValidPngBuffer(48));
+  fs.writeFileSync(pngB, makeValidPngBuffer(64));
+
+  // Verify getMediaBlob no longer uses synchronous fs.readFileSync
+  const svcSrc = fs.readFileSync(path.join(ROOT, 'vendor', 'wallpaper', 'wallpaper-service.mjs'), 'utf8');
+  const blobFnIdx = svcSrc.indexOf('async function getMediaBlob');
+  assert.ok(blobFnIdx > 0);
+  assert.equal(svcSrc.slice(blobFnIdx).includes('readFileSync'), false, 'getMediaBlob must be fully async without readFileSync');
+
+  try {
+    // 1) Concurrent pick-media calls share single-flight promise (only 1 child spawned)
+    let spawnCount = 0;
+    let releasePicker = null;
+    const sfSvc = createWallpaperService({
+      configPath: path.join(tmpDir, 'sf-pick.json'),
+      platform: 'win32',
+      execFileImpl(_file, _args, _opts, cb) {
+        spawnCount += 1;
+        releasePicker = () => cb(null, `${pngA}\r\n`, '');
+        return { killed: false, kill() { this.killed = true; } };
+      },
+    });
+    try {
+      const calls = [
+        sfSvc.handleAction('pick-media'),
+        sfSvc.handleAction('pick-media'),
+        sfSvc.handleAction('pick-media'),
+        sfSvc.handleAction('pick-media'),
+      ];
+      await new Promise((r) => setTimeout(r, 10));
+      assert.equal(spawnCount, 1, 'Concurrent pick-media must spawn only 1 OS picker child');
+      releasePicker();
+      const results = await Promise.all(calls);
+      for (const r of results) {
+        assert.equal(r.ok, true);
+        assert.equal(r.config.enabled, true);
+      }
+    } finally {
+      await sfSvc.dispose();
+    }
+
+    // 2) dispose() immediately kills in-flight picker child
+    let killCalls = 0;
+    let pendingCb = null;
+    const killSvc = createWallpaperService({
+      configPath: path.join(tmpDir, 'kill-pick.json'),
+      platform: 'win32',
+      execFileImpl(_file, _args, _opts, cb) {
+        pendingCb = cb;
+        return {
+          killed: false,
+          kill() {
+            killCalls += 1;
+            this.killed = true;
+            const err = new Error('SIGTERM');
+            setTimeout(() => pendingCb(err, '', ''), 0);
+          },
+        };
+      },
+    });
+    const inFlightPick = killSvc.handleAction('pick-media');
+    await new Promise((r) => setTimeout(r, 10));
+    await killSvc.dispose();
+    assert.equal(killCalls, 1, 'dispose() must kill active picker child process');
+    const killedRes = await inFlightPick;
+    assert.equal(killedRes.ok, false);
+    assert.equal(killedRes.code, 'service-disposed');
+
+    // 3) get-media-blob: same-rev single-flight (1 open for 5 concurrent calls) + cross-rev concurrency <= 1
+    let openCalls = 0;
+    let activeOpens = 0;
+    let peakConcurrentOpens = 0;
+    const delayedFsPromises = {
+      async open(p, flags) {
+        openCalls += 1;
+        activeOpens += 1;
+        if (activeOpens > peakConcurrentOpens) peakConcurrentOpens = activeOpens;
+        await new Promise((r) => setTimeout(r, 25));
+        const realFh = await fs.promises.open(p, flags);
+        return {
+          stat: () => realFh.stat(),
+          read: (...a) => realFh.read(...a),
+          async close() {
+            activeOpens -= 1;
+            return realFh.close();
+          },
+        };
+      },
+    };
+
+    const blobSvc = createWallpaperService({
+      configPath: path.join(tmpDir, 'blob-sf.json'),
+      fsPromises: delayedFsPromises,
+    });
+    try {
+      await blobSvc.handleAction('save-config', { enabled: true, mediaPath: pngA });
+      const sameRevResults = await Promise.all([
+        blobSvc.handleAction('get-media-blob'),
+        blobSvc.handleAction('get-media-blob'),
+        blobSvc.handleAction('get-media-blob'),
+        blobSvc.handleAction('get-media-blob'),
+        blobSvc.handleAction('get-media-blob'),
+      ]);
+      assert.equal(openCalls, 1, 'Same-rev concurrent get-media-blob must share 1 single-flight read');
+      assert.equal(peakConcurrentOpens, 1);
+      for (const r of sameRevResults) {
+        assert.equal(r.ok, true);
+        assert.equal(r.mimeType, 'image/png');
+      }
+
+      // Cross-rev concurrent reads must serialize (peak concurrency strictly <= 1)
+      const p1 = blobSvc.handleAction('get-media-blob');
+      await blobSvc.handleAction('save-config', { enabled: true, mediaPath: pngB });
+      const p2 = blobSvc.handleAction('get-media-blob');
+      const [r1, r2] = await Promise.all([p1, p2]);
+      assert.equal(r1.ok, true);
+      assert.equal(r2.ok, true);
+      assert.equal(peakConcurrentOpens, 1, 'Concurrent disk reads across revs must stay capped at 1');
+    } finally {
+      await blobSvc.dispose();
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('red-team #229 [P1-2] & #230 [P0-1, P1-7, P2-3, P2-4]: no bootWpCfg token in expr, sync always refreshes, safe z-index:-1 CSS, bridge-offline recovery, blur=0 filter:none, hasFocus/pointerdown, slot destroy & ctx.lang priority', async () => {
+  // 1) #229 [P1-2]: buildWallpaperExpression never embeds dynamic mediaUrl/token/mediaPath
+  const secretToken = 'deadbeef'.repeat(8);
+  const secretUrl = `http://127.0.0.1:54321/wallpaper/${secretToken}/9`;
+  const secretPath = 'C:/Users/Alice/Pictures/private-wall.png';
+  const exprWithInit = cdp.buildWallpaperExpression(cdp.DEFAULT_CONFIG, {
+    initialWallpaperConfig: {
+      enabled: true,
+      mediaPath: secretPath,
+      mediaType: 'image',
+      mediaUrl: secretUrl,
+      rev: 9,
+    },
+  });
+  assert.equal(exprWithInit.includes(secretToken), false, 'Channel 7 expr must never inline Bearer token');
+  assert.equal(exprWithInit.includes(secretUrl), false, 'Channel 7 expr must never inline mediaUrl');
+  assert.equal(exprWithInit.includes(secretPath), false, 'Channel 7 expr must never inline mediaPath');
+
+  // 2) #230 [P0-1, P1-7, P2-3]: WALLPAPER_CSS structural guards
+  const css = wallpaperClientMod.WALLPAPER_CSS;
+  assert.equal(css.includes('body>:not(#ag-prism-wallpaper-root)'), false, 'Must NOT demote body fixed children to position:relative');
+  assert.equal(css.includes(':has('), false, 'WALLPAPER_CSS must contain 0 :has()');
+  assert.equal(checkBalancedBraces(css), true, 'WALLPAPER_CSS must have balanced braces');
+  assert.match(css, /#ag-prism-wallpaper-root\{[^}]*z-index:-1;[^}]*background:var\(--body-background,var\(--background,#0B0B0E\)\)/);
+  assert.ok(css.includes('>body:not([data-has-browser-hole="true"])'), 'Must make body background transparent when wallpaper is on');
+  assert.ok(css.includes('[data-main-content-body]'), 'Must include [data-main-content-body] translucency for palette="host"');
+  assert.ok(css.includes('aside,[data-testid="sidebar-split"]>div:first-child'), 'Must include sidebar translucency');
+  assert.ok(css.includes('[data-testid="conversation-view"]::before{display:none !important;'), 'Must hide opaque top fade seam on conversation-view');
+  assert.ok(css.includes('filter:var(--ag-prism-wp-filter,blur(4px))'), 'Must drive filter via --ag-prism-wp-filter so blurPx=0 sets filter:none');
+
+  // 3) #229 [P1-2], #230 [P1-7, P2-3]: runtime behavior in DOM sandbox
+  const env = createDomSandbox();
+  env.doc.hasFocus = () => false; // Start blurred
+
+  let getConfigCalls = 0;
+  let remoteConfig = {
+    ...DEFAULT_WALLPAPER_CONFIG,
+    enabled: true,
+    mediaPath: 'C:/wall/v.mp4',
+    mediaType: 'video',
+    mediaUrl: 'http://127.0.0.1:45556/wallpaper/fresh/2',
+    blurPx: 0,
+    rev: 2,
+    serverRunning: true,
+  };
+
+  // Start offline -> refresh() sets lastError = 'bridge-offline'
+  const client = wallpaperClientMod.createWallpaperClient({ window: env.sandbox, document: env.doc });
+  const offlineRes = await client.refresh();
+  assert.equal(offlineRes.offline, true);
+  assert.equal(client.getState().lastError, 'bridge-offline');
+
+  // Reconnect bridge -> even when wallpaper is disabled (needRebuild === false), refresh() clears bridge-offline
+  env.sandbox.__agPrismWallpaperCall = (rawJson) => {
+    const req = JSON.parse(rawJson);
+    if (req.action === 'get-config') {
+      getConfigCalls += 1;
+      setTimeout(() => {
+        env.sandbox.__agPrismWallpaperResolve(req.id, { ok: true, config: remoteConfig });
+      }, 0);
+    }
+  };
+
+  remoteConfig = { ...DEFAULT_WALLPAPER_CONFIG, enabled: false, mediaPath: '', mediaUrl: '', rev: 0 };
+  await client.refresh();
+  assert.equal(client.getState().lastError, '', 'Daemon reconnect must clear stuck bridge-offline even when disabled');
+
+  // Re-test sync(bootCfgWithOldUrl) ALWAYS calls refresh() when online
+  const prevCalls = getConfigCalls;
+  remoteConfig = {
+    ...DEFAULT_WALLPAPER_CONFIG,
+    enabled: true,
+    mediaPath: 'C:/wall/v.mp4',
+    mediaType: 'video',
+    mediaUrl: 'http://127.0.0.1:45556/wallpaper/fresh/3',
+    blurPx: 0,
+    pauseOnBlur: true,
+    rev: 3,
+    serverRunning: true,
+  };
+  client.sync({
+    enabled: true,
+    mediaPath: 'C:/wall/stale.mp4',
+    mediaType: 'video',
+    mediaUrl: 'http://127.0.0.1:45556/wallpaper/stale/1',
+    rev: 1,
+  });
+  await new Promise((r) => setTimeout(r, 25));
+  assert.ok(getConfigCalls > prevCalls, 'sync() must always call refresh() when bridge is online even if bootCfg has mediaUrl');
+  assert.equal(client.getState().rev, 3);
+
+  // blurPx === 0 sets --ag-prism-wp-filter: none; blurPx === 8 sets blur(8px)
+  assert.equal(env.html.style.getPropertyValue('--ag-prism-wp-filter'), 'none');
+  client.previewVisualVars({ blurPx: 8 });
+  assert.equal(env.html.style.getPropertyValue('--ag-prism-wp-filter'), 'blur(8px)');
+  client.previewVisualVars({ blurPx: 0 });
+  assert.equal(env.html.style.getPropertyValue('--ag-prism-wp-filter'), 'none');
+
+  // doc.hasFocus() === false at init pauses video; passive pointerdown resets winBlurred = false and resumes playback
+  const vid = env.doc.querySelector('#ag-prism-wallpaper-root video');
+  assert.ok(vid);
+  assert.equal(vid.paused, true, 'Video must start paused when doc.hasFocus() === false');
+  env.doc.dispatchEvent({ type: 'pointerdown' });
+  assert.equal(vid.paused, false, 'pointerdown on document must reset winBlurred=false and resume video');
+
+  // Also test applyConfig clears bridge-offline when online without rebuild
+  delete env.sandbox.__agPrismWallpaperCall;
+  await client.refresh();
+  assert.equal(client.getState().lastError, 'bridge-offline');
+  env.sandbox.__agPrismWallpaperCall = () => {};
+  client.applyConfig({ ...client.getState() });
+  assert.equal(client.getState().lastError, '', 'applyConfig while online must clear bridge-offline even when needRebuild=false');
+
+  client.destroy();
+  assert.equal(env.docListeners.get('pointerdown')?.size || 0, 0, 'destroy() must clean up pointerdown listener');
+
+  // 4) #230 [P2-4]: resolveLang prefers explicit ctx.lang over ctx.getLang()
+  const langSlot = env.makeNode('div', { 'data-testid': 'prism-wallpaper-slot' });
+  env.body.appendChild(langSlot);
+  const langHandle = wallpaperSettingsUiMod.mountWallpaperUi(langSlot, {
+    window: env.sandbox,
+    document: env.doc,
+    lang: 'ja',
+    getLang: () => 'en',
+  });
+  assert.equal(langHandle.root.getAttribute('data-ag-cs-lang'), 'ja');
+  assert.equal(langHandle.root.querySelector('.ag-prism-wp-title').textContent, wallpaperSettingsUiMod.WALLPAPER_I18N.ja.title);
+  langHandle.destroy();
+
+  // 5) #230 [P2-4]: settings-panel.js destroys old wpSlot handle before existing.remove() on lang switch
+  const dlg = env.makeNode('div', { role: 'dialog' });
+  const panel = env.makeNode('div', { class: 'p-6 flex flex-col gap-4' });
+  const h2 = env.makeNode('h2');
+  h2.textContent = 'Appearance';
+  const wrap = env.makeNode('div', { class: 'flex flex-col gap-8' });
+  const anchorSec = env.makeNode('div', { class: 'space-y-2' });
+  wrap.appendChild(anchorSec);
+  panel.appendChild(h2);
+  panel.appendChild(wrap);
+  dlg.appendChild(panel);
+  env.body.appendChild(dlg);
+
+  let destroyCount = 0;
+  let activeLang = 'en';
+  globalThis.__prismMountWallpaperUi = (slotEl, ctx) => {
+    const h = wallpaperSettingsUiMod.mountWallpaperUi(slotEl, { ...ctx, window: env.sandbox, document: env.doc });
+    const origDestroy = h.destroy.bind(h);
+    h.destroy = () => {
+      destroyCount += 1;
+      origDestroy();
+    };
+    return h;
+  };
+  const origDoc = globalThis.document;
+  globalThis.document = env.doc;
+  try {
+    const mountPanel = () =>
+      settingsPanelMod.mountOrSyncSettingsSection({
+        version: '1.0.7-beta.1',
+        lazyFold: false,
+        getLang: () => activeLang,
+        uiText: () => ({ grpAppearance: 'Appearance', sectionTitle: 'Obsidian Prism' }),
+        isZh: () => activeLang.startsWith('zh'),
+        resolveSettingRowActiveValue: (k) => cdp.DEFAULT_CONFIG[k],
+        isSettingButtonMatch: (_k, vj, cur) => vj === JSON.stringify(cur),
+        saveSetting: () => {},
+        saveSettingsBatch: () => {},
+        formatSettingsSummary: () => 'Obsidian',
+        getThoughtTranslateMode: () => 'off',
+        runGuardedMut: (fn) => fn(),
+      });
+    mountPanel();
+    assert.equal(destroyCount, 0);
+    activeLang = 'zh-CN';
+    mountPanel();
+    assert.equal(destroyCount, 1, 'Language switch rebuild must call old wpSlot.__agPrismWpUiHandle.destroy() before existing.remove()');
+  } finally {
+    globalThis.document = origDoc;
+    delete globalThis.__prismMountWallpaperUi;
   }
 });

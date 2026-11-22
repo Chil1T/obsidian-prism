@@ -112,7 +112,10 @@
 
   const allIgn = (recs) => Array.isArray(recs) && recs.length > 0 && recs.every(isIgnRec);
 
-  const MDL_SEL = '[data-testid="model-selector-panel"],[data-testid="model-selector-trigger"],[role="menu"],[role="listbox"]';
+  const TR_SEL = '[data-testid="model-selector-trigger"],button[aria-label^="Select model"]';
+  const SUB_TID = 'context-menu-submenu-popup';
+  const SUB_SEL = `[data-testid="${SUB_TID}"]`;
+  const MDL_SEL = `[data-testid="model-selector-panel"],${TR_SEL},${SUB_SEL},[role="menu"],[role="listbox"]`;
   function touchesModel(recs) {
     if (!Array.isArray(recs) || !recs.length) return true;
     for (const rec of recs) {
@@ -121,8 +124,8 @@
       if (el?.getAttribute && ((ga(el, 'data-testid') || '').includes('model-selector') || el.closest?.(MDL_SEL))) return true;
       for (const n of rec?.addedNodes || []) {
         if (!n || n.nodeType !== 1 || isIgnTarget(n)) continue;
-        const r = ga(n, 'role') || '';
-        if ((ga(n, 'data-testid') || '').includes('model-selector') || r === 'menu' || r === 'listbox' || r === 'dialog' || n.classList?.contains?.('agy-overlay') || ((n.tagName === 'DIV' || n.tagName === 'BUTTON') && qs(n, MDL_SEL))) return true;
+        const r = ga(n, 'role') || '', tid = ga(n, 'data-testid') || '';
+        if (tid.includes('model-selector') || tid === SUB_TID || r === 'menu' || r === 'listbox' || r === 'dialog' || n.classList?.contains?.('agy-overlay') || ((n.tagName === 'DIV' || n.tagName === 'BUTTON') && qs(n, MDL_SEL))) return true;
       }
     }
     return false;
@@ -134,7 +137,7 @@
       let tm = null, closeTm = null, lastAt = 0, q = [], disc = false, wasOpen = false, curTrig = null;
       const syncTrig = () => {
         if (disc) return;
-        const tr = qs(doc, '[data-testid="model-selector-trigger"],button[aria-label^="Select model"]');
+        const tr = qs(doc, TR_SEL);
         if (!tr || tr === curTrig) return;
         curTrig = tr;
         try { inner.observe(tr, { characterData: true, subtree: true }); } catch {}
@@ -145,7 +148,7 @@
         const batch = q;
         q = [];
         const open = isMenu(doc), closed = wasOpen && !open;
-        if (!Boolean(fSync || closed) && !touchesModel(batch, doc, open)) {
+        if (!Boolean(fSync || closed) && !touchesModel(batch)) {
           wasOpen = open;
           stats.skippedIrrelevant += 1;
           return;
@@ -168,7 +171,7 @@
         stats.rawMutations += 1;
         if (allIgn(recs)) { stats.skippedIrrelevant += 1; return; }
         const open = isMenu(doc), closed = wasOpen && !open;
-        if (!closed && !touchesModel(recs, doc, open)) { stats.skippedIrrelevant += 1; return; }
+        if (!closed && !touchesModel(recs)) { stats.skippedIrrelevant += 1; return; }
         if (Array.isArray(recs)) for (let i = 0; i < recs.length && q.length < 48; i++) q.push(recs[i]);
         const el = Date.now() - lastAt, wMs = open ? MENU_THROTTLE_MS : THROTTLE_MS;
         let subAdded = false;
@@ -176,7 +179,7 @@
           for (const rec of recs) {
             for (const nd of rec?.addedNodes || []) {
               const nr = nd?.nodeType === 1 ? ga(nd, 'role') : '';
-              if (nd?.nodeType === 1 && (nr === 'menu' || nr === 'listbox' || nd.classList?.contains('agy-overlay') || qs(nd, '[role="menu"],[role="listbox"],[role^="menuitem"],[data-testid="context-menu-submenu-popup"],.agy-overlay'))) {
+              if (nd?.nodeType === 1 && (nr === 'menu' || nr === 'listbox' || ga(nd, 'data-testid') === SUB_TID || nd.classList?.contains('agy-overlay') || qs(nd, `[role="menu"],[role="listbox"],[role^="menuitem"],${SUB_SEL},.agy-overlay`))) {
                 subAdded = true;
                 break;
               }

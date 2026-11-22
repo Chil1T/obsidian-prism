@@ -198,8 +198,11 @@
       if (!ed || !text) return;
       safe(() => ed.focus?.());
       let emit = 0;
-      if (isFld(ed)) { ed.value = String(ed.value || '') + text; emit = 1; }
-      else {
+      if (isFld(ed)) {
+        const v = String(ed.value || '') + text, p = W['HTML' + (/^I/i.test(ed.tagName) ? 'Input' : 'TextArea') + 'Element']?.prototype;
+        if (!safe(() => (Object.getOwnPropertyDescriptor(p, 'value').set.call(ed, v), 1))) ed.value = v;
+        emit = 1;
+      } else {
         safe(() => {
           const s = getSel();
           if (s?.removeAllRanges && doc?.createRange) {
@@ -283,6 +286,10 @@
         }
         const pickedFromMenu = !!opt?.click;
         if (pickedFromMenu) safe(() => opt.click());
+        else {
+          const cur = edTxt(ed).toLowerCase();
+          if (cur.startsWith(norm) && cur.slice(norm.length).trimStart().startsWith(norm)) return fail('duplicate-command', cx);
+        }
 
         if (quote) {
           if (pickedFromMenu) {
@@ -296,10 +303,6 @@
         await waitStep();
         const ab = guard();
         if (ab) return ab;
-        if (!pickedFromMenu) {
-          const cur = edTxt(ed).toLowerCase();
-          if (cur.startsWith(norm) && cur.slice(norm.length).replace(/^[ \t]+/, '').startsWith(norm)) return fail('duplicate-command', cx);
-        }
 
         let sendBtn = null;
         for (const sc of [ed.closest?.(BOX), doc]) {
