@@ -36,7 +36,7 @@ jobs:
       - name: Secret & private-path hygiene gate
         shell: bash
         run: |
-          if git grep -nE '(sk-[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})' -- . ':!test/'; then
+          if git grep -nE '(^|[^A-Za-z0-9_-])(sk-[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})' -- . ':!test/'; then
             echo "ERROR: Potential secret token detected in tracked source!"
             exit 1
           fi

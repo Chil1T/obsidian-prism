@@ -911,3 +911,52 @@ test('Issue #36 E2E: PeekContextState invalidates settled proxy cache after /com
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('Red-team R2 regression: proto3 zero-value startStepIndex=0 / checkpointIndex=0 must NOT treat historical checkpoint as post-chat compaction', () => {
+  const response = {
+    trajectory: {
+      cascadeId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      steps: [
+        { type: 'CORTEX_STEP_TYPE_USER_INPUT', status: 'CORTEX_STEP_STATUS_DONE', metadata: { createdAt: '2026-11-22T09:00:00Z' } },
+        {
+          type: 'CORTEX_STEP_TYPE_CHECKPOINT',
+          status: 'CORTEX_STEP_STATUS_DONE',
+          metadata: { createdAt: '2026-11-22T09:30:00Z', completedAt: '2026-11-22T09:30:05Z' },
+          checkpoint: {
+            checkpointIndex: 1,
+            intentOnly: false,
+            userIntent: 'Older compaction summary',
+            summary: 'Compacted earlier history.',
+          },
+        },
+        { type: 'CORTEX_STEP_TYPE_USER_INPUT', status: 'CORTEX_STEP_STATUS_DONE', metadata: { createdAt: '2026-11-22T10:00:00Z' } },
+        { type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE', status: 'CORTEX_STEP_STATUS_DONE', metadata: { createdAt: '2026-11-22T10:05:00Z' } },
+      ],
+      compactionInfo: { compactedAtStepIndices: [1] },
+      generatorMetadata: [
+        {
+          // 模拟 Antigravity protobuf-es：stepIndices 缺失，且未设置的 proto3 标量 startStepIndex/checkpointIndex 序列化为 0
+          chatModel: {
+            model: 'MODEL_PLACEHOLDER_M26',
+            modelDisplayName: 'Gemini 4 Carbon (High)',
+            chatStartMetadata: {
+              createdAt: '2026-11-22T10:04:00Z',
+              startStepIndex: 0,
+              checkpointIndex: 0,
+              contextWindowMetadata: {
+                estimatedTokensUsed: 420000,
+                maxContextTokens: 512000,
+              },
+            },
+            usage: { inputTokens: 420000, outputTokens: 2000 },
+          },
+        },
+      ],
+    },
+  };
+
+  const m = trajectoryMetrics(response);
+  assert.equal(m.context.usedTokens, 420000, 'Historical checkpoint before lastChat must NOT clear real high occupancy');
+  assert.equal(m.context.maxTokens, 512000);
+  assert.notEqual(m.context.compacted, true, 'Must not mark historical checkpoint as post-chat compaction');
+});

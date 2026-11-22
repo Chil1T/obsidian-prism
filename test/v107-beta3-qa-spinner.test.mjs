@@ -483,7 +483,12 @@ test('Task 2, 3, 4 & Invariants: Q&A selected contrast (.bg-secondary.border-bor
   );
   assert.ok(darkQa.includes('width:2.5px'), 'Selected Q&A option must render a prominent 2.5px glowing left indicator bar');
   assert.ok(darkQa.includes('[data-testid$="-shortcut-badge"]'), 'Q&A rule must highlight shortcut badge on selected options');
-  assert.ok(darkQa.includes('[data-testid="ask-question-option-text"]'), 'Q&A rule must brighten selected option text vs dimmed unselected text');
+  assert.ok(darkQa.includes('[data-testid$="-option-text"]'), 'Q&A rule must brighten selected option text vs dimmed unselected text');
+  assert.equal(
+    /(sk-[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/.test(css),
+    false,
+    'style.css must never trip CI secret hygiene regex (e.g. ask-question-option-text matching sk- + 20 chars)'
+  );
   assert.ok(
     darkQa.includes('&:hover:where(:not(.cursor-not-allowed))'),
     'Q&A hover rule must exclude disabled .cursor-not-allowed options without raising specificity above ARIA selected states'

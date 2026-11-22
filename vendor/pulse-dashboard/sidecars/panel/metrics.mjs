@@ -135,18 +135,30 @@ function findPostChatCompaction(response, trajectory, steps, lastChatInfo, lastA
       const cpMs = cpTimeIso ? Date.parse(cpTimeIso) : NaN;
       const cpIdx = safeNonNegInt(cp.checkpointIndex);
       let isAfter = false;
+      const hasStrongAnchor = lastChatInfo && lastChatInfo.maxStepIndex !== null;
+      const hasBothTimes = Boolean(lastChatInfo && Number.isFinite(cpMs) && Number.isFinite(lastChatInfo.createdMs));
       if (!lastChatInfo) {
         isAfter = true;
+      } else if (hasStrongAnchor) {
+        if (i > lastChatInfo.maxStepIndex) isAfter = true;
+        else if (i === lastChatInfo.maxStepIndex) {
+          isAfter =
+            (cpIdx !== null && lastChatInfo.checkpointIndex !== null && lastChatInfo.checkpointIndex > 0 && cpIdx > lastChatInfo.checkpointIndex) ||
+            (hasBothTimes && cpMs > lastChatInfo.createdMs);
+        }
+      } else if (hasBothTimes && cpMs < lastChatInfo.createdMs) {
+        // 无强 stepIndices 锚点时，若 checkpoint 时间早于最新 chat 请求时间则严格否决，避免旧压缩误清高水位
+        isAfter = false;
       } else if (lastChatInfo.anchorStepIndex !== null) {
         if (i > lastChatInfo.anchorStepIndex) isAfter = true;
         else if (i === lastChatInfo.anchorStepIndex) {
           isAfter =
-            (cpIdx !== null && lastChatInfo.checkpointIndex !== null && cpIdx > lastChatInfo.checkpointIndex) ||
-            (Number.isFinite(cpMs) && Number.isFinite(lastChatInfo.createdMs) && cpMs > lastChatInfo.createdMs);
+            (cpIdx !== null && lastChatInfo.checkpointIndex !== null && lastChatInfo.checkpointIndex > 0 && cpIdx > lastChatInfo.checkpointIndex) ||
+            (hasBothTimes && cpMs > lastChatInfo.createdMs);
         }
-      } else if (cpIdx !== null && lastChatInfo.checkpointIndex !== null && cpIdx > lastChatInfo.checkpointIndex) {
+      } else if (cpIdx !== null && lastChatInfo.checkpointIndex !== null && lastChatInfo.checkpointIndex > 0 && cpIdx > lastChatInfo.checkpointIndex) {
         isAfter = true;
-      } else if (Number.isFinite(cpMs) && Number.isFinite(lastChatInfo.createdMs)) {
+      } else if (hasBothTimes) {
         isAfter = cpMs > lastChatInfo.createdMs;
       } else if (lastChatInfo.checkpointIndex !== null && lastChatInfo.checkpointIndex > 0 && cpIdx !== null && cpIdx <= lastChatInfo.checkpointIndex) {
         isAfter = false;
@@ -178,11 +190,17 @@ function findPostChatCompaction(response, trajectory, steps, lastChatInfo, lastA
     const stepTimeIso = firstValidIso(stepAt?.metadata?.completedAt, stepAt?.metadata?.startedAt, stepAt?.metadata?.createdAt, lastActiveAt);
     const stepMs = stepTimeIso ? Date.parse(stepTimeIso) : NaN;
     let idxAfter = false;
+    const hasStrongAnchor = lastChatInfo && lastChatInfo.maxStepIndex !== null;
+    const hasBothTimes = Boolean(lastChatInfo && Number.isFinite(stepMs) && Number.isFinite(lastChatInfo.createdMs));
     if (!lastChatInfo) {
       idxAfter = true;
+    } else if (hasStrongAnchor) {
+      idxAfter = maxCompactedIdx > lastChatInfo.maxStepIndex;
+    } else if (hasBothTimes && stepMs < lastChatInfo.createdMs) {
+      idxAfter = false;
     } else if (lastChatInfo.anchorStepIndex !== null) {
       idxAfter = maxCompactedIdx > lastChatInfo.anchorStepIndex;
-    } else if (Number.isFinite(stepMs) && Number.isFinite(lastChatInfo.createdMs)) {
+    } else if (hasBothTimes) {
       idxAfter = stepMs > lastChatInfo.createdMs;
     } else if (maxCompactedIdx >= Math.max(0, totalSteps - 3)) {
       idxAfter = true;
@@ -357,7 +375,8 @@ export function trajectoryMetrics(response, storage = null) {
         chat,
         maxStepIndex,
         startStepIndex,
-        anchorStepIndex: maxStepIndex !== null ? maxStepIndex : startStepIndex,
+        // proto3 未设置标量常序列化为 0，仅在 startStepIndex > 0 时作为弱回退锚点，避免将 0 误判为有效步序锚点
+        anchorStepIndex: maxStepIndex !== null ? maxStepIndex : (startStepIndex !== null && startStepIndex > 0 ? startStepIndex : null),
         checkpointIndex,
         createdAt,
         createdMs,
