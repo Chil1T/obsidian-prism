@@ -1184,7 +1184,12 @@ test('wallpaper-settings-ui.js: 0 innerHTML, 5 locales, 5+1 anti-translation, an
         version: '1.0.7-beta.2',
         lazyFold: false,
         getLang: () => activeLang,
-        uiText: () => ({ grpAppearance: 'Appearance', sectionTitle: 'Obsidian Prism' }),
+        uiText: () => ({
+          grpAppearance: 'Appearance',
+          grpBeta: 'Beta Features',
+          betaPlaceholderNotice: 'Notice: Beta items are mostly placeholders right now and are not ready for normal use.',
+          sectionTitle: 'Obsidian Prism',
+        }),
         isZh: () => activeLang.startsWith('zh'),
         resolveSettingRowActiveValue: (k) => cdp.DEFAULT_CONFIG[k],
         isSettingButtonMatch: (_k, vj, cur) => vj === JSON.stringify(cur),
@@ -1199,7 +1204,10 @@ test('wallpaper-settings-ui.js: 0 innerHTML, 5 locales, 5+1 anti-translation, an
       assert.ok(mountCalls >= 1, 'settings-panel.js must invoke __prismMountWallpaperUi');
       assert.ok(capturedSlot, 'settings-panel.js must pass [data-testid="prism-wallpaper-slot"]');
       assert.equal(capturedSlot.getAttribute('data-testid'), 'prism-wallpaper-slot');
-      assert.ok(capturedSlot.closest('[data-ag-cs-group="appearance"]'), 'Slot must live inside Appearance group');
+      assert.ok(capturedSlot.closest('[data-ag-cs-group="beta"]'), 'Wallpaper slot must live inside Beta group');
+      assert.equal(capturedSlot.closest('[data-ag-cs-group="appearance"]'), null, 'Wallpaper slot must no longer live inside Appearance group');
+      const betaNotice = env.doc.querySelector('[data-ag-cs-group="beta"] [data-testid="prism-beta-notice"]');
+      assert.ok(betaNotice && /placeholder/i.test(betaNotice.textContent), 'Beta group must render explicit placeholder warning notice');
       assert.equal(lastMountLang, 'en');
 
       // Switch language en -> ja and verify wallpaper UI remounts/syncs with ja locale

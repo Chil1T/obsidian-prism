@@ -261,6 +261,13 @@
       'Beta Features',
       'Beta 機能',
     ],
+    betaPlaceholderNotice: [
+      '提示：Beta 内容目前几乎仅作占位展示，尚未成熟，大多不太能正常使用。',
+      '提示：Beta 內容目前幾乎僅作佔位展示，尚未成熟，大多不太能正常使用。',
+      '提示：Beta 內容目前幾乎只係佔位展示，未算成熟，多數唔太可以正常使用。',
+      'Notice: Beta items are mostly placeholders right now and are not ready for normal use.',
+      '注意：Beta 項目は現在ほぼプレースホルダーであり、通常の利用にはまだ適していません。',
+    ],
     onLabel: ['开启', '開啟', '開啟', 'On', 'オン'],
     offLabel: ['关闭', '關閉', '關閉', 'Off', 'オフ'],
     optAutoCoexist: ['智能兼容', '智慧相容', '智能兼容', 'Auto', '自動互換'],

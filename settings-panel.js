@@ -834,13 +834,20 @@
             if (grp.id === 'thought') {
               thoughtListEl = list;
             }
-            ap(groupsWrap, ap(grpEl, mkEl('div', 'ag-cs-settings-subhead', grp.title), list));
-            if (grp.id === 'appearance') {
+            ap(grpEl, mkEl('div', 'ag-cs-settings-subhead', grp.title));
+            if (grp.id === 'beta') {
+              const bNote = mkEl('div', 'ag-cs-beta-notice', U('betaPlaceholderNotice', 'Notice: Beta items are mostly placeholders and not ready for normal use.'));
+              sa(bNote, 'data-testid', 'prism-beta-notice');
+              ap(grpEl, bNote);
+            }
+            ap(grpEl, list);
+            if (grp.id === 'beta') {
               wpSlot = mkEl('div');
               sa(wpSlot, 'data-testid', K_WP);
               setVis(wpSlot, false);
               ap(grpEl, wpSlot);
             }
+            ap(groupsWrap, grpEl);
           }
 
           const aboutGrp = mkEl('div', 'ag-cs-settings-group');
