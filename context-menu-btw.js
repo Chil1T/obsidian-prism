@@ -16,7 +16,7 @@
   const SIDE_IN = SA + ' ' + CE + ',' + SB + ' ' + CE;
   const EDIT = BOX + ',' + CE + ',input,textarea,select,[role="textbox"],.monaco-editor,.cm-editor';
   const EXCL = EDIT + ',a[href],button,[role="button"],aside,[data-testid="conversation-row-sidebar"],[data-testid="diff-line-count"],[data-ag-diff-chip="1"],' + SIDE + ',[role="dialog"],[role="menu"],.ag-cs-ctx-menu,.ag-cs-diff-ctx-menu,.ag-omni-menu,#ag-prism-settings-sec,#ag-cs-settings-sec,.ces-set,.agy-overlay,[data-ag-zh-widget],.ag-zh-widget,#ag-zh-panel,[data-testid="host-i18n-widget"],img,video,audio,canvas,iframe,.agy-selection-pill';
-  const SLASH = '[role="listbox"] [role="option"],[data-testid="slash-command-menu"] [role="option"]';
+  const SLASH = '[id^="typeahead-item-"][role="option"],[role="listbox"] [role="option"],[data-testid="slash-command-menu"] [role="option"]';
   const SEND = '[data-testid="input-send-button"],[data-testid="send-button"],' + BOX + ' button[type="submit"]';
 
   // [copy, btw, plan, compact, learn, grill-me]
@@ -271,21 +271,30 @@
         const quote = norm === '/compact' ? '' : clip(selectedText, 1200, 1);
         insertText(ed, norm);
 
-        // 最多 4 轮短探测原生斜杠菜单（覆盖 40~160ms React 渲染窗口，命中即停）
-        const re = new RegExp('(?:^|\\s)' + norm + '(?:\\s|$)', 'i');
-        let opt = null;
-        for (let t = 0; t < 4 && !opt; t++) {
+        // 最多 10 轮短探测原生斜杠菜单（兼容 v2.34 typeahead-item-* 无前导 / 的 label 与旧版 listbox，命中即停）
+        const bare = norm.slice(1);
+        const re = new RegExp('(?:^|\\s)/?' + bare.replace('-', '\\-') + '(?:\\s|$)', 'i');
+        let opt = null, pickEl = null;
+        for (let t = 0; t < 10 && !opt; t++) {
           await waitStep();
           const ab = guard();
           if (ab) return ab;
           for (const o of qa(SLASH)) {
+            if (o.getAttribute?.('aria-disabled') === 'true' || qs('[data-testid="menu-category-row"],[aria-disabled="true"]', o)) continue;
+            const le = qs('[data-testid="menu-option-label"]', o);
+            if (le) {
+              const lv = String(le.textContent || '').trim().toLowerCase();
+              if (lv === bare || lv === norm) { opt = o; pickEl = le; break; }
+              continue;
+            }
             const lbl = String(o.textContent || o.getAttribute?.('data-value') || '').trim();
             if (re.test(lbl)) { opt = o; break; }
             if (!opt && lbl.toLowerCase().includes(norm)) opt = o;
           }
         }
-        const pickedFromMenu = !!opt?.click;
-        if (pickedFromMenu) safe(() => opt.click());
+        pickEl = pickEl || opt;
+        const pickedFromMenu = !!pickEl?.click;
+        if (pickedFromMenu) safe(() => pickEl.click());
         else {
           const cur = edTxt(ed).toLowerCase();
           if (cur.startsWith(norm) && cur.slice(norm.length).trimStart().startsWith(norm)) return fail('duplicate-command', cx);

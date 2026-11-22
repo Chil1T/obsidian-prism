@@ -1107,3 +1107,84 @@ test('8. P2-1/P1-3/P1-5 regressions: drag translate3d uses trackEl.clientWidth u
     'ui-runtime.js must trigger thought title scan incrementally on flags.s || flags.g || flags.o when getTranslateTitles() is enabled'
   );
 });
+
+// ── Test 9: Antigravity v2.34 Lexical typeahead-item-* slash menu (no listbox, bare label, inner onClickCapture target) ──
+test('9. context-menu-btw: matches Antigravity v2.34 typeahead-item-* options with bare menu-option-label, skips category/planner, and clicks inner label/row', async () => {
+  const env = createDomEnv();
+  const box = env.makeEl('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const ed = env.makeEl('div', { attrs: { contenteditable: 'true' } });
+  const sendBtn = env.makeEl('button', { attrs: { 'data-testid': 'input-send-button' } });
+  let sendClicks = 0;
+  sendBtn.addEventListener('click', () => { sendClicks += 1; });
+  box.appendChild(ed);
+  box.appendChild(sendBtn);
+  env.body.appendChild(box);
+
+  // Portal container WITHOUT [role="listbox"] or [data-testid="slash-command-menu"] (exact v2.34 structure)
+  const portal = env.makeEl('div', { className: 'agy-overlay' });
+  env.body.appendChild(portal);
+
+  const selectedCommands = [];
+  const mountTypeaheadMenu = (items) => {
+    portal.children.length = 0;
+    items.forEach((it, idx) => {
+      const opt = env.makeEl('div', { attrs: { id: `typeahead-item-${idx}`, role: 'option', 'aria-selected': idx === 0 ? 'true' : 'false' } });
+      const row = env.makeEl('div', {
+        attrs: it.category ? { 'data-testid': 'menu-category-row', 'aria-disabled': 'true' } : {},
+        className: 'flex w-full cursor-pointer',
+      });
+      const lbl = env.makeEl('span', { attrs: { 'data-testid': 'menu-option-label' }, text: it.label });
+      const desc = env.makeEl('span', { attrs: { 'data-testid': 'menu-option-description' }, text: it.desc || '' });
+      // Host attaches React onClickCapture on inner row (clicking outer opt alone never hits it!)
+      lbl.addEventListener('click', () => {
+        if (!it.category) {
+          selectedCommands.push(it.label);
+          ed.textContent = `[SLASH_CHIP:${it.label}] `;
+          portal.children.length = 0;
+        }
+      });
+      row.appendChild(lbl);
+      row.appendChild(desc);
+      opt.appendChild(row);
+      portal.appendChild(opt);
+    });
+  };
+
+  env.setExecCommandHandler((cmd, val) => {
+    if (cmd !== 'insertText') return false;
+    Promise.resolve().then(() => {
+      ed.textContent = (ed.textContent || '') + String(val);
+      if (val === '/compact') {
+        mountTypeaheadMenu([
+          { label: 'Commands', category: true },
+          { label: 'compact', desc: 'Compact conversation context' },
+        ]);
+      } else if (val === '/plan') {
+        mountTypeaheadMenu([
+          { label: 'planner', desc: 'Distractor' },
+          { label: 'plan', desc: 'Create step-by-step plan' },
+        ]);
+      }
+    });
+    return true;
+  });
+
+  const ctl = ctxMenuMod.createContextMenuController({
+    doc: env.doc, win: env.win, nav: env.win.navigator, loc: env.win.location, stepDelayMs: 5,
+  });
+
+  const cRes = await ctl.triggerSlashCommand('/compact', '');
+  assert.deepEqual(cRes, { ok: true, command: '/compact', pickedFromMenu: true, hasQuote: false, submitMethod: 'click-send-button' });
+  assert.deepEqual(selectedCommands, ['compact']);
+  assert.equal(ed.textContent, '[SLASH_CHIP:compact] ');
+  assert.equal(sendClicks, 1);
+
+  ed.textContent = '';
+  const pRes = await ctl.triggerSlashCommand('/plan', 'Need architecture review');
+  assert.deepEqual(pRes, { ok: true, command: '/plan', pickedFromMenu: true, hasQuote: true, submitMethod: 'click-send-button' });
+  assert.deepEqual(selectedCommands, ['compact', 'plan']);
+  assert.equal(ed.textContent, '[SLASH_CHIP:plan] \nNeed architecture review');
+  assert.equal(sendClicks, 2);
+
+  ctl.destroy();
+});
