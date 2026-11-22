@@ -150,6 +150,16 @@
       if (txt !== undefined) e.textContent = txt;
       return e;
     };
+    const markNoTr = (el) => {
+      if (!el) return el;
+      const fn = G.AntigravityCodexEffortSlider?.markNoTranslate;
+      if (fn) return fn(el);
+      for (const k of ['data-ag-i18n-skip', 'data-ag-no-tr', 'data-no-translate']) sa(el, k, '1');
+      sa(el, 'data-translate', 'no');
+      sa(el, 'translate', 'no');
+      el[K_CL]?.add?.('notranslate');
+      return el;
+    };
 
     const getRootHtml = () => {
       return typeof document !== 'undefined' ? document.documentElement : null;
@@ -584,16 +594,16 @@
 
       let bar = qs(panel, '[data-testid="orchestrator-effort-bar"]');
       if (!bar) {
-        bar = mk('div', 'ces-ag-effort-row ag-cs-orch-row');
+        bar = markNoTr(mk('div', 'ces-ag-effort-row ag-cs-orch-row'));
         sa(bar, 'data-testid', 'orchestrator-effort-bar');
         sa(bar, 'data-ag-no-i18n');
         sa(bar, 'data-ag-owned', '1');
 
-        const head = mk('div', 'ces-ag-effort-head ag-cs-orch-head');
-        head.appendChild(mk('span', 'ces-ag-effort-title', isZh() ? '推理等级' : 'Reasoning Effort'));
-        head.appendChild(mk('span', 'ces-ag-effort-value ag-cs-orch-value', 'Auto'));
+        const head = markNoTr(mk('div', 'ces-ag-effort-head ag-cs-orch-head'));
+        head.appendChild(markNoTr(mk('span', 'ces-ag-effort-title', isZh() ? '推理等级' : 'Reasoning Effort')));
+        head.appendChild(markNoTr(mk('span', 'ces-ag-effort-value ag-cs-orch-value', 'Auto')));
 
-        const inline = mk('div', 'ces-inline');
+        const inline = markNoTr(mk('div', 'ces-inline'));
         const track = mk('div', 'ag-cs-orch-track');
         sa(track, 'role', 'status');
         sa(track, 'aria-label', 'Orchestrator Auto');

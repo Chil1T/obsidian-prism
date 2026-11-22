@@ -1606,3 +1606,126 @@ test('Scenario 10 (PR #12 + Issue #16): 三处统一防乒乓 (valEl / effortSpa
   assert.equal(neonRow.effortSpan.__cesLastText, undefined, '_clrAgDom/_unmntSec must clear sib.__cesLastText');
   assert.equal(valEl.__cesLastLabel, undefined, '_unmntSec must clear valEl.__cesLastLabel');
 });
+
+test('Scenario 11 (PR #35 / Issue #34 View Usage false-positive Orchestrator L2 regression): View Usage popup containing Gemini 4 Argon quota rows must never be bound as Orchestrator L2 submenu or switch model to Orchestrator on click', () => {
+  const env = createSimEnv();
+  const neonHigh = { label: 'Gemini 4 Neon (High)', modelId: 'gemini-4-neon-high', value: 1532 };
+  const neonMed = { label: 'Gemini 4 Neon (Medium)', modelId: 'gemini-4-neon-medium', value: 1533 };
+  const argonHigh = { label: 'Gemini 4 Argon (High)', modelId: 'gemini-4-argon-high', value: 1417 };
+  const argonMed = { label: 'Gemini 4 Argon (Medium)', modelId: 'gemini-4-argon-medium', value: 1418 };
+  const argonXHigh = { label: 'Gemini 4 Argon (Extra)', modelId: 'gemini-4-argon-xhigh', value: 1419 };
+  const orchNeon = { label: 'Orchestrator (Neon)', modelId: 'gemini-pro-orchestrator-neon', value: 1537 };
+
+  const planners = [neonHigh, neonMed, argonHigh, argonMed, argonXHigh];
+  const modelOptions = [...planners, orchNeon];
+  let selectedModel = neonHigh;
+  const commits = [];
+  const orchPicks = [];
+
+  const plannerIdx = new Map([
+    ['gemini-4-neon', new Map([['medium', neonMed], ['high', neonHigh]])],
+    ['gemini-4-argon', new Map([['medium', argonMed], ['high', argonHigh], ['xhigh', argonXHigh]])],
+  ]);
+  const selectorCtx = {
+    effortIndex: plannerIdx,
+    modelOptions,
+    get selectedModel() { return selectedModel; },
+    orchestratorPlanners: planners,
+    orchestratorPlannerIndex: plannerIdx,
+    orchestratorDefaultPlanner: neonHigh,
+    orchestratorPick: {
+      model: argonMed.value,
+      select(v) { orchPicks.push(v); this.model = v; },
+    },
+  };
+  const globalModelCtx = {
+    setModelConfigByLabelForConversation(label, convId, keepOpen) {
+      commits.push({ label, convId, keepOpen });
+      selectedModel = modelOptions.find((o) => o.label === label) || selectedModel;
+    },
+  };
+
+  const trigger = env.makeTrigger('Gemini 4 Neon', 'High');
+  env.body.appendChild(trigger);
+  const { panel, listWrap } = env.makePanel();
+  env.addGroupRow(listWrap, 'Gemini 4 Neon', 'High');
+  env.addGroupRow(listWrap, 'Gemini 4 Argon', 'Medium');
+  const orchRow = env.makeEl('div', { attrs: { role: 'menuitem', 'data-testid': 'model-selector-orchestrator' }, text: 'Orchestrator Gemini 4 Argon Medium New' });
+  listWrap.appendChild(orchRow);
+  const viewUsageRow = env.makeEl('div', { attrs: { role: 'menuitem', 'aria-haspopup': 'menu' }, text: 'View Usage' });
+  panel.appendChild(viewUsageRow);
+  env.body.appendChild(panel);
+  env.attachFiberChain(panel, { selectorCtx, convId: 'conv-usage-11', globalModelCtx });
+
+  // Build exact Antigravity v2.34 View Usage nested popup:
+  // outer <div data-side="right" role="presentation"> wrapping <div data-side="right" tabindex="-1" role="menu" class="agy-overlay">
+  const usagePositioner = env.makeEl('div', {
+    className: 'z-[6000]',
+    attrs: { 'data-side': 'right', 'data-align': 'start', 'data-nested': '', role: 'presentation' },
+  });
+  const usageMenu = env.makeEl('div', {
+    className: 'agy-overlay surface-glass bg-card',
+    attrs: { 'data-side': 'right', 'data-align': 'start', 'data-nested': '', tabindex: '-1', role: 'menu' },
+  });
+  const usageBody = env.makeEl('div', {
+    text: 'UsageRefreshing...Gemini ModelsWeekly limit57% leftResets in 5d 14h5h limit97% leftResets in 4h 28mClaude and GPT modelsWeekly limit61% leftResets in 3d 12h5h limit100% leftGemini 4 Argon57% leftWeekly limit, resets in 6d 22h',
+  });
+  const argonLabelSpan = env.makeEl('span', { text: 'Gemini 4 Argon' });
+  usageBody.appendChild(argonLabelSpan);
+  usageMenu.appendChild(usageBody);
+  usagePositioner.appendChild(usageMenu);
+  env.body.appendChild(usagePositioner);
+
+  // Also test a short-text quota card carrying [data-testid="quota-progress-circle"]
+  const quotaCard = env.makeEl('div', { className: 'agy-overlay', attrs: { role: 'menu', 'data-side': 'right' } });
+  const quotaRing = env.makeEl('div', { attrs: { 'data-testid': 'quota-progress-circle' } });
+  const quotaRow = env.makeEl('div', { attrs: { role: 'menuitem' }, text: 'Gemini 4 Argon' });
+  quotaCard.appendChild(quotaRing);
+  quotaCard.appendChild(quotaRow);
+  env.body.appendChild(quotaCard);
+
+  // Also test non-prefix container text ("Usage for Gemini 4 Argon") -> must NOT match prefix-only _mPlan
+  const nonPrefixBox = env.makeEl('div', { attrs: { role: 'menu', 'data-side': 'right' } });
+  const nonPrefixRow = env.makeEl('div', { attrs: { role: 'menuitem' }, text: 'Usage for Gemini 4 Argon' });
+  nonPrefixBox.appendChild(nonPrefixRow);
+  env.body.appendChild(nonPrefixBox);
+
+  const agObs = upstreamLib.installAntigravityObserver({
+    document: env.doc,
+    window: env.win,
+    MutationObserver: env.win.MutationObserver,
+  });
+  agObs.rescan();
+
+  // Neither the outer presentation wrapper nor the inner Usage menu / quota-progress-circle / non-prefix box may be bound as Orchestrator L2
+  assert.equal(usagePositioner.hasAttribute('data-ag-cs-orch-l2'), false, 'Usage positioner must never be tagged data-ag-cs-orch-l2');
+  assert.equal(usageMenu.hasAttribute('data-ag-cs-orch-l2'), false, 'Usage menu must never be tagged data-ag-cs-orch-l2');
+  assert.equal(usageMenu.hasAttribute('data-ces-orch-row'), false, 'Usage menu container must never be tagged data-ces-orch-row');
+  assert.equal(quotaCard.hasAttribute('data-ag-cs-orch-l2'), false, 'Quota card with quota-progress-circle must never be tagged data-ag-cs-orch-l2');
+  assert.equal(nonPrefixBox.hasAttribute('data-ag-cs-orch-l2'), false, 'Non-prefix row "Usage for Gemini 4 Argon" must never match _mPlan');
+
+  // Clicking inside the Usage panel (even without quota-progress-circle testids) must NEVER switch model to Orchestrator
+  env.simulateNativeClick(argonLabelSpan, () => {});
+  env.simulateNativeClick(usageMenu, () => {});
+  env.simulateNativeClick(quotaRow, () => {});
+  env.simulateNativeClick(nonPrefixRow, () => {});
+  assert.equal(selectedModel, neonHigh, 'Active model must remain Gemini 4 Neon (High) after clicking Usage/quota panels');
+  assert.equal(commits.length, 0, 'Clicking Usage panel must trigger 0 model commits');
+  assert.equal(orchPicks.length, 0, 'Clicking Usage panel must trigger 0 orchestratorPick.select calls');
+
+  // Genuine Orchestrator L2 submenu with multi-word tail effort ("Gemini 4 Argon Extra High") still works via linear tail stripping
+  const realL2 = env.makeEl('div', { className: 'agy-overlay', attrs: { role: 'menu', 'data-side': 'right' } });
+  const realArgon = env.makeEl('div', { attrs: { role: 'menuitemradio' }, text: 'Gemini 4 Argon Extra High' });
+  const realNeon = env.makeEl('div', { attrs: { role: 'menuitemradio' }, text: 'Gemini 4 Neon High' });
+  realL2.appendChild(realArgon);
+  realL2.appendChild(realNeon);
+  env.body.appendChild(realL2);
+  agObs.rescan();
+  assert.equal(realL2.getAttribute('data-ag-cs-orch-l2'), '1', 'Real Orchestrator L2 with multi-word tail effort must still bind');
+  assert.equal(realArgon.getAttribute('data-ces-orch-row'), '1', 'Linear tail stripper must recognize "Gemini 4 Argon Extra High"');
+  // Clicking the outer container realL2 directly (it === m / _isBox) must NOT trigger commit
+  env.simulateNativeClick(realL2, () => {});
+  assert.equal(commits.length, 0, 'Clicking outer L2 box itself must not trigger commit');
+
+  agObs.stop();
+});

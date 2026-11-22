@@ -225,17 +225,32 @@ function createManagedTimeoutSignal(timeoutMs) {
 }
 
 function composeAbortSignal(timeoutMs, externalSignal = null) {
-  const timeoutSig = AbortSignal.timeout(timeoutMs);
-  if (!externalSignal) return timeoutSig;
-  if (typeof AbortSignal.any === 'function') {
-    return AbortSignal.any([timeoutSig, externalSignal]);
+  if (!externalSignal) return createManagedTimeoutSignal(timeoutMs);
+  if (externalSignal.aborted) {
+    return { signal: externalSignal, cleanup() {} };
   }
-  if (externalSignal.aborted) return externalSignal;
+  const managed = createManagedTimeoutSignal(timeoutMs);
   const ctl = new AbortController();
-  const abortNow = () => ctl.abort();
-  timeoutSig.addEventListener('abort', abortNow, { once: true });
-  externalSignal.addEventListener('abort', abortNow, { once: true });
-  return ctl.signal;
+  const cleanup = () => {
+    managed.cleanup();
+    try {
+      managed.signal.removeEventListener('abort', onTimeoutAbort);
+    } catch {}
+    try {
+      externalSignal.removeEventListener?.('abort', onExternalAbort);
+    } catch {}
+  };
+  const onTimeoutAbort = () => {
+    cleanup();
+    if (!ctl.signal.aborted) ctl.abort(managed.signal.reason);
+  };
+  const onExternalAbort = () => {
+    cleanup();
+    if (!ctl.signal.aborted) ctl.abort(externalSignal.reason);
+  };
+  managed.signal.addEventListener('abort', onTimeoutAbort, { once: true });
+  externalSignal.addEventListener?.('abort', onExternalAbort, { once: true });
+  return { signal: ctl.signal, cleanup };
 }
 
 export function maskApiKey(rawKey) {
@@ -3561,26 +3576,31 @@ export class ThoughtTranslatorService {
     const url =
       `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(gtxTl)}&dt=t&q=` +
       encodeURIComponent(masked);
-    const res = await this._request(url, {
-      method: 'GET',
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-      redirect: 'error',
-      signal: composeAbortSignal(9000, abortSignal),
-    });
-    if (!res.ok) {
-      try { await res.body?.cancel?.(); } catch {}
-      throw new Error(`Machine translate HTTP ${res.status}`);
+    const reqAbort = composeAbortSignal(9000, abortSignal);
+    try {
+      const res = await this._request(url, {
+        method: 'GET',
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        redirect: 'error',
+        signal: reqAbort.signal,
+      });
+      if (!res.ok) {
+        try { await res.body?.cancel?.(); } catch {}
+        throw new Error(`Machine translate HTTP ${res.status}`);
+      }
+      const rawJsonText = await this._readResponseTextBounded(res, 4 * 1024 * 1024);
+      const json = JSON.parse(rawJsonText);
+      const segs = Array.isArray(json?.[0]) ? json[0] : [];
+      let translated = segs.map((s) => (Array.isArray(s) && s[0] ? String(s[0]) : '')).join('');
+      const restoreRe = new RegExp(`__\\s*${opTag}\\s*_?\\s*(\\d+)\\s*__`, 'gi');
+      translated = translated.replace(restoreRe, (full, n) => {
+        const idx = Number(n);
+        return Number.isInteger(idx) && idx >= 0 && idx < codeSpans.length ? codeSpans[idx] : full;
+      });
+      return translated.trim();
+    } finally {
+      reqAbort.cleanup();
     }
-    const rawJsonText = await this._readResponseTextBounded(res, 4 * 1024 * 1024);
-    const json = JSON.parse(rawJsonText);
-    const segs = Array.isArray(json?.[0]) ? json[0] : [];
-    let translated = segs.map((s) => (Array.isArray(s) && s[0] ? String(s[0]) : '')).join('');
-    const restoreRe = new RegExp(`__\\s*${opTag}\\s*_?\\s*(\\d+)\\s*__`, 'gi');
-    translated = translated.replace(restoreRe, (full, n) => {
-      const idx = Number(n);
-      return Number.isInteger(idx) && idx >= 0 && idx < codeSpans.length ? codeSpans[idx] : full;
-    });
-    return translated.trim();
   }
 
   async translateMachine(rawText, abortSignalOrLang = null, targetLang = 'zh-CN') {
@@ -3677,7 +3697,15 @@ export class ThoughtTranslatorService {
       headers.Authorization = `Bearer ${apiKey}`;
     }
 
+    let activeAbort = null;
+    const cleanupActiveAbort = () => {
+      if (activeAbort) {
+        activeAbort.cleanup();
+        activeAbort = null;
+      }
+    };
     const sendCompletion = (includeDisableThinking) => {
+      cleanupActiveAbort();
       const payload = {
         model,
         stream: true,
@@ -3690,159 +3718,164 @@ export class ThoughtTranslatorService {
       if (includeDisableThinking && noThinkParams) {
         Object.assign(payload, noThinkParams);
       }
+      activeAbort = composeAbortSignal(45000, abortSignal);
       return this._request(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers,
         redirect: 'error',
         body: JSON.stringify(payload),
-        signal: composeAbortSignal(45000, abortSignal),
+        signal: activeAbort.signal,
       });
     };
 
-    let res = await sendCompletion(Boolean(noThinkParams));
-    if (!res.ok && noThinkParams && (res.status === 400 || res.status === 422)) {
-      try { await res.body?.cancel?.(); } catch {}
-      res = await sendCompletion(false);
-    }
-
-    if (!res.ok) {
-      const errBody = await this._readResponseTextBounded(res, 4 * 1024 * 1024).catch(() => '');
-      throw new Error(`AI HTTP ${res.status}: ${redactSecrets(errBody.slice(0, 200), apiKey)}`);
-    }
-
-    const ctype = String(res.headers?.get?.('content-type') || '').toLowerCase();
-    if (!ctype.includes('text/event-stream') || !res.body) {
-      const jsonText = await this._readResponseTextBounded(res, 4 * 1024 * 1024);
-      const json = JSON.parse(jsonText);
-      const full = stripThinkTagsAndQuotes(json?.choices?.[0]?.message?.content || '').slice(0, MAX_STREAM_CHARS);
-      if (full && onPartial) onPartial(full);
-      return { text: full, engine: 'ai', fallback: false };
-    }
-
-    const decoder = new TextDecoder();
-    let buf = '';
-    let acc = '';
-    let lastEmitAt = 0;
-    let totalBytes = 0;
-
-    const processChunk = async (chunk, cancelStream) => {
-      if (abortSignal?.aborted) {
-        try {
-          await cancelStream();
-        } catch {}
-        throw new Error('Translation aborted');
+    try {
+      let res = await sendCompletion(Boolean(noThinkParams));
+      if (!res.ok && noThinkParams && (res.status === 400 || res.status === 422)) {
+        try { await res.body?.cancel?.(); } catch {}
+        res = await sendCompletion(false);
       }
-      const chunkBytes =
-        typeof chunk === 'string'
-          ? Buffer.byteLength(chunk, 'utf8')
-          : chunk?.byteLength ?? chunk?.length ?? 0;
-      totalBytes += chunkBytes;
-      if (totalBytes > MAX_STREAM_BYTES) {
-        try {
-          await cancelStream();
-        } catch {}
-        throw new Error(`AI stream exceeded size limit (${MAX_STREAM_BYTES} bytes)`);
+
+      if (!res.ok) {
+        const errBody = await this._readResponseTextBounded(res, 4 * 1024 * 1024).catch(() => '');
+        throw new Error(`AI HTTP ${res.status}: ${redactSecrets(errBody.slice(0, 200), apiKey)}`);
       }
-      buf += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
-      if (buf.length > MAX_STREAM_CHARS) {
-        buf = buf.slice(0, MAX_STREAM_CHARS);
+
+      const ctype = String(res.headers?.get?.('content-type') || '').toLowerCase();
+      if (!ctype.includes('text/event-stream') || !res.body) {
+        const jsonText = await this._readResponseTextBounded(res, 4 * 1024 * 1024);
+        const json = JSON.parse(jsonText);
+        const full = stripThinkTagsAndQuotes(json?.choices?.[0]?.message?.content || '').slice(0, MAX_STREAM_CHARS);
+        if (full && onPartial) onPartial(full);
+        return { text: full, engine: 'ai', fallback: false };
       }
-      const lines = buf.split(/\r?\n/);
-      buf = lines.pop() || '';
-      let appended = false;
-      let reachedDone = false;
-      for (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (!line || !line.startsWith('data:')) continue;
-        const payload = line.slice(5).trim();
-        if (payload === '[DONE]') {
-          reachedDone = true;
-          break;
+
+      const decoder = new TextDecoder();
+      let buf = '';
+      let acc = '';
+      let lastEmitAt = 0;
+      let totalBytes = 0;
+
+      const processChunk = async (chunk, cancelStream) => {
+        if (abortSignal?.aborted) {
+          try {
+            await cancelStream();
+          } catch {}
+          throw new Error('Translation aborted');
         }
-        try {
-          const obj = JSON.parse(payload);
-          const delta = obj?.choices?.[0]?.delta?.content ?? obj?.choices?.[0]?.message?.content ?? '';
-          if (delta) {
-            acc += delta;
-            appended = true;
-          }
-        } catch {}
-      }
-      if (acc.length >= MAX_STREAM_CHARS) {
-        acc = acc.slice(0, MAX_STREAM_CHARS);
-        try {
-          await cancelStream();
-        } catch {}
-        return true;
-      }
-      if (appended && onPartial) {
-        const now = Date.now();
-        if (now - lastEmitAt >= 48) {
-          const cleaned = stripThinkTagsAndQuotes(acc);
-          if (cleaned) {
-            lastEmitAt = now;
-            onPartial(cleaned);
-          }
+        const chunkBytes =
+          typeof chunk === 'string'
+            ? Buffer.byteLength(chunk, 'utf8')
+            : chunk?.byteLength ?? chunk?.length ?? 0;
+        totalBytes += chunkBytes;
+        if (totalBytes > MAX_STREAM_BYTES) {
+          try {
+            await cancelStream();
+          } catch {}
+          throw new Error(`AI stream exceeded size limit (${MAX_STREAM_BYTES} bytes)`);
         }
-      }
-      if (reachedDone) {
-        try {
-          await cancelStream();
-        } catch {}
-        return true;
-      }
-      return false;
-    };
-
-    if (typeof res.body.getReader === 'function') {
-      const reader = res.body.getReader();
-      const cancelReader = () => reader.cancel();
-      const onStreamAbort = () => {
-        try {
-          void reader.cancel().catch(() => {});
-        } catch {}
-      };
-      if (abortSignal && typeof abortSignal.addEventListener === 'function') {
-        if (abortSignal.aborted) onStreamAbort();
-        else abortSignal.addEventListener('abort', onStreamAbort, { once: true });
-      }
-      try {
-        while (true) {
-          if (abortSignal?.aborted) {
-            try {
-              await reader.cancel();
-            } catch {}
-            throw new Error('Translation aborted');
-          }
-          const { done, value } = await reader.read();
-          if (done) {
-            if (abortSignal?.aborted) throw new Error('Translation aborted');
+        buf += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+        if (buf.length > MAX_STREAM_CHARS) {
+          buf = buf.slice(0, MAX_STREAM_CHARS);
+        }
+        const lines = buf.split(/\r?\n/);
+        buf = lines.pop() || '';
+        let appended = false;
+        let reachedDone = false;
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line || !line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (payload === '[DONE]') {
+            reachedDone = true;
             break;
           }
-          const shouldStop = await processChunk(value, cancelReader);
-          if (shouldStop) break;
-        }
-      } finally {
-        if (abortSignal && typeof abortSignal.removeEventListener === 'function') {
           try {
-            abortSignal.removeEventListener('abort', onStreamAbort);
+            const obj = JSON.parse(payload);
+            const delta = obj?.choices?.[0]?.delta?.content ?? obj?.choices?.[0]?.message?.content ?? '';
+            if (delta) {
+              acc += delta;
+              appended = true;
+            }
           } catch {}
         }
-        try {
-          reader.releaseLock();
-        } catch {}
-      }
-    } else {
-      const cancelBody = () => res.body.cancel?.();
-      for await (const chunk of res.body) {
-        const shouldStop = await processChunk(chunk, cancelBody);
-        if (shouldStop) break;
-      }
-    }
+        if (acc.length >= MAX_STREAM_CHARS) {
+          acc = acc.slice(0, MAX_STREAM_CHARS);
+          try {
+            await cancelStream();
+          } catch {}
+          return true;
+        }
+        if (appended && onPartial) {
+          const now = Date.now();
+          if (now - lastEmitAt >= 48) {
+            const cleaned = stripThinkTagsAndQuotes(acc);
+            if (cleaned) {
+              lastEmitAt = now;
+              onPartial(cleaned);
+            }
+          }
+        }
+        if (reachedDone) {
+          try {
+            await cancelStream();
+          } catch {}
+          return true;
+        }
+        return false;
+      };
 
-    const finalClean = stripThinkTagsAndQuotes(acc).slice(0, MAX_STREAM_CHARS);
-    if (finalClean && onPartial) onPartial(finalClean);
-    return { text: finalClean, engine: 'ai', fallback: false };
+      if (typeof res.body.getReader === 'function') {
+        const reader = res.body.getReader();
+        const cancelReader = () => reader.cancel();
+        const onStreamAbort = () => {
+          try {
+            void reader.cancel().catch(() => {});
+          } catch {}
+        };
+        if (abortSignal && typeof abortSignal.addEventListener === 'function') {
+          if (abortSignal.aborted) onStreamAbort();
+          else abortSignal.addEventListener('abort', onStreamAbort, { once: true });
+        }
+        try {
+          while (true) {
+            if (abortSignal?.aborted) {
+              try {
+                await reader.cancel();
+              } catch {}
+              throw new Error('Translation aborted');
+            }
+            const { done, value } = await reader.read();
+            if (done) {
+              if (abortSignal?.aborted) throw new Error('Translation aborted');
+              break;
+            }
+            const shouldStop = await processChunk(value, cancelReader);
+            if (shouldStop) break;
+          }
+        } finally {
+          if (abortSignal && typeof abortSignal.removeEventListener === 'function') {
+            try {
+              abortSignal.removeEventListener('abort', onStreamAbort);
+            } catch {}
+          }
+          try {
+            reader.releaseLock();
+          } catch {}
+        }
+      } else {
+        const cancelBody = () => res.body.cancel?.();
+        for await (const chunk of res.body) {
+          const shouldStop = await processChunk(chunk, cancelBody);
+          if (shouldStop) break;
+        }
+      }
+
+      const finalClean = stripThinkTagsAndQuotes(acc).slice(0, MAX_STREAM_CHARS);
+      if (finalClean && onPartial) onPartial(finalClean);
+      return { text: finalClean, engine: 'ai', fallback: false };
+    } finally {
+      cleanupActiveAbort();
+    }
   }
 
   _parseNumberedBatchLines(rawOut, expectedCount) {
@@ -4032,7 +4065,15 @@ export class ThoughtTranslatorService {
           const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
           if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
+          let batchAbort = null;
+          const cleanupBatchAbort = () => {
+            if (batchAbort) {
+              batchAbort.cleanup();
+              batchAbort = null;
+            }
+          };
           const sendAiBatch = (includeNoThink) => {
+            cleanupBatchAbort();
             const payload = {
               model,
               stream: false,
@@ -4043,30 +4084,35 @@ export class ThoughtTranslatorService {
               ],
             };
             if (includeNoThink && noThinkParams) Object.assign(payload, noThinkParams);
+            batchAbort = composeAbortSignal(30000, abortController.signal);
             return this._request(`${baseUrl}/chat/completions`, {
               method: 'POST',
               headers,
               redirect: 'error',
               body: JSON.stringify(payload),
-              signal: composeAbortSignal(30000, abortController.signal),
+              signal: batchAbort.signal,
             });
           };
 
-          let res = await sendAiBatch(Boolean(noThinkParams));
-          if (!res.ok && noThinkParams && (res.status === 400 || res.status === 422)) {
-            try { await res.body?.cancel?.(); } catch {}
-            res = await sendAiBatch(false);
-          }
-          if (!res.ok) {
-            const errBody = await this._readResponseTextBounded(res, 4 * 1024 * 1024).catch(() => '');
-            throw new Error(`AI HTTP ${res.status}: ${redactSecrets(errBody.slice(0, 200), apiKey)}`);
-          }
-          const jsonText = await this._readResponseTextBounded(res, 4 * 1024 * 1024);
-          const json = JSON.parse(jsonText);
-          const rawReply = stripThinkTagsAndQuotes(json?.choices?.[0]?.message?.content || '');
-          const parsedLines = this._parseNumberedBatchLines(rawReply, pendingList.length);
-          for (let k = 0; k < pendingList.length; k++) {
-            translatedMasked[k] = parsedLines[k] || '';
+          try {
+            let res = await sendAiBatch(Boolean(noThinkParams));
+            if (!res.ok && noThinkParams && (res.status === 400 || res.status === 422)) {
+              try { await res.body?.cancel?.(); } catch {}
+              res = await sendAiBatch(false);
+            }
+            if (!res.ok) {
+              const errBody = await this._readResponseTextBounded(res, 4 * 1024 * 1024).catch(() => '');
+              throw new Error(`AI HTTP ${res.status}: ${redactSecrets(errBody.slice(0, 200), apiKey)}`);
+            }
+            const jsonText = await this._readResponseTextBounded(res, 4 * 1024 * 1024);
+            const json = JSON.parse(jsonText);
+            const rawReply = stripThinkTagsAndQuotes(json?.choices?.[0]?.message?.content || '');
+            const parsedLines = this._parseNumberedBatchLines(rawReply, pendingList.length);
+            for (let k = 0; k < pendingList.length; k++) {
+              translatedMasked[k] = parsedLines[k] || '';
+            }
+          } finally {
+            cleanupBatchAbort();
           }
         }
 

@@ -1190,7 +1190,7 @@ test('9. context-menu-btw: matches Antigravity v2.34 typeahead-item-* options wi
 });
 
 // ── Test 10: Issue #31 anti-flicker & first-frame anti-translation regression ──
-test('10. upstream-client (Issue #31): _mntSec stamps 5+1 no-translate attrs before DOM insertion, bilingual synonyms (Medium <-> 中) never trigger rise flicker, real tier change updates with bounded <=22% rise & overflow:hidden clip', () => {
+test('10. upstream-client (Issue #31): _mntSec stamps 5+1 no-translate attrs before DOM insertion, bilingual synonyms (Medium <-> 中) never trigger rise flicker, real tier change updates with bounded <=22% rise & overflow-y:clip margin', () => {
   const REQUIRED_NO_TR_ATTRS = [
     ['data-ag-i18n-skip', '1'],
     ['data-ag-no-tr', '1'],
@@ -1262,7 +1262,7 @@ test('10. upstream-client (Issue #31): _mntSec stamps 5+1 no-translate attrs bef
   });
   assert.equal(insertedSnapshotOk, true, '_mntSec must stamp 5+1 anti-translation attributes synchronously before DOM insertion');
 
-  // Verify SLIDER_CSS bounds rise animation displacement <= 22% and clips .ces-ag-effort-head with overflow:hidden
+  // Verify SLIDER_CSS bounds rise animation displacement <= 22% and clips .ces-ag-effort-head with overflow-y:clip + overflow-clip-margin:10px (without hard-clipping Max glow)
   const styleEl = env.doc.getElementById('ag-codex-effort-slider-styles');
   assert.ok(styleEl, 'SLIDER_CSS style element must be installed');
   const css = styleEl.textContent;
@@ -1273,7 +1273,8 @@ test('10. upstream-client (Issue #31): _mntSec stamps 5+1 no-translate attrs bef
   for (const pct of yMatches) {
     assert.ok(pct <= 22 && pct >= -10, `ces-claude-rise translateY(${pct}%) must stay bounded within [-10%, 22%] to prevent bleeding into slider track`);
   }
-  assert.match(css, /\.ces-ag-effort-head\{[^}]*overflow:hidden/, '.ces-ag-effort-head must apply overflow:hidden to clip value text transition');
+  assert.match(css, /\.ces-ag-effort-head\{[^}]*overflow-y:clip;overflow-clip-margin:10px/, '.ces-ag-effort-head must use overflow-y:clip + overflow-clip-margin:10px so Max glow is not hard-clipped');
+  assert.doesNotMatch(css, /\.ces-ag-effort-head\{[^}]*overflow:hidden/, '.ces-ag-effort-head must not hard-clip is-glowing with overflow:hidden');
 
   agObs.stop();
 
@@ -1371,4 +1372,226 @@ test('10. upstream-client (Issue #31): _mntSec stamps 5+1 no-translate attrs bef
   mount.unmount();
   assert.equal(valEl.__cesLastLabel, undefined);
   assert.equal(valEl.__cesLastKey, undefined);
+});
+
+// ── Test 11: Red-team #255 P1 #6 (Adaptive + fixed locked key) & P1 #7 (markNoTranslate idempotence + orchestrator-effort-bar 5+1) ──
+test('11. Red-team #255 P1 #6/#7: Adaptive <-> 自适应 zero-flicker, Medium -> Adaptive / GPT-OSS 120B (sE="fixed") never stalls, markNoTranslate is idempotent (0 redundant setAttribute), and orchestrator-effort-bar carries 5+1 no-translate attrs pre-insert', () => {
+  const REQUIRED_NO_TR_ATTRS = [
+    ['data-ag-i18n-skip', '1'],
+    ['data-ag-no-tr', '1'],
+    ['data-no-translate', '1'],
+    ['data-translate', 'no'],
+    ['translate', 'no'],
+  ];
+
+  // (a) slider-coexist EFF_MAP & EFF_LABELS map Adaptive / 自适应 / 自適應 cleanly
+  for (const raw of ['Claude Sonnet (Adaptive)', 'Claude Sonnet (自适应)', 'Claude Sonnet (自適應)']) {
+    const parsed = sliderCoexist.parseLocalizedModelLabel(raw);
+    assert.equal(parsed.effort, 'adaptive', `${raw} must map to effort="adaptive"`);
+    assert.equal(parsed.effortLabel, 'Adaptive', `${raw} must map to effortLabel="Adaptive"`);
+    assert.equal(parsed.canonicalLabel, 'Claude Sonnet (Adaptive)');
+  }
+
+  // (b) Adaptive <-> 自适应 <-> 自適應 zero-flicker, Medium -> Adaptive (even with fallback effort="medium"), and Medium -> GPT-OSS 120B (locked single-tier)
+  const mEnv = createDomEnv({ virtualTimers: true });
+  const rowEl = mEnv.makeEl('div', { className: 'ces-ag-effort-row' });
+  const valEl = mEnv.makeEl('span', { className: 'ces-ag-effort-value' });
+  const container = mEnv.makeEl('div', { className: 'ces-inline' });
+  rowEl.appendChild(valEl);
+  rowEl.appendChild(container);
+  mEnv.body.appendChild(rowEl);
+
+  let riseAdds = 0;
+  const origClassAdd = valEl.classList.add.bind(valEl.classList);
+  valEl.classList.add = (...cs) => {
+    if (cs.includes('ces-text-rise')) riseAdds += 1;
+    return origClassAdd(...cs);
+  };
+
+  let curLevels = [
+    { effort: 'low', label: 'Low' },
+    { effort: 'medium', label: 'Medium' },
+    { effort: 'high', label: 'High' },
+  ];
+  let curEffort = 'medium';
+  let curLocked = false;
+  const mount = upstreamLib.mountCodexEffortSlider({
+    container,
+    row: rowEl,
+    valueElement: valEl,
+    document: mEnv.doc,
+    window: mEnv.win,
+    seat: {
+      isClaude: false,
+      get locked() { return curLocked; },
+      get effortLevels() { return curLevels; },
+      get currentEffort() { return curEffort; },
+      selectEffort() {},
+    },
+  });
+  assert.equal(valEl.textContent, 'Medium');
+  assert.equal(riseAdds, 0);
+
+  // Switch Medium -> Adaptive (even if seat reports fallback effort="medium") -> MUST NOT stall on "Medium"
+  curLevels = [
+    { effort: 'medium', label: 'Adaptive' },
+    { effort: 'high', label: 'High' },
+  ];
+  curEffort = 'medium';
+  mount.refresh();
+  assert.equal(valEl.textContent, 'Adaptive', 'Medium -> Adaptive must update value text even when seat effort falls back to "medium"');
+  assert.equal(riseAdds, 1, 'Medium -> Adaptive real change triggers 1 rise animation');
+  mEnv.flushTimers(300);
+
+  // Bilingual Adaptive <-> 自适应 <-> 自適應 oscillation -> 0 rise animations & 0 ping-pong overwrites
+  for (const [seatLbl, domTxt] of [
+    ['自适应', '自适应'],
+    ['Adaptive', '自适应'],
+    ['自適應', '自適應'],
+    ['Adaptive', 'Adaptive'],
+  ]) {
+    curLevels = [{ effort: 'adaptive', label: seatLbl }, { effort: 'high', label: 'High' }];
+    curEffort = 'adaptive';
+    valEl.textContent = domTxt;
+    mount.refresh();
+    mEnv.flushRafs(16);
+    assert.equal(valEl.classList.contains('ces-text-rise'), false, `Adaptive synonym "${seatLbl}" must never trigger rise flicker`);
+  }
+  assert.equal(riseAdds, 1, 'Adaptive <-> 自适应 <-> 自適應 must produce 0 extra rise animations');
+
+  // Switch back to Medium, then switch to unparenthesized single-tier locked model GPT-OSS 120B (sE="fixed")
+  curLevels = [{ effort: 'low', label: 'Low' }, { effort: 'medium', label: 'Medium' }];
+  curEffort = 'medium';
+  curLocked = false;
+  mount.refresh();
+  assert.equal(valEl.textContent, 'Medium');
+  mEnv.flushTimers(300);
+
+  const gptOssSingle = { label: 'GPT-OSS 120B', modelId: 'gpt-oss-120b', value: 901 };
+  const gptProf = upstreamLib.resolveModelEffortProfile(
+    { effortIndex: new Map(), modelOptions: [gptOssSingle], selectedModel: gptOssSingle },
+    gptOssSingle
+  );
+  assert.equal(gptProf.locked, true);
+  assert.equal(gptProf.currentEffort, 'fixed', 'Unparenthesized single-tier locked model must use sE="fixed" instead of "medium"');
+  assert.equal(gptProf.levels[0].effort, 'fixed');
+
+  curLevels = gptProf.levels;
+  curEffort = gptProf.currentEffort;
+  curLocked = gptProf.locked;
+  mount.refresh();
+  assert.equal(valEl.textContent, gptProf.currentLabel, 'Medium -> GPT-OSS 120B must update value text to Fixed/固定 (no "medium" key collision)');
+
+  // Also switch Medium -> unknown unmapped label "Turbo" (even with effort="medium") -> !_sameEffTxt updates cleanly
+  curLevels = [{ effort: 'medium', label: 'Medium' }];
+  curEffort = 'medium';
+  mount.refresh();
+  assert.equal(valEl.textContent, 'Medium');
+  curLevels = [{ effort: 'medium', label: 'Turbo' }];
+  curEffort = 'medium';
+  mount.refresh();
+  assert.equal(valEl.textContent, 'Turbo', 'Medium -> unknown label must still update text via !_sameEffTxt guard');
+  mount.unmount();
+
+  // (c) P1 #7: markNoTranslate idempotence — 0 redundant setAttribute / classList.add on already-marked nodes, incremental fill on partial nodes
+  const nEnv = createDomEnv();
+  const node = nEnv.makeEl('div', { className: 'ces-ag-effort-row' });
+  let setAttrCount = 0;
+  let clsAddCount = 0;
+  const origSetAttr = node.setAttribute.bind(node);
+  const origClsAdd = node.classList.add.bind(node.classList);
+  node.setAttribute = (k, v) => { setAttrCount += 1; return origSetAttr(k, v); };
+  node.classList.add = (...cs) => { clsAddCount += 1; return origClsAdd(...cs); };
+
+  upstreamLib.markNoTranslate(node);
+  assert.ok(setAttrCount >= 5, 'First markNoTranslate call stamps all anti-translation attributes');
+  assert.equal(clsAddCount, 1);
+
+  const afterFirstSet = setAttrCount;
+  const afterFirstCls = clsAddCount;
+  for (let i = 0; i < 10; i++) upstreamLib.markNoTranslate(node);
+  assert.equal(setAttrCount, afterFirstSet, 'Repeated markNoTranslate calls must short-circuit with 0 setAttribute calls');
+  assert.equal(clsAddCount, afterFirstCls, 'Repeated markNoTranslate calls must short-circuit with 0 classList.add calls');
+
+  // Partial node (has 2 of 8 attrs + notranslate): only missing attrs are written
+  const partialNode = nEnv.makeEl('span', { className: 'notranslate', attrs: { 'data-ag-i18n-skip': '1', translate: 'no' } });
+  const writtenKeys = [];
+  const origPSet = partialNode.setAttribute.bind(partialNode);
+  partialNode.setAttribute = (k, v) => { writtenKeys.push(k); return origPSet(k, v); };
+  upstreamLib.markNoTranslate(partialNode);
+  assert.equal(writtenKeys.includes('data-ag-i18n-skip'), false, 'markNoTranslate must not rewrite already-equal data-ag-i18n-skip');
+  assert.equal(writtenKeys.includes('translate'), false, 'markNoTranslate must not rewrite already-equal translate');
+  assert.equal(writtenKeys.includes('data-antigravity-zh-skip'), true, 'markNoTranslate must fill missing attributes');
+
+  // (d) P1 #7: model-glyph-crystal.js stamps 5+1 anti-translation attributes on [data-testid="orchestrator-effort-bar"] BEFORE DOM insertion
+  for (const withUpstream of [false, true]) {
+    const mgcEnv = createDomEnv();
+    const prevDoc = globalThis.document;
+    const prevPerf = globalThis.performance;
+    const prevRaf = globalThis.requestAnimationFrame;
+    const prevCaf = globalThis.cancelAnimationFrame;
+    const prevUp = globalThis.AntigravityCodexEffortSlider;
+    globalThis.document = mgcEnv.doc;
+    globalThis.performance = mgcEnv.win.performance;
+    globalThis.requestAnimationFrame = mgcEnv.win.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = mgcEnv.win.cancelAnimationFrame;
+    if (withUpstream) globalThis.AntigravityCodexEffortSlider = upstreamLib;
+    else delete globalThis.AntigravityCodexEffortSlider;
+    try {
+      const panel = mgcEnv.makeEl('div', { attrs: { 'data-testid': 'model-selector-panel' } });
+      const orchItem = mgcEnv.makeEl('div', { attrs: { role: 'menuitem', 'data-testid': 'model-selector-orchestrator', 'data-selected': 'true' }, text: 'Orchestrator' });
+      panel.appendChild(orchItem);
+      mgcEnv.body.appendChild(panel);
+
+      let checkedPreInsert = false;
+      const origAppend = panel.appendChild.bind(panel);
+      panel.appendChild = (ch) => {
+        if (ch.getAttribute?.('data-testid') === 'orchestrator-effort-bar') {
+          for (const target of [
+            ch,
+            ch.querySelector('.ces-ag-effort-head'),
+            ch.querySelector('.ces-ag-effort-title'),
+            ch.querySelector('.ces-ag-effort-value'),
+            ch.querySelector('.ces-inline'),
+          ]) {
+            assert.ok(target, 'orchestrator-effort-bar child must exist before insertion');
+            for (const [k, v] of REQUIRED_NO_TR_ATTRS) {
+              assert.equal(target.getAttribute(k), v, `orchestrator-effort-bar (withUpstream=${withUpstream}) must carry ${k}="${v}" before insertion`);
+            }
+            assert.equal(target.classList.contains('notranslate'), true, `orchestrator-effort-bar (withUpstream=${withUpstream}) must carry notranslate before insertion`);
+          }
+          checkedPreInsert = true;
+        }
+        return origAppend(ch);
+      };
+
+      const mCtl = mgcMod.createModelGlyphCrystalController({
+        animatedIcons: null,
+        crystalPrismCore: {
+          mountCrystalPrismBar() {
+            return { step() {}, isIdle: () => true, setPointerClient() {}, setReduceMotion() {}, wake() {}, dispose() {} };
+          },
+        },
+        isDestroyed: () => false,
+        isComposerRestyleEnabled: () => true,
+        isZh: () => true,
+        isDarkTheme: () => true,
+        motionReduced: () => false,
+        getMinFrameGapMs: () => 0,
+        canMountRealCanvas: () => false,
+        getLastPointerPos: () => null,
+        setAttrIfChanged: (el, k, v) => el.setAttribute(k, v),
+      });
+      mCtl.syncModelSelectorPanel({ brand: 'antigravity', tier: 'auto', isOrchestrator: true });
+      assert.equal(checkedPreInsert, true, `orchestrator-effort-bar pre-insert 5+1 check must run (withUpstream=${withUpstream})`);
+      mCtl.teardownCrystalMount();
+    } finally {
+      globalThis.document = prevDoc;
+      globalThis.performance = prevPerf;
+      globalThis.requestAnimationFrame = prevRaf;
+      globalThis.cancelAnimationFrame = prevCaf;
+      if (prevUp === undefined) delete globalThis.AntigravityCodexEffortSlider;
+      else globalThis.AntigravityCodexEffortSlider = prevUp;
+    }
+  }
 });

@@ -3149,3 +3149,177 @@ test('17) Red-team #230 regressions: sidebarStudio attr, breadcrumb last-segment
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('18) Red-team #256 [P1 #7]: composeAbortSignal uses managed ref-d timeout across GTX/AI-non-stream/AI-stream/batch with 0 leaked timers or abort listeners', async () => {
+  const svcSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'thought-translator', 'translator-service.mjs'), 'utf8');
+  assert.equal(svcSrc.includes('AbortSignal.timeout('), false, 'translator-service.mjs must have 0 native AbortSignal.timeout() calls');
+  const managedFnMatch = /function createManagedTimeoutSignal\([\s\S]*?\n\}/.exec(svcSrc);
+  assert.ok(managedFnMatch, 'createManagedTimeoutSignal must exist');
+  assert.equal(managedFnMatch[0].includes('.unref('), false, 'createManagedTimeoutSignal must keep ref-d timer (never call timer.unref())');
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-managed-abort-'));
+  const origSetTimeout = globalThis.setTimeout;
+  const origClearTimeout = globalThis.clearTimeout;
+  const activeTimers = new Map();
+  const countReqTimeouts = () => [...activeTimers.values()].filter((ms) => ms === 9000 || ms === 30000 || ms === 45000 || ms === 45).length;
+
+  globalThis.setTimeout = (...args) => {
+    const ms = Number(args[1]) || 0;
+    const wrappedCb = () => {
+      activeTimers.delete(id);
+      return args[0]();
+    };
+    const id = origSetTimeout(wrappedCb, ...args.slice(1));
+    activeTimers.set(id, ms);
+    return id;
+  };
+  globalThis.clearTimeout = (id) => {
+    activeTimers.delete(id);
+    return origClearTimeout(id);
+  };
+
+  try {
+    let aiAttempts = 0;
+    let batchAttempts = 0;
+    const svc = new ThoughtTranslatorService({
+      configDir: tmpDir,
+      proxyEnv: {},
+      fetchImpl: async (url, init = {}) => {
+        const u = String(url);
+        if (u.includes('translate.googleapis.com')) {
+          return new Response(JSON.stringify([[['你好世界', 'Hello world']]]), { status: 200 });
+        }
+        if (u.includes('/hang-external')) {
+          return new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(init.signal.reason || new Error('Aborted')), { once: true });
+          });
+        }
+        if (u.includes('/models')) {
+          return new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(init.signal.reason || new Error('Aborted')), { once: true });
+          });
+        }
+        if (u.includes('/chat/completions')) {
+          const body = JSON.parse(String(init.body || '{}'));
+          if (body.stream === false) {
+            batchAttempts += 1;
+            if (batchAttempts === 1) {
+              return new Response('Bad Request: unsupported enable_thinking', { status: 400 });
+            }
+            return new Response(JSON.stringify({ choices: [{ message: { content: '[0] 读取配置文件' } }] }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            });
+          }
+          aiAttempts += 1;
+          if (aiAttempts === 1) {
+            return new Response('Bad Request: unsupported enable_thinking', { status: 400 });
+          }
+          if (aiAttempts === 2) {
+            return new Response(JSON.stringify({ choices: [{ message: { content: '非流式译文' } }] }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            });
+          }
+          const enc = new TextEncoder();
+          const stream = new ReadableStream({
+            start(controller) {
+              controller.enqueue(enc.encode('data: {"choices":[{"delta":{"content":"流式"}}]}\n\n'));
+              controller.enqueue(enc.encode('data: {"choices":[{"delta":{"content":"译文"}}]}\n\n'));
+              controller.enqueue(enc.encode('data: [DONE]\n\n'));
+              controller.close();
+            },
+          });
+          return new Response(stream, {
+            status: 200,
+            headers: { 'content-type': 'text/event-stream' },
+          });
+        }
+        return new Response('Not Found', { status: 404 });
+      },
+    });
+
+    svc.saveConfig({
+      proxyMode: 'direct',
+      activeProfileId: 'qwen-local',
+      profiles: [
+        { id: 'qwen-local', name: 'Qwen Local', baseUrl: 'http://127.0.0.1:11434/v1', apiKey: '', model: 'qwen3:8b' },
+      ],
+    });
+
+    // 1) GTX machine translate cleans up 9s managed timeout
+    const gtxOut = await svc.translateMachine('Analyze the performance bottleneck carefully', null, 'zh-CN');
+    assert.equal(gtxOut, '你好世界');
+    assert.equal(countReqTimeouts(), 0, 'GTX translateMachine must leave 0 active timeout timers');
+
+    // 2) AI non-streaming (including 400 noThink retry) cleans up BOTH 45s managed timeouts
+    const aiNonStream = await svc.translateAiStream('Thinking step one carefully', null, null, 'zh-CN');
+    assert.equal(aiNonStream.text, '非流式译文');
+    assert.equal(aiAttempts, 2, 'AI non-stream must exercise 400 retry branch');
+    assert.equal(countReqTimeouts(), 0, 'AI non-stream + retry must leave 0 active timeout timers');
+
+    // 3) AI streaming cleans up 45s managed timeout after stream drains
+    const partials = [];
+    const aiStream = await svc.translateAiStream('Thinking step two carefully', (s) => partials.push(s), null, 'zh-CN');
+    assert.equal(aiStream.text, '流式译文');
+    assert.equal(countReqTimeouts(), 0, 'AI streaming must leave 0 active timeout timers');
+
+    // 4) AI tool-summary batch (including 400 noThink retry) cleans up BOTH 30s managed timeouts
+    const batchRes = await svc.translateToolSummariesBatch({
+      items: ['Read config file'],
+      mode: 'ai',
+      targetLang: 'zh-CN',
+    });
+    assert.equal(batchRes.ok, true);
+    assert.equal(batchRes.items[0], '读取配置文件');
+    assert.equal(batchAttempts, 2, 'AI batch must exercise 400 retry branch');
+    assert.equal(countReqTimeouts(), 0, 'AI batch + retry must leave 0 active timeout timers');
+
+    // 5) External AbortSignal listener is removed on normal completion AND timer is cleared on early external abort
+    const extCtl = new AbortController();
+    let extAdds = 0;
+    let extRemoves = 0;
+    const origAdd = extCtl.signal.addEventListener.bind(extCtl.signal);
+    const origRem = extCtl.signal.removeEventListener.bind(extCtl.signal);
+    extCtl.signal.addEventListener = (...a) => { extAdds += 1; return origAdd(...a); };
+    extCtl.signal.removeEventListener = (...a) => { extRemoves += 1; return origRem(...a); };
+
+    await svc.translateMachine('Analyze the performance bottleneck carefully', extCtl.signal, 'zh-CN');
+    assert.equal(countReqTimeouts(), 0, 'Completed GTX with externalSignal must leave 0 active timers');
+    assert.equal(extRemoves, extAdds, 'Completed GTX with externalSignal must remove all attached abort listeners');
+
+    // Early external abort during hanging AI request
+    svc.saveConfig({
+      proxyMode: 'direct',
+      activeProfileId: 'hang-local',
+      profiles: [
+        { id: 'hang-local', name: 'Hang Local', baseUrl: 'http://127.0.0.1:11434/hang-external', apiKey: '', model: 'qwen3:8b' },
+      ],
+    });
+    const abortCtl2 = new AbortController();
+    const pendingAi = svc.translateAiStream('Should abort early cleanly', null, abortCtl2.signal, 'zh-CN');
+    await new Promise((r) => origSetTimeout(r, 15));
+    abortCtl2.abort(new Error('caller cancelled'));
+    await assert.rejects(pendingAi);
+    assert.equal(countReqTimeouts(), 0, 'Early external abort must clear timeout timer immediately');
+
+    // 6) Diagnose short timeout resolves cleanly with TimeoutError and leaves 0 timers
+    const diag = await svc.diagnose({
+      mode: 'ai',
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      model: 'qwen3:8b',
+      proxyMode: 'direct',
+      timeoutMs: 45,
+    });
+    assert.equal(diag.connectivity.ok, false);
+    assert.equal(diag.connectivity.reason, 'timeout');
+    assert.equal(countReqTimeouts(), 0, 'Timed-out diagnose must leave 0 active timers');
+
+    svc.dispose();
+    assert.equal(activeTimers.size, 0, 'svc.dispose() must clear all remaining timers including cache debounce');
+  } finally {
+    globalThis.setTimeout = origSetTimeout;
+    globalThis.clearTimeout = origClearTimeout;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
