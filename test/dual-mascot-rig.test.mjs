@@ -305,13 +305,13 @@ test('static frame cache & adaptive heartbeat: skips redundant clearRect + style
   try {
     const snap0 = stage.getLayoutSnapshot();
     assert.equal(snap0.perf.timerIntervalMs, 100, 'Active heartbeat must run at 100ms');
-    assert.equal(clearRectCount, 2, 'Initial mount draws both mascots once');
+    assert.equal(clearRectCount, 3, 'Initial mount draws both mascots + 1 static habitat prop once');
     assert.equal(transformAssignCount, 2, 'Initial mount writes initial style.transform once per mascot');
 
     // 等待 260ms（跨过 2 拍心跳）：因姿态、帧签名与坐标完全未变，必须 0 次 clearRect、0 次 style.transform 写入！
     await new Promise((r) => setTimeout(r, 260));
     const snapIdle = stage.getLayoutSnapshot();
-    assert.equal(clearRectCount, 2, 'Unchanged idle frames must completely skip Canvas clearRect/redraw');
+    assert.equal(clearRectCount, 3, 'Unchanged idle frames must completely skip Canvas clearRect/redraw');
     assert.equal(transformAssignCount, 2, 'Stationary mascots must completely skip DOM style.transform writes');
     assert.ok(snapIdle.perf.canvasSkips >= 2, 'Must record skipped canvas redraws');
     assert.ok(snapIdle.perf.domTransformSkips >= 2, 'Must record skipped DOM transform writes');
@@ -849,8 +849,8 @@ test('OP-1 & OP-3 regressions: streamDone error worry pose, window blur drag rel
   assert.equal(catActorEl.getAttribute('data-dragging'), null, 'Window blur must release mid-air drag lock');
   assert.equal(stage.getLayoutSnapshot().actors.find((a) => a.id === 'cat').footY, 0);
 
-  // 4. dispose() removes all mounted DOM subtrees from hostEl
-  assert.equal(hostEl.children.length, 4);
+  // 4. dispose() removes all mounted DOM subtrees from hostEl (includes .ag-v2-habitat-prop)
+  assert.equal(hostEl.children.length, 5);
   stage.dispose();
   assert.equal(hostEl.children.length, 0, 'dispose() must detach all stage children from hostEl');
 });
@@ -1508,7 +1508,7 @@ test('Issue #2/#4/#5 regressions: RLE fillRect batching pixel-equivalence, tier-
 
   try {
     const initialCtxCalls = getCtxCalls;
-    assert.equal(initialCtxCalls, 5, 'Should acquire 2D context exactly once for 2 main actors + 3 mini crabs');
+    assert.equal(initialCtxCalls, 6, 'Should acquire 2D context exactly once for 2 main actors + 3 mini crabs + 1 static habitat prop');
 
     // Verify streamTier === 3 write pose alternates frames across ticks instead of freezing on even localTick
     const seenWriteFrames = new Set([
@@ -1558,4 +1558,276 @@ test('Issue #2/#4/#5 regressions: RLE fillRect batching pixel-equivalence, tier-
   assert.equal(moDisconnected, true, 'dispose() must disconnect win-blur MutationObserver');
   assert.equal(winListeners.get('blur')?.size || 0, 0, 'dispose() must unbind window blur listeners');
   assert.equal(winListeners.get('focus')?.size || 0, 0, 'dispose() must unbind window focus listeners');
+});
+
+test('WO-MAIN-001A pixel audit: all grounded poses have maxY=9 with zero row gaps, missing sprites filled, dead frames removed, peek/letter unoccluded', () => {
+  assert.equal(rig.CLAWD_PARTS.clawL.low, undefined, 'Dead frame clawL.low must be removed');
+  assert.equal(rig.CLAWD_PARTS.clawR.reach2, undefined, 'Dead frame clawR.reach2 must be removed');
+  for (const k of ['laser0', 'laser1', 'laser2']) {
+    assert.ok(rig.PROPS[k]?.rows?.length >= 2 && rig.PROPS[k].grounded === true, `Expected grounded PROPS.${k}`);
+  }
+  for (const k of ['fireSpark0', 'fireSpark1', 'fireSpark2']) {
+    assert.ok(rig.SYMS[k]?.rows?.length >= 3, `Expected SYMS.${k}`);
+  }
+  assert.equal(rig.CLAWD_PARTS.clawL.peekGrip.ox, 1);
+  assert.equal(rig.CLAWD_PARTS.clawR.peekGrip.ox, 13);
+  assert.equal(rig.CAT_PARTS.paws.peekGrip.ox, 1);
+  assert.ok(rig.PROPS.letter.ox >= 14, 'PROPS.letter must not occlude face/eyes');
+
+  // Cowboy trick aligned to same ground baseline maxY=5 as cowboy/shades/wizard
+  for (const id of ['cowboy', 'shades', 'wizard']) {
+    const base = rig.MINI_SPRITES[id];
+    const trick = rig.MINI_ANIM_FRAMES[id].trick;
+    assert.equal(base.oy + base.rows.length - 1, 5, `${id} base must align maxY=5`);
+    assert.equal(trick.oy + trick.rows.length - 1, 5, `${id} trick must align maxY=5`);
+  }
+
+  const propSet = new Set([...Object.values(rig.PROPS), ...Object.values(rig.SYMS)]);
+  const groundedPoses = [
+    'idle', 'squash', 'sleep', 'walk', 'write', 'pet', 'happy', 'jiggle', 'angry', 'tilt', 'wow', 'sulk',
+    'polish', 'eat', 'eatFish', 'letter', 'plant', 'butterfly', 'stretch', 'spinHop', 'onFire',
+    'cheerSticks', 'rickroll', 'siren', 'chatGreet', 'lookNod', 'readAlong', 'balance', 'yawn',
+    'wave', 'gaze', 'worry', 'salute', 'carry', 'yawnStretch',
+  ];
+  for (const kind of ['clawd', 'cat']) {
+    const poses = kind === 'cat' ? [...groundedPoses, 'loaf', 'groom', 'chaseDot', 'catStretch'] : groundedPoses;
+    for (const pose of poses) {
+      for (const tick of [0, 1, 2, 3, 5, 7, 10, 15, 22, 26, 32]) {
+        const layers = rig.buildClipLayers(kind, pose, tick, { clipTick: tick, dir: 'right' });
+        const ys = new Set();
+        let minY = 99;
+        let maxY = -99;
+        for (const l of layers) {
+          if (!l || l.grounded || propSet.has(l)) continue;
+          for (let ry = 0; ry < l.rows.length; ry++) {
+            if (/[^. ]/.test(l.rows[ry])) {
+              const y = l.oy + ry;
+              ys.add(y);
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+        assert.equal(maxY, 9, `${kind}:${pose}@${tick} must touch ground y=9, got ${maxY}`);
+        for (let y = minY; y <= maxY; y++) {
+          assert.ok(ys.has(y), `${kind}:${pose}@${tick} has horizontal row gap at y=${y}`);
+        }
+      }
+    }
+  }
+});
+
+test('WO-MAIN-001A state-machine reset, poke-2 cancel, host-sleep/blur/chat 0fps halt, and workbench demo/inspect APIs', () => {
+  const rootAttrs = new Map();
+  const makeEl = (tag) => {
+    const attrs = new Map();
+    const listeners = new Map();
+    const children = [];
+    const ctx = {
+      setTransform() {}, clearRect() {}, save() {}, restore() {}, translate() {},
+      scale() {}, rotate() {}, beginPath() {}, rect() {}, clip() {}, fillRect() {}, drawImage() {},
+    };
+    return {
+      tagName: String(tag).toUpperCase(),
+      clientWidth: 720, width: 96, height: 84, className: '', dataset: {},
+      style: { display: '', zIndex: '', transform: '', transition: '', cursor: '' },
+      children,
+      setAttribute(k, v) { attrs.set(k, String(v)); },
+      getAttribute(k) { return attrs.get(k) ?? null; },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) { attrs.delete(k); },
+      appendChild(ch) { children.push(ch); ch.parentNode = this; return ch; },
+      removeChild(ch) { const i = children.indexOf(ch); if (i >= 0) children.splice(i, 1); },
+      addEventListener(t, fn) { if (!listeners.has(t)) listeners.set(t, new Set()); listeners.get(t).add(fn); },
+      removeEventListener(t, fn) { listeners.get(t)?.delete(fn); },
+      getContext() { return ctx; },
+      getBoundingClientRect() { return { left: 0, right: 96, top: 0, bottom: 84, width: 96, height: 84 }; },
+    };
+  };
+  const doc = {
+    hidden: false,
+    documentElement: {
+      setAttribute(k, v) { rootAttrs.set(k, String(v)); },
+      getAttribute(k) { return rootAttrs.get(k) ?? null; },
+      hasAttribute(k) { return rootAttrs.has(k); },
+      removeAttribute(k) { rootAttrs.delete(k); },
+    },
+    defaultView: { devicePixelRatio: 1, addEventListener() {}, removeEventListener() {}, requestAnimationFrame: () => 1, cancelAnimationFrame() {} },
+    createElement(tag) { const n = makeEl(tag); n.ownerDocument = doc; return n; },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const hostEl = doc.createElement('div');
+  const stage = rig.mountDualMascotStage(hostEl, { miniPileEnabled: true, reducedMotion: false });
+
+  try {
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 100);
+
+    // 1. host-sleep pauses heartbeat to 0fps immediately
+    stage.notify('host-sleep', { sleep: true });
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 0);
+    assert.equal(stage.getLayoutSnapshot().perf.timerPaused, true);
+    stage.notify('host-sleep', { sleep: false });
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 100);
+
+    // 2. data-ag-cs-win-blur attribute forces 0fps on sync
+    doc.documentElement.setAttribute('data-ag-cs-win-blur', '1');
+    stage.notify('activity');
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 0);
+    doc.documentElement.removeAttribute('data-ag-cs-win-blur');
+    stage.notify('activity');
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 100);
+
+    // 3. data-ag-prism-mode="chat" forces 0fps on sync
+    doc.documentElement.setAttribute('data-ag-prism-mode', 'chat');
+    stage.notify('activity');
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 0);
+    doc.documentElement.removeAttribute('data-ag-prism-mode');
+    stage.notify('activity');
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 100);
+
+    // 4. Cross-interrupt cleanup & poke-2 jiggle cancels pending bounce
+    stage.poke('cat');
+    stage.poke('cat');
+    assert.equal(stage.getLayoutSnapshot().actors.find((a) => a.id === 'cat').pose, 'jiggle');
+    stage.poke('cat');
+    assert.equal(stage.getLayoutSnapshot().actors.find((a) => a.id === 'cat').rot, -9);
+    stage.triggerDemo('unstack');
+    assert.equal(stage.getLayoutSnapshot().actors.find((a) => a.id === 'cat').rot, 0);
+
+    // 5. All workbench demo branches + inspectPose / stepTick / listPoses
+    for (const cmd of ['campSwitch', 'streamDone', 'crabRide', 'bump', 'passBy', 'theater']) {
+      assert.doesNotThrow(() => stage.triggerDemo(cmd), `triggerDemo(${cmd}) must not throw`);
+    }
+    assert.ok(stage.listPoses().includes('chaseDot') && stage.listPoses().includes('yawnStretch'));
+    const st = stage.inspectPose({ pose: 'sulk', tick: 5, mirror: true, sqW: 1, sqH: -1, ruler: true });
+    assert.equal(st.pose, 'sulk');
+    assert.equal(stage.stepTick(1), 6);
+    stage.inspectPose({ active: false });
+  } finally {
+    stage.dispose();
+  }
+});
+
+test('WO-MAIN-001B: 9 Slash theaters, 4 contextual links, habitat 3-mode 0fps prop, feed donut/coffee sulk-reset, and all new poses maxY=9', () => {
+  // 1. All 13 new poses grounded at maxY=9 with zero row gaps
+  const propSet = new Set([...Object.values(rig.PROPS), ...Object.values(rig.SYMS)]);
+  const newPoses = [
+    'slashPlan', 'slashGoal', 'slashBoost', 'slashTeam', 'slashBrowser', 'slashCompact',
+    'slashSchedule', 'slashGrill', 'slashLearnBook', 'slashLearnBulb',
+    'nightSip', 'feedDonut', 'feedCoffee',
+  ];
+  for (const kind of ['clawd', 'cat']) {
+    for (const pose of newPoses) {
+      for (const tick of [0, 1, 5, 10, 16, 20]) {
+        const layers = rig.buildClipLayers(kind, pose, tick, { clipTick: tick, dir: 'right' });
+        const ys = new Set();
+        let minY = 99, maxY = -99;
+        for (const l of layers) {
+          if (!l || l.grounded || propSet.has(l)) continue;
+          for (let ry = 0; ry < l.rows.length; ry++) {
+            if (/[^. ]/.test(l.rows[ry])) {
+              const y = l.oy + ry;
+              ys.add(y);
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+        assert.equal(maxY, 9, `New pose ${kind}:${pose}@${tick} must touch y=9, got ${maxY}`);
+        for (let y = minY; y <= maxY; y++) assert.ok(ys.has(y), `New pose ${kind}:${pose}@${tick} gap at y=${y}`);
+      }
+    }
+  }
+
+  // 2. Interactive test: all 9 slash cmds, feed donut/coffee clearing sulk, habitat 3 states, contextual notifications
+  let habDraws = 0;
+  const makeEl = (tag) => {
+    const attrs = new Map();
+    const listeners = new Map();
+    const children = [];
+    let isHab = false;
+    const ctx = {
+      setTransform() {}, clearRect() { if (isHab) habDraws += 1; }, save() {}, restore() {},
+      translate() {}, scale() {}, rotate() {}, beginPath() {}, rect() {}, clip() {}, fillRect() {}, drawImage() {},
+    };
+    const node = {
+      tagName: String(tag).toUpperCase(),
+      clientWidth: 720, width: 96, height: 84, dataset: {},
+      style: { display: '', zIndex: '', transform: '', transition: '', cursor: '' },
+      children,
+      set className(v) { this._cls = v; isHab = v === 'ag-v2-habitat-prop'; },
+      get className() { return this._cls || ''; },
+      setAttribute(k, v) { attrs.set(k, String(v)); },
+      getAttribute(k) { return attrs.get(k) ?? null; },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) { attrs.delete(k); },
+      appendChild(ch) { children.push(ch); ch.parentNode = this; return ch; },
+      removeChild(ch) { const i = children.indexOf(ch); if (i >= 0) children.splice(i, 1); },
+      addEventListener(t, fn) { if (!listeners.has(t)) listeners.set(t, new Set()); listeners.get(t).add(fn); },
+      removeEventListener(t, fn) { listeners.get(t)?.delete(fn); },
+      dispatch(t, ev = {}) {
+        const e = { button: 0, altKey: false, preventDefault() {}, stopPropagation() {}, ...ev };
+        for (const fn of listeners.get(t) || []) fn(e);
+      },
+      getContext() { return ctx; },
+      getBoundingClientRect() { return { left: 0, right: 96, top: 0, bottom: 84, width: 96, height: 84 }; },
+    };
+    return node;
+  };
+  const doc = {
+    hidden: false,
+    documentElement: { getAttribute: () => null, hasAttribute: () => false },
+    defaultView: { devicePixelRatio: 1, addEventListener() {}, removeEventListener() {}, requestAnimationFrame: () => 1, cancelAnimationFrame() {} },
+    createElement(tag) { const n = makeEl(tag); n.ownerDocument = doc; return n; },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const hostEl = doc.createElement('div');
+  const stage = rig.mountDualMascotStage(hostEl, { miniPileEnabled: true, reducedMotion: true });
+
+  try {
+    const habEl = hostEl.children.find((n) => n.className === 'ag-v2-habitat-prop');
+    assert.ok(habEl, 'Expected .ag-v2-habitat-prop canvas mounted in stage');
+    assert.equal(habDraws, 1, 'Habitat prop must draw exactly 1 static frame at mount (0fps idle)');
+
+    // Test all 9 slash commands + /swarm alias
+    for (const cmd of ['plan', 'goal', 'boost', 'teamwork', 'swarm', 'browser', 'compact', 'schedule', 'grill-me', 'learn']) {
+      stage.notify('slash-cmd', { cmd });
+      const snap = stage.getLayoutSnapshot();
+      assert.ok(snap.lastInteraction.type.startsWith('slash:'), `Expected slash interaction for /${cmd}`);
+    }
+    // /schedule activates 30-min hourglass watch mode on habitat prop
+    assert.equal(stage.getLayoutSnapshot().habitat.mode, 'hourglass');
+    assert.equal(stage.getLayoutSnapshot().habitat.scheduleActive, true);
+    assert.equal(stage.setHabitatPreview('lamp'), 'lamp');
+    assert.equal(stage.setHabitatPreview('cactus'), 'cactus');
+    assert.equal(stage.setHabitatPreview('auto'), 'hourglass');
+
+    // Contextual notifications: effort-tier, vial-high, aura-complete
+    stage.notify('effort-tier', { tier: 'high' });
+    assert.equal(stage.getLayoutSnapshot().lastInteraction.type, 'effort-tier:high');
+    stage.notify('vial-high', { fraction: 0.82 });
+    assert.equal(stage.getLayoutSnapshot().lastInteraction.type, 'vial-high');
+    stage.notify('aura-complete', { durationMs: 20000 });
+    assert.equal(stage.getLayoutSnapshot().lastInteraction.type, 'aura-complete');
+
+    // Feed donut (contextmenu) & coffee (Alt+pointerdown) immediately clear pokeCount & sulk
+    const catEl = hostEl.children.find((n) => n.getAttribute('data-mascot-id') === 'cat');
+    for (let i = 0; i < 5; i++) stage.poke('cat');
+    assert.equal(stage.getLayoutSnapshot().actors.find((a) => a.id === 'cat').pose, 'sulk');
+    catEl.dispatch('contextmenu', { button: 2 });
+    const afterDonut = stage.getLayoutSnapshot().actors.find((a) => a.id === 'cat');
+    assert.equal(afterDonut.pose, 'feedDonut');
+    assert.equal(afterDonut.pokeCount, 0);
+
+    stage.poke('cat');
+    assert.equal(stage.getLayoutSnapshot().actors.find((a) => a.id === 'cat').pokeCount, 1);
+    catEl.dispatch('pointerdown', { button: 0, altKey: true });
+    const afterCoffee = stage.getLayoutSnapshot().actors.find((a) => a.id === 'cat');
+    assert.equal(afterCoffee.pose, 'feedCoffee');
+    assert.equal(afterCoffee.pokeCount, 0);
+  } finally {
+    stage.dispose();
+  }
 });

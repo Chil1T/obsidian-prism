@@ -59,12 +59,14 @@
     composerRestyle: S_T,
     placeholderStyle: { allowed: ['studio', 'host'], default: 'studio' },
     smoothCaret: S_T,
+    scrollBottomMotion: { allowed: ['smooth', 'instant'], default: 'smooth' },
     contextMenu: S_T,
     codeFont: { allowed: ['default', 'jetbrains', 'cascadia', 'sfmono'], default: 'default' },
     codeLigatures: S_F,
     mascot: { allowed: ['crab', 'minis', 'off'], default: 'crab', aliases: { dual: 'crab' } },
     sidebarRestyle: S_T,
     sidebarCompact: S_F,
+    sidebarNavFold: { allowed: ['off', 'on'], default: 'off' },
     thoughtTranslate: { allowed: ['off', 'machine', 'ai'], default: 'off' },
     thoughtTrigger: { allowed: ['preload', 'expand'], default: 'preload' },
     thoughtView: { allowed: ['immersive', 'bilingual'], default: 'immersive' },
@@ -105,7 +107,7 @@
       const normFn = G.__agCsI18n?.normalizeLanguage;
       val = typeof normFn === 'function' && nav ? normFn(nav) : /^ja\b/i.test(nav) ? 'ja' : /^en\b/i.test(nav) ? 'en' : /^zh[-_](?:HK|MO)/i.test(nav) ? 'yue' : /^zh[-_](?:TW|Hant)/i.test(nav) ? 'zh-TW' : 'zh-CN';
     }
-    if ((key === 'omniModule' || key === 'sidebarStudio' || key === 'autoUpdate') && typeof val === 'boolean') val = val ? 'on' : 'off';
+    if ((key === 'omniModule' || key === 'sidebarStudio' || key === 'autoUpdate' || key === 'sidebarNavFold') && typeof val === 'boolean') val = val ? 'on' : 'off';
     if (typeof spec.default === 'string' && typeof val === 'number' && Number.isFinite(val)) val = String(val);
     return spec.allowed.includes(val) ? { valid: true, value: val } : { valid: false };
   };
@@ -283,17 +285,39 @@
 
     const doc = typeof document !== 'undefined' ? document : null;
     if (!doc) return;
+    const syncChrome = G.__agPrismHostEnhancer?.syncSettingsDialogChrome;
+    if (typeof syncChrome === 'function') syncChrome(doc, runGuardedMut);
     const lang = getLang();
     const ui = uiText(lang);
     const targetTitles = ['Appearance', '外观', '外觀', '外観'];
     let panel = null;
+    let matchedH2 = null;
     for (const h2 of doc.querySelectorAll('[role="dialog"] h2')) {
       if (targetTitles.includes((h2.textContent || '').trim())) {
         panel = h2.closest('div.p-6') || h2.parentElement?.parentElement;
-        if (panel) break;
+        if (panel) { matchedH2 = h2; break; }
       }
     }
     if (!panel) return;
+    if (typeof syncChrome !== 'function') {
+      const dlg = panel.closest?.('[role="dialog"]');
+      if (dlg) runGuardedMut(() => {
+        if (dlg.getAttribute?.('data-ag-cs-settings-dlg') !== '1') dlg.setAttribute?.('data-ag-cs-settings-dlg', '1');
+        let nav = null;
+        for (let c = panel; c && c !== dlg && !nav; c = c.parentElement) {
+          for (const k of c.parentElement?.children || []) {
+            if (k === c) break;
+            if ((k.querySelectorAll?.('button, [role="tab"]') || []).length >= 2) { nav = k; break; }
+          }
+        }
+        if (nav) {
+          if (nav.getAttribute?.('data-ag-cs-settings-nav') !== '1') nav.setAttribute?.('data-ag-cs-settings-nav', '1');
+          const ht = (matchedH2?.textContent || '').trim().toLowerCase(), bs = Array.from(nav.querySelectorAll?.('button, [role="tab"]') || []);
+          const act = bs.find((b) => (b.getAttribute?.('aria-current') && b.getAttribute('aria-current') !== 'false') || b.getAttribute?.('aria-selected') === 'true') || bs.find((b) => (b.textContent || '').trim().toLowerCase() === ht) || bs.find((b) => String(b.className || '').split(/\s+/).some((t) => /^(?:(?:dark|light):)?(?:bg-secondary|bg-sidebar-secondary)(?:\/\d+)?$/.test(t)));
+          for (const b of bs) b === act ? b.setAttribute?.('data-ag-cs-nav-active', '1') : b.removeAttribute?.('data-ag-cs-nav-active');
+        }
+      });
+    }
 
     const effVal = (k, l) => {
       const v = typeof resolveSettingRowActiveValue === 'function' ? resolveSettingRowActiveValue(k, l) : undefined;
@@ -327,6 +351,7 @@
     const onClk = (e, fn) => on(e, 'click', (ev) => { ev?.stopPropagation?.(); fn(ev); });
 
     const SCHEMA_KEYS = O.keys(PRISM_SETTINGS_SCHEMA);
+    const isSwitchValOn = (v) => v === true || v === 'on';
     const syncRootState = (rootEl, l, u) => {
       const sumEl = qs(rootEl, '[data-ag-cs-fold-summary]');
       const ns = formatSettingsSummary(l, u);
@@ -354,8 +379,9 @@
       const dirtyBtns = [];
       qa(rootEl, 'button[data-ag-cs-key]').forEach((btn) => {
         const k = ga(btn, 'data-ag-cs-key');
-        const act = Boolean(matchBtn(k, ga(btn, 'data-ag-cs-val'), effVal(k, l)));
-        if (btn.__agOn !== act || ga(btn, 'aria-pressed') !== String(act)) dirtyBtns.push([btn, act]);
+        const cur = effVal(k, l);
+        const act = Boolean(matchBtn(k, ga(btn, 'data-ag-cs-val'), cur));
+        if (btn.__agOn !== act || ga(btn, 'aria-pressed') !== String(act)) dirtyBtns.push([btn, act, cur]);
       });
       const dirtyPresets = [];
       qa(rootEl, 'button[data-ag-cs-preset]').forEach((pBtn) => {
@@ -364,11 +390,16 @@
         const m = O.entries(spec).every(([k, ex]) => effVal(k, l) === ex);
         if (pBtn.__agAct !== m || ga(pBtn, 'data-active') !== (m ? '1' : '0')) dirtyPresets.push([pBtn, m]);
       });
-      for (const [btn, act] of dirtyBtns) {
+      for (const [btn, act, cur] of dirtyBtns) {
         btn.__agOn = act;
         sa(btn, 'aria-pressed', act);
         if (act) sa(btn, 'data-pressed');
         else ra(btn, 'data-pressed');
+        const grp = btn.parentElement;
+        if (grp && ga(grp, 'data-ui-kind') === 'switch') {
+          const swOn = isSwitchValOn(cur) ? '1' : '0';
+          if (ga(grp, 'data-switch-on') !== swOn) sa(grp, 'data-switch-on', swOn);
+        }
       }
       for (const [pBtn, m] of dirtyPresets) {
         pBtn.__agAct = m;
@@ -447,7 +478,7 @@
 
       const initOpen = ['1', 'true'].includes(readStore(STORAGE_SETTINGS_OPEN_KEY));
       const savedTab = readStore(STORAGE_SETTINGS_SUBTAB_KEY);
-      let activeSubTab = ['all', 'appearance', 'interaction', 'thought', 'modules', 'beta', 'about'].includes(savedTab) ? savedTab : 'all';
+      let activeSubTab = ['appearance', 'interaction', 'thought', 'modules', 'beta', 'about', 'all'].includes(savedTab) ? savedTab : 'appearance';
 
       const sec = doc.createElement('div');
       sec.id = SETTINGS_SEC_ID;
@@ -636,12 +667,14 @@
             composerRestyle: RS('composerRestyle', 'Composer', onOff),
             placeholderStyle: RS('placeholderStyle', 'Placeholder', [['studio', 'Studio'], ['host', U('optPlaceholderHost')]]),
             smoothCaret: RS('smoothCaret', 'SmoothCaret', onOff),
+            scrollBottomMotion: RS('scrollBottomMotion', 'ScrollBottom', [['smooth', U('optScrollBottomSmooth', 'Glide')], ['instant', U('optScrollBottomInstant', 'Instant')]]),
             contextMenu: R('contextMenu', 'rowContextMenuTitle', 'rowContextMenuDesc', onOff),
             codeFont: RS('codeFont', 'CodeFont', [['default', U('optFontDefault')], ['jetbrains', 'JetBrains Mono'], ['cascadia', 'Cascadia Code'], ['sfmono', U('optFontSfmono', 'SF Mono')]]),
             codeLigatures: RS('codeLigatures', 'CodeLigatures', onOff),
             mascot: RS('mascot', 'Mascot', [['crab', mDual], ['minis', mMinis], ['off', mOff]]),
             sidebarRestyle: RS('sidebarRestyle', 'Sidebar', onOff),
             sidebarCompact: RS('sidebarCompact', 'SidebarCompact', onOff),
+            sidebarNavFold: R('sidebarNavFold', 'setSidebarNavFoldLabel', 'setSidebarNavFoldDesc', [['off', U('optSidebarNavFoldOff', 'Show All')], ['on', U('optSidebarNavFoldOn', 'Fold Extra')]]),
             thoughtTranslate: RS('thoughtTranslate', 'ThoughtMode', [['off', U('optThoughtOff')], ['machine', U('optThoughtMachine')], ['ai', U('optThoughtAi')]]),
             thoughtTrigger: RS('thoughtTrigger', 'ThoughtTrigger', [['preload', U('optTriggerPreload')], ['expand', U('optTriggerExpand')]]),
             thoughtView: RS('thoughtView', 'ThoughtView', [['immersive', U('optThoughtImmersive')], ['bilingual', U('optThoughtBilingual')]]),
@@ -656,7 +689,7 @@
 
           const groups = [
             { id: 'appearance', title: U('grpAppearance'), keys: ['palette', 'lightPreset', 'accentTone', 'cornerStyle', 'ambientIntensity', 'motionLevel', 'targetFps', 'homeLayout', 'homeRipple', 'logoInk', 'language', 'hostLocalization'] },
-            { id: 'interaction', title: U('grpInteraction'), keys: ['composerRestyle', 'placeholderStyle', 'smoothCaret', 'contextMenu', 'codeFont', 'codeLigatures', 'mascot', 'sidebarRestyle', 'sidebarCompact'] },
+            { id: 'interaction', title: U('grpInteraction'), keys: ['composerRestyle', 'placeholderStyle', 'smoothCaret', 'scrollBottomMotion', 'contextMenu', 'codeFont', 'codeLigatures', 'mascot', 'sidebarRestyle', 'sidebarCompact', 'sidebarNavFold'] },
             { id: 'thought', title: U('grpThought'), keys: ['thoughtTranslate', 'thoughtTrigger', 'thoughtView'] },
             { id: 'modules', title: U('groupModules'), keys: ['telemetryModule', 'effortSliderModule', 'omniModule', 'linkTarget'] },
             { id: 'beta', title: U('grpBeta'), keys: ['sidebarStudio'] },
@@ -674,9 +707,27 @@
             const group = mkEl('div', 'ag-cs-seg-group');
             sa(group, 'role', 'group');
             const curVal = effVal(r.key, lang);
+            const isSwitch =
+              r.key !== 'sidebarNavFold' &&
+              r.opts.length === 2 &&
+              ((r.opts[0][0] === true && r.opts[1][0] === false) || (r.opts[0][0] === 'on' && r.opts[1][0] === 'off'));
+            if (isSwitch) {
+              sa(group, 'data-ui-kind', 'switch');
+              sa(group, 'data-switch-on', isSwitchValOn(curVal) ? '1' : '0');
+              const thumb = mkEl('span', 'ag-cs-switch-thumb');
+              sa(thumb, 'aria-hidden', 'true');
+              ap(group, thumb);
+            }
             for (const [val, lbl] of r.opts) {
               const valJson = JSON.stringify(val);
-              const b = mkB(BTN, lbl, 'data-ag-cs-key', r.key);
+              const isTone = r.key === 'accentTone';
+              const b = mkB(BTN, isTone ? undefined : lbl, 'data-ag-cs-key', r.key);
+              if (isTone) {
+                const dot = mkEl('span', 'ag-cs-tone-dot');
+                sa(dot, 'data-tone', val);
+                sa(dot, 'aria-hidden', 'true');
+                ap(b, dot, mkEl('span', '', lbl));
+              }
               sa(b, 'data-ag-cs-val', valJson);
               const act = Boolean(matchBtn(r.key, valJson, curVal));
               b.__agOn = act;
@@ -684,19 +735,21 @@
               if (act) sa(b, 'data-pressed');
               on(b, 'click', (ev) => {
                 if (ev && typeof ev === 'object' && handledGroupClicks) handledGroupClicks.add(ev);
-                const prevBtn = Array.from(group.children).find((s) => ga(s, 'aria-pressed') === 'true' || s.hasAttribute('data-pressed'));
+                const prevBtn = Array.from(group.children).find((s) => s.tagName === 'BUTTON' && (ga(s, 'aria-pressed') === 'true' || s.hasAttribute('data-pressed')));
                 if (prevBtn === b && matchBtn(r.key, valJson, effVal(r.key, getLang()))) return;
                 // Read-then-Write: 在任何 DOM 写入与 saveSetting 之前仅读取当前行的 prevBtn 与 b，其余 29 行 0 次回流！
-                const needGlide = !!(prevBtn && prevBtn !== b && typeof runSettingsGroupGlide === 'function');
+                const needGlide = !isSwitch && !!(prevBtn && prevBtn !== b && typeof runSettingsGroupGlide === 'function');
                 const prevRect = needGlide ? rc(prevBtn) : null;
                 const nextRect = needGlide ? rc(b) : null;
                 for (const sib of group.children) {
+                  if (sib.tagName !== 'BUTTON') continue;
                   const isCur = sib === b;
                   sib.__agOn = isCur;
                   sa(sib, 'aria-pressed', isCur);
                   if (isCur) sa(sib, 'data-pressed');
                   else ra(sib, 'data-pressed');
                 }
+                if (isSwitch) sa(group, 'data-switch-on', isSwitchValOn(val) ? '1' : '0');
                 saveSetting(r.key, val);
                 if (r.key === 'thoughtTranslate') {
                   mountThoughtUiIfReady();
@@ -740,13 +793,13 @@
             for (const [gid, gel] of groupElsById.entries()) setVis(gel, sid === 'all' || sid === gid);
           };
           for (const [sid, slbl] of [
-            ['all', U('subTabAll', 'All')],
             ['appearance', U('subTabAppearance', 'Appearance')],
             ['interaction', U('subTabInteraction', 'Workspace')],
             ['thought', U('subTabThought', 'Thought')],
             ['modules', U('subTabModules', 'Modules')],
             ['beta', U('subTabBeta', 'Beta')],
             ['about', U('subTabAbout', 'Config & About')],
+            ['all', U('subTabAll', 'All')],
           ]) {
             const sb = mkB('ag-cs-subtab-btn', slbl, 'data-ag-cs-subtab', sid);
             sa(sb, 'role', 'tab');

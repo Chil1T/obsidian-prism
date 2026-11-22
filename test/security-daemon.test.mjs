@@ -864,12 +864,13 @@ test('security-daemon 9: omniModule="off" lazy-start skips ensureOmniServer & om
             hasSidebar: false,
             sidebarMode: 'off',
             hasHostI18n: false,
+            hasInlineDiff: true,
             codeHash: daemon.codeHash,
             hasLegacyCss: false,
             needsDashboardSync: false,
           };
         }
-        return { status: 'ok', refreshed: true };
+        return { ok: true, status: 'ok', refreshed: true };
       },
       close() { this.closed = true; },
     };
@@ -1047,12 +1048,13 @@ test('security-daemon 10: self-heals missing mainFrameId after initial Page.getF
             hasSidebar: false,
             sidebarMode: 'off',
             hasHostI18n: false,
+            hasInlineDiff: true,
             codeHash: daemon.codeHash,
             hasLegacyCss: false,
             needsDashboardSync: false,
           };
         }
-        return { status: 'ok', refreshed: true };
+        return { ok: true, status: 'ok', refreshed: true };
       },
       close() {
         this.closed = true;

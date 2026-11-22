@@ -707,3 +707,233 @@ body {
   color: #1d4ed8;
   border-color: rgba(37, 99, 235, 0.28);
 }
+
+/* ── M3 Expressive True-CSS Surface Lab (data-wb-scene="m3lab") ────────── */
+.wb-m3lab-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 18px 22px 32px;
+  position: relative;
+  z-index: 2;
+  background: var(--ag-cs-tonal-1, var(--background));
+  color: var(--foreground);
+  font-family: var(--font-sans, var(--ag-v2-font-sans));
+}
+
+.wb-m3lab-wrap {
+  max-width: 1120px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.wb-m3lab-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: var(--ag-cs-r-lg, 10px);
+  background: var(--ag-cs-tonal-2, var(--surface-1));
+  border: 1px solid var(--ag-cs-border-1, var(--border));
+  box-shadow: var(--ag-cs-bubble-sh, none);
+}
+
+.wb-m3lab-banner-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--foreground);
+}
+
+.wb-m3lab-banner-sub {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  margin-top: 2px;
+}
+
+.wb-m3lab-swatches {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.wb-m3lab-swatch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--ag-cs-border-2, var(--border));
+  font-family: var(--ag-v2-font-mono);
+  font-size: 10.5px;
+  color: var(--foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-m3lab-swatch i {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid var(--ag-cs-border-2, var(--border));
+  display: inline-block;
+}
+
+.wb-m3lab-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 980px) {
+  .wb-m3lab-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.wb-m3lab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--ag-cs-r-lg, 10px);
+  background: var(--ag-cs-tonal-2, var(--surface-1));
+  border: 1px solid var(--ag-cs-border-1, var(--border));
+  min-width: 0;
+}
+
+.wb-m3lab-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.wb-m3lab-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.wb-m3lab-panel-tag {
+  font-family: var(--ag-v2-font-mono);
+  font-size: 10.5px;
+  color: var(--muted-foreground);
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--ag-cs-tonal-3, var(--surface-2));
+  border: 1px solid var(--ag-cs-border-1, var(--border));
+}
+
+.wb-m3lab-fastpick-body {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wb-m3lab-fp-item {
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  background: transparent;
+  color: var(--foreground);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 11px;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wb-m3lab-fp-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+}
+
+.wb-m3lab-diff-lines {
+  font-family: var(--ag-v2-font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  padding: 6px 0;
+  overflow-x: auto;
+}
+
+.wb-m3lab-diff-line {
+  display: flex;
+  gap: 10px;
+  padding: 1px 12px;
+  white-space: pre;
+}
+
+.wb-m3lab-diff-ln {
+  color: var(--muted-foreground);
+  user-select: none;
+  min-width: 24px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.wb-m3lab-bento-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.wb-m3lab-card-pad {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.wb-m3lab-sheet-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.wb-m3lab-toast-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wb-m3lab-toast-item {
+  padding: 9px 12px 9px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.wb-m3lab-term-body {
+  padding: 10px 12px;
+  font-family: var(--ag-v2-font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--secondary-foreground);
+}
+
+/* Protect Workbench outer chrome while html[data-ag-cs-style] is active in m3lab */
+html[data-ag-cs-style] .wb-topbar {
+  background: var(--wb-bar) !important;
+  color: var(--wb-fg) !important;
+  border-bottom: 1px solid var(--wb-line) !important;
+}
+html[data-ag-cs-style] .wb-inspector {
+  background: var(--wb-panel) !important;
+  color: var(--wb-fg) !important;
+}

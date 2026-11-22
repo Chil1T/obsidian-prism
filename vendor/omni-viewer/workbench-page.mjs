@@ -336,7 +336,7 @@ const WORKBENCH_CSS = `
   --wb-fg: #F2F2F5; --wb-fg-sec: #C4C4CE; --wb-muted: #8A8A98;
   --wb-accent: #669DF6; --wb-accent-ink: #8AB4F8; --wb-accent-fg: #0B0D13; --wb-accent-soft: rgba(102,157,246,0.15);
   --wb-checker-a: #161820; --wb-checker-b: #1F222D;
-  --wb-font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --wb-font-sans: "Google Sans", "Google Sans Text", Inter, "Segoe UI Variable", "PingFang SC", "Noto Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
   --wb-font-mono: "JetBrains Mono", "Cascadia Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 html[data-wb-palette="warm"]:not([data-wb-theme="light"]),
@@ -2675,9 +2675,15 @@ function bootPrismWorkbench(INIT_STATE, I18N_TABLE) {
         state.theme = d.payload.themeType;
       }
       if (d.payload.cssVariables && typeof d.payload.cssVariables === 'object') {
-        for (const [k, v] of Object.entries(d.payload.cssVariables)) {
+        const cv = d.payload.cssVariables;
+        for (const [k, v] of Object.entries(cv)) {
           if (typeof k === 'string' && k.startsWith('--')) htmlEl.style.setProperty(k, String(v));
         }
+        if (cv['--ag-cs-tonal-0']) htmlEl.style.setProperty('--wb-bg', String(cv['--ag-cs-tonal-0']));
+        if (cv['--ag-cs-tonal-1']) htmlEl.style.setProperty('--wb-surface', String(cv['--ag-cs-tonal-1']));
+        if (cv['--ag-cs-tonal-2']) htmlEl.style.setProperty('--wb-panel', String(cv['--ag-cs-tonal-2']));
+        if (cv['--ag-cs-tonal-3']) htmlEl.style.setProperty('--wb-elevated', String(cv['--ag-cs-tonal-3']));
+        if (cv['--font-sans']) htmlEl.style.setProperty('--wb-font-sans', String(cv['--font-sans']));
       }
       applyThemeAttrs();
       if (typeof state.onThemeRefresh === 'function') state.onThemeRefresh();

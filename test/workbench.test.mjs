@@ -23,9 +23,15 @@ test('workbench server serves HTML, styles, shared core scripts, and safely vali
     // 1. HTML, CSS, and shared runtime scripts
     for (const p of [
       '/',
+      '/legacy',
+      '/replica.css',
+      '/replica.js',
+      '/api/prism-inject.js?palette=obsidian&corners=balanced',
+      '/api/prism-remove.js',
       '/styles/v2-tokens.css',
       '/styles/v2-components.css',
       '/styles/workbench-shell.css',
+      '/shared/style.css',
       '/shared/ripple-core.js',
       '/shared/motion-engine.js',
       '/shared/animated-icons.js',
@@ -257,4 +263,16 @@ test('workbench & host runtime enforce GPU compositor optimization, 32% aura hei
   assert.ok(cssSrc.includes('.ag-cs-stream-chunk') && !cssSrc.includes('filter: blur(4px)'), 'Stream chunk blur filter must be purged in workbench CSS too');
   assert.ok(runtimeSrc.includes('syncWorkedForAutoUnfold') && runtimeSrc.includes('ag-cs-conv-aura-host'));
   assert.ok(runtimeSrc.includes('syncLensOverlayOrigins') && runtimeSrc.includes('syncHostAnimatedIcons'));
+
+  // 4. WO-MAIN-001C True-CSS M3 Expressive Surface Lab & 0 non-ASCII guard
+  assert.ok(htmlSrc.includes('data-wb-scene="m3lab"'), 'index.html must expose M3 true-CSS surface lab scene');
+  assert.ok(htmlSrc.includes('href="/shared/style.css"'), 'index.html must link /shared/style.css for true-CSS M3 preview');
+  assert.ok(src.includes('buildM3LabSceneHtml') && src.includes('syncLiveStyleCss'), 'app.js must implement true-CSS M3 surface lab');
+  assert.ok(hostCssSrc.includes('--ag-cs-tonal-0') && hostCssSrc.includes('.agy-fastpick') && hostCssSrc.includes('.agy-toast'), 'style.css must define M3 tonal tokens and 4 dead-zone surfaces');
+  let badCssChars = 0;
+  for (let i = 0; i < hostCssSrc.length; i++) {
+    const code = hostCssSrc.charCodeAt(i);
+    if (code >= 0x00a1 && code <= 0x1360) badCssChars++;
+  }
+  assert.equal(badCssChars, 0, 'style.css must stay strictly free of 0x00A1..0x1360 chars for packCssJsExpr');
 });

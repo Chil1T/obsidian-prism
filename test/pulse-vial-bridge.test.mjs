@@ -1545,4 +1545,68 @@ test('inline-fallback mounts isolated #ag-prism-pulse-bar invisible to external 
   }
 });
 
+test('WO-MAIN-001B: pulse-vial-bridge writes data-pv-warn="1" at >=80% and clears with hysteresis <=78%, plus pauses on data-ag-cs-win-blur', async () => {
+  const env = createPulseMockEnv();
+  let frac = 0.82;
+  env.win.agPulseHost = {
+    getMetrics: async () => ({
+      connection: 'live',
+      speed: {
+        tps: 52.0,
+        latestTps: 52.0,
+        ttftSeconds: 0.4,
+        rounds: 4,
+        context: {
+          usedTokens: Math.round(512000 * frac),
+          maxTokens: 512000,
+          usedFraction: frac,
+          model: 'Gemini 4 Carbon',
+          sampledAt: new Date().toISOString(),
+        },
+      },
+    }),
+  };
 
+  const prevDoc = globalThis.document;
+  delete globalThis.document;
+  let bridge;
+  try {
+    bridge = bridgeMod.mountPulseVialBridge({
+      win: env.win,
+      doc: env.doc,
+      storage: env.storage,
+      vialCore,
+      autoPoll: false,
+      allowMultiple: true,
+    });
+    await bridge.sync();
+    const host = env.getPulseHost();
+    assert.equal(host.getAttribute('data-pv-warn'), '1', 'fraction >= 0.80 must stamp data-pv-warn="1"');
+
+    // Inside hysteresis band (0.79) must keep warn active
+    frac = 0.79;
+    await bridge.sync();
+    assert.equal(host.getAttribute('data-pv-warn'), '1', 'fraction 0.79 inside hysteresis band must preserve data-pv-warn="1"');
+
+    // Drop to/below 0.78 clears data-pv-warn
+    frac = 0.78;
+    await bridge.sync();
+    assert.equal(host.hasAttribute('data-pv-warn'), false, 'fraction <= 0.78 must clear data-pv-warn');
+
+    // Re-trigger at 0.80 and verify 0.72 clears
+    frac = 0.80;
+    await bridge.sync();
+    assert.equal(host.getAttribute('data-pv-warn'), '1', 'fraction 0.80 must re-trigger data-pv-warn="1"');
+    frac = 0.72;
+    await bridge.sync();
+    assert.equal(host.hasAttribute('data-pv-warn'), false, 'fraction 0.72 must clear data-pv-warn');
+
+    // Window blur gate stops rAF
+    env.doc.documentElement.setAttribute('data-ag-cs-win-blur', '1');
+    await bridge.sync();
+    assert.equal(bridge.getDebugState().rafActive, false, 'data-ag-cs-win-blur="1" must stop vial rAF');
+  } finally {
+    bridge?.destroy();
+    if (prevDoc !== undefined) globalThis.document = prevDoc;
+  }
+});

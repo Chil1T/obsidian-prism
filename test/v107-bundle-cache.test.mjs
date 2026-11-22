@@ -544,8 +544,9 @@ test('v107 A2-8: single-pass PrismDaemon.rebuildBundle cold hit parses .bundle-c
     assert.ok(dCold.sidebarExpr.length > 0);
     assert.ok(dCold.hostI18nExpr.length > 0);
     assert.ok(dCold.thoughtExpr.length > 0);
+    assert.ok(dCold.inlineDiffExpr.length > 0);
 
-    // 2) Simulate cold daemon restart: all 5 channels hit disk cache with ONLY 1 readFileSync + 1 JSON.parse
+    // 2) Simulate cold daemon restart: all 6 channels hit disk cache with ONLY 1 readFileSync + 1 JSON.parse
     delete require.cache[require.resolve(snap.cdpPath)];
     const dHit = new PrismDaemon({
       rootDir: snap.pluginDir,
@@ -582,12 +583,13 @@ test('v107 A2-8: single-pass PrismDaemon.rebuildBundle cold hit parses .bundle-c
     assert.equal(dHit.sidebarExpr, dCold.sidebarExpr);
     assert.equal(dHit.hostI18nExpr, dCold.hostI18nExpr);
     assert.equal(dHit.thoughtExpr, dCold.thoughtExpr);
-    assert.equal(cacheReads, 1, 'rebuildBundle() cold hit across 5 channels must read .bundle-cache.json only once');
-    assert.equal(cacheParses, 1, 'rebuildBundle() cold hit across 5 channels must JSON.parse .bundle-cache.json only once');
+    assert.equal(dHit.inlineDiffExpr, dCold.inlineDiffExpr);
+    assert.equal(cacheReads, 1, 'rebuildBundle() cold hit across 6 channels must read .bundle-cache.json only once');
+    assert.equal(cacheParses, 1, 'rebuildBundle() cold hit across 6 channels must JSON.parse .bundle-cache.json only once');
 
     const hitStats = dHit.cdp.getBundleCacheStats();
     assert.equal(hitStats.diskHits, 1);
-    assert.equal(hitStats.channelDiskHits, 4);
+    assert.equal(hitStats.channelDiskHits, 5);
     assert.equal(hitStats.compileUnifiedRuns, 0);
     assert.equal(hitStats.channelCompileRuns, 0);
 

@@ -22,6 +22,7 @@ namespace AgyClaudeStyle.Watcher
         public string ScriptId;
         public string OmniScriptId;
         public string ThoughtScriptId;
+        public string InlineDiffScriptId;
         public string Title;
         public string MainFrameId;
         public bool HasFrameTree;
@@ -238,6 +239,7 @@ namespace AgyClaudeStyle.Watcher
             string thoughtExpr = CdpHelper.ShouldEnableThought(onceCfg)
                 ? CdpHelper.BuildThoughtExpression(_baseDir, onceCfg)
                 : "";
+            string inlineDiffExpr = CdpHelper.BuildInlineDiffExpression(_baseDir, onceCfg);
             List<string> injectedTitles = new List<string>();
             for (int i = 0; i < pages.Count; i++)
             {
@@ -252,6 +254,10 @@ namespace AgyClaudeStyle.Watcher
                     if (!string.IsNullOrEmpty(thoughtExpr))
                     {
                         try { await session.EvaluateAsync(thoughtExpr, false).ConfigureAwait(false); } catch { }
+                    }
+                    if (!string.IsNullOrEmpty(inlineDiffExpr))
+                    {
+                        try { await session.EvaluateAsync(inlineDiffExpr, false).ConfigureAwait(false); } catch { }
                     }
                     injectedTitles.Add(CdpHelper.ShortTitle(page));
                 }
@@ -347,6 +353,11 @@ namespace AgyClaudeStyle.Watcher
             {
                 return true;
             }
+            if (norm.StartsWith("vendor/inline-diff/", StringComparison.OrdinalIgnoreCase) &&
+                norm.EndsWith(".js", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
             return norm.EndsWith(".css", StringComparison.OrdinalIgnoreCase) ||
                    norm.EndsWith(".js", StringComparison.OrdinalIgnoreCase) ||
                    norm.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
@@ -376,6 +387,7 @@ namespace AgyClaudeStyle.Watcher
                 string currentThoughtExpr = CdpHelper.ShouldEnableThought(initialCfg)
                     ? CdpHelper.BuildThoughtExpression(_baseDir, initialCfg)
                     : "";
+                string currentInlineDiffExpr = CdpHelper.BuildInlineDiffExpression(_baseDir, initialCfg);
                 object exprLock = new object();
                 ConcurrentDictionary<string, AttachedEntry> attached = new ConcurrentDictionary<string, AttachedEntry>(StringComparer.Ordinal);
                 ManualResetEventSlim exitEvent = new ManualResetEventSlim(false);
@@ -392,7 +404,7 @@ namespace AgyClaudeStyle.Watcher
                     ReleasePidFile(selfPid);
                 };
 
-                Func<AttachedEntry, string, string, string, Task<Dictionary<string, object>>> applyAsync = async (entry, exprToUse, omniExprToUse, thoughtExprToUse) =>
+                Func<AttachedEntry, string, string, string, string, Task<Dictionary<string, object>>> applyAsync = async (entry, exprToUse, omniExprToUse, thoughtExprToUse, inlineDiffExprToUse) =>
                 {
                     if (!string.IsNullOrEmpty(entry.ScriptId))
                     {
@@ -447,6 +459,17 @@ namespace AgyClaudeStyle.Watcher
                             }
                             catch { }
                             entry.ThoughtScriptId = null;
+                        }
+                        if (!string.IsNullOrEmpty(entry.InlineDiffScriptId))
+                        {
+                            try
+                            {
+                                Dictionary<string, object> rmInlineSkip = new Dictionary<string, object>(StringComparer.Ordinal);
+                                rmInlineSkip["identifier"] = entry.InlineDiffScriptId;
+                                await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmInlineSkip, 5000).ConfigureAwait(false);
+                            }
+                            catch { }
+                            entry.InlineDiffScriptId = null;
                         }
                         return evalDict;
                     }
@@ -506,6 +529,40 @@ namespace AgyClaudeStyle.Watcher
                         try
                         {
                             await entry.Session.EvaluateAsync(CdpHelper.ThoughtRemoveExpression, false).ConfigureAwait(false);
+                        }
+                        catch { }
+                    }
+
+                    bool hadInlineDiff = !string.IsNullOrEmpty(entry.InlineDiffScriptId);
+                    if (hadInlineDiff)
+                    {
+                        try
+                        {
+                            Dictionary<string, object> rmInline = new Dictionary<string, object>(StringComparer.Ordinal);
+                            rmInline["identifier"] = entry.InlineDiffScriptId;
+                            await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmInline, 5000).ConfigureAwait(false);
+                        }
+                        catch { }
+                        entry.InlineDiffScriptId = null;
+                    }
+                    if (!string.IsNullOrEmpty(inlineDiffExprToUse))
+                    {
+                        try
+                        {
+                            Dictionary<string, object> addInline = new Dictionary<string, object>(StringComparer.Ordinal);
+                            addInline["source"] = inlineDiffExprToUse;
+                            Dictionary<string, object> inlineRes = await entry.Session.SendAsync("Page.addScriptToEvaluateOnNewDocument", addInline, 15000).ConfigureAwait(false);
+                            object inlineIdVal;
+                            if (inlineRes.TryGetValue("identifier", out inlineIdVal)) entry.InlineDiffScriptId = inlineIdVal as string;
+                            await entry.Session.EvaluateAsync(inlineDiffExprToUse, false).ConfigureAwait(false);
+                        }
+                        catch { }
+                    }
+                    else if (hadInlineDiff)
+                    {
+                        try
+                        {
+                            await entry.Session.EvaluateAsync(CdpHelper.InlineDiffRemoveExpression, false).ConfigureAwait(false);
                         }
                         catch { }
                     }
@@ -683,13 +740,15 @@ namespace AgyClaudeStyle.Watcher
                         string exprSnapshot;
                         string omniSnapshot;
                         string thoughtSnapshot;
+                        string inlineDiffSnapshot;
                         lock (exprLock)
                         {
                             exprSnapshot = currentExpr;
                             omniSnapshot = currentOmniExpr;
                             thoughtSnapshot = currentThoughtExpr;
+                            inlineDiffSnapshot = currentInlineDiffExpr;
                         }
-                        Dictionary<string, object> res = await applyAsync(entry, exprSnapshot, omniSnapshot, thoughtSnapshot).ConfigureAwait(false);
+                        Dictionary<string, object> res = await applyAsync(entry, exprSnapshot, omniSnapshot, thoughtSnapshot, inlineDiffSnapshot).ConfigureAwait(false);
                         string status = (res != null && res.ContainsKey("status")) ? Convert.ToString(res["status"]) : "ok";
                         Log(string.Format("[✓] 已注入 obsidian-prism: {0} ({1})", entry.Title, status));
                     }
@@ -743,16 +802,20 @@ namespace AgyClaudeStyle.Watcher
                                         string nextThoughtExpr = CdpHelper.ShouldEnableThought(nextCfg)
                                             ? CdpHelper.BuildThoughtExpression(_baseDir, nextCfg)
                                             : "";
+                                        string nextInlineDiffExpr = CdpHelper.BuildInlineDiffExpression(_baseDir, nextCfg);
                                         string fastCfgExpr = string.Equals(Path.GetFileName(changedName ?? ""), "config.json", StringComparison.OrdinalIgnoreCase)
                                             ? CdpHelper.BuildConfigRefreshExpression(_baseDir, manifest)
                                             : null;
                                         string prevThoughtExpr;
+                                        string prevInlineDiffExpr;
                                         lock (exprLock)
                                         {
                                             prevThoughtExpr = currentThoughtExpr;
+                                            prevInlineDiffExpr = currentInlineDiffExpr;
                                             currentExpr = nextExpr;
                                             currentOmniExpr = nextOmniExpr;
                                             currentThoughtExpr = nextThoughtExpr;
+                                            currentInlineDiffExpr = nextInlineDiffExpr;
                                         }
 
                                         int n = 0;
@@ -829,6 +892,31 @@ namespace AgyClaudeStyle.Watcher
                                                         catch { }
                                                     }
 
+                                                    bool hadInlineDiff = !string.IsNullOrEmpty(entry.InlineDiffScriptId) || !string.IsNullOrEmpty(prevInlineDiffExpr);
+                                                    if (!string.IsNullOrEmpty(entry.InlineDiffScriptId))
+                                                    {
+                                                        try
+                                                        {
+                                                            Dictionary<string, object> rmI = new Dictionary<string, object>(StringComparer.Ordinal);
+                                                            rmI["identifier"] = entry.InlineDiffScriptId;
+                                                            await entry.Session.SendAsync("Page.removeScriptToEvaluateOnNewDocument", rmI, 5000).ConfigureAwait(false);
+                                                        }
+                                                        catch { }
+                                                        entry.InlineDiffScriptId = null;
+                                                    }
+                                                    if (!string.IsNullOrEmpty(nextInlineDiffExpr))
+                                                    {
+                                                        try
+                                                        {
+                                                            Dictionary<string, object> addI = new Dictionary<string, object>(StringComparer.Ordinal);
+                                                            addI["source"] = nextInlineDiffExpr;
+                                                            Dictionary<string, object> inlineR = await entry.Session.SendAsync("Page.addScriptToEvaluateOnNewDocument", addI, 15000).ConfigureAwait(false);
+                                                            object iIdV;
+                                                            if (inlineR.TryGetValue("identifier", out iIdV)) entry.InlineDiffScriptId = iIdV as string;
+                                                        }
+                                                        catch { }
+                                                    }
+
                                                     Dictionary<string, object> fastRes = await entry.Session.EvaluateAsync(fastCfgExpr, false).ConfigureAwait(false) as Dictionary<string, object>;
                                                     object refVal;
                                                     if (fastRes != null && fastRes.TryGetValue("refreshed", out refVal) && refVal is bool && (bool)refVal)
@@ -844,6 +932,14 @@ namespace AgyClaudeStyle.Watcher
                                                         else if (hadThought)
                                                         {
                                                             try { await entry.Session.EvaluateAsync(CdpHelper.ThoughtRemoveExpression, false).ConfigureAwait(false); } catch { }
+                                                        }
+                                                        if (!string.IsNullOrEmpty(nextInlineDiffExpr))
+                                                        {
+                                                            try { await entry.Session.EvaluateAsync(nextInlineDiffExpr, false).ConfigureAwait(false); } catch { }
+                                                        }
+                                                        else if (hadInlineDiff)
+                                                        {
+                                                            try { await entry.Session.EvaluateAsync(CdpHelper.InlineDiffRemoveExpression, false).ConfigureAwait(false); } catch { }
                                                         }
                                                         n++;
                                                         continue;
@@ -861,11 +957,19 @@ namespace AgyClaudeStyle.Watcher
                                                     {
                                                         try { await entry.Session.EvaluateAsync(CdpHelper.ThoughtRemoveExpression, false).ConfigureAwait(false); } catch { }
                                                     }
+                                                    if (!string.IsNullOrEmpty(nextInlineDiffExpr))
+                                                    {
+                                                        try { await entry.Session.EvaluateAsync(nextInlineDiffExpr, false).ConfigureAwait(false); } catch { }
+                                                    }
+                                                    else if (hadInlineDiff)
+                                                    {
+                                                        try { await entry.Session.EvaluateAsync(CdpHelper.InlineDiffRemoveExpression, false).ConfigureAwait(false); } catch { }
+                                                    }
                                                     n++;
                                                 }
                                                 else
                                                 {
-                                                    await applyAsync(entry, nextExpr, nextOmniExpr, nextThoughtExpr).ConfigureAwait(false);
+                                                    await applyAsync(entry, nextExpr, nextOmniExpr, nextThoughtExpr, nextInlineDiffExpr).ConfigureAwait(false);
                                                     n++;
                                                 }
                                             }

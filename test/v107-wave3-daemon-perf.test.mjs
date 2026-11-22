@@ -270,9 +270,10 @@ test('Wave3 P1-6b & P2-7a: Channel 2~5 share .bundle-cache.json, detect same-len
     cdpNoCache.buildSidebarStudioExpression(null);
     cdpNoCache.buildHostI18nExpression({ ...cdpNoCache.DEFAULT_CONFIG, hostLocalization: 'on' });
     cdpNoCache.buildThoughtExpression({ ...cdpNoCache.DEFAULT_CONFIG, thoughtTranslate: 'ai' });
+    cdpNoCache.buildInlineDiffInjectExpression(cdpNoCache.DEFAULT_CONFIG);
     assert.equal(fs.existsSync(path.join(snap.pluginDir, '.bundle-cache.json')), false);
 
-    // 1) Cold compile all 5 channels into the single shared .bundle-cache.json
+    // 1) Cold compile all 6 channels into the single shared .bundle-cache.json
     const cdpCold = loadFreshCdp(snap.cdpPath);
     const ch1Cold = cdpCold.buildInjectExpression(cdpCold.DEFAULT_CONFIG, { cachePath, deferCacheWrite: true });
 
@@ -294,29 +295,33 @@ test('Wave3 P1-6b & P2-7a: Channel 2~5 share .bundle-cache.json, detect same-len
       { ...cdpCold.DEFAULT_CONFIG, thoughtTranslate: 'ai' },
       { cachePath, deferCacheWrite: true }
     );
+    const inlineDiffCold = cdpCold.buildInlineDiffInjectExpression(
+      cdpCold.DEFAULT_CONFIG,
+      { cachePath, deferCacheWrite: true }
+    );
     const coldMs = performance.now() - tCold0;
 
     // Deferred writes have not hit disk yet
     assert.equal(fs.existsSync(cachePath), false, 'deferCacheWrite must hold writes until flushPendingBundleCache');
     assert.equal(cdpCold.getBundleCacheStats().deferredExprHashRuns, 0);
 
-    // Single atomic flush writes Channel 1 + Channel 2~5 into ONE .bundle-cache.json
+    // Single atomic flush writes Channel 1 + Channel 2~6 into ONE .bundle-cache.json
     assert.equal(cdpCold.flushPendingBundleCache(), true);
     assert.deepEqual(fs.readdirSync(cacheDir), ['.bundle-cache.json'], 'Must reuse ONE .bundle-cache.json with zero extra files');
     assert.equal(cdpCold.getBundleCacheStats().diskWrites, 1);
     assert.equal(cdpCold.getBundleCacheStats().deferredExprHashRuns, 1);
-    assert.equal(cdpCold.getBundleCacheStats().channelCompileRuns, 4);
+    assert.equal(cdpCold.getBundleCacheStats().channelCompileRuns, 5);
 
     const parsed = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
     assert.equal(parsed.schemaVersion, cdpCold.BUNDLE_CACHE_SCHEMA_VERSION);
     assert.ok(parsed.channels && typeof parsed.channels === 'object');
-    for (const ch of ['omni', 'sidebar', 'hostI18n', 'thought']) {
+    for (const ch of ['omni', 'sidebar', 'hostI18n', 'thought', 'inlineDiff']) {
       assert.ok(parsed.channels[ch], `Expected channels.${ch} in .bundle-cache.json`);
       assert.match(parsed.channels[ch].sourceHash, /^[0-9a-f]{64}$/);
       assert.match(parsed.channels[ch].payloadSha256, /^[0-9a-f]{64}$/);
     }
 
-    // 2) Fresh cold reload hits all 5 channels byte-identically with 0 channel compilation and ONLY 1 readFileSync + 1 JSON.parse
+    // 2) Fresh cold reload hits all 6 channels byte-identically with 0 channel compilation and ONLY 1 readFileSync + 1 JSON.parse
     const origReadFileSync = fs.readFileSync;
     const origJsonParse = JSON.parse;
     const resolvedCachePath = path.resolve(cachePath);
@@ -328,6 +333,7 @@ test('Wave3 P1-6b & P2-7a: Channel 2~5 share .bundle-cache.json, detect same-len
     let sidebarHit;
     let hostI18nHit;
     let thoughtHit;
+    let inlineDiffHit;
     let hitMs = 0;
     fs.readFileSync = function spyCacheRead(p, ...rest) {
       if (typeof p === 'string' && path.resolve(p) === resolvedCachePath) {
@@ -350,26 +356,28 @@ test('Wave3 P1-6b & P2-7a: Channel 2~5 share .bundle-cache.json, detect same-len
       sidebarHit = cdpHit.buildSidebarStudioExpression({ binding: '__agPrismSidebarCall' }, null, { cachePath });
       hostI18nHit = cdpHit.buildHostI18nExpression({ ...cdpHit.DEFAULT_CONFIG, hostLocalization: 'on' }, null, { cachePath });
       thoughtHit = cdpHit.buildThoughtExpression({ ...cdpHit.DEFAULT_CONFIG, thoughtTranslate: 'ai' }, { cachePath });
+      inlineDiffHit = cdpHit.buildInlineDiffInjectExpression(cdpHit.DEFAULT_CONFIG, { cachePath });
       hitMs = performance.now() - tHit0;
     } finally {
       fs.readFileSync = origReadFileSync;
       JSON.parse = origJsonParse;
     }
 
-    assert.equal(cacheFileReads, 1, '5-channel cold reload must execute fs.readFileSync on .bundle-cache.json exactly once');
-    assert.equal(cacheJsonParses, 1, '5-channel cold reload must execute JSON.parse on .bundle-cache.json exactly once');
+    assert.equal(cacheFileReads, 1, '6-channel cold reload must execute fs.readFileSync on .bundle-cache.json exactly once');
+    assert.equal(cacheJsonParses, 1, '6-channel cold reload must execute JSON.parse on .bundle-cache.json exactly once');
     assert.equal(omniHit, omniCold);
     assert.equal(sidebarHit, sidebarCold);
     assert.equal(hostI18nHit, hostI18nCold);
     assert.equal(thoughtHit, thoughtCold);
+    assert.equal(inlineDiffHit, inlineDiffCold);
 
     const hitStats = cdpHit.getBundleCacheStats();
     assert.equal(hitStats.diskHits, 1);
     assert.equal(hitStats.compileUnifiedRuns, 0);
-    assert.equal(hitStats.channelDiskHits, 4);
+    assert.equal(hitStats.channelDiskHits, 5);
     assert.equal(hitStats.channelCompileRuns, 0);
-    assert.deepEqual(hitStats.channelHitsByName, { omni: 1, sidebar: 1, hostI18n: 1, thought: 1 });
-    assert.ok(hitMs < coldMs, `Expected Channel 2~5 cache hit (${hitMs.toFixed(1)}ms) faster than cold compile (${coldMs.toFixed(1)}ms)`);
+    assert.deepEqual(hitStats.channelHitsByName, { omni: 1, sidebar: 1, hostI18n: 1, thought: 1, inlineDiff: 1 });
+    assert.ok(hitMs < coldMs, `Expected Channel 2~6 cache hit (${hitMs.toFixed(1)}ms) faster than cold compile (${coldMs.toFixed(1)}ms)`);
 
     // 3) P2-7a: Repeated warm-base-hit config updates defer 676KB exprSha256 until actual flush
     cdpHit.resetBundleCacheStats();
@@ -1408,6 +1416,10 @@ test('SetFix #5/#6/#7b/#7d: legacy alias normalization, thoughtView off removal,
       getThoughtHooks: () => ({
         shouldEnable: () => false,
         buildExpression: () => '__THOUGHT__',
+        removeExpression: '',
+      }),
+      getInlineDiffHooks: () => ({
+        buildExpression: () => '',
         removeExpression: '',
       }),
     });

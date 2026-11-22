@@ -89,6 +89,7 @@
     let runInit = false;
     let wasRunning = false;
     let runStartAt = 0;
+    let lastVialHighNotifyAt = -600000;
     let fiberTimer = 0;
     let sbInit = false;
     let sbIndex = -1;
@@ -1064,8 +1065,17 @@
               }
             }
           }
-          if (elapsed >= 15000) convAuraCtl?.triggerLongTaskComplete?.(now);
-          notifyMascot('complete', { durationMs: elapsed });
+          if (elapsed >= 15000) {
+            convAuraCtl?.triggerLongTaskComplete?.(now);
+            notifyMascot('aura-complete', { durationMs: elapsed });
+          } else {
+            notifyMascot('complete', { durationMs: elapsed });
+          }
+          const warnBar = qs(d, '#ag-prism-pulse-bar[data-pv-warn="1"]');
+          if (warnBar && now - lastVialHighNotifyAt >= 600000) {
+            lastVialHighNotifyAt = now;
+            notifyMascot('vial-high', { fraction: 0.8 });
+          }
         }
       }
     };
@@ -1550,7 +1560,11 @@
       if (!d) return;
       for (const el of qsa(d, '[data-testid="overview-panel"]')) {
         const p = peOf(el);
-        if (p && tagOf(p) === 'DIV') setAttrIfChanged(p, 'data-ag-cs-overview-shell', '1');
+        if (p && tagOf(p) === 'DIV') {
+          setAttrIfChanged(p, 'data-ag-cs-overview-shell', '1');
+          setAttrIfChanged(p, 'data-ag-cs-prism-box', '1');
+          setAttrIfChanged(p, 'data-ag-cs-prism-mirror', '1');
+        }
       }
       if (!isMotionStandardOrUltra()) return;
       const list = measuredOverlays || measureNewLensOverlays();

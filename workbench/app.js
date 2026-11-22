@@ -88,6 +88,7 @@
 
   const SESSIONS = [
     { id: 'studio-home', group: '置顶', title: 'Studio 首页与全屏波纹光晕', time: '实时', scene: 'studio' },
+    { id: 'm3-surface-lab', group: '今天', title: 'M3 四大死角实景舱 (True CSS)', time: '实景', scene: 'm3lab' },
     { id: 'v2-refactor', group: '今天', title: 'Obsidian Prism 视觉重构', time: '刚刚', scene: 'chat' },
     { id: 'effort-merge', group: '今天', title: '原版 1:1 推理等级滑块', time: '运行中', scene: 'effort', running: true },
     { id: 'dash-fastpath', group: '过去 7 天', title: '实体光学水试管与模型验真', time: '昨天', scene: 'dashboard' },
@@ -173,6 +174,10 @@
     sidebarSearchQuery: '',
     sidebarCollapsedGroups: {},
     workspaceName: 'obsidian-prism',
+    m3ActiveSlashIdx: 1,
+    m3DiffStatus: 'pending', // 'pending' | 'accepted' | 'rejected'
+    m3SwitchOn: true,
+    m3ToastType: 'info', // 'info' | 'success' | 'warning' | 'error'
   };
 
   let rippleControllers = [];
@@ -1450,13 +1455,215 @@
   function getActiveSessionId() {
     return state.scene === 'studio'
       ? 'studio-home'
-      : state.scene === 'effort'
-        ? 'effort-merge'
-        : state.scene === 'dashboard'
-          ? 'dash-fastpath'
-          : state.scene === 'settings'
-            ? 'theme-tokens'
-            : 'v2-refactor';
+      : state.scene === 'm3lab'
+        ? 'm3-surface-lab'
+        : state.scene === 'effort'
+          ? 'effort-merge'
+          : state.scene === 'dashboard'
+            ? 'dash-fastpath'
+            : state.scene === 'settings'
+              ? 'theme-tokens'
+              : 'v2-refactor';
+  }
+
+  function buildM3LabSceneHtml() {
+    const slashItems = [
+      { cmd: '/plan', desc: '双阶段规划蓝图 + 依赖拆解', kbd: 'P' },
+      { cmd: '/boost', desc: '深度架构攻坚 + 多视角验证', kbd: 'B' },
+      { cmd: '/teamwork', desc: '原生多 Agent Swarm 协同施工', kbd: 'T' },
+      { cmd: '/grill-me', desc: '交互式需求对齐与边界确认', kbd: 'G' },
+      { cmd: '/compact', desc: '干净断点上下文压缩归档', kbd: 'C' },
+    ];
+    const diffBadge =
+      state.m3DiffStatus === 'accepted'
+        ? '已采纳 · Accepted'
+        : state.m3DiffStatus === 'rejected'
+          ? '已回退 · Rejected'
+          : '+14 / -3 · Pending';
+    const toastMeta = {
+      info: { title: 'Info · 主题已同步至 Sidecar 浮窗', detail: '已推送 5 阶 Tonal Surface 与 Google Sans 令牌' },
+      success: { title: 'Success · 全部 312 项自动化门禁通过', detail: 'style.css 纯 ASCII 校验与 0fps 休眠全部达标' },
+      warning: { title: 'Warning · 512K 水试管水位达到 84%', detail: '建议在干净断点处执行 /compact 释放上下文' },
+      error: { title: 'Error · 符号链接越界写入已被拦截', detail: '路径逃逸检测已触发 Fail-Closed 保护' },
+    };
+    const activeToast = toastMeta[state.m3ToastType] || toastMeta.info;
+
+    return `
+      <div class="wb-m3lab-scroll" data-testid="m3-surface-lab">
+        <div class="wb-m3lab-wrap">
+          <div class="wb-m3lab-banner">
+            <div>
+              <div class="wb-m3lab-banner-title">Google M3 Expressive · 1:1 真实 style.css 四大死角实景舱</div>
+              <div class="wb-m3lab-banner-sub">直连 /shared/style.css 真实宿主选择器 · 支持右上角四大主题、明暗 Split、四主题 Quad 与圆角实时联动</div>
+            </div>
+            <div class="wb-m3lab-swatches" aria-label="5 阶 Tonal Surface 色阶">
+              <span class="wb-m3lab-swatch"><i style="background:var(--ag-cs-tonal-0)"></i>T0</span>
+              <span class="wb-m3lab-swatch"><i style="background:var(--ag-cs-tonal-1)"></i>T1</span>
+              <span class="wb-m3lab-swatch"><i style="background:var(--ag-cs-tonal-2)"></i>T2</span>
+              <span class="wb-m3lab-swatch"><i style="background:var(--ag-cs-tonal-3)"></i>T3</span>
+              <span class="wb-m3lab-swatch"><i style="background:var(--ag-cs-tonal-4)"></i>T4</span>
+            </div>
+          </div>
+
+          <div class="wb-m3lab-grid">
+            <!-- 表面 1: Fastpick / Slash Command Menu -->
+            <section class="wb-m3lab-panel">
+              <div class="wb-m3lab-panel-head">
+                <span class="wb-m3lab-panel-title">1. Fastpick &amp; Slash 指令弹层</span>
+                <span class="wb-m3lab-panel-tag">.agy-fastpick / [data-testid="slash-command-menu"]</span>
+              </div>
+              <div class="agy-fastpick" data-testid="slash-command-menu">
+                <div class="wb-m3lab-fastpick-body">
+                  <input type="text" value="/boo" placeholder="搜索 Slash 指令或工作区文件..." aria-label="Fastpick 搜索框" />
+                  <div role="listbox" aria-label="Slash 指令候选">
+                    ${slashItems
+                      .map((it, idx) => {
+                        const sel = idx === state.m3ActiveSlashIdx;
+                        return `
+                          <button type="button" class="wb-m3lab-fp-item" role="option" aria-selected="${sel}" data-active="${sel}" data-action="m3-pick-slash" data-idx="${idx}">
+                            <span><strong>${escapeHtml(it.cmd)}</strong> <span style="opacity:.72;margin-left:6px;">${escapeHtml(it.desc)}</span></span>
+                            <span class="wb-m3lab-fp-meta"><kbd>Ctrl</kbd><kbd>${escapeHtml(it.kbd)}</kbd></span>
+                          </button>`;
+                      })
+                      .join('')}
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- 表面 2: Diff 审阅卡片 & 行/字级变更 -->
+            <section class="wb-m3lab-panel">
+              <div class="wb-m3lab-panel-head">
+                <span class="wb-m3lab-panel-title">2. 代码 Diff 审阅卡片 &amp; 25px 双胶囊</span>
+                <span class="wb-m3lab-panel-tag">[data-testid="changed-files-card"] / .monaco-diff-editor</span>
+              </div>
+              <div data-testid="changed-files-card" style="padding:10px 12px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">
+                  <span style="font-size:12.5px;font-weight:600;">host-workbench-enhancer.js</span>
+                  <span style="font-size:11px;opacity:.78;font-variant-numeric:tabular-nums;">${escapeHtml(diffBadge)}</span>
+                </div>
+                <div class="monaco-diff-editor" style="border-radius:var(--ag-cs-r-md);overflow:hidden;border:1px solid var(--ag-cs-border-1);">
+                  <div class="wb-m3lab-diff-lines">
+                    <div class="wb-m3lab-diff-line"><span class="wb-m3lab-diff-ln">36</span><span>  '--warning', '--success', '--scrim',</span></div>
+                    <div class="wb-m3lab-diff-line line-delete"><span class="wb-m3lab-diff-ln">37</span><span>- <span class="char-delete">const legacyBg = '#121216';</span></span></div>
+                    <div class="wb-m3lab-diff-line line-insert"><span class="wb-m3lab-diff-ln">37</span><span>+ <span class="char-insert">'--ag-cs-tonal-0', '--ag-cs-tonal-1', '--ag-cs-tonal-2',</span></span></div>
+                    <div class="wb-m3lab-diff-line line-insert"><span class="wb-m3lab-diff-ln">38</span><span>+ <span class="char-insert">'--ag-cs-tonal-3', '--ag-cs-tonal-4', '--font-sans',</span></span></div>
+                  </div>
+                  <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-top:1px solid var(--ag-cs-border-1);background:var(--ag-cs-tonal-2);">
+                    <span style="font-size:11px;color:var(--muted-foreground);">Hunk 1/2 · 仅影响跨源 Sidecar 令牌</span>
+                    <div class="ag-m3-diff-actions">
+                      <button type="button" data-diff-action="accept" data-action="m3-diff-decision" data-decision="accepted">Accept</button>
+                      <button type="button" data-diff-action="reject" data-action="m3-diff-decision" data-decision="rejected">Reject</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- 表面 3: 插件 / MCP 卡片 + Sheet 表单 + 四色光学 Toast -->
+            <section class="wb-m3lab-panel">
+              <div class="wb-m3lab-panel-head">
+                <span class="wb-m3lab-panel-title">3. 插件 Bento 卡片 · Sheet 表单 · 四色光学 Toast</span>
+                <span class="wb-m3lab-panel-tag">.agy-bento-card / .agy-sheet / .agy-toast</span>
+              </div>
+              <div class="wb-m3lab-bento-row">
+                <div class="agy-plugin-card wb-m3lab-card-pad" data-testid="plugin-card">
+                  <div style="display:flex;align-items:center;justify-content:space-between;">
+                    <strong style="font-size:12.5px;">Obsidian Prism</strong>
+                    <span style="font-size:10.5px;padding:1px 7px;border-radius:999px;background:var(--primary-soft);color:var(--primary);">Active</span>
+                  </div>
+                  <span style="font-size:11.5px;color:var(--muted-foreground);">黑曜棱镜光学与 0fps 休眠引擎</span>
+                </div>
+                <div class="agy-bento-card wb-m3lab-card-pad" data-testid="mcp-server-card">
+                  <div style="display:flex;align-items:center;justify-content:space-between;">
+                    <strong style="font-size:12.5px;">MCP · gemini-decisions</strong>
+                    <span style="font-size:10.5px;padding:1px 7px;border-radius:999px;background:var(--success-soft);color:var(--success);">18ms</span>
+                  </div>
+                  <span style="font-size:11.5px;color:var(--muted-foreground);">零成本结构化初筛与门禁核验</span>
+                </div>
+              </div>
+
+              <div class="agy-sheet" style="padding:10px 12px;border-radius:var(--ag-cs-r-lg);border:1px solid var(--ag-cs-border-1);background:var(--ag-cs-tonal-1);">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                  <span style="font-size:12px;font-weight:500;">Sheet 抽屉表单控件与 2px 焦点光晕</span>
+                  <button type="button" role="switch" aria-checked="${state.m3SwitchOn}" data-action="m3-toggle-switch" style="width:36px;height:20px;padding:2px;border:1px solid var(--ag-cs-border-2);background:${state.m3SwitchOn ? 'var(--primary)' : 'var(--ag-cs-tonal-3)'};cursor:pointer;display:inline-flex;align-items:center;justify-content:${state.m3SwitchOn ? 'flex-end' : 'flex-start'};">
+                    <span style="width:14px;height:14px;border-radius:999px;background:#fff;display:block;"></span>
+                  </button>
+                </div>
+                <div class="wb-m3lab-sheet-row">
+                  <input type="text" value="Obsidian Neutral" aria-label="Sheet 文本输入框" style="padding:6px 10px;font-size:12px;" />
+                  <select aria-label="Sheet 下拉选择" style="padding:6px 10px;font-size:12px;">
+                    <option>Balanced (10px 外框 + 胶囊内件)</option>
+                    <option>Soft (14px 外框 + 胶囊内件)</option>
+                    <option>Crisp (6px 精密锐角)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="wb-m3lab-toast-stack">
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                  ${['info', 'success', 'warning', 'error']
+                    .map(
+                      (tp) =>
+                        `<button type="button" class="wb-mini-action" data-active="${state.m3ToastType === tp}" data-action="m3-toast-type" data-toast-type="${tp}">${tp.toUpperCase()}</button>`
+                    )
+                    .join('')}
+                </div>
+                <div class="agy-toast wb-m3lab-toast-item" data-testid="toast-notification" data-type="${state.m3ToastType}">
+                  <div>
+                    <div style="font-weight:600;color:var(--foreground);">${escapeHtml(activeToast.title)}</div>
+                    <div style="font-size:11.5px;color:var(--muted-foreground);margin-top:2px;">${escapeHtml(activeToast.detail)}</div>
+                  </div>
+                  <kbd>Esc</kbd>
+                </div>
+              </div>
+            </section>
+
+            <!-- 表面 4: Prose 阅读细节 + Artifact 卡片 + 终端沉降底槽 -->
+            <section class="wb-m3lab-panel">
+              <div class="wb-m3lab-panel-head">
+                <span class="wb-m3lab-panel-title">4. Prose 表格/引用/五色警示 · Artifact · 终端底槽</span>
+                <span class="wb-m3lab-panel-tag">.agy-md-table / .markdown-alert / bottom-terminal-panel</span>
+              </div>
+              <div data-testid="agent-response" style="display:flex;flex-direction:column;gap:10px;">
+                <table class="agy-md-table" style="width:100%;border-collapse:collapse;font-size:12px;">
+                  <thead>
+                    <tr><th style="text-align:left;padding:6px 10px;">光学通道</th><th style="text-align:left;padding:6px 10px;">空闲态</th><th style="text-align:right;padding:6px 10px;">状态</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr><td style="padding:6px 10px;">Channel 1 · 静态主包</td><td style="padding:6px 10px;">0fps Idle</td><td style="text-align:right;padding:6px 10px;font-variant-numeric:tabular-nums;">662 KiB</td></tr>
+                    <tr><td style="padding:6px 10px;">Channel 2 · Omni Workbench</td><td style="padding:6px 10px;">暗底预涂零闪白</td><td style="text-align:right;padding:6px 10px;">Tonal Sync</td></tr>
+                  </tbody>
+                </table>
+
+                <blockquote style="margin:0;padding:7px 12px;font-size:12px;">
+                  外框随 corners 保持锐利克制，内部高频交互件全面采用 M3 胶囊，且 100% 保护 v1.0.3 编排无框棱镜水晶条。
+                </blockquote>
+
+                <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;font-size:11.5px;">
+                  <div class="markdown-alert markdown-alert-tip" style="padding:7px 10px;"><strong>TIP</strong> · 暗色靠 5 阶 Tonal 分层，弱化杂乱内描边</div>
+                  <div class="markdown-alert markdown-alert-important" style="padding:7px 10px;"><strong>IMPORTANT</strong> · 右键投喂甜甜圈，Alt+左键热咖啡</div>
+                </div>
+
+                <div data-testid="artifact-card" style="overflow:hidden;">
+                  <div data-testid="artifact-header" style="padding:7px 11px;display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:600;">
+                    <span>ARCH-001-GRILL-DECISIONS.md</span>
+                    <span style="font-size:10.5px;opacity:.72;">Artifact · Locked</span>
+                  </div>
+                  <div style="padding:8px 11px;font-size:11.5px;color:var(--muted-foreground);">隔离开发 Worktree 全部 3 批次决策与验收基线已归档。</div>
+                </div>
+
+                <div data-testid="bottom-terminal-panel" style="border-radius:var(--ag-cs-r-md);overflow:hidden;">
+                  <div class="wb-m3lab-term-body">
+                    <div>$ npm test  <span style="color:var(--success);"># 0 failures · Tonal-0 Console Well</span></div>
+                    <div style="opacity:.72;">› style.css non-ASCII check: 0 bad chars (packCssJsExpr OK)</div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>`;
   }
 
   function getFilteredSessions() {
@@ -1619,23 +1826,28 @@
     const lightPreset = (stageOpts && stageOpts.lightPreset) || state.tokens.lightPreset || 'crystal';
     const isLockedStage = Boolean(stageOpts && stageOpts.lockedPreset);
     const isHome = state.scene === 'studio';
+    const isM3Lab = state.scene === 'm3lab';
     const bodyHtml =
       state.scene === 'studio'
         ? buildStudioHomeHtml()
         : state.scene === 'settings'
           ? buildSettingsSceneHtml()
-          : buildChatStreamHtml();
+          : isM3Lab
+            ? buildM3LabSceneHtml()
+            : buildChatStreamHtml();
 
     const titleText =
       state.scene === 'studio'
         ? 'Studio 总览 · 0fps 物理休眠与四色棱镜涟漪'
-        : state.scene === 'effort'
-          ? '1:1 原版 Codex / Claude 推理滑块'
-          : state.scene === 'dashboard'
-            ? '512K 光学水试管 & 真实模型采样验真'
-            : state.scene === 'settings'
-              ? 'Obsidian Prism · 黑曜棱镜（可折叠外观与共存模块设置）'
-              : '深度对话流 · Obsidian Prism';
+        : isM3Lab
+          ? 'Google M3 Expressive · 1:1 真实 style.css 四大死角实景舱'
+          : state.scene === 'effort'
+            ? '1:1 原版 Codex / Claude 推理滑块'
+            : state.scene === 'dashboard'
+              ? '512K 光学水试管 & 真实模型采样验真'
+              : state.scene === 'settings'
+                ? 'Obsidian Prism · 黑曜棱镜（可折叠外观与共存模块设置）'
+                : '深度对话流 · Obsidian Prism';
 
     const customTag = stageOpts && stageOpts.crumbTag;
     const paletteTag =
@@ -1654,7 +1866,7 @@
             <canvas class="ag-cs-brand-glow ag-v2-brand-glow" data-testid="onboarding-brand-glow" aria-hidden="true"></canvas>
             <canvas class="ag-cs-ripple-canvas" aria-hidden="true"></canvas>
           </div>
-          <div class="ag-v2-conv-aura" data-testid="conv-aura-host" data-dormant="${isHome || state.scene === 'settings'}" data-aura-phase="${state.convAuraPhase}" aria-hidden="true">
+          <div class="ag-v2-conv-aura" data-testid="conv-aura-host" data-dormant="${isHome || state.scene === 'settings' || isM3Lab}" data-aura-phase="${state.convAuraPhase}" aria-hidden="true">
             <canvas class="ag-v2-conv-glow"></canvas>
           </div>
 
@@ -1669,7 +1881,7 @@
           </div>
 
           ${bodyHtml}
-          ${buildComposerHtml(stageOpts && typeof stageOpts.allowFloat === 'boolean' ? stageOpts.allowFloat : true)}
+          ${isM3Lab ? '' : buildComposerHtml(stageOpts && typeof stageOpts.allowFloat === 'boolean' ? stageOpts.allowFloat : true)}
         </div>
         <div class="ag-v2-floating-tip" data-stage-floating-tip="true" aria-hidden="true"><span></span><kbd></kbd></div>
       </div>`;
@@ -1762,11 +1974,34 @@
       </div>`;
   }
 
+  function syncLiveStyleCss() {
+    const t = state.tokens;
+    const html = document.documentElement;
+    const link = document.getElementById('wb-live-style-css');
+    const active = state.scene === 'm3lab';
+    if (link) link.disabled = !active;
+    if (active) {
+      const lp = t.lightPreset || 'crystal';
+      const corners = t.radiusBase >= 10 ? 'soft' : t.radiusBase <= 3 ? 'crisp' : 'balanced';
+      html.setAttribute('data-ag-cs-style', '1');
+      html.setAttribute('data-ag-cs-theme', t.theme === 'light' ? 'light' : 'dark');
+      html.setAttribute('data-ag-cs-palette', t.palette === 'warm' ? 'warm' : 'obsidian');
+      html.setAttribute('data-ag-cs-light-preset', lp);
+      html.setAttribute('data-ag-cs-corners', corners);
+    } else {
+      html.removeAttribute('data-ag-cs-style');
+      html.removeAttribute('data-ag-cs-theme');
+      html.removeAttribute('data-ag-cs-palette');
+      html.removeAttribute('data-ag-cs-corners');
+    }
+  }
+
   function applyTokenStylesToStages() {
     const t = state.tokens;
     const lp = t.lightPreset || 'crystal';
     document.documentElement.setAttribute('data-ag-cs-motion', state.motionLevel);
     document.documentElement.setAttribute('data-ag-cs-light-preset', lp);
+    syncLiveStyleCss();
     const stages = document.querySelectorAll('.ag-v2-stage');
     stages.forEach((stage) => {
       if (stage.getAttribute('data-stage-locked') !== '1') {
@@ -4054,6 +4289,27 @@
           const nextRailBtn = nextRailGlide ? nextRailGlide.closest('.ag-v2-rail-btn') : null;
           if (nextRailGlide && nextRailBtn) runGlide(nextRailGlide, prevRailRect, nextRailBtn.getBoundingClientRect());
         }
+      } else if (action === 'm3-pick-slash') {
+        const idx = Number(actionEl.getAttribute('data-idx'));
+        if (Number.isFinite(idx)) {
+          state.m3ActiveSlashIdx = idx;
+          renderWorkbench();
+        }
+      } else if (action === 'm3-diff-decision') {
+        const dec = actionEl.getAttribute('data-decision');
+        if (dec === 'accepted' || dec === 'rejected') {
+          state.m3DiffStatus = dec;
+          renderWorkbench();
+        }
+      } else if (action === 'm3-toggle-switch') {
+        state.m3SwitchOn = !state.m3SwitchOn;
+        renderWorkbench();
+      } else if (action === 'm3-toast-type') {
+        const tp = actionEl.getAttribute('data-toast-type');
+        if (tp === 'info' || tp === 'success' || tp === 'warning' || tp === 'error') {
+          state.m3ToastType = tp;
+          renderWorkbench();
+        }
       } else if (action === 'pick-range') {
         state.timeRange = actionEl.getAttribute('data-range') || '30d';
         patchTimeRange();
@@ -4278,7 +4534,7 @@
     const theme = params.get('theme');
     const lightPreset = params.get('lightPreset') || params.get('preset');
     if (view === 'single' || view === 'split' || view === 'quad' || view === 'matrix') state.viewMode = view;
-    if (scene === 'studio' || scene === 'chat' || scene === 'effort' || scene === 'dashboard' || scene === 'settings') {
+    if (scene === 'studio' || scene === 'chat' || scene === 'effort' || scene === 'dashboard' || scene === 'settings' || scene === 'm3lab') {
       state.scene = scene;
       if (scene === 'effort' && state.viewMode !== 'quad') state.openPopover = 'effort';
       if (scene === 'dashboard' && state.viewMode !== 'quad') state.openPopover = 'dashboard';
@@ -4419,7 +4675,121 @@
       stopStream() {
         stopStreamSimulation();
       },
+      inspectMascot(opts) {
+        return mascotControllers.map((m) => (typeof m.rig.inspectPose === 'function' ? m.rig.inspectPose(opts) : null));
+      },
+      stepMascotTick(delta = 1) {
+        return mascotControllers.map((m) => (typeof m.rig.stepTick === 'function' ? m.rig.stepTick(delta) : 0));
+      },
     };
+  }
+
+  function bindMascotInspectorControls() {
+    const poseSel = document.getElementById('wb-inspect-pose');
+    const toggleBtn = document.getElementById('btn-inspect-toggle');
+    const prevBtn = document.getElementById('btn-inspect-prev');
+    const nextBtn = document.getElementById('btn-inspect-next');
+    const mirrorBtn = document.getElementById('btn-inspect-mirror');
+    const rulerBtn = document.getElementById('btn-inspect-ruler');
+    const blurBtn = document.getElementById('btn-sim-win-blur');
+    const habBtn = document.getElementById('btn-habitat-cycle');
+    const sqwInput = document.getElementById('ctrl-inspect-sqw');
+    const sqhInput = document.getElementById('ctrl-inspect-sqh');
+    const tickVal = document.getElementById('val-inspect-tick');
+    const sqwVal = document.getElementById('val-inspect-sqw');
+    const sqhVal = document.getElementById('val-inspect-sqh');
+    if (!poseSel || !toggleBtn) return;
+
+    const inspect = { active: false, pose: 'idle', tick: 0, mirror: false, ruler: false, sqW: 0, sqH: 0, blur: false };
+    const fillPoses = () => {
+      const rig = mascotControllers[0]?.rig;
+      const list = rig && typeof rig.listPoses === 'function' ? rig.listPoses() : ['idle'];
+      if (poseSel.options.length === list.length) return;
+      poseSel.innerHTML = '';
+      for (const p of list) {
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = p;
+        poseSel.appendChild(opt);
+      }
+      poseSel.value = inspect.pose;
+    };
+    const apply = () => {
+      fillPoses();
+      if (tickVal) tickVal.textContent = `Tick ${inspect.tick}`;
+      if (sqwVal) sqwVal.textContent = String(inspect.sqW);
+      if (sqhVal) sqhVal.textContent = String(inspect.sqH);
+      toggleBtn.textContent = `锁定检视: ${inspect.active ? '开' : '关'}`;
+      if (mirrorBtn) mirrorBtn.textContent = `Mirror: ${inspect.mirror ? '开' : '关'}`;
+      if (rulerBtn) rulerBtn.textContent = `y=9 标尺: ${inspect.ruler ? '开' : '关'}`;
+      if (blurBtn) blurBtn.textContent = `失焦 0fps: ${inspect.blur ? '开' : '关'}`;
+      mascotControllers.forEach((m) => {
+        if (typeof m.rig.inspectPose === 'function') {
+          m.rig.inspectPose(inspect.active ? { ...inspect } : { active: false });
+        }
+      });
+    };
+
+    poseSel.addEventListener('change', () => {
+      inspect.pose = poseSel.value;
+      inspect.active = true;
+      apply();
+    });
+    toggleBtn.addEventListener('click', () => {
+      inspect.active = !inspect.active;
+      apply();
+    });
+    prevBtn?.addEventListener('click', () => {
+      inspect.active = true;
+      inspect.tick = Math.max(0, inspect.tick - 1);
+      apply();
+    });
+    nextBtn?.addEventListener('click', () => {
+      inspect.active = true;
+      inspect.tick += 1;
+      apply();
+    });
+    mirrorBtn?.addEventListener('click', () => {
+      inspect.active = true;
+      inspect.mirror = !inspect.mirror;
+      apply();
+    });
+    rulerBtn?.addEventListener('click', () => {
+      inspect.active = true;
+      inspect.ruler = !inspect.ruler;
+      apply();
+    });
+    blurBtn?.addEventListener('click', () => {
+      inspect.blur = !inspect.blur;
+      if (inspect.blur) document.documentElement.setAttribute('data-ag-cs-win-blur', '1');
+      else document.documentElement.removeAttribute('data-ag-cs-win-blur');
+      mascotControllers.forEach((m) => m.rig.notify('host-sleep', { sleep: inspect.blur }));
+      apply();
+    });
+    const habModes = [
+      ['auto', '自动'],
+      ['cactus', '日间仙人掌'],
+      ['lamp', '深夜小路灯'],
+      ['hourglass', '守望沙漏'],
+    ];
+    let habIdx = 0;
+    habBtn?.addEventListener('click', () => {
+      habIdx = (habIdx + 1) % habModes.length;
+      const [mode, label] = habModes[habIdx];
+      habBtn.textContent = `栖息地: ${label}`;
+      mascotControllers.forEach((m) => m.rig.setHabitatPreview?.(mode));
+    });
+    sqwInput?.addEventListener('input', () => {
+      inspect.active = true;
+      inspect.sqW = Number(sqwInput.value) || 0;
+      apply();
+    });
+    sqhInput?.addEventListener('input', () => {
+      inspect.active = true;
+      inspect.sqH = Number(sqhInput.value) || 0;
+      apply();
+    });
+    fillPoses();
   }
 
   async function init() {
@@ -4443,6 +4813,7 @@
     bindHeatTooltip();
     bindStageTooltips();
     renderWorkbench();
+    bindMascotInspectorControls();
 
     try {
       const es = new EventSource('/api/events');

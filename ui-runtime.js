@@ -79,6 +79,7 @@
   const STORAGE_USAGE_CACHE_KEY = 'ag-prism:trajRollup.v1';
   const SETTINGS_SEC_ID = 'ag-cs-settings-sec';
   const MODEL_PANEL_SEL = '[data-testid="model-selector-panel"]';
+  const BLUR_ATTR = 'data-ag-cs-win-blur';
   const K_IC = 'isConnected', K_PE = 'parentElement', K_TC = 'textContent', K_CL = 'classList';
   const de = () => D.documentElement;
   const byId = (id) => D.getElementById?.(id) || null;
@@ -136,10 +137,12 @@
     out.placeholderStyle = out.promptStyle = (out.placeholderStyle ?? out.promptStyle ?? 'studio') === 'host' ? 'host' : 'studio';
     out.mascot = out.mascot === 'off' || out.mascot === false ? 'off' : out.mascot === 'minis' ? 'minis' : 'crab';
     out.sidebarCompact = out.sidebarCompact === true || out.sidebarCompact === 'on';
+    out.sidebarNavFold = out.sidebarNavFold === 'on' || out.sidebarNavFold === true ? 'on' : 'off';
     out.smoothCaret = out.smoothCaret === undefined ? true : out.smoothCaret !== false && out.smoothCaret !== 'off';
     out.contextMenu = out.contextMenu === undefined ? true : out.contextMenu !== false && out.contextMenu !== 'off';
     if (!['follow', 'cobalt', 'iris', 'amber', 'mono'].includes(out.accentTone)) out.accentTone = 'follow';
     if (!['sharp', 'balanced', 'soft'].includes(out.cornerStyle)) out.cornerStyle = 'balanced';
+    out.scrollBottomMotion = out.scrollBottomMotion === 'instant' ? 'instant' : 'smooth';
     if (!['default', 'jetbrains', 'cascadia', 'sfmono'].includes(out.codeFont)) out.codeFont = 'default';
     out.codeLigatures = out.codeLigatures === true || out.codeLigatures === 'on';
     const rawAmb = String(out.ambientIntensity ?? '100');
@@ -178,7 +181,7 @@
     for (const k of ['smoothCaret', 'contextMenu']) {
       if (k in patch && typeof patch[k] === 'string') patch[k] = patch[k] !== 'off' && patch[k] !== 'false';
     }
-    for (const k of ['telemetryModule', 'effortSliderModule', 'omniModule', 'sidebarStudio', 'autoUpdate']) {
+    for (const k of ['telemetryModule', 'effortSliderModule', 'omniModule', 'sidebarStudio', 'autoUpdate', 'sidebarNavFold']) {
       if (k in patch && typeof patch[k] === 'boolean') patch[k] = patch[k] ? 'on' : 'off';
     }
     return patch;
@@ -295,7 +298,7 @@
     if (key === 'sidebarRestyle' && 'sidebar' in base && !('sidebarRestyle' in base)) return ['sidebar', value ? 'on' : 'off'];
     if ((key === 'sidebarCompact' || key === 'smoothCaret' || key === 'contextMenu') && typeof base[key] === 'string') return [key, value ? 'on' : 'off'];
     if (key === 'language' && 'lang' in base && !('language' in base)) return ['lang', value];
-    if ((key === 'telemetryModule' || key === 'effortSliderModule' || key === 'omniModule' || key === 'sidebarStudio' || key === 'autoUpdate') && typeof value === 'boolean') {
+    if ((key === 'telemetryModule' || key === 'effortSliderModule' || key === 'omniModule' || key === 'sidebarStudio' || key === 'autoUpdate' || key === 'sidebarNavFold') && typeof value === 'boolean') {
       return [key, value ? 'on' : 'off'];
     }
     if (key === 'palette' && value === 'claude') return ['palette', 'warm'];
@@ -313,7 +316,7 @@
       dirtyFlags.c = true;
     }
     if (chg('homeLayout') || chg('homeRipple') || chg('language')) dirtyFlags.r = true;
-    if (chg('sidebarRestyle') || chg('sidebarCompact')) dirtyFlags.s = true;
+    if (chg('sidebarRestyle') || chg('sidebarCompact') || chg('sidebarNavFold')) dirtyFlags.s = true;
     if (chg('thoughtTranslate') || chg('thoughtTrigger') || chg('thoughtView')) dirtyFlags.l = dirtyFlags.tk = true;
   };
 
@@ -697,7 +700,7 @@
   };
 
   // ── Official Dual Mascot Stage ─────────────────────────────────────────
-  let msRoot = null, msRig = null, msAnc = null, msOrch = null, msActAt = 0;
+  let msRoot = null, msRig = null, msAnc = null, msOrch = null, msLastTier, msActAt = 0;
 
   const notifyMascot = (eventName, payload) => {
     try { msRig?.notify?.(eventName, payload || {}); } catch {}
@@ -738,6 +741,7 @@
     ra(msAnc, 'data-ag-cs-crab-anchor');
     if (ha(de(), 'data-ag-cs-has-crab')) ra(de(), 'data-ag-cs-has-crab');
     msRoot = msRig = msAnc = msOrch = null;
+    msLastTier = undefined;
   };
 
   const syncCrab = (activeCard, activeInfo, modelInfo) => {
@@ -787,7 +791,8 @@
 
     const camp = modelInfo?.camp || 'gemini';
     const isOrch = !!(modelInfo?.isOrchestrator);
-    const streamTier = modelInfo?.tier === 'xhigh' || isOrch ? 3 : 2;
+    const curTier = String(modelInfo?.tier || '').toLowerCase();
+    const streamTier = curTier === 'high' || curTier === 'xhigh' || isOrch ? 3 : 2;
     const nextState = {
       camp,
       streaming: !!(activeInfo?.isRunning),
@@ -819,6 +824,13 @@
       notifyMascot('orchestrator', { on: isOrch });
     }
     msOrch = isOrch;
+    if (msLastTier !== undefined && msLastTier !== curTier && (curTier === 'high' || curTier === 'xhigh')) {
+      notifyMascot('effort-tier', { tier: curTier });
+    }
+    msLastTier = curTier;
+    if (ga(html, 'data-ag-prism-mode') === 'chat' || ha(html, BLUR_ATTR)) {
+      notifyMascot('host-sleep', { sleep: true });
+    }
   };
 
   // ── Extracted Domain Controllers Initialization ────────────────────────
@@ -889,7 +901,7 @@
         doc: D,
         win: W,
         getLang,
-        t: uiText,
+        t: (k) => (k ? uiText()[k] : uiText()),
         isDestroyed: () => destroyed,
         isConvRunning,
         runGuardedMut,
@@ -901,6 +913,8 @@
           motionLevel: getMotionLevel(),
           accentTone: getAccentTone(),
           cornerStyle: getCornerStyle(),
+          scrollBottomMotion: cfg.scrollBottomMotion === 'instant' ? 'instant' : 'smooth',
+          sidebarNavFold: cfg.sidebarNavFold === 'on' ? 'on' : 'off',
           codeFont: getCodeFont(),
           codeLigatures: isCodeLigaturesEnabled(),
           ambientIntensity: getAmbientIntensitySetting(),
@@ -1249,6 +1263,7 @@
         ['data-ag-prism-sidebar-studio', cfg.sidebarStudio === 'on' ? 'on' : 'off'],
         ['data-ag-cs-accent', getAccentTone()],
         ['data-ag-cs-corners', getCornerStyle()],
+        ['data-ag-cs-scroll-bottom', cfg.scrollBottomMotion === 'instant' ? 'instant' : 'smooth'],
         ['data-ag-cs-code-font', getCodeFont()],
         ['data-ag-cs-ligatures', isCodeLigaturesEnabled() ? '1' : '0'],
         ['data-ag-cs-ambient', getAmbientCssValue()],
@@ -1257,6 +1272,7 @@
         ['data-ag-cs-logo-ink', cfg.logoInk === 'foreground' ? 'foreground' : 'accent'],
         ['data-ag-cs-sidebar', cfg.sidebarRestyle === false ? 'off' : 'on'],
         ['data-ag-cs-sidebar-compact', cfg.sidebarCompact === true ? 'on' : 'off'],
+        ['data-ag-cs-sb-fold', cfg.sidebarNavFold === 'on' ? 'on' : 'off'],
         ['data-ag-cs-lang', lang],
       ]) {
         setAttrIfChanged(html, k, v);
@@ -1445,6 +1461,50 @@
     }
   };
 
+  const syncQueuedPrismBoxes = () => {
+    const qCards = qa(D, '[data-testid="queued-messages-card"], [data-testid="interaction-takeover-card"]');
+    if (!qCards || qCards.length === 0) return;
+    const chatMode = ga(de(), 'data-ag-prism-mode') === 'chat';
+    for (const qCard of qCards) {
+      const allowPrism =
+        cfg.composerRestyle !== false &&
+        !chatMode &&
+        !cl(qCard, '[data-testid="subagent-tab-conversation"]');
+      if (allowPrism) {
+        const isNew = ga(qCard, 'data-ag-cs-prism-box') !== '1' || ga(qCard, 'data-ag-cs-prism-reflect') !== 'bottom';
+        setAttrIfChanged(qCard, 'data-ag-cs-prism-box', '1');
+        setAttrIfChanged(qCard, 'data-ag-cs-prism-reflect', 'bottom');
+        if (isNew) {
+          prismRimCtl.invalidateMetrics?.();
+          prismRimCtl.markDirty();
+        }
+      } else if (ha(qCard, 'data-ag-cs-prism-box') || ha(qCard, 'data-ag-cs-prism-reflect')) {
+        ra(qCard, 'data-ag-cs-prism-box');
+        ra(qCard, 'data-ag-cs-prism-reflect');
+        rp(qCard, '--ag-px');
+        rp(qCard, '--ag-py');
+        prismRimCtl.invalidateMetrics?.();
+        prismRimCtl.markDirty();
+      }
+    }
+  };
+
+  const syncPopupOverlayMirrors = () => {
+    const ovs = qa(D, '.agy-overlay');
+    if (!ovs || ovs.length === 0) return;
+    let touched = false;
+    for (const ov of ovs) {
+      if (ha(ov, 'data-hover-card-popup') || tidOf(ov) === 'model-selector-panel') continue;
+      if (ga(ov, 'role') !== 'menu' && !clHas(ov, 'max-h-48')) continue;
+      if (ga(ov, 'data-ag-cs-prism-box') !== '1' || ga(ov, 'data-ag-cs-prism-mirror') !== '1') {
+        touched = true;
+      }
+      setAttrIfChanged(ov, 'data-ag-cs-prism-box', '1');
+      setAttrIfChanged(ov, 'data-ag-cs-prism-mirror', '1');
+    }
+    if (touched) prismRimCtl.markDirty();
+  };
+
   function syncComposers(measured, skipSparks = false) {
     const cards = AF(qa(D, '[data-testid="agent-input-box"] .surface-composer-card'));
     const lang = getLang();
@@ -1513,6 +1573,8 @@
       }
       if (didModelShift && isPrimary) hs.pendingModelShiftNotify = true;
     }
+
+    syncQueuedPrismBoxes();
 
     latestPrimaryModelInfo = primaryModelInfo;
     const activeInfoForCrab = getLightweightActiveInfo(primaryCard);
@@ -2155,6 +2217,7 @@
     'interaction-takeover-card',
     'side-question-panel',
     'running-items-panel',
+    'queued-messages-card',
   ]);
   const COLL_TIDS = new Set([
     'worked-for-collapsible',
@@ -2218,7 +2281,7 @@
         if (isAdded) touchedButtons = true;
       }
 
-      if (COMP_TIDS.has(tid) || cls.includes('surface-composer-card') || ancComp || q('[data-testid="agent-input-box"], [data-testid="input-cancel-button"], .surface-composer-card')) {
+      if (COMP_TIDS.has(tid) || cls.includes('surface-composer-card') || ancComp || q('[data-testid="agent-input-box"], [data-testid="input-cancel-button"], [data-testid="interaction-takeover-card"], [data-testid="queued-messages-card"], .surface-composer-card')) {
         dirtyFlags.c = dirtyFlags.r = true;
         if (isAdded) touchedButtons = true;
       }
@@ -2248,10 +2311,11 @@
     } else {
       if (
         tid === 'interaction-takeover-card' ||
+        tid === 'queued-messages-card' ||
         tid === 'side-question-panel' ||
         tid === 'running-items-panel' ||
         tid === 'agent-loading' ||
-        q('[data-testid="interaction-takeover-card"], [data-testid="side-question-panel"], [data-testid="running-items-panel"]')
+        q('[data-testid="interaction-takeover-card"], [data-testid="queued-messages-card"], [data-testid="side-question-panel"], [data-testid="running-items-panel"]')
       ) {
         dirtyFlags.c = true;
       }
@@ -2471,15 +2535,20 @@
       streamChoreoCtl.cancelDeferredHydration();
     }
 
-    const routeJumped =
-      effectiveFull ||
+    const actualRouteJump =
       measured.isConvSwap ||
       measured.inHome !== prevWasInHome ||
       !!(measured.formalConv) !== prevWasInConv;
+    const routeJumped = effectiveFull || actualRouteJump;
 
     // ── Phase 2: Pure Mutate ──
     runGuardedMut(() => {
       applyRootAttrs(effectiveFull);
+      if (actualRouteJump) {
+        for (const a of ['data-ag-cs-stage-glide', 'data-ag-cs-sonar', 'data-ag-cs-caustic']) {
+          qa(D, `[${a}]`).forEach((el) => ra(el, a));
+        }
+      }
       if (effectiveFull || flags.m) {
         stampBgCmdWrap(effectiveFull ? D : bgCmdNodes);
       }
@@ -2528,9 +2597,10 @@
       }
       if (flags.f || flags.o) {
         streamChoreoCtl.syncLensOverlayOrigins(measured.lensOverlays);
+        syncPopupOverlayMirrors();
       }
 
-      if (routeJumped || flags.r || flags.c) {
+      if (routeJumped || flags.r || flags.c || flags.o) {
         prismRimCtl.markDirty();
       }
 
@@ -2605,7 +2675,7 @@
         ensurePulseBridge(!!(flags.f || flags.t));
       }
     });
-    if (!deferHeavyConvWork && (flags.f || flags.r || flags.l || flags.c || flags.b || flags.t)) {
+    if (!deferHeavyConvWork && (flags.f || flags.r || flags.l || flags.c || flags.b || flags.t || flags.s)) {
       scheduleHostEnhancerSync(!!(flags.f || routeJumped || flags.t));
     }
     if (!deferHeavyConvWork) {
@@ -2678,14 +2748,15 @@
   }
 
   // ── Event Handlers ─────────────────────────────────────────────────────
-  const BLUR_ATTR = 'data-ag-cs-win-blur';
   let blurTm = 0;
   const clearWinBlur = () => {
     if (blurTm) { CT(blurTm); blurTm = 0; }
     const h = de();
     if (ha(h, BLUR_ATTR)) {
       runGuardedMut(() => ra(h, BLUR_ATTR));
+      notifyMascot('host-sleep', { sleep: false });
       try { msRig?.syncPowerState?.(); } catch {}
+      try { convAuraCtl.wake?.(false); } catch {}
       try { convAuraCtl.sync(true); } catch {}
       try { W.__agPrismTelemetry?.refresh?.(); } catch {}
     }
@@ -2707,6 +2778,7 @@
       const h = de();
       if (!destroyed && (!D.hasFocus || !D.hasFocus()) && ga(h, BLUR_ATTR) !== '1') {
         runGuardedMut(() => sa(h, BLUR_ATTR, '1'));
+        notifyMascot('host-sleep', { sleep: true });
         try { msRig?.syncPowerState?.(); } catch {}
       }
     }, 1200);
@@ -2761,13 +2833,36 @@
     );
   };
 
+  const SLASH_CMD_RE = /^\/(plan|goal|boost|teamwork|swarm|browser|compact|schedule|grill-me|learn)(?:\s|$)/i;
+  let lastSlashNotifyAt = 0;
+  let lastSlashNotifyCmd = '';
+  const dispatchComposerSubmit = (scopeEl) => {
+    const box = cl(scopeEl, '[data-testid="agent-input-box"]') || qs(D, '[data-testid="agent-input-box"]');
+    const editable = qs(box, '[contenteditable="true"], textarea, input') || scopeEl;
+    const text = String(editable?.innerText ?? editable?.[K_TC] ?? editable?.value ?? '').trim();
+    const m = SLASH_CMD_RE.exec(text);
+    if (m) {
+      const cmd = m[1].toLowerCase();
+      const now = Date.now();
+      if (cmd !== lastSlashNotifyCmd || now - lastSlashNotifyAt >= 800) {
+        lastSlashNotifyCmd = cmd;
+        lastSlashNotifyAt = now;
+        notifyMascot('slash-cmd', { cmd });
+      }
+      return;
+    }
+    notifyMascot('send', {});
+  };
+
   const onWinKeyDown = (ev) => {
     if (destroyed || !ev) return;
     wakeWinBlur();
     if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && cl(ev.target, '[data-testid="agent-input-box"] [contenteditable="true"]')) {
+      const slashMenu = qs(D, '[data-testid="slash-command-menu"]');
+      if (slashMenu && (!slashMenu.getClientRects || slashMenu.getClientRects().length > 0)) return;
       if (cl(ev.target, '.agy-home')) streamChoreoCtl.triggerHomeLiftoffRippleBurst();
       convAuraCtl.triggerStart();
-      notifyMascot('send', {});
+      dispatchComposerSubmit(ev.target);
       return;
     }
     if (ev.key === '[' && !ev.ctrlKey && !ev.metaKey && !ev.altKey && !isEditableTarget(ev.target)) {
@@ -2801,7 +2896,7 @@
         try { motionEngine?.triggerIcon?.(sendBtn, 'launch'); } catch {}
       }
       convAuraCtl.triggerStart();
-      notifyMascot('send', {});
+      dispatchComposerSubmit(sendBtn);
     }
 
     const copyBtn = cl(t, '[data-ag-cs-icon-injected="copy-check"]') || cl(t, 'pre button, button[aria-label*="Copy" i], button[aria-label*="复制"]');
@@ -2944,6 +3039,7 @@
         }
         const tgt = m.target;
         if (tgt === D.body || tgt === de()) {
+          if (m.attributeName === 'data-ag-prism-mode') dirtyFlags.c = true;
           dirtyFlags.t = anyRelevant = true;
           continue;
         }
@@ -3062,7 +3158,7 @@
     ['pointerup', onWinPointerUp, { passive: true }],
     ['pointercancel', onWinPointerUp, { passive: true }],
     ['resize', onWinResize, { passive: true }],
-    ['keydown', onWinKeyDown, false],
+    ['keydown', onWinKeyDown, true],
     ['click', onWinClick, true],
     ['storage', onWinStorage, false],
     ['blur', onWinBlur, false],
@@ -3083,6 +3179,7 @@
     dirtyTurboRoots.clear();
     clearWinBlur();
     finishResizing(false);
+    unmountCrab();
     if (crabRemoveAttrTimer) {
       CT(crabRemoveAttrTimer);
       crabRemoveAttrTimer = 0;
@@ -3186,7 +3283,7 @@
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['class', 'aria-expanded', 'data-selected', 'data-cascade-id', 'data-ag-prism-host-i18n'],
+      attributeFilter: ['class', 'aria-expanded', 'data-selected', 'data-cascade-id', 'data-ag-prism-host-i18n', 'data-ag-prism-mode'],
     });
     for (const [evName, handler, opts] of DOC_LISTENERS) {
       D.addEventListener(evName, handler, opts);
@@ -3272,6 +3369,8 @@
           thoughtView: getThoughtView(),
           accentTone: getAccentTone(),
           cornerStyle: getCornerStyle(),
+          scrollBottomMotion: cfg.scrollBottomMotion === 'instant' ? 'instant' : 'smooth',
+          sidebarNavFold: cfg.sidebarNavFold === 'on' ? 'on' : 'off',
           codeFont: getCodeFont(),
           codeLigatures: isCodeLigaturesEnabled(),
           contextMenu: isContextMenuEnabled(),
@@ -3314,7 +3413,7 @@
     },
     destroy() {
       teardownCore();
-      for (const k of ['__agPrismTelemetry', '__agPrismEffortSlider', '__agPrismThought', '__agPrismOmni', '__agPrismSidebar']) {
+      for (const k of ['__agPrismTelemetry', '__agPrismEffortSlider', '__agPrismThought', '__agPrismOmni', '__agPrismSidebar', '__agPrismInlineDiff']) {
         try {
           W[k]?.destroy?.();
         } catch {}
@@ -3365,19 +3464,21 @@
         rp(el, '--ag-origin-x');
         rp(el, '--ag-origin-y');
       });
-      for (const s of 'orch-active|model-overlay|aux-dual|overview-shell|conv-seat|vp-wrap|home-sheet|row-running|menu-open|auto-unfolded|outer-open|caustic|fiber-camp|sonar|stage-glide|liftoff-bubble|thought-streaming|spark-streaming|prism-cv|code-folded|bg-cmd-wrap|input-layer|hdr-open|rich-pre|glide-item'.split('|')) {
+      for (const s of 'orch-active|model-overlay|aux-dual|overview-shell|prism-mirror|prism-reflect|settings-dlg|settings-nav|nav-active|conv-seat|vp-wrap|home-sheet|row-running|menu-open|auto-unfolded|outer-open|caustic|fiber-camp|sonar|stage-glide|liftoff-bubble|thought-streaming|spark-streaming|prism-cv|code-folded|bg-cmd-wrap|input-layer|hdr-open|rich-pre|glide-item'.split('|')) {
         const a = 'data-ag-cs-' + s;
         qa(D, `[${a}]`).forEach((el) => ra(el, a));
       }
-      qa(D, '[data-has-sep]').forEach((el) => ra(el, 'data-has-sep'));
+      for (const a of ['data-has-sep', 'data-pv-warn']) {
+        qa(D, `[${a}]`).forEach((el) => ra(el, a));
+      }
       qa(
         D,
-        '#ag-prism-settings-v101-css, #ag-prism-omni-css, #ag-prism-motion-off-css, .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, .ag-cs-ctx-menu, .ag-cs-ctx-toast, [data-ag-prism-omni-owned="1"], .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-conv-aura-host, .ag-cs-conv-glow, .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-model-glyph, .ag-cs-panel-row-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-orbital-backdrop, .ag-cs-perf-backdrop, #' +
+        '#ag-prism-settings-v101-css, #ag-prism-omni-css, #ag-prism-motion-off-css, #ag-prism-inline-diff-css, .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, .ag-cs-ctx-menu, .ag-cs-ctx-toast, .ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu, .ag-cs-sb-more-wrap, [data-ag-prism-omni-owned="1"], .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-conv-aura-host, .ag-cs-conv-glow, .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-model-glyph, .ag-cs-panel-row-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-orbital-backdrop, .ag-cs-perf-backdrop, .ag-v2-habitat-prop, #' +
           SETTINGS_SEC_ID
       ).forEach((el) => el.remove());
       const html = de();
       if (html) {
-        for (const s of 'style|theme|palette|light-preset|motion|target-fps|telemetry|effort-slider|thought-translate|home|composer|logo-ink|sidebar|sidebar-compact|sidebar-collapsed|has-crab|model-menu|lang|cjk|accent|corners|code-font|ligatures|ambient|win-blur|resizing|mascot-drag'.split('|')) {
+        for (const s of 'style|theme|palette|light-preset|motion|target-fps|telemetry|effort-slider|thought-translate|home|composer|logo-ink|sidebar|sidebar-compact|sidebar-collapsed|sb-fold|has-crab|model-menu|lang|cjk|accent|corners|code-font|ligatures|ambient|win-blur|scroll-bottom|resizing|mascot-drag'.split('|')) {
           ra(html, 'data-ag-cs-' + s);
         }
         for (const s of '|thought-view|omni|link-target|sidebar-studio|sidebar-host-sync'.split('|')) {

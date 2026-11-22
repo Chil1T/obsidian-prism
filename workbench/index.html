@@ -17,6 +17,7 @@
   <link rel="stylesheet" href="/styles/v2-tokens.css" />
   <link rel="stylesheet" href="/styles/v2-components.css" />
   <link rel="stylesheet" href="/styles/workbench-shell.css" />
+  <link id="wb-live-style-css" rel="stylesheet" href="/shared/style.css" disabled />
 </head>
 <body>
   <div class="ag-v2-workbench" id="wb-root" data-view="single" data-inspector="open">
@@ -44,6 +45,7 @@
           <button type="button" class="wb-pill-btn" data-wb-scene="effort">原版滑块</button>
           <button type="button" class="wb-pill-btn" data-wb-scene="dashboard">实体水试管</button>
           <button type="button" class="wb-pill-btn" data-wb-scene="settings">设置面板</button>
+          <button type="button" class="wb-pill-btn" data-wb-scene="m3lab">M3 死角实景舱</button>
           <a class="wb-pill-btn" href="/studio" data-testid="wb-open-studio-link" style="text-decoration:none;">⚡ 双极 Studio 预览台</a>
         </div>
       </div>
@@ -231,6 +233,48 @@
               <button type="button" class="wb-mini-action" data-mascot-cmd="crabRide">迷你蟹骑头</button>
               <button type="button" class="wb-mini-action" data-mascot-cmd="bump">迎面轻撞</button>
               <button type="button" class="wb-mini-action" data-mascot-cmd="passBy">擦肩经过</button>
+            </div>
+            <div class="wb-ctrl-row" style="margin-top:8px;">
+              <span class="wb-ctrl-label">9 大 Slash 剧场 · 情境 · 投喂与栖息地</span>
+            </div>
+            <div class="wb-crab-grid" data-testid="wb-slash-theater-grid">
+              <button type="button" class="wb-mini-action" data-mascot-cmd="slash:plan">/plan 蓝图</button>
+              <button type="button" class="wb-mini-action" data-mascot-cmd="slash:goal">/goal 冲刺</button>
+              <button type="button" class="wb-mini-action" data-mascot-cmd="slash:boost">/boost 冰晶</button>
+              <button type="button" class="wb-mini-action" data-mascot-cmd="slash:teamwork">/teamwork</button>
+              <button type="button" class="wb-mini-action" data-mascot-cmd="slash:browser">/browser</button>
+              <button type="button" class="wb-mini-action" data-mascot-cmd="slash:compact">/compact</button>
+              <button type="button" class="wb-mini-action" data-mascot-cmd="slash:schedule">/schedule</button>
+              <button type="button" class="wb-mini-action" data-mascot-cmd="slash:grill-me">/grill-me</button>
+              <button type="button" class="wb-mini-action" data-mascot-cmd="slash:learn">/learn 灯泡</button>
+              <button type="button" class="wb-mini-action" data-mascot-cmd="feedDonut">喂甜甜圈</button>
+              <button type="button" class="wb-mini-action" data-mascot-cmd="feedCoffee">喂热咖啡</button>
+              <button type="button" class="wb-mini-action" data-mascot-cmd="vialHigh">水试管探头</button>
+              <button type="button" class="wb-mini-action" data-mascot-cmd="auraComplete">碰爪庆祝</button>
+              <button type="button" class="wb-mini-action" data-mascot-cmd="effortHigh">高推理换装</button>
+              <button type="button" class="wb-mini-action" data-mascot-cmd="nightSip">深夜热饮</button>
+              <button type="button" class="wb-mini-action" id="btn-habitat-cycle">栖息地: 自动</button>
+            </div>
+            <div class="wb-inspect-box" data-testid="wb-mascot-inspector">
+              <div class="wb-ctrl-row" style="margin-top:8px;">
+                <span class="wb-ctrl-label">逐帧像素检视器 (y=9 标尺)</span>
+                <span class="wb-ctrl-val" id="val-inspect-tick">Tick 0</span>
+              </div>
+              <div class="wb-inspect-row">
+                <select id="wb-inspect-pose" class="wb-select" aria-label="检视姿态枚举"></select>
+                <button type="button" class="wb-mini-action" id="btn-inspect-toggle">锁定检视: 关</button>
+              </div>
+              <div class="wb-crab-grid" style="margin-top:4px;">
+                <button type="button" class="wb-mini-action" id="btn-inspect-prev">Tick -1</button>
+                <button type="button" class="wb-mini-action" id="btn-inspect-next">Tick +1</button>
+                <button type="button" class="wb-mini-action" id="btn-inspect-mirror">Mirror: 关</button>
+                <button type="button" class="wb-mini-action" id="btn-inspect-ruler">y=9 标尺: 关</button>
+                <button type="button" class="wb-mini-action" id="btn-sim-win-blur">失焦 0fps: 关</button>
+              </div>
+              <div class="wb-inspect-sliders">
+                <label class="wb-ctrl-label">sqW <span id="val-inspect-sqw">0</span><input class="wb-range" id="ctrl-inspect-sqw" type="range" min="-2" max="2" step="1" value="0" /></label>
+                <label class="wb-ctrl-label">sqH <span id="val-inspect-sqh">0</span><input class="wb-range" id="ctrl-inspect-sqh" type="range" min="-2" max="2" step="1" value="0" /></label>
+              </div>
             </div>
           </div>
         </div>

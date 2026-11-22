@@ -26,8 +26,77 @@ const DEFAULT_TOKENS = {
 };
 
 const VENDOR_SLIDER_PATH = path.join(REPO_ROOT, 'vendor', 'effort-slider', 'upstream-client.js');
+const CDP_MODULE_PATH = path.join(REPO_ROOT, 'cdp.js');
+const HOST_MIRROR_DIR = path.join(REPO_ROOT, '.antigravity', 'host-mirror');
+
+const ROOT_WATCH_FILES = [
+  'style.css',
+  'ui-runtime.js',
+  'dual-mascot-rig.js',
+  'host-workbench-enhancer.js',
+  'stream-choreography.js',
+  'pulse-vial-bridge.js',
+  'settings-panel.js',
+  'home-studio-panel.js',
+  'home-ripple-host.js',
+  'conv-aura.js',
+  path.join('vendor', 'inline-diff', 'inline-diff-client.js'),
+];
+
+function loadFreshCdp() {
+  try {
+    const resolved = require.resolve(CDP_MODULE_PATH);
+    delete require.cache[resolved];
+  } catch {}
+  return require(CDP_MODULE_PATH);
+}
+
+function parseReplicaPrismConfig(searchParams) {
+  const cfg = {
+    enabled: true,
+    sidebarStudio: 'off',
+    thoughtTranslateMode: 'off',
+    omniViewer: 'off',
+  };
+  const allow = {
+    palette: ['obsidian', 'warm', 'host'],
+    lightPreset: ['crystal', 'alabaster'],
+    cornerStyle: ['sharp', 'balanced', 'soft'],
+    sidebarNavFold: ['off', 'on'],
+    scrollBottomMotion: ['smooth', 'instant'],
+    motionLevel: ['off', 'subtle', 'standard', 'ultra'],
+    accentTone: ['follow', 'mono', 'cobalt', 'iris', 'amber'],
+    homeLayout: ['studio', 'classic', 'off'],
+    telemetryModule: ['auto', 'on', 'off'],
+    effortSliderModule: ['auto', 'on', 'off'],
+    language: ['zh-CN', 'zh-TW', 'yue', 'en', 'ja'],
+    codeFont: ['default', 'jetbrains', 'cascadia', 'sfmono'],
+  };
+  for (const [k, vals] of Object.entries(allow)) {
+    const v = searchParams.get(k);
+    if (v && vals.includes(v)) cfg[k] = v;
+  }
+  const cornersAlias = searchParams.get('corners');
+  if (!cfg.cornerStyle && cornersAlias) {
+    const mapped = cornersAlias === 'crisp' ? 'sharp' : cornersAlias;
+    if (['sharp', 'balanced', 'soft'].includes(mapped)) cfg.cornerStyle = mapped;
+  }
+  const boolKeys = ['mascotMiniPile', 'sidebarCompact', 'composerRestyle', 'sidebarEnhanced'];
+  for (const bk of boolKeys) {
+    const v = searchParams.get(bk);
+    if (v === '1' || v === 'true') cfg[bk] = true;
+    else if (v === '0' || v === 'false') cfg[bk] = false;
+  }
+  const amb = searchParams.get('ambientIntensity');
+  if (amb !== null && amb !== '') {
+    const n = Number(amb);
+    if (Number.isFinite(n)) cfg.ambientIntensity = Math.max(0, Math.min(2, n));
+  }
+  return cfg;
+}
 
 const SHARED_MODULE_MAP = {
+  '/shared/style.css': path.join(REPO_ROOT, 'style.css'),
   '/shared/ripple-core.js': path.join(REPO_ROOT, 'ripple-core.js'),
   '/shared/motion-engine.js': path.join(REPO_ROOT, 'motion-engine.js'),
   '/shared/animated-icons.js': path.join(REPO_ROOT, 'animated-icons.js'),
@@ -35,6 +104,7 @@ const SHARED_MODULE_MAP = {
   '/shared/vial-core.js': path.join(REPO_ROOT, 'vial-core.js'),
   '/shared/crystal-prism-core.js': path.join(REPO_ROOT, 'crystal-prism-core.js'),
   '/shared/effort-slider-client.js': VENDOR_SLIDER_PATH,
+  '/shared/inline-diff-client.js': path.join(REPO_ROOT, 'vendor', 'inline-diff', 'inline-diff-client.js'),
   '/shared/sidebar-state-machine.mjs': SIDEBAR_STATE_MACHINE_PATH,
 };
 
@@ -312,6 +382,7 @@ function createWorkbenchServer(options = {}) {
   const enableWatch = options.watch !== false;
   const sseClients = new Set();
   let watcher = null;
+  const rootWatchers = [];
   let reloadTimer = null;
 
   // 每实例独立随机 Token 与严格 mkdtemp 私有沙盒（绝不触碰 ~/.gemini/config）
@@ -394,6 +465,17 @@ function createWorkbenchServer(options = {}) {
       });
     } catch {
       watcher = null;
+    }
+    for (const rel of ROOT_WATCH_FILES) {
+      try {
+        const w = fs.watch(path.join(REPO_ROOT, rel), () => {
+          clearTimeout(reloadTimer);
+          reloadTimer = setTimeout(broadcastReload, 140);
+        });
+        rootWatchers.push(w);
+      } catch {
+        // 忽略单个文件监听失败
+      }
     }
   }
 
@@ -569,6 +651,97 @@ function createWorkbenchServer(options = {}) {
       return;
     }
 
+    if (req.method === 'GET' && pathname === '/api/host-mirror/native.css') {
+      const cssFile = path.join(HOST_MIRROR_DIR, 'native.css');
+      if (fs.existsSync(cssFile)) {
+        serveFile(res, cssFile, { 'X-Host-Mirror': 'live' }, HOST_MIRROR_DIR);
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'no-store', 'X-Host-Mirror': 'fallback' });
+        res.end('/* Host mirror cache absent; using standalone fallback */\n');
+      }
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/host-mirror/blueprint.json') {
+      const bpFile = path.join(HOST_MIRROR_DIR, 'blueprint.json');
+      if (fs.existsSync(bpFile)) {
+        serveFile(res, bpFile, { 'X-Host-Mirror': 'live' }, HOST_MIRROR_DIR);
+      } else {
+        sendJson(res, 200, { meta: { fallback: true }, parts: { svgIcons: {} } });
+      }
+      return;
+    }
+
+    if (req.method === 'GET' && pathname.startsWith('/api/host-mirror/fonts/')) {
+      const safeName = path.basename(pathname.slice('/api/host-mirror/fonts/'.length));
+      const fontsDir = path.join(HOST_MIRROR_DIR, 'fonts');
+      if (safeName && fs.existsSync(path.join(fontsDir, safeName))) {
+        serveFile(res, path.join(fontsDir, safeName), {}, fontsDir);
+      } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Not Found');
+      }
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/prism-inject.js') {
+      try {
+        const reqUrl = new URL(req.url || '/api/prism-inject.js', 'http://127.0.0.1');
+        const cdpMod = loadFreshCdp();
+        const cfg = parseReplicaPrismConfig(reqUrl.searchParams);
+        let expr = cdpMod.buildInjectExpression(cfg);
+        if (typeof cdpMod.buildInlineDiffInjectExpression === 'function') {
+          const ch6 = cdpMod.buildInlineDiffInjectExpression(cfg);
+          if (ch6) expr = `${expr};\n${ch6}`;
+        }
+        res.writeHead(200, {
+          'Content-Type': 'application/javascript; charset=utf-8',
+          'Cache-Control': 'no-store',
+        });
+        res.end(expr);
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end('Failed to compile Prism bundle: ' + String(err && err.message ? err.message : err));
+      }
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/prism-inline-diff.js') {
+      try {
+        const reqUrl = new URL(req.url || '/api/prism-inline-diff.js', 'http://127.0.0.1');
+        const cdpMod = loadFreshCdp();
+        const cfg = parseReplicaPrismConfig(reqUrl.searchParams);
+        const expr =
+          typeof cdpMod.buildInlineDiffInjectExpression === 'function'
+            ? String(cdpMod.buildInlineDiffInjectExpression(cfg) || '')
+            : '';
+        res.writeHead(200, {
+          'Content-Type': 'application/javascript; charset=utf-8',
+          'Cache-Control': 'no-store',
+        });
+        res.end(expr);
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end('Failed to compile Prism Channel 6 bundle: ' + String(err && err.message ? err.message : err));
+      }
+      return;
+    }
+
+    if (req.method === 'GET' && pathname === '/api/prism-remove.js') {
+      try {
+        const cdpMod = loadFreshCdp();
+        res.writeHead(200, {
+          'Content-Type': 'application/javascript; charset=utf-8',
+          'Cache-Control': 'no-store',
+        });
+        res.end(String(cdpMod.REMOVE_EXPRESSION || ''));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end('Failed to read REMOVE_EXPRESSION: ' + String(err && err.message ? err.message : err));
+      }
+      return;
+    }
+
     if (pathname === '/studio' || pathname === '/studio/') {
       const sec = verifyStudioRequestSecurity(req, server, studioToken, false);
       if (!sec.ok) {
@@ -579,12 +752,22 @@ function createWorkbenchServer(options = {}) {
       return;
     }
 
+    if (pathname === '/legacy' || pathname === '/legacy/') {
+      serveFile(res, path.join(WORKBENCH_DIR, 'index.html'), {}, WORKBENCH_DIR);
+      return;
+    }
+
+    if (pathname.startsWith('/c/')) {
+      serveFile(res, path.join(WORKBENCH_DIR, 'replica.html'), {}, WORKBENCH_DIR);
+      return;
+    }
+
     if (SHARED_MODULE_MAP[pathname]) {
       serveFile(res, SHARED_MODULE_MAP[pathname]);
       return;
     }
 
-    const relPath = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
+    const relPath = pathname === '/' ? 'replica.html' : pathname.replace(/^\/+/, '');
     const resolved = path.resolve(WORKBENCH_DIR, relPath);
     if (resolved !== WORKBENCH_DIR && !resolved.startsWith(WORKBENCH_DIR + path.sep)) {
       res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -607,6 +790,12 @@ function createWorkbenchServer(options = {}) {
         watcher.close();
       } catch {}
       watcher = null;
+    }
+    while (rootWatchers.length) {
+      const w = rootWatchers.pop();
+      try {
+        w.close();
+      } catch {}
     }
     for (const client of sseClients) {
       try {

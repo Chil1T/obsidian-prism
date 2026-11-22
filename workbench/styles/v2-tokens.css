@@ -34,10 +34,16 @@
   --ag-v2-r-md: calc(var(--ag-v2-radius, 6px) + 2px);             /* 8px primary islands */
   --ag-v2-r-lg: calc(var(--ag-v2-radius, 6px) + 4px);
 
-  /* Strict Typography Tiers */
-  --ag-v2-font-sans: 'Google Sans', 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei UI', sans-serif;
+  /* Strict Typography Tiers (Zero-External Google Sans Stack) */
+  --font-sans: 'Google Sans', 'Google Sans Text', 'Inter', 'Segoe UI Variable', 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei UI', system-ui, sans-serif;
+  --ag-v2-font-sans: var(--font-sans);
   --ag-v2-font-serif: 'Newsreader', 'Noto Serif SC', 'Instrument Serif', Georgia, 'Songti SC', serif;
   --ag-v2-font-mono: 'Google Sans Mono', 'JetBrains Mono', 'SF Mono', 'Noto Sans SC', Consolas, monospace;
+  --ag-cs-r-sm: var(--ag-v2-r-xs);
+  --ag-cs-r-md: calc(var(--ag-v2-radius, 6px) + 2px);
+  --ag-cs-r-lg: calc(var(--ag-v2-radius, 6px) + 4px);
+  --ag-cs-r-xl: calc(var(--ag-v2-radius, 6px) + 8px);
+  --ag-cs-r-pill: 999px;
 
   /* Serif is STRICTLY confined to Studio home greeting & book-scale metric */
   --ag-v2-display-font: var(--ag-v2-font-serif);
@@ -168,6 +174,27 @@
   --ag-mascot-coral: #e06c65;
   --ag-mascot-outline: #23171b;
   --prism-light-mul: 1;
+
+  /* M3 Expressive 5-Step Tonal Elevation (Obsidian Dark) */
+  --ag-cs-tonal-0: #09090b;
+  --ag-cs-tonal-1: #0e0e11;
+  --ag-cs-tonal-2: #151519;
+  --ag-cs-tonal-3: #1c1c22;
+  --ag-cs-tonal-4: #24242c;
+  --ag-cs-tonal-wash: rgba(255, 255, 255, 0.045);
+  --ag-cs-specular: rgba(255, 255, 255, 0.095);
+  --ag-cs-border-1: rgba(255, 255, 255, 0.068);
+  --ag-cs-border-2: rgba(255, 255, 255, 0.125);
+  --ag-cs-sheen: linear-gradient(172deg, rgba(255, 255, 255, 0.032) 0%, rgba(255, 255, 255, 0) 38%);
+  --ag-cs-bubble-sh: inset 0 1px 0 var(--ag-cs-specular), 0 1px 2px rgba(0, 0, 0, 0.42), 0 8px 20px -6px rgba(0, 0, 0, 0.45);
+  --ag-cs-popover-bg: #1b1b21;
+  --ag-cs-focus-halo-2: 0 0 0 2px rgba(91, 137, 214, 0.28);
+  --ag-cs-diff-add-bg: rgba(52, 168, 83, 0.12);
+  --ag-cs-diff-add-bar: #34a853;
+  --ag-cs-diff-add-word: rgba(52, 168, 83, 0.28);
+  --ag-cs-diff-del-bg: rgba(234, 67, 53, 0.12);
+  --ag-cs-diff-del-bar: #ea4335;
+  --ag-cs-diff-del-word: rgba(234, 67, 53, 0.28);
 }
 
 /* ── Quadrant 2: Daylight Crystal ·的白昼冷晶棱镜 (Default Light) ──────── */
@@ -244,6 +271,27 @@
   --ag-mascot-coral: #d9655e;
   --ag-mascot-outline: #3a2220;
   --prism-light-mul: 1;
+
+  /* M3 Expressive 5-Step Tonal Elevation (Daylight Crystal) */
+  --ag-cs-tonal-0: #e8eef6;
+  --ag-cs-tonal-1: #f4f7fb;
+  --ag-cs-tonal-2: #ffffff;
+  --ag-cs-tonal-3: #edf2f9;
+  --ag-cs-tonal-4: #ffffff;
+  --ag-cs-tonal-wash: rgba(15, 23, 42, 0.045);
+  --ag-cs-specular: rgba(255, 255, 255, 0.96);
+  --ag-cs-border-1: rgba(15, 23, 42, 0.095);
+  --ag-cs-border-2: rgba(15, 23, 42, 0.16);
+  --ag-cs-sheen: linear-gradient(172deg, rgba(255, 255, 255, 0.85) 0%, rgba(255, 255, 255, 0) 40%);
+  --ag-cs-bubble-sh: 0 1px 3px rgba(15, 23, 42, 0.06), 0 8px 22px -6px rgba(30, 58, 138, 0.09), 0 0 0 1px rgba(15, 23, 42, 0.07);
+  --ag-cs-popover-bg: rgba(255, 255, 255, 0.97);
+  --ag-cs-focus-halo-2: 0 0 0 2px rgba(37, 99, 235, 0.24);
+  --ag-cs-diff-add-bg: rgba(22, 163, 74, 0.10);
+  --ag-cs-diff-add-bar: #16a34a;
+  --ag-cs-diff-add-word: rgba(22, 163, 74, 0.22);
+  --ag-cs-diff-del-bg: rgba(220, 38, 38, 0.09);
+  --ag-cs-diff-del-bar: #dc2626;
+  --ag-cs-diff-del-word: rgba(220, 38, 38, 0.20);
 }
 
 /* ── Quadrant 3 (REF): Titanium Prism · Deep Indigo Dark ───────────────── */
@@ -319,6 +367,27 @@
   --ag-mascot-coral: #e06c65;
   --ag-mascot-outline: #23171b;
   --prism-light-mul: 1;
+
+  /* M3 Expressive 5-Step Tonal Elevation (Obsidian Dark) */
+  --ag-cs-tonal-0: #09090b;
+  --ag-cs-tonal-1: #0e0e11;
+  --ag-cs-tonal-2: #151519;
+  --ag-cs-tonal-3: #1c1c22;
+  --ag-cs-tonal-4: #24242c;
+  --ag-cs-tonal-wash: rgba(255, 255, 255, 0.045);
+  --ag-cs-specular: rgba(255, 255, 255, 0.095);
+  --ag-cs-border-1: rgba(255, 255, 255, 0.068);
+  --ag-cs-border-2: rgba(255, 255, 255, 0.125);
+  --ag-cs-sheen: linear-gradient(172deg, rgba(255, 255, 255, 0.032) 0%, rgba(255, 255, 255, 0) 38%);
+  --ag-cs-bubble-sh: inset 0 1px 0 var(--ag-cs-specular), 0 1px 2px rgba(0, 0, 0, 0.42), 0 8px 20px -6px rgba(0, 0, 0, 0.45);
+  --ag-cs-popover-bg: #1b1b21;
+  --ag-cs-focus-halo-2: 0 0 0 2px rgba(91, 137, 214, 0.28);
+  --ag-cs-diff-add-bg: rgba(52, 168, 83, 0.12);
+  --ag-cs-diff-add-bar: #34a853;
+  --ag-cs-diff-add-word: rgba(52, 168, 83, 0.28);
+  --ag-cs-diff-del-bg: rgba(234, 67, 53, 0.12);
+  --ag-cs-diff-del-bar: #ea4335;
+  --ag-cs-diff-del-word: rgba(234, 67, 53, 0.28);
 }
 
 /* ── Quadrant 4 (REF): Titanium Prism · Nebula Light ───────────────────── */
@@ -467,6 +536,27 @@
   --ag-mascot-coral: #e06c65;
   --ag-mascot-outline: #23171b;
   --prism-light-mul: 1;
+
+  /* M3 Expressive 5-Step Tonal Elevation (Warm Dark) */
+  --ag-cs-tonal-0: #10100f;
+  --ag-cs-tonal-1: #141413;
+  --ag-cs-tonal-2: #1b1a18;
+  --ag-cs-tonal-3: #22201d;
+  --ag-cs-tonal-4: #2a2824;
+  --ag-cs-tonal-wash: rgba(245, 240, 230, 0.048);
+  --ag-cs-specular: rgba(255, 250, 242, 0.09);
+  --ag-cs-border-1: rgba(245, 240, 230, 0.072);
+  --ag-cs-border-2: rgba(245, 240, 230, 0.13);
+  --ag-cs-sheen: linear-gradient(172deg, rgba(255, 250, 242, 0.032) 0%, rgba(255, 250, 242, 0) 38%);
+  --ag-cs-bubble-sh: inset 0 1px 0 var(--ag-cs-specular), 0 1px 2px rgba(0, 0, 0, 0.38), 0 8px 20px -6px rgba(0, 0, 0, 0.44);
+  --ag-cs-popover-bg: #201e1b;
+  --ag-cs-focus-halo-2: 0 0 0 2px rgba(217, 119, 87, 0.28);
+  --ag-cs-diff-add-bg: rgba(95, 168, 130, 0.13);
+  --ag-cs-diff-add-bar: #5fa882;
+  --ag-cs-diff-add-word: rgba(95, 168, 130, 0.28);
+  --ag-cs-diff-del-bg: rgba(226, 120, 114, 0.13);
+  --ag-cs-diff-del-bar: #e27872;
+  --ag-cs-diff-del-word: rgba(226, 120, 114, 0.28);
 }
 
 /* ── Quadrant 6 (ALT): Warm Alabaster · 暖白画册折光 ───────────────────── */
@@ -541,6 +631,27 @@
   --ag-mascot-coral: #d9655e;
   --ag-mascot-outline: #3a2220;
   --prism-light-mul: 1;
+
+  /* M3 Expressive 5-Step Tonal Elevation (Warm Alabaster) */
+  --ag-cs-tonal-0: #ebe6dc;
+  --ag-cs-tonal-1: #f6f4ee;
+  --ag-cs-tonal-2: #ffffff;
+  --ag-cs-tonal-3: #f1eee5;
+  --ag-cs-tonal-4: #ffffff;
+  --ag-cs-tonal-wash: rgba(42, 32, 20, 0.045);
+  --ag-cs-specular: rgba(255, 255, 255, 0.96);
+  --ag-cs-border-1: rgba(42, 32, 20, 0.105);
+  --ag-cs-border-2: rgba(42, 32, 20, 0.17);
+  --ag-cs-sheen: linear-gradient(172deg, rgba(255, 255, 255, 0.88) 0%, rgba(255, 255, 255, 0) 40%);
+  --ag-cs-bubble-sh: 0 1px 3px rgba(42, 32, 20, 0.06), 0 8px 22px -6px rgba(68, 52, 32, 0.10), 0 0 0 1px rgba(42, 32, 20, 0.075);
+  --ag-cs-popover-bg: rgba(255, 255, 255, 0.97);
+  --ag-cs-focus-halo-2: 0 0 0 2px rgba(201, 100, 66, 0.24);
+  --ag-cs-diff-add-bg: rgba(44, 122, 86, 0.10);
+  --ag-cs-diff-add-bar: #2c7a56;
+  --ag-cs-diff-add-word: rgba(44, 122, 86, 0.22);
+  --ag-cs-diff-del-bg: rgba(196, 78, 71, 0.10);
+  --ag-cs-diff-del-bar: #c44e47;
+  --ag-cs-diff-del-word: rgba(196, 78, 71, 0.20);
 }
 
 /* ── 跨调色板通用光学补充 Token（按明暗主题分流） ─────────────────────────── */

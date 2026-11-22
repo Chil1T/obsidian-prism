@@ -92,6 +92,35 @@ function createMockCdpServer() {
             value: { ok: true, status: 'mounted' },
           },
         };
+      } else if (expr.includes('const targetHash =') && (expr.includes('__agPrismInlineDiff') || expr.includes('__agPrismThoughtSettingsUi'))) {
+        result = {
+          result: {
+            type: 'object',
+            value: { ok: true, status: 'mounted' },
+          },
+        };
+      } else if (
+        (expr.includes('delete window.__agPrismInlineDiff') || expr.includes('delete window.__agPrismThoughtSettingsUi')) &&
+        expr.includes("status: 'off'") &&
+        !expr.includes('const targetHash =')
+      ) {
+        result = {
+          result: {
+            type: 'object',
+            value: { ok: true, status: 'off' },
+          },
+        };
+      } else if (
+        expr.includes('window.__agPrismRepoBridge') &&
+        expr.includes('window.__agPrismThoughtBridge') &&
+        !expr.includes('globalThis.__agCsUiMain')
+      ) {
+        result = {
+          result: {
+            type: 'object',
+            value: { ok: true },
+          },
+        };
       } else {
         lastInjectedExpr = expr;
         claudeStyleMounted = true;

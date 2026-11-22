@@ -124,18 +124,14 @@
     },
   };
 
-  const F = (rows, ox = 0, oy = 0, extra = null) => ({
-    rows: typeof rows === 'string' ? (rows ? rows.split('|') : []) : rows,
-    ox,
-    oy,
-    ...(extra === true ? { grounded: true } : extra || {}),
-  });
+  const F = (rows, ox = 0, oy = 0, extra = null) =>
+    extra ? { rows, ox, oy, ...extra } : { rows, ox, oy };
   const rep = (s, n) => Array(n).fill(s);
 
   function mirrorFrame(fr, partW) {
     const w = Math.max(...fr.rows.map((r) => r.length));
     const rows = fr.rows.map((r) => r.padEnd(w, '.').split('').reverse().join(''));
-    return F(rows, partW - (fr.ox + w), fr.oy, fr.grounded ? true : null);
+    return F(rows, partW - (fr.ox + w), fr.oy, fr.grounded ? { grounded: true } : null);
   }
 
   function recolorFrame(fr, map) {
@@ -145,199 +141,61 @@
     };
   }
 
-  // ── Claude 官方 Clawd 分件点阵（16x10 标准画框，y=9 着地） ──────────────
-  const CLAWD_PARTS = {
-    shadow: {
-      w12: F('hhhhhhhhhhhh', 2, 10, true),
-      w14: F('hhhhhhhhhhhhhh', 1, 10, true),
-      w10: F('hhhhhhhhhh', 3, 10, true),
-    },
-    body: {
-      stand: F(rep('############', 8), 2, 0),
-      tall: F(rep('############', 9), 2, -1),
-      squash: F(['.ssssssssssss.', ...rep('##############', 5)], 1, 2),
-      squash2: F(['.ssssssssssss.', ...rep('##############', 4)], 1, 4),
-      flat: F('ssssssssssss|############|############', 2, 7),
-      turnL: F(rep('###########s', 8), 2, 0),
-      turnR: F(rep('s###########', 8), 2, 0),
-      leanR: F([...rep('.############', 4), ...rep('############.', 4)], 2, 0),
-      leanL: F([...rep('############.', 4), ...rep('.############', 4)], 1, 0),
-      peek: F(rep('############', 4), 2, 4),
-    },
-    eyes: {
-      open: F('o......o|o......o', 4, 2),
-      openL: F('o......o|o......o', 3, 2),
-      openR: F('o......o|o......o', 5, 2),
-      half: F('o......o', 4, 3),
-      shut: F('oo......oo', 3, 3),
-      happy: F('.o......o.|o.o....o.o', 3, 2),
-      squint: F('o......o|.o....o.|o......o', 4, 2),
-      wide: F('oo......oo|oo......oo', 3, 2),
-      peekOpen: F('o......o|o......o', 4, 6),
-      peekHalf: F('o......o', 4, 7),
-      flatEyes: F('oo....oo', 4, 8),
-      blink: F('ss......ss', 3, 3),
-      upL: F('o......o|o......o', 3, 1),
-      up: F('o......o|o......o', 4, 1),
-      upR: F('o......o|o......o', 5, 1),
-    },
-    mouth: {
-      small: F('.ss.', 6, 5),
-      yawn: F('ssss|.ss.', 6, 5),
-    },
-    legs: {
-      stand: F('.#.#....#.#.|.#.#....#.#.', 2, 8),
-      crouch: F('.#.#....#.#.', 2, 9),
-      tuck: F('..#.#..#.#..', 2, 8),
-      walkA: F('.#.s....#.s.|.#......#...', 2, 8),
-      walkB: F('.s.#....s.#.|...#......#.', 2, 8),
-      dangle: F('.#.#....#.#.|.#.#........|.#.#........', 2, 8),
-      dangle2: F('.#.#....#.#.|........#.#.|........#.#.', 2, 8),
-      flailA: F('#...#..#...#|#..........#', 2, 8),
-      flailB: F('..#.#..#.#..|....#..#....', 2, 8),
-      flailC: F('#..#....#..#|...#....#..#', 2, 8),
-    },
-    clawL: {
-      stub: F('##|##', 0, 5),
-      front: F('ss|ss', 0, 5),
-      up: F('##|##|#.', 0, -2),
-      low: F('###|###', -1, 8),
-      peekGrip: F('ss', 3, 7),
-      flatLeft: F('ss', 0, 8),
-      open: F('##|.#|##', 0, 4),
-    },
-    clawR: {
-      stub: F('##|##', 14, 5),
-      front: F('ss|ss', 14, 5),
-      up: F('##|##|.#', 14, -2),
-      low: F('###|###', 14, 8),
-      reach1: F('...##|#####', 14, 4),
-      reach2: F('......##|########', 14, 3),
-      write1: F('ss|ss', 13, 6),
-      write2: F('ss|ss', 14, 5),
-      peekGrip: F('ss', 11, 7),
-      flatRight: F('ss', 14, 8),
-      open: F('##|#.|##', 14, 4),
-      waveOut: F('.##|.##|#..', 14, -1),
-    },
-  };
+  // ── 紧凑 RLE 图集（去重派生 + 自动进入 cdp.js 共享 LZ 压缩池，纯函数解码还原同构对象）──
+  const SPRITE_ATLAS_RAW =
+    'c.shadow!w12=2,10,g:12h;w14=1,10,g:14h;w10=3,10,g:10h|c.body!stand=2,0:12#*8;tall=2,-1:12#*9;squash=1,2:.12s./14#*6;squash2=1,4:.12s./14#*4;flat=2,7:12s/12#*2;turnL=2,0:11#s*8;turnR=2,0:s11#*8;leanR=2,0:.12#*4/12#.*4;leanL=1,0:12#.*4/.12#*4;peek=2,4:12#*4|c.eyes!open=4,2:o6.o*2;openL=3,2:o6.o*2;openR=5,2:o6.o*2;half=4,3:o6.o;shut=3,3:oo6.oo;happy=3,2:.o6.o./o.o4.o.o;squint=4,2:o6.o/.o4.o./o6.o;wide=3,2:oo6.oo*2;peekOpen=4,6:o6.o*2;peekHalf=4,7:o6.o;flatEyes=4,8:oo4.oo;blink=3,3:ss6.ss;upL=3,1:o6.o*2;up=4,1:o6.o*2;upR=5,1:o6.o*2|c.mouth!small=6,5:.ss.;yawn=6,5:4s/.ss.|c.legs!stand=2,8:.#.#4.#.#.*2;crouch=2,9:.#.#4.#.#.;tuck=2,8:..#.#..#.#..*2;walkA=2,8:.#.s4.#.s./.#6.#3.;walkB=2,8:.s.#4.s.#./3.#6.#.;dangle=2,8:.#.#4.#.#./.#.#8.*2;dangle2=2,8:.#.#4.#.#./8.#.#.*2;flailA=2,8:#3.#..#3.#/#10.#;flailB=2,8:..#.#..#.#../4.#..#4.;flailC=2,8:#..#4.#..#/3.#4.#..#|c.clawL!stub=0,5:##*2;front=0,5:ss*2;up=0,-2:##*2/#.;peekGrip=1,7:ss;flatLeft=0,8:ss;open=0,4:##/.#/##|c.clawR!stub=14,5:##*2;front=14,5:ss*2;up=14,-2:##*2/.#;low=14,8:3#*2;reach1=14,4:3.##/5#;write1=13,6:ss*2;write2=14,5:ss*2;peekGrip=13,7:ss;flatRight=14,8:ss;open=14,4:##/#./##;waveOut=14,-1:.##*2/#..|k.ears!stand=2,-1:#10.#/##8.##;nod=2,0:#10.#/##8.##;loaf=2,2:#10.#/##8.##;airplane=0,0:##12.##/3#10.3#;peek=2,3:#10.#/##8.##;flat=1,6:#12.#;twitchL=2,-1:11.#/##8.##;twitchR=2,-1:#11./##8.##|k.body!stand=2,1:12#*7;loaf=1,4:.12s./14#*5;stretch=2,0:s11#/12#*2/.11#*2/..10#/12#*2;turnL=2,1:11#s*7;turnR=2,1:s11#*7;leanR=2,1:.12#*4/12#.*3;leanL=1,1:12#.*4/.12#*3|k.eyes!loafShut=3,6:oo6.oo;loafHalf=4,6:o6.o|k.paws!none=0,0:;groom1=12,4:ss*2;groom2=12,3:ss*2;cheer=0,2:#14.#*2;up=0,-1:##12.##*2;peekGrip=1,7:ss10.ss;write1=13,5:ss*2;write2=14,6:ss*2;upR=14,0:##*2|k.tail!up=14,3:.s/.#*2/##;sway=14,3:.#*2/s#/#.;curl=14,4:##/.#/s#;loaf=14,6:.#*2/s#;puff=14,2:.#/##*2/s#/#.|p!quill1=15,3:..B/.B./k..;sheet=12,8:6c/ckk3c/6g;mug=13,4:..4D/3DbwD/D.DbbD/3DbbD/..4D;cloth1=13,2:cw../w3c/.cwc/..c.;cloth2=14,3:..cw/3cw/.cwc/..c.;bowl=12,7:5w/DBwBD/.3D.;bowlEmpty=12,8:D3gD/.3D.;chop1=12,4:3.n/..n./.n../n3.;chop2=12,3:3.n/..n./.n../w3.;fishDish=11,7:.PPsPP./7D/.5D.;fishBone=11,7:.M.M.M./7D/.5D.;envS=12,5:6d/ddwwdd/dwddwd/d4wd/6d;envSOpen=12,4:..dd../.dwwd./6d/d4wd*2/6d;letter=14,1:7d/d5cd/d3gccd/d5cd/d4gcd/d5cd/dggccrd/7d;seed=15,8,g:On/nO;p1=16,7,g:O/l*2;p2=16,6,g:O/l*3;p3=14,5,g:..O../..l../O.l.O/.3l./..l..;p4=14,3,g:..O../O.l.O/.3l./O.l.O/.3l./..l..*2;d1=13,0,g:3.O3./O5.O/.O3.O./7./O5.O/7.*2/3.O3.;d2=13,-2,g:.q3.q./3.q3./q5.q/7./.q3.q./7./3.q3.;wilt1=14,3,g:..q../q.l.q/.3l./q.l.q/.3l./..l..*2;wilt2=14,4,g:q4./.q.q./..ll./.q.l./..ll./..l..;wilt3=15,6,g:Q.Q/.l./Ql./.l.;bfUp=13,-4:B3.B/BB.BB/.BkB./..k..;bfDn=13,-4:5.*2/BBkBB/.BkB.;bfRest=7,-3:..B../.BB../..k..;stickUp=14,-9:WW/GG*6;stickLT=9,-9:5.tt/WG3.tt/.GG..tt/..GG.tt/3.GGtt/4.GGt/5.GG;stickRT=14,-9:tt5./tt3.GW/tt..GG./tt.GG../ttGG3./tGG4./GG5.;sirenDim=5,-4:..LL../.4x.*2/6l;sirenL=5,-4:..Lx../.HLxx./.LLxx./6l;sirenF=5,-4:..HH../.LHHL./.4L./6l;sirenR=5,-4:..xL../.xxLH./.xxLL./6l;beamL=-1,-7:J5./.j4./..j3./6./J3j../6./.Jjj..;beamF=4,-7:J..JJ..J/.j.jj.j.;micStand=1,4,g:6.ZZ6./6.Zz6./6.ZZ6./6.Z7.*2/5.4Z5.;micSink1=1,6,g:6.ZZ6./6.Zz6./6.ZZ6./5.4Z5.;micSink2=1,8,g:6.ZZ6./5.4Z5.;smoke=6,-4:.m./mm./.mm/.m.;iceCrystal=5,-6:..av../.aavv./3a3v/.aavv./..av..;laser0=16,7,g:.p./pRp/.p.;laser1=18,8,g:.R./RpR;laser2=15,8,g:pRp/.R.;blueprint=12,2:7B/B4EBB/BE3BEB/B4EBB/BE3BEB/7B;headband=1,1:.12L.L/..10H..L;goalFlame0=4,-7,g:3.Y3./..fYf../.FfYfF./FfYVYfF;goalFlame1=4,-7,g:..Y4./.fYf..Y/FfYVYf./.FfYfF.;goggles=3,0:gAAg..gAAg/gEAg..gEAg;iceCrystalSpin=6,-7:.av./aavv*2/.av.;flag0=14,-6:l4A./lAAyA./l4A./l5.*4;flag1=14,-6:l..3A/lAAyAA/l3A../l5.*4;shadesProp=3,2:4Z..4Z/ZEZZ..ZEZZ;surfboard=1,8,g:..10A../.A10EA.;waveSplash0=-3,6,g:..E./E.A./.AA.;waveSplash1=-3,6,g:E3./.EA./AA..;cloudBig=12,2:..3w../.w3Ew./5wbw/.5b.;cloudMid=13,3:.3w./wEEbw/.3b.;cubeGlow=13,3:.y.y./A3EA/AEyEA/5A;hourglass0=13,1:5n/.byb./..y../.b.b./5n;hourglass1=13,1:5n/.b.b./..y../.byb./5n;pocketWatch=12,4:..y../.ywy./ywnwy/.3y.;micHand=13,2:.ZZ./ZwZZ/.gg./..g.*2;spotlight=5,-9:..VV../.VyyV./V.yy.V;book0=12,4:5B/B3wB/BwgwB/B3wB/5B;book1=12,4:BB.BB/BwBwB/BwgwB/BwBwB/BB.BB;bulbOff=5,-8:..gg../.g..g.*2/..cc..;bulbOn=5,-9:y.yy.y/.yVVy./y4Vy/..yy../..cc..;hotCup0=12,3:.m..m./m..m../5D./D3nDD/D3nD./.3D..;hotCup1=12,3:m..m../.m..m./5D./D3nDD/D3nD./.3D..;donut0=12,4:.3p./pywpp/pp.pn/5n/.3n.;donut1=12,4:.pp../pyw../pp.pn/5n/.3n.;habCactus=0,0,g:3.P3./..lGl../l.lGl../lGlGl.l/..lGlGl/.5n./..3n..;habLamp=0,0,g:..3l../.l3Vl./.l3Yl./..3l../3.z3.*4/..3z..;habHourglass=0,0,g:.5n./..byb../3.y3./..byb../.5n.|s!heart=5,-7:.r.r./5r/.3r./..r..;spark=5,-8:..y..*2/5y/..y..*2;z1=10,-6:4k/..k./.k../4k;z2=12,-9:3k/.k./3k;vein=5,-7:.r.r./rr.rr/5./rr.rr/.r.r.;bang=6,-8:.r.*3/3./.r.;q=5,-9:.3k./k3.k/3.k./..k../5./..k..;note=5,-8:..kk./..k.k/..k../3k../kk3.;sweat=13,-4:.B./BbB*2/.B.;tilde=5,-7:.k3./k.k.k/3.k.;dozeZ0=12,-3:3k/.k./3k;dozeZ1=13,-7:4k/..k./.k../4k;dozeZ2=14,-12:5k/3.k./..k../.k3./5k;fireSpark0=5,-8:..Y../f3.V/..f..;fireSpark1=5,-9:.V..f/..Y../f4.;fireSpark2=5,-8:f..Y./4.V/.f3.;sleepBubble0=12,4:.b./bEb/.b.;sleepBubble1=12,3:.bb./bEwb/bEEb/.bb.|m!cowboy=0,-2:5.6H5./3.10H3./..12R../..12#../..##o6#o##../16#/..12#../3.#.#4.#.#3.;shades=0,0:..12#../..4Gg##g4G../..12G../16#/..12#../3.#.#4.#.#3.;wizard=0,-3:7.MM7./6.MyMM6./5.6M5./..12M../..12#../..##o6#o##../16#/..12#../3.#.#4.#.#3.|ma.cowboy!trick=0,-2:4.6H6./..10H4./.12R3./..12#../..##o6#o##../16#/..12#../..#..#4.#..#..|ma.shades!trick=0,0:..12#../..GwGGw##GwGGw../..12G../16#/..12#../3.#.#4.#.#3.|ma.wizard!trick=0,-3:5.y10./4.yMyMM7./5.6M5./..12M../..12#../..##o6#o##../16#/..12#y./3.#.#4.#.#.y.';
 
-  // ── Gemini 小紫猫分件点阵（仅限 ['#', 's', 'o', '.', ' ']，y=9 同地平线） ──
-  const CAT_PARTS = {
-    shadow: CLAWD_PARTS.shadow,
-    ears: {
-      stand: F('#..........#|##........##', 2, -1),
-      nod: F('#..........#|##........##', 2, 0),
-      loaf: F('#..........#|##........##', 2, 2),
-      airplane: F('##............##|###..........###', 0, 0),
-      peek: F('#..........#|##........##', 2, 3),
-      flat: F('#............#', 1, 6),
-      twitchL: F('...........#|##........##', 2, -1),
-      twitchR: F('#...........|##........##', 2, -1),
-    },
-    body: {
-      stand: F(rep('############', 7), 2, 1),
-      squash: F(['.ssssssssssss.', ...rep('##############', 4)], 1, 3),
-      loaf: F(['.ssssssssssss.', ...rep('##############', 5)], 1, 4),
-      flat: F('ssssssssssss|############|############', 2, 7),
-      stretch: F('s###########|############|############|.###########|.###########|..##########|############', 2, 0),
-      turnL: F(rep('###########s', 7), 2, 1),
-      turnR: F(rep('s###########', 7), 2, 1),
-      leanR: F([...rep('.############', 4), ...rep('############.', 3)], 2, 1),
-      leanL: F([...rep('############.', 4), ...rep('.############', 3)], 1, 1),
-      peek: F(rep('############', 4), 2, 4),
-    },
-    eyes: {
-      open: F('o......o|o......o', 4, 3),
-      openL: F('o......o|o......o', 3, 3),
-      openR: F('o......o|o......o', 5, 3),
-      half: F('o......o', 4, 4),
-      shut: F('oo......oo', 3, 4),
-      happy: F('.o......o.|o.o....o.o', 3, 3),
-      squint: F('o......o|.o....o.|o......o', 4, 3),
-      wide: F('oo......oo|oo......oo', 3, 3),
-      loafShut: F('oo......oo', 3, 6),
-      loafHalf: F('o......o', 4, 6),
-      peekOpen: F('o......o|o......o', 4, 6),
-      flatEyes: F('oo....oo', 4, 8),
-      blink: F('ss......ss', 3, 4),
-      upL: F('o......o|o......o', 3, 2),
-      up: F('o......o|o......o', 4, 2),
-      upR: F('o......o|o......o', 5, 2),
-    },
-    mouth: {
-      small: F('.ss.', 6, 5),
-      yawn: F('ssss|.ss.', 6, 5),
-    },
-    legs: CLAWD_PARTS.legs,
-    paws: {
-      none: F('', 0, 0),
-      groom1: F('ss|ss', 12, 4),
-      groom2: F('ss|ss', 12, 3),
-      cheer: F('#..............#|#..............#', 0, 2),
-      up: F('##............##|##............##', 0, -1),
-      peekGrip: F('ss......ss', 3, 7),
-      write1: F('ss|ss', 13, 5),
-      write2: F('ss|ss', 14, 6),
-      upR: F('##|##', 14, 0),
-    },
-    tail: {
-      up: F('.s|.#|.#|##', 14, 3),
-      sway: F('.#|.#|s#|#.', 14, 3),
-      curl: F('##|.#|s#', 14, 4),
-      loaf: F('.#|.#|s#', 14, 6),
-      puff: F('.#|##|##|s#|#.', 14, 2),
-    },
-  };
+  function decodeSpriteAtlas(raw) {
+    const out = { c: {}, k: {}, p: {}, s: {}, m: {}, ma: {} };
+    for (const sec of raw.split('|')) {
+      const bi = sec.indexOf('!');
+      const pk = sec.slice(0, bi).split('.');
+      const grp = {};
+      for (const item of sec.slice(bi + 1).split(';')) {
+        const eq = item.indexOf('=');
+        const co = item.indexOf(':', eq + 1);
+        const [ox, oy, fl] = item.slice(eq + 1, co).split(',');
+        const body = item.slice(co + 1);
+        const rows = [];
+        if (body) {
+          for (const seg of body.split('/')) {
+            const st = seg.indexOf('*');
+            const rRaw = st >= 0 ? seg.slice(0, st) : seg;
+            const n = st >= 0 ? +seg.slice(st + 1) : 1;
+            const row = rRaw.replace(/(\d+)(.)/g, (_, cnt, ch) => ch.repeat(+cnt));
+            for (let i = 0; i < n; i++) rows.push(row);
+          }
+        }
+        grp[item.slice(0, eq)] = fl === 'g' ? { ox: +ox, oy: +oy, grounded: true, rows } : { ox: +ox, oy: +oy, rows };
+      }
+      if (pk.length === 1) out[pk[0]] = grp;
+      else out[pk[0]][pk[1]] = grp;
+    }
+    return out;
+  }
 
-  // ── 道具与剧场精灵（迁移自 TauriTavern 并新增猫专属鱼盘/激光点） ─────────
-  const PROPS = {
-    quill1: F('..B|.B.|k..', 15, 3),
-    quill2: F('..B|.B.|k..', 16, 4),
-    sheet: F('cccccc|ckkccc|gggggg', 12, 8),
-    mug: F('..DDDD|DDDbwD|D.DbbD|DDDbbD|..DDDD', 13, 4),
-    cloth1: F('cw..|wccc|.cwc|..c.', 13, 2),
-    cloth2: F('..cw|cccw|.cwc|..c.', 14, 3),
-    bowl: F('wwwww|DBwBD|.DDD.', 12, 7),
-    bowlEmpty: F('DgggD|.DDD.', 12, 8),
-    chop1: F('...n|..n.|.n..|n...', 12, 4),
-    chop2: F('...n|..n.|.n..|w...', 12, 3),
-    fishDish: F('.PPsPP.|DDDDDDD|.DDDDD.', 11, 7),
-    fishBone: F('.M.M.M.|DDDDDDD|.DDDDD.', 11, 7),
-    envS: F('dddddd|ddwwdd|dwddwd|dwwwwd|dddddd', 12, 5),
-    envSOpen: F('..dd..|.dwwd.|dddddd|dwwwwd|dwwwwd|dddddd', 12, 4),
-    letter: F('ddddddd|dcccccd|dgggccd|dcccccd|dggggcd|dcccccd|dggccrd|ddddddd', 12, 1),
-    seed: F('On|nO', 15, 8, true),
-    p1: F('O|l|l', 16, 7, true),
-    p2: F('O|l|l|l', 16, 6, true),
-    p3: F('..O..|..l..|O.l.O|.lll.|..l..', 14, 5, true),
-    p4: F('..O..|O.l.O|.lll.|O.l.O|.lll.|..l..|..l..', 14, 3, true),
-    d1: F('...O...|O.....O|.O...O.|.......|O.....O|.......|.......|...O...', 13, 0, true),
-    d2: F('.q...q.|...q...|q.....q|.......|.q...q.|.......|...q...', 13, -2, true),
-    wilt1: F('..q..|q.l.q|.lll.|q.l.q|.lll.|..l..|..l..', 14, 3, true),
-    wilt2: F('q....|.q.q.|..ll.|.q.l.|..ll.|..l..', 14, 4, true),
-    wilt3: F('Q.Q|.l.|Ql.|.l.', 15, 6, true),
-    bfUp: F('B...B|BB.BB|.BkB.|..k..', 13, -4),
-    bfDn: F('.....|.....|BBkBB|.BkB.', 13, -4),
-    bfLeftUp: F('B...B|BB.BB|.BkB.|..k..', 1, -5),
-    bfLeftDn: F('.....|.....|BBkBB|.BkB.', 1, -5),
-    bfRest: F('..B..|.BB..|..k..', 7, -3),
-    stickUp: F('WW|GG|GG|GG|GG|GG|GG', 14, -9),
-    stickLT: F('.....tt|WG...tt|.GG..tt|..GG.tt|...GGtt|....GGt|.....GG', 9, -9),
-    stickRT: F('tt.....|tt...GW|tt..GG.|tt.GG..|ttGG...|tGG....|GG.....', 14, -9),
-    sirenDim: F('..LL..|.xxxx.|.xxxx.|llllll', 5, -4),
-    sirenL: F('..Lx..|.HLxx.|.LLxx.|llllll', 5, -4),
-    sirenF: F('..HH..|.LHHL.|.LLLL.|llllll', 5, -4),
-    sirenR: F('..xL..|.xxLH.|.xxLL.|llllll', 5, -4),
-    beamL: F('J.....|.j....|..j...|......|Jjjj..|......|.Jjj..', -1, -7),
-    beamF: F('J..JJ..J|.j.jj.j.', 4, -7),
-    micStand: F('......ZZ......|......Zz......|......ZZ......|......Z.......|......Z.......|.....ZZZZ.....', 1, 4, true),
-    micSink1: F('......ZZ......|......Zz......|......ZZ......|.....ZZZZ.....', 1, 6, true),
-    micSink2: F('......ZZ......|.....ZZZZ.....', 1, 8, true),
-    smoke: F('.m.|mm.|.mm|.m.', 6, -4),
-    iceCrystal: F('..av..|.aavv.|aaavvv|.aavv.|..av..', 5, -6),
-    iceCrystalHi: F('..av..|.aavv.|aaavvv|.aavv.|..av..', 5, -7),
-  };
+  const _A = decodeSpriteAtlas(SPRITE_ATLAS_RAW);
+  const CLAWD_PARTS = _A.c;
+  const CAT_PARTS = { shadow: CLAWD_PARTS.shadow, ..._A.k, mouth: CLAWD_PARTS.mouth, legs: CLAWD_PARTS.legs };
+  CAT_PARTS.body.squash = CLAWD_PARTS.body.squash;
+  CAT_PARTS.body.flat = CLAWD_PARTS.body.flat;
+  CAT_PARTS.body.peek = CLAWD_PARTS.body.peek;
+  for (const [ek, ef] of Object.entries(CLAWD_PARTS.eyes)) {
+    if (ek === 'peekHalf') continue;
+    CAT_PARTS.eyes[ek] = ek === 'peekOpen' || ek === 'flatEyes' ? ef : { ...ef, oy: ef.oy + 1 };
+  }
+  const PROPS = _A.p;
+  PROPS.quill2 = { ...PROPS.quill1, ox: PROPS.quill1.ox + 1, oy: PROPS.quill1.oy + 1 };
+  PROPS.bfLeftUp = { ...PROPS.bfUp, ox: PROPS.bfUp.ox - 12, oy: PROPS.bfUp.oy - 1 };
+  PROPS.bfLeftDn = { ...PROPS.bfDn, ox: PROPS.bfDn.ox - 12, oy: PROPS.bfDn.oy - 1 };
+  PROPS.iceCrystalHi = { ...PROPS.iceCrystal, oy: PROPS.iceCrystal.oy - 1 };
+  const SYMS = _A.s;
+  const MINI_SPRITES = _A.m;
+  const MINI_ANIM_FRAMES = _A.ma;
+  for (const id of ['cowboy', 'shades', 'wizard']) {
+    const b = MINI_SPRITES[id];
+    MINI_ANIM_FRAMES[id].walkB = { ox: b.ox, oy: b.oy, rows: [...b.rows.slice(0, -1), '..s#.#....#.#s..'] };
+  }
 
   ['stickUp', 'stickLT', 'stickRT'].forEach((k) => {
     PROPS[k + 'M'] = recolorFrame(mirrorFrame(PROPS[k], 16), { G: 'N', t: 'u' });
@@ -347,17 +205,14 @@
     PROPS[k + 'B'] = recolorFrame(PROPS[k], { L: 'A', H: 'E', x: 'C', j: 'i', J: 'I' });
   });
 
-  // 背后火海算法生成（保留 Clawd/小紫猫轮廓一圈白光 'V'，火焰比本体暗一档）
+  // 背后火海算法生成（保留轮廓白光 'V'）
   (() => {
     const sil = new Set();
     for (let y = 0; y <= 7; y++) for (let x = 2; x <= 13; x++) sil.add(`${x},${y}`);
     for (let y = 5; y <= 6; y++) [0, 1, 14, 15].forEach((x) => sil.add(`${x},${y}`));
     for (let y = 8; y <= 9; y++) [3, 5, 10, 12].forEach((x) => sil.add(`${x},${y}`));
     const glow = (x, y) =>
-      y <= 9 &&
-      !sil.has(`${x},${y}`) &&
-      [-1, 0, 1].some((dx) => [-1, 0, 1].some((dy) => sil.has(`${x + dx},${y + dy}`)));
-
+      y <= 9 && !sil.has(`${x},${y}`) && [-1, 0, 1].some((dx) => [-1, 0, 1].some((dy) => sil.has(`${x + dx},${y + dy}`)));
     const X0 = -3;
     const W = 22;
     const TONGUES = [
@@ -365,78 +220,51 @@
       [[-1, 14, 3, 3, 1.5], [3, 3, 3, 3, 0], [7, 11, 3, 2, -2], [11, 3, 3, 3, 0], [16, 15, 3, 3, -1]],
     ];
     const base = (x) => (x >= 2 && x <= 13 ? 0 : x >= 0 && x <= 15 ? 5 : 8);
-    const SWAY = 2.4;
     const mk = (k, f) => {
       const tips = TONGUES[f % 2].map(([cx, h, sl, sr, lean], i) => {
         const by = base(cx);
-        const ty = by - Math.round(h * k);
-        return { cx, by, ty, sl, sr, h, sw: lean + SWAY * Math.sin((f * Math.PI) / 2 + i * 1.3) };
+        return { cx, by, ty: by - Math.round(h * k), sl, sr, h, sw: lean + 2.4 * Math.sin((f * Math.PI) / 2 + i * 1.3) };
       });
       const heat = (x, y) =>
-        Math.max(
-          -1,
-          ...tips.map(({ cx, by, ty, sl, sr, sw }) => {
-            const rel = Math.max(0, Math.min(1, (by - y) / Math.max(1, by - ty)));
-            const c = cx + sw * rel * rel;
-            return y - ty - (x < c ? sl : sr) * Math.abs(x - c);
-          })
-        );
+        Math.max(-1, ...tips.map(({ cx, by, ty, sl, sr, sw }) => {
+          const rel = Math.max(0, Math.min(1, (by - y) / Math.max(1, by - ty)));
+          const c = cx + sw * rel * rel;
+          return y - ty - (x < c ? sl : sr) * Math.abs(x - c);
+        }));
       const embers = new Set();
       tips.forEach(({ cx, ty, h, sw }, i) => {
         if (i % 3 === f % 3 && h * k >= 4) embers.add(`${Math.round(cx + sw + (i % 2 ? 1 : -1))},${ty - 2}`);
       });
-      const cells = [];
       let y0 = 0;
-      for (let y = -16; y <= 9; y++) {
-        for (let i = 0; i < W; i++) {
-          if (heat(X0 + i, y) >= 0 || embers.has(`${X0 + i},${y}`)) y0 = Math.min(y0, y);
-        }
-      }
+      for (let y = -16; y <= 9; y++) for (let i = 0; i < W; i++) if (heat(X0 + i, y) >= 0 || embers.has(`${X0 + i},${y}`)) y0 = Math.min(y0, y);
+      const cells = [];
       for (let y = y0 - 1; y <= 9; y++) {
-        cells.push(
-          Array.from({ length: W }, (_, i) => {
-            const x = X0 + i;
-            if (sil.has(`${x},${y}`)) return '.';
-            if (glow(x, y)) return 'V';
-            if (embers.has(`${x},${y}`)) return 'f';
-            const e = heat(x, y);
-            return e < 0 ? '.' : e < 1 ? 'F' : e < 4 ? 'f' : 'Y';
-          }).join('')
-        );
+        cells.push(Array.from({ length: W }, (_, i) => {
+          const x = X0 + i;
+          if (sil.has(`${x},${y}`)) return '.';
+          if (glow(x, y)) return 'V';
+          if (embers.has(`${x},${y}`)) return 'f';
+          const e = heat(x, y);
+          return e < 0 ? '.' : e < 1 ? 'F' : e < 4 ? 'f' : 'Y';
+        }).join(''));
       }
       return F(cells, X0, y0 - 1, { grounded: true });
     };
-    [
-      [1, 0.35],
-      [2, 0.7],
-      [3, 1.05],
-    ].forEach(([lv, k]) => {
+    [[1, 0.35], [2, 0.7], [3, 1.05]].forEach(([lv, k]) => {
       for (let f = 0; f < 4; f++) PROPS['fire' + lv + f] = mk(k, f);
     });
   })();
 
-  const SYMS = {
-    heart: F('.r.r.|rrrrr|.rrr.|..r..', 5, -7),
-    spark: F('..y..|..y..|yyyyy|..y..|..y..', 5, -8),
-    z1: F('kkkk|..k.|.k..|kkkk', 10, -6),
-    z2: F('kkk|.k.|kkk', 12, -9),
-    vein: F('.r.r.|rr.rr|.....|rr.rr|.r.r.', 5, -7),
-    bang: F('.r.|.r.|.r.|...|.r.', 6, -8),
-    q: F('.kkk.|k...k|...k.|..k..|.....|..k..', 5, -9),
-    note: F('..kk.|..k.k|..k..|kkk..|kk...', 5, -8),
-    sweat: F('.B.|BbB|BbB|.B.', 13, -4),
-    tilde: F('.k...|k.k.k|...k.', 5, -7),
-    dozeZ0: F('kkk|.k.|kkk', 12, -3),
-    dozeZ1: F('kkkk|..k.|.k..|kkkk', 13, -7),
-    dozeZ2: F('kkkkk|...k.|..k..|.k...|kkkkk', 14, -12),
-  };
-
-  // ── 刚体层登记：道具与符号在整数格挤压时只做整格平移、不参与行列增删 ────
+  // ── 刚体层与符号层登记（符号层水平镜像时仅翻转锚点，字符正向绘制）────────
   const RIGID_LAYERS = new WeakSet();
+  const SYM_LAYERS = new WeakSet();
   Object.values(PROPS).forEach((l) => RIGID_LAYERS.add(l));
-  Object.values(SYMS).forEach((l) => RIGID_LAYERS.add(l));
+  Object.values(SYMS).forEach((l) => {
+    RIGID_LAYERS.add(l);
+    SYM_LAYERS.add(l);
+  });
 
-  // 整格平移帧（带缓存，避免每拍新建对象；保持刚体登记属性）
+  // 整格平移帧（带缓存，传递刚体与符号标记）
   const SHIFT_CACHE = new WeakMap();
   function shiftFrame(fr, dx, dy) {
     if (!fr || (!dx && !dy)) return fr;
@@ -451,31 +279,10 @@
       out = { ...fr, ox: fr.ox + dx, oy: fr.oy + dy };
       bucket.set(key, out);
       if (RIGID_LAYERS.has(fr)) RIGID_LAYERS.add(out);
+      if (SYM_LAYERS.has(fr)) SYM_LAYERS.add(out);
     }
     return out;
   }
-
-  // ── 3 只迷你装扮小蟹（PX = 2 彩蛋堆，保持 MINI_SPRITES 三键契约） ─────────
-  const MINI_SPRITES = {
-    cowboy: F('.....HHHHHH.....|...HHHHHHHHHH...|..RRRRRRRRRRRR..|..############..|..##o######o##..|################|..############..|...#.#....#.#...', 0, -2),
-    shades: F('..############..|..GGGGg##gGGGG..|..GGGGGGGGGGGG..|################|..############..|...#.#....#.#...', 0, 0),
-    wizard: F('.......MM.......|......MyMM......|.....MMMMMM.....|..MMMMMMMMMMMM..|..############..|..##o######o##..|################|..############..|...#.#....#.#...', 0, -3),
-  };
-
-  const MINI_ANIM_FRAMES = {
-    cowboy: {
-      walkB: F('.....HHHHHH.....|...HHHHHHHHHH...|..RRRRRRRRRRRR..|..############..|..##o######o##..|################|..############..|..s#.#....#.#s..', 0, -2),
-      trick: F('....HHHHHH......|..HHHHHHHHHH....|.RRRRRRRRRRRR...|..############..|..##o######o##..|################|..############..|..#..#....#..#..', 0, -3),
-    },
-    shades: {
-      walkB: F('..############..|..GGGGg##gGGGG..|..GGGGGGGGGGGG..|################|..############..|..s#.#....#.#s..', 0, 0),
-      trick: F('..############..|..GwGGw##GwGGw..|..GGGGGGGGGGGG..|################|..############..|...#.#....#.#...', 0, 0),
-    },
-    wizard: {
-      walkB: F('.......MM.......|......MyMM......|.....MMMMMM.....|..MMMMMMMMMMMM..|..############..|..##o######o##..|################|..############..|..s#.#....#.#s..', 0, -3),
-      trick: F('.....y..........|....yMyMM.......|.....MMMMMM.....|..MMMMMMMMMMMM..|..############..|..##o######o##..|################|..############y.|...#.#....#.#.y.', 0, -3),
-    },
-  };
 
   function resolveClawdStandGrid() {
     const grid = Array.from({ length: 10 }, () => Array(16).fill('.'));
@@ -748,13 +555,33 @@
       c2.save();
       c2.translate(0, tyPx);
       if (mirror) {
+        const flipSet = [];
+        const symSet = [];
+        for (const l of elasticLayers) {
+          if (SYM_LAYERS.has(l)) symSet.push(l);
+          else flipSet.push(l);
+        }
+        c2.save();
         c2.translate(anchorX, 0);
         c2.scale(-1, 1);
         c2.translate(-anchorX, 0);
-      }
-      drawLayerSet(c2, oxGrid, oyGrid, pxSize, palette, elasticLayers, options.colorResolver || null);
-      if (typeof options.overlayPainter === 'function') {
-        options.overlayPainter(c2, oxGrid, oyGrid, pxSize);
+        drawLayerSet(c2, oxGrid, oyGrid, pxSize, palette, flipSet, options.colorResolver || null);
+        if (typeof options.overlayPainter === 'function') {
+          options.overlayPainter(c2, oxGrid, oyGrid, pxSize);
+        }
+        c2.restore();
+        if (symSet.length) {
+          const placed = symSet.map((s) => {
+            const w = Math.max(1, ...s.rows.map((r) => r.length));
+            return { ...s, ox: 16 - (s.ox + w) };
+          });
+          drawLayerSet(c2, oxGrid, oyGrid, pxSize, palette, placed, options.colorResolver || null);
+        }
+      } else {
+        drawLayerSet(c2, oxGrid, oyGrid, pxSize, palette, elasticLayers, options.colorResolver || null);
+        if (typeof options.overlayPainter === 'function') {
+          options.overlayPainter(c2, oxGrid, oyGrid, pxSize);
+        }
       }
       c2.restore();
     };
@@ -798,24 +625,262 @@
   const BLINKABLE_POSES = new Set(['idle', 'walk', 'lookNod', 'readAlong', 'gaze']);
   const SLOW_TAIL_POSES = new Set(['idle', 'lookNod', 'readAlong', 'gaze']);
   // 冰晶让位：头顶已有道具的姿态不挂冰晶；居中符号出现时冰晶暂隐，仅侧边汗滴与打盹 z 可共存
-  const CRYSTAL_HIDE_POSES = new Set(['siren', 'onFire', 'cheerSticks', 'peek', 'flat', 'rickroll', 'carry']);
-  const CRYSTAL_OK_SYMS = new Set([SYMS.sweat, SYMS.z1, SYMS.z2, SYMS.dozeZ0, SYMS.dozeZ1, SYMS.dozeZ2]);
+  const CRYSTAL_HIDE_POSES = new Set([
+    'siren', 'onFire', 'cheerSticks', 'peek', 'flat', 'rickroll', 'carry',
+    'slashGoal', 'slashBoost', 'slashSchedule', 'slashGrill', 'slashLearnBulb',
+  ]);
+  const CRYSTAL_OK_SYMS = new Set([SYMS.sweat, SYMS.z1, SYMS.z2, SYMS.dozeZ0, SYMS.dozeZ1, SYMS.dozeZ2, SYMS.sleepBubble0, SYMS.sleepBubble1]);
   // 哈欠接伸懒腰：前 10 拍打哈欠，之后伸懒腰
   const YAWN_STRETCH_SPLIT = 10;
 
-  /**
-   * opts 新增（均可选，旧调用不受影响）：
-   * - blinkStage: 'half' | 'closed'  随机眨眼过渡阶段（1×2 → 1×1 → 闭 → 1×1 → 1×2）
-   * - breath: true                    待机呼吸下沉 1 格（腿收短 1 格、影子宽 ±1 格）
-   * - earTwitch: 'L' | 'R'            小紫猫偶发耳尖抖动
-   * - clawSnap: 'L' | 'R'             Clawd 偶发单钳张开
-   * - clipParam: number               双宠剧目的错峰参数（如点头时刻）
-   * - reduced: true                   减少动态偏好：尾巴静止
-   * - crystal: true                   Clawd 头顶常驻编排器冰晶（crystalBob 控制 1 格上浮）
-   */
+  // ── 紧凑数据驱动姿态配方引擎（24 个常规姿态走极简字符串表进入 LZ 池，复杂时间轴保留短函数）──
+  const PLANT_STAGES_C = [[5, 'seed'], [9, 'p1'], [13, 'p2'], [17, 'p3'], [23, 'p4'], [27, 'wilt1'], [31, 'wilt2']];
+  const PLANT_STAGES_K = [[5, 'seed'], [9, 'p1'], [13, 'p2'], [17, 'p3'], [23, 'p4']];
+  const pickStage = (t, v, fb) => { for (const [lim, k] of t) if (v < lim) return k; return fb; };
+
+  // DSL 字段码: sh=shadow b=body e=eyes l=legs L=clawL R=clawR a=ears w=paws t=tail 1=prop1 2=prop2 y=extraSym(无sym时) z=sink
+  // 值后缀: ~f (frameMod?A:B), ~c (clipMod?A:B), ~4 (phase4 4选1), ~3 (tickIdx%3 3选1); ~ 表示 null; 前缀 C:/K: 仅限爪/猫
+  const POSE_DSL_RAW =
+    'flat:sh=w14,b=flat,e=flatEyes,l=~,C:L=flatLeft,C:R=flatRight,K:a=flat,K:t=curl|' +
+    'dangle:sh=~,e=wide,l=dangle/flailA/dangle2/flailB~4,C:b=turnL/turnR~f,C:L=up,C:R=up,K:a=airplane,K:t=puff|' +
+    'write:l=crouch,z=1,1=sheet,2=quill1/quill2~f,C:b=stand/turnR~f,C:R=write1/write2~f,K:a=stand/nod~f,K:w=write1/write2~f,K:t=sway/curl~f|' +
+    'happy:e=happy,C:b=squash/stand~f,C:l=crouch/stand~f,C:L=up,C:R=up,K:a=nod/stand~f,K:w=cheer,K:t=up/puff~f|' +
+    'pet:e=happy,C:b=squash/stand~f,C:l=crouch/stand~f,C:L=up,C:R=up,K:a=nod/stand~f,K:w=cheer,K:t=up/puff~f|' +
+    'jiggle:l=flailA/flailB/flailC~3,e=happy,C:L=up,C:R=up,K:a=stand,K:t=puff|' +
+    'peek:sh=~,b=peek,l=~,C:L=peekGrip,C:R=peekGrip,K:a=peek,K:e=peekOpen,K:w=peekGrip,K:t=loaf|' +
+    'angry:b=squash/stand~f,l=walkA/walkB~f,C:e=squint,K:a=airplane,K:e=wide,K:t=puff|' +
+    'groom:K:a=nod,K:e=shut,K:w=groom1/groom2~f|' +
+    'tilt:b=turnL,e=half,K:a=nod,K:t=curl|' +
+    'wow:e=wide,C:b=tall,C:L=up,C:R=up,K:a=stand,K:w=up,K:t=puff|' +
+    'sulk:b=turnL,e=squint/shut~c,l=tuck,y=vein,C:L=front,C:R=front,K:a=airplane,K:t=curl|' +
+    'polish:b=turnR,1=mug,2=cloth1/cloth2~c,C:R=front,K:a=stand|' +
+    'chaseDot:K:a=airplane,K:b=squash/stretch~c,K:e=wide,K:l=walkA/stand~c,K:t=puff,K:y=spark|' +
+    'stretch:e=shut,y=tilde,C:b=tall,C:l=stand,C:L=up,C:R=up,K:a=stand,K:b=stretch,K:t=puff|' +
+    'spinHop:b=turnR/stand/turnL/squash~4,e=open/open/open/happy~4,l=tuck/tuck/tuck/crouch~4,K:t=puff|' +
+    'cheerSticks:b=squash/stand~f,l=crouch/stand~f,e=happy,1=stickLT/stickUp/stickRT/stickUp~4,2=stickRTM/stickUpM/stickLTM/stickUpM~4,y=note,C:L=up,C:R=up,K:a=stand/nod~c,K:w=up,K:t=puff|' +
+    'chatGreet:b=stand/squash~c,e=happy,y=heart/note~c,C:L=up/stub~c,K:a=nod,K:t=up/puff~c|' +
+    'balance:e=wide,C:L=open,C:R=open,K:a=airplane,K:w=cheer,K:t=puff|' +
+    'worry:e=half/squint~c,l=tuck,y=sweat,C:L=front,C:R=front,K:a=airplane,K:t=curl|' +
+    'salute:e=happy,y=spark,C:R=up,K:a=stand,K:w=upR,K:t=up|' +
+    'carry:C:e=up,C:L=open,C:R=open|' +
+    'slashTeam:e=happy,1=flag0/flag1~c,y=spark,C:R=up,K:a=stand,K:w=upR,K:t=puff|' +
+    'slashBrowser:b=leanR/turnR~c,1=shadesProp,2=surfboard,y=spark,K:a=airplane,K:t=puff|' +
+    'slashGrill:e=squint,1=spotlight,2=micHand,y=q,C:R=front,K:a=nod,K:w=write1,K:t=curl|' +
+    'slashLearnBook:e=half/open~c,1=book0/book1~c,y=note,C:R=front,K:a=nod,K:w=write1,K:t=sway|' +
+    'nightSip:e=half/happy~c,1=hotCup0/hotCup1~c,y=tilde,C:R=front,K:a=nod,K:t=curl|' +
+    'feedCoffee:e=happy,1=hotCup0/hotCup1~c,y=heart,C:R=front,K:a=nod/stand~f,K:t=up/puff~f';
+
+  const DSL_KEY_MAP = { sh: 'shadow', b: 'body', e: 'eyes', l: 'legs', L: 'clawL', R: 'clawR', a: 'ears', w: 'paws', t: 'tail', 1: 'prop1', 2: 'prop2', y: 'extraSym', z: 'sink' };
+  const POSE_DSL = Object.create(null);
+  for (const seg of POSE_DSL_RAW.split('|')) {
+    const idx = seg.indexOf(':');
+    POSE_DSL[seg.slice(0, idx)] = seg.slice(idx + 1).split(',').map((kv) => {
+      let scope = 0;
+      let rest = kv;
+      if (rest[1] === ':') { scope = rest[0] === 'K' ? 2 : 1; rest = rest.slice(2); }
+      const eq = rest.indexOf('=');
+      const prop = DSL_KEY_MAP[rest.slice(0, eq)];
+      const rawV = rest.slice(eq + 1);
+      const tIdx = rawV.indexOf('~');
+      if (rawV === '~') return [scope, prop, 0, null];
+      if (tIdx >= 0) return [scope, prop, rawV.slice(tIdx + 1), rawV.slice(0, tIdx).split('/')];
+      return [scope, prop, 0, prop === 'sink' ? +rawV : rawV];
+    });
+  }
+
+  function applyDslPose(s, rules, c) {
+    for (const [sc, prop, mode, val] of rules) {
+      if ((sc === 1 && c.isCat) || (sc === 2 && !c.isCat)) continue;
+      let v = val;
+      if (mode === 'f') v = val[c.frameMod ? 0 : 1];
+      else if (mode === 'c') v = val[c.clipMod ? 0 : 1];
+      else if (mode === '4') v = val[c.phase4];
+      else if (mode === '3') v = val[c.tickIdx % 3];
+      if (prop === 'extraSym') { if (!c.sym) s.extraSym = v; }
+      else s[prop] = v;
+    }
+  }
+
+  const POSE_RECIPES = {
+    idle: null,
+    squash(s, { isCat, p }) {
+      s.shadow = 'w14'; s.body = 'squash'; s.legs = 'crouch';
+      if (isCat) { s.ears = 'nod'; s.eyes = 'half'; } else s.eyes = shiftFrame(p.eyes.squint, 0, 1);
+    },
+    loaf(s, { isCat, poseKey, phase4, tickIdx }) {
+      if (!isCat) return;
+      s.shadow = 'w14'; s.ears = 'loaf'; s.body = 'loaf'; s.legs = null;
+      s.eyes = poseKey === 'sleep' || phase4 === 3 ? 'loafShut' : 'loafHalf';
+      s.tail = poseKey === 'sleep' ? 'loaf' : Math.floor(tickIdx / 4) % 2 ? 'loaf' : 'curl';
+    },
+    sleep(s, c) { if (c.isCat) POSE_RECIPES.loaf(s, c); else { s.body = 'squash'; s.eyes = 'shut'; s.legs = 'tuck'; } },
+    walk(s, { isCat, tickIdx, opts }) {
+      const b = Math.floor(tickIdx / 2) % 4;
+      s.legs = ['walkA', 'stand', 'walkB', 'stand'][b];
+      if (b % 2 === 0) s.sink = 1;
+      if (isCat) s.tail = b < 2 ? 'up' : 'sway'; else s.body = opts.dir === 'left' ? 'turnL' : 'turnR';
+    },
+    peek(s, c) { applyDslPose(s, POSE_DSL.peek, c); if (!c.isCat) s.eyes = c.phase4 === 3 ? 'peekHalf' : 'peekOpen'; },
+    polish(s, c) { applyDslPose(s, POSE_DSL.polish, c); s.eyes = c.phase4 === 2 ? 'happy' : 'open'; },
+    chaseDot(s, c) { if (!c.isCat) return; applyDslPose(s, POSE_DSL.chaseDot, c); s.prop1 = 'laser' + (c.lt % 3); },
+    eat(s, { isCat, lt, clipMod, sym }) {
+      const d = lt > (isCat ? 20 : 22), em = lt > (isCat ? 18 : 20);
+      s.body = d ? 'stand' : 'squash'; s.legs = d ? 'stand' : 'crouch';
+      s.eyes = d ? 'happy' : isCat ? 'half' : clipMod ? 'half' : 'open';
+      s.prop1 = em ? 'bowlEmpty' : 'bowl'; s.prop2 = em ? null : clipMod ? 'chop2' : 'chop1';
+      s.extraSym = d ? SYMS.heart : sym; if (isCat) s.ears = 'nod';
+    },
+    eatFish(s, { isCat, lt, clipMod, sym }) {
+      const d = lt > 20;
+      s.body = d ? 'stand' : 'squash'; s.legs = d ? 'stand' : 'crouch';
+      s.eyes = d ? 'happy' : isCat ? (clipMod ? 'half' : 'open') : 'half';
+      s.prop1 = lt > 18 ? 'fishBone' : 'fishDish'; s.extraSym = d ? SYMS.heart : sym;
+      if (isCat) { s.ears = d ? 'stand' : 'nod'; s.tail = clipMod ? 'sway' : 'up'; }
+    },
+    catStretch(s, { isCat, lt }) {
+      if (!isCat) return;
+      if (lt >= 18) { s.ears = 'loaf'; s.body = 'loaf'; s.eyes = 'loafHalf'; s.legs = null; s.tail = 'loaf'; s.extraSym = SYMS.z1; }
+      else { s.ears = 'nod'; s.body = 'stretch'; s.eyes = 'shut'; s.tail = 'up'; s.extraSym = SYMS.tilde; }
+    },
+    letter(s, { isCat, lt, sym }) {
+      s.body = 'turnR'; s.eyes = lt >= 10 && lt <= 18 ? 'half' : lt > 18 ? 'happy' : 'open';
+      s.prop1 = lt < 6 ? 'envS' : lt < 11 ? 'envSOpen' : 'letter'; s.extraSym = lt > 18 ? SYMS.heart : sym;
+      if (isCat) s.ears = 'nod';
+    },
+    plant(s, { isCat, lt, sym, p }) {
+      s.legs = lt < 8 ? 'crouch' : 'stand';
+      if (isCat) {
+        s.ears = 'nod'; s.body = lt < 8 ? 'squash' : 'stand'; s.eyes = lt >= 16 && lt <= 24 ? 'happy' : 'open';
+        s.prop1 = pickStage(PLANT_STAGES_K, lt, 'wilt2'); s.prop2 = lt >= 17 && lt < 21 ? 'd1' : null;
+      } else {
+        s.body = lt < 8 ? 'squash2' : 'stand'; s.clawR = lt < 8 ? 'low' : 'stub';
+        s.eyes = lt < 8 ? shiftFrame(p.eyes.open, 0, 3) : lt >= 16 && lt <= 24 ? 'happy' : lt > 24 ? 'half' : 'open';
+        s.prop1 = pickStage(PLANT_STAGES_C, lt, 'wilt3');
+        s.prop2 = lt >= 17 && lt < 21 ? 'd1' : lt >= 21 && lt < 23 ? 'd2' : null;
+        s.extraSym = lt > 28 ? SYMS.sweat : sym;
+      }
+    },
+    butterfly(s, { isCat, lt, clipMod, sym }) {
+      const lp = lt % 16 >= 8, r = lt >= 24 && lt <= 30;
+      s.eyes = r ? 'happy' : lp ? 'openL' : 'openR';
+      s.prop1 = r ? 'bfRest' : lp ? (clipMod ? 'bfLeftUp' : 'bfLeftDn') : clipMod ? 'bfUp' : 'bfDn';
+      s.extraSym = r ? SYMS.spark : sym;
+      if (isCat) { s.ears = r ? 'nod' : 'stand'; s.tail = clipMod ? 'sway' : 'puff'; } else s.clawR = lt % 10 < 5 ? 'reach1' : 'stub';
+    },
+    onFire(s, { lt }) {
+      const cool = lt >= 30;
+      s.backProp = cool ? null : 'fire' + (lt < 5 ? 1 : lt < 10 ? 2 : 3) + (lt % 4);
+      s.prop1 = 'mug'; s.eyes = 'open'; s.extraSym = cool ? PROPS.smoke : SYMS['fireSpark' + (lt % 3)];
+    },
+    rickroll(s, { isCat, lt, clipMod, phase4, sym }) {
+      s.body = ['leanR', 'squash', 'leanL', 'stand'][phase4]; s.eyes = clipMod ? 'happy' : 'open';
+      s.prop1 = lt > 33 ? 'micSink2' : lt > 30 ? 'micSink1' : 'micStand'; s.extraSym = sym || SYMS.note;
+      if (isCat) { s.ears = clipMod ? 'stand' : 'nod'; s.paws = 'cheer'; }
+      else { s.clawL = clipMod ? 'up' : 'stub'; s.clawR = clipMod ? 'stub' : 'up'; }
+    },
+    siren(s, { isCat, lt, clipMod }) {
+      const x = Math.floor(lt / 6) % 2 ? 'B' : '', i = lt % 4, bn = ['beamL', 'beamF', 'beamR', null][i];
+      s.body = clipMod ? 'squash' : 'stand'; s.eyes = 'wide';
+      s.prop1 = ['sirenL', 'sirenF', 'sirenR', 'sirenDim'][i] + x; s.prop2 = bn ? bn + x : null;
+      s.extraSym = clipMod ? SYMS.bang : SYMS.sweat; if (isCat) s.ears = 'airplane';
+    },
+    lookNod(s, { isCat, lt, opts, sym }) {
+      const fL = opts.dir === 'left', at = Number(opts.clipParam ?? (isCat ? 9 : 5)), nod = lt >= at && lt < at + 2;
+      s.body = fL ? 'turnL' : 'turnR'; s.eyes = nod ? 'happy' : fL ? 'openL' : 'openR';
+      if (nod) { s.sink = 1; s.legs = 'crouch'; }
+      s.extraSym = sym || (lt >= at + 2 && lt < at + 8 ? (isCat ? SYMS.heart : SYMS.note) : null);
+    },
+    readAlong(s, { isCat, lt, sym }) {
+      const on = lt >= 2 && lt < 14 && (lt - 2) % 4 < 2;
+      s.eyes = on ? 'half' : 'open'; if (on) { s.sink = 1; s.legs = 'crouch'; }
+      s.extraSym = sym || (isCat ? null : SYMS.note);
+    },
+    yawn(s, { isCat, lt, sym }) {
+      if (lt < 2) { if (isCat) s.ears = 'nod'; s.eyes = 'half'; s.mouth = 'small'; }
+      else if (lt < 9) {
+        s.eyes = 'shut'; s.mouth = 'yawn'; s.extraSym = sym || (lt >= 4 ? SYMS.tilde : null);
+        if (isCat) { s.ears = 'nod'; s.tail = 'puff'; } else { s.body = 'tall'; s.clawL = 'up'; s.clawR = 'up'; }
+      } else { s.eyes = 'half'; if (isCat) s.tail = 'curl'; }
+    },
+    wave(s, { isCat, lt, sym }) {
+      const w = lt < 12, b = Math.floor(lt / 2) % 2; s.eyes = 'happy';
+      if (isCat) { s.ears = 'nod'; s.paws = w && !b ? 'upR' : 'none'; s.extraSym = sym || SYMS.note; }
+      else { s.clawR = w ? (b ? 'waveOut' : 'up') : 'stub'; s.extraSym = sym || (w ? SYMS.note : SYMS.heart); }
+    },
+    gaze(s, { isCat, opts }) {
+      const fL = opts.dir === 'left', up = opts.clipParam === 1;
+      s.body = fL ? 'turnL' : 'turnR'; s.eyes = up ? (fL ? 'upL' : 'upR') : fL ? 'openL' : 'openR';
+      if (isCat && (opts.earTwitch === 'L' || opts.earTwitch === 'R')) s.ears = opts.earTwitch === 'L' ? 'twitchL' : 'twitchR';
+    },
+    slashPlan(s, { isCat, lt, sym }) {
+      s.body = 'turnR'; s.prop1 = 'blueprint';
+      s.eyes = lt >= 14 ? 'happy' : 'open';
+      if (lt >= 8 && lt < 11) { s.sink = 1; s.legs = 'crouch'; }
+      s.extraSym = sym || (lt >= 14 ? SYMS.spark : SYMS.note);
+      if (isCat) { s.ears = 'nod'; s.paws = 'write1'; s.tail = 'sway'; } else s.clawR = 'front';
+    },
+    slashGoal(s, { isCat, lt, clipMod, sym }) {
+      const charge = lt < 8;
+      s.backProp = clipMod ? 'goalFlame1' : 'goalFlame0';
+      s.body = charge ? 'squash' : 'stand'; s.legs = charge ? 'crouch' : 'stand';
+      s.eyes = lt >= 14 ? 'happy' : 'squint'; s.prop1 = 'headband';
+      s.extraSym = sym || SYMS.spark;
+      if (isCat) { s.ears = charge ? 'nod' : 'stand'; s.paws = charge ? 'cheer' : 'up'; s.tail = 'puff'; }
+      else { s.clawL = charge ? 'front' : 'up'; s.clawR = charge ? 'front' : 'up'; }
+    },
+    slashBoost(s, { isCat, phase4, sym }) {
+      s.eyes = 'wide'; s.prop1 = 'goggles';
+      s.prop2 = ['iceCrystal', 'iceCrystalSpin', 'iceCrystalHi', 'iceCrystalSpin'][phase4];
+      s.extraSym = sym || SYMS.spark;
+      if (isCat) { s.ears = 'stand'; s.paws = 'up'; s.tail = 'puff'; } else { s.clawL = 'up'; s.clawR = 'up'; }
+    },
+    slashBrowser(s, c) {
+      applyDslPose(s, POSE_DSL.slashBrowser, c);
+      s.backProp = c.clipMod ? 'waveSplash1' : 'waveSplash0';
+    },
+    slashCompact(s, { isCat, lt, clipMod, sym }) {
+      const done = lt >= 16;
+      s.body = done ? 'stand' : clipMod ? 'squash' : 'leanR';
+      s.legs = done ? 'stand' : clipMod ? 'crouch' : 'stand';
+      s.eyes = done ? 'happy' : 'squint';
+      s.prop1 = lt < 9 ? 'cloudBig' : lt < 16 ? 'cloudMid' : 'cubeGlow';
+      s.extraSym = sym || (done ? SYMS.spark : null);
+      if (isCat) { s.ears = done ? 'stand' : 'nod'; s.paws = done ? 'up' : 'cheer'; s.tail = done ? 'puff' : 'sway'; }
+      else { s.clawL = done ? 'up' : 'front'; s.clawR = done ? 'up' : 'front'; }
+    },
+    slashSchedule(s, { isCat, lt, clipMod, sym }) {
+      const nod = lt >= 10 && lt < 14;
+      s.prop1 = clipMod ? 'hourglass1' : 'hourglass0';
+      s.prop2 = 'pocketWatch';
+      s.eyes = nod ? 'happy' : clipMod ? 'half' : 'open';
+      if (nod) { s.sink = 1; s.legs = 'crouch'; }
+      s.extraSym = sym || SYMS.note;
+      if (isCat) { s.ears = 'nod'; s.tail = 'sway'; } else s.clawR = 'front';
+    },
+    slashLearnBulb(s, { isCat, lt, sym }) {
+      const lit = lt >= 9;
+      s.prop1 = lit ? 'bulbOn' : 'bulbOff';
+      s.eyes = lit ? 'happy' : 'half';
+      s.extraSym = sym || (lit ? SYMS.spark : SYMS.q);
+      if (isCat) { s.ears = lit ? 'stand' : 'nod'; s.tail = lit ? 'puff' : 'curl'; }
+      else if (lit) s.clawR = 'up';
+    },
+    feedDonut(s, { isCat, lt, clipMod, sym }) {
+      s.body = clipMod ? 'squash' : 'stand'; s.legs = clipMod ? 'crouch' : 'stand';
+      s.eyes = 'happy'; s.prop1 = lt < 10 ? 'donut0' : 'donut1';
+      s.extraSym = sym || SYMS.heart;
+      if (isCat) { s.ears = clipMod ? 'nod' : 'stand'; s.tail = clipMod ? 'up' : 'puff'; } else s.clawR = 'front';
+    },
+  };
+
+  const ALL_POSE_KEYS = Array.from(new Set([...Object.keys(POSE_DSL), ...Object.keys(POSE_RECIPES), 'yawnStretch']));
+
+  function resolvePart(dict, val) {
+    return typeof val === 'string' ? dict[val] || null : val || null;
+  }
+
   function buildClipLayers(kind, poseKey, tickIdx, opts = {}) {
     if (poseKey === 'yawnStretch') {
-      // 复合剧目：哈欠 → 伸懒腰（按剧目本地拍拆分）
       const lt = Number(opts.clipTick ?? tickIdx);
       const first = lt < YAWN_STRETCH_SPLIT;
       return buildClipLayers(kind, first ? 'yawn' : 'stretch', tickIdx, {
@@ -824,343 +889,86 @@
       });
     }
     const isCat = kind === 'cat';
+    const p = isCat ? CAT_PARTS : CLAWD_PARTS;
     const frameMod = tickIdx % 2;
     const phase4 = tickIdx % 4;
     const sym = opts.sym ? SYMS[opts.sym] : null;
-    const localTick = Number(opts.clipTick ?? tickIdx);
-    const clipMod = localTick % 2;
+    const lt = Number(opts.clipTick ?? tickIdx);
+    const clipMod = lt % 2;
     const blinkStage = opts.blinkStage || (opts.blink ? 'closed' : null);
-    let sink = 0; // 整体下沉格数（呼吸 / 步态落脚 / 点头），只平移身体部件
+
+    const s = {
+      backProp: null,
+      shadow: opts.noShadow ? null : 'w12',
+      body: 'stand',
+      eyes: opts.eyeScan === -1 ? 'openL' : opts.eyeScan === 1 ? 'openR' : 'open',
+      legs: 'stand',
+      mouth: null,
+      prop1: null,
+      prop2: null,
+      extraSym: sym,
+      sink: 0,
+      clawL: isCat ? null : 'stub',
+      clawR: isCat ? null : 'stub',
+      ears: isCat ? 'stand' : null,
+      paws: isCat ? 'none' : null,
+      tail: isCat ? ['up', 'sway', 'curl', 'up'][phase4] : null,
+    };
+
+    const ctx = { isCat, p, poseKey, tickIdx, lt, frameMod, clipMod, phase4, opts, sym };
+    if (Object.prototype.hasOwnProperty.call(POSE_RECIPES, poseKey)) {
+      if (POSE_RECIPES[poseKey]) POSE_RECIPES[poseKey](s, ctx);
+    } else if (POSE_DSL[poseKey]) {
+      applyDslPose(s, POSE_DSL[poseKey], ctx);
+    }
+
+    if (isCat && s.body === 'squash' && s.ears === 'stand') s.ears = 'nod';
+    if (isCat && SLOW_TAIL_POSES.has(poseKey)) {
+      s.tail = opts.reduced ? 'up' : Math.floor(tickIdx / 3) % 2 ? 'sway' : 'up';
+    }
+    if (poseKey === 'idle') {
+      if (isCat) {
+        if (opts.earTwitch === 'L') s.ears = 'twitchL';
+        else if (opts.earTwitch === 'R') s.ears = 'twitchR';
+      } else {
+        if (opts.clawSnap === 'L') s.clawL = 'open';
+        else if (opts.clawSnap === 'R') s.clawR = 'open';
+      }
+      if (opts.breath) {
+        s.sink = 1;
+        s.legs = 'crouch';
+        if (s.shadow) s.shadow = 'w14';
+      }
+    }
+
+    let backProp = resolvePart(PROPS, s.backProp);
+    let shadow = resolvePart(p.shadow, s.shadow);
+    let legs = resolvePart(p.legs, s.legs);
+    let body = resolvePart(p.body, s.body);
+    let mouth = resolvePart(p.mouth, s.mouth);
+    let eyes = resolvePart(p.eyes, s.eyes);
+    let prop1 = resolvePart(PROPS, s.prop1);
+    let prop2 = resolvePart(PROPS, s.prop2);
+    let extraSym = resolvePart(SYMS, s.extraSym) || (typeof s.extraSym === 'object' ? s.extraSym : null);
+
+    if (blinkStage && BLINKABLE_POSES.has(poseKey)) {
+      const eyeDx = eyes === p.eyes.open ? 0 : eyes === p.eyes.openL ? -1 : eyes === p.eyes.openR ? 1 : null;
+      if (eyeDx !== null) eyes = shiftFrame(blinkStage === 'half' ? p.eyes.half : p.eyes.blink, eyeDx, 0);
+    }
 
     if (!isCat) {
-      const p = CLAWD_PARTS;
-      let backProp = null;
-      let shadow = opts.noShadow ? null : p.shadow.w12;
-      let body = p.body.stand;
-      let eyes = opts.eyeScan === -1 ? p.eyes.openL : opts.eyeScan === 1 ? p.eyes.openR : p.eyes.open;
-      let legs = p.legs.stand;
-      let clawL = p.clawL.stub;
-      let clawR = p.clawR.stub;
-      let prop1 = null;
-      let prop2 = null;
-      let mouth = null;
-      let extraSym = sym;
-
-      switch (poseKey) {
-        case 'flat':
-          shadow = p.shadow.w14;
-          body = p.body.flat;
-          eyes = p.eyes.flatEyes;
-          legs = null;
-          clawL = p.clawL.flatLeft;
-          clawR = p.clawR.flatRight;
-          break;
-        case 'squash':
-          shadow = p.shadow.w14;
-          body = p.body.squash;
-          eyes = p.eyes.squint;
-          legs = p.legs.crouch;
-          break;
-        case 'dangle':
-          shadow = null;
-          body = frameMod ? p.body.turnL : p.body.turnR;
-          eyes = p.eyes.wide;
-          legs = [p.legs.dangle, p.legs.flailA, p.legs.dangle2, p.legs.flailB][phase4];
-          clawL = p.clawL.up;
-          clawR = p.clawR.up;
-          break;
-        case 'walk': {
-          // 4 拍步态 [walkA, stand, walkB, stand]，每拍 2 tick；落脚拍整体下沉 1 格形成蹒跚感
-          const beat = Math.floor(tickIdx / 2) % 4;
-          legs = [p.legs.walkA, p.legs.stand, p.legs.walkB, p.legs.stand][beat];
-          body = opts.dir === 'left' ? p.body.turnL : p.body.turnR;
-          if (beat % 2 === 0) sink = 1;
-          break;
-        }
-        case 'write':
-          body = frameMod ? p.body.stand : p.body.turnR;
-          legs = p.legs.crouch;
-          clawR = frameMod ? p.clawR.write1 : p.clawR.write2;
-          prop1 = PROPS.sheet;
-          prop2 = frameMod ? PROPS.quill1 : PROPS.quill2;
-          break;
-        case 'pet':
-        case 'happy':
-          eyes = p.eyes.happy;
-          body = frameMod ? p.body.squash : p.body.stand;
-          legs = frameMod ? p.legs.crouch : p.legs.stand;
-          clawL = p.clawL.up;
-          clawR = p.clawR.up;
-          break;
-        case 'sleep':
-          body = p.body.squash;
-          eyes = p.eyes.shut;
-          legs = p.legs.tuck;
-          break;
-        case 'jiggle':
-          legs = [p.legs.flailA, p.legs.flailB, p.legs.flailC][tickIdx % 3];
-          clawL = p.clawL.up;
-          clawR = p.clawR.up;
-          eyes = p.eyes.happy;
-          break;
-        case 'peek':
-          shadow = null;
-          body = p.body.peek;
-          eyes = phase4 === 3 ? p.eyes.peekHalf : p.eyes.peekOpen;
-          legs = null;
-          clawL = p.clawL.peekGrip;
-          clawR = p.clawR.peekGrip;
-          break;
-        case 'angry':
-          body = frameMod ? p.body.squash : p.body.stand;
-          eyes = p.eyes.squint;
-          legs = frameMod ? p.legs.walkA : p.legs.walkB;
-          break;
-        case 'tilt':
-          body = p.body.turnL;
-          eyes = p.eyes.half;
-          break;
-        case 'wow':
-          body = p.body.tall;
-          eyes = p.eyes.wide;
-          clawL = p.clawL.up;
-          clawR = p.clawR.up;
-          break;
-        case 'sulk':
-          body = p.body.turnL;
-          eyes = clipMod ? p.eyes.squint : p.eyes.shut;
-          legs = p.legs.tuck;
-          clawL = p.clawL.front;
-          clawR = p.clawR.front;
-          extraSym = sym || SYMS.vein;
-          break;
-        case 'polish':
-          body = p.body.turnR;
-          eyes = phase4 === 2 ? p.eyes.happy : p.eyes.open;
-          clawR = p.clawR.front;
-          prop1 = PROPS.mug;
-          prop2 = clipMod ? PROPS.cloth1 : PROPS.cloth2;
-          break;
-        case 'eat':
-          body = localTick > 22 ? p.body.stand : p.body.squash;
-          legs = localTick > 22 ? p.legs.stand : p.legs.crouch;
-          eyes = localTick > 22 ? p.eyes.happy : clipMod ? p.eyes.half : p.eyes.open;
-          prop1 = localTick > 20 ? PROPS.bowlEmpty : PROPS.bowl;
-          prop2 = localTick > 20 ? null : clipMod ? PROPS.chop2 : PROPS.chop1;
-          extraSym = localTick > 22 ? SYMS.heart : sym;
-          break;
-        case 'eatFish':
-          body = localTick > 20 ? p.body.stand : p.body.squash;
-          eyes = localTick > 20 ? p.eyes.happy : p.eyes.half;
-          prop1 = localTick > 18 ? PROPS.fishBone : PROPS.fishDish;
-          extraSym = localTick > 20 ? SYMS.heart : sym;
-          break;
-        case 'letter':
-          body = p.body.turnR;
-          eyes = localTick >= 10 && localTick <= 18 ? p.eyes.half : localTick > 18 ? p.eyes.happy : p.eyes.open;
-          prop1 = localTick < 6 ? PROPS.envS : localTick < 11 ? PROPS.envSOpen : PROPS.letter;
-          extraSym = localTick > 18 ? SYMS.heart : sym;
-          break;
-        case 'plant':
-          body = localTick < 8 ? p.body.squash2 : p.body.stand;
-          legs = localTick < 8 ? p.legs.crouch : p.legs.stand;
-          clawR = localTick < 8 ? p.clawR.low : p.clawR.stub;
-          eyes = localTick >= 16 && localTick <= 24 ? p.eyes.happy : localTick > 24 ? p.eyes.half : p.eyes.open;
-          prop1 =
-            localTick < 5
-              ? PROPS.seed
-              : localTick < 9
-                ? PROPS.p1
-                : localTick < 13
-                  ? PROPS.p2
-                  : localTick < 17
-                    ? PROPS.p3
-                    : localTick < 23
-                      ? PROPS.p4
-                      : localTick < 27
-                        ? PROPS.wilt1
-                        : localTick < 31
-                          ? PROPS.wilt2
-                          : PROPS.wilt3;
-          prop2 = localTick >= 17 && localTick < 21 ? PROPS.d1 : localTick >= 21 && localTick < 23 ? PROPS.d2 : null;
-          extraSym = localTick > 28 ? SYMS.sweat : sym;
-          break;
-        case 'butterfly': {
-          const leftPhase = localTick % 16 >= 8;
-          const resting = localTick >= 24 && localTick <= 30;
-          eyes = resting ? p.eyes.happy : leftPhase ? p.eyes.openL : p.eyes.openR;
-          clawR = localTick % 10 < 5 ? p.clawR.reach1 : p.clawR.stub;
-          prop1 = resting ? PROPS.bfRest : leftPhase ? (clipMod ? PROPS.bfLeftUp : PROPS.bfLeftDn) : clipMod ? PROPS.bfUp : PROPS.bfDn;
-          extraSym = resting ? SYMS.spark : sym;
-          break;
-        }
-        case 'stretch':
-          body = p.body.tall;
-          legs = p.legs.stand;
-          clawL = p.clawL.up;
-          clawR = p.clawR.up;
-          eyes = p.eyes.shut;
-          extraSym = sym || SYMS.tilde;
-          break;
-        case 'spinHop':
-          body = [p.body.turnR, p.body.stand, p.body.turnL, p.body.squash][phase4];
-          eyes = phase4 === 3 ? p.eyes.happy : p.eyes.open;
-          legs = phase4 === 3 ? p.legs.crouch : p.legs.tuck;
-          break;
-        case 'onFire': {
-          const cooling = localTick >= 30;
-          const lv = localTick < 5 ? 1 : localTick < 10 ? 2 : 3;
-          backProp = cooling ? null : PROPS['fire' + lv + (localTick % 4)];
-          prop1 = PROPS.mug;
-          eyes = p.eyes.open; // 灵魂淡定 ("This is fine")
-          extraSym = cooling
-            ? PROPS.smoke
-            : SYMS['fireSpark' + (localTick % 3)];
-          break;
-        }
-        case 'cheerSticks':
-          body = frameMod ? p.body.squash : p.body.stand;
-          legs = frameMod ? p.legs.crouch : p.legs.stand;
-          eyes = p.eyes.happy;
-          clawL = p.clawL.up;
-          clawR = p.clawR.up;
-          prop1 = [PROPS.stickLT, PROPS.stickUp, PROPS.stickRT, PROPS.stickUp][phase4];
-          prop2 = [PROPS.stickRTM, PROPS.stickUpM, PROPS.stickLTM, PROPS.stickUpM][phase4];
-          extraSym = sym || SYMS.note;
-          break;
-        case 'rickroll':
-          body = [p.body.leanR, p.body.squash, p.body.leanL, p.body.stand][phase4];
-          eyes = clipMod ? p.eyes.happy : p.eyes.open;
-          clawL = clipMod ? p.clawL.up : p.clawL.stub;
-          clawR = clipMod ? p.clawR.stub : p.clawR.up;
-          prop1 = localTick > 33 ? PROPS.micSink2 : localTick > 30 ? PROPS.micSink1 : PROPS.micStand;
-          extraSym = sym || SYMS.note;
-          break;
-        case 'siren': {
-          const isBlue = Math.floor(localTick / 6) % 2 === 1;
-          const sfx = isBlue ? 'B' : '';
-          const step4 = localTick % 4;
-          const sirenName = ['sirenL', 'sirenF', 'sirenR', 'sirenDim'][step4];
-          const beamName = step4 === 0 ? 'beamL' : step4 === 1 ? 'beamF' : step4 === 2 ? 'beamR' : null;
-          body = clipMod ? p.body.squash : p.body.stand;
-          eyes = p.eyes.wide;
-          prop1 = PROPS[sirenName + sfx];
-          prop2 = beamName ? PROPS[beamName + sfx] : null;
-          extraSym = clipMod ? SYMS.bang : SYMS.sweat;
-          break;
-        }
-        case 'chatGreet':
-          body = clipMod ? p.body.stand : p.body.squash;
-          eyes = p.eyes.happy;
-          clawL = clipMod ? p.clawL.up : p.clawL.stub;
-          extraSym = sym || (clipMod ? SYMS.heart : SYMS.note);
-          break;
-        case 'lookNod': {
-          // 对视点头：转向伙伴，在错峰时刻点头一次（下沉 1 格 2 拍 + 笑眼）
-          const faceL = opts.dir === 'left';
-          const nodAt = Number(opts.clipParam ?? 5);
-          const nodding = localTick >= nodAt && localTick < nodAt + 2;
-          body = faceL ? p.body.turnL : p.body.turnR;
-          eyes = nodding ? p.eyes.happy : faceL ? p.eyes.openL : p.eyes.openR;
-          if (nodding) {
-            sink = 1;
-            legs = p.legs.crouch;
-          }
-          extraSym = sym || (localTick >= nodAt + 2 && localTick < nodAt + 8 ? SYMS.note : null);
-          break;
-        }
-        case 'readAlong': {
-          // 并排跟读：与伙伴同一起始拍，同步轻点头 3 拍
-          const beatOn = localTick >= 2 && localTick < 14 && (localTick - 2) % 4 < 2;
-          eyes = beatOn ? p.eyes.half : p.eyes.open;
-          if (beatOn) {
-            sink = 1;
-            legs = p.legs.crouch;
-          }
-          extraSym = sym || SYMS.note;
-          break;
-        }
-        case 'balance':
-          // 叠叠乐上层保持平衡：双钳张开、睁大眼
-          eyes = p.eyes.wide;
-          clawL = p.clawL.open;
-          clawR = p.clawR.open;
-          break;
-        case 'yawn':
-          // 打哈欠：张嘴 1 拍 → 闭眼大张嘴 + 拉高举钳 7 拍 → 半眼收嘴
-          if (localTick < 2) {
-            eyes = p.eyes.half;
-            mouth = p.mouth.small;
-          } else if (localTick < 9) {
-            body = p.body.tall;
-            eyes = p.eyes.shut;
-            mouth = p.mouth.yawn;
-            clawL = p.clawL.up;
-            clawR = p.clawR.up;
-            extraSym = sym || (localTick >= 4 ? SYMS.tilde : null);
-          } else {
-            eyes = p.eyes.half;
-          }
-          break;
-        case 'wave': {
-          // 单钳挥手 3 次：右钳在 up / waveOut 间每 2 拍切换，之后放下冒心
-          const waving = localTick < 12;
-          eyes = p.eyes.happy;
-          clawR = waving ? (Math.floor(localTick / 2) % 2 ? p.clawR.waveOut : p.clawR.up) : p.clawR.stub;
-          extraSym = sym || (waving ? SYMS.note : SYMS.heart);
-          break;
-        }
-        case 'gaze': {
-          // 扫视：转身 + 竖瞳偏向目标侧；clipParam=1 时抬头
-          const faceL = opts.dir === 'left';
-          const up = opts.clipParam === 1;
-          body = faceL ? p.body.turnL : p.body.turnR;
-          eyes = up ? (faceL ? p.eyes.upL : p.eyes.upR) : faceL ? p.eyes.openL : p.eyes.openR;
-          break;
-        }
-        case 'worry':
-          // 担忧：半眼、收腿、双钳护在身前，默认冒汗
-          eyes = clipMod ? p.eyes.half : p.eyes.squint;
-          legs = p.legs.tuck;
-          clawL = p.clawL.front;
-          clawR = p.clawR.front;
-          extraSym = sym || SYMS.sweat;
-          break;
-        case 'salute':
-          // 敬礼 / 举钳：右钳高举，笑眼
-          eyes = p.eyes.happy;
-          clawR = p.clawR.up;
-          extraSym = sym || SYMS.spark;
-          break;
-        case 'carry':
-          // 头顶驮着迷你蟹：抬眼看头顶、双钳微张保持平衡
-          eyes = p.eyes.up;
-          clawL = p.clawL.open;
-          clawR = p.clawR.open;
-          break;
-        default:
-          break;
+      let clawL = resolvePart(p.clawL, s.clawL);
+      let clawR = resolvePart(p.clawR, s.clawR);
+      if (s.body === 'squash') {
+        if (clawL === p.clawL.up) clawL = shiftFrame(clawL, 0, 2);
+        if (clawR === p.clawR.up) clawR = shiftFrame(clawR, 0, 2);
       }
-
-      if (poseKey === 'idle') {
-        if (opts.clawSnap === 'L') clawL = p.clawL.open;
-        else if (opts.clawSnap === 'R') clawR = p.clawR.open;
-        if (opts.breath) {
-          sink = 1;
-          legs = p.legs.crouch;
-          if (shadow) shadow = p.shadow.w14;
-        }
-      }
-      if (blinkStage && BLINKABLE_POSES.has(poseKey)) {
-        const eyeDx = eyes === p.eyes.open ? 0 : eyes === p.eyes.openL ? -1 : eyes === p.eyes.openR ? 1 : null;
-        if (eyeDx !== null) eyes = shiftFrame(blinkStage === 'half' ? p.eyes.half : p.eyes.blink, eyeDx, 0);
-      }
-      if (sink) {
-        body = shiftFrame(body, 0, sink);
-        eyes = shiftFrame(eyes, 0, sink);
-        clawL = shiftFrame(clawL, 0, sink);
-        clawR = shiftFrame(clawR, 0, sink);
-        mouth = shiftFrame(mouth, 0, sink);
+      if (s.sink) {
+        body = shiftFrame(body, 0, s.sink);
+        eyes = shiftFrame(eyes, 0, s.sink);
+        clawL = shiftFrame(clawL, 0, s.sink);
+        clawR = shiftFrame(clawR, 0, s.sink);
+        mouth = shiftFrame(mouth, 0, s.sink);
       }
       let crystal = null;
       if (opts.crystal && !CRYSTAL_HIDE_POSES.has(poseKey) && !(extraSym && !CRYSTAL_OK_SYMS.has(extraSym))) {
@@ -1169,373 +977,16 @@
       return [backProp, shadow, legs, body, mouth, eyes, clawL, clawR, prop1, prop2, crystal, extraSym].filter(Boolean);
     }
 
-    // ── Gemini 小紫猫分件合成 ──
-    const c = CAT_PARTS;
-    let backProp = null;
-    let shadow = opts.noShadow ? null : c.shadow.w12;
-    let ears = c.ears.stand;
-    let body = c.body.stand;
-    let eyes = opts.eyeScan === -1 ? c.eyes.openL : opts.eyeScan === 1 ? c.eyes.openR : c.eyes.open;
-    let legs = c.legs.stand;
-    let paws = c.paws.none;
-    let tail = [c.tail.up, c.tail.sway, c.tail.curl, c.tail.up][phase4];
-    let prop1 = null;
-    let prop2 = null;
-    let mouth = null;
-    let extraSym = sym;
-
-    switch (poseKey) {
-      case 'flat':
-        shadow = c.shadow.w14;
-        ears = c.ears.flat;
-        body = c.body.flat;
-        eyes = c.eyes.flatEyes;
-        legs = null;
-        tail = c.tail.curl;
-        break;
-      case 'squash':
-        shadow = c.shadow.w14;
-        ears = c.ears.nod;
-        body = c.body.squash;
-        eyes = c.eyes.half;
-        legs = c.legs.crouch;
-        break;
-      case 'loaf':
-      case 'sleep':
-        shadow = c.shadow.w14;
-        ears = c.ears.loaf;
-        body = c.body.loaf;
-        eyes = poseKey === 'sleep' || phase4 === 3 ? c.eyes.loafShut : c.eyes.loafHalf;
-        legs = null;
-        tail = poseKey === 'sleep' ? c.tail.loaf : Math.floor(tickIdx / 4) % 2 ? c.tail.loaf : c.tail.curl;
-        break;
-      case 'dangle':
-        shadow = null;
-        ears = c.ears.airplane;
-        eyes = c.eyes.wide;
-        legs = [c.legs.dangle, c.legs.flailA, c.legs.dangle2, c.legs.flailB][phase4];
-        tail = c.tail.puff;
-        break;
-      case 'walk': {
-        const beat = Math.floor(tickIdx / 2) % 4;
-        legs = [c.legs.walkA, c.legs.stand, c.legs.walkB, c.legs.stand][beat];
-        tail = beat < 2 ? c.tail.up : c.tail.sway;
-        if (beat % 2 === 0) sink = 1;
-        break;
-      }
-      case 'write':
-        ears = frameMod ? c.ears.stand : c.ears.nod;
-        legs = c.legs.crouch;
-        paws = frameMod ? c.paws.write1 : c.paws.write2;
-        tail = frameMod ? c.tail.sway : c.tail.curl;
-        prop1 = PROPS.sheet;
-        prop2 = frameMod ? PROPS.quill1 : PROPS.quill2;
-        break;
-      case 'pet':
-      case 'happy':
-        eyes = c.eyes.happy;
-        ears = frameMod ? c.ears.nod : c.ears.stand;
-        paws = c.paws.cheer;
-        tail = frameMod ? c.tail.up : c.tail.puff;
-        break;
-      case 'jiggle':
-        legs = [c.legs.flailA, c.legs.flailB, c.legs.flailC][tickIdx % 3];
-        eyes = c.eyes.happy;
-        ears = c.ears.stand;
-        tail = c.tail.puff;
-        break;
-      case 'peek':
-        shadow = null;
-        ears = c.ears.peek;
-        body = c.body.peek;
-        eyes = c.eyes.peekOpen;
-        legs = null;
-        paws = c.paws.peekGrip;
-        tail = c.tail.loaf;
-        break;
-      case 'angry':
-        ears = c.ears.airplane;
-        body = frameMod ? c.body.squash : c.body.stand;
-        eyes = c.eyes.wide;
-        legs = frameMod ? c.legs.walkA : c.legs.walkB;
-        tail = c.tail.puff;
-        break;
-      case 'groom':
-        ears = c.ears.nod;
-        eyes = c.eyes.shut;
-        paws = frameMod ? c.paws.groom1 : c.paws.groom2;
-        break;
-      case 'tilt':
-        ears = c.ears.nod;
-        body = c.body.turnL;
-        eyes = c.eyes.half;
-        tail = c.tail.curl;
-        break;
-      case 'wow':
-        ears = c.ears.stand;
-        eyes = c.eyes.wide;
-        paws = c.paws.up;
-        tail = c.tail.puff;
-        break;
-      case 'sulk':
-        ears = c.ears.airplane;
-        body = c.body.turnL;
-        eyes = clipMod ? c.eyes.squint : c.eyes.shut;
-        legs = c.legs.tuck;
-        tail = c.tail.curl;
-        extraSym = sym || SYMS.vein;
-        break;
-      case 'eatFish':
-        ears = localTick > 20 ? c.ears.stand : c.ears.nod;
-        body = localTick > 20 ? c.body.stand : c.body.squash;
-        eyes = localTick > 20 ? c.eyes.happy : clipMod ? c.eyes.half : c.eyes.open;
-        tail = clipMod ? c.tail.sway : c.tail.up;
-        prop1 = localTick > 18 ? PROPS.fishBone : PROPS.fishDish;
-        extraSym = localTick > 20 ? SYMS.heart : sym;
-        break;
-      case 'eat':
-        ears = c.ears.nod;
-        body = localTick > 20 ? c.body.stand : c.body.squash;
-        eyes = localTick > 20 ? c.eyes.happy : c.eyes.half;
-        prop1 = localTick > 18 ? PROPS.bowlEmpty : PROPS.bowl;
-        prop2 = localTick > 18 ? null : clipMod ? PROPS.chop2 : PROPS.chop1;
-        extraSym = localTick > 20 ? SYMS.heart : sym;
-        break;
-      case 'chaseDot':
-        ears = c.ears.airplane;
-        body = clipMod ? c.body.squash : c.body.stretch;
-        eyes = c.eyes.wide;
-        legs = clipMod ? c.legs.walkA : c.legs.crouch;
-        tail = c.tail.puff;
-        prop1 = PROPS['laser' + (localTick % 3)];
-        extraSym = sym || SYMS.spark;
-        break;
-      case 'catStretch':
-        if (localTick >= 18) {
-          ears = c.ears.loaf;
-          body = c.body.loaf;
-          eyes = c.eyes.loafHalf;
-          legs = null;
-          tail = c.tail.loaf;
-          extraSym = SYMS.z1;
-        } else {
-          ears = c.ears.nod;
-          body = c.body.stretch;
-          eyes = c.eyes.shut;
-          tail = c.tail.up;
-          extraSym = SYMS.tilde;
-        }
-        break;
-      case 'polish':
-        ears = c.ears.stand;
-        body = c.body.turnR;
-        eyes = phase4 === 2 ? c.eyes.happy : c.eyes.open;
-        prop1 = PROPS.mug;
-        prop2 = clipMod ? PROPS.cloth1 : PROPS.cloth2;
-        break;
-      case 'letter':
-        ears = c.ears.nod;
-        body = c.body.turnR;
-        eyes = localTick >= 10 && localTick <= 18 ? c.eyes.half : localTick > 18 ? c.eyes.happy : c.eyes.open;
-        prop1 = localTick < 6 ? PROPS.envS : localTick < 11 ? PROPS.envSOpen : PROPS.letter;
-        extraSym = localTick > 18 ? SYMS.heart : sym;
-        break;
-      case 'plant':
-        ears = c.ears.nod;
-        body = localTick < 8 ? c.body.squash : c.body.stand;
-        legs = localTick < 8 ? c.legs.crouch : c.legs.stand;
-        eyes = localTick >= 16 && localTick <= 24 ? c.eyes.happy : c.eyes.open;
-        prop1 =
-          localTick < 5
-            ? PROPS.seed
-            : localTick < 9
-              ? PROPS.p1
-              : localTick < 13
-                ? PROPS.p2
-                : localTick < 17
-                  ? PROPS.p3
-                  : localTick < 23
-                    ? PROPS.p4
-                    : PROPS.wilt2;
-        prop2 = localTick >= 17 && localTick < 21 ? PROPS.d1 : null;
-        break;
-      case 'butterfly': {
-        const leftPhase = localTick % 16 >= 8;
-        const resting = localTick >= 24 && localTick <= 30;
-        ears = resting ? c.ears.nod : c.ears.stand;
-        eyes = resting ? c.eyes.happy : leftPhase ? c.eyes.openL : c.eyes.openR;
-        tail = clipMod ? c.tail.sway : c.tail.puff;
-        prop1 = resting ? PROPS.bfRest : leftPhase ? (clipMod ? PROPS.bfLeftUp : PROPS.bfLeftDn) : clipMod ? PROPS.bfUp : PROPS.bfDn;
-        extraSym = resting ? SYMS.spark : sym;
-        break;
-      }
-      case 'stretch':
-        ears = c.ears.stand;
-        body = c.body.stretch;
-        eyes = c.eyes.shut;
-        tail = c.tail.puff;
-        extraSym = sym || SYMS.tilde;
-        break;
-      case 'spinHop':
-        body = [c.body.turnR, c.body.stand, c.body.turnL, c.body.squash][phase4];
-        eyes = phase4 === 3 ? c.eyes.happy : c.eyes.open;
-        legs = phase4 === 3 ? c.legs.crouch : c.legs.tuck;
-        tail = c.tail.puff;
-        break;
-      case 'onFire': {
-        const cooling = localTick >= 30;
-        const lv = localTick < 5 ? 1 : localTick < 10 ? 2 : 3;
-        backProp = cooling ? null : PROPS['fire' + lv + (localTick % 4)];
-        prop1 = PROPS.mug;
-        eyes = c.eyes.open;
-        extraSym = cooling ? PROPS.smoke : SYMS['fireSpark' + (localTick % 3)];
-        break;
-      }
-      case 'cheerSticks':
-        ears = clipMod ? c.ears.stand : c.ears.nod;
-        body = frameMod ? c.body.squash : c.body.stand;
-        legs = frameMod ? c.legs.crouch : c.legs.stand;
-        eyes = c.eyes.happy;
-        paws = c.paws.up;
-        tail = c.tail.puff;
-        prop1 = [PROPS.stickLT, PROPS.stickUp, PROPS.stickRT, PROPS.stickUp][phase4];
-        prop2 = [PROPS.stickRTM, PROPS.stickUpM, PROPS.stickLTM, PROPS.stickUpM][phase4];
-        extraSym = sym || SYMS.note;
-        break;
-      case 'rickroll':
-        ears = clipMod ? c.ears.stand : c.ears.nod;
-        body = [c.body.leanR, c.body.squash, c.body.leanL, c.body.stand][phase4];
-        eyes = clipMod ? c.eyes.happy : c.eyes.open;
-        paws = c.paws.cheer;
-        prop1 = localTick > 33 ? PROPS.micSink2 : localTick > 30 ? PROPS.micSink1 : PROPS.micStand;
-        extraSym = sym || SYMS.note;
-        break;
-      case 'siren': {
-        const isBlue = Math.floor(localTick / 6) % 2 === 1;
-        const sfx = isBlue ? 'B' : '';
-        const step4 = localTick % 4;
-        const sirenName = ['sirenL', 'sirenF', 'sirenR', 'sirenDim'][step4];
-        const beamName = step4 === 0 ? 'beamL' : step4 === 1 ? 'beamF' : step4 === 2 ? 'beamR' : null;
-        ears = c.ears.airplane;
-        body = clipMod ? c.body.squash : c.body.stand;
-        eyes = c.eyes.wide;
-        prop1 = PROPS[sirenName + sfx];
-        prop2 = beamName ? PROPS[beamName + sfx] : null;
-        extraSym = clipMod ? SYMS.bang : SYMS.sweat;
-        break;
-      }
-      case 'chatGreet':
-        ears = c.ears.nod;
-        body = clipMod ? c.body.stand : c.body.squash;
-        eyes = c.eyes.happy;
-        tail = clipMod ? c.tail.up : c.tail.puff;
-        extraSym = sym || (clipMod ? SYMS.heart : SYMS.note);
-        break;
-      case 'lookNod': {
-        const faceL = opts.dir === 'left';
-        const nodAt = Number(opts.clipParam ?? 9);
-        const nodding = localTick >= nodAt && localTick < nodAt + 2;
-        body = faceL ? c.body.turnL : c.body.turnR;
-        eyes = nodding ? c.eyes.happy : faceL ? c.eyes.openL : c.eyes.openR;
-        if (nodding) {
-          sink = 1;
-          legs = c.legs.crouch;
-        }
-        extraSym = sym || (localTick >= nodAt + 2 && localTick < nodAt + 8 ? SYMS.heart : null);
-        break;
-      }
-      case 'readAlong': {
-        const beatOn = localTick >= 2 && localTick < 14 && (localTick - 2) % 4 < 2;
-        eyes = beatOn ? c.eyes.half : c.eyes.open;
-        if (beatOn) {
-          sink = 1;
-          legs = c.legs.crouch;
-        }
-        extraSym = sym || null;
-        break;
-      }
-      case 'balance':
-        // 叠叠乐上层保持平衡：双爪张开、飞机耳、炸毛尾
-        ears = c.ears.airplane;
-        eyes = c.eyes.wide;
-        paws = c.paws.cheer;
-        tail = c.tail.puff;
-        break;
-      case 'yawn':
-        // 打哈欠：耳朵后压、闭眼大张嘴（s 开口）、尾巴炸开
-        if (localTick < 2) {
-          ears = c.ears.nod;
-          eyes = c.eyes.half;
-          mouth = c.mouth.small;
-        } else if (localTick < 9) {
-          ears = c.ears.nod;
-          eyes = c.eyes.shut;
-          mouth = c.mouth.yawn;
-          tail = c.tail.puff;
-          extraSym = sym || (localTick >= 4 ? SYMS.tilde : null);
-        } else {
-          eyes = c.eyes.half;
-          tail = c.tail.curl;
-        }
-        break;
-      case 'wave':
-        // 单爪挥手：右爪举起 / 放下每 2 拍切换
-        eyes = c.eyes.happy;
-        ears = c.ears.nod;
-        paws = localTick < 12 && Math.floor(localTick / 2) % 2 === 0 ? c.paws.upR : c.paws.none;
-        extraSym = sym || SYMS.note;
-        break;
-      case 'gaze': {
-        const faceL = opts.dir === 'left';
-        const up = opts.clipParam === 1;
-        body = faceL ? c.body.turnL : c.body.turnR;
-        eyes = up ? (faceL ? c.eyes.upL : c.eyes.upR) : faceL ? c.eyes.openL : c.eyes.openR;
-        if (opts.earTwitch === 'L') ears = c.ears.twitchL;
-        else if (opts.earTwitch === 'R') ears = c.ears.twitchR;
-        break;
-      }
-      case 'worry':
-        ears = c.ears.airplane;
-        eyes = clipMod ? c.eyes.half : c.eyes.squint;
-        legs = c.legs.tuck;
-        tail = c.tail.curl;
-        extraSym = sym || SYMS.sweat;
-        break;
-      case 'salute':
-        ears = c.ears.stand;
-        eyes = c.eyes.happy;
-        paws = c.paws.upR;
-        tail = c.tail.up;
-        extraSym = sym || SYMS.spark;
-        break;
-      default:
-        break;
-    }
-
-    if (SLOW_TAIL_POSES.has(poseKey)) {
-      // 待机尾巴放慢：约 600ms 一次往复（3 拍 up / 3 拍 sway）；减少动态时静止
-      tail = opts.reduced ? c.tail.up : Math.floor(tickIdx / 3) % 2 ? c.tail.sway : c.tail.up;
-    }
-    if (poseKey === 'idle') {
-      if (opts.earTwitch === 'L') ears = c.ears.twitchL;
-      else if (opts.earTwitch === 'R') ears = c.ears.twitchR;
-      if (opts.breath) {
-        sink = 1;
-        legs = c.legs.crouch;
-        if (shadow) shadow = c.shadow.w14;
-      }
-    }
-    if (blinkStage && BLINKABLE_POSES.has(poseKey)) {
-      const eyeDx = eyes === c.eyes.open ? 0 : eyes === c.eyes.openL ? -1 : eyes === c.eyes.openR ? 1 : null;
-      if (eyeDx !== null) eyes = shiftFrame(blinkStage === 'half' ? c.eyes.half : c.eyes.blink, eyeDx, 0);
-    }
-    if (sink) {
-      body = shiftFrame(body, 0, sink);
-      ears = shiftFrame(ears, 0, sink);
-      eyes = shiftFrame(eyes, 0, sink);
-      paws = shiftFrame(paws, 0, sink);
-      tail = shiftFrame(tail, 0, sink);
-      mouth = shiftFrame(mouth, 0, sink);
+    let ears = resolvePart(p.ears, s.ears);
+    let paws = resolvePart(p.paws, s.paws);
+    let tail = resolvePart(p.tail, s.tail);
+    if (s.sink) {
+      body = shiftFrame(body, 0, s.sink);
+      ears = shiftFrame(ears, 0, s.sink);
+      eyes = shiftFrame(eyes, 0, s.sink);
+      paws = shiftFrame(paws, 0, s.sink);
+      tail = shiftFrame(tail, 0, s.sink);
+      mouth = shiftFrame(mouth, 0, s.sink);
     }
     return [backProp, shadow, tail, legs, body, mouth, ears, eyes, paws, prop1, prop2, extraSym].filter(Boolean);
   }
@@ -1841,6 +1292,27 @@
     if (!hostEl) return null;
     const doc = hostEl.ownerDocument;
     const win = (doc && doc.defaultView) || (typeof window !== 'undefined' ? window : null);
+    let hostSleep = false;
+    let inspectState = null;
+    let wb = false;
+    const WB = 'data-ag-cs-win-blur';
+    const PM = 'data-ag-prism-mode';
+    const isDocHidden = () => Boolean(doc && doc.hidden);
+    const isAttrB = () => {
+      const root = doc && doc.documentElement;
+      if (!root) return false;
+      const val = typeof root.getAttribute === 'function' ? root.getAttribute(WB) : null;
+      if (val === '1') return true;
+      if (val === '0') return false;
+      return Boolean(typeof root.hasAttribute === 'function' && root.hasAttribute(WB));
+    };
+    const isWindowBlurred = () => Boolean(isDocHidden() || isAttrB() || wb);
+    const isHostSleeping = () => {
+      if (hostSleep) return true;
+      const root = doc && doc.documentElement;
+      if (!root) return false;
+      return typeof root.getAttribute === 'function' && root.getAttribute(PM) === 'chat';
+    };
     const readDpr = () => Math.min((win && win.devicePixelRatio) || 1, 2);
     let dpr = readDpr();
     const rand = (a, b) => a + Math.random() * (b - a);
@@ -1848,7 +1320,25 @@
 
     let tickIdx = 0;
     let disposed = false;
+    let parked = false;
+    let vramReclaimed = false;
     const isHostDetached = () => Boolean(hostEl && hostEl.isConnected === false);
+    const isVramSleepState = () => Boolean(disposed || parked || isDocHidden() || isHostSleeping() || isHostDetached());
+    const NO_TR_ATTRS = [
+      ['translate', 'no'],
+      ['data-no-translate', 'true'],
+      ['data-ag-localization-skip', 'true'],
+      ['data-agy-no-translate', 'true'],
+      ['data-antigravity-zh-skip', '1'],
+      ['data-ag-no-i18n', ''],
+    ];
+    const markNoTrOwned = (el) => {
+      if (el && typeof el.setAttribute === 'function') {
+        for (let i = 0; i < NO_TR_ATTRS.length; i++) el.setAttribute(NO_TR_ATTRS[i][0], NO_TR_ATTRS[i][1]);
+        el.setAttribute('data-ag-owned', '1');
+      }
+      return el;
+    };
 
     // ── prefers-reduced-motion：无 window / matchMedia 时安全降级为 false ──
     let reducedMotion = false;
@@ -2109,11 +1599,11 @@
       hostEl.innerHTML = '';
     }
 
-    const miniGroupEl = doc.createElement('div');
+    const miniGroupEl = markNoTrOwned(doc.createElement('div'));
     miniGroupEl.className = 'ag-v2-mini-pile';
     if (miniGroupEl.style) miniGroupEl.style.zIndex = 'auto';
     miniCrabs.forEach((mc) => {
-      const cv = doc.createElement('canvas');
+      const cv = markNoTrOwned(doc.createElement('canvas'));
       cv.className = 'ag-v2-mini-crab-canvas';
       cv.width = Math.round(40 * dpr);
       cv.height = Math.round(32 * dpr);
@@ -2132,14 +1622,14 @@
     hostEl.appendChild(miniGroupEl);
 
     const createActorDom = (actor) => {
-      const btn = doc.createElement('div');
+      const btn = markNoTrOwned(doc.createElement('div'));
       btn.className = 'ag-v2-mascot-actor';
       btn.setAttribute('data-mascot-id', actor.id);
       btn.setAttribute('data-no-press-spring', '1');
       btn.setAttribute('role', 'button');
       btn.setAttribute('tabindex', '0');
       btn.setAttribute('aria-label', actor.label);
-      const cv = doc.createElement('canvas');
+      const cv = markNoTrOwned(doc.createElement('canvas'));
       cv.className = 'ag-v2-mascot-canvas';
       cv.width = Math.round(CANVAS_W * dpr);
       cv.height = Math.round(CANVAS_H * dpr);
@@ -2156,7 +1646,7 @@
     createActorDom(actors.cat);
     createActorDom(actors.clawd);
 
-    const fxCanvas = doc.createElement('canvas');
+    const fxCanvas = markNoTrOwned(doc.createElement('canvas'));
     fxCanvas.className = 'ag-v2-chroma-fx';
     const releaseFxCanvas = () => {
       fxCanvas.width = fxCanvas.height = 0;
@@ -2172,6 +1662,110 @@
     }
     releaseFxCanvas();
     hostEl.appendChild(fxCanvas);
+
+    // ── 右侧角落微缩像素栖息地摆件（图层 z-index:14 在双宠背后，仅状态切换绘制 1 帧，日常 0fps）──
+    const habitatCanvas = markNoTrOwned(doc.createElement('canvas'));
+    habitatCanvas.className = 'ag-v2-habitat-prop';
+    habitatCanvas.setAttribute('aria-hidden', 'true');
+    if (habitatCanvas.style) {
+      habitatCanvas.style.position = 'absolute';
+      habitatCanvas.style.right = '10px';
+      habitatCanvas.style.bottom = '2px';
+      habitatCanvas.style.width = '24px';
+      habitatCanvas.style.height = '30px';
+      habitatCanvas.style.pointerEvents = 'none';
+      habitatCanvas.style.zIndex = '14';
+      habitatCanvas.style.imageRendering = 'pixelated';
+    }
+    hostEl.appendChild(habitatCanvas);
+    let habitatPreview = 'auto';
+    let scheduleWatchUntil = 0;
+    let lastHabitatKey = '';
+    const resolveHabitatMode = () => {
+      if (habitatPreview !== 'auto') return habitatPreview;
+      if (Date.now() < scheduleWatchUntil) return 'hourglass';
+      const h = new Date().getHours();
+      return h >= 23 || h < 5 ? 'lamp' : 'cactus';
+    };
+    const renderHabitatProp = (force = false) => {
+      if (isVramSleepState()) return;
+      const mode = resolveHabitatMode();
+      const key = `${mode}:${dpr}`;
+      if (!force && key === lastHabitatKey && habitatCanvas.width > 0 && habitatCanvas.height > 0) return;
+      lastHabitatKey = key;
+      const cssW = 24;
+      const cssH = 30;
+      habitatCanvas.width = Math.round(cssW * dpr);
+      habitatCanvas.height = Math.round(cssH * dpr);
+      const ctx = habitatCanvas._ctx || (habitatCanvas._ctx = habitatCanvas.getContext('2d'));
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssW, cssH);
+      ctx.imageSmoothingEnabled = false;
+      const propKey = mode === 'lamp' ? 'habLamp' : mode === 'hourglass' ? 'habHourglass' : 'habCactus';
+      const spr = PROPS[propKey];
+      if (!spr) return;
+      const cell = 3;
+      const hCells = spr.rows.length;
+      const oy = Math.max(0, Math.floor(cssH / cell) - hCells);
+      drawLayerSet(ctx, 0, oy, cell, PALETTES.clawd, [spr]);
+      habitatCanvas.setAttribute('data-habitat-mode', mode);
+    };
+    renderHabitatProp(true);
+
+    // ── A1 VRAM 0x0 回收与唤醒恢复（document.hidden / park / hostSleep / detached） ──
+    const reclaimStageVram = () => {
+      if (vramReclaimed) return;
+      vramReclaimed = true;
+      releaseFxCanvas();
+      if (habitatCanvas) {
+        habitatCanvas.width = 0;
+        habitatCanvas.height = 0;
+        lastHabitatKey = '';
+      }
+      for (const id of ['cat', 'clawd']) {
+        const a = actors[id];
+        if (a?.canvas) {
+          a.canvas.width = 0;
+          a.canvas.height = 0;
+        }
+        if (a?.lastRender) {
+          a.lastRender.poseKey = null;
+          a.lastRender.cw = 0;
+          a.lastRender.ch = 0;
+        }
+      }
+      miniCrabs.forEach((mc) => {
+        if (mc.canvas) {
+          mc.canvas.width = 0;
+          mc.canvas.height = 0;
+        }
+        mc.lastFrameKey = null;
+      });
+    };
+
+    const restoreStageVram = () => {
+      if (!vramReclaimed && actors.cat.canvas?.width > 0 && actors.clawd.canvas?.width > 0) return false;
+      dpr = readDpr();
+      vramReclaimed = false;
+      for (const id of ['cat', 'clawd']) {
+        const a = actors[id];
+        if (a?.canvas) {
+          a.canvas.width = Math.round(CANVAS_W * dpr);
+          a.canvas.height = Math.round(CANVAS_H * dpr);
+        }
+        if (a?.lastRender) a.lastRender.poseKey = null;
+      }
+      miniCrabs.forEach((mc) => {
+        if (mc.canvas) {
+          mc.canvas.width = Math.round(40 * dpr);
+          mc.canvas.height = Math.round(32 * dpr);
+        }
+        mc.lastFrameKey = null;
+      });
+      lastHabitatKey = '';
+      return true;
+    };
 
     // ── 5 宠统一图腾塔拓扑、抽底重力补位与地面刚体防重叠核心 ─────────────────
     const miniById = new Map(miniCrabs.map((m) => [m.id, m]));
@@ -2859,7 +2453,7 @@
         perfStats.domTransformSkips += 1;
       }
       // 60fps GPU 倾角同步到内层 canvas（外层 actor.el 维持纯 translate3d 兼容），静止 rot=0 清回 ''
-      const nextRot = snapRot(effectiveRot(actor, now));
+      const nextRot = snapRot(inspectState ? 0 : effectiveRot(actor, now));
       if (actor.lastDomRot !== nextRot) {
         actor.lastDomRot = nextRot;
         actor.lastRender.lastRot = nextRot;
@@ -2948,24 +2542,29 @@
       return fx;
     };
 
-    // ── 叠叠乐平衡：下方角色每拍水平位移 → 上方角色反向摆角（±8°）──
+    // ── 叠叠乐平衡：下方角色（含迷你蟹）每拍位移 → 上方角色反向摆角（±8°）──
     const updateBalance = () => {
       for (const id of ['cat', 'clawd']) {
         const top = actors[id];
-        const base = top.stackedOn ? actors[top.stackedOn] : null;
+        const base = top.stackedOn ? getEnt(top.stackedOn) : null;
         let target = 0;
-        if (base && !reducedMotion && base.prevX !== null) {
-          target = Math.max(-8, Math.min(8, -(base.x - base.prevX) * 4));
+        if (base && !reducedMotion && base.prevCx != null) {
+          target = Math.max(-8, Math.min(8, -(getEntWorldCx(base) - base.prevCx) * 4));
         }
         top.balRot = Math.abs(target) >= Math.abs(top.balRot) ? target : top.balRot * 0.55 + target * 0.45;
         if (Math.abs(top.balRot) < 0.4) top.balRot = 0;
       }
-      for (const id of ['cat', 'clawd']) actors[id].prevX = actors[id].x;
+      for (const e of allActiveEnts()) e.prevCx = getEntWorldCx(e);
     };
 
     // ── 生态联动辅助：打盹 z / 迷你蟹互动路径 ─────────────────────────────
-    // 打盹 z 周期：每 18 拍冒一串（小 → 中 → 大上浮），两宠错开半周期；减少动态时静态显示中号 z
+    // 打盹符号：日间打盹冒 z（小→中→大），深夜（23:00~05:00）吹轻柔睡眠小鼻泡
     const dozeSymFor = (a) => {
+      if (isLateNight()) {
+        if (reducedMotion) return 'sleepBubble0';
+        const ph = (tickIdx + (a.id === 'cat' ? 4 : 0)) % 12;
+        return ph < 6 ? 'sleepBubble0' : 'sleepBubble1';
+      }
       if (reducedMotion) return 'dozeZ1';
       const ph = (tickIdx + (a.id === 'cat' ? 9 : 0)) % 18;
       return ph < 4 ? 'dozeZ0' : ph < 8 ? 'dozeZ1' : ph < 12 ? 'dozeZ2' : null;
@@ -3207,7 +2806,13 @@
 
     let lastChromaStepTick = -1;
     const renderAllFrames = (now) => {
+      if (isVramSleepState()) {
+        reclaimStageVram();
+        return;
+      }
+      restoreStageVram();
       syncStageDpr();
+      renderHabitatProp(false);
       if (prismaticCoat && !reducedMotion && !dozing && lastChromaStepTick !== tickIdx) {
         lastChromaStepTick = tickIdx;
         if (tickIdx % 3 === 0) {
@@ -3236,6 +2841,7 @@
           const prevY = computeWorldFootY(a);
           const jumpDir = a.id === 'cat' ? 1 : -1;
           a.stackedOn = null;
+          resetActorTransient(a, { keepFly: true });
           a.y = prevY;
           startBallistic(a, jumpDir * 2.8, -3.6, { noSnap: true });
         }
@@ -3276,46 +2882,54 @@
         if (a.stackedOn && pose === 'idle' && Math.abs(a.balRot) > 1.5) pose = 'balance';
 
         const sym =
-          a.sym && now < a.symUntil
-            ? a.sym
-            : dozing && pose === 'sleep'
-              ? dozeSymFor(a)
-              : pose === 'sleep' || pose === 'loaf'
-                ? tickIdx % 8 < 4
-                  ? 'z1'
-                  : 'z2'
-                : pose === 'angry'
-                  ? 'vein'
-                  : null;
-        const localTick = pose === 'write' ? (streamTier >= 3 ? tickIdx : Math.floor(tickIdx / 2)) : tickIdx;
+          inspectState
+            ? inspectState.sym || null
+            : a.sym && now < a.symUntil
+              ? a.sym
+              : dozing && pose === 'sleep'
+                ? dozeSymFor(a)
+                : pose === 'sleep' || pose === 'loaf'
+                  ? tickIdx % 8 < 4
+                    ? 'z1'
+                    : 'z2'
+                  : pose === 'angry'
+                    ? 'vein'
+                    : null;
+        const localTick = inspectState
+          ? inspectState.tick
+          : pose === 'write'
+            ? streamTier >= 3
+              ? tickIdx
+              : Math.floor(tickIdx / 2)
+            : tickIdx;
         const fx = updateIdleFx(a, pose, now);
         a.lastFx = fx;
         const hasRider = Boolean(findDirectRider(id));
-        const effectivePose = hasRider && pose === 'idle' ? 'squash' : pose;
-        const sulkJitter = effectivePose === 'sulk' && !reducedMotion ? (tickIdx % 4 < 2 ? 0 : -PX) : 0;
+        const effectivePose = inspectState ? inspectState.pose : hasRider && pose === 'idle' ? 'squash' : pose;
+        const sulkJitter = effectivePose === 'sulk' && !reducedMotion && !inspectState ? (tickIdx % 4 < 2 ? 0 : -PX) : 0;
         const liftPx = st && st.lift && !reducedMotion ? st.lift * PX : 0;
         const nodOffset = (now < a.nodUntil ? a.nodY : 0) + sulkJitter + liftPx;
-        let sqW = st ? st.sqW : 0;
-        let sqH = st ? st.sqH : 0;
-        if (!st && hasRider && pose !== 'idle') sqH = -1;
+        let sqW = inspectState ? inspectState.sqW : st ? st.sqW : 0;
+        let sqH = inspectState ? inspectState.sqH : st ? st.sqH : 0;
+        if (!inspectState && !st && hasRider && pose !== 'idle') sqH = -1;
         a.lastSq = { w: sqW, h: sqH };
-        const clipBottomY = yieldMode === 'peek' && !a.dragging ? (OY + 8) * PX : undefined;
+        const clipBottomY = yieldMode === 'peek' && !a.dragging && !inspectState ? (OY + 8) * PX : undefined;
         const ftk = tickIdx - a.forceTwitchStart;
         const forcedTwitch = ftk >= 0 && ftk < 4 && ftk !== 2 ? a.forceTwitchSide : null;
 
         const crystalActive = id === 'clawd' && orchestrator && !hasRider && !crabRiding();
         const layers = buildClipLayers(a.kind, effectivePose, localTick, {
-          clipTick: Math.max(0, tickIdx - a.clipStartTick),
+          clipTick: inspectState ? inspectState.tick : Math.max(0, tickIdx - a.clipStartTick),
           sym,
-          blinkStage: fx.blinkStage,
-          breath: fx.breath,
-          earTwitch: forcedTwitch || fx.earTwitch,
-          clawSnap: fx.clawSnap,
+          blinkStage: inspectState ? null : fx.blinkStage,
+          breath: inspectState ? false : fx.breath,
+          earTwitch: inspectState ? null : forcedTwitch || fx.earTwitch,
+          clawSnap: inspectState ? null : fx.clawSnap,
           clipParam: a.clipParam,
           reduced: reducedMotion,
           crystal: crystalActive,
           crystalBob: !reducedMotion && Math.floor(tickIdx / 6) % 2 === 1,
-          eyeScan: a.eyeScan || fx.glance,
+          eyeScan: inspectState ? 0 : a.eyeScan || fx.glance,
           noShadow: a.dragging || a.y < -2 || Boolean(a.stackedOn) || yieldMode === 'peek',
           dir: a.faceDir || (a.vx < 0 || a.patrolDir < 0 ? 'left' : 'right'),
         });
@@ -3331,8 +2945,9 @@
           spawnChromaBurst(getEntWorldCx(a), computeWorldFootY(a) - 6, 1, true);
         }
 
-        const flip = Boolean(a.mirror);
-        const tintState = `${a.kind}:${crystalActive ? 1 : 0}:${isChromaCat ? `p${phaseBucket}_${earSparkPhase}` : '0'}`;
+        const flip = inspectState ? inspectState.mirror : Boolean(a.mirror);
+        const rulerOn = Boolean(inspectState && inspectState.ruler);
+        const tintState = `${a.kind}:${crystalActive ? 1 : 0}:${rulerOn ? 1 : 0}:${isChromaCat ? `p${phaseBucket}_${earSparkPhase}` : '0'}`;
         const snappedTy = Math.round(Number(nodOffset || 0) / PX) * PX;
         const frameIdx = computeLayersFrameIdx(layers);
         const rc = a.lastRender;
@@ -3370,18 +2985,25 @@
                     : pal[ch]
             : null;
           const overlayPainter =
-            isChromaCat && (earSparkPhase < 3 || (earSparkPhase >= 5 && earSparkPhase < 8))
+            rulerOn || (isChromaCat && (earSparkPhase < 3 || (earSparkPhase >= 5 && earSparkPhase < 8)))
               ? (c2, oxG, oyG, pxS) => {
-                  const leftEar = earSparkPhase < 3;
-                  const sx = (oxG + (leftEar ? 2 : 13)) * pxS;
-                  const sy = (oyG - 3) * pxS;
-                  c2.fillStyle = '#FFFFFF';
-                  c2.fillRect(sx, sy, pxS, pxS);
-                  if (earSparkPhase === 1 || earSparkPhase === 6) {
-                    c2.fillRect(sx - pxS, sy, pxS, pxS);
-                    c2.fillRect(sx + pxS, sy, pxS, pxS);
-                    c2.fillRect(sx, sy - pxS, pxS, pxS);
-                    c2.fillRect(sx, sy + pxS, pxS, pxS);
+                  if (isChromaCat && (earSparkPhase < 3 || (earSparkPhase >= 5 && earSparkPhase < 8))) {
+                    const leftEar = earSparkPhase < 3;
+                    const sx = (oxG + (leftEar ? 2 : 13)) * pxS;
+                    const sy = (oyG - 3) * pxS;
+                    c2.fillStyle = '#FFFFFF';
+                    c2.fillRect(sx, sy, pxS, pxS);
+                    if (earSparkPhase === 1 || earSparkPhase === 6) {
+                      c2.fillRect(sx - pxS, sy, pxS, pxS);
+                      c2.fillRect(sx + pxS, sy, pxS, pxS);
+                      c2.fillRect(sx, sy - pxS, pxS, pxS);
+                      c2.fillRect(sx, sy + pxS, pxS, pxS);
+                    }
+                  }
+                  if (rulerOn) {
+                    const y9 = (oyG + 10) * pxS - 1;
+                    c2.fillStyle = 'rgba(234,67,53,0.92)';
+                    c2.fillRect(0, y9, (oxG + 20) * pxS, 1);
                   }
                 }
               : null;
@@ -3498,11 +3120,9 @@
               hopPx = -2;
             } else if (moving) {
               const hopCells = isTrick
-                ? mc.id === 'cowboy'
-                  ? [0, -1, -2, -2, -1, 0][tc] || 0
-                  : tc === 1 || tc === 2
-                    ? -1
-                    : 0
+                ? tc === 1 || tc === 2
+                  ? -1
+                  : 0
                 : (tickIdx + idx * 3) % 14 === 0
                   ? -1
                   : 0;
@@ -3605,29 +3225,49 @@
       if (opts.patrolDir) actor.patrolDir = opts.patrolDir;
     };
 
-    // 减少动态开启：中止抛掷/巡逻/序列，回到静态待机
+    // 统一清理角色瞬态姿态/物理状态，根治交叉打断导致的残余旋转/镜像/序列卡死
+    const resetActorTransient = (ent, opts = {}) => {
+      if (!ent) return;
+      if (!opts.keepFly) ent.flying += 1;
+      if (!opts.keepBallistic) ent.ballisticActive = false;
+      ent.leap = null;
+      if (!opts.keepVel) {
+        ent.vx = 0;
+        ent.vy = 0;
+      }
+      ent.rot = 0;
+      if (isMiniEnt(ent)) {
+        if (!opts.keepAct) ent.act = null;
+        return;
+      }
+      if (!opts.keepPose) {
+        ent.overridePose = null;
+        ent.overrideUntil = 0;
+      }
+      ent.overrideRot = 0;
+      ent.balRot = 0;
+      if (!opts.keepMirror) ent.mirror = false;
+      ent.faceDir = null;
+      ent.clipParam = null;
+      if (!opts.keepSeq) {
+        ent.seq = null;
+        ent.seqThen = null;
+      }
+    };
+
+    // 减少动态开启：中止抛掷/巡逻/序列与星屑，回到静态待机
     function freezeMotion() {
+      chromaSparks.length = 0;
+      releaseFxCanvas();
       for (const id of ['cat', 'clawd']) {
         const a = actors[id];
-        a.flying += 1;
-        a.ballisticActive = false;
-        a.leap = null;
-        a.seq = null;
-        a.seqThen = null;
-        a.vx = 0;
-        a.vy = 0;
-        a.rot = 0;
-        a.balRot = 0;
+        const keepPose = a.overridePose && a.overridePose !== 'walk' && a.overridePose !== 'dangle';
+        resetActorTransient(a, { keepPose });
         a.passBoostUntil = 0;
         if (!a.stackedOn) a.y = 0;
-        if (a.overridePose === 'walk' || a.overridePose === 'dangle') a.overridePose = null;
       }
       miniCrabs.forEach((mc) => {
-        mc.flying += 1;
-        mc.ballisticActive = false;
-        mc.rot = 0;
-        mc.leap = null;
-        if (mc.act && mc.act.type !== 'wave') mc.act = null;
+        resetActorTransient(mc, { keepAct: Boolean(mc.act && mc.act.type === 'wave') });
         mc.bumpUntilTick = -1;
         mc.passHopUntilTick = -1;
         mc.cooldownTick = -1;
@@ -3644,10 +3284,10 @@
     const toggleChromaResonance = (now) => {
       prismaticCoat = !prismaticCoat;
       writeChromaSaved(prismaticCoat);
+      resetActorTransient(actors.cat);
       const catCx = getEntWorldCx(actors.cat);
       const catFootY = computeWorldFootY(actors.cat);
       if (prismaticCoat) {
-        // 觉醒：迸发一圈 12 粒四色棱镜像素星屑 + 腾空轻跃蜕变为棱彩炫彩形态
         spawnChromaBurst(catCx, catFootY - 18, 12, false);
         playSeq(actors.cat, hopSteps('spinHop'));
         actors.cat.sym = 'spark';
@@ -3665,14 +3305,10 @@
       const now = performance.now();
       markActivity();
 
-      // 检查叠塔态小紫猫 2.6s 内连续点击 4 次仪式（2 层及以上叠塔皆可）
       if (actor.id === 'cat') {
         const towerLen = getTowerMembers('cat').length;
-        const reqTower = 2;
-        if (towerLen >= reqTower && (prismaticCoat || (chromaGates.tuned && chromaGates.forged))) {
-          while (chromaTapTimes.length && now - chromaTapTimes[0] > 2600) {
-            chromaTapTimes.shift();
-          }
+        if (towerLen >= 2 && (prismaticCoat || (chromaGates.tuned && chromaGates.forged))) {
+          while (chromaTapTimes.length && now - chromaTapTimes[0] > 2600) chromaTapTimes.shift();
           chromaTapTimes.push(now);
           if (chromaTapTimes.length >= 4) {
             chromaTapTimes.length = 0;
@@ -3696,20 +3332,25 @@
         startClip(actor, actor.id === 'cat' && Math.random() < 0.45 ? 'groom' : 'happy', 750, { sym: 'spark' });
         if (fromPointer && !inTower) startBallistic(actor, 0, -4.4, { anticipate: true });
       } else if (actor.pokeCount === 2) {
+        // 作废第 1 击可能挂起的 200ms 延迟弹射，防止 jiggle 被滞后弹飞打断
+        actor.flying += 1;
+        actor.seq = null;
         startClip(actor, 'jiggle', 950, { sym: 'note' });
       } else if (actor.pokeCount === 3) {
+        actor.flying += 1;
         startClip(actor, 'tilt', 1100, { rot: -9, sym: 'q' });
       } else if (actor.pokeCount === 4) {
         startClip(actor, 'wow', 950, { sym: 'bang' });
         if (fromPointer && !inTower) startBallistic(actor, 0, -3.2, { anticipate: true });
       } else {
+        actor.flying += 1;
         actor.pokeCount = 0;
         startClip(actor, 'sulk', 3200, { mirror: true, sym: 'vein' });
       }
       renderAllFrames(now);
     };
 
-    // ── 日常自主小剧场调度 + 约 6% 低概率彩蛋 + 双宠互动剧目 ───────────────
+    // ── 紧凑时间轴剧本表驱动：日常剧场 + 彩蛋 + 合演（Batch 2 Slash 剧场复用此执行器）──
     const DAILY_CLAWD = ['polish', 'eat', 'letter', 'plant', 'butterfly', 'walk', 'stretch', 'spinHop', 'wave', 'yawn'];
     const DAILY_CAT = ['groom', 'eatFish', 'chaseDot', 'catStretch', 'butterfly', 'letter', 'walk', 'plant', 'yawnStretch'];
     const DAILY_WEIGHTS = { wave: 1.3, yawn: 0.6, yawnStretch: 1.1 };
@@ -3717,7 +3358,7 @@
     const CLIP_MS = { wave: 1500, yawn: 1300, yawnStretch: 2200 };
     const isLateNight = () => {
       const h = new Date().getHours();
-      return h >= 23 || h < 6;
+      return h >= 23 || h < 5;
     };
     const pickDaily = (pool) => {
       const night = isLateNight();
@@ -3730,18 +3371,10 @@
       return pool[pool.length - 1];
     };
     const EGGS = ['onFire', 'cheerSticks', 'rickroll', 'siren'];
-    const DUETS = [
-      ['chatGreet', 0.4],
-      ['lookNod', 0.25],
-      ['catRub', 0.2],
-      ['readAlong', 0.15],
-    ];
+    const DUETS = [['chatGreet', 0.4], ['lookNod', 0.25], ['catRub', 0.2], ['readAlong', 0.15]];
     const pickDuet = () => {
       let r = Math.random();
-      for (const [k, w] of DUETS) {
-        r -= w;
-        if (r < 0) return k;
-      }
+      for (const [k, w] of DUETS) if ((r -= w) < 0) return k;
       return 'chatGreet';
     };
 
@@ -3757,109 +3390,105 @@
       miniCrabs.some((m) => m.stackedOn);
 
     let duetSerial = 0;
+    const THEATER_SCRIPTS = {
+      lookNod: (ctx) => {
+        const cf = ctx.cat.x >= ctx.clawd.x ? 'right' : 'left';
+        const kf = cf === 'right' ? 'left' : 'right';
+        return {
+          dur: 2500,
+          steps: [
+            [0, 'clawd', 'lookNod', 2000, { face: cf, param: 5 }],
+            [0, 'cat', 'lookNod', 2000, { face: kf, param: 9 }],
+          ],
+        };
+      },
+      readAlong: () => ({
+        dur: 2500,
+        steps: [
+          [0, 'clawd', 'readAlong', 1600, { sym: 'note' }],
+          [0, 'cat', 'readAlong', 1600],
+        ],
+      }),
+      chatGreet: () => ({
+        dur: 2500,
+        steps: [
+          [0, 'clawd', 'chatGreet', 2400, { sym: 'heart' }],
+          [0, 'cat', 'chatGreet', 2400, { mirror: true, sym: 'note' }],
+          [0, 'crabsWave'],
+        ],
+      }),
+      catRub: (ctx) => {
+        const dir = ctx.clawd.x < ctx.cat.x ? -1 : 1;
+        const wt = Math.min(16, Math.round(Math.max(0, Math.abs(ctx.clawd.x - ctx.cat.x) - 46) / 1.4));
+        const wm = wt * TICK;
+        const steps = [];
+        if (wt >= 2) steps.push([0, 'cat', 'walk', wm, { patrolDir: dir }]);
+        steps.push([wm, 'cat', 'groom', 1600, { mirror: dir < 0 }]);
+        steps.push([wm + 400, 'clawd', 'pet', 1300, { sym: 'heart' }]);
+        if (wt >= 2) steps.push([wm + 1700, 'cat', 'walk', wm, { patrolDir: -dir }]);
+        steps.push([wm * 2 + 1800, 'resetHome']);
+        return { dur: wm * 2 + 2000, steps };
+      },
+    };
+
     const runDuet = (name) => {
       const now = performance.now();
-      const clawd = actors.clawd;
-      const cat = actors.cat;
+      const specFn = THEATER_SCRIPTS[name] || THEATER_SCRIPTS.chatGreet;
+      const spec = specFn({ clawd: actors.clawd, cat: actors.cat, now });
       const serial = (duetSerial += 1);
-      if (name === 'lookNod') {
-        duetUntil = now + 2500;
-        // 对视点头：两宠转向对方，Clawd 先点、小紫猫随后点头回应
-        const clawdFace = cat.x >= clawd.x ? 'right' : 'left';
-        const catFace = clawdFace === 'right' ? 'left' : 'right';
-        startClip(clawd, 'lookNod', 2000, { face: clawdFace, param: 5 });
-        startClip(cat, 'lookNod', 2000, { face: catFace, param: 9 });
-      } else if (name === 'readAlong') {
-        duetUntil = now + 2500;
-        // 并排跟读：同一起始拍，同步轻点头 3 拍
-        startClip(clawd, 'readAlong', 1600, { sym: 'note' });
-        startClip(cat, 'readAlong', 1600);
-      } else if (name === 'catRub') {
-        // 小紫猫蹭爪：猫走近 Clawd → 伸爪蹭蹭 → Clawd 冒心 → 猫走回原位
-        const dirToClawd = clawd.x < cat.x ? -1 : 1;
-        const walkPx = Math.max(0, Math.abs(clawd.x - cat.x) - 46);
-        const walkTicks = Math.min(16, Math.round(walkPx / 1.4));
-        const walkMs = walkTicks * TICK;
-        duetUntil = now + walkMs * 2 + 2000;
-        const alive = () => serial === duetSerial && !disposed && !stageBusy() && !reducedMotion;
-        if (walkTicks >= 2) startClip(cat, 'walk', walkMs, { patrolDir: dirToClawd });
-        later(walkMs, () => {
-          if (!alive()) return;
-          startClip(cat, 'groom', 1600, { mirror: dirToClawd < 0 });
-          renderAllFrames(performance.now());
-        });
-        later(walkMs + 400, () => {
-          if (!alive()) return;
-          startClip(clawd, 'pet', 1300, { sym: 'heart' });
-          renderAllFrames(performance.now());
-        });
-        later(walkMs + 1700, () => {
-          if (!alive()) return;
-          if (walkTicks >= 2) startClip(cat, 'walk', walkMs, { patrolDir: -dirToClawd });
-          renderAllFrames(performance.now());
-        });
-        later(walkMs * 2 + 1800, () => {
-          if (!alive()) return;
-          resetHomePositions(false);
-        });
-      } else {
-        duetUntil = now + 2500;
-        startClip(clawd, 'chatGreet', 2400, { sym: 'heart' });
-        startClip(cat, 'chatGreet', 2400, { mirror: true, sym: 'note' });
-        crabsWave();
+      duetUntil = now + (spec.dur || 2500);
+      const alive = () => serial === duetSerial && !disposed && !stageBusy() && !reducedMotion && !isHostSleeping() && !isWindowBlurred();
+      const exec = (step) => {
+        const [, who, pose, dur, opts] = step;
+        if (who === 'crabsWave') crabsWave();
+        else if (who === 'resetHome') resetHomePositions(false);
+        else if (typeof who === 'function') who();
+        else if (actors[who]) startClip(actors[who], pose, dur, opts || {});
+      };
+      for (const st of spec.steps) {
+        if (!st[0]) exec(st);
+        else later(st[0], () => { if (alive()) { exec(st); renderAllFrames(performance.now()); } });
       }
       renderAllFrames(now);
     };
 
     const pickNextTheater = () => {
-      if (disposed || isHostDetached()) {
+      if (disposed || isHostDetached() || parked) {
         theaterTimer = 0;
         return;
       }
-      // 减少动态：冻结自主巡逻与剧场，只保留静态待机与眨眼；打盹期间不排剧目
-      if (!stageBusy() && !reducedMotion && !dozing) {
+      if (!stageBusy() && !reducedMotion && !dozing && !isHostSleeping() && !isWindowBlurred()) {
         const now = performance.now();
         const cIdle = !actors.clawd.overridePose || now >= actors.clawd.overrideUntil;
         const kIdle = !actors.cat.overridePose || now >= actors.cat.overrideUntil;
         const crabBusy = miniCrabs.some((mc) => mc.act);
 
         if (miniPileEnabled && cIdle && kIdle && !crabBusy && Math.random() < 0.18) {
-          // 迷你三蟹生态互动：小猫追蟹 / 蟹骑 Clawd 头顶 / 集体挥手
           const r = Math.random();
-          const ok = r < 0.4 ? runCrabChase(false) : r < 0.8 ? runCrabRide(false) : (crabsWave(), true);
-          if (ok) renderAllFrames(now);
+          if (r < 0.4 ? runCrabChase(false) : r < 0.8 ? runCrabRide(false) : (crabsWave(), true)) renderAllFrames(now);
         } else if (cIdle && kIdle && Math.random() < 0.3) {
           runDuet(pickDuet());
         } else {
           const target = theaterCursor % 2 === 0 ? actors.cat : actors.clawd;
           theaterCursor += 1;
           if (!target.overridePose || now >= target.overrideUntil) {
-            const roll = Math.random();
-            if (roll < 0.06) {
-              const egg = EGGS[Math.floor(Math.random() * EGGS.length)];
-              startClip(target, egg, 3800);
+            if (Math.random() < 0.06) {
+              startClip(target, EGGS[Math.floor(Math.random() * EGGS.length)], 3800);
             } else {
-              const pool = target.id === 'cat' ? DAILY_CAT : DAILY_CLAWD;
-              const clip = pickDaily(pool);
+              const clip = pickDaily(target.id === 'cat' ? DAILY_CAT : DAILY_CLAWD);
               startClip(target, clip, CLIP_MS[clip] || 3600, { patrolDir: Math.random() < 0.5 ? -1 : 1 });
               if (clip === 'walk') {
-                // 巡逻散步后原路折返并归位，避免长期偏离站位与伙伴重叠
                 const walker = target;
-                const backOk = () => !stageBusy() && !reducedMotion && !walker.seq && walker.y === 0;
-                later(3700, () => {
-                  if (!backOk()) return;
-                  startClip(walker, 'walk', 3600, { patrolDir: -walker.patrolDir });
-                });
-                later(7400, () => {
-                  if (backOk()) resetHomePositions(true);
-                });
+                const backOk = () => !stageBusy() && !reducedMotion && !walker.seq && walker.y === 0 && !isHostSleeping();
+                later(3700, () => { if (backOk()) startClip(walker, 'walk', 3600, { patrolDir: -walker.patrolDir }); });
+                later(7400, () => { if (backOk()) resetHomePositions(true); });
               }
             }
             renderAllFrames(now);
           }
         }
       }
-      if (!disposed && !dozing && !isHostDetached() && (!doc || !doc.hidden)) {
+      if (!disposed && !dozing && !parked && !isHostDetached() && !isDocHidden() && !isHostSleeping() && !isWindowBlurred()) {
         theaterTimer = setTimeout(pickNextTheater, 4600 + Math.round(Math.random() * 2600));
       } else {
         theaterTimer = 0;
@@ -3868,12 +3497,12 @@
     const scheduleTheater = (delayMs) => {
       clearTimeout(theaterTimer);
       theaterTimer = 0;
-      if (disposed || dozing || isHostDetached() || (doc && doc.hidden)) return;
+      if (disposed || dozing || parked || isHostDetached() || isDocHidden() || isHostSleeping() || isWindowBlurred()) return;
       theaterTimer = setTimeout(pickNextTheater, delayMs ?? 4600 + Math.round(Math.random() * 2600));
     };
     scheduleTheater(3800);
 
-    // ── 多层图腾塔吸附、抽底重力顺滑补位、剧烈动作侧跳下塔与迷你蟹弹道 ────────
+    // ── 多层图腾塔吸附、抽底重力顺滑补位、剧烈动作侧跳下塔与统一弹道引擎 ──────
     const trySnapOntoTower = (mover, now = performance.now()) => {
       if (!mover || mover.dragging) return false;
       const moverChain = getTowerMembers(mover.id);
@@ -3887,23 +3516,17 @@
         if (!root || seenRoots.has(root.id)) continue;
         seenRoots.add(root.id);
         if (root.dragging || root.ballisticActive || root.leap || (root.y || 0) < -4) continue;
-        if (!isMiniEnt(root) && now < root.overrideUntil && ['onFire', 'siren', 'spinHop'].includes(root.overridePose)) {
-          continue;
-        }
+        if (!isMiniEnt(root) && now < root.overrideUntil && ['onFire', 'siren', 'spinHop'].includes(root.overridePose)) continue;
         const baseChain = getTowerMembers(root.id);
         if (baseChain.length + moverChain.length > maxDepth) continue;
         const top = getEnt(baseChain[baseChain.length - 1]);
         if (!top || top.dragging || top.ballisticActive || top.leap || ((top.y || 0) < -2 && !top.stackedOn)) continue;
 
         const perchY = computeWorldFootY(top) - mountStepH(top.id);
-        const dx = Math.abs(moverCx - getEntWorldCx(top));
-        if (dx <= 28 && moverFootY >= perchY - 24 && moverFootY <= perchY + 20) {
-          mover.ballisticActive = false;
+        if (Math.abs(moverCx - getEntWorldCx(top)) <= 28 && moverFootY >= perchY - 24 && moverFootY <= perchY + 20) {
+          resetActorTransient(mover, { keepFly: true });
           mover.stackedOn = top.id;
           mover.y = 0;
-          mover.vx = 0;
-          mover.vy = 0;
-          mover.rot = 0;
           mover.perchUntil = 0;
           if (!isMiniEnt(mover)) {
             mover.overridePose = 'happy';
@@ -3955,18 +3578,12 @@
         }
         const k = Math.max(0.5, Math.min(2.5, (now - prev) / 16.6667));
         prev = now;
-
         let holder = targetHolderId ? getEnt(targetHolderId) : null;
-        if (
-          holder &&
-          (holder.dragging ||
-            getTowerMembers(holder.id).includes(subRoot.id) ||
-            getTowerMembers(holder.id).length + subLen > maxTowerDepthAllowed())
-        ) {
+        if (holder && (holder.dragging || getTowerMembers(holder.id).includes(subRoot.id) || getTowerMembers(holder.id).length + subLen > maxTowerDepthAllowed())) {
           holder = null;
         }
         const goalY = holder ? computeWorldFootY(holder) - mountStepH(holder.id) : 0;
-        if (doc && doc.hidden) {
+        if (isDocHidden() || isHostSleeping() || parked) {
           subRoot.ballisticActive = false;
           subRoot.vx = 0;
           subRoot.vy = 0;
@@ -3980,19 +3597,17 @@
             subRoot.y = 0;
             enforceGroundSeparation();
           }
-          renderAllFrames(now);
+          syncTower(subRoot, now);
+          reclaimStageVram();
           return;
         }
         if (holder) {
           const curCx = getEntWorldCx(subRoot);
-          const dstCx = getEntWorldCx(holder);
-          setEntWorldCx(subRoot, curCx + (dstCx - curCx) * Math.min(1, 0.35 * k));
+          setEntWorldCx(subRoot, curCx + (getEntWorldCx(holder) - curCx) * Math.min(1, 0.35 * k));
         }
-
         vy = Math.min(14, vy + 0.54 * k);
         subRoot.y += vy * k;
         subRoot.vy = vy;
-
         if (subRoot.y >= goalY) {
           subRoot.ballisticActive = false;
           subRoot.vx = 0;
@@ -4001,22 +3616,18 @@
           if (holder) {
             subRoot.stackedOn = holder.id;
             subRoot.y = 0;
-            if (!isMiniEnt(subRoot)) {
-              playSeq(subRoot, [['idle', 1, 2, -1]]);
-            }
+            if (!isMiniEnt(subRoot)) playSeq(subRoot, [['idle', 1, 2, -1]]);
             syncAllStackedFollowers();
           } else {
             subRoot.stackedOn = null;
             subRoot.y = 0;
-            if (!isMiniEnt(subRoot)) {
-              playSeq(subRoot, landingSteps(1));
-            }
+            if (!isMiniEnt(subRoot)) playSeq(subRoot, landingSteps(1));
             enforceGroundSeparation();
           }
+          syncTower(subRoot, now);
           renderAllFrames(now);
           return;
         }
-
         syncAllStackedFollowers();
         syncTower(subRoot, now);
         rAF(step);
@@ -4029,128 +3640,33 @@
       if (!pulled) return;
       const lowerHolderId = pulled.stackedOn || null;
       const upperRider = findDirectRider(pulledId);
-      let riderStartFootY = 0;
-      let riderStartCx = 0;
       if (upperRider) {
-        riderStartFootY = computeWorldFootY(upperRider);
-        riderStartCx = getEntWorldCx(upperRider);
+        const riderStartFootY = computeWorldFootY(upperRider);
+        const riderStartCx = getEntWorldCx(upperRider);
         upperRider.stackedOn = null;
         upperRider.perchUntil = 0;
+        resetActorTransient(upperRider, { keepFly: true });
         setEntWorldCx(upperRider, riderStartCx);
         upperRider.y = riderStartFootY;
       }
       pulled.stackedOn = null;
       pulled.perchUntil = 0;
-      if (upperRider) {
-        startGravitySettle(upperRider, lowerHolderId);
-      }
-    };
-
-    const startMiniBallistic = (mc, vx0, vy0, mopts = {}) => {
-      if (!mc) return;
-      mc.act = null;
-      mc.leap = null;
-      if (reducedMotion) {
-        mc.flying += 1;
-        mc.ballisticActive = false;
-        mc.y = 0;
-        mc.vx = 0;
-        mc.vy = 0;
-        mc.rot = 0;
-        if (mopts.noSnap || !trySnapOntoTower(mc, performance.now())) {
-          enforceGroundSeparation();
-          renderAllFrames(performance.now());
-        }
-        return;
-      }
-      const flightId = (mc.flying += 1);
-      mc.ballisticActive = true;
-      syncDirectMotionDomAttr(mc, mc.canvas);
-      let vx = Math.max(-14, Math.min(14, vx0));
-      let vy = Math.max(-14, Math.min(14, vy0));
-      let bounces = 0;
-      let prev = performance.now();
-
-      const step = (now) => {
-        if (disposed || flightId !== mc.flying || mc.dragging) {
-          if (disposed || mc.dragging) mc.ballisticActive = false;
-          return;
-        }
-        if (doc && doc.hidden) {
-          mc.ballisticActive = false;
-          mc.y = 0;
-          mc.vx = 0;
-          mc.vy = 0;
-          mc.rot = 0;
-          enforceGroundSeparation();
-          renderAllFrames(now);
-          return;
-        }
-        const k = Math.max(0.5, Math.min(2.5, (now - prev) / 16.6667));
-        prev = now;
-        vy += 0.46 * k;
-        vx *= Math.pow(0.985, k);
-        vy *= Math.pow(0.985, k);
-
-        const { minX, maxX } = stageBoundsX();
-        const hw = entHalfW(mc);
-        let cx = getEntWorldCx(mc) + vx * k;
-        if (cx < minX + hw) {
-          cx = minX + hw;
-          vx = -0.45 * vx;
-        } else if (cx > maxX - hw) {
-          cx = maxX - hw;
-          vx = -0.45 * vx;
-        }
-        setEntWorldCx(mc, cx);
-        mc.y = Math.max(-180, (mc.y || 0) + vy * k);
-        mc.vx = vx;
-        mc.vy = vy;
-
-        if (!mopts.noSnap && vy >= 0 && trySnapOntoTower(mc, now)) {
-          return;
-        }
-
-        if (mc.y >= 0) {
-          mc.y = 0;
-          if (Math.abs(vy) > 2.6 && bounces < 1) {
-            vy = -vy * 0.32;
-            vx *= 0.78;
-            bounces += 1;
-          } else {
-            mc.ballisticActive = false;
-            mc.vx = 0;
-            mc.vy = 0;
-            mc.rot = 0;
-            enforceGroundSeparation();
-            renderAllFrames(now);
-            return;
-          }
-        }
-        mc.rot = Math.max(-14, Math.min(14, -vx * 0.65));
-        syncAllStackedFollowers();
-        syncTower(mc, now);
-        rAF(step);
-      };
-      rAF(step);
+      if (upperRider) startGravitySettle(upperRider, lowerHolderId);
     };
 
     const dismountRidersSideHop = (baseId) => {
       const chain = getTowerMembers(baseId);
       const idx = chain.indexOf(baseId);
       if (idx < 0 || idx >= chain.length - 1) return false;
-      const riders = chain
+      const snapshots = chain
         .slice(idx + 1)
         .map((id) => getEnt(id))
-        .filter(Boolean);
-      const snapshots = riders.map((r) => ({
-        r,
-        footY: computeWorldFootY(r),
-        cx: getEntWorldCx(r),
-      }));
+        .filter(Boolean)
+        .map((r) => ({ r, footY: computeWorldFootY(r), cx: getEntWorldCx(r) }));
       for (const s of snapshots) {
         s.r.stackedOn = null;
         s.r.perchUntil = 0;
+        resetActorTransient(s.r, { keepFly: true });
         s.r.y = s.footY;
         setEntWorldCx(s.r, s.cx);
       }
@@ -4159,10 +3675,9 @@
         if (reducedMotion) {
           setEntWorldCx(s.r, s.cx + dir * (28 + i * 18));
           s.r.y = 0;
-        } else if (isMiniEnt(s.r)) {
-          startMiniBallistic(s.r, dir * (2.6 + i * 0.6), -3.5 - i * 0.4, { noSnap: true });
         } else {
-          startBallistic(s.r, dir * (2.8 + i * 0.6), -3.8 - i * 0.4, { noSnap: true });
+          const isM = isMiniEnt(s.r);
+          startEntityBallistic(s.r, dir * ((isM ? 2.6 : 2.8) + i * 0.6), (isM ? -3.5 : -3.8) - i * 0.4, { noSnap: true });
         }
       });
       if (reducedMotion) {
@@ -4188,8 +3703,7 @@
       const mHw = entHalfW(mover);
       const canLeap = landCx >= minX + mHw + 2 && landCx <= maxX - mHw - 2;
       const obsTowerLen = getTowerMembers(obsRoot.id).length;
-      const moverTowerLen = getTowerMembers(mover.id).length;
-      const canPerch = moverTowerLen === 1 && obsTowerLen < maxTowerDepthAllowed();
+      const canPerch = getTowerMembers(mover.id).length === 1 && obsTowerLen < maxTowerDepthAllowed();
 
       let action = forcedAction || chooseObstacleAction({ canLeap, canPerch });
       if (action === 'autoPerch' && !canPerch) action = canLeap ? 'leapfrog' : 'greetTurn';
@@ -4197,20 +3711,13 @@
 
       if (action === 'leapfrog') {
         const peak = Math.min(62, 26 + Math.max(0, obsTowerLen - 1) * 14);
-        if (isMiniEnt(mover)) mover.act = null;
+        resetActorTransient(mover, { keepFly: true });
         if (reducedMotion) {
           setEntWorldCx(mover, landCx);
           mover.y = 0;
           enforceGroundSeparation();
         } else {
-          mover.leap = {
-            cx0: moverCx,
-            cx1: landCx,
-            peak,
-            startTick: tickIdx,
-            ticks: 6,
-            landOnto: null,
-          };
+          mover.leap = { cx0: moverCx, cx1: landCx, peak, startTick: tickIdx, ticks: 6, landOnto: null };
           if (!isMiniEnt(mover)) {
             mover.faceDir = dir > 0 ? 'right' : 'left';
             mover.sym = 'spark';
@@ -4219,7 +3726,7 @@
         }
       } else if (action === 'autoPerch') {
         const top = getStackTop(obsRoot.id);
-        if (isMiniEnt(mover)) mover.act = null;
+        resetActorTransient(mover, { keepFly: true });
         if (reducedMotion) {
           mover.stackedOn = top.id;
           mover.y = 0;
@@ -4227,14 +3734,7 @@
           syncAllStackedFollowers();
         } else {
           const peak = Math.max(26, Math.abs(computeWorldFootY(top) - mountStepH(top.id)) + 10);
-          mover.leap = {
-            cx0: moverCx,
-            cx1: getEntWorldCx(top),
-            peak,
-            startTick: tickIdx,
-            ticks: 5,
-            landOnto: top.id,
-          };
+          mover.leap = { cx0: moverCx, cx1: getEntWorldCx(top), peak, startTick: tickIdx, ticks: 5, landOnto: top.id };
           if (!isMiniEnt(obsRoot) && !obsRoot.dragging && !obsRoot.stackedOn) {
             startClip(obsRoot, 'walk', 2800, { patrolDir: dir });
           }
@@ -4276,194 +3776,190 @@
       return action;
     };
 
-    const startBallistic = (actor, vx0, vy0, bopts = {}) => {
-      if (Math.hypot(vx0, vy0) > 2.2) {
-        dismountRidersSideHop(actor.id);
-      }
-      if (reducedMotion) {
-        // 减少动态：不做抛物线与弹跳，若在塔顶上方则吸附叠塔，否则静止落回地面并防重叠
-        actor.flying += 1;
-        actor.ballisticActive = false;
-        actor.seq = null;
-        actor.vx = 0;
-        actor.vy = 0;
-        actor.rot = 0;
-        if (actor.overridePose === 'dangle') actor.overridePose = null;
-        if (typeof bopts.reboundTargetX === 'number' && Number.isFinite(bopts.reboundTargetX)) {
-          actor.x = clampActorX(bopts.reboundTargetX);
-        }
-        if (bopts.noSnap || !trySnapOntoTower(actor, performance.now())) {
-          actor.y = 0;
-          enforceGroundSeparation();
-          applyActorTransform(actor);
-          renderAllFrames(performance.now());
-        }
-        return;
-      }
-      if (bopts.anticipate && actor.y === 0 && !actor.stackedOn) {
-        // 起跳前 1 拍下蹲预备（整数格压扁加宽）
-        const prepId = (actor.flying += 1);
-        actor.ballisticActive = false;
-        playSeq(actor, [['squash', 2, 2, -1]]);
-        later(TICK * 2, () => {
-          if (actor.flying === prepId && !actor.dragging) launch(actor, vx0, vy0, bopts);
-        });
-        return;
-      }
-      launch(actor, vx0, vy0, bopts);
-    };
-
-    const launch = (actor, vx0, vy0, bopts = {}) => {
-      const flightId = (actor.flying += 1);
-      const hasReboundTarget = typeof bopts.reboundTargetX === 'number' && Number.isFinite(bopts.reboundTargetX);
-      const maxVx = hasReboundTarget ? 64 : 18;
+    // 统一主宠 + 迷你蟹弹道物理循环
+    const launchEntity = (ent, vx0, vy0, bopts = {}) => {
+      const mini = isMiniEnt(ent);
+      const flightId = (ent.flying += 1);
+      const hasReboundTarget = !mini && typeof bopts.reboundTargetX === 'number' && Number.isFinite(bopts.reboundTargetX);
+      const vLim = mini ? 14 : 18;
+      const maxVx = hasReboundTarget ? 64 : vLim;
       let vx = Math.max(-maxVx, Math.min(maxVx, vx0));
-      let vy = Math.max(-18, Math.min(18, vy0));
+      let vy = Math.max(-vLim, Math.min(vLim, vy0));
       let bounces = 0;
       let scattered = false;
-      actor.ballisticActive = true;
-      actor.reboundNoBump = Boolean(bopts.reboundNoBump);
-      actor.leap = null;
-      actor.seq = null;
-      actor.overridePose = 'dangle';
-      actor.overrideUntil = performance.now() + 3000;
+      resetActorTransient(ent, { keepFly: true, keepVel: true, keepBallistic: true });
+      ent.ballisticActive = true;
+      if (!mini) {
+        ent.reboundNoBump = Boolean(bopts.reboundNoBump);
+        ent.overridePose = 'dangle';
+        ent.overrideUntil = performance.now() + 3000;
+      }
       // 起跳瞬间立刻锁死 data-direct="1" 与 transition: none，防止首帧落入 220ms CSS transition
-      syncDirectMotionDomAttr(actor, actor.el);
+      syncDirectMotionDomAttr(ent, mini ? ent.canvas : ent.el);
 
       let prev = performance.now();
       const step = (now) => {
-        if (disposed || flightId !== actor.flying || actor.dragging) {
-          if (disposed || actor.dragging) actor.ballisticActive = false;
+        if (disposed || flightId !== ent.flying || ent.dragging) {
+          if (disposed || ent.dragging) ent.ballisticActive = false;
           return;
         }
-        if (doc && doc.hidden) {
+        if (isDocHidden() || isHostSleeping() || parked) {
           if (hasReboundTarget) {
-            actor.x = Math.max(8, Math.min(maxXFor(readStageWidth()), bopts.reboundTargetX));
+            ent.x = Math.max(8, Math.min(maxXFor(readStageWidth()), bopts.reboundTargetX));
           }
-          actor.ballisticActive = false;
-          actor.reboundNoBump = false;
-          actor.y = 0;
-          actor.vx = 0;
-          actor.vy = 0;
-          actor.rot = 0;
-          actor.overridePose = null;
-          actor.overrideRot = 0;
+          if (!mini) ent.reboundNoBump = false;
+          resetActorTransient(ent, { keepFly: true });
+          ent.y = 0;
           enforceGroundSeparation();
-          applyActorTransform(actor, now);
+          if (!mini) applyActorTransform(ent, now);
+          else syncTower(ent, now);
+          reclaimStageVram();
           return;
         }
         const k = Math.max(0.5, Math.min(2.5, (now - prev) / 16.6667));
         prev = now;
-        vy += 0.44 * k;
-        vx *= Math.pow(0.988, k);
-        vy *= Math.pow(0.988, k);
-        actor.x += vx * k;
-        actor.y += vy * k;
+        vy += (mini ? 0.46 : 0.44) * k;
+        const drag = Math.pow(mini ? 0.985 : 0.988, k);
+        vx *= drag;
+        vy *= drag;
 
-        const w = readStageWidth();
-        const minX = 8;
-        const maxX = maxXFor(w);
-        if (hasReboundTarget) {
-          const targetX = Math.max(minX, Math.min(maxX, bopts.reboundTargetX));
-          if ((vx >= 0 && actor.x > targetX) || (vx < 0 && actor.x < targetX)) {
-            actor.x = targetX;
-            vx = 0;
+        let mainMinX = 8;
+        let mainMaxX = 40;
+        if (mini) {
+          const { minX, maxX } = stageBoundsX();
+          const hw = entHalfW(ent);
+          let cx = getEntWorldCx(ent) + vx * k;
+          if (cx < minX + hw) { cx = minX + hw; vx = -0.45 * vx; }
+          else if (cx > maxX - hw) { cx = maxX - hw; vx = -0.45 * vx; }
+          setEntWorldCx(ent, cx);
+          ent.y = Math.max(-180, (ent.y || 0) + vy * k);
+        } else {
+          ent.x += vx * k;
+          ent.y += vy * k;
+          mainMinX = 8;
+          mainMaxX = maxXFor(readStageWidth());
+          if (hasReboundTarget) {
+            const targetX = Math.max(mainMinX, Math.min(mainMaxX, bopts.reboundTargetX));
+            if ((vx >= 0 && ent.x > targetX) || (vx < 0 && ent.x < targetX)) {
+              ent.x = targetX;
+              vx = 0;
+            }
+          }
+          if (ent.x < mainMinX) { ent.x = mainMinX; vx = -0.45 * vx; }
+          else if (ent.x > mainMaxX) { ent.x = mainMaxX; vx = -0.45 * vx; }
+          if (ent.y < -180) { ent.y = -180; vy = -0.45 * vy; }
+        }
+        ent.vx = vx;
+        ent.vy = vy;
+
+        if (!bopts.noSnap && vy >= 0 && trySnapOntoTower(ent, now)) return;
+
+        if (!mini) {
+          const other = ent.id === 'cat' ? actors.clawd : actors.cat;
+          if (
+            !bopts.reboundNoBump &&
+            !other.reboundNoBump &&
+            !other.dragging && !other.stackedOn && !ent.stackedOn &&
+            Math.abs(ent.x - other.x) < 42 && Math.abs(ent.y - other.y) < 22 &&
+            ((ent.x < other.x && vx > 0.35) || (ent.x >= other.x && vx < -0.35)) &&
+            canTriggerPair('ballistic', now, 650)
+          ) {
+            const sign = ent.x < other.x ? -1 : 1;
+            ent.x = clampActorX(other.x + sign * 42);
+            const incomingVx = vx;
+            vx = -incomingVx * 0.46;
+            if (Math.abs(vx) < 1.6) vx = sign * 1.8;
+            ent.sym = 'sweat';
+            ent.symUntil = now + 750;
+            startClip(other, 'wow', 800, { sym: 'bang', face: sign < 0 ? 'left' : 'right' });
+            startEntityBallistic(other, Math.max(-7.2, Math.min(7.2, incomingVx * 0.62 || -sign * 2.6)), -2.7);
+            recordInteraction('ballisticBump', `${ent.id}->${other.id}`, now);
+            renderAllFrames(now);
           }
         }
-        if (actor.x < minX) {
-          actor.x = minX;
-          vx = -0.45 * vx;
-        } else if (actor.x > maxX) {
-          actor.x = maxX;
-          vx = -0.45 * vx;
-        }
-        if (actor.y < -180) {
-          actor.y = -180;
-          vy = -0.45 * vy;
-        }
 
-        // 支持 2~5 层通用图腾塔下落吸附
-        if (!bopts.noSnap && vy >= 0 && trySnapOntoTower(actor, now)) {
-          return;
-        }
-
-        // 场景 1 · 抛掷横向弹道撞击（不破坏上方叠叠乐，同层横撞则互弹 + 冲量传递）
-        const other = actor.id === 'cat' ? actors.clawd : actors.cat;
-        if (
-          !bopts.reboundNoBump &&
-          !other.reboundNoBump &&
-          !other.dragging &&
-          !other.stackedOn &&
-          !actor.stackedOn &&
-          Math.abs(actor.x - other.x) < 42 &&
-          Math.abs(actor.y - other.y) < 22 &&
-          ((actor.x < other.x && vx > 0.35) || (actor.x >= other.x && vx < -0.35)) &&
-          canTriggerPair('ballistic', now, 650)
-        ) {
-          const sign = actor.x < other.x ? -1 : 1;
-          actor.x = clampActorX(other.x + sign * 42);
-          const incomingVx = vx;
-          vx = -incomingVx * 0.46;
-          if (Math.abs(vx) < 1.6) vx = sign * 1.8;
-          actor.sym = 'sweat';
-          actor.symUntil = now + 750;
-          const knockVx = Math.max(-7.2, Math.min(7.2, incomingVx * 0.62 || -sign * 2.6));
-          startClip(other, 'wow', 800, { sym: 'bang', face: sign < 0 ? 'left' : 'right' });
-          startBallistic(other, knockVx, -2.7);
-          recordInteraction('ballisticBump', `${actor.id}->${other.id}`, now);
-          renderAllFrames(now);
-        }
-
-        if (actor.y >= 0) {
-          actor.y = 0;
-          // 首次触地砸在迷你蟹附近：蟹四散后归位
-          if (!scattered) {
-            scattered = true;
-            scatterCrabsNear(actor.x + 48);
-          }
-          if (Math.abs(vy) > 2.4 && bounces < 2) {
-            vy = -vy * 0.36;
-            vx *= 0.82;
+        if (ent.y >= 0) {
+          ent.y = 0;
+          if (!mini && !scattered) { scattered = true; scatterCrabsNear(ent.x + 48); }
+          const maxB = mini ? 1 : 2;
+          const minVy = mini ? 2.6 : 2.4;
+          if (Math.abs(vy) > minVy && bounces < maxB) {
+            vy = -vy * (mini ? 0.32 : 0.36);
+            vx *= mini ? 0.78 : 0.82;
             bounces += 1;
-            // 中途弹跳：1 拍整格压扁触地，随后继续腾空（ballisticActive 保持 true 锁死 data-direct）
-            playSeq(actor, [['flat', 1, 2, 0]]);
+            // 中途弹跳：ballisticActive 保持 true 锁死 data-direct
+            if (!mini) playSeq(ent, [['flat', 1, 2, 0]]);
           } else {
             const impact = Math.abs(vy);
             if (hasReboundTarget) {
-              actor.x = Math.max(minX, Math.min(maxX, bopts.reboundTargetX));
+              ent.x = Math.max(mainMinX, Math.min(mainMaxX, bopts.reboundTargetX));
             }
-            actor.ballisticActive = false;
-            actor.reboundNoBump = false;
-            actor.vx = 0;
-            actor.vy = 0;
-            actor.rot = 0;
-            actor.overridePose = null;
-            actor.overrideRot = 0;
-            const steps = landingSteps(impact > 1.2 || bounces > 0 ? 2 : 1);
-            playSeq(actor, steps);
-            if (actor.throws >= 3) {
-              actor.throws = 0;
-              startClip(actor, 'angry', 1400 + seqTotalMs(steps), { sym: 'vein' });
+            if (!mini) ent.reboundNoBump = false;
+            resetActorTransient(ent, { keepFly: true });
+            if (!mini) {
+              const steps = landingSteps(impact > 1.2 || bounces > 0 ? 2 : 1);
+              playSeq(ent, steps);
+              if (ent.throws >= 3) {
+                ent.throws = 0;
+                startClip(ent, 'angry', 1400 + seqTotalMs(steps), { sym: 'vein' });
+              }
             }
             enforceGroundSeparation();
-            applyActorTransform(actor, now);
+            if (!mini) applyActorTransform(ent, now);
+            else syncTower(ent, now);
             renderAllFrames(now);
             return;
           }
         }
-        actor.rot = Math.max(-14, Math.min(14, -vx * 0.65));
-        actor.vx = vx;
-        actor.vy = vy;
+        ent.rot = Math.max(-14, Math.min(14, -vx * 0.65));
+        ent.vx = vx;
+        ent.vy = vy;
         syncAllStackedFollowers();
-        applyActorTransform(actor, now);
-        // 仅在姿态真正切变（如起跳进 dangle 或触地切 flat）时重绘精灵，避免 60fps 软件重绘
-        if (resolvePoseFor(actor, now) !== actor.lastRender.poseKey) {
-          renderAllFrames(now);
+        if (mini) {
+          syncTower(ent, now);
+        } else {
+          applyActorTransform(ent, now);
+          // 仅在姿态真正切变（如起跳进 dangle 或触地切 flat）时重绘精灵，避免 60fps 软件重绘
+          if (resolvePoseFor(ent, now) !== ent.lastRender.poseKey) {
+            renderAllFrames(now);
+          }
         }
         rAF(step);
       };
       rAF(step);
     };
+
+    const startEntityBallistic = (ent, vx0, vy0, bopts = {}) => {
+      if (!ent) return;
+      const mini = isMiniEnt(ent);
+      if (!mini && Math.hypot(vx0, vy0) > 2.2) dismountRidersSideHop(ent.id);
+      if (reducedMotion) {
+        resetActorTransient(ent, { keepPose: !mini && ent.overridePose !== 'dangle' });
+        if (!mini && typeof bopts.reboundTargetX === 'number' && Number.isFinite(bopts.reboundTargetX)) {
+          ent.x = clampActorX(bopts.reboundTargetX);
+        }
+        if (bopts.noSnap || !trySnapOntoTower(ent, performance.now())) {
+          ent.y = 0;
+          enforceGroundSeparation();
+          if (!mini) applyActorTransform(ent);
+          else syncTower(ent);
+          renderAllFrames(performance.now());
+        }
+        return;
+      }
+      if (!mini && bopts.anticipate && ent.y === 0 && !ent.stackedOn) {
+        const prepId = (ent.flying += 1);
+        ent.ballisticActive = false;
+        playSeq(ent, [['squash', 2, 2, -1]]);
+        later(TICK * 2, () => {
+          if (ent.flying === prepId && !ent.dragging) launchEntity(ent, vx0, vy0, bopts);
+        });
+        return;
+      }
+      launchEntity(ent, vx0, vy0, bopts);
+    };
+    const startBallistic = startEntityBallistic;
+    const startMiniBallistic = startEntityBallistic;
 
     const dragReleaseHooks = [];
     let dragRafPending = false;
@@ -4481,12 +3977,34 @@
       });
     };
 
-    const bindActorEvents = (actor) => {
+    // ── 投喂彩蛋（右键=甜甜圈 / Alt+左键=热咖啡）：立即消气清 pokeCount 并解除 sulk ──
+    const feedActor = (actor, item = 'donut') => {
+      if (!actor || isMiniEnt(actor) || disposed) return false;
+      const now = performance.now();
+      markActivity();
+      actor.pokeCount = 0;
+      actor.lastPokeAt = 0;
+      if (actor.overridePose === 'sulk' || actor.overridePose === 'angry') {
+        resetActorTransient(actor);
+      }
+      const pose = item === 'coffee' ? 'feedCoffee' : 'feedDonut';
+      startClip(actor, pose, 2200, { sym: 'heart' });
+      recordInteraction(pose, actor.id, now);
+      renderAllFrames(now);
+      return true;
+    };
+
+    // 统一主宠 + 迷你蟹指针拖拽绑定（主宠附带右键甜甜圈 & Alt+左键热咖啡投喂）
+    const bindEntityPointer = (ent) => {
+      const mini = isMiniEnt(ent);
+      const domNode = mini ? ent.canvas : ent.el;
+      const dragThreshold = mini ? 2.5 : 7;
       let downX = 0;
       let downY = 0;
       let startX = 0;
       let startY = 0;
-      let cachedStageW = 720;
+      let cachedA = 720;
+      let cachedB = 680;
       let lastMoveX = 0;
       let lastMoveY = 0;
       let lastMoveT = 0;
@@ -4495,19 +4013,20 @@
       let petTriggered = false;
 
       const onDown = (evt) => {
-        if (evt.button !== 0) return;
+        if (evt.button !== 0 || (mini && !miniPileEnabled)) return;
         evt.preventDefault();
         evt.stopPropagation();
-        cachedStageW = readStageWidth();
-        try {
-          actor.el.setPointerCapture?.(evt.pointerId);
-        } catch (_) {}
+        if (!mini && evt.altKey) {
+          feedActor(ent, 'coffee');
+          return;
+        }
+        try { ent.el.setPointerCapture?.(evt.pointerId); } catch (_) {}
         const downNow = performance.now();
-        if (actor.glideUntil && downNow < actor.glideUntil) {
-          actor.glideSeq = (actor.glideSeq || 0) + 1;
-          actor.glideUntil = 0;
+        if (ent.glideUntil && downNow < ent.glideUntil) {
+          ent.glideSeq = (ent.glideSeq || 0) + 1;
+          ent.glideUntil = 0;
           try {
-            const er = actor.el?.getBoundingClientRect?.();
+            const er = ent.el?.getBoundingClientRect?.();
             const hr = hostEl?.getBoundingClientRect?.();
             const hasRect =
               er &&
@@ -4516,114 +4035,128 @@
               Number.isFinite(hr.left) &&
               ((Number.isFinite(er.width) && er.width > 0) || (Number.isFinite(er.right) && er.right > er.left));
             if (hasRect) {
-              actor.x = clampActorX(er.left - hr.left);
+              if (mini) setEntWorldCx(ent, er.left - hr.left + 20);
+              else ent.x = clampActorX(er.left - hr.left);
             }
           } catch (_) {}
-          for (const cid of getTowerMembers(actor.id)) {
-            const ent = getEnt(cid);
-            if (!ent) continue;
-            ent.glideSeq = (ent.glideSeq || 0) + 1;
-            ent.glideUntil = 0;
+          if (mini) {
             if (ent.el?.style) ent.el.style.transition = '';
+          } else {
+            for (const cid of getTowerMembers(ent.id)) {
+              const member = getEnt(cid);
+              if (!member) continue;
+              member.glideSeq = (member.glideSeq || 0) + 1;
+              member.glideUntil = 0;
+              if (member.el?.style) member.el.style.transition = '';
+            }
+            syncTower(ent);
           }
-          syncTower(actor);
         }
-        actor.reboundNoBump = false;
+        if (!mini) ent.reboundNoBump = false;
+        if (mini) {
+          const { minX, maxX } = stageBoundsX();
+          const hw = entHalfW(ent);
+          cachedA = minX + hw;
+          cachedB = maxX - hw;
+          startX = getEntWorldCx(ent);
+        } else {
+          cachedA = readStageWidth();
+          startX = ent.x;
+        }
         downX = evt.clientX;
         downY = evt.clientY;
-        startX = actor.x;
-        startY = actor.stackedOn ? computeWorldFootY(actor) : actor.y;
+        startY = ent.stackedOn ? computeWorldFootY(ent) : ent.y || 0;
         lastMoveX = evt.clientX;
         lastMoveY = evt.clientY;
         lastMoveT = downNow;
         moved = false;
         petTriggered = false;
         markActivity();
-        actor.flying += 1;
-        actor.ballisticActive = false;
-        actor.leap = null;
-        actor.seq = null;
-        actor.seqThen = null;
-        actor.vx = 0;
-        actor.vy = 0;
-        actor.overrideRot = 0;
-        actor.mirror = false;
+        resetActorTransient(ent);
 
-        clearTimeout(petTimer);
-        petTimer = setTimeout(() => {
-          if (!moved && !disposed) {
-            petTriggered = true;
-            startClip(actor, 'pet', 1100, { sym: 'heart' });
-            renderAllFrames(performance.now());
-          }
-        }, 360);
+        if (!mini) {
+          clearTimeout(petTimer);
+          petTimer = setTimeout(() => {
+            if (!moved && !disposed) {
+              petTriggered = true;
+              startClip(ent, 'pet', 1100, { sym: 'heart' });
+              renderAllFrames(performance.now());
+            }
+          }, 360);
+        }
       };
 
       const onMove = (evt) => {
         if (lastMoveT === 0) return;
         const dxTotal = evt.clientX - downX;
         const dyTotal = evt.clientY - downY;
-        let justStartedDrag = false;
-        if (!moved && Math.hypot(dxTotal, dyTotal) > 7) {
+        let justStarted = false;
+        if (!moved && Math.hypot(dxTotal, dyTotal) > dragThreshold) {
           moved = true;
-          justStartedDrag = true;
+          justStarted = true;
           clearTimeout(petTimer);
-          detachWithGravitySettle(actor.id);
-          actor.sideEdgeSnap = false;
-          actor.sidePushOriginX = null;
-          actor.sideEdgeDirectUntil = 0;
-          actor.ballisticActive = false;
-          actor.dragging = true;
-          syncDirectMotionDomAttr(actor, actor.el);
+          detachWithGravitySettle(ent.id);
+          if (!mini) {
+            ent.sideEdgeSnap = false;
+            ent.sidePushOriginX = null;
+            ent.sideEdgeDirectUntil = 0;
+          }
+          ent.ballisticActive = false;
+          ent.dragging = true;
+          syncDirectMotionDomAttr(ent, domNode);
           syncMascotDragRootAttr();
         }
         if (!moved) return;
         evt.stopPropagation?.();
         const now = performance.now();
         const dt = Math.max(4, now - lastMoveT);
-        const instVx = ((evt.clientX - lastMoveX) / dt) * 16;
-        const instVy = ((evt.clientY - lastMoveY) / dt) * 16;
-        actor.vx = actor.vx * 0.4 + instVx * 0.6;
-        actor.vy = actor.vy * 0.4 + instVy * 0.6;
-        actor.rot = Math.max(-14, Math.min(14, -actor.vx * 0.7));
+        ent.vx = ent.vx * 0.4 + (((evt.clientX - lastMoveX) / dt) * 16) * 0.6;
+        ent.vy = ent.vy * 0.4 + (((evt.clientY - lastMoveY) / dt) * 16) * 0.6;
+        ent.rot = Math.max(-14, Math.min(14, -ent.vx * 0.7));
         lastMoveX = evt.clientX;
         lastMoveY = evt.clientY;
         lastMoveT = now;
 
-        const rightReserve = popoverRightWidth > 0 ? Math.min(cachedStageW - 150, popoverRightWidth + 16) : 0;
-        const maxDragX = Math.max(24, cachedStageW - 88 - rightReserve);
-        actor.x = Math.max(4, Math.min(maxDragX, startX + dxTotal));
-        actor.y = Math.max(-180, Math.min(0, startY + dyTotal));
-        // 0ms 直通 GPU 合成层更新亚像素坐标与 60fps 倾角，不等待全舞台重绘
-        applyActorTransform(actor, now);
-        if (justStartedDrag) {
-          renderAllFrames(now);
+        const nextY = Math.max(-180, Math.min(0, startY + dyTotal));
+        if (mini) {
+          const clampedCx = Math.max(cachedA, Math.min(cachedB, startX + dxTotal));
+          const nextPx = Math.max(2, clampedCx - 32);
+          ent.px = nextPx;
+          ent.lastX = Math.round(nextPx);
+          ent.y = nextY;
+          const tx = snapCoord(nextPx, true);
+          const ty = snapCoord(nextY, true);
+          applyMiniTransform(ent, tx, ty, '39', ent.rot);
         } else {
-          scheduleDragRender();
+          const rightReserve = popoverRightWidth > 0 ? Math.min(cachedA - 150, popoverRightWidth + 16) : 0;
+          ent.x = Math.max(4, Math.min(Math.max(24, cachedA - 88 - rightReserve), startX + dxTotal));
+          ent.y = nextY;
+          applyActorTransform(ent, now);
         }
 
-        // 场景 2 · 鼠标拖拽地面擦撞、慢速经过与惊扰迷你蟹
-        if (!reducedMotion && actor.dragging && actor.y > -22) {
-          const other = actor.id === 'cat' ? actors.clawd : actors.cat;
-          if (!other.dragging && !other.stackedOn && other.y === 0 && Math.abs(actor.x - other.x) < 38) {
-            if (Math.abs(actor.vx) >= 2.0 && canTriggerPair('dragBump', now, 750)) {
-              const pushDir = actor.vx >= 0 ? 1 : -1;
+        if (justStarted) renderAllFrames(now);
+        else scheduleDragRender();
+
+        if (!mini && !reducedMotion && ent.dragging && ent.y > -22) {
+          const other = ent.id === 'cat' ? actors.clawd : actors.cat;
+          if (!other.dragging && !other.stackedOn && other.y === 0 && Math.abs(ent.x - other.x) < 38) {
+            if (Math.abs(ent.vx) >= 2.0 && canTriggerPair('dragBump', now, 750)) {
+              const pushDir = ent.vx >= 0 ? 1 : -1;
               startClip(other, 'wow', 750, { sym: 'bang', face: pushDir > 0 ? 'left' : 'right' });
-              startBallistic(other, pushDir * Math.min(5.2, Math.abs(actor.vx) * 0.58), -2.5);
-              recordInteraction('dragBump', `${actor.id}->${other.id}`, now);
+              startEntityBallistic(other, pushDir * Math.min(5.2, Math.abs(ent.vx) * 0.58), -2.5);
+              recordInteraction('dragBump', `${ent.id}->${other.id}`, now);
               scheduleDragRender();
-            } else if (Math.abs(actor.vx) < 2.0 && canTriggerPair('dragPass', now, 1400)) {
-              gaze(other, actor.x < other.x ? 'left' : 'right', 750, false, 'note');
+            } else if (Math.abs(ent.vx) < 2.0 && canTriggerPair('dragPass', now, 1400)) {
+              gaze(other, ent.x < other.x ? 'left' : 'right', 750, false, 'note');
               hop(other, 'wave');
-              recordInteraction('dragPass', `${actor.id}->${other.id}`, now);
+              recordInteraction('dragPass', `${ent.id}->${other.id}`, now);
               scheduleDragRender();
             }
           }
-          if (miniPileEnabled && actor.y > -16 && Math.abs(actor.vx) > 1.4 && canTriggerPair('dragCrab', now, 800)) {
-            const nearCrab = miniCrabs.some((mc) => !mc.act && !mc.stackedOn && Math.abs(crabHostCenter(mc) - (actor.x + 48)) < 32);
-            if (nearCrab) {
-              scatterCrabsNear(actor.x + 48);
-              recordInteraction('crabScatter', actor.id, now);
+          if (miniPileEnabled && ent.y > -16 && Math.abs(ent.vx) > 1.4 && canTriggerPair('dragCrab', now, 800)) {
+            if (miniCrabs.some((mc) => !mc.act && !mc.stackedOn && Math.abs(crabHostCenter(mc) - (ent.x + 48)) < 32)) {
+              scatterCrabsNear(ent.x + 48);
+              recordInteraction('crabScatter', ent.id, now);
               scheduleDragRender();
             }
           }
@@ -4633,239 +4166,85 @@
       const onUp = (evt) => {
         if (lastMoveT === 0) return;
         clearTimeout(petTimer);
-        actor.el.releasePointerCapture?.(evt.pointerId);
+        ent.el.releasePointerCapture?.(evt.pointerId);
         const prevMoveT = lastMoveT;
         lastMoveT = 0;
 
         if (moved) {
-          actor.dragging = false;
+          ent.dragging = false;
           syncMascotDragRootAttr();
           const pNow = performance.now();
-          if (pNow - prevMoveT > 35) {
-            actor.vx = 0;
-            actor.vy = 0;
-          }
-          if (Math.hypot(actor.vx, actor.vy) < 4.5 && trySnapOntoTower(actor, pNow)) {
-            syncDirectMotionDomAttr(actor, actor.el);
+          if (pNow - prevMoveT > 35) { ent.vx = 0; ent.vy = 0; }
+          if (Math.hypot(ent.vx, ent.vy) < 4.5 && trySnapOntoTower(ent, pNow)) {
+            syncDirectMotionDomAttr(ent, domNode);
             moved = false;
             return;
           }
-          const now = Date.now();
-          if (now - actor.lastThrowAt > 8000) actor.throws = 0;
-          actor.throws += 1;
-          actor.lastThrowAt = now;
-          startBallistic(actor, actor.vx * 0.85, actor.vy * 0.85);
+          if (!mini) {
+            const wallNow = Date.now();
+            if (wallNow - ent.lastThrowAt > 8000) ent.throws = 0;
+            ent.throws += 1;
+            ent.lastThrowAt = wallNow;
+          }
+          const mul = mini ? 0.78 : 0.85;
+          startEntityBallistic(ent, ent.vx * mul, ent.vy * mul);
           moved = false;
           return;
         }
 
-        if (petTriggered) return;
-        triggerPoke(actor, true);
+        if (mini) {
+          ent.bumpUntilTick = tickIdx + 6;
+          ent.passHopUntilTick = tickIdx + 4;
+          renderAllFrames(performance.now());
+        } else if (!petTriggered) {
+          triggerPoke(ent, true);
+        }
       };
 
       const cancelDragOnBlur = () => {
-        if (lastMoveT === 0 && !actor.dragging) return;
+        if (lastMoveT === 0 && !ent.dragging) return;
         clearTimeout(petTimer);
         lastMoveT = 0;
-        if (moved || actor.dragging) {
+        if (moved || ent.dragging) {
           moved = false;
-          actor.dragging = false;
-          actor.ballisticActive = false;
-          actor.vx = 0;
-          actor.vy = 0;
-          actor.rot = 0;
+          ent.dragging = false;
+          ent.ballisticActive = false;
+          ent.vx = 0;
+          ent.vy = 0;
+          ent.rot = 0;
           syncMascotDragRootAttr();
-          syncDirectMotionDomAttr(actor, actor.el);
-          if (!disposed) startBallistic(actor, 0, 0, { noSnap: true });
+          syncDirectMotionDomAttr(ent, domNode);
+          if (!disposed) startEntityBallistic(ent, 0, 0, { noSnap: true });
         }
       };
       dragReleaseHooks.push(cancelDragOnBlur);
 
-      actor.el.addEventListener('pointerdown', onDown);
-      actor.el.addEventListener('pointermove', onMove);
-      actor.el.addEventListener('pointerup', onUp);
-      actor.el.addEventListener('pointercancel', onUp);
-      cleanups.push(() => {
-        clearTimeout(petTimer);
-        actor.el.removeEventListener('pointerdown', onDown);
-        actor.el.removeEventListener('pointermove', onMove);
-        actor.el.removeEventListener('pointerup', onUp);
-        actor.el.removeEventListener('pointercancel', onUp);
-      });
-    };
-
-    const bindMiniCrabEvents = (mc) => {
-      let downX = 0;
-      let downY = 0;
-      let startCx = 0;
-      let startY = 0;
-      let cachedMinCx = 27;
-      let cachedMaxCx = 680;
-      let lastMoveX = 0;
-      let lastMoveY = 0;
-      let lastMoveT = 0;
-      let moved = false;
-
-      const onDown = (evt) => {
-        if (evt.button !== 0 || !miniPileEnabled) return;
+      const onContextMenu = (evt) => {
+        if (mini) return;
         evt.preventDefault();
         evt.stopPropagation();
-        const { minX, maxX } = stageBoundsX();
-        const hw = entHalfW(mc);
-        cachedMinCx = minX + hw;
-        cachedMaxCx = maxX - hw;
-        try {
-          mc.el.setPointerCapture?.(evt.pointerId);
-        } catch (_) {}
-        const downNow = performance.now();
-        if (mc.glideUntil && downNow < mc.glideUntil) {
-          mc.glideSeq = (mc.glideSeq || 0) + 1;
-          mc.glideUntil = 0;
-          try {
-            const er = mc.el?.getBoundingClientRect?.();
-            const hr = hostEl?.getBoundingClientRect?.();
-            const hasRect =
-              er &&
-              hr &&
-              Number.isFinite(er.left) &&
-              Number.isFinite(hr.left) &&
-              ((Number.isFinite(er.width) && er.width > 0) || (Number.isFinite(er.right) && er.right > er.left));
-            if (hasRect) {
-              setEntWorldCx(mc, er.left - hr.left + 20);
-            }
-          } catch (_) {}
-          if (mc.el?.style) mc.el.style.transition = '';
-        }
-        downX = evt.clientX;
-        downY = evt.clientY;
-        startCx = getEntWorldCx(mc);
-        startY = mc.stackedOn ? computeWorldFootY(mc) : mc.y || 0;
-        lastMoveX = evt.clientX;
-        lastMoveY = evt.clientY;
-        lastMoveT = downNow;
-        moved = false;
-        markActivity();
-        mc.flying += 1;
-        mc.ballisticActive = false;
-        mc.leap = null;
-        mc.act = null;
-        mc.vx = 0;
-        mc.vy = 0;
-        mc.rot = 0;
+        feedActor(ent, 'donut');
       };
 
-      const onMove = (evt) => {
-        if (lastMoveT === 0) return;
-        const dxTotal = evt.clientX - downX;
-        const dyTotal = evt.clientY - downY;
-        let justStartedDrag = false;
-        if (!moved && Math.hypot(dxTotal, dyTotal) > 2.5) {
-          moved = true;
-          justStartedDrag = true;
-          detachWithGravitySettle(mc.id);
-          mc.ballisticActive = false;
-          mc.dragging = true;
-          syncDirectMotionDomAttr(mc, mc.canvas);
-          syncMascotDragRootAttr();
-        }
-        if (!moved) return;
-        evt.stopPropagation?.();
-        const now = performance.now();
-        const dt = Math.max(4, now - lastMoveT);
-        const instVx = ((evt.clientX - lastMoveX) / dt) * 16;
-        const instVy = ((evt.clientY - lastMoveY) / dt) * 16;
-        mc.vx = mc.vx * 0.4 + instVx * 0.6;
-        mc.vy = mc.vy * 0.4 + instVy * 0.6;
-        mc.rot = Math.max(-14, Math.min(14, -mc.vx * 0.7));
-        lastMoveX = evt.clientX;
-        lastMoveY = evt.clientY;
-        lastMoveT = now;
-
-        // 零 DOM 读取，0ms 直推亚像素浮点 transform + GPU 倾角至 GPU 合成层
-        const clampedCx = Math.max(cachedMinCx, Math.min(cachedMaxCx, startCx + dxTotal));
-        const nextPx = Math.max(2, clampedCx - 32);
-        const nextY = Math.max(-180, Math.min(0, startY + dyTotal));
-        mc.px = nextPx;
-        mc.lastX = Math.round(nextPx);
-        mc.y = nextY;
-
-        const tx = snapCoord(nextPx, true);
-        const ty = snapCoord(nextY, true);
-        applyMiniTransform(mc, tx, ty, '39', mc.rot);
-
-        if (justStartedDrag) {
-          renderAllFrames(now);
-        } else {
-          scheduleDragRender();
-        }
-      };
-
-      const onUp = (evt) => {
-        if (lastMoveT === 0) return;
-        mc.el.releasePointerCapture?.(evt.pointerId);
-        const prevMoveT = lastMoveT;
-        lastMoveT = 0;
-        if (moved) {
-          mc.dragging = false;
-          syncMascotDragRootAttr();
-          const now = performance.now();
-          if (now - prevMoveT > 35) {
-            mc.vx = 0;
-            mc.vy = 0;
-          }
-          if (Math.hypot(mc.vx, mc.vy) < 4.5 && trySnapOntoTower(mc, now)) {
-            syncDirectMotionDomAttr(mc, mc.canvas);
-            moved = false;
-            return;
-          }
-          startMiniBallistic(mc, mc.vx * 0.78, mc.vy * 0.78);
-          moved = false;
-          return;
-        }
-        // 轻点迷你蟹：触发专属特技小跳
-        mc.bumpUntilTick = tickIdx + 6;
-        mc.passHopUntilTick = tickIdx + 4;
-        renderAllFrames(performance.now());
-      };
-
-      const cancelMiniDragOnBlur = () => {
-        if (lastMoveT === 0 && !mc.dragging) return;
-        lastMoveT = 0;
-        if (moved || mc.dragging) {
-          moved = false;
-          mc.dragging = false;
-          mc.ballisticActive = false;
-          mc.vx = 0;
-          mc.vy = 0;
-          mc.rot = 0;
-          syncMascotDragRootAttr();
-          syncDirectMotionDomAttr(mc, mc.canvas);
-          if (!disposed) startMiniBallistic(mc, 0, 0, { noSnap: true });
-        }
-      };
-      dragReleaseHooks.push(cancelMiniDragOnBlur);
-
-      mc.el.addEventListener('pointerdown', onDown);
-      mc.el.addEventListener('pointermove', onMove);
-      mc.el.addEventListener('pointerup', onUp);
-      mc.el.addEventListener('pointercancel', onUp);
+      ent.el.addEventListener('pointerdown', onDown);
+      ent.el.addEventListener('pointermove', onMove);
+      ent.el.addEventListener('pointerup', onUp);
+      ent.el.addEventListener('pointercancel', onUp);
+      if (!mini) ent.el.addEventListener('contextmenu', onContextMenu);
       cleanups.push(() => {
-        mc.el.removeEventListener('pointerdown', onDown);
-        mc.el.removeEventListener('pointermove', onMove);
-        mc.el.removeEventListener('pointerup', onUp);
-        mc.el.removeEventListener('pointercancel', onUp);
+        clearTimeout(petTimer);
+        ent.el.removeEventListener('pointerdown', onDown);
+        ent.el.removeEventListener('pointermove', onMove);
+        ent.el.removeEventListener('pointerup', onUp);
+        ent.el.removeEventListener('pointercancel', onUp);
+        if (!mini) ent.el.removeEventListener('contextmenu', onContextMenu);
       });
     };
 
-    bindActorEvents(actors.cat);
-    bindActorEvents(actors.clawd);
-    miniCrabs.forEach(bindMiniCrabEvents);
+    bindEntityPointer(actors.cat);
+    bindEntityPointer(actors.clawd);
+    miniCrabs.forEach(bindEntityPointer);
 
-    let wb = false;
-    const WB = 'data-ag-cs-win-blur';
-    const isDocHidden = () => Boolean(doc && doc.hidden);
-    const isAttrB = () => doc?.documentElement?.getAttribute?.(WB) === '1';
-    const isWindowBlurred = () => Boolean(isDocHidden() || isAttrB() || wb);
     const hasDozeTransition = (now) =>
       (actors.cat.overridePose && now < actors.cat.overrideUntil) ||
       (actors.clawd.overridePose && now < actors.clawd.overrideUntil);
@@ -4875,17 +4254,23 @@
       ) || Boolean(reboundTm);
     const syncPwr = () => {
       if (disposed) return;
-      if (isHostDetached()) {
+      if (isHostDetached() || parked) {
         syncHeartbeat();
+        reclaimStageVram();
+        return;
+      }
+      if (isDocHidden() || isHostSleeping()) {
+        syncHeartbeat();
+        reclaimStageVram();
         return;
       }
       if (!isAttrB()) {
         wb = false;
-        if (dozing && !isDocHidden()) { wakeUp(); return; }
+        if (dozing && !isDocHidden() && !isHostSleeping()) { wakeUp(); return; }
       }
       syncHeartbeat();
       if (!theaterTimer && currentTickMs > 0 && !dozing && !reducedMotion) scheduleTheater();
-      if (!isWindowBlurred()) renderAllFrames(performance.now());
+      if (!isWindowBlurred() && !isHostSleeping()) renderAllFrames(performance.now());
     };
     const onWBlur = () => {
       if (disposed) return;
@@ -4909,14 +4294,17 @@
           const resizeEnded = wasResizingAttr && !nowResizingAttr;
           wasResizingAttr = nowResizingAttr;
           if (resizeEnded) onStageResizeReleased();
-          const hasBlurMut = !Array.isArray(records) || records.some((r) => !r || !r.attributeName || r.attributeName === WB);
-          if (hasBlurMut) syncPwr();
+          const hasPowerMut =
+            !Array.isArray(records) ||
+            records.some((r) => !r || !r.attributeName || r.attributeName === WB || r.attributeName === PM);
+          if (hasPowerMut) syncPwr();
         });
-        mo.observe(doc.documentElement, { attributes: true, attributeFilter: [WB, RESIZE_ATTR] });
+        mo.observe(doc.documentElement, { attributes: true, attributeFilter: [WB, PM, RESIZE_ATTR] });
         cleanups.push(() => mo.disconnect());
       } catch (_) {}
     }
 
+    // ── 生态联动：活动唤醒 / 打盹 / 领衔交接 / 外部事件 notify ───────────────
     const leaderActor = () => (camp === 'claude' ? actors.clawd : actors.cat);
     const partnerActor = () => (camp === 'claude' ? actors.cat : actors.clawd);
     const faceToward = (from, to) => (to.x >= from.x ? 'right' : 'left');
@@ -4924,8 +4312,9 @@
     const onHeartbeat = () => {
       if (disposed) return;
       const now = performance.now();
-      if (isHostDetached() || isDocHidden() || (isWindowBlurred() && (dozing || !inTrans()))) {
+      if (isHostDetached() || parked || isDocHidden() || isHostSleeping() || (isWindowBlurred() && (dozing || !inTrans()))) {
         syncHeartbeat(now);
+        if (isVramSleepState()) reclaimStageVram();
         return;
       }
       tickIdx += 1;
@@ -4937,7 +4326,15 @@
 
     function syncHeartbeat(now = performance.now()) {
       let targetMs = TICK;
-      if (disposed || isHostDetached() || isDocHidden() || (isWindowBlurred() && (dozing || !inTrans())) || (reducedMotion && !stageBusy())) {
+      if (
+        disposed ||
+        isHostDetached() ||
+        parked ||
+        isDocHidden() ||
+        isHostSleeping() ||
+        (isWindowBlurred() && (dozing || !inTrans())) ||
+        (reducedMotion && !stageBusy())
+      ) {
         targetMs = 0;
       } else if (dozing && !stageBusy() && !hasDozeTransition(now)) {
         targetMs = DOZE_TICK;
@@ -4948,6 +4345,7 @@
       } else if (!theaterTimer) {
         scheduleTheater();
       }
+      if (isVramSleepState()) reclaimStageVram();
       if (targetMs === currentTickMs) return;
       if (tickTimer !== null) {
         clearInterval(tickTimer);
@@ -4976,7 +4374,7 @@
     function markActivity() {
       if (!isAttrB()) wb = false;
       lastActivityAt = performance.now();
-      if (dozing) wakeUp();
+      if (dozing && !isHostSleeping() && !isWindowBlurred()) wakeUp();
       else syncHeartbeat();
     }
 
@@ -4990,9 +4388,11 @@
         a.eyeScan = 0;
       }
       if (!skipYawn) {
-        startClip(actors.cat, 'yawn', 1200);
+        const prePose = isLateNight() ? 'nightSip' : 'yawn';
+        const preMs = isLateNight() ? 1800 : 1200;
+        startClip(actors.cat, prePose, preMs);
         later(400, () => {
-          if (dozing) startClip(actors.clawd, 'yawn', 1200);
+          if (dozing) startClip(actors.clawd, prePose, preMs);
         });
       }
       const now = performance.now();
@@ -5169,9 +4569,127 @@
       hop(partner, 'jiggle');
     };
 
+    // ── 9 大 Slash 指令专属微剧场（2.4~2.8s，演完归零 0fps）──────────────────
+    let lastVialWarnAt = 0;
+    const runSlashTheater = (rawCmd) => {
+      const cmd = String(rawCmd || '').replace(/^\/+/, '').trim().toLowerCase();
+      if (!cmd || disposed) return false;
+      const now = performance.now();
+      const leader = leaderActor();
+      const partner = partnerActor();
+      const norm = cmd === 'swarm' ? 'teamwork' : cmd;
+      duetUntil = now + 2900;
+
+      if (norm === 'plan') {
+        startClip(leader, 'slashPlan', 2600);
+        startClip(partner, 'tilt', 1300, { rot: -8, sym: 'q', face: faceToward(partner, leader) });
+        later(1350, () => { if (!disposed) startClip(partner, 'lookNod', 1200, { face: faceToward(partner, leader), param: 2 }); });
+      } else if (norm === 'goal') {
+        startClip(leader, 'slashGoal', 2600);
+        startClip(partner, 'salute', 2400, { sym: 'spark' });
+      } else if (norm === 'boost') {
+        startClip(leader, 'slashBoost', 2600);
+        if (!reducedMotion) {
+          spawnChromaBurst(getEntWorldCx(leader), computeWorldFootY(leader) - 18, 12, false);
+          hop(leader, 'slashBoost');
+        }
+        startClip(partner, 'wow', 2200, { sym: 'spark' });
+      } else if (norm === 'teamwork') {
+        startClip(leader, 'slashTeam', 2800);
+        startClip(partner, 'salute', 2600, { sym: 'spark' });
+        if (miniPileEnabled) {
+          const mid = Math.round(readStageWidth() * 0.45);
+          miniCrabs.forEach((mc, idx) => {
+            if (mc.act && mc.act.type === 'ride') return;
+            const x0 = crabSafeX(mc.lastX);
+            const tx = crabSafeX(mid + (idx - 1) * 28);
+            mc.act = {
+              type: 'wave',
+              start: tickIdx + 1,
+              segs: [
+                { ticks: 6, x0, x1: tx, y0: 0, y1: 0, sprite: 'walk' },
+                { ticks: 14, x0: tx, x1: tx, y0: 0, y1: 0, sprite: 'wave', hop: true },
+                { ticks: 6, x0: tx, x1: x0, y0: 0, y1: 0, sprite: 'walk' },
+              ],
+            };
+          });
+        }
+      } else if (norm === 'browser') {
+        const startX = leader.x;
+        const dir = startX > readStageWidth() * 0.5 ? -1 : 1;
+        startClip(leader, 'slashBrowser', 2600, { mirror: dir < 0 });
+        startClip(partner, 'wow', 2200, { sym: 'spark' });
+        if (!reducedMotion && !leader.stackedOn && !leader.dragging) {
+          leader.x = clampActorX(startX + dir * 28);
+          later(2200, () => { if (!disposed && !leader.dragging && !leader.stackedOn) resetHomePositions(true); });
+        }
+      } else if (norm === 'compact') {
+        startClip(actors.clawd, 'slashCompact', 2800);
+        startClip(actors.cat, 'slashCompact', 2800, { mirror: true });
+      } else if (norm === 'schedule') {
+        scheduleWatchUntil = Date.now() + 30 * 60 * 1000;
+        renderHabitatProp(true);
+        startClip(leader, 'slashSchedule', 2600);
+        startClip(partner, 'lookNod', 2200, { face: faceToward(partner, leader), param: 3 });
+      } else if (norm === 'grill-me') {
+        startClip(leader, 'slashGrill', 2600);
+        startClip(partner, 'lookNod', 2400, { face: faceToward(partner, leader), param: 4 });
+      } else if (norm === 'learn') {
+        startClip(actors.cat, 'slashLearnBook', 2600);
+        startClip(actors.clawd, 'slashLearnBulb', 2600);
+      } else {
+        return false;
+      }
+      recordInteraction('slash:' + norm, leader.id, now);
+      return true;
+    };
+
     // 外部事件处理表（未知事件静默忽略）
     const NOTIFY = {
       activity() {},
+      'slash-cmd'(p) {
+        if (!runSlashTheater(p && p.cmd)) NOTIFY.send();
+      },
+      'effort-tier'(p) {
+        const tier = String(p?.tier || '').toLowerCase();
+        if (tier === 'high' || tier === 'xhigh') {
+          const leader = leaderActor();
+          startClip(leader, 'slashBoost', 2200, { sym: 'spark' });
+          if (!reducedMotion) spawnChromaBurst(getEntWorldCx(leader), computeWorldFootY(leader) - 16, 6, true);
+          recordInteraction('effort-tier:' + tier, leader.id, performance.now());
+        }
+      },
+      'vial-high'() {
+        const wallNow = Date.now();
+        if (wallNow - lastVialWarnAt < 600000) return;
+        lastVialWarnAt = wallNow;
+        const leftPet = actors.clawd.x <= actors.cat.x ? actors.clawd : actors.cat;
+        if (leftPet.dragging || leftPet.stackedOn) return;
+        const origX = leftPet.x;
+        if (!reducedMotion) leftPet.x = clampActorX(16);
+        startClip(leftPet, 'worry', 2200, { face: 'left', mirror: true, sym: 'sweat' });
+        recordInteraction('vial-high', leftPet.id, performance.now());
+        later(2300, () => {
+          if (!disposed && !leftPet.dragging && !leftPet.stackedOn) {
+            leftPet.x = clampActorX(origX);
+            resetHomePositions(true);
+            renderAllFrames(performance.now());
+          }
+        });
+      },
+      'aura-complete'() {
+        const now = performance.now();
+        const clawd = actors.clawd;
+        const cat = actors.cat;
+        duetUntil = now + 2200;
+        startClip(clawd, 'happy', 2000, { face: faceToward(clawd, cat), sym: 'heart' });
+        startClip(cat, 'happy', 2000, { face: faceToward(cat, clawd), sym: 'spark' });
+        if (!reducedMotion) {
+          hop(clawd, 'happy');
+          hop(cat, 'happy');
+        }
+        recordInteraction('aura-complete', 'clawd-cat', now);
+      },
       campSwitch() {
         // 与 setState 自动触发 700ms 内去重，避免主代理双路调用时重复交接
         campHandoff();
@@ -5237,18 +4755,32 @@
         startClip(leader, 'salute', 900, { sym: 'spark' });
         startClip(partner, 'lookNod', 1200, { face: faceToward(partner, leader), param: 2 });
       },
+      'host-sleep'(p) {
+        hostSleep = Boolean(p && p.sleep);
+        syncHeartbeat();
+        if (hostSleep || isVramSleepState()) {
+          reclaimStageVram();
+        } else if (!isWindowBlurred()) {
+          renderAllFrames(performance.now());
+        }
+      },
     };
     const handleNotify = (event, payload) => {
       if (disposed) return;
       const fn = Object.prototype.hasOwnProperty.call(NOTIFY, event) ? NOTIFY[event] : null;
       if (!fn) return;
+      const pl = payload && typeof payload === 'object' ? payload : {};
+      if (event === 'host-sleep') {
+        fn(pl);
+        return;
+      }
       const wasDozing = dozing;
       markActivity();
       if (event === 'activity') {
         if (wasDozing) renderAllFrames(performance.now());
         return;
       }
-      fn(payload && typeof payload === 'object' ? payload : {});
+      fn(pl);
       renderAllFrames(performance.now());
     };
 
@@ -5267,7 +4799,11 @@
     const onVisibilityChange = () => {
       if (disposed) return;
       syncHeartbeat();
-      if (!isDocHidden()) renderAllFrames(performance.now());
+      if (isVramSleepState()) {
+        reclaimStageVram();
+      } else if (!isWindowBlurred()) {
+        renderAllFrames(performance.now());
+      }
     };
     if (doc && typeof doc.addEventListener === 'function') {
       doc.addEventListener('visibilitychange', onVisibilityChange);
@@ -5380,13 +4916,8 @@
         }
         const origCx = getEntWorldCx(ent);
         detachWithGravitySettle(ent.id);
-        ent.flying += 1;
-        ent.ballisticActive = false;
-        ent.leap = null;
+        resetActorTransient(ent);
         ent.y = 0;
-        ent.vx = 0;
-        ent.vy = 0;
-        ent.rot = 0;
         setEntWorldCx(ent, origCx - 64);
         enforceGroundSeparation();
         renderAllFrames(performance.now());
@@ -5397,6 +4928,7 @@
       },
       triggerDemo(kind) {
         const now = performance.now();
+        inspectState = null;
         const leader = camp === 'claude' ? actors.clawd : actors.cat;
         const partner = camp === 'claude' ? actors.cat : actors.clawd;
         const stageObstacle = (mode) => {
@@ -5413,6 +4945,41 @@
           startDoze(true);
         } else if (kind === 'wake') {
           markActivity();
+        } else if (kind === 'theater') {
+          markActivity();
+          runDuet(pickDuet());
+        } else if (kind === 'campSwitch') {
+          markActivity();
+          camp = camp === 'claude' ? 'gemini' : 'claude';
+          lastHandoffAt = 0;
+          campHandoff();
+        } else if (kind === 'streamDone') {
+          markActivity();
+          NOTIFY.streamDone({ error: false });
+        } else if (kind === 'crabRide') {
+          markActivity();
+          miniPileEnabled = true;
+          resetHomePositions(false);
+          runCrabRide(true);
+        } else if (kind === 'bump') {
+          markActivity();
+          const mid = Math.round((clampActorX(9999) + 16) * 0.46);
+          actors.clawd.stackedOn = null;
+          actors.cat.stackedOn = null;
+          actors.clawd.y = 0;
+          actors.cat.y = 0;
+          actors.clawd.x = clampActorX(mid - 20);
+          actors.cat.x = clampActorX(mid + 20);
+          actors.clawd.sym = 'bang';
+          actors.clawd.symUntil = now + 900;
+          actors.cat.sym = 'spark';
+          actors.cat.symUntil = now + 900;
+          playSeq(actors.clawd, [['squash', 1, 2, -1, 0], ['wow', 2, -1, 1, -2], ['idle', 1, 1, -1, 0]]);
+          playSeq(actors.cat, [['squash', 1, 2, -1, 0], ['tilt', 2, -1, 1, -2], ['idle', 1, 1, -1, 0]]);
+          recordInteraction('bump', 'clawd-cat', now);
+        } else if (kind === 'passBy') {
+          markActivity();
+          stageObstacle('leapfrog');
         } else if (kind === 'leapfrog' || kind === 'autoPerch' || kind === 'greetTurn') {
           stageObstacle(kind);
         } else if (kind === 'stack') {
@@ -5421,15 +4988,9 @@
           allActiveEnts().forEach((e) => {
             e.stackedOn = null;
             e.perchUntil = 0;
-            e.leap = null;
-            e.ballisticActive = false;
-            e.rot = 0;
+            resetActorTransient(e);
             e.y = 0;
           });
-          actors.cat.overridePose = null;
-          actors.clawd.overridePose = null;
-          actors.cat.mirror = false;
-          actors.clawd.mirror = false;
           resetHomePositions(true);
         } else if (kind === 'toss') {
           dismountRidersSideHop(leader.id);
@@ -5438,6 +4999,18 @@
           startBallistic(leader, -3.5, -7.8);
         } else if (kind === 'poke') {
           triggerPoke(leader, false);
+        } else if (typeof kind === 'string' && (kind.startsWith('slash:') || kind.startsWith('/'))) {
+          markActivity();
+          runSlashTheater(kind.replace(/^(?:slash:|\/)/, ''));
+        } else if (kind === 'feedDonut' || kind === 'feedCoffee') {
+          feedActor(leader, kind === 'feedCoffee' ? 'coffee' : 'donut');
+        } else if (kind === 'vialHigh') {
+          lastVialWarnAt = 0;
+          NOTIFY['vial-high']({});
+        } else if (kind === 'auraComplete') {
+          NOTIFY['aura-complete']({});
+        } else if (kind === 'effortHigh') {
+          NOTIFY['effort-tier']({ tier: 'xhigh' });
         } else {
           const clipMap = { fire: 'onFire', cheer: 'cheerSticks', rickroll: 'rickroll', siren: 'siren' };
           const mapped = clipMap[kind] || kind;
@@ -5449,9 +5022,48 @@
         }
         renderAllFrames(now);
       },
+      inspectPose(opts = null) {
+        if (!opts || opts.active === false) {
+          inspectState = null;
+          syncHeartbeat();
+          renderAllFrames(performance.now());
+          return null;
+        }
+        inspectState = {
+          pose: opts.pose || 'idle',
+          tick: Number.isFinite(opts.tick) ? Math.max(0, Math.floor(opts.tick)) : tickIdx,
+          mirror: Boolean(opts.mirror),
+          sqW: Math.round(Number(opts.sqW || 0)),
+          sqH: Math.round(Number(opts.sqH || 0)),
+          ruler: Boolean(opts.ruler),
+          sym: opts.sym || null,
+        };
+        tickIdx = inspectState.tick;
+        renderAllFrames(performance.now());
+        return { ...inspectState };
+      },
+      stepTick(delta = 1) {
+        const d = Math.round(Number(delta || 1));
+        tickIdx = Math.max(0, tickIdx + d);
+        if (inspectState) inspectState.tick = tickIdx;
+        renderAllFrames(performance.now());
+        return tickIdx;
+      },
+      listPoses() {
+        return ALL_POSE_KEYS.slice();
+      },
       poke(id = 'cat') {
         const target = actors[id] || actors.cat;
         triggerPoke(target, false);
+      },
+      feed(id = 'cat', item = 'donut') {
+        const target = actors[id] || actors.cat;
+        return feedActor(target, item);
+      },
+      setHabitatPreview(mode = 'auto') {
+        habitatPreview = ['auto', 'cactus', 'lamp', 'hourglass'].includes(mode) ? mode : 'auto';
+        renderHabitatProp(true);
+        return resolveHabitatMode();
       },
       onUserType(text = '') {
         const now = performance.now();
@@ -5487,6 +5099,10 @@
           // 生态联动与按需渲染遥测只读诊断
           dozing,
           orchestrator,
+          habitat: {
+            mode: resolveHabitatMode(),
+            scheduleActive: Date.now() < scheduleWatchUntil,
+          },
           towers: listAllTowers(),
           chromaResonance: {
             active: prismaticCoat,
@@ -5496,7 +5112,8 @@
           },
           perf: {
             timerIntervalMs: currentTickMs,
-            timerPaused: isHostDetached() || isWindowBlurred() || currentTickMs === 0,
+            timerPaused: isHostDetached() || parked || isWindowBlurred() || isHostSleeping() || currentTickMs === 0,
+            vramReclaimed,
             canvasDraws: perfStats.canvasDraws,
             canvasSkips: perfStats.canvasSkips,
             domTransformWrites: perfStats.domTransformWrites,
@@ -5551,6 +5168,22 @@
           }),
         };
       },
+      park(on = true) {
+        if (disposed) return;
+        parked = Boolean(on);
+        syncHeartbeat();
+        if (parked) {
+          reclaimStageVram();
+        } else if (!isVramSleepState() && !isWindowBlurred()) {
+          renderAllFrames(performance.now());
+        }
+      },
+      resume() {
+        if (disposed) return;
+        parked = false;
+        syncHeartbeat();
+        if (!isVramSleepState() && !isWindowBlurred()) renderAllFrames(performance.now());
+      },
       syncPowerState: syncPwr,
       dispose() {
         disposed = true;
@@ -5592,16 +5225,18 @@
         }
         pairCooldowns.clear();
         try {
+          reclaimStageVram();
           if (fxCanvas) { fxCanvas.width = 0; fxCanvas.height = 0; fxCanvas._ctx = null; }
+          if (habitatCanvas) { habitatCanvas.width = 0; habitatCanvas.height = 0; habitatCanvas._ctx = null; }
           for (const a of [actors.cat, actors.clawd]) {
             if (a) a._ctx = null;
-            if (a?.canvas) a.canvas._ctx = null;
+            if (a?.canvas) { a.canvas.width = 0; a.canvas.height = 0; a.canvas._ctx = null; }
             if (a?.canvas?.__agRotOff) { a.canvas.__agRotOff.width = 0; a.canvas.__agRotOff.height = 0; a.canvas.__agRotOff._ctx = null; a.canvas.__agRotOff = null; }
           }
-          miniCrabs.forEach((mc) => { mc._ctx = null; if (mc.canvas) mc.canvas._ctx = null; });
+          miniCrabs.forEach((mc) => { mc._ctx = null; if (mc.canvas) { mc.canvas.width = 0; mc.canvas.height = 0; mc.canvas._ctx = null; } });
         } catch (_) {}
         cleanups.forEach((fn) => fn());
-        for (const node of [miniGroupEl, actors.cat.el, actors.clawd.el, fxCanvas]) {
+        for (const node of [miniGroupEl, actors.cat.el, actors.clawd.el, fxCanvas, habitatCanvas]) {
           if (node) {
             if (typeof node.remove === 'function') node.remove();
             else if (node.parentNode && typeof node.parentNode.removeChild === 'function') {

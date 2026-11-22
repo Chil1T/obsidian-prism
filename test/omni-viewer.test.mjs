@@ -1373,3 +1373,40 @@ test('Compliance & copy hygiene: zero machine path leaks, zero secret patterns, 
     }
   }
 });
+
+test('WO-MAIN-001C: omni-client pre-paints dark overlay against white flash & workbench-page syncs --ag-cs-tonal-* + --font-sans', async () => {
+  const clientSrc = fs.readFileSync(path.resolve(__dirname, '../vendor/omni-viewer/omni-client.js'), 'utf8');
+  assert.ok(clientSrc.includes('opacity:0;transition:opacity 140ms ease'), 'omni-client overlay must start hidden until ready to prevent white flash');
+  assert.ok(clientSrc.includes('data-wb-ready="1"'), 'omni-client overlay must reveal via data-wb-ready="1"');
+  assert.ok(clientSrc.includes('ag-prism-workbench-ready'), 'omni-client must listen for ag-prism-workbench-ready');
+
+  const html = renderWorkbenchHtml({ kind: 'text', name: 'demo.md' });
+  assert.ok(html.includes('Google Sans'), 'workbench-page must default to zero-external Google Sans stack');
+  assert.ok(html.includes('ag-prism-workbench-ready'), 'workbench-page must notify parent when ready');
+
+  const env = bootRenderedWorkbenchInVm(html, {
+    locationHref: 'http://127.0.0.1:43199/viewer?token=t1&kind=text',
+  });
+  await env.settle();
+  env.win.dispatchWindowEvent('message', {
+    source: env.win.parent,
+    data: {
+      type: 'theme-change',
+      payload: {
+        themeType: 'dark',
+        cssVariables: {
+          '--ag-cs-tonal-0': '#09090b',
+          '--ag-cs-tonal-1': '#0e0e11',
+          '--ag-cs-tonal-2': '#151519',
+          '--ag-cs-tonal-3': '#1c1c22',
+          '--font-sans': "'Google Sans', sans-serif",
+        },
+      },
+    },
+  });
+  assert.equal(env.htmlEl.style.getPropertyValue('--wb-bg'), '#09090b');
+  assert.equal(env.htmlEl.style.getPropertyValue('--wb-surface'), '#0e0e11');
+  assert.equal(env.htmlEl.style.getPropertyValue('--wb-panel'), '#151519');
+  assert.equal(env.htmlEl.style.getPropertyValue('--wb-elevated'), '#1c1c22');
+  assert.equal(env.htmlEl.style.getPropertyValue('--wb-font-sans'), "'Google Sans', sans-serif");
+});

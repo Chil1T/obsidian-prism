@@ -348,20 +348,51 @@ test('v1.0.1 i18n keys cover all 5 languages for scene presets, 6 new config key
     'setUpdateChannelDesc',
     'optChannelStable',
     'optChannelBeta',
+    'setScrollBottomTitle',
+    'setScrollBottomDesc',
+    'optScrollBottomSmooth',
+    'optScrollBottomInstant',
+    'inlineDiffOpenSidebar',
+    'inlineDiffCollapse',
+    'inlineDiffLoading',
+    'inlineDiffBinary',
+    'inlineDiffNoPreview',
+    'sidebarMoreLabel',
+    'sidebarLessLabel',
+    'setSidebarNavFoldLabel',
+    'setSidebarNavFoldDesc',
+    'optSidebarNavFoldOff',
+    'optSidebarNavFoldOn',
+  ];
+  const removedPermKeys = [
+    'permPolicyTitle',
+    'permAskLabel',
+    'permAutoLabel',
+    'permTurboLabel',
+    'permAskDesc',
+    'permAutoDesc',
+    'permTurboDesc',
   ];
   for (const lang of ['zh-CN', 'zh-TW', 'yue', 'en', 'ja']) {
     const ui = i18nLocales.getUiStrings(lang);
     for (const k of requiredNewKeys) {
       assert.ok(typeof ui[k] === 'string' && ui[k].trim().length > 0, `Missing ${k} for language ${lang}`);
     }
+    for (const removedKey of removedPermKeys) {
+      assert.equal(ui[removedKey], undefined, `Obsolete ${removedKey} must be removed for language ${lang}`);
+    }
   }
 });
 
 test('settings-panel schema, scene presets, strict apiKey-stripping JSON export, and allowlist-validated JSON import', () => {
-  // Verify all 31 global config keys (including contextMenu, hostLocalization, omniModule, linkTarget, sidebarStudio, autoUpdate & updateChannel) match exact contract
+  // Verify all 33 global config keys (including contextMenu, sidebarNavFold, scrollBottomMotion, hostLocalization, omniModule, linkTarget, sidebarStudio, autoUpdate & updateChannel) match exact contract
   const { PRISM_SETTINGS_SCHEMA, SCENE_PRESETS, buildSanitizedConfigExport, validateImportedConfigJson, getDefaultSettingsPatch } =
     settingsPanel;
-  assert.equal(Object.keys(PRISM_SETTINGS_SCHEMA).length, 31);
+  assert.equal(Object.keys(PRISM_SETTINGS_SCHEMA).length, 33);
+  assert.deepEqual(PRISM_SETTINGS_SCHEMA.sidebarNavFold.allowed, ['off', 'on']);
+  assert.equal(PRISM_SETTINGS_SCHEMA.sidebarNavFold.default, 'off');
+  assert.deepEqual(PRISM_SETTINGS_SCHEMA.scrollBottomMotion.allowed, ['smooth', 'instant']);
+  assert.equal(PRISM_SETTINGS_SCHEMA.scrollBottomMotion.default, 'smooth');
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.hostLocalization.allowed, ['auto', 'on', 'off']);
   assert.equal(PRISM_SETTINGS_SCHEMA.hostLocalization.default, 'auto');
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.accentTone.allowed, ['follow', 'cobalt', 'iris', 'amber', 'mono']);
@@ -444,10 +475,11 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
   assert.equal(validated.thought.profiles[0].apiKey, '');
   assert.equal(validated.thought.profiles[0].keepExistingKey, true);
 
-  // Boolean alias support for omniModule (true -> 'on', false -> 'off') + legacy mascot:'dual' & language:'auto'
-  const boolAlias = validateImportedConfigJson(JSON.stringify({ omniModule: false, linkTarget: 'builtin', mascot: 'dual', language: 'auto' }));
+  // Boolean alias support for omniModule & sidebarNavFold (true -> 'on', false -> 'off') + legacy mascot:'dual' & language:'auto'
+  const boolAlias = validateImportedConfigJson(JSON.stringify({ omniModule: false, sidebarNavFold: true, linkTarget: 'builtin', mascot: 'dual', language: 'auto' }));
   assert.equal(boolAlias.ok, true);
   assert.equal(boolAlias.settings.omniModule, 'off');
+  assert.equal(boolAlias.settings.sidebarNavFold, 'on');
   assert.equal(boolAlias.settings.linkTarget, 'builtin');
   assert.equal(boolAlias.settings.mascot, 'crab');
   assert.ok(['zh-CN', 'zh-TW', 'yue', 'en', 'ja'].includes(boolAlias.settings.language));
@@ -457,7 +489,10 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
 
   assert.equal(validateImportedConfigJson('not-json').ok, false);
   assert.equal(validateImportedConfigJson('{"unknownOnly": 1}').ok, false);
-  assert.equal(Object.keys(getDefaultSettingsPatch()).length, 31);
+  const defaultPatch = getDefaultSettingsPatch();
+  assert.equal(Object.keys(defaultPatch).length, 33);
+  assert.equal(defaultPatch.sidebarNavFold, 'off');
+  assert.equal(defaultPatch.scrollBottomMotion, 'smooth');
 });
 
 test('UX-1 / OP-5 / UX-4 / UX-9 regressions: async thought config export, tech->technical normalization, preset sidebarCompact reset, lightPreset context hints, and Effort Slider off/i18n', () => {

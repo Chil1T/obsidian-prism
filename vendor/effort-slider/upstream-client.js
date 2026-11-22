@@ -1657,10 +1657,14 @@ cachedTrackRect = null;
 cachedTrackRectAt = 0;
 lastClaudePaintAt = 0;
 }
+function _isBgWin() {
+var r = doc && doc.documentElement;
+return Boolean(doc && (doc.hidden || (r && ((r.getAttribute && r.getAttribute("data-ag-cs-win-blur") === "1") || (r.hasAttribute && r.hasAttribute("data-ag-cs-win-blur") && (!r.getAttribute || r.getAttribute("data-ag-cs-win-blur") !== "0"))))));
+}
 function stepClaudeCanvas(nowTs) {
 claudeRafId = null;
 if (destroyed) return;
-if (doc && (doc.hidden || (doc.documentElement && doc.documentElement.getAttribute && doc.documentElement.getAttribute("data-ag-cs-win-blur") === "1"))) {
+if (_isBgWin()) {
 _stopClRaf();
 return;
 }
@@ -1712,6 +1716,7 @@ claudeRafId = win.requestAnimationFrame(stepClaudeCanvas);
 }
 function _startClRaf() {
 if (destroyed || claudeRafId !== null) return;
+if (_isBgWin()) return;
 if (win && typeof win.requestAnimationFrame === "function") {
 claudeRafId = win.requestAnimationFrame(stepClaudeCanvas);
 } else {

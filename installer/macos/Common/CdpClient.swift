@@ -27,6 +27,7 @@ final class PluginManifest {
     let version: String
     let styleId: String
     let settingBinding: String
+    let inlineDiffBinding: String
     let parts: [String]
     let defaultConfig: [String: JsonValue]
     let validators: [String: JsonValue]
@@ -36,6 +37,7 @@ final class PluginManifest {
         version: String,
         styleId: String,
         settingBinding: String,
+        inlineDiffBinding: String = "__agPrismInlineDiffCall",
         parts: [String],
         defaultConfig: [String: JsonValue],
         validators: [String: JsonValue],
@@ -44,6 +46,7 @@ final class PluginManifest {
         self.version = version
         self.styleId = styleId
         self.settingBinding = settingBinding
+        self.inlineDiffBinding = inlineDiffBinding
         self.parts = parts
         self.defaultConfig = defaultConfig
         self.validators = validators
@@ -57,6 +60,7 @@ final class PluginManifest {
         let version = raw["version"]?.stringValue ?? "1.0.6"
         let styleId = raw["styleId"]?.stringValue ?? "ag-prism-css"
         let settingBinding = raw["settingBinding"]?.stringValue ?? "__agPrismSetting"
+        let inlineDiffBinding = raw["inlineDiffBinding"]?.stringValue ?? "__agPrismInlineDiffCall"
         let removeExpression = raw["removeExpression"]?.stringValue ?? ""
         var parts: [String] = []
         if let arr = raw["parts"]?.arrayValue {
@@ -72,6 +76,7 @@ final class PluginManifest {
             version: version,
             styleId: styleId,
             settingBinding: settingBinding,
+            inlineDiffBinding: inlineDiffBinding,
             parts: parts,
             defaultConfig: defaultConfig,
             validators: validators,
@@ -535,7 +540,7 @@ enum CdpHelper {
                 out["codeLigatures"] = .bool(s == "on" || s == "true")
             }
         }
-        for k in ["telemetryModule", "effortSliderModule", "omniModule", "sidebarStudio", "autoUpdate"] {
+        for k in ["telemetryModule", "effortSliderModule", "omniModule", "sidebarStudio", "autoUpdate", "sidebarNavFold"] {
             if let v = out[k], case .bool(let b) = v {
                 out[k] = .string(b ? "on" : "off")
             }
@@ -1194,6 +1199,7 @@ enum CdpHelper {
         sb.append("    try { window.__agPrismTelemetry?.sync?.(effectiveCfg); } catch {}\n")
         sb.append("    try { window.__agPrismEffortSlider?.sync?.(effectiveCfg); } catch {}\n")
         sb.append("    try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}\n")
+        sb.append("    try { window.__agPrismInlineDiff?.sync?.(effectiveCfg); } catch {}\n")
         sb.append("    try { if (effectiveCfg.omniModule === 'off') window.__agPrismOmni?.destroy?.(); else window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}\n")
         sb.append("    try { if (effectiveCfg.hostLocalization === 'off' || (effectiveCfg.hostLocalization !== 'on' && effectiveCfg.language && effectiveCfg.language !== 'zh-CN' && effectiveCfg.language !== 'auto')) window.__agPrismHostI18n?.destroy?.(); } catch {}\n")
         sb.append("    if (document.documentElement) {\n")
@@ -1472,6 +1478,163 @@ enum CdpHelper {
         return sb
     }
 
+    static let inlineDiffRemoveExpression: String = """
+    (() => {
+      try { window.__agPrismInlineDiff?.destroy?.(); } catch {}
+      try { document.getElementById?.('ag-prism-inline-diff-css')?.remove?.(); } catch {}
+      try { document.querySelectorAll?.('.ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu')?.forEach?.((el) => el.remove()); } catch {}
+      try { delete window.__agPrismInlineDiff; } catch {}
+      try { delete globalThis.__agPrismInlineDiff; } catch {}
+      try { delete window.__agPrismInlineDiffFactory; } catch {}
+      try { delete globalThis.__agPrismInlineDiffFactory; } catch {}
+      try { delete window.__agPrismInlineDiffResolve; } catch {}
+      return { ok: true, status: 'off' };
+    })()
+    """
+
+    static func buildInlineDiffExpression(baseDir: String, manifest: PluginManifest) -> String {
+        let config = readConfig(baseDir: baseDir, manifest: manifest)
+        return buildInlineDiffExpression(baseDir: baseDir, cfg: config)
+    }
+
+    static func buildInlineDiffExpression(baseDir: String, cfg: [String: JsonValue]?) -> String {
+        guard let clientPath = resolveSafePluginFile(baseDir: baseDir, relPath: "vendor/inline-diff/inline-diff-client.js"),
+              let clientSource = try? String(contentsOfFile: clientPath, encoding: .utf8), !clientSource.isEmpty else {
+            return ""
+        }
+        let bootCfg = reconcileConfigAliases(cfg ?? [:])
+        let bootCfgJson = MiniJson.stringify(.object(bootCfg), pretty: false)
+        let codeHash = computeHash(clientSource)
+        let hashJson = MiniJson.stringifyString(codeHash)
+
+        var sb = ""
+        sb.reserveCapacity(clientSource.count + bootCfgJson.count + 2560)
+        sb.append("(() => {\n")
+        sb.append("  try {\n")
+        sb.append("    if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };\n")
+        sb.append("  } catch {\n")
+        sb.append("    return { ok: false, status: 'skipped-subframe' };\n")
+        sb.append("  }\n")
+        sb.append("  const hasDomMarker = () => {\n")
+        sb.append("    try {\n")
+        sb.append("      if (\n")
+        sb.append("        document.body &&\n")
+        sb.append("        document.body.classList &&\n")
+        sb.append("        (document.body.classList.contains('theme-standalone') || document.body.classList.contains('monaco-workbench'))\n")
+        sb.append("      ) {\n")
+        sb.append("        return true;\n")
+        sb.append("      }\n")
+        sb.append("      return Boolean(\n")
+        sb.append("        typeof document.querySelector === 'function' &&\n")
+        sb.append("          document.querySelector(\n")
+        sb.append("            '.agy-shell, .agy-home, [data-testid=\"aux-pane-split\"], [data-testid=\"conversation-view\"], [data-testid=\"agent-input-box\"], [data-testid=\"model-selector-trigger\"], .monaco-workbench'\n")
+        sb.append("          )\n")
+        sb.append("      );\n")
+        sb.append("    } catch {\n")
+        sb.append("      return false;\n")
+        sb.append("    }\n")
+        sb.append("  };\n")
+        sb.append("  let needDomMarkerOnReady = false;\n")
+        sb.append("  let isPlainHttpLocalhost = false;\n")
+        sb.append("  try {\n")
+        sb.append("    const loc = typeof window !== 'undefined' && window.location;\n")
+        sb.append("    const href = loc && typeof loc.href === 'string' ? loc.href : '';\n")
+        sb.append("    if (href) {\n")
+        sb.append("      const low = href.toLowerCase();\n")
+        sb.append("      if (low.startsWith('devtools://') || low.startsWith('data:') || low.startsWith('chrome:') || low.startsWith('chrome-extension:') || low.startsWith('edge:') || low.startsWith('blob:') || low.startsWith('plugin:')) {\n")
+        sb.append("        return { ok: false, status: 'skipped-non-host' };\n")
+        sb.append("      }\n")
+        sb.append("      if (low.startsWith('vscode-file://') || low.startsWith('app://') || low.startsWith('about:')) {\n")
+        sb.append("        const ttl = String(document.title || '').trim();\n")
+        sb.append("        if (/^(?:untitled|launchpad)$/i.test(ttl) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(low)) {\n")
+        sb.append("          return { ok: false, status: 'skipped-non-host' };\n")
+        sb.append("        }\n")
+        sb.append("      }\n")
+        sb.append("      if (low.startsWith('http:') || low.startsWith('https:')) {\n")
+        sb.append("        const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);\n")
+        sb.append("        if (!m) return { ok: false, status: 'skipped-non-host' };\n")
+        sb.append("        const pathname = (m[3] || '/').toLowerCase();\n")
+        sb.append("        if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test(pathname)) {\n")
+        sb.append("          return { ok: false, status: 'skipped-non-host' };\n")
+        sb.append("        }\n")
+        sb.append("        if (!hasDomMarker()) {\n")
+        sb.append("          isPlainHttpLocalhost = m[1].toLowerCase() === 'http';\n")
+        sb.append("          const rs = String(document.readyState || '');\n")
+        sb.append("          if (isPlainHttpLocalhost) {\n")
+        sb.append("            if (rs === 'loading') needDomMarkerOnReady = true;\n")
+        sb.append("            else return { ok: false, status: 'skipped-non-host' };\n")
+        sb.append("          } else if (!/\\bantigravity\\b/i.test(String(document.title || ''))) {\n")
+        sb.append("            if (rs === 'loading') needDomMarkerOnReady = true;\n")
+        sb.append("            else return { ok: false, status: 'skipped-non-host' };\n")
+        sb.append("          }\n")
+        sb.append("        }\n")
+        sb.append("      }\n")
+        sb.append("    }\n")
+        sb.append("  } catch {}\n")
+        sb.append("  const cleanupInlineDiff = () => {\n")
+        sb.append("    try { (window.__agPrismInlineDiff || globalThis.__agPrismInlineDiff)?.destroy?.(); } catch {}\n")
+        sb.append("    try { document.getElementById?.('ag-prism-inline-diff-css')?.remove?.(); } catch {}\n")
+        sb.append("    try { document.querySelectorAll?.('.ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu')?.forEach?.((el) => el.remove()); } catch {}\n")
+        sb.append("    try { delete window.__agPrismInlineDiff; } catch {}\n")
+        sb.append("    try { delete globalThis.__agPrismInlineDiff; } catch {}\n")
+        sb.append("    try { delete window.__agPrismInlineDiffFactory; } catch {}\n")
+        sb.append("    try { delete globalThis.__agPrismInlineDiffFactory; } catch {}\n")
+        sb.append("    try { delete window.__agPrismInlineDiffResolve; } catch {}\n")
+        sb.append("  };\n")
+        sb.append("  const getLiveCfg = () => {\n")
+        sb.append("    try {\n")
+        sb.append("      const st = window.__agPrism?.getState?.();\n")
+        sb.append("      return st && st.cfg && typeof st.cfg === 'object' ? st.cfg : null;\n")
+        sb.append("    } catch {\n")
+        sb.append("      return null;\n")
+        sb.append("    }\n")
+        sb.append("  };\n")
+        sb.append("  const bootCfg = ")
+        sb.append(bootCfgJson)
+        sb.append(";\n")
+        sb.append("  const targetHash = ")
+        sb.append(hashJson)
+        sb.append(";\n")
+        sb.append("  const mountOrReuse = () => {\n")
+        sb.append("    if (needDomMarkerOnReady && !hasDomMarker() && (isPlainHttpLocalhost || !/\\bantigravity\\b/i.test(String(document.title || '')))) {\n")
+        sb.append("      return { ok: false, status: 'skipped-non-host' };\n")
+        sb.append("    }\n")
+        sb.append("    const effectiveCfg = getLiveCfg() || bootCfg;\n")
+        sb.append("    const existing = window.__agPrismInlineDiff || globalThis.__agPrismInlineDiff;\n")
+        sb.append("    if (existing && existing.__prismCodeHash === targetHash && typeof existing.sync === 'function') {\n")
+        sb.append("      try { existing.sync(effectiveCfg); } catch {}\n")
+        sb.append("      return { ok: true, reused: true, codeHash: targetHash };\n")
+        sb.append("    }\n")
+        sb.append("    cleanupInlineDiff();\n")
+        sb.append("    ;")
+        sb.append(clientSource)
+        sb.append(";\n")
+        sb.append("    let mounted = window.__agPrismInlineDiff || globalThis.__agPrismInlineDiff;\n")
+        sb.append("    const factory = window.__agPrismInlineDiffFactory || globalThis.__agPrismInlineDiffFactory;\n")
+        sb.append("    if (!mounted && typeof factory === 'function') {\n")
+        sb.append("      try { mounted = factory({ window, document }); } catch {}\n")
+        sb.append("    }\n")
+        sb.append("    if (mounted && typeof mounted === 'object') {\n")
+        sb.append("      mounted.__prismCodeHash = targetHash;\n")
+        sb.append("      try { window.__agPrismInlineDiff = mounted; } catch {}\n")
+        sb.append("      try { globalThis.__agPrismInlineDiff = mounted; } catch {}\n")
+        sb.append("    }\n")
+        sb.append("    if (typeof factory === 'function') {\n")
+        sb.append("      try { window.__agPrismInlineDiffFactory = factory; } catch {}\n")
+        sb.append("      try { globalThis.__agPrismInlineDiffFactory = factory; } catch {}\n")
+        sb.append("    }\n")
+        sb.append("    try { mounted?.sync?.(effectiveCfg); } catch {}\n")
+        sb.append("    return { ok: true, status: 'mounted', codeHash: targetHash };\n")
+        sb.append("  };\n")
+        sb.append("  if ((needDomMarkerOnReady || !document.documentElement) && typeof document.addEventListener === 'function') {\n")
+        sb.append("    document.addEventListener('DOMContentLoaded', () => { try { mountOrReuse(); } catch {} }, { once: true });\n")
+        sb.append("    return { ok: true, status: 'deferred', codeHash: targetHash };\n")
+        sb.append("  }\n")
+        sb.append("  return mountOrReuse();\n")
+        sb.append("})()")
+        return sb
+    }
+
     static func buildInjectExpression(baseDir: String, manifest: PluginManifest) throws -> String {
         let config = readConfig(baseDir: baseDir, manifest: manifest)
         let cssPath = (baseDir as NSString).appendingPathComponent("style.css")
@@ -1511,6 +1674,8 @@ enum CdpHelper {
         sb.append("      try { window.__agPrismEffortSlider?.destroy?.(); } catch {}\n")
         sb.append("      try { window.__agPrismThought?.destroy?.(); } catch {}\n")
         sb.append("      try { document.querySelectorAll?.('[data-testid=\"prism-thought-ai-config\"]')?.forEach?.((el) => el.remove()); } catch {}\n")
+        sb.append("      try { window.__agPrismInlineDiff?.destroy?.(); } catch {}\n")
+        sb.append("      try { document.querySelectorAll?.('.ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu')?.forEach?.((el) => el.remove()); } catch {}\n")
         sb.append("      try { window.__agPrismOmni?.destroy?.(); } catch {}\n")
         sb.append("      try { window.__agPrismContextMenu?.destroy?.(); } catch {}\n")
         sb.append("      try { document.querySelectorAll?.('.ag-cs-ctx-menu, .ag-cs-ctx-toast')?.forEach?.((el) => el.remove()); } catch {}\n")
@@ -1523,8 +1688,9 @@ enum CdpHelper {
         sb.append("      try { document.getElementById('ag-claude-style-css')?.remove(); } catch {}\n")
         sb.append("      try { document.getElementById('ag-prism-settings-v101-css')?.remove(); } catch {}\n")
         sb.append("      try { document.getElementById('ag-prism-omni-css')?.remove(); } catch {}\n")
+        sb.append("      try { document.getElementById('ag-prism-inline-diff-css')?.remove(); } catch {}\n")
         sb.append("      try { if (document.documentElement) document.documentElement.removeAttribute('data-ag-prism'); } catch {}\n")
-        sb.append("      try { delete window.__agPrismThought; delete globalThis.__agPrismThought; delete window.__agPrismThoughtSettingsUi; delete globalThis.__agPrismThoughtSettingsUi; delete window.__agPrismOmni; delete window.__agPrismContextMenu; delete globalThis.__agPrismContextMenu; delete window.__agPrism; delete window.__agClaudeStyle; } catch {}\n")
+        sb.append("      try { delete window.__agPrismThought; delete globalThis.__agPrismThought; delete window.__agPrismThoughtSettingsUi; delete globalThis.__agPrismThoughtSettingsUi; delete window.__agPrismInlineDiff; delete globalThis.__agPrismInlineDiff; delete window.__agPrismInlineDiffFactory; delete globalThis.__agPrismInlineDiffFactory; delete window.__agPrismInlineDiffResolve; delete window.__agPrismOmni; delete window.__agPrismContextMenu; delete globalThis.__agPrismContextMenu; delete window.__agPrism; delete window.__agClaudeStyle; } catch {}\n")
         sb.append("    };\n")
         sb.append("    const hasDomWorkbenchMarkers = () => {\n")
         sb.append("      try {\n")

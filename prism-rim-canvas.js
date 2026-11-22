@@ -261,6 +261,11 @@
         cv.height = 0;
         cv.setAttribute('aria-hidden', 'true');
         cv.setAttribute('data-ag-no-i18n', '');
+        if (cv.style?.setProperty) {
+          cv.style.setProperty('margin', '0', 'important');
+          cv.style.setProperty('padding', '0', 'important');
+          cv.style.setProperty('border', '0', 'important');
+        }
         hostEl.appendChild(cv);
       }
       trackedRimCanvases.add(cv);
@@ -288,6 +293,64 @@
       ctx.closePath();
     }
 
+    function drawMirrorCursorReflection(ctx, gx, gy, w, h, dpr, dark, effAlpha, rectW, rectH, localX, localY) {
+      const distX = localX < 0 ? -localX : localX > rectW ? localX - rectW : 0;
+      const distY = localY < 0 ? -localY : localY > rectH ? localY - rectH : 0;
+      const distOut = Math.hypot(distX, distY);
+      if (distOut > 42) return;
+      const prox = Math.max(0, 1 - distOut / 42);
+      const reflAlpha = effAlpha * prox * (dark ? 1 : 0.65);
+      if (reflAlpha <= 0.01) return;
+
+      // Subtle glass-thickness refraction offset (+3.2px, +4.2px)
+      const rx = gx + 3.2 * dpr;
+      const ry = gy + 4.2 * dpr;
+
+      // 1) Soft specular coating bloom around cursor tip
+      const bloomR = 26 * dpr;
+      const bg = ctx.createRadialGradient(rx + 2 * dpr, ry + 3 * dpr, 0, rx + 2 * dpr, ry + 3 * dpr, bloomR);
+      if (dark) {
+        bg.addColorStop(0, `rgba(248,252,255,${(0.135 * reflAlpha).toFixed(4)})`);
+        bg.addColorStop(0.45, `rgba(216,232,252,${(0.05 * reflAlpha).toFixed(4)})`);
+        bg.addColorStop(1, 'rgba(200,220,250,0)');
+      } else {
+        bg.addColorStop(0, `rgba(37,99,235,${(0.065 * reflAlpha).toFixed(4)})`);
+        bg.addColorStop(1, 'rgba(37,99,235,0)');
+      }
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, w, h);
+
+      // 2) Soft-focus coated glass cursor ghost reflection (depth-blurred, zero harsh stroke)
+      const s = 1.06 * dpr;
+      ctx.save();
+      try {
+        if ('filter' in ctx) ctx.filter = `blur(${(1.25 * dpr).toFixed(2)}px)`;
+      } catch {}
+      ctx.translate(rx, ry);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, 13.8 * s);
+      ctx.lineTo(3.6 * s, 10.5 * s);
+      ctx.lineTo(6.1 * s, 15.6 * s);
+      ctx.lineTo(8.0 * s, 14.7 * s);
+      ctx.lineTo(5.5 * s, 9.6 * s);
+      ctx.lineTo(10.1 * s, 9.6 * s);
+      ctx.closePath();
+
+      const cg = ctx.createLinearGradient(0, 0, 7 * s, 15 * s);
+      if (dark) {
+        cg.addColorStop(0, `rgba(252,254,255,${(0.14 * reflAlpha).toFixed(4)})`);
+        cg.addColorStop(0.45, `rgba(222,235,252,${(0.065 * reflAlpha).toFixed(4)})`);
+        cg.addColorStop(1, `rgba(190,210,240,${(0.008 * reflAlpha).toFixed(4)})`);
+      } else {
+        cg.addColorStop(0, `rgba(15,23,42,${(0.075 * reflAlpha).toFixed(4)})`);
+        cg.addColorStop(1, 'rgba(15,23,42,0.005)');
+      }
+      ctx.fillStyle = cg;
+      ctx.fill();
+      ctx.restore();
+    }
+
     function paintPrismRimCanvas(entry, active, localX, localY, radius, dark, toneKey = 'default', ambientScale = 1) {
       if (isDragSuspended()) return true;
       if (!entry || !entry.ctx || !entry.cv || !entry.rect) return false;
@@ -299,13 +362,16 @@
         }
         return true;
       }
+      const isMirror = Boolean(entry.mirrorMode);
+      const isReflectBottom = !isMirror && Boolean(entry.reflectBottomMode);
       const dpr = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, 1.5);
       const w = Math.max(4, Math.round((entry.rect.width + (entry.insetPad || 0)) * dpr));
       const h = Math.max(4, Math.round((entry.rect.height + (entry.insetPad || 0)) * dpr));
       const cssRadius = entry.borderRadius > 0 ? entry.borderRadius : 10;
-      const effAlpha = Math.max(0, Math.min(1, ambientScale * (toneKey === 'mono' ? 0.58 : 1)));
-      const sig = `${w}|${h}|${radius}|${dark ? 1 : 0}|${toneKey}|${effAlpha.toFixed(3)}|${cssRadius}|${entry.insetPad || 0}`;
-      if (!entry.wasCleared && entry.cv.width === w && entry.cv.height === h && entry._s === sig && Math.abs(localX - entry._x) < 1.5 && Math.abs(localY - entry._y) < 1.5) {
+      const effAlpha = Math.max(0, Math.min(1, ambientScale * (!isMirror && toneKey === 'mono' ? 0.58 : 1)));
+      const sig = `${w}|${h}|${radius}|${dark ? 1 : 0}|${isMirror ? 'mirror' : toneKey}|${isReflectBottom ? 'reflB' : ''}|${effAlpha.toFixed(3)}|${cssRadius}|${entry.insetPad || 0}`;
+      const moveEps = isMirror ? 0.8 : 1.5;
+      if (!entry.wasCleared && entry.cv.width === w && entry.cv.height === h && entry._s === sig && Math.abs(localX - entry._x) < moveEps && Math.abs(localY - entry._y) < moveEps) {
         return true;
       }
       if (entry.cv.width !== w || entry.cv.height !== h) { entry.cv.width = w; entry.cv.height = h; }
@@ -317,11 +383,102 @@
       const gx = (localX + padOffset) * dpr;
       const gy = (localY + padOffset) * dpr;
       const gr = radius * dpr;
-      const strokeInset = (entry.insetPad ? 1.0 : 0.7) * dpr;
+      const strokeInset = (entry.insetPad ? 1.0 : 0.75) * dpr;
       const rw = Math.max(2, w - strokeInset * 2);
       const rh = Math.max(2, h - strokeInset * 2);
       const rr = Math.min(rw * 0.5, rh * 0.5, cssRadius * dpr);
       const prevAlpha = ctx.globalAlpha;
+
+      if (isMirror) {
+        // Layer 1 & 2 (clipped inside rounded glass): soft surface specular wash + cursor reflection
+        ctx.save();
+        strokeRoundedRectPath(ctx, 0, 0, w, h, Math.min(w * 0.5, h * 0.5, cssRadius * dpr));
+        ctx.clip();
+
+        const surfR = 210 * dpr;
+        const sg = ctx.createRadialGradient(gx, gy, 0, gx, gy, surfR);
+        if (dark) {
+          sg.addColorStop(0, `rgba(238,245,255,${(0.068 * effAlpha).toFixed(4)})`);
+          sg.addColorStop(0.42, `rgba(206,224,250,${(0.026 * effAlpha).toFixed(4)})`);
+          sg.addColorStop(0.8, `rgba(180,202,238,${(0.006 * effAlpha).toFixed(4)})`);
+          sg.addColorStop(1, 'rgba(180,202,238,0)');
+        } else {
+          sg.addColorStop(0, `rgba(37,99,235,${(0.042 * effAlpha).toFixed(4)})`);
+          sg.addColorStop(0.5, `rgba(37,99,235,${(0.014 * effAlpha).toFixed(4)})`);
+          sg.addColorStop(1, 'rgba(37,99,235,0)');
+        }
+        ctx.fillStyle = sg;
+        ctx.fillRect(0, 0, w, h);
+
+        if (typeof ctx.translate === 'function' && typeof ctx.createLinearGradient === 'function') {
+          drawMirrorCursorReflection(ctx, gx, gy, w, h, dpr, dark, effAlpha, entry.rect.width, entry.rect.height, localX, localY);
+        }
+        ctx.restore();
+
+        // Layer 3: Crisp silver-specular rim highlight
+        const rg = ctx.createRadialGradient(gx, gy, 0, gx, gy, gr);
+        if (dark) {
+          rg.addColorStop(0, 'rgba(255,255,255,0.95)');
+          rg.addColorStop(0.24, 'rgba(232,240,252,0.56)');
+          rg.addColorStop(0.54, 'rgba(186,202,228,0.18)');
+          rg.addColorStop(0.85, 'rgba(148,168,198,0.03)');
+          rg.addColorStop(1, 'rgba(148,168,198,0)');
+        } else {
+          rg.addColorStop(0, 'rgba(30,64,175,0.52)');
+          rg.addColorStop(0.42, 'rgba(59,130,246,0.2)');
+          rg.addColorStop(1, 'rgba(59,130,246,0)');
+        }
+        ctx.globalAlpha = effAlpha;
+        strokeRoundedRectPath(ctx, strokeInset, strokeInset, rw, rh, rr);
+        ctx.lineWidth = 1.35 * dpr;
+        ctx.strokeStyle = rg;
+        ctx.stroke();
+        ctx.globalAlpha = prevAlpha !== undefined ? prevAlpha : 1;
+        return true;
+      }
+
+      if (isReflectBottom) {
+        const gyR = h + 16 * dpr, grR = Math.max(radius * 1.15, 220) * dpr, ob = localY - entry.rect.height;
+        const aR = effAlpha * 0.46 * (ob > 150 ? Math.max(0, 1 - (ob - 150) / 190) : localY < 0 ? Math.max(0, 1 + localY / 80) : 1);
+        if (aR > 0.004) {
+          const rg = ctx.createRadialGradient(gx, gyR, 0, gx, gyR, grR);
+          const stops = (RIM_PALETTES[toneKey] || RIM_PALETTES.default)[dark ? 'dark' : 'light'];
+          for (let i = 0; i < stops.length; i++) rg.addColorStop(stops[i][0], stops[i][1]);
+          ctx.globalAlpha = aR;
+          strokeRoundedRectPath(ctx, strokeInset, strokeInset, rw, rh, rr);
+          ctx.lineWidth = 1.15 * dpr;
+          ctx.strokeStyle = rg;
+          ctx.stroke();
+          if (typeof ctx.save === 'function' && typeof ctx.clip === 'function') {
+            ctx.save();
+            strokeRoundedRectPath(ctx, strokeInset, strokeInset, rw, rh, rr);
+            ctx.clip();
+            const wh = Math.min(rh, 14 * dpr), wg = ctx.createRadialGradient(gx, h + 2 * dpr, 0, gx, h + 2 * dpr, Math.max(grR * 0.72, 160 * dpr)), wc = dark ? '255,255,255' : '59,130,246';
+            wg.addColorStop(0, `rgba(${wc},${(0.032 * aR).toFixed(4)})`);
+            wg.addColorStop(1, `rgba(${wc},0)`);
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = wg;
+            ctx.fillRect(0, Math.max(0, h - wh), w, wh);
+            ctx.restore();
+          }
+          if (typeof ctx.createLinearGradient === 'function' && typeof ctx.save === 'function') {
+            ctx.save();
+            ctx.globalCompositeOperation = 'destination-in';
+            const vg = ctx.createLinearGradient(0, h, 0, 0);
+            vg.addColorStop(0, 'rgba(0,0,0,1)');
+            vg.addColorStop(0.22, 'rgba(0,0,0,0.68)');
+            vg.addColorStop(0.48, 'rgba(0,0,0,0)');
+            vg.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = vg;
+            ctx.fillRect(0, 0, w, h);
+            ctx.restore();
+          }
+        }
+        ctx.globalAlpha = prevAlpha !== undefined ? prevAlpha : 1;
+        return true;
+      }
+
       const canXform = typeof ctx.save === 'function' && typeof ctx.translate === 'function' && typeof ctx.restore === 'function';
       if (canXform) {
         const gKey = `${gr}|${dark ? 1 : 0}|${toneKey}`;
@@ -361,6 +518,23 @@
       if (prismBoxRo || typeof ResizeObserver !== 'function') return prismBoxRo;
       prismBoxRo = new ResizeObserver(() => {
         prismBoxCacheDirty = true;
+        if (
+          !isDestroyed() &&
+          !isWB() &&
+          !isDragSuspended() &&
+          !isRimMotionDisabled() &&
+          readAmbientScale() > 0.001 &&
+          lastPointerPos.x >= -1000 &&
+          !prismRaf &&
+          typeof requestAnimationFrame === 'function'
+        ) {
+          const hasVisibleGlow =
+            cachedPrismBoxes.some((e) => !e.wasCleared) || Boolean(cachedOrchEntry && !cachedOrchEntry.wasCleared);
+          if (hasVisibleGlow) {
+            lastPrismDrawAt = 0;
+            schedRaf();
+          }
+        }
       });
       return prismBoxRo;
     }
@@ -375,8 +549,16 @@
       }
     }
 
+    function isMirrorPopupOverlay(el) {
+      if (!el || !el.classList?.contains?.('agy-overlay')) return false;
+      if (el.hasAttribute?.('data-hover-card-popup')) return false;
+      if (el.getAttribute?.('data-testid') === 'model-selector-panel') return false;
+      return el.getAttribute?.('role') === 'menu' || Boolean(el.classList?.contains?.('max-h-48'));
+    }
+
     function refreshPrismBoxRectCache(now, allowReadRect) {
       const boxes = document.querySelectorAll('[data-ag-cs-prism-box="1"]');
+      const popupOverlays = document.querySelectorAll('.agy-overlay');
       const ro = ensurePrismBoxRo();
       const prevMap = new Map();
       for (let i = 0; i < cachedPrismBoxes.length; i++) {
@@ -388,7 +570,19 @@
       let nextOrch = null;
 
       // Phase A: Batch all layout/style reads BEFORE DOM mutations to prevent forced write->read reflows!
-      const boxList = Array.from(boxes);
+      const boxSet = new Set(Array.from(boxes || []));
+      const pendingMirrorOverlays = [];
+      if (popupOverlays && popupOverlays.length) {
+        for (let i = 0; i < popupOverlays.length; i++) {
+          const ov = popupOverlays[i];
+          if (!isMirrorPopupOverlay(ov)) continue;
+          if (ov.getAttribute?.('data-ag-cs-prism-box') !== '1' || ov.getAttribute?.('data-ag-cs-prism-mirror') !== '1') {
+            pendingMirrorOverlays.push(ov);
+          }
+          boxSet.add(ov);
+        }
+      }
+      const boxList = Array.from(boxSet);
       const preMeasured = boxList.map((box) => {
         const prev = prevMap.get(box);
         return {
@@ -403,13 +597,13 @@
           ? trackEl.getBoundingClientRect()
           : null;
 
-      const mkEntry = (box, rect, prev, insetPad, borderRadius) => {
+      const mkEntry = (box, rect, prev, insetPad, borderRadius, mirrorMode = false, reflectBottomMode = false) => {
         nextObserved.add(box);
         if (ro && !observedPrismSet.has(box)) { try { ro.observe(box); observedPrismSet.add(box); } catch {} }
         const reusePrev = Boolean(prev?.cv?.isConnected);
         const rim = reusePrev ? prev : ensurePrismRimCanvas(box);
         return {
-          box, rect, cv: rim ? rim.cv : null, ctx: rim ? rim.ctx : null, insetPad, borderRadius,
+          box, rect, cv: rim ? rim.cv : null, ctx: rim ? rim.ctx : null, insetPad, mirrorMode, reflectBottomMode, borderRadius,
           wasCleared: prev ? prev.wasCleared : false,
           _s: prev?._s || '', _x: prev?._x ?? -9999, _y: prev?._y ?? -9999,
           _g: reusePrev ? (prev._g || null) : null, _gk: reusePrev ? (prev._gk || '') : '',
@@ -419,13 +613,20 @@
 
       // Phase B: Batch all DOM mutations (canvas mounts, ResizeObserver bindings, orphan prune) after reads!
       runGuardedMut(() => {
+        for (let i = 0; i < pendingMirrorOverlays.length; i++) {
+          const ov = pendingMirrorOverlays[i];
+          setAttrIfChanged(ov, 'data-ag-cs-prism-box', '1');
+          setAttrIfChanged(ov, 'data-ag-cs-prism-mirror', '1');
+        }
         for (let i = 0; i < preMeasured.length; i++) {
           const { box, prev, borderRadius, rect } = preMeasured[i];
-          next.push(mkEntry(box, rect, prev, 2, borderRadius));
+          const mirrorMode = box.getAttribute?.('data-ag-cs-prism-mirror') === '1';
+          const reflectBottomMode = !mirrorMode && box.getAttribute?.('data-ag-cs-prism-reflect') === 'bottom';
+          next.push(mkEntry(box, rect, prev, mirrorMode ? 0 : 2, borderRadius, mirrorMode, reflectBottomMode));
         }
         if (trackEl) {
           const prevOrch = cachedOrchEntry?.box === trackEl ? cachedOrchEntry : null;
-          nextOrch = mkEntry(trackEl, orchRect, prevOrch, 0, 999);
+          nextOrch = mkEntry(trackEl, orchRect, prevOrch, 0, 999, false, false);
         }
 
         if (ro) {
@@ -501,10 +702,18 @@
         let inRange = false;
         let lx = -9999;
         let ly = -9999;
-        if (r && (!minW || r.width >= minW) && x >= r.left - maxR && x <= r.right + maxR && y >= r.top - maxR && y <= r.bottom + maxR) {
-          inRange = true;
-          lx = x - r.left;
-          ly = y - r.top;
+        if (r && r.width >= 4 && r.height >= 4 && (!minW || r.width >= minW)) {
+          if (entry.reflectBottomMode) {
+            if (x >= r.left - 240 && x <= r.right + 240 && y >= r.top - 80 && y <= r.bottom + 340) {
+              inRange = true;
+              lx = x - r.left;
+              ly = y - r.top;
+            }
+          } else if (x >= r.left - maxR && x <= r.right + maxR && y >= r.top - maxR && y <= r.bottom + maxR) {
+            inRange = true;
+            lx = x - r.left;
+            ly = y - r.top;
+          }
         }
         if (entry.ctx && paintPrismRimCanvas(entry, inRange, lx, ly, gradR, dark, toneKey, ambientScale)) return;
         const nx = inRange ? `${lx.toFixed(1)}px` : '-9999px';
@@ -536,7 +745,11 @@
       if (!isRimMotionDisabled() && readAmbientScale() > 0.001 && !prismRaf && typeof requestAnimationFrame === 'function') {
         const far = (e, d) => {
           const r = e.rect;
-          return e.wasCleared && r && (x < r.left - d || x > r.right + d || y < r.top - d || y > r.bottom + d);
+          return (
+            e.wasCleared &&
+            r &&
+            (r.width < 4 || r.height < 4 || x < r.left - d || x > r.right + d || y < r.top - d || y > r.bottom + d)
+          );
         };
         const farIdle =
           !prismBoxCacheDirty &&

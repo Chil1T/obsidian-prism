@@ -21,6 +21,27 @@ test('buildInjectExpression and REMOVE_EXPRESSION compile cleanly and stay withi
   assert.equal(injectExpr.includes('__agCsPerfAssets'), false);
   assert.equal(injectExpr.includes('__agCsEffortCore'), false);
   assert.ok(removeExpr.includes('window.__agPrism.destroy'));
+  for (const token of [
+    'data-ag-cs-scroll-bottom',
+    'data-ag-cs-sb-fold',
+    '__agPrismInlineDiffResolve',
+    '__agPrismInlineDiff',
+    '__agPrismInlineDiffFactory',
+    'ag-prism-inline-diff-css',
+    'data-pv-warn',
+    'data-ag-inline-diff-open',
+    'data-ag-inline-diff-host',
+    'data-ag-sb-more-hidden',
+    'data-ag-sb-more-item',
+    'data-ag-scrolling',
+    '.ag-cs-inline-diff-box',
+    '.ag-cs-sb-more-wrap',
+    '.ag-v2-habitat-prop',
+  ]) {
+    assert.ok(removeExpr.includes(token), `REMOVE_EXPRESSION must clean ${token}`);
+  }
+  assert.equal(removeExpr.includes('data-ag-perm-hosted'), false, 'REMOVE_EXPRESSION must drop obsolete data-ag-perm-hosted');
+  assert.equal(removeExpr.includes('.ag-cs-perm-deck'), false, 'REMOVE_EXPRESSION must drop obsolete .ag-cs-perm-deck');
 });
 
 test('inject expression mounts cleanly without model-button or telemetry conflict, and REMOVE_EXPRESSION restores DOM', async () => {
@@ -499,11 +520,12 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
         .map((b) => b.getAttribute('data-ag-cs-key'))
         .filter(Boolean)
     );
-    assert.equal(settingKeys.size, 31);
+    assert.equal(settingKeys.size, 33);
     for (const expectedKey of [
       'palette',
       'lightPreset',
       'motionLevel',
+      'scrollBottomMotion',
       'targetFps',
       'homeLayout',
       'homeRipple',
@@ -517,6 +539,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
       'mascot',
       'sidebarRestyle',
       'sidebarCompact',
+      'sidebarNavFold',
       'thoughtTranslate',
       'thoughtTrigger',
       'telemetryModule',
@@ -641,10 +664,20 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     assert.equal(html.getAttribute('data-ag-cs-palette'), 'warm', 'Zero-arg refreshConfig() must not revert file-refreshed palette');
     assert.equal(html.getAttribute('data-ag-cs-accent'), 'cobalt');
 
+    // Verify sidebarNavFold defaults to 'off', toggles data-ag-cs-sb-fold & getState().cfg, and REMOVE_EXPRESSION cleans it + __agPrismInlineDiffResolve
+    assert.equal(html.getAttribute('data-ag-cs-sb-fold'), 'off');
+    assert.equal(sandbox.window.__agPrism.getState().cfg.sidebarNavFold, 'off');
+    sandbox.window.__agPrism.saveSettingsBatch({ sidebarNavFold: 'on' });
+    assert.equal(html.getAttribute('data-ag-cs-sb-fold'), 'on');
+    assert.equal(sandbox.window.__agPrism.getState().cfg.sidebarNavFold, 'on');
+    sandbox.window.__agPrismInlineDiffResolve = () => {};
+
     // Teardown cleanly removes everything and restores host greeting text
     const rem = vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
     assert.ok(rem.removed >= 1);
     assert.equal(html.hasAttribute('data-ag-prism'), false);
+    assert.equal(html.hasAttribute('data-ag-cs-sb-fold'), false);
+    assert.equal(sandbox.window.__agPrismInlineDiffResolve, undefined);
     assert.equal(html.hasAttribute('data-ag-cs-target-fps'), false);
     assert.equal(html.hasAttribute('data-ag-cs-style'), false);
     assert.equal(html.hasAttribute('data-ag-cs-light-preset'), false);

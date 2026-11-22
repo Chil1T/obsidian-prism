@@ -34,6 +34,7 @@ namespace AgyClaudeStyle
         public string Version;
         public string StyleId;
         public string SettingBinding;
+        public string InlineDiffBinding;
         public List<string> Parts;
         public Dictionary<string, object> DefaultConfig;
         public Dictionary<string, object> Validators;
@@ -47,6 +48,7 @@ namespace AgyClaudeStyle
             m.Version = GetString(raw, "version", "1.0.6");
             m.StyleId = GetString(raw, "styleId", "ag-prism-css");
             m.SettingBinding = GetString(raw, "settingBinding", "__agPrismSetting");
+            m.InlineDiffBinding = GetString(raw, "inlineDiffBinding", "__agPrismInlineDiffCall");
             m.RemoveExpression = GetString(raw, "removeExpression", "");
             m.Parts = new List<string>();
             List<object> partsObj = raw.ContainsKey("parts") ? raw["parts"] as List<object> : null;
@@ -588,7 +590,7 @@ namespace AgyClaudeStyle
                     res["codeLigatures"] = cls != null && (string.Equals(cls, "on", StringComparison.OrdinalIgnoreCase) || string.Equals(cls, "true", StringComparison.OrdinalIgnoreCase));
                 }
             }
-            string[] boolOnOffKeys = new string[] { "telemetryModule", "effortSliderModule", "omniModule", "sidebarStudio", "autoUpdate" };
+            string[] boolOnOffKeys = new string[] { "telemetryModule", "effortSliderModule", "omniModule", "sidebarStudio", "autoUpdate", "sidebarNavFold" };
             for (int i = 0; i < boolOnOffKeys.Length; i++)
             {
                 string k = boolOnOffKeys[i];
@@ -1980,6 +1982,7 @@ namespace AgyClaudeStyle
             sb.Append("    try { window.__agPrismTelemetry?.sync?.(effectiveCfg); } catch {}\n");
             sb.Append("    try { window.__agPrismEffortSlider?.sync?.(effectiveCfg); } catch {}\n");
             sb.Append("    try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}\n");
+            sb.Append("    try { window.__agPrismInlineDiff?.sync?.(effectiveCfg); } catch {}\n");
             sb.Append("    try { if (effectiveCfg.omniModule === 'off') window.__agPrismOmni?.destroy?.(); else window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}\n");
             sb.Append("    try { if (effectiveCfg.hostLocalization === 'off' || (effectiveCfg.hostLocalization !== 'on' && effectiveCfg.language && effectiveCfg.language !== 'zh-CN' && effectiveCfg.language !== 'auto')) window.__agPrismHostI18n?.destroy?.(); } catch {}\n");
             sb.Append("    if (document.documentElement) {\n");
@@ -2287,6 +2290,167 @@ namespace AgyClaudeStyle
             return sb.ToString();
         }
 
+        public const string InlineDiffRemoveExpression =
+            "(() => {\n" +
+            "  try { window.__agPrismInlineDiff?.destroy?.(); } catch {}\n" +
+            "  try { document.getElementById?.('ag-prism-inline-diff-css')?.remove?.(); } catch {}\n" +
+            "  try { document.querySelectorAll?.('.ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu')?.forEach?.((el) => el.remove()); } catch {}\n" +
+            "  try { delete window.__agPrismInlineDiff; } catch {}\n" +
+            "  try { delete globalThis.__agPrismInlineDiff; } catch {}\n" +
+            "  try { delete window.__agPrismInlineDiffFactory; } catch {}\n" +
+            "  try { delete globalThis.__agPrismInlineDiffFactory; } catch {}\n" +
+            "  try { delete window.__agPrismInlineDiffResolve; } catch {}\n" +
+            "  return { ok: true, status: 'off' };\n" +
+            "})()";
+
+        public static string BuildInlineDiffExpression(string baseDir, PluginManifest manifest)
+        {
+            Dictionary<string, object> config = ReadConfig(baseDir, manifest);
+            return BuildInlineDiffExpression(baseDir, config);
+        }
+
+        public static string BuildInlineDiffExpression(string pluginDir, Dictionary<string, object> cfg)
+        {
+            string clientPath = ResolveSafePluginFile(pluginDir, "vendor/inline-diff/inline-diff-client.js");
+            if (string.IsNullOrEmpty(clientPath)) return "";
+
+            string clientSource;
+            try
+            {
+                clientSource = File.ReadAllText(clientPath, Encoding.UTF8);
+            }
+            catch
+            {
+                return "";
+            }
+            if (string.IsNullOrEmpty(clientSource)) return "";
+
+            Dictionary<string, object> bootCfg = ReconcileConfigAliases(cfg);
+            string bootCfgJson = MiniJson.Stringify(bootCfg, false);
+            string codeHash = ComputeHash(clientSource);
+            string hashJson = MiniJson.StringifyString(codeHash);
+
+            StringBuilder sb = new StringBuilder(clientSource.Length + bootCfgJson.Length + 2560);
+            sb.Append("(() => {\n");
+            sb.Append("  try {\n");
+            sb.Append("    if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };\n");
+            sb.Append("  } catch {\n");
+            sb.Append("    return { ok: false, status: 'skipped-subframe' };\n");
+            sb.Append("  }\n");
+            sb.Append("  const hasDomMarker = () => {\n");
+            sb.Append("    try {\n");
+            sb.Append("      if (\n");
+            sb.Append("        document.body &&\n");
+            sb.Append("        document.body.classList &&\n");
+            sb.Append("        (document.body.classList.contains('theme-standalone') || document.body.classList.contains('monaco-workbench'))\n");
+            sb.Append("      ) {\n");
+            sb.Append("        return true;\n");
+            sb.Append("      }\n");
+            sb.Append("      return Boolean(\n");
+            sb.Append("        typeof document.querySelector === 'function' &&\n");
+            sb.Append("          document.querySelector(\n");
+            sb.Append("            '.agy-shell, .agy-home, [data-testid=\"aux-pane-split\"], [data-testid=\"conversation-view\"], [data-testid=\"agent-input-box\"], [data-testid=\"model-selector-trigger\"], .monaco-workbench'\n");
+            sb.Append("          )\n");
+            sb.Append("      );\n");
+            sb.Append("    } catch {\n");
+            sb.Append("      return false;\n");
+            sb.Append("    }\n");
+            sb.Append("  };\n");
+            sb.Append("  let needDomMarkerOnReady = false;\n");
+            sb.Append("  let isPlainHttpLocalhost = false;\n");
+            sb.Append("  try {\n");
+            sb.Append("    const loc = typeof window !== 'undefined' && window.location;\n");
+            sb.Append("    const href = loc && typeof loc.href === 'string' ? loc.href : '';\n");
+            sb.Append("    if (href) {\n");
+            sb.Append("      const low = href.toLowerCase();\n");
+            sb.Append("      if (low.startsWith('devtools://') || low.startsWith('data:') || low.startsWith('chrome:') || low.startsWith('chrome-extension:') || low.startsWith('edge:') || low.startsWith('blob:') || low.startsWith('plugin:')) {\n");
+            sb.Append("        return { ok: false, status: 'skipped-non-host' };\n");
+            sb.Append("      }\n");
+            sb.Append("      if (low.startsWith('vscode-file://') || low.startsWith('app://') || low.startsWith('about:')) {\n");
+            sb.Append("        const ttl = String(document.title || '').trim();\n");
+            sb.Append("        if (/^(?:untitled|launchpad)$/i.test(ttl) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(low)) {\n");
+            sb.Append("          return { ok: false, status: 'skipped-non-host' };\n");
+            sb.Append("        }\n");
+            sb.Append("      }\n");
+            sb.Append("      if (low.startsWith('http:') || low.startsWith('https:')) {\n");
+            sb.Append("        const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);\n");
+            sb.Append("        if (!m) return { ok: false, status: 'skipped-non-host' };\n");
+            sb.Append("        const pathname = (m[3] || '/').toLowerCase();\n");
+            sb.Append("        if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test(pathname)) {\n");
+            sb.Append("          return { ok: false, status: 'skipped-non-host' };\n");
+            sb.Append("        }\n");
+            sb.Append("        if (!hasDomMarker()) {\n");
+            sb.Append("          isPlainHttpLocalhost = m[1].toLowerCase() === 'http';\n");
+            sb.Append("          const rs = String(document.readyState || '');\n");
+            sb.Append("          if (isPlainHttpLocalhost) {\n");
+            sb.Append("            if (rs === 'loading') needDomMarkerOnReady = true;\n");
+            sb.Append("            else return { ok: false, status: 'skipped-non-host' };\n");
+            sb.Append("          } else if (!/\\bantigravity\\b/i.test(String(document.title || ''))) {\n");
+            sb.Append("            if (rs === 'loading') needDomMarkerOnReady = true;\n");
+            sb.Append("            else return { ok: false, status: 'skipped-non-host' };\n");
+            sb.Append("          }\n");
+            sb.Append("        }\n");
+            sb.Append("      }\n");
+            sb.Append("    }\n");
+            sb.Append("  } catch {}\n");
+            sb.Append("  const cleanupInlineDiff = () => {\n");
+            sb.Append("    try { (window.__agPrismInlineDiff || globalThis.__agPrismInlineDiff)?.destroy?.(); } catch {}\n");
+            sb.Append("    try { document.getElementById?.('ag-prism-inline-diff-css')?.remove?.(); } catch {}\n");
+            sb.Append("    try { document.querySelectorAll?.('.ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu')?.forEach?.((el) => el.remove()); } catch {}\n");
+            sb.Append("    try { delete window.__agPrismInlineDiff; } catch {}\n");
+            sb.Append("    try { delete globalThis.__agPrismInlineDiff; } catch {}\n");
+            sb.Append("    try { delete window.__agPrismInlineDiffFactory; } catch {}\n");
+            sb.Append("    try { delete globalThis.__agPrismInlineDiffFactory; } catch {}\n");
+            sb.Append("    try { delete window.__agPrismInlineDiffResolve; } catch {}\n");
+            sb.Append("  };\n");
+            sb.Append("  const getLiveCfg = () => {\n");
+            sb.Append("    try {\n");
+            sb.Append("      const st = window.__agPrism?.getState?.();\n");
+            sb.Append("      return st && st.cfg && typeof st.cfg === 'object' ? st.cfg : null;\n");
+            sb.Append("    } catch {\n");
+            sb.Append("      return null;\n");
+            sb.Append("    }\n");
+            sb.Append("  };\n");
+            sb.Append("  const bootCfg = ").Append(bootCfgJson).Append(";\n");
+            sb.Append("  const targetHash = ").Append(hashJson).Append(";\n");
+            sb.Append("  const mountOrReuse = () => {\n");
+            sb.Append("    if (needDomMarkerOnReady && !hasDomMarker() && (isPlainHttpLocalhost || !/\\bantigravity\\b/i.test(String(document.title || '')))) {\n");
+            sb.Append("      return { ok: false, status: 'skipped-non-host' };\n");
+            sb.Append("    }\n");
+            sb.Append("    const effectiveCfg = getLiveCfg() || bootCfg;\n");
+            sb.Append("    const existing = window.__agPrismInlineDiff || globalThis.__agPrismInlineDiff;\n");
+            sb.Append("    if (existing && existing.__prismCodeHash === targetHash && typeof existing.sync === 'function') {\n");
+            sb.Append("      try { existing.sync(effectiveCfg); } catch {}\n");
+            sb.Append("      return { ok: true, reused: true, codeHash: targetHash };\n");
+            sb.Append("    }\n");
+            sb.Append("    cleanupInlineDiff();\n");
+            sb.Append("    ;").Append(clientSource).Append(";\n");
+            sb.Append("    let mounted = window.__agPrismInlineDiff || globalThis.__agPrismInlineDiff;\n");
+            sb.Append("    const factory = window.__agPrismInlineDiffFactory || globalThis.__agPrismInlineDiffFactory;\n");
+            sb.Append("    if (!mounted && typeof factory === 'function') {\n");
+            sb.Append("      try { mounted = factory({ window, document }); } catch {}\n");
+            sb.Append("    }\n");
+            sb.Append("    if (mounted && typeof mounted === 'object') {\n");
+            sb.Append("      mounted.__prismCodeHash = targetHash;\n");
+            sb.Append("      try { window.__agPrismInlineDiff = mounted; } catch {}\n");
+            sb.Append("      try { globalThis.__agPrismInlineDiff = mounted; } catch {}\n");
+            sb.Append("    }\n");
+            sb.Append("    if (typeof factory === 'function') {\n");
+            sb.Append("      try { window.__agPrismInlineDiffFactory = factory; } catch {}\n");
+            sb.Append("      try { globalThis.__agPrismInlineDiffFactory = factory; } catch {}\n");
+            sb.Append("    }\n");
+            sb.Append("    try { mounted?.sync?.(effectiveCfg); } catch {}\n");
+            sb.Append("    return { ok: true, status: 'mounted', codeHash: targetHash };\n");
+            sb.Append("  };\n");
+            sb.Append("  if ((needDomMarkerOnReady || !document.documentElement) && typeof document.addEventListener === 'function') {\n");
+            sb.Append("    document.addEventListener('DOMContentLoaded', () => { try { mountOrReuse(); } catch {} }, { once: true });\n");
+            sb.Append("    return { ok: true, status: 'deferred', codeHash: targetHash };\n");
+            sb.Append("  }\n");
+            sb.Append("  return mountOrReuse();\n");
+            sb.Append("})()");
+            return sb.ToString();
+        }
+
         public static string BuildInjectExpression(string baseDir, PluginManifest manifest)
         {
             Dictionary<string, object> config = ReadConfig(baseDir, manifest);
@@ -2345,6 +2509,8 @@ namespace AgyClaudeStyle
             sb.Append("      try { window.__agPrismEffortSlider?.destroy?.(); } catch {}\n");
             sb.Append("      try { window.__agPrismThought?.destroy?.(); } catch {}\n");
             sb.Append("      try { document.querySelectorAll?.('[data-testid=\"prism-thought-ai-config\"]')?.forEach?.((el) => el.remove()); } catch {}\n");
+            sb.Append("      try { window.__agPrismInlineDiff?.destroy?.(); } catch {}\n");
+            sb.Append("      try { document.querySelectorAll?.('.ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu')?.forEach?.((el) => el.remove()); } catch {}\n");
             sb.Append("      try { window.__agPrismOmni?.destroy?.(); } catch {}\n");
             sb.Append("      try { window.__agPrismContextMenu?.destroy?.(); } catch {}\n");
             sb.Append("      try { document.querySelectorAll?.('.ag-cs-ctx-menu, .ag-cs-ctx-toast')?.forEach?.((el) => el.remove()); } catch {}\n");
@@ -2355,7 +2521,8 @@ namespace AgyClaudeStyle
             sb.Append("      try { document.getElementById('ag-claude-style-css')?.remove(); } catch {}\n");
             sb.Append("      try { document.getElementById('ag-prism-settings-v101-css')?.remove(); } catch {}\n");
             sb.Append("      try { document.getElementById('ag-prism-omni-css')?.remove(); } catch {}\n");
-            sb.Append("      delete window.__agPrismThought; delete window.__agPrismThoughtSettingsUi; delete globalThis.__agPrismThoughtSettingsUi; delete window.__agPrismOmni; delete window.__agPrismContextMenu; delete globalThis.__agPrismContextMenu; delete window.__agPrism; delete window.__agClaudeStyle;\n");
+            sb.Append("      try { document.getElementById('ag-prism-inline-diff-css')?.remove(); } catch {}\n");
+            sb.Append("      delete window.__agPrismThought; delete window.__agPrismThoughtSettingsUi; delete globalThis.__agPrismThoughtSettingsUi; delete window.__agPrismInlineDiff; delete globalThis.__agPrismInlineDiff; delete window.__agPrismInlineDiffFactory; delete globalThis.__agPrismInlineDiffFactory; delete window.__agPrismInlineDiffResolve; delete window.__agPrismOmni; delete window.__agPrismContextMenu; delete globalThis.__agPrismContextMenu; delete window.__agPrism; delete window.__agClaudeStyle;\n");
             sb.Append("    };\n");
             sb.Append("    const hasDomWorkbenchMarkers = () => {\n");
             sb.Append("      try {\n");

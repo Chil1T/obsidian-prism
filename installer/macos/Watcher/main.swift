@@ -14,17 +14,19 @@ final class AttachedEntry {
     var scriptId: String?
     var omniScriptId: String?
     var thoughtScriptId: String?
+    var inlineDiffScriptId: String?
     let title: String
     private let ctxLock = NSLock()
     var mainFrameId: String = ""
     var hasFrameTree: Bool = false
     var contextFrames: [Int: FrameContextMeta] = [:]
 
-    init(session: CdpSession, scriptId: String? = nil, omniScriptId: String? = nil, thoughtScriptId: String? = nil, title: String) {
+    init(session: CdpSession, scriptId: String? = nil, omniScriptId: String? = nil, thoughtScriptId: String? = nil, inlineDiffScriptId: String? = nil, title: String) {
         self.session = session
         self.scriptId = scriptId
         self.omniScriptId = omniScriptId
         self.thoughtScriptId = thoughtScriptId
+        self.inlineDiffScriptId = inlineDiffScriptId
         self.title = title
     }
 
@@ -165,6 +167,7 @@ final class WatcherApp {
             let thoughtExpr = CdpHelper.shouldEnableThought(onceCfg)
                 ? CdpHelper.buildThoughtExpression(baseDir: baseDir, cfg: onceCfg)
                 : ""
+            let inlineDiffExpr = CdpHelper.buildInlineDiffExpression(baseDir: baseDir, cfg: onceCfg)
             var injectedTitles: [String] = []
             for page in pages {
                 let session = try CdpSession.connect(wsUrl: page.webSocketDebuggerUrl, timeoutMs: 4000)
@@ -175,6 +178,9 @@ final class WatcherApp {
                 }
                 if !thoughtExpr.isEmpty {
                     _ = try? session.evaluate(thoughtExpr, awaitPromise: false)
+                }
+                if !inlineDiffExpr.isEmpty {
+                    _ = try? session.evaluate(inlineDiffExpr, awaitPromise: false)
                 }
                 injectedTitles.append(CdpHelper.shortTitle(page))
             }
@@ -247,6 +253,7 @@ final class WatcherApp {
             "vendor/omni-viewer/omni-client.js",
             "vendor/thought-translator/thought-client.js",
             "vendor/thought-translator/thought-settings-ui.js",
+            "vendor/inline-diff/inline-diff-client.js",
         ] {
             let vendorFull = (baseDir as NSString).appendingPathComponent(vendorRel)
             if let attrs = try? fm.attributesOfItem(atPath: vendorFull) {
@@ -287,6 +294,7 @@ final class WatcherApp {
         var currentExpr: String
         var currentOmniExpr: String
         var currentThoughtExpr: String
+        var currentInlineDiffExpr: String
         do {
             manifest = try PluginManifest.load(baseDir: baseDir)
             let initCfg = CdpHelper.readConfig(baseDir: baseDir, manifest: manifest)
@@ -295,6 +303,7 @@ final class WatcherApp {
             currentThoughtExpr = CdpHelper.shouldEnableThought(initCfg)
                 ? CdpHelper.buildThoughtExpression(baseDir: baseDir, cfg: initCfg)
                 : ""
+            currentInlineDiffExpr = CdpHelper.buildInlineDiffExpression(baseDir: baseDir, cfg: initCfg)
         } catch {
             log("[!] 初始化加载失败: \(error.localizedDescription)")
             releasePidFile(selfPid: selfPid)
@@ -339,7 +348,7 @@ final class WatcherApp {
         intSource.setEventHandler(handler: requestExit)
         intSource.resume()
 
-        let applyToEntry: (AttachedEntry, String, String, String) throws -> JsonValue = { entry, exprToUse, omniExprToUse, thoughtExprToUse in
+        let applyToEntry: (AttachedEntry, String, String, String, String) throws -> JsonValue = { entry, exprToUse, omniExprToUse, thoughtExprToUse, inlineDiffExprToUse in
             if let oldId = entry.scriptId, !oldId.isEmpty {
                 _ = try? entry.session.send(
                     "Page.removeScriptToEvaluateOnNewDocument",
@@ -380,6 +389,14 @@ final class WatcherApp {
                         timeoutMs: 5000
                     )
                     entry.thoughtScriptId = nil
+                }
+                if let oldInlineId = entry.inlineDiffScriptId, !oldInlineId.isEmpty {
+                    _ = try? entry.session.send(
+                        "Page.removeScriptToEvaluateOnNewDocument",
+                        params: ["identifier": .string(oldInlineId)],
+                        timeoutMs: 5000
+                    )
+                    entry.inlineDiffScriptId = nil
                 }
                 return mainVal
             }
@@ -423,6 +440,28 @@ final class WatcherApp {
                 _ = try? entry.session.evaluate(thoughtExprToUse, awaitPromise: false)
             } else if hadThought {
                 _ = try? entry.session.evaluate(CdpHelper.thoughtRemoveExpression, awaitPromise: false)
+            }
+
+            let hadInlineDiff = (entry.inlineDiffScriptId?.isEmpty == false)
+            if let oldInlineId = entry.inlineDiffScriptId, !oldInlineId.isEmpty {
+                _ = try? entry.session.send(
+                    "Page.removeScriptToEvaluateOnNewDocument",
+                    params: ["identifier": .string(oldInlineId)],
+                    timeoutMs: 5000
+                )
+                entry.inlineDiffScriptId = nil
+            }
+            if !inlineDiffExprToUse.isEmpty {
+                if let inlineRes = try? entry.session.send(
+                    "Page.addScriptToEvaluateOnNewDocument",
+                    params: ["source": .string(inlineDiffExprToUse)],
+                    timeoutMs: 15000
+                ), let inlineId = inlineRes["identifier"]?.stringValue {
+                    entry.inlineDiffScriptId = inlineId
+                }
+                _ = try? entry.session.evaluate(inlineDiffExprToUse, awaitPromise: false)
+            } else if hadInlineDiff {
+                _ = try? entry.session.evaluate(CdpHelper.inlineDiffRemoveExpression, awaitPromise: false)
             }
             return mainVal
         }
@@ -522,6 +561,7 @@ final class WatcherApp {
                 let exprSnap = currentExpr
                 let omniSnap = currentOmniExpr
                 let thoughtSnap = currentThoughtExpr
+                let inlineDiffSnap = currentInlineDiffExpr
                 stateLock.unlock()
 
                 _ = try s.send("Runtime.addBinding", params: ["name": .string(bindingName)], timeoutMs: 5000)
@@ -534,7 +574,7 @@ final class WatcherApp {
                 attaching.remove(page.id)
                 stateLock.unlock()
 
-                let evalVal = try applyToEntry(entry, exprSnap, omniSnap, thoughtSnap)
+                let evalVal = try applyToEntry(entry, exprSnap, omniSnap, thoughtSnap, inlineDiffSnap)
                 let status = evalVal.objectValue?["status"]?.stringValue ?? "ok"
                 self.log("[✓] 已注入 obsidian-prism: \(title) (\(status))")
             } catch {
@@ -576,15 +616,18 @@ final class WatcherApp {
                 let nextThoughtExpr = CdpHelper.shouldEnableThought(nextCfg)
                     ? CdpHelper.buildThoughtExpression(baseDir: self.baseDir, cfg: nextCfg)
                     : ""
+                let nextInlineDiffExpr = CdpHelper.buildInlineDiffExpression(baseDir: self.baseDir, cfg: nextCfg)
                 let fastCfgExpr: String? = ((changedName as NSString).lastPathComponent.caseInsensitiveCompare("config.json") == .orderedSame)
                     ? CdpHelper.buildConfigRefreshExpression(baseDir: self.baseDir, manifest: nextManifest)
                     : nil
                 stateLock.lock()
                 let prevThoughtExpr = currentThoughtExpr
+                let prevInlineDiffExpr = currentInlineDiffExpr
                 manifest = nextManifest
                 currentExpr = nextExpr
                 currentOmniExpr = nextOmniExpr
                 currentThoughtExpr = nextThoughtExpr
+                currentInlineDiffExpr = nextInlineDiffExpr
                 let entries = Array(attached.values)
                 stateLock.unlock()
 
@@ -618,6 +661,16 @@ final class WatcherApp {
                            let thoughtId = thoughtAdd["identifier"]?.stringValue {
                             entry.thoughtScriptId = thoughtId
                         }
+                        let hadInlineDiff = (entry.inlineDiffScriptId?.isEmpty == false) || !prevInlineDiffExpr.isEmpty
+                        if let oldInlineId = entry.inlineDiffScriptId, !oldInlineId.isEmpty {
+                            _ = try? entry.session.send("Page.removeScriptToEvaluateOnNewDocument", params: ["identifier": .string(oldInlineId)], timeoutMs: 5000)
+                            entry.inlineDiffScriptId = nil
+                        }
+                        if !nextInlineDiffExpr.isEmpty,
+                           let inlineAdd = try? entry.session.send("Page.addScriptToEvaluateOnNewDocument", params: ["source": .string(nextInlineDiffExpr)], timeoutMs: 15000),
+                           let inlineId = inlineAdd["identifier"]?.stringValue {
+                            entry.inlineDiffScriptId = inlineId
+                        }
                         if let fastRes = try? entry.session.evaluate(fastExpr, awaitPromise: false),
                            fastRes.objectValue?["refreshed"]?.boolValue == true {
                             if !nextOmniExpr.isEmpty {
@@ -627,6 +680,11 @@ final class WatcherApp {
                                 _ = try? entry.session.evaluate(nextThoughtExpr, awaitPromise: false)
                             } else if hadThought {
                                 _ = try? entry.session.evaluate(CdpHelper.thoughtRemoveExpression, awaitPromise: false)
+                            }
+                            if !nextInlineDiffExpr.isEmpty {
+                                _ = try? entry.session.evaluate(nextInlineDiffExpr, awaitPromise: false)
+                            } else if hadInlineDiff {
+                                _ = try? entry.session.evaluate(CdpHelper.inlineDiffRemoveExpression, awaitPromise: false)
                             }
                             n += 1
                             continue
@@ -640,10 +698,15 @@ final class WatcherApp {
                             } else if hadThought {
                                 _ = try? entry.session.evaluate(CdpHelper.thoughtRemoveExpression, awaitPromise: false)
                             }
+                            if !nextInlineDiffExpr.isEmpty {
+                                _ = try? entry.session.evaluate(nextInlineDiffExpr, awaitPromise: false)
+                            } else if hadInlineDiff {
+                                _ = try? entry.session.evaluate(CdpHelper.inlineDiffRemoveExpression, awaitPromise: false)
+                            }
                             n += 1
                         }
                     } else {
-                        if (try? applyToEntry(entry, nextExpr, nextOmniExpr, nextThoughtExpr)) != nil {
+                        if (try? applyToEntry(entry, nextExpr, nextOmniExpr, nextThoughtExpr, nextInlineDiffExpr)) != nil {
                             n += 1
                         }
                     }

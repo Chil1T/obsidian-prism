@@ -13,6 +13,7 @@ const SETTING_BINDING = '__agPrismSetting';
 const LEGACY_SETTING_BINDING = '__agClaudeStyleSetting';
 const OMNI_BINDING = '__agPrismOmniCall';
 const SIDEBAR_BINDING = '__agPrismSidebarCall';
+const INLINE_DIFF_BINDING = '__agPrismInlineDiffCall';
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
 
@@ -50,7 +51,9 @@ const DEFAULT_CONFIG = {
   sidebarRestyle: true,
   sidebar: 'on',
   sidebarCompact: false,
+  sidebarNavFold: 'off',
   smoothCaret: true,
+  scrollBottomMotion: 'smooth',
   contextMenu: true,
   accentTone: 'follow',
   cornerStyle: 'balanced',
@@ -91,7 +94,9 @@ const VALIDATORS = {
   sidebarRestyle: 'boolean',
   sidebar: ['on', 'off'],
   sidebarCompact: 'boolean',
+  sidebarNavFold: ['off', 'on'],
   smoothCaret: 'boolean',
+  scrollBottomMotion: ['smooth', 'instant'],
   contextMenu: 'boolean',
   accentTone: ['follow', 'cobalt', 'iris', 'amber', 'mono'],
   cornerStyle: ['sharp', 'balanced', 'soft'],
@@ -189,7 +194,7 @@ function reconcileConfigAliases(raw) {
   if (has('codeLigatures') && typeof out.codeLigatures === 'string') {
     out.codeLigatures = out.codeLigatures === 'on' || out.codeLigatures === 'true';
   }
-  for (const k of ['telemetryModule', 'effortSliderModule', 'omniModule', 'sidebarStudio', 'autoUpdate']) {
+  for (const k of ['telemetryModule', 'effortSliderModule', 'omniModule', 'sidebarStudio', 'autoUpdate', 'sidebarNavFold']) {
     if (has(k) && typeof out[k] === 'boolean') {
       out[k] = out[k] ? 'on' : 'off';
     }
@@ -1971,7 +1976,226 @@ function serializeStringListExpr(list) {
   return arrExpr;
 }
 
-const PROTECTED_CSS_LITERALS = ['interaction-takeover-card', 'side-question-panel'];
+const PROTECTED_CSS_LITERALS = ['interaction-takeover-card', 'side-question-panel', 'ag-cs-home-panel'];
+
+const LZSS_SAFE_ASCII = (() => {
+  const arr = [];
+  for (let c = 35; c <= 126; c++) {
+    if (c !== 60 && c !== 62 && c !== 92) arr.push(c);
+  }
+  return arr; // 89 unescaped 1-byte JSON ASCII chars (no ", <, >, \)
+})();
+
+// 纯同步零-eval UTF-16 LZSS 压缩器（~2.7ms 解码，支持完整 BMP/CJK/Emoji 与首现受保护字面量原样保留）
+function packLzssJsExpr(text, protectFirstList = []) {
+  if (typeof text !== 'string' || text.length < 1024) return null;
+  const n = text.length;
+  const usedLow = new Uint8Array(2048);
+  for (let i = 0; i < n; i++) {
+    const cc = text.charCodeAt(i);
+    if (cc >= 0x00a1 && cc < 0x0800) usedLow[cc] = 1;
+  }
+  // 寻找 0x00A1..0x07FF（全部 2 字节 UTF-8、无转义、无代理项）内最长连续空闲区间
+  let bestStart = -1;
+  let bestLen = 0;
+  let curStart = -1;
+  for (let cc = 0x00a1; cc <= 0x0800; cc++) {
+    if (cc < 0x0800 && !usedLow[cc]) {
+      if (curStart < 0) curStart = cc;
+    } else if (curStart >= 0) {
+      const len = cc - curStart;
+      if (len > bestLen) {
+        bestLen = len;
+        bestStart = curStart;
+      }
+      curStart = -1;
+    }
+  }
+  if (bestLen < 512) return null;
+
+  const tokStart = bestStart;
+  const tokEnd = bestStart + bestLen;
+  const BASE = LZSS_SAFE_ASCII.length; // 89
+  const shortSlots = Math.floor(bestLen * 0.72);
+  const longBase = tokStart + shortSlots;
+  const longSlots = bestLen - shortSlots;
+  const shortMaxDist = Math.floor((shortSlots * BASE) / 24);
+  const longMaxDist = Math.min(65535, Math.floor((longSlots * BASE * BASE) / 128));
+  if (shortMaxDist < 64 || longMaxDist < 512) return null;
+
+  const protectedPos = protectFirstList && protectFirstList.length > 0 ? new Uint8Array(n) : null;
+  if (protectedPos) {
+    for (let p = 0; p < protectFirstList.length; p++) {
+      const lit = protectFirstList[p];
+      if (!lit) continue;
+      const idx = text.indexOf(lit);
+      if (idx >= 0) {
+        for (let k = 0; k < lit.length; k++) protectedPos[idx + k] = 1;
+      }
+    }
+  }
+
+  const charBytes = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const cc = text.charCodeAt(i);
+    charBytes[i] =
+      cc < 0x80
+        ? cc === 34 || cc === 92
+          ? 2
+          : cc < 32 || cc === 60 || cc === 62
+          ? 6
+          : 1
+        : cc < 0x800
+        ? 2
+        : 3;
+  }
+
+  const head = new Int32Array(65536);
+  head.fill(-1);
+  const prev = new Int32Array(n);
+  prev.fill(-1);
+  const hash3 = (pos) =>
+    ((text.charCodeAt(pos) * 31 + text.charCodeAt(pos + 1)) * 31 + text.charCodeAt(pos + 2)) & 0xffff;
+  const insert = (pos) => {
+    if (pos + 2 >= n) return;
+    const h = hash3(pos);
+    prev[pos] = head[h];
+    head[h] = pos;
+  };
+  const findBest = (pos) => {
+    if (pos + 2 >= n) return { len: 0, dist: 0, gain: 0 };
+    if (protectedPos && protectedPos[pos]) return { len: 0, dist: 0, gain: 0 };
+    const c0 = text.charCodeAt(pos);
+    if (c0 >= 0xdc00 && c0 <= 0xdfff) return { len: 0, dist: 0, gain: 0 };
+    const h = hash3(pos);
+    let cur = head[h];
+    let bestMatchLen = 0;
+    let bestDist = 0;
+    let bestGain = 0;
+    let steps = 0;
+    let maxLen = Math.min(131, n - pos);
+    if (protectedPos) {
+      for (let k = 1; k < maxLen; k++) {
+        if (protectedPos[pos + k]) {
+          maxLen = k;
+          break;
+        }
+      }
+      if (maxLen < 3) return { len: 0, dist: 0, gain: 0 };
+    }
+    const c1 = text.charCodeAt(pos + 1);
+    const c2 = text.charCodeAt(pos + 2);
+    while (cur >= 0 && pos - cur <= longMaxDist && steps < 128) {
+      steps++;
+      if (
+        text.charCodeAt(cur) === c0 &&
+        text.charCodeAt(cur + 1) === c1 &&
+        text.charCodeAt(cur + 2) === c2
+      ) {
+        let l = 3;
+        let matchBytes = charBytes[pos] + charBytes[pos + 1] + charBytes[pos + 2];
+        while (l < maxLen && text.charCodeAt(cur + l) === text.charCodeAt(pos + l)) {
+          matchBytes += charBytes[pos + l];
+          l++;
+        }
+        if (l > 0) {
+          const lastC = text.charCodeAt(pos + l - 1);
+          if (lastC >= 0xd800 && lastC <= 0xdbff) {
+            matchBytes -= charBytes[pos + l - 1];
+            l--;
+          }
+        }
+        if (l >= 3) {
+          const dist = pos - cur;
+          const cost = dist <= shortMaxDist && l <= 26 ? 3 : l >= 4 ? 4 : 999;
+          const gain = matchBytes - cost;
+          if (gain > bestGain || (gain === bestGain && l > bestMatchLen)) {
+            bestGain = gain;
+            bestMatchLen = l;
+            bestDist = dist;
+            if (bestMatchLen === maxLen) break;
+          }
+        }
+      }
+      cur = prev[cur];
+    }
+    return { len: bestMatchLen, dist: bestDist, gain: bestGain };
+  };
+
+  const out = [];
+  let i = 0;
+  while (i < n) {
+    const m = findBest(i);
+    if (m.gain >= 1) {
+      insert(i);
+      const m2 = findBest(i + 1);
+      if (m2.gain > m.gain + charBytes[i]) {
+        out.push(text[i]);
+        i++;
+        continue;
+      }
+      if (m.dist <= shortMaxDist && m.len <= 26) {
+        const st = (m.dist - 1) * 24 + (m.len - 3);
+        out.push(String.fromCharCode(tokStart + Math.floor(st / BASE), LZSS_SAFE_ASCII[st % BASE]));
+      } else {
+        const st = (m.dist - 1) * 128 + (m.len - 4);
+        const q = Math.floor(st / BASE);
+        out.push(
+          String.fromCharCode(
+            longBase + Math.floor(q / BASE),
+            LZSS_SAFE_ASCII[q % BASE],
+            LZSS_SAFE_ASCII[st % BASE]
+          )
+        );
+      }
+      for (let k = 1; k < m.len; k++) insert(i + k);
+      i += m.len;
+    } else {
+      insert(i);
+      out.push(text[i]);
+      i++;
+    }
+  }
+
+  const encoded = out.join('');
+  // 严格无损往返验证（与运行时解码器逐字节一致）
+  const o = new Uint16Array(n);
+  let p = 0;
+  const decG = (c) => c - 35 - (c > 60) - (c > 62) - (c > 92);
+  for (let idx = 0; idx < encoded.length; ) {
+    const c = encoded.charCodeAt(idx++);
+    if (c < tokStart || c >= tokEnd) {
+      if (p >= n) return null;
+      o[p++] = c;
+      continue;
+    }
+    const v1 = decG(encoded.charCodeAt(idx++));
+    let st;
+    let l;
+    let d;
+    if (c < longBase) {
+      st = (c - tokStart) * 89 + v1;
+      l = 3 + (st % 24);
+      d = 1 + ((st / 24) | 0);
+    } else {
+      st = ((c - longBase) * 89 + v1) * 89 + decG(encoded.charCodeAt(idx++));
+      l = 4 + (st % 128);
+      d = 1 + ((st / 128) | 0);
+    }
+    let q = p - d;
+    if (q < 0 || p + l > n) return null;
+    while (l-- > 0) o[p++] = o[q++];
+  }
+  if (p !== n) return null;
+  let verify = '';
+  for (let idx = 0; idx < p; idx += 16384) {
+    verify += String.fromCharCode.apply(null, o.subarray(idx, Math.min(p, idx + 16384)));
+  }
+  if (verify !== text) return null;
+
+  const rangeCheck = tokEnd === 2048 ? `c<${tokStart}||c>=2048` : `c<${tokStart}||c>=${tokEnd}`;
+  return `(()=>{let s=${serializeJsValue(encoded)},o=new Uint16Array(${n}),p=0,g=c=>c-35-(c>60)-(c>62)-(c>92),r="",i=0;for(;i<s.length;){let c=s.charCodeAt(i++);if(${rangeCheck}){o[p++]=c;continue}let v=g(s.charCodeAt(i++)),t,l,d;if(c<${longBase}){t=(c-${tokStart})*89+v;l=3+t%24;d=1+(t/24|0)}else{t=((c-${longBase})*89+v)*89+g(s.charCodeAt(i++));l=4+t%128;d=1+(t/128|0)}for(let q=p-d;l--;)o[p++]=o[q++]}for(i=0;i<p;i+=16384)r+=String.fromCharCode.apply(null,o.subarray(i,i+16384<p?i+16384:p));return r})()`;
+}
 
 // Fast 2-gram pre-filter + Batch Top-K non-overlapping greedy phrase replacement
 function collectWindowFrequencies(work, winLen, skipPua = false) {
@@ -2187,6 +2411,10 @@ function applyBatchPhraseReplacements(work, freq, freeTokens, dict, tokChars, co
 }
 
 function packCssJsExpr(css) {
+  const lzPacked = packLzssJsExpr(css, PROTECTED_CSS_LITERALS);
+  if (lzPacked && Buffer.byteLength(lzPacked, 'utf8') + 12 < Buffer.byteLength(serializeJsValue(css), 'utf8')) {
+    return lzPacked;
+  }
   const TOKEN_BASE = 0x00a1;
   const MAX_DICT = 4800; // 0x00A1..0x1360 (1,887 2-byte + 2,913 3-byte UTF-8 chars, all < 0x2028)
   for (let i = 0; i < css.length; i++) {
@@ -3833,6 +4061,12 @@ function decodeSimpleTemplateBody(body) {
 }
 
 function packTextJsExpr(text, maxDict = 5200) {
+  if (text.length >= 8192) {
+    const lzPacked = packLzssJsExpr(text, ['ag-cs-home-panel', 'SIDEBAR_STUDIO_CLIENT_V2']);
+    if (lzPacked && Buffer.byteLength(lzPacked, 'utf8') + 12 < Buffer.byteLength(serializeJsValue(text), 'utf8')) {
+      return lzPacked;
+    }
+  }
   const usedInText = new Set();
   for (let i = 0; i < text.length; i++) {
     const cc = text.charCodeAt(i);
@@ -4636,18 +4870,28 @@ const SYNC_ROOT_FILES = [
   ...RUNTIME_PARTS.filter((p) => !p.includes('/')),
 ];
 
+const SYNC_VENDOR_FILES = [
+  'vendor/omni-viewer/omni-client.js',
+  'vendor/sidebar-studio/sidebar-client.js',
+  'vendor/host-i18n/host-i18n-runtime.js',
+  'vendor/host-i18n/zh-CN.json',
+  'vendor/thought-translator/thought-client.js',
+  'vendor/thought-translator/thought-settings-ui.js',
+  'vendor/inline-diff/inline-diff-client.js',
+];
+
 const _mangledUnitCache = new Map();
 let _unifiedBundleCache = { sig: '', bundleCode: '', partCodeByName: new Map() };
 let _cssCache = { sig: '', minCss: '', packedExpr: '' };
 
-const BUNDLE_CACHE_SCHEMA_VERSION = 1;
+const BUNDLE_CACHE_SCHEMA_VERSION = 2;
 const BUNDLE_CACHE_FILENAME = '.bundle-cache.json';
 const BUNDLE_CACHE_MAX_ENTRIES = 4;
 const BUNDLE_CACHE_MAX_FILE_BYTES = 4 * 1024 * 1024;
 const BUNDLE_CACHE_MAX_EXPR_BYTES = 2 * 1024 * 1024;
 const BUNDLE_CACHE_MAX_BOOTCFG_BYTES = 64 * 1024;
 const CHANNEL_CACHE_MAX_PAYLOAD_BYTES = 1024 * 1024;
-const CHANNEL_CACHE_NAMES = ['omni', 'sidebar', 'hostI18n', 'thought'];
+const CHANNEL_CACHE_NAMES = ['omni', 'sidebar', 'hostI18n', 'thought', 'inlineDiff'];
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const CODE_HASH_RE = /^[0-9a-z]{1,16}$/;
 
@@ -4665,7 +4909,7 @@ const _bundleCacheStats = {
   channelDiskHits: 0,
   channelDiskMisses: 0,
   channelCompileRuns: 0,
-  channelHitsByName: { omni: 0, sidebar: 0, hostI18n: 0, thought: 0 },
+  channelHitsByName: { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0 },
   lastOutcome: 'none',
   lastCachePath: null,
 };
@@ -5437,6 +5681,7 @@ function buildConfigRefreshExpression(customConfig, extraMeta = null) {
       try { window.__agPrismTelemetry?.sync?.(effectiveCfg); } catch {}
       try { window.__agPrismEffortSlider?.sync?.(effectiveCfg); } catch {}
       try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}
+      try { window.__agPrismInlineDiff?.sync?.(effectiveCfg); } catch {}
       if (effectiveCfg?.omniModule === 'off') {
         try { window.__agPrismOmni?.destroy?.(); } catch {}
       } else {
@@ -5683,6 +5928,7 @@ function getInjectWrapperTemplate() {
 
     const stripForeignMount = () => {
       destroyModules(true);
+      try { window.__agPrismInlineDiff?.destroy?.(); } catch {}
       try { window.__agPrismContextMenu?.destroy?.(); } catch {}
       try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}
       try {
@@ -5695,13 +5941,18 @@ function getInjectWrapperTemplate() {
       for (const k of ['__agPrismRepoBridge', '__agPrismThoughtBridge', '__agPrismUsageBridge', '__agPrismOmniBridge']) {
         try { window[k]?.dispose?.(); } catch {}
       }
-      for (const id of [${JSON.stringify(STYLE_ID)}, ${JSON.stringify(LEGACY_STYLE_ID)}, 'ag-prism-settings-v101-css', 'ag-prism-omni-css']) {
+      for (const id of [${JSON.stringify(STYLE_ID)}, ${JSON.stringify(LEGACY_STYLE_ID)}, 'ag-prism-settings-v101-css', 'ag-prism-omni-css', 'ag-prism-inline-diff-css']) {
         try { document.getElementById(id)?.remove(); } catch {}
       }
-      try { document.querySelectorAll?.('[data-testid="prism-thought-ai-config"], .ag-cs-ctx-menu, .ag-cs-ctx-toast')?.forEach?.((el) => el.remove()); } catch {}
+      try { document.querySelectorAll?.('[data-testid="prism-thought-ai-config"], .ag-cs-ctx-menu, .ag-cs-ctx-toast, .ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu')?.forEach?.((el) => el.remove()); } catch {}
       delete window.__agPrismThought;
       delete window.__agPrismThoughtSettingsUi;
       delete globalThis.__agPrismThoughtSettingsUi;
+      delete window.__agPrismInlineDiff;
+      delete globalThis.__agPrismInlineDiff;
+      delete window.__agPrismInlineDiffFactory;
+      delete globalThis.__agPrismInlineDiffFactory;
+      delete window.__agPrismInlineDiffResolve;
       delete window.__agPrismOmni;
       delete window.__agPrismContextMenu;
       delete globalThis.__agPrismContextMenu;
@@ -6263,13 +6514,14 @@ function resetBundleCacheStats() {
   _bundleCacheStats.channelDiskHits = 0;
   _bundleCacheStats.channelDiskMisses = 0;
   _bundleCacheStats.channelCompileRuns = 0;
-  _bundleCacheStats.channelHitsByName = { omni: 0, sidebar: 0, hostI18n: 0, thought: 0 };
+  _bundleCacheStats.channelHitsByName = { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0 };
   _bundleCacheStats.lastOutcome = 'none';
   _bundleCacheStats.lastCachePath = null;
   try { _omniClientCache.cachedPaths?.clear?.(); } catch {}
   try { _sidebarClientCache.cachedPaths?.clear?.(); } catch {}
   try { _hostI18nCache.cachedPaths?.clear?.(); } catch {}
   try { _thoughtAssetsCache.cachedPaths?.clear?.(); } catch {}
+  try { _inlineDiffClientCache.cachedPaths?.clear?.(); } catch {}
   invalidateBundleCacheRootCache();
 }
 
@@ -6316,7 +6568,7 @@ function isValidChannelCacheEntry(channelName, entry) {
   if (!hasOwn('payloadSha256') || typeof entry.payloadSha256 !== 'string' || !SHA256_HEX_RE.test(entry.payloadSha256)) {
     return false;
   }
-  if (channelName === 'omni' || channelName === 'sidebar') {
+  if (channelName === 'omni' || channelName === 'sidebar' || channelName === 'inlineDiff') {
     if (!hasOwn('minCode') || typeof entry.minCode !== 'string' || entry.minCode.length === 0) return false;
     if (Buffer.byteLength(entry.minCode, 'utf8') > CHANNEL_CACHE_MAX_PAYLOAD_BYTES) return false;
     if (channelName === 'sidebar' && /setPrefValues?/i.test(entry.minCode)) return false;
@@ -6632,6 +6884,7 @@ function markChannelCachedOnPath(cachePath, chMap) {
     sidebar: _sidebarClientCache,
     hostI18n: _hostI18nCache,
     thought: _thoughtAssetsCache,
+    inlineDiff: _inlineDiffClientCache,
   };
   for (const name of CHANNEL_CACHE_NAMES) {
     const rec = chMap[name];
@@ -7813,7 +8066,205 @@ function buildThoughtExpression(config = null, opts = null) {
   })()`;
 }
 
+let _inlineDiffClientCache = { sig: '', sourceHash: '', minCode: '', codeHash: '', cachedPaths: new Set() };
+
+function readCompiledInlineDiffClient(opts = null) {
+  const clientPath = path.join(__dirname, 'vendor', 'inline-diff', 'inline-diff-client.js');
+  if (!fs.existsSync(clientPath)) {
+    return { sig: '', minCode: '', codeHash: '' };
+  }
+  const sig = getFileSig(clientPath);
+  const cachePath = resolveBundleCachePathOption(opts);
+  if (!cachePath && _inlineDiffClientCache.sig === sig && _inlineDiffClientCache.codeHash) {
+    return _inlineDiffClientCache;
+  }
+  const rawBuf = fs.readFileSync(clientPath);
+  return resolveChannelAssetsWithDiskCache({
+    channelName: 'inlineDiff',
+    memCache: _inlineDiffClientCache,
+    setMemCache: (v) => { _inlineDiffClientCache = v; },
+    sig,
+    fileEntries: [{ rel: 'vendor/inline-diff/inline-diff-client.js', content: rawBuf }],
+    opts,
+    compileFn: () => {
+      const minCode = minifySingleSource(rawBuf.toString('utf8'));
+      const codeHash = computeHash(minCode);
+      return { minCode, codeHash };
+    },
+    toCacheEntry: (assets, sourceHash) => ({
+      sourceHash,
+      codeHash: assets.codeHash,
+      minCode: assets.minCode,
+      payloadSha256: sha256Text(`${assets.codeHash}\0${assets.minCode}`),
+      updatedAt: Date.now(),
+    }),
+    fromCacheEntry: (entry) => ({
+      minCode: entry.minCode,
+      codeHash: entry.codeHash,
+    }),
+  });
+}
+
+const INLINE_DIFF_REMOVE_EXPRESSION = `(() => {
+  try { window.__agPrismInlineDiff?.destroy?.(); } catch {}
+  try { document.getElementById?.('ag-prism-inline-diff-css')?.remove?.(); } catch {}
+  try { document.querySelectorAll?.('.ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu')?.forEach?.((el) => el.remove()); } catch {}
+  try { delete window.__agPrismInlineDiff; } catch {}
+  try { delete globalThis.__agPrismInlineDiff; } catch {}
+  try { delete window.__agPrismInlineDiffFactory; } catch {}
+  try { delete globalThis.__agPrismInlineDiffFactory; } catch {}
+  try { delete window.__agPrismInlineDiffResolve; } catch {}
+  return { ok: true, status: 'off' };
+})()`;
+
+// 第六通道独立注入（Inline Diff 展开预览 + 样式与右键菜单）：与 Channel 1 解耦，缺文件时安全返回 ''，支持 codeHash 幂等跳过与热重载
+function buildInlineDiffInjectExpression(config = null, opts = null) {
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  let minCode = '';
+  let codeHash = '';
+  if (opts && typeof opts.customClientSource === 'string') {
+    minCode = opts.customClientSource ? minifySingleSource(opts.customClientSource) : '';
+    codeHash = minCode ? computeHash(minCode) : '';
+  } else {
+    const compiled = readCompiledInlineDiffClient(opts);
+    minCode = compiled.minCode;
+    codeHash = compiled.codeHash;
+  }
+  if (!minCode || !codeHash) {
+    return '';
+  }
+
+  const bootCfgJson = serializeJsonForEval(cfg);
+  const hashJson = serializeJsonForEval(codeHash);
+
+  return `(() => {
+    try {
+      if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };
+    } catch {
+      return { ok: false, status: 'skipped-subframe' };
+    }
+    const hasDomMarker = () => {
+      try {
+        if (
+          document.body &&
+          document.body.classList &&
+          (document.body.classList.contains('theme-standalone') || document.body.classList.contains('monaco-workbench'))
+        ) {
+          return true;
+        }
+        return Boolean(
+          typeof document.querySelector === 'function' &&
+            document.querySelector(
+              '.agy-shell, .agy-home, [data-testid="aux-pane-split"], [data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="model-selector-trigger"], .monaco-workbench'
+            )
+        );
+      } catch {
+        return false;
+      }
+    };
+    let needDomMarkerOnReady = false;
+    let isPlainHttpLocalhost = false;
+    try {
+      const loc = typeof window !== 'undefined' && window.location;
+      const href = loc && typeof loc.href === 'string' ? loc.href : '';
+      if (href) {
+        const low = href.toLowerCase();
+        if (low.startsWith('devtools://') || low.startsWith('data:') || low.startsWith('chrome:') || low.startsWith('chrome-extension:') || low.startsWith('edge:') || low.startsWith('blob:') || low.startsWith('plugin:')) {
+          return { ok: false, status: 'skipped-non-host' };
+        }
+        if (low.startsWith('vscode-file://') || low.startsWith('app://') || low.startsWith('about:')) {
+          const ttl = String(document.title || '').trim();
+          if (/^(?:untitled|launchpad)$/i.test(ttl) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(low)) {
+            return { ok: false, status: 'skipped-non-host' };
+          }
+        }
+        if (low.startsWith('http:') || low.startsWith('https:')) {
+          const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);
+          if (!m) return { ok: false, status: 'skipped-non-host' };
+          const pathname = (m[3] || '/').toLowerCase();
+          if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test(pathname)) {
+            return { ok: false, status: 'skipped-non-host' };
+          }
+          if (!hasDomMarker()) {
+            isPlainHttpLocalhost = m[1].toLowerCase() === 'http';
+            const rs = String(document.readyState || '');
+            if (isPlainHttpLocalhost) {
+              if (rs === 'loading') needDomMarkerOnReady = true;
+              else return { ok: false, status: 'skipped-non-host' };
+            } else if (!/\\bantigravity\\b/i.test(String(document.title || ''))) {
+              if (rs === 'loading') needDomMarkerOnReady = true;
+              else return { ok: false, status: 'skipped-non-host' };
+            }
+          }
+        }
+      }
+    } catch {}
+
+    const cleanupInlineDiff = () => {
+      try { (window.__agPrismInlineDiff || globalThis.__agPrismInlineDiff)?.destroy?.(); } catch {}
+      try { document.getElementById?.('ag-prism-inline-diff-css')?.remove?.(); } catch {}
+      try { document.querySelectorAll?.('.ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu')?.forEach?.((el) => el.remove()); } catch {}
+      try { delete window.__agPrismInlineDiff; } catch {}
+      try { delete globalThis.__agPrismInlineDiff; } catch {}
+      try { delete window.__agPrismInlineDiffFactory; } catch {}
+      try { delete globalThis.__agPrismInlineDiffFactory; } catch {}
+      try { delete window.__agPrismInlineDiffResolve; } catch {}
+    };
+    const getLiveCfg = () => {
+      try {
+        const st = window.__agPrism?.getState?.();
+        return st && st.cfg && typeof st.cfg === 'object' ? st.cfg : null;
+      } catch {
+        return null;
+      }
+    };
+
+    const bootCfg = ${bootCfgJson};
+    const targetHash = ${hashJson};
+    const mountOrReuse = () => {
+      if (needDomMarkerOnReady && !hasDomMarker() && (isPlainHttpLocalhost || !/\\bantigravity\\b/i.test(String(document.title || '')))) {
+        return { ok: false, status: 'skipped-non-host' };
+      }
+      const effectiveCfg = getLiveCfg() || bootCfg;
+      const existing = window.__agPrismInlineDiff || globalThis.__agPrismInlineDiff;
+      if (existing && existing.__prismCodeHash === targetHash && typeof existing.sync === 'function') {
+        try { existing.sync(effectiveCfg); } catch {}
+        return { ok: true, reused: true, codeHash: targetHash };
+      }
+
+      cleanupInlineDiff();
+      ;${minCode};
+
+      let mounted = window.__agPrismInlineDiff || globalThis.__agPrismInlineDiff;
+      const factory = window.__agPrismInlineDiffFactory || globalThis.__agPrismInlineDiffFactory;
+      if (!mounted && typeof factory === 'function') {
+        try {
+          mounted = factory({ window, document });
+        } catch {}
+      }
+      if (mounted && typeof mounted === 'object') {
+        mounted.__prismCodeHash = targetHash;
+        try { window.__agPrismInlineDiff = mounted; } catch {}
+        try { globalThis.__agPrismInlineDiff = mounted; } catch {}
+      }
+      if (typeof factory === 'function') {
+        try { window.__agPrismInlineDiffFactory = factory; } catch {}
+        try { globalThis.__agPrismInlineDiffFactory = factory; } catch {}
+      }
+      try { mounted?.sync?.(effectiveCfg); } catch {}
+      return { ok: true, status: 'mounted', codeHash: targetHash };
+    };
+
+    if ((needDomMarkerOnReady || !document.documentElement) && typeof document.addEventListener === 'function') {
+      document.addEventListener('DOMContentLoaded', () => { try { mountOrReuse(); } catch {} }, { once: true });
+      return { ok: true, status: 'deferred', codeHash: targetHash };
+    }
+    return mountOrReuse();
+  })()`;
+}
+
 const REMOVE_EXPRESSION = `(() => {
+  try { window.__agPrismInlineDiff?.destroy?.(); } catch (e) {}
   try {
     if (window.__agPrismTelemetry && typeof window.__agPrismTelemetry.destroy === 'function') {
       window.__agPrismTelemetry.destroy();
@@ -7913,6 +8364,9 @@ const REMOVE_EXPRESSION = `(() => {
   delete window.__agPrismThoughtResolve;
   delete window.__agPrismUsageBridge;
   delete window.__agPrismUsageResolve;
+  try { delete window.__agPrismInlineDiff; } catch {}
+  try { delete window.__agPrismInlineDiffFactory; } catch {}
+  try { delete window.__agPrismInlineDiffResolve; } catch {}
   delete window.__agPrismBrandLogoSvg;
   delete window.__agPrismHostI18n;
   delete window.__agPrismHostI18nFactory;
@@ -7927,6 +8381,8 @@ const REMOVE_EXPRESSION = `(() => {
   delete globalThis.__agPrismTelemetry;
   delete globalThis.__agPrismEffortSlider;
   delete globalThis.__agPrismThought;
+  delete globalThis.__agPrismInlineDiff;
+  delete globalThis.__agPrismInlineDiffFactory;
   delete globalThis.__agPrismOmni;
   delete globalThis.__agPrismSidebar;
   delete globalThis.__agPrismThoughtSettingsUi;
@@ -7978,6 +8434,7 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-cs-sidebar',
       'data-ag-cs-sidebar-compact',
       'data-ag-cs-sidebar-collapsed',
+      'data-ag-cs-sb-fold',
       'data-ag-cs-has-crab',
       'data-ag-cs-model-menu',
       'data-ag-cs-lang',
@@ -8001,6 +8458,7 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-cs-space-palette',
       'data-ag-cs-space-accent',
       'data-ag-cs-win-blur',
+      'data-ag-cs-scroll-bottom',
       'data-ag-cs-resizing',
       'data-ag-cs-mascot-drag',
     ].forEach((attr) => root.removeAttribute(attr));
@@ -8067,6 +8525,11 @@ const REMOVE_EXPRESSION = `(() => {
     'data-ag-cs-thought-streaming',
     'data-ag-cs-spark-streaming',
     'data-ag-cs-prism-cv',
+    'data-ag-cs-prism-mirror',
+    'data-ag-cs-prism-reflect',
+    'data-ag-cs-settings-dlg',
+    'data-ag-cs-settings-nav',
+    'data-ag-cs-nav-active',
     'data-ag-cs-code-folded',
     'data-ag-cs-aux-dual',
     'data-ag-cs-model-overlay',
@@ -8079,9 +8542,25 @@ const REMOVE_EXPRESSION = `(() => {
     'data-ag-row-stagger',
     'data-ces-orch-b',
     'data-ces-orch-tunable',
+    'data-pv-warn',
+    'data-ag-inline-diff-open',
+    'data-ag-inline-diff-host',
+    'data-ag-sb-more-hidden',
+    'data-ag-sb-more-item',
+    'data-ag-scrolling',
+    'data-ag-diff-chip',
+    'data-ag-diff-chip-file',
+    'data-ag-diff-chip-row',
+    'data-ag-diff-stat',
+    'data-ag-perm-selected',
+    'data-ag-perm-sandbox-sep',
+    'data-ag-sub-running',
+    'data-ag-sub-sec-running',
+    'data-ag-overview-running',
   ].forEach((attr) => {
     document.querySelectorAll('[' + attr + ']').forEach((el) => el.removeAttribute(attr));
   });
+  document.querySelectorAll('.ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu, .ag-cs-sb-more-wrap').forEach((n) => n.remove());
   document.querySelectorAll('[data-ag-cs-prism-box]').forEach((el) => {
     el.removeAttribute('data-ag-cs-prism-box');
     if (el.style && typeof el.style.removeProperty === 'function') {
@@ -8141,7 +8620,7 @@ const REMOVE_EXPRESSION = `(() => {
   const nodes = document.querySelectorAll(
     '#' + ${JSON.stringify(STYLE_ID)} +
     ', #' + ${JSON.stringify(LEGACY_STYLE_ID)} +
-    ', #ag-prism-host-alert-css, #ag-prism-settings-v101-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-cs-settings-sec, [data-testid="prism-thought-ai-config"], .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ag-prism-sidebar-studio, .ag-prism-sidebar-rail, .ag-prism-sidebar-popover, .ag-prism-sidebar-modal, .ag-cs-home-panel, .ag-cs-home-panel-seat, .ag-cs-ripple-layer, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-mascot, .ag-v2-mascot-stage, .ag-cs-crystal-bar, [data-testid="orchestrator-effort-bar"], .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-smooth-caret, .ag-cs-perf-backdrop, .ag-cs-ctx-menu, .ag-cs-ctx-toast'
+    ', #ag-prism-host-alert-css, #ag-prism-settings-v101-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-prism-inline-diff-css, #ag-cs-settings-sec, [data-testid="prism-thought-ai-config"], .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ag-prism-sidebar-studio, .ag-prism-sidebar-rail, .ag-prism-sidebar-popover, .ag-prism-sidebar-modal, .ag-cs-home-panel, .ag-cs-home-panel-seat, .ag-cs-ripple-layer, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-mascot, .ag-v2-mascot-stage, .ag-v2-habitat-prop, .ag-cs-crystal-bar, [data-testid="orchestrator-effort-bar"], .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-smooth-caret, .ag-cs-perf-backdrop, .ag-cs-ctx-menu, .ag-cs-ctx-toast'
   );
   nodes.forEach((n) => n.remove());
   return { removed: nodes.length };
@@ -8155,6 +8634,7 @@ module.exports = {
   LEGACY_SETTING_BINDING,
   OMNI_BINDING,
   SIDEBAR_BINDING,
+  INLINE_DIFF_BINDING,
   PORT_FILE,
   PID_FILE,
   CONFIG_FILE,
@@ -8186,6 +8666,7 @@ module.exports = {
   spawnDetachedHostRelaunchHelper,
   RUNTIME_PARTS,
   SYNC_ROOT_FILES,
+  SYNC_VENDOR_FILES,
   REMOVE_EXPRESSION,
   readConfig,
   writeConfig,
@@ -8219,5 +8700,7 @@ module.exports = {
   shouldEnableThought,
   buildThoughtExpression,
   THOUGHT_REMOVE_EXPRESSION,
+  buildInlineDiffInjectExpression,
+  INLINE_DIFF_REMOVE_EXPRESSION,
   isSafeV2SidebarClientSource,
 };

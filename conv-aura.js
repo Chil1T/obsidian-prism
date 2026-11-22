@@ -1146,6 +1146,10 @@
       if (convAura && typeof convAura.refreshTheme === 'function') convAura.refreshTheme();
     }
 
+    function wake(immediate = false) {
+      if (convAura && typeof convAura.wake === 'function') convAura.wake(immediate);
+    }
+
     function getInstance() {
       return convAura;
     }
@@ -1154,6 +1158,7 @@
       prime,
       sync,
       unmount,
+      wake,
       triggerStart,
       triggerLiftoffEbb,
       advancePhase,

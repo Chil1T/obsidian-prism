@@ -4282,3 +4282,38 @@
   background: #2563eb;
   box-shadow: 0 0 8px rgba(37, 99, 235, 0.65);
 }
+.wb-inspect-box {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.1);
+}
+.wb-inspect-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  margin-top: 4px;
+}
+.wb-select {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(15, 23, 42, 0.55);
+  color: inherit;
+  font-size: 11px;
+}
+.ag-v2-workbench[data-shell-theme="light"] .wb-select {
+  border-color: rgba(15, 23, 42, 0.16);
+  background: rgba(255, 255, 255, 0.9);
+}
+.wb-inspect-sliders {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 6px;
+}
+.wb-inspect-sliders label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}

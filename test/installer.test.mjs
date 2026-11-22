@@ -124,6 +124,7 @@ function createMockCdpServer(options = {}) {
               hasOmniServerMeta: prismMounted,
               hasOmni: prismMounted,
               omniMode: 'on',
+              hasInlineDiff: prismMounted,
               codeHash: '',
               hasLegacyCss: false,
               needsDashboardSync: false,
@@ -135,6 +136,24 @@ function createMockCdpServer(options = {}) {
           result: {
             type: 'object',
             value: { ok: true, status: 'mounted' },
+          },
+        };
+      } else if (expr.includes('const targetHash =') && expr.includes('__agPrismInlineDiff')) {
+        result = {
+          result: {
+            type: 'object',
+            value: { ok: true, status: 'mounted' },
+          },
+        };
+      } else if (
+        expr.includes('delete window.__agPrismInlineDiff') &&
+        expr.includes("status: 'off'") &&
+        !expr.includes('const targetHash =')
+      ) {
+        result = {
+          result: {
+            type: 'object',
+            value: { ok: true, status: 'off' },
           },
         };
       } else if (expr.includes('const targetHash =') && expr.includes('__agPrismThoughtSettingsUi')) {
