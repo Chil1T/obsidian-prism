@@ -842,27 +842,230 @@ namespace AgyClaudeStyle
             return false;
         }
 
+        private const uint IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003u;
+        private const uint IO_REPARSE_TAG_SYMLINK = 0xA000000Cu;
+        private const uint IO_REPARSE_TAG_LX_SYMLINK = 0xA000001Du;
+        private const uint IO_REPARSE_TAG_WOF = 0x80000017u;
+        private const uint IO_REPARSE_TAG_DEDUP = 0x80000013u;
+        private const uint IO_REPARSE_TAG_ONEDRIVE = 0x80000021u;
+        private const uint IO_REPARSE_TAG_CLOUD_BASE = 0x9000001Au;
+        private const uint IO_REPARSE_TAG_CLOUD_MASK = 0xFFFF0FFFu;
+        private static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
+        private static int _atomicWriteSeq = 0;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct WIN32_FIND_DATAW
+        {
+            public uint dwFileAttributes;
+            public System.Runtime.InteropServices.ComTypes.FILETIME ftCreationTime;
+            public System.Runtime.InteropServices.ComTypes.FILETIME ftLastAccessTime;
+            public System.Runtime.InteropServices.ComTypes.FILETIME ftLastWriteTime;
+            public uint nFileSizeHigh;
+            public uint nFileSizeLow;
+            public uint dwReserved0;
+            public uint dwReserved1;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+            public string cFileName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)]
+            public string cAlternateFileName;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr FindFirstFileW(string lpFileName, out WIN32_FIND_DATAW lpFindFileData);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool FindClose(IntPtr hFindFile);
+
+        /// <summary>
+        /// 仅放行微软标准非重定向存储层/云占位重解析标签（WOF CompactOS 压缩、OneDrive Cloud Filter、NTFS Dedup）。
+        /// Symlink / Junction / 未知标签一律返回 false（Fail-Closed）。
+        /// </summary>
+        public static bool IsSafeNonRedirectReparseTag(uint tag)
+        {
+            if (tag == IO_REPARSE_TAG_WOF ||
+                tag == IO_REPARSE_TAG_DEDUP ||
+                tag == IO_REPARSE_TAG_ONEDRIVE)
+            {
+                return true;
+            }
+            if ((tag & IO_REPARSE_TAG_CLOUD_MASK) == IO_REPARSE_TAG_CLOUD_BASE)
+            {
+                return true;
+            }
+            return false;
+        }
+
+        public static string DescribeReparseTag(uint tag)
+        {
+            if (tag == IO_REPARSE_TAG_SYMLINK) return "Symlink (0xA000000C)";
+            if (tag == IO_REPARSE_TAG_MOUNT_POINT) return "Junction/MountPoint (0xA0000003)";
+            if (tag == IO_REPARSE_TAG_LX_SYMLINK) return "WSL Symlink (0xA000001D)";
+            if (tag == IO_REPARSE_TAG_WOF) return "WOF CompactOS (0x80000017)";
+            if (tag == IO_REPARSE_TAG_DEDUP) return "NTFS Dedup (0x80000013)";
+            if (tag == IO_REPARSE_TAG_ONEDRIVE || (tag & IO_REPARSE_TAG_CLOUD_MASK) == IO_REPARSE_TAG_CLOUD_BASE)
+            {
+                return string.Format("Cloud/OneDrive (0x{0:X8})", tag);
+            }
+            if (tag == 0u) return "Unknown ReparsePoint";
+            return string.Format("ReparsePoint (0x{0:X8})", tag);
+        }
+
+        public static bool TryGetReparseTag(string path, out uint reparseTag)
+        {
+            reparseTag = 0u;
+            if (string.IsNullOrEmpty(path)) return false;
+            try
+            {
+                string query = path.TrimEnd('\\', '/');
+                if (string.IsNullOrEmpty(query) || (query.Length == 2 && query[1] == ':'))
+                {
+                    return false;
+                }
+                WIN32_FIND_DATAW data;
+                IntPtr handle = FindFirstFileW(query, out data);
+                if (handle == INVALID_HANDLE_VALUE)
+                {
+                    return false;
+                }
+                try
+                {
+                    if ((data.dwFileAttributes & (uint)FileAttributes.ReparsePoint) != 0u)
+                    {
+                        reparseTag = data.dwReserved0;
+                        return true;
+                    }
+                    return false;
+                }
+                finally
+                {
+                    FindClose(handle);
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static bool IsUnsafeReparsePoint(string path)
+        {
+            uint tag;
+            return IsUnsafeReparsePoint(path, out tag);
+        }
+
+        /// <summary>
+        /// 判断路径是否为具有重定向风险的重解析点（符号链接、目录联接或未知重解析点）。
+        /// 放行纯存储层/云占位标签（WOF / OneDrive Cloud / Dedup），避免误伤开启 CompactOS 或 OneDrive 的正常环境；
+        /// 读取失败或未知标签严格 Fail-Closed 返回 true。
+        /// </summary>
+        public static bool IsUnsafeReparsePoint(string path, out uint reparseTag)
+        {
+            reparseTag = 0u;
+            if (string.IsNullOrEmpty(path)) return false;
+            try
+            {
+                if (!File.Exists(path) && !Directory.Exists(path)) return false;
+                FileAttributes attrs = File.GetAttributes(path);
+                if ((attrs & FileAttributes.ReparsePoint) == 0) return false;
+                if (TryGetReparseTag(path, out reparseTag) && IsSafeNonRedirectReparseTag(reparseTag))
+                {
+                    return false;
+                }
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static void ClearReadOnlyAndHiddenAttributes(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            try
+            {
+                if (!File.Exists(path) && !Directory.Exists(path)) return;
+                if (IsUnsafeReparsePoint(path)) return;
+                FileAttributes attrs = File.GetAttributes(path);
+                FileAttributes toStrip = FileAttributes.ReadOnly | FileAttributes.Hidden | FileAttributes.System;
+                if ((attrs & toStrip) != 0)
+                {
+                    FileAttributes next = attrs & ~toStrip;
+                    File.SetAttributes(path, next == 0 ? FileAttributes.Normal : next);
+                }
+            }
+            catch { }
+        }
+
         private static void AtomicWriteJson(string cfgPath, Dictionary<string, object> next)
         {
-            string tmpPath = cfgPath + ".tmp";
+            if (string.IsNullOrEmpty(cfgPath)) return;
+            string parentDir = Path.GetDirectoryName(cfgPath);
+            if (!string.IsNullOrEmpty(parentDir) && IsUnsafeReparsePoint(parentDir))
+            {
+                throw new InvalidOperationException("目标目录为符号链接或重解析点，已拒绝写入: " + parentDir);
+            }
+            if (IsUnsafeReparsePoint(cfgPath))
+            {
+                throw new InvalidOperationException("目标文件为符号链接或重解析点，已拒绝覆盖: " + cfgPath);
+            }
+            int seq = Interlocked.Increment(ref _atomicWriteSeq);
+            string tmpPath = cfgPath + ".tmp." + Process.GetCurrentProcess().Id + "." + seq;
             string content = MiniJson.Stringify(next, true) + "\n";
-            File.WriteAllText(tmpPath, content, new UTF8Encoding(false));
-            if (File.Exists(cfgPath))
+            int[] backoffs = new int[] { 50, 100, 200, 350 };
+            Exception lastErr = null;
+            for (int attempt = 0; attempt <= backoffs.Length; attempt++)
             {
                 try
                 {
-                    File.Replace(tmpPath, cfgPath, null);
+                    if (IsUnsafeReparsePoint(cfgPath))
+                    {
+                        throw new InvalidOperationException("目标文件为符号链接或重解析点，已拒绝覆盖: " + cfgPath);
+                    }
+                    File.WriteAllText(tmpPath, content, new UTF8Encoding(false));
+                    if (File.Exists(cfgPath))
+                    {
+                        ClearReadOnlyAndHiddenAttributes(cfgPath);
+                        try
+                        {
+                            File.Replace(tmpPath, cfgPath, null, true);
+                        }
+                        catch
+                        {
+                            ClearReadOnlyAndHiddenAttributes(cfgPath);
+                            using (FileStream fs = new FileStream(cfgPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite))
+                            {
+                                byte[] bytes = new UTF8Encoding(false).GetBytes(content);
+                                fs.Write(bytes, 0, bytes.Length);
+                            }
+                            try { if (File.Exists(tmpPath)) File.Delete(tmpPath); } catch { }
+                        }
+                    }
+                    else
+                    {
+                        File.Move(tmpPath, cfgPath);
+                    }
+                    return;
+                }
+                catch (IOException ioEx)
+                {
+                    lastErr = ioEx;
+                    try { if (File.Exists(tmpPath)) File.Delete(tmpPath); } catch { }
+                    if (attempt < backoffs.Length) Thread.Sleep(backoffs[attempt]);
+                }
+                catch (UnauthorizedAccessException uaEx)
+                {
+                    lastErr = uaEx;
+                    try { if (File.Exists(tmpPath)) File.Delete(tmpPath); } catch { }
+                    if (attempt < backoffs.Length) Thread.Sleep(backoffs[attempt]);
                 }
                 catch
                 {
-                    File.WriteAllText(cfgPath, content, new UTF8Encoding(false));
-                    try { File.Delete(tmpPath); } catch { }
+                    try { if (File.Exists(tmpPath)) File.Delete(tmpPath); } catch { }
+                    throw;
                 }
             }
-            else
-            {
-                File.Move(tmpPath, cfgPath);
-            }
+            if (lastErr != null) throw lastErr;
         }
 
         public static bool UpdateConfigBatch(string baseDir, PluginManifest manifest, Dictionary<string, object> entries)
@@ -898,16 +1101,25 @@ namespace AgyClaudeStyle
         public static string GetDefaultNativePluginDir()
         {
             string envOverride = Environment.GetEnvironmentVariable("AG_PRISM_PLUGIN_DIR");
-            if (!string.IsNullOrEmpty(envOverride))
+            if (!string.IsNullOrEmpty(envOverride) && !string.IsNullOrEmpty(envOverride.Trim()))
             {
                 return Path.GetFullPath(envOverride.Trim()).TrimEnd('\\', '/');
             }
             string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             if (string.IsNullOrEmpty(home))
             {
-                home = Environment.GetEnvironmentVariable("USERPROFILE") ?? "";
+                home = Environment.GetEnvironmentVariable("USERPROFILE");
             }
-            return Path.Combine(home, ".gemini", "config", "plugins", "obsidian-prism");
+            if (string.IsNullOrEmpty(home))
+            {
+                string hd = Environment.GetEnvironmentVariable("HOMEDRIVE");
+                string hp = Environment.GetEnvironmentVariable("HOMEPATH");
+                if (!string.IsNullOrEmpty(hd) && !string.IsNullOrEmpty(hp))
+                {
+                    home = hd + hp;
+                }
+            }
+            return Path.Combine(home ?? "", ".gemini", "config", "plugins", "obsidian-prism");
         }
 
         public static int? ReadNativeDaemonPid(string pluginDir)
@@ -1246,11 +1458,34 @@ namespace AgyClaudeStyle
 
         public static bool SyncHostPluginRegistry(string pluginDir, bool enable)
         {
+            string ignoredReason;
+            return SyncHostPluginRegistry(pluginDir, enable, out ignoredReason);
+        }
+
+        public static bool SyncHostPluginRegistry(string pluginDir, bool enable, out string reason)
+        {
+            reason = null;
             string cfgDir = ResolveHostGeminiConfigDir(pluginDir);
-            if (string.IsNullOrEmpty(cfgDir)) return false;
+            if (string.IsNullOrEmpty(cfgDir))
+            {
+                reason = "未解析到宿主 .gemini/config 目录";
+                return false;
+            }
             string cfgPath = Path.Combine(cfgDir, "config.json");
             try
             {
+                uint dirTag;
+                if (IsUnsafeReparsePoint(cfgDir, out dirTag))
+                {
+                    reason = "宿主配置目录为 " + DescribeReparseTag(dirTag) + "，已按安全策略跳过自动写入: " + cfgDir;
+                    return false;
+                }
+                uint cfgTag;
+                if (IsUnsafeReparsePoint(cfgPath, out cfgTag))
+                {
+                    reason = "宿主 config.json 为 " + DescribeReparseTag(cfgTag) + "（如 dotfiles 软链接），已保护原链接未覆盖: " + cfgPath;
+                    return false;
+                }
                 if (enable)
                 {
                     Directory.CreateDirectory(cfgDir);
@@ -1261,7 +1496,11 @@ namespace AgyClaudeStyle
                         if (raw.Length > 0)
                         {
                             Dictionary<string, object> parsed = MiniJson.ParseObject(raw);
-                            if (parsed == null) return false;
+                            if (parsed == null)
+                            {
+                                reason = "宿主 config.json JSON 格式异常，已保护原文件未覆盖";
+                                return false;
+                            }
                             rootObj = parsed;
                         }
                     }
@@ -1326,15 +1565,79 @@ namespace AgyClaudeStyle
                     }
                 }
                 string cacheFile = Path.Combine(cfgDir, "obsidian-prism-thought-cache.json");
-                if (File.Exists(cacheFile))
+                if (File.Exists(cacheFile) && !IsUnsafeReparsePoint(cacheFile))
                 {
-                    try { File.Delete(cacheFile); } catch { }
+                    try
+                    {
+                        ClearReadOnlyAndHiddenAttributes(cacheFile);
+                        File.Delete(cacheFile);
+                    }
+                    catch { }
                 }
                 return true;
             }
+            catch (Exception ex)
+            {
+                reason = ex.GetType().Name + ": " + ex.Message;
+                return false;
+            }
+        }
+
+        private static bool IsAntigravityRegistryDisplayName(string disp)
+        {
+            if (string.IsNullOrEmpty(disp)) return false;
+            if (disp.IndexOf("IDE", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            if (disp.IndexOf("Tools", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            return disp.StartsWith("Antigravity", StringComparison.OrdinalIgnoreCase) ||
+                   disp.StartsWith("Google Antigravity", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string TryProbeAntigravityDirCandidate(string dir)
+        {
+            if (string.IsNullOrEmpty(dir)) return null;
+            string cleaned = dir.Trim().Trim('"');
+            if (string.IsNullOrEmpty(cleaned)) return null;
+            try
+            {
+                string cand = Path.Combine(cleaned, "Antigravity.exe");
+                return File.Exists(cand) ? cand : null;
+            }
             catch
             {
-                return false;
+                return null;
+            }
+        }
+
+        private static string TryProbeAntigravityFromCommand(string cmd)
+        {
+            if (string.IsNullOrEmpty(cmd)) return null;
+            string s = cmd.Trim();
+            string pathPart = null;
+            if (s.StartsWith("\"", StringComparison.Ordinal))
+            {
+                int end = s.IndexOf('"', 1);
+                if (end > 1) pathPart = s.Substring(1, end - 1);
+            }
+            else
+            {
+                int exeIdx = s.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+                if (exeIdx > 0) pathPart = s.Substring(0, exeIdx + 4);
+            }
+            if (string.IsNullOrEmpty(pathPart)) return null;
+            int comma = pathPart.IndexOf(',');
+            if (comma > 0) pathPart = pathPart.Substring(0, comma);
+            try
+            {
+                if (string.Equals(Path.GetFileName(pathPart), "Antigravity.exe", StringComparison.OrdinalIgnoreCase) &&
+                    File.Exists(pathPart))
+                {
+                    return pathPart;
+                }
+                return TryProbeAntigravityDirCandidate(Path.GetDirectoryName(pathPart));
+            }
+            catch
+            {
+                return null;
             }
         }
 
@@ -1344,6 +1647,7 @@ namespace AgyClaudeStyle
             if (!string.IsNullOrEmpty(envExe) && File.Exists(envExe.Trim())) return envExe.Trim();
             if (!string.IsNullOrEmpty(preferredExe) && File.Exists(preferredExe)) return preferredExe;
 
+            string runningExe = null;
             try
             {
                 Process[] procs = Process.GetProcessesByName("Antigravity");
@@ -1351,8 +1655,11 @@ namespace AgyClaudeStyle
                 {
                     try
                     {
-                        string p = procs[i].MainModule.FileName;
-                        if (!string.IsNullOrEmpty(p) && File.Exists(p)) return p;
+                        if (runningExe == null)
+                        {
+                            string p = procs[i].MainModule.FileName;
+                            if (!string.IsNullOrEmpty(p) && File.Exists(p)) runningExe = p;
+                        }
                     }
                     catch { }
                     finally
@@ -1362,15 +1669,27 @@ namespace AgyClaudeStyle
                 }
             }
             catch { }
+            if (!string.IsNullOrEmpty(runningExe)) return runningExe;
 
-            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+            if (string.IsNullOrEmpty(localAppData))
+            {
+                localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            }
+            string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrEmpty(userProfile))
+            {
+                userProfile = Environment.GetEnvironmentVariable("USERPROFILE");
+            }
             string progFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
             string progFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
             string[] candidates = new string[]
             {
                 !string.IsNullOrEmpty(localAppData) ? Path.Combine(localAppData, "Programs", "antigravity", "Antigravity.exe") : null,
+                !string.IsNullOrEmpty(localAppData) ? Path.Combine(localAppData, "Antigravity", "Antigravity.exe") : null,
                 !string.IsNullOrEmpty(progFiles) ? Path.Combine(progFiles, "Antigravity", "Antigravity.exe") : null,
-                !string.IsNullOrEmpty(progFilesX86) ? Path.Combine(progFilesX86, "Antigravity", "Antigravity.exe") : null
+                !string.IsNullOrEmpty(progFilesX86) ? Path.Combine(progFilesX86, "Antigravity", "Antigravity.exe") : null,
+                !string.IsNullOrEmpty(userProfile) ? Path.Combine(userProfile, "scoop", "apps", "antigravity", "current", "Antigravity.exe") : null
             };
             for (int i = 0; i < candidates.Length; i++)
             {
@@ -1389,31 +1708,100 @@ namespace AgyClaudeStyle
                 {
                     for (int sp = 0; sp < subPaths.Length; sp++)
                     {
-                        using (RegistryKey parent = roots[r].OpenSubKey(subPaths[sp]))
+                        try
                         {
-                            if (parent == null) continue;
-                            string[] names = parent.GetSubKeyNames();
-                            for (int i = 0; i < names.Length; i++)
+                            using (RegistryKey parent = roots[r].OpenSubKey(subPaths[sp]))
                             {
-                                using (RegistryKey item = parent.OpenSubKey(names[i]))
+                                if (parent == null) continue;
+                                string[] names = parent.GetSubKeyNames();
+                                for (int i = 0; i < names.Length; i++)
                                 {
-                                    if (item == null) continue;
-                                    string disp = item.GetValue("DisplayName") as string;
-                                    if (string.IsNullOrEmpty(disp) || !disp.StartsWith("Antigravity", StringComparison.OrdinalIgnoreCase)) continue;
-                                    if (disp.IndexOf("IDE", StringComparison.OrdinalIgnoreCase) >= 0) continue;
-                                    string loc = item.GetValue("InstallLocation") as string;
-                                    if (!string.IsNullOrEmpty(loc))
+                                    try
                                     {
-                                        string cand = Path.Combine(loc.Trim().Trim('"'), "Antigravity.exe");
-                                        if (File.Exists(cand)) return cand;
+                                        using (RegistryKey item = parent.OpenSubKey(names[i]))
+                                        {
+                                            if (item == null) continue;
+                                            string disp = item.GetValue("DisplayName") as string;
+                                            if (!IsAntigravityRegistryDisplayName(disp)) continue;
+
+                                            string exe = TryProbeAntigravityDirCandidate(item.GetValue("InstallLocation") as string);
+                                            if (exe != null) return exe;
+
+                                            exe = TryProbeAntigravityFromCommand(item.GetValue("UninstallString") as string);
+                                            if (exe != null) return exe;
+
+                                            exe = TryProbeAntigravityFromCommand(item.GetValue("DisplayIcon") as string);
+                                            if (exe != null) return exe;
+                                        }
                                     }
+                                    catch { }
                                 }
                             }
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch { }
+
+            if (!IsTestSandboxEnvironment(null))
+            {
+                string fromShortcut = TryFindAntigravityExeFromShortcuts();
+                if (!string.IsNullOrEmpty(fromShortcut)) return fromShortcut;
+            }
+            return null;
+        }
+
+        private static string TryFindAntigravityExeFromShortcuts()
+        {
+            object shell = null;
+            try
+            {
+                List<string> dirs = GetShortcutCandidateDirs(null, null);
+                if (dirs.Count == 0) return null;
+                List<string> lnks = new List<string>();
+                for (int i = 0; i < dirs.Count; i++)
+                {
+                    CollectLnkFilesBounded(dirs[i], 0, lnks);
+                }
+                if (lnks.Count == 0) return null;
+                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType == null) return null;
+                shell = Activator.CreateInstance(shellType);
+                for (int i = 0; i < lnks.Count; i++)
+                {
+                    object lnk = null;
+                    try
+                    {
+                        lnk = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnks[i] });
+                        if (lnk == null) continue;
+                        string target = (lnk.GetType().InvokeMember("TargetPath", BindingFlags.GetProperty, null, lnk, null) as string) ?? "";
+                        string trimmed = target.Trim().Trim('"');
+                        if (!string.IsNullOrEmpty(trimmed) &&
+                            string.Equals(Path.GetFileName(trimmed), "Antigravity.exe", StringComparison.OrdinalIgnoreCase) &&
+                            File.Exists(trimmed))
+                        {
+                            return trimmed;
+                        }
+                    }
+                    catch { }
+                    finally
+                    {
+                        if (lnk != null && Marshal.IsComObject(lnk))
+                        {
+                            try { Marshal.FinalReleaseComObject(lnk); } catch { }
                         }
                     }
                 }
             }
             catch { }
+            finally
+            {
+                if (shell != null && Marshal.IsComObject(shell))
+                {
+                    try { Marshal.FinalReleaseComObject(shell); } catch { }
+                }
+            }
             return null;
         }
 
@@ -1693,6 +2081,13 @@ namespace AgyClaudeStyle
             }
 
             string userDesktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrEmpty(userProfile))
+            {
+                userProfile = Environment.GetEnvironmentVariable("USERPROFILE");
+            }
+            string profileDesktop = !string.IsNullOrEmpty(userProfile) ? Path.Combine(userProfile, "Desktop") : null;
+            string userStartMenu = Environment.GetFolderPath(Environment.SpecialFolder.StartMenu);
             string userPrograms = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
             string quickLaunch = !string.IsNullOrEmpty(appData)
@@ -1701,16 +2096,44 @@ namespace AgyClaudeStyle
             string taskbarPinned = !string.IsNullOrEmpty(appData)
                 ? Path.Combine(appData, @"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar")
                 : null;
+            string startMenuPinned = !string.IsNullOrEmpty(appData)
+                ? Path.Combine(appData, @"Microsoft\Internet Explorer\Quick Launch\User Pinned\StartMenu")
+                : null;
+            string implicitPinned = !string.IsNullOrEmpty(appData)
+                ? Path.Combine(appData, @"Microsoft\Internet Explorer\Quick Launch\User Pinned\ImplicitAppShortcuts")
+                : null;
             string commonDesktop = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
+            string commonStartMenu = Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu);
             string commonPrograms = Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms);
 
-            string[] raw = new string[] { userDesktop, userPrograms, quickLaunch, taskbarPinned, commonDesktop, commonPrograms };
+            string[] raw = new string[]
+            {
+                userDesktop,
+                profileDesktop,
+                userStartMenu,
+                userPrograms,
+                quickLaunch,
+                taskbarPinned,
+                startMenuPinned,
+                implicitPinned,
+                commonDesktop,
+                commonStartMenu,
+                commonPrograms
+            };
+            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < raw.Length; i++)
             {
-                if (!string.IsNullOrEmpty(raw[i]) && Directory.Exists(raw[i]) && !dirs.Contains(raw[i]))
+                if (string.IsNullOrEmpty(raw[i])) continue;
+                try
                 {
-                    dirs.Add(raw[i]);
+                    if (!Directory.Exists(raw[i])) continue;
+                    string norm = Path.GetFullPath(raw[i]).TrimEnd('\\', '/');
+                    if (seen.Add(norm))
+                    {
+                        dirs.Add(raw[i]);
+                    }
                 }
+                catch { }
             }
             return dirs;
         }
@@ -1733,6 +2156,7 @@ namespace AgyClaudeStyle
                 string[] subs = Directory.GetDirectories(dir);
                 for (int i = 0; i < subs.Length; i++)
                 {
+                    if (IsUnsafeReparsePoint(subs[i])) continue;
                     CollectLnkFilesBounded(subs[i], depth + 1, outFiles);
                 }
             }
@@ -1794,6 +2218,23 @@ namespace AgyClaudeStyle
             Action<string> log = null
         )
         {
+            int skippedCount;
+            int alreadySetCount;
+            return EnsureAntigravityShortcutsOptIn(installDir, defaultInstallDir, stateDir, out skippedCount, out alreadySetCount, null, log);
+        }
+
+        public static int EnsureAntigravityShortcutsOptIn(
+            string installDir,
+            string defaultInstallDir,
+            string stateDir,
+            out int skippedCount,
+            out int alreadySetCount,
+            List<string> skippedPaths = null,
+            Action<string> log = null
+        )
+        {
+            skippedCount = 0;
+            alreadySetCount = 0;
             List<string> rootDirs = GetShortcutCandidateDirs(installDir, defaultInstallDir);
             if (rootDirs.Count == 0) return 0;
 
@@ -1817,17 +2258,24 @@ namespace AgyClaudeStyle
             if (lnkFiles.Count == 0) return 0;
 
             List<string> recorded = ReadPatchedShortcutsRecord(stateDir);
+            List<string> localSkipped = skippedPaths ?? new List<string>();
             int patchedCount = 0;
             object shell = null;
             try
             {
                 Type shellType = Type.GetTypeFromProgID("WScript.Shell");
-                if (shellType == null) return 0;
+                if (shellType == null)
+                {
+                    if (log != null) log("[!] 系统未注册 WScript.Shell COM 组件，已跳过快捷方式参数修补（不影响核心插件部署）");
+                    return 0;
+                }
                 shell = Activator.CreateInstance(shellType);
                 for (int i = 0; i < lnkFiles.Count; i++)
                 {
                     string lnkPath = lnkFiles[i];
+                    if (IsUnsafeReparsePoint(lnkPath)) continue;
                     object lnk = null;
+                    bool matchedAntigravity = false;
                     try
                     {
                         lnk = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnkPath });
@@ -1839,20 +2287,32 @@ namespace AgyClaudeStyle
                         {
                             continue;
                         }
+                        matchedAntigravity = true;
                         string origArgs = (lnkType.InvokeMember("Arguments", BindingFlags.GetProperty, null, lnk, null) as string) ?? "";
                         if (origArgs.IndexOf("--remote-debugging-port", StringComparison.OrdinalIgnoreCase) >= 0)
                         {
+                            alreadySetCount++;
                             continue;
                         }
                         string nextArgs = string.IsNullOrEmpty(origArgs.Trim())
                             ? CdpOptInFlag
                             : (origArgs.TrimEnd() + " " + CdpOptInFlag);
+                        // 仅对非符号链接的普通 .lnk 文件尝试清理只读属性后再保存；若位于系统受保护目录无权限则记录告警继续
+                        ClearReadOnlyAndHiddenAttributes(lnkPath);
                         lnkType.InvokeMember("Arguments", BindingFlags.SetProperty, null, lnk, new object[] { nextArgs });
                         lnkType.InvokeMember("Save", BindingFlags.InvokeMethod, null, lnk, null);
                         recorded.Add(lnkPath);
                         patchedCount++;
                     }
-                    catch { }
+                    catch
+                    {
+                        if (matchedAntigravity ||
+                            string.Equals(Path.GetFileName(lnkPath), "Antigravity.lnk", StringComparison.OrdinalIgnoreCase))
+                        {
+                            skippedCount++;
+                            localSkipped.Add(lnkPath);
+                        }
+                    }
                     finally
                     {
                         if (lnk != null && Marshal.IsComObject(lnk))
@@ -1862,7 +2322,10 @@ namespace AgyClaudeStyle
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                if (log != null) log("[!] 快捷方式扫描异常（非致命，已跳过）: " + ex.Message);
+            }
             finally
             {
                 if (shell != null && Marshal.IsComObject(shell))
@@ -1878,6 +2341,10 @@ namespace AgyClaudeStyle
                 {
                     log("已自动维护 " + patchedCount + " 个 Antigravity 快捷方式开启 --remote-debugging-port=0");
                 }
+            }
+            if (skippedCount > 0 && log != null)
+            {
+                log("[!] 已跳过 " + skippedCount + " 个受保护或只读的系统级 Antigravity 快捷方式（不影响安装，需提权或手动追加参数）: " + localSkipped[0]);
             }
             return patchedCount;
         }
@@ -1954,6 +2421,7 @@ namespace AgyClaudeStyle
                                     continue;
                                 }
                                 string restoredArgs = StripOptInFlagFromArguments(origArgs);
+                                ClearReadOnlyAndHiddenAttributes(lnkPath);
                                 lnkType.InvokeMember("Arguments", BindingFlags.SetProperty, null, lnk, new object[] { restoredArgs });
                                 lnkType.InvokeMember("Save", BindingFlags.InvokeMethod, null, lnk, null);
                                 restoredCount++;
@@ -2088,7 +2556,8 @@ namespace AgyClaudeStyle
                             continue;
                         }
                         if (cmd.IndexOf("--type=", StringComparison.OrdinalIgnoreCase) >= 0) continue;
-                        if (cmd.IndexOf("sidecar_sdk", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        if (cmd.IndexOf("--import=", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            cmd.IndexOf("sidecar_sdk", StringComparison.OrdinalIgnoreCase) >= 0 ||
                             cmd.IndexOf("main.mjs", StringComparison.OrdinalIgnoreCase) >= 0 ||
                             cmd.IndexOf("watch.js", StringComparison.OrdinalIgnoreCase) >= 0)
                         {
@@ -2512,14 +2981,13 @@ namespace AgyClaudeStyle
                 string fullPath = Path.GetFullPath(Path.Combine(rootFull, normalizedRel));
                 if (!fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase)) return null;
                 if (!File.Exists(fullPath)) return null;
-                FileAttributes fileAttrs = File.GetAttributes(fullPath);
-                if ((fileAttrs & FileAttributes.ReparsePoint) != 0) return null;
+                if (IsUnsafeReparsePoint(fullPath)) return null;
                 string curDir = Path.GetDirectoryName(fullPath);
                 while (!string.IsNullOrEmpty(curDir) &&
                        curDir.Length > rootFull.Length &&
                        curDir.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
                 {
-                    if ((File.GetAttributes(curDir) & FileAttributes.ReparsePoint) != 0) return null;
+                    if (IsUnsafeReparsePoint(curDir)) return null;
                     string parent = Path.GetDirectoryName(curDir);
                     if (string.Equals(parent, curDir, StringComparison.OrdinalIgnoreCase)) break;
                     curDir = parent;

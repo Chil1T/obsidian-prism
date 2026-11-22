@@ -375,8 +375,25 @@ namespace AgyClaudeStyle.Watcher
                 }
 
                 int selfPid = Process.GetCurrentProcess().Id;
-                File.WriteAllText(_pidFile, selfPid.ToString(), new UTF8Encoding(false));
-                try { File.WriteAllText(_logFile, "", new UTF8Encoding(false)); } catch { }
+                for (int pidTry = 0; pidTry < 4; pidTry++)
+                {
+                    try
+                    {
+                        CdpHelper.ClearReadOnlyAndHiddenAttributes(_pidFile);
+                        File.WriteAllText(_pidFile, selfPid.ToString(), new UTF8Encoding(false));
+                        break;
+                    }
+                    catch
+                    {
+                        if (pidTry < 3) Thread.Sleep(80 * (pidTry + 1));
+                    }
+                }
+                try
+                {
+                    CdpHelper.ClearReadOnlyAndHiddenAttributes(_logFile);
+                    File.WriteAllText(_logFile, "", new UTF8Encoding(false));
+                }
+                catch { }
 
                 PluginManifest manifest = PluginManifest.Load(_baseDir);
                 Log(string.Format("[*] Obsidian Prism (obsidian-prism) 守护模式启动 (PID {0})，每 2 秒检查一次窗口", selfPid));
@@ -1065,8 +1082,12 @@ namespace AgyClaudeStyle.Watcher
                                 {
                                     string pCfg = Path.Combine(_pluginDir, "config.json");
                                     string bCfg = Path.Combine(_baseDir, "config.json");
-                                    if (File.Exists(pCfg) && (!File.Exists(bCfg) || File.GetLastWriteTimeUtc(pCfg) > File.GetLastWriteTimeUtc(bCfg)))
+                                    if (File.Exists(pCfg) &&
+                                        !CdpHelper.IsUnsafeReparsePoint(pCfg) &&
+                                        !CdpHelper.IsUnsafeReparsePoint(bCfg) &&
+                                        (!File.Exists(bCfg) || File.GetLastWriteTimeUtc(pCfg) > File.GetLastWriteTimeUtc(bCfg)))
                                     {
+                                        CdpHelper.ClearReadOnlyAndHiddenAttributes(bCfg);
                                         File.Copy(pCfg, bCfg, true);
                                     }
                                 }

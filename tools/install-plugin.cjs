@@ -237,6 +237,34 @@ function assertNotSymbolicLink(targetPath, label = "path") {
   }
 }
 
+const FS_RETRY_BACKOFFS_MS = [40, 80, 150, 250, 400];
+
+function sleepSync(ms) {
+  const duration = Math.max(1, Number(ms) || 1);
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, duration);
+  } catch {
+    const end = Date.now() + duration;
+    while (Date.now() < end) {
+      // Fallback busy-wait only when SharedArrayBuffer is unavailable
+    }
+  }
+}
+
+function isTransientFsError(err) {
+  if (!err || !err.code) return false;
+  return err.code === "EBUSY" || err.code === "EPERM" || err.code === "EACCES";
+}
+
+function clearReadOnlyIfRegularFile(filePath, label = "target file") {
+  const st = assertNotSymbolicLink(filePath, label);
+  if (st && st.isFile()) {
+    try {
+      fs.chmodSync(filePath, 0o666);
+    } catch {}
+  }
+}
+
 function atomicWriteFileSync(filePath, content, options = {}) {
   assertNotSymbolicLink(filePath, "target file");
   const dir = path.dirname(filePath);
@@ -262,9 +290,25 @@ function atomicWriteFileSync(filePath, content, options = {}) {
     try {
       fs.chmodSync(tmpPath, mode);
     } catch {}
-    assertNotSymbolicLink(dir, "target directory");
-    assertNotSymbolicLink(filePath, "target file");
-    fs.renameSync(tmpPath, filePath);
+
+    let lastErr = null;
+    for (let attempt = 0; attempt <= FS_RETRY_BACKOFFS_MS.length; attempt++) {
+      assertNotSymbolicLink(dir, "target directory");
+      assertNotSymbolicLink(filePath, "target file");
+      clearReadOnlyIfRegularFile(filePath, "target file");
+      try {
+        fs.renameSync(tmpPath, filePath);
+        lastErr = null;
+        break;
+      } catch (err) {
+        if (!isTransientFsError(err) || attempt >= FS_RETRY_BACKOFFS_MS.length) {
+          throw err;
+        }
+        lastErr = err;
+        sleepSync(FS_RETRY_BACKOFFS_MS[attempt]);
+      }
+    }
+    if (lastErr) throw lastErr;
   } catch (err) {
     if (fd !== null) {
       try {
@@ -288,7 +332,45 @@ function safeCopyFileNoSymlink(src, dst) {
   assertNotSymbolicLink(dstDir, "destination directory");
   fs.mkdirSync(dstDir, { recursive: true });
   assertNotSymbolicLink(dstDir, "destination directory");
-  fs.copyFileSync(src, dst);
+
+  let lastErr = null;
+  for (let attempt = 0; attempt <= FS_RETRY_BACKOFFS_MS.length; attempt++) {
+    assertNotSymbolicLink(dst, "destination");
+    clearReadOnlyIfRegularFile(dst, "destination");
+    try {
+      fs.copyFileSync(src, dst);
+      return;
+    } catch (err) {
+      if (!isTransientFsError(err)) {
+        throw err;
+      }
+      // 遇 Windows 共享读取占用时回退临时文件原子重命名替换
+      const tmpPath = `${dst}.tmp.${process.pid}.${crypto.randomBytes(6).toString("hex")}`;
+      try {
+        fs.copyFileSync(src, tmpPath);
+        assertNotSymbolicLink(dst, "destination");
+        clearReadOnlyIfRegularFile(dst, "destination");
+        fs.renameSync(tmpPath, dst);
+        return;
+      } catch (fallbackErr) {
+        try {
+          fs.unlinkSync(tmpPath);
+        } catch {}
+        lastErr = fallbackErr || err;
+        if (attempt < FS_RETRY_BACKOFFS_MS.length) {
+          sleepSync(FS_RETRY_BACKOFFS_MS[attempt]);
+        }
+      }
+    }
+  }
+  if (lastErr) {
+    const wrapped = new Error(
+      `Failed to copy "${dst}" (${lastErr.code || lastErr.message}); file may be locked by Antigravity or antivirus software`
+    );
+    wrapped.code = lastErr.code;
+    wrapped.cause = lastErr;
+    throw wrapped;
+  }
 }
 
 function syncHostPluginRegistry(configDir, enable) {
@@ -486,6 +568,7 @@ async function stopExistingDaemonInDir(targetDir, opts = {}) {
     }
   } catch {}
   try {
+    clearReadOnlyIfRegularFile(pidFile, ".daemon.pid");
     fs.unlinkSync(pidFile);
   } catch {}
   return killedPid;
@@ -665,7 +748,7 @@ async function installPlugin(opts = {}) {
   }
 
   // Ensure ~/.gemini/config/config.json (including 0-byte empty file) registers `obsidian-prism` cleanly
-  syncHostPluginRegistry(hostConfigDir, true);
+  const registrySynced = syncHostPluginRegistry(hostConfigDir, true);
 
   const isDefaultTarget = path.resolve(targetDir).toLowerCase() === path.resolve(getDefaultPluginTargetDir()).toLowerCase();
   const hasExplicitShortcutScope = Boolean(opts.shortcutSearchDirs || opts.shortcutAdapter);
@@ -809,6 +892,7 @@ async function installPlugin(opts = {}) {
     missingOptional,
     preservedConfig,
     restoredFromBackup,
+    registrySynced,
     shortcuts,
     deferredRelaunchHost,
     sidebarStudio,
@@ -1078,6 +1162,7 @@ function formatInstallSelfCheckSummary(res) {
   const daemonAlive = Boolean(res?.daemon?.pidVerified || res?.daemon?.started);
   const patchedCount = Array.isArray(res?.shortcuts?.patched) ? res.shortcuts.patched.length : 0;
   const alreadySetCount = Array.isArray(res?.shortcuts?.alreadySet) ? res.shortcuts.alreadySet.length : 0;
+  const skippedCount = Array.isArray(res?.shortcuts?.skipped) ? res.shortcuts.skipped.length : 0;
   const attachedCount = Array.isArray(res?.live?.attachedPages) ? res.live.attachedPages.length : 0;
   const thoughtMode = sc.thoughtTranslateMode || "off";
   const lines = [
@@ -1085,7 +1170,13 @@ function formatInstallSelfCheckSummary(res) {
     "================ Obsidian Prism 安装自检摘要 / Self-Check Summary ================",
     `[中文] 插件目录: ${res?.targetDir || getDefaultPluginTargetDir()}`,
     `[中文] 后台守护: ${daemonAlive ? "运行中 (PID " + (res?.daemon?.pid || "?") + ")" : "未启动"} | 已连接窗口: ${attachedCount} | 思考翻译模块: ${sc.hasThoughtTranslator ? "已就绪" : "缺失"} | 壁纸通道(Ch7): ${sc.hasWallpaperChannel ? "已就绪" : "缺失"} | 独立Watcher: ${sc.watcherInstalled ? "已安装" : "未安装(源码模式)"}`,
-    `[中文] 快捷方式 --remote-debugging-port=0: 本次新补齐 ${patchedCount} 个，已就绪 ${alreadySetCount} 个。`,
+    `[中文] 快捷方式 --remote-debugging-port=0: 本次新补齐 ${patchedCount} 个，已就绪 ${alreadySetCount} 个${skippedCount > 0 ? `，权限不足跳过 ${skippedCount} 个（系统目录需管理员权限）` : ""}。`,
+    ...(res?.registrySynced === false
+      ? ["[中文] 提示: 未能自动写入 ~/.gemini/config/config.json（目标可能为符号链接或只读），请确认 plugins[\"obsidian-prism\"].enabled 为 true。"]
+      : []),
+    ...(res?.shortcuts?.error
+      ? [`[中文] 快捷方式维护提示（非致命）: ${res.shortcuts.error}`]
+      : []),
     thoughtMode === "off"
       ? "[中文] 提示: 思考过程翻译默认处于关闭态 (off, 0 B 注入)，请打开 Antigravity「设置 -> 外观 -> Obsidian Prism」手动开启「机器翻译」或「AI 流式转译」。"
       : `[中文] 思考过程翻译当前模式: ${thoughtMode}（如翻译异常，可在设置卡片点击「一键诊断」排查）。`,
