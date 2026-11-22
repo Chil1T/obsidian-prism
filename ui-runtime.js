@@ -1719,6 +1719,7 @@
     return false;
   };
 
+  const iconSigMap = new WeakMap();
   function syncHostAnimatedIcons(roots = null) {
     if (!animatedIcons || typeof animatedIcons.renderIcon !== 'function' || !isMotionStandardOrUltra()) {
       restoreAllHostAnimatedIcons();
@@ -1749,16 +1750,23 @@
     const pendingIcons = [];
     for (const btn of buttons) {
       if (isThoughtIsolatedNode(btn)) continue;
-      const existingIcon = ga(btn, 'data-ag-cs-icon-injected');
+      const ex = ga(btn, 'data-ag-cs-icon-injected');
+      const origSvg = findOriginalHostSvg(btn);
+      if (!ex && !origSvg) continue;
+      const rawSvgCls = origSvg ? (ga(origSvg, 'class') || (typeof origSvg.className === 'string' ? origSvg.className : origSvg.className?.baseVal) || '') : '-';
+      const bSig = `${tidOf(btn)}|${ga(btn, 'aria-label') || ''}|${ga(btn, 'title') || ''}|${ga(btn, 'data-tooltip-id') || ''}|${ga(btn, 'role') || ''}|${ha(btn, 'data-ag-cs-filter-btn') ? 1 : 0}|${rawSvgCls}`;
+      const eqSig = '=' + bSig;
+      const hit = iconSigMap.get(btn);
+      if (hit === (ex ? eqSig : bSig) && (!ex || qs(btn, '.ag-anim-icon'))) continue;
       const iconName = detectHostIconTarget(btn);
-      if (existingIcon) {
-        if (existingIcon !== iconName) restoreHostButtonIcon(btn);
-        else if (qs(btn, '.ag-anim-icon')) continue;
+      if (ex) {
+        if (ex !== iconName) restoreHostButtonIcon(btn);
+        else if (qs(btn, '.ag-anim-icon')) { iconSigMap.set(btn, eqSig); continue; }
         else ra(btn, 'data-ag-cs-icon-injected');
       }
-      if (!iconName) continue;
-      const origSvg = findOriginalHostSvg(btn);
+      if (!iconName) { iconSigMap.set(btn, bSig); continue; }
       if (!origSvg || !origSvg.parentNode) continue;
+      iconSigMap.set(btn, eqSig);
 
       const rawSize = parseInt(ga(origSvg, 'width') || '15', 10);
       const size = Number.isFinite(rawSize) && rawSize >= 12 && rawSize <= 20 ? rawSize : 15;

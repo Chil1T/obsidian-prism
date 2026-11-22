@@ -472,13 +472,15 @@ test(
       assert.equal(st.nativePluginInstalled, false);
       assert.equal(st.cdpPort, port);
 
-      // Prepare 0-byte empty host config.json, user secret file, and ephemeral cache file in sandbox config root
+      // Prepare 0-byte empty host config.json, user secret file, ephemeral cache file, and usage rollup cache in sandbox config root
       const sandboxHostCfgPath = path.join(workDir, 'config.json');
       const sandboxSecretPath = path.join(workDir, 'obsidian-prism-thought.json');
       const sandboxCachePath = path.join(workDir, 'obsidian-prism-thought-cache.json');
+      const sandboxUsageCachePath = path.join(workDir, 'obsidian-prism-usage-rollup-cache.json');
       fs.writeFileSync(sandboxHostCfgPath, '', 'utf8');
       fs.writeFileSync(sandboxSecretPath, JSON.stringify({ engine: 'gemini', apiKey: 'test-user-secret' }), 'utf8');
       fs.writeFileSync(sandboxCachePath, JSON.stringify({ entries: { a: '1' } }), 'utf8');
+      fs.writeFileSync(sandboxUsageCachePath, JSON.stringify({ version: 2, scopes: { local: {} } }), 'utf8');
 
       // 2. Run --silent install (--no-native-daemon to specifically exercise C# Watcher standalone fallback)
       await runExe(
@@ -719,6 +721,7 @@ test(
       assert.equal(hostRegistryAfterUninstall.plugins?.['obsidian-prism'], undefined);
       assert.equal(fs.existsSync(sandboxCachePath), false, 'ephemeral thought cache must be removed on uninstall');
       assert.equal(fs.existsSync(sandboxSecretPath), true, 'user secret file obsidian-prism-thought.json must be preserved');
+      assert.equal(fs.existsSync(sandboxUsageCachePath), true, 'usage rollup cache must be preserved on default uninstall (without --purge-data)');
 
       await waitFor(() => (!fs.existsSync(installDir) ? true : null), 20000, 150);
       assert.equal(fs.existsSync(installDir), false);
@@ -1132,6 +1135,47 @@ test('interactive GUI installers require explicit user confirmation before insta
   assert.match(macSrc, /closeBtn\s*=\s*NSButton\(title:\s*"取消"/);
 });
 
+test('Windows InstallerForm configures 96-DPI AutoScaleDimensions with AutoScaleMode.Dpi and safe button margins (#28)', () => {
+  const winSrc = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'setup', 'Program.cs'), 'utf8');
+  const ctorMatch = winSrc.match(/public\s+InstallerForm\s*\(InstallerOptions\s+opts\)[\s\S]*?\n\s{8}\}/);
+  assert.ok(ctorMatch, 'InstallerForm constructor must exist');
+  const ctor = ctorMatch[0];
+  const suspendIdx = ctor.indexOf('SuspendLayout();');
+  const dimsIdx = ctor.indexOf('AutoScaleDimensions = new SizeF(96F, 96F);');
+  const modeIdx = ctor.indexOf('AutoScaleMode = AutoScaleMode.Dpi;');
+  const resumeIdx = ctor.indexOf('ResumeLayout(false);');
+  const performIdx = ctor.indexOf('PerformLayout();');
+  assert.ok(suspendIdx >= 0, 'InstallerForm must call SuspendLayout() before adding controls');
+  assert.equal(ctor.includes('AutoScaleMode = AutoScaleMode.Font;'), false, 'InstallerForm must not pre-set AutoScaleMode.Font');
+  assert.ok(dimsIdx > suspendIdx, 'InstallerForm must set AutoScaleDimensions to 96 DPI base');
+  assert.ok(modeIdx > dimsIdx, 'InstallerForm must set AutoScaleMode.Dpi after AutoScaleDimensions');
+  assert.ok(resumeIdx > modeIdx, 'InstallerForm must call ResumeLayout(false) after setting AutoScaleMode');
+  assert.ok(performIdx > resumeIdx, 'InstallerForm must call PerformLayout() after ResumeLayout(false)');
+  assert.ok(ctor.includes('_metaLabel.AutoEllipsis = true;'), '_metaLabel must enable AutoEllipsis to avoid long-path clipping');
+
+  // Verify 96-DPI button geometry leaves generous horizontal padding for 6-7 CJK char labels and stays non-overlapping within ClientSize(588, 464)
+  const readRect = (field) => {
+    const loc = ctor.match(new RegExp(`${field}\\.Location\\s*=\\s*new\\s+Point\\((\\d+),\\s*(\\d+)\\);`));
+    const sz = ctor.match(new RegExp(`${field}\\.Size\\s*=\\s*new\\s+Size\\((\\d+),\\s*(\\d+)\\);`));
+    assert.ok(loc && sz, `Missing Location/Size for ${field}`);
+    return { x: Number(loc[1]), y: Number(loc[2]), w: Number(sz[1]), h: Number(sz[2]) };
+  };
+  const uninstallR = readRect('_uninstallBtn');
+  const openDirR = readRect('_openDirBtn');
+  const installR = readRect('_installBtn');
+  const launchR = readRect('_launchAgBtn');
+  const closeR = readRect('_closeBtn');
+  assert.ok(uninstallR.w >= 134, `Expected _uninstallBtn width >= 134 at 96 DPI, got ${uninstallR.w}`);
+  assert.ok(openDirR.w >= 120, `Expected _openDirBtn width >= 120 at 96 DPI for 6 CJK chars, got ${openDirR.w}`);
+  assert.ok(installR.w >= 136, `Expected _installBtn width >= 136 at 96 DPI for bold labels, got ${installR.w}`);
+  assert.equal(launchR.x, installR.x);
+  assert.equal(launchR.w, installR.w);
+  assert.ok(uninstallR.x + uninstallR.w + 8 <= openDirR.x, '_uninstallBtn and _openDirBtn must keep >= 8px gap');
+  assert.ok(openDirR.x + openDirR.w + 16 <= installR.x, '_openDirBtn and _installBtn must keep clean group separation');
+  assert.ok(installR.x + installR.w + 8 <= closeR.x, '_installBtn and _closeBtn must keep >= 8px gap');
+  assert.ok(closeR.x + closeR.w <= 568, `Rightmost button must stay within 20px right margin of 588px ClientSize, got ${closeR.x + closeR.w}`);
+});
+
 test('Windows C# installer & Watcher Channel 5 contracts and cdp.js REMOVE_EXPRESSION data-ces-model-selected cleanup', () => {
   const cdpCs = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs'), 'utf8');
   const watcherCs = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'watcher', 'Program.cs'), 'utf8');
@@ -1329,3 +1373,205 @@ test('Windows C# CdpClient ReconcileConfigAliases (#5) & BuildConfigRefreshExpre
     }
   }
 });
+
+test('remove.js preserves usage rollup cache by default and --purge-data safely cleans it while blocking symlinks and redline dirs', () => {
+  const removeMod = require(path.join(ROOT_DIR, 'remove.js'));
+  assert.deepEqual(removeMod.parseCliArgs([]), { purgeData: false });
+  assert.deepEqual(removeMod.parseCliArgs(['--purge-data']), { purgeData: true });
+
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-remove-purge-'));
+  try {
+    const geminiDir = path.join(workDir, '.gemini');
+    const cfgDir = path.join(geminiDir, 'config');
+    const telemetryDir = path.join(geminiDir, 'antigravity', 'sidecar_data', 'obsidian-prism', 'telemetry');
+    const redlineDir = path.join(geminiDir, 'antigravity', 'conversations_archive');
+    const overrideDir = path.join(workDir, 'override-usage');
+    fs.mkdirSync(cfgDir, { recursive: true });
+    fs.mkdirSync(telemetryDir, { recursive: true });
+    fs.mkdirSync(redlineDir, { recursive: true });
+    fs.mkdirSync(overrideDir, { recursive: true });
+
+    const usageCachePath = path.join(cfgDir, 'obsidian-prism-usage-rollup-cache.json');
+    const thoughtCfgPath = path.join(cfgDir, 'obsidian-prism-thought.json');
+    const thoughtCachePath = path.join(cfgDir, 'obsidian-prism-thought-cache.json');
+    const backupCfgPath = path.join(cfgDir, 'obsidian-prism-config.backup.json');
+    const sidebarCfgPath = path.join(cfgDir, 'obsidian-prism-sidebar.json');
+    const sidebarBakPath = path.join(cfgDir, 'obsidian-prism-sidebar.json.v1.bak');
+    const telSamplePath = path.join(telemetryDir, 'sample.json');
+    const safeOverrideUsagePath = path.join(overrideDir, 'obsidian-prism-usage-rollup-cache.json');
+    const hijackedNamePath = path.join(overrideDir, 'not-prism-file.json');
+    const redlineUsagePath = path.join(redlineDir, 'obsidian-prism-usage-rollup-cache.json');
+
+    fs.writeFileSync(usageCachePath, '{"version":2,"scopes":{"local":{}}}', 'utf8');
+    fs.writeFileSync(thoughtCfgPath, '{"engine":"gemini"}', 'utf8');
+    fs.writeFileSync(thoughtCachePath, '{"entries":{}}', 'utf8');
+    fs.writeFileSync(backupCfgPath, '{"palette":"warm"}', 'utf8');
+    fs.writeFileSync(sidebarCfgPath, '{"folders":[]}', 'utf8');
+    fs.writeFileSync(sidebarBakPath, '{"folders":[]}', 'utf8');
+    fs.writeFileSync(telSamplePath, '{"ok":true}', 'utf8');
+    fs.writeFileSync(safeOverrideUsagePath, '{"version":2,"scopes":{"ssh:dev":{}}}', 'utf8');
+    fs.writeFileSync(hijackedNamePath, '{"keep":true}', 'utf8');
+    fs.writeFileSync(redlineUsagePath, '{"archive":true}', 'utf8');
+
+    const baseEnv = {
+      ...process.env,
+      HOME: workDir,
+      USERPROFILE: workDir,
+      APPDATA: path.join(workDir, 'appdata'),
+      LOCALAPPDATA: path.join(workDir, 'localappdata'),
+      AG_PRISM_GEMINI_CONFIG_DIR: cfgDir,
+      PRISM_USAGE_CACHE_PATH: safeOverrideUsagePath,
+    };
+    delete baseEnv.AG_CDP_PORT;
+    delete baseEnv.AG_PRISM_TELEMETRY_DIR;
+
+    // 1. Default `node remove.js` (no --purge-data) must preserve user configs and usage rollup cache
+    execFileSync(process.execPath, [path.join(ROOT_DIR, 'remove.js')], {
+      env: baseEnv,
+      stdio: 'pipe',
+    });
+    assert.equal(fs.existsSync(usageCachePath), true, 'default remove.js must preserve obsidian-prism-usage-rollup-cache.json');
+    assert.equal(fs.existsSync(safeOverrideUsagePath), true, 'default remove.js must preserve PRISM_USAGE_CACHE_PATH');
+    assert.equal(fs.existsSync(thoughtCfgPath), true, 'default remove.js must preserve obsidian-prism-thought.json');
+    assert.equal(fs.existsSync(telSamplePath), true, 'default remove.js must preserve telemetry dir');
+
+    // 2. `node remove.js --purge-data` cleans usage rollup cache, configs, caches, safe override, and telemetry
+    execFileSync(process.execPath, [path.join(ROOT_DIR, 'remove.js'), '--purge-data'], {
+      env: baseEnv,
+      stdio: 'pipe',
+    });
+    assert.equal(fs.existsSync(usageCachePath), false, '--purge-data must remove obsidian-prism-usage-rollup-cache.json');
+    assert.equal(fs.existsSync(safeOverrideUsagePath), false, '--purge-data must remove safe PRISM_USAGE_CACHE_PATH override');
+    assert.equal(fs.existsSync(thoughtCfgPath), false);
+    assert.equal(fs.existsSync(thoughtCachePath), false);
+    assert.equal(fs.existsSync(backupCfgPath), false);
+    assert.equal(fs.existsSync(sidebarCfgPath), false);
+    assert.equal(fs.existsSync(sidebarBakPath), false);
+    assert.equal(fs.existsSync(telemetryDir), false);
+
+    // 3. Security guard: hijacked filename & redline directory must never be deleted by --purge-data
+    removeMod.purgeUserPluginData({ hostConfigDir: cfgDir, usageCachePath: hijackedNamePath });
+    removeMod.purgeUserPluginData({ hostConfigDir: cfgDir, usageCachePath: redlineUsagePath });
+    assert.equal(fs.existsSync(hijackedNamePath), true, 'non-allowlisted PRISM_USAGE_CACHE_PATH filename must never be deleted');
+    assert.equal(fs.existsSync(redlineUsagePath), true, 'files inside redline conversations_archive must never be deleted');
+
+    // 4. Symlink guard: symlinked usage cache file must never be unlinked (best-effort on platforms allowing file symlinks)
+    const realVictim = path.join(workDir, 'victim.json');
+    fs.writeFileSync(realVictim, '{"protected":true}', 'utf8');
+    const symlinkCache = path.join(cfgDir, 'obsidian-prism-usage-rollup-cache.json');
+    let symlinkCreated = false;
+    try {
+      fs.symlinkSync(realVictim, symlinkCache);
+      symlinkCreated = true;
+    } catch {}
+    if (symlinkCreated) {
+      removeMod.purgeUserPluginData({ hostConfigDir: cfgDir });
+      assert.equal(fs.existsSync(symlinkCache), true, 'symlinked cache file must be refused by lstatSync guard');
+      assert.equal(fs.existsSync(realVictim), true, 'symlink target must remain intact');
+    }
+  } finally {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test(
+  'Windows installer.exe --uninstall --purge-data removes obsidian-prism-usage-rollup-cache.json & safe PRISM_USAGE_CACHE_PATH while sparing redline/hijacked files',
+  { skip: process.platform !== 'win32' ? 'Windows-only installer.exe --purge-data E2E test' : false },
+  async () => {
+    const csSrc = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'setup', 'Program.cs'), 'utf8');
+    assert.ok(
+      csSrc.includes('"obsidian-prism-usage-rollup-cache.json"'),
+      'Program.cs PurgeUserPluginData must include obsidian-prism-usage-rollup-cache.json'
+    );
+
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-win-purge-usage-'));
+    const installerExe = path.join(workDir, 'installer.exe');
+    const installDir = path.join(workDir, 'installed');
+    const geminiDir = path.join(workDir, '.gemini');
+    const cfgDir = path.join(geminiDir, 'config');
+    const nativePluginDir = path.join(cfgDir, 'plugins', 'obsidian-prism');
+    const overrideDir = path.join(workDir, 'override');
+    const redlineDir = path.join(geminiDir, 'antigravity', 'conversations_archive');
+    const outPurge = path.join(workDir, 'purge.json');
+    const outGuard = path.join(workDir, 'guard.json');
+
+    fs.mkdirSync(nativePluginDir, { recursive: true });
+    fs.mkdirSync(installDir, { recursive: true });
+    fs.mkdirSync(overrideDir, { recursive: true });
+    fs.mkdirSync(redlineDir, { recursive: true });
+
+    const usageCachePath = path.join(cfgDir, 'obsidian-prism-usage-rollup-cache.json');
+    const safeOverridePath = path.join(overrideDir, 'obsidian-prism-usage-rollup-cache.json');
+    const thoughtCfgPath = path.join(cfgDir, 'obsidian-prism-thought.json');
+    const hijackedPath = path.join(overrideDir, 'important-user-data.json');
+    const redlinePath = path.join(redlineDir, 'obsidian-prism-usage-rollup-cache.json');
+
+    fs.writeFileSync(usageCachePath, '{"version":2,"scopes":{"local":{}}}', 'utf8');
+    fs.writeFileSync(safeOverridePath, '{"version":2,"scopes":{"ssh:prod":{}}}', 'utf8');
+    fs.writeFileSync(thoughtCfgPath, '{"engine":"gemini"}', 'utf8');
+    fs.writeFileSync(hijackedPath, '{"keep":true}', 'utf8');
+    fs.writeFileSync(redlinePath, '{"archive":true}', 'utf8');
+
+    try {
+      buildInstaller({ outputPath: installerExe });
+      await runExe(
+        installerExe,
+        [
+          '--uninstall',
+          '--silent',
+          '--no-autostart',
+          '--purge-data',
+          '--install-dir',
+          installDir,
+          '--plugin-dir',
+          nativePluginDir,
+          '--out',
+          outPurge,
+        ],
+        20000,
+        {
+          ...process.env,
+          AG_PRISM_GEMINI_CONFIG_DIR: cfgDir,
+          PRISM_USAGE_CACHE_PATH: safeOverridePath,
+        }
+      );
+
+      const purgeRes = JSON.parse(fs.readFileSync(outPurge, 'utf8'));
+      assert.equal(purgeRes.ok, true);
+      assert.equal(fs.existsSync(usageCachePath), false, 'installer.exe --purge-data must delete obsidian-prism-usage-rollup-cache.json');
+      assert.equal(fs.existsSync(safeOverridePath), false, 'installer.exe --purge-data must delete safe PRISM_USAGE_CACHE_PATH');
+      assert.equal(fs.existsSync(thoughtCfgPath), false);
+
+      // Re-run with hijacked filename & redline path -> must be strictly refused
+      for (const dangerousTarget of [hijackedPath, redlinePath]) {
+        await runExe(
+          installerExe,
+          [
+            '--uninstall',
+            '--silent',
+            '--no-autostart',
+            '--purge-data',
+            '--install-dir',
+            installDir,
+            '--plugin-dir',
+            nativePluginDir,
+            '--out',
+            outGuard,
+          ],
+          20000,
+          {
+            ...process.env,
+            AG_PRISM_GEMINI_CONFIG_DIR: cfgDir,
+            PRISM_USAGE_CACHE_PATH: dangerousTarget,
+          }
+        );
+      }
+      assert.equal(fs.existsSync(hijackedPath), true, 'installer.exe --purge-data must never delete non-allowlisted filename');
+      assert.equal(fs.existsSync(redlinePath), true, 'installer.exe --purge-data must never delete files under conversations_archive');
+    } finally {
+      try {
+        fs.rmSync(workDir, { recursive: true, force: true });
+      } catch {}
+    }
+  }
+);

@@ -188,7 +188,7 @@
         runBase + (dark ? 0.035 : 0.045) * Math.sin(now * 0.0021),
         scaleConvReach(0.22),
         0.70,
-        0.06 * Math.sin(now * 0.0024),
+        0.025 * (1 + Math.sin(now * 0.0016)),
         1.45,
         'none',
         32
@@ -267,7 +267,7 @@
         0.24 + (idlePrism - 0.24) * ease,
         0,
         0.55 + (0.72 - 0.55) * ease,
-        p < 0.7 ? 'long-task-complete' : 'none',
+        'none',
         32
       );
     }
@@ -618,6 +618,14 @@
         const prevPhase = convAura.phase;
         const nextPhase = advancePhase(readNowMs());
         if (!isAB()) wb = false;
+        if (isH()) {
+          convAura.releaseBacking?.();
+          return;
+        }
+        if (!convAura.sleeping && (!isMotionStandardOrUltra() || isP())) {
+          convAura.wake(true);
+          return;
+        }
         const shouldResumeFromMotionOrVis =
           isMotionStandardOrUltra() &&
           !isP() &&
@@ -844,13 +852,25 @@
           );
         }
 
-        // Split-Rate 300Hz VSync throttle: burst transients capped >=16-20ms; non-burst steady idle >=160ms; running ~30fps
+        // Split-Rate 300Hz VSync throttle; on real WebGL2 with explicit targetFps (minGap>0), drive smooth VSync 60fps for active phases and ~30fps (33ms) for pre-sleep settling phases
         const isGpuGlow = Boolean(state.glow && state.glow.mode === 'webgl2');
         const minGap = isGpuGlow && typeof getMinFrameGapMs === 'function' ? Number(getMinFrameGapMs() || 0) : 0;
+        const smoothGpu = isGpuGlow && minGap > 0;
+        const isPreSleepPhase = !inLiftoffEbb && (phase === 'idle' || phase === 'awaiting-decision' || phase === 'long-task-complete');
+        const smoothActiveGpu = smoothGpu && !isPreSleepPhase;
+        const smoothPreSleep = smoothGpu && isPreSleepPhase;
         const isBurstTransient = inLiftoffEbb || phase === 'start';
-        const schedFrameMs = phase === 'idle' ? Math.max(160, opt.frameMs || 160) : opt.frameMs || 32;
+        const schedFrameMs = smoothPreSleep
+          ? Math.max(33, minGap)
+          : smoothActiveGpu
+          ? Math.max(16, minGap)
+          : (phase === 'idle' ? Math.max(160, opt.frameMs || 160) : opt.frameMs || 32);
         const burstGap = Math.max(minGap, inLiftoffEbb ? 16 : 20);
-        const effectiveMinGap = isBurstTransient
+        const effectiveMinGap = smoothPreSleep
+          ? Math.max(31, schedFrameMs - 2)
+          : smoothActiveGpu
+          ? Math.max(15, minGap)
+          : isBurstTransient
           ? burstGap
           : Math.max(minGap, Math.max(0, schedFrameMs - 2));
 
@@ -865,6 +885,7 @@
         forceImmediateDraw = false;
 
         if (!bypassThrottle && allowLivingFlow && effectiveMinGap > 0 && lastGpuDrawAt > 0 && now - lastGpuDrawAt < effectiveMinGap) {
+          if (smoothActiveGpu) { wake(false); return; }
           const rem = Math.max(4, Math.ceil(effectiveMinGap - (now - lastGpuDrawAt)));
           clearTimeout(state.timer);
           state.timer = setTimeout(() => wake(false), rem);
@@ -950,6 +971,7 @@
           nextDelay = Math.min(nextDelay, Math.max(20, CONV_AURA_IDLE_SLEEP_MS - phaseElapsed + 4));
         }
         clearTimeout(state.timer);
+        if (smoothActiveGpu) { wake(false); return; }
         state.timer = setTimeout(() => wake(false), nextDelay);
       }
 

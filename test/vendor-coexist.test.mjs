@@ -921,11 +921,12 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
               sendWs(socket, { id: msg.id, result: { identifier: 'doc-script-1' } });
             } else if (msg.method === 'Runtime.evaluate') {
               const expr = String(msg.params?.expression || '');
-              if (expr.includes('__agPrismMetricsResolve')) {
+              // Match actual RPC resolve invocations (not the full injected bundle source which also mentions these globals).
+              if (/window\.__agPrismMetricsResolve\s*\(\s*\d+\s*,/.test(expr)) {
                 metricsResolveExpr = expr;
-              } else if (expr.includes('__agPrismRepoBridge')) {
-                if (expr.includes('.resolve(')) lastRepoResolveExpr = expr;
-              } else if (expr.includes('__agPrismOmniBridge') && expr.includes('b.resolve(')) {
+              } else if (/window\.__agPrismRepoBridge\.resolve\s*\(\s*\d+\s*,/.test(expr)) {
+                lastRepoResolveExpr = expr;
+              } else if (expr.includes('__agPrismOmniBridge') && /\bb\.resolve\s*\(\s*\d+\s*,/.test(expr)) {
                 lastOmniResolveExpr = expr;
               }
               sendWs(socket, {
@@ -1029,7 +1030,18 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
     assert.equal(remoteStatus.hasUpdates, true);
     assert.equal(remoteStatus.upToDate, false);
 
+    const waitUntil = async (predicate, timeoutMs = 8000, intervalMs = 25) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const val = predicate();
+        if (val) return val;
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
+      return predicate();
+    };
+
     const beforeDocScripts = cdpCalls.filter((c) => c.method === 'Page.addScriptToEvaluateOnNewDocument').length;
+    lastRepoResolveExpr = null;
     sendWs(wsServerConn, {
       method: 'Runtime.bindingCalled',
       params: {
@@ -1038,9 +1050,7 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
       },
     });
 
-    for (let i = 0; i < 150 && !lastRepoResolveExpr; i++) {
-      await new Promise((r) => setTimeout(r, 60));
-    }
+    await waitUntil(() => Boolean(lastRepoResolveExpr), 9000, 30);
     assert.ok(lastRepoResolveExpr, 'Expected __agPrismRepoBridge.resolve callback via CDP');
     assert.ok(lastRepoResolveExpr.includes(upstreamHash));
     assert.ok(lastRepoResolveExpr.includes('"updated":true'));
@@ -1060,8 +1070,16 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
         }),
       },
     });
-    await new Promise((r) => setTimeout(r, 90));
-    const savedCfgAfterBatch = JSON.parse(fs.readFileSync(path.join(targetPluginDir, 'config.json'), 'utf8'));
+    const cfgPath = path.join(targetPluginDir, 'config.json');
+    const savedCfgAfterBatch = await waitUntil(() => {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+        return parsed && parsed.palette === 'warm' && parsed.language === 'ja' ? parsed : null;
+      } catch {
+        return null;
+      }
+    }, 6000, 25);
+    assert.ok(savedCfgAfterBatch, 'Expected patch-batch config.json persistence within timeout');
     assert.equal(savedCfgAfterBatch.palette, 'warm');
     assert.equal(savedCfgAfterBatch.motionLevel, 'subtle');
     assert.equal(savedCfgAfterBatch.targetFps, '120');
@@ -1071,7 +1089,8 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
     assert.equal(savedCfgAfterBatch.lang, 'ja', 'Expected legacy twin key lang synced on disk');
     assert.equal(touchedForeignPreview, false, 'PrismDaemon must never connect or expose RPC bindings to non-host preview pages');
 
-    // Trigger on-demand metrics request as well
+    // Trigger on-demand metrics request as well (reset metricsResolveExpr so only the real RPC resolve matches)
+    metricsResolveExpr = null;
     sendWs(wsServerConn, {
       method: 'Runtime.bindingCalled',
       params: {
@@ -1079,13 +1098,12 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
         payload: JSON.stringify({ id: 7, input: { conversationId: '11111111-2222-3333-4444-555555555555' } }),
       },
     });
-    for (let i = 0; i < 100 && (!lazyCollectorInvoked || !metricsResolveExpr); i++) {
-      await new Promise((r) => setTimeout(r, 50));
-    }
+    await waitUntil(() => lazyCollectorInvoked >= 1 && Boolean(metricsResolveExpr), 8000, 25);
     assert.equal(lazyCollectorInvoked, 1);
     assert.ok(metricsResolveExpr && metricsResolveExpr.includes('88.8'));
 
     // Trigger OMNI_BINDING RPC over CDP -> resolves path & returns via __agPrismOmniBridge.resolve
+    lastOmniResolveExpr = null;
     sendWs(wsServerConn, {
       method: 'Runtime.bindingCalled',
       params: {
@@ -1098,9 +1116,7 @@ test('PrismDaemon & install-plugin.cjs: obsidian-prism target, legacy antigravit
         }),
       },
     });
-    for (let i = 0; i < 30 && !lastOmniResolveExpr; i++) {
-      await new Promise((r) => setTimeout(r, 40));
-    }
+    await waitUntil(() => Boolean(lastOmniResolveExpr), 6000, 25);
     assert.ok(lastOmniResolveExpr, 'Expected __agPrismOmniBridge.resolve callback via CDP');
     assert.ok(lastOmniResolveExpr.includes('"exists":true'));
     assert.ok(lastOmniResolveExpr.includes('"line":1'));

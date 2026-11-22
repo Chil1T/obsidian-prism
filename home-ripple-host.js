@@ -118,6 +118,7 @@
       if (!rippleMount) return;
       if (rippleMount.timer) { clearTimeout(rippleMount.timer); rippleMount.timer = 0; }
       if (rippleMount.rafId) { cancelAnimationFrame(rippleMount.rafId); rippleMount.rafId = 0; }
+      if (rippleMount.rRaf && typeof cancelAnimationFrame === 'function') { cancelAnimationFrame(rippleMount.rRaf); rippleMount.rRaf = 0; }
       rippleMount.ro?.disconnect();
       unbindRoot(rippleMount);
       rippleMount.host.remove();
@@ -130,6 +131,7 @@
       const m = rippleMount;
       if (m.timer) { clearTimeout(m.timer); m.timer = 0; }
       if (m.rafId) cancelAnimationFrame(m.rafId);
+      if (m.rRaf && typeof cancelAnimationFrame === 'function') { cancelAnimationFrame(m.rRaf); m.rRaf = 0; }
       m.ro?.disconnect();
       m.uW?.();
       unbindRoot(m);
@@ -209,6 +211,7 @@
         field: { mode: 'none', dispose() {}, invalidate() {}, setCalmZones() {}, draw() {}, needsDraw: () => false, busy: () => false },
         timer: 0,
         rafId: 0,
+        rRaf: 0,
         ro: null,
         uW: null,
         onPress: null,
@@ -562,6 +565,7 @@
         } catch {}
       }
       state.uW = () => {
+        if (state.rRaf && typeof cancelAnimationFrame === 'function') { cancelAnimationFrame(state.rRaf); state.rRaf = 0; }
         document.removeEventListener('visibilitychange', onVis);
         wRef?.removeEventListener?.('blur', onBlur);
         wRef?.removeEventListener?.('focus', onFocus);
@@ -569,9 +573,10 @@
       };
 
       if (typeof ResizeObserver === 'function') {
+        const doLay = () => { state.rRaf = 0; if (!isDestroyed() && !state.parked) { layout(); wake(); } };
         state.ro = new ResizeObserver(() => {
-          layout();
-          wake();
+          if (typeof requestAnimationFrame !== 'function') doLay();
+          else if (!state.rRaf) state.rRaf = requestAnimationFrame(doLay);
         });
         state.ro.observe(home);
       }

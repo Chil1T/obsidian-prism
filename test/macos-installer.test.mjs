@@ -330,6 +330,9 @@ test('macOS Swift installer & LaunchAgent contracts enforce KeepAlive <true/>, n
   assert.ok(watcherSwift.includes('ensureNativeDaemonRunning'), 'macOS Watcher auto-respawns native Sidecar daemon when host CDP is active');
   assert.ok(cdpSwift.includes('syncHostPluginRegistry'), 'macOS CdpClient enables/cleans plugins[\"obsidian-prism\"] in config.json');
   assert.ok(cdpSwift.includes('obsidian-prism-thought-cache.json'), 'macOS CdpClient cleans thought cache on uninstall while preserving secret file');
+  assert.equal(cdpSwift.includes('obsidian-prism-usage-rollup-cache.json'), false, 'macOS CdpClient default uninstall must preserve usage rollup cache');
+  assert.ok(setupSwift.includes('"obsidian-prism-usage-rollup-cache.json"'), 'macOS Setup purgeUserPluginData must clean usage rollup cache on --purge-data');
+  assert.ok(setupSwift.includes('PRISM_USAGE_CACHE_PATH'), 'macOS Setup purgeUserPluginData must safely handle PRISM_USAGE_CACHE_PATH override');
   assert.ok(cdpSwift.includes('isBareAuxiliaryTarget'), 'macOS CdpClient narrows Untitled/launchpad filtering to bare auxiliary targets');
   assert.ok(cdpSwift.includes('checkHostIdentity'), 'macOS CdpClient enforces in-page checkHostIdentity gate');
   assert.ok(cdpSwift.includes('--remote-debugging-port=0'), 'macOS CdpClient defines v2.33.0+ --remote-debugging-port=0 flag');

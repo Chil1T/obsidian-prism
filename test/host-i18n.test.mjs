@@ -399,15 +399,20 @@ function createTestEnv(initialTime = 1000) {
   };
 }
 
-test('dictionary hygiene: vendor/host-i18n/zh-CN.json has 3361 exact + 327 patterns, zero private terms, compact JSON, and safe regexes', () => {
+test('dictionary hygiene: vendor/host-i18n/zh-CN.json has 3367 exact + 327 patterns, zero private terms, compact JSON, and safe regexes', () => {
   const dictPath = path.join(ROOT, 'vendor', 'host-i18n', 'zh-CN.json');
   const raw = fs.readFileSync(dictPath, 'utf8');
   assert.equal(raw.includes('\n  '), false, 'zh-CN.json must be compact JSON without pretty-print indentation');
 
   const dict = JSON.parse(raw);
   const exactKeys = Object.keys(dict.exact || {});
-  assert.equal(exactKeys.length, 3361);
+  assert.equal(exactKeys.length, 3367);
   assert.equal((dict.patterns || []).length, 327);
+  assert.equal(dict.exact['Unlock the power of agent swarms.'], '解锁智能体 Swarm 协作的强大能力。');
+  assert.ok(
+    dict.exact["Live view of the native swarm board, roster and @mention graph for the current conversation's swarm."]?.includes('Swarm'),
+    'Swarm sidecar description must be translated while preserving Swarm'
+  );
 
   const privRe = /ema-persona|emoji_emma|C:\\Users\\Administrator|\/Users\/|\/home\/|\.hermes|obsidian-prism/i;
   for (const k of exactKeys) {

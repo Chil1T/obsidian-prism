@@ -15,7 +15,7 @@
   const SIDE = SA + ',' + SB;
   const SIDE_IN = SA + ' ' + CE + ',' + SB + ' ' + CE;
   const EDIT = BOX + ',' + CE + ',input,textarea,select,[role="textbox"],.monaco-editor,.cm-editor';
-  const EXCL = EDIT + ',a[href],button,[role="button"],aside,[data-testid="conversation-row-sidebar"],' + SIDE + ',[role="dialog"],[role="menu"],.ag-cs-ctx-menu,.ag-cs-diff-ctx-menu,.ag-omni-menu,#ag-prism-settings-sec,#ag-cs-settings-sec,.ces-set,.agy-overlay,[data-ag-zh-widget],.ag-zh-widget,#ag-zh-panel,[data-testid="host-i18n-widget"]';
+  const EXCL = EDIT + ',a[href],button,[role="button"],aside,[data-testid="conversation-row-sidebar"],[data-testid="diff-line-count"],[data-ag-diff-chip="1"],' + SIDE + ',[role="dialog"],[role="menu"],.ag-cs-ctx-menu,.ag-cs-diff-ctx-menu,.ag-omni-menu,#ag-prism-settings-sec,#ag-cs-settings-sec,.ces-set,.agy-overlay,[data-ag-zh-widget],.ag-zh-widget,#ag-zh-panel,[data-testid="host-i18n-widget"]';
   const SLASH = '[role="listbox"] [role="option"],[data-testid="slash-command-menu"] [role="option"]';
   const SEND = '[data-testid="input-send-button"],[data-testid="send-button"],' + BOX + ' button[type="submit"]';
 
@@ -446,13 +446,18 @@
     };
 
     const onCtx = (ev) => {
-      safe(() => {
-        if (destroyed || !enabled || !ev || ev.shiftKey === true) return;
+      try {
+        if (destroyed || !enabled || !ev || ev.shiftKey === true || ev.defaultPrevented) return;
         const el = toEl(ev.target);
         if (!el || el.isContentEditable === true || !el.closest?.(CONV) || el.closest?.(EXCL)) return;
+        if (el.closest?.('.ag-cs-inline-diff-box')) {
+          const s = getSel();
+          const selTxt = !s || s.isCollapsed === true ? '' : clip(s.toString?.());
+          if (!selTxt) return;
+        }
         stop(ev);
         openAt(ev.clientX, ev.clientY);
-      });
+      } catch {}
     };
     const onOutside = (ev) => { safe(() => { const t = ev?.target; if (menuEl && !(t && (menuEl.contains?.(t) || toEl(t)?.closest?.('.ag-cs-ctx-menu') === menuEl))) close(); }); };
     const onScroll = (ev) => { safe(() => { if (menuEl && ev?.target !== menuEl) close(); }); };
@@ -470,7 +475,7 @@
     const toggleCtx = (on) => {
       if (bound === on || (on && (destroyed || !doc))) return;
       bound = on;
-      doc?.[on ? 'addEventListener' : 'removeEventListener']?.('contextmenu', onCtx, false);
+      doc?.[on ? 'addEventListener' : 'removeEventListener']?.('contextmenu', onCtx, true);
     };
 
     const isOpen = () => !!(menuEl && menuEl.isConnected !== false);

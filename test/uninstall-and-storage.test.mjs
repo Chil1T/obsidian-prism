@@ -209,12 +209,14 @@ test('tools/install-plugin.cjs default uninstall backs up & restores config.json
 
     const thoughtCfg = path.join(hostConfigDir, 'obsidian-prism-thought.json');
     const thoughtCache = path.join(hostConfigDir, 'obsidian-prism-thought-cache.json');
+    const usageRollupCache = path.join(hostConfigDir, 'obsidian-prism-usage-rollup-cache.json');
     const sidebarCfg = path.join(hostConfigDir, 'obsidian-prism-sidebar.json');
     const sidebarLock = path.join(hostConfigDir, 'obsidian-prism-sidebar.json.lock');
     const sidebarBak = path.join(hostConfigDir, 'obsidian-prism-sidebar.json.v1.12345.bak');
 
     fs.writeFileSync(thoughtCfg, JSON.stringify({ apiKey: 'sk-test-secret' }));
     fs.writeFileSync(thoughtCache, '{"c":1}');
+    fs.writeFileSync(usageRollupCache, '{"version":2,"scopes":{"local":{}}}');
     fs.writeFileSync(sidebarCfg, '{"folders":[]}');
     fs.writeFileSync(sidebarLock, 'lock');
     fs.writeFileSync(sidebarBak, '{"folders":[]}');
@@ -247,6 +249,7 @@ test('tools/install-plugin.cjs default uninstall backs up & restores config.json
     assert.equal(fs.existsSync(backupPath), true, 'Default uninstall must back up config.json');
     assert.equal(JSON.parse(fs.readFileSync(backupPath, 'utf8')).palette, 'warm');
     assert.equal(fs.existsSync(thoughtCfg), true, 'Default uninstall must keep obsidian-prism-thought.json');
+    assert.equal(fs.existsSync(usageRollupCache), true, 'Default uninstall must keep obsidian-prism-usage-rollup-cache.json');
     assert.equal(fs.existsSync(sidebarCfg), true, 'Default uninstall must keep obsidian-prism-sidebar.json');
     assert.equal(fs.existsSync(telemetryDir), true, 'Default uninstall must keep telemetry/');
 
@@ -279,6 +282,7 @@ test('tools/install-plugin.cjs default uninstall backs up & restores config.json
     assert.equal(fs.existsSync(backupPath), false);
     assert.equal(fs.existsSync(thoughtCfg), false);
     assert.equal(fs.existsSync(thoughtCache), false);
+    assert.equal(fs.existsSync(usageRollupCache), false, '--purge-data must remove obsidian-prism-usage-rollup-cache.json');
     assert.equal(fs.existsSync(sidebarCfg), false);
     assert.equal(fs.existsSync(sidebarLock), false);
     assert.equal(fs.existsSync(sidebarBak), false);
@@ -346,6 +350,44 @@ test('Redline subdirectories and hijacked AG_PRISM_TELEMETRY_DIR env var are ref
     fs.mkdirSync(validTel, { recursive: true });
     process.env.AG_PRISM_TELEMETRY_DIR = validTel;
     assert.equal(installTool.resolveTelemetryDir(hostConfigDir), path.resolve(validTel));
+
+    // 4) PRISM_USAGE_CACHE_PATH safe override is cleaned on --purge-data, while hijacked/redline paths are refused
+    const prevUsageEnv = process.env.PRISM_USAGE_CACHE_PATH;
+    try {
+      const safeUsageOverride = path.join(rootTmp, 'usage-override', 'obsidian-prism-usage-rollup-cache.json');
+      const hijackedUsageFile = path.join(evilWorkspace, 'not-usage-cache.json');
+      const redlineUsageFile = path.join(convSubdir, 'obsidian-prism-usage-rollup-cache.json');
+      fs.mkdirSync(path.dirname(safeUsageOverride), { recursive: true });
+      fs.writeFileSync(safeUsageOverride, '{"version":2,"scopes":{"ssh:box":{}}}');
+      fs.writeFileSync(hijackedUsageFile, '{"keep":true}');
+      fs.writeFileSync(redlineUsageFile, '{"archive":true}');
+
+      process.env.PRISM_USAGE_CACHE_PATH = safeUsageOverride;
+      await installTool.uninstallPlugin({
+        targetDir,
+        hostConfigDir,
+        noCdp: true,
+        syncShortcuts: false,
+        purgeData: true,
+      });
+      assert.equal(fs.existsSync(safeUsageOverride), false, 'Valid PRISM_USAGE_CACHE_PATH override must be purged on --purge-data');
+
+      for (const dangerous of [hijackedUsageFile, redlineUsageFile]) {
+        process.env.PRISM_USAGE_CACHE_PATH = dangerous;
+        await installTool.uninstallPlugin({
+          targetDir,
+          hostConfigDir,
+          noCdp: true,
+          syncShortcuts: false,
+          purgeData: true,
+        });
+      }
+      assert.equal(fs.existsSync(hijackedUsageFile), true, 'Non-allowlisted PRISM_USAGE_CACHE_PATH filename must be refused');
+      assert.equal(fs.existsSync(redlineUsageFile), true, 'Redline PRISM_USAGE_CACHE_PATH must be refused');
+    } finally {
+      if (prevUsageEnv === undefined) delete process.env.PRISM_USAGE_CACHE_PATH;
+      else process.env.PRISM_USAGE_CACHE_PATH = prevUsageEnv;
+    }
   } finally {
     if (prevEnv === undefined) delete process.env.AG_PRISM_TELEMETRY_DIR;
     else process.env.AG_PRISM_TELEMETRY_DIR = prevEnv;
@@ -674,6 +716,7 @@ test('Windows Program.cs and macOS main.swift source contracts support --purge-d
   assert.ok(cs.includes('CleanInstallDirKeepingSelfExe'));
   assert.ok(cs.includes('conversations_archive'));
   assert.ok(cs.includes('obsidian-prism-thought.json'));
+  assert.ok(cs.includes('obsidian-prism-usage-rollup-cache.json'));
   assert.ok(cs.includes('obsidian-prism-sidebar.json'));
   assert.ok(cs.includes('telemetry'));
   assert.ok(cs.includes('ScheduleSelfDeleteIfNeeded'));
@@ -688,6 +731,7 @@ test('Windows Program.cs and macOS main.swift source contracts support --purge-d
   assert.ok(swift.includes('purgeUserPluginData'));
   assert.ok(swift.includes('isAllowedTelemetryOverrideDir'));
   assert.ok(swift.includes('obsidian-prism-thought.json'));
+  assert.ok(swift.includes('obsidian-prism-usage-rollup-cache.json'));
   assert.ok(swift.includes('obsidian-prism-sidebar.json'));
   assert.ok(swift.includes('telemetry'));
   assert.ok(swift.includes('unloadLaunchAgent'));

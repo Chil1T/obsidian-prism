@@ -7,7 +7,7 @@
   if (!G) return;
 
   const WB_STR_KEYS =
-    'defaultProfName|customProfPrefix|viewLabel|optImmersive|optBilingual|styleLabel|optTech|optConcise|optCustom|customPromptPh|profilesLabel|addProfile|delProfile|fieldName|fieldNamePh|fetchModels|saveBtn|testBtn|clearCacheBtn|privacyHint|keylessPh|keylessBadge|clearKeyBtn|keyClearedBadge|fetchingModels|fetchErr|savingCfg|saveErr|testingConn|testErr|clearDualOk|clearLocalOk|usageHint|bridgeOfflineHint'.split(
+    'defaultProfName|customProfPrefix|viewLabel|optImmersive|optBilingual|styleLabel|optTech|optConcise|optCustom|customPromptPh|profilesLabel|addProfile|delProfile|fieldName|fieldNamePh|fetchModels|saveBtn|testBtn|clearCacheBtn|privacyHint|keylessPh|keylessBadge|clearKeyBtn|keyClearedBadge|fetchingModels|fetchErr|savingCfg|saveErr|testingConn|testErr|clearDualOk|clearLocalOk|usageHint|bridgeOfflineHint|proxyLabel|proxyModeAuto|proxyModeCustom|proxyModeDirect|proxyHintAuto|proxyHintDirect|proxyHintValid|proxyHintSavedAuth|proxyHintInvalid|proxyClearBtn|toolSumLabel|toolSumDesc|toolSumOn|toolSumOff'.split(
       '|'
     );
   const wbFmt = (t, args) => t.replace(/\{(\d)\}/g, (_, i) => String(args[i] ?? ''));
@@ -22,31 +22,31 @@
   ];
   const WB_DATA = {
     'zh-CN': [
-      'OpenAI 兼容主力渠道|自定义渠道|译文阅读视图|纯译文沉浸|译文+原文对照|润色文风预设|专业工程手稿|精炼核心要点|自定义提示词|在此输入仅保存在本机私密配置 (~/.gemini/config/) 的自定义系统提示词，绝不写入 Git 仓库…|OpenAI 兼容渠道预设|+ 新增渠道|删除当前|渠道名称|例如：主力网关 / 本地 Ollama|拉取模型列表|保存渠道配置|发送测试消息|清空缓存|密钥与自定义提示词以 0600 权限独立保存在本机 ~/.gemini/config/，脱敏回显，不进入公开 Git 仓库。|本地渠道可留空免密|本地免密|清除密钥|待保存清除|正在拉取上游模型列表…|拉取模型失败|正在保存配置…|保存失败（守护进程离线）|正在保存并发送测试消息…|测试连接失败|✓ 已清空双端转译缓存|✓ 已清空前端缓存|开启后点击展开英文思考块可见译文；本身已是目标语言的思考块自动保留原文；免费机翻在代理环境下会自动跟随系统代理。|Prism 后台服务未连接，请确认插件守护进程已启动。',
+      'OpenAI 兼容主力渠道|自定义渠道|译文阅读视图|纯译文沉浸|译文+原文对照|润色文风预设|专业工程手稿|精炼核心要点|自定义提示词|在此输入仅保存在本机私密配置 (~/.gemini/config/) 的自定义系统提示词，绝不写入 Git 仓库…|OpenAI 兼容渠道预设|+ 新增渠道|删除当前|渠道名称|例如：主力网关 / 本地 Ollama|拉取模型列表|保存渠道配置|发送测试消息|清空缓存|密钥与自定义提示词以 0600 权限独立保存在本机 ~/.gemini/config/，脱敏回显，不进入公开 Git 仓库。|本地渠道可留空免密|本地免密|清除密钥|待保存清除|正在拉取上游模型列表…|拉取模型失败|正在保存配置…|保存失败（守护进程离线）|正在保存并发送测试消息…|测试连接失败|✓ 已清空双端转译缓存|✓ 已清空前端缓存|开启后点击展开英文思考块可见译文；本身已是目标语言的思考块自动保留原文；免费机翻在代理环境下会自动跟随系统代理。|Prism 后台服务未连接，请确认插件守护进程已启动。|自定义代理地址|自动检测|自定义|直连|留空自动检测环境变量与系统代理；支持 http://、https://、socks5://、socks5h://|已启用直连模式，将忽略环境变量与系统代理。|✓ 代理地址格式有效（保存后优先使用此代理，凭证自动脱敏）|✓ 已保存带认证代理（凭证已脱敏，清空或覆盖可修改）|✕ 代理地址无效：仅支持 http://、https://、socks5://、socks5h://（端口 1-65535，禁止换行或控制字符）|清除|「正在探索」工具摘要翻译|仅批量翻译探索/工具列表中的自然语言短句（默认关闭），自动保护文件名、路径、行号与退出码，关闭后立即无损还原原文。|已开启|已关闭',
       ['已保存 {0}（留空保持不变）', '缓存 {0} 条', '前端缓存 {0} 条 / 磁盘缓存 {1} 条', '▾ 从已拉取的 {0} 个上游模型中快速选择…', '✓ 成功拉取 {0} 个模型 · {1}ms', '✓ 已保存（{0} · {1}）', '✓ 连通正常 · {0}ms · {1} 回复: 「{2}」'],
       '渠道',
       '未设模型',
     ],
     'zh-TW': [
-      'OpenAI 相容主力管道|自訂管道|譯文閱讀視圖|純譯文沉浸|譯文+原文對照|潤飾文風預設|專業工程手稿|精煉核心要點|自訂提示詞|在此輸入僅儲存在本機私密設定 (~/.gemini/config/) 的自訂系統提示詞，絕不寫入 Git 儲存庫…|OpenAI 相容管道預設|+ 新增管道|刪除目前|管道名稱|例如：主力閘道 / 本機 Ollama|擷取模型清單|儲存管道設定|傳送測試訊息|清除快取|金鑰與自訂提示詞以 0600 權限獨立儲存在本機 ~/.gemini/config/，遮罩回顯，不進入公開 Git 儲存庫。|本機管道可留空免密|本機免密|清除金鑰|待儲存清除|正在擷取上游模型清單…|擷取模型失敗|正在儲存設定…|儲存失敗（守護行程離線）|正在儲存並傳送測試訊息…|測試連線失敗|✓ 已清除雙端轉譯快取|✓ 已清除前端快取|開啟後點擊展開英文思考區塊即可見譯文；本身已是目標語言的思考區塊自動保留原文；免費機翻在代理環境下會自動跟隨系統代理。|Prism 背景服務未連線，請確認外掛守護行程已啟動。',
+      'OpenAI 相容主力管道|自訂管道|譯文閱讀視圖|純譯文沉浸|譯文+原文對照|潤飾文風預設|專業工程手稿|精煉核心要點|自訂提示詞|在此輸入僅儲存在本機私密設定 (~/.gemini/config/) 的自訂系統提示詞，絕不寫入 Git 儲存庫…|OpenAI 相容管道預設|+ 新增管道|刪除目前|管道名稱|例如：主力閘道 / 本機 Ollama|擷取模型清單|儲存管道設定|傳送測試訊息|清除快取|金鑰與自訂提示詞以 0600 權限獨立儲存在本機 ~/.gemini/config/，遮罩回顯，不進入公開 Git 儲存庫。|本機管道可留空免密|本機免密|清除金鑰|待儲存清除|正在擷取上游模型清單…|擷取模型失敗|正在儲存設定…|儲存失敗（守護行程離線）|正在儲存並傳送測試訊息…|測試連線失敗|✓ 已清除雙端轉譯快取|✓ 已清除前端快取|開啟後點擊展開英文思考區塊即可見譯文；本身已是目標語言的思考區塊自動保留原文；免費機翻在代理環境下會自動跟隨系統代理。|Prism 背景服務未連線，請確認外掛守護行程已啟動。|自訂代理位址|自動偵測|自訂|直連|留空自動偵測環境變數與系統代理；支援 http://、https://、socks5://、socks5h://|已啟用直連模式，將略過環境變數與系統代理。|✓ 代理位址格式有效（儲存後優先使用此代理，憑證自動遮罩）|✓ 已儲存含驗證代理（憑證已遮罩，清空或覆寫可修改）|✕ 代理位址無效：僅支援 http://、https://、socks5://、socks5h://（連接埠 1-65535，禁止換行或控制字元）|清除|「正在探索」工具摘要翻譯|僅批次翻譯探索/工具清單中的自然語言短句（預設關閉），自動保護檔名、路徑、行號與結束碼，關閉後立即無損還原原文。|已開啟|已關閉',
       ['已儲存 {0}（留空維持不變）', '快取 {0} 筆', '前端快取 {0} 筆 / 磁碟快取 {1} 筆', '▾ 從已擷取的 {0} 個上游模型中快速選擇…', '✓ 成功擷取 {0} 個模型 · {1}ms', '✓ 已儲存（{0} · {1}）', '✓ 連線正常 · {0}ms · {1} 回覆: 「{2}」'],
       '管道',
       '未設模型',
     ],
     yue: [
-      'OpenAI 兼容主力渠道|自訂渠道|譯文閱讀視圖|純譯文沉浸|譯文+原文對照|潤飾文風預設|專業工程手稿|精煉核心要點|自訂提示詞|喺度輸入只會儲存喺本機私密設定 (~/.gemini/config/) 嘅自訂系統提示詞，絕唔寫入 Git 倉庫…|OpenAI 兼容渠道預設|+ 新增渠道|刪除而家呢個|渠道名稱|例如：主力網關 / 本機 Ollama|拉取模型清單|儲存渠道設定|發送測試訊息|清空快取|金鑰同自訂提示詞以 0600 權限獨立保存喺本機 ~/.gemini/config/，遮罩顯示，唔會寫入公開 Git 倉庫。|本機渠道可留空免密|本機免密|清除金鑰|待儲存清除|正在拉取上游模型清單…|拉取模型失敗|正在儲存設定…|儲存失敗（守護進程離線）|正在儲存並發送測試訊息…|測試連接失敗|✓ 已清空雙端轉譯快取|✓ 已清空前端快取|開啟後撳開英文思考區塊就睇到譯文；本身已經係目標語言嘅思考區塊會自動保留原文；免費機翻喺代理環境下會自動跟隨系統代理。|Prism 後台服務未連接，請確認外掛守護進程已經啟動。',
+      'OpenAI 兼容主力渠道|自訂渠道|譯文閱讀視圖|純譯文沉浸|譯文+原文對照|潤飾文風預設|專業工程手稿|精煉核心要點|自訂提示詞|喺度輸入只會儲存喺本機私密設定 (~/.gemini/config/) 嘅自訂系統提示詞，絕唔寫入 Git 倉庫…|OpenAI 兼容渠道預設|+ 新增渠道|刪除而家呢個|渠道名稱|例如：主力網關 / 本機 Ollama|拉取模型清單|儲存渠道設定|發送測試訊息|清空快取|金鑰同自訂提示詞以 0600 權限獨立保存喺本機 ~/.gemini/config/，遮罩顯示，唔會寫入公開 Git 倉庫。|本機渠道可留空免密|本機免密|清除金鑰|待儲存清除|正在拉取上游模型清單…|拉取模型失敗|正在儲存設定…|儲存失敗（守護進程離線）|正在儲存並發送測試訊息…|測試連接失敗|✓ 已清空雙端轉譯快取|✓ 已清空前端快取|開啟後撳開英文思考區塊就睇到譯文；本身已經係目標語言嘅思考區塊會自動保留原文；免費機翻喺代理環境下會自動跟隨系統代理。|Prism 後台服務未連接，請確認外掛守護進程已經啟動。|自訂代理地址|自動偵測|自訂|直連|留空自動偵測環境變數同系統代理；支援 http://、https://、socks5://、socks5h://|已啟用直連模式，會略過環境變數同系統代理。|✓ 代理地址格式有效（儲存後優先使用呢個代理，憑證自動遮罩）|✓ 已儲存認證代理（憑證已遮罩，清空或覆寫可修改）|✕ 代理地址無效：只支援 http://、https://、socks5://、socks5h://（端口 1-65535，禁止換行或控制字符）|清除|「正在探索」工具摘要翻譯|只批量翻譯探索/工具列表入面嘅自然語言短句（預設關閉），自動保護檔名、路徑、行號同退出碼，關閉後即刻無損還原原文。|已開啟|已關閉',
       ['已儲存 {0}（留空保持唔變）', '快取 {0} 條', '前端快取 {0} 條 / 磁碟快取 {1} 條', '▾ 由已拉取嘅 {0} 個上游模型入面快速揀選…', '✓ 成功拉取 {0} 個模型 · {1}ms', '✓ 已儲存（{0} · {1}）', '✓ 連通正常 · {0}ms · {1} 回覆: 「{2}」'],
       '渠道',
       '未設模型',
     ],
     en: [
-      'Primary OpenAI Profile|Profile|Reading View|Translated Only|Bilingual Stacked|Polishing Style|Technical Manuscript|Concise Key Points|Custom Prompt|Enter local-only custom system prompt (saved in ~/.gemini/config/, never in Git)…|OpenAI Endpoint Profiles|+ New|Delete|Profile Name|e.g. Primary Gateway / Local Ollama|Fetch Models|Save Config|Send Test Message|Clear Cache|API keys & custom prompts are stored locally in ~/.gemini/config/ (0600) and never touch Git.|Optional for local endpoint|Keyless OK|Clear|Pending clear|Fetching upstream /models…|Failed to fetch models|Saving configuration…|Save failed (daemon offline)|Testing endpoint latency…|Connection test failed|✓ Cleared translation cache|✓ Cleared local cache|Expand an English thinking block to view translations; blocks already in your target language keep the original text; free machine translation automatically follows your system proxy.|Prism background service is disconnected. Please make sure the plugin daemon is running.',
+      'Primary OpenAI Profile|Profile|Reading View|Translated Only|Bilingual Stacked|Polishing Style|Technical Manuscript|Concise Key Points|Custom Prompt|Enter local-only custom system prompt (saved in ~/.gemini/config/, never in Git)…|OpenAI Endpoint Profiles|+ New|Delete|Profile Name|e.g. Primary Gateway / Local Ollama|Fetch Models|Save Config|Send Test Message|Clear Cache|API keys & custom prompts are stored locally in ~/.gemini/config/ (0600) and never touch Git.|Optional for local endpoint|Keyless OK|Clear|Pending clear|Fetching upstream /models…|Failed to fetch models|Saving configuration…|Save failed (daemon offline)|Testing endpoint latency…|Connection test failed|✓ Cleared translation cache|✓ Cleared local cache|Expand an English thinking block to view translations; blocks already in your target language keep the original text; free machine translation automatically follows your system proxy.|Prism background service is disconnected. Please make sure the plugin daemon is running.|Custom Proxy URL|Auto|Custom|Direct|Leave blank to auto-detect env & OS system proxy; supports http://, https://, socks5://, socks5h://|Direct mode enabled: env & OS system proxies are bypassed.|✓ Proxy URL valid (prioritized after save; credentials redacted)|✓ Saved proxy with redacted credentials (clear or overwrite to change)|✕ Invalid proxy URL: only http://, https://, socks5://, socks5h:// (port 1–65535, no control chars)|Clear|Translate "Exploring" Tool Summaries|Batch-translate short English prose in Exploring/tool lists (off by default); auto-protects filenames, paths, line refs & exit codes, and restores raw text when off.|On|Off',
       ['Saved {0} (leave blank to keep)', 'Cache: {0}', 'Frontend: {0} / Daemon: {1}', '▾ Quick-select from {0} models…', '✓ Loaded {0} models · {1}ms', '✓ Saved ({0} · {1})', '✓ Connected · {0}ms · Reply: "{2}"'],
       'Profile',
       'No model',
     ],
     ja: [
-      'OpenAI 互換メインプロファイル|カスタム接続先|翻訳表示モード|翻訳のみ|翻訳＋原文対照|文体プリセット|技術ノート調|要点簡潔|カスタムプロンプト|ローカル専用システムプロンプトを入力（~/.gemini/config/ に保存され、Gitには含まれません）…|OpenAI 互換接続先プリセット|+ 追加|削除|接続先名|例: メインGW / ローカル Ollama|モデル一覧取得|設定を保存|接続テスト送信|キャッシュ消去|APIキーとカスタムプロンプトは ~/.gemini/config/ (0600) にローカル保存され、Gitには一切書き込まれません。|ローカル接続先は空欄可|キー不要|キー消去|保存時に消去|上流のモデル一覧を取得中…|モデル一覧の取得に失敗しました|設定を保存中…|保存失敗（デーモンオフライン）|保存して接続テストを送信中…|接続テストに失敗しました|✓ 翻訳キャッシュを消去しました|✓ ローカルキャッシュを消去しました|有効化後に英語の思考ブロックを展開すると訳文が表示されます。既に対象言語の思考ブロックは原文を保持し、無料機械翻訳はシステムプロキシに自動追従します。|Prism バックグラウンドサービスに接続されていません。プラグインのデーモンが起動しているか確認してください。',
+      'OpenAI 互換メインプロファイル|カスタム接続先|翻訳表示モード|翻訳のみ|翻訳＋原文対照|文体プリセット|技術ノート調|要点簡潔|カスタムプロンプト|ローカル専用システムプロンプトを入力（~/.gemini/config/ に保存され、Gitには含まれません）…|OpenAI 互換接続先プリセット|+ 追加|削除|接続先名|例: メインGW / ローカル Ollama|モデル一覧取得|設定を保存|接続テスト送信|キャッシュ消去|APIキーとカスタムプロンプトは ~/.gemini/config/ (0600) にローカル保存され、Gitには一切書き込まれません。|ローカル接続先は空欄可|キー不要|キー消去|保存時に消去|上流のモデル一覧を取得中…|モデル一覧の取得に失敗しました|設定を保存中…|保存失敗（デーモンオフライン）|保存して接続テストを送信中…|接続テストに失敗しました|✓ 翻訳キャッシュを消去しました|✓ ローカルキャッシュを消去しました|有効化後に英語の思考ブロックを展開すると訳文が表示されます。既に対象言語の思考ブロックは原文を保持し、無料機械翻訳はシステムプロキシに自動追従します。|Prism バックグラウンドサービスに接続されていません。プラグインのデーモンが起動しているか確認してください。|カスタムプロキシ URL|自動検出|カスタム|直接接続|空欄で環境変数とシステムプロキシを自動検出します（http://、https://、socks5://、socks5h:// 対応）|直接接続モード：環境変数およびシステムプロキシを無視します。|✓ プロキシ形式は有効です（保存後に優先適用・認証情報は自動マスク）|✓ 認証付きプロキシ保存済み（認証情報はマスク済・消去または上書きで変更可）|✕ 無効なプロキシ URL：http://、https://、socks5://、socks5h://（ポート 1–65535・制御文字不可）のみ対応|消去|「探索中」ツール要約の翻訳|探索・ツール一覧の自然言語短文を一括翻訳します（初期設定オフ）。ファイル名・パス・行番号・終了コードを自動保護し、オフ時に原文へ即時復元します。|オン|オフ',
       ['保存済み {0}（空欄で維持）', 'キャッシュ {0} 件', 'フロント {0} 件 / デーモン {1} 件', '▾ 取得した {0} 個のモデルから選択…', '✓ {0} 個のモデルを取得 · {1}ms', '✓ 保存完了（{0} · {1}）', '✓ 接続正常 · {0}ms · {1} 応答: 「{2}」'],
       'プロファイル',
       'モデル未設定',
@@ -115,6 +115,77 @@
     } catch {
       return false;
     }
+  }
+
+  function validateCustomProxyInput(rawProxy, savedMaskedProxy = '') {
+    const rawStr = String(rawProxy || '');
+    if (/[\r\n\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(rawStr)) {
+      return { ok: false, empty: false, reason: 'control-chars' };
+    }
+    const s = rawStr.trim();
+    if (!s) return { ok: true, empty: true, savedAuth: false };
+    if (s.includes('••••')) {
+      if (savedMaskedProxy && s === savedMaskedProxy) {
+        return { ok: true, empty: false, savedAuth: true };
+      }
+      return { ok: false, empty: false, reason: 'invalid-mask' };
+    }
+    if (/[\u0000-\u001f\u007f]/.test(s)) {
+      return { ok: false, empty: false, reason: 'control-chars' };
+    }
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s)) {
+      if (!/^(?:https?|socks5h?):\/\//i.test(s)) {
+        return { ok: false, empty: false, reason: 'unsupported-protocol' };
+      }
+    } else if (s.includes('=') || /^[a-zA-Z][a-zA-Z0-9+.-]*:(?!\d+$)/.test(s)) {
+      return { ok: false, empty: false, reason: 'invalid-format' };
+    }
+    const withScheme = /^(?:https?|socks5h?):\/\//i.test(s) ? s : `http://${s}`;
+    try {
+      const u = new URL(withScheme);
+      if (!['http:', 'https:', 'socks5:', 'socks5h:'].includes(u.protocol)) {
+        return { ok: false, empty: false, reason: 'unsupported-protocol' };
+      }
+      const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+      if (
+        !host ||
+        /[\u0000-\u001f\u007f\s=@/?#]/.test(host) ||
+        host === '0.0.0.0' ||
+        host === '100.100.100.200' ||
+        host === 'metadata.google.internal' ||
+        host === 'metadata' ||
+        host === 'instance-data' ||
+        /^fd00:ec2::254$/i.test(host) ||
+        /^169\.254(?:\.\d{1,3}){2}$/.test(host)
+      ) {
+        return { ok: false, empty: false, reason: 'invalid-host' };
+      }
+      if (u.port) {
+        if (!/^\d{1,5}$/.test(u.port)) return { ok: false, empty: false, reason: 'invalid-port' };
+        const p = Number(u.port);
+        if (!Number.isInteger(p) || p < 1 || p > 65535) return { ok: false, empty: false, reason: 'invalid-port' };
+      }
+      let user = '';
+      let pass = '';
+      try { user = decodeURIComponent(u.username || ''); } catch { user = u.username || ''; }
+      try { pass = decodeURIComponent(u.password || ''); } catch { pass = u.password || ''; }
+      if (/[\u0000-\u001f\u007f]/.test(user) || /[\u0000-\u001f\u007f]/.test(pass)) {
+        return { ok: false, empty: false, reason: 'control-chars' };
+      }
+      return { ok: true, empty: false, savedAuth: false, protocol: u.protocol };
+    } catch {
+      return { ok: false, empty: false, reason: 'invalid-url' };
+    }
+  }
+
+  function applyNoTranslateAttrs(el) {
+    if (!el || !el.setAttribute) return el;
+    el.setAttribute('data-ag-no-i18n', '');
+    for (const s of 'translate=no,data-no-translate=true,data-ag-localization-skip=true,data-agy-no-translate=true,data-antigravity-zh-skip=1'.split(',')) {
+      const p = s.split('=');
+      el.setAttribute(p[0], p[1]);
+    }
+    return el;
   }
 
   function setToggleAttr(el, name, on) {
@@ -231,9 +302,16 @@
 
     const box = mkEl('div', 'ag-cs-thought-cfg-box');
     box.setAttribute('data-testid', 'prism-thought-ai-config');
-    box.setAttribute('data-ag-no-i18n', '');
-    for (const s of 'translate=no,data-no-translate=true,data-ag-localization-skip=true,data-agy-no-translate=true,data-antigravity-zh-skip=1'.split(',')) { const p = s.split('='); box.setAttribute(p[0], p[1]); }
+    applyNoTranslateAttrs(box);
     box.hidden = modeFn() !== 'ai';
+
+    const sharedMountSlot = mkEl('div', '');
+    if (sharedMountSlot.style) {
+      sharedMountSlot.style.display = 'flex';
+      sharedMountSlot.style.flexDirection = 'column';
+      sharedMountSlot.style.gap = '10px';
+    }
+    box.appendChild(sharedMountSlot);
 
     const hostCfgView = resolveHostPrism()?.getState?.()?.cfg?.thoughtView;
     const initialApi = resolveThoughtApi();
@@ -251,6 +329,11 @@
       viewMode: initialViewMode === 'bilingual' ? 'bilingual' : 'immersive',
       stylePreset: 'technical',
       customPrompt: '',
+      proxyMode: 'auto',
+      customProxyUrl: '',
+      savedMaskedProxy: '',
+      hasProxyCredentials: false,
+      translateToolSummaries: false,
       cacheCount: 0,
       cacheDetailText: '',
       activeProfileId: 'default',
@@ -294,7 +377,7 @@
     }
     usageBanner.appendChild(usageHintEl);
     usageBanner.appendChild(bridgeWarnEl);
-    box.appendChild(usageBanner);
+    sharedMountSlot.appendChild(usageBanner);
 
     const syncUsageBanner = () => {
       const pack = getPack();
@@ -368,7 +451,182 @@
     }
     viewBar.appendChild(viewLbl);
     viewBar.appendChild(viewGrp);
-    box.appendChild(viewBar);
+    sharedMountSlot.appendChild(viewBar);
+
+    // 0b) Optional "Exploring" Tool Execution Summaries Batch Translation Toggle (default false)
+    const toolSumWrap = mkEl('div', 'ag-cs-thought-field');
+    toolSumWrap.setAttribute('data-testid', 'thought-tool-summaries-row');
+    const toolSumBar = mkEl('div', 'ag-cs-thought-bar');
+    const toolSumLbl = mkEl('span', 'ag-cs-thought-label');
+    toolSumLbl.textContent = ui.thoughtToolSumLabel || initialPack.toolSumLabel;
+    const toolSumBtn = doc.createElement('button');
+    toolSumBtn.type = 'button';
+    toolSumBtn.className = 'ag-cs-thought-btn';
+    toolSumBtn.setAttribute('role', 'switch');
+    toolSumBtn.setAttribute('aria-checked', 'false');
+    toolSumBtn.setAttribute('data-testid', 'thought-tool-summaries-toggle');
+    toolSumBtn.textContent = initialPack.toolSumOff;
+    const toolSumDesc = mkEl('p', 'ag-cs-thought-hint');
+    toolSumDesc.setAttribute('data-testid', 'thought-tool-summaries-desc');
+    toolSumDesc.textContent = ui.thoughtToolSumDesc || initialPack.toolSumDesc;
+
+    const syncToolSumUi = () => {
+      const pack = getPack();
+      const on = Boolean(state.translateToolSummaries);
+      guard(() => {
+        toolSumLbl.textContent = ui.thoughtToolSumLabel || pack.toolSumLabel;
+        toolSumDesc.textContent = ui.thoughtToolSumDesc || pack.toolSumDesc;
+        toolSumBtn.setAttribute('aria-checked', String(on));
+        setToggleAttr(toolSumBtn, 'data-pressed', on);
+        if (on) toolSumBtn.setAttribute('data-primary', '1');
+        else toolSumBtn.removeAttribute('data-primary');
+        toolSumBtn.textContent = on ? pack.toolSumOn : pack.toolSumOff;
+      });
+    };
+
+    toolSumBtn.addEventListener('click', (ev) => {
+      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+      const next = !state.translateToolSummaries;
+      state.translateToolSummaries = next;
+      syncToolSumUi();
+      const api = resolveThoughtApi();
+      if (api && typeof api.setTranslateToolSummaries === 'function') {
+        api.setTranslateToolSummaries(next, { persistDaemon: false });
+      }
+      if (api && typeof api.saveConfig === 'function' && !state.busy) {
+        void api.saveConfig({ translateToolSummaries: next }).catch(() => {});
+      }
+    });
+
+    toolSumBar.appendChild(toolSumLbl);
+    toolSumBar.appendChild(toolSumBtn);
+    toolSumWrap.appendChild(toolSumBar);
+    toolSumWrap.appendChild(toolSumDesc);
+    sharedMountSlot.appendChild(toolSumWrap);
+
+    // 0c) Custom Proxy URL Setting (HTTP / HTTPS / SOCKS5 / SOCKS5H + Auto / Custom / Direct mode + live validation)
+    const proxyWrap = mkEl('div', 'ag-cs-thought-field');
+    proxyWrap.setAttribute('data-testid', 'thought-custom-proxy-section');
+    const proxyHeaderBar = mkEl('div', 'ag-cs-thought-bar');
+    const proxyLbl = mkEl('span', 'ag-cs-thought-label');
+    proxyLbl.textContent = ui.thoughtProxyLabel || initialPack.proxyLabel;
+    const proxyModeGrp = mkEl(
+      'div',
+      'inline-flex items-center rounded-lg border border-border bg-secondary/20 p-0.5 gap-0.5 select-none min-h-8'
+    );
+    proxyModeGrp.setAttribute('role', 'group');
+    proxyModeGrp.setAttribute('data-testid', 'thought-proxy-mode-group');
+
+    const proxyModeBtns = new Map();
+    const getProxyModeLabel = (mid, pack) => {
+      if (mid === 'custom') return pack.proxyModeCustom;
+      if (mid === 'direct') return pack.proxyModeDirect;
+      return pack.proxyModeAuto;
+    };
+
+    const proxyInputRow = mkEl('div', 'ag-cs-thought-input-row');
+    const proxyInput = doc.createElement('input');
+    proxyInput.type = 'text';
+    proxyInput.className = 'ag-cs-thought-input';
+    proxyInput.setAttribute('data-mono', '1');
+    proxyInput.setAttribute('data-testid', 'thought-custom-proxy-url');
+    proxyInput.placeholder = 'http://127.0.0.1:7890 | socks5://127.0.0.1:1080';
+
+    const clearProxyBtn = doc.createElement('button');
+    clearProxyBtn.type = 'button';
+    clearProxyBtn.className = 'ag-cs-thought-btn';
+    clearProxyBtn.setAttribute('data-testid', 'thought-clear-proxy-btn');
+    clearProxyBtn.textContent = initialPack.proxyClearBtn;
+    clearProxyBtn.hidden = true;
+    if (clearProxyBtn.style) clearProxyBtn.style.display = 'none';
+
+    const proxyHintEl = mkEl('p', 'ag-cs-thought-hint');
+    proxyHintEl.setAttribute('data-testid', 'thought-custom-proxy-hint');
+    proxyHintEl.textContent = initialPack.proxyHintAuto;
+
+    const syncProxyUi = () => {
+      const pack = getPack();
+      const rawVal = String(state.customProxyUrl || '').trim();
+      const check = validateCustomProxyInput(rawVal, state.savedMaskedProxy);
+      guard(() => {
+        proxyLbl.textContent = ui.thoughtProxyLabel || pack.proxyLabel;
+        clearProxyBtn.textContent = pack.proxyClearBtn;
+        for (const [mid, btn] of proxyModeBtns.entries()) {
+          const on = state.proxyMode === mid;
+          btn.setAttribute('aria-pressed', String(on));
+          setToggleAttr(btn, 'data-pressed', on);
+          btn.textContent = getProxyModeLabel(mid, pack);
+        }
+        if (proxyInput.value !== state.customProxyUrl) proxyInput.value = state.customProxyUrl;
+        const isDirect = state.proxyMode === 'direct';
+        proxyInput.disabled = isDirect;
+        const showClear = Boolean(rawVal && !isDirect);
+        clearProxyBtn.hidden = !showClear;
+        if (clearProxyBtn.style) clearProxyBtn.style.display = showClear ? '' : 'none';
+
+        if (isDirect) {
+          proxyHintEl.setAttribute('data-state', 'idle');
+          proxyHintEl.textContent = pack.proxyHintDirect;
+          if (proxyHintEl.style) proxyHintEl.style.color = '';
+        } else if (!rawVal) {
+          proxyHintEl.setAttribute('data-state', 'idle');
+          proxyHintEl.textContent = pack.proxyHintAuto;
+          if (proxyHintEl.style) proxyHintEl.style.color = '';
+        } else if (check.ok) {
+          proxyHintEl.setAttribute('data-state', 'ok');
+          proxyHintEl.textContent = check.savedAuth || state.hasProxyCredentials ? pack.proxyHintSavedAuth : pack.proxyHintValid;
+          if (proxyHintEl.style) proxyHintEl.style.color = 'var(--success, #50A37B)';
+        } else {
+          proxyHintEl.setAttribute('data-state', 'err');
+          proxyHintEl.textContent = pack.proxyHintInvalid;
+          if (proxyHintEl.style) proxyHintEl.style.color = 'var(--error, #E5534B)';
+        }
+      });
+    };
+
+    for (const mid of ['auto', 'custom', 'direct']) {
+      const pb = doc.createElement('button');
+      pb.type = 'button';
+      pb.className = btnClass;
+      pb.textContent = getProxyModeLabel(mid, initialPack);
+      pb.setAttribute('data-proxy-mode', mid);
+      pb.addEventListener('click', (ev) => {
+        if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+        state.proxyMode = mid;
+        syncProxyUi();
+      });
+      proxyModeBtns.set(mid, pb);
+      proxyModeGrp.appendChild(pb);
+    }
+
+    proxyInput.addEventListener('input', () => {
+      state.customProxyUrl = proxyInput.value;
+      if (state.customProxyUrl.trim() && state.proxyMode === 'direct') {
+        state.proxyMode = 'custom';
+      }
+      if (state.customProxyUrl.trim() !== state.savedMaskedProxy) {
+        state.hasProxyCredentials = false;
+      }
+      syncProxyUi();
+    });
+
+    clearProxyBtn.addEventListener('click', (ev) => {
+      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+      state.customProxyUrl = '';
+      state.savedMaskedProxy = '';
+      state.hasProxyCredentials = false;
+      if (state.proxyMode === 'custom') state.proxyMode = 'auto';
+      syncProxyUi();
+    });
+
+    proxyHeaderBar.appendChild(proxyLbl);
+    proxyHeaderBar.appendChild(proxyModeGrp);
+    proxyInputRow.appendChild(proxyInput);
+    proxyInputRow.appendChild(clearProxyBtn);
+    proxyWrap.appendChild(proxyHeaderBar);
+    proxyWrap.appendChild(proxyInputRow);
+    proxyWrap.appendChild(proxyHintEl);
+    sharedMountSlot.appendChild(proxyWrap);
 
     // 1) Style Preset Bar + Conditional Local Custom Prompt Textarea
     const styleBar = mkEl('div', 'ag-cs-thought-bar');
@@ -784,6 +1042,8 @@
       });
       syncUsageBanner();
       syncViewModeUi();
+      syncToolSumUi();
+      syncProxyUi();
       syncStyleUi();
       renderProfilePillsAndForm();
       renderCacheBadge(state.cacheCount, state.cacheDetailText);
@@ -839,6 +1099,17 @@
         state.viewMode = clientView || res.viewMode;
       }
       state.customPrompt = typeof res.customPrompt === 'string' ? res.customPrompt : '';
+      if (['auto', 'custom', 'direct'].includes(res.proxyMode)) {
+        state.proxyMode = res.proxyMode;
+      }
+      if (typeof res.customProxyUrl === 'string') {
+        state.customProxyUrl = res.customProxyUrl;
+        state.savedMaskedProxy = res.hasProxyCredentials ? res.customProxyUrl : '';
+      }
+      state.hasProxyCredentials = Boolean(res.hasProxyCredentials);
+      if (typeof res.translateToolSummaries === 'boolean') {
+        state.translateToolSummaries = res.translateToolSummaries;
+      }
       if (Array.isArray(res.profiles) && res.profiles.length > 0) {
         state.profiles = res.profiles.map((p) => ({
           id: p.id,
@@ -855,6 +1126,8 @@
         ? res.activeProfileId
         : state.profiles[0].id;
       syncViewModeUi();
+      syncToolSumUi();
+      syncProxyUi();
       syncStyleUi();
       renderProfilePillsAndForm();
     };
@@ -865,6 +1138,9 @@
         stylePreset: state.stylePreset,
         viewMode: state.viewMode,
         customPrompt: state.customPrompt,
+        proxyMode: state.proxyMode,
+        customProxyUrl: String(state.customProxyUrl || '').trim(),
+        translateToolSummaries: Boolean(state.translateToolSummaries),
         activeProfileId: state.activeProfileId,
         profiles: state.profiles.map((p) => ({
           id: p.id,
@@ -919,6 +1195,10 @@
       syncFormIntoProfile();
       const cur = getActiveProfile();
       const pack = getPack();
+      if (state.proxyMode !== 'direct' && !validateCustomProxyInput(state.customProxyUrl, state.savedMaskedProxy).ok) {
+        setStatus('err', pack.proxyHintInvalid);
+        return;
+      }
       state.busy = true;
       fetchModelsBtn.disabled = true;
       setStatus('idle', pack.fetchingModels);
@@ -927,6 +1207,8 @@
           profileId: cur?.id,
           baseUrl: cur?.baseUrl,
           apiKey: cur?.draftKey || '',
+          proxyMode: state.proxyMode,
+          customProxyUrl: String(state.customProxyUrl || '').trim(),
         })
         .then((res) => {
           const curPack = getPack();
@@ -971,6 +1253,10 @@
       const api = resolveThoughtApi();
       if (!api || typeof api.saveConfig !== 'function' || state.busy) return;
       const pack = getPack();
+      if (state.proxyMode !== 'direct' && !validateCustomProxyInput(state.customProxyUrl, state.savedMaskedProxy).ok) {
+        setStatus('err', pack.proxyHintInvalid);
+        return;
+      }
       state.busy = true;
       saveBtn.disabled = true;
       setStatus('idle', pack.savingCfg);
@@ -1000,6 +1286,10 @@
       const api = resolveThoughtApi();
       if (!api || typeof api.testConnection !== 'function' || state.busy) return;
       const pack = getPack();
+      if (state.proxyMode !== 'direct' && !validateCustomProxyInput(state.customProxyUrl, state.savedMaskedProxy).ok) {
+        setStatus('err', pack.proxyHintInvalid);
+        return;
+      }
       state.busy = true;
       testBtn.disabled = true;
       setStatus('idle', pack.testingConn);
@@ -1013,6 +1303,8 @@
             profileId: cur?.id,
             baseUrl: cur?.baseUrl,
             model: cur?.model,
+            proxyMode: state.proxyMode,
+            customProxyUrl: String(state.customProxyUrl || '').trim(),
           });
         })
         .then((res) => {
@@ -1063,8 +1355,53 @@
         });
     });
 
+    let machineBox = null;
+    const syncModeLayout = (nextMode) => {
+      guard(() => {
+        box.hidden = nextMode !== 'ai';
+        const hostParent = box.parentElement || null;
+        if (nextMode === 'machine' && hostParent && typeof hostParent.appendChild === 'function') {
+          if (!machineBox) {
+            machineBox = mkEl('div', 'ag-cs-thought-cfg-box');
+            machineBox.setAttribute('data-testid', 'prism-thought-general-config');
+            applyNoTranslateAttrs(machineBox);
+          }
+          if (machineBox.parentElement !== hostParent) {
+            hostParent.appendChild(machineBox);
+          }
+          machineBox.hidden = false;
+          if (sharedMountSlot.parentElement !== machineBox) machineBox.appendChild(sharedMountSlot);
+          if (actRow.parentElement !== machineBox) machineBox.appendChild(actRow);
+          testBtn.hidden = true;
+          if (testBtn.style) testBtn.style.display = 'none';
+        } else {
+          if (sharedMountSlot.parentElement !== box) {
+            if (typeof box.insertBefore === 'function' && styleBar.parentElement === box) {
+              box.insertBefore(sharedMountSlot, styleBar);
+            } else {
+              box.appendChild(sharedMountSlot);
+            }
+          }
+          if (actRow.parentElement !== box) {
+            if (typeof box.insertBefore === 'function' && privHint.parentElement === box) {
+              box.insertBefore(actRow, privHint);
+            } else {
+              box.appendChild(actRow);
+            }
+          }
+          testBtn.hidden = false;
+          if (testBtn.style) testBtn.style.display = '';
+          if (machineBox && machineBox.parentElement) {
+            machineBox.remove();
+          }
+        }
+      });
+    };
+
     syncUsageBanner();
     syncViewModeUi();
+    syncToolSumUi();
+    syncProxyUi();
     syncStyleUi();
     renderProfilePillsAndForm();
     if (!box.hidden) ensureLoaded();
@@ -1084,14 +1421,12 @@
         refreshStaticLabels();
       },
       onModeSwitched(nextMode) {
-        guard(() => {
-          box.hidden = nextMode !== 'ai';
-        });
+        syncModeLayout(nextMode);
         syncUsageBanner();
-        if (nextMode === 'ai') ensureLoaded();
+        if (nextMode === 'ai' || nextMode === 'machine') ensureLoaded();
       },
     };
   }
 
-  G.__agPrismThoughtSettingsUi = { createThoughtAiConfigBox, isLocalKeylessUrl };
+  G.__agPrismThoughtSettingsUi = { createThoughtAiConfigBox, isLocalKeylessUrl, validateCustomProxyInput };
 })(typeof globalThis !== 'undefined' ? globalThis : window);

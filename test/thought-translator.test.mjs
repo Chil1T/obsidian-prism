@@ -2405,7 +2405,7 @@ test('5-locale targetLang adaptation: prompt/boundary routing, GTX tl= mapping, 
     // Frontend thought-client.js zh-HK/zh-MO mapping & short threshold parity
     const tcSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-client.js'), 'utf8');
     assert.ok(/if\s*\(\/\^\(\?:yue\|zh\[-_\]\(\?:yue\|HK\|MO\)\)\/i\.test\(s\)\)\s*return\s*'yue'/.test(tcSrc), 'thought-client.js must map zh-HK/zh-MO to yue before zh-TW');
-    assert.ok(tcSrc.includes('norm.length < 4 || norm.length > 48000'), 'thought-client.js must use < 4 short-text threshold');
+    assert.ok(tcSrc.includes('!norm || norm.length < 4'), 'thought-client.js must use < 4 short-text threshold');
 
     // 3) Backend AI + GTX tl= mapping + cache isolation
     const aiRequests = [];
@@ -2752,13 +2752,18 @@ test('Issue #14 system proxy detection: Windows reg query, macOS scutil, env pri
   assert.equal(winDisabled.http, null);
   assert.equal(winDisabled.https, null);
 
-  // Windows reg query: socks-only or socks5:// must safely return disabled without crashing
+  // Windows reg query: socks-only now natively parses as socks5h://; unsupported schemes & unsplit tokens still return null
   const winSocksOnly = parseWindowsRegProxyOutput(
     '    ProxyEnable    REG_DWORD    0x1\r\n    ProxyServer    REG_SZ    socks=127.0.0.1:1080\r\n'
   );
-  assert.equal(winSocksOnly.enabled, false);
-  assert.equal(parseProxyUrl('socks5://127.0.0.1:1080'), null);
+  assert.equal(winSocksOnly.enabled, true);
+  assert.equal(winSocksOnly.socks?.protocol, 'socks5h:');
+  assert.equal(winSocksOnly.socks?.port, 1080);
+  assert.equal(parseProxyUrl('socks5://127.0.0.1:1080')?.protocol, 'socks5:');
+  assert.equal(parseProxyUrl('socks5://127.0.0.1:1080')?.port, 1080);
+  assert.equal(parseProxyUrl('socks5h://127.0.0.1:1080')?.protocol, 'socks5h:');
   assert.equal(parseProxyUrl('socks=127.0.0.1:1080'), null);
+  assert.equal(parseProxyUrl('socks4://127.0.0.1:1080'), null);
 
   // 2) macOS scutil --proxy parsing
   const macScutilOut = [

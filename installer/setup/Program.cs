@@ -311,6 +311,64 @@ namespace AgyClaudeStyle.Installer
             return false;
         }
 
+        private static bool IsAllowedUsageCacheOverrideFile(string candidate, string hostCfgDir, string geminiRoot, out string matchedRoot)
+        {
+            matchedRoot = null;
+            if (string.IsNullOrEmpty(candidate) || string.IsNullOrEmpty(candidate.Trim())) return false;
+            string normFile;
+            string parentDir;
+            try
+            {
+                normFile = Path.GetFullPath(candidate.Trim());
+                parentDir = Path.GetDirectoryName(normFile);
+            }
+            catch { return false; }
+            if (string.IsNullOrEmpty(parentDir)) return false;
+            if (!string.Equals(Path.GetFileName(normFile), "obsidian-prism-usage-rollup-cache.json", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+            string normParent;
+            try { normParent = NormalizeDirPath(parentDir); }
+            catch { return false; }
+            string[] segs = normParent.Split(new char[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < segs.Length; i++)
+            {
+                if (string.Equals(segs[i], "conversations_archive", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(segs[i], "prism-knowledge-space", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(segs[i], "Antigravity-Spark", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+
+            List<string> allowedRoots = new List<string>();
+            Action<string> addBase = (b) =>
+            {
+                if (string.IsNullOrEmpty(b)) return;
+                try { allowedRoots.Add(NormalizeDirPath(b)); } catch { }
+            };
+            if (!string.IsNullOrEmpty(hostCfgDir)) addBase(hostCfgDir);
+            if (!string.IsNullOrEmpty(geminiRoot)) addBase(geminiRoot);
+            string userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrEmpty(userHome)) userHome = Environment.GetEnvironmentVariable("USERPROFILE");
+            if (!string.IsNullOrEmpty(userHome)) addBase(Path.Combine(userHome, ".gemini"));
+            addBase(Path.GetTempPath());
+
+            for (int i = 0; i < allowedRoots.Count; i++)
+            {
+                string root = allowedRoots[i];
+                string rootSlash = root.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+                if (string.Equals(normParent, root, StringComparison.OrdinalIgnoreCase) ||
+                    normParent.StartsWith(rootSlash, StringComparison.OrdinalIgnoreCase))
+                {
+                    matchedRoot = root;
+                    return true;
+                }
+            }
+            return false;
+        }
+
         private static void SafeDeleteDirectory(string dir)
         {
             if (string.IsNullOrEmpty(dir)) return;
@@ -463,6 +521,7 @@ namespace AgyClaudeStyle.Installer
                     "obsidian-prism-config.backup.json",
                     "obsidian-prism-thought.json",
                     "obsidian-prism-thought-cache.json",
+                    "obsidian-prism-usage-rollup-cache.json",
                     "obsidian-prism-sidebar.json",
                     "obsidian-prism-sidebar.json.lock",
                 };
@@ -504,6 +563,24 @@ namespace AgyClaudeStyle.Installer
                     }
                     catch { }
                 }
+            }
+
+            string envUsageCache = Environment.GetEnvironmentVariable("PRISM_USAGE_CACHE_PATH");
+            string geminiRootForUsage = !string.IsNullOrEmpty(hostCfgDir) ? Path.GetDirectoryName(hostCfgDir) : null;
+            string usageCacheStopRoot;
+            if (IsAllowedUsageCacheOverrideFile(envUsageCache, hostCfgDir, geminiRootForUsage, out usageCacheStopRoot))
+            {
+                try
+                {
+                    string overrideFile = Path.GetFullPath(envUsageCache.Trim());
+                    string overrideParent = Path.GetDirectoryName(overrideFile);
+                    if (!string.IsNullOrEmpty(overrideParent) && Directory.Exists(overrideParent))
+                    {
+                        AssertNoReparsePointChain(overrideParent, usageCacheStopRoot);
+                        SafeDeleteFileNoReparsePoint(overrideFile);
+                    }
+                }
+                catch { }
             }
         }
 
@@ -1494,11 +1571,12 @@ namespace AgyClaudeStyle.Installer
             _activeInstallDir = InstallerCore.NormalizeDirPath(string.IsNullOrEmpty(opts.InstallDir) ? InstallerCore.GetDefaultInstallDir() : opts.InstallDir);
             _activePluginDir = InstallerCore.ResolveNativePluginDir(opts, _activeInstallDir);
 
+            SuspendLayout();
+
             Text = "Obsidian Prism · 黑曜棱镜 安装与修补工具";
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
-            AutoScaleMode = AutoScaleMode.Font;
             Font = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Regular);
             ClientSize = new Size(588, 464);
             BackColor = Color.FromArgb(244, 247, 251);
@@ -1547,7 +1625,7 @@ namespace AgyClaudeStyle.Installer
                 : "正在只读检测 Antigravity Desktop 与安装状态，等待你确认后再开始安装...";
             _statusDetail.ForeColor = Color.FromArgb(87, 83, 78);
             _statusDetail.Location = new Point(14, 42);
-            _statusDetail.Size = new Size(520, 40);
+            _statusDetail.Size = new Size(520, 42);
 
             _metaLabel = new Label();
             _metaLabel.Text = "插件目录: " + _activePluginDir;
@@ -1555,6 +1633,7 @@ namespace AgyClaudeStyle.Installer
             _metaLabel.Font = new Font("Microsoft YaHei UI", 8.2f, FontStyle.Regular);
             _metaLabel.Location = new Point(14, 88);
             _metaLabel.Size = new Size(520, 20);
+            _metaLabel.AutoEllipsis = true;
 
             card.Controls.Add(_statusHeadline);
             card.Controls.Add(_statusDetail);
@@ -1583,15 +1662,15 @@ namespace AgyClaudeStyle.Installer
             _uninstallBtn = new Button();
             _uninstallBtn.Text = "卸载并恢复原版";
             _uninstallBtn.Location = new Point(20, 412);
-            _uninstallBtn.Size = new Size(130, 34);
+            _uninstallBtn.Size = new Size(134, 34);
             _uninstallBtn.Enabled = false;
             _uninstallBtn.FlatStyle = FlatStyle.System;
             _uninstallBtn.Click += async (s, e) => await HandleUninstallClickAsync();
 
             _openDirBtn = new Button();
             _openDirBtn.Text = "打开配置目录";
-            _openDirBtn.Location = new Point(158, 412);
-            _openDirBtn.Size = new Size(108, 34);
+            _openDirBtn.Location = new Point(162, 412);
+            _openDirBtn.Size = new Size(122, 34);
             _openDirBtn.Enabled = false;
             _openDirBtn.FlatStyle = FlatStyle.System;
             _openDirBtn.Click += (s, e) =>
@@ -1608,8 +1687,8 @@ namespace AgyClaudeStyle.Installer
 
             _installBtn = new Button();
             _installBtn.Text = "立即安装";
-            _installBtn.Location = new Point(318, 412);
-            _installBtn.Size = new Size(134, 34);
+            _installBtn.Location = new Point(314, 412);
+            _installBtn.Size = new Size(138, 34);
             _installBtn.Visible = !opts.Uninstall;
             _installBtn.Enabled = false;
             _installBtn.FlatStyle = FlatStyle.Flat;
@@ -1620,8 +1699,8 @@ namespace AgyClaudeStyle.Installer
 
             _launchAgBtn = new Button();
             _launchAgBtn.Text = "启动 Antigravity";
-            _launchAgBtn.Location = new Point(318, 412);
-            _launchAgBtn.Size = new Size(134, 34);
+            _launchAgBtn.Location = new Point(314, 412);
+            _launchAgBtn.Size = new Size(138, 34);
             _launchAgBtn.Visible = false;
             _launchAgBtn.FlatStyle = FlatStyle.System;
             _launchAgBtn.Click += (s, e) =>
@@ -1653,6 +1732,13 @@ namespace AgyClaudeStyle.Installer
             Controls.Add(_closeBtn);
             CancelButton = _closeBtn;
             UpdateInstallButtonStyle();
+
+            // Coordinates above are designed at 96 DPI; set AutoScaleDimensions + Dpi mode
+            // so PerMonitorV2 scales the form and child controls proportionally on high-DPI displays.
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            ResumeLayout(false);
+            PerformLayout();
 
             Shown += async (s, e) => await StartInitialActionAsync();
             FormClosing += (s, e) =>

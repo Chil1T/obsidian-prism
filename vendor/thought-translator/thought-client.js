@@ -32,6 +32,7 @@
   let triggerTiming = 'preload';
   let currentViewMode = 'immersive';
   let currentLang = 'zh-CN';
+  let translateToolSummaries = false;
   let activeStyleTag = '';
   let storedCount = 0;
   let cacheDirty = false;
@@ -40,13 +41,17 @@
   let viewModeLoaded = false;
   let hasExplicitHostView = false;
   let scrollBound = false;
+  let visBound = false;
   let scrollTimer = null;
   let scanTimer = null;
+  let streamingWatchTimer = null;
   let cachedConvRoot = null;
   let reqSeq = 0;
 
   const SEL_TRIGGER = 'button[data-testid="thinking-collapsible-trigger"]';
   const SEL_OVERLAY = '.ag-prism-thought-overlay[data-op-thought="1"]';
+  const SEL_TOOL_TRIGGERS = '[data-testid="tool-group-collapsible"], [data-testid="worked-for-collapsible"]';
+  const SEL_TOOL_ROWS = '[data-testid="tool-call-row"], [data-ag-tool-row="1"]';
   const A_EXP = 'aria-expanded';
   const A_RDY = 'data-op-zh-ready';
   const A_PND = 'data-op-zh-pending';
@@ -67,14 +72,36 @@
   const C_RT = 'ag-prism-thought-retry-btn';
   const C_PH = 'ag-prism-thought-pending-hint';
   const C_CK = 'ag-prism-thought-chunk';
+  const C_TRG = 'ag-prism-thought-trigger-badge';
+  const C_TRC = 'ag-prism-thought-trunc-badge';
 
-  const ZH_TW_PACK = '原文|收起原文|機翻降級|AI 未就緒，已降級機翻|重新轉譯|轉譯未完成|↻ 重試|機翻中…|AI 轉譯中…|思考輸出中…|收束中…'.split('|');
+  const MAX_SAFE_THOUGHT_CHARS = 48000;
+  const SAFE_TRUNCATE_BUDGET = 46000;
+  const INFLIGHT_TTL_MS = 185000;
+
+  // Indices:
+  // 0:raw, 1:hideRaw, 2:fallback, 3:fallbackTitle, 4:retranslate, 5:errGeneric, 6:retryBtn,
+  // 7:pendingMachine, 8:pendingAi, 9:streaming, 10:settling,
+  // 11:errProxy, 12:errRateLimit, 13:errAuth, 14:errTimeout, 15:errOffline,
+  // 16:badgeProxy, 17:badgeRateLimit, 18:badgeAuth, 19:badgeTimeout, 20:badgeOffline, 21:badgeGeneric,
+  // 22:truncFmt ({0}k/{1}k)
+  const ZH_TW_PACK =
+    '原文|收起原文|機翻降級|AI 未就緒，已降級機翻|重新轉譯|轉譯未完成|↻ 重試|機翻中…|AI 轉譯中…|思考輸出中…|收束中…|代理或網路不可達|請求限流冷卻中|金鑰或權限異常|轉譯逾時|後台服務未連線|代理失敗 · 重試|限流冷卻 · 重試|驗證失敗 · 重試|逾時 · 重試|服務離線 · 重試|轉譯失敗 · 重試|已安全分段譯前 {0}k 字（共 {1}k）'.split(
+      '|'
+    );
   const CLIENT_I18N = {
-    'zh-CN': '原文|收起原文|机翻降级|AI 未就绪，已降级机翻|重新转译|转译未完成|↻ 重试|机翻中…|AI 转译中…|思考输出中…|收束中…'.split('|'),
+    'zh-CN':
+      '原文|收起原文|机翻降级|AI 未就绪，已降级机翻|重新转译|转译未完成|↻ 重试|机翻中…|AI 转译中…|思考输出中…|收束中…|代理或网络不可达|请求限流冷却中|密钥或权限异常|转译超时|后台服务未连接|代理失败 · 重试|限流冷却 · 重试|鉴权失败 · 重试|超时 · 重试|服务离线 · 重试|转译失败 · 重试|已安全分段译前 {0}k 字（共 {1}k）'.split(
+        '|'
+      ),
     'zh-TW': ZH_TW_PACK,
     yue: ['原文', '收埋原文', ...ZH_TW_PACK.slice(2)],
-    en: 'Raw|Hide Raw|Fallback|AI unavailable; machine fallback|Retranslate|Translation incomplete|↻ Retry|Translating…|AI polishing…|Streaming…|Settling…'.split('|'),
-    ja: '原文|原文を隠す|機械翻訳代替|AI未設定・機械翻訳代替|再翻訳|翻訳未完了|↻ 再試行|翻訳中…|AI翻訳中…|出力中…|整理中…'.split('|'),
+    en: 'Raw|Hide Raw|Fallback|AI unavailable; machine fallback|Retranslate|Translation incomplete|↻ Retry|Translating…|AI polishing…|Streaming…|Settling…|Proxy or network unreachable|Rate-limited (cooling down)|API key or auth error|Translation timed out|Daemon service offline|Proxy error · Retry|Rate limit · Retry|Auth error · Retry|Timed out · Retry|Offline · Retry|Failed · Retry|Translated first {0}k / {1}k chars'.split(
+      '|'
+    ),
+    ja: '原文|原文を隠す|機械翻訳代替|AI未設定・機械翻訳代替|再翻訳|翻訳未完了|↻ 再試行|翻訳中…|AI翻訳中…|出力中…|整理中…|プロキシまたは接続不可|レート制限クールダウン中|APIキーまたは認証エラー|翻訳タイムアウト|バックグラウンド未接続|プロキシ失敗 · 再試行|制限中 · 再試行|認証エラー · 再試行|タイムアウト · 再試行|オフライン · 再試行|失敗 · 再試行|先頭 {0}k 字を翻訳済（全 {1}k 字）'.split(
+      '|'
+    ),
   };
 
   const memCache = new Map();
@@ -86,6 +113,14 @@
   const failedSigs = new Map();
   const inflightBySig = new Map();
   const trackedWaitPanels = new Map();
+  const trackedStreamingTriggers = new Map();
+  const streamingObservers = new WeakMap();
+  const waitPanelObservers = new WeakMap();
+  const toolSummaryRecords = new Set();
+  const toolSummaryNodeMap = new WeakMap();
+  const toolSummaryCache = new Map();
+  const toolBatchInflight = new Map();
+  const toolSummaryFailedUntil = new Map();
   const panelMeta = new WeakMap();
   const rawCacheMap = new WeakMap();
   const lockedHeights = new WeakMap();
@@ -316,21 +351,172 @@
     return CLIENT_I18N[resolveActiveLang(explicitLang)] || CLIENT_I18N['zh-CN'];
   }
 
+  function isDocHiddenOrSleep() {
+    try {
+      if (typeof document !== 'undefined' && (document.hidden || document.visibilityState === 'hidden')) return true;
+      const rootEl = docRoot();
+      if (rootEl && ga(rootEl, 'data-ag-prism-mode') === 'chat') return true;
+    } catch (_) {}
+    return false;
+  }
+
+  function disconnectWaitPanelObserver(panel) {
+    if (!panel) return;
+    const obs = waitPanelObservers.get(panel);
+    if (obs) {
+      try { obs.disconnect(); } catch (_) {}
+      waitPanelObservers.delete(panel);
+    }
+  }
+
+  function untrackStreamingTrigger(btn) {
+    if (!btn) return;
+    trackedStreamingTriggers.delete(btn);
+    const obs = streamingObservers.get(btn);
+    if (obs) {
+      try { obs.disconnect(); } catch (_) {}
+      streamingObservers.delete(btn);
+    }
+    if (!trackedStreamingTriggers.size && streamingWatchTimer) {
+      clearTimeout(streamingWatchTimer);
+      streamingWatchTimer = null;
+    }
+  }
+
+  function clearAllStreamingWatchers() {
+    if (streamingWatchTimer) {
+      clearTimeout(streamingWatchTimer);
+      streamingWatchTimer = null;
+    }
+    for (const btn of Array.from(trackedStreamingTriggers.keys())) {
+      untrackStreamingTrigger(btn);
+    }
+    trackedStreamingTriggers.clear();
+  }
+
+  function checkTrackedStreamingTriggers() {
+    streamingWatchTimer = null;
+    if (currentMode === 'off' || isDocHiddenOrSleep()) return;
+    const now = nowMs();
+    let wokeAny = false;
+    for (const [btn, rec] of Array.from(trackedStreamingTriggers.entries())) {
+      if (!isConn(btn) || now - rec.at > 300000) {
+        untrackStreamingTrigger(btn);
+        continue;
+      }
+      if (!isTriggerStreaming(btn)) {
+        untrackStreamingTrigger(btn);
+        wokeAny = true;
+      } else {
+        const panel = nextSib(btn);
+        if (panel) {
+          const stp = quickPanelStamp(panel);
+          if (stp !== rec.stp) {
+            rec.stp = stp;
+            rec.lastMut = now;
+          }
+        }
+      }
+    }
+    if (wokeAny) scheduleScan(25);
+    if (trackedStreamingTriggers.size > 0 && currentMode !== 'off' && !isDocHiddenOrSleep()) {
+      streamingWatchTimer = setTimeout(checkTrackedStreamingTriggers, 480);
+      streamingWatchTimer?.unref?.();
+    }
+  }
+
+  function trackStreamingTrigger(btn, panel) {
+    if (!btn || currentMode === 'off') return;
+    const now = nowMs();
+    const stp = panel ? quickPanelStamp(panel) : '';
+    const existing = trackedStreamingTriggers.get(btn);
+    if (existing) {
+      existing.stp = stp;
+    } else {
+      trackedStreamingTriggers.set(btn, { at: now, lastMut: now, stp });
+    }
+    const MO = W.MutationObserver || (typeof MutationObserver === 'function' ? MutationObserver : null);
+    if (MO && !streamingObservers.has(btn)) {
+      try {
+        const obs = new MO(() => {
+          if (currentMode === 'off') {
+            untrackStreamingTrigger(btn);
+            return;
+          }
+          if (!isConn(btn) || !isTriggerStreaming(btn)) {
+            untrackStreamingTrigger(btn);
+            scheduleScan(25);
+          }
+        });
+        obs.observe(btn, {
+          attributes: true,
+          attributeFilter: ['class', 'aria-expanded', 'data-op-thought-state', 'data-ag-cs-spark-streaming'],
+          characterData: true,
+          childList: true,
+          subtree: true,
+        });
+        streamingObservers.set(btn, obs);
+      } catch (_) {}
+    }
+    if (!streamingWatchTimer && !isDocHiddenOrSleep()) {
+      streamingWatchTimer = setTimeout(checkTrackedStreamingTriggers, 480);
+      streamingWatchTimer?.unref?.();
+    }
+  }
+
   function setPanelWaitTimer(panel, btn, fn, delayMs) {
     if (!panel) return;
     clearPanelWaitTimer(panel);
+    const MO = W.MutationObserver || (typeof MutationObserver === 'function' ? MutationObserver : null);
+    if (MO && !waitPanelObservers.has(panel)) {
+      try {
+        const obs = new MO((records) => {
+          if (currentMode === 'off') {
+            disconnectWaitPanelObserver(panel);
+            return;
+          }
+          let sawHostChange = false;
+          for (let i = 0; i < records.length; i++) {
+            const tgt = records[i]?.target;
+            const el = tgt && tgt.nodeType === 1 ? tgt : parEl(tgt);
+            if (el && (isOverlayOrIgnoredElement(el) || el.closest?.('[data-prism-ignore], [data-op-thought]'))) continue;
+            sawHostChange = true;
+            break;
+          }
+          if (sawHostChange) {
+            const m = panelMeta.get(panel);
+            if (m) m.c = nowMs();
+          }
+        });
+        obs.observe(panel, { characterData: true, childList: true, subtree: true });
+        waitPanelObservers.set(panel, obs);
+      } catch (_) {}
+    }
     const t = setTimeout(() => {
       trackedWaitPanels.delete(panel);
+      disconnectWaitPanelObserver(panel);
       fn();
     }, delayMs);
     trackedWaitPanels.set(panel, { t, b: btn });
   }
 
   function clearPanelWaitTimer(panel) {
+    disconnectWaitPanelObserver(panel);
     const rec = trackedWaitPanels.get(panel);
     if (!rec) return;
     clearTimeout(rec.t);
     trackedWaitPanels.delete(panel);
+  }
+
+  function findTriggerForPanel(panel) {
+    if (!panel) return null;
+    const prev = panel.previousElementSibling;
+    if (prev && ga(prev, 'data-testid') === 'thinking-collapsible-trigger') return prev;
+    const triggers = queryTriggers();
+    for (let i = 0; i < triggers.length; i++) {
+      if (nextSib(triggers[i]) === panel) return triggers[i];
+    }
+    return null;
   }
 
   function isPanelCurrentlyExpanded(panel) {
@@ -349,6 +535,7 @@
       if (onlyCollapsed && expanded) continue;
       clearTimeout(rec.t);
       trackedWaitPanels.delete(panel);
+      disconnectWaitPanelObserver(panel);
       if (!expanded) clearPendingKeepRaw(panel);
     }
   }
@@ -439,9 +626,10 @@
   }
 
   function isAlreadyTargetLang(norm, targetLang = currentLang) {
-    if (!norm || norm.length < 4 || norm.length > 48000) return true;
+    if (!norm || norm.length < 4) return true;
+    const sample = norm.length > MAX_SAFE_THOUGHT_CHARS ? norm.slice(0, MAX_SAFE_THOUGHT_CHARS) : norm;
     const tl = normalizeLangCode(targetLang) || 'zh-CN';
-    const prose = norm
+    const prose = sample
       .replace(/```[\s\S]*?```/g, ' ')
       .replace(/`[^`\n]+`/g, ' ')
       .replace(/https?:\/\/\S+/g, ' ')
@@ -472,6 +660,76 @@
     if (tl === 'zh-TW' || tl === 'yue') return false;
 
     return c.lw < 6 && c.kana < 4 && c.han < 4 && c.cjk >= 6;
+  }
+
+  function sliceThoughtForSafeSend(rawText) {
+    const text = String(rawText || '').trim();
+    if (text.length <= MAX_SAFE_THOUGHT_CHARS) {
+      return { text, truncated: false, totalChars: text.length, sentChars: text.length };
+    }
+    const hardEnd = Math.min(text.length, SAFE_TRUNCATE_BUDGET);
+    const minCut = Math.floor(SAFE_TRUNCATE_BUDGET * 0.7);
+    let cut = text.lastIndexOf('\n\n', hardEnd);
+    if (cut < minCut) cut = text.lastIndexOf('\n', hardEnd);
+    if (cut < minCut) cut = text.lastIndexOf(' ', hardEnd);
+    if (cut < minCut) cut = hardEnd;
+    const head = text.slice(0, cut).trim() || text.slice(0, hardEnd);
+    return { text: head, truncated: true, totalChars: text.length, sentChars: head.length };
+  }
+
+  const TOOL_PROTECT_RES = [
+    /\x60[^\x60\n]+\x60/g,
+    /\bExited\s+with\s+(?:exit\s+)?code\s+-?\d+\b/gi,
+    /\bexit\s+code\s+-?\d+\b/gi,
+    /\bHTTP\s+\d{3}\b/g,
+    /(?:https?|file|socks5h?):\/\/[^\s\x22\x27<>()]+/gi,
+    /[A-Za-z]:[\\/][^\s\x22\x27<>|]+/g,
+    /(?<![A-Za-z0-9_])(?:\.{1,2}\/|\/)(?:[A-Za-z0-9_.@-]+\/)*[A-Za-z0-9_.@-]+(?:#L\d+(?:-L?\d+)?|:\d+(?:-\d+)?(?::\d+)?)?/g,
+    /(?<![A-Za-z0-9_./\\-])(?:[A-Za-z0-9_.@-]+\/)+[A-Za-z0-9_.@-]+(?:#L\d+(?:-L?\d+)?|:\d+(?:-\d+)?(?::\d+)?)?/g,
+    /#L\d+(?:-L?\d+)?\b/gi,
+    /\bL\d+-L?\d+\b/g,
+    /(?<!\w):\d+(?:-\d+)(?::\d+)?\b/g,
+    /(?<![A-Za-z0-9_./\\-])[A-Za-z0-9_][A-Za-z0-9_.-]*\.[A-Za-z][A-Za-z0-9]{0,7}(?:#L\d+(?:-L?\d+)?|:\d+(?:-\d+)?)?(?![A-Za-z0-9_])/g,
+    /(?<=^|[\s([{\x22\x27])--?[A-Za-z][A-Za-z0-9_-]*(?:=[^\s)\]}\x22\x27]+)?/g,
+    /\b[A-Za-z0-9]+(?:_[A-Za-z0-9]+)+\b/g,
+    /\b(?:[a-z]+[A-Z][A-Za-z0-9]*|[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]*)\b/g,
+    /\b[A-Za-z_][A-Za-z0-9_]*\(\)/g,
+    /\b(?:xlsx|xls|docx|pptx|csv|tsv|json|jsonl|yaml|yml|toml|xml|html|htm|css|scss|less|mjs|cjs|jsx|tsx|pyc|cpp|hpp|ps1|bat|cmd|sql|mdx|txt|pdf|png|jpg|jpeg|webp|svg|gif|ico|zip|tar|tgz|rar|env|ini|cfg|conf|diff|patch|exe|dll|dylib|wasm|ipynb|parquet|sqlite)\b/gi,
+  ];
+  const TOOL_VERB_RE =
+    /\b(?:read|reading|write|writing|wrote|edit|editing|edited|inspect|inspecting|inspected|check|checking|checked|list|listing|listed|search|searching|searched|find|finding|found|run|running|ran|open|opening|opened|view|viewing|viewed|create|creating|created|delete|deleting|deleted|update|updating|updated|analyze|analyzing|analyzed|explore|exploring|explored|finished|failed|completed|scanning|scanned|loading|loaded)\b/i;
+
+  function protectToolSummaryTokens(text) {
+    const src = String(text || '');
+    if (!src) return { masked: '', tokens: [] };
+    const tokens = [];
+    let masked = src;
+    for (let i = 0; i < TOOL_PROTECT_RES.length; i++) {
+      const re = TOOL_PROTECT_RES[i];
+      re.lastIndex = 0;
+      masked = masked.replace(re, (m) => {
+        if (!m || m.includes('__OPID_')) return m;
+        const idx = tokens.push(m) - 1;
+        return `__OPID_${idx}__`;
+      });
+    }
+    return { masked, tokens };
+  }
+
+  function isToolSummaryCandidate(raw, targetLang = currentLang) {
+    const norm = trm(raw);
+    if (!norm || norm.length < 4 || norm.length > 280) return false;
+    const tl = normalizeLangCode(targetLang) || 'zh-CN';
+    const { masked, tokens } = protectToolSummaryTokens(norm);
+    const prose = masked.replace(/__OPID_\d+__/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!prose) return false;
+    const latinWords = (prose.match(/[A-Za-z]{2,}/g) || []).length;
+    const cjk = (prose.match(/[\u4e00-\u9fa5]/g) || []).length;
+    const kana = (prose.match(/[\u3040-\u30ff]/g) || []).length;
+    const han = (prose.match(/[\uac00-\ud7af]/g) || []).length;
+    if (tl === 'en') return cjk + kana + han >= 2;
+    if (tl === 'ja') return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || (cjk >= 4 && kana === 0);
+    return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || kana >= 3 || han >= 3;
   }
 
   const getStore = () => W.localStorage || null;
@@ -612,9 +870,43 @@
     storedCount = 0;
     const cleared = memCache.size;
     memCache.clear();
+    toolSummaryCache.clear();
     failedSigs.clear();
+    toolSummaryFailedUntil.clear();
     try { getStore()?.removeItem?.(LOCAL_CACHE_KEY); } catch (_) {}
     return { ok: true, cleared, memEntries: 0, storageEntries: 0 };
+  }
+
+  function sanitizeClientErrorText(rawErr) {
+    return String(rawErr || '')
+      .replace(/((?:https?|socks5h?):\/\/)[^@\s/\x22\x27<>]+@/gi, '$1***REDACTED***@')
+      .replace(/(sk-[A-Za-z0-9_\-]{6,}|Bearer\s+[A-Za-z0-9._\-:+/=]{6,}|(?:Proxy-)?Authorization\s*:\s*Basic\s+[A-Za-z0-9+/=]{4,})/gi, '***REDACTED***')
+      .slice(0, 180);
+  }
+
+  function classifyFailureReason(resOrErr) {
+    if (resOrErr && typeof resOrErr === 'object') {
+      if (resOrErr.offline) return 'offline';
+      if (resOrErr.timeout) return 'timeout';
+    }
+    const msg = String((resOrErr && (resOrErr.error || resOrErr.message)) || resOrErr || '');
+    if (/429|rate.?limit|quota|too many requests/i.test(msg)) return 'ratelimit';
+    if (/401|403|api.?key|unauthorized|forbidden|invalid.?key/i.test(msg)) return 'auth';
+    if (/timed?\s*out|timeout/i.test(msg)) return 'timeout';
+    if (/offline|disconnected/i.test(msg)) return 'offline';
+    if (/proxy|socks|connect|econnrefused|enotfound|econnreset|etimedout|tunnel|network|fetch failed|socket/i.test(msg)) return 'proxy';
+    return 'generic';
+  }
+
+  const ERR_REASON_IDX = { proxy: 11, ratelimit: 12, auth: 13, timeout: 14, offline: 15, generic: 5 };
+  const BADGE_REASON_IDX = { proxy: 16, ratelimit: 17, auth: 18, timeout: 19, offline: 20, generic: 21 };
+
+  function getFailureErrorText(reason, pack = getClientPack()) {
+    return pack[ERR_REASON_IDX[reason] || 5] || pack[5];
+  }
+
+  function getTriggerBadgeText(reason, pack = getClientPack()) {
+    return pack[BADGE_REASON_IDX[reason] || 21] || pack[21];
   }
 
   function isSigInCooldown(sig) {
@@ -627,16 +919,95 @@
     return true;
   }
 
-  function recordSigFailure(sig) {
-    if (!sig) return;
+  function getSigFailureMeta(sig) {
+    const rec = failedSigs.get(sig);
+    if (!rec) return null;
+    if (nowMs() >= rec.u) {
+      failedSigs.delete(sig);
+      return null;
+    }
+    return rec;
+  }
+
+  function recordSigFailure(sig, errInfo = null) {
+    if (!sig) return null;
     const prev = failedSigs.get(sig);
     const c = prev ? prev.c + 1 : 1;
+    const reason = (errInfo && errInfo.reason) || classifyFailureReason(errInfo);
+    const detail = sanitizeClientErrorText((errInfo && (errInfo.detail || errInfo.error || errInfo.message)) || '');
+    const ttl = c === 1 ? 15000 : c === 2 ? 45000 : 120000;
+    const rec = { c, u: nowMs() + ttl, r: reason, d: detail };
     failedSigs.delete(sig);
-    failedSigs.set(sig, { c, u: nowMs() + (c === 1 ? 15000 : c === 2 ? 45000 : 120000) });
+    failedSigs.set(sig, rec);
     if (failedSigs.size > 512) {
       const oldest = failedSigs.keys().next().value;
       if (oldest !== undefined) failedSigs.delete(oldest);
     }
+    return rec;
+  }
+
+  function clearSigCooldown(sig) {
+    if (sig) failedSigs.delete(sig);
+    else failedSigs.clear();
+  }
+
+  function clearTriggerStatusBadge(btnOrPanel) {
+    const btn =
+      btnOrPanel && ga(btnOrPanel, 'data-testid') === 'thinking-collapsible-trigger'
+        ? btnOrPanel
+        : findTriggerForPanel(btnOrPanel);
+    if (!btn) return;
+    const old = findChildByClass(btn, C_TRG);
+    if (old) old.remove();
+  }
+
+  function syncTriggerStatusBadge(panel, reason, detail, sig, rawText, mode) {
+    if (!panel) return;
+    const btn = findTriggerForPanel(panel);
+    if (!btn || !isConn(btn)) return;
+    const doc = docOf(btn);
+    const t = getClientPack();
+    const r = reason || 'generic';
+    let badge = findChildByClass(btn, C_TRG);
+    if (!badge) {
+      badge = markNoTr(ce(doc, 'span', C_TRG));
+      sa(badge, 'role', 'button');
+      sa(badge, 'tabindex', '0');
+      sa(badge, 'data-testid', 'thought-trigger-status-badge');
+      sa(badge, 'data-op-thought', '1');
+      sa(badge, 'data-prism-ignore', '1');
+      sa(badge, 'data-ag-no-i18n', '');
+      sa(badge, 'data-no-press-spring', '1');
+      if (badge[K_ST]) {
+        badge[K_ST].display = 'inline-flex';
+        badge[K_ST].alignItems = 'center';
+        badge[K_ST].padding = '0 6px';
+        badge[K_ST].marginLeft = '4px';
+        badge[K_ST].borderRadius = '999px';
+        badge[K_ST].fontSize = '10.5px';
+        badge[K_ST].lineHeight = '16px';
+        badge[K_ST].fontWeight = '500';
+        badge[K_ST].cursor = 'pointer';
+        badge[K_ST].border = '1px solid color-mix(in srgb,var(--warning,#E5A93B) 36%,var(--ag-cs-border-1,rgba(128,128,128,.28)))';
+        badge[K_ST].background = 'color-mix(in srgb,var(--warning,#E5A93B) 12%,var(--ag-cs-pill-bg,rgba(128,128,128,.1)))';
+        badge[K_ST].color = 'var(--warning,#D97706)';
+      }
+      const doRetry = (ev) => {
+        stopEv(ev);
+        retryPanelNow(panel, rawText, mode, sig);
+      };
+      onClk(badge, doRetry);
+      if (typeof badge.addEventListener === 'function') {
+        badge.addEventListener('keydown', (ev) => {
+          if (ev && (ev.key === 'Enter' || ev.key === ' ')) doRetry(ev);
+        });
+      }
+      ap(btn, badge);
+    }
+    sa(badge, 'data-fail-reason', r);
+    const label = getTriggerBadgeText(r, t);
+    stc(badge, label);
+    badge.title = detail ? `${getFailureErrorText(r, t)}: ${detail}` : getFailureErrorText(r, t);
   }
 
   const getBridge = () => W.__agPrismThoughtBridge || null;
@@ -668,9 +1039,54 @@
     scrollTimer?.unref?.();
   };
 
+  const onVisibilityChange = () => {
+    if (isDocHiddenOrSleep()) {
+      if (streamingWatchTimer) {
+        clearTimeout(streamingWatchTimer);
+        streamingWatchTimer = null;
+      }
+      return;
+    }
+    if (currentMode !== 'off' && trackedStreamingTriggers.size > 0) {
+      checkTrackedStreamingTriggers();
+    }
+  };
+
+  function restoreAllToolSummaries() {
+    for (const reqId of toolBatchInflight.values()) {
+      if (reqId) void callDaemonRpc({ action: 'cancel-translate', requestId: reqId }).catch(() => {});
+    }
+    toolBatchInflight.clear();
+    for (const rec of Array.from(toolSummaryRecords)) {
+      try {
+        if (rec.tn && isConn(rec.tn) && getTnStr(rec.tn) === rec.trans) {
+          setTn(rec.tn, rec.orig);
+        }
+        if (rec.el) ra(rec.el, 'data-op-tool-tr');
+      } catch (_) {}
+      if (rec.tn) toolSummaryNodeMap.delete(rec.tn);
+      toolSummaryRecords.delete(rec);
+    }
+  }
+
+  function setTranslateToolSummariesFlag(enabled, triggerRescan = true) {
+    const next = Boolean(enabled);
+    const changed = translateToolSummaries !== next;
+    translateToolSummaries = next;
+    if (!next) {
+      restoreAllToolSummaries();
+    } else if (changed && triggerRescan && currentMode !== 'off') {
+      scheduleScan(30);
+    }
+    return changed;
+  }
+
   function syncRemoteCfgMeta(res) {
     const nextTag = res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : '');
     const tagChanged = setActiveStyleTag(nextTag);
+    if (res && typeof res.translateToolSummaries === 'boolean') {
+      setTranslateToolSummariesFlag(res.translateToolSummaries, false);
+    }
     if (!hasExplicitHostView && (res?.viewMode === 'bilingual' || res?.viewMode === 'immersive')) {
       let hasLocalPref = false;
       try { hasLocalPref = Boolean(getStore()?.getItem(VIEW_MODE_STORAGE_KEY)); } catch (_) {}
@@ -694,6 +1110,10 @@
     if (!scrollBound && typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
       document.addEventListener('scroll', onScrollCapture, { capture: true, passive: true });
       scrollBound = true;
+    }
+    if (!visBound && typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
+      visBound = true;
     }
 
     if (cacheWarmed) return;
@@ -781,6 +1201,12 @@
         stc(fb, t[2]);
         fb.title = t[3];
       }
+      const trc = findChildByClass(ov, C_TRC);
+      if (trc && !trc.hidden) {
+        const sK = ga(trc, 'data-sent-k') || '46';
+        const tK = ga(trc, 'data-total-k') || '48';
+        stc(trc, (t[22] || '').replace('{0}', sK).replace('{1}', tK));
+      }
       const rb = findChildByClass(ov, C_RB);
       if (rb) {
         rb.title = t[4];
@@ -792,13 +1218,18 @@
       if (body) {
         const errBar = findChildByClass(body, C_EB);
         if (errBar) {
-          stc(findChildByClass(errBar, C_ET), t[5]);
+          const r = ga(errBar, 'data-fail-reason') || 'generic';
+          stc(findChildByClass(errBar, C_ET), getFailureErrorText(r, t));
           stc(findChildByClass(errBar, C_RT), t[6]);
         }
         const ph = findChildByClass(body, C_PH);
         const ki = ph && KIND_IDX[ga(ph, 'data-pending-kind')];
         if (ki) stc(ph, t[ki]);
       }
+    });
+    qsa(`.${C_TRG}`).forEach((badge) => {
+      const r = ga(badge, 'data-fail-reason') || 'generic';
+      stc(badge, getTriggerBadgeText(r, t));
     });
   }
 
@@ -820,6 +1251,7 @@
     clearPanelStreamState(panel);
     unlockHeight(panel);
     clearPanelWaitTimer(panel);
+    clearTriggerStatusBadge(panel);
     findDirectOverlay(panel)?.remove();
     raList(panel, PANEL_CLEAN_ATTRS);
   }
@@ -840,6 +1272,12 @@
       document.removeEventListener('scroll', onScrollCapture, { capture: true });
       scrollBound = false;
     }
+    if (visBound && typeof document !== 'undefined' && document.removeEventListener) {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      visBound = false;
+    }
+    clearAllStreamingWatchers();
+    restoreAllToolSummaries();
     clearHydrateQueue();
     clearPanelHlItems(null);
     clearAllWaitTimers(false);
@@ -850,7 +1288,11 @@
       ov.remove();
       if (panel) cleanSinglePanelAttributes(panel);
     });
-    qsa(SEL_TRIGGER).forEach((btn) => cleanSinglePanelAttributes(nextSib(btn)));
+    qsa(SEL_TRIGGER).forEach((btn) => {
+      clearTriggerStatusBadge(btn);
+      cleanSinglePanelAttributes(nextSib(btn));
+    });
+    qsa(`.${C_TRG}, [data-testid="prism-thought-general-config"]`).forEach((n) => n.remove());
     const rootEl = docRoot();
     ra(rootEl, 'data-ag-prism-thought-owner');
     ra(rootEl, 'data-ag-prism-thought-view');
@@ -1305,13 +1747,59 @@
     return cns && cns.length === 1 && cns[0].nodeType === 3 ? cns[0][K_NV] || '' : tc(n) || '';
   };
 
+  function hashSampleStr(h, s) {
+    const len = s.length;
+    h ^= len;
+    h = Math.imul(h, 16777619);
+    if (len <= 64) {
+      for (let i = 0; i < len; i++) {
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return h;
+    }
+    for (let i = 0; i < 24; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    const q1 = len >> 2;
+    const mid = len >> 1;
+    const q3 = (len * 3) >> 2;
+    for (const off of [q1, mid, q3]) {
+      for (let j = 0; j < 8 && off + j < len; j++) {
+        h ^= s.charCodeAt(off + j);
+        h = Math.imul(h, 16777619);
+      }
+    }
+    for (let i = len - 24; i < len; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h;
+  }
+
   function quickPanelStamp(panel) {
-    const st = quickStructureSig(panel);
-    if (!st || !st.c) return '';
-    const fs = leafStr(st.f);
-    const ls = st.l === st.f ? fs : leafStr(st.l);
-    const ll = ls.length;
-    return `${st.c}:${fs.length}:${ll}:${ll ? ls.charCodeAt(ll - 1) | 0 : 0}`;
+    const nodes = panel && panel[K_CN];
+    if (!nodes || !nodes.length) return '';
+    let c = 0;
+    let totalLen = 0;
+    let h = 2166136261;
+    const nLen = nodes.length;
+    for (let i = 0; i < nLen; i++) {
+      const n = nodes[i];
+      if (n.nodeType === 1 && isOverlayOrIgnoredElement(n)) continue;
+      c++;
+      const s = leafStr(n);
+      totalLen += s.length;
+      if (c <= 16 || i >= nLen - 4) {
+        h = hashSampleStr(h, s);
+      } else {
+        h ^= s.length;
+        h = Math.imul(h, 16777619);
+      }
+    }
+    if (!c) return '';
+    return `${c}:${totalLen}:${(h >>> 0).toString(36)}`;
   }
 
   function splitMarkdownBlocks(markdownText, isStreaming = false, metaOut = null) {
@@ -1624,6 +2112,42 @@
 
   const findDirectOverlay = (panel) => findChildByClass(panel, C_OV);
 
+  function retryPanelNow(panel, fallbackRawText = '', fallbackMode = '', oldSig = '') {
+    if (!panel) return false;
+    const activeMode = currentMode === 'off' ? fallbackMode : currentMode;
+    if (!activeMode || activeMode === 'off') return false;
+    if (oldSig) failedSigs.delete(oldSig);
+    clearTriggerStatusBadge(panel);
+    const ov = findDirectOverlay(panel);
+    if (ov) ra(ov, 'data-failed');
+    ra(panel, A_FLD);
+    applyPanelViewMode(panel);
+    const inf = extractPanelInfo(panel);
+    const curRaw = inf.t || fallbackRawText;
+    if (!curRaw) return false;
+    const activeLang = resolveActiveLang();
+    const kb = inf.t ? inf.k : computeSkelBody(normalizeTextKey(curRaw));
+    const nextSig = sigFromBody(kb, activeMode, activeLang);
+    failedSigs.delete(nextSig);
+    const pm = panelMeta.get(panel);
+    if (pm && pm.skippedSig) {
+      delete pm.skippedSig;
+      panelMeta.set(panel, pm);
+    }
+    const existing = inflightBySig.get(nextSig);
+    if (existing) {
+      cancelTranslateRequest(existing);
+      inflightBySig.delete(nextSig);
+    }
+    const exp = isPanelCurrentlyExpanded(panel);
+    startOrJoinTranslation(panel, curRaw, activeMode, nextSig, `sig${kb}`, exp, {
+      force: true,
+      bypassCache: true,
+      priority: 30000,
+    });
+    return true;
+  }
+
   function triggerSingleBlockRetranslate(panel) {
     if (!panel || currentMode === 'off') return;
     const inf = extractPanelInfo(panel);
@@ -1631,6 +2155,7 @@
     const activeLang = resolveActiveLang();
     const sig = sigFromBody(inf.k, currentMode, activeLang);
     failedSigs.delete(sig);
+    clearTriggerStatusBadge(panel);
     memCache.delete(`${withLangSuffix('mt', activeLang)}${inf.k}`);
     memCache.delete(`${withLangSuffix(activeStyleTag || 'ai_technical', activeLang)}${inf.k}`);
     const pm = panelMeta.get(panel);
@@ -1645,7 +2170,11 @@
       cancelTranslateRequest(existing);
       inflightBySig.delete(sig);
     }
-    startOrJoinTranslation(panel, inf.t, currentMode, sig, `sig${inf.k}`, true, { force: true, priority: 30000 });
+    startOrJoinTranslation(panel, inf.t, currentMode, sig, `sig${inf.k}`, true, {
+      force: true,
+      bypassCache: true,
+      priority: 30000,
+    });
   }
 
   function ensureOverlayShell(panel) {
@@ -1670,6 +2199,25 @@
     fb.title = t[3];
     if (fb[K_ST]) fb[K_ST].display = 'none';
     ap(ov, fb);
+
+    const trc = markNoTr(ce(doc, 'span', C_TRC));
+    sa(trc, 'data-testid', 'thought-truncated-badge');
+    sa(trc, 'data-op-thought', '1');
+    sa(trc, 'data-prism-ignore', '1');
+    sa(trc, 'data-ag-no-i18n', '');
+    trc.hidden = true;
+    if (trc[K_ST]) {
+      trc[K_ST].display = 'none';
+      trc[K_ST].marginLeft = '6px';
+      trc[K_ST].padding = '1px 7px';
+      trc[K_ST].borderRadius = '999px';
+      trc[K_ST].fontSize = '10.5px';
+      trc[K_ST].lineHeight = '16px';
+      trc[K_ST].border = '1px solid var(--ag-cs-border-1,rgba(128,128,128,.28))';
+      trc[K_ST].background = 'var(--ag-cs-pill-bg,rgba(128,128,128,.1))';
+      trc[K_ST].color = 'var(--muted-foreground)';
+    }
+    ap(ov, trc);
 
     const rb = markNoTr(ce(doc, 'button', C_RB));
     rb.type = 'button';
@@ -1704,7 +2252,7 @@
     return ov;
   }
 
-  function syncOverlayBadges(ov, panel, isFallback, isReady) {
+  function syncOverlayBadges(ov, panel, isFallback, isReady, truncInfo = null) {
     if (!ov) return;
     const t = getClientPack();
     const fb = findChildByClass(ov, C_FB);
@@ -1713,6 +2261,21 @@
       if (fb[K_ST]) fb[K_ST].display = isFallback ? '' : 'none';
       stc(fb, t[2]);
       fb.title = t[3];
+    }
+    const trc = findChildByClass(ov, C_TRC);
+    if (trc) {
+      const showTrc = Boolean(isReady && truncInfo && truncInfo.truncated);
+      trc.hidden = !showTrc;
+      if (trc[K_ST]) trc[K_ST].display = showTrc ? 'inline-flex' : 'none';
+      if (showTrc) {
+        const sK = Math.max(1, Math.round((truncInfo.sentChars || SAFE_TRUNCATE_BUDGET) / 1000));
+        const tK = Math.max(sK, Math.round((truncInfo.totalChars || sK * 1000) / 1000));
+        sa(trc, 'data-sent-k', String(sK));
+        sa(trc, 'data-total-k', String(tK));
+        const msg = (t[22] || '').replace('{0}', String(sK)).replace('{1}', String(tK));
+        stc(trc, msg);
+        trc.title = msg;
+      }
     }
     if (panel) {
       if (isFallback) sa(panel, A_FBK, '1');
@@ -1730,6 +2293,7 @@
 
   function renderPendingState(panel, message, pendingKind = '') {
     if (!panel) return;
+    clearTriggerStatusBadge(panel);
     const existingOv = findDirectOverlay(panel);
     if (ga(panel, A_RDY) === '1' && existingOv && ga(existingOv, 'data-pending') !== '1') {
       const rb = findChildByClass(existingOv, C_RB);
@@ -1769,11 +2333,16 @@
     }
   }
 
-  function renderFailedState(panel, rawText, mode, sig) {
+  function renderFailedState(panel, rawText, mode, sig, errInfo = null) {
     if (!panel) return;
     clearPanelStreamState(panel);
     unlockHeight(panel);
     ra(panel, A_PND);
+
+    const failRec = getSigFailureMeta(sig);
+    const reason = (errInfo && errInfo.reason) || (failRec && failRec.r) || 'generic';
+    const detail = sanitizeClientErrorText((errInfo && (errInfo.detail || errInfo.error)) || (failRec && failRec.d) || '');
+    syncTriggerStatusBadge(panel, reason, detail, sig, rawText, mode);
 
     const existingOv = findDirectOverlay(panel);
     if (ga(panel, A_RDY) === '1' && existingOv) {
@@ -1796,8 +2365,11 @@
       ra(body, 'data-raw-zh');
       clearEl(body);
       const errBar = markNoTr(ce(doc, 'span', C_EB));
+      sa(errBar, 'data-fail-reason', reason);
+      const reasonText = getFailureErrorText(reason, t);
+      if (detail) errBar.title = `${reasonText}: ${detail}`;
       const errTxt = ce(doc, 'span', C_ET);
-      stc(errTxt, t[5]);
+      stc(errTxt, reasonText);
       ap(errBar, errTxt);
 
       const retryBtn = markNoTr(ce(doc, 'button', C_RT));
@@ -1807,17 +2379,7 @@
       stc(retryBtn, t[6]);
       onClk(retryBtn, (ev) => {
         stopEv(ev);
-        failedSigs.delete(sig);
-        ra(ov, 'data-failed');
-        ra(panel, A_FLD);
-        applyPanelViewMode(panel);
-        const inf = extractPanelInfo(panel);
-        const curRaw = inf.t || rawText;
-        const kb = inf.t ? inf.k : computeSkelBody(normalizeTextKey(curRaw));
-        const activeMode = currentMode === 'off' ? mode : currentMode;
-        const nextSig = sigFromBody(kb, activeMode);
-        failedSigs.delete(nextSig);
-        startOrJoinTranslation(panel, curRaw, activeMode, nextSig, `sig${kb}`, true, { force: true, priority: 30000 });
+        retryPanelNow(panel, rawText, mode, sig);
       });
       ap(errBar, retryBtn);
       ap(body, errBar);
@@ -1827,6 +2389,7 @@
 
   function renderTranslatedText(panel, text, isPartial, sig, engine = '', streamOpts = null) {
     if (!panel || typeof text !== 'string' || !text) return;
+    clearTriggerStatusBadge(panel);
     const ov = ensureOverlayShell(panel);
     ra(ov, 'data-pending');
     ra(ov, 'data-failed');
@@ -1892,7 +2455,7 @@
         commitFinalDom();
       }
 
-      syncOverlayBadges(ov, panel, isFallback, true);
+      syncOverlayBadges(ov, panel, isFallback, true, streamOpts?.truncInfo || null);
       if (sig) {
         const effectiveSig = isFallback ? `${sig}:fallback` : sig;
         sa(panel, A_SIG, effectiveSig);
@@ -1956,23 +2519,33 @@
 
   function startOrJoinTranslation(panel, rawText, mode, sig, srcSkelHash, expanded, opts = {}) {
     const force = Boolean(opts.force);
+    const bypassCache = Boolean(opts.bypassCache || opts.force);
     const priority = Number(opts.priority) || 0;
+    const sendPlan = sliceThoughtForSafeSend(rawText);
+    const truncInfo = sendPlan.truncated ? sendPlan : null;
     const skelBody = srcSkelHash && srcSkelHash.startsWith('sig') ? srcSkelHash.slice(3) : computeSkelBody(normalizeTextKey(rawText));
 
     if (!force) {
       const cached = findCachedByBody(skelBody, mode);
       if (cached) {
         claimPanelEntry(panel, null);
-        if (panel && expanded) renderTranslatedText(panel, cached, false, sig, mode === 'machine' ? 'machine' : 'ai');
+        if (panel && expanded) {
+          renderTranslatedText(panel, cached, false, sig, mode === 'machine' ? 'machine' : 'ai', { truncInfo });
+        }
         return;
       }
       if (isSigInCooldown(sig)) {
         claimPanelEntry(panel, null);
-        if (panel && expanded && ga(panel, A_FLD) !== '1') renderFailedState(panel, rawText, mode, sig);
+        const failMeta = getSigFailureMeta(sig);
+        if (panel && expanded && ga(panel, A_FLD) !== '1') {
+          renderFailedState(panel, rawText, mode, sig, failMeta ? { reason: failMeta.r, detail: failMeta.d } : null);
+        } else if (panel && failMeta) {
+          syncTriggerStatusBadge(panel, failMeta.r, failMeta.d, sig, rawText, mode);
+        }
         return;
       }
       const existing = inflightBySig.get(sig);
-      if (existing && !existing.x && nowMs() - existing.at <= 75000) {
+      if (existing && !existing.x && nowMs() - existing.at <= INFLIGHT_TTL_MS) {
         bindPanelToInflight(existing, panel, expanded);
         return;
       }
@@ -2006,6 +2579,7 @@
       fa: 0,
       pp: '',
       fTm: null,
+      tr: truncInfo,
       ps: [],
     };
     if (panel) claimPanelEntry(panel, entry);
@@ -2051,8 +2625,9 @@
         const inf = extractPanelInfo(p);
         if (inf.t && `sig${inf.k}` !== entry.sk) continue;
         if (isPanelCurrentlyExpanded(p) && !isHiddenByAncestor(null, p)) {
-          renderTranslatedText(p, pl.z, false, pl.s, pl.e);
+          renderTranslatedText(p, pl.z, false, pl.s, pl.e, { truncInfo: pl.tr || entry.tr || null });
         } else {
+          clearTriggerStatusBadge(p);
           const m = panelMeta.get(p) || {};
           m.ps = pl.s;
           m.rs = inf.s;
@@ -2150,37 +2725,51 @@
       }, STREAM_FLUSH_MS);
     };
 
-    const failEntry = () => {
+    const failEntry = (errOrRes) => {
       cancelFlushHandle(entry);
       if (inflightBySig.get(sig) === entry) inflightBySig.delete(sig);
       if (entry.x || currentMode === 'off') return;
-      recordSigFailure(sig);
+      const reason = classifyFailureReason(errOrRes);
+      const detail = sanitizeClientErrorText(
+        (errOrRes && (errOrRes.error || errOrRes.message)) || (typeof errOrRes === 'string' ? errOrRes : '')
+      );
+      recordSigFailure(sig, { reason, detail });
       for (const p of entry.ps) {
         if (panelActiveEntry.get(p) === entry) {
           panelActiveEntry.delete(p);
-          if (isConn(p)) renderFailedState(p, rawText, mode, sig);
+          if (isConn(p)) {
+            if (isPanelCurrentlyExpanded(p)) {
+              renderFailedState(p, rawText, mode, sig, { reason, detail });
+            } else {
+              clearPendingKeepRaw(p);
+              syncTriggerStatusBadge(p, reason, detail, sig, rawText, mode);
+            }
+          }
         }
       }
     };
 
     const reqLang = resolveActiveLang();
-    br.translateStream({ text: rawText, mode, priority, requestId, force, targetLang: reqLang }, (partial) => {
-      if (currentMode === 'off' || entry.x || resolveActiveLang() !== reqLang || typeof partial !== 'string' || !partial.trim()) return;
-      const trimmed = partial.trimStart();
-      if (!trimmed) return;
-      if (canUseSmoothStream()) {
-        entry.tg = trimmed;
-        ensurePacerLoop();
-        return;
+    br.translateStream(
+      { text: sendPlan.text, mode, priority, requestId, force, bypassCache, targetLang: reqLang },
+      (partial) => {
+        if (currentMode === 'off' || entry.x || resolveActiveLang() !== reqLang || typeof partial !== 'string' || !partial.trim()) return;
+        const trimmed = partial.trimStart();
+        if (!trimmed) return;
+        if (canUseSmoothStream()) {
+          entry.tg = trimmed;
+          ensurePacerLoop();
+          return;
+        }
+        entry.pp = trimmed;
+        const now = nowMs();
+        if (entry.fa === 0) flushPartialToPanels(trimmed);
+        else if (now - entry.fa >= STREAM_FLUSH_MS) {
+          cancelFlushHandle(entry);
+          flushPartialToPanels(trimmed);
+        } else scheduleAlignedStreamFlush();
       }
-      entry.pp = trimmed;
-      const now = nowMs();
-      if (entry.fa === 0) flushPartialToPanels(trimmed);
-      else if (now - entry.fa >= STREAM_FLUSH_MS) {
-        cancelFlushHandle(entry);
-        flushPartialToPanels(trimmed);
-      } else scheduleAlignedStreamFlush();
-    })
+    )
       .then((res) => {
         if (currentMode === 'off' || entry.x || res?.cancelled) {
           cancelFlushHandle(entry);
@@ -2214,6 +2803,12 @@
           const fallbackBase = isFb || mode === 'machine' ? 'mt' : activeStyleTag || 'ai_technical';
           putMemCache(res.key || `${withLangSuffix(fallbackBase, reqLang)}${skelBody}`, finalZh, true);
 
+          const finalTrunc =
+            entry.tr ||
+            (res.truncated
+              ? { truncated: true, totalChars: res.originalLength || rawText.length, sentChars: res.translatedLength || sendPlan.sentChars }
+              : null);
+
           if (resolveActiveLang() !== reqLang) {
             cancelFlushHandle(entry);
             if (inflightBySig.get(sig) === entry) inflightBySig.delete(sig);
@@ -2234,14 +2829,14 @@
           ) {
             entry.tg = finalZh;
             entry.dn = true;
-            entry.fn = { z: finalZh, s: sig, e: eng };
+            entry.fn = { z: finalZh, s: sig, e: eng, tr: finalTrunc };
             ensurePacerLoop();
             return;
           }
           cancelFlushHandle(entry);
-          commitFinalPayloadToPanels({ z: finalZh, s: sig, e: eng });
+          commitFinalPayloadToPanels({ z: finalZh, s: sig, e: eng, tr: finalTrunc });
         } else {
-          failEntry();
+          failEntry(res);
         }
       })
       .catch(failEntry);
@@ -2313,10 +2908,12 @@
       meta.c = now;
       panelMeta.set(panel, meta);
       clearPanelWaitTimer(panel);
+      trackStreamingTrigger(btn, panel);
       if (alreadyStreamingPending) return;
       if (expanded && !isHiddenByAncestor(btn, panel)) renderPendingState(panel, getClientPack()[9], 'streaming');
       return;
     }
+    untrackStreamingTrigger(btn);
 
     if (expanded && ga(panel, A_RDY) === '1') {
       const em = panelMeta.get(panel);
@@ -2329,11 +2926,17 @@
 
     const inf = extractPanelInfo(panel);
     if (!inf.t || inf.z) {
+      const prevMeta = panelMeta.get(panel);
+      // 防止 React 重绘期间短暂空文本把正在收束的思考块静默清掉并污染缓存签名
+      if (!inf.t && prevMeta && prevMeta.h && prevMeta.m && nowMs() - prevMeta.c < 2500) {
+        scheduleScan(180);
+        return;
+      }
       if (ga(panel, A_PND) === '1') clearPendingKeepRaw(panel);
       if (ga(panel, A_RDY) === '1' || findDirectOverlay(panel)) {
         cleanOverlayKeepRaw(panel);
       }
-      const m0 = panelMeta.get(panel) || {};
+      const m0 = prevMeta || {};
       m0.ps = sigFromBody(inf.k, currentMode);
       m0.rs = inf.s;
       delete m0.skippedSig;
@@ -2380,14 +2983,17 @@
     if (cached) {
       clearPanelWaitTimer(panel);
       const eng = currentMode === 'machine' ? 'machine' : 'ai';
+      const sendPlan = sliceThoughtForSafeSend(inf.t);
+      const truncInfo = sendPlan.truncated ? sendPlan : null;
       if (visExpanded) {
         if (syncHydrateBudget > 0) {
           syncHydrateBudget--;
-          renderTranslatedText(panel, cached, false, sig, eng);
+          renderTranslatedText(panel, cached, false, sig, eng, { truncInfo });
         } else {
           enqueueHydrate(panel, cached, sig, eng);
         }
       } else {
+        clearTriggerStatusBadge(panel);
         meta.ps = sig;
         meta.rs = inf.s;
         panelMeta.set(panel, meta);
@@ -2396,35 +3002,49 @@
     }
 
     const activeFlight = inflightBySig.get(sig);
-    if (activeFlight && !activeFlight.x && now - activeFlight.at <= 75000) {
+    if (activeFlight && !activeFlight.x && now - activeFlight.at <= INFLIGHT_TTL_MS) {
       bindPanelToInflight(activeFlight, panel, visExpanded);
       return;
     }
 
     if (isSigInCooldown(sig)) {
-      if (visExpanded && ga(panel, A_FLD) !== '1') renderFailedState(panel, inf.t, currentMode, sig);
+      const failMeta = getSigFailureMeta(sig);
+      if (visExpanded && ga(panel, A_FLD) !== '1') {
+        renderFailedState(panel, inf.t, currentMode, sig, failMeta ? { reason: failMeta.r, detail: failMeta.d } : null);
+      } else if (failMeta) {
+        syncTriggerStatusBadge(panel, failMeta.r, failMeta.d, sig, inf.t, currentMode);
+      }
       return;
     }
 
     const waitMs = meta.m ? Math.max(0, FINISH_GATE_MS - (now - meta.f), QUIET_GATE_MS - (now - meta.c)) : 0;
     if (waitMs > 0) {
       if (visExpanded) renderPendingState(panel, getClientPack()[10], 'settling');
-      setPanelWaitTimer(
-        panel,
-        btn,
-        () => {
-          if (currentMode === 'off' || !isConn(btn)) return;
-          const liveExpanded = ga(btn, A_EXP) === 'true';
-          let liveAllowPreload = false;
-          if (!liveExpanded && triggerTiming === 'preload') {
-            const allBtns = queryTriggers();
-            liveAllowPreload = Boolean(allBtns.length > 0 && allBtns[allBtns.length - 1] === btn);
+      const startedExpanded = expanded;
+      const runWaitCallback = (graceAttempt) => {
+        if (currentMode === 'off') return;
+        if (!isConn(btn)) {
+          // React 可能在静默等待窗口内重建了触发按钮节点，主动补扫而非静默放弃
+          scheduleScan(75);
+          return;
+        }
+        const liveExpanded = ga(btn, A_EXP) === 'true' || isPanelCurrentlyExpanded(panel);
+        let liveAllowPreload = false;
+        if (!liveExpanded && triggerTiming === 'preload') {
+          const allBtns = queryTriggers();
+          liveAllowPreload = Boolean(allBtns.length > 0 && allBtns[allBtns.length - 1] === btn);
+        }
+        if (!liveExpanded && !liveAllowPreload) {
+          // 展开态若在 QUIET_GATE 期间短暂抖动为未展开，给 1 次短宽限复核，避免误清 pending 静默丢翻
+          if (startedExpanded && graceAttempt === 0 && isConn(panel)) {
+            setPanelWaitTimer(panel, btn, () => runWaitCallback(1), 160);
+            return;
           }
-          if (!liveExpanded && !liveAllowPreload) return clearPendingKeepRaw(panel);
-          processSingleTrigger(btn, liveAllowPreload, priority);
-        },
-        waitMs + 25
-      );
+          return clearPendingKeepRaw(panel);
+        }
+        processSingleTrigger(btn, liveAllowPreload, priority);
+      };
+      setPanelWaitTimer(panel, btn, () => runWaitCallback(0), waitMs + 25);
       return;
     }
 
@@ -2441,11 +3061,248 @@
     }
   }
 
+  const TOOL_SKIP_TAGS = new Set('SCRIPT,STYLE,SVG,NOSCRIPT,PRE,CODE,A,INPUT,TEXTAREA,SELECT'.split(','));
+
+  function isExcludedToolAncestor(el, thoughtPanelSet) {
+    if (!el || el.nodeType !== 1) return true;
+    if (thoughtPanelSet && thoughtPanelSet.has(el)) return true;
+    if (isOverlayOrIgnoredElement(el)) return true;
+    const tag = el.tagName ? String(el.tagName).toUpperCase() : '';
+    if (TOOL_SKIP_TAGS.has(tag)) return true;
+    const tid = ga(el, 'data-testid') || '';
+    if (tid === 'thinking-collapsible-trigger' || tid === 'prism-thought-ai-config' || tid === 'prism-thought-general-config') return true;
+    if (hasAttr(el, 'data-file-href') || hasAttr(el, 'data-file-path') || hasAttr(el, 'data-omni-path')) return true;
+    return false;
+  }
+
+  function collectToolSummaryTextNodes(rootNode, outList, visitedNodes, thoughtPanelSet) {
+    if (!rootNode || outList.length >= 24) return;
+    const nt = rootNode.nodeType;
+    if (nt === 3) {
+      if (visitedNodes.has(rootNode)) return;
+      visitedNodes.add(rootNode);
+      const val = getTnStr(rootNode);
+      const prevRec = toolSummaryNodeMap.get(rootNode);
+      if (prevRec && prevRec.trans === val && prevRec.lang === resolveActiveLang() && prevRec.mode === currentMode) {
+        return;
+      }
+      const trimmed = trm(val);
+      if (!trimmed || trimmed.length < 4 || trimmed.length > 280) return;
+      if (!isToolSummaryCandidate(trimmed, resolveActiveLang())) return;
+      outList.push({ tn: rootNode, el: parEl(rootNode), raw: val, trimmed });
+      return;
+    }
+    if (nt !== 1 || isExcludedToolAncestor(rootNode, thoughtPanelSet)) return;
+    const chs = rootNode[K_CN];
+    if (!chs || !chs.length) return;
+    for (let i = 0; i < chs.length && outList.length < 24; i++) {
+      collectToolSummaryTextNodes(chs[i], outList, visitedNodes, thoughtPanelSet);
+    }
+  }
+
+  function applyToolSummaryText(item, translatedStr, activeLang, mode) {
+    if (!item || !item.tn || !isConn(item.tn) || !translatedStr) return;
+    const curVal = getTnStr(item.tn);
+    if (curVal !== item.raw) return;
+    const leadMatch = /^\s*/.exec(item.raw);
+    const trailMatch = /\s*$/.exec(item.raw);
+    const lead = leadMatch ? leadMatch[0] : '';
+    const trail = trailMatch ? trailMatch[0] : '';
+    const nextVal = `${lead}${translatedStr}${trail}`;
+    if (nextVal === item.raw) return;
+
+    const oldRec = toolSummaryNodeMap.get(item.tn);
+    const orig = oldRec ? oldRec.orig : item.raw;
+    if (oldRec) toolSummaryRecords.delete(oldRec);
+
+    setTn(item.tn, nextVal);
+    if (item.el) sa(item.el, 'data-op-tool-tr', '1');
+    const rec = { tn: item.tn, el: item.el, orig, trans: nextVal, lang: activeLang, mode };
+    toolSummaryNodeMap.set(item.tn, rec);
+    toolSummaryRecords.add(rec);
+  }
+
+  function scanToolSummaryContainers() {
+    if (!translateToolSummaries || currentMode === 'off' || typeof document === 'undefined') return;
+    const br = getBridge();
+    if (!br || typeof br.translateStream !== 'function') return;
+
+    const scope = isConn(cachedConvRoot) && cachedConvRoot.querySelectorAll ? cachedConvRoot : document;
+    const thoughtPanelSet = new Set();
+    const tBtns = queryTriggers();
+    for (let i = 0; i < tBtns.length; i++) {
+      const tp = nextSib(tBtns[i]);
+      if (tp) thoughtPanelSet.add(tp);
+    }
+
+    const containers = [];
+    const seenContainer = new Set();
+    const pushContainer = (c) => {
+      if (!c || seenContainer.has(c) || !isConn(c) || isHiddenByAncestor(null, c)) return;
+      if (probeViewportBand(c) === 0) return;
+      seenContainer.add(c);
+      containers.push(c);
+    };
+
+    const groupTrigs = scope.querySelectorAll ? scope.querySelectorAll(SEL_TOOL_TRIGGERS) : [];
+    for (let i = 0; i < groupTrigs.length; i++) {
+      const trig = groupTrigs[i];
+      if (!trig || ga(trig, A_EXP) !== 'true') continue;
+      const bodyDiv = nextSib(trig);
+      if (bodyDiv && String(bodyDiv.tagName || '').toUpperCase() === 'DIV') {
+        pushContainer(bodyDiv);
+      }
+    }
+
+    const rowEls = scope.querySelectorAll ? scope.querySelectorAll(SEL_TOOL_ROWS) : [];
+    if (rowEls && rowEls.length) {
+      const orphanRows = [];
+      for (let i = 0; i < rowEls.length; i++) {
+        const r = rowEls[i];
+        let insideKnown = false;
+        let cur = parEl(r);
+        while (cur) {
+          if (seenContainer.has(cur)) {
+            insideKnown = true;
+            break;
+          }
+          cur = parEl(cur);
+        }
+        if (!insideKnown && !isHiddenByAncestor(null, r) && probeViewportBand(r) > 0) {
+          orphanRows.push(r);
+        }
+      }
+      if (orphanRows.length) {
+        const byParent = new Map();
+        for (let i = 0; i < orphanRows.length; i++) {
+          const p = parEl(orphanRows[i]) || orphanRows[i];
+          if (!byParent.has(p)) byParent.set(p, []);
+          byParent.get(p).push(orphanRows[i]);
+        }
+        for (const [p, rows] of byParent.entries()) {
+          if (!seenContainer.has(p)) {
+            seenContainer.add(p);
+            containers.push({ __rows: rows });
+          }
+        }
+      }
+    }
+
+    if (!containers.length) return;
+    const activeLang = resolveActiveLang();
+    const activeMode = currentMode;
+    const modePrefix = `${activeMode}:${activeLang}:`;
+    const visitedNodes = new Set();
+    const now = nowMs();
+
+    for (let ci = 0; ci < containers.length; ci++) {
+      const c = containers[ci];
+      const candidates = [];
+      if (c && c.__rows) {
+        for (let ri = 0; ri < c.__rows.length; ri++) {
+          collectToolSummaryTextNodes(c.__rows[ri], candidates, visitedNodes, thoughtPanelSet);
+        }
+      } else {
+        collectToolSummaryTextNodes(c, candidates, visitedNodes, thoughtPanelSet);
+      }
+      if (!candidates.length) continue;
+
+      const uncached = [];
+      const uniqueTrimmed = [];
+      const uniqueIdxMap = new Map();
+
+      for (let i = 0; i < candidates.length; i++) {
+        const cand = candidates[i];
+        const cacheKey = `${modePrefix}${cand.trimmed}`;
+        const hit = toolSummaryCache.get(cacheKey);
+        if (hit) {
+          applyToolSummaryText(cand, hit, activeLang, activeMode);
+          continue;
+        }
+        const failUntil = toolSummaryFailedUntil.get(cacheKey);
+        if (failUntil && now < failUntil) continue;
+        uncached.push(cand);
+        if (!uniqueIdxMap.has(cand.trimmed)) {
+          uniqueIdxMap.set(cand.trimmed, uniqueTrimmed.length);
+          uniqueTrimmed.push(cand.trimmed);
+        }
+      }
+
+      if (!uniqueTrimmed.length) continue;
+      const batchKey = `${modePrefix}${uniqueTrimmed.join('\x1f')}`;
+      if (toolBatchInflight.has(batchKey)) continue;
+
+      const requestId = `op_ts_${nowMs().toString(36)}_${++reqSeq}`;
+      toolBatchInflight.set(batchKey, requestId);
+
+      br.translateStream(
+        {
+          text: JSON.stringify({ v: 1, items: uniqueTrimmed }),
+          mode: activeMode === 'machine' ? 'tool-batch:machine' : 'tool-batch:ai',
+          priority: 8000,
+          requestId,
+          targetLang: activeLang,
+        },
+        null
+      )
+        .then((res) => {
+          toolBatchInflight.delete(batchKey);
+          if (!translateToolSummaries || currentMode !== activeMode || resolveActiveLang() !== activeLang) return;
+          let outItems = null;
+          if (res && res.ok) {
+            if (Array.isArray(res.items)) {
+              outItems = res.items;
+            } else if (typeof res.text === 'string' && res.text.trim()) {
+              try {
+                const parsed = JSON.parse(res.text);
+                if (Array.isArray(parsed?.items)) outItems = parsed.items;
+              } catch (_) {}
+            }
+          }
+          if (!outItems || outItems.length !== uniqueTrimmed.length) {
+            const until = nowMs() + 20000;
+            for (let k = 0; k < uniqueTrimmed.length; k++) {
+              toolSummaryFailedUntil.set(`${modePrefix}${uniqueTrimmed[k]}`, until);
+            }
+            return;
+          }
+          for (let k = 0; k < uniqueTrimmed.length; k++) {
+            const trText = typeof outItems[k] === 'string' ? outItems[k].trim() : '';
+            if (trText && trText !== uniqueTrimmed[k]) {
+              if (toolSummaryCache.size >= 600) {
+                const oldest = toolSummaryCache.keys().next().value;
+                if (oldest !== undefined) toolSummaryCache.delete(oldest);
+              }
+              toolSummaryCache.set(`${modePrefix}${uniqueTrimmed[k]}`, trText);
+            }
+          }
+          for (let i = 0; i < uncached.length; i++) {
+            const cand = uncached[i];
+            const idx = uniqueIdxMap.get(cand.trimmed);
+            const trText = idx !== undefined && typeof outItems[idx] === 'string' ? outItems[idx].trim() : '';
+            if (trText && trText !== cand.trimmed) {
+              applyToolSummaryText(cand, trText, activeLang, activeMode);
+            }
+          }
+        })
+        .catch(() => {
+          toolBatchInflight.delete(batchKey);
+          const until = nowMs() + 20000;
+          for (let k = 0; k < uniqueTrimmed.length; k++) {
+            toolSummaryFailedUntil.set(`${modePrefix}${uniqueTrimmed[k]}`, until);
+          }
+        });
+    }
+  }
+
   function scanNow() {
     scanTimer = null;
     if (currentMode === 'off') return;
     const triggers = queryTriggers();
-    if (!triggers.length) return;
+    if (!triggers.length) {
+      if (translateToolSummaries) scanToolSummaryContainers();
+      return;
+    }
 
     const lastIdx = triggers.length - 1;
     const candidates = [];
@@ -2465,6 +3322,7 @@
         const em = panelMeta.get(panel);
         const streamingNow = isTriggerStreaming(btn);
         if (streamingNow && expanded && isLatest && em && em.s && ga(panel, A_PND) === '1') {
+          trackStreamingTrigger(btn, panel);
           activePanelSet.add(panel);
           continue;
         }
@@ -2502,16 +3360,18 @@
     hasOffscreenLazyPanels = sawOffscreenLazy;
 
     if (inflightBySig.size > 0) pruneUnneededPendingRequests(activePanelSet);
-    if (!candidates.length) return;
-    candidates.sort((x, y) => y.p - x.p);
-    syncHydrateBudget = 1;
-    try {
-      for (let i = 0; i < candidates.length; i++) {
-        processSingleTrigger(candidates[i].b, candidates[i].a, candidates[i].p);
+    if (candidates.length) {
+      candidates.sort((x, y) => y.p - x.p);
+      syncHydrateBudget = 1;
+      try {
+        for (let i = 0; i < candidates.length; i++) {
+          processSingleTrigger(candidates[i].b, candidates[i].a, candidates[i].p);
+        }
+      } finally {
+        syncHydrateBudget = 99;
       }
-    } finally {
-      syncHydrateBudget = 99;
     }
+    if (translateToolSummaries) scanToolSummaryContainers();
   }
 
   function scheduleScan(delayMs = 55) {
@@ -2545,6 +3405,11 @@
       const langChanged = prevLang !== currentLang;
       if (langChanged) refreshAllOverlayLocaleStrings();
 
+      let toolSummaryChanged = false;
+      if (typeof cfg.translateToolSummaries === 'boolean') {
+        toolSummaryChanged = setTranslateToolSummariesFlag(cfg.translateToolSummaries, false);
+      }
+
       const incomingView = cfg.thoughtView || cfg.thoughtViewMode;
       let viewChanged = false;
       if (incomingView === 'bilingual' || incomingView === 'immersive') {
@@ -2576,6 +3441,7 @@
       ensureInitialized();
       if (changed || langChanged) {
         clearHydrateQueue();
+        restoreAllToolSummaries();
         if (hadPrevEngine) {
           clearAllWaitTimers(false);
           for (const entry of inflightBySig.values()) cancelTranslateRequest(entry);
@@ -2583,13 +3449,14 @@
         }
         const resetPanelSig = (p) => {
           if (!p) return;
+          clearTriggerStatusBadge(p);
           raList(p, RESET_SIG_ATTRS);
           panelMeta.delete(p);
         };
         qsa(SEL_TRIGGER).forEach((b) => resetPanelSig(nextSib(b)));
         qsa(SEL_OVERLAY).forEach((ov) => resetPanelSig(parEl(ov)));
       }
-      const needScan = !syncedOnce || changed || langChanged || viewChanged || triggerChanged;
+      const needScan = !syncedOnce || changed || langChanged || viewChanged || triggerChanged || toolSummaryChanged;
       syncedOnce = true;
       if (needScan) scheduleScan(25);
     },
@@ -2618,6 +3485,19 @@
       }
       return currentViewMode;
     },
+    getTranslateToolSummaries() {
+      return Boolean(translateToolSummaries);
+    },
+    setTranslateToolSummaries(enabled, opts = {}) {
+      const next = Boolean(enabled);
+      const changed = setTranslateToolSummariesFlag(next, true);
+      if (changed && opts.persistDaemon === true) {
+        void callDaemonRpc({ action: 'save-config', translateToolSummaries: next }).catch(() => {});
+      }
+      return translateToolSummaries;
+    },
+    retryBlock: (panel) => retryPanelNow(panel),
+    clearCooldown: (sig) => clearSigCooldown(sig),
     getLocalCacheStats,
     clearLocalCache,
     getCacheStats() {
@@ -2647,14 +3527,21 @@
       return brCall('save-config', input).then((res) => {
         const nextTag = res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : '');
         const tagChanged = setActiveStyleTag(nextTag);
+        if (res && typeof res.translateToolSummaries === 'boolean') {
+          setTranslateToolSummariesFlag(res.translateToolSummaries, false);
+        } else if (input && typeof input.translateToolSummaries === 'boolean') {
+          setTranslateToolSummariesFlag(input.translateToolSummaries, false);
+        }
         qsa(SEL_TRIGGER).forEach((b) => {
           const p = nextSib(b);
-          if (p && (tagChanged || ga(p, A_FBK) === '1' || ga(p, A_FLD) === '1')) {
+          if (p && (tagChanged || ga(p, A_FBK) === '1' || ga(p, A_FLD) === '1' || findChildByClass(b, C_TRG))) {
+            clearTriggerStatusBadge(b);
             raList(p, RESET_SIG_ATTRS);
             panelMeta.delete(p);
           }
         });
         failedSigs.clear();
+        toolSummaryFailedUntil.clear();
         scheduleScan(25);
         return res;
       });

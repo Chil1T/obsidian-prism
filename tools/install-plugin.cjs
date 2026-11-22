@@ -133,6 +133,53 @@ function safeUnlinkNoSymlink(filePath, label = "file") {
   return false;
 }
 
+function resolveSafeUsageCacheOverridePath(hostConfigDir, explicitPath = null) {
+  const raw =
+    typeof explicitPath === "string" && explicitPath.trim()
+      ? explicitPath.trim()
+      : typeof process.env.PRISM_USAGE_CACHE_PATH === "string"
+        ? process.env.PRISM_USAGE_CACHE_PATH.trim()
+        : "";
+  if (!raw) return null;
+  const resolved = path.resolve(raw);
+  if (path.basename(resolved).toLowerCase() !== "obsidian-prism-usage-rollup-cache.json") {
+    return null;
+  }
+  if (isProtectedUserDataPath(resolved)) return null;
+  const parentDir = path.dirname(resolved);
+  const geminiRoot = hostConfigDir ? path.dirname(path.resolve(hostConfigDir)) : null;
+  const allowedRoots = [
+    hostConfigDir ? path.resolve(hostConfigDir) : null,
+    geminiRoot,
+    path.join(os.homedir(), ".gemini"),
+    os.tmpdir(),
+  ].filter(Boolean);
+  const norm = (p) => (process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p));
+  const parentNorm = norm(parentDir);
+  const matchedRoot = allowedRoots.find((base) => {
+    const baseNorm = norm(base);
+    if (parentNorm === baseNorm) return true;
+    const prefix = baseNorm.endsWith(path.sep) ? baseNorm : baseNorm + path.sep;
+    return parentNorm.startsWith(prefix);
+  });
+  if (!matchedRoot) return null;
+  let cur = parentDir;
+  const stopNorm = norm(matchedRoot);
+  for (let depth = 0; depth < 64; depth++) {
+    try {
+      const st = fs.lstatSync(cur);
+      if (st.isSymbolicLink()) return null;
+    } catch (err) {
+      if (err && err.code !== "ENOENT") return null;
+    }
+    if (norm(cur) === stopNorm) break;
+    const up = path.dirname(cur);
+    if (!up || up === cur) break;
+    cur = up;
+  }
+  return resolved;
+}
+
 function isProtectedUserDataPath(dirPath) {
   if (!dirPath) return true;
   const resolved = path.resolve(dirPath);
@@ -782,6 +829,7 @@ async function uninstallPlugin(opts = {}) {
           "obsidian-prism-config.backup.json",
           "obsidian-prism-thought.json",
           "obsidian-prism-thought-cache.json",
+          "obsidian-prism-usage-rollup-cache.json",
           "obsidian-prism-sidebar.json",
           "obsidian-prism-sidebar.json.lock",
         ];
@@ -797,6 +845,15 @@ async function uninstallPlugin(opts = {}) {
               if (safeUnlinkNoSymlink(fp, entry.name)) purgedPaths.push(fp);
             }
           }
+        }
+      } catch {}
+    }
+
+    const usageCacheOverride = resolveSafeUsageCacheOverridePath(hostConfigDir, opts.usageCachePath || null);
+    if (usageCacheOverride) {
+      try {
+        if (safeUnlinkNoSymlink(usageCacheOverride, "obsidian-prism-usage-rollup-cache.json")) {
+          purgedPaths.push(usageCacheOverride);
         }
       } catch {}
     }

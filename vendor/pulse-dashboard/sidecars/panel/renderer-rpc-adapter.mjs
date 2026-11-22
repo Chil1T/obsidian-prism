@@ -491,6 +491,44 @@ export function buildRendererRpcExpression(method, body = {}) {
         return { ok: true, data: { response: { groups } } };
       }
       if (params.method === 'GetAllCascadeTrajectories') {
+        const readScopeHint = () => {
+          try {
+            const cleanSeg = (s) => String(s || '').trim().toLowerCase().replace(/[^a-z0-9._:@-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+            const docEl = typeof document !== 'undefined' && document && document.documentElement;
+            const attr = docEl && typeof docEl.getAttribute === 'function' ? String(docEl.getAttribute('data-ag-prism-scope') || '').trim() : '';
+            if (/^(?:local|ssh:[a-z0-9._:@-]+|remote:[a-z0-9._:@-]+)$/i.test(attr)) return attr.toLowerCase();
+            const href = typeof location !== 'undefined' && location && typeof location.href === 'string' ? location.href : '';
+            if (href) {
+              let dec = href;
+              try { dec = decodeURIComponent(href); } catch {}
+              const sshM = dec.match(/ssh-remote\\+([^/&#?\\s]+)/i);
+              if (sshM && sshM[1]) {
+                const h = cleanSeg(sshM[1]);
+                if (h) return 'ssh:' + h;
+              }
+              const remM = dec.match(/(?:vscode-remote:\\/\\/|remoteAuthority=)([a-z0-9_-]+)\\+([^/&#?\\s]+)/i);
+              if (remM && remM[1] && remM[2]) {
+                const id = cleanSeg(remM[1] + '-' + remM[2]);
+                if (id) return 'remote:' + id;
+              }
+            }
+            const title = typeof document !== 'undefined' && document && typeof document.title === 'string' ? document.title : '';
+            if (title) {
+              const tSsh = title.match(/\\[SSH:\\s*([^\\]]+)\\]/i);
+              if (tSsh && tSsh[1]) {
+                const h = cleanSeg(tSsh[1]);
+                if (h) return 'ssh:' + h;
+              }
+              const tRem = title.match(/\\[(WSL|Dev Container|Codespaces|Tunnel|Remote):\\s*([^\\]]+)\\]/i);
+              if (tRem && tRem[1] && tRem[2]) {
+                const id = cleanSeg(tRem[1] + '-' + tRem[2]);
+                if (id) return 'remote:' + id;
+              }
+            }
+          } catch {}
+          return '';
+        };
+        const scopeHint = readScopeHint();
         if (typeof activeLs.getAllCascadeTrajectories === 'function') {
           const r = await activeLs.getAllCascadeTrajectories({ excludeSubtrajectories: false });
           const sums = (r && r.trajectorySummaries) || {};
@@ -515,7 +553,7 @@ export function buildRendererRpcExpression(method, body = {}) {
               } : undefined,
             };
           }
-          return { ok: true, data: { trajectorySummaries: out } };
+          return { ok: true, data: scopeHint ? { trajectorySummaries: out, scopeHint } : { trajectorySummaries: out } };
         }
         if (typeof activeLs.searchConversations === 'function') {
           const r = await activeLs.searchConversations({ query: '' });
@@ -525,6 +563,7 @@ export function buildRendererRpcExpression(method, body = {}) {
           return {
             ok: true,
             data: {
+              ...(scopeHint ? { scopeHint } : {}),
               results: list.map((it) => ({
                 cascadeId: it && it.cascadeId,
                 title: it && it.title,

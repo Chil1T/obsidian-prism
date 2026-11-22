@@ -952,5 +952,997 @@ test('#209 inline-fallback.js: telemetryModule="on" overrides external Pulse & "
   assert.equal(win.__agPrismMetricsBridge, undefined, 'destroy() must clean up __agPrismMetricsBridge');
 });
 
+// ==================== PR #19 / PR #22 / Todo 3 (Remote-SSH Isolation) Regressions ====================
+
+function createMockStudioDom(initialTitle = 'obsidian-prism — Antigravity') {
+  class MockNode {
+    constructor(tag) {
+      this.tagName = String(tag || 'DIV').toUpperCase();
+      this.className = '';
+      this.id = '';
+      this._textContent = '';
+      this.title = '';
+      this.value = '';
+      this.type = '';
+      this.disabled = false;
+      this.style = {
+        setProperty(k, v) { this[k] = v; },
+        getPropertyValue(k) { return this[k] || ''; },
+      };
+      this.attrs = new Map();
+      this.children = [];
+      this.parentElement = null;
+      this.listeners = new Map();
+    }
+    get isConnected() {
+      let cur = this;
+      while (cur) {
+        if (cur === doc.body || cur === doc.head || cur === doc.documentElement) return true;
+        cur = cur.parentElement;
+      }
+      return false;
+    }
+    get childElementCount() { return this.children.length; }
+    get previousSibling() {
+      if (!this.parentElement) return null;
+      const idx = this.parentElement.children.indexOf(this);
+      return idx > 0 ? this.parentElement.children[idx - 1] : null;
+    }
+    get nextSibling() {
+      if (!this.parentElement) return null;
+      const idx = this.parentElement.children.indexOf(this);
+      return idx >= 0 && idx + 1 < this.parentElement.children.length ? this.parentElement.children[idx + 1] : null;
+    }
+    get textContent() {
+      if (this.children.length === 0) return this._textContent;
+      return this._textContent + this.children.map((c) => c.textContent).join('');
+    }
+    set textContent(v) {
+      this._textContent = String(v ?? '');
+      this.children = [];
+    }
+    set innerHTML(v) {
+      this._innerHTML = String(v ?? '');
+      this.children = [];
+      this._textContent = '';
+    }
+    get innerHTML() { return this._innerHTML || ''; }
+    setAttribute(k, v) { this.attrs.set(k, String(v)); if (k === 'id') this.id = String(v); }
+    getAttribute(k) { return this.attrs.has(k) ? this.attrs.get(k) : null; }
+    hasAttribute(k) { return this.attrs.has(k); }
+    removeAttribute(k) { this.attrs.delete(k); }
+    addEventListener(ev, fn) { this.listeners.set(ev, fn); }
+    appendChild(child) {
+      if (!child) return child;
+      if (child.tagName === '#FRAGMENT') {
+        for (const c of child.children.slice()) this.appendChild(c);
+        child.children = [];
+        return child;
+      }
+      if (child.parentElement) child.parentElement.removeChild(child);
+      child.parentElement = this;
+      this.children.push(child);
+      return child;
+    }
+    insertBefore(child, ref) {
+      if (!ref) return this.appendChild(child);
+      if (child.parentElement) child.parentElement.removeChild(child);
+      const idx = this.children.indexOf(ref);
+      child.parentElement = this;
+      if (idx === -1) this.children.push(child);
+      else this.children.splice(idx, 0, child);
+      return child;
+    }
+    removeChild(child) {
+      const idx = this.children.indexOf(child);
+      if (idx >= 0) { this.children.splice(idx, 1); child.parentElement = null; }
+      return child;
+    }
+    matches(sel) {
+      if (sel.startsWith('.')) return this.className.split(/\s+/).includes(sel.slice(1));
+      const attrEq = sel.match(/^\[([^=\]]+)="([^"]*)"\]$/);
+      if (attrEq) return this.getAttribute(attrEq[1]) === attrEq[2];
+      const attrHas = sel.match(/^\[([^\]]+)\]$/);
+      if (attrHas) return this.hasAttribute(attrHas[1]);
+      return this.tagName === sel.toUpperCase();
+    }
+    querySelectorAll(sel) {
+      const out = [];
+      const walk = (node) => {
+        for (const ch of node.children) {
+          if (ch.matches(sel)) out.push(ch);
+          walk(ch);
+        }
+      };
+      walk(this);
+      return out;
+    }
+    querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+  }
+
+  const doc = {
+    title: initialTitle,
+    documentElement: null,
+    head: null,
+    body: null,
+    createElement(tag) { return new MockNode(tag); },
+    createDocumentFragment() { return new MockNode('#FRAGMENT'); },
+    getElementById(id) {
+      const find = (n) => {
+        if (!n) return null;
+        if (n.id === id) return n;
+        for (const c of n.children) { const r = find(c); if (r) return r; }
+        return null;
+      };
+      return find(doc.head) || find(doc.body);
+    },
+    querySelector(sel) { return doc.body.querySelector(sel); },
+    querySelectorAll(sel) { return doc.body.querySelectorAll(sel); },
+  };
+  doc.documentElement = new MockNode('html');
+  doc.head = new MockNode('head');
+  doc.body = new MockNode('body');
+  doc.documentElement.appendChild(doc.head);
+  doc.documentElement.appendChild(doc.body);
+
+  const home = doc.createElement('div');
+  home.className = 'agy-home';
+  const greeting = doc.createElement('div');
+  greeting.setAttribute('data-testid', 'home-greeting');
+  const h1 = doc.createElement('h1');
+  h1.textContent = 'Good evening';
+  greeting.appendChild(h1);
+  home.appendChild(greeting);
+  doc.body.appendChild(home);
+  return { doc, home, greeting };
+}
+
+test('PR #19: isMainEntry handles Windows Junction / symlinked CLI entrypoints in main.mjs & conversation-archive.mjs', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { pathToFileURL, fileURLToPath } = await import('node:url');
+  const { execFileSync } = await import('node:child_process');
+  const { isMainEntry: mainIsEntry } = await import('../sidecars/daemon/main.mjs');
+  const { isMainEntry: archiveIsEntry } = await import('../sidecars/daemon/conversation-archive.mjs');
+
+  const daemonDir = path.resolve(fileURLToPath(new URL('../sidecars/daemon', import.meta.url)));
+  const mainFile = path.join(daemonDir, 'main.mjs');
+  const archiveFile = path.join(daemonDir, 'conversation-archive.mjs');
+  const mainUrl = pathToFileURL(mainFile).href;
+  const archiveUrl = pathToFileURL(archiveFile).href;
+
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-pr19-'));
+  const linkDir = path.join(tmpBase, 'daemon-link');
+  try {
+    fs.symlinkSync(daemonDir, linkDir, process.platform === 'win32' ? 'junction' : 'dir');
+    const linkedMain = path.join(linkDir, 'main.mjs');
+    const linkedArchive = path.join(linkDir, 'conversation-archive.mjs');
+
+    assert.equal(mainIsEntry(linkedMain, mainFile), true, 'main.mjs isMainEntry must return true for junction/symlinked argv[1]');
+    assert.equal(mainIsEntry(linkedMain, mainUrl), true, 'main.mjs isMainEntry must accept file:// moduleUrl');
+    assert.equal(archiveIsEntry(linkedArchive, archiveUrl), true, 'conversation-archive.mjs isMainEntry must return true for junction/symlinked argv[1]');
+
+    if (process.platform === 'win32') {
+      const flippedDrive = linkedMain.replace(/^([A-Za-z]):/, (_, d) => `${d === d.toUpperCase() ? d.toLowerCase() : d.toUpperCase()}:`);
+      assert.equal(mainIsEntry(flippedDrive, mainFile), true, 'Win32 drive-letter casing difference must still match');
+      assert.equal(archiveIsEntry(linkedArchive.toUpperCase(), archiveUrl), true, 'Win32 case-insensitive junction path must match');
+    }
+
+    // Negative cases
+    assert.equal(mainIsEntry('', mainFile), false);
+    assert.equal(mainIsEntry(path.join(linkDir, 'non-existent.mjs'), mainFile), false);
+    assert.equal(mainIsEntry(linkedArchive, mainFile), false, 'Different script must not match');
+    assert.equal(archiveIsEntry(linkedMain, archiveUrl), false, 'Different script must not match');
+
+    // End-to-end CLI execution through junction/symlink directory (isolated HOME/USERPROFILE)
+    const cliOut = execFileSync(process.execPath, [linkedArchive, '--list-batches', '--json'], {
+      encoding: 'utf8',
+      timeout: 8000,
+      env: { ...process.env, USERPROFILE: tmpBase, HOME: tmpBase },
+    });
+    assert.deepEqual(JSON.parse(cliOut), [], 'CLI invoked via junction/symlink must enter CLI main branch and output JSON batches');
+
+    // Security redline preserved in daemon/main.mjs
+    const mainSrc = fs.readFileSync(mainFile, 'utf8');
+    assert.ok(mainSrc.includes('assertNotSymlinkSync'), 'assertNotSymlinkSync security boundary must remain intact in sidecars/daemon/main.mjs');
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+});
+
+test('PR #22: usage rollup disk cache uses ~/.gemini/config, enforces non-symlink/4MB/1200/0o600, supports v1 compat & cold-restart 0-RPC hit', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const { PrismDaemon, resolveUsageCachePath } = await import('../sidecars/daemon/main.mjs');
+
+  const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+  const prevEnv = process.env.PRISM_USAGE_CACHE_PATH;
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-pr22-'));
+  const tmpCfg = path.join(tmpBase, 'cfg');
+  fs.mkdirSync(tmpCfg, { recursive: true });
+
+  const coldId = '11111111-1111-4111-8111-111111111101';
+  const legacyId = '11111111-1111-4111-8111-111111111102';
+  const symRecId = '11111111-1111-4111-8111-111111111103';
+
+  try {
+    // 1. Default path points to ~/.gemini/config/obsidian-prism-usage-rollup-cache.json, overridable via env / param
+    delete process.env.PRISM_USAGE_CACHE_PATH;
+    const defaultPath = resolveUsageCachePath().replace(/\\/g, '/');
+    assert.ok(defaultPath.endsWith('/.gemini/config/obsidian-prism-usage-rollup-cache.json'), `Unexpected default cache path: ${defaultPath}`);
+
+    const envPath = path.join(tmpCfg, 'env-cache.json');
+    process.env.PRISM_USAGE_CACHE_PATH = envPath;
+    assert.equal(resolveUsageCachePath(), path.resolve(envPath));
+
+    const explicitPath = path.join(tmpCfg, 'explicit-cache.json');
+    assert.equal(resolveUsageCachePath(explicitPath), path.resolve(explicitPath));
+
+    // 2. Daemon #1 populates rollup cache & flushes atomically with 0o600, never polluting rootDir
+    const dSec = 1763400100;
+    const fakeTraj = {
+      trajectory: {
+        steps: [{ metadata: { createdAt: { seconds: String(dSec), nanos: 0 } } }],
+        generatorMetadata: [{
+          stepIndices: [0],
+          metadata: {
+            value: {
+              modelDisplayName: 'Gemini 4 Carbon',
+              usage: { inputTokens: '5000', cacheReadTokens: '15000', outputTokens: '2000' },
+            },
+          },
+        }],
+      },
+    };
+    const fakeSummaries = {
+      [coldId]: {
+        stepCount: 4,
+        lastModifiedTime: { seconds: String(dSec) },
+        createdTime: { seconds: String(dSec - 60) },
+        workspaces: [{ workspaceFolderAbsoluteUri: 'file:///c:/proj/prism' }],
+      },
+    };
+
+    const daemon1 = new PrismDaemon({ rootDir: repoRoot, usageCachePath: explicitPath, silent: true });
+    daemon1._discoverLocalAppConversations = () => [];
+    let rpcTrajCalls1 = 0;
+    daemon1._lazyLsClient = {
+      server: { port: 0, mode: 'renderer-proxy' },
+      call: async (method) => {
+        if (method === 'GetAllCascadeTrajectories') return { trajectorySummaries: fakeSummaries };
+        return {};
+      },
+      trajectory: async () => { rpcTrajCalls1 += 1; return fakeTraj; },
+    };
+
+    const batch1 = await daemon1.fetchUsageRollupBatch(
+      [{ id: coldId, stepCount: 4, lastModifiedSec: dSec, createdSec: dSec - 60 }],
+      { action: 'fetch-batch' }
+    );
+    assert.equal(batch1.ok, true);
+    assert.equal(rpcTrajCalls1, 1);
+    assert.equal(batch1.records[0].mode, 'full');
+    assert.equal(batch1.records[0].record.calls, 1);
+    daemon1._flushUsageDiskCache();
+
+    // Must NOT pollute repo rootDir
+    assert.equal(fs.existsSync(path.join(repoRoot, '.usage-rollup-cache.json')), false, 'Must never write cache inside rootDir');
+    assert.equal(fs.existsSync(explicitPath), true, 'Cache file must be persisted to configured usageCachePath');
+    const st = fs.lstatSync(explicitPath);
+    assert.equal(st.isSymbolicLink(), false);
+    if (process.platform !== 'win32') {
+      assert.equal(st.mode & 0o777, 0o600, 'POSIX cache file mode must be 0o600');
+    }
+    const mainSrc = fs.readFileSync(new URL('../sidecars/daemon/main.mjs', import.meta.url), 'utf8');
+    assert.match(mainSrc, /writeFileAtomicSync\(cacheFile,\s*serialized,\s*\{\s*mode:\s*0o600\s*\}\)/, 'Must write cache via writeFileAtomicSync with mode 0o600');
+
+    // 3. Cold restart: Daemon #2 serves list-summaries & fetch-batch with 0 trajectory RPCs
+    const daemon2 = new PrismDaemon({ rootDir: repoRoot, usageCachePath: explicitPath, silent: true });
+    daemon2._discoverLocalAppConversations = () => [];
+    let rpcTrajCalls2 = 0;
+    daemon2._lazyLsClient = {
+      server: { port: 0, mode: 'renderer-proxy' },
+      call: async (method) => {
+        if (method === 'GetAllCascadeTrajectories') return { trajectorySummaries: fakeSummaries };
+        rpcTrajCalls2 += 1;
+        throw new Error(`Unexpected RPC on cache hit: ${method}`);
+      },
+      trajectory: async () => { rpcTrajCalls2 += 1; throw new Error('Should not be called on cache hit'); },
+    };
+    const list2 = await daemon2.fetchUsageRollupBatch(null, { action: 'list-summaries' });
+    assert.equal(list2.ok, true);
+    assert.equal(list2.records.length, 1);
+    assert.equal(list2.records[0].id, coldId);
+    const batch2 = await daemon2.fetchUsageRollupBatch(
+      [{ id: coldId, stepCount: 4, lastModifiedSec: dSec }],
+      { action: 'fetch-batch' }
+    );
+    assert.equal(batch2.ok, true);
+    assert.equal(batch2.records[0].mode, 'full');
+    assert.equal(rpcTrajCalls2, 0, 'Cold-restarted daemon must hit disk cache with 0 trajectory RPCs');
+
+    // 4. v1 flat format backward compatibility into local scope
+    const v1Path = path.join(tmpCfg, 'v1-compat.json');
+    fs.writeFileSync(v1Path, JSON.stringify({
+      [legacyId]: {
+        stepCount: 3,
+        lastModifiedSec: dSec,
+        record: {
+          cascadeId: legacyId,
+          stepCount: 3,
+          lastModifiedSec: dSec,
+          gmCount: 1,
+          calls: 1,
+          days: { '2026-11-18': { calls: 1, input: 1000, output: 500, cacheRead: 0, cacheWrite: 0, total: 1500, hours: new Array(24).fill(0), models: {} } },
+        },
+      },
+    }), 'utf8');
+    const daemonV1 = new PrismDaemon({ rootDir: repoRoot, usageCachePath: v1Path, silent: true });
+    daemonV1._discoverLocalAppConversations = () => [];
+    daemonV1._lazyLsClient = {
+      server: { port: 12347, mode: 'http' },
+      call: async (method) => {
+        if (method === 'GetAllCascadeTrajectories') {
+          return { trajectorySummaries: { [legacyId]: { stepCount: 3, lastModifiedTime: { seconds: String(dSec) } } } };
+        }
+        return {};
+      },
+    };
+    const v1Res = await daemonV1.fetchUsageRollupBatch(null, { action: 'list-summaries' });
+    assert.equal(v1Res.records.length, 1);
+    assert.equal(v1Res.records[0].id, legacyId);
+
+    // 5. > 4 MB file rejected cleanly
+    const bigPath = path.join(tmpCfg, 'oversize.json');
+    fs.writeFileSync(bigPath, ' '.repeat(4 * 1024 * 1024 + 128), 'utf8');
+    const daemonBig = new PrismDaemon({ rootDir: repoRoot, usageCachePath: bigPath, silent: true });
+    assert.equal(daemonBig._loadUsageDiskCache().size, 0, 'Oversize (>4MB) cache file must be ignored');
+
+    // 6. > 1200 records per scope trimmed to newest 1200 on flush
+    const capPath = path.join(tmpCfg, 'cap-1200.json');
+    const daemonCap = new PrismDaemon({ rootDir: repoRoot, usageCachePath: capPath, silent: true });
+    const makeUuid = (i) => `22222222-2222-4222-8222-${String(i).padStart(12, '0')}`;
+    for (let i = 0; i < 1250; i++) {
+      const id = makeUuid(i);
+      daemonCap._putUsageDiskCache(id, 2, 1700000000 + i, {
+        cascadeId: id,
+        stepCount: 2,
+        lastModifiedSec: 1700000000 + i,
+        calls: 1,
+        days: { '2026-11-18': { calls: 1, total: 100 } },
+      }, 'local');
+    }
+    daemonCap._flushUsageDiskCache();
+    const savedCap = JSON.parse(fs.readFileSync(capPath, 'utf8'));
+    const savedKeys = Object.keys(savedCap.scopes.local);
+    assert.equal(savedKeys.length, 1200, 'Per-scope cache must trim to at most 1200 records');
+    assert.ok(savedCap.scopes.local[makeUuid(1249)], 'Newest record must be retained');
+    assert.equal(savedCap.scopes.local[makeUuid(0)], undefined, 'Oldest records must be evicted');
+
+    // 7. Symlink target refused on both read and write (victim untouched)
+    const victimDir = path.join(tmpBase, 'victim-dir');
+    fs.mkdirSync(victimDir, { recursive: true });
+    const victimFile = path.join(victimDir, 'victim.txt');
+    fs.writeFileSync(victimFile, 'DO_NOT_OVERWRITE', 'utf8');
+    let symCachePath = path.join(tmpCfg, 'symlink-cache.json');
+    let symlinkCreated = false;
+    try {
+      fs.symlinkSync(victimFile, symCachePath, 'file');
+      symlinkCreated = true;
+    } catch {
+      // Windows without Developer Mode: test directory junction parent defense instead
+      const juncDir = path.join(tmpBase, 'junc-cfg');
+      fs.symlinkSync(victimDir, juncDir, 'junction');
+      symCachePath = path.join(juncDir, 'victim.txt');
+    }
+    const daemonSym = new PrismDaemon({ rootDir: repoRoot, usageCachePath: symCachePath, silent: true });
+    assert.equal(daemonSym._loadUsageDiskCache().size, 0, 'Symlinked/junction cache path must be refused on load');
+    daemonSym._putUsageDiskCache(symRecId, 1, dSec, { cascadeId: symRecId, stepCount: 1, lastModifiedSec: dSec, calls: 1, days: { '2026-11-18': { total: 500, calls: 1 } } }, 'local');
+    daemonSym._flushUsageDiskCache();
+    assert.equal(fs.readFileSync(victimFile, 'utf8'), 'DO_NOT_OVERWRITE', `Symlink/junction write must be refused (fileSymlink=${symlinkCreated})`);
+  } finally {
+    if (prevEnv === undefined) delete process.env.PRISM_USAGE_CACHE_PATH;
+    else process.env.PRISM_USAGE_CACHE_PATH = prevEnv;
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+});
+
+test('PR #22 edge fixes: offline/0-session exits skeleton within bounded wait and offline >240-step fallback preserves real stats', async () => {
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevStorage = globalThis.localStorage;
+  const storeMem = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+    setItem: (k, v) => { storeMem.set(k, String(v)); },
+    removeItem: (k) => { storeMem.delete(k); },
+  };
+  const { doc } = createMockStudioDom('obsidian-prism — Antigravity');
+  globalThis.document = doc;
+
+  let online = false;
+  let onlineChecks = 0;
+  let listCalls = 0;
+  let fetchBatchCalls = 0;
+  let lastBatchIds = [];
+  const dKey = usageCore.homeDayKey(new Date(1763400100 * 1000));
+  const realRecord = (id, stepCount, lastModifiedSec, total) => ({
+    cascadeId: id,
+    stepCount,
+    lastModifiedSec,
+    gmCount: 5,
+    subagent: false,
+    workspace: 'obsidian-prism',
+    parentId: '',
+    calls: 12,
+    days: {
+      [dKey]: {
+        calls: 12,
+        input: Math.floor(total * 0.4),
+        output: Math.floor(total * 0.1),
+        cacheRead: Math.floor(total * 0.5),
+        cacheWrite: 0,
+        total,
+        hours: new Array(24).fill(0),
+        models: { 'Gemini 4 Carbon': { input: Math.floor(total * 0.4), output: Math.floor(total * 0.1), cacheRead: Math.floor(total * 0.5), cacheWrite: 0, total, calls: 12 } },
+      },
+    },
+  });
+
+  globalThis.window = {
+    document: doc,
+    location: { href: 'vscode-file://vscode-app/workbench.html' },
+    __agPrismUsageBridge: {
+      isOnline: () => { onlineChecks += 1; return online; },
+      listSummaries: async () => {
+        listCalls += 1;
+        return { ok: true, scopeKey: 'local', summaries: [], records: [{ id: 'online-hydrated-1', record: realRecord('online-hydrated-1', 10, 1763400100, 42000) }] };
+      },
+      fetchBatch: async (items) => {
+        fetchBatchCalls += 1;
+        lastBatchIds = items.map((x) => x.id);
+        return {
+          ok: true,
+          scopeKey: 'local',
+          records: items.map((it) => ({ id: it.id, mode: 'full', record: realRecord(it.id, it.stepCount, it.lastModifiedSec, 125000) })),
+        };
+      },
+    },
+  };
+
+  try {
+    // Part A: Cold start skeleton (0 fake "0" KPI flash) + offline 0-session exits skeleton within <= 10 poll ticks
+    let reduxSummaries = {};
+    let directTrajCalls = 0;
+    const ctlA = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:pr22:offlineA',
+      waitTickMs: 5,
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'en',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({
+        store: { getState: () => ({ trajectorySummaries: { summaries: reduxSummaries } }) },
+        svc: { getCascadeTrajectory: async () => { directTrajCalls += 1; return {}; } },
+      }),
+      canMountRealCanvas: () => true,
+      setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+
+    ctlA.renderHomePanel(true);
+    const skelBefore = doc.querySelectorAll('[data-skeleton]');
+    assert.ok(skelBefore.length >= 6, 'Cold start with empty cache must render skeleton placeholders');
+    const statValsBefore = doc.querySelectorAll('.ag-cs-home-stat-value').map((n) => n.textContent);
+    assert.equal(statValsBefore.every((t) => t === ''), true, 'Cold-start skeleton must never flash fake "0" KPI numbers');
+
+    onlineChecks = 0;
+    await ctlA.refreshUsageRollup(true);
+    assert.ok(onlineChecks <= 15, `Offline cold wait must be tightly bounded (<=10 ticks), saw ${onlineChecks} checks`);
+    assert.equal(doc.querySelectorAll('[data-skeleton]').length, 0, 'Offline/0-session refresh must exit skeleton cleanly (no permanent deadlock)');
+
+    // Bridge comes back online -> force=false must immediately refresh (lastUsageFetchAt was not locked during offline pass)
+    online = true;
+    await ctlA.refreshUsageRollup(false);
+    assert.equal(listCalls, 1, 'Coming online after offline pass must immediately invoke listSummaries() even with force=false');
+    assert.equal(ctlA.getUsageRecordsCount(), 1, 'Online hydration must populate cached record');
+
+    // Part B: Offline >240-step conversation preserves existing cached real stats (never overwritten with 0) and auto-backfills once online
+    online = false;
+    storeMem.set('test:pr22:bigConv', JSON.stringify({
+      'big-conv-1': realRecord('big-conv-1', 250, 1763400100, 98000),
+    }));
+    reduxSummaries = {
+      'big-conv-1': { stepCount: 265, lastModifiedTime: { seconds: 1763400200 }, workspaces: [{ workspaceFolderAbsoluteUri: 'file:///c:/proj/obsidian-prism' }] },
+    };
+    const ctlB = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:pr22:bigConv',
+      waitTickMs: 5,
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'en',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({
+        store: { getState: () => ({ trajectorySummaries: { summaries: reduxSummaries } }) },
+        svc: { getCascadeTrajectory: async () => { directTrajCalls += 1; return {}; } },
+      }),
+      canMountRealCanvas: () => true,
+      setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+
+    await ctlB.refreshUsageRollup(true);
+    ctlB.flushUsageCacheNow();
+    assert.equal(directTrajCalls, 0, 'Offline fallback must skip direct getCascadeTrajectory for >240-step conversation');
+    const afterOffline = JSON.parse(storeMem.get('test:pr22:bigConv') || '{}')['big-conv-1'];
+    assert.equal(afterOffline.calls, 12, 'Existing real call count must be preserved when offline skips >240-step conversation');
+    assert.equal(afterOffline.days[dKey].total, 98000, 'Existing real token total must NEVER be overwritten with 0');
+    assert.equal(afterOffline.stepCount, 250, 'Cursor must not advance past un-fetched steps during offline skip');
+    assert.equal(afterOffline._do, 1, 'Deferred offline flag must be set to guarantee future backfill');
+
+    // Once bridge comes back online, big-conv-1 auto-backfills via fetchBatch and clears _do
+    online = true;
+    fetchBatchCalls = 0;
+    lastBatchIds = [];
+    await ctlB.refreshUsageRollup(true);
+    ctlB.flushUsageCacheNow();
+    assert.equal(fetchBatchCalls, 1);
+    assert.deepEqual(lastBatchIds, ['big-conv-1']);
+    const afterOnline = JSON.parse(storeMem.get('test:pr22:bigConv') || '{}')['big-conv-1'];
+    assert.equal(afterOnline.days[dKey].total, 125000);
+    assert.equal(afterOnline.stepCount, 265);
+    assert.equal(afterOnline._do, undefined, 'Online backfill must clear deferred _do marker');
+  } finally {
+    if (prevWin === undefined) delete globalThis.window;
+    else globalThis.window = prevWin;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevStorage;
+  }
+});
+
+test('Todo 3: Daemon isolates Local vs Remote-SSH targeted RPC, summary cache buckets, local disk scan & v2 partitioned disk cache', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const {
+    PrismDaemon,
+    normalizeUsageScopeKey,
+    extractScopeKeyFromUri,
+    extractScopeKeyFromTitle,
+    resolveUsageScopeKey,
+  } = await import('../sidecars/daemon/main.mjs');
+
+  const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
+
+  // 1. Pure scopeKey normalization & security checks
+  assert.equal(normalizeUsageScopeKey('local'), 'local');
+  assert.equal(extractScopeKeyFromUri('vscode-remote://ssh-remote+prod-gpu/home/dev/repo'), 'ssh:prod-gpu');
+  const hexAuth = Buffer.from(JSON.stringify({ hostName: 'gpu-box.internal' }), 'utf8').toString('hex');
+  assert.equal(extractScopeKeyFromUri(`vscode-remote://ssh-remote+${hexAuth}/srv/app`), 'ssh:gpu-box.internal');
+  assert.equal(extractScopeKeyFromUri('vscode-file://vscode-app/workbench.html?remoteAuthority=ssh-remote%2Bml-node-1'), 'ssh:ml-node-1');
+  assert.equal(extractScopeKeyFromTitle('ml-repo [SSH: prod-gpu] — Antigravity'), 'ssh:prod-gpu');
+  assert.equal(extractScopeKeyFromTitle('proj [WSL: Ubuntu-22.04] — Antigravity'), 'remote:wsl-ubuntu-22.04');
+  assert.equal(normalizeUsageScopeKey('ssh:__proto__'), '');
+  assert.equal(normalizeUsageScopeKey('remote:constructor'), '');
+  assert.equal(resolveUsageScopeKey({ entry: { title: 'plain-repo — Antigravity', url: 'vscode-file://vscode-app/workbench.html' } }), 'local');
+
+  // 2. Dual + Hidden-SSH multi-window daemon routing & isolation
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-todo3-'));
+  const cacheFile = path.join(tmpBase, 'usage-cache.json');
+
+  const localCid = '33333333-3333-4333-8333-333333333301';
+  const sshCid = '33333333-3333-4333-8333-333333333302';
+  const sshNewCid = '33333333-3333-4333-8333-333333333303';
+  const hiddenSshCid = '33333333-3333-4333-8333-333333333304';
+  const diskLocalCid = '33333333-3333-4333-8333-333333333399';
+  const dSec = 1763400200;
+
+  // Raw renderer-proxy trajectory shape normalized by normalizeRendererTrajectory()
+  const makeRawRendererTraj = (model, totalInput, output) => ({
+    trajectory: {
+      steps: [{ type: 'CORTEX_STEP_TYPE_PLANNER_RESPONSE', metadata: { createdAt: { seconds: String(dSec), nanos: 0 } } }],
+      generatorMetadata: [{
+        stepIndices: [0],
+        chatModel: {
+          model,
+          usage: { inputTokens: String(totalInput), outputTokens: String(output) },
+        },
+      }],
+    },
+  });
+
+  const makeMockEntry = (pageId, title, url, rpcHandler) => {
+    const responses = [];
+    const wsUrl = `ws://127.0.0.1:9222/devtools/page/${pageId}`;
+    const mainFrameId = `frame-${pageId}`;
+    return {
+      pageId,
+      wsUrl,
+      title,
+      url,
+      mainFrameId,
+      contextFrames: new Map([[1, { frameId: mainFrameId, isDefault: true, type: 'default' }]]),
+      detectedScopeKey: '',
+      responses,
+      session: {
+        closed: false,
+        evaluate: async (expr) => {
+          const text = String(expr || '');
+          const pMatch = text.match(/\}\)\((\{[\s\S]*\})\)\s*$/);
+          if (pMatch) {
+            const rpcParams = JSON.parse(pMatch[1]);
+            return await rpcHandler(rpcParams.method, rpcParams);
+          }
+          return null;
+        },
+        send: async (method, params) => {
+          if (method !== 'Runtime.evaluate') return {};
+          const expr = String(params?.expression || '');
+          const resolveMatch = expr.match(/__agPrismUsageResolve\((\d+),\s*(\{[\s\S]*\})\)/);
+          if (resolveMatch) {
+            responses.push({ id: Number(resolveMatch[1]), payload: JSON.parse(resolveMatch[2]) });
+            return { result: { value: true } };
+          }
+          return { result: { value: null } };
+        },
+      },
+    };
+  };
+
+  try {
+    const localRpcLog = [];
+    const sshRpcLog = [];
+    const hiddenSshRpcLog = [];
+    let sshBroken = false;
+
+    const localEntry = makeMockEntry(
+      'page-local-1',
+      'obsidian-prism — Antigravity',
+      'vscode-file://vscode-app/workbench.html',
+      async (method, body) => {
+        localRpcLog.push({ method, cascadeId: body.cascadeId || '' });
+        if (method === 'GetAllCascadeTrajectories') {
+          return {
+            ok: true,
+            data: {
+              trajectorySummaries: {
+                [localCid]: {
+                  stepCount: 5,
+                  lastModifiedTime: { seconds: String(dSec) },
+                  workspaces: [{ workspaceFolderAbsoluteUri: 'file:///c:/proj/obsidian-prism' }],
+                },
+              },
+            },
+          };
+        }
+        if (body.cascadeId === localCid) {
+          return { ok: true, data: makeRawRendererTraj('Gemini 4 Carbon', 40000, 10000) };
+        }
+        return { ok: false, error: 'local-unknown-cascade' };
+      }
+    );
+
+    const sshEntry = makeMockEntry(
+      'page-ssh-1',
+      'ml-repo [SSH: prod-gpu] — Antigravity',
+      'vscode-file://vscode-app/workbench.html?remoteAuthority=ssh-remote%2Bprod-gpu',
+      async (method, body) => {
+        sshRpcLog.push({ method, cascadeId: body.cascadeId || '' });
+        if (sshBroken) return { ok: false, error: 'ssh-ls-unreachable' };
+        if (method === 'GetAllCascadeTrajectories') {
+          return {
+            ok: true,
+            data: {
+              scopeHint: 'ssh:prod-gpu',
+              trajectorySummaries: {
+                [sshCid]: {
+                  stepCount: 8,
+                  lastModifiedTime: { seconds: String(dSec) },
+                  workspaces: [{ workspaceFolderAbsoluteUri: 'vscode-remote://ssh-remote+prod-gpu/home/dev/ml-repo' }],
+                },
+              },
+            },
+          };
+        }
+        if (body.cascadeId === sshCid) {
+          return { ok: true, data: makeRawRendererTraj('Claude Opus 4.6', 100000, 20000) };
+        }
+        return { ok: false, error: 'ssh-unknown-cascade' };
+      }
+    );
+
+    const hiddenSshEntry = makeMockEntry(
+      'page-ssh-hidden',
+      'Antigravity',
+      'vscode-file://vscode-app/workbench.html',
+      async (method) => {
+        hiddenSshRpcLog.push({ method });
+        if (method === 'GetAllCascadeTrajectories') {
+          return {
+            ok: true,
+            data: {
+              trajectorySummaries: {
+                [hiddenSshCid]: {
+                  stepCount: 3,
+                  lastModifiedTime: { seconds: String(dSec) },
+                  workspaces: [{ workspaceFolderAbsoluteUri: 'vscode-remote://ssh-remote+hidden-box/srv/app' }],
+                },
+              },
+            },
+          };
+        }
+        return { ok: false, error: 'not-found' };
+      }
+    );
+
+    const makeRendererProxyDaemon = () => {
+      const d = new PrismDaemon({ rootDir: repoRoot, usageCachePath: cacheFile, silent: true });
+      d.sessions.set(localEntry.wsUrl, localEntry);
+      d.sessions.set(sshEntry.wsUrl, sshEntry);
+      d.sessions.set(hiddenSshEntry.wsUrl, hiddenSshEntry);
+      // Simulate v2.34+ renderer-proxy LS client (routes via AsyncLocalStorage -> _invokeRendererLsRpc)
+      d._lazyLsClient = {
+        server: { port: 0, csrf: '', pid: 0, mode: 'renderer-proxy' },
+        call: (method, body = {}) => d._invokeRendererLsRpc(method, body),
+        trajectory: (cascadeId) => d._invokeRendererLsRpc('GetCascadeTrajectory', { cascadeId }),
+      };
+      return d;
+    };
+
+    const daemon = makeRendererProxyDaemon();
+
+    let localDiskScanCalls = 0;
+    daemon._discoverLocalAppConversations = async () => {
+      localDiskScanCalls += 1;
+      return { conversations: [{ id: diskLocalCid, mtimeMs: dSec * 1000 }] };
+    };
+
+    const callUsageBinding = async (d, entry, reqId, payload) => {
+      const beforeLen = entry.responses.length;
+      await d.handleBindingCall(entry, {
+        name: '__agPrismUsageCall',
+        payload: JSON.stringify({ id: reqId, ...payload }),
+        executionContextId: 1,
+      });
+      assert.equal(entry.responses.length, beforeLen + 1, 'Binding call must resolve response to caller entry');
+      return entry.responses[entry.responses.length - 1].payload;
+    };
+
+    // A. Local window list-summaries & fetch-batch
+    const localList = await callUsageBinding(daemon, localEntry, 1, { action: 'list-summaries' });
+    assert.equal(localList.ok, true);
+    assert.equal(localList.scopeKey, 'local');
+    assert.ok(localList.summaries.some((s) => s.id === localCid));
+    assert.ok(localList.summaries.some((s) => s.id === diskLocalCid), 'Local scope may include local disk conversations');
+    assert.equal(localDiskScanCalls, 1);
+    assert.equal(sshRpcLog.length, 0, 'Local request must never hit SSH window');
+
+    const localBatch = await callUsageBinding(daemon, localEntry, 2, {
+      action: 'fetch-batch',
+      items: [{ id: localCid, stepCount: 5, lastModifiedSec: dSec }],
+    });
+    assert.equal(localBatch.ok, true);
+    assert.equal(localBatch.scopeKey, 'local');
+    assert.equal(localBatch.records[0].mode, 'full');
+    assert.equal(localBatch.records[0].record.days[usageCore.homeDayKey(new Date(dSec * 1000))].total, 50000);
+    assert.equal(sshRpcLog.length, 0, 'Local fetch-batch must never route to SSH window');
+
+    // B. Immediate SSH window request within 15s TTL: must NOT read local _backendSummariesCache, must NOT scan local disk, must route ONLY to sshEntry!
+    const localRpcBeforeSsh = localRpcLog.length;
+    const sshList = await callUsageBinding(daemon, sshEntry, 3, { action: 'list-summaries' });
+    assert.equal(sshList.ok, true);
+    assert.equal(sshList.scopeKey, 'ssh:prod-gpu');
+    assert.deepEqual(sshList.summaries.map((s) => s.id), [sshCid], 'SSH summaries must contain ONLY remote SSH conversations (no local cache or disk bleed)');
+    assert.equal(localDiskScanCalls, 1, 'SSH scope must make 0 calls to _discoverLocalAppConversations()');
+    assert.equal(localRpcLog.length, localRpcBeforeSsh, 'SSH list-summaries must make 0 RPCs to local window');
+
+    const sshBatch = await callUsageBinding(daemon, sshEntry, 4, {
+      action: 'fetch-batch',
+      items: [{ id: sshCid, stepCount: 8, lastModifiedSec: dSec }],
+    });
+    assert.equal(sshBatch.ok, true);
+    assert.equal(sshBatch.scopeKey, 'ssh:prod-gpu');
+    assert.equal(sshBatch.records[0].mode, 'full');
+    const sshDay = sshBatch.records[0].record.days[usageCore.homeDayKey(new Date(dSec * 1000))];
+    assert.equal(sshDay.total, 120000, 'SSH trajectory must yield real remote tokens (never 0 from cross-routed local window)');
+    assert.ok(sshDay.models['Claude Opus 4.6'], 'SSH favorite model must reflect remote SSH model');
+    assert.equal(localRpcLog.length, localRpcBeforeSsh, 'SSH fetch-batch must make 0 RPCs to local window');
+
+    // C. When SSH window RPC fails, daemon must return mode:'error' and NEVER fall back to localEntry!
+    sshBroken = true;
+    const sshFailBatch = await callUsageBinding(daemon, sshEntry, 5, {
+      action: 'fetch-batch',
+      items: [{ id: sshNewCid, stepCount: 3, lastModifiedSec: dSec + 10 }],
+    });
+    assert.equal(sshFailBatch.ok, true);
+    assert.equal(sshFailBatch.records[0].mode, 'error', 'Failed SSH RPC must fail closed with mode:"error"');
+    assert.equal(localRpcLog.length, localRpcBeforeSsh, 'Failed SSH RPC must NEVER fall back to local window');
+    sshBroken = false;
+
+    // D. Title-less hidden SSH window dynamically upgrades scope from returned workspace URIs BEFORE local disk scan
+    const hiddenList = await callUsageBinding(daemon, hiddenSshEntry, 6, { action: 'list-summaries' });
+    assert.equal(hiddenList.ok, true);
+    assert.equal(hiddenList.scopeKey, 'ssh:hidden-box');
+    assert.deepEqual(hiddenList.summaries.map((s) => s.id), [hiddenSshCid]);
+    assert.equal(localDiskScanCalls, 1, 'Dynamically upgraded hidden SSH window must still make 0 local disk scan calls');
+
+    // E. v2 Partitioned Disk Cache survives restart without local/SSH cross-overwriting
+    daemon._flushUsageDiskCache();
+    const persisted = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    assert.equal(persisted.version, 2);
+    assert.ok(persisted.scopes.local[localCid], 'v2 cache must isolate local records under scopes.local');
+    assert.equal(persisted.scopes.local[sshCid], undefined, 'SSH record must never leak into scopes.local');
+    assert.ok(persisted.scopes['ssh:prod-gpu'][sshCid], 'v2 cache must isolate SSH records under scopes["ssh:prod-gpu"]');
+    assert.equal(persisted.scopes['ssh:prod-gpu'][localCid], undefined, 'Local record must never leak into SSH scope');
+    assert.equal(persisted.scopes['ssh:prod-gpu'][sshNewCid], undefined, 'Failed SSH fetch must not pollute cache with 0-token stub');
+
+    const daemonRestart = makeRendererProxyDaemon();
+    daemonRestart._discoverLocalAppConversations = () => [];
+    const coldSshList = await callUsageBinding(daemonRestart, sshEntry, 7, { action: 'list-summaries' });
+    assert.equal(coldSshList.records.length, 1);
+    assert.equal(coldSshList.records[0].id, sshCid);
+    const coldLocalList = await callUsageBinding(daemonRestart, localEntry, 8, { action: 'list-summaries' });
+    assert.equal(coldLocalList.records.length, 1);
+    assert.equal(coldLocalList.records[0].id, localCid);
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+});
+
+test('Todo 3: Frontend home-studio-panel namespaces localStorage by scopeKey and renders pure-DOM XSS-safe scope badge', async () => {
+  const fs = await import('node:fs');
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevStorage = globalThis.localStorage;
+  const storeMem = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+    setItem: (k, v) => { storeMem.set(k, String(v)); },
+    removeItem: (k) => { storeMem.delete(k); },
+  };
+  const dKey = usageCore.homeDayKey(new Date(1763400300 * 1000));
+  const makeRec = (id, model, total) => ({
+    cascadeId: id,
+    stepCount: 4,
+    lastModifiedSec: 1763400300,
+    gmCount: 2,
+    subagent: false,
+    workspace: 'proj',
+    parentId: '',
+    calls: 2,
+    days: {
+      [dKey]: {
+        calls: 2,
+        input: Math.floor(total * 0.7),
+        output: Math.floor(total * 0.3),
+        cacheRead: 0,
+        cacheWrite: 0,
+        total,
+        hours: new Array(24).fill(0),
+        models: { [model]: { input: Math.floor(total * 0.7), output: Math.floor(total * 0.3), cacheRead: 0, cacheWrite: 0, total, calls: 2 } },
+      },
+    },
+  });
+
+  try {
+    // 1. Local window: default storage key, NO scope badge rendered
+    const localDom = createMockStudioDom('obsidian-prism — Antigravity');
+    globalThis.document = localDom.doc;
+    globalThis.window = {
+      document: localDom.doc,
+      location: { href: 'vscode-file://vscode-app/workbench.html' },
+      __agPrismUsageBridge: {
+        isOnline: () => true,
+        listSummaries: async () => ({ ok: true, scopeKey: 'local', summaries: [{ id: 'local-1', stepCount: 4, lastModifiedSec: 1763400300 }], records: [] }),
+        fetchBatch: async (items) => ({ ok: true, scopeKey: 'local', records: items.map((it) => ({ id: it.id, mode: 'full', record: makeRec(it.id, 'Gemini 4 Carbon', 30000) })) }),
+      },
+    };
+    const localCtl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:scope:v1',
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'en',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: {} } }) }, svc: {} }),
+      canMountRealCanvas: () => true,
+      setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+    await localCtl.refreshUsageRollup(true);
+    localCtl.flushUsageCacheNow();
+    assert.equal(localCtl.getScopeKey(), 'local');
+    assert.ok(JSON.parse(storeMem.get('test:scope:v1') || '{}')['local-1'], 'Local scope must persist under un-suffixed default storage key');
+    assert.equal(localDom.doc.querySelector('.ag-cs-home-scope-badge'), null, 'Local window must NOT render redundant remote scope badge');
+
+    // 2. Remote-SSH window sharing same localStorage: separate namespaced key, local records untouched, pure DOM badge rendered
+    const sshDom = createMockStudioDom('ml-repo [SSH: prod-gpu] — Antigravity');
+    globalThis.document = sshDom.doc;
+    globalThis.window = {
+      document: sshDom.doc,
+      location: { href: 'vscode-file://vscode-app/workbench.html?remoteAuthority=ssh-remote%2Bprod-gpu' },
+      __agPrismUsageBridge: {
+        isOnline: () => true,
+        listSummaries: async () => ({ ok: true, scopeKey: 'ssh:prod-gpu', summaries: [{ id: 'ssh-1', stepCount: 4, lastModifiedSec: 1763400300 }], records: [] }),
+        fetchBatch: async (items) => ({ ok: true, scopeKey: 'ssh:prod-gpu', records: items.map((it) => ({ id: it.id, mode: 'full', record: makeRec(it.id, 'Claude Opus 4.6', 90000) })) }),
+      },
+    };
+    const sshCtl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:scope:v1',
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'en',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: {} } }) }, svc: {} }),
+      canMountRealCanvas: () => true,
+      setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+    await sshCtl.refreshUsageRollup(true);
+    sshCtl.flushUsageCacheNow();
+    assert.equal(sshCtl.getScopeKey(), 'ssh:prod-gpu');
+    assert.ok(JSON.parse(storeMem.get('test:scope:v1:ssh:prod-gpu') || '{}')['ssh-1'], 'SSH scope must persist under namespaced storage key');
+    assert.ok(JSON.parse(storeMem.get('test:scope:v1') || '{}')['local-1'], 'SSH pruning must NEVER delete local storage records');
+    assert.equal(JSON.parse(storeMem.get('test:scope:v1') || '{}')['ssh-1'], undefined, 'SSH records must NEVER leak into local storage key');
+
+    const badge = sshDom.doc.querySelector('.ag-cs-home-scope-badge');
+    assert.ok(badge, 'SSH window must render scope badge next to tabs');
+    assert.equal(badge.textContent, 'SSH · prod-gpu');
+    assert.equal(badge.getAttribute('data-scope'), 'ssh:prod-gpu');
+    assert.equal(badge.getAttribute('data-scope-kind'), 'ssh');
+    assert.equal(badge.getAttribute('translate'), 'no');
+    assert.equal(badge.getAttribute('data-ag-no-i18n'), '');
+
+    // 3. XSS payload in SSH title must be strictly sanitized and never use innerHTML
+    const xssDom = createMockStudioDom('repo [SSH: <img src=x onerror=alert(1)>prod] — Antigravity');
+    globalThis.document = xssDom.doc;
+    globalThis.window = { document: xssDom.doc, location: { href: 'vscode-file://vscode-app/workbench.html' } };
+    const xssCtl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:scope:v1',
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'en',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: {} } }) }, svc: {} }),
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+    xssCtl.renderHomePanel(true);
+    const xssBadge = xssDom.doc.querySelector('.ag-cs-home-scope-badge');
+    assert.ok(xssBadge);
+    assert.equal(/[<>"]/.test(xssBadge.textContent), false, 'Scope badge textContent must strip HTML metacharacters');
+    assert.equal(/[<>"]/.test(xssBadge.getAttribute('data-scope') || ''), false, 'Scope data-scope attribute must strip HTML metacharacters');
+
+    const panelSrc = fs.readFileSync(new URL('../home-studio-panel.js', import.meta.url), 'utf8');
+    const badgeLine = panelSrc.split('\n').find((l) => l.includes('ag-cs-home-scope-badge') && l.includes('markNoTr'));
+    assert.ok(badgeLine && !badgeLine.includes('innerHTML'), 'Scope badge must be built via pure DOM textContent with 0 innerHTML');
+  } finally {
+    if (prevWin === undefined) delete globalThis.window;
+    else globalThis.window = prevWin;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevStorage;
+  }
+});
+
 
 

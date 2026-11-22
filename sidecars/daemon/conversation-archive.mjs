@@ -1436,9 +1436,42 @@ async function runCli() {
   }
 }
 
-const isEntry =
-  process.argv[1] &&
-  pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
+function resolveRealpathForEntry(targetPath) {
+  if (typeof fs.realpathSync.native === 'function') {
+    try {
+      return fs.realpathSync.native(targetPath);
+    } catch (err) {
+      if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR' || err.code === 'EACCES' || err.code === 'EPERM')) {
+        return path.resolve(targetPath);
+      }
+    }
+  }
+  try {
+    return fs.realpathSync(targetPath);
+  } catch {
+    return path.resolve(targetPath);
+  }
+}
+
+/**
+ * 判断当前模块是否作为 CLI 主入口直接启动。
+ * 解析符号链接与 Windows Junction（例如 ~/.gemini 迁至其他盘符），并在 Win32 下归一化盘符大小写。
+ */
+export function isMainEntry(argv1, moduleUrl = import.meta.url) {
+  if (!argv1 || !moduleUrl) return false;
+  const modulePath = String(moduleUrl).startsWith('file:') ? fileURLToPath(moduleUrl) : String(moduleUrl);
+  const resolvedArgv = resolveRealpathForEntry(argv1);
+  const resolvedSelf = resolveRealpathForEntry(modulePath);
+  if (process.platform === 'win32') {
+    return (
+      resolvedArgv.replace(/^\\\\\?\\/, '').toLowerCase() ===
+      resolvedSelf.replace(/^\\\\\?\\/, '').toLowerCase()
+    );
+  }
+  return resolvedArgv === resolvedSelf;
+}
+
+const isEntry = isMainEntry(process.argv[1], import.meta.url);
 
 if (isEntry) {
   runCli().catch((err) => {

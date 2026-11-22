@@ -5765,15 +5765,20 @@ function getInjectWrapperTemplate() {
             return;
           }
           const id = ++seq;
-          const timer = setTimeout(() => {
-            pending.delete(id);
-            resolve(onTimeout());
-          }, timeoutMs);
-          pending.set(id, extra ? { resolve, timer, ...extra } : { resolve, timer });
+          const item = extra ? { resolve, timer: null, ...extra } : { resolve, timer: null };
+          item.arm = (ms = timeoutMs) => {
+            clearTimeout(item.timer);
+            item.timer = setTimeout(() => {
+              pending.delete(id);
+              resolve(onTimeout());
+            }, ms);
+          };
+          item.arm();
+          pending.set(id, item);
           try {
             window[bindingKey](JSON.stringify(buildReq(id)));
           } catch (err) {
-            clearTimeout(timer);
+            clearTimeout(item.timer);
             pending.delete(id);
             resolve(onError(String(err && err.message ? err.message : err), false));
           }
@@ -5845,9 +5850,11 @@ function getInjectWrapperTemplate() {
         };
         const bridge = {
           __prismBridgeReady: true,
-          call: (input) => sendRpc(input && typeof input === 'object' ? { ...input } : { action: String(input || 'get-config') }, null, 20000),
-          translateStream: (opts, onPartial) =>
-            sendRpc({ ...(opts && typeof opts === 'object' ? opts : {}), action: 'translate-stream', text: (opts && opts.text) || '', mode: (opts && opts.mode) || 'ai' }, onPartial, 50000),
+          call: (input) => sendRpc(input && typeof input === 'object' ? { ...input } : { action: String(input || 'get-config') }, null, 25000),
+          translateStream: (opts, onPartial) => {
+            const waitMs = Math.min(180000, 90000 + Math.max(0, core.pending.size - 2) * 30000);
+            return sendRpc({ ...(opts && typeof opts === 'object' ? opts : {}), action: 'translate-stream', text: (opts && opts.text) || '', mode: (opts && opts.mode) || 'ai' }, onPartial, waitMs);
+          },
           cancelTranslate: (v) => sendRpc(v && typeof v === 'object' ? { ...v, action: 'cancel-translate' } : { action: 'cancel-translate', requestId: v, key: v }, null, 8000),
           cacheStats: () => sendRpc({ action: 'cache-stats' }, null, 8000),
           clearCache: () => sendRpc({ action: 'clear-cache' }, null, 8000),
@@ -5866,6 +5873,7 @@ function getInjectWrapperTemplate() {
               }
             }
             if (fullText !== null) {
+              try { item.arm?.(60000); } catch {}
               try { item.onPartial(fullText); } catch {}
             }
           },
@@ -5934,7 +5942,7 @@ function getInjectWrapperTemplate() {
       for (const id of [${JSON.stringify(STYLE_ID)}, ${JSON.stringify(LEGACY_STYLE_ID)}, 'ag-prism-settings-v101-css', 'ag-prism-omni-css', 'ag-prism-inline-diff-css']) {
         try { document.getElementById(id)?.remove(); } catch {}
       }
-      try { document.querySelectorAll?.('[data-testid="prism-thought-ai-config"], .ag-cs-ctx-menu, .ag-cs-ctx-toast, .ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu')?.forEach?.((el) => el.remove()); } catch {}
+      try { document.querySelectorAll?.('[data-testid="prism-thought-ai-config"], [data-testid="prism-thought-general-config"], .ag-cs-ctx-menu, .ag-cs-ctx-toast, .ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu')?.forEach?.((el) => el.remove()); } catch {}
       delete window.__agPrismThought;
       delete window.__agPrismThoughtSettingsUi;
       delete globalThis.__agPrismThoughtSettingsUi;
@@ -7866,7 +7874,7 @@ function readCompiledThoughtAssets(opts = null) {
 
 const THOUGHT_REMOVE_EXPRESSION = `(() => {
   try { window.__agPrismThought?.destroy?.(); } catch {}
-  try { document.querySelectorAll?.('[data-testid="prism-thought-ai-config"]')?.forEach?.((el) => el.remove()); } catch {}
+  try { document.querySelectorAll?.('[data-testid="prism-thought-ai-config"], [data-testid="prism-thought-general-config"]')?.forEach?.((el) => el.remove()); } catch {}
   try { delete window.__agPrismThought; } catch {}
   try { delete globalThis.__agPrismThought; } catch {}
   try { delete window.__agPrismThoughtSettingsUi; } catch {}
@@ -7972,7 +7980,7 @@ function buildThoughtExpression(config = null, opts = null) {
     };
     const cleanupThought = () => {
       try { window.__agPrismThought?.destroy?.(); } catch {}
-      try { document.querySelectorAll?.('[data-testid="prism-thought-ai-config"]')?.forEach?.((el) => el.remove()); } catch {}
+      try { document.querySelectorAll?.('[data-testid="prism-thought-ai-config"], [data-testid="prism-thought-general-config"]')?.forEach?.((el) => el.remove()); } catch {}
       try { delete window.__agPrismThought; } catch {}
       try { delete globalThis.__agPrismThought; } catch {}
       try { delete window.__agPrismThoughtSettingsUi; } catch {}
@@ -8616,7 +8624,7 @@ const REMOVE_EXPRESSION = `(() => {
   const nodes = document.querySelectorAll(
     '#' + ${JSON.stringify(STYLE_ID)} +
     ', #' + ${JSON.stringify(LEGACY_STYLE_ID)} +
-    ', #ag-prism-host-alert-css, #ag-prism-settings-v101-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-prism-inline-diff-css, #ag-cs-settings-sec, [data-testid="prism-thought-ai-config"], .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ag-prism-sidebar-studio, .ag-prism-sidebar-rail, .ag-prism-sidebar-popover, .ag-prism-sidebar-modal, .ag-cs-home-panel, .ag-cs-home-panel-seat, .ag-cs-ripple-layer, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-mascot, .ag-v2-mascot-stage, .ag-v2-habitat-prop, .ag-cs-crystal-bar, [data-testid="orchestrator-effort-bar"], .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-smooth-caret, .ag-cs-perf-backdrop, .ag-cs-ctx-menu, .ag-cs-ctx-toast'
+    ', #ag-prism-host-alert-css, #ag-prism-settings-v101-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-prism-inline-diff-css, #ag-cs-settings-sec, [data-testid="prism-thought-ai-config"], [data-testid="prism-thought-general-config"], .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ag-prism-sidebar-studio, .ag-prism-sidebar-rail, .ag-prism-sidebar-popover, .ag-prism-sidebar-modal, .ag-cs-home-panel, .ag-cs-home-panel-seat, .ag-cs-ripple-layer, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-mascot, .ag-v2-mascot-stage, .ag-v2-habitat-prop, .ag-cs-crystal-bar, [data-testid="orchestrator-effort-bar"], .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-nav-outline-trigger, .ag-cs-smooth-caret, .ag-cs-perf-backdrop, .ag-cs-ctx-menu, .ag-cs-ctx-toast'
   );
   nodes.forEach((n) => n.remove());
   return { removed: nodes.length };

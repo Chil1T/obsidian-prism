@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -38,6 +39,186 @@ export const INLINE_DIFF_BINDING = '__agPrismInlineDiffCall';
 export const SIDEBAR_BINDING = '__agPrismSidebarCall';
 export { OmniServer, OMNI_BINDING };
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const RPC_ROUTE_STORAGE = new AsyncLocalStorage();
+const USAGE_CACHE_MAX_BYTES = 4 * 1024 * 1024;
+const USAGE_CACHE_MAX_PER_SCOPE = 1200;
+const USAGE_CACHE_MAX_SCOPES = 32;
+const USAGE_CACHE_MAX_TOTAL_RECORDS = 2400;
+const FORBIDDEN_SCOPE_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+
+export function resolveUsageCachePath(customPath = null) {
+  if (typeof customPath === 'string' && customPath.trim()) {
+    return path.resolve(customPath.trim());
+  }
+  const envPath = typeof process.env.PRISM_USAGE_CACHE_PATH === 'string' ? process.env.PRISM_USAGE_CACHE_PATH.trim() : '';
+  if (envPath) {
+    return path.resolve(envPath);
+  }
+  return path.join(os.homedir(), '.gemini', 'config', 'obsidian-prism-usage-rollup-cache.json');
+}
+
+function sanitizeScopeSegment(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return '';
+  try {
+    s = decodeURIComponent(s);
+  } catch {}
+  // VS Code Remote-SSH 有时将 authority JSON 编码为 hex 字符串（如 {"hostName":"prod-box"}）
+  if (/^[0-9a-f]{8,}$/i.test(s) && s.length % 2 === 0 && s.length <= 512) {
+    try {
+      const decoded = Buffer.from(s, 'hex').toString('utf8');
+      if (decoded.startsWith('{') && decoded.endsWith('}')) {
+        const parsed = JSON.parse(decoded);
+        const hostCand = parsed?.hostName || parsed?.host || parsed?.authority || '';
+        if (typeof hostCand === 'string' && hostCand.trim()) s = hostCand.trim();
+      }
+    } catch {}
+  }
+  const clean = s
+    .toLowerCase()
+    .replace(/[^a-z0-9._:@-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+  if (!clean || FORBIDDEN_SCOPE_SEGMENTS.has(clean)) return '';
+  return clean;
+}
+
+export function normalizeUsageScopeKey(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  const low = s.toLowerCase();
+  if (low === 'local') return 'local';
+  if (low.startsWith('ssh:')) {
+    const host = sanitizeScopeSegment(s.slice(4));
+    return host ? `ssh:${host}` : '';
+  }
+  if (low.startsWith('remote:')) {
+    const id = sanitizeScopeSegment(s.slice(7));
+    return id ? `remote:${id}` : '';
+  }
+  const fromUri = extractScopeKeyFromUri(s);
+  if (fromUri) return fromUri;
+  const fromTitle = extractScopeKeyFromTitle(s);
+  if (fromTitle) return fromTitle;
+  return '';
+}
+
+export function extractScopeKeyFromUri(rawUri) {
+  let s = String(rawUri || '').trim();
+  if (!s) return '';
+  try {
+    s = decodeURIComponent(s);
+  } catch {}
+  // 检查 URL query 中的 remoteAuthority=...
+  const qm = s.match(/[?&#]remoteAuthority=([^&#\s]+)/i);
+  const candidate = qm && qm[1] ? qm[1] : s;
+  const sshMatch = candidate.match(/(?:^|vscode-remote:\/\/)ssh-remote\+([^/&#?\s]+)/i);
+  if (sshMatch && sshMatch[1]) {
+    const host = sanitizeScopeSegment(sshMatch[1]);
+    return host ? `ssh:${host}` : '';
+  }
+  const remoteMatch = candidate.match(/(?:^|vscode-remote:\/\/)([a-z0-9_-]+)\+([^/&#?\s]+)/i);
+  if (remoteMatch && remoteMatch[1] && remoteMatch[2]) {
+    const kind = sanitizeScopeSegment(remoteMatch[1]);
+    const target = sanitizeScopeSegment(remoteMatch[2]);
+    if (kind === 'ssh-remote') return target ? `ssh:${target}` : '';
+    const combined = sanitizeScopeSegment(`${kind}-${target}`);
+    return combined ? `remote:${combined}` : '';
+  }
+  return '';
+}
+
+export function extractScopeKeyFromTitle(rawTitle) {
+  const s = String(rawTitle || '').trim();
+  if (!s) return '';
+  const sshMatch = s.match(/\[SSH:\s*([^\]]+)\]/i);
+  if (sshMatch && sshMatch[1]) {
+    const host = sanitizeScopeSegment(sshMatch[1]);
+    return host ? `ssh:${host}` : '';
+  }
+  const remMatch = s.match(/\[(WSL|Dev Container|Codespaces|Tunnel|Remote):\s*([^\]]+)\]/i);
+  if (remMatch && remMatch[1] && remMatch[2]) {
+    const combined = sanitizeScopeSegment(`${remMatch[1]}-${remMatch[2]}`);
+    return combined ? `remote:${combined}` : '';
+  }
+  return '';
+}
+
+function inferRemoteScopeFromSummariesOrItems(records) {
+  if (!Array.isArray(records) || records.length === 0) return '';
+  let remoteScope = '';
+  let remoteCount = 0;
+  let localFileCount = 0;
+  for (const item of records) {
+    if (!item || typeof item !== 'object') continue;
+    const uris = [];
+    if (Array.isArray(item.workspaces)) {
+      for (const w of item.workspaces) {
+        if (typeof w === 'string' && w) uris.push(w);
+        else if (w && typeof w === 'object') {
+          const u = w.workspaceFolderAbsoluteUri || w.gitRootAbsoluteUri || w.uri || w.path || '';
+          if (u) uris.push(String(u));
+        }
+      }
+    }
+    for (const single of [item.workspaceUri, item.workspacePath, item.workspace]) {
+      if (typeof single === 'string' && single) uris.push(single);
+    }
+    let itemRemote = '';
+    let itemLocal = false;
+    for (const u of uris) {
+      const sc = extractScopeKeyFromUri(u);
+      if (sc) {
+        itemRemote = sc;
+        break;
+      }
+      if (/^file:\/\//i.test(u) || /^[a-z]:[\\/]/i.test(u)) {
+        itemLocal = true;
+      }
+    }
+    if (itemRemote) {
+      if (!remoteScope) remoteScope = itemRemote;
+      remoteCount += 1;
+    } else if (itemLocal) {
+      localFileCount += 1;
+    }
+  }
+  // 只有存在明确远程工作区 URI 且未被本机 file:// 主导时才推断为远程 scope
+  if (remoteScope && remoteCount > 0 && remoteCount >= localFileCount) {
+    return remoteScope;
+  }
+  return '';
+}
+
+export function resolveUsageScopeKey({ explicitScopeKey = '', entry = null, items = null, summaries = null } = {}) {
+  const explicit = normalizeUsageScopeKey(explicitScopeKey);
+  if (explicit && explicit !== 'local') return explicit;
+  if (entry && typeof entry === 'object') {
+    const fromDetected = normalizeUsageScopeKey(entry.detectedScopeKey || entry.scopeKey || '');
+    if (fromDetected && fromDetected !== 'local') return fromDetected;
+    const fromUrl = extractScopeKeyFromUri(entry.url);
+    if (fromUrl) return fromUrl;
+    const fromTitle = extractScopeKeyFromTitle(entry.title);
+    if (fromTitle) return fromTitle;
+  }
+  const fromItems = inferRemoteScopeFromSummariesOrItems(items);
+  if (fromItems) return fromItems;
+  const fromSums = inferRemoteScopeFromSummariesOrItems(summaries);
+  if (fromSums) return fromSums;
+  if (explicit === 'local') return 'local';
+  return 'local';
+}
+
+function hasRealUsageRecord(record) {
+  if (!record || typeof record !== 'object' || !record.days || typeof record.days !== 'object') return false;
+  if (Number(record.calls || 0) > 0) return true;
+  for (const d of Object.values(record.days)) {
+    if (!d || typeof d !== 'object') continue;
+    if (Number(d.total || d.tokens || 0) > 0 || Number(d.calls || 0) > 0) return true;
+  }
+  return false;
+}
 
 function execGit(args, cwd, timeoutMs = 12000, extraConfigs = []) {
   const cfgFlags = [
@@ -1808,6 +1989,7 @@ export class PrismDaemon {
     rootDir = DEFAULT_ROOT_DIR,
     gitRepoDir = null,
     bundleCachePath = undefined,
+    usageCachePath = undefined,
     overridePort = null,
     portFile = null,
     pollIntervalMs = 3000,
@@ -1885,6 +2067,11 @@ export class PrismDaemon {
     this._lazyLsClient = null;
     this._backendSummariesCache = null;
     this._backendSummariesAt = 0;
+    this._usageCachePathOpt = usageCachePath;
+    this._usageCacheFile = resolveUsageCachePath(usageCachePath);
+    this._usageDiskCache = null;
+    this._usageCacheDirty = false;
+    this._usageCacheTimer = null;
     this._storageHealthCache = null;
     this._storageHealthAt = 0;
     this._lastTelemetryActivityAt = 0;
@@ -3179,6 +3366,8 @@ export class PrismDaemon {
     this._lazyLsClient = null;
     this._backendSummariesCache = null;
     this._backendSummariesAt = 0;
+    this._flushUsageDiskCache();
+    this._usageDiskCache = null;
     for (const svc of targets) {
       if (!svc) continue;
       try {
@@ -3460,21 +3649,61 @@ export class PrismDaemon {
     return this._lazyUsage;
   }
 
-  _getRendererRpcCandidates() {
-    const out = [];
-    for (const entry of this.sessions.values()) {
-      if (!entry || !entry.session || entry.session.closed) continue;
-      const url = String(entry.url || '');
-      if (/^(?:devtools|chrome-extension|chrome|about):/i.test(url)) continue;
-      const isLocalHost = /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\//i.test(url);
-      out.push({ entry, score: (isLocalHost ? 2 : 0) + (entry.healthyStreak > 0 ? 1 : 0) });
-    }
-    out.sort((a, b) => b.score - a.score);
-    return out.map((x) => x.entry);
+  _resolveEntryScopeKey(entry) {
+    if (!entry || typeof entry !== 'object') return 'local';
+    return resolveUsageScopeKey({ entry });
   }
 
-  async _invokeRendererLsRpc(method, body = {}) {
-    const candidates = this._getRendererRpcCandidates();
+  _getRendererRpcCandidates(opts = null) {
+    const preferredEntry = opts?.preferredEntry || null;
+    const explicitScope = normalizeUsageScopeKey(opts?.scopeKey || '');
+    const preferredValid = Boolean(
+      preferredEntry &&
+        preferredEntry.session &&
+        !preferredEntry.session.closed &&
+        !/^(?:devtools|chrome-extension|chrome|about):/i.test(String(preferredEntry.url || ''))
+    );
+    const targetScope = explicitScope || (preferredValid ? this._resolveEntryScopeKey(preferredEntry) : '');
+    const out = [];
+    if (preferredValid) {
+      out.push(preferredEntry);
+    }
+    const others = [];
+    if (this.sessions && typeof this.sessions.values === 'function') {
+      for (const entry of this.sessions.values()) {
+        if (!entry || entry === preferredEntry || !entry.session || entry.session.closed) continue;
+        const url = String(entry.url || '');
+        if (/^(?:devtools|chrome-extension|chrome|about):/i.test(url)) continue;
+        const entryScope = this._resolveEntryScopeKey(entry);
+        // 严格环境隔离：指定了 targetScope 或 preferredEntry 时，仅允许同 scope 候选回退，严禁 SSH 与 Local 互相跨路由
+        if (targetScope && entryScope !== targetScope) continue;
+        const isLocalHost = /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\//i.test(url);
+        const isLocalScope = entryScope === 'local';
+        others.push({
+          entry,
+          score: (isLocalScope ? 4 : 0) + (isLocalHost ? 2 : 0) + (entry.healthyStreak > 0 ? 1 : 0),
+        });
+      }
+    }
+    others.sort((a, b) => b.score - a.score);
+    for (const x of others) out.push(x.entry);
+    return out;
+  }
+
+  _createScopedRendererClient(entry, scopeKey) {
+    const safeScope = normalizeUsageScopeKey(scopeKey) || 'local';
+    const routeOpts = { preferredEntry: entry, scopeKey: safeScope };
+    return {
+      server: { port: 0, csrf: '', pid: 0, mode: 'renderer-proxy', scopeKey: safeScope },
+      call: (method, body = {}) => this._invokeRendererLsRpc(method, body, routeOpts),
+      trajectory: (cascadeId) => this._invokeRendererLsRpc('GetCascadeTrajectory', { cascadeId }, routeOpts),
+    };
+  }
+
+  async _invokeRendererLsRpc(method, body = {}, opts = null) {
+    const asyncCtx = RPC_ROUTE_STORAGE.getStore();
+    const routeOpts = opts || (asyncCtx && asyncCtx.daemon === this ? asyncCtx : null);
+    const candidates = this._getRendererRpcCandidates(routeOpts);
     if (!candidates.length) {
       throw new Error('等待 Antigravity 主窗口连接');
     }
@@ -3506,7 +3735,19 @@ export class PrismDaemon {
           return normalizeRendererQuotaSummary(raw);
         }
         if (method === 'GetAllCascadeTrajectories') {
-          return normalizeRendererSummaries(raw);
+          const scopeHint = normalizeUsageScopeKey(raw?.scopeHint || '');
+          if (scopeHint && scopeHint !== 'local') {
+            entry.detectedScopeKey = scopeHint;
+          }
+          const normalized = normalizeRendererSummaries(raw);
+          if (scopeHint) {
+            Object.defineProperty(normalized, '_scopeHint', {
+              value: scopeHint,
+              enumerable: false,
+              configurable: true,
+            });
+          }
+          return normalized;
         }
         if (method === 'GetCascadeTrajectory') {
           return normalizeRendererTrajectory(raw, body?.cascadeId, this._rendererModelLabels || null);
@@ -3623,10 +3864,27 @@ export class PrismDaemon {
     };
   }
 
-  async _fetchBackendTrajectorySummaries(client, usageCore, force = false) {
+  _discoverLocalAppConversations() {
+    return discoverLocalConversations({ host: 'app' });
+  }
+
+  _getDiscoveredSubagents(scopeKey = 'local') {
+    const safeScope = normalizeUsageScopeKey(scopeKey) || 'local';
+    if (!this._discoveredSubagentsByScope) return null;
+    return this._discoveredSubagentsByScope.get(safeScope) || null;
+  }
+
+  async _fetchBackendTrajectorySummaries(client, usageCore, force = false, ctx = null) {
     const now = Date.now();
-    if (!force && this._backendSummariesCache && now - this._backendSummariesAt < 15000) {
-      return this._backendSummariesCache;
+    const entry = ctx?.entry || null;
+    let scopeKey = resolveUsageScopeKey({ explicitScopeKey: ctx?.scopeKey, entry });
+    const makeBucketKey = (sc) => (entry?.pageId ? `${sc}::${entry.pageId}` : sc);
+    const initialBucketKey = makeBucketKey(scopeKey);
+    if (!force && this._backendSummariesCache instanceof Map) {
+      const hit = this._backendSummariesCache.get(initialBucketKey);
+      if (hit && now - hit.at < 15000) {
+        return hit.pack;
+      }
     }
     try {
       const raw = await client.call('GetAllCascadeTrajectories', {});
@@ -3718,36 +3976,53 @@ export class PrismDaemon {
         list.push(item);
         byId.set(id.toLowerCase(), item);
       }
+
+      // 动态二次校准 scopeKey：在扫描本机磁盘前检查该窗口返回的工作区 URI 与 renderer scopeHint
+      if (scopeKey === 'local') {
+        const inferredScope = resolveUsageScopeKey({
+          explicitScopeKey: raw?._scopeHint || entry?.detectedScopeKey || '',
+          entry,
+          summaries: list,
+        });
+        if (inferredScope && inferredScope !== 'local') {
+          scopeKey = inferredScope;
+          if (entry && typeof entry === 'object') entry.detectedScopeKey = scopeKey;
+        }
+      }
+
       if (client?.server?.mode === 'renderer-proxy') {
-        const subMap = this._discoveredSubagents || null;
-        try {
-          const localRes = await discoverLocalConversations({ host: 'app' });
-          for (const entry of localRes?.conversations || []) {
-            const lid = String(entry?.id || '').toLowerCase();
-            if (!GUID_RE.test(lid) || byId.has(lid)) continue;
-            // 直接复用 discoverLocalConversations 并发 lstat 返回的 mtimeMs，省去二次串行 lstat
-            const rawMtimeMs = Number.isFinite(entry?.dbMtimeMs)
-              ? entry.dbMtimeMs
-              : Number.isFinite(entry?.mtimeMs)
-              ? entry.mtimeMs
-              : 0;
-            const mtimeSec = rawMtimeMs > 0 ? Math.floor(rawMtimeMs / 1000) : 0;
-            const knownSub = subMap?.get(lid) || null;
-            const localItem = {
-              id: lid,
-              stepCount: 0,
-              lastModifiedSec: mtimeSec,
-              createdSec: mtimeSec,
-              subagent: Boolean(knownSub),
-              ...(knownSub?.parentId ? { parentId: knownSub.parentId } : {}),
-              ...(knownSub?.workspace ? { workspace: knownSub.workspace } : {}),
-              title: '',
-              status: '',
-            };
-            list.push(localItem);
-            byId.set(lid, localItem);
-          }
-        } catch {}
+        const subMap = this._getDiscoveredSubagents(scopeKey);
+        // 严格隔离：仅本地窗口允许补充扫描本机磁盘会话；Remote-SSH 等远程窗口绝不混入本机磁盘对话
+        if (scopeKey === 'local') {
+          try {
+            const localRes = await this._discoverLocalAppConversations();
+            for (const localEntry of localRes?.conversations || []) {
+              const lid = String(localEntry?.id || '').toLowerCase();
+              if (!GUID_RE.test(lid) || byId.has(lid)) continue;
+              // 直接复用 discoverLocalConversations 并发 lstat 返回的 mtimeMs，省去二次串行 lstat
+              const rawMtimeMs = Number.isFinite(localEntry?.dbMtimeMs)
+                ? localEntry.dbMtimeMs
+                : Number.isFinite(localEntry?.mtimeMs)
+                ? localEntry.mtimeMs
+                : 0;
+              const mtimeSec = rawMtimeMs > 0 ? Math.floor(rawMtimeMs / 1000) : 0;
+              const knownSub = subMap?.get(lid) || null;
+              const localItem = {
+                id: lid,
+                stepCount: 0,
+                lastModifiedSec: mtimeSec,
+                createdSec: mtimeSec,
+                subagent: Boolean(knownSub),
+                ...(knownSub?.parentId ? { parentId: knownSub.parentId } : {}),
+                ...(knownSub?.workspace ? { workspace: knownSub.workspace } : {}),
+                title: '',
+                status: '',
+              };
+              list.push(localItem);
+              byId.set(lid, localItem);
+            }
+          } catch {}
+        }
         if (subMap && subMap.size > 0) {
           for (const item of list) {
             const info = subMap.get(item.id.toLowerCase());
@@ -3759,27 +4034,45 @@ export class PrismDaemon {
         }
         list.sort((a, b) => (b.lastModifiedSec || 0) - (a.lastModifiedSec || 0));
       }
-      const pack = { list, byId };
-      this._backendSummariesCache = pack;
+
+      const pack = { list, byId, scopeKey };
+      if (!(this._backendSummariesCache instanceof Map)) {
+        this._backendSummariesCache = new Map();
+      }
+      const finalBucketKey = makeBucketKey(scopeKey);
+      this._backendSummariesCache.delete(finalBucketKey);
+      this._backendSummariesCache.set(finalBucketKey, { pack, at: now });
+      while (this._backendSummariesCache.size > 32) {
+        this._backendSummariesCache.delete(this._backendSummariesCache.keys().next().value);
+      }
       this._backendSummariesAt = now;
       return pack;
     } catch {
-      return { list: [], byId: new Map() };
+      return { list: [], byId: new Map(), scopeKey };
     }
   }
 
-  _recordDiscoveredSubagents(parentId, traj, parentWorkspace = '') {
+  _recordDiscoveredSubagents(parentId, traj, parentWorkspace = '', scopeKey = 'local') {
     const steps = traj?.trajectory?.steps;
     if (!Array.isArray(steps) || !GUID_RE.test(String(parentId || ''))) return;
     const pid = String(parentId).toLowerCase();
-    if (!this._discoveredSubagents) this._discoveredSubagents = new Map();
+    const safeScope = normalizeUsageScopeKey(scopeKey) || 'local';
+    if (!this._discoveredSubagentsByScope) this._discoveredSubagentsByScope = new Map();
+    let scopeMap = this._discoveredSubagentsByScope.get(safeScope);
+    if (!scopeMap) {
+      scopeMap = new Map();
+      this._discoveredSubagentsByScope.set(safeScope, scopeMap);
+      while (this._discoveredSubagentsByScope.size > USAGE_CACHE_MAX_SCOPES) {
+        this._discoveredSubagentsByScope.delete(this._discoveredSubagentsByScope.keys().next().value);
+      }
+    }
     const register = (rawChildId) => {
       const cid = String(rawChildId || '').toLowerCase();
       if (!GUID_RE.test(cid) || cid === pid) return;
-      this._discoveredSubagents.delete(cid);
-      this._discoveredSubagents.set(cid, { parentId: pid, workspace: String(parentWorkspace || '') });
-      while (this._discoveredSubagents.size > 512) {
-        this._discoveredSubagents.delete(this._discoveredSubagents.keys().next().value);
+      scopeMap.delete(cid);
+      scopeMap.set(cid, { parentId: pid, workspace: String(parentWorkspace || '') });
+      while (scopeMap.size > 512) {
+        scopeMap.delete(scopeMap.keys().next().value);
       }
     };
     for (const s of steps) {
@@ -3792,136 +4085,468 @@ export class PrismDaemon {
     }
   }
 
+  _resolveUsageCachePath() {
+    if (typeof this._usageCacheFile === 'string' && this._usageCacheFile.trim()) {
+      return path.resolve(this._usageCacheFile.trim());
+    }
+    return resolveUsageCachePath(this._usageCachePathOpt);
+  }
+
+  _loadUsageDiskCache() {
+    if (this._usageDiskCache instanceof Map) return this._usageDiskCache;
+    const scopesMap = new Map();
+    const cacheFile = this._resolveUsageCachePath();
+    const parseScopeEntries = (obj) => {
+      const m = new Map();
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return m;
+      for (const [k, v] of Object.entries(obj)) {
+        if (m.size >= USAGE_CACHE_MAX_PER_SCOPE) break;
+        if (GUID_RE.test(k) && v && v.record?.days && Number(v.stepCount) > 0 && Number(v.lastModifiedSec) > 0) {
+          m.set(k.toLowerCase(), {
+            stepCount: Number(v.stepCount),
+            lastModifiedSec: Number(v.lastModifiedSec),
+            record: v.record,
+          });
+        }
+      }
+      return m;
+    };
+    try {
+      const dir = path.dirname(cacheFile);
+      if (fs.existsSync(cacheFile)) {
+        const dirStat = fs.lstatSync(dir);
+        const lst = fs.lstatSync(cacheFile);
+        if (
+          !dirStat.isSymbolicLink() &&
+          dirStat.isDirectory() &&
+          !lst.isSymbolicLink() &&
+          lst.isFile() &&
+          lst.size > 0 &&
+          lst.size <= USAGE_CACHE_MAX_BYTES
+        ) {
+          const raw = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+          if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+            if (raw.version === 2 && raw.scopes && typeof raw.scopes === 'object' && !Array.isArray(raw.scopes)) {
+              for (const [rawScope, bucketObj] of Object.entries(raw.scopes)) {
+                if (scopesMap.size >= USAGE_CACHE_MAX_SCOPES) break;
+                const sc = normalizeUsageScopeKey(rawScope);
+                if (!sc) continue;
+                const parsedBucket = parseScopeEntries(bucketObj);
+                if (parsedBucket.size > 0) scopesMap.set(sc, parsedBucket);
+              }
+            } else {
+              // 向下兼容 v1 平铺格式：统一归入 local 分区
+              const localBucket = parseScopeEntries(raw);
+              if (localBucket.size > 0) scopesMap.set('local', localBucket);
+            }
+          }
+        }
+      }
+    } catch {}
+    this._usageDiskCache = scopesMap;
+    return scopesMap;
+  }
+
+  _getUsageDiskCacheScope(scopeKey = 'local', create = false) {
+    const safeScope = normalizeUsageScopeKey(scopeKey) || 'local';
+    const scopesMap = this._loadUsageDiskCache();
+    let bucket = scopesMap.get(safeScope);
+    if (!bucket && create) {
+      bucket = new Map();
+      scopesMap.set(safeScope, bucket);
+      while (scopesMap.size > USAGE_CACHE_MAX_SCOPES) {
+        const oldestKey = scopesMap.keys().next().value;
+        if (oldestKey === safeScope) break;
+        scopesMap.delete(oldestKey);
+      }
+    }
+    return bucket || new Map();
+  }
+
+  _putUsageDiskCache(id, stepCount, lastModifiedSec, record, scopeKey = 'local') {
+    if (!id || !GUID_RE.test(id) || !record?.days) return;
+    const sc = Math.max(0, Number(stepCount || record.stepCount || 0));
+    const lm = Math.max(0, Number(lastModifiedSec || record.lastModifiedSec || 0));
+    if (sc <= 0 || lm <= 0) return;
+    const safeScope = normalizeUsageScopeKey(scopeKey) || 'local';
+    const bucket = this._getUsageDiskCacheScope(safeScope, true);
+    const key = id.toLowerCase();
+    const existing = bucket.get(key);
+    // 保护：绝不用空统计覆盖已有真实非空统计
+    if (existing && hasRealUsageRecord(existing.record) && !hasRealUsageRecord(record)) {
+      return;
+    }
+    bucket.set(key, { stepCount: sc, lastModifiedSec: lm, record });
+    this._usageCacheDirty = true;
+    if (!this._usageCacheTimer) {
+      this._usageCacheTimer = setTimeout(() => {
+        this._usageCacheTimer = null;
+        this._flushUsageDiskCache();
+      }, 1500);
+      this._usageCacheTimer.unref?.();
+    }
+  }
+
+  _flushUsageDiskCache() {
+    if (this._usageCacheTimer) {
+      clearTimeout(this._usageCacheTimer);
+      this._usageCacheTimer = null;
+    }
+    if (!this._usageCacheDirty || !(this._usageDiskCache instanceof Map)) return;
+    this._usageCacheDirty = false;
+    try {
+      const cacheFile = this._resolveUsageCachePath();
+      const dir = path.dirname(cacheFile);
+      assertNotSymlinkSync(cacheFile, 'usage cache file');
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      }
+      assertNotSymlinkSync(dir, 'usage cache directory');
+
+      // 1) 单 scope 限额 1200 条，按 lastModifiedSec 降序保留最新记录
+      const normalizedScopes = [];
+      let totalCount = 0;
+      for (const [rawScope, bucket] of this._usageDiskCache.entries()) {
+        const sc = normalizeUsageScopeKey(rawScope);
+        if (!sc || !(bucket instanceof Map) || bucket.size === 0) continue;
+        let entries = Array.from(bucket.entries());
+        entries.sort((a, b) => (b[1].lastModifiedSec || 0) - (a[1].lastModifiedSec || 0));
+        if (entries.length > USAGE_CACHE_MAX_PER_SCOPE) {
+          entries = entries.slice(0, USAGE_CACHE_MAX_PER_SCOPE);
+          this._usageDiskCache.set(sc, new Map(entries));
+        }
+        const newestSec = entries[0]?.[1]?.lastModifiedSec || 0;
+        normalizedScopes.push({ scope: sc, entries, newestSec });
+        totalCount += entries.length;
+      }
+      // 最多保留 USAGE_CACHE_MAX_SCOPES 个最活跃 scope
+      normalizedScopes.sort((a, b) => b.newestSec - a.newestSec);
+      if (normalizedScopes.length > USAGE_CACHE_MAX_SCOPES) {
+        normalizedScopes.length = USAGE_CACHE_MAX_SCOPES;
+      }
+
+      // 2) 跨 scope 总条目限额控制
+      if (totalCount > USAGE_CACHE_MAX_TOTAL_RECORDS) {
+        const allItems = [];
+        for (const s of normalizedScopes) {
+          for (const [k, v] of s.entries) allItems.push({ scope: s.scope, key: k, val: v });
+        }
+        allItems.sort((a, b) => (b.val.lastModifiedSec || 0) - (a.val.lastModifiedSec || 0));
+        const kept = allItems.slice(0, USAGE_CACHE_MAX_TOTAL_RECORDS);
+        const byScope = new Map();
+        for (const it of kept) {
+          let arr = byScope.get(it.scope);
+          if (!arr) {
+            arr = [];
+            byScope.set(it.scope, arr);
+          }
+          arr.push([it.key, it.val]);
+        }
+        normalizedScopes.length = 0;
+        for (const [sc, entries] of byScope.entries()) {
+          normalizedScopes.push({ scope: sc, entries, newestSec: entries[0]?.[1]?.lastModifiedSec || 0 });
+        }
+      }
+
+      // 3) 序列化并严格保证 <= 4 MB 上限（超限时按最老条目逐步裁剪）
+      const buildPayload = () => {
+        const scopesObj = Object.create(null);
+        for (const s of normalizedScopes) {
+          if (!s.entries.length) continue;
+          const bucketObj = Object.create(null);
+          for (const [k, v] of s.entries) bucketObj[k] = v;
+          scopesObj[s.scope] = bucketObj;
+        }
+        return JSON.stringify({ version: 2, scopes: scopesObj });
+      };
+      let serialized = buildPayload();
+      while (Buffer.byteLength(serialized, 'utf8') > USAGE_CACHE_MAX_BYTES) {
+        let trimmed = false;
+        for (const s of normalizedScopes) {
+          if (s.entries.length > 1) {
+            s.entries = s.entries.slice(0, Math.max(1, Math.floor(s.entries.length * 0.8)));
+            trimmed = true;
+          }
+        }
+        if (!trimmed) break;
+        serialized = buildPayload();
+      }
+      if (Buffer.byteLength(serialized, 'utf8') <= USAGE_CACHE_MAX_BYTES) {
+        writeFileAtomicSync(cacheFile, serialized, { mode: 0o600 });
+      }
+    } catch {}
+  }
+
   async fetchUsageRollupBatch(rawItems, opts = {}) {
     const usageCore = require(path.join(this.rootDir, 'usage-core.js'));
-    const client = await this.ensureLsClient();
+    const entry = opts?.entry || null;
     const action = opts?.action || 'fetch-batch';
     const wantSummaries = action === 'list-summaries' || Boolean(opts?.includeSummaries);
-    const backendPack = await this._fetchBackendTrajectorySummaries(client, usageCore, action === 'list-summaries');
+    let scopeKey = resolveUsageScopeKey({
+      explicitScopeKey: opts?.scopeKey || '',
+      entry,
+      items: Array.isArray(rawItems) ? rawItems : null,
+    });
+    const routeState = { daemon: this, preferredEntry: entry, scopeKey };
 
-    if (action === 'list-summaries') {
-      return { ok: true, records: [], summaries: backendPack.list };
-    }
+    return RPC_ROUTE_STORAGE.run(routeState, async () => {
+      const hasEntrySession = Boolean(entry && entry.session && !entry.session.closed);
+      let client =
+        scopeKey !== 'local' && hasEntrySession
+          ? this._createScopedRendererClient(entry, scopeKey)
+          : await this.ensureLsClient();
 
-    const list = Array.isArray(rawItems) ? rawItems.slice(0, 16) : [];
-    if (list.length === 0) {
-      return wantSummaries ? { ok: true, records: [], summaries: backendPack.list } : { ok: true, records: [] };
-    }
+      const backendPack = await this._fetchBackendTrajectorySummaries(
+        client,
+        usageCore,
+        action === 'list-summaries',
+        { entry, scopeKey }
+      );
+      const resolvedScope = normalizeUsageScopeKey(backendPack?.scopeKey || '') || scopeKey;
+      if (resolvedScope !== scopeKey) {
+        scopeKey = resolvedScope;
+        routeState.scopeKey = scopeKey;
+        if (scopeKey !== 'local' && hasEntrySession && client?.server?.scopeKey !== scopeKey) {
+          client = this._createScopedRendererClient(entry, scopeKey);
+        }
+      }
+      const diskCache = this._getUsageDiskCacheScope(scopeKey, false);
 
-    const records = [];
-    for (const item of list) {
-      const id = String(item?.id || '');
-      if (!GUID_RE.test(id)) continue;
-      const backendSum = backendPack.byId.get(id.toLowerCase()) || null;
-      const stepCount = Math.max(0, Number(item.stepCount || backendSum?.stepCount || 0));
-      const lastModifiedSec = Math.max(0, Number(item.lastModifiedSec || backendSum?.lastModifiedSec || 0));
-      const createdSec = Math.max(0, Number(item.createdSec || backendSum?.createdSec || lastModifiedSec || 0));
-      const subagent = Boolean(item.subagent || backendSum?.subagent);
-      const parentId = String(item.parentId || backendSum?.parentId || '').trim();
-      const rootId = String(item.rootId || backendSum?.rootId || '').trim();
-      const workspace = String(item.workspace || backendSum?.workspace || '');
-      const workspaces = Array.isArray(item.workspaces) && item.workspaces.length
-        ? item.workspaces
-        : backendSum?.workspaces || [];
-      const gmOffset = Math.max(0, Math.floor(Number(item.gmOffset || 0)));
-      const wsMeta = workspaces.map((uri) => ({ workspaceFolderAbsoluteUri: uri }));
-      const summaryStub = {
-        stepCount,
-        lastModifiedTime: lastModifiedSec > 0 ? { seconds: lastModifiedSec } : undefined,
-        createdTime: createdSec > 0 ? { seconds: createdSec } : undefined,
-        ...(parentId ? { parentConversationId: parentId, parentId } : {}),
-        ...(rootId ? { rootConversationId: rootId, rootId } : {}),
-        ...(wsMeta.length ? { workspaces: wsMeta } : {}),
-        trajectoryMetadata: {
-          ...(subagent ? { nestingDepth: 1 } : {}),
-          ...(parentId ? { parentConversationId: parentId } : {}),
-          ...(rootId ? { rootConversationId: rootId } : {}),
-          ...(wsMeta.length ? { workspaces: wsMeta } : {}),
-        },
-      };
-      try {
-        if (client?.server?.mode === 'renderer-proxy' && typeof client.trajectory === 'function') {
-          const fullTraj = await client.trajectory(id, { force: Boolean(opts?.force), summary: summaryStub });
-          this._recordDiscoveredSubagents(id, fullTraj, workspace);
-          const allSteps = Array.isArray(fullTraj?.trajectory?.steps) ? fullTraj.trajectory.steps : [];
-          const allGms = Array.isArray(fullTraj?.trajectory?.generatorMetadata) ? fullTraj.trajectory.generatorMetadata : [];
-          const realStepCount = Math.max(stepCount, Number(fullTraj?.numTotalSteps || 0), allSteps.length);
-          const totalGm = Math.max(Number(fullTraj?.numTotalGeneratorMetadata || 0), allGms.length);
-          const firstStepTs = allSteps.find((s) => s?.metadata?.createdAt)?.metadata?.createdAt;
-          const lastStepTs = [...allSteps].reverse().find((s) => s?.metadata?.completedAt || s?.metadata?.createdAt);
-          const realLastModSec =
-            lastModifiedSec ||
-            (lastStepTs ? Math.floor((Date.parse(lastStepTs.metadata.completedAt || lastStepTs.metadata.createdAt) || 0) / 1000) : 0);
-          const realCreatedSec =
-            (firstStepTs ? Math.floor((Date.parse(firstStepTs) || 0) / 1000) : 0) || createdSec || realLastModSec;
-          const enrichedStub = {
-            ...summaryStub,
-            stepCount: realStepCount,
-            ...(realLastModSec > 0 ? { lastModifiedTime: { seconds: realLastModSec } } : {}),
-            ...(realCreatedSec > 0 ? { createdTime: { seconds: realCreatedSec } } : {}),
-          };
-          if (gmOffset > 0 && totalGm >= gmOffset) {
-            const deltaItems = allGms.slice(gmOffset);
-            const deltaRec = usageCore.analyzeTrajectoryForUsage(
-              {
-                numTotalSteps: realStepCount,
-                numTotalGeneratorMetadata: totalGm,
-                trajectory: { cascadeId: id, steps: allSteps, generatorMetadata: deltaItems },
-              },
-              enrichedStub,
-              id
-            );
-            if (workspace && deltaRec && typeof deltaRec === 'object' && !deltaRec.workspace) deltaRec.workspace = workspace;
-            if (parentId && deltaRec && typeof deltaRec === 'object' && !deltaRec.parentId) deltaRec.parentId = parentId;
-            records.push({
-              id,
-              mode: 'delta',
-              gmCount: totalGm,
-              stepCount: realStepCount,
-              lastModifiedSec: realLastModSec,
-              subagent,
-              ...(parentId ? { parentId } : {}),
-              ...(workspace ? { workspace } : {}),
-              delta: deltaRec,
-            });
-          } else {
-            const fullRec = usageCore.analyzeTrajectoryForUsage(fullTraj, enrichedStub, id);
-            if (workspace && fullRec && typeof fullRec === 'object' && !fullRec.workspace) fullRec.workspace = workspace;
-            if (parentId && fullRec && typeof fullRec === 'object' && !fullRec.parentId) fullRec.parentId = parentId;
+      if (action === 'list-summaries') {
+        const cachedRecords = [];
+        for (const s of backendPack.list) {
+          const sid = String(s?.id || '').trim();
+          if (!sid) continue;
+          const hit = diskCache.get(sid.toLowerCase());
+          if (hit?.record?.days) {
+            cachedRecords.push({ id: sid, mode: 'full', record: hit.record });
+          }
+        }
+        return { ok: true, scopeKey, records: cachedRecords, summaries: backendPack.list };
+      }
+
+      const list = Array.isArray(rawItems) ? rawItems.slice(0, 16) : [];
+      if (list.length === 0) {
+        return wantSummaries
+          ? { ok: true, scopeKey, records: [], summaries: backendPack.list }
+          : { ok: true, scopeKey, records: [] };
+      }
+
+      const records = [];
+      for (const item of list) {
+        const id = String(item?.id || '');
+        if (!GUID_RE.test(id)) continue;
+        const backendSum = backendPack.byId.get(id.toLowerCase()) || null;
+        const stepCount = Math.max(0, Number(item.stepCount || backendSum?.stepCount || 0));
+        const lastModifiedSec = Math.max(0, Number(item.lastModifiedSec || backendSum?.lastModifiedSec || 0));
+        const createdSec = Math.max(0, Number(item.createdSec || backendSum?.createdSec || lastModifiedSec || 0));
+        const subagent = Boolean(item.subagent || backendSum?.subagent);
+        const parentId = String(item.parentId || backendSum?.parentId || '').trim();
+        const rootId = String(item.rootId || backendSum?.rootId || '').trim();
+        const workspace = String(item.workspace || backendSum?.workspace || '');
+        const workspaces = Array.isArray(item.workspaces) && item.workspaces.length
+          ? item.workspaces
+          : backendSum?.workspaces || [];
+        const gmOffset = Math.max(0, Math.floor(Number(item.gmOffset || 0)));
+        const diskHit = diskCache.get(id.toLowerCase()) || null;
+        if (!opts?.force && stepCount > 0 && lastModifiedSec > 0) {
+          if (diskHit && diskHit.stepCount === stepCount && diskHit.lastModifiedSec === lastModifiedSec && diskHit.record?.days) {
             records.push({
               id,
               mode: 'full',
-              subagent,
+              subagent: Boolean(diskHit.record.subagent || subagent),
               ...(parentId ? { parentId } : {}),
               ...(workspace ? { workspace } : {}),
-              record: fullRec,
+              record: diskHit.record,
             });
+            continue;
           }
-        } else if (gmOffset > 0) {
-          const deltaItems = [];
-          let curOffset = gmOffset;
-          let totalGm = null;
-          while (true) {
-            const page = await client.call('GetCascadeTrajectoryGeneratorMetadata', {
-              cascadeId: id,
-              generatorMetadataOffset: curOffset,
-              includeMessages: false,
-            });
-            const chunk = page?.generatorMetadata || page?.generatorMetadatas || [];
-            if (page?.numTotalGeneratorMetadata !== undefined && page?.numTotalGeneratorMetadata !== null) {
-              totalGm = Number(page.numTotalGeneratorMetadata);
+        }
+        const wsMeta = workspaces.map((uri) => ({ workspaceFolderAbsoluteUri: uri }));
+        const summaryStub = {
+          stepCount,
+          lastModifiedTime: lastModifiedSec > 0 ? { seconds: lastModifiedSec } : undefined,
+          createdTime: createdSec > 0 ? { seconds: createdSec } : undefined,
+          ...(parentId ? { parentConversationId: parentId, parentId } : {}),
+          ...(rootId ? { rootConversationId: rootId, rootId } : {}),
+          ...(wsMeta.length ? { workspaces: wsMeta } : {}),
+          trajectoryMetadata: {
+            ...(subagent ? { nestingDepth: 1 } : {}),
+            ...(parentId ? { parentConversationId: parentId } : {}),
+            ...(rootId ? { rootConversationId: rootId } : {}),
+            ...(wsMeta.length ? { workspaces: wsMeta } : {}),
+          },
+        };
+        try {
+          if (client?.server?.mode === 'renderer-proxy' && typeof client.trajectory === 'function') {
+            const fullTraj = await client.trajectory(id, { force: Boolean(opts?.force), summary: summaryStub });
+            this._recordDiscoveredSubagents(id, fullTraj, workspace, scopeKey);
+            const allSteps = Array.isArray(fullTraj?.trajectory?.steps) ? fullTraj.trajectory.steps : [];
+            const allGms = Array.isArray(fullTraj?.trajectory?.generatorMetadata) ? fullTraj.trajectory.generatorMetadata : [];
+            const realStepCount = Math.max(stepCount, Number(fullTraj?.numTotalSteps || 0), allSteps.length);
+            const totalGm = Math.max(Number(fullTraj?.numTotalGeneratorMetadata || 0), allGms.length);
+            const firstStepTs = allSteps.find((s) => s?.metadata?.createdAt)?.metadata?.createdAt;
+            const lastStepTs = [...allSteps].reverse().find((s) => s?.metadata?.completedAt || s?.metadata?.createdAt);
+            const realLastModSec =
+              lastModifiedSec ||
+              (lastStepTs ? Math.floor((Date.parse(lastStepTs.metadata.completedAt || lastStepTs.metadata.createdAt) || 0) / 1000) : 0);
+            const realCreatedSec =
+              (firstStepTs ? Math.floor((Date.parse(firstStepTs) || 0) / 1000) : 0) || createdSec || realLastModSec;
+            const enrichedStub = {
+              ...summaryStub,
+              stepCount: realStepCount,
+              ...(realLastModSec > 0 ? { lastModifiedTime: { seconds: realLastModSec } } : {}),
+              ...(realCreatedSec > 0 ? { createdTime: { seconds: realCreatedSec } } : {}),
+            };
+            if (gmOffset > 0 && totalGm >= gmOffset) {
+              const deltaItems = allGms.slice(gmOffset);
+              const deltaRec = usageCore.analyzeTrajectoryForUsage(
+                {
+                  numTotalSteps: realStepCount,
+                  numTotalGeneratorMetadata: totalGm,
+                  trajectory: { cascadeId: id, steps: allSteps, generatorMetadata: deltaItems },
+                },
+                enrichedStub,
+                id
+              );
+              if (workspace && deltaRec && typeof deltaRec === 'object' && !deltaRec.workspace) deltaRec.workspace = workspace;
+              if (parentId && deltaRec && typeof deltaRec === 'object' && !deltaRec.parentId) deltaRec.parentId = parentId;
+              if (diskHit?.record?.days && typeof usageCore.mergeUsageRecordDelta === 'function') {
+                const merged = usageCore.mergeUsageRecordDelta(diskHit.record, deltaRec, {
+                  cascadeId: id,
+                  stepCount: Number(item.stepCount || realStepCount),
+                  lastModifiedSec: Number(item.lastModifiedSec || realLastModSec),
+                  gmCount: totalGm,
+                  subagent,
+                  workspace,
+                  parentId,
+                });
+                this._putUsageDiskCache(
+                  id,
+                  Number(item.stepCount || realStepCount),
+                  Number(item.lastModifiedSec || realLastModSec),
+                  merged,
+                  scopeKey
+                );
+              }
+              records.push({
+                id,
+                mode: 'delta',
+                gmCount: totalGm,
+                stepCount: realStepCount,
+                lastModifiedSec: realLastModSec,
+                subagent,
+                ...(parentId ? { parentId } : {}),
+                ...(workspace ? { workspace } : {}),
+                delta: deltaRec,
+              });
+            } else {
+              const fullRec = usageCore.analyzeTrajectoryForUsage(fullTraj, enrichedStub, id);
+              if (workspace && fullRec && typeof fullRec === 'object' && !fullRec.workspace) fullRec.workspace = workspace;
+              if (parentId && fullRec && typeof fullRec === 'object' && !fullRec.parentId) fullRec.parentId = parentId;
+              this._putUsageDiskCache(
+                id,
+                Number(item.stepCount || realStepCount),
+                Number(item.lastModifiedSec || realLastModSec),
+                fullRec,
+                scopeKey
+              );
+              records.push({
+                id,
+                mode: 'full',
+                subagent,
+                ...(parentId ? { parentId } : {}),
+                ...(workspace ? { workspace } : {}),
+                record: fullRec,
+              });
             }
-            if (!chunk.length) break;
-            deltaItems.push(...chunk);
-            curOffset += chunk.length;
-            if (totalGm !== null && curOffset >= totalGm) break;
-          }
-          if (totalGm !== null && totalGm < gmOffset) {
-            // Rewound/reverted conversation: rebuild cleanly from offset 0
+          } else if (gmOffset > 0) {
+            const deltaItems = [];
+            let curOffset = gmOffset;
+            let totalGm = null;
+            while (true) {
+              const page = await client.call('GetCascadeTrajectoryGeneratorMetadata', {
+                cascadeId: id,
+                generatorMetadataOffset: curOffset,
+                includeMessages: false,
+              });
+              const chunk = page?.generatorMetadata || page?.generatorMetadatas || [];
+              if (page?.numTotalGeneratorMetadata !== undefined && page?.numTotalGeneratorMetadata !== null) {
+                totalGm = Number(page.numTotalGeneratorMetadata);
+              }
+              if (!chunk.length) break;
+              deltaItems.push(...chunk);
+              curOffset += chunk.length;
+              if (totalGm !== null && curOffset >= totalGm) break;
+            }
+            if (totalGm !== null && totalGm < gmOffset) {
+              // Rewound/reverted conversation: rebuild cleanly from offset 0
+              const fullMeta = await this._fetchFullGeneratorMetadata(client, id);
+              const fullRec = usageCore.analyzeTrajectoryForUsage(fullMeta, summaryStub, id);
+              if (workspace && fullRec && typeof fullRec === 'object' && !fullRec.workspace) fullRec.workspace = workspace;
+              if (parentId && fullRec && typeof fullRec === 'object' && !fullRec.parentId) fullRec.parentId = parentId;
+              this._putUsageDiskCache(id, stepCount, lastModifiedSec, fullRec, scopeKey);
+              records.push({
+                id,
+                mode: 'full',
+                subagent,
+                ...(parentId ? { parentId } : {}),
+                ...(workspace ? { workspace } : {}),
+                record: fullRec,
+              });
+            } else {
+              const nextGmCount = totalGm !== null ? Math.max(gmOffset + deltaItems.length, totalGm) : gmOffset + deltaItems.length;
+              const deltaSummary = {
+                stepCount,
+                lastModifiedTime: lastModifiedSec > 0 ? { seconds: lastModifiedSec } : { seconds: Math.floor(Date.now() / 1000) },
+                createdTime: lastModifiedSec > 0 ? { seconds: lastModifiedSec } : undefined,
+                ...(parentId ? { parentConversationId: parentId, parentId } : {}),
+                ...(rootId ? { rootConversationId: rootId, rootId } : {}),
+                ...(wsMeta.length ? { workspaces: wsMeta } : {}),
+                trajectoryMetadata: {
+                  ...(subagent ? { nestingDepth: 1 } : {}),
+                  ...(parentId ? { parentConversationId: parentId } : {}),
+                  ...(rootId ? { rootConversationId: rootId } : {}),
+                  ...(wsMeta.length ? { workspaces: wsMeta } : {}),
+                },
+              };
+              const deltaRec = usageCore.analyzeTrajectoryForUsage(
+                { numTotalSteps: stepCount, numTotalGeneratorMetadata: nextGmCount, trajectory: { cascadeId: id, steps: [], generatorMetadata: deltaItems } },
+                deltaSummary,
+                id
+              );
+              if (workspace && deltaRec && typeof deltaRec === 'object' && !deltaRec.workspace) deltaRec.workspace = workspace;
+              if (parentId && deltaRec && typeof deltaRec === 'object' && !deltaRec.parentId) deltaRec.parentId = parentId;
+              if (diskHit?.record?.days && typeof usageCore.mergeUsageRecordDelta === 'function') {
+                const merged = usageCore.mergeUsageRecordDelta(diskHit.record, deltaRec, {
+                  cascadeId: id,
+                  stepCount,
+                  lastModifiedSec,
+                  gmCount: nextGmCount,
+                  subagent,
+                  workspace,
+                  parentId,
+                });
+                this._putUsageDiskCache(id, stepCount, lastModifiedSec, merged, scopeKey);
+              }
+              records.push({
+                id,
+                mode: 'delta',
+                gmCount: nextGmCount,
+                stepCount,
+                lastModifiedSec,
+                subagent,
+                ...(parentId ? { parentId } : {}),
+                ...(workspace ? { workspace } : {}),
+                delta: deltaRec,
+              });
+            }
+          } else {
             const fullMeta = await this._fetchFullGeneratorMetadata(client, id);
             const fullRec = usageCore.analyzeTrajectoryForUsage(fullMeta, summaryStub, id);
             if (workspace && fullRec && typeof fullRec === 'object' && !fullRec.workspace) fullRec.workspace = workspace;
             if (parentId && fullRec && typeof fullRec === 'object' && !fullRec.parentId) fullRec.parentId = parentId;
+            this._putUsageDiskCache(id, stepCount, lastModifiedSec, fullRec, scopeKey);
             records.push({
               id,
               mode: 'full',
@@ -3930,60 +4555,15 @@ export class PrismDaemon {
               ...(workspace ? { workspace } : {}),
               record: fullRec,
             });
-          } else {
-            const nextGmCount = totalGm !== null ? Math.max(gmOffset + deltaItems.length, totalGm) : gmOffset + deltaItems.length;
-            const deltaSummary = {
-              stepCount,
-              lastModifiedTime: lastModifiedSec > 0 ? { seconds: lastModifiedSec } : { seconds: Math.floor(Date.now() / 1000) },
-              createdTime: lastModifiedSec > 0 ? { seconds: lastModifiedSec } : undefined,
-              ...(parentId ? { parentConversationId: parentId, parentId } : {}),
-              ...(rootId ? { rootConversationId: rootId, rootId } : {}),
-              ...(wsMeta.length ? { workspaces: wsMeta } : {}),
-              trajectoryMetadata: {
-                ...(subagent ? { nestingDepth: 1 } : {}),
-                ...(parentId ? { parentConversationId: parentId } : {}),
-                ...(rootId ? { rootConversationId: rootId } : {}),
-                ...(wsMeta.length ? { workspaces: wsMeta } : {}),
-              },
-            };
-            const deltaRec = usageCore.analyzeTrajectoryForUsage(
-              { numTotalSteps: stepCount, numTotalGeneratorMetadata: nextGmCount, trajectory: { cascadeId: id, steps: [], generatorMetadata: deltaItems } },
-              deltaSummary,
-              id
-            );
-            if (workspace && deltaRec && typeof deltaRec === 'object' && !deltaRec.workspace) deltaRec.workspace = workspace;
-            if (parentId && deltaRec && typeof deltaRec === 'object' && !deltaRec.parentId) deltaRec.parentId = parentId;
-            records.push({
-              id,
-              mode: 'delta',
-              gmCount: nextGmCount,
-              stepCount,
-              lastModifiedSec,
-              subagent,
-              ...(parentId ? { parentId } : {}),
-              ...(workspace ? { workspace } : {}),
-              delta: deltaRec,
-            });
           }
-        } else {
-          const fullMeta = await this._fetchFullGeneratorMetadata(client, id);
-          const fullRec = usageCore.analyzeTrajectoryForUsage(fullMeta, summaryStub, id);
-          if (workspace && fullRec && typeof fullRec === 'object' && !fullRec.workspace) fullRec.workspace = workspace;
-          if (parentId && fullRec && typeof fullRec === 'object' && !fullRec.parentId) fullRec.parentId = parentId;
-          records.push({
-            id,
-            mode: 'full',
-            subagent,
-            ...(parentId ? { parentId } : {}),
-            ...(workspace ? { workspace } : {}),
-            record: fullRec,
-          });
+        } catch (err) {
+          records.push({ id, mode: 'error', error: sanitizeSecretText(err?.message || 'fetch failed') });
         }
-      } catch (err) {
-        records.push({ id, mode: 'error', error: sanitizeSecretText(err?.message || 'fetch failed') });
       }
-    }
-    return wantSummaries ? { ok: true, records, summaries: backendPack.list } : { ok: true, records };
+      return wantSummaries
+        ? { ok: true, scopeKey, records, summaries: backendPack.list }
+        : { ok: true, scopeKey, records };
+    });
   }
 
   updateConfigBatch(entriesObj) {
@@ -5067,9 +5647,12 @@ export class PrismDaemon {
       this._lastTelemetryActivityAt = Date.now();
       let result;
       try {
+        const reqScopeKey = typeof parsed.scopeKey === 'string' && parsed.scopeKey.trim() ? parsed.scopeKey.trim() : '';
         result = await this.fetchUsageRollupBatch(parsed.items, {
           action: parsed.action || 'fetch-batch',
           includeSummaries: Boolean(parsed.includeSummaries),
+          entry,
+          ...(reqScopeKey ? { scopeKey: reqScopeKey } : {}),
         });
       } catch (err) {
         result = { ok: false, error: sanitizeSecretText(err?.message || err), records: [] };
@@ -5271,6 +5854,7 @@ export class PrismDaemon {
       pageId: target.id,
       url: String(target.url || ''),
       title: target.title || target.url || 'Antigravity',
+      detectedScopeKey: '',
       session,
       scriptId: null,
       omniScriptId: null,
@@ -5564,6 +6148,8 @@ export class PrismDaemon {
           ready: true,
           isHostDom,
           href: (typeof location !== 'undefined' && location && typeof location.href === 'string') ? location.href : '',
+          title: typeof document.title === 'string' ? document.title.slice(0, 200) : '',
+          scopeAttr: root.getAttribute('data-ag-prism-scope') || '',
           prismAttr: root.getAttribute('data-ag-prism') || '',
           hasPrism: Boolean(api),
           hasRepoBridge: Boolean(window.__agPrismRepoBridge),
@@ -5590,6 +6176,11 @@ export class PrismDaemon {
       );
       if (!probe || !probe.ready) return { alive: true, ready: false, isHostDom: true };
       if (probe.href) entry.url = probe.href;
+      if (probe.title) entry.title = probe.title;
+      if (probe.scopeAttr) {
+        const probedScope = normalizeUsageScopeKey(probe.scopeAttr);
+        if (probedScope) entry.detectedScopeKey = probedScope;
+      }
       const omniEnabled = this._isOmniEnabled(cfg) && probe.omniMode !== 'off';
       const hasClientOnDisk = omniEnabled && this._hasOmniClientFile();
       const needsOmniHeal =
@@ -6100,7 +6691,14 @@ export class PrismDaemon {
         // If this page is already attached and healthy, only mark it dirty on URL shift rather than waking all pages
         for (const existing of this.sessions.values()) {
           if (tid && existing.pageId === tid) {
+            if (typeof info.title === 'string' && info.title && info.title !== existing.title) {
+              existing.title = info.title;
+              const titleScope = extractScopeKeyFromTitle(info.title);
+              if (titleScope) existing.detectedScopeKey = titleScope;
+            }
             if (typeof info.url === 'string' && info.url && info.url !== existing.url) {
+              existing.url = info.url;
+              existing.detectedScopeKey = '';
               existing.verifyDirty = true;
               existing.healthyStreak = 0;
               this.scheduleImmediateTick(45);
@@ -6783,6 +7381,7 @@ export class PrismDaemon {
   }
 
   async stop(cleanPageDom = false) {
+    this._flushUsageDiskCache();
     this._sidebarStopped = true;
     this.running = false;
     if (this._updateInitialTimer) {
@@ -6842,6 +7441,7 @@ export class PrismDaemon {
     this._lazyLsClient = null;
     this._backendSummariesCache = null;
     this._backendSummariesAt = 0;
+    this._usageDiskCache = null;
     this._lazyThoughtService = null;
     if (this.omniServer) {
       const srv = this.omniServer;
@@ -6879,7 +7479,43 @@ function parseArgs(argv) {
   return { once, port, rootDir, gitRepoDir, outFile };
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+/**
+ * 判断当前模块是否作为 CLI 主入口启动。
+ * 复用本文件 canonicalRealpathSync() 解析符号链接与 Windows Junction（例如 ~/.gemini 迁至其他盘符），
+ * 并在 Win32 下统一规范化盘符大小写与长路径前缀。
+ */
+export function isMainEntry(argv1, moduleFilename = __filename) {
+  if (!argv1 || !moduleFilename) return false;
+  let selfPath = String(moduleFilename);
+  if (selfPath.startsWith('file://')) {
+    try {
+      selfPath = fileURLToPath(selfPath);
+    } catch {
+      return false;
+    }
+  }
+  let resolvedArgv;
+  let resolvedSelf;
+  try {
+    resolvedArgv = canonicalRealpathSync(argv1);
+  } catch {
+    resolvedArgv = path.resolve(argv1);
+  }
+  try {
+    resolvedSelf = canonicalRealpathSync(selfPath);
+  } catch {
+    resolvedSelf = path.resolve(selfPath);
+  }
+  if (process.platform === 'win32') {
+    return (
+      resolvedArgv.replace(/^\\\\\?\\/, '').toLowerCase() ===
+      resolvedSelf.replace(/^\\\\\?\\/, '').toLowerCase()
+    );
+  }
+  return resolvedArgv === resolvedSelf;
+}
+
+if (isMainEntry(process.argv[1], __filename)) {
   const cli = parseArgs(process.argv);
   const daemon = new PrismDaemon({
     rootDir: cli.rootDir,
