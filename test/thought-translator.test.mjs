@@ -1476,7 +1476,10 @@ test('Phase 2 TS-1~TS-8 security & lifecycle audit: SSRF/redirect defense, key r
       mode: 'ai',
       requestId: 'req-live-sse',
     });
-    await new Promise((r) => setTimeout(r, 20));
+    const waitActiveDeadline = Date.now() + 2000;
+    while (svc.getQueueStats().active < 1 && Date.now() < waitActiveDeadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
     assert.equal(svc.getQueueStats().active, 1);
 
     const abortRes = svc.cancelPending('req-live-sse');

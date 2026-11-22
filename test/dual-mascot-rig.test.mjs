@@ -1097,11 +1097,21 @@ test('Red-team regressions: wide rebound (reducedMotion=false), narrower restore
         for (const fn of q) fn(now);
       }
     };
+    const waitRebound = async (pred, maxMs = 1200) => {
+      const deadline = Date.now() + maxMs;
+      await new Promise((r) => setTimeout(r, 200));
+      while (Date.now() < deadline) {
+        await flushBallistic(100);
+        if (!pred || pred(stage.getLayoutSnapshot())) return;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      await flushBallistic(100);
+    };
     const cleanup = () => {
       stage.dispose();
       globalThis.ResizeObserver = prevRO;
     };
-    return { stage, resizeTo, flushBallistic, cleanup };
+    return { stage, resizeTo, flushBallistic, waitRebound, cleanup };
   };
 
   // ① reducedMotion: false wide screen (1100 -> 360 -> 1100) rebounds accurately without stalling at 351px
@@ -1121,8 +1131,11 @@ test('Red-team regressions: wide rebound (reducedMotion=false), narrower restore
       h.resizeTo(700);
       await new Promise((r) => setTimeout(r, 60));
       h.resizeTo(1100);
-      await new Promise((r) => setTimeout(r, 220));
-      await h.flushBallistic(100);
+      await h.waitRebound((s) => {
+        const cb = s.actors.find((a) => a.id === 'cat').x;
+        const db = s.actors.find((a) => a.id === 'clawd').x;
+        return Math.abs(cb - cat0) <= 2 && Math.abs(db - clawd0) <= 2;
+      });
 
       const snapBack = h.stage.getLayoutSnapshot();
       const catBack = snapBack.actors.find((a) => a.id === 'cat').x;
@@ -1145,9 +1158,14 @@ test('Red-team regressions: wide rebound (reducedMotion=false), narrower restore
       assert.ok(cat0 > clawd0, 'Baseline gemini camp puts cat right of clawd');
 
       h.resizeTo(360);
+      const snapN = h.stage.getLayoutSnapshot();
+      const clawdN = snapN.actors.find((a) => a.id === 'clawd').x;
       h.resizeTo(580);
-      await new Promise((r) => setTimeout(r, 220));
-      await h.flushBallistic(100);
+      await h.waitRebound((s) => {
+        const c1 = s.actors.find((a) => a.id === 'cat').x;
+        const d1 = s.actors.find((a) => a.id === 'clawd').x;
+        return d1 > clawdN + 60 && c1 - d1 >= 56;
+      });
 
       const snap580 = h.stage.getLayoutSnapshot();
       const cat1 = snap580.actors.find((a) => a.id === 'cat').x;
@@ -1170,7 +1188,7 @@ test('Red-team regressions: wide rebound (reducedMotion=false), narrower restore
       assert.ok(Math.abs(cowboyN.worldCx - clawdN.worldCx) <= 1, `Stacked mini crab worldCx (${cowboyN.worldCx}) must match clawd worldCx (${clawdN.worldCx}) during push`);
 
       h.resizeTo(720);
-      await new Promise((r) => setTimeout(r, 220));
+      await h.waitRebound((s) => s.actors.find((a) => a.id === 'clawd').x > clawdN.x + 100);
       const snapR = h.stage.getLayoutSnapshot();
       const clawdR = snapR.actors.find((a) => a.id === 'clawd');
       const cowboyR = snapR.minis.find((m) => m.id === 'cowboy');

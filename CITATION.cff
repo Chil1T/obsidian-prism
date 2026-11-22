@@ -6,8 +6,8 @@ abstract: "Modular optical UI themes, split-rate WebGL2 rendering, host workbenc
 authors:
   - name: "RMvdesi"
     website: "https://github.com/RMvdesi"
-version: 1.0.7-beta.1
-date-released: "2026-11-22"
+version: 1.0.7-beta.2
+date-released: "2026-11-23"
 license: GPL-3.0-only
 repository-code: "https://github.com/RMvdesi/obsidian-prism"
 url: "https://github.com/RMvdesi/obsidian-prism"

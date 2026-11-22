@@ -6,13 +6,13 @@
 
 **A native optical UI suite for Google Antigravity**
 
-Four dark & daylight themes · A living 512K context vial · Reasoning effort slider · Pixel companions · Chat Mode (Beta)
+Four dark & daylight themes · A living 512K context vial · Reasoning effort slider · Pixel companions · Custom Static / Video Wallpaper (Beta) · Chat Mode (Beta)
 
 [**简体中文**](./README.md) · [**English**](./README.en.md) · [**Changelog**](./CHANGELOG.md) · [**Releases**](https://github.com/RMvdesi/obsidian-prism/releases) · [**Issues**](https://github.com/RMvdesi/obsidian-prism/issues)
 
 <p>
   <a href="https://github.com/RMvdesi/obsidian-prism/releases"><img src="https://img.shields.io/github/v/release/RMvdesi/obsidian-prism?style=flat-square&color=3186ff&label=Release" alt="Latest Release" /></a>
-  <img src="https://img.shields.io/badge/Version-1.0.7--beta.1-0f172a?style=flat-square" alt="Version 1.0.7-beta.1" />
+  <img src="https://img.shields.io/badge/Version-1.0.7--beta.2-0f172a?style=flat-square" alt="Version 1.0.7-beta.2" />
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20Universal-1e293b?style=flat-square" alt="Platform" />
   <a href="https://github.com/RMvdesi/obsidian-prism/actions"><img src="https://img.shields.io/github/actions/workflow/status/RMvdesi/obsidian-prism/ci.yml?branch=main&style=flat-square&label=CI" alt="CI Status" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-GPL--3.0-2563eb?style=flat-square" alt="License: GPL-3.0" /></a>
@@ -22,7 +22,7 @@ Four dark & daylight themes · A living 512K context vial · Reasoning effort sl
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/screenshots/hero-dark.webp" />
   <source media="(prefers-color-scheme: light)" srcset="assets/screenshots/hero-light.webp" />
-  <img src="assets/screenshots/hero-dark.webp" width="100%" alt="Obsidian Prism v1.0.7-beta.1 showcase" />
+  <img src="assets/screenshots/hero-dark.webp" width="100%" alt="Obsidian Prism v1.0.7-beta.2 showcase" />
 </picture>
 
 <sub>Footage is rendered frame by frame by an offline stage that runs this repository's front-end source directly. All workspaces and conversations shown are fictional.</sub>
@@ -41,7 +41,8 @@ Four dark & daylight themes · A living 512K context vial · Reasoning effort sl
 - **Four themes, one click**: Obsidian Dark and Warm Charcoal, plus Daylight Crystal and Warm Alabaster — with automatic light/dark following.
 - **Context you can see**: A tiny vial next to the composer shows live 512K context usage; click it for a usage breakdown and quota forecasts.
 - **Reasoning effort at your fingertips**: A starfield slider lives in the model menu; pick Orchestrator and it turns into a light-refracting cut-crystal bar.
-- **Thinking you can read**: Translate the model's thinking in real time, in Immersive or Stacked Bilingual view.
+- **Thinking & titles you can read**: Translate the model's thinking in real time (Immersive or Stacked Bilingual) with 1-Click Diagnose, manual HTTP/SOCKS5 proxy, and optional tool-summary & session-title translation.
+- **Custom Static / Live Video Wallpaper (Beta)**: 100% local image (JPG/PNG/WebP/GIF/AVIF) and live video (MP4/WebM) wallpapers, off by default with zero overhead and automatic 0fps pause on blur or chat.
 - **Pixel companions**: Clawd, a little purple cat and three mini crabs stack into a tower above the composer — with a hidden rainbow easter egg.
 - **A friendlier workbench**: Built-in side-pane browser and large-file viewer, right-click actions, long code-block folding and conversation outline jumps.
 - **Chat Mode (Beta)**: A dedicated space for everyday chats and notes, kept separate from your coding workspace and its settings.
@@ -91,14 +92,15 @@ Off by default — enable it under **Settings → Appearance → Beta**. A switc
 ### 5. More Capabilities
 
 - **Appearance Control Center**: Lives in **Settings → Appearance** — redesigned two-column modal, 5 UI languages, **33** end-to-end validated settings (including `sidebarNavFold`, `scrollBottomMotion`, and Stable / Beta update channels), three scene presets (Full Visuals / Deep Focus / Silent Eco), backup/restore and one-click updates.
-- **Thought Translator (Channel 5 On-Demand)**: Injects `0 B` by default when disabled with hot-plug support; zero-config machine translation or streaming local/compatible endpoints, zero-dependency Windows/macOS OS proxy auto-detection, and clickable source paths/line numbers.
+- **Thought & Title Translator (Channel 5 On-Demand)**: Injects `0 B` by default when disabled with hot-plug support; zero-config machine translation or streaming local/compatible endpoints, OS proxy auto-detection + manual HTTP/SOCKS5 proxy, optional tool-summary & conversation-title translation, 1-Click Diagnose bar, and clickable source paths/line numbers.
+- **Custom Static / Live Video Wallpaper (Channel 7 · Beta)**: Experimental on-demand channel, off by default (zero overhead); 100% local read-only streaming for images (JPG/PNG/WebP/GIF/AVIF) and videos (MP4/WebM) with opacity/blur/dim controls, Browser Hole avoidance, and automatic `0fps` pause on blur/hide.
 - **Omni Browser, File Viewer & Inline Diff Preview (Channel 6)**: Open bare links and local paths in the side pane, preview inline file diffs directly in conversation turns, stream huge videos/audio/PDFs/tables/fonts, and right-click to copy paths, reveal files or insert references.
-- **Smoked Obsidian Surfaces & Workbench Enhancements**: Unified faceted message bubbles, file-change strips, Artifact cards and graphite keycaps; sticky code-block headers, manual folding for long code blocks, chapter ticks and hover outlines on the conversation rail, `Alt+↑` / `Alt+↓` turn navigation, and `/btw` side-question fundamentals.
+- **Smoked Obsidian Surfaces & Workbench Enhancements**: Unified faceted message bubbles, file-change strips, Artifact cards and graphite keycaps; sticky code-block headers, manual folding for long code blocks, dedicated outline trigger and hover outlines on the conversation rail, `Alt+↑` / `Alt+↓` turn navigation, and conversation right-click `/btw` + native `/compact`, `/plan`, `/learn`, `/grill-me` slash commands.
 
 <details>
 <summary><strong>Technical details: performance, security, telemetry & configuration (click to expand)</strong></summary>
 
-**Obsidian Prism (`v1.0.7-beta.1`)** provides Smoked Obsidian dark/daylight themes, host workbench & inline diff enhancements, a built-in side-pane browser and streaming multi-format file viewer, live quota telemetry, and chain-of-thought translation for the Antigravity desktop client through a native 6-channel Sidecar plugin architecture — without altering host business logic or conflicting with external plugins:
+**Obsidian Prism (`v1.0.7-beta.2`)** provides Smoked Obsidian dark/daylight themes, host workbench & inline diff enhancements, a built-in side-pane browser and streaming multi-format file viewer, live quota telemetry, chain-of-thought translation, and experimental static/video wallpapers (Beta) for the Antigravity desktop client through a native 7-channel Sidecar plugin architecture — without altering host business logic or conflicting with external plugins:
 
 - **Four Dark/Daylight Themes & Fine-Grained Controls**: Includes two dark palettes (**Obsidian Dark** & **Warm Charcoal**) and two daylight presets (**Daylight Crystal** & **Warm Alabaster**) with automatic host light/dark tracking, unified Smoked Obsidian faceted surfaces (message bubbles, file-change strips, Artifact cards, graphite keycaps, and single-frame inline file chips), plus 5 accent tones (Follow Model, Cobalt, Iris, Amber, and Graphite Monochrome `mono`), 3 corner radius scales, 4 code monospace font stacks with ligature toggle, and ambient glow intensity controls.
 - **300Hz Split-Rate Pipeline, 5-Step Ink Streaming & `0fps` Semantic Afterglow**: Removes persistent multi-layer `backdrop-filter` blur passes and reclaims Canvas VRAM (`0x0`) during sleep; renders streaming responses with a `CSS.highlights`-based **5-step ink fade-in** (zero wrapper nodes, zero forced layout reflow, maintaining smooth high-refresh frame pacing even in `34k+`-node long sessions); caps steady-state background aurora rendering to `~30fps` on 300Hz displays and enters `0fps` idle sleep `1.2s` after activity ends. Provides non-intrusive three-state semantic edge cues (awaiting user decision, error halted, and background long-task completion) that freeze into `0fps` static snapshots.
@@ -108,7 +110,7 @@ Off by default — enable it under **Settings → Appearance → Beta**. A switc
 - **Dual-Window Quota Telemetry & 512K Context Vial**: Aligns `vendor/pulse-dashboard/` with upstream [`ATtacK030130/antigrative-dashboard`](https://github.com/ATtacK030130/antigrative-dashboard) `v0.9.1` (MIT), supporting **5-hour and weekly quota pool tracking with linear depletion forecasts**, **main session vs. Swarm/subagent token attribution**, **cache hit rate** metrics, and CDP process-lineage multi-instance discovery. Exposes Overview, Trends, and Quotas views with workspace filtering on the Studio home dashboard, stores telemetry in an isolated sidecar directory, and yields automatically when standalone external plugins are active.
 - **Dual-Mode Thought Translator (Channel 5)**: Isolated into an on-demand channel (`0 B` injected when off) supporting zero-config **Machine Translation** and **OpenAI-Compatible Streaming Translation**, with zero-dependency async Windows/macOS OS system proxy auto-detection and keyless local endpoints (`localhost` / LAN Ollama, LM Studio, vLLM without requiring an API key); safely restores `file://` source paths and `#L` line-number jump pills under a strict `file://`-only protocol allowlist; adds a concurrency-limited (`max = 3`) viewport-priority queue, per-block retry/re-translate controls, **Immersive vs. Stacked Bilingual** view modes, and cache management. API keys and custom prompts are stored locally in `~/.gemini/config/` (`0600` permissions).
 - **Chat Mode (Beta · Off by Default)**: Off by default and toggleable anytime in **Settings → Appearance → Beta** (`sidebarStudio: "on" | "off"`). When enabled, adds a top-sidebar switcher between the Code workspace and a dedicated Chat space for everyday conversations and document organization, complete with folder/project grouping, clean multi-turn reading views, Artifacts preview, and project-scoped permission isolation that preserves global Code settings.
-- **6-Channel On-Demand Microkernel, Zero-`eval` LZSS & Sub-10ms Config Sync**: Splits the runtime into a lean `ui-runtime.js` microkernel and 6 focused controller modules compiled with zero-`eval` synchronous UTF-16 LZSS compression (`~681 KB` static Channel 1 bundle, well below the `704 KB` ceiling; Omni viewer, Chat sidebar, Host i18n, Thought Translator Channel 5, and Inline Diff Channel 6 load on-demand over dedicated channels) and a unified 6-channel disk cache (`.bundle-cache.json`) achieving `~26 ms` cold-start builds. Covers **33** validated configuration keys (including Stable / Beta update channels) with `< 10 ms` single-flight incremental `refreshConfig` broadcast, three scene presets, categorized sub-tabs, and API-key-sanitized JSON export/import.
+- **7-Channel On-Demand Microkernel, Zero-`eval` LZSS & Sub-10ms Config Sync**: Splits the runtime into a lean `ui-runtime.js` microkernel and 6 focused controller modules compiled with zero-`eval` synchronous UTF-16 LZSS compression (`< 685 KB` static Channel 1 bundle, well below the `704 KB` ceiling; Omni viewer, Chat sidebar, Host i18n, Thought Translator Channel 5, Inline Diff Channel 6, and Wallpaper Beta Channel 7 load on-demand over dedicated channels) and a unified 7-channel disk cache (`.bundle-cache.json`) achieving `~26 ms` cold-start builds. Covers **33** validated configuration keys (including Stable / Beta update channels) with `< 10 ms` single-flight incremental `refreshConfig` broadcast, three scene presets, categorized sub-tabs, and API-key-sanitized JSON export/import.
 
 </details>
 
@@ -120,8 +122,8 @@ Obsidian Prism provides **standalone GUI installers** (no Node.js required) and 
 
 ### Option A: Standalone GUI Installer (Recommended · Zero External Dependencies, No Node.js Required)
 Download the latest installer directly below (or browse all versions & Beta pre-releases on [**GitHub Releases**](https://github.com/RMvdesi/obsidian-prism/releases)):
-1. **Windows (`x64`)**: Download [**`obsidian-prism-installer.exe`**](https://github.com/RMvdesi/obsidian-prism/releases/latest/download/obsidian-prism-installer.exe) and run it. With zero external runtime dependencies (no system Node.js installation needed), it deploys the complete native plugin to `~/.gemini/config/plugins/obsidian-prism`, reuses the bundled Antigravity runtime headlessly to activate all six Sidecar channels immediately, and registers background startup protection (re-run the same `.exe` anytime for a one-click clean uninstall).
-2. **macOS (`Apple Silicon & Intel Universal`)**: Download [**`Obsidian-Prism-macOS-universal.dmg`**](https://github.com/RMvdesi/obsidian-prism/releases/latest/download/Obsidian-Prism-macOS-universal.dmg), mount the disk image, drag `Obsidian Prism.app` into `/Applications`, and **double-click `Obsidian Prism.app` once** to complete native six-channel Sidecar deployment and `LaunchAgent` setup (the same app also provides one-click clean uninstall).
+1. **Windows (`x64`)**: Download [**`obsidian-prism-installer.exe`**](https://github.com/RMvdesi/obsidian-prism/releases/latest/download/obsidian-prism-installer.exe) and run it. With zero external runtime dependencies (no system Node.js installation needed), it deploys the complete native plugin to `~/.gemini/config/plugins/obsidian-prism`, reuses the bundled Antigravity runtime headlessly to activate all seven Sidecar channels immediately, and registers background startup protection (re-run the same `.exe` anytime for a one-click clean uninstall).
+2. **macOS (`Apple Silicon & Intel Universal`)**: Download [**`Obsidian-Prism-macOS-universal.dmg`**](https://github.com/RMvdesi/obsidian-prism/releases/latest/download/Obsidian-Prism-macOS-universal.dmg), mount the disk image, drag `Obsidian Prism.app` into `/Applications`, and **double-click `Obsidian Prism.app` once** to complete native seven-channel Sidecar deployment and `LaunchAgent` setup (the same app also provides one-click clean uninstall).
 
 > **First-Launch OS Security Prompt (Open-Source Build Note)**
 > - **Windows SmartScreen**: Because the installer is built independently without a commercial EV code-signing certificate, if Windows shows *"Windows protected your PC"*, click **More info → Run anyway**.
@@ -182,11 +184,11 @@ npm run build:macos            # Build standalone macOS Universal bundle (.dmg)
 #### Core Repository Layout
 ```text
 obsidian-prism/
-├── plugin.json                         # Antigravity native plugin manifest (obsidian-prism@1.0.7-beta.1)
+├── plugin.json                         # Antigravity native plugin manifest (obsidian-prism@1.0.7-beta.2)
 ├── LICENSE / NOTICE / CITATION.cff     # GPL-3.0 license, attribution terms & citation metadata
 ├── THIRD_PARTY_NOTICES.md              # Preserved copyright & license notices for MIT upstreams
 ├── assets/                             # Vector plugin icon & documentation screenshots
-├── cdp.js / inject.js / remove.js      # Zero-eval LZSS compiler (~681KB), 6-channel disk cache & attach/removal
+├── cdp.js / inject.js / remove.js      # Zero-eval LZSS compiler (<685KB), 7-channel disk cache & attach/removal
 ├── style.css                           # Four themes, Smoked Obsidian surfaces & workbench styles
 ├── i18n-locales.js / i18n-core.js      # 5-language localization tables (zh-CN/zh-TW/yue/en/ja)
 ├── motion-engine.js / animated-icons.js# 4-tier damped spring physics & animated UI icons
@@ -202,8 +204,8 @@ obsidian-prism/
 ├── prism-rim-canvas.js                 # Controller 5: Cursor-reactive border highlight controller
 ├── host-workbench-enhancer.js          # Controller 6: Sidecar theme bridge, code fold & rail outline
 ├── ui-runtime.js                       # Frontend microkernel: fast config sync & lifecycle orchestration
-├── sidecars/daemon/                    # 6-channel native daemon (settings/metrics/usage/repo/archiver/thought/omni/inline-diff)
-├── vendor/                             # Telemetry (v0.9.1), effort-slider, thought-translator (Ch5), inline-diff (Ch6), omni-viewer, sidebar-studio & host-i18n
+├── sidecars/daemon/                    # 7-channel native daemon (settings/metrics/usage/repo/archiver/thought/omni/inline-diff/wallpaper-beta)
+├── vendor/                             # Telemetry (v0.9.1), effort-slider, thought-translator (Ch5), inline-diff (Ch6), wallpaper-beta (Ch7), omni-viewer, sidebar-studio & host-i18n
 └── installer/ & tools/                 # Windows (C#) / macOS (Swift) native-plugin installers & scripts
 ```
 </details>
@@ -231,7 +233,7 @@ Any fork, modification, port, or redistribution must comply with all three requi
   author       = {RMvdesi},
   title        = {{Obsidian Prism: Modular Optical UI, Workbench Enhancements, Omni File Viewer, Quota Telemetry & Thought Translator for Antigravity}},
   year         = {2026},
-  version      = {1.0.7-beta.1},
+  version      = {1.0.7-beta.2},
   license      = {GPL-3.0-only},
   url          = {https://github.com/RMvdesi/obsidian-prism}
 }
@@ -259,9 +261,11 @@ Absorbed and adapted third-party components were originally released under the *
 Heartfelt thanks to the community contributors whose PRs, security hardening, deep performance profiling, and root-cause bug reports directly shaped Obsidian Prism:
 
 - **[@TheSixPasserby](https://github.com/TheSixPasserby)** (ハチケイ) — [PR #6](https://github.com/RMvdesi/obsidian-prism/pull/6) & [Issue #5](https://github.com/RMvdesi/obsidian-prism/issues/5) (credited via `Co-authored-by` in GitHub Contributors): eliminated Blink `:has()` `RecalcStyle` storms, added horizontal RLE Canvas batching, true `0fps` macOS background hibernation, and Antigravity `v2.34.0` `renderer-proxy` tiered caching.
-- **[@yzd05](https://github.com/yzd05)** — [PR #10](https://github.com/RMvdesi/obsidian-prism/pull/10) & [PR #13](https://github.com/RMvdesi/obsidian-prism/pull/13): fixed Orchestrator submenu hover dismissal and redundant L3 menus, and championed Sidecar security hardening (UNC/NT device-path blocking, fail-closed `Host`, in-memory pre-write SHA-256, cross-origin `apiKey` isolation, and `mainFrame` gating).
+- **[@yzd05](https://github.com/yzd05)** — [PR #10](https://github.com/RMvdesi/obsidian-prism/pull/10), [PR #13](https://github.com/RMvdesi/obsidian-prism/pull/13), [PR #20](https://github.com/RMvdesi/obsidian-prism/pull/20), [PR #21](https://github.com/RMvdesi/obsidian-prism/pull/21), [PR #22](https://github.com/RMvdesi/obsidian-prism/pull/22), [PR #23](https://github.com/RMvdesi/obsidian-prism/pull/23), [PR #29](https://github.com/RMvdesi/obsidian-prism/pull/29): fixed Orchestrator submenus and light-mode overlay contrast / submenu transparency, championed Sidecar security hardening, added the dedicated outline trigger, wave-phase continuity & 450ms semantic blend, cross-port usage disk persistence, and WeakMap icon / ResizeObserver optimizations.
+- **[@Kazaorus](https://github.com/Kazaorus)** — [PR #19](https://github.com/RMvdesi/obsidian-prism/pull/19): resolved symlinks and Windows junctions in the daemon CLI entry-point guard.
+- **[@zzirui321-rgb](https://github.com/zzirui321-rgb)** — [PR #30](https://github.com/RMvdesi/obsidian-prism/pull/30) & [Issue #28](https://github.com/RMvdesi/obsidian-prism/issues/28): fixed Windows 200% high-DPI GUI installer scaling and clipping.
 - **[@DDykarc](https://github.com/DDykarc)** — [PR #12](https://github.com/RMvdesi/obsidian-prism/pull/12): resolved Chinese UI effort-slider "中等 ↔ Medium" ping-pong flicker.
 - **[@SuzumiyaHaruhi719](https://github.com/SuzumiyaHaruhi719)** — [PR #17](https://github.com/RMvdesi/obsidian-prism/pull/17): restored Prism metrics fallback in Home Studio when external `agPulseHost` returns empty quotas.
-- **[@Gruu6y](https://github.com/Gruu6y)** — [Issue #2](https://github.com/RMvdesi/obsidian-prism/issues/2), [Issue #3](https://github.com/RMvdesi/obsidian-prism/issues/3), [Issue #8](https://github.com/RMvdesi/obsidian-prism/issues/8): end-to-end rendering/streaming/daemon performance profiling, Read-then-Write zero-reflow settings recommendations, and Windows double-scrollbar root-cause analysis.
+- **[@Gruu6y](https://github.com/Gruu6y)** — [Issue #2](https://github.com/RMvdesi/obsidian-prism/issues/2), [Issue #3](https://github.com/RMvdesi/obsidian-prism/issues/3), [Issue #8](https://github.com/RMvdesi/obsidian-prism/issues/8), [Issue #18](https://github.com/RMvdesi/obsidian-prism/issues/18): end-to-end rendering/streaming/daemon performance profiling, Read-then-Write zero-reflow settings recommendations, Windows double-scrollbar root-cause analysis, and pure-CDP Swarm localization proposal.
 - **[@boy14204367](https://github.com/boy14204367)** (Arui) — [Issue #7](https://github.com/RMvdesi/obsidian-prism/issues/7), [Issue #11](https://github.com/RMvdesi/obsidian-prism/issues/11), [Issue #14](https://github.com/RMvdesi/obsidian-prism/issues/14), [Issue #15](https://github.com/RMvdesi/obsidian-prism/issues/15): pinpointed settings panel Layout Thrashing, `host-i18n` `pointerenter` deep rescans, React 19 multi-text-node effort slider glitches, Thought Translator OS proxy cases, and native `<select>` contrast issues.
-- **[@Freezecatmeow](https://github.com/Freezecatmeow)** — [Issue #16](https://github.com/RMvdesi/obsidian-prism/issues/16) (Chinese UI effort-tier flicker diagnostics); **[@Gyf0402](https://github.com/Gyf0402)** (TTap) — [Issue #4](https://github.com/RMvdesi/obsidian-prism/issues/4) (localization & performance feedback); **[@FeonzmEko](https://github.com/FeonzmEko)** — [Issue #1](https://github.com/RMvdesi/obsidian-prism/issues/1) (narrow-screen & sidebar layout feedback).
+- **[@fenzsen](https://github.com/fenzsen)** — [Issue #27](https://github.com/RMvdesi/obsidian-prism/issues/27) (Thought Translator intermittent failure diagnostics & manual proxy feedback); **[@L-yifan](https://github.com/L-yifan)** — [Issue #26](https://github.com/RMvdesi/obsidian-prism/issues/26) (submenu readability & context menu feedback); **[@Freezecatmeow](https://github.com/Freezecatmeow)** — [Issue #16](https://github.com/RMvdesi/obsidian-prism/issues/16) (Chinese UI effort-tier flicker diagnostics); **[@Gyf0402](https://github.com/Gyf0402)** (TTap) — [Issue #4](https://github.com/RMvdesi/obsidian-prism/issues/4) (localization & performance feedback); **[@FeonzmEko](https://github.com/FeonzmEko)** — [Issue #1](https://github.com/RMvdesi/obsidian-prism/issues/1) (narrow-screen & sidebar layout feedback).

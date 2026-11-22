@@ -29,6 +29,7 @@ function createManifest() {
     settingBinding: cdp.SETTING_BINDING,
     sidebarBinding: cdp.SIDEBAR_BINDING,
     inlineDiffBinding: cdp.INLINE_DIFF_BINDING,
+    wallpaperBinding: cdp.WALLPAPER_BINDING,
     parts: getEffectiveRuntimeParts(),
     defaultConfig: cdp.DEFAULT_CONFIG,
     validators: VALIDATORS,
@@ -191,6 +192,24 @@ function collectOptionalInlineDiffTopEntries() {
   }
 }
 
+function collectOptionalWallpaperTopEntries() {
+  const entries = [];
+  for (const rel of [
+    'vendor/wallpaper/wallpaper-client.js',
+    'vendor/wallpaper/wallpaper-settings-ui.js',
+  ]) {
+    const abs = path.join(ROOT_DIR, ...rel.split('/'));
+    if (!fs.existsSync(abs)) continue;
+    try {
+      entries.push({
+        name: rel,
+        data: Buffer.from(cdp.minifyJs(fs.readFileSync(abs, 'utf8')), 'utf8'),
+      });
+    } catch {}
+  }
+  return entries;
+}
+
 function collectOptionalOmniTopEntries() {
   const entries = [];
   const omniClientRel = 'vendor/omni-viewer/omni-client.js';
@@ -206,6 +225,7 @@ function collectOptionalOmniTopEntries() {
   entries.push(...collectOptionalSidebarTopEntries());
   entries.push(...collectOptionalThoughtTopEntries());
   entries.push(...collectOptionalInlineDiffTopEntries());
+  entries.push(...collectOptionalWallpaperTopEntries());
   return entries;
 }
 
@@ -406,6 +426,7 @@ export {
   collectOptionalSidebarTopEntries,
   collectOptionalThoughtTopEntries,
   collectOptionalInlineDiffTopEntries,
+  collectOptionalWallpaperTopEntries,
   collectNativePluginEntries,
   renderPrismIconPng,
   buildMultiResIco,

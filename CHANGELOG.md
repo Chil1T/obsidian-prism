@@ -5,6 +5,52 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 本项目遵循语义化版本（SemVer）规范，记录各正式版本的新增功能、架构变更、安全加固与缺陷修复。
 
+## [1.0.7-beta.2] - 2026-11-23
+
+> 本版本作为 **Beta 预发布版（`v1.0.7-beta.2`）** 推送至「Beta 尝鲜版」更新通道，全面吸收并加固了近期 7 个社区 PR（`#19` / `#20` / `#21` / `#22` / `#23` / `#29` / `#30`），修复多项高频痛点与全部 CodeQL High 安全告警，并上线 **Channel 7 自定义静态 / 动态视频背景壁纸（Beta）**、会话标题自动翻译与思考翻译一键诊断能力。
+>
+> **Beta 提示**：全新推出的「自定义静态 / 动态视频背景壁纸（含本地 MP4/WebM 视频）」目前定位为 **Beta 实验性功能**，默认关闭（零资源占用），欢迎在各种系统与显示环境下体验并提 Issue 反馈！
+
+### New Features & Beta / 新功能与 Beta 尝鲜（Channel 7 壁纸 · 标题翻译 · 一键诊断）
+
+- **自定义静态 / 动态视频背景壁纸（Beta · 独立按需 Channel 7）**：新增类 Wallpaper Engine 风格的本机静态/动态背景壁纸引擎（`vendor/wallpaper/`），**默认关闭（零开销）**，支持本地图片（`JPG / PNG / WebP / GIF / AVIF`）与动态视频（`MP4 / WebM`），提供系统原生文件选择器、透明度 / 高斯模糊 / 护眼遮罩 / 铺满模式与失焦暂停开关；纯本机 `127.0.0.1` 隔离流式读取（严禁外网请求、符号链接、敏感凭据目录及 SVG/HTML），支持失焦、最小化、进入对话或 `motion=off` 自动 `0fps` 暂停休眠与 Browser Hole 自动避让；升级至 **7 通道统一磁盘缓存**（Channel 1 稳守 `~684.8 KB`）。
+  - *Custom Static / Live Video Wallpaper (Beta · On-Demand Channel 7)*: Introduces a Wallpaper Engine-style 100% local static image (`JPG/PNG/WebP/GIF/AVIF`) and live video (`MP4/WebM`) wallpaper runtime (`vendor/wallpaper/`), **off by default (0 overhead)**, with native file picker, opacity/blur/eye-care dim/fit controls, automatic `0fps` pause on blur/hide/chat/`motion=off`, Browser Hole avoidance, loopback-only streaming security, and unified **7-channel disk caching** (keeping Channel 1 at `~684.8 KB`).
+- **对话 / 会话标题自动翻译成中文（Channel 5 · 默认关闭）**：在思考翻译设置卡片新增可选「会话标题自动翻译」开关（`translateTitles`，默认 `false`，`0 B` 占 Channel 1），支持侧栏与历史会话主标题及面包屑末段纯文本无损翻译，绝不误译工作区名、副标题或状态标签，关闭或卸载时 100% 原位还原。
+  - *Opt-In Conversation Title Auto-Translation (Channel 5 · Off by Default)*: Adds an optional `translateTitles` toggle in the Thought Translator card (`0 B` in Channel 1) that translates sidebar/history conversation titles and final breadcrumb segments without mutating workspace names, subtitles, or badges, with lossless restore on disable/destroy.
+- **思考过程翻译「一键诊断」与手动代理 / 工具摘要批量翻译（[#27](https://github.com/RMvdesi/obsidian-prism/issues/27)）**：彻底修复思考翻译 5 处偶发失效根因（并发竞态、未就绪过早退出、流式态误清等），新增手动 HTTP / HTTPS / SOCKS5 代理地址栏与可选「工具摘要批量翻译」开关；卡片顶部新增 5 语「一键诊断」条与 4 项状态灯（桥接在线态 / 模式配置 / 代理与连通性 / 脱敏排查命令），并在 `README` / `tools/install-plugin.cjs --status` 补充 AI 助手代装标准流程与通道健康自检。
+  - *Thought Translator 1-Click Diagnose, Manual HTTP/SOCKS5 Proxy & Tool-Summary Batch Translation ([#27](https://github.com/RMvdesi/obsidian-prism/issues/27))*: Resolves 5 intermittent translation failure root causes, adds manual HTTP/HTTPS/SOCKS5 proxy configuration and opt-in tool-summary batch translation, introduces a sanitized 5-locale 1-Click Diagnose bar, and expands `README` & `--status` with AI-assisted installation health checks.
+
+### Performance & Experience / 性能重构与核心体验修复
+
+- **推理等级 / 思考强度滑动条 60fps 拖拽防掉帧重构**：彻底消除拖动期每帧 `getBoundingClientRect()`、`void offsetWidth` 强制同步回流、500 层 React Fiber 遍历与全菜单 DOM 重扫；改用缓存轨道尺寸 + 单帧 `rAF` 合并 + `translate3d` 合成层位移，并将 Claude 点阵 Canvas 升级为 `fillRect` + 预计算色表 + HiDPI 固定 backing store（静止自动降频、`motion=off` 严守 `0fps`）；同步修复 Orchestrator L2 切回 Auto Planner 水晶条状态同步。
+  - *60fps Effort Slider Drag Refactor*: Eliminates per-frame layout reflows, 500-level Fiber walks, and full-menu scans during dragging via cached track rects, single-rAF coalescing, and GPU `translate3d` transforms; upgrades the Claude dither Canvas to `fillRect` + precomputed LUT + HiDPI fixed backing store with `0fps` idle enforcement.
+- **右键快捷菜单与 Antigravity v2.34 原生斜杠指令修复**：修复 `/btw` 会话区右键菜单捕获阶段触发问题；彻底解决右键点击 `/compact`、`/plan`、`/learn`、`/grill-me` 时双写变成 `/compact/compact` 以及仅发纯文本未触发原生指令芯片的问题，完整对齐 Antigravity v2.34 `typeahead-item-*` 无前导 `/` 标签与内层 `onClickCapture` 交互机制。
+  - *Context Menu `/btw` & Antigravity v2.34 Native Slash Command Fixes*: Fixes capture-phase `/btw` menu triggers, eliminates `/compact/compact` double-insert in async Lexical editors, and aligns slash option matching with Antigravity v2.34 `typeahead-item-*` bare labels and inner `onClickCapture` chip insertion.
+- **Antigravity 本体更新后「一更新就丢了」5 大盲区根治**：Windows（C# 安装器 / Watcher）与 macOS（Swift Watcher）同步升级为实测探活 `DevToolsActivePort` 识别残留死端口、内存弹窗去重防风暴、解除管理员进程 `ACCESS_DENIED` 误判与真实非默认安装路径屏蔽、扩展 Start Menu / Quick Launch 快捷方式覆盖，macOS 跨版本/新 PID 自动复位旧静音，Daemon 端口恢复秒级复位 45 分钟快捷方式退避。
+  - *5-Gap Post-Update Persistence Resilience (Windows & macOS)*: Upgrades C#/Swift watchers and daemon with live `DevToolsActivePort` dead-port probing, in-memory prompt dedup, admin-process `ACCESS_DENIED` & non-default path fixes, expanded shortcut coverage, cross-version/new-PID macOS snooze reset, and instant daemon shortcut backoff reset.
+
+### Community PRs & Issue Closures / 社区 PR 融合与 Issue 闭环
+
+- **融合并加固 7 个社区 PR**：
+  - [PR #19](https://github.com/RMvdesi/obsidian-prism/pull/19)（[@Kazaorus](https://github.com/Kazaorus)）：修复软链 / Windows Junction 下 CLI 入口路径判定；
+  - [PR #20](https://github.com/RMvdesi/obsidian-prism/pull/20)（[@yzd05](https://github.com/yzd05)）：左侧会话导轨新增独立 `☰` 大纲触发入口并礼让原生 Base UI Turn Tooltip；
+  - [PR #21](https://github.com/RMvdesi/obsidian-prism/pull/21)（[@yzd05](https://github.com/yzd05)）：休眠恢复保持地平线波浪连续相位、消除 surge 跳变、平滑 VSync 步进与 450ms 语义混色；
+  - [PR #22](https://github.com/RMvdesi/obsidian-prism/pull/22)（[@yzd05](https://github.com/yzd05)）：跨端口用量统计磁盘持久化（消除冷启 0-KPI 闪烁），并叠加本机与 Remote-SSH 严格隔离；
+  - [PR #23](https://github.com/RMvdesi/obsidian-prism/pull/23)（[@yzd05](https://github.com/yzd05)）：动态图标 `WeakMap` 签名缓存与首页波纹 `ResizeObserver` `rAF` 合并；
+  - [PR #29](https://github.com/RMvdesi/obsidian-prism/pull/29)（[@yzd05](https://github.com/yzd05)）& [#26](https://github.com/RMvdesi/obsidian-prism/issues/26)（[@L-yifan](https://github.com/L-yifan)）：修复浅色覆层对比度泄漏与宿主配色子菜单透明问题；
+  - [PR #30](https://github.com/RMvdesi/obsidian-prism/pull/30) & [#28](https://github.com/RMvdesi/obsidian-prism/issues/28)（[@zzirui321-rgb](https://github.com/zzirui321-rgb)）：修复 Windows 200% 高 DPI 缩放下图形化安装器界面裁剪与比例异常。
+- **Swarm 宿主词条补全（[#18](https://github.com/RMvdesi/obsidian-prism/issues/18) 层 A）与 CI 稳定性**：补齐 Antigravity 内置 Swarm 插件卡片简介与内置技能词条（独立侧栏 Webview 层 B 排入后续版本）；全面消抖 3 处 CI 偶发时序测试。
+
+### Security & CodeQL / 安全红队审计与 CodeQL 告警清零
+
+- **清零全部 3 条 GitHub Security CodeQL High 告警（`#32` / `#33` / `#34`）及新增潜在模式**：移除测试中全部 `rejectUnauthorized: false` 改用自签测试 CA 校验、消除高危 HTML 过滤正则与潜在多项式 ReDoS 正则；同步完成两轮深度安全红队闭环（NTFS 8.3 短名 Fail-Closed、壁纸读时单 `fd` TOCTOU 与头部魔数复核、`WALLPAPER_BINDING` 主 Frame 与 `contextId` 严格鉴权、一键诊断全量脱敏）。
+  - *Zero CodeQL High Alerts (`#32/#33/#34`) & Red-Team Hardening*: Replaces all `rejectUnauthorized: false` test calls with self-signed test CAs, removes unsafe HTML/ReDoS regexes, and hardens wallpaper/IPC boundaries with NTFS 8.3 fail-closed checks, single-`fd` read-time TOCTOU & magic-byte re-verification, strict main-frame binding checks, and full diagnostic secret redaction.
+
+### Acknowledgements / 社区致谢（Community Credits）
+
+- 衷心感谢本版本通过 PR、深度排查与一线需求反馈推动 Obsidian Prism 进化的所有社区伙伴：**[@yzd05](https://github.com/yzd05)**（[PR #20](https://github.com/RMvdesi/obsidian-prism/pull/20)、[PR #21](https://github.com/RMvdesi/obsidian-prism/pull/21)、[PR #22](https://github.com/RMvdesi/obsidian-prism/pull/22)、[PR #23](https://github.com/RMvdesi/obsidian-prism/pull/23)、[PR #29](https://github.com/RMvdesi/obsidian-prism/pull/29)）、**[@Kazaorus](https://github.com/Kazaorus)**（[PR #19](https://github.com/RMvdesi/obsidian-prism/pull/19)）、**[@zzirui321-rgb](https://github.com/zzirui321-rgb)**（[PR #30](https://github.com/RMvdesi/obsidian-prism/pull/30) & [#28](https://github.com/RMvdesi/obsidian-prism/issues/28)）、**[@fenzsen](https://github.com/fenzsen)**（[#27](https://github.com/RMvdesi/obsidian-prism/issues/27)）、**[@L-yifan](https://github.com/L-yifan)**（[#26](https://github.com/RMvdesi/obsidian-prism/issues/26)）、**[@Gruu6y](https://github.com/Gruu6y)**（[#18](https://github.com/RMvdesi/obsidian-prism/issues/18)），以及在评论区积极反馈自定义壁纸、标题翻译、滑块流畅度、AI 代装排查与更新保持需求的社区朋友们！
+  - *Special thanks to [@yzd05](https://github.com/yzd05) (PR #20/#21/#22/#23/#29), [@Kazaorus](https://github.com/Kazaorus) (PR #19), [@zzirui321-rgb](https://github.com/zzirui321-rgb) (PR #30 & #28), [@fenzsen](https://github.com/fenzsen) (#27), [@L-yifan](https://github.com/L-yifan) (#26), [@Gruu6y](https://github.com/Gruu6y) (#18), and community members who shared wallpaper, title-translation, slider performance, and update-persistence feedback.*
+
 ## [1.0.7-beta.1] - 2026-11-22
 
 > 燃尽了，睡一觉 😴

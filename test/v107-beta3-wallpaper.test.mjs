@@ -1075,13 +1075,15 @@ test('wallpaper-settings-ui.js: 0 innerHTML, 5 locales, 5+1 anti-translation, an
   const uiSrc = fs.readFileSync(path.join(ROOT, 'vendor', 'wallpaper', 'wallpaper-settings-ui.js'), 'utf8');
   assert.equal(/\.innerHTML\s*=/.test(uiSrc), false, 'wallpaper-settings-ui.js must have 0 innerHTML assignments');
 
-  // Verify 5 locale packs exist and have distinct titles
+  // Verify 5 locale packs exist, mark Beta explicitly, and have distinct titles
   const locales = ['zh-CN', 'zh-TW', 'yue', 'en', 'ja'];
   const titles = new Set();
   for (const loc of locales) {
     const pack = wallpaperSettingsUiMod.WALLPAPER_I18N[loc];
     assert.ok(pack, `Locale pack ${loc} must exist`);
     assert.ok(pack.title && pack.pickBtn && pack.opacityLabel && pack.errUnsupportedExt);
+    assert.ok(pack.title.includes('(Beta)'), `Locale ${loc} wallpaper title must clearly show (Beta)`);
+    assert.ok(/Beta/i.test(pack.desc), `Locale ${loc} wallpaper description must clearly mention Beta`);
     titles.add(pack.title);
   }
   assert.equal(titles.size, 5, 'All 5 locales must provide distinct localized titles');
@@ -1179,7 +1181,7 @@ test('wallpaper-settings-ui.js: 0 innerHTML, 5 locales, 5+1 anti-translation, an
     globalThis.document = env.doc;
     const mountPanel = () =>
       settingsPanelMod.mountOrSyncSettingsSection({
-        version: '1.0.7-beta.1',
+        version: '1.0.7-beta.2',
         lazyFold: false,
         getLang: () => activeLang,
         uiText: () => ({ grpAppearance: 'Appearance', sectionTitle: 'Obsidian Prism' }),
@@ -1805,7 +1807,7 @@ test('red-team #229 [P1-2] & #230 [P0-1, P1-7, P2-3, P2-4]: no bootWpCfg token i
   try {
     const mountPanel = () =>
       settingsPanelMod.mountOrSyncSettingsSection({
-        version: '1.0.7-beta.1',
+        version: '1.0.7-beta.2',
         lazyFold: false,
         getLang: () => activeLang,
         uiText: () => ({ grpAppearance: 'Appearance', sectionTitle: 'Obsidian Prism' }),
