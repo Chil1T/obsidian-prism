@@ -1188,3 +1188,187 @@ test('9. context-menu-btw: matches Antigravity v2.34 typeahead-item-* options wi
 
   ctl.destroy();
 });
+
+// ── Test 10: Issue #31 anti-flicker & first-frame anti-translation regression ──
+test('10. upstream-client (Issue #31): _mntSec stamps 5+1 no-translate attrs before DOM insertion, bilingual synonyms (Medium <-> 中) never trigger rise flicker, real tier change updates with bounded <=22% rise & overflow:hidden clip', () => {
+  const REQUIRED_NO_TR_ATTRS = [
+    ['data-ag-i18n-skip', '1'],
+    ['data-ag-no-tr', '1'],
+    ['data-no-translate', '1'],
+    ['data-translate', 'no'],
+    ['translate', 'no'],
+  ];
+  const assertNoTrComplete = (el, name) => {
+    assert.ok(el, `${name} must exist`);
+    for (const [k, v] of REQUIRED_NO_TR_ATTRS) {
+      assert.equal(el.getAttribute(k), v, `${name} must carry ${k}="${v}" on first frame`);
+    }
+    assert.equal(el.classList.contains('notranslate'), true, `${name} must carry class "notranslate" on first frame`);
+  };
+
+  // (a) Verify _mntSec stamps full 5+1 anti-translation attributes synchronously BEFORE inserting into panel (without slider-coexist)
+  const env = createDomEnv({ virtualTimers: true });
+  const optLow = { label: 'Gemini 4 Hydrogen (Low)', modelId: 'h-low', value: 1 };
+  const optMed = { label: 'Gemini 4 Hydrogen (Medium)', modelId: 'h-med', value: 2 };
+  const optHigh = { label: 'Gemini 4 Hydrogen (High)', modelId: 'h-high', value: 3 };
+  let selected = optMed;
+
+  const panel = env.makeEl('div', { attrs: { 'data-testid': 'model-selector-panel' } });
+  const listWrap = env.makeEl('div');
+  const rowItem = env.makeEl('div', { attrs: { role: 'menuitem' } });
+  const grpSpan = env.makeEl('span', {
+    attrs: { 'data-testid': 'model-selector-effort-group', 'data-model-base': 'Gemini 4 Hydrogen' },
+    text: 'Gemini 4 Hydrogen',
+  });
+  const effSpan = env.makeEl('span', { text: '中' });
+  rowItem.appendChild(grpSpan);
+  rowItem.appendChild(effSpan);
+  listWrap.appendChild(rowItem);
+  panel.appendChild(listWrap);
+  const viewUsageRow = env.makeEl('div', { text: '查看用量明细' });
+  panel.appendChild(viewUsageRow);
+  env.body.appendChild(panel);
+
+  const selectorCtx = {
+    effortIndex: new Map([['Gemini 4 Hydrogen', new Map([['low', optLow], ['medium', optMed], ['high', optHigh]])]]),
+    modelOptions: [optLow, optMed, optHigh],
+    get selectedModel() { return selected; },
+    setModelConfigByLabelForConversation(lbl) {
+      selected = [optLow, optMed, optHigh].find((o) => o.label === lbl) || selected;
+    },
+  };
+  panel.__reactFiber$issue31 = { memoizedProps: { value: selectorCtx }, return: null };
+
+  // Intercept insertBefore to assert first-frame attributes exist BEFORE external i18n MutationObserver can react
+  let insertedSnapshotOk = false;
+  const origInsertBefore = panel.insertBefore.bind(panel);
+  panel.insertBefore = (node, ref) => {
+    if (node.classList.contains('ces-ag-section')) {
+      assertNoTrComplete(node, '.ces-ag-section (pre-insert)');
+      assertNoTrComplete(node.querySelector('.ces-ag-effort-row'), '.ces-ag-effort-row (pre-insert)');
+      assertNoTrComplete(node.querySelector('.ces-ag-effort-head'), '.ces-ag-effort-head (pre-insert)');
+      assertNoTrComplete(node.querySelector('.ces-ag-effort-title'), '.ces-ag-effort-title (pre-insert)');
+      assertNoTrComplete(node.querySelector('.ces-ag-effort-value'), '.ces-ag-effort-value (pre-insert)');
+      assertNoTrComplete(node.querySelector('.ces-inline'), '.ces-inline (pre-insert)');
+      insertedSnapshotOk = true;
+    }
+    return origInsertBefore(node, ref);
+  };
+
+  const agObs = upstreamLib.installAntigravityObserver({
+    document: env.doc,
+    window: env.win,
+    MutationObserver: env.win.MutationObserver,
+  });
+  assert.equal(insertedSnapshotOk, true, '_mntSec must stamp 5+1 anti-translation attributes synchronously before DOM insertion');
+
+  // Verify SLIDER_CSS bounds rise animation displacement <= 22% and clips .ces-ag-effort-head with overflow:hidden
+  const styleEl = env.doc.getElementById('ag-codex-effort-slider-styles');
+  assert.ok(styleEl, 'SLIDER_CSS style element must be installed');
+  const css = styleEl.textContent;
+  const kfMatch = /@keyframes\s+ces-claude-rise\{([^}]+(?:\{[^}]*\}[^}]*)*)\}/.exec(css);
+  assert.ok(kfMatch, 'SLIDER_CSS must define @keyframes ces-claude-rise');
+  const yMatches = [...kfMatch[1].matchAll(/translateY\(\s*(-?\d+(?:\.\d+)?)%\s*\)/g)].map((m) => Number(m[1]));
+  assert.ok(yMatches.length > 0, 'ces-claude-rise must specify translateY percentage');
+  for (const pct of yMatches) {
+    assert.ok(pct <= 22 && pct >= -10, `ces-claude-rise translateY(${pct}%) must stay bounded within [-10%, 22%] to prevent bleeding into slider track`);
+  }
+  assert.match(css, /\.ces-ag-effort-head\{[^}]*overflow:hidden/, '.ces-ag-effort-head must apply overflow:hidden to clip value text transition');
+
+  agObs.stop();
+
+  // (b) Bilingual synonym oscillation (Medium <-> 中 <-> 中等 <-> Medium) must NEVER trigger ces-text-rise / is-claude-changing
+  const mEnv = createDomEnv({ virtualTimers: true });
+  const rowEl = mEnv.makeEl('div', { className: 'ces-ag-effort-row' });
+  const valEl = mEnv.makeEl('span', { className: 'ces-ag-effort-value' });
+  const container = mEnv.makeEl('div', { className: 'ces-inline' });
+  rowEl.appendChild(valEl);
+  rowEl.appendChild(container);
+  mEnv.body.appendChild(rowEl);
+
+  let riseAdds = 0;
+  const origClassAdd = valEl.classList.add.bind(valEl.classList);
+  valEl.classList.add = (...cs) => {
+    if (cs.includes('ces-text-rise')) riseAdds += 1;
+    return origClassAdd(...cs);
+  };
+
+  let seatLabelMed = 'Medium';
+  let seatLabelHigh = 'High';
+  let curEffort = 'medium';
+  let seatLevelsUseEmptyKey = false;
+  const mount = upstreamLib.mountCodexEffortSlider({
+    container,
+    row: rowEl,
+    valueElement: valEl,
+    document: mEnv.doc,
+    window: mEnv.win,
+    seat: {
+      isClaude: false,
+      locked: false,
+      get effortLevels() {
+        return [
+          { effort: seatLevelsUseEmptyKey ? '' : 'low', label: 'Low' },
+          { effort: seatLevelsUseEmptyKey ? '' : 'medium', label: seatLabelMed },
+          { effort: seatLevelsUseEmptyKey ? '' : 'high', label: seatLabelHigh },
+        ];
+      },
+      get currentEffort() { return curEffort; },
+      selectEffort() {},
+    },
+  });
+
+  assert.equal(valEl.textContent, 'Medium');
+  assert.equal(riseAdds, 0, 'Initial mount must not trigger rise animation');
+
+  // Alternate seat label & external DOM text between bilingual equivalents: Medium <-> 中 <-> 中等 <-> Medium
+  for (const [nextSeatLbl, domRewrite] of [
+    ['中', '中'],
+    ['Medium', '中'],
+    ['中等', '中等'],
+    ['Medium', 'Medium'],
+    ['（中）', '（中）'],
+    ['Medium', '中'],
+  ]) {
+    seatLabelMed = nextSeatLbl;
+    valEl.textContent = domRewrite;
+    mount.refresh();
+    mEnv.flushRafs(16);
+    assert.equal(valEl.classList.contains('ces-text-rise'), false, `Bilingual synonym "${nextSeatLbl}" must not add ces-text-rise`);
+    assert.equal(valEl.classList.contains('is-claude-changing'), false, `Bilingual synonym "${nextSeatLbl}" must not add is-claude-changing`);
+  }
+  // Even when effort key is absent and only label oscillates between 'Medium' and '中'
+  seatLevelsUseEmptyKey = true;
+  curEffort = 'Medium';
+  seatLabelMed = '中';
+  curEffort = '中';
+  mount.refresh();
+  seatLabelMed = 'Medium';
+  curEffort = 'Medium';
+  mount.refresh();
+  assert.equal(riseAdds, 0, 'Bilingual synonym oscillation must produce 0 rise animations');
+
+  // (c) Real tier change (Medium -> High) updates text cleanly and triggers bounded rise animation once
+  seatLevelsUseEmptyKey = false;
+  seatLabelMed = 'Medium';
+  seatLabelHigh = 'High';
+  curEffort = 'high';
+  mount.refresh();
+  assert.equal(valEl.textContent, 'High', 'Real tier change Medium -> High must update value text');
+  assert.equal(valEl.classList.contains('ces-text-rise'), true, 'Real tier change must play controlled rise animation');
+  assert.equal(riseAdds, 1, 'Real tier change must trigger rise animation exactly once');
+
+  // Repeated refreshes at High (including High <-> 高 synonym) must NOT re-trigger animation
+  mEnv.flushTimers(300);
+  assert.equal(valEl.classList.contains('ces-text-rise'), false, 'Rise animation class must clear after timer');
+  seatLabelHigh = '高';
+  valEl.textContent = '高';
+  mount.refresh();
+  seatLabelHigh = 'High';
+  mount.refresh();
+  assert.equal(riseAdds, 1, 'Synonym oscillation at High must not re-trigger rise animation');
+
+  mount.unmount();
+  assert.equal(valEl.__cesLastLabel, undefined);
+  assert.equal(valEl.__cesLastKey, undefined);
+});

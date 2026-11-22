@@ -203,6 +203,27 @@ function isBlockedSsrfHost(rawHost) {
   return false;
 }
 
+function createManagedTimeoutSignal(timeoutMs) {
+  const ctl = new AbortController();
+  let timer = setTimeout(() => {
+    timer = null;
+    const err =
+      typeof DOMException === 'function'
+        ? new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+        : Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+    ctl.abort(err);
+  }, timeoutMs);
+  return {
+    signal: ctl.signal,
+    cleanup() {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    },
+  };
+}
+
 function composeAbortSignal(timeoutMs, externalSignal = null) {
   const timeoutSig = AbortSignal.timeout(timeoutMs);
   if (!externalSignal) return timeoutSig;
@@ -2590,6 +2611,7 @@ export class ThoughtTranslatorService {
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
     const t0 = Date.now();
+    const reqTimeout = createManagedTimeoutSignal(12000);
     try {
       const res = await this._request(
         `${baseUrl}/models`,
@@ -2597,7 +2619,7 @@ export class ThoughtTranslatorService {
           method: 'GET',
           headers,
           redirect: 'error',
-          signal: AbortSignal.timeout(12000),
+          signal: reqTimeout.signal,
         },
         proxyCheck.override
       );
@@ -2640,6 +2662,8 @@ export class ThoughtTranslatorService {
         latencyMs: Date.now() - t0,
         error: redactSecrets(err?.message || String(err), apiKey),
       };
+    } finally {
+      reqTimeout.cleanup();
     }
   }
 
@@ -2658,6 +2682,7 @@ export class ThoughtTranslatorService {
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
     const noThinkParams = buildNoThinkingParams(model, baseUrl);
 
+    const reqTimeout = createManagedTimeoutSignal(15000);
     const sendTest = (includeNoThink) => {
       const payload = {
         model,
@@ -2681,7 +2706,7 @@ export class ThoughtTranslatorService {
           headers,
           redirect: 'error',
           body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(15000),
+          signal: reqTimeout.signal,
         },
         proxyCheck.override
       );
@@ -2721,6 +2746,8 @@ export class ThoughtTranslatorService {
         model,
         error: redactSecrets(err?.message || String(err), apiKey),
       };
+    } finally {
+      reqTimeout.cleanup();
     }
   }
 
@@ -2952,6 +2979,7 @@ export class ThoughtTranslatorService {
         const headers = { Accept: 'application/json' };
         if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
         const t0 = Date.now();
+        const reqTimeout = createManagedTimeoutSignal(timeoutMs);
         try {
           const res = await this._request(
             `${baseUrl}/models`,
@@ -2959,7 +2987,7 @@ export class ThoughtTranslatorService {
               method: 'GET',
               headers,
               redirect: 'error',
-              signal: AbortSignal.timeout(timeoutMs),
+              signal: reqTimeout.signal,
             },
             proxyOverride
           );
@@ -3009,12 +3037,15 @@ export class ThoughtTranslatorService {
             reason: classifyErrReason(err),
             error: safeRedact(err?.message || String(err)),
           };
+        } finally {
+          reqTimeout.cleanup();
         }
       }
     } else if (!this.fetchImpl) {
       connectivity = { ok: false, target: 'gtx', latencyMs: 0, reason: 'fetch_unavailable', error: 'Fetch unavailable' };
     } else {
       const t0 = Date.now();
+      const reqTimeout = createManagedTimeoutSignal(timeoutMs);
       try {
         const res = await this._request(
           gtxProbeUrl,
@@ -3022,7 +3053,7 @@ export class ThoughtTranslatorService {
             method: 'GET',
             headers: { 'User-Agent': 'Mozilla/5.0' },
             redirect: 'error',
-            signal: AbortSignal.timeout(timeoutMs),
+            signal: reqTimeout.signal,
           },
           proxyOverride
         );
@@ -3060,6 +3091,8 @@ export class ThoughtTranslatorService {
           reason: classifyErrReason(err),
           error: safeRedact(err?.message || String(err)),
         };
+      } finally {
+        reqTimeout.cleanup();
       }
     }
 

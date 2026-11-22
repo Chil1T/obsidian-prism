@@ -765,12 +765,26 @@ test('tools/install-plugin.cjs P1-5: waits for slow-exiting daemon to finish flu
     const usageCachePath = path.join(hostConfigDir, 'obsidian-prism-usage-rollup-cache.json');
     const flushMarkerPath = path.join(rootTmp, 'flushed.marker');
     const triggerFilePath = path.join(rootTmp, 'sigterm.trigger');
+    const readyMarkerPath = path.join(rootTmp, 'daemon.ready');
+    const stubbornReadyPath = path.join(rootTmp, 'stubborn.ready');
     fs.writeFileSync(usageCachePath, '{"version":2,"scopes":{"local":{"stale":true}}}', 'utf8');
+
+    const waitForChildReady = async (markerFile, proc, timeoutMs = 5000) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (fs.existsSync(markerFile)) return;
+        if (proc.exitCode !== null || proc.signalCode !== null) {
+          throw new Error(`Child exited before ready (exit=${proc.exitCode}, signal=${proc.signalCode})`);
+        }
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      throw new Error(`Timed out waiting for child ready marker: ${markerFile}`);
+    };
 
     // 1) Spawn a real child process simulating a Daemon that flushes dirty usage cache ~160ms after SIGTERM, then exits
     const slowDaemonScript = `
       const fs = require('node:fs');
-      const [cachePath, markerPath, triggerPath] = process.argv.slice(1);
+      const [cachePath, markerPath, triggerPath, readyPath] = process.argv.slice(1);
       let stopping = false;
       function gracefulStop() {
         if (stopping) return;
@@ -786,16 +800,22 @@ test('tools/install-plugin.cjs P1-5: waits for slow-exiting daemon to finish flu
         if (fs.existsSync(triggerPath)) gracefulStop();
       }, 10);
       timer.unref && false;
+      fs.writeFileSync(readyPath, '1', 'utf8');
     `;
-    const child = spawn(process.execPath, ['-e', slowDaemonScript, usageCachePath, flushMarkerPath, triggerFilePath], {
-      stdio: 'ignore',
-      windowsHide: true,
-    });
+    const child = spawn(
+      process.execPath,
+      ['-e', slowDaemonScript, usageCachePath, flushMarkerPath, triggerFilePath, readyMarkerPath],
+      {
+        stdio: 'ignore',
+        windowsHide: true,
+      }
+    );
     spawnedChildren.push(child);
     let childExited = false;
     child.once('exit', () => {
       childExited = true;
     });
+    await waitForChildReady(readyMarkerPath, child);
 
     const pidFile = path.join(targetDir, '.daemon.pid');
     fs.writeFileSync(pidFile, JSON.stringify({ pid: child.pid, startedAt: Date.now() }), 'utf8');
@@ -851,14 +871,17 @@ test('tools/install-plugin.cjs P1-5: waits for slow-exiting daemon to finish flu
 
     // 2) Stubborn process ignoring graceful SIGTERM must escalate to SIGKILL after timeout and exit cleanly
     const stubbornScript = `
+      const fs = require('node:fs');
       process.on('SIGTERM', () => {});
       setInterval(() => {}, 1000);
+      fs.writeFileSync(process.argv[1], '1', 'utf8');
     `;
-    const stubborn = spawn(process.execPath, ['-e', stubbornScript], {
+    const stubborn = spawn(process.execPath, ['-e', stubbornScript, stubbornReadyPath], {
       stdio: 'ignore',
       windowsHide: true,
     });
     spawnedChildren.push(stubborn);
+    await waitForChildReady(stubbornReadyPath, stubborn);
     const stubbornSignals = [];
     const termRes = await installTool.terminatePidAndWait(stubborn.pid, {
       pollIntervalMs: 25,

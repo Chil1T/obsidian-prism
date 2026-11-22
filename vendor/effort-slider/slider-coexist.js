@@ -46,7 +46,6 @@
     for (const v of vs.split('|')) EFF_MAP[v] = k;
   }
   const EFF_LABELS = { off: 'Off', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra', max: 'Max', auto: 'Auto', thinking: 'Thinking' };
-  const NO_TR_ATTRS = [['translate', 'no'], ['data-no-translate', 'true'], ['data-ag-localization-skip', 'true'], ['data-agy-no-translate', 'true'], ['data-antigravity-zh-skip', '1']];
 
   function normalizeEffortToken(raw) {
     const s = String(raw || '').trim().replace(/^[(\uff08]+|[)\uff09]+$/g, '').trim().replace(/\s+thinking$/i, '').toLowerCase();
@@ -64,9 +63,11 @@
   }
 
   function markOwnedNoTr(doc) {
-    for (const el of qa(doc, '.ces-ag-section, .ces-set')) {
-      if (ga(el, 'data-antigravity-zh-skip') === '1') continue;
-      for (const [k, v] of NO_TR_ATTRS) sa(el, k, v);
+    const fn = resLib(doc?.defaultView)?.markNoTranslate;
+    if (!fn) return;
+    for (const el of qa(doc, '.ces-ag-section,.ces-set')) {
+      fn(el);
+      for (const ch of qa(el, 'div,span')) if (String(ch.className || '').includes('ces-ag-effort-')) fn(ch);
     }
   }
 

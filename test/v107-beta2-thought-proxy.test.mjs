@@ -2436,6 +2436,14 @@ test('14) Conversation titles auto-translation: config persistence, safe filteri
   }
 });
 
+function hasUrlHostname(rawUrl, expectedHostname) {
+  try {
+    return new URL(String(rawUrl)).hostname === expectedHostname;
+  } catch {
+    return false;
+  }
+}
+
 test('15) One-click Thought Diagnostics: all states, 5s bounded timeout, strict secret redaction & 5-locale 4-item UI strip', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-diag-'));
   try {
@@ -2451,21 +2459,26 @@ test('15) One-click Thought Diagnostics: all states, 5s bounded timeout, strict 
         if (u.includes('11434/v1/models')) {
           return new Response(JSON.stringify({ data: [{ id: 'qwen2.5:7b' }] }), { status: 200 });
         }
-        if (u.includes('auth-fail.example.test')) {
+        if (hasUrlHostname(u, 'auth-fail.example.test')) {
           return new Response('Invalid token sk-leaktest1234567890 via http://alice:ProxySecret42@127.0.0.1:7890', {
             status: 401,
           });
         }
-        if (u.includes('hang.example.test')) {
+        if (hasUrlHostname(u, 'hang.example.test')) {
           return new Promise((_resolve, reject) => {
-            init?.signal?.addEventListener('abort', () => {
+            const onAbort = () => {
               const e = new Error('The operation was aborted due to timeout');
               e.name = 'TimeoutError';
               reject(e);
-            });
+            };
+            if (init?.signal?.aborted) {
+              onAbort();
+              return;
+            }
+            init?.signal?.addEventListener('abort', onAbort, { once: true });
           });
         }
-        if (u.includes('translate.googleapis.com')) {
+        if (hasUrlHostname(u, 'translate.googleapis.com')) {
           return new Response(JSON.stringify([[['好的', 'ok']]]), { status: 200 });
         }
         return new Response('{}', { status: 200 });
@@ -2701,22 +2714,22 @@ test('16) Red-team #229 regressions: full secret redaction (URL-encoded/Base64/e
       },
       fetchImpl: async (url) => {
         const u = String(url);
-        if (u.includes('leak-a.example.test')) {
+        if (hasUrlHostname(u, 'leak-a.example.test')) {
           return makeTrackableResponse(401, `k=${encApiKey} e=${encEnvPass} b=${envB64}`);
         }
-        if (u.includes('leak-b.example.test')) {
+        if (hasUrlHostname(u, 'leak-b.example.test')) {
           return makeTrackableResponse(401, `s=${encOsSocksPass} sb=${osSocksB64} u=${socks4Raw}`);
         }
-        if (u.includes('ok-200.example.test')) {
+        if (hasUrlHostname(u, 'ok-200.example.test')) {
           return makeTrackableResponse(200, '{"data":[' + '{"id":"m"},'.repeat(5000) + ']}');
         }
-        if (u.includes('notfound-404.example.test')) {
+        if (hasUrlHostname(u, 'notfound-404.example.test')) {
           return makeTrackableResponse(404, 'not found giant body');
         }
-        if (u.includes('method-405.example.test')) {
+        if (hasUrlHostname(u, 'method-405.example.test')) {
           return makeTrackableResponse(405, 'method not allowed giant body');
         }
-        if (u.includes('translate.googleapis.com')) {
+        if (hasUrlHostname(u, 'translate.googleapis.com')) {
           return makeTrackableResponse(200, JSON.stringify([[['好的', 'ok']]]));
         }
         return makeTrackableResponse(200, '{}');

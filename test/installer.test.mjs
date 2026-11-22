@@ -1492,13 +1492,27 @@ test('remove.js P1-5: --purge-data waits for slow-exiting daemon flush before de
     const usageCachePath = path.join(cfgDir, 'obsidian-prism-usage-rollup-cache.json');
     const flushMarkerPath = path.join(workDir, 'remove-flushed.marker');
     const triggerFilePath = path.join(workDir, 'remove-sigterm.trigger');
+    const readyMarkerPath = path.join(workDir, 'remove-daemon.ready');
+    const stubbornReadyPath = path.join(workDir, 'remove-stubborn.ready');
     const daemonPidFile = path.join(workDir, '.daemon.pid');
     const watchPidFile = path.join(workDir, '.watch.pid');
     fs.writeFileSync(usageCachePath, '{"version":2,"scopes":{"local":{"stale":true}}}', 'utf8');
 
+    const waitForChildReady = async (markerFile, proc, timeoutMs = 5000) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (fs.existsSync(markerFile)) return;
+        if (proc.exitCode !== null || proc.signalCode !== null) {
+          throw new Error(`Child exited before ready (exit=${proc.exitCode}, signal=${proc.signalCode})`);
+        }
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      throw new Error(`Timed out waiting for child ready marker: ${markerFile}`);
+    };
+
     const slowDaemonScript = `
       const fs = require('node:fs');
-      const [cachePath, markerPath, triggerPath] = process.argv.slice(1);
+      const [cachePath, markerPath, triggerPath, readyPath] = process.argv.slice(1);
       let stopping = false;
       function gracefulStop() {
         if (stopping) return;
@@ -1513,16 +1527,22 @@ test('remove.js P1-5: --purge-data waits for slow-exiting daemon flush before de
       setInterval(() => {
         if (fs.existsSync(triggerPath)) gracefulStop();
       }, 10);
+      fs.writeFileSync(readyPath, '1', 'utf8');
     `;
-    const child = spawn(process.execPath, ['-e', slowDaemonScript, usageCachePath, flushMarkerPath, triggerFilePath], {
-      stdio: 'ignore',
-      windowsHide: true,
-    });
+    const child = spawn(
+      process.execPath,
+      ['-e', slowDaemonScript, usageCachePath, flushMarkerPath, triggerFilePath, readyMarkerPath],
+      {
+        stdio: 'ignore',
+        windowsHide: true,
+      }
+    );
     spawnedChildren.push(child);
     let childExited = false;
     child.once('exit', () => {
       childExited = true;
     });
+    await waitForChildReady(readyMarkerPath, child);
 
     fs.writeFileSync(daemonPidFile, JSON.stringify({ pid: child.pid, startedAt: Date.now() }), 'utf8');
 
@@ -1560,11 +1580,18 @@ test('remove.js P1-5: --purge-data waits for slow-exiting daemon flush before de
     assert.equal(fs.existsSync(usageCachePath), false, 'usage cache must NOT resurrect after remove.js --purge-data');
 
     // Timeout escalation to SIGKILL
-    const stubborn = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);'], {
+    const stubbornScript = `
+      const fs = require('node:fs');
+      process.on('SIGTERM', () => {});
+      setInterval(() => {}, 1000);
+      fs.writeFileSync(process.argv[1], '1', 'utf8');
+    `;
+    const stubborn = spawn(process.execPath, ['-e', stubbornScript, stubbornReadyPath], {
       stdio: 'ignore',
       windowsHide: true,
     });
     spawnedChildren.push(stubborn);
+    await waitForChildReady(stubbornReadyPath, stubborn);
     const stubbornSignals = [];
     const termRes = await removeMod.terminatePidAndWait(stubborn.pid, {
       pollIntervalMs: 25,
