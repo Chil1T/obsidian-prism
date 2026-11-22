@@ -3075,6 +3075,190 @@ test('PR #33 hardening: usage-core BigInt safety across analyzeTrajectoryForUsag
   assert.equal(usageCore.axisMax(12500n), 20000);
 });
 
+test('Redteam #256 P1 #6: renderer-rpc-adapter merges before 1024 cap, supports bigint/number ts/tsSec, skips unrelated Redux stores & blocks prototype pollution', async () => {
+  const vm = await import('node:vm');
+  const {
+    buildRendererRpcExpression,
+    normalizeRendererSummaries,
+    normalizeRendererTrajectory,
+    protoTimestampToIso,
+  } = await import('../vendor/pulse-dashboard/sidecars/panel/renderer-rpc-adapter.mjs');
 
+  const mkGuid = (n) => `10000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const baseSec = 1763500000;
 
+  // 1) Redux already has 1030 (>1024) older sessions + prototype-pollution decoy keys
+  const reduxSums = Object.create(null);
+  for (let i = 0; i < 1030; i += 1) {
+    reduxSums[mkGuid(i)] = {
+      summary: i === 1029 ? '' : `Redux Session #${i}`,
+      stepCount: BigInt(i + 1),
+      status: 1n,
+      lastModifiedTime: i % 4 === 0
+        ? BigInt(baseSec + i) // raw bigint seconds
+        : i % 4 === 1
+          ? BigInt((baseSec + i) * 1000) // raw bigint ms
+          : i % 4 === 2
+            ? baseSec + i // raw number seconds
+            : (baseSec + i) * 1000, // raw number ms
+      createdTime: BigInt(baseSec - 100),
+      workspaces: [{ workspaceFolderAbsoluteUri: 'file:///d:/proj/main' }],
+      trajectoryMetadata: { parentConversationId: '', rootConversationId: '', nestingDepth: 0n },
+    };
+  }
+  reduxSums['__proto__'] = { summary: 'evil-proto', lastModifiedTime: BigInt(baseSec + 999999) };
+  reduxSums['constructor'] = { summary: 'evil-ctor', lastModifiedTime: BigInt(baseSec + 999999) };
+  reduxSums['not-a-guid'] = { summary: 'evil-invalid', lastModifiedTime: BigInt(baseSec + 999999) };
+
+  const activeNew1 = mkGuid(9001);
+  const activeNew2 = mkGuid(9002);
+  const activeNew3 = mkGuid(9003);
+  const searchResults = [
+    // New active sessions missing from Redux, with newer bigint / number / proto timestamps
+    { cascadeId: activeNew1.toUpperCase(), title: 'Brand New Active #1', workspaceName: 'ws-live', lastModifiedTime: BigInt(baseSec + 50000) },
+    { cascadeId: activeNew2, title: 'Brand New Active #2', workspaceName: 'ws-live', lastModifiedTime: (baseSec + 50001) * 1000 },
+    { cascadeId: activeNew3, title: 'Brand New Active #3', workspaceName: 'ws-live', lastModifiedTime: { seconds: BigInt(baseSec + 50002), nanos: 500000000n } },
+    // Backfill empty title on latest Redux entry without losing its stepCount/workspaces
+    { cascadeId: mkGuid(1029), title: 'Backfilled Latest Redux', workspaceName: 'ws-ignored', lastModifiedTime: BigInt(baseSec + 1029) },
+    // Malicious / non-GUID keys in search results
+    { cascadeId: '__proto__', title: 'polluted', lastModifiedTime: BigInt(baseSec + 999999) },
+    { cascadeId: 'prototype', title: 'polluted', lastModifiedTime: BigInt(baseSec + 999999) },
+    { cascadeId: '../escape', title: 'invalid', lastModifiedTime: BigInt(baseSec + 999999) },
+  ];
+
+  // Unrelated Redux stores appear FIRST in DOM/Fiber before the real summaries store
+  const unrelatedStore1 = { getState: () => ({ ui: { theme: 'dark' } }) };
+  const unrelatedStore2 = { getState: () => ({ notifications: [] }) };
+  const realStore = { getState: () => ({ trajectorySummaries: { summaries: reduxSums } }) };
+
+  const anchorWithUnrelated = {
+    '__reactFiber$u': {
+      memoizedProps: { store: unrelatedStore1 },
+      dependencies: { firstContext: { memoizedValue: { store: unrelatedStore2 }, next: null } },
+      return: null,
+    },
+  };
+  const anchorWithReal = {
+    '__reactFiber$r': {
+      memoizedProps: { store: unrelatedStore1 },
+      return: {
+        memoizedProps: {},
+        dependencies: {
+          firstContext: {
+            memoizedValue: { store: unrelatedStore2 },
+            next: { memoizedValue: { store: realStore }, next: null },
+          },
+        },
+        return: null,
+      },
+    },
+  };
+
+  const lsMock = {
+    getUserStatus: async () => ({}),
+    getCascadeTrajectory: async () => ({
+      status: 1,
+      numTotalSteps: 1,
+      numTotalGeneratorMetadata: 1,
+      trajectory: {
+        cascadeId: activeNew1,
+        steps: [{ type: 14, step: { case: 'userInput', value: {} }, metadata: { createdAt: BigInt(baseSec + 50000) } }],
+        generatorMetadata: [
+          {
+            stepIndices: [0],
+            chatModel: {
+              model: 1427,
+              timeToFirstToken: 1.25,
+              streamingDuration: 4,
+              usage: { inputTokens: '100', outputTokens: '200', apiProvider: 24, responseId: 'dur-check' },
+              chatStartMetadata: { createdAt: BigInt((baseSec + 50000) * 1000) },
+            },
+          },
+        ],
+      },
+    }),
+    searchConversations: async () => ({ results: searchResults }),
+  };
+
+  const rootEl = {
+    '__reactContainer$sec': {
+      memoizedProps: { value: lsMock },
+      child: null,
+      sibling: null,
+    },
+  };
+
+  let queryCalls = 0;
+  let currentAnchors = [anchorWithUnrelated, anchorWithReal];
+  const sandbox = vm.createContext({
+    document: {
+      getElementById: (id) => (id === 'root' ? rootEl : null),
+      querySelectorAll: () => {
+        queryCalls += 1;
+        return currentAnchors;
+      },
+      body: rootEl,
+    },
+    WeakRef: globalThis.WeakRef,
+    Promise,
+  });
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+
+  const expr = buildRendererRpcExpression('GetAllCascadeTrajectories', {});
+  const res = await vm.runInContext(expr, sandbox);
+  assert.equal(res.ok, true);
+  assert.doesNotThrow(() => JSON.stringify(res), 'Merged summaries payload must contain zero raw BigInt values');
+
+  const map = res.data.trajectorySummaries;
+  // 4) Prototype pollution guard: null-prototype map & strict GUID keys only
+  assert.equal(Object.getPrototypeOf(map), null, 'trajectorySummaries map must use Object.create(null)');
+  assert.equal(Object.prototype.polluted, undefined, 'Object.prototype must never be polluted');
+  assert.equal(Object.prototype.hasOwnProperty.call(map, '__proto__'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(map, 'constructor'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(map, 'prototype'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(map, 'not-a-guid'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(map, '../escape'), false);
+
+  // 1) Merge-then-truncate 1024 cap: all 3 brand-new active sessions must beat oldest Redux records
+  const keys = Object.keys(map);
+  assert.equal(keys.length, 1024, 'Merged map must truncate strictly to 1024 after merging');
+  assert.equal(map[activeNew1]?.summary, 'Brand New Active #1', 'Newest search session #1 must not be dropped when Redux has >=1024 records');
+  assert.equal(map[activeNew2]?.summary, 'Brand New Active #2', 'Newest search session #2 must not be dropped when Redux has >=1024 records');
+  assert.equal(map[activeNew3]?.summary, 'Brand New Active #3', 'Newest search session #3 must not be dropped when Redux has >=1024 records');
+  assert.equal(map[mkGuid(0)], undefined, 'Oldest Redux sessions beyond top 1024 must be evicted');
+  assert.equal(map[mkGuid(8)], undefined, 'Oldest Redux sessions beyond top 1024 (1033-1024=9 evicted) must be evicted');
+  assert.ok(map[mkGuid(9)], '1024th newest session must be retained');
+  assert.equal(map[mkGuid(1029)].summary, 'Backfilled Latest Redux', 'Title backfill must merge into existing Redux entry');
+  assert.equal(map[mkGuid(1029)].stepCount, 1030, 'Existing Redux stepCount must be preserved after merge');
+  assert.equal(map[mkGuid(1029)].workspaces[0].workspaceFolderAbsoluteUri, 'file:///d:/proj/main', 'Existing Redux workspaces must be preserved');
+
+  // 2) Inline ts() / tsSec() match protoTimestampToIso for raw bigint & number timestamps (sec and ms)
+  assert.equal(map[activeNew1].lastModifiedTime, protoTimestampToIso(BigInt(baseSec + 50000)));
+  assert.equal(map[activeNew2].lastModifiedTime, protoTimestampToIso((baseSec + 50001) * 1000));
+  assert.equal(map[mkGuid(1028)].lastModifiedTime, protoTimestampToIso(BigInt(baseSec + 1028)));
+  assert.equal(map[mkGuid(1026)].lastModifiedTime, protoTimestampToIso(baseSec + 1026));
+  const normSums = normalizeRendererSummaries(res.data);
+  assert.equal(normSums.trajectorySummaries[activeNew1].lastModifiedTime, new Date((baseSec + 50000) * 1000).toISOString());
+  assert.equal(normSums.trajectorySummaries[activeNew2].lastModifiedTime, new Date((baseSec + 50001) * 1000).toISOString());
+
+  // 3) Unrelated Redux store was NOT cached; realStore WAS cached so second call does 0 DOM scans
+  assert.equal(queryCalls, 1);
+  currentAnchors = [];
+  const resCached = await vm.runInContext(expr, sandbox);
+  assert.equal(resCached.ok, true);
+  assert.equal(queryCalls, 1, 'Real Redux store must be cached while unrelated stores are ignored');
+  assert.equal(Object.keys(resCached.data.trajectorySummaries).length, 1024);
+
+  // Verify dur() preserves numeric durations without converting them to 1970 ISO timestamps
+  const trajExpr = buildRendererRpcExpression('GetCascadeTrajectory', { cascadeId: activeNew1 });
+  const trajRes = await vm.runInContext(trajExpr, sandbox);
+  assert.equal(trajRes.ok, true);
+  assert.equal(trajRes.data.trajectory.generatorMetadata[0].chatModel.timeToFirstToken, 1.25);
+  assert.equal(trajRes.data.trajectory.generatorMetadata[0].chatModel.streamingDuration, 4);
+  const normTraj = normalizeRendererTrajectory(trajRes.data, activeNew1);
+  assert.equal(normTraj.trajectory.generatorMetadata[0].chatModel.timeToFirstToken, 1.25);
+  assert.equal(normTraj.trajectory.generatorMetadata[0].chatModel.streamingDuration, 4);
+  assert.equal(normTraj.trajectory.steps[0].metadata.createdAt, new Date((baseSec + 50000) * 1000).toISOString());
+});
 

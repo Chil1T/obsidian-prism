@@ -264,11 +264,30 @@ export class AntigravityClient {
     const lmStr =
       typeof lm === 'string'
         ? lm
-        : lm && typeof lm === 'object'
-          ? `${lm.seconds ?? ''}:${lm.nanos ?? 0}`
-          : '';
+        : typeof lm === 'bigint' || typeof lm === 'number'
+          ? String(lm)
+          : lm && typeof lm === 'object'
+            ? `${lm.seconds ?? ''}:${lm.nanos ?? 0}`
+            : '';
     const sc = summary.stepCount ?? '';
     return lmStr || sc !== '' ? `${lmStr}|${sc}` : '';
+  }
+
+  _proxyContextSig(data) {
+    if (!data || typeof data !== 'object') return { steps: 0, cwu: '', compact: '' };
+    const stepsRaw = data.numTotalSteps ?? data.stepCount ?? data.trajectory?.steps?.length ?? 0;
+    const steps = Number.isFinite(Number(stepsRaw)) && Number(stepsRaw) >= 0 ? Number(stepsRaw) : 0;
+    const cwuObj = data.contextWindowUsage || data.trajectory?.contextWindowUsage;
+    const cwu =
+      cwuObj && typeof cwuObj === 'object'
+        ? `${cwuObj.estimatedTokensUsed ?? ''}:${cwuObj.maxContextTokens ?? ''}:${cwuObj.estimatedAfterCompaction ? 1 : 0}:${cwuObj.lastStepIndex ?? ''}:${cwuObj.generatorMetadataIndex ?? ''}`
+        : '';
+    const compArr =
+      data.compactedAtStepIndices ||
+      data.compactionInfo?.compactedAtStepIndices ||
+      data.trajectory?.compactedAtStepIndices;
+    const compact = Array.isArray(compArr) && compArr.length ? `${compArr.length}:${compArr[compArr.length - 1]}` : '';
+    return { steps, cwu, compact };
   }
 
   async _getProxyTrajectory(cascadeId, force = false, summaryOrOpts = null) {
@@ -295,7 +314,38 @@ export class AntigravityClient {
             ? 60000
             : 20000
           : 4000;
-        if (age < ttl) return cached.data;
+        if (age < ttl) {
+          let peekChanged = false;
+          // In renderer-proxy mode without an explicit summary stamp, run a zero-LS-RPC
+          // in-memory context peek after 3.5s so /compact completion invalidates stale cache immediately.
+          if (settled && !sumStamp && age >= 3500 && (!cached.peekAt || now - cached.peekAt >= 2000)) {
+            cached.peekAt = now;
+            try {
+              const peek = await this.rendererRpc('PeekContextState', { cascadeId });
+              if (peek && typeof peek === 'object') {
+                const pSig = this._proxyContextSig(peek);
+                const cSig = cached.ctxSig || this._proxyContextSig(cached.data);
+                const peekMod = this._proxySummaryStamp({ lastModifiedTime: peek.lastModifiedTime });
+                const hasPeekSteps = peek.stepCount !== undefined && peek.stepCount !== null;
+                const stepsChanged =
+                  hasPeekSteps &&
+                  (pSig.steps > cSig.steps || (cached.peekSteps !== undefined && pSig.steps !== cached.peekSteps));
+                if (
+                  stepsChanged ||
+                  (pSig.cwu && pSig.cwu !== cSig.cwu) ||
+                  (pSig.compact && pSig.compact !== cSig.compact) ||
+                  (peekMod && cached.peekMod && peekMod !== cached.peekMod)
+                ) {
+                  peekChanged = true;
+                } else {
+                  if (hasPeekSteps) cached.peekSteps = pSig.steps;
+                  if (peekMod && !cached.peekMod) cached.peekMod = peekMod;
+                }
+              }
+            } catch {}
+          }
+          if (!peekChanged) return cached.data;
+        }
       }
     }
     const existing = this._proxyTrajInFlight.get(key);
@@ -308,8 +358,9 @@ export class AntigravityClient {
         throw new Error('接口响应超过采集上限');
       }
       const fetchedAt = this.now();
+      const ctxSig = this._proxyContextSig(data);
       this._proxyTrajCache.delete(key);
-      this._proxyTrajCache.set(key, { at: fetchedAt, data, bytes, sumStamp });
+      this._proxyTrajCache.set(key, { at: fetchedAt, data, bytes, sumStamp, ctxSig, peekAt: fetchedAt, peekMod: '' });
       while (this._proxyTrajCache.size > 32) {
         this._proxyTrajCache.delete(this._proxyTrajCache.keys().next().value);
       }

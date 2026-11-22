@@ -204,18 +204,27 @@ export class MetricsStore {
     const response = await this.client.call('GetAllCascadeTrajectories', { excludeSubtrajectories: false });
     if (!this.owned() || scope !== this.identity || epoch !== this.epoch) throw new Error('后台已重新连接，请等待刷新');
     const toEpochMs = (t) => {
-      if (!t) return 0;
+      if (t === undefined || t === null || t === '') return 0;
+      if (typeof t === 'bigint' || typeof t === 'number') {
+        const n = Number(t);
+        if (!Number.isFinite(n) || n <= 0) return 0;
+        return n > 1e11 ? n : n * 1000;
+      }
       if (typeof t === 'string') return Date.parse(t) || 0;
-      if (typeof t === 'object' && t.seconds !== undefined) return Number(t.seconds || 0) * 1000;
+      if (typeof t === 'object' && t.seconds !== undefined) {
+        const s = Number(t.seconds || 0);
+        return Number.isFinite(s) && s > 0 ? s * 1000 : 0;
+      }
       return 0;
     };
     this.summaries = Object.entries(response.trajectorySummaries || {})
       .map(([id, value]) => {
         const meta = value?.trajectoryMetadata || {};
         const subagent = Boolean(meta.parentConversationId) || Number(meta.nestingDepth || 0) > 0;
+        const modMs = toEpochMs(value?.lastModifiedTime);
         const modIso = typeof value?.lastModifiedTime === 'string'
           ? value.lastModifiedTime
-          : (value?.lastModifiedTime?.seconds ? new Date(Number(value.lastModifiedTime.seconds) * 1000).toISOString() : null);
+          : (modMs > 0 ? new Date(modMs).toISOString() : null);
         return {
           id,
           title: value?.summary || '未命名会话',

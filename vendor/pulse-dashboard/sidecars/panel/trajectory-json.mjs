@@ -3,28 +3,37 @@
 // Incremental JSON projection for trajectory RPCs (extended with workspace URI fields for Studio workspace filtering).
 import {budgetError} from './collection-state.mjs';
 import {normalizeConversationId} from './delegation.mjs';
-const scalar='scalar',nonempty='nonempty',presence='presence',calls='calls',guid='conversationId';
+const scalar='scalar',nonempty='nonempty',presence='presence',calls='calls',guid='conversationId',tokenEstimate='tokenEstimate';
 const usage=Object.fromEntries(['inputTokens','outputTokens','responseOutputTokens','thinkingOutputTokens','cacheReadTokens','cacheWriteTokens','apiProvider','responseId','messageId','model'].map(k=>[k,scalar]));
 const duration={seconds:scalar,nanos:scalar};
+const contextWindowMetadata={estimatedTokensUsed:scalar,maxContextTokens:scalar};
+const contextWindowUsage={generatorMetadataIndex:scalar,lastStepIndex:scalar,estimatedTokensUsed:scalar,maxContextTokens:scalar,estimatedAfterCompaction:scalar};
+const compactedAtStepIndices={'*':scalar};
+const compactionInfo={compactedAtStepIndices};
 const generators={'*':{stepIndices:{'*':scalar},chatModel:{usage,model:scalar,modelDisplayName:scalar,responseModel:scalar,
  streamingDuration:duration,timeToFirstToken:duration,retryInfos:{'*':{usage}},
- chatStartMetadata:{createdAt:scalar,contextWindowMetadata:{estimatedTokensUsed:scalar,maxContextTokens:scalar}}}}};
+ chatStartMetadata:{createdAt:scalar,startStepIndex:scalar,checkpointIndex:scalar,stepsCoveredByCheckpoint:scalar,contextWindowMetadata}}}};
 const subagentResult={conversationId:guid},subagentResults={'*':subagentResult};
 const invokeSubagent={conversationId:guid,results:subagentResults};
-const steps={'*':{type:scalar,metadata:{createdAt:duration,startedAt:duration,completedAt:duration,toolCall:presence},
- plannerResponse:{response:nonempty,toolCalls:calls},invokeSubagent}};
+const checkpoint={checkpointIndex:scalar,intentOnly:scalar,includedStepIndexStart:scalar,includedStepIndexEnd:scalar,
+ renderLatestCheckpoint:scalar,modelSummarizationFailed:scalar,usedFallbackSummary:scalar,summaryTokens:scalar,
+ sessionSummary:tokenEstimate,userIntent:tokenEstimate,codeChangeSummary:tokenEstimate,memorySummary:tokenEstimate,
+ contextWindowMetadata};
+const steps={'*':{type:scalar,status:scalar,metadata:{createdAt:duration,startedAt:duration,completedAt:duration,toolCall:presence},
+ plannerResponse:{response:nonempty,toolCalls:calls},invokeSubagent,checkpoint}};
 const workspaceEntry={workspaceFolderAbsoluteUri:scalar,gitRootAbsoluteUri:scalar,uri:scalar,path:scalar};
 const workspaces={'*':workspaceEntry};
 const trajectoryMetadata={parentConversationId:guid,rootConversationId:guid,nestingDepth:scalar,workspaces,workspaceUri:scalar};
 const summary={summary:scalar,stepCount:scalar,lastModifiedTime:duration,createdTime:duration,status:scalar,lastUserInputStepIndex:scalar,
  hasActiveChildren:scalar,hasRunningSubagents:scalar,notFullyIdle:scalar,trajectoryMetadata,workspaces,workspaceUri:scalar,workspacePath:scalar};
 const summaryEntry=Symbol('summaryEntry'),summaries={[summaryEntry]:summary};
-const objectOnly=new Set([subagentResult,invokeSubagent,workspaceEntry,trajectoryMetadata,summary,summaries]);
-const arrayOnly=new Set([subagentResults,workspaces]);
+const objectOnly=new Set([subagentResult,invokeSubagent,checkpoint,contextWindowMetadata,contextWindowUsage,compactionInfo,workspaceEntry,trajectoryMetadata,summary,summaries]);
+const arrayOnly=new Set([subagentResults,compactedAtStepIndices,workspaces]);
 const structured=node=>objectOnly.has(node)||arrayOnly.has(node);
 const stringAllowed=node=>node===scalar||typeof node==='object'&&!structured(node);
-const schema={trajectory:{cascadeId:scalar,trajectoryId:scalar,steps,generatorMetadata:generators},steps,
+const schema={trajectory:{cascadeId:scalar,trajectoryId:scalar,steps,generatorMetadata:generators,contextWindowUsage,compactedAtStepIndices,compactionInfo},steps,
  generatorMetadata:generators,generatorMetadatas:generators,status:scalar,numTotalSteps:scalar,numTotalGeneratorMetadata:scalar,
+ contextWindowUsage,compactedAtStepIndices,compactionInfo,
  trajectorySummaries:summaries};
 const DROP=Symbol('discard');
 const STR_SPECIAL=/["\\\x00-\x1f]/g;
@@ -85,6 +94,10 @@ export class TrajectoryJson {
    const other=(text.match(/[^\x00-\x7f]/g)||[]).length;t.ascii+=text.length-other;t.other+=other;
    if(t.buffer.length<256)t.buffer+=text.slice(0,256-t.buffer.length);
   }
+  if(t.node===tokenEstimate){
+   const other=(text.match(/[^\x00-\x7f]/g)||[]).length;t.ascii+=text.length-other;t.other+=other;
+   return;
+  }
   if(t.node===guid){if(!t.overflow){if(t.buffer.length+text.length>36){t.buffer='';t.overflow=true;}else t.buffer+=text;}return;}
   if(t.key||stringAllowed(t.node)){
    if(t.overflow)return;t.buffer+=text;
@@ -97,6 +110,7 @@ export class TrajectoryJson {
   let value=DROP;
   if(t.node===nonempty)value=t.any?'1':'';
   else if(t.node==='textEstimate')value={tokens:Math.ceil(t.ascii/4+t.other/1.5),prefix:t.buffer};
+  else if(t.node===tokenEstimate)value=Math.ceil(t.ascii/4+t.other/1.5);
   else if(t.node===presence)value=t.any;
   else if(t.node===guid){const id=!t.overflow&&normalizeConversationId(t.buffer);if(id){value=id;this.charge(value.length*2);}}
   else if(stringAllowed(t.node)){value=t.buffer;this.charge(value.length*2);}
@@ -105,7 +119,7 @@ export class TrajectoryJson {
  literalEnd(){
   const t=this.token;this.token=null;
   if(!/^(?:true|false|null|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)$/.test(t.buffer))this.fail();
-  const value=JSON.parse(t.buffer);this.finishValue(t.node&&t.node!==guid&&!structured(t.node)?value:DROP);
+  const value=JSON.parse(t.buffer);this.finishValue(t.node&&t.node!==guid&&t.node!==tokenEstimate&&!structured(t.node)?value:DROP);
  }
  write(text,{stopAfterRecord=false}={}){
   let i=0;const before=this.emitted;

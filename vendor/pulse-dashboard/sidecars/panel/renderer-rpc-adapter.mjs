@@ -6,11 +6,82 @@
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ALLOWED_METHODS = new Set([
   'Probe',
+  'PeekContextState',
   'GetUserStatus',
   'RetrieveUserQuotaSummary',
   'GetAllCascadeTrajectories',
   'GetCascadeTrajectory',
 ]);
+
+const STEP_STATUS_NAMES = Object.freeze({
+  0: 'CORTEX_STEP_STATUS_UNSPECIFIED',
+  1: 'CORTEX_STEP_STATUS_PENDING',
+  2: 'CORTEX_STEP_STATUS_RUNNING',
+  3: 'CORTEX_STEP_STATUS_DONE',
+  4: 'CORTEX_STEP_STATUS_INVALID',
+  5: 'CORTEX_STEP_STATUS_CLEARED',
+  6: 'CORTEX_STEP_STATUS_CANCELED',
+  7: 'CORTEX_STEP_STATUS_ERROR',
+  8: 'CORTEX_STEP_STATUS_GENERATING',
+  9: 'CORTEX_STEP_STATUS_WAITING',
+  11: 'CORTEX_STEP_STATUS_QUEUED',
+  12: 'CORTEX_STEP_STATUS_INTERRUPTED',
+});
+
+function estimateSummaryTextTokens(val) {
+  if (typeof val === 'number') return Number.isFinite(val) && val > 0 ? Math.round(val) : 0;
+  if (typeof val === 'bigint') {
+    const n = Number(val);
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+  }
+  if (val && typeof val === 'object' && typeof val.tokens === 'number' && Number.isFinite(val.tokens) && val.tokens > 0) {
+    return Math.round(val.tokens);
+  }
+  if (typeof val !== 'string' || !val) return 0;
+  let nonAscii = 0;
+  for (let i = 0; i < val.length; i += 1) {
+    if (val.charCodeAt(i) > 127) nonAscii += 1;
+  }
+  return Math.ceil((val.length - nonAscii) / 4 + nonAscii / 1.5);
+}
+
+function normalizeStepStatus(rawStatus) {
+  if (typeof rawStatus === 'string' && rawStatus.trim()) return rawStatus.trim();
+  if (typeof rawStatus === 'number' || typeof rawStatus === 'bigint') {
+    const n = Number(rawStatus);
+    if (Number.isInteger(n) && n >= 0) {
+      return STEP_STATUS_NAMES[n] || `CORTEX_STEP_STATUS_${n}`;
+    }
+  }
+  return undefined;
+}
+
+function normalizeContextWindowUsage(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const est = Number(raw.estimatedTokensUsed);
+  if (!Number.isSafeInteger(est) || est < 0) return undefined;
+  const mx = raw.maxContextTokens !== undefined && raw.maxContextTokens !== null ? Number(raw.maxContextTokens) : undefined;
+  const gmIdx = raw.generatorMetadataIndex !== undefined && raw.generatorMetadataIndex !== null ? Number(raw.generatorMetadataIndex) : undefined;
+  const lastIdx = raw.lastStepIndex !== undefined && raw.lastStepIndex !== null ? Number(raw.lastStepIndex) : undefined;
+  return {
+    estimatedTokensUsed: est,
+    ...(Number.isSafeInteger(mx) && mx > 0 ? { maxContextTokens: mx } : {}),
+    ...(Number.isSafeInteger(gmIdx) && gmIdx >= 0 ? { generatorMetadataIndex: gmIdx } : {}),
+    ...(Number.isSafeInteger(lastIdx) && lastIdx >= 0 ? { lastStepIndex: lastIdx } : {}),
+    estimatedAfterCompaction: raw.estimatedAfterCompaction === true,
+  };
+}
+
+function normalizeCompactedIndices(raw) {
+  const arr = Array.isArray(raw) ? raw : Array.isArray(raw?.compactedAtStepIndices) ? raw.compactedAtStepIndices : null;
+  if (!arr || !arr.length) return undefined;
+  const out = [];
+  for (const item of arr) {
+    const n = Number(item);
+    if (Number.isSafeInteger(n) && n >= 0) out.push(n);
+  }
+  return out.length ? out.slice(-64) : undefined;
+}
 
 function serializeJsonForEval(val) {
   const raw = JSON.stringify(val === undefined ? null : val);
@@ -20,8 +91,8 @@ function serializeJsonForEval(val) {
 }
 
 export function protoTimestampToIso(val) {
-  if (!val) return undefined;
-  if (typeof val === 'bigint') {
+  if (val === undefined || val === null || val === '') return undefined;
+  if (typeof val === 'bigint' || typeof val === 'number') {
     const num = Number(val);
     if (!Number.isFinite(num) || num <= 0) return undefined;
     const d = new Date(num > 1e11 ? num : num * 1000);
@@ -234,6 +305,8 @@ export function normalizeRendererTrajectory(raw, cascadeId, modelLabelMap = null
     if (meta.hasToolCall || meta.toolCall) normMeta.toolCall = { id: '1' };
 
     const stepOut = { type: typeStr, metadata: normMeta };
+    const normStatus = normalizeStepStatus(s?.status);
+    if (normStatus) stepOut.status = normStatus;
     if (stepCase === 'plannerResponse' || s?.hasToolCalls || s?.plannerResponse) {
       const hasCalls = Boolean(s?.hasToolCalls || s?.plannerResponse?.toolCalls?.length);
       const hasResp = Boolean(s?.hasResponseText || (typeof s?.plannerResponse?.response === 'string' && s.plannerResponse.response.trim()));
@@ -255,6 +328,45 @@ export function normalizeRendererTrajectory(raw, cascadeId, modelLabelMap = null
       if (cid || resIds.length) {
         stepOut.invokeSubagent = { ...(cid ? { conversationId: cid } : {}), ...(resIds.length ? { results: resIds } : {}) };
       }
+    }
+    const cp = s?.checkpoint || (stepCase === 'checkpoint' ? s?.step?.value : null);
+    if (cp && typeof cp === 'object') {
+      const cpIndex = cp.checkpointIndex !== undefined && cp.checkpointIndex !== null ? Number(cp.checkpointIndex) : undefined;
+      const incStart = cp.includedStepIndexStart !== undefined && cp.includedStepIndexStart !== null ? Number(cp.includedStepIndexStart) : undefined;
+      const incEnd = cp.includedStepIndexEnd !== undefined && cp.includedStepIndexEnd !== null ? Number(cp.includedStepIndexEnd) : undefined;
+      const explicitSumTok = cp.summaryTokens !== undefined && cp.summaryTokens !== null ? Number(cp.summaryTokens) : undefined;
+      const computedSumTok =
+        estimateSummaryTextTokens(cp.userIntent) +
+        estimateSummaryTextTokens(cp.sessionSummary) +
+        estimateSummaryTextTokens(cp.codeChangeSummary) +
+        estimateSummaryTextTokens(cp.memorySummary);
+      const summaryTokens =
+        Number.isSafeInteger(explicitSumTok) && explicitSumTok > 0
+          ? explicitSumTok
+          : computedSumTok > 0
+            ? computedSumTok
+            : undefined;
+      const cpCw = cp.contextWindowMetadata && typeof cp.contextWindowMetadata === 'object' ? cp.contextWindowMetadata : null;
+      const cpCwEst = cpCw ? Number(cpCw.estimatedTokensUsed ?? cpCw.tokenBreakdown?.totalTokens) : NaN;
+      const cpCwMax = cpCw && cpCw.maxContextTokens !== undefined && cpCw.maxContextTokens !== null ? Number(cpCw.maxContextTokens) : NaN;
+      stepOut.checkpoint = {
+        ...(Number.isSafeInteger(cpIndex) && cpIndex >= 0 ? { checkpointIndex: cpIndex } : {}),
+        intentOnly: cp.intentOnly === true,
+        ...(Number.isSafeInteger(incStart) && incStart >= 0 ? { includedStepIndexStart: incStart } : {}),
+        ...(Number.isSafeInteger(incEnd) && incEnd >= 0 ? { includedStepIndexEnd: incEnd } : {}),
+        ...(cp.renderLatestCheckpoint !== undefined ? { renderLatestCheckpoint: Boolean(cp.renderLatestCheckpoint) } : {}),
+        ...(cp.modelSummarizationFailed !== undefined ? { modelSummarizationFailed: Boolean(cp.modelSummarizationFailed) } : {}),
+        ...(cp.usedFallbackSummary !== undefined ? { usedFallbackSummary: Boolean(cp.usedFallbackSummary) } : {}),
+        ...(summaryTokens !== undefined ? { summaryTokens } : {}),
+        ...(Number.isSafeInteger(cpCwEst) && cpCwEst >= 0
+          ? {
+              contextWindowMetadata: {
+                estimatedTokensUsed: cpCwEst,
+                ...(Number.isSafeInteger(cpCwMax) && cpCwMax > 0 ? { maxContextTokens: cpCwMax } : {}),
+              },
+            }
+          : {}),
+      };
     }
     return stepOut;
   });
@@ -304,10 +416,16 @@ export function normalizeRendererTrajectory(raw, cascadeId, modelLabelMap = null
     const csm = cm.chatStartMetadata && typeof cm.chatStartMetadata === 'object' ? cm.chatStartMetadata : null;
     const cw = csm?.contextWindowMetadata && typeof csm.contextWindowMetadata === 'object' ? csm.contextWindowMetadata : null;
     const csmCreated = protoTimestampToIso(csm?.createdAt);
+    const csmStartIdx = csm?.startStepIndex !== undefined && csm?.startStepIndex !== null ? Number(csm.startStepIndex) : undefined;
+    const csmCpIdx = csm?.checkpointIndex !== undefined && csm?.checkpointIndex !== null ? Number(csm.checkpointIndex) : undefined;
+    const csmStepsCov =
+      csm?.stepsCoveredByCheckpoint !== undefined && csm?.stepsCoveredByCheckpoint !== null ? Number(csm.stepsCoveredByCheckpoint) : undefined;
     const chatStartMetadata = csm
       ? {
           ...(csmCreated ? { createdAt: csmCreated } : {}),
-          ...(csm.startStepIndex !== undefined ? { startStepIndex: Number(csm.startStepIndex) } : {}),
+          ...(Number.isSafeInteger(csmStartIdx) && csmStartIdx >= 0 ? { startStepIndex: csmStartIdx } : {}),
+          ...(Number.isSafeInteger(csmCpIdx) && csmCpIdx >= 0 ? { checkpointIndex: csmCpIdx } : {}),
+          ...(Number.isSafeInteger(csmStepsCov) && csmStepsCov >= 0 ? { stepsCoveredByCheckpoint: csmStepsCov } : {}),
           ...(cw
             ? {
                 contextWindowMetadata: {
@@ -349,10 +467,16 @@ export function normalizeRendererTrajectory(raw, cascadeId, modelLabelMap = null
 
   const numSteps = Number(raw?.numTotalSteps);
   const numGm = Number(raw?.numTotalGeneratorMetadata);
+  const contextWindowUsage = normalizeContextWindowUsage(raw?.contextWindowUsage ?? traj?.contextWindowUsage);
+  const compactedAtStepIndices = normalizeCompactedIndices(
+    raw?.compactedAtStepIndices ?? raw?.compactionInfo ?? traj?.compactedAtStepIndices ?? traj?.compactionInfo
+  );
   return {
     status,
     numTotalSteps: Number.isSafeInteger(numSteps) && numSteps >= 0 ? numSteps : steps.length,
     numTotalGeneratorMetadata: Number.isSafeInteger(numGm) && numGm >= 0 ? numGm : generatorMetadata.length,
+    ...(contextWindowUsage ? { contextWindowUsage } : {}),
+    ...(compactedAtStepIndices ? { compactedAtStepIndices } : {}),
     trajectory: {
       cascadeId: String(traj.cascadeId || cascadeId || '').toLowerCase(),
       steps,
@@ -366,7 +490,7 @@ export function buildRendererRpcExpression(method, body = {}) {
     throw new Error(`Unsupported renderer RPC method: ${String(method)}`);
   }
   const safeParams = { method };
-  if (method === 'GetCascadeTrajectory') {
+  if (method === 'GetCascadeTrajectory' || method === 'PeekContextState') {
     const cid = typeof body?.cascadeId === 'string' ? body.cascadeId.trim() : '';
     if (!GUID_RE.test(cid)) throw new Error('Invalid cascadeId for renderer RPC');
     safeParams.cascadeId = cid;
@@ -376,28 +500,42 @@ export function buildRendererRpcExpression(method, body = {}) {
   const argLiteral = serializeJsonForEval(safeParams);
   return `(async (params) => {
     const g = typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : null;
+    const guidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const isLs = (v) => Boolean(v && typeof v === 'object' && typeof v.getUserStatus === 'function' && typeof v.getCascadeTrajectory === 'function');
-    const clearCachedLs = () => { try { if (g) delete g.__agPrismLsRef; } catch {} };
-    const saveCachedLs = (v) => {
+    const isAgentMgr = (v) => Boolean(v && typeof v === 'object' && typeof v.peek === 'function' && typeof v.getAgentStates === 'function');
+    const clearCachedRef = (key) => { try { if (g) delete g[key]; } catch {} };
+    const saveCachedRef = (key, v) => {
       if (!g || !v) return;
       const box = typeof WeakRef === 'function' ? new WeakRef(v) : v;
       try {
-        Object.defineProperty(g, '__agPrismLsRef', { value: box, configurable: true, writable: true, enumerable: false });
+        Object.defineProperty(g, key, { value: box, configurable: true, writable: true, enumerable: false });
       } catch {
-        try { g.__agPrismLsRef = box; } catch {}
+        try { g[key] = box; } catch {}
       }
     };
+    const readCachedRef = (key) => {
+      try {
+        const ref = g && g[key];
+        if (!ref) return null;
+        return typeof ref.deref === 'function' ? ref.deref() : ref && ref.value ? ref.value : ref;
+      } catch {
+        return null;
+      }
+    };
+    const clearCachedLs = () => clearCachedRef('__agPrismLsRef');
+    const saveCachedLs = (v) => saveCachedRef('__agPrismLsRef', v);
+    const saveCachedStore = (st) => saveCachedRef('__agPrismStoreRef', st);
+    const saveCachedAgentMgr = (mgr) => saveCachedRef('__agPrismAgentMgrRef', mgr);
     let usedCache = false;
     const findLs = (forceRescan = false) => {
       if (!forceRescan) {
         try {
-          const ref = g && g.__agPrismLsRef;
-          const cached = ref && typeof ref.deref === 'function' ? ref.deref() : ref && ref.value ? ref.value : ref;
+          const cached = readCachedRef('__agPrismLsRef');
           if (isLs(cached)) {
             usedCache = true;
             return cached;
           }
-          if (ref) clearCachedLs();
+          if (g && g.__agPrismLsRef) clearCachedLs();
         } catch {}
       }
       usedCache = false;
@@ -423,11 +561,27 @@ export function buildRendererRpcExpression(method, body = {}) {
       }
       return null;
     };
-    let ls = findLs(false);
-    if (!ls) return { ok: false, error: 'renderer_ls_unavailable' };
-    if (params.method === 'Probe') return { ok: true, data: { available: true } };
     const ts = (v) => {
-      if (!v) return undefined;
+      if (v === undefined || v === null || v === '') return undefined;
+      if (typeof v === 'string') return v;
+      if (typeof v === 'bigint' || typeof v === 'number') {
+        const n = Number(v);
+        if (!Number.isFinite(n) || n <= 0) return undefined;
+        const d = new Date(n > 1e11 ? n : n * 1000);
+        return Number.isFinite(d.getTime()) ? d.toISOString() : undefined;
+      }
+      if (typeof v === 'object' && (v.seconds !== undefined || v.nanos !== undefined)) {
+        return { seconds: String(v.seconds ?? 0), nanos: Number(v.nanos ?? 0) };
+      }
+      return undefined;
+    };
+    const dur = (v) => {
+      if (v === undefined || v === null) return undefined;
+      if (typeof v === 'number') return Number.isFinite(v) && v >= 0 ? v : undefined;
+      if (typeof v === 'bigint') {
+        const n = Number(v);
+        return Number.isFinite(n) && n >= 0 ? n : undefined;
+      }
       if (typeof v === 'string') return v;
       if (typeof v === 'object' && (v.seconds !== undefined || v.nanos !== undefined)) {
         return { seconds: String(v.seconds ?? 0), nanos: Number(v.nanos ?? 0) };
@@ -444,17 +598,206 @@ export function buildRendererRpcExpression(method, body = {}) {
       if (v === undefined || v === null) return undefined;
       if (typeof v === 'string') {
         const n = Number(v);
-        return /^\d+$/.test(v) && Number.isSafeInteger(n) ? n : v;
+        return /^\\d+$/.test(v) && Number.isSafeInteger(n) ? n : v;
       }
       const n = Number(v);
       return Number.isFinite(n) ? n : String(v);
     };
     const tsSec = (v) => {
-      if (!v) return 0;
+      if (v === undefined || v === null) return 0;
+      if (typeof v === 'bigint' || typeof v === 'number') {
+        const n = Number(v);
+        if (!Number.isFinite(n) || n <= 0) return 0;
+        return n > 1e11 ? n / 1000 : n;
+      }
       if (typeof v === 'string') { const ms = Date.parse(v); return Number.isFinite(ms) ? ms / 1000 : 0; }
-      if (typeof v === 'object' && v.seconds !== undefined) { const s = Number(v.seconds); return Number.isFinite(s) ? s : 0; }
+      if (typeof v === 'object' && v.seconds !== undefined) {
+        const s = Number(v.seconds);
+        const ns = Number(v.nanos ?? 0);
+        if (!Number.isFinite(s) || s <= 0) return 0;
+        return s + (Number.isFinite(ns) && ns > 0 ? ns / 1e9 : 0);
+      }
       return 0;
     };
+    const estStrTok = (str) => {
+      if (typeof str !== 'string' || !str) return 0;
+      let nonAscii = 0;
+      for (let i = 0; i < str.length; i += 1) {
+        if (str.charCodeAt(i) > 127) nonAscii += 1;
+      }
+      return Math.ceil((str.length - nonAscii) / 4 + nonAscii / 1.5);
+    };
+    const extractReduxSums = (st) => {
+      if (!st || typeof st.getState !== 'function') return null;
+      try {
+        const s = st.getState();
+        const sums = s && s.trajectorySummaries && s.trajectorySummaries.summaries;
+        if (sums && typeof sums === 'object' && !Array.isArray(sums)) return sums;
+      } catch {}
+      return null;
+    };
+    const findReduxSummaries = () => {
+      try {
+        const cached = readCachedRef('__agPrismStoreRef');
+        const cachedSums = extractReduxSums(cached);
+        if (cachedSums) return cachedSums;
+        if (g && g.__agPrismStoreRef) clearCachedRef('__agPrismStoreRef');
+      } catch {}
+      try {
+        if (typeof document === 'undefined' || !document || typeof document.querySelectorAll !== 'function') return null;
+        const anchors = document.querySelectorAll('[data-testid="new-conversation-button"], [data-testid="home-greeting"], [data-testid="agent-input-box"], [data-testid="conversation-view"], [data-testid="conversation-row-sidebar"]');
+        for (let i = 0; i < anchors.length; i += 1) {
+          const el = anchors[i];
+          const fk = el && Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
+          for (let f = fk && el[fk], depth = 0; f && depth < 60; f = f.return, depth += 1) {
+            const mp = f.memoizedProps;
+            if (mp && mp.store && typeof mp.store.getState === 'function') {
+              const sums = extractReduxSums(mp.store);
+              if (sums) {
+                saveCachedStore(mp.store);
+                return sums;
+              }
+            }
+            for (let d = f.dependencies && f.dependencies.firstContext; d; d = d.next) {
+              const v = d.memoizedValue;
+              if (v && v.store && typeof v.store.getState === 'function') {
+                const sums = extractReduxSums(v.store);
+                if (sums) {
+                  saveCachedStore(v.store);
+                  return sums;
+                }
+              }
+            }
+          }
+        }
+      } catch {}
+      return null;
+    };
+    const findAgentMgr = () => {
+      try {
+        const cached = readCachedRef('__agPrismAgentMgrRef');
+        if (isAgentMgr(cached)) return cached;
+        if (g && g.__agPrismAgentMgrRef) clearCachedRef('__agPrismAgentMgrRef');
+      } catch {}
+      try {
+        if (typeof document !== 'undefined' && document && typeof document.querySelectorAll === 'function') {
+          const anchors = document.querySelectorAll('[data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="new-conversation-button"]');
+          for (let i = 0; i < anchors.length; i += 1) {
+            const el = anchors[i];
+            const fk = el && Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
+            for (let f = fk && el[fk], depth = 0; f && depth < 80; f = f.return, depth += 1) {
+              const v = f.memoizedProps && f.memoizedProps.value;
+              if (isAgentMgr(v)) {
+                saveCachedAgentMgr(v);
+                return v;
+              }
+              for (let d = f.dependencies && f.dependencies.firstContext; d; d = d.next) {
+                if (isAgentMgr(d.memoizedValue)) {
+                  saveCachedAgentMgr(d.memoizedValue);
+                  return d.memoizedValue;
+                }
+              }
+            }
+          }
+        }
+        const root = (typeof document !== 'undefined' && document && (document.getElementById('root') || document.body)) || null;
+        if (!root) return null;
+        const fk = Object.keys(root).find((k) => k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$'));
+        if (!fk || !root[fk]) return null;
+        const q = [root[fk]];
+        const seen = new Set();
+        let visited = 0;
+        while (q.length && visited < 4000) {
+          const f = q.shift();
+          if (!f || seen.has(f)) continue;
+          seen.add(f);
+          visited += 1;
+          const v = f.memoizedProps && f.memoizedProps.value;
+          if (isAgentMgr(v)) {
+            saveCachedAgentMgr(v);
+            return v;
+          }
+          if (f.child) q.push(f.child);
+          if (f.sibling) q.push(f.sibling);
+        }
+      } catch {}
+      return null;
+    };
+    const projectContextWindowUsage = (cwu) => {
+      if (!cwu || typeof cwu !== 'object') return undefined;
+      const est = numVal(cwu.estimatedTokensUsed);
+      if (est === undefined || est < 0) return undefined;
+      const mx = numVal(cwu.maxContextTokens);
+      const gmIdx = numVal(cwu.generatorMetadataIndex);
+      const lastIdx = numVal(cwu.lastStepIndex);
+      return {
+        estimatedTokensUsed: est,
+        ...(mx !== undefined && mx > 0 ? { maxContextTokens: mx } : {}),
+        ...(gmIdx !== undefined && gmIdx >= 0 ? { generatorMetadataIndex: gmIdx } : {}),
+        ...(lastIdx !== undefined && lastIdx >= 0 ? { lastStepIndex: lastIdx } : {}),
+        estimatedAfterCompaction: Boolean(cwu.estimatedAfterCompaction),
+      };
+    };
+    const projectCompactedIndices = (raw) => {
+      const arr = Array.isArray(raw) ? raw : Array.isArray(raw && raw.compactedAtStepIndices) ? raw.compactedAtStepIndices : null;
+      if (!arr || !arr.length) return undefined;
+      const out = [];
+      for (let i = 0; i < arr.length; i += 1) {
+        const n = numVal(arr[i]);
+        if (n !== undefined && Number.isInteger(n) && n >= 0) out.push(n);
+      }
+      return out.length ? out.slice(-64) : undefined;
+    };
+    const readLiveAgentState = (cid) => {
+      try {
+        const mgr = findAgentMgr();
+        if (!mgr) return null;
+        const prov = mgr.peek(cid) || mgr.peek(String(cid || '').toLowerCase());
+        const st = prov && typeof prov.getState === 'function' ? prov.getState() : null;
+        if (!st || typeof st !== 'object') return null;
+        const contextWindowUsage = projectContextWindowUsage(st.contextWindowUsage);
+        const compactedAtStepIndices = projectCompactedIndices(st.compactedAtStepIndices || st.compactionInfo);
+        const totalSteps = numVal(st.trajectorySlice && st.trajectorySlice.totalStepsLength);
+        const stStatus = typeof st.status === 'bigint' ? Number(st.status) : st.status;
+        if (!contextWindowUsage && !compactedAtStepIndices && totalSteps === undefined && stStatus === undefined) return null;
+        return {
+          ...(contextWindowUsage ? { contextWindowUsage } : {}),
+          ...(compactedAtStepIndices ? { compactedAtStepIndices } : {}),
+          ...(totalSteps !== undefined && totalSteps >= 0 ? { stepCount: totalSteps } : {}),
+          ...(stStatus !== undefined ? { status: stStatus } : {}),
+        };
+      } catch {
+        return null;
+      }
+    };
+    if (params.method === 'PeekContextState') {
+      const live = readLiveAgentState(params.cascadeId);
+      const sums = findReduxSummaries();
+      const lowerCid = params.cascadeId.toLowerCase();
+      const sum = sums && (sums[params.cascadeId] || sums[lowerCid]) || null;
+      const sumStepCount = sum ? numVal(sum.stepCount !== undefined ? sum.stepCount : sum.numTotalSteps) : undefined;
+      const sumMod = sum ? ts(sum.lastModifiedTime) : undefined;
+      const sumStatus = sum ? (typeof sum.status === 'bigint' ? Number(sum.status) : sum.status) : undefined;
+      const stepCount =
+        live && live.stepCount !== undefined && sumStepCount !== undefined
+          ? Math.max(live.stepCount, sumStepCount)
+          : live && live.stepCount !== undefined
+            ? live.stepCount
+            : sumStepCount;
+      return {
+        ok: true,
+        data: {
+          ...(stepCount !== undefined ? { stepCount } : {}),
+          ...(sumMod !== undefined ? { lastModifiedTime: sumMod } : {}),
+          ...(live && live.status !== undefined ? { status: live.status } : sumStatus !== undefined ? { status: sumStatus } : {}),
+          ...(live && live.contextWindowUsage ? { contextWindowUsage: live.contextWindowUsage } : {}),
+          ...(live && live.compactedAtStepIndices ? { compactedAtStepIndices: live.compactedAtStepIndices } : {}),
+        },
+      };
+    }
+    let ls = findLs(false);
+    if (!ls) return { ok: false, error: 'renderer_ls_unavailable' };
+    if (params.method === 'Probe') return { ok: true, data: { available: true } };
     const execWithLs = async (activeLs) => {
       if (params.method === 'GetUserStatus') {
         const r = await activeLs.getUserStatus({});
@@ -537,28 +880,29 @@ export function buildRendererRpcExpression(method, body = {}) {
           return '';
         };
         const scopeHint = readScopeHint();
+        const projectSummaryEntry = (v) => ({
+          summary: typeof v.summary === 'string' && v.summary ? v.summary : undefined,
+          stepCount: numVal(v.stepCount !== undefined ? v.stepCount : v.numTotalSteps),
+          lastModifiedTime: ts(v.lastModifiedTime),
+          createdTime: ts(v.createdTime),
+          status: typeof v.status === 'bigint' ? Number(v.status) : v.status,
+          workspaces: Array.isArray(v.workspaces) ? v.workspaces.slice(0, 4).map((w) => ({ workspaceFolderAbsoluteUri: w && w.workspaceFolderAbsoluteUri })) : undefined,
+          trajectoryMetadata: v.trajectoryMetadata ? {
+            parentConversationId: v.trajectoryMetadata.parentConversationId,
+            rootConversationId: v.trajectoryMetadata.rootConversationId,
+            nestingDepth: numVal(v.trajectoryMetadata.nestingDepth),
+          } : undefined,
+        });
         const projectSummariesMap = (sums) => {
-          const out = {};
+          const out = Object.create(null);
           const keys = Object.keys(sums)
+            .filter((k) => guidRe.test(k) && sums[k] && typeof sums[k] === 'object')
             .sort((a, b) => tsSec(sums[b] && sums[b].lastModifiedTime) - tsSec(sums[a] && sums[a].lastModifiedTime))
             .slice(0, 1024);
           for (let i = 0; i < keys.length; i += 1) {
             const k = keys[i];
             const v = sums[k];
-            if (!v || typeof v !== 'object') continue;
-            out[k] = {
-              summary: typeof v.summary === 'string' && v.summary ? v.summary : undefined,
-              stepCount: numVal(v.stepCount !== undefined ? v.stepCount : v.numTotalSteps),
-              lastModifiedTime: ts(v.lastModifiedTime),
-              createdTime: ts(v.createdTime),
-              status: typeof v.status === 'bigint' ? Number(v.status) : v.status,
-              workspaces: Array.isArray(v.workspaces) ? v.workspaces.slice(0, 4).map((w) => ({ workspaceFolderAbsoluteUri: w && w.workspaceFolderAbsoluteUri })) : undefined,
-              trajectoryMetadata: v.trajectoryMetadata ? {
-                parentConversationId: v.trajectoryMetadata.parentConversationId,
-                rootConversationId: v.trajectoryMetadata.rootConversationId,
-                nestingDepth: numVal(v.trajectoryMetadata.nestingDepth),
-              } : undefined,
-            };
+            out[k.toLowerCase()] = projectSummaryEntry(v);
           }
           return out;
         };
@@ -567,79 +911,58 @@ export function buildRendererRpcExpression(method, body = {}) {
           const out = projectSummariesMap((r && r.trajectorySummaries) || {});
           return { ok: true, data: scopeHint ? { trajectorySummaries: out, scopeHint } : { trajectorySummaries: out } };
         }
-        const saveCachedStore = (st) => {
-          if (!g || !st) return;
-          const box = typeof WeakRef === 'function' ? new WeakRef(st) : st;
-          try {
-            Object.defineProperty(g, '__agPrismStoreRef', { value: box, configurable: true, writable: true, enumerable: false });
-          } catch {
-            try { g.__agPrismStoreRef = box; } catch {}
-          }
-        };
-        const findReduxSummaries = () => {
-          try {
-            const ref = g && g.__agPrismStoreRef;
-            const cached = ref && typeof ref.deref === 'function' ? ref.deref() : ref;
-            if (cached && typeof cached.getState === 'function') {
-              const s = cached.getState();
-              if (s && s.trajectorySummaries && s.trajectorySummaries.summaries) return s.trajectorySummaries.summaries;
-            } else if (ref) {
-              try { delete g.__agPrismStoreRef; } catch {}
-            }
-          } catch {}
-          try {
-            if (typeof document === 'undefined' || !document || typeof document.querySelectorAll !== 'function') return null;
-            const anchors = document.querySelectorAll('[data-testid="new-conversation-button"], [data-testid="home-greeting"], [data-testid="agent-input-box"], [data-testid="conversation-view"], [data-testid="conversation-row-sidebar"]');
-            for (let i = 0; i < anchors.length; i += 1) {
-              const el = anchors[i];
-              const fk = el && Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
-              for (let f = fk && el[fk], depth = 0; f && depth < 60; f = f.return, depth += 1) {
-                const mp = f.memoizedProps;
-                if (mp && mp.store && typeof mp.store.getState === 'function') {
-                  saveCachedStore(mp.store);
-                  const s = mp.store.getState();
-                  return (s && s.trajectorySummaries && s.trajectorySummaries.summaries) || null;
-                }
-                for (let d = f.dependencies && f.dependencies.firstContext; d; d = d.next) {
-                  const v = d.memoizedValue;
-                  if (v && v.store && typeof v.store.getState === 'function') {
-                    saveCachedStore(v.store);
-                    const s = v.store.getState();
-                    return (s && s.trajectorySummaries && s.trajectorySummaries.summaries) || null;
-                  }
-                }
-              }
-            }
-          } catch {}
-          return null;
-        };
         const reduxSums = findReduxSummaries();
         if (reduxSums && typeof reduxSums === 'object' && Object.keys(reduxSums).length > 0) {
-          const out = projectSummariesMap(reduxSums);
-          let outCount = Object.keys(out).length;
+          const merged = Object.create(null);
+          const sortSecs = Object.create(null);
+          const rKeys = Object.keys(reduxSums);
+          for (let i = 0; i < rKeys.length; i += 1) {
+            const rk = rKeys[i];
+            if (!guidRe.test(rk)) continue;
+            const v = reduxSums[rk];
+            if (!v || typeof v !== 'object') continue;
+            const key = rk.toLowerCase();
+            merged[key] = projectSummaryEntry(v);
+            sortSecs[key] = tsSec(v.lastModifiedTime);
+          }
           if (typeof activeLs.searchConversations === 'function') {
             try {
               const sr = await activeLs.searchConversations({ query: '' });
-              const sList = Array.isArray(sr && sr.results)
-                ? sr.results.slice().sort((a, b) => tsSec(b && b.lastModifiedTime) - tsSec(a && a.lastModifiedTime))
-                : [];
+              const sList = Array.isArray(sr && sr.results) ? sr.results : [];
               for (let i = 0; i < sList.length; i += 1) {
                 const it = sList[i];
-                const cid = it && typeof it.cascadeId === 'string' ? it.cascadeId.trim() : '';
-                if (!cid) continue;
-                if (Object.prototype.hasOwnProperty.call(out, cid)) {
-                  if (!out[cid].summary && typeof it.title === 'string' && it.title.trim()) out[cid].summary = it.title.trim();
-                } else if (outCount < 1024) {
-                  const ws = typeof it.workspaceName === 'string' ? it.workspaceName.trim() : '';
-                  out[cid] = {
-                    summary: typeof it.title === 'string' && it.title.trim() ? it.title.trim() : undefined,
+                const rawCid = it && typeof it.cascadeId === 'string' ? it.cascadeId.trim() : '';
+                if (!rawCid || !guidRe.test(rawCid)) continue;
+                const cid = rawCid.toLowerCase();
+                const sSec = tsSec(it.lastModifiedTime);
+                const title = typeof it.title === 'string' && it.title.trim() ? it.title.trim() : undefined;
+                const ws = typeof it.workspaceName === 'string' ? it.workspaceName.trim() : '';
+                if (merged[cid]) {
+                  if (!merged[cid].summary && title) merged[cid].summary = title;
+                  if ((!merged[cid].workspaces || !merged[cid].workspaces.length) && ws) {
+                    merged[cid].workspaces = [{ workspaceFolderAbsoluteUri: ws }];
+                  }
+                  if (sSec > (sortSecs[cid] || 0)) {
+                    merged[cid].lastModifiedTime = ts(it.lastModifiedTime);
+                    sortSecs[cid] = sSec;
+                  }
+                } else {
+                  merged[cid] = {
+                    summary: title,
                     lastModifiedTime: ts(it.lastModifiedTime),
                     ...(ws ? { workspaces: [{ workspaceFolderAbsoluteUri: ws }] } : {}),
                   };
-                  outCount += 1;
+                  sortSecs[cid] = sSec;
                 }
               }
             } catch {}
+          }
+          const topKeys = Object.keys(merged)
+            .sort((a, b) => (sortSecs[b] || 0) - (sortSecs[a] || 0))
+            .slice(0, 1024);
+          const out = Object.create(null);
+          for (let i = 0; i < topKeys.length; i += 1) {
+            out[topKeys[i]] = merged[topKeys[i]];
           }
           return { ok: true, data: scopeHint ? { trajectorySummaries: out, scopeHint } : { trajectorySummaries: out } };
         }
@@ -669,13 +992,14 @@ export function buildRendererRpcExpression(method, body = {}) {
         const traj = (t && t.trajectory) || {};
         const rawSteps = Array.isArray(traj.steps) ? traj.steps : [];
         const rawGms = Array.isArray(traj.generatorMetadata) ? traj.generatorMetadata : [];
-        const guidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const liveState = readLiveAgentState(params.cascadeId);
         const steps = rawSteps.map((s) => {
           const sc = (s && s.step && s.step.case) || '';
           const sv = (s && s.step && s.step.value) || null;
           const m = (s && s.metadata) || {};
           const item = {
-            type: s && s.type,
+            type: typeof (s && s.type) === 'bigint' ? Number(s.type) : (s && s.type),
+            status: typeof (s && s.status) === 'bigint' ? Number(s.status) : (s && s.status),
             stepCase: sc,
             metadata: {
               createdAt: ts(m.createdAt),
@@ -693,6 +1017,36 @@ export function buildRendererRpcExpression(method, body = {}) {
               ? sv.results.map((x) => (x && typeof x.conversationId === 'string' && guidRe.test(x.conversationId) ? { conversationId: x.conversationId } : null)).filter(Boolean)
               : [];
             if (cid || res.length) item.invokeSubagent = { conversationId: cid, results: res };
+          } else {
+            const cp = (sc === 'checkpoint' ? sv : null) || (s && s.checkpoint && typeof s.checkpoint === 'object' ? s.checkpoint : null);
+            if (cp && typeof cp === 'object') {
+              const sumTok =
+                estStrTok(cp.userIntent) +
+                estStrTok(cp.sessionSummary) +
+                estStrTok(cp.codeChangeSummary) +
+                estStrTok(cp.memorySummary);
+              const cpCw = cp.contextWindowMetadata && typeof cp.contextWindowMetadata === 'object' ? cp.contextWindowMetadata : null;
+              const cpCwEst = cpCw ? numVal(cpCw.estimatedTokensUsed ?? (cpCw.tokenBreakdown && cpCw.tokenBreakdown.totalTokens)) : undefined;
+              const cpCwMax = cpCw ? numVal(cpCw.maxContextTokens) : undefined;
+              item.checkpoint = {
+                ...(numVal(cp.checkpointIndex) !== undefined ? { checkpointIndex: numVal(cp.checkpointIndex) } : {}),
+                intentOnly: Boolean(cp.intentOnly),
+                ...(numVal(cp.includedStepIndexStart) !== undefined ? { includedStepIndexStart: numVal(cp.includedStepIndexStart) } : {}),
+                ...(numVal(cp.includedStepIndexEnd) !== undefined ? { includedStepIndexEnd: numVal(cp.includedStepIndexEnd) } : {}),
+                ...(cp.renderLatestCheckpoint !== undefined ? { renderLatestCheckpoint: Boolean(cp.renderLatestCheckpoint) } : {}),
+                ...(cp.modelSummarizationFailed !== undefined ? { modelSummarizationFailed: Boolean(cp.modelSummarizationFailed) } : {}),
+                ...(cp.usedFallbackSummary !== undefined ? { usedFallbackSummary: Boolean(cp.usedFallbackSummary) } : {}),
+                ...(sumTok > 0 ? { summaryTokens: sumTok } : {}),
+                ...(cpCwEst !== undefined
+                  ? {
+                      contextWindowMetadata: {
+                        estimatedTokensUsed: cpCwEst,
+                        ...(cpCwMax !== undefined && cpCwMax > 0 ? { maxContextTokens: cpCwMax } : {}),
+                      },
+                    }
+                  : {}),
+              };
+            }
           }
           return item;
         });
@@ -715,8 +1069,8 @@ export function buildRendererRpcExpression(method, body = {}) {
               responseModel: typeof cm.responseModel === 'string' ? cm.responseModel : undefined,
               responseModelFull: typeof cm.responseModelFull === 'string' ? cm.responseModelFull : undefined,
               customMetadata: cmMeta,
-              timeToFirstToken: ts(cm.timeToFirstToken),
-              streamingDuration: ts(cm.streamingDuration),
+              timeToFirstToken: dur(cm.timeToFirstToken),
+              streamingDuration: dur(cm.streamingDuration),
               usage: {
                 model: numVal(u.model),
                 inputTokens: numStr(u.inputTokens),
@@ -744,6 +1098,8 @@ export function buildRendererRpcExpression(method, body = {}) {
                 ? {
                     createdAt: ts(csm.createdAt),
                     startStepIndex: numVal(csm.startStepIndex),
+                    checkpointIndex: numVal(csm.checkpointIndex),
+                    stepsCoveredByCheckpoint: numVal(csm.stepsCoveredByCheckpoint),
                     contextWindowMetadata: cw
                       ? {
                           estimatedTokensUsed: numVal(cw.estimatedTokensUsed ?? (cw.tokenBreakdown && cw.tokenBreakdown.totalTokens)),
@@ -755,12 +1111,19 @@ export function buildRendererRpcExpression(method, body = {}) {
             },
           });
         }
+        const directCwu = projectContextWindowUsage((t && t.contextWindowUsage) || traj.contextWindowUsage);
+        const contextWindowUsage = (liveState && liveState.contextWindowUsage) || directCwu;
+        const compactedAtStepIndices =
+          (liveState && liveState.compactedAtStepIndices) ||
+          projectCompactedIndices((t && (t.compactedAtStepIndices || t.compactionInfo)) || traj.compactedAtStepIndices || traj.compactionInfo);
         return {
           ok: true,
           data: {
-            status: t && t.status,
+            status: typeof (t && t.status) === 'bigint' ? Number(t.status) : (t && t.status),
             numTotalSteps: numVal(t && t.numTotalSteps),
             numTotalGeneratorMetadata: numVal(t && t.numTotalGeneratorMetadata),
+            ...(contextWindowUsage ? { contextWindowUsage } : {}),
+            ...(compactedAtStepIndices ? { compactedAtStepIndices } : {}),
             trajectory: {
               cascadeId: traj.cascadeId || params.cascadeId,
               steps,

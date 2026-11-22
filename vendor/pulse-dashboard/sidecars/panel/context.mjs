@@ -46,11 +46,18 @@ export function modelCompressionLimit(_model){
  // provider's capacity nor the host's maxContextTokens proves a trigger value.
  return null;
 }
-export function contextMetrics(metadata,{model=null,sampledAt=null}={}){
+const CONTEXT_SOURCES=new Set([
+ 'Antigravity context window metadata',
+ 'Antigravity context window usage',
+ 'Antigravity post-compaction estimate',
+]);
+export function contextMetrics(metadata,{model=null,sampledAt=null,compacted=false,estimatedAfterCompaction=false,source=null}={}){
  if(!metadata||typeof metadata!=='object'||Array.isArray(metadata))return null;
  const usedTokens=count(metadata.estimatedTokensUsed),rawMax=count(metadata.maxContextTokens);
  if(usedTokens===null)return null;
  const maxTokens=rawMax>0?rawMax:null,reference=modelContextReference(model);
+ const isCompacted=compacted===true||estimatedAfterCompaction===true;
+ const resolvedSource=typeof source==='string'&&CONTEXT_SOURCES.has(source)?source:'Antigravity context window metadata';
  return {
   usedTokens,maxTokens,remainingTokens:maxTokens===null?null:Math.max(0,maxTokens-usedTokens),
   usedFraction:maxTokens===null?null:usedTokens/maxTokens,
@@ -62,12 +69,18 @@ export function contextMetrics(metadata,{model=null,sampledAt=null}={}){
   compressionLimit:null,compressionFraction:null,compressionSource:null,
   model:formatModelName(model),
   sampledAt:typeof sampledAt==='string'&&Number.isFinite(Date.parse(sampledAt))?new Date(sampledAt).toISOString():null,
-  source:'Antigravity context window metadata',estimated:true,
+  source:resolvedSource,estimated:true,
+  ...(isCompacted?{compacted:true,estimatedAfterCompaction:true}:{}),
  };
 }
 export function safeContext(value){
  if(!value||typeof value!=='object'||Array.isArray(value))return null;
  // Recalculate all derived fields and provider references. Never trust ratios,
  // arbitrary source URLs, unsupported limits or additional saved properties.
- return contextMetrics({estimatedTokensUsed:value.usedTokens,maxContextTokens:value.maxTokens},{model:value.model,sampledAt:value.sampledAt});
+ const isCompacted=value.compacted===true||value.estimatedAfterCompaction===true;
+ const source=typeof value.source==='string'&&CONTEXT_SOURCES.has(value.source)?value.source:null;
+ return contextMetrics(
+  {estimatedTokensUsed:value.usedTokens,maxContextTokens:value.maxTokens},
+  {model:value.model,sampledAt:value.sampledAt,compacted:isCompacted,estimatedAfterCompaction:isCompacted,source}
+ );
 }

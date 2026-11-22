@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS deviations(v REAL); CREATE INDEX IF NOT EXISTS deviat
   }
  }
  toolSeconds(){let start=null,end=null,total=0;for(const {a,b} of this.statement('SELECT a,b FROM intervals ORDER BY a,b').iterate()){this.tick();if(start===null){start=a;end=b;}else if(a<=end)end=Math.max(end,b);else{total+=end-start;start=a;end=b;}}return (total+(start===null?0:end-start))/1000;}
- finish({status=null,numTotalSteps,numTotalGeneratorMetadata}={}){
+ finish({status=null,numTotalSteps,numTotalGeneratorMetadata,contextWindowUsage=null,compactedAtStepIndices=null}={}){
   this.tick();this.flush();this.begin();
   try{
   this.sampleCount=0;this.db.exec('DELETE FROM samples;DELETE FROM identities;DELETE FROM usage;DELETE FROM tasks;DELETE FROM intervals;DELETE FROM deviations;');
@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS deviations(v REAL); CREATE INDEX IF NOT EXISTS deviat
   }
   const self=this,samples=this.sequence('samples');samples.push=value=>{const i=self.sampleCount++;self.samplePut(i,value);};
   const ids={has:id=>!!self.statement('SELECT 1 FROM identities WHERE id=?').get(id),get(id){const r=self.statement('SELECT signature,seq,j FROM identities JOIN samples ON seq=i WHERE id=?').get(id);return r?{signature:r.signature,sample:decodeSample(r.j)}:undefined;},set(id,value){const old=self.statement('SELECT seq FROM identities WHERE id=?').get(id);if(old)self.samplePut(old.seq,value.sample);else self.statement('INSERT INTO identities VALUES(?,?,?)').run(id,value.signature,samples.length-1);},get size(){return self.statement('SELECT count(*) n FROM identities').get().n;}};
-  const metrics=trajectoryMetrics({trajectory:{cascadeId:this.id,steps,generatorMetadata:this.sequence('generators')},status,numTotalSteps:counts.steps,numTotalGeneratorMetadata:counts.generators},{samples,ids,classify:()=>this.classify(),toolSeconds:()=>this.toolSeconds(),lastChat:()=>{for(const row of this.statement('SELECT j FROM generators ORDER BY i DESC').iterate()){this.tick();const g=JSON.parse(row.j);if(g.chatModel)return g.chatModel;}return null;}});
+  const metrics=trajectoryMetrics({trajectory:{cascadeId:this.id,steps,generatorMetadata:this.sequence('generators')},status,numTotalSteps:counts.steps,numTotalGeneratorMetadata:counts.generators,...(contextWindowUsage?{contextWindowUsage}:{}),...(compactedAtStepIndices?{compactedAtStepIndices}:{})},{samples,ids,classify:()=>this.classify(),toolSeconds:()=>this.toolSeconds(),lastChat:()=>{for(const row of this.statement('SELECT j FROM generators ORDER BY i DESC').iterate()){this.tick();const g=JSON.parse(row.j);if(g.chatModel)return g.chatModel;}return null;}});
   this.flush();return {metrics,delegatedIds:[...links]};
   }catch(error){this.rollback();throw error;}
  }

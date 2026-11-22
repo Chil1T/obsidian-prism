@@ -59,6 +59,274 @@ function unionSeconds(intervals) {
   return total / 1000;
 }
 
+function safeNonNegInt(value) {
+  if (value === undefined || value === null || value === '' || typeof value === 'boolean') return null;
+  const n = Number(value);
+  return Number.isSafeInteger(n) && n >= 0 ? n : null;
+}
+
+function firstValidIso(...values) {
+  for (const v of values) {
+    if (typeof v === 'string' && Number.isFinite(Date.parse(v))) {
+      return new Date(v).toISOString();
+    }
+  }
+  return null;
+}
+
+function estimateTextFieldTokens(val) {
+  if (typeof val === 'number') return Number.isFinite(val) && val > 0 ? Math.round(val) : 0;
+  if (typeof val === 'bigint') {
+    const n = Number(val);
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+  }
+  if (val && typeof val === 'object' && typeof val.tokens === 'number' && Number.isFinite(val.tokens) && val.tokens > 0) {
+    return Math.round(val.tokens);
+  }
+  if (typeof val !== 'string' || !val) return 0;
+  let nonAscii = 0;
+  for (let i = 0; i < val.length; i++) if (val.charCodeAt(i) > 127) nonAscii++;
+  return Math.ceil((val.length - nonAscii) / 4 + nonAscii / 1.5);
+}
+
+function isStepInProgress(status) {
+  if (status === undefined || status === null) return false;
+  if (typeof status === 'number' || typeof status === 'bigint') {
+    const n = Number(status);
+    return n === 1 || n === 2 || n === 8 || n === 9 || n === 11;
+  }
+  return /PENDING|RUNNING|GENERATING|WAITING|QUEUED/i.test(String(status));
+}
+
+function isStepFailedOrCanceled(status) {
+  if (status === undefined || status === null) return false;
+  if (typeof status === 'number' || typeof status === 'bigint') {
+    const n = Number(status);
+    return n === 4 || n === 5 || n === 6 || n === 7 || n === 12;
+  }
+  return /INVALID|CLEARED|CANCEL|ERROR|INTERRUPT/i.test(String(status));
+}
+
+function extractCheckpointPayload(step) {
+  if (!step || typeof step !== 'object') return null;
+  const typeStr = String(step.type || '');
+  const stepCase = step.stepCase || step.step?.case || '';
+  const hasCpObj = step.checkpoint && typeof step.checkpoint === 'object';
+  if (!/CHECKPOINT|COMPACT/i.test(typeStr) && stepCase !== 'checkpoint' && !hasCpObj) return null;
+  return (hasCpObj ? step.checkpoint : null) || (stepCase === 'checkpoint' && step.step?.value && typeof step.step.value === 'object' ? step.step.value : null) || {};
+}
+
+function findPostChatCompaction(response, trajectory, steps, lastChatInfo, lastActiveAt) {
+  const totalSteps = Number(steps?.length) || 0;
+  let latestCp = null;
+  if (totalSteps > 0) {
+    const lowerBound =
+      lastChatInfo?.anchorStepIndex !== null && lastChatInfo?.anchorStepIndex !== undefined
+        ? Math.max(0, lastChatInfo.anchorStepIndex)
+        : Math.max(0, totalSteps - 64);
+    for (let i = totalSteps - 1; i >= lowerBound; i--) {
+      const step = steps[i];
+      const cp = extractCheckpointPayload(step);
+      if (!cp) continue;
+      if (cp.intentOnly === true) continue;
+      if (cp.modelSummarizationFailed === true && cp.usedFallbackSummary !== true) continue;
+      if (isStepInProgress(step.status) || isStepFailedOrCanceled(step.status)) continue;
+      const cpTimeIso = firstValidIso(step.metadata?.completedAt, step.metadata?.startedAt, step.metadata?.createdAt);
+      const cpMs = cpTimeIso ? Date.parse(cpTimeIso) : NaN;
+      const cpIdx = safeNonNegInt(cp.checkpointIndex);
+      let isAfter = false;
+      if (!lastChatInfo) {
+        isAfter = true;
+      } else if (lastChatInfo.anchorStepIndex !== null) {
+        if (i > lastChatInfo.anchorStepIndex) isAfter = true;
+        else if (i === lastChatInfo.anchorStepIndex) {
+          isAfter =
+            (cpIdx !== null && lastChatInfo.checkpointIndex !== null && cpIdx > lastChatInfo.checkpointIndex) ||
+            (Number.isFinite(cpMs) && Number.isFinite(lastChatInfo.createdMs) && cpMs > lastChatInfo.createdMs);
+        }
+      } else if (cpIdx !== null && lastChatInfo.checkpointIndex !== null && cpIdx > lastChatInfo.checkpointIndex) {
+        isAfter = true;
+      } else if (Number.isFinite(cpMs) && Number.isFinite(lastChatInfo.createdMs)) {
+        isAfter = cpMs > lastChatInfo.createdMs;
+      } else if (lastChatInfo.checkpointIndex !== null && lastChatInfo.checkpointIndex > 0 && cpIdx !== null && cpIdx <= lastChatInfo.checkpointIndex) {
+        isAfter = false;
+      } else if (i >= totalSteps - 3) {
+        isAfter = true;
+      }
+      if (isAfter) {
+        latestCp = { stepIndex: i, checkpoint: cp, timeIso: cpTimeIso, ms: cpMs };
+        break;
+      }
+    }
+  }
+
+  const rawIndices =
+    response?.compactedAtStepIndices ??
+    response?.compactionInfo?.compactedAtStepIndices ??
+    trajectory?.compactedAtStepIndices ??
+    trajectory?.compactionInfo?.compactedAtStepIndices;
+  let maxCompactedIdx = null;
+  if (Array.isArray(rawIndices)) {
+    for (const v of rawIndices) {
+      const n = safeNonNegInt(v);
+      if (n !== null && (maxCompactedIdx === null || n > maxCompactedIdx)) maxCompactedIdx = n;
+    }
+  }
+
+  if (maxCompactedIdx !== null) {
+    const stepAt = maxCompactedIdx < totalSteps ? steps[maxCompactedIdx] : null;
+    const stepTimeIso = firstValidIso(stepAt?.metadata?.completedAt, stepAt?.metadata?.startedAt, stepAt?.metadata?.createdAt, lastActiveAt);
+    const stepMs = stepTimeIso ? Date.parse(stepTimeIso) : NaN;
+    let idxAfter = false;
+    if (!lastChatInfo) {
+      idxAfter = true;
+    } else if (lastChatInfo.anchorStepIndex !== null) {
+      idxAfter = maxCompactedIdx > lastChatInfo.anchorStepIndex;
+    } else if (Number.isFinite(stepMs) && Number.isFinite(lastChatInfo.createdMs)) {
+      idxAfter = stepMs > lastChatInfo.createdMs;
+    } else if (maxCompactedIdx >= Math.max(0, totalSteps - 3)) {
+      idxAfter = true;
+    }
+    if (idxAfter && (!latestCp || maxCompactedIdx > latestCp.stepIndex)) {
+      return {
+        stepIndex: maxCompactedIdx,
+        checkpoint: extractCheckpointPayload(stepAt),
+        timeIso: stepTimeIso,
+        ms: stepMs,
+        fromIndices: true,
+      };
+    }
+  }
+
+  return latestCp;
+}
+
+function estimatePostCompactionTokens(compaction, totalSteps, prevUsed, maxTokens) {
+  const cp = compaction?.checkpoint || {};
+  const explicitSum = safeNonNegInt(cp.summaryTokens);
+  const summaryTokens =
+    explicitSum !== null && explicitSum > 0
+      ? explicitSum
+      : estimateTextFieldTokens(cp.userIntent) +
+        estimateTextFieldTokens(cp.sessionSummary) +
+        estimateTextFieldTokens(cp.codeChangeSummary) +
+        estimateTextFieldTokens(cp.memorySummary);
+  const trailingSteps =
+    Number.isSafeInteger(compaction?.stepIndex) && totalSteps > compaction.stepIndex + 1
+      ? totalSteps - 1 - compaction.stepIndex
+      : 0;
+  const trailingTokens = Math.min(trailingSteps, 32) * 300;
+  const maxCap = maxTokens > 0 ? maxTokens : 512000;
+  let baseOverhead = Math.min(16000, Math.max(4000, Math.round(maxCap * 0.025)));
+  if (prevUsed !== null && prevUsed > 0) {
+    baseOverhead = Math.min(baseOverhead, Math.floor(prevUsed * 0.5));
+  }
+  let est =
+    summaryTokens > 0
+      ? baseOverhead + summaryTokens + trailingTokens
+      : Math.max(4000, Math.round(maxCap * 0.04)) + trailingTokens;
+  if (prevUsed !== null && prevUsed > 0) {
+    const ceiling = Math.min(Math.max(1000, Math.floor(prevUsed * 0.35)), Math.floor(maxCap * 0.35));
+    est = Math.min(est, ceiling);
+  }
+  if (maxTokens > 0) est = Math.min(est, maxTokens);
+  return Math.max(0, Math.round(est));
+}
+
+function resolveContextMetrics(response, trajectory, steps, lastChatInfo, lastChatWithCw, lastActiveAt) {
+  const lastChat = lastChatInfo?.chat || null;
+  const lastChatCw = lastChat?.chatStartMetadata?.contextWindowMetadata || null;
+  const fallbackMax =
+    tokenCount(lastChatCw?.maxContextTokens) ||
+    tokenCount(lastChatWithCw?.chat?.chatStartMetadata?.contextWindowMetadata?.maxContextTokens) ||
+    null;
+  const model =
+    lastChat?.modelDisplayName ||
+    lastChat?.responseModel ||
+    String(lastChat?.model || '') ||
+    lastChatWithCw?.chat?.modelDisplayName ||
+    lastChatWithCw?.chat?.responseModel ||
+    '';
+
+  const latestCompaction = findPostChatCompaction(response, trajectory, steps, lastChatInfo, lastActiveAt);
+
+  // 1) Host-reported live ContextWindowUsage (Antigravity v2.34+ AgentState.contextWindowUsage)
+  const rawCwu = response?.contextWindowUsage || trajectory?.contextWindowUsage || null;
+  const cwuUsed = rawCwu && typeof rawCwu === 'object' ? tokenCount(rawCwu.estimatedTokensUsed) : null;
+  if (cwuUsed !== null) {
+    const cwuMax = tokenCount(rawCwu.maxContextTokens) || fallbackMax;
+    const cwuGmIdx = safeNonNegInt(rawCwu.generatorMetadataIndex);
+    const cwuLastStepIdx = safeNonNegInt(rawCwu.lastStepIndex);
+    const cwuAfterCompact = rawCwu.estimatedAfterCompaction === true;
+    const chatNewerByGm = lastChatInfo && cwuGmIdx !== null && lastChatInfo.index !== null && lastChatInfo.index > cwuGmIdx;
+    const chatNewerByStep =
+      lastChatInfo &&
+      lastChatInfo.anchorStepIndex !== null &&
+      cwuLastStepIdx !== null &&
+      lastChatInfo.anchorStepIndex > cwuLastStepIdx;
+    const chatStrictlyNewer = Boolean(chatNewerByGm || chatNewerByStep);
+    const lastChatHasCw = tokenCount(lastChatCw?.estimatedTokensUsed) !== null;
+    const cwuNewerStep =
+      lastChatInfo &&
+      lastChatInfo.anchorStepIndex !== null &&
+      cwuLastStepIdx !== null &&
+      cwuLastStepIdx > lastChatInfo.anchorStepIndex;
+
+    if (!chatStrictlyNewer && (cwuAfterCompact || !lastChatHasCw || latestCompaction !== null || cwuNewerStep)) {
+      const isCompacted = cwuAfterCompact || Boolean(latestCompaction);
+      return contextMetrics(
+        { estimatedTokensUsed: cwuUsed, maxContextTokens: cwuMax },
+        {
+          model,
+          sampledAt: latestCompaction?.timeIso || lastActiveAt || lastChatInfo?.createdAt || null,
+          compacted: isCompacted,
+          estimatedAfterCompaction: isCompacted,
+          source: 'Antigravity context window usage',
+        }
+      );
+    }
+  }
+
+  // 2) Post-compaction fallback when a completed non-intentOnly checkpoint / compactedAtStepIndices is newer than lastChat
+  if (latestCompaction) {
+    const cpCw = latestCompaction.checkpoint?.contextWindowMetadata;
+    const cpCwUsed = cpCw && typeof cpCw === 'object' ? tokenCount(cpCw.estimatedTokensUsed) : null;
+    const cpCwMax = (cpCw && typeof cpCw === 'object' ? tokenCount(cpCw.maxContextTokens) : null) || fallbackMax;
+    if (cpCwUsed !== null) {
+      return contextMetrics(
+        { estimatedTokensUsed: cpCwUsed, maxContextTokens: cpCwMax },
+        {
+          model,
+          sampledAt: latestCompaction.timeIso || lastActiveAt || lastChatInfo?.createdAt || null,
+          compacted: true,
+          estimatedAfterCompaction: true,
+          source: 'Antigravity context window usage',
+        }
+      );
+    }
+    const prevUsed = tokenCount(lastChatCw?.estimatedTokensUsed);
+    if (prevUsed !== null || fallbackMax !== null) {
+      const est = estimatePostCompactionTokens(latestCompaction, Number(steps?.length) || 0, prevUsed, fallbackMax);
+      return contextMetrics(
+        { estimatedTokensUsed: est, maxContextTokens: fallbackMax },
+        {
+          model,
+          sampledAt: latestCompaction.timeIso || lastActiveAt || lastChatInfo?.createdAt || null,
+          compacted: true,
+          estimatedAfterCompaction: true,
+          source: 'Antigravity post-compaction estimate',
+        }
+      );
+    }
+  }
+
+  // 3) Default: latest chatModel's chatStartMetadata.contextWindowMetadata
+  return contextMetrics(lastChatCw, {
+    model,
+    sampledAt: lastChatInfo?.createdAt || null,
+  });
+}
+
 export function trajectoryMetrics(response, storage = null) {
   const trajectory = response.trajectory || {};
   const generators = trajectory.generatorMetadata || [];
@@ -72,8 +340,32 @@ export function trajectoryMetrics(response, storage = null) {
   const tokens = { inputTokens:0, cachedTokens:0, cacheWriteTokens:0, uncachedTokens:0, outputTokens:0,
     measuredRequests:0, inputRequests:0, outputRequests:0, missingInputRequests:0, missingOutputRequests:0,
     uncachedRequests:0, cachedRequests:0, cacheWriteRequests:0 };
+  let lastChatInfo = null, lastChatWithCw = null;
   for (const [index, generator] of generators.entries()) {
-    const chat = generator.chatModel;
+    const chat = generator?.chatModel;
+    if (chat && typeof chat === 'object') {
+      const gSteps = Array.isArray(generator.stepIndices)
+        ? generator.stepIndices.map(safeNonNegInt).filter(i => i !== null)
+        : [];
+      const maxStepIndex = gSteps.length ? Math.max(...gSteps) : null;
+      const startStepIndex = safeNonNegInt(chat.chatStartMetadata?.startStepIndex);
+      const checkpointIndex = safeNonNegInt(chat.chatStartMetadata?.checkpointIndex);
+      const createdAt = firstValidIso(chat.chatStartMetadata?.createdAt);
+      const createdMs = createdAt ? Date.parse(createdAt) : NaN;
+      lastChatInfo = {
+        index,
+        chat,
+        maxStepIndex,
+        startStepIndex,
+        anchorStepIndex: maxStepIndex !== null ? maxStepIndex : startStepIndex,
+        checkpointIndex,
+        createdAt,
+        createdMs,
+      };
+      if (chat.chatStartMetadata?.contextWindowMetadata && typeof chat.chatStartMetadata.contextWindowMetadata === 'object') {
+        lastChatWithCw = lastChatInfo;
+      }
+    }
     if (!chat?.usage) continue;
     const usage = chat.usage;
     // IDE executionId identifies a planner run/turn, not an individual model
@@ -170,7 +462,22 @@ export function trajectoryMetrics(response, storage = null) {
   const tools = steps.filter(s => /SEARCH_WEB|BROWSE|RUN_COMMAND|COMMAND|READ|WRITE|EDIT|CODE_ACTION|TOOL|MCP|LIST|GREP|VIEW|FIND|TERMINAL/i.test(String(s.type || '')) || s.metadata?.toolCall);
   const toolSeconds = storage ? storage.toolSeconds() : unionSeconds(tools.map(s => [Date.parse(s.metadata.startedAt || s.metadata.createdAt), Date.parse(s.metadata.completedAt)]));
   const latest = samples.at(-1) || null;
-  const lastChat = storage ? storage.lastChat() : [...generators].reverse().find(g => g.chatModel)?.chatModel;
+  const lastChat = lastChatInfo?.chat || (storage ? storage.lastChat() : null);
+  if (!lastChatInfo && lastChat && typeof lastChat === 'object') {
+    const startStepIndex = safeNonNegInt(lastChat.chatStartMetadata?.startStepIndex);
+    const checkpointIndex = safeNonNegInt(lastChat.chatStartMetadata?.checkpointIndex);
+    const createdAt = firstValidIso(lastChat.chatStartMetadata?.createdAt);
+    lastChatInfo = {
+      index: null,
+      chat: lastChat,
+      maxStepIndex: null,
+      startStepIndex,
+      anchorStepIndex: startStepIndex,
+      checkpointIndex,
+      createdAt,
+      createdMs: createdAt ? Date.parse(createdAt) : NaN,
+    };
+  }
   let lastActiveMs = NaN;
   const considerTime = value => {
     if (typeof value !== 'string') return;
@@ -202,10 +509,7 @@ export function trajectoryMetrics(response, storage = null) {
     rateBasis: basisSamples.length && basisSamples.every(s => s.basis === 'response') ? 'response' : 'all-output',
     streamingSeconds, modelSeconds, toolSeconds, ttftSeconds: ttftSamples ? ttftSeconds / ttftSamples : null,
     latestShortSample: latest?.status === 'ok' && latest.duration < 1, model: latest?.model || null,
-    context: contextMetrics(lastChat?.chatStartMetadata?.contextWindowMetadata, {
-      model:lastChat?.modelDisplayName || lastChat?.responseModel || String(lastChat?.model || ''),
-      sampledAt:lastChat?.chatStartMetadata?.createdAt,
-    }),
+    context: resolveContextMetrics(response, trajectory, steps, lastChatInfo, lastChatWithCw, lastActiveAt),
     complete: Number(response.numTotalGeneratorMetadata ?? generators.length) === generators.length,
   };
 }
