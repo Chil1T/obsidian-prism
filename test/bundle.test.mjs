@@ -400,10 +400,10 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     assert.equal(html.getAttribute('data-ag-cs-effort-slider'), 'auto');
     assert.equal(st.cfg.palette, 'obsidian');
 
-    // Home UI mounts, optical glyph & prism rim & orbital backdrop mount, and Clawd queued clearance works
+    // Home UI mounts, optical glyph & prism rim mount (without hairline orbital backdrop), and Clawd queued clearance works
     assert.ok(head.querySelector('#ag-prism-css'));
     assert.ok(home.querySelector('.ag-cs-home-panel'));
-    assert.ok(home.querySelector('.ag-cs-orbital-backdrop'));
+    assert.equal(home.querySelector('.ag-cs-orbital-backdrop'), null, 'Home Studio must not inject hairline .ag-cs-orbital-backdrop');
     assert.ok(home.querySelector('.ag-cs-ripple-host'));
     assert.ok(home.querySelector('.ag-cs-brand-glow'));
     assert.ok(home.querySelector('.ag-cs-ripple-canvas'));

@@ -21,6 +21,12 @@ function serializeJsonForEval(val) {
 
 export function protoTimestampToIso(val) {
   if (!val) return undefined;
+  if (typeof val === 'bigint') {
+    const num = Number(val);
+    if (!Number.isFinite(num) || num <= 0) return undefined;
+    const d = new Date(num > 1e11 ? num : num * 1000);
+    return Number.isFinite(d.getTime()) ? d.toISOString() : undefined;
+  }
   if (typeof val === 'string') {
     const ms = Date.parse(val);
     return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
@@ -174,8 +180,10 @@ export function normalizeRendererSummaries(raw) {
       const key = id.toLowerCase();
       const modIso = protoTimestampToIso(sum.lastModifiedTime);
       const createdIso = protoTimestampToIso(sum.createdTime);
+      const stepCount = Number(sum.stepCount ?? sum.numTotalSteps ?? 0);
       out[key] = {
         summary: typeof sum.summary === 'string' ? sum.summary : typeof sum.title === 'string' ? sum.title : '未命名会话',
+        ...(Number.isSafeInteger(stepCount) && stepCount > 0 ? { stepCount } : {}),
         ...(modIso ? { lastModifiedTime: modIso } : {}),
         ...(createdIso ? { createdTime: createdIso } : {}),
         ...(typeof sum.status === 'string' ? { status: sum.status } : {}),
@@ -529,9 +537,7 @@ export function buildRendererRpcExpression(method, body = {}) {
           return '';
         };
         const scopeHint = readScopeHint();
-        if (typeof activeLs.getAllCascadeTrajectories === 'function') {
-          const r = await activeLs.getAllCascadeTrajectories({ excludeSubtrajectories: false });
-          const sums = (r && r.trajectorySummaries) || {};
+        const projectSummariesMap = (sums) => {
           const out = {};
           const keys = Object.keys(sums)
             .sort((a, b) => tsSec(sums[b] && sums[b].lastModifiedTime) - tsSec(sums[a] && sums[a].lastModifiedTime))
@@ -541,10 +547,11 @@ export function buildRendererRpcExpression(method, body = {}) {
             const v = sums[k];
             if (!v || typeof v !== 'object') continue;
             out[k] = {
-              summary: typeof v.summary === 'string' ? v.summary : undefined,
+              summary: typeof v.summary === 'string' && v.summary ? v.summary : undefined,
+              stepCount: numVal(v.stepCount !== undefined ? v.stepCount : v.numTotalSteps),
               lastModifiedTime: ts(v.lastModifiedTime),
               createdTime: ts(v.createdTime),
-              status: v.status,
+              status: typeof v.status === 'bigint' ? Number(v.status) : v.status,
               workspaces: Array.isArray(v.workspaces) ? v.workspaces.slice(0, 4).map((w) => ({ workspaceFolderAbsoluteUri: w && w.workspaceFolderAbsoluteUri })) : undefined,
               trajectoryMetadata: v.trajectoryMetadata ? {
                 parentConversationId: v.trajectoryMetadata.parentConversationId,
@@ -552,6 +559,87 @@ export function buildRendererRpcExpression(method, body = {}) {
                 nestingDepth: numVal(v.trajectoryMetadata.nestingDepth),
               } : undefined,
             };
+          }
+          return out;
+        };
+        if (typeof activeLs.getAllCascadeTrajectories === 'function') {
+          const r = await activeLs.getAllCascadeTrajectories({ excludeSubtrajectories: false });
+          const out = projectSummariesMap((r && r.trajectorySummaries) || {});
+          return { ok: true, data: scopeHint ? { trajectorySummaries: out, scopeHint } : { trajectorySummaries: out } };
+        }
+        const saveCachedStore = (st) => {
+          if (!g || !st) return;
+          const box = typeof WeakRef === 'function' ? new WeakRef(st) : st;
+          try {
+            Object.defineProperty(g, '__agPrismStoreRef', { value: box, configurable: true, writable: true, enumerable: false });
+          } catch {
+            try { g.__agPrismStoreRef = box; } catch {}
+          }
+        };
+        const findReduxSummaries = () => {
+          try {
+            const ref = g && g.__agPrismStoreRef;
+            const cached = ref && typeof ref.deref === 'function' ? ref.deref() : ref;
+            if (cached && typeof cached.getState === 'function') {
+              const s = cached.getState();
+              if (s && s.trajectorySummaries && s.trajectorySummaries.summaries) return s.trajectorySummaries.summaries;
+            } else if (ref) {
+              try { delete g.__agPrismStoreRef; } catch {}
+            }
+          } catch {}
+          try {
+            if (typeof document === 'undefined' || !document || typeof document.querySelectorAll !== 'function') return null;
+            const anchors = document.querySelectorAll('[data-testid="new-conversation-button"], [data-testid="home-greeting"], [data-testid="agent-input-box"], [data-testid="conversation-view"], [data-testid="conversation-row-sidebar"]');
+            for (let i = 0; i < anchors.length; i += 1) {
+              const el = anchors[i];
+              const fk = el && Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
+              for (let f = fk && el[fk], depth = 0; f && depth < 60; f = f.return, depth += 1) {
+                const mp = f.memoizedProps;
+                if (mp && mp.store && typeof mp.store.getState === 'function') {
+                  saveCachedStore(mp.store);
+                  const s = mp.store.getState();
+                  return (s && s.trajectorySummaries && s.trajectorySummaries.summaries) || null;
+                }
+                for (let d = f.dependencies && f.dependencies.firstContext; d; d = d.next) {
+                  const v = d.memoizedValue;
+                  if (v && v.store && typeof v.store.getState === 'function') {
+                    saveCachedStore(v.store);
+                    const s = v.store.getState();
+                    return (s && s.trajectorySummaries && s.trajectorySummaries.summaries) || null;
+                  }
+                }
+              }
+            }
+          } catch {}
+          return null;
+        };
+        const reduxSums = findReduxSummaries();
+        if (reduxSums && typeof reduxSums === 'object' && Object.keys(reduxSums).length > 0) {
+          const out = projectSummariesMap(reduxSums);
+          let outCount = Object.keys(out).length;
+          if (typeof activeLs.searchConversations === 'function') {
+            try {
+              const sr = await activeLs.searchConversations({ query: '' });
+              const sList = Array.isArray(sr && sr.results)
+                ? sr.results.slice().sort((a, b) => tsSec(b && b.lastModifiedTime) - tsSec(a && a.lastModifiedTime))
+                : [];
+              for (let i = 0; i < sList.length; i += 1) {
+                const it = sList[i];
+                const cid = it && typeof it.cascadeId === 'string' ? it.cascadeId.trim() : '';
+                if (!cid) continue;
+                if (Object.prototype.hasOwnProperty.call(out, cid)) {
+                  if (!out[cid].summary && typeof it.title === 'string' && it.title.trim()) out[cid].summary = it.title.trim();
+                } else if (outCount < 1024) {
+                  const ws = typeof it.workspaceName === 'string' ? it.workspaceName.trim() : '';
+                  out[cid] = {
+                    summary: typeof it.title === 'string' && it.title.trim() ? it.title.trim() : undefined,
+                    lastModifiedTime: ts(it.lastModifiedTime),
+                    ...(ws ? { workspaces: [{ workspaceFolderAbsoluteUri: ws }] } : {}),
+                  };
+                  outCount += 1;
+                }
+              }
+            } catch {}
           }
           return { ok: true, data: scopeHint ? { trajectorySummaries: out, scopeHint } : { trajectorySummaries: out } };
         }

@@ -2479,5 +2479,602 @@ test('Redteam #193 [P0-2, P1-3, P2-1]: style hot-upgrade overwrite, data-ag-pris
   }
 });
 
+test('v1.0.7-beta.2 regression: Home Studio handles Protobuf BigInt timestamps in Redux summaries and renderer-rpc-adapter falls back to Redux store when getAllCascadeTrajectories is absent', async () => {
+  const vm = await import('node:vm');
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const { buildRendererRpcExpression, normalizeRendererSummaries } = await import(
+    '../vendor/pulse-dashboard/sidecars/panel/renderer-rpc-adapter.mjs'
+  );
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevStorage = globalThis.localStorage;
+  const storeMem = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+    setItem: (k, v) => { storeMem.set(k, String(v)); },
+    removeItem: (k) => { storeMem.delete(k); },
+  };
+  const cid = '22779ae5-6a08-4dcb-b118-09731c05030a';
+  const secNum = 1763400900;
+  const secBig = BigInt(secNum);
+  const dKey = usageCore.homeDayKey(new Date(secNum * 1000));
+
+  try {
+    const dom = createMockStudioDom('Antigravity');
+    globalThis.document = dom.doc;
+    const reduxSums = {
+      [cid]: {
+        summary: '',
+        stepCount: 6n,
+        lastModifiedTime: { seconds: secBig, nanos: 0 },
+        createdTime: { seconds: secBig, nanos: 0 },
+        workspaces: [{ workspaceFolderAbsoluteUri: 'file:///d:/proj/vibe-coding' }],
+        trajectoryMetadata: {
+          workspaces: [{ workspaceFolderAbsoluteUri: 'file:///d:/proj/vibe-coding' }],
+          nestingDepth: 0n,
+        },
+      },
+    };
+    globalThis.window = {
+      document: dom.doc,
+      location: { href: 'https://127.0.0.1:12497/' },
+      __agPrismUsageBridge: {
+        isOnline: () => true,
+        listSummaries: async () => ({
+          ok: true,
+          scopeKey: 'local',
+          summaries: [{ id: cid, stepCount: 6, lastModifiedSec: secNum, workspaces: ['file:///d:/proj/vibe-coding'] }],
+          records: [],
+        }),
+        fetchBatch: async (items) => ({
+          ok: true,
+          scopeKey: 'local',
+          records: items.map((it) => ({
+            id: it.id,
+            mode: 'full',
+            record: {
+              cascadeId: it.id,
+              stepCount: it.stepCount,
+              lastModifiedSec: it.lastModifiedSec,
+              gmCount: 1,
+              subagent: false,
+              workspace: 'vibe-coding',
+              parentId: '',
+              calls: 3,
+              days: {
+                [dKey]: {
+                  calls: 3,
+                  input: 20000,
+                  output: 5000,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  total: 25000,
+                  hours: new Array(24).fill(0),
+                  models: { 'Gemini 4 Argon': { input: 20000, output: 5000, cacheRead: 0, cacheWrite: 0, total: 25000, calls: 3 } },
+                },
+              },
+            },
+          })),
+        }),
+      },
+    };
+
+    const ctl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:bigint:v1',
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: reduxSums } }) }, svc: {} }),
+      canMountRealCanvas: () => true,
+      setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+
+    ctl.renderHomePanel(true);
+    assert.equal(dom.doc.querySelector('.ag-cs-orbital-backdrop'), null, 'Home Studio must not mount hairline orbital backdrop');
+    await assert.doesNotReject(() => ctl.refreshUsageRollup(true));
+    assert.equal(dom.doc.querySelectorAll('[data-skeleton]').length, 0, 'BigInt timestamps must not leave overview stuck in skeleton state');
+    const tokVal = dom.doc.querySelector('[data-stat="tokens"] .ag-cs-home-stat-value');
+    assert.equal(tokVal?.textContent, '25k', 'Overview must render aggregated token count after BigInt summary resolution');
+    ctl.flushUsageCacheNow();
+    assert.ok(JSON.parse(storeMem.get('test:bigint:v1') || '{}')[cid], 'Flushed cache must contain record');
+
+    // A controller whose loadScopeCache is empty and never completed refreshUsageRollup must NOT overwrite existing localStorage cache on teardown flushUsageCacheNow()
+    const savedBefore = storeMem.get('test:bigint:v1');
+    storeMem.set('test:bigint:v1', '{}');
+    const idleCtl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:bigint:v1',
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => null,
+      canMountRealCanvas: () => true,
+      setAttrIfChanged: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+    storeMem.set('test:bigint:v1', savedBefore);
+    idleCtl.flushUsageCacheNow();
+    assert.ok(JSON.parse(storeMem.get('test:bigint:v1') || '{}')[cid], 'Teardown flushUsageCacheNow() on un-fetched controller must never wipe existing cache');
+
+    // Also verify renderer-rpc-adapter GetAllCascadeTrajectories uses Redux Fiber store when getAllCascadeTrajectories is absent
+    const lsWithoutGetAll = {
+      getUserStatus: async () => ({}),
+      getCascadeTrajectory: async () => ({}),
+      searchConversations: async () => ({
+        results: [{ cascadeId: cid, title: 'Backfilled Title', workspaceName: 'vibe-coding', lastModifiedTime: { seconds: secBig, nanos: 0 } }],
+      }),
+    };
+    const anchorEl = {
+      '__reactFiber$1': {
+        memoizedProps: { store: { getState: () => ({ trajectorySummaries: { summaries: reduxSums } }) } },
+        return: null,
+      },
+    };
+    const rootEl = {
+      '__reactContainer$1': {
+        memoizedProps: { value: lsWithoutGetAll },
+        child: null,
+        sibling: null,
+      },
+    };
+    const sandbox = vm.createContext({
+      document: {
+        getElementById: (id) => (id === 'root' ? rootEl : null),
+        querySelectorAll: () => [anchorEl],
+        body: rootEl,
+      },
+      WeakRef: globalThis.WeakRef,
+      Promise,
+    });
+    sandbox.window = sandbox;
+    sandbox.globalThis = sandbox;
+    const expr = buildRendererRpcExpression('GetAllCascadeTrajectories', {});
+    const rpcRes = await vm.runInContext(expr, sandbox);
+    assert.equal(rpcRes.ok, true);
+    const norm = normalizeRendererSummaries(rpcRes.data);
+    assert.equal(norm.trajectorySummaries[cid].summary, 'Backfilled Title');
+    assert.equal(norm.trajectorySummaries[cid].stepCount, 6);
+    assert.equal(norm.trajectorySummaries[cid].workspaces[0].workspaceFolderAbsoluteUri, 'file:///d:/proj/vibe-coding');
+  } finally {
+    if (prevWin === undefined) delete globalThis.window;
+    else globalThis.window = prevWin;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevStorage;
+  }
+});
+
+test('PR #33 hardening: renderer-rpc-adapter O(1) 1024 cap truncation, recency ordering, WeakRef store reuse & BigInt-free JSON output', async () => {
+  const vm = await import('node:vm');
+  const { buildRendererRpcExpression, normalizeRendererSummaries, protoTimestampToIso } = await import(
+    '../vendor/pulse-dashboard/sidecars/panel/renderer-rpc-adapter.mjs'
+  );
+  const mkGuid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const baseSec = 1763400000;
+  const reduxSums = {};
+  for (let i = 0; i < 1020; i += 1) {
+    reduxSums[mkGuid(i)] = {
+      summary: i === 0 ? '' : `Redux #${i}`,
+      stepCount: BigInt(i + 1),
+      status: 2n,
+      lastModifiedTime: { seconds: BigInt(baseSec + i), nanos: 0n },
+      createdTime: { seconds: BigInt(baseSec), nanos: 0n },
+    };
+  }
+  const searchResults = [
+    // Backfill empty title on existing Redux entry
+    { cascadeId: mkGuid(0), title: 'Backfilled Redux #0', workspaceName: 'ws-a', lastModifiedTime: { seconds: BigInt(baseSec), nanos: 0n } },
+    // 10 older extra entries (should be truncated past cap 1024)
+    ...Array.from({ length: 10 }, (_, idx) => ({
+      cascadeId: mkGuid(2000 + idx),
+      title: `Old Search #${idx}`,
+      workspaceName: 'ws-old',
+      lastModifiedTime: { seconds: BigInt(baseSec - 500 + idx), nanos: 0n },
+    })),
+    // 4 newest extra entries (must win the 4 remaining slots up to 1024)
+    ...Array.from({ length: 4 }, (_, idx) => ({
+      cascadeId: mkGuid(3000 + idx),
+      title: `Fresh Search #${idx}`,
+      workspaceName: 'ws-fresh',
+      lastModifiedTime: { seconds: BigInt(baseSec + 5000 + idx), nanos: 0n },
+    })),
+    // Duplicate of a fresh entry must NOT consume an extra slot
+    { cascadeId: mkGuid(3000), title: 'Dup Ignored', workspaceName: 'ws-fresh', lastModifiedTime: { seconds: BigInt(baseSec + 5000), nanos: 0n } },
+  ];
+
+  const lsMock = {
+    getUserStatus: async () => ({}),
+    getCascadeTrajectory: async () => ({}),
+    searchConversations: async () => ({ results: searchResults }),
+  };
+  const reduxStore = { getState: () => ({ trajectorySummaries: { summaries: reduxSums } }) };
+  const anchorEl = {
+    '__reactFiber$9': {
+      dependencies: { firstContext: { memoizedValue: { store: reduxStore }, next: null } },
+      return: null,
+    },
+  };
+  const rootEl = {
+    '__reactContainer$9': {
+      memoizedProps: { value: lsMock },
+      child: null,
+      sibling: null,
+    },
+  };
+  let queryCalls = 0;
+  let anchorsNow = [anchorEl];
+  const sandbox = vm.createContext({
+    document: {
+      getElementById: (id) => (id === 'root' ? rootEl : null),
+      querySelectorAll: () => { queryCalls += 1; return anchorsNow; },
+      body: rootEl,
+    },
+    WeakRef: globalThis.WeakRef,
+    Promise,
+  });
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+
+  const expr = buildRendererRpcExpression('GetAllCascadeTrajectories', {});
+  const res1 = await vm.runInContext(expr, sandbox);
+  assert.equal(res1.ok, true);
+  assert.doesNotThrow(() => JSON.stringify(res1), 'RPC payload must contain zero raw BigInt values');
+  const map1 = res1.data.trajectorySummaries;
+  assert.equal(Object.keys(map1).length, 1024, 'Merged Redux + searchConversations map must cap strictly at 1024 via O(1) counter');
+  assert.equal(map1[mkGuid(0)].summary, 'Backfilled Redux #0', 'Empty Redux summary must be backfilled from searchConversations');
+  assert.equal(map1[mkGuid(0)].stepCount, 1);
+  assert.equal(map1[mkGuid(0)].status, 2);
+  for (let idx = 0; idx < 4; idx += 1) {
+    assert.ok(map1[mkGuid(3000 + idx)], `Newest search entry #${idx} must be kept within 1024 cap`);
+  }
+  assert.equal(map1[mkGuid(2000)], undefined, 'Older search entry beyond 1024 cap must be evicted');
+  assert.equal(Object.keys(sandbox).includes('__agPrismStoreRef'), false, '__agPrismStoreRef must be non-enumerable');
+
+  // Second invocation must reuse WeakRef cached store even if DOM query returns no anchors
+  anchorsNow = [];
+  const res2 = await vm.runInContext(expr, sandbox);
+  assert.equal(res2.ok, true);
+  assert.equal(queryCalls, 1, 'Second invocation must hit WeakRef store cache without re-scanning DOM');
+  assert.equal(Object.keys(res2.data.trajectorySummaries).length, 1024);
+
+  // Verify protoTimestampToIso handles direct BigInt timestamps and normalizeRendererSummaries preserves BigInt stepCount
+  assert.equal(protoTimestampToIso(BigInt(baseSec)), new Date(baseSec * 1000).toISOString());
+  const norm = normalizeRendererSummaries({
+    trajectorySummaries: {
+      [mkGuid(7)]: { summary: 'BigInt Step', stepCount: 42n, lastModifiedTime: BigInt(baseSec) },
+    },
+  });
+  assert.equal(norm.trajectorySummaries[mkGuid(7)].stepCount, 42);
+  assert.equal(norm.trajectorySummaries[mkGuid(7)].lastModifiedTime, new Date(baseSec * 1000).toISOString());
+});
+
+test('PR #33 hardening: home-studio-panel BigInt safety in >1200 cache trim, JSON.stringify replacer, delta gmCount, and liveQuotaSnap.conversations', async () => {
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevStorage = globalThis.localStorage;
+  const storeMem = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+    setItem: (k, v) => { storeMem.set(k, String(v)); },
+    removeItem: (k) => { storeMem.delete(k); },
+  };
+  const baseSec = 1763400900;
+  const dKey = usageCore.homeDayKey(new Date(baseSec * 1000));
+
+  try {
+    // Seed 1202 existing cache entries so flushing exercises the >1200 sort & slice path
+    const initialCache = {};
+    for (let i = 0; i < 1202; i += 1) {
+      initialCache[`old-${i}`] = {
+        cascadeId: `old-${i}`,
+        stepCount: 2,
+        lastModifiedSec: baseSec - 5000 + i,
+        gmCount: 1,
+        subagent: false,
+        workspace: 'proj-a',
+        parentId: '',
+        calls: 1,
+        days: { [dKey]: { calls: 1, input: 100, output: 50, cacheRead: 0, cacheWrite: 0, total: 150, hours: new Array(24).fill(0), models: {} } },
+      };
+    }
+    storeMem.set('test:bigint:trim', JSON.stringify(initialCache));
+
+    const dom = createMockStudioDom('proj-a — Antigravity');
+    globalThis.document = dom.doc;
+    let deltaReqOffset = -1;
+    globalThis.window = {
+      document: dom.doc,
+      location: { href: 'vscode-file://vscode-app/workbench.html' },
+      agPulseHost: {
+        getMetrics: async () => ({
+          groups: [{ id: 'g', name: 'Gemini', windows: { '5h': { remaining: 0.8, resetAt: Date.now() + 3600000 } } }],
+          conversations: [{ id: 'conv-live-big', steps: 12n, subagent: false, workspace: 'proj-a', modifiedAt: new Date((baseSec + 200) * 1000).toISOString() }],
+        }),
+      },
+      __agPrismUsageBridge: {
+        isOnline: () => true,
+        listSummaries: async () => ({
+          ok: true,
+          scopeKey: 'local',
+          summaries: [
+            // ISO string in lastModifiedTime + BigInt stepCount
+            { id: 'old-1201', stepCount: 10n, lastModifiedTime: new Date((baseSec + 100) * 1000).toISOString(), workspace: 'proj-a' },
+            // BigInt raw fields seeded via bridge record (tests JSON.stringify BigInt replacer & hasRealUsage)
+            { id: 'big-raw-1', stepCount: 4n, lastModifiedSec: BigInt(baseSec + 300), workspace: 'proj-a' },
+          ],
+          records: [
+            {
+              id: 'big-raw-1',
+              record: {
+                cascadeId: 'big-raw-1',
+                stepCount: 4n,
+                lastModifiedSec: BigInt(baseSec + 300),
+                gmCount: 2n,
+                subagent: false,
+                workspace: 'proj-a',
+                parentId: '',
+                calls: 2n,
+                days: {
+                  [dKey]: {
+                    calls: 2n,
+                    input: 4000n,
+                    output: 1000n,
+                    cacheRead: 0n,
+                    cacheWrite: 0n,
+                    total: 5000n,
+                    hours: new Array(24).fill(0n),
+                    models: { 'Gemini 4 Carbon': { input: 4000n, output: 1000n, cacheRead: 0n, cacheWrite: 0n, total: 5000n, calls: 2n } },
+                  },
+                },
+              },
+            },
+          ],
+        }),
+        fetchBatch: async (items) => {
+          const hitOld = items.find((x) => x.id === 'old-1201');
+          if (hitOld) deltaReqOffset = hitOld.gmOffset;
+          return {
+            ok: true,
+            scopeKey: 'local',
+            records: items.map((it) =>
+              it.id === 'old-1201'
+                ? {
+                    id: it.id,
+                    mode: 'delta',
+                    gmCount: 5n,
+                    delta: {
+                      calls: 2n,
+                      days: { [dKey]: { calls: 2n, input: 800n, output: 200n, cacheRead: 0n, cacheWrite: 0n, total: 1000n, hours: new Array(24).fill(0n), models: {} } },
+                    },
+                  }
+                : {
+                    id: it.id,
+                    mode: 'full',
+                    record: {
+                      cascadeId: it.id,
+                      stepCount: it.stepCount,
+                      lastModifiedSec: it.lastModifiedSec,
+                      gmCount: 1n,
+                      subagent: false,
+                      workspace: 'proj-a',
+                      parentId: '',
+                      calls: 1n,
+                      days: { [dKey]: { calls: 1n, input: 1000n, output: 500n, cacheRead: 0n, cacheWrite: 0n, total: 1500n, hours: new Array(24).fill(0n), models: {} } },
+                    },
+                  }
+            ),
+          };
+        },
+      },
+    };
+
+    const ctl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:bigint:trim',
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: {} } }) }, svc: {} }),
+      canMountRealCanvas: () => true,
+      setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+
+    // Test >1200 sort & trim with an actual BigInt lastModifiedSec entry inside usageRecords
+    const savedBridge = globalThis.window.__agPrismUsageBridge;
+    globalThis.window.__agPrismUsageBridge = {
+      isOnline: () => true,
+      listSummaries: async () => ({
+        ok: true,
+        scopeKey: 'local',
+        summaries: [
+          ...Array.from({ length: 1202 }, (_, i) => ({ id: `old-${i}`, stepCount: 2, lastModifiedSec: baseSec - 5000 + i, workspace: 'proj-a' })),
+          { id: 'big-sort-top', stepCount: 4n, lastModifiedSec: BigInt(baseSec + 9999), workspace: 'proj-a' },
+        ],
+        records: [
+          {
+            id: 'big-sort-top',
+            record: {
+              cascadeId: 'big-sort-top',
+              stepCount: 4n,
+              lastModifiedSec: BigInt(baseSec + 9999),
+              gmCount: 1n,
+              subagent: false,
+              workspace: 'proj-a',
+              parentId: '',
+              calls: 1n,
+              days: { [dKey]: { calls: 1n, input: 100n, output: 50n, cacheRead: 0n, cacheWrite: 0n, total: 150n, hours: new Array(24).fill(0n), models: {} } },
+            },
+          },
+        ],
+      }),
+      fetchBatch: async () => ({ ok: true, scopeKey: 'local', records: [] }),
+    };
+    const ctlTrim = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:bigint:trim',
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: {} } }) }, svc: {} }),
+      canMountRealCanvas: () => true,
+      setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+    await assert.doesNotReject(() => ctlTrim.refreshUsageRollup(true));
+    ctlTrim.flushUsageCacheNow();
+    const trimmed = JSON.parse(storeMem.get('test:bigint:trim') || '{}');
+    assert.equal(Object.keys(trimmed).length, 1200, 'Cache flush must trim >1200 entries (including BigInt lastModifiedSec) down to 1200');
+    assert.equal(trimmed['old-0'], undefined, 'Oldest entry must be evicted');
+    assert.equal(trimmed['big-sort-top'].lastModifiedSec, baseSec + 9999, 'BigInt lastModifiedSec entry must sort to top and serialize cleanly');
+    globalThis.window.__agPrismUsageBridge = savedBridge;
+
+    // Now test online delta merge with BigInt gmCount + liveQuotaSnap BigInt steps + BigInt JSON replacer
+    await ctl.refreshLiveTelemetrySnapshot(true);
+    await assert.doesNotReject(() => ctl.refreshUsageRollup(true));
+    assert.equal(deltaReqOffset, 1, 'Delta request must pass numeric gmOffset');
+    ctl.flushUsageCacheNow();
+    const persisted = JSON.parse(storeMem.get('test:bigint:trim') || '{}');
+    assert.equal(persisted['big-raw-1'].stepCount, 4, 'BigInt fields in usageRecords must serialize cleanly to numbers in localStorage');
+    assert.equal(persisted['old-1201'].gmCount, 5, 'Delta BigInt gmCount must persist as number');
+    assert.equal(persisted['conv-live-big'].stepCount, 12, 'liveQuotaSnap.conversations BigInt steps must not throw');
+  } finally {
+    if (prevWin === undefined) delete globalThis.window;
+    else globalThis.window = prevWin;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevStorage;
+  }
+});
+
+test('PR #33 hardening: usage-core BigInt safety across analyzeTrajectoryForUsage, mergeUsageRecordDelta, aggregateUsageRollup, quotaForecast & formatters', () => {
+  const stepSec = 1763400900;
+  const stepDate = new Date(stepSec * 1000);
+  const expectedDay = usageCore.homeDayKey(BigInt(stepSec * 1000));
+  const expectedHour = stepDate.getHours();
+
+  const rec = usageCore.analyzeTrajectoryForUsage(
+    {
+      numTotalSteps: 8n,
+      numTotalGeneratorMetadata: 1n,
+      trajectory: {
+        cascadeId: 'cid-big-1',
+        steps: [{ metadata: { createdAt: { seconds: BigInt(stepSec), nanos: 500000000n } } }],
+        generatorMetadata: [
+          {
+            stepIndices: [0n],
+            chatModel: {
+              modelDisplayName: 'Gemini 4 Carbon',
+              usage: {
+                inputTokens: 1200n,
+                outputTokens: 300n,
+                cacheReadTokens: 500n,
+                cacheWriteTokens: 100n,
+              },
+            },
+          },
+        ],
+      },
+    },
+    {
+      stepCount: 8n,
+      createdTime: BigInt(stepSec - 60),
+      lastModifiedTime: { seconds: BigInt(stepSec + 30), nanos: 0n },
+      trajectoryMetadata: { nestingDepth: 1n },
+    },
+    'cid-big-1'
+  );
+  assert.doesNotThrow(() => JSON.stringify(rec), 'analyzeTrajectoryForUsage result must be JSON-serializable without BigInt');
+  assert.equal(rec.stepCount, 8);
+  assert.equal(rec.gmCount, 1);
+  assert.equal(rec.lastModifiedSec, stepSec + 30);
+  assert.equal(rec.subagent, true);
+  assert.equal(rec.calls, 1);
+  assert.equal(rec.days[expectedDay].total, 2100);
+  assert.equal(rec.days[expectedDay].hours[expectedHour], 1, 'BigInt stepIndices [0n] must resolve stepTime Map entry');
+
+  // mergeUsageRecordDelta with BigInt fields inside BOTH baseRec (models + hours) and deltaRec
+  const baseHours = new Array(24).fill(0n);
+  baseHours[expectedHour] = 1n;
+  const deltaHours = new Array(24).fill(0n);
+  deltaHours[expectedHour] = 2n;
+  const merged = usageCore.mergeUsageRecordDelta(
+    {
+      cascadeId: 'cid-big-1',
+      stepCount: 4n,
+      lastModifiedSec: BigInt(stepSec),
+      gmCount: 1n,
+      calls: 1n,
+      days: {
+        [expectedDay]: {
+          calls: 1n,
+          input: 100n,
+          output: 50n,
+          cacheRead: 25n,
+          cacheWrite: 0n,
+          total: 175n,
+          hours: baseHours,
+          models: { 'Gemini 4 Carbon': { input: 100n, output: 50n, cacheRead: 25n, cacheWrite: 0n, total: 175n, calls: 1n } },
+        },
+      },
+    },
+    {
+      calls: 2n,
+      days: {
+        [expectedDay]: {
+          calls: 2n,
+          input: 200n,
+          output: 100n,
+          cacheRead: 75n,
+          cacheWrite: 25n,
+          total: 400n,
+          hours: deltaHours,
+          models: { 'Gemini 4 Carbon': { input: 200n, output: 100n, cacheRead: 75n, cacheWrite: 25n, total: 400n, calls: 2n } },
+        },
+      },
+    },
+    { stepCount: 9n, lastModifiedSec: BigInt(stepSec + 90), gmCount: 3n }
+  );
+  assert.doesNotThrow(() => JSON.stringify(merged), 'mergeUsageRecordDelta must coerce BigInt fields to plain numbers');
+  assert.equal(merged.calls, 3);
+  assert.equal(merged.stepCount, 9);
+  assert.equal(merged.gmCount, 3);
+  assert.equal(merged.days[expectedDay].total, 575);
+  assert.equal(merged.days[expectedDay].hours[expectedHour], 3);
+  assert.equal(merged.days[expectedDay].models['Gemini 4 Carbon'].total, 575);
+
+  // aggregateUsageRollup with raw BigInt record
+  const rollup = usageCore.aggregateUsageRollup([merged], 'all', 0.07, 'zh-CN', stepDate);
+  assert.doesNotThrow(() => JSON.stringify(rollup));
+  assert.equal(rollup.tokens, 575);
+  assert.equal(rollup.calls, 3);
+
+  // quotaForecast, shortEta, durSec, tsSec, fmtResetTime, axisMax with BigInt & Protobuf Timestamp
+  const nowMs = stepSec * 1000;
+  const fcProto = usageCore.quotaForecast({ remaining: 0.6, resetTime: { seconds: BigInt(stepSec + 7200), nanos: 0n } }, '5h', BigInt(nowMs));
+  assert.ok(fcProto && fcProto.resetInMs === 7200 * 1000, 'quotaForecast must support Protobuf BigInt Timestamp resetTime');
+  const fcBig = usageCore.quotaForecast({ remaining: 1n, resetAt: BigInt(stepSec + 3600) }, '5h', nowMs);
+  assert.ok(fcBig && fcBig.remaining === 1 && fcBig.resetInMs === 3600 * 1000, 'quotaForecast must support direct BigInt resetAt and remaining');
+  assert.equal(usageCore.shortEta(3600000n, 'en'), '1h 0m');
+  assert.equal(usageCore.durSec({ seconds: 3n, nanos: 500000000n }), 3.5);
+  assert.equal(usageCore.tsSec(BigInt(stepSec)), stepSec);
+  assert.equal(usageCore.fmtResetTime({ seconds: BigInt(stepSec + 3600), nanos: 0n }, 'en', BigInt(stepSec)), '1h 0m');
+  assert.equal(usageCore.axisMax(12500n), 20000);
+});
+
+
 
 

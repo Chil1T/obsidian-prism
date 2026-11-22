@@ -9,6 +9,15 @@
   const HOME_MODEL_ROWS = 6;
   const HOME_MODEL_COLOUR_COUNT = 10;
 
+  function numOr(v) {
+    return typeof v === 'bigint' ? Number(v) : v;
+  }
+
+  function toNum(v) {
+    const n = typeof v === 'number' || typeof v === 'bigint' || typeof v === 'string' ? Number(v) : 0;
+    return Number.isFinite(n) ? n : 0;
+  }
+
   function resolveLang(langOrZh) {
     if (langOrZh === true) return 'zh-CN';
     if (langOrZh === false || langOrZh === null) return 'en';
@@ -120,7 +129,7 @@
   }
 
   function homeDayKey(date) {
-    const d = date instanceof Date ? date : new Date(date);
+    const d = date instanceof Date ? date : new Date(numOr(date));
     return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
   }
 
@@ -133,12 +142,12 @@
   }
 
   function formatHomeCount(count) {
-    const value = Math.round(Number(count) || 0);
+    const value = Math.round(toNum(count));
     return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   }
 
   function formatCompactTokens(count) {
-    const value = Number(count) || 0;
+    const value = toNum(count);
     const units = [[1e9, 'B'], [1e6, 'M'], [1e3, 'k']];
     for (let u = 0; u < units.length; u++) {
       const scaled = Math.round((value / units[u][0]) * 10) / 10;
@@ -148,7 +157,7 @@
   }
 
   function formatHomeHour(hour, langOrZh) {
-    const h = ((Math.floor(Number(hour) || 0) % 24) + 24) % 24;
+    const h = ((Math.floor(toNum(hour)) % 24) + 24) % 24;
     const h12 = h % 12 === 0 ? 12 : h % 12;
     const l = resolveLang(langOrZh);
     if (l === 'zh-CN') return (h < 12 ? '上午 ' : '下午 ') + h12 + ' 点';
@@ -172,15 +181,14 @@
   function tsToMs(ts) {
     if (!ts) return 0;
     if (typeof ts === 'number') return Number.isFinite(ts) ? ts : 0;
-    if (typeof ts === 'string') {
-      const parsed = Date.parse(ts);
+    if (typeof ts === 'string' || typeof ts === 'bigint') {
+      const parsed = typeof ts === 'string' ? Date.parse(ts) : NaN;
       if (Number.isFinite(parsed) && parsed > 0) return parsed;
-      const num = Number(ts);
-      return Number.isFinite(num) && num > 0 ? (num > 1e11 ? num : num * 1000) : 0;
+      const num = toNum(ts);
+      return num > 0 ? (num > 1e11 ? num : num * 1000) : 0;
     }
-    const sec = Number(ts.seconds || 0);
-    const nanos = Number(ts.nanos || 0);
-    return sec > 0 ? sec * 1000 + Math.floor(nanos / 1e6) : 0;
+    const sec = toNum(ts.seconds);
+    return sec > 0 ? sec * 1000 + Math.floor(toNum(ts.nanos) / 1e6) : 0;
   }
 
   function cleanModelName(val) {
@@ -198,7 +206,7 @@
     if (!summary || typeof summary !== 'object') return false;
     if (summary.subagent === true) return true;
     const meta = summary.trajectoryMetadata || {};
-    return Boolean(meta.parentConversationId || summary.parentConversationId) || Number(meta.nestingDepth || 0) > 0;
+    return Boolean(meta.parentConversationId || summary.parentConversationId) || toNum(meta.nestingDepth) > 0;
   }
 
   function normalizeWorkspaceLabel(rawUriOrPath) {
@@ -259,7 +267,7 @@
     const createdMs = tsToMs(summaryObj?.createdTime) || tsToMs(t?.metadata?.createdAt) || 0;
     const lastModMs = tsToMs(summaryObj?.lastModifiedTime) || 0;
     const fallbackMs = lastModMs || createdMs || 0;
-    const totalStepSpan = Math.max(1, Number(summaryObj?.stepCount ?? trajObj?.numTotalSteps ?? steps.length ?? 1));
+    const totalStepSpan = Math.max(1, toNum(summaryObj?.stepCount ?? trajObj?.numTotalSteps ?? steps.length ?? 1));
 
     const days = {}; // YYYY-MM-DD -> { calls, input, output, cacheRead, cacheWrite, total, hours: number[24], models: { [id]: { input, output, cacheRead, cacheWrite, total, calls } } }
     let calls = 0;
@@ -269,10 +277,10 @@
       if (!val) continue;
       const u = val.usage || val.retryInfos?.[val.retryInfos.length - 1]?.usage || gmList[i]?.usage;
       if (!u) continue;
-      const input = Number(u.inputTokens || 0);
-      const cacheRead = Number(u.cacheReadTokens || 0);
-      const cacheWrite = Number(u.cacheWriteTokens || 0);
-      const output = Number(u.outputTokens || 0);
+      const input = toNum(u.inputTokens);
+      const cacheRead = toNum(u.cacheReadTokens);
+      const cacheWrite = toNum(u.cacheWriteTokens);
+      const output = toNum(u.outputTokens);
       const total = input + cacheRead + cacheWrite + output;
       if (total <= 0 && input === 0 && output === 0) continue;
 
@@ -280,7 +288,7 @@
       const sIndices = Array.isArray(gmList[i].stepIndices) ? gmList[i].stepIndices : [];
       let ts = 0;
       for (let k = 0; k < sIndices.length; k++) {
-        const hit = stepTime.get(sIndices[k]);
+        const hit = stepTime.get(numOr(sIndices[k]));
         if (hit) {
           ts = hit;
           break;
@@ -291,7 +299,7 @@
         if (chatCreatedMs > 0) {
           ts = chatCreatedMs;
         } else if (steps.length === 0 && createdMs > 0 && lastModMs > createdMs && sIndices.length > 0) {
-          const ratio = Math.min(1, Math.max(0, Number(sIndices[0] || 0) / totalStepSpan));
+          const ratio = Math.min(1, Math.max(0, toNum(sIndices[0]) / totalStepSpan));
           ts = Math.round(createdMs + ratio * (lastModMs - createdMs));
         } else {
           ts = fallbackMs;
@@ -340,16 +348,17 @@
     }
 
     const lastModifiedSec =
-      Number(summaryObj?.lastModifiedTime?.seconds || 0) ||
+      toNum(summaryObj?.lastModifiedSec) ||
+      toNum(summaryObj?.lastModifiedTime?.seconds) ||
       (lastModMs > 0 ? Math.floor(lastModMs / 1000) : 0);
     const workspace = extractWorkspaceId(summaryObj, t);
     const parentId = extractParentConversationId(summaryObj, t);
 
     return {
       cascadeId: String(cascadeId || t.cascadeId || ''),
-      stepCount: Math.max(Number(summaryObj?.stepCount || 0), Number(trajObj?.numTotalSteps || 0), steps.length),
+      stepCount: Math.max(toNum(summaryObj?.stepCount), toNum(trajObj?.numTotalSteps), steps.length),
       lastModifiedSec,
-      gmCount: Number(trajObj?.numTotalGeneratorMetadata ?? gmList.length ?? 0),
+      gmCount: toNum(trajObj?.numTotalGeneratorMetadata ?? gmList.length),
       subagent: isSubagentSummary(summaryObj),
       workspace,
       parentId,
@@ -365,16 +374,18 @@
       if (!d) continue;
       const models = {};
       for (const [mk, mv] of Object.entries(d.models || {})) {
-        if (mv) models[mk] = { ...mv };
+        if (mv) models[mk] = { input: toNum(mv.input), output: toNum(mv.output), cacheRead: toNum(mv.cacheRead), cacheWrite: toNum(mv.cacheWrite), total: toNum(mv.total), calls: toNum(mv.calls) };
       }
+      const hours = new Array(24).fill(0);
+      if (Array.isArray(d.hours)) for (let h = 0; h < 24; h++) hours[h] = toNum(d.hours[h]);
       days[dk] = {
-        calls: Number(d.calls || 0),
-        input: Number(d.input || 0),
-        output: Number(d.output || 0),
-        cacheRead: Number(d.cacheRead || 0),
-        cacheWrite: Number(d.cacheWrite || 0),
-        total: Number(d.total || 0),
-        hours: Array.isArray(d.hours) ? d.hours.slice(0, 24) : new Array(24).fill(0),
+        calls: toNum(d.calls),
+        input: toNum(d.input),
+        output: toNum(d.output),
+        cacheRead: toNum(d.cacheRead),
+        cacheWrite: toNum(d.cacheWrite),
+        total: toNum(d.total),
+        hours,
         models,
       };
     }
@@ -395,14 +406,14 @@
           };
           days[dk] = dst;
         }
-        dst.calls += Number(dd.calls || 0);
-        dst.input += Number(dd.input || 0);
-        dst.output += Number(dd.output || 0);
-        dst.cacheRead += Number(dd.cacheRead || 0);
-        dst.cacheWrite += Number(dd.cacheWrite || 0);
-        dst.total += Number(dd.total || 0);
+        dst.calls += toNum(dd.calls);
+        dst.input += toNum(dd.input);
+        dst.output += toNum(dd.output);
+        dst.cacheRead += toNum(dd.cacheRead);
+        dst.cacheWrite += toNum(dd.cacheWrite);
+        dst.total += toNum(dd.total);
         if (Array.isArray(dd.hours)) {
-          for (let h = 0; h < 24; h++) dst.hours[h] = (dst.hours[h] || 0) + Number(dd.hours[h] || 0);
+          for (let h = 0; h < 24; h++) dst.hours[h] = (dst.hours[h] || 0) + toNum(dd.hours[h]);
         }
         for (const [mk, mv] of Object.entries(dd.models || {})) {
           if (!mv) continue;
@@ -411,24 +422,24 @@
             dm = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, calls: 0 };
             dst.models[mk] = dm;
           }
-          dm.input += Number(mv.input || 0);
-          dm.output += Number(mv.output || 0);
-          dm.cacheRead += Number(mv.cacheRead || 0);
-          dm.cacheWrite += Number(mv.cacheWrite || 0);
-          dm.total += Number(mv.total || 0);
-          dm.calls += Number(mv.calls || 0);
+          dm.input += toNum(mv.input);
+          dm.output += toNum(mv.output);
+          dm.cacheRead += toNum(mv.cacheRead);
+          dm.cacheWrite += toNum(mv.cacheWrite);
+          dm.total += toNum(mv.total);
+          dm.calls += toNum(mv.calls);
         }
       }
     }
     return {
       cascadeId: String(nextMeta.cascadeId ?? deltaRec?.cascadeId ?? baseRec.cascadeId ?? ''),
-      stepCount: Number(nextMeta.stepCount ?? deltaRec?.stepCount ?? baseRec.stepCount ?? 0),
-      lastModifiedSec: Number(nextMeta.lastModifiedSec ?? deltaRec?.lastModifiedSec ?? baseRec.lastModifiedSec ?? 0),
-      gmCount: Number(nextMeta.gmCount ?? deltaRec?.gmCount ?? baseRec.gmCount ?? 0),
+      stepCount: toNum(nextMeta.stepCount ?? deltaRec?.stepCount ?? baseRec.stepCount ?? 0),
+      lastModifiedSec: toNum(nextMeta.lastModifiedSec ?? deltaRec?.lastModifiedSec ?? baseRec.lastModifiedSec ?? 0),
+      gmCount: toNum(nextMeta.gmCount ?? deltaRec?.gmCount ?? baseRec.gmCount ?? 0),
       subagent: Boolean(nextMeta.subagent ?? deltaRec?.subagent ?? baseRec.subagent),
       workspace: String(nextMeta.workspace ?? deltaRec?.workspace ?? baseRec.workspace ?? ''),
       parentId: String(nextMeta.parentId ?? deltaRec?.parentId ?? baseRec.parentId ?? ''),
-      calls: Number(baseRec.calls || 0) + Number(deltaRec?.calls || 0),
+      calls: toNum(baseRec.calls) + toNum(deltaRec?.calls),
       days,
     };
   }
@@ -443,7 +454,7 @@
     let peak = 0;
     for (const cursor = new Date(start); cursor <= today; cursor.setDate(cursor.getDate() + 1)) {
       const key = homeDayKey(cursor);
-      const tokens = Number(dayTotalsMap[key] || 0);
+      const tokens = toNum(dayTotalsMap[key]);
       if (tokens > peak) peak = tokens;
       cells.push({ date: key, tokens, level: 0 });
     }
@@ -515,9 +526,9 @@
           if (!inRange(dk)) continue;
           const day = rec.days[dk];
           if (!day) continue;
-          const dt = Number(day.total || 0);
+          const dt = toNum(day.total);
           wsEntry.tokens += dt;
-          if (!rec.subagent && (dt > 0 || (day.calls || 0) > 0)) {
+          if (!rec.subagent && (dt > 0 || toNum(day.calls) > 0)) {
             wsEntry.sessionsSet.add(rec.cascadeId || String(i));
           }
         }
@@ -530,18 +541,19 @@
         const dk = dayKeys[d];
         const day = rec.days[dk];
         if (!day) continue;
-        const dTotal = Number(day.total || 0);
+        const dTotal = toNum(day.total);
         allDayTotals[dk] = (allDayTotals[dk] || 0) + dTotal;
 
         if (day.models) {
           if (!allDayModels[dk]) allDayModels[dk] = {};
           for (const [mId, mData] of Object.entries(day.models)) {
-            allDayModels[dk][mId] = (allDayModels[dk][mId] || 0) + Number(mData.total || 0);
+            allDayModels[dk][mId] = (allDayModels[dk][mId] || 0) + toNum(mData.total);
           }
         }
 
         if (!inRange(dk)) continue;
-        if (dTotal > 0 || (day.calls || 0) > 0) {
+        const dCalls = toNum(day.calls);
+        if (dTotal > 0 || dCalls > 0) {
           activeDaySet.add(dk);
           if (rec.subagent) {
             subagentSessionSet.add(rec.cascadeId || String(i));
@@ -553,14 +565,15 @@
         totalTokens += dTotal;
         if (rec.subagent) subagentTokens += dTotal;
         else mainTokens += dTotal;
-        totalCalls += Number(day.calls || 0);
-        const dInp = Number(day.input || 0) + Number(day.cacheRead || 0) + Number(day.cacheWrite || 0);
+        totalCalls += dCalls;
+        const dCacheRead = toNum(day.cacheRead);
+        const dInp = toNum(day.input) + dCacheRead + toNum(day.cacheWrite);
         totalInput += dInp;
-        totalCacheRead += Number(day.cacheRead || 0);
+        totalCacheRead += dCacheRead;
 
         if (Array.isArray(day.hours)) {
           for (let h = 0; h < 24; h++) {
-            hourCounts[h] += Number(day.hours[h] || 0);
+            hourCounts[h] += toNum(day.hours[h]);
           }
         }
         if (day.models) {
@@ -580,14 +593,14 @@
               };
               modelTotals[mId] = entry;
             }
-            const mTok = Number(mData.total || 0);
-            entry.input += Number(mData.input || 0);
-            entry.output += Number(mData.output || 0);
-            entry.cacheRead += Number(mData.cacheRead || 0);
-            entry.cacheWrite += Number(mData.cacheWrite || 0);
+            const mTok = toNum(mData.total);
+            entry.input += toNum(mData.input);
+            entry.output += toNum(mData.output);
+            entry.cacheRead += toNum(mData.cacheRead);
+            entry.cacheWrite += toNum(mData.cacheWrite);
             entry.tokens += mTok;
             if (rec.subagent) entry.subagentTokens += mTok;
-            entry.calls += Number(mData.calls || 0);
+            entry.calls += toNum(mData.calls);
             if (!rec.subagent) entry.sessionsSet.add(rec.cascadeId || String(i));
           }
         }
@@ -701,7 +714,7 @@
   function quotaRemaining(bucket) {
     if (!bucket || typeof bucket !== 'object' || bucket.available === false || bucket.disabled === true) return null;
     if (bucket.expired === true) return 1;
-    const r = bucket.remaining ?? bucket.remainingFraction;
+    const r = numOr(bucket.remaining ?? bucket.remainingFraction);
     if (typeof r === 'number' && Number.isFinite(r)) return Math.max(0, Math.min(1, r));
     if (typeof r === 'string' && r.trim() !== '' && Number.isFinite(Number(r))) {
       return Math.max(0, Math.min(1, Number(r)));
@@ -746,10 +759,11 @@
 
   function shortEta(ms, langOrZh) {
     const l = resolveLang(langOrZh);
-    if (!(ms > 0) || !Number.isFinite(ms)) {
+    const v = numOr(ms);
+    if (!(v > 0) || !Number.isFinite(v)) {
       return pickByLang({ 'zh-CN': '即将刷新', 'zh-TW': '即將重設', yue: '就嚟重設', en: 'Refreshing', ja: '間もなく更新' }, l);
     }
-    const totalSec = Math.max(1, Math.round(ms / 1000));
+    const totalSec = Math.max(1, Math.round(v / 1000));
     const d = Math.floor(totalSec / 86400);
     const h = Math.floor((totalSec % 86400) / 3600);
     const m = Math.floor((totalSec % 3600) / 60);
@@ -765,16 +779,12 @@
   function quotaForecast(bucket, windowKey, nowMs = Date.now()) {
     const rem = quotaRemaining(bucket);
     if (rem === null) return null;
+    const now = numOr(nowMs);
     const spanMs = windowKey === 'weekly' ? 7 * 86400 * 1000 : 5 * 3600 * 1000;
-    const rawReset = bucket?.resetAt ?? bucket?.resetTime ?? null;
-    const resetMs =
-      typeof rawReset === 'string'
-        ? Date.parse(rawReset)
-        : typeof rawReset === 'number'
-        ? (rawReset > 1e11 ? rawReset : rawReset * 1000)
-        : NaN;
+    const r0 = numOr(bucket?.resetAt ?? bucket?.resetTime);
+    const resetMs = typeof r0 === 'number' ? (r0 > 1e11 ? r0 : r0 * 1000) : (tsToMs(r0) || NaN);
 
-    if (!Number.isFinite(resetMs) || resetMs <= nowMs) {
+    if (!Number.isFinite(resetMs) || resetMs <= now) {
       return {
         window: windowKey,
         remaining: rem,
@@ -789,7 +799,7 @@
       };
     }
 
-    const leftMs = Math.max(0, Math.min(spanMs, resetMs - nowMs));
+    const leftMs = Math.max(0, Math.min(spanMs, resetMs - now));
     const elapsedMs = Math.max(0, spanMs - leftMs);
     const used = Math.max(0, 1 - rem);
     const minSmoothMs = windowKey === 'weekly' ? 2 * 3600 * 1000 : 15 * 60 * 1000;
@@ -896,9 +906,10 @@
   }
 
   function axisMax(peak) {
-    if (!(peak > 0)) return 0;
-    const magnitude = Math.pow(10, Math.floor(Math.log(peak) / Math.LN10));
-    const scaled = peak / magnitude;
+    const p = numOr(peak);
+    if (!(p > 0)) return 0;
+    const magnitude = Math.pow(10, Math.floor(Math.log(p) / Math.LN10));
+    const scaled = p / magnitude;
     const step = scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 2.5 ? 2.5 : scaled <= 5 ? 5 : 10;
     return step * magnitude;
   }
@@ -961,40 +972,42 @@
 
   function durSec(d) {
     if (!d) return 0;
-    return Number(d.seconds || 0) + Number(d.nanos || 0) / 1e9;
+    return typeof d === 'object' ? toNum(d.seconds) + toNum(d.nanos) / 1e9 : toNum(d);
   }
 
   function tsSec(ts) {
     if (!ts) return 0;
-    return Number(ts.seconds || 0) + Number(ts.nanos || 0) / 1e9;
+    if (typeof ts === 'string') { const ms = Date.parse(ts); return Number.isFinite(ms) ? ms / 1000 : toNum(ts); }
+    return typeof ts === 'object' ? toNum(ts.seconds) + toNum(ts.nanos) / 1e9 : toNum(ts);
   }
 
   function fmtK(n) {
-    const v = Number(n) || 0;
+    const v = toNum(n);
     if (v >= 1000000) return (v / 1000000).toFixed(2) + 'M';
     if (v >= 1000) return (v / 1000).toFixed(1) + 'K';
     return String(Math.round(v));
   }
 
   function fmtInt(n) {
-    return (Number(n) || 0).toLocaleString();
+    return toNum(n).toLocaleString();
   }
 
   function fmtPct(p, digits = 1) {
-    const v = Number(p) || 0;
+    const v = toNum(p);
     return v.toFixed(digits) + '%';
   }
 
   function fmtSec(s) {
-    const v = Number(s) || 0;
+    const v = toNum(s);
     if (v <= 0) return '—';
     if (v < 1) return Math.round(v * 1000) + 'ms';
     return v.toFixed(1) + 's';
   }
 
   function fmtResetTime(tsSeconds, langOrZh, nowSec) {
-    const now = typeof nowSec === 'number' ? nowSec : Date.now() / 1000;
-    const sec = Number(tsSeconds || 0) - now;
+    const n0 = numOr(nowSec);
+    const now = typeof n0 === 'number' ? n0 : Date.now() / 1000;
+    const sec = (tsSeconds && typeof tsSeconds === 'object' ? tsSec(tsSeconds) : toNum(tsSeconds)) - now;
     const l = resolveLang(langOrZh);
     if (sec <= 0) {
       return pickByLang({ 'zh-CN': '即将刷新', 'zh-TW': '即將重設', yue: '就嚟重設', en: 'Refreshing', ja: '間もなく更新' }, l);

@@ -7,6 +7,7 @@
   const STUDIO_STYLE_ID = 'ag-prism-studio-v101-css';
   const isFn = (v) => typeof v === 'function';
   const isFin = (v) => typeof v === 'number' && Number.isFinite(v);
+  const toNum = (v) => { const n = typeof v === 'number' || typeof v === 'bigint' || typeof v === 'string' ? Number(v) : 0; return Number.isFinite(n) ? n : 0; };
   function markNoTr(e) {
     if (e?.setAttribute) for (const s of 'translate=no,data-no-translate=true,data-ag-localization-skip=true,data-agy-no-translate=true,data-antigravity-zh-skip=1'.split(',')) { const p = s.split('='); e.setAttribute(p[0], p[1]); }
     return e;
@@ -14,8 +15,6 @@
 
   const STUDIO_HEAD_CSS = '.ag-cs-home-panel-head{flex-wrap:wrap;row-gap:8px}';
   const STUDIO_EXTRA_CSS = STUDIO_HEAD_CSS + '.agy-home{--_a:var(--ag-cs-accent,var(--primary,#2563eb));--_m:var(--muted-foreground);--_b:var(--ag-cs-border-1,rgba(148,163,184,.2));--_p:var(--ag-cs-pill-bg,rgba(128,138,158,.08))}.ag-cs-home-tab,.ag-cs-home-range{white-space:nowrap}.ag-cs-home-head-left,.ag-cs-home-head-right{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}.ag-cs-home-head-left{min-width:0}.ag-cs-home-scope-badge,.ag-cs-home-stat-sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ag-cs-home-scope-badge,.ag-cs-quota-pace,.ag-cs-quota-bar,.ag-cs-qbar-solid{border-radius:999px}.ag-cs-home-ws-select,.ag-cs-quota-refresh,.ag-cs-quota-card{border:1px solid var(--_b);background:var(--_p)}.ag-cs-home-ws-select,.ag-cs-quota-refresh{border-radius:var(--ag-cs-r-sm,6px);cursor:pointer}.ag-cs-home-ws-select,.ag-cs-quota-toolbar,.ag-cs-quota-refresh,.ag-cs-quota-win-row,.ag-cs-quota-win-val{font-size:11px}.ag-cs-home-ws-select,.ag-cs-quota-refresh,.ag-cs-quota-name,.ag-cs-quota-win-val{color:var(--foreground)}.ag-cs-home-scope-badge,.ag-cs-quota-name,.ag-cs-quota-pace,.ag-cs-quota-win-val{font-weight:600}.ag-cs-quota-wrap,.ag-cs-quota-card,.ag-cs-quota-win{display:flex;flex-direction:column}.ag-cs-home-stat-sub,.ag-cs-quota-card,.ag-cs-quota-win-val{font-variant-numeric:tabular-nums}.ag-cs-home-stat-sub,.ag-cs-quota-foot{font-size:10px;color:var(--_m);opacity:.82}.ag-cs-home-scope-badge{display:inline-flex;align-items:center;height:20px;max-width:168px;padding:0 7px;font-size:10.5px;color:var(--_a);border:1px solid color-mix(in srgb,currentColor 32%,transparent);background:color-mix(in srgb,currentColor 11%,transparent)}.ag-cs-home-ws-select{height:24px;max-width:156px;padding:0 20px 0 8px;color-scheme:inherit;font-weight:500;outline:none;text-overflow:ellipsis}.ag-cs-home-ws-select option{background:var(--card,#141418);color:var(--foreground,#F2F2F5);}.ag-cs-home-stat-sub{display:block;margin-top:2px;line-height:1.25}.ag-cs-quota-wrap{gap:10px;margin-top:4px;position:relative;z-index:1}.ag-cs-quota-toolbar,.ag-cs-quota-card-head,.ag-cs-quota-win-row{display:flex;align-items:center;justify-content:space-between;gap:6px}.ag-cs-quota-toolbar{color:var(--_m)}.ag-cs-quota-refresh{height:23px;padding:0 9px}.ag-cs-quota-refresh:hover{background:rgba(128,138,158,.16)}.ag-cs-quota-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}.ag-cs-quota-card{padding:11px 12px;border-radius:var(--ag-cs-r-md,10px);gap:8px}.ag-cs-quota-name{font-size:12px}.ag-cs-quota-pace{padding:1.5px 6.5px;font-size:10px;border:1px solid rgba(148,163,184,.24);color:var(--_m)}.ag-cs-quota-pace[data-pace="ok"]{color:var(--_a);border-color:color-mix(in srgb,currentColor 30%,transparent);background:color-mix(in srgb,currentColor 10%,transparent)}.ag-cs-quota-pace[data-pace="tight"]{color:#d97706;border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.12)}.dark .ag-cs-quota-pace[data-pace="tight"]{color:#fbbf24}.ag-cs-quota-pace[data-pace="low"]{color:#dc2626;border-color:rgba(239,68,68,.38);background:rgba(239,68,68,.12)}.dark .ag-cs-quota-pace[data-pace="low"]{color:#f87171}.ag-cs-quota-win{gap:4px}.ag-cs-quota-win-row{align-items:baseline}.ag-cs-quota-win-lbl{color:var(--_m);font-size:10.5px}.ag-cs-quota-bar{position:relative;height:6px;background:rgba(148,163,184,.18);overflow:hidden}.ag-cs-qbar-solid{position:absolute;inset:0 auto 0 0;color:var(--_a);background:linear-gradient(90deg,currentColor,color-mix(in srgb,currentColor 68%,#fff))}.ag-cs-quota-win[data-warn="1"] .ag-cs-qbar-solid{background:linear-gradient(90deg,#d97706,#fbbf24)}.ag-cs-quota-win[data-warn="2"] .ag-cs-qbar-solid{background:linear-gradient(90deg,#dc2626,#f87171)}';
-
-  const ORBITAL_SVG_HTML = '<svg class="ag-cs-orbital-svg" viewBox="0 0 760 280" fill="none" preserveAspectRatio="none"><ellipse class="ag-cs-orbit-arc is-primary" cx="468" cy="136" rx="348" ry="118" transform="rotate(-10 468 136)"/><ellipse class="ag-cs-orbit-arc is-dashed" cx="468" cy="136" rx="252" ry="82" stroke-dasharray="2.5 5.5" transform="rotate(-10 468 136)"/><g class="ag-cs-orbit-reticle" transform="translate(466 36)"><path d="M-4 0H4M0 -4V4"/></g><g class="ag-cs-orbit-reticle" transform="translate(216 184)"><path d="M-3.5 0H3.5M0 -3.5V3.5"/></g><g class="ag-cs-orbit-reticle" transform="translate(698 92)"><path d="M-3.5 0H3.5M0 -3.5V3.5"/></g><circle class="ag-cs-orbit-node is-cobalt" cx="634" cy="54" r="2.2"/><circle class="ag-cs-orbit-node is-iris" cx="308" cy="64" r="1.8"/><circle class="ag-cs-orbit-node is-amber" cx="566" cy="212" r="1.8"/></svg>';
 
   const REMOTE_TITLE_RE = /\[(SSH|WSL|Dev Container|Codespaces|Tunnel|Remote):\s*([^\]]+)\]/i;
   const decUri = (v) => { const s = String(v || '').trim(); if (!s) return ''; try { return decodeURIComponent(s); } catch { return s; } };
@@ -39,7 +38,7 @@
     return extractScopeFromUri(s);
   };
   const formatScopeBadge = (sc) => (!sc || sc === 'local' ? '' : sc.startsWith('ssh:') ? 'SSH · ' + sc.slice(4) : sc.startsWith('remote:') ? 'Remote' + (sc.slice(7) ? ' · ' + sc.slice(7) : '') : '');
-  const hasRealUsage = (r) => !!(r?.days && ((+r.calls || 0) > 0 || Object.values(r.days).some((d) => d && ((+(d.total || d.tokens) || 0) > 0 || (+d.calls || 0) > 0))));
+  const hasRealUsage = (r) => !!(r?.days && (toNum(r.calls) > 0 || Object.values(r.days).some((d) => d && (toNum(d.total || d.tokens) > 0 || toNum(d.calls) > 0))));
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const getDoc = () => (typeof document !== 'undefined' ? document : null);
   const getWin = () => (typeof window !== 'undefined' ? window : G);
@@ -185,18 +184,18 @@
 
     const flushUsageCacheNow = () => {
       clearSaveTimers();
-      if (curScope === 'local' && localSaveBlocked) return;
+      if ((curScope === 'local' && localSaveBlocked) || (!usageRecords.size && !lastUsageFetchAt)) return;
       try {
         const ls = getLs();
         if (!ls) return;
         let entries = [...usageRecords];
         if (entries.length > 1200) {
-          entries.sort((a, b) => (+b[1]?.lastModifiedSec || 0) - (+a[1]?.lastModifiedSec || 0));
+          entries.sort((a, b) => toNum(b[1]?.lastModifiedSec) - toNum(a[1]?.lastModifiedSec));
           entries = entries.slice(0, 1200);
         }
         const obj = {};
         for (const [id, rec] of entries) obj[id] = rec;
-        ls.setItem(scopeStorageKey(curScope), JSON.stringify(obj));
+        ls.setItem(scopeStorageKey(curScope), JSON.stringify(obj, (_, v) => (typeof v === 'bigint' ? Number(v) : v)));
       } catch {}
     };
     const saveUsageCache = () => {
@@ -211,12 +210,12 @@
       }, 1200);
     };
 
-    const toSec = (n, o, iso) => (+(n || o?.seconds) || 0) || (typeof iso === 'string' ? Math.floor((Date.parse(iso) || 0) / 1000) : 0);
+    const toSec = (n, o, iso) => { const s = toNum(n || o?.seconds); if (s) return s; const t = typeof o === 'string' ? o : iso; return typeof t === 'string' ? Math.floor((Date.parse(t) || 0) / 1000) : 0; };
     const extractMeta = (sum) => {
       const tm = sum?.trajectoryMetadata;
       const workspace = usageCore?.extractWorkspaceId ? usageCore.extractWorkspaceId(sum) : String(sum?.workspace || '');
       const parentId = String(tm?.parentConversationId || sum?.parentConversationId || sum?.parentId || sum?.rootConversationId || sum?.rootId || '').trim();
-      return { workspace, u: wsUrisOf(sum), parentId, subagent: !!(sum?.subagent || parentId || usageCore?.isSubagentSummary?.(sum)), lastModifiedSec: toSec(sum?.lastModifiedSec, sum?.lastModifiedTime, sum?.modifiedAt), createdSec: toSec(sum?.createdSec, sum?.createdTime, sum?.createdAt), stepCount: +(sum?.stepCount ?? sum?.steps ?? 0) || 0 };
+      return { workspace, u: wsUrisOf(sum), parentId, subagent: !!(sum?.subagent || parentId || usageCore?.isSubagentSummary?.(sum)), lastModifiedSec: toSec(sum?.lastModifiedSec, sum?.lastModifiedTime, sum?.modifiedAt), createdSec: toSec(sum?.createdSec, sum?.createdTime, sum?.createdAt), stepCount: toNum(sum?.stepCount ?? sum?.steps ?? 0) };
     };
 
     const advanceCachedCursor = (prev, id, sum, defer) => {
@@ -360,7 +359,7 @@
       const win = getWin();
       const usageBridge = win?.__agPrismUsageBridge || null;
       if (!usageHasData && canMountRealCanvas(getDoc()?.body) && usageBridge && !usageBridge.isOnline?.() && !inCooldown(lastOfflineWaitAt, 15000, now)) {
-        const wTick = Math.max(5, +waitTickMs || 120);
+        const wTick = Math.max(5, toNum(waitTickMs) || 120);
         usageLoading = true; renderHomePanel();
         for (let w = 0; w < 10 && !isDestroyed() && !usageBridge.isOnline?.(); w++) await sleep(wTick);
         usageLoading = false;
@@ -407,7 +406,7 @@
       }
 
       if (curScope === 'local' && Array.isArray(liveQuotaSnap?.conversations)) {
-        for (const c of liveQuotaSnap.conversations) if (c?.id && !sumsMap.has(c.id)) sumsMap.set(c.id, { stepCount: +c.steps || 0, subagent: !!c.subagent, parentConversationId: c.parentConversationId || '', rootConversationId: c.rootConversationId || '', workspace: c.workspace || '', modifiedAt: c.modifiedAt || '' });
+        for (const c of liveQuotaSnap.conversations) if (c?.id && !sumsMap.has(c.id)) sumsMap.set(c.id, { stepCount: toNum(c.steps), subagent: !!c.subagent, parentConversationId: c.parentConversationId || '', rootConversationId: c.rootConversationId || '', workspace: c.workspace || '', modifiedAt: c.modifiedAt || '' });
       }
       const entries = [...sumsMap];
       const canPrune = bridgeOnline;
@@ -423,7 +422,7 @@
         presentIds.add(id);
         const m = extractMeta(sum);
         const cached = usageRecords.get(id);
-        if (!cached || (bridgeOnline && cached._do) || cached.stepCount !== m.stepCount || cached.lastModifiedSec !== m.lastModifiedSec) staleIds.push([id, sum]);
+        if (!cached || (bridgeOnline && cached._do) || toNum(cached.stepCount) !== m.stepCount || toNum(cached.lastModifiedSec) !== m.lastModifiedSec) staleIds.push([id, sum]);
         else if ((m.workspace && !cached.workspace) || (m.parentId && !cached.parentId)) { cached.workspace ||= m.workspace; cached.parentId ||= m.parentId; patchedMeta = true; }
       }
       if (patchedMeta) usageDataEpoch += 1;
@@ -455,7 +454,8 @@
             const reqItems = slice.map(([id, sum]) => {
               const c = usageRecords.get(id);
               const m = extractMeta(sum);
-              return { id, stepCount: m.stepCount, lastModifiedSec: m.lastModifiedSec, createdSec: m.createdSec, subagent: m.subagent, workspace: m.workspace, ...(m.u.length ? { workspaces: m.u } : {}), parentId: m.parentId, gmOffset: c && !c._do && Number.isInteger(c.gmCount) && c.gmCount > 0 ? c.gmCount : 0 };
+              const gm = toNum(c?.gmCount);
+              return { id, stepCount: m.stepCount, lastModifiedSec: m.lastModifiedSec, createdSec: m.createdSec, subagent: m.subagent, workspace: m.workspace, ...(m.u.length ? { workspaces: m.u } : {}), parentId: m.parentId, gmOffset: c && !c._do && Number.isInteger(gm) && gm > 0 ? gm : 0 };
             });
             const res = await usageBridge.fetchBatch(reqItems, 18000);
             const byId = res?.ok && Array.isArray(res.records) ? new Map(res.records.map((r) => [r.id, r])) : null;
@@ -465,7 +465,7 @@
               const m = extractMeta(sum);
               if (hit?.mode === 'full' && hit.record) applyRecord(id, sum, prev, hit.record, m);
               else if (hit?.mode === 'delta' && hit.delta && usageCore.mergeUsageRecordDelta) {
-                const nr = usageCore.mergeUsageRecordDelta(prev, hit.delta, { cascadeId: id, stepCount: m.stepCount, lastModifiedSec: m.lastModifiedSec, gmCount: +hit.gmCount || 0, subagent: m.subagent, workspace: m.workspace, parentId: m.parentId });
+                const nr = usageCore.mergeUsageRecordDelta(prev, hit.delta, { cascadeId: id, stepCount: m.stepCount, lastModifiedSec: m.lastModifiedSec, gmCount: toNum(hit.gmCount), subagent: m.subagent, workspace: m.workspace, parentId: m.parentId });
                 if (nr && typeof nr === 'object') delete nr._do;
                 usageRecords.set(id, nr);
               } else usageRecords.set(id, advanceCachedCursor(prev, id, sum, true));
@@ -686,9 +686,6 @@
 
       runGuardedMut(() => {
         panel.innerHTML = '';
-        const orbital = dv('ag-cs-orbital-backdrop', { 'aria-hidden': 'true' });
-        orbital.innerHTML = ORBITAL_SVG_HTML;
-        ap(panel, orbital);
 
         const headLeft = dv('ag-cs-home-head-left');
         const tabs = dv('ag-cs-home-tabs');
@@ -735,8 +732,8 @@
           const stats = dv('ag-cs-home-stats');
           const cacheVal = isFin(data.cacheHitRate) ? usageCore.fmtPct(data.cacheHitRate * 100, 1) : '—';
           const cacheTitle = typeof data.cacheHitRate === 'number' ? `${ui.cacheRead || 'Cache'}: ${fmtTok(data.cacheReadTokens || 0)} / ${fmtTok(data.totalInput || 0)}${data.peakHour ? ` · ${data.peakHour}` : ''}` : data.peakHour || '—';
-          const subTok = +data.subagentTokens || 0;
-          const subSes = +data.subagentSessions || 0;
+          const subTok = toNum(data.subagentTokens);
+          const subSes = toNum(data.subagentSessions);
           const subPct = data.tokens > 0 && subTok > 0 ? Math.round((subTok / data.tokens) * 100) : 0;
           const swarmSub = subTok > 0 ? (isFn(ui.swarmSplitSub) ? ui.swarmSplitSub(100 - subPct, subPct) : `Main ${100 - subPct}% · Swarm ${subPct}%`) : '';
 
