@@ -38,7 +38,7 @@
   const isMenu = (doc) => Boolean(qs(doc, '[data-testid="model-selector-panel"], .ces-menu-section, [data-ces-effort-row="true"], [role="dialog"] [data-ces-settings]'));
 
   const IGNORED_CHAT_SEL =
-    '[data-testid="autoscroll-viewport"],[data-testid="planner-response-text"],[data-testid="agent-response"],[data-markdown-root],[data-testid="user-message-bubble"],aside,[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-crab,.ag-cs-conv-aura-host,#ag-pulse-status-bar,#ag-prism-pulse-bar,[data-ag-prism-pulse-bar="true"],.ag-cs-panel-row-glyph,[data-testid="orchestrator-effort-bar"],.ag-cs-smooth-caret,.ag-anim-icon,[data-agy-hans-ui],#agy-theme-switcher,#agy-theme-menu,#antigravity-quota-widget,#antigravity-translation-audit';
+    '[data-testid="autoscroll-viewport"],[data-testid="planner-response-text"],[data-testid="agent-response"],[data-markdown-root],[data-testid="user-message-bubble"],aside,[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-crab,.ag-cs-conv-aura-host,#ag-pulse-status-bar,#ag-prism-pulse-bar,[data-ag-prism-pulse-bar="true"],.ag-cs-panel-row-glyph,.ces-ag-section,.ces-set,[data-ag-owned="1"],[data-testid="orchestrator-effort-bar"],.ag-cs-smooth-caret,.ag-anim-icon,[data-agy-hans-ui],#agy-theme-switcher,#agy-theme-menu,#antigravity-quota-widget,#antigravity-translation-audit';
 
   const EFF_MAP = Object.create(null);
   for (const g of 'xhigh:xhigh|extra|超高|极高|特高|超高思考;high:high|高|高思考|高推理|高强度;medium:medium|med|中|中等|中思考|中等思考|中推理;low:low|低|低思考|低推理;minimal:minimal|极低|最小|最低;max:max|最高|最大;off:off|关闭|关;auto:auto|自动;thinking:thinking|深度思考|思考中|思考'.split(';')) {
@@ -100,38 +100,29 @@
     return typeof el.closest === 'function' ? Boolean(el.closest(IGNORED_CHAT_SEL)) : false;
   }
 
-  function allIgn(records) {
-    if (!Array.isArray(records) || records.length === 0) return false;
-    for (let i = 0; i < records.length; i++) {
-      const t = records[i] && records[i].target;
-      if (!t || !isIgnTarget(t)) return false;
-    }
+  function isIgnRec(rec) {
+    const t = rec?.target;
+    if (!t) return false;
+    if (isIgnTarget(t)) return true;
+    const a = rec.addedNodes, r = rec.removedNodes, n = (a?.length || 0) + (r?.length || 0);
+    if (!n) return false;
+    for (const l of [a, r]) if (l) for (let i = 0; i < l.length; i++) if (!isIgnTarget(l[i])) return false;
     return true;
   }
 
-  function touchesModel(records, doc, mOpen) {
-    if (!Array.isArray(records) || records.length === 0) return true;
-    if (typeof mOpen === 'boolean' ? mOpen : isMenu(doc)) return true;
-    for (let i = 0; i < records.length; i++) {
-      const rec = records[i], t = rec && rec.target;
-      if (t && isIgnTarget(t)) continue;
-      const el = t && (t.nodeType === 1 ? t : t.parentElement);
-      if (el && typeof el.getAttribute === 'function') {
-        if ((el.getAttribute('data-testid') || '').includes('model-selector')) return true;
-        if (el.closest?.('[data-testid="model-selector-trigger"], [data-testid="model-selector-panel"], [role="menu"], [role="listbox"]')) return true;
-      }
-      const added = rec && rec.addedNodes;
-      if (added && added.length) {
-        for (let j = 0; j < added.length; j++) {
-          const n = added[j];
-          if (!n || n.nodeType !== 1) continue;
-          if ((n.getAttribute?.('data-testid') || '').includes('model-selector')) return true;
-          const role = n.getAttribute?.('role') || '';
-          if (role === 'menu' || role === 'listbox' || role === 'dialog') return true;
-          if ((n.tagName === 'DIV' || n.tagName === 'BUTTON') && n.querySelector?.('[data-testid="model-selector-panel"], [data-testid="model-selector-trigger"]')) {
-            return true;
-          }
-        }
+  const allIgn = (recs) => Array.isArray(recs) && recs.length > 0 && recs.every(isIgnRec);
+
+  const MDL_SEL = '[data-testid="model-selector-panel"],[data-testid="model-selector-trigger"],[role="menu"],[role="listbox"]';
+  function touchesModel(recs) {
+    if (!Array.isArray(recs) || !recs.length) return true;
+    for (const rec of recs) {
+      if (isIgnRec(rec)) continue;
+      const t = rec?.target, el = t && (t.nodeType === 1 ? t : t.parentElement);
+      if (el?.getAttribute && ((ga(el, 'data-testid') || '').includes('model-selector') || el.closest?.(MDL_SEL))) return true;
+      for (const n of rec?.addedNodes || []) {
+        if (!n || n.nodeType !== 1 || isIgnTarget(n)) continue;
+        const r = ga(n, 'role') || '';
+        if ((ga(n, 'data-testid') || '').includes('model-selector') || r === 'menu' || r === 'listbox' || r === 'dialog' || n.classList?.contains?.('agy-overlay') || ((n.tagName === 'DIV' || n.tagName === 'BUTTON') && qs(n, MDL_SEL))) return true;
       }
     }
     return false;
@@ -182,24 +173,15 @@
         const el = Date.now() - lastAt, wMs = open ? MENU_THROTTLE_MS : THROTTLE_MS;
         let subAdded = false;
         if (open && Array.isArray(recs)) {
-          for (let ri = 0; ri < recs.length && !subAdded; ri++) {
-            const an = recs[ri]?.addedNodes;
-            if (!an) continue;
-            for (let aj = 0; aj < an.length; aj++) {
-              const nd = an[aj];
-              const nr = nd && nd.nodeType === 1 ? nd.getAttribute?.('role') : '';
-              if (
-                nd &&
-                nd.nodeType === 1 &&
-                (nr === 'menu' ||
-                  nr === 'listbox' ||
-                  nd.classList?.contains('agy-overlay') ||
-                  nd.querySelector?.('[role="menu"],[role="listbox"],[role^="menuitem"],[data-testid="context-menu-submenu-popup"],.agy-overlay'))
-              ) {
+          for (const rec of recs) {
+            for (const nd of rec?.addedNodes || []) {
+              const nr = nd?.nodeType === 1 ? ga(nd, 'role') : '';
+              if (nd?.nodeType === 1 && (nr === 'menu' || nr === 'listbox' || nd.classList?.contains('agy-overlay') || qs(nd, '[role="menu"],[role="listbox"],[role^="menuitem"],[data-testid="context-menu-submenu-popup"],.agy-overlay'))) {
                 subAdded = true;
                 break;
               }
             }
+            if (subAdded) break;
           }
         }
         if (closed || subAdded || (open && !wasOpen) || (el >= wMs && tm === null)) {

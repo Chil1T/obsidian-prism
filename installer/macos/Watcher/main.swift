@@ -778,18 +778,31 @@ final class WatcherApp {
         let isDefaultDir = (self.baseDir == defaultMacInstallDir)
 
         var lastPort: Int?
+        var lastLoggedStalePort: Int?
         var yieldingToDaemon = false
         var lastDaemonSpawnAttempt = Date.distantPast
         while !isExiting() {
             var nativeAlive = !pluginDir.isEmpty && CdpHelper.isNativeDaemonAlive(pluginDir: pluginDir)
-            if !nativeAlive && !noNativeDaemon && !pluginDir.isEmpty {
-                if let activePort = CdpHelper.readPort(overridePort: overridePort),
-                   Date().timeIntervalSince(lastDaemonSpawnAttempt) >= 6.0 {
-                    lastDaemonSpawnAttempt = Date()
-                    if CdpHelper.ensureNativeDaemonRunning(pluginDir: pluginDir, cdpPort: activePort, log: { msg in
-                        self.log("[+] \(msg)")
-                    }) {
-                        nativeAlive = true
+            var rawPort: Int? = nil
+            var livePort: Int? = nil
+            var livePages: [CdpPageInfo]? = nil
+            if !nativeAlive {
+                rawPort = CdpHelper.readPort(overridePort: overridePort)
+                if let rp = rawPort {
+                    if let probed = try? CdpHelper.listPages(port: rp) {
+                        livePort = rp
+                        livePages = probed
+                    }
+                }
+                if !noNativeDaemon && !pluginDir.isEmpty {
+                    if let activeLivePort = livePort,
+                       Date().timeIntervalSince(lastDaemonSpawnAttempt) >= 6.0 {
+                        lastDaemonSpawnAttempt = Date()
+                        if CdpHelper.ensureNativeDaemonRunning(pluginDir: pluginDir, cdpPort: activeLivePort, log: { msg in
+                            self.log("[+] \(msg)")
+                        }) {
+                            nativeAlive = true
+                        }
                     }
                 }
             }
@@ -805,6 +818,7 @@ final class WatcherApp {
                         oldEntry.session.close()
                     }
                     lastPort = nil
+                    lastLoggedStalePort = nil
                     if !yieldingToDaemon {
                         yieldingToDaemon = true
                         log("[~] 检测到原生 Sidecar Daemon 运行中，Watcher 进入热备避让态")
@@ -823,15 +837,32 @@ final class WatcherApp {
                 performReload(nil)
             }
 
-            let activePort = CdpHelper.readPort(overridePort: overridePort)
-            if activePort == nil && overridePort == nil {
+            if let stalePort = rawPort, livePort == nil {
+                if lastLoggedStalePort != stalePort {
+                    lastLoggedStalePort = stalePort
+                    log("[!] 检测到残留无效调试端口 \(stalePort)（连接被拒绝/超时），视作无有效端口并转入裸启恢复检测")
+                }
+                stateLock.lock()
+                let staleEntries = Array(attached.values)
+                attached.removeAll()
+                stateLock.unlock()
+                for oldEntry in staleEntries {
+                    oldEntry.session.close()
+                }
+                lastPort = nil
+            } else {
+                lastLoggedStalePort = nil
+            }
+
+            if livePort == nil && overridePort == nil {
                 let env = ProcessInfo.processInfo.environment
                 let mockDec = env["AG_PRISM_MOCK_RELAUNCH_DECISION"] ?? ""
                 var allowPrompt = !self.noRelaunchPrompt &&
                     env["PRISM_NO_RELAUNCH_PROMPT"] != "1" &&
                     env["AG_PRISM_NO_RELAUNCH_PROMPT"] != "1" &&
                     (env["NODE_ENV"] ?? "").caseInsensitiveCompare("test") != .orderedSame &&
-                    (isDefaultDir || !mockDec.isEmpty)
+                    ((env["NODE_TEST_CONTEXT"] ?? "").isEmpty) &&
+                    (isDefaultDir || !self.isTempSandboxDir(self.baseDir) || !mockDec.isEmpty)
                 if allowPrompt {
                     stateLock.lock()
                     let mSnap = manifest
@@ -844,20 +875,22 @@ final class WatcherApp {
                 }
                 if allowPrompt,
                    let bare = CdpHelper.findBareAntigravityMainProcess(),
-                   bare.uptimeMs >= 8000,
-                   !CdpHelper.hasPromptedForHost(pid: bare.pid, startTimeMs: bare.startTimeMs, installDir: self.baseDir, pluginDir: self.pluginDir) {
-                    CdpHelper.recordPromptedForHost(pid: bare.pid, startTimeMs: bare.startTimeMs, decision: "prompted", installDir: self.baseDir, pluginDir: self.pluginDir)
-                    let confirmed = CdpHelper.promptUserForCdpRelaunch()
-                    CdpHelper.recordPromptedForHost(pid: bare.pid, startTimeMs: bare.startTimeMs, decision: confirmed ? "yes" : "no", installDir: self.baseDir, pluginDir: self.pluginDir)
-                    if confirmed {
-                        log("[*] 用户确认带 --remote-debugging-port=0 重新打开 Antigravity (旧 PID \(bare.pid))")
-                        _ = CdpHelper.relaunchAntigravityWithCdp(host: bare, waitExitMs: 15000) { m in self.log("[+] \(m)") }
+                   bare.uptimeMs >= 8000 {
+                    let hostVersion = self.readHostAppVersion(appPath: bare.appPath)
+                    if !self.hasPromptedForHostWithVersion(bare: bare, hostVersion: hostVersion) {
+                        self.recordPromptedForHostWithVersion(bare: bare, hostVersion: hostVersion, decision: "prompted")
+                        let confirmed = CdpHelper.promptUserForCdpRelaunch()
+                        self.recordPromptedForHostWithVersion(bare: bare, hostVersion: hostVersion, decision: confirmed ? "yes" : "no")
+                        if confirmed {
+                            log("[*] 用户确认带 --remote-debugging-port=0 重新打开 Antigravity (旧 PID \(bare.pid), ver=\(hostVersion.isEmpty ? "unknown" : hostVersion))")
+                            _ = CdpHelper.relaunchAntigravityWithCdp(host: bare, waitExitMs: 15000) { m in self.log("[+] \(m)") }
+                        }
                     }
                 }
             }
 
-            if let port = activePort,
-               let pages = try? CdpHelper.listPages(port: port) {
+            if let port = livePort,
+               let pages = livePages {
                 if lastPort != port {
                     stateLock.lock()
                     let oldEntries = Array(attached.values)
@@ -905,6 +938,132 @@ final class WatcherApp {
         flock(lockFd, LOCK_UN)
         close(lockFd)
         return 0
+    }
+
+    private func isTempSandboxDir(_ dir: String) -> Bool {
+        let std = URL(fileURLWithPath: dir).standardizedFileURL.path
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory()).standardizedFileURL.path
+        if std == "/tmp" || std.hasPrefix("/tmp/") || std == "/private/tmp" || std.hasPrefix("/private/tmp/") {
+            return true
+        }
+        if !tmp.isEmpty {
+            let cleanTmp = tmp.hasSuffix("/") ? String(tmp.dropLast()) : tmp
+            if std == cleanTmp || std.hasPrefix(cleanTmp + "/") {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func readHostAppVersion(appPath: String) -> String {
+        let env = ProcessInfo.processInfo.environment
+        if let mockVer = env["AG_PRISM_MOCK_HOST_VERSION"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !mockVer.isEmpty {
+            return mockVer
+        }
+        guard !appPath.isEmpty else { return "" }
+        let plistPath = (appPath as NSString).appendingPathComponent("Contents/Info.plist")
+        guard let dict = NSDictionary(contentsOfFile: plistPath) else { return "" }
+        let shortVer = (dict["CFBundleShortVersionString"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let buildVer = (dict["CFBundleVersion"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !shortVer.isEmpty && !buildVer.isEmpty && shortVer != buildVer {
+            return "\(shortVer)(\(buildVer))"
+        }
+        return !shortVer.isEmpty ? shortVer : buildVer
+    }
+
+    private func stateObjMatchesCurrentHost(_ obj: [String: JsonValue], pid: Int32, startTimeMs: Int64, hostVersion: String) -> Bool {
+        // 跨版本更新自动复位：若宿主版本发生变化，旧版本的“稍后”决定不再静音新版本
+        let savedVersion = (obj["hostVersion"]?.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !hostVersion.isEmpty && !savedVersion.isEmpty && savedVersion != hostVersion {
+            return false
+        }
+
+        var savedPid: Int64? = obj["hostPid"]?.int64Value
+        var savedStart: Int64 = obj["hostStartMs"]?.int64Value ?? obj["startTimeMs"]?.int64Value ?? 0
+        if savedPid == nil {
+            let rawKey = obj["hostKey"]?.stringValue ?? obj["key"]?.stringValue ?? ""
+            let parts = rawKey.split(separator: ":")
+            if parts.count >= 1, let parsedPid = Int64(parts[0]) {
+                savedPid = parsedPid
+            }
+            if savedStart <= 0 && parts.count >= 2, let parsedStart = Int64(parts[1]) {
+                savedStart = parsedStart
+            }
+        }
+
+        guard let recordedPid = savedPid, recordedPid == Int64(pid) else {
+            return false
+        }
+        if savedStart > 0 && startTimeMs > 0 && abs(savedStart - startTimeMs) > 15000 {
+            return false
+        }
+        return true
+    }
+
+    private func hasPromptedForHostWithVersion(bare: BareHostAppInfo, hostVersion: String) -> Bool {
+        guard bare.pid > 0 else { return true }
+        let fm = FileManager.default
+        var dirs: [String] = []
+        if !self.pluginDir.isEmpty { dirs.append(self.pluginDir) }
+        if !self.baseDir.isEmpty && self.baseDir != self.pluginDir { dirs.append(self.baseDir) }
+
+        var matched = false
+        var resetLogged = false
+        for dir in dirs {
+            let statePath = (dir as NSString).appendingPathComponent(".relaunch-prompt-state.json")
+            guard fm.fileExists(atPath: statePath),
+                  let raw = try? String(contentsOfFile: statePath, encoding: .utf8) else {
+                continue
+            }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, let obj = try? MiniJson.parseObject(trimmed) else {
+                continue
+            }
+            if stateObjMatchesCurrentHost(obj, pid: bare.pid, startTimeMs: bare.startTimeMs, hostVersion: hostVersion) {
+                matched = true
+            } else {
+                // 新进程 PID 或新版本出现时自动复位旧的跳过记录，防止旧“稍后”永久静音
+                try? fm.removeItem(atPath: statePath)
+                if !resetLogged {
+                    resetLogged = true
+                    log("[~] 检测到 Antigravity 新进程或版本更新 (PID \(bare.pid), ver=\(hostVersion.isEmpty ? "unknown" : hostVersion))，已自动复位重开提示状态")
+                }
+            }
+        }
+        return matched
+    }
+
+    private func recordPromptedForHostWithVersion(bare: BareHostAppInfo, hostVersion: String, decision: String) {
+        guard bare.pid > 0 else { return }
+        let hostKey = hostVersion.isEmpty
+            ? "\(bare.pid):\(bare.startTimeMs)"
+            : "\(bare.pid):\(bare.startTimeMs):\(hostVersion)"
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000.0)
+        let obj: [String: JsonValue] = [
+            "hostPid": .int(Int64(bare.pid)),
+            "hostStartMs": .int(bare.startTimeMs),
+            "startTimeMs": .int(bare.startTimeMs),
+            "hostVersion": .string(hostVersion),
+            "hostKey": .string(hostKey),
+            "key": .string(hostKey),
+            "decision": .string(decision.isEmpty ? "prompted" : decision),
+            "updatedAt": .int(nowMs),
+        ]
+        let payload = MiniJson.stringify(.object(obj), pretty: true) + "\n"
+        let fm = FileManager.default
+        for dir in [self.pluginDir, self.baseDir] where !dir.isEmpty {
+            do {
+                try fm.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil)
+                let statePath = (dir as NSString).appendingPathComponent(".relaunch-prompt-state.json")
+                let tmpPath = statePath + ".tmp.\(getpid())"
+                try payload.write(toFile: tmpPath, atomically: true, encoding: .utf8)
+                if fm.fileExists(atPath: statePath) {
+                    try? fm.removeItem(atPath: statePath)
+                }
+                try fm.moveItem(atPath: tmpPath, toPath: statePath)
+            } catch {}
+        }
     }
 }
 

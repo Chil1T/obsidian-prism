@@ -26,6 +26,7 @@ const PURGE_EXACT_FILES = [
   USAGE_ROLLUP_CACHE_FILENAME,
   'obsidian-prism-sidebar.json',
   'obsidian-prism-sidebar.json.lock',
+  'obsidian-prism-wallpaper.json',
 ];
 
 function parseCliArgs(argv = process.argv.slice(2)) {

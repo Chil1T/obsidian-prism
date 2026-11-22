@@ -524,6 +524,7 @@ namespace AgyClaudeStyle.Installer
                     "obsidian-prism-usage-rollup-cache.json",
                     "obsidian-prism-sidebar.json",
                     "obsidian-prism-sidebar.json.lock",
+                    "obsidian-prism-wallpaper.json",
                 };
                 for (int i = 0; i < exactFiles.Length; i++)
                 {
@@ -1271,9 +1272,12 @@ namespace AgyClaudeStyle.Installer
                     catch
                     {
                         pages = null;
-                        if (!ag.IsRunning && !opts.CdpPort.HasValue && attempt >= 1)
+                        if (!opts.CdpPort.HasValue && attempt >= 1)
                         {
-                            break;
+                            if (!ag.IsRunning || CdpHelper.FindBareAntigravityMainProcess() != null)
+                            {
+                                break;
+                            }
                         }
                     }
                     Thread.Sleep(350);

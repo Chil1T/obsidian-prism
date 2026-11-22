@@ -706,7 +706,7 @@ test('vendor/effort-slider/slider-coexist.js yields 100% to external __agCodexEf
         set fillStyle(v) { curStyle = String(v); fillStylesUsed.add(curStyle); },
         clearRect() {},
         createLinearGradient: () => ({ addColorStop() {} }),
-        fillRect() {},
+        fillRect(_x, _y, w, h) { if (w < 20 && h < 20) ditherPixelsPainted += 1; },
         beginPath() {},
         moveTo() { ditherPixelsPainted += 1; },
         lineTo() {},
@@ -1553,8 +1553,8 @@ test('PrismDaemon HS-1 & SEC-2: 68 rapid-fire setting updates, multi-window cros
     assert.equal(stB.vmWin.__agPrism.getState().cfg.palette, 'obsidian', 'Window B must sync with reloaded Window A');
     assert.equal(stB.vmWin.__agPrism.getState().cfg.accentTone, 'iris');
     assert.ok(
-      activeScripts.size <= 8,
-      `HS-1: Active NewDocument script handles across 2 windows × 4 dynamic channels (main + Omni + Sidebar Studio + Inline Diff) must never leak (got ${activeScripts.size})`
+      activeScripts.size <= 10,
+      `HS-1: Active NewDocument script handles across 2 windows × 5 dynamic channels (main + Omni + Sidebar Studio + Inline Diff + Wallpaper) must never leak (got ${activeScripts.size})`
     );
 
     await daemon.stop(false);

@@ -64,6 +64,182 @@
     })
   );
 
+  const EXTRA_I18N = {
+    'zh-CN': {
+      titlesLabel: '会话标题自动翻译',
+      titlesDesc: '仅在渲染层翻译英文会话标题（默认关闭），不修改底层会话数据，自动跳过时间戳/文件名/路径，关闭后立即无损还原原文。',
+      diagBtn: '一键诊断',
+      diagRunning: '正在诊断…',
+      diagBridgeLbl: '① 守护桥接',
+      diagBridgeOnline: '在线',
+      diagBridgeOffline: '离线（后台守护进程未连接）',
+      diagProfileLbl: '② 模式与配置',
+      diagModeAi: 'AI 润色',
+      diagModeMachine: '免费机翻',
+      diagModeOff: '已关闭',
+      diagProfileOk: '渠道配置完整',
+      diagProfileMissing: '配置待补全',
+      diagIssueUrl: 'Base URL 无效',
+      diagIssueModel: '缺少模型 ID',
+      diagIssueKey: '缺少 API Key',
+      diagConnLbl: '③ 代理与连通',
+      diagConnOk: '连通正常',
+      diagConnSkipped: '未探测（思考翻译当前关闭）',
+      diagConnOffline: '未探测（守护桥接离线）',
+      diagConnFail: '连通异常',
+      diagProxyNone: '直连/无代理',
+      diagProxyOs: '系统代理',
+      diagRemedyLbl: '④ 排查指引',
+      diagHealthy: '各项链路正常，展开英文思考块即可看到译文。',
+      diagRemedyOffline: '请先在终端运行下方自检命令确认守护进程在线，必要时通过已修补的快捷方式重启一次 Antigravity。',
+      diagRemedyAuth: '上游鉴权失败，请检查 API Key 是否正确、额度是否充足或是否具备目标模型权限。',
+      diagRemedyProxy: '上游或代理连接超时/不可达，请切换「自动检测 / 自定义 / 直连」并确认本地代理端口已放行。',
+      diagRemedyProfile: '请先完善 AI 渠道的 Base URL、模型 ID 与 API Key（本地 Ollama 可免密），或切至免费机翻。',
+      diagRemedyGeneral: '若问题持续，请运行下方状态检查命令核验安装与守护状态，或重开 Antigravity 生效。',
+      diagCopyBtn: '复制命令',
+      diagCopied: '已复制 ✓',
+    },
+    'zh-TW': {
+      titlesLabel: '工作階段標題自動翻譯',
+      titlesDesc: '僅在渲染層翻譯英文工作階段標題（預設關閉），不修改底層工作階段資料，自動略過時間戳/檔名/路徑，關閉後立即無損還原原文。',
+      diagBtn: '一鍵診斷',
+      diagRunning: '正在診斷…',
+      diagBridgeLbl: '① 守護橋接',
+      diagBridgeOnline: '線上',
+      diagBridgeOffline: '離線（背景守護行程未連線）',
+      diagProfileLbl: '② 模式與設定',
+      diagModeAi: 'AI 潤飾',
+      diagModeMachine: '免費機翻',
+      diagModeOff: '已關閉',
+      diagProfileOk: '管道設定完整',
+      diagProfileMissing: '設定待補全',
+      diagIssueUrl: 'Base URL 無效',
+      diagIssueModel: '缺少模型 ID',
+      diagIssueKey: '缺少 API Key',
+      diagConnLbl: '③ 代理與連通',
+      diagConnOk: '連線正常',
+      diagConnSkipped: '未偵測（思考翻譯目前關閉）',
+      diagConnOffline: '未偵測（守護橋接離線）',
+      diagConnFail: '連線異常',
+      diagProxyNone: '直連/無代理',
+      diagProxyOs: '系統代理',
+      diagRemedyLbl: '④ 排查指引',
+      diagHealthy: '各項鏈路正常，展開英文思考區塊即可查看譯文。',
+      diagRemedyOffline: '請先在終端執行下方自檢指令確認守護行程在線，必要時透過已修補捷徑重開 Antigravity。',
+      diagRemedyAuth: '上游驗證失敗，請檢查 API Key 是否正確、額度充足或具備目標模型權限。',
+      diagRemedyProxy: '上游或代理連線逾時/不可達，請切換「自動偵測 / 自訂 / 直連」並確認本機代理埠已開啟。',
+      diagRemedyProfile: '請先補齊 AI 管道的 Base URL、模型 ID 與 API Key（本機 Ollama 可免密），或改用免費機翻。',
+      diagRemedyGeneral: '若問題持續，請執行下方狀態檢查指令確認安裝與守護狀態，或重新啟動 Antigravity。',
+      diagCopyBtn: '複製指令',
+      diagCopied: '已複製 ✓',
+    },
+    yue: {
+      titlesLabel: '會話標題自動翻譯',
+      titlesDesc: '只喺渲染層翻譯英文會話標題（預設關閉），唔會改動底層會話資料，自動跳過時間戳/檔名/路徑，關閉後即刻無損還原原文。',
+      diagBtn: '一鍵診斷',
+      diagRunning: '正在診斷…',
+      diagBridgeLbl: '① 守護橋接',
+      diagBridgeOnline: '在線',
+      diagBridgeOffline: '離線（後台守護進程未連接）',
+      diagProfileLbl: '② 模式同設定',
+      diagModeAi: 'AI 潤飾',
+      diagModeMachine: '免費機翻',
+      diagModeOff: '已關閉',
+      diagProfileOk: '渠道設定齊全',
+      diagProfileMissing: '設定未齊全',
+      diagIssueUrl: 'Base URL 無效',
+      diagIssueModel: '缺少模型 ID',
+      diagIssueKey: '缺少 API Key',
+      diagConnLbl: '③ 代理同連通',
+      diagConnOk: '連通正常',
+      diagConnSkipped: '未探測（思考翻譯而家關閉）',
+      diagConnOffline: '未探測（守護橋接離線）',
+      diagConnFail: '連通異常',
+      diagProxyNone: '直連/無代理',
+      diagProxyOs: '系統代理',
+      diagRemedyLbl: '④ 排查指引',
+      diagHealthy: '各項鏈路正常，撳開英文思考區塊就睇到譯文。',
+      diagRemedyOffline: '請先喺終端執行下面嘅自檢命令確認守護進程在線，有需要就用已修補捷徑重開一次 Antigravity。',
+      diagRemedyAuth: '上游驗證失敗，請檢查 API Key 係咪正確、額度夠唔夠或者有無目標模型權限。',
+      diagRemedyProxy: '上游或代理逾時/連唔到，請切換「自動偵測 / 自訂 / 直連」並確認本機代理端口正常。',
+      diagRemedyProfile: '請先補齊 AI 渠道嘅 Base URL、模型 ID 同 API Key（本機 Ollama 可免密），或者轉用免費機翻。',
+      diagRemedyGeneral: '如果問題仲喺度，請執行下面狀態檢查命令核對守護狀態，或者重開 Antigravity。',
+      diagCopyBtn: '複製命令',
+      diagCopied: '已複製 ✓',
+    },
+    en: {
+      titlesLabel: 'Auto-Translate Conversation Titles',
+      titlesDesc: 'Translates English conversation titles in the render layer only (off by default); never modifies underlying session data, skips timestamps/paths/filenames, and restores raw titles when off.',
+      diagBtn: 'Diagnose',
+      diagRunning: 'Diagnosing…',
+      diagBridgeLbl: '1. Daemon Bridge',
+      diagBridgeOnline: 'Online',
+      diagBridgeOffline: 'Offline (daemon bridge disconnected)',
+      diagProfileLbl: '2. Mode & Config',
+      diagModeAi: 'AI Polish',
+      diagModeMachine: 'Machine',
+      diagModeOff: 'Off',
+      diagProfileOk: 'Profile ready',
+      diagProfileMissing: 'Config incomplete',
+      diagIssueUrl: 'Invalid Base URL',
+      diagIssueModel: 'Missing Model ID',
+      diagIssueKey: 'Missing API Key',
+      diagConnLbl: '3. Proxy & Upstream',
+      diagConnOk: 'Connected',
+      diagConnSkipped: 'Skipped (translator is off)',
+      diagConnOffline: 'Unavailable (bridge offline)',
+      diagConnFail: 'Unreachable',
+      diagProxyNone: 'Direct / No proxy',
+      diagProxyOs: 'OS proxy',
+      diagRemedyLbl: '4. Troubleshooting',
+      diagHealthy: 'All checks passed. Expand an English thinking block to see translations.',
+      diagRemedyOffline: 'Run the status command below in a terminal to verify the daemon, then restart Antigravity via the patched shortcut.',
+      diagRemedyAuth: 'Upstream auth failed. Check your API key, quota, and model permissions.',
+      diagRemedyProxy: 'Upstream/proxy timed out or unreachable. Try switching Auto / Custom / Direct proxy mode and verify your proxy port.',
+      diagRemedyProfile: 'Complete a valid Base URL, Model ID, and API key (optional for local Ollama), or switch to free Machine mode.',
+      diagRemedyGeneral: 'Run the status command below to verify installation & daemon health, or restart Antigravity.',
+      diagCopyBtn: 'Copy',
+      diagCopied: 'Copied ✓',
+    },
+    ja: {
+      titlesLabel: '会話タイトルの自動翻訳',
+      titlesDesc: '描画層のみで英語の会話タイトルを翻訳します（初期設定オフ）。会話データ本体は変更せず、時刻・ファイル名・パスを除外し、オフ時に原文へ即時復元します。',
+      diagBtn: 'ワンクリック診断',
+      diagRunning: '診断中…',
+      diagBridgeLbl: '① デーモン接続',
+      diagBridgeOnline: 'オンライン',
+      diagBridgeOffline: 'オフライン（デーモン未接続）',
+      diagProfileLbl: '② モードと設定',
+      diagModeAi: 'AI 翻訳',
+      diagModeMachine: '無料機械翻訳',
+      diagModeOff: 'オフ',
+      diagProfileOk: '設定完了',
+      diagProfileMissing: '設定不足',
+      diagIssueUrl: 'Base URL 無効',
+      diagIssueModel: 'モデル ID 未入力',
+      diagIssueKey: 'API キー未入力',
+      diagConnLbl: '③ プロキシと接続性',
+      diagConnOk: '接続正常',
+      diagConnSkipped: '未検証（翻訳オフ）',
+      diagConnOffline: '検証不可（デーモン未接続）',
+      diagConnFail: '接続異常',
+      diagProxyNone: '直接接続/プロキシなし',
+      diagProxyOs: 'OS プロキシ',
+      diagRemedyLbl: '④ 対処ガイド',
+      diagHealthy: 'すべての診断が正常です。英語の思考ブロックを展開すると訳文が表示されます。',
+      diagRemedyOffline: '下の状態確認コマンドを端末で実行してデーモンを確認し、パッチ済みショートカットから Antigravity を再起動してください。',
+      diagRemedyAuth: '認証に失敗しました。API キー・残高・モデル権限を確認してください。',
+      diagRemedyProxy: 'プロキシまたは上流接続がタイムアウト/到達不能です。「自動検出 / カスタム / 直接接続」を切り替えて確認してください。',
+      diagRemedyProfile: '有効な Base URL・モデル ID・API キー（ローカル Ollama は空欄可）を入力するか、無料機械翻訳へ切り替えてください。',
+      diagRemedyGeneral: '問題が続く場合は下の状態確認コマンドを実行するか、Antigravity を再起動してください。',
+      diagCopyBtn: 'コピー',
+      diagCopied: 'コピー済 ✓',
+    },
+  };
+  for (const [lk, extra] of Object.entries(EXTRA_I18N)) {
+    if (WORKBENCH_I18N[lk]) Object.assign(WORKBENCH_I18N[lk], extra);
+  }
+
   function normalizeLangCode(raw) {
     const s = String(raw || '').trim();
     if (!s) return '';
@@ -334,6 +510,11 @@
       savedMaskedProxy: '',
       hasProxyCredentials: false,
       translateToolSummaries: false,
+      translateTitles: false,
+      dirtyToolSum: false,
+      dirtyTitles: false,
+      diagnosing: false,
+      lastDiag: null,
       cacheCount: 0,
       cacheDetailText: '',
       activeProfileId: 'default',
@@ -351,21 +532,37 @@
       fetchedModels: [],
     };
 
-    // -1) Usage Hint & Background Bridge Status Banner
+    // -1) Usage Hint, Background Bridge Status Banner & One-Click Diagnostics Strip
     const usageBanner = mkEl('div', 'ag-cs-thought-hint');
     usageBanner.setAttribute('data-testid', 'thought-usage-banner');
+    applyNoTranslateAttrs(usageBanner);
     if (usageBanner.style) {
       usageBanner.style.display = 'flex';
       usageBanner.style.flexDirection = 'column';
-      usageBanner.style.gap = '4px';
+      usageBanner.style.gap = '6px';
       usageBanner.style.padding = '7px 10px';
       usageBanner.style.borderRadius = 'var(--ag-cs-r-md, 8px)';
       usageBanner.style.border = '1px solid var(--ag-cs-border-1, rgba(128, 128, 128, 0.22))';
       usageBanner.style.background = 'var(--ag-cs-pill-bg, rgba(128, 128, 128, 0.06))';
     }
+    const usageTopRow = mkEl('div', 'ag-cs-thought-bar');
+    if (usageTopRow.style) {
+      usageTopRow.style.alignItems = 'flex-start';
+      usageTopRow.style.gap = '8px';
+    }
     const usageHintEl = mkEl('p', 'ag-cs-thought-hint');
     usageHintEl.setAttribute('data-testid', 'thought-usage-hint');
     usageHintEl.textContent = ui.thoughtUsageHint || initialPack.usageHint;
+
+    const diagBtn = doc.createElement('button');
+    diagBtn.type = 'button';
+    diagBtn.className = 'ag-cs-thought-btn';
+    diagBtn.setAttribute('data-testid', 'thought-diagnose-btn');
+    if (diagBtn.style) diagBtn.style.flexShrink = '0';
+    diagBtn.textContent = ui.thoughtDiagBtn || initialPack.diagBtn;
+
+    usageTopRow.appendChild(usageHintEl);
+    usageTopRow.appendChild(diagBtn);
 
     const bridgeWarnEl = mkEl('p', 'ag-cs-thought-hint');
     bridgeWarnEl.setAttribute('data-testid', 'thought-bridge-warning');
@@ -375,9 +572,231 @@
       bridgeWarnEl.style.fontWeight = '500';
       bridgeWarnEl.style.opacity = '1';
     }
-    usageBanner.appendChild(usageHintEl);
+
+    const diagPanel = mkEl('div', 'ag-cs-thought-diag-panel');
+    diagPanel.setAttribute('data-testid', 'thought-diagnose-panel');
+    diagPanel.setAttribute('role', 'status');
+    applyNoTranslateAttrs(diagPanel);
+    diagPanel.hidden = true;
+    if (diagPanel.style) {
+      diagPanel.style.display = 'none';
+      diagPanel.style.flexDirection = 'column';
+      diagPanel.style.gap = '4px';
+      diagPanel.style.paddingTop = '6px';
+      diagPanel.style.borderTop = '1px solid var(--ag-cs-border-1, rgba(128, 128, 128, 0.18))';
+      diagPanel.style.fontSize = '11.5px';
+    }
+
+    const mkDiagRow = (tid) => {
+      const row = mkEl('div', 'ag-cs-thought-diag-item');
+      row.setAttribute('data-testid', tid);
+      row.setAttribute('data-state', 'idle');
+      if (row.style) {
+        row.style.display = 'flex';
+        row.style.flexWrap = 'wrap';
+        row.style.alignItems = 'center';
+        row.style.gap = '6px';
+        row.style.lineHeight = '1.45';
+      }
+      const lbl = doc.createElement('span');
+      if (lbl.style) {
+        lbl.style.fontWeight = '600';
+        lbl.style.opacity = '0.88';
+      }
+      const val = doc.createElement('span');
+      row.appendChild(lbl);
+      row.appendChild(val);
+      diagPanel.appendChild(row);
+      return { row, lbl, val };
+    };
+
+    const diagBridgeRow = mkDiagRow('thought-diag-bridge');
+    const diagProfileRow = mkDiagRow('thought-diag-profile');
+    const diagConnRow = mkDiagRow('thought-diag-connectivity');
+    const diagRemedyRow = mkDiagRow('thought-diag-remedy');
+
+    const diagCmdWrap = mkEl('div', 'ag-cs-thought-diag-cmd-row');
+    diagCmdWrap.setAttribute('data-testid', 'thought-diag-cmd-wrap');
+    diagCmdWrap.hidden = true;
+    if (diagCmdWrap.style) {
+      diagCmdWrap.style.display = 'none';
+      diagCmdWrap.style.alignItems = 'center';
+      diagCmdWrap.style.gap = '6px';
+      diagCmdWrap.style.marginTop = '2px';
+    }
+    const diagCmdCode = doc.createElement('code');
+    diagCmdCode.setAttribute('data-testid', 'thought-diag-cmd');
+    diagCmdCode.textContent = 'node tools/install-plugin.cjs --status';
+    if (diagCmdCode.style) {
+      diagCmdCode.style.fontFamily = 'monospace';
+      diagCmdCode.style.fontSize = '11px';
+      diagCmdCode.style.padding = '2px 6px';
+      diagCmdCode.style.borderRadius = '4px';
+      diagCmdCode.style.background = 'var(--ag-cs-pill-bg, rgba(128, 128, 128, 0.14))';
+      diagCmdCode.style.userSelect = 'all';
+    }
+    const diagCopyBtn = doc.createElement('button');
+    diagCopyBtn.type = 'button';
+    diagCopyBtn.className = 'ag-cs-thought-btn';
+    diagCopyBtn.setAttribute('data-testid', 'thought-diag-copy-cmd');
+    diagCopyBtn.textContent = initialPack.diagCopyBtn;
+    if (diagCopyBtn.style) {
+      diagCopyBtn.style.fontSize = '10.5px';
+      diagCopyBtn.style.padding = '1px 6px';
+      diagCopyBtn.style.minHeight = '20px';
+    }
+    diagCopyBtn.addEventListener('click', (ev) => {
+      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+      const cmd = diagCmdCode.textContent || 'node tools/install-plugin.cjs --status';
+      const clip = typeof navigator !== 'undefined' && navigator.clipboard ? navigator.clipboard : G.navigator?.clipboard;
+      if (clip && typeof clip.writeText === 'function') {
+        void Promise.resolve()
+          .then(() => clip.writeText(cmd))
+          .catch(() => {});
+      }
+      const p = getPack();
+      guard(() => {
+        diagCopyBtn.textContent = p.diagCopied;
+      });
+      setTimeout(() => {
+        if (diagCopyBtn.isConnected === false) return;
+        guard(() => {
+          diagCopyBtn.textContent = getPack().diagCopyBtn;
+        });
+      }, 1600);
+    });
+    diagCmdWrap.appendChild(diagCmdCode);
+    diagCmdWrap.appendChild(diagCopyBtn);
+    diagPanel.appendChild(diagCmdWrap);
+
+    usageBanner.appendChild(usageTopRow);
     usageBanner.appendChild(bridgeWarnEl);
+    usageBanner.appendChild(diagPanel);
     sharedMountSlot.appendChild(usageBanner);
+
+    const setDiagItemState = (item, kind, labelText, valueText) => {
+      item.row.setAttribute('data-state', kind);
+      item.lbl.textContent = labelText;
+      item.val.textContent = valueText;
+      if (item.val.style) {
+        item.val.style.color =
+          kind === 'ok'
+            ? 'var(--success, #50A37B)'
+            : kind === 'err'
+            ? 'var(--error, #E5534B)'
+            : kind === 'warn'
+            ? 'var(--warning, #D97706)'
+            : '';
+      }
+    };
+
+    const redactUiDiagText = (raw) =>
+      String(raw || '')
+        .replace(/((?:https?|socks5h?):\/\/)[^@\s\x2f\x22\x27<>]+@/gi, '$1***REDACTED***@')
+        .replace(/(sk-[A-Za-z0-9_\-]{6,}|Bearer\s+[A-Za-z0-9._\-:+/=]{6,})/gi, '***REDACTED***')
+        .slice(0, 160);
+
+    const renderDiagnostics = () => {
+      const pack = getPack();
+      guard(() => {
+        diagBtn.textContent = state.diagnosing ? pack.diagRunning : ui.thoughtDiagBtn || pack.diagBtn;
+        diagBtn.disabled = Boolean(state.diagnosing);
+        diagCopyBtn.textContent = pack.diagCopyBtn;
+        const d = state.lastDiag;
+        if (!d) {
+          diagPanel.hidden = true;
+          if (diagPanel.style) diagPanel.style.display = 'none';
+          return;
+        }
+        diagPanel.hidden = false;
+        if (diagPanel.style) diagPanel.style.display = 'flex';
+
+        const bridgeOnline = d.bridgeOnline === true;
+        setDiagItemState(
+          diagBridgeRow,
+          bridgeOnline ? 'ok' : 'err',
+          pack.diagBridgeLbl,
+          bridgeOnline ? `✓ ${pack.diagBridgeOnline}` : `✕ ${pack.diagBridgeOffline}`
+        );
+
+        const modeName =
+          d.mode === 'ai' ? pack.diagModeAi : d.mode === 'machine' ? pack.diagModeMachine : pack.diagModeOff;
+        const issueLabels = Array.isArray(d.profileIssues)
+          ? d.profileIssues.map((code) =>
+              code === 'invalid_base_url'
+                ? pack.diagIssueUrl
+                : code === 'missing_model'
+                ? pack.diagIssueModel
+                : code === 'missing_api_key'
+                ? pack.diagIssueKey
+                : code
+            )
+          : [];
+        const profileOk = d.mode === 'ai' ? Boolean(d.profileReady) : d.mode !== 'off';
+        const profileText =
+          d.mode === 'ai'
+            ? `${modeName} · ${d.profileReady ? `✓ ${pack.diagProfileOk}` : `✕ ${pack.diagProfileMissing} (${issueLabels.join(', ')})`}`
+            : modeName;
+        setDiagItemState(
+          diagProfileRow,
+          d.mode === 'off' ? 'warn' : profileOk ? 'ok' : 'err',
+          pack.diagProfileLbl,
+          profileText
+        );
+
+        const conn = d.connectivity || {};
+        const proxyParts = [];
+        if (d.proxyMode) proxyParts.push(d.proxyMode);
+        if (d.effectiveProxy) proxyParts.push(redactUiDiagText(d.effectiveProxy));
+        else proxyParts.push(pack.diagProxyNone);
+        if (d.osProxyDetected && d.osProxyDetected !== d.effectiveProxy) {
+          proxyParts.push(`${pack.diagProxyOs}: ${redactUiDiagText(d.osProxyDetected)}`);
+        }
+        const proxyPrefix = proxyParts.length ? `[${proxyParts.join(' · ')}] ` : '';
+        let connKind = 'idle';
+        let connVal = '';
+        if (!bridgeOnline) {
+          connKind = 'err';
+          connVal = `✕ ${pack.diagConnOffline}`;
+        } else if (conn.skipped) {
+          connKind = 'warn';
+          connVal = `${proxyPrefix}${pack.diagConnSkipped}`;
+        } else if (conn.ok) {
+          connKind = 'ok';
+          const ms = Number.isFinite(conn.latencyMs) ? ` · ${conn.latencyMs}ms` : '';
+          connVal = `${proxyPrefix}✓ ${pack.diagConnOk}${ms}`;
+        } else {
+          connKind = 'err';
+          const detail = conn.error ? ` (${redactUiDiagText(conn.error)})` : conn.reason ? ` (${conn.reason})` : '';
+          connVal = `${proxyPrefix}✕ ${pack.diagConnFail}${detail}`;
+        }
+        setDiagItemState(diagConnRow, connKind, pack.diagConnLbl, connVal);
+
+        const hasIssue = !bridgeOnline || d.mode === 'off' || (d.mode === 'ai' && !d.profileReady) || (conn && !conn.ok);
+        let remedyMsg = pack.diagHealthy;
+        if (!bridgeOnline) remedyMsg = pack.diagRemedyOffline;
+        else if (d.mode === 'ai' && !d.profileReady) remedyMsg = pack.diagRemedyProfile;
+        else if (conn && !conn.ok && conn.reason === 'auth_error') remedyMsg = pack.diagRemedyAuth;
+        else if (
+          conn &&
+          !conn.ok &&
+          (conn.reason === 'timeout' || conn.reason === 'proxy_error' || conn.reason === 'network_error' || conn.reason === 'invalid_proxy')
+        ) {
+          remedyMsg = pack.diagRemedyProxy;
+        } else if (hasIssue) {
+          remedyMsg = pack.diagRemedyGeneral;
+        }
+        setDiagItemState(diagRemedyRow, hasIssue ? 'warn' : 'ok', pack.diagRemedyLbl, remedyMsg);
+
+        const cmdText =
+          Array.isArray(d.suggestedCommands) && d.suggestedCommands[0]
+            ? String(d.suggestedCommands[0])
+            : 'node tools/install-plugin.cjs --status';
+        diagCmdCode.textContent = cmdText;
+        diagCmdWrap.hidden = !hasIssue;
+        if (diagCmdWrap.style) diagCmdWrap.style.display = hasIssue ? 'flex' : 'none';
+      });
+    };
 
     const syncUsageBanner = () => {
       const pack = getPack();
@@ -389,7 +808,117 @@
         bridgeWarnEl.hidden = !offline;
         if (bridgeWarnEl.style) bridgeWarnEl.style.display = offline ? '' : 'none';
       });
+      renderDiagnostics();
     };
+
+    const runDiagnostics = () => {
+      if (state.diagnosing) return Promise.resolve(state.lastDiag);
+      const curMode = modeFn() || 'off';
+      if (!hasThoughtBridge()) {
+        syncFormIntoProfile();
+        const cur = getActiveProfile();
+        const issues = [];
+        if (!cur?.baseUrl) issues.push('invalid_base_url');
+        if (!cur?.model) issues.push('missing_model');
+        if (!cur?.hasApiKey && !cur?.draftKey && !isLocalKeylessUrl(cur?.baseUrl)) issues.push('missing_api_key');
+        state.lastDiag = {
+          ok: false,
+          bridgeOnline: false,
+          mode: curMode,
+          proxyMode: state.proxyMode,
+          effectiveProxy: '',
+          osProxyDetected: '',
+          profileReady: issues.length === 0,
+          profileIssues: issues,
+          connectivity: { ok: false, latencyMs: 0, reason: 'bridge_offline' },
+          translateToolSummaries: Boolean(state.translateToolSummaries),
+          translateTitles: Boolean(state.translateTitles),
+          suggestedCommands: ['node tools/install-plugin.cjs --status'],
+        };
+        syncUsageBanner();
+        return Promise.resolve(state.lastDiag);
+      }
+      syncFormIntoProfile();
+      const cur = getActiveProfile();
+      state.diagnosing = true;
+      renderDiagnostics();
+      const reqPayload = {
+        mode: curMode,
+        profileId: cur?.id,
+        baseUrl: cur?.baseUrl,
+        model: cur?.model,
+        apiKey: cur?.draftKey || '',
+        proxyMode: state.proxyMode,
+        customProxyUrl: state.proxyMode === 'custom' ? String(state.customProxyUrl || '').trim() : '',
+      };
+      const api = resolveThoughtApi();
+      const rpcCall = resolveThoughtRpcCall();
+      const invoke =
+        api && typeof api.diagnose === 'function'
+          ? () => api.diagnose(reqPayload)
+          : rpcCall
+          ? () => rpcCall({ action: 'diagnose', ...reqPayload })
+          : () => Promise.resolve({ ok: false, offline: true });
+      return Promise.resolve()
+        .then(invoke)
+        .then((res) => {
+          if (res && res.ok) {
+            state.lastDiag = { ...res, bridgeOnline: true };
+          } else {
+            state.lastDiag = {
+              ok: false,
+              bridgeOnline: !res?.offline,
+              mode: curMode,
+              proxyMode: state.proxyMode,
+              effectiveProxy: '',
+              osProxyDetected: '',
+              profileReady: false,
+              profileIssues: [],
+              connectivity: {
+                ok: false,
+                latencyMs: 0,
+                reason: res?.offline ? 'bridge_offline' : 'diagnose_failed',
+                error: redactUiDiagText(res?.error || ''),
+              },
+              translateToolSummaries: Boolean(state.translateToolSummaries),
+              translateTitles: Boolean(state.translateTitles),
+              suggestedCommands: ['node tools/install-plugin.cjs --status'],
+            };
+          }
+          return state.lastDiag;
+        })
+        .catch((err) => {
+          state.lastDiag = {
+            ok: false,
+            bridgeOnline: hasThoughtBridge(),
+            mode: curMode,
+            proxyMode: state.proxyMode,
+            effectiveProxy: '',
+            osProxyDetected: '',
+            profileReady: false,
+            profileIssues: [],
+            connectivity: {
+              ok: false,
+              latencyMs: 0,
+              reason: 'diagnose_failed',
+              error: redactUiDiagText(err?.message || String(err)),
+            },
+            translateToolSummaries: Boolean(state.translateToolSummaries),
+            translateTitles: Boolean(state.translateTitles),
+            suggestedCommands: ['node tools/install-plugin.cjs --status'],
+          };
+          return state.lastDiag;
+        })
+        .finally(() => {
+          state.diagnosing = false;
+          syncUsageBanner();
+        });
+    };
+
+    diagBtn.addEventListener('click', (ev) => {
+      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+      void runDiagnostics();
+    });
 
     // 0) Reading View Bar: kept in DOM for standalone/test usage; auto-hidden when parent settings-panel already renders thoughtView row
     const viewBar = mkEl('div', 'ag-cs-thought-bar');
@@ -488,6 +1017,7 @@
       if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
       const next = !state.translateToolSummaries;
       state.translateToolSummaries = next;
+      state.dirtyToolSum = true;
       syncToolSumUi();
       const api = resolveThoughtApi();
       if (api && typeof api.setTranslateToolSummaries === 'function') {
@@ -503,6 +1033,59 @@
     toolSumWrap.appendChild(toolSumBar);
     toolSumWrap.appendChild(toolSumDesc);
     sharedMountSlot.appendChild(toolSumWrap);
+
+    // 0b2) Optional Conversation Titles Render-Layer Auto-Translation Toggle (default false)
+    const titlesWrap = mkEl('div', 'ag-cs-thought-field');
+    titlesWrap.setAttribute('data-testid', 'thought-titles-row');
+    applyNoTranslateAttrs(titlesWrap);
+    const titlesBar = mkEl('div', 'ag-cs-thought-bar');
+    const titlesLbl = mkEl('span', 'ag-cs-thought-label');
+    titlesLbl.textContent = ui.thoughtTitlesLabel || initialPack.titlesLabel;
+    const titlesBtn = doc.createElement('button');
+    titlesBtn.type = 'button';
+    titlesBtn.className = 'ag-cs-thought-btn';
+    titlesBtn.setAttribute('role', 'switch');
+    titlesBtn.setAttribute('aria-checked', 'false');
+    titlesBtn.setAttribute('data-testid', 'thought-titles-toggle');
+    titlesBtn.textContent = initialPack.toolSumOff;
+    const titlesDesc = mkEl('p', 'ag-cs-thought-hint');
+    titlesDesc.setAttribute('data-testid', 'thought-titles-desc');
+    titlesDesc.textContent = ui.thoughtTitlesDesc || initialPack.titlesDesc;
+
+    const syncTitlesUi = () => {
+      const pack = getPack();
+      const on = Boolean(state.translateTitles);
+      guard(() => {
+        titlesLbl.textContent = ui.thoughtTitlesLabel || pack.titlesLabel;
+        titlesDesc.textContent = ui.thoughtTitlesDesc || pack.titlesDesc;
+        titlesBtn.setAttribute('aria-checked', String(on));
+        setToggleAttr(titlesBtn, 'data-pressed', on);
+        if (on) titlesBtn.setAttribute('data-primary', '1');
+        else titlesBtn.removeAttribute('data-primary');
+        titlesBtn.textContent = on ? pack.toolSumOn : pack.toolSumOff;
+      });
+    };
+
+    titlesBtn.addEventListener('click', (ev) => {
+      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+      const next = !state.translateTitles;
+      state.translateTitles = next;
+      state.dirtyTitles = true;
+      syncTitlesUi();
+      const api = resolveThoughtApi();
+      if (api && typeof api.setTranslateTitles === 'function') {
+        api.setTranslateTitles(next, { persistDaemon: false });
+      }
+      if (api && typeof api.saveConfig === 'function' && !state.busy) {
+        void api.saveConfig({ translateTitles: next }).catch(() => {});
+      }
+    });
+
+    titlesBar.appendChild(titlesLbl);
+    titlesBar.appendChild(titlesBtn);
+    titlesWrap.appendChild(titlesBar);
+    titlesWrap.appendChild(titlesDesc);
+    sharedMountSlot.appendChild(titlesWrap);
 
     // 0c) Custom Proxy URL Setting (HTTP / HTTPS / SOCKS5 / SOCKS5H + Auto / Custom / Direct mode + live validation)
     const proxyWrap = mkEl('div', 'ag-cs-thought-field');
@@ -1043,6 +1626,7 @@
       syncUsageBanner();
       syncViewModeUi();
       syncToolSumUi();
+      syncTitlesUi();
       syncProxyUi();
       syncStyleUi();
       renderProfilePillsAndForm();
@@ -1093,8 +1677,9 @@
       });
     };
 
-    const applySanitizedConfig = (res) => {
+    const applySanitizedConfig = (res, opts = {}) => {
       if (!res || !res.ok) return;
+      const fromSave = Boolean(opts && opts.fromSave);
       state.loaded = true;
       const mappedPreset = res.stylePreset === 'tech' ? 'technical' : res.stylePreset;
       state.stylePreset = ['technical', 'concise', 'custom'].includes(mappedPreset) ? mappedPreset : 'technical';
@@ -1115,8 +1700,13 @@
         state.savedMaskedProxy = res.hasProxyCredentials ? res.customProxyUrl : '';
       }
       state.hasProxyCredentials = Boolean(res.hasProxyCredentials);
-      if (typeof res.translateToolSummaries === 'boolean') {
+      if (typeof res.translateToolSummaries === 'boolean' && (fromSave || !state.dirtyToolSum)) {
         state.translateToolSummaries = res.translateToolSummaries;
+        if (fromSave) state.dirtyToolSum = false;
+      }
+      if (typeof res.translateTitles === 'boolean' && (fromSave || !state.dirtyTitles)) {
+        state.translateTitles = res.translateTitles;
+        if (fromSave) state.dirtyTitles = false;
       }
       if (Array.isArray(res.profiles) && res.profiles.length > 0) {
         state.profiles = res.profiles.map((p) => ({
@@ -1135,6 +1725,7 @@
         : state.profiles[0].id;
       syncViewModeUi();
       syncToolSumUi();
+      syncTitlesUi();
       syncProxyUi();
       syncStyleUi();
       renderProfilePillsAndForm();
@@ -1154,6 +1745,7 @@
         customPrompt: state.customPrompt,
         proxyMode: state.proxyMode,
         translateToolSummaries: Boolean(state.translateToolSummaries),
+        translateTitles: Boolean(state.translateTitles),
         activeProfileId: state.activeProfileId,
         profiles: state.profiles.map((p) => ({
           id: p.id,
@@ -1172,6 +1764,8 @@
 
     const reloadConfig = () => {
       state.loaded = false;
+      state.dirtyToolSum = false;
+      state.dirtyTitles = false;
       syncUsageBanner();
       syncActionButtons();
       const hostView = resolveHostPrism()?.getState?.()?.cfg?.thoughtView;
@@ -1289,7 +1883,7 @@
         .then((res) => {
           const curPack = getPack();
           if (res && res.ok) {
-            applySanitizedConfig(res);
+            applySanitizedConfig(res, { fromSave: true });
             const cur = getActiveProfile();
             setStatus('ok', curPack.saveOk(cur?.name, cur?.model));
             try {
@@ -1322,7 +1916,7 @@
       void api
         .saveConfig(payload)
         .then((savedRes) => {
-          if (savedRes && savedRes.ok) applySanitizedConfig(savedRes);
+          if (savedRes && savedRes.ok) applySanitizedConfig(savedRes, { fromSave: true });
           const cur = getActiveProfile();
           return api.testConnection({
             profileId: cur?.id,
@@ -1426,6 +2020,7 @@
     syncUsageBanner();
     syncViewModeUi();
     syncToolSumUi();
+    syncTitlesUi();
     syncProxyUi();
     syncStyleUi();
     renderProfilePillsAndForm();
@@ -1437,6 +2032,7 @@
       ensureLoaded,
       reloadConfig,
       refreshCacheStats,
+      runDiagnostics,
       onViewSwitched(nextView) {
         if (nextView !== 'bilingual' && nextView !== 'immersive') return;
         state.viewMode = nextView;

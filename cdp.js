@@ -14,6 +14,7 @@ const LEGACY_SETTING_BINDING = '__agClaudeStyleSetting';
 const OMNI_BINDING = '__agPrismOmniCall';
 const SIDEBAR_BINDING = '__agPrismSidebarCall';
 const INLINE_DIFF_BINDING = '__agPrismInlineDiffCall';
+const WALLPAPER_BINDING = '__agPrismWallpaperCall';
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
 
@@ -4881,7 +4882,7 @@ const BUNDLE_CACHE_MAX_FILE_BYTES = 4 * 1024 * 1024;
 const BUNDLE_CACHE_MAX_EXPR_BYTES = 2 * 1024 * 1024;
 const BUNDLE_CACHE_MAX_BOOTCFG_BYTES = 64 * 1024;
 const CHANNEL_CACHE_MAX_PAYLOAD_BYTES = 1024 * 1024;
-const CHANNEL_CACHE_NAMES = ['omni', 'sidebar', 'hostI18n', 'thought', 'inlineDiff'];
+const CHANNEL_CACHE_NAMES = ['omni', 'sidebar', 'hostI18n', 'thought', 'inlineDiff', 'wallpaper'];
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const CODE_HASH_RE = /^[0-9a-z]{1,16}$/;
 
@@ -4899,7 +4900,7 @@ const _bundleCacheStats = {
   channelDiskHits: 0,
   channelDiskMisses: 0,
   channelCompileRuns: 0,
-  channelHitsByName: { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0 },
+  channelHitsByName: { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0, wallpaper: 0 },
   lastOutcome: 'none',
   lastCachePath: null,
 };
@@ -6512,7 +6513,7 @@ function resetBundleCacheStats() {
   _bundleCacheStats.channelDiskHits = 0;
   _bundleCacheStats.channelDiskMisses = 0;
   _bundleCacheStats.channelCompileRuns = 0;
-  _bundleCacheStats.channelHitsByName = { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0 };
+  _bundleCacheStats.channelHitsByName = { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0, wallpaper: 0 };
   _bundleCacheStats.lastOutcome = 'none';
   _bundleCacheStats.lastCachePath = null;
   try { _omniClientCache.cachedPaths?.clear?.(); } catch {}
@@ -6520,6 +6521,7 @@ function resetBundleCacheStats() {
   try { _hostI18nCache.cachedPaths?.clear?.(); } catch {}
   try { _thoughtAssetsCache.cachedPaths?.clear?.(); } catch {}
   try { _inlineDiffClientCache.cachedPaths?.clear?.(); } catch {}
+  try { _wallpaperAssetsCache.cachedPaths?.clear?.(); } catch {}
   invalidateBundleCacheRootCache();
 }
 
@@ -6581,7 +6583,7 @@ function isValidChannelCacheEntry(channelName, entry) {
     if (computeHash(`${entry.minRuntime}:${entry.dictRaw}`) !== entry.codeHash) return false;
     return sha256Text(`${entry.codeHash}\0${entry.minRuntime}\0${entry.dictRaw}`) === entry.payloadSha256;
   }
-  if (channelName === 'thought') {
+  if (channelName === 'thought' || channelName === 'wallpaper') {
     if (!hasOwn('minClient') || typeof entry.minClient !== 'string' || entry.minClient.length === 0) return false;
     if (!hasOwn('minSettingsUi') || typeof entry.minSettingsUi !== 'string' || entry.minSettingsUi.length === 0) return false;
     const totalBytes = Buffer.byteLength(entry.minClient, 'utf8') + Buffer.byteLength(entry.minSettingsUi, 'utf8');
@@ -6883,6 +6885,7 @@ function markChannelCachedOnPath(cachePath, chMap) {
     hostI18n: _hostI18nCache,
     thought: _thoughtAssetsCache,
     inlineDiff: _inlineDiffClientCache,
+    wallpaper: _wallpaperAssetsCache,
   };
   for (const name of CHANNEL_CACHE_NAMES) {
     const rec = chMap[name];
@@ -8261,7 +8264,303 @@ function buildInlineDiffInjectExpression(config = null, opts = null) {
   })()`;
 }
 
+let _wallpaperAssetsCache = { sig: '', sourceHash: '', minClient: '', minSettingsUi: '', codeHash: '', cachedPaths: new Set() };
+
+function readCompiledWallpaperAssets(opts = null) {
+  const clientPath = path.join(__dirname, 'vendor', 'wallpaper', 'wallpaper-client.js');
+  const settingsUiPath = path.join(__dirname, 'vendor', 'wallpaper', 'wallpaper-settings-ui.js');
+  if (!fs.existsSync(clientPath) || !fs.existsSync(settingsUiPath)) {
+    return { sig: '', minClient: '', minSettingsUi: '', codeHash: '' };
+  }
+  const sig = `${getFileSig(clientPath)}|${getFileSig(settingsUiPath)}`;
+  const cachePath = resolveBundleCachePathOption(opts);
+  if (!cachePath && _wallpaperAssetsCache.sig === sig && _wallpaperAssetsCache.codeHash) {
+    return _wallpaperAssetsCache;
+  }
+  const clientBuf = fs.readFileSync(clientPath);
+  const settingsBuf = fs.readFileSync(settingsUiPath);
+  return resolveChannelAssetsWithDiskCache({
+    channelName: 'wallpaper',
+    memCache: _wallpaperAssetsCache,
+    setMemCache: (v) => { _wallpaperAssetsCache = v; },
+    sig,
+    fileEntries: [
+      { rel: 'vendor/wallpaper/wallpaper-client.js', content: clientBuf },
+      { rel: 'vendor/wallpaper/wallpaper-settings-ui.js', content: settingsBuf },
+    ],
+    opts,
+    compileFn: () => {
+      const minClient = minifySingleSource(clientBuf.toString('utf8'));
+      const minSettingsUi = minifySingleSource(settingsBuf.toString('utf8'));
+      const codeHash = computeHash(`${minClient}\n${minSettingsUi}`);
+      return { minClient, minSettingsUi, codeHash };
+    },
+    toCacheEntry: (assets, sourceHash) => ({
+      sourceHash,
+      codeHash: assets.codeHash,
+      minClient: assets.minClient,
+      minSettingsUi: assets.minSettingsUi,
+      payloadSha256: sha256Text(`${assets.codeHash}\0${assets.minClient}\0${assets.minSettingsUi}`),
+      updatedAt: Date.now(),
+    }),
+    fromCacheEntry: (entry) => ({
+      minClient: entry.minClient,
+      minSettingsUi: entry.minSettingsUi,
+      codeHash: entry.codeHash,
+    }),
+  });
+}
+
+const WALLPAPER_REMOVE_EXPRESSION = `(() => {
+  try {
+    document.querySelectorAll?.('#ag-prism-wallpaper-root video')?.forEach?.((v) => {
+      try { v.pause?.(); } catch {}
+      try { v.removeAttribute?.('src'); } catch {}
+      try { v.src = ''; } catch {}
+      try { v.load?.(); } catch {}
+    });
+  } catch {}
+  try { (window.__agPrismWallpaper || globalThis.__agPrismWallpaper)?.destroy?.(); } catch {}
+  try { (window.__agPrismWallpaperBridge || globalThis.__agPrismWallpaperBridge)?.dispose?.(); } catch {}
+  try { document.getElementById?.('ag-prism-wallpaper-root')?.remove?.(); } catch {}
+  try { document.getElementById?.('ag-prism-wallpaper-css')?.remove?.(); } catch {}
+  try {
+    const slot = document.querySelector?.('[data-testid="prism-wallpaper-slot"]');
+    if (slot) {
+      try { slot.__agPrismWpUiHandle?.destroy?.(); } catch {}
+      slot.__agPrismWpUiHandle = null;
+      while (slot.firstChild) slot.removeChild(slot.firstChild);
+    }
+  } catch {}
+  try {
+    const de = document.documentElement;
+    if (de) {
+      de.removeAttribute?.('data-ag-prism-wallpaper');
+      de.removeAttribute?.('data-ag-prism-wallpaper-hole');
+      if (de.style && typeof de.style.removeProperty === 'function') {
+        ['--ag-prism-wp-opacity', '--ag-prism-wp-blur', '--ag-prism-wp-blur-pad', '--ag-prism-wp-dim', '--ag-prism-wp-fit'].forEach((p) =>
+          de.style.removeProperty(p)
+        );
+      }
+    }
+  } catch {}
+  try { delete window.__agPrismWallpaper; } catch {}
+  try { delete globalThis.__agPrismWallpaper; } catch {}
+  try { delete window.__agPrismWallpaperFactory; } catch {}
+  try { delete globalThis.__agPrismWallpaperFactory; } catch {}
+  try { delete window.__agPrismWallpaperSettingsUi; } catch {}
+  try { delete globalThis.__agPrismWallpaperSettingsUi; } catch {}
+  try { delete window.__prismMountWallpaperUi; } catch {}
+  try { delete globalThis.__prismMountWallpaperUi; } catch {}
+  try { delete window.__agPrismWallpaperBridge; } catch {}
+  try { delete globalThis.__agPrismWallpaperBridge; } catch {}
+  try { delete window.__agPrismWallpaperResolve; } catch {}
+  try { delete globalThis.__agPrismWallpaperResolve; } catch {}
+  return { ok: true, status: 'off' };
+})()`;
+
+// 第七通道独立注入（本地静态/动态背景壁纸引擎 + 5 语种设置卡片）：完全独立于 Channel 1，缺文件时安全返回 ''，支持 codeHash 幂等复用与零泄漏热卸载
+function buildWallpaperExpression(config = null, opts = null) {
+  let minClient = '';
+  let minSettingsUi = '';
+  let codeHash = '';
+  if (opts && typeof opts.customClientSource === 'string' && typeof opts.customSettingsUiSource === 'string') {
+    minClient = opts.customClientSource ? minifySingleSource(opts.customClientSource) : '';
+    minSettingsUi = opts.customSettingsUiSource ? minifySingleSource(opts.customSettingsUiSource) : '';
+    codeHash = minClient && minSettingsUi ? computeHash(`${minClient}\n${minSettingsUi}`) : '';
+  } else {
+    const compiled = readCompiledWallpaperAssets(opts);
+    minClient = compiled.minClient;
+    minSettingsUi = compiled.minSettingsUi;
+    codeHash = compiled.codeHash;
+  }
+  if (!minClient || !minSettingsUi || !codeHash) {
+    return '';
+  }
+
+  const initialWpCfg =
+    opts && opts.initialWallpaperConfig && typeof opts.initialWallpaperConfig === 'object'
+      ? opts.initialWallpaperConfig
+      : null;
+  const bootWpCfgJson = serializeJsonForEval(initialWpCfg);
+  const hashJson = serializeJsonForEval(codeHash);
+
+  return `(() => {
+    try {
+      if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };
+    } catch {
+      return { ok: false, status: 'skipped-subframe' };
+    }
+    const hasDomMarker = () => {
+      try {
+        if (
+          document.body &&
+          document.body.classList &&
+          (document.body.classList.contains('theme-standalone') || document.body.classList.contains('monaco-workbench'))
+        ) {
+          return true;
+        }
+        return Boolean(
+          typeof document.querySelector === 'function' &&
+            document.querySelector(
+              '.agy-shell, .agy-home, [data-testid="aux-pane-split"], [data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="model-selector-trigger"], .monaco-workbench'
+            )
+        );
+      } catch {
+        return false;
+      }
+    };
+    let needDomMarkerOnReady = false;
+    let isPlainHttpLocalhost = false;
+    try {
+      const loc = typeof window !== 'undefined' && window.location;
+      const href = loc && typeof loc.href === 'string' ? loc.href : '';
+      if (href) {
+        const low = href.toLowerCase();
+        if (low.startsWith('devtools://') || low.startsWith('data:') || low.startsWith('chrome:') || low.startsWith('chrome-extension:') || low.startsWith('edge:') || low.startsWith('blob:') || low.startsWith('plugin:')) {
+          return { ok: false, status: 'skipped-non-host' };
+        }
+        if (low.startsWith('vscode-file://') || low.startsWith('app://') || low.startsWith('about:')) {
+          const ttl = String(document.title || '').trim();
+          if (/^(?:untitled|launchpad)$/i.test(ttl) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(low)) {
+            return { ok: false, status: 'skipped-non-host' };
+          }
+        }
+        if (low.startsWith('http:') || low.startsWith('https:')) {
+          const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);
+          if (!m) return { ok: false, status: 'skipped-non-host' };
+          const pathname = (m[3] || '/').toLowerCase();
+          if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test(pathname)) {
+            return { ok: false, status: 'skipped-non-host' };
+          }
+          if (!hasDomMarker()) {
+            isPlainHttpLocalhost = m[1].toLowerCase() === 'http';
+            const rs = String(document.readyState || '');
+            if (isPlainHttpLocalhost) {
+              if (rs === 'loading') needDomMarkerOnReady = true;
+              else return { ok: false, status: 'skipped-non-host' };
+            } else if (!/\\bantigravity\\b/i.test(String(document.title || ''))) {
+              if (rs === 'loading') needDomMarkerOnReady = true;
+              else return { ok: false, status: 'skipped-non-host' };
+            }
+          }
+        }
+      }
+    } catch {}
+
+    const mountSettingsSlot = () => {
+      try {
+        const sec = document.getElementById?.('ag-cs-settings-sec') || document.getElementById?.('ag-prism-settings-sec');
+        if (sec && typeof sec.__prismMountWp === 'function') {
+          sec.__prismMountWp();
+          return;
+        }
+        const slot = document.querySelector?.('[data-testid="prism-wallpaper-slot"]');
+        const fn = window.__prismMountWallpaperUi || globalThis.__prismMountWallpaperUi;
+        if (slot && typeof fn === 'function') fn(slot, {});
+      } catch {}
+    };
+
+    const cleanupWallpaper = () => {
+      try {
+        document.querySelectorAll?.('#ag-prism-wallpaper-root video')?.forEach?.((v) => {
+          try { v.pause?.(); } catch {}
+          try { v.removeAttribute?.('src'); } catch {}
+          try { v.src = ''; } catch {}
+          try { v.load?.(); } catch {}
+        });
+      } catch {}
+      try { (window.__agPrismWallpaper || globalThis.__agPrismWallpaper)?.destroy?.(); } catch {}
+      try { (window.__agPrismWallpaperBridge || globalThis.__agPrismWallpaperBridge)?.dispose?.(); } catch {}
+      try { document.getElementById?.('ag-prism-wallpaper-root')?.remove?.(); } catch {}
+      try { document.getElementById?.('ag-prism-wallpaper-css')?.remove?.(); } catch {}
+      try {
+        const slot = document.querySelector?.('[data-testid="prism-wallpaper-slot"]');
+        if (slot) {
+          try { slot.__agPrismWpUiHandle?.destroy?.(); } catch {}
+          slot.__agPrismWpUiHandle = null;
+          while (slot.firstChild) slot.removeChild(slot.firstChild);
+        }
+      } catch {}
+      try { delete window.__agPrismWallpaper; } catch {}
+      try { delete globalThis.__agPrismWallpaper; } catch {}
+      try { delete window.__agPrismWallpaperFactory; } catch {}
+      try { delete globalThis.__agPrismWallpaperFactory; } catch {}
+      try { delete window.__agPrismWallpaperSettingsUi; } catch {}
+      try { delete globalThis.__agPrismWallpaperSettingsUi; } catch {}
+      try { delete window.__prismMountWallpaperUi; } catch {}
+      try { delete globalThis.__prismMountWallpaperUi; } catch {}
+      try { delete window.__agPrismWallpaperBridge; } catch {}
+      try { delete globalThis.__agPrismWallpaperBridge; } catch {}
+      try { delete window.__agPrismWallpaperResolve; } catch {}
+      try { delete globalThis.__agPrismWallpaperResolve; } catch {}
+    };
+
+    const bootWpCfg = ${bootWpCfgJson};
+    const targetHash = ${hashJson};
+    const mountOrReuse = () => {
+      if (needDomMarkerOnReady && !hasDomMarker() && (isPlainHttpLocalhost || !/\\bantigravity\\b/i.test(String(document.title || '')))) {
+        return { ok: false, status: 'skipped-non-host' };
+      }
+      const existing = window.__agPrismWallpaper || globalThis.__agPrismWallpaper;
+      const existingUi = window.__agPrismWallpaperSettingsUi || globalThis.__agPrismWallpaperSettingsUi;
+      if (
+        existing &&
+        !existing.getDebugState?.()?.destroyed &&
+        existing.__prismCodeHash === targetHash &&
+        existingUi &&
+        existingUi.__prismCodeHash === targetHash
+      ) {
+        try { existing.sync?.(bootWpCfg); } catch {}
+        mountSettingsSlot();
+        return { ok: true, reused: true, codeHash: targetHash };
+      }
+
+      cleanupWallpaper();
+      ;${minClient};
+      ;${minSettingsUi};
+
+      let mounted = window.__agPrismWallpaper || globalThis.__agPrismWallpaper;
+      const factory = window.__agPrismWallpaperFactory || globalThis.__agPrismWallpaperFactory;
+      if (!mounted && typeof factory === 'function') {
+        try {
+          mounted = factory({ window, document });
+        } catch {}
+      }
+      if (mounted && typeof mounted === 'object') {
+        mounted.__prismCodeHash = targetHash;
+        try { window.__agPrismWallpaper = mounted; } catch {}
+        try { globalThis.__agPrismWallpaper = mounted; } catch {}
+      }
+      const mountedUi = window.__agPrismWallpaperSettingsUi || globalThis.__agPrismWallpaperSettingsUi;
+      if (mountedUi && typeof mountedUi === 'object') {
+        mountedUi.__prismCodeHash = targetHash;
+        try { window.__agPrismWallpaperSettingsUi = mountedUi; } catch {}
+        try { globalThis.__agPrismWallpaperSettingsUi = mountedUi; } catch {}
+      }
+      try { mounted?.sync?.(bootWpCfg); } catch {}
+      mountSettingsSlot();
+      return { ok: true, status: 'mounted', codeHash: targetHash };
+    };
+
+    if ((needDomMarkerOnReady || !document.documentElement) && typeof document.addEventListener === 'function') {
+      document.addEventListener('DOMContentLoaded', () => { try { mountOrReuse(); } catch {} }, { once: true });
+      return { ok: true, status: 'deferred', codeHash: targetHash };
+    }
+    return mountOrReuse();
+  })()`;
+}
+
 const REMOVE_EXPRESSION = `(() => {
+  try {
+    document.querySelectorAll?.('#ag-prism-wallpaper-root video')?.forEach?.((v) => {
+      try { v.pause?.(); } catch {}
+      try { v.removeAttribute?.('src'); } catch {}
+      try { v.src = ''; } catch {}
+      try { v.load?.(); } catch {}
+    });
+  } catch (e) {}
+  try { (window.__agPrismWallpaper || globalThis.__agPrismWallpaper)?.destroy?.(); } catch (e) {}
   try { window.__agPrismInlineDiff?.destroy?.(); } catch (e) {}
   try {
     if (window.__agPrismTelemetry && typeof window.__agPrismTelemetry.destroy === 'function') {
@@ -8340,6 +8639,11 @@ const REMOVE_EXPRESSION = `(() => {
       window.__agPrismSidebarBridge.dispose();
     }
   } catch (e) {}
+  try {
+    if (window.__agPrismWallpaperBridge && typeof window.__agPrismWallpaperBridge.dispose === 'function') {
+      window.__agPrismWallpaperBridge.dispose();
+    }
+  } catch (e) {}
   delete window.__agPrism;
   delete window.__agClaudeStyle;
   delete window.__agPrismTelemetry;
@@ -8365,6 +8669,12 @@ const REMOVE_EXPRESSION = `(() => {
   try { delete window.__agPrismInlineDiff; } catch {}
   try { delete window.__agPrismInlineDiffFactory; } catch {}
   try { delete window.__agPrismInlineDiffResolve; } catch {}
+  try { delete window.__agPrismWallpaper; } catch {}
+  try { delete window.__agPrismWallpaperFactory; } catch {}
+  try { delete window.__agPrismWallpaperSettingsUi; } catch {}
+  try { delete window.__prismMountWallpaperUi; } catch {}
+  try { delete window.__agPrismWallpaperBridge; } catch {}
+  try { delete window.__agPrismWallpaperResolve; } catch {}
   delete window.__agPrismBrandLogoSvg;
   delete window.__agPrismHostI18n;
   delete window.__agPrismHostI18nFactory;
@@ -8381,6 +8691,12 @@ const REMOVE_EXPRESSION = `(() => {
   delete globalThis.__agPrismThought;
   delete globalThis.__agPrismInlineDiff;
   delete globalThis.__agPrismInlineDiffFactory;
+  delete globalThis.__agPrismWallpaper;
+  delete globalThis.__agPrismWallpaperFactory;
+  delete globalThis.__agPrismWallpaperSettingsUi;
+  delete globalThis.__prismMountWallpaperUi;
+  delete globalThis.__agPrismWallpaperBridge;
+  delete globalThis.__agPrismWallpaperResolve;
   delete globalThis.__agPrismOmni;
   delete globalThis.__agPrismSidebar;
   delete globalThis.__agPrismThoughtSettingsUi;
@@ -8459,11 +8775,16 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-cs-scroll-bottom',
       'data-ag-cs-resizing',
       'data-ag-cs-mascot-drag',
+      'data-ag-prism-wallpaper',
+      'data-ag-prism-wallpaper-hole',
     ].forEach((attr) => root.removeAttribute(attr));
     if (root.getAttribute('data-ag-cjk') === '1') root.removeAttribute('data-ag-cjk');
     if (root.style && typeof root.style.removeProperty === 'function') {
       root.style.removeProperty('--ag-spring-sidebar-ease');
       root.style.removeProperty('--ag-spring-sidebar-dur');
+      ['--ag-prism-wp-opacity', '--ag-prism-wp-blur', '--ag-prism-wp-blur-pad', '--ag-prism-wp-dim', '--ag-prism-wp-fit'].forEach((p) =>
+        root.style.removeProperty(p)
+      );
     }
   }
   const chunkParents = new Set();
@@ -8625,7 +8946,7 @@ const REMOVE_EXPRESSION = `(() => {
   const nodes = document.querySelectorAll(
     '#' + ${JSON.stringify(STYLE_ID)} +
     ', #' + ${JSON.stringify(LEGACY_STYLE_ID)} +
-    ', #ag-prism-host-alert-css, #ag-prism-settings-v101-css, #ag-prism-studio-v101-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-prism-inline-diff-css, #ag-cs-settings-sec, [data-testid="prism-thought-ai-config"], [data-testid="prism-thought-general-config"], .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ag-prism-sidebar-studio, .ag-prism-sidebar-rail, .ag-prism-sidebar-popover, .ag-prism-sidebar-modal, .ag-cs-home-panel, .ag-cs-home-panel-seat, .ag-cs-ripple-layer, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-mascot, .ag-v2-mascot-stage, .ag-v2-habitat-prop, .ag-cs-crystal-bar, [data-testid="orchestrator-effort-bar"], .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-nav-outline-trigger, .ag-cs-smooth-caret, .ag-cs-perf-backdrop, .ag-cs-ctx-menu, .ag-cs-ctx-toast'
+    ', #ag-prism-host-alert-css, #ag-prism-settings-v101-css, #ag-prism-studio-v101-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-prism-inline-diff-css, #ag-prism-wallpaper-root, #ag-prism-wallpaper-css, #ag-cs-settings-sec, [data-testid="prism-thought-ai-config"], [data-testid="prism-thought-general-config"], .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ag-prism-sidebar-studio, .ag-prism-sidebar-rail, .ag-prism-sidebar-popover, .ag-prism-sidebar-modal, .ag-cs-home-panel, .ag-cs-home-panel-seat, .ag-cs-ripple-layer, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-mascot, .ag-v2-mascot-stage, .ag-v2-habitat-prop, .ag-cs-crystal-bar, [data-testid="orchestrator-effort-bar"], .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-nav-outline-trigger, .ag-cs-smooth-caret, .ag-cs-perf-backdrop, .ag-cs-ctx-menu, .ag-cs-ctx-toast'
   );
   nodes.forEach((n) => n.remove());
   return { removed: nodes.length };
@@ -8640,6 +8961,7 @@ module.exports = {
   OMNI_BINDING,
   SIDEBAR_BINDING,
   INLINE_DIFF_BINDING,
+  WALLPAPER_BINDING,
   PORT_FILE,
   PID_FILE,
   CONFIG_FILE,
@@ -8706,5 +9028,7 @@ module.exports = {
   THOUGHT_REMOVE_EXPRESSION,
   buildInlineDiffInjectExpression,
   INLINE_DIFF_REMOVE_EXPRESSION,
+  buildWallpaperExpression,
+  WALLPAPER_REMOVE_EXPRESSION,
   isSafeV2SidebarClientSource,
 };

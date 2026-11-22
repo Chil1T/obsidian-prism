@@ -140,6 +140,25 @@ npm run install:plugin
 ```
 Then open **Settings → Appearance** in Antigravity to expand the **Obsidian Prism** control panel.
 
+### Standard AI-Assisted Install Workflow & Thought Translator Checklist
+If you ask an AI coding assistant (Claude Code, Cursor, Antigravity Agent, etc.) to install Obsidian Prism from source, **always run these two commands in order**:
+```bash
+git clone https://github.com/RMvdesi/obsidian-prism.git
+cd obsidian-prism
+
+# 1. Full native plugin deployment (syncs all channels and starts the persistent Sidecar daemon)
+npm run install:plugin
+
+# 2. Verify installation health, background daemon, and on-demand channels
+node tools/install-plugin.cjs --status
+```
+- **Do NOT use `npm run inject` as an installer**: `npm run inject` only performs a one-shot temporary front-end injection. It does **not** install into `~/.gemini/config/plugins/obsidian-prism` and does **not** start the persistent Sidecar daemon — leaving Thought Translator, local telemetry, and wallpaper channels offline and causing styles to disappear on reload, restart, or client update.
+- **Verify `--status` output**: confirm `installed: true`, `daemonAlive: true`, `hasThoughtTranslator: true`, and `hasWallpaperChannel: true`. If `bareAntigravityRunning: true` (typical right after an in-app update relaunches without flags), close Antigravity and reopen it once via your patched Desktop or Start Menu shortcut (which automatically carries `--remote-debugging-port=0`).
+- **Thought Translator Troubleshooting Checklist**:
+  1. **OFF by default**: Thought Translator (Channel 5) ships disabled (`thoughtTranslate: "off"`, `0 B` injected). Open **Settings → Appearance → Obsidian Prism** and explicitly select **Machine Translation (zero-config)** or **AI Streaming** (and optionally toggle automatic session-title translation).
+  2. **No translation after enabling**: click the **1-Click Diagnose** button at the top of the Thought Translator settings card to inspect daemon bridge health, active mode/model configuration, OS proxy detection, and upstream connectivity — or re-run `node tools/install-plugin.cjs --status` to confirm `daemonAlive: true`.
+  3. **UI reverted right after an Antigravity update**: accept the daemon/watcher's single non-repeating relaunch prompt, or simply restart Antigravity once via its patched shortcut.
+
 ### FAQ & `Antigravity v2.33.0+` Compatibility
 - **Why did the UI temporarily revert to stock right after an in-app update to `Antigravity v2.33.0+`?**
   Starting in `Antigravity v2.33.0`, the host switched its local DevTools bridge to explicit opt-in (`--remote-debugging-port=0`, binding an ephemeral `127.0.0.1` port with a local token file), and Electron's built-in `quitAndInstall` updater relaunches the app once without command-line arguments. Obsidian Prism handles this automatically in two layers:

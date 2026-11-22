@@ -2088,3 +2088,546 @@ test('12) Red-team #193 [P0-2]: cdp.js cleans up ag-prism-studio-v101-css and da
   assert.equal(doc.getElementById('ag-prism-studio-v101-css'), null, 'REMOVE_EXPRESSION must remove #ag-prism-studio-v101-css');
   assert.equal(docEl.getAttribute('data-ag-prism-scope'), null, 'REMOVE_EXPRESSION must strip data-ag-prism-scope');
 });
+
+test('13) CodeQL High alerts zero-regression: 0 rejectUnauthorized:false, 0 HTML script regexp, 0 innerHTML in thought UI/client', () => {
+  const thoughtTestSrc = fs.readFileSync(path.join(ROOT_DIR, 'test', 'thought-translator.test.mjs'), 'utf8');
+  assert.equal(
+    /rejectUnauthorized\s*:\s*false/.test(thoughtTestSrc),
+    false,
+    'test/thought-translator.test.mjs must contain 0 occurrences of rejectUnauthorized: false (CodeQL #32 & #33)'
+  );
+
+  const secHardeningSrc = fs.readFileSync(path.join(ROOT_DIR, 'test', 'security-sidecar-hardening.test.mjs'), 'utf8');
+  assert.equal(
+    /\/<script[\s\S]*?<\\\/script>\//i.test(secHardeningSrc),
+    false,
+    'test/security-sidecar-hardening.test.mjs must not use HTML <script> filtering regex (CodeQL #34)'
+  );
+  assert.ok(
+    secHardeningSrc.includes("html.lastIndexOf(openTag)") || secHardeningSrc.includes("html.lastIndexOf('<script>')"),
+    'extractInlineWorkbenchScript must use linear lastIndexOf/indexOf parsing'
+  );
+
+  const clientSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-client.js'), 'utf8');
+  const uiSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-settings-ui.js'), 'utf8');
+  assert.equal(/\.innerHTML\s*=/.test(clientSrc), false, 'thought-client.js must have 0 innerHTML writes');
+  assert.equal(/\.innerHTML\s*=/.test(uiSrc), false, 'thought-settings-ui.js must have 0 innerHTML writes');
+
+  const cdp = require(path.join(ROOT_DIR, 'cdp.js'));
+  const ch1Expr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
+  assert.equal(
+    ch1Expr.includes('thought-diagnose-btn') || ch1Expr.includes('thought-titles-toggle') || ch1Expr.includes('scanConversationTitles'),
+    false,
+    'Conversation title translation & one-click diagnostics must add 0 B to Channel 1 bundle'
+  );
+  const ch5Expr = cdp.buildThoughtExpression({ ...cdp.DEFAULT_CONFIG, thoughtTranslate: 'ai' });
+  assert.ok(ch5Expr.length > 0 && new vm.Script(ch5Expr), 'Channel 5 thought bundle must parse cleanly via vm.Script');
+  // Execute packed/minified Channel 5 bundle in a clean VM sandbox to verify runtime integrity after mangling/LZSS
+  const ch5Env = createMockDomEnv({
+    location: { href: 'vscode-file://vscode-app/index.html' },
+    __agPrismThoughtCall: () => {},
+  });
+  ch5Env.sandbox.self = ch5Env.sandbox.window;
+  ch5Env.sandbox.top = ch5Env.sandbox.window;
+  ch5Env.rootBody.classList.add('theme-standalone');
+  const ch5Res = vm.runInNewContext(ch5Expr, ch5Env.sandbox);
+  assert.equal(ch5Res?.ok, true, `Packed Channel 5 must mount cleanly (got ${JSON.stringify(ch5Res)})`);
+  assert.equal(typeof ch5Env.sandbox.__agPrismThought?.getTranslateTitles, 'function');
+  assert.equal(typeof ch5Env.sandbox.__agPrismThought?.setTranslateTitles, 'function');
+  assert.equal(typeof ch5Env.sandbox.__agPrismThought?.diagnose, 'function');
+  assert.equal(typeof ch5Env.sandbox.__agPrismThoughtSettingsUi?.createThoughtAiConfigBox, 'function');
+  const packedBox = ch5Env.sandbox.__agPrismThoughtSettingsUi.createThoughtAiConfigBox({
+    mkEl: (t, c) => ch5Env.doc.createElement(t, c ? { class: c } : {}),
+    btnClass: 'btn',
+    getMode: () => 'ai',
+    getLang: () => 'zh-CN',
+  });
+  assert.ok(packedBox.box.querySelector('[data-testid="thought-diagnose-btn"]'));
+  assert.ok(packedBox.box.querySelector('[data-testid="thought-titles-toggle"]'));
+  ch5Env.sandbox.__agPrismThought.destroy();
+});
+
+test('14) Conversation titles auto-translation: config persistence, safe filtering, identifier protection, React TextNode reuse, detached pruning, lossless restore & 5-locale UI', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-titles-'));
+  try {
+    // A) Legacy config backward compat: missing translateTitles defaults to false
+    const legacyFile = path.join(tmpDir, 'obsidian-prism-thought.json');
+    fs.writeFileSync(
+      legacyFile,
+      JSON.stringify({
+        version: 1,
+        stylePreset: 'technical',
+        activeProfileId: 'default',
+        profiles: [{ id: 'default', name: 'P1', baseUrl: 'https://api.openai.com/v1', apiKey: '', model: 'gpt-4o-mini' }],
+      }),
+      'utf8'
+    );
+
+    const gtxBatchCalls = [];
+    const svc = new ThoughtTranslatorService({
+      configDir: tmpDir,
+      fetchImpl: async (url) => {
+        const q = new URL(String(url)).searchParams.get('q') || '';
+        gtxBatchCalls.push(q);
+        const translated = q
+          .replace(/Optimize project performance/g, '优化项目性能')
+          .replace(/Refactor /g, '重构 ')
+          .replace(/ proxy timeout/g, ' 代理超时')
+          .replace(/Fix login redirect flow/g, '修复登录重定向流程')
+          .replace(/Debug memory leak in daemon/g, '调试守护进程内存泄漏');
+        return new Response(JSON.stringify([[[translated, q]]]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+    });
+
+    const initialCfg = svc.getSanitizedConfig();
+    assert.equal(initialCfg.translateTitles, false, 'translateTitles must default to false for legacy configs');
+    assert.equal(svc.getWarmCacheSnapshot().translateTitles, false, 'get-cache snapshot must expose translateTitles=false');
+
+    const savedOn = svc.saveConfig({ translateTitles: true });
+    assert.equal(savedOn.ok, true);
+    assert.equal(savedOn.translateTitles, true);
+    assert.equal(svc.getSanitizedConfig().translateTitles, true);
+    assert.equal(svc.getWarmCacheSnapshot().translateTitles, true);
+    const persistedJson = JSON.parse(fs.readFileSync(legacyFile, 'utf8'));
+    assert.equal(persistedJson.translateTitles, true, 'translateTitles must persist to obsidian-prism-thought.json');
+
+    // Reset back to false to verify default-off runtime gating before enabling
+    svc.saveConfig({ translateTitles: false });
+
+    // B) Client-side scanning, strict filtering, sidebarStudio dedup, React reuse & detached cleanup
+    const clientSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-client.js'), 'utf8');
+    const batchRpcCalls = [];
+    const { doc, docEl, rootBody, sandbox } = createMockDomEnv({
+      __agPrism: { getState: () => ({ cfg: { sidebarStudio: 'on', language: 'zh-CN' } }) },
+      __agPrismThoughtBridge: {
+        call: async ({ action, ...rest }) => {
+          if (action === 'get-cache') return svc.getWarmCacheSnapshot();
+          if (action === 'get-config') return svc.getSanitizedConfig();
+          if (action === 'save-config') return svc.saveConfig(rest);
+          return { ok: true };
+        },
+        translateStream: async (opts) => {
+          if (String(opts.mode || '').startsWith('tool-batch:')) batchRpcCalls.push(opts);
+          return svc.translateThought(opts);
+        },
+        cancelTranslate: async () => ({ ok: true }),
+      },
+    });
+    docEl.setAttribute('data-ag-cs-lang', 'zh-CN');
+    docEl.setAttribute('data-ag-prism-sidebar', 'on');
+    vm.runInNewContext(clientSrc, sandbox);
+    const api = sandbox.__agPrismThought;
+
+    // Sidebar row 1: English title + timestamp + child button + badge
+    const row1 = doc.createElement('button', { 'data-testid': 'conversation-row-sidebar' });
+    const row1Title = doc.createElement('span');
+    row1Title.textContent = 'Optimize project performance';
+    const row1Time = doc.createElement('span');
+    row1Time.textContent = '2m';
+    const row1TimeYesterday = doc.createElement('span');
+    row1TimeYesterday.textContent = 'Yesterday';
+    const row1Badge = doc.createElement('span', { class: 'status-badge badge' });
+    row1Badge.textContent = 'Running now';
+    const row1SubBtn = doc.createElement('button');
+    row1SubBtn.textContent = 'Delete conversation';
+    row1.appendChild(row1Title);
+    row1.appendChild(row1Time);
+    row1.appendChild(row1TimeYesterday);
+    row1.appendChild(row1Badge);
+    row1.appendChild(row1SubBtn);
+    rootBody.appendChild(row1);
+
+    // Sidebar row 2: English title with PascalCase identifier + pure filename + short word + Chinese title
+    const row2 = doc.createElement('div', { 'data-testid': 'conversation-row-sidebar' });
+    const row2Title = doc.createElement('span');
+    row2Title.textContent = 'Refactor ThoughtTranslatorService proxy timeout';
+    const row2File = doc.createElement('span');
+    row2File.textContent = 'package.json';
+    const row2Short = doc.createElement('span');
+    row2Short.textContent = 'Hi';
+    const row2Zh = doc.createElement('span');
+    row2Zh.textContent = '已经中文的会话标题';
+    row2.appendChild(row2Title);
+    row2.appendChild(row2File);
+    row2.appendChild(row2Short);
+    row2.appendChild(row2Zh);
+    rootBody.appendChild(row2);
+
+    // History row 3: English title + __OPID collision title
+    const row3 = doc.createElement('div', { 'data-testid': 'conversation-row-history' });
+    const row3Title = doc.createElement('span');
+    row3Title.textContent = 'Fix login redirect flow';
+    const row3Opid = doc.createElement('span');
+    row3Opid.textContent = 'Check __OPID_0__ title safety';
+    row3.appendChild(row3Title);
+    row3.appendChild(row3Opid);
+    rootBody.appendChild(row3);
+
+    // Breadcrumb segments: workspace slug (skip) + active title (translate)
+    const bcWorkspace = doc.createElement('span', { 'data-testid': 'breadcrumb-segment' });
+    bcWorkspace.textContent = 'obsidian-prism-dev';
+    const bcTitle = doc.createElement('span', { 'data-testid': 'breadcrumb-segment' });
+    bcTitle.textContent = 'Optimize project performance';
+    rootBody.appendChild(bcWorkspace);
+    rootBody.appendChild(bcTitle);
+
+    // Prism Sidebar Studio owned duplicate row: MUST be skipped when sidebarStudio === 'on'
+    const prismSidebar = doc.createElement('div', { 'data-ag-prism-sidebar-owned': '1', class: 'ag-prism-sb-chat-list' });
+    const dupRow = doc.createElement('div', { 'data-testid': 'conversation-row-sidebar' });
+    const dupTitle = doc.createElement('span');
+    dupTitle.textContent = 'Optimize project performance';
+    dupRow.appendChild(dupTitle);
+    prismSidebar.appendChild(dupRow);
+    rootBody.appendChild(prismSidebar);
+
+    // Default OFF: zero requests, all titles untouched
+    api.sync({ thoughtTranslate: 'machine', thoughtTrigger: 'expand', language: 'zh-CN' });
+    api.scanImmediate();
+    await new Promise((r) => setTimeout(r, 35));
+    assert.equal(batchRpcCalls.length, 0, 'translateTitles=false must send 0 batch requests');
+    assert.equal(row1Title.textContent, 'Optimize project performance');
+
+    // Enable translateTitles: single merged batch translates eligible titles only
+    api.setTranslateTitles(true);
+    api.scanImmediate();
+    await new Promise((r) => setTimeout(r, 50));
+
+    assert.equal(batchRpcCalls.length, 1, 'All eligible titles must be merged into 1 tool-batch request');
+    assert.equal(row1Title.textContent, '优化项目性能');
+    assert.equal(bcTitle.textContent, '优化项目性能');
+    assert.equal(row2Title.textContent, '重构 ThoughtTranslatorService 代理超时', 'Code identifier must be preserved verbatim');
+    assert.equal(row3Title.textContent, '修复登录重定向流程');
+
+    // Strictly skipped nodes remain 100% untouched
+    assert.equal(row1Time.textContent, '2m');
+    assert.equal(row1TimeYesterday.textContent, 'Yesterday');
+    assert.equal(row1Badge.textContent, 'Running now');
+    assert.equal(row1SubBtn.textContent, 'Delete conversation');
+    assert.equal(row2File.textContent, 'package.json');
+    assert.equal(row2Short.textContent, 'Hi');
+    assert.equal(row2Zh.textContent, '已经中文的会话标题');
+    assert.equal(row3Opid.textContent, 'Check __OPID_0__ title safety');
+    assert.equal(bcWorkspace.textContent, 'obsidian-prism-dev');
+    assert.equal(dupTitle.textContent, 'Optimize project performance', 'Prism Sidebar Studio owned duplicate row must be skipped');
+    assert.equal(api.__titleRecords.size, 4, 'Exactly 4 connected title TextNodes tracked');
+
+    // React TextNode reuse: overwrite row3Title TextNode in-place with a new conversation title
+    const reusedTn = row3Title.childNodes[0];
+    reusedTn.nodeValue = 'Debug memory leak in daemon';
+    api.scanImmediate();
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(row3Title.textContent, '调试守护进程内存泄漏');
+
+    // Detached DOM pruning: remove row2 and rescan -> detached record pruned immediately
+    row2.remove();
+    api.scanImmediate();
+    assert.equal(api.__titleRecords.size, 3, 'Detached title DOM node must be pruned on next scan');
+
+    // Disable toggle -> 100% lossless restore (reused TextNode restores to NEW orig, never stale old orig!)
+    api.setTranslateTitles(false);
+    assert.equal(row1Title.textContent, 'Optimize project performance');
+    assert.equal(bcTitle.textContent, 'Optimize project performance');
+    assert.equal(row3Title.textContent, 'Debug memory leak in daemon', 'Reused TextNode must restore to new orig, not stale old title');
+    assert.equal(row1Title.getAttribute('data-op-title-tr'), null);
+    assert.equal(api.__titleRecords.size, 0);
+
+    // Re-enable then destroy() -> also 100% lossless restore
+    api.setTranslateTitles(true);
+    api.scanImmediate();
+    await new Promise((r) => setTimeout(r, 40));
+    assert.equal(row1Title.textContent, '优化项目性能');
+    api.destroy();
+    assert.equal(row1Title.textContent, 'Optimize project performance');
+    assert.equal(bcTitle.textContent, 'Optimize project performance');
+    assert.equal(row3Title.textContent, 'Debug memory leak in daemon');
+
+    // C) Settings UI toggle: visible in both ai & machine modes, 5+1 no-translate attrs, 5 locales, persists translateTitles
+    const uiSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-settings-ui.js'), 'utf8');
+    const savedPayloads = [];
+    const clientCalls = [];
+    const uiEnv = createMockDomEnv({
+      __agPrismThoughtBridge: { call: async () => ({ ok: true }) },
+      __agPrismThought: {
+        getViewMode: () => 'immersive',
+        getLocalCacheStats: () => ({ memEntries: 0 }),
+        getConfig: async () => svc.getSanitizedConfig(),
+        saveConfig: async (payload) => {
+          savedPayloads.push(payload);
+          return svc.saveConfig(payload);
+        },
+        setTranslateTitles: (v, opts) => {
+          clientCalls.push({ v, opts });
+          return v;
+        },
+      },
+    });
+    vm.runInNewContext(uiSrc, uiEnv.sandbox);
+    const { createThoughtAiConfigBox } = uiEnv.sandbox.__agPrismThoughtSettingsUi;
+    const hostWrap = uiEnv.doc.createElement('div');
+    uiEnv.rootBody.appendChild(hostWrap);
+    let curMode = 'ai';
+    let curLang = 'zh-CN';
+    const uiHandle = createThoughtAiConfigBox({
+      mkEl: (t, c) => uiEnv.doc.createElement(t, c ? { class: c } : {}),
+      btnClass: 'btn',
+      getMode: () => curMode,
+      getLang: () => curLang,
+    });
+    hostWrap.appendChild(uiHandle.box);
+
+    const titlesRow = uiHandle.box.querySelector('[data-testid="thought-titles-row"]');
+    const titlesToggle = uiHandle.box.querySelector('[data-testid="thought-titles-toggle"]');
+    const titlesDesc = uiHandle.box.querySelector('[data-testid="thought-titles-desc"]');
+    assert.ok(titlesRow && titlesToggle && titlesDesc, 'thought-titles-toggle must exist in AI mode');
+    assert.equal(titlesToggle.getAttribute('aria-checked'), 'false', 'titles toggle defaults to off');
+    for (const [k, v] of [
+      ['translate', 'no'],
+      ['data-no-translate', 'true'],
+      ['data-ag-localization-skip', 'true'],
+      ['data-agy-no-translate', 'true'],
+      ['data-antigravity-zh-skip', '1'],
+      ['data-ag-no-i18n', ''],
+    ]) {
+      assert.equal(titlesRow.getAttribute(k), v, `titles row must carry anti-translation attr ${k}=${v}`);
+    }
+
+    // 5-locale label & description verification
+    const seenDescs = new Set();
+    for (const loc of ['zh-CN', 'zh-TW', 'yue', 'en', 'ja']) {
+      curLang = loc;
+      uiHandle.onLanguageChanged(loc);
+      assert.ok(titlesDesc.textContent.length > 15, `titles desc must be non-empty for ${loc}`);
+      seenDescs.add(titlesDesc.textContent);
+    }
+    assert.equal(seenDescs.size, 5, 'All 5 locales must have distinct localized title-translation descriptions');
+
+    // Switch to machine mode -> companion card still exposes thought-titles-toggle
+    curMode = 'machine';
+    uiHandle.onModeSwitched('machine');
+    const machineCard = hostWrap.querySelector('[data-testid="prism-thought-general-config"]');
+    assert.ok(machineCard && !machineCard.hidden);
+    const machineToggle = machineCard.querySelector('[data-testid="thought-titles-toggle"]');
+    assert.ok(machineToggle, 'thought-titles-toggle must remain visible in machine companion card');
+
+    // Click toggle -> calls client setTranslateTitles + persists translateTitles: true
+    machineToggle.click();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(machineToggle.getAttribute('aria-checked'), 'true');
+    assert.equal(clientCalls.length, 1);
+    assert.equal(clientCalls[0].v, true);
+    assert.ok(savedPayloads.some((p) => p.translateTitles === true));
+
+    svc.dispose();
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('15) One-click Thought Diagnostics: all states, 5s bounded timeout, strict secret redaction & 5-locale 4-item UI strip', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-diag-'));
+  try {
+    // A) Off mode & incomplete AI profile (no network call)
+    let fetchHits = 0;
+    const svc = new ThoughtTranslatorService({
+      configDir: tmpDir,
+      proxyEnv: {},
+      resolveSystemProxy: () => 'http://osUser:OsSecretPass99@127.0.0.1:8888',
+      fetchImpl: async (url, init) => {
+        fetchHits++;
+        const u = String(url);
+        if (u.includes('11434/v1/models')) {
+          return new Response(JSON.stringify({ data: [{ id: 'qwen2.5:7b' }] }), { status: 200 });
+        }
+        if (u.includes('auth-fail.example.test')) {
+          return new Response('Invalid token sk-leaktest1234567890 via http://alice:ProxySecret42@127.0.0.1:7890', {
+            status: 401,
+          });
+        }
+        if (u.includes('hang.example.test')) {
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              const e = new Error('The operation was aborted due to timeout');
+              e.name = 'TimeoutError';
+              reject(e);
+            });
+          });
+        }
+        if (u.includes('translate.googleapis.com')) {
+          return new Response(JSON.stringify([[['好的', 'ok']]]), { status: 200 });
+        }
+        return new Response('{}', { status: 200 });
+      },
+    });
+    svc.saveConfig({
+      translateToolSummaries: true,
+      translateTitles: true,
+      proxyMode: 'custom',
+      customProxyUrl: 'http://alice:ProxySecret42@127.0.0.1:7890',
+      profiles: [
+        { id: 'default', name: 'Cloud', baseUrl: 'https://auth-fail.example.test/v1', apiKey: '', model: 'gpt-4o-mini' },
+      ],
+    });
+
+    // 1) mode=off -> skipped connectivity, flags & redacted proxies reported
+    const diagOff = await svc.diagnose({ mode: 'off' });
+    assert.equal(diagOff.ok, true);
+    assert.equal(diagOff.mode, 'off');
+    assert.equal(diagOff.proxyMode, 'custom');
+    assert.equal(diagOff.effectiveProxy, 'http://••••@127.0.0.1:7890');
+    assert.equal(diagOff.osProxyDetected, 'http://••••@127.0.0.1:8888');
+    assert.equal(diagOff.translateToolSummaries, true);
+    assert.equal(diagOff.translateTitles, true);
+    assert.equal(diagOff.connectivity.skipped, true);
+    assert.equal(diagOff.connectivity.reason, 'mode_off');
+    assert.equal(fetchHits, 0);
+    const offJson = JSON.stringify(diagOff);
+    assert.equal(offJson.includes('ProxySecret42'), false, 'Custom proxy password must never appear in diagnose output');
+    assert.equal(offJson.includes('OsSecretPass99'), false, 'OS proxy password must never appear in diagnose output');
+
+    // 2) mode=ai with missing API key -> profileReady=false, zero network probes
+    const diagIncomplete = await svc.diagnose({ mode: 'ai' });
+    assert.equal(diagIncomplete.profileReady, false);
+    assert.ok(diagIncomplete.profileIssues.includes('missing_api_key'));
+    assert.equal(diagIncomplete.connectivity.ok, false);
+    assert.equal(diagIncomplete.connectivity.reason, 'missing_api_key');
+    assert.equal(fetchHits, 0);
+
+    // 3) mode=ai with keyless local Ollama endpoint -> profileReady=true & connectivity ok
+    const diagLocal = await svc.diagnose({
+      mode: 'ai',
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      model: 'qwen2.5:7b',
+      proxyMode: 'direct',
+    });
+    assert.equal(diagLocal.profileReady, true);
+    assert.equal(diagLocal.proxyMode, 'direct');
+    assert.equal(diagLocal.effectiveProxy, '');
+    assert.equal(diagLocal.connectivity.ok, true);
+    assert.equal(diagLocal.connectivity.reason, 'ok');
+
+    // 4) mode=ai upstream 401 echoing secrets -> auth_error + 100% secret redaction
+    const diagAuth = await svc.diagnose({
+      mode: 'ai',
+      baseUrl: 'https://auth-fail.example.test/v1',
+      model: 'gpt-4o-mini',
+      apiKey: 'sk-leaktest1234567890',
+      proxyMode: 'direct',
+    });
+    assert.equal(diagAuth.profileReady, true);
+    assert.equal(diagAuth.connectivity.ok, false);
+    assert.equal(diagAuth.connectivity.reason, 'auth_error');
+    const authJson = JSON.stringify(diagAuth);
+    assert.equal(authJson.includes('sk-leaktest1234567890'), false, 'API key must be redacted from diagnose response');
+    assert.equal(authJson.includes('ProxySecret42'), false, 'Proxy password must be redacted from diagnose response');
+
+    // 5) mode=machine -> probes GTX and succeeds; bounded timeout test returns reason=timeout quickly
+    const diagMachine = await svc.diagnose({ mode: 'machine', proxyMode: 'direct' });
+    assert.equal(diagMachine.mode, 'machine');
+    assert.equal(diagMachine.connectivity.ok, true);
+    assert.equal(diagMachine.connectivity.target, 'gtx');
+
+    const t0 = Date.now();
+    const diagTimeout = await svc.diagnose({
+      mode: 'ai',
+      baseUrl: 'https://hang.example.test/v1',
+      model: 'gpt-4o-mini',
+      apiKey: 'sk-timeouttest12345',
+      proxyMode: 'direct',
+      timeoutMs: 120,
+    });
+    assert.equal(diagTimeout.connectivity.ok, false);
+    assert.equal(diagTimeout.connectivity.reason, 'timeout');
+    assert.ok(Date.now() - t0 < 2000, 'Bounded timeout probe must abort promptly');
+
+    // B) Settings UI one-click diagnostics strip: offline, online healthy, 4-item status & 5 locales
+    const uiSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'thought-translator', 'thought-settings-ui.js'), 'utf8');
+    const copiedCmds = [];
+    let onlineMode = false;
+    let diagReturn = diagMachine;
+    const uiEnv = createMockDomEnv({
+      navigator: { clipboard: { writeText: async (s) => copiedCmds.push(s) } },
+      __agPrismThought: {
+        getViewMode: () => 'immersive',
+        getLocalCacheStats: () => ({ memEntries: 0 }),
+        getConfig: async () => svc.getSanitizedConfig(),
+        diagnose: async () => diagReturn,
+      },
+    });
+    // Offline first: no __agPrismThoughtBridge
+    vm.runInNewContext(uiSrc, uiEnv.sandbox);
+    const { createThoughtAiConfigBox } = uiEnv.sandbox.__agPrismThoughtSettingsUi;
+    const hostWrap = uiEnv.doc.createElement('div');
+    uiEnv.rootBody.appendChild(hostWrap);
+    let curLang = 'zh-CN';
+    const uiHandle = createThoughtAiConfigBox({
+      mkEl: (t, c) => uiEnv.doc.createElement(t, c ? { class: c } : {}),
+      btnClass: 'btn',
+      getMode: () => 'machine',
+      getLang: () => curLang,
+    });
+    hostWrap.appendChild(uiHandle.box);
+    uiHandle.onModeSwitched('machine');
+
+    const machineCard = hostWrap.querySelector('[data-testid="prism-thought-general-config"]');
+    const diagBtn = machineCard.querySelector('[data-testid="thought-diagnose-btn"]');
+    const diagPanel = machineCard.querySelector('[data-testid="thought-diagnose-panel"]');
+    assert.ok(diagBtn && diagPanel, 'Diagnose button and 4-item feedback panel must exist in companion card');
+    assert.equal(diagPanel.hidden, true, 'Diagnose panel starts collapsed');
+    for (const [k, v] of [
+      ['translate', 'no'],
+      ['data-no-translate', 'true'],
+      ['data-ag-localization-skip', 'true'],
+      ['data-agy-no-translate', 'true'],
+      ['data-antigravity-zh-skip', '1'],
+      ['data-ag-no-i18n', ''],
+    ]) {
+      assert.equal(diagPanel.getAttribute(k), v, `diag panel must carry anti-translation attr ${k}=${v}`);
+    }
+
+    // Offline click -> 4 items populated + copyable command shown
+    diagBtn.click();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(diagPanel.hidden, false);
+    const bridgeItem = diagPanel.querySelector('[data-testid="thought-diag-bridge"]');
+    const profItem = diagPanel.querySelector('[data-testid="thought-diag-profile"]');
+    const connItem = diagPanel.querySelector('[data-testid="thought-diag-connectivity"]');
+    const remItem = diagPanel.querySelector('[data-testid="thought-diag-remedy"]');
+    const cmdWrap = diagPanel.querySelector('[data-testid="thought-diag-cmd-wrap"]');
+    const cmdCode = diagPanel.querySelector('[data-testid="thought-diag-cmd"]');
+    const copyBtn = diagPanel.querySelector('[data-testid="thought-diag-copy-cmd"]');
+    assert.equal(bridgeItem.getAttribute('data-state'), 'err');
+    assert.equal(connItem.getAttribute('data-state'), 'err');
+    assert.equal(cmdWrap.hidden, false, 'Offline diagnostics must surface copyable status command');
+    assert.equal(cmdCode.textContent, 'node tools/install-plugin.cjs --status');
+    copyBtn.click();
+    await new Promise((r) => setTimeout(r, 10));
+    assert.deepEqual(copiedCmds, ['node tools/install-plugin.cjs --status']);
+
+    // Online healthy click -> bridge/profile/connectivity/remedy all ok & cmd hidden
+    onlineMode = true;
+    if (onlineMode) uiEnv.sandbox.__agPrismThoughtBridge = { call: async () => diagReturn };
+    diagBtn.click();
+    await new Promise((r) => setTimeout(r, 25));
+    assert.equal(bridgeItem.getAttribute('data-state'), 'ok');
+    assert.equal(profItem.getAttribute('data-state'), 'ok');
+    assert.equal(connItem.getAttribute('data-state'), 'ok');
+    assert.equal(remItem.getAttribute('data-state'), 'ok');
+    assert.equal(cmdWrap.hidden, true, 'Healthy diagnostics should hide error troubleshooting command');
+
+    // 5-locale live refresh on diagnose button & panel
+    const diagBtnLabels = new Set();
+    for (const loc of ['zh-CN', 'zh-TW', 'yue', 'en', 'ja']) {
+      curLang = loc;
+      uiHandle.onLanguageChanged(loc);
+      diagBtnLabels.add(`${loc}:${diagBtn.textContent}:${bridgeItem.textContent}`);
+    }
+    assert.equal(diagBtnLabels.size, 5, 'All 5 locales must refresh diagnose button & 4-item panel');
+
+    svc.dispose();
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

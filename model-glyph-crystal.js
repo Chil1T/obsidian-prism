@@ -123,6 +123,9 @@
       mWakeFn = null,
       mMountedAt = 0,
       mKnob = null,
+      mKnobRect = null,
+      mKnobRectAt = 0,
+      mKnobFillSig = '',
       mTrkWidth = 0,
       mStepFillRatio = null;
 
@@ -454,89 +457,77 @@
 
     let knobPrismHot = false;
     const syncKnobPrismPointer = (clientX, clientY) => {
-      const trk = mHideLock ? mTrk : null;
-      const knob = getCachedKnob(trk);
-      if (!knob) {
-        knobPrismHot = false;
-        return;
+      const trk = mHideLock ? mTrk : null, knob = getCachedKnob(trk);
+      if (!knob) { knobPrismHot = false; mKnobRect = null; return; }
+      const clr = () => { if (knobPrismHot) { sp(knob, '--knob-px', '-9999px'); sp(knob, '--knob-py', '-9999px'); knobPrismHot = false; } };
+      if (motionReduced() || readRootAmbientFloat() <= 0.001 || !(clientX > -1000 && clientY > -1000)) { clr(); return; }
+      const fillSig = trk?.style?.getPropertyValue?.('--ces-fill') || '', now = performance.now();
+      let rect = mKnobRect;
+      if (!rect || fillSig !== mKnobFillSig || now - mKnobRectAt > 120) {
+        rect = rc(knob);
+        mKnobRect = rect && rect.width >= 4 ? rect : null;
+        mKnobRectAt = now;
+        mKnobFillSig = fillSig;
       }
-      if (motionReduced() || readRootAmbientFloat() <= 0.001 || !(clientX > -1000 && clientY > -1000)) {
-        if (knobPrismHot) {
-          sp(knob, '--knob-px', '-9999px');
-          sp(knob, '--knob-py', '-9999px');
-          knobPrismHot = false;
-        }
-        return;
-      }
-      const rect = rc(knob);
       if (!rect || rect.width < 4) return;
       const lx = clientX - rect.left, ly = clientY - rect.top;
       if (Math.hypot(lx - rect.width * 0.5, ly - rect.height * 0.5) <= 56) {
         sp(knob, '--knob-px', `${lx.toFixed(1)}px`);
         sp(knob, '--knob-py', `${ly.toFixed(1)}px`);
         knobPrismHot = true;
-      } else if (knobPrismHot) {
-        sp(knob, '--knob-px', '-9999px');
-        sp(knob, '--knob-py', '-9999px');
-        knobPrismHot = false;
-      }
+      } else clr();
     };
 
-    const cancelMountRaf = () => {
-      if (mMountRaf) {
-        cAF(mMountRaf);
-        mMountRaf = 0;
-      }
-    };
-    const cancelStepRaf = () => {
-      if (mRaf) {
-        cAF(mRaf);
-        mRaf = 0;
-      }
+    const cancelMountRaf = () => { if (mMountRaf) { cAF(mMountRaf); mMountRaf = 0; } };
+    const cancelStepRaf = () => { if (mRaf) { cAF(mRaf); mRaf = 0; } };
+
+    const resetKnobCache = () => {
+      mKnob = mKnobRect = null;
+      mTrkWidth = mKnobRectAt = 0;
+      mKnobFillSig = '';
+      mStepFillRatio = null;
     };
 
-    const teardownCrystalMount = () => {
+    const stopCrystalOnPanel = (panel) => {
       detachSliderWake();
       cancelMountRaf();
       cancelStepRaf();
       try { mInst?.dispose?.(); } catch {}
-      if (mPanel?.[K_IC]) {
-        clearPanelRowGlyphs(mPanel);
-        clearSliderPrismOverlay(mPanel);
-        ra(mPanel, 'data-ag-cs-orch-active');
-        qa(mPanel, EFF_ROW_SEL).forEach((row) => {
-          ra(row, 'data-row-hidden');
-          ra(row, 'aria-hidden');
-        });
+      if (panel) {
+        clearSliderPrismOverlay(panel);
+        ra(panel, 'data-ag-cs-orch-active');
+        qa(panel, EFF_ROW_SEL).forEach((row) => { ra(row, 'data-row-hidden'); ra(row, 'aria-hidden'); });
       }
-      clearPanelRowGlyphs();
-      syncModelMenuAttrs(null);
       if (mBar?.[K_PE]) mBar.remove();
-      mPanel = mOv = mBar = mTrk = mCv = mInst = mKnob = null;
-      mRaf = mMountRaf = mLastMs = mMountedAt = mTrkWidth = 0;
-      mStepFillRatio = null;
+      mPanel = mBar = mTrk = mCv = mInst = null;
+      mRaf = mMountRaf = mLastMs = mMountedAt = 0;
+      resetKnobCache();
       mWasOrch = mHideLock = false;
     };
 
+    const teardownCrystalMount = () => {
+      const p = mPanel?.[K_IC] ? mPanel : null;
+      if (p) clearPanelRowGlyphs(p);
+      stopCrystalOnPanel(p);
+      clearPanelRowGlyphs();
+      syncModelMenuAttrs(null);
+      mOv = null;
+    };
+
+    const ORCH_LBL_RE = /\borchestrator\b|编排|调度器/i;
+    const isOrchRowLbl = (el) => ORCH_LBL_RE.test(stripTranslatedEffortSuffix(readButtonLabelWithoutGlyph(el)));
     const detectPanelIsOrchestrator = (panel, fallbackModelInfo) => {
       if (panel) {
         const cesSel = qs(panel, '[data-ces-model-selected="true"]');
         if (cesSel) {
-          if (ga(cesSel, 'data-testid') === 'model-selector-orchestrator' || Boolean(qs(cesSel, '[data-testid="model-selector-orchestrator"]'))) {
-            return true;
-          }
-          return /\borchestrator\b|编排|调度器/i.test(stripTranslatedEffortSuffix(readButtonLabelWithoutGlyph(cesSel)));
+          return ga(cesSel, 'data-testid') === 'model-selector-orchestrator' || Boolean(qs(cesSel, '[data-testid="model-selector-orchestrator"]')) || isOrchRowLbl(cesSel);
         }
       }
       if (fallbackModelInfo && typeof fallbackModelInfo.isOrchestrator === 'boolean') return fallbackModelInfo.isOrchestrator;
       if (panel) {
         let sel = qs(panel, '[data-selected="true"], [aria-checked="true"], [data-state="checked"], [data-ces-model-selected="true"]');
-        if (!sel) {
-          for (const r of qa(panel, '[role="menuitem"], [role="option"], button')) {
-            if (isPanelRowSelected(r)) { sel = r; break; }
-          }
-        }
-        if (sel) return /\borchestrator\b|编排|调度器/i.test(stripTranslatedEffortSuffix(readButtonLabelWithoutGlyph(sel)));
+        if (!sel) for (const r of qa(panel, '[role="menuitem"], [role="option"], button')) if (isPanelRowSelected(r)) { sel = r; break; }
+        if (sel) return isOrchRowLbl(sel);
       }
       return false;
     };
@@ -577,22 +568,8 @@
 
       syncPanelRowGlyphs(panel);
       if (isEffortSliderOff()) {
-        detachSliderWake();
-        cancelMountRaf();
-        cancelStepRaf();
-        try { mInst?.dispose?.(); } catch {}
-        clearSliderPrismOverlay(panel);
-        ra(panel, 'data-ag-cs-orch-active');
-        qa(panel, EFF_ROW_SEL).forEach((row) => {
-          ra(row, 'data-row-hidden');
-          ra(row, 'aria-hidden');
-        });
         qa(panel, '[data-testid="orchestrator-effort-bar"]').forEach((b) => b.remove?.());
-        if (mBar?.[K_PE]) mBar.remove();
-        mPanel = mBar = mTrk = mCv = mInst = mKnob = null;
-        mRaf = mMountRaf = mLastMs = mMountedAt = mTrkWidth = 0;
-        mStepFillRatio = null;
-        mWasOrch = mHideLock = false;
+        stopCrystalOnPanel(panel);
         return;
       }
       const isOrch = detectPanelIsOrchestrator(panel, primaryModelInfo);
@@ -656,6 +633,7 @@
         if (mWakeTrk !== sTrk) {
           detachSliderWake();
           const onWake = (ev) => {
+            mKnobRect = null;
             if (ev && typeof ev.clientX === 'number') syncKnobPrismPointer(ev.clientX, ev.clientY);
             if (!mRaf && mInst && !docOf()?.hidden) {
               mLastMs = performance.now();
@@ -677,11 +655,7 @@
         mInst = null;
       }
 
-      if (mTrk !== tTrk) {
-        mKnob = null;
-        mTrkWidth = 0;
-        mStepFillRatio = null;
-      }
+      if (mTrk !== tTrk) resetKnobCache();
       mPanel = panel;
       mBar = bar;
       mTrk = tTrk;

@@ -615,7 +615,7 @@ export function restoreToolSummaryIdentifiers(translated, tokens = []) {
 }
 
 const TOOL_SUMMARY_ACTION_VERB_RE =
-  /\b(?:read|reading|write|writing|wrote|edit|editing|edited|inspect|inspecting|inspected|check|checking|checked|list|listing|listed|search|searching|searched|find|finding|found|run|running|ran|open|opening|opened|view|viewing|viewed|create|creating|created|delete|deleting|deleted|update|updating|updated|analyze|analyzing|analyzed|explore|exploring|explored|finished|failed|completed|scanning|scanned|loading|loaded)\b/i;
+  /\b(?:read|reading|write|writing|wrote|edit|editing|edited|inspect|inspecting|inspected|check|checking|checked|list|listing|listed|search|searching|searched|find|finding|found|run|running|ran|open|opening|opened|view|viewing|viewed|create|creating|created|delete|deleting|deleted|update|updating|updated|analyze|analyzing|analyzed|explore|exploring|explored|finished|failed|completed|scanning|scanned|loading|loaded|fix|fixing|fixed|refactor|refactoring|refactored|optimize|optimizing|optimized|debug|debugging|debugged|add|adding|added|remove|removing|removed|build|building|built|deploy|deploying|deployed|test|testing|tested|implement|implementing|implemented|migrate|migrating|migrated|upgrade|upgrading|upgraded|setup|configure|configuring|configured|design|designing|designed|plan|planning|planned|review|reviewing|reviewed|investigate|investigating|investigated|resolve|resolving|resolved|improve|improving|improved|clean|cleaning|cleaned|support|supporting|enable|enabling|disable|disabling|translate|translating|handle|handling|parse|parsing|render|rendering|sync|syncing|patch|patching|harden|hardening)\b/i;
 
 export function isToolSummaryTranslatable(text, targetLang = 'zh-CN') {
   const norm = String(text || '').trim();
@@ -1206,6 +1206,7 @@ export class ThoughtTranslatorService {
       proxyMode: 'auto',
       customProxyUrl: '',
       translateToolSummaries: false,
+      translateTitles: false,
       activeProfileId: 'default',
       profiles: [
         {
@@ -1253,6 +1254,7 @@ export class ThoughtTranslatorService {
       ? 'custom'
       : 'auto';
     const translateToolSummaries = Boolean(raw.translateToolSummaries);
+    const translateTitles = Boolean(raw.translateTitles);
     const profiles = [];
     const seen = new Set();
     for (const item of Array.isArray(raw.profiles) ? raw.profiles : []) {
@@ -1291,6 +1293,7 @@ export class ThoughtTranslatorService {
       proxyMode,
       customProxyUrl,
       translateToolSummaries,
+      translateTitles,
       activeProfileId,
       profiles,
     };
@@ -1337,6 +1340,7 @@ export class ThoughtTranslatorService {
       customProxyUrl: store.customProxyUrl ? maskProxyUrl(store.customProxyUrl) : '',
       hasProxyCredentials,
       translateToolSummaries: Boolean(store.translateToolSummaries),
+      translateTitles: Boolean(store.translateTitles),
       activeProfileId: store.activeProfileId,
       profiles: store.profiles.map((p) => ({
         id: p.id,
@@ -1408,6 +1412,10 @@ export class ThoughtTranslatorService {
         input.translateToolSummaries !== undefined
           ? Boolean(input.translateToolSummaries)
           : Boolean(prev.translateToolSummaries),
+      translateTitles:
+        input.translateTitles !== undefined
+          ? Boolean(input.translateTitles)
+          : Boolean(prev.translateTitles),
       activeProfileId: input.activeProfileId ?? prev.activeProfileId,
       profiles: Array.isArray(input.profiles)
         ? input.profiles.map((p) => {
@@ -2703,6 +2711,296 @@ export class ThoughtTranslatorService {
     }
   }
 
+  async diagnose(input = {}) {
+    const store = this.loadStore();
+    const { baseUrl, baseUrlError, apiKey, model } = this._resolveEffectiveCredentials(input);
+    const targetId = input.profileId || store.activeProfileId;
+    const activeProf = store.profiles.find((p) => p.id === targetId) || store.profiles[0] || null;
+
+    const keylessAllowed = Boolean(!baseUrlError && baseUrl && isKeylessAllowedEndpoint(baseUrl));
+    const profileIssues = [];
+    if (baseUrlError || !baseUrl) profileIssues.push('invalid_base_url');
+    if (!model) profileIssues.push('missing_model');
+    if (!apiKey && !keylessAllowed) profileIssues.push('missing_api_key');
+    const profileReady = profileIssues.length === 0;
+
+    const rawMode = String(input.mode || input.thoughtTranslate || '').trim().toLowerCase();
+    const mode =
+      rawMode === 'ai' || rawMode === 'machine' || rawMode === 'off'
+        ? rawMode
+        : profileReady
+        ? 'ai'
+        : 'machine';
+
+    const proxyCheck = this._extractProxyOverride(input);
+    const proxyOverride = proxyCheck.ok ? proxyCheck.override : null;
+    const effectiveProxyMode =
+      proxyOverride && proxyOverride.proxyMode
+        ? proxyOverride.proxyMode
+        : store.proxyMode || 'auto';
+
+    const secretTokens = [];
+    const addSecretToken = (s) => {
+      const t = String(s || '').trim();
+      if (t.length >= 3 && !secretTokens.includes(t)) secretTokens.push(t);
+    };
+    addSecretToken(apiKey);
+    const collectProxySecrets = (raw) => {
+      if (!raw) return;
+      const parsed = typeof raw === 'string' ? parseProxyUrl(raw) : raw;
+      if (parsed && typeof parsed === 'object') {
+        addSecretToken(parsed.password);
+        if (parsed.username && parsed.password) addSecretToken(`${parsed.username}:${parsed.password}`);
+      }
+    };
+    collectProxySecrets(store.customProxyUrl);
+    if (typeof input.customProxyUrl === 'string') collectProxySecrets(input.customProxyUrl);
+
+    const safeRedact = (text) => {
+      let out = redactSecrets(text, apiKey);
+      for (const tok of secretTokens) {
+        if (out.includes(tok)) out = out.split(tok).join('***REDACTED***');
+      }
+      return out;
+    };
+
+    const maskParsedProxy = (p) => {
+      if (!p) return '';
+      if (typeof p === 'string') return maskProxyUrl(p);
+      if (typeof p === 'object') {
+        collectProxySecrets(p);
+        if (p.href) return maskProxyUrl(p.href);
+        if (p.url || p.proxy) return maskProxyUrl(p.url || p.proxy);
+        if (p.protocol && p.hostname && p.port) {
+          const hostPart = p.hostname.includes(':') ? `[${p.hostname}]` : p.hostname;
+          return p.username || p.password
+            ? `${p.protocol}//••••@${hostPart}:${p.port}`
+            : `${p.protocol}//${hostPart}:${p.port}`;
+        }
+      }
+      return '';
+    };
+
+    const gtxProbeUrl = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-CN&dt=t&q=ok';
+    const probeTargetUrl = mode === 'ai' && baseUrl && !baseUrlError ? `${baseUrl}/models` : gtxProbeUrl;
+
+    let osProxyDetected = '';
+    try {
+      if (this._customResolveSystemProxy) {
+        const customOs = await this._customResolveSystemProxy(probeTargetUrl);
+        if (customOs) osProxyDetected = maskParsedProxy(customOs);
+      } else {
+        const osCfg = await this._getCachedOsProxyConfigAsync();
+        const pickedOs = osCfg && (osCfg.https || osCfg.http || osCfg.socks);
+        if (pickedOs) {
+          osProxyDetected = maskParsedProxy(pickedOs);
+        }
+      }
+    } catch {}
+
+    let effectiveProxy = '';
+    let proxySource = effectiveProxyMode === 'direct' ? 'direct' : 'none';
+    if (proxyCheck.ok) {
+      try {
+        const resolved = await this._resolveProxyForUrlAsync(probeTargetUrl, proxyOverride);
+        if (resolved) {
+          effectiveProxy = maskParsedProxy(resolved);
+          const customCfg = this._resolveConfiguredCustomProxy(probeTargetUrl, proxyOverride);
+          if (customCfg.handled && customCfg.proxy) {
+            proxySource = 'custom';
+          } else {
+            const env = this._proxyEnv || process.env;
+            const envHit = resolveSystemProxy(probeTargetUrl, { env, osConfig: null });
+            proxySource = envHit ? 'env' : 'os';
+          }
+        }
+      } catch {}
+    }
+
+    const timeoutMs = Math.max(100, Math.min(5000, Number(input.timeoutMs) || 5000));
+    const classifyErrReason = (err) => {
+      const msg = String(err?.message || err || '');
+      if (err?.name === 'TimeoutError' || err?.name === 'AbortError' || /timed?\s*out|timeout|aborted/i.test(msg)) {
+        return 'timeout';
+      }
+      if (/proxy|socks|tunnel|407/i.test(msg)) return 'proxy_error';
+      return 'network_error';
+    };
+
+    let connectivity;
+    if (input.skipConnectivity === true) {
+      connectivity = { ok: true, skipped: true, target: 'none', latencyMs: 0, reason: 'skipped' };
+    } else if (mode === 'off') {
+      connectivity = { ok: true, skipped: true, target: 'none', latencyMs: 0, reason: 'mode_off' };
+    } else if (!proxyCheck.ok) {
+      connectivity = {
+        ok: false,
+        target: mode === 'ai' ? 'ai' : 'gtx',
+        latencyMs: 0,
+        reason: 'invalid_proxy',
+        error: safeRedact(proxyCheck.error || 'Invalid proxy URL'),
+      };
+    } else if (mode === 'ai') {
+      if (!profileReady) {
+        connectivity = {
+          ok: false,
+          target: 'ai',
+          latencyMs: 0,
+          reason: profileIssues[0] || 'profile_incomplete',
+          ...(baseUrlError ? { error: safeRedact(baseUrlError) } : {}),
+        };
+      } else if (!this.fetchImpl) {
+        connectivity = { ok: false, target: 'ai', latencyMs: 0, reason: 'fetch_unavailable', error: 'Fetch unavailable' };
+      } else {
+        const headers = { Accept: 'application/json' };
+        if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+        const t0 = Date.now();
+        try {
+          const res = await this._request(
+            `${baseUrl}/models`,
+            {
+              method: 'GET',
+              headers,
+              redirect: 'error',
+              signal: AbortSignal.timeout(timeoutMs),
+            },
+            proxyOverride
+          );
+          const latencyMs = Date.now() - t0;
+          const bodySnippet = await this._readResponseTextBounded(res, 65536).catch(() => '');
+          if (res.ok) {
+            connectivity = { ok: true, target: 'ai', status: res.status, latencyMs, reason: 'ok' };
+          } else if (res.status === 404 || res.status === 405) {
+            connectivity = { ok: true, target: 'ai', status: res.status, latencyMs, reason: 'endpoint_reachable' };
+          } else if (res.status === 401 || res.status === 403) {
+            connectivity = {
+              ok: false,
+              target: 'ai',
+              status: res.status,
+              latencyMs,
+              reason: 'auth_error',
+              error: `HTTP ${res.status}: ${safeRedact(bodySnippet.slice(0, 180))}`,
+            };
+          } else if (res.status === 429) {
+            connectivity = {
+              ok: false,
+              target: 'ai',
+              status: res.status,
+              latencyMs,
+              reason: 'rate_limited',
+              error: `HTTP 429: ${safeRedact(bodySnippet.slice(0, 180))}`,
+            };
+          } else {
+            connectivity = {
+              ok: false,
+              target: 'ai',
+              status: res.status,
+              latencyMs,
+              reason: 'http_error',
+              error: `HTTP ${res.status}: ${safeRedact(bodySnippet.slice(0, 180))}`,
+            };
+          }
+        } catch (err) {
+          connectivity = {
+            ok: false,
+            target: 'ai',
+            latencyMs: Date.now() - t0,
+            reason: classifyErrReason(err),
+            error: safeRedact(err?.message || String(err)),
+          };
+        }
+      }
+    } else if (!this.fetchImpl) {
+      connectivity = { ok: false, target: 'gtx', latencyMs: 0, reason: 'fetch_unavailable', error: 'Fetch unavailable' };
+    } else {
+      const t0 = Date.now();
+      try {
+        const res = await this._request(
+          gtxProbeUrl,
+          {
+            method: 'GET',
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            redirect: 'error',
+            signal: AbortSignal.timeout(timeoutMs),
+          },
+          proxyOverride
+        );
+        const latencyMs = Date.now() - t0;
+        const bodySnippet = await this._readResponseTextBounded(res, 16384).catch(() => '');
+        if (res.ok) {
+          connectivity = { ok: true, target: 'gtx', status: res.status, latencyMs, reason: 'ok' };
+        } else if (res.status === 429) {
+          connectivity = {
+            ok: false,
+            target: 'gtx',
+            status: res.status,
+            latencyMs,
+            reason: 'rate_limited',
+            error: `HTTP 429: ${safeRedact(bodySnippet.slice(0, 160))}`,
+          };
+        } else {
+          connectivity = {
+            ok: false,
+            target: 'gtx',
+            status: res.status,
+            latencyMs,
+            reason: 'http_error',
+            error: `HTTP ${res.status}: ${safeRedact(bodySnippet.slice(0, 160))}`,
+          };
+        }
+      } catch (err) {
+        connectivity = {
+          ok: false,
+          target: 'gtx',
+          latencyMs: Date.now() - t0,
+          reason: classifyErrReason(err),
+          error: safeRedact(err?.message || String(err)),
+        };
+      }
+    }
+
+    const suggestions = [];
+    if (mode === 'off') suggestions.push('enable_thought_translate');
+    if (mode === 'ai' && !profileReady) suggestions.push(...profileIssues);
+    if (!proxyCheck.ok) suggestions.push('fix_custom_proxy');
+    if (connectivity && !connectivity.ok) {
+      if (connectivity.reason === 'auth_error') suggestions.push('check_api_key');
+      else if (connectivity.reason === 'rate_limited') suggestions.push('retry_later_or_switch_channel');
+      else if (connectivity.reason === 'timeout' || connectivity.reason === 'proxy_error' || connectivity.reason === 'network_error') {
+        suggestions.push('check_proxy_or_network');
+      } else if (connectivity.reason === 'http_error') {
+        suggestions.push('check_upstream_endpoint');
+      }
+    }
+    if (suggestions.length === 0) suggestions.push('all_healthy');
+
+    return {
+      ok: true,
+      mode,
+      bridgeOnline: true,
+      proxyMode: effectiveProxyMode,
+      effectiveProxy,
+      proxySource,
+      osProxyDetected,
+      customProxyConfigured: Boolean(store.customProxyUrl),
+      profileReady,
+      profileIssues,
+      activeProfile: {
+        id: activeProf?.id || 'default',
+        name: activeProf?.name || '',
+        baseUrl: baseUrl ? safeRedact(baseUrl) : '',
+        model,
+        hasApiKey: Boolean(apiKey),
+        keylessAllowed,
+      },
+      connectivity,
+      translateToolSummaries: Boolean(store.translateToolSummaries),
+      translateTitles: Boolean(store.translateTitles),
+      suggestions,
+      suggestedCommands: ['node tools/install-plugin.cjs --status'],
+    };
+  }
+
   _ingestDiskCacheText(raw) {
     this._lastDiskBytes = Buffer.byteLength(raw, 'utf8');
     this._hasDiskFile = this._lastDiskBytes > 0;
@@ -2946,6 +3244,7 @@ export class ThoughtTranslatorService {
       proxyMode: store.proxyMode || 'auto',
       hasCustomProxy: Boolean(store.customProxyUrl),
       translateToolSummaries: Boolean(store.translateToolSummaries),
+      translateTitles: Boolean(store.translateTitles),
       entries: items,
     };
   }

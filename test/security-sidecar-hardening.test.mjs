@@ -332,9 +332,14 @@ function createWorkbenchMockDom({ fetchImpl, onImageLoad, onCanvasCreate } = {})
 }
 
 function extractInlineWorkbenchScript(html) {
-  const m = /<script>([\s\S]*?)<\/script>/.exec(html);
-  assert.ok(m && m[1], 'renderWorkbenchHtml must emit an inline <script> block');
-  return m[1];
+  const openTag = '<script>';
+  const closeTag = '</script>';
+  const start = html.lastIndexOf(openTag);
+  const end = start >= 0 ? html.indexOf(closeTag, start + openTag.length) : -1;
+  assert.ok(start >= 0 && end > start, 'renderWorkbenchHtml must emit an inline <script> block');
+  const scriptBody = html.slice(start + openTag.length, end);
+  assert.ok(scriptBody.length > 0, 'renderWorkbenchHtml must emit a non-empty inline <script> block');
+  return scriptBody;
 }
 
 function flushAsync(ms = 25) {

@@ -33,6 +33,7 @@
   let currentViewMode = 'immersive';
   let currentLang = 'zh-CN';
   let translateToolSummaries = false;
+  let translateTitles = false;
   let activeStyleTag = '';
   let storedCount = 0;
   let cacheDirty = false;
@@ -52,6 +53,8 @@
   const SEL_OVERLAY = '.ag-prism-thought-overlay[data-op-thought="1"]';
   const SEL_TOOL_TRIGGERS = '[data-testid="tool-group-collapsible"], [data-testid="worked-for-collapsible"]';
   const SEL_TOOL_ROWS = '[data-testid="tool-call-row"], [data-ag-tool-row="1"]';
+  const SEL_TITLE_CONTAINERS =
+    '[data-testid="conversation-row-sidebar"], [data-testid="conversation-row-history"], [data-testid="breadcrumb-segment"]';
   const A_EXP = 'aria-expanded';
   const A_RDY = 'data-op-zh-ready';
   const A_PND = 'data-op-zh-pending';
@@ -121,6 +124,11 @@
   const toolSummaryCache = new Map();
   const toolBatchInflight = new Map();
   const toolSummaryFailedUntil = new Map();
+  const titleRecords = new Set();
+  const titleNodeMap = new WeakMap();
+  const titleCache = new Map();
+  const titleBatchInflight = new Map();
+  const titleFailedUntil = new Map();
   const panelMeta = new WeakMap();
   const rawCacheMap = new WeakMap();
   const lockedHeights = new WeakMap();
@@ -697,7 +705,33 @@
     /\b(?:xlsx|xls|docx|pptx|csv|tsv|json|jsonl|yaml|yml|toml|xml|html|htm|css|scss|less|mjs|cjs|jsx|tsx|pyc|cpp|hpp|ps1|bat|cmd|sql|mdx|txt|pdf|png|jpg|jpeg|webp|svg|gif|ico|zip|tar|tgz|rar|env|ini|cfg|conf|diff|patch|exe|dll|dylib|wasm|ipynb|parquet|sqlite)\b/gi,
   ];
   const TOOL_VERB_RE =
-    /\b(?:read|reading|write|writing|wrote|edit|editing|edited|inspect|inspecting|inspected|check|checking|checked|list|listing|listed|search|searching|searched|find|finding|found|run|running|ran|open|opening|opened|view|viewing|viewed|create|creating|created|delete|deleting|deleted|update|updating|updated|analyze|analyzing|analyzed|explore|exploring|explored|finished|failed|completed|scanning|scanned|loading|loaded)\b/i;
+    /\b(?:read|reading|write|writing|wrote|edit|editing|edited|inspect|inspecting|inspected|check|checking|checked|list|listing|listed|search|searching|searched|find|finding|found|run|running|ran|open|opening|opened|view|viewing|viewed|create|creating|created|delete|deleting|deleted|update|updating|updated|analyze|analyzing|analyzed|explore|exploring|explored|finished|failed|completed|scanning|scanned|loading|loaded|fix|fixing|fixed|refactor|refactoring|refactored|optimize|optimizing|optimized|debug|debugging|debugged|add|adding|added|remove|removing|removed|build|building|built|deploy|deploying|deployed|test|testing|tested|implement|implementing|implemented|migrate|migrating|migrated|upgrade|upgrading|upgraded|setup|configure|configuring|configured|design|designing|plan|planning|review|reviewing|investigate|investigating|resolve|resolving|improve|improving|clean|cleaning|support|enable|disable|translate|translating|handle|handling|parse|parsing|render|rendering|sync|syncing|patch|patching|harden|hardening)\b/i;
+
+  const TITLE_TIME_RE =
+    /^(?:just\s+now|now|today|yesterday|tomorrow|last\s+(?:week|month|year)|this\s+(?:week|month|year)|\d+\s*(?:s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|wk|wks|week|weeks|mo|mos|month|months|y|yr|yrs|year|years)(?:\s+ago)?|\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]m)?|\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[ T]\d{1,2}:\d{2}(?::\d{2})?)?|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2}(?:,?\s+\d{4})?)$/i;
+  const TITLE_NUM_SYM_RE = /^[\d\s.,:%$€£¥#+\-\x2f\x2a=()[\]{}<>_|\\~\x60!?\x27\x22@^&vV]+$/;
+  const TITLE_PATH_OR_URL_RE = /^(?:(?:https?|file):\/\/\S+|[A-Za-z]:[\\/]\S+|(?:~\/|\.\.?\/|\/)\S+|[A-Za-z0-9_.-]+\.[A-Za-z][A-Za-z0-9]{0,7}(?:#L\d+(?:-L?\d+)?|:\d+(?:-\d+)?)?)$/i;
+  const TITLE_SLUG_RE = /^[A-Za-z0-9]+(?:[-_/][A-Za-z0-9.]+)+$/;
+
+  function isTitleCandidate(raw, targetLang = currentLang) {
+    const norm = trm(raw);
+    if (!norm || norm.length < 4 || norm.length > 200) return false;
+    if (/__\s*OPID/i.test(norm)) return false;
+    if (TITLE_TIME_RE.test(norm) || TITLE_NUM_SYM_RE.test(norm) || TITLE_PATH_OR_URL_RE.test(norm)) return false;
+    if (!/\s/.test(norm) && TITLE_SLUG_RE.test(norm)) return false;
+    const tl = normalizeLangCode(targetLang) || 'zh-CN';
+    const { masked, tokens } = protectToolSummaryTokens(norm);
+    const prose = masked.replace(/__OPID_\d+__/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!prose) return false;
+    const latinWords = (prose.match(/[A-Za-z]{2,}/g) || []).length;
+    const cjk = (prose.match(/[\u4e00-\u9fa5]/g) || []).length;
+    const kana = (prose.match(/[\u3040-\u30ff]/g) || []).length;
+    const han = (prose.match(/[\uac00-\ud7af]/g) || []).length;
+    if (tl === 'en') return cjk + kana + han >= 2;
+    if (tl === 'ja') return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || (cjk >= 4 && kana === 0);
+    if (tl === 'zh-CN' && cjk >= 2 && latinWords < 2 && kana === 0 && han === 0) return false;
+    return latinWords >= 2 || (latinWords === 1 && tokens.length > 0 && TOOL_VERB_RE.test(prose)) || kana >= 3 || han >= 3;
+  }
 
   function protectToolSummaryTokens(text) {
     const src = String(text || '');
@@ -872,8 +906,10 @@
     const cleared = memCache.size;
     memCache.clear();
     toolSummaryCache.clear();
+    titleCache.clear();
     failedSigs.clear();
     toolSummaryFailedUntil.clear();
+    titleFailedUntil.clear();
     try { getStore()?.removeItem?.(LOCAL_CACHE_KEY); } catch (_) {}
     return { ok: true, cleared, memEntries: 0, storageEntries: 0 };
   }
@@ -1031,11 +1067,12 @@
   }
 
   let hasOffscreenLazyPanels = false;
+  let hasOffscreenTitles = false;
   const onScrollCapture = () => {
-    if (currentMode === 'off' || scrollTimer || !hasOffscreenLazyPanels) return;
+    if (currentMode === 'off' || scrollTimer || (!hasOffscreenLazyPanels && !hasOffscreenTitles)) return;
     scrollTimer = setTimeout(() => {
       scrollTimer = null;
-      if (currentMode !== 'off' && hasOffscreenLazyPanels) scheduleScan(20);
+      if (currentMode !== 'off' && (hasOffscreenLazyPanels || hasOffscreenTitles)) scheduleScan(20);
     }, 100);
     scrollTimer?.unref?.();
   };
@@ -1082,11 +1119,44 @@
     return changed;
   }
 
+  function restoreAllTitles() {
+    for (const reqId of titleBatchInflight.values()) {
+      if (reqId) void callDaemonRpc({ action: 'cancel-translate', requestId: reqId }).catch(() => {});
+    }
+    titleBatchInflight.clear();
+    hasOffscreenTitles = false;
+    for (const rec of Array.from(titleRecords)) {
+      try {
+        if (rec.tn && isConn(rec.tn) && getTnStr(rec.tn) === rec.trans) {
+          setTn(rec.tn, rec.orig);
+        }
+        if (rec.el) ra(rec.el, 'data-op-title-tr');
+      } catch (_) {}
+      if (rec.tn) titleNodeMap.delete(rec.tn);
+      titleRecords.delete(rec);
+    }
+  }
+
+  function setTranslateTitlesFlag(enabled, triggerRescan = true) {
+    const next = Boolean(enabled);
+    const changed = translateTitles !== next;
+    translateTitles = next;
+    if (!next) {
+      restoreAllTitles();
+    } else if (changed && triggerRescan && currentMode !== 'off') {
+      scheduleScan(30);
+    }
+    return changed;
+  }
+
   function syncRemoteCfgMeta(res) {
     const nextTag = res?.styleTag || (res?.stylePreset ? `ai_${res.stylePreset}` : '');
     const tagChanged = setActiveStyleTag(nextTag);
     if (res && typeof res.translateToolSummaries === 'boolean') {
       setTranslateToolSummariesFlag(res.translateToolSummaries, false);
+    }
+    if (res && typeof res.translateTitles === 'boolean') {
+      setTranslateTitlesFlag(res.translateTitles, false);
     }
     if (!hasExplicitHostView && (res?.viewMode === 'bilingual' || res?.viewMode === 'immersive')) {
       let hasLocalPref = false;
@@ -1279,6 +1349,7 @@
     }
     clearAllStreamingWatchers();
     restoreAllToolSummaries();
+    restoreAllTitles();
     clearHydrateQueue();
     clearPanelHlItems(null);
     clearAllWaitTimers(false);
@@ -3320,12 +3391,282 @@
     }
   }
 
+  const TITLE_SKIP_TAGS = new Set('SCRIPT,STYLE,SVG,NOSCRIPT,PRE,CODE,INPUT,TEXTAREA,SELECT,TIME,KBD,SAMP'.split(','));
+  const TITLE_CHILD_BADGE_CLS_RE =
+    /\b(?:badge|pill|chip|timestamp|time|meta|count|counter|hotkey|shortcut|avatar|icon|spinner|status|actions?|ag-prism-sb-)\b/i;
+  const TITLE_CHILD_BADGE_TID_RE = /badge|time|date|action|menu|delete|pin|archive|count|status|icon/i;
+
+  function isSidebarStudioActive() {
+    try {
+      const rootEl = docRoot();
+      if (
+        rootEl &&
+        (ga(rootEl, 'data-ag-prism-sidebar') === 'on' || ga(rootEl, 'data-ag-sidebar-studio') === 'on')
+      ) {
+        return true;
+      }
+      return W.__agPrism?.getState?.()?.cfg?.sidebarStudio === 'on';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function isTitleContainerExcluded(container, sidebarOn) {
+    let cur = container;
+    while (cur && cur.nodeType === 1) {
+      if (isOverlayOrIgnoredElement(cur)) return true;
+      if (hasAttr(cur, 'data-ag-prism-sidebar-owned')) return true;
+      const cls = String(ga(cur, 'class') || cur.className || '');
+      if (cls.includes('ag-prism-sb-native-hidden') || cls.includes('ag-prism-chat-row-hidden')) return true;
+      if (sidebarOn && (cls.includes('ag-prism-sb-') || cls.includes('ag-sb-'))) return true;
+      const tid = ga(cur, 'data-testid') || '';
+      if (tid === 'prism-thought-ai-config' || tid === 'prism-thought-general-config') return true;
+      cur = parEl(cur);
+    }
+    return false;
+  }
+
+  function isExcludedTitleChild(el, containerRoot, sidebarOn) {
+    if (!el || el.nodeType !== 1) return true;
+    if (isOverlayOrIgnoredElement(el)) return true;
+    if (
+      hasAttr(el, 'data-ag-prism-sidebar-owned') ||
+      hasAttr(el, 'data-ag-no-i18n') ||
+      hasAttr(el, 'data-file-href') ||
+      hasAttr(el, 'data-file-path') ||
+      hasAttr(el, 'data-omni-path') ||
+      hasAttr(el, 'data-badge')
+    ) {
+      return true;
+    }
+    const tag = el.tagName ? String(el.tagName).toUpperCase() : '';
+    if (TITLE_SKIP_TAGS.has(tag)) return true;
+    const cls = String(ga(el, 'class') || el.className || '');
+    if (sidebarOn && (cls.includes('ag-prism-sb-') || cls.includes('ag-sb-'))) return true;
+    if (el !== containerRoot) {
+      if (tag === 'BUTTON') return true;
+      const role = low(ga(el, 'role'));
+      if (role === 'button' || role === 'status' || role === 'badge') return true;
+      if (TITLE_CHILD_BADGE_CLS_RE.test(cls)) return true;
+      const tid = ga(el, 'data-testid') || '';
+      if (tid && TITLE_CHILD_BADGE_TID_RE.test(tid)) return true;
+    }
+    return false;
+  }
+
+  function collectTitleTextNodes(rootNode, containerRoot, outList, visitedNodes, sidebarOn, activeLang) {
+    if (!rootNode || outList.length >= 40) return;
+    const nt = rootNode.nodeType;
+    if (nt === 3) {
+      if (visitedNodes.has(rootNode)) return;
+      visitedNodes.add(rootNode);
+      const val = getTnStr(rootNode);
+      const prevRec = titleNodeMap.get(rootNode);
+      if (prevRec && prevRec.trans === val && prevRec.lang === activeLang && prevRec.mode === currentMode) {
+        return;
+      }
+      const trimmed = trm(val);
+      if (!trimmed || !isTitleCandidate(trimmed, activeLang)) {
+        if (prevRec && prevRec.trans !== val) {
+          titleNodeMap.delete(rootNode);
+          titleRecords.delete(prevRec);
+          if (prevRec.el) ra(prevRec.el, 'data-op-title-tr');
+        }
+        return;
+      }
+      outList.push({ tn: rootNode, el: parEl(rootNode), raw: val, trimmed });
+      return;
+    }
+    if (nt !== 1 || isExcludedTitleChild(rootNode, containerRoot, sidebarOn)) return;
+    const chs = rootNode[K_CN];
+    if (!chs || !chs.length) return;
+    for (let i = 0; i < chs.length && outList.length < 40; i++) {
+      collectTitleTextNodes(chs[i], containerRoot, outList, visitedNodes, sidebarOn, activeLang);
+    }
+  }
+
+  function applyTitleText(item, translatedStr, activeLang, mode) {
+    if (!item || !item.tn || !isConn(item.tn) || !translatedStr) return;
+    const curVal = getTnStr(item.tn);
+    if (curVal !== item.raw) return;
+    const leadMatch = /^\s*/.exec(item.raw);
+    const trailMatch = /\s*$/.exec(item.raw);
+    const lead = leadMatch ? leadMatch[0] : '';
+    const trail = trailMatch ? trailMatch[0] : '';
+    const nextVal = `${lead}${translatedStr}${trail}`;
+    if (nextVal === item.raw) return;
+
+    const oldRec = titleNodeMap.get(item.tn);
+    const orig = oldRec && item.raw === oldRec.trans ? oldRec.orig : item.raw;
+    if (oldRec) titleRecords.delete(oldRec);
+
+    setTn(item.tn, nextVal);
+    if (item.el) sa(item.el, 'data-op-title-tr', '1');
+    const rec = { tn: item.tn, el: item.el, orig, trans: nextVal, lang: activeLang, mode };
+    titleNodeMap.set(item.tn, rec);
+    titleRecords.add(rec);
+  }
+
+  function markTitleFailed(key, until) {
+    if (titleFailedUntil.has(key)) titleFailedUntil.delete(key);
+    titleFailedUntil.set(key, until);
+    while (titleFailedUntil.size > 512) {
+      const oldest = titleFailedUntil.keys().next().value;
+      if (oldest === undefined) break;
+      titleFailedUntil.delete(oldest);
+    }
+  }
+
+  function pruneDetachedTitleRecords() {
+    if (!titleRecords.size) return;
+    for (const rec of Array.from(titleRecords)) {
+      if (!rec || !rec.tn || !isConn(rec.tn)) {
+        if (rec && rec.tn) titleNodeMap.delete(rec.tn);
+        titleRecords.delete(rec);
+      }
+    }
+  }
+
+  function scanConversationTitles() {
+    pruneDetachedTitleRecords();
+    if (!translateTitles || currentMode === 'off' || typeof document === 'undefined') return;
+    const br = getBridge();
+    if (!br || typeof br.translateStream !== 'function') return;
+
+    const nodes = qsa(SEL_TITLE_CONTAINERS);
+    if (!nodes || !nodes.length) {
+      hasOffscreenTitles = false;
+      return;
+    }
+
+    const sidebarOn = isSidebarStudioActive();
+    const activeLang = resolveActiveLang();
+    const activeMode = currentMode;
+    const modePrefix = `${activeMode}:${activeLang}:`;
+    const visitedNodes = new Set();
+    const candidates = [];
+    let sawOffscreen = false;
+
+    for (let i = 0; i < nodes.length && candidates.length < 40; i++) {
+      const c = nodes[i];
+      if (!c || !isConn(c) || isHiddenByAncestor(null, c)) continue;
+      if (isTitleContainerExcluded(c, sidebarOn)) continue;
+      if (probeViewportBand(c) === 0) {
+        sawOffscreen = true;
+        continue;
+      }
+      collectTitleTextNodes(c, c, candidates, visitedNodes, sidebarOn, activeLang);
+    }
+    hasOffscreenTitles = sawOffscreen;
+    if (!candidates.length) return;
+
+    const now = nowMs();
+    const uncached = [];
+    const uniqueTrimmed = [];
+    const uniqueIdxMap = new Map();
+
+    for (let i = 0; i < candidates.length; i++) {
+      const cand = candidates[i];
+      const cacheKey = `${modePrefix}${cand.trimmed}`;
+      const hit = titleCache.get(cacheKey) || toolSummaryCache.get(cacheKey);
+      if (hit) {
+        applyTitleText(cand, hit, activeLang, activeMode);
+        continue;
+      }
+      const failUntil = titleFailedUntil.get(cacheKey);
+      if (failUntil) {
+        if (now < failUntil) continue;
+        titleFailedUntil.delete(cacheKey);
+      }
+      uncached.push(cand);
+      if (!uniqueIdxMap.has(cand.trimmed)) {
+        uniqueIdxMap.set(cand.trimmed, uniqueTrimmed.length);
+        uniqueTrimmed.push(cand.trimmed);
+      }
+    }
+
+    if (!uniqueTrimmed.length) return;
+
+    for (let start = 0; start < uniqueTrimmed.length; start += 24) {
+      const batchStrings = uniqueTrimmed.slice(start, start + 24);
+      const batchSet = new Set(batchStrings);
+      const batchCands = uncached.filter((c) => batchSet.has(c.trimmed));
+      const batchIdxMap = new Map();
+      for (let k = 0; k < batchStrings.length; k++) batchIdxMap.set(batchStrings[k], k);
+
+      const batchKey = `${modePrefix}${batchStrings.join('\x1f')}`;
+      if (titleBatchInflight.has(batchKey)) continue;
+
+      const requestId = `op_tt_${nowMs().toString(36)}_${++reqSeq}`;
+      titleBatchInflight.set(batchKey, requestId);
+
+      br.translateStream(
+        {
+          text: JSON.stringify({ v: 1, items: batchStrings }),
+          mode: activeMode === 'machine' ? 'tool-batch:machine' : 'tool-batch:ai',
+          priority: 7000,
+          requestId,
+          targetLang: activeLang,
+        },
+        null
+      )
+        .then((res) => {
+          titleBatchInflight.delete(batchKey);
+          if (!translateTitles || currentMode !== activeMode || resolveActiveLang() !== activeLang) return;
+          let outItems = null;
+          if (res && res.ok) {
+            if (Array.isArray(res.items)) {
+              outItems = res.items;
+            } else if (typeof res.text === 'string' && res.text.trim()) {
+              try {
+                const parsed = JSON.parse(res.text);
+                if (Array.isArray(parsed?.items)) outItems = parsed.items;
+              } catch (_) {}
+            }
+          }
+          if (!outItems || outItems.length !== batchStrings.length) {
+            const until = nowMs() + 20000;
+            for (let k = 0; k < batchStrings.length; k++) {
+              markTitleFailed(`${modePrefix}${batchStrings[k]}`, until);
+            }
+            return;
+          }
+          for (let k = 0; k < batchStrings.length; k++) {
+            const trText = typeof outItems[k] === 'string' ? outItems[k].trim() : '';
+            if (trText && trText !== batchStrings[k]) {
+              if (titleCache.size >= 600) {
+                const oldest = titleCache.keys().next().value;
+                if (oldest !== undefined) titleCache.delete(oldest);
+              }
+              titleCache.set(`${modePrefix}${batchStrings[k]}`, trText);
+            }
+          }
+          for (let i = 0; i < batchCands.length; i++) {
+            const cand = batchCands[i];
+            const idx = batchIdxMap.get(cand.trimmed);
+            const trText = idx !== undefined && typeof outItems[idx] === 'string' ? outItems[idx].trim() : '';
+            if (trText && trText !== cand.trimmed) {
+              applyTitleText(cand, trText, activeLang, activeMode);
+            }
+          }
+        })
+        .catch(() => {
+          titleBatchInflight.delete(batchKey);
+          const until = nowMs() + 20000;
+          for (let k = 0; k < batchStrings.length; k++) {
+            markTitleFailed(`${modePrefix}${batchStrings[k]}`, until);
+          }
+        });
+    }
+  }
+
   function scanNow() {
     scanTimer = null;
     if (currentMode === 'off') return;
     const triggers = queryTriggers();
     if (!triggers.length) {
       if (translateToolSummaries) scanToolSummaryContainers();
+      if (translateTitles) scanConversationTitles();
       return;
     }
 
@@ -3397,6 +3738,7 @@
       }
     }
     if (translateToolSummaries) scanToolSummaryContainers();
+    if (translateTitles) scanConversationTitles();
   }
 
   function scheduleScan(delayMs = 55) {
@@ -3435,6 +3777,11 @@
         toolSummaryChanged = setTranslateToolSummariesFlag(cfg.translateToolSummaries, false);
       }
 
+      let titleChanged = false;
+      if (typeof cfg.translateTitles === 'boolean') {
+        titleChanged = setTranslateTitlesFlag(cfg.translateTitles, false);
+      }
+
       const incomingView = cfg.thoughtView || cfg.thoughtViewMode;
       let viewChanged = false;
       if (incomingView === 'bilingual' || incomingView === 'immersive') {
@@ -3467,6 +3814,7 @@
       if (changed || langChanged) {
         clearHydrateQueue();
         restoreAllToolSummaries();
+        restoreAllTitles();
         if (hadPrevEngine) {
           clearAllWaitTimers(false);
           for (const entry of inflightBySig.values()) cancelTranslateRequest(entry);
@@ -3488,7 +3836,7 @@
         qsa(SEL_TRIGGER).forEach((b) => resetPanelSig(nextSib(b)));
         qsa(SEL_OVERLAY).forEach((ov) => resetPanelSig(parEl(ov)));
       }
-      const needScan = !syncedOnce || changed || langChanged || viewChanged || triggerChanged || toolSummaryChanged;
+      const needScan = !syncedOnce || changed || langChanged || viewChanged || triggerChanged || toolSummaryChanged || titleChanged;
       syncedOnce = true;
       if (needScan) scheduleScan(25);
     },
@@ -3528,6 +3876,17 @@
       }
       return translateToolSummaries;
     },
+    getTranslateTitles() {
+      return Boolean(translateTitles);
+    },
+    setTranslateTitles(enabled, opts = {}) {
+      const next = Boolean(enabled);
+      const changed = setTranslateTitlesFlag(next, true);
+      if (changed && opts.persistDaemon === true) {
+        void callDaemonRpc({ action: 'save-config', translateTitles: next }).catch(() => {});
+      }
+      return translateTitles;
+    },
     retryBlock: (panel) => retryPanelNow(panel),
     clearCooldown: (sig) => clearSigCooldown(sig),
     getLocalCacheStats,
@@ -3564,6 +3923,11 @@
         } else if (input && typeof input.translateToolSummaries === 'boolean') {
           setTranslateToolSummariesFlag(input.translateToolSummaries, false);
         }
+        if (res && typeof res.translateTitles === 'boolean') {
+          setTranslateTitlesFlag(res.translateTitles, false);
+        } else if (input && typeof input.translateTitles === 'boolean') {
+          setTranslateTitlesFlag(input.translateTitles, false);
+        }
         qsa(SEL_TRIGGER).forEach((b) => {
           const p = nextSib(b);
           if (p && (tagChanged || ga(p, A_FBK) === '1' || ga(p, A_FLD) === '1' || findChildByClass(b, C_TRG))) {
@@ -3574,19 +3938,24 @@
         });
         failedSigs.clear();
         toolSummaryFailedUntil.clear();
+        titleFailedUntil.clear();
         scheduleScan(25);
         return res;
       });
     },
     fetchModels: (input) => brCall('fetch-models', input),
     testConnection: (input) => brCall('test-connection', input),
+    diagnose: (input) => brCall('diagnose', input),
     __memCache: memCache,
     __toolSummaryRecords: toolSummaryRecords,
     __toolSummaryFailedUntil: toolSummaryFailedUntil,
+    __titleRecords: titleRecords,
+    __titleFailedUntil: titleFailedUntil,
     destroy() {
       currentMode = 'off';
       syncedOnce = false;
       hasOffscreenLazyPanels = false;
+      hasOffscreenTitles = false;
       clrScan();
       if (cacheDirty || persistTimer || persistIdle || memCache.size > storedCount) flushLocalStorageCacheNow();
       releasePrismOverlays();

@@ -1619,12 +1619,14 @@ test(
     const usageCachePath = path.join(cfgDir, 'obsidian-prism-usage-rollup-cache.json');
     const safeOverridePath = path.join(overrideDir, 'obsidian-prism-usage-rollup-cache.json');
     const thoughtCfgPath = path.join(cfgDir, 'obsidian-prism-thought.json');
+    const wallpaperCfgPath = path.join(cfgDir, 'obsidian-prism-wallpaper.json');
     const hijackedPath = path.join(overrideDir, 'important-user-data.json');
     const redlinePath = path.join(redlineDir, 'obsidian-prism-usage-rollup-cache.json');
 
     fs.writeFileSync(usageCachePath, '{"version":2,"scopes":{"local":{}}}', 'utf8');
     fs.writeFileSync(safeOverridePath, '{"version":2,"scopes":{"ssh:prod":{}}}', 'utf8');
     fs.writeFileSync(thoughtCfgPath, '{"engine":"gemini"}', 'utf8');
+    fs.writeFileSync(wallpaperCfgPath, '{"enabled":true}', 'utf8');
     fs.writeFileSync(hijackedPath, '{"keep":true}', 'utf8');
     fs.writeFileSync(redlinePath, '{"archive":true}', 'utf8');
 
@@ -1657,6 +1659,7 @@ test(
       assert.equal(fs.existsSync(usageCachePath), false, 'installer.exe --purge-data must delete obsidian-prism-usage-rollup-cache.json');
       assert.equal(fs.existsSync(safeOverridePath), false, 'installer.exe --purge-data must delete safe PRISM_USAGE_CACHE_PATH');
       assert.equal(fs.existsSync(thoughtCfgPath), false);
+      assert.equal(fs.existsSync(wallpaperCfgPath), false, 'installer.exe --purge-data must delete obsidian-prism-wallpaper.json');
 
       // Re-run with hijacked filename & redline path -> must be strictly refused
       for (const dangerousTarget of [hijackedPath, redlinePath]) {

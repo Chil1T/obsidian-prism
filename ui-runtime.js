@@ -2318,8 +2318,11 @@
       const isDialogRoot = role === 'dialog' || q('[role="dialog"]');
 
       if (isModelOrPulse) {
-        dirtyFlags.o = dirtyFlags.c = true;
-        if (isAdded) touchedButtons = true;
+        dirtyFlags.c = true;
+        if (!ancMdl) {
+          dirtyFlags.o = true;
+          if (isAdded) touchedButtons = true;
+        }
       } else if (isDialogRoot || ancDlg) {
         inPlainDialog = true;
         if (isDialogRoot || (isAdded && (tg === 'H2' || cls.includes('space-y-2') || q('h2, div.space-y-2')))) {

@@ -140,6 +140,25 @@ npm run install:plugin
 ```
 安装完成后打开 **设置 (Settings) → 外观 (Appearance)**，展开 **「Obsidian Prism · 黑曜棱镜」** 区域即可调整各项参数。
 
+### AI 助手代装标准流程 & 思考翻译排查清单
+如果你使用 AI 助手（Claude Code、Cursor、Antigravity Agent 等）协助从源码安装，请**严格执行以下标准命令**完成部署与验收：
+```bash
+git clone https://github.com/RMvdesi/obsidian-prism.git
+cd obsidian-prism
+
+# 1. 必须执行完整原生插件部署（同步全部模块并启动后台常驻 Sidecar 守护进程）
+npm run install:plugin
+
+# 2. 必须执行安装状态自检，确认后台守护与按需通道均已就绪
+node tools/install-plugin.cjs --status
+```
+- **严禁仅执行 `npm run inject` 替代安装**：`npm run inject` 仅做单次临时前端注入，**不会**将插件部署至 `~/.gemini/config/plugins/obsidian-prism`，也**不会**启动常驻 Sidecar 守护进程——这会导致思考翻译、本地遥测与动态壁纸等 Sidecar 通道离线，且在窗口刷新、重启或更新后立即失效。
+- **核对 `--status` 自检项**：确认返回 JSON 中 `installed: true`、`daemonAlive: true`、`hasThoughtTranslator: true`、`hasWallpaperChannel: true`；若 `bareAntigravityRunning: true`（常见于客户端在线更新后裸启），请关闭 Antigravity 并通过已自动补齐 `--remote-debugging-port=0` 的桌面/开始菜单快捷方式重开一次即可激活。
+- **思考过程翻译排查清单**：
+  1. **出厂默认关闭**：思考过程翻译（Channel 5）默认关闭（`thoughtTranslate: "off"`，零注入），安装后需打开 **设置 (Settings) → 外观 (Appearance) → Obsidian Prism**，手动切换为 **机器翻译（免配置）** 或 **AI 模型流式转译**（按需可同时开启「会话标题自动翻译」）。
+  2. **开启后无反应**：点击思考翻译设置卡片顶部的 **「一键诊断」** 按钮，即可一键核验守护桥接在线态、当前模式/模型配置、系统代理与上游网络连通性；也可重新执行 `node tools/install-plugin.cjs --status` 确认 `daemonAlive: true`。
+  3. **更新或裸启后样式暂时回退**：若客户端刚完成在线自动更新且当次裸启无调试端口，接受守护进程弹出的温和重开恢复提示，或直接通过桌面/开始菜单快捷方式重启一次 Antigravity 即可恢复。
+
 ### 常见问题与 `Antigravity v2.33.0+` 兼容说明 (FAQ)
 - **为什么客户端在线自动更新到 `v2.33.0+` 当次重启后界面暂时回到原生状态？**
   自 `Antigravity v2.33.0` 起，宿主将本地调试桥接改为显式按需启用（`--remote-debugging-port=0`，仅在本地 `127.0.0.1` 随机分配端口并写入受限鉴权文件），且客户端内置在线更新器（`quitAndInstall`）当次拉起进程时不携带命令行参数。Obsidian Prism 内置双层自动恢复机制：

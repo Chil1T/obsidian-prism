@@ -516,13 +516,13 @@ test('v107 A2-7: default buildInjectExpression never pollutes repo, and PrismDae
   }
 });
 
-test('v107 A2-8: single-pass PrismDaemon.rebuildBundle cold hit parses .bundle-cache.json once across all 5 channels and detects same-length same-mtime disk tampering', async () => {
+test('v107 A2-8: single-pass PrismDaemon.rebuildBundle cold hit parses .bundle-cache.json once across all 6 sub-channels and detects same-length same-mtime disk tampering', async () => {
   const snap = await createIsolatedPluginSnapshot('prism-v107-cache-root-');
   const cachePath = path.join(snap.pluginDir, '.bundle-cache.json');
   const origReadFileSync = fs.readFileSync;
   const origJsonParse = JSON.parse;
   try {
-    // 1) Enable all 5 channels and cold-compile into .bundle-cache.json via PrismDaemon.rebuildBundle()
+    // 1) Enable all 6 sub-channels (Channels 2-7) and cold-compile into .bundle-cache.json via PrismDaemon.rebuildBundle()
     const cdpSeed = loadFreshCdp(snap.cdpPath);
     cdpSeed.writeConfig({
       ...cdpSeed.DEFAULT_CONFIG,
@@ -545,8 +545,9 @@ test('v107 A2-8: single-pass PrismDaemon.rebuildBundle cold hit parses .bundle-c
     assert.ok(dCold.hostI18nExpr.length > 0);
     assert.ok(dCold.thoughtExpr.length > 0);
     assert.ok(dCold.inlineDiffExpr.length > 0);
+    assert.ok(dCold.wallpaperExpr.length > 0);
 
-    // 2) Simulate cold daemon restart: all 6 channels hit disk cache with ONLY 1 readFileSync + 1 JSON.parse
+    // 2) Simulate cold daemon restart: all 7 channels hit disk cache with ONLY 1 readFileSync + 1 JSON.parse
     delete require.cache[require.resolve(snap.cdpPath)];
     const dHit = new PrismDaemon({
       rootDir: snap.pluginDir,
@@ -584,12 +585,14 @@ test('v107 A2-8: single-pass PrismDaemon.rebuildBundle cold hit parses .bundle-c
     assert.equal(dHit.hostI18nExpr, dCold.hostI18nExpr);
     assert.equal(dHit.thoughtExpr, dCold.thoughtExpr);
     assert.equal(dHit.inlineDiffExpr, dCold.inlineDiffExpr);
-    assert.equal(cacheReads, 1, 'rebuildBundle() cold hit across 6 channels must read .bundle-cache.json only once');
-    assert.equal(cacheParses, 1, 'rebuildBundle() cold hit across 6 channels must JSON.parse .bundle-cache.json only once');
+    assert.equal(dHit.wallpaperExpr, dCold.wallpaperExpr);
+    assert.equal(cacheReads, 1, 'rebuildBundle() cold hit across 7 channels must read .bundle-cache.json only once');
+    assert.equal(cacheParses, 1, 'rebuildBundle() cold hit across 7 channels must JSON.parse .bundle-cache.json only once');
 
     const hitStats = dHit.cdp.getBundleCacheStats();
     assert.equal(hitStats.diskHits, 1);
-    assert.equal(hitStats.channelDiskHits, 5);
+    assert.equal(hitStats.channelDiskHits, 6);
+    assert.equal(hitStats.channelHitsByName.wallpaper, 1);
     assert.equal(hitStats.compileUnifiedRuns, 0);
     assert.equal(hitStats.channelCompileRuns, 0);
 

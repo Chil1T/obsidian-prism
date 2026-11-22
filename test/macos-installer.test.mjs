@@ -332,6 +332,7 @@ test('macOS Swift installer & LaunchAgent contracts enforce KeepAlive <true/>, n
   assert.ok(cdpSwift.includes('obsidian-prism-thought-cache.json'), 'macOS CdpClient cleans thought cache on uninstall while preserving secret file');
   assert.equal(cdpSwift.includes('obsidian-prism-usage-rollup-cache.json'), false, 'macOS CdpClient default uninstall must preserve usage rollup cache');
   assert.ok(setupSwift.includes('"obsidian-prism-usage-rollup-cache.json"'), 'macOS Setup purgeUserPluginData must clean usage rollup cache on --purge-data');
+  assert.ok(setupSwift.includes('"obsidian-prism-wallpaper.json"'), 'macOS Setup purgeUserPluginData must clean obsidian-prism-wallpaper.json on --purge-data');
   assert.ok(setupSwift.includes('PRISM_USAGE_CACHE_PATH'), 'macOS Setup purgeUserPluginData must safely handle PRISM_USAGE_CACHE_PATH override');
   assert.ok(cdpSwift.includes('isBareAuxiliaryTarget'), 'macOS CdpClient narrows Untitled/launchpad filtering to bare auxiliary targets');
   assert.ok(cdpSwift.includes('checkHostIdentity'), 'macOS CdpClient enforces in-page checkHostIdentity gate');

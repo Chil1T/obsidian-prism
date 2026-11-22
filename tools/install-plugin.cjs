@@ -777,6 +777,30 @@ async function installPlugin(opts = {}) {
     hasClient: fs.existsSync(path.join(targetDir, "vendor", "sidebar-studio", "sidebar-client.js")),
   };
 
+  const statusSnap = getPluginInstallStatus({
+    targetDir,
+    hostProbe: opts.hostProbe,
+    watcherDir: opts.watcherDir,
+    platformOverride: opts.platformOverride,
+    probeHost: typeof opts.hostProbe === "function" || (isDefaultTarget && !isAutomatedTestRuntime()),
+    bareAntigravityRunning:
+      deferredRelaunchHost && deferredRelaunchHost.pid ? true : undefined,
+  });
+
+  const selfCheck = {
+    hasThoughtTranslator: statusSnap.hasThoughtTranslator,
+    hasWallpaperChannel: statusSnap.hasWallpaperChannel,
+    bareAntigravityRunning: statusSnap.bareAntigravityRunning,
+    watcherInstalled: statusSnap.watcherInstalled,
+    thoughtTranslateMode: statusSnap.thoughtTranslateMode,
+    thoughtTranslateDefaultOff: statusSnap.thoughtTranslateMode === "off",
+    needsHostRelaunch: Boolean(
+      statusSnap.bareAntigravityRunning ||
+        (liveCheck && liveCheck.unreachable) ||
+        (deferredRelaunchHost && deferredRelaunchHost.pid)
+    ),
+  };
+
   return {
     ok: true,
     targetDir,
@@ -788,6 +812,7 @@ async function installPlugin(opts = {}) {
     shortcuts,
     deferredRelaunchHost,
     sidebarStudio,
+    selfCheck,
     daemon: daemonInfo,
     live: liveCheck,
   };
@@ -901,6 +926,7 @@ async function uninstallPlugin(opts = {}) {
           "obsidian-prism-usage-rollup-cache.json",
           "obsidian-prism-sidebar.json",
           "obsidian-prism-sidebar.json.lock",
+          "obsidian-prism-wallpaper.json",
         ];
         for (const name of exactFiles) {
           const fp = path.join(hostConfigDir, name);
@@ -956,6 +982,53 @@ async function uninstallPlugin(opts = {}) {
   };
 }
 
+function isStandaloneWatcherInstalled(opts = {}) {
+  const plat = opts.platformOverride || process.platform;
+  const customDir = typeof opts.watcherDir === "string" && opts.watcherDir.trim() ? path.resolve(opts.watcherDir.trim()) : null;
+  if (plat === "win32") {
+    const base =
+      customDir ||
+      path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "obsidian-prism");
+    return fs.existsSync(path.join(base, "obsidian-prism-watcher.exe"));
+  }
+  if (plat === "darwin") {
+    const base =
+      customDir ||
+      path.join(os.homedir(), "Library", "Application Support", "obsidian-prism");
+    return fs.existsSync(path.join(base, "obsidian-prism-watcher"));
+  }
+  return false;
+}
+
+function detectBareAntigravityRunningSync(opts = {}) {
+  if (opts.bareAntigravityRunning !== undefined) {
+    return Boolean(opts.bareAntigravityRunning);
+  }
+  const allowProbe =
+    typeof opts.hostProbe === "function" ||
+    opts.probeHost === true ||
+    !isAutomatedTestRuntime();
+  if (!allowProbe) return false;
+  try {
+    const runningHost = detectRunningAntigravityHostSync({ probeProcesses: opts.hostProbe });
+    return Boolean(runningHost && runningHost.pid && !runningHost.hasDebugPortSwitch);
+  } catch {
+    return false;
+  }
+}
+
+function readThoughtTranslateMode(targetDir) {
+  try {
+    const cfgPath = path.join(targetDir, "config.json");
+    if (!fs.existsSync(cfgPath)) return "off";
+    const parsed = JSON.parse(fs.readFileSync(cfgPath, "utf8").replace(/^\uFEFF/, ""));
+    const raw = typeof parsed?.thoughtTranslate === "string" ? parsed.thoughtTranslate.trim().toLowerCase() : "";
+    return raw || "off";
+  } catch {
+    return "off";
+  }
+}
+
 function getPluginInstallStatus(opts = {}) {
   const targetDir = path.resolve(opts.targetDir || getDefaultPluginTargetDir());
   const pluginJsonPath = path.join(targetDir, "plugin.json");
@@ -963,6 +1036,8 @@ function getPluginInstallStatus(opts = {}) {
   const logoPath = path.join(targetDir, "assets", "logo.svg");
   const sidebarServicePath = path.join(targetDir, "vendor", "sidebar-studio", "sidebar-service.mjs");
   const sidebarClientPath = path.join(targetDir, "vendor", "sidebar-studio", "sidebar-client.js");
+  const thoughtServicePath = path.join(targetDir, "vendor", "thought-translator", "translator-service.mjs");
+  const wallpaperServicePath = path.join(targetDir, "vendor", "wallpaper", "wallpaper-service.mjs");
   const pidFile = path.join(targetDir, ".daemon.pid");
 
   let daemonPid = null;
@@ -975,6 +1050,12 @@ function getPluginInstallStatus(opts = {}) {
     } catch {}
   }
 
+  const hasThoughtTranslator = fs.existsSync(thoughtServicePath);
+  const hasWallpaperChannel = fs.existsSync(wallpaperServicePath);
+  const bareAntigravityRunning = detectBareAntigravityRunningSync(opts);
+  const watcherInstalled = isStandaloneWatcherInstalled(opts);
+  const thoughtTranslateMode = readThoughtTranslateMode(targetDir);
+
   return {
     installed: fs.existsSync(pluginJsonPath) && fs.existsSync(sidecarJsonPath),
     targetDir,
@@ -982,9 +1063,46 @@ function getPluginInstallStatus(opts = {}) {
     hasSidecar: fs.existsSync(sidecarJsonPath),
     hasSidebarService: fs.existsSync(sidebarServicePath),
     hasSidebarClient: fs.existsSync(sidebarClientPath),
+    hasThoughtTranslator,
+    hasWallpaperChannel,
+    bareAntigravityRunning,
+    watcherInstalled,
+    thoughtTranslateMode,
     daemonPid,
     daemonAlive,
   };
+}
+
+function formatInstallSelfCheckSummary(res) {
+  const sc = (res && res.selfCheck) || {};
+  const daemonAlive = Boolean(res?.daemon?.pidVerified || res?.daemon?.started);
+  const patchedCount = Array.isArray(res?.shortcuts?.patched) ? res.shortcuts.patched.length : 0;
+  const alreadySetCount = Array.isArray(res?.shortcuts?.alreadySet) ? res.shortcuts.alreadySet.length : 0;
+  const attachedCount = Array.isArray(res?.live?.attachedPages) ? res.live.attachedPages.length : 0;
+  const thoughtMode = sc.thoughtTranslateMode || "off";
+  const lines = [
+    "",
+    "================ Obsidian Prism 安装自检摘要 / Self-Check Summary ================",
+    `[中文] 插件目录: ${res?.targetDir || getDefaultPluginTargetDir()}`,
+    `[中文] 后台守护: ${daemonAlive ? "运行中 (PID " + (res?.daemon?.pid || "?") + ")" : "未启动"} | 已连接窗口: ${attachedCount} | 思考翻译模块: ${sc.hasThoughtTranslator ? "已就绪" : "缺失"} | 壁纸通道(Ch7): ${sc.hasWallpaperChannel ? "已就绪" : "缺失"} | 独立Watcher: ${sc.watcherInstalled ? "已安装" : "未安装(源码模式)"}`,
+    `[中文] 快捷方式 --remote-debugging-port=0: 本次新补齐 ${patchedCount} 个，已就绪 ${alreadySetCount} 个。`,
+    thoughtMode === "off"
+      ? "[中文] 提示: 思考过程翻译默认处于关闭态 (off, 0 B 注入)，请打开 Antigravity「设置 -> 外观 -> Obsidian Prism」手动开启「机器翻译」或「AI 流式转译」。"
+      : `[中文] 思考过程翻译当前模式: ${thoughtMode}（如翻译异常，可在设置卡片点击「一键诊断」排查）。`,
+    sc.bareAntigravityRunning || sc.needsHostRelaunch
+      ? "[中文] 重要提醒: 检测到当前 Antigravity 为无调试端口裸启实例（常见于客户端在线更新后），请关闭并通过已修补的桌面/开始菜单快捷方式重新打开 Antigravity 一次即可自动激活！"
+      : "[中文] 当前未检测到裸启冲突；随时可运行 `node tools/install-plugin.cjs --status` 复核插件状态。",
+    `[EN] Plugin Dir: ${res?.targetDir || getDefaultPluginTargetDir()}`,
+    `[EN] Daemon: ${daemonAlive ? "alive (PID " + (res?.daemon?.pid || "?") + ")" : "stopped"} | Attached Windows: ${attachedCount} | ThoughtTranslator: ${sc.hasThoughtTranslator ? "ready" : "missing"} | Wallpaper(Ch7): ${sc.hasWallpaperChannel ? "ready" : "missing"} | Watcher: ${sc.watcherInstalled ? "installed" : "not-installed"}`,
+    thoughtMode === "off"
+      ? "[EN] Note: Thought Translator is OFF by default (0 B injected). Enable Machine or AI streaming mode in Settings -> Appearance -> Obsidian Prism."
+      : `[EN] Thought Translator mode: ${thoughtMode} (use the 1-click Diagnose bar in Settings if translation fails).`,
+    sc.bareAntigravityRunning || sc.needsHostRelaunch
+      ? "[EN] Action Required: Antigravity is currently running bare without --remote-debugging-port=0 (common after an in-app update). Close and relaunch Antigravity once via a patched shortcut to activate."
+      : "[EN] Status healthy. Run `node tools/install-plugin.cjs --status` anytime to verify.",
+    "==================================================================================",
+  ];
+  return lines.join("\n");
 }
 
 function parseCliArgs(argv) {
@@ -1040,6 +1158,7 @@ if (require.main === module) {
       syncShortcuts: cli.noShortcuts ? false : undefined,
     });
     console.log(JSON.stringify(res, null, 2));
+    console.error(formatInstallSelfCheckSummary(res));
   })().catch((err) => {
     console.error("[Obsidian Prism InstallPlugin] Error:", err);
     process.exit(1);
@@ -1061,6 +1180,9 @@ module.exports = {
   installPlugin,
   uninstallPlugin,
   getPluginInstallStatus,
+  isStandaloneWatcherInstalled,
+  detectBareAntigravityRunningSync,
+  formatInstallSelfCheckSummary,
   terminatePidAndWait,
   stopExistingDaemonInDir,
   parseCliArgs,

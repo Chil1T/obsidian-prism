@@ -169,6 +169,8 @@
       return String(row?.getAttribute?.('data-cascade-id') || row?.dataset?.cascadeId || '').trim();
     };
 
+    const edTxt = (ed) => String(isFld(ed) ? (ed.value ?? '') : (ed.textContent ?? '')).replace(/\u200B/g, '').trim();
+
     const findEmptyComposer = (ex) => {
       const ed = [
         qs(BOX + ' ' + CE + ',' + BOX + ' textarea'),
@@ -176,8 +178,7 @@
         safe(() => qs('#antigravity\\.agentSidePanelInputBox ' + CE)),
       ].find((el) => el && !inSide(el));
       if (!ed) { showToast(P()[10], 'warn'); return { err: fail('no-composer', ex) }; }
-      const txt = String(isFld(ed) ? (ed.value ?? '') : (ed.textContent ?? '')).replace(/\u200B/g, '').trim();
-      if (txt) { showToast(P()[8], 'warn'); return { err: fail('draft-not-empty', ex) }; }
+      if (edTxt(ed)) { showToast(P()[8], 'warn'); return { err: fail('draft-not-empty', ex) }; }
       return { ed };
     };
 
@@ -205,9 +206,8 @@
             const r = doc.createRange(); r.selectNodeContents(ed); r.collapse(false); s.removeAllRanges(); s.addRange(r);
           }
         });
-        const prev = String(ed.textContent || '');
-        if (!safe(() => doc?.execCommand?.('insertText', false, text)) || String(ed.textContent || '') === prev) {
-          ed.textContent = prev + text;
+        if (safe(() => doc?.execCommand?.('insertText', false, text)) !== true) {
+          ed.textContent = String(ed.textContent || '') + text;
           emit = 1;
         }
       }
@@ -296,6 +296,10 @@
         await waitStep();
         const ab = guard();
         if (ab) return ab;
+        if (!pickedFromMenu) {
+          const cur = edTxt(ed).toLowerCase();
+          if (cur.startsWith(norm) && cur.slice(norm.length).replace(/^[ \t]+/, '').startsWith(norm)) return fail('duplicate-command', cx);
+        }
 
         let sendBtn = null;
         for (const sc of [ed.closest?.(BOX), doc]) {

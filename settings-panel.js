@@ -347,6 +347,7 @@
       if (typeof rootEl.__prismMountThoughtUi === 'function') {
         try { rootEl.__prismMountThoughtUi(); } catch {}
       }
+      try { rootEl.__prismMountWp?.(l); } catch {}
 
       const de = doc.documentElement;
       const themeAttr = de?.getAttribute?.('data-ag-cs-theme') || '';
@@ -541,6 +542,7 @@
       let probeRepoRef = null;
       let thoughtListEl = null;
       let thoughtUiHandle = null;
+      let wpSlot = null;
 
       const getThoughtUiHandle = () => {
         const live = sec.__prismThoughtUiHandle || thoughtUiHandle;
@@ -603,6 +605,10 @@
         return handle;
       };
       sec.__prismMountThoughtUi = mountThoughtUiIfReady;
+      sec.__prismMountWp = (l) => {
+        const f = G.__prismMountWallpaperUi;
+        if (wpSlot && f) f(wpSlot, { lang: l || getLang(), getLang, runGuardedMut });
+      };
 
       const syncFoldBadgeOnly = (st) => {
         if (!updBadge[K_IC] || !st || st.offline || st.timeout) return;
@@ -832,6 +838,12 @@
               thoughtListEl = list;
             }
             ap(groupsWrap, ap(grpEl, mkEl('div', 'ag-cs-settings-subhead', grp.title), list));
+            if (grp.id === 'appearance') {
+              wpSlot = mkEl('div');
+              sa(wpSlot, 'data-testid', 'prism-wallpaper-slot');
+              setVis(wpSlot, false);
+              ap(grpEl, wpSlot);
+            }
           }
 
           const aboutGrp = mkEl('div', 'ag-cs-settings-group');

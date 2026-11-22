@@ -214,6 +214,7 @@ test('tools/install-plugin.cjs default uninstall backs up & restores config.json
     const sidebarCfg = path.join(hostConfigDir, 'obsidian-prism-sidebar.json');
     const sidebarLock = path.join(hostConfigDir, 'obsidian-prism-sidebar.json.lock');
     const sidebarBak = path.join(hostConfigDir, 'obsidian-prism-sidebar.json.v1.12345.bak');
+    const wallpaperCfg = path.join(hostConfigDir, 'obsidian-prism-wallpaper.json');
 
     fs.writeFileSync(thoughtCfg, JSON.stringify({ apiKey: 'sk-test-secret' }));
     fs.writeFileSync(thoughtCache, '{"c":1}');
@@ -221,6 +222,7 @@ test('tools/install-plugin.cjs default uninstall backs up & restores config.json
     fs.writeFileSync(sidebarCfg, '{"folders":[]}');
     fs.writeFileSync(sidebarLock, 'lock');
     fs.writeFileSync(sidebarBak, '{"folders":[]}');
+    fs.writeFileSync(wallpaperCfg, '{"enabled":true}');
 
     // 1) Install into isolated targetDir and customize config.json
     const installRes = await installTool.installPlugin({
@@ -252,6 +254,7 @@ test('tools/install-plugin.cjs default uninstall backs up & restores config.json
     assert.equal(fs.existsSync(thoughtCfg), true, 'Default uninstall must keep obsidian-prism-thought.json');
     assert.equal(fs.existsSync(usageRollupCache), true, 'Default uninstall must keep obsidian-prism-usage-rollup-cache.json');
     assert.equal(fs.existsSync(sidebarCfg), true, 'Default uninstall must keep obsidian-prism-sidebar.json');
+    assert.equal(fs.existsSync(wallpaperCfg), true, 'Default uninstall must keep obsidian-prism-wallpaper.json');
     assert.equal(fs.existsSync(telemetryDir), true, 'Default uninstall must keep telemetry/');
 
     // 3) Reinstall automatically inherits obsidian-prism-config.backup.json
@@ -287,6 +290,7 @@ test('tools/install-plugin.cjs default uninstall backs up & restores config.json
     assert.equal(fs.existsSync(sidebarCfg), false);
     assert.equal(fs.existsSync(sidebarLock), false);
     assert.equal(fs.existsSync(sidebarBak), false);
+    assert.equal(fs.existsSync(wallpaperCfg), false, '--purge-data must remove obsidian-prism-wallpaper.json');
     assert.equal(fs.existsSync(telemetryDir), false);
 
     // Redline directories must be 100% untouched

@@ -29,6 +29,14 @@ namespace AgyClaudeStyle
         public string WebSocketDebuggerUrl;
     }
 
+    public class ActivePortProbeResult
+    {
+        public int? RawPort;
+        public int? LivePort;
+        public List<CdpPageInfo> Pages;
+        public bool IsStalePort;
+    }
+
     public class PluginManifest
     {
         public string Version;
@@ -418,6 +426,57 @@ namespace AgyClaudeStyle
             }
             catch { }
             return null;
+        }
+
+        public static async Task<bool> IsPortAliveAsync(int port, int timeoutMs = 1200)
+        {
+            if (port <= 0 || port > 65535) return false;
+            int effectiveMs = timeoutMs > 100 ? timeoutMs : 1200;
+            using (CancellationTokenSource cts = new CancellationTokenSource(effectiveMs))
+            {
+                try
+                {
+                    string url = string.Format("http://127.0.0.1:{0}/json/list", port);
+                    using (HttpResponseMessage resp = await SharedHttp.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
+                    {
+                        return resp.IsSuccessStatusCode;
+                    }
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+        }
+
+        public static async Task<ActivePortProbeResult> ProbeActivePortAsync(int? overridePort)
+        {
+            ActivePortProbeResult res = new ActivePortProbeResult();
+            int? rawPort = ReadPort(overridePort);
+            res.RawPort = rawPort;
+            if (!rawPort.HasValue)
+            {
+                res.LivePort = null;
+                res.Pages = null;
+                res.IsStalePort = false;
+                return res;
+            }
+            try
+            {
+                List<CdpPageInfo> pages = await ListPagesAsync(rawPort.Value).ConfigureAwait(false);
+                if (pages != null)
+                {
+                    res.LivePort = rawPort;
+                    res.Pages = pages;
+                    res.IsStalePort = false;
+                    return res;
+                }
+            }
+            catch { }
+            res.LivePort = null;
+            res.Pages = null;
+            res.IsStalePort = true;
+            return res;
         }
 
         public static bool IsBareAuxiliaryTarget(string title, string pageUrl)
@@ -827,11 +886,8 @@ namespace AgyClaudeStyle
             return "";
         }
 
-        private static string QueryWindowsProcessCommandLine(int pid)
+        private static string QueryProcessCommandLineViaPowerShell(int pid)
         {
-            if (pid <= 0) return "";
-            string fastCmd = QueryProcessCommandLineFast(pid);
-            if (!string.IsNullOrEmpty(fastCmd)) return fastCmd;
             try
             {
                 ProcessStartInfo psi = new ProcessStartInfo();
@@ -850,13 +906,54 @@ namespace AgyClaudeStyle
                         try { p.Kill(); } catch { }
                         return "";
                     }
-                    return readTask.GetAwaiter().GetResult() ?? "";
+                    string output = readTask.GetAwaiter().GetResult() ?? "";
+                    return output.Trim();
                 }
             }
             catch
             {
                 return "";
             }
+        }
+
+        private static string QueryWindowsProcessCommandLine(int pid)
+        {
+            if (pid <= 0) return "";
+            // 快速 PEB 通道：遇进程刚拉起的瞬态空串重试一次，避免无谓退化或漏检
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                string fastCmd = (QueryProcessCommandLineFast(pid) ?? "").Trim();
+                if (!string.IsNullOrEmpty(fastCmd)) return fastCmd;
+                if (attempt == 0)
+                {
+                    try { Thread.Sleep(60); } catch { }
+                }
+            }
+
+            // CIM / PowerShell 回退，瞬态空串时做二次短退避重试
+            for (int psAttempt = 0; psAttempt < 2; psAttempt++)
+            {
+                string psCmd = QueryProcessCommandLineViaPowerShell(pid);
+                if (!string.IsNullOrEmpty(psCmd)) return psCmd;
+                if (psAttempt == 0)
+                {
+                    try
+                    {
+                        using (Process checkProc = Process.GetProcessById(pid))
+                        {
+                            if (checkProc.HasExited) return "";
+                        }
+                        Thread.Sleep(120);
+                        string retryFast = (QueryProcessCommandLineFast(pid) ?? "").Trim();
+                        if (!string.IsNullOrEmpty(retryFast)) return retryFast;
+                    }
+                    catch
+                    {
+                        return "";
+                    }
+                }
+            }
+            return "";
         }
 
         private static bool MatchesNativeLockFilePid(int pid, string pluginDir)
@@ -1344,13 +1441,47 @@ namespace AgyClaudeStyle
             }
         }
 
-        private static List<string> GetShortcutCandidateDirs(string installDir, string defaultInstallDir)
+        public static bool IsTestSandboxEnvironment(string installDir = null)
+        {
+            string disable1 = Environment.GetEnvironmentVariable("PRISM_DISABLE_SHORTCUT_SYNC");
+            string disable2 = Environment.GetEnvironmentVariable("AG_PRISM_DISABLE_SHORTCUT_SYNC");
+            if (disable1 == "1" || disable2 == "1") return true;
+            string nodeEnv = Environment.GetEnvironmentVariable("NODE_ENV");
+            if (string.Equals(nodeEnv, "test", StringComparison.OrdinalIgnoreCase)) return true;
+            if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NODE_TEST_CONTEXT"))) return true;
+            if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AG_PRISM_GEMINI_CONFIG_DIR"))) return true;
+            if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AG_PRISM_ELECTRON_EXE"))) return true;
+            if (!string.IsNullOrEmpty(installDir))
+            {
+                try
+                {
+                    string normInst = Path.GetFullPath(installDir).TrimEnd('\\', '/');
+                    string normTemp = Path.GetFullPath(Path.GetTempPath()).TrimEnd('\\', '/');
+                    if (!string.IsNullOrEmpty(normTemp) &&
+                        (string.Equals(normInst, normTemp, StringComparison.OrdinalIgnoreCase) ||
+                         normInst.StartsWith(normTemp + "\\", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        return true;
+                    }
+                }
+                catch { }
+            }
+            return false;
+        }
+
+        public static List<string> GetShortcutCandidateDirs(string installDir, string defaultInstallDir)
         {
             List<string> dirs = new List<string>();
             string envDirs = Environment.GetEnvironmentVariable("AG_PRISM_SHORTCUT_DIRS");
             if (!string.IsNullOrEmpty(envDirs))
             {
-                string[] parts = envDirs.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+                string trimmedEnv = envDirs.Trim();
+                if (string.Equals(trimmedEnv, "none", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(trimmedEnv, "off", StringComparison.OrdinalIgnoreCase))
+                {
+                    return dirs;
+                }
+                string[] parts = trimmedEnv.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
                 for (int i = 0; i < parts.Length; i++)
                 {
                     string d = parts[i].Trim();
@@ -1359,26 +1490,26 @@ namespace AgyClaudeStyle
                 return dirs;
             }
 
-            if (!string.IsNullOrEmpty(installDir) && !string.IsNullOrEmpty(defaultInstallDir))
+            // 严格隔离自动化测试与临时沙盒目录，避免触碰真实桌面快捷方式；
+            // 允许真实用户在非默认目录安装时正常修补快捷方式。
+            if (IsTestSandboxEnvironment(installDir))
             {
-                string normInst = Path.GetFullPath(installDir).TrimEnd('\\', '/');
-                string normDef = Path.GetFullPath(defaultInstallDir).TrimEnd('\\', '/');
-                if (!string.Equals(normInst, normDef, StringComparison.OrdinalIgnoreCase))
-                {
-                    return dirs;
-                }
+                return dirs;
             }
 
             string userDesktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
             string userPrograms = Environment.GetFolderPath(Environment.SpecialFolder.Programs);
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            string quickLaunch = !string.IsNullOrEmpty(appData)
+                ? Path.Combine(appData, @"Microsoft\Internet Explorer\Quick Launch")
+                : null;
             string taskbarPinned = !string.IsNullOrEmpty(appData)
                 ? Path.Combine(appData, @"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar")
                 : null;
             string commonDesktop = Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory);
             string commonPrograms = Environment.GetFolderPath(Environment.SpecialFolder.CommonPrograms);
 
-            string[] raw = new string[] { userDesktop, userPrograms, taskbarPinned, commonDesktop, commonPrograms };
+            string[] raw = new string[] { userDesktop, userPrograms, quickLaunch, taskbarPinned, commonDesktop, commonPrograms };
             for (int i = 0; i < raw.Length; i++)
             {
                 if (!string.IsNullOrEmpty(raw[i]) && Directory.Exists(raw[i]) && !dirs.Contains(raw[i]))
@@ -1391,7 +1522,7 @@ namespace AgyClaudeStyle
 
         private static void CollectLnkFilesBounded(string dir, int depth, List<string> outFiles)
         {
-            if (depth > 2 || string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;
+            if (depth > 3 || string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;
             try
             {
                 string[] lnks = Directory.GetFiles(dir, "*.lnk", SearchOption.TopDirectoryOnly);
@@ -1401,7 +1532,7 @@ namespace AgyClaudeStyle
                 }
             }
             catch { }
-            if (depth >= 2) return;
+            if (depth >= 3) return;
             try
             {
                 string[] subs = Directory.GetDirectories(dir);
@@ -1471,10 +1602,22 @@ namespace AgyClaudeStyle
             List<string> rootDirs = GetShortcutCandidateDirs(installDir, defaultInstallDir);
             if (rootDirs.Count == 0) return 0;
 
-            List<string> lnkFiles = new List<string>();
+            List<string> rawLnkFiles = new List<string>();
             for (int i = 0; i < rootDirs.Count; i++)
             {
-                CollectLnkFilesBounded(rootDirs[i], 0, lnkFiles);
+                CollectLnkFilesBounded(rootDirs[i], 0, rawLnkFiles);
+            }
+            if (rawLnkFiles.Count == 0) return 0;
+
+            HashSet<string> seenLnks = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            List<string> lnkFiles = new List<string>();
+            for (int i = 0; i < rawLnkFiles.Count; i++)
+            {
+                string p = rawLnkFiles[i];
+                if (!string.IsNullOrEmpty(p) && seenLnks.Add(p))
+                {
+                    lnkFiles.Add(p);
+                }
             }
             if (lnkFiles.Count == 0) return 0;
 
@@ -1701,6 +1844,7 @@ namespace AgyClaudeStyle
             {
                 Process[] procs = Process.GetProcessesByName("Antigravity");
                 BareHostProcessInfo candidate = null;
+                BareHostProcessInfo windowFallbackCandidate = null;
                 for (int i = 0; i < procs.Length; i++)
                 {
                     Process p = procs[i];
@@ -1708,7 +1852,23 @@ namespace AgyClaudeStyle
                     {
                         if (p.HasExited) continue;
                         string cmd = QueryWindowsProcessCommandLine(p.Id);
-                        if (string.IsNullOrEmpty(cmd)) continue;
+                        if (string.IsNullOrEmpty(cmd))
+                        {
+                            // 瞬态命令行读取失败时，仅对持有可见主窗口的进程保留低优先级回退候选，避免把无窗 Helper 子进程误判为主进程
+                            if (windowFallbackCandidate == null && p.MainWindowHandle != IntPtr.Zero)
+                            {
+                                long fbStartMs = ProcessStartEpochMs(p);
+                                string fbExe = "";
+                                try { fbExe = p.MainModule.FileName; } catch { }
+                                if (string.IsNullOrEmpty(fbExe)) fbExe = FindAntigravityExecutable(null);
+                                windowFallbackCandidate = new BareHostProcessInfo();
+                                windowFallbackCandidate.Pid = p.Id;
+                                windowFallbackCandidate.ExePath = fbExe;
+                                windowFallbackCandidate.StartTimeMs = fbStartMs;
+                                windowFallbackCandidate.UptimeMs = fbStartMs > 0L ? Math.Max(0L, NowEpochMs() - fbStartMs) : 0L;
+                            }
+                            continue;
+                        }
                         if (cmd.IndexOf("--type=", StringComparison.OrdinalIgnoreCase) >= 0) continue;
                         if (cmd.IndexOf("sidecar_sdk", StringComparison.OrdinalIgnoreCase) >= 0 ||
                             cmd.IndexOf("main.mjs", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -1740,7 +1900,7 @@ namespace AgyClaudeStyle
                         try { p.Dispose(); } catch { }
                     }
                 }
-                return candidate;
+                return candidate ?? windowFallbackCandidate;
             }
             catch
             {

@@ -31,15 +31,9 @@ root.AntigravityCodexEffortSlider = exportsObj;
 })(typeof globalThis !== "undefined" ? globalThis : typeof window !== "undefined" ? window : this, function (globalRoot) {
 // ── 常量与默认几何参数 ──────────────────────────────────────────────────────
 var STYLE_ELEMENT_ID = "ag-codex-effort-slider-styles";
-var TRACK_HEIGHT = 28;
-var KNOB_SIZE = 28;
-var KNOB_RADIUS = KNOB_SIZE / 2;
-var BASE_SPEEDUP = 4;
-// Antigravity 默认三档模型 (Low / Medium / High) 无 Off 档，因此能量起点为 0、中点为 0.5；
-// 若遇到首档为 Off 的四档模型 (Off / Low / High / Max)，energyStopsFor 会自动返回 { start: 1/3, end: 2/3 }。
+var KNOB_RADIUS = 14;
 var ENERGY_START = 0;
 var ENERGY_END = 0.5;
-var MIN_HEIGHT_SLOTS = 2;
 // Antigravity 官方推理档位枚举与展示名映射（对应 main.js 中的 DXb / EXb / GXb）
 var AG_EFFORT_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 var AG_EFFORT_LABELS = {
@@ -66,13 +60,8 @@ if (a === b) return true;
 var ka = _normEffTxt(a), kb = _normEffTxt(b);
 return Boolean(ka && kb && ka === kb);
 }
-// Claude 专属主题常量（6×60 点阵、1.6s 从右至左扫掠、Capsule 胶囊滑块）
-var CLAUDE_CELL = 28 / 6; // ≈ 4.67px
-var CLAUDE_ROWS = 6;
+var CLAUDE_CELL = 28 / 6;
 var CLAUDE_SWEEP_MS = 1600;
-var CLAUDE_KNOB_W = 24;
-var CLAUDE_KNOB_H = 30;
-var CLAUDE_KNOB_R = 7;
 function isClaudeModel(name) {
 if (!name || typeof name !== "string") return false;
 return /claude/i.test(name);
@@ -214,25 +203,12 @@ function indexFromPct(p, c) { var n = Number(c) || 0; return n <= 1 ? 0 : Math.m
 * - 往回退则需要退过 2/3 格宽（留出 [1/3, 2/3] 迟滞带），防止手指停在边界附近时左右抖动。
 */
 function detentTargetIndex(currentIndex, ptrPct, count) {
-var n = Number(count) || 0;
+var n = Number(count) || 0, p = clamp01(ptrPct);
 if (n <= 1) return 0;
-var p = clamp01(ptrPct);
-if (typeof currentIndex !== "number" || currentIndex < 0 || currentIndex >= n) {
-return indexFromPct(p, n);
-}
-var step = 1 / (n - 1);
-var forwardThreshold = 1 / 3;
-var idx = currentIndex;
-var curCenter = idx * step;
-if (p >= curCenter) {
-while (idx < n - 1 && p >= (idx + forwardThreshold) * step - 1e-9) {
-idx += 1;
-}
-} else {
-while (idx > 0 && p <= (idx - forwardThreshold) * step + 1e-9) {
-idx -= 1;
-}
-}
+if (typeof currentIndex !== "number" || currentIndex < 0 || currentIndex >= n) return indexFromPct(p, n);
+var step = 1 / (n - 1), idx = currentIndex;
+if (p >= idx * step) { while (idx < n - 1 && p >= (idx + 1 / 3) * step - 1e-9) idx += 1; }
+else { while (idx > 0 && p <= (idx - 1 / 3) * step + 1e-9) idx -= 1; }
 return idx;
 }
 function knobOffsetOf(pct, radiusPx) {
@@ -252,56 +228,17 @@ return dist <= cfg.snapEps && vel <= cfg.velEps;
 */
 function motionStep(state, dtSeconds, params) {
 if (!state) return;
-var cfg = params || MOTION;
-var dt = Number(dtSeconds);
+var cfg = params || MOTION, dt = Number(dtSeconds);
 if (!Number.isFinite(dt) || dt <= 0) return;
 if (dt > 0.05) dt = 0.05;
-var target = clamp01(state.target);
-var x = clamp01(state.x);
-var v = Number(state.v) || 0;
-var diff = target - x;
-var dist = Math.abs(diff);
-if (dist <= cfg.snapEps && Math.abs(v) <= cfg.velEps) {
-state.x = target;
-state.v = 0;
-state.a = 0;
-return;
-}
+var target = clamp01(state.target), x = clamp01(state.x), v = Number(state.v) || 0, diff = target - x, dist = Math.abs(diff);
+if (dist <= cfg.snapEps && Math.abs(v) <= cfg.velEps) { state.x = target; state.v = state.a = 0; return; }
 var dir = diff >= 0 ? 1 : -1;
-var movingTowards = v * dir >= 0;
-var stopDist = (v * v) / (2 * cfg.decel);
-var a = 0;
-if (!movingTowards) {
-a = dir * cfg.accel;
-} else if (stopDist >= dist) {
-a = -dir * cfg.decel;
-} else {
-a = dir * cfg.accel;
-}
-var nextV = clampAbs(v + a * dt, cfg.maxSpeed);
-var nextX = x + nextV * dt;
-// 防止单步跨越目标造成振荡
-if ((target - x) * (target - nextX) <= 0 && Math.abs(nextV) <= cfg.maxSpeed) {
-state.x = target;
-state.v = 0;
-state.a = 0;
-return;
-}
-if (nextX <= 0) {
-state.x = 0;
-state.v = Math.max(0, nextV);
+var a = (v * dir >= 0 && (v * v) / (2 * cfg.decel) >= dist) ? -dir * cfg.decel : dir * cfg.accel;
+var nextV = clampAbs(v + a * dt, cfg.maxSpeed), nextX = x + nextV * dt;
+if ((target - x) * (target - nextX) <= 0 && Math.abs(nextV) <= cfg.maxSpeed) { state.x = target; state.v = state.a = 0; return; }
 state.a = a;
-return;
-}
-if (nextX >= 1) {
-state.x = 1;
-state.v = Math.min(0, nextV);
-state.a = a;
-return;
-}
-state.x = nextX;
-state.v = nextV;
-state.a = a;
+state.x = nextX <= 0 ? (state.v = Math.max(0, nextV), 0) : nextX >= 1 ? (state.v = Math.min(0, nextV), 1) : (state.v = nextV, nextX);
 }
 function decayPointerSpeed(rawSpeed, idleSeconds) {
 var v = Number(rawSpeed) || 0;
@@ -365,19 +302,20 @@ var ramp = 0.92 + 0.08 * t;
 var jitter = 0.25 + 0.75 * hash01(col, row, 7);
 return clamp01(ramp * jitter);
 }
-function fillRoundRect(ctx, x, y, w, h, r) {
-ctx.beginPath();
-ctx.moveTo(x + r, y);
-ctx.lineTo(x + w - r, y);
-ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-ctx.lineTo(x + w, y + h - r);
-ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-ctx.lineTo(x + r, y + h);
-ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-ctx.lineTo(x, y + r);
-ctx.quadraticCurveTo(x, y, x + r, y);
-ctx.closePath();
-ctx.fill();
+var _DRW = [];
+for (var _r = 0; _r < 6; _r += 1) {
+var _w1 = 3 + ((hash01(0, _r, 47) * 5) | 0), _s1 = (5 + 10 * hash01(0, _r, 43)) / 6.2831853, _w2 = 2 + ((hash01(0, _r, 61) * 4) | 0);
+_DRW.push([_w1, _s1, hash01(0, _r, 53), _w2, _s1 * (_w2 / _w1), hash01(0, _r, 71)]);
+}
+var _ditherLightLut = null;
+function _getLightLut() {
+if (_ditherLightLut) return _ditherLightLut;
+var lut = [], cl = function (v, a, b) { return v < a ? a : v > b ? b : (v + 0.5) | 0; };
+for (var i = 0; i < 256; i += 1) {
+var tv = (i >> 5) / 7, ov = -40 + (((i >> 2) & 7) / 7) * 96, pv = (i & 3) / 3;
+lut.push("rgb(" + cl(187 - 32 * tv + ov + 12 * pv, 124, 240) + "," + cl(184 - 46 * tv + (ov < 0 ? ov : ov * 1.05) + 12 * pv, 100, 232) + "," + cl(206 + 4 * tv + (ov < 0 ? ov : ov * 0.65) + 8 * pv, 180, 252) + ")");
+}
+return (_ditherLightLut = lut);
 }
 function valueNoise(col, row, timeSec, speed, seed) {
 var tt = timeSec * speed + hash01(col, row, seed) * 17;
@@ -442,7 +380,7 @@ return true;
 var _ditherWashCache = typeof WeakMap === "function" ? new WeakMap() : null;
 function paintDither(ctx, w, h, dark, progress, timeSec, intensity) {
 if (!ctx) return;
-var _mx = Math.max, _mn = Math.min, _rd = Math.round, _fl = Math.floor, _pw = Math.pow, _PI2 = Math.PI * 2;
+var _mx = Math.max, _mn = Math.min, _pw = Math.pow;
 var strength = typeof intensity === "number" ? clamp01(intensity) : 1;
 ctx.clearRect(0, 0, w, h);
 if (strength <= 0 || w <= 0) return;
@@ -465,21 +403,23 @@ ctx.globalAlpha = strength;
 ctx.fillStyle = wash;
 ctx.fillRect(0, 0, w, h);
 var purple = dark ? "rgb(208,192,246)" : "rgb(150,130,205)";
-var cell = h / 6 > 0 ? h / 6 : CLAUDE_CELL, cols = Math.ceil(w / cell), rows = 6;
+var cell = h / 6 > 0 ? h / 6 : CLAUDE_CELL, cols = Math.ceil(w / cell), rows = 6, front = 1 - progress;
+var lmap = !dark ? getMergeMap(cols, rows) : null;
+var lightLut = !dark ? _getLightLut() : null;
+var size = cell * 0.72;
 for (var col = 0; col < cols; col += 1) {
 var x = col * cell, t = clamp01(x / _mx(1, w)), fade = clamp01((t - 0.02) / 0.48);
 for (var row = 0; row < rows; row += 1) {
 if (keepRatio < 1 && hash01(col, row, 101) > keepRatio) continue;
 var base = ditherAlphaAt(x, w, col, row) * alphaMul;
 if (base < 0.05) continue;
-var front = 1 - progress, edgeJit = (hash01(col, row, 31) - 0.5) * 0.05;
+var edgeJit = (hash01(col, row, 31) - 0.5) * 0.05;
 if (t < front + edgeJit) continue;
 var appear = (0.35 + 0.65 * clamp01((t - front - edgeJit) / 0.04)) * (dark ? 1 : alphaMul);
-var rowWaves = 3 + _fl(hash01(0, row, 47) * 5), rowSpeed = 5 + 10 * hash01(0, row, 43), rowPhase = hash01(0, row, 53) * _PI2;
-var rowWaves2 = 2 + _fl(hash01(0, row, 61) * 4), rowSpeed2 = rowSpeed * (rowWaves2 / rowWaves), rowPhase2 = hash01(0, row, 71) * _PI2;
-var u1 = ((t * rowWaves * _PI2 + timeSec * rowSpeed + rowPhase) / _PI2) % 1;
+var rw = _DRW[row];
+var u1 = (t * rw[0] + timeSec * rw[1] + rw[2]) % 1;
 if (u1 < 0) u1 += 1;
-var u2 = ((t * rowWaves2 * _PI2 + timeSec * rowSpeed2 + rowPhase2) / _PI2) % 1;
+var u2 = (t * rw[3] + timeSec * rw[4] + rw[5]) % 1;
 if (u2 < 0) u2 += 1;
 var p1 = _pw(1 - u1, 2.6 + 3.4 * hash01(col, row, 17)), p2 = _pw(1 - u2, 3.4);
 var pulse = _mx(p1, p2 * (0.55 + 0.45 * hash01(col, row, 19))) * 0.85;
@@ -488,26 +428,23 @@ if (progress < 0.999) wAmt = _mx(wAmt, clamp01(1 - (t - front) / 0.16) * (0.55 +
 if (!dark) {
 var lt = clamp01((t - 0.05) / 0.2);
 if (lt <= 0) continue;
-var lmap = getMergeMap(cols, rows), mv = lmap[row * cols + col];
+var mv = lmap[row * cols + col];
 if (mv === 2 || hash01(col, row, 95) < 0.03) continue;
 var y2 = row * cell, off = (hash01(col, row, 93) - 0.42) * (22 + 66 * t);
 if (off > 0) off *= 1.1;
-var lr = _mx(124, _mn(240, _rd(187 - 32 * t + off + 12 * pulse)));
-var lg = _mx(100, _mn(232, _rd(184 - 46 * t + (off < 0 ? off : off * 1.05) + 12 * pulse)));
-var lb = _mx(180, _mn(252, _rd(206 + 4 * t + (off < 0 ? off : off * 0.65) + 8 * pulse)));
 var lw = cell * (mv === 3 || mv === 1 ? 2 : 1) * 0.88, lh = cell * (mv === 4 || mv === 1 ? 2 : 1) * 0.88;
 var flicker = valueNoise(col, row, timeSec, 0.9, 83), density = clamp01((t - 0.12) / 0.35);
 var presence = density > 0.9 ? 1 : clamp01((0.2 + 0.8 * density - flicker) / 0.2);
 if (presence <= 0.01) continue;
 var lAlpha = clamp01(lt * appear * presence * (0.7 + 0.3 * (1 - flicker)) * (0.85 + 0.15 * hash01(col, row, 29)));
 ctx.globalAlpha = lAlpha;
-ctx.fillStyle = "rgb(" + lr + "," + lg + "," + lb + ")";
-fillRoundRect(ctx, x + 0.5, y2 + 0.5, lw, lh, 1);
+ctx.fillStyle = lightLut[(_mn(7, (t * 7.99) | 0) << 5) | (_mx(0, _mn(7, (((off + 40) / 96) * 7.99) | 0)) << 2) | _mn(3, (pulse * 3.99) | 0)];
+ctx.fillRect(x + 0.5, y2 + 0.5, lw, lh);
 if (wAmt > 0.03) {
 ctx.globalAlpha = _mn(1, (lAlpha / alphaMul) * (0.12 + 0.88 * wAmt));
 ctx.fillStyle = "rgb(247,243,255)";
 var ins = lw * 0.14;
-fillRoundRect(ctx, x + 0.5 + ins, y2 + 0.5 + ins, lw - ins * 2, lh - ins * 2, 0.7);
+ctx.fillRect(x + 0.5 + ins, y2 + 0.5 + ins, lw - ins * 2, lh - ins * 2);
 }
 continue;
 }
@@ -515,14 +452,14 @@ var flick = valueNoise(col, row, timeSec, 1.5, 5), gap = 0.6 + 0.4 * clamp01((fl
 var vis = clamp01((t - 0.2) / 0.18), baseAlpha = 0.04 + 0.96 * vis + 0.06 * clamp01((flick - 0.5) / 0.5) * (1 - vis);
 var gridAlpha = clamp01(base * baseAlpha * gap * appear * 1.15 * (0.9 + 0.1 * hash01(col, row, 29)));
 if (gridAlpha < 0.008) continue;
-var y = row * cell, size = cell * 0.72;
+var y = row * cell;
 ctx.globalAlpha = _mn(1, gridAlpha * 0.55);
 ctx.fillStyle = purple;
-fillRoundRect(ctx, x + 0.5, y + 0.5, size, size, 1.1);
+ctx.fillRect(x + 0.5, y + 0.5, size, size);
 if (wAmt > 0.03) {
 ctx.globalAlpha = _mn(1, (gridAlpha / alphaMul) * (0.1 + 0.72 * wAmt));
 ctx.fillStyle = "rgb(220, 204, 255)";
-fillRoundRect(ctx, x + 0.5, y + 0.5, size, size, 0.7);
+ctx.fillRect(x + 0.5, y + 0.5, size, size);
 }
 }
 }
@@ -577,86 +514,27 @@ return Math.round(Math.pow(e, 1.5) * 1000) / 1000;
 function claudeSpeedFor(pct, startOverride) {
 return speedFor(pct, startOverride) / MAX_SPEED_FACTOR;
 }
-/** 位置 → 可见粒子数量（随能量从 0 渐增至 22 颗） */
-function particleCountFor(pct, startOverride) {
-return Math.round(energyForPct(pct, startOverride) * PARTICLES.length);
-}
-function starCountFor(pct, startOverride) {
-return particleCountFor(pct, startOverride);
-}
-/**
-* 第 index 颗粒子的亮度/大小系数（落在 [STARFIELD_MIN, 1]，越亮越大）：
-* - 单参数调用 starBrightnessFor(indexOrStar)：返回该星固有亮度 [0.5, 1]
-* - 双参数调用 starBrightnessFor(starOrIndex, energy)：当 energy 尚未达到该星出现序号时返回 0，已出现则返回固有亮度
-*/
-function starBrightnessFor(starOrIndex, energy) {
-var idx = typeof starOrIndex === "number"
-? starOrIndex
-: (starOrIndex && typeof starOrIndex.id === "number" ? starOrIndex.id : 0);
-var baseB = STARFIELD_MIN + (1 - STARFIELD_MIN) * starHash01(idx, 61);
-if (energy === undefined) {
-return Math.round(baseB * 1000) / 1000;
-}
-var e = clamp01(energy);
-var visibleCount = Math.round(e * PARTICLES.length);
-if (e <= 0 || idx >= visibleCount) return 0;
-return Math.round(baseB * 1000) / 1000;
-}
-/**
-* 第 index 颗粒子从右向左横穿轨道的时长（秒）：
-* 最高档约 1.5s、中档约 3.0s、低端约 8.6s，各星之间仅差 ±8% 防止追尾成团
-*/
 function starDurationFor(starOrIndex, speedFactor) {
-var idx = typeof starOrIndex === "number"
-? starOrIndex
-: (starOrIndex && typeof starOrIndex.id === "number" ? starOrIndex.id : 0);
-var speed = Math.min(
-MAX_SPEED_FACTOR,
-Math.max(0.35, typeof speedFactor === "number" && Number.isFinite(speedFactor) ? speedFactor : MAX_SPEED_FACTOR)
-);
-var spread = 1 - _SF_SPR + 2 * _SF_SPR * starHash01(idx, 29);
-return (_SF_MEAN * MAX_SPEED_FACTOR) / speed * spread;
+var idx = typeof starOrIndex === "number" ? starOrIndex : (starOrIndex && typeof starOrIndex.id === "number" ? starOrIndex.id : 0);
+var speed = Math.min(MAX_SPEED_FACTOR, Math.max(0.35, typeof speedFactor === "number" && Number.isFinite(speedFactor) ? speedFactor : MAX_SPEED_FACTOR));
+return ((_SF_MEAN * MAX_SPEED_FACTOR) / speed) * (1 - _SF_SPR + 2 * _SF_SPR * starHash01(idx, 29));
 }
-/**
-* 第 index 颗粒子的负相位延迟（秒）：
-* 按黄金比低差异序列铺开，只与粒子序号与当前周期有关，与当前可见颗数无关
-*/
 function starDelayFor(starOrIndex, duration) {
-var idx = typeof starOrIndex === "number"
-? starOrIndex
-: (starOrIndex && typeof starOrIndex.id === "number" ? starOrIndex.id : 0);
-var particle = PARTICLES[idx];
-var phase = particle && typeof particle.phase === "number" ? particle.phase : 0;
-var dur = typeof duration === "number" && duration > 0 ? duration : starDurationFor(idx, MAX_SPEED_FACTOR);
-var jitter = starHash01(idx, 53) * 0.03;
-return -((phase + jitter) % 1) * dur;
+var idx = typeof starOrIndex === "number" ? starOrIndex : (starOrIndex && typeof starOrIndex.id === "number" ? starOrIndex.id : 0);
+var p = PARTICLES[idx], ph = p && typeof p.phase === "number" ? p.phase : 0;
+return -((ph + starHash01(idx, 53) * 0.03) % 1) * (typeof duration === "number" && duration > 0 ? duration : starDurationFor(idx, MAX_SPEED_FACTOR));
 }
-/**
-* 星星层总不透明度：独立于星云层，保证中档 (energy=0.5) 也有 0.8 的清晰度，最高档为 1.0
-*/
 function starLayerOpacityFor(energyOrPct, startOverride) {
 var e = typeof startOverride === "number" ? energyForPct(energyOrPct, startOverride) : clamp01(energyOrPct);
-if (e <= 0) return 0;
-return Math.round((0.6 + 0.4 * e) * 1000) / 1000;
+return e <= 0 ? 0 : Math.round((0.6 + 0.4 * e) * 1000) / 1000;
 }
 function parseHexRgb(hex) {
-var clean = String(hex || "").replace(/^#/, "");
-var num = parseInt(clean, 16);
-return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
+var n = parseInt(String(hex || "").replace(/^#/, ""), 16);
+return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 function mixHex(hexA, hexB, t) {
-var ratio = clamp01(t);
-var a = parseHexRgb(hexA);
-var b = parseHexRgb(hexB);
-var r = Math.round(a[0] + (b[0] - a[0]) * ratio);
-var g = Math.round(a[1] + (b[1] - a[1]) * ratio);
-var bl = Math.round(a[2] + (b[2] - a[2]) * ratio);
-return (
-"#" +
-((1 << 24) | (r << 16) | (g << 8) | bl)
-.toString(16)
-.slice(1)
-);
+var k = clamp01(t), a = parseHexRgb(hexA), b = parseHexRgb(hexB), m = function (i) { return Math.round(a[i] + (b[i] - a[i]) * k); };
+return "#" + ((1 << 24) | (m(0) << 16) | (m(1) << 8) | m(2)).toString(16).slice(1);
 }
 /**
 * 填充区末端主色：
@@ -688,42 +566,14 @@ function fillBackgroundFor(pct, startOverride, endOverride, isClaude, accentOver
 var p = clamp01(pct);
 var start = typeof startOverride === "number" && Number.isFinite(startOverride) ? startOverride : ENERGY_START;
 var end = typeof endOverride === "number" && Number.isFinite(endOverride) ? endOverride : ENERGY_END;
-var tone = accentOverride || resolvePrismAccentTone(null, null);
-if (tone === "mono") {
-return p <= 0.05
-? "rgba(161, 161, 170, 0.22)"
-: "linear-gradient(90deg, rgba(113, 113, 122, 0.45) 0%, " + fillColorFor(p, start, end, false, "mono") + " 100%)";
-}
-if (isClaude) {
-if (p <= 0.05) return "rgba(142, 118, 192, 0.15)";
-return "linear-gradient(90deg, rgba(142, 118, 192, 0.25) 0%, " + fillColorFor(p, start, end, true, "follow") + " 100%)";
-}
-if (TONE_PAL[tone]) {
-return "linear-gradient(90deg, " + TONE_PAL[tone][0] + " 0%, " + fillColorFor(p, start, end, false, tone) + " 100%)";
-}
+var tone = accentOverride || resolvePrismAccentTone(null, null), lg = "linear-gradient(90deg,";
+if (tone === "mono") return p <= 0.05 ? "rgba(161, 161, 170, 0.22)" : lg + " rgba(113, 113, 122, 0.45) 0%, " + fillColorFor(p, start, end, false, "mono") + " 100%)";
+if (isClaude) return p <= 0.05 ? "rgba(142, 118, 192, 0.15)" : lg + " rgba(142, 118, 192, 0.25) 0%, " + fillColorFor(p, start, end, true, "follow") + " 100%)";
+if (TONE_PAL[tone]) return lg + " " + TONE_PAL[tone][0] + " 0%, " + fillColorFor(p, start, end, false, tone) + " 100%)";
 if (p <= start + 1e-6) return "#4d93f8";
-var endColor = fillColorFor(p, start, end, false, "follow");
-if (p <= end + 1e-6) {
-var stopBlue = start > 0 ? Math.round((start / p) * 100) : 0;
-if (stopBlue <= 0) {
-return "linear-gradient(90deg, #4d93f8 0%, " + endColor + " 100%)";
-}
-return "linear-gradient(90deg, #4d93f8 0%, #4d93f8 " + stopBlue + "%, " + endColor + " 100%)";
-}
-var stopStart = start > 0 ? Math.round((start / p) * 100) : 0;
-var stopMid = Math.round((end / p) * 100);
-if (stopStart <= 0) {
-return "linear-gradient(90deg, #4d93f8 0%, #9333ea " + stopMid + "%, " + endColor + " 100%)";
-}
-return (
-"linear-gradient(90deg, #4d93f8 0%, #4d93f8 " +
-stopStart +
-"%, #9333ea " +
-stopMid +
-"%, " +
-endColor +
-" 100%)"
-);
+var ec = fillColorFor(p, start, end, false, "follow"), sb = start > 0 ? Math.round((start / p) * 100) : 0;
+var pre = lg + " #4d93f8 0%," + (sb > 0 ? " #4d93f8 " + sb + "%," : "");
+return p <= end + 1e-6 ? pre + " " + ec + " 100%)" : pre + " #9333ea " + Math.round((end / p) * 100) + "%, " + ec + " 100%)";
 }
 /**
 * 档位文字着色：
@@ -747,9 +597,8 @@ if (!tp && idx <= first) return lo;
 if (isClaude && n === 3 && idx === 1) return "#a78bfa";
 return mixHex(lo, hi, clamp01((idx - first) / Math.max(1, n - 1 - first)));
 }
-var FILL_RADIUS_CSS = KNOB_RADIUS + "px 0 0 " + KNOB_RADIUS + "px";
 // ── 样式表注入（对齐 dsh-codex-effort-slider 右向左星尘横穿 + 星云扫光 + Antigravity 面板适配） ──
-var SLIDER_CSS = "@keyframes ces-sweep{0%{transform:translateX(100%)}100%{transform:translateX(-100%)}}@keyframes ces-star-sweep{0%{transform:translate3d(0,0,0);opacity:0}6%{opacity:1}94%{opacity:1}100%{transform:translate3d(-100%,0,0);opacity:0}}.ces-inline{width:100%;box-sizing:border-box;padding-top:6px;user-select:none!important;-webkit-user-select:none!important}.ces-root,.ces-root:focus,.ces-root:focus-visible,.ces-root:focus-within{position:relative;width:100%;box-sizing:border-box;outline:none!important;outline-width:0!important;box-shadow:none!important;user-select:none!important;-webkit-user-select:none!important;-webkit-tap-highlight-color:transparent!important}.ces-track{position:relative;width:100%;height:28px;border-radius:999px;background:rgba(128,128,145,.18);box-shadow:inset 0 1px 2px rgba(0,0,0,.24),inset 0 0 0 1px rgba(255,255,255,.06);cursor:pointer;touch-action:none;box-sizing:border-box;transition:opacity .15s ease,box-shadow .2s ease}.ces-inline[data-energy='1'] .ces-track,.ces-root[data-energy='1'] .ces-track{box-shadow:0 0 calc(var(--ces-energy,0) * 16px) rgba(168,85,247,.5),inset 0 1px 2px rgba(0,0,0,.24)}.ces-inline[data-energy='0'] .ces-star,.ces-inline[data-energy='0'] .ces-energy__sweep,.ces-root[data-energy='0'] .ces-star,.ces-root[data-energy='0'] .ces-energy__sweep{animation-play-state:paused}.ces-track.is-locked{opacity:.45;cursor:not-allowed;filter:saturate(.25)}.ces-fill{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;background:var(--ces-fill-bg,#4d93f8);pointer-events:none;will-change:width,background}.ces-energy{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;overflow:hidden;pointer-events:none;opacity:var(--ces-energy,0);transition:opacity .2s ease;background:linear-gradient(90deg,#3b1178 0%,#6d28d9 30%,#9333ea 62%,#c084fc 100%)}.ces-energy__sweep{position:absolute;inset:0;background:linear-gradient(100deg,transparent 18%,rgba(255,255,255,.3) 50%,transparent 82%);transform:translateX(100%);animation:ces-sweep 2.4s linear infinite;pointer-events:none}.ces-stars{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;opacity:var(--ces-star-opacity,0);transition:opacity .2s ease;pointer-events:none;overflow:hidden}.ces-star{position:absolute;left:0;right:0;height:3px;margin-top:-1.5px;pointer-events:none;animation-name:ces-star-sweep;animation-timing-function:linear;animation-iteration-count:infinite}.ces-star__dot{position:absolute;left:100%;top:0;width:3px;height:3px;margin-left:-1.5px;border-radius:50%;background:#f5f3ff;box-shadow:0 0 5px rgba(216,180,254,.95);opacity:var(--ces-b,1);transform:scale(var(--ces-b,1))}.ces-ticks{position:absolute;inset:0;pointer-events:none}.ces-tick{position:absolute;top:50%;width:3px;height:3px;margin:-1.5px 0 0 -1.5px;border-radius:50%;background:rgba(255,255,255,.28);pointer-events:none;transition:background-color .12s ease}.ces-tick.is-on{background:rgba(255,255,255,.65)}.ces-tick.is-dim{background:rgba(255,255,255,.28)}.ces-knob{position:absolute;top:50%;left:var(--ces-fill,14px);width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;background:#fff;box-shadow:0 1px 5px rgba(0,0,0,.34),0 0 0 .5px rgba(0,0,0,.06);pointer-events:none;will-change:left}.ces-root[data-theme='claude'] .ces-stars,.ces-root[data-theme='claude'] .ces-energy,.ces-inline[data-theme='claude'] .ces-stars,.ces-inline[data-theme='claude'] .ces-energy{display:none!important}.ces-root[data-theme='claude'] .ces-track,.ces-inline[data-theme='claude'] .ces-track{height:28px;border-radius:999px;background:rgba(128,128,145,.16);box-shadow:inset 0 1px 2px rgba(0,0,0,.22),inset 0 0 0 1px rgba(255,255,255,.08)}.ces-root[data-theme='claude'][data-energy='1'] .ces-track,.ces-inline[data-theme='claude'][data-energy='1'] .ces-track{box-shadow:0 0 16px rgba(167,139,250,.45),inset 0 1px 2px rgba(0,0,0,.22)}.ces-root[data-theme='claude'] .ces-knob,.ces-inline[data-theme='claude'] .ces-knob{width:24px;height:30px;margin:-15px 0 0 -12px;border-radius:7px;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.4),0 0 0 .5px rgba(0,0,0,.12);display:flex;align-items:center;justify-content:center}.ces-knob-notch{display:none;width:2px;height:10px;border-radius:999px;background:rgba(0,0,0,.28)}.ces-root[data-theme='claude'] .ces-knob-notch,.ces-inline[data-theme='claude'] .ces-knob-notch{display:block}.ces-claude-canvas{position:absolute;left:0;top:0;width:var(--ces-fill,0px);height:100%;border-radius:999px;display:none;pointer-events:none}.ces-root[data-theme='claude'][data-energy='1'] .ces-claude-canvas,.ces-inline[data-theme='claude'][data-energy='1'] .ces-claude-canvas{display:block}@keyframes ces-claude-rise{0%{transform:translateY(85%) scale(.96);opacity:0}55%{opacity:1}80%{transform:translateY(-6%) scale(1.01)}100%{transform:translateY(0) scale(1);opacity:1}}.ces-ag-effort-value.is-claude-changing,.ces-ag-effort-value.ces-text-rise{animation:ces-claude-rise .3s cubic-bezier(.2,.85,.25,1)}.ces-ag-effort-value.is-claude-changing.is-glowing,.ces-ag-effort-value.ces-text-rise.is-glowing{animation:ces-claude-rise .3s cubic-bezier(.2,.85,.25,1),ces-text-bloom .4s cubic-bezier(.16,1,.3,1) forwards}[data-testid='model-selector-panel'].ces-ag-panel-enhanced{max-height:26rem!important}.ces-ag-section,.ces-ag-section:focus,.ces-ag-section:focus-visible,.ces-ag-section *{outline:none!important;outline-width:0!important;user-select:none!important;-webkit-user-select:none!important;-webkit-tap-highlight-color:transparent!important}.ces-ag-section{display:flex;flex-direction:column;flex-shrink:0;width:100%;box-sizing:border-box}.ces-ag-effort-row{display:flex;flex-direction:column;width:100%;box-sizing:border-box;padding:6px 8px 8px;border-radius:6px;transition:box-shadow .2s ease,background-color .2s ease}.ces-ag-effort-row:hover{background-color:rgba(128,128,145,.08)}.ces-ag-effort-row[data-ces-max='true'],[data-ces-effort-row='true'][data-ces-max='true']{box-shadow:inset 0 0 0 1px rgba(139,92,246,.42),0 0 14px -4px rgba(139,92,246,.45)!important;background-color:rgba(139,92,246,.06)}.ces-ag-effort-head{display:flex;align-items:center;justify-content:space-between;width:100%;font-size:12px;line-height:16px}.ces-ag-effort-title{display:inline-flex;align-items:center;gap:6px;color:inherit;font-weight:500;opacity:.9}.ces-ag-effort-value{position:relative;z-index:1;display:inline-block;font-size:12px;font-weight:600;transition:color .15s ease}.ces-ag-effort-value::after{content:'';position:absolute;top:50%;left:50%;width:52px;height:26px;border-radius:999px;transform:translate(-50%,-50%) scale(.6);background:radial-gradient(ellipse at center,var(--ces-glow-color,rgba(168,85,247,.85)) 0%,var(--ces-glow-color,rgba(168,85,247,.45)) 45%,rgba(168,85,247,0) 75%);filter:blur(8px);pointer-events:none;opacity:0;z-index:-1}@keyframes ces-glow-flash{0%{opacity:.95;transform:translate(-50%,-50%) scale(.65);filter:blur(6px)}25%{opacity:1;transform:translate(-50%,-50%) scale(1.15);filter:blur(8px)}100%{opacity:0;transform:translate(-50%,-50%) scale(1.5);filter:blur(14px)}}@keyframes ces-text-bloom{0%{text-shadow:0 0 8px var(--ces-glow-color,#c084fc)}30%{text-shadow:0 0 14px var(--ces-glow-color,#c084fc),0 0 3px #fff}100%{text-shadow:none}}.ces-ag-effort-value.is-glowing{animation:ces-text-bloom .4s cubic-bezier(.16,1,.3,1) forwards}.ces-ag-effort-value.is-glowing::after{animation:ces-glow-flash .4s cubic-bezier(.16,1,.3,1) forwards}@media (prefers-reduced-motion:reduce){.ces-panel-shaking,.ces-ag-effort-value.is-glowing,.ces-ag-effort-value.is-glowing::after,.ces-ag-effort-value.ces-text-rise,.ces-ag-effort-value.is-claude-changing{animation:none!important}}html[data-ces-slider-ready='1'] [role='menu']:has([data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])),html[data-ces-slider-ready='1'] div[role='presentation']:has(>[role='menu'] [data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])){display:none!important;visibility:hidden!important;pointer-events:none!important;opacity:0!important}html[data-ces-slider-ready='1'] [role='menuitem']:has([data-testid='model-selector-effort-group'])>span.shrink-0:last-child{display:none!important}html[data-ces-slider-ready='1'] [role='menuitem']:has([data-testid='model-selector-effort-group'])>.group-hover\\:hidden{display:flex!important}[role='menuitem'][data-ces-model-selected='true']{background-color:rgba(128,128,145,.14)}.ces-set{position:fixed;z-index:2147483646;width:268px;padding:12px;border-radius:10px;background:rgba(24,24,28,.96);color:#f4f4f6;border:1px solid rgba(255,255,255,.12);box-shadow:0 12px 32px rgba(0,0,0,.55);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;box-sizing:border-box;user-select:none}.ces-set-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,.08);font-weight:600;font-size:12.5px}.ces-set-ver{font-size:11px;font-weight:400;opacity:.55}.ces-set-group{margin-bottom:10px}.ces-set-label{margin-bottom:5px;font-size:11px;opacity:.72}.ces-set-opts{display:flex;gap:4px}.ces-set-opt{flex:1;padding:5px 6px;border-radius:6px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.04);color:#d4d4d8;font-size:11.5px;cursor:pointer;text-align:center;transition:all .12s ease}.ces-set-opt:hover{background:rgba(255,255,255,.1);color:#fff}.ces-set-opt.is-on{background:rgba(139,92,246,.28);border-color:rgba(139,92,246,.75);color:#fff;font-weight:600}.ces-set-actions{display:flex;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08)}.ces-set-btn{flex:1;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:#e4e4e7;font-size:11px;cursor:pointer}.ces-set-btn:hover{background:rgba(255,255,255,.14)}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']{grid-template-rows:auto auto}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>[role='separator']{grid-row:1;grid-column:1}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>:is(.ces-ag-effort-row,[data-testid='orchestrator-effort-bar']){grid-row:2!important;grid-column:1!important}html[data-ces-slider-ready='1'] [data-ag-cs-orch-l3='1']{display:none!important;visibility:hidden!important;pointer-events:none!important;opacity:0!important}html[data-ces-slider-ready='1'] [data-ces-orch-row='1']>svg:last-child:not(:first-child):not(.lucide-check),html[data-ces-slider-ready='1'] [data-ces-orch-row='1']>span:last-child:not(:first-child):has(>svg:only-child:not(.lucide-check)),html[data-ces-slider-ready='1'] [data-ces-orch-row='1']>*:last-child>svg:last-child:not(.lucide-check){display:none!important}[data-ces-orch-row='1'][data-ces-model-selected='true']{background-color:rgba(128,128,145,.14)}";
+var SLIDER_CSS = "@keyframes ces-sweep{0%{transform:translateX(100%)}100%{transform:translateX(-100%)}}@keyframes ces-star-sweep{0%{transform:translate3d(0,0,0);opacity:0}6%,94%{opacity:1}100%{transform:translate3d(-100%,0,0);opacity:0}}.ces-inline,.ces-root,.ces-track,.ces-ag-section,.ces-ag-effort-row{box-sizing:border-box}.ces-inline,.ces-root,.ces-ag-section,.ces-ag-section *{user-select:none!important;-webkit-user-select:none!important;-webkit-tap-highlight-color:transparent!important}.ces-inline{width:100%;padding-top:6px}.ces-root{position:relative;width:100%;outline:none!important;box-shadow:none!important}.ces-track{position:relative;width:100%;height:28px;border-radius:999px;background:rgba(128,128,145,.18);box-shadow:inset 0 1px 2px rgba(0,0,0,.24),inset 0 0 0 1px rgba(255,255,255,.06);cursor:pointer;touch-action:none;transition:opacity .15s,box-shadow .2s}.ces-root[data-energy='1'] .ces-track{box-shadow:0 0 calc(var(--ces-energy,0) * 16px) rgba(168,85,247,.5),inset 0 1px 2px rgba(0,0,0,.24)}.ces-root[data-energy='0'] .ces-star,.ces-root[data-energy='0'] .ces-energy__sweep{animation-play-state:paused}.ces-track.is-locked{opacity:.45;cursor:not-allowed;filter:saturate(.25)}.ces-fill,.ces-energy,.ces-stars{position:absolute;top:0;left:0;bottom:0;width:var(--ces-fill,14px);border-radius:14px 0 0 14px;pointer-events:none}.ces-fill{background:var(--ces-fill-bg,#4d93f8)}.ces-energy{overflow:hidden;opacity:var(--ces-energy,0);transition:opacity .2s;background:linear-gradient(90deg,#3b1178,#6d28d9 30%,#9333ea 62%,#c084fc)}.ces-energy__sweep{position:absolute;inset:0;background:linear-gradient(100deg,transparent 18%,rgba(255,255,255,.3) 50%,transparent 82%);transform:translateX(100%);animation:ces-sweep 2.4s linear infinite;pointer-events:none}.ces-stars{opacity:var(--ces-star-opacity,0);transition:opacity .2s;overflow:hidden}.ces-star{position:absolute;left:0;right:0;height:3px;margin-top:-1.5px;pointer-events:none;animation:ces-star-sweep linear infinite}.ces-star__dot{position:absolute;left:100%;top:0;width:3px;height:3px;margin-left:-1.5px;border-radius:50%;background:#f5f3ff;box-shadow:0 0 5px rgba(216,180,254,.95);opacity:var(--ces-b,1);transform:scale(var(--ces-b,1))}.ces-ticks{position:absolute;inset:0;pointer-events:none}.ces-tick{position:absolute;top:50%;width:3px;height:3px;margin:-1.5px 0 0 -1.5px;border-radius:50%;background:rgba(255,255,255,.28);pointer-events:none;transition:background-color .12s}.ces-tick.is-on{background:rgba(255,255,255,.65)}.ces-tick.is-dim{background:rgba(255,255,255,.28)}.ces-knob{position:absolute;top:50%;left:var(--ces-fill,14px);width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;background:#fff;box-shadow:0 1px 5px rgba(0,0,0,.34),0 0 0 .5px rgba(0,0,0,.06);pointer-events:none;will-change:transform}.ces-root[data-theme='claude'] .ces-stars,.ces-root[data-theme='claude'] .ces-energy{display:none!important}.ces-root[data-theme='claude'] .ces-track{background:rgba(128,128,145,.16);box-shadow:inset 0 1px 2px rgba(0,0,0,.22),inset 0 0 0 1px rgba(255,255,255,.08)}.ces-root[data-theme='claude'][data-energy='1'] .ces-track{box-shadow:0 0 16px rgba(167,139,250,.45),inset 0 1px 2px rgba(0,0,0,.22)}.ces-root[data-theme='claude'] .ces-knob{width:24px;height:30px;margin:-15px 0 0 -12px;border-radius:7px;box-shadow:0 2px 6px rgba(0,0,0,.4),0 0 0 .5px rgba(0,0,0,.12);display:flex;align-items:center;justify-content:center}.ces-knob-notch{display:none;width:2px;height:10px;border-radius:999px;background:rgba(0,0,0,.28)}.ces-root[data-theme='claude'] .ces-knob-notch{display:block}.ces-claude-canvas{position:absolute;left:0;top:0;width:var(--ces-fill,0px);height:100%;object-fit:none;object-position:0 0;border-radius:999px;display:none;pointer-events:none}.ces-root[data-theme='claude'][data-energy='1'] .ces-claude-canvas{display:block}@keyframes ces-claude-rise{0%{transform:translateY(85%) scale(.96);opacity:0}55%{opacity:1}80%{transform:translateY(-6%) scale(1.01)}100%{transform:none;opacity:1}}.ces-ag-effort-value.is-claude-changing,.ces-ag-effort-value.ces-text-rise{animation:ces-claude-rise .3s cubic-bezier(.2,.85,.25,1)}.ces-ag-effort-value.is-claude-changing.is-glowing,.ces-ag-effort-value.ces-text-rise.is-glowing{animation:ces-claude-rise .3s cubic-bezier(.2,.85,.25,1),ces-text-bloom .4s cubic-bezier(.16,1,.3,1) forwards}[data-testid='model-selector-panel'].ces-ag-panel-enhanced{max-height:26rem!important}.ces-ag-section,.ces-ag-section *{outline:none!important}.ces-ag-section,.ces-ag-effort-row{display:flex;flex-direction:column;width:100%}.ces-ag-section{flex-shrink:0}.ces-ag-effort-row{padding:6px 8px 8px;border-radius:6px;transition:box-shadow .2s,background-color .2s}.ces-ag-effort-row:hover{background:rgba(128,128,145,.08)}.ces-ag-effort-row[data-ces-max='true'],[data-ces-effort-row='true'][data-ces-max='true']{box-shadow:inset 0 0 0 1px rgba(139,92,246,.42),0 0 14px -4px rgba(139,92,246,.45)!important;background:rgba(139,92,246,.06)}.ces-ag-effort-head{display:flex;align-items:center;justify-content:space-between;width:100%;font-size:12px;line-height:16px}.ces-ag-effort-title{display:inline-flex;align-items:center;gap:6px;color:inherit;font-weight:500;opacity:.9}.ces-ag-effort-value{position:relative;z-index:1;display:inline-block;font-size:12px;font-weight:600;transition:color .15s}.ces-ag-effort-value::after{content:'';position:absolute;top:50%;left:50%;width:52px;height:26px;border-radius:999px;transform:translate(-50%,-50%) scale(.6);background:radial-gradient(ellipse,var(--ces-glow-color,rgba(168,85,247,.85)),var(--ces-glow-color,rgba(168,85,247,.45)) 45%,rgba(168,85,247,0) 75%);filter:blur(8px);pointer-events:none;opacity:0;z-index:-1}@keyframes ces-glow-flash{0%{opacity:.95;transform:translate(-50%,-50%) scale(.65);filter:blur(6px)}25%{opacity:1;transform:translate(-50%,-50%) scale(1.15);filter:blur(8px)}100%{opacity:0;transform:translate(-50%,-50%) scale(1.5);filter:blur(14px)}}@keyframes ces-text-bloom{0%{text-shadow:0 0 8px var(--ces-glow-color,#c084fc)}30%{text-shadow:0 0 14px var(--ces-glow-color,#c084fc),0 0 3px #fff}100%{text-shadow:none}}.ces-ag-effort-value.is-glowing{animation:ces-text-bloom .4s cubic-bezier(.16,1,.3,1) forwards}.ces-ag-effort-value.is-glowing::after{animation:ces-glow-flash .4s cubic-bezier(.16,1,.3,1) forwards}@media (prefers-reduced-motion:reduce){.ces-panel-shaking,.ces-ag-effort-value.is-glowing,.ces-ag-effort-value.is-glowing::after,.ces-ag-effort-value.ces-text-rise,.ces-ag-effort-value.is-claude-changing{animation:none!important}}html[data-ces-slider-ready='1'] [role='menu']:has([data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])),html[data-ces-slider-ready='1'] div[role='presentation']:has(>[role='menu'] [data-testid='model-selector-effort-option']):not(:has([data-testid='model-selector-panel'])),html[data-ces-slider-ready='1'] [data-ag-cs-orch-l3='1']{display:none!important;visibility:hidden!important;pointer-events:none!important;opacity:0!important}html[data-ces-slider-ready='1'] [role='menuitem']:has([data-testid='model-selector-effort-group'])>span.shrink-0:last-child,html[data-ces-slider-ready='1'] [data-ces-orch-row='1']>svg:last-child:not(:first-child):not(.lucide-check),html[data-ces-slider-ready='1'] [data-ces-orch-row='1']>span:last-child:not(:first-child):has(>svg:only-child:not(.lucide-check)),html[data-ces-slider-ready='1'] [data-ces-orch-row='1']>*:last-child>svg:last-child:not(.lucide-check){display:none!important}html[data-ces-slider-ready='1'] [role='menuitem']:has([data-testid='model-selector-effort-group'])>.group-hover\\:hidden{display:flex!important}[role='menuitem'][data-ces-model-selected='true'],[data-ces-orch-row='1'][data-ces-model-selected='true']{background:rgba(128,128,145,.14)}.ces-set{position:fixed;z-index:2147483646;width:268px;padding:12px;border-radius:10px;background:rgba(24,24,28,.96);color:#f4f4f6;border:1px solid rgba(255,255,255,.12);box-shadow:0 12px 32px rgba(0,0,0,.55);backdrop-filter:blur(12px);font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;box-sizing:border-box;user-select:none}.ces-set-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,.08);font-weight:600;font-size:12.5px}.ces-set-ver{font-size:11px;font-weight:400;opacity:.55}.ces-set-group{margin-bottom:10px}.ces-set-label{margin-bottom:5px;font-size:11px;opacity:.72}.ces-set-opts{display:flex;gap:4px}.ces-set-opt{flex:1;padding:5px 6px;border-radius:6px;border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.04);color:#d4d4d8;font-size:11.5px;cursor:pointer;text-align:center;transition:all .12s ease}.ces-set-opt:hover{background:rgba(255,255,255,.1);color:#fff}.ces-set-opt.is-on{background:rgba(139,92,246,.28);border-color:rgba(139,92,246,.75);color:#fff;font-weight:600}.ces-set-actions{display:flex;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08)}.ces-set-btn{flex:1;padding:5px 8px;border-radius:6px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:#e4e4e7;font-size:11px;cursor:pointer}.ces-set-btn:hover{background:rgba(255,255,255,.14)}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']{grid-template-rows:auto auto}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>[role='separator']{grid-row:1;grid-column:1}[data-testid='model-selector-panel'] .ces-ag-section[data-effort-slot='true']>:is(.ces-ag-effort-row,[data-testid='orchestrator-effort-bar']){grid-row:2!important;grid-column:1!important}";
 function installStyles(doc) {
 var d = doc || (typeof document !== "undefined" ? document : null);
 if (!d || !d.head) return null;
@@ -1151,82 +1000,29 @@ return act ? { opt: act, def: def, idx: oi instanceof Map && oi.size ? oi : ctx.
 * - eKa.Provider: setModelConfigByLabelForConversation（直接切档不关菜单、不抢焦点）
 */
 function _rdAgFiber(el) {
-var startFiber = getReactFiber(el);
-if (!startFiber) return null;
-var selectorCtx = null;
-var innerPopoverProps = null;
-var outerPopoverProps = null;
-var conversationId = undefined;
-var hasConversationSelector = false;
-var globalModelCtx = null;
-var cur = startFiber;
+var cur = getReactFiber(el);
+if (!cur) return null;
+var sc = null, ip = null, op = null, cid = undefined, hasC = false, gm = null;
 for (var step = 0; cur && step < 500; step += 1, cur = cur.return) {
 var props = cur.memoizedProps;
 if (!props || typeof props !== "object") continue;
-// 1. OXb.Provider / WJc.Provider (ModelSelectorProvider)
-if (!selectorCtx && props.value && typeof props.value === "object") {
 var val = props.value;
-if (val.effortIndex instanceof Map && Array.isArray(val.modelOptions)) {
-selectorCtx = val;
+if (!sc && val && typeof val === "object" && val.effortIndex instanceof Map && Array.isArray(val.modelOptions)) sc = val;
+if (typeof props.setIsOpen === "function" && typeof props.setSelectedModel === "function" && Array.isArray(props.modelOptions)) { if (!ip) ip = props; op = props; }
+if (!hasC && ("conversationId" in props) && ("placement" in props)) { hasC = true; cid = props.conversationId; }
+if (!gm && val && typeof val === "object" && typeof val.setModelConfigByLabelForConversation === "function") gm = val;
+if (sc && op && hasC && gm) break;
 }
-}
-// 2. $Xb / hKc / XJc (ModelSelectorPopover 及其各层包装)
-if (
-typeof props.setIsOpen === "function" &&
-typeof props.setSelectedModel === "function" &&
-Array.isArray(props.modelOptions)
-) {
-if (!innerPopoverProps) innerPopoverProps = props;
-outerPopoverProps = props;
-}
-// 3. cYb / kKc (ConversationModelSelector)
-if (!hasConversationSelector && ("conversationId" in props) && ("placement" in props)) {
-hasConversationSelector = true;
-conversationId = props.conversationId;
-}
-// 4. eKa.Provider (Global Model Context，在 Antigravity Web 中通常位于 ~170 层 Fiber 高度)
-if (
-!globalModelCtx &&
-props.value &&
-typeof props.value === "object" &&
-typeof props.value.setModelConfigByLabelForConversation === "function"
-) {
-globalModelCtx = props.value;
-}
-if (selectorCtx && outerPopoverProps && hasConversationSelector && globalModelCtx) {
-break;
-}
-}
-if (!selectorCtx && !innerPopoverProps && !outerPopoverProps && !globalModelCtx) return null;
-var modelOptions =
-(outerPopoverProps && outerPopoverProps.modelOptions) ||
-(innerPopoverProps && innerPopoverProps.modelOptions) ||
-(selectorCtx && selectorCtx.modelOptions) ||
-(globalModelCtx && globalModelCtx.visibleModelConfigs) ||
-[];
-var selectedModel =
-(outerPopoverProps && outerPopoverProps.selectedModel) ||
-(innerPopoverProps && innerPopoverProps.selectedModel) ||
-(selectorCtx && selectorCtx.selectedModel) ||
-(globalModelCtx &&
-(hasConversationSelector && typeof globalModelCtx.getModelConfigForConversation === "function"
-? globalModelCtx.getModelConfigForConversation(conversationId)
-: globalModelCtx.currentModelConfig)) ||
-null;
-var _fn = function (o, k) { return o && typeof o[k] === "function" ? o[k] : null; };
-var sc = selectorCtx, op = outerPopoverProps, ip = innerPopoverProps, gm = globalModelCtx;
-var orchPlanners = sc && Array.isArray(sc.orchestratorPlanners) ? sc.orchestratorPlanners : [];
+if (!sc && !ip && !op && !gm) return null;
+var mos = (op && op.modelOptions) || (ip && ip.modelOptions) || (sc && sc.modelOptions) || (gm && gm.visibleModelConfigs) || [];
+var sel = (op && op.selectedModel) || (ip && ip.selectedModel) || (sc && sc.selectedModel) || (gm && (hasC && typeof gm.getModelConfigForConversation === "function" ? gm.getModelConfigForConversation(cid) : gm.currentModelConfig)) || null;
+var _fn = function (o, k) { return o && typeof o[k] === "function" ? o[k] : null; }, ops = sc && Array.isArray(sc.orchestratorPlanners) ? sc.orchestratorPlanners : [];
 return {
-effortIndex: normalizeEffortIndex(sc && sc.effortIndex, modelOptions),
-modelOptions: modelOptions,
-selectedModel: selectedModel,
-orchPlanners: orchPlanners,
-orchIdx: normalizeEffortIndex(sc && sc.orchestratorPlannerIndex, orchPlanners),
+effortIndex: normalizeEffortIndex(sc && sc.effortIndex, mos), modelOptions: mos, selectedModel: sel,
+orchPlanners: ops, orchIdx: normalizeEffortIndex(sc && sc.orchestratorPlannerIndex, ops),
 orchDef: (sc && sc.orchestratorDefaultPlanner) || null,
 orchPick: sc && sc.orchestratorPick && typeof sc.orchestratorPick === "object" ? sc.orchestratorPick : null,
-groups: (sc && sc.groups) || [],
-conversationId: conversationId,
-hasConversationSelector: hasConversationSelector,
+groups: (sc && sc.groups) || [], conversationId: cid, hasConversationSelector: hasC,
 setModelConfigByLabelForConversation: _fn(gm, "setModelConfigByLabelForConversation"),
 setCurrentModelConfigByLabel: _fn(gm, "setCurrentModelConfigByLabel"),
 unwrappedSetSelectedModel: _fn(op, "setSelectedModel") || _fn(ip, "setSelectedModel") || _fn(sc, "setSelectedModel"),
@@ -1415,6 +1211,7 @@ return { unmount: function () {}, refresh: function () {} };
 installStyles(doc);
 // 清空宿主容器并构建 DOM 树（对齐 dsh-codex-effort-slider 四层结构：fill / energy+sweep / stars+dot / knob）
 container.innerHTML = "";
+var _sa = function (el, k, v) { if (el && typeof el.setAttribute === "function" && el.getAttribute(k) !== v) el.setAttribute(k, v); };
 function _ce(tag, cls, part, parent) {
 var el = doc.createElement(tag);
 if (cls) el.className = cls;
@@ -1477,47 +1274,36 @@ var tickNodes = [];
 var _lastTicks = -1;
 var _lastEng = -1;
 var _lastSlow = -1;
+var dragTrackRect = null;
+var dragSnap = null;
+var dragRafId = null;
+var lastSnap = null;
+var _lastShownIdx = -1;
+var _lastFillCss = "";
+var _lastFillBg = "";
+var _knobTf = false;
+var _rAF = function (f) { return win && typeof win.requestAnimationFrame === "function" ? win.requestAnimationFrame(f) : null; };
+var _cAF = function (id) { if (id !== null && win && typeof win.cancelAnimationFrame === "function") win.cancelAnimationFrame(id); };
 function nowMs() {
-if (win && win.performance && typeof win.performance.now === "function") {
-return win.performance.now();
-}
-return Date.now();
+return win && win.performance && typeof win.performance.now === "function" ? win.performance.now() : Date.now();
 }
 function readSeatSnapshot() {
-var rawLevels = (seat && Array.isArray(seat.effortLevels) ? seat.effortLevels : []).slice();
+var _p = seat && typeof seat._read === "function" ? seat._read() : null, _s = _p || seat;
+var rawLevels = (_s && (Array.isArray(_s.effortLevels) ? _s.effortLevels : Array.isArray(_s.levels) ? _s.levels : []) || []).slice();
 var levels = rawLevels.map(function (item) {
 var key = extractEffortKey(item);
-return {
-raw: item,
-effort: key,
-label: _extEffLbl(item, key, seat)
-};
+return { raw: item, effort: key, label: _extEffLbl(item, key, _s) };
 });
-var count = levels.length;
-var curEffort = extractEffortKey(seat && seat.currentEffort);
-var officialIndex = 0;
+var count = levels.length, curEffort = extractEffortKey(_s && _s.currentEffort), officialIndex = 0;
 for (var i = 0; i < count; i += 1) {
-if (String(levels[i].effort).toLowerCase() === String(curEffort).toLowerCase()) {
-officialIndex = i;
-break;
+if (String(levels[i].effort).toLowerCase() === String(curEffort).toLowerCase()) { officialIndex = i; break; }
 }
-}
-var locked = Boolean((seat && seat.locked) || count <= 1);
-var stops = energyStopsFor(levels);
-var baseName = (seat && seat.baseName) || (seat && seat.modelName) || "";
-var isClaude = Boolean((seat && seat.isClaude) || isClaudeModel(baseName));
-var theme = (seat && seat.theme) || (isClaude ? "claude" : "codex");
+var locked = Boolean((_s && _s.locked) || count <= 1), stops = energyStopsFor(levels);
+var baseName = (_s && (_s.baseName || _s.modelName)) || "", isClaude = Boolean((_s && _s.isClaude) || isClaudeModel(baseName));
 return {
-baseName: baseName,
-isClaude: isClaude,
-theme: theme,
-levels: levels,
-count: count,
-officialIndex: officialIndex,
-locked: locked,
-energyStart: stops.start,
-energyEnd: stops.end,
-hasOffFirst: stops.hasOffFirst
+baseName: baseName, isClaude: isClaude, theme: (_s && _s.theme) || (isClaude ? "claude" : "codex"),
+levels: levels, count: count, officialIndex: officialIndex, locked: locked,
+energyStart: stops.start, energyEnd: stops.end, hasOffFirst: stops.hasOffFirst
 };
 }
 function currentShownIndex(snap) {
@@ -1537,17 +1323,27 @@ target: initPct
 }
 return motionState;
 }
-function _sa(el, k, v) { if (el && typeof el.setAttribute === "function" && el.getAttribute(k) !== v) el.setAttribute(k, v); }
 function _rowEl() {
 return opts.row || (container.closest && container.closest('.ces-ag-effort-row,[data-ces-effort-row="true"],[role="menuitem"]'));
 }
-function _syncHeadTrig(snap, showIdx) {
-var count = snap.count;
-var safeIdx = Math.max(0, Math.min(Math.max(0, count - 1), showIdx));
-var levelItem = snap.levels[safeIdx];
-var label = levelItem ? levelItem.label : "";
-var isMax = !snap.locked && count > 1 && safeIdx === count - 1 && !isOffLevel(label);
-var rowEl = _rowEl();
+function _reAnim(el, cls, k, ms) {
+if (!el || !el.classList) return;
+var cl = el.classList, tk = k + "t", rk = k + "r", had = false;
+if (el[tk]) { clearTimeout(el[tk]); el[tk] = null; }
+if (el[rk]) { _cAF(el[rk]); el[rk] = null; }
+cls.forEach(function (c) { if (cl.contains(c)) { had = true; cl.remove(c); } });
+var run = function () {
+el[rk] = null;
+if (destroyed || !el.classList) return;
+cls.forEach(function (c) { cl.add(c); });
+el[tk] = setTimeout(function () { cls.forEach(function (c) { cl.remove(c); }); el[tk] = null; }, ms);
+};
+var r = had ? _rAF(run) : null;
+if (r !== null) el[rk] = r; else run();
+}
+function _syncValOnly(snap, safeIdx) {
+var count = snap.count, levelItem = snap.levels[safeIdx], label = levelItem ? levelItem.label : "";
+var isMax = !snap.locked && count > 1 && safeIdx === count - 1 && !isOffLevel(label), rowEl = _rowEl();
 if (rowEl) {
 _sa(rowEl, "data-ces-effort-row", "true");
 if (isMax) _sa(rowEl, "data-ces-max", "true");
@@ -1555,55 +1351,41 @@ else if (rowEl.hasAttribute("data-ces-max")) rowEl.removeAttribute("data-ces-max
 }
 var valEl = opts.valueElement || (rowEl && findValueElement(rowEl));
 if (valEl) {
-var hadLastLabel = typeof valEl.__cesLastLabel === "string";
-var curVal = valEl.textContent || "";
-var logicalChanged = Boolean(label) && valEl.__cesLastLabel !== label;
+var had = typeof valEl.__cesLastLabel === "string", curVal = valEl.textContent || "", chg = Boolean(label) && valEl.__cesLastLabel !== label;
 var ka = _normEffTxt(curVal), kb = _normEffTxt(label);
-var staleTier = Boolean(label && ka && kb && ka !== kb);
-if (logicalChanged || (label && !curVal.trim()) || staleTier) {
+if (chg || (label && !curVal.trim()) || (label && ka && kb && ka !== kb)) {
 valEl.__cesLastLabel = label;
-if (!_sameEffTxt(curVal, label)) {
-valEl.textContent = label;
-}
-// 无论是 Claude 还是 Codex (Argon / Flash)，文字切换时统一触发顺滑向上翻转动效
-if (hadLastLabel && logicalChanged && !prefersReducedMotion(win)) {
-if (valEl.__cesRiseTimer) {
-clearTimeout(valEl.__cesRiseTimer);
-valEl.__cesRiseTimer = null;
-}
-valEl.classList.remove("ces-text-rise");
-valEl.classList.remove("is-claude-changing");
-void valEl.offsetWidth;
-valEl.classList.add("ces-text-rise");
-valEl.classList.add("is-claude-changing");
-valEl.__cesRiseTimer = setTimeout(function () {
-if (valEl && valEl.classList) {
-valEl.classList.remove("ces-text-rise");
-valEl.classList.remove("is-claude-changing");
-}
-valEl.__cesRiseTimer = null;
-}, 320);
-}
+if (!_sameEffTxt(curVal, label)) valEl.textContent = label;
+if (had && chg && !prefersReducedMotion(win)) _reAnim(valEl, ["ces-text-rise", "is-claude-changing"], "_c", 320);
 }
 var vColor = snap.locked ? "" : valueColorFor(label, safeIdx, count, isMax, snap.hasOffFirst, snap.isClaude, resolvePrismAccentTone(doc, win)) || "";
-if (valEl.style && valEl.style.color !== vColor) {
-valEl.style.color = vColor;
+if (valEl.style && valEl.style.color !== vColor) valEl.style.color = vColor;
 }
+return { label: label, isMax: isMax, levelItem: levelItem };
 }
-syncTriggerColor(doc, label, safeIdx, count, isMax, snap.hasOffFirst, snap.isClaude);
+function _syncHeadTrig(snap, showIdx) {
+var count = snap.count;
+var safeIdx = Math.max(0, Math.min(Math.max(0, count - 1), showIdx));
+if (dragging) {
+if (safeIdx === _lastShownIdx) return;
+_lastShownIdx = safeIdx;
+_syncValOnly(snap, safeIdx);
+return;
+}
+_lastShownIdx = safeIdx;
+var st = _syncValOnly(snap, safeIdx);
+syncTriggerColor(doc, st.label, safeIdx, count, st.isMax, snap.hasOffFirst, snap.isClaude);
 if (typeof opts.onVisualChange === "function") {
 try {
 opts.onVisualChange({
 index: safeIdx,
 count: count,
-label: label,
-effort: levelItem ? levelItem.effort : "",
-isMax: isMax,
+label: st.label,
+effort: st.levelItem ? st.levelItem.effort : "",
+isMax: st.isMax,
 locked: snap.locked
 });
-} catch (err) {
-// 忽略外部视觉回调错误
-}
+} catch (err) {}
 }
 }
 function renderTicks(snap, effectivePct) {
@@ -1649,9 +1431,7 @@ var cachedSurfaceDarkAt = 0;
 var lastClaudePaintAt = 0;
 var cachedClaudeCtx = null;
 function _stopClRaf() {
-if (claudeRafId !== null && win && typeof win.cancelAnimationFrame === "function") {
-win.cancelAnimationFrame(claudeRafId);
-}
+_cAF(claudeRafId);
 claudeRafId = null;
 cachedTrackRect = null;
 cachedTrackRectAt = 0;
@@ -1661,215 +1441,133 @@ function _isBgWin() {
 var r = doc && doc.documentElement;
 return Boolean(doc && (doc.hidden || (r && ((r.getAttribute && r.getAttribute("data-ag-cs-win-blur") === "1") || (r.hasAttribute && r.hasAttribute("data-ag-cs-win-blur") && (!r.getAttribute || r.getAttribute("data-ag-cs-win-blur") !== "0"))))));
 }
+function _trkRect(now) {
+var r = dragging && dragTrackRect && dragTrackRect.width > 0 ? dragTrackRect : cachedTrackRect;
+if (!r || (!dragging && now && now - cachedTrackRectAt > 250)) {
+r = trackEl.getBoundingClientRect ? trackEl.getBoundingClientRect() : null;
+if (r && r.width > 0) { cachedTrackRect = r; cachedTrackRectAt = now || nowMs(); if (dragging) dragTrackRect = r; }
+}
+return r;
+}
 function stepClaudeCanvas(nowTs) {
 claudeRafId = null;
 if (destroyed) return;
-if (_isBgWin()) {
-_stopClRaf();
-return;
-}
-var snap = readSeatSnapshot();
-// 强度归零（回到 Low / 切走 Claude / 锁定）即停止循环，零冗余开销
-if (!snap.isClaude || snap.locked || claudeIntensity <= 0) {
-_stopClRaf();
-return;
-}
+if (_isBgWin() || isPrismMotionOff(doc, win)) { _stopClRaf(); return; }
+var snap = (dragging && dragSnap) || lastSnap || readSeatSnapshot();
+if (!snap.isClaude || snap.locked || claudeIntensity <= 0) { _stopClRaf(); return; }
 var now = typeof nowTs === "number" && nowTs > 0 ? nowTs : nowMs();
-// 高刷屏限频至 ~60fps（15.5ms），避免 180Hz/300Hz 下重复逐像素重绘 Canvas，60Hz 丝滑度 100% 一致
-if (lastClaudePaintAt > 0 && now - lastClaudePaintAt < 15.5) {
-if (win && typeof win.requestAnimationFrame === "function") {
-claudeRafId = win.requestAnimationFrame(stepClaudeCanvas);
-}
-return;
-}
+var progress = Math.min(1, Math.max(0, now - claudeAnimStart) / CLAUDE_SWEEP_MS);
+var isQuick = motionMode(win, null, doc) === "quick";
+if (lastClaudePaintAt > 0 && now - lastClaudePaintAt < (dragging || progress < 1 ? 15.5 : claudeIntensity >= 0.7 ? 32 : 50)) { claudeRafId = _rAF(stepClaudeCanvas); return; }
 lastClaudePaintAt = now;
-var elapsed = Math.max(0, now - claudeAnimStart);
-var progress = Math.min(1, elapsed / CLAUDE_SWEEP_MS);
-// 相位按帧累加：dt 上限 50ms，防止切后台回来后一次性跳很远
-var frameDt = claudeLastTs > 0 ? Math.min(0.05, Math.max(0, (now - claudeLastTs) / 1000)) : 0;
+claudeFlowTime += (claudeLastTs > 0 ? Math.min(0.05, Math.max(0, (now - claudeLastTs) / 1000)) : 0) * claudeSpeed;
 claudeLastTs = now;
-claudeFlowTime += frameDt * claudeSpeed;
-if (now - cachedSurfaceDarkAt > 300 || cachedSurfaceDarkAt === 0) {
-cachedSurfaceDark = surfaceIsDark(win, doc);
-cachedSurfaceDarkAt = now;
-}
-var isDark = cachedSurfaceDark;
-if (!cachedTrackRect || now - cachedTrackRectAt > 250) {
-cachedTrackRect = trackEl.getBoundingClientRect ? trackEl.getBoundingClientRect() : null;
-cachedTrackRectAt = now;
-}
-var rect = cachedTrackRect;
-var trackW = rect && rect.width > 0 ? rect.width : 280;
-var th = rect && rect.height > 0 ? Math.round(rect.height) : (claudeCanvasEl.height || 28);
-// 画布像素宽度 = 已填充宽度（圆钮中心），与 CSS width: var(--ces-fill) 对齐
-var curPct = motionState ? clamp01(motionState.x) : 0;
-var tw = Math.max(1, Math.round(KNOB_RADIUS + (trackW - KNOB_RADIUS * 2) * curPct));
-if (claudeCanvasEl.width !== tw) claudeCanvasEl.width = tw;
+if (now - cachedSurfaceDarkAt > 300 || !cachedSurfaceDarkAt) { cachedSurfaceDark = surfaceIsDark(win, doc); cachedSurfaceDarkAt = now; }
+var rect = _trkRect(now), trackW = rect && rect.width > 0 ? rect.width : 280, th = rect && rect.height > 0 ? Math.round(rect.height) : (claudeCanvasEl.height || 28);
+var fullW = Math.max(1, Math.round(trackW)), tw = Math.max(1, Math.min(fullW, Math.round(KNOB_RADIUS + (trackW - KNOB_RADIUS * 2) * (motionState ? clamp01(motionState.x) : 0))));
+if (claudeCanvasEl.width !== fullW) claudeCanvasEl.width = fullW;
 if (claudeCanvasEl.height !== th) claudeCanvasEl.height = th;
 var cctx = cachedClaudeCtx || (claudeCanvasEl.getContext && (cachedClaudeCtx = claudeCanvasEl.getContext("2d")));
 if (cctx) {
-paintDither(cctx, tw, th, isDark, progress, claudeFlowTime, claudeIntensity);
+var clp = tw < fullW && cctx.save && cctx.rect && cctx.clip;
+if (tw < fullW) cctx.clearRect(tw, 0, fullW - tw, th);
+if (clp) { cctx.save(); cctx.beginPath(); cctx.rect(0, 0, tw, th); cctx.clip(); }
+paintDither(cctx, tw, th, cachedSurfaceDark, progress, claudeFlowTime, claudeIntensity);
+if (clp) cctx.restore();
 }
-if (win && typeof win.requestAnimationFrame === "function") {
-claudeRafId = win.requestAnimationFrame(stepClaudeCanvas);
-}
+if (isQuick && !dragging && progress >= 1) { _stopClRaf(); return; }
+claudeRafId = _rAF(stepClaudeCanvas);
 }
 function _startClRaf() {
-if (destroyed || claudeRafId !== null) return;
-if (_isBgWin()) return;
-if (win && typeof win.requestAnimationFrame === "function") {
-claudeRafId = win.requestAnimationFrame(stepClaudeCanvas);
-} else {
-stepClaudeCanvas(nowMs());
-}
+if (destroyed || claudeRafId !== null || _isBgWin()) return;
+claudeRafId = _rAF(stepClaudeCanvas);
+if (claudeRafId === null) stepClaudeCanvas(nowMs());
 }
 function applyVisualPct(snap, effectivePct, showIdx) {
-var p = clamp01(effectivePct);
-var count = snap.count;
-var safeIdx = Math.max(0, Math.min(Math.max(0, count - 1), showIdx));
-var levelItem = snap.levels[safeIdx];
-var label = levelItem ? levelItem.label : "";
-var theme = snap.theme || "codex";
+lastSnap = snap;
+var p = clamp01(effectivePct), count = snap.count, safeIdx = Math.max(0, Math.min(Math.max(0, count - 1), showIdx));
+var levelItem = snap.levels[safeIdx], label = levelItem ? levelItem.label : "", theme = snap.theme || "codex";
 _sa(rootEl, "data-theme", theme);
 _sa(trackEl, "data-theme", theme);
-_sa(container, "data-theme", theme);
-// 设为 -1，防止 Radix/Base UI FocusScope 在重新打开菜单时将焦点自动抢到推理条上导致框选
 _sa(rootEl, "tabindex", "-1");
 _sa(rootEl, "aria-valuemin", "0");
 _sa(rootEl, "aria-valuemax", String(Math.max(0, count - 1)));
 _sa(rootEl, "aria-valuenow", String(safeIdx));
 _sa(rootEl, "aria-valuetext", label);
 _sa(rootEl, "aria-disabled", snap.locked ? "true" : "false");
-if (snap.locked) {
-if (!trackEl.classList.contains("is-locked")) trackEl.classList.add("is-locked");
-} else if (trackEl.classList.contains("is-locked")) {
-trackEl.classList.remove("is-locked");
-}
-var curTone = resolvePrismAccentTone(doc, win);
-var motOff = isPrismMotionOff(doc, win);
-var offsetCss = knobOffsetOf(p, KNOB_RADIUS);
-var fillBg = fillBackgroundFor(p, snap.energyStart, snap.energyEnd, snap.isClaude, curTone);
-trackEl.style.setProperty("--ces-fill", offsetCss);
-trackEl.style.setProperty("--ces-fill-bg", fillBg);
-fillEl.style.width = offsetCss;
-fillEl.style.background = fillBg;
-energyEl.style.width = offsetCss;
-starsEl.style.width = offsetCss;
-knobEl.style.left = offsetCss;
+if (snap.locked) { if (!trackEl.classList.contains("is-locked")) trackEl.classList.add("is-locked"); }
+else if (trackEl.classList.contains("is-locked")) trackEl.classList.remove("is-locked");
+var curTone = resolvePrismAccentTone(doc, win), motOff = isPrismMotionOff(doc, win);
+var offsetCss = knobOffsetOf(p, KNOB_RADIUS), fillBg = fillBackgroundFor(p, snap.energyStart, snap.energyEnd, snap.isClaude, curTone);
+if (offsetCss !== _lastFillCss) { _lastFillCss = offsetCss; trackEl.style.setProperty("--ces-fill", offsetCss); }
+if (fillBg !== _lastFillBg) { _lastFillBg = fillBg; trackEl.style.setProperty("--ces-fill-bg", fillBg); }
+if (dragging && dragTrackRect && dragTrackRect.width > 0) {
+if (!_knobTf) { knobEl.style.left = "0px"; _knobTf = true; }
+knobEl.style.transform = "translate3d(" + (KNOB_RADIUS + (dragTrackRect.width - KNOB_RADIUS * 2) * p).toFixed(1) + "px,0,0)";
+} else if (_knobTf) { knobEl.style.left = knobEl.style.transform = ""; _knobTf = false; }
 claudeIntensity = !motOff && curTone !== "mono" && snap.isClaude && !snap.locked && count > 1 ? claudeIntensityFor(p, snap.energyStart) : 0;
 claudeSpeed = claudeSpeedFor(p, snap.energyStart);
 if (claudeIntensity > 0) {
-if (claudeCanvasEl.style.display !== "block") {
-// 仅「无特效 → 有特效」时重置入场扫掠；之后拖动只调强度/速度，不重播
-claudeCanvasEl.style.display = "block";
-claudeAnimStart = nowMs();
-claudeLastTs = 0;
-}
+if (claudeCanvasEl.style.display !== "block") { claudeCanvasEl.style.display = "block"; claudeAnimStart = nowMs(); claudeLastTs = 0; }
 _startClRaf();
 } else {
-if (claudeCanvasEl.style.display !== "none") {
-claudeCanvasEl.style.display = "none";
-}
+if (claudeCanvasEl.style.display !== "none") claudeCanvasEl.style.display = "none";
 _stopClRaf();
 }
-var energy = snap.locked || motOff ? 0 : energyForPct(p, snap.energyStart);
-var slowdown = motionMode(win, null, doc) === "quick" ? _RM_SLOW : 1;
+var energy = snap.locked || motOff ? 0 : energyForPct(p, snap.energyStart), slowdown = motionMode(win, null, doc) === "quick" ? _RM_SLOW : 1;
 if (Math.abs(energy - _lastEng) > 1e-5 || slowdown !== _lastSlow) {
-_lastEng = energy;
-_lastSlow = slowdown;
-var energyOn = energy > 0 ? "1" : "0";
-var energyStr = String(Math.round(energy * 1000) / 1000);
-_sa(rootEl, "data-energy", energyOn);
-rootEl.style.setProperty("--ces-energy", energyStr);
-_sa(container, "data-energy", energyOn);
-if (container && container.style) container.style.setProperty("--ces-energy", energyStr);
-var starLayerOpacity = starLayerOpacityFor(energy);
-trackEl.style.setProperty("--ces-star-opacity", String(starLayerOpacity));
-starsEl.style.opacity = String(starLayerOpacity);
-var visibleCount = Math.round(energy * PARTICLES.length);
-var speedFactor = speedFor(p, snap.energyStart);
-starsEl.setAttribute("data-count", String(visibleCount));
+_lastEng = energy; _lastSlow = slowdown;
+_sa(rootEl, "data-energy", energy > 0 ? "1" : "0");
+rootEl.style.setProperty("--ces-energy", String(Math.round(energy * 1000) / 1000));
+var slo = String(starLayerOpacityFor(energy)), vc = Math.round(energy * PARTICLES.length), sf = speedFor(p, snap.energyStart);
+trackEl.style.setProperty("--ces-star-opacity", slo);
+starsEl.style.opacity = slo;
+starsEl.setAttribute("data-count", String(vc));
 for (var i = 0; i < starNodes.length; i += 1) {
-var sNode = starNodes[i];
-var dur = starDurationFor(i, speedFactor) * slowdown;
-var delay = starDelayFor(i, dur);
-sNode.el.style.display = i < visibleCount ? "" : "none";
-sNode.el.style.animationDuration = dur.toFixed(3) + "s";
-sNode.el.style.animationDelay = delay.toFixed(3) + "s";
+var st = starNodes[i].el.style, dur = starDurationFor(i, sf) * slowdown;
+st.display = i < vc ? "" : "none";
+st.animationDuration = dur.toFixed(3) + "s";
+st.animationDelay = starDelayFor(i, dur).toFixed(3) + "s";
 }
 }
 renderTicks(snap, p);
 _syncHeadTrig(snap, safeIdx);
 }
-function stopFrames() {
-if (rafId !== null && win && typeof win.cancelAnimationFrame === "function") {
-win.cancelAnimationFrame(rafId);
-}
-rafId = null;
-lastFrameMs = 0;
-}
+function stopFrames() { _cAF(rafId); rafId = null; lastFrameMs = 0; }
 function stepFrame(ts) {
 rafId = null;
 if (destroyed) return;
-var snap = readSeatSnapshot();
-var m = ensureMotion(snap);
-var mode = motionMode(win, null, doc);
-var params = motionParamsForMode(mode);
+var snap = readSeatSnapshot(), m = ensureMotion(snap), params = motionParamsForMode(motionMode(win, null, doc));
 var now = typeof ts === "number" && ts > 0 ? ts : nowMs();
-var dt = lastFrameMs > 0 ? (now - lastFrameMs) / 1000 : 1 / 60;
+motionStep(m, lastFrameMs > 0 ? (now - lastFrameMs) / 1000 : 1 / 60, params);
 lastFrameMs = now;
-motionStep(m, dt, params);
-var showIdx = currentShownIndex(snap);
-applyVisualPct(snap, m.x, showIdx);
-if (!motionSettled(m, params)) {
-startFrames();
-} else {
-m.x = clamp01(m.target);
-m.v = 0;
-m.a = 0;
-if (!dragging) {
-snapIndex = null;
-}
+applyVisualPct(snap, m.x, currentShownIndex(snap));
+if (!motionSettled(m, params)) startFrames();
+else {
+m.x = clamp01(m.target); m.v = m.a = 0;
+if (!dragging) snapIndex = null;
 applyVisualPct(snap, m.x, currentShownIndex(snap));
 }
 }
 function startFrames() {
 if (destroyed || rafId !== null) return;
-if (win && typeof win.requestAnimationFrame === "function") {
-rafId = win.requestAnimationFrame(stepFrame);
-} else {
-stepFrame(nowMs());
-}
+rafId = _rAF(stepFrame);
+if (rafId === null) stepFrame(nowMs());
 }
 function clearMaxEffects() {
 var valEl = opts.valueElement || findValueElement(_rowEl());
-if (valEl && valEl.classList && valEl.classList.contains("is-glowing")) {
-valEl.classList.remove("is-glowing");
-if (valEl.__cesGlowTimer) {
-clearTimeout(valEl.__cesGlowTimer);
-valEl.__cesGlowTimer = null;
-}
+if (valEl) {
+if (valEl._gt) { clearTimeout(valEl._gt); valEl._gt = null; }
+if (valEl._gr) { _cAF(valEl._gr); valEl._gr = null; }
+if (valEl.classList) valEl.classList.remove("is-glowing");
 }
 }
 function triggerMaxEffects(isClaude) {
 if (prefersReducedMotion(win)) return;
-// "High" 文字到达最高档时的模糊光斑爆散 (约 0.4s 淡淡消失)
 var valEl = opts.valueElement || findValueElement(_rowEl());
 if (valEl && valEl.classList) {
-var glowColor = isClaude ? "rgba(196, 181, 253, 0.9)" : "rgba(168, 85, 247, 0.9)";
-if (valEl.style && typeof valEl.style.setProperty === "function") {
-valEl.style.setProperty("--ces-glow-color", glowColor);
-}
-valEl.classList.remove("is-glowing");
-void valEl.offsetWidth;
-valEl.classList.add("is-glowing");
-if (valEl.__cesGlowTimer) {
-clearTimeout(valEl.__cesGlowTimer);
-}
-valEl.__cesGlowTimer = setTimeout(function () {
-if (valEl && valEl.classList) valEl.classList.remove("is-glowing");
-valEl.__cesGlowTimer = null;
-}, 450);
+if (valEl.style && valEl.style.setProperty) valEl.style.setProperty("--ces-glow-color", isClaude ? "rgba(196, 181, 253, 0.9)" : "rgba(168, 85, 247, 0.9)");
+_reAnim(valEl, ["is-glowing"], "_g", 450);
 }
 }
 /**
@@ -1879,176 +1577,109 @@ valEl.__cesGlowTimer = null;
 function commitAtIndex(targetIndex, reason) {
 var snap = readSeatSnapshot();
 if (snap.locked || snap.count <= 1) return;
-var clampedIdx = Math.max(0, Math.min(snap.count - 1, targetIndex));
-var item = snap.levels[clampedIdx];
+var idx = Math.max(0, Math.min(snap.count - 1, targetIndex)), item = snap.levels[idx];
 if (!item) return;
-var isNowMax = clampedIdx === snap.count - 1 && !isOffLevel(item.label);
-var wasMax = _lastCmtIdx === snap.count - 1;
-_lastCmtIdx = clampedIdx;
-tracePush("commit", {
-reason: reason || "drag",
-index: clampedIdx,
-effort: item.effort,
-label: item.label
-});
-if (isNowMax && !wasMax) {
-triggerMaxEffects(snap.isClaude);
-} else if (!isNowMax && wasMax) {
-clearMaxEffects();
-}
+var isNowMax = idx === snap.count - 1 && !isOffLevel(item.label), wasMax = _lastCmtIdx === snap.count - 1;
+_lastCmtIdx = idx;
+tracePush("commit", { reason: reason || "drag", index: idx, effort: item.effort, label: item.label });
+if (isNowMax && !wasMax) triggerMaxEffects(snap.isClaude);
+else if (!isNowMax && wasMax) clearMaxEffects();
 if (seat && typeof seat.selectEffort === "function") {
-try {
-seat.selectEffort(item.raw !== undefined ? item.raw : item.effort, clampedIdx);
-} catch (err) {
-tracePush("commit-error", { message: String(err && err.message ? err.message : err) });
+try { seat.selectEffort(item.raw !== undefined ? item.raw : item.effort, idx); }
+catch (err) { tracePush("commit-error", { message: String(err && err.message ? err.message : err) }); }
 }
+if (typeof opts.onCommit === "function") try { opts.onCommit(item, idx, reason || "drag"); } catch (err) {}
 }
-if (typeof opts.onCommit === "function") {
-try {
-opts.onCommit(item, clampedIdx, reason || "drag");
-} catch (err) {
-// 忽略外部回调异常
-}
-}
-}
+function _cancelDragRaf() { _cAF(dragRafId); dragRafId = null; }
 function pctAtClientX(clientX) {
-var rect = trackEl.getBoundingClientRect ? trackEl.getBoundingClientRect() : null;
-if (!rect || !(rect.width > 0)) return null;
-var usable = Math.max(1, rect.width - KNOB_RADIUS * 2);
-var raw = (clientX - rect.left - KNOB_RADIUS) / usable;
-return clamp01(raw);
+var rect = _trkRect(0);
+return rect && rect.width > 0 ? clamp01((clientX - rect.left - KNOB_RADIUS) / Math.max(1, rect.width - KNOB_RADIUS * 2)) : null;
+}
+function _flushDragVisual() {
+dragRafId = null;
+if (destroyed || !dragging) return;
+var ds = dragSnap || readSeatSnapshot(), dm = ensureMotion(ds);
+applyVisualPct(ds, dm.x, draftIndex !== null ? draftIndex : ds.officialIndex);
 }
 function moveToClientX(clientX, isInitialDown) {
-var snap = readSeatSnapshot();
+var snap = (dragging && dragSnap) || readSeatSnapshot();
 if (snap.locked || snap.count <= 0) return;
 var ptrPct = pctAtClientX(clientX);
 if (ptrPct === null) ptrPct = pctFromIndex(snap.officialIndex, snap.count);
 var now = nowMs();
 if (lastPtrPct !== null && lastPtrMs > 0) {
 var dt = (now - lastPtrMs) / 1000;
-if (dt > 1e-4 && dt < 0.25) {
-var instSpeed = (ptrPct - lastPtrPct) / dt;
-ptrSpeed = ptrSpeed * (1 - _PS_EMA) + instSpeed * _PS_EMA;
-}
-} else {
-ptrSpeed = 0;
-}
-lastPtrPct = ptrPct;
-lastPtrMs = now;
-var mode = motionMode(win);
+if (dt > 1e-4 && dt < 0.25) ptrSpeed = ptrSpeed * (1 - _PS_EMA) + ((ptrPct - lastPtrPct) / dt) * _PS_EMA;
+} else ptrSpeed = 0;
+lastPtrPct = ptrPct; lastPtrMs = now;
 var nowIndex;
-var targetPct;
-if (mode === "fast") {
-if (isInitialDown || detentIndex < 0 || detentIndex >= snap.count) {
-// 按下时若点击位置跨格，直接按最近格响应；随后的拖动按 1/3 边界迟滞棘轮触发
-nowIndex = isInitialDown
-? indexFromPct(ptrPct, snap.count)
-: detentTargetIndex(snap.officialIndex, ptrPct, snap.count);
-} else {
-nowIndex = detentTargetIndex(detentIndex, ptrPct, snap.count);
-}
-// 仅当指针已进入 nowIndex 自身的稳定死区时才把棘轮锚点推进到 nowIndex，
-// 否则保持在过渡区来源侧相邻格，防止在 [1/3, 2/3] 区间连续微移或松手时来回翻转
-if (detentTargetIndex(nowIndex, ptrPct, snap.count) === nowIndex) {
-detentIndex = nowIndex;
-} else if (ptrPct < pctFromIndex(nowIndex, snap.count)) {
-detentIndex = Math.max(0, nowIndex - 1);
-} else {
-detentIndex = Math.min(snap.count - 1, nowIndex + 1);
-}
-targetPct = ptrPct;
-} else {
-nowIndex = indexFromPct(ptrPct, snap.count);
-targetPct = ptrPct;
-}
-draftPct = ptrPct;
-draftIndex = nowIndex;
+if (motionMode(win, null, doc) === "fast") {
+nowIndex = isInitialDown ? indexFromPct(ptrPct, snap.count) : detentTargetIndex(detentIndex >= 0 && detentIndex < snap.count ? detentIndex : snap.officialIndex, ptrPct, snap.count);
+detentIndex = detentTargetIndex(nowIndex, ptrPct, snap.count) === nowIndex ? nowIndex : ptrPct < pctFromIndex(nowIndex, snap.count) ? Math.max(0, nowIndex - 1) : Math.min(snap.count - 1, nowIndex + 1);
+} else nowIndex = indexFromPct(ptrPct, snap.count);
+draftPct = ptrPct; draftIndex = nowIndex;
 var m = ensureMotion(snap);
-m.target = targetPct;
-// ★ R1：拖动过程中仅做视觉即时跟手与档位文字/能量预览，不在途中连续触发宿主 MODEL_CHANGED 脉冲 ★
-m.x = targetPct;
-m.v = 0;
-m.a = 0;
+m.x = m.target = ptrPct; m.v = m.a = 0;
 stopFrames();
-applyVisualPct(snap, m.x, nowIndex);
+if (isInitialDown || !win || typeof win.requestAnimationFrame !== "function") {
+_cancelDragRaf();
+applyVisualPct(snap, ptrPct, nowIndex);
+} else {
+if (nowIndex !== _lastShownIdx) { _lastShownIdx = nowIndex; _syncValOnly(snap, nowIndex); }
+if (dragRafId === null) dragRafId = _rAF(_flushDragVisual);
+}
+}
+function _settle(snap, idx, imm, startX) {
+var m = ensureMotion(snap), tgt = pctFromIndex(idx, snap.count);
+m.target = tgt;
+if (imm) {
+m.x = tgt; m.v = m.a = 0; snapIndex = null; stopFrames();
+applyVisualPct(snap, m.x, idx);
+} else {
+if (typeof startX === "number") { m.x = startX; m.v = m.a = 0; }
+applyVisualPct(snap, m.x, idx);
+startFrames();
+}
 }
 function endDrag(clientX) {
 if (!dragging) return;
-var snap = readSeatSnapshot();
+_cancelDragRaf();
+var snap = dragSnap || readSeatSnapshot();
 var ptrPct = draftPct !== null ? draftPct : pctFromIndex(snap.officialIndex, snap.count);
 if (typeof clientX === "number") {
 var p = pctAtClientX(clientX);
 if (p !== null) ptrPct = p;
 }
-var mode = motionMode(win);
-var finalIndex;
-if (mode === "fast") {
-var baseDetent = detentIndex >= 0 && detentIndex < snap.count ? detentIndex : snap.officialIndex;
-finalIndex = detentTargetIndex(baseDetent, ptrPct, snap.count);
-} else if (mode === "quick") {
-finalIndex = indexFromPct(ptrPct, snap.count);
-} else {
-var idleS = lastPtrMs > 0 ? Math.max(0, (nowMs() - lastPtrMs) / 1000) : 1;
-finalIndex = releaseIndexFor(ptrPct, ptrSpeed, idleS, snap.count);
-}
-dragging = false;
-buttonDown = false;
-draftPct = null;
-draftIndex = null;
-detentIndex = -1;
-lastPtrPct = null;
+var mode = motionMode(win, null, doc), finalIndex;
+if (mode === "fast") finalIndex = detentTargetIndex(detentIndex >= 0 && detentIndex < snap.count ? detentIndex : snap.officialIndex, ptrPct, snap.count);
+else if (mode === "quick") finalIndex = indexFromPct(ptrPct, snap.count);
+else finalIndex = releaseIndexFor(ptrPct, ptrSpeed, lastPtrMs > 0 ? Math.max(0, (nowMs() - lastPtrMs) / 1000) : 1, snap.count);
+dragging = buttonDown = false;
+dragTrackRect = dragSnap = draftPct = draftIndex = lastPtrPct = null;
+detentIndex = _lastShownIdx = -1;
 ptrSpeed = 0;
 snapIndex = finalIndex;
-// 仅在松手或单次点击且最终档位相对 officialIndex 真正改变时提交 1 次
-if (finalIndex !== snap.officialIndex) {
-commitAtIndex(finalIndex, "release");
+if (finalIndex !== snap.officialIndex) commitAtIndex(finalIndex, "release");
+_settle(readSeatSnapshot(), finalIndex, mode === "quick", ptrPct);
 }
-var m = ensureMotion(snap);
-m.target = pctFromIndex(finalIndex, snap.count);
-if (mode === "quick") {
-m.x = m.target;
-m.v = 0;
-m.a = 0;
-snapIndex = null;
-stopFrames();
-applyVisualPct(readSeatSnapshot(), m.x, finalIndex);
-} else {
-m.x = ptrPct;
-m.v = 0;
-m.a = 0;
-applyVisualPct(readSeatSnapshot(), m.x, finalIndex);
-startFrames();
-}
-}
-function swallowEvent(ev) {
-if (!ev) return;
-if (typeof ev.stopPropagation === "function") ev.stopPropagation();
-}
+function swallowEvent(ev) { if (ev && typeof ev.stopPropagation === "function") ev.stopPropagation(); }
 function onPointerDown(ev) {
 if (ev && typeof ev.button === "number" && ev.button !== 0) return;
 var snap = readSeatSnapshot();
 if (snap.locked || snap.count <= 1) return;
 swallowEvent(ev);
 if (typeof ev.preventDefault === "function") ev.preventDefault();
-dragging = true;
-buttonDown = true;
-// 起手时对齐当前官方档位，若起手点就在当前档位则不重复触发无意义的写入；若点在其他档位则立即切过去
-_lastCmtIdx = snap.officialIndex;
-detentIndex = snap.officialIndex;
-snapIndex = null;
-lastPtrPct = null;
-try {
-if (trackEl.setPointerCapture && ev.pointerId !== undefined) {
-trackEl.setPointerCapture(ev.pointerId);
-}
-} catch (err) {
-// 忽略不支持 pointerCapture 的环境
-}
+dragging = buttonDown = true;
+dragSnap = snap;
+dragTrackRect = trackEl.getBoundingClientRect ? trackEl.getBoundingClientRect() : null;
+if (dragTrackRect && dragTrackRect.width > 0) { cachedTrackRect = dragTrackRect; cachedTrackRectAt = nowMs(); }
+_lastCmtIdx = detentIndex = snap.officialIndex;
+snapIndex = lastPtrPct = null;
+try { if (trackEl.setPointerCapture && ev.pointerId !== undefined) trackEl.setPointerCapture(ev.pointerId); } catch (err) {}
 moveToClientX(ev.clientX, true);
 }
 function onPointerMove(ev) {
-if (!dragging) return;
-if (ev && ev.buttons === 0 && !buttonDown) return;
+if (!dragging || (ev && ev.buttons === 0 && !buttonDown)) return;
 swallowEvent(ev);
 moveToClientX(ev.clientX, false);
 }
@@ -2056,13 +1687,7 @@ function onPointerUp(ev) {
 if (!dragging) return;
 swallowEvent(ev);
 buttonDown = false;
-try {
-if (trackEl.releasePointerCapture && ev && ev.pointerId !== undefined) {
-trackEl.releasePointerCapture(ev.pointerId);
-}
-} catch (err) {
-// 忽略释放失败
-}
+try { if (trackEl.releasePointerCapture && ev && ev.pointerId !== undefined) trackEl.releasePointerCapture(ev.pointerId); } catch (err) {}
 endDrag(ev && typeof ev.clientX === "number" ? ev.clientX : undefined);
 }
 function onPointerCancel(ev) {
@@ -2074,67 +1699,29 @@ endDrag(undefined);
 function onKeyDown(ev) {
 var snap = readSeatSnapshot();
 if (snap.locked || snap.count <= 1) return;
-var key = ev && ev.key;
-var curIdx = currentShownIndex(snap);
-var nextIdx = null;
-if (key === "ArrowLeft" || key === "ArrowDown") {
-nextIdx = Math.max(0, curIdx - 1);
-} else if (key === "ArrowRight" || key === "ArrowUp") {
-nextIdx = Math.min(snap.count - 1, curIdx + 1);
-} else if (key === "Home") {
-nextIdx = 0;
-} else if (key === "End") {
-nextIdx = snap.count - 1;
-} else {
-return;
-}
+var key = ev && ev.key, curIdx = currentShownIndex(snap), nextIdx = null;
+if (key === "ArrowLeft" || key === "ArrowDown") nextIdx = Math.max(0, curIdx - 1);
+else if (key === "ArrowRight" || key === "ArrowUp") nextIdx = Math.min(snap.count - 1, curIdx + 1);
+else if (key === "Home") nextIdx = 0;
+else if (key === "End") nextIdx = snap.count - 1;
+else return;
 swallowEvent(ev);
 if (typeof ev.preventDefault === "function") ev.preventDefault();
 snapIndex = nextIdx;
 commitAtIndex(nextIdx, "key");
-var m = ensureMotion(snap);
-m.target = pctFromIndex(nextIdx, snap.count);
-if (motionMode(win) === "quick") {
-m.x = m.target;
-m.v = 0;
-m.a = 0;
-snapIndex = null;
-stopFrames();
-applyVisualPct(readSeatSnapshot(), m.x, nextIdx);
-} else {
-applyVisualPct(readSeatSnapshot(), m.x, nextIdx);
-startFrames();
+_settle(readSeatSnapshot(), nextIdx, motionMode(win, null, doc) === "quick");
 }
-}
-// 阻断 click / mouseup 冒泡到外层 MenuItem，防止拖动松手时意外关闭官方菜单
-function onBlockMenuClose(ev) {
-swallowEvent(ev);
-}
+function onBlockMenuClose(ev) { swallowEvent(ev); }
 var _trkEvs = [["pointerdown", onPointerDown], ["pointermove", onPointerMove], ["pointerup", onPointerUp], ["pointercancel", onPointerCancel], ["lostpointercapture", onPointerCancel], ["click", onBlockMenuClose], ["mouseup", onBlockMenuClose]];
 for (var _ei = 0; _ei < _trkEvs.length; _ei += 1) trackEl.addEventListener(_trkEvs[_ei][0], _trkEvs[_ei][1]);
 rootEl.addEventListener("keydown", onKeyDown);
+function onWinResize() { dragTrackRect = cachedTrackRect = null; cachedTrackRectAt = 0; }
+if (win && typeof win.addEventListener === "function") win.addEventListener("resize", onWinResize, { passive: true });
 function syncFromExternal() {
 if (destroyed || dragging) return;
-var snap = readSeatSnapshot();
-var m = ensureMotion(snap);
-var targetIdx = snap.officialIndex;
-var targetPct = pctFromIndex(targetIdx, snap.count);
-m.target = targetPct;
-if (
-snap.locked ||
-motionMode(win) === "quick" ||
-motionSettled(m, motionParamsForMode(motionMode(win)))
-) {
-m.x = targetPct;
-m.v = 0;
-m.a = 0;
-snapIndex = null;
-stopFrames();
-applyVisualPct(snap, m.x, targetIdx);
-} else {
-applyVisualPct(snap, m.x, targetIdx);
-startFrames();
-}
+var snap = readSeatSnapshot(), m = ensureMotion(snap), idx = snap.officialIndex, mode = motionMode(win, null, doc);
+m.target = pctFromIndex(idx, snap.count);
+_settle(snap, idx, snap.locked || mode === "quick" || motionSettled(m, motionParamsForMode(mode)));
 }
 var offSeat =
 seat && typeof seat.subscribe === "function"
@@ -2157,19 +1744,20 @@ return {
 unmount: function () {
 destroyed = true;
 stopFrames();
+_cancelDragRaf();
 _stopClRaf();
 cachedClaudeCtx = null;
+dragTrackRect = dragSnap = lastSnap = null;
 clearMaxEffects();
 var valEl = opts.valueElement || findValueElement(_rowEl());
 if (valEl) {
-if (valEl.__cesRiseTimer) {
-clearTimeout(valEl.__cesRiseTimer);
-valEl.__cesRiseTimer = null;
-}
+if (valEl._ct) { clearTimeout(valEl._ct); valEl._ct = null; }
+if (valEl._cr) { _cAF(valEl._cr); valEl._cr = null; }
 delete valEl.__cesLastLabel;
 }
 if (typeof offSeat === "function") offSeat();
 if (typeof offSettings === "function") offSettings();
+if (win && typeof win.removeEventListener === "function") win.removeEventListener("resize", onWinResize);
 for (var _ri = 0; _ri < _trkEvs.length; _ri += 1) trackEl.removeEventListener(_trkEvs[_ri][0], _trkEvs[_ri][1]);
 rootEl.removeEventListener("keydown", onKeyDown);
 if (rootEl.parentNode === container) {
@@ -2449,6 +2037,7 @@ syncTriggerColor(doc, trigLbl, idx, count, isMax, false, Boolean(profile.isClaud
 // 2. 同步展开菜单中的各模型行
 var panel = findAntigravityPanel(doc);
 if (!panel) return;
+var _s = function (st, c) { var o = c ? "1" : "", w = c ? "600" : ""; if (st.color !== c) st.color = c; if (st.opacity !== o) st.opacity = o; if (st.fontWeight !== w) st.fontWeight = w; };
 var _sa = function (el, k, v) { if (el && el.getAttribute(k) !== v) el.setAttribute(k, v); };
 var _mkSel = function (el, on) {
 if (!el) return;
@@ -2459,11 +2048,9 @@ el.classList.toggle("text-secondary-foreground", !on);
 if (profile.isOrchestrator && profile.orchestratorTunable && !profile.locked) {
 _sa(panel, "data-ces-orch-tunable", "true");
 panel.removeAttribute("data-ag-cs-orch-active");
-_sa(activeRow, "data-row-hidden", "false");
-_sa(activeRow, "aria-hidden", "false");
+_sa(activeRow, "data-row-hidden", "false"); _sa(activeRow, "aria-hidden", "false");
 var ob = panel.querySelector('[data-testid="orchestrator-effort-bar"]');
-_sa(ob, "data-row-hidden", "true");
-_sa(ob, "aria-hidden", "true");
+_sa(ob, "data-row-hidden", "true"); _sa(ob, "aria-hidden", "true");
 } else panel.removeAttribute("data-ces-orch-tunable");
 var orchRows = panel.querySelectorAll('[data-testid="model-selector-orchestrator"]');
 for (var oi = 0; oi < orchRows.length; oi += 1) {
@@ -2473,30 +2060,25 @@ if (oMenuItem !== oRow) _sa(oRow, "data-ces-model-selected", profile.isOrchestra
 }
 var groupSpans = panel.querySelectorAll('[data-testid="model-selector-effort-group"]');
 for (var i = 0; i < groupSpans.length; i += 1) {
-var gSpan = groupSpans[i], base = gSpan.getAttribute("data-model-base") || (gSpan.textContent || "").trim();
-var rowProf = resolveModelEffortProfile(ctx, base, _effMap);
+var gSpan = groupSpans[i], base = gSpan.getAttribute("data-model-base") || (gSpan.textContent || "").trim(), rowProf = resolveModelEffortProfile(ctx, base, _effMap);
 if (!rowProf) continue;
-var sel = !profile.isOrchestrator && profile.baseName === base;
+var sel = !profile.isOrchestrator && profile.baseName === base, sib = gSpan.nextElementSibling;
 _mkSel(gSpan.closest('[role="menuitem"]'), sel);
-var sib = gSpan.nextElementSibling;
 if (sib && sib.tagName === "SPAN") {
 var dE = sel ? profile.currentLabel : rowProf.currentLabel, dI = sel ? profile.currentIndex : rowProf.currentIndex, dC = rowProf.levels.length;
 _setEffTxt(sib, dE);
-var rc = valueColorFor(dE, dI, dC, dC > 1 && dI === dC - 1, false) || "";
-if (sib.style.color !== rc) sib.style.color = rc;
-if (sib.style.opacity !== (rc ? "1" : "")) sib.style.opacity = rc ? "1" : "";
-if (sib.style.fontWeight !== (rc ? "600" : "")) sib.style.fontWeight = rc ? "600" : "";
+_s(sib.style, valueColorFor(dE, dI, dC, dC > 1 && dI === dC - 1, false) || "");
 }
 }
 var singleItems = panel.querySelectorAll('[data-testid="model-selector-item"]');
 for (var j = 0; j < singleItems.length; j += 1) {
-var sItem = singleItems[j];
-var sLabel = sItem.getAttribute("data-model-label") || (sItem.textContent || "").trim();
+var sItem = singleItems[j], sLabel = sItem.getAttribute("data-model-label") || (sItem.textContent || "").trim();
 _mkSel(sItem, !profile.isOrchestrator && ((profile.modelOption && profile.modelOption.label === sLabel) || profile.baseName === sLabel));
 }
 }
 function _curProf() { return getActiveProfile(getLiveContext()); }
 var agSeatAdapter = {
+_read: _curProf,
 get effortLevels() { var p = _curProf(); return p ? p.levels : []; },
 get currentEffort() { var p = _curProf(); return p ? p.currentEffort : ""; },
 get locked() { var p = _curProf(); return p ? p.locked : true; },
@@ -2945,6 +2527,7 @@ seat: agSeatAdapter,
 document: doc,
 window: win,
 onVisualChange: function (vState) {
+if (vState && vState.dragging) return;
 _withMut(function () {
 var liveCtx = getLiveContext();
 if (liveCtx) _syncAgDom(liveCtx, getActiveProfile(liveCtx));
@@ -2952,11 +2535,6 @@ else syncTriggerColor(doc, vState.label, vState.index, vState.count, vState.isMa
 });
 }
 });
-try {
-if (win && typeof win.dispatchEvent === "function" && typeof win.Event === "function") {
-win.dispatchEvent(new win.Event("resize"));
-}
-} catch (err) {}
 }
 function scan() {
 if (_intMut) return;

@@ -5,6 +5,7 @@ import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import tls from 'node:tls';
 import vm from 'node:vm';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
@@ -3242,6 +3243,8 @@ test('Red-team security hardening: HTTPS proxy SNI servername, microtask queue c
       const peekPort = tlsPeekServer.address().port;
 
       try {
+        // 使用有效测试 CA PEM 且严格保持默认 TLS 证书校验开启（tlsPeekServer 仅捕获 ClientHello SNI 即断开）
+        const testCaPem = Array.isArray(tls.rootCertificates) && tls.rootCertificates.length > 0 ? tls.rootCertificates[0] : undefined;
         const localLookup = (_hostname, opts, cb) => {
           const done = typeof opts === 'function' ? opts : cb;
           if (opts && typeof opts === 'object' && opts.all) {
@@ -3256,7 +3259,7 @@ test('Red-team security hardening: HTTPS proxy SNI servername, microtask queue c
           configDir: tmpDir,
           proxyEnv: {},
           resolveSystemProxy: () => `https://proxy.corp.example:${peekPort}`,
-          proxyTlsOptions: { lookup: localLookup, rejectUnauthorized: false },
+          proxyTlsOptions: { lookup: localLookup, ...(testCaPem ? { ca: testCaPem } : {}), rejectUnauthorized: true },
         });
         await assert.rejects(() =>
           domainProxySvc._request('http://target.upstream.test/v1/models', { method: 'GET', redirect: 'error' })
@@ -3281,7 +3284,7 @@ test('Red-team security hardening: HTTPS proxy SNI servername, microtask queue c
           configDir: tmpDir,
           proxyEnv: {},
           resolveSystemProxy: () => `https://127.0.0.1:${peekPort}`,
-          proxyTlsOptions: { rejectUnauthorized: false },
+          proxyTlsOptions: { ...(testCaPem ? { ca: testCaPem } : {}), rejectUnauthorized: true },
         });
         await assert.rejects(() =>
           ipProxySvc._request('http://target.upstream.test/v1/models', { method: 'GET', redirect: 'error' })

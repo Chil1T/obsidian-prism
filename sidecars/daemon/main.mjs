@@ -37,7 +37,17 @@ export const THOUGHT_BINDING = '__agPrismThoughtCall';
 export const USAGE_BINDING = '__agPrismUsageCall';
 export const INLINE_DIFF_BINDING = '__agPrismInlineDiffCall';
 export const SIDEBAR_BINDING = '__agPrismSidebarCall';
+export const WALLPAPER_BINDING = '__agPrismWallpaperCall';
 export { OmniServer, OMNI_BINDING };
+const WALLPAPER_MAX_PAYLOAD_BYTES = 131072;
+const WALLPAPER_ALLOWED_ACTIONS = new Set([
+  'get-config',
+  'save-config',
+  'pick-media',
+  'clear-media',
+  'get-media-blob',
+  'status',
+]);
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const RPC_ROUTE_STORAGE = new AsyncLocalStorage();
 const USAGE_CACHE_MAX_BYTES = 4 * 1024 * 1024;
@@ -1996,6 +2006,7 @@ export class PrismDaemon {
     enabledCheck = () => isPluginEnabledInHostConfig(),
     metricsProvider = null,
     thoughtService = null,
+    wallpaperService = null,
     omniExecHooks = null,
     sidebarService = null,
     relaunchHooks = null,
@@ -2055,6 +2066,9 @@ export class PrismDaemon {
     this.inlineDiffExpr = '';
     this.inlineDiffCodeHash = '';
     this._inlineDiffHashSource = '';
+    this.wallpaperExpr = '';
+    this.wallpaperCodeHash = '';
+    this._wallpaperHashSource = '';
     this.codeHash = '';
     this.ownerToken = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     this.pidFile = path.join(this.rootDir, '.daemon.pid');
@@ -2078,6 +2092,9 @@ export class PrismDaemon {
     this._telemetryInFlight = 0;
     this._customMetricsProvider = metricsProvider;
     this._lazyThoughtService = thoughtService;
+    this._lazyWallpaperService = wallpaperService;
+    this._wallpaperServicePromise = null;
+    this._wallpaperStopped = false;
     this.omniServer = null;
     this._omniServerPromise = null;
     this._omniExecHooks = omniExecHooks;
@@ -2098,6 +2115,9 @@ export class PrismDaemon {
     this._promptInFlight = false;
     this._lastShortcutCheckAt = 0;
     this._lastObservedHostPid = 0;
+    this._lastActiveCdpPort = null;
+    this._prevAttachedCount = 0;
+    this._disconnectedAllSessions = false;
     this._enableAutoUpdateTimer = enableAutoUpdateTimer !== false;
     const initDelayNum = Number(updateCheckInitialDelayMs);
     this._updateCheckInitialDelayMs = Number.isFinite(initDelayNum) ? Math.max(0, initDelayNum) : 45000;
@@ -3098,6 +3118,7 @@ export class PrismDaemon {
     }
     this._buildThoughtExprForConfig(cfg, cacheOpts);
     this._buildInlineDiffExprForConfig(cfg, cacheOpts);
+    this._buildWallpaperExprForConfig(cfg, cacheOpts);
 
     if (bundleCachePath) {
       if (deferDiskCacheWrite) {
@@ -3330,6 +3351,79 @@ export class PrismDaemon {
     );
   }
 
+  _hasWallpaperClientFile() {
+    try {
+      return fs.existsSync(path.join(this.rootDir, 'vendor', 'wallpaper', 'wallpaper-client.js'));
+    } catch {
+      return false;
+    }
+  }
+
+  _extractWallpaperCodeHash(expr) {
+    const str = typeof expr === 'string' ? expr : '';
+    if (!str) return '';
+    const m = /const targetHash = "([^"]+)"/.exec(str);
+    if (m && m[1]) return m[1];
+    return crypto.createHash('sha256').update(str).digest('hex').slice(0, 16);
+  }
+
+  _setWallpaperExpr(expr) {
+    const next = typeof expr === 'string' ? expr : '';
+    this.wallpaperExpr = next;
+    this._wallpaperHashSource = next;
+    this.wallpaperCodeHash = this._extractWallpaperCodeHash(next);
+    return next;
+  }
+
+  _buildWallpaperExprForConfig(cfgOverride = null, cacheOpts = undefined) {
+    const cfg = cfgOverride || (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
+    if (typeof this.cdp?.buildWallpaperExpression !== 'function') {
+      return this._setWallpaperExpr('');
+    }
+    const baseOpts = cacheOpts !== undefined ? cacheOpts : this._getChannelCacheOpts(true);
+    let initialWallpaperConfig = null;
+    if (this._lazyWallpaperService && typeof this._lazyWallpaperService.getConfigSync === 'function') {
+      try {
+        initialWallpaperConfig = this._lazyWallpaperService.getConfigSync();
+      } catch {}
+    }
+    const mergedOpts =
+      baseOpts || initialWallpaperConfig
+        ? {
+            ...(baseOpts || {}),
+            ...(initialWallpaperConfig ? { initialWallpaperConfig } : {}),
+          }
+        : undefined;
+    const expr = mergedOpts
+      ? this.cdp.buildWallpaperExpression(cfg, mergedOpts)
+      : this.cdp.buildWallpaperExpression(cfg);
+    if (cacheOpts === undefined && baseOpts && this.running) {
+      this._scheduleBundleCacheFlush();
+    }
+    return this._setWallpaperExpr(expr);
+  }
+
+  _getWallpaperExprHash(expr = this.wallpaperExpr) {
+    const str = typeof expr === 'string' ? expr : '';
+    if (!str) return '';
+    if (str === this._wallpaperHashSource && this.wallpaperCodeHash) {
+      return this.wallpaperCodeHash;
+    }
+    const hash = this._extractWallpaperCodeHash(str);
+    if (str === this.wallpaperExpr) {
+      this._wallpaperHashSource = str;
+      this.wallpaperCodeHash = hash;
+    }
+    return hash;
+  }
+
+  _getWallpaperCleanupExpression() {
+    return (
+      this.cdp?.WALLPAPER_REMOVE_EXPRESSION ||
+      "(() => { try { window.__agPrismWallpaper?.destroy?.(); } catch {} try { const root = document.getElementById('ag-prism-wallpaper-root'); if (root) { root.querySelectorAll('video').forEach((v) => { try { v.pause(); v.removeAttribute('src'); v.load(); } catch {} }); root.remove(); } } catch {} try { document.getElementById('ag-prism-wallpaper-css')?.remove(); } catch {} try { document.documentElement?.removeAttribute?.('data-ag-prism-wallpaper'); } catch {} try { delete window.__agPrismWallpaper; } catch {} try { delete globalThis.__agPrismWallpaper; } catch {} try { delete window.__prismMountWallpaperUi; } catch {} try { delete globalThis.__prismMountWallpaperUi; } catch {} try { delete window.__agPrismWallpaperResolve; } catch {} return { ok: true, status: 'off' }; })()"
+    );
+  }
+
   _isTelemetryDisabled(cfgOverride = null) {
     try {
       const cfg = cfgOverride || this.cdp?.readConfig?.();
@@ -3530,6 +3624,78 @@ export class PrismDaemon {
       entry.inlineDiffMounted = false;
       entry.inlineDiffSkipped = false;
       entry.lastInlineDiffHash = '';
+    }
+  }
+
+  async _ensureWallpaperBinding(entry, timeoutMs = 2600, force = false) {
+    if (!entry || entry.session.closed) return false;
+    if (!force && entry.wallpaperBindingAdded) return true;
+    const bindingName = this.cdp?.WALLPAPER_BINDING || WALLPAPER_BINDING;
+    const ok = await entry.session
+      .send('Runtime.addBinding', { name: bindingName }, timeoutMs)
+      .then(() => true)
+      .catch(() => false);
+    if (ok) entry.wallpaperBindingAdded = true;
+    return ok;
+  }
+
+  async _removeWallpaperBinding(entry, timeoutMs = 2000) {
+    if (!entry || entry.session.closed) return;
+    const bindingName = this.cdp?.WALLPAPER_BINDING || WALLPAPER_BINDING;
+    await entry.session
+      .send('Runtime.removeBinding', { name: bindingName }, timeoutMs)
+      .catch(() => {});
+    entry.wallpaperBindingAdded = false;
+  }
+
+  async _recordWallpaperEvalOutcome(entry, evalRes, wallpaperHash) {
+    const isSkipped = Boolean(
+      evalRes && typeof evalRes.status === 'string' && evalRes.status.startsWith('skipped-')
+    );
+    if (evalRes && evalRes.ok) {
+      entry.wallpaperMounted = true;
+      entry.wallpaperSkipped = false;
+      entry.lastWallpaperHash = wallpaperHash;
+    } else if (isSkipped) {
+      entry.wallpaperMounted = false;
+      entry.wallpaperSkipped = true;
+      entry.lastWallpaperHash = wallpaperHash;
+      if (evalRes.status === 'skipped-non-host') {
+        await this._removeWallpaperBinding(entry);
+      }
+    } else {
+      entry.wallpaperMounted = false;
+      entry.wallpaperSkipped = false;
+      entry.lastWallpaperHash = '';
+    }
+  }
+
+  async ensureWallpaperService() {
+    if (this._wallpaperStopped) return null;
+    if (this._lazyWallpaperService) return this._lazyWallpaperService;
+    if (this._wallpaperServicePromise) return this._wallpaperServicePromise;
+    this._wallpaperServicePromise = (async () => {
+      const svcPath = path.join(this.rootDir, 'vendor', 'wallpaper', 'wallpaper-service.mjs');
+      if (!fs.existsSync(svcPath)) {
+        return null;
+      }
+      const mod = await import(pathToFileURL(svcPath).href);
+      const factory = mod?.createWallpaperService || mod?.default;
+      if (this._wallpaperStopped || typeof factory !== 'function') return null;
+      const svc = factory({ logger: (m) => this.log(m) });
+      if (this._wallpaperStopped) {
+        try {
+          if (typeof svc?.dispose === 'function') await svc.dispose();
+        } catch {}
+        return null;
+      }
+      this._lazyWallpaperService = svc;
+      return svc;
+    })();
+    try {
+      return await this._wallpaperServicePromise;
+    } finally {
+      this._wallpaperServicePromise = null;
     }
   }
 
@@ -4807,6 +4973,7 @@ export class PrismDaemon {
         const hostI18nSnap = this.hostI18nExpr;
         let thoughtSnap = this.thoughtExpr;
         let inlineDiffSnap = this.inlineDiffExpr;
+        let wallpaperSnap = this.wallpaperExpr;
         const currentCfg = typeof this.cdp.readConfig === 'function' ? this.cdp.readConfig() : {};
         if (currentCfg?.telemetryModule === 'off') {
           this._releaseIdleTelemetry(true);
@@ -4828,6 +4995,10 @@ export class PrismDaemon {
           inlineDiffSnap = this._buildInlineDiffExprForConfig(currentCfg);
         }
         const inlineDiffHash = inlineDiffSnap ? this._getInlineDiffExprHash(inlineDiffSnap) : '';
+        if (!wallpaperSnap && typeof this.cdp.buildWallpaperExpression === 'function') {
+          wallpaperSnap = this._buildWallpaperExprForConfig(currentCfg);
+        }
+        const wallpaperHash = wallpaperSnap ? this._getWallpaperExprHash(wallpaperSnap) : '';
         const canFastRefresh = typeof this.cdp.buildConfigRefreshExpression === 'function';
         const baseRefreshExpr = canFastRefresh ? this.cdp.buildConfigRefreshExpression() : null;
         if (activeItems.length === 0) continue;
@@ -4958,6 +5129,26 @@ export class PrismDaemon {
                 entry.inlineDiffSkipped = false;
                 entry.lastInlineDiffHash = '';
               }
+              if (abortIfStale()) return;
+              const hadWallpaper = Boolean(entry.wallpaperScriptId || entry.wallpaperMounted);
+              const wallpaperChanged = Boolean(
+                wallpaperSnap &&
+                  !entry.wallpaperSkipped &&
+                  (entry.lastWallpaperHash !== wallpaperHash || !entry.wallpaperScriptId || !entry.wallpaperMounted)
+              );
+              if (wallpaperSnap) {
+                if (!skippedStale && !entry.session.closed && !entry.wallpaperSkipped && (!refreshedFast || wallpaperChanged)) {
+                  await this._ensureWallpaperBinding(entry);
+                  const evalRes = await entry.session.evaluate(wallpaperSnap).catch(() => null);
+                  await this._recordWallpaperEvalOutcome(entry, evalRes, wallpaperHash);
+                }
+              } else if (hadWallpaper && !skippedStale && !entry.session.closed) {
+                await this._removeWallpaperBinding(entry);
+                await entry.session.evaluate(this._getWallpaperCleanupExpression()).catch(() => {});
+                entry.wallpaperMounted = false;
+                entry.wallpaperSkipped = false;
+                entry.lastWallpaperHash = '';
+              }
 
               // Coalesce persistent NewDocument script replacement if a newer mutation is already queued!
               if (this._broadcastPending || this._configSeq !== snapSeq || entry.session.closed) {
@@ -5081,6 +5272,29 @@ export class PrismDaemon {
                   entry.lastInlineDiffScriptHash = inlineDiffHash;
                 }
               }
+              if (!wallpaperSnap) {
+                if (entry.wallpaperScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.wallpaperScriptId })
+                    .catch(() => {});
+                  entry.wallpaperScriptId = null;
+                }
+                entry.lastWallpaperScriptHash = '';
+              } else if ((entry.lastWallpaperScriptHash !== wallpaperHash || !entry.wallpaperScriptId) && !entry.session.closed) {
+                if (entry.wallpaperScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.wallpaperScriptId })
+                    .catch(() => {});
+                  entry.wallpaperScriptId = null;
+                }
+                const wallpaperAdd = await entry.session
+                  .send('Page.addScriptToEvaluateOnNewDocument', { source: wallpaperSnap })
+                  .catch(() => null);
+                if (wallpaperAdd && wallpaperAdd.identifier) {
+                  entry.wallpaperScriptId = wallpaperAdd.identifier;
+                  entry.lastWallpaperScriptHash = wallpaperHash;
+                }
+              }
             })
           )
         );
@@ -5195,6 +5409,10 @@ export class PrismDaemon {
           this._buildInlineDiffExprForConfig(curCfg, chOpts);
           if (chOpts && this.inlineDiffExpr) usedChCache = true;
         }
+        if (!this.wallpaperExpr && typeof this.cdp.buildWallpaperExpression === 'function') {
+          this._buildWallpaperExprForConfig(curCfg, chOpts);
+          if (chOpts && this.wallpaperExpr) usedChCache = true;
+        }
         if (usedChCache && this.running) {
           this._scheduleBundleCacheFlush();
         }
@@ -5252,8 +5470,15 @@ export class PrismDaemon {
             .catch(() => {});
           entry.inlineDiffScriptId = null;
         }
+        if (entry.wallpaperScriptId) {
+          await entry.session
+            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.wallpaperScriptId })
+            .catch(() => {});
+          entry.wallpaperScriptId = null;
+        }
         await this._removeSidebarBinding(entry);
         await this._removeInlineDiffBinding(entry);
+        await this._removeWallpaperBinding(entry);
         entry.sidebarMounted = false;
         entry.hostI18nMounted = false;
         entry.lastHostI18nSig = '';
@@ -5265,6 +5490,10 @@ export class PrismDaemon {
         entry.inlineDiffSkipped = true;
         entry.lastInlineDiffHash = '';
         entry.lastInlineDiffScriptHash = '';
+        entry.wallpaperMounted = false;
+        entry.wallpaperSkipped = true;
+        entry.lastWallpaperHash = '';
+        entry.lastWallpaperScriptHash = '';
         return mainRes;
       }
 
@@ -5446,6 +5675,43 @@ export class PrismDaemon {
         entry.lastInlineDiffHash = '';
         entry.lastInlineDiffScriptHash = '';
       }
+      const hadWallpaperBefore = Boolean(entry.wallpaperScriptId || entry.wallpaperMounted);
+      if (entry.wallpaperScriptId) {
+        await entry.session
+          .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.wallpaperScriptId })
+          .catch(() => {});
+        entry.wallpaperScriptId = null;
+      }
+      const wallpaperCfgNow = getCurrentCfg();
+      if (!this.wallpaperExpr && typeof this.cdp.buildWallpaperExpression === 'function') {
+        this._buildWallpaperExprForConfig(wallpaperCfgNow);
+      }
+      if (this.wallpaperExpr) {
+        await this._ensureWallpaperBinding(entry);
+        const wallpaperAdd = await entry.session
+          .send('Page.addScriptToEvaluateOnNewDocument', { source: this.wallpaperExpr })
+          .catch(() => null);
+        if (wallpaperAdd && wallpaperAdd.identifier) {
+          entry.wallpaperScriptId = wallpaperAdd.identifier;
+        }
+        const evalRes = await entry.session.evaluate(this.wallpaperExpr).catch(() => null);
+        const wallpaperHash = this._getWallpaperExprHash(this.wallpaperExpr);
+        await this._recordWallpaperEvalOutcome(entry, evalRes, wallpaperHash);
+        if (wallpaperAdd && wallpaperAdd.identifier) {
+          entry.lastWallpaperScriptHash = wallpaperHash;
+        } else {
+          entry.lastWallpaperScriptHash = '';
+        }
+      } else {
+        if (hadWallpaperBefore) {
+          await this._removeWallpaperBinding(entry);
+          await entry.session.evaluate(this._getWallpaperCleanupExpression()).catch(() => null);
+        }
+        entry.wallpaperMounted = false;
+        entry.wallpaperSkipped = false;
+        entry.lastWallpaperHash = '';
+        entry.lastWallpaperScriptHash = '';
+      }
       entry.lastVerifyAt = Date.now();
       entry.healthyStreak = 1;
       entry.verifyDirty = false;
@@ -5625,6 +5891,12 @@ export class PrismDaemon {
           result = await svc.fetchModels(input);
         } else if (action === 'test-connection') {
           result = await svc.testConnection(input);
+        } else if (action === 'diagnose') {
+          if (typeof svc.diagnose === 'function') {
+            result = await svc.diagnose(input);
+          } else {
+            result = { ok: false, error: 'diagnose_not_supported' };
+          }
         } else if (action === 'translate-stream') {
           let lastSent = '';
           let pendingPartial = null;
@@ -5902,6 +6174,120 @@ export class PrismDaemon {
       }
       return result;
     }
+
+    const activeWallpaperBinding = this.cdp?.WALLPAPER_BINDING || WALLPAPER_BINDING;
+    if (name === WALLPAPER_BINDING || name === activeWallpaperBinding) {
+      const context = typeof executionContextId === 'number' ? entry.contextFrames?.get(executionContextId) : undefined;
+      const expectedDocGen = typeof entry.sidebarDocument === 'number' ? entry.sidebarDocument : null;
+      const hasTrackedFrames = Boolean(
+        entry.hasFrameTree || entry.mainFrameId || (entry.contextFrames instanceof Map && entry.contextFrames.size > 0)
+      );
+      const isCurrentContext = () => {
+        if (this._wallpaperStopped || !entry || entry.session?.closed) return false;
+        if (!this._isTrustedMainFrameBindingCall(entry, executionContextId)) return false;
+        if (hasTrackedFrames) {
+          if (entry.sidebarHostVerified !== true) return false;
+          if (typeof executionContextId !== 'number' || !context) return false;
+          if (context.isDefault !== true || (context.type && context.type !== 'default')) return false;
+          if (!entry.mainFrameId || context.frameId !== entry.mainFrameId) return false;
+          if (!(entry.contextFrames instanceof Map) || entry.contextFrames.get(executionContextId) !== context) {
+            return false;
+          }
+          if (typeof entry.sidebarDocument === 'number') {
+            if (typeof entry.sidebarVerifiedDocument === 'number' && entry.sidebarVerifiedDocument !== entry.sidebarDocument) {
+              return false;
+            }
+            if (expectedDocGen !== null && entry.sidebarDocument !== expectedDocGen) {
+              return false;
+            }
+            if (typeof context.docGen === 'number' && context.docGen !== entry.sidebarDocument) {
+              return false;
+            }
+          }
+          if (typeof entry.sidebarHostContextId === 'number' && entry.sidebarHostContextId !== executionContextId) {
+            return false;
+          }
+        }
+        return true;
+      };
+      if (!isCurrentContext()) return;
+      if (typeof payload !== 'string') return;
+      if (payload.length > WALLPAPER_MAX_PAYLOAD_BYTES) return;
+      if (Buffer.byteLength(payload, 'utf8') > WALLPAPER_MAX_PAYLOAD_BYTES) return;
+      let parsed;
+      try {
+        parsed = JSON.parse(payload);
+      } catch {
+        return;
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+      const reqId = Number.isSafeInteger(parsed.id) && parsed.id >= 0 ? parsed.id : null;
+      if (reqId === null) return;
+      const action = typeof parsed.action === 'string' ? parsed.action.trim() : '';
+      if (!WALLPAPER_ALLOWED_ACTIONS.has(action)) {
+        const errRes = { ok: false, error: `Unknown wallpaper action: ${action || 'empty'}` };
+        if (isCurrentContext()) {
+          const safeId = Number(reqId) | 0;
+          const resolveExpr = `(() => { const r = ${serializeJsonForEval(errRes)}; if (typeof window.__agPrismWallpaperResolve === 'function') window.__agPrismWallpaperResolve(${safeId}, r); else if (window.__agPrismWallpaperBridge && typeof window.__agPrismWallpaperBridge.resolve === 'function') window.__agPrismWallpaperBridge.resolve(${safeId}, r); })()`;
+          const evalParams = { expression: resolveExpr, returnByValue: true };
+          if (typeof executionContextId === 'number') evalParams.contextId = executionContextId;
+          await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+        }
+        return errRes;
+      }
+      const actionPayload =
+        parsed.payload && typeof parsed.payload === 'object' && !Array.isArray(parsed.payload)
+          ? parsed.payload
+          : parsed.input && typeof parsed.input === 'object' && !Array.isArray(parsed.input)
+          ? parsed.input
+          : {};
+
+      let result;
+      let svc = null;
+      try {
+        svc = await this.ensureWallpaperService();
+        if (!svc || typeof svc.handleAction !== 'function') {
+          result = { ok: false, error: 'wallpaper_service_unavailable' };
+        } else {
+          result = await svc.handleAction(action, actionPayload);
+        }
+      } catch (err) {
+        result = { ok: false, error: sanitizeSecretText(err?.message || err) };
+      }
+
+      if (isCurrentContext()) {
+        const safeId = Number(reqId) | 0;
+        const safeJson = serializeJsonForEval(result);
+        const payloadExpr = safeJson.length > 4096 ? `JSON.parse(${serializeJsonForEval(safeJson)})` : safeJson;
+        const resolveExpr = `(() => { const r = ${payloadExpr}; if (typeof window.__agPrismWallpaperResolve === 'function') window.__agPrismWallpaperResolve(${safeId}, r); else if (window.__agPrismWallpaperBridge && typeof window.__agPrismWallpaperBridge.resolve === 'function') window.__agPrismWallpaperBridge.resolve(${safeId}, r); })()`;
+        const evalParams = { expression: resolveExpr, returnByValue: true };
+        if (typeof executionContextId === 'number') evalParams.contextId = executionContextId;
+        await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+      }
+
+      // 多窗口同步：保存/选媒/清除壁纸后向其他合法主窗口广播最新安全配置
+      if (
+        result &&
+        result.ok &&
+        (action === 'save-config' || action === 'pick-media' || action === 'clear-media')
+      ) {
+        let latestCfg = result.config || null;
+        if (!latestCfg && svc && typeof svc.getConfigSync === 'function') {
+          try {
+            latestCfg = svc.getConfigSync();
+          } catch {}
+        }
+        if (latestCfg && typeof latestCfg === 'object') {
+          const syncExpr = `window.__agPrismWallpaper?.applyConfig?.(${serializeJsonForEval(latestCfg)})`;
+          for (const other of this.sessions.values()) {
+            if (!other || other === entry || other.session?.closed || other.wallpaperSkipped) continue;
+            if (other.sidebarHostVerified === false) continue;
+            void other.session.evaluate(syncExpr, false, 2000).catch(() => {});
+          }
+        }
+      }
+      return result;
+    }
   }
 
   async attachTarget(target) {
@@ -5937,6 +6323,12 @@ export class PrismDaemon {
       inlineDiffSkipped: false,
       lastInlineDiffHash: '',
       lastInlineDiffScriptHash: '',
+      wallpaperScriptId: null,
+      wallpaperBindingAdded: false,
+      wallpaperMounted: false,
+      wallpaperSkipped: false,
+      lastWallpaperHash: '',
+      lastWallpaperScriptHash: '',
       sidebarHostVerified: false,
       sidebarVerifiedDocument: -1,
       sidebarHostContextId: null,
@@ -5963,6 +6355,9 @@ export class PrismDaemon {
       }
       if (this.sessions.get(wsUrl) === entry) {
         this.sessions.delete(wsUrl);
+        if (this.sessions.size === 0 && this._prevAttachedCount > 0) {
+          this._disconnectedAllSessions = true;
+        }
       }
     };
 
@@ -5973,6 +6368,7 @@ export class PrismDaemon {
         entry.sidebarHostContextId = null;
         entry.sidebarDocument += 1;
         entry.inlineDiffSkipped = false;
+        entry.wallpaperSkipped = false;
       };
       session.on('Runtime.executionContextCreated', (params) => {
         const ctx = params?.context;
@@ -6120,6 +6516,13 @@ export class PrismDaemon {
         entry.inlineDiffMounted = false;
         entry.lastInlineDiffHash = '';
         entry.lastInlineDiffScriptHash = '';
+        if (entry.wallpaperScriptId) {
+          await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.wallpaperScriptId });
+          entry.wallpaperScriptId = null;
+        }
+        entry.wallpaperMounted = false;
+        entry.lastWallpaperHash = '';
+        entry.lastWallpaperScriptHash = '';
       } catch {}
       session.close();
       this.sessions.delete(wsUrl);
@@ -6145,6 +6548,10 @@ export class PrismDaemon {
     const inlineDiffNeedsSync = inlineDiffAvailable
       ? !entry.inlineDiffSkipped && (!entry.inlineDiffScriptId || !entry.inlineDiffMounted)
       : Boolean(entry.inlineDiffScriptId || entry.inlineDiffMounted);
+    const wallpaperAvailable = Boolean(this.wallpaperExpr || this._hasWallpaperClientFile());
+    const wallpaperNeedsSync = wallpaperAvailable
+      ? !entry.wallpaperSkipped && (!entry.wallpaperScriptId || !entry.wallpaperMounted)
+      : Boolean(entry.wallpaperScriptId || entry.wallpaperMounted);
     const now = Date.now();
     const hashMatches = !this.codeHash || entry.lastVerifiedCodeHash === this.codeHash;
     if (
@@ -6152,6 +6559,7 @@ export class PrismDaemon {
       !needsBindingHeal &&
       !thoughtNeedsSync &&
       !inlineDiffNeedsSync &&
+      !wallpaperNeedsSync &&
       !entry.verifyDirty &&
       hashMatches &&
       entry.lastVerifyAt > 0 &&
@@ -6228,6 +6636,8 @@ export class PrismDaemon {
           hasThought: Boolean(window.__agPrismThought),
           hasThoughtSettingsUi: Boolean(window.__agPrismThoughtSettingsUi),
           hasInlineDiff: Boolean(window.__agPrismInlineDiff && !window.__agPrismInlineDiff.getDebugState?.()?.destroyed),
+          hasWallpaper: Boolean(window.__agPrismWallpaper && !window.__agPrismWallpaper.getDebugState?.()?.destroyed),
+          hasWallpaperUi: Boolean(typeof window.__prismMountWallpaperUi === 'function'),
           codeHash: (api && api.codeHash) || '',
           hasLegacyCss: Boolean(document.getElementById('ag-claude-style-css')),
           needsDashboardSync: Boolean(api && telMode !== 'off' && !isHome && hasModelBtn && !hasPulseBar),
@@ -6274,6 +6684,12 @@ export class PrismDaemon {
         (!probe.hasInlineDiff || !entry.inlineDiffScriptId || !entry.inlineDiffMounted);
       const needsInlineDiffCleanup =
         !inlineDiffAvailable && Boolean(probe.hasInlineDiff || entry.inlineDiffScriptId || entry.inlineDiffMounted);
+      const needsWallpaperHeal =
+        wallpaperAvailable &&
+        !entry.wallpaperSkipped &&
+        (!probe.hasWallpaper || !probe.hasWallpaperUi || !entry.wallpaperScriptId || !entry.wallpaperMounted);
+      const needsWallpaperCleanup =
+        !wallpaperAvailable && Boolean(probe.hasWallpaper || probe.hasWallpaperUi || entry.wallpaperScriptId || entry.wallpaperMounted);
       let healed = false;
       if (
         (entry.sidebarHostVerified === false && probe.isHostDom) ||
@@ -6332,8 +6748,13 @@ export class PrismDaemon {
             await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.inlineDiffScriptId }).catch(() => {});
             entry.inlineDiffScriptId = null;
           }
+          if (entry.wallpaperScriptId) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.wallpaperScriptId }).catch(() => {});
+            entry.wallpaperScriptId = null;
+          }
           await this._removeSidebarBinding(entry);
           await this._removeInlineDiffBinding(entry);
+          await this._removeWallpaperBinding(entry);
           entry.sidebarMounted = false;
           entry.hostI18nMounted = false;
           entry.lastHostI18nSig = '';
@@ -6345,6 +6766,10 @@ export class PrismDaemon {
           entry.inlineDiffSkipped = true;
           entry.lastInlineDiffHash = '';
           entry.lastInlineDiffScriptHash = '';
+          entry.wallpaperMounted = false;
+          entry.wallpaperSkipped = true;
+          entry.lastWallpaperHash = '';
+          entry.lastWallpaperScriptHash = '';
           this._markTargetIgnored({ id: entry.pageId, webSocketDebuggerUrl: entry.wsUrl }, probe.href || entry.url);
           entry.session.close();
           this.sessions.delete(entry.wsUrl);
@@ -6497,6 +6922,37 @@ export class PrismDaemon {
           entry.inlineDiffSkipped = false;
           entry.lastInlineDiffHash = '';
           entry.lastInlineDiffScriptHash = '';
+        }
+        if (wallpaperAvailable) {
+          await this._ensureWallpaperBinding(entry, 2600, true);
+          if (!this.wallpaperExpr && typeof this.cdp.buildWallpaperExpression === 'function') {
+            this._buildWallpaperExprForConfig(cfg);
+          }
+          if (this.wallpaperExpr) {
+            const wallpaperHash = this._getWallpaperExprHash(this.wallpaperExpr);
+            if (!entry.wallpaperScriptId) {
+              const wallpaperAdd = await entry.session
+                .send('Page.addScriptToEvaluateOnNewDocument', { source: this.wallpaperExpr })
+                .catch(() => null);
+              if (wallpaperAdd && wallpaperAdd.identifier) {
+                entry.wallpaperScriptId = wallpaperAdd.identifier;
+                entry.lastWallpaperScriptHash = wallpaperHash;
+              }
+            }
+            const evalRes = await entry.session.evaluate(this.wallpaperExpr, false, 4500).catch(() => null);
+            await this._recordWallpaperEvalOutcome(entry, evalRes, wallpaperHash);
+          }
+        } else if (needsWallpaperCleanup) {
+          if (entry.wallpaperScriptId) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.wallpaperScriptId }).catch(() => {});
+            entry.wallpaperScriptId = null;
+          }
+          await this._removeWallpaperBinding(entry);
+          await entry.session.evaluate(this._getWallpaperCleanupExpression(), false, 3500).catch(() => {});
+          entry.wallpaperMounted = false;
+          entry.wallpaperSkipped = false;
+          entry.lastWallpaperHash = '';
+          entry.lastWallpaperScriptHash = '';
         }
         this.log(`[↻] Hot-healed window to Obsidian Prism v${this.cdp.PLUGIN_VERSION}: ${entry.title}`);
       } else {
@@ -6662,6 +7118,41 @@ export class PrismDaemon {
           entry.lastInlineDiffHash = '';
           entry.lastInlineDiffScriptHash = '';
         }
+        if (needsWallpaperHeal) {
+          healed = true;
+          await this._ensureWallpaperBinding(entry, 2600, true);
+          if (!this.wallpaperExpr && typeof this.cdp.buildWallpaperExpression === 'function') {
+            this._buildWallpaperExprForConfig(cfg);
+          }
+          if (this.wallpaperExpr) {
+            const wallpaperHash = this._getWallpaperExprHash(this.wallpaperExpr);
+            if (!entry.wallpaperScriptId) {
+              const wallpaperAdd = await entry.session
+                .send('Page.addScriptToEvaluateOnNewDocument', { source: this.wallpaperExpr })
+                .catch(() => null);
+              if (wallpaperAdd && wallpaperAdd.identifier) {
+                entry.wallpaperScriptId = wallpaperAdd.identifier;
+                entry.lastWallpaperScriptHash = wallpaperHash;
+              }
+            }
+            if (!probe.hasWallpaper || !probe.hasWallpaperUi || !entry.wallpaperMounted) {
+              const evalRes = await entry.session.evaluate(this.wallpaperExpr, false, 4500).catch(() => null);
+              await this._recordWallpaperEvalOutcome(entry, evalRes, wallpaperHash);
+            }
+          }
+        } else if (needsWallpaperCleanup) {
+          healed = true;
+          if (entry.wallpaperScriptId) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.wallpaperScriptId }).catch(() => {});
+            entry.wallpaperScriptId = null;
+          }
+          await this._removeWallpaperBinding(entry);
+          await entry.session.evaluate(this._getWallpaperCleanupExpression(), false, 3500).catch(() => {});
+          entry.wallpaperMounted = false;
+          entry.wallpaperSkipped = false;
+          entry.lastWallpaperHash = '';
+          entry.lastWallpaperScriptHash = '';
+        }
         if (probe.needsDashboardSync) {
           healed = true;
           await entry.session
@@ -6820,6 +7311,13 @@ export class PrismDaemon {
           entry.inlineDiffMounted = false;
           entry.lastInlineDiffHash = '';
           entry.lastInlineDiffScriptHash = '';
+          if (entry.wallpaperScriptId && !entry.session.closed) {
+            await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.wallpaperScriptId }).catch(() => {});
+          }
+          entry.wallpaperScriptId = null;
+          entry.wallpaperMounted = false;
+          entry.lastWallpaperHash = '';
+          entry.lastWallpaperScriptHash = '';
           if (cleanPageDom && !entry.session.closed) {
             await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
           }
@@ -6845,6 +7343,15 @@ export class PrismDaemon {
       return JSON.parse(fs.readFileSync(cfgPath, 'utf8')) || {};
     } catch {
       return {};
+    }
+  }
+
+  _resetShortcutBackoff(reason = '') {
+    const hadBackoff = Boolean(this._shortcutAllClean || this._lastShortcutCheckAt > 0);
+    this._shortcutAllClean = false;
+    this._lastShortcutCheckAt = 0;
+    if (reason && hadBackoff) {
+      this.log(`[shortcut-guard] Reset shortcut backoff (${reason})`);
     }
   }
 
@@ -7053,6 +7560,11 @@ export class PrismDaemon {
       const port = discoverActivePort(this.overridePort, this.portFile);
       if (!port) {
         this._hasActiveCdpPort = false;
+        this._resetShortcutBackoff('no-port');
+        if (this.sessions.size === 0 && this._prevAttachedCount > 0) {
+          this._disconnectedAllSessions = true;
+          this._prevAttachedCount = 0;
+        }
         await this._handleMissingCdpPort();
         return { attached: 0, port: null };
       }
@@ -7083,6 +7595,10 @@ export class PrismDaemon {
 
         if (liveEntries.length > 0) {
           await Promise.allSettled(liveEntries.map((entry) => this.verifyAndHealEntry(entry)));
+          if (this.sessions.size === 0 && this._prevAttachedCount > 0) {
+            this._disconnectedAllSessions = true;
+          }
+          this._prevAttachedCount = this.sessions.size;
           if (this._isTelemetryDisabled()) {
             this._releaseIdleTelemetry(true);
           } else {
@@ -7095,6 +7611,10 @@ export class PrismDaemon {
             skippedListPoll: true,
           };
         }
+        if (this._prevAttachedCount > 0) {
+          this._disconnectedAllSessions = true;
+          this._prevAttachedCount = 0;
+        }
       }
 
       let rawPages = [];
@@ -7104,8 +7624,13 @@ export class PrismDaemon {
         this._forceListPagesNextTick = false;
       } catch {
         this._hasActiveCdpPort = false;
+        this._resetShortcutBackoff('port-unreachable');
         this.closeBrowserDiscovery();
         if (this.sessions.size === 0) {
+          if (this._prevAttachedCount > 0) {
+            this._disconnectedAllSessions = true;
+            this._prevAttachedCount = 0;
+          }
           await this._handleMissingCdpPort();
         }
         return { attached: this.sessions.size, port, unreachable: true };
@@ -7113,7 +7638,19 @@ export class PrismDaemon {
 
       this._noPortSinceMs = 0;
       this._hasActiveCdpPort = true;
-      if (this.timer) {
+      const prevActivePort = this._lastActiveCdpPort;
+      const portChanged = prevActivePort !== null && prevActivePort !== port;
+      this._lastActiveCdpPort = port;
+      const prevSessionCount = this.sessions.size;
+      const canRunShortcutSync = Boolean(this.timer || typeof this._relaunchHooks?.syncShortcuts === 'function');
+      let forcedShortcutSyncThisTick = false;
+      if (portChanged) {
+        this._resetShortcutBackoff(`port-changed:${prevActivePort}->${port}`);
+        if (canRunShortcutSync) {
+          forcedShortcutSyncThisTick = true;
+          this._maybeSyncShortcuts(true, { hasActivePort: true });
+        }
+      } else if (this.timer) {
         this._maybeSyncShortcuts(false, { hasActivePort: true });
       }
 
@@ -7164,6 +7701,13 @@ export class PrismDaemon {
             entry.inlineDiffMounted = false;
             entry.lastInlineDiffHash = '';
             entry.lastInlineDiffScriptHash = '';
+            if (entry.wallpaperScriptId) {
+              await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.wallpaperScriptId }).catch(() => {});
+              entry.wallpaperScriptId = null;
+            }
+            entry.wallpaperMounted = false;
+            entry.lastWallpaperHash = '';
+            entry.lastWallpaperScriptHash = '';
             await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
           }
           entry.session.close();
@@ -7181,6 +7725,29 @@ export class PrismDaemon {
           return this.verifyAndHealEntry(this.sessions.get(target.webSocketDebuggerUrl));
         })
       );
+
+      // 盲区 3：全部窗口断开后重连，或活跃窗口数从 0 恢复时，立即复位 45 分钟退避并补检快捷方式
+      const nowAttachedCount = this.sessions.size;
+      if (nowAttachedCount === 0) {
+        if (this._prevAttachedCount > 0 || prevSessionCount > 0) {
+          this._disconnectedAllSessions = true;
+        }
+      } else {
+        const recoveredFromAllDisconnected = this._disconnectedAllSessions;
+        const recoveredFromZero = prevSessionCount === 0 && this._lastShortcutCheckAt > 0;
+        if (recoveredFromAllDisconnected) {
+          this._disconnectedAllSessions = false;
+        }
+        if ((recoveredFromAllDisconnected || recoveredFromZero) && !forcedShortcutSyncThisTick) {
+          this._resetShortcutBackoff(
+            recoveredFromAllDisconnected ? 'all-windows-reconnected' : 'active-windows-recovered-from-zero'
+          );
+          if (canRunShortcutSync) {
+            this._maybeSyncShortcuts(true, { hasActivePort: true });
+          }
+        }
+      }
+      this._prevAttachedCount = nowAttachedCount;
 
       if (this._isTelemetryDisabled()) {
         this._releaseIdleTelemetry(true);
@@ -7348,6 +7915,7 @@ export class PrismDaemon {
   start({ claimPid = true, watchFiles = true } = {}) {
     if (this.running) return;
     this._sidebarStopped = false;
+    this._wallpaperStopped = false;
     this.running = true;
     if (claimPid) this.claimOwnership();
     const initialPort = discoverActivePort(this.overridePort, this.portFile);
@@ -7449,6 +8017,7 @@ export class PrismDaemon {
   async stop(cleanPageDom = false) {
     this._flushUsageDiskCache();
     this._sidebarStopped = true;
+    this._wallpaperStopped = true;
     this.running = false;
     if (this._updateInitialTimer) {
       clearTimeout(this._updateInitialTimer);
@@ -7521,6 +8090,14 @@ export class PrismDaemon {
       this.sidebarService = null;
       try {
         if (typeof sb.dispose === 'function') await sb.dispose();
+      } catch {}
+    }
+    await this._wallpaperServicePromise?.catch(() => null);
+    if (this._lazyWallpaperService) {
+      const wp = this._lazyWallpaperService;
+      this._lazyWallpaperService = null;
+      try {
+        if (typeof wp.dispose === 'function') await wp.dispose();
       } catch {}
     }
     this.releaseOwnership();

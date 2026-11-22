@@ -997,11 +997,12 @@ namespace AgyClaudeStyle.Watcher
                 catch { }
 
                 int? lastPort = null;
+                int? lastLoggedStalePort = null;
                 bool yieldingToDaemon = false;
                 long lastDaemonBootTick = 0L;
                 long lastShortcutCheckTick = 0L;
                 string defaultWatcherDir = GetDefaultWatcherInstallDir();
-                bool isDefaultDir = string.Equals(_baseDir, defaultWatcherDir, StringComparison.OrdinalIgnoreCase);
+                string shortcutStateDir = !string.IsNullOrEmpty(_pluginDir) ? _pluginDir : _baseDir;
                 try
                 {
                     while (!exitEvent.IsSet)
@@ -1015,22 +1016,27 @@ namespace AgyClaudeStyle.Watcher
                                 CdpHelper.EnsureAntigravityShortcutsOptIn(
                                     _baseDir,
                                     defaultWatcherDir,
-                                    !string.IsNullOrEmpty(_pluginDir) ? _pluginDir : _baseDir,
+                                    shortcutStateDir,
                                     Log
                                 );
                             }
 
                             bool nativeAlive = !string.IsNullOrEmpty(_pluginDir) && CdpHelper.IsNativeDaemonAlive(_pluginDir);
-                            if (!nativeAlive && !_noNativeDaemon && !string.IsNullOrEmpty(_pluginDir))
+                            ActivePortProbeResult portProbe = null;
+                            if (!nativeAlive)
                             {
-                                long nowTick = Environment.TickCount & int.MaxValue;
-                                if ((lastDaemonBootTick == 0L || Math.Abs(nowTick - lastDaemonBootTick) >= 6000L) &&
-                                    CdpHelper.ReadPort(overridePort).HasValue)
+                                portProbe = await CdpHelper.ProbeActivePortAsync(overridePort).ConfigureAwait(false);
+                                if (!_noNativeDaemon && !string.IsNullOrEmpty(_pluginDir))
                                 {
-                                    lastDaemonBootTick = nowTick;
-                                    if (CdpHelper.EnsureNativeDaemonRunning(_pluginDir, overridePort, null, Log))
+                                    long nowTick = Environment.TickCount & int.MaxValue;
+                                    if ((lastDaemonBootTick == 0L || Math.Abs(nowTick - lastDaemonBootTick) >= 6000L) &&
+                                        portProbe.LivePort.HasValue)
                                     {
-                                        nativeAlive = true;
+                                        lastDaemonBootTick = nowTick;
+                                        if (CdpHelper.EnsureNativeDaemonRunning(_pluginDir, overridePort, null, Log))
+                                        {
+                                            nativeAlive = true;
+                                        }
                                     }
                                 }
                             }
@@ -1057,6 +1063,7 @@ namespace AgyClaudeStyle.Watcher
                                         }
                                     }
                                     lastPort = null;
+                                    lastLoggedStalePort = null;
                                     if (!yieldingToDaemon)
                                     {
                                         yieldingToDaemon = true;
@@ -1072,8 +1079,45 @@ namespace AgyClaudeStyle.Watcher
                                 Log("[+] 原生 Sidecar Daemon 已离线，Watcher 接管实时注入");
                             }
 
-                            int? port = CdpHelper.ReadPort(overridePort);
-                            if (!port.HasValue && !overridePort.HasValue)
+                            if (portProbe == null)
+                            {
+                                portProbe = await CdpHelper.ProbeActivePortAsync(overridePort).ConfigureAwait(false);
+                            }
+
+                            if (portProbe.IsStalePort && portProbe.RawPort.HasValue)
+                            {
+                                if (!lastLoggedStalePort.HasValue || lastLoggedStalePort.Value != portProbe.RawPort.Value)
+                                {
+                                    lastLoggedStalePort = portProbe.RawPort.Value;
+                                    Log("[!] 检测到残留无效调试端口 " + portProbe.RawPort.Value + "（连接被拒绝/超时），视作无有效端口并转入裸启恢复检测");
+                                }
+                                if (lastPort.HasValue || attached.Count > 0)
+                                {
+                                    foreach (KeyValuePair<string, AttachedEntry> kv in attached)
+                                    {
+                                        AttachedEntry oldEntry;
+                                        if (attached.TryRemove(kv.Key, out oldEntry) && oldEntry != null && oldEntry.Session != null)
+                                        {
+                                            try { oldEntry.Session.Close(); } catch { }
+                                        }
+                                    }
+                                    lastPort = null;
+                                    lastShortcutCheckTick = Environment.TickCount & int.MaxValue;
+                                    CdpHelper.EnsureAntigravityShortcutsOptIn(
+                                        _baseDir,
+                                        defaultWatcherDir,
+                                        shortcutStateDir,
+                                        Log
+                                    );
+                                }
+                            }
+                            else
+                            {
+                                lastLoggedStalePort = null;
+                            }
+
+                            int? livePort = portProbe.LivePort;
+                            if (!livePort.HasValue && !overridePort.HasValue)
                             {
                                 string noPromptEnv1 = Environment.GetEnvironmentVariable("PRISM_NO_RELAUNCH_PROMPT");
                                 string noPromptEnv2 = Environment.GetEnvironmentVariable("AG_PRISM_NO_RELAUNCH_PROMPT");
@@ -1083,7 +1127,7 @@ namespace AgyClaudeStyle.Watcher
                                                    noPromptEnv1 != "1" &&
                                                    noPromptEnv2 != "1" &&
                                                    !string.Equals(nodeEnv, "test", StringComparison.OrdinalIgnoreCase) &&
-                                                   (isDefaultDir || !string.IsNullOrEmpty(mockDec));
+                                                   (!CdpHelper.IsTestSandboxEnvironment(_baseDir) || !string.IsNullOrEmpty(mockDec));
                                 if (allowPrompt)
                                 {
                                     Dictionary<string, object> curCfg = CdpHelper.ReadConfig(_baseDir, manifest);
@@ -1101,61 +1145,68 @@ namespace AgyClaudeStyle.Watcher
                                 if (allowPrompt)
                                 {
                                     BareHostProcessInfo bare = CdpHelper.FindBareAntigravityMainProcess();
-                                    if (bare != null &&
-                                        bare.UptimeMs >= 8000L &&
-                                        !CdpHelper.HasPromptedForHost(bare.Pid, bare.StartTimeMs, _baseDir, _pluginDir))
+                                    if (bare != null)
                                     {
-                                        CdpHelper.RecordPromptedForHost(bare.Pid, bare.StartTimeMs, "prompted", _baseDir, _pluginDir);
-                                        bool confirmed = CdpHelper.PromptUserForCdpRelaunch();
-                                        CdpHelper.RecordPromptedForHost(bare.Pid, bare.StartTimeMs, confirmed ? "yes" : "no", _baseDir, _pluginDir);
-                                        if (confirmed)
+                                        // 发现裸启主进程时立即复检并自愈补齐快捷方式参数（无需干等 45 秒周期）
+                                        lastShortcutCheckTick = Environment.TickCount & int.MaxValue;
+                                        CdpHelper.EnsureAntigravityShortcutsOptIn(
+                                            _baseDir,
+                                            defaultWatcherDir,
+                                            shortcutStateDir,
+                                            Log
+                                        );
+                                        if (bare.UptimeMs >= 8000L &&
+                                            !CdpHelper.HasPromptedForHost(bare.Pid, bare.StartTimeMs, _baseDir, _pluginDir))
                                         {
-                                            Log("[*] 用户确认带 --remote-debugging-port=0 重新打开 Antigravity (旧 PID " + bare.Pid + ")");
-                                            CdpHelper.RelaunchAntigravityWithCdp(bare, 15000, Log);
+                                            CdpHelper.RecordPromptedForHost(bare.Pid, bare.StartTimeMs, "prompted", _baseDir, _pluginDir);
+                                            bool confirmed = CdpHelper.PromptUserForCdpRelaunch();
+                                            CdpHelper.RecordPromptedForHost(bare.Pid, bare.StartTimeMs, confirmed ? "yes" : "no", _baseDir, _pluginDir);
+                                            if (confirmed)
+                                            {
+                                                Log("[*] 用户确认带 --remote-debugging-port=0 重新打开 Antigravity (旧 PID " + bare.Pid + ")");
+                                                CdpHelper.RelaunchAntigravityWithCdp(bare, 15000, Log);
+                                            }
                                         }
                                     }
                                 }
                             }
-                            if (port.HasValue)
+                            if (livePort.HasValue && portProbe.Pages != null)
                             {
-                                List<CdpPageInfo> pages = null;
-                                try
+                                List<CdpPageInfo> pages = portProbe.Pages;
+                                if (!lastPort.HasValue || lastPort.Value != livePort.Value)
                                 {
-                                    pages = await CdpHelper.ListPagesAsync(port.Value).ConfigureAwait(false);
-                                }
-                                catch
-                                {
-                                    pages = null;
-                                }
-                                if (pages != null)
-                                {
-                                    if (!lastPort.HasValue || lastPort.Value != port.Value)
+                                    // Close stale sessions if Antigravity restarted on a new port
+                                    foreach (KeyValuePair<string, AttachedEntry> kv in attached)
                                     {
-                                        // Close stale sessions if Antigravity restarted on a new port
-                                        foreach (KeyValuePair<string, AttachedEntry> kv in attached)
+                                        AttachedEntry oldEntry;
+                                        if (attached.TryRemove(kv.Key, out oldEntry) && oldEntry != null && oldEntry.Session != null)
                                         {
-                                            AttachedEntry oldEntry;
-                                            if (attached.TryRemove(kv.Key, out oldEntry) && oldEntry != null && oldEntry.Session != null)
-                                            {
-                                                try { oldEntry.Session.Close(); } catch { }
-                                            }
+                                            try { oldEntry.Session.Close(); } catch { }
                                         }
-                                        Log("[+] 连接到调试端口 " + port.Value);
-                                        lastPort = port.Value;
                                     }
+                                    Log("[+] 连接到调试端口 " + livePort.Value);
+                                    lastPort = livePort.Value;
+                                    // 端口切换或重连后立即复检快捷方式（应对更新覆盖 .lnk）
+                                    lastShortcutCheckTick = Environment.TickCount & int.MaxValue;
+                                    CdpHelper.EnsureAntigravityShortcutsOptIn(
+                                        _baseDir,
+                                        defaultWatcherDir,
+                                        shortcutStateDir,
+                                        Log
+                                    );
+                                }
 
-                                    List<Task> tasks = new List<Task>();
-                                    for (int i = 0; i < pages.Count; i++)
+                                List<Task> tasks = new List<Task>();
+                                for (int i = 0; i < pages.Count; i++)
+                                {
+                                    if (!attached.ContainsKey(pages[i].Id))
                                     {
-                                        if (!attached.ContainsKey(pages[i].Id))
-                                        {
-                                            tasks.Add(attachAsync(pages[i]));
-                                        }
+                                        tasks.Add(attachAsync(pages[i]));
                                     }
-                                    if (tasks.Count > 0)
-                                    {
-                                        await Task.WhenAll(tasks).ConfigureAwait(false);
-                                    }
+                                }
+                                if (tasks.Count > 0)
+                                {
+                                    await Task.WhenAll(tasks).ConfigureAwait(false);
                                 }
                             }
                         }
