@@ -260,7 +260,11 @@ function clearReadOnlyIfRegularFile(filePath, label = "target file") {
   const st = assertNotSymbolicLink(filePath, label);
   if (st && st.isFile()) {
     try {
-      fs.chmodSync(filePath, 0o666);
+      if (process.platform === "win32") {
+        fs.chmodSync(filePath, 0o666);
+      } else if ((st.mode & 0o200) === 0) {
+        fs.chmodSync(filePath, (st.mode & 0o777) | 0o200);
+      }
     } catch {}
   }
 }
@@ -347,7 +351,7 @@ function safeCopyFileNoSymlink(src, dst) {
       // 遇 Windows 共享读取占用时回退临时文件原子重命名替换
       const tmpPath = `${dst}.tmp.${process.pid}.${crypto.randomBytes(6).toString("hex")}`;
       try {
-        fs.copyFileSync(src, tmpPath);
+        fs.copyFileSync(src, tmpPath, fs.constants.COPYFILE_EXCL);
         assertNotSymbolicLink(dst, "destination");
         clearReadOnlyIfRegularFile(dst, "destination");
         fs.renameSync(tmpPath, dst);
@@ -430,7 +434,8 @@ function syncHostPluginRegistry(configDir, enable) {
       }
     }
     const cachePath = path.join(configDir, "obsidian-prism-thought-cache.json");
-    if (fs.existsSync(cachePath)) {
+    const cacheStat = assertNotSymbolicLink(cachePath, "thought cache file");
+    if (cacheStat && cacheStat.isFile()) {
       try { fs.unlinkSync(cachePath); } catch {}
     }
     return true;
@@ -1266,6 +1271,7 @@ module.exports = {
   resolveTelemetryDir,
   isProtectedUserDataPath,
   syncHostPluginRegistry,
+  clearReadOnlyIfRegularFile,
   atomicWriteFileSync,
   copyDirRecursiveSync,
   installPlugin,

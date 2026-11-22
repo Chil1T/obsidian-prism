@@ -742,14 +742,131 @@ enum CdpHelper {
         return nil
     }
 
-    private static func atomicWriteJsonObject(_ obj: [String: JsonValue], toFile path: String) throws {
-        let tmpPath = path + ".tmp"
-        let content = MiniJson.stringify(.object(obj), pretty: true) + "\n"
-        try content.write(toFile: tmpPath, atomically: false, encoding: .utf8)
-        if rename(tmpPath, path) != 0 {
-            try content.write(toFile: path, atomically: true, encoding: .utf8)
-            try? FileManager.default.removeItem(atPath: tmpPath)
+    private static func normalizeHostSystemRootPrefix(_ rawPath: String) -> String {
+        let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "" }
+        let std = URL(fileURLWithPath: trimmed).standardizedFileURL.path
+        let clean = (std.count > 1 && std.hasSuffix("/")) ? String(std.dropLast()) : std
+        if clean == "/tmp" { return "/private/tmp" }
+        if clean.hasPrefix("/tmp/") { return "/private" + clean }
+        if clean == "/var" { return "/private/var" }
+        if clean.hasPrefix("/var/") { return "/private" + clean }
+        return clean
+    }
+
+    /// 通过 lstat 检查路径是否为符号链接；除 ENOENT（目标不存在）外，所有非 ENOENT 错误均 Fail-Closed 返回 true。
+    static func isSymbolicLinkOrUnsafePath(_ path: String) -> Bool {
+        guard !path.isEmpty else { return true }
+        var st = stat()
+        if lstat(path, &st) != 0 {
+            return errno != ENOENT
         }
+        return (st.st_mode & S_IFMT) == S_IFLNK
+    }
+
+    /// 检查宿主配置目录祖先链（覆盖 ~/.gemini → cfgDir 或沙盒 .gemini → cfgDir）是否含符号链接或不可验证节点（Fail-Closed）。
+    static func hasSymbolicLinkInHostConfigChain(_ cfgDir: String) -> Bool {
+        let normDir = normalizeHostSystemRootPrefix(cfgDir)
+        if normDir.isEmpty { return true }
+        let normHome = normalizeHostSystemRootPrefix(FileManager.default.homeDirectoryForCurrentUser.path)
+        let defaultGemini = normHome.isEmpty ? "" : (normHome as NSString).appendingPathComponent(".gemini")
+        var stopRoot = normDir
+        if !defaultGemini.isEmpty && (normDir == defaultGemini || normDir.hasPrefix(defaultGemini + "/")) {
+            stopRoot = defaultGemini
+        } else {
+            var scan = normDir
+            for _ in 0..<64 {
+                if (scan as NSString).lastPathComponent.caseInsensitiveCompare(".gemini") == .orderedSame {
+                    stopRoot = scan
+                    break
+                }
+                let up = (scan as NSString).deletingLastPathComponent
+                if up.isEmpty || up == scan { break }
+                scan = up
+            }
+        }
+        var cur = normDir
+        var reachedStop = false
+        for _ in 0..<64 {
+            if isSymbolicLinkOrUnsafePath(cur) { return true }
+            if cur == stopRoot {
+                reachedStop = true
+                break
+            }
+            let parent = (cur as NSString).deletingLastPathComponent
+            if parent.isEmpty || parent == cur { break }
+            cur = parent
+        }
+        return !reachedStop
+    }
+
+    private static func atomicWriteJsonObject(_ obj: [String: JsonValue], toFile path: String) throws {
+        guard !path.isEmpty else {
+            throw CdpError("目标文件路径为空")
+        }
+        let parentDir = (path as NSString).deletingLastPathComponent
+        if hasSymbolicLinkInHostConfigChain(parentDir) {
+            throw CdpError("目标目录链路包含符号链接或无法安全验证，已拒绝写入: \(parentDir)")
+        }
+        if isSymbolicLinkOrUnsafePath(path) {
+            throw CdpError("目标文件为符号链接或无法安全验证，已拒绝覆盖: \(path)")
+        }
+        let tmpPath = "\(path).tmp.\(getpid()).\(UUID().uuidString)"
+        let content = MiniJson.stringify(.object(obj), pretty: true) + "\n"
+        let bytes = Array(content.utf8)
+        let openFlags: Int32 = O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW
+        let fd = open(tmpPath, openFlags, mode_t(0o600))
+        if fd < 0 {
+            let errCode = errno
+            throw CdpError("无法安全创建临时文件 \(tmpPath) (errno=\(errCode))")
+        }
+        var closed = false
+        var committed = false
+        defer {
+            if !closed {
+                _ = close(fd)
+            }
+            if !committed {
+                _ = unlink(tmpPath)
+            }
+        }
+        if !bytes.isEmpty {
+            try bytes.withUnsafeBytes { rawBuf in
+                guard let baseAddr = rawBuf.baseAddress else { return }
+                var totalWritten = 0
+                while totalWritten < bytes.count {
+                    let remaining = bytes.count - totalWritten
+                    let written = write(fd, baseAddr.advanced(by: totalWritten), remaining)
+                    if written < 0 {
+                        if errno == EINTR { continue }
+                        let errCode = errno
+                        throw CdpError("写入临时文件失败 \(tmpPath) (errno=\(errCode))")
+                    }
+                    if written == 0 {
+                        throw CdpError("写入临时文件提前结束: \(tmpPath)")
+                    }
+                    totalWritten += written
+                }
+            }
+        }
+        _ = fsync(fd)
+        let closeRc = close(fd)
+        closed = true
+        if closeRc != 0 {
+            let errCode = errno
+            throw CdpError("关闭临时文件失败 \(tmpPath) (errno=\(errCode))")
+        }
+        if hasSymbolicLinkInHostConfigChain(parentDir) {
+            throw CdpError("目标目录链路包含符号链接或无法安全验证，已拒绝替换: \(parentDir)")
+        }
+        if isSymbolicLinkOrUnsafePath(path) {
+            throw CdpError("目标文件为符号链接或无法安全验证，已拒绝覆盖: \(path)")
+        }
+        if rename(tmpPath, path) != 0 {
+            let errCode = errno
+            throw CdpError("原子替换目标文件失败 \(path) (errno=\(errCode))")
+        }
+        committed = true
     }
 
     @discardableResult
@@ -759,9 +876,15 @@ enum CdpHelper {
         }
         let fm = FileManager.default
         let cfgPath = (cfgDir as NSString).appendingPathComponent("config.json")
+        if hasSymbolicLinkInHostConfigChain(cfgDir) || isSymbolicLinkOrUnsafePath(cfgPath) {
+            return false
+        }
         do {
             if enable {
                 try fm.createDirectory(atPath: cfgDir, withIntermediateDirectories: true, attributes: nil)
+                if hasSymbolicLinkInHostConfigChain(cfgDir) || isSymbolicLinkOrUnsafePath(cfgPath) {
+                    return false
+                }
                 var rootObj: [String: JsonValue] = [:]
                 if fm.fileExists(atPath: cfgPath) {
                     let raw = (try String(contentsOfFile: cfgPath, encoding: .utf8))
@@ -803,7 +926,7 @@ enum CdpHelper {
             }
             // Remove ephemeral translation cache while strictly preserving user secret file obsidian-prism-thought.json
             let cacheFile = (cfgDir as NSString).appendingPathComponent("obsidian-prism-thought-cache.json")
-            if fm.fileExists(atPath: cacheFile) {
+            if !isSymbolicLinkOrUnsafePath(cacheFile) && fm.fileExists(atPath: cacheFile) {
                 try? fm.removeItem(atPath: cacheFile)
             }
             return true

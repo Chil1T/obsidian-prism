@@ -679,6 +679,59 @@ namespace AgyClaudeStyle.Installer
             return Path.Combine(string.IsNullOrEmpty(parentDir) ? normInstall : parentDir, (string.IsNullOrEmpty(baseName) ? "obsidian-prism" : baseName) + "-native-plugin");
         }
 
+        public static bool MatchesExactCommandPath(string normalizedCmd, string exactPath)
+        {
+            if (string.IsNullOrEmpty(normalizedCmd) || string.IsNullOrEmpty(exactPath)) return false;
+            int idx = 0;
+            while (idx <= normalizedCmd.Length - exactPath.Length)
+            {
+                int found = normalizedCmd.IndexOf(exactPath, idx, StringComparison.Ordinal);
+                if (found < 0) return false;
+                bool leftOk = (found == 0);
+                if (!leftOk)
+                {
+                    char prev = normalizedCmd[found - 1];
+                    leftOk = char.IsWhiteSpace(prev) || prev == '"' || prev == '\'' || prev == '=';
+                }
+                int afterIdx = found + exactPath.Length;
+                bool rightOk = (afterIdx == normalizedCmd.Length);
+                if (!rightOk)
+                {
+                    char next = normalizedCmd[afterIdx];
+                    rightOk = char.IsWhiteSpace(next) || next == '"' || next == '\'' || next == ',' || next == ';';
+                }
+                if (leftOk && rightOk) return true;
+                idx = found + 1;
+            }
+            return false;
+        }
+
+        public static bool IsExactOrphanDaemonCommand(string rawCmd, string pluginDir, bool isAntigravityMainBinary, bool hasMainWindow)
+        {
+            if (string.IsNullOrEmpty(rawCmd) || string.IsNullOrEmpty(pluginDir)) return false;
+            string normPlugin = NormalizeDirPath(pluginDir).Replace('\\', '/').TrimEnd('/').ToLowerInvariant();
+            if (string.IsNullOrEmpty(normPlugin)) return false;
+            string cmd = rawCmd.Replace('\\', '/').ToLowerInvariant();
+            if (cmd.Contains("--type=")) return false;
+
+            bool matchesExactEntry =
+                MatchesExactCommandPath(cmd, normPlugin + "/sidecars/daemon/main.mjs") ||
+                MatchesExactCommandPath(cmd, normPlugin + "/daemon/main.mjs") ||
+                MatchesExactCommandPath(cmd, normPlugin + "/watch.js");
+            if (!matchesExactEntry) return false;
+
+            if (isAntigravityMainBinary)
+            {
+                if (hasMainWindow) return false;
+                bool hasDaemonFeature =
+                    cmd.Contains("--root ") ||
+                    cmd.Contains("sidecar_sdk") ||
+                    cmd.Contains("--import=");
+                if (!hasDaemonFeature) return false;
+            }
+            return true;
+        }
+
         public static void StopNativeDaemonInDir(string pluginDir, Action<string> log)
         {
             if (string.IsNullOrEmpty(pluginDir) || !Directory.Exists(pluginDir)) return;
@@ -703,7 +756,7 @@ namespace AgyClaudeStyle.Installer
                 catch { }
             }
 
-            // 额外清理命令行明确指向当前 pluginDir 的残留孤儿 daemon（严格匹配完整 pluginDir 路径，绝不触碰宿主主窗口或其他插件）
+            // 额外清理命令行精确指向当前 pluginDir 入口脚本的残留孤儿 daemon（组合完整路径匹配 + 宿主主进程强门禁，绝不误杀宿主主窗口或其他插件）
             try
             {
                 string normPlugin = NormalizeDirPath(pluginDir).Replace('\\', '/').TrimEnd('/').ToLowerInvariant();
@@ -712,6 +765,7 @@ namespace AgyClaudeStyle.Installer
                     string[] procNames = new string[] { "node", "Antigravity" };
                     for (int n = 0; n < procNames.Length; n++)
                     {
+                        bool isAgMain = string.Equals(procNames[n], "Antigravity", StringComparison.OrdinalIgnoreCase);
                         Process[] procs = null;
                         try { procs = Process.GetProcessesByName(procNames[n]); } catch { procs = null; }
                         if (procs == null) continue;
@@ -722,12 +776,15 @@ namespace AgyClaudeStyle.Installer
                                 int candPid = procs[i].Id;
                                 if (candPid == selfPid || stoppedPids.Contains(candPid)) continue;
                                 if (procs[i].HasExited) continue;
+                                bool hasMainWindow = false;
+                                if (isAgMain)
+                                {
+                                    hasMainWindow = procs[i].MainWindowHandle != IntPtr.Zero;
+                                    if (hasMainWindow) continue;
+                                }
                                 bool denied;
-                                string cmd = (CdpHelper.QueryProcessCommandLineFast(candPid, out denied) ?? "").Replace('\\', '/').ToLowerInvariant();
-                                if (string.IsNullOrEmpty(cmd) || cmd.Contains("--type=")) continue;
-                                bool matchesDir = cmd.Contains(normPlugin + "/") || cmd.Contains(normPlugin + "\"") || cmd.EndsWith(normPlugin, StringComparison.Ordinal);
-                                bool matchesEntry = cmd.Contains("sidecars/daemon/main.mjs") || cmd.Contains("/daemon/main.mjs") || cmd.Contains("/watch.js");
-                                if (matchesDir && matchesEntry)
+                                string cmd = CdpHelper.QueryProcessCommandLineFast(candPid, out denied) ?? "";
+                                if (IsExactOrphanDaemonCommand(cmd, pluginDir, isAgMain, hasMainWindow))
                                 {
                                     procs[i].Kill();
                                     procs[i].WaitForExit(2000);
@@ -977,9 +1034,11 @@ namespace AgyClaudeStyle.Installer
                 catch { }
             }
 
+            int selfPid = Process.GetCurrentProcess().Id;
             string normalizedDir = NormalizeDirPath(dir).TrimEnd('\\', '/').ToLowerInvariant();
             string normalizedDirPrefix = normalizedDir + "\\";
             string normalizedDirSlash = normalizedDir.Replace('\\', '/');
+            string expectedWatcherExeSlash = (normalizedDirSlash + "/" + WatcherExeName).ToLowerInvariant();
             try
             {
                 Process[] procs = Process.GetProcessesByName(Path.GetFileNameWithoutExtension(WatcherExeName));
@@ -987,6 +1046,8 @@ namespace AgyClaudeStyle.Installer
                 {
                     try
                     {
+                        int candPid = procs[i].Id;
+                        if (candPid == selfPid) continue;
                         bool belongsToDir = false;
                         try
                         {
@@ -1000,9 +1061,10 @@ namespace AgyClaudeStyle.Installer
                         catch
                         {
                             bool denied;
-                            string cmd = (CdpHelper.QueryProcessCommandLineFast(procs[i].Id, out denied) ?? "").Replace('\\', '/').ToLowerInvariant();
+                            string cmd = (CdpHelper.QueryProcessCommandLineFast(candPid, out denied) ?? "").Replace('\\', '/').ToLowerInvariant();
                             if (!string.IsNullOrEmpty(cmd) &&
-                                (cmd.Contains(normalizedDirSlash + "/") || cmd.Contains(normalizedDirSlash + "\"") || cmd.EndsWith(normalizedDirSlash, StringComparison.Ordinal)))
+                                (MatchesExactCommandPath(cmd, expectedWatcherExeSlash) ||
+                                 (cmd.Contains("--dir ") && MatchesExactCommandPath(cmd, normalizedDirSlash))))
                             {
                                 belongsToDir = true;
                             }
@@ -1124,6 +1186,25 @@ namespace AgyClaudeStyle.Installer
             }
         }
 
+        public static string QuotePathArgumentStrict(string value, string paramName)
+        {
+            if (string.IsNullOrEmpty(value)) return "\"\"";
+            if (value.IndexOf('"') >= 0 || value.IndexOf('\r') >= 0 || value.IndexOf('\n') >= 0 || value.IndexOf('\0') >= 0)
+            {
+                throw new InvalidOperationException("路径参数 " + paramName + " 包含非法引号或控制字符，已拒绝操作");
+            }
+            int trailingBackslashes = 0;
+            for (int i = value.Length - 1; i >= 0 && value[i] == '\\'; i--)
+            {
+                trailingBackslashes++;
+            }
+            if (trailingBackslashes > 0)
+            {
+                return "\"" + value + new string('\\', trailingBackslashes) + "\"";
+            }
+            return "\"" + value + "\"";
+        }
+
         public static void CreateStartupShortcut(string installDir, string pluginDir)
         {
             string lnkPath = GetStartupShortcutPath();
@@ -1140,7 +1221,7 @@ namespace AgyClaudeStyle.Installer
             string shortcutArgs = "--watch";
             if (!string.IsNullOrEmpty(pluginDir))
             {
-                shortcutArgs += " --plugin-dir \"" + pluginDir + "\"";
+                shortcutArgs += " --plugin-dir " + QuotePathArgumentStrict(pluginDir, "--plugin-dir");
             }
             Type shellType = Type.GetTypeFromProgID("WScript.Shell");
             if (shellType == null)
@@ -1184,7 +1265,7 @@ namespace AgyClaudeStyle.Installer
                 key.SetValue("Publisher", "Obsidian Prism Contributors", RegistryValueKind.String);
                 key.SetValue("InstallLocation", installDir, RegistryValueKind.String);
                 key.SetValue("DisplayIcon", exePath + ",0", RegistryValueKind.String);
-                key.SetValue("UninstallString", "\"" + exePath + "\" --uninstall", RegistryValueKind.String);
+                key.SetValue("UninstallString", QuotePathArgumentStrict(exePath, "UninstallString") + " --uninstall", RegistryValueKind.String);
                 key.SetValue("NoModify", 1, RegistryValueKind.DWord);
                 key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
             }
@@ -1198,9 +1279,9 @@ namespace AgyClaudeStyle.Installer
                    string.Equals(ext, ".dll", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static void CleanupStaleOldFiles(string dir)
+        private static void CleanupStaleOldFiles(string dir, int depth = 0)
         {
-            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir) || IsReparsePoint(dir)) return;
+            if (depth > 8 || string.IsNullOrEmpty(dir) || !Directory.Exists(dir) || IsReparsePoint(dir)) return;
             try
             {
                 string[] oldFiles = Directory.GetFiles(dir, "*.old.*", SearchOption.TopDirectoryOnly);
@@ -1215,6 +1296,19 @@ namespace AgyClaudeStyle.Installer
                         }
                     }
                     catch { }
+                }
+            }
+            catch { }
+            if (depth >= 8) return;
+            try
+            {
+                string[] subDirs = Directory.GetDirectories(dir);
+                for (int i = 0; i < subDirs.Length; i++)
+                {
+                    if (!IsReparsePoint(subDirs[i]))
+                    {
+                        CleanupStaleOldFiles(subDirs[i], depth + 1);
+                    }
                 }
             }
             catch { }
@@ -1288,24 +1382,45 @@ namespace AgyClaudeStyle.Installer
                             }
                             if (isExe)
                             {
-                                // Windows 允许对运行中/杀软扫描中的 PE 可执行映像重命名为 .old，再将新版 exe 原子移入
+                                // Windows 允许对运行中/杀软扫描中的 PE 可执行映像重命名为 .old，再将新版 exe 原子移入；二阶段失败尽力回滚原 PE
                                 string staleOld = destPath + ".old." + pid + "." + seq + "." + attempt;
+                                bool movedToOld = false;
                                 try
                                 {
+                                    uint preMoveTag;
+                                    if (IsReparsePoint(destPath, out preMoveTag))
+                                    {
+                                        throw new InvalidOperationException(
+                                            "检测到目标文件为符号链接或重解析点 [" + CdpHelper.DescribeReparseTag(preMoveTag) + "]，已拒绝覆盖: " + destPath
+                                        );
+                                    }
                                     CdpHelper.ClearReadOnlyAndHiddenAttributes(destPath);
                                     File.Move(destPath, staleOld);
+                                    movedToOld = true;
                                     File.Move(tmpPath, destPath);
                                     try { File.Delete(staleOld); } catch { }
                                     return;
                                 }
-                                catch
+                                catch (Exception moveEx)
                                 {
+                                    if (movedToOld && File.Exists(staleOld) && !File.Exists(destPath))
+                                    {
+                                        try { File.Move(staleOld, destPath); } catch { }
+                                    }
+                                    if (moveEx is InvalidOperationException) throw;
                                     throw replaceEx;
                                 }
                             }
                             else
                             {
-                                // 非可执行文件（如 main.mjs/cdp.js）若正被宿主 Sidecar 共享只读打开，使用 FileShare.ReadWrite 覆盖内容
+                                // 非可执行文件（如 main.mjs/cdp.js）若正被宿主 Sidecar 共享只读打开，回退写入前复检重解析点再使用 FileShare.ReadWrite 覆盖内容
+                                uint fallbackTag;
+                                if (IsReparsePoint(destPath, out fallbackTag))
+                                {
+                                    throw new InvalidOperationException(
+                                        "检测到目标文件为符号链接或重解析点 [" + CdpHelper.DescribeReparseTag(fallbackTag) + "]，已拒绝覆盖: " + destPath
+                                    );
+                                }
                                 CdpHelper.ClearReadOnlyAndHiddenAttributes(destPath);
                                 using (FileStream outStream = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite))
                                 {
@@ -1344,7 +1459,20 @@ namespace AgyClaudeStyle.Installer
         private static void CopyFileWithRetry(string srcPath, string destPath, bool overwrite)
         {
             if (string.IsNullOrEmpty(srcPath) || string.IsNullOrEmpty(destPath)) return;
-            if (IsReparsePoint(srcPath) || IsReparsePoint(destPath)) return;
+            uint srcTag;
+            if (IsReparsePoint(srcPath, out srcTag))
+            {
+                throw new InvalidOperationException(
+                    "检测到源文件为符号链接或重解析点 [" + CdpHelper.DescribeReparseTag(srcTag) + "]，已拒绝复制: " + srcPath
+                );
+            }
+            uint dstTag;
+            if (IsReparsePoint(destPath, out dstTag))
+            {
+                throw new InvalidOperationException(
+                    "检测到目标文件为符号链接或重解析点 [" + CdpHelper.DescribeReparseTag(dstTag) + "]，已拒绝覆盖: " + destPath
+                );
+            }
             if (!overwrite && File.Exists(destPath)) return;
             int pid = Process.GetCurrentProcess().Id;
             int seq = Interlocked.Increment(ref _fileWriteSeq);
@@ -1355,34 +1483,55 @@ namespace AgyClaudeStyle.Installer
             {
                 try
                 {
+                    uint curDstTag;
+                    if (IsReparsePoint(destPath, out curDstTag))
+                    {
+                        throw new InvalidOperationException(
+                            "检测到目标文件为符号链接或重解析点 [" + CdpHelper.DescribeReparseTag(curDstTag) + "]，已拒绝覆盖: " + destPath
+                        );
+                    }
                     if (File.Exists(destPath))
                     {
-                        if (IsReparsePoint(destPath)) return;
                         CdpHelper.ClearReadOnlyAndHiddenAttributes(destPath);
                     }
                     File.Copy(srcPath, destPath, overwrite);
                     return;
                 }
-                catch (IOException ioEx)
+                catch (Exception copyEx)
                 {
-                    lastErr = ioEx;
+                    if (!(copyEx is IOException) && !(copyEx is UnauthorizedAccessException))
+                    {
+                        throw;
+                    }
+                    lastErr = copyEx;
                     if (isExe && overwrite && File.Exists(destPath))
                     {
+                        uint preMoveTag;
+                        if (IsReparsePoint(destPath, out preMoveTag))
+                        {
+                            throw new InvalidOperationException(
+                                "检测到目标文件为符号链接或重解析点 [" + CdpHelper.DescribeReparseTag(preMoveTag) + "]，已拒绝覆盖: " + destPath
+                            );
+                        }
                         string staleOld = destPath + ".old." + pid + "." + seq + "." + attempt;
+                        bool movedToOld = false;
                         try
                         {
+                            CdpHelper.ClearReadOnlyAndHiddenAttributes(destPath);
                             File.Move(destPath, staleOld);
+                            movedToOld = true;
                             File.Copy(srcPath, destPath, true);
                             try { File.Delete(staleOld); } catch { }
                             return;
                         }
-                        catch { }
+                        catch
+                        {
+                            if (movedToOld && File.Exists(staleOld) && !File.Exists(destPath))
+                            {
+                                try { File.Move(staleOld, destPath); } catch { }
+                            }
+                        }
                     }
-                    if (attempt < backoffs.Length) Thread.Sleep(backoffs[attempt]);
-                }
-                catch (UnauthorizedAccessException uaEx)
-                {
-                    lastErr = uaEx;
                     if (attempt < backoffs.Length) Thread.Sleep(backoffs[attempt]);
                 }
             }
@@ -1731,10 +1880,10 @@ namespace AgyClaudeStyle.Installer
                 report(82, "正在启动后台静默守护进程...");
                 string watcherExe = Path.Combine(installDir, WatcherExeName);
                 currentTargetPath = watcherExe;
-                string watcherArgs = "--watch --dir \"" + installDir + "\"";
+                string watcherArgs = "--watch --dir " + QuotePathArgumentStrict(installDir, "--dir");
                 if (!string.IsNullOrEmpty(pluginDir))
                 {
-                    watcherArgs += " --plugin-dir \"" + pluginDir + "\"";
+                    watcherArgs += " --plugin-dir " + QuotePathArgumentStrict(pluginDir, "--plugin-dir");
                 }
                 if (opts.NoNativeDaemon)
                 {

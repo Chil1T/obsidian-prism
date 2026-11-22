@@ -156,6 +156,7 @@ namespace AgyClaudeStyle.Watcher
             {
                 try
                 {
+                    if (CdpHelper.IsUnsafeReparsePoint(_logFile)) return;
                     FileInfo fi = new FileInfo(_logFile);
                     if (fi.Exists && fi.Length > 1024 * 1024)
                     {
@@ -207,6 +208,7 @@ namespace AgyClaudeStyle.Watcher
         {
             try
             {
+                if (CdpHelper.IsUnsafeReparsePoint(_pidFile)) return;
                 int? current = ReadPidFile();
                 if (current.HasValue && current.Value == selfPid)
                 {
@@ -379,6 +381,10 @@ namespace AgyClaudeStyle.Watcher
                 {
                     try
                     {
+                        if (CdpHelper.IsUnsafeReparsePoint(_pidFile))
+                        {
+                            break;
+                        }
                         CdpHelper.ClearReadOnlyAndHiddenAttributes(_pidFile);
                         File.WriteAllText(_pidFile, selfPid.ToString(), new UTF8Encoding(false));
                         break;
@@ -390,8 +396,11 @@ namespace AgyClaudeStyle.Watcher
                 }
                 try
                 {
-                    CdpHelper.ClearReadOnlyAndHiddenAttributes(_logFile);
-                    File.WriteAllText(_logFile, "", new UTF8Encoding(false));
+                    if (!CdpHelper.IsUnsafeReparsePoint(_logFile))
+                    {
+                        CdpHelper.ClearReadOnlyAndHiddenAttributes(_logFile);
+                        File.WriteAllText(_logFile, "", new UTF8Encoding(false));
+                    }
                 }
                 catch { }
 

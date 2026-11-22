@@ -850,6 +850,8 @@ namespace AgyClaudeStyle
         private const uint IO_REPARSE_TAG_ONEDRIVE = 0x80000021u;
         private const uint IO_REPARSE_TAG_CLOUD_BASE = 0x9000001Au;
         private const uint IO_REPARSE_TAG_CLOUD_MASK = 0xFFFF0FFFu;
+        private const int ERROR_FILE_NOT_FOUND = 2;
+        private const int ERROR_PATH_NOT_FOUND = 3;
         private static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
         private static int _atomicWriteSeq = 0;
 
@@ -910,14 +912,84 @@ namespace AgyClaudeStyle
             return string.Format("ReparsePoint (0x{0:X8})", tag);
         }
 
+        private static bool TryBuildFindFirstQuery(string path, out string query, out bool isDriveRoot)
+        {
+            query = null;
+            isDriveRoot = false;
+            if (string.IsNullOrEmpty(path)) return false;
+
+            bool hasExtendedPrefix = path.StartsWith(@"\\?\", StringComparison.Ordinal);
+            string wildcardCheckSlice = hasExtendedPrefix ? path.Substring(4) : path;
+            if (wildcardCheckSlice.IndexOf('*') >= 0 || wildcardCheckSlice.IndexOf('?') >= 0)
+            {
+                return false;
+            }
+
+            string normalized = hasExtendedPrefix ? path : path.Replace('/', '\\');
+            if (!hasExtendedPrefix &&
+                (normalized.EndsWith(@"\.", StringComparison.Ordinal) ||
+                 normalized.EndsWith(@"\..", StringComparison.Ordinal) ||
+                 normalized == "." ||
+                 normalized == ".."))
+            {
+                normalized = Path.GetFullPath(normalized);
+            }
+
+            string trimmed = normalized.TrimEnd('\\');
+            if (string.IsNullOrEmpty(trimmed))
+            {
+                return false;
+            }
+
+            if (hasExtendedPrefix)
+            {
+                if (trimmed.Length == 6 && char.IsLetter(trimmed[4]) && trimmed[5] == ':')
+                {
+                    isDriveRoot = true;
+                    return true;
+                }
+                query = trimmed;
+                return true;
+            }
+
+            if (trimmed.Length == 2 && char.IsLetter(trimmed[0]) && trimmed[1] == ':')
+            {
+                isDriveRoot = true;
+                return true;
+            }
+
+            if (trimmed.Length >= 248)
+            {
+                string abs = trimmed;
+                bool isUnc = abs.StartsWith(@"\\", StringComparison.Ordinal) && !abs.StartsWith(@"\\.\", StringComparison.Ordinal);
+                bool isDriveAbs = abs.Length >= 3 && char.IsLetter(abs[0]) && abs[1] == ':' && abs[2] == '\\';
+                if (!isUnc && !isDriveAbs)
+                {
+                    abs = Path.GetFullPath(abs).TrimEnd('\\');
+                    isUnc = abs.StartsWith(@"\\", StringComparison.Ordinal) && !abs.StartsWith(@"\\.\", StringComparison.Ordinal);
+                }
+                if (abs.Length == 2 && char.IsLetter(abs[0]) && abs[1] == ':')
+                {
+                    isDriveRoot = true;
+                    return true;
+                }
+                query = isUnc ? (@"\\?\UNC\" + abs.Substring(2)) : (@"\\?\" + abs);
+                return true;
+            }
+
+            query = trimmed;
+            return true;
+        }
+
         public static bool TryGetReparseTag(string path, out uint reparseTag)
         {
             reparseTag = 0u;
             if (string.IsNullOrEmpty(path)) return false;
             try
             {
-                string query = path.TrimEnd('\\', '/');
-                if (string.IsNullOrEmpty(query) || (query.Length == 2 && query[1] == ':'))
+                string query;
+                bool isDriveRoot;
+                if (!TryBuildFindFirstQuery(path, out query, out isDriveRoot) || isDriveRoot)
                 {
                     return false;
                 }
@@ -954,9 +1026,9 @@ namespace AgyClaudeStyle
         }
 
         /// <summary>
-        /// 判断路径是否为具有重定向风险的重解析点（符号链接、目录联接或未知重解析点）。
-        /// 放行纯存储层/云占位标签（WOF / OneDrive Cloud / Dedup），避免误伤开启 CompactOS 或 OneDrive 的正常环境；
-        /// 读取失败或未知标签严格 Fail-Closed 返回 true。
+        /// 判断路径是否为具有重定向风险的重解析点（符号链接、目录联接、悬空软链或未知重解析点）。
+        /// 直接通过 FindFirstFileW 判定（拦截通配符，超长路径自动补 \\?\ 前缀），放行纯存储层/云占位标签（WOF / OneDrive Cloud / Dedup）；
+        /// 仅在 ERROR_FILE_NOT_FOUND(2) 或 ERROR_PATH_NOT_FOUND(3) 时返回 false，其余任何错误/异常严格 Fail-Closed 返回 true。
         /// </summary>
         public static bool IsUnsafeReparsePoint(string path, out uint reparseTag)
         {
@@ -964,18 +1036,149 @@ namespace AgyClaudeStyle
             if (string.IsNullOrEmpty(path)) return false;
             try
             {
-                if (!File.Exists(path) && !Directory.Exists(path)) return false;
-                FileAttributes attrs = File.GetAttributes(path);
-                if ((attrs & FileAttributes.ReparsePoint) == 0) return false;
-                if (TryGetReparseTag(path, out reparseTag) && IsSafeNonRedirectReparseTag(reparseTag))
+                string query;
+                bool isDriveRoot;
+                if (!TryBuildFindFirstQuery(path, out query, out isDriveRoot))
+                {
+                    return true;
+                }
+                if (isDriveRoot)
                 {
                     return false;
                 }
-                return true;
+                WIN32_FIND_DATAW data;
+                IntPtr handle = FindFirstFileW(query, out data);
+                if (handle == INVALID_HANDLE_VALUE)
+                {
+                    int err = Marshal.GetLastWin32Error();
+                    if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
+                    {
+                        return false;
+                    }
+                    return true;
+                }
+                try
+                {
+                    if ((data.dwFileAttributes & (uint)FileAttributes.ReparsePoint) == 0u)
+                    {
+                        return false;
+                    }
+                    reparseTag = data.dwReserved0;
+                    return !IsSafeNonRedirectReparseTag(reparseTag);
+                }
+                finally
+                {
+                    FindClose(handle);
+                }
             }
             catch
             {
+                return true;
+            }
+        }
+
+        private static string NormalizeChainPath(string rawPath)
+        {
+            if (string.IsNullOrEmpty(rawPath)) return "";
+            string full = Path.GetFullPath(rawPath);
+            string root = Path.GetPathRoot(full);
+            if (!string.IsNullOrEmpty(root) &&
+                string.Equals(full.TrimEnd('\\', '/'), root.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+            {
+                return root;
+            }
+            return full.TrimEnd('\\', '/');
+        }
+
+        /// <summary>
+        /// 检查目录链路（覆盖 ~/.gemini → cfgDir 或沙盒 .gemini → cfgDir 祖先链）是否存在不安全重解析点。
+        /// 任何无法解析或越界异常均 Fail-Closed 返回 true。
+        /// </summary>
+        public static bool HasUnsafeReparsePointInChain(string dirPath, out string unsafePath, out uint reparseTag)
+        {
+            unsafePath = dirPath ?? "";
+            reparseTag = 0u;
+            if (string.IsNullOrEmpty(dirPath)) return false;
+            try
+            {
+                string probeQuery;
+                bool probeIsRoot;
+                if (!TryBuildFindFirstQuery(dirPath, out probeQuery, out probeIsRoot))
+                {
+                    unsafePath = dirPath;
+                    return true;
+                }
+                string cur = NormalizeChainPath(dirPath);
+                if (string.IsNullOrEmpty(cur)) return true;
+
+                string stopRoot = null;
+                string userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                if (string.IsNullOrEmpty(userHome)) userHome = Environment.GetEnvironmentVariable("USERPROFILE");
+                if (!string.IsNullOrEmpty(userHome))
+                {
+                    string defaultGemini = NormalizeChainPath(Path.Combine(userHome, ".gemini"));
+                    string defaultGeminiPrefix = defaultGemini.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+                    if (string.Equals(cur, defaultGemini, StringComparison.OrdinalIgnoreCase) ||
+                        cur.StartsWith(defaultGeminiPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        stopRoot = defaultGemini;
+                    }
+                }
+                if (string.IsNullOrEmpty(stopRoot))
+                {
+                    string scan = cur;
+                    for (int depth = 0; depth < 64 && !string.IsNullOrEmpty(scan); depth++)
+                    {
+                        if (string.Equals(Path.GetFileName(scan), ".gemini", StringComparison.OrdinalIgnoreCase))
+                        {
+                            stopRoot = scan;
+                            break;
+                        }
+                        string up = Path.GetDirectoryName(scan);
+                        if (string.IsNullOrEmpty(up) || string.Equals(up, scan, StringComparison.OrdinalIgnoreCase)) break;
+                        scan = NormalizeChainPath(up);
+                    }
+                }
+                if (string.IsNullOrEmpty(stopRoot))
+                {
+                    stopRoot = cur;
+                }
+
+                string walk = cur;
+                bool reachedStop = false;
+                for (int step = 0; step < 64 && !string.IsNullOrEmpty(walk); step++)
+                {
+                    uint tag;
+                    if (IsUnsafeReparsePoint(walk, out tag))
+                    {
+                        unsafePath = walk;
+                        reparseTag = tag;
+                        return true;
+                    }
+                    if (string.Equals(walk, stopRoot, StringComparison.OrdinalIgnoreCase))
+                    {
+                        reachedStop = true;
+                        break;
+                    }
+                    string parent = Path.GetDirectoryName(walk);
+                    if (string.IsNullOrEmpty(parent) || string.Equals(parent, walk, StringComparison.OrdinalIgnoreCase))
+                    {
+                        break;
+                    }
+                    walk = NormalizeChainPath(parent);
+                }
+                if (!reachedStop)
+                {
+                    unsafePath = dirPath;
+                    return true;
+                }
                 return false;
+            }
+            catch
+            {
+                unsafePath = dirPath;
+                reparseTag = 0u;
+                return true;
             }
         }
 
@@ -984,8 +1187,8 @@ namespace AgyClaudeStyle
             if (string.IsNullOrEmpty(path)) return;
             try
             {
-                if (!File.Exists(path) && !Directory.Exists(path)) return;
                 if (IsUnsafeReparsePoint(path)) return;
+                if (!File.Exists(path) && !Directory.Exists(path)) return;
                 FileAttributes attrs = File.GetAttributes(path);
                 FileAttributes toStrip = FileAttributes.ReadOnly | FileAttributes.Hidden | FileAttributes.System;
                 if ((attrs & toStrip) != 0)
@@ -1001,9 +1204,14 @@ namespace AgyClaudeStyle
         {
             if (string.IsNullOrEmpty(cfgPath)) return;
             string parentDir = Path.GetDirectoryName(cfgPath);
-            if (!string.IsNullOrEmpty(parentDir) && IsUnsafeReparsePoint(parentDir))
+            if (!string.IsNullOrEmpty(parentDir))
             {
-                throw new InvalidOperationException("目标目录为符号链接或重解析点，已拒绝写入: " + parentDir);
+                string badDir;
+                uint badTag;
+                if (HasUnsafeReparsePointInChain(parentDir, out badDir, out badTag))
+                {
+                    throw new InvalidOperationException("目标目录链路包含符号链接或重解析点 [" + DescribeReparseTag(badTag) + "]，已拒绝写入: " + badDir);
+                }
             }
             if (IsUnsafeReparsePoint(cfgPath))
             {
@@ -1012,17 +1220,38 @@ namespace AgyClaudeStyle
             int seq = Interlocked.Increment(ref _atomicWriteSeq);
             string tmpPath = cfgPath + ".tmp." + Process.GetCurrentProcess().Id + "." + seq;
             string content = MiniJson.Stringify(next, true) + "\n";
+            byte[] utf8Bytes = new UTF8Encoding(false).GetBytes(content);
             int[] backoffs = new int[] { 50, 100, 200, 350 };
             Exception lastErr = null;
             for (int attempt = 0; attempt <= backoffs.Length; attempt++)
             {
                 try
                 {
+                    if (!string.IsNullOrEmpty(parentDir))
+                    {
+                        string curBadDir;
+                        uint curBadTag;
+                        if (HasUnsafeReparsePointInChain(parentDir, out curBadDir, out curBadTag))
+                        {
+                            throw new InvalidOperationException("目标目录链路包含符号链接或重解析点 [" + DescribeReparseTag(curBadTag) + "]，已拒绝写入: " + curBadDir);
+                        }
+                    }
                     if (IsUnsafeReparsePoint(cfgPath))
                     {
                         throw new InvalidOperationException("目标文件为符号链接或重解析点，已拒绝覆盖: " + cfgPath);
                     }
-                    File.WriteAllText(tmpPath, content, new UTF8Encoding(false));
+                    if (IsUnsafeReparsePoint(tmpPath))
+                    {
+                        throw new InvalidOperationException("临时文件为符号链接或重解析点，已拒绝写入: " + tmpPath);
+                    }
+                    if (File.Exists(tmpPath))
+                    {
+                        File.Delete(tmpPath);
+                    }
+                    using (FileStream tmpFs = new FileStream(tmpPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    {
+                        tmpFs.Write(utf8Bytes, 0, utf8Bytes.Length);
+                    }
                     if (File.Exists(cfgPath))
                     {
                         ClearReadOnlyAndHiddenAttributes(cfgPath);
@@ -1030,19 +1259,43 @@ namespace AgyClaudeStyle
                         {
                             File.Replace(tmpPath, cfgPath, null, true);
                         }
-                        catch
+                        catch (Exception replaceEx)
                         {
+                            if (!(replaceEx is IOException) && !(replaceEx is UnauthorizedAccessException))
+                            {
+                                throw;
+                            }
+                            if (attempt < backoffs.Length)
+                            {
+                                throw;
+                            }
+                            if (!string.IsNullOrEmpty(parentDir))
+                            {
+                                string fbBadDir;
+                                uint fbBadTag;
+                                if (HasUnsafeReparsePointInChain(parentDir, out fbBadDir, out fbBadTag))
+                                {
+                                    throw new InvalidOperationException("目标目录链路包含符号链接或重解析点 [" + DescribeReparseTag(fbBadTag) + "]，已拒绝回退写入: " + fbBadDir);
+                                }
+                            }
+                            if (IsUnsafeReparsePoint(cfgPath))
+                            {
+                                throw new InvalidOperationException("目标文件为符号链接或重解析点，已拒绝回退覆盖: " + cfgPath);
+                            }
                             ClearReadOnlyAndHiddenAttributes(cfgPath);
                             using (FileStream fs = new FileStream(cfgPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite))
                             {
-                                byte[] bytes = new UTF8Encoding(false).GetBytes(content);
-                                fs.Write(bytes, 0, bytes.Length);
+                                fs.Write(utf8Bytes, 0, utf8Bytes.Length);
                             }
                             try { if (File.Exists(tmpPath)) File.Delete(tmpPath); } catch { }
                         }
                     }
                     else
                     {
+                        if (IsUnsafeReparsePoint(cfgPath))
+                        {
+                            throw new InvalidOperationException("目标文件为符号链接或重解析点，已拒绝覆盖: " + cfgPath);
+                        }
                         File.Move(tmpPath, cfgPath);
                     }
                     return;
@@ -1474,10 +1727,11 @@ namespace AgyClaudeStyle
             string cfgPath = Path.Combine(cfgDir, "config.json");
             try
             {
+                string badDir;
                 uint dirTag;
-                if (IsUnsafeReparsePoint(cfgDir, out dirTag))
+                if (HasUnsafeReparsePointInChain(cfgDir, out badDir, out dirTag))
                 {
-                    reason = "宿主配置目录为 " + DescribeReparseTag(dirTag) + "，已按安全策略跳过自动写入: " + cfgDir;
+                    reason = "宿主配置目录链路包含 " + DescribeReparseTag(dirTag) + "，已按安全策略跳过自动写入: " + badDir;
                     return false;
                 }
                 uint cfgTag;
@@ -1489,6 +1743,16 @@ namespace AgyClaudeStyle
                 if (enable)
                 {
                     Directory.CreateDirectory(cfgDir);
+                    if (HasUnsafeReparsePointInChain(cfgDir, out badDir, out dirTag))
+                    {
+                        reason = "宿主配置目录链路包含 " + DescribeReparseTag(dirTag) + "，已按安全策略跳过自动写入: " + badDir;
+                        return false;
+                    }
+                    if (IsUnsafeReparsePoint(cfgPath, out cfgTag))
+                    {
+                        reason = "宿主 config.json 为 " + DescribeReparseTag(cfgTag) + "（如 dotfiles 软链接），已保护原链接未覆盖: " + cfgPath;
+                        return false;
+                    }
                     Dictionary<string, object> rootObj = new Dictionary<string, object>(StringComparer.Ordinal);
                     if (File.Exists(cfgPath))
                     {
@@ -1565,7 +1829,7 @@ namespace AgyClaudeStyle
                     }
                 }
                 string cacheFile = Path.Combine(cfgDir, "obsidian-prism-thought-cache.json");
-                if (File.Exists(cacheFile) && !IsUnsafeReparsePoint(cacheFile))
+                if (!IsUnsafeReparsePoint(cacheFile) && File.Exists(cacheFile))
                 {
                     try
                     {

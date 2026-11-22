@@ -50,6 +50,7 @@ test('all hardened installer source files use pure LF and UTF-8 without BOM', ()
     path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs'),
     path.join(ROOT_DIR, 'installer', 'watcher', 'Program.cs'),
     path.join(ROOT_DIR, 'installer', 'macos', 'Setup', 'main.swift'),
+    path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'CdpClient.swift'),
     path.join(ROOT_DIR, 'tools', 'install-plugin.cjs'),
   ];
   for (const fp of files) {
@@ -562,6 +563,363 @@ test(
       try {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       } catch {}
+    }
+  }
+);
+
+test('tools/install-plugin.cjs enforces POSIX least-privilege chmod, COPYFILE_EXCL, and thought-cache symlink guard', () => {
+  const src = fs.readFileSync(path.join(ROOT_DIR, 'tools', 'install-plugin.cjs'), 'utf8');
+  assert.ok(src.includes('process.platform === "win32"'), 'clearReadOnlyIfRegularFile must branch on win32 vs POSIX');
+  assert.ok(src.includes('(st.mode & 0o200) === 0'), 'POSIX clearReadOnlyIfRegularFile must only add owner write bit when missing');
+  assert.ok(src.includes('(st.mode & 0o777) | 0o200'), 'POSIX clearReadOnlyIfRegularFile must preserve existing bits without making files world-writable');
+  assert.ok(src.includes('fs.constants.COPYFILE_EXCL'), 'safeCopyFileNoSymlink fallback tmp copy must use COPYFILE_EXCL');
+  assert.match(
+    src,
+    /obsidian-prism-thought-cache\.json[\s\S]{0,180}assertNotSymbolicLink/,
+    'syncHostPluginRegistry must verify thought-cache is not a symlink before unlink'
+  );
+
+  // Exercise POSIX branch logic directly even when running on Windows
+  const origPlatformDesc = Object.getOwnPropertyDescriptor(process, 'platform');
+  const origLstat = fs.lstatSync;
+  const origChmod = fs.chmodSync;
+  const chmodCalls = [];
+  let fakeMode = 0o100400;
+  try {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    fs.lstatSync = () => ({ isSymbolicLink: () => false, isFile: () => true, mode: fakeMode });
+    fs.chmodSync = (p, m) => {
+      chmodCalls.push({ p, m });
+    };
+
+    // 0o400 -> 0o600 (never 0o666!)
+    cliInstaller.clearReadOnlyIfRegularFile('/fake/secret-config.json', 'config');
+    assert.deepEqual(chmodCalls, [{ p: '/fake/secret-config.json', m: 0o600 }]);
+
+    // 0o444 -> 0o644 (never 0o666!)
+    chmodCalls.length = 0;
+    fakeMode = 0o100444;
+    cliInstaller.clearReadOnlyIfRegularFile('/fake/plugin.js', 'plugin');
+    assert.deepEqual(chmodCalls, [{ p: '/fake/plugin.js', m: 0o644 }]);
+
+    // 0o600 already owner-writable -> no chmodSync call at all
+    chmodCalls.length = 0;
+    fakeMode = 0o100600;
+    cliInstaller.clearReadOnlyIfRegularFile('/fake/already-writable.json', 'config');
+    assert.deepEqual(chmodCalls, []);
+  } finally {
+    fs.lstatSync = origLstat;
+    fs.chmodSync = origChmod;
+    if (origPlatformDesc) {
+      Object.defineProperty(process, 'platform', origPlatformDesc);
+    }
+  }
+
+  // Runtime test: syncHostPluginRegistry(disable) refuses deleting symlinked obsidian-prism-thought-cache.json
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-cli-cache-sym-'));
+  try {
+    const cfgDir = path.join(tmpDir, '.gemini', 'config');
+    fs.mkdirSync(cfgDir, { recursive: true });
+    const victimFile = path.join(tmpDir, 'victim-secret.txt');
+    fs.writeFileSync(victimFile, 'DO_NOT_DELETE', 'utf8');
+    const cacheLink = path.join(cfgDir, 'obsidian-prism-thought-cache.json');
+    let linkCreated = false;
+    try {
+      fs.symlinkSync(victimFile, cacheLink, 'file');
+      linkCreated = true;
+    } catch {}
+    if (linkCreated) {
+      const ok = cliInstaller.syncHostPluginRegistry(cfgDir, false);
+      assert.equal(ok, false, 'syncHostPluginRegistry(disable) must refuse symlinked thought cache');
+      assert.equal(fs.lstatSync(cacheLink).isSymbolicLink(), true, 'Symlink must remain untouched');
+      assert.equal(fs.readFileSync(victimFile, 'utf8'), 'DO_NOT_DELETE');
+    }
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {}
+  }
+});
+
+test('macOS CdpClient.swift, macOS Setup main.swift, and Windows watcher/setup contain R2 red-team hardening contracts', () => {
+  const macCdp = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'CdpClient.swift'), 'utf8');
+  assert.ok(macCdp.includes('lstat(path, &st)'), 'CdpClient.swift must use lstat for Fail-Closed symlink checks');
+  assert.ok(macCdp.includes('errno != ENOENT'), 'CdpClient.swift must Fail-Closed on non-ENOENT lstat errors');
+  assert.ok(macCdp.includes('hasSymbolicLinkInHostConfigChain'), 'CdpClient.swift must validate ~/.gemini -> cfgDir ancestor chain');
+  assert.ok(macCdp.includes('O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW'), 'CdpClient.swift must create tmp files with O_CREAT|O_EXCL|O_NOFOLLOW');
+  assert.ok(macCdp.includes('mode_t(0o600)'), 'CdpClient.swift must create tmp files with 0o600 permissions');
+  assert.ok(macCdp.includes('UUID().uuidString'), 'CdpClient.swift must use unique unpredictable tmp filename');
+  assert.ok(macCdp.includes('errno == EINTR'), 'CdpClient.swift write loop must handle EINTR');
+  assert.ok(macCdp.includes('unlink(tmpPath)'), 'CdpClient.swift must unlink tmpPath on failure');
+  assert.equal(macCdp.includes('let tmpPath = path + ".tmp"'), false, 'CdpClient.swift must not use predictable .tmp filename');
+  assert.equal(
+    macCdp.includes('content.write(toFile: path'),
+    false,
+    'CdpClient.swift must never fall back to overwriting path in-place when rename fails'
+  );
+  assert.match(
+    macCdp,
+    /obsidian-prism-thought-cache\.json[\s\S]{0,160}isSymbolicLinkOrUnsafePath/,
+    'CdpClient.swift must check thought-cache symlink before removal'
+  );
+
+  const macMain = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Setup', 'main.swift'), 'utf8');
+  assert.ok(macMain.includes('getppid()'), 'main.swift must exclude getppid() when stopping orphan daemons');
+  assert.ok(macMain.includes('extractExecutableBasename'), 'main.swift must verify argv[0]/comm basename whitelist');
+  assert.ok(macMain.includes('"antigravity helper (plugin)"'), 'main.swift basename whitelist must cover Antigravity Helper (Plugin)');
+  assert.ok(macMain.includes('base + "/sidecars/daemon/main.mjs"'), 'main.swift must match exact combined plugin entry paths');
+  assert.ok(macMain.includes('cmd.contains("--root ") || cmd.contains("sidecar_sdk") || cmd.contains("--import=")'), 'main.swift must require daemon features for Antigravity main binary');
+  assert.ok(macMain.includes('hasSymbolicLinkInChain(installDir, stopRoot:'), 'main.swift runInstall must check installDir ancestor chain');
+  assert.ok(macMain.includes('hasSymbolicLinkInChain(pluginDir, stopRoot:'), 'main.swift runInstall must check pluginDir ancestor chain');
+  assert.ok(macMain.includes('_ = fputs('), 'main.swift must discard fputs return value to avoid Swift compiler warning');
+  assert.equal(/(?<!_ = )fputs\(/.test(macMain), false, 'main.swift must not have bare fputs() calls');
+  assert.match(
+    macMain,
+    /func copyItemSafelyWithRetry[\s\S]*?\.tmp\.\\\(getpid\(\)\)\.[\s\S]*?\.old\.\\\(getpid\(\)\)\./,
+    'main.swift copyItemSafelyWithRetry must copy to unique tmp path first and roll back on replacement failure'
+  );
+
+  const watcherCs = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'watcher', 'Program.cs'), 'utf8');
+  assert.ok(watcherCs.includes('IsUnsafeReparsePoint(_pidFile)'), 'watcher Program.cs must guard _pidFile against unsafe reparse points');
+  assert.ok(watcherCs.includes('IsUnsafeReparsePoint(_logFile)'), 'watcher Program.cs must guard _logFile against unsafe reparse points');
+
+  const setupCs = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'setup', 'Program.cs'), 'utf8');
+  assert.ok(setupCs.includes('bool movedToOld = false;'), 'setup Program.cs must track movedToOld for PE rollback');
+  assert.ok(setupCs.includes('File.Move(staleOld, destPath)'), 'setup Program.cs must roll back staleOld when stage-2 PE replacement fails');
+  assert.ok(setupCs.includes('QuotePathArgumentStrict'), 'setup Program.cs must validate and quote custom path arguments');
+  assert.ok(setupCs.includes('depth > 8'), 'setup Program.cs CleanupStaleOldFiles must recurse safely with max depth 8');
+
+  const cdpCs = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs'), 'utf8');
+  assert.ok(cdpCs.includes('ERROR_FILE_NOT_FOUND'), 'CdpClient.cs IsUnsafeReparsePoint must check Win32 ERROR_FILE_NOT_FOUND');
+  assert.ok(cdpCs.includes('ERROR_PATH_NOT_FOUND'), 'CdpClient.cs IsUnsafeReparsePoint must check Win32 ERROR_PATH_NOT_FOUND');
+  assert.ok(cdpCs.includes('HasUnsafeReparsePointInChain'), 'CdpClient.cs must verify ~/.gemini -> cfgDir ancestor chain');
+});
+
+test(
+  'Windows C# R2 security probe verifies Fail-Closed IsUnsafeReparsePoint (wildcards/dangling/long-path/ancestor-chain), exact orphan daemon matching, strict path quoting, CopyFileWithRetry symlink throw, and recursive CleanupStaleOldFiles',
+  { skip: process.platform !== 'win32' ? 'Windows-only C# R2 security probe' : false },
+  () => {
+    const csc = findCsc();
+    assert.ok(csc, 'Expected .NET Framework csc.exe on Windows');
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-r2-sec-probe-'));
+    const cleanupJunctions = [];
+    try {
+      const probeCs = path.join(tmpDir, 'R2SecProbe.cs');
+      const probeExe = path.join(tmpDir, 'r2-sec-probe.exe');
+
+      // 1) Dangling/broken NTFS junction (target deleted after mklink /J)
+      const doomedTarget = path.join(tmpDir, 'doomed-target');
+      const brokenJunction = path.join(tmpDir, 'broken-junction');
+      fs.mkdirSync(doomedTarget, { recursive: true });
+      execFileSync('cmd.exe', ['/c', 'mklink', '/J', brokenJunction, doomedTarget], { stdio: 'ignore' });
+      cleanupJunctions.push(brokenJunction);
+      fs.rmdirSync(doomedTarget);
+
+      // 2) Long path >= 248 chars normal file
+      let longDir = tmpDir;
+      for (let i = 0; i < 8; i++) {
+        longDir = path.join(longDir, `seg_${i}_0123456789abcdef0123456789`);
+      }
+      const extLongDir = `\\\\?\\${longDir}`;
+      fs.mkdirSync(extLongDir, { recursive: true });
+      const longFile = path.join(longDir, 'normal-file.txt');
+      fs.writeFileSync(`\\\\?\\${longFile}`, 'ok', 'utf8');
+      assert.ok(longFile.length >= 248, `Expected longFile length >= 248, got ${longFile.length}`);
+
+      // 3) Ancestor chain junction: tmpDir/chain-test/.gemini -> victimGemini
+      const chainRoot = path.join(tmpDir, 'chain-test');
+      const victimGemini = path.join(tmpDir, 'victim-gemini');
+      const evilGeminiJunction = path.join(chainRoot, '.gemini');
+      fs.mkdirSync(chainRoot, { recursive: true });
+      fs.mkdirSync(victimGemini, { recursive: true });
+      execFileSync('cmd.exe', ['/c', 'mklink', '/J', evilGeminiJunction, victimGemini], { stdio: 'ignore' });
+      cleanupJunctions.push(evilGeminiJunction);
+      const chainPluginDir = path.join(evilGeminiJunction, 'config', 'plugins', 'obsidian-prism');
+
+      // 4) CleanupStaleOldFiles nested tree + external junction protection
+      const cleanRoot = path.join(tmpDir, 'clean-root');
+      const nestedDir = path.join(cleanRoot, 'sub1', 'sub2');
+      const extKeepDir = path.join(tmpDir, 'ext-keep');
+      const nestedJunction = path.join(cleanRoot, 'linked-sub');
+      fs.mkdirSync(nestedDir, { recursive: true });
+      fs.mkdirSync(extKeepDir, { recursive: true });
+      const nestedOldFile = path.join(nestedDir, 'helper.dll.old.123.1.0');
+      const extOldFile = path.join(extKeepDir, 'keep.dll.old.999.1.0');
+      fs.writeFileSync(nestedOldFile, 'stale', 'utf8');
+      fs.writeFileSync(extOldFile, 'must-keep', 'utf8');
+      execFileSync('cmd.exe', ['/c', 'mklink', '/J', nestedJunction, extKeepDir], { stdio: 'ignore' });
+      cleanupJunctions.push(nestedJunction);
+
+      // 5) CopyFileWithRetry source/dest junction refusal (must throw InvalidOperationException, not silently return)
+      const copySrc = path.join(tmpDir, 'copy-src.txt');
+      fs.writeFileSync(copySrc, 'payload', 'utf8');
+
+      fs.writeFileSync(
+        probeCs,
+        [
+          'using System;',
+          'using System.Collections.Generic;',
+          'using System.IO;',
+          'using System.Reflection;',
+          'using AgyClaudeStyle;',
+          'using AgyClaudeStyle.Installer;',
+          'class R2SecProbe {',
+          '  static void Main(string[] args) {',
+          '    string brokenJ = args[0];',
+          '    string longFile = args[1];',
+          '    string chainPluginDir = args[2];',
+          '    string cleanRoot = args[3];',
+          '    string copySrc = args[4];',
+          '    string tmpDir = args[5];',
+          '',
+          '    uint brokenTag;',
+          '    bool brokenUnsafe = CdpHelper.IsUnsafeReparsePoint(brokenJ, out brokenTag);',
+          '    bool starUnsafe = CdpHelper.IsUnsafeReparsePoint(tmpDir + "\\\\*.json");',
+          '    bool qmarkUnsafe = CdpHelper.IsUnsafeReparsePoint(tmpDir + "\\\\a?.json");',
+          '    bool invalidNameUnsafe = CdpHelper.IsUnsafeReparsePoint(tmpDir + "\\\\bad|name.json");',
+          '    bool driveRootUnsafe = CdpHelper.IsUnsafeReparsePoint(Path.GetPathRoot(tmpDir));',
+          '    bool missingUnsafe = CdpHelper.IsUnsafeReparsePoint(Path.Combine(tmpDir, "definitely-missing-xyz.json"));',
+          '    bool longNormalUnsafe = CdpHelper.IsUnsafeReparsePoint(longFile);',
+          '',
+          '    string chainReason;',
+          '    bool chainRegOk = CdpHelper.SyncHostPluginRegistry(chainPluginDir, true, out chainReason);',
+          '',
+          '    string pDir = @"C:\\Users\\Alice\\.gemini\\config\\plugins\\obsidian-prism";',
+          '    bool matchNodeExact = InstallerCore.IsExactOrphanDaemonCommand(',
+          '      "\\"C:\\\\Program Files\\\\nodejs\\\\node.exe\\" \\"" + pDir + "\\\\sidecars\\\\daemon\\\\main.mjs\\" --root \\"" + pDir + "\\"",',
+          '      pDir, false, false);',
+          '    bool matchAgDaemon = InstallerCore.IsExactOrphanDaemonCommand(',
+          '      "\\"C:\\\\Antigravity.exe\\" --import=file:///sidecar_sdk/register_loader.js \\"" + pDir + "\\\\sidecars\\\\daemon\\\\main.mjs\\"",',
+          '      pDir, true, false);',
+          '    bool rejectOtherPlugin = InstallerCore.IsExactOrphanDaemonCommand(',
+          '      "node.exe \\"C:\\\\other\\\\daemon\\\\main.mjs\\" --dir \\"" + pDir + "\\"",',
+          '      pDir, false, false);',
+          '    bool rejectAgGui = InstallerCore.IsExactOrphanDaemonCommand(',
+          '      "\\"C:\\\\Antigravity.exe\\" \\"" + pDir + "\\\\sidecars\\\\daemon\\\\main.mjs\\"",',
+          '      pDir, true, true);',
+          '    bool rejectAgNoFeature = InstallerCore.IsExactOrphanDaemonCommand(',
+          '      "\\"C:\\\\Antigravity.exe\\" \\"" + pDir + "\\\\sidecars\\\\daemon\\\\main.mjs\\"",',
+          '      pDir, true, false);',
+          '    bool rejectRenderer = InstallerCore.IsExactOrphanDaemonCommand(',
+          '      "\\"C:\\\\Antigravity.exe\\" --type=renderer --root \\"" + pDir + "\\" \\"" + pDir + "\\\\sidecars\\\\daemon\\\\main.mjs\\"",',
+          '      pDir, true, false);',
+          '    bool rejectSuffixMismatch = InstallerCore.IsExactOrphanDaemonCommand(',
+          '      "node.exe \\"" + pDir + "\\\\sidecars\\\\daemon\\\\main.mjs.bak\\"",',
+          '      pDir, false, false);',
+          '',
+          '    string quotedRoot = InstallerCore.QuotePathArgumentStrict(@"C:\\", "--dir");',
+          '    bool rejectedQuoteArg = false;',
+          '    try { InstallerCore.QuotePathArgumentStrict("C:\\\\evil\\"path", "--dir"); }',
+          '    catch (InvalidOperationException) { rejectedQuoteArg = true; }',
+          '',
+          '    MethodInfo copyMethod = typeof(InstallerCore).GetMethod("CopyFileWithRetry", BindingFlags.NonPublic | BindingFlags.Static);',
+          '    bool copyThrewOnJunction = false;',
+          '    try { copyMethod.Invoke(null, new object[] { copySrc, brokenJ, true }); }',
+          '    catch (TargetInvocationException tie) { copyThrewOnJunction = tie.InnerException is InvalidOperationException; }',
+          '',
+          '    MethodInfo cleanMethod = typeof(InstallerCore).GetMethod("CleanupStaleOldFiles", BindingFlags.NonPublic | BindingFlags.Static);',
+          '    cleanMethod.Invoke(null, new object[] { cleanRoot, 0 });',
+          '',
+          '    var res = new Dictionary<string, object>(StringComparer.Ordinal) {',
+          '      { "brokenUnsafe", brokenUnsafe },',
+          '      { "brokenDesc", CdpHelper.DescribeReparseTag(brokenTag) },',
+          '      { "starUnsafe", starUnsafe },',
+          '      { "qmarkUnsafe", qmarkUnsafe },',
+          '      { "invalidNameUnsafe", invalidNameUnsafe },',
+          '      { "driveRootUnsafe", driveRootUnsafe },',
+          '      { "missingUnsafe", missingUnsafe },',
+          '      { "longNormalUnsafe", longNormalUnsafe },',
+          '      { "chainRegOk", chainRegOk },',
+          '      { "chainReason", chainReason ?? "" },',
+          '      { "matchNodeExact", matchNodeExact },',
+          '      { "matchAgDaemon", matchAgDaemon },',
+          '      { "rejectOtherPlugin", rejectOtherPlugin },',
+          '      { "rejectAgGui", rejectAgGui },',
+          '      { "rejectAgNoFeature", rejectAgNoFeature },',
+          '      { "rejectRenderer", rejectRenderer },',
+          '      { "rejectSuffixMismatch", rejectSuffixMismatch },',
+          '      { "quotedRoot", quotedRoot },',
+          '      { "rejectedQuoteArg", rejectedQuoteArg },',
+          '      { "copyThrewOnJunction", copyThrewOnJunction }',
+          '    };',
+          '    Console.Write(MiniJson.Stringify(res, false));',
+          '  }',
+          '}',
+        ].join('\n'),
+        'utf8'
+      );
+
+      execFileSync(
+        csc,
+        [
+          '/nologo',
+          '/utf8output',
+          '/codepage:65001',
+          '/warnaserror',
+          '/target:exe',
+          '/main:R2SecProbe',
+          `/out:${probeExe}`,
+          '/r:System.dll',
+          '/r:System.Core.dll',
+          '/r:System.Drawing.dll',
+          '/r:System.IO.Compression.dll',
+          '/r:System.IO.Compression.FileSystem.dll',
+          '/r:System.Management.dll',
+          '/r:System.Net.Http.dll',
+          '/r:System.Windows.Forms.dll',
+          path.join(ROOT_DIR, 'installer', 'common', 'MiniJson.cs'),
+          path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs'),
+          path.join(ROOT_DIR, 'installer', 'setup', 'Program.cs'),
+          probeCs,
+        ],
+        { stdio: 'pipe' }
+      );
+
+      const out = JSON.parse(
+        execFileSync(probeExe, [brokenJunction, longFile, chainPluginDir, cleanRoot, copySrc, tmpDir], {
+          encoding: 'utf8',
+          env: { ...process.env, AG_PRISM_GEMINI_CONFIG_DIR: '' },
+        })
+      );
+
+      assert.equal(out.brokenUnsafe, true, 'Dangling/broken NTFS junction must be rejected');
+      assert.ok(out.brokenDesc.includes('0xA0000003'), `Expected Junction tag for broken junction, got: ${out.brokenDesc}`);
+      assert.equal(out.starUnsafe, true, 'Wildcard * path must Fail-Closed');
+      assert.equal(out.qmarkUnsafe, true, 'Wildcard ? path must Fail-Closed');
+      assert.equal(out.invalidNameUnsafe, true, 'Invalid Win32 path error must Fail-Closed');
+      assert.equal(out.driveRootUnsafe, false, 'Drive root must not be flagged as unsafe reparse point');
+      assert.equal(out.missingUnsafe, false, 'Missing path (ENOENT) must return false');
+      assert.equal(out.longNormalUnsafe, false, 'Normal file at >=248 char path must be handled via \\\\?\\ prefix');
+
+      assert.equal(out.chainRegOk, false, 'SyncHostPluginRegistry must reject junction in .gemini ancestor chain');
+      assert.ok(out.chainReason.includes('0xA0000003'), `Expected Junction tag in chain reason, got: ${out.chainReason}`);
+      assert.deepEqual(fs.readdirSync(victimGemini), [], 'Victim directory behind .gemini junction must remain untouched');
+
+      assert.equal(out.matchNodeExact, true, 'Exact node daemon command must match');
+      assert.equal(out.matchAgDaemon, true, 'Headless Antigravity sidecar daemon with --import/sidecar_sdk must match');
+      assert.equal(out.rejectOtherPlugin, false, 'Other plugin daemon referencing pluginDir as argument must NOT match');
+      assert.equal(out.rejectAgGui, false, 'Antigravity GUI window opening main.mjs must NOT match');
+      assert.equal(out.rejectAgNoFeature, false, 'Antigravity main binary without daemon feature must NOT match');
+      assert.equal(out.rejectRenderer, false, 'Antigravity --type=renderer must NOT match');
+      assert.equal(out.rejectSuffixMismatch, false, 'Suffix mismatch (main.mjs.bak) must NOT match');
+
+      assert.equal(out.quotedRoot, '"C:\\\\"');
+      assert.equal(out.rejectedQuoteArg, true, 'QuotePathArgumentStrict must reject paths containing double quotes');
+      assert.equal(out.copyThrewOnJunction, true, 'CopyFileWithRetry must throw InvalidOperationException on reparse point rather than silently returning');
+
+      assert.equal(fs.existsSync(nestedOldFile), false, 'CleanupStaleOldFiles must recursively delete nested *.old.* files');
+      assert.equal(fs.existsSync(extOldFile), true, 'CleanupStaleOldFiles must skip NTFS junctions and preserve external files');
+    } finally {
+      for (const j of cleanupJunctions) {
+        try { execFileSync('cmd.exe', ['/c', 'rmdir', j], { stdio: 'ignore' }); } catch {}
+      }
+      try {
+        fs.rmSync(`\\\\?\\${tmpDir}`, { recursive: true, force: true });
+      } catch {
+        try {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        } catch {}
+      }
     }
   }
 );

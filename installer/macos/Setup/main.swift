@@ -91,29 +91,139 @@ enum InstallerCore {
         return nil
     }
 
+    private static func matchesExactCommandPath(_ normalizedCmd: String, exactPath: String) -> Bool {
+        guard !normalizedCmd.isEmpty, !exactPath.isEmpty else { return false }
+        var searchStart = normalizedCmd.startIndex
+        while searchStart < normalizedCmd.endIndex,
+              let range = normalizedCmd.range(of: exactPath, range: searchStart..<normalizedCmd.endIndex) {
+            let leftOk: Bool
+            if range.lowerBound == normalizedCmd.startIndex {
+                leftOk = true
+            } else {
+                let prev = normalizedCmd[normalizedCmd.index(before: range.lowerBound)]
+                leftOk = prev.isWhitespace || prev == "\"" || prev == "'" || prev == "="
+            }
+            let rightOk: Bool
+            if range.upperBound == normalizedCmd.endIndex {
+                rightOk = true
+            } else {
+                let next = normalizedCmd[range.upperBound]
+                rightOk = next.isWhitespace || next == "\"" || next == "'" || next == "," || next == ";"
+            }
+            if leftOk && rightOk {
+                return true
+            }
+            searchStart = normalizedCmd.index(after: range.lowerBound)
+        }
+        return false
+    }
+
+    private static func extractExecutableBasename(rawCommand: String, pid: Int32) -> String {
+        let psComm = runProcessSync(executable: "/bin/ps", arguments: ["-p", "\(pid)", "-o", "comm="])
+        let commTrimmed = psComm.stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        if !commTrimmed.isEmpty {
+            return (commTrimmed as NSString).lastPathComponent.lowercased()
+        }
+        let trimmed = rawCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "" }
+        var argv0 = ""
+        if let firstChar = trimmed.first, firstChar == "\"" || firstChar == "'" {
+            let rest = trimmed.dropFirst()
+            if let endIdx = rest.firstIndex(of: firstChar) {
+                argv0 = String(rest[..<endIdx])
+            } else {
+                argv0 = String(rest)
+            }
+        } else {
+            let lower = trimmed.lowercased()
+            let knownMacOsMarkers = [
+                "/contents/macos/antigravity helper (plugin)",
+                "/contents/macos/antigravity helper",
+                "/contents/macos/antigravity",
+            ]
+            var matchedMarker: String? = nil
+            for marker in knownMacOsMarkers {
+                if let r = lower.range(of: marker),
+                   r.upperBound == lower.endIndex || lower[r.upperBound].isWhitespace {
+                    matchedMarker = String(lower[..<r.upperBound])
+                    break
+                }
+            }
+            if let found = matchedMarker {
+                argv0 = found
+            } else if let wsIdx = trimmed.firstIndex(where: { $0.isWhitespace }) {
+                argv0 = String(trimmed[..<wsIdx])
+            } else {
+                argv0 = trimmed
+            }
+        }
+        let cleaned = argv0.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        return (cleaned as NSString).lastPathComponent.lowercased()
+    }
+
     static func stopNativeDaemonInDir(_ pluginDir: String, log: ((String) -> Void)?) {
         guard !pluginDir.isEmpty, FileManager.default.fileExists(atPath: pluginDir) else { return }
+        let selfPid = getpid()
+        let parentPid = getppid()
         var stoppedPids = Set<Int32>()
-        if let pid = CdpHelper.readNativeDaemonPid(pluginDir: pluginDir), pid > 0, pid != getpid() {
+        if let pid = CdpHelper.readNativeDaemonPid(pluginDir: pluginDir), pid > 0, pid != selfPid, pid != parentPid {
             if CdpHelper.isExpectedDaemonProcess(pid: pid, pluginDir: pluginDir) && terminatePid(pid) {
                 stoppedPids.insert(pid)
                 log?("已停止原生 Sidecar Daemon (PID \(pid))")
             }
         }
-        // 清理命令行明确指向当前 pluginDir 的残留孤儿 daemon（严格限定当前目录，不触碰其他插件或宿主主进程）
-        let normalizedDir = URL(fileURLWithPath: pluginDir).standardizedFileURL.path.lowercased()
-        if !normalizedDir.isEmpty {
+        // 清理命令行精确指向当前 pluginDir 入口脚本的残留孤儿 daemon（组合完整路径 + argv[0] 白名单 + 排除自身与父进程）
+        let rawStdDir = URL(fileURLWithPath: pluginDir).standardizedFileURL.path
+        let stdDirClean = (rawStdDir.count > 1 && rawStdDir.hasSuffix("/")) ? String(rawStdDir.dropLast()) : rawStdDir
+        let sysNormDir = normalizeSystemRootPrefix(pluginDir)
+        var dirCandidates: [String] = []
+        if !stdDirClean.isEmpty {
+            dirCandidates.append(stdDirClean.lowercased())
+        }
+        let sysNormLower = sysNormDir.lowercased()
+        if !sysNormLower.isEmpty && !dirCandidates.contains(sysNormLower) {
+            dirCandidates.append(sysNormLower)
+        }
+        if !dirCandidates.isEmpty {
+            var exactEntries: [String] = []
+            for base in dirCandidates {
+                exactEntries.append(base + "/sidecars/daemon/main.mjs")
+                exactEntries.append(base + "/daemon/main.mjs")
+                exactEntries.append(base + "/watch.js")
+            }
+            let allowedBasenames: Set<String> = [
+                "node",
+                "antigravity",
+                "antigravity helper",
+                "antigravity helper (plugin)",
+                "electron",
+                "agy",
+            ]
             let ps = runProcessSync(executable: "/bin/ps", arguments: ["-ax", "-o", "pid=,command="])
             for rawLine in ps.stdout.components(separatedBy: CharacterSet.newlines) {
                 let line = rawLine.trimmingCharacters(in: .whitespaces)
                 if line.isEmpty { continue }
                 let parts = line.split(maxSplits: 1, omittingEmptySubsequences: true, whereSeparator: { $0.isWhitespace })
-                guard parts.count == 2, let pid = Int32(parts[0]), pid > 0, pid != getpid(), !stoppedPids.contains(pid) else { continue }
-                let cmd = String(parts[1]).lowercased()
+                guard parts.count == 2,
+                      let pid = Int32(parts[0]),
+                      pid > 0,
+                      pid != selfPid,
+                      pid != parentPid,
+                      !stoppedPids.contains(pid) else { continue }
+                let rawCmd = String(parts[1])
+                let cmd = rawCmd.replacingOccurrences(of: "\\", with: "/").lowercased()
                 if cmd.contains("--type=") { continue }
-                let matchesDir = cmd.contains(normalizedDir + "/") || cmd.contains(normalizedDir + "\"") || cmd.hasSuffix(normalizedDir)
-                let matchesEntry = cmd.contains("sidecars/daemon/main.mjs") || cmd.contains("/daemon/main.mjs") || cmd.contains("/watch.js")
-                if matchesDir && matchesEntry && terminatePid(pid) {
+                let matchesExactEntry = exactEntries.contains { matchesExactCommandPath(cmd, exactPath: $0) }
+                guard matchesExactEntry else { continue }
+                let exeBasename = extractExecutableBasename(rawCommand: rawCmd, pid: pid)
+                guard allowedBasenames.contains(exeBasename) else { continue }
+                if exeBasename == "antigravity" {
+                    let hasDaemonFeature = cmd.contains("--root ") || cmd.contains("sidecar_sdk") || cmd.contains("--import=")
+                    if !hasDaemonFeature { continue }
+                }
+                if terminatePid(pid) {
                     stoppedPids.insert(pid)
                     log?("已清理残留 Sidecar Daemon (PID \(pid))")
                 }
@@ -262,7 +372,7 @@ enum InstallerCore {
     }
 
     private static func terminatePid(_ pid: Int32) -> Bool {
-        guard pid > 0, pid != getpid() else { return false }
+        guard pid > 0, pid != getpid(), pid != getppid() else { return false }
         guard kill(pid, 0) == 0 else { return false }
         _ = kill(pid, SIGTERM)
         let deadline = Date().addingTimeInterval(2.0)
@@ -448,6 +558,10 @@ enum InstallerCore {
         if isSymbolicLink(src) {
             throw CdpError("检测到源文件为符号链接，已拒绝复制: \(src)")
         }
+        let destParent = (dest as NSString).deletingLastPathComponent
+        if !destParent.isEmpty && isSymbolicLink(destParent) {
+            throw CdpError("检测到目标父目录为符号链接，已拒绝覆盖: \(destParent)")
+        }
         if isSymbolicLink(dest) {
             throw CdpError("检测到目标路径为符号链接，已拒绝覆盖: \(dest)")
         }
@@ -455,17 +569,67 @@ enum InstallerCore {
         let backoffs: [TimeInterval] = [0.06, 0.12, 0.25, 0.4]
         var lastError: Error? = nil
         for attempt in 0...backoffs.count {
+            let tmpPath = "\(dest).tmp.\(getpid()).\(UUID().uuidString)"
+            var copiedTmp = false
             do {
                 if isSymbolicLink(dest) {
                     throw CdpError("检测到目标路径为符号链接，已拒绝覆盖: \(dest)")
                 }
-                if fm.fileExists(atPath: dest) {
-                    clearReadOnlyPermissionsNoSymlink(dest)
-                    try fm.removeItem(atPath: dest)
+                if isSymbolicLink(tmpPath) {
+                    throw CdpError("检测到临时目标为符号链接，已拒绝写入: \(tmpPath)")
                 }
-                try fm.copyItem(atPath: src, toPath: dest)
-                return
+                var srcIsDir: ObjCBool = false
+                guard fm.fileExists(atPath: src, isDirectory: &srcIsDir) else {
+                    throw CdpError("源文件不存在: \(src)")
+                }
+                // 先拷贝至同目录唯一临时路径再原子替换，复制失败绝不丢失原目标
+                try fm.copyItem(atPath: src, toPath: tmpPath)
+                copiedTmp = true
+
+                var destIsDir: ObjCBool = false
+                let destExists = fm.fileExists(atPath: dest, isDirectory: &destIsDir)
+                if !destExists {
+                    if isSymbolicLink(dest) {
+                        throw CdpError("检测到目标路径为符号链接，已拒绝覆盖: \(dest)")
+                    }
+                    if rename(tmpPath, dest) != 0 {
+                        try fm.moveItem(atPath: tmpPath, toPath: dest)
+                    }
+                    return
+                }
+
+                if !srcIsDir.boolValue && !destIsDir.boolValue {
+                    if isSymbolicLink(dest) {
+                        throw CdpError("检测到目标路径为符号链接，已拒绝覆盖: \(dest)")
+                    }
+                    if rename(tmpPath, dest) == 0 {
+                        return
+                    }
+                }
+
+                // 目录或 rename 受阻时采用可回滚 .old 两阶段替换
+                clearReadOnlyPermissionsNoSymlink(dest)
+                if isSymbolicLink(dest) {
+                    throw CdpError("检测到目标路径为符号链接，已拒绝覆盖: \(dest)")
+                }
+                let backupPath = "\(dest).old.\(getpid()).\(UUID().uuidString)"
+                var movedOld = false
+                do {
+                    try fm.moveItem(atPath: dest, toPath: backupPath)
+                    movedOld = true
+                    try fm.moveItem(atPath: tmpPath, toPath: dest)
+                    try? fm.removeItem(atPath: backupPath)
+                    return
+                } catch {
+                    if movedOld && fm.fileExists(atPath: backupPath) && !fm.fileExists(atPath: dest) {
+                        try? fm.moveItem(atPath: backupPath, toPath: dest)
+                    }
+                    throw error
+                }
             } catch {
+                if copiedTmp && fm.fileExists(atPath: tmpPath) {
+                    try? fm.removeItem(atPath: tmpPath)
+                }
                 if error is CdpError { throw error }
                 lastError = error
                 if attempt < backoffs.count {
@@ -597,14 +761,16 @@ enum InstallerCore {
             report(45, "正在部署原生 Sidecar 插件与独立守护资源...")
             let fm = FileManager.default
             currentTargetPath = installDir
-            if isSymbolicLink(installDir) {
-                throw CdpError("检测到安装目录为符号链接，已拒绝操作: \(installDir)")
+            let installStopRoot = resolveInstallChainStopRoot(installDir)
+            if isSymbolicLink(installDir) || hasSymbolicLinkInChain(installDir, stopRoot: installStopRoot) {
+                throw CdpError("检测到安装目录或其父目录链路包含符号链接，已拒绝操作: \(installDir)")
             }
             try fm.createDirectory(atPath: installDir, withIntermediateDirectories: true, attributes: nil)
             if !pluginDir.isEmpty {
                 currentTargetPath = pluginDir
-                if isSymbolicLink(pluginDir) {
-                    throw CdpError("检测到插件目录为符号链接，已拒绝操作: \(pluginDir)")
+                let pluginStopRoot = resolveInstallChainStopRoot(pluginDir)
+                if isSymbolicLink(pluginDir) || hasSymbolicLinkInChain(pluginDir, stopRoot: pluginStopRoot) {
+                    throw CdpError("检测到插件目录或其父目录链路包含符号链接，已拒绝操作: \(pluginDir)")
                 }
                 try fm.createDirectory(atPath: pluginDir, withIntermediateDirectories: true, attributes: nil)
                 cleanupLegacySiblingPluginDir(pluginDir) { msg in report(46, msg) }
@@ -981,6 +1147,24 @@ enum InstallerCore {
             }
         }
         return nil
+    }
+
+    private static func resolveInstallChainStopRoot(_ dirPath: String) -> String {
+        let norm = normalizeSystemRootPrefix(dirPath)
+        let home = normalizeSystemRootPrefix(FileManager.default.homeDirectoryForCurrentUser.path)
+        if !home.isEmpty && (norm == home || norm.hasPrefix(home + "/")) {
+            return home
+        }
+        if norm == "/private/tmp" || norm.hasPrefix("/private/tmp/") {
+            return "/private/tmp"
+        }
+        if norm == "/private/var" || norm.hasPrefix("/private/var/") {
+            return "/private/var"
+        }
+        if norm == "/Applications" || norm.hasPrefix("/Applications/") {
+            return "/Applications"
+        }
+        return "/"
     }
 
     private static func hasSymbolicLinkInChain(_ targetDir: String, stopRoot: String) -> Bool {
@@ -1847,7 +2031,7 @@ func runInstallerMain() -> Int32 {
                 let text = MiniJson.stringify(.object(errObj), pretty: true) + "\n"
                 try? text.write(toFile: outFile, atomically: true, encoding: .utf8)
             } else {
-                fputs("[Obsidian Prism Installer] Error: \(error.localizedDescription)\n", stderr)
+                _ = fputs("[Obsidian Prism Installer] Error: \(error.localizedDescription)\n", stderr)
             }
             if opts.popup {
                 let app = NSApplication.shared
