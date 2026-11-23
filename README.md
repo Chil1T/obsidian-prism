@@ -258,14 +258,7 @@ obsidian-prism/
 
 ### 3. 社区贡献者 (Community Contributors)
 
-衷心感谢以下社区贡献者通过 PR、安全加固、深度性能剖析与一线缺陷定位推动 Obsidian Prism 持续演进：
+衷心感谢所有通过 Pull Request、安全加固、性能剖析与一线缺陷定位推动 Obsidian Prism 持续演进的社区伙伴！
 
-- **[@TheSixPasserby](https://github.com/TheSixPasserby)**（ハチケイ）— [PR #6](https://github.com/RMvdesi/obsidian-prism/pull/6) & [Issue #5](https://github.com/RMvdesi/obsidian-prism/issues/5)（通过 `Co-authored-by` 正式纳入 Contributors 榜单）：消除 Blink `:has()` `RecalcStyle` 风暴、Canvas 水平 RLE 批处理、macOS 真 `0fps` 失焦休眠与 Antigravity `v2.34.0` `renderer-proxy` 分级缓存。
-- **[@yzd05](https://github.com/yzd05)** — [PR #10](https://github.com/RMvdesi/obsidian-prism/pull/10)、[PR #13](https://github.com/RMvdesi/obsidian-prism/pull/13)、[PR #20](https://github.com/RMvdesi/obsidian-prism/pull/20)、[PR #21](https://github.com/RMvdesi/obsidian-prism/pull/21)、[PR #22](https://github.com/RMvdesi/obsidian-prism/pull/22)、[PR #23](https://github.com/RMvdesi/obsidian-prism/pull/23)、[PR #29](https://github.com/RMvdesi/obsidian-prism/pull/29)：修复 Orchestrator 模型选择器与浅色对比度/子菜单透明，深度推动 Sidecar 安全边界加固、导航独立大纲入口、地平线波浪相位连续与语义混色、跨端口用量持久化及图标 WeakMap/ResizeObserver 性能优化。
-- **[@Kazaorus](https://github.com/Kazaorus)** — [PR #19](https://github.com/RMvdesi/obsidian-prism/pull/19)：修复软链 / Windows Junction 下守护进程 CLI 入口判定。
-- **[@zzirui321-rgb](https://github.com/zzirui321-rgb)** — [PR #30](https://github.com/RMvdesi/obsidian-prism/pull/30) & [Issue #28](https://github.com/RMvdesi/obsidian-prism/issues/28)：修复 Windows 200% 高 DPI 下图形化安装器缩放裁剪。
-- **[@DDykarc](https://github.com/DDykarc)** — [PR #12](https://github.com/RMvdesi/obsidian-prism/pull/12)：修复中文界面下推理强度滑块「中等 ↔ Medium」乒乓闪烁问题。
-- **[@SuzumiyaHaruhi719](https://github.com/SuzumiyaHaruhi719)** — [PR #17](https://github.com/RMvdesi/obsidian-prism/pull/17)：修复 Home Studio 外部 `agPulseHost` 返回空配额时回退 Prism 自带指标桥接。
-- **[@Gruu6y](https://github.com/Gruu6y)** — [Issue #2](https://github.com/RMvdesi/obsidian-prism/issues/2)、[Issue #3](https://github.com/RMvdesi/obsidian-prism/issues/3)、[Issue #8](https://github.com/RMvdesi/obsidian-prism/issues/8)、[Issue #18](https://github.com/RMvdesi/obsidian-prism/issues/18)：全链路渲染/流式/守护进程深度性能剖析与优化方案、设置弹窗 Read-then-Write 零回流改造建议、Windows 双重滚动条根因定位与 Swarm 纯 CDP 按需汉化提案。
-- **[@boy14204367](https://github.com/boy14204367)**（Arui）— [Issue #7](https://github.com/RMvdesi/obsidian-prism/issues/7)、[Issue #11](https://github.com/RMvdesi/obsidian-prism/issues/11)、[Issue #14](https://github.com/RMvdesi/obsidian-prism/issues/14)、[Issue #15](https://github.com/RMvdesi/obsidian-prism/issues/15)：精准定位设置面板卡顿与 `host-i18n` `pointerenter` 深扫、React 19 多文本节点滑块异常、思考转译系统代理场景及深浅模式原生 `<select>` 对比度缺陷。
-- **[@fenzsen](https://github.com/fenzsen)** — [Issue #27](https://github.com/RMvdesi/obsidian-prism/issues/27)（思考翻译偶发失效排查与手动代理反馈）；**[@L-yifan](https://github.com/L-yifan)** — [Issue #26](https://github.com/RMvdesi/obsidian-prism/issues/26)（子菜单可读性与右键菜单体验反馈）；**[@Freezecatmeow](https://github.com/Freezecatmeow)** — [Issue #16](https://github.com/RMvdesi/obsidian-prism/issues/16)（中文界面推理等级闪烁排查反馈）；**[@Gyf0402](https://github.com/Gyf0402)**（TTap）— [Issue #4](https://github.com/RMvdesi/obsidian-prism/issues/4)（汉化/性能优化反馈）；**[@FeonzmEko](https://github.com/FeonzmEko)** — [Issue #1](https://github.com/RMvdesi/obsidian-prism/issues/1)（窄屏与侧栏拥挤反馈）。
+- **完整社区贡献者荣誉名录与贡献详情**：请见 [**`CONTRIBUTORS.md`**](./CONTRIBUTORS.md)（永久收录全部 PR 贡献者与核心 Issue 定位反馈者，并同步留档于 [`CHANGELOG.md`](./CHANGELOG.md)）。
+- 欢迎通过 [Issues](https://github.com/RMvdesi/obsidian-prism/issues) 与 [Pull Requests](https://github.com/RMvdesi/obsidian-prism/pulls) 一起参与打磨！
