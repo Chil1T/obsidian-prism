@@ -5,6 +5,46 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 本项目遵循语义化版本（SemVer）规范，记录各正式版本的新增功能、架构变更、安全加固与缺陷修复。
 
+## [1.0.7-beta.4] - 2026-11-23
+
+> 本版本作为 **Beta 体验与双端国际化预发布版（`v1.0.7-beta.4`）** 推送至「Beta 尝鲜版」更新通道，重点响应社区反馈（[#9](https://github.com/RMvdesi/obsidian-prism/issues/9) / [#11](https://github.com/RMvdesi/obsidian-prism/issues/11) / [#37](https://github.com/RMvdesi/obsidian-prism/issues/37) / [#38](https://github.com/RMvdesi/obsidian-prism/issues/38)），带来桌宠防遮挡穿透模式、独立跨模型推理档位记忆开关、关闭内置汉化即时回滚与外部汉化醒目提醒、Windows/macOS 安装器与托盘 100% 中英双语化，以及 macOS 更新/重开丢调试端口根治与无损包装启动器。
+
+### New Features & UX Improvements / 新增功能与交互优化
+
+- **桌宠防遮挡 `peek` 姿态激活 + 100% 鼠标穿透零交互**：
+  - 接通 `dual-mascot-rig.js` 原生 `yieldMode: 'peek'` 趴边偷看姿态：当问答卡（`interaction-takeover-card` / `side-question-panel`）、排队/运行任务卡（`queued-messages-card` / `running-items-panel`）、斜杠菜单或模型选择菜单打开时自动进入 `peek`；
+  - `peek` 状态下强制启用全层 `pointer-events: none !important`、`tabindex="-1"`、`aria-hidden="true"` 并将层叠退居卡片背后（`z-index: 6`），同时放行指针与右键事件，确保后方卡片/菜单按钮 100% 可点；关闭后双宠与三蟹自动恢复正常交互。
+  - *Mascot Anti-Occlusion `peek` Mode & Full Pointer Pass-Through*: Activates `yieldMode: 'peek'` whenever Q&A takeover cards, queued/running cards, slash menus, or model pickers open, enforcing full `pointer-events: none`, `tabindex="-1"`, and lowered `z-index: 6` behind overlays so underlying controls stay 100% clickable.
+- **新增独立「跨模型记住推理档位」开关（[#9](https://github.com/RMvdesi/obsidian-prism/issues/9) · 关联 [#11](https://github.com/RMvdesi/obsidian-prism/issues/11)）**：
+  - 在设置「实用模块」新增独立开关 `effortMemory`（默认开启 `'on'`）：即便关闭「模型推理等级滑块」，仍以零 UI/零 CSS 轻量守卫跨会话持久化记忆各普通模型与 Orchestrator 规划器上次选过的推理档位（切回不再跌回宿主默认 `Medium`，同时保留显式二级/三级子菜单选档优先级且不强制卡住菜单）；关闭开关即 100% 退回原生无记忆行为。
+  - *Independent "Remember Effort Per Model" Toggle (`effortMemory`, default `on`)*: Remembers per-model and Orchestrator planner reasoning effort in `localStorage` even with the effort slider disabled, without injecting slider UI/CSS or blocking explicit submenu selections.
+- **关闭内置汉化即时回滚根治 + 外部汉化琥珀提示条 + 正式模块英文补译**：
+  - 修复 `ui-runtime.js` 切换 `hostLocalization: 'off'`（或 `auto` + 非简体中文）时未立即销毁 `window.__agPrismHostI18n` 的滞后问题，以及 `host-i18n-runtime.js` 节点脱离后复用导致 `rollbackAllSnapshots()` 漏回滚的边界缺陷（新增重入追踪与 `TreeWalker` 兜底扫回）；
+  - 当 Prism 内置汉化停用且仍检测到第三方汉化插件或 `app.asar` 汉化补丁接管界面时，在设置项下方显示醒目的五语琥珀色边框提示条；
+  - 补齐 `vendor/effort-slider/upstream-client.js` 设置弹窗与 `Fixed` 标签，以及 `vendor/pulse-dashboard/` 前端可见状态文本的英文翻译。
+  - *Instant Host-i18n Teardown, External Patch Notice & Formal Module English Polish*: Immediately destroys and rolls back `host-i18n` on `off` or `auto` + non-`zh-CN` (fixing detached-then-reattached rollback leaks), renders a clear amber notice pill when an external localization plugin or `app.asar` patch remains active, and completes English strings in Effort Slider and Pulse Dashboard UIs.
+
+### Cross-Platform Installers & macOS Relaunch Fix / 双端双语安装器与 macOS 重启根治
+
+- **Windows & macOS 安装器/托盘 100% 中英双语化（[#37](https://github.com/RMvdesi/obsidian-prism/issues/37)）**：
+  - `installer/setup/Program.cs`、`installer/watcher/Program.cs`、`installer/common/CdpClient.cs` 与 `installer/macos/{Setup,Watcher,Common}` 全面接入 `InstallerI18n`，自动跟随操作系统语言切换完整英文/中文界面、日志与弹窗（同时支持 `--lang en|zh` 与 `AG_PRISM_LANG` 覆盖）。
+  - *100% Bilingual (EN/ZH) Windows & macOS Installers and Watchers ([#37](https://github.com/RMvdesi/obsidian-prism/issues/37))*: Automatically adapts to OS locale with `--lang en|zh` and `AG_PRISM_LANG` overrides across all setup wizards, tray menus, logs, and relaunch dialogs.
+- **根治 macOS 更新/重开后丢失 `--remote-debugging-port=0` + 可选无损包装启动器（[#38](https://github.com/RMvdesi/obsidian-prism/issues/38)）**：
+  - `cdp.js`（`MAC_DETACHED_RELAUNCH_SH` / `normalizeMacAppBundlePath`）与 `installer/macos/Common/CdpClient.swift` 统一归一化 `.app` 路径、使用 `on run argv` 防注入优雅退出、等待主进程与全部 Helper 进程及 `SingletonLock` 彻底释放、剥离 `ELECTRON_RUN_AS_NODE`，并以 `open -na <app> --args --remote-debugging-port=0` 干净拉起；
+  - `installer/macos/Setup/main.swift` 与 `tools/install-plugin.cjs` 新增可选无损启动器 `~/Applications/Antigravity Prism.app`（安装向导默认勾选，支持 `--create-launcher` / `--no-launcher`），绝不修改 `/Applications/Antigravity.app` 代码签名，卸载时按标记与 Bundle ID 严格校验后安全清理。
+  - *Fixes macOS Relaunch Dropping `--remote-debugging-port=0` & Adds Lossless Launcher ([#38](https://github.com/RMvdesi/obsidian-prism/issues/38))*: Normalizes `.app` bundle paths, waits for Helpers and `SingletonLock` release, strips `ELECTRON_RUN_AS_NODE`, relaunches via `open -na`, and offers a signature-safe `~/Applications/Antigravity Prism.app` wrapper launcher with fail-closed uninstall verification.
+
+### Security, Compiler & Quality Gates / 安全、编译瘦身与测试门禁
+
+- 修复 CodeQL Alert `#37`（`test/v107-beta2-thought-proxy.test.mjs` 改用 `hasUrlHostname` 精确校验主机名）；
+- 优化 `cdp.js` 内置无损压缩器（控制流安全的 `}` 前冗余分号消除、`typeof`/函数调用误 poison 修复、单字母高频池变量优先分配与 LZSS 链深调优），在新增全部特性的前提下将 Channel 1 主包体积进一步压降至 `~682 KB`（严格低于 `685,000 B` 门禁）；
+- 新增 `test/v107-beta4-features.test.mjs` 及双端安装器双语与 macOS 无损启动器专项单测，全量回归 `581 pass / 0 fail`。
+
+### Acknowledgements / 社区致谢（Community Credits）
+
+- 衷心感谢通过详尽复现视频、功能建议与本地实测方案推动本版本落地的社区伙伴：**[@boy14204367](https://github.com/boy14204367)**（[#9](https://github.com/RMvdesi/obsidian-prism/issues/9) / [#11](https://github.com/RMvdesi/obsidian-prism/issues/11) 跨模型档位记忆反馈）、**[@yanzhem02](https://github.com/yanzhem02)**（[#37](https://github.com/RMvdesi/obsidian-prism/issues/37) 英文界面与双语安装器需求）、**[@nanpi8633-spec](https://github.com/nanpi8633-spec)**（[#38](https://github.com/RMvdesi/obsidian-prism/issues/38) macOS 重开根因定位与无损包装启动器思路）。
+  - *Special thanks to [@boy14204367](https://github.com/boy14204367) (#9/#11), [@yanzhem02](https://github.com/yanzhem02) (#37), and [@nanpi8633-spec](https://github.com/nanpi8633-spec) (#38) for detailed repros, localization feedback, and macOS relaunch / lossless launcher insights.*
+
 ## [1.0.7-beta.3] - 2026-11-23
 
 > 本版本作为 **Beta 热修预发布版（`v1.0.7-beta.3`）** 推送至「Beta 尝鲜版」更新通道，重点吸收并加固了社区高优 PR（[#33](https://github.com/RMvdesi/obsidian-prism/pull/33) / [#35](https://github.com/RMvdesi/obsidian-prism/pull/35)）与新 Issue（[#31](https://github.com/RMvdesi/obsidian-prism/issues/31) / [#32](https://github.com/RMvdesi/obsidian-prism/issues/32) / [#34](https://github.com/RMvdesi/obsidian-prism/issues/34) / [#36](https://github.com/RMvdesi/obsidian-prism/issues/36)），修复问答卡遮挡/选中态、浅色 Token 面板视觉观感、子代理运行图标与三端安装器/CI/CodeQL 问题，并将「背景壁纸」归入「Beta 内容」分类加以明确占位提示。
