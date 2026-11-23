@@ -431,8 +431,9 @@
       const hiDescEl = qs(rootEl, '[data-ag-cs-row="hostLocalization"] [data-k="d"]');
       if (hiDescEl) {
         const hiModeNow = effVal('hostLocalization', l);
+        const hiDisabledNow = hiModeNow === 'off' || (hiModeNow === 'auto' && l !== 'zh-CN');
         let extZhActive = false;
-        if (hiModeNow === 'off') {
+        if (hiDisabledNow) {
           try {
             const winRef = doc.defaultView || globalThis;
             if (
@@ -442,7 +443,7 @@
             ) {
               extZhActive = true;
             } else {
-              for (const hn of qa(doc, '[data-testid="new-conversation-button"], [data-ag-cs-settings-dlg="1"] h1, [data-ag-cs-settings-dlg="1"] [data-ag-cs-settings-nav="1"]')) {
+              for (const hn of qa(doc, '[data-testid="new-conversation-button"], [role="dialog"] h1, [role="dialog"] h2, [data-ag-cs-settings-dlg="1"] [data-ag-cs-settings-nav="1"]')) {
                 if (hn && !hn.closest?.('#' + SETTINGS_SEC_ID) && /[\u4e00-\u9fff]/.test(String(hn.textContent || ''))) {
                   extZhActive = true;
                   break;
@@ -451,13 +452,21 @@
             }
           } catch {}
         }
-        const hiText =
+        const hiWarn =
           hiModeNow === 'auto' && hiState === 'yielded' && u.hostI18nYieldHint
+            ? '1'
+            : hiDisabledNow && extZhActive && u.hostI18nOffExtHint
+              ? 'ext'
+              : '';
+        const hiText =
+          hiWarn === '1'
             ? u.hostI18nYieldHint
-            : hiModeNow === 'off' && extZhActive && u.hostI18nOffExtHint
+            : hiWarn === 'ext'
               ? u.hostI18nOffExtHint
               : (u.setHostI18nDesc || '');
         if (hiDescEl[K_TC] !== hiText) hiDescEl[K_TC] = hiText;
+        if (hiWarn) sa(hiDescEl, 'data-ag-cs-hi-warn', hiWarn);
+        else ra(hiDescEl, 'data-ag-cs-hi-warn');
       }
     };
 

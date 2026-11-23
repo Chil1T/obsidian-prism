@@ -838,3 +838,7 @@ html[data-ag-cs-style][data-ag-cs-theme="light"],html[data-ag-cs-style]>body:is(
 & :is(.monaco-diff-editor,[data-testid="changed-files-card"]) :is(button[data-diff-action="accept"],button[aria-label*="Accept" i]:not(.ces-knob)){color:#15803D !important;background-color:rgba(52,168,83,.14) !important;}
 & :is(.monaco-diff-editor,[data-testid="changed-files-card"]) :is(button[data-diff-action="reject"],button[aria-label*="Reject" i]:not(.ces-knob)){color:#B91C1C !important;background-color:rgba(234,67,53,.12) !important;}
 }
+#ag-cs-settings-sec [data-ag-cs-hi-warn="1"]{color:#D97706 !important;font-weight:500 !important;}
+#ag-cs-settings-sec [data-ag-cs-hi-warn="ext"]{display:inline-block;margin-top:4px;padding:3px 8px;border-radius:6px;color:#B45309 !important;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.34);font-weight:500 !important;}
+html[data-ag-cs-theme="dark"] #ag-cs-settings-sec [data-ag-cs-hi-warn="1"]{color:#FBBF24 !important;}
+html[data-ag-cs-theme="dark"] #ag-cs-settings-sec [data-ag-cs-hi-warn="ext"]{color:#FCD34D !important;background:rgba(245,158,11,.14);border-color:rgba(251,191,36,.32);}

@@ -743,6 +743,21 @@ test('v1.0.7-beta.4: ui-runtime immediately destroys host-i18n on off/en, shows 
     const hiDesc = sec.querySelector('[data-ag-cs-row="hostLocalization"] [data-k="d"]');
     assert.ok(hiDesc);
     assert.equal(hiDesc.textContent, locales.getUiStrings('zh-CN').hostI18nOffExtHint);
+    assert.equal(hiDesc.getAttribute('data-ag-cs-hi-warn'), 'ext');
+
+    // Switching to auto + English while external zh patch is active must ALSO show the external-i18n warning pill
+    sandbox.__agPrism.saveSettingsBatch({ hostLocalization: 'auto', language: 'en' });
+    sandbox.__agPrism.sync();
+    const secEn = doc.getElementById('ag-cs-settings-sec');
+    const toggleBtnEn = secEn?.querySelector('button[aria-expanded]');
+    if (toggleBtnEn && toggleBtnEn.getAttribute('aria-expanded') === 'false') {
+      toggleBtnEn.dispatchEvent({ type: 'click', target: toggleBtnEn });
+    }
+    sandbox.__agPrism.sync();
+    const hiDescEn = secEn?.querySelector('[data-ag-cs-row="hostLocalization"] [data-k="d"]');
+    assert.ok(hiDescEn);
+    assert.equal(hiDescEn.textContent, locales.getUiStrings('en').hostI18nOffExtHint);
+    assert.equal(hiDescEn.getAttribute('data-ag-cs-hi-warn'), 'ext');
   } finally {
     sandbox.__agPrism?.destroy?.();
   }
