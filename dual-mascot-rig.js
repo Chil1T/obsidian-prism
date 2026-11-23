@@ -2452,7 +2452,7 @@
       const depth = actor.stackedOn ? getStackDepth(actor.id) : 0;
       const tx = snapCoord(actor.x, direct);
       const ty = snapCoord(yPx, direct);
-      const tz = yieldMode === 'peek' ? '4' : actor.dragging ? '38' : depth > 0 ? String(24 + depth * 2) : '24';
+      const tz = yieldMode === 'peek' ? '8' : actor.dragging ? '38' : depth > 0 ? String(24 + depth * 2) : '24';
       if (actor.lastDomX !== tx || actor.lastDomY !== ty) {
         actor.lastDomX = tx;
         actor.lastDomY = ty;

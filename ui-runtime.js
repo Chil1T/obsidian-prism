@@ -1978,7 +1978,7 @@
         dirtyFlags.r = dirtyFlags.c = dirtyFlags.l = dirtyFlags.tk = dirtyFlags.cf = touchedButtons = true;
       }
 
-      if (tid === 'conversation-row-sidebar' || ancSide || q('[data-testid="conversation-row-sidebar"]')) {
+      if (tid === 'conversation-row-sidebar' || tid === 'breadcrumb-segment' || tid === 'conversation-row-history' || ancSide || q('[data-testid="conversation-row-sidebar"],[data-testid="breadcrumb-segment"],[data-testid="conversation-row-history"]')) {
         dirtyFlags.s = true;
         if (isAdded) touchedButtons = true;
       }

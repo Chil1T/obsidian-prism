@@ -321,7 +321,7 @@ test('v1.0.7-beta.4: dual-mascot-rig peek mode enforces full pointer pass-throug
     assert.equal(a.getAttribute('tabindex'), '-1');
     assert.equal(a.getAttribute('aria-hidden'), 'true');
     assert.equal(a.style.pointerEvents, 'none');
-    assert.equal(a.style.zIndex, '4');
+    assert.equal(a.style.zIndex, '8');
   }
   for (const mc of miniCrabs) {
     assert.equal(mc.style.pointerEvents, 'none', 'mini-crabs must disable pointer events in peek mode');
@@ -365,6 +365,15 @@ test('v1.0.7-beta.4: dual-mascot-rig peek mode enforces full pointer pass-throug
 
   const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
   assert.ok(css.includes('.ag-cs-crab[data-ag-mascot-peek="1"]'), 'style.css must style peek pass-through');
+  assert.ok(
+    /\.ag-cs-crab\[data-ag-mascot-peek="1"\][^{]*\{z-index:8 !important;/.test(css),
+    'peek mascot stage must sit at z-index 8 (> prism rim 7, < takeover card 12)'
+  );
+  assert.ok(
+    css.includes('& .surface-composer-card>.ag-cs-prism-rim-cv,& [data-ag-cs-prism-reflect="bottom"]>.ag-cs-prism-rim-cv{') &&
+      /\.surface-composer-card>\.ag-cs-prism-rim-cv[^{]*\{[^}]*z-index:7 !important;/.test(css),
+    'prism rim canvas must sit at z-index 7 so peeking mascots cover the rim cleanly'
+  );
   assert.ok(
     css.includes('[data-testid="input-box-bottom-toolbar"]{pointer-events:none !important;'),
     'Issue #39: input-box-bottom-toolbar transparent container must pass pointer events through to mascot stage'
@@ -764,5 +773,158 @@ test('v1.0.7-beta.4: ui-runtime immediately destroys host-i18n on off/en, shows 
     assert.equal(hiDescEn.getAttribute('data-ag-cs-hi-warn'), 'ext');
   } finally {
     sandbox.__agPrism?.destroy?.();
+  }
+});
+
+test('v1.0.7: thought-client auto-translates asynchronously updated & newly added conversation titles without observing chat stream', async () => {
+  const vm = require('node:vm');
+  const { doc, win } = createFakeDom();
+  const observers = [];
+  class MockMutationObserver {
+    constructor(cb) {
+      this.cb = cb;
+      this.targets = [];
+      observers.push(this);
+    }
+    observe(target, opts) { this.targets.push({ target, opts }); }
+    disconnect() { this.targets = []; }
+    takeRecords() { return []; }
+    trigger(records) { this.cb(records, this); }
+  }
+
+  // Sidebar list with an initial placeholder new conversation row
+  const listEl = doc.createElement('div');
+  listEl.setAttribute('data-testid', 'conversation-list-sidebar');
+  const row1 = doc.createElement('div');
+  row1.setAttribute('data-testid', 'conversation-row-sidebar');
+  const row1Span = doc.createElement('span');
+  row1Span.className = 'truncate';
+  const row1Text = doc.createTextNode('New Conversation');
+  row1Span.appendChild(row1Text);
+  row1.appendChild(row1Span);
+  listEl.appendChild(row1);
+  doc.body.appendChild(listEl);
+
+  // Top breadcrumb nav (workspace + active conversation title)
+  const nav = doc.createElement('nav');
+  const bc1 = doc.createElement('a');
+  bc1.setAttribute('data-testid', 'breadcrumb-segment');
+  bc1.appendChild(doc.createTextNode('obsidian-prism'));
+  const bc2 = doc.createElement('a');
+  bc2.setAttribute('data-testid', 'breadcrumb-segment');
+  const bc2Span = doc.createElement('span');
+  bc2Span.className = 'truncate';
+  const bc2Text = doc.createTextNode('New Conversation');
+  bc2Span.appendChild(bc2Text);
+  bc2.appendChild(bc2Span);
+  nav.appendChild(bc1);
+  nav.appendChild(bc2);
+  doc.body.appendChild(nav);
+
+  // Chat stream area (must NEVER be observed by titleObserver)
+  const convView = doc.createElement('div');
+  convView.setAttribute('data-testid', 'conversation-view');
+  const autoScroll = doc.createElement('div');
+  autoScroll.setAttribute('data-testid', 'autoscroll-viewport');
+  convView.appendChild(autoScroll);
+  doc.body.appendChild(convView);
+
+  const dict = {
+    'New Conversation': '新会话',
+    'Optimize Async Title Sync': '优化异步标题同步',
+    'Debug WebGL Rim Layer': '调试 WebGL 棱镜层',
+  };
+  const batchCalls = [];
+  const bridge = {
+    async call(req) {
+      if (req?.action === 'get-cache') return { ok: true, entries: {}, translateTitles: true };
+      return { ok: true };
+    },
+    async translateStream(req) {
+      const payload = JSON.parse(req.text);
+      batchCalls.push(payload.items);
+      return { ok: true, items: payload.items.map((s) => dict[s] || s) };
+    },
+  };
+
+  const sandbox = {
+    window: null,
+    globalThis: null,
+    document: doc,
+    console,
+    setTimeout,
+    clearTimeout,
+    performance: { now: () => Date.now() },
+    navigator: { language: 'zh-CN' },
+    localStorage: win.localStorage,
+    MutationObserver: MockMutationObserver,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }),
+    __agPrismThoughtBridge: bridge,
+    innerHeight: 900,
+    innerWidth: 1400,
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  doc.defaultView = sandbox;
+
+  const thoughtSrc = fs.readFileSync(path.join(ROOT, 'vendor', 'thought-translator', 'thought-client.js'), 'utf8');
+  vm.runInNewContext(thoughtSrc, sandbox);
+  const th = sandbox.__agPrismThought;
+  assert.ok(th);
+
+  try {
+    th.sync({ thoughtTranslate: 'machine', language: 'zh-CN', translateTitles: true });
+    th.scanImmediate();
+    await new Promise((r) => setTimeout(r, 30));
+
+    assert.equal(row1Text.nodeValue, '新会话');
+    assert.equal(bc2Text.nodeValue, '新会话');
+    assert.ok(th.__observedTitleRoots.has(listEl), 'titleObserver must observe conversation-list-sidebar');
+    assert.ok(th.__observedTitleRoots.has(nav), 'titleObserver must observe breadcrumb nav');
+    assert.equal(th.__observedTitleRoots.has(doc.body), false, 'titleObserver must NEVER observe document.body');
+    assert.equal(th.__observedTitleRoots.has(convView), false, 'titleObserver must NEVER observe conversation-view');
+
+    const titleObs = observers.find((o) => o.targets.some((t) => t.target === listEl));
+    assert.ok(titleObs, 'title MutationObserver must be active');
+
+    // Echo of our own translation write must NOT trigger another RPC
+    const callsAfterInit = batchCalls.length;
+    titleObs.trigger([{ type: 'characterData', target: row1Text }]);
+    await new Promise((r) => setTimeout(r, 180));
+    assert.equal(batchCalls.length, callsAfterInit, 'self-written translated text must not loop-trigger scan');
+
+    // Simulate Antigravity backend asynchronously replacing placeholder text in-place (characterData)
+    row1Text.nodeValue = 'Optimize Async Title Sync';
+    bc2Text.nodeValue = 'Optimize Async Title Sync';
+    titleObs.trigger([
+      { type: 'characterData', target: row1Text },
+      { type: 'characterData', target: bc2Text },
+    ]);
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(row1Text.nodeValue, '优化异步标题同步', 'sidebar new conversation title must auto-translate on async characterData update');
+    assert.equal(bc2Text.nodeValue, '优化异步标题同步', 'breadcrumb new conversation title must auto-translate on async characterData update');
+    assert.equal(batchCalls.length, callsAfterInit + 1, 'simultaneous sidebar+breadcrumb updates must coalesce into 1 batch RPC');
+
+    // Simulate a brand new sidebar row inserted dynamically (childList)
+    const row2 = doc.createElement('div');
+    row2.setAttribute('data-testid', 'conversation-row-sidebar');
+    const row2Span = doc.createElement('span');
+    row2Span.className = 'truncate';
+    const row2Text = doc.createTextNode('Debug WebGL Rim Layer');
+    row2Span.appendChild(row2Text);
+    row2.appendChild(row2Span);
+    listEl.appendChild(row2);
+    titleObs.trigger([{ type: 'childList', target: listEl, addedNodes: [row2] }]);
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(row2Text.nodeValue, '调试 WebGL 棱镜层', 'newly inserted sidebar row must auto-translate');
+
+    // Disabling translateTitles disconnects titleObserver and restores latest English originals (NOT stale placeholder)
+    th.setTranslateTitles(false);
+    assert.equal(th.__observedTitleRoots.size, 0, 'disabling translateTitles must disconnect titleObserver');
+    assert.equal(row1Text.nodeValue, 'Optimize Async Title Sync');
+    assert.equal(bc2Text.nodeValue, 'Optimize Async Title Sync');
+    assert.equal(row2Text.nodeValue, 'Debug WebGL Rim Layer');
+  } finally {
+    th.destroy();
   }
 });

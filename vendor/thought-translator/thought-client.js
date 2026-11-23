@@ -131,6 +131,11 @@
   const titleCache = new Map();
   const titleBatchInflight = new Map();
   const titleFailedUntil = new Map();
+  const observedTitleRoots = new Set();
+  const TITLE_CONTAINER_TIDS = new Set(['conversation-row-sidebar', 'conversation-row-history', 'breadcrumb-segment']);
+  let titleObserver = null;
+  let titleScanTimer = null;
+  let titleInternalMutDepth = 0;
   const panelMeta = new WeakMap();
   const rawCacheMap = new WeakMap();
   const lockedHeights = new WeakMap();
@@ -1085,10 +1090,15 @@
         clearTimeout(streamingWatchTimer);
         streamingWatchTimer = null;
       }
+      clearTitleScanTimer();
       return;
     }
     if (currentMode !== 'off' && trackedStreamingTriggers.size > 0) {
       checkTrackedStreamingTriggers();
+    }
+    if (currentMode !== 'off' && translateTitles) {
+      syncTitleObserverTargets();
+      scheduleTitleScan(80);
     }
   };
 
@@ -1122,20 +1132,26 @@
   }
 
   function restoreAllTitles() {
+    clearTitleScanTimer();
     for (const reqId of titleBatchInflight.values()) {
       if (reqId) void callDaemonRpc({ action: 'cancel-translate', requestId: reqId }).catch(() => {});
     }
     titleBatchInflight.clear();
     hasOffscreenTitles = false;
-    for (const rec of Array.from(titleRecords)) {
-      try {
-        if (rec.tn && isConn(rec.tn) && getTnStr(rec.tn) === rec.trans) {
-          setTn(rec.tn, rec.orig);
-        }
-        if (rec.el) ra(rec.el, 'data-op-title-tr');
-      } catch (_) {}
-      if (rec.tn) titleNodeMap.delete(rec.tn);
-      titleRecords.delete(rec);
+    titleInternalMutDepth += 1;
+    try {
+      for (const rec of Array.from(titleRecords)) {
+        try {
+          if (rec.tn && isConn(rec.tn) && getTnStr(rec.tn) === rec.trans) {
+            setTn(rec.tn, rec.orig);
+          }
+          if (rec.el) ra(rec.el, 'data-op-title-tr');
+        } catch (_) {}
+        if (rec.tn) titleNodeMap.delete(rec.tn);
+        titleRecords.delete(rec);
+      }
+    } finally {
+      titleInternalMutDepth = Math.max(0, titleInternalMutDepth - 1);
     }
   }
 
@@ -1144,9 +1160,11 @@
     const changed = translateTitles !== next;
     translateTitles = next;
     if (!next) {
+      stopTitleObserver();
       restoreAllTitles();
-    } else if (changed && triggerRescan && currentMode !== 'off') {
-      scheduleScan(30);
+    } else if (currentMode !== 'off') {
+      syncTitleObserverTargets();
+      if (changed && triggerRescan) scheduleScan(30);
     }
     return changed;
   }
@@ -1350,6 +1368,7 @@
       visBound = false;
     }
     clearAllStreamingWatchers();
+    stopTitleObserver();
     restoreAllToolSummaries();
     restoreAllTitles();
     clearHydrateQueue();
@@ -3567,11 +3586,188 @@
     const orig = oldRec && item.raw === oldRec.trans ? oldRec.orig : item.raw;
     if (oldRec) titleRecords.delete(oldRec);
 
-    setTn(item.tn, nextVal);
-    if (item.el) sa(item.el, 'data-op-title-tr', '1');
+    titleInternalMutDepth += 1;
+    try {
+      setTn(item.tn, nextVal);
+      if (item.el) sa(item.el, 'data-op-title-tr', '1');
+    } finally {
+      titleInternalMutDepth = Math.max(0, titleInternalMutDepth - 1);
+    }
     const rec = { tn: item.tn, el: item.el, orig, trans: nextVal, lang: activeLang, mode };
     titleNodeMap.set(item.tn, rec);
     titleRecords.add(rec);
+  }
+
+  function clearTitleScanTimer() {
+    if (titleScanTimer) {
+      clearTimeout(titleScanTimer);
+      titleScanTimer = null;
+    }
+  }
+
+  function stopTitleObserver() {
+    clearTitleScanTimer();
+    if (titleObserver) {
+      try { titleObserver.disconnect(); } catch (_) {}
+      titleObserver = null;
+    }
+    observedTitleRoots.clear();
+  }
+
+  function scheduleTitleScan(delayMs = 140) {
+    if (!translateTitles || currentMode === 'off' || isDocHiddenOrSleep()) return;
+    if (titleScanTimer) return;
+    titleScanTimer = setTimeout(() => {
+      titleScanTimer = null;
+      if (translateTitles && currentMode !== 'off' && !isDocHiddenOrSleep()) {
+        scanConversationTitles();
+      }
+    }, delayMs);
+    titleScanTimer?.unref?.();
+  }
+
+  function findTitleContainerAncestor(node) {
+    let cur = node && node.nodeType === 1 ? node : parEl(node);
+    while (cur && cur.nodeType === 1) {
+      if (TITLE_CONTAINER_TIDS.has(ga(cur, 'data-testid') || '')) return cur;
+      cur = parEl(cur);
+    }
+    return null;
+  }
+
+  function isSafeTitleObserverRoot(el) {
+    if (!el || el.nodeType !== 1 || !isConn(el)) return false;
+    if (typeof document !== 'undefined' && (el === document.body || el === document.documentElement)) return false;
+    const tid = ga(el, 'data-testid') || '';
+    if (tid === 'conversation-view' || tid === 'autoscroll-viewport') return false;
+    try {
+      if (typeof el.querySelector === 'function' && el.querySelector('[data-testid="conversation-view"], [data-testid="autoscroll-viewport"]')) {
+        return false;
+      }
+    } catch (_) {}
+    return true;
+  }
+
+  function isTitleMutationRelevant(rec) {
+    if (!rec) return false;
+    if (rec.type === 'characterData') {
+      const tn = rec.target;
+      if (!tn || tn.nodeType !== 3) return false;
+      const curVal = getTnStr(tn);
+      const prev = titleNodeMap.get(tn);
+      if (prev && prev.trans === curVal) return false;
+      const p = parEl(tn);
+      if (!p || isOverlayOrIgnoredElement(p)) return false;
+      return Boolean(findTitleContainerAncestor(p));
+    }
+    if (rec.type === 'childList') {
+      const tgt = rec.target;
+      if (tgt && tgt.nodeType === 1 && !isOverlayOrIgnoredElement(tgt) && findTitleContainerAncestor(tgt)) {
+        const added = rec.addedNodes;
+        if (!added || !added.length) return true;
+        for (let i = 0; i < added.length; i++) {
+          const n = added[i];
+          if (!n) continue;
+          if (n.nodeType === 3) {
+            const prev = titleNodeMap.get(n);
+            if (!prev || prev.trans !== getTnStr(n)) return true;
+          } else if (n.nodeType === 1 && !isOverlayOrIgnoredElement(n)) {
+            return true;
+          }
+        }
+        return false;
+      }
+      const added = rec.addedNodes;
+      if (added && added.length) {
+        for (let i = 0; i < added.length; i++) {
+          const n = added[i];
+          if (!n || n.nodeType !== 1 || isOverlayOrIgnoredElement(n)) continue;
+          if (TITLE_CONTAINER_TIDS.has(ga(n, 'data-testid') || '')) return true;
+          try {
+            if (typeof n.querySelector === 'function' && n.querySelector(SEL_TITLE_CONTAINERS)) return true;
+          } catch (_) {}
+        }
+      }
+    }
+    return false;
+  }
+
+  function syncTitleObserverTargets() {
+    if (!translateTitles || currentMode === 'off' || typeof document === 'undefined') {
+      stopTitleObserver();
+      return;
+    }
+    const MO = W.MutationObserver || (typeof MutationObserver === 'function' ? MutationObserver : null);
+    if (typeof MO !== 'function') return;
+
+    const desired = new Set();
+    const listNodes = qsa('[data-testid="conversation-list-sidebar"]');
+    for (let i = 0; i < listNodes.length; i++) {
+      if (isSafeTitleObserverRoot(listNodes[i])) desired.add(listNodes[i]);
+    }
+    const titleNodes = qsa(SEL_TITLE_CONTAINERS);
+    for (let i = 0; i < titleNodes.length; i++) {
+      const el = titleNodes[i];
+      if (!el || !isConn(el)) continue;
+      const tid = ga(el, 'data-testid') || '';
+      if (tid === 'breadcrumb-segment') {
+        const grp = findBreadcrumbGroupRoot(el);
+        if (isSafeTitleObserverRoot(grp)) desired.add(grp);
+        else if (isSafeTitleObserverRoot(parEl(el))) desired.add(parEl(el));
+        else if (isSafeTitleObserverRoot(el)) desired.add(el);
+      } else {
+        // 如果已在 conversation-list-sidebar 内就无需重复挂到行级
+        let covered = false;
+        for (const root of desired) {
+          try {
+            if (root === el || (typeof root.contains === 'function' && root.contains(el))) { covered = true; break; }
+          } catch (_) {}
+        }
+        if (!covered) {
+          const p = parEl(el);
+          if (isSafeTitleObserverRoot(p)) desired.add(p);
+          else if (isSafeTitleObserverRoot(el)) desired.add(el);
+        }
+      }
+    }
+
+    if (!desired.size) {
+      stopTitleObserver();
+      return;
+    }
+
+    let needRebuild = !titleObserver;
+    if (!needRebuild) {
+      for (const cur of observedTitleRoots) {
+        if (!isConn(cur) || !desired.has(cur)) {
+          needRebuild = true;
+          break;
+        }
+      }
+    }
+    if (needRebuild) {
+      if (titleObserver) {
+        try { titleObserver.disconnect(); } catch (_) {}
+      }
+      observedTitleRoots.clear();
+      titleObserver = new MO((records) => {
+        if (!translateTitles || currentMode === 'off' || titleInternalMutDepth > 0 || isDocHiddenOrSleep()) return;
+        if (!Array.isArray(records) || !records.length) return;
+        for (let i = 0; i < records.length; i++) {
+          if (isTitleMutationRelevant(records[i])) {
+            scheduleTitleScan(140);
+            return;
+          }
+        }
+      });
+    }
+    for (const root of desired) {
+      if (observedTitleRoots.has(root)) continue;
+      try {
+        titleObserver.observe(root, { childList: true, subtree: true, characterData: true });
+        observedTitleRoots.add(root);
+      } catch (_) {}
+    }
   }
 
   function markTitleFailed(key, until) {
@@ -3596,7 +3792,11 @@
 
   function scanConversationTitles() {
     pruneDetachedTitleRecords();
-    if (!translateTitles || currentMode === 'off' || typeof document === 'undefined') return;
+    if (!translateTitles || currentMode === 'off' || typeof document === 'undefined') {
+      stopTitleObserver();
+      return;
+    }
+    syncTitleObserverTargets();
     const br = getBridge();
     if (!br || typeof br.translateStream !== 'function') return;
 
@@ -4052,12 +4252,14 @@
     __toolSummaryFailedUntil: toolSummaryFailedUntil,
     __titleRecords: titleRecords,
     __titleFailedUntil: titleFailedUntil,
+    __observedTitleRoots: observedTitleRoots,
     destroy() {
       currentMode = 'off';
       syncedOnce = false;
       hasOffscreenLazyPanels = false;
       hasOffscreenTitles = false;
       clrScan();
+      stopTitleObserver();
       if (cacheDirty || persistTimer || persistIdle || memCache.size > storedCount) flushLocalStorageCacheNow();
       releasePrismOverlays();
       hlBks = null;
