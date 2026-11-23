@@ -435,7 +435,7 @@ test('盲区 1 (Windows Watcher E2E): 残留死端口 DevToolsActivePort 不再�
     await new Promise((r) => setTimeout(r, 2400));
     const watchLogPath = path.join(installDir, 'watch.log');
     const logText = fs.existsSync(watchLogPath) ? fs.readFileSync(watchLogPath, 'utf8') : '';
-    const staleMatches = logText.match(/检测到残留无效调试端口|Detected stale\/unusable debug port/g) || [];
+    const staleMatches = logText.match(/检测到残留无效调试端口|Detected stale debug port/g) || [];
     assert.equal(staleMatches.length, 1, `Expected stale-port log deduplicated to 1 occurrence, got ${staleMatches.length}`);
   } finally {
     try { dummyBareHost.kill(); } catch {}

@@ -365,6 +365,10 @@ test('v1.0.7-beta.4: dual-mascot-rig peek mode enforces full pointer pass-throug
 
   const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
   assert.ok(css.includes('.ag-cs-crab[data-ag-mascot-peek="1"]'), 'style.css must style peek pass-through');
+  assert.ok(
+    css.includes('[data-testid="input-box-bottom-toolbar"]{pointer-events:none !important;'),
+    'Issue #39: input-box-bottom-toolbar transparent container must pass pointer events through to mascot stage'
+  );
   assert.ok(!/:has\(/.test(css), 'style.css must stay 0 :has()');
 });
 

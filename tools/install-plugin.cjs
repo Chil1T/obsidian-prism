@@ -467,7 +467,7 @@ function normalizeMacosSystemRootPrefix(rawPath) {
   const trimmed = String(rawPath || "").trim();
   if (!trimmed) return "";
   let resolved = path.resolve(trimmed);
-  if (process.platform !== "win32") {
+  if (process.platform === "darwin") {
     if (resolved === "/tmp") return "/private/tmp";
     if (resolved.startsWith("/tmp/")) return "/private" + resolved;
     if (resolved === "/var") return "/private/var";
