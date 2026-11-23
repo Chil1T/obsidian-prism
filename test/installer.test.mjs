@@ -662,12 +662,18 @@ test(
         fs.writeFileSync(daemonPidPath, JSON.stringify({ pid: mockDaemonProc.pid }), 'utf8');
         await waitFor(() => {
           const logText = fs.existsSync(watchLogPath) ? fs.readFileSync(watchLogPath, 'utf8') : '';
-          return logText.includes('检测到原生 Sidecar Daemon 运行中') ? true : null;
+          return logText.includes('检测到原生 Sidecar Daemon 运行中') ||
+            logText.includes('Native Sidecar Daemon detected; Watcher entering standby mode')
+            ? true
+            : null;
         }, 6000, 120);
         fs.unlinkSync(daemonPidPath);
         await waitFor(() => {
           const logText = fs.existsSync(watchLogPath) ? fs.readFileSync(watchLogPath, 'utf8') : '';
-          return logText.includes('原生 Sidecar Daemon 已离线') ? true : null;
+          return logText.includes('原生 Sidecar Daemon 已离线') ||
+            logText.includes('Native Sidecar Daemon offline; Watcher taking over live injection')
+            ? true
+            : null;
         }, 6000, 120);
       } finally {
         try { mockDaemonProc.kill(); } catch {}
@@ -1129,7 +1135,7 @@ test('interactive GUI installers require explicit user confirmation before insta
   );
   assert.match(winInitMatch[0], /PrepareInstallChoiceAsync\s*\(/);
   assert.match(winSrc, /_installBtn\.Click\s*\+=\s*async\s*\(s,\s*e\)\s*=>\s*await\s+ExecuteInstallAsync\(\)/);
-  assert.match(winSrc, /_closeBtn\.Text\s*=\s*"取消"/);
+  assert.match(winSrc, /_closeBtn\.Text\s*=\s*InstallerI18n\.Tr\("取消",\s*"Cancel"\)/);
 
   const macSrc = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Setup', 'main.swift'), 'utf8');
   const macInitMatch = macSrc.match(/private\s+func\s+startInitialAction\(\)[\s\S]*?\n\s{4}\}/);
@@ -1141,7 +1147,7 @@ test('interactive GUI installers require explicit user confirmation before insta
   );
   assert.match(macInitMatch[0], /prepareInstallChoice\s*\(/);
   assert.match(macSrc, /#selector\(handleInstallClick\)/);
-  assert.match(macSrc, /closeBtn\s*=\s*NSButton\(title:\s*"取消"/);
+  assert.match(macSrc, /closeBtn\s*=\s*NSButton\(\s*title:\s*(?:"取消"|InstallerI18n\.tr\("取消",\s*"Cancel"\))/);
 });
 
 test('Windows InstallerForm configures 96-DPI AutoScaleDimensions with AutoScaleMode.Dpi and safe button margins (#28)', () => {
@@ -1724,6 +1730,498 @@ test(
       assert.equal(fs.existsSync(hijackedPath), true, 'installer.exe --purge-data must never delete non-allowlisted filename');
       assert.equal(fs.existsSync(redlinePath), true, 'installer.exe --purge-data must never delete files under conversations_archive');
     } finally {
+      try {
+        fs.rmSync(workDir, { recursive: true, force: true });
+      } catch {}
+    }
+  }
+);
+
+test('Windows C# installer & watcher bilingual i18n coverage: InstallerI18n contract, key UI/dialog English pairs, and zero untranslated CJK literals (#37)', () => {
+  const cdpCs = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs'), 'utf8');
+  const setupCs = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'setup', 'Program.cs'), 'utf8');
+  const watcherCs = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'watcher', 'Program.cs'), 'utf8');
+
+  // 1. Unified InstallerI18n engine contract
+  assert.ok(cdpCs.includes('public static class InstallerI18n'));
+  assert.ok(cdpCs.includes('public static bool IsZhUi'));
+  assert.ok(cdpCs.includes('public static void SetPreferredLang(string lang)'));
+  assert.ok(cdpCs.includes('public static string Tr(string zh, string en)'));
+  assert.ok(cdpCs.includes('public static string TrFormat(string zhFormat, string enFormat, params object[] args)'));
+  assert.ok(cdpCs.includes('public static bool TryParseLangArg('));
+  assert.ok(cdpCs.includes('AG_PRISM_LANG'));
+  assert.ok(cdpCs.includes('CultureInfo.CurrentUICulture'));
+  assert.ok(cdpCs.includes('GetCdpRelaunchPromptCaption()'));
+  assert.ok(cdpCs.includes('GetCdpRelaunchPromptText()'));
+
+  // 2. CLI --lang / --help & WinForms UseMnemonic safety
+  assert.ok(setupCs.includes('InstallerI18n.TryParseLangArg('), 'Setup ParseArgs must support --lang en|zh and --lang=en|zh');
+  assert.ok(setupCs.includes('BuildHelpText()'), 'Setup must provide bilingual --help output');
+  assert.ok(watcherCs.includes('InstallerI18n.TryParseLangArg('), 'Watcher Main must support --lang en|zh and --lang=en|zh');
+  assert.ok(watcherCs.includes('BuildHelpText()'), 'Watcher must provide bilingual --help output');
+  assert.ok(setupCs.includes('_uninstallBtn.UseMnemonic = false;'), 'WinForms buttons with & must disable mnemonic prefix');
+  assert.ok(setupCs.includes('_closeBtn.UseMnemonic = false;'), 'WinForms buttons with & must disable mnemonic prefix');
+  assert.ok(setupCs.includes('_subtitleLabel.UseMnemonic = false;'), 'WinForms labels with & must disable mnemonic prefix');
+
+  // 3. Key window/button/relaunch prompt English strings exist
+  for (const phrase of [
+    'Obsidian Prism Installer & Patcher',
+    'Obsidian Prism Installer',
+    'Uninstall & Reset',
+    'Open Config Dir',
+    'Install Now',
+    'Reinstall / Update',
+    'Launch Antigravity',
+    'Done & Close',
+    'Activate Obsidian Prism Now',
+    'Confirm Uninstall',
+  ]) {
+    assert.ok(setupCs.includes(`"${phrase}"`), `setup/Program.cs must include English UI phrase: ${phrase}`);
+  }
+  assert.ok(cdpCs.includes('"Obsidian Prism · Restore UI Connection"'));
+  assert.ok(cdpCs.includes('Reopen Antigravity now to restore the Obsidian Prism interface?'));
+
+  // 4. Static audit: every non-comment CJK string literal in the 3 C# files must be inside InstallerI18n.Tr/TrFormat
+  // (except explicit CJK keyword matching in IndexOf), and every Tr/TrFormat call must have a clean non-CJK English second arg.
+  const allowedMatchKeywords = new Set([
+    '符号链接',
+    '重解析点',
+    '正由另一进程使用',
+    '拒绝访问',
+    '[✓] 已注入 obsidian-prism:',
+  ]);
+
+  function stripCommentsPreserveLines(src) {
+    let out = '';
+    let i = 0;
+    let inStr = false;
+    let verbatim = false;
+    let inChar = false;
+    while (i < src.length) {
+      const ch = src[i];
+      const next = src[i + 1];
+      if (inStr) {
+        out += ch;
+        if (verbatim) {
+          if (ch === '"' && next === '"') {
+            out += next;
+            i += 2;
+            continue;
+          }
+          if (ch === '"') inStr = false;
+        } else {
+          if (ch === '\\' && i + 1 < src.length) {
+            out += next;
+            i += 2;
+            continue;
+          }
+          if (ch === '"') inStr = false;
+        }
+        i++;
+        continue;
+      }
+      if (inChar) {
+        out += ch;
+        if (ch === '\\' && i + 1 < src.length) {
+          out += next;
+          i += 2;
+          continue;
+        }
+        if (ch === "'") inChar = false;
+        i++;
+        continue;
+      }
+      if (ch === '/' && next === '/') {
+        while (i < src.length && src[i] !== '\n') i++;
+        continue;
+      }
+      if (ch === '/' && next === '*') {
+        i += 2;
+        while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) {
+          if (src[i] === '\n') out += '\n';
+          i++;
+        }
+        i += 2;
+        continue;
+      }
+      if (ch === '@' && next === '"') {
+        inStr = true;
+        verbatim = true;
+        out += '@"';
+        i += 2;
+        continue;
+      }
+      if (ch === '"') {
+        inStr = true;
+        verbatim = false;
+        out += ch;
+        i++;
+        continue;
+      }
+      if (ch === "'") {
+        inChar = true;
+        out += ch;
+        i++;
+        continue;
+      }
+      out += ch;
+      i++;
+    }
+    return out;
+  }
+
+  function extractTrCalls(code) {
+    const calls = [];
+    const re = /InstallerI18n\.Tr(?:Format)?\s*\(/g;
+    let m;
+    while ((m = re.exec(code)) !== null) {
+      let depth = 1;
+      let i = m.index + m[0].length;
+      let inStr = false;
+      let verbatim = false;
+      let argStart = i;
+      const args = [];
+      while (i < code.length && depth > 0) {
+        const ch = code[i];
+        const next = code[i + 1];
+        if (inStr) {
+          if (verbatim) {
+            if (ch === '"' && next === '"') { i += 2; continue; }
+            if (ch === '"') inStr = false;
+          } else {
+            if (ch === '\\') { i += 2; continue; }
+            if (ch === '"') inStr = false;
+          }
+          i++;
+          continue;
+        }
+        if (ch === '@' && next === '"') { inStr = true; verbatim = true; i += 2; continue; }
+        if (ch === '"') { inStr = true; verbatim = false; i++; continue; }
+        if (ch === '(') depth++;
+        else if (ch === ')') {
+          depth--;
+          if (depth === 0) {
+            args.push(code.slice(argStart, i).trim());
+            break;
+          }
+        } else if (ch === ',' && depth === 1) {
+          args.push(code.slice(argStart, i).trim());
+          argStart = i + 1;
+        }
+        i++;
+      }
+      calls.push({ start: m.index, end: i + 1, args });
+    }
+    return calls;
+  }
+
+  for (const [label, rawSrc] of [
+    ['installer/common/CdpClient.cs', cdpCs],
+    ['installer/setup/Program.cs', setupCs],
+    ['installer/watcher/Program.cs', watcherCs],
+  ]) {
+    const code = stripCommentsPreserveLines(rawSrc);
+    const trCalls = extractTrCalls(code);
+    assert.ok(trCalls.length > 0, `${label} must contain InstallerI18n.Tr/TrFormat calls`);
+    for (const c of trCalls) {
+      assert.ok(c.args.length >= 2, `${label} Tr call missing English arg: ${c.args[0]}`);
+      assert.ok(c.args[1].length > 2, `${label} Tr call has empty English arg for: ${c.args[0]}`);
+      assert.equal(/[\u4e00-\u9fa5]/.test(c.args[1]), false, `${label} English branch must not contain CJK: ${c.args[1]}`);
+    }
+
+    // Mask out all Tr/TrFormat call spans, then ensure zero bare CJK string literals remain outside allowlisted IndexOf keywords
+    let masked = '';
+    let cursor = 0;
+    for (const c of trCalls) {
+      if (c.start >= cursor) {
+        masked += code.slice(cursor, c.start);
+        masked += ' '.repeat(c.end - c.start);
+        cursor = c.end;
+      }
+    }
+    masked += code.slice(cursor);
+
+    const strRe = /@"(?:""|[^"])*"|"(?:\\.|[^"\\])*"/g;
+    let sm;
+    const bareCjk = [];
+    while ((sm = strRe.exec(masked)) !== null) {
+      const lit = sm[0];
+      if (!/[\u4e00-\u9fa5]/.test(lit)) continue;
+      const inner = lit.startsWith('@"') ? lit.slice(2, -1).replace(/""/g, '"') : lit.slice(1, -1);
+      if (allowedMatchKeywords.has(inner)) continue;
+      bareCjk.push(inner);
+    }
+    assert.deepEqual(bareCjk, [], `${label} still has untranslated bare CJK string literal(s)`);
+  }
+});
+
+test(
+  'Windows C# InstallerI18n priority (CLI --lang > AG_PRISM_LANG > CurrentUICulture), relaunch prompt & WinForms English button fit (#37)',
+  { skip: process.platform !== 'win32' ? 'Windows-only C# InstallerI18n runtime test' : false },
+  () => {
+    const winDir = process.env.WINDIR || 'C:\\Windows';
+    const csc = [
+      path.join(winDir, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'),
+      path.join(winDir, 'Microsoft.NET', 'Framework', 'v4.0.30319', 'csc.exe'),
+    ].find((p) => fs.existsSync(p));
+    assert.ok(csc, 'Expected .NET Framework csc.exe on Windows');
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-cs-i18n-'));
+    try {
+      const probeCs = path.join(tmpDir, 'I18nProbe.cs');
+      const probeExe = path.join(tmpDir, 'i18n-probe.exe');
+      fs.writeFileSync(
+        probeCs,
+        [
+          'using System;',
+          'using System.Collections.Generic;',
+          'using System.Drawing;',
+          'using System.Globalization;',
+          'using System.Threading;',
+          'using System.Windows.Forms;',
+          'using AgyClaudeStyle;',
+          'class I18nProbe {',
+          '  static int MeasureNoPrefix(string text, string family, float size, bool bold) {',
+          '    using (Font f = new Font(family, size, bold ? FontStyle.Bold : FontStyle.Regular)) {',
+          '      return TextRenderer.MeasureText(text, f, Size.Empty, TextFormatFlags.NoPrefix).Width;',
+          '    }',
+          '  }',
+          '  static void Main() {',
+          '    var res = new Dictionary<string, object>(StringComparer.Ordinal);',
+          '    Environment.SetEnvironmentVariable("AG_PRISM_LANG", null);',
+          '    InstallerI18n.SetPreferredLang(null);',
+          '    Thread.CurrentThread.CurrentUICulture = new CultureInfo("en-US");',
+          '    res["cultureEn"] = InstallerI18n.EffectiveLang;',
+          '    res["captionEn"] = CdpHelper.GetCdpRelaunchPromptCaption();',
+          '    res["textEn"] = CdpHelper.GetCdpRelaunchPromptText();',
+          '    Thread.CurrentThread.CurrentUICulture = new CultureInfo("ja-JP");',
+          '    res["cultureJa"] = InstallerI18n.EffectiveLang;',
+          '    Thread.CurrentThread.CurrentUICulture = new CultureInfo("zh-CN");',
+          '    res["cultureZhCn"] = InstallerI18n.EffectiveLang;',
+          '    res["captionZh"] = CdpHelper.GetCdpRelaunchPromptCaption();',
+          '    res["textZh"] = CdpHelper.GetCdpRelaunchPromptText();',
+          '    Thread.CurrentThread.CurrentUICulture = new CultureInfo("zh-TW");',
+          '    res["cultureZhTw"] = InstallerI18n.EffectiveLang;',
+          '    Environment.SetEnvironmentVariable("AG_PRISM_LANG", "en");',
+          '    res["envEnOverZh"] = InstallerI18n.EffectiveLang;',
+          '    Thread.CurrentThread.CurrentUICulture = new CultureInfo("en-US");',
+          '    Environment.SetEnvironmentVariable("AG_PRISM_LANG", "zh-CN");',
+          '    res["envZhOverEn"] = InstallerI18n.EffectiveLang;',
+          '    InstallerI18n.SetPreferredLang("en");',
+          '    res["explicitEnOverEnvZh"] = InstallerI18n.EffectiveLang;',
+          '    Environment.SetEnvironmentVariable("AG_PRISM_LANG", "en");',
+          '    InstallerI18n.SetPreferredLang("zh");',
+          '    res["explicitZhOverEnvEn"] = InstallerI18n.EffectiveLang;',
+          '    string parsed1 = null, parsed2 = null;',
+          '    string[] a1 = new string[] { "--lang", "en" }; int i1 = 0;',
+          '    bool ok1 = InstallerI18n.TryParseLangArg(a1, ref i1, out parsed1);',
+          '    string[] a2 = new string[] { "--lang=zh-CN" }; int i2 = 0;',
+          '    bool ok2 = InstallerI18n.TryParseLangArg(a2, ref i2, out parsed2);',
+          '    res["parsePairOk"] = ok1 && i1 == 1 && parsed1 == "en";',
+          '    res["parseEqOk"] = ok2 && i2 == 0 && parsed2 == "zh-CN";',
+          '    var widths = new Dictionary<string, object>(StringComparer.Ordinal);',
+          '    widths["uninstallEn"] = MeasureNoPrefix("Uninstall & Reset", "Segoe UI", 9.5f, false);',
+          '    widths["openDirEn"] = MeasureNoPrefix("Open Config Dir", "Segoe UI", 9.5f, false);',
+          '    widths["reinstallEn"] = MeasureNoPrefix("Reinstall / Update", "Segoe UI", 9.5f, true);',
+          '    widths["launchEn"] = MeasureNoPrefix("Launch Antigravity", "Segoe UI", 9.5f, false);',
+          '    widths["doneCloseEn"] = MeasureNoPrefix("Done & Close", "Segoe UI", 9.5f, false);',
+          '    res["widths"] = widths;',
+          '    Console.Write(MiniJson.Stringify(res, false));',
+          '  }',
+          '}',
+        ].join('\n'),
+        'utf8'
+      );
+
+      execFileSync(
+        csc,
+        [
+          '/nologo',
+          '/utf8output',
+          '/codepage:65001',
+          '/warnaserror',
+          '/target:exe',
+          `/out:${probeExe}`,
+          '/r:System.dll',
+          '/r:System.Core.dll',
+          '/r:System.Drawing.dll',
+          '/r:System.Net.Http.dll',
+          '/r:System.Windows.Forms.dll',
+          path.join(ROOT_DIR, 'installer', 'common', 'MiniJson.cs'),
+          path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs'),
+          probeCs,
+        ],
+        { stdio: 'pipe' }
+      );
+
+      const out = JSON.parse(execFileSync(probeExe, [], { encoding: 'utf8' }));
+      assert.equal(out.cultureEn, 'en');
+      assert.equal(out.cultureJa, 'en');
+      assert.equal(out.cultureZhCn, 'zh');
+      assert.equal(out.cultureZhTw, 'zh');
+      assert.equal(out.envEnOverZh, 'en');
+      assert.equal(out.envZhOverEn, 'zh');
+      assert.equal(out.explicitEnOverEnvZh, 'en');
+      assert.equal(out.explicitZhOverEnvEn, 'zh');
+      assert.equal(out.parsePairOk, true);
+      assert.equal(out.parseEqOk, true);
+
+      assert.equal(out.captionEn, 'Obsidian Prism · Restore UI Connection');
+      assert.equal(/[\u4e00-\u9fa5]/.test(out.captionEn), false);
+      assert.equal(/[\u4e00-\u9fa5]/.test(out.textEn), false);
+      assert.ok(out.textEn.includes('--remote-debugging-port=0'));
+      assert.ok(out.textEn.includes('Obsidian Prism'));
+      assert.ok(out.captionZh.includes('恢复界面连接'));
+      assert.ok(out.textZh.includes('--remote-debugging-port=0'));
+
+      // Verify English WinForms button labels fit comfortably inside 96-DPI button widths with >= 12px horizontal padding
+      assert.ok(out.widths.uninstallEn <= 136 - 12, `Uninstall & Reset width ${out.widths.uninstallEn}px exceeds safe fit in 136px`);
+      assert.ok(out.widths.openDirEn <= 122 - 12, `Open Config Dir width ${out.widths.openDirEn}px exceeds safe fit in 122px`);
+      assert.ok(out.widths.reinstallEn <= 144 - 12, `Reinstall / Update width ${out.widths.reinstallEn}px exceeds safe fit in 144px`);
+      assert.ok(out.widths.launchEn <= 144 - 12, `Launch Antigravity width ${out.widths.launchEn}px exceeds safe fit in 144px`);
+      assert.ok(out.widths.doneCloseEn <= 110 - 12, `Done & Close width ${out.widths.doneCloseEn}px exceeds safe fit in 110px`);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
+);
+
+test(
+  'Windows installer.exe & watcher.exe E2E bilingual CLI (--lang en|zh, AG_PRISM_LANG, --help, English install/uninstall/watch.log) (#37)',
+  { skip: process.platform !== 'win32' ? 'Windows-only installer.exe bilingual E2E test' : false },
+  async () => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-i18n-e2e-'));
+    const installerExe = path.join(workDir, 'installer.exe');
+    const installDir = path.join(workDir, 'installed');
+    const nativePluginDir = path.join(workDir, 'plugins', 'obsidian-prism');
+    const outHelpEn = path.join(workDir, 'help-en.txt');
+    const outHelpZh = path.join(workDir, 'help-zh.txt');
+    const outStatusEnvEn = path.join(workDir, 'status-env-en.json');
+    const outStatusCliZh = path.join(workDir, 'status-cli-zh.json');
+    const outStatusCliEn = path.join(workDir, 'status-cli-en.json');
+    const outInstallEn = path.join(workDir, 'install-en.json');
+    const outUninstallEn = path.join(workDir, 'uninstall-en.json');
+    const outWatcherHelpEn = path.join(workDir, 'watcher-help-en.txt');
+    const mockCdp = createMockCdpServer();
+
+    try {
+      buildInstaller({ outputPath: installerExe });
+      const port = await mockCdp.start();
+
+      // 1. --help in English and Chinese
+      await runExe(installerExe, ['--help', '--lang', 'en', '--out', outHelpEn], 10000);
+      await runExe(installerExe, ['--help', '--lang=zh', '--out', outHelpZh], 10000);
+      const helpEn = fs.readFileSync(outHelpEn, 'utf8');
+      const helpZh = fs.readFileSync(outHelpZh, 'utf8');
+      assert.equal(/[\u4e00-\u9fa5]/.test(helpEn), false, `English --help must not contain CJK: ${helpEn}`);
+      assert.ok(helpEn.includes('Obsidian Prism Installer & Patcher for Windows'));
+      assert.ok(helpEn.includes('--lang <zh|en>'));
+      assert.ok(helpZh.includes('黑曜棱镜') && helpZh.includes('--lang <zh|en>'));
+
+      // 2. Priority check via --status: CLI --lang overrides AG_PRISM_LANG
+      await runExe(
+        installerExe,
+        ['--status', '--install-dir', installDir, '--plugin-dir', nativePluginDir, '--out', outStatusEnvEn],
+        10000,
+        { ...process.env, AG_PRISM_LANG: 'en' }
+      );
+      assert.equal(JSON.parse(fs.readFileSync(outStatusEnvEn, 'utf8')).uiLang, 'en');
+
+      await runExe(
+        installerExe,
+        ['--status', '--lang=zh', '--install-dir', installDir, '--plugin-dir', nativePluginDir, '--out', outStatusCliZh],
+        10000,
+        { ...process.env, AG_PRISM_LANG: 'en' }
+      );
+      assert.equal(JSON.parse(fs.readFileSync(outStatusCliZh, 'utf8')).uiLang, 'zh');
+
+      await runExe(
+        installerExe,
+        ['--status', '--lang', 'en', '--install-dir', installDir, '--plugin-dir', nativePluginDir, '--out', outStatusCliEn],
+        10000,
+        { ...process.env, AG_PRISM_LANG: 'zh' }
+      );
+      assert.equal(JSON.parse(fs.readFileSync(outStatusCliEn, 'utf8')).uiLang, 'en');
+
+      // 3. Silent install in English mode (--lang=en overriding AG_PRISM_LANG=zh) -> English result & English watch.log
+      await runExe(
+        installerExe,
+        [
+          '--silent',
+          '--lang=en',
+          '--no-autostart',
+          '--no-kill-legacy',
+          '--no-native-daemon',
+          '--install-dir',
+          installDir,
+          '--plugin-dir',
+          nativePluginDir,
+          '--cdp-port',
+          String(port),
+          '--out',
+          outInstallEn,
+        ],
+        20000,
+        { ...process.env, AG_PRISM_LANG: 'zh' }
+      );
+
+      const installEnRes = JSON.parse(fs.readFileSync(outInstallEn, 'utf8'));
+      assert.equal(installEnRes.ok, true);
+      assert.deepEqual(installEnRes.injectedPages, ['Antigravity']);
+      assert.equal(/[\u4e00-\u9fa5]/.test(installEnRes.headline), false, `English headline had CJK: ${installEnRes.headline}`);
+      assert.equal(/[\u4e00-\u9fa5]/.test(installEnRes.detail), false, `English detail had CJK: ${installEnRes.detail}`);
+      assert.ok(installEnRes.headline.includes('Patched!'));
+
+      const watchLogPath = path.join(installDir, 'watch.log');
+      const watchLogEn = await waitFor(() => {
+        if (!fs.existsSync(watchLogPath)) return null;
+        const t = fs.readFileSync(watchLogPath, 'utf8');
+        return t.includes('[✓] Injected obsidian-prism:') ? t : null;
+      }, 6000, 120);
+      assert.ok(watchLogEn.includes('watcher started'));
+      assert.ok(watchLogEn.includes('[+] Connected to debug port'));
+      assert.equal(/[\u4e00-\u9fa5]/.test(watchLogEn), false, `English watch.log must not contain CJK: ${watchLogEn}`);
+
+      // 4. Watcher --help --lang en
+      const watcherExe = path.join(installDir, 'obsidian-prism-watcher.exe');
+      await runExe(watcherExe, ['--help', '--lang', 'en', '--out', outWatcherHelpEn], 10000, { ...process.env, AG_PRISM_LANG: 'zh' });
+      const watcherHelpEn = fs.readFileSync(outWatcherHelpEn, 'utf8');
+      assert.equal(/[\u4e00-\u9fa5]/.test(watcherHelpEn), false);
+      assert.ok(watcherHelpEn.includes('Obsidian Prism Background Watcher'));
+
+      // 5. Silent uninstall in English mode via AG_PRISM_LANG=en
+      await runExe(
+        installerExe,
+        [
+          '--uninstall',
+          '--silent',
+          '--no-autostart',
+          '--install-dir',
+          installDir,
+          '--plugin-dir',
+          nativePluginDir,
+          '--cdp-port',
+          String(port),
+          '--out',
+          outUninstallEn,
+        ],
+        20000,
+        { ...process.env, AG_PRISM_LANG: 'en' }
+      );
+      const uninstallEnRes = JSON.parse(fs.readFileSync(outUninstallEn, 'utf8'));
+      assert.equal(uninstallEnRes.ok, true);
+      assert.equal(/[\u4e00-\u9fa5]/.test(uninstallEnRes.headline), false, `English uninstall headline had CJK: ${uninstallEnRes.headline}`);
+      assert.equal(/[\u4e00-\u9fa5]/.test(uninstallEnRes.detail), false, `English uninstall detail had CJK: ${uninstallEnRes.detail}`);
+      assert.ok(uninstallEnRes.headline.includes('Uninstalled'));
+    } finally {
+      try {
+        const pidPath = path.join(installDir, '.watch.pid');
+        if (fs.existsSync(pidPath)) {
+          const pid = parseInt(fs.readFileSync(pidPath, 'utf8'), 10);
+          if (pid) process.kill(pid);
+        }
+      } catch {}
+      await mockCdp.close();
       try {
         fs.rmSync(workDir, { recursive: true, force: true });
       } catch {}

@@ -78,15 +78,15 @@ var LEGACY_SETTINGS_KEY = "dsh.codexEffortSlider.settings.v1";
 var SETTINGS_EVENT = "ag:codex-effort-slider:settings";
 var SETTINGS_VERSION = 1;
 var SETTINGS_SCHEMA = _F([
-_F({ key: "motion", label: "动画效果", defaultValue: "fast", options: _F([
-_F({ value: "fast", label: "快速动画", hint: "拨过 1/3 即切档 · ~70ms 快速吸附" }),
-_F({ value: "quick", label: "简洁动画", hint: "无过渡 · 直接跳档" }),
-_F({ value: "full", label: "完整动画", hint: "匀变速追赶 + 星尘渐亮" })
+_F({ key: "motion", label: "动画效果", labelEn: "Animation", defaultValue: "fast", options: _F([
+_F({ value: "fast", label: "快速动画", labelEn: "Fast", hint: "拨过 1/3 即切档 · ~70ms 快速吸附", hintEn: "Snaps after 1/3 travel (~70ms)" }),
+_F({ value: "quick", label: "简洁动画", labelEn: "Instant", hint: "无过渡 · 直接跳档", hintEn: "No transition, immediate jump" }),
+_F({ value: "full", label: "完整动画", labelEn: "Full", hint: "匀变速追赶 + 星尘渐亮", hintEn: "Smooth physics catch-up + starfield" })
 ]) }),
-_F({ key: "ticks", label: "已到达档位的刻度点", defaultValue: "highlight", options: _F([
-_F({ value: "highlight", label: "亮白显示", hint: "默认 · 已滑过档位高亮" }),
-_F({ value: "dim", label: "与未到达同色", hint: "所有刻度点保持柔和半透明" }),
-_F({ value: "hidden", label: "隐藏", hint: "不显示任何刻度点" })
+_F({ key: "ticks", label: "已到达档位的刻度点", labelEn: "Reached Tick Marks", defaultValue: "highlight", options: _F([
+_F({ value: "highlight", label: "亮白显示", labelEn: "Bright", hint: "默认 · 已滑过档位高亮", hintEn: "Default: highlight reached ticks" }),
+_F({ value: "dim", label: "与未到达同色", labelEn: "Muted", hint: "所有刻度点保持柔和半透明", hintEn: "Keep all ticks softly muted" }),
+_F({ value: "hidden", label: "隐藏", labelEn: "Hidden", hint: "不显示任何刻度点", hintEn: "Hide all tick marks" })
 ]) })
 ]);
 function schemaDefaults() {
@@ -509,21 +509,24 @@ return s;
 }
 // ── 右键设置面板 ────────────────────────────────────────────────────────────
 var SET_TITLE_I18N = { "zh-CN": "推理等级滑条设置", "zh-TW": "推理等級滑桿設定", yue: "推理等級滑桿設定", en: "Effort Slider", ja: "推論スライダー設定" };
+var SET_HEAD_I18N = { "zh-CN": "推理等级滑条", "zh-TW": "推理等級滑桿", yue: "推理等級滑桿", en: "Effort Slider", ja: "推論スライダー" };
+function _isZhLang(lk) { return !lk || /^(?:zh|yue)\b/i.test(String(lk)); }
 function openSettingsPanel(options) {
 var o = options || {}, d = o.document || (typeof document !== "undefined" ? document : null);
 var w = o.window || d?.defaultView || (typeof window !== "undefined" ? window : globalRoot);
 if (!d?.body) return () => {};
 installStyles(d);
 var lk = getPrismRootAttr(d, w, "data-ag-cs-lang") || "zh-CN";
+var zh = _isZhLang(lk);
 d.querySelector(".ces-set")?.remove?.();
 var mk = (t, c, tx) => { var e = d.createElement(t); if (c) e.className = c; if (tx) e.textContent = tx; return e; };
 var p = markNoTranslate(mk("div", "ces-set"));
 p.setAttribute("role", "dialog");
-p.setAttribute("aria-label", SET_TITLE_I18N[lk] || SET_TITLE_I18N["zh-CN"]);
+p.setAttribute("aria-label", SET_TITLE_I18N[lk] || (zh ? SET_TITLE_I18N["zh-CN"] : SET_TITLE_I18N.en));
 p.style.left = Math.max(8, Math.min((w?.innerWidth || 800) - 276, typeof o.x === "number" ? o.x : 120)) + "px";
 p.style.top = Math.max(8, Math.min((w?.innerHeight || 600) - 230, typeof o.y === "number" ? o.y : 120)) + "px";
 var hd = mk("div", "ces-set-head");
-hd.appendChild(mk("span", "", "推理等级滑条"));
+hd.appendChild(mk("span", "", SET_HEAD_I18N[lk] || (zh ? SET_HEAD_I18N["zh-CN"] : SET_HEAD_I18N.en)));
 hd.appendChild(mk("span", "ces-set-ver", "v1.2.1"));
 p.appendChild(hd);
 var obs = [];
@@ -538,12 +541,13 @@ it.b.setAttribute("aria-pressed", String(on));
 };
 for (var sc of SETTINGS_SCHEMA) {
 var g = mk("div", "ces-set-group"), r = mk("div", "ces-set-opts");
-g.appendChild(mk("div", "ces-set-label", sc.label));
+g.appendChild(mk("div", "ces-set-label", zh ? sc.label : (sc.labelEn || sc.label)));
 for (var op of sc.options) {
 let k = sc.key, v = op.value;
-var b = mk("button", "ces-set-opt", op.label);
+var b = mk("button", "ces-set-opt", zh ? op.label : (op.labelEn || op.label));
 b.type = "button";
-if (op.hint) b.title = op.hint;
+var hTxt = zh ? op.hint : (op.hintEn || op.hint);
+if (hTxt) b.title = hTxt;
 b.addEventListener("click", (ev) => { ev.stopPropagation(); writeSettings({ [k]: v }, w); ref(); });
 obs.push({ k, v, b });
 r.appendChild(b);
@@ -557,9 +561,9 @@ b.type = "button";
 b.addEventListener("click", (ev) => { ev.stopPropagation(); fn(b); });
 acts.appendChild(b);
 };
-mb("复制诊断", (b) => { try { w?.navigator?.clipboard?.writeText?.(JSON.stringify(dumpTrace(w), null, 2)); } catch {} b.textContent = "已复制"; });
-mb("恢复默认", () => { resetSettings(w); ref(); });
-mb("关闭", () => cls());
+mb(zh ? "复制诊断" : "Copy Debug", (b) => { try { w?.navigator?.clipboard?.writeText?.(JSON.stringify(dumpTrace(w), null, 2)); } catch {} b.textContent = zh ? "已复制" : "Copied"; });
+mb(zh ? "恢复默认" : "Reset", () => { resetSettings(w); ref(); });
+mb(zh ? "关闭" : "Close", () => cls());
 p.appendChild(acts);
 ref();
 var offS = onSettingsChange(ref, w);
@@ -839,7 +843,7 @@ modelOption: byEffort.get(ck) || modelObj
 };
 }
 var sP = modelObj && parseModelLabel(modelObj.label), sE = sP ? sP.effort : "fixed";
-var sL = sP ? sP.effortLabel : (getPrismRootAttr(null, null, "data-ag-cs-lang") === "en" ? "Fixed" : "固定");
+var sL = sP ? sP.effortLabel : (_isZhLang(getPrismRootAttr(null, null, "data-ag-cs-lang")) ? "固定" : "Fixed");
 var bn = baseName || modelObj?.label || "", sC = isClaudeModel(bn);
 return {
 baseName: bn, isOrchestrator: isOrch, orchestratorTunable: false,
@@ -848,18 +852,19 @@ levels: [{ effort: sE, label: sL, modelOption: modelObj }],
 currentIndex: 0, currentEffort: sE, currentLabel: sL, modelOption: modelObj
 };
 }
-function _commitAgOpt(ctx, targetOption, isOrchPlan) {
+function _commitAgOpt(ctx, targetOption, isOrchPlan, keepOpen) {
 if (!ctx || !targetOption?.label) return false;
+var shouldKeep = keepOpen !== false;
 try {
 var pk = ctx.orchPick || ctx.orchestratorPick;
 if (isOrchPlan && typeof pk?.select === "function") {
 var def = ctx.orchDef || ctx.orchestratorDefaultPlanner;
 pk.select(def && def.value === targetOption.value ? 0 : targetOption.value);
-try { ctx.setIsOpen?.(true); } catch {}
+if (shouldKeep) { try { ctx.setIsOpen?.(true); } catch {} }
 return true;
 }
 if (typeof ctx.setModelConfigByLabelForConversation === "function") {
-ctx.setModelConfigByLabelForConversation(targetOption.label, ctx.conversationId, true);
+ctx.setModelConfigByLabelForConversation(targetOption.label, ctx.conversationId, shouldKeep);
 return true;
 }
 if (typeof ctx.unwrappedSetSelectedModel === "function") {
@@ -875,7 +880,7 @@ if (prevFocus && prevFocus !== ed) { try { prevFocus.focus?.(); } catch {} }
 } finally {
 ed?.removeEventListener?.("focus", onFocus, true);
 }
-try { ctx.setIsOpen?.(true); } catch {}
+if (shouldKeep) { try { ctx.setIsOpen?.(true); } catch {} }
 return true;
 }
 if (typeof ctx.setCurrentModelConfigByLabel === "function") {
@@ -1532,16 +1537,65 @@ if (typeof MO === "function") { obs = new MO(scan); obs.observe(d.body, { childL
 return { stop: () => { obs?.disconnect(); obs = null; detach(); }, rescan: scan, getCurrent: () => cur };
 }
 // ── Antigravity 原生模型选择器深度桥接器 ───────────────────────────────────
-function installAntigravityObserver(options) {
-var opts = options || {};
-var doc = opts.document || (typeof document !== "undefined" ? document : null);
-var win = opts.window || (doc && doc.defaultView) || (typeof window !== "undefined" ? window : globalRoot);
-if (!doc || !doc.body) {
-return { stop: function () {}, rescan: function () {} };
+var EFFORT_MEMORY_KEY = "ag.prism.effortMemory.v1", _EFF_V = Object.create(null);
+AG_EFFORT_ORDER.forEach((k) => { _EFF_V[k] = 1; });
+function _loadEffMem(w) {
+var o = { models: new Map(), orch: new Map() }, s = resolveStorage(w);
+if (!s) return o;
+try {
+var p = JSON.parse(s.getItem(EFFORT_MEMORY_KEY) || "null");
+var f = (src, dst) => { if (!src || typeof src !== "object") return; for (var k of Object.keys(src)) { if (dst.size >= 64) break; var kk = k.trim(), v = String(src[k] || "").trim().toLowerCase(); if (kk && _EFF_V[v]) dst.set(kk, v); } };
+if (p && typeof p === "object") { f(p.models, o.models); f(p.orch, o.orch); }
+} catch {}
+return o;
 }
-installStyles(doc);
-// 记录每个基础模型在当前会话最后选定的推理档位（默认跟随 selectedModel 或 medium）
-var _effMap = new Map();
+function _saveEffMem(w, m1, m2) {
+var s = resolveStorage(w);
+if (!s) return;
+try {
+var d = (m) => { var o = Object.create(null), a = m ? Array.from(m.entries()) : []; for (var i = Math.max(0, a.length - 64); i < a.length; i++) { var k = String(a[i][0] || "").trim(), v = String(a[i][1] || "").trim().toLowerCase(); if (k && _EFF_V[v]) o[k] = v; } return o; };
+s.setItem(EFFORT_MEMORY_KEY, JSON.stringify({ v: 1, models: d(m1), orch: d(m2) }));
+} catch {}
+}
+function _setTxtNode(el, s, fd) {
+var txt = String(s == null ? "" : s);
+if (!el || el.textContent === txt) return;
+var tNodes = [], cn = el.childNodes;
+if (cn?.length) { for (var i = 0; i < cn.length; i++) if (cn[i]?.nodeType === 3) tNodes.push(cn[i]); }
+else if (el.firstChild?.nodeType === 3) tNodes.push(el.firstChild);
+if (tNodes.length === 1) { tNodes[0].nodeValue = txt; return; }
+if (tNodes.length >= 2) {
+var last = tNodes.length - 1, lead = txt[0] === " " && /^\s*$/.test(tNodes[0].nodeValue || "");
+if (lead && tNodes[0].nodeValue !== " ") tNodes[0].nodeValue = " ";
+for (var k = lead ? 1 : 0; k < (txt ? last : tNodes.length); k++) if (tNodes[k].nodeValue !== "") tNodes[k].nodeValue = "";
+if (txt) { var tail = lead ? txt.slice(1) : txt; if (tNodes[last].nodeValue !== tail) tNodes[last].nodeValue = tail; }
+return;
+}
+if (!txt) { if (!cn?.length && !el.children?.length) el.textContent = ""; return; }
+var d = el.ownerDocument || fd;
+if (d?.createTextNode && el.appendChild) el.appendChild(d.createTextNode(txt));
+else if (!el.children?.length) el.textContent = txt;
+}
+function _setEffTxtNode(el, s, fd) {
+if (!el) return;
+var txt = String(s == null ? "" : s), cur = el.textContent || "", ka = _normEffTxt(cur), kb = _normEffTxt(txt);
+if (!txt.trim()) { el.__cesLastText = txt; if (cur !== txt) _setTxtNode(el, txt, fd); return; }
+if (cur.trim() && ((ka && kb && ka === kb) || (el.__cesLastText === txt && !(ka && kb && ka !== kb)))) { el.__cesLastText = txt; return; }
+el.__cesLastText = txt;
+_setTxtNode(el, txt, fd);
+}
+function installAntigravityObserver(options) {
+var opts = options || {}, doc = opts.document || (typeof document !== "undefined" ? document : null);
+var win = opts.window || doc?.defaultView || (typeof window !== "undefined" ? window : globalRoot);
+var memOnly = Boolean(opts.memoryOnly);
+if (!doc?.body) return { stop: () => {}, rescan: () => {}, setRememberEffort: () => {}, getMemory: () => ({ models: {}, orch: {} }) };
+if (!memOnly) installStyles(doc);
+var rememberEffort = memOnly ? true : opts.rememberEffort !== false;
+var _loadedMem = rememberEffort ? _loadEffMem(win) : { models: new Map(), orch: new Map() };
+var _effMap = _loadedMem.models, _orchEffMap = _loadedMem.orch;
+var _curEffMap = () => (rememberEffort ? _effMap : null);
+var _recEff = (m, b, e) => { if (!rememberEffort || !b || !e || !_EFF_V[e] || m.get(b) === e) return; m.set(b, e); _saveEffMem(win, _effMap, _orchEffMap); };
+var lk = null, qM = typeof queueMicrotask === "function" ? queueMicrotask : (fn) => Promise.resolve().then(fn);
 var activeMount = null;
 var activePanel = null;
 var activeSection = null;
@@ -1557,33 +1611,8 @@ var _boundSubs = new Set();
 var _hiddenL3 = new Map();
 var observer = null;
 var _intMut = false;
-function _setTxt(el, s) {
-var txt = String(s == null ? "" : s);
-if (!el || el.textContent === txt) return;
-var tNodes = [], cn = el.childNodes;
-if (cn && cn.length) { for (var i = 0; i < cn.length; i += 1) if (cn[i] && cn[i].nodeType === 3) tNodes.push(cn[i]); }
-else if (el.firstChild && el.firstChild.nodeType === 3) tNodes.push(el.firstChild);
-if (tNodes.length === 1) { tNodes[0].nodeValue = txt; return; }
-if (tNodes.length >= 2) {
-var last = tNodes.length - 1, lead = txt.charAt(0) === " " && /^\s*$/.test(tNodes[0].nodeValue || "");
-if (lead && tNodes[0].nodeValue !== " ") tNodes[0].nodeValue = " ";
-for (var k = lead ? 1 : 0; k < (txt ? last : tNodes.length); k += 1) if (tNodes[k].nodeValue !== "") tNodes[k].nodeValue = "";
-if (txt) { var tail = lead ? txt.slice(1) : txt; if (tNodes[last].nodeValue !== tail) tNodes[last].nodeValue = tail; }
-return;
-}
-if (!txt) { if ((!cn || !cn.length) && (!el.children || !el.children.length)) el.textContent = ""; return; }
-var d = el.ownerDocument || doc;
-if (d && d.createTextNode && el.appendChild) el.appendChild(d.createTextNode(txt));
-else if (!el.children || !el.children.length) el.textContent = txt;
-}
-function _setEffTxt(el, s) {
-if (!el) return;
-var txt = String(s == null ? "" : s), cur = el.textContent || "", ka = _normEffTxt(cur), kb = _normEffTxt(txt);
-if (!txt.trim()) { el.__cesLastText = txt; if (cur !== txt) _setTxt(el, txt); return; }
-if (cur.trim() && ((ka && kb && ka === kb) || (el.__cesLastText === txt && !(ka && kb && ka !== kb)))) { el.__cesLastText = txt; return; }
-el.__cesLastText = txt;
-_setTxt(el, txt);
-}
+function _setTxt(el, s) { _setTxtNode(el, s, doc); }
+function _setEffTxt(el, s) { _setEffTxtNode(el, s, doc); }
 function notifySeatListeners() { _seatLs.forEach(function (fn) { try { fn(); } catch (e) {} }); }
 function _withMut(fn) {
 _intMut = true;
@@ -1602,7 +1631,7 @@ var p = findAntigravityPanel(doc), t = findAntigravityTrigger(doc);
 return (p && _rdAgFiber(p)) || (t && _rdAgFiber(t)) || null;
 }
 function getActiveProfile(ctx) {
-return ctx ? resolveModelEffortProfile(ctx, _actOptOvr || activeBaseOverride || ctx.selectedModel, _effMap, _orchPlanOvr) : null;
+return ctx ? resolveModelEffortProfile(ctx, _actOptOvr || activeBaseOverride || ctx.selectedModel, _curEffMap(), _orchPlanOvr) : null;
 }
 /**
 * 立即同步更新：
@@ -1612,7 +1641,10 @@ return ctx ? resolveModelEffortProfile(ctx, _actOptOvr || activeBaseOverride || 
 function _syncAgDom(ctx, activeProfile) {
 var profile = ctx && (activeProfile || getActiveProfile(ctx));
 if (!profile) return;
-if (!profile.locked && !profile.isOrchestrator && profile.baseName && profile.currentEffort) _effMap.set(profile.baseName, profile.currentEffort);
+if (!profile.locked && profile.baseName && profile.currentEffort) {
+if (profile.isOrchestrator) _recEff(_orchEffMap, profile.baseName, profile.currentEffort);
+else _recEff(_effMap, profile.baseName, profile.currentEffort);
+}
 var count = profile.levels.length, idx = profile.currentIndex, isMax = !profile.locked && count > 1 && idx === count - 1 && !isOffLevel(profile.currentLabel);
 var _sa = (el, k, v) => { if (el && el.getAttribute(k) !== v) el.setAttribute(k, v); };
 var triggerBtn = findAntigravityTrigger(doc);
@@ -1656,7 +1688,7 @@ _mkSel(oM, Boolean(profile.isOrchestrator));
 if (oM !== oRow) _sa(oRow, "data-ces-model-selected", String(Boolean(profile.isOrchestrator)));
 }
 for (var gSpan of panel.querySelectorAll('[data-testid="model-selector-effort-group"]')) {
-var base = gSpan.getAttribute("data-model-base") || (gSpan.textContent || "").trim(), rowProf = resolveModelEffortProfile(ctx, base, _effMap);
+var base = gSpan.getAttribute("data-model-base") || (gSpan.textContent || "").trim(), rowProf = resolveModelEffortProfile(ctx, base, _curEffMap());
 if (!rowProf) continue;
 var sel = !profile.isOrchestrator && profile.baseName === base, sib = gSpan.nextElementSibling;
 _mkSel(gSpan.closest('[role="menuitem"]'), sel);
@@ -1686,19 +1718,21 @@ var ctx = getLiveContext(), targetOpt = levelItem && (levelItem.modelOption || l
 if (!ctx || !targetOpt) return;
 var curProf = getActiveProfile(ctx);
 if (curProf?.isOrchestrator && curProf.orchestratorTunable) {
+var opP = parseModelLabel(targetOpt.label);
+if (opP) _recEff(_orchEffMap, opP.base, opP.effort);
 _orchPlanOvr = targetOpt;
 _commitAgOpt(ctx, targetOpt, true);
-_withMut(() => { var np = resolveModelEffortProfile(ctx, _actOptOvr || ctx.selectedModel, _effMap, targetOpt); _syncAgDom(ctx, np); _sySubs(activePanel, ctx, np); notifySeatListeners(); _syP(); });
+_withMut(() => { var np = resolveModelEffortProfile(ctx, _actOptOvr || ctx.selectedModel, _curEffMap(), targetOpt); _syncAgDom(ctx, np); _sySubs(activePanel, ctx, np); notifySeatListeners(); _syP(); });
 return;
 }
 var parsed = parseModelLabel(targetOpt.label);
-if (parsed) { _effMap.set(parsed.base, parsed.effort); activeBaseOverride = parsed.base; }
+if (parsed) { _recEff(_effMap, parsed.base, parsed.effort); activeBaseOverride = parsed.base; }
 _actOptOvr = targetOpt;
 _lastHostLbl = (ctx.selectedModel && ctx.selectedModel.label) || "";
 _orchPlanOvr = null;
 _commitAgOpt(ctx, targetOpt);
 _withMut(function () {
-_syncAgDom(ctx, resolveModelEffortProfile(ctx, targetOpt, _effMap));
+_syncAgDom(ctx, resolveModelEffortProfile(ctx, targetOpt, _curEffMap()));
 _syP();
 });
 },
@@ -1763,6 +1797,7 @@ var by = _luEff(c.orchIdx instanceof Map && c.orchIdx.size ? c.orchIdx : c.effor
 if (by && by.size) {
 var ok = function (k) { return k && by.has(k) && _okOpt(by.get(k)); }, cur = getActiveProfile(c), dp2 = c.orchDef && parseModelLabel(c.orchDef.label), ek = "";
 if (bp && ok(bp.effort)) ek = bp.effort;
+else if (rememberEffort && ok(_orchEffMap.get(mb))) ek = _orchEffMap.get(mb);
 else if (cur && cur.isOrchestrator && ok(cur.currentEffort)) ek = cur.currentEffort;
 else if (dp2 && _slug(dp2.base) === _slug(mb) && ok(dp2.effort)) ek = dp2.effort;
 else if (ok("medium")) ek = "medium";
@@ -1860,7 +1895,7 @@ if (!a || (a.need && !_commitAgOpt(a.ctx, a.oo, false)) || !_commitAgOpt(a.ctx, 
 ev.preventDefault(); _stp(ev);
 activeBaseOverride = null; _actOptOvr = a.oo; _lastHostLbl = (a.ctx.selectedModel && a.ctx.selectedModel.label) || ""; _orchPlanOvr = a.po;
 _withMut(function () {
-var p = resolveModelEffortProfile(a.ctx, a.oo, _effMap, a.po);
+var p = resolveModelEffortProfile(a.ctx, a.oo, _curEffMap(), a.po);
 _syncAgDom(a.ctx, p); _sySubDom(m, a.ctx, p); _sySubs(activePanel, a.ctx, p); notifySeatListeners(); _syP();
 });
 }
@@ -1930,7 +1965,7 @@ if (bp && bp.base) base = bp.base;
 if (!base || _isOrch(base)) return null;
 var ctx = getLiveContext();
 if (!_canCm(ctx)) return null;
-var prof = resolveModelEffortProfile(ctx, base, _effMap), opt = prof && !prof.locked && prof.levels && prof.levels.length >= 2 ? prof.modelOption : null;
+var prof = resolveModelEffortProfile(ctx, base, _curEffMap()), opt = prof && !prof.locked && prof.levels && prof.levels.length >= 2 ? prof.modelOption : null;
 if (!_okOpt(opt)) return null;
 if (Array.isArray(ctx.modelOptions) && ctx.modelOptions.length && !ctx.modelOptions.some(function (o) { return _okOpt(o) && (o === opt || o.label === opt.label); })) return null;
 var cur = getActiveProfile(ctx);
@@ -1950,7 +1985,7 @@ _actOptOvr = act.targetOption;
 _lastHostLbl = (act.ctx.selectedModel && act.ctx.selectedModel.label) || "";
 _orchPlanOvr = null;
 _withMut(function () {
-var nextProf = resolveModelEffortProfile(act.ctx, act.targetOption, _effMap);
+var nextProf = resolveModelEffortProfile(act.ctx, act.targetOption, _curEffMap());
 _syncAgDom(act.ctx, nextProf);
 _sySubs(panel, act.ctx, nextProf);
 notifySeatListeners();
@@ -2120,7 +2155,35 @@ else syncTriggerColor(doc, vState.label, vState.index, vState.count, vState.isMa
 function scan() {
 if (_intMut) return;
 _withMut(() => {
-var ctx = getLiveContext(), curLbl = ctx?.selectedModel?.label || "";
+var ctx = getLiveContext();
+if (memOnly) {
+if (!ctx) return;
+var sel = ctx.selectedModel, isO = _isOrch(sel);
+if (lk && Date.now() > lk.u) lk = null;
+var pi = isO ? _resOrch(ctx) : null, mp = isO ? (pi?.opt && parseModelLabel(pi.opt.label)) : (sel?.label && parseModelLabel(sel.label)), lbl = isO ? pi?.opt?.label : sel?.label;
+if (mp?.base && mp.effort && (isO || (_luEff(ctx.effortIndex, mp.base)?.size || 0) >= 2)) {
+var dst = isO ? _orchEffMap : _effMap;
+if (lk && lk.o === isO && lk.b === mp.base) { if (lbl === lk.t.label) { lk = null; _recEff(dst, mp.base, mp.effort); } }
+else _recEff(dst, mp.base, mp.effort);
+}
+var p0 = findAntigravityPanel(doc);
+if (!p0) return;
+var sB = !isO && sel?.label ? (parseModelLabel(sel.label)?.base || sel.label) : "";
+for (var g of p0.querySelectorAll('[data-testid="model-selector-effort-group"]')) {
+var gb = g.getAttribute("data-model-base") || (g.textContent || "").trim(); gb = parseModelLabel(gb)?.base || gb;
+var gr = gb && (isO || gb !== sB) ? _effMap.get(gb) : "";
+if (gr && _luEff(ctx.effortIndex, gb)?.has(gr) && g.nextElementSibling?.tagName === "SPAN") _setEffTxt(g.nextElementSibling, AG_EFFORT_LABELS[gr] || gr);
+}
+if (!isO && _orchEffMap.size) {
+var oi = ctx.orchIdx instanceof Map && ctx.orchIdx.size ? ctx.orchIdx : ctx.effortIndex;
+for (var row of doc.querySelectorAll('[data-testid="orchestrator-picker-row"][data-model-base]')) {
+var ob = (row.getAttribute("data-model-base") || "").trim(), or = ob ? _orchEffMap.get(ob) : "", os = or && _luEff(oi, ob)?.has(or) && row.querySelector("span.opacity-70");
+if (os) _setEffTxt(os, AG_EFFORT_LABELS[or] || or);
+}
+}
+return;
+}
+var curLbl = ctx?.selectedModel?.label || "";
 if ((_actOptOvr || activeBaseOverride) && (!curLbl || (_actOptOvr && curLbl === _actOptOvr.label) || curLbl !== _lastHostLbl)) _actOptOvr = activeBaseOverride = null;
 _lastHostLbl = curLbl;
 if (_orchPlanOvr) {
@@ -2144,6 +2207,48 @@ var liveProf = getActiveProfile(ctx);
 _syncAgDom(ctx, liveProf); _sySubs(panel, ctx, liveProf); notifySeatListeners();
 });
 }
+var onMemCk = null;
+if (memOnly) {
+var qOrch = (c, ob) => {
+var or = ob ? _orchEffMap.get(ob) : "", oi = c ? (c.orchIdx instanceof Map && c.orchIdx.size ? c.orchIdx : c.effortIndex) : null, oby = oi && or ? _luEff(oi, ob) : null, ot = oby?.get(or);
+if (ot && _okOpt(ot) && or !== (oby.has("medium") ? "medium" : "")) { lk = { o: true, b: ob, t: ot, u: Date.now() + 300 }; qM(() => _commitAgOpt(c, ot, true, false)); }
+};
+onMemCk = (ev) => {
+var t = ev?.target;
+if (!t?.closest || _isDis(t)) return;
+if (t.closest('[data-testid="model-selector-effort-option"],[data-testid="orchestrator-picker-effort"]')) { lk = null; return; }
+if (t.closest('button[aria-label="Edit Model"],a[href]')) return;
+var oRow = t.closest('[data-testid="orchestrator-picker-row"][data-model-base]');
+if (oRow) { qOrch(getLiveContext(), (oRow.getAttribute("data-model-base") || "").trim()); return; }
+var pnl = findAntigravityPanel(doc);
+if (pnl && !pnl.contains(t)) {
+var sm = t.closest(_SUB_BOX);
+if (sm && sm !== pnl) {
+var sc = getLiveContext() || _rdAgFiber(sm);
+if (sc && _hasOrch(sc)) {
+var it3 = t.closest(_SUB_IT) || t.closest("button,[tabindex]");
+if (it3 && _L3_RE.test(String(it3.textContent || "").replace(/[✓✔•·]/g, " ").replace(/\s+/g, " ").trim())) { lk = null; return; }
+if (it3 && !_isBox(it3) && !_isDis(t, it3)) {
+var hm = _mPlan(it3, sc);
+if (hm) { if (hm.fam && hm.base) qOrch(sc, hm.base); else lk = null; return; }
+}
+}
+}
+}
+var mi = pnl?.contains(t) && t.closest('[role^="menuitem"]');
+if (!mi || !pnl.contains(mi) || t.closest('[data-testid="model-selector-item"],[data-testid="model-selector-orchestrator"]')) return;
+var g = mi.querySelector('[data-testid="model-selector-effort-group"]');
+if (!g) return;
+var b = (g.getAttribute("data-model-base") || g.textContent || "").trim(); b = parseModelLabel(b)?.base || b;
+var r = b ? _effMap.get(b) : "", c = r ? getLiveContext() : null;
+if (!c) return;
+var curP = c.selectedModel && !_isOrch(c.selectedModel) ? parseModelLabel(c.selectedModel.label) : null;
+if (curP?.base === b) return;
+var by = _luEff(c.effortIndex, b), tgt = by?.get(r);
+if (tgt && _okOpt(tgt) && r !== (by.has("medium") ? "medium" : "")) { lk = { o: false, b, t: tgt, u: Date.now() + 300 }; qM(() => _commitAgOpt(c, tgt, false, false)); }
+};
+doc.addEventListener?.("click", onMemCk, true);
+}
 scan();
 var MO = opts.MutationObserver || win?.MutationObserver || (typeof MutationObserver === "function" ? MutationObserver : null);
 if (typeof MO === "function") {
@@ -2151,7 +2256,7 @@ var ctrlSel = '[data-testid="model-selector-trigger"],button[aria-label^="Select
 var noiseSel = '[data-testid="autoscroll-viewport"],.toast-viewport,[data-testid="sidebar-split"]>div:first-child';
 observer = new MO((recs) => {
 if (_intMut) return;
-if (Array.isArray(recs) && recs.length) {
+if (!memOnly && Array.isArray(recs) && recs.length) {
 if (activeSection && activePanel?.contains(activeSection) && recs.every((sr) => { var st = sr?.target, sel = st && (st.nodeType === 1 ? st : st.parentElement); return sel && activeSection.contains(sel); })) return;
 if (!activePanel) {
 var rel = recs.some((r) => {
@@ -2167,10 +2272,32 @@ scan();
 observer.observe(doc.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["aria-expanded", "data-state", "hidden", "data-selected"] });
 }
 return {
-stop: () => { observer?.disconnect(); observer = null; _unmntSec(); _clrAgDom(doc); },
+stop: () => {
+observer?.disconnect(); observer = null;
+if (memOnly) { if (onMemCk) doc.removeEventListener?.("click", onMemCk, true); lk = null; _clrSibs(doc); }
+else { _unmntSec(); _clrAgDom(doc); }
+},
 rescan: scan,
+setRememberEffort: (on) => {
+var next = on !== false;
+if (next === rememberEffort) return;
+rememberEffort = next;
+if (next) {
+var ld = _loadEffMem(win);
+ld.models.forEach((v, k) => { if (!_effMap.has(k)) _effMap.set(k, v); });
+ld.orch.forEach((v, k) => { if (!_orchEffMap.has(k)) _orchEffMap.set(k, v); });
+} else {
+_effMap.clear();
+_orchEffMap.clear();
+}
+scan();
+},
+getMemory: () => ({ models: Object.fromEntries(_effMap), orch: Object.fromEntries(_orchEffMap) }),
 _bindPnl
 };
+}
+function installEffortMemoryGuard(options) {
+return installAntigravityObserver(Object.assign({}, options, { memoryOnly: true, rememberEffort: true }));
 }
 function installCodexEffortSlider(options) {
 var o = options || {}, d = o.document || (typeof document !== "undefined" ? document : null), w = o.window || d?.defaultView || (typeof window !== "undefined" ? window : globalRoot);
@@ -2181,7 +2308,7 @@ var _onStoInv = (ev) => { if (!ev || ev.key === SETTINGS_KEY || ev.key === LEGAC
 w?.addEventListener?.("storage", _onStoInv); w?.addEventListener?.(SETTINGS_EVENT, _onStoInv);
 var noop = { stop: () => {}, rescan: () => {} };
 var sUi = o.disableContextMenuSettings ? noop : installSettingsUi({ document: d, window: w });
-var agObs = installAntigravityObserver({ document: d, window: w, MutationObserver: o.MutationObserver });
+var agObs = installAntigravityObserver({ document: d, window: w, MutationObserver: o.MutationObserver, rememberEffort: o.rememberEffort });
 var _actGenMnt = null;
 var menuObs = o.skipGenericMenuObserver ? noop : installMenuObserver({
 document: d, window: w, MutationObserver: o.MutationObserver,
@@ -2199,7 +2326,8 @@ w?.removeEventListener?.("storage", _onStoInv); w?.removeEventListener?.(SETTING
 _invCfg();
 if (w?.__agCodexEffortSliderInstance === inst) delete w.__agCodexEffortSliderInstance;
 },
-rescan: () => { agObs.rescan(); menuObs.rescan(); }
+rescan: () => { agObs.rescan(); menuObs.rescan(); },
+setRememberEffort: (on) => { agObs.setRememberEffort?.(on); }
 };
 if (w) w.__agCodexEffortSliderInstance = inst;
 return inst;
@@ -2219,5 +2347,5 @@ document.addEventListener("DOMContentLoaded", boot, { once: true });
 boot();
 }
 }
-return {mountCodexEffortSlider,installMenuObserver,installAntigravityObserver,installCodexEffortSlider,findAntigravityTrigger,findAntigravityPanel,resolveModelEffortProfile,normalizeEffortIndex,motionMode,openSettingsPanel,fillColorFor,fillBackgroundFor,valueColorFor,paintDither,surfaceIsDark,markNoTranslate};
+return {mountCodexEffortSlider,installMenuObserver,installAntigravityObserver,installEffortMemoryGuard,installCodexEffortSlider,findAntigravityTrigger,findAntigravityPanel,resolveModelEffortProfile,normalizeEffortIndex,motionMode,openSettingsPanel,fillColorFor,fillBackgroundFor,valueColorFor,paintDither,surfaceIsDark,markNoTranslate};
 });

@@ -23,6 +23,92 @@ struct CdpError: Error, LocalizedError {
     var errorDescription: String? { return message }
 }
 
+enum InstallerI18n {
+    private static let lock = NSLock()
+    private static var cachedLang: String? = nil
+
+    static func normalizeLangCode(_ raw: String?) -> String? {
+        guard let s = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !s.isEmpty else {
+            return nil
+        }
+        if s == "zh" || s.hasPrefix("zh-") || s.hasPrefix("zh_") || s == "cn" {
+            return "zh"
+        }
+        if s == "en" || s.hasPrefix("en-") || s.hasPrefix("en_") {
+            return "en"
+        }
+        return nil
+    }
+
+    static func parseCliLang(_ args: [String] = CommandLine.arguments) -> String? {
+        var i = 1
+        while i < args.count {
+            let a = args[i]
+            if a == "--lang", i + 1 < args.count {
+                if let norm = normalizeLangCode(args[i + 1]) {
+                    return norm
+                }
+                i += 2
+                continue
+            }
+            if a.hasPrefix("--lang=") {
+                let val = String(a.dropFirst("--lang=".count))
+                if let norm = normalizeLangCode(val) {
+                    return norm
+                }
+            }
+            i += 1
+        }
+        return nil
+    }
+
+    static func detectLanguage(
+        args: [String] = CommandLine.arguments,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        preferredLanguages: [String] = Locale.preferredLanguages
+    ) -> String {
+        if let cli = parseCliLang(args) {
+            return cli
+        }
+        if let envVal = normalizeLangCode(environment["AG_PRISM_LANG"]) {
+            return envVal
+        }
+        if let first = preferredLanguages.first?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           first.hasPrefix("zh") {
+            return "zh"
+        }
+        return "en"
+    }
+
+    static func setExplicitLanguage(_ raw: String?) {
+        guard let norm = normalizeLangCode(raw) else { return }
+        lock.lock()
+        cachedLang = norm
+        lock.unlock()
+    }
+
+    static var currentLanguage: String {
+        lock.lock()
+        if let existing = cachedLang {
+            lock.unlock()
+            return existing
+        }
+        let resolved = detectLanguage()
+        cachedLang = resolved
+        lock.unlock()
+        return resolved
+    }
+
+    static var isChinese: Bool {
+        return currentLanguage == "zh"
+    }
+
+    static func tr(_ zh: String, _ en: String) -> String {
+        return isChinese ? zh : en
+    }
+}
+
 final class PluginManifest {
     let version: String
     let styleId: String
@@ -827,14 +913,20 @@ enum CdpHelper {
 
     private static func atomicWriteJsonObject(_ obj: [String: JsonValue], toFile path: String) throws {
         guard !path.isEmpty else {
-            throw CdpError("目标文件路径为空")
+            throw CdpError(InstallerI18n.tr("目标文件路径为空", "Target file path is empty"))
         }
         let parentDir = (path as NSString).deletingLastPathComponent
         if hasSymbolicLinkInHostConfigChain(parentDir) {
-            throw CdpError("目标目录链路包含符号链接或无法安全验证，已拒绝写入: \(parentDir)")
+            throw CdpError(InstallerI18n.tr(
+                "目标目录链路包含符号链接或无法安全验证，已拒绝写入: \(parentDir)",
+                "Target directory chain contains a symbolic link or cannot be safely verified; write refused: \(parentDir)"
+            ))
         }
         if isSymbolicLinkOrUnsafePath(path) {
-            throw CdpError("目标文件为符号链接或无法安全验证，已拒绝覆盖: \(path)")
+            throw CdpError(InstallerI18n.tr(
+                "目标文件为符号链接或无法安全验证，已拒绝覆盖: \(path)",
+                "Target file is a symbolic link or cannot be safely verified; overwrite refused: \(path)"
+            ))
         }
         let tmpPath = "\(path).tmp.\(getpid()).\(UUID().uuidString)"
         let content = MiniJson.stringify(.object(obj), pretty: true) + "\n"
@@ -843,7 +935,10 @@ enum CdpHelper {
         let fd = open(tmpPath, openFlags, mode_t(0o600))
         if fd < 0 {
             let errCode = errno
-            throw CdpError("无法安全创建临时文件 \(tmpPath) (errno=\(errCode))")
+            throw CdpError(InstallerI18n.tr(
+                "无法安全创建临时文件 \(tmpPath) (errno=\(errCode))",
+                "Failed to safely create temporary file \(tmpPath) (errno=\(errCode))"
+            ))
         }
         var closed = false
         var committed = false
@@ -865,10 +960,16 @@ enum CdpHelper {
                     if written < 0 {
                         if errno == EINTR { continue }
                         let errCode = errno
-                        throw CdpError("写入临时文件失败 \(tmpPath) (errno=\(errCode))")
+                        throw CdpError(InstallerI18n.tr(
+                            "写入临时文件失败 \(tmpPath) (errno=\(errCode))",
+                            "Failed to write temporary file \(tmpPath) (errno=\(errCode))"
+                        ))
                     }
                     if written == 0 {
-                        throw CdpError("写入临时文件提前结束: \(tmpPath)")
+                        throw CdpError(InstallerI18n.tr(
+                            "写入临时文件提前结束: \(tmpPath)",
+                            "Short write while writing temporary file: \(tmpPath)"
+                        ))
                     }
                     totalWritten += written
                 }
@@ -879,17 +980,29 @@ enum CdpHelper {
         closed = true
         if closeRc != 0 {
             let errCode = errno
-            throw CdpError("关闭临时文件失败 \(tmpPath) (errno=\(errCode))")
+            throw CdpError(InstallerI18n.tr(
+                "关闭临时文件失败 \(tmpPath) (errno=\(errCode))",
+                "Failed to close temporary file \(tmpPath) (errno=\(errCode))"
+            ))
         }
         if hasSymbolicLinkInHostConfigChain(parentDir) {
-            throw CdpError("目标目录链路包含符号链接或无法安全验证，已拒绝替换: \(parentDir)")
+            throw CdpError(InstallerI18n.tr(
+                "目标目录链路包含符号链接或无法安全验证，已拒绝替换: \(parentDir)",
+                "Target directory chain contains a symbolic link or cannot be safely verified; replace refused: \(parentDir)"
+            ))
         }
         if isSymbolicLinkOrUnsafePath(path) {
-            throw CdpError("目标文件为符号链接或无法安全验证，已拒绝覆盖: \(path)")
+            throw CdpError(InstallerI18n.tr(
+                "目标文件为符号链接或无法安全验证，已拒绝覆盖: \(path)",
+                "Target file is a symbolic link or cannot be safely verified; overwrite refused: \(path)"
+            ))
         }
         if rename(tmpPath, path) != 0 {
             let errCode = errno
-            throw CdpError("原子替换目标文件失败 \(path) (errno=\(errCode))")
+            throw CdpError(InstallerI18n.tr(
+                "原子替换目标文件失败 \(path) (errno=\(errCode))",
+                "Failed to atomically replace target file \(path) (errno=\(errCode))"
+            ))
         }
         committed = true
     }
@@ -1076,7 +1189,10 @@ enum CdpHelper {
             let deadline = Date().addingTimeInterval(3.0)
             while Date() < deadline {
                 if isNativeDaemonAlive(pluginDir: pluginDir) {
-                    log?("已自举启动五通道原生 Sidecar Daemon (\(rtLabel))")
+                    log?(InstallerI18n.tr(
+                        "已自举启动五通道原生 Sidecar Daemon (\(rtLabel))",
+                        "Bootstrapped native 5-channel Sidecar Daemon (\(rtLabel))"
+                    ))
                     return true
                 }
                 if !proc.isRunning { break }
@@ -1161,8 +1277,7 @@ enum CdpHelper {
                 }
                 if candidate == nil {
                     let prefixUpToApp = String(cmd[..<appRange.lowerBound]) + ".app"
-                    let cleanedApp = prefixUpToApp.trimmingCharacters(in: CharacterSet(charactersIn: " \"'"))
-                    let appPath = FileManager.default.fileExists(atPath: cleanedApp) ? cleanedApp : "/Applications/Antigravity.app"
+                    let appPath = normalizeAntigravityAppPath(prefixUpToApp)
                     let uptimeMs = max(0, elapsedSec * 1000)
                     let startMs = nowMs - uptimeMs
                     candidate = BareHostAppInfo(pid: pid, appPath: appPath, startTimeMs: startMs, uptimeMs: uptimeMs)
@@ -1234,14 +1349,189 @@ enum CdpHelper {
         }
     }
 
+    private static func escapeAppleScriptString(_ s: String) -> String {
+        return s
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\n", with: "\\n")
+    }
+
+    static func normalizeAntigravityAppPath(_ rawPath: String) -> String {
+        let fm = FileManager.default
+        let fallbackSystem = "/Applications/Antigravity.app"
+        let fallbackUser = (fm.homeDirectoryForCurrentUser.path as NSString).appendingPathComponent("Applications/Antigravity.app")
+        let defaultFallback = (!fm.fileExists(atPath: fallbackSystem) && fm.fileExists(atPath: fallbackUser))
+            ? fallbackUser
+            : fallbackSystem
+
+        let trimmed = rawPath.trimmingCharacters(in: CharacterSet(charactersIn: " \t\r\n\"'"))
+        if trimmed.isEmpty {
+            return defaultFallback
+        }
+        let std = URL(fileURLWithPath: trimmed).standardizedFileURL.path
+        let clean = (std.count > 1 && std.hasSuffix("/")) ? String(std.dropLast()) : std
+
+        var normalized = clean
+        if let innerRange = clean.range(of: ".app/contents/", options: .caseInsensitive) {
+            let cutEnd = clean.index(innerRange.lowerBound, offsetBy: 4)
+            normalized = String(clean[..<cutEnd])
+        } else if let slashRange = clean.range(of: ".app/", options: .caseInsensitive) {
+            let cutEnd = clean.index(slashRange.lowerBound, offsetBy: 4)
+            normalized = String(clean[..<cutEnd])
+        }
+
+        if normalized.lowercased().hasSuffix(".app") {
+            if fm.fileExists(atPath: normalized) {
+                return normalized
+            }
+            return defaultFallback
+        }
+        return defaultFallback
+    }
+
+    static func getAntigravitySingletonLockPath() -> String {
+        if let overridePath = ProcessInfo.processInfo.environment["AG_PRISM_SINGLETON_LOCK_PATH"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !overridePath.isEmpty {
+            return URL(fileURLWithPath: overridePath).standardizedFileURL.path
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return (home as NSString).appendingPathComponent("Library/Application Support/Antigravity/SingletonLock")
+    }
+
+    static func isSingletonLockHeld(lockPath: String = getAntigravitySingletonLockPath()) -> Bool {
+        guard !lockPath.isEmpty else { return false }
+        var st = stat()
+        if lstat(lockPath, &st) != 0 {
+            return false
+        }
+        if (st.st_mode & S_IFMT) == S_IFLNK {
+            if let dest = try? FileManager.default.destinationOfSymbolicLink(atPath: lockPath),
+               let dashIdx = dest.lastIndex(of: "-") {
+                let pidText = String(dest[dest.index(after: dashIdx)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if let lockPid = Int32(pidText), lockPid > 0 {
+                    return kill(lockPid, 0) == 0
+                }
+            }
+            return true
+        }
+        return true
+    }
+
+    private static func isSidecarOrWatcherCommand(_ lowerCmd: String) -> Bool {
+        return lowerCmd.contains("sidecars/daemon/main.mjs") ||
+            lowerCmd.contains("/daemon/main.mjs") ||
+            lowerCmd.contains("sidecar_sdk") ||
+            lowerCmd.contains("obsidian-prism-watcher") ||
+            lowerCmd.contains("obsidian-prism") ||
+            lowerCmd.contains("antigravity-prism") ||
+            lowerCmd.contains("agy-claude-style") ||
+            lowerCmd.contains("/watch.js")
+    }
+
+    static func listRunningAppFamilyPids(appPath: String, mainPid: Int32 = 0) -> [Int32] {
+        let normalizedApp = normalizeAntigravityAppPath(appPath)
+        let selfPid = getpid()
+        let parentPid = getppid()
+
+        var prefixes: [String] = []
+        let appVariants = [normalizedApp, normalizeHostSystemRootPrefix(normalizedApp)]
+        for variant in appVariants where !variant.isEmpty {
+            let lower = variant.lowercased()
+            let macosPfx = lower + "/contents/macos/"
+            let fwPfx = lower + "/contents/frameworks/"
+            if !prefixes.contains(macosPfx) { prefixes.append(macosPfx) }
+            if !prefixes.contains(fwPfx) { prefixes.append(fwPfx) }
+        }
+
+        var pids = Set<Int32>()
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+        proc.arguments = ["-ax", "-o", "pid=,command="]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+            if let out = String(data: data, encoding: .utf8) {
+                for rawLine in out.components(separatedBy: CharacterSet.newlines) {
+                    let line = rawLine.trimmingCharacters(in: .whitespaces)
+                    if line.isEmpty { continue }
+                    let cols = line.split(maxSplits: 1, omittingEmptySubsequences: true, whereSeparator: { $0.isWhitespace })
+                    guard cols.count == 2,
+                          let pid = Int32(cols[0]),
+                          pid > 0,
+                          pid != selfPid,
+                          pid != parentPid else { continue }
+                    let lowerCmd = String(cols[1]).replacingOccurrences(of: "\\", with: "/").lowercased()
+                    if isSidecarOrWatcherCommand(lowerCmd) { continue }
+                    if prefixes.contains(where: { lowerCmd.contains($0) }) {
+                        pids.insert(pid)
+                    }
+                }
+            }
+        } catch {}
+
+        if mainPid > 0 && mainPid != selfPid && mainPid != parentPid && kill(mainPid, 0) == 0 {
+            pids.insert(mainPid)
+        }
+        return pids.sorted()
+    }
+
+    static func findRunningAntigravityWithCdp(appPath: String) -> Int32? {
+        let normalizedApp = normalizeAntigravityAppPath(appPath)
+        let macosPfx = normalizedApp.lowercased() + "/contents/macos/"
+        let sysMacosPfx = normalizeHostSystemRootPrefix(normalizedApp).lowercased() + "/contents/macos/"
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+        proc.arguments = ["-ax", "-o", "pid=,command="]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+            guard let out = String(data: data, encoding: .utf8) else { return nil }
+            for rawLine in out.components(separatedBy: CharacterSet.newlines) {
+                let line = rawLine.trimmingCharacters(in: .whitespaces)
+                if line.isEmpty { continue }
+                let cols = line.split(maxSplits: 1, omittingEmptySubsequences: true, whereSeparator: { $0.isWhitespace })
+                guard cols.count == 2, let pid = Int32(cols[0]), pid > 0 else { continue }
+                let lowerCmd = String(cols[1]).replacingOccurrences(of: "\\", with: "/").lowercased()
+                if isSidecarOrWatcherCommand(lowerCmd) || lowerCmd.contains("--type=") { continue }
+                let matchesApp = lowerCmd.contains(macosPfx) || (!sysMacosPfx.isEmpty && lowerCmd.contains(sysMacosPfx))
+                if matchesApp && lowerCmd.contains("--remote-debugging-port") {
+                    return pid
+                }
+            }
+        } catch {}
+        return nil
+    }
+
     static func promptUserForCdpRelaunch() -> Bool {
         if let mockDec = ProcessInfo.processInfo.environment["AG_PRISM_MOCK_RELAUNCH_DECISION"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !mockDec.isEmpty {
             return mockDec.caseInsensitiveCompare("yes") == .orderedSame || mockDec == "1"
         }
-        let script = """
-        display dialog "检测到 Antigravity 已升级或无参启动，尚未开启本地光学桥接端口（--remote-debugging-port=0）。\\n\\n是否立即重新打开 Antigravity 以恢复 Obsidian Prism（黑曜棱镜）界面？" with title "Obsidian Prism · 恢复界面连接" buttons {"稍后手动重开", "立即重新打开"} default button "立即重新打开"
-        """
+        let laterBtn = InstallerI18n.tr("稍后手动重开", "Later")
+        let relaunchBtn = InstallerI18n.tr("立即重新打开", "Relaunch Now")
+        let dialogTitle = InstallerI18n.tr(
+            "Obsidian Prism · 恢复界面连接",
+            "Obsidian Prism · Restore UI Connection"
+        )
+        let dialogMessage = InstallerI18n.tr(
+            "检测到 Antigravity 已升级或无参启动，尚未开启本地光学桥接端口（--remote-debugging-port=0）。\n\n是否立即重新打开 Antigravity 以恢复 Obsidian Prism（黑曜棱镜）界面？",
+            "Antigravity appears to have updated or launched without the local optical bridge flag (--remote-debugging-port=0).\n\nRelaunch Antigravity now to restore the Obsidian Prism interface?"
+        )
+        let escMsg = escapeAppleScriptString(dialogMessage)
+        let escTitle = escapeAppleScriptString(dialogTitle)
+        let escLater = escapeAppleScriptString(laterBtn)
+        let escRelaunch = escapeAppleScriptString(relaunchBtn)
+        let script = "display dialog \"\(escMsg)\" with title \"\(escTitle)\" buttons {\"\(escLater)\", \"\(escRelaunch)\"} default button \"\(escRelaunch)\""
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         proc.arguments = ["-e", script]
@@ -1254,7 +1544,7 @@ enum CdpHelper {
             proc.waitUntilExit()
             if proc.terminationStatus != 0 { return false }
             let out = String(data: data, encoding: .utf8) ?? ""
-            return out.contains("立即重新打开")
+            return out.contains(relaunchBtn)
         } catch {
             return false
         }
@@ -1262,44 +1552,142 @@ enum CdpHelper {
 
     @discardableResult
     static func relaunchAntigravityWithCdp(host: BareHostAppInfo, waitExitMs: Int = 15000, log: ((String) -> Void)? = nil) -> Bool {
-        guard host.pid > 0, !host.appPath.isEmpty else { return false }
+        guard host.pid > 0 else { return false }
+        let normalizedAppPath = normalizeAntigravityAppPath(host.appPath)
+        let appBaseName = (normalizedAppPath as NSString).lastPathComponent
+
+        let quitScript: String
+        if normalizedAppPath == "/Applications/Antigravity.app" ||
+           appBaseName.caseInsensitiveCompare("Antigravity.app") == .orderedSame {
+            quitScript = "tell application \"Antigravity\" to quit"
+        } else {
+            let escapedPath = escapeAppleScriptString(normalizedAppPath)
+            quitScript = "tell application (POSIX file \"\(escapedPath)\" as text) to quit"
+        }
+
         let quitProc = Process()
         quitProc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        quitProc.arguments = ["-e", "tell application \"Antigravity\" to quit"]
+        quitProc.arguments = ["-e", quitScript]
         quitProc.standardOutput = FileHandle.nullDevice
         quitProc.standardError = FileHandle.nullDevice
-        try? quitProc.run()
-        quitProc.waitUntilExit()
-
-        let softDeadline = Date().addingTimeInterval(Double(min(8000, max(1000, waitExitMs))) / 1000.0)
-        while Date() < softDeadline {
-            if kill(host.pid, 0) != 0 { break }
-            Thread.sleep(forTimeInterval: 0.12)
-        }
-        if kill(host.pid, 0) == 0 {
+        var quitSent = false
+        do {
+            try quitProc.run()
+            quitProc.waitUntilExit()
+            quitSent = (quitProc.terminationStatus == 0)
+        } catch {}
+        if !quitSent && kill(host.pid, 0) == 0 {
             _ = kill(host.pid, SIGTERM)
+        }
+
+        let lockPath = getAntigravitySingletonLockPath()
+        let softDeadline = Date().addingTimeInterval(Double(min(10000, max(1500, waitExitMs))) / 1000.0)
+        var aliveFamilyPids = listRunningAppFamilyPids(appPath: normalizedAppPath, mainPid: host.pid)
+        var lockHeld = isSingletonLockHeld(lockPath: lockPath)
+        while Date() < softDeadline {
+            if aliveFamilyPids.isEmpty && !lockHeld { break }
+            Thread.sleep(forTimeInterval: 0.12)
+            aliveFamilyPids = listRunningAppFamilyPids(appPath: normalizedAppPath, mainPid: host.pid)
+            lockHeld = isSingletonLockHeld(lockPath: lockPath)
+        }
+
+        if !aliveFamilyPids.isEmpty {
+            for pid in aliveFamilyPids {
+                if pid > 0 && pid != getpid() && pid != getppid() && kill(pid, 0) == 0 {
+                    _ = kill(pid, SIGTERM)
+                }
+            }
             let hardDeadline = Date().addingTimeInterval(4.0)
             while Date() < hardDeadline {
-                if kill(host.pid, 0) != 0 { break }
+                aliveFamilyPids = listRunningAppFamilyPids(appPath: normalizedAppPath, mainPid: host.pid)
+                lockHeld = isSingletonLockHeld(lockPath: lockPath)
+                if aliveFamilyPids.isEmpty && !lockHeld { break }
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+        } else if lockHeld {
+            let lockDeadline = Date().addingTimeInterval(2.0)
+            while Date() < lockDeadline {
+                lockHeld = isSingletonLockHeld(lockPath: lockPath)
+                if !lockHeld { break }
                 Thread.sleep(forTimeInterval: 0.1)
             }
         }
-        Thread.sleep(forTimeInterval: 0.25)
 
+        if !aliveFamilyPids.isEmpty || lockHeld {
+            log?(InstallerI18n.tr(
+                "等待 Antigravity 退净超时（残留进程数=\(aliveFamilyPids.count)，SingletonLock占用=\(lockHeld)），仍将尝试以新实例拉起",
+                "Timed out waiting for Antigravity to fully exit (remaining=\(aliveFamilyPids.count), SingletonLockHeld=\(lockHeld)); proceeding with new instance launch"
+            ))
+        }
+
+        // Wait an extra 0.5s after full exit so LaunchServices finishes unregistering the old instance.
+        Thread.sleep(forTimeInterval: 0.5)
+
+        let launchStartedAt = Date()
         let openProc = Process()
         openProc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        openProc.arguments = ["-a", host.appPath, "--args", cdpOptInFlag]
+        openProc.arguments = ["-na", normalizedAppPath, "--args", cdpOptInFlag]
+        var cleanEnv = ProcessInfo.processInfo.environment
+        cleanEnv.removeValue(forKey: "ELECTRON_RUN_AS_NODE")
+        openProc.environment = cleanEnv
         openProc.standardOutput = FileHandle.nullDevice
         openProc.standardError = FileHandle.nullDevice
         do {
             try openProc.run()
             openProc.waitUntilExit()
-            if openProc.terminationStatus == 0 {
-                log?("已带 \(cdpOptInFlag) 重新打开 Antigravity.app")
-                return true
+            guard openProc.terminationStatus == 0 else {
+                log?(InstallerI18n.tr(
+                    "重新打开 \(normalizedAppPath) 失败（open 退出码 \(openProc.terminationStatus)）",
+                    "Failed to relaunch \(normalizedAppPath) (open exited with code \(openProc.terminationStatus))"
+                ))
+                return false
             }
-        } catch {}
-        return false
+
+            var confirmedPort: Int? = nil
+            var confirmedPid: Int32? = nil
+            let verifyDeadline = Date().addingTimeInterval(3.0)
+            let portFile = getPortFilePath()
+            while Date() < verifyDeadline {
+                if let p = readPort(overridePort: nil) {
+                    let attrs = try? FileManager.default.attributesOfItem(atPath: portFile)
+                    let mtime = attrs?[.modificationDate] as? Date
+                    let isFresh = (mtime != nil && mtime!.timeIntervalSince(launchStartedAt) >= -0.5)
+                    if isFresh || (try? listPages(port: p)) != nil {
+                        confirmedPort = p
+                        break
+                    }
+                }
+                if let cdpPid = findRunningAntigravityWithCdp(appPath: normalizedAppPath) {
+                    confirmedPid = cdpPid
+                    break
+                }
+                Thread.sleep(forTimeInterval: 0.15)
+            }
+
+            if let p = confirmedPort {
+                log?(InstallerI18n.tr(
+                    "已带 \(cdpOptInFlag) 以新实例重新打开 \(normalizedAppPath)（检测到 DevToolsActivePort=\(p)）",
+                    "Relaunched new instance of \(normalizedAppPath) with \(cdpOptInFlag) (DevToolsActivePort=\(p) ready)"
+                ))
+            } else if let cdpPid = confirmedPid {
+                log?(InstallerI18n.tr(
+                    "已带 \(cdpOptInFlag) 以新实例重新打开 \(normalizedAppPath)（新进程 PID \(cdpPid) 已存活）",
+                    "Relaunched new instance of \(normalizedAppPath) with \(cdpOptInFlag) (new process PID \(cdpPid) alive)"
+                ))
+            } else {
+                log?(InstallerI18n.tr(
+                    "已带 \(cdpOptInFlag) 发起新实例启动 \(normalizedAppPath)，正在等待调试端口就绪",
+                    "Dispatched new instance launch for \(normalizedAppPath) with \(cdpOptInFlag); waiting for DevToolsActivePort"
+                ))
+            }
+            return true
+        } catch {
+            log?(InstallerI18n.tr(
+                "重新打开 \(normalizedAppPath) 异常: \(error.localizedDescription)",
+                "Exception while relaunching \(normalizedAppPath): \(error.localizedDescription)"
+            ))
+            return false
+        }
     }
 
     static func readRuntimeBundle(baseDir: String, manifest: PluginManifest) throws -> String {

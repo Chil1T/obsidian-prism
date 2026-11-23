@@ -21,6 +21,7 @@ namespace AgyClaudeStyle.Installer
         public bool Silent;
         public bool Popup;
         public bool StatusOnly;
+        public bool ShowHelp;
         public bool NoAutostart;
         public bool NoKillLegacy;
         public bool NoNativeDaemon;
@@ -30,6 +31,7 @@ namespace AgyClaudeStyle.Installer
         public string PluginDir;
         public int? CdpPort;
         public string OutFile;
+        public string Lang;
     }
 
     internal class AntigravityDetectResult
@@ -50,7 +52,7 @@ namespace AgyClaudeStyle.Installer
             : base(message, inner)
         {
             StepCode = stepCode ?? "unknown";
-            StepLabel = stepLabel ?? "安装操作";
+            StepLabel = stepLabel ?? InstallerI18n.Tr("安装操作", "Installation");
             TargetPath = targetPath ?? "";
             Hint = hint ?? "";
         }
@@ -175,9 +177,12 @@ namespace AgyClaudeStyle.Installer
                 uint tag;
                 if (IsReparsePoint(cur, out tag))
                 {
-                    throw new InvalidOperationException(
-                        "检测到符号链接或重解析点目录 [" + CdpHelper.DescribeReparseTag(tag) + "]，已拒绝操作: " + cur
-                    );
+                    throw new InvalidOperationException(InstallerI18n.TrFormat(
+                        "检测到符号链接或重解析点目录 [{0}]，已拒绝操作: {1}",
+                        "Detected symbolic link or reparse point directory [{0}]; operation refused: {1}",
+                        CdpHelper.DescribeReparseTag(tag),
+                        cur
+                    ));
                 }
                 if (!string.IsNullOrEmpty(rootNorm))
                 {
@@ -204,19 +209,30 @@ namespace AgyClaudeStyle.Installer
         {
             if (string.IsNullOrEmpty(targetRoot) || string.IsNullOrEmpty(relPath))
             {
-                throw new InvalidOperationException("非法的 ZIP 解压目标路径");
+                throw new InvalidOperationException(InstallerI18n.Tr(
+                    "非法的 ZIP 解压目标路径",
+                    "Invalid ZIP extraction target path"
+                ));
             }
             string normalizedRel = relPath.Replace('/', '\\');
             if (normalizedRel.StartsWith("\\", StringComparison.Ordinal) || Path.IsPathRooted(normalizedRel))
             {
-                throw new InvalidOperationException("检测到非法绝对路径 ZIP 条目: " + relPath);
+                throw new InvalidOperationException(InstallerI18n.TrFormat(
+                    "检测到非法绝对路径 ZIP 条目: {0}",
+                    "Detected illegal absolute path in ZIP entry: {0}",
+                    relPath
+                ));
             }
             string rootFull = NormalizeDirPath(targetRoot);
             string rootPrefix = rootFull.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
             string destFull = Path.GetFullPath(Path.Combine(rootFull, normalizedRel));
             if (!destFull.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
             {
-                throw new InvalidOperationException("检测到 ZIP Slip 越界路径: " + relPath);
+                throw new InvalidOperationException(InstallerI18n.TrFormat(
+                    "检测到 ZIP Slip 越界路径: {0}",
+                    "Detected ZIP Slip path traversal: {0}",
+                    relPath
+                ));
             }
             string parent = Path.GetDirectoryName(destFull);
             if (!string.IsNullOrEmpty(parent))
@@ -226,9 +242,12 @@ namespace AgyClaudeStyle.Installer
             uint destTag;
             if (IsReparsePoint(destFull, out destTag))
             {
-                throw new InvalidOperationException(
-                    "检测到目标文件为符号链接或重解析点 [" + CdpHelper.DescribeReparseTag(destTag) + "]，已拒绝覆盖: " + destFull
-                );
+                throw new InvalidOperationException(InstallerI18n.TrFormat(
+                    "检测到目标文件为符号链接或重解析点 [{0}]，已拒绝覆盖: {1}",
+                    "Target file is a symbolic link or reparse point [{0}]; overwrite refused: {1}",
+                    CdpHelper.DescribeReparseTag(destTag),
+                    destFull
+                ));
             }
             return destFull;
         }
@@ -457,7 +476,11 @@ namespace AgyClaudeStyle.Installer
             if (string.IsNullOrEmpty(dir)) return;
             if (IsDangerousRootPath(dir))
             {
-                throw new InvalidOperationException("已拒绝删除受保护的系统或用户根目录: " + dir);
+                throw new InvalidOperationException(InstallerI18n.TrFormat(
+                    "已拒绝删除受保护的系统或用户根目录: {0}",
+                    "Refused to delete protected system or user root directory: {0}",
+                    dir
+                ));
             }
             if (!Directory.Exists(dir)) return;
             if (IsReparsePoint(dir))
@@ -785,7 +808,14 @@ namespace AgyClaudeStyle.Installer
                             p.Kill();
                             p.WaitForExit(2000);
                             stoppedPids.Add(pid.Value);
-                            if (log != null) log("已停止原生 Sidecar Daemon (PID " + pid.Value + ")");
+                            if (log != null)
+                            {
+                                log(InstallerI18n.TrFormat(
+                                    "已停止原生 Sidecar Daemon (PID {0})",
+                                    "Stopped native Sidecar Daemon (PID {0})",
+                                    pid.Value
+                                ));
+                            }
                         }
                     }
                 }
@@ -825,7 +855,14 @@ namespace AgyClaudeStyle.Installer
                                     procs[i].Kill();
                                     procs[i].WaitForExit(2000);
                                     stoppedPids.Add(candPid);
-                                    if (log != null) log("已清理残留 Sidecar Daemon (PID " + candPid + ")");
+                                    if (log != null)
+                                    {
+                                        log(InstallerI18n.TrFormat(
+                                            "已清理残留 Sidecar Daemon (PID {0})",
+                                            "Cleaned up orphaned Sidecar Daemon (PID {0})",
+                                            candPid
+                                        ));
+                                    }
                                 }
                             }
                             catch { }
@@ -1051,7 +1088,14 @@ namespace AgyClaudeStyle.Installer
                                         p.Kill();
                                         p.WaitForExit(2000);
                                     }
-                                    if (log != null) log("已停止运行中的守护进程 (PID " + pid + ")");
+                                    if (log != null)
+                                    {
+                                        log(InstallerI18n.TrFormat(
+                                            "已停止运行中的守护进程 (PID {0})",
+                                            "Stopped running watcher process (PID {0})",
+                                            pid
+                                        ));
+                                    }
                                 }
                             }
                         }
@@ -1150,7 +1194,14 @@ namespace AgyClaudeStyle.Installer
                                         {
                                             p.Kill();
                                             p.WaitForExit(1500);
-                                            if (log != null) log("已停止旧版脚本守护进程 (PID " + pid + ")");
+                                            if (log != null)
+                                            {
+                                                log(InstallerI18n.TrFormat(
+                                                    "已停止旧版脚本守护进程 (PID {0})",
+                                                    "Stopped legacy script watcher (PID {0})",
+                                                    pid
+                                                ));
+                                            }
                                         }
                                     }
                                 }
@@ -1189,7 +1240,14 @@ namespace AgyClaudeStyle.Installer
                                             {
                                                 p.Kill();
                                                 p.WaitForExit(1500);
-                                                if (log != null) log("已替换旧版 Node 守护进程 (PID " + pid + ")");
+                                                if (log != null)
+                                                {
+                                                    log(InstallerI18n.TrFormat(
+                                                        "已替换旧版 Node 守护进程 (PID {0})",
+                                                        "Replaced legacy Node watcher (PID {0})",
+                                                        pid
+                                                    ));
+                                                }
                                             }
                                         }
                                     }
@@ -1227,7 +1285,11 @@ namespace AgyClaudeStyle.Installer
             if (string.IsNullOrEmpty(value)) return "\"\"";
             if (value.IndexOf('"') >= 0 || value.IndexOf('\r') >= 0 || value.IndexOf('\n') >= 0 || value.IndexOf('\0') >= 0)
             {
-                throw new InvalidOperationException("路径参数 " + paramName + " 包含非法引号或控制字符，已拒绝操作");
+                throw new InvalidOperationException(InstallerI18n.TrFormat(
+                    "路径参数 {0} 包含非法引号或控制字符，已拒绝操作",
+                    "Path argument {0} contains illegal quotes or control characters; operation refused",
+                    paramName
+                ));
             }
             int trailingBackslashes = 0;
             for (int i = value.Length - 1; i >= 0 && value[i] == '\\'; i--)
@@ -1259,10 +1321,18 @@ namespace AgyClaudeStyle.Installer
             {
                 shortcutArgs += " --plugin-dir " + QuotePathArgumentStrict(pluginDir, "--plugin-dir");
             }
+            string explicitLang = InstallerI18n.ExplicitLang;
+            if (!string.IsNullOrEmpty(explicitLang))
+            {
+                shortcutArgs += " --lang " + explicitLang;
+            }
             Type shellType = Type.GetTypeFromProgID("WScript.Shell");
             if (shellType == null)
             {
-                throw new InvalidOperationException("系统未注册 WScript.Shell COM 组件，无法创建开机自启快捷方式");
+                throw new InvalidOperationException(InstallerI18n.Tr(
+                    "系统未注册 WScript.Shell COM 组件，无法创建开机自启快捷方式",
+                    "WScript.Shell COM component is not registered; unable to create startup shortcut"
+                ));
             }
             object shell = null;
             object lnk = null;
@@ -1296,7 +1366,14 @@ namespace AgyClaudeStyle.Installer
             {
                 if (key == null) return;
                 string exePath = Path.Combine(installDir, SelfInstalledExeName);
-                key.SetValue("DisplayName", "Obsidian Prism · 黑曜棱镜 (Optical UI & Motion Suite for Antigravity)", RegistryValueKind.String);
+                key.SetValue(
+                    "DisplayName",
+                    InstallerI18n.Tr(
+                        "Obsidian Prism · 黑曜棱镜 (Optical UI & Motion Suite for Antigravity)",
+                        "Obsidian Prism (Optical UI & Motion Suite for Antigravity)"
+                    ),
+                    RegistryValueKind.String
+                );
                 key.SetValue("DisplayVersion", version ?? "1.0.7-beta.3", RegistryValueKind.String);
                 key.SetValue("Publisher", "Obsidian Prism Contributors", RegistryValueKind.String);
                 key.SetValue("InstallLocation", installDir, RegistryValueKind.String);
@@ -1355,9 +1432,12 @@ namespace AgyClaudeStyle.Installer
             uint preTag;
             if (IsReparsePoint(destPath, out preTag))
             {
-                throw new InvalidOperationException(
-                    "检测到目标文件为符号链接或重解析点 [" + CdpHelper.DescribeReparseTag(preTag) + "]，已拒绝覆盖: " + destPath
-                );
+                throw new InvalidOperationException(InstallerI18n.TrFormat(
+                    "检测到目标文件为符号链接或重解析点 [{0}]，已拒绝覆盖: {1}",
+                    "Target file is a symbolic link or reparse point [{0}]; overwrite refused: {1}",
+                    CdpHelper.DescribeReparseTag(preTag),
+                    destPath
+                ));
             }
 
             byte[] payloadBytes;
@@ -1384,13 +1464,20 @@ namespace AgyClaudeStyle.Installer
                         uint curTag;
                         if (IsReparsePoint(destPath, out curTag))
                         {
-                            throw new InvalidOperationException(
-                                "检测到目标文件为符号链接或重解析点 [" + CdpHelper.DescribeReparseTag(curTag) + "]，已拒绝覆盖: " + destPath
-                            );
+                            throw new InvalidOperationException(InstallerI18n.TrFormat(
+                                "检测到目标文件为符号链接或重解析点 [{0}]，已拒绝覆盖: {1}",
+                                "Target file is a symbolic link or reparse point [{0}]; overwrite refused: {1}",
+                                CdpHelper.DescribeReparseTag(curTag),
+                                destPath
+                            ));
                         }
                         if (IsReparsePoint(tmpPath))
                         {
-                            throw new InvalidOperationException("检测到临时目标为符号链接或重解析点，已拒绝写入: " + tmpPath);
+                            throw new InvalidOperationException(InstallerI18n.TrFormat(
+                                "检测到临时目标为符号链接或重解析点，已拒绝写入: {0}",
+                                "Temporary target is a symbolic link or reparse point; write refused: {0}",
+                                tmpPath
+                            ));
                         }
 
                         using (FileStream tmpStream = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None))
@@ -1426,9 +1513,12 @@ namespace AgyClaudeStyle.Installer
                                     uint preMoveTag;
                                     if (IsReparsePoint(destPath, out preMoveTag))
                                     {
-                                        throw new InvalidOperationException(
-                                            "检测到目标文件为符号链接或重解析点 [" + CdpHelper.DescribeReparseTag(preMoveTag) + "]，已拒绝覆盖: " + destPath
-                                        );
+                                        throw new InvalidOperationException(InstallerI18n.TrFormat(
+                                            "检测到目标文件为符号链接或重解析点 [{0}]，已拒绝覆盖: {1}",
+                                            "Target file is a symbolic link or reparse point [{0}]; overwrite refused: {1}",
+                                            CdpHelper.DescribeReparseTag(preMoveTag),
+                                            destPath
+                                        ));
                                     }
                                     CdpHelper.ClearReadOnlyAndHiddenAttributes(destPath);
                                     File.Move(destPath, staleOld);
@@ -1453,9 +1543,12 @@ namespace AgyClaudeStyle.Installer
                                 uint fallbackTag;
                                 if (IsReparsePoint(destPath, out fallbackTag))
                                 {
-                                    throw new InvalidOperationException(
-                                        "检测到目标文件为符号链接或重解析点 [" + CdpHelper.DescribeReparseTag(fallbackTag) + "]，已拒绝覆盖: " + destPath
-                                    );
+                                    throw new InvalidOperationException(InstallerI18n.TrFormat(
+                                        "检测到目标文件为符号链接或重解析点 [{0}]，已拒绝覆盖: {1}",
+                                        "Target file is a symbolic link or reparse point [{0}]; overwrite refused: {1}",
+                                        CdpHelper.DescribeReparseTag(fallbackTag),
+                                        destPath
+                                    ));
                                 }
                                 CdpHelper.ClearReadOnlyAndHiddenAttributes(destPath);
                                 using (FileStream outStream = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite))
@@ -1498,16 +1591,22 @@ namespace AgyClaudeStyle.Installer
             uint srcTag;
             if (IsReparsePoint(srcPath, out srcTag))
             {
-                throw new InvalidOperationException(
-                    "检测到源文件为符号链接或重解析点 [" + CdpHelper.DescribeReparseTag(srcTag) + "]，已拒绝复制: " + srcPath
-                );
+                throw new InvalidOperationException(InstallerI18n.TrFormat(
+                    "检测到源文件为符号链接或重解析点 [{0}]，已拒绝复制: {1}",
+                    "Source file is a symbolic link or reparse point [{0}]; copy refused: {1}",
+                    CdpHelper.DescribeReparseTag(srcTag),
+                    srcPath
+                ));
             }
             uint dstTag;
             if (IsReparsePoint(destPath, out dstTag))
             {
-                throw new InvalidOperationException(
-                    "检测到目标文件为符号链接或重解析点 [" + CdpHelper.DescribeReparseTag(dstTag) + "]，已拒绝覆盖: " + destPath
-                );
+                throw new InvalidOperationException(InstallerI18n.TrFormat(
+                    "检测到目标文件为符号链接或重解析点 [{0}]，已拒绝覆盖: {1}",
+                    "Target file is a symbolic link or reparse point [{0}]; overwrite refused: {1}",
+                    CdpHelper.DescribeReparseTag(dstTag),
+                    destPath
+                ));
             }
             if (!overwrite && File.Exists(destPath)) return;
             int pid = Process.GetCurrentProcess().Id;
@@ -1522,9 +1621,12 @@ namespace AgyClaudeStyle.Installer
                     uint curDstTag;
                     if (IsReparsePoint(destPath, out curDstTag))
                     {
-                        throw new InvalidOperationException(
-                            "检测到目标文件为符号链接或重解析点 [" + CdpHelper.DescribeReparseTag(curDstTag) + "]，已拒绝覆盖: " + destPath
-                        );
+                        throw new InvalidOperationException(InstallerI18n.TrFormat(
+                            "检测到目标文件为符号链接或重解析点 [{0}]，已拒绝覆盖: {1}",
+                            "Target file is a symbolic link or reparse point [{0}]; overwrite refused: {1}",
+                            CdpHelper.DescribeReparseTag(curDstTag),
+                            destPath
+                        ));
                     }
                     if (File.Exists(destPath))
                     {
@@ -1545,9 +1647,12 @@ namespace AgyClaudeStyle.Installer
                         uint preMoveTag;
                         if (IsReparsePoint(destPath, out preMoveTag))
                         {
-                            throw new InvalidOperationException(
-                                "检测到目标文件为符号链接或重解析点 [" + CdpHelper.DescribeReparseTag(preMoveTag) + "]，已拒绝覆盖: " + destPath
-                            );
+                            throw new InvalidOperationException(InstallerI18n.TrFormat(
+                                "检测到目标文件为符号链接或重解析点 [{0}]，已拒绝覆盖: {1}",
+                                "Target file is a symbolic link or reparse point [{0}]; overwrite refused: {1}",
+                                CdpHelper.DescribeReparseTag(preMoveTag),
+                                destPath
+                            ));
                         }
                         string staleOld = destPath + ".old." + pid + "." + seq + "." + attempt;
                         bool movedToOld = false;
@@ -1594,9 +1699,58 @@ namespace AgyClaudeStyle.Installer
                     try { CopyFileWithRetry(legacyCfg, targetCfg, false); } catch { }
                 }
                 SafeDeleteDirectory(legacyDir);
-                if (log != null) log("已清理旧临时插件目录: " + legacyDir);
+                if (log != null)
+                {
+                    log(InstallerI18n.TrFormat(
+                        "已清理旧临时插件目录: {0}",
+                        "Cleaned up legacy plugin directory: {0}",
+                        legacyDir
+                    ));
+                }
             }
             catch { }
+        }
+
+        public static string BuildHelpText()
+        {
+            return InstallerI18n.Tr(
+                "Obsidian Prism · 黑曜棱镜 Windows 安装与修补工具\r\n" +
+                "用法: obsidian-prism-installer.exe [选项]\r\n\r\n" +
+                "选项:\r\n" +
+                "  --silent, -s, /S      静默模式运行（无交互界面）\r\n" +
+                "  --uninstall           卸载 Obsidian Prism 并恢复原生界面\r\n" +
+                "  --purge-data          卸载时同时清理配置、思考翻译设置与遥测缓存\r\n" +
+                "  --status              输出当前安装与运行状态 JSON\r\n" +
+                "  --popup               静默模式下执行完成后弹窗提示结果\r\n" +
+                "  --no-autostart        安装时跳过开机自启与卸载注册表项\r\n" +
+                "  --no-kill-legacy      安装时不终止旧版 Node 守护进程\r\n" +
+                "  --no-native-daemon    不自动拉起原生 Sidecar Daemon\r\n" +
+                "  --no-relaunch-prompt  不弹出 Antigravity 带参重开提示\r\n" +
+                "  --install-dir <目录>  自定义后台守护安装目录\r\n" +
+                "  --plugin-dir <目录>   自定义原生 Sidecar 插件目录\r\n" +
+                "  --cdp-port <端口>     指定 Antigravity CDP 调试端口\r\n" +
+                "  --lang <zh|en>        指定界面与日志语言（覆盖 AG_PRISM_LANG 与系统语言）\r\n" +
+                "  --out <文件>          将执行结果写入指定文件\r\n" +
+                "  --help, -h, /?        显示此帮助信息",
+                "Obsidian Prism Installer & Patcher for Windows\r\n" +
+                "Usage: obsidian-prism-installer.exe [options]\r\n\r\n" +
+                "Options:\r\n" +
+                "  --silent, -s, /S      Run silently without the GUI window\r\n" +
+                "  --uninstall           Uninstall Obsidian Prism and restore the native UI\r\n" +
+                "  --purge-data          Also purge saved configs, thought settings & telemetry cache on uninstall\r\n" +
+                "  --status              Print current installation and runtime status as JSON\r\n" +
+                "  --popup               Show a result dialog after silent execution\r\n" +
+                "  --no-autostart        Skip startup shortcut and Uninstall registry registration\r\n" +
+                "  --no-kill-legacy      Do not stop legacy Node watcher processes during install\r\n" +
+                "  --no-native-daemon    Do not auto-start the native Sidecar Daemon\r\n" +
+                "  --no-relaunch-prompt  Disable the Antigravity CDP relaunch prompt\r\n" +
+                "  --install-dir <dir>   Custom directory for background watcher files\r\n" +
+                "  --plugin-dir <dir>    Custom directory for the native Sidecar plugin\r\n" +
+                "  --cdp-port <port>     Override the Antigravity CDP debug port\r\n" +
+                "  --lang <zh|en>        Set UI/log language (overrides AG_PRISM_LANG and OS locale)\r\n" +
+                "  --out <file>          Write result output to the specified file\r\n" +
+                "  --help, -h, /?        Show this help message"
+            );
         }
 
         public static string BuildFailureHint(Exception ex, string stepCode)
@@ -1604,48 +1758,68 @@ namespace AgyClaudeStyle.Installer
             Exception root = ex is InstallerStepException && ex.InnerException != null ? ex.InnerException : ex;
             string msg = root != null ? (root.Message ?? "") : "";
             if (root is InvalidOperationException &&
-                (msg.IndexOf("符号链接", StringComparison.Ordinal) >= 0 || msg.IndexOf("重解析点", StringComparison.Ordinal) >= 0))
+                (msg.IndexOf("符号链接", StringComparison.Ordinal) >= 0 ||
+                 msg.IndexOf("重解析点", StringComparison.Ordinal) >= 0 ||
+                 msg.IndexOf("symbolic link", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                 msg.IndexOf("symlink", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                 msg.IndexOf("reparse point", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                 msg.IndexOf("junction", StringComparison.OrdinalIgnoreCase) >= 0))
             {
-                return "目标路径包含符号链接或目录联接，请检查并移除手动创建的软链接目录，或使用 --install-dir / --plugin-dir 指定普通本地目录。";
+                return InstallerI18n.Tr(
+                    "目标路径包含符号链接或目录联接，请检查并移除手动创建的软链接目录，或使用 --install-dir / --plugin-dir 指定普通本地目录。",
+                    "Target path contains a symbolic link or directory junction. Remove the symlink/junction or specify a standard local folder via --install-dir / --plugin-dir."
+                );
             }
             if (root is IOException || msg.IndexOf("being used by another process", StringComparison.OrdinalIgnoreCase) >= 0 || msg.IndexOf("正由另一进程使用", StringComparison.Ordinal) >= 0)
             {
-                return "目标文件正被旧版守护进程、Antigravity 或杀毒软件占用，请先完全关闭 Antigravity 客户端后重试安装。";
+                return InstallerI18n.Tr(
+                    "目标文件正被旧版守护进程、Antigravity 或杀毒软件占用，请先完全关闭 Antigravity 客户端后重试安装。",
+                    "Target file is in use by a legacy watcher, Antigravity, or antivirus software. Close Antigravity completely and try again."
+                );
             }
             if (root is UnauthorizedAccessException || msg.IndexOf("拒绝访问", StringComparison.Ordinal) >= 0 || msg.IndexOf("denied", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                return "文件权限不足或被 Windows Defender / 杀毒软件拦截，请检查目录权限或将安装目录加入安全软件白名单后重试。";
+                return InstallerI18n.Tr(
+                    "文件权限不足或被 Windows Defender / 杀毒软件拦截，请检查目录权限或将安装目录加入安全软件白名单后重试。",
+                    "Insufficient permissions or blocked by Windows Defender / antivirus. Check folder permissions or add the install folder to exclusions and retry."
+                );
             }
             if (string.Equals(stepCode, "start-watcher", StringComparison.Ordinal))
             {
-                return "后台守护程序 obsidian-prism-watcher.exe 启动被拦截，请检查杀毒软件隔离区或将 %LOCALAPPDATA%\\obsidian-prism 加入白名单。";
+                return InstallerI18n.Tr(
+                    "后台守护程序 obsidian-prism-watcher.exe 启动被拦截，请检查杀毒软件隔离区或将 %LOCALAPPDATA%\\obsidian-prism 加入白名单。",
+                    "Background watcher obsidian-prism-watcher.exe was blocked from starting. Check antivirus quarantine or add %LOCALAPPDATA%\\obsidian-prism to exclusions."
+                );
             }
-            return "请截图当前日志反馈，并尝试完全关闭 Antigravity 后重新运行安装器。";
+            return InstallerI18n.Tr(
+                "请截图当前日志反馈，并尝试完全关闭 Antigravity 后重新运行安装器。",
+                "Please share a screenshot of this log and retry after closing Antigravity completely."
+            );
         }
 
         public static string FormatFailureLogBlock(Exception ex)
         {
             InstallerStepException stepEx = ex as InstallerStepException;
             Exception root = (stepEx != null && stepEx.InnerException != null) ? stepEx.InnerException : ex;
-            string stepLabel = stepEx != null ? (stepEx.StepLabel + " [" + stepEx.StepCode + "]") : "安装执行";
+            string stepLabel = stepEx != null ? (stepEx.StepLabel + " [" + stepEx.StepCode + "]") : InstallerI18n.Tr("安装执行", "Installation");
             string targetPath = stepEx != null ? stepEx.TargetPath : "";
             string hint = stepEx != null && !string.IsNullOrEmpty(stepEx.Hint)
                 ? stepEx.Hint
                 : BuildFailureHint(ex, stepEx != null ? stepEx.StepCode : "");
             string exType = root != null ? root.GetType().FullName : "UnknownException";
-            string rawMsg = root != null ? root.Message : (ex != null ? ex.Message : "未知错误");
+            string rawMsg = root != null ? root.Message : (ex != null ? ex.Message : InstallerI18n.Tr("未知错误", "Unknown error"));
 
             StringBuilder sb = new StringBuilder();
-            sb.Append("失败步骤: ").Append(stepLabel);
-            sb.Append("\r\n异常类型: ").Append(exType);
+            sb.Append(InstallerI18n.Tr("失败步骤: ", "Failed step: ")).Append(stepLabel);
+            sb.Append(InstallerI18n.Tr("\r\n异常类型: ", "\r\nException type: ")).Append(exType);
             if (!string.IsNullOrEmpty(targetPath))
             {
-                sb.Append("\r\n关键路径: ").Append(targetPath);
+                sb.Append(InstallerI18n.Tr("\r\n关键路径: ", "\r\nTarget path: ")).Append(targetPath);
             }
-            sb.Append("\r\n错误详情: ").Append(rawMsg);
+            sb.Append(InstallerI18n.Tr("\r\n错误详情: ", "\r\nError detail: ")).Append(rawMsg);
             if (!string.IsNullOrEmpty(hint))
             {
-                sb.Append("\r\n排查建议: ").Append(hint);
+                sb.Append(InstallerI18n.Tr("\r\n排查建议: ", "\r\nSuggested fix: ")).Append(hint);
             }
             return sb.ToString();
         }
@@ -1653,7 +1827,7 @@ namespace AgyClaudeStyle.Installer
         public static OperationResult RunInstall(InstallerOptions opts, Action<int, string> progress)
         {
             string currentStep = "validate-paths";
-            string currentStepLabel = "校验安装路径";
+            string currentStepLabel = InstallerI18n.Tr("校验安装路径", "Validate install paths");
             string currentTargetPath = "";
             try
             {
@@ -1664,12 +1838,20 @@ namespace AgyClaudeStyle.Installer
                 currentTargetPath = installDir;
                 if (IsDangerousRootPath(installDir))
                 {
-                    throw new InvalidOperationException("已拒绝将受保护的系统或用户根目录作为安装目录: " + installDir);
+                    throw new InvalidOperationException(InstallerI18n.TrFormat(
+                        "已拒绝将受保护的系统或用户根目录作为安装目录: {0}",
+                        "Refused to use protected system or user root directory as install directory: {0}",
+                        installDir
+                    ));
                 }
                 if (!string.IsNullOrEmpty(pluginDir) && IsDangerousRootPath(pluginDir))
                 {
                     currentTargetPath = pluginDir;
-                    throw new InvalidOperationException("已拒绝将受保护的系统或用户根目录作为插件目录: " + pluginDir);
+                    throw new InvalidOperationException(InstallerI18n.TrFormat(
+                        "已拒绝将受保护的系统或用户根目录作为插件目录: {0}",
+                        "Refused to use protected system or user root directory as plugin directory: {0}",
+                        pluginDir
+                    ));
                 }
                 result.InstallDir = installDir;
                 result.PluginDir = pluginDir;
@@ -1680,25 +1862,33 @@ namespace AgyClaudeStyle.Installer
                 };
 
                 currentStep = "detect-host";
-                currentStepLabel = "检测 Antigravity 环境";
+                currentStepLabel = InstallerI18n.Tr("检测 Antigravity 环境", "Detect Antigravity environment");
                 currentTargetPath = "";
-                report(10, "正在检测本机 Antigravity Desktop 环境...");
+                report(10, InstallerI18n.Tr("正在检测本机 Antigravity Desktop 环境...", "Detecting local Antigravity Desktop environment..."));
                 AntigravityDetectResult ag = DetectAntigravityDesktop();
                 result.AntigravityExe = ag.ExePath;
                 result.AntigravityVersion = ag.Version;
                 if (!string.IsNullOrEmpty(ag.ExePath))
                 {
-                    report(18, "已发现 Antigravity Desktop" + (string.IsNullOrEmpty(ag.Version) ? "" : " (" + ag.Version + ")") + ": " + ag.ExePath);
+                    report(18, InstallerI18n.TrFormat(
+                        "已发现 Antigravity Desktop{0}: {1}",
+                        "Found Antigravity Desktop{0}: {1}",
+                        string.IsNullOrEmpty(ag.Version) ? "" : " (" + ag.Version + ")",
+                        ag.ExePath
+                    ));
                 }
                 else
                 {
-                    report(18, "未在默认目录检测到 Antigravity.exe，仍将安装并启用 CDP 自动监听");
+                    report(18, InstallerI18n.Tr(
+                        "未在默认目录检测到 Antigravity.exe，仍将安装并启用 CDP 自动监听",
+                        "Antigravity.exe not found in default locations; continuing install with automatic CDP watcher"
+                    ));
                 }
 
                 currentStep = "stop-legacy";
-                currentStepLabel = "停止旧版守护与 Sidecar";
+                currentStepLabel = InstallerI18n.Tr("停止旧版守护与 Sidecar", "Stop legacy watcher & Sidecar");
                 currentTargetPath = installDir;
-                report(28, "正在停止旧版守护进程（如存在）...");
+                report(28, InstallerI18n.Tr("正在停止旧版守护进程（如存在）...", "Stopping existing watcher processes (if any)..."));
                 StopWatcherInDir(installDir, (m) => report(32, m));
                 StopNativeDaemonInDir(pluginDir, (m) => report(34, m));
                 if (!opts.NoKillLegacy)
@@ -1707,8 +1897,8 @@ namespace AgyClaudeStyle.Installer
                 }
 
                 currentStep = "prepare-dirs";
-                currentStepLabel = "校验并准备安装目录";
-                report(45, "正在部署原生 Sidecar 插件与独立守护资源...");
+                currentStepLabel = InstallerI18n.Tr("校验并准备安装目录", "Validate & prepare install directories");
+                report(45, InstallerI18n.Tr("正在部署原生 Sidecar 插件与独立守护资源...", "Deploying native Sidecar plugin & standalone watcher resources..."));
                 currentTargetPath = installDir;
                 AssertNoReparsePointChain(installDir, ResolveInstallChainStopRoot(installDir));
                 Directory.CreateDirectory(installDir);
@@ -1743,12 +1933,18 @@ namespace AgyClaudeStyle.Installer
                 }
 
                 currentStep = "extract-payload";
-                currentStepLabel = "解压部署插件与守护文件";
+                currentStepLabel = InstallerI18n.Tr("解压部署插件与守护文件", "Extract plugin & watcher files");
                 bool preservedConfig = false;
                 const string nativePrefix = "native-plugin/";
                 using (Stream resStream = Assembly.GetExecutingAssembly().GetManifestResourceStream("AGY_PAYLOAD.zip"))
                 {
-                    if (resStream == null) throw new InvalidOperationException("安装包内嵌资源 AGY_PAYLOAD.zip 缺失");
+                    if (resStream == null)
+                    {
+                        throw new InvalidOperationException(InstallerI18n.Tr(
+                            "安装包内嵌资源 AGY_PAYLOAD.zip 缺失",
+                            "Embedded installer resource AGY_PAYLOAD.zip is missing"
+                        ));
+                    }
                     using (ZipArchive archive = new ZipArchive(resStream, ZipArchiveMode.Read))
                     {
                         foreach (ZipArchiveEntry entry in archive.Entries)
@@ -1774,9 +1970,12 @@ namespace AgyClaudeStyle.Installer
                             uint destTag;
                             if (IsReparsePoint(destPath, out destTag))
                             {
-                                throw new InvalidOperationException(
-                                    "检测到目标文件为符号链接或重解析点 [" + CdpHelper.DescribeReparseTag(destTag) + "]，已拒绝覆盖: " + destPath
-                                );
+                                throw new InvalidOperationException(InstallerI18n.TrFormat(
+                                    "检测到目标文件为符号链接或重解析点 [{0}]，已拒绝覆盖: {1}",
+                                    "Target file is a symbolic link or reparse point [{0}]; overwrite refused: {1}",
+                                    CdpHelper.DescribeReparseTag(destTag),
+                                    destPath
+                                ));
                             }
 
                             if (string.Equals(entry.Name, "config.json", StringComparison.OrdinalIgnoreCase) && File.Exists(destPath))
@@ -1799,7 +1998,7 @@ namespace AgyClaudeStyle.Installer
                 result.NativePluginDeployed = !string.IsNullOrEmpty(pluginDir) && File.Exists(Path.Combine(pluginDir, "plugin.json"));
 
                 currentStep = "sync-registry";
-                currentStepLabel = "注册 Antigravity 插件配置";
+                currentStepLabel = InstallerI18n.Tr("注册 Antigravity 插件配置", "Register Antigravity plugin config");
                 currentTargetPath = pluginDir ?? "";
                 if (!string.IsNullOrEmpty(pluginDir))
                 {
@@ -1807,12 +2006,18 @@ namespace AgyClaudeStyle.Installer
                     bool regOk = CdpHelper.SyncHostPluginRegistry(pluginDir, true, out regReason);
                     if (!regOk && !string.IsNullOrEmpty(regReason))
                     {
-                        string warn = "[!] 未能自动写入宿主插件注册表（非致命）: " + regReason;
+                        string warn = InstallerI18n.TrFormat(
+                            "[!] 未能自动写入宿主插件注册表（非致命）: {0}",
+                            "[!] Could not update host plugin registry automatically (non-fatal): {0}",
+                            regReason
+                        );
                         result.Warnings.Add(warn);
                         report(60, warn);
                     }
                 }
-                report(62, preservedConfig ? "已保留本机现有 config.json 用户配置并同步部署原生 Sidecar 插件" : "已部署原生 Sidecar 插件并写入默认配置 config.json");
+                report(62, preservedConfig
+                    ? InstallerI18n.Tr("已保留本机现有 config.json 用户配置并同步部署原生 Sidecar 插件", "Preserved existing config.json and deployed native Sidecar plugin")
+                    : InstallerI18n.Tr("已部署原生 Sidecar 插件并写入默认配置 config.json", "Deployed native Sidecar plugin and wrote default config.json"));
 
                 try
                 {
@@ -1827,12 +2032,13 @@ namespace AgyClaudeStyle.Installer
                 catch { }
 
                 currentStep = "load-manifest";
-                currentStepLabel = "读取插件清单与配置";
+                currentStepLabel = InstallerI18n.Tr("读取插件清单与配置", "Load plugin manifest & config");
                 currentTargetPath = Path.Combine(installDir, "manifest.json");
                 PluginManifest manifest = PluginManifest.Load(installDir);
                 Dictionary<string, object> activeCfg = CdpHelper.ReadConfig(installDir, manifest);
-                result.ConfigSummary = string.Format(
+                result.ConfigSummary = InstallerI18n.TrFormat(
                     "语言={0} | 配色={1} | 动效={2} | Omni={3}",
+                    "Lang={0} | Palette={1} | Motion={2} | Omni={3}",
                     activeCfg.ContainsKey("language") ? activeCfg["language"] : "zh-CN",
                     activeCfg.ContainsKey("palette") ? activeCfg["palette"] : "obsidian",
                     activeCfg.ContainsKey("motionLevel") ? activeCfg["motionLevel"] : "standard",
@@ -1840,7 +2046,7 @@ namespace AgyClaudeStyle.Installer
                 );
 
                 currentStep = "patch-shortcuts";
-                currentStepLabel = "维护 Antigravity 快捷方式参数";
+                currentStepLabel = InstallerI18n.Tr("维护 Antigravity 快捷方式参数", "Patch Antigravity shortcut arguments");
                 currentTargetPath = "";
                 string shortcutStateDir = !string.IsNullOrEmpty(pluginDir) ? pluginDir : installDir;
                 int skippedShortcuts = 0;
@@ -1860,29 +2066,41 @@ namespace AgyClaudeStyle.Installer
                     result.SkippedShortcuts = skippedShortcuts;
                     if (skippedShortcuts > 0)
                     {
-                        result.Warnings.Add("已跳过 " + skippedShortcuts + " 个需要管理员权限的系统级快捷方式");
+                        result.Warnings.Add(InstallerI18n.TrFormat(
+                            "已跳过 {0} 个需要管理员权限的系统级快捷方式",
+                            "Skipped {0} system shortcut(s) requiring Administrator privileges",
+                            skippedShortcuts
+                        ));
                     }
                 }
                 catch (Exception scEx)
                 {
-                    string warn = "[!] 快捷方式参数修补异常（非致命，核心插件已安装）: " + scEx.Message;
+                    string warn = InstallerI18n.TrFormat(
+                        "[!] 快捷方式参数修补异常（非致命，核心插件已安装）: {0}",
+                        "[!] Shortcut patching warning (non-fatal, core plugin installed): {0}",
+                        scEx.Message
+                    );
                     result.Warnings.Add(warn);
                     report(68, warn);
                 }
 
                 currentStep = "register-autostart";
-                currentStepLabel = "配置开机自启与卸载入口";
+                currentStepLabel = InstallerI18n.Tr("配置开机自启与卸载入口", "Configure autostart & uninstall entry");
                 currentTargetPath = GetStartupShortcutPath();
                 if (!opts.NoAutostart)
                 {
-                    report(72, "正在配置 Windows 开机自动修补与卸载入口...");
+                    report(72, InstallerI18n.Tr("正在配置 Windows 开机自动修补与卸载入口...", "Configuring Windows startup shortcut & uninstall entry..."));
                     try
                     {
                         CreateStartupShortcut(installDir, pluginDir);
                     }
                     catch (Exception startupEx)
                     {
-                        string warn = "[!] 创建开机自启快捷方式被拦截（非致命，插件已正常部署）: " + startupEx.Message;
+                        string warn = InstallerI18n.TrFormat(
+                            "[!] 创建开机自启快捷方式被拦截（非致命，插件已正常部署）: {0}",
+                            "[!] Startup shortcut creation blocked (non-fatal, plugin deployed): {0}",
+                            startupEx.Message
+                        );
                         result.Warnings.Add(warn);
                         report(73, warn);
                     }
@@ -1892,28 +2110,32 @@ namespace AgyClaudeStyle.Installer
                     }
                     catch (Exception regEx)
                     {
-                        string warn = "[!] 写入 Windows 卸载注册表入口被拦截（非致命）: " + regEx.Message;
+                        string warn = InstallerI18n.TrFormat(
+                            "[!] 写入 Windows 卸载注册表入口被拦截（非致命）: {0}",
+                            "[!] Writing Windows Uninstall registry entry blocked (non-fatal): {0}",
+                            regEx.Message
+                        );
                         result.Warnings.Add(warn);
                         report(74, warn);
                     }
                 }
                 else
                 {
-                    report(72, "已按参数跳过开机自启注册");
+                    report(72, InstallerI18n.Tr("已按参数跳过开机自启注册", "Skipped autostart registration per CLI option"));
                 }
 
                 currentStep = "start-native-daemon";
-                currentStepLabel = "激活原生 Sidecar Daemon";
+                currentStepLabel = InstallerI18n.Tr("激活原生 Sidecar Daemon", "Start native Sidecar Daemon");
                 currentTargetPath = pluginDir ?? "";
                 if (!opts.NoNativeDaemon && result.NativePluginDeployed)
                 {
-                    report(78, "正在激活原生五通道 Sidecar Daemon...");
+                    report(78, InstallerI18n.Tr("正在激活原生五通道 Sidecar Daemon...", "Starting native 5-channel Sidecar Daemon..."));
                     result.NativeDaemonStarted = CdpHelper.EnsureNativeDaemonRunning(pluginDir, opts.CdpPort, ag.ExePath, (m) => report(80, m));
                 }
 
                 currentStep = "start-watcher";
-                currentStepLabel = "启动后台静默守护进程";
-                report(82, "正在启动后台静默守护进程...");
+                currentStepLabel = InstallerI18n.Tr("启动后台静默守护进程", "Start background watcher");
+                report(82, InstallerI18n.Tr("正在启动后台静默守护进程...", "Starting silent background watcher..."));
                 string watcherExe = Path.Combine(installDir, WatcherExeName);
                 currentTargetPath = watcherExe;
                 string watcherArgs = "--watch --dir " + QuotePathArgumentStrict(installDir, "--dir");
@@ -1932,6 +2154,11 @@ namespace AgyClaudeStyle.Installer
                 if (opts.CdpPort.HasValue && opts.CdpPort.Value > 0)
                 {
                     watcherArgs += " --cdp-port " + opts.CdpPort.Value;
+                }
+                string explicitWatcherLang = InstallerI18n.ExplicitLang;
+                if (!string.IsNullOrEmpty(explicitWatcherLang))
+                {
+                    watcherArgs += " --lang " + explicitWatcherLang;
                 }
                 ProcessStartInfo psi = new ProcessStartInfo();
                 psi.FileName = watcherExe;
@@ -1962,8 +2189,11 @@ namespace AgyClaudeStyle.Installer
                 {
                     if (result.NativeDaemonStarted)
                     {
-                        string warn = "[!] 启动独立守护 obsidian-prism-watcher.exe 受阻（可能被杀毒软件拦截，但原生 Sidecar Daemon 已运行）: " +
-                                      (watcherStartErr != null ? watcherStartErr.Message : "未知原因");
+                        string warn = InstallerI18n.TrFormat(
+                            "[!] 启动独立守护 obsidian-prism-watcher.exe 受阻（可能被杀毒软件拦截，但原生 Sidecar Daemon 已运行）: {0}",
+                            "[!] Standalone watcher obsidian-prism-watcher.exe failed to start (possibly blocked by antivirus, but native Sidecar Daemon is running): {0}",
+                            watcherStartErr != null ? watcherStartErr.Message : InstallerI18n.Tr("未知原因", "Unknown reason")
+                        );
                         result.Warnings.Add(warn);
                         report(84, warn);
                     }
@@ -1971,19 +2201,23 @@ namespace AgyClaudeStyle.Installer
                     {
                         throw new InstallerStepException(
                             "start-watcher",
-                            "启动后台守护进程",
+                            InstallerI18n.Tr("启动后台守护进程", "Start background watcher"),
                             watcherExe,
                             BuildFailureHint(watcherStartErr, "start-watcher"),
-                            "无法启动后台守护进程 obsidian-prism-watcher.exe: " + watcherStartErr.Message,
+                            InstallerI18n.TrFormat(
+                                "无法启动后台守护进程 obsidian-prism-watcher.exe: {0}",
+                                "Failed to start background watcher obsidian-prism-watcher.exe: {0}",
+                                watcherStartErr.Message
+                            ),
                             watcherStartErr
                         );
                     }
                 }
 
                 currentStep = "verify-cdp";
-                currentStepLabel = "检测 Antigravity 实时注入状态";
+                currentStepLabel = InstallerI18n.Tr("检测 Antigravity 实时注入状态", "Verify live Antigravity injection");
                 currentTargetPath = "";
-                report(90, "正在检查 Antigravity Desktop 实时注入状态...");
+                report(90, InstallerI18n.Tr("正在检查 Antigravity Desktop 实时注入状态...", "Checking live Antigravity Desktop injection status..."));
                 int? port = CdpHelper.ReadPort(opts.CdpPort);
                 bool cdpReachable = false;
                 string watchLogPath = Path.Combine(installDir, "watch.log");
@@ -2006,6 +2240,7 @@ namespace AgyClaudeStyle.Installer
                                 }
                             }
                             bool watcherInjected = logContent.IndexOf("[✓] 已注入 obsidian-prism:", StringComparison.Ordinal) >= 0 ||
+                                                   logContent.IndexOf("[✓] Injected obsidian-prism:", StringComparison.Ordinal) >= 0 ||
                                                    (!string.IsNullOrEmpty(pluginDir) && CdpHelper.IsNativeDaemonAlive(pluginDir));
                             if (pages != null && pages.Count > 0 && watcherInjected)
                             {
@@ -2049,17 +2284,35 @@ namespace AgyClaudeStyle.Installer
                 result.Ok = true;
                 if (result.InjectedPages.Count > 0)
                 {
-                    result.Headline = string.Format("修补成功！已实时注入 {0} 个 Antigravity 窗口", result.InjectedPages.Count);
-                    result.Detail = "已部署原生五通道 Sidecar 插件与后台热备守护，并配置开机自启。后续打开新窗口或更新 Antigravity 后也会自动生效。";
+                    result.Headline = InstallerI18n.TrFormat(
+                        "修补成功！已实时注入 {0} 个 Antigravity 窗口",
+                        "Patched! Injected {0} Antigravity window(s)",
+                        result.InjectedPages.Count
+                    );
+                    result.Detail = InstallerI18n.Tr(
+                        "已部署原生五通道 Sidecar 插件与后台热备守护，并配置开机自启。后续打开新窗口或更新 Antigravity 后也会自动生效。",
+                        "Native 5-channel Sidecar plugin, standby watcher & autostart are configured. New windows and future Antigravity updates will auto-apply."
+                    );
                     for (int i = 0; i < result.InjectedPages.Count; i++)
                     {
-                        report(98, "已注入窗口: " + result.InjectedPages[i]);
+                        report(98, InstallerI18n.TrFormat(
+                            "已注入窗口: {0}",
+                            "Injected window: {0}",
+                            result.InjectedPages[i]
+                        ));
                     }
                 }
                 else if (cdpReachable && port.HasValue)
                 {
-                    result.Headline = "已安装原生插件并启动守护！等待 Antigravity 窗口就绪";
-                    result.Detail = "已部署原生 Sidecar 插件并启动后台守护。检测到调试端口 " + port.Value + "，窗口就绪后将自动完成注入。";
+                    result.Headline = InstallerI18n.Tr(
+                        "已安装原生插件并启动守护！等待 Antigravity 窗口就绪",
+                        "Installed & watcher started! Waiting for window"
+                    );
+                    result.Detail = InstallerI18n.TrFormat(
+                        "已部署原生 Sidecar 插件并启动后台守护。检测到调试端口 {0}，窗口就绪后将自动完成注入。",
+                        "Native Sidecar plugin & watcher are running. Detected debug port {0}; injection will complete automatically once a window is ready.",
+                        port.Value
+                    );
                 }
                 else
                 {
@@ -2067,26 +2320,45 @@ namespace AgyClaudeStyle.Installer
                     if (bareHost != null)
                     {
                         result.BareHostDetected = true;
-                        result.Headline = "安装完成！重新打开一次 Antigravity 即可激活界面";
+                        result.Headline = InstallerI18n.Tr(
+                            "安装完成！重新打开一次 Antigravity 即可激活界面",
+                            "Installed! Reopen Antigravity once to activate"
+                        );
                         if (result.PatchedShortcuts == 0 && alreadySetShortcuts == 0 && skippedShortcuts > 0)
                         {
-                            result.Detail = "检测到 Antigravity 快捷方式位于系统受保护目录（需管理员权限写入）；核心插件已安装完毕，请以管理员身份运行安装器补齐快捷方式参数或手动追加 --remote-debugging-port=0 后重开 Antigravity。";
+                            result.Detail = InstallerI18n.Tr(
+                                "检测到 Antigravity 快捷方式位于系统受保护目录（需管理员权限写入）；核心插件已安装完毕，请以管理员身份运行安装器补齐快捷方式参数或手动追加 --remote-debugging-port=0 后重开 Antigravity。",
+                                "Antigravity shortcuts are in a protected folder. Core plugin is installed; run as Administrator or append --remote-debugging-port=0, then reopen Antigravity."
+                            );
                         }
                         else
                         {
-                            result.Detail = "检测到当前 Antigravity (v2.33.0+) 未开启本地光学桥接端口；桌面与开始菜单快捷方式已自动补齐 --remote-debugging-port=0，重新打开后将自动永久生效。";
+                            result.Detail = InstallerI18n.Tr(
+                                "检测到当前 Antigravity (v2.33.0+) 未开启本地光学桥接端口；桌面与开始菜单快捷方式已自动补齐 --remote-debugging-port=0，重新打开后将自动永久生效。",
+                                "Running Antigravity (v2.33.0+) lacks the local CDP bridge. Shortcuts were updated with --remote-debugging-port=0; reopen Antigravity to activate."
+                            );
                         }
                     }
                     else
                     {
-                        result.Headline = "安装成功！原生 Sidecar 插件与自动修补已就绪";
+                        result.Headline = InstallerI18n.Tr(
+                            "安装成功！原生 Sidecar 插件与自动修补已就绪",
+                            "Installed! Native Sidecar & watcher are ready"
+                        );
                         if (result.PatchedShortcuts == 0 && alreadySetShortcuts == 0 && skippedShortcuts > 0)
                         {
-                            result.Detail = "核心插件与守护已就绪；但有 " + skippedShortcuts + " 个系统级快捷方式需要管理员权限才能写入 --remote-debugging-port=0，请以管理员身份运行一次或手动补充启动参数。";
+                            result.Detail = InstallerI18n.TrFormat(
+                                "核心插件与守护已就绪；但有 {0} 个系统级快捷方式需要管理员权限才能写入 --remote-debugging-port=0，请以管理员身份运行一次或手动补充启动参数。",
+                                "Core plugin & watcher are ready, but {0} system shortcut(s) need Administrator rights for --remote-debugging-port=0. Run as Administrator or add the flag manually.",
+                                skippedShortcuts
+                            );
                         }
                         else
                         {
-                            result.Detail = "当前未检测到运行中的 Antigravity Desktop；快捷方式与守护进程已就绪，打开 Antigravity Desktop 后会自动立即生效。";
+                            result.Detail = InstallerI18n.Tr(
+                                "当前未检测到运行中的 Antigravity Desktop；快捷方式与守护进程已就绪，打开 Antigravity Desktop 后会自动立即生效。",
+                                "Antigravity Desktop is not currently running. Shortcuts and background watcher are ready and will take effect as soon as you launch it."
+                            );
                         }
                     }
                 }
@@ -2118,11 +2390,19 @@ namespace AgyClaudeStyle.Installer
             string pluginDir = ResolveNativePluginDir(opts, installDir);
             if (IsDangerousRootPath(installDir))
             {
-                throw new InvalidOperationException("已拒绝在受保护的系统或用户根目录执行卸载: " + installDir);
+                throw new InvalidOperationException(InstallerI18n.TrFormat(
+                    "已拒绝在受保护的系统或用户根目录执行卸载: {0}",
+                    "Refused to uninstall from protected system or user root directory: {0}",
+                    installDir
+                ));
             }
             if (!string.IsNullOrEmpty(pluginDir) && IsDangerousRootPath(pluginDir))
             {
-                throw new InvalidOperationException("已拒绝在受保护的系统或用户根目录执行插件目录卸载: " + pluginDir);
+                throw new InvalidOperationException(InstallerI18n.TrFormat(
+                    "已拒绝在受保护的系统或用户根目录执行插件目录卸载: {0}",
+                    "Refused to uninstall plugin from protected system or user root directory: {0}",
+                    pluginDir
+                ));
             }
             result.InstallDir = installDir;
             result.PluginDir = pluginDir;
@@ -2132,11 +2412,11 @@ namespace AgyClaudeStyle.Installer
                 if (progress != null) progress(pct, msg);
             };
 
-            report(15, "正在停止后台守护进程...");
+            report(15, InstallerI18n.Tr("正在停止后台守护进程...", "Stopping background watcher processes..."));
             StopWatcherInDir(installDir, (m) => report(25, m));
             StopNativeDaemonInDir(pluginDir, (m) => report(30, m));
 
-            report(40, "正在通过 CDP 清理运行中的 Antigravity Desktop 界面...");
+            report(40, InstallerI18n.Tr("正在通过 CDP 清理运行中的 Antigravity Desktop 界面...", "Cleaning up injected UI in running Antigravity windows via CDP..."));
             int? port = CdpHelper.ReadPort(opts.CdpPort);
             result.CdpPort = port;
             string removeExpr = null;
@@ -2179,7 +2459,7 @@ namespace AgyClaudeStyle.Installer
                                 s.EvaluateAsync(removeExpr, false).GetAwaiter().GetResult();
                                 string title = CdpHelper.ShortTitle(pages[i]);
                                 result.InjectedPages.Add(title);
-                                report(55, "已恢复原生界面: " + title);
+                                report(55, InstallerI18n.TrFormat("已恢复原生界面: {0}", "Restored native UI: {0}", title));
                             }
                         }
                         catch { }
@@ -2188,7 +2468,7 @@ namespace AgyClaudeStyle.Installer
                 catch { }
             }
 
-            report(70, "正在还原快捷方式并移除开机自启与卸载注册表项...");
+            report(70, InstallerI18n.Tr("正在还原快捷方式并移除开机自启与卸载注册表项...", "Restoring shortcuts and removing autostart & uninstall registry entries..."));
             result.RestoredShortcuts = CdpHelper.RestoreAntigravityShortcutsOptIn(
                 installDir,
                 GetDefaultInstallDir(),
@@ -2244,11 +2524,11 @@ namespace AgyClaudeStyle.Installer
 
             if (!string.IsNullOrEmpty(pluginDir) && Directory.Exists(pluginDir))
             {
-                report(80, "正在清理原生 Sidecar 插件目录: " + pluginDir);
+                report(80, InstallerI18n.TrFormat("正在清理原生 Sidecar 插件目录: {0}", "Removing native Sidecar plugin directory: {0}", pluginDir));
                 try { SafeDeleteDirectory(pluginDir); } catch { }
             }
 
-            report(85, "正在清理安装目录: " + installDir);
+            report(85, InstallerI18n.TrFormat("正在清理安装目录: {0}", "Removing install directory: {0}", installDir));
             string selfExe = Assembly.GetExecutingAssembly().Location;
             string installDirPrefix = NormalizeDirPath(installDir).TrimEnd('\\', '/').ToLowerInvariant() + "\\";
             bool runningInsideInstallDir = !string.IsNullOrEmpty(selfExe) &&
@@ -2264,7 +2544,11 @@ namespace AgyClaudeStyle.Installer
                 {
                     if (IsDangerousRootPath(installDir))
                     {
-                        throw new InvalidOperationException("已拒绝清理受保护的系统或用户根目录: " + installDir);
+                        throw new InvalidOperationException(InstallerI18n.TrFormat(
+                            "已拒绝清理受保护的系统或用户根目录: {0}",
+                            "Refused to clean protected system or user root directory: {0}",
+                            installDir
+                        ));
                     }
                     CleanInstallDirKeepingSelfExe(installDir, Path.GetFullPath(selfExe));
                     result.SelfDeleteScheduled = true;
@@ -2273,15 +2557,25 @@ namespace AgyClaudeStyle.Installer
 
             if (opts.PurgeData)
             {
-                report(92, "正在清除插件配置与遥测缓存...");
+                report(92, InstallerI18n.Tr("正在清除插件配置与遥测缓存...", "Purging plugin configuration and telemetry cache..."));
                 PurgeUserPluginData(pluginDir);
             }
 
             result.Ok = true;
-            result.Headline = "已卸载并恢复 Antigravity Desktop 原生界面";
+            result.Headline = InstallerI18n.Tr(
+                "已卸载并恢复 Antigravity Desktop 原生界面",
+                "Uninstalled & restored native Antigravity UI"
+            );
             result.Detail = result.InjectedPages.Count > 0
-                ? string.Format("已停止守护、移除自启，并立即还原了 {0} 个打开的窗口。", result.InjectedPages.Count)
-                : "已停止守护、移除开机自启并清理安装文件。";
+                ? InstallerI18n.TrFormat(
+                    "已停止守护、移除自启，并立即还原了 {0} 个打开的窗口。",
+                    "Stopped watcher, removed autostart, and immediately restored {0} open window(s).",
+                    result.InjectedPages.Count
+                )
+                : InstallerI18n.Tr(
+                    "已停止守护、移除开机自启并清理安装文件。",
+                    "Stopped watcher, removed autostart, and cleaned up installation files."
+                );
             report(100, result.Headline);
             return result;
         }
@@ -2365,14 +2659,15 @@ namespace AgyClaudeStyle.Installer
             _opts = opts;
             _activeInstallDir = InstallerCore.NormalizeDirPath(string.IsNullOrEmpty(opts.InstallDir) ? InstallerCore.GetDefaultInstallDir() : opts.InstallDir);
             _activePluginDir = InstallerCore.ResolveNativePluginDir(opts, _activeInstallDir);
+            string uiFontFamily = InstallerI18n.IsZhUi ? "Microsoft YaHei UI" : "Segoe UI";
 
             SuspendLayout();
 
-            Text = "Obsidian Prism · 黑曜棱镜 安装与修补工具";
+            Text = InstallerI18n.Tr("Obsidian Prism · 黑曜棱镜 安装与修补工具", "Obsidian Prism Installer & Patcher");
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
-            Font = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Regular);
+            Font = new Font(uiFontFamily, 9.5f, FontStyle.Regular);
             ClientSize = new Size(588, 464);
             BackColor = Color.FromArgb(244, 247, 251);
             try { Icon = Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location); } catch { }
@@ -2384,16 +2679,21 @@ namespace AgyClaudeStyle.Installer
             header.Padding = new Padding(20, 14, 20, 12);
 
             _titleLabel = new Label();
-            _titleLabel.Text = "Obsidian Prism · 黑曜棱镜安装器";
+            _titleLabel.UseMnemonic = false;
+            _titleLabel.Text = InstallerI18n.Tr("Obsidian Prism · 黑曜棱镜安装器", "Obsidian Prism Installer");
             _titleLabel.ForeColor = Color.FromArgb(248, 250, 252);
-            _titleLabel.Font = new Font("Microsoft YaHei UI", 13.5f, FontStyle.Bold);
+            _titleLabel.Font = new Font(uiFontFamily, 13.5f, FontStyle.Bold);
             _titleLabel.AutoSize = true;
             _titleLabel.Location = new Point(20, 14);
 
             _subtitleLabel = new Label();
-            _subtitleLabel.Text = "Antigravity 主题外观、动效调节、上下文监控与思考翻译套件";
+            _subtitleLabel.UseMnemonic = false;
+            _subtitleLabel.Text = InstallerI18n.Tr(
+                "Antigravity 主题外观、动效调节、上下文监控与思考翻译套件",
+                "Theme, motion, context telemetry & thought translation suite for Antigravity"
+            );
             _subtitleLabel.ForeColor = Color.FromArgb(96, 165, 250);
-            _subtitleLabel.Font = new Font("Microsoft YaHei UI", 9f, FontStyle.Regular);
+            _subtitleLabel.Font = new Font(uiFontFamily, 9f, FontStyle.Regular);
             _subtitleLabel.AutoSize = true;
             _subtitleLabel.Location = new Point(21, 46);
 
@@ -2408,25 +2708,36 @@ namespace AgyClaudeStyle.Installer
             card.BorderStyle = BorderStyle.FixedSingle;
 
             _statusHeadline = new Label();
-            _statusHeadline.Text = opts.Uninstall ? "准备卸载并恢复原版界面..." : "正在检测本地 Antigravity 环境...";
+            _statusHeadline.UseMnemonic = false;
+            _statusHeadline.Text = opts.Uninstall
+                ? InstallerI18n.Tr("准备卸载并恢复原版界面...", "Preparing to uninstall & restore native UI...")
+                : InstallerI18n.Tr("正在检测本地 Antigravity 环境...", "Detecting local Antigravity environment...");
             _statusHeadline.ForeColor = Color.FromArgb(28, 25, 23);
-            _statusHeadline.Font = new Font("Microsoft YaHei UI", 11f, FontStyle.Bold);
+            _statusHeadline.Font = new Font(uiFontFamily, 11f, FontStyle.Bold);
             _statusHeadline.Location = new Point(14, 12);
             _statusHeadline.Size = new Size(520, 26);
 
             _statusDetail = new Label();
+            _statusDetail.UseMnemonic = false;
             _statusDetail.Text = opts.Uninstall
-                ? "请确认是否卸载 Obsidian Prism、停止后台守护并恢复原生界面。"
-                : "正在只读检测 Antigravity Desktop 与安装状态，等待你确认后再开始安装...";
+                ? InstallerI18n.Tr(
+                    "请确认是否卸载 Obsidian Prism、停止后台守护并恢复原生界面。",
+                    "Confirm to uninstall Obsidian Prism, stop background watchers, and restore the native UI."
+                )
+                : InstallerI18n.Tr(
+                    "正在只读检测 Antigravity Desktop 与安装状态，等待你确认后再开始安装...",
+                    "Running read-only check on Antigravity Desktop and install state. Waiting for your confirmation..."
+                );
             _statusDetail.ForeColor = Color.FromArgb(87, 83, 78);
             _statusDetail.Location = new Point(14, 42);
-            _statusDetail.Size = new Size(520, 42);
+            _statusDetail.Size = new Size(520, 44);
 
             _metaLabel = new Label();
-            _metaLabel.Text = "插件目录: " + _activePluginDir;
+            _metaLabel.UseMnemonic = false;
+            _metaLabel.Text = InstallerI18n.Tr("插件目录: ", "Plugin dir: ") + _activePluginDir;
             _metaLabel.ForeColor = Color.FromArgb(120, 113, 108);
-            _metaLabel.Font = new Font("Microsoft YaHei UI", 8.2f, FontStyle.Regular);
-            _metaLabel.Location = new Point(14, 88);
+            _metaLabel.Font = new Font(uiFontFamily, 8.2f, FontStyle.Regular);
+            _metaLabel.Location = new Point(14, 90);
             _metaLabel.Size = new Size(520, 20);
             _metaLabel.AutoEllipsis = true;
 
@@ -2455,16 +2766,18 @@ namespace AgyClaudeStyle.Installer
             Controls.Add(_logBox);
 
             _uninstallBtn = new Button();
-            _uninstallBtn.Text = "卸载并恢复原版";
+            _uninstallBtn.UseMnemonic = false;
+            _uninstallBtn.Text = InstallerI18n.Tr("卸载并恢复原版", "Uninstall & Reset");
             _uninstallBtn.Location = new Point(20, 412);
-            _uninstallBtn.Size = new Size(134, 34);
+            _uninstallBtn.Size = new Size(136, 34);
             _uninstallBtn.Enabled = false;
             _uninstallBtn.FlatStyle = FlatStyle.System;
             _uninstallBtn.Click += async (s, e) => await HandleUninstallClickAsync();
 
             _openDirBtn = new Button();
-            _openDirBtn.Text = "打开配置目录";
-            _openDirBtn.Location = new Point(162, 412);
+            _openDirBtn.UseMnemonic = false;
+            _openDirBtn.Text = InstallerI18n.Tr("打开配置目录", "Open Config Dir");
+            _openDirBtn.Location = new Point(164, 412);
             _openDirBtn.Size = new Size(122, 34);
             _openDirBtn.Enabled = false;
             _openDirBtn.FlatStyle = FlatStyle.System;
@@ -2481,21 +2794,23 @@ namespace AgyClaudeStyle.Installer
             };
 
             _installBtn = new Button();
-            _installBtn.Text = "立即安装";
-            _installBtn.Location = new Point(314, 412);
-            _installBtn.Size = new Size(138, 34);
+            _installBtn.UseMnemonic = false;
+            _installBtn.Text = InstallerI18n.Tr("立即安装", "Install Now");
+            _installBtn.Location = new Point(306, 412);
+            _installBtn.Size = new Size(144, 34);
             _installBtn.Visible = !opts.Uninstall;
             _installBtn.Enabled = false;
             _installBtn.FlatStyle = FlatStyle.Flat;
             _installBtn.FlatAppearance.BorderSize = 0;
-            _installBtn.Font = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Bold);
+            _installBtn.Font = new Font(uiFontFamily, 9.5f, FontStyle.Bold);
             _installBtn.Cursor = Cursors.Hand;
             _installBtn.Click += async (s, e) => await ExecuteInstallAsync();
 
             _launchAgBtn = new Button();
-            _launchAgBtn.Text = "启动 Antigravity";
-            _launchAgBtn.Location = new Point(314, 412);
-            _launchAgBtn.Size = new Size(138, 34);
+            _launchAgBtn.UseMnemonic = false;
+            _launchAgBtn.Text = InstallerI18n.Tr("启动 Antigravity", "Launch Antigravity");
+            _launchAgBtn.Location = new Point(306, 412);
+            _launchAgBtn.Size = new Size(144, 34);
             _launchAgBtn.Visible = false;
             _launchAgBtn.FlatStyle = FlatStyle.System;
             _launchAgBtn.Click += (s, e) =>
@@ -2513,9 +2828,10 @@ namespace AgyClaudeStyle.Installer
             };
 
             _closeBtn = new Button();
-            _closeBtn.Text = "取消";
-            _closeBtn.Location = new Point(460, 412);
-            _closeBtn.Size = new Size(108, 34);
+            _closeBtn.UseMnemonic = false;
+            _closeBtn.Text = InstallerI18n.Tr("取消", "Cancel");
+            _closeBtn.Location = new Point(458, 412);
+            _closeBtn.Size = new Size(110, 34);
             _closeBtn.Enabled = true;
             _closeBtn.FlatStyle = FlatStyle.System;
             _closeBtn.Click += (s, e) => Close();
@@ -2593,8 +2909,11 @@ namespace AgyClaudeStyle.Installer
             {
                 DialogResult dr = MessageBox.Show(
                     this,
-                    "确认要卸载 Obsidian Prism 并恢复 Antigravity Desktop 原生界面吗？",
-                    "卸载确认",
+                    InstallerI18n.Tr(
+                        "确认要卸载 Obsidian Prism 并恢复 Antigravity Desktop 原生界面吗？",
+                        "Are you sure you want to uninstall Obsidian Prism and restore the native Antigravity Desktop UI?"
+                    ),
+                    InstallerI18n.Tr("卸载确认", "Confirm Uninstall"),
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Question
                 );
@@ -2639,40 +2958,62 @@ namespace AgyClaudeStyle.Installer
                 _antigravityExe = ag != null ? ag.ExePath : null;
                 if (alreadyInstalled)
                 {
-                    _statusHeadline.Text = "已检测到本地 Obsidian Prism · 请选择操作";
+                    _statusHeadline.Text = InstallerI18n.Tr(
+                        "已检测到本地 Obsidian Prism · 请选择操作",
+                        "Obsidian Prism Detected · Choose an Action"
+                    );
                     _statusHeadline.ForeColor = Color.FromArgb(28, 25, 23);
-                    _statusDetail.Text = "点击「重新安装 / 升级」可覆盖更新插件并保留现有配置；点击「卸载并恢复原版」可彻底卸载并还原原生界面。";
-                    _installBtn.Text = "重新安装 / 升级";
+                    _statusDetail.Text = InstallerI18n.Tr(
+                        "点击「重新安装 / 升级」可覆盖更新插件并保留现有配置；点击「卸载并恢复原版」可彻底卸载并还原原生界面。",
+                        "Click 'Reinstall / Update' to update while preserving settings, or 'Uninstall & Reset' to restore the native UI."
+                    );
+                    _installBtn.Text = InstallerI18n.Tr("重新安装 / 升级", "Reinstall / Update");
                 }
                 else
                 {
-                    _statusHeadline.Text = "是否安装 Obsidian Prism · 黑曜棱镜？";
+                    _statusHeadline.Text = InstallerI18n.Tr(
+                        "是否安装 Obsidian Prism · 黑曜棱镜？",
+                        "Install Obsidian Prism?"
+                    );
                     _statusHeadline.ForeColor = Color.FromArgb(28, 25, 23);
-                    _statusDetail.Text = "将部署原生 Sidecar 插件、后台热备守护与开机自启（不修改 Antigravity 核心程序文件）。请点击「立即安装」开始，或点击「取消」退出。";
-                    _installBtn.Text = "立即安装";
+                    _statusDetail.Text = InstallerI18n.Tr(
+                        "将部署原生 Sidecar 插件、后台热备守护与开机自启（不修改 Antigravity 核心程序文件）。请点击「立即安装」开始，或点击「取消」退出。",
+                        "Deploys the native Sidecar plugin, standby watcher & autostart without modifying Antigravity binaries. Click 'Install Now' to proceed."
+                    );
+                    _installBtn.Text = InstallerI18n.Tr("立即安装", "Install Now");
                 }
 
                 string agSummary;
                 if (ag != null && !string.IsNullOrEmpty(ag.ExePath))
                 {
-                    string ver = !string.IsNullOrEmpty(ag.Version) ? "v" + ag.Version : "已检测到";
+                    string ver = !string.IsNullOrEmpty(ag.Version)
+                        ? "v" + ag.Version
+                        : InstallerI18n.Tr("已检测到", "Detected");
                     string runState = ag.IsRunning
-                        ? (port.HasValue ? "运行中 · 端口 " + port.Value : "运行中")
-                        : "未运行";
+                        ? (port.HasValue
+                            ? InstallerI18n.TrFormat("运行中 · 端口 {0}", "Running · Port {0}", port.Value)
+                            : InstallerI18n.Tr("运行中", "Running"))
+                        : InstallerI18n.Tr("未运行", "Not running");
                     agSummary = "Antigravity: " + ver + " (" + runState + ")";
                 }
                 else
                 {
-                    agSummary = "未检测到运行中的 Antigravity（支持预先安装）";
+                    agSummary = InstallerI18n.Tr(
+                        "未检测到运行中的 Antigravity（支持预先安装）",
+                        "Antigravity not detected (pre-install supported)"
+                    );
                 }
                 _metaLabel.Text = agSummary + " | " + pluginDir;
 
-                AppendLog("环境只读预检完成，当前未对本机做任何修改，等待你确认操作。");
-                AppendLog("原生插件目录: " + pluginDir);
-                AppendLog("后台守护目录: " + installDir);
+                AppendLog(InstallerI18n.Tr(
+                    "环境只读预检完成，当前未对本机做任何修改，等待你确认操作。",
+                    "Read-only environment check complete. No changes made yet; waiting for confirmation."
+                ));
+                AppendLog(InstallerI18n.Tr("原生插件目录: ", "Native plugin dir: ") + pluginDir);
+                AppendLog(InstallerI18n.Tr("后台守护目录: ", "Watcher dir: ") + installDir);
                 if (ag != null && !string.IsNullOrEmpty(ag.ExePath))
                 {
-                    AppendLog("检测到 Antigravity Desktop: " + ag.ExePath);
+                    AppendLog(InstallerI18n.Tr("检测到 Antigravity Desktop: ", "Detected Antigravity Desktop: ") + ag.ExePath);
                 }
 
                 _progressBar.Value = 0;
@@ -2681,7 +3022,7 @@ namespace AgyClaudeStyle.Installer
                 _installBtn.Enabled = true;
                 _uninstallBtn.Enabled = alreadyInstalled;
                 _openDirBtn.Enabled = hasDir;
-                _closeBtn.Text = "取消";
+                _closeBtn.Text = InstallerI18n.Tr("取消", "Cancel");
                 _closeBtn.Enabled = true;
                 AcceptButton = _installBtn;
                 UpdateInstallButtonStyle();
@@ -2689,13 +3030,17 @@ namespace AgyClaudeStyle.Installer
             catch (Exception ex)
             {
                 if (IsDisposed || Disposing) return;
-                _statusHeadline.Text = "准备安装 Obsidian Prism";
-                _statusDetail.Text = "环境预检遇到提示：" + ex.Message + "。你仍可点击「立即安装」继续或点击「取消」退出。";
-                AppendLog("[!] 预检提示: " + ex.Message);
+                _statusHeadline.Text = InstallerI18n.Tr("准备安装 Obsidian Prism", "Ready to Install Obsidian Prism");
+                _statusDetail.Text = InstallerI18n.TrFormat(
+                    "环境预检遇到提示：{0}。你仍可点击「立即安装」继续或点击「取消」退出。",
+                    "Pre-check notice: {0}. You can still click 'Install Now' to continue or 'Cancel' to exit.",
+                    ex.Message
+                );
+                AppendLog(InstallerI18n.Tr("[!] 预检提示: ", "[!] Pre-check notice: ") + ex.Message);
                 _installBtn.Visible = true;
-                _installBtn.Text = "立即安装";
+                _installBtn.Text = InstallerI18n.Tr("立即安装", "Install Now");
                 _installBtn.Enabled = true;
-                _closeBtn.Text = "取消";
+                _closeBtn.Text = InstallerI18n.Tr("取消", "Cancel");
                 _closeBtn.Enabled = true;
                 AcceptButton = _installBtn;
                 UpdateInstallButtonStyle();
@@ -2706,9 +3051,15 @@ namespace AgyClaudeStyle.Installer
         {
             if (_busy) return;
             _busy = true;
-            _statusHeadline.Text = "正在安装并修补本机 Antigravity Desktop...";
+            _statusHeadline.Text = InstallerI18n.Tr(
+                "正在安装并修补本机 Antigravity Desktop...",
+                "Installing & patching Antigravity Desktop..."
+            );
             _statusHeadline.ForeColor = Color.FromArgb(28, 25, 23);
-            _statusDetail.Text = "正在部署原生 Sidecar 插件与后台热备守护，请稍候...";
+            _statusDetail.Text = InstallerI18n.Tr(
+                "正在部署原生 Sidecar 插件与后台热备守护，请稍候...",
+                "Deploying native Sidecar plugin and standby background watcher, please wait..."
+            );
             _progressBar.Value = 5;
             SetButtonsEnabled(false);
             try
@@ -2720,7 +3071,7 @@ namespace AgyClaudeStyle.Installer
                 _statusHeadline.Text = res.Headline;
                 _statusHeadline.ForeColor = Color.FromArgb(21, 128, 61);
                 _statusDetail.Text = res.Detail;
-                _metaLabel.Text = "配置: " + res.ConfigSummary;
+                _metaLabel.Text = InstallerI18n.Tr("配置: ", "Config: ") + res.ConfigSummary;
                 _openDirBtn.Enabled = (!string.IsNullOrEmpty(_activePluginDir) && Directory.Exists(_activePluginDir)) || Directory.Exists(_activeInstallDir);
                 _uninstallBtn.Enabled = true;
                 bool showLaunch = (!string.IsNullOrEmpty(_antigravityExe) && res.InjectedPages.Count == 0 && !res.BareHostDetected);
@@ -2729,10 +3080,10 @@ namespace AgyClaudeStyle.Installer
                 _installBtn.Visible = !showLaunch;
                 if (!showLaunch)
                 {
-                    _installBtn.Text = "重新安装";
+                    _installBtn.Text = InstallerI18n.Tr("重新安装", "Reinstall");
                     _installBtn.Enabled = true;
                 }
-                _closeBtn.Text = "完成并关闭";
+                _closeBtn.Text = InstallerI18n.Tr("完成并关闭", "Done & Close");
                 AcceptButton = _closeBtn;
 
                 if (res.BareHostDetected &&
@@ -2746,10 +3097,15 @@ namespace AgyClaudeStyle.Installer
                     {
                         DialogResult relaunchDr = MessageBox.Show(
                             this,
-                            "检测到正在运行的 Antigravity 未开启本地光学桥接端口（v2.33.0+ 默认关闭）。\r\n" +
-                            "桌面与开始菜单快捷方式已自动补齐 --remote-debugging-port=0。\r\n\r\n" +
-                            "是否立即重新打开 Antigravity 使黑曜棱镜（Obsidian Prism）界面当场生效？",
-                            "立即激活 Obsidian Prism",
+                            InstallerI18n.Tr(
+                                "检测到正在运行的 Antigravity 未开启本地光学桥接端口（v2.33.0+ 默认关闭）。\r\n" +
+                                "桌面与开始菜单快捷方式已自动补齐 --remote-debugging-port=0。\r\n\r\n" +
+                                "是否立即重新打开 Antigravity 使黑曜棱镜（Obsidian Prism）界面当场生效？",
+                                "Running Antigravity does not have the local optical bridge enabled (disabled by default in v2.33.0+).\r\n" +
+                                "Desktop and Start Menu shortcuts have been updated with --remote-debugging-port=0.\r\n\r\n" +
+                                "Reopen Antigravity now to activate Obsidian Prism immediately?"
+                            ),
+                            InstallerI18n.Tr("立即激活 Obsidian Prism", "Activate Obsidian Prism Now"),
                             MessageBoxButtons.YesNo,
                             MessageBoxIcon.Question
                         );
@@ -2762,8 +3118,14 @@ namespace AgyClaudeStyle.Installer
                         );
                         if (relaunchDr == DialogResult.Yes)
                         {
-                            _statusHeadline.Text = "正在带参重新打开 Antigravity 并激活界面...";
-                            AppendLog("正在等待旧实例释放锁并带 --remote-debugging-port=0 重新打开 Antigravity...");
+                            _statusHeadline.Text = InstallerI18n.Tr(
+                                "正在带参重新打开 Antigravity 并激活界面...",
+                                "Relaunching Antigravity with CDP enabled..."
+                            );
+                            AppendLog(InstallerI18n.Tr(
+                                "正在等待旧实例释放锁并带 --remote-debugging-port=0 重新打开 Antigravity...",
+                                "Waiting for previous instance to release lock and relaunching Antigravity with --remote-debugging-port=0..."
+                            ));
                             bool relaunched = await Task.Run(() =>
                             {
                                 bool ok = CdpHelper.RelaunchAntigravityWithCdp(bareHost, 15000, AppendLog);
@@ -2785,8 +3147,14 @@ namespace AgyClaudeStyle.Installer
                             });
                             if (relaunched)
                             {
-                                _statusHeadline.Text = "修补成功！已带参重开并激活 Antigravity 界面";
-                                _statusDetail.Text = "已自动为快捷方式补齐 --remote-debugging-port=0 并激活五通道原生 Sidecar 守护，后续日常启动将自动生效。";
+                                _statusHeadline.Text = InstallerI18n.Tr(
+                                    "修补成功！已带参重开并激活 Antigravity 界面",
+                                    "Patched! Antigravity relaunched & activated"
+                                );
+                                _statusDetail.Text = InstallerI18n.Tr(
+                                    "已自动为快捷方式补齐 --remote-debugging-port=0 并激活五通道原生 Sidecar 守护，后续日常启动将自动生效。",
+                                    "Shortcuts were updated with --remote-debugging-port=0 and the 5-channel native Sidecar daemon is active for future launches."
+                                );
                             }
                         }
                     }
@@ -2795,19 +3163,21 @@ namespace AgyClaudeStyle.Installer
             catch (Exception ex)
             {
                 InstallerStepException stepEx = ex as InstallerStepException;
-                string stepTitle = stepEx != null ? ("修补失败 · " + stepEx.StepLabel) : "修补失败";
+                string stepTitle = stepEx != null
+                    ? InstallerI18n.TrFormat("修补失败 · {0}", "Patch failed · {0}", stepEx.StepLabel)
+                    : InstallerI18n.Tr("修补失败", "Patch failed");
                 string hint = stepEx != null && !string.IsNullOrEmpty(stepEx.Hint)
                     ? stepEx.Hint
                     : InstallerCore.BuildFailureHint(ex, stepEx != null ? stepEx.StepCode : "");
                 _statusHeadline.Text = stepTitle;
                 _statusHeadline.ForeColor = Color.FromArgb(185, 28, 28);
                 _statusDetail.Text = string.IsNullOrEmpty(hint) ? ex.Message : (ex.Message + " — " + hint);
-                AppendLog("[✗] 错误诊断:\r\n" + InstallerCore.FormatFailureLogBlock(ex));
+                AppendLog(InstallerI18n.Tr("[✗] 错误诊断:\r\n", "[✗] Failure diagnostics:\r\n") + InstallerCore.FormatFailureLogBlock(ex));
                 _launchAgBtn.Visible = false;
                 _installBtn.Visible = true;
-                _installBtn.Text = "重试安装";
+                _installBtn.Text = InstallerI18n.Tr("重试安装", "Retry Install");
                 _installBtn.Enabled = true;
-                _closeBtn.Text = "关闭";
+                _closeBtn.Text = InstallerI18n.Tr("关闭", "Close");
                 AcceptButton = _installBtn;
             }
             finally
@@ -2822,8 +3192,11 @@ namespace AgyClaudeStyle.Installer
         {
             DialogResult dr = MessageBox.Show(
                 this,
-                "确认卸载 Obsidian Prism、停止后台守护并立即恢复 Antigravity 原生界面？",
-                "卸载并恢复原版",
+                InstallerI18n.Tr(
+                    "确认卸载 Obsidian Prism、停止后台守护并立即恢复 Antigravity 原生界面？",
+                    "Confirm uninstalling Obsidian Prism, stopping background watchers, and restoring the native Antigravity UI?"
+                ),
+                InstallerI18n.Tr("卸载并恢复原版", "Uninstall & Reset"),
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question
             );
@@ -2835,9 +3208,15 @@ namespace AgyClaudeStyle.Installer
         {
             if (_busy) return;
             _busy = true;
-            _statusHeadline.Text = "正在卸载 Obsidian Prism 并恢复原版界面...";
+            _statusHeadline.Text = InstallerI18n.Tr(
+                "正在卸载 Obsidian Prism 并恢复原版界面...",
+                "Uninstalling Obsidian Prism & restoring UI..."
+            );
             _statusHeadline.ForeColor = Color.FromArgb(28, 25, 23);
-            _statusDetail.Text = "正在停止后台守护、还原快捷方式并清理插件文件，请稍候...";
+            _statusDetail.Text = InstallerI18n.Tr(
+                "正在停止后台守护、还原快捷方式并清理插件文件，请稍候...",
+                "Stopping background watchers, restoring shortcuts, and removing plugin files, please wait..."
+            );
             _progressBar.Value = 5;
             SetButtonsEnabled(false);
             try
@@ -2847,14 +3226,14 @@ namespace AgyClaudeStyle.Installer
                 _statusHeadline.Text = res.Headline;
                 _statusHeadline.ForeColor = Color.FromArgb(3, 105, 161);
                 _statusDetail.Text = res.Detail;
-                _metaLabel.Text = "已清理目录: " + res.InstallDir;
+                _metaLabel.Text = InstallerI18n.Tr("已清理目录: ", "Cleaned dir: ") + res.InstallDir;
                 _openDirBtn.Enabled = false;
                 _uninstallBtn.Enabled = false;
                 _launchAgBtn.Visible = false;
                 if (!_selfDeleteOnClose)
                 {
                     _installBtn.Visible = true;
-                    _installBtn.Text = "重新安装";
+                    _installBtn.Text = InstallerI18n.Tr("重新安装", "Reinstall");
                     _installBtn.Enabled = true;
                 }
                 else
@@ -2862,16 +3241,16 @@ namespace AgyClaudeStyle.Installer
                     _installBtn.Visible = false;
                     _installBtn.Enabled = false;
                 }
-                _closeBtn.Text = "完成并关闭";
+                _closeBtn.Text = InstallerI18n.Tr("完成并关闭", "Done & Close");
                 AcceptButton = _closeBtn;
             }
             catch (Exception ex)
             {
-                _statusHeadline.Text = "卸载失败";
+                _statusHeadline.Text = InstallerI18n.Tr("卸载失败", "Uninstall failed");
                 _statusHeadline.ForeColor = Color.FromArgb(185, 28, 28);
                 _statusDetail.Text = ex.Message;
-                AppendLog("[✗] 错误: " + ex);
-                _closeBtn.Text = "关闭";
+                AppendLog(InstallerI18n.Tr("[✗] 错误: ", "[✗] Error: ") + ex);
+                _closeBtn.Text = InstallerI18n.Tr("关闭", "Close");
             }
             finally
             {
@@ -2903,6 +3282,33 @@ namespace AgyClaudeStyle.Installer
             try { SetProcessDPIAware(); } catch { }
 
             InstallerOptions opts = ParseArgs(args);
+            if (!string.IsNullOrEmpty(opts.Lang))
+            {
+                InstallerI18n.SetPreferredLang(opts.Lang);
+            }
+
+            if (opts.ShowHelp)
+            {
+                string helpText = InstallerCore.BuildHelpText();
+                if (!string.IsNullOrEmpty(opts.OutFile))
+                {
+                    File.WriteAllText(opts.OutFile, helpText, new UTF8Encoding(false));
+                }
+                else
+                {
+                    try { Console.WriteLine(helpText); } catch { }
+                }
+                if (opts.Popup)
+                {
+                    MessageBox.Show(
+                        helpText,
+                        InstallerI18n.Tr("Obsidian Prism 安装器帮助", "Obsidian Prism Installer Help"),
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information
+                    );
+                }
+                return 0;
+            }
 
             if (opts.StatusOnly)
             {
@@ -2921,6 +3327,7 @@ namespace AgyClaudeStyle.Installer
                 st["antigravityVersion"] = ag.Version;
                 st["antigravityRunning"] = ag.IsRunning;
                 st["cdpPort"] = port.HasValue ? (object)port.Value : null;
+                st["uiLang"] = InstallerI18n.EffectiveLang;
                 string json = MiniJson.Stringify(st, true);
                 if (!string.IsNullOrEmpty(opts.OutFile)) File.WriteAllText(opts.OutFile, json, new UTF8Encoding(false));
                 else Console.WriteLine(json);
@@ -2957,7 +3364,7 @@ namespace AgyClaudeStyle.Installer
                         err["error"] = rootEx.Message;
                         err["errorType"] = rootEx.GetType().FullName;
                         err["failedStep"] = stepEx != null ? stepEx.StepCode : "unknown";
-                        err["failedStepLabel"] = stepEx != null ? stepEx.StepLabel : "安装操作";
+                        err["failedStepLabel"] = stepEx != null ? stepEx.StepLabel : InstallerI18n.Tr("安装操作", "Installation");
                         err["failedPath"] = stepEx != null ? stepEx.TargetPath : "";
                         err["hint"] = stepEx != null && !string.IsNullOrEmpty(stepEx.Hint)
                             ? stepEx.Hint
@@ -2970,7 +3377,12 @@ namespace AgyClaudeStyle.Installer
                     }
                     if (opts.Popup)
                     {
-                        MessageBox.Show(diagText, "Obsidian Prism 操作失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        MessageBox.Show(
+                            diagText,
+                            InstallerI18n.Tr("Obsidian Prism 操作失败", "Obsidian Prism Operation Failed"),
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Error
+                        );
                     }
                     return 1;
                 }
@@ -2988,10 +3400,13 @@ namespace AgyClaudeStyle.Installer
             for (int i = 0; i < args.Length; i++)
             {
                 string a = args[i];
+                string parsedLang;
                 if (a == "--uninstall") opts.Uninstall = true;
                 else if (a == "--silent" || a == "/S" || a == "-s") opts.Silent = true;
                 else if (a == "--popup") opts.Popup = true;
                 else if (a == "--status") opts.StatusOnly = true;
+                else if (a == "--help" || a == "-h" || a == "/?") opts.ShowHelp = true;
+                else if (InstallerI18n.TryParseLangArg(args, ref i, out parsedLang)) opts.Lang = parsedLang;
                 else if (a == "--no-autostart") opts.NoAutostart = true;
                 else if (a == "--no-kill-legacy") opts.NoKillLegacy = true;
                 else if (a == "--no-native-daemon") opts.NoNativeDaemon = true;

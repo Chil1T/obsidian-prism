@@ -37,6 +37,7 @@ const DEFAULT_CONFIG = {
   targetFps: '180',
   telemetryModule: 'auto',
   effortSliderModule: 'auto',
+  effortMemory: 'on',
   thoughtTranslate: 'off',
   thoughtTrigger: 'preload',
   homeLayout: 'studio',
@@ -80,6 +81,7 @@ const VALIDATORS = {
   targetFps: ['60', '120', '180', 'native'],
   telemetryModule: ['auto', 'on', 'off'],
   effortSliderModule: ['auto', 'on', 'off'],
+  effortMemory: ['on', 'off'],
   thoughtTranslate: ['off', 'machine', 'ai'],
   thoughtTrigger: ['preload', 'expand'],
   homeLayout: ['studio', 'classic', 'off'],
@@ -195,7 +197,7 @@ function reconcileConfigAliases(raw) {
   if (has('codeLigatures') && typeof out.codeLigatures === 'string') {
     out.codeLigatures = out.codeLigatures === 'on' || out.codeLigatures === 'true';
   }
-  for (const k of ['telemetryModule', 'effortSliderModule', 'omniModule', 'sidebarStudio', 'autoUpdate', 'sidebarNavFold']) {
+  for (const k of ['telemetryModule', 'effortSliderModule', 'effortMemory', 'omniModule', 'sidebarStudio', 'autoUpdate', 'sidebarNavFold']) {
     if (has(k) && typeof out[k] === 'boolean') {
       out[k] = out[k] ? 'on' : 'off';
     }
@@ -1491,21 +1493,39 @@ const WIN_WMI_BREAKAWAY_PS = [
 
 const WIN_WMI_BREAKAWAY_B64 = Buffer.from(WIN_WMI_BREAKAWAY_PS, 'utf16le').toString('base64');
 
+function normalizeMacAppBundlePath(rawPath) {
+  const s = String(rawPath || '').trim();
+  if (!s) return '/Applications/Antigravity.app';
+  const m = /^(.+?\.app)(?:\/.*)?$/i.exec(s);
+  if (m && m[1]) return m[1];
+  return '/Applications/Antigravity.app';
+}
+
 const MAC_DETACHED_RELAUNCH_SH = [
   'target_pid="$1"',
   'app_path="$2"',
   'if [ -z "$app_path" ]; then app_path="/Applications/Antigravity.app"; fi',
-  'osascript -e \'tell application "Antigravity" to quit\' >/dev/null 2>&1 || kill -TERM "$target_pid" >/dev/null 2>&1 || true',
+  'unset ELECTRON_RUN_AS_NODE',
+  'osascript -e \'on run argv\' -e \'tell application (item 1 of argv) to quit\' -e \'end run\' "$app_path" >/dev/null 2>&1 || osascript -e \'tell application "Antigravity" to quit\' >/dev/null 2>&1 || kill -TERM "$target_pid" >/dev/null 2>&1 || true',
+  'lock_file="$HOME/Library/Application Support/Antigravity/SingletonLock"',
+  'bundle_prefix="$app_path/Contents/MacOS/"',
   'i=0',
   'exited=0',
-  'while [ "$i" -lt 100 ]; do',
-  '  if ! kill -0 "$target_pid" >/dev/null 2>&1; then exited=1; break; fi',
+  'while [ "$i" -lt 120 ]; do',
+  '  main_alive=0',
+  '  helper_alive=0',
+  '  lock_alive=0',
+  '  if kill -0 "$target_pid" >/dev/null 2>&1; then main_alive=1; fi',
+  '  if ps -ax -o command= 2>/dev/null | grep -F -- "$bundle_prefix" | grep -v grep >/dev/null 2>&1; then helper_alive=1; fi',
+  '  if [ -e "$lock_file" ] || [ -L "$lock_file" ]; then lock_alive=1; fi',
+  '  if [ "$main_alive" -eq 0 ] && [ "$helper_alive" -eq 0 ] && [ "$lock_alive" -eq 0 ]; then exited=1; break; fi',
+  '  if [ "$i" -eq 40 ] && [ "$main_alive" -eq 1 ]; then kill -TERM "$target_pid" >/dev/null 2>&1 || true; fi',
   '  sleep 0.25',
   '  i=$((i + 1))',
   'done',
-  'if [ "$exited" -ne 1 ]; then exit 0; fi',
-  'sleep 0.35',
-  'open -a "$app_path" --args --remote-debugging-port=0 >/dev/null 2>&1 &',
+  'if [ "$exited" -ne 1 ] && kill -0 "$target_pid" >/dev/null 2>&1; then exit 0; fi',
+  'sleep 0.5',
+  'open -na "$app_path" --args --remote-debugging-port=0 >/dev/null 2>&1 &',
 ].join('\n');
 
 // 派生物理脱离宿主进程树与 Job Object 的独立微进程执行「温和退出 -> 等单实例锁释放 -> 带参重开」
@@ -1571,13 +1591,16 @@ function spawnDetachedHostRelaunchHelper(task, opts = {}) {
   }
 
   if (IS_MAC) {
-    const appPath = task.exePath && task.exePath.endsWith('.app') ? task.exePath : '/Applications/Antigravity.app';
+    const appPath = normalizeMacAppBundlePath(task.exePath);
+    const cleanEnv = { ...process.env };
+    delete cleanEnv.ELECTRON_RUN_AS_NODE;
     const child = spawn('/usr/bin/nohup', ['/bin/sh', '-c', MAC_DETACHED_RELAUNCH_SH, 'sh', String(hostPid), appPath], {
       detached: true,
       stdio: 'ignore',
+      env: cleanEnv,
     });
     child.unref();
-    return { spawned: true, pid: child.pid || null, method: 'nohup-sh' };
+    return { spawned: true, pid: child.pid || null, method: 'nohup-sh', appPath };
   }
 
   return { spawned: false, reason: 'unsupported-platform' };
@@ -2086,7 +2109,7 @@ function packLzssJsExpr(text, protectFirstList = []) {
     }
     const c1 = text.charCodeAt(pos + 1);
     const c2 = text.charCodeAt(pos + 2);
-    while (cur >= 0 && pos - cur <= longMaxDist && steps < 128) {
+    while (cur >= 0 && pos - cur <= longMaxDist && steps < 384) {
       steps++;
       if (
         text.charCodeAt(cur) === c0 &&
@@ -3065,10 +3088,10 @@ const PROTECTED_BUNDLE_LITERALS = [
   'ag-prism-thought-overlay',
 ];
 
-function createShortNameGen(existingIds, unsafe) {
+function createShortNameGen(existingIds, unsafe, startIdx = 0) {
   const headChars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ$';
   const tailChars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$';
-  let genIdx = 0;
+  let genIdx = startIdx;
   return () => {
     while (true) {
       let n = genIdx++;
@@ -3582,7 +3605,8 @@ function mangleSafeLocals(tokens) {
   }
 
   const existingIds = new Set(counts.keys());
-  const nextShortName = createShortNameGen(existingIds, unsafe);
+  const nextShortName = createShortNameGen(existingIds, unsafe, 0);
+  const nextTwoCharName = createShortNameGen(existingIds, unsafe, 53);
 
   const candidates = [];
   for (const name of declared) {
@@ -3592,11 +3616,12 @@ function mangleSafeLocals(tokens) {
     const estSave = (c - sh) * (name.length - 2) - sh * 3;
     if (estSave >= 3) candidates.push({ name, c, sh, estSave });
   }
-  candidates.sort((a, b) => b.estSave - a.estSave);
+  candidates.sort((a, b) => (b.c - b.sh) - (a.c - a.sh) || b.estSave - a.estSave);
 
   const renameMap = new Map();
   for (const cand of candidates) {
-    const short = nextShortName();
+    const useSingle = cand.c - cand.sh >= 14;
+    const short = useSingle ? nextShortName() : nextTwoCharName();
     const realSave = (cand.c - cand.sh) * (cand.name.length - short.length) - cand.sh * (1 + short.length);
     if (realSave >= 2) {
       renameMap.set(cand.name, short);
@@ -3894,11 +3919,16 @@ const SAFE_STMT_START_KW = new Set([
   'delete', 'throw', 'break', 'continue',
 ]);
 
+const CTRL_PAREN_KW = new Set(['if', 'while', 'for', 'with']);
+const NO_DROP_SEMI_PREV = new Set(['else', 'do', ':', ';', '{', 'try', 'finally']);
+
 function serializeTokens(tokens) {
   const out = [];
   let lastCh = '';
   let lastTokenVal = '';
   let pendingNL = false;
+  const parenIsCtrl = [];
+  let lastRParenWasCtrl = false;
 
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
@@ -3909,6 +3939,23 @@ function serializeTokens(tokens) {
     }
     const val = t.val;
     if (!val) continue;
+    // Safely omit redundant statement-ending ';' immediately before '}' (never drop EmptyStatement after control headers/labels)
+    if (val === ';' && !NO_DROP_SEMI_PREV.has(lastTokenVal) && !(lastTokenVal === ')' && lastRParenWasCtrl)) {
+      let nextVal = '';
+      for (let j = i + 1; j < tokens.length; j++) {
+        if (tokens[j].type === 'ws' || tokens[j].type === 'nl' || !tokens[j].val) continue;
+        nextVal = tokens[j].val;
+        break;
+      }
+      if (nextVal === '}') continue;
+    }
+    if (val === '(') {
+      parenIsCtrl.push(CTRL_PAREN_KW.has(lastTokenVal));
+    } else if (val === ')') {
+      lastRParenWasCtrl = parenIsCtrl.length ? parenIsCtrl.pop() : false;
+    } else {
+      lastRParenWasCtrl = false;
+    }
     const nextCh = val[0];
     if (lastCh) {
       if (pendingNL) {
@@ -4470,8 +4517,12 @@ function applyModulePoolReplacements(tokens, selectedEntries, headerBuilder) {
   if (selectedEntries.length === 0) return serializeTokens(tokens);
 
   const usedIds = new Set();
-  for (const tk of tokens) {
-    if (tk.type === 'id') usedIds.add(tk.val);
+  let lastSigVal = '';
+  for (let i = 0; i < tokens.length; i++) {
+    const tk = tokens[i];
+    if (tk.type === 'ws' || tk.type === 'nl') continue;
+    if (tk.type === 'id' && lastSigVal !== '.' && lastSigVal !== '?.') usedIds.add(tk.val);
+    lastSigVal = tk.val;
   }
   const nextVar = createShortNameGen(usedIds, RESERVED_OR_GLOBAL);
   const activeItems = [];
@@ -4525,12 +4576,13 @@ function applyModulePoolReplacements(tokens, selectedEntries, headerBuilder) {
     if (tk.type !== 'id' || !SAFE_ALIAS_GLOBALS.has(tk.val)) continue;
     const p = prevSig[i];
     const nx = nextSig[i];
-    if (p && (p.val === '.' || p.val === '?.' || p.val === 'function')) continue;
+    if (p && (p.val === '.' || p.val === '?.' || p.val === 'function' || p.val === 'class')) continue;
     if (nx && nx.val === ':') continue;
+    if (p && p.val === 'typeof') continue;
     if (
       nx &&
-      (nx.val === '.' || nx.val === '?.') &&
-      !(p && (p.val === 'let' || p.val === 'const' || p.val === 'var' || p.val === 'typeof'))
+      (nx.val === '.' || nx.val === '?.' || nx.val === '(') &&
+      !(p && (p.val === 'let' || p.val === 'const' || p.val === 'var' || p.val === 'static' || p.val === 'get' || p.val === 'set' || p.val === 'async' || p.val === '*'))
     ) {
       if (!globalPositions.has(tk.val)) globalPositions.set(tk.val, []);
       globalPositions.get(tk.val).push(i);
@@ -4541,7 +4593,6 @@ function applyModulePoolReplacements(tokens, selectedEntries, headerBuilder) {
         (p.val === 'let' ||
           p.val === 'const' ||
           p.val === 'var' ||
-          p.val === 'typeof' ||
           p.val === '++' ||
           p.val === '--' ||
           p.val === '...' ||
@@ -4589,10 +4640,10 @@ function applyModulePoolReplacements(tokens, selectedEntries, headerBuilder) {
   const globalAliasDecls = [];
   const globalReplaceAt = new Map();
   for (const [gName, idxs] of globalPositions.entries()) {
-    if (poisonedGlobals.has(gName) || idxs.length < 3) continue;
+    if (poisonedGlobals.has(gName) || idxs.length < 2) continue;
     const alias = nextVar();
     const save = idxs.length * (gName.length - alias.length) - (alias.length + 1 + gName.length + 1);
-    if (save >= 8) {
+    if (save >= 4) {
       globalAliasDecls.push(`${alias}=${gName}`);
       for (const pos of idxs) globalReplaceAt.set(pos, alias);
     }
@@ -5065,7 +5116,21 @@ function stripJsFunctionsByName(src, replacementsByName) {
 }
 
 function stripUnusedUpstreamMenuObserver(src) {
-  const stripped = stripJsFunctionsByName(src, {
+  const preCleaned = src
+    .replace(/\bvar\s+(?:SET_TITLE_I18N|SET_HEAD_I18N|FILL_RADIUS_CSS|TRACK_HEIGHT|BASE_SPEEDUP|MIN_HEIGHT_SLOTS|CLAUDE_ROWS|CLAUDE_KNOB_[WHR]|TRACE_CAPACITY|traceRingBuffer)\s*=\s*(?:\{[^{}]*\}|[^;\n]+);?/g, '')
+    .replace(/,\s*(?:label|hint|labelEn|hintEn)\s*:\s*"[^"]*"/g, '')
+    .replace(/(?<!function\s)\btracePush\([^\n;]*\);?/g, '')
+    .replace(/if\s*\(\s*typeof\s+window\s*!==\s*"undefined"\s*&&[\s\S]*?(?=\nreturn\s*\{)/, '')
+    .replace(/(var\s+SLIDER_CSS\s*=\s*)("(?:\\.|[^"\\])*")/, (full, p1, lit) => {
+      try {
+        const rawCss = JSON.parse(lit);
+        const cleaned = rawCss.replace(/\.ces-set[^{}]*\{[^{}]*\}/g, '');
+        return p1 + serializeJsValue(minifyCss(cleaned));
+      } catch {
+        return full;
+      }
+    });
+  return stripJsFunctionsByName(preCleaned, {
     installMenuObserver: 'function installMenuObserver(){return{stop:function(){},rescan:function(){},getCurrent:function(){return null;}};}',
     openSettingsPanel: 'function openSettingsPanel(){return function(){};}',
     installSettingsUi: 'function installSettingsUi(){return{stop:function(){}};}',
@@ -5080,21 +5145,6 @@ function stripUnusedUpstreamMenuObserver(src) {
     particleCountFor: '',
     starBrightnessFor: '',
   });
-  return stripped
-    .replace(/\bvar\s+(?:SET_TITLE_I18N|FILL_RADIUS_CSS|TRACK_HEIGHT|BASE_SPEEDUP|MIN_HEIGHT_SLOTS|CLAUDE_ROWS|CLAUDE_KNOB_[WHR]|TRACE_CAPACITY|traceRingBuffer)\s*=\s*(?:\{[^{}]*\}|[^;\n]+);?/g, '')
-    .replace(/,\s*(?:label|hint)\s*:\s*"(?:动画效果|快速动画|拨过[^"]*|简洁动画|无过渡[^"]*|完整动画|匀变速[^"]*|已到达档位[^"]*|亮白显示|默认 · 已滑过[^"]*|与未到达同色|所有刻度点[^"]*|隐藏|不显示任何[^"]*)"/g, '')
-    .replace(/(?<!function\s)\btracePush\([^;]*\);?/g, '')
-    .replace(/if\s*\(\s*typeof\s+window\s*!==\s*"undefined"\s*&&[\s\S]*?(?=\nreturn\s*\{)/, '')
-    .replace(/(var\s+SLIDER_CSS\s*=\s*)("(?:\\.|[^"\\])*")/, (full, p1, lit) => {
-      try {
-        const rawCss = JSON.parse(lit);
-        const cleaned = rawCss
-          .replace(/(?:\.ces-set(?:-[a-z-]+)?(?::hover|\.is-on)?\{[^{}]*\})+/g, '');
-        return p1 + serializeJsValue(minifyCss(cleaned));
-      } catch {
-        return full;
-      }
-    });
 }
 
 function preprocessPartToUnits(partName, rawSource) {
@@ -5503,8 +5553,8 @@ function compileUnifiedBundle() {
   for (const g of globalStats.values()) {
     const lzPoolCost = g.valBytes >= 8 ? Math.ceil(g.valBytes * 0.62) + 2 : g.valBytes + 2;
     const netSave = g.totalOrig - (lzPoolCost + g.totalReplEst);
-    // Multi-occurrence strings/props save via deduplication; single-occurrence strings >= 23B save via shared LZ phrase dictionary (skip pre-compressed high-entropy blobs).
-    if ((g.totalOccs >= 2 && netSave >= 1) || (g.hasStr && g.valBytes >= 23 && !g.strVal.startsWith('^]t'))) {
+    // Multi-occurrence strings/props save via deduplication; single-occurrence strings >= 17B save via shared LZ phrase dictionary (skip pre-compressed high-entropy blobs).
+    if ((g.totalOccs >= 2 && netSave >= 1) || (g.hasStr && g.valBytes >= 17 && !g.strVal.startsWith('^]t'))) {
       const sortScore = g.totalOccs >= 2 ? netSave + Math.floor(g.valBytes * 0.25) : Math.floor(g.valBytes * 0.35) - 5;
       poolCandidates.push({ ...g, netSave, sortScore });
     }
@@ -8985,6 +9035,8 @@ module.exports = {
   recordRelaunchPromptState,
   promptUserForHostRelaunch,
   executeHostRelaunchSequence,
+  normalizeMacAppBundlePath,
+  MAC_DETACHED_RELAUNCH_SH,
   spawnDetachedHostRelaunchHelper,
   RUNTIME_PARTS,
   SYNC_ROOT_FILES,

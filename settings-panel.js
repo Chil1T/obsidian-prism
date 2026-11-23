@@ -73,6 +73,7 @@
     thoughtView: mkSp(['immersive', 'bilingual']),
     telemetryModule: S_AUTO,
     effortSliderModule: S_AUTO,
+    effortMemory: S_ON,
     omniModule: S_ON,
     linkTarget: mkSp(['builtin', 'external']),
     sidebarStudio: S_OFF,
@@ -429,7 +430,33 @@
       }
       const hiDescEl = qs(rootEl, '[data-ag-cs-row="hostLocalization"] [data-k="d"]');
       if (hiDescEl) {
-        const hiText = effVal('hostLocalization', l) === 'auto' && hiState === 'yielded' && u.hostI18nYieldHint ? u.hostI18nYieldHint : (u.setHostI18nDesc || '');
+        const hiModeNow = effVal('hostLocalization', l);
+        let extZhActive = false;
+        if (hiModeNow === 'off') {
+          try {
+            const winRef = doc.defaultView || globalThis;
+            if (
+              winRef?.__antigravityZhInstalled ||
+              winRef?.__AGY_HANS__ ||
+              qs(doc, '[data-agy-hans-ui], #agy-theme-switcher, #antigravity-translation-audit')
+            ) {
+              extZhActive = true;
+            } else {
+              for (const hn of qa(doc, '[data-testid="new-conversation-button"], [data-ag-cs-settings-dlg="1"] h1, [data-ag-cs-settings-dlg="1"] [data-ag-cs-settings-nav="1"]')) {
+                if (hn && !hn.closest?.('#' + SETTINGS_SEC_ID) && /[\u4e00-\u9fff]/.test(String(hn.textContent || ''))) {
+                  extZhActive = true;
+                  break;
+                }
+              }
+            }
+          } catch {}
+        }
+        const hiText =
+          hiModeNow === 'auto' && hiState === 'yielded' && u.hostI18nYieldHint
+            ? u.hostI18nYieldHint
+            : hiModeNow === 'off' && extZhActive && u.hostI18nOffExtHint
+              ? u.hostI18nOffExtHint
+              : (u.setHostI18nDesc || '');
         if (hiDescEl[K_TC] !== hiText) hiDescEl[K_TC] = hiText;
       }
     };
@@ -674,6 +701,7 @@
             RS('thoughtView', [['immersive', U('optThoughtImmersive')], ['bilingual', U('optThoughtBilingual')]]),
             RS('telemetryModule', autoOnOff, 'Telemetry'),
             RS('effortSliderModule', autoOnOff, 'EffortSlider'),
+            RS('effortMemory', onOffStr, 'EffortMemory'),
             RS('omniModule', onOffStr, 'Omni'),
             RS('linkTarget', [['builtin', U('optLinkBuiltin')], ['external', U('optLinkExternal')]]),
             RS('sidebarStudio', onOffStr),
@@ -685,7 +713,7 @@
             { id: 'appearance', title: U('grpAppearance'), keys: ['palette', 'lightPreset', 'accentTone', 'cornerStyle', 'ambientIntensity', 'motionLevel', 'targetFps', 'homeLayout', 'homeRipple', 'logoInk', 'language', 'hostLocalization'] },
             { id: 'interaction', title: U('grpInteraction'), keys: ['composerRestyle', 'placeholderStyle', 'smoothCaret', 'scrollBottomMotion', 'contextMenu', 'codeFont', 'codeLigatures', 'mascot', 'sidebarRestyle', 'sidebarCompact', 'sidebarNavFold'] },
             { id: 'thought', title: U('grpThought'), keys: ['thoughtTranslate', 'thoughtTrigger', 'thoughtView'] },
-            { id: 'modules', title: U('groupModules'), keys: ['telemetryModule', 'effortSliderModule', 'omniModule', 'linkTarget'] },
+            { id: 'modules', title: U('groupModules'), keys: ['telemetryModule', 'effortSliderModule', 'effortMemory', 'omniModule', 'linkTarget'] },
             { id: 'beta', title: U('grpBeta'), keys: ['sidebarStudio'] },
           ];
 

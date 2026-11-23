@@ -1845,7 +1845,7 @@
 
     function rollbackAllSnapshots() {
       disconnectObserver();
-      modifiedTextNodes.forEachAll(function (node) {
+      var rollbackTextNode = function (node) {
         var snap = textSnapshots.get(node);
         if (snap) {
           try {
@@ -1855,10 +1855,8 @@
           } catch (e) {}
           textSnapshots.delete(node);
         }
-      });
-      modifiedTextNodes.clear();
-
-      modifiedAttrElements.forEachAll(function (el) {
+      };
+      var rollbackAttrEl = function (el) {
         var mapRec = attrSnapshots.get(el);
         if (mapRec && mapRec.entries) {
           for (var attr in mapRec.entries) {
@@ -1871,8 +1869,42 @@
           }
           attrSnapshots.delete(el);
         }
-      });
+      };
+      modifiedTextNodes.forEachAll(rollbackTextNode);
+      modifiedTextNodes.clear();
+
+      modifiedAttrElements.forEachAll(rollbackAttrEl);
       modifiedAttrElements.clear();
+
+      // DOM 兜底扫回：防止节点曾因暂时脱离 DOM 被 prune 剪枝后又被 React 复用回挂导致漏回滚
+      var rootEl = doc && (doc.body || doc.documentElement);
+      if (rootEl) {
+        try {
+          if (typeof doc.createTreeWalker === 'function') {
+            var tw = doc.createTreeWalker(rootEl, 5);
+            var cur = tw.currentNode;
+            while (cur) {
+              if (cur.nodeType === 3) rollbackTextNode(cur);
+              else if (cur.nodeType === 1) rollbackAttrEl(cur);
+              cur = tw.nextNode();
+            }
+          } else {
+            var stack = [rootEl];
+            while (stack.length) {
+              var nd = stack.pop();
+              if (!nd) continue;
+              if (nd.nodeType === 3) rollbackTextNode(nd);
+              else if (nd.nodeType === 1) {
+                rollbackAttrEl(nd);
+                var ch = nd.childNodes;
+                if (ch && ch.length) {
+                  for (var ci = ch.length - 1; ci >= 0; ci--) stack.push(ch[ci]);
+                }
+              }
+            }
+          }
+        } catch (e) {}
+      }
     }
 
     function teardownRuntime(nextStatus, nextReason, yieldedFlag, providerName) {
@@ -2179,7 +2211,10 @@
       if (!original) return;
 
       var snap = textSnapshots.get(node);
-      if (snap && snap.expected === original) return;
+      if (snap && snap.expected === original) {
+        modifiedTextNodes.add(node);
+        return;
+      }
       if (!snap && textUntranslatedCache.get(node) === original) return;
 
       var trimmed = original.trim();
@@ -2220,7 +2255,10 @@
 
         var mapRec = attrSnapshots.get(el);
         var snap = mapRec && attr in mapRec.entries ? mapRec.entries[attr] : null;
-        if (snap && snap.expected === val) continue;
+        if (snap && snap.expected === val) {
+          modifiedAttrElements.add(el);
+          continue;
+        }
         if (snap && snap.expected !== val) {
           delete mapRec.entries[attr];
           mapRec.count--;

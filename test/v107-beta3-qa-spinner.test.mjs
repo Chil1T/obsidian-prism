@@ -447,9 +447,9 @@ test('Task 2, 3, 4 & Invariants: Q&A selected contrast (.bg-secondary.border-bor
 
   // ── Task 1 CSS stacking & clearance contracts ────────────────────────
   assert.ok(
-    css.includes('html[data-ag-cs-takeover-open="1"] .ag-cs-crab{z-index:8 !important;') &&
+    /html\[data-ag-cs-takeover-open="1"\]\s+\.ag-cs-crab\{z-index:[1-8]\s*!important;/.test(css) &&
       css.includes('pointer-events:none !important;'),
-    'Active takeover must drop mascot stage z-index to 8 (< interaction-takeover-card z-index 12) and neutralize pointer-events'
+    'Active takeover must drop mascot stage z-index <= 8 (< interaction-takeover-card z-index 12) and neutralize pointer-events'
   );
   assert.equal(
     css.includes('[data-ag-cs-takeover="1"]){padding-bottom:14px !important;}'),

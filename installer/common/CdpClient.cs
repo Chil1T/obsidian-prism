@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -17,6 +18,123 @@ using Microsoft.Win32;
 
 namespace AgyClaudeStyle
 {
+    public static class InstallerI18n
+    {
+        private static readonly object _langLock = new object();
+        private static string _explicitLang = null;
+
+        public static string NormalizeLang(string raw)
+        {
+            if (string.IsNullOrEmpty(raw)) return null;
+            string s = raw.Trim().ToLowerInvariant();
+            if (s.Length == 0 || s == "auto" || s == "system" || s == "default")
+            {
+                return null;
+            }
+            if (s == "zh" ||
+                s.StartsWith("zh-", StringComparison.Ordinal) ||
+                s.StartsWith("zh_", StringComparison.Ordinal) ||
+                s == "cn" ||
+                s == "chinese")
+            {
+                return "zh";
+            }
+            return "en";
+        }
+
+        public static void SetPreferredLang(string lang)
+        {
+            string normalized = NormalizeLang(lang);
+            lock (_langLock)
+            {
+                _explicitLang = normalized;
+            }
+        }
+
+        public static string ExplicitLang
+        {
+            get
+            {
+                lock (_langLock)
+                {
+                    return _explicitLang;
+                }
+            }
+        }
+
+        public static string EffectiveLang
+        {
+            get
+            {
+                string explicitCopy;
+                lock (_langLock)
+                {
+                    explicitCopy = _explicitLang;
+                }
+                if (!string.IsNullOrEmpty(explicitCopy))
+                {
+                    return explicitCopy;
+                }
+                string envLang = NormalizeLang(Environment.GetEnvironmentVariable("AG_PRISM_LANG"));
+                if (!string.IsNullOrEmpty(envLang))
+                {
+                    return envLang;
+                }
+                string uiName = "";
+                try
+                {
+                    CultureInfo ui = CultureInfo.CurrentUICulture;
+                    if (ui != null && !string.IsNullOrEmpty(ui.Name))
+                    {
+                        uiName = ui.Name;
+                    }
+                }
+                catch { }
+                return uiName.StartsWith("zh", StringComparison.OrdinalIgnoreCase) ? "zh" : "en";
+            }
+        }
+
+        public static bool IsZhUi
+        {
+            get { return string.Equals(EffectiveLang, "zh", StringComparison.Ordinal); }
+        }
+
+        public static string Tr(string zh, string en)
+        {
+            return IsZhUi ? (zh ?? "") : (en ?? "");
+        }
+
+        public static string TrFormat(string zhFormat, string enFormat, params object[] args)
+        {
+            string fmt = IsZhUi ? (zhFormat ?? "") : (enFormat ?? "");
+            if (args == null || args.Length == 0) return fmt;
+            return string.Format(CultureInfo.InvariantCulture, fmt, args);
+        }
+
+        public static bool TryParseLangArg(string[] args, ref int index, out string lang)
+        {
+            lang = null;
+            if (args == null || index < 0 || index >= args.Length) return false;
+            string a = args[index];
+            if (string.IsNullOrEmpty(a)) return false;
+            if (string.Equals(a, "--lang", StringComparison.OrdinalIgnoreCase))
+            {
+                if (index + 1 < args.Length)
+                {
+                    lang = args[++index];
+                    return true;
+                }
+                return false;
+            }
+            if (a.StartsWith("--lang=", StringComparison.OrdinalIgnoreCase))
+            {
+                lang = a.Substring(7);
+                return true;
+            }
+            return false;
+        }
+    }
+
     public class BareHostProcessInfo
     {
         public int Pid;
@@ -1210,12 +1328,21 @@ namespace AgyClaudeStyle
                 uint badTag;
                 if (HasUnsafeReparsePointInChain(parentDir, out badDir, out badTag))
                 {
-                    throw new InvalidOperationException("目标目录链路包含符号链接或重解析点 [" + DescribeReparseTag(badTag) + "]，已拒绝写入: " + badDir);
+                    throw new InvalidOperationException(InstallerI18n.TrFormat(
+                        "目标目录链路包含符号链接或重解析点 [{0}]，已拒绝写入: {1}",
+                        "Target directory chain contains a symbolic link or reparse point [{0}]; write refused: {1}",
+                        DescribeReparseTag(badTag),
+                        badDir
+                    ));
                 }
             }
             if (IsUnsafeReparsePoint(cfgPath))
             {
-                throw new InvalidOperationException("目标文件为符号链接或重解析点，已拒绝覆盖: " + cfgPath);
+                throw new InvalidOperationException(InstallerI18n.TrFormat(
+                    "目标文件为符号链接或重解析点，已拒绝覆盖: {0}",
+                    "Target file is a symbolic link or reparse point; overwrite refused: {0}",
+                    cfgPath
+                ));
             }
             int seq = Interlocked.Increment(ref _atomicWriteSeq);
             string tmpPath = cfgPath + ".tmp." + Process.GetCurrentProcess().Id + "." + seq;
@@ -1233,16 +1360,29 @@ namespace AgyClaudeStyle
                         uint curBadTag;
                         if (HasUnsafeReparsePointInChain(parentDir, out curBadDir, out curBadTag))
                         {
-                            throw new InvalidOperationException("目标目录链路包含符号链接或重解析点 [" + DescribeReparseTag(curBadTag) + "]，已拒绝写入: " + curBadDir);
+                            throw new InvalidOperationException(InstallerI18n.TrFormat(
+                                "目标目录链路包含符号链接或重解析点 [{0}]，已拒绝写入: {1}",
+                                "Target directory chain contains a symbolic link or reparse point [{0}]; write refused: {1}",
+                                DescribeReparseTag(curBadTag),
+                                curBadDir
+                            ));
                         }
                     }
                     if (IsUnsafeReparsePoint(cfgPath))
                     {
-                        throw new InvalidOperationException("目标文件为符号链接或重解析点，已拒绝覆盖: " + cfgPath);
+                        throw new InvalidOperationException(InstallerI18n.TrFormat(
+                            "目标文件为符号链接或重解析点，已拒绝覆盖: {0}",
+                            "Target file is a symbolic link or reparse point; overwrite refused: {0}",
+                            cfgPath
+                        ));
                     }
                     if (IsUnsafeReparsePoint(tmpPath))
                     {
-                        throw new InvalidOperationException("临时文件为符号链接或重解析点，已拒绝写入: " + tmpPath);
+                        throw new InvalidOperationException(InstallerI18n.TrFormat(
+                            "临时文件为符号链接或重解析点，已拒绝写入: {0}",
+                            "Temporary file is a symbolic link or reparse point; write refused: {0}",
+                            tmpPath
+                        ));
                     }
                     if (File.Exists(tmpPath))
                     {
@@ -1275,12 +1415,21 @@ namespace AgyClaudeStyle
                                 uint fbBadTag;
                                 if (HasUnsafeReparsePointInChain(parentDir, out fbBadDir, out fbBadTag))
                                 {
-                                    throw new InvalidOperationException("目标目录链路包含符号链接或重解析点 [" + DescribeReparseTag(fbBadTag) + "]，已拒绝回退写入: " + fbBadDir);
+                                    throw new InvalidOperationException(InstallerI18n.TrFormat(
+                                        "目标目录链路包含符号链接或重解析点 [{0}]，已拒绝回退写入: {1}",
+                                        "Target directory chain contains a symbolic link or reparse point [{0}]; fallback write refused: {1}",
+                                        DescribeReparseTag(fbBadTag),
+                                        fbBadDir
+                                    ));
                                 }
                             }
                             if (IsUnsafeReparsePoint(cfgPath))
                             {
-                                throw new InvalidOperationException("目标文件为符号链接或重解析点，已拒绝回退覆盖: " + cfgPath);
+                                throw new InvalidOperationException(InstallerI18n.TrFormat(
+                                    "目标文件为符号链接或重解析点，已拒绝回退覆盖: {0}",
+                                    "Target file is a symbolic link or reparse point; fallback overwrite refused: {0}",
+                                    cfgPath
+                                ));
                             }
                             ClearReadOnlyAndHiddenAttributes(cfgPath);
                             using (FileStream fs = new FileStream(cfgPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite))
@@ -1294,7 +1443,11 @@ namespace AgyClaudeStyle
                     {
                         if (IsUnsafeReparsePoint(cfgPath))
                         {
-                            throw new InvalidOperationException("目标文件为符号链接或重解析点，已拒绝覆盖: " + cfgPath);
+                            throw new InvalidOperationException(InstallerI18n.TrFormat(
+                                "目标文件为符号链接或重解析点，已拒绝覆盖: {0}",
+                                "Target file is a symbolic link or reparse point; overwrite refused: {0}",
+                                cfgPath
+                            ));
                         }
                         File.Move(tmpPath, cfgPath);
                     }
@@ -1746,7 +1899,10 @@ namespace AgyClaudeStyle
             string cfgDir = ResolveHostGeminiConfigDir(pluginDir);
             if (string.IsNullOrEmpty(cfgDir))
             {
-                reason = "未解析到宿主 .gemini/config 目录";
+                reason = InstallerI18n.Tr(
+                    "未解析到宿主 .gemini/config 目录",
+                    "Could not resolve host .gemini/config directory"
+                );
                 return false;
             }
             string cfgPath = Path.Combine(cfgDir, "config.json");
@@ -1756,13 +1912,23 @@ namespace AgyClaudeStyle
                 uint dirTag;
                 if (HasUnsafeReparsePointInChain(cfgDir, out badDir, out dirTag))
                 {
-                    reason = "宿主配置目录链路包含 " + DescribeReparseTag(dirTag) + "，已按安全策略跳过自动写入: " + badDir;
+                    reason = InstallerI18n.TrFormat(
+                        "宿主配置目录链路包含 {0}，已按安全策略跳过自动写入: {1}",
+                        "Host config directory chain contains {0}; auto-write skipped by security policy: {1}",
+                        DescribeReparseTag(dirTag),
+                        badDir
+                    );
                     return false;
                 }
                 uint cfgTag;
                 if (IsUnsafeReparsePoint(cfgPath, out cfgTag))
                 {
-                    reason = "宿主 config.json 为 " + DescribeReparseTag(cfgTag) + "（如 dotfiles 软链接），已保护原链接未覆盖: " + cfgPath;
+                    reason = InstallerI18n.TrFormat(
+                        "宿主 config.json 为 {0}（如 dotfiles 软链接），已保护原链接未覆盖: {1}",
+                        "Host config.json is a {0} (e.g. dotfiles symlink); original link preserved without overwriting: {1}",
+                        DescribeReparseTag(cfgTag),
+                        cfgPath
+                    );
                     return false;
                 }
                 if (enable)
@@ -1770,12 +1936,22 @@ namespace AgyClaudeStyle
                     Directory.CreateDirectory(cfgDir);
                     if (HasUnsafeReparsePointInChain(cfgDir, out badDir, out dirTag))
                     {
-                        reason = "宿主配置目录链路包含 " + DescribeReparseTag(dirTag) + "，已按安全策略跳过自动写入: " + badDir;
+                        reason = InstallerI18n.TrFormat(
+                            "宿主配置目录链路包含 {0}，已按安全策略跳过自动写入: {1}",
+                            "Host config directory chain contains {0}; auto-write skipped by security policy: {1}",
+                            DescribeReparseTag(dirTag),
+                            badDir
+                        );
                         return false;
                     }
                     if (IsUnsafeReparsePoint(cfgPath, out cfgTag))
                     {
-                        reason = "宿主 config.json 为 " + DescribeReparseTag(cfgTag) + "（如 dotfiles 软链接），已保护原链接未覆盖: " + cfgPath;
+                        reason = InstallerI18n.TrFormat(
+                            "宿主 config.json 为 {0}（如 dotfiles 软链接），已保护原链接未覆盖: {1}",
+                            "Host config.json is a {0} (e.g. dotfiles symlink); original link preserved without overwriting: {1}",
+                            DescribeReparseTag(cfgTag),
+                            cfgPath
+                        );
                         return false;
                     }
                     Dictionary<string, object> rootObj = new Dictionary<string, object>(StringComparer.Ordinal);
@@ -1787,7 +1963,10 @@ namespace AgyClaudeStyle
                             Dictionary<string, object> parsed = MiniJson.ParseObject(raw);
                             if (parsed == null)
                             {
-                                reason = "宿主 config.json JSON 格式异常，已保护原文件未覆盖";
+                                reason = InstallerI18n.Tr(
+                                    "宿主 config.json JSON 格式异常，已保护原文件未覆盖",
+                                    "Host config.json has invalid JSON syntax; original file preserved without overwriting"
+                                );
                                 return false;
                             }
                             rootObj = parsed;
@@ -2188,7 +2367,11 @@ namespace AgyClaudeStyle
                     {
                         if (log != null)
                         {
-                            log("[✓] 已拉起原生五通道 Sidecar Daemon (" + (useElectronAsNode ? "ELECTRON_RUN_AS_NODE=1" : "node") + ")");
+                            log(InstallerI18n.TrFormat(
+                                "[✓] 已拉起原生五通道 Sidecar Daemon ({0})",
+                                "[✓] Started native 5-channel Sidecar Daemon ({0})",
+                                useElectronAsNode ? "ELECTRON_RUN_AS_NODE=1" : "node"
+                            ));
                         }
                         return true;
                     }
@@ -2555,7 +2738,13 @@ namespace AgyClaudeStyle
                 Type shellType = Type.GetTypeFromProgID("WScript.Shell");
                 if (shellType == null)
                 {
-                    if (log != null) log("[!] 系统未注册 WScript.Shell COM 组件，已跳过快捷方式参数修补（不影响核心插件部署）");
+                    if (log != null)
+                    {
+                        log(InstallerI18n.Tr(
+                            "[!] 系统未注册 WScript.Shell COM 组件，已跳过快捷方式参数修补（不影响核心插件部署）",
+                            "[!] WScript.Shell COM component is not registered; skipped shortcut patching (core plugin deployment unaffected)"
+                        ));
+                    }
                     return 0;
                 }
                 shell = Activator.CreateInstance(shellType);
@@ -2613,7 +2802,14 @@ namespace AgyClaudeStyle
             }
             catch (Exception ex)
             {
-                if (log != null) log("[!] 快捷方式扫描异常（非致命，已跳过）: " + ex.Message);
+                if (log != null)
+                {
+                    log(InstallerI18n.TrFormat(
+                        "[!] 快捷方式扫描异常（非致命，已跳过）: {0}",
+                        "[!] Shortcut scan warning (non-fatal, skipped): {0}",
+                        ex.Message
+                    ));
+                }
             }
             finally
             {
@@ -2628,12 +2824,21 @@ namespace AgyClaudeStyle
                 WritePatchedShortcutsRecord(stateDir, recorded);
                 if (log != null)
                 {
-                    log("已自动维护 " + patchedCount + " 个 Antigravity 快捷方式开启 --remote-debugging-port=0");
+                    log(InstallerI18n.TrFormat(
+                        "已自动维护 {0} 个 Antigravity 快捷方式开启 --remote-debugging-port=0",
+                        "Updated {0} Antigravity shortcut(s) with --remote-debugging-port=0",
+                        patchedCount
+                    ));
                 }
             }
             if (skippedCount > 0 && log != null)
             {
-                log("[!] 已跳过 " + skippedCount + " 个受保护或只读的系统级 Antigravity 快捷方式（不影响安装，需提权或手动追加参数）: " + localSkipped[0]);
+                log(InstallerI18n.TrFormat(
+                    "[!] 已跳过 {0} 个受保护或只读的系统级 Antigravity 快捷方式（不影响安装，需提权或手动追加参数）: {1}",
+                    "[!] Skipped {0} protected/read-only system Antigravity shortcut(s) (non-fatal; run as Administrator or append flag manually): {1}",
+                    skippedCount,
+                    localSkipped[0]
+                ));
             }
             return patchedCount;
         }
@@ -2749,7 +2954,11 @@ namespace AgyClaudeStyle
 
             if (restoredCount > 0 && log != null)
             {
-                log("已还原 " + restoredCount + " 个 Antigravity 快捷方式启动参数");
+                log(InstallerI18n.TrFormat(
+                    "已还原 {0} 个 Antigravity 快捷方式启动参数",
+                    "Restored launch arguments for {0} Antigravity shortcut(s)",
+                    restoredCount
+                ));
             }
             return restoredCount;
         }
@@ -3020,6 +3229,26 @@ namespace AgyClaudeStyle
             }
         }
 
+        public static string GetCdpRelaunchPromptCaption()
+        {
+            return InstallerI18n.Tr(
+                "Obsidian Prism · 恢复界面连接",
+                "Obsidian Prism · Restore UI Connection"
+            );
+        }
+
+        public static string GetCdpRelaunchPromptText()
+        {
+            return InstallerI18n.Tr(
+                "检测到 Antigravity 已升级或无参启动，尚未开启本地光学桥接端口（--remote-debugging-port=0）。\r\n" +
+                "快捷方式参数已自动维护完毕。\r\n\r\n" +
+                "是否立即重新打开 Antigravity 以恢复 Obsidian Prism（黑曜棱镜）界面？",
+                "Antigravity appears to have updated or launched without the local optical bridge flag (--remote-debugging-port=0).\r\n" +
+                "Your shortcuts have been automatically updated.\r\n\r\n" +
+                "Reopen Antigravity now to restore the Obsidian Prism interface?"
+            );
+        }
+
         public static bool PromptUserForCdpRelaunch()
         {
             string mockDec = Environment.GetEnvironmentVariable("AG_PRISM_MOCK_RELAUNCH_DECISION");
@@ -3028,11 +3257,9 @@ namespace AgyClaudeStyle
                 return string.Equals(mockDec.Trim(), "yes", StringComparison.OrdinalIgnoreCase) ||
                        string.Equals(mockDec.Trim(), "1", StringComparison.OrdinalIgnoreCase);
             }
-            string text =
-                "检测到 Antigravity 已升级或无参启动，尚未开启本地光学桥接端口（--remote-debugging-port=0）。\r\n" +
-                "快捷方式参数已自动维护完毕。\r\n\r\n" +
-                "是否立即重新打开 Antigravity 以恢复 Obsidian Prism（黑曜棱镜）界面？";
-            int ans = MessageBoxW(IntPtr.Zero, text, "Obsidian Prism · 恢复界面连接", MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND);
+            string text = GetCdpRelaunchPromptText();
+            string caption = GetCdpRelaunchPromptCaption();
+            int ans = MessageBoxW(IntPtr.Zero, text, caption, MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND);
             return ans == IDYES;
         }
 
@@ -3090,7 +3317,15 @@ namespace AgyClaudeStyle
                 Process spawned = Process.Start(psi);
                 if (spawned != null)
                 {
-                    if (log != null) log("已带 " + CdpOptInFlag + " 重新打开 Antigravity (PID " + spawned.Id + ")");
+                    if (log != null)
+                    {
+                        log(InstallerI18n.TrFormat(
+                            "已带 {0} 重新打开 Antigravity (PID {1})",
+                            "Relaunched Antigravity with {0} (PID {1})",
+                            CdpOptInFlag,
+                            spawned.Id
+                        ));
+                    }
                     return true;
                 }
             }

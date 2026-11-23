@@ -88,13 +88,18 @@ namespace AgyClaudeStyle.Watcher
             string customPluginDir = null;
             int? overridePort = null;
             string outFile = null;
+            string langArg = null;
+            bool showHelp = false;
 
             for (int i = 0; i < args.Length; i++)
             {
                 string a = args[i];
+                string parsedLang;
                 if (a == "--watch") mode = "watch";
                 else if (a == "--once") mode = "once";
                 else if (a == "--remove") mode = "remove";
+                else if (a == "--help" || a == "-h" || a == "/?") showHelp = true;
+                else if (InstallerI18n.TryParseLangArg(args, ref i, out parsedLang)) langArg = parsedLang;
                 else if (a == "--no-native-daemon") _noNativeDaemon = true;
                 else if (a == "--no-relaunch-prompt") _noRelaunchPrompt = true;
                 else if (a == "--dir" && i + 1 < args.Length) customDir = args[++i];
@@ -105,6 +110,25 @@ namespace AgyClaudeStyle.Watcher
                     if (int.TryParse(args[++i], out p) && p > 0) overridePort = p;
                 }
                 else if (a == "--out" && i + 1 < args.Length) outFile = args[++i];
+            }
+
+            if (!string.IsNullOrEmpty(langArg))
+            {
+                InstallerI18n.SetPreferredLang(langArg);
+            }
+
+            if (showHelp)
+            {
+                string helpText = BuildHelpText();
+                if (!string.IsNullOrEmpty(outFile))
+                {
+                    try { File.WriteAllText(outFile, helpText, new UTF8Encoding(false)); } catch { }
+                }
+                else
+                {
+                    try { Console.WriteLine(helpText); } catch { }
+                }
+                return 0;
             }
 
             _baseDir = Path.GetFullPath(string.IsNullOrEmpty(customDir) ? AppDomain.CurrentDomain.BaseDirectory : customDir).TrimEnd('\\', '/');
@@ -147,6 +171,40 @@ namespace AgyClaudeStyle.Watcher
                 WriteResult(outFile, false, ex.Message, null);
                 return 1;
             }
+        }
+
+        private static string BuildHelpText()
+        {
+            return InstallerI18n.Tr(
+                "Obsidian Prism 后台守护进程 (obsidian-prism-watcher)\r\n" +
+                "用法: obsidian-prism-watcher.exe [选项]\r\n\r\n" +
+                "选项:\r\n" +
+                "  --watch               持续监听并自动注入 Antigravity 窗口（默认）\r\n" +
+                "  --once                立即执行一次注入并退出\r\n" +
+                "  --remove              移除已注入界面并停止守护进程\r\n" +
+                "  --dir <目录>          指定守护资源目录\r\n" +
+                "  --plugin-dir <目录>   指定原生插件目录\r\n" +
+                "  --cdp-port <端口>     指定 CDP 调试端口\r\n" +
+                "  --no-native-daemon    禁用自动拉起原生 Sidecar Daemon\r\n" +
+                "  --no-relaunch-prompt  禁用裸启重开提示弹窗\r\n" +
+                "  --lang <zh|en>        指定界面/日志语言（覆盖 AG_PRISM_LANG 与系统语言）\r\n" +
+                "  --out <文件>          将结果输出到指定文件\r\n" +
+                "  --help, -h            显示此帮助信息",
+                "Obsidian Prism Background Watcher (obsidian-prism-watcher)\r\n" +
+                "Usage: obsidian-prism-watcher.exe [options]\r\n\r\n" +
+                "Options:\r\n" +
+                "  --watch               Continuously monitor and inject Antigravity windows (default)\r\n" +
+                "  --once                Inject once and exit\r\n" +
+                "  --remove              Remove injected UI and stop running watcher\r\n" +
+                "  --dir <dir>           Specify watcher directory\r\n" +
+                "  --plugin-dir <dir>    Specify native plugin directory\r\n" +
+                "  --cdp-port <port>     Specify CDP debug port\r\n" +
+                "  --no-native-daemon    Do not auto-start native Sidecar Daemon\r\n" +
+                "  --no-relaunch-prompt  Disable bare-launch relaunch prompt\r\n" +
+                "  --lang <zh|en>        Set UI/log language (overrides AG_PRISM_LANG and OS locale)\r\n" +
+                "  --out <file>          Write result to the specified file\r\n" +
+                "  --help, -h            Show this help message"
+            );
         }
 
         private static void Log(string line)
@@ -224,14 +282,30 @@ namespace AgyClaudeStyle.Watcher
             int? port = CdpHelper.ReadPort(overridePort);
             if (!port.HasValue)
             {
-                WriteResult(outFile, false, "未找到调试端口文件，Antigravity 可能未运行", null);
+                WriteResult(
+                    outFile,
+                    false,
+                    InstallerI18n.Tr(
+                        "未找到调试端口文件，Antigravity 可能未运行",
+                        "Debug port file not found; Antigravity may not be running"
+                    ),
+                    null
+                );
                 return 1;
             }
 
             List<CdpPageInfo> pages = await CdpHelper.ListPagesAsync(port.Value).ConfigureAwait(false);
             if (pages.Count == 0)
             {
-                WriteResult(outFile, false, "未找到 Antigravity 窗口页面", null);
+                WriteResult(
+                    outFile,
+                    false,
+                    InstallerI18n.Tr(
+                        "未找到 Antigravity 窗口页面",
+                        "No Antigravity window pages found"
+                    ),
+                    null
+                );
                 return 1;
             }
 
@@ -405,7 +479,11 @@ namespace AgyClaudeStyle.Watcher
                 catch { }
 
                 PluginManifest manifest = PluginManifest.Load(_baseDir);
-                Log(string.Format("[*] Obsidian Prism (obsidian-prism) 守护模式启动 (PID {0})，每 2 秒检查一次窗口", selfPid));
+                Log(InstallerI18n.TrFormat(
+                    "[*] Obsidian Prism (obsidian-prism) 守护模式启动 (PID {0})，每 2 秒检查一次窗口",
+                    "[*] Obsidian Prism (obsidian-prism) watcher started (PID {0}), polling windows every 2s",
+                    selfPid
+                ));
 
                 Dictionary<string, object> initialCfg = CdpHelper.ReadConfig(_baseDir, manifest);
                 string currentExpr = CdpHelper.BuildInjectExpression(_baseDir, manifest);
@@ -612,7 +690,11 @@ namespace AgyClaudeStyle.Watcher
                         {
                             AttachedEntry ignored;
                             attached.TryRemove(page.Id, out ignored);
-                            Log("[-] 窗口已关闭: " + entry.Title);
+                            Log(InstallerI18n.TrFormat(
+                                "[-] 窗口已关闭: {0}",
+                                "[-] Window closed: {0}",
+                                entry.Title
+                            ));
                         };
 
                         session.On("Runtime.executionContextCreated", (cp) =>
@@ -726,7 +808,11 @@ namespace AgyClaudeStyle.Watcher
                                         {
                                             try { CdpHelper.UpdateConfigBatch(_pluginDir, manifest, entriesDict); } catch { }
                                         }
-                                        Log("[⚙] 批量设置已保存 (" + entriesDict.Count + " 项)");
+                                        Log(InstallerI18n.TrFormat(
+                                            "[⚙] 批量设置已保存 ({0} 项)",
+                                            "[⚙] Batch settings saved ({0} item(s))",
+                                            entriesDict.Count
+                                        ));
                                     }
                                     return;
                                 }
@@ -741,7 +827,12 @@ namespace AgyClaudeStyle.Watcher
                                         {
                                             try { CdpHelper.UpdateConfigSetting(_pluginDir, manifest, key, vObj); } catch { }
                                         }
-                                        Log("[⚙] 设置已保存: " + key + " = " + MiniJson.Stringify(vObj, false));
+                                        Log(InstallerI18n.TrFormat(
+                                            "[⚙] 设置已保存: {0} = {1}",
+                                            "[⚙] Setting saved: {0} = {1}",
+                                            key,
+                                            MiniJson.Stringify(vObj, false)
+                                        ));
                                     }
                                 }
                             }
@@ -776,7 +867,12 @@ namespace AgyClaudeStyle.Watcher
                         }
                         Dictionary<string, object> res = await applyAsync(entry, exprSnapshot, omniSnapshot, thoughtSnapshot, inlineDiffSnapshot).ConfigureAwait(false);
                         string status = (res != null && res.ContainsKey("status")) ? Convert.ToString(res["status"]) : "ok";
-                        Log(string.Format("[✓] 已注入 obsidian-prism: {0} ({1})", entry.Title, status));
+                        Log(InstallerI18n.TrFormat(
+                            "[✓] 已注入 obsidian-prism: {0} ({1})",
+                            "[✓] Injected obsidian-prism: {0} ({1})",
+                            entry.Title,
+                            status
+                        ));
                     }
                     catch (Exception ex)
                     {
@@ -789,7 +885,12 @@ namespace AgyClaudeStyle.Watcher
                         {
                             try { session.Close(); } catch { }
                         }
-                        Log(string.Format("[!] 注入失败，稍后重试: {0} — {1}", CdpHelper.ShortTitle(page), ex.Message));
+                        Log(InstallerI18n.TrFormat(
+                            "[!] 注入失败，稍后重试: {0} — {1}",
+                            "[!] Injection failed, will retry: {0} — {1}",
+                            CdpHelper.ShortTitle(page),
+                            ex.Message
+                        ));
                     }
                 };
 
@@ -1001,11 +1102,20 @@ namespace AgyClaudeStyle.Watcher
                                             }
                                             catch { }
                                         }
-                                        Log(string.Format("[↻] {0} 已变更，已热更新 {1} 个窗口", changedName, n));
+                                        Log(InstallerI18n.TrFormat(
+                                            "[↻] {0} 已变更，已热更新 {1} 个窗口",
+                                            "[↻] {0} changed; hot-reloaded {1} window(s)",
+                                            changedName,
+                                            n
+                                        ));
                                     }
                                     catch (Exception ex)
                                     {
-                                        Log("[!] 读取文件失败: " + ex.Message);
+                                        Log(InstallerI18n.TrFormat(
+                                            "[!] 读取文件失败: {0}",
+                                            "[!] Failed to read file: {0}",
+                                            ex.Message
+                                        ));
                                     }
                                 }, null, 180, Timeout.Infinite);
                             }
@@ -1118,7 +1228,10 @@ namespace AgyClaudeStyle.Watcher
                                     if (!yieldingToDaemon)
                                     {
                                         yieldingToDaemon = true;
-                                        Log("[~] 检测到原生 Sidecar Daemon 运行中，Watcher 进入热备避让态");
+                                        Log(InstallerI18n.Tr(
+                                            "[~] 检测到原生 Sidecar Daemon 运行中，Watcher 进入热备避让态",
+                                            "[~] Native Sidecar Daemon detected; Watcher entering standby mode"
+                                        ));
                                     }
                                 }
                                 exitEvent.Wait(750);
@@ -1127,7 +1240,10 @@ namespace AgyClaudeStyle.Watcher
                             if (yieldingToDaemon)
                             {
                                 yieldingToDaemon = false;
-                                Log("[+] 原生 Sidecar Daemon 已离线，Watcher 接管实时注入");
+                                Log(InstallerI18n.Tr(
+                                    "[+] 原生 Sidecar Daemon 已离线，Watcher 接管实时注入",
+                                    "[+] Native Sidecar Daemon offline; Watcher taking over live injection"
+                                ));
                             }
 
                             if (portProbe == null)
@@ -1156,7 +1272,11 @@ namespace AgyClaudeStyle.Watcher
                                 if (!lastLoggedStalePort.HasValue || lastLoggedStalePort.Value != portProbe.RawPort.Value)
                                 {
                                     lastLoggedStalePort = portProbe.RawPort.Value;
-                                    Log("[!] 检测到残留无效调试端口 " + portProbe.RawPort.Value + "（连接被拒绝/超时），视作无有效端口并转入裸启恢复检测");
+                                    Log(InstallerI18n.TrFormat(
+                                        "[!] 检测到残留无效调试端口 {0}（连接被拒绝/超时），视作无有效端口并转入裸启恢复检测",
+                                        "[!] Detected stale debug port {0} (connection refused/timed out); treating as inactive and checking bare-launch recovery",
+                                        portProbe.RawPort.Value
+                                    ));
                                 }
                                 if (lastPort.HasValue || attached.Count > 0)
                                 {
@@ -1241,7 +1361,11 @@ namespace AgyClaudeStyle.Watcher
                                             CdpHelper.RecordPromptedForHost(bare.Pid, bare.StartTimeMs, confirmed ? "yes" : "no", _baseDir, _pluginDir);
                                             if (confirmed)
                                             {
-                                                Log("[*] 用户确认带 --remote-debugging-port=0 重新打开 Antigravity (旧 PID " + bare.Pid + ")");
+                                                Log(InstallerI18n.TrFormat(
+                                                    "[*] 用户确认带 --remote-debugging-port=0 重新打开 Antigravity (旧 PID {0})",
+                                                    "[*] User confirmed relaunching Antigravity with --remote-debugging-port=0 (old PID {0})",
+                                                    bare.Pid
+                                                ));
                                                 CdpHelper.RelaunchAntigravityWithCdp(bare, 15000, Log);
                                             }
                                         }
@@ -1262,7 +1386,11 @@ namespace AgyClaudeStyle.Watcher
                                             try { oldEntry.Session.Close(); } catch { }
                                         }
                                     }
-                                    Log("[+] 连接到调试端口 " + livePort.Value);
+                                    Log(InstallerI18n.TrFormat(
+                                        "[+] 连接到调试端口 {0}",
+                                        "[+] Connected to debug port {0}",
+                                        livePort.Value
+                                    ));
                                     lastPort = livePort.Value;
                                     // 端口切换或重连后立即复检快捷方式（应对更新覆盖 .lnk）
                                     lastShortcutCheckTick = Environment.TickCount & int.MaxValue;

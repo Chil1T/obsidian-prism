@@ -111,7 +111,9 @@ function rendererBridge(binding, allowNested = false) {
   if (window.__agPulseRuntimeBridge && window.agPulseHost) return;
   window.__agPulseRuntimeBridge?.dispose();
   const pending = new Map(); let sequence = 0;
-  const empty = () => ({ connection: 'offline', error: '等待 Antigrative Dashboard 重新连接', speed: null, groups: [], enabled: false });
+  const isZhUi = () => { try { const l = document?.documentElement?.getAttribute?.('data-ag-cs-lang') || ''; return !l || /^(?:zh|yue)\b/i.test(l); } catch { return true; } };
+  const reconMsg = () => (isZhUi() ? '等待 Antigrative Dashboard 重新连接' : 'Waiting for Antigrative Dashboard to reconnect');
+  const empty = () => ({ connection: 'offline', error: reconMsg(), speed: null, groups: [], enabled: false });
   const call = (type, input) => new Promise(resolve => {
     if (pending.size >= 8) { resolve(empty()); return; }
     const id = ++sequence;
@@ -122,7 +124,7 @@ function rendererBridge(binding, allowNested = false) {
   window.__agPulseRuntimeBridge = {
     binding,
     resolve(id, result) { const item = pending.get(id); if (!item) return; clearTimeout(item.timer); pending.delete(id); item.resolve(result); },
-    reconnect() { for(const item of pending.values()){clearTimeout(item.timer);item.resolve({connection:'offline',error:'等待 Antigrative Dashboard 重新连接',speed:null,groups:[]});}pending.clear(); },
+    reconnect() { const msg = reconMsg(); for(const item of pending.values()){clearTimeout(item.timer);item.resolve({connection:'offline',error:msg,speed:null,groups:[]});}pending.clear(); },
     dispose() { for (const item of pending.values()) { clearTimeout(item.timer); item.resolve(empty()); } pending.clear(); delete window.__agPulseRuntimeBridge; },
   };
   if (!window.agPulseHost) window.agPulseHost = {
@@ -213,7 +215,7 @@ export class RuntimeUi {
     connection.inflight++;
     try {
       let result = {};
-      if (input.type === 'metrics') result = await this.enabled() ? await this.snapshot(validatedInput(input.input)) : { ...offline('Antigrative Dashboard 已停用'), enabled: false };
+      if (input.type === 'metrics') result = await this.enabled() ? await this.snapshot(validatedInput(input.input)) : { ...offline('Antigrative Dashboard is disabled'), enabled: false };
       else if(input.type==='update'&&this.updater){
         if(!await this.enabled())throw Error('Plugin disabled');
         result=await this.updater.request(input.input);
@@ -230,7 +232,7 @@ export class RuntimeUi {
       if(this.stopping||!await this.owns()||!current())return;
       await connection.command('Runtime.evaluate', { expression: this.rendererGuard('window.__agPulseRuntimeBridge?.resolve(' + input.id + ',' + JSON.stringify(result) + ')'), contextId: p.executionContextId });
     } catch {
-      const failure=input.type==='preferences'?{error:'Language preference could not be saved or read'}:offline('等待 Antigrative Dashboard 重新连接');
+      const failure=input.type==='preferences'?{error:'Language preference could not be saved or read'}:offline('Waiting for Antigrative Dashboard to reconnect');
       if(this.stopping||!await this.owns()||!current())return;
       try { await connection.command('Runtime.evaluate', { expression: this.rendererGuard('window.__agPulseRuntimeBridge?.resolve(' + input.id + ',' + JSON.stringify(failure) + ')'), contextId: p.executionContextId }); } catch { /* The next poll reconnects. */ }
     } finally { connection.inflight--; }

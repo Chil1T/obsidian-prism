@@ -6,7 +6,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { buildIcns } from '../scripts/build-common.mjs';
@@ -17,6 +17,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 const cdp = require(path.join(ROOT_DIR, 'cdp.js'));
+const installPluginMod = require(path.join(ROOT_DIR, 'tools', 'install-plugin.cjs'));
 
 function runBin(binPath, args, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
@@ -731,3 +732,411 @@ test(
     }
   }
 );
+
+test('Issue #38: macOS CdpClient.swift relaunch normalizes .app path, waits for full app family + SingletonLock, strips ELECTRON_RUN_AS_NODE, and launches with open -na', () => {
+  const cdpSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'CdpClient.swift'), 'utf8');
+  const setupSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Setup', 'main.swift'), 'utf8');
+
+  // 1) .app bundle path normalization
+  const normMatch = cdpSwift.match(/static func normalizeAntigravityAppPath\([\s\S]*?\n    \}/);
+  assert.ok(normMatch, 'CdpClient.swift must define normalizeAntigravityAppPath');
+  assert.ok(normMatch[0].includes('.app/contents/'), 'normalizeAntigravityAppPath strips internal /Contents/... suffix');
+  assert.ok(normMatch[0].includes('"/Applications/Antigravity.app"'), 'normalizeAntigravityAppPath falls back to /Applications/Antigravity.app');
+
+  // Semantic check via JS helper mirror in tools/install-plugin.cjs
+  assert.equal(
+    installPluginMod.normalizeMacosAntigravityAppPath('/Applications/Antigravity.app/Contents/MacOS/Antigravity'),
+    '/Applications/Antigravity.app'
+  );
+  assert.equal(
+    installPluginMod.normalizeMacosAntigravityAppPath('/Users/test/Applications/Antigravity.app/Contents/Frameworks/Antigravity Helper.app/Contents/MacOS/Antigravity Helper'),
+    '/Users/test/Applications/Antigravity.app'
+  );
+  assert.equal(
+    installPluginMod.normalizeMacosAntigravityAppPath(''),
+    '/Applications/Antigravity.app'
+  );
+  assert.equal(
+    installPluginMod.normalizeMacosAntigravityAppPath('/usr/local/bin/not-a-bundle'),
+    '/Applications/Antigravity.app'
+  );
+
+  // 2) App family PID scan (main + Electron Helpers, excluding Sidecar/Watcher) + SingletonLock check
+  const famMatch = cdpSwift.match(/static func listRunningAppFamilyPids\([\s\S]*?\n    \}/);
+  assert.ok(famMatch, 'CdpClient.swift must define listRunningAppFamilyPids');
+  assert.ok(famMatch[0].includes('/contents/macos/'), 'listRunningAppFamilyPids scans Contents/MacOS main executables');
+  assert.ok(famMatch[0].includes('/contents/frameworks/'), 'listRunningAppFamilyPids scans Contents/Frameworks Electron Helper processes');
+  assert.ok(famMatch[0].includes('isSidecarOrWatcherCommand'), 'listRunningAppFamilyPids must exclude Prism Sidecar/Watcher processes');
+
+  const lockMatch = cdpSwift.match(/static func isSingletonLockHeld\([\s\S]*?\n    \}/);
+  assert.ok(lockMatch, 'CdpClient.swift must define isSingletonLockHeld');
+  assert.ok(cdpSwift.includes('Library/Application Support/Antigravity/SingletonLock'), 'Checks Chromium SingletonLock path');
+  assert.ok(lockMatch[0].includes('lstat(lockPath'), 'Uses lstat to inspect Chromium symlink SingletonLock');
+  assert.ok(lockMatch[0].includes('destinationOfSymbolicLink'), 'Reads symlink target PID from SingletonLock');
+  assert.ok(lockMatch[0].includes('kill(lockPid, 0) == 0'), 'Verifies SingletonLock owner PID liveness');
+
+  // 3) relaunchAntigravityWithCdp full contract
+  const relaunchMatch = cdpSwift.match(/static func relaunchAntigravityWithCdp\([\s\S]*?\n    \}/);
+  assert.ok(relaunchMatch, 'CdpClient.swift must define relaunchAntigravityWithCdp');
+  const relaunchBody = relaunchMatch[0];
+  assert.ok(relaunchBody.includes('normalizeAntigravityAppPath(host.appPath)'), 'Normalizes host.appPath');
+  assert.ok(relaunchBody.includes('tell application \\"Antigravity\\" to quit'), 'Sends AppleScript quit for default Antigravity.app');
+  assert.ok(relaunchBody.includes('POSIX file'), 'Supports AppleScript quit by POSIX file for custom app paths');
+  assert.ok(relaunchBody.includes('listRunningAppFamilyPids(appPath: normalizedAppPath'), 'Waits for entire Antigravity process family to exit');
+  assert.ok(relaunchBody.includes('isSingletonLockHeld(lockPath: lockPath)'), 'Waits for SingletonLock release');
+  assert.ok(relaunchBody.includes('kill(pid, SIGTERM)'), 'Uses gentle SIGTERM fallback on timeout');
+  assert.ok(relaunchBody.includes('Thread.sleep(forTimeInterval: 0.5)'), 'Waits 0.5s LaunchServices unregister buffer after full exit');
+  assert.ok(relaunchBody.includes('cleanEnv.removeValue(forKey: "ELECTRON_RUN_AS_NODE")'), 'Strips ELECTRON_RUN_AS_NODE before spawning open');
+  assert.ok(relaunchBody.includes('openProc.arguments = ["-na", normalizedAppPath, "--args", cdpOptInFlag]'), 'Uses open -na to force new instance with --remote-debugging-port=0');
+  assert.ok(relaunchBody.includes('findRunningAntigravityWithCdp(appPath: normalizedAppPath)'), 'Polls post-launch for DevToolsActivePort or live CDP process');
+
+  // 4) Setup GUI "Launch Antigravity" button also strips ELECTRON_RUN_AS_NODE and uses -na
+  const launchClickMatch = setupSwift.match(/@objc private func handleLaunchAgClick\([\s\S]*?\n    \}/);
+  assert.ok(launchClickMatch, 'Setup main.swift must define handleLaunchAgClick');
+  assert.ok(launchClickMatch[0].includes('removeValue(forKey: "ELECTRON_RUN_AS_NODE")'));
+  assert.ok(launchClickMatch[0].includes('"-na"'));
+});
+
+test('macOS lossless wrapper launcher: sandbox creation, Info.plist/marker/script validation, symlink refusal, and Fail-Closed uninstall', async () => {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-prism-launcher-test-'));
+  const launcherDir = path.join(workDir, 'Applications');
+  const iconFile = path.join(workDir, 'AppIcon.icns');
+  fs.writeFileSync(iconFile, buildIcns());
+
+  try {
+    // 1) CLI argument parsing for --create-launcher / --no-launcher / --launcher-dir
+    const cliDefault = installPluginMod.parseCliArgs(['node', 'install-plugin.cjs', '--install']);
+    assert.equal(cliDefault.createLauncher, undefined);
+    const cliCreate = installPluginMod.parseCliArgs(['node', 'install-plugin.cjs', '--install', '--create-launcher', '--launcher-dir', launcherDir]);
+    assert.equal(cliCreate.createLauncher, true);
+    assert.equal(cliCreate.launcherDir, launcherDir);
+    const cliNo = installPluginMod.parseCliArgs(['node', 'install-plugin.cjs', '--install', '--no-launcher']);
+    assert.equal(cliNo.createLauncher, false);
+
+    // 2) Create lossless wrapper launcher in sandbox with tricky spaces & single-quote target path
+    const trickyTarget = "/Users/O'Brien/My Apps/Antigravity.app/Contents/MacOS/Antigravity";
+    const created = installPluginMod.createMacosLosslessLauncher({
+      platformOverride: 'darwin',
+      launcherDir,
+      stopRoot: workDir,
+      targetApp: trickyTarget,
+      version: '1.0.7-beta.4',
+      iconPath: iconFile,
+    });
+    assert.equal(created.supported, true);
+    assert.equal(created.created, true);
+    assert.equal(created.updated, false);
+    assert.equal(created.iconCopied, true);
+    assert.equal(created.targetApp, "/Users/O'Brien/My Apps/Antigravity.app");
+    assert.equal(path.basename(created.appPath), 'Antigravity Prism.app');
+
+    // Verify Info.plist metadata
+    const plist = fs.readFileSync(created.plistPath, 'utf8');
+    assert.ok(plist.includes('<key>CFBundleIdentifier</key>'));
+    assert.ok(plist.includes('<string>io.github.rmvdesi.obsidian-prism.launcher</string>'));
+    assert.ok(plist.includes('<key>CFBundleName</key>'));
+    assert.ok(plist.includes('<string>Antigravity Prism</string>'));
+    assert.ok(plist.includes('<key>CFBundleExecutable</key>'));
+    assert.ok(plist.includes('<string>launch</string>'));
+    assert.ok(plist.includes('<key>CFBundleIconFile</key>'));
+    assert.ok(plist.includes('<string>AppIcon</string>'));
+    assert.match(plist, /<key>LSUIElement<\/key>\s*<false\/>/);
+    assert.match(plist, /<key>LSMinimumSystemVersion<\/key>\s*<string>12\.0<\/string>/);
+
+    // Verify marker JSON
+    const marker = JSON.parse(fs.readFileSync(created.markerPath, 'utf8'));
+    assert.equal(marker.managedBy, 'obsidian-prism');
+    assert.equal(marker.bundleIdentifier, 'io.github.rmvdesi.obsidian-prism.launcher');
+    assert.equal(marker.version, '1.0.7-beta.4');
+    assert.equal(marker.targetApp, "/Users/O'Brien/My Apps/Antigravity.app");
+
+    // Verify icon copied
+    assert.ok(fs.existsSync(path.join(created.appPath, 'Contents', 'Resources', 'AppIcon.icns')));
+
+    // Verify launch script is POSIX sh, safely single-quoted, strips ELECTRON_RUN_AS_NODE, uses open -na
+    const script = fs.readFileSync(created.launchScriptPath, 'utf8');
+    assert.ok(script.startsWith('#!/bin/sh\n'));
+    assert.ok(script.includes("PREFERRED_APP='/Users/O'\\''Brien/My Apps/Antigravity.app'"), 'Target path must be POSIX single-quote escaped');
+    assert.ok(script.includes('unset ELECTRON_RUN_AS_NODE'), 'Launch script must unset ELECTRON_RUN_AS_NODE');
+    assert.ok(script.includes('exec /usr/bin/open -na "$TARGET_APP" --args --remote-debugging-port=0'), 'Launch script must use open -na with --remote-debugging-port=0');
+    assert.ok(script.includes('exec /usr/bin/open -a "$TARGET_APP"'), 'Launch script activates existing CDP-enabled instance cleanly');
+    assert.equal(script.includes('eval '), false, 'Launch script must never use eval');
+
+    // Run `sh -n` if available on this machine
+    for (const shBin of ['sh', 'C:\\Program Files\\Git\\bin\\sh.exe']) {
+      const shRes = spawnSync(shBin, ['-n', created.launchScriptPath], { encoding: 'utf8' });
+      if (!shRes.error) {
+        assert.equal(shRes.status, 0, `Launch script failed POSIX sh -n syntax check: ${shRes.stderr}`);
+        break;
+      }
+    }
+
+    // Re-running create updates safely in-place
+    const updated = installPluginMod.createMacosLosslessLauncher({
+      platformOverride: 'darwin',
+      launcherDir,
+      stopRoot: workDir,
+      targetApp: '/Applications/Antigravity.app',
+      version: '1.0.7-beta.4',
+    });
+    assert.equal(updated.updated, true);
+    assert.equal(installPluginMod.isManagedMacosLauncherBundle(created.appPath), true);
+
+    // 3) Managed uninstall removes it cleanly
+    const removed = installPluginMod.removeMacosLosslessLauncher({
+      platformOverride: 'darwin',
+      launcherDir,
+      stopRoot: workDir,
+    });
+    assert.equal(removed.removed, true);
+    assert.equal(removed.refused, false);
+    assert.equal(fs.existsSync(created.appPath), false);
+
+    // 4) Fail-Closed: refuse to overwrite or delete unmanaged user app with the same name
+    const userApp = path.join(launcherDir, 'Antigravity Prism.app');
+    fs.mkdirSync(path.join(userApp, 'Contents'), { recursive: true });
+    fs.writeFileSync(
+      path.join(userApp, 'Contents', 'Info.plist'),
+      '<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.user.custom.app</string></dict></plist>\n'
+    );
+    const userSentinel = path.join(userApp, 'Contents', 'user-data.txt');
+    fs.writeFileSync(userSentinel, 'do-not-delete');
+
+    assert.equal(installPluginMod.isManagedMacosLauncherBundle(userApp), false);
+    assert.throws(
+      () =>
+        installPluginMod.createMacosLosslessLauncher({
+          platformOverride: 'darwin',
+          launcherDir,
+          stopRoot: workDir,
+        }),
+      /unmanaged app bundle/i
+    );
+    const refusedUninstall = installPluginMod.removeMacosLosslessLauncher({
+      platformOverride: 'darwin',
+      launcherDir,
+      stopRoot: workDir,
+    });
+    assert.equal(refusedUninstall.removed, false);
+    assert.equal(refusedUninstall.refused, true);
+    assert.equal(refusedUninstall.reason, 'unmanaged-bundle');
+    assert.equal(fs.readFileSync(userSentinel, 'utf8'), 'do-not-delete');
+    fs.rmSync(userApp, { recursive: true, force: true });
+
+    // 5) Symlink refusal on both target .app and parent launcherDir
+    const innocentTarget = path.join(workDir, 'innocent-real-dir');
+    fs.mkdirSync(innocentTarget, { recursive: true });
+    fs.writeFileSync(path.join(innocentTarget, 'keep.txt'), 'safe');
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+
+    // 5a) Target .app is a symlink
+    fs.symlinkSync(innocentTarget, userApp, linkType);
+    assert.throws(
+      () =>
+        installPluginMod.createMacosLosslessLauncher({
+          platformOverride: 'darwin',
+          launcherDir,
+          stopRoot: workDir,
+        }),
+      /symbolic link/i
+    );
+    const refusedLinkUninstall = installPluginMod.removeMacosLosslessLauncher({
+      platformOverride: 'darwin',
+      launcherDir,
+      stopRoot: workDir,
+    });
+    assert.equal(refusedLinkUninstall.removed, false);
+    assert.equal(refusedLinkUninstall.refused, true);
+    assert.equal(refusedLinkUninstall.reason, 'symlink');
+    assert.equal(fs.readFileSync(path.join(innocentTarget, 'keep.txt'), 'utf8'), 'safe');
+    fs.rmSync(userApp, { recursive: true, force: true });
+
+    // 5b) Parent launcherDir is a symlink
+    const symParent = path.join(workDir, 'SymApplications');
+    fs.symlinkSync(innocentTarget, symParent, linkType);
+    assert.throws(
+      () =>
+        installPluginMod.createMacosLosslessLauncher({
+          platformOverride: 'darwin',
+          launcherDir: symParent,
+          stopRoot: workDir,
+        }),
+      /symbolic link/i
+    );
+
+    // 6) End-to-end installPlugin + uninstallPlugin with platformOverride:'darwin'
+    const pluginTarget = path.join(workDir, 'sandbox-plugin');
+    const hostCfgDir = path.join(workDir, 'sandbox-gemini-cfg');
+    const e2eLauncherDir = path.join(workDir, 'E2EApps');
+
+    // --no-launcher skips creation
+    const noLauncherRes = await installPluginMod.installPlugin({
+      targetDir: pluginTarget,
+      hostConfigDir: hostCfgDir,
+      startDaemon: false,
+      syncShortcuts: false,
+      platformOverride: 'darwin',
+      createLauncher: false,
+      launcherDir: e2eLauncherDir,
+      launcherStopRoot: workDir,
+    });
+    assert.equal(noLauncherRes.ok, true);
+    assert.equal(noLauncherRes.launcher.created, false);
+    assert.equal(fs.existsSync(path.join(e2eLauncherDir, 'Antigravity Prism.app')), false);
+
+    // --create-launcher creates it and uninstallPlugin cleans it up
+    const withLauncherRes = await installPluginMod.installPlugin({
+      targetDir: pluginTarget,
+      hostConfigDir: hostCfgDir,
+      startDaemon: false,
+      syncShortcuts: false,
+      platformOverride: 'darwin',
+      createLauncher: true,
+      launcherDir: e2eLauncherDir,
+      launcherStopRoot: workDir,
+    });
+    assert.equal(withLauncherRes.ok, true);
+    assert.equal(withLauncherRes.launcher.created, true);
+    assert.ok(fs.existsSync(path.join(e2eLauncherDir, 'Antigravity Prism.app', 'Contents', 'MacOS', 'launch')));
+
+    const uninstallRes = await installPluginMod.uninstallPlugin({
+      targetDir: pluginTarget,
+      hostConfigDir: hostCfgDir,
+      noCdp: true,
+      syncShortcuts: false,
+      platformOverride: 'darwin',
+      launcherDir: e2eLauncherDir,
+      launcherStopRoot: workDir,
+    });
+    assert.equal(uninstallRes.ok, true);
+    assert.equal(uninstallRes.launcher.removed, true);
+    assert.equal(fs.existsSync(path.join(e2eLauncherDir, 'Antigravity Prism.app')), false);
+  } finally {
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test('macOS Swift Setup lossless launcher & Issue #37 100% bilingual i18n contracts across Setup, Watcher, and CdpClient', () => {
+  const cdpSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'CdpClient.swift'), 'utf8');
+  const setupSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Setup', 'main.swift'), 'utf8');
+  const watcherSwift = fs.readFileSync(path.join(ROOT_DIR, 'installer', 'macos', 'Watcher', 'main.swift'), 'utf8');
+
+  // 1) Pure LF & no UTF-8 BOM on all three Swift sources
+  for (const [name, src] of [
+    ['CdpClient.swift', cdpSwift],
+    ['Setup/main.swift', setupSwift],
+    ['Watcher/main.swift', watcherSwift],
+  ]) {
+    assert.equal(src.includes('\r\n'), false, `${name} must use pure LF`);
+    assert.equal(src.startsWith('\uFEFF'), false, `${name} must not have UTF-8 BOM`);
+  }
+
+  // 2) Swift Setup lossless launcher contracts
+  assert.ok(setupSwift.includes('var createLauncher = true'), 'InstallerOptions defaults createLauncher to true');
+  assert.ok(setupSwift.includes('"--create-launcher"'), 'Setup supports --create-launcher CLI flag');
+  assert.ok(setupSwift.includes('"--no-launcher"'), 'Setup supports --no-launcher CLI flag');
+  assert.ok(setupSwift.includes('NSButton(\n            checkboxWithTitle:'), 'Setup GUI adds default-checked checkbox for lossless launcher');
+  assert.ok(setupSwift.includes('创建无损启动器（~/Applications/Antigravity Prism.app，可拖进 Dock 一键开启）'), 'Setup GUI checkbox has Chinese label');
+  assert.ok(setupSwift.includes('Create lossless launcher (~/Applications/Antigravity Prism.app, pin to Dock)'), 'Setup GUI checkbox has English label');
+  assert.ok(setupSwift.includes('O_NOFOLLOW'), 'Swift launcher uses O_NOFOLLOW atomic writes');
+  assert.ok(setupSwift.includes('io.github.rmvdesi.obsidian-prism.launcher'), 'Swift launcher uses canonical CFBundleIdentifier');
+  assert.ok(setupSwift.includes('Contents/Resources/.obsidian-prism-launcher'), 'Swift launcher writes ownership marker file');
+  assert.ok(setupSwift.includes('isManagedLauncherBundle(at:'), 'Swift uninstall verifies ownership marker/BundleID Fail-Closed');
+  assert.ok(setupSwift.includes('removeLosslessLauncherIfManaged('), 'Swift runUninstall invokes safe launcher cleanup');
+
+  // 3) Issue #37 InstallerI18n priority & AppleScript button self-consistency
+  const i18nMatch = cdpSwift.match(/enum InstallerI18n \{[\s\S]*?\n\}/);
+  assert.ok(i18nMatch, 'CdpClient.swift must define enum InstallerI18n');
+  const i18nBlock = i18nMatch[0];
+  const cliPos = i18nBlock.indexOf('parseCliLang(args)');
+  const envPos = i18nBlock.indexOf('environment["AG_PRISM_LANG"]');
+  const localePos = i18nBlock.indexOf('preferredLanguages.first');
+  assert.ok(cliPos > 0 && envPos > cliPos && localePos > envPos, 'InstallerI18n priority must be CLI --lang > AG_PRISM_LANG > Locale.preferredLanguages');
+  assert.ok(i18nBlock.includes('static func tr(_ zh: String, _ en: String) -> String'), 'InstallerI18n exposes tr(_:_:)');
+
+  // Verify Setup & Watcher parse both `--lang <val>` and `--lang=<val>`
+  assert.ok(setupSwift.includes('a == "--lang"') && setupSwift.includes('a.hasPrefix("--lang=")'), 'Setup parses --lang and --lang=');
+  assert.ok(watcherSwift.includes('a == "--lang"') && watcherSwift.includes('a.hasPrefix("--lang=")'), 'Watcher parses --lang and --lang=');
+
+  // Verify promptUserForCdpRelaunch shares the same `relaunchBtn` constant for AppleScript default button & out.contains check
+  const promptMatch = cdpSwift.match(/static func promptUserForCdpRelaunch\(\) -> Bool \{[\s\S]*?\n    \}/);
+  assert.ok(promptMatch, 'CdpClient.swift must define promptUserForCdpRelaunch');
+  const promptBody = promptMatch[0];
+  assert.ok(promptBody.includes('let relaunchBtn = InstallerI18n.tr("立即重新打开", "Relaunch Now")'));
+  assert.ok(promptBody.includes('default button \\"\\(escRelaunch)\\"'), 'AppleScript default button uses escaped relaunchBtn');
+  assert.ok(promptBody.includes('return out.contains(relaunchBtn)'), 'osascript output matching dynamically checks relaunchBtn (never hardcoded Chinese)');
+
+  // Verify Setup verify-cdp recognizes both Chinese and English watcher injection log lines
+  assert.ok(
+    setupSwift.includes('logContent.contains("[✓] 已注入 obsidian-prism:")') &&
+      setupSwift.includes('logContent.contains("[✓] Injected obsidian-prism:")'),
+    'Setup verify-cdp must recognize both Chinese and English watcher injection log entries'
+  );
+
+  // 4) Zero unwrapped Chinese user-visible strings across all 3 Swift files
+  for (const [name, src] of [
+    ['CdpClient.swift', cdpSwift],
+    ['Setup/main.swift', setupSwift],
+    ['Watcher/main.swift', watcherSwift],
+  ]) {
+    const lines = src.split('\n');
+    let insideTr = false;
+    let insideShellGen = false;
+    let trDepth = 0;
+    const unwrapped = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (trimmed.startsWith('//')) continue;
+      if (line.includes('func generateLauncherShellScript')) insideShellGen = true;
+      if (insideShellGen && trimmed.startsWith('return lines.joined')) {
+        insideShellGen = false;
+        continue;
+      }
+      const codePart = line.replace(/\/\/.*$/, '');
+      if (!insideTr && codePart.includes('InstallerI18n.tr(')) {
+        const idx = codePart.indexOf('InstallerI18n.tr(');
+        const rest = codePart.slice(idx + 'InstallerI18n.tr'.length);
+        trDepth = 0;
+        let inStr = false;
+        for (let k = 0; k < rest.length; k++) {
+          const c = rest[k];
+          if (inStr) {
+            if (c === '\\') { k++; continue; }
+            if (c === '"') inStr = false;
+          } else {
+            if (c === '"') inStr = true;
+            else if (c === '(') trDepth++;
+            else if (c === ')') { trDepth--; if (trDepth === 0) break; }
+          }
+        }
+        if (trDepth > 0) insideTr = true;
+        continue;
+      }
+      if (insideTr) {
+        let inStr = false;
+        for (let k = 0; k < codePart.length; k++) {
+          const c = codePart[k];
+          if (inStr) {
+            if (c === '\\') { k++; continue; }
+            if (c === '"') inStr = false;
+          } else {
+            if (c === '"') inStr = true;
+            else if (c === '(') trDepth++;
+            else if (c === ')') { trDepth--; if (trDepth === 0) { insideTr = false; break; } }
+          }
+        }
+        continue;
+      }
+      if (insideShellGen) continue;
+      // Allow the bilingual log-match line in Setup/main.swift that checks both ZH & EN watcher output
+      if (name === 'Setup/main.swift' && codePart.includes('logContent.contains("[✓] 已注入 obsidian-prism:")')) {
+        continue;
+      }
+      if (/[\u4e00-\u9fff]/.test(codePart)) {
+        unwrapped.push(`${name}:${i + 1}: ${trimmed}`);
+      }
+    }
+    assert.deepEqual(unwrapped, [], `Found unwrapped Chinese strings in ${name}: ${unwrapped.join('; ')}`);
+  }
+});

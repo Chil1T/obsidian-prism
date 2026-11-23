@@ -302,6 +302,13 @@
       'Detected external localization — auto-yielded',
       '外部翻訳を検出し自動譲歩中',
     ],
+    hostI18nOffExtHint: [
+      '已关闭 Prism 内置汉化；检测到外部汉化插件或客户端汉化补丁仍在接管界面。',
+      '已關閉 Prism 內建漢化；偵測到外部漢化外掛或用戶端補丁仍在接管介面。',
+      '已關閉 Prism 內置漢化；偵測到外部漢化插件或客戶端補丁仍然接管緊介面。',
+      'Prism host localization is off; an external localization plugin or client patch is still active.',
+      'Prism のホスト翻訳はオフです（外部翻訳プラグインまたはクライアントパッチが有効です）。',
+    ],
     setHomeLayoutTitle: ['首页版面', '首頁版面', '首頁版面', 'Home Layout', 'ホームレイアウト'],
     setHomeLayoutDesc: [
       '切换新对话首页的显示布局（简洁看板 / 居中 / 默认）。',
@@ -373,6 +380,14 @@
       '喺模型選單提供推理等級滑桿；已裝同類插件時自動兼容。',
       'Add a reasoning effort slider inside the model menu.',
       'モデルメニュー内に推論レベルスライダーを表示します。',
+    ],
+    setEffortMemoryTitle: ['跨模型记住推理档位', '跨模型記住推理檔位', '跨模型記住推理檔位', 'Remember Effort Per Model', 'モデル別推論レベル記憶'],
+    setEffortMemoryDesc: [
+      '切换模型或关闭滑块后，仍自动记住每个模型与 Orchestrator 上次选过的推理档位，不再回落默认 Medium。',
+      '切換模型或關閉滑桿後，仍自動記住每個模型與 Orchestrator 上次選過的推理檔位，不再回落預設 Medium。',
+      '轉模型或者關咗滑桿之後，依然自動記住每個模型同 Orchestrator 上次揀過嘅推理檔位，唔會跌返 Medium。',
+      'Remember your last reasoning effort per model and Orchestrator planner, even with the slider turned off.',
+      'スライダーオフ時も含め、モデル別および Orchestrator の前回の推論レベルを自動記憶します。',
     ],
     setOmniTitle: ['文件检视与右键菜单', '檔案檢視與右鍵選單', '檔案檢視同右鍵選單', 'File Viewer & Context Menu', 'ファイル表示と右クリックメニュー'],
     setOmniDesc: [

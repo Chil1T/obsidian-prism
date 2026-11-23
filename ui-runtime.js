@@ -114,6 +114,7 @@
     out.ambientIntensity = pickOf(String(out.ambientIntensity ?? '100'), '0|35|70|100', '100');
     out.thoughtView = out.thoughtView === 'bilingual' ? 'bilingual' : 'immersive';
     out.omniModule = out.omniModule === 'off' || out.omniModule === false ? 'off' : 'on';
+    out.effortMemory = out.effortMemory === 'off' || out.effortMemory === false ? 'off' : 'on';
     out.linkTarget = out.linkTarget === 'external' ? 'external' : 'builtin';
     out.updateChannel = out.updateChannel === 'beta' ? 'beta' : 'stable';
     const rawLang = (out.language && out.language !== 'auto' ? out.language : '') || (out.lang && out.lang !== 'auto' ? out.lang : '');
@@ -143,7 +144,7 @@
     for (const k of ['smoothCaret', 'contextMenu']) {
       if (k in patch && typeof patch[k] === 'string') patch[k] = patch[k] !== 'off' && patch[k] !== 'false';
     }
-    for (const k of ['telemetryModule', 'effortSliderModule', 'omniModule', 'sidebarStudio', 'autoUpdate', 'sidebarNavFold']) {
+    for (const k of ['telemetryModule', 'effortSliderModule', 'effortMemory', 'omniModule', 'sidebarStudio', 'autoUpdate', 'sidebarNavFold']) {
       if (k in patch && typeof patch[k] === 'boolean') patch[k] = patch[k] ? 'on' : 'off';
     }
     return patch;
@@ -259,7 +260,7 @@
       if (key === a && b in base && !(a in base)) return [b, boolStr ? (value ? 'on' : 'off') : value];
     }
     if ('sidebarCompact|smoothCaret|contextMenu'.split('|').includes(key) && typeof base[key] === 'string') return [key, value ? 'on' : 'off'];
-    if ('telemetryModule|effortSliderModule|omniModule|sidebarStudio|autoUpdate|sidebarNavFold'.split('|').includes(key) && typeof value === 'boolean') return [key, value ? 'on' : 'off'];
+    if ('telemetryModule|effortSliderModule|effortMemory|omniModule|sidebarStudio|autoUpdate|sidebarNavFold'.split('|').includes(key) && typeof value === 'boolean') return [key, value ? 'on' : 'off'];
     if (key === 'palette' && value === 'claude') return ['palette', 'warm'];
     if (key === 'mascot') return ['mascot', value === 'dual' ? 'crab' : value];
     return [key, value];
@@ -355,6 +356,8 @@
   const getMinFrameGapMs = () => ({ native: 0, 60: 15.2, 120: 7.5 })[getTargetFps()] ?? 4.8;
   const getTelemetryMode = () => pickOf(cfg.telemetryModule, 'on|off', 'auto');
   const getEffortSliderMode = () => pickOf(cfg.effortSliderModule, 'on|off', 'auto');
+  const getEffortMemoryMode = () => (cfg.effortMemory === 'off' || cfg.effortMemory === false ? 'off' : 'on');
+  const getHostLocalizationMode = () => pickOf(cfg.hostLocalization, 'on|off', 'auto');
   const getThoughtTranslateMode = () => pickOf(cfg.thoughtTranslate, 'machine|ai', 'off');
   const getThoughtTriggerTiming = () => (cfg.thoughtTrigger === 'expand' ? 'expand' : 'preload');
   const getAccentTone = () => pickOf(cfg.accentTone, 'cobalt|iris|amber|mono', 'follow');
@@ -554,7 +557,7 @@
     msLastHostSleep = false;
   };
 
-  const syncCrab = (activeCard, activeInfo, modelInfo) => {
+  const syncCrab = (activeCard, activeInfo, modelInfo, yieldMode = 'none') => {
     if (!isMascotEnabled()) return unmountCrab();
     const html = de();
     if (!activeCard) {
@@ -599,6 +602,10 @@
     }
     if (html) setAttrIfChanged(html, 'data-ag-cs-has-crab', '1');
 
+    const nextYield = yieldMode === 'peek' || yieldMode === 'leap' ? yieldMode : 'none';
+    if (nextYield === 'peek') setAttrIfChanged(msRoot, 'data-ag-mascot-peek', '1');
+    else if (ha(msRoot, 'data-ag-mascot-peek')) ra(msRoot, 'data-ag-mascot-peek');
+
     const camp = modelInfo?.camp || 'gemini';
     const isOrch = !!(modelInfo?.isOrchestrator);
     const curTier = String(modelInfo?.tier || '').toLowerCase();
@@ -608,7 +615,7 @@
       streaming: !!(activeInfo?.isRunning),
       streamTier,
       hasError: !!(activeInfo?.hasError),
-      yieldMode: 'none',
+      yieldMode: nextYield,
       leapOffsetY: 0,
       popoverRightWidth: 0,
       miniPileEnabled: cfg.mascot === 'minis',
@@ -992,12 +999,18 @@
     if (ctxMenu && !ownedCtxMenu) ownedCtxMenu = ctxMenu;
     const motionLv = getMotionLevel();
     const ctxEnabled = isContextMenuEnabled() && !destroyed;
+    const hiMode = getHostLocalizationMode();
+    const effMemMode = getEffortMemoryMode();
+    const curLang = getLang();
+    const hiInst = W.__agPrismHostI18n;
     const key = [
       VERSION,
-      getLang(),
+      curLang,
       motionLv,
       getTelemetryMode(),
       getEffortSliderMode(),
+      effMemMode,
+      hiMode,
       getThoughtTranslateMode(),
       getThoughtTriggerTiming(),
       getThoughtView(),
@@ -1010,6 +1023,7 @@
       sbMeta?.serviceReady ? 1 : 0,
       tel ? 1 : 0,
       eff ? 1 : 0,
+      hiInst ? 1 : 0,
       th ? 1 : 0,
       thUi ? 1 : 0,
       omni ? 1 : 0,
@@ -1020,6 +1034,15 @@
     lastAbsorbedSyncKey = key;
     try { tel?.sync?.(cfg); } catch {}
     try { eff?.sync?.(cfg); } catch {}
+    try {
+      const shouldDisableHostI18n = hiMode === 'off' || (hiMode === 'auto' && curLang !== 'zh-CN');
+      if (shouldDisableHostI18n) {
+        hiInst?.destroy?.();
+        ra(de(), 'data-ag-prism-host-i18n');
+      } else if (hiInst && isFn(hiInst.setMode)) {
+        hiInst.setMode(hiMode === 'on' ? 'on' : 'auto');
+      }
+    } catch {}
     try { th?.sync?.(cfg); } catch {}
     try {
       if (getOmniMode() === 'off') omni?.destroy?.();
@@ -1300,8 +1323,16 @@
     }
     syncQueuedPrismBoxes();
     latestPrimaryModelInfo = primaryModelInfo;
+    const priPlan = primaryCard ? cPlan.byCard.get(primaryCard) : null;
+    const mascotShouldPeek = Boolean(
+      cPlan.awaitingDecision ||
+      priPlan?.mo ||
+      priPlan?.ops?.some(([, , on]) => on) ||
+      ha(de(), 'data-ag-cs-model-menu') ||
+      qs(D, MODEL_PANEL_SEL)
+    );
     const activeInfoForCrab = getLightweightActiveInfo(primaryCard);
-    syncCrab(primaryCard, activeInfoForCrab, primaryModelInfo);
+    syncCrab(primaryCard, activeInfoForCrab, primaryModelInfo, mascotShouldPeek ? 'peek' : 'none');
     syncConvAuraSemantics(activeInfoForCrab, cPlan.awaitingDecision);
     if (hs.pendingModelShiftNotify) {
       hs.pendingModelShiftNotify = false;
@@ -1577,6 +1608,8 @@
     if (key === 'lightPreset') return getLightPreset();
     if (key === 'telemetryModule') return getTelemetryMode();
     if (key === 'effortSliderModule') return getEffortSliderMode();
+    if (key === 'effortMemory') return getEffortMemoryMode();
+    if (key === 'hostLocalization') return getHostLocalizationMode();
     if (key === 'omniModule') return getOmniMode();
     if (key === 'linkTarget') return getLinkTarget();
     if (key === 'thoughtTranslate') return getThoughtTranslateMode();
@@ -2949,6 +2982,8 @@
           targetFps: getTargetFps(),
           telemetryModule: getTelemetryMode(),
           effortSliderModule: getEffortSliderMode(),
+          effortMemory: getEffortMemoryMode(),
+          hostLocalization: getHostLocalizationMode(),
           thoughtTranslate: getThoughtTranslateMode(),
           thoughtTrigger: getThoughtTriggerTiming(),
           thoughtView: getThoughtView(),

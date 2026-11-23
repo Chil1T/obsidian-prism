@@ -566,10 +566,10 @@ export function quotaMetrics(response, now = Date.now()) {
   }
   return groups.map((group, index) => ({
     id: (Array.isArray(group.buckets)?group.buckets.filter(object).map(bucketFamily).find(Boolean):null)||`group-${index}`,
-    name: text(group.displayName) || `额度组 ${index + 1}`, description: text(group.description),
+    name: text(group.displayName) || `Quota Group ${index + 1}`, description: text(group.description),
     windows: Object.fromEntries(['5h', 'weekly'].map(window => {
       const bucket = (Array.isArray(group.buckets)?group.buckets:[]).find(b=>object(b)&&cadence(b)===window);
-      if (!bucket) return [window, { available: false, reason: '账户未返回此额度窗口' }];
+      if (!bucket) return [window, { available: false, reason: 'Quota window not returned by account' }];
       const remaining = fraction(remainingValue(bucket,'remainingFraction'));
       const date = typeof bucket.resetTime==='string'&&/^\d{4}-\d{2}-\d{2}T/.test(bucket.resetTime)?Date.parse(bucket.resetTime):NaN;
       return [window, { available: true, id: text(bucket.bucketId), remaining, amount: tokenCount(remainingValue(bucket,'remainingAmount')),

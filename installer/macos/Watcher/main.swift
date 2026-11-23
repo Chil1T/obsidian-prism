@@ -155,12 +155,28 @@ final class WatcherApp {
         do {
             let manifest = try PluginManifest.load(baseDir: baseDir)
             guard let port = CdpHelper.readPort(overridePort: overridePort) else {
-                Self.writeResult(outFile: outFile, ok: false, message: "未找到调试端口文件，Antigravity 可能未运行", pages: nil)
+                Self.writeResult(
+                    outFile: outFile,
+                    ok: false,
+                    message: InstallerI18n.tr(
+                        "未找到调试端口文件，Antigravity 可能未运行",
+                        "Debug port file not found; Antigravity may not be running"
+                    ),
+                    pages: nil
+                )
                 return 1
             }
             let pages = try CdpHelper.listPages(port: port)
             if pages.isEmpty {
-                Self.writeResult(outFile: outFile, ok: false, message: "未找到 Antigravity 窗口页面", pages: nil)
+                Self.writeResult(
+                    outFile: outFile,
+                    ok: false,
+                    message: InstallerI18n.tr(
+                        "未找到 Antigravity 窗口页面",
+                        "No Antigravity window pages found"
+                    ),
+                    pages: nil
+                )
                 return 1
             }
             let onceCfg = CdpHelper.readConfig(baseDir: baseDir, manifest: manifest)
@@ -307,14 +323,20 @@ final class WatcherApp {
                 : ""
             currentInlineDiffExpr = CdpHelper.buildInlineDiffExpression(baseDir: baseDir, cfg: initCfg)
         } catch {
-            log("[!] 初始化加载失败: \(error.localizedDescription)")
+            log(InstallerI18n.tr(
+                "[!] 初始化加载失败: \(error.localizedDescription)",
+                "[!] Failed to initialize: \(error.localizedDescription)"
+            ))
             releasePidFile(selfPid: selfPid)
             flock(lockFd, LOCK_UN)
             close(lockFd)
             return 1
         }
 
-        log("[*] Obsidian Prism (obsidian-prism) 守护模式启动 (PID \(selfPid))，每 2 秒检查一次窗口")
+        log(InstallerI18n.tr(
+            "[*] Obsidian Prism (obsidian-prism) 守护模式启动 (PID \(selfPid))，每 2 秒检查一次窗口",
+            "[*] Obsidian Prism (obsidian-prism) watcher started (PID \(selfPid)), polling windows every 2s"
+        ))
 
         let stateLock = NSLock()
         var attached: [String: AttachedEntry] = [:]
@@ -489,7 +511,10 @@ final class WatcherApp {
                     let removed = attached.removeValue(forKey: page.id)
                     stateLock.unlock()
                     if let removed = removed {
-                        self.log("[-] 窗口已关闭: \(removed.title)")
+                        self.log(InstallerI18n.tr(
+                            "[-] 窗口已关闭: \(removed.title)",
+                            "[-] Window closed: \(removed.title)"
+                        ))
                     }
                 }
 
@@ -541,7 +566,10 @@ final class WatcherApp {
                             if !self.pluginDir.isEmpty && FileManager.default.fileExists(atPath: self.pluginDir) {
                                 _ = CdpHelper.updateConfigBatch(baseDir: self.pluginDir, manifest: manifestSnap, entries: entriesObj)
                             }
-                            self.log("[⚙] 批量设置已保存 (\(entriesObj.count) 项)")
+                            self.log(InstallerI18n.tr(
+                                "[⚙] 批量设置已保存 (\(entriesObj.count) 项)",
+                                "[⚙] Batch settings saved (\(entriesObj.count) items)"
+                            ))
                         }
                         return
                     }
@@ -552,7 +580,11 @@ final class WatcherApp {
                             if !self.pluginDir.isEmpty && FileManager.default.fileExists(atPath: self.pluginDir) {
                                 _ = CdpHelper.updateConfigSetting(baseDir: self.pluginDir, manifest: manifestSnap, key: key, value: value)
                             }
-                            self.log("[⚙] 设置已保存: \(key) = \(MiniJson.stringify(value, pretty: false))")
+                            let valStr = MiniJson.stringify(value, pretty: false)
+                            self.log(InstallerI18n.tr(
+                                "[⚙] 设置已保存: \(key) = \(valStr)",
+                                "[⚙] Setting saved: \(key) = \(valStr)"
+                            ))
                         }
                     }
                 }
@@ -578,7 +610,10 @@ final class WatcherApp {
 
                 let evalVal = try applyToEntry(entry, exprSnap, omniSnap, thoughtSnap, inlineDiffSnap)
                 let status = evalVal.objectValue?["status"]?.stringValue ?? "ok"
-                self.log("[✓] 已注入 obsidian-prism: \(title) (\(status))")
+                self.log(InstallerI18n.tr(
+                    "[✓] 已注入 obsidian-prism: \(title) (\(status))",
+                    "[✓] Injected obsidian-prism: \(title) (\(status))"
+                ))
             } catch {
                 stateLock.lock()
                 attaching.remove(page.id)
@@ -586,7 +621,11 @@ final class WatcherApp {
                 stateLock.unlock()
                 removed?.session.close()
                 session?.close()
-                self.log("[!] 注入失败，稍后重试: \(CdpHelper.shortTitle(page)) — \(error.localizedDescription)")
+                let pageTitle = CdpHelper.shortTitle(page)
+                self.log(InstallerI18n.tr(
+                    "[!] 注入失败，稍后重试: \(pageTitle) — \(error.localizedDescription)",
+                    "[!] Injection failed, will retry: \(pageTitle) — \(error.localizedDescription)"
+                ))
             }
         }
 
@@ -713,9 +752,15 @@ final class WatcherApp {
                         }
                     }
                 }
-                self.log("[↻] \(changedName) 已变更，已热更新 \(n) 个窗口")
+                self.log(InstallerI18n.tr(
+                    "[↻] \(changedName) 已变更，已热更新 \(n) 个窗口",
+                    "[↻] \(changedName) changed, hot-reloaded \(n) window(s)"
+                ))
             } catch {
-                self.log("[!] 读取文件失败: \(error.localizedDescription)")
+                self.log(InstallerI18n.tr(
+                    "[!] 读取文件失败: \(error.localizedDescription)",
+                    "[!] Failed to read file: \(error.localizedDescription)"
+                ))
             }
         }
 
@@ -823,7 +868,10 @@ final class WatcherApp {
                     lastLoggedStalePort = nil
                     if !yieldingToDaemon {
                         yieldingToDaemon = true
-                        log("[~] 检测到原生 Sidecar Daemon 运行中，Watcher 进入热备避让态")
+                        log(InstallerI18n.tr(
+                            "[~] 检测到原生 Sidecar Daemon 运行中，Watcher 进入热备避让态",
+                            "[~] Native Sidecar Daemon is active; Watcher entering standby mode"
+                        ))
                     }
                 }
                 _ = exitSem.wait(timeout: .now() + .milliseconds(750))
@@ -831,7 +879,10 @@ final class WatcherApp {
             }
             if yieldingToDaemon {
                 yieldingToDaemon = false
-                log("[+] 原生 Sidecar Daemon 已离线，Watcher 接管实时注入")
+                log(InstallerI18n.tr(
+                    "[+] 原生 Sidecar Daemon 已离线，Watcher 接管实时注入",
+                    "[+] Native Sidecar Daemon went offline; Watcher taking over live injection"
+                ))
             }
 
             // Poll fallback for in-place edits that don't fire directory vnode write events
@@ -842,7 +893,10 @@ final class WatcherApp {
             if let stalePort = rawPort, livePort == nil {
                 if lastLoggedStalePort != stalePort {
                     lastLoggedStalePort = stalePort
-                    log("[!] 检测到残留无效调试端口 \(stalePort)（连接被拒绝/超时），视作无有效端口并转入裸启恢复检测")
+                    log(InstallerI18n.tr(
+                        "[!] 检测到残留无效调试端口 \(stalePort)（连接被拒绝/超时），视作无有效端口并转入裸启恢复检测",
+                        "[!] Detected stale debug port \(stalePort) (connection refused/timed out); treating as inactive and checking for bare host recovery"
+                    ))
                 }
                 stateLock.lock()
                 let staleEntries = Array(attached.values)
@@ -884,7 +938,11 @@ final class WatcherApp {
                         let confirmed = CdpHelper.promptUserForCdpRelaunch()
                         self.recordPromptedForHostWithVersion(bare: bare, hostVersion: hostVersion, decision: confirmed ? "yes" : "no")
                         if confirmed {
-                            log("[*] 用户确认带 --remote-debugging-port=0 重新打开 Antigravity (旧 PID \(bare.pid), ver=\(hostVersion.isEmpty ? "unknown" : hostVersion))")
+                            let verLabel = hostVersion.isEmpty ? "unknown" : hostVersion
+                            log(InstallerI18n.tr(
+                                "[*] 用户确认带 --remote-debugging-port=0 重新打开 Antigravity (旧 PID \(bare.pid), ver=\(verLabel))",
+                                "[*] User confirmed relaunching Antigravity with --remote-debugging-port=0 (old PID \(bare.pid), ver=\(verLabel))"
+                            ))
                             _ = CdpHelper.relaunchAntigravityWithCdp(host: bare, waitExitMs: 15000) { m in self.log("[+] \(m)") }
                         }
                     }
@@ -901,7 +959,10 @@ final class WatcherApp {
                     for oldEntry in oldEntries {
                         oldEntry.session.close()
                     }
-                    log("[+] 连接到调试端口 \(port)")
+                    log(InstallerI18n.tr(
+                        "[+] 连接到调试端口 \(port)",
+                        "[+] Connected to debug port \(port)"
+                    ))
                     lastPort = port
                 }
 
@@ -1082,7 +1143,11 @@ final class WatcherApp {
                 try? fm.removeItem(atPath: statePath)
                 if !resetLogged {
                     resetLogged = true
-                    log("[~] 检测到 Antigravity 新进程或版本更新 (PID \(bare.pid), ver=\(hostVersion.isEmpty ? "unknown" : hostVersion))，已自动复位重开提示状态")
+                    let verLabel = hostVersion.isEmpty ? "unknown" : hostVersion
+                    log(InstallerI18n.tr(
+                        "[~] 检测到 Antigravity 新进程或版本更新 (PID \(bare.pid), ver=\(verLabel))，已自动复位重开提示状态",
+                        "[~] Detected new Antigravity process or version update (PID \(bare.pid), ver=\(verLabel)); reset relaunch prompt state"
+                    ))
                 }
             }
         }
@@ -1158,6 +1223,13 @@ func runWatcherMain() -> Int32 {
             if let p = Int(args[i]), p > 0 { overridePort = p }
         }
         else if a == "--out" && i + 1 < args.count { i += 1; outFile = args[i] }
+        else if a == "--lang" && i + 1 < args.count {
+            i += 1
+            InstallerI18n.setExplicitLanguage(args[i])
+        }
+        else if a.hasPrefix("--lang=") {
+            InstallerI18n.setExplicitLanguage(String(a.dropFirst("--lang=".count)))
+        }
         i += 1
     }
 

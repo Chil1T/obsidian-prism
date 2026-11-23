@@ -3186,7 +3186,7 @@ test('18) Red-team #256 [P1 #7]: composeAbortSignal uses managed ref-d timeout a
       proxyEnv: {},
       fetchImpl: async (url, init = {}) => {
         const u = String(url);
-        if (u.includes('translate.googleapis.com')) {
+        if (hasUrlHostname(u, 'translate.googleapis.com')) {
           return new Response(JSON.stringify([[['你好世界', 'Hello world']]]), { status: 200 });
         }
         if (u.includes('/hang-external')) {

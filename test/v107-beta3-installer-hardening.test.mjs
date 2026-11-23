@@ -353,7 +353,10 @@ test(
       assert.ok(jErr.error.includes('0xA0000003'), `Error must identify Junction tag, got: ${jErr.error}`);
       assert.ok(jErr.failedPath.toLowerCase().includes('evil-plugin-junction'));
       assert.ok(jErr.errorType.includes('InvalidOperationException'));
-      assert.ok(jErr.hint.includes('符号链接') || jErr.hint.includes('目录联接'));
+      assert.ok(
+        /符号链接|目录联接|symlink|junction/i.test(String(jErr.hint || '')),
+        `Expected symlink/junction hint, got: ${jErr.hint}`
+      );
     } finally {
       if (readerLockChild) {
         try { readerLockChild.kill(); } catch {}

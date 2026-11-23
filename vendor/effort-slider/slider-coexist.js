@@ -220,7 +220,7 @@
   function createEffortSliderController(envOpts) {
     const gW = () => (envOpts && envOpts.window) || (typeof window !== 'undefined' ? window : globalRoot);
     const gD = () => (envOpts && envOpts.document) || gW()?.document || null;
-    let mode = 'auto', inst = null, yielded = false;
+    let mode = 'auto', rememberEffort = true, inst = null, memGuard = null, yielded = false;
     const perfStats = { rawMutations: 0, executedScans: 0, skippedIrrelevant: 0 };
 
     function hasExtInst() {
@@ -279,6 +279,28 @@
       if (st && st.getAttribute(PRISM_OWNER_ATTR) === '1') st.remove();
     }
 
+    function stopMemGuard() {
+      if (memGuard) {
+        try { memGuard.stop(); } catch {}
+        memGuard = null;
+      }
+    }
+
+    function mountMemGuard() {
+      const w = gW(), d = gD();
+      if (!w || !d || !d.body) return false;
+      const lib = resLib(w);
+      if (!lib || typeof lib.installEffortMemoryGuard !== 'function') return false;
+      const BaseMO = w.MutationObserver || (typeof MutationObserver === 'function' ? MutationObserver : null);
+      stopMemGuard();
+      memGuard = lib.installEffortMemoryGuard({
+        document: d,
+        window: w,
+        MutationObserver: mkThrottledMO(BaseMO, d, perfStats) || undefined,
+      });
+      return Boolean(memGuard);
+    }
+
     function mountBuiltIn() {
       const w = gW(), d = gD();
       if (!w || !d || !d.body) return false;
@@ -290,6 +312,7 @@
         window: w,
         MutationObserver: mkThrottledMO(BaseMO, d, perfStats) || undefined,
         skipGenericMenuObserver: true,
+        rememberEffort,
       });
       if (!next) return false;
       next.__prismOwned = true;
@@ -306,26 +329,36 @@
     function sync(cfg) {
       const raw = cfg && cfg.effortSliderModule;
       mode = raw === 'on' || raw === 'off' ? raw : 'auto';
+      rememberEffort = !(cfg && (cfg.effortMemory === 'off' || cfg.effortMemory === false));
       if (mode === 'off') {
         yielded = false;
         stopInst();
         clrTint(gD());
         setHideCss(true);
+        if (rememberEffort) {
+          if (!memGuard) mountMemGuard();
+          else try { memGuard.rescan?.(); } catch {}
+        } else {
+          stopMemGuard();
+        }
         return getState();
       }
       setHideCss(false);
       if (mode === 'auto' && hasExtInst()) {
         yielded = true;
         stopInst();
+        stopMemGuard();
         try { gW()?.__agCodexEffortSliderInstance?.rescan?.(); } catch {}
         return getState();
       }
       yielded = false;
+      stopMemGuard();
       syncBilingualDom(gD());
       if (!inst || hasExtInst()) {
         if (inst) stopInst();
         mountBuiltIn();
       } else {
+        try { inst.setRememberEffort?.(rememberEffort); } catch {}
         try { inst.rescan?.(); } catch {}
       }
       markOwnedNoTr(gD());
@@ -334,6 +367,7 @@
 
     function destroy() {
       stopInst();
+      stopMemGuard();
       setHideCss(false);
       yielded = false;
     }
@@ -341,7 +375,9 @@
     function getState() {
       return {
         mode,
+        rememberEffort,
         mountedPrism: Boolean(inst),
+        memoryGuardActive: Boolean(memGuard),
         yieldedToExternal: Boolean(yielded || (mode === 'auto' && hasExtInst())),
         hasExternal: hasExtInst(),
         throttleMs: THROTTLE_MS,

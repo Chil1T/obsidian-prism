@@ -533,9 +533,17 @@
     // 保持原有绘制顺序：身体部件 → 道具 → 符号（rigid 本就位于末尾）
 
     ctx.save();
-    if (typeof clipBottomY === 'number') {
+    if (typeof clipBottomY === 'number' && typeof ctx.clip === 'function') {
       ctx.beginPath();
-      ctx.rect(0, 0, cssW, clipBottomY);
+      if (typeof ctx.rect === 'function') {
+        ctx.rect(0, 0, cssW, clipBottomY);
+      } else {
+        ctx.moveTo(0, 0);
+        ctx.lineTo(cssW, 0);
+        ctx.lineTo(cssW, clipBottomY);
+        ctx.lineTo(0, clipBottomY);
+        ctx.closePath();
+      }
       ctx.clip();
     }
 
@@ -2444,7 +2452,7 @@
       const depth = actor.stackedOn ? getStackDepth(actor.id) : 0;
       const tx = snapCoord(actor.x, direct);
       const ty = snapCoord(yPx, direct);
-      const tz = actor.dragging ? '38' : depth > 0 ? String(24 + depth * 2) : '24';
+      const tz = yieldMode === 'peek' ? '4' : actor.dragging ? '38' : depth > 0 ? String(24 + depth * 2) : '24';
       if (actor.lastDomX !== tx || actor.lastDomY !== ty) {
         actor.lastDomX = tx;
         actor.lastDomY = ty;
@@ -4014,7 +4022,7 @@
       let petTriggered = false;
 
       const onDown = (evt) => {
-        if (evt.button !== 0 || (mini && !miniPileEnabled)) return;
+        if (yieldMode === 'peek' || evt.button !== 0 || (mini && !miniPileEnabled)) return;
         evt.preventDefault();
         evt.stopPropagation();
         if (!mini && evt.altKey) {
@@ -4221,7 +4229,7 @@
       dragReleaseHooks.push(cancelDragOnBlur);
 
       const onContextMenu = (evt) => {
-        if (mini) return;
+        if (mini || yieldMode === 'peek') return;
         evt.preventDefault();
         evt.stopPropagation();
         feedActor(ent, 'donut');
@@ -4852,6 +4860,30 @@
       return true;
     };
 
+    const syncPeekInteractivity = () => {
+      const isPeek = yieldMode === 'peek';
+      if (hostEl) {
+        if (isPeek) hostEl.setAttribute?.('data-ag-mascot-peek', '1');
+        else hostEl.removeAttribute?.('data-ag-mascot-peek');
+      }
+      if (isPeek) {
+        dragReleaseHooks.forEach((fn) => { try { fn(); } catch (_) {} });
+      }
+      for (const a of [actors.cat, actors.clawd]) {
+        if (!a?.el) continue;
+        a.el.setAttribute?.('tabindex', isPeek ? '-1' : '0');
+        if (isPeek) a.el.setAttribute?.('aria-hidden', 'true');
+        else a.el.removeAttribute?.('aria-hidden');
+        if (a.el.style) a.el.style.pointerEvents = isPeek ? 'none' : '';
+        applyActorTransform(a, performance.now());
+      }
+      if (miniGroupEl?.style) miniGroupEl.style.pointerEvents = isPeek ? 'none' : '';
+      for (const mc of miniCrabs) {
+        if (mc?.el?.style) mc.el.style.pointerEvents = isPeek ? 'none' : 'auto';
+      }
+    };
+
+    syncPeekInteractivity();
     renderAllFrames(performance.now());
     syncHeartbeat();
 
@@ -4904,6 +4936,9 @@
           if (performance.now() - lastHandoffAt > 50) resetHomePositions(popoverRightWidth !== prevRight);
         } else if (popoverRightWidth !== prevRight || miniPileEnabled !== prevMiniPile) {
           resetHomePositions(popoverRightWidth !== prevRight);
+        }
+        if (yieldMode !== prevYield || leapOffsetY !== prevLeapOffset) {
+          syncPeekInteractivity();
         }
         if (reducedMotion !== prevReduced || streaming !== prevStreaming) {
           syncHeartbeat();

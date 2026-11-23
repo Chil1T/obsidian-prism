@@ -253,7 +253,7 @@ export function normalizeRendererSummaries(raw) {
       const createdIso = protoTimestampToIso(sum.createdTime);
       const stepCount = Number(sum.stepCount ?? sum.numTotalSteps ?? 0);
       out[key] = {
-        summary: typeof sum.summary === 'string' ? sum.summary : typeof sum.title === 'string' ? sum.title : '未命名会话',
+        summary: typeof sum.summary === 'string' ? sum.summary : typeof sum.title === 'string' ? sum.title : 'Untitled Conversation',
         ...(Number.isSafeInteger(stepCount) && stepCount > 0 ? { stepCount } : {}),
         ...(modIso ? { lastModifiedTime: modIso } : {}),
         ...(createdIso ? { createdTime: createdIso } : {}),
@@ -272,7 +272,7 @@ export function normalizeRendererSummaries(raw) {
     const modIso = protoTimestampToIso(item.lastModifiedTime);
     const ws = typeof item.workspaceName === 'string' ? item.workspaceName.trim() : '';
     out[key] = {
-      summary: typeof item.title === 'string' && item.title.trim() ? item.title.trim() : '未命名会话',
+      summary: typeof item.title === 'string' && item.title.trim() ? item.title.trim() : 'Untitled Conversation',
       ...(modIso ? { lastModifiedTime: modIso } : {}),
       ...(ws ? { workspaces: [{ workspaceFolderAbsoluteUri: ws }] } : {}),
     };

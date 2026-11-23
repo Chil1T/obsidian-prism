@@ -446,6 +446,520 @@ function syncHostPluginRegistry(configDir, enable) {
 
 const ROOT_FILES_TO_SYNC = SYNC_ROOT_FILES;
 
+const MACOS_LAUNCHER_APP_NAME = "Antigravity Prism.app";
+const MACOS_LAUNCHER_BUNDLE_ID = "io.github.rmvdesi.obsidian-prism.launcher";
+const MACOS_LAUNCHER_MARKER_REL = path.join("Contents", "Resources", ".obsidian-prism-launcher");
+
+function escapeXmlText(str) {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function shellSingleQuote(str) {
+  return "'" + String(str || "").replace(/'/g, "'\\''") + "'";
+}
+
+function normalizeMacosSystemRootPrefix(rawPath) {
+  const trimmed = String(rawPath || "").trim();
+  if (!trimmed) return "";
+  let resolved = path.resolve(trimmed);
+  if (process.platform !== "win32") {
+    if (resolved === "/tmp") return "/private/tmp";
+    if (resolved.startsWith("/tmp/")) return "/private" + resolved;
+    if (resolved === "/var") return "/private/var";
+    if (resolved.startsWith("/var/")) return "/private" + resolved;
+  }
+  return resolved;
+}
+
+function resolveLauncherChainStopRoot(dirPath, explicitStopRoot = null) {
+  if (explicitStopRoot) return normalizeMacosSystemRootPrefix(explicitStopRoot);
+  const norm = normalizeMacosSystemRootPrefix(dirPath);
+  const home = normalizeMacosSystemRootPrefix(os.homedir());
+  const tmp = normalizeMacosSystemRootPrefix(os.tmpdir());
+  const cmp = (p) => (process.platform === "win32" ? p.toLowerCase() : p);
+  const nCmp = cmp(norm);
+  for (const cand of [home, tmp, "/private/tmp", "/private/var", "/Applications"].filter(Boolean)) {
+    const cCmp = cmp(cand);
+    const pfx = cCmp.endsWith(path.sep) ? cCmp : cCmp + path.sep;
+    if (nCmp === cCmp || nCmp.startsWith(pfx)) {
+      return cand;
+    }
+  }
+  return path.parse(norm).root;
+}
+
+function assertNoSymbolicLinkInChain(targetPath, stopRoot = null, label = "path") {
+  const normTarget = normalizeMacosSystemRootPrefix(targetPath);
+  const normStop = resolveLauncherChainStopRoot(normTarget, stopRoot);
+  if (!normTarget || !normStop) {
+    throw new Error(`Refusing empty ${label}`);
+  }
+  const cmp = (p) => (process.platform === "win32" ? p.toLowerCase() : p);
+  const stopCmp = cmp(normStop);
+  let cur = normTarget;
+  let reachedStop = false;
+  for (let depth = 0; depth < 64; depth++) {
+    try {
+      const st = fs.lstatSync(cur);
+      if (st.isSymbolicLink()) {
+        throw new Error(`Refusing symbolic link in ${label} chain: ${cur}`);
+      }
+    } catch (err) {
+      if (!err || err.code !== "ENOENT") {
+        throw err;
+      }
+    }
+    if (cmp(cur) === stopCmp) {
+      reachedStop = true;
+      break;
+    }
+    const parent = path.dirname(cur);
+    if (!parent || parent === cur) break;
+    cur = parent;
+  }
+  if (!reachedStop) {
+    throw new Error(`Refusing unverified ${label} chain outside stop root: ${targetPath}`);
+  }
+}
+
+function getDefaultMacosLauncherDir(opts = {}) {
+  if (typeof opts.launcherDir === "string" && opts.launcherDir.trim()) {
+    return path.resolve(opts.launcherDir.trim());
+  }
+  if (typeof process.env.AG_PRISM_LAUNCHER_DIR === "string" && process.env.AG_PRISM_LAUNCHER_DIR.trim()) {
+    return path.resolve(process.env.AG_PRISM_LAUNCHER_DIR.trim());
+  }
+  return path.join(os.homedir(), "Applications");
+}
+
+function getMacosLauncherAppPath(opts = {}) {
+  return path.join(getDefaultMacosLauncherDir(opts), MACOS_LAUNCHER_APP_NAME);
+}
+
+function normalizeMacosAntigravityAppPath(rawPath) {
+  const fallback = "/Applications/Antigravity.app";
+  const trimmed = String(rawPath || "").trim().replace(/^["']+|["']+$/g, "");
+  if (!trimmed) return fallback;
+  const posixClean = trimmed.replace(/\\/g, "/").replace(/\/+$/, "");
+  const lower = posixClean.toLowerCase();
+  const contentsIdx = lower.indexOf(".app/contents/");
+  let normalized = posixClean;
+  if (contentsIdx !== -1) {
+    normalized = posixClean.slice(0, contentsIdx + 4);
+  } else {
+    const slashIdx = lower.indexOf(".app/");
+    if (slashIdx !== -1) {
+      normalized = posixClean.slice(0, slashIdx + 4);
+    }
+  }
+  return normalized.toLowerCase().endsWith(".app") ? normalized : fallback;
+}
+
+function generateMacosLauncherInfoPlist(version = "1.0.7") {
+  const safeShort = escapeXmlText(version || "1.0.7");
+  const numericMatch = String(version || "1.0.7").match(/^\d+(?:\.\d+){0,2}/);
+  const safeBundleVer = escapeXmlText(numericMatch ? numericMatch[0] : "1.0.7");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>Antigravity Prism</string>
+  <key>CFBundleExecutable</key>
+  <string>launch</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
+  <key>CFBundleIdentifier</key>
+  <string>${escapeXmlText(MACOS_LAUNCHER_BUNDLE_ID)}</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>Antigravity Prism</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>${safeShort}</string>
+  <key>CFBundleSignature</key>
+  <string>????</string>
+  <key>CFBundleVersion</key>
+  <string>${safeBundleVer}</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>12.0</string>
+  <key>LSUIElement</key>
+  <false/>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+</dict>
+</plist>
+`;
+}
+
+function generateMacosLauncherScript(targetApp = "/Applications/Antigravity.app") {
+  const normalizedTarget = normalizeMacosAntigravityAppPath(targetApp);
+  const quotedTarget = shellSingleQuote(normalizedTarget);
+  return [
+    "#!/bin/sh",
+    "set -eu",
+    "",
+    "# Obsidian Prism lossless wrapper launcher (never modifies Antigravity.app)",
+    `PREFERRED_APP=${quotedTarget}`,
+    "",
+    "resolve_target_app() {",
+    '  if [ -n "$PREFERRED_APP" ] && [ -d "$PREFERRED_APP" ]; then',
+    "    printf '%s\\n' \"$PREFERRED_APP\"",
+    "    return 0",
+    "  fi",
+    '  if [ -d "/Applications/Antigravity.app" ]; then',
+    "    printf '%s\\n' \"/Applications/Antigravity.app\"",
+    "    return 0",
+    "  fi",
+    '  if [ -d "$HOME/Applications/Antigravity.app" ]; then',
+    "    printf '%s\\n' \"$HOME/Applications/Antigravity.app\"",
+    "    return 0",
+    "  fi",
+    "  return 1",
+    "}",
+    "",
+    'TARGET_APP="$(resolve_target_app || true)"',
+    'if [ -z "$TARGET_APP" ]; then',
+    "  NOT_FOUND_MSG=\"$(printf 'Antigravity.app was not found in /Applications or ~/Applications.\\n\\n未在 /Applications 或 ~/Applications 中找到 Antigravity.app。')\"",
+    '  /usr/bin/osascript - "$NOT_FOUND_MSG" <<\'APPLESCRIPT\' >/dev/null 2>&1 || true',
+    "on run argv",
+    '  display dialog (item 1 of argv) with title "Antigravity Prism" buttons {"OK"} default button "OK"',
+    "end run",
+    "APPLESCRIPT",
+    "  exit 1",
+    "fi",
+    "",
+    "unset ELECTRON_RUN_AS_NODE",
+    "",
+    "detect_host_state() {",
+    '  /bin/ps -ax -o pid=,command= | /usr/bin/awk -v app="$TARGET_APP" \'',
+    "    BEGIN {",
+    "      app_low = tolower(app)",
+    '      main_pfx = app_low "/contents/macos/antigravity"',
+    "      cdp_pid = 0",
+    "      bare_pid = 0",
+    "    }",
+    "    {",
+    "      pid = $1",
+    "      cmd = $0",
+    '      sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "", cmd)',
+    "      low = tolower(cmd)",
+    '      if (index(low, "--type=") > 0 || index(low, "sidecar_sdk") > 0 || index(low, "main.mjs") > 0 || index(low, "watch.js") > 0) next',
+    "      pos = index(low, main_pfx)",
+    "      if (pos == 0) next",
+    "      after = substr(low, pos + length(main_pfx), 1)",
+    '      if (after != "" && after != " " && after != "\\t" && after != "\\"") next',
+    '      if (index(low, "--remote-debugging-port") > 0) {',
+    "        if (cdp_pid == 0) cdp_pid = pid",
+    "      } else {",
+    "        if (bare_pid == 0) bare_pid = pid",
+    "      }",
+    "    }",
+    "    END {",
+    '      if (cdp_pid > 0) printf "cdp %s\\n", cdp_pid',
+    '      else if (bare_pid > 0) printf "bare %s\\n", bare_pid',
+    '      else printf "none 0\\n"',
+    "    }",
+    "  '",
+    "}",
+    "",
+    "list_family_pids() {",
+    '  /bin/ps -ax -o pid=,command= | /usr/bin/awk -v app="$TARGET_APP" \'',
+    "    BEGIN {",
+    "      app_low = tolower(app)",
+    '      macos_pfx = app_low "/contents/macos/"',
+    '      fw_pfx = app_low "/contents/frameworks/"',
+    "    }",
+    "    {",
+    "      pid = $1",
+    "      cmd = $0",
+    '      sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "", cmd)',
+    "      low = tolower(cmd)",
+    '      if (index(low, "sidecars/daemon/main.mjs") > 0 || index(low, "/daemon/main.mjs") > 0 || index(low, "sidecar_sdk") > 0 || index(low, "obsidian-prism") > 0 || index(low, "antigravity-prism") > 0 || index(low, "agy-claude-style") > 0 || index(low, "/watch.js") > 0) next',
+    "      if (index(low, macos_pfx) > 0 || index(low, fw_pfx) > 0) print pid",
+    "    }",
+    "  '",
+    "}",
+    "",
+    "is_singleton_lock_held() {",
+    '  LOCK_PATH="$HOME/Library/Application Support/Antigravity/SingletonLock"',
+    '  if [ -L "$LOCK_PATH" ]; then',
+    '    LINK_DEST="$(/usr/bin/readlink "$LOCK_PATH" 2>/dev/null || true)"',
+    '    LOCK_PID="${LINK_DEST##*-}"',
+    '    case "$LOCK_PID" in',
+    "      ''|*[!0-9]*) return 0 ;;",
+    '      *) /bin/kill -0 "$LOCK_PID" 2>/dev/null && return 0 || return 1 ;;',
+    "    esac",
+    "  fi",
+    '  [ -e "$LOCK_PATH" ]',
+    "}",
+    "",
+    "STATE_LINE=\"$(detect_host_state || printf 'none 0')\"",
+    'HOST_STATE="${STATE_LINE%% *}"',
+    'HOST_PID="${STATE_LINE#* }"',
+    "",
+    'if [ "$HOST_STATE" = "cdp" ]; then',
+    '  exec /usr/bin/open -a "$TARGET_APP"',
+    "fi",
+    "",
+    'if [ "$HOST_STATE" = "bare" ]; then',
+    '  LOCALE_HINT="${AG_PRISM_LANG:-${LC_ALL:-${LANG:-}}}"',
+    '  if [ -z "$LOCALE_HINT" ]; then',
+    "    LOCALE_HINT=\"$(/usr/bin/defaults read -g AppleLanguages 2>/dev/null | /usr/bin/head -n 3 | /usr/bin/tr '\\n' ' ' || true)\"",
+    "  fi",
+    '  case "$LOCALE_HINT" in',
+    "    *zh*|*ZH*|*cn*|*CN*)",
+    '      PROMPT_BTN="立即重启并开启"',
+    '      KEEP_BTN="保持现状"',
+    '      PROMPT_TITLE="Antigravity Prism"',
+    "      PROMPT_MSG=\"$(printf '检测到 Antigravity 当前正在运行，但未开启光学桥接端口（--remote-debugging-port=0）。\\n\\n是否温和重启 Antigravity 以激活 Obsidian Prism？')\"",
+    "      ;;",
+    "    *)",
+    '      PROMPT_BTN="Relaunch with Prism"',
+    '      KEEP_BTN="Keep Running"',
+    '      PROMPT_TITLE="Antigravity Prism"',
+    "      PROMPT_MSG=\"$(printf 'Antigravity is currently running without --remote-debugging-port=0.\\n\\nGracefully relaunch Antigravity now to enable Obsidian Prism?')\"",
+    "      ;;",
+    "  esac",
+    '  USER_CHOICE="$(/usr/bin/osascript - "$PROMPT_MSG" "$PROMPT_TITLE" "$KEEP_BTN" "$PROMPT_BTN" <<\'APPLESCRIPT\' 2>/dev/null || true',
+    "on run argv",
+    "  set msgText to item 1 of argv",
+    "  set titleText to item 2 of argv",
+    "  set keepBtn to item 3 of argv",
+    "  set relaunchBtn to item 4 of argv",
+    "  set res to display dialog msgText with title titleText buttons {keepBtn, relaunchBtn} default button relaunchBtn",
+    "  return button returned of res",
+    "end run",
+    "APPLESCRIPT",
+    ')"',
+    '  if [ "$USER_CHOICE" != "$PROMPT_BTN" ]; then',
+    '    exec /usr/bin/open -a "$TARGET_APP"',
+    "  fi",
+    "",
+    '  APP_BASE="$(/usr/bin/basename "$TARGET_APP")"',
+    '  if [ "$TARGET_APP" = "/Applications/Antigravity.app" ] || [ "$APP_BASE" = "Antigravity.app" ]; then',
+    '    /usr/bin/osascript -e \'tell application "Antigravity" to quit\' >/dev/null 2>&1 || /bin/kill -TERM "$HOST_PID" 2>/dev/null || true',
+    "  else",
+    '    /usr/bin/osascript - "$TARGET_APP" <<\'APPLESCRIPT\' >/dev/null 2>&1 || /bin/kill -TERM "$HOST_PID" 2>/dev/null || true',
+    "on run argv",
+    "  tell application (POSIX file (item 1 of argv) as text) to quit",
+    "end run",
+    "APPLESCRIPT",
+    "  fi",
+    "",
+    "  WAIT_COUNT=0",
+    '  while [ "$WAIT_COUNT" -lt 80 ]; do',
+    '    ALIVE_PIDS="$(list_family_pids || true)"',
+    '    if [ -z "$ALIVE_PIDS" ] && ! is_singleton_lock_held; then',
+    "      break",
+    "    fi",
+    "    /bin/sleep 0.12",
+    "    WAIT_COUNT=$((WAIT_COUNT + 1))",
+    "  done",
+    "",
+    '  ALIVE_PIDS="$(list_family_pids || true)"',
+    '  if [ -n "$ALIVE_PIDS" ]; then',
+    "    for P in $ALIVE_PIDS; do",
+    '      /bin/kill -TERM "$P" 2>/dev/null || true',
+    "    done",
+    "    HARD_COUNT=0",
+    '    while [ "$HARD_COUNT" -lt 40 ]; do',
+    '      ALIVE_PIDS="$(list_family_pids || true)"',
+    '      if [ -z "$ALIVE_PIDS" ] && ! is_singleton_lock_held; then',
+    "        break",
+    "      fi",
+    "      /bin/sleep 0.1",
+    "      HARD_COUNT=$((HARD_COUNT + 1))",
+    "    done",
+    "  fi",
+    "  /bin/sleep 0.5",
+    "fi",
+    "",
+    'exec /usr/bin/open -na "$TARGET_APP" --args --remote-debugging-port=0',
+    "",
+  ].join("\n");
+}
+
+function isManagedMacosLauncherBundle(appPath) {
+  if (!appPath) return false;
+  try {
+    const appStat = fs.lstatSync(appPath);
+    if (appStat.isSymbolicLink() || !appStat.isDirectory()) return false;
+    const contentsDir = path.join(appPath, "Contents");
+    const contentsStat = fs.lstatSync(contentsDir);
+    if (contentsStat.isSymbolicLink() || !contentsStat.isDirectory()) return false;
+
+    const resourcesDir = path.join(contentsDir, "Resources");
+    try {
+      const resStat = fs.lstatSync(resourcesDir);
+      if (resStat.isSymbolicLink()) return false;
+      const markerPath = path.join(appPath, MACOS_LAUNCHER_MARKER_REL);
+      const markerStat = fs.lstatSync(markerPath);
+      if (!markerStat.isSymbolicLink() && markerStat.isFile()) {
+        const parsed = JSON.parse(fs.readFileSync(markerPath, "utf8").replace(/^\uFEFF/, ""));
+        if (parsed && typeof parsed === "object" && parsed.managedBy === "obsidian-prism") {
+          return true;
+        }
+      }
+    } catch {}
+
+    const plistPath = path.join(contentsDir, "Info.plist");
+    try {
+      const plistStat = fs.lstatSync(plistPath);
+      if (!plistStat.isSymbolicLink() && plistStat.isFile()) {
+        const rawPlist = fs.readFileSync(plistPath, "utf8");
+        if (
+          /<key>\s*CFBundleIdentifier\s*<\/key>\s*<string>\s*io\.github\.rmvdesi\.obsidian-prism\.launcher\s*<\/string>/.test(
+            rawPlist
+          )
+        ) {
+          return true;
+        }
+      }
+    } catch {}
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function createMacosLosslessLauncher(opts = {}) {
+  const plat = opts.platformOverride || process.platform;
+  if (plat !== "darwin") {
+    return { supported: false, created: false, appPath: null, skippedReason: "non-darwin" };
+  }
+  const launcherDir = getDefaultMacosLauncherDir(opts);
+  const appPath = path.join(launcherDir, MACOS_LAUNCHER_APP_NAME);
+  assertNoSymbolicLinkInChain(launcherDir, opts.stopRoot || null, "launcher parent directory");
+  const existingAppStat = assertNotSymbolicLink(appPath, "launcher app bundle");
+  const existedBefore = Boolean(existingAppStat);
+  if (existingAppStat) {
+    if (!existingAppStat.isDirectory() || !isManagedMacosLauncherBundle(appPath)) {
+      throw new Error(`Refusing to overwrite unmanaged app bundle: ${appPath}`);
+    }
+  }
+
+  fs.mkdirSync(launcherDir, { recursive: true });
+  assertNoSymbolicLinkInChain(launcherDir, opts.stopRoot || null, "launcher parent directory");
+
+  const contentsDir = path.join(appPath, "Contents");
+  const macosDir = path.join(contentsDir, "MacOS");
+  const resourcesDir = path.join(contentsDir, "Resources");
+  for (const dir of [appPath, contentsDir, macosDir, resourcesDir]) {
+    assertNotSymbolicLink(dir, "launcher directory");
+    fs.mkdirSync(dir, { recursive: true });
+    assertNotSymbolicLink(dir, "launcher directory");
+  }
+
+  let version = opts.version || "";
+  if (!version) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(opts.sourceDir || ROOT_DIR, "package.json"), "utf8"));
+      version = pkg?.version || "1.0.7";
+    } catch {
+      version = "1.0.7";
+    }
+  }
+  const targetApp = normalizeMacosAntigravityAppPath(opts.targetApp || "/Applications/Antigravity.app");
+  const plistPath = path.join(contentsDir, "Info.plist");
+  const pkgInfoPath = path.join(contentsDir, "PkgInfo");
+  const markerPath = path.join(appPath, MACOS_LAUNCHER_MARKER_REL);
+  const launchScriptPath = path.join(macosDir, "launch");
+
+  const markerObj = {
+    managedBy: "obsidian-prism",
+    bundleIdentifier: MACOS_LAUNCHER_BUNDLE_ID,
+    version,
+    targetApp,
+    createdAt: new Date().toISOString(),
+  };
+
+  atomicWriteFileSync(plistPath, generateMacosLauncherInfoPlist(version), { encoding: "utf8", mode: 0o644 });
+  atomicWriteFileSync(pkgInfoPath, "APPL????", { encoding: "utf8", mode: 0o644 });
+  atomicWriteFileSync(markerPath, JSON.stringify(markerObj, null, 2) + "\n", { encoding: "utf8", mode: 0o644 });
+  atomicWriteFileSync(launchScriptPath, generateMacosLauncherScript(targetApp), { encoding: "utf8", mode: 0o755 });
+
+  const iconCandidates = [
+    opts.iconPath || null,
+    path.join(opts.sourceDir || ROOT_DIR, "Obsidian Prism.app", "Contents", "Resources", "AppIcon.icns"),
+  ].filter(Boolean);
+  let iconCopied = false;
+  for (const iconSrc of iconCandidates) {
+    try {
+      const iconStat = assertNotSymbolicLink(iconSrc, "launcher icon source");
+      if (iconStat && iconStat.isFile()) {
+        const iconBuf = fs.readFileSync(iconSrc);
+        if (iconBuf.length > 0) {
+          atomicWriteFileSync(path.join(resourcesDir, "AppIcon.icns"), iconBuf, { encoding: null, mode: 0o644 });
+          iconCopied = true;
+          break;
+        }
+      }
+    } catch {}
+  }
+
+  return {
+    supported: true,
+    created: true,
+    updated: existedBefore,
+    appPath,
+    targetApp,
+    bundleId: MACOS_LAUNCHER_BUNDLE_ID,
+    plistPath,
+    markerPath,
+    launchScriptPath,
+    iconCopied,
+  };
+}
+
+function removeMacosLosslessLauncher(opts = {}) {
+  const plat = opts.platformOverride || process.platform;
+  if (plat !== "darwin") {
+    return { supported: false, removed: false, refused: false, appPath: null, skippedReason: "non-darwin" };
+  }
+  const launcherDir = getDefaultMacosLauncherDir(opts);
+  const appPath = path.join(launcherDir, MACOS_LAUNCHER_APP_NAME);
+
+  let appStat = null;
+  try {
+    appStat = fs.lstatSync(appPath);
+  } catch (err) {
+    if (err && err.code === "ENOENT") {
+      return { supported: true, removed: false, refused: false, appPath, skippedReason: "not-found" };
+    }
+    return { supported: true, removed: false, refused: true, reason: "stat-error", appPath };
+  }
+
+  try {
+    assertNoSymbolicLinkInChain(launcherDir, opts.stopRoot || null, "launcher parent directory");
+  } catch {
+    return { supported: true, removed: false, refused: true, reason: "symlink", appPath };
+  }
+  if (appStat.isSymbolicLink()) {
+    return { supported: true, removed: false, refused: true, reason: "symlink", appPath };
+  }
+  if (!isManagedMacosLauncherBundle(appPath)) {
+    return { supported: true, removed: false, refused: true, reason: "unmanaged-bundle", appPath };
+  }
+
+  fs.rmSync(appPath, { recursive: true, force: true });
+  return {
+    supported: true,
+    removed: !fs.existsSync(appPath),
+    refused: false,
+    appPath,
+  };
+}
+
 const DIRS_TO_SYNC = [
   "assets",
   "vendor",
@@ -772,6 +1286,37 @@ async function installPlugin(opts = {}) {
     });
   }
 
+  const effectivePlatform = opts.platformOverride || process.platform;
+  const shouldCreateLauncher =
+    opts.createLauncher === false
+      ? false
+      : opts.createLauncher === true || Boolean(opts.launcherDir)
+        ? effectivePlatform === "darwin"
+        : effectivePlatform === "darwin" && isDefaultTarget && !isAutomatedTestRuntime();
+
+  let launcher = { supported: effectivePlatform === "darwin", created: false, appPath: null };
+  if (shouldCreateLauncher) {
+    try {
+      launcher = createMacosLosslessLauncher({
+        sourceDir,
+        launcherDir: opts.launcherDir,
+        targetApp: opts.targetApp,
+        version: opts.version,
+        iconPath: opts.iconPath,
+        stopRoot: opts.launcherStopRoot,
+        platformOverride: effectivePlatform,
+      });
+    } catch (err) {
+      if (opts.strictLauncher) throw err;
+      launcher = {
+        supported: true,
+        created: false,
+        appPath: getMacosLauncherAppPath({ launcherDir: opts.launcherDir }),
+        error: err && err.message ? err.message : String(err),
+      };
+    }
+  }
+
   // 默认开启 --defer-relaunch-prompt：若当前本机宿主已裸启运行，预先记入 .relaunch-prompt-state.json 避免弹窗打断正在进行的会话
   const deferRelaunchPrompt = opts.deferRelaunchPrompt !== false;
   let deferredRelaunchHost = null;
@@ -899,6 +1444,7 @@ async function installPlugin(opts = {}) {
     restoredFromBackup,
     registrySynced,
     shortcuts,
+    launcher,
     deferredRelaunchHost,
     sidebarStudio,
     selfCheck,
@@ -963,6 +1509,23 @@ async function uninstallPlugin(opts = {}) {
       searchDirs: opts.shortcutSearchDirs || null,
       shortcutAdapter: opts.shortcutAdapter,
       platformOverride: opts.platformOverride,
+    });
+  }
+
+  const effectivePlatform = opts.platformOverride || process.platform;
+  const shouldRemoveLauncher =
+    opts.removeLauncher === false
+      ? false
+      : opts.removeLauncher === true || Boolean(opts.launcherDir)
+        ? effectivePlatform === "darwin"
+        : effectivePlatform === "darwin" && isDefaultTarget && !isAutomatedTestRuntime();
+
+  let launcher = { supported: effectivePlatform === "darwin", removed: false, refused: false, appPath: null };
+  if (shouldRemoveLauncher) {
+    launcher = removeMacosLosslessLauncher({
+      launcherDir: opts.launcherDir,
+      stopRoot: opts.launcherStopRoot,
+      platformOverride: effectivePlatform,
     });
   }
 
@@ -1065,6 +1628,7 @@ async function uninstallPlugin(opts = {}) {
     removedDomPages,
     cleanedLegacyPluginDir,
     shortcuts,
+    launcher,
     purgeData,
     backedUpConfig,
     purgedPaths,
@@ -1182,6 +1746,12 @@ function formatInstallSelfCheckSummary(res) {
     ...(res?.shortcuts?.error
       ? [`[中文] 快捷方式维护提示（非致命）: ${res.shortcuts.error}`]
       : []),
+    ...(res?.launcher?.created && res?.launcher?.appPath
+      ? [`[中文] macOS 无损启动器已就绪: ${res.launcher.appPath}（可拖进 Dock 一键带参启动，零修改 Antigravity.app 本体）。`]
+      : []),
+    ...(res?.launcher?.error
+      ? [`[中文] macOS 无损启动器提示（非致命）: ${res.launcher.error}`]
+      : []),
     thoughtMode === "off"
       ? "[中文] 提示: 思考过程翻译默认处于关闭态 (off, 0 B 注入)，请打开 Antigravity「设置 -> 外观 -> Obsidian Prism」手动开启「机器翻译」或「AI 流式转译」。"
       : `[中文] 思考过程翻译当前模式: ${thoughtMode}（如翻译异常，可在设置卡片点击「一键诊断」排查）。`,
@@ -1196,6 +1766,12 @@ function formatInstallSelfCheckSummary(res) {
     sc.bareAntigravityRunning || sc.needsHostRelaunch
       ? "[EN] Action Required: Antigravity is currently running bare without --remote-debugging-port=0 (common after an in-app update). Close and relaunch Antigravity once via a patched shortcut to activate."
       : "[EN] Status healthy. Run `node tools/install-plugin.cjs --status` anytime to verify.",
+    ...(res?.launcher?.created && res?.launcher?.appPath
+      ? [`[EN] macOS lossless launcher ready: ${res.launcher.appPath} (pin to Dock for 1-click launch without modifying Antigravity.app).`]
+      : []),
+    ...(res?.launcher?.error
+      ? [`[EN] macOS launcher note (non-fatal): ${res.launcher.error}`]
+      : []),
     "==================================================================================",
   ];
   return lines.join("\n");
@@ -1211,6 +1787,8 @@ function parseCliArgs(argv) {
   let deferRelaunchPrompt = true;
   let noShortcuts = false;
   let purgeData = false;
+  let createLauncher = undefined;
+  let launcherDir = null;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--install") action = "install";
@@ -1222,10 +1800,24 @@ function parseCliArgs(argv) {
     else if (a === "--prompt-relaunch") deferRelaunchPrompt = false;
     else if (a === "--no-shortcuts") noShortcuts = true;
     else if (a === "--purge-data") purgeData = true;
+    else if (a === "--create-launcher") createLauncher = true;
+    else if (a === "--no-launcher") createLauncher = false;
+    else if (a === "--launcher-dir" && args[i + 1]) launcherDir = args[++i];
     else if (a === "--target" && args[i + 1]) targetDir = args[++i];
     else if (a === "--cdp-port" && args[i + 1]) cdpPort = parseInt(args[++i], 10);
   }
-  return { action, targetDir, noDaemon, noCdp, cdpPort, deferRelaunchPrompt, noShortcuts, purgeData };
+  return {
+    action,
+    targetDir,
+    noDaemon,
+    noCdp,
+    cdpPort,
+    deferRelaunchPrompt,
+    noShortcuts,
+    purgeData,
+    createLauncher,
+    launcherDir,
+  };
 }
 
 if (require.main === module) {
@@ -1242,6 +1834,8 @@ if (require.main === module) {
         cdpPort: cli.cdpPort,
         syncShortcuts: cli.noShortcuts ? false : undefined,
         purgeData: cli.purgeData,
+        removeLauncher: cli.createLauncher === false ? false : undefined,
+        launcherDir: cli.launcherDir,
       });
       console.log(JSON.stringify(res, null, 2));
       return;
@@ -1252,6 +1846,8 @@ if (require.main === module) {
       cdpPort: cli.cdpPort,
       deferRelaunchPrompt: cli.deferRelaunchPrompt,
       syncShortcuts: cli.noShortcuts ? false : undefined,
+      createLauncher: cli.createLauncher,
+      launcherDir: cli.launcherDir,
     });
     console.log(JSON.stringify(res, null, 2));
     console.error(formatInstallSelfCheckSummary(res));
@@ -1265,6 +1861,9 @@ module.exports = {
   DAEMON_STOP_POLL_MS,
   DAEMON_STOP_GRACEFUL_TIMEOUT_MS,
   DAEMON_STOP_SIGKILL_WAIT_MS,
+  MACOS_LAUNCHER_APP_NAME,
+  MACOS_LAUNCHER_BUNDLE_ID,
+  MACOS_LAUNCHER_MARKER_REL,
   getDefaultPluginTargetDir,
   getLegacyTempPluginDir,
   resolveHostGeminiConfigDir,
@@ -1274,6 +1873,14 @@ module.exports = {
   clearReadOnlyIfRegularFile,
   atomicWriteFileSync,
   copyDirRecursiveSync,
+  getDefaultMacosLauncherDir,
+  getMacosLauncherAppPath,
+  normalizeMacosAntigravityAppPath,
+  generateMacosLauncherInfoPlist,
+  generateMacosLauncherScript,
+  isManagedMacosLauncherBundle,
+  createMacosLosslessLauncher,
+  removeMacosLosslessLauncher,
   installPlugin,
   uninstallPlugin,
   getPluginInstallStatus,
