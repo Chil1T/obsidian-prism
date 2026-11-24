@@ -508,25 +508,45 @@ if (s.textContent !== SLIDER_CSS) s.textContent = SLIDER_CSS;
 return s;
 }
 // ── 右键设置面板 ────────────────────────────────────────────────────────────
-var SET_TITLE_I18N = { "zh-CN": "推理等级滑条设置", "zh-TW": "推理等級滑桿設定", yue: "推理等級滑桿設定", en: "Effort Slider", ja: "推論スライダー設定" };
-var SET_HEAD_I18N = { "zh-CN": "推理等级滑条", "zh-TW": "推理等級滑桿", yue: "推理等級滑桿", en: "Effort Slider", ja: "推論スライダー" };
-function _isZhLang(lk) { return !lk || /^(?:zh|yue)\b/i.test(String(lk)); }
+var SET_TITLE_I18N = { "zh-CN": "推理等级滑条设置", "zh-TW": "推理等級滑桿設定", en: "Effort Slider", ja: "推論スライダー設定", ko: "추론 슬라이더 설정", es: "Ajustes de esfuerzo", fr: "Réglages d’effort", de: "Aufwandsregler-Einstellungen" };
+var SET_HEAD_I18N = { "zh-CN": "推理等级滑条", "zh-TW": "推理等級滑桿", en: "Effort Slider", ja: "推論スライダー", ko: "추론 슬라이더", es: "Nivel de esfuerzo", fr: "Niveau d’effort", de: "Aufwandsregler" };
+var FIXED_I18N = { "zh-CN": "固定", "zh-TW": "固定", en: "Fixed", ja: "固定", ko: "고정", es: "Fijo", fr: "Fixe", de: "Fest" };
+function _normSliderLang(raw, win) {
+var v = String(raw || "").trim();
+if (!v || v.toLowerCase() === "auto") {
+var w = _win(win);
+var navObj = w && "navigator" in w ? w.navigator : (typeof navigator !== "undefined" ? navigator : null);
+v = String(navObj?.language || "").trim();
+}
+var s = v.toLowerCase().replace(/_/g, "-");
+if (!s || s === "auto") return "en";
+if (s === "yue" || s.startsWith("yue-") || s === "zh-yue" || s.includes("cantonese")) return "zh-CN";
+if (/^zh-(tw|hant|hk|mo)/.test(s) || s === "tw" || s === "hant") return "zh-TW";
+if (/^zh/.test(s)) return "zh-CN";
+if (/^(ja|jp)/.test(s) || s === "japanese") return "ja";
+if (/^(ko|kr)/.test(s) || s === "korean") return "ko";
+if (/^es/.test(s) || s === "spanish") return "es";
+if (/^fr/.test(s) || s === "french") return "fr";
+if (/^de/.test(s) || s === "german") return "de";
+return "en";
+}
+function _isZhLang(lk) { var n = _normSliderLang(lk); return n === "zh-CN" || n === "zh-TW"; }
 function openSettingsPanel(options) {
 var o = options || {}, d = o.document || (typeof document !== "undefined" ? document : null);
 var w = o.window || d?.defaultView || (typeof window !== "undefined" ? window : globalRoot);
 if (!d?.body) return () => {};
 installStyles(d);
-var lk = getPrismRootAttr(d, w, "data-ag-cs-lang") || "zh-CN";
-var zh = _isZhLang(lk);
+var lk = _normSliderLang(getPrismRootAttr(d, w, "data-ag-cs-lang"), w);
+var zh = lk === "zh-CN" || lk === "zh-TW";
 d.querySelector(".ces-set")?.remove?.();
 var mk = (t, c, tx) => { var e = d.createElement(t); if (c) e.className = c; if (tx) e.textContent = tx; return e; };
 var p = markNoTranslate(mk("div", "ces-set"));
 p.setAttribute("role", "dialog");
-p.setAttribute("aria-label", SET_TITLE_I18N[lk] || (zh ? SET_TITLE_I18N["zh-CN"] : SET_TITLE_I18N.en));
+p.setAttribute("aria-label", SET_TITLE_I18N[lk] || SET_TITLE_I18N.en);
 p.style.left = Math.max(8, Math.min((w?.innerWidth || 800) - 276, typeof o.x === "number" ? o.x : 120)) + "px";
 p.style.top = Math.max(8, Math.min((w?.innerHeight || 600) - 230, typeof o.y === "number" ? o.y : 120)) + "px";
 var hd = mk("div", "ces-set-head");
-hd.appendChild(mk("span", "", SET_HEAD_I18N[lk] || (zh ? SET_HEAD_I18N["zh-CN"] : SET_HEAD_I18N.en)));
+hd.appendChild(mk("span", "", SET_HEAD_I18N[lk] || SET_HEAD_I18N.en));
 hd.appendChild(mk("span", "ces-set-ver", "v1.2.1"));
 p.appendChild(hd);
 var obs = [];
@@ -843,7 +863,7 @@ modelOption: byEffort.get(ck) || modelObj
 };
 }
 var sP = modelObj && parseModelLabel(modelObj.label), sE = sP ? sP.effort : "fixed";
-var sL = sP ? sP.effortLabel : (_isZhLang(getPrismRootAttr(null, null, "data-ag-cs-lang")) ? "固定" : "Fixed");
+var sL = sP ? sP.effortLabel : (FIXED_I18N[_normSliderLang(getPrismRootAttr(null, null, "data-ag-cs-lang"))] || FIXED_I18N.en);
 var bn = baseName || modelObj?.label || "", sC = isClaudeModel(bn);
 return {
 baseName: bn, isOrchestrator: isOrch, orchestratorTunable: false,
@@ -900,14 +920,14 @@ if (typeof item?.label === "string" && item.label) return item.label;
 if (typeof seat?.formatEffortLabel === "function") { try { var f = seat.formatEffortLabel(effortKey); if (f) return String(f); } catch {} }
 return AG_EFFORT_LABELS[String(effortKey || "").toLowerCase()] || String(effortKey || "");
 }
-var EFFORT_TITLE_I18N = { "zh-CN": "推理等级", "zh-TW": "推理等級", yue: "推理等級", en: "Reasoning Effort", ja: "推論レベル" };
+var EFFORT_TITLE_I18N = { "zh-CN": "推理等级", "zh-TW": "推理等級", en: "Reasoning Effort", ja: "推論レベル", ko: "추론 수준", es: "Nivel de razonamiento", fr: "Niveau de raisonnement", de: "Denkaufwand" };
 function resolveEffortTitle(doc, win) {
-var lang = getPrismRootAttr(doc, win, "data-ag-cs-lang") || "zh-CN";
+var lang = _normSliderLang(getPrismRootAttr(doc, win, "data-ag-cs-lang"), win);
 try {
 var ui = (win?.__agCsLocales || globalRoot?.__agCsLocales)?.getUiStrings?.(lang);
 if (ui?.effortTitle) return String(ui.effortTitle);
 } catch {}
-return EFFORT_TITLE_I18N[lang] || EFFORT_TITLE_I18N["zh-CN"];
+return EFFORT_TITLE_I18N[lang] || EFFORT_TITLE_I18N.en;
 }
 function _clrSibs(r) {
 for (var g of r?.querySelectorAll?.('[data-testid="model-selector-effort-group"]') || []) if (g?.nextElementSibling) delete g.nextElementSibling.__cesLastText;

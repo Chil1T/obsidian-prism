@@ -353,6 +353,9 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
   try {
     const res = vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), sandbox);
     assert.equal(res.status, 'ok');
+    // Load Channel 10 Mascot (split out of Channel 1) & Channel 9 Settings on demand
+    vm.runInNewContext(cdp.buildMascotChannelExpression(cdp.DEFAULT_CONFIG), sandbox);
+    vm.runInNewContext(cdp.buildSettingsChannelExpression(), sandbox);
     assert.equal(html.getAttribute('data-ag-cs-style'), '1');
     assert.equal(html.getAttribute('data-ag-cs-palette'), 'obsidian');
     assert.equal(html.getAttribute('data-ag-cs-home'), 'studio');
@@ -435,8 +438,9 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     assert.equal(injectedCss.includes('.ag-cs-effort-popover'), false);
     assert.equal(injectedCss.includes('.ag-cs-ctx-popover'), false);
 
-    // Settings section mounts ONLY in Appearance, rebranded to Obsidian Prism collapsible banner + About & 6 credits
+    // Settings section mounts ONLY in Appearance via on-demand Settings Channel (Ch9), rebranded to Obsidian Prism collapsible banner + About & 6 credits
     assert.equal(sandbox.window.__agPrism.brand, 'Obsidian Prism');
+    vm.runInNewContext(cdp.buildSettingsChannelExpression(), sandbox);
     assert.equal(generalPanel.querySelector('#ag-cs-settings-sec'), null);
     const settingsSec = appearancePanel.querySelector('#ag-cs-settings-sec');
     assert.ok(settingsSec);
@@ -582,8 +586,18 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
       assert.equal(placeholder.getAttribute('data-ag-cs-placeholder'), expectedPlaceholder);
     };
 
+    // Verify all 8 language buttons switch dashboard, greeting, placeholder & settings copy + emit CDP binding (no yue)
+    assert.equal(getLangBtns().length, 8, 'Expected exactly 8 language buttons');
+    assert.equal(getLangBtns().some((b) => b.getAttribute('data-ag-cs-val') === '"yue"'), false, 'yue button must be removed');
     checkLangSwitch('zh-TW', '外觀', '介面語言', '概覽', '接下來做什麼？', '描述任務或提出問題');
-    checkLangSwitch('yue', '外觀', '介面語言', '概覽', '跟住想做啲咩？', '寫低你想做嘅任務或者問題');
+    checkLangSwitch('ko', 'Appearance', 'UI 언어', '개요', '다음은 무엇을 할까요?', '작업 설명이나 질문을 입력하세요');
+    assert.equal(html.getAttribute('data-ag-cs-cjk'), '1');
+    checkLangSwitch('es', 'Appearance', 'Idioma de la interfaz', 'Resumen', '¿Qué hacemos ahora?', 'Describe una tarea o haz una pregunta');
+    assert.equal(html.hasAttribute('data-ag-cs-cjk'), false);
+    checkLangSwitch('fr', 'Appearance', 'Langue de l’interface', 'Aperçu', 'Que faisons-nous ensuite ?', 'Décrivez une tâche ou posez une question');
+    assert.equal(html.hasAttribute('data-ag-cs-cjk'), false);
+    checkLangSwitch('de', 'Appearance', 'UI-Sprache', 'Übersicht', 'Was steht als Nächstes an?', 'Aufgabe beschreiben oder Frage stellen');
+    assert.equal(html.hasAttribute('data-ag-cs-cjk'), false);
     checkLangSwitch('en', 'Appearance', 'UI Language', 'Overview', "What's up next?", 'How can I help you today?');
     assert.equal(html.hasAttribute('data-ag-cs-cjk'), false);
     checkLangSwitch('ja', '外観', '表示言語', '概要', '次は何をしますか？', 'タスクの説明や質問を入力してください');
@@ -594,7 +608,10 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
       bindingCalls.map((c) => [c.key, c.value]),
       [
         ['language', 'zh-TW'],
-        ['language', 'yue'],
+        ['language', 'ko'],
+        ['language', 'es'],
+        ['language', 'fr'],
+        ['language', 'de'],
         ['language', 'en'],
         ['language', 'ja'],
         ['language', 'zh-CN'],
@@ -1066,6 +1083,9 @@ test('Q&A takeover card, side-question panel, and running tasks clear Clawd masc
   try {
     const res = vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), sandbox);
     assert.equal(res.status, 'ok');
+    // Load Channel 10 Mascot (split out of Channel 1) & Channel 9 Settings on demand
+    vm.runInNewContext(cdp.buildMascotChannelExpression(cdp.DEFAULT_CONFIG), sandbox);
+    vm.runInNewContext(cdp.buildSettingsChannelExpression(), sandbox);
 
     // 1. Q&A takeover card alone: wrapper raised by 46px with data-ag-cs-takeover="1"
     assert.equal(takeoverWrap.getAttribute('data-ag-cs-takeover'), '1');
@@ -1461,6 +1481,9 @@ test('v3.5.1 mounts dual mascot stage, brand optical glyphs, Orchestrator crysta
   try {
     const res = vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), sandbox);
     assert.equal(res.status, 'ok');
+    // Load Channel 10 Mascot (split out of Channel 1) & Channel 9 Settings on demand
+    vm.runInNewContext(cdp.buildMascotChannelExpression(cdp.DEFAULT_CONFIG), sandbox);
+    vm.runInNewContext(cdp.buildSettingsChannelExpression(), sandbox);
 
     // 1. Dual mascot stage mounts 2 real actor canvases (Clawd & Cat, 96x84)
     const stageEl = card.querySelector('.ag-cs-crab');
@@ -2361,6 +2384,7 @@ test('v3.7 orchestrates 4-tier motionLevel, Hero A~E optical transitions, dual-t
     assert.equal(copyMsgBtn.querySelector('.ag-anim-icon')?.getAttribute('data-icon-state'), 'check');
 
     // Settings motionLevel row switches tier & glides indicator; 'off' restores original host SVGs!
+    vm.runInNewContext(cdp.buildSettingsChannelExpression(), sandbox);
     let glideCalls = 0;
     const origGlide = sandbox.__agMotionEngine.glideIndicator;
     appPanel.querySelector('[data-ag-cs-fold-toggle]')?.dispatch('click');
@@ -2959,6 +2983,7 @@ test('Prism v1.0 regression guard: Thought Translator overlay (.ag-prism-thought
     assert.equal(sandbox.window.__agPrism.getState().convAuraSleeping, false);
 
     // Also test About Git Repo Sync button with mocked __agPrismRepoBridge (no-remote & remote pull)
+    vm.runInNewContext(cdp.buildSettingsChannelExpression(), sandbox);
     appPanel.querySelector('[data-ag-cs-fold-toggle]')?.dispatch('click');
     const repoSyncBtn = appPanel.querySelector('button[data-ag-cs-repo-sync]');
     const repoChip = appPanel.querySelector('[data-ag-cs-repo-status]');

@@ -74,8 +74,8 @@ const DEFAULT_CONFIG = {
 };
 
 const VALIDATORS = {
-  language: ['auto', 'zh-CN', 'zh-TW', 'yue', 'en', 'ja'],
-  lang: ['auto', 'zh-CN', 'zh-TW', 'yue', 'en', 'ja'],
+  language: ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'],
+  lang: ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'],
   palette: ['host', 'obsidian', 'warm', 'claude'],
   lightPreset: ['crystal', 'alabaster'],
   motionLevel: ['off', 'subtle', 'standard', 'ultra'],
@@ -143,6 +143,13 @@ function reconcileConfigAliases(raw) {
     out.lang = out.language;
   } else if (has('lang')) {
     out.language = out.lang;
+  }
+  if (typeof out.language === 'string') {
+    const lowLang = out.language.trim().toLowerCase().replace(/_/g, '-');
+    if (lowLang === 'yue' || lowLang.startsWith('yue-') || lowLang === 'zh-yue' || lowLang.includes('cantonese')) {
+      out.language = 'zh-CN';
+      out.lang = 'zh-CN';
+    }
   }
 
   if (has('homeLayout')) {
@@ -4884,8 +4891,14 @@ function minifySingleSource(src) {
   return plainMin;
 }
 
-const RUNTIME_PARTS = [
+// 按需独立通道模块（不打入 Channel 1 主包以严控体积 < 550 KB，仍纳入 SYNC_ROOT_FILES 随安装包/热更新同步）
+const DEFERRED_ROOT_MODULES = [
   'i18n-locales.js',
+  'dual-mascot-rig.js',
+  'settings-panel.js',
+];
+
+const RUNTIME_PARTS = [
   'i18n-core.js',
   'usage-core.js',
   'crystal-prism-core.js',
@@ -4894,12 +4907,10 @@ const RUNTIME_PARTS = [
   'ripple-core.js',
   'conv-aura.js',
   'smooth-caret.js',
-  'dual-mascot-rig.js',
   'vial-core.js',
   'pulse-vial-bridge.js',
   'vendor/pulse-dashboard/inline-fallback.js',
   'vendor/effort-slider/slider-coexist.js',
-  'settings-panel.js',
   'home-studio-panel.js',
   'home-ripple-host.js',
   'model-glyph-crystal.js',
@@ -4921,6 +4932,7 @@ const SYNC_ROOT_FILES = [
   'inject.js',
   'remove.js',
   'style.css',
+  ...DEFERRED_ROOT_MODULES,
   ...RUNTIME_PARTS.filter((p) => !p.includes('/')),
 ];
 
@@ -4935,7 +4947,7 @@ const BUNDLE_CACHE_MAX_FILE_BYTES = 6 * 1024 * 1024;
 const BUNDLE_CACHE_MAX_EXPR_BYTES = 2 * 1024 * 1024;
 const BUNDLE_CACHE_MAX_BOOTCFG_BYTES = 64 * 1024;
 const CHANNEL_CACHE_MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
-const CHANNEL_CACHE_NAMES = ['omni', 'sidebar', 'hostI18n', 'thought', 'inlineDiff', 'wallpaper', 'periodicPicker'];
+const CHANNEL_CACHE_NAMES = ['omni', 'sidebar', 'hostI18n', 'thought', 'inlineDiff', 'wallpaper', 'periodicPicker', 'settings', 'mascot'];
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const CODE_HASH_RE = /^[0-9a-z]{1,16}$/;
 
@@ -4953,7 +4965,7 @@ const _bundleCacheStats = {
   channelDiskHits: 0,
   channelDiskMisses: 0,
   channelCompileRuns: 0,
-  channelHitsByName: { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0, wallpaper: 0, periodicPicker: 0 },
+  channelHitsByName: { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0, wallpaper: 0, periodicPicker: 0, settings: 0, mascot: 0 },
   lastOutcome: 'none',
   lastCachePath: null,
 };
@@ -5702,41 +5714,132 @@ function resolveCurrentBundleCodeHash() {
   return computeHash(readRuntimeBundle());
 }
 
-function buildConfigRefreshExpression(customConfig, extraMeta = null) {
-  const config = customConfig ? reconcileConfigAliases(customConfig) : readConfig();
-  const codeHash = resolveCurrentBundleCodeHash();
-  const bootCfg = {
-    ...config,
-    ...(extraMeta && typeof extraMeta === 'object' ? extraMeta : {}),
-    binding: SETTING_BINDING,
-    codeHash,
-    __fromFile: true,
-  };
-  return `(() => {
-    const cfg = ${JSON.stringify(bootCfg)};
-    const api = window.__agPrism || window.__agClaudeStyle;
-    if (api && api.version === ${JSON.stringify(PLUGIN_VERSION)} && api.codeHash === ${JSON.stringify(codeHash)} && typeof api.refreshConfig === 'function') {
-      const applied = api.refreshConfig(cfg);
-      if (applied === false) {
-        return { refreshed: true, skippedStale: true, version: api.version };
+// Channel 1 自身实际消费的最小运行时 key 集（Omni / InlineDiff 均在各自独立通道内自带完整 8 语表，无需重复打入 Channel 1 bootCfg）
+const CH1_RUNTIME_UI_KEYS = Object.freeze([
+  'cacheRead', 'cacheShort', 'effortTitle', 'fiveHourLabel',
+  'kpiCacheHit', 'kpiCalls', 'kpiDays', 'kpiFavModel', 'kpiSessions', 'kpiTokens',
+  'noModelUsage',
+  'optHost', 'optLightAlabaster', 'optLightCrystal', 'optMotionOff', 'optMotionStandard', 'optMotionSubtle',
+  'optMotionUltra', 'optObsidian', 'optThoughtBilingual', 'optThoughtImmersive', 'optWarm',
+  'quotaEmptyHint', 'quotaJustNow', 'quotaLoading', 'quotaPoolsTitle', 'refreshBtnTitle', 'sessionsUnit',
+  'showLess', 'sidebarLessLabel', 'sidebarMoreLabel', 'studioPlaceholder', 'subagentsUnit', 'swarmBadge',
+  'tabModels', 'tabOverview', 'tabQuotas', 'thinkingEllipsis', 'tokenUnit', 'tokensInShort', 'tokensOutShort',
+  'weeklyLabel', 'workspaceAll', 'workspaceFilterAria',
+]);
+
+let _localesFreshCache = { sig: '', mod: null };
+
+function loadLocalesModuleFresh() {
+  const locPath = path.join(__dirname, 'i18n-locales.js');
+  if (!fs.existsSync(locPath)) return null;
+  try {
+    const sig = getFileSig(locPath);
+    if (_localesFreshCache.sig === sig && _localesFreshCache.mod) {
+      return _localesFreshCache.mod;
+    }
+    try { delete require.cache[require.resolve(locPath)]; } catch {}
+    const mod = require(locPath);
+    _localesFreshCache = { sig, mod };
+    return mod;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeLangIdNode(rawLang, fallback = 'en') {
+  const raw = typeof rawLang === 'string' ? rawLang.trim().toLowerCase().replace(/_/g, '-') : '';
+  if (!raw || raw === 'auto') return fallback;
+  if (raw === 'en' || raw.startsWith('en-') || raw === 'english') return 'en';
+  if (raw === 'ja' || raw.startsWith('ja-') || raw === 'jp' || raw === 'japanese') return 'ja';
+  if (raw === 'ko' || raw.startsWith('ko-') || raw === 'kr' || raw === 'korean') return 'ko';
+  if (raw === 'es' || raw.startsWith('es-') || raw === 'spanish') return 'es';
+  if (raw === 'fr' || raw.startsWith('fr-') || raw === 'french') return 'fr';
+  if (raw === 'de' || raw.startsWith('de-') || raw === 'german') return 'de';
+  if (raw === 'yue' || raw.startsWith('yue-') || raw === 'zh-yue' || raw.includes('cantonese')) return 'zh-CN';
+  if (raw === 'zh-tw' || raw === 'zh-hk' || raw.startsWith('zh-hk-') || raw === 'zh-mo' || raw === 'zh-hant' || raw.startsWith('zh-hant-') || raw === 'tw' || raw === 'hant') return 'zh-TW';
+  if (raw === 'zh' || raw === 'zh-cn' || raw === 'zh-hans' || raw.startsWith('zh-')) return 'zh-CN';
+  return fallback;
+}
+
+function resolveSystemLangNode(hostLocaleHint = null) {
+  let sysLocale = hostLocaleHint;
+  if (!sysLocale) {
+    try {
+      const candidates = [process.env.LC_ALL, process.env.LC_MESSAGES, process.env.LANG];
+      for (let i = 0; i < candidates.length; i++) {
+        const val = String(candidates[i] || '').trim();
+        if (val && !/^(?:c|posix)(?:[.@]|$)/i.test(val)) {
+          sysLocale = val;
+          break;
+        }
       }
+      if (!sysLocale) {
+        sysLocale = Intl.DateTimeFormat().resolvedOptions().locale || '';
+      }
+    } catch {
+      sysLocale = '';
+    }
+  }
+  const stripped = String(sysLocale || '').trim().split(/[.@]/)[0];
+  return normalizeLangIdNode(stripped, 'en');
+}
+
+function extractSingleLangRuntimeSlice(mod, langId) {
+  if (!mod) return {};
+  const src =
+    typeof mod.getRuntimeUiSlice === 'function'
+      ? mod.getRuntimeUiSlice(langId)?.strings
+      : typeof mod.getUiStrings === 'function'
+        ? mod.getUiStrings(langId)
+        : null;
+  if (!src || typeof src !== 'object') return {};
+  const out = {};
+  for (let i = 0; i < CH1_RUNTIME_UI_KEYS.length; i++) {
+    const k = CH1_RUNTIME_UI_KEYS[i];
+    if (typeof src[k] === 'string') out[k] = src[k];
+  }
+  return out;
+}
+
+// 为 Channel 1 bootCfg 生成当前活跃语言（及 auto 模式下的 en 兜底）迷你运行时词典（~2.3-4.6 KB），避免打包完整 8 语设置词典
+function buildRuntimeUiSlicePayload(config) {
+  const mod = loadLocalesModuleFresh();
+  if (!mod) return null;
+  const rawLang = (config && (config.language || config.lang)) || 'zh-CN';
+  const isAuto = String(rawLang).trim().toLowerCase() === 'auto';
+  const primary = isAuto ? resolveSystemLangNode() : normalizeLangIdNode(rawLang, 'en');
+  const byLang = {};
+  byLang[primary] = extractSingleLangRuntimeSlice(mod, primary);
+  if (isAuto && primary !== 'en') {
+    byLang.en = extractSingleLangRuntimeSlice(mod, 'en');
+  }
+  return { active: primary, byLang };
+}
+
+let _configRefreshTemplate = '';
+
+function getConfigRefreshTemplate() {
+  if (_configRefreshTemplate) return _configRefreshTemplate;
+  const rawTpl = `(() => {
+    const cfg = __AG_REF_CFG__;
+    const api = window.__agPrism || window.__agClaudeStyle;
+    if (api && api.version === __AG_REF_VER__ && api.codeHash === __AG_REF_HASH__ && typeof api.refreshConfig === 'function') {
+      const applied = api.refreshConfig(cfg);
+      if (applied === false) return { refreshed: true, skippedStale: true, version: api.version };
       const effectiveCfg = api.getState?.()?.cfg || cfg;
       try { window.__agPrismTelemetry?.sync?.(effectiveCfg); } catch {}
       try { window.__agPrismEffortSlider?.sync?.(effectiveCfg); } catch {}
       try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}
       try { window.__agPrismInlineDiff?.sync?.(effectiveCfg); } catch {}
-      if (effectiveCfg?.omniModule === 'off') {
-        try { window.__agPrismOmni?.destroy?.(); } catch {}
-      } else {
-        try { window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}
-      }
+      if (effectiveCfg?.omniModule === 'off') { try { window.__agPrismOmni?.destroy?.(); } catch {} }
+      else { try { window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {} }
       if (effectiveCfg?.sidebarStudio !== 'on') {
         try { window.__agPrismSidebar?.sync?.(effectiveCfg, window.__agPrismSidebarMeta || null); } catch {}
         try { window.__agPrismSidebar?.destroy?.(); } catch {}
         try { delete window.__agPrismSidebar; } catch {}
         try {
           if (document.documentElement) {
-            ['data-ag-prism-mode', 'data-ag-prism-chat-kind', 'data-ag-prism-chat-telemetry', 'data-ag-cs-space', 'data-ag-cs-space-palette', 'data-ag-cs-space-accent'].forEach((a) => document.documentElement.removeAttribute(a));
+            ['data-ag-prism-mode','data-ag-prism-chat-kind','data-ag-prism-chat-telemetry','data-ag-cs-space','data-ag-cs-space-palette','data-ag-cs-space-accent'].forEach((a) => document.documentElement.removeAttribute(a));
           }
         } catch {}
       } else {
@@ -5746,21 +5849,24 @@ function buildConfigRefreshExpression(customConfig, extraMeta = null) {
         const hiMode = effectiveCfg?.hostLocalization;
         const hiLang = effectiveCfg?.language;
         const navL = String((typeof navigator !== 'undefined' && navigator.language) || '').trim();
-        if (hiMode === 'off' || (hiMode !== 'on' && ((hiLang && hiLang !== 'zh-CN' && hiLang !== 'auto') || (hiLang === 'auto' && navL && !/^zh(?:$|-(?:cn|hans|sg)(?:-|$))/i.test(navL))))) {
-          window.__agPrismHostI18n?.destroy?.();
-        }
+        if (hiMode === 'off') window.__agPrismHostI18n?.setMode?.('off');
+        else if (hiMode === 'on') window.__agPrismHostI18n?.setMode?.('on');
+        else if ((hiLang && hiLang !== 'zh-CN' && hiLang !== 'auto') || (hiLang === 'auto' && navL && !/^zh(?:$|-(?:cn|hans|sg)(?:-|$))/i.test(navL))) window.__agPrismHostI18n?.destroy?.();
+        else window.__agPrismHostI18n?.setMode?.('auto');
       } catch {}
+      if (effectiveCfg?.mascot === 'off' || effectiveCfg?.mascot === false) {
+        try {
+          document.querySelectorAll?.('.ag-cs-crab-stage,.ag-cs-mascot-stage').forEach((n) => n.remove());
+          delete window.__agDualMascotRig;
+          delete globalThis.__agDualMascotRig;
+        } catch {}
+      }
       if (effectiveCfg?.periodicModelPicker === 'off' || effectiveCfg?.periodicModelPicker === false) {
         try {
           window.__agPrismPeriodicPicker?.destroy?.();
-          document.documentElement?.removeAttribute?.('data-ag-prism-periodic-picker');
-          document.documentElement?.removeAttribute?.('data-ag-pp-open');
-          document.documentElement?.removeAttribute?.('data-ag-pp-holding');
-          document.querySelectorAll?.('#ag-prism-periodic-picker-css, #ag-prism-periodic-picker-root, .ag-pp-hold-ring, .ag-pp-mini-keycap').forEach((n) => n.remove());
-          for (const k of ['__agPrismPeriodicPicker', '__agPrismPeriodicPickerFactory', '__agPrismKeyboard3D', '__agPrismPeriodicKeyboard3D', '__agPrismOledScreen', '__agPrismGrainAssets', '__agPeriodicAudioFx', '__agPeriodicModelCatalog', '__agPeriodicHostBridge', '__agPeriodicBentoUi', '__agPeriodicPbrGrainAssets', '__agPeriodicOledScreen', '__agPeriodicKeyboard3D']) {
-            try { delete window[k]; } catch {}
-            try { delete globalThis[k]; } catch {}
-          }
+          ['data-ag-prism-periodic-picker','data-ag-pp-open','data-ag-pp-holding'].forEach((a) => document.documentElement?.removeAttribute?.(a));
+          document.querySelectorAll?.('#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap').forEach((n) => n.remove());
+          ['__agPrismPeriodicPicker','__agPrismPeriodicPickerFactory','__agPrismKeyboard3D','__agPrismPeriodicKeyboard3D','__agPrismOledScreen','__agPrismGrainAssets','__agPeriodicAudioFx','__agPeriodicModelCatalog','__agPeriodicHostBridge','__agPeriodicBentoUi','__agPeriodicPbrGrainAssets','__agPeriodicOledScreen','__agPeriodicKeyboard3D'].forEach((k) => { try { delete window[k]; } catch {} try { delete globalThis[k]; } catch {} });
         } catch {}
       }
       if (document.documentElement) {
@@ -5775,6 +5881,27 @@ function buildConfigRefreshExpression(customConfig, extraMeta = null) {
     }
     return { refreshed: false };
   })()`;
+  _configRefreshTemplate = minifySingleSource(rawTpl);
+  return _configRefreshTemplate;
+}
+
+function buildConfigRefreshExpression(customConfig, extraMeta = null) {
+  const config = customConfig ? reconcileConfigAliases(customConfig) : readConfig();
+  const codeHash = resolveCurrentBundleCodeHash();
+  const hasExplicitLang = !customConfig || Object.prototype.hasOwnProperty.call(config, 'language') || Object.prototype.hasOwnProperty.call(config, 'lang');
+  const uiSlice = hasExplicitLang ? buildRuntimeUiSlicePayload(config) : null;
+  const bootCfg = {
+    ...config,
+    ...(uiSlice ? { __uiSlice: uiSlice } : {}),
+    ...(extraMeta && typeof extraMeta === 'object' ? extraMeta : {}),
+    binding: SETTING_BINDING,
+    codeHash,
+    __fromFile: true,
+  };
+  return getConfigRefreshTemplate()
+    .replace('__AG_REF_CFG__', () => JSON.stringify(bootCfg))
+    .replace('__AG_REF_VER__', () => JSON.stringify(PLUGIN_VERSION))
+    .replace('__AG_REF_HASH__', () => JSON.stringify(codeHash));
 }
 
 let _injectWrapperTemplate = null;
@@ -6182,6 +6309,8 @@ function getBundleSourceFiles() {
     { rel: 'cdp.js', fullPath: __filename, optional: false },
     { rel: 'style.css', fullPath: path.join(__dirname, 'style.css'), optional: false },
     { rel: 'assets/brand-mark-svg.js', fullPath: path.join(__dirname, 'assets', 'brand-mark-svg.js'), optional: true },
+    // i18n-locales.js 虽已拆至按需 Settings 通道，但其活跃语言迷你切片会打入 Channel 1 bootCfg.__uiSlice，故纳入源哈希确保缓存强一致
+    { rel: 'i18n-locales.js', fullPath: path.join(__dirname, 'i18n-locales.js'), optional: true },
   ];
   for (const partName of RUNTIME_PARTS) {
     files.push({ rel: partName, fullPath: path.join(__dirname, partName), optional: false });
@@ -6231,8 +6360,10 @@ function computeBundleSourceHash() {
 
 // 计算规范化后的有效 bootCfg 指纹（确保缓存命中输出与现场编译逐字节 100% 一致）
 function computeBundleConfigHash(config) {
+  const uiSlice = buildRuntimeUiSlicePayload(config);
   const effective = {
     ...(config && typeof config === 'object' ? config : {}),
+    ...(uiSlice ? { __uiSlice: uiSlice } : {}),
     binding: SETTING_BINDING,
     codeHash: '',
     __fromFile: true,
@@ -6570,7 +6701,7 @@ function resetBundleCacheStats() {
   _bundleCacheStats.channelDiskHits = 0;
   _bundleCacheStats.channelDiskMisses = 0;
   _bundleCacheStats.channelCompileRuns = 0;
-  _bundleCacheStats.channelHitsByName = { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0, wallpaper: 0, periodicPicker: 0 };
+  _bundleCacheStats.channelHitsByName = { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0, wallpaper: 0, periodicPicker: 0, settings: 0, mascot: 0 };
   _bundleCacheStats.lastOutcome = 'none';
   _bundleCacheStats.lastCachePath = null;
   try { _omniClientCache.cachedPaths?.clear?.(); } catch {}
@@ -6649,7 +6780,7 @@ function isValidChannelCacheEntry(channelName, entry) {
     if (computeHash(`${entry.minClient}\n${entry.minSettingsUi}`) !== entry.codeHash) return false;
     return sha256Text(`${entry.codeHash}\0${entry.minClient}\0${entry.minSettingsUi}`) === entry.payloadSha256;
   }
-  if (channelName === 'periodicPicker') {
+  if (channelName === 'periodicPicker' || channelName === 'settings' || channelName === 'mascot') {
     if (!hasOwn('minRuntime') || typeof entry.minRuntime !== 'string' || entry.minRuntime.length === 0) return false;
     if (Buffer.byteLength(entry.minRuntime, 'utf8') > CHANNEL_CACHE_MAX_PAYLOAD_BYTES) return false;
     if (computeHash(entry.minRuntime) !== entry.codeHash) return false;
@@ -7008,16 +7139,25 @@ function flushPendingBundleCache() {
 
 function buildInjectExpression(customConfig, opts = null) {
   const config = customConfig ? reconcileConfigAliases(customConfig) : readConfig();
+  const uiSlice = buildRuntimeUiSlicePayload(config);
+  const buildBootCfgJson = (codeHash) =>
+    JSON.stringify({
+      ...config,
+      ...(uiSlice ? { __uiSlice: uiSlice } : {}),
+      binding: SETTING_BINDING,
+      codeHash,
+      __fromFile: true,
+    });
   const cachePath = resolveBundleCachePathOption(opts);
   const deferCacheWrite = Boolean(opts && opts.deferCacheWrite === true);
 
   // 同进程配置热刷新快路径（broadcastConfigRefresh）：源 stat 未变化时直接复用已验签的内存基础模板（< 1ms，零磁盘阻塞）
-  // P2-7a: 延迟对 676 KB 字符串计算 exprSha256 至 flushPendingBundleCache() 实际落盘时再执行，避免防抖期内重复白算哈希
+  // P2-7a: 延迟对主包字符串计算 exprSha256 至 flushPendingBundleCache() 实际落盘时再执行，避免防抖期内重复白算哈希
   if (cachePath && deferCacheWrite && _warmBaseCache.basePrefix && _warmBaseCache.statSig) {
     try {
       if (getBundleSourceStatSig() === _warmBaseCache.statSig) {
         const codeHash = _warmBaseCache.codeHash;
-        const bootCfgJson = JSON.stringify({ ...config, binding: SETTING_BINDING, codeHash, __fromFile: true });
+        const bootCfgJson = buildBootCfgJson(codeHash);
         const expr = _warmBaseCache.basePrefix + bootCfgJson + _warmBaseCache.baseSuffix;
         const configHash = computeBundleConfigHash(config);
         _bundleCacheStats.diskBaseHits += 1;
@@ -7102,7 +7242,7 @@ function buildInjectExpression(customConfig, opts = null) {
 
   if (cachedBaseTemplate) {
     codeHash = cachedBaseTemplate.codeHash;
-    bootCfgJson = JSON.stringify({ ...config, binding: SETTING_BINDING, codeHash, __fromFile: true });
+    bootCfgJson = buildBootCfgJson(codeHash);
     expr = cachedBaseTemplate.basePrefix + bootCfgJson + cachedBaseTemplate.baseSuffix;
     baseForDisk = cachedBaseTemplate;
     _bundleCacheStats.diskBaseHits += 1;
@@ -7116,7 +7256,7 @@ function buildInjectExpression(customConfig, opts = null) {
 
     const compiledBase = compileBaseInjectTemplate();
     codeHash = compiledBase.codeHash;
-    bootCfgJson = JSON.stringify({ ...config, binding: SETTING_BINDING, codeHash, __fromFile: true });
+    bootCfgJson = buildBootCfgJson(codeHash);
     if (compiledBase.basePrefix !== null && compiledBase.baseSuffix !== null) {
       expr = compiledBase.basePrefix + bootCfgJson + compiledBase.baseSuffix;
       baseForDisk = {
@@ -7637,7 +7777,8 @@ let _hostI18nCache = { sig: '', sourceHash: '', minRuntime: '', dictRaw: '', cod
 function shouldEnableHostI18n(config, hostLocaleHint = null) {
   const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
   const mode = cfg.hostLocalization || 'auto';
-  if (mode === 'off') return false;
+  // off 模式挂载第四通道进入反向英文还原（温和压制外部运行时 DOM 汉化，零 app.asar 修改）
+  if (mode === 'off') return true;
   if (mode === 'on') return true;
   const lang = cfg.language || cfg.lang || 'zh-CN';
   if (lang === 'zh-CN') return true;
@@ -7669,29 +7810,35 @@ function shouldEnableHostI18n(config, hostLocaleHint = null) {
 
 function readCompiledHostI18nAssets(opts = null) {
   const rtPath = path.join(__dirname, 'vendor', 'host-i18n', 'host-i18n-runtime.js');
+  const revPath = path.join(__dirname, 'vendor', 'host-i18n', 'reverse-patterns.js');
   const dictPath = path.join(__dirname, 'vendor', 'host-i18n', 'zh-CN.json');
   if (!fs.existsSync(rtPath) || !fs.existsSync(dictPath)) {
     return { minRuntime: '', dictRaw: '', codeHash: '' };
   }
-  const sig = `${getFileSig(rtPath)}|${getFileSig(dictPath)}`;
+  const hasRev = fs.existsSync(revPath);
+  const sig = `${getFileSig(rtPath)}|${hasRev ? getFileSig(revPath) : 'norev'}|${getFileSig(dictPath)}`;
   const cachePath = resolveBundleCachePathOption(opts);
   if (!cachePath && _hostI18nCache.sig === sig && _hostI18nCache.codeHash) {
     return _hostI18nCache;
   }
   const rtBuf = fs.readFileSync(rtPath);
+  const revBuf = hasRev ? fs.readFileSync(revPath) : null;
   const dictBuf = fs.readFileSync(dictPath);
+  const fileEntries = [];
+  if (revBuf) fileEntries.push({ rel: 'vendor/host-i18n/reverse-patterns.js', content: revBuf });
+  fileEntries.push({ rel: 'vendor/host-i18n/host-i18n-runtime.js', content: rtBuf });
+  fileEntries.push({ rel: 'vendor/host-i18n/zh-CN.json', content: dictBuf });
   return resolveChannelAssetsWithDiskCache({
     channelName: 'hostI18n',
     memCache: _hostI18nCache,
     setMemCache: (v) => { _hostI18nCache = v; },
     sig,
-    fileEntries: [
-      { rel: 'vendor/host-i18n/host-i18n-runtime.js', content: rtBuf },
-      { rel: 'vendor/host-i18n/zh-CN.json', content: dictBuf },
-    ],
+    fileEntries,
     opts,
     compileFn: () => {
-      const minRuntime = minifySingleSource(rtBuf.toString('utf8'));
+      const minRev = revBuf ? minifySingleSource(revBuf.toString('utf8')) : '';
+      const minRt = minifySingleSource(rtBuf.toString('utf8'));
+      const minRuntime = minRev ? `${minRev};\n${minRt}` : minRt;
       const parsedDict = JSON.parse(dictBuf.toString('utf8'));
       const dictRaw = JSON.stringify(parsedDict).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
       const codeHash = computeHash(`${minRuntime}:${dictRaw}`);
@@ -7720,10 +7867,12 @@ const HOST_I18N_REMOVE_EXPRESSION = `(() => {
   try { delete globalThis.__agPrismHostI18n; } catch {}
   try { delete window.__agPrismHostI18nFactory; } catch {}
   try { delete globalThis.__agPrismHostI18nFactory; } catch {}
+  try { delete window.__agPrismHostI18nReversePatterns; } catch {}
+  try { delete globalThis.__agPrismHostI18nReversePatterns; } catch {}
   return { ok: true, status: 'off' };
 })()`;
 
-// 第四通道独立注入（Host UI 简体中文按需本地化）：绝不打入静态主包，支持 4 层通用自动礼让与 100% 无损卸载
+// 第四通道独立注入（Host UI 简体中文按需本地化 + off 态反向英文还原）：绝不打入静态主包，支持 4 层自动礼让、3 层温和压制与 100% 无损卸载
 function buildHostI18nExpression(config = null, hostLocaleHint = null, opts = null) {
   let resolvedLocaleHint = hostLocaleHint;
   let resolvedOpts = opts;
@@ -7739,7 +7888,7 @@ function buildHostI18nExpression(config = null, hostLocaleHint = null, opts = nu
   if (!minRuntime || !dictRaw) {
     return '';
   }
-  const mode = cfg.hostLocalization === 'on' ? 'on' : 'auto';
+  const mode = cfg.hostLocalization === 'on' ? 'on' : cfg.hostLocalization === 'off' ? 'off' : 'auto';
   const modeJson = serializeJsonForEval(mode);
   const hashJson = serializeJsonForEval(codeHash);
 
@@ -7811,10 +7960,8 @@ function buildHostI18nExpression(config = null, hostLocaleHint = null, opts = nu
       const liveCfg = window.__agPrism?.getState?.()?.cfg;
       if (liveCfg && typeof liveCfg === 'object') {
         if (liveCfg.hostLocalization === 'off') {
-          try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}
-          return { ok: true, status: 'off', skippedByLiveCfg: true };
-        }
-        if (liveCfg.hostLocalization === 'on') {
+          targetMode = 'off';
+        } else if (liveCfg.hostLocalization === 'on') {
           targetMode = 'on';
         } else {
           targetMode = 'auto';
@@ -7848,7 +7995,13 @@ function buildHostI18nExpression(config = null, hostLocaleHint = null, opts = nu
       const existing = window.__agPrismHostI18n;
       if (existing && existing.__prismCodeHash === targetHash && typeof existing.getStatus === 'function') {
         const st = existing.getStatus();
-        if (st && st.mode === targetMode) {
+        const isHealthyForTarget =
+          st &&
+          st.mode === targetMode &&
+          (targetMode === 'off'
+            ? st.status === 'off-enforced' || st.status === 'off-blocked'
+            : st.status === 'active' || st.status === 'yielded');
+        if (isHealthyForTarget) {
           return { ok: true, reused: true, codeHash: targetHash, ...st };
         }
         if (typeof existing.setMode === 'function') {
@@ -8838,6 +8991,199 @@ function buildPeriodicPickerExpression(config = null, opts = null) {
   })()`;
 }
 
+// ── 第九通道：设置面板 + 全量 8 语言词典按需独立注入（不占 Channel 1 体积） ──────────
+let _settingsChannelCache = { sig: '', sourceHash: '', minRuntime: '', codeHash: '', cachedPaths: new Set() };
+
+function readCompiledSettingsChannelAssets(opts = null) {
+  const locPath = path.join(__dirname, 'i18n-locales.js');
+  const setPath = path.join(__dirname, 'settings-panel.js');
+  if (!fs.existsSync(locPath) || !fs.existsSync(setPath)) {
+    return { sig: '', minRuntime: '', codeHash: '' };
+  }
+  const sig = `${getFileSig(locPath)}|${getFileSig(setPath)}`;
+  const cachePath = resolveBundleCachePathOption(opts);
+  if (!cachePath && _settingsChannelCache.sig === sig && _settingsChannelCache.codeHash) {
+    return _settingsChannelCache;
+  }
+  const locBuf = fs.readFileSync(locPath);
+  const setBuf = fs.readFileSync(setPath);
+  return resolveChannelAssetsWithDiskCache({
+    channelName: 'settings',
+    memCache: _settingsChannelCache,
+    setMemCache: (v) => { _settingsChannelCache = v; },
+    sig,
+    fileEntries: [
+      { rel: 'i18n-locales.js', content: locBuf },
+      { rel: 'settings-panel.js', content: setBuf },
+    ],
+    opts,
+    compileFn: () => {
+      const minLoc = minifySingleSource(locBuf.toString('utf8'));
+      const minSet = minifySingleSource(setBuf.toString('utf8'));
+      const minRuntime = `${minLoc};\n${minSet}`;
+      const codeHash = computeHash(minRuntime);
+      return { minRuntime, codeHash };
+    },
+    toCacheEntry: (assets, sourceHash) => ({
+      sourceHash,
+      codeHash: assets.codeHash,
+      minRuntime: assets.minRuntime,
+      payloadSha256: sha256Text(`${assets.codeHash}\0${assets.minRuntime}`),
+      updatedAt: Date.now(),
+    }),
+    fromCacheEntry: (entry) => ({
+      minRuntime: entry.minRuntime,
+      codeHash: entry.codeHash,
+    }),
+  });
+}
+
+const SETTINGS_REMOVE_EXPRESSION = `(() => {
+  try { document.getElementById('ag-cs-settings-sec')?.remove?.(); } catch {}
+  try { delete window.__agPrismSettingsPanel; } catch {}
+  try { delete globalThis.__agPrismSettingsPanel; } catch {}
+  return { ok: true, status: 'off' };
+})()`;
+
+function buildSettingsChannelExpression(config = null, opts = null) {
+  let resolvedOpts = opts;
+  if (config && typeof config === 'object' && ('cachePath' in config || 'noDiskCache' in config || 'deferCacheWrite' in config) && !resolvedOpts) {
+    resolvedOpts = config;
+  }
+  const { minRuntime, codeHash } = readCompiledSettingsChannelAssets(resolvedOpts);
+  if (!minRuntime || !codeHash) {
+    return '';
+  }
+  const hashJson = serializeJsonForEval(codeHash);
+  return `(() => {
+    try {
+      if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };
+    } catch {
+      return { ok: false, status: 'skipped-subframe' };
+    }
+    const targetHash = ${hashJson};
+    const existingPanel = globalThis.__agPrismSettingsPanel || window.__agPrismSettingsPanel;
+    const existingLoc = globalThis.__agCsLocales || window.__agCsLocales;
+    if (existingPanel && existingPanel.__prismCodeHash === targetHash && existingLoc && existingLoc.__isFullLocales) {
+      try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
+      return { ok: true, reused: true, codeHash: targetHash };
+    }
+    ${minRuntime};
+    try {
+      const panel = globalThis.__agPrismSettingsPanel || window.__agPrismSettingsPanel;
+      if (panel && typeof panel === 'object') {
+        panel.__prismCodeHash = targetHash;
+        window.__agPrismSettingsPanel = panel;
+      }
+      const loc = globalThis.__agCsLocales || window.__agCsLocales;
+      if (loc && typeof loc === 'object') {
+        loc.__isFullLocales = true;
+        window.__agCsLocales = loc;
+      }
+    } catch {}
+    try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
+    try { document.getElementById('ag-cs-settings-sec')?.__prismMountThoughtUi?.(); } catch {}
+    try { window.__prismMountWallpaperUi?.(); } catch {}
+    return { ok: true, codeHash: targetHash };
+  })()`;
+}
+
+// ── 第十通道：双桌宠（dual-mascot-rig.js）配置门控独立注入（mascot === 'off' 时 0 B） ────
+let _mascotChannelCache = { sig: '', sourceHash: '', minRuntime: '', codeHash: '', cachedPaths: new Set() };
+
+function shouldEnableMascot(config = null) {
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  return cfg.mascot !== 'off' && cfg.mascot !== false;
+}
+
+function readCompiledMascotAssets(opts = null) {
+  const mascotPath = path.join(__dirname, 'dual-mascot-rig.js');
+  if (!fs.existsSync(mascotPath)) {
+    return { sig: '', minRuntime: '', codeHash: '' };
+  }
+  const sig = getFileSig(mascotPath);
+  const cachePath = resolveBundleCachePathOption(opts);
+  if (!cachePath && _mascotChannelCache.sig === sig && _mascotChannelCache.codeHash) {
+    return _mascotChannelCache;
+  }
+  const buf = fs.readFileSync(mascotPath);
+  return resolveChannelAssetsWithDiskCache({
+    channelName: 'mascot',
+    memCache: _mascotChannelCache,
+    setMemCache: (v) => { _mascotChannelCache = v; },
+    sig,
+    fileEntries: [{ rel: 'dual-mascot-rig.js', content: buf }],
+    opts,
+    compileFn: () => {
+      const minRuntime = minifySingleSource(buf.toString('utf8'));
+      const codeHash = computeHash(minRuntime);
+      return { minRuntime, codeHash };
+    },
+    toCacheEntry: (assets, sourceHash) => ({
+      sourceHash,
+      codeHash: assets.codeHash,
+      minRuntime: assets.minRuntime,
+      payloadSha256: sha256Text(`${assets.codeHash}\0${assets.minRuntime}`),
+      updatedAt: Date.now(),
+    }),
+    fromCacheEntry: (entry) => ({
+      minRuntime: entry.minRuntime,
+      codeHash: entry.codeHash,
+    }),
+  });
+}
+
+const MASCOT_REMOVE_EXPRESSION = `(() => {
+  try { document.querySelectorAll?.('.ag-cs-crab-stage, .ag-cs-mascot-stage').forEach((n) => n.remove()); } catch {}
+  try { document.documentElement?.removeAttribute?.('data-ag-cs-has-crab'); } catch {}
+  try { delete window.__agDualMascotRig; } catch {}
+  try { delete globalThis.__agDualMascotRig; } catch {}
+  return { ok: true, status: 'off' };
+})()`;
+
+function buildMascotChannelExpression(config = null, opts = null) {
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  if (!shouldEnableMascot(cfg)) {
+    return '';
+  }
+  const { minRuntime, codeHash } = readCompiledMascotAssets(opts);
+  if (!minRuntime || !codeHash) {
+    return '';
+  }
+  const hashJson = serializeJsonForEval(codeHash);
+  return `(() => {
+    try {
+      if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };
+    } catch {
+      return { ok: false, status: 'skipped-subframe' };
+    }
+    try {
+      const liveCfg = window.__agPrism?.getState?.()?.cfg;
+      if (liveCfg && (liveCfg.mascot === 'off' || liveCfg.mascot === false)) {
+        try { document.querySelectorAll?.('.ag-cs-crab-stage, .ag-cs-mascot-stage').forEach((n) => n.remove()); } catch {}
+        try { delete window.__agDualMascotRig; delete globalThis.__agDualMascotRig; } catch {}
+        return { ok: true, status: 'off', skippedByLiveCfg: true };
+      }
+    } catch {}
+    const targetHash = ${hashJson};
+    const existing = globalThis.__agDualMascotRig || window.__agDualMascotRig;
+    if (existing && existing.__prismCodeHash === targetHash) {
+      try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
+      return { ok: true, reused: true, codeHash: targetHash };
+    }
+    ${minRuntime};
+    try {
+      const mod = globalThis.__agDualMascotRig || window.__agDualMascotRig;
+      if (mod && typeof mod === 'object') {
+        mod.__prismCodeHash = targetHash;
+        window.__agDualMascotRig = mod;
+      }
+    } catch {}
+    try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
+    return { ok: true, codeHash: targetHash };
+  })()`;
+}
+
 const REMOVE_EXPRESSION = `(() => {
   try {
     document.querySelectorAll?.('#ag-prism-wallpaper-root video')?.forEach?.((v) => {
@@ -8991,6 +9337,7 @@ const REMOVE_EXPRESSION = `(() => {
   delete globalThis.__agPrismBrandLogoSvg;
   delete globalThis.__agPrismHostI18n;
   delete globalThis.__agPrismHostI18nFactory;
+  delete globalThis.__agPrismHostI18nReversePatterns;
   delete globalThis.__agPrismPeriodicPicker;
   delete globalThis.__agPrismPeriodicPickerFactory;
   delete globalThis.__agPrismKeyboard3D;
@@ -9351,5 +9698,11 @@ module.exports = {
   shouldEnablePeriodicPicker,
   buildPeriodicPickerExpression,
   PERIODIC_PICKER_REMOVE_EXPRESSION,
+  DEFERRED_ROOT_MODULES,
+  buildSettingsChannelExpression,
+  SETTINGS_REMOVE_EXPRESSION,
+  shouldEnableMascot,
+  buildMascotChannelExpression,
+  MASCOT_REMOVE_EXPRESSION,
   isSafeV2SidebarClientSource,
 };

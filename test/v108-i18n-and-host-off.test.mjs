@@ -1,0 +1,637 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import vm from 'node:vm';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
+
+const cdp = require(path.join(ROOT, 'cdp.js'));
+const i18nCore = require(path.join(ROOT, 'i18n-core.js'));
+const i18nLocales = require(path.join(ROOT, 'i18n-locales.js'));
+const settingsPanel = require(path.join(ROOT, 'settings-panel.js'));
+const hostI18nRuntime = require(path.join(ROOT, 'vendor/host-i18n/host-i18n-runtime.js'));
+const reversePatterns = require(path.join(ROOT, 'vendor/host-i18n/reverse-patterns.js'));
+const zhDict = JSON.parse(fs.readFileSync(path.join(ROOT, 'vendor/host-i18n/zh-CN.json'), 'utf8'));
+
+const SUPPORTED_8 = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'];
+const CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf]/;
+
+function createMiniDom(htmlLang = 'en') {
+  const listeners = new Map();
+  class MiniNode {
+    constructor(nodeType, tagName = '', textContent = '') {
+      this.nodeType = nodeType;
+      this.tagName = tagName ? tagName.toUpperCase() : '';
+      this.nodeName = nodeType === 3 ? '#text' : this.tagName;
+      this._text = textContent;
+      this.parentNode = null;
+      this.childNodes = [];
+      this.attrs = new Map();
+      this.style = {
+        _map: new Map(),
+        setProperty(k, v) { this._map.set(k, String(v)); },
+        removeProperty(k) { this._map.delete(k); },
+        getPropertyValue(k) { return this._map.get(k) || ''; },
+      };
+      this.classList = {
+        _set: new Set(),
+        add: (...cs) => { cs.forEach((c) => c && this.classList._set.add(c)); this.attrs.set('class', [...this.classList._set].join(' ')); },
+        remove: (...cs) => { cs.forEach((c) => this.classList._set.delete(c)); this.attrs.set('class', [...this.classList._set].join(' ')); },
+        contains: (c) => this.classList._set.has(c),
+      };
+      this._listeners = new Map();
+    }
+    get isConnected() {
+      let cur = this;
+      while (cur) {
+        if (cur === doc.documentElement || cur === doc) return true;
+        cur = cur.parentNode;
+      }
+      return false;
+    }
+    get parentElement() { return this.parentNode && this.parentNode.nodeType === 1 ? this.parentNode : null; }
+    get children() { return this.childNodes.filter((n) => n.nodeType === 1); }
+    get firstChild() { return this.childNodes[0] || null; }
+    get nextSibling() {
+      if (!this.parentNode) return null;
+      const idx = this.parentNode.childNodes.indexOf(this);
+      return idx >= 0 ? this.parentNode.childNodes[idx + 1] || null : null;
+    }
+    get previousSibling() {
+      if (!this.parentNode) return null;
+      const idx = this.parentNode.childNodes.indexOf(this);
+      return idx > 0 ? this.parentNode.childNodes[idx - 1] || null : null;
+    }
+    get lastElementChild() {
+      const ch = this.children;
+      return ch[ch.length - 1] || null;
+    }
+    get previousElementSibling() {
+      if (!this.parentNode) return null;
+      const list = this.parentNode.children;
+      const idx = list.indexOf(this);
+      return idx > 0 ? list[idx - 1] : null;
+    }
+    get id() { return this.attrs.get('id') || ''; }
+    set id(v) { this.setAttribute('id', v); }
+    get className() { return this.attrs.get('class') || ''; }
+    set className(v) {
+      this.classList._set = new Set(String(v || '').split(/\s+/).filter(Boolean));
+      this.attrs.set('class', [...this.classList._set].join(' '));
+    }
+    get nodeValue() { return this.nodeType === 3 ? this._text : null; }
+    set nodeValue(v) { if (this.nodeType === 3) this._text = String(v); }
+    get textContent() {
+      if (this.nodeType === 3) return this._text;
+      return this.childNodes.map((c) => c.textContent).join('');
+    }
+    set textContent(v) {
+      if (this.nodeType === 3) {
+        this._text = String(v);
+      } else {
+        this.childNodes = [];
+        if (v !== '' && v !== null && v !== undefined) {
+          this.appendChild(new MiniNode(3, '', String(v)));
+        }
+      }
+    }
+    getAttribute(k) { return this.attrs.has(k) ? this.attrs.get(k) : null; }
+    hasAttribute(k) { return this.attrs.has(k); }
+    setAttribute(k, v) {
+      this.attrs.set(k, String(v));
+      if (k === 'class') this.classList._set = new Set(String(v).split(/\s+/).filter(Boolean));
+    }
+    removeAttribute(k) {
+      this.attrs.delete(k);
+      if (k === 'class') this.classList._set.clear();
+    }
+    toggleAttribute(k, force) {
+      const on = force === undefined ? !this.attrs.has(k) : Boolean(force);
+      if (on) this.attrs.set(k, '');
+      else this.attrs.delete(k);
+      return on;
+    }
+    append(...nodes) {
+      for (const n of nodes) {
+        this.appendChild(typeof n === 'string' ? new MiniNode(3, '', n) : n);
+      }
+      return this;
+    }
+    appendChild(child) {
+      if (child.parentNode) child.parentNode.removeChild(child);
+      child.parentNode = this;
+      this.childNodes.push(child);
+      return child;
+    }
+    insertBefore(child, ref) {
+      if (!ref) return this.appendChild(child);
+      if (child.parentNode) child.parentNode.removeChild(child);
+      const idx = this.childNodes.indexOf(ref);
+      child.parentNode = this;
+      if (idx >= 0) this.childNodes.splice(idx, 0, child);
+      else this.childNodes.push(child);
+      return child;
+    }
+    removeChild(child) {
+      const idx = this.childNodes.indexOf(child);
+      if (idx >= 0) {
+        this.childNodes.splice(idx, 1);
+        child.parentNode = null;
+      }
+      return child;
+    }
+    remove() {
+      if (this.parentNode) this.parentNode.removeChild(this);
+    }
+    _matchSimple(node, simple) {
+      if (!node || node.nodeType !== 1) return false;
+      let rest = simple;
+      const tagM = /^[a-zA-Z0-9_-]+/.exec(rest);
+      if (tagM) {
+        if (node.tagName !== tagM[0].toUpperCase()) return false;
+        rest = rest.slice(tagM[0].length);
+      }
+      while (rest) {
+        if (rest[0] === '#') {
+          const m = /^#([a-zA-Z0-9_-]+)/.exec(rest);
+          if (!m || node.id !== m[1]) return false;
+          rest = rest.slice(m[0].length);
+        } else if (rest[0] === '.') {
+          const m = /^\.([a-zA-Z0-9_-]+)/.exec(rest);
+          if (!m || !node.classList.contains(m[1])) return false;
+          rest = rest.slice(m[0].length);
+        } else if (rest[0] === '[') {
+          const m = /^\[([^\]=]+)(?:="([^"]*)")?\]/.exec(rest);
+          if (!m) return false;
+          const ok = m[2] === undefined ? node.hasAttribute(m[1]) : node.getAttribute(m[1]) === m[2];
+          if (!ok) return false;
+          rest = rest.slice(m[0].length);
+        } else {
+          return false;
+        }
+      }
+      return true;
+    }
+    matches(sel) {
+      return sel.split(',').map((s) => s.trim()).filter(Boolean).some((part) => {
+        const tokens = part.split(/\s+/).filter(Boolean);
+        if (!tokens.length || !this._matchSimple(this, tokens[tokens.length - 1])) return false;
+        let cur = this.parentElement;
+        for (let ti = tokens.length - 2; ti >= 0; ti--) {
+          while (cur && !this._matchSimple(cur, tokens[ti])) cur = cur.parentElement;
+          if (!cur) return false;
+          cur = cur.parentElement;
+        }
+        return true;
+      });
+    }
+    closest(sel) {
+      let cur = this;
+      while (cur && cur.nodeType === 1) {
+        if (cur.matches(sel)) return cur;
+        cur = cur.parentNode;
+      }
+      return null;
+    }
+    querySelectorAll(sel) {
+      const out = [];
+      const walk = (n) => {
+        for (const c of n.childNodes) {
+          if (c.nodeType === 1) {
+            if (c.matches(sel)) out.push(c);
+            walk(c);
+          }
+        }
+      };
+      walk(this);
+      return out;
+    }
+    querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+    addEventListener(ev, fn) {
+      if (!this._listeners.has(ev)) this._listeners.set(ev, new Set());
+      this._listeners.get(ev).add(fn);
+    }
+    removeEventListener(ev, fn) { this._listeners.get(ev)?.delete(fn); }
+  }
+
+  const rootEl = new MiniNode(1, 'html');
+  if (htmlLang) rootEl.setAttribute('lang', htmlLang);
+  const head = new MiniNode(1, 'head');
+  const body = new MiniNode(1, 'body');
+  body.classList.add('theme-standalone');
+  rootEl.appendChild(head);
+  rootEl.appendChild(body);
+
+  const observers = [];
+  class FakeMutationObserver {
+    constructor(cb) {
+      this._cb = cb;
+      this._connected = false;
+      observers.push(this);
+    }
+    observe(target, opts) { this._connected = true; this._target = target; this._opts = opts; }
+    disconnect() { this._connected = false; }
+    takeRecords() { return []; }
+    _emit(records) { if (this._connected) this._cb(records, this); }
+  }
+
+  const doc = {
+    nodeType: 9,
+    readyState: 'complete',
+    hidden: false,
+    title: 'Antigravity',
+    documentElement: rootEl,
+    head,
+    body,
+    createElement: (tag) => new MiniNode(1, tag),
+    createTextNode: (t) => new MiniNode(3, '', String(t)),
+    getElementById: (id) => rootEl.querySelector(`#${id}`),
+    querySelector: (sel) => rootEl.querySelector(sel),
+    querySelectorAll: (sel) => rootEl.querySelectorAll(sel),
+    addEventListener: (ev, fn) => {
+      if (!listeners.has(ev)) listeners.set(ev, new Set());
+      listeners.get(ev).add(fn);
+    },
+    removeEventListener: (ev, fn) => listeners.get(ev)?.delete(fn),
+    createTreeWalker: (root, whatToShow) => {
+      const nodes = [];
+      const walk = (n) => {
+        for (const c of n.childNodes) {
+          if (whatToShow === 4) {
+            if (c.nodeType === 3) nodes.push(c);
+          } else if (whatToShow === 1) {
+            if (c.nodeType === 1) nodes.push(c);
+          } else {
+            nodes.push(c);
+          }
+          walk(c);
+        }
+      };
+      walk(root);
+      let idx = -1;
+      return {
+        nextNode() {
+          idx += 1;
+          return idx < nodes.length ? nodes[idx] : null;
+        },
+      };
+    },
+  };
+
+  const win = {
+    document: doc,
+    location: { href: 'vscode-file://vscode-app/index.html' },
+    navigator: { language: 'en-US', languages: ['en-US'] },
+    MutationObserver: FakeMutationObserver,
+    NodeFilter: { SHOW_TEXT: 4, SHOW_ELEMENT: 1, SHOW_ALL: -1 },
+    addEventListener() {},
+    removeEventListener() {},
+    requestAnimationFrame: (fn) => setTimeout(fn, 0),
+    cancelAnimationFrame: (id) => clearTimeout(id),
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+  };
+  win.window = win;
+  win.self = win;
+  win.top = win;
+  win.globalThis = win;
+
+  return { doc, win, rootEl, body, observers, MiniNode };
+}
+
+test('Battle 2: 8-language contract, zero yue in UI/VALIDATORS, and smooth legacy yue -> zh-CN migration', () => {
+  assert.deepEqual(i18nCore.SUPPORTED_LANG_IDS, SUPPORTED_8);
+  assert.deepEqual(
+    i18nCore.LANG_OPTIONS.map((o) => o.id),
+    SUPPORTED_8
+  );
+  assert.equal(i18nCore.LANG_OPTIONS.some((o) => o.id === 'yue'), false);
+  assert.deepEqual(cdp.VALIDATORS.language, ['auto', ...SUPPORTED_8]);
+  assert.deepEqual(cdp.VALIDATORS.lang, ['auto', ...SUPPORTED_8]);
+  assert.equal(cdp.validateConfigEntry('language', 'yue'), false);
+  assert.equal(cdp.validateConfigEntry('lang', 'yue'), false);
+  for (const l of SUPPORTED_8) {
+    assert.equal(cdp.validateConfigEntry('language', l), true, `VALIDATORS must accept ${l}`);
+  }
+
+  // Smooth legacy yue migration
+  for (const legacy of ['yue', 'yue-HK', 'zh-yue', 'cantonese']) {
+    const rec = cdp.reconcileConfigAliases({ language: legacy });
+    assert.equal(rec.language, 'zh-CN', `reconcileConfigAliases(${legacy}) -> zh-CN`);
+    assert.equal(rec.lang, 'zh-CN');
+    assert.equal(i18nCore.normalizeLanguage(legacy), 'zh-CN', `normalizeLanguage(${legacy}) -> zh-CN`);
+  }
+  const recLangOnly = cdp.reconcileConfigAliases({ lang: 'yue' });
+  assert.equal(recLangOnly.language, 'zh-CN');
+  assert.equal(recLangOnly.lang, 'zh-CN');
+
+  // New locales & zh-HK/zh-MO normalization
+  assert.equal(i18nCore.normalizeLanguage('zh-HK'), 'zh-TW');
+  assert.equal(i18nCore.normalizeLanguage('zh-MO'), 'zh-TW');
+  assert.equal(i18nCore.normalizeLanguage('ko-KR'), 'ko');
+  assert.equal(i18nCore.normalizeLanguage('es-MX'), 'es');
+  assert.equal(i18nCore.normalizeLanguage('fr-CA'), 'fr');
+  assert.equal(i18nCore.normalizeLanguage('de-AT'), 'de');
+  assert.equal(i18nCore.normalizeLanguage('pt-BR', 'en'), 'en');
+
+  // isCjkLanguage strictly true only for zh-CN / zh-TW / ja / ko
+  for (const cjk of ['zh-CN', 'zh-TW', 'ja', 'ko']) {
+    assert.equal(i18nCore.isCjkLanguage(cjk), true, `${cjk} should be CJK`);
+  }
+  for (const latin of ['en', 'es', 'fr', 'de']) {
+    assert.equal(i18nCore.isCjkLanguage(latin), false, `${latin} must NOT be CJK`);
+  }
+});
+
+test('Battle 2 CI Guard: 100% 8-locale parity in i18n-locales.js and 0 CJK leakage in en/es/fr/de', () => {
+  assert.deepEqual(i18nLocales.LANG_IDS, SUPPORTED_8);
+  const keys = Object.keys(i18nLocales.UI_TABLE);
+  assert.ok(keys.length >= 270, `Expected >=270 UI_TABLE keys, got ${keys.length}`);
+
+  for (const key of keys) {
+    const row = i18nLocales.UI_TABLE[key];
+    assert.ok(Array.isArray(row) && row.length === 8, `UI_TABLE.${key} must have exactly 8 locales`);
+    for (let i = 0; i < 8; i++) {
+      assert.equal(typeof row[i], 'string', `UI_TABLE.${key}[${i}] must be string`);
+      assert.ok(row[i].trim().length > 0, `UI_TABLE.${key}[${i}] must be non-empty`);
+    }
+    // Pure EN / ES / FR / DE must never leak CJK characters
+    for (const [idx, code] of [[2, 'en'], [5, 'es'], [6, 'fr'], [7, 'de']]) {
+      assert.equal(
+        CJK_RE.test(row[idx]),
+        false,
+        `CJK leakage detected in UI_TABLE.${key} (${code}): ${JSON.stringify(row[idx])}`
+      );
+    }
+  }
+
+  for (const lang of ['en', 'es', 'fr', 'de']) {
+    const ui = i18nLocales.getUiStrings(lang);
+    assert.equal(CJK_RE.test(ui.swarmSplitSub(68, 32)), false, `swarmSplitSub leaked CJK in ${lang}`);
+    assert.equal(CJK_RE.test(ui.showMoreN(4)), false, `showMoreN leaked CJK in ${lang}`);
+  }
+
+  // Unknown language falls back to EN, never zh-CN
+  const unknownUi = i18nLocales.getUiStrings('pt-BR');
+  const enUi = i18nLocales.getUiStrings('en');
+  assert.equal(unknownUi.sectionTitle, enUi.sectionTitle);
+  assert.equal(CJK_RE.test(unknownUi.foldExpandHint), false);
+
+  // Runtime slice budget < 4 KB per language
+  for (const lang of SUPPORTED_8) {
+    const slice = i18nLocales.getRuntimeUiSlice(lang);
+    assert.equal(slice.lang, lang);
+    const bytes = Buffer.byteLength(JSON.stringify(slice), 'utf8');
+    assert.ok(bytes < 4096, `Runtime slice for ${lang} exceeded 4096 B: ${bytes}`);
+  }
+});
+
+test('Battle 2 CI Guard: macOS installer NOT_FOUND_MSG uses InstallerI18n (0 hardcoded bilingual CJK leak)', () => {
+  const swiftSrc = fs.readFileSync(path.join(ROOT, 'installer/macos/Setup/main.swift'), 'utf8');
+  assert.equal(
+    /NOT_FOUND_MSG=".*未找到/.test(swiftSrc),
+    false,
+    'main.swift must not hardcode bilingual Chinese text inside NOT_FOUND_MSG'
+  );
+  assert.ok(swiftSrc.includes('quotedNotFoundMsg') || swiftSrc.includes('InstallerI18n.tr'), 'main.swift must localize NOT_FOUND_MSG via InstallerI18n');
+});
+
+test('Battle 2 Channel 1 Slimming (< 550 KB across all 9 language modes), SYNC_ROOT_FILES integrity & Ch9/Ch10 disk cache', () => {
+  // Deferred modules removed from Channel 1 RUNTIME_PARTS, preserved in SYNC_ROOT_FILES
+  for (const mod of ['i18n-locales.js', 'settings-panel.js', 'dual-mascot-rig.js']) {
+    assert.equal(cdp.RUNTIME_PARTS.includes(mod), false, `${mod} must be split out of Channel 1 RUNTIME_PARTS`);
+    assert.equal(cdp.SYNC_ROOT_FILES.includes(mod), true, `${mod} MUST remain in SYNC_ROOT_FILES for installer/updater`);
+  }
+
+  // Channel 1 strict < 550,000 B across all 9 language settings
+  for (const lang of ['auto', ...SUPPORTED_8]) {
+    const expr = cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, language: lang });
+    const bytes = Buffer.byteLength(expr, 'utf8');
+    assert.ok(bytes < 550_000, `Channel 1 (${lang}) exceeded 550,000 B budget: ${bytes} B`);
+  }
+
+  // pulse-vial-bridge.js strict < 31,000 B
+  const pvbSize = fs.statSync(path.join(ROOT, 'pulse-vial-bridge.js')).size;
+  assert.ok(pvbSize < 31_000, `pulse-vial-bridge.js exceeded 31,000 B budget: ${pvbSize} B`);
+
+  // Mascot Channel 10: 0 B when off, non-empty when on
+  assert.equal(cdp.shouldEnableMascot({ mascot: 'off' }), false);
+  assert.equal(cdp.buildMascotChannelExpression({ mascot: 'off' }), '');
+  assert.equal(cdp.shouldEnableMascot({ mascot: 'crab' }), true);
+  assert.ok(cdp.buildMascotChannelExpression({ mascot: 'crab' }).length > 10_000);
+
+  // Settings Channel 9 & Mascot Channel 10 .bundle-cache.json disk hit verification
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-b2-cache-'));
+  const cachePath = path.join(tmpDir, '.bundle-cache.json');
+  try {
+    cdp.resetBundleCacheStats();
+    const sCold = cdp.buildSettingsChannelExpression(null, { cachePath });
+    const mCold = cdp.buildMascotChannelExpression({ mascot: 'crab' }, { cachePath });
+    assert.ok(sCold.length > 20_000);
+    assert.ok(mCold.length > 10_000);
+
+    // Reload fresh cdp module to verify cold-process disk hit
+    delete require.cache[require.resolve(path.join(ROOT, 'cdp.js'))];
+    const cdpFresh = require(path.join(ROOT, 'cdp.js'));
+    cdpFresh.resetBundleCacheStats();
+    const sHit = cdpFresh.buildSettingsChannelExpression(null, { cachePath });
+    const mHit = cdpFresh.buildMascotChannelExpression({ mascot: 'crab' }, { cachePath });
+    assert.equal(sHit, sCold);
+    assert.equal(mHit, mCold);
+    const stats = cdpFresh.getBundleCacheStats();
+    assert.ok(stats.channelHitsByName.settings >= 1, 'Expected settings channel disk cache hit');
+    assert.ok(stats.channelHitsByName.mascot >= 1, 'Expected mascot channel disk cache hit');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Battle 2 hostLocalization="off": reverse English restoration, 3-tier gentle suppression, Prism zh-CN isolation & lossless rollback', async () => {
+  // Channel 4 gating: off -> true (mounts reverse mode), on -> true, auto+en -> false (0 B)
+  assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'off', language: 'zh-CN' }), true);
+  assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'on', language: 'en' }), true);
+  assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'en' }), false);
+  assert.equal(cdp.buildHostI18nExpression({ hostLocalization: 'auto', language: 'en' }), '');
+  const offExpr = cdp.buildHostI18nExpression({ hostLocalization: 'off', language: 'zh-CN' });
+  assert.ok(offExpr.length > 50_000, 'hostLocalization=off must build Channel 4 reverse expression');
+  assert.ok(offExpr.includes('"off"'));
+
+  const env = createMiniDom('zh-CN');
+  let extLangCalls = [];
+  env.win.__antigravityZhSetLang = (l) => { extLangCalls.push(l); };
+
+  // Build host UI nodes localized by an external plugin + protected Prism zh-CN UI + user prose
+  const hostBtn1 = env.doc.createElement('button');
+  hostBtn1.textContent = '应用设置';
+  const hostBtn2 = env.doc.createElement('button');
+  hostBtn2.textContent = '操作';
+  const hostThought = env.doc.createElement('span');
+  hostThought.textContent = '已思考 2 分 15 秒';
+  const hostTime = env.doc.createElement('span');
+  hostTime.textContent = '5 分钟前';
+  env.body.appendChild(hostBtn1);
+  env.body.appendChild(hostBtn2);
+  env.body.appendChild(hostThought);
+  env.body.appendChild(hostTime);
+
+  // Protected Prism UI (in zh-CN!) must remain untouched even when hostLocalization='off'
+  const prismSec = env.doc.createElement('section');
+  prismSec.id = 'ag-cs-settings-sec';
+  const prismTitle = env.doc.createElement('span');
+  prismTitle.textContent = '设置';
+  prismSec.appendChild(prismTitle);
+  env.body.appendChild(prismSec);
+
+  // Protected User Chat Prose must remain untouched
+  const userMsg = env.doc.createElement('div');
+  userMsg.setAttribute('data-testid', 'user-message');
+  const userText = env.doc.createElement('p');
+  userText.textContent = '应用设置';
+  userMsg.appendChild(userText);
+  env.body.appendChild(userMsg);
+
+  const inst = hostI18nRuntime.mountHostI18n({
+    root: env.win,
+    doc: env.doc,
+    mode: 'off',
+    dict: zhDict,
+    reversePatterns,
+  });
+
+  // Allow rAF / initial scan to complete
+  await new Promise((r) => setTimeout(r, 30));
+
+  const st = inst.getStatus();
+  assert.equal(st.mode, 'off');
+  assert.equal(st.active, true);
+  assert.equal(st.status, 'off-enforced');
+  assert.equal(env.rootEl.getAttribute('data-ag-prism-host-i18n'), 'off-enforced');
+
+  // Verify host UI restored to clean English
+  assert.equal(hostBtn1.textContent, 'App Settings');
+  assert.equal(hostBtn2.textContent, 'Action');
+  assert.equal(hostThought.textContent, 'Thought for 2m 15s');
+  assert.equal(hostTime.textContent, '5 minutes ago');
+
+  // Verify Tier 1 cooperative switch & html[lang] restoration
+  assert.ok(extLangCalls.includes('en'), 'Tier 1 must cooperatively request en on __antigravityZhSetLang');
+  assert.equal(env.rootEl.getAttribute('lang'), 'en');
+
+  // Verify Tier 2 reversible skip attributes stamped on restored host parents
+  assert.equal(hostBtn1.getAttribute('data-ag-localization-skip'), 'true');
+  assert.equal(hostBtn1.getAttribute('data-antigravity-zh-skip'), '1');
+
+  // Verify strict Prism UI & User Prose isolation (ZERO damage!)
+  assert.equal(prismTitle.textContent, '设置', 'Prism zh-CN UI must NEVER be reverse-translated');
+  assert.equal(userText.textContent, '应用设置', 'User chat message must NEVER be reverse-translated');
+
+  // Verify Tier 3 anti-ping-pong circuit breaker on aggressive external overwrites
+  const mo = env.observers.find((o) => o._connected);
+  assert.ok(mo, 'Expected active MutationObserver');
+  const tNode = hostBtn1.firstChild;
+  for (let i = 0; i < 4; i++) {
+    tNode.nodeValue = '应用设置';
+    mo._emit([{ type: 'characterData', target: tNode, addedNodes: [], removedNodes: [] }]);
+    await new Promise((r) => setTimeout(r, 28));
+  }
+  const stBlocked = inst.getStatus();
+  assert.equal(stBlocked.status, 'off-blocked');
+  assert.equal(env.rootEl.getAttribute('data-ag-prism-host-i18n'), 'off-blocked');
+
+  // Verify lossless destroy() rollback (restores snapshots, removes skip attrs, restores html[lang], removes status attr)
+  inst.destroy();
+  assert.equal(hostBtn1.getAttribute('data-ag-localization-skip'), null);
+  assert.equal(hostBtn1.getAttribute('data-antigravity-zh-skip'), null);
+  assert.equal(env.rootEl.getAttribute('lang'), 'zh-CN');
+  assert.equal(env.rootEl.getAttribute('data-ag-prism-host-i18n'), null);
+  assert.equal(inst.getStatus().active, false);
+  assert.equal(inst.getStatus().status, 'off');
+});
+
+test('Battle 2 Settings Panel: displays off-enforced chip and off-blocked amber notice without CJK leak in EN', () => {
+  const env = createMiniDom('en');
+  const dlg = env.doc.createElement('div');
+  dlg.setAttribute('role', 'dialog');
+  const panel = env.doc.createElement('div');
+  panel.className = 'p-6';
+  const heading = env.doc.createElement('h2');
+  heading.textContent = 'Appearance';
+  const anchor = env.doc.createElement('div');
+  anchor.className = 'space-y-2';
+  panel.appendChild(heading);
+  panel.appendChild(anchor);
+  dlg.appendChild(panel);
+  env.body.appendChild(dlg);
+
+  const origDoc = globalThis.document;
+  const origWin = globalThis.window;
+  globalThis.document = env.doc;
+  globalThis.window = env.win;
+
+  const mountWithStatus = (statusAttr) => {
+    if (statusAttr) env.rootEl.setAttribute('data-ag-prism-host-i18n', statusAttr);
+    else env.rootEl.removeAttribute('data-ag-prism-host-i18n');
+    const sec = env.doc.getElementById('ag-cs-settings-sec');
+    if (sec) sec.remove();
+    settingsPanel.mountOrSyncSettingsSection({
+      version: cdp.PLUGIN_VERSION,
+      getLang: () => 'en',
+      uiText: (l) => i18nLocales.getUiStrings(l || 'en'),
+      isZh: () => false,
+      i18nCore,
+      formatSettingsSummary: () => 'Obsidian · Daylight Crystal · Ultra',
+      resolveSettingRowActiveValue: (k) => (k === 'hostLocalization' ? 'off' : k === 'language' ? 'en' : undefined),
+      isSettingButtonMatch: (k, btnValJson, curVal) => JSON.stringify(curVal) === btnValJson,
+      saveSetting: () => {},
+      saveSettingsBatch: () => {},
+      getConfig: () => ({ ...cdp.DEFAULT_CONFIG, language: 'en', hostLocalization: 'off' }),
+      getThoughtTranslateMode: () => 'off',
+      handledGroupClicks: new WeakSet(),
+      runSettingsGroupGlide: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+    env.doc.getElementById('ag-cs-settings-sec')?.__ensureFoldBody?.();
+  };
+
+  const stripAllowedProperNouns = (txt) =>
+    String(txt || '')
+      .replace(/简体中文|繁體中文|日本語|한국어|月上寒/g, '');
+
+  try {
+    mountWithStatus('off-enforced');
+    const secEnforced = env.doc.getElementById('ag-cs-settings-sec');
+    assert.ok(secEnforced, 'Settings section must mount');
+    assert.equal(
+      CJK_RE.test(stripAllowedProperNouns(secEnforced.textContent)),
+      false,
+      `EN settings panel leaked CJK: ${stripAllowedProperNouns(secEnforced.textContent)}`
+    );
+    const langBtns = secEnforced.querySelectorAll('button[data-ag-cs-key="language"]');
+    assert.equal(langBtns.length, 8, 'Must render exactly 8 language buttons (no yue)');
+    assert.ok(
+      secEnforced.textContent.includes(i18nLocales.getUiStrings('en').hostLocStatusEnforced),
+      'Must show off-enforced status text'
+    );
+
+    mountWithStatus('off-blocked');
+    const secBlocked = env.doc.getElementById('ag-cs-settings-sec');
+    assert.ok(
+      secBlocked.textContent.includes(i18nLocales.getUiStrings('en').hostLocStatusBlocked),
+      'Must show off-blocked amber notice text'
+    );
+    assert.equal(
+      CJK_RE.test(stripAllowedProperNouns(secBlocked.textContent)),
+      false,
+      'EN settings panel (off-blocked) must have 0 CJK'
+    );
+  } finally {
+    globalThis.document = origDoc;
+    globalThis.window = origWin;
+  }
+});

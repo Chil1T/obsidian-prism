@@ -1071,12 +1071,12 @@ test('wallpaper-client.js: 0 innerHTML, 0 :has(), balanced CSS, Browser Hole avo
 
 // ── 5. Five-Locale Settings UI & settings-panel.js Minimal Slot Integration ──
 
-test('wallpaper-settings-ui.js: 0 innerHTML, 5 locales, 5+1 anti-translation, and settings-panel.js appearance slot wiring', async () => {
+test('wallpaper-settings-ui.js: 0 innerHTML, 8 locales + yue migration, 5+1 anti-translation, and settings-panel.js appearance slot wiring', async () => {
   const uiSrc = fs.readFileSync(path.join(ROOT, 'vendor', 'wallpaper', 'wallpaper-settings-ui.js'), 'utf8');
   assert.equal(/\.innerHTML\s*=/.test(uiSrc), false, 'wallpaper-settings-ui.js must have 0 innerHTML assignments');
 
-  // Verify 5 locale packs exist, mark Beta explicitly, and have distinct titles
-  const locales = ['zh-CN', 'zh-TW', 'yue', 'en', 'ja'];
+  // Verify 8 locale packs exist, mark Beta explicitly, and have distinct titles
+  const locales = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'];
   const titles = new Set();
   for (const loc of locales) {
     const pack = wallpaperSettingsUiMod.WALLPAPER_I18N[loc];
@@ -1086,7 +1086,7 @@ test('wallpaper-settings-ui.js: 0 innerHTML, 5 locales, 5+1 anti-translation, an
     assert.ok(/Beta/i.test(pack.desc), `Locale ${loc} wallpaper description must clearly mention Beta`);
     titles.add(pack.title);
   }
-  assert.equal(titles.size, 5, 'All 5 locales must provide distinct localized titles');
+  assert.equal(titles.size, 8, 'All 8 locales must provide distinct localized titles');
 
   const env = createDomSandbox();
   const rpcLog = [];
@@ -1117,7 +1117,7 @@ test('wallpaper-settings-ui.js: 0 innerHTML, 5 locales, 5+1 anti-translation, an
   env.sandbox.__agPrismWallpaper = client;
   env.sandbox.__prismMountWallpaperUi = wallpaperSettingsUiMod.mountWallpaperUi;
 
-  // Mount slot and test all 5 locales + interactions
+  // Mount slot and test all 8 locales + yue->zh-CN migration + interactions
   const slot = env.makeNode('div', { 'data-testid': 'prism-wallpaper-slot' });
   env.body.appendChild(slot);
   const handle = wallpaperSettingsUiMod.mountWallpaperUi(slot, {
@@ -1135,6 +1135,9 @@ test('wallpaper-settings-ui.js: 0 innerHTML, 5 locales, 5+1 anti-translation, an
     assert.equal(handle.root.getAttribute('data-ag-cs-lang'), loc);
     assert.equal(handle.root.querySelector('.ag-prism-wp-title').textContent, wallpaperSettingsUiMod.WALLPAPER_I18N[loc].title);
   }
+  handle.updateLang('yue');
+  assert.equal(handle.root.getAttribute('data-ag-cs-lang'), 'zh-CN');
+  assert.equal(handle.root.querySelector('.ag-prism-wp-title').textContent, wallpaperSettingsUiMod.WALLPAPER_I18N['zh-CN'].title);
 
   // Click pick button -> Linux manual input hint shown
   handle.updateLang('en');

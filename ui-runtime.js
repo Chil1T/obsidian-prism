@@ -28,15 +28,65 @@
   const usageCore = GT.__agCsUsageCore;
   const rippleCore = GT.__agCsRippleCore;
   const i18nCore = GT.__agCsI18nCore;
-  const i18nLocales = GT.__agCsLocales;
-  const dualMascotRig = GT.__agDualMascotRig;
+  const getLocalesMod = () => GT.__agCsLocales || W.__agCsLocales || null;
+  const getDualMascotRig = () => GT.__agDualMascotRig || W.__agDualMascotRig || null;
   const crystalPrismCore = GT.__agCrystalPrismCore;
   const motionEngine = GT.__agMotionEngine;
   const animatedIcons = GT.__agAnimatedIcons;
   const pulseVialBridgeMod = GT.__agCsPulseVialBridge;
   const convAuraMod = GT.__agPrismConvAura;
   const smoothCaretMod = GT.__agPrismSmoothCaret;
-  const settingsPanelMod = GT.__agPrismSettingsPanel;
+  const getSettingsPanelMod = () => GT.__agPrismSettingsPanel || W.__agPrismSettingsPanel || null;
+
+  // Channel 1 活跃语言迷你词典垫片：未加载按需 Settings 通道前由 bootCfg.__uiSlice 供电；全量 i18n-locales.js 就位后自动退让
+  const runtimeSliceStore = { active: 'en', byLang: Object.create(null) };
+  const mergeRuntimeUiSlice = (payload) => {
+    if (!payload || typeof payload !== 'object') return;
+    if (typeof payload.active === 'string' && payload.active) runtimeSliceStore.active = payload.active;
+    if (payload.byLang && typeof payload.byLang === 'object') {
+      for (const [k, v] of O.entries(payload.byLang)) {
+        if (v && typeof v === 'object') runtimeSliceStore.byLang[k] = { ...(runtimeSliceStore.byLang[k] || {}), ...v };
+      }
+    }
+  };
+  const ensureLiteLocalesShim = (slicePayload) => {
+    mergeRuntimeUiSlice(slicePayload);
+    const cur = getLocalesMod();
+    if (cur && cur.__isFullLocales) return;
+    if (cur && cur.__isLiteShim) return;
+    const shim = {
+      __isLiteShim: true,
+      getUiStrings(lang) {
+        const l = typeof lang === 'string' && lang ? lang : runtimeSliceStore.active || 'en';
+        const base = runtimeSliceStore.byLang[l] || runtimeSliceStore.byLang.en || runtimeSliceStore.byLang[runtimeSliceStore.active] || {};
+        const out = { ...base };
+        if (out.optThoughtImmersive && !out.optViewImmersive) out.optViewImmersive = out.optThoughtImmersive;
+        if (out.optThoughtBilingual && !out.optViewBilingual) out.optViewBilingual = out.optThoughtBilingual;
+        out.swarmSplitSub = (m, s) =>
+          l === 'zh-CN' ? `主会话 ${m}% · 子代理 ${s}%`
+          : l === 'zh-TW' ? `主工作階段 ${m}% · 子代理 ${s}%`
+          : l === 'ja' ? `メイン ${m}% · サブ ${s}%`
+          : l === 'ko' ? `메인 ${m}% · 서브 ${s}%`
+          : l === 'es' ? `Principal ${m}% · Sub ${s}%`
+          : l === 'fr' ? `Principal ${m}% · Sous ${s}%`
+          : l === 'de' ? `Haupt ${m}% · Sub ${s}%`
+          : `Main ${m}% · Swarm ${s}%`;
+        out.showMoreN = (n) =>
+          l === 'zh-CN' ? `再显示 ${n} 个`
+          : l === 'zh-TW' ? `再顯示 ${n} 個`
+          : l === 'ja' ? `さらに ${n} 件表示`
+          : l === 'ko' ? `${n}개 더 보기`
+          : l === 'es' ? `Mostrar ${n} más`
+          : l === 'fr' ? `Afficher ${n} de plus`
+          : l === 'de' ? `${n} weitere anzeigen`
+          : `Show ${n} more`;
+        return out;
+      },
+    };
+    GT.__agCsLocales = shim;
+    W.__agCsLocales = shim;
+  };
+  if (initialConfig && initialConfig.__uiSlice) ensureLiteLocalesShim(initialConfig.__uiSlice);
   const homeStudioMod = GT.__agPrismHomeStudioPanel;
   const homeRippleMod = GT.__agPrismHomeRippleHost;
   const modelGlyphMod = GT.__agPrismModelGlyphCrystal;
@@ -117,7 +167,17 @@
     for (const k of ['omniModule', 'effortMemory', 'periodicModelPicker']) out[k] = out[k] === 'off' || out[k] === false ? 'off' : 'on';
     out.linkTarget = out.linkTarget === 'external' ? 'external' : 'builtin';
     out.updateChannel = out.updateChannel === 'beta' ? 'beta' : 'stable';
-    const rawLang = (out.language && out.language !== 'auto' ? out.language : '') || (out.lang && out.lang !== 'auto' ? out.lang : '');
+    const migrateLegacyLang = (v) => {
+      if (typeof v !== 'string') return '';
+      const t = v.trim();
+      if (!t) return '';
+      const low = t.toLowerCase().replace(/_/g, '-');
+      if (low === 'yue' || low.startsWith('yue-') || low === 'zh-yue' || low.includes('cantonese')) return 'zh-CN';
+      return t;
+    };
+    const rawLang =
+      (out.language && out.language !== 'auto' ? migrateLegacyLang(out.language) : '') ||
+      (out.lang && out.lang !== 'auto' ? migrateLegacyLang(out.lang) : '');
     if (rawLang) out.language = out.lang = rawLang;
     return out;
   };
@@ -151,7 +211,7 @@
   };
 
   const stripRuntimeMetaKeys = (obj) => {
-    const { binding, pollIntervalMs, codeHash, __fromFile, __ackEpoch, ...clean } = obj || {};
+    const { binding, pollIntervalMs, codeHash, __fromFile, __ackEpoch, __uiSlice, ...clean } = obj || {};
     return clean;
   };
 
@@ -325,21 +385,36 @@
   const saveSetting = (key, value) => persistAndApplyConfigPatch({ [key]: value }, key);
   const saveSettingsBatch = (patchObj) => { if (patchObj && typeof patchObj === 'object') persistAndApplyConfigPatch(patchObj, null); };
 
+  const pickConcreteLang = (v) => (typeof v === 'string' && v.trim() && v.trim().toLowerCase() !== 'auto' ? v.trim() : '');
+
   const getLang = () => {
     const raw =
-      cfg.language ||
-      (cfg.lang && cfg.lang !== 'auto' ? cfg.lang : '') ||
-      currentBaseConfig?.language ||
-      (currentBaseConfig?.lang && currentBaseConfig.lang !== 'auto' ? currentBaseConfig.lang : '') ||
-      (typeof navigator !== 'undefined' && navigator.language ? navigator.language : 'zh-CN');
-    if (isFn(i18nCore?.normalizeLanguage)) return i18nCore.normalizeLanguage(raw);
-    if (raw === 'zh-TW' || raw === 'yue' || raw === 'en' || raw === 'ja') return raw;
-    const low = String(raw || '').toLowerCase();
-    return low.startsWith('zh-tw') || low.startsWith('zh-hk') ? 'zh-TW' : low.startsWith('yue') ? 'yue' : low.startsWith('ja') ? 'ja' : low.startsWith('en') ? 'en' : 'zh-CN';
+      pickConcreteLang(cfg.language) ||
+      pickConcreteLang(cfg.lang) ||
+      pickConcreteLang(currentBaseConfig?.language) ||
+      pickConcreteLang(currentBaseConfig?.lang) ||
+      (typeof navigator !== 'undefined' && (navigator.language || (navigator.languages && navigator.languages[0]))
+        ? navigator.language || navigator.languages[0]
+        : 'en');
+    if (isFn(i18nCore?.normalizeLanguage)) return i18nCore.normalizeLanguage(raw, 'en');
+    const low = String(raw || '').trim().toLowerCase().replace(/_/g, '-');
+    if (low === 'en' || low.startsWith('en-')) return 'en';
+    if (low === 'ja' || low.startsWith('ja-')) return 'ja';
+    if (low === 'ko' || low.startsWith('ko-')) return 'ko';
+    if (low === 'es' || low.startsWith('es-')) return 'es';
+    if (low === 'fr' || low.startsWith('fr-')) return 'fr';
+    if (low === 'de' || low.startsWith('de-')) return 'de';
+    if (low === 'yue' || low.startsWith('yue-') || low === 'zh-yue' || low.includes('cantonese')) return 'zh-CN';
+    if (low === 'zh-tw' || low === 'zh-hk' || low.startsWith('zh-hk-') || low === 'zh-mo' || low.startsWith('zh-hant')) return 'zh-TW';
+    if (low === 'zh' || low.startsWith('zh-')) return 'zh-CN';
+    return 'en';
   };
 
-  const uiText = (lang = getLang()) => (isFn(i18nLocales?.getUiStrings) ? i18nLocales.getUiStrings(lang) : {});
-  const isZh = () => { const l = getLang(); return l === 'zh-CN' || l === 'zh-TW' || l === 'yue'; };
+  const uiText = (lang = getLang()) => {
+    const mod = getLocalesMod();
+    return isFn(mod?.getUiStrings) ? mod.getUiStrings(lang) : {};
+  };
+  const isZh = () => { const l = getLang(); return l === 'zh-CN' || l === 'zh-TW'; };
 
   const isDarkTheme = () => {
     for (const l of [D.body?.[K_CL], de()?.[K_CL]]) {
@@ -632,6 +707,7 @@
       reducedMotion: motionReduced(),
     };
 
+    const dualMascotRig = getDualMascotRig();
     const mountFn = dualMascotRig && (dualMascotRig.mountDualMascotStage || dualMascotRig.createDualMascotRig);
     if (!msRig && mountFn && canMountRealCanvas(msRoot)) {
       try {
@@ -1047,12 +1123,12 @@
     try { tel?.sync?.(cfg); } catch {}
     try { eff?.sync?.(cfg); } catch {}
     try {
-      const shouldDisableHostI18n = hiMode === 'off' || (hiMode === 'auto' && curLang !== 'zh-CN');
-      if (shouldDisableHostI18n) {
+      const shouldDestroyHostI18n = hiMode === 'auto' && curLang !== 'zh-CN';
+      if (shouldDestroyHostI18n) {
         hiInst?.destroy?.();
         ra(de(), 'data-ag-prism-host-i18n');
       } else if (hiInst && isFn(hiInst.setMode)) {
-        hiInst.setMode(hiMode === 'on' ? 'on' : 'auto');
+        hiInst.setMode(hiMode === 'on' ? 'on' : hiMode === 'off' ? 'off' : 'auto');
       }
     } catch {}
     try { th?.sync?.(cfg); } catch {}
@@ -1594,23 +1670,23 @@
     const pal = getEffectivePalette();
     const palLabel =
       pal === 'host'
-        ? ui.optHost || (isZh() ? '跟随主题' : 'Host')
+        ? ui.optHost || 'Host'
         : pal === 'warm'
-        ? ui.optWarm || (isZh() ? 'Alabaster 暖岩' : 'Alabaster')
-        : ui.optObsidian || (isZh() ? 'Obsidian 深空' : 'Obsidian');
+        ? ui.optWarm || 'Alabaster'
+        : ui.optObsidian || 'Obsidian';
     const lp =
       getLightPreset() === 'alabaster'
-        ? ui.optLightAlabaster || (isZh() ? '暖白画册' : 'Warm Alabaster')
-        : ui.optLightCrystal || (isZh() ? '白昼冷晶' : 'Daylight Crystal');
+        ? ui.optLightAlabaster || 'Warm Alabaster'
+        : ui.optLightCrystal || 'Daylight Crystal';
     const ml = getMotionLevel();
     const mlLabel =
       ml === 'off'
-        ? ui.optMotionOff || (isZh() ? '动效关' : 'Off')
+        ? ui.optMotionOff || 'Off'
         : ml === 'subtle'
-        ? ui.optMotionSubtle || (isZh() ? '克制' : 'Subtle')
+        ? ui.optMotionSubtle || 'Subtle'
         : ml === 'standard'
-        ? ui.optMotionStandard || (isZh() ? '标准' : 'Standard')
-        : ui.optMotionUltra || (isZh() ? '完整' : 'Ultra');
+        ? ui.optMotionStandard || 'Standard'
+        : ui.optMotionUltra || 'Ultra';
     return `${palLabel} · ${lp} · ${mlLabel}`;
   };
 
@@ -1650,8 +1726,28 @@
     return false;
   };
 
+  let lastSettingsChannelReqAt = 0;
+
+  function requestSettingsChannelIfDialogOpen() {
+    if (destroyed) return;
+    const now = Date.now();
+    if (now - lastSettingsChannelReqAt < 1000) return;
+    if (!qs(D, '[role="dialog"]')) return;
+    const bindingName = currentBaseConfig?.binding || cfg?.binding || '__agPrismSetting';
+    const fn = W[bindingName];
+    if (!isFn(fn)) return;
+    lastSettingsChannelReqAt = now;
+    try {
+      fn(JSON.stringify({ action: 'request-settings-panel' }));
+    } catch {}
+  }
+
   function ensureSettingsSection() {
-    if (!settingsPanelMod || typeof settingsPanelMod.mountOrSyncSettingsSection !== 'function') return;
+    const settingsPanelMod = getSettingsPanelMod();
+    if (!settingsPanelMod || typeof settingsPanelMod.mountOrSyncSettingsSection !== 'function') {
+      requestSettingsChannelIfDialogOpen();
+      return;
+    }
     settingsPanelMod.mountOrSyncSettingsSection({
       version: VERSION,
       getLang,
@@ -2962,6 +3058,7 @@
     saveSettingsBatch,
     refreshConfig(next) {
       if (next && typeof next === 'object') {
+        if (next.__uiSlice) ensureLiteLocalesShim(next.__uiSlice);
         const fromFile = !!(next.__fromFile);
         const ackEpoch = Number(next.__ackEpoch) || 0;
         if (fromFile && ackEpoch > 0 && ackEpoch < localWriteEpoch) {

@@ -39,6 +39,10 @@ const {
   shouldEnablePeriodicPicker,
   buildPeriodicPickerExpression,
   PERIODIC_PICKER_REMOVE_EXPRESSION,
+  buildSettingsChannelExpression,
+  shouldEnableMascot,
+  buildMascotChannelExpression,
+  MASCOT_REMOVE_EXPRESSION,
 } = require('./cdp');
 
 const FALLBACK_THOUGHT_REMOVE_EXPRESSION =
@@ -409,11 +413,29 @@ async function injectOnce() {
     periodicPickerEnabled && typeof buildPeriodicPickerExpression === 'function'
       ? buildPeriodicPickerExpression(cfgNow, PERIODIC_PICKER_CACHE_OPTS)
       : '';
+  const settingsExpr =
+    typeof buildSettingsChannelExpression === 'function'
+      ? buildSettingsChannelExpression(cfgNow, PERIODIC_PICKER_CACHE_OPTS)
+      : '';
+  const mascotEnabled =
+    typeof shouldEnableMascot === 'function' ? shouldEnableMascot(cfgNow) : cfgNow?.mascot !== 'off';
+  const mascotExpr =
+    mascotEnabled && typeof buildMascotChannelExpression === 'function'
+      ? buildMascotChannelExpression(cfgNow, PERIODIC_PICKER_CACHE_OPTS)
+      : '';
   for (const page of targets) {
     let session = null;
     try {
       session = await CdpSession.connect(page.webSocketDebuggerUrl);
       const res = await session.evaluate(expr);
+      if (settingsExpr) {
+        await session.evaluate(settingsExpr).catch(() => {});
+      }
+      if (mascotExpr) {
+        await session.evaluate(mascotExpr).catch(() => {});
+      } else if (!mascotEnabled && MASCOT_REMOVE_EXPRESSION) {
+        await session.evaluate(MASCOT_REMOVE_EXPRESSION).catch(() => {});
+      }
       if (omniExpr) {
         await session.evaluate(omniExpr).catch(() => {});
       }
@@ -828,6 +850,28 @@ async function watch() {
     } else if (!periodicPickerExpr) {
       entry.periodicPickerMounted = false;
     }
+    const mascotEnabledNow = typeof shouldEnableMascot === 'function' ? shouldEnableMascot(cfgNow) : cfgNow?.mascot !== 'off';
+    const mascotExprNow =
+      mascotEnabledNow && typeof buildMascotChannelExpression === 'function'
+        ? buildMascotChannelExpression(cfgNow, PERIODIC_PICKER_CACHE_OPTS)
+        : '';
+    if (entry.mascotScriptId) {
+      await entry.session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.mascotScriptId })
+        .catch(() => {});
+      entry.mascotScriptId = null;
+    }
+    if (mascotExprNow) {
+      const mAdd = await entry.session
+        .send('Page.addScriptToEvaluateOnNewDocument', { source: mascotExprNow })
+        .catch(() => null);
+      if (mAdd && mAdd.identifier) entry.mascotScriptId = mAdd.identifier;
+      const mEval = await entry.session.evaluate(mascotExprNow).catch(() => null);
+      if (mEval && mEval.ok) entry.mascotMounted = true;
+    } else if (!mascotEnabledNow && entry.mascotMounted && MASCOT_REMOVE_EXPRESSION) {
+      await entry.session.evaluate(MASCOT_REMOVE_EXPRESSION).catch(() => {});
+      entry.mascotMounted = false;
+    }
     return res;
   }
 
@@ -853,6 +897,8 @@ async function watch() {
         lastInlineDiffHash: '',
         periodicPickerScriptId: null,
         periodicPickerMounted: false,
+        mascotScriptId: null,
+        mascotMounted: false,
         docGen: 0,
         mainFrameId: null,
         hasFrameTree: false,
@@ -1043,6 +1089,17 @@ async function watch() {
         if (name !== SETTING_BINDING && name !== LEGACY_SETTING_BINDING) return;
         try {
           const parsed = JSON.parse(payload);
+          if (parsed && parsed.action === 'request-settings-panel') {
+            if (typeof buildSettingsChannelExpression === 'function') {
+              const sExpr = buildSettingsChannelExpression(null, PERIODIC_PICKER_CACHE_OPTS);
+              if (sExpr) {
+                const evalParams = { expression: sExpr, returnByValue: true };
+                if (typeof executionContextId === 'number' && executionContextId > 0) evalParams.contextId = executionContextId;
+                await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+              }
+            }
+            return;
+          }
           let changed = false;
           if (parsed && parsed.action === 'patch-batch' && parsed.entries && typeof parsed.entries === 'object') {
             selfConfigWriteUntil = Date.now() + 650;
@@ -1089,6 +1146,7 @@ async function watch() {
           if (entry.thoughtScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId });
           if (entry.inlineDiffScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.inlineDiffScriptId });
           if (entry.periodicPickerScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId });
+          if (entry.mascotScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.mascotScriptId });
         } catch {}
         entry.session.close();
       }

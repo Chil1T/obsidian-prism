@@ -493,7 +493,7 @@ test('runtime translates exact, pattern, attributes, multi-text merge, inline re
   assert.equal(after.active, false);
   assert.equal(after.status, 'off');
   assert.equal(after.translatedCount, 0);
-  assert.equal(env.doc.documentElement.getAttribute('data-ag-prism-host-i18n'), 'off');
+  assert.equal(env.doc.documentElement.getAttribute('data-ag-prism-host-i18n'), null);
 
   assert.equal(navBtn.textContent, 'Settings');
   assert.equal(navBtn.getAttribute('aria-label'), 'Settings');
@@ -841,7 +841,7 @@ test('0fps hibernation on document.hidden / window blur and resume scan on focus
   inst.destroy();
 });
 
-test('Channel 4 isolation: main bundle < 690 KiB without dict, shouldEnableHostI18n gating, and off mode 0 B fail-closed', () => {
+test('Channel 4 isolation: main bundle < 690 KiB without dict, shouldEnableHostI18n gating (incl. off reverse-restore), and auto+non-zh 0 B fail-closed', () => {
   const mainExpr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
   const mainBytes = Buffer.byteLength(mainExpr, 'utf8');
   assert.ok(mainBytes <= 704000, `Main bundle must stay <= 704,000 B, got ${mainBytes}`);
@@ -852,7 +852,8 @@ test('Channel 4 isolation: main bundle < 690 KiB without dict, shouldEnableHostI
   assert.equal(cdp.DEFAULT_CONFIG.hostLocalization, 'auto');
   assert.deepEqual(cdp.VALIDATORS.hostLocalization, ['auto', 'on', 'off']);
 
-  assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'off', language: 'zh-CN' }), false);
+  assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'off', language: 'zh-CN' }), true);
+  assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'off', language: 'en' }), true);
   assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'on', language: 'en' }), true);
   assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'zh-CN' }), true);
   assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'en' }), false);
@@ -860,8 +861,12 @@ test('Channel 4 isolation: main bundle < 690 KiB without dict, shouldEnableHostI
   assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'auto' }, 'zh-CN'), true);
   assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'auto' }, 'en-US'), false);
 
-  assert.equal(cdp.buildHostI18nExpression({ hostLocalization: 'off', language: 'zh-CN' }), '');
+  const offExpr = cdp.buildHostI18nExpression({ hostLocalization: 'off', language: 'zh-CN' });
+  assert.ok(Buffer.byteLength(offExpr, 'utf8') > 100000, 'off mode must mount Channel 4 for reverse English restore');
+  assert.doesNotThrow(() => new vm.Script(offExpr));
   assert.equal(cdp.buildHostI18nExpression({ hostLocalization: 'auto', language: 'en' }), '');
+  assert.equal(cdp.buildHostI18nExpression({ hostLocalization: 'auto', language: 'zh-TW' }), '');
+  assert.equal(cdp.buildHostI18nExpression({ hostLocalization: 'auto', language: 'auto' }, 'en-US'), '');
 
   const ch4Expr = cdp.buildHostI18nExpression({ hostLocalization: 'auto', language: 'zh-CN' });
   assert.ok(Buffer.byteLength(ch4Expr, 'utf8') > 100000);
@@ -1353,7 +1358,7 @@ test('[P1-C, P1-D, P1-E, P1-F] hover trailing tooltip, post-1200ms observer hibe
   inst.destroy();
   assert.equal(hoverBtn.getAttribute('aria-label'), 'Collapse');
 
-  // [P1-E] yielded state destroy() resets status and root attribute to 'off'
+  // [P1-E] yielded state destroy() resets status to 'off' and removes root attribute
   const yEnv = createTestEnv();
   yEnv.win.__AGY_I18N_INITIALIZED__ = true;
   const yInst = runtime.mountHostI18n({ root: yEnv.win, doc: yEnv.doc, dict, mode: 'auto' });
@@ -1362,7 +1367,7 @@ test('[P1-C, P1-D, P1-E, P1-F] hover trailing tooltip, post-1200ms observer hibe
   yInst.destroy();
   assert.equal(yInst.getStatus().status, 'off');
   assert.equal(yInst.getStatus().yielded, false);
-  assert.equal(yEnv.doc.documentElement.getAttribute('data-ag-prism-host-i18n'), 'off');
+  assert.equal(yEnv.doc.documentElement.getAttribute('data-ag-prism-host-i18n'), null);
 
   // Re-mounting over existing instance destroys old instance cleanly
   const yInst2 = runtime.mountHostI18n({ root: yEnv.win, doc: yEnv.doc, dict, mode: 'on' });

@@ -42,6 +42,206 @@
       { key: 'tps', zh: '吞吐极速', en: 'Velocity', vertexZh: '极速', vertexEn: 'Speed' },
     ];
 
+    var BENTO_I18N = {
+      'zh-CN': {
+        detailsOpen: '展开面板 ▾', detailsClose: '收起面板 ▴',
+        teleOff: '遥测未开启', teleOffTitle: '实时遥测未开启', teleDisabledTitle: '实时遥测已关闭',
+        teleOffSub: '仅展示真实上下文指标 · 已禁用模拟数据',
+        badgeDisabled: '已关闭', badgeOffline: '未开启', badgeTight: '紧凑 TIGHT', badgeOptimal: '充裕 OPTIMAL',
+        kv: '缓存 ', free: '余量 ', specBtn: '规格',
+        flipToSpec: '切换回 MOD-01 评测规格面板', flipToTele: '切换至 MOD-02 512K 实时遥测面板',
+        metaKicker: '原生模型元信息', metaModel: '名称', metaEffort: '推理档位', metaDefault: '默认', metaId: '原生标识',
+        metaNote: '未收录于 2026Q4 基准库 · 仅展示真实宿主元数据',
+        ttHead: '2026Q4 评测口径与思考档位说明',
+        ttLines: ['AA v5：Artificial Analysis 综合智力指数（满分 100）', 'TermBench：命令行与终端自主排障通过率（%）', 'HLE-D / GPQA-D：前沿科学与多步难题推理（%）', 'SWE-Pro / AutoBench：真实软件工程修复率（%）', '思考档位：Low 极速响应 · Med 均衡 · High 深度 · XHigh 极限推理'],
+        locked: '锁定态', hoverTag: '预览', activeTag: '当前',
+        orchTopo: '双核路由拓扑 · DUAL-CORE', planner: '规划核', runner: '执行核',
+        inFlowDock: '内嵌底坞', stage3d: '全屏展台',
+        dockReturn: '收起回输入框正下方内嵌底坞 (F)', stageExpand: '展开全屏 3D 展台并解锁自由旋转 (F)',
+        unmute: '开启机械音效', mute: '静音', closeDock: '收起底坞 (Esc / Enter)',
+        auxPrev: '上一页副盘模型', auxNext: '下一页副盘模型', pagePre: '第 ', pageSuf: ' 页',
+        radarAxes: ['AA v5', 'TermBench', 'HLE-D', 'SWE-Pro', '吞吐极速'],
+        radarVerts: ['推理', '终端', '科学', '工程', '极速'],
+      },
+      'zh-TW': {
+        detailsOpen: '展開面板 ▾', detailsClose: '收起面板 ▴',
+        teleOff: '遙測未開啟', teleOffTitle: '即時遙測未開啟', teleDisabledTitle: '即時遙測已關閉',
+        teleOffSub: '僅顯示真實上下文指標 · 已停用模擬資料',
+        badgeDisabled: '已關閉', badgeOffline: '未開啟', badgeTight: '緊湊 TIGHT', badgeOptimal: '充裕 OPTIMAL',
+        kv: '快取 ', free: '餘量 ', specBtn: '規格',
+        flipToSpec: '切換回 MOD-01 評測規格面板', flipToTele: '切換至 MOD-02 512K 即時遙測面板',
+        metaKicker: '原生模型中繼資料', metaModel: '名稱', metaEffort: '推理檔位', metaDefault: '預設', metaId: '原生識別',
+        metaNote: '未收錄於 2026Q4 基準庫 · 僅顯示真實宿主中繼資料',
+        ttHead: '2026Q4 評測口徑與思考檔位說明',
+        ttLines: ['AA v5：Artificial Analysis 綜合智力指數（滿分 100）', 'TermBench：命令列與終端自主排障通過率（%）', 'HLE-D / GPQA-D：前沿科學與多步難題推理（%）', 'SWE-Pro / AutoBench：真實軟體工程修復率（%）', '思考檔位：Low 極速響應 · Med 均衡 · High 深度 · XHigh 極限推理'],
+        locked: '鎖定態', hoverTag: '預覽', activeTag: '目前',
+        orchTopo: '雙核路由拓樸 · DUAL-CORE', planner: '規劃核', runner: '執行核',
+        inFlowDock: '內嵌底塢', stage3d: '全螢幕展台',
+        dockReturn: '收合回輸入框下方內嵌底塢 (F)', stageExpand: '展開全螢幕 3D 展台並解鎖自由旋轉 (F)',
+        unmute: '開啟機械音效', mute: '靜音', closeDock: '收合底塢 (Esc / Enter)',
+        auxPrev: '上一頁副盤模型', auxNext: '下一頁副盤模型', pagePre: '第 ', pageSuf: ' 頁',
+        radarAxes: ['AA v5', 'TermBench', 'HLE-D', 'SWE-Pro', '吞吐極速'],
+        radarVerts: ['推理', '終端', '科學', '工程', '極速'],
+      },
+      en: {
+        detailsOpen: 'Details ▾', detailsClose: 'Hide Panel ▴',
+        teleOff: 'Telemetry Off', teleOffTitle: 'Telemetry Offline', teleDisabledTitle: 'Telemetry Disabled',
+        teleOffSub: 'Live metrics only · Synthetic fallback disabled',
+        badgeDisabled: 'DISABLED', badgeOffline: 'OFFLINE', badgeTight: 'TIGHT', badgeOptimal: 'OPTIMAL',
+        kv: 'KV ', free: 'Free ', specBtn: 'Spec',
+        flipToSpec: 'Switch to MOD-01 Spec & Benchmarks', flipToTele: 'Switch to MOD-02 512K Telemetry',
+        metaKicker: 'NATIVE MODEL METADATA', metaModel: 'MODEL', metaEffort: 'EFFORT', metaDefault: 'Default', metaId: 'TAG / ID',
+        metaNote: 'Not listed in 2026Q4 benchmarks · Showing live host metadata',
+        ttHead: '2026Q4 Benchmarks & Thinking Tiers',
+        ttLines: ['AA v5: Artificial Analysis Intelligence Index (0-100)', 'TermBench: Autonomous terminal & CLI task accuracy (%)', 'HLE-D / GPQA-D: Frontier science & deep reasoning (%)', 'SWE-Pro / AutoBench: Real-world software engineering (%)', 'Effort: Low Fast · Med Balanced · High Deep · XHigh Max'],
+        locked: 'Locked', hoverTag: 'Hover', activeTag: 'Active',
+        orchTopo: 'Dual-Core Routing Topology', planner: 'PLANNER', runner: 'RUNNER',
+        inFlowDock: 'In-Flow Dock', stage3d: '3D Stage',
+        dockReturn: 'Return to In-Flow Desk Dock below Input Box (F)', stageExpand: 'Expand Fullscreen 3D Stage & Free Orbit (F)',
+        unmute: 'Unmute Audio', mute: 'Mute Audio', closeDock: 'Collapse Dock (Esc / Enter)',
+        auxPrev: 'Previous aux pad page', auxNext: 'Next aux pad page', pagePre: 'Page ', pageSuf: '',
+        radarAxes: ['AA v5', 'TermBench', 'HLE-D', 'SWE-Pro', 'Velocity'],
+        radarVerts: ['AA', 'Term', 'Sci', 'SWE', 'Speed'],
+      },
+      ja: {
+        detailsOpen: '詳細 ▾', detailsClose: 'パネルを閉じる ▴',
+        teleOff: '計測オフ', teleOffTitle: 'テレメトリ未接続', teleDisabledTitle: 'テレメトリ無効',
+        teleOffSub: '実測コンテキスト指標のみ表示 · 擬似データ無効',
+        badgeDisabled: '無効', badgeOffline: 'オフライン', badgeTight: '逼迫 TIGHT', badgeOptimal: '余裕 OPTIMAL',
+        kv: 'KV ', free: '残 ', specBtn: '仕様',
+        flipToSpec: 'MOD-01 ベンチマーク仕様へ戻る', flipToTele: 'MOD-02 512K リアルタイム計測へ切替',
+        metaKicker: 'ネイティブモデルメタ情報', metaModel: 'モデル', metaEffort: '推論レベル', metaDefault: '既定', metaId: '識別子',
+        metaNote: '2026Q4 ベンチ対象外 · ホスト実メタデータを表示中',
+        ttHead: '2026Q4 評価指標と推論レベル説明',
+        ttLines: ['AA v5：Artificial Analysis 総合知能指数 (100点満点)', 'TermBench：端末・CLI 自律修復成功率 (%)', 'HLE-D / GPQA-D：先端科学・多段推論正答率 (%)', 'SWE-Pro / AutoBench：実ソフトウェア修正率 (%)', '推論レベル：Low 高速 · Med 均衡 · High 深層 · XHigh 極限'],
+        locked: 'ロック中', hoverTag: 'プレビュー', activeTag: '現在',
+        orchTopo: 'デュアルコア経路トポロジ', planner: '計画コア', runner: '実行コア',
+        inFlowDock: 'インラインドック', stage3d: '3Dステージ',
+        dockReturn: '入力欄下のインラインドックへ戻す (F)', stageExpand: '全画面 3D ステージを展開して自由回転 (F)',
+        unmute: 'メカニカル音を有効化', mute: 'ミュート', closeDock: 'ドックを閉じる (Esc / Enter)',
+        auxPrev: '前のサブキーページ', auxNext: '次のサブキーページ', pagePre: '', pageSuf: ' ページ',
+        radarAxes: ['AA v5', 'TermBench', 'HLE-D', 'SWE-Pro', '生成速度'],
+        radarVerts: ['AA', 'Term', '科学', 'SWE', '速度'],
+      },
+      ko: {
+        detailsOpen: '상세 ▾', detailsClose: '패널 접기 ▴',
+        teleOff: '텔레메트리 꺼짐', teleOffTitle: '텔레메트리 오프라인', teleDisabledTitle: '텔레메트리 비활성',
+        teleOffSub: '실시간 컨텍스트 지표만 표시 · 가상 데이터 비활성화',
+        badgeDisabled: '꺼짐', badgeOffline: '오프라인', badgeTight: '부족 TIGHT', badgeOptimal: '여유 OPTIMAL',
+        kv: '캐시 ', free: '여유 ', specBtn: '사양',
+        flipToSpec: 'MOD-01 벤치마크 사양으로 전환', flipToTele: 'MOD-02 512K 실시간 텔레메트리로 전환',
+        metaKicker: '기본 모델 메타데이터', metaModel: '모델', metaEffort: '추론 수준', metaDefault: '기본값', metaId: '태그 / ID',
+        metaNote: '2026Q4 벤치마크 미등재 · 호스트 메타데이터 표시 중',
+        ttHead: '2026Q4 벤치마크 및 사고 수준 안내',
+        ttLines: ['AA v5: Artificial Analysis 종합 지능 지수 (0-100)', 'TermBench: 터미널·CLI 자율 작업 정확도 (%)', 'HLE-D / GPQA-D: 첨단 과학 및 심층 추론 (%)', 'SWE-Pro / AutoBench: 실제 소프트웨어 엔지니어링 (%)', '수준: Low 고속 · Med 균형 · High 심층 · XHigh 최대'],
+        locked: '잠김', hoverTag: '미리보기', activeTag: '활성',
+        orchTopo: '듀얼 코어 라우팅 토폴로지', planner: '플래너', runner: '러너',
+        inFlowDock: '인라인 독', stage3d: '3D 스테이지',
+        dockReturn: '입력창 아래 인라인 독으로 복귀 (F)', stageExpand: '전체 화면 3D 스테이지 및 자유 회전 (F)',
+        unmute: '키캡 사운드 켜기', mute: '음소거', closeDock: '독 닫기 (Esc / Enter)',
+        auxPrev: '이전 보조 키 페이지', auxNext: '다음 보조 키 페이지', pagePre: '', pageSuf: '페이지',
+        radarAxes: ['AA v5', 'TermBench', 'HLE-D', 'SWE-Pro', '처리 속도'],
+        radarVerts: ['AA', 'Term', '과학', 'SWE', '속도'],
+      },
+      es: {
+        detailsOpen: 'Detalles ▾', detailsClose: 'Ocultar ▴',
+        teleOff: 'Telemetría apagada', teleOffTitle: 'Telemetría desconectada', teleDisabledTitle: 'Telemetría desactivada',
+        teleOffSub: 'Solo métricas reales · Datos sintéticos desactivados',
+        badgeDisabled: 'APAGADA', badgeOffline: 'OFFLINE', badgeTight: 'JUSTO', badgeOptimal: 'ÓPTIMO',
+        kv: 'KV ', free: 'Libre ', specBtn: 'Espec.',
+        flipToSpec: 'Volver a especificaciones MOD-01', flipToTele: 'Cambiar a telemetría MOD-02 512K',
+        metaKicker: 'METADATOS DEL MODELO', metaModel: 'MODELO', metaEffort: 'ESFUERZO', metaDefault: 'Predet.', metaId: 'TAG / ID',
+        metaNote: 'Fuera de benchmarks 2026Q4 · Mostrando metadatos reales',
+        ttHead: 'Benchmarks 2026Q4 y niveles de esfuerzo',
+        ttLines: ['AA v5: Índice de inteligencia Artificial Analysis (0-100)', 'TermBench: Precisión autónoma en terminal y CLI (%)', 'HLE-D / GPQA-D: Ciencia de frontera y razonamiento (%)', 'SWE-Pro / AutoBench: Ingeniería de software real (%)', 'Esfuerzo: Low Rápido · Med Equil. · High Prof. · XHigh Máx'],
+        locked: 'Bloqueado', hoverTag: 'Vista previa', activeTag: 'Activo',
+        orchTopo: 'Topología de doble núcleo', planner: 'PLANIF.', runner: 'EJECUTOR',
+        inFlowDock: 'Dock integrado', stage3d: 'Escena 3D',
+        dockReturn: 'Volver al dock bajo el editor (F)', stageExpand: 'Expandir escena 3D y órbita libre (F)',
+        unmute: 'Activar sonido', mute: 'Silenciar', closeDock: 'Contraer dock (Esc / Enter)',
+        auxPrev: 'Página anterior', auxNext: 'Página siguiente', pagePre: 'Página ', pageSuf: '',
+        radarAxes: ['AA v5', 'TermBench', 'HLE-D', 'SWE-Pro', 'Velocidad'],
+        radarVerts: ['AA', 'Term', 'Cienc.', 'SWE', 'Vel.'],
+      },
+      fr: {
+        detailsOpen: 'Détails ▾', detailsClose: 'Masquer ▴',
+        teleOff: 'Télémétrie coupée', teleOffTitle: 'Télémétrie hors ligne', teleDisabledTitle: 'Télémétrie désactivée',
+        teleOffSub: 'Métriques réelles uniquement · Secours synthétique coupé',
+        badgeDisabled: 'COUPÉE', badgeOffline: 'HORS LIGNE', badgeTight: 'SERRÉ', badgeOptimal: 'OPTIMAL',
+        kv: 'KV ', free: 'Libre ', specBtn: 'Spéc.',
+        flipToSpec: 'Revenir au panneau MOD-01', flipToTele: 'Passer à la télémétrie MOD-02 512K',
+        metaKicker: 'MÉTADONNÉES NATIVES', metaModel: 'MODÈLE', metaEffort: 'EFFORT', metaDefault: 'Défaut', metaId: 'TAG / ID',
+        metaNote: 'Absent des benchmarks 2026Q4 · Métadonnées hôte réelles',
+        ttHead: 'Benchmarks 2026Q4 et niveaux de réflexion',
+        ttLines: ['AA v5 : Indice d’intelligence Artificial Analysis (0-100)', 'TermBench : Précision autonome terminal & CLI (%)', 'HLE-D / GPQA-D : Science avancée & raisonnement (%)', 'SWE-Pro / AutoBench : Génie logiciel réel (%)', 'Effort : Low Rapide · Med Équil. · High Prof. · XHigh Max'],
+        locked: 'Verrouillé', hoverTag: 'Aperçu', activeTag: 'Actif',
+        orchTopo: 'Topologie double cœur', planner: 'PLANIF.', runner: 'EXÉC.',
+        inFlowDock: 'Dock intégré', stage3d: 'Scène 3D',
+        dockReturn: 'Revenir au dock sous la zone de saisie (F)', stageExpand: 'Agrandir la scène 3D en plein écran (F)',
+        unmute: 'Activer le son', mute: 'Couper le son', closeDock: 'Fermer le dock (Esc / Enter)',
+        auxPrev: 'Page précédente', auxNext: 'Page suivante', pagePre: 'Page ', pageSuf: '',
+        radarAxes: ['AA v5', 'TermBench', 'HLE-D', 'SWE-Pro', 'Vélocité'],
+        radarVerts: ['AA', 'Term', 'Sci', 'SWE', 'Vit.'],
+      },
+      de: {
+        detailsOpen: 'Details ▾', detailsClose: 'Ausblenden ▴',
+        teleOff: 'Telemetrie aus', teleOffTitle: 'Telemetrie offline', teleDisabledTitle: 'Telemetrie deaktiviert',
+        teleOffSub: 'Nur Live-Kontextmetriken · Synthetik deaktiviert',
+        badgeDisabled: 'AUS', badgeOffline: 'OFFLINE', badgeTight: 'KNAPP', badgeOptimal: 'OPTIMAL',
+        kv: 'KV ', free: 'Frei ', specBtn: 'Daten',
+        flipToSpec: 'Zurück zu MOD-01 Spezifikationen', flipToTele: 'Zu MOD-02 512K-Telemetrie wechseln',
+        metaKicker: 'NATIVE MODELL-METADATEN', metaModel: 'MODELL', metaEffort: 'AUFWAND', metaDefault: 'Standard', metaId: 'TAG / ID',
+        metaNote: 'Nicht in 2026Q4-Benchmarks · Zeige echte Host-Metadaten',
+        ttHead: '2026Q4-Benchmarks & Denkstufen',
+        ttLines: ['AA v5: Artificial Analysis Intelligence Index (0-100)', 'TermBench: Autonome Terminal- & CLI-Aufgaben (%)', 'HLE-D / GPQA-D: Spitzenwissenschaft & Tiefenlogik (%)', 'SWE-Pro / AutoBench: Reale Softwareentwicklung (%)', 'Aufwand: Low Schnell · Med Ausgew. · High Tief · XHigh Max'],
+        locked: 'Gesperrt', hoverTag: 'Vorschau', activeTag: 'Aktiv',
+        orchTopo: 'Dual-Core-Routingtopologie', planner: 'PLANER', runner: 'RUNNER',
+        inFlowDock: 'Inline-Dock', stage3d: '3D-Bühne',
+        dockReturn: 'Zurück zum Inline-Dock unter dem Eingabefeld (F)', stageExpand: 'Vollbild-3D-Bühne & freies Drehen (F)',
+        unmute: 'Ton einschalten', mute: 'Stummschalten', closeDock: 'Dock schließen (Esc / Enter)',
+        auxPrev: 'Vorherige Aux-Seite', auxNext: 'Nächste Aux-Seite', pagePre: 'Seite ', pageSuf: '',
+        radarAxes: ['AA v5', 'TermBench', 'HLE-D', 'SWE-Pro', 'Tempo'],
+        radarVerts: ['AA', 'Term', 'Wiss.', 'SWE', 'Tempo'],
+      },
+    };
+
+    function normalizePeriodicLang(raw) {
+      var s = String(raw || '').trim().toLowerCase().replace(/_/g, '-');
+      if (!s || s === 'auto') return '';
+      if (s === 'yue' || s.indexOf('yue-') === 0 || s === 'zh-yue' || s.indexOf('cantonese') !== -1) return 'zh-CN';
+      if (/^zh-(tw|hant|hk|mo)/.test(s) || s === 'tw' || s === 'hant') return 'zh-TW';
+      if (/^zh(?:$|-)/.test(s)) return 'zh-CN';
+      if (/^(ja|jp)(?:$|-)/.test(s) || s === 'japanese') return 'ja';
+      if (/^(ko|kr)(?:$|-)/.test(s) || s === 'korean') return 'ko';
+      if (/^es(?:$|-)/.test(s) || s === 'spanish') return 'es';
+      if (/^fr(?:$|-)/.test(s) || s === 'french') return 'fr';
+      if (/^de(?:$|-)/.test(s) || s === 'german') return 'de';
+      if (/^en(?:$|-)/.test(s) || s === 'english') return 'en';
+      return '';
+    }
+
+    function resolveLocale(doc, rt) {
+      try {
+        var de = doc && doc.documentElement;
+        var attr = (de && de.getAttribute && (de.getAttribute('data-ag-cs-lang') || de.getAttribute('lang'))) || '';
+        var nAttr = normalizePeriodicLang(attr);
+        if (nAttr) return nAttr;
+        var navObj = rt && 'navigator' in rt ? rt.navigator : (typeof navigator !== 'undefined' ? navigator : null);
+        var navLang = (navObj && navObj.language) || '';
+        var nNav = normalizePeriodicLang(navLang);
+        if (nNav) return nNav;
+      } catch (e) {}
+      return 'en';
+    }
+
+    function getBentoI18nPack(langOrZh) {
+      if (typeof langOrZh === 'string') {
+        return BENTO_I18N[normalizePeriodicLang(langOrZh) || langOrZh] || BENTO_I18N.en;
+      }
+      if (langOrZh === true) return BENTO_I18N['zh-CN'];
+      return BENTO_I18N.en;
+    }
+
     var CORE_FOUR_ELEMENTS = [
       { slotZ: 1, symbol: 'H' },
       { slotZ: 6, symbol: 'C' },
@@ -699,20 +899,8 @@
     }
 
     function isZhLocale(doc, rt) {
-      try {
-        var de = doc && doc.documentElement;
-        var attr = (de && de.getAttribute && (de.getAttribute('data-ag-cs-lang') || de.getAttribute('lang'))) || '';
-        attr = String(attr).trim();
-        if (attr) {
-          return /^zh(?:[-_]|$)/i.test(attr);
-        }
-        var navLang = (rt && rt.navigator && rt.navigator.language) || '';
-        navLang = String(navLang).trim();
-        if (navLang) {
-          return /^zh(?:[-_]|$)/i.test(navLang);
-        }
-      } catch (e) {}
-      return false;
+      var l = resolveLocale(doc, rt);
+      return l === 'zh-CN' || l === 'zh-TW';
     }
 
     var _bentoRmMqlCache = typeof WeakMap === 'function' ? new WeakMap() : null;
@@ -1381,11 +1569,11 @@
       return segs.join(' ') + ' Z';
     }
 
-    function buildFiveAxisRadarSvg(doc, zh) {
+    function buildFiveAxisRadarSvg(doc, langOrZh) {
       var cx = 66;
       var cy = 68;
       var maxR = 40;
-      var isZh = Boolean(zh);
+      var pack = getBentoI18nPack(langOrZh);
       var svg = mkSvg(doc, 'svg', {
         class: 'ag-pp-radar-svg',
         viewBox: '0 0 132 132',
@@ -1407,7 +1595,7 @@
         var lx = lPt.x + (s === 1 ? -4 : s === 4 ? 4 : s === 2 ? -5 : s === 3 ? 5 : 0);
         var ly = lPt.y + (s === 0 ? -1.5 : s === 2 || s === 3 ? 3.5 : 2.5);
         var vLbl = mkSvg(doc, 'text', { class: 'ag-pp-radar-vtx-lbl', x: lx.toFixed(1), y: ly.toFixed(1), 'text-anchor': anchor });
-        vLbl.textContent = isZh ? RADAR_AXES[s].vertexZh : RADAR_AXES[s].vertexEn;
+        vLbl.textContent = (pack.radarVerts && pack.radarVerts[s]) || RADAR_AXES[s].vertexEn;
         svg.appendChild(vLbl);
         vertexLabels.push(vLbl);
       }
@@ -1508,8 +1696,9 @@
       }
 
       if (Array.isArray(radarRefs.vertexLabels)) {
+        var pack = getBentoI18nPack(zh);
         for (var vi = 0; vi < radarRefs.vertexLabels.length && vi < RADAR_AXES.length; vi += 1) {
-          radarRefs.vertexLabels[vi].textContent = zh ? RADAR_AXES[vi].vertexZh : RADAR_AXES[vi].vertexEn;
+          radarRefs.vertexLabels[vi].textContent = (pack.radarVerts && pack.radarVerts[vi]) || RADAR_AXES[vi].vertexEn;
         }
       }
 
@@ -1765,7 +1954,8 @@
     }
 
     function buildBentoTwinCards(doc, handlers, opts) {
-      var zhInit = Boolean((opts && opts.zh !== undefined ? opts.zh : handlers && handlers.zh !== undefined ? handlers.zh : isZhLocale(doc, opts && opts.root)));
+      var langInit = (opts && opts.lang) ? (normalizePeriodicLang(opts.lang) || 'en') : (handlers && handlers.lang) ? (normalizePeriodicLang(handlers.lang) || 'en') : ((opts && opts.zh !== undefined) ? (opts.zh ? 'zh-CN' : 'en') : (handlers && handlers.zh !== undefined) ? (handlers.zh ? 'zh-CN' : 'en') : resolveLocale(doc, opts && opts.root));
+      var packInit = getBentoI18nPack(langInit);
       var activeHandlers = handlers || {};
 
       /* Medium & Narrow Top 38px Hardware Bar */
@@ -1787,7 +1977,7 @@
       var compactDot = mkEl(doc, 'span', 'ag-pp-family-dot ag-pp-narrow-only');
       var compactTitle = mkEl(doc, 'span', 'ag-pp-compact-title ag-pp-narrow-only', 'Gemini 4 Carbon');
       var compactMetrics = mkEl(doc, 'span', 'ag-pp-compact-metrics ag-pp-narrow-only', '');
-      var compactToggleLbl = mkEl(doc, 'span', 'ag-pp-compact-toggle-lbl ag-pp-narrow-only', zhInit ? '展开面板 ▾' : 'Details ▾');
+      var compactToggleLbl = mkEl(doc, 'span', 'ag-pp-compact-toggle-lbl ag-pp-narrow-only', packInit.detailsOpen);
       compactLeft.appendChild(compactHwBadge);
       compactLeft.appendChild(compactModelPill);
       compactLeft.appendChild(compactDot);
@@ -1798,7 +1988,7 @@
       var compactRight = mkEl(doc, 'div', 'ag-pp-compact-right');
       var compactTeleWrap = mkEl(doc, 'div', 'ag-pp-compact-tele-wrap');
       compactTeleWrap.setAttribute('data-telemetry-available', '0');
-      var compact512k = mkEl(doc, 'span', 'ag-pp-compact-512k', zhInit ? '遥测未开启' : 'Telemetry Off');
+      var compact512k = mkEl(doc, 'span', 'ag-pp-compact-512k', packInit.teleOff);
       var compact512kBar = mkEl(doc, 'div', 'ag-pp-compact-tele-bar');
       var compact512kFill = mkEl(doc, 'div', 'ag-pp-compact-tele-fill');
       setStyleVar(compact512kFill, 'width', '0%');
@@ -1911,7 +2101,7 @@
 
       var radarPane = mkEl(doc, 'div', 'ag-pp-recess-screen ag-pp-radar-pane ag-pp-bento-foldable');
       var radarCol = mkEl(doc, 'div', 'ag-pp-radar-col');
-      var radarSvgRefs = buildFiveAxisRadarSvg(doc, zhInit);
+      var radarSvgRefs = buildFiveAxisRadarSvg(doc, langInit);
       var radarLegend = mkEl(doc, 'div', 'ag-pp-radar-legend');
       radarLegend.setAttribute('data-show', '0');
       var legPri = mkEl(doc, 'span', 'ag-pp-radar-leg-item');
@@ -1931,7 +2121,7 @@
       var barRefs = [];
       for (var bi = 0; bi < RADAR_AXES.length; bi += 1) {
         var rRow = mkEl(doc, 'div', 'ag-pp-radar-row');
-        var rLbl = mkEl(doc, 'span', 'ag-pp-radar-lbl', zhInit ? RADAR_AXES[bi].zh : RADAR_AXES[bi].en);
+        var rLbl = mkEl(doc, 'span', 'ag-pp-radar-lbl', (packInit.radarAxes && packInit.radarAxes[bi]) || RADAR_AXES[bi].en);
         var rTrack = mkEl(doc, 'div', 'ag-pp-radar-track');
         var rFill = mkEl(doc, 'div', 'ag-pp-radar-fill');
         setStyleVar(rFill, 'width', '65%');
@@ -1972,13 +2162,13 @@
       /* Pure Native Metadata Pane for Unknown / Unlisted Models (isKnownBenchmark === false) */
       var metaPane = mkEl(doc, 'div', 'ag-pp-recess-screen ag-pp-meta-pane ag-pp-bento-foldable');
       metaPane.setAttribute('data-testid', 'ag-pp-unknown-meta-pane');
-      var metaKicker = mkEl(doc, 'div', 'ag-pp-meta-kicker', zhInit ? '原生模型元信息' : 'NATIVE MODEL METADATA');
+      var metaKicker = mkEl(doc, 'div', 'ag-pp-meta-kicker', packInit.metaKicker);
       var metaGrid = mkEl(doc, 'div', 'ag-pp-meta-grid');
-      var metaModelKey = mkEl(doc, 'span', 'ag-pp-meta-key', zhInit ? '名称' : 'MODEL');
+      var metaModelKey = mkEl(doc, 'span', 'ag-pp-meta-key', packInit.metaModel);
       var metaModelVal = mkEl(doc, 'span', 'ag-pp-meta-val', '');
-      var metaEffortKey = mkEl(doc, 'span', 'ag-pp-meta-key', zhInit ? '推理档位' : 'EFFORT');
+      var metaEffortKey = mkEl(doc, 'span', 'ag-pp-meta-key', packInit.metaEffort);
       var metaEffortVal = mkEl(doc, 'span', 'ag-pp-meta-val', '');
-      var metaIdKey = mkEl(doc, 'span', 'ag-pp-meta-key', zhInit ? '原生标识' : 'TAG / ID');
+      var metaIdKey = mkEl(doc, 'span', 'ag-pp-meta-key', packInit.metaId);
       var metaIdVal = mkEl(doc, 'span', 'ag-pp-meta-val', '');
       metaGrid.appendChild(metaModelKey);
       metaGrid.appendChild(metaModelVal);
@@ -1986,12 +2176,7 @@
       metaGrid.appendChild(metaEffortVal);
       metaGrid.appendChild(metaIdKey);
       metaGrid.appendChild(metaIdVal);
-      var metaNote = mkEl(
-        doc,
-        'div',
-        'ag-pp-meta-note',
-        zhInit ? '未收录于 2026Q4 基准库 · 仅展示真实宿主元数据' : 'Not listed in 2026Q4 benchmarks · Showing live host metadata'
-      );
+      var metaNote = mkEl(doc, 'div', 'ag-pp-meta-note', packInit.metaNote);
       metaPane.appendChild(metaKicker);
       metaPane.appendChild(metaGrid);
       metaPane.appendChild(metaNote);
@@ -2016,12 +2201,7 @@
       var benchTooltip = mkEl(doc, 'div', 'ag-pp-bench-tooltip');
       markPeriodicOwnedRoot(benchTooltip);
       benchTooltip.setAttribute('role', 'tooltip');
-      var ttHead = mkEl(
-        doc,
-        'div',
-        'ag-pp-tt-head',
-        zhInit ? '2026Q4 评测口径与思考档位说明' : '2026Q4 Benchmarks & Thinking Tiers'
-      );
+      var ttHead = mkEl(doc, 'div', 'ag-pp-tt-head', packInit.ttHead);
       var ttLines = [];
       for (var tli = 0; tli < 5; tli += 1) {
         var lineNode = mkEl(doc, 'div', 'ag-pp-tt-line', '');
@@ -2062,7 +2242,7 @@
       cardFlipBackBtn.setAttribute('data-testid', 'ag-pp-card-flip-back-btn');
       cardFlipBackBtn.setAttribute('aria-pressed', 'true');
       cardFlipBackBtn.appendChild(buildCardFlipIconSvg(doc));
-      var cardFlipBackLabel = mkEl(doc, 'span', '', zhInit ? '规格' : 'Spec');
+      var cardFlipBackLabel = mkEl(doc, 'span', '', packInit.specBtn);
       cardFlipBackBtn.appendChild(cardFlipBackLabel);
       cardFlipBackBtn.addEventListener('click', function (ev) {
         ev.stopPropagation();
@@ -2078,7 +2258,7 @@
       stageModeBtn.setAttribute('data-testid', 'ag-pp-stage-mode-btn');
       stageModeBtn.setAttribute('data-ag-pp-action', 'toggle-stage-mode');
       var modeIconRefs = buildStageModeIconSvg(doc);
-      var modeLabelSpan = mkEl(doc, 'span', 'ag-pp-stage-btn-lbl', zhInit ? '全屏展台' : '3D Stage');
+      var modeLabelSpan = mkEl(doc, 'span', 'ag-pp-stage-btn-lbl', packInit.stage3d);
       var modeKeyTag = mkEl(doc, 'span', 'ag-pp-stage-key-tag', 'F');
       stageModeBtn.appendChild(modeIconRefs.svg);
       stageModeBtn.appendChild(modeKeyTag);
@@ -2119,25 +2299,15 @@
       teleScreen.setAttribute('data-has-pulse', '0');
       var teleTopRow = mkEl(doc, 'div', 'ag-pp-tele-top-row');
       var teleHero512k = mkEl(doc, 'span', 'ag-pp-tele-hero-512k', '512K');
-      var teleHealth = mkEl(doc, 'span', 'ag-pp-tele-health ag-pp-bento-foldable', zhInit ? '未开启' : 'OFFLINE');
+      var teleHealth = mkEl(doc, 'span', 'ag-pp-tele-health ag-pp-bento-foldable', packInit.badgeOffline);
       teleHealth.setAttribute('data-level', 'offline');
       teleTopRow.appendChild(teleHero512k);
       teleTopRow.appendChild(teleHealth);
 
       var teleOfflineBox = mkEl(doc, 'div', 'ag-pp-tele-offline-box');
       teleOfflineBox.setAttribute('data-testid', 'ag-pp-tele-offline');
-      var teleOfflineTitle = mkEl(
-        doc,
-        'div',
-        'ag-pp-tele-offline-title',
-        zhInit ? '实时遥测未开启' : 'Telemetry Offline'
-      );
-      var teleOfflineSub = mkEl(
-        doc,
-        'div',
-        'ag-pp-tele-offline-sub',
-        zhInit ? '仅展示真实上下文指标' : 'Live context metrics unavailable'
-      );
+      var teleOfflineTitle = mkEl(doc, 'div', 'ag-pp-tele-offline-title', packInit.teleOffTitle);
+      var teleOfflineSub = mkEl(doc, 'div', 'ag-pp-tele-offline-sub', packInit.teleOffSub);
       teleOfflineBox.appendChild(teleOfflineTitle);
       teleOfflineBox.appendChild(teleOfflineSub);
 
@@ -2162,13 +2332,13 @@
 
       var teleMetrics = mkEl(doc, 'div', 'ag-pp-tele-metrics ag-pp-bento-foldable');
       var cacheKv = mkEl(doc, 'span', 'ag-pp-tele-kv');
-      var cacheLbl = mkEl(doc, 'span', '', zhInit ? '缓存 ' : 'KV ');
+      var cacheLbl = mkEl(doc, 'span', '', packInit.kv);
       var cacheVal = mkEl(doc, 'strong', '', '—');
       cacheKv.appendChild(cacheLbl);
       cacheKv.appendChild(cacheVal);
 
       var freeKv = mkEl(doc, 'span', 'ag-pp-tele-kv');
-      var freeLbl = mkEl(doc, 'span', '', zhInit ? '余量 ' : 'Free ');
+      var freeLbl = mkEl(doc, 'span', '', packInit.free);
       var freeVal = mkEl(doc, 'strong', '', '—');
       freeKv.appendChild(freeLbl);
       freeKv.appendChild(freeVal);
@@ -2201,21 +2371,16 @@
 
       var orchView = mkEl(doc, 'div', 'ag-pp-orch-view');
       orchView.setAttribute('data-testid', 'ag-pp-dualcore-topology');
-      var orchTopoTitle = mkEl(
-        doc,
-        'div',
-        'ag-pp-sub-title',
-        zhInit ? '双核路由拓扑 · DUAL-CORE' : 'Dual-Core Routing Topology'
-      );
+      var orchTopoTitle = mkEl(doc, 'div', 'ag-pp-sub-title', packInit.orchTopo);
       var topoNodes = mkEl(doc, 'div', 'ag-pp-topo-nodes');
       var plannerBox = mkEl(doc, 'div', 'ag-pp-topo-box');
-      var plannerRoleEl = mkEl(doc, 'span', 'ag-pp-topo-role', zhInit ? '规划核' : 'PLANNER');
+      var plannerRoleEl = mkEl(doc, 'span', 'ag-pp-topo-role', packInit.planner);
       var plannerValEl = mkEl(doc, 'span', 'ag-pp-topo-val', '6C High');
       plannerBox.appendChild(plannerRoleEl);
       plannerBox.appendChild(plannerValEl);
       var topoArrow = mkEl(doc, 'span', 'ag-pp-topo-arrow', '→');
       var runnerBox = mkEl(doc, 'div', 'ag-pp-topo-box is-runner');
-      var runnerRoleEl = mkEl(doc, 'span', 'ag-pp-topo-role', zhInit ? '执行核' : 'RUNNER');
+      var runnerRoleEl = mkEl(doc, 'span', 'ag-pp-topo-role', packInit.runner);
       var runnerValEl = mkEl(doc, 'span', 'ag-pp-topo-val', '1H High');
       runnerBox.appendChild(runnerRoleEl);
       runnerBox.appendChild(runnerValEl);
@@ -2240,7 +2405,7 @@
       var auxPrevBtn = mkEl(doc, 'button', 'ag-pp-aux-page-btn', '<');
       auxPrevBtn.type = 'button';
       auxPrevBtn.setAttribute('data-testid', 'ag-pp-aux-prev');
-      auxPrevBtn.setAttribute('aria-label', zhInit ? '上一页副盘模型' : 'Previous aux pad page');
+      auxPrevBtn.setAttribute('aria-label', packInit.auxPrev);
       auxPrevBtn.addEventListener('click', function (ev) {
         ev.stopPropagation();
         if (pagerState.count <= 1) return;
@@ -2259,7 +2424,7 @@
       var auxNextBtn = mkEl(doc, 'button', 'ag-pp-aux-page-btn', '>');
       auxNextBtn.type = 'button';
       auxNextBtn.setAttribute('data-testid', 'ag-pp-aux-next');
-      auxNextBtn.setAttribute('aria-label', zhInit ? '下一页副盘模型' : 'Next aux pad page');
+      auxNextBtn.setAttribute('aria-label', packInit.auxNext);
       auxNextBtn.addEventListener('click', function (ev) {
         ev.stopPropagation();
         if (pagerState.count <= 1) return;
@@ -2374,9 +2539,11 @@
       };
     }
 
-    function syncAuxPagerDom(bentoRefs, doc, auxPage, auxPageCount, zh, handlers) {
+    function syncAuxPagerDom(bentoRefs, doc, auxPage, auxPageCount, langOrZh, handlers) {
       if (!bentoRefs || !bentoRefs.auxPager) return;
       if (handlers) bentoRefs._handlers = handlers;
+      var pack = getBentoI18nPack(langOrZh);
+      var langKey = typeof langOrZh === 'string' ? (normalizePeriodicLang(langOrZh) || langOrZh) : (langOrZh ? 'zh-CN' : 'en');
       var total = Math.max(1, Number(auxPageCount) || 1);
       var page = Math.max(0, Math.min(total - 1, Number(auxPage) || 0));
       if (bentoRefs._pagerState) {
@@ -2394,16 +2561,16 @@
       bentoRefs.auxPager.setAttribute('data-show', '1');
       setStyleVar(bentoRefs.auxPager, 'display', null);
       if (bentoRefs.auxPrevBtn) {
-        bentoRefs.auxPrevBtn.setAttribute('aria-label', zh ? '上一页副盘模型' : 'Previous aux pad page');
+        bentoRefs.auxPrevBtn.setAttribute('aria-label', pack.auxPrev);
       }
       if (bentoRefs.auxNextBtn) {
-        bentoRefs.auxNextBtn.setAttribute('aria-label', zh ? '下一页副盘模型' : 'Next aux pad page');
+        bentoRefs.auxNextBtn.setAttribute('aria-label', pack.auxNext);
       }
       if (bentoRefs.auxPageTxt) {
         bentoRefs.auxPageTxt.textContent = (page + 1) + '/' + total;
       }
 
-      var pSig = total + ':' + page + ':' + (zh ? 'zh' : 'en');
+      var pSig = total + ':' + page + ':' + langKey;
       if (bentoRefs._lastPagerSig === pSig) return;
       bentoRefs._lastPagerSig = pSig;
 
@@ -2416,7 +2583,7 @@
             dot.setAttribute('data-page-index', String(idx));
             dot.setAttribute('data-active', idx === page ? '1' : '0');
             if (idx === page) dot.setAttribute('aria-current', 'page');
-            dot.setAttribute('aria-label', (zh ? '第 ' : 'Page ') + (idx + 1) + (zh ? ' 页' : ''));
+            dot.setAttribute('aria-label', pack.pagePre + (idx + 1) + pack.pageSuf);
             dot.addEventListener('click', function (ev) {
               ev.stopPropagation();
               var h = bentoRefs._handlers;
@@ -2438,7 +2605,9 @@
       var bSpec = params.bSpec;
       var committed = params.committed || {};
       var tele = params.telemetry || { available: false, reason: 'offline' };
-      var zh = Boolean(params.zh);
+      var lang = params.lang ? (normalizePeriodicLang(params.lang) || 'en') : (typeof params.zh === 'boolean' ? (params.zh ? 'zh-CN' : 'en') : resolveLocale(doc, rt));
+      var pack = getBentoI18nPack(lang);
+      var zh = lang === 'zh-CN' || lang === 'zh-TW';
       var profile = params.profile || resolvePrismThemeProfile(doc, rt);
       var stageMode = params.stageMode || 'drawer';
       var muted = Boolean(params.muted);
@@ -2468,7 +2637,7 @@
 
       var bentoSig =
         (profile ? profile.id + ':' + profile.accent + ':' + (isMono ? '1' : '0') : '') +
-        '|' + (zh ? 'zh' : 'en') +
+        '|' + lang +
         '|' + stageMode +
         '|' + (muted ? '1' : '0') +
         '|' + (useShortCite ? '1' : '0') +
@@ -2500,7 +2669,7 @@
         '|' + (committed.litDots || 0) +
         '|' + teleSig;
 
-      syncAuxPagerDom(bentoRefs, doc, auxPage, auxPageCount, zh, handlers);
+      syncAuxPagerDom(bentoRefs, doc, auxPage, auxPageCount, lang, handlers);
 
       if (bentoRefs._lastDomSig === bentoSig) return;
       bentoRefs._lastDomSig = bentoSig;
@@ -2560,24 +2729,20 @@
           : (bSpec.activeEffortLabel || bSpec.activeEffort || 'Native');
       }
       if (bentoRefs.compactToggleLbl) {
-        bentoRefs.compactToggleLbl.textContent = compactExpanded
-          ? (zh ? '收起面板 ▴' : 'Hide Panel ▴')
-          : (zh ? '展开面板 ▾' : 'Details ▾');
+        bentoRefs.compactToggleLbl.textContent = compactExpanded ? pack.detailsClose : pack.detailsOpen;
       }
 
       if (bentoRefs.cardFlipBtn && bentoRefs.cardFlipLabel) {
         bentoRefs.cardFlipBtn.setAttribute('aria-pressed', cardFlipped ? 'true' : 'false');
-        var flipText = cardFlipped ? (zh ? '规格' : 'Spec') : '512K';
-        var flipTitle = cardFlipped
-          ? (zh ? '切换回 MOD-01 评测规格面板' : 'Switch to MOD-01 Spec & Benchmarks')
-          : (zh ? '切换至 MOD-02 512K 实时遥测面板' : 'Switch to MOD-02 512K Telemetry');
+        var flipText = cardFlipped ? pack.specBtn : '512K';
+        var flipTitle = cardFlipped ? pack.flipToSpec : pack.flipToTele;
         bentoRefs.cardFlipLabel.textContent = flipText;
         bentoRefs.cardFlipBtn.setAttribute('aria-label', flipTitle);
         bentoRefs.cardFlipBtn.title = flipTitle;
       }
       if (bentoRefs.cardFlipBackBtn && bentoRefs.cardFlipBackLabel) {
-        var backText = zh ? '规格' : 'Spec';
-        var backTitle = zh ? '切换回 MOD-01 评测规格面板' : 'Switch back to MOD-01 Spec';
+        var backText = pack.specBtn;
+        var backTitle = pack.flipToSpec;
         bentoRefs.cardFlipBackBtn.setAttribute('aria-pressed', cardFlipped ? 'true' : 'false');
         bentoRefs.cardFlipBackLabel.textContent = backText;
         bentoRefs.cardFlipBackBtn.setAttribute('aria-label', backTitle);
@@ -2593,7 +2758,7 @@
           specGlowRgba,
           bSpec.runnerRatios,
           bSpec.compareRatios,
-          zh,
+          lang,
           isLight
         );
         if (bentoRefs.radarLegend && bentoRefs.legPriText && bentoRefs.legSecText) {
@@ -2603,8 +2768,8 @@
             bentoRefs.legSecText.textContent = '1H';
           } else if (bSpec.compareRatios) {
             bentoRefs.radarLegend.setAttribute('data-show', '1');
-            bentoRefs.legPriText.textContent = bSpec.shortTag || (zh ? '预览' : 'Hover');
-            bentoRefs.legSecText.textContent = bSpec.compareTag || (zh ? '当前' : 'Active');
+            bentoRefs.legPriText.textContent = bSpec.shortTag || pack.hoverTag;
+            bentoRefs.legSecText.textContent = bSpec.compareTag || pack.activeTag;
           } else {
             bentoRefs.radarLegend.setAttribute('data-show', '0');
           }
@@ -2616,7 +2781,7 @@
           if (!br) continue;
           var rItem = rows[ri];
           if (rItem) {
-            br.lbl.textContent = rItem.label;
+            br.lbl.textContent = (pack.radarAxes && pack.radarAxes[ri]) || rItem.label;
             setStyleVar(br.fill, 'width', Math.max(8, Math.min(100, Number(rItem.fillPct) || 20)) + '%');
             br.val.textContent = rItem.valText;
             if (br.delta) {
@@ -2632,23 +2797,21 @@
       } else {
         if (bentoRefs.specCard) bentoRefs.specCard.setAttribute('data-comparing', '0');
         if (bentoRefs.metaKicker) {
-          bentoRefs.metaKicker.textContent = zh ? '原生模型元信息' : 'NATIVE MODEL METADATA';
+          bentoRefs.metaKicker.textContent = pack.metaKicker;
         }
-        if (bentoRefs.metaModelKey) bentoRefs.metaModelKey.textContent = zh ? '名称' : 'MODEL';
+        if (bentoRefs.metaModelKey) bentoRefs.metaModelKey.textContent = pack.metaModel;
         if (bentoRefs.metaModelVal) bentoRefs.metaModelVal.textContent = bSpec.title || '—';
-        if (bentoRefs.metaEffortKey) bentoRefs.metaEffortKey.textContent = zh ? '推理档位' : 'EFFORT';
+        if (bentoRefs.metaEffortKey) bentoRefs.metaEffortKey.textContent = pack.metaEffort;
         if (bentoRefs.metaEffortVal) {
-          bentoRefs.metaEffortVal.textContent = bSpec.activeEffortLabel || bSpec.activeEffort || (zh ? '默认' : 'Default');
+          bentoRefs.metaEffortVal.textContent = bSpec.activeEffortLabel || bSpec.activeEffort || pack.metaDefault;
         }
-        if (bentoRefs.metaIdKey) bentoRefs.metaIdKey.textContent = zh ? '原生标识' : 'TAG / ID';
+        if (bentoRefs.metaIdKey) bentoRefs.metaIdKey.textContent = pack.metaId;
         if (bentoRefs.metaIdVal) {
           var nativeTagText = bSpec.modelId || (Array.isArray(bSpec.microTags) && bSpec.microTags.length ? bSpec.microTags.join(' · ') : '') || bSpec.badge || '—';
           bentoRefs.metaIdVal.textContent = nativeTagText;
         }
         if (bentoRefs.metaNote) {
-          bentoRefs.metaNote.textContent = zh
-            ? '未收录于 2026Q4 基准库 · 仅展示真实宿主元数据'
-            : 'Not listed in 2026Q4 benchmarks · Showing live host metadata';
+          bentoRefs.metaNote.textContent = pack.metaNote;
         }
       }
 
@@ -2657,22 +2820,8 @@
         bentoRefs.sourceCiteEl.title = BENCHMARK_SOURCE_CITATION;
       }
       if (bentoRefs.ttHead && Array.isArray(bentoRefs.ttLines)) {
-        bentoRefs.ttHead.textContent = zh ? '2026Q4 评测口径与思考档位说明' : '2026Q4 Benchmarks & Thinking Tiers';
-        var ttCopy = zh
-          ? [
-              'AA v5：Artificial Analysis 综合智力指数（满分 100）',
-              'TermBench：命令行与终端自主排障通过率（%）',
-              'HLE-D / GPQA-D：前沿科学与多步难题推理（%）',
-              'SWE-Pro / AutoBench：真实软件工程修复率（%）',
-              '思考档位：Low 极速响应 · Med 均衡 · High 深度 · XHigh 极限推理',
-            ]
-          : [
-              'AA v5: Artificial Analysis Intelligence Index (0-100)',
-              'TermBench: Autonomous terminal & CLI task accuracy (%)',
-              'HLE-D / GPQA-D: Frontier science & deep reasoning (%)',
-              'SWE-Pro / AutoBench: Real-world software engineering (%)',
-              'Effort: Low Fast · Med Balanced · High Deep · XHigh Max',
-            ];
+        bentoRefs.ttHead.textContent = pack.ttHead;
+        var ttCopy = pack.ttLines;
         for (var tli = 0; tli < bentoRefs.ttLines.length; tli += 1) {
           bentoRefs.ttLines[tli].textContent = ttCopy[tli] || '';
         }
@@ -2682,7 +2831,7 @@
         bSpec.kind +
         ':' + (bSpec.z !== null && bSpec.z !== undefined ? bSpec.z : bSpec.auxIndex) +
         ':' + (orchLatched ? 'orch' : 'solo') +
-        ':' + (zh ? 'zh' : 'en') +
+        ':' + lang +
         '|' + (bSpec.levels || []).map(function (l) { return l.effort + ':' + (l.active ? '1' : '0') + ':' + l.label; }).join(',');
 
       if (bentoRefs.lastBentoEffSig !== bentoEffSig && doc) {
@@ -2705,7 +2854,7 @@
         var btnPool = bentoRefs._effortBtnPool;
         var hasLevels = Boolean(bSpec.isAvailable && bSpec.levels && bSpec.levels.length > 0);
         if (!hasLevels) {
-          lockedNoteEl.textContent = bSpec.stateText || (zh ? '锁定态' : 'Locked');
+          lockedNoteEl.textContent = bSpec.stateText || pack.locked;
           setStyleVar(lockedNoteEl, 'display', '');
           lockedNoteEl.hidden = false;
           lockedNoteEl.removeAttribute('aria-hidden');
@@ -2787,38 +2936,29 @@
       if (!teleAvailable) {
         var isDisabled = tele && tele.reason === 'disabled';
         bentoRefs.teleHealth.setAttribute('data-level', 'offline');
-        bentoRefs.teleHealth.textContent = isDisabled
-          ? (zh ? '已关闭' : 'DISABLED')
-          : (zh ? '未开启' : 'OFFLINE');
+        bentoRefs.teleHealth.textContent = isDisabled ? pack.badgeDisabled : pack.badgeOffline;
         if (bentoRefs.teleOfflineTitle) {
-          bentoRefs.teleOfflineTitle.textContent = isDisabled
-            ? (zh ? '实时遥测已关闭' : 'Telemetry Disabled')
-            : (zh ? '实时遥测未开启' : 'Telemetry Offline');
+          bentoRefs.teleOfflineTitle.textContent = isDisabled ? pack.teleDisabledTitle : pack.teleOffTitle;
         }
         if (bentoRefs.teleOfflineSub) {
-          bentoRefs.teleOfflineSub.textContent = zh
-            ? '仅展示真实上下文指标 · 已禁用模拟数据'
-            : 'Live metrics only · Synthetic fallback disabled';
+          bentoRefs.teleOfflineSub.textContent = pack.teleOffSub;
         }
         bentoRefs.bigNumEl.textContent = '—';
         bentoRefs.capLblEl.textContent = '—';
         setStyleVar(bentoRefs.crystalFill, 'width', '0%');
-        bentoRefs.cacheLbl.textContent = zh ? '缓存 ' : 'KV ';
+        bentoRefs.cacheLbl.textContent = pack.kv;
         bentoRefs.cacheVal.textContent = '—';
-        bentoRefs.freeLbl.textContent = zh ? '余量 ' : 'Free ';
+        bentoRefs.freeLbl.textContent = pack.free;
         bentoRefs.freeVal.textContent = '—';
         if (bentoRefs.teleScreen) bentoRefs.teleScreen.setAttribute('data-has-pulse', '0');
         updateTelemetryPulseSvg(bentoRefs.pulseSvgRefs, null, committedAccentHex, committedSecondaryHex);
-        if (bentoRefs.compact512k) bentoRefs.compact512k.textContent = zh ? '遥测未开启' : 'Telemetry Off';
+        if (bentoRefs.compact512k) bentoRefs.compact512k.textContent = pack.teleOff;
         if (bentoRefs.compact512kFill) setStyleVar(bentoRefs.compact512kFill, 'width', '0%');
       } else {
         var ratio = tele.maxTokens > 0 ? Math.max(0, Math.min(1, tele.usedTokens / tele.maxTokens)) : 0;
         var healthLevel = tele.healthLevel || (ratio > 0.78 ? 'warn' : 'ok');
         bentoRefs.teleHealth.setAttribute('data-level', healthLevel);
-        bentoRefs.teleHealth.textContent =
-          healthLevel === 'warn'
-            ? (zh ? '紧凑 TIGHT' : 'TIGHT')
-            : (zh ? '充裕 OPTIMAL' : 'OPTIMAL');
+        bentoRefs.teleHealth.textContent = healthLevel === 'warn' ? pack.badgeTight : pack.badgeOptimal;
         var usedLbl = tele.usedLabel || String(tele.usedTokens);
         var maxLbl = tele.maxLabel || String(tele.maxTokens);
         var pctVal = typeof tele.pct === 'number' && Number.isFinite(tele.pct) ? tele.pct : Math.round(ratio * 1000) / 10;
@@ -2826,12 +2966,12 @@
         bentoRefs.capLblEl.textContent = tele.percentText || pctVal.toFixed(1) + '%';
         var fillPctStr = Math.max(3, Math.min(100, ratio * 100)).toFixed(1) + '%';
         setStyleVar(bentoRefs.crystalFill, 'width', fillPctStr);
-        bentoRefs.cacheLbl.textContent = zh ? '缓存 ' : 'KV ';
+        bentoRefs.cacheLbl.textContent = pack.kv;
         bentoRefs.cacheVal.textContent =
           typeof tele.kvCacheRate === 'number' && Number.isFinite(tele.kvCacheRate)
             ? Math.round(tele.kvCacheRate) + '%'
             : (tele.cacheText && tele.cacheText !== '—' ? tele.cacheText : '—');
-        bentoRefs.freeLbl.textContent = zh ? '余量 ' : 'Free ';
+        bentoRefs.freeLbl.textContent = pack.free;
         bentoRefs.freeVal.textContent = tele.freeLabel || '—';
 
         var hasRealPulse = Array.isArray(tele.pulsePoints) && tele.pulsePoints.length >= 2;
@@ -2856,19 +2996,17 @@
         }
       }
       if (bentoRefs.orchTopoTitle) {
-        bentoRefs.orchTopoTitle.textContent = zh ? '双核路由拓扑 · DUAL-CORE' : 'Dual-Core Routing Topology';
+        bentoRefs.orchTopoTitle.textContent = pack.orchTopo;
       }
-      if (bentoRefs.plannerRoleEl) bentoRefs.plannerRoleEl.textContent = zh ? '规划核' : 'PLANNER';
-      if (bentoRefs.runnerRoleEl) bentoRefs.runnerRoleEl.textContent = zh ? '执行核' : 'RUNNER';
+      if (bentoRefs.plannerRoleEl) bentoRefs.plannerRoleEl.textContent = pack.planner;
+      if (bentoRefs.runnerRoleEl) bentoRefs.runnerRoleEl.textContent = pack.runner;
       if (bentoRefs.plannerValEl) bentoRefs.plannerValEl.textContent = bSpec.plannerTopoLabel || '6C High';
       if (bentoRefs.runnerValEl) bentoRefs.runnerValEl.textContent = '1H High';
 
       /* Integrated Machined Controls */
       var isFull = stageMode === 'fullscreen';
-      var modeBtnText = isFull ? (zh ? '内嵌底坞' : 'In-Flow Dock') : (zh ? '全屏展台' : '3D Stage');
-      var modeTitle = isFull
-        ? (zh ? '收起回输入框正下方内嵌底坞 (F)' : 'Return to In-Flow Desk Dock below Input Box (F)')
-        : (zh ? '展开全屏 3D 展台并解锁自由旋转 (F)' : 'Expand Fullscreen 3D Stage & Free Orbit (F)');
+      var modeBtnText = isFull ? pack.inFlowDock : pack.stage3d;
+      var modeTitle = isFull ? pack.dockReturn : pack.stageExpand;
       var modePathD = isFull ? 'M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5' : 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5';
 
       bentoRefs.modeLabelSpan.textContent = modeBtnText;
@@ -2887,8 +3025,8 @@
         }
       }
 
-      var muteTitleText = zh ? (muted ? '开启机械音效' : '静音') : (muted ? 'Unmute Audio' : 'Mute Audio');
-      var closeTitleText = zh ? '收起底坞 (Esc / Enter)' : 'Collapse Dock (Esc / Enter)';
+      var muteTitleText = muted ? pack.unmute : pack.mute;
+      var closeTitleText = pack.closeDock;
       bentoRefs.quickMuteBtn.setAttribute('data-muted', muted ? '1' : '0');
       bentoRefs.quickMuteBtn.title = muteTitleText;
       bentoRefs.quickMuteBtn.setAttribute('aria-label', muteTitleText);
@@ -2920,6 +3058,9 @@
       ensureStyles: ensureStyles,
       cleanupUiResiduals: cleanupUiResiduals,
       markPeriodicOwnedRoot: markPeriodicOwnedRoot,
+      normalizePeriodicLang: normalizePeriodicLang,
+      resolveLocale: resolveLocale,
+      getBentoI18nPack: getBentoI18nPack,
       isZhLocale: isZhLocale,
       isReducedMotion: isReducedMotion,
       invalidateComputedThemeCache: invalidateComputedThemeCache,

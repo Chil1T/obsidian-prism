@@ -1016,6 +1016,11 @@ enum InstallerCore {
     static func generateLauncherShellScript(targetApp: String) -> String {
         let normalizedTarget = CdpHelper.normalizeAntigravityAppPath(targetApp)
         let quotedTarget = shellSingleQuote(normalizedTarget)
+        let notFoundMsg = InstallerI18n.tr(
+            "未在 /Applications 或 ~/Applications 中找到 Antigravity.app。",
+            "Antigravity.app was not found in /Applications or ~/Applications."
+        )
+        let quotedNotFoundMsg = shellSingleQuote(notFoundMsg)
         let lines: [String] = [
             "#!/bin/sh",
             "set -eu",
@@ -1041,7 +1046,7 @@ enum InstallerCore {
             "",
             "TARGET_APP=\"$(resolve_target_app || true)\"",
             "if [ -z \"$TARGET_APP\" ]; then",
-            "  NOT_FOUND_MSG=\"$(printf 'Antigravity.app was not found in /Applications or ~/Applications.\\n\\n未在 /Applications 或 ~/Applications 中找到 Antigravity.app。')\"",
+            "  NOT_FOUND_MSG=\(quotedNotFoundMsg)",
             "  /usr/bin/osascript - \"$NOT_FOUND_MSG\" <<'APPLESCRIPT' >/dev/null 2>&1 || true",
             "on run argv",
             "  display dialog (item 1 of argv) with title \"Antigravity Prism\" buttons {\"OK\"} default button \"OK\"",

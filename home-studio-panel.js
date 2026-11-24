@@ -38,6 +38,31 @@
     return extractScopeFromUri(s);
   };
   const formatScopeBadge = (sc) => (!sc || sc === 'local' ? '' : sc.startsWith('ssh:') ? 'SSH · ' + sc.slice(4) : sc.startsWith('remote:') ? 'Remote' + (sc.slice(7) ? ' · ' + sc.slice(7) : '') : '');
+  const STUDIO_FB = {
+    'zh-CN': ['子代理', 'Token', '蜂群', '入', '出', '额度偏低', '余量偏紧', '充裕', '接下来做什么', '，', '？'],
+    'zh-TW': ['子代理', 'Token', '蜂群', '入', '出', '額度偏低', '餘量偏緊', '充裕', '接下來做什麼', '，', '？'],
+    en: ['subagents', 'tokens', 'Swarm', 'in', 'out', 'Low Quota', 'Running Low', 'Healthy', "What's up next", ', ', '?'],
+    ja: ['サブエージェント', 'トークン', 'Swarm', '入力', '出力', '残枠少', '残り少なめ', '余裕あり', '次は何をしますか', '、', '？'],
+    ko: ['서브에이전트', '토큰', 'Swarm', '입력', '출력', '할당량 부족', '잔여량 적음', '여유', '다음은 무엇을 할까요', ', ', '?'],
+    es: ['subagentes', 'tokens', 'Swarm', 'entr.', 'sal.', 'Cuota baja', 'Casi agotada', 'Óptima', '¿Qué hacemos ahora', ', ', '?'],
+    fr: ['sous-agents', 'tokens', 'Swarm', 'entr.', 'sort.', 'Quota bas', 'Presque épuisé', 'Optimal', 'Que faisons-nous ensuite', ', ', ' ?'],
+    de: ['Subagenten', 'Token', 'Swarm', 'Ein', 'Aus', 'Wenig Kontingent', 'Wird knapp', 'Reichlich', 'Was steht als Nächstes an', ', ', '?'],
+  };
+  const normStudioLang = (l) => {
+    const s = String(l || '').trim();
+    if (s === 'yue') return 'zh-CN';
+    if (STUDIO_FB[s]) return s;
+    const lo = s.toLowerCase();
+    if (/^zh[-_](tw|hant|hk|mo)/.test(lo)) return 'zh-TW';
+    if (/^zh|^yue/.test(lo)) return 'zh-CN';
+    if (/^ja/.test(lo)) return 'ja';
+    if (/^ko/.test(lo)) return 'ko';
+    if (/^es/.test(lo)) return 'es';
+    if (/^fr/.test(lo)) return 'fr';
+    if (/^de/.test(lo)) return 'de';
+    return 'en';
+  };
+  const studioFb = (l) => STUDIO_FB[normStudioLang(l)] || STUDIO_FB.en;
   const hasRealUsage = (r) => !!(r?.days && (toNum(r.calls) > 0 || Object.values(r.days).some((d) => d && (toNum(d.total || d.tokens) > 0 || toNum(d.calls) > 0))));
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const getDoc = () => (typeof document !== 'undefined' ? document : null);
@@ -514,10 +539,10 @@
         if (orig !== undefined) { if (h1.textContent !== orig.host) h1.textContent = orig.host; replacedGreetings.delete(h1); }
         return;
       }
-      const lang = getLang();
+      const lang = normStudioLang(getLang());
       const name = getDisplayName();
-      const gMap = { 'zh-CN': '接下来做什么', 'zh-TW': '接下來做什麼', yue: '跟住想做啲咩', ja: '次は何をしますか' };
-      const target = gMap[lang] ? gMap[lang] + (name ? (lang === 'ja' ? '、' : '，') + name : '') + '？' : "What's up next" + (name ? ', ' + name : '') + '?';
+      const fb = studioFb(lang);
+      const target = fb[8] + (name ? fb[9] + name : '') + fb[10];
       setAttrIfChanged(h1, 'data-ag-no-i18n', '');
       if (h1.textContent !== target) {
         const prev = replacedGreetings.get(h1);
@@ -627,10 +652,11 @@
 
       const grid = dv('ag-cs-quota-grid');
       const quotaWinUsage = liveQuotaSnap?.usage?.quotaWindows || null;
+      const qFb = studioFb(lang);
       const healthBadgeFor = (r) => (!(r >= 0 && r <= 1) ? { s: 'idle', l: '—' }
-        : r <= 0.15 ? { s: 'low', l: lang === 'en' ? 'Low Quota' : lang === 'ja' ? '残枠少' : lang === 'zh-TW' || lang === 'yue' ? '額度偏低' : '额度偏低' }
-        : r <= 0.35 ? { s: 'tight', l: lang === 'en' ? 'Running Low' : lang === 'ja' ? '残り少なめ' : lang === 'zh-TW' ? '餘量偏緊' : lang === 'yue' ? '餘額偏緊' : '余量偏紧' }
-        : { s: 'ok', l: lang === 'en' ? 'Healthy' : lang === 'ja' ? '余裕あり' : '充裕' });
+        : r <= 0.15 ? { s: 'low', l: ui.quotaLow || qFb[5] }
+        : r <= 0.35 ? { s: 'tight', l: ui.quotaTight || qFb[6] }
+        : { s: 'ok', l: ui.quotaHealthy || qFb[7] });
       for (const grp of groups) {
         const card = dv('ag-cs-quota-card', { 'data-quota-kind': usageCore.quotaGroupKind ? usageCore.quotaGroupKind(grp) : 'other' });
         const winEntries = [];
@@ -665,8 +691,9 @@
       if (!panel) return;
       const fmtTok = usageCore.formatCompactTokens;
       const fmtCnt = usageCore.formatHomeCount;
-      const lang = getLang();
+      const lang = normStudioLang(getLang());
       const ui = uiText(lang);
+      const fb = studioFb(lang);
       const skeleton = !usageHasData;
       const aggKey = `${usageDataEpoch}|${usageRecords.size}|${activeRange}|${activeWorkspace}|${lang}|${bookPick}`;
       let data = cachedAggData;
@@ -735,12 +762,15 @@
           const subTok = toNum(data.subagentTokens);
           const subSes = toNum(data.subagentSessions);
           const subPct = data.tokens > 0 && subTok > 0 ? Math.round((subTok / data.tokens) * 100) : 0;
-          const swarmSub = subTok > 0 ? (isFn(ui.swarmSplitSub) ? ui.swarmSplitSub(100 - subPct, subPct) : `Main ${100 - subPct}% · Swarm ${subPct}%`) : '';
+          const swarmBadge = ui.swarmBadge || fb[2];
+          const subUnit = ui.subagentsUnit || fb[0];
+          const tokUnit = ui.tokenUnit || fb[1];
+          const swarmSub = subTok > 0 ? (isFn(ui.swarmSplitSub) ? ui.swarmSplitSub(100 - subPct, subPct) : `Main ${100 - subPct}% · ${swarmBadge} ${subPct}%`) : '';
 
           for (const [k, lb, vt, tt, stx] of [
-            ['sessions', ui.kpiSessions || 'Sessions', fmtCnt(data.sessions), subSes > 0 ? `${data.sessions} + ${subSes} subagents` : String(data.sessions)],
+            ['sessions', ui.kpiSessions || 'Sessions', fmtCnt(data.sessions), subSes > 0 ? `${data.sessions} + ${subSes} ${subUnit}` : String(data.sessions)],
             ['calls', ui.kpiCalls || 'Messages', fmtCnt(data.calls), String(data.calls)],
-            ['tokens', ui.kpiTokens || 'Total tokens', fmtTok(data.tokens), `${fmtCnt(data.tokens)} tokens${swarmSub ? ` (${swarmSub})` : ''}`, swarmSub],
+            ['tokens', ui.kpiTokens || 'Total tokens', fmtTok(data.tokens), `${fmtCnt(data.tokens)} ${tokUnit}${swarmSub ? ` (${swarmSub})` : ''}`, swarmSub],
             ['days', ui.kpiDays || 'Active days', fmtCnt(data.activeDays), String(data.activeDays)],
             ['cache', ui.kpiCacheHit || 'Cache Hit Rate', cacheVal, cacheTitle],
             ['model', ui.kpiFavModel || 'Favorite model', data.model || '—', data.model || '—'],
@@ -760,7 +790,7 @@
           const heatFrag = isFn(d?.createDocumentFragment) ? d.createDocumentFragment() : heat;
           for (const c of data.grid.cells) {
             const lv = String(c.level);
-            const tip = skeleton ? '' : `${usageCore.homeShortDate(fmt, c.date)} — ${fmtTok(c.tokens)} ${ui.tokenUnit || 'tokens'}`;
+            const tip = skeleton ? '' : `${usageCore.homeShortDate(fmt, c.date)} — ${fmtTok(c.tokens)} ${ui.tokenUnit || fb[1]}`;
             ap(heatFrag, sp('ag-cs-home-heat-cell', skeleton ? { 'data-level': lv } : { 'data-level': lv, 'data-tip': tip, 'aria-label': tip }));
           }
           if (heatFrag !== heat) ap(heat, heatFrag);
@@ -822,13 +852,16 @@
           const rowCap = usageCore.HOME_MODEL_ROWS;
           const shown = modelsExpanded ? models : models.slice(0, rowCap);
           const listEl = dv('ag-cs-home-models');
+          const swarmBadge = ui.swarmBadge || fb[2];
+          const inUnit = ui.tokensInShort || fb[3];
+          const outUnit = ui.tokensOutShort || fb[4];
           for (const m of shown) {
             const row = dv('ag-cs-home-model');
-            const subShare = m.tokens > 0 && m.subagentTokens > 0 ? ` · Swarm ${Math.round((m.subagentTokens / m.tokens) * 100)}%` : '';
+            const subShare = m.tokens > 0 && m.subagentTokens > 0 ? ` · ${swarmBadge} ${Math.round((m.subagentTokens / m.tokens) * 100)}%` : '';
             row.title = `${m.id} · ${m.sessions} ${ui.sessionsUnit || 'sessions'}${subShare}`;
             const inp = (m.input || 0) + (m.cacheRead || 0) + (m.cacheWrite || 0);
             const cacheTag = isFin(m.cacheHitRate) ? ` · ${Math.round(m.cacheHitRate * 100)}% ${ui.cacheShort || 'Cache'}` : '';
-            ap(listEl, ap(row, sp('ag-cs-home-model-swatch', { 'data-color': String(colours[m.id] ?? 0) }), sp('ag-cs-home-model-name', m.id), sp('ag-cs-home-model-split', `${fmtTok(inp)} in · ${fmtTok(m.output || 0)} out${cacheTag}`), sp('ag-cs-home-model-share', totalAll > 0 ? (Math.round((m.tokens / totalAll) * 1000) / 10).toFixed(1) + '%' : '—')));
+            ap(listEl, ap(row, sp('ag-cs-home-model-swatch', { 'data-color': String(colours[m.id] ?? 0) }), sp('ag-cs-home-model-name', m.id), sp('ag-cs-home-model-split', `${fmtTok(inp)} ${inUnit} · ${fmtTok(m.output || 0)} ${outUnit}${cacheTag}`), sp('ag-cs-home-model-share', totalAll > 0 ? (Math.round((m.tokens / totalAll) * 1000) / 10).toFixed(1) + '%' : '—')));
           }
           if (models.length > rowCap) {
             const hc = models.length - shown.length;

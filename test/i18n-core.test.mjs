@@ -230,31 +230,45 @@ function createMiniDom() {
   };
 }
 
-test('normalizeLanguage, LANG_OPTIONS, and UI_TABLE support all 5 required languages', () => {
+test('normalizeLanguage, LANG_OPTIONS, and UI_TABLE support all 8 required languages + yue migration', () => {
   assert.deepEqual(
     i18nCore.LANG_OPTIONS.map((o) => [o.id, o.label]),
     [
       ['zh-CN', '简体中文'],
       ['zh-TW', '繁體中文'],
-      ['yue', '粵語'],
       ['en', 'English'],
       ['ja', '日本語'],
+      ['ko', '한국어'],
+      ['es', 'Español'],
+      ['fr', 'Français'],
+      ['de', 'Deutsch'],
     ]
   );
 
   assert.equal(i18nCore.normalizeLanguage('zh-CN'), 'zh-CN');
   assert.equal(i18nCore.normalizeLanguage('zh_TW'), 'zh-TW');
   assert.equal(i18nCore.normalizeLanguage('zh-Hant'), 'zh-TW');
-  assert.equal(i18nCore.normalizeLanguage('zh-HK'), 'yue');
-  assert.equal(i18nCore.normalizeLanguage('cantonese'), 'yue');
+  assert.equal(i18nCore.normalizeLanguage('zh-HK'), 'zh-TW');
+  assert.equal(i18nCore.normalizeLanguage('zh-MO'), 'zh-TW');
+  assert.equal(i18nCore.normalizeLanguage('yue'), 'zh-CN');
+  assert.equal(i18nCore.normalizeLanguage('zh-yue'), 'zh-CN');
+  assert.equal(i18nCore.normalizeLanguage('cantonese'), 'zh-CN');
   assert.equal(i18nCore.normalizeLanguage('en-US'), 'en');
   assert.equal(i18nCore.normalizeLanguage('ja-JP'), 'ja');
+  assert.equal(i18nCore.normalizeLanguage('ko-KR'), 'ko');
+  assert.equal(i18nCore.normalizeLanguage('es-ES'), 'es');
+  assert.equal(i18nCore.normalizeLanguage('fr-FR'), 'fr');
+  assert.equal(i18nCore.normalizeLanguage('de-DE'), 'de');
   assert.equal(i18nCore.normalizeLanguage(true), 'zh-CN');
   assert.equal(i18nCore.normalizeLanguage(false), 'en');
-  assert.equal(i18nCore.isCjkLanguage('en'), false);
-  assert.equal(i18nCore.isCjkLanguage('ja'), true);
+  for (const cjkLang of ['zh-CN', 'zh-TW', 'ja', 'ko']) {
+    assert.equal(i18nCore.isCjkLanguage(cjkLang), true, `isCjkLanguage(${cjkLang}) must be true`);
+  }
+  for (const latinLang of ['en', 'es', 'fr', 'de']) {
+    assert.equal(i18nCore.isCjkLanguage(latinLang), false, `isCjkLanguage(${latinLang}) must be false`);
+  }
 
-  for (const lang of ['zh-CN', 'zh-TW', 'yue', 'en', 'ja']) {
+  for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
     const ui = i18nLocales.getUiStrings(lang);
     assert.ok(ui.setLanguageTitle);
     assert.ok(ui.setLanguageDesc);
@@ -299,7 +313,7 @@ test('createDomTranslator returns null and leaves Antigravity host DOM untouched
   assert.equal(html.hasAttribute('data-ag-cs-cjk'), false);
 });
 
-test('v1.0.1 i18n keys cover all 5 languages for scene presets, 6 new config keys, sub-tabs, backup/reset & quotas', () => {
+test('v1.0.1 i18n keys cover all 8 languages for scene presets, 6 new config keys, sub-tabs, backup/reset & quotas', () => {
   const requiredNewKeys = [
     'presetBarLabel',
     'presetUltra',
@@ -373,7 +387,7 @@ test('v1.0.1 i18n keys cover all 5 languages for scene presets, 6 new config key
     'permAutoDesc',
     'permTurboDesc',
   ];
-  for (const lang of ['zh-CN', 'zh-TW', 'yue', 'en', 'ja']) {
+  for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
     const ui = i18nLocales.getUiStrings(lang);
     for (const k of requiredNewKeys) {
       assert.ok(typeof ui[k] === 'string' && ui[k].trim().length > 0, `Missing ${k} for language ${lang}`);
@@ -393,7 +407,7 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
   assert.equal(PRISM_SETTINGS_SCHEMA.effortMemory.default, 'on');
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.periodicModelPicker.allowed, ['on', 'off']);
   assert.equal(PRISM_SETTINGS_SCHEMA.periodicModelPicker.default, 'on');
-  for (const lang of ['zh-CN', 'zh-TW', 'yue', 'en', 'ja']) {
+  for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
     const ui = i18nLocales.getUiStrings(lang);
     assert.ok(typeof ui.setPeriodicPickerTitle === 'string' && ui.setPeriodicPickerTitle.trim().length > 0, `Missing setPeriodicPickerTitle for ${lang}`);
     assert.ok(typeof ui.setPeriodicPickerDesc === 'string' && ui.setPeriodicPickerDesc.trim().length > 0, `Missing setPeriodicPickerDesc for ${lang}`);
@@ -492,7 +506,7 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
   assert.equal(boolAlias.settings.sidebarNavFold, 'on');
   assert.equal(boolAlias.settings.linkTarget, 'builtin');
   assert.equal(boolAlias.settings.mascot, 'crab');
-  assert.ok(['zh-CN', 'zh-TW', 'yue', 'en', 'ja'].includes(boolAlias.settings.language));
+  assert.ok(['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'].includes(boolAlias.settings.language));
 
   assert.equal(i18nLocales.getUiStrings('zh-CN').presetUltra, '完整光效');
   assert.equal(i18nLocales.getUiStrings('en').presetUltra, 'Full Visuals');
@@ -533,14 +547,15 @@ test('UX-1 / OP-5 / UX-4 / UX-9 regressions: async thought config export, tech->
   assert.equal(importedLegacy.ok, true);
   assert.equal(importedLegacy.thought.stylePreset, 'technical');
 
-  // 3. 5-language lightPreset context hints, optFontSfmono, and swarmSplitSub
-  for (const lang of ['zh-CN', 'zh-TW', 'yue', 'en', 'ja']) {
+  // 3. 8-language lightPreset context hints, optFontSfmono, and swarmSplitSub
+  for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
     const ui = i18nLocales.getUiStrings(lang);
     assert.ok(ui.lightPresetHintDark && ui.lightPresetHintDark.length > 4);
     assert.ok(ui.lightPresetHintWarm && ui.lightPresetHintWarm.length > 4);
     assert.ok(ui.lightPresetHintHost && ui.lightPresetHintHost.length > 4);
     assert.equal(ui.optFontSfmono, 'SF Mono / Consolas');
     assert.equal(typeof ui.swarmSplitSub, 'function');
-    assert.ok(ui.swarmSplitSub(62, 38).includes('62%') && ui.swarmSplitSub(62, 38).includes('38%'));
+    const splitStr = ui.swarmSplitSub(62, 38);
+    assert.ok(/\b62\s*%/.test(splitStr) && /\b38\s*%/.test(splitStr), `Unexpected swarmSplitSub(${lang}): ${splitStr}`);
   }
 });

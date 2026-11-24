@@ -2072,6 +2072,10 @@ export class PrismDaemon {
     this.periodicPickerExpr = '';
     this.periodicPickerCodeHash = '';
     this._periodicPickerHashSource = '';
+    this.settingsExpr = '';
+    this.mascotExpr = '';
+    this.mascotCodeHash = '';
+    this._mascotHashSource = '';
     this.codeHash = '';
     this.ownerToken = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     this.pidFile = path.join(this.rootDir, '.daemon.pid');
@@ -3123,6 +3127,8 @@ export class PrismDaemon {
     this._buildInlineDiffExprForConfig(cfg, cacheOpts);
     this._buildWallpaperExprForConfig(cfg, cacheOpts);
     this._buildPeriodicPickerExprForConfig(cfg, cacheOpts);
+    this.settingsExpr = '';
+    this._buildMascotExprForConfig(cfg, cacheOpts);
 
     if (bundleCachePath) {
       if (deferDiskCacheWrite) {
@@ -3590,6 +3596,214 @@ export class PrismDaemon {
     entry.periodicPickerMounted = false;
     entry.lastPeriodicPickerSig = '';
     entry.lastPeriodicPickerScriptSig = '';
+  }
+
+  // ── 第九通道：设置面板 + 全量 8 语言词典按需下发（仅当设置弹窗打开时触发） ──────────
+  _ensureSettingsExpr(cacheOpts = undefined) {
+    if (this.settingsExpr) return this.settingsExpr;
+    if (typeof this.cdp?.buildSettingsChannelExpression !== 'function') return '';
+    const opts = cacheOpts !== undefined ? cacheOpts : this._getChannelCacheOpts(true);
+    const expr = opts
+      ? this.cdp.buildSettingsChannelExpression(null, opts)
+      : this.cdp.buildSettingsChannelExpression();
+    if (cacheOpts === undefined && opts && this.running) {
+      this._scheduleBundleCacheFlush();
+    }
+    this.settingsExpr = typeof expr === 'string' ? expr : '';
+    return this.settingsExpr;
+  }
+
+  async _deliverSettingsChannelToEntry(entry, executionContextId = null) {
+    if (!entry || entry.session.closed) return false;
+    if (entry._settingsChannelInFlight) return false;
+    const expr = this._ensureSettingsExpr();
+    if (!expr) return false;
+    entry._settingsChannelInFlight = true;
+    try {
+      const evalParams = { expression: expr, returnByValue: true };
+      if (typeof executionContextId === 'number' && executionContextId > 0) {
+        evalParams.contextId = executionContextId;
+      }
+      const res = await entry.session.send('Runtime.evaluate', evalParams, 5000).catch(() => null);
+      if (res && res.result && res.result.value && res.result.value.ok) {
+        entry.settingsChannelDelivered = true;
+        return true;
+      }
+      return false;
+    } finally {
+      entry._settingsChannelInFlight = false;
+    }
+  }
+
+  // ── 第十通道：双桌宠按配置门控独立注入（mascot === 'off' 时零注入） ─────────────────
+  _hasMascotFile() {
+    try {
+      return fs.existsSync(path.join(this.rootDir, 'dual-mascot-rig.js'));
+    } catch {
+      return false;
+    }
+  }
+
+  _isMascotEnabled(cfgOverride = null) {
+    try {
+      const cfg = cfgOverride || this.cdp?.readConfig?.();
+      if (typeof this.cdp?.shouldEnableMascot === 'function') {
+        return Boolean(this.cdp.shouldEnableMascot(cfg));
+      }
+      return cfg?.mascot !== 'off' && cfg?.mascot !== false;
+    } catch {
+      return true;
+    }
+  }
+
+  _getMascotCfgSig(cfgOverride = null) {
+    try {
+      const cfg = cfgOverride || this.cdp?.readConfig?.() || {};
+      return cfg.mascot === 'off' || cfg.mascot === false ? 'off' : String(cfg.mascot || 'crab');
+    } catch {
+      return 'crab';
+    }
+  }
+
+  _extractMascotCodeHash(expr) {
+    const str = typeof expr === 'string' ? expr : '';
+    if (!str) return '';
+    const m = /const targetHash = "([^"]+)"/.exec(str);
+    if (m && m[1]) return m[1];
+    return crypto.createHash('sha256').update(str).digest('hex').slice(0, 16);
+  }
+
+  _setMascotExpr(expr) {
+    const next = typeof expr === 'string' ? expr : '';
+    this.mascotExpr = next;
+    this._mascotHashSource = next;
+    this.mascotCodeHash = this._extractMascotCodeHash(next);
+    return next;
+  }
+
+  _buildMascotExprForConfig(cfgOverride = null, cacheOpts = undefined) {
+    const cfg = cfgOverride || (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
+    if (
+      typeof this.cdp?.buildMascotChannelExpression !== 'function' ||
+      !this._hasMascotFile() ||
+      !this._isMascotEnabled(cfg)
+    ) {
+      return this._setMascotExpr('');
+    }
+    const opts = cacheOpts !== undefined ? cacheOpts : this._getChannelCacheOpts(true);
+    const expr = opts
+      ? this.cdp.buildMascotChannelExpression(cfg, opts)
+      : this.cdp.buildMascotChannelExpression(cfg);
+    if (cacheOpts === undefined && opts && this.running) {
+      this._scheduleBundleCacheFlush();
+    }
+    return this._setMascotExpr(expr);
+  }
+
+  _getMascotExprHash(expr = this.mascotExpr) {
+    const str = typeof expr === 'string' ? expr : '';
+    if (!str) return '';
+    if (str === this._mascotHashSource && this.mascotCodeHash) {
+      return this.mascotCodeHash;
+    }
+    const hash = this._extractMascotCodeHash(str);
+    if (str === this.mascotExpr) {
+      this._mascotHashSource = str;
+      this.mascotCodeHash = hash;
+    }
+    return hash;
+  }
+
+  _getMascotCleanupExpression() {
+    return (
+      this.cdp?.MASCOT_REMOVE_EXPRESSION ||
+      "(() => { try { document.querySelectorAll?.('.ag-cs-crab-stage, .ag-cs-mascot-stage').forEach((n) => n.remove()); document.documentElement?.removeAttribute?.('data-ag-cs-has-crab'); delete window.__agDualMascotRig; delete globalThis.__agDualMascotRig; } catch {} return { ok: true, status: 'off' }; })()"
+    );
+  }
+
+  async _resetMascotEntryState(entry, session = entry?.session) {
+    if (!entry) return;
+    if (entry.mascotScriptId && session && !session.closed) {
+      await session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.mascotScriptId })
+        .catch(() => {});
+    }
+    entry.mascotScriptId = null;
+    entry.mascotMounted = false;
+    entry.lastMascotSig = '';
+    entry.lastMascotScriptSig = '';
+  }
+
+  async _syncMascotOnEntry(
+    entry,
+    cfgNow,
+    {
+      expr = null,
+      hash = '',
+      enabled = null,
+      probe = null,
+      forceReplaceScript = false,
+      forceEval = false,
+      runCleanup = false,
+      evalTimeoutMs = 4500,
+      cleanupTimeoutMs = 3500,
+    } = {}
+  ) {
+    if (!entry || entry.session.closed) return;
+    const isEnabled = enabled !== null ? Boolean(enabled) : this._hasMascotFile() && this._isMascotEnabled(cfgNow);
+    if (isEnabled) {
+      const activeExpr = expr || this.mascotExpr || this._buildMascotExprForConfig(cfgNow);
+      if (!activeExpr) return;
+      const mHash = hash || this._getMascotExprHash(activeExpr);
+      const mSig = `${this._getMascotCfgSig(cfgNow)}:${mHash}`;
+      if (forceReplaceScript || !entry.mascotScriptId || entry.lastMascotScriptSig !== mSig) {
+        if (entry.mascotScriptId) {
+          await entry.session
+            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.mascotScriptId })
+            .catch(() => {});
+          entry.mascotScriptId = null;
+        }
+        const mAdd = await entry.session
+          .send('Page.addScriptToEvaluateOnNewDocument', { source: activeExpr })
+          .catch(() => null);
+        if (mAdd && mAdd.identifier) {
+          entry.mascotScriptId = mAdd.identifier;
+          entry.lastMascotScriptSig = mSig;
+        } else {
+          entry.lastMascotScriptSig = '';
+        }
+      }
+      const needsEval = forceEval || !probe || !probe.hasMascot || Boolean(mHash && probe.mascotCodeHash !== mHash);
+      if (needsEval && !entry.session.closed) {
+        const evalRes =
+          evalTimeoutMs > 0
+            ? await entry.session.evaluate(activeExpr, false, evalTimeoutMs).catch(() => null)
+            : await entry.session.evaluate(activeExpr).catch(() => null);
+        if (evalRes && evalRes.ok) {
+          entry.mascotMounted = true;
+          entry.lastMascotSig = mSig;
+        }
+      }
+      return;
+    }
+
+    const hadBefore = Boolean(entry.mascotScriptId || entry.mascotMounted);
+    if (entry.mascotScriptId) {
+      await entry.session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.mascotScriptId })
+        .catch(() => {});
+      entry.mascotScriptId = null;
+    }
+    if ((runCleanup || hadBefore || probe?.hasMascot) && !entry.session.closed) {
+      if (cleanupTimeoutMs > 0) {
+        await entry.session.evaluate(this._getMascotCleanupExpression(), false, cleanupTimeoutMs).catch(() => null);
+      } else {
+        await entry.session.evaluate(this._getMascotCleanupExpression()).catch(() => null);
+      }
+    }
+    entry.mascotMounted = false;
+    entry.lastMascotSig = '';
+    entry.lastMascotScriptSig = '';
   }
 
   _isTelemetryDisabled(cfgOverride = null) {
@@ -5143,6 +5357,7 @@ export class PrismDaemon {
         let inlineDiffSnap = this.inlineDiffExpr;
         let wallpaperSnap = this.wallpaperExpr;
         let periodicPickerSnap = this.periodicPickerExpr;
+        let mascotSnap = this.mascotExpr;
         const currentCfg = typeof this.cdp.readConfig === 'function' ? this.cdp.readConfig() : {};
         if (currentCfg?.telemetryModule === 'off') {
           this._releaseIdleTelemetry(true);
@@ -5176,6 +5391,12 @@ export class PrismDaemon {
         const periodicPickerSig = periodicPickerEnabled
           ? `${this._getPeriodicPickerCfgSig(currentCfg)}:${periodicPickerHash}`
           : '';
+        const mascotEnabled = this._hasMascotFile() && this._isMascotEnabled(currentCfg);
+        if (mascotEnabled && !mascotSnap && typeof this.cdp.buildMascotChannelExpression === 'function') {
+          mascotSnap = this._buildMascotExprForConfig(currentCfg);
+        }
+        const mascotHash = mascotSnap ? this._getMascotExprHash(mascotSnap) : '';
+        const mascotSig = mascotEnabled ? `${this._getMascotCfgSig(currentCfg)}:${mascotHash}` : '';
         const canFastRefresh = typeof this.cdp.buildConfigRefreshExpression === 'function';
         const baseRefreshExpr = canFastRefresh ? this.cdp.buildConfigRefreshExpression() : null;
         if (activeItems.length === 0) continue;
@@ -5348,6 +5569,28 @@ export class PrismDaemon {
                 entry.periodicPickerMounted = false;
                 entry.lastPeriodicPickerSig = '';
               }
+              if (abortIfStale()) return;
+              const hadMascot = Boolean(entry.mascotScriptId || entry.mascotMounted);
+              const mascotChanged = Boolean(
+                mascotEnabled &&
+                  mascotSnap &&
+                  (entry.lastMascotSig !== mascotSig || !entry.mascotScriptId || !entry.mascotMounted)
+              );
+              if (mascotEnabled && mascotSnap) {
+                if (!skippedStale && !entry.session.closed && (!refreshedFast || mascotChanged)) {
+                  const evalRes = await entry.session.evaluate(mascotSnap).catch(() => null);
+                  if (evalRes && evalRes.ok) {
+                    entry.mascotMounted = true;
+                    entry.lastMascotSig = mascotSig;
+                  }
+                }
+              } else if ((hadMascot || !this._isMascotEnabled(currentCfg)) && !skippedStale && !entry.session.closed) {
+                if (hadMascot) {
+                  await entry.session.evaluate(this._getMascotCleanupExpression()).catch(() => {});
+                }
+                entry.mascotMounted = false;
+                entry.lastMascotSig = '';
+              }
 
               // Coalesce persistent NewDocument script replacement if a newer mutation is already queued!
               if (this._broadcastPending || this._configSeq !== snapSeq || entry.session.closed) {
@@ -5515,6 +5758,29 @@ export class PrismDaemon {
                 if (ppAdd && ppAdd.identifier) {
                   entry.periodicPickerScriptId = ppAdd.identifier;
                   entry.lastPeriodicPickerScriptSig = periodicPickerSig;
+                }
+              }
+              if (!mascotEnabled || !mascotSnap) {
+                if (entry.mascotScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.mascotScriptId })
+                    .catch(() => {});
+                  entry.mascotScriptId = null;
+                }
+                entry.lastMascotScriptSig = '';
+              } else if ((entry.lastMascotScriptSig !== mascotSig || !entry.mascotScriptId) && !entry.session.closed) {
+                if (entry.mascotScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.mascotScriptId })
+                    .catch(() => {});
+                  entry.mascotScriptId = null;
+                }
+                const mAdd = await entry.session
+                  .send('Page.addScriptToEvaluateOnNewDocument', { source: mascotSnap })
+                  .catch(() => null);
+                if (mAdd && mAdd.identifier) {
+                  entry.mascotScriptId = mAdd.identifier;
+                  entry.lastMascotScriptSig = mascotSig;
                 }
               }
             })
@@ -5945,6 +6211,12 @@ export class PrismDaemon {
         evalTimeoutMs: 0,
         cleanupTimeoutMs: 0,
       });
+      await this._syncMascotOnEntry(entry, getCurrentCfg(), {
+        forceReplaceScript: true,
+        forceEval: true,
+        evalTimeoutMs: 0,
+        cleanupTimeoutMs: 0,
+      });
       entry.lastVerifyAt = Date.now();
       entry.healthyStreak = 1;
       entry.verifyDirty = false;
@@ -5967,6 +6239,10 @@ export class PrismDaemon {
       try {
         const parsed = JSON.parse(payload);
         if (!parsed || typeof parsed !== 'object') return;
+        if (parsed.action === 'request-settings-panel') {
+          await this._deliverSettingsChannelToEntry(entry, executionContextId);
+          return;
+        }
         const updated =
           parsed.action === 'patch-batch' && parsed.entries && typeof parsed.entries === 'object'
             ? this.updateConfigBatch(parsed.entries)
@@ -6799,6 +7075,7 @@ export class PrismDaemon {
         entry.lastWallpaperHash = '';
         entry.lastWallpaperScriptHash = '';
         await this._resetPeriodicPickerEntryState(entry, session);
+        await this._resetMascotEntryState(entry, session);
       } catch {}
       session.close();
       this.sessions.delete(wsUrl);
@@ -6838,6 +7115,16 @@ export class PrismDaemon {
         !entry.periodicPickerMounted ||
         Boolean(expectedPeriodicEarlySig && (entry.lastPeriodicPickerSig !== expectedPeriodicEarlySig || entry.lastPeriodicPickerScriptSig !== expectedPeriodicEarlySig))
       : Boolean(entry.periodicPickerScriptId || entry.periodicPickerMounted);
+    const mascotAvailable = this._isMascotEnabled(cfg) && this._hasMascotFile();
+    const expectedMascotEarlySig =
+      mascotAvailable && this.mascotExpr
+        ? `${this._getMascotCfgSig(cfg)}:${this._getMascotExprHash(this.mascotExpr)}`
+        : '';
+    const mascotNeedsSync = mascotAvailable
+      ? !entry.mascotScriptId ||
+        !entry.mascotMounted ||
+        Boolean(expectedMascotEarlySig && (entry.lastMascotSig !== expectedMascotEarlySig || entry.lastMascotScriptSig !== expectedMascotEarlySig))
+      : Boolean(entry.mascotScriptId || entry.mascotMounted);
     const now = Date.now();
     const hashMatches = !this.codeHash || entry.lastVerifiedCodeHash === this.codeHash;
     if (
@@ -6847,6 +7134,7 @@ export class PrismDaemon {
       !inlineDiffNeedsSync &&
       !wallpaperNeedsSync &&
       !periodicPickerNeedsSync &&
+      !mascotNeedsSync &&
       !entry.verifyDirty &&
       hashMatches &&
       entry.lastVerifyAt > 0 &&
@@ -6920,6 +7208,9 @@ export class PrismDaemon {
           hasSidebar: Boolean(window.__agPrismSidebar),
           sidebarMode,
           hasHostI18n: Boolean(window.__agPrismHostI18n),
+          hostI18nMode: String(window.__agPrismHostI18n?.getStatus?.()?.mode || ''),
+          hasMascot: Boolean(window.__agDualMascotRig || globalThis.__agDualMascotRig),
+          mascotCodeHash: String((window.__agDualMascotRig || globalThis.__agDualMascotRig)?.__prismCodeHash || ''),
           hasThought: Boolean(window.__agPrismThought),
           hasThoughtSettingsUi: Boolean(window.__agPrismThoughtSettingsUi),
           hasInlineDiff: Boolean(window.__agPrismInlineDiff && !window.__agPrismInlineDiff.getDebugState?.()?.destroyed),
@@ -6962,7 +7253,9 @@ export class PrismDaemon {
       const needsSidebarCleanup =
         !sidebarEnabled && Boolean(probe.hasSidebar || entry.sidebarScriptId || entry.sidebarMounted || entry.sidebarBindingAdded);
       const hostI18nEnabled = this._isHostI18nEnabled(cfg);
-      const needsHostI18nHeal = hostI18nEnabled && (!probe.hasHostI18n || !entry.hostI18nScriptId);
+      const expectedHostI18nMode = cfg?.hostLocalization === 'on' ? 'on' : cfg?.hostLocalization === 'off' ? 'off' : 'auto';
+      const needsHostI18nHeal =
+        hostI18nEnabled && (!probe.hasHostI18n || !entry.hostI18nScriptId || (probe.hostI18nMode && probe.hostI18nMode !== expectedHostI18nMode));
       const needsHostI18nCleanup =
         !hostI18nEnabled && Boolean(probe.hasHostI18n || entry.hostI18nScriptId || entry.hostI18nMounted);
       const needsThoughtHeal =
@@ -7004,6 +7297,17 @@ export class PrismDaemon {
         hasPeriodicPickerOnDisk && (!probe.hasPeriodicPicker || periodicPickerHashMismatch || periodicPickerScriptStale);
       const needsPeriodicPickerCleanup =
         !periodicPickerEnabled && Boolean(probe.hasPeriodicPicker || entry.periodicPickerScriptId || entry.periodicPickerMounted);
+      const mascotEnabled = this._isMascotEnabled(cfg);
+      const hasMascotOnDisk = mascotEnabled && this._hasMascotFile();
+      if (hasMascotOnDisk && !this.mascotExpr && typeof this.cdp.buildMascotChannelExpression === 'function') {
+        this._buildMascotExprForConfig(cfg);
+      }
+      const expectedMascotHash = hasMascotOnDisk && this.mascotExpr ? this._getMascotExprHash(this.mascotExpr) : '';
+      const expectedMascotSig = hasMascotOnDisk && this.mascotExpr ? `${this._getMascotCfgSig(cfg)}:${expectedMascotHash}` : '';
+      const mascotHashMismatch = Boolean(expectedMascotHash && probe.mascotCodeHash !== expectedMascotHash);
+      const mascotScriptStale = Boolean(!entry.mascotScriptId || (expectedMascotSig && entry.lastMascotScriptSig !== expectedMascotSig));
+      const needsMascotHeal = hasMascotOnDisk && (!probe.hasMascot || mascotHashMismatch || mascotScriptStale);
+      const needsMascotCleanup = !mascotEnabled && Boolean(probe.hasMascot || entry.mascotScriptId || entry.mascotMounted);
       let healed = false;
       if (
         (entry.sidebarHostVerified === false && probe.isHostDom) ||
@@ -7085,6 +7389,7 @@ export class PrismDaemon {
           entry.lastWallpaperHash = '';
           entry.lastWallpaperScriptHash = '';
           await this._resetPeriodicPickerEntryState(entry);
+          await this._resetMascotEntryState(entry);
           this._markTargetIgnored({ id: entry.pageId, webSocketDebuggerUrl: entry.wsUrl }, probe.href || entry.url);
           entry.session.close();
           this.sessions.delete(entry.wsUrl);
@@ -7137,7 +7442,7 @@ export class PrismDaemon {
           entry.sidebarMounted = false;
         }
         if (hostI18nEnabled) {
-          if (!probe.hasHostI18n || !entry.hostI18nScriptId) {
+          if (!probe.hasHostI18n || !entry.hostI18nScriptId || (probe.hostI18nMode && probe.hostI18nMode !== expectedHostI18nMode)) {
             if (!this.hostI18nExpr && typeof this.cdp.buildHostI18nExpression === 'function') {
               const chOpts = this._getChannelCacheOpts(true);
               this.hostI18nExpr = chOpts
@@ -7156,7 +7461,7 @@ export class PrismDaemon {
                   entry.lastHostI18nScriptSig = hiSig;
                 }
               }
-              if (!probe.hasHostI18n) {
+              if (!probe.hasHostI18n || (probe.hostI18nMode && probe.hostI18nMode !== expectedHostI18nMode)) {
                 const evalRes = await entry.session.evaluate(this.hostI18nExpr, false, 4500).catch(() => null);
                 if (evalRes && evalRes.ok) {
                   entry.hostI18nMounted = true;
@@ -7180,6 +7485,13 @@ export class PrismDaemon {
             enabled: periodicPickerEnabled,
             probe,
             runCleanup: needsPeriodicPickerCleanup,
+          });
+        }
+        if ((mascotEnabled && needsMascotHeal) || (!mascotEnabled && needsMascotCleanup)) {
+          await this._syncMascotOnEntry(entry, cfg, {
+            enabled: mascotEnabled,
+            probe,
+            runCleanup: needsMascotCleanup,
           });
         }
         if (thoughtEnabled) {
@@ -7351,7 +7663,7 @@ export class PrismDaemon {
                 entry.lastHostI18nScriptSig = hiSig;
               }
             }
-            if (!probe.hasHostI18n) {
+            if (!probe.hasHostI18n || (probe.hostI18nMode && probe.hostI18nMode !== expectedHostI18nMode)) {
               const evalRes = await entry.session.evaluate(this.hostI18nExpr, false, 4500).catch(() => null);
               if (evalRes && evalRes.ok) {
                 entry.hostI18nMounted = true;
@@ -7376,6 +7688,14 @@ export class PrismDaemon {
             enabled: needsPeriodicPickerHeal,
             probe,
             runCleanup: needsPeriodicPickerCleanup,
+          });
+        }
+        if (needsMascotHeal || needsMascotCleanup) {
+          healed = true;
+          await this._syncMascotOnEntry(entry, cfg, {
+            enabled: needsMascotHeal,
+            probe,
+            runCleanup: needsMascotCleanup,
           });
         }
         if (needsThoughtHeal) {
@@ -7651,6 +7971,7 @@ export class PrismDaemon {
           entry.lastWallpaperHash = '';
           entry.lastWallpaperScriptHash = '';
           await this._resetPeriodicPickerEntryState(entry);
+          await this._resetMascotEntryState(entry);
           if (cleanPageDom && !entry.session.closed) {
             await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
           }
@@ -8044,6 +8365,7 @@ export class PrismDaemon {
             entry.lastWallpaperHash = '';
             entry.lastWallpaperScriptHash = '';
             await this._resetPeriodicPickerEntryState(entry);
+          await this._resetMascotEntryState(entry);
             await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
           }
           entry.session.close();

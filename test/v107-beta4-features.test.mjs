@@ -620,7 +620,7 @@ test('v1.0.7-beta.4: Issue #38 macOS relaunch normalizes .app bundle, strips ELE
   assert.ok(sh.includes('on run argv'), 'AppleScript quit must use argv instead of string interpolation');
 });
 
-test('v1.0.7-beta.4: ui-runtime immediately destroys host-i18n on off/en, shows external zh hint, and toggles mascot peek on takeover/queued/model-menu', () => {
+test('v1.0.7-beta.4: ui-runtime switches host-i18n to off reverse-restore on off and destroys on auto+en, loads Ch9 Settings, and toggles mascot peek on takeover/queued/model-menu', () => {
   const vm = require('node:vm');
   const { doc, win } = createFakeDom();
   doc.documentElement.setAttribute('data-ag-prism-host-i18n', 'active');
@@ -628,8 +628,14 @@ test('v1.0.7-beta.4: ui-runtime immediately destroys host-i18n on off/en, shows 
   let hostI18nDestroyed = 0;
   let hostI18nModes = [];
   win.__agPrismHostI18n = {
-    destroy() { hostI18nDestroyed += 1; },
-    setMode(m) { hostI18nModes.push(m); },
+    destroy() {
+      hostI18nDestroyed += 1;
+      doc.documentElement.removeAttribute('data-ag-prism-host-i18n');
+    },
+    setMode(m) {
+      hostI18nModes.push(m);
+      doc.documentElement.setAttribute('data-ag-prism-host-i18n', m === 'off' ? 'off-enforced' : 'active');
+    },
   };
   win.performance = { now: () => Date.now() };
   win.requestAnimationFrame = () => 0;
@@ -724,14 +730,16 @@ test('v1.0.7-beta.4: ui-runtime immediately destroys host-i18n on off/en, shows 
     sandbox.__agPrism.sync();
     assert.equal(crab.getAttribute('data-ag-mascot-peek'), null, 'closing overlays must exit peek');
 
-    // Toggle hostLocalization to 'off' -> immediately calls window.__agPrismHostI18n.destroy()
+    // Toggle hostLocalization to 'off' -> immediately calls window.__agPrismHostI18n.setMode('off') (reverse English restore)
     const beforeDestroy = hostI18nDestroyed;
+    const beforeModesLen = hostI18nModes.length;
     sandbox.__agPrism.saveSettingsBatch({ hostLocalization: 'off' });
     sandbox.__agPrism.sync();
-    assert.ok(hostI18nDestroyed > beforeDestroy, 'switching hostLocalization to off must immediately call destroy()');
-    assert.equal(doc.documentElement.getAttribute('data-ag-prism-host-i18n'), null);
+    assert.equal(hostI18nDestroyed, beforeDestroy, 'switching hostLocalization to off must call setMode("off") instead of destroy()');
+    assert.equal(hostI18nModes.slice(beforeModesLen).at(-1), 'off', 'switching hostLocalization to off must call setMode("off")');
+    assert.equal(doc.documentElement.getAttribute('data-ag-prism-host-i18n'), 'off-enforced');
 
-    // Settings panel in hostLocalization === 'off' with [data-agy-hans-ui] shows external localization notice
+    // Settings panel (Channel 9 on-demand) in hostLocalization === 'off' with [data-agy-hans-ui] shows external localization notice
     const dlg = doc.createElement('div');
     dlg.setAttribute('role', 'dialog');
     const pane = doc.createElement('div');
@@ -744,6 +752,8 @@ test('v1.0.7-beta.4: ui-runtime immediately destroys host-i18n on off/en, shows 
     pane.appendChild(nativeSec);
     dlg.appendChild(pane);
     doc.body.appendChild(dlg);
+    const settingsRes = vm.runInNewContext(cdp.buildSettingsChannelExpression(), sandbox);
+    assert.equal(settingsRes.ok, true);
     sandbox.__agPrism.sync();
 
     const sec = doc.getElementById('ag-cs-settings-sec');
@@ -758,9 +768,12 @@ test('v1.0.7-beta.4: ui-runtime immediately destroys host-i18n on off/en, shows 
     assert.equal(hiDesc.textContent, locales.getUiStrings('zh-CN').hostI18nOffExtHint);
     assert.equal(hiDesc.getAttribute('data-ag-cs-hi-warn'), 'ext');
 
-    // Switching to auto + English while external zh patch is active must ALSO show the external-i18n warning pill
+    // Switching to auto + English immediately calls window.__agPrismHostI18n.destroy() and shows the external-i18n warning pill
+    const beforeAutoEnDestroy = hostI18nDestroyed;
     sandbox.__agPrism.saveSettingsBatch({ hostLocalization: 'auto', language: 'en' });
     sandbox.__agPrism.sync();
+    assert.ok(hostI18nDestroyed > beforeAutoEnDestroy, 'switching hostLocalization to auto + en must immediately call destroy()');
+    assert.equal(doc.documentElement.getAttribute('data-ag-prism-host-i18n'), null);
     const secEn = doc.getElementById('ag-cs-settings-sec');
     const toggleBtnEn = secEn?.querySelector('button[aria-expanded]');
     if (toggleBtnEn && toggleBtnEn.getAttribute('aria-expanded') === 'false') {

@@ -336,6 +336,32 @@
     var SYNC_BADGE_DEFAULT_EN = 'SYNCED';
     var SYNC_BADGE_DEFAULT_DURATION_MS = 1200;
 
+    var OLED_I18N = {
+      'zh-CN': { nonPlanner: ORCH_NON_PLANNER_LABEL_ZH, standbyAux: 'STANDBY · 未开放副盘槽位', synced: SYNC_BADGE_DEFAULT_ZH },
+      'zh-TW': { nonPlanner: 'NON-PLANNER · 編排態不可選', standbyAux: 'STANDBY · 未開放副盤槽位', synced: '已同步工作階段' },
+      en: { nonPlanner: ORCH_NON_PLANNER_LABEL_EN, standbyAux: 'STANDBY · RESERVED MACRO SLOT', synced: SYNC_BADGE_DEFAULT_EN },
+      ja: { nonPlanner: 'NON-PLANNER · オーケストラ固定', standbyAux: 'STANDBY · 予約済みマクロ枠', synced: '同期済' },
+      ko: { nonPlanner: 'NON-PLANNER · 오케스트레이션 잠금', standbyAux: 'STANDBY · 예약된 매크로 슬롯', synced: '동기화됨' },
+      es: { nonPlanner: 'NON-PLANNER · BLOQUEADO EN ORCH', standbyAux: 'STANDBY · RANURA RESERVADA', synced: 'SINCRONIZADO' },
+      fr: { nonPlanner: 'NON-PLANNER · VERROUILLÉ ORCH', standbyAux: 'STANDBY · EMPLACEMENT RÉSERVÉ', synced: 'SYNCHRONISÉ' },
+      de: { nonPlanner: 'NON-PLANNER · IN ORCH GESPERRT', standbyAux: 'STANDBY · RESERVIERTER SLOT', synced: 'SYNCHRONISIERT' },
+    };
+
+    function normalizeOledLang(raw) {
+      var s = String(raw || '').trim().toLowerCase().replace(/_/g, '-');
+      if (!s || s === 'auto') return '';
+      if (s === 'yue' || s.indexOf('yue-') === 0 || s === 'zh-yue' || s.indexOf('cantonese') !== -1) return 'zh-CN';
+      if (/^zh-(tw|hant|hk|mo)/.test(s) || s === 'tw' || s === 'hant') return 'zh-TW';
+      if (/^zh(?:$|-)/.test(s)) return 'zh-CN';
+      if (/^(ja|jp)(?:$|-)/.test(s) || s === 'japanese') return 'ja';
+      if (/^(ko|kr)(?:$|-)/.test(s) || s === 'korean') return 'ko';
+      if (/^es(?:$|-)/.test(s) || s === 'spanish') return 'es';
+      if (/^fr(?:$|-)/.test(s) || s === 'french') return 'fr';
+      if (/^de(?:$|-)/.test(s) || s === 'german') return 'de';
+      if (/^en(?:$|-)/.test(s) || s === 'english') return 'en';
+      return '';
+    }
+
     function normalizeOledTargetFps(raw) {
       if (raw === null || raw === undefined || raw === '') return 'native';
       var s = String(raw).trim().toLowerCase();
@@ -381,37 +407,33 @@
       return false;
     }
 
-    function resolveOledIsZh(explicitZh, info, tp, bs, doc, rt) {
-      if (bs && typeof bs.zh === 'boolean') return bs.zh;
-      if (info && typeof info.zh === 'boolean') return info.zh;
-      if (tp && typeof tp.zh === 'boolean') return tp.zh;
-      if (typeof explicitZh === 'boolean') return explicitZh;
-
-      var langCand = '';
-      if (bs && typeof bs.lang === 'string' && bs.lang.trim()) langCand = bs.lang.trim();
-      else if (info && typeof info.lang === 'string' && info.lang.trim()) langCand = info.lang.trim();
-      else if (tp && typeof tp.lang === 'string' && tp.lang.trim()) langCand = tp.lang.trim();
-      else {
-        try {
-          var de = doc && doc.documentElement;
-          if (de && typeof de.getAttribute === 'function') {
-            langCand = String(de.getAttribute('data-ag-cs-lang') || de.getAttribute('lang') || '').trim();
-          }
-        } catch (_langErr) {}
+    function resolveOledLocale(explicitLang, explicitZh, info, tp, bs, doc, rt) {
+      var cands = [
+        bs && bs.lang,
+        info && info.lang,
+        tp && tp.lang,
+        explicitLang,
+      ];
+      for (var i = 0; i < cands.length; i += 1) {
+        var n = normalizeOledLang(cands[i]);
+        if (n) return n;
       }
-
-      if (langCand) {
-        return /^zh/i.test(langCand);
-      }
-
       try {
-        var navLang = String((rt && rt.navigator && rt.navigator.language) || '').trim();
-        if (navLang) {
-          return /^zh/i.test(navLang);
+        var de = doc && doc.documentElement;
+        if (de && typeof de.getAttribute === 'function') {
+          var docLang = normalizeOledLang(de.getAttribute('data-ag-cs-lang') || de.getAttribute('lang'));
+          if (docLang) return docLang;
         }
+      } catch (_langErr) {}
+      if (bs && typeof bs.zh === 'boolean') return bs.zh ? 'zh-CN' : 'en';
+      if (info && typeof info.zh === 'boolean') return info.zh ? 'zh-CN' : 'en';
+      if (tp && typeof tp.zh === 'boolean') return tp.zh ? 'zh-CN' : 'en';
+      if (typeof explicitZh === 'boolean') return explicitZh ? 'zh-CN' : 'en';
+      try {
+        var navLang = normalizeOledLang(rt && rt.navigator && rt.navigator.language);
+        if (navLang) return navLang;
       } catch (_navErr) {}
-
-      return false;
+      return 'en';
     }
 
     /* ============================================================================
@@ -1800,7 +1822,8 @@
     }
 
     /* 单档位、盲键 1s 化学快闪（含原子质量 STANDBY）或 Orchestrator 非编排主核锁定（NON-PLANNER）胶囊 —— 深浅双模通透适配 */
-    function drawSingleModeStatusCapsule(ctx, info, tokens, upperEnName, isZh) {
+    function drawSingleModeStatusCapsule(ctx, info, tokens, upperEnName, oledPack) {
+      var pack = (typeof oledPack === 'object' && oledPack) ? oledPack : (oledPack ? OLED_I18N['zh-CN'] : OLED_I18N.en);
       var capX = WELL_X;
       var capY = WELL_Y;
       var capW = WELL_W;
@@ -1819,7 +1842,7 @@
       } else if (isOrchUnsupported) {
         badgeLabel = info.orchUnsupportedLabel
           ? String(info.orchUnsupportedLabel)
-          : (isZh ? ORCH_NON_PLANNER_LABEL_ZH : ORCH_NON_PLANNER_LABEL_EN);
+          : pack.nonPlanner;
       } else if (info.singleModeLabel) {
         badgeLabel = String(info.singleModeLabel).toUpperCase();
       } else if (isOrchActive) {
@@ -1828,7 +1851,7 @@
         if (!info.isAuxModel) {
           badgeLabel = formatBlindElementCapsuleLabel(info, upperEnName);
         } else {
-          badgeLabel = isZh ? 'STANDBY · 未开放副盘槽位' : 'STANDBY · RESERVED MACRO SLOT';
+          badgeLabel = pack.standbyAux;
         }
       }
 
@@ -2148,9 +2171,8 @@
       var pausedAtMs = 0;
       var explicitTargetFps = opts.targetFps !== undefined ? normalizeOledTargetFps(opts.targetFps) : null;
       var explicitMotionLevel = opts.motionLevel !== undefined ? normalizeOledMotionLevel(opts.motionLevel) : null;
-      var explicitZh = typeof opts.zh === 'boolean'
-        ? opts.zh
-        : (typeof opts.lang === 'string' && opts.lang.trim() ? /^zh/i.test(opts.lang.trim()) : null);
+      var explicitLang = typeof opts.lang === 'string' && opts.lang.trim() ? opts.lang.trim() : '';
+      var explicitZh = typeof opts.zh === 'boolean' ? opts.zh : null;
 
       var sharedPool = useLazySharedPool ? getSharedPoolForRoot(root) : null;
       var wallpaperCache = new Map();
@@ -2616,7 +2638,8 @@
         var effTargetFps = resolveEffectiveTargetFps(bs);
         var minFrameGapMs = resolveOledMinFrameGapMs(effTargetFps);
         var effPaused = isEffectivelyPaused(bs);
-        var isZh = resolveOledIsZh(explicitZh, info, tp, bs, doc, root);
+        var langCode = resolveOledLocale(explicitLang, explicitZh, info, tp, bs, doc, root);
+        var oledPack = OLED_I18N[langCode] || OLED_I18N.en;
 
         lastDeckInfo = info;
         lastBlendState = bs;
@@ -2827,7 +2850,7 @@
           if (!effPaused && sbElapsed >= syncBadgeDurationMs) {
             syncBadgeActive = false;
           } else {
-            syncBadgeDrawLabel = syncBadgeCustomLabel || (isZh ? SYNC_BADGE_DEFAULT_ZH : SYNC_BADGE_DEFAULT_EN);
+            syncBadgeDrawLabel = syncBadgeCustomLabel || oledPack.synced;
             if (reducedMotion) {
               syncBadgeAlpha = 1.0;
               syncBadgeSlideY = 0;
@@ -2866,7 +2889,7 @@
           info.pressedEffort,
           wellLayout.activeIndex,
           nLevels,
-          isZh ? 1 : 0,
+          langCode,
           Math.round(orbitYaw * 100),
           Math.round(orbitPitch * 100),
           pointerSweepX !== undefined ? Math.round(pointerSweepX * 100) : '',
@@ -2916,11 +2939,11 @@
         drawEditorialHeroHeader(ctx, info, optic, tokens, upperEnName);
 
         if (info.blindFlash) {
-          drawSingleModeStatusCapsule(ctx, info, tokens, upperEnName, isZh);
+          drawSingleModeStatusCapsule(ctx, info, tokens, upperEnName, oledPack);
         } else if (!info.orchUnsupported && info.isAvailable && wellLayout.well && nLevels > 1) {
           drawFrostedEffortCapsuleBar(ctx, wellLayout, info, tokens, sliderCurrentPos);
         } else {
-          drawSingleModeStatusCapsule(ctx, info, tokens, upperEnName, isZh);
+          drawSingleModeStatusCapsule(ctx, info, tokens, upperEnName, oledPack);
         }
 
         /* Layer 3: 1.2s 轻盈「已同步会话 / SYNCED」角落胶囊微标 */

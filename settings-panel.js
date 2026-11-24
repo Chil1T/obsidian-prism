@@ -55,7 +55,7 @@
     homeLayout: mkSp(['studio', 'classic', 'off']),
     homeRipple: S_T,
     logoInk: mkSp(['accent', 'foreground']),
-    language: mkSp(['zh-CN', 'zh-TW', 'yue', 'en', 'ja']),
+    language: mkSp(['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'], 'zh-CN', { yue: 'zh-CN', 'zh-HK': 'zh-TW', 'zh-MO': 'zh-TW' }),
     hostLocalization: S_AUTO,
     composerRestyle: S_T,
     placeholderStyle: mkSp(['studio', 'host']),
@@ -107,8 +107,27 @@
     let val = typeof rawVal === 'string' && spec.aliases && hasOwn(spec.aliases, rawVal) ? spec.aliases[rawVal] : rawVal;
     if (key === 'language' && val === 'auto') {
       const nav = typeof navigator !== 'undefined' && navigator?.language ? navigator.language : '';
-      const normFn = G.__agCsI18n?.normalizeLanguage;
-      val = typeof normFn === 'function' && nav ? normFn(nav) : /^ja\b/i.test(nav) ? 'ja' : /^en\b/i.test(nav) ? 'en' : /^zh[-_](?:HK|MO)/i.test(nav) ? 'yue' : /^zh[-_](?:TW|Hant)/i.test(nav) ? 'zh-TW' : 'zh-CN';
+      const normFn = G.__agCsI18nCore?.normalizeLanguage || G.__agCsI18n?.normalizeLanguage;
+      if (typeof normFn === 'function' && nav) {
+        val = normFn(nav, 'en');
+      } else {
+        const low = String(nav || '').toLowerCase().replace(/_/g, '-');
+        val = /^ja\b/.test(low)
+          ? 'ja'
+          : /^ko\b/.test(low)
+            ? 'ko'
+            : /^es\b/.test(low)
+              ? 'es'
+              : /^fr\b/.test(low)
+                ? 'fr'
+                : /^de\b/.test(low)
+                  ? 'de'
+                  : /^zh-(?:tw|hk|mo|hant)\b/.test(low)
+                    ? 'zh-TW'
+                    : /^zh\b/.test(low)
+                      ? 'zh-CN'
+                      : 'en';
+      }
     }
     if ((key === 'periodicModelPicker' || key === 'omniModule' || key === 'sidebarStudio' || key === 'autoUpdate' || key === 'sidebarNavFold') && typeof val === 'boolean') val = val ? 'on' : 'off';
     if (typeof spec.default === 'string' && typeof val === 'number' && Number.isFinite(val)) val = String(val);
@@ -257,13 +276,6 @@
     return '';
   };
 
-  const mascotLabels = (lang, ui) => {
-    if (lang === 'zh-TW' || lang === 'yue') return ['雙寵', '雙寵+三蟹', ui.offLabel || '關閉'];
-    if (lang === 'ja') return ['ペア', 'ペア+ミニ蟹', ui.offLabel || 'オフ'];
-    if (lang === 'en') return ['Dual', 'Dual+Crabs', ui.offLabel || 'Off'];
-    return ['双宠', '双宠+三蟹', ui.offLabel || '关闭'];
-  };
-
   const mountOrSyncSettingsSection = (ctx) => {
     const {
       version,
@@ -288,7 +300,7 @@
     if (isFn(syncChrome)) syncChrome(doc, runGuardedMut);
     const lang = getLang();
     const ui = uiText(lang);
-    const targetTitles = ['Appearance', '外观', '外觀', '外観'];
+    const targetTitles = ['Appearance', '外观', '外觀', '外観', '외관', '모양', 'Apariencia', 'Apparence', 'Darstellung', 'Erscheinungsbild'];
     let panel = null;
     for (const h2 of doc.querySelectorAll('[role="dialog"] h2')) {
       if (targetTitles.includes((h2.textContent || '').trim())) {
@@ -429,7 +441,8 @@
         else if (isLightTheme && curPal === 'host' && u.lightPresetHintHost) lpText = u.lightPresetHintHost;
         if (lpDescEl[K_TC] !== lpText) lpDescEl[K_TC] = lpText;
       }
-      const hiDescEl = qs(rootEl, '[data-ag-cs-row="hostLocalization"] [data-k="d"]');
+      const hiRow = qs(rootEl, '[data-ag-cs-row="hostLocalization"]');
+      const hiDescEl = hiRow ? qs(hiRow, '[data-k="d"]') : null;
       if (hiDescEl) {
         const hiModeNow = effVal('hostLocalization', l);
         const hiDisabledNow = hiModeNow === 'off' || (hiModeNow === 'auto' && l !== 'zh-CN');
@@ -453,10 +466,12 @@
             }
           } catch {}
         }
+        const isOffEnforced = hiState === 'off-enforced';
+        const isOffBlocked = hiState === 'off-blocked';
         const hiWarn =
           hiModeNow === 'auto' && hiState === 'yielded' && u.hostI18nYieldHint
             ? '1'
-            : hiDisabledNow && extZhActive && u.hostI18nOffExtHint
+            : !isOffBlocked && hiDisabledNow && extZhActive && u.hostI18nOffExtHint
               ? 'ext'
               : '';
         const hiText =
@@ -468,6 +483,44 @@
         if (hiDescEl[K_TC] !== hiText) hiDescEl[K_TC] = hiText;
         if (hiWarn) sa(hiDescEl, 'data-ag-cs-hi-warn', hiWarn);
         else ra(hiDescEl, 'data-ag-cs-hi-warn');
+
+        const titleLine = qs(hiRow, '.ag-cs-settings-title-line');
+        let hiBadge = titleLine ? qs(titleLine, '[data-ag-cs-hi-badge="1"]') : null;
+        if (isOffEnforced && titleLine) {
+          if (!hiBadge) {
+            hiBadge = doc.createElement('span');
+            hiBadge.className = 'ag-cs-repo-chip';
+            sa(hiBadge, 'data-ag-cs-hi-badge', '1');
+            sa(hiBadge, 'data-status', 'ok');
+            ap(titleLine, hiBadge);
+          }
+          const badgeTxt = u.hostLocStatusEnforced || 'Enforcing native English UI';
+          if (hiBadge[K_TC] !== badgeTxt) hiBadge[K_TC] = badgeTxt;
+          hiBadge.hidden = false;
+          ra(hiBadge, 'hidden');
+        } else if (hiBadge) {
+          hiBadge.hidden = true;
+          sa(hiBadge, 'hidden');
+        }
+
+        const textCol = hiDescEl.parentElement;
+        let hiBlockedBar = textCol ? qs(textCol, '[data-ag-cs-hi-blocked="1"]') : null;
+        if (isOffBlocked && textCol) {
+          if (!hiBlockedBar) {
+            hiBlockedBar = doc.createElement('div');
+            hiBlockedBar.className = 'ag-cs-beta-notice';
+            if (hiBlockedBar.style) hiBlockedBar.style.marginTop = '4px';
+            sa(hiBlockedBar, 'data-ag-cs-hi-blocked', '1');
+            ap(textCol, hiBlockedBar);
+          }
+          const blkTxt = u.hostLocStatusBlocked || 'External localization override blocked by loop guard.';
+          if (hiBlockedBar[K_TC] !== blkTxt) hiBlockedBar[K_TC] = blkTxt;
+          hiBlockedBar.hidden = false;
+          ra(hiBlockedBar, 'hidden');
+        } else if (hiBlockedBar) {
+          hiBlockedBar.hidden = true;
+          sa(hiBlockedBar, 'hidden');
+        }
       }
     };
 
@@ -666,13 +719,15 @@
             i18nCore?.LANG_OPTIONS || [
               { id: 'zh-CN', label: '简体中文' },
               { id: 'zh-TW', label: '繁體中文' },
-              { id: 'yue', label: '粵語' },
               { id: 'en', label: 'English' },
               { id: 'ja', label: '日本語' },
+              { id: 'ko', label: '한국어' },
+              { id: 'es', label: 'Español' },
+              { id: 'fr', label: 'Français' },
+              { id: 'de', label: 'Deutsch' },
             ]
           ).map((o) => [o.id, o.label]);
 
-          const [mDual, mMinis, mOff] = mascotLabels(lang, ui);
           const U = (k, d = '') => ui[k] || d;
           const onOff = [[true, U('onLabel', 'On')], [false, U('offLabel', 'Off')]];
           const autoOnOff = [['auto', U('optAutoCoexist', 'Auto')], ['on', U('onLabel', 'On')], ['off', U('offLabel', 'Off')]];
@@ -694,7 +749,7 @@
             RS('homeRipple', onOff, 'Ripple'),
             RS('logoInk', [['accent', U('optAccent')], ['foreground', U('optForeground')]]),
             RS('language', langOpts),
-            RS('hostLocalization', [['auto', U('optHostI18nAuto', 'Auto')], ['on', U('onLabel', 'On')], ['off', U('offLabel', 'Off')]], 'HostI18n'),
+            RS('hostLocalization', [['auto', U('optHostI18nAuto', 'Auto')], ['on', U('optHostI18nOn', U('onLabel', 'On'))], ['off', U('optHostI18nOff', U('offLabel', 'Off'))]], 'HostI18n'),
             RS('composerRestyle', onOff, 'Composer'),
             RS('placeholderStyle', [['studio', 'Studio'], ['host', U('optPlaceholderHost')]], 'Placeholder'),
             RS('smoothCaret', onOff),
@@ -702,7 +757,7 @@
             R('contextMenu', 'rowContextMenuTitle', 'rowContextMenuDesc', onOff),
             RS('codeFont', [['default', U('optFontDefault')], ['jetbrains', 'JetBrains Mono'], ['cascadia', 'Cascadia Code'], ['sfmono', U('optFontSfmono', 'SF Mono')]]),
             RS('codeLigatures', onOff),
-            RS('mascot', [['crab', mDual], ['minis', mMinis], ['off', mOff]]),
+            RS('mascot', [['crab', U('optMascotCrab', 'Crab Mascot')], ['minis', U('optMascotMinis', 'Dual + Crabs')], ['off', U('optMascotOff', U('offLabel', 'Off'))]]),
             RS('sidebarRestyle', onOff, 'Sidebar'),
             RS('sidebarCompact', onOff),
             R('sidebarNavFold', 'setSidebarNavFoldLabel', 'setSidebarNavFoldDesc', [['off', U('optSidebarNavFoldOff', 'Show All')], ['on', U('optSidebarNavFoldOn', 'Fold Extra')]]),

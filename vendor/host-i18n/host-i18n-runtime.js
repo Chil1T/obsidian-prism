@@ -15,12 +15,12 @@
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
-    module.exports = factory();
+    module.exports = factory(root);
   } else {
-    var api = factory();
+    var api = factory(root);
     if (root) root.__agPrismHostI18nFactory = api;
   }
-})(typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : this, function () {
+})(typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : this, function (root) {
   'use strict';
 
   var hasOwn = Object.prototype.hasOwnProperty;
@@ -81,6 +81,7 @@
 
   var PRISM_OWNED_IDS = {
     'ag-cs-settings-sec': 1,
+    'ag-prism-settings-sec': 1,
     'ag-prism-pulse-bar': 1,
     'ag-pulse-status-bar': 1,
     'ag-prism-periodic-picker-root': 1,
@@ -91,6 +92,8 @@
     'data-ag-prism-ui',
     'data-ag-cs-ui',
     'data-ag-no-i18n',
+    'data-ag-owned',
+    'data-ces-part',
     'data-ag-prism-sidebar-owned',
     'data-ag-prism-omni-owned',
     'data-ag-prism-fallback',
@@ -276,6 +279,17 @@
     return false;
   }
 
+  function isModelSelectorElement(el) {
+    var cur = el && el.nodeType === 3 ? el.parentElement || el.parentNode : el;
+    var depth = 0;
+    while (cur && depth < MAX_SAFE_BOUNDARY_DEPTH) {
+      if (cur.nodeType === 1 && isModelSelectorSelf(cur)) return true;
+      cur = cur.parentElement || cur.parentNode;
+      depth++;
+    }
+    return false;
+  }
+
   function isChatProseSelf(el, preTokens, preTid) {
     if (!el || el.nodeType !== 1) return false;
     var tid = preTid !== undefined ? preTid : getAttr(el, 'data-testid');
@@ -343,6 +357,17 @@
     if (id && hasOwn.call(EXTERNAL_OWNED_IDS, id)) return true;
     for (var i = 0; i < EXTERNAL_OWNED_ATTRS.length; i++) {
       if (hasAttr(el, EXTERNAL_OWNED_ATTRS[i])) return true;
+    }
+    return false;
+  }
+
+  function isExternalOwnedElement(el) {
+    var cur = el && el.nodeType === 3 ? el.parentElement || el.parentNode : el;
+    var depth = 0;
+    while (cur && depth < MAX_SAFE_BOUNDARY_DEPTH) {
+      if (cur.nodeType === 1 && isExternalPluginOwnedSelf(cur)) return true;
+      cur = cur.parentElement || cur.parentNode;
+      depth++;
     }
     return false;
   }
@@ -1132,10 +1157,104 @@
     return dedup;
   }
 
-  function createHostI18nEngine(dictData) {
+  var cachedDefaultReverseModule = null;
+
+  function resolveDefaultReverseModule(winObj) {
+    if (winObj && winObj.__agPrismHostI18nReversePatterns) {
+      return winObj.__agPrismHostI18nReversePatterns;
+    }
+    if (root && root.__agPrismHostI18nReversePatterns) {
+      return root.__agPrismHostI18nReversePatterns;
+    }
+    if (cachedDefaultReverseModule) return cachedDefaultReverseModule;
+    if (typeof require === 'function') {
+      try {
+        cachedDefaultReverseModule = require('./reverse-patterns.js');
+        return cachedDefaultReverseModule;
+      } catch (e) {}
+    }
+    return null;
+  }
+
+  function rankReverseCaseStyle(s) {
+    if (/^[A-Z][a-z]/.test(s) && s !== s.toUpperCase()) return 0;
+    if (s !== s.toLowerCase() && s !== s.toUpperCase()) return 1;
+    if (s === s.toLowerCase()) return 2;
+    return 3;
+  }
+
+  function scoreReverseEnCandidate(s) {
+    var score = s.length * 10 + rankReverseCaseStyle(s);
+    if (/\s+[.,!?;:]$/.test(s)) score += 500;
+    return score;
+  }
+
+  function mapZhTrailingPuncToEn(punc) {
+    var out = '';
+    for (var i = 0; i < punc.length; i++) {
+      var ch = punc.charAt(i);
+      if (ch === '：') out += ':';
+      else if (ch === '。') out += '.';
+      else if (ch === '？') out += '?';
+      else if (ch === '！') out += '!';
+      else if (ch === '…') out += '...';
+      else out += ch;
+    }
+    return out;
+  }
+
+  function splitOuterWhitespace(str) {
+    var len = str.length;
+    var start = 0;
+    while (start < len && /\s/.test(str.charAt(start))) start++;
+    var end = len;
+    while (end > start && /\s/.test(str.charAt(end - 1))) end--;
+    return {
+      leading: str.slice(0, start),
+      core: str.slice(start, end),
+      trailing: str.slice(end),
+    };
+  }
+
+  function createHostI18nEngine(dictData, engineOptions) {
+    var engOpts = engineOptions || {};
+    var direction = engOpts.direction === 'reverse' ? 'reverse' : 'forward';
     var data = dictData || {};
     var exactDict = data.exact || {};
-    var rawPatterns = (data.patterns || []).concat(data.rules || []);
+
+    var revModule = null;
+    var revExactOverrides = null;
+    var rawPatterns = null;
+    var crossNodeRules = [];
+
+    if (direction === 'reverse') {
+      var customRev = engOpts.reversePatterns;
+      var fallbackRev = resolveDefaultReverseModule(engOpts.root || null);
+      if (Array.isArray(customRev)) {
+        rawPatterns = customRev.slice();
+        revExactOverrides =
+          engOpts.reverseExactOverrides || (fallbackRev && fallbackRev.REVERSE_EXACT_OVERRIDES) || null;
+        crossNodeRules =
+          engOpts.reverseCrossNodeRules || (fallbackRev && fallbackRev.REVERSE_CROSS_NODE_RULES) || [];
+      } else {
+        revModule = customRev && typeof customRev === 'object' ? customRev : fallbackRev;
+        rawPatterns =
+          (revModule && (revModule.REVERSE_PATTERNS || revModule.patterns))
+            ? (revModule.REVERSE_PATTERNS || revModule.patterns).slice()
+            : [];
+        revExactOverrides =
+          engOpts.reverseExactOverrides ||
+          (revModule && (revModule.REVERSE_EXACT_OVERRIDES || revModule.exactOverrides)) ||
+          null;
+        crossNodeRules =
+          engOpts.reverseCrossNodeRules ||
+          (revModule && (revModule.REVERSE_CROSS_NODE_RULES || revModule.crossNodeRules)) ||
+          [];
+      }
+    } else {
+      rawPatterns = (data.patterns || []).concat(data.rules || []);
+    }
+
     var patterns = [];
     var charBuckets = Object.create(null);
     var digitBucket = [];
@@ -1188,19 +1307,57 @@
       return true;
     }
 
+    function normalizeWhitespace(str) {
+      return str.replace(/\s+/g, ' ').trim();
+    }
+
     var exactLookup = Object.create(null);
     var translatedValues = Object.create(null);
-    for (var k in exactDict) {
-      if (hasOwn.call(exactDict, k)) {
-        exactLookup[k] = exactDict[k];
-        translatedValues[exactDict[k]] = true;
+    var reverseScores = direction === 'reverse' ? Object.create(null) : null;
+
+    if (direction === 'reverse') {
+      for (var enKey in exactDict) {
+        if (!hasOwn.call(exactDict, enKey)) continue;
+        var zhVal = exactDict[enKey];
+        if (typeof enKey !== 'string' || typeof zhVal !== 'string') continue;
+        var normZh = normalizeWhitespace(zhVal);
+        var normEn = normalizeWhitespace(enKey);
+        if (!normZh || !normEn || !ZH_CHAR_RE.test(normZh)) continue;
+        var candScore = scoreReverseEnCandidate(normEn);
+        if (!(normZh in exactLookup) || candScore < reverseScores[normZh]) {
+          exactLookup[normZh] = normEn;
+          reverseScores[normZh] = candScore;
+        }
+      }
+      reverseScores = null;
+      if (revExactOverrides && typeof revExactOverrides === 'object') {
+        for (var ovZh in revExactOverrides) {
+          if (typeof ovZh === 'string' && typeof revExactOverrides[ovZh] === 'string') {
+            var cleanZh = normalizeWhitespace(ovZh);
+            if (cleanZh) {
+              exactLookup[cleanZh] = revExactOverrides[ovZh];
+            }
+          }
+        }
+      }
+    } else {
+      for (var k in exactDict) {
+        if (hasOwn.call(exactDict, k)) {
+          exactLookup[k] = exactDict[k];
+          translatedValues[exactDict[k]] = true;
+        }
       }
     }
+
     // Release strong references to external input dictionary objects (~0.6 MiB/window saved)
     dictData = null;
+    engineOptions = null;
+    engOpts = null;
     data = null;
     exactDict = null;
     rawPatterns = null;
+    revModule = null;
+    revExactOverrides = null;
 
     var MAX_UNIT_CACHE_SIZE = 2048;
     var unitCache = createNullProtoBoundedCache(MAX_UNIT_CACHE_SIZE);
@@ -1208,10 +1365,6 @@
     function cacheAndReturn(key, value) {
       unitCache.set(key, value);
       return value;
-    }
-
-    function normalizeWhitespace(str) {
-      return str.replace(/\s+/g, ' ').trim();
     }
 
     function applyPatterns(text) {
@@ -1255,6 +1408,136 @@
         }
       }
       return null;
+    }
+
+    if (direction === 'reverse') {
+      function lookupReverseExactOrVariant(norm) {
+        if (norm in exactLookup) return exactLookup[norm];
+        var tailCh = norm.charAt(norm.length - 1);
+        if (':：….。？?!！'.indexOf(tailCh) !== -1) {
+          var puncMatch = norm.match(/^(.+?)([:：…\.。？\?!！]+)$/);
+          if (puncMatch) {
+            var base = puncMatch[1].trim();
+            var punc = puncMatch[2];
+            if (base in exactLookup) {
+              var baseEn = exactLookup[base];
+              var mappedPunc = mapZhTrailingPuncToEn(punc);
+              var baseEnd = baseEn.charAt(baseEn.length - 1);
+              if (mappedPunc === '.' && (baseEnd === '.' || baseEnd === '!' || baseEnd === '?')) {
+                return baseEn;
+              }
+              return baseEn + mappedPunc;
+            }
+            if (punc === '…' && base + '...' in exactLookup) {
+              return exactLookup[base + '...'];
+            }
+            if (punc === '...' && base + '…' in exactLookup) {
+              return exactLookup[base + '…'];
+            }
+          }
+        }
+        if (norm.indexOf('+') !== -1) {
+          var hkMatch = norm.match(
+            /(\((?:Ctrl|Cmd|Alt|Shift)\+[^\s\)]+\)|\b(?:Ctrl|Cmd|Alt|Shift)\+[\w;:,\\/+\-]+)$/i
+          );
+          if (hkMatch && hkMatch.index > 0) {
+            var cmdBase = norm.slice(0, hkMatch.index).trim();
+            var hk = hkMatch[1].trim();
+            if (cmdBase && cmdBase in exactLookup) {
+              return exactLookup[cmdBase] + ' ' + hk;
+            }
+          }
+        }
+        return null;
+      }
+
+      function translateReverseUnit(rawUnit) {
+        if (!rawUnit || typeof rawUnit !== 'string' || rawUnit.length > 512) return null;
+        if (!ZH_CHAR_RE.test(rawUnit)) return null;
+        var normalized = normalizeWhitespace(rawUnit);
+        if (!normalized || !ZH_CHAR_RE.test(normalized)) return null;
+
+        if (unitCache.has(normalized)) {
+          return unitCache.get(normalized);
+        }
+
+        var exactHit = lookupReverseExactOrVariant(normalized);
+        if (exactHit !== null && exactHit !== normalized) {
+          return cacheAndReturn(normalized, exactHit);
+        }
+
+        var patHit = applyPatterns(normalized);
+        if (patHit !== null && patHit !== normalized) {
+          return cacheAndReturn(normalized, patHit);
+        }
+
+        if (
+          normalized.indexOf('。') !== -1 ||
+          normalized.indexOf('！') !== -1 ||
+          normalized.indexOf('？') !== -1
+        ) {
+          var zhParts = normalized.split(/([。！？]\s*)/);
+          if (zhParts.length >= 3) {
+            var anyRev = false;
+            var allRev = true;
+            var outSegs = [];
+            for (var zIdx = 0; zIdx < zhParts.length; zIdx++) {
+              var seg = zhParts[zIdx];
+              var trimSeg = seg.trim();
+              if (!trimSeg) continue;
+              if (/^[。！？\s]+$/.test(seg)) {
+                outSegs.push(mapZhTrailingPuncToEn(trimSeg) + ' ');
+                continue;
+              }
+              var segRes = lookupReverseExactOrVariant(trimSeg) || applyPatterns(trimSeg);
+              if (segRes && segRes !== trimSeg) {
+                anyRev = true;
+                outSegs.push(segRes.replace(/[.!?]+$/, ''));
+              } else {
+                allRev = false;
+                break;
+              }
+            }
+            if (anyRev && allRev) {
+              return cacheAndReturn(normalized, outSegs.join('').trim());
+            }
+          }
+        }
+
+        return cacheAndReturn(normalized, null);
+      }
+
+      function translateReverseText(rawStr) {
+        if (!rawStr || typeof rawStr !== 'string' || rawStr.length > 512) return null;
+        if (!ZH_CHAR_RE.test(rawStr)) return null;
+        var parts = splitOuterWhitespace(rawStr);
+        if (!parts.core) return null;
+        var coreRes = translateReverseUnit(parts.core);
+        if (coreRes === null || coreRes === parts.core) return null;
+        return parts.leading + coreRes + parts.trailing;
+      }
+
+      return {
+        direction: 'reverse',
+        translate: translateReverseText,
+        translateText: translateReverseText,
+        translateUnit: translateReverseUnit,
+        exactDict: exactLookup,
+        reverseExact: exactLookup,
+        patterns: patterns,
+        crossNodeRules: crossNodeRules,
+        patternIndex: {
+          charBuckets: charBuckets,
+          digitBucket: digitBucket,
+          generalBucket: generalBucket,
+          getCandidatesForText: getCandidatesForText,
+        },
+        translatedValues: translatedValues,
+        cache: unitCache,
+        unitCache: unitCache,
+        maxCacheSize: MAX_UNIT_CACHE_SIZE,
+        normalizeWhitespace: normalizeWhitespace,
+      };
     }
 
     function translateSingleUnit(rawStr) {
@@ -1363,10 +1646,23 @@
       return cacheAndReturn(normalized, null);
     }
 
+    function translateForwardText(rawStr) {
+      if (!rawStr || typeof rawStr !== 'string' || rawStr.length > 512) return null;
+      var parts = splitOuterWhitespace(rawStr);
+      if (!parts.core) return null;
+      var coreRes = translateSingleUnit(parts.core);
+      if (coreRes === null || coreRes === parts.core) return null;
+      return parts.leading + coreRes + parts.trailing;
+    }
+
     return {
+      direction: 'forward',
       translate: translateSingleUnit,
+      translateText: translateForwardText,
+      translateUnit: translateSingleUnit,
       exactDict: exactLookup,
       patterns: patterns,
+      crossNodeRules: crossNodeRules,
       patternIndex: {
         charBuckets: charBuckets,
         digitBucket: digitBucket,
@@ -1636,12 +1932,63 @@
           };
 
     var customMutationObserver = opts.MutationObserver || null;
-    var engine = createHostI18nEngine(opts.dict || { exact: {}, patterns: [] });
-    // Sever closure retention of options / options.dict after engine construction
+    var inputDict = opts.dict || { exact: {}, patterns: [] };
+    var customReversePatterns = opts.reversePatterns || null;
+    var customReverseOverrides = opts.reverseExactOverrides || null;
+    var customReverseCrossRules = opts.reverseCrossNodeRules || null;
+    var seedExact = Object.create(null);
+    if (inputDict.exact && typeof inputDict.exact === 'object') {
+      for (var sk in inputDict.exact) {
+        if (hasOwn.call(inputDict.exact, sk)) {
+          seedExact[sk] = inputDict.exact[sk];
+        }
+      }
+    }
+    var internalDictSeed = {
+      exact: seedExact,
+      patterns: Array.isArray(inputDict.patterns) ? inputDict.patterns.slice() : [],
+      rules: Array.isArray(inputDict.rules) ? inputDict.rules.slice() : [],
+    };
+    // Sever closure retention of options / options.dict immediately
+    inputDict = null;
     options = null;
     opts = null;
-    var translateSingleUnit = engine.translate;
-    var translatedValues = engine.translatedValues || Object.create(null);
+
+    var forwardEngine = null;
+    var reverseEngine = null;
+    var activeEngine = null;
+    var translateSingleUnit = null;
+    var translatedValues = Object.create(null);
+    var activeCrossNodeRules = [];
+
+    function selectEngineForMode(targetMode) {
+      if (targetMode === 'off') {
+        if (!reverseEngine) {
+          reverseEngine = createHostI18nEngine(internalDictSeed, {
+            direction: 'reverse',
+            reversePatterns: customReversePatterns,
+            reverseExactOverrides: customReverseOverrides,
+            reverseCrossNodeRules: customReverseCrossRules,
+            root: win,
+          });
+        }
+        activeEngine = reverseEngine;
+        translateSingleUnit = reverseEngine.translateUnit;
+        translatedValues = Object.create(null);
+        activeCrossNodeRules = reverseEngine.crossNodeRules || [];
+      } else {
+        if (!forwardEngine) {
+          forwardEngine = createHostI18nEngine(internalDictSeed, {
+            direction: 'forward',
+            root: win,
+          });
+        }
+        activeEngine = forwardEngine;
+        translateSingleUnit = forwardEngine.translateUnit || forwardEngine.translate;
+        translatedValues = forwardEngine.translatedValues || Object.create(null);
+        activeCrossNodeRules = [];
+      }
+    }
 
     var state = {
       active: false,
@@ -1653,6 +2000,11 @@
       destroyed: false,
     };
 
+    var TIER2_SKIP_ATTRS = [
+      ['data-ag-localization-skip', 'true'],
+      ['data-antigravity-zh-skip', '1'],
+    ];
+
     var textSnapshots = new WeakMap();
     var textUntranslatedCache = new WeakMap();
     var attrSnapshots = new WeakMap();
@@ -1661,9 +2013,17 @@
     var exemptElements = new WeakSet();
     var exemptNodes = new WeakSet();
     var processedAlerts = new WeakSet();
+    var tier2SkipSnapshots = new WeakMap();
+    var offPendingRetryElements = new WeakMap();
 
     var modifiedTextNodes = createWeakNodeTracker();
     var modifiedAttrElements = createWeakNodeTracker();
+    var tier2MarkedElements = createWeakNodeTracker();
+    var blockedElementsTracker = createWeakNodeTracker();
+
+    var tier1State = null;
+    var offRetryTimers = new Set();
+    var inOffRetryPass = false;
 
     var observer = null;
     var observing = false;
@@ -1700,6 +2060,7 @@
     var CONFLICT_WINDOW_MS = 3000;
     var NODE_CONFLICT_THRESHOLD = 3;
     var GLOBAL_CONFLICT_NODE_THRESHOLD = 5;
+    var OFF_RETRY_DELAY_MS = 16;
 
     function isWinBlurAttrSet() {
       return Boolean(doc && doc.documentElement && getAttr(doc.documentElement, 'data-ag-cs-win-blur') === '1');
@@ -1716,6 +2077,138 @@
           doc.documentElement.setAttribute('data-ag-prism-host-i18n', val);
         }
       } catch (e) {}
+    }
+
+    function removeRootStatusAttr() {
+      try {
+        if (doc && doc.documentElement && typeof doc.documentElement.removeAttribute === 'function') {
+          doc.documentElement.removeAttribute('data-ag-prism-host-i18n');
+        }
+      } catch (e) {}
+    }
+
+    function activateTier1Suppression() {
+      tier1State = {
+        hansSwitched: false,
+        hansPrevLang: null,
+        patchObserverPaused: false,
+        patchObserverRef: null,
+        patchObserverTarget: null,
+        patchObserverOpts: null,
+        htmlLangModified: false,
+        htmlLangOrig: null,
+      };
+      if (win && typeof win.__antigravityZhSetLang === 'function') {
+        var storedHans = safeReadLocalStorage(win, 'antigravityHansLang');
+        var normStored = storedHans !== null ? String(storedHans).trim().toLowerCase() : '';
+        if (
+          storedHans === null ||
+          (normStored !== 'en' &&
+            normStored !== 'en-us' &&
+            normStored !== 'off' &&
+            normStored !== 'false' &&
+            normStored !== '0')
+        ) {
+          tier1State.hansPrevLang = storedHans && String(storedHans).trim() ? String(storedHans).trim() : 'zh-CN';
+          try {
+            win.__antigravityZhSetLang('en');
+            tier1State.hansSwitched = true;
+          } catch (e) {}
+        }
+      } else if (
+        win &&
+        win.__antigravityZhPatchObserver &&
+        typeof win.__antigravityZhPatchObserver.disconnect === 'function' &&
+        typeof win.__antigravityZhPatchObserver.observe === 'function' &&
+        doc &&
+        (doc.body || doc.documentElement)
+      ) {
+        try {
+          var extObs = win.__antigravityZhPatchObserver;
+          tier1State.patchObserverRef = extObs;
+          tier1State.patchObserverTarget = extObs._target || extObs.target || doc.documentElement;
+          tier1State.patchObserverOpts = extObs.options || { childList: true, subtree: true, characterData: true };
+          extObs.disconnect();
+          tier1State.patchObserverPaused = true;
+        } catch (e) {}
+      }
+      if (doc && doc.documentElement && !hasAttr(doc.documentElement, 'data-ag-prism-lang-owned')) {
+        var curHtmlLang = getAttr(doc.documentElement, 'lang');
+        if (curHtmlLang && /^zh(?:$|[-_])/i.test(String(curHtmlLang).trim())) {
+          tier1State.htmlLangOrig = curHtmlLang;
+          try {
+            doc.documentElement.setAttribute('lang', 'en');
+            tier1State.htmlLangModified = true;
+          } catch (e) {}
+        }
+      }
+    }
+
+    function restoreTier1Suppression() {
+      if (!tier1State) return;
+      var saved = tier1State;
+      tier1State = null;
+      if (saved.htmlLangModified && doc && doc.documentElement && typeof doc.documentElement.setAttribute === 'function') {
+        try {
+          if (getAttr(doc.documentElement, 'lang') === 'en') {
+            doc.documentElement.setAttribute('lang', saved.htmlLangOrig);
+          }
+        } catch (e) {}
+      }
+      if (saved.patchObserverPaused && saved.patchObserverRef && saved.patchObserverTarget) {
+        try {
+          saved.patchObserverRef.observe(saved.patchObserverTarget, saved.patchObserverOpts);
+        } catch (e) {}
+      }
+      if (saved.hansSwitched && win && typeof win.__antigravityZhSetLang === 'function') {
+        try {
+          win.__antigravityZhSetLang(saved.hansPrevLang || 'zh-CN');
+        } catch (e) {}
+      }
+    }
+
+    function markTier2SkipElement(el) {
+      if (state.mode !== 'off' || !el || el.nodeType !== 1 || typeof el.setAttribute !== 'function') return;
+      if (doc && el === doc.documentElement) return;
+      var snap = tier2SkipSnapshots.get(el);
+      if (!snap) {
+        snap = Object.create(null);
+        for (var i = 0; i < TIER2_SKIP_ATTRS.length; i++) {
+          var attrName = TIER2_SKIP_ATTRS[i][0];
+          snap[attrName] = hasAttr(el, attrName) ? getAttr(el, attrName) : null;
+        }
+        tier2SkipSnapshots.set(el, snap);
+      }
+      for (var j = 0; j < TIER2_SKIP_ATTRS.length; j++) {
+        var name = TIER2_SKIP_ATTRS[j][0];
+        var targetVal = TIER2_SKIP_ATTRS[j][1];
+        if (getAttr(el, name) !== targetVal) {
+          try {
+            el.setAttribute(name, targetVal);
+          } catch (e) {}
+        }
+      }
+      tier2MarkedElements.add(el);
+    }
+
+    function rollbackTier2Element(el) {
+      var snap = tier2SkipSnapshots.get(el);
+      if (!snap) return;
+      for (var i = 0; i < TIER2_SKIP_ATTRS.length; i++) {
+        var name = TIER2_SKIP_ATTRS[i][0];
+        var writtenVal = TIER2_SKIP_ATTRS[i][1];
+        var prevVal = snap[name];
+        try {
+          if (getAttr(el, name) === writtenVal) {
+            if (prevVal === null) {
+              if (typeof el.removeAttribute === 'function') el.removeAttribute(name);
+            } else if (typeof el.setAttribute === 'function') {
+              el.setAttribute(name, prevVal);
+            }
+          }
+        } catch (e) {}
+      }
+      tier2SkipSnapshots.delete(el);
     }
 
     function countTranslatedUnits() {
@@ -1791,10 +2284,25 @@
       }
     }
 
+    function clearOffRetryTimers() {
+      var hadAny = offRetryTimers.size > 0;
+      if (hadAny) {
+        offRetryTimers.forEach(function (tid) {
+          try {
+            clearTimeoutFn(tid);
+          } catch (e) {}
+        });
+        offRetryTimers.clear();
+      }
+      offPendingRetryElements = new WeakMap();
+      return hadAny;
+    }
+
     function clearAllTimersAndListeners() {
       disconnectDirtyObserver();
       dirtyObserver = null;
       pendingFullFloatScan = false;
+      clearOffRetryTimers();
       if (rafId !== null) {
         try {
           cancelRafFn(rafId);
@@ -1877,6 +2385,9 @@
       modifiedAttrElements.forEachAll(rollbackAttrEl);
       modifiedAttrElements.clear();
 
+      tier2MarkedElements.forEachAll(rollbackTier2Element);
+      tier2MarkedElements.clear();
+
       // DOM 兜底扫回：防止节点曾因暂时脱离 DOM 被 prune 剪枝后又被 React 复用回挂导致漏回滚
       var rootEl = doc && (doc.body || doc.documentElement);
       if (rootEl) {
@@ -1885,8 +2396,12 @@
             var tw = doc.createTreeWalker(rootEl, 5);
             var cur = tw.currentNode;
             while (cur) {
-              if (cur.nodeType === 3) rollbackTextNode(cur);
-              else if (cur.nodeType === 1) rollbackAttrEl(cur);
+              if (cur.nodeType === 3) {
+                rollbackTextNode(cur);
+              } else if (cur.nodeType === 1) {
+                rollbackAttrEl(cur);
+                rollbackTier2Element(cur);
+              }
               cur = tw.nextNode();
             }
           } else {
@@ -1894,9 +2409,11 @@
             while (stack.length) {
               var nd = stack.pop();
               if (!nd) continue;
-              if (nd.nodeType === 3) rollbackTextNode(nd);
-              else if (nd.nodeType === 1) {
+              if (nd.nodeType === 3) {
+                rollbackTextNode(nd);
+              } else if (nd.nodeType === 1) {
                 rollbackAttrEl(nd);
+                rollbackTier2Element(nd);
                 var ch = nd.childNodes;
                 if (ch && ch.length) {
                   for (var ci = ch.length - 1; ci >= 0; ci--) stack.push(ch[ci]);
@@ -1908,7 +2425,17 @@
       }
     }
 
-    function teardownRuntime(nextStatus, nextReason, yieldedFlag, providerName) {
+    function resetTransientRuntimeCaches() {
+      textUntranslatedCache = new WeakMap();
+      attrUntranslatedCache = new WeakMap();
+      elementConflictState = new WeakMap();
+      exemptElements = new WeakSet();
+      exemptNodes = new WeakSet();
+      processedAlerts = new WeakSet();
+      blockedElementsTracker.clear();
+    }
+
+    function teardownRuntime(nextStatus, nextReason, yieldedFlag, providerName, removeRootAttrFlag) {
       state.active = false;
       state.destroyed = true;
       state.status = nextStatus;
@@ -1917,15 +2444,22 @@
       state.yielded = Boolean(yieldedFlag);
       hibernating = false;
       pausedByWindowBlur = false;
+      inOffRetryPass = false;
 
       clearAllTimersAndListeners();
       rollbackAllSnapshots();
+      restoreTier1Suppression();
+      resetTransientRuntimeCaches();
       pendingNodes.length = 0;
       pendingNodeSet.clear();
       delayedExternalNodes.clear();
       globalConflictRecords.length = 0;
 
-      setRootStatusAttr(nextStatus);
+      if (removeRootAttrFlag) {
+        removeRootStatusAttr();
+      } else {
+        setRootStatusAttr(nextStatus);
+      }
     }
 
     function yieldAndRollback(reason, providerName) {
@@ -1938,7 +2472,44 @@
         var l1Conflict = detectLayer1External(win, doc);
         resolvedProvider = l1Conflict.hit ? l1Conflict.provider : 'conflict-breaker';
       }
-      teardownRuntime('yielded', reason, true, resolvedProvider);
+      teardownRuntime('yielded', reason, true, resolvedProvider, false);
+    }
+
+    function scheduleOffConflictRetry(el) {
+      if (!el || el.nodeType !== 1 || !state.active || state.destroyed || state.mode !== 'off') return;
+      if (exemptElements.has(el) || offPendingRetryElements.has(el)) return;
+      var tid = setTimeoutFn(function () {
+        offRetryTimers.delete(tid);
+        offPendingRetryElements.delete(el);
+        if (!state.active || state.destroyed || state.mode !== 'off') return;
+        if (el.isConnected === false || exemptElements.has(el)) return;
+        if (isPaused()) {
+          missedWhilePaused = true;
+          return;
+        }
+        var visited = new WeakSet();
+        disconnectObserver();
+        inOffRetryPass = true;
+        try {
+          translateElement(el, visited, null, null);
+        } catch (e) {}
+        inOffRetryPass = false;
+        reconnectObserver();
+      }, OFF_RETRY_DELAY_MS);
+      offRetryTimers.add(tid);
+      offPendingRetryElements.set(el, tid);
+    }
+
+    function cancelOffRetryForElement(el) {
+      if (!el) return;
+      var pendingTid = offPendingRetryElements.get(el);
+      if (pendingTid !== undefined) {
+        offPendingRetryElements.delete(el);
+        offRetryTimers.delete(pendingTid);
+        try {
+          clearTimeoutFn(pendingTid);
+        } catch (e) {}
+      }
     }
 
     function recordGlobalConflict(el, now) {
@@ -1964,7 +2535,7 @@
 
     function recordElementConflict(el, currentText, expectedText, origText, translatedAt) {
       if (!el || el.nodeType !== 1) return false;
-      if (exemptElements.has(el)) return true;
+      if (exemptElements.has(el)) return 'blocked';
       var st = elementConflictState.get(el);
       if (!st) return false;
 
@@ -1981,7 +2552,8 @@
           (st.conflicts.length > 0 && now - st.conflicts[st.conflicts.length - 1] <= CONFLICT_WINDOW_MS);
         if (inWindow) {
           if (st.lastCountedVersion === st.writeVersion) {
-            return exemptElements.has(el);
+            if (exemptElements.has(el)) return 'blocked';
+            return state.mode === 'off' ? 'deferred' : false;
           }
           st.lastCountedVersion = st.writeVersion;
 
@@ -1994,11 +2566,40 @@
           recent.push(now);
           st.conflicts = recent;
 
+          if (state.mode === 'off') {
+            if (recent.length >= NODE_CONFLICT_THRESHOLD) {
+              cancelOffRetryForElement(el);
+              exemptElements.add(el);
+              blockedElementsTracker.add(el);
+              var offCh = el.firstChild;
+              while (offCh) {
+                if (offCh.nodeType === 3) {
+                  exemptNodes.add(offCh);
+                  modifiedTextNodes.delete(offCh);
+                  textSnapshots.delete(offCh);
+                }
+                offCh = offCh.nextSibling;
+              }
+              if (state.status !== 'off-blocked') {
+                state.status = 'off-blocked';
+                state.reason = 'external-override-blocked';
+                if (!state.detectedProvider) {
+                  var l1Blk = detectLayer1External(win, doc);
+                  if (l1Blk.hit) state.detectedProvider = l1Blk.provider;
+                }
+                setRootStatusAttr('off-blocked');
+              }
+              return 'blocked';
+            }
+            scheduleOffConflictRetry(el);
+            return 'deferred';
+          }
+
           if (recent.length >= 2) {
             var globalCount = recordGlobalConflict(el, now);
             if (globalCount >= GLOBAL_CONFLICT_NODE_THRESHOLD) {
               yieldAndRollback('conflict-breaker');
-              return true;
+              return 'blocked';
             }
           }
           if (recent.length >= NODE_CONFLICT_THRESHOLD) {
@@ -2012,7 +2613,7 @@
               }
               ch = ch.nextSibling;
             }
-            return true;
+            return 'blocked';
           }
           return false;
         }
@@ -2021,8 +2622,9 @@
     }
 
     /**
-     * Checks whether a previously translated node was modified externally.
-     * Returns true if the node should NOT be translated (exempted or circuit-broken).
+     * Checks whether a previously translated/restored node was modified externally.
+     * Returns true if the node should NOT be processed synchronously right now
+     * (either exempted/circuit-broken, or scheduled for a gentle 16ms retry in 'off' mode).
      */
     function checkNodeConflict(node) {
       if (!node || node.nodeType !== 3) return false;
@@ -2035,10 +2637,14 @@
       if (currentVal === snap.expected) return false;
 
       if (parent && parent.nodeType === 1) {
-        if (recordElementConflict(parent, currentVal, snap.expected, snap.orig, snap.translatedAt)) {
+        var conflictRes = recordElementConflict(parent, currentVal, snap.expected, snap.orig, snap.translatedAt);
+        if (conflictRes === 'blocked' || conflictRes === true) {
           exemptNodes.add(node);
           modifiedTextNodes.delete(node);
           textSnapshots.delete(node);
+          return true;
+        }
+        if (conflictRes === 'deferred') {
           return true;
         }
       }
@@ -2069,7 +2675,14 @@
         (!st.lastExpected || curText.indexOf(st.lastExpected) === -1) &&
         !hasElementChild(el);
       if (isBackToOrig || isExternalZh) {
-        if (recordElementConflict(el, curText, st.lastExpected, isBackToOrig ? curText : undefined, st.lastTranslatedAt)) {
+        var cRes = recordElementConflict(
+          el,
+          curText,
+          st.lastExpected,
+          isBackToOrig ? curText : undefined,
+          st.lastTranslatedAt
+        );
+        if (cRes) {
           return true;
         }
       } else {
@@ -2093,6 +2706,9 @@
 
       var parent = node.parentElement || node.parentNode;
       if (parent && parent.nodeType === 1) {
+        if (state.mode === 'off') {
+          markTier2SkipElement(parent);
+        }
         var st = elementConflictState.get(parent);
         if (!st) {
           st = {
@@ -2206,7 +2822,7 @@
       if (parent && exemptElements.has(parent)) return;
       if (!knownSafeParent && parent && isIgnoredBoundary(parent)) return;
 
-      if (checkNodeConflict(node) || !state.active) return;
+      if (!inOffRetryPass && (checkNodeConflict(node) || !state.active)) return;
 
       var original = node.nodeValue;
       if (!original) return;
@@ -2221,6 +2837,24 @@
       var trimmed = original.trim();
       if (!trimmed) {
         textUntranslatedCache.set(node, original);
+        return;
+      }
+
+      if (state.mode === 'off') {
+        if (trimmed === '。' && node.previousSibling) {
+          var prevSibText = (node.previousSibling.textContent || '').trim();
+          if (prevSibText && EN_ALPHA_RE.test(prevSibText) && !ZH_CHAR_RE.test(prevSibText)) {
+            applyTextWrite(node, original, original.replace('。', '.'));
+            return;
+          }
+        }
+        var restored = translateSingleUnit(trimmed);
+        if (restored !== null && restored !== trimmed) {
+          var revEdges = sliceEdgeWhitespace(original);
+          applyTextWrite(node, original, revEdges.leading + restored + revEdges.trailing);
+        } else {
+          textUntranslatedCache.set(node, original);
+        }
         return;
       }
 
@@ -2248,6 +2882,7 @@
 
     function translateAttributes(el) {
       if (!el || el.nodeType !== 1 || el.isConnected === false || typeof el.getAttribute !== 'function') return;
+      var wroteAnyAttr = false;
       for (var i = 0; i < TRANSLATABLE_ATTRS.length; i++) {
         var attr = TRANSLATABLE_ATTRS[i];
         if (!hasAttr(el, attr)) continue;
@@ -2274,7 +2909,10 @@
         var untransMap = attrUntranslatedCache.get(el);
         if (!snap && untransMap && attr in untransMap && untransMap[attr] === val) continue;
 
-        var trans = translateSingleUnit(val);
+        var trans =
+          state.mode === 'off' && activeEngine && typeof activeEngine.translateText === 'function'
+            ? activeEngine.translateText(val)
+            : translateSingleUnit(val);
         if (trans !== null && trans !== val && typeof el.setAttribute === 'function') {
           var baseOrig = val;
           el.setAttribute(attr, trans);
@@ -2285,6 +2923,7 @@
           if (!(attr in mapRec.entries)) mapRec.count++;
           mapRec.entries[attr] = { orig: baseOrig, expected: trans };
           modifiedAttrElements.add(el);
+          wroteAnyAttr = true;
           if (untransMap && attr in untransMap) delete untransMap[attr];
         } else {
           if (!untransMap) {
@@ -2292,6 +2931,76 @@
             attrUntranslatedCache.set(el, untransMap);
           }
           untransMap[attr] = val;
+        }
+      }
+      if (wroteAnyAttr && state.mode === 'off') {
+        markTier2SkipElement(el);
+      }
+    }
+
+    function applyReverseCrossNodeRulesOnElement(el) {
+      if (!activeCrossNodeRules || activeCrossNodeRules.length === 0) return;
+      for (var rIdx = 0; rIdx < activeCrossNodeRules.length; rIdx++) {
+        var rule = activeCrossNodeRules[rIdx];
+        if (!rule) continue;
+        if (rule.kind === 'testid-span-prefix') {
+          if (getAttr(el, 'data-testid') === rule.testid && typeof el.querySelector === 'function') {
+            var alertSpan = el.querySelector('span');
+            if (alertSpan && !processedAlerts.has(alertSpan)) {
+              var aCh = alertSpan.firstChild;
+              while (aCh) {
+                if (aCh.nodeType === 3 && aCh.nodeValue && !exemptNodes.has(aCh)) {
+                  var aTrim = aCh.nodeValue.trim();
+                  if (rule.matchTrimmed && rule.matchTrimmed.indexOf(aTrim) !== -1) {
+                    var repPrefix = aCh.nodeValue.replace(aTrim, rule.replacement);
+                    if (aCh.nextSibling && aCh.nextSibling.nodeType === 1 && !/\s$/.test(repPrefix)) {
+                      repPrefix += ' ';
+                    }
+                    applyTextWrite(aCh, aCh.nodeValue, repPrefix);
+                  }
+                }
+                aCh = aCh.nextSibling;
+              }
+              processedAlerts.add(alertSpan);
+            }
+          }
+        } else if (rule.kind === 'element-sandwich') {
+          var first = el.firstChild;
+          if (first && first.nextSibling) {
+            var hasElemSib = false;
+            var probe = first;
+            while (probe) {
+              if (probe.nodeType === 1) {
+                hasElemSib = true;
+                break;
+              }
+              probe = probe.nextSibling;
+            }
+            if (hasElemSib) {
+              var leadNode = null;
+              var sawMidElement = false;
+              var tailNode = null;
+              var cur = first;
+              while (cur) {
+                if (cur.nodeType === 3 && cur.nodeValue) {
+                  var cTrim = cur.nodeValue.trim();
+                  if (!leadNode && rule.leadTrimmed && rule.leadTrimmed.indexOf(cTrim) !== -1) {
+                    leadNode = cur;
+                  } else if (leadNode && sawMidElement && rule.tailTrimmed && rule.tailTrimmed.indexOf(cTrim) !== -1) {
+                    tailNode = cur;
+                    break;
+                  }
+                } else if (cur.nodeType === 1 && leadNode) {
+                  sawMidElement = true;
+                }
+                cur = cur.nextSibling;
+              }
+              if (leadNode && tailNode && !exemptNodes.has(leadNode) && !exemptNodes.has(tailNode)) {
+                applyTextWrite(leadNode, leadNode.nodeValue, rule.leadReplacement);
+                applyTextWrite(tailNode, tailNode.nodeValue, rule.tailReplacement);
+              }
+            }
+          }
         }
       }
     }
@@ -2329,59 +3038,64 @@
         return;
       }
 
-      if (getAttr(el, 'data-testid') === 'plan-command-fyi-alert' && typeof el.querySelector === 'function') {
-        var alertSpan = el.querySelector('span');
-        if (alertSpan && !processedAlerts.has(alertSpan)) {
-          var alertChild = alertSpan.firstChild;
-          while (alertChild) {
-            if (alertChild.nodeType === 3 && alertChild.nodeValue && alertChild.nodeValue.trim() === 'Type') {
-              applyTextWrite(alertChild, alertChild.nodeValue, alertChild.nodeValue.replace('Type', '输入'));
-            }
-            alertChild = alertChild.nextSibling;
-          }
-          processedAlerts.add(alertSpan);
-        }
-      }
-
-      translateAttributes(el);
-
-      var first = el.firstChild;
-      if (first && first.nextSibling) {
-        var hasElementSibling = false;
-        var cur = first;
-        while (cur) {
-          if (cur.nodeType === 1) {
-            hasElementSibling = true;
-            break;
-          }
-          cur = cur.nextSibling;
-        }
-        if (hasElementSibling) {
-          var alsoNode = null;
-          var whenNode = null;
-          var scanCur = first;
-          while (scanCur) {
-            if (scanCur.nodeType === 3 && scanCur.nodeValue) {
-              var tVal = scanCur.nodeValue.trim();
-              if (tVal === 'Also includes') {
-                alsoNode = scanCur;
-              } else if (alsoNode && tVal === 'when working in this project.') {
-                whenNode = scanCur;
-                break;
+      if (state.mode === 'off') {
+        translateAttributes(el);
+        applyReverseCrossNodeRulesOnElement(el);
+      } else {
+        if (getAttr(el, 'data-testid') === 'plan-command-fyi-alert' && typeof el.querySelector === 'function') {
+          var alertSpan = el.querySelector('span');
+          if (alertSpan && !processedAlerts.has(alertSpan)) {
+            var alertChild = alertSpan.firstChild;
+            while (alertChild) {
+              if (alertChild.nodeType === 3 && alertChild.nodeValue && alertChild.nodeValue.trim() === 'Type') {
+                applyTextWrite(alertChild, alertChild.nodeValue, alertChild.nodeValue.replace('Type', '输入'));
               }
+              alertChild = alertChild.nextSibling;
             }
-            scanCur = scanCur.nextSibling;
+            processedAlerts.add(alertSpan);
           }
-          if (alsoNode && whenNode && !exemptNodes.has(alsoNode) && !exemptNodes.has(whenNode)) {
-            applyTextWrite(alsoNode, alsoNode.nodeValue, '在此项目中工作时，也包含');
-            var between = alsoNode.nextSibling;
-            while (between && between !== whenNode) {
-              if (between.nodeType === 3 && !(between.nodeValue || '').trim()) {
-                applyTextWrite(between, between.nodeValue, '');
-              }
-              between = between.nextSibling;
+        }
+
+        translateAttributes(el);
+
+        var first = el.firstChild;
+        if (first && first.nextSibling) {
+          var hasElementSibling = false;
+          var cur = first;
+          while (cur) {
+            if (cur.nodeType === 1) {
+              hasElementSibling = true;
+              break;
             }
-            applyTextWrite(whenNode, whenNode.nodeValue, '。');
+            cur = cur.nextSibling;
+          }
+          if (hasElementSibling) {
+            var alsoNode = null;
+            var whenNode = null;
+            var scanCur = first;
+            while (scanCur) {
+              if (scanCur.nodeType === 3 && scanCur.nodeValue) {
+                var tVal = scanCur.nodeValue.trim();
+                if (tVal === 'Also includes') {
+                  alsoNode = scanCur;
+                } else if (alsoNode && tVal === 'when working in this project.') {
+                  whenNode = scanCur;
+                  break;
+                }
+              }
+              scanCur = scanCur.nextSibling;
+            }
+            if (alsoNode && whenNode && !exemptNodes.has(alsoNode) && !exemptNodes.has(whenNode)) {
+              applyTextWrite(alsoNode, alsoNode.nodeValue, '在此项目中工作时，也包含');
+              var between = alsoNode.nextSibling;
+              while (between && between !== whenNode) {
+                if (between.nodeType === 3 && !(between.nodeValue || '').trim()) {
+                  applyTextWrite(between, between.nodeValue, '');
+                }
+                between = between.nextSibling;
+              }
+              applyTextWrite(whenNode, whenNode.nodeValue, '。');
+            }
           }
         }
       }
@@ -2700,7 +3414,8 @@
         clearTimeoutFn(focusWakeTimer);
         focusWakeTimer = null;
       }
-      if (markMissed || pendingNodes.length > 0 || !wasCovered) {
+      var hadOffRetry = clearOffRetryTimers();
+      if (markMissed || hadOffRetry || pendingNodes.length > 0 || !wasCovered) {
         missedWhilePaused = true;
       }
       pendingNodes.length = 0;
@@ -3008,10 +3723,7 @@
       mode = targetMode === 'on' || targetMode === 'off' ? targetMode : 'auto';
       state.mode = mode;
 
-      if (mode === 'off') {
-        teardownRuntime('off', 'disabled', false);
-        return;
-      }
+      selectEngineForMode(mode);
 
       state.destroyed = false;
       state.yielded = false;
@@ -3023,8 +3735,33 @@
       missedWhilePaused = false;
       dirtyProbeActive = false;
       pendingFullFloatScan = false;
+      inOffRetryPass = false;
       delayedExternalNodes.clear();
       globalConflictRecords.length = 0;
+
+      if (mode === 'off') {
+        var l1Pre = detectLayer1External(win, doc);
+        if (l1Pre.hit) {
+          state.detectedProvider = l1Pre.provider || null;
+        }
+        activateTier1Suppression();
+        state.active = true;
+        state.status = 'off-enforced';
+        setRootStatusAttr('off-enforced');
+
+        if (doc) {
+          if (doc.readyState === 'loading' && typeof doc.addEventListener === 'function') {
+            domReadyHandler = function () {
+              if (!state.active || state.destroyed || state.mode !== 'off') return;
+              attachListenersAndObserver();
+            };
+            doc.addEventListener('DOMContentLoaded', domReadyHandler, { once: true });
+          } else {
+            attachListenersAndObserver();
+          }
+        }
+        return;
+      }
 
       if (mode === 'auto') {
         var extCheck = detectExternalLocalization(win, doc);
@@ -3067,25 +3804,34 @@
 
     var instance = {
       getStatus: function () {
+        var modUnits = countTranslatedUnits();
+        var isOffMode = state.mode === 'off';
         return {
           active: state.active,
           mode: state.mode,
           status: state.status,
           reason: state.reason,
           detectedProvider: state.detectedProvider,
-          translatedCount: countTranslatedUnits(),
+          translatedCount: isOffMode ? 0 : modUnits,
+          restoredCount: isOffMode ? modUnits : 0,
+          blockedCount: isOffMode ? blockedElementsTracker.countActive() : 0,
           yielded: state.yielded,
         };
       },
       destroy: function () {
-        teardownRuntime('off', 'destroyed', false);
+        teardownRuntime('off', 'destroyed', false, null, true);
       },
       setMode: function (nextMode) {
         var norm = nextMode === 'on' || nextMode === 'off' ? nextMode : 'auto';
-        if (norm === state.mode && ((norm === 'off' && state.status === 'off') || (norm !== 'off' && state.active))) {
+        if (
+          !state.destroyed &&
+          norm === state.mode &&
+          ((norm === 'off' && state.active && (state.status === 'off-enforced' || state.status === 'off-blocked')) ||
+            (norm !== 'off' && state.active && state.status === 'active'))
+        ) {
           return instance.getStatus();
         }
-        teardownRuntime('off', 'mode-switch', false);
+        teardownRuntime('off', 'mode-switch', false, null, false);
         boot(norm);
         return instance.getStatus();
       },
@@ -3115,6 +3861,8 @@
     detectLayer1External: detectLayer1External,
     detectLayer2ChromeZh: detectLayer2ChromeZh,
     isPrismOwnedElement: isPrismOwnedElement,
+    isExternalOwnedElement: isExternalOwnedElement,
+    isModelSelectorElement: isModelSelectorElement,
     isUserContentBoundary: isUserContentBoundary,
     isIgnoredBoundary: isIgnoredBoundary,
     measureSafeBoundaryDepth: measureSafeBoundaryDepth,

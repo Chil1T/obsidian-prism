@@ -38,23 +38,27 @@
   const HL_PATH_NAME = 'ag-omni-path';
   const GUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
-  // Compact 5-locale fallback table [zh-CN, zh-TW, yue, en, ja]; primary source is `window.__agCsLocales`
-  const LANG_INDEX = { 'zh-CN': 0, 'zh-TW': 1, yue: 2, en: 3, ja: 4 };
+  // Compact 8-locale fallback table [zh-CN, zh-TW, en, ja, ko, es, fr, de]; primary source is `window.__agCsLocales`
+  const LANG_INDEX = { 'zh-CN': 0, 'zh-TW': 1, en: 2, ja: 3, ko: 4, es: 5, fr: 6, de: 7 };
   const FALLBACK_ROWS = {
-    omniOpenBuiltin: ['在右侧面板打开', '在右側面板開啟', '喺右邊面板打開', 'Open in Side Pane', '右パネルで開く'],
-    omniOpenPreview: ['在右侧检视台预览', '在右側檢視台預覽', '喺右邊檢視台預覽', 'Preview in Workbench', 'ワークベンチでプレビュー'],
-    omniOpenExternal: ['使用系统默认程序打开', '使用系統預設程式開啟', '用系統預設程式打開', 'Open in Default App', '既定のアプリで開く'],
-    omniOpenBrowser: ['在系统浏览器中打开', '在系統瀏覽器中開啟', '喺系統瀏覽器打開', 'Open in System Browser', '標準ブラウザで開く'],
-    omniRevealFolder: ['在文件夹中显示', '在資料夾中顯示', '喺資料夾入面顯示', 'Reveal in Folder', 'フォルダに表示'],
-    omniInsertMention: ['作为 @引用 填入输入框', '作為 @引用 填入輸入框', '當做 @引用 填入輸入框', 'Insert as @Mention', '@参照として入力欄へ挿入'],
-    omniCopyLink: ['复制链接地址', '複製連結位址', '複製連結地址', 'Copy Link URL', 'リンクURLをコピー'],
-    omniCopyAbsPath: ['复制绝对路径', '複製絕對路徑', '複製絕對路徑', 'Copy Absolute Path', '絶対パスをコピー'],
-    omniCopyRelPath: ['复制相对路径', '複製相對路徑', '複製相對路徑', 'Copy Relative Path', '相対パスをコピー'],
-    omniCopyText: ['复制文本', '複製文字', '複製文字', 'Copy Text', 'テキストをコピー'],
-    omniZoomDiagram: ['放大查看图表', '放大檢視圖表', '放大睇圖表', 'Zoom Diagram', '図を拡大表示'],
-    omniViewWorkbench: ['检视台视图', '檢視台檢視', '檢視台檢視', 'Workbench View', 'プレビュー表示'],
-    omniViewRaw: ['原始视图', '原始檢視', '原始檢視', 'Raw View', 'ソース表示'],
-    omniCopied: ['已复制', '已複製', '已複製', 'Copied', 'コピー済'],
+    omniOpenBuiltin: ['在右侧面板打开', '在右側面板開啟', 'Open in Side Pane', '右パネルで開く', '오른쪽 패널에서 열기', 'Abrir en panel lateral', 'Ouvrir dans le panneau latéral', 'Im Seitenbereich öffnen'],
+    omniOpenPreview: ['在右侧检视台预览', '在右側檢視台預覽', 'Preview in Workbench', 'ワークベンチでプレビュー', '워크벤치에서 미리보기', 'Previsualizar en Workbench', 'Aperçu dans Workbench', 'In Workbench vorschauen'],
+    omniOpenExternal: ['使用系统默认程序打开', '使用系統預設程式開啟', 'Open in Default App', '既定のアプリで開く', '기본 앱으로 열기', 'Abrir en app predeterminada', 'Ouvrir avec l’app par défaut', 'In Standard-App öffnen'],
+    omniOpenBrowser: ['在系统浏览器中打开', '在系統瀏覽器中開啟', 'Open in System Browser', '標準ブラウザで開く', '시스템 브라우저에서 열기', 'Abrir en el navegador', 'Ouvrir dans le navigateur', 'Im Systembrowser öffnen'],
+    omniRevealFolder: ['在文件夹中显示', '在資料夾中顯示', 'Reveal in Folder', 'フォルダに表示', '폴더에서 보기', 'Mostrar en carpeta', 'Afficher dans le dossier', 'Im Ordner anzeigen'],
+    omniInsertMention: ['作为 @引用 填入输入框', '作為 @引用 填入輸入框', 'Insert as @Mention', '@参照として入力欄へ挿入', '@멘션으로 입력창에 삽입', 'Insertar como @mención', 'Insérer comme @mention', 'Als @Erwähnung einfügen'],
+    omniCopyLink: ['复制链接地址', '複製連結位址', 'Copy Link URL', 'リンクURLをコピー', '링크 URL 복사', 'Copiar enlace', 'Copier le lien', 'Link-URL kopieren'],
+    omniCopyAbsPath: ['复制绝对路径', '複製絕對路徑', 'Copy Absolute Path', '絶対パスをコピー', '절대 경로 복사', 'Copiar ruta absoluta', 'Copier le chemin absolu', 'Absoluten Pfad kopieren'],
+    omniCopyRelPath: ['复制相对路径', '複製相對路徑', 'Copy Relative Path', '相対パスをコピー', '상대 경로 복사', 'Copiar ruta relativa', 'Copier le chemin relatif', 'Relativen Pfad kopieren'],
+    omniCopyText: ['复制文本', '複製文字', 'Copy Text', 'テキストをコピー', '텍스트 복사', 'Copiar texto', 'Copier le texte', 'Text kopieren'],
+    omniZoomDiagram: ['放大查看图表', '放大檢視圖表', 'Zoom Diagram', '図を拡大表示', '다이어그램 확대', 'Ampliar diagrama', 'Agrandir le diagramme', 'Diagramm vergrößern'],
+    omniViewWorkbench: ['检视台视图', '檢視台檢視', 'Workbench View', 'プレビュー表示', '워크벤치 보기', 'Vista Workbench', 'Vue Workbench', 'Workbench-Ansicht'],
+    omniViewRaw: ['原始视图', '原始檢視', 'Raw View', 'ソース表示', '원본 보기', 'Vista sin formato', 'Vue brute', 'Rohansicht'],
+    omniCopied: ['已复制', '已複製', 'Copied', 'コピー済', '복사됨', 'Copiado', 'Copié', 'Kopiert'],
+    omniMermaidDiagram: ['Mermaid 图表', 'Mermaid 圖表', 'Mermaid Diagram', 'Mermaid 図', 'Mermaid 다이어그램', 'Diagrama Mermaid', 'Diagramme Mermaid', 'Mermaid-Diagramm'],
+    omniMermaidSvg: ['Mermaid SVG 图表', 'Mermaid SVG 圖表', 'Mermaid SVG', 'Mermaid SVG', 'Mermaid SVG', 'Mermaid SVG', 'Mermaid SVG', 'Mermaid SVG'],
+    omniHintClick: ['单击', '單擊', 'Click', 'クリック', '클릭', 'Clic', 'Clic', 'Klick'],
+    omniHintCtrlClick: ['Ctrl+单击', 'Ctrl+單擊', 'Ctrl+Click', 'Ctrl+クリック', 'Ctrl+클릭', 'Ctrl+Clic', 'Ctrl+Clic', 'Strg+Klick'],
   };
 
   const PREVIEW_KIND_BY_EXT = {
@@ -161,13 +165,17 @@
   }
 
   function normalizeLangCode(raw) {
-    const s = String(raw || '').trim();
-    if (!s) return '';
-    if (/^zh[-_](?:TW|HK|MO|Hant)/i.test(s)) return 'zh-TW';
-    if (/^(?:yue|zh[-_]yue)/i.test(s)) return 'yue';
-    if (/^ja\b/i.test(s)) return 'ja';
-    if (/^en\b/i.test(s)) return 'en';
-    if (/^zh\b/i.test(s)) return 'zh-CN';
+    const s = String(raw || '').trim().toLowerCase().replace(/_/g, '-');
+    if (!s || s === 'auto') return '';
+    if (s === 'yue' || s.startsWith('yue-') || s === 'zh-yue' || s.includes('cantonese')) return 'zh-CN';
+    if (/^zh-(tw|hk|mo|hant)/.test(s) || s === 'tw' || s === 'hant') return 'zh-TW';
+    if (/^zh\b/.test(s)) return 'zh-CN';
+    if (/^(ja|jp)\b/.test(s) || s === 'japanese') return 'ja';
+    if (/^(ko|kr)\b/.test(s) || s === 'korean') return 'ko';
+    if (/^es\b/.test(s) || s === 'spanish') return 'es';
+    if (/^fr\b/.test(s) || s === 'french') return 'fr';
+    if (/^de\b/.test(s) || s === 'german') return 'de';
+    if (/^en\b/.test(s) || s === 'english') return 'en';
     return '';
   }
 
@@ -464,7 +472,7 @@
     return null;
   }
 
-  function extractTargetMeta(startNode) {
+  function extractTargetMeta(startNode, defaultMermaidLabel = 'Mermaid Diagram') {
     const el = startNode && startNode.nodeType === 1 ? startNode : startNode?.parentElement;
     if (!el) return null;
     if (findClosest(el, '.ag-omni-menu')) return null;
@@ -628,7 +636,7 @@
         return {
           kind: 'mermaid',
           rawContent: svgMarkup,
-          text: (mermaidBox.getAttribute?.('aria-label') || 'Mermaid Diagram').trim(),
+          text: (mermaidBox.getAttribute?.('aria-label') || defaultMermaidLabel).trim(),
           element: mermaidBox,
         };
       }
@@ -726,15 +734,18 @@
       const attrLang = normalizeLangCode(D?.documentElement?.getAttribute?.('data-ag-cs-lang'));
       if (attrLang) return attrLang;
       const cfgLang = normalizeLangCode(W?.__agPrism?.getState?.()?.cfg?.language);
-      return cfgLang || 'zh-CN';
+      if (cfgLang) return cfgLang;
+      const navObj = W && 'navigator' in W ? W.navigator : (typeof navigator !== 'undefined' ? navigator : null);
+      const navLang = normalizeLangCode(navObj?.language || '');
+      return navLang || 'en';
     }
 
     function getStrings() {
       const lang = resolveLang();
-      const idx = LANG_INDEX[lang] ?? 0;
+      const idx = LANG_INDEX[lang] ?? 2;
       const base = {};
       for (const k of Object.keys(FALLBACK_ROWS)) {
-        base[k] = FALLBACK_ROWS[k][idx] || FALLBACK_ROWS[k][0];
+        base[k] = FALLBACK_ROWS[k][idx] ?? FALLBACK_ROWS[k][2];
       }
       try {
         const shared = W?.__agCsLocales?.getUiStrings?.(lang);
@@ -1636,13 +1647,13 @@
         entries.push({
           id: 'open-builtin',
           label: s.omniOpenBuiltin,
-          hint: linkTarget === 'builtin' ? 'Click' : 'Ctrl+Click',
+          hint: linkTarget === 'builtin' ? s.omniHintClick : s.omniHintCtrlClick,
           run: () => openUrl(meta.url, 'builtin'),
         });
         entries.push({
           id: 'open-browser',
           label: s.omniOpenBrowser,
-          hint: linkTarget === 'external' ? 'Click' : 'Ctrl+Click',
+          hint: linkTarget === 'external' ? s.omniHintClick : s.omniHintCtrlClick,
           run: () => openUrl(meta.url, 'external'),
         });
         entries.push({ separator: true });
@@ -1742,7 +1753,7 @@
           label: s.omniCopyText,
           run: () => copyTextToClipboard(meta.rawContent),
         });
-        return { header: meta.text || 'Mermaid SVG', entries };
+        return { header: meta.text || s.omniMermaidSvg || 'Mermaid SVG', entries };
       }
 
       return null;
@@ -1954,7 +1965,7 @@
       let selectedText = '';
       try { selectedText = String(W?.getSelection?.()?.toString?.() || '').trim(); } catch (_) {}
 
-      const meta = extractTargetMeta(el) || hitTestHighlightedToken(ev.clientX, ev.clientY);
+      const meta = extractTargetMeta(el, getStrings().omniMermaidDiagram) || hitTestHighlightedToken(ev.clientX, ev.clientY);
       if (!meta) {
         closeContextMenu();
         return;
