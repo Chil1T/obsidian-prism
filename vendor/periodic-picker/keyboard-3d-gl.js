@@ -6601,32 +6601,47 @@
         }
       }
 
-      function compileShader(type, src) {
-        var sh = gl.createShader(type);
-        gl.shaderSource(sh, src);
-        gl.compileShader(sh);
-        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-          gl.deleteShader(sh);
+      /* Khronos WebGL2 最佳实践：分离提交与检查阶段，使 GPU 后台并行编译全部着色器且成功路径零 getShaderParameter IPC 阻塞 */
+      function beginLinkProgram(vsSrc, fsSrc) {
+        var vs = gl.createShader(gl.VERTEX_SHADER);
+        var fs = gl.createShader(gl.FRAGMENT_SHADER);
+        var prog = gl.createProgram();
+        if (!vs || !fs || !prog) {
+          if (vs) gl.deleteShader(vs);
+          if (fs) gl.deleteShader(fs);
+          if (prog) gl.deleteProgram(prog);
           return null;
         }
-        glRes.shaders.push(sh);
-        return sh;
-      }
-
-      function linkProgram(vsSrc, fsSrc) {
-        var vs = compileShader(gl.VERTEX_SHADER, vsSrc);
-        var fs = compileShader(gl.FRAGMENT_SHADER, fsSrc);
-        if (!vs || !fs) return null;
-        var prog = gl.createProgram();
+        gl.shaderSource(vs, vsSrc);
+        gl.compileShader(vs);
+        gl.shaderSource(fs, fsSrc);
+        gl.compileShader(fs);
         gl.attachShader(prog, vs);
         gl.attachShader(prog, fs);
         gl.linkProgram(prog);
-        if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-          gl.deleteProgram(prog);
+        return { vs: vs, fs: fs, prog: prog };
+      }
+
+      function finishLinkProgram(handle) {
+        if (!handle || !handle.prog) return null;
+        if (!gl.getProgramParameter(handle.prog, gl.LINK_STATUS)) {
+          /* 仅在链接失败的极少数异常路径才读取 shader 状态并释放全部句柄 */
+          if (handle.vs) gl.deleteShader(handle.vs);
+          if (handle.fs) gl.deleteShader(handle.fs);
+          gl.deleteProgram(handle.prog);
           return null;
         }
-        glRes.programs.push(prog);
-        return prog;
+        glRes.shaders.push(handle.vs);
+        glRes.shaders.push(handle.fs);
+        glRes.programs.push(handle.prog);
+        return handle.prog;
+      }
+
+      function discardPendingProgram(handle) {
+        if (!handle) return;
+        if (handle.vs) gl.deleteShader(handle.vs);
+        if (handle.fs) gl.deleteShader(handle.fs);
+        if (handle.prog) gl.deleteProgram(handle.prog);
       }
 
       function createGlBuffer(target, data, usage) {
@@ -6706,8 +6721,10 @@
           return null;
         }
 
-        var progShadowSolid = linkProgram(SHADOW_SOLID_VS, SHADOW_EMPTY_FS);
-        var progShadowKeycap = linkProgram(SHADOW_KEYCAP_VS, SHADOW_EMPTY_FS);
+        var hShadowSolid = beginLinkProgram(SHADOW_SOLID_VS, SHADOW_EMPTY_FS);
+        var hShadowKeycap = beginLinkProgram(SHADOW_KEYCAP_VS, SHADOW_EMPTY_FS);
+        var progShadowSolid = finishLinkProgram(hShadowSolid);
+        var progShadowKeycap = finishLinkProgram(hShadowKeycap);
         if (!progShadowSolid || !progShadowKeycap) {
           if (typeof gl.deleteFramebuffer === 'function') gl.deleteFramebuffer(fbo);
           gl.deleteTexture(tex);
@@ -6822,10 +6839,14 @@
 
       function initWebGLPipeline() {
         if (!gl) return false;
-        var progSolid = linkProgram(SOLID_VS, SOLID_FS);
-        var progKeycap = linkProgram(KEYCAP_VS, KEYCAP_FS);
-        var progScreen = linkProgram(SCREEN_VS, SCREEN_FS);
-        if (!progSolid || !progKeycap || !progScreen) {
+        /* 阶段 1：第一时间提交全部 3 个主 PBR 着色器给 GPU 后台并行编译，与后续 CPU VAO/Buffer/纹理上传完全重叠 */
+        var hSolid = beginLinkProgram(SOLID_VS, SOLID_FS);
+        var hKeycap = beginLinkProgram(KEYCAP_VS, KEYCAP_FS);
+        var hScreen = beginLinkProgram(SCREEN_VS, SCREEN_FS);
+        if (!hSolid || !hKeycap || !hScreen) {
+          discardPendingProgram(hSolid);
+          discardPendingProgram(hKeycap);
+          discardPendingProgram(hScreen);
           return false;
         }
 
@@ -7004,6 +7025,13 @@
 
         /* 8. 2048/1024 按需分级实时软阴影离屏深度 FBO & 深度纹理 (#5/5) */
         var shadowPass = initShadowMapResources(resolveTargetShadowMapSize());
+        /* 阶段 2：全部几何/纹理/阴影 FBO 已准备就绪后统一检验主程序 LINK_STATUS（此时 GPU 后台已完成并行编译） */
+        var progSolid = finishLinkProgram(hSolid);
+        var progKeycap = finishLinkProgram(hKeycap);
+        var progScreen = finishLinkProgram(hScreen);
+        if (!progSolid || !progKeycap || !progScreen) {
+          return false;
+        }
         shadowDirty = true;
         lastShadowGeomSig = '';
         lastDynMeshSig = '';

@@ -3759,10 +3759,12 @@
       function findNearBottomScrollContainer(hostEl) {
         if (!hostEl || typeof hostEl.querySelectorAll !== 'function') return null;
         try {
+          /* Strictly query explicit scroll containers only — never scan every <div> in a long chat thread */
           var candidates = hostEl.querySelectorAll(
-            '.ag-chat-stream, [data-testid*="message"], [data-testid*="scroll"], [role="log"], div, main, section'
+            '.ag-chat-stream, [data-testid*="scroll"], [role="log"], [class*="overflow-y-auto"], [class*="overflow-auto"], [class*="overflow-y-scroll"]'
           );
-          for (var i = 0; i < candidates.length; i += 1) {
+          var limit = Math.min(candidates.length, 24);
+          for (var i = 0; i < limit; i += 1) {
             var el = candidates[i];
             if (!el || (overlayEl && (el === overlayEl || (typeof overlayEl.contains === 'function' && overlayEl.contains(el))))) continue;
             var sh = Number(el.scrollHeight) || 0;
@@ -4832,16 +4834,15 @@
         syncDockCompactState();
         resizeCanvasToStage();
         syncSceneAndDom(true);
-        syncHitLayerRects(true);
         if (isHostPaused) applyRendererPausedState(true);
 
         if (activeRenderer && !isHostPaused && !bentoUi.isReducedMotion(doc, root) && typeof activeRenderer.triggerIntroWake === 'function') {
           try {
             activeRenderer.triggerIntroWake();
-            syncHitLayerRects(true);
             scheduleSettledRectSync();
           } catch (e) {}
         }
+        syncHitLayerRects(true);
 
         attachOpenSessionSyncWatchers();
 
@@ -5694,11 +5695,22 @@
             holdState.lastY = my;
             var dx = mx - holdState.startX;
             var dy = my - holdState.startY;
-            if (dx * dx + dy * dy >= HOLD_MAX_DRIFT_PX * HOLD_MAX_DRIFT_PX) {
-              var driftedBtn = holdState.btn;
+            if (!holdState.drifted && dx * dx + dy * dy >= HOLD_MAX_DRIFT_PX * HOLD_MAX_DRIFT_PX) {
+              /* Cancel long-press timers/ring immediately, but keep holdState until pointerup so quick clicks inside triggerBtn still replay cleanly */
               holdState.drifted = true;
-              cancelHold(false);
-              armSuppressTrailingNativeRelease(driftedBtn);
+              if (holdState.ringTimer) { clearTimer(holdState.ringTimer); holdState.ringTimer = 0; }
+              if (holdState.prewarmTimer) { clearTimer(holdState.prewarmTimer); holdState.prewarmTimer = 0; }
+              if (holdState.openTimer) { clearTimer(holdState.openTimer); holdState.openTimer = 0; }
+              if (holdState.ring) {
+                try { holdState.ring.remove(); } catch (eRing) {}
+                holdState.ring = null;
+              }
+              if (typeof hostBridge.setHoldTooltipSuppression === 'function') {
+                hostBridge.setHoldTooltipSuppression(doc, false, holdState.btn);
+              }
+              if (typeof hostBridge.suppressNativeTooltip === 'function') {
+                hostBridge.suppressNativeTooltip(doc, holdState.btn, false);
+              }
             }
           }
         }
@@ -5739,7 +5751,8 @@
 
         cancelHold(false);
 
-        if (!driftedNow && !st.triggeredLongPress && isNodeConnectedToDoc(doc, btn)) {
+        var releasedInsideBtn = isTargetWithinNode(btn, ev.target);
+        if ((!driftedNow || releasedInsideBtn) && !st.triggeredLongPress && isNodeConnectedToDoc(doc, btn)) {
           if (overlayEl) {
             close({ silent: true });
           }
