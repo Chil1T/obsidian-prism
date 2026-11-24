@@ -1263,7 +1263,7 @@
     /* ============================================================================
      * 5. 满幅深浅官方海报背景绘制器（支持 200ms 叠化 + 微妙视差平移 + ~8% 切档辉度微涌 + V14.1 原石晶坯 & 重度冰封雾化）
      * ============================================================================ */
-    function buildFrostedDownsampleCanvas(doc, wpEntry, isLight) {
+    function buildFrostedDownsampleCanvas(doc, wpEntry, isLight, isMono) {
       if (!doc || typeof doc.createElement !== 'function' || !wpEntry || !wpEntry.img) return null;
       try {
         var stageW1 = 112;
@@ -1281,52 +1281,50 @@
         var g2 = c2.getContext('2d');
         if (!g1 || !g2) return null;
 
+        /* 离屏降采预烘焙冰封磨砂底图：零 getImageData/putImageData 同步回读，仅在首次命中该壁纸时烘焙并缓存复用 */
         g1.imageSmoothingEnabled = true;
         g1.imageSmoothingQuality = 'high';
+        var filterDone = false;
         if ('filter' in g1) {
           try {
+            var desatExpr = isMono ? 'grayscale(1)' : 'saturate(0.08)';
             g1.filter = isLight
-              ? 'blur(2.2px) saturate(0.08) brightness(0.99) contrast(0.84)'
-              : 'blur(2.2px) saturate(0.08) brightness(0.88) contrast(0.88)';
+              ? ('blur(2.2px) ' + desatExpr + ' brightness(0.99) contrast(0.84)')
+              : ('blur(2.2px) ' + desatExpr + ' brightness(0.88) contrast(0.88)');
+            filterDone = Boolean(g1.filter && g1.filter !== 'none');
           } catch (_e1) {}
         }
         g1.drawImage(wpEntry.img, -4, -3, stageW1 + 8, stageH1 + 6);
-
-        /* Pixel-level ~92% cold-slate desaturation fallback on compact 112x34 buffer when getImageData is supported */
-        if (typeof g1.getImageData === 'function' && typeof g1.putImageData === 'function') {
+        if ('filter' in g1) {
           try {
-            var imgData = g1.getImageData(0, 0, stageW1, stageH1);
-            var px = imgData && imgData.data;
-            if (px && px.length >= stageW1 * stageH1 * 4) {
-              var slateR = isLight ? 232 : 34;
-              var slateG = isLight ? 238 : 44;
-              var slateB = isLight ? 247 : 58;
-              var veilMix = isLight ? 0.24 : 0.20;
-              for (var p = 0; p < px.length; p += 4) {
-                var r = px[p];
-                var g = px[p + 1];
-                var b = px[p + 2];
-                var lum = 0.299 * r + 0.587 * g + 0.114 * b;
-                var dr = lum * 0.92 + r * 0.08;
-                var dg = lum * 0.92 + g * 0.08;
-                var db = Math.min(255, lum * 0.95 + b * 0.08 + (isLight ? 3 : 5));
-                px[p] = Math.round(dr * (1 - veilMix) + slateR * veilMix);
-                px[p + 1] = Math.round(dg * (1 - veilMix) + slateG * veilMix);
-                px[p + 2] = Math.round(db * (1 - veilMix) + slateB * veilMix);
-              }
-              g1.putImageData(imgData, 0, 0);
-            }
-          } catch (_pxErr) {}
+            g1.filter = 'none';
+          } catch (_e1r) {}
         }
+
+        /* 纯 Canvas2D 合成冷石板灰雾面纱（替代逐像素 getImageData CPU 读回，零 GPU→CPU 同步栅栏） */
+        if (!filterDone) {
+          g1.save();
+          setCompositeSafe(g1, 'saturation');
+          g1.fillStyle = isLight ? 'rgba(218, 226, 238, 0.92)' : 'rgba(38, 46, 60, 0.92)';
+          g1.fillRect(0, 0, stageW1, stageH1);
+          g1.restore();
+        }
+        g1.fillStyle = isLight ? 'rgba(232, 238, 247, 0.24)' : 'rgba(34, 44, 58, 0.20)';
+        g1.fillRect(0, 0, stageW1, stageH1);
 
         g2.imageSmoothingEnabled = true;
         g2.imageSmoothingQuality = 'high';
         if ('filter' in g2) {
           try {
-            g2.filter = 'blur(2.8px)';
+            g2.filter = 'blur(3.2px)';
           } catch (_e2) {}
         }
         g2.drawImage(c1, 0, 0, stageW1, stageH1, 0, 0, stageW2, stageH2);
+        if ('filter' in g2) {
+          try {
+            g2.filter = 'none';
+          } catch (_e2r) {}
+        }
         c1.width = 0;
         c1.height = 0;
         try {
@@ -1381,7 +1379,7 @@
         if (isOrchUnsupported) {
           ctx.globalAlpha = clamp(alpha * (tokens.isLight ? 0.76 : 0.74), 0, 1);
           if (bgState.getFrostedSurface && (bgState.preferOffscreenBlur || !supportsFilterProp)) {
-            var frostedSurf = bgState.getFrostedSurface(modeTag, lookupKey, wpEntry, tokens.isLight);
+            var frostedSurf = bgState.getFrostedSurface(modeTag, lookupKey, wpEntry, tokens.isLight, tokens.isMono);
             if (frostedSurf) {
               drawSource = frostedSurf;
               usingOffscreenFrosted = true;
@@ -1391,11 +1389,10 @@
 
         if (tokens.isMono || isOrchUnsupported) {
           var filterApplied = false;
-          if (supportsFilterProp) {
+          /* 已命中离屏预烘焙冰封缓存时，直接零滤镜贴图，彻底避免热路径大画布 ctx.filter='blur(...)' */
+          if (!usingOffscreenFrosted && supportsFilterProp) {
             try {
-              if (usingOffscreenFrosted) {
-                ctx.filter = tokens.isMono ? 'blur(8px) grayscale(1)' : 'blur(8px)';
-              } else if (tokens.isMono && isOrchUnsupported) {
+              if (tokens.isMono && isOrchUnsupported) {
                 ctx.filter = tokens.isLight
                   ? 'blur(16px) grayscale(1) brightness(0.99) contrast(0.84)'
                   : 'blur(16px) grayscale(1) brightness(0.88) contrast(0.88)';
@@ -1412,7 +1409,7 @@
             } catch (_fErr) {}
           }
           if (isOrchUnsupported && !filterApplied && !usingOffscreenFrosted && bgState.getFrostedSurface) {
-            var fallbackFrosted = bgState.getFrostedSurface(modeTag, lookupKey, wpEntry, tokens.isLight);
+            var fallbackFrosted = bgState.getFrostedSurface(modeTag, lookupKey, wpEntry, tokens.isLight, tokens.isMono);
             if (fallbackFrosted) {
               drawSource = fallbackFrosted;
               usingOffscreenFrosted = true;
@@ -1640,14 +1637,11 @@
 
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
-      if (!isLight && !isOrchUnsupported) {
-        setShadow(ctx, 'rgba(0, 0, 0, 0.52)', 12, 0, 3);
-      }
+      /* 消除高开销 Canvas2D shadowBlur：高对比暗色底板已确保标题极度锐利，无多余离屏模糊图层分配 */
       ctx.fillStyle = isOrchUnsupported
         ? tokens.lockedTitleHex
         : (isAvail ? tokens.titleHex : (tokens.standbyTitleHex || tokens.titleHex));
       ctx.fillText(finalTitle, RIGHT_ZONE_X, 186);
-      clearShadow(ctx);
       setLetterSpacingSafe(ctx, '0px');
 
       ctx.restore();
@@ -1686,12 +1680,10 @@
 
       ctx.save();
 
-      /* 1) 通透磨砂毛玻璃外胶囊底座（Dark 烟熏毛玻璃 / Light 白冰毛玻璃） */
-      if (isLight) {
-        setShadow(ctx, 'rgba(15, 23, 42, 0.08)', 14, 0, 4);
-      } else {
-        setShadow(ctx, 'rgba(0, 0, 0, 0.34)', 16, 0, 4);
-      }
+      /* 1) 通透磨砂毛玻璃外胶囊底座（以轻量偏移暗底圆角替代高耗 shadowBlur，零离屏高斯模糊分配） */
+      drawRoundRectPath(ctx, wellX, wellY + 3, wellW, wellH, wellR);
+      ctx.fillStyle = isLight ? 'rgba(15, 23, 42, 0.055)' : 'rgba(0, 0, 0, 0.22)';
+      ctx.fill();
       drawRoundRectPath(ctx, wellX, wellY, wellW, wellH, wellR);
       ctx.fillStyle = makeLinearGrad(
         ctx, wellX, wellY, wellX, wellY + wellH,
@@ -1702,7 +1694,6 @@
         tokens.wellFillTop
       );
       ctx.fill();
-      clearShadow(ctx);
 
       drawRoundRectPath(ctx, wellX + 0.75, wellY + 0.75, wellW - 1.5, wellH - 1.5, wellR - 0.75);
       ctx.lineWidth = 1.5;
@@ -1760,7 +1751,13 @@
       var blockCy = by + bh * 0.5;
 
       ctx.save();
-      setShadow(ctx, tokens.pillGlowCss, 16, 0, 3);
+      /* 以轻量外扩辉光描边/底晕替代高开销 shadowBlur=16，零离屏阴影图层分配 */
+      ctx.save();
+      ctx.globalAlpha = 0.28;
+      drawRoundRectPath(ctx, bx - 3, by - 1, bw + 6, bh + 4, br + 2);
+      ctx.fillStyle = tokens.pillGlowCss;
+      ctx.fill();
+      ctx.restore();
       drawRoundRectPath(ctx, bx, by, bw, bh, br);
       ctx.fillStyle = makeLinearGrad(
         ctx, bx, by, bx + bw, by + bh,
@@ -1771,7 +1768,6 @@
         tokens.pillTopHex
       );
       ctx.fill();
-      clearShadow(ctx);
 
       /* 顶部玻璃高光微折射层 */
       drawRoundRectPath(ctx, bx, by, bw, bh, br);
@@ -1811,12 +1807,8 @@
       ctx.font = '700 ' + actPx + 'px ' + SANS_STACK;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      if (tokens.pillTextHex === '#FFFFFF') {
-        setShadow(ctx, 'rgba(0, 0, 0, 0.34)', 4, 0, 1);
-      }
       ctx.fillStyle = tokens.pillTextHex;
       ctx.fillText(truncateText(ctx, actLabel, bw - 14), blockCx, blockCy + (isOrchActive ? -2 : 1));
-      clearShadow(ctx);
 
       ctx.restore();
     }
@@ -1909,12 +1901,12 @@
       ctx.restore();
     }
 
-    /* 细腻光学玻璃表面微掠光（静止态 0 白雾污染防止浅色屏竖切泛白，动态指针扫掠由 GPU SCREEN_FS 及显式视差实时响应） */
-    function drawEditorialGlassSheenOverlay(ctx, W, H, isLight, orbitYaw, orbitPitch, pointerSweepX) {
+    /* 细腻光学玻璃表面微掠光（静止态 0 白雾污染防止浅色屏竖切泛白；gpuSheenHandled=true 时由 GPU SCREEN_FS 零成本接管动态掠光） */
+    function drawEditorialGlassSheenOverlay(ctx, W, H, isLight, orbitYaw, orbitPitch, pointerSweepX, gpuSheenHandled) {
       ctx.save();
       var hasExplicitSweep = typeof pointerSweepX === 'number' && isFinite(pointerSweepX);
       var hasOrbitMotion = Math.abs(Number(orbitYaw) || 0) > 0.008 || Math.abs(Number(orbitPitch) || 0) > 0.008;
-      if (hasExplicitSweep || hasOrbitMotion) {
+      if (!gpuSheenHandled && (hasExplicitSweep || hasOrbitMotion)) {
         var yawShift = clamp((Number(orbitYaw) || 0) * 180, -140, 140);
         var pitchShift = clamp((Number(orbitPitch) || 0) * 80, -60, 60);
         var ptrShift = hasExplicitSweep ? clamp((pointerSweepX - 0.5) * 640, -320, 320) : 0;
@@ -2163,6 +2155,10 @@
       var doc = opts.doc || (root && root.document) || (typeof document !== 'undefined' ? document : null);
       var onAsyncAssetReady = typeof opts.onAsyncAssetReady === 'function' ? opts.onAsyncAssetReady : null;
       var useLazySharedPool = Boolean(opts.lazyWallpapers === true);
+      /* 降采热路径（如 800x240 WebGL 纹理）默认启用离屏预烘焙模糊缓存，彻底消除热路径大画布 ctx.filter='blur(16px)' */
+      var defaultPreferOffscreenBlur = opts.preferOffscreenBlur !== undefined
+        ? Boolean(opts.preferOffscreenBlur)
+        : (width < DEFAULT_WIDTH);
       var isRealBrowserDom = Boolean(root && typeof root.HTMLElement === 'function');
 
       var surf = createOffscreenSurface(doc, opts.canvas || null, width, height);
@@ -2218,6 +2214,7 @@
       var lastRenderUsedCustomClock = false;
       var lastDrawClockMs = 0;
       var lastStaticRenderKey = '';
+      var lastDrawWasFinalStatic = false;
 
       var lastDeckInfo = null;
       var lastThemeProfile = null;
@@ -2371,6 +2368,7 @@
         syncBadgeDurationMs = resolvedDuration;
         syncBadgeActive = true;
         lastStaticRenderKey = '';
+        lastDrawWasFinalStatic = false;
         lastDrawClockMs = 0;
 
         if (typeof resolvedNow === 'number' && isFinite(resolvedNow)) {
@@ -2409,9 +2407,9 @@
         return resolveImageConstructorForRoot(root);
       }
 
-      function getFrostedSurfaceForKey(modeTag, keyId, wpEntry, isLight) {
+      function getFrostedSurfaceForKey(modeTag, keyId, wpEntry, isLight, isMono) {
         if (disposed || !wpEntry || !wpEntry.img) return null;
-        var fKey = modeTag + ':' + String(keyId);
+        var fKey = modeTag + ':' + String(keyId) + (isMono ? ':mono' : '');
         var targetMap = sharedPool ? sharedPool.frosted : localFrostedCache;
         var cachedCv = targetMap.get(fKey);
         if (cachedCv && cachedCv.width > 0) {
@@ -2430,7 +2428,7 @@
           }
           targetMap.delete(firstK);
         }
-        var built = buildFrostedDownsampleCanvas(doc, wpEntry, isLight);
+        var built = buildFrostedDownsampleCanvas(doc, wpEntry, isLight, Boolean(isMono));
         if (built) {
           targetMap.set(fKey, built);
         }
@@ -2781,6 +2779,8 @@
               : (optic.watermark || 'Or'))
           : String(info.symbol || optic.watermark || 'C').slice(0, 3);
 
+        var gpuSheenHandled = Boolean(bs.gpuSheenHandled);
+        var instantBgSwitch = Boolean(reducedMotion || bs.instantSwitch);
         var nextBgObj = {
           key: nextBgKey,
           z: info.z,
@@ -2794,7 +2794,7 @@
           tokens: tokens,
           requestWp: requestWallpaperEntry,
           getFrostedSurface: getFrostedSurfaceForKey,
-          preferOffscreenBlur: Boolean(bs.forceOffscreenBlur),
+          preferOffscreenBlur: Boolean(bs.forceOffscreenBlur || defaultPreferOffscreenBlur),
         };
 
         if (!currentBgState) {
@@ -2802,7 +2802,7 @@
           fromBgState = null;
           crossFadeActive = false;
         } else if (currentBgState.key !== nextBgKey) {
-          if (reducedMotion) {
+          if (instantBgSwitch) {
             currentBgState = nextBgObj;
             fromBgState = null;
             crossFadeActive = false;
@@ -2878,7 +2878,7 @@
           return null;
         }
 
-        /* 动态高刷限帧：仅对同状态连续动画推进帧限流，内容变化帧永远即时绘制 */
+        /* 动态高刷限帧：仅对同状态连续动画推进帧限流，内容变化帧即时绘制；gpuSheenHandled 时忽略视角/扫键微光以杜绝无意义重绘 */
         var staticRenderKey = [
           nextBgKey,
           info.title,
@@ -2890,9 +2890,9 @@
           wellLayout.activeIndex,
           nLevels,
           langCode,
-          Math.round(orbitYaw * 100),
-          Math.round(orbitPitch * 100),
-          pointerSweepX !== undefined ? Math.round(pointerSweepX * 100) : '',
+          gpuSheenHandled ? '0' : Math.round(orbitYaw * 100),
+          gpuSheenHandled ? '0' : Math.round(orbitPitch * 100),
+          (!gpuSheenHandled && pointerSweepX !== undefined) ? Math.round(pointerSweepX * 100) : '',
           syncBadgeActive ? (syncBadgeDrawLabel || '1') : '0',
         ].join('|');
 
@@ -2901,6 +2901,15 @@
           sliderAnimActive ||
           (syncBadgeActive && !reducedMotion)
         );
+        if (
+          !anyAnimActive &&
+          lastDrawWasFinalStatic &&
+          bs.skipIdenticalStatic === true &&
+          lastDrawClockMs > 0 &&
+          staticRenderKey === lastStaticRenderKey
+        ) {
+          return surf.canvas;
+        }
         if (
           minFrameGapMs > 0 &&
           anyAnimActive &&
@@ -2913,6 +2922,7 @@
         }
         lastStaticRenderKey = staticRenderKey;
         lastDrawClockMs = now;
+        lastDrawWasFinalStatic = !anyAnimActive;
 
         var ctx = surf.ctx;
         var sx = width / DEFAULT_WIDTH;
@@ -2925,12 +2935,14 @@
         setCompositeSafe(ctx, 'source-over');
         ctx.globalAlpha = 1.0;
 
-        /* Layer 1: 满幅深浅官方海报底图（切模型/深浅时带 14px 优雅水平视差滑移） */
+        /* Layer 1: 满幅深浅官方海报底图（gpuSheenHandled 下视差交由 GPU 透视自然表现，避免纯旋转触发整幅 Canvas2D 重绘） */
+        var drawParYaw = gpuSheenHandled ? 0 : orbitYaw;
+        var drawParPitch = gpuSheenHandled ? 0 : orbitPitch;
         if (crossFadeActive && fromBgState && fadeAlpha < 0.999) {
-          drawFullBleedBannerLayer(ctx, LW, LH, fromBgState, grainPkg, 1.0, -14 * fadeAlpha, orbitYaw, orbitPitch, 0);
-          drawFullBleedBannerLayer(ctx, LW, LH, currentBgState, grainPkg, fadeAlpha, 14 * (1.0 - fadeAlpha), orbitYaw, orbitPitch, effortSwell);
+          drawFullBleedBannerLayer(ctx, LW, LH, fromBgState, grainPkg, 1.0, -14 * fadeAlpha, drawParYaw, drawParPitch, 0);
+          drawFullBleedBannerLayer(ctx, LW, LH, currentBgState, grainPkg, fadeAlpha, 14 * (1.0 - fadeAlpha), drawParYaw, drawParPitch, effortSwell);
         } else {
-          drawFullBleedBannerLayer(ctx, LW, LH, currentBgState, grainPkg, 1.0, 0, orbitYaw, orbitPitch, effortSwell);
+          drawFullBleedBannerLayer(ctx, LW, LH, currentBgState, grainPkg, 1.0, 0, drawParYaw, drawParPitch, effortSwell);
         }
 
         var upperEnName = extractElementUpperName(info);
@@ -2951,8 +2963,8 @@
           drawSessionSyncedBadgeOverlay(ctx, syncBadgeDrawLabel, syncBadgeAlpha, syncBadgeSlideY, tokens);
         }
 
-        /* Layer 4: 清透斜向玻璃镜面微掠光（零黑色扫描网，完美还原白昼明亮色泽） */
-        drawEditorialGlassSheenOverlay(ctx, LW, LH, tokens.isLight, orbitYaw, orbitPitch, pointerSweepX);
+        /* Layer 4: 清透斜向玻璃镜面微掠光（零黑色扫描网；3D 模式下动态掠光由 GPU SCREEN_FS 零成本渲染） */
+        drawEditorialGlassSheenOverlay(ctx, LW, LH, tokens.isLight, orbitYaw, orbitPitch, pointerSweepX, gpuSheenHandled);
 
         ctx.restore();
         return surf.canvas;
@@ -3060,6 +3072,7 @@
       function releaseLocalCaches() {
         fromBgState = null;
         lastStaticRenderKey = '';
+        lastDrawWasFinalStatic = false;
         lastDrawClockMs = 0;
 
         wallpaperCache.forEach(function (entry) {

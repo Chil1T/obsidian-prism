@@ -587,11 +587,17 @@
       var spatialDockEl = null;
       var bentoRefs = null;
       var stageEl = null;
+      var floorShadowEl = null;
       var canvasEl = null;
       var hitLayerEl = null;
       var hudPillEl = null;
+      var swatchesWrapEl = null;
       var activeRenderer = null;
       var dockResizeObserver = null;
+      /* 离屏 DOM 壳与遥测缓存（正常 close 保留以便热开 <16ms，hidden/destroy/releaseHeavyCaches 立即释放） */
+      var cachedShell = null;
+      var cachedHostTelemetry = null;
+      var activeHudElementsKey = '';
 
       /* Zero-reflow cached geometry (updated ONLY in open / resize / ResizeObserver / transitionend) */
       var cachedOverlayWidth = 1280;
@@ -602,6 +608,12 @@
       var cachedStageBounds = { left: 320, top: 220, width: 760, height: 340, valid: false };
       var lastStageRectFn = null;
       var rimGlowWasActive = false;
+      var rimDockWasActive = false;
+      var rimCardWasActive = false;
+      var rimRightWasActive = false;
+      var lastDockCompactSig = '';
+      var lastShadowPxStr = '';
+      var lastShadowPyStr = '';
       var lastStageCursor = '';
 
       /* High-refresh (120-300Hz) single-frame pointermove coalescing state */
@@ -819,6 +831,8 @@
       /* ── Immediate VRAM / Offscreen / Audio Cache Release ──────────────── */
 
       function releaseAllHeavyCaches() {
+        cachedShell = null;
+        cachedHostTelemetry = null;
         if (activeRenderer) {
           if (typeof activeRenderer.releaseCaches === 'function') {
             try { activeRenderer.releaseCaches(); } catch (e) {}
@@ -2544,8 +2558,11 @@
 
       /* Strictly zero getBoundingClientRect() calls — reads cached measurements only! */
       function syncDockCompactState() {
-        if (!overlayEl) return;
+        if (!overlayEl) return false;
         if (stageMode !== 'drawer') {
+          var fullSig = 'fullscreen';
+          if (lastDockCompactSig === fullSig) return false;
+          lastDockCompactSig = fullSig;
           overlayEl.setAttribute('data-dock-tier', 'wide');
           overlayEl.setAttribute('data-dock-compact', '0');
           overlayEl.setAttribute('data-spec-compact', '0');
@@ -2553,21 +2570,18 @@
           overlayEl.setAttribute('data-compact-expanded', '0');
           overlayEl.removeAttribute('data-short-viewport');
           setStyleVar(overlayEl, '--ag-pp-short-dock-h', null);
-          return;
+          return true;
         }
         var winH = Number(root && root.innerHeight) || 800;
-        if (winH > 0 && winH < SHORT_VIEWPORT_HEIGHT_PX) {
+        var isShortVp = winH > 0 && winH < SHORT_VIEWPORT_HEIGHT_PX;
+        var clampedShortH = 0;
+        if (isShortVp) {
           var availShortH = winH - 180;
           if (cachedComposerHeight > 28 && cachedComposerHeight < winH * 0.7) {
             availShortH = Math.min(availShortH, winH - cachedComposerHeight - 84);
           }
           var minShortH = winH < 420 ? 172 : 196;
-          var clampedShortH = Math.max(minShortH, Math.min(268, Math.round(availShortH)));
-          overlayEl.setAttribute('data-short-viewport', '1');
-          setStyleVar(overlayEl, '--ag-pp-short-dock-h', clampedShortH + 'px');
-        } else {
-          overlayEl.removeAttribute('data-short-viewport');
-          setStyleVar(overlayEl, '--ag-pp-short-dock-h', null);
+          clampedShortH = Math.max(minShortH, Math.min(268, Math.round(availShortH)));
         }
 
         var measuredW = cachedOverlayWidth > 160 ? cachedOverlayWidth : cachedDockBounds.width;
@@ -2583,30 +2597,57 @@
         var isCompact = tier !== 'wide';
         var isSpecCompact = tier === 'medium' || (tier === 'wide' && measuredW < 1300);
         var useShortSource = tier !== 'wide' || measuredW < 1260;
+        if (tier !== 'narrow' && compactExpanded) compactExpanded = false;
+        var compExpFlag = tier === 'narrow' && compactExpanded ? '1' : '0';
 
+        var nextSig =
+          'drawer|' + tier + '|' + (isCompact ? '1' : '0') + '|' + (isSpecCompact ? '1' : '0') +
+          '|' + (useShortSource ? '1' : '0') + '|' + compExpFlag + '|' + (isShortVp ? clampedShortH : '0');
+        if (lastDockCompactSig === nextSig) return false;
+        lastDockCompactSig = nextSig;
+
+        if (isShortVp) {
+          overlayEl.setAttribute('data-short-viewport', '1');
+          setStyleVar(overlayEl, '--ag-pp-short-dock-h', clampedShortH + 'px');
+        } else {
+          overlayEl.removeAttribute('data-short-viewport');
+          setStyleVar(overlayEl, '--ag-pp-short-dock-h', null);
+        }
         overlayEl.setAttribute('data-dock-tier', tier);
         overlayEl.setAttribute('data-dock-compact', isCompact ? '1' : '0');
         overlayEl.setAttribute('data-spec-compact', isSpecCompact ? '1' : '0');
         overlayEl.setAttribute('data-source-short', useShortSource ? '1' : '0');
-        if (tier !== 'narrow' && compactExpanded) compactExpanded = false;
-        overlayEl.setAttribute('data-compact-expanded', tier === 'narrow' && compactExpanded ? '1' : '0');
+        overlayEl.setAttribute('data-compact-expanded', compExpFlag);
+        return true;
       }
 
       var lastBoundsSyncMs = 0;
 
       function clearLocalRimGlow() {
         if (!overlayEl) return;
-        rimGlowWasActive = false;
-        overlayEl.setAttribute('data-pointer-near', '0');
-        setStyleVar(overlayEl, '--ag-pp-dock-rim-alpha', '0');
-        setStyleVar(overlayEl, '--ag-pp-card-rim-alpha', '0');
-        setStyleVar(overlayEl, '--ag-pp-right-rim-alpha', '0');
-        setStyleVar(overlayEl, '--ag-pp-px', '-999px');
-        setStyleVar(overlayEl, '--ag-pp-py', '-999px');
-        setStyleVar(overlayEl, '--ag-pp-card-px', '-999px');
-        setStyleVar(overlayEl, '--ag-pp-card-py', '-999px');
-        setStyleVar(overlayEl, '--ag-pp-right-px', '-999px');
-        setStyleVar(overlayEl, '--ag-pp-right-py', '-999px');
+        if (rimGlowWasActive) {
+          rimGlowWasActive = false;
+          overlayEl.setAttribute('data-pointer-near', '0');
+        }
+        if (rimDockWasActive && dockTopRimEl) {
+          rimDockWasActive = false;
+          setStyleVar(dockTopRimEl, '--ag-pp-dock-rim-alpha', '0');
+          setStyleVar(dockTopRimEl, '--ag-pp-px', '-999px');
+        }
+        var specRim = bentoRefs && bentoRefs.specCardRim;
+        if (rimCardWasActive && specRim) {
+          rimCardWasActive = false;
+          setStyleVar(specRim, '--ag-pp-card-rim-alpha', '0');
+          setStyleVar(specRim, '--ag-pp-card-px', '-999px');
+          setStyleVar(specRim, '--ag-pp-card-py', '-999px');
+        }
+        var teleRim = bentoRefs && bentoRefs.telePodRim;
+        if (rimRightWasActive && teleRim) {
+          rimRightWasActive = false;
+          setStyleVar(teleRim, '--ag-pp-right-rim-alpha', '0');
+          setStyleVar(teleRim, '--ag-pp-right-px', '-999px');
+          setStyleVar(teleRim, '--ag-pp-right-py', '-999px');
+        }
       }
 
       function updateDynamicPrismCssVars(clientX, clientY) {
@@ -2638,23 +2679,59 @@
           EXT_RIM_PROXIMITY_PX
         );
 
-        var nearAny = dockAlpha > 0.008 || cardAlpha > 0.008 || rightAlpha > 0.008;
+        var dockNear = dockAlpha > 0.008;
+        var cardNear = cardAlpha > 0.008;
+        var rightNear = rightAlpha > 0.008;
+        var nearAny = dockNear || cardNear || rightNear;
         if (!nearAny && !rimGlowWasActive) return { nearAny: false, extDockDist: extDockDist };
         if (!nearAny && rimGlowWasActive) {
           clearLocalRimGlow();
           return { nearAny: false, extDockDist: extDockDist };
         }
-        rimGlowWasActive = true;
-        overlayEl.setAttribute('data-pointer-near', '1');
-        setStyleVar(overlayEl, '--ag-pp-dock-rim-alpha', dockAlpha.toFixed(3));
-        setStyleVar(overlayEl, '--ag-pp-card-rim-alpha', cardAlpha.toFixed(3));
-        setStyleVar(overlayEl, '--ag-pp-right-rim-alpha', rightAlpha.toFixed(3));
-        setStyleVar(overlayEl, '--ag-pp-px', localX.toFixed(1) + 'px');
-        setStyleVar(overlayEl, '--ag-pp-py', localY.toFixed(1) + 'px');
-        setStyleVar(overlayEl, '--ag-pp-card-px', cardX.toFixed(1) + 'px');
-        setStyleVar(overlayEl, '--ag-pp-card-py', cardY.toFixed(1) + 'px');
-        setStyleVar(overlayEl, '--ag-pp-right-px', rightX.toFixed(1) + 'px');
-        setStyleVar(overlayEl, '--ag-pp-right-py', rightY.toFixed(1) + 'px');
+        if (!rimGlowWasActive) {
+          rimGlowWasActive = true;
+          overlayEl.setAttribute('data-pointer-near', '1');
+        }
+        // 仅写入各自独立的零子节点光环层，禁止向 #ag-prism-periodic-picker-root 写入高频 CSS 变量
+        if (dockTopRimEl) {
+          if (dockNear) {
+            rimDockWasActive = true;
+            setStyleVar(dockTopRimEl, '--ag-pp-dock-rim-alpha', dockAlpha.toFixed(3));
+            setStyleVar(dockTopRimEl, '--ag-pp-px', localX.toFixed(1) + 'px');
+          } else if (rimDockWasActive) {
+            rimDockWasActive = false;
+            setStyleVar(dockTopRimEl, '--ag-pp-dock-rim-alpha', '0');
+            setStyleVar(dockTopRimEl, '--ag-pp-px', '-999px');
+          }
+        }
+        var specRim = bentoRefs && bentoRefs.specCardRim;
+        if (specRim) {
+          if (cardNear) {
+            rimCardWasActive = true;
+            setStyleVar(specRim, '--ag-pp-card-rim-alpha', cardAlpha.toFixed(3));
+            setStyleVar(specRim, '--ag-pp-card-px', cardX.toFixed(1) + 'px');
+            setStyleVar(specRim, '--ag-pp-card-py', cardY.toFixed(1) + 'px');
+          } else if (rimCardWasActive) {
+            rimCardWasActive = false;
+            setStyleVar(specRim, '--ag-pp-card-rim-alpha', '0');
+            setStyleVar(specRim, '--ag-pp-card-px', '-999px');
+            setStyleVar(specRim, '--ag-pp-card-py', '-999px');
+          }
+        }
+        var teleRim = bentoRefs && bentoRefs.telePodRim;
+        if (teleRim) {
+          if (rightNear) {
+            rimRightWasActive = true;
+            setStyleVar(teleRim, '--ag-pp-right-rim-alpha', rightAlpha.toFixed(3));
+            setStyleVar(teleRim, '--ag-pp-right-px', rightX.toFixed(1) + 'px');
+            setStyleVar(teleRim, '--ag-pp-right-py', rightY.toFixed(1) + 'px');
+          } else if (rimRightWasActive) {
+            rimRightWasActive = false;
+            setStyleVar(teleRim, '--ag-pp-right-rim-alpha', '0');
+            setStyleVar(teleRim, '--ag-pp-right-px', '-999px');
+            setStyleVar(teleRim, '--ag-pp-right-py', '-999px');
+          }
+        }
         return { nearAny: nearAny, extDockDist: extDockDist };
       }
 
@@ -2682,10 +2759,14 @@
         if (!overlayEl) return;
         var orbit = getChassisOrbitSafe();
         var reduced = bentoUi.isReducedMotion(doc, root);
-        setStyleVar(overlayEl, '--pp-aura-px', (reduced ? 0 : -orbit.yaw * 42).toFixed(2) + 'px');
-        setStyleVar(overlayEl, '--pp-aura-py', (reduced ? 0 : -orbit.pitch * 30).toFixed(2) + 'px');
-        setStyleVar(overlayEl, '--pp-shadow-px', (reduced ? 0 : orbit.yaw * 18).toFixed(2) + 'px');
-        setStyleVar(overlayEl, '--pp-shadow-py', (reduced ? 0 : orbit.pitch * 14).toFixed(2) + 'px');
+        var nextShadowPx = (reduced ? 0 : orbit.yaw * 18).toFixed(2) + 'px';
+        var nextShadowPy = (reduced ? 0 : orbit.pitch * 14).toFixed(2) + 'px';
+        if (floorShadowEl && (nextShadowPx !== lastShadowPxStr || nextShadowPy !== lastShadowPyStr)) {
+          lastShadowPxStr = nextShadowPx;
+          lastShadowPyStr = nextShadowPy;
+          setStyleVar(floorShadowEl, '--pp-shadow-px', nextShadowPx);
+          setStyleVar(floorShadowEl, '--pp-shadow-py', nextShadowPy);
+        }
         if (uiRefs && uiRefs.resetBtn) {
           var rotFlag = orbit.isRotated ? '1' : '0';
           if (uiRefs.lastRotatedFlag !== rotFlag) {
@@ -2761,10 +2842,17 @@
 
       function applyBoxRect(el, rect) {
         if (!el || !rect) return;
-        setStyleVar(el, 'left', Math.round(rect.left) + 'px');
-        setStyleVar(el, 'top', Math.round(rect.top) + 'px');
-        setStyleVar(el, 'width', Math.max(1, Math.round(rect.width)) + 'px');
-        setStyleVar(el, 'height', Math.max(1, Math.round(rect.height)) + 'px');
+        var l = Math.round(rect.left);
+        var t = Math.round(rect.top);
+        var w = Math.max(1, Math.round(rect.width));
+        var h = Math.max(1, Math.round(rect.height));
+        var rKey = l + ',' + t + ',' + w + ',' + h;
+        if (el._ppRectKey === rKey) return;
+        el._ppRectKey = rKey;
+        setStyleVar(el, 'left', l + 'px');
+        setStyleVar(el, 'top', t + 'px');
+        setStyleVar(el, 'width', w + 'px');
+        setStyleVar(el, 'height', h + 'px');
       }
 
       function syncHitLayerRects(skipBoundsMeasure) {
@@ -2886,9 +2974,9 @@
         }
       }
 
-      function resizeCanvasToStage() {
+      function resizeCanvasToStage(skipRectRefresh) {
         if (!stageEl || !canvasEl) return;
-        refreshCachedLayoutRects();
+        if (!skipRectRefresh || !cachedStageBounds.valid) refreshCachedLayoutRects();
         var sBounds = readStageBoundsZeroReflow();
         var cssW = sBounds.valid ? sBounds.width : 1280;
         var cssH = sBounds.valid ? sBounds.height : 680;
@@ -3269,7 +3357,17 @@
         var payload = buildCurrentDeckPayload(langCode);
         var dInfo = payload.deckInfo;
         var committed = resolveCommittedTelemetrySpec(zh);
-        var telemetry = hostBridge.readHostContextTelemetry(doc, root);
+        // 纯悬停扫键禁止同步读取宿主 DOM 遥测，直接复用缓存；首帧开放可选跳过 DOM 扫描
+        var telemetry;
+        if (hoverOnly) {
+          telemetry = cachedHostTelemetry || { available: false, reason: 'offline' };
+        } else if (optsObj && optsObj.deferTelemetryDomScan) {
+          telemetry = hostBridge.readHostContextTelemetry(doc, root, { skipDomScan: true });
+          cachedHostTelemetry = telemetry;
+        } else {
+          telemetry = hostBridge.readHostContextTelemetry(doc, root);
+          cachedHostTelemetry = telemetry;
+        }
 
         bentoUi.syncBentoTwinCardsDom(bentoRefs, {
           doc: doc,
@@ -4564,12 +4662,92 @@
 
       /* ── Open & Close Lifecycle ────────────────────────────────────────── */
 
+      function bindCanvasClickHandler(targetCanvas) {
+        if (!targetCanvas) return;
+        targetCanvas.addEventListener('click', function (ev) {
+          if (!overlayEl || isDestroyed || isConfirmClosing || isDrawerClosing) return;
+          ev.stopPropagation();
+          var clickX = Number(ev.clientX) || 0;
+          var clickY = Number(ev.clientY) || 0;
+          if (activeRenderer && typeof activeRenderer.pick === 'function') {
+            var hit = activeRenderer.pick(clickX, clickY);
+            if (!hit) {
+              if (hasPointerCoords(ev) && isPointInEffortSliderBand(clickX, clickY)) {
+                var bandRes = resolveEffortAlongSlider(clickX, clickY);
+                if (bandRes.effort) {
+                  var cDeck = buildCurrentDeckPayload(resolveCurrentLang());
+                  if (cDeck.inspectKind === 'aux' && cDeck.globalAuxIndex !== null && cDeck.globalAuxIndex !== undefined) {
+                    handleAuxEffortSelect(cDeck.globalAuxIndex, bandRes.effort);
+                  } else {
+                    handleEffortSelect(bandRes.effort);
+                  }
+                  return;
+                }
+              }
+              if ((stageMode === 'fullscreen' && pointerDownOutside) || !hasPointerCoords(ev)) confirmAndClose();
+              return;
+            }
+            dispatchPickedTarget(hit);
+          }
+        });
+      }
+
+      function rebuildHudSwatches(wrapEl, hudElements, profile) {
+        if (!wrapEl) return;
+        wrapEl.textContent = '';
+        hudChipByZ.clear();
+        for (var hi = 0; hi < hudElements.length; hi += 1) {
+          (function (elEntry) {
+            var ez = elEntry.slotZ || elEntry.z;
+            var isAvailChip = availableByZ.has(ez);
+            var chip = mkEl(doc, 'button', 'ag-pp-hud-chip ag-pp-sr-only');
+            chip.type = 'button';
+            chip.setAttribute('data-hud-z', String(ez));
+            chip.setAttribute('data-ag-pp-swatch-z', String(ez));
+            chip.setAttribute('data-available', isAvailChip ? '1' : '0');
+            chip.setAttribute('data-selected', ez === selectedZ ? '1' : '0');
+            chip.setAttribute('aria-pressed', ez === selectedZ ? 'true' : 'false');
+            var dot = mkEl(doc, 'span', 'ag-pp-hud-dot');
+            dot.setAttribute('aria-hidden', 'true');
+            var cPal = bentoUi.hudGemColorsForZ(ez, profile);
+            setStyleVar(dot, '--dot-bg', cPal.dot);
+            setStyleVar(dot, '--dot-glow', cPal.glow || cPal.ring);
+            setStyleVar(chip, '--chip-ring', cPal.ring);
+            chip.appendChild(dot);
+            chip.appendChild(mkEl(doc, 'span', 'ag-pp-chip-z', String(ez)));
+            chip.appendChild(typeof doc.createTextNode === 'function' ? doc.createTextNode(' ') : mkEl(doc, 'span', '', ' '));
+            chip.appendChild(mkEl(doc, 'span', 'ag-pp-chip-sym', elEntry.symbol));
+            chip.addEventListener('click', function (ev) {
+              ev.stopPropagation();
+              if (availableByZ.has(ez)) handleAvailableKeyClick(ez);
+              else triggerBlindKeyFeedback(ez);
+            });
+            hudChipByZ.set(ez, { btn: chip, dot: dot });
+            wrapEl.appendChild(chip);
+          })(hudElements[hi]);
+        }
+      }
+
+      function computeHudElementsKey(hudElements) {
+        var parts = [];
+        for (var i = 0; i < hudElements.length; i += 1) {
+          parts.push(String(hudElements[i].slotZ || hudElements[i].z));
+        }
+        return parts.join(',');
+      }
+
       function open(anchorBtn) {
         if (isDestroyed || currentMode === 'off' || !doc || !doc.body) return false;
         bentoUi.ensureStyles(doc);
         if (audioEngine && typeof audioEngine.rearm === 'function') audioEngine.rearm();
         lastStageCursor = '';
         rimGlowWasActive = false;
+        rimDockWasActive = false;
+        rimCardWasActive = false;
+        rimRightWasActive = false;
+        lastDockCompactSig = '';
+        lastShadowPxStr = '';
+        lastShadowPyStr = '';
 
         if (overlayEl) {
           close({ silent: true, preserveCaches: true });
@@ -4642,257 +4820,411 @@
         var zh = langCode === 'zh-CN' || langCode === 'zh-TW';
         var pk = getPpI18nPack(langCode);
         var profile = bentoUi.resolvePrismThemeProfile(doc, root);
-
-        overlayEl = mkEl(doc, 'div', 'ag-periodic-picker-backdrop');
-        overlayEl.id = ROOT_ID;
-        overlayEl.setAttribute('id', ROOT_ID);
-        markPeriodicOwnedRoot(overlayEl);
-        overlayEl.setAttribute('role', 'dialog');
-        overlayEl.setAttribute('aria-modal', stageMode === 'fullscreen' ? 'true' : 'false');
-        overlayEl.setAttribute('aria-label', pk.pickerAria);
-        overlayEl.setAttribute('data-stage-mode', stageMode);
-        overlayEl.setAttribute('data-theme', profile.theme);
-        overlayEl.setAttribute('data-kit', profile.id);
-        overlayEl.setAttribute('data-rim-tone', profile.rimTone || 'default');
-        overlayEl.setAttribute('data-corners', profile.corners);
-        overlayEl.setAttribute('data-mono', profile.isMono ? '1' : '0');
-        overlayEl.setAttribute('data-card-flipped', '0');
-        overlayEl.setAttribute('data-orch-latched', orchLatched ? '1' : '0');
-        overlayEl.setAttribute('data-pointer-near', '0');
-        overlayEl.setAttribute('data-open', '0');
-
-        deskmatEl = bentoUi.buildDeskmatStage(doc, root);
-        dockTopRimEl = mkEl(doc, 'div', 'ag-pp-dock-top-rim');
-        dockTopRimEl.setAttribute('aria-hidden', 'true');
-        dockGripEl = mkEl(doc, 'div', 'ag-pp-dock-grip');
-        dockGripEl.setAttribute('aria-hidden', 'true');
-        spatialDockEl = mkEl(doc, 'div', 'ag-pp-spatial-dock');
-
-        bentoRefs = bentoUi.buildBentoTwinCards(
-          doc,
-          {
-            onToggleCardFlip: toggleCardFlipAction,
-            onToggleCompactExpand: toggleCompactExpandAction,
-            onToggleStageMode: toggleStageModeAction,
-            onToggleMute: function () {
-              toggleMuteAction();
-              if (activeRenderer && typeof activeRenderer.triggerControlPress === 'function') {
-                try { activeRenderer.triggerControlPress('mute'); } catch (e) {}
-              }
-            },
-            onConfirmClose: confirmAndClose,
-            onEffortSelect: handleEffortSelect,
-            onAuxEffortSelect: handleAuxEffortSelect,
-            onAuxPageChange: setAuxPageAction,
-          },
-          { lang: langCode, zh: zh, root: root }
-        );
-
-        stageEl = mkEl(doc, 'div', 'ag-pp-stage ag-pp-modal');
-        bentoUi.mountStudioFloorRig(doc, stageEl);
-        canvasEl = mkEl(doc, 'canvas', 'ag-pp-gl-canvas');
-        canvasEl.setAttribute('aria-hidden', 'true');
-        hitLayerEl = mkEl(doc, 'div', 'ag-pp-hit-layer');
-
-        var srDeck = mkEl(doc, 'div', 'ag-pp-sr-only');
-        srDeck.setAttribute('data-testid', 'ag-pp-inspector-deck');
-        srDeck.setAttribute('aria-live', 'polite');
-        var srBanner = mkEl(doc, 'div', '');
-        srBanner.setAttribute('data-testid', 'ag-pp-session-banner');
-        srBanner.setAttribute('data-show', '0');
-        var srBannerText = mkEl(doc, 'span', '', '');
-        srBanner.appendChild(srBannerText);
-        var srTitle = mkEl(doc, 'span', '', '');
-        var srChem = mkEl(doc, 'span', '', '');
-        var srSub = mkEl(doc, 'span', '', '');
-        srDeck.appendChild(srBanner);
-        srDeck.appendChild(srTitle);
-        srDeck.appendChild(srChem);
-        srDeck.appendChild(srSub);
-        hitLayerEl.appendChild(srDeck);
-
-        keyNodesByZ.clear();
-        for (var idx = 0; idx < ELEMENTS_90.length; idx += 1) {
-          (function (slot) {
-            var isAvailInit = availableByZ.has(slot.z);
-            var keyBtn = mkEl(doc, 'button', 'ag-pp-hit-btn ag-pp-key ' + (isAvailInit ? 'ag-pp-key-avail' : 'ag-pp-key-blind'));
-            keyBtn.type = 'button';
-            keyBtn.setAttribute('data-ag-pp-z', String(slot.z));
-            keyBtn.setAttribute('data-z', String(slot.z));
-            keyBtn.setAttribute('data-symbol', slot.symbol);
-            keyBtn.setAttribute('data-available', isAvailInit ? '1' : '0');
-            if (!isAvailInit) {
-              keyBtn.setAttribute('tabindex', '-1');
-              keyBtn.setAttribute('aria-disabled', 'true');
-            }
-            keyBtn.setAttribute(
-              'aria-label',
-              fullAvailableByZ.has(slot.z)
-                ? fullAvailableByZ.get(slot.z).baseName + ' (' + slot.numLabel + ' ' + slot.symbol + ')'
-                : slot.numLabel + ' ' + slot.symbol + ' ' + slot.name + ' (Unreleased)'
-            );
-            keyBtn.addEventListener('click', function (ev) {
-              ev.stopPropagation();
-              if (hasPointerCoords(ev) && activeRenderer && typeof activeRenderer.pick === 'function') {
-                var picked = activeRenderer.pick(ev.clientX, ev.clientY);
-                if (picked) { dispatchPickedTarget(picked); return; }
-              }
-              if (availableByZ.has(slot.z)) handleAvailableKeyClick(slot.z);
-              else triggerBlindKeyFeedback(slot.z);
-            });
-            keyNodesByZ.set(slot.z, keyBtn);
-            hitLayerEl.appendChild(keyBtn);
-          })(ELEMENTS_90[idx]);
-        }
-
-        auxKeyNodes.length = 0;
-        var localSelInit = getLocalAuxIndex(selectedGlobalAuxIndex);
-        for (var ak = 0; ak < AUX_PAGE_SIZE; ak += 1) {
-          (function (slotIdx) {
-            var auxSlot = auxSlots[slotIdx];
-            var isAuxAvail = Boolean(auxSlot && auxSlot.available);
-            var isOrchSlot = auxSlot && isGlobalOrchToggleSlot(auxSlot._globalAuxIndex, auxSlot);
-            var auxBtn = mkEl(doc, 'button', 'ag-pp-hit-btn ag-pp-aux-key ' + (isAuxAvail ? 'ag-pp-key-avail' : 'ag-pp-key-blind'));
-            auxBtn.type = 'button';
-            auxBtn.setAttribute('data-ag-pp-aux', String(slotIdx));
-            auxBtn.setAttribute('data-aux-index', String(slotIdx));
-            auxBtn.setAttribute('data-aux-id', auxSlot ? auxSlot.id : 'blind-' + slotIdx);
-            auxBtn.setAttribute('data-available', isAuxAvail ? '1' : '0');
-            if (isOrchSlot) {
-              auxBtn.setAttribute('data-latched', orchLatched ? '1' : '0');
-              auxBtn.setAttribute('aria-pressed', orchLatched ? 'true' : 'false');
-            } else {
-              auxBtn.setAttribute('aria-pressed', localSelInit === slotIdx ? 'true' : 'false');
-            }
-            if (!isAuxAvail) {
-              auxBtn.setAttribute('tabindex', '-1');
-              auxBtn.setAttribute('aria-disabled', 'true');
-            }
-            auxBtn.setAttribute(
-              'aria-label',
-              isAuxAvail
-                ? auxSlot.title + ' (' + auxSlot.badgeCode + ' ' + auxSlot.shortLabel + ')'
-                : (auxSlot ? auxSlot.badgeCode : 'AUX') + ' (Reserved Macro Key)'
-            );
-            auxBtn.addEventListener('click', function (ev) {
-              ev.stopPropagation();
-              if (hasPointerCoords(ev) && activeRenderer && typeof activeRenderer.pick === 'function') {
-                var picked = activeRenderer.pick(ev.clientX, ev.clientY);
-                if (picked) { dispatchPickedTarget(picked); return; }
-              }
-              handleAuxKeyClick(slotIdx);
-            });
-            auxKeyNodes.push(auxBtn);
-            hitLayerEl.appendChild(auxBtn);
-          })(ak);
-        }
-
-        stageEl.appendChild(canvasEl);
-        stageEl.appendChild(hitLayerEl);
-
-        hudPillEl = mkEl(doc, 'div', 'ag-pp-hud-pill');
-        hudPillEl.setAttribute('role', 'toolbar');
-        hudPillEl.setAttribute('aria-label', pk.hudAria);
-        hudPillEl.addEventListener('pointerdown', function (ev) { ev.stopPropagation(); });
-        hudPillEl.addEventListener('click', function (ev) { ev.stopPropagation(); });
-
-        var resetBtn = mkEl(doc, 'button', 'ag-pp-hud-icon-btn ag-pp-hud-reset-btn');
-        resetBtn.type = 'button';
-        resetBtn.setAttribute('data-ag-pp-action', 'reset-view');
-        resetBtn.setAttribute('data-testid', 'ag-pp-reset-view-btn');
-        resetBtn.setAttribute('data-rotated', '0');
-        var initResetLbl = pk.resetTitle;
-        resetBtn.setAttribute('aria-label', initResetLbl);
-        resetBtn.title = initResetLbl;
-        resetBtn.appendChild(bentoUi.buildHudResetViewSvg(doc));
-        var resetLabelSpan = mkEl(doc, 'span', 'ag-pp-reset-label', pk.resetLbl);
-        var resetKbdSpan = mkEl(doc, 'span', 'ag-pp-reset-kbd', 'R');
-        resetKbdSpan.setAttribute('aria-hidden', 'true');
-        resetBtn.appendChild(resetLabelSpan);
-        resetBtn.appendChild(resetKbdSpan);
-        resetBtn.addEventListener('click', function (ev) {
-          ev.stopPropagation();
-          resetOrbitViewAction();
-        });
-
-        var swatchesWrap = mkEl(doc, 'div', 'ag-pp-hud-swatches ag-pp-sr-only');
-        hudChipByZ.clear();
         var hudElements = bentoUi.selectHudIslandElements(fullAvailableEntries, fullAvailableByZ);
-        for (var hi = 0; hi < hudElements.length; hi += 1) {
-          (function (elEntry) {
-            var ez = elEntry.slotZ || elEntry.z;
-            var isAvailChip = availableByZ.has(ez);
-            var chip = mkEl(doc, 'button', 'ag-pp-hud-chip ag-pp-sr-only');
-            chip.type = 'button';
-            chip.setAttribute('data-hud-z', String(ez));
-            chip.setAttribute('data-ag-pp-swatch-z', String(ez));
-            chip.setAttribute('data-available', isAvailChip ? '1' : '0');
-            chip.setAttribute('data-selected', ez === selectedZ ? '1' : '0');
-            chip.setAttribute('aria-pressed', ez === selectedZ ? 'true' : 'false');
-            var dot = mkEl(doc, 'span', 'ag-pp-hud-dot');
-            dot.setAttribute('aria-hidden', 'true');
-            var cPal = bentoUi.hudGemColorsForZ(ez, profile);
-            setStyleVar(dot, '--dot-bg', cPal.dot);
-            setStyleVar(dot, '--dot-glow', cPal.glow || cPal.ring);
-            setStyleVar(chip, '--chip-ring', cPal.ring);
-            chip.appendChild(dot);
-            chip.appendChild(mkEl(doc, 'span', 'ag-pp-chip-z', String(ez)));
-            chip.appendChild(typeof doc.createTextNode === 'function' ? doc.createTextNode(' ') : mkEl(doc, 'span', '', ' '));
-            chip.appendChild(mkEl(doc, 'span', 'ag-pp-chip-sym', elEntry.symbol));
-            chip.addEventListener('click', function (ev) {
-              ev.stopPropagation();
-              if (availableByZ.has(ez)) handleAvailableKeyClick(ez);
-              else triggerBlindKeyFeedback(ez);
-            });
-            hudChipByZ.set(ez, { btn: chip, dot: dot });
-            swatchesWrap.appendChild(chip);
-          })(hudElements[hi]);
-        }
+        var nextHudKey = computeHudElementsKey(hudElements);
+        activeHudElementsKey = nextHudKey;
 
-        var hudActions = mkEl(doc, 'div', 'ag-pp-hud-actions ag-pp-sr-only');
-        var muteBtn = mkEl(doc, 'button', 'ag-pp-hud-icon-btn ag-pp-hud-mute-btn ag-pp-sr-only');
-        muteBtn.type = 'button';
-        muteBtn.setAttribute('data-ag-pp-action', 'mute');
-        muteBtn.setAttribute('data-testid', 'ag-pp-mute-btn');
-        muteBtn.setAttribute('data-muted', muted ? '1' : '0');
-        muteBtn.setAttribute('aria-pressed', muted ? 'true' : 'false');
-        muteBtn.setAttribute('aria-label', pk.muteInit);
-        muteBtn.appendChild(bentoUi.buildHudMuteSvg(doc));
-        muteBtn.addEventListener('click', function (ev) {
-          ev.stopPropagation();
-          toggleMuteAction();
-          if (activeRenderer && typeof activeRenderer.triggerControlPress === 'function') {
-            try { activeRenderer.triggerControlPress('mute'); } catch (e) {}
+        var reusedShell = Boolean(cachedShell && cachedShell.doc === doc && cachedShell.overlayEl);
+        if (reusedShell) {
+          // 复用离屏 501 节点 DOM 壳（仅替换 1 个全新 WebGL <canvas>），大幅削减热开同步开销
+          var shell = cachedShell;
+          cachedShell = null;
+          overlayEl = shell.overlayEl;
+          deskmatEl = shell.deskmatEl;
+          dockTopRimEl = shell.dockTopRimEl;
+          dockGripEl = shell.dockGripEl;
+          spatialDockEl = shell.spatialDockEl;
+          bentoRefs = shell.bentoRefs;
+          stageEl = shell.stageEl;
+          floorShadowEl = shell.floorShadowEl;
+          hitLayerEl = shell.hitLayerEl;
+          hudPillEl = shell.hudPillEl;
+          swatchesWrapEl = shell.swatchesWrapEl;
+          uiRefs = shell.uiRefs;
+
+          keyNodesByZ.clear();
+          shell.keyNodesByZ.forEach(function (btn, zKey) {
+            keyNodesByZ.set(zKey, btn);
+          });
+          auxKeyNodes.length = 0;
+          for (var ra = 0; ra < shell.auxKeyNodes.length; ra += 1) {
+            auxKeyNodes.push(shell.auxKeyNodes[ra]);
           }
-        });
+          hudChipByZ.clear();
+          shell.hudChipByZ.forEach(function (obj, zKey) {
+            hudChipByZ.set(zKey, obj);
+          });
 
-        var closeBtn = mkEl(doc, 'button', 'ag-pp-hud-icon-btn ag-pp-hud-close-btn ag-pp-sr-only');
-        closeBtn.type = 'button';
-        closeBtn.setAttribute('data-ag-pp-action', 'close');
-        closeBtn.setAttribute('data-testid', 'ag-pp-close-btn');
-        closeBtn.setAttribute('aria-label', pk.closeLbl);
-        closeBtn.appendChild(bentoUi.buildHudCloseSvg(doc));
-        closeBtn.addEventListener('click', function (ev) {
-          ev.stopPropagation();
-          confirmAndClose();
-        });
+          overlayEl.removeAttribute('data-closing');
+          overlayEl.removeAttribute('data-confirm-slam');
+          overlayEl.removeAttribute('data-orbit-dragging');
+          overlayEl.removeAttribute('data-effort-dragging');
+          overlayEl.removeAttribute('data-in-flow');
+          overlayEl.removeAttribute('data-short-viewport');
+          setStyleVar(overlayEl, '--ag-pp-short-dock-h', null);
+          overlayEl.setAttribute('aria-modal', stageMode === 'fullscreen' ? 'true' : 'false');
+          overlayEl.setAttribute('aria-label', pk.pickerAria);
+          overlayEl.setAttribute('data-stage-mode', stageMode);
+          overlayEl.setAttribute('data-theme', profile.theme);
+          overlayEl.setAttribute('data-kit', profile.id);
+          overlayEl.setAttribute('data-rim-tone', profile.rimTone || 'default');
+          overlayEl.setAttribute('data-corners', profile.corners);
+          overlayEl.setAttribute('data-mono', profile.isMono ? '1' : '0');
+          overlayEl.setAttribute('data-card-flipped', '0');
+          overlayEl.setAttribute('data-orch-latched', orchLatched ? '1' : '0');
+          overlayEl.setAttribute('data-pointer-near', '0');
+          overlayEl.setAttribute('data-open', '0');
+          if (hudPillEl) hudPillEl.setAttribute('aria-label', pk.hudAria);
 
-        hudActions.appendChild(muteBtn);
-        hudActions.appendChild(closeBtn);
-        hudPillEl.appendChild(resetBtn);
-        hudPillEl.appendChild(swatchesWrap);
-        hudPillEl.appendChild(hudActions);
+          // 重置局部光环、地板投影与 Bento 差分缓存
+          if (dockTopRimEl) {
+            setStyleVar(dockTopRimEl, '--ag-pp-dock-rim-alpha', '0');
+            setStyleVar(dockTopRimEl, '--ag-pp-px', '-999px');
+          }
+          if (bentoRefs) {
+            bentoRefs._lastDomSig = '';
+            bentoRefs._lastCommittedCssSig = '';
+            bentoRefs._lastPagerSig = '';
+            bentoRefs.lastBentoEffSig = '';
+            if (bentoRefs.specCardRim) {
+              setStyleVar(bentoRefs.specCardRim, '--ag-pp-card-rim-alpha', '0');
+              setStyleVar(bentoRefs.specCardRim, '--ag-pp-card-px', '-999px');
+              setStyleVar(bentoRefs.specCardRim, '--ag-pp-card-py', '-999px');
+            }
+            if (bentoRefs.telePodRim) {
+              setStyleVar(bentoRefs.telePodRim, '--ag-pp-right-rim-alpha', '0');
+              setStyleVar(bentoRefs.telePodRim, '--ag-pp-right-px', '-999px');
+              setStyleVar(bentoRefs.telePodRim, '--ag-pp-right-py', '-999px');
+            }
+            if (bentoRefs.specCard && bentoRefs.specCard.classList) bentoRefs.specCard.classList.remove('is-session-switching');
+            if (bentoRefs.telePod && bentoRefs.telePod.classList) bentoRefs.telePod.classList.remove('is-session-switching');
+          }
+          if (floorShadowEl) {
+            setStyleVar(floorShadowEl, '--pp-shadow-px', '0px');
+            setStyleVar(floorShadowEl, '--pp-shadow-py', '0px');
+          }
+          if (uiRefs) {
+            uiRefs.lastEffortSig = '';
+            uiRefs.lastRotatedFlag = '0';
+            if (uiRefs.resetBtn) uiRefs.resetBtn.setAttribute('data-rotated', '0');
+          }
 
-        spatialDockEl.appendChild(bentoRefs.compactBar);
-        spatialDockEl.appendChild(bentoRefs.grid);
-        spatialDockEl.appendChild(stageEl);
-        spatialDockEl.appendChild(bentoRefs.rightWing);
-        spatialDockEl.appendChild(hudPillEl);
+          // 增量同步 90 颗主键盘键帽与 6 颗副盘键帽的可用状态（避免跨打开周期宿主模型变化后状态过期）
+          for (var rIdx = 0; rIdx < ELEMENTS_90.length; rIdx += 1) {
+            var rSlot = ELEMENTS_90[rIdx];
+            var rBtn = keyNodesByZ.get(rSlot.z);
+            if (!rBtn) continue;
+            var rAvail = availableByZ.has(rSlot.z);
+            var rAvailStr = rAvail ? '1' : '0';
+            rBtn._ppRectKey = '';
+            if (rBtn.classList) rBtn.classList.remove('is-levitated');
+            rBtn.removeAttribute('data-hovered');
+            if (rBtn.getAttribute('data-available') !== rAvailStr) {
+              rBtn.className = 'ag-pp-hit-btn ag-pp-key ' + (rAvail ? 'ag-pp-key-avail' : 'ag-pp-key-blind');
+              rBtn.setAttribute('data-available', rAvailStr);
+              if (rAvail) {
+                rBtn.removeAttribute('tabindex');
+                rBtn.removeAttribute('aria-disabled');
+              } else {
+                rBtn.setAttribute('tabindex', '-1');
+                rBtn.setAttribute('aria-disabled', 'true');
+              }
+            }
+            var nextAria = fullAvailableByZ.has(rSlot.z)
+              ? fullAvailableByZ.get(rSlot.z).baseName + ' (' + rSlot.numLabel + ' ' + rSlot.symbol + ')'
+              : rSlot.numLabel + ' ' + rSlot.symbol + ' ' + rSlot.name + ' (Unreleased)';
+            if (rBtn.getAttribute('aria-label') !== nextAria) rBtn.setAttribute('aria-label', nextAria);
+          }
 
-        overlayEl.appendChild(deskmatEl);
-        overlayEl.appendChild(dockTopRimEl);
-        overlayEl.appendChild(dockGripEl);
-        overlayEl.appendChild(spatialDockEl);
+          var localSelReuse = getLocalAuxIndex(selectedGlobalAuxIndex);
+          for (var rAk = 0; rAk < auxKeyNodes.length; rAk += 1) {
+            var rAuxBtn = auxKeyNodes[rAk];
+            var rAuxSlot = auxSlots[rAk];
+            if (!rAuxBtn) continue;
+            var rAuxAvail = Boolean(rAuxSlot && rAuxSlot.available);
+            var rAuxAvailStr = rAuxAvail ? '1' : '0';
+            var rIsOrch = rAuxSlot && isGlobalOrchToggleSlot(rAuxSlot._globalAuxIndex, rAuxSlot);
+            rAuxBtn._ppRectKey = '';
+            if (rAuxBtn.classList) rAuxBtn.classList.remove('is-levitated');
+            rAuxBtn.className = 'ag-pp-hit-btn ag-pp-aux-key ' + (rAuxAvail ? 'ag-pp-key-avail' : 'ag-pp-key-blind');
+            rAuxBtn.setAttribute('data-aux-id', rAuxSlot ? rAuxSlot.id : 'blind-' + rAk);
+            rAuxBtn.setAttribute('data-available', rAuxAvailStr);
+            if (rIsOrch) {
+              rAuxBtn.setAttribute('data-latched', orchLatched ? '1' : '0');
+              rAuxBtn.setAttribute('aria-pressed', orchLatched ? 'true' : 'false');
+            } else {
+              rAuxBtn.removeAttribute('data-latched');
+              rAuxBtn.setAttribute('aria-pressed', localSelReuse === rAk ? 'true' : 'false');
+            }
+            if (rAuxAvail) {
+              rAuxBtn.removeAttribute('tabindex');
+              rAuxBtn.removeAttribute('aria-disabled');
+            } else {
+              rAuxBtn.setAttribute('tabindex', '-1');
+              rAuxBtn.setAttribute('aria-disabled', 'true');
+            }
+            var nextAuxAria = rAuxAvail
+              ? rAuxSlot.title + ' (' + rAuxSlot.badgeCode + ' ' + rAuxSlot.shortLabel + ')'
+              : (rAuxSlot ? rAuxSlot.badgeCode : 'AUX') + ' (Reserved Macro Key)';
+            if (rAuxBtn.getAttribute('aria-label') !== nextAuxAria) rAuxBtn.setAttribute('aria-label', nextAuxAria);
+          }
+
+          if (shell.hudElementsKey !== nextHudKey && swatchesWrapEl) {
+            rebuildHudSwatches(swatchesWrapEl, hudElements, profile);
+          }
+
+          // 替换全新 <canvas>（避免上次 dispose() 调用 WEBGL_lose_context 导致上下文永久失效）
+          var freshCanvas = mkEl(doc, 'canvas', 'ag-pp-gl-canvas');
+          freshCanvas.setAttribute('aria-hidden', 'true');
+          if (stageEl && hitLayerEl && typeof stageEl.insertBefore === 'function') {
+            stageEl.insertBefore(freshCanvas, hitLayerEl);
+          } else if (stageEl) {
+            stageEl.appendChild(freshCanvas);
+          }
+          if (shell.canvasEl) safeRemove(shell.canvasEl);
+          canvasEl = freshCanvas;
+          bindCanvasClickHandler(canvasEl);
+        } else {
+          overlayEl = mkEl(doc, 'div', 'ag-periodic-picker-backdrop');
+          overlayEl.id = ROOT_ID;
+          overlayEl.setAttribute('id', ROOT_ID);
+          markPeriodicOwnedRoot(overlayEl);
+          overlayEl.setAttribute('role', 'dialog');
+          overlayEl.setAttribute('aria-modal', stageMode === 'fullscreen' ? 'true' : 'false');
+          overlayEl.setAttribute('aria-label', pk.pickerAria);
+          overlayEl.setAttribute('data-stage-mode', stageMode);
+          overlayEl.setAttribute('data-theme', profile.theme);
+          overlayEl.setAttribute('data-kit', profile.id);
+          overlayEl.setAttribute('data-rim-tone', profile.rimTone || 'default');
+          overlayEl.setAttribute('data-corners', profile.corners);
+          overlayEl.setAttribute('data-mono', profile.isMono ? '1' : '0');
+          overlayEl.setAttribute('data-card-flipped', '0');
+          overlayEl.setAttribute('data-orch-latched', orchLatched ? '1' : '0');
+          overlayEl.setAttribute('data-pointer-near', '0');
+          overlayEl.setAttribute('data-open', '0');
+
+          deskmatEl = bentoUi.buildDeskmatStage(doc, root);
+          dockTopRimEl = mkEl(doc, 'div', 'ag-pp-dock-top-rim');
+          dockTopRimEl.setAttribute('aria-hidden', 'true');
+          dockGripEl = mkEl(doc, 'div', 'ag-pp-dock-grip');
+          dockGripEl.setAttribute('aria-hidden', 'true');
+          spatialDockEl = mkEl(doc, 'div', 'ag-pp-spatial-dock');
+
+          bentoRefs = bentoUi.buildBentoTwinCards(
+            doc,
+            {
+              onToggleCardFlip: toggleCardFlipAction,
+              onToggleCompactExpand: toggleCompactExpandAction,
+              onToggleStageMode: toggleStageModeAction,
+              onToggleMute: function () {
+                toggleMuteAction();
+                if (activeRenderer && typeof activeRenderer.triggerControlPress === 'function') {
+                  try { activeRenderer.triggerControlPress('mute'); } catch (e) {}
+                }
+              },
+              onConfirmClose: confirmAndClose,
+              onEffortSelect: handleEffortSelect,
+              onAuxEffortSelect: handleAuxEffortSelect,
+              onAuxPageChange: setAuxPageAction,
+            },
+            { lang: langCode, zh: zh, root: root }
+          );
+
+          stageEl = mkEl(doc, 'div', 'ag-pp-stage ag-pp-modal');
+          var floorRig = bentoUi.mountStudioFloorRig(doc, stageEl);
+          floorShadowEl = (floorRig && floorRig.shadowEl) || null;
+          canvasEl = mkEl(doc, 'canvas', 'ag-pp-gl-canvas');
+          canvasEl.setAttribute('aria-hidden', 'true');
+          hitLayerEl = mkEl(doc, 'div', 'ag-pp-hit-layer');
+
+          var srDeck = mkEl(doc, 'div', 'ag-pp-sr-only');
+          srDeck.setAttribute('data-testid', 'ag-pp-inspector-deck');
+          srDeck.setAttribute('aria-live', 'polite');
+          var srBanner = mkEl(doc, 'div', '');
+          srBanner.setAttribute('data-testid', 'ag-pp-session-banner');
+          srBanner.setAttribute('data-show', '0');
+          var srBannerText = mkEl(doc, 'span', '', '');
+          srBanner.appendChild(srBannerText);
+          var srTitle = mkEl(doc, 'span', '', '');
+          var srChem = mkEl(doc, 'span', '', '');
+          var srSub = mkEl(doc, 'span', '', '');
+          srDeck.appendChild(srBanner);
+          srDeck.appendChild(srTitle);
+          srDeck.appendChild(srChem);
+          srDeck.appendChild(srSub);
+          hitLayerEl.appendChild(srDeck);
+
+          keyNodesByZ.clear();
+          for (var idx = 0; idx < ELEMENTS_90.length; idx += 1) {
+            (function (slot) {
+              var isAvailInit = availableByZ.has(slot.z);
+              var keyBtn = mkEl(doc, 'button', 'ag-pp-hit-btn ag-pp-key ' + (isAvailInit ? 'ag-pp-key-avail' : 'ag-pp-key-blind'));
+              keyBtn.type = 'button';
+              keyBtn.setAttribute('data-ag-pp-z', String(slot.z));
+              keyBtn.setAttribute('data-z', String(slot.z));
+              keyBtn.setAttribute('data-symbol', slot.symbol);
+              keyBtn.setAttribute('data-available', isAvailInit ? '1' : '0');
+              if (!isAvailInit) {
+                keyBtn.setAttribute('tabindex', '-1');
+                keyBtn.setAttribute('aria-disabled', 'true');
+              }
+              keyBtn.setAttribute(
+                'aria-label',
+                fullAvailableByZ.has(slot.z)
+                  ? fullAvailableByZ.get(slot.z).baseName + ' (' + slot.numLabel + ' ' + slot.symbol + ')'
+                  : slot.numLabel + ' ' + slot.symbol + ' ' + slot.name + ' (Unreleased)'
+              );
+              keyBtn.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                if (hasPointerCoords(ev) && activeRenderer && typeof activeRenderer.pick === 'function') {
+                  var picked = activeRenderer.pick(ev.clientX, ev.clientY);
+                  if (picked) { dispatchPickedTarget(picked); return; }
+                }
+                if (availableByZ.has(slot.z)) handleAvailableKeyClick(slot.z);
+                else triggerBlindKeyFeedback(slot.z);
+              });
+              keyNodesByZ.set(slot.z, keyBtn);
+              hitLayerEl.appendChild(keyBtn);
+            })(ELEMENTS_90[idx]);
+          }
+
+          auxKeyNodes.length = 0;
+          var localSelInit = getLocalAuxIndex(selectedGlobalAuxIndex);
+          for (var ak = 0; ak < AUX_PAGE_SIZE; ak += 1) {
+            (function (slotIdx) {
+              var auxSlot = auxSlots[slotIdx];
+              var isAuxAvail = Boolean(auxSlot && auxSlot.available);
+              var isOrchSlot = auxSlot && isGlobalOrchToggleSlot(auxSlot._globalAuxIndex, auxSlot);
+              var auxBtn = mkEl(doc, 'button', 'ag-pp-hit-btn ag-pp-aux-key ' + (isAuxAvail ? 'ag-pp-key-avail' : 'ag-pp-key-blind'));
+              auxBtn.type = 'button';
+              auxBtn.setAttribute('data-ag-pp-aux', String(slotIdx));
+              auxBtn.setAttribute('data-aux-index', String(slotIdx));
+              auxBtn.setAttribute('data-aux-id', auxSlot ? auxSlot.id : 'blind-' + slotIdx);
+              auxBtn.setAttribute('data-available', isAuxAvail ? '1' : '0');
+              if (isOrchSlot) {
+                auxBtn.setAttribute('data-latched', orchLatched ? '1' : '0');
+                auxBtn.setAttribute('aria-pressed', orchLatched ? 'true' : 'false');
+              } else {
+                auxBtn.setAttribute('aria-pressed', localSelInit === slotIdx ? 'true' : 'false');
+              }
+              if (!isAuxAvail) {
+                auxBtn.setAttribute('tabindex', '-1');
+                auxBtn.setAttribute('aria-disabled', 'true');
+              }
+              auxBtn.setAttribute(
+                'aria-label',
+                isAuxAvail
+                  ? auxSlot.title + ' (' + auxSlot.badgeCode + ' ' + auxSlot.shortLabel + ')'
+                  : (auxSlot ? auxSlot.badgeCode : 'AUX') + ' (Reserved Macro Key)'
+              );
+              auxBtn.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                if (hasPointerCoords(ev) && activeRenderer && typeof activeRenderer.pick === 'function') {
+                  var picked = activeRenderer.pick(ev.clientX, ev.clientY);
+                  if (picked) { dispatchPickedTarget(picked); return; }
+                }
+                handleAuxKeyClick(slotIdx);
+              });
+              auxKeyNodes.push(auxBtn);
+              hitLayerEl.appendChild(auxBtn);
+            })(ak);
+          }
+
+          stageEl.appendChild(canvasEl);
+          stageEl.appendChild(hitLayerEl);
+
+          hudPillEl = mkEl(doc, 'div', 'ag-pp-hud-pill');
+          hudPillEl.setAttribute('role', 'toolbar');
+          hudPillEl.setAttribute('aria-label', pk.hudAria);
+          hudPillEl.addEventListener('pointerdown', function (ev) { ev.stopPropagation(); });
+          hudPillEl.addEventListener('click', function (ev) { ev.stopPropagation(); });
+
+          var resetBtn = mkEl(doc, 'button', 'ag-pp-hud-icon-btn ag-pp-hud-reset-btn');
+          resetBtn.type = 'button';
+          resetBtn.setAttribute('data-ag-pp-action', 'reset-view');
+          resetBtn.setAttribute('data-testid', 'ag-pp-reset-view-btn');
+          resetBtn.setAttribute('data-rotated', '0');
+          var initResetLbl = pk.resetTitle;
+          resetBtn.setAttribute('aria-label', initResetLbl);
+          resetBtn.title = initResetLbl;
+          resetBtn.appendChild(bentoUi.buildHudResetViewSvg(doc));
+          var resetLabelSpan = mkEl(doc, 'span', 'ag-pp-reset-label', pk.resetLbl);
+          var resetKbdSpan = mkEl(doc, 'span', 'ag-pp-reset-kbd', 'R');
+          resetKbdSpan.setAttribute('aria-hidden', 'true');
+          resetBtn.appendChild(resetLabelSpan);
+          resetBtn.appendChild(resetKbdSpan);
+          resetBtn.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            resetOrbitViewAction();
+          });
+
+          swatchesWrapEl = mkEl(doc, 'div', 'ag-pp-hud-swatches ag-pp-sr-only');
+          rebuildHudSwatches(swatchesWrapEl, hudElements, profile);
+
+          var hudActions = mkEl(doc, 'div', 'ag-pp-hud-actions ag-pp-sr-only');
+          var muteBtn = mkEl(doc, 'button', 'ag-pp-hud-icon-btn ag-pp-hud-mute-btn ag-pp-sr-only');
+          muteBtn.type = 'button';
+          muteBtn.setAttribute('data-ag-pp-action', 'mute');
+          muteBtn.setAttribute('data-testid', 'ag-pp-mute-btn');
+          muteBtn.setAttribute('data-muted', muted ? '1' : '0');
+          muteBtn.setAttribute('aria-pressed', muted ? 'true' : 'false');
+          muteBtn.setAttribute('aria-label', pk.muteInit);
+          muteBtn.appendChild(bentoUi.buildHudMuteSvg(doc));
+          muteBtn.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            toggleMuteAction();
+            if (activeRenderer && typeof activeRenderer.triggerControlPress === 'function') {
+              try { activeRenderer.triggerControlPress('mute'); } catch (e) {}
+            }
+          });
+
+          var closeBtn = mkEl(doc, 'button', 'ag-pp-hud-icon-btn ag-pp-hud-close-btn ag-pp-sr-only');
+          closeBtn.type = 'button';
+          closeBtn.setAttribute('data-ag-pp-action', 'close');
+          closeBtn.setAttribute('data-testid', 'ag-pp-close-btn');
+          closeBtn.setAttribute('aria-label', pk.closeLbl);
+          closeBtn.appendChild(bentoUi.buildHudCloseSvg(doc));
+          closeBtn.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            confirmAndClose();
+          });
+
+          hudActions.appendChild(muteBtn);
+          hudActions.appendChild(closeBtn);
+          hudPillEl.appendChild(resetBtn);
+          hudPillEl.appendChild(swatchesWrapEl);
+          hudPillEl.appendChild(hudActions);
+
+          spatialDockEl.appendChild(bentoRefs.compactBar);
+          spatialDockEl.appendChild(bentoRefs.grid);
+          spatialDockEl.appendChild(stageEl);
+          spatialDockEl.appendChild(bentoRefs.rightWing);
+          spatialDockEl.appendChild(hudPillEl);
+
+          overlayEl.appendChild(deskmatEl);
+          overlayEl.appendChild(dockTopRimEl);
+          overlayEl.appendChild(dockGripEl);
+          overlayEl.appendChild(spatialDockEl);
+
+          uiRefs = {
+            banner: srBanner,
+            bannerText: srBannerText,
+            srTitle: srTitle,
+            srChem: srChem,
+            srSub: srSub,
+            resetBtn: resetBtn,
+            resetLabel: resetLabelSpan,
+            muteBtn: muteBtn,
+            closeBtn: closeBtn,
+            effortButtons: [],
+            effortButtonPool: [],
+            effortTargetInfo: { isAuxModel: false, globalAuxIndex: null, z: null, effortTitle: '' },
+            lastEffortSig: '',
+            lastRotatedFlag: '0',
+          };
+
+          bindCanvasClickHandler(canvasEl);
+        }
 
         var pinnedScrollEl = null;
         if (stageMode === 'drawer') {
@@ -4910,31 +5242,14 @@
         /* Notify host mascot/runtime immediately so desktop pet enters peek mode */
         syncPrismHostUi();
 
-        uiRefs = {
-          banner: srBanner,
-          bannerText: srBannerText,
-          srTitle: srTitle,
-          srChem: srChem,
-          srSub: srSub,
-          resetBtn: resetBtn,
-          resetLabel: resetLabelSpan,
-          muteBtn: muteBtn,
-          closeBtn: closeBtn,
-          effortButtons: [],
-          effortButtonPool: [],
-          effortTargetInfo: { isAuxModel: false, globalAuxIndex: null, z: null, effortTitle: '' },
-          lastEffortSig: '',
-          lastRotatedFlag: '0',
-        };
-
         var ResizeObsCtor = (root && root.ResizeObserver) || (typeof ResizeObserver === 'function' ? ResizeObserver : null);
         if (ResizeObsCtor && overlayEl) {
           try {
             dockResizeObserver = new ResizeObsCtor(function () {
               if (!overlayEl || isDestroyed || isDrawerClosing) return;
               refreshCachedLayoutRects();
-              syncDockCompactState();
-              resizeCanvasToStage();
+              var roTierChanged = syncDockCompactState();
+              resizeCanvasToStage(!roTierChanged);
               if (!isOrbitDragging) syncHitLayerRects(true);
               if (!isConfirmClosing) syncSceneAndDom(true);
             });
@@ -4962,12 +5277,16 @@
           }
         }
 
+        // 3D/Canvas 舞台启用拾取时，屏蔽命中层 100+ 透明按钮的鼠标命中测试，杜绝跨按钮 pointerover/pointerenter 风暴
+        var useGlStagePick = Boolean(activeRenderer && typeof activeRenderer.pick === 'function');
+        overlayEl.setAttribute('data-gl-stage', useGlStagePick ? '1' : '0');
+
         clearStaleBlurIfActive();
         isHostPaused = computeHostPaused();
         refreshCachedLayoutRects();
-        syncDockCompactState();
-        resizeCanvasToStage();
-        syncSceneAndDom(true);
+        var initTierChanged = syncDockCompactState();
+        resizeCanvasToStage(!initTierChanged);
+        syncSceneAndDom(true, { deferTelemetryDomScan: Boolean(reqRaf) });
         if (isHostPaused) applyRendererPausedState(true);
 
         if (activeRenderer && !isHostPaused && !bentoUi.isReducedMotion(doc, root) && typeof activeRenderer.triggerIntroWake === 'function') {
@@ -4976,27 +5295,41 @@
             scheduleSettledRectSync();
           } catch (e) {}
         }
-        syncHitLayerRects(true);
+        if (!useGlStagePick || !reqRaf) {
+          syncHitLayerRects(true);
+        }
 
         attachOpenSessionSyncWatchers();
 
-        /* Capture-phase post-drag click guard */
-        overlayEl.addEventListener(
-          'click',
-          function (ev) {
-            if (suppressPostDragClickUntil > 0) {
-              var blockClick = !isTargetInBentoOrHud(ev && ev.target) && readClockMs() <= suppressPostDragClickUntil;
-              suppressPostDragClickUntil = 0;
-              if (blockClick) {
-                if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-                if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
-                if (ev && typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation();
-                return;
+        if (!reusedShell) {
+          /* 阻止容器内指针/悬停事件冒泡泄漏至宿主 document/window（规避宿主 main.js 全页 UpdateLayoutTree 与底层光环误触发） */
+          var stopHoverBubbleToHost = function (ev) {
+            if (!ev) return;
+            if (ev.type === 'mouseout' && !ev.relatedTarget && !ev.toElement) return;
+            if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
+          };
+          overlayEl.addEventListener('pointerover', stopHoverBubbleToHost);
+          overlayEl.addEventListener('pointerout', stopHoverBubbleToHost);
+          overlayEl.addEventListener('mouseover', stopHoverBubbleToHost);
+          overlayEl.addEventListener('mouseout', stopHoverBubbleToHost);
+
+          /* Capture-phase post-drag click guard */
+          overlayEl.addEventListener(
+            'click',
+            function (ev) {
+              if (suppressPostDragClickUntil > 0) {
+                var blockClick = !isTargetInBentoOrHud(ev && ev.target) && readClockMs() <= suppressPostDragClickUntil;
+                suppressPostDragClickUntil = 0;
+                if (blockClick) {
+                  if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+                  if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+                  if (ev && typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation();
+                  return;
+                }
               }
-            }
-          },
-          true
-        );
+            },
+            true
+          );
 
         /* Rotary knob effort wheel + 2x3 Aux Pad page scroll wheel */
         overlayEl.addEventListener('wheel', function (ev) {
@@ -5160,6 +5493,7 @@
         });
 
         overlayEl.addEventListener('pointermove', function (ev) {
+          if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
           if (!overlayEl || isDestroyed || isConfirmClosing || isDrawerClosing || isHostPaused || !ev) return;
           var cx = Number(ev.clientX) || 0;
           var cy = Number(ev.clientY) || 0;
@@ -5397,53 +5731,27 @@
           clearStageHoverAndPress();
         });
 
-        stageEl.addEventListener('pointerleave', function (ev) {
-          if (!overlayEl || isDestroyed || isConfirmClosing || isDrawerClosing) return;
-          if (isOrbitDragging || (gestureState && gestureState.scrubbing)) return;
-          var stillInOverlay = Boolean(
-            ev && ev.relatedTarget && typeof overlayEl.contains === 'function' && overlayEl.contains(ev.relatedTarget)
-          );
-          if (!stillInOverlay) {
-            cancelPendingPointerMoveRaf();
-            lastPointerClient.x = -9999;
-            lastPointerClient.y = -9999;
-            lastPointerClient.active = false;
-            if (ev && ev.relatedTarget && Number.isFinite(Number(ev.clientX)) && Number.isFinite(Number(ev.clientY))) {
-              updateDynamicPrismCssVars(ev.clientX, ev.clientY);
-            } else {
-              clearLocalRimGlow();
-            }
-            forwardPointerToRenderer(-9999, -9999, false);
-          }
-          clearStageHoverAndPress();
-        });
-
-        canvasEl.addEventListener('click', function (ev) {
-          if (!overlayEl || isDestroyed || isConfirmClosing || isDrawerClosing) return;
-          ev.stopPropagation();
-          var clickX = Number(ev.clientX) || 0;
-          var clickY = Number(ev.clientY) || 0;
-          if (activeRenderer && typeof activeRenderer.pick === 'function') {
-            var hit = activeRenderer.pick(clickX, clickY);
-            if (!hit) {
-              if (hasPointerCoords(ev) && isPointInEffortSliderBand(clickX, clickY)) {
-                var bandRes = resolveEffortAlongSlider(clickX, clickY);
-                if (bandRes.effort) {
-                  var cDeck = buildCurrentDeckPayload(resolveCurrentLang());
-                  if (cDeck.inspectKind === 'aux' && cDeck.globalAuxIndex !== null && cDeck.globalAuxIndex !== undefined) {
-                    handleAuxEffortSelect(cDeck.globalAuxIndex, bandRes.effort);
-                  } else {
-                    handleEffortSelect(bandRes.effort);
-                  }
-                  return;
-                }
+          stageEl.addEventListener('pointerleave', function (ev) {
+            if (!overlayEl || isDestroyed || isConfirmClosing || isDrawerClosing) return;
+            if (isOrbitDragging || (gestureState && gestureState.scrubbing)) return;
+            var stillInOverlay = Boolean(
+              ev && ev.relatedTarget && typeof overlayEl.contains === 'function' && overlayEl.contains(ev.relatedTarget)
+            );
+            if (!stillInOverlay) {
+              cancelPendingPointerMoveRaf();
+              lastPointerClient.x = -9999;
+              lastPointerClient.y = -9999;
+              lastPointerClient.active = false;
+              if (ev && ev.relatedTarget && Number.isFinite(Number(ev.clientX)) && Number.isFinite(Number(ev.clientY))) {
+                updateDynamicPrismCssVars(ev.clientX, ev.clientY);
+              } else {
+                clearLocalRimGlow();
               }
-              if ((stageMode === 'fullscreen' && pointerDownOutside) || !hasPointerCoords(ev)) confirmAndClose();
-              return;
+              forwardPointerToRenderer(-9999, -9999, false);
             }
-            dispatchPickedTarget(hit);
-          }
-        });
+            clearStageHoverAndPress();
+          });
+        }
 
         if (reqRaf) {
           if (openRafId && cancelRaf) cancelRaf(openRafId);
@@ -5460,9 +5768,17 @@
                 }, DOCK_OPEN_TRANSITION_MS + 16);
               }
               refreshCachedLayoutRects();
-              syncDockCompactState();
-              resizeCanvasToStage();
+              var rafTierChanged = syncDockCompactState();
+              resizeCanvasToStage(!rafTierChanged);
               syncHitLayerRects(true);
+              // 首帧后异步补齐宿主 DOM 遥测扫描，避免阻塞 open() 首帧绘制
+              if (cachedHostTelemetry && cachedHostTelemetry.domScanDeferred) {
+                var fullTele = hostBridge.readHostContextTelemetry(doc, root);
+                cachedHostTelemetry = fullTele;
+                if (fullTele && (fullTele.available || fullTele.reason !== 'offline')) {
+                  syncSceneAndDom(true);
+                }
+              }
             }
           });
         } else {
@@ -5566,6 +5882,32 @@
         }
         if (hadOverlay) {
           var toRemove = overlayEl;
+          if (!co.releaseHeavyCaches && !isDestroyed && currentMode !== 'off') {
+            // 正常关闭保留离屏 DOM 壳，仍立即卸载出 document 确保关闭态零残留节点
+            cachedShell = {
+              doc: doc,
+              overlayEl: overlayEl,
+              deskmatEl: deskmatEl,
+              dockTopRimEl: dockTopRimEl,
+              dockGripEl: dockGripEl,
+              spatialDockEl: spatialDockEl,
+              bentoRefs: bentoRefs,
+              stageEl: stageEl,
+              floorShadowEl: floorShadowEl,
+              canvasEl: canvasEl,
+              hitLayerEl: hitLayerEl,
+              hudPillEl: hudPillEl,
+              swatchesWrapEl: swatchesWrapEl,
+              uiRefs: uiRefs,
+              hudElementsKey: activeHudElementsKey,
+              keyNodesByZ: new Map(keyNodesByZ),
+              auxKeyNodes: auxKeyNodes.slice(),
+              hudChipByZ: new Map(hudChipByZ),
+            };
+          } else {
+            cachedShell = null;
+          }
+          cachedHostTelemetry = null;
           overlayEl = null;
           deskmatEl = null;
           dockTopRimEl = null;
@@ -5573,13 +5915,21 @@
           spatialDockEl = null;
           bentoRefs = null;
           stageEl = null;
+          floorShadowEl = null;
           canvasEl = null;
           hitLayerEl = null;
           hudPillEl = null;
+          swatchesWrapEl = null;
           uiRefs = null;
           lastStageRectFn = null;
           cachedStageBounds.valid = false;
           rimGlowWasActive = false;
+          rimDockWasActive = false;
+          rimCardWasActive = false;
+          rimRightWasActive = false;
+          lastDockCompactSig = '';
+          lastShadowPxStr = '';
+          lastShadowPyStr = '';
           lastStageCursor = '';
           lastFlushedPointer.x = NaN;
           lastFlushedPointer.y = NaN;
@@ -6042,8 +6392,8 @@
         if (holdState) cancelHold(false);
         if (overlayEl && !isDrawerClosing) {
           refreshCachedLayoutRects();
-          syncDockCompactState();
-          resizeCanvasToStage();
+          var resTierChanged = syncDockCompactState();
+          resizeCanvasToStage(!resTierChanged);
           syncHitLayerRects(true);
           if (!isConfirmClosing) syncSceneAndDom(true);
         }

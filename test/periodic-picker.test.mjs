@@ -296,7 +296,7 @@ function createMockWebGL2Context({ failFbo = false } = {}) {
       return { name };
     },
     viewport(x, y, w, h) {
-      if (w === 2048 && h === 2048) {
+      if (w === 1024 && h === 1024) {
         shadowViewports.push({ x, y, w, h });
       }
     },
@@ -1551,15 +1551,15 @@ test('V3 3D Renderer (keyboard-3d-gl.js): headless/WebGL2 2048px Shadow FBO + 5 
   assert.equal(glStatsInit.created.programs.size, 5, 'V5 requires 5 GLSL programs (3 main PBR + 2 shadow pass)');
   assert.equal(glStatsInit.created.shaders.size, 10, '5 GLSL programs must compile 10 shaders');
   assert.equal(glStatsInit.created.vaos.size, 4);
-  assert.equal(glStatsInit.created.textures.size, 5, 'V5 requires 5 textures (atlas, 128x128 RG8 grain, 128x64 RGB8 metalEnv, oled, 2048px shadow depth)');
-  assert.equal(glStatsInit.created.framebuffers.size, 1, 'V5 requires 1 2048x2048 shadow depth FBO');
+  assert.equal(glStatsInit.created.textures.size, 5, 'V5 requires 5 textures (atlas, 128x128 RG8 grain, 128x64 RGB8 metalEnv, oled, 1024px shadow depth)');
+  assert.equal(glStatsInit.created.framebuffers.size, 1, 'V5 requires 1 1024x1024 shadow depth FBO');
   assert.ok(
-    glStatsInit.shadowTexAllocations.some((a) => a.width === 2048 && a.height === 2048),
-    'Shadow depth texture must be allocated at 2048x2048'
+    glStatsInit.shadowTexAllocations.some((a) => a.width === 1024 && a.height === 1024),
+    'Shadow depth texture must be allocated at 1024x1024'
   );
   assert.ok(
-    glStatsInit.shadowViewports.some((v) => v.w === 2048 && v.h === 2048),
-    'Shadow pass must render at 2048x2048 viewport'
+    glStatsInit.shadowViewports.some((v) => v.w === 1024 && v.h === 1024),
+    'Shadow pass must render at 1024x1024 viewport'
   );
   assert.ok(glStatsInit.drawCalls > 0);
 
@@ -3655,10 +3655,15 @@ test('V10 VisionOS Spatial Glass, Minimalist External Reset Capsule (.ag-pp-sr-o
   });
   assert.equal(inst.open(triggerBtn), true);
 
-  // 1) Verify VisionOS 16px Spatial Glass CSS, dual-layer floor shadows, and minimalist external reset capsule vs sr-only HUD proxies
+  // 1) Verify darkroom radial scrim (zero expensive fullscreen backdrop-filter), zero blur() floor shadows, containment & minimalist external reset capsule
   const styleEl = env.document.getElementById('ag-prism-periodic-picker-css');
   assert.ok(styleEl, 'Expected #ag-prism-periodic-picker-css stylesheet');
-  assert.ok(styleEl.textContent.includes('blur(16px)'), 'Expected 16px VisionOS spatial depth-of-field blur');
+  assert.equal(styleEl.textContent.includes('backdrop-filter:blur(16px)'), false, 'Fullscreen root must not use expensive 16px backdrop-filter blur');
+  assert.ok(styleEl.textContent.includes('--pp-spatial-scrim:radial-gradient('), 'Expected high-craft darkroom radial-gradient scrim');
+  assert.ok(styleEl.textContent.includes('contain:layout style paint;'), 'Expected CSS containment firewall on root');
+  assert.equal(styleEl.textContent.includes('filter:blur(28px)'), false, 'Floor shadow must replace blur(28px) with radial-gradient');
+  assert.equal(styleEl.textContent.includes('filter:blur(12px)'), false, 'Contact shadow must replace blur(12px) with radial-gradient');
+  assert.equal(styleEl.textContent.includes('transition:all 180ms'), false, 'Radar polygons must not use transition:all');
   assert.ok(styleEl.textContent.includes('--pp-topo-mul:0.035'), 'Expected subtle 0.035 DESKMAT_TOPO silkscreen opacity');
   assert.ok(styleEl.textContent.includes('.ag-pp-floor-shadow::before'), 'Expected deep drop shadow layer');
   assert.ok(styleEl.textContent.includes('.ag-pp-floor-shadow::after'), 'Expected ambient contact shadow layer');
@@ -5031,7 +5036,10 @@ test('V13.1 PRISM-118 CNC Triptych: MOD-01/MOD-02, Hover Dual-Radar Compare + De
   env.document.dispatchEvent(env.createEventObj('pointermove', { clientX: 1120, clientY: 160, target: inputBox }));
   env.flushRaf();
   assert.equal(rootEl.getAttribute('data-pointer-near'), '1', 'External cursor 80px above dock must trigger near-field chamfer glint');
-  assert.ok(parseFloat(rootEl.style.getPropertyValue('--ag-pp-right-rim-alpha')) > 0.1, 'MOD-02 right CNC chamfer must illuminate within 150px');
+  const teleRim = telePod.querySelector('.ag-pp-tele-rim');
+  assert.ok(teleRim, 'MOD-02 must isolate rim glare onto dedicated zero-child .ag-pp-tele-rim layer');
+  assert.ok(parseFloat(teleRim.style.getPropertyValue('--ag-pp-right-rim-alpha')) > 0.1, 'MOD-02 right CNC chamfer must illuminate within 150px');
+  assert.equal(rootEl.style.getPropertyValue('--ag-pp-right-rim-alpha'), '', 'Root container must never be dirtied by high-frequency pointer rim CSS vars');
 
   inst.destroy();
   assert.equal(env.getCounts().activeTimers, 0);
@@ -7037,10 +7045,11 @@ test('v1.0.8-beta (f) keyboard-3d-gl.js targetFps throttling, shadowDirty static
   });
 
   const statsInit = renderer.getPerfStats();
-  assert.equal(statsInit.dpr, 2, 'DPR must strictly cap at 2.0 on >2x displays');
-  assert.equal(canvas.width, 960 * 2);
-  assert.equal(canvas.height, 552 * 2);
-  assert.equal(statsInit.shadowMapSize, 2048, 'ultra motionLevel uses 2048px shadow map');
+  assert.ok(statsInit.dpr <= 1.5, 'DPR must strictly cap at <= 1.5 on >1.5x displays');
+  assert.equal(statsInit.dpr, 1.5, 'DPR must strictly cap at 1.5 on 3.5x displays');
+  assert.equal(canvas.width, Math.round(960 * 1.5));
+  assert.equal(canvas.height, Math.round(552 * 1.5));
+  assert.equal(statsInit.shadowMapSize, 1024, 'ultra motionLevel uses 1024px shadow map');
   assert.equal(statsInit.targetFps, '60');
 
   // Trigger OLED/energy pulse wake without changing keycap/chassis geometry ->
@@ -7670,6 +7679,165 @@ test('v1.0.8-beta live-fix (2) Long-press blocks native popup, re-long-press clo
   assert.equal(nativePointerDownHits, 0, 'Re-long-press close must NOT trigger native dropdown pointerdown');
   assert.equal(nativeMouseDownHits, 0, 'Re-long-press close must NOT trigger native dropdown mousedown');
   assert.equal(nativeClickHits, 0, 'Re-long-press close must NOT trigger native dropdown click');
+
+  inst.destroy();
+  const counts = env.getCounts();
+  assert.equal(counts.activeTimers, 0);
+  assert.equal(counts.activeRafs, 0);
+});
+
+test('v1.0.8-beta perf-dom-bg: 3D hit-layer pointer isolation, event bubble firewall, 0-root-var hover, 0-DOM-telemetry sweep, shell reuse & 8-module 0fps sleep', () => {
+  const env = createPeriodicSandbox({ mock2d: true, mockWebGL2: false });
+  loadPeriodicModuleInSandbox(env, 'pbr-grain-assets.js');
+  loadPeriodicModuleInSandbox(env, 'audio-fx.js');
+  loadPeriodicModuleInSandbox(env, 'model-catalog.js');
+  loadPeriodicModuleInSandbox(env, 'host-bridge.js');
+  loadPeriodicModuleInSandbox(env, 'oled-cyber-screen.js');
+  loadPeriodicModuleInSandbox(env, 'keyboard-3d-gl.js');
+  const factory = loadPeriodicFactoryInSandbox(env);
+
+  const teleEl = env.makeElement('span', { attrs: { 'data-testid': 'context-percent' }, text: '31%' });
+  env.body.appendChild(teleEl);
+  const triggerBtn = env.makeElement('button', {
+    attrs: { 'data-testid': 'model-selector-trigger' },
+    text: 'Gemini 4 Carbon (High)',
+  });
+  env.body.appendChild(triggerBtn);
+  env.window.__agPeriodicMockHost = {
+    selectedModel: { label: 'Gemini 4 Carbon (High)', modelId: 'gemini-4-c-high' },
+    modelOptions: [
+      { label: 'Gemini 4 Hydrogen (High)', modelId: 'gemini-4-h-high' },
+      { label: 'Gemini 4 Carbon (High)', modelId: 'gemini-4-c-high' },
+      { label: 'Gemini 4 Neon (High)', modelId: 'gemini-4-ne-high' },
+    ],
+  };
+
+  // 1) 追踪宿主冒泡事件与悬停态遥测 DOM 扫描
+  let hostBubbleHits = 0;
+  for (const evType of ['pointerover', 'pointerout', 'mouseover', 'mouseout', 'pointermove']) {
+    env.body.addEventListener(evType, () => {
+      hostBubbleHits += 1;
+    });
+  }
+
+  let telemetryDomQueries = 0;
+  const origQuerySel = env.document.querySelector.bind(env.document);
+  env.document.querySelector = (sel) => {
+    if (typeof sel === 'string' && (sel.includes('context-tokens') || sel.includes('context-percent'))) {
+      telemetryDomQueries += 1;
+    }
+    return origQuerySel(sel);
+  };
+
+  const inst = factory.mountPeriodicPicker({ root: env.window, doc: env.document, mode: 'on' });
+  assert.equal(inst.open(triggerBtn), true);
+  // 首帧同步阶段应延后宿主 DOM 遥测扫描（仅在 openRafId 首帧后补扫）
+  assert.equal(telemetryDomQueries, 0, 'Synchronous open() must defer host DOM telemetry scan until post-first-frame rAF');
+
+  const rootEl = env.document.getElementById('ag-prism-periodic-picker-root');
+  const stageEl = rootEl.querySelector('.ag-pp-stage');
+  const canvas1 = rootEl.querySelector('.ag-pp-gl-canvas');
+  const styleEl = env.document.getElementById('ag-prism-periodic-picker-css');
+  assert.equal(rootEl.getAttribute('data-gl-stage'), '1', 'GL/Canvas picker must mark data-gl-stage="1"');
+  assert.ok(
+    styleEl.textContent.includes('#ag-prism-periodic-picker-root[data-gl-stage="1"] .ag-pp-hit-layer .ag-pp-hit-btn{pointer-events:none !important;}'),
+    '3D/Canvas stage must disable pointer-events on 100+ overlay hit buttons'
+  );
+  // 验证键盘无障碍焦点属性完好：可用键仍可 Tab 聚焦
+  const carbonKeyBtn = rootEl.querySelector('button[data-z="6"]');
+  assert.equal(carbonKeyBtn.getAttribute('tabindex'), null, 'Available keycap button must stay keyboard focusable');
+
+  // 首帧 rAF 后补扫遥测生效
+  env.flushRaf();
+  assert.ok(telemetryDomQueries >= 1, 'Post-first-frame rAF must hydrate host DOM telemetry');
+  const telePod = rootEl.querySelector('[data-testid="ag-pp-bento-telemetry-pod"]');
+  assert.ok(telePod.textContent.includes('159K') || telePod.textContent.includes('31.0%'), 'Deferred telemetry must populate MOD-02');
+
+  // 2) 容器事件冒泡防火墙：pointerover/pointerout/mouseover/mouseout/pointermove 绝不泄漏到宿主
+  hostBubbleHits = 0;
+  for (const evType of ['pointerover', 'pointerout', 'mouseover', 'mouseout', 'pointermove']) {
+    canvas1.dispatchEvent(env.createEventObj(evType, { clientX: 500, clientY: 320, relatedTarget: stageEl }));
+  }
+  assert.equal(hostBubbleHits, 0, 'High-frequency pointer/hover events inside picker root must never bubble to host');
+
+  // 3) 跨键帽 hoverOnly 扫键：0 次宿主 DOM 遥测扫描 + 0 个高频光标变量写到 rootEl
+  const fixedStageRect = { left: 320, top: 240, width: 760, height: 340, right: 1080, bottom: 580 };
+  rootEl.getBoundingClientRect = () => ({ left: 0, top: 230, width: 1280, height: 360, right: 1280, bottom: 590 });
+  stageEl.getBoundingClientRect = () => fixedStageRect;
+  canvas1.getBoundingClientRect = () => fixedStageRect;
+  env.window.dispatchEvent(env.createEventObj('resize'));
+  for (let i = 0; i < 60 && env.getCounts().activeRafs > 0; i += 1) {
+    env.advanceTime(16);
+    env.flushRaf();
+  }
+
+  const proj = inst.getProjectedRects();
+  const keyH = proj.keys.find((k) => k.z === 1);
+  const keyC = proj.keys.find((k) => k.z === 6);
+  const keyNe = proj.keys.find((k) => k.z === 10);
+  const keyAu = proj.keys.find((k) => k.z === 79);
+
+  telemetryDomQueries = 0;
+  for (const pt of [keyH, keyC, keyNe, keyAu, keyH, keyNe]) {
+    rootEl.dispatchEvent(
+      env.createEventObj('pointermove', { clientX: fixedStageRect.left + pt.cx, clientY: fixedStageRect.top + pt.cy }, canvas1)
+    );
+    env.flushRaf();
+  }
+  assert.equal(telemetryDomQueries, 0, 'Cross-keycap hoverOnly sweep must perform strictly 0 host DOM telemetry queries');
+  for (const rootVar of ['--ag-pp-px', '--ag-pp-py', '--ag-pp-card-px', '--ag-pp-card-py', '--ag-pp-right-px', '--ag-pp-right-py', '--ag-pp-dock-rim-alpha', '--ag-pp-card-rim-alpha', '--ag-pp-right-rim-alpha']) {
+    assert.equal(rootEl.style.getPropertyValue(rootVar), '', `Root container must never receive ${rootVar}`);
+  }
+
+  // 4) 热开离屏 DOM 壳复用 + 替换全新 <canvas> + close() 零残留 + hidden 立即释放
+  inst.close();
+  assert.equal(env.document.getElementById('ag-prism-periodic-picker-root'), null, 'Closed picker must detach root from DOM');
+  assert.equal(inst.open(triggerBtn), true);
+  const rootEl2 = env.document.getElementById('ag-prism-periodic-picker-root');
+  const canvas2 = rootEl2.querySelector('.ag-pp-gl-canvas');
+  assert.equal(rootEl2, rootEl, 'Warm reopen must reuse cached detached DOM shell (0 501-node rebuild)');
+  assert.notEqual(canvas2, canvas1, 'Warm reopen must swap in a fresh <canvas> to avoid lost WebGL context');
+
+  inst.close();
+  env.document.visibilityState = 'hidden';
+  env.document.dispatchEvent(env.createEventObj('visibilitychange'));
+  env.document.visibilityState = 'visible';
+  env.document.dispatchEvent(env.createEventObj('visibilitychange'));
+  assert.equal(inst.open(triggerBtn), true);
+  const rootEl3 = env.document.getElementById('ag-prism-periodic-picker-root');
+  assert.notEqual(rootEl3, rootEl, 'visibilitychange(hidden) must evict detached shell cache');
+
+  // 5) 背景模块 data-ag-pp-open="1" 真 0fps 休眠静态/行为核验
+  const hostI18nMod = require(HOST_I18N_FILE);
+  const hoverHostBtn = env.makeElement('button', { text: 'Settings', useChildNodes: true });
+  hoverHostBtn.appendChild(env.createTextNode('Settings'));
+  env.body.appendChild(hoverHostBtn);
+  const i18nInst = hostI18nMod.mountHostI18n({
+    root: env.window,
+    doc: env.document,
+    mode: 'on',
+    dict: { exact: { Settings: '设置' }, patterns: [] },
+  });
+  // 打开态（data-ag-pp-open="1"）下 pointerenter 触发 hoverHandler 应直接休眠早退
+  env.document.dispatchEvent(env.createEventObj('pointerenter', {}, hoverHostBtn));
+  assert.equal(hoverHostBtn.textContent, 'Settings', 'host-i18n hoverHandler must short-circuit while data-ag-pp-open="1"');
+  i18nInst.destroy();
+
+  const checkSleepFiles = [
+    ['ui-runtime.js', "ga(de(), 'data-ag-pp-open') === '1'"],
+    ['prism-rim-canvas.js', "'data-ag-pp-open'"],
+    ['dual-mascot-rig.js', "const PP_OPEN = 'data-ag-pp-open'"],
+    ['vendor/wallpaper/wallpaper-client.js', "html.getAttribute('data-ag-pp-open') === '1'"],
+    ['conv-aura.js', "const PP_OPEN = 'data-ag-pp-open'"],
+    ['home-ripple-host.js', "const PP_OPEN = 'data-ag-pp-open'"],
+    ['style.css', ':is([data-ag-cs-win-blur="1"],[data-ag-pp-open="1"])'],
+  ];
+  for (const [relFile, needle] of checkSleepFiles) {
+    const content = fs.readFileSync(path.join(ROOT_DIR, relFile), 'utf8');
+    assert.ok(content.includes(needle), `${relFile} must integrate data-ag-pp-open="1" 0fps sleep guard`);
+  }
+  const styleCssSrc = fs.readFileSync(path.join(ROOT_DIR, 'style.css'), 'utf8');
+  assert.equal(/^[^&]*:has\(/m.test(styleCssSrc), false, 'style.css must never introduce top-level :has()');
 
   inst.destroy();
   const counts = env.getCounts();

@@ -518,7 +518,8 @@
      * Read real-time 512K context telemetry strictly from window.__agPrismTelemetry or live DOM nodes.
      * Never synthesizes fake token counts, KV cache rates, or wave arrays when telemetry is disabled or offline.
      */
-    function readHostContextTelemetry(doc, rt) {
+    function readHostContextTelemetry(doc, rt, opts) {
+      var skipDomScan = Boolean(opts && opts.skipDomScan);
       try {
         var de = doc && doc.documentElement;
         if (de && typeof de.getAttribute === 'function' && de.getAttribute('data-ag-cs-telemetry') === 'off') {
@@ -586,7 +587,7 @@
         }
       } catch (e2) {}
 
-      if (!Number.isFinite(usedTokens) && doc) {
+      if (!Number.isFinite(usedTokens) && doc && !skipDomScan) {
         try {
           var tokNode = queryTelemetryDomNode(doc, [
             '[data-testid="context-tokens"]',
@@ -630,7 +631,9 @@
       }
 
       if (!Number.isFinite(usedTokens) || usedTokens < 0) {
-        return buildOfflineTelemetryResult('offline');
+        var offRes = buildOfflineTelemetryResult('offline');
+        if (skipDomScan) offRes.domScanDeferred = true;
+        return offRes;
       }
 
       if (!Number.isFinite(maxTokens) || maxTokens <= 0) {

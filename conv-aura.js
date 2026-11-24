@@ -342,9 +342,11 @@
     let externalErrorPending = false;
     let wb = false;
     const WB = 'data-ag-cs-win-blur';
+    const PP_OPEN = 'data-ag-pp-open';
     const isAB = () => typeof document !== 'undefined' && document.documentElement?.getAttribute?.(WB) === '1';
+    const isPpOpen = () => typeof document !== 'undefined' && document.documentElement?.getAttribute?.(PP_OPEN) === '1';
     const isH = () => Boolean(typeof document !== 'undefined' && document.hidden);
-    const isP = () => Boolean(isH() || isAB() || wb);
+    const isP = () => Boolean(isH() || isAB() || wb || isPpOpen());
 
     function normAmbientVal(v) {
       if (v === null || v === undefined || v === '') return 1;
@@ -1026,7 +1028,7 @@
       if (typeof MutationObserver === 'function' && document.documentElement) {
         try {
           bMo = new MutationObserver(() => { if (!isAB()) wb = false; onVis(); });
-          bMo.observe(document.documentElement, { attributes: true, attributeFilter: [WB] });
+          bMo.observe(document.documentElement, { attributes: true, attributeFilter: [WB, PP_OPEN] });
         } catch {}
       }
       state.uW = () => {

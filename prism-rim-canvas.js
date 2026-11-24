@@ -181,7 +181,8 @@
     }
 
     const isH = () => Boolean(getDoc()?.hidden);
-    const isWB = () => isH() || getRootHtml()?.getAttribute?.('data-ag-cs-win-blur') === '1';
+    const isPpOpen = () => getRootHtml()?.getAttribute?.('data-ag-pp-open') === '1';
+    const isWB = () => isH() || getRootHtml()?.getAttribute?.('data-ag-cs-win-blur') === '1' || isPpOpen();
     const isDragSuspended = () => {
       const h = getRootHtml();
       return h?.getAttribute?.('data-ag-cs-resizing') === '1' || h?.getAttribute?.('data-ag-cs-mascot-drag') === '1';
@@ -901,6 +902,7 @@
     return {
       onPointerMove,
       cancelPendingRaf,
+      pauseForOverlay: onWinBlur,
       teardown: teardownDynPointerRules,
       markDirty,
       invalidateMetrics,

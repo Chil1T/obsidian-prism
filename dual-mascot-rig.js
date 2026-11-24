@@ -1316,7 +1316,12 @@
     let wb = false;
     const WB = 'data-ag-cs-win-blur';
     const PM = 'data-ag-prism-mode';
+    const PP_OPEN = 'data-ag-pp-open';
     const isDocHidden = () => Boolean(doc && doc.hidden);
+    const isPpOpen = () => {
+      const root = doc && doc.documentElement;
+      return Boolean(root && typeof root.getAttribute === 'function' && root.getAttribute(PP_OPEN) === '1');
+    };
     const isAttrB = () => {
       const root = doc && doc.documentElement;
       if (!root) return false;
@@ -4325,7 +4330,7 @@
       }
       syncHeartbeat();
       if (!theaterTimer && currentTickMs > 0 && !dozing && !reducedMotion) scheduleTheater();
-      if (!isWindowBlurred() && !isHostSleeping()) renderAllFrames(performance.now());
+      if (!isWindowBlurred() && !isHostSleeping() && !isPpOpen()) renderAllFrames(performance.now());
     };
     const onWBlur = () => {
       if (disposed) return;
@@ -4351,10 +4356,12 @@
           if (resizeEnded) onStageResizeReleased();
           const hasPowerMut =
             !Array.isArray(records) ||
-            records.some((r) => !r || !r.attributeName || r.attributeName === WB || r.attributeName === PM);
+            records.some(
+              (r) => !r || !r.attributeName || r.attributeName === WB || r.attributeName === PM || r.attributeName === PP_OPEN
+            );
           if (hasPowerMut) syncPwr();
         });
-        mo.observe(doc.documentElement, { attributes: true, attributeFilter: [WB, PM, RESIZE_ATTR] });
+        mo.observe(doc.documentElement, { attributes: true, attributeFilter: [WB, PM, PP_OPEN, RESIZE_ATTR] });
         cleanups.push(() => mo.disconnect());
       } catch (_) {}
     }
@@ -4372,6 +4379,7 @@
         parked ||
         isDocHidden() ||
         isHostSleeping() ||
+        isPpOpen() ||
         (isWindowBlurred() && (dozing || !inTrans())) ||
         (reducedMotion && !inTrans())
       ) {
@@ -4394,6 +4402,7 @@
         parked ||
         isDocHidden() ||
         isHostSleeping() ||
+        isPpOpen() ||
         (isWindowBlurred() && (dozing || !inTrans())) ||
         (reducedMotion && !inTrans())
       ) {

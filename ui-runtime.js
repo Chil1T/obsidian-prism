@@ -2535,6 +2535,7 @@
   }
   const onWinPointerMove = (ev) => {
     try {
+      if (ga(de(), 'data-ag-pp-open') === '1') return;
       wakeWinBlur();
       if (isDragSuspendedRoot()) return;
       prismRimCtl.onPointerMove(ev);
@@ -2833,6 +2834,9 @@
           const tgt = m.target;
           if (tgt === D.body || tgt === de()) {
             if (m.attributeName === 'data-ag-pp-open') {
+              if (ga(de(), 'data-ag-pp-open') === '1') {
+                try { prismRimCtl.pauseForOverlay?.(); } catch {}
+              }
               dirtyFlags.c = anyRelevant = true;
               continue;
             }

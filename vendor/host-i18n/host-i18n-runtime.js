@@ -2066,9 +2066,14 @@
       return Boolean(doc && doc.documentElement && getAttr(doc.documentElement, 'data-ag-cs-win-blur') === '1');
     }
 
+    // 元素周期表 3D 键盘打开期间进入休眠，避免高频扫键触发宿主 i18n 扫描与 hover 拦截
+    function isPeriodicPickerOpen() {
+      return Boolean(doc && doc.documentElement && getAttr(doc.documentElement, 'data-ag-pp-open') === '1');
+    }
+
     function isPaused() {
       var hidden = Boolean(doc && doc.hidden === true);
-      return hidden || pausedByWindowBlur || isWinBlurAttrSet();
+      return hidden || pausedByWindowBlur || isWinBlurAttrSet() || isPeriodicPickerOpen();
     }
 
     function setRootStatusAttr(val) {
@@ -3690,14 +3695,18 @@
         try {
           winBlurObserver = new MutationObserverClass(function (muts) {
             if (!state.active || state.destroyed) return;
-            var sawBlurAttr = false;
+            var sawPauseAttr = false;
             for (var wi = 0; wi < muts.length; wi++) {
-              if (muts[wi].type === 'attributes' && (!muts[wi].attributeName || muts[wi].attributeName === 'data-ag-cs-win-blur')) {
-                sawBlurAttr = true;
+              var attrName = muts[wi].attributeName;
+              if (
+                muts[wi].type === 'attributes' &&
+                (!attrName || attrName === 'data-ag-cs-win-blur' || attrName === 'data-ag-pp-open')
+              ) {
+                sawPauseAttr = true;
                 break;
               }
             }
-            if (!sawBlurAttr) return;
+            if (!sawPauseAttr) return;
             if (isPaused()) {
               enterHibernation();
             } else if (hibernating) {
@@ -3706,7 +3715,7 @@
           });
           winBlurObserver.observe(doc.documentElement, {
             attributes: true,
-            attributeFilter: ['data-ag-cs-win-blur'],
+            attributeFilter: ['data-ag-cs-win-blur', 'data-ag-pp-open'],
           });
         } catch (e) {
           winBlurObserver = null;

@@ -470,15 +470,17 @@
       { pitch: -4.5 * DEG2RAD, scaleY: 1.03, yBias: 0.014 }, /* Row 7: R4 锕系 */
     ];
 
-    /* 第 3~12 族（Col 3..12, Row 1..3）圆角 CNC 斜切内凹边框 2.5D 熏黑蓝宝石 OLED 屏（1600x480） */
+    /* 第 3~12 族（Col 3..12, Row 1..3）圆角 CNC 斜切内凹边框 2.5D 熏黑蓝宝石 OLED 屏（逻辑 1600x480 -> 物理 800x240，3× 超采且上传体积 -75%） */
     var DECK_X_MIN = -6.90;
     var DECK_X_MAX = 2.90;
     var DECK_Z_MIN = -3.02;
     var DECK_Z_MAX = -0.14;
     var DECK_CORNER_R = 0.16;
     var DECK_GLASS_Y = 0.125;
-    var OLED_WIDTH = 1600;
-    var OLED_HEIGHT = 480;
+    var OLED_DESIGN_WIDTH = 1600;
+    var OLED_DESIGN_HEIGHT = 480;
+    var OLED_WIDTH = 800;
+    var OLED_HEIGHT = 240;
 
     /* 71.5° 高俯视略露前侧楔形折角满画幅相机（自动适配单主盘、全屏双盘或横向紧凑三联底坞视觉中心） */
     var CAM_FOV_Y = 18.0 * DEG2RAD;
@@ -487,9 +489,9 @@
     var CAM_TARGET_SUITE = [1.34, -0.05, 0.38];
     var CAM_TARGET_SUITE_DRAWER = [1.39, -0.06, 0.39];
 
-    /* 2048/1024 动态分级实时阴影贴图与戏剧化左前上斜侧顶摄影棚主光 normalize([-0.46, 0.74, 0.49]) */
-    var SHADOW_MAP_SIZE = 2048;
-    var SHADOW_MAP_SIZE_ULTRA = 2048;
+    /* 1024×1024 实时阴影贴图（像素量 -75%，仍是主画布 ~2.8× 超采，配合 6-tap IGN Vogel 柔和细腻）与左前上斜侧顶主光 */
+    var SHADOW_MAP_SIZE = 1024;
+    var SHADOW_MAP_SIZE_ULTRA = 1024;
     var SHADOW_MAP_SIZE_REDUCED = 1024;
     var MAIN_LIGHT_DIR = (function () {
       var lx = -0.46, ly = 0.74, lz = 0.49;
@@ -995,23 +997,35 @@
       return v < lo ? lo : v > hi ? hi : v;
     }
 
+    /* Zero-GC 十六进制色值只读缓存（封顶 256 条），消除 96 键逐帧正则解析与临时 RGB 数组分配 */
+    var _hexRgbCache = new Map();
+    var _HEX_FALLBACK_RGB = [0.23, 0.60, 0.88];
     function hexToRgb01(hex, fallback) {
       var s = String(hex || '').trim();
+      var cached = _hexRgbCache.get(s);
+      if (cached !== undefined) {
+        return cached || fallback || _HEX_FALLBACK_RGB;
+      }
+      var rgb = null;
       var m3 = /^#([0-9a-f]{3})$/i.exec(s);
       if (m3) {
         var h3 = m3[1];
-        return [
+        rgb = [
           parseInt(h3[0] + h3[0], 16) / 255,
           parseInt(h3[1] + h3[1], 16) / 255,
           parseInt(h3[2] + h3[2], 16) / 255,
         ];
+      } else {
+        var m6 = /^#([0-9a-f]{6})$/i.exec(s);
+        if (m6) {
+          var n = parseInt(m6[1], 16);
+          rgb = [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+        }
       }
-      var m6 = /^#([0-9a-f]{6})$/i.exec(s);
-      if (m6) {
-        var n = parseInt(m6[1], 16);
-        return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+      if (_hexRgbCache.size < 256) {
+        _hexRgbCache.set(s, rgb);
       }
-      return fallback || [0.23, 0.60, 0.88];
+      return rgb || fallback || _HEX_FALLBACK_RGB;
     }
 
     function rgb01ToCss(rgb, alpha) {
@@ -1195,22 +1209,27 @@
       return out;
     }
 
-    function transformPoint4(m, x, y, z, w) {
+    /* 支持可选 out 预分配 Float32Array 复用写入，零 GC 分配并保持未传 out 时向后兼容 */
+    function transformPoint4(m, x, y, z, w, out) {
       var ww = w === undefined ? 1.0 : w;
-      return [
-        m[0] * x + m[4] * y + m[8] * z + m[12] * ww,
-        m[1] * x + m[5] * y + m[9] * z + m[13] * ww,
-        m[2] * x + m[6] * y + m[10] * z + m[14] * ww,
-        m[3] * x + m[7] * y + m[11] * z + m[15] * ww,
-      ];
+      var dst = out || [0, 0, 0, 0];
+      dst[0] = m[0] * x + m[4] * y + m[8] * z + m[12] * ww;
+      dst[1] = m[1] * x + m[5] * y + m[9] * z + m[13] * ww;
+      dst[2] = m[2] * x + m[6] * y + m[10] * z + m[14] * ww;
+      dst[3] = m[3] * x + m[7] * y + m[11] * z + m[15] * ww;
+      return dst;
     }
 
-    function transformDir3(m, dx, dy, dz) {
+    function transformDir3(m, dx, dy, dz, out) {
       var rx = m[0] * dx + m[4] * dy + m[8] * dz;
       var ry = m[1] * dx + m[5] * dy + m[9] * dz;
       var rz = m[2] * dx + m[6] * dy + m[10] * dz;
       var len = Math.hypot(rx, ry, rz) || 1;
-      return [rx / len, ry / len, rz / len];
+      var dst = out || [0, 0, 0];
+      dst[0] = rx / len;
+      dst[1] = ry / len;
+      dst[2] = rz / len;
+      return dst;
     }
 
     function intersectRayAABB(ox, oy, oz, dx, dy, dz, minX, minY, minZ, maxX, maxY, maxZ) {
@@ -1629,7 +1648,8 @@
         emitCapQuad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], -1, 0, 0, flag);
       }
 
-      var SEG_CORNER = 10;
+      /* 轻量化高精度外观分段：每角 6 段 G2 超椭圆（24 段周长）+ 10×10 圆柱微凹指肚顶面 = 440 tris/键（-71.5%），视觉零折角 */
+      var SEG_CORNER = 6;
       var RING_COUNT = SEG_CORNER * 4;
 
       function sampleCapRing(halfW, halfD, radius, zShift) {
@@ -1648,11 +1668,10 @@
       var topZShift = -0.013;
       var topCornerR = 0.068;
 
-      /* GMK / Cherry 干净利落四斜面梯形侧壁 + 极窄微圆角肩棱过渡环（侧壁平直受光分明，零塑料肥边） */
+      /* GMK / Cherry 干净利落四斜面梯形侧壁 + 极窄微圆角肩棱过渡环（精简中段冗余环，100% 保留外轮廓与肩棱受光） */
       var profileRings = [
         { hw: CAP_BASE_HALF, hd: CAP_BASE_HALF, r: 0.064, y: 0.000, zS: 0.000, ny: 0.19, flag: 0.0 },
-        { hw: 0.428, hd: 0.427, r: 0.066, y: 0.185, zS: -0.004, ny: 0.195, flag: 0.0 },
-        { hw: 0.396, hd: 0.394, r: 0.068, y: 0.375, zS: -0.009, ny: 0.20, flag: 0.0 },
+        { hw: 0.414, hd: 0.413, r: 0.067, y: 0.265, zS: -0.006, ny: 0.198, flag: 0.0 },
         { hw: 0.370, hd: 0.367, r: 0.069, y: 0.525, zS: -0.012, ny: 0.22, flag: 0.0 },
         { hw: 0.362, hd: 0.359, r: 0.069, y: 0.556, zS: -0.0128, ny: 0.46, flag: 0.5 },
         { hw: 0.357, hd: 0.354, r: 0.068, y: 0.571, zS: -0.0130, ny: 0.72, flag: 0.5 },
@@ -1688,7 +1707,7 @@
         }
       }
 
-      var DISH_GRID = 16;
+      var DISH_GRID = 10;
       var dishStart = positions.length / 3;
 
       function clampToRoundedTop(ux, uz) {
@@ -1744,8 +1763,11 @@
         }
       }
 
+      /* 段 0 结束：全部 96 颗键帽仅需绘制轻量高质量外壳（440 tris/键），彻底剔除 95 颗落地键不可见底腔废面 */
+      var outerIndexCount = indices.length;
+
       /* ======================================================================
-       * 真实微距底腔内构：
+       * 段 1（仅对 1 颗浮空磁悬浮键按需绘制，复用同一 keycapVao 零新增 VAO）：
        * 1) 精确 0.065U 厚壁外裙底端面（hw: 0.460 -> 0.395, y = 0.0）
        * 2) 深凹双阶梯形内腔壁（y = 0.0 -> 0.064 台阶 -> 0.276 深腔顶）+ 四向微距加强筋
        * 3) 正中央凸出圆柱形 [+] 十字菊花套筒母座（Cross Stem Mount, r = 0.122, 含深凹十字插孔）
@@ -1833,8 +1855,8 @@
       emitCapSubBox(-ribHalfT, ribY0, 0.116, ribHalfT, ribY1, 0.336, 0.38, true, false);
       emitCapSubBox(-ribHalfT, ribY0, -0.336, ribHalfT, ribY1, -0.116, 0.38, true, false);
 
-      /* (f) 正中央凸出圆柱形十字菊花套筒母座（16 段圆柱筒 + 底端护环 + 立体深凹 [+] 十字母口） */
-      var bossSegs = 16;
+      /* (f) 正中央凸出圆柱形十字菊花套筒母座（12 段圆柱筒 + 底端护环 + 立体深凹 [+] 十字母口） */
+      var bossSegs = 12;
       var bossOuterR = 0.122;
       var bossInnerR = 0.084;
       var bossBotY = 0.012;
@@ -1907,6 +1929,8 @@
         partFlags: new Float32Array(partFlags),
         indices: new Uint16Array(indices),
         indexCount: indices.length,
+        outerIndexCount: outerIndexCount,
+        cavityIndexCount: indices.length - outerIndexCount,
       };
       return _cachedSculptedKeycapGeom;
     }
@@ -2314,6 +2338,143 @@
         laserInkCol, matLaserEtch
       );
 
+      /* 2E. 主盘底壳永不变形的 PVD 镜面棱镜大配重铭牌 + 前后二段式楔形折翼（由动态 widgetsGpu 迁入静态 chassisGpu，消除每帧重复构建与上传） */
+      var matPvdFacet = palette.isLight ? [0.065, 0.98, 0.0, 1] : [0.090, 0.95, 0.0, 1];
+      var matPvdCrown = palette.isLight ? [0.080, 0.97, 0.0, 1] : [0.090, 0.95, 0.0, 1];
+      var bwBodyCol = hexToRgb01(palette.backWeightBody || palette.caseChamfer);
+      var bwRimCol = hexToRgb01(palette.backWeightRim || palette.caseChamfer);
+      var bwBevelSouth = mixRgb(bwBodyCol, bwRimCol, 0.64);
+      var bwBevelNorth = shadeRgb(bwBodyCol, palette.isLight ? 0.88 : 0.78);
+      var bwBevelLeft = mixRgb(bwBodyCol, bwRimCol, 0.72);
+      var bwBevelRight = shadeRgb(bwBodyCol, palette.isLight ? 0.84 : 0.72);
+
+      var bwx0 = -4.82, bwx1 = 4.82;
+      var bwz0 = -2.14, bwz1 = 2.74;
+      var bwBev = 0.15;
+      var bix0 = bwx0 + bwBev, bix1 = bwx1 - bwBev;
+      var biz0 = bwz0 + bwBev, biz1 = bwz1 - bwBev;
+      var bySeat = CASE_Y_BOT + 0.018;
+      var byEdge = CASE_Y_BOT - 0.014;
+      var byApex = CASE_Y_BOT - 0.032;
+      var bcz = (bwz0 + bwz1) * 0.5;
+
+      mb.addQuad(
+        [bwx0, bySeat, bwz1], [bix0, byEdge, biz1], [bix1, byEdge, biz1], [bwx1, bySeat, bwz1],
+        [0.0, -0.71, 0.70], bwBevelSouth, matPvdFacet,
+        [0.96, 0.00], [0.96, 0.08], [0.96, 0.25], [0.96, 0.30]
+      );
+      mb.addQuad(
+        [bwx1, bySeat, bwz0], [bix1, byEdge, biz0], [bix0, byEdge, biz0], [bwx0, bySeat, bwz0],
+        [0.0, -0.71, -0.70], bwBevelNorth, matPvdFacet,
+        [0.96, 0.50], [0.96, 0.58], [0.96, 0.75], [0.96, 0.80]
+      );
+      mb.addQuad(
+        [bwx0, bySeat, bwz0], [bix0, byEdge, biz0], [bix0, byEdge, biz1], [bwx0, bySeat, bwz1],
+        [-0.70, -0.71, 0.0], bwBevelLeft, matPvdFacet,
+        [0.96, 0.80], [0.96, 0.85], [0.96, 0.95], [0.96, 1.00]
+      );
+      mb.addQuad(
+        [bwx1, bySeat, bwz1], [bix1, byEdge, biz1], [bix1, byEdge, biz0], [bwx1, bySeat, bwz0],
+        [0.70, -0.71, 0.0], bwBevelRight, matPvdFacet,
+        [0.96, 0.30], [0.96, 0.35], [0.96, 0.45], [0.96, 0.50]
+      );
+
+      var bwFacetS = mixRgb(bwBodyCol, bwRimCol, 0.26);
+      var bwFacetN = shadeRgb(bwBodyCol, 0.88);
+      var bwFacetW = mixRgb(bwBodyCol, bwRimCol, 0.34);
+      var bwFacetE = shadeRgb(bwBodyCol, 0.82);
+      var bRidgeX0 = -2.15, bRidgeX1 = 2.15;
+      mb.addQuad(
+        [bix0, byEdge, biz1], [bRidgeX0, byApex, bcz], [bRidgeX1, byApex, bcz], [bix1, byEdge, biz1],
+        [0.0, -0.985, 0.17], bwFacetS, matPvdCrown,
+        [0.24, 0.05], [0.58, 0.35], [0.58, 0.65], [0.24, 0.25]
+      );
+      mb.addQuad(
+        [bix1, byEdge, biz0], [bRidgeX1, byApex, bcz], [bRidgeX0, byApex, bcz], [bix0, byEdge, biz0],
+        [0.0, -0.985, -0.17], bwFacetN, matPvdCrown,
+        [0.24, 0.55], [0.58, 0.65], [0.58, 0.35], [0.24, 0.75]
+      );
+      mb.addQuad(
+        [bix0, byEdge, biz0], [bRidgeX0, byApex, bcz], [bRidgeX0, byApex, bcz], [bix0, byEdge, biz1],
+        [-0.17, -0.985, 0.0], bwFacetW, matPvdCrown,
+        [0.24, 0.75], [0.58, 0.35], [0.58, 0.35], [0.24, 0.95]
+      );
+      mb.addQuad(
+        [bix1, byEdge, biz1], [bRidgeX1, byApex, bcz], [bRidgeX1, byApex, bcz], [bix1, byEdge, biz0],
+        [0.17, -0.985, 0.0], bwFacetE, matPvdCrown,
+        [0.24, 0.25], [0.58, 0.65], [0.58, 0.65], [0.24, 0.45]
+      );
+
+      var fwx0 = -3.56, fwx1 = 3.56;
+      var fix0 = fwx0 + 0.12, fix1 = fwx1 - 0.12;
+      var fyBot = -0.855, fzBot = 3.99;
+      var fyTop = -0.355, fzTop = 4.52;
+      var fyInBot = -0.815, fzInBot = 4.08;
+      var fyInTop = -0.402, fzInTop = 4.48;
+      var fyMid = (fyInBot + fyInTop) * 0.5 - 0.012;
+      var fzMid = (fzInBot + fzInTop) * 0.5 + 0.016;
+
+      mb.addQuad(
+        [fwx0, fyBot, fzBot], [fix0, fyInBot, fzInBot], [fix1, fyInBot, fzInBot], [fwx1, fyBot, fzBot],
+        [0.0, -0.85, 0.52], bwBevelNorth, matPvdFacet,
+        [0.95, 0.02], [0.95, 0.08], [0.95, 0.28], [0.95, 0.34]
+      );
+      mb.addQuad(
+        [fix0, fyInTop, fzInTop], [fwx0, fyTop, fzTop], [fwx1, fyTop, fzTop], [fix1, fyInTop, fzInTop],
+        [0.0, -0.36, 0.93], bwBevelSouth, matPvdFacet,
+        [0.95, 0.10], [0.95, 0.16], [0.95, 0.36], [0.95, 0.42]
+      );
+      mb.addQuad(
+        [fwx0, fyTop, fzTop], [fix0, fyInTop, fzInTop], [fix0, fyInBot, fzInBot], [fwx0, fyBot, fzBot],
+        [-0.68, -0.45, 0.58], bwBevelLeft, matPvdFacet,
+        [0.95, 0.82], [0.95, 0.86], [0.95, 0.94], [0.95, 0.98]
+      );
+      mb.addQuad(
+        [fwx1, fyBot, fzBot], [fix1, fyInBot, fzInBot], [fix1, fyInTop, fzInTop], [fwx1, fyTop, fzTop],
+        [0.68, -0.45, 0.58], bwBevelRight, matPvdFacet,
+        [0.95, 0.38], [0.95, 0.42], [0.95, 0.48], [0.95, 0.52]
+      );
+      mb.addQuad(
+        [fix0, fyInBot, fzInBot], [fix0, fyMid, fzMid], [fix1, fyMid, fzMid], [fix1, fyInBot, fzInBot],
+        [0.0, -0.68, 0.73], bwFacetN, matPvdCrown,
+        [0.22, 0.10], [0.58, 0.10], [0.58, 0.40], [0.22, 0.40]
+      );
+      mb.addQuad(
+        [fix0, fyMid, fzMid], [fix0, fyInTop, fzInTop], [fix1, fyInTop, fzInTop], [fix1, fyMid, fzMid],
+        [0.0, -0.54, 0.84], bwFacetS, matPvdCrown,
+        [0.58, 0.10], [0.22, 0.10], [0.22, 0.40], [0.58, 0.40]
+      );
+
+      var ryBot = -0.865, rzBot = -3.37;
+      var ryTop = -0.435, rzTop = -3.79;
+      var ryInBot = -0.825, rzInBot = -3.44;
+      var ryInTop = -0.475, rzInTop = -3.76;
+      mb.addQuad(
+        [fwx1, ryBot, rzBot], [fix1, ryInBot, rzInBot], [fix0, ryInBot, rzInBot], [fwx0, ryBot, rzBot],
+        [0.0, -0.84, -0.54], bwBevelNorth, matPvdFacet,
+        [0.95, 0.52], [0.95, 0.58], [0.95, 0.78], [0.95, 0.84]
+      );
+      mb.addQuad(
+        [fix1, ryInTop, rzInTop], [fwx1, ryTop, rzTop], [fwx0, ryTop, rzTop], [fix0, ryInTop, rzInTop],
+        [0.0, -0.38, -0.92], bwBevelSouth, matPvdFacet,
+        [0.95, 0.60], [0.95, 0.66], [0.95, 0.86], [0.95, 0.92]
+      );
+      mb.addQuad(
+        [fwx0, ryBot, rzBot], [fix0, ryInBot, rzInBot], [fix0, ryInTop, rzInTop], [fwx0, ryTop, rzTop],
+        [-0.68, -0.46, -0.57], bwBevelLeft, matPvdFacet,
+        [0.95, 0.88], [0.95, 0.91], [0.95, 0.96], [0.95, 0.99]
+      );
+      mb.addQuad(
+        [fwx1, ryTop, rzTop], [fix1, ryInTop, rzInTop], [fix1, ryInBot, rzInBot], [fwx1, ryBot, rzBot],
+        [0.68, -0.46, -0.57], bwBevelRight, matPvdFacet,
+        [0.95, 0.42], [0.95, 0.45], [0.95, 0.50], [0.95, 0.54]
+      );
+      mb.addQuad(
+        [fix1, ryInBot, rzInBot], [fix1, ryInTop, rzInTop], [fix0, ryInTop, rzInTop], [fix0, ryInBot, rzInBot],
+        [0.0, -0.62, -0.78], bwFacetS, matPvdCrown,
+        [0.26, 0.55], [0.38, 0.55], [0.38, 0.85], [0.26, 0.85]
+      );
+
       var mainIndexCount = mb.getIndexCount();
 
       /* 3. V11 并排同源真 3D「2×3 非元素模型扩展小键盘（Aux Macro Pad）」Step-Bezel CNC 铝壳合批进同一 chassisGpu VAO */
@@ -2472,6 +2633,59 @@
           AUX_CENTER_X + 0.43, 0.535, CASE_Y_TOP + 0.0032,
           0.102, 0.130, 0.046, 0.024,
           laserInkCol, matLaserEtch
+        );
+
+        /* 3E. 副盘底壳静态镶嵌式 PVD 镜面棱镜小配重铭牌（并入静态 chassisGpu 一次上传复用） */
+        var abx0 = 10.62, abx1 = 11.80;
+        var abz0 = 1.46, abz1 = 3.42;
+        var abBev = 0.09;
+        var abix0 = abx0 + abBev, abix1 = abx1 - abBev;
+        var abiz0 = abz0 + abBev, abiz1 = abz1 - abBev;
+        var abySeat = CASE_Y_BOT + 0.016;
+        var abyEdge = CASE_Y_BOT - 0.012;
+        var abyApex = CASE_Y_BOT - 0.026;
+        var abcx = (abx0 + abx1) * 0.5;
+        var abcz0 = 2.02, abcz1 = 2.86;
+
+        mb.addQuad(
+          [abx0, abySeat, abz1], [abix0, abyEdge, abiz1], [abix1, abyEdge, abiz1], [abx1, abySeat, abz1],
+          [0.0, -0.71, 0.70], bwBevelSouth, matPvdFacet,
+          [0.96, 0.05], [0.96, 0.10], [0.96, 0.25], [0.96, 0.30]
+        );
+        mb.addQuad(
+          [abx1, abySeat, abz0], [abix1, abyEdge, abiz0], [abix0, abyEdge, abiz0], [abx0, abySeat, abz0],
+          [0.0, -0.71, -0.70], bwBevelNorth, matPvdFacet,
+          [0.96, 0.55], [0.96, 0.60], [0.96, 0.75], [0.96, 0.80]
+        );
+        mb.addQuad(
+          [abx0, abySeat, abz0], [abix0, abyEdge, abiz0], [abix0, abyEdge, abiz1], [abx0, abySeat, abz1],
+          [-0.70, -0.71, 0.0], bwBevelLeft, matPvdFacet,
+          [0.96, 0.80], [0.96, 0.85], [0.96, 0.95], [0.96, 1.00]
+        );
+        mb.addQuad(
+          [abx1, abySeat, abz1], [abix1, abyEdge, abiz1], [abix1, abyEdge, abiz0], [abx1, abySeat, abz0],
+          [0.70, -0.71, 0.0], bwBevelRight, matPvdFacet,
+          [0.96, 0.30], [0.96, 0.35], [0.96, 0.45], [0.96, 0.50]
+        );
+        mb.addQuad(
+          [abix0, abyEdge, abiz1], [abcx, abyApex, abcz1], [abcx, abyApex, abcz1], [abix1, abyEdge, abiz1],
+          [0.0, -0.985, 0.17], bwFacetS, matPvdCrown,
+          [0.24, 0.10], [0.58, 0.50], [0.58, 0.50], [0.24, 0.30]
+        );
+        mb.addQuad(
+          [abix1, abyEdge, abiz0], [abcx, abyApex, abcz0], [abcx, abyApex, abcz0], [abix0, abyEdge, abiz0],
+          [0.0, -0.985, -0.17], bwFacetN, matPvdCrown,
+          [0.24, 0.60], [0.58, 0.50], [0.58, 0.50], [0.24, 0.80]
+        );
+        mb.addQuad(
+          [abix0, abyEdge, abiz0], [abcx, abyApex, abcz0], [abcx, abyApex, abcz1], [abix0, abyEdge, abiz1],
+          [-0.17, -0.985, 0.0], bwFacetW, matPvdCrown,
+          [0.24, 0.75], [0.58, 0.35], [0.58, 0.65], [0.24, 0.95]
+        );
+        mb.addQuad(
+          [abix1, abyEdge, abiz1], [abcx, abyApex, abcz1], [abcx, abyApex, abcz0], [abix1, abyEdge, abiz0],
+          [0.17, -0.985, 0.0], bwFacetE, matPvdCrown,
+          [0.24, 0.25], [0.58, 0.65], [0.58, 0.35], [0.24, 0.45]
         );
       }
 
@@ -3214,213 +3428,19 @@
       var energyPulse = params.energyPulse || 0;
       var hwCtrl = params.hwCtrl || null;
 
-      var matPvdFacet = palette.isLight ? [0.065, 0.98, 0.0, 1] : [0.090, 0.95, 0.0, 1];
-      var matPvdCrown = palette.isLight ? [0.080, 0.97, 0.0, 1] : [0.090, 0.95, 0.0, 1];
-
-      /* 1. 左 1U 金属棱镜个性键 + 右 5U PVD 硬件控制铭牌舱（严丝合缝填满第 1 行左右缺口） */
+      /* 1. 左 1U 金属棱镜个性键 + 右 5U PVD 硬件控制铭牌舱（静态主/副盘底壳 PVD 配重已拆入静态 chassisGpu，仅保留纯动态组件） */
       buildArtisanPrismKeyMesh(mb, palette, hwCtrl, ambientMul);
       buildHardwareControlDeckMesh(mb, palette, hwCtrl, ambientMul);
 
-      /* 2A. 底部中央大面积镶嵌式 PVD 镜面棱镜大配重铭牌（Mirror Prism Backplate Weight，带钻石斜切边框与四向棱镜脊面） */
-      var bwBodyCol = hexToRgb01(palette.backWeightBody || palette.caseChamfer);
-      var bwRimCol = hexToRgb01(palette.backWeightRim || palette.caseChamfer);
-      var bwBevelSouth = mixRgb(bwBodyCol, bwRimCol, 0.64);
-      var bwBevelNorth = shadeRgb(bwBodyCol, palette.isLight ? 0.88 : 0.78);
-      var bwBevelLeft = mixRgb(bwBodyCol, bwRimCol, 0.72);
-      var bwBevelRight = shadeRgb(bwBodyCol, palette.isLight ? 0.84 : 0.72);
-
-      var bwx0 = -4.82, bwx1 = 4.82;
-      var bwz0 = -2.14, bwz1 = 2.74;
-      var bwBev = 0.15;
-      var bix0 = bwx0 + bwBev, bix1 = bwx1 - bwBev;
-      var biz0 = bwz0 + bwBev, biz1 = bwz1 - bwBev;
-      var bySeat = CASE_Y_BOT + 0.018;
-      var byEdge = CASE_Y_BOT - 0.014;
-      var byApex = CASE_Y_BOT - 0.032;
-      var bcz = (bwz0 + bwz1) * 0.5;
-
-      /* 大配重四周 45° 钻石斜切边框（CCW 正面朝外下，chamferMask = 0.96） */
-      mb.addQuad(
-        [bwx0, bySeat, bwz1], [bix0, byEdge, biz1], [bix1, byEdge, biz1], [bwx1, bySeat, bwz1],
-        [0.0, -0.71, 0.70], bwBevelSouth, matPvdFacet,
-        [0.96, 0.00], [0.96, 0.08], [0.96, 0.25], [0.96, 0.30]
-      );
-      mb.addQuad(
-        [bwx1, bySeat, bwz0], [bix1, byEdge, biz0], [bix0, byEdge, biz0], [bwx0, bySeat, bwz0],
-        [0.0, -0.71, -0.70], bwBevelNorth, matPvdFacet,
-        [0.96, 0.50], [0.96, 0.58], [0.96, 0.75], [0.96, 0.80]
-      );
-      mb.addQuad(
-        [bwx0, bySeat, bwz0], [bix0, byEdge, biz0], [bix0, byEdge, biz1], [bwx0, bySeat, bwz1],
-        [-0.70, -0.71, 0.0], bwBevelLeft, matPvdFacet,
-        [0.96, 0.80], [0.96, 0.85], [0.96, 0.95], [0.96, 1.00]
-      );
-      mb.addQuad(
-        [bwx1, bySeat, bwz1], [bix1, byEdge, biz1], [bix1, byEdge, biz0], [bwx1, bySeat, bwz0],
-        [0.70, -0.71, 0.0], bwBevelRight, matPvdFacet,
-        [0.96, 0.30], [0.96, 0.35], [0.96, 0.45], [0.96, 0.50]
-      );
-
-      /* 大配重中央四坡 Hip-Roof 棱镜折面镜面冠（零退化梯形四折面，CCW 严格朝外下） */
-      var bwFacetS = mixRgb(bwBodyCol, bwRimCol, 0.26);
-      var bwFacetN = shadeRgb(bwBodyCol, 0.88);
-      var bwFacetW = mixRgb(bwBodyCol, bwRimCol, 0.34);
-      var bwFacetE = shadeRgb(bwBodyCol, 0.82);
-      var bRidgeX0 = -2.15, bRidgeX1 = 2.15;
-      mb.addQuad(
-        [bix0, byEdge, biz1], [bRidgeX0, byApex, bcz], [bRidgeX1, byApex, bcz], [bix1, byEdge, biz1],
-        [0.0, -0.985, 0.17], bwFacetS, matPvdCrown,
-        [0.24, 0.05], [0.58, 0.35], [0.58, 0.65], [0.24, 0.25]
-      );
-      mb.addQuad(
-        [bix1, byEdge, biz0], [bRidgeX1, byApex, bcz], [bRidgeX0, byApex, bcz], [bix0, byEdge, biz0],
-        [0.0, -0.985, -0.17], bwFacetN, matPvdCrown,
-        [0.24, 0.55], [0.58, 0.65], [0.58, 0.35], [0.24, 0.75]
-      );
-      mb.addQuad(
-        [bix0, byEdge, biz0], [bRidgeX0, byApex, bcz], [bRidgeX0, byApex, bcz], [bix0, byEdge, biz1],
-        [-0.17, -0.985, 0.0], bwFacetW, matPvdCrown,
-        [0.24, 0.75], [0.58, 0.35], [0.58, 0.35], [0.24, 0.95]
-      );
-      mb.addQuad(
-        [bix1, byEdge, biz1], [bRidgeX1, byApex, bcz], [bRidgeX1, byApex, bcz], [bix1, byEdge, biz0],
-        [0.17, -0.985, 0.0], bwFacetE, matPvdCrown,
-        [0.24, 0.25], [0.58, 0.65], [0.58, 0.65], [0.24, 0.45]
-      );
-
-      /* 2B. 前后二段式内收楔形底壳镶嵌镜面棱镜背配重折翼（对齐加厚后的 [-3.86, 4.62] 底壳斜面） */
-      var fwx0 = -3.56, fwx1 = 3.56;
-      var fix0 = fwx0 + 0.12, fix1 = fwx1 - 0.12;
-      var fyBot = -0.855, fzBot = 3.99;
-      var fyTop = -0.355, fzTop = 4.52;
-      var fyInBot = -0.815, fzInBot = 4.08;
-      var fyInTop = -0.402, fzInTop = 4.48;
-      var fyMid = (fyInBot + fyInTop) * 0.5 - 0.012;
-      var fzMid = (fzInBot + fzInTop) * 0.5 + 0.016;
-
-      mb.addQuad(
-        [fwx0, fyBot, fzBot], [fix0, fyInBot, fzInBot], [fix1, fyInBot, fzInBot], [fwx1, fyBot, fzBot],
-        [0.0, -0.85, 0.52], bwBevelNorth, matPvdFacet,
-        [0.95, 0.02], [0.95, 0.08], [0.95, 0.28], [0.95, 0.34]
-      );
-      mb.addQuad(
-        [fix0, fyInTop, fzInTop], [fwx0, fyTop, fzTop], [fwx1, fyTop, fzTop], [fix1, fyInTop, fzInTop],
-        [0.0, -0.36, 0.93], bwBevelSouth, matPvdFacet,
-        [0.95, 0.10], [0.95, 0.16], [0.95, 0.36], [0.95, 0.42]
-      );
-      mb.addQuad(
-        [fwx0, fyTop, fzTop], [fix0, fyInTop, fzInTop], [fix0, fyInBot, fzInBot], [fwx0, fyBot, fzBot],
-        [-0.68, -0.45, 0.58], bwBevelLeft, matPvdFacet,
-        [0.95, 0.82], [0.95, 0.86], [0.95, 0.94], [0.95, 0.98]
-      );
-      mb.addQuad(
-        [fwx1, fyBot, fzBot], [fix1, fyInBot, fzInBot], [fix1, fyInTop, fzInTop], [fwx1, fyTop, fzTop],
-        [0.68, -0.45, 0.58], bwBevelRight, matPvdFacet,
-        [0.95, 0.38], [0.95, 0.42], [0.95, 0.48], [0.95, 0.52]
-      );
-      mb.addQuad(
-        [fix0, fyInBot, fzInBot], [fix0, fyMid, fzMid], [fix1, fyMid, fzMid], [fix1, fyInBot, fzInBot],
-        [0.0, -0.68, 0.73], bwFacetN, matPvdCrown,
-        [0.22, 0.10], [0.58, 0.10], [0.58, 0.40], [0.22, 0.40]
-      );
-      mb.addQuad(
-        [fix0, fyMid, fzMid], [fix0, fyInTop, fzInTop], [fix1, fyInTop, fzInTop], [fix1, fyMid, fzMid],
-        [0.0, -0.54, 0.84], bwFacetS, matPvdCrown,
-        [0.58, 0.10], [0.22, 0.10], [0.22, 0.40], [0.58, 0.40]
-      );
-
-      /* 后下楔形斜坡镶嵌镜面棱镜折翼（法线朝后下 [0, -0.64, -0.77]） */
-      var ryBot = -0.865, rzBot = -3.37;
-      var ryTop = -0.435, rzTop = -3.79;
-      var ryInBot = -0.825, rzInBot = -3.44;
-      var ryInTop = -0.475, rzInTop = -3.76;
-      mb.addQuad(
-        [fwx1, ryBot, rzBot], [fix1, ryInBot, rzInBot], [fix0, ryInBot, rzInBot], [fwx0, ryBot, rzBot],
-        [0.0, -0.84, -0.54], bwBevelNorth, matPvdFacet,
-        [0.95, 0.52], [0.95, 0.58], [0.95, 0.78], [0.95, 0.84]
-      );
-      mb.addQuad(
-        [fix1, ryInTop, rzInTop], [fwx1, ryTop, rzTop], [fwx0, ryTop, rzTop], [fix0, ryInTop, rzInTop],
-        [0.0, -0.38, -0.92], bwBevelSouth, matPvdFacet,
-        [0.95, 0.60], [0.95, 0.66], [0.95, 0.86], [0.95, 0.92]
-      );
-      mb.addQuad(
-        [fwx0, ryBot, rzBot], [fix0, ryInBot, rzInBot], [fix0, ryInTop, rzInTop], [fwx0, ryTop, rzTop],
-        [-0.68, -0.46, -0.57], bwBevelLeft, matPvdFacet,
-        [0.95, 0.88], [0.95, 0.91], [0.95, 0.96], [0.95, 0.99]
-      );
-      mb.addQuad(
-        [fwx1, ryTop, rzTop], [fix1, ryInTop, rzInTop], [fix1, ryInBot, rzInBot], [fwx1, ryBot, rzBot],
-        [0.68, -0.46, -0.57], bwBevelRight, matPvdFacet,
-        [0.95, 0.42], [0.95, 0.45], [0.95, 0.50], [0.95, 0.54]
-      );
-      mb.addQuad(
-        [fix1, ryInBot, rzInBot], [fix1, ryInTop, rzInTop], [fix0, ryInTop, rzInTop], [fix0, ryInBot, rzInBot],
-        [0.0, -0.62, -0.78], bwFacetS, matPvdCrown,
-        [0.26, 0.55], [0.38, 0.55], [0.38, 0.85], [0.26, 0.85]
-      );
-
-      /* 3. 主盘拔起主角键原位暴露的微距五脚弧面凸透镜聚光镜真轴体 */
+      /* 2. 主盘拔起主角键原位暴露的微距五脚弧面凸透镜聚光镜真轴体 */
       if (switchInfo && !switchInfo.isAux) {
         buildActiveSwitchMesh(mb, switchInfo, palette, ambientMul, energyPulse);
       }
 
       var mainOpaqueCount = mb.getIndexCount();
 
-      /* 3B. 副盘不透明动态部件（副盘底壳镶嵌式 PVD 镜面棱镜小配重铭牌 + 副盘浮空键原位透明晶柱真轴体，绑定 auxChassisMat 共轨） */
+      /* 3. 副盘不透明动态部件（副盘浮空键原位透明晶柱真轴体 + #0 Orch 锁存缝隙背光，绑定 auxChassisMat 共轨） */
       if (params.includeAuxPad) {
-        var abx0 = 10.62, abx1 = 11.80;
-        var abz0 = 1.46, abz1 = 3.42;
-        var abBev = 0.09;
-        var abix0 = abx0 + abBev, abix1 = abx1 - abBev;
-        var abiz0 = abz0 + abBev, abiz1 = abz1 - abBev;
-        var abySeat = CASE_Y_BOT + 0.016;
-        var abyEdge = CASE_Y_BOT - 0.012;
-        var abyApex = CASE_Y_BOT - 0.026;
-        var abcx = (abx0 + abx1) * 0.5;
-        var abcz0 = 2.02, abcz1 = 2.86;
-
-        mb.addQuad(
-          [abx0, abySeat, abz1], [abix0, abyEdge, abiz1], [abix1, abyEdge, abiz1], [abx1, abySeat, abz1],
-          [0.0, -0.71, 0.70], bwBevelSouth, matPvdFacet,
-          [0.96, 0.05], [0.96, 0.10], [0.96, 0.25], [0.96, 0.30]
-        );
-        mb.addQuad(
-          [abx1, abySeat, abz0], [abix1, abyEdge, abiz0], [abix0, abyEdge, abiz0], [abx0, abySeat, abz0],
-          [0.0, -0.71, -0.70], bwBevelNorth, matPvdFacet,
-          [0.96, 0.55], [0.96, 0.60], [0.96, 0.75], [0.96, 0.80]
-        );
-        mb.addQuad(
-          [abx0, abySeat, abz0], [abix0, abyEdge, abiz0], [abix0, abyEdge, abiz1], [abx0, abySeat, abz1],
-          [-0.70, -0.71, 0.0], bwBevelLeft, matPvdFacet,
-          [0.96, 0.80], [0.96, 0.85], [0.96, 0.95], [0.96, 1.00]
-        );
-        mb.addQuad(
-          [abx1, abySeat, abz1], [abix1, abyEdge, abiz1], [abix1, abyEdge, abiz0], [abx1, abySeat, abz0],
-          [0.70, -0.71, 0.0], bwBevelRight, matPvdFacet,
-          [0.96, 0.30], [0.96, 0.35], [0.96, 0.45], [0.96, 0.50]
-        );
-        mb.addQuad(
-          [abix0, abyEdge, abiz1], [abcx, abyApex, abcz1], [abcx, abyApex, abcz1], [abix1, abyEdge, abiz1],
-          [0.0, -0.985, 0.17], bwFacetS, matPvdCrown,
-          [0.24, 0.10], [0.58, 0.50], [0.58, 0.50], [0.24, 0.30]
-        );
-        mb.addQuad(
-          [abix1, abyEdge, abiz0], [abcx, abyApex, abcz0], [abcx, abyApex, abcz0], [abix0, abyEdge, abiz0],
-          [0.0, -0.985, -0.17], bwFacetN, matPvdCrown,
-          [0.24, 0.60], [0.58, 0.50], [0.58, 0.50], [0.24, 0.80]
-        );
-        mb.addQuad(
-          [abix0, abyEdge, abiz0], [abcx, abyApex, abcz0], [abcx, abyApex, abcz1], [abix0, abyEdge, abiz1],
-          [-0.17, -0.985, 0.0], bwFacetW, matPvdCrown,
-          [0.24, 0.75], [0.58, 0.35], [0.58, 0.65], [0.24, 0.95]
-        );
-        mb.addQuad(
-          [abix1, abyEdge, abiz1], [abcx, abyApex, abcz1], [abcx, abyApex, abcz0], [abix1, abyEdge, abiz0],
-          [0.17, -0.985, 0.0], bwFacetE, matPvdCrown,
-          [0.24, 0.25], [0.58, 0.65], [0.58, 0.35], [0.24, 0.45]
-        );
-
         if (switchInfo && switchInfo.isAux) {
           buildActiveSwitchMesh(mb, switchInfo, palette, ambientMul, energyPulse);
         }
@@ -3762,7 +3782,10 @@
      * ============================================================================ */
     var ATLAS_COLS = 10;
     var ATLAS_ROWS = 9;
-    var ATLAS_SIZE = 2048;
+    /* 1024x1024 物理键帽字模图集（单键 102x102 px ≈ 2.7× 超采，逻辑 2048 坐标系等比缩放；热开上传与 Mipmap 耗时直降 75%） */
+    var ATLAS_DESIGN_SIZE = 2048;
+    var ATLAS_SIZE = 1024;
+    var ATLAS_SCALE = ATLAS_SIZE / ATLAS_DESIGN_SIZE;
 
     function createOffscreenCanvas(doc, w, h) {
       if (doc && typeof doc.createElement === 'function') {
@@ -3931,11 +3954,15 @@
       var surf = createOffscreenCanvas(doc, ATLAS_SIZE, ATLAS_SIZE);
       if (!surf) return null;
       var ctx = surf.ctx;
-      var cellW = ATLAS_SIZE / ATLAS_COLS;
-      var cellH = (ATLAS_SIZE * 0.90) / ATLAS_ROWS;
+      var cellW = ATLAS_DESIGN_SIZE / ATLAS_COLS;
+      var cellH = (ATLAS_DESIGN_SIZE * 0.90) / ATLAS_ROWS;
       var hasPath2D = typeof Path2D === 'function';
 
       ctx.clearRect(0, 0, ATLAS_SIZE, ATLAS_SIZE);
+      ctx.save();
+      if (ATLAS_SCALE !== 1) {
+        ctx.scale(ATLAS_SCALE, ATLAS_SCALE);
+      }
       var sansStack = '"Inter", "SF Pro Display", "Helvetica Neue", "Segoe UI", system-ui, sans-serif';
 
       var stealthDraws = [];
@@ -4049,7 +4076,9 @@
         ctx.restore();
       }
 
-      /* 初始化同步烘焙底部富余第 9 行（y ∈ [1844, 2048], v ∈ [0.9004, 1.00]）的 6 槽副盘键帽印字与定制棱镜符号 */
+      ctx.restore();
+
+      /* 初始化同步烘焙底部富余第 9 行（物理 y ∈ [922, 1024], v ∈ [0.9004, 1.00]）的 6 槽副盘键帽印字与定制棱镜符号 */
       renderAuxAtlasCellsToContext(ctx, targetAuxList, false);
 
       surf.sharedCached = true;
@@ -4075,8 +4104,10 @@
       return surf;
     }
 
-    var AUX_ATLAS_Y0 = 1844;
-    var AUX_ATLAS_H = ATLAS_SIZE - AUX_ATLAS_Y0; /* 204 px */
+    var AUX_ATLAS_DESIGN_Y0 = 1844;
+    var AUX_ATLAS_DESIGN_H = ATLAS_DESIGN_SIZE - AUX_ATLAS_DESIGN_Y0; /* 204 逻辑 px */
+    var AUX_ATLAS_Y0 = Math.round(AUX_ATLAS_DESIGN_Y0 * ATLAS_SCALE); /* 922 物理 px */
+    var AUX_ATLAS_H = ATLAS_SIZE - AUX_ATLAS_Y0; /* 102 物理 px */
 
     /**
      * 为右侧 2×3 副盘非元素模型绘制高辨识度定制右上几何棱镜微标（写入 #FFFF00 R+G 双通道）：
@@ -4169,17 +4200,22 @@
     }
 
     /**
-     * 将 6 个副盘模型槽位渲染至全图集第 9 行（targetY0 = AUX_ATLAS_Y0）或独立 2048×204 局部刷新条带画布（localStrip = true => y0 = 0）
+     * 将 6 个副盘模型槽位渲染至全图集第 9 行（物理 y = AUX_ATLAS_Y0）或独立 1024×102 局部刷新条带画布（localStrip = true => y0 = 0）
      */
     function renderAuxAtlasCellsToContext(ctx, auxList, localStripFlag) {
       if (!ctx) return;
-      var cellW = ATLAS_SIZE / ATLAS_COLS;
-      var cellH = AUX_ATLAS_H;
-      var yBase = localStripFlag ? 0 : AUX_ATLAS_Y0;
+      var cellW = ATLAS_DESIGN_SIZE / ATLAS_COLS;
+      var cellH = AUX_ATLAS_DESIGN_H;
+      var yBase = localStripFlag ? 0 : AUX_ATLAS_DESIGN_Y0;
+      var physYBase = localStripFlag ? 0 : AUX_ATLAS_Y0;
       var sansStack = '"Inter", "SF Pro Display", "Helvetica Neue", "Segoe UI", system-ui, sans-serif';
       var monoStack = '"JetBrains Mono", "SF Mono", Consolas, monospace';
 
-      ctx.clearRect(0, yBase, ATLAS_SIZE, cellH);
+      ctx.clearRect(0, physYBase, ATLAS_SIZE, AUX_ATLAS_H);
+      ctx.save();
+      if (ATLAS_SCALE !== 1) {
+        ctx.scale(ATLAS_SCALE, ATLAS_SCALE);
+      }
 
       var list = Array.isArray(auxList) ? auxList : DEFAULT_AUX_MODELS;
       for (var k = 0; k < AUX_SLOT_COUNT; k++) {
@@ -4254,6 +4290,7 @@
           ctx.restore();
         }
       }
+      ctx.restore();
     }
 
     function drawRoundRectPath(ctx, x, y, w, h, r) {
@@ -4308,10 +4345,10 @@
         var lv = levels[i];
         var px = trackX + trackPad + i * (pillW + pillGap);
         var py = trackY + trackPad;
-        var u0 = clamp((px - 3) / OLED_WIDTH, 0, 1);
-        var u1 = clamp((px + pillW + 3) / OLED_WIDTH, 0, 1);
-        var v0 = clamp((py - 4) / OLED_HEIGHT, 0, 1);
-        var v1 = clamp((py + pillH + 4) / OLED_HEIGHT, 0, 1);
+        var u0 = clamp((px - 3) / OLED_DESIGN_WIDTH, 0, 1);
+        var u1 = clamp((px + pillW + 3) / OLED_DESIGN_WIDTH, 0, 1);
+        var v0 = clamp((py - 4) / OLED_DESIGN_HEIGHT, 0, 1);
+        var v1 = clamp((py + pillH + 4) / OLED_DESIGN_HEIGHT, 0, 1);
         var effStr = String(lv.effort || '');
         var isHov = Boolean(info && info.hoveredEffort === effStr);
         var isPrs = Boolean(info && info.pressedEffort === effStr);
@@ -4351,8 +4388,14 @@
     function renderOledDeckCanvas(surf, deckInfo, palette, accentHex, isMono, _grainAssets, capsuleLayout) {
       if (!surf) return;
       var ctx = surf.ctx;
-      var W = surf.canvas.width;
-      var H = surf.canvas.height;
+      var physW = surf.canvas.width || OLED_WIDTH;
+      var physH = surf.canvas.height || OLED_HEIGHT;
+      var W = OLED_DESIGN_WIDTH;
+      var H = OLED_DESIGN_HEIGHT;
+      ctx.save();
+      if (physW !== W || physH !== H) {
+        ctx.scale(physW / W, physH / H);
+      }
       var isLight = Boolean(palette && palette.isLight);
       var isAlabaster = palette && palette.id === 'alabaster-light';
       var isWarmDark = palette && palette.id === 'warm-dark';
@@ -4530,6 +4573,7 @@
           342
         );
       }
+      ctx.restore();
     }
 
     /* ============================================================================
@@ -4832,18 +4876,23 @@
       '  float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715)))) * 6.2831853;',
       '  float ca = cos(ign);',
       '  float sa = sin(ign);',
-      '  float radius = 0.00235;',
+      '  /* 6-tap 预计算 Vogel Disk PCF + IGN 旋转抖动：纹理采样与三角函数开销 -50%+，柔影边缘依然平滑细腻 */',
+      '  const vec2 vogel6[6] = vec2[6](',
+      '    vec2( 0.000678,  0.000000),',
+      '    vec2(-0.000866,  0.000794),',
+      '    vec2( 0.000133, -0.001511),',
+      '    vec2( 0.001122,  0.001407),',
+      '    vec2(-0.002016, -0.000321),',
+      '    vec2( 0.001614, -0.001577)',
+      '  );',
       '  float lit = 0.0;',
-      '  for (int i = 0; i < 12; i++) {',
-      '    float fi = float(i);',
-      '    float r = sqrt((fi + 0.5) / 12.0) * radius;',
-      '    float theta = fi * 2.39996323;',
-      '    vec2 d = vec2(cos(theta), sin(theta)) * r;',
+      '  for (int i = 0; i < 6; i++) {',
+      '    vec2 d = vogel6[i];',
       '    vec2 rotOff = vec2(ca * d.x - sa * d.y, sa * d.x + ca * d.y);',
       '    float occDepth = textureLod(shadowTex, proj.xy + rotOff, 0.0).r;',
       '    lit += (proj.z - bias <= occDepth) ? 1.0 : 0.0;',
       '  }',
-      '  return lit / 12.0;',
+      '  return lit * (1.0 / 6.0);',
       '}',
     ].join('\n');
 
@@ -5048,16 +5097,18 @@
       '    float beadZ = texture(u_grainTex, v_localPos.xy * gScale).g;',
       '    float beadX = texture(u_grainTex, v_localPos.zy * gScale).g;',
       '    float beadH = beadX * triW.x + beadY * triW.y + beadZ * triW.z;',
-      '    float beadHx = texture(u_grainTex, v_localPos.xz * gScale + vec2(gStep, 0.0)).g;',
-      '    float beadHz = texture(u_grainTex, v_localPos.xz * gScale + vec2(0.0, gStep)).g;',
       '    float pxFoot = max(length(fwidth(v_localPos.xz)), length(fwidth(v_localPos.xy)));',
       '    float aaWeight = 1.0 - smoothstep(0.035, 0.15, pxFoot);',
       '    float ignGrain = fract(52.9829189 * fract(dot(floor(gl_FragCoord.xy), vec2(0.06711056, 0.00583715)))) - 0.5;',
-      '    vec3 T_iso = abs(baseN.y) < 0.99 ? normalize(cross(vec3(0.0, 1.0, 0.0), baseN)) : vec3(1.0, 0.0, 0.0);',
-      '    vec3 B_iso = normalize(cross(baseN, T_iso));',
-      '    float dBx = (beadHx - beadY) * aaWeight * 0.017 + ignGrain * 0.0032;',
-      '    float dBz = (beadHz - beadY) * aaWeight * 0.017 - ignGrain * 0.0032;',
-      '    N = normalize(baseN + T_iso * dBx + B_iso * dBz);',
+      '    if (aaWeight > 0.02) {',
+      '      float beadHx = texture(u_grainTex, v_localPos.xz * gScale + vec2(gStep, 0.0)).g;',
+      '      float beadHz = texture(u_grainTex, v_localPos.xz * gScale + vec2(0.0, gStep)).g;',
+      '      vec3 T_iso = abs(baseN.y) < 0.99 ? normalize(cross(vec3(0.0, 1.0, 0.0), baseN)) : vec3(1.0, 0.0, 0.0);',
+      '      vec3 B_iso = normalize(cross(baseN, T_iso));',
+      '      float dBx = (beadHx - beadY) * aaWeight * 0.017 + ignGrain * 0.0032;',
+      '      float dBz = (beadHz - beadY) * aaWeight * 0.017 - ignGrain * 0.0032;',
+      '      N = normalize(baseN + T_iso * dBx + B_iso * dBz);',
+      '    }',
       '    rough = clamp(rough + (beadH - 0.5) * 0.018 * aaWeight, 0.19, 0.32);',
       '  } else if (kind > 4.5 && kind < 5.5) {',
       '    float gStep = grainTexelSize(u_grainTex);',
@@ -5450,33 +5501,36 @@
       '    albedo = capLin * 0.90;',
       '  }',
       '',
-      '  float grainMask = mix(mix(1.0, 0.32, legGrainHalo), 0.03, isAvail);',
-      '  vec2 seedOff = vec2(fract(zSeed * 0.3713), fract(zSeed * 0.6197));',
-      '  float rLen = length(v_localPos.xz);',
-      '  vec2 radialDir = rLen > 1e-4 ? (v_localPos.xz / rLen) : vec2(1.0, 0.0);',
-      '  float skirtUnfold = max(0.0, 0.565 - v_localPos.y) * 0.64;',
-      '  vec2 pbtUv = (v_localPos.xz + radialDir * skirtUnfold) * 2.05 + seedOff;',
-      '  float gTexel = grainTexelSize(u_grainTex);',
+      '  /* 陶瓷/亮面可用键跳过 3 次 u_grainTex 采样，仅 86 颗哑光 PBT 盲键采样细腻微磨砂高度场 */',
+      '  float grainMask = mix(mix(1.0, 0.32, legGrainHalo), 0.0, isAvail);',
+      '  vec3 baseN = normalize(v_normal);',
+      '  vec3 N = baseN;',
+      '  float grainR = 0.5;',
+      '  if (grainMask > 0.04) {',
+      '    vec2 seedOff = vec2(fract(zSeed * 0.3713), fract(zSeed * 0.6197));',
+      '    float rLen = length(v_localPos.xz);',
+      '    vec2 radialDir = rLen > 1e-4 ? (v_localPos.xz / rLen) : vec2(1.0, 0.0);',
+      '    float skirtUnfold = max(0.0, 0.565 - v_localPos.y) * 0.64;',
+      '    vec2 pbtUv = (v_localPos.xz + radialDir * skirtUnfold) * 2.05 + seedOff;',
+      '    float gTexel = grainTexelSize(u_grainTex);',
+      '    grainR = texture(u_grainTex, pbtUv, -0.35).r;',
+      '    float grainRx = texture(u_grainTex, pbtUv + vec2(gTexel, 0.0), -0.35).r;',
+      '    float grainRz = texture(u_grainTex, pbtUv + vec2(0.0, gTexel), -0.35).r;',
+      '    albedo *= mix(1.0, mix(0.985, 1.015, grainR), grainMask);',
+      '    vec3 T = normalize(v_tanX - baseN * dot(baseN, v_tanX));',
+      '    vec3 B = normalize(cross(baseN, T));',
+      '    float bumpStrength = 0.115 * grainMask;',
+      '    float dHx = (grainRx - grainR) * bumpStrength;',
+      '    float dHz = (grainRz - grainR) * bumpStrength;',
+      '    N = normalize(baseN - T * (dHx * 1.50) - B * (dHz * 1.50));',
+      '  }',
       '',
-      '  float grainR = texture(u_grainTex, pbtUv, -0.35).r;',
-      '  float grainRx = texture(u_grainTex, pbtUv + vec2(gTexel, 0.0), -0.35).r;',
-      '  float grainRz = texture(u_grainTex, pbtUv + vec2(0.0, gTexel), -0.35).r;',
-      '',
-      '  /* 86 颗盲键细腻 PBT 微磨砂漫反射 vs 4 颗可用键纯净亮面陶瓷清漆光泽 */',
-      '  albedo *= mix(1.0, mix(0.985, 1.015, grainR), grainMask);',
+      '  /* 86 颗盲键细腻 PBT 微磨砂漫反射 vs 可用键纯净亮面陶瓷清漆光泽 */',
       '  float stealthRough = clamp(0.65 + (0.5 - grainR) * 0.028 * grainMask + engraveDip * 0.10, 0.62, 0.69);',
       '  float availBaseRough = mix(0.195, 0.145, heroChroma);',
       '  float ceramicRough = mix(availBaseRough, 0.13, legSmoothMix);',
       '  float rough = mix(stealthRough, ceramicRough, isAvail);',
-      '',
-      '  vec3 baseN = normalize(v_normal);',
-      '  vec3 T = normalize(v_tanX - baseN * dot(baseN, v_tanX));',
-      '  vec3 B = normalize(cross(baseN, T));',
-      '  float bumpStrength = 0.115 * grainMask;',
-      '  float dHx = (grainRx - grainR) * bumpStrength;',
-      '  float dHz = (grainRz - grainR) * bumpStrength;',
-      '  vec3 N = normalize(baseN - T * (dHx * 1.50) - B * (dHz * 1.50));',
-      '  vec3 Nc = normalize(mix(baseN, N, mix(0.06, 0.02, isAvail)));',
+      '  vec3 Nc = grainMask > 0.04 ? normalize(mix(baseN, N, mix(0.06, 0.02, isAvail))) : baseN;',
       '',
       '  vec3 V = normalize(u_camPos - v_worldPos);',
       '  vec3 L = normalize(u_lightDir);',
@@ -5511,18 +5565,25 @@
       '  vec3 F = F_Schlick(vdh, f0);',
       '  vec3 specBrdf = D * Vis * F;',
       '',
+      '  /* 86 颗盲键 (clearcoat == 0) 早退跳过清漆双层 GGX 与 envCoat 采样，零视觉差异、片段计算骤降 */',
       '  float clearcoat = mix(0.0, mix(0.68, 0.90, heroChroma), isAvail);',
       '  float clearcoatRoughness = mix(0.34, mix(0.125, 0.098, heroChroma), isAvail);',
       '  float ccAlpha = max(0.0036, clearcoatRoughness * clearcoatRoughness);',
       '  float ndvC = max(dot(Nc, V), 1e-4);',
-      '  float ndlC = max(dot(Nc, L), 0.0);',
-      '  float ndhC = max(dot(Nc, H), 0.0);',
-      '  float Dc = D_GGX(ndhC, ccAlpha);',
-      '  float Vc = V_SmithGGX(ndvC, ndlC, ccAlpha);',
-      '  float Fc = (0.042 + 0.958 * pow(clamp(1.0 - vdh, 0.0, 1.0), 5.0)) * clearcoat;',
-      '  float isDarkInk = 1.0 - step(0.24, dot(activeInkLin, vec3(0.2126, 0.7152, 0.0722)));',
-      '  float coatInkGuard = 1.0 - clamp(legSmoothMix * 1.25, 0.0, 1.0) * isDarkInk * 0.56;',
-      '  float specCoatDirect = Dc * Vc * Fc * coatInkGuard;',
+      '  float ndlC = 0.0;',
+      '  float Fc = 0.0;',
+      '  float coatInkGuard = 1.0;',
+      '  float specCoatDirect = 0.0;',
+      '  if (clearcoat > 0.005) {',
+      '    ndlC = max(dot(Nc, L), 0.0);',
+      '    float ndhC = max(dot(Nc, H), 0.0);',
+      '    float Dc = D_GGX(ndhC, ccAlpha);',
+      '    float Vc = V_SmithGGX(ndvC, ndlC, ccAlpha);',
+      '    Fc = (0.042 + 0.958 * pow(clamp(1.0 - vdh, 0.0, 1.0), 5.0)) * clearcoat;',
+      '    float isDarkInk = 1.0 - step(0.24, dot(activeInkLin, vec3(0.2126, 0.7152, 0.0722)));',
+      '    coatInkGuard = 1.0 - clamp(legSmoothMix * 1.25, 0.0, 1.0) * isDarkInk * 0.56;',
+      '    specCoatDirect = Dc * Vc * Fc * coatInkGuard;',
+      '  }',
       '',
       '  vec3 mainLightRad = vec3(2.48, 2.43, 2.36) * mix(1.0, 0.88, u_envParams.x) * shadow;',
       '  float coatAtten = 1.0 - Fc * 0.52;',
@@ -5600,12 +5661,16 @@
       '  vec3 LoRim = (albedo * mix(0.022, 0.12, isAvail) * ndlRim + vec3(D_GGX(ndhRim, max(0.015, ccAlpha)) * rimCoatBoost * ndlRim)) * rimRad * rimEdge * cavityAo;',
       '',
       '  vec3 R = reflect(-V, N);',
-      '  vec3 Rc = reflect(-V, Nc);',
       '  vec3 envSpec = sampleStudioHDRI(R, rough, u_envParams.x) * mix(0.18 * stealthTopSuppress + 0.06, mix(0.64, 0.92, heroChroma), isAvail);',
-      '  vec3 envCoat = sampleMetalStudioEnv(u_metalEnvTex, Rc, clearcoatRoughness, u_envParams.x) * mix(0.82, 0.68, u_envParams.x);',
+      '  vec3 envCoat = vec3(0.0);',
+      '  float fcEnv = 0.0;',
+      '  if (clearcoat > 0.005) {',
+      '    vec3 Rc = reflect(-V, Nc);',
+      '    envCoat = sampleMetalStudioEnv(u_metalEnvTex, Rc, clearcoatRoughness, u_envParams.x) * mix(0.82, 0.68, u_envParams.x);',
+      '    fcEnv = (0.055 + 0.945 * pow(clamp(1.0 - ndvC, 0.0, 1.0), 4.6)) * clearcoat * coatInkGuard;',
+      '  }',
       '  vec3 envDiff = sampleStudioHDRI(N, 0.94, u_envParams.x) * mix(0.90, 0.96, u_envParams.x);',
       '  vec3 kS = F_SchlickRoughness(ndv, f0, rough);',
-      '  float fcEnv = (0.055 + 0.945 * pow(clamp(1.0 - ndvC, 0.0, 1.0), 4.6)) * clearcoat * coatInkGuard;',
       '  vec3 kD = (1.0 - kS) * (1.0 - fcEnv * 0.56);',
       '  float envSpecOcc = cavityAo * mix(0.46, 1.0, shadow);',
       '  vec3 ambient = kD * albedo * envDiff * cavityAo + (envSpec * kS * (1.0 - fcEnv * 0.50) + envCoat * fcEnv) * envSpecOcc;',
@@ -5935,7 +6000,7 @@
       '  vec3 V = normalize(u_camPos - v_worldPos);',
       '  vec3 R = reflect(-V, N);',
       '  float ndv = max(dot(N, V), 1e-4);',
-      '  float shadow = sampleVogelShadow(u_shadowTex, u_lightViewProj, v_worldPos, N, normalize(u_lightDir), u_envParams.y);',
+      '  /* SCREEN_FS 跳过昂贵多点阴影采样（原仅调制 <=4% 亮度），由 GPU 直接驱动柔和呼吸流光与扫描微光，0 Canvas2D 重绘 */',
       '',
       '  /* 2. 深/浅双模满幅海报无损合成：100% 忠实还原白昼明亮瓷白海报与暗夜深绒海报（零压暗冲灰！） */',
       '  float isLightScr = clamp(u_envParams.x, 0.0, 1.0);',
@@ -5970,15 +6035,22 @@
       '  vec3 edgeRefractGlint = mix(vec3(0.84, 0.91, 1.00), vec3(1.00, 1.00, 1.00), isLightScr) * (rimArcBand * (0.022 + 0.088 * catchTopLeft + 0.036 * catchBotRight));',
       '',
       '  float microSeatShade = mix(0.90 + 0.10 * smoothstep(-0.002, -0.030, dScr), 0.975 + 0.025 * smoothstep(-0.001, -0.018, dScr), isLightScr);',
-      '  float softShadowMul = mix(mix(0.96, 1.0, shadow), mix(0.992, 1.0, shadow), isLightScr);',
-      '  float diagSheen = (sheenBand1 * 0.016 + sheenBand2 * 0.010 + fres * 0.012) * (0.55 + 0.45 * shadow) + ptrSheen;',
+      '  /* GPU 零成本动态光学呼吸流光 + 极微细扫描线光泽 + 切档/能量脉冲亮度微调制（替代 Canvas2D 逐帧重绘与上传） */',
+      '  float gpuTime = u_envParams.w;',
+      '  float ePulseScr = u_prismConfig.w;',
+      '  float breathWave = 0.5 + 0.5 * sin(gpuTime * 1.15);',
+      '  float scanSweep = fract(v_uv.x * 0.42 + v_uv.y * 0.18 - gpuTime * 0.085);',
+      '  float scanBand = exp(-pow((scanSweep - 0.5) * 7.5, 2.0)) * mix(0.014, 0.009, isLightScr) * u_envParams.z;',
+      '  float microScanline = (0.5 + 0.5 * sin(v_uv.y * 240.0 * 3.14159265)) * mix(0.006, 0.002, isLightScr);',
+      '  float breathGain = 1.0 + (breathWave * 0.012 + ePulseScr * 0.048) * u_envParams.z * mix(1.0, 0.45, isLightScr);',
+      '  float diagSheen = (sheenBand1 * 0.016 + sheenBand2 * 0.010 + fres * 0.012) + ptrSheen + scanBand;',
       '  if (u_prismConfig.z > 0.004) {',
       '    float dSw = v_localPos.x - u_prismConfig.y;',
       '    diagSheen += exp(-dSw * dSw * 1.10) * u_prismConfig.z * u_envParams.z * 0.030;',
       '  }',
       '',
       '  vec3 finalSrgb = clamp(',
-      '    compositedSrgb * microSeatShade * softShadowMul + mix(vec3(0.93, 0.96, 1.00), vec3(1.00, 1.00, 1.00), isLightScr) * diagSheen + edgeRefractGlint,',
+      '    compositedSrgb * microSeatShade * breathGain * (1.0 - microScanline) + mix(vec3(0.93, 0.96, 1.00), vec3(1.00, 1.00, 1.00), isLightScr) * diagSheen + edgeRefractGlint,',
       '    0.0,',
       '    1.0',
       '  );',
@@ -6398,8 +6470,22 @@
       var animClockMs = 10000;
       var lastOledSig = '';
       var lastOledDiscreteSig = '';
+      var lastOledCoreSig = '';
       var lastOledUploadMs = -1;
+      var oledPendingFlush = false;
+      var oledCoreTransitionStep = false;
+      var OLED_SWEEP_THROTTLE_MS = 36.0;
+      var OLED_ANIM_THROTTLE_MS = 33.0;
       var lastChassisThemeId = '';
+      var lastChassisAuxFlag = enableAuxPad ? 1 : 0;
+      var hasLiftedKeycapCavity = false;
+      /* Zero-GC 帧级预分配缓冲：消除每帧数组字面量与实例换槽临时对象分配 */
+      var _tmpInstSwap32 = new Float32Array(32);
+      var _framePrismCfg4 = new Float32Array(4);
+      var _frameEnvVec4 = new Float32Array(4);
+      var _frameLiftShadow4 = new Float32Array(4);
+      var _zeroVec4 = new Float32Array([0, 0, 0, 0]);
+      var _fallbackRimTint3 = new Float32Array([0.74, 0.84, 1.0]);
 
       function ensureOledSurf() {
         if (!oledSurf && !disposed) {
@@ -6541,6 +6627,7 @@
             doc: doc,
             root: root,
             lazyWallpapers: true,
+            preferOffscreenBlur: true,
             targetFps: explicitTargetFps !== null ? explicitTargetFps : undefined,
             motionLevel: explicitMotionLevel !== null ? explicitMotionLevel : undefined,
             paused: isEffectivelyPaused(),
@@ -6548,7 +6635,9 @@
               if (disposed || contextLost) return;
               lastOledSig = '';
               lastOledDiscreteSig = '';
+              lastOledCoreSig = '';
               lastOledUploadMs = -1;
+              oledPendingFlush = false;
               if (constructingPainter) return;
               if (isEffectivelyPaused()) {
                 pendingRenderWhilePaused = true;
@@ -6676,7 +6765,7 @@
         return buf;
       }
 
-      function initShadowMapResources(targetSize) {
+      function initShadowMapResources(targetSize, deferLink) {
         if (
           !gl ||
           typeof gl.createFramebuffer !== 'function' ||
@@ -6745,21 +6834,18 @@
           return null;
         }
 
+        /* 若 deferLink 为 true，则仅提交编译链接不在此处同步阻塞，留待所有 VAO/纹理上传后与 3 个主 PBR 程序一并检查 */
         var hShadowSolid = beginLinkProgram(SHADOW_SOLID_VS, SHADOW_EMPTY_FS);
         var hShadowKeycap = beginLinkProgram(SHADOW_KEYCAP_VS, SHADOW_EMPTY_FS);
-        var progShadowSolid = finishLinkProgram(hShadowSolid);
-        var progShadowKeycap = finishLinkProgram(hShadowKeycap);
-        if (!progShadowSolid || !progShadowKeycap) {
+        if (!hShadowSolid || !hShadowKeycap) {
+          discardPendingProgram(hShadowSolid);
+          discardPendingProgram(hShadowKeycap);
           if (typeof gl.deleteFramebuffer === 'function') gl.deleteFramebuffer(fbo);
           gl.deleteTexture(tex);
           return null;
         }
 
-        glRes.framebuffers.push(fbo);
-        glRes.textures.push(tex);
-        activeShadowMapSize = shadowSize;
-
-        return {
+        var shadowObj = {
           fbo: fbo,
           tex: tex,
           size: shadowSize,
@@ -6771,18 +6857,46 @@
           noneConst: noneConst,
           internalFmt: chosenCand.internalFmt,
           type: chosenCand.type,
-          progSolid: progShadowSolid,
-          progKeycap: progShadowKeycap,
-          uSolid: {
-            lightViewProj: gl.getUniformLocation(progShadowSolid, 'u_lightViewProj'),
-            model: gl.getUniformLocation(progShadowSolid, 'u_model'),
-          },
-          uKeycap: {
-            lightViewProj: gl.getUniformLocation(progShadowKeycap, 'u_lightViewProj'),
-            chassisMat: gl.getUniformLocation(progShadowKeycap, 'u_chassisMat'),
-            auxChassisMat: gl.getUniformLocation(progShadowKeycap, 'u_auxChassisMat'),
-          },
+          _pendingSolid: hShadowSolid,
+          _pendingKeycap: hShadowKeycap,
+          progSolid: null,
+          progKeycap: null,
+          uSolid: null,
+          uKeycap: null,
         };
+
+        if (!deferLink) {
+          return finalizeShadowMapPrograms(shadowObj);
+        }
+        return shadowObj;
+      }
+
+      function finalizeShadowMapPrograms(shadowObj) {
+        if (!shadowObj) return null;
+        var progShadowSolid = finishLinkProgram(shadowObj._pendingSolid);
+        var progShadowKeycap = finishLinkProgram(shadowObj._pendingKeycap);
+        shadowObj._pendingSolid = null;
+        shadowObj._pendingKeycap = null;
+        if (!progShadowSolid || !progShadowKeycap) {
+          if (typeof gl.deleteFramebuffer === 'function') gl.deleteFramebuffer(shadowObj.fbo);
+          gl.deleteTexture(shadowObj.tex);
+          return null;
+        }
+        glRes.framebuffers.push(shadowObj.fbo);
+        glRes.textures.push(shadowObj.tex);
+        activeShadowMapSize = shadowObj.size;
+        shadowObj.progSolid = progShadowSolid;
+        shadowObj.progKeycap = progShadowKeycap;
+        shadowObj.uSolid = {
+          lightViewProj: gl.getUniformLocation(progShadowSolid, 'u_lightViewProj'),
+          model: gl.getUniformLocation(progShadowSolid, 'u_model'),
+        };
+        shadowObj.uKeycap = {
+          lightViewProj: gl.getUniformLocation(progShadowKeycap, 'u_lightViewProj'),
+          chassisMat: gl.getUniformLocation(progShadowKeycap, 'u_chassisMat'),
+          auxChassisMat: gl.getUniformLocation(progShadowKeycap, 'u_auxChassisMat'),
+        };
+        return shadowObj;
       }
 
       /* 仅在 motionLevel 跨级切换（ultra 2048 <-> medium/low/subtle/off 1024）时按需重建 FBO 深度纹理 */
@@ -6863,7 +6977,7 @@
 
       function initWebGLPipeline() {
         if (!gl) return false;
-        /* 阶段 1：第一时间提交全部 3 个主 PBR 着色器给 GPU 后台并行编译，与后续 CPU VAO/Buffer/纹理上传完全重叠 */
+        /* 阶段 1：第一时间并发提交全部 5 个着色器程序（3 主 PBR + 2 阴影 Pass）给 GPU 后台并行编译，与后续 CPU VAO/Buffer/纹理上传 100% 重叠 */
         var hSolid = beginLinkProgram(SOLID_VS, SOLID_FS);
         var hKeycap = beginLinkProgram(KEYCAP_VS, KEYCAP_FS);
         var hScreen = beginLinkProgram(SCREEN_VS, SCREEN_FS);
@@ -6873,6 +6987,8 @@
           discardPendingProgram(hScreen);
           return false;
         }
+        /* 1024×1024 实时软阴影 FBO 提前建好并延迟检查链接状态，确保 5 程序并行编译零中途 stall */
+        var pendingShadowPass = initShadowMapResources(resolveTargetShadowMapSize(), true);
 
         /* 1. 雕塑球帽 VAO + (90 主盘 + 6 副盘) 合批实例缓冲区（每实例 32 floats = 128 bytes，0 新增 VAO/Buffer） */
         var capGeom = buildSculptedKeycapGeometry();
@@ -7047,12 +7163,11 @@
           gl.texParameterf(gl.TEXTURE_2D, anisoExt.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(4, maxAniso));
         }
 
-        /* 8. 2048/1024 按需分级实时软阴影离屏深度 FBO & 深度纹理 (#5/5) */
-        var shadowPass = initShadowMapResources(resolveTargetShadowMapSize());
-        /* 阶段 2：全部几何/纹理/阴影 FBO 已准备就绪后统一检验主程序 LINK_STATUS（此时 GPU 后台已完成并行编译） */
+        /* 8. 阶段 2：全部几何/纹理/阴影 FBO 已准备就绪后统一检验全部 5 个程序 LINK_STATUS（GPU 后台已完成并行编译） */
         var progSolid = finishLinkProgram(hSolid);
         var progKeycap = finishLinkProgram(hKeycap);
         var progScreen = finishLinkProgram(hScreen);
+        var shadowPass = finalizeShadowMapPrograms(pendingShadowPass);
         if (!progSolid || !progKeycap || !progScreen) {
           return false;
         }
@@ -7120,6 +7235,8 @@
           },
           capVao: capVao,
           capIndexCount: capGeom.indexCount,
+          capOuterIndexCount: capGeom.outerIndexCount !== undefined ? capGeom.outerIndexCount : capGeom.indexCount,
+          capCavityIndexCount: capGeom.cavityIndexCount || 0,
           instanceFloats: instanceFloats,
           instanceBuf: instanceBuf,
           chassisGpu: chassisGpu,
@@ -7156,7 +7273,10 @@
         contextLost = false;
         lastOledSig = '';
         lastOledDiscreteSig = '';
+        lastOledCoreSig = '';
         lastOledUploadMs = -1;
+        oledPendingFlush = false;
+        oledCoreTransitionStep = false;
         lastAuxAtlasSig = '';
         lastChassisThemeId = '';
         lastShadowGeomSig = '';
@@ -7626,22 +7746,42 @@
         return -1;
       }
 
+      /* 预分配硬件控件参数对象与射线/投影临时向量，消除每帧高频 GC 对象分配 */
+      var _hwCtrlCache = {
+        muted: false,
+        effortTier: 0,
+        orbitMag: 0,
+        prismHover: 0,
+        prismPress: 0,
+        prismWaveDip: 0,
+        resetHover: 0,
+        resetPress: 0,
+        muteHover: 0,
+        mutePress: 0,
+        knobAngle: 0,
+        closeHover: 0,
+        closePress: 0,
+      };
+      var _tmpVec4A = new Float32Array(4);
+      var _tmpVec4B = new Float32Array(4);
+      var _tmpVec4C = new Float32Array(4);
+      var _tmpDir3A = new Float32Array(3);
+
       function buildHardwareCtrlParams() {
-        return {
-          muted: Boolean(state.hardwareState && state.hardwareState.muted),
-          effortTier: effortTierCur,
-          orbitMag: Math.hypot(orbitPitchCur, orbitYawCur),
-          prismHover: ctrlHoverCur[0],
-          prismPress: ctrlPressCur[0],
-          prismWaveDip: artisanWaveDipCur,
-          resetHover: ctrlHoverCur[1],
-          resetPress: ctrlPressCur[1],
-          muteHover: ctrlHoverCur[2],
-          mutePress: ctrlPressCur[2],
-          knobAngle: knobAngleCur,
-          closeHover: ctrlHoverCur[3],
-          closePress: ctrlPressCur[3],
-        };
+        _hwCtrlCache.muted = Boolean(state.hardwareState && state.hardwareState.muted);
+        _hwCtrlCache.effortTier = effortTierCur;
+        _hwCtrlCache.orbitMag = Math.hypot(orbitPitchCur, orbitYawCur);
+        _hwCtrlCache.prismHover = ctrlHoverCur[0];
+        _hwCtrlCache.prismPress = ctrlPressCur[0];
+        _hwCtrlCache.prismWaveDip = artisanWaveDipCur;
+        _hwCtrlCache.resetHover = ctrlHoverCur[1];
+        _hwCtrlCache.resetPress = ctrlPressCur[1];
+        _hwCtrlCache.muteHover = ctrlHoverCur[2];
+        _hwCtrlCache.mutePress = ctrlPressCur[2];
+        _hwCtrlCache.knobAngle = knobAngleCur;
+        _hwCtrlCache.closeHover = ctrlHoverCur[3];
+        _hwCtrlCache.closePress = ctrlPressCur[3];
+        return _hwCtrlCache;
       }
 
       var _ctrlPickBoundsCache = [
@@ -7706,8 +7846,8 @@
       }
 
       function projectChassisPointToPx(lx, ly, lz, scaleMul) {
-        var wp = transformPoint4(chassisMat, lx, ly, lz, 1.0);
-        var cp = transformPoint4(viewProjMat, wp[0], wp[1], wp[2], 1.0);
+        var wp = transformPoint4(chassisMat, lx, ly, lz, 1.0, _tmpVec4A);
+        var cp = transformPoint4(viewProjMat, wp[0], wp[1], wp[2], 1.0, _tmpVec4B);
         var w = cp[3];
         if (w <= 0.01) return null;
         var ndcX = cp[0] / w;
@@ -7721,8 +7861,8 @@
       }
 
       function projectAuxChassisPointToPx(lx, ly, lz, scaleMul) {
-        var wp = transformPoint4(auxChassisMat, lx, ly, lz, 1.0);
-        var cp = transformPoint4(viewProjMat, wp[0], wp[1], wp[2], 1.0);
+        var wp = transformPoint4(auxChassisMat, lx, ly, lz, 1.0, _tmpVec4A);
+        var cp = transformPoint4(viewProjMat, wp[0], wp[1], wp[2], 1.0, _tmpVec4B);
         var w = cp[3];
         if (w <= 0.01) return null;
         var ndcX = cp[0] / w;
@@ -7781,8 +7921,8 @@
           var ndcX = (lx / rw) * 2.0 - 1.0;
           var ndcY = 1.0 - (ly / rh) * 2.0;
 
-          var nearW = transformPoint4(invViewProjMat, ndcX, ndcY, -1.0, 1.0);
-          var farW = transformPoint4(invViewProjMat, ndcX, ndcY, 1.0, 1.0);
+          var nearW = transformPoint4(invViewProjMat, ndcX, ndcY, -1.0, 1.0, _tmpVec4A);
+          var farW = transformPoint4(invViewProjMat, ndcX, ndcY, 1.0, 1.0, _tmpVec4B);
           if (Math.abs(nearW[3]) > 1e-7 && Math.abs(farW[3]) > 1e-7) {
             var oxW = nearW[0] / nearW[3], oyW = nearW[1] / nearW[3], ozW = nearW[2] / nearW[3];
             var fxW = farW[0] / farW[3], fyW = farW[1] / farW[3], fzW = farW[2] / farW[3];
@@ -7790,8 +7930,8 @@
             var lenW = Math.hypot(dxW, dyW, dzW) || 1;
             dxW /= lenW; dyW /= lenW; dzW /= lenW;
 
-            var oCh = transformPoint4(invChassisMat, oxW, oyW, ozW, 1.0);
-            var dCh = transformDir3(invChassisMat, dxW, dyW, dzW);
+            var oCh = transformPoint4(invChassisMat, oxW, oyW, ozW, 1.0, _tmpVec4C);
+            var dCh = transformDir3(invChassisMat, dxW, dyW, dzW, _tmpDir3A);
             var targetPlaneY = orbitPitchCur < -0.22 ? -0.35 : CASE_Y_TOP;
             if (Math.abs(dCh[1]) > 1e-4) {
               var tHit = (targetPlaneY - oCh[1]) / dCh[1];
@@ -8028,13 +8168,14 @@
         var frustumReq = baseDist;
 
         function accumBoxCorners(modelM, x0, x1, y0, y1, z0, z1) {
-          var xs = [x0, x1];
-          var ys = [y0, y1];
-          var zs = [z0, z1];
+          /* Zero-GC 8 角点投影计算：直接复用 _tmpVec4A，消灭每帧 16~48 次临时数组分配 */
           for (var xi = 0; xi < 2; xi++) {
+            var vx = xi === 0 ? x0 : x1;
             for (var yi = 0; yi < 2; yi++) {
+              var vy = yi === 0 ? y0 : y1;
               for (var zi = 0; zi < 2; zi++) {
-                var wpB = transformPoint4(modelM, xs[xi], ys[yi], zs[zi], 1.0);
+                var vz = zi === 0 ? z0 : z1;
+                var wpB = transformPoint4(modelM, vx, vy, vz, 1.0, _tmpVec4A);
                 var dxT = wpB[0] - camTarget[0];
                 var dyT = wpB[1] - camTarget[1];
                 var dzT = wpB[2] - camTarget[2];
@@ -9203,7 +9344,7 @@
           typeof painter.isAnimating === 'function' &&
           painter.isAnimating(animClockMs)
         );
-        if (oledAnimating) {
+        if (oledAnimating || oledPendingFlush) {
           maxErr = Math.max(maxErr, 0.01);
         }
 
@@ -9499,22 +9640,46 @@
           lvSig,
         ].join('|');
 
+        var coreOledSig = [
+          painter ? 'cyber' : 'builtin',
+          palette.id,
+          Boolean(palette.isLight),
+          Boolean(tp.isMono),
+          rimToneKey,
+          state.selectedZ,
+          state.selectedAuxIndex,
+          di.activeEffort || '',
+          effortTierCur,
+          di.orchLatched ? 1 : 0,
+          di.blindFlash ? 1 : 0,
+          di.sessionBanner || '',
+        ].join('|');
+
         var stateSwitched = oledSig !== lastOledDiscreteSig || lastOledSig === '';
+        var coreChanged = coreOledSig !== lastOledCoreSig;
         var firstUpload = !oledTexAllocated || lastOledUploadMs < 0;
-        var needOledWork = isPainterAnim || continuousZeroGOled || stateSwitched || oledSig !== lastOledSig;
+        var needOledWork = isPainterAnim || continuousZeroGOled || stateSwitched || oledPendingFlush || oledSig !== lastOledSig;
 
         if (needOledWork) {
-          /* 高刷限频（最高 60Hz, >=15.5ms）：状态切换首帧与初始首帧立即可传，连续动画推进帧受 15.5ms 最小上传间隔保护 */
+          var elapsedSinceUpload = animClockMs >= lastOledUploadMs ? (animClockMs - lastOledUploadMs) : OLED_SWEEP_THROTTLE_MS;
+          /* 高速扫键预览节流 36ms（且由 oledPendingFlush 保证尾帧必补刷落地）；主动点击切模型/盲键后的首步叠化在 >=15.5ms 立即呈现新图层，后续动画推进按 33ms 节流 */
+          var minOledGap = (!coreChanged && stateSwitched)
+            ? OLED_SWEEP_THROTTLE_MS
+            : (oledCoreTransitionStep ? 15.5 : OLED_ANIM_THROTTLE_MS);
           if (
             !firstUpload &&
-            !stateSwitched &&
-            isPainterAnim &&
-            animClockMs >= lastOledUploadMs &&
-            (animClockMs - lastOledUploadMs) < 15.5
+            !coreChanged &&
+            !reducedNow &&
+            (isPainterAnim || stateSwitched || oledPendingFlush) &&
+            elapsedSinceUpload < minOledGap
           ) {
+            oledPendingFlush = true;
             idle = false;
             return computeEffortButtonLayouts();
           }
+
+          /* 高速连续扫键预览（非选定变更且间隔较短）瞬切海报避免拖出 200ms 双图叠化重绘风暴 */
+          var isFastHoverSweep = Boolean(!firstUpload && !coreChanged && stateSwitched && elapsedSinceUpload < 120);
 
           var uploadCanvas = null;
           if (painter && typeof painter.render === 'function') {
@@ -9542,6 +9707,10 @@
                 motionLevel: resolveMotionLevel(),
                 targetFps: resolveTargetFps(),
                 paused: isEffectivelyPaused(),
+                gpuSheenHandled: true,
+                skipIdenticalStatic: true,
+                forceOffscreenBlur: true,
+                instantSwitch: isFastHoverSweep,
               };
               uploadCanvas =
                 painter.render(di, painterTheme, blendState, animClockMs) ||
@@ -9571,6 +9740,9 @@
 
           lastOledUploadMs = animClockMs;
           lastOledDiscreteSig = oledSig;
+          lastOledCoreSig = coreOledSig;
+          oledPendingFlush = false;
+          oledCoreTransitionStep = Boolean(coreChanged && isPainterAnim);
           lastOledSig = (isPainterAnim || continuousZeroGOled) ? '__anim__' : oledSig;
 
           if (uploadCanvas) {
@@ -9695,6 +9867,33 @@
           }
         }
 
+        /* 将唯一浮空磁悬浮键交换至 instance 0（KEYCAP_VS/FS 不依赖 gl_InstanceID，主 Pass 仅对 instance 0 补绘 1 次微距立体底腔，strict 4 VAO 零新增） */
+        var bestLiftVal = 0.015;
+        var liftedInstIdx = -1;
+        for (var li = 0; li < slotCount; li++) {
+          if (keyLiftCur[li] > bestLiftVal) {
+            bestLiftVal = keyLiftCur[li];
+            liftedInstIdx = li;
+          }
+        }
+        if (enableAuxPad) {
+          for (var ali = 0; ali < AUX_SLOT_COUNT; ali++) {
+            if (auxKeyLiftCur[ali] > bestLiftVal) {
+              bestLiftVal = auxKeyLiftCur[ali];
+              liftedInstIdx = slotCount + ali;
+            }
+          }
+        }
+        hasLiftedKeycapCavity = liftedInstIdx >= 0;
+        if (liftedInstIdx > 0) {
+          var lOff = liftedInstIdx * 32;
+          for (var si = 0; si < 32; si++) {
+            _tmpInstSwap32[si] = inst[si];
+            inst[si] = inst[lOff + si];
+            inst[lOff + si] = _tmpInstSwap32[si];
+          }
+        }
+
         gl.bindBuffer(gl.ARRAY_BUFFER, glObjs.instanceBuf);
         gl.bufferSubData(gl.ARRAY_BUFFER, 0, inst);
       }
@@ -9702,13 +9901,10 @@
       function computeShadowGeomSignature(palette, shadowMapSize) {
         var q1000 = function (v) { return Math.round((Number(v) || 0) * 1000); };
         var q500 = function (v) { return Math.round((Number(v) || 0) * 500); };
-        /* 近场悬浮微倾角对柔和 PCF 阴影影响极小，按 ~0.05 rad (3°) 粗量化避免扫键每帧重绘 419 万像素阴影图 */
-        var q20 = function (v) { return Math.round((Number(v) || 0) * 20); };
+        /* 近场悬浮微倾角对柔和 6-tap PCF 阴影影响极小，按 ~0.08 rad (4.5°) 粗量化；剔除纯配色与相机距离，确保纯扫键/换主题 0 次 ShadowPass */
+        var q12 = function (v) { return Math.round((Number(v) || 0) * 12); };
         var parts = [
           shadowMapSize,
-          palette && palette.isLight ? 1 : 0,
-          lastChassisThemeId,
-          state.stageMode,
           enableAuxPad ? 1 : 0,
           q1000(orbitPitchCur),
           q1000(orbitYawCur),
@@ -9716,18 +9912,17 @@
           q1000(auxOrbitYawCur),
           q1000(auxPhaseLiftY),
           introActive ? q1000(introElapsed) : 0,
-          Math.round(camDistCur * 100),
           q1000(effortLiftHeightCur),
-          q20(neighborSympathyCur),
+          q12(neighborSympathyCur),
           q1000(orchLatchCur),
-          q20(liftPitchCur),
-          q20(liftRollCur),
-          q20(liftYawCur),
-          q20(liftMagXCur),
-          q20(liftMagZCur),
-          q20(gyroPitchCur),
-          q20(gyroRollCur),
-          q20(gyroYawCur),
+          q12(liftPitchCur),
+          q12(liftRollCur),
+          q12(liftYawCur),
+          q12(liftMagXCur),
+          q12(liftMagZCur),
+          q12(gyroPitchCur),
+          q12(gyroRollCur),
+          q12(gyroYawCur),
           q500(ctrlPressCur[0]),
           q500(ctrlPressCur[1]),
           q500(ctrlPressCur[2]),
@@ -9887,11 +10082,17 @@
 
         var chassisThemeKey = palette.id + ':' + (enableAuxPad ? 1 : 0);
         if (lastChassisThemeId !== chassisThemeKey) {
+          var prevEmptyChassis = lastChassisThemeId === '';
+          var auxLayoutChanged = lastChassisAuxFlag !== (enableAuxPad ? 1 : 0);
           lastChassisThemeId = chassisThemeKey;
+          lastChassisAuxFlag = enableAuxPad ? 1 : 0;
           var chMesh = buildChassisMesh(palette, enableAuxPad);
           uploadSolidMesh(glObjs.chassisGpu, chMesh, gl.STATIC_DRAW);
-          shadowDirty = true;
-          lastShadowGeomSig = '';
+          /* 仅在首次建底盘或副盘结构切换时重算阴影，纯切换主题配色不改变几何深度，避免热开冗余 ShadowPass */
+          if (prevEmptyChassis || auxLayoutChanged) {
+            shadowDirty = true;
+            lastShadowGeomSig = '';
+          }
           keycapInstanceDirty = true;
         }
         syncAuxAtlasTexture();
@@ -9899,7 +10100,11 @@
         var tp = state.themeProfile || {};
         var ambientMul = clamp(tp.ambientMul === undefined ? 0.7 : Number(tp.ambientMul), 0, 1);
         var rimToneIdx = resolveRimToneIndex(palette);
-        var prismCfgVec = [rimToneIdx, sweepWaveX, sweepWaveWeight, energyPulseVal];
+        _framePrismCfg4[0] = rimToneIdx;
+        _framePrismCfg4[1] = sweepWaveX;
+        _framePrismCfg4[2] = sweepWaveWeight;
+        _framePrismCfg4[3] = energyPulseVal;
+        var prismCfgVec = _framePrismCfg4;
 
         var fluxCfg = null;
         var activeSwitchForMesh = switchInfo && switchInfo.lift > 0.04 ? switchInfo : null;
@@ -10028,7 +10233,8 @@
               gl.uniformMatrix4fv(shPass.uKeycap.chassisMat, false, chassisMat);
               gl.uniformMatrix4fv(shPass.uKeycap.auxChassisMat, false, auxChassisMat);
               gl.bindVertexArray(glObjs.capVao);
-              gl.drawElementsInstanced(gl.TRIANGLES, glObjs.capIndexCount, gl.UNSIGNED_SHORT, 0, totalKeyInstances);
+              /* 阴影 Pass 仅绘制轻量高质量键帽外壳（440 tris/键），彻底剔除内部不可见底腔，三角面直降 71.5% */
+              gl.drawElementsInstanced(gl.TRIANGLES, glObjs.capOuterIndexCount, gl.UNSIGNED_SHORT, 0, totalKeyInstances);
             }
 
             gl.bindVertexArray(null);
@@ -10046,18 +10252,31 @@
           }
         }
 
-        /* ================= Stage B: V11 双外设铝壳 + 3D 棱镜边 + 屏幕 + (90+6) 键 + 折光微晶簇 ================= */
-        var envVec = [palette.isLight ? 1.0 : 0.0, shadowEnabled, ambientMul, fluxPhase];
-        var rimTintVec = palette.rimTint || [0.74, 0.84, 1.0];
-        var liftShadowVec = switchInfo && switchInfo.lift > 0.04
-          ? [switchInfo.capX, CAP_Y_BASE + switchInfo.lift * effortLiftHeightCur, switchInfo.capZ, switchInfo.lift]
-          : [0, 0, 0, 0];
+        /* ================= Stage B: Early-Z Front-to-Back 渲染（先键帽写满深度 -> 再底盘/定位板剔除 ~2× Overdraw -> 再 OLED 屏与半透明微晶） ================= */
+        _frameEnvVec4[0] = palette.isLight ? 1.0 : 0.0;
+        _frameEnvVec4[1] = shadowEnabled;
+        _frameEnvVec4[2] = ambientMul;
+        _frameEnvVec4[3] = fluxPhase;
+        var envVec = _frameEnvVec4;
+        var rimTintVec = palette.rimTint || _fallbackRimTint3;
+        var liftShadowVec;
+        if (switchInfo && switchInfo.lift > 0.04) {
+          _frameLiftShadow4[0] = switchInfo.capX;
+          _frameLiftShadow4[1] = CAP_Y_BASE + switchInfo.lift * effortLiftHeightCur;
+          _frameLiftShadow4[2] = switchInfo.capZ;
+          _frameLiftShadow4[3] = switchInfo.lift;
+          liftShadowVec = _frameLiftShadow4;
+        } else {
+          liftShadowVec = _zeroVec4;
+        }
 
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-        gl.enable(gl.BLEND);
-        gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        /* Pass 1 & 2 全为不透明实体：关闭混合省带宽，利用 Front-to-Back Early-Z 消除被 96 颗键帽遮挡的定位板 Overdraw */
+        if (typeof gl.disable === 'function') {
+          gl.disable(gl.BLEND);
+        }
 
         gl.activeTexture(texUnit1);
         gl.bindTexture(gl.TEXTURE_2D, shPass ? shPass.tex : glObjs.atlasTex);
@@ -10066,7 +10285,56 @@
         gl.activeTexture(texUnit3);
         gl.bindTexture(gl.TEXTURE_2D, glObjs.metalEnvTex);
 
-        /* Pass 1: 主盘与右侧 2×3 副盘 Step-Bezel CNC 铝壳 + 导光腰线 + PVD 镜面配重 + 轴座 */
+        /* Pass 1 (Early-Z 前景): 96 颗不透明键帽轻量外壳 + 仅 1 颗浮空磁悬浮键（instance 0）微距立体底腔 */
+        if (totalKeyInstances > 0) {
+          gl.useProgram(glObjs.progKeycap);
+          gl.uniformMatrix4fv(glObjs.uKeycap.viewProj, false, viewProjMat);
+          gl.uniformMatrix4fv(glObjs.uKeycap.chassisMat, false, chassisMat);
+          gl.uniformMatrix4fv(glObjs.uKeycap.auxChassisMat, false, auxChassisMat);
+          gl.uniformMatrix4fv(glObjs.uKeycap.lightViewProj, false, lightViewProjMat);
+          gl.uniform3fv(glObjs.uKeycap.camPos, camEye);
+          gl.uniform3fv(glObjs.uKeycap.lightDir, MAIN_LIGHT_DIR);
+          gl.uniform3fv(glObjs.uKeycap.rimTint, rimTintVec);
+          gl.uniform4fv(glObjs.uKeycap.envParams, envVec);
+          gl.uniform4fv(glObjs.uKeycap.liftCapShadow, liftShadowVec);
+          gl.uniform4fv(glObjs.uKeycap.prismConfig, prismCfgVec);
+
+          if (switchInfo && ambientMul > 0.01 && switchInfo.lift > 0.03) {
+            gl.uniform4f(
+              glObjs.uKeycap.switchLightPos,
+              switchInfo.x,
+              PLATE_Y + 0.28,
+              switchInfo.z + 0.22,
+              ambientMul * switchInfo.lift * 1.05
+            );
+            gl.uniform3fv(glObjs.uKeycap.switchLightColor, switchInfo.ledRgb);
+          } else {
+            gl.uniform4f(glObjs.uKeycap.switchLightPos, 0, 0, 0, 0);
+            gl.uniform3f(glObjs.uKeycap.switchLightColor, 0, 0, 0);
+          }
+
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, glObjs.atlasTex);
+          gl.uniform1i(glObjs.uKeycap.atlasTex, 0);
+          gl.uniform1i(glObjs.uKeycap.shadowTex, 1);
+          gl.uniform1i(glObjs.uKeycap.grainTex, 2);
+          gl.uniform1i(glObjs.uKeycap.metalEnvTex, 3);
+
+          gl.bindVertexArray(glObjs.capVao);
+          gl.drawElementsInstanced(gl.TRIANGLES, glObjs.capOuterIndexCount, gl.UNSIGNED_SHORT, 0, totalKeyInstances);
+          if (hasLiftedKeycapCavity && glObjs.capCavityIndexCount > 0) {
+            gl.drawElementsInstanced(
+              gl.TRIANGLES,
+              glObjs.capCavityIndexCount,
+              gl.UNSIGNED_SHORT,
+              glObjs.capOuterIndexCount * 2,
+              1
+            );
+          }
+          gl.bindVertexArray(null);
+        }
+
+        /* Pass 2 (Early-Z 受益层): 主盘与右侧 2×3 副盘 Step-Bezel CNC 铝壳 + 导光腰线 + 静态 PVD 镜面配重 + 轴座 */
         gl.useProgram(glObjs.progSolid);
         gl.uniformMatrix4fv(glObjs.uSolid.viewProj, false, viewProjMat);
         gl.uniformMatrix4fv(glObjs.uSolid.model, false, chassisMat);
@@ -10075,7 +10343,7 @@
         gl.uniform3fv(glObjs.uSolid.lightDir, MAIN_LIGHT_DIR);
         gl.uniform3fv(glObjs.uSolid.rimTint, rimTintVec);
         gl.uniform4fv(glObjs.uSolid.envParams, envVec);
-        gl.uniform4fv(glObjs.uSolid.liftCapShadow, switchInfo && !switchInfo.isAux ? liftShadowVec : [0, 0, 0, 0]);
+        gl.uniform4fv(glObjs.uSolid.liftCapShadow, switchInfo && !switchInfo.isAux ? liftShadowVec : _zeroVec4);
         gl.uniform4fv(glObjs.uSolid.prismFocusPos, prismFocusVec);
         gl.uniform4fv(glObjs.uSolid.prismConfig, prismCfgVec);
 
@@ -10107,7 +10375,7 @@
 
         if (enableAuxPad && glObjs.chassisGpu.auxCount > 0) {
           gl.uniformMatrix4fv(glObjs.uSolid.model, false, auxChassisMat);
-          gl.uniform4fv(glObjs.uSolid.liftCapShadow, switchInfo && switchInfo.isAux ? liftShadowVec : [0, 0, 0, 0]);
+          gl.uniform4fv(glObjs.uSolid.liftCapShadow, switchInfo && switchInfo.isAux ? liftShadowVec : _zeroVec4);
           if (switchInfo && switchInfo.isAux && ambientMul > 0.01 && switchInfo.lift > 0.03) {
             gl.uniform4f(
               glObjs.uSolid.switchLightPos,
@@ -10135,7 +10403,9 @@
           }
         }
 
-        /* Pass 2: 第 3~12 族 10U×3U 2.5D 蓝宝石圆角 OLED 大屏 */
+        /* Pass 3: 第 3~12 族 10U×3U 2.5D 蓝宝石圆角 OLED 大屏（开启混合以平滑融合 1px 圆角抗锯齿边至 CNC 内框） */
+        gl.enable(gl.BLEND);
+        gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         var diScreen = state.deckInfo || null;
         var screenZ = Number(
           diScreen && diScreen.z !== undefined && diScreen.z !== null
@@ -10173,46 +10443,7 @@
 
         gl.bindVertexArray(glObjs.scrVao);
         gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
-
-        /* Pass 3: 单次硬件实例化合批渲染主盘 90 键 + 副盘 6 键（KEYCAP_VS 内自动按 x > 9.85 选择 u_auxChassisMat） */
-        if (totalKeyInstances > 0) {
-          gl.useProgram(glObjs.progKeycap);
-          gl.uniformMatrix4fv(glObjs.uKeycap.viewProj, false, viewProjMat);
-          gl.uniformMatrix4fv(glObjs.uKeycap.chassisMat, false, chassisMat);
-          gl.uniformMatrix4fv(glObjs.uKeycap.auxChassisMat, false, auxChassisMat);
-          gl.uniformMatrix4fv(glObjs.uKeycap.lightViewProj, false, lightViewProjMat);
-          gl.uniform3fv(glObjs.uKeycap.camPos, camEye);
-          gl.uniform3fv(glObjs.uKeycap.lightDir, MAIN_LIGHT_DIR);
-          gl.uniform3fv(glObjs.uKeycap.rimTint, rimTintVec);
-          gl.uniform4fv(glObjs.uKeycap.envParams, envVec);
-          gl.uniform4fv(glObjs.uKeycap.liftCapShadow, liftShadowVec);
-          gl.uniform4fv(glObjs.uKeycap.prismConfig, prismCfgVec);
-
-          if (switchInfo && ambientMul > 0.01 && switchInfo.lift > 0.03) {
-            gl.uniform4f(
-              glObjs.uKeycap.switchLightPos,
-              switchInfo.x,
-              PLATE_Y + 0.28,
-              switchInfo.z + 0.22,
-              ambientMul * switchInfo.lift * 1.05
-            );
-            gl.uniform3fv(glObjs.uKeycap.switchLightColor, switchInfo.ledRgb);
-          } else {
-            gl.uniform4f(glObjs.uKeycap.switchLightPos, 0, 0, 0, 0);
-            gl.uniform3f(glObjs.uKeycap.switchLightColor, 0, 0, 0);
-          }
-
-          gl.activeTexture(gl.TEXTURE0);
-          gl.bindTexture(gl.TEXTURE_2D, glObjs.atlasTex);
-          gl.uniform1i(glObjs.uKeycap.atlasTex, 0);
-          gl.uniform1i(glObjs.uKeycap.shadowTex, 1);
-          gl.uniform1i(glObjs.uKeycap.grainTex, 2);
-          gl.uniform1i(glObjs.uKeycap.metalEnvTex, 3);
-
-          gl.bindVertexArray(glObjs.capVao);
-          gl.drawElementsInstanced(gl.TRIANGLES, glObjs.capIndexCount, gl.UNSIGNED_SHORT, 0, totalKeyInstances);
-          gl.bindVertexArray(null);
-        }
+        gl.bindVertexArray(null);
 
         /* Pass 4: Antigravity 轴座气隙「磁通全息环 + 光柱 + 6..28 颗三维八面体折光微晶 + 散景光尘」（复用 progSolid + widgetsGpu） */
         if (glObjs.widgetsGpu.fluxCount > 0) {
@@ -11149,16 +11380,15 @@
       }
 
       function projectBoxToCssRect(minX, minY, minZ, maxX, maxY, maxZ, localMat) {
-        var xs = [minX, maxX];
-        var ys = [minY, maxY];
-        var zs = [minZ, maxZ];
         var left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
         for (var ix = 0; ix < 2; ix++) {
+          var bx = ix === 0 ? minX : maxX;
           for (var iy = 0; iy < 2; iy++) {
+            var by = iy === 0 ? minY : maxY;
             for (var iz = 0; iz < 2; iz++) {
-              var cx = xs[ix], cy = ys[iy], cz = zs[iz];
+              var cx = bx, cy = by, cz = iz === 0 ? minZ : maxZ;
               if (localMat) {
-                var lp = transformPoint4(localMat, cx, cy, cz, 1.0);
+                var lp = transformPoint4(localMat, cx, cy, cz, 1.0, _tmpVec4C);
                 cx = lp[0]; cy = lp[1]; cz = lp[2];
               }
               var pt = projectChassisPointToPx(cx, cy, cz, 1.0);
@@ -11183,16 +11413,15 @@
       }
 
       function projectAuxBoxToCssRect(minX, minY, minZ, maxX, maxY, maxZ, localMat) {
-        var xs = [minX, maxX];
-        var ys = [minY, maxY];
-        var zs = [minZ, maxZ];
         var left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
         for (var ix = 0; ix < 2; ix++) {
+          var bx = ix === 0 ? minX : maxX;
           for (var iy = 0; iy < 2; iy++) {
+            var by = iy === 0 ? minY : maxY;
             for (var iz = 0; iz < 2; iz++) {
-              var cx = xs[ix], cy = ys[iy], cz = zs[iz];
+              var cx = bx, cy = by, cz = iz === 0 ? minZ : maxZ;
               if (localMat) {
-                var lp = transformPoint4(localMat, cx, cy, cz, 1.0);
+                var lp = transformPoint4(localMat, cx, cy, cz, 1.0, _tmpVec4C);
                 cx = lp[0]; cy = lp[1]; cz = lp[2];
               }
               var pt = projectAuxChassisPointToPx(cx, cy, cz, 1.0);
@@ -11668,7 +11897,8 @@
         sweepWaveWeight = 0.05;
         shadowDirty = true;
         energizeZeroG(ZERO_G_DURATION);
-        wakeAndRenderSync();
+        /* 异步合并至下一 VSync 帧启动入场动画，避免 open() 同毫秒内紧跟 setState() 再同步重绘第 4 遍整帧 */
+        requestWake();
       }
 
       function triggerWaveRipple(originZ, strength) {
@@ -11850,10 +12080,13 @@
 
       function resize(nextCssW, nextCssH, nextDpr, optBoundsRect) {
         if (disposed) return;
+        var prevCssW = cssWidth;
+        var prevCssH = cssHeight;
+        var prevDpr = dpr;
         cssWidth = Math.max(64, Number(nextCssW) || cssWidth || 1040);
         cssHeight = Math.max(48, Number(nextCssH) || cssHeight || 552);
-        /* 严格封顶 DPR <= 2.0（WebGL2 与 Canvas2D 降级模式统一生效） */
-        dpr = Math.min(2, Math.max(1, Number(nextDpr) || 1));
+        /* DPR 上限封顶 1.5（DPR=1 保持原生 1.0 零降质，2K/4K 高分屏下大幅削减填充率与 MSAA 带宽） */
+        dpr = Math.min(1.5, Math.max(1, Number(nextDpr) || 1));
         if (optBoundsRect && typeof optBoundsRect === 'object') {
           cachedCanvasRect = {
             left: Number(optBoundsRect.left) || 0,
@@ -11882,14 +12115,24 @@
             cachedCanvasRect.height = cssHeight;
           }
         }
+        var targetW = Math.max(1, Math.round(cssWidth * dpr));
+        var targetH = Math.max(1, Math.round(cssHeight * dpr));
+        var canvasResized = false;
         if (canvas) {
-          var targetW = Math.max(1, Math.round(cssWidth * dpr));
-          var targetH = Math.max(1, Math.round(cssHeight * dpr));
-          if (canvas.width !== targetW) canvas.width = targetW;
-          if (canvas.height !== targetH) canvas.height = targetH;
+          if (canvas.width !== targetW) {
+            canvas.width = targetW;
+            canvasResized = true;
+          }
+          if (canvas.height !== targetH) {
+            canvas.height = targetH;
+            canvasResized = true;
+          }
         }
-        shadowDirty = true;
-        keycapInstanceDirty = true;
+        /* 画布宽高与 DPR 均未变更且已完成首帧绘制时，跳过冗余整帧重绘 */
+        if (hasInitialRender && !canvasResized && prevCssW === cssWidth && prevCssH === cssHeight && prevDpr === dpr) {
+          return;
+        }
+        /* 视口尺寸变化不影响光源正交阴影深度与键帽局部矩阵，严禁在此处误置 shadowDirty / keycapInstanceDirty */
         updateTransforms();
         recomputePointerTargets();
         if (hasInitialRender && isEffectivelyPaused()) {
@@ -12318,7 +12561,9 @@
           painter.showSessionSyncedBadge(label, durationMs, animClockMs);
           lastOledSig = '';
           lastOledDiscreteSig = '';
+          lastOledCoreSig = '';
           lastOledUploadMs = -1;
+          oledPendingFlush = false;
           wakeAndRenderSync();
         }
       }
@@ -12501,7 +12746,11 @@
         auxStripSurf = null;
         activeOledCanvas = null;
         lastOledDiscreteSig = '';
+        lastOledCoreSig = '';
         lastOledUploadMs = -1;
+        oledPendingFlush = false;
+        oledCoreTransitionStep = false;
+        hasLiftedKeycapCavity = false;
         lastPickKind = null;
         lastPickIdx = -1;
         keyLocalInvValid.fill(0);

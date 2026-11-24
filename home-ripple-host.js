@@ -233,8 +233,10 @@
       let ph = 0;
       let shrunk = false;
       const WB = 'data-ag-cs-win-blur';
+      const PP_OPEN = 'data-ag-pp-open';
       const isAB = () => getRootHtml()?.getAttribute?.(WB) === '1';
-      const hP = () => Boolean(document.hidden || wb || isAB());
+      const isPpOpen = () => getRootHtml()?.getAttribute?.(PP_OPEN) === '1';
+      const hP = () => Boolean(document.hidden || wb || isAB() || isPpOpen());
 
       const syncG = (w, h) => {
         if (w <= 0 || h <= 0) return;
@@ -562,7 +564,7 @@
       if (typeof MutationObserver === 'function' && getRootHtml()) {
         try {
           bMo = new MutationObserver(() => { if (!isAB()) wb = false; onVis(); });
-          bMo.observe(getRootHtml(), { attributes: true, attributeFilter: [WB] });
+          bMo.observe(getRootHtml(), { attributes: true, attributeFilter: [WB, PP_OPEN] });
         } catch {}
       }
       state.uW = () => {
