@@ -26,7 +26,10 @@
 > 感谢以下伙伴提交的高质量性能剖析、根因线索、截图复现与体验建议：
 
 - **[@Gruu6y](https://github.com/Gruu6y)** — [#2](https://github.com/RMvdesi/obsidian-prism/issues/2)、[#3](https://github.com/RMvdesi/obsidian-prism/issues/3)、[#8](https://github.com/RMvdesi/obsidian-prism/issues/8)、[#18](https://github.com/RMvdesi/obsidian-prism/issues/18)：全链路渲染/流式/守护进程深度性能剖析与优化方案、设置弹窗 Read-then-Write 零回流建议、Windows 双重滚动条根因定位与 Swarm 纯 CDP 按需汉化提案。
-- **[@boy14204367](https://github.com/boy14204367)**（Arui）— [#7](https://github.com/RMvdesi/obsidian-prism/issues/7)、[#11](https://github.com/RMvdesi/obsidian-prism/issues/11)、[#14](https://github.com/RMvdesi/obsidian-prism/issues/14)、[#15](https://github.com/RMvdesi/obsidian-prism/issues/15)：精准定位设置面板卡顿与 `host-i18n` `pointerenter` 深扫、React 19 多文本节点滑块异常、思考转译系统代理场景及深浅模式原生 `<select>` 对比度缺陷。
+- **[@boy14204367](https://github.com/boy14204367)**（Arui）— [#7](https://github.com/RMvdesi/obsidian-prism/issues/7)、[#9](https://github.com/RMvdesi/obsidian-prism/issues/9)、[#11](https://github.com/RMvdesi/obsidian-prism/issues/11)、[#14](https://github.com/RMvdesi/obsidian-prism/issues/14)、[#15](https://github.com/RMvdesi/obsidian-prism/issues/15)：精准定位设置面板卡顿与 `host-i18n` `pointerenter` 深扫、React 19 多文本节点滑块异常与跨模型档位记忆需求、思考转译系统代理场景及深浅模式原生 `<select>` 对比度缺陷。
+- **[@nanpi8633-spec](https://github.com/nanpi8633-spec)** — [#38](https://github.com/RMvdesi/obsidian-prism/issues/38)：详尽的 macOS `daemon.log` 重启根因排查，以及不修改宿主应用签名的无损包装启动器（`Antigravity Prism.app`）设计思路。
+- **[@yanzhem02](https://github.com/yanzhem02)** — [#37](https://github.com/RMvdesi/obsidian-prism/issues/37)：英文界面体验反馈与双端中英双语安装器/托盘需求推动。
+- **[@awasllll0317](https://github.com/awasllll0317)** — [#39](https://github.com/RMvdesi/obsidian-prism/issues/39)：定位首页新会话界面底部工具栏空白区遮挡桌面双宠交互的问题。
 - **[@baihao2006](https://github.com/baihao2006)** — [#31](https://github.com/RMvdesi/obsidian-prism/issues/31)：提供清晰截图与环境信息，协助定位 Win11 中文环境下模型推理等级滑块文字向下偏移闪动问题。
 - **[@fenzsen](https://github.com/fenzsen)** — [#27](https://github.com/RMvdesi/obsidian-prism/issues/27)：思考过程翻译偶发失效排查与手动代理配置需求反馈。
 - **[@L-yifan](https://github.com/L-yifan)** — [#26](https://github.com/RMvdesi/obsidian-prism/issues/26)：子菜单可读性与右键菜单交互体验反馈。
