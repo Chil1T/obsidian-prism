@@ -2069,6 +2069,9 @@ export class PrismDaemon {
     this.wallpaperExpr = '';
     this.wallpaperCodeHash = '';
     this._wallpaperHashSource = '';
+    this.periodicPickerExpr = '';
+    this.periodicPickerCodeHash = '';
+    this._periodicPickerHashSource = '';
     this.codeHash = '';
     this.ownerToken = `${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     this.pidFile = path.join(this.rootDir, '.daemon.pid');
@@ -3119,6 +3122,7 @@ export class PrismDaemon {
     this._buildThoughtExprForConfig(cfg, cacheOpts);
     this._buildInlineDiffExprForConfig(cfg, cacheOpts);
     this._buildWallpaperExprForConfig(cfg, cacheOpts);
+    this._buildPeriodicPickerExprForConfig(cfg, cacheOpts);
 
     if (bundleCachePath) {
       if (deferDiskCacheWrite) {
@@ -3416,6 +3420,176 @@ export class PrismDaemon {
       this.cdp?.WALLPAPER_REMOVE_EXPRESSION ||
       "(() => { try { window.__agPrismWallpaper?.destroy?.(); } catch {} try { const root = document.getElementById('ag-prism-wallpaper-root'); if (root) { root.querySelectorAll('video').forEach((v) => { try { v.pause(); v.removeAttribute('src'); v.load(); } catch {} }); root.remove(); } } catch {} try { document.getElementById('ag-prism-wallpaper-css')?.remove(); } catch {} try { document.documentElement?.removeAttribute?.('data-ag-prism-wallpaper'); } catch {} try { delete window.__agPrismWallpaper; } catch {} try { delete globalThis.__agPrismWallpaper; } catch {} try { delete window.__prismMountWallpaperUi; } catch {} try { delete globalThis.__prismMountWallpaperUi; } catch {} try { delete window.__agPrismWallpaperResolve; } catch {} return { ok: true, status: 'off' }; })()"
     );
+  }
+
+  _hasPeriodicPickerFile() {
+    try {
+      return fs.existsSync(path.join(this.rootDir, 'vendor', 'periodic-picker', 'periodic-picker.js'));
+    } catch {
+      return false;
+    }
+  }
+
+  _isPeriodicPickerEnabled(cfgOverride = null) {
+    try {
+      const cfg = cfgOverride || this.cdp?.readConfig?.();
+      if (typeof this.cdp?.shouldEnablePeriodicPicker === 'function') {
+        return Boolean(this.cdp.shouldEnablePeriodicPicker(cfg));
+      }
+      return cfg?.periodicModelPicker !== 'off' && cfg?.periodicModelPicker !== false;
+    } catch {
+      return true;
+    }
+  }
+
+  _getPeriodicPickerCfgSig(cfgOverride = null) {
+    try {
+      const cfg = cfgOverride || this.cdp?.readConfig?.() || {};
+      return cfg.periodicModelPicker === 'off' || cfg.periodicModelPicker === false ? 'off' : 'on';
+    } catch {
+      return 'on';
+    }
+  }
+
+  _extractPeriodicPickerCodeHash(expr) {
+    const str = typeof expr === 'string' ? expr : '';
+    if (!str) return '';
+    const m = /const targetHash = "([^"]+)"/.exec(str);
+    if (m && m[1]) return m[1];
+    return crypto.createHash('sha256').update(str).digest('hex').slice(0, 16);
+  }
+
+  _setPeriodicPickerExpr(expr) {
+    const next = typeof expr === 'string' ? expr : '';
+    this.periodicPickerExpr = next;
+    this._periodicPickerHashSource = next;
+    this.periodicPickerCodeHash = this._extractPeriodicPickerCodeHash(next);
+    return next;
+  }
+
+  _buildPeriodicPickerExprForConfig(cfgOverride = null, cacheOpts = undefined) {
+    const cfg = cfgOverride || (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
+    if (
+      typeof this.cdp?.buildPeriodicPickerExpression !== 'function' ||
+      !this._hasPeriodicPickerFile() ||
+      !this._isPeriodicPickerEnabled(cfg)
+    ) {
+      return this._setPeriodicPickerExpr('');
+    }
+    const opts = cacheOpts !== undefined ? cacheOpts : this._getChannelCacheOpts(true);
+    const expr = opts
+      ? this.cdp.buildPeriodicPickerExpression(cfg, opts)
+      : this.cdp.buildPeriodicPickerExpression(cfg);
+    if (cacheOpts === undefined && opts && this.running) {
+      this._scheduleBundleCacheFlush();
+    }
+    return this._setPeriodicPickerExpr(expr);
+  }
+
+  _getPeriodicPickerExprHash(expr = this.periodicPickerExpr) {
+    const str = typeof expr === 'string' ? expr : '';
+    if (!str) return '';
+    if (str === this._periodicPickerHashSource && this.periodicPickerCodeHash) {
+      return this.periodicPickerCodeHash;
+    }
+    const hash = this._extractPeriodicPickerCodeHash(str);
+    if (str === this.periodicPickerExpr) {
+      this._periodicPickerHashSource = str;
+      this.periodicPickerCodeHash = hash;
+    }
+    return hash;
+  }
+
+  _getPeriodicPickerCleanupExpression() {
+    return (
+      this.cdp?.PERIODIC_PICKER_REMOVE_EXPRESSION ||
+      "(() => { try { window.__agPrismPeriodicPicker?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-periodic-picker'); document.documentElement?.removeAttribute?.('data-ag-pp-open'); document.documentElement?.removeAttribute?.('data-ag-pp-holding'); document.querySelectorAll?.('#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap').forEach((n) => n.remove()); for (const k of ['__agPrismPeriodicPicker','__agPrismPeriodicPickerFactory','__agPrismKeyboard3D','__agPrismPeriodicKeyboard3D','__agPrismOledScreen','__agPrismGrainAssets','__agPeriodicAudioFx','__agPeriodicModelCatalog','__agPeriodicHostBridge','__agPeriodicBentoUi','__agPeriodicPbrGrainAssets','__agPeriodicOledScreen','__agPeriodicKeyboard3D']) { try { delete window[k]; } catch {} try { delete globalThis[k]; } catch {} } } catch {} return { ok: true, status: 'off' }; })()"
+    );
+  }
+
+  async _resetPeriodicPickerEntryState(entry, session = entry?.session) {
+    if (!entry) return;
+    if (entry.periodicPickerScriptId && session && !session.closed) {
+      await session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId })
+        .catch(() => {});
+    }
+    entry.periodicPickerScriptId = null;
+    entry.periodicPickerMounted = false;
+    entry.lastPeriodicPickerSig = '';
+    entry.lastPeriodicPickerScriptSig = '';
+  }
+
+  async _syncPeriodicPickerOnEntry(
+    entry,
+    cfgNow,
+    {
+      expr = null,
+      hash = '',
+      enabled = null,
+      probe = null,
+      forceReplaceScript = false,
+      forceEval = false,
+      runCleanup = false,
+      evalTimeoutMs = 4500,
+      cleanupTimeoutMs = 3500,
+    } = {}
+  ) {
+    if (!entry || entry.session.closed) return;
+    const isEnabled = enabled !== null ? Boolean(enabled) : this._hasPeriodicPickerFile() && this._isPeriodicPickerEnabled(cfgNow);
+    if (isEnabled) {
+      const activeExpr = expr || this.periodicPickerExpr || this._buildPeriodicPickerExprForConfig(cfgNow);
+      if (!activeExpr) return;
+      const ppHash = hash || this._getPeriodicPickerExprHash(activeExpr);
+      const ppSig = `${this._getPeriodicPickerCfgSig(cfgNow)}:${ppHash}`;
+      if (forceReplaceScript || !entry.periodicPickerScriptId || entry.lastPeriodicPickerScriptSig !== ppSig) {
+        if (entry.periodicPickerScriptId) {
+          await entry.session
+            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId })
+            .catch(() => {});
+          entry.periodicPickerScriptId = null;
+        }
+        const ppAdd = await entry.session
+          .send('Page.addScriptToEvaluateOnNewDocument', { source: activeExpr })
+          .catch(() => null);
+        if (ppAdd && ppAdd.identifier) {
+          entry.periodicPickerScriptId = ppAdd.identifier;
+          entry.lastPeriodicPickerScriptSig = ppSig;
+        } else {
+          entry.lastPeriodicPickerScriptSig = '';
+        }
+      }
+      const needsEval = forceEval || !probe || !probe.hasPeriodicPicker || Boolean(ppHash && probe.periodicPickerCodeHash !== ppHash);
+      if (needsEval && !entry.session.closed) {
+        const evalRes =
+          evalTimeoutMs > 0
+            ? await entry.session.evaluate(activeExpr, false, evalTimeoutMs).catch(() => null)
+            : await entry.session.evaluate(activeExpr).catch(() => null);
+        if (evalRes && evalRes.ok) {
+          entry.periodicPickerMounted = true;
+          entry.lastPeriodicPickerSig = ppSig;
+        }
+      }
+      return;
+    }
+
+    const hadBefore = Boolean(entry.periodicPickerScriptId || entry.periodicPickerMounted);
+    if (entry.periodicPickerScriptId) {
+      await entry.session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId })
+        .catch(() => {});
+      entry.periodicPickerScriptId = null;
+    }
+    if ((runCleanup || hadBefore || probe?.hasPeriodicPicker) && !entry.session.closed) {
+      if (cleanupTimeoutMs > 0) {
+        await entry.session.evaluate(this._getPeriodicPickerCleanupExpression(), false, cleanupTimeoutMs).catch(() => null);
+      } else {
+        await entry.session.evaluate(this._getPeriodicPickerCleanupExpression()).catch(() => null);
+      }
+    }
+    entry.periodicPickerMounted = false;
+    entry.lastPeriodicPickerSig = '';
+    entry.lastPeriodicPickerScriptSig = '';
   }
 
   _isTelemetryDisabled(cfgOverride = null) {
@@ -4968,6 +5142,7 @@ export class PrismDaemon {
         let thoughtSnap = this.thoughtExpr;
         let inlineDiffSnap = this.inlineDiffExpr;
         let wallpaperSnap = this.wallpaperExpr;
+        let periodicPickerSnap = this.periodicPickerExpr;
         const currentCfg = typeof this.cdp.readConfig === 'function' ? this.cdp.readConfig() : {};
         if (currentCfg?.telemetryModule === 'off') {
           this._releaseIdleTelemetry(true);
@@ -4993,6 +5168,14 @@ export class PrismDaemon {
           wallpaperSnap = this._buildWallpaperExprForConfig(currentCfg);
         }
         const wallpaperHash = wallpaperSnap ? this._getWallpaperExprHash(wallpaperSnap) : '';
+        const periodicPickerEnabled = this._hasPeriodicPickerFile() && this._isPeriodicPickerEnabled(currentCfg);
+        if (periodicPickerEnabled && !periodicPickerSnap && typeof this.cdp.buildPeriodicPickerExpression === 'function') {
+          periodicPickerSnap = this._buildPeriodicPickerExprForConfig(currentCfg);
+        }
+        const periodicPickerHash = periodicPickerSnap ? this._getPeriodicPickerExprHash(periodicPickerSnap) : '';
+        const periodicPickerSig = periodicPickerEnabled
+          ? `${this._getPeriodicPickerCfgSig(currentCfg)}:${periodicPickerHash}`
+          : '';
         const canFastRefresh = typeof this.cdp.buildConfigRefreshExpression === 'function';
         const baseRefreshExpr = canFastRefresh ? this.cdp.buildConfigRefreshExpression() : null;
         if (activeItems.length === 0) continue;
@@ -5143,6 +5326,28 @@ export class PrismDaemon {
                 entry.wallpaperSkipped = false;
                 entry.lastWallpaperHash = '';
               }
+              if (abortIfStale()) return;
+              const hadPeriodicPicker = Boolean(entry.periodicPickerScriptId || entry.periodicPickerMounted);
+              const periodicPickerChanged = Boolean(
+                periodicPickerEnabled &&
+                  periodicPickerSnap &&
+                  (entry.lastPeriodicPickerSig !== periodicPickerSig || !entry.periodicPickerScriptId || !entry.periodicPickerMounted)
+              );
+              if (periodicPickerEnabled && periodicPickerSnap) {
+                if (!skippedStale && !entry.session.closed && (!refreshedFast || periodicPickerChanged)) {
+                  const evalRes = await entry.session.evaluate(periodicPickerSnap).catch(() => null);
+                  if (evalRes && evalRes.ok) {
+                    entry.periodicPickerMounted = true;
+                    entry.lastPeriodicPickerSig = periodicPickerSig;
+                  }
+                }
+              } else if ((hadPeriodicPicker || !this._isPeriodicPickerEnabled(currentCfg)) && !skippedStale && !entry.session.closed) {
+                if (hadPeriodicPicker) {
+                  await entry.session.evaluate(this._getPeriodicPickerCleanupExpression()).catch(() => {});
+                }
+                entry.periodicPickerMounted = false;
+                entry.lastPeriodicPickerSig = '';
+              }
 
               // Coalesce persistent NewDocument script replacement if a newer mutation is already queued!
               if (this._broadcastPending || this._configSeq !== snapSeq || entry.session.closed) {
@@ -5289,6 +5494,29 @@ export class PrismDaemon {
                   entry.lastWallpaperScriptHash = wallpaperHash;
                 }
               }
+              if (!periodicPickerEnabled || !periodicPickerSnap) {
+                if (entry.periodicPickerScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId })
+                    .catch(() => {});
+                  entry.periodicPickerScriptId = null;
+                }
+                entry.lastPeriodicPickerScriptSig = '';
+              } else if ((entry.lastPeriodicPickerScriptSig !== periodicPickerSig || !entry.periodicPickerScriptId) && !entry.session.closed) {
+                if (entry.periodicPickerScriptId) {
+                  await entry.session
+                    .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId })
+                    .catch(() => {});
+                  entry.periodicPickerScriptId = null;
+                }
+                const ppAdd = await entry.session
+                  .send('Page.addScriptToEvaluateOnNewDocument', { source: periodicPickerSnap })
+                  .catch(() => null);
+                if (ppAdd && ppAdd.identifier) {
+                  entry.periodicPickerScriptId = ppAdd.identifier;
+                  entry.lastPeriodicPickerScriptSig = periodicPickerSig;
+                }
+              }
             })
           )
         );
@@ -5407,6 +5635,10 @@ export class PrismDaemon {
           this._buildWallpaperExprForConfig(curCfg, chOpts);
           if (chOpts && this.wallpaperExpr) usedChCache = true;
         }
+        if (!this.periodicPickerExpr && this._hasPeriodicPickerFile() && this._isPeriodicPickerEnabled(curCfg) && typeof this.cdp.buildPeriodicPickerExpression === 'function') {
+          this._buildPeriodicPickerExprForConfig(curCfg, chOpts);
+          if (chOpts && this.periodicPickerExpr) usedChCache = true;
+        }
         if (usedChCache && this.running) {
           this._scheduleBundleCacheFlush();
         }
@@ -5488,6 +5720,7 @@ export class PrismDaemon {
         entry.wallpaperSkipped = true;
         entry.lastWallpaperHash = '';
         entry.lastWallpaperScriptHash = '';
+        await this._resetPeriodicPickerEntryState(entry);
         return mainRes;
       }
 
@@ -5706,6 +5939,12 @@ export class PrismDaemon {
         entry.lastWallpaperHash = '';
         entry.lastWallpaperScriptHash = '';
       }
+      await this._syncPeriodicPickerOnEntry(entry, getCurrentCfg(), {
+        forceReplaceScript: true,
+        forceEval: true,
+        evalTimeoutMs: 0,
+        cleanupTimeoutMs: 0,
+      });
       entry.lastVerifyAt = Date.now();
       entry.healthyStreak = 1;
       entry.verifyDirty = false;
@@ -6361,6 +6600,10 @@ export class PrismDaemon {
       wallpaperSkipped: false,
       lastWallpaperHash: '',
       lastWallpaperScriptHash: '',
+      periodicPickerScriptId: null,
+      periodicPickerMounted: false,
+      lastPeriodicPickerSig: '',
+      lastPeriodicPickerScriptSig: '',
       sidebarHostVerified: false,
       sidebarVerifiedDocument: -1,
       sidebarHostContextId: null,
@@ -6555,6 +6798,7 @@ export class PrismDaemon {
         entry.wallpaperMounted = false;
         entry.lastWallpaperHash = '';
         entry.lastWallpaperScriptHash = '';
+        await this._resetPeriodicPickerEntryState(entry, session);
       } catch {}
       session.close();
       this.sessions.delete(wsUrl);
@@ -6584,6 +6828,16 @@ export class PrismDaemon {
     const wallpaperNeedsSync = wallpaperAvailable
       ? !entry.wallpaperSkipped && (!entry.wallpaperScriptId || !entry.wallpaperMounted)
       : Boolean(entry.wallpaperScriptId || entry.wallpaperMounted);
+    const periodicPickerAvailable = this._isPeriodicPickerEnabled(cfg) && this._hasPeriodicPickerFile();
+    const expectedPeriodicEarlySig =
+      periodicPickerAvailable && this.periodicPickerExpr
+        ? `${this._getPeriodicPickerCfgSig(cfg)}:${this._getPeriodicPickerExprHash(this.periodicPickerExpr)}`
+        : '';
+    const periodicPickerNeedsSync = periodicPickerAvailable
+      ? !entry.periodicPickerScriptId ||
+        !entry.periodicPickerMounted ||
+        Boolean(expectedPeriodicEarlySig && (entry.lastPeriodicPickerSig !== expectedPeriodicEarlySig || entry.lastPeriodicPickerScriptSig !== expectedPeriodicEarlySig))
+      : Boolean(entry.periodicPickerScriptId || entry.periodicPickerMounted);
     const now = Date.now();
     const hashMatches = !this.codeHash || entry.lastVerifiedCodeHash === this.codeHash;
     if (
@@ -6592,6 +6846,7 @@ export class PrismDaemon {
       !thoughtNeedsSync &&
       !inlineDiffNeedsSync &&
       !wallpaperNeedsSync &&
+      !periodicPickerNeedsSync &&
       !entry.verifyDirty &&
       hashMatches &&
       entry.lastVerifyAt > 0 &&
@@ -6670,6 +6925,12 @@ export class PrismDaemon {
           hasInlineDiff: Boolean(window.__agPrismInlineDiff && !window.__agPrismInlineDiff.getDebugState?.()?.destroyed),
           hasWallpaper: Boolean(window.__agPrismWallpaper && !window.__agPrismWallpaper.getDebugState?.()?.destroyed),
           hasWallpaperUi: Boolean(typeof window.__prismMountWallpaperUi === 'function'),
+          hasPeriodicPicker: Boolean(
+            window.__agPrismPeriodicPicker &&
+            window.__agPrismPeriodicPicker.getStatus?.()?.status !== 'destroyed' &&
+            window.__agPrismPeriodicPicker.getStatus?.()?.status !== 'off'
+          ),
+          periodicPickerCodeHash: String(window.__agPrismPeriodicPicker?.__prismCodeHash || ''),
           codeHash: (api && api.codeHash) || '',
           hasLegacyCss: Boolean(document.getElementById('ag-claude-style-css')),
           needsDashboardSync: Boolean(api && telMode !== 'off' && !isHome && hasModelBtn && !hasPulseBar),
@@ -6722,6 +6983,27 @@ export class PrismDaemon {
         (!probe.hasWallpaper || !probe.hasWallpaperUi || !entry.wallpaperScriptId || !entry.wallpaperMounted);
       const needsWallpaperCleanup =
         !wallpaperAvailable && Boolean(probe.hasWallpaper || probe.hasWallpaperUi || entry.wallpaperScriptId || entry.wallpaperMounted);
+      const periodicPickerEnabled = this._isPeriodicPickerEnabled(cfg);
+      const hasPeriodicPickerOnDisk = periodicPickerEnabled && this._hasPeriodicPickerFile();
+      if (hasPeriodicPickerOnDisk && !this.periodicPickerExpr && typeof this.cdp.buildPeriodicPickerExpression === 'function') {
+        this._buildPeriodicPickerExprForConfig(cfg);
+      }
+      const expectedPeriodicHash = hasPeriodicPickerOnDisk && this.periodicPickerExpr
+        ? this._getPeriodicPickerExprHash(this.periodicPickerExpr)
+        : '';
+      const expectedPeriodicSig = hasPeriodicPickerOnDisk && this.periodicPickerExpr
+        ? `${this._getPeriodicPickerCfgSig(cfg)}:${expectedPeriodicHash}`
+        : '';
+      const periodicPickerHashMismatch = Boolean(
+        expectedPeriodicHash && probe.periodicPickerCodeHash !== expectedPeriodicHash
+      );
+      const periodicPickerScriptStale = Boolean(
+        !entry.periodicPickerScriptId || (expectedPeriodicSig && entry.lastPeriodicPickerScriptSig !== expectedPeriodicSig)
+      );
+      const needsPeriodicPickerHeal =
+        hasPeriodicPickerOnDisk && (!probe.hasPeriodicPicker || periodicPickerHashMismatch || periodicPickerScriptStale);
+      const needsPeriodicPickerCleanup =
+        !periodicPickerEnabled && Boolean(probe.hasPeriodicPicker || entry.periodicPickerScriptId || entry.periodicPickerMounted);
       let healed = false;
       if (
         (entry.sidebarHostVerified === false && probe.isHostDom) ||
@@ -6802,6 +7084,7 @@ export class PrismDaemon {
           entry.wallpaperSkipped = true;
           entry.lastWallpaperHash = '';
           entry.lastWallpaperScriptHash = '';
+          await this._resetPeriodicPickerEntryState(entry);
           this._markTargetIgnored({ id: entry.pageId, webSocketDebuggerUrl: entry.wsUrl }, probe.href || entry.url);
           entry.session.close();
           this.sessions.delete(entry.wsUrl);
@@ -6891,6 +7174,13 @@ export class PrismDaemon {
           entry.hostI18nMounted = false;
           entry.lastHostI18nSig = '';
           entry.lastHostI18nScriptSig = '';
+        }
+        if ((periodicPickerEnabled && needsPeriodicPickerHeal) || (!periodicPickerEnabled && needsPeriodicPickerCleanup)) {
+          await this._syncPeriodicPickerOnEntry(entry, cfg, {
+            enabled: periodicPickerEnabled,
+            probe,
+            runCleanup: needsPeriodicPickerCleanup,
+          });
         }
         if (thoughtEnabled) {
           if (!this.thoughtExpr && typeof this.cdp.buildThoughtExpression === 'function') {
@@ -7079,6 +7369,14 @@ export class PrismDaemon {
           entry.hostI18nMounted = false;
           entry.lastHostI18nSig = '';
           entry.lastHostI18nScriptSig = '';
+        }
+        if (needsPeriodicPickerHeal || needsPeriodicPickerCleanup) {
+          healed = true;
+          await this._syncPeriodicPickerOnEntry(entry, cfg, {
+            enabled: needsPeriodicPickerHeal,
+            probe,
+            runCleanup: needsPeriodicPickerCleanup,
+          });
         }
         if (needsThoughtHeal) {
           healed = true;
@@ -7352,6 +7650,7 @@ export class PrismDaemon {
           entry.wallpaperMounted = false;
           entry.lastWallpaperHash = '';
           entry.lastWallpaperScriptHash = '';
+          await this._resetPeriodicPickerEntryState(entry);
           if (cleanPageDom && !entry.session.closed) {
             await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
           }
@@ -7744,6 +8043,7 @@ export class PrismDaemon {
             entry.wallpaperMounted = false;
             entry.lastWallpaperHash = '';
             entry.lastWallpaperScriptHash = '';
+            await this._resetPeriodicPickerEntryState(entry);
             await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
           }
           entry.session.close();

@@ -1557,8 +1557,8 @@ test('PrismDaemon HS-1 & SEC-2: 68 rapid-fire setting updates, multi-window cros
     assert.equal(stB.vmWin.__agPrism.getState().cfg.palette, 'obsidian', 'Window B must sync with reloaded Window A');
     assert.equal(stB.vmWin.__agPrism.getState().cfg.accentTone, 'iris');
     assert.ok(
-      activeScripts.size <= 10,
-      `HS-1: Active NewDocument script handles across 2 windows × 5 dynamic channels (main + Omni + Sidebar Studio + Inline Diff + Wallpaper) must never leak (got ${activeScripts.size})`
+      activeScripts.size <= 12,
+      `HS-1: Active NewDocument script handles across 2 windows × 6 dynamic channels (main + Omni + Sidebar Studio + Inline Diff + Wallpaper + Periodic Picker) must never leak (got ${activeScripts.size})`
     );
 
     await daemon.stop(false);
@@ -2420,5 +2420,122 @@ test('13-provider localization coexistence: slider bilingual effort/model parsin
   }
   for (const extWidget of ['data-agy-hans-ui', 'agy-theme-switcher', 'agy-theme-menu', 'antigravity-quota-widget', 'antigravity-translation-audit']) {
     assert.ok(omniSrc.includes(extWidget), `omni-client must ignore external localization widget ${extWidget}`);
+  }
+});
+
+test('host-i18n runtime skips ag-pp- class prefix and #ag-prism-periodic-picker-root without mutating periodic picker DOM', () => {
+  const hostI18nMod = require(path.join(ROOT_DIR, 'vendor', 'host-i18n', 'host-i18n-runtime.js'));
+  const hostI18nSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'host-i18n', 'host-i18n-runtime.js'), 'utf8');
+  assert.ok(hostI18nSrc.includes("'ag-pp-'"), "host-i18n-runtime.js must whitelist 'ag-pp-' class prefix");
+  assert.ok(hostI18nSrc.includes("'ag-prism-periodic-picker-root'"), "host-i18n-runtime.js must whitelist 'ag-prism-periodic-picker-root' ID");
+
+  const mkNode = (tag, text) => {
+    const attrs = new Map();
+    const el = {
+      nodeType: 1,
+      tagName: String(tag).toUpperCase(),
+      childNodes: [],
+      children: [],
+      parentNode: null,
+      parentElement: null,
+      isConnected: true,
+      className: '',
+      get id() { return attrs.get('id') || ''; },
+      set id(v) { attrs.set('id', String(v)); },
+      get firstChild() { return el.childNodes[0] || null; },
+      get nextSibling() {
+        if (!el.parentNode) return null;
+        const idx = el.parentNode.childNodes.indexOf(el);
+        return idx >= 0 ? el.parentNode.childNodes[idx + 1] || null : null;
+      },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      setAttribute(k, v) { attrs.set(k, String(v)); },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) { attrs.delete(k); },
+      appendChild(child) {
+        child.parentNode = el;
+        child.parentElement = el;
+        child.isConnected = true;
+        el.childNodes.push(child);
+        if (child.nodeType === 1) el.children.push(child);
+        return child;
+      },
+    };
+    if (typeof text === 'string') {
+      const txt = {
+        nodeType: 3,
+        nodeValue: text,
+        parentNode: null,
+        parentElement: null,
+        isConnected: true,
+        get nextSibling() {
+          if (!this.parentNode) return null;
+          const idx = this.parentNode.childNodes.indexOf(this);
+          return idx >= 0 ? this.parentNode.childNodes[idx + 1] || null : null;
+        },
+      };
+      el.appendChild(txt);
+    }
+    return el;
+  };
+  const rootEl = mkNode('html');
+  const bodyEl = mkNode('body');
+  rootEl.appendChild(bodyEl);
+  const fakeDoc = {
+    documentElement: rootEl,
+    body: bodyEl,
+    readyState: 'complete',
+    hidden: false,
+    addEventListener() {},
+    removeEventListener() {},
+    querySelectorAll() { return []; },
+    querySelector() { return null; },
+    getElementById() { return null; },
+  };
+  const fakeWin = {
+    document: fakeDoc,
+    navigator: { language: 'zh-CN' },
+    addEventListener() {},
+    removeEventListener() {},
+    MutationObserver: class { observe() {} disconnect() {} },
+    setTimeout,
+    clearTimeout,
+  };
+
+  const ppWrap = mkNode('div');
+  ppWrap.className = 'ag-pp-stage';
+  const ppBtn = mkNode('button', 'Settings');
+  ppBtn.className = 'ag-pp-keycap';
+  ppBtn.setAttribute('aria-label', 'Settings');
+  ppWrap.appendChild(ppBtn);
+
+  const ppById = mkNode('div');
+  ppById.id = 'ag-prism-periodic-picker-root';
+  const ppInner = mkNode('span', 'Settings');
+  ppInner.setAttribute('aria-label', 'Settings');
+  ppById.appendChild(ppInner);
+
+  const hostBtn = mkNode('button', 'Settings');
+  hostBtn.setAttribute('aria-label', 'Settings');
+
+  bodyEl.appendChild(ppWrap);
+  bodyEl.appendChild(ppById);
+  bodyEl.appendChild(hostBtn);
+
+  const inst = hostI18nMod.mountHostI18n({
+    root: fakeWin,
+    doc: fakeDoc,
+    mode: 'on',
+    dict: { exact: { Settings: '设置' } },
+  });
+  try {
+    assert.equal(hostBtn.getAttribute('aria-label'), '设置', 'Normal host chrome button aria-label must be translated');
+    assert.equal(hostBtn.childNodes[0].nodeValue, '设置', 'Normal host chrome button text must be translated');
+    assert.equal(ppBtn.getAttribute('aria-label'), 'Settings', 'Elements under ag-pp-* class prefix must NEVER have attrs translated');
+    assert.equal(ppBtn.childNodes[0].nodeValue, 'Settings', 'Elements under ag-pp-* class prefix must NEVER have text translated');
+    assert.equal(ppInner.getAttribute('aria-label'), 'Settings', 'Elements inside #ag-prism-periodic-picker-root must NEVER have attrs translated');
+    assert.equal(ppInner.childNodes[0].nodeValue, 'Settings', 'Elements inside #ag-prism-periodic-picker-root must NEVER have text translated');
+  } finally {
+    inst.destroy();
   }
 });

@@ -36,6 +36,9 @@ const {
   THOUGHT_REMOVE_EXPRESSION,
   buildInlineDiffInjectExpression,
   INLINE_DIFF_REMOVE_EXPRESSION,
+  shouldEnablePeriodicPicker,
+  buildPeriodicPickerExpression,
+  PERIODIC_PICKER_REMOVE_EXPRESSION,
 } = require('./cdp');
 
 const FALLBACK_THOUGHT_REMOVE_EXPRESSION =
@@ -129,6 +132,9 @@ function createFastConfigRefreshBroadcaster({
     buildExpression: buildInlineDiffInjectExpression,
     removeExpression: INLINE_DIFF_REMOVE_EXPRESSION || FALLBACK_INLINE_DIFF_REMOVE_EXPRESSION,
   }),
+  shouldEnablePeriodicPicker: shouldPeriodicPicker = shouldEnablePeriodicPicker,
+  buildPeriodicPickerExpression: buildPeriodicPicker = buildPeriodicPickerExpression,
+  periodicPickerRemoveExpression = PERIODIC_PICKER_REMOVE_EXPRESSION,
   getOmniServerInfo = () => null,
   getSidebarServiceReady = () => false,
   sidebarBinding = SIDEBAR_BINDING,
@@ -175,8 +181,13 @@ function createFastConfigRefreshBroadcaster({
     const inlineDiffHashMatch = inlineDiffExpr ? /const targetHash = "([^"]+)"/.exec(inlineDiffExpr) : null;
     const inlineDiffHash = inlineDiffHashMatch ? inlineDiffHashMatch[1] : inlineDiffExpr;
     const inlineDiffRemoveExpr = inlineDiffHooks.removeExpression || FALLBACK_INLINE_DIFF_REMOVE_EXPRESSION;
+    const periodicPickerEnabled = typeof shouldPeriodicPicker === 'function' ? shouldPeriodicPicker(cfgNow) : false;
+    const periodicPickerExpr =
+      periodicPickerEnabled && typeof buildPeriodicPicker === 'function'
+        ? buildPeriodicPicker(cfgNow)
+        : '';
     if (typeof onExpressionsUpdated === 'function') {
-      onExpressionsUpdated({ expr, omniExpr, sidebarExpr, hostI18nExpr, thoughtExpr, inlineDiffExpr });
+      onExpressionsUpdated({ expr, omniExpr, sidebarExpr, hostI18nExpr, thoughtExpr, inlineDiffExpr, periodicPickerExpr });
     }
     const canFastRefresh = typeof buildRefresh === 'function';
     const baseRefreshExpr = canFastRefresh ? buildRefresh() : null;
@@ -228,6 +239,13 @@ function createFastConfigRefreshBroadcaster({
                 entry.inlineDiffSkipped = false;
                 entry.lastInlineDiffHash = '';
               }
+              if (periodicPickerExpr && periodicPickerEnabled) {
+                const ppRes = await entry.session.evaluate(periodicPickerExpr).catch(() => null);
+                if (ppRes && ppRes.ok) entry.periodicPickerMounted = true;
+              } else if (!periodicPickerEnabled && (entry.periodicPickerScriptId || entry.periodicPickerMounted)) {
+                if (periodicPickerRemoveExpression) await entry.session.evaluate(periodicPickerRemoveExpression).catch(() => {});
+                entry.periodicPickerMounted = false;
+              }
             }
           } else {
             const reRes = await entry.session.evaluate(expr).catch(() => null);
@@ -278,6 +296,13 @@ function createFastConfigRefreshBroadcaster({
               entry.inlineDiffSkipped = false;
               entry.lastInlineDiffHash = '';
             }
+            if (periodicPickerExpr && periodicPickerEnabled) {
+              const ppRes = await entry.session.evaluate(periodicPickerExpr).catch(() => null);
+              if (ppRes && ppRes.ok) entry.periodicPickerMounted = true;
+            } else if (!periodicPickerEnabled && (entry.periodicPickerScriptId || entry.periodicPickerMounted)) {
+              if (periodicPickerRemoveExpression) await entry.session.evaluate(periodicPickerRemoveExpression).catch(() => {});
+              entry.periodicPickerMounted = false;
+            }
           }
         }
         if (entry.scriptId) {
@@ -326,6 +351,14 @@ function createFastConfigRefreshBroadcaster({
           entry.inlineDiffScriptId = idAdd && idAdd.identifier ? idAdd.identifier : null;
           if (entry.inlineDiffScriptId) entry.lastInlineDiffHash = inlineDiffHash;
         }
+        if (entry.periodicPickerScriptId) {
+          await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId }).catch(() => {});
+          entry.periodicPickerScriptId = null;
+        }
+        if (periodicPickerExpr && periodicPickerEnabled) {
+          const ppAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: periodicPickerExpr }).catch(() => null);
+          entry.periodicPickerScriptId = ppAdd && ppAdd.identifier ? ppAdd.identifier : null;
+        }
       } catch {}
     }
   };
@@ -367,6 +400,12 @@ async function injectOnce() {
     typeof buildInlineDiffInjectExpression === 'function'
       ? buildInlineDiffInjectExpression(cfgNow)
       : '';
+  const periodicPickerEnabled =
+    typeof shouldEnablePeriodicPicker === 'function' ? shouldEnablePeriodicPicker(cfgNow) : true;
+  const periodicPickerExpr =
+    periodicPickerEnabled && typeof buildPeriodicPickerExpression === 'function'
+      ? buildPeriodicPickerExpression(cfgNow)
+      : '';
   for (const page of targets) {
     let session = null;
     try {
@@ -390,6 +429,11 @@ async function injectOnce() {
       }
       if (inlineDiffExpr) {
         await session.evaluate(inlineDiffExpr).catch(() => {});
+      }
+      if (periodicPickerExpr) {
+        await session.evaluate(periodicPickerExpr).catch(() => {});
+      } else if (!periodicPickerEnabled && PERIODIC_PICKER_REMOVE_EXPRESSION) {
+        await session.evaluate(PERIODIC_PICKER_REMOVE_EXPRESSION).catch(() => {});
       }
       log(`[✓] ${shortTitle(page)} (obsidian-prism ${res.version} · 状态: ${res.status})`);
     } catch (err) {
@@ -523,6 +567,10 @@ async function watch() {
     typeof activeBuildInlineDiffExpression === 'function'
       ? activeBuildInlineDiffExpression(initCfg)
       : '';
+  let periodicPickerExpr =
+    typeof buildPeriodicPickerExpression === 'function'
+      ? buildPeriodicPickerExpression(initCfg)
+      : '';
   let _lazyReadSafeInlineDiff = null;
   async function loadReadSafeInlineDiff() {
     if (typeof _lazyReadSafeInlineDiff === 'function') return _lazyReadSafeInlineDiff;
@@ -587,6 +635,9 @@ async function watch() {
       buildExpression: activeBuildInlineDiffExpression,
       removeExpression: activeInlineDiffRemoveExpression,
     }),
+    shouldEnablePeriodicPicker,
+    buildPeriodicPickerExpression,
+    periodicPickerRemoveExpression: PERIODIC_PICKER_REMOVE_EXPRESSION,
     getOmniServerInfo: () => (omniServer ? omniServer.getServerInfo() : null),
     getSidebarServiceReady: () => Boolean(sidebarService),
     sidebarBinding: SIDEBAR_BINDING,
@@ -598,6 +649,7 @@ async function watch() {
       hostI18nExpr = next.hostI18nExpr;
       thoughtExpr = next.thoughtExpr;
       inlineDiffExpr = next.inlineDiffExpr;
+      periodicPickerExpr = next.periodicPickerExpr;
     },
   });
 
@@ -615,7 +667,7 @@ async function watch() {
     const res = await entry.session.evaluate(expr);
     entry.sidebarHostVerified = Boolean(res && res.status === 'ok');
     if (res && res.status === 'skipped-non-host') {
-      for (const key of ['scriptId', 'omniScriptId', 'sidebarScriptId', 'hostI18nScriptId', 'thoughtScriptId', 'inlineDiffScriptId']) {
+      for (const key of ['scriptId', 'omniScriptId', 'sidebarScriptId', 'hostI18nScriptId', 'thoughtScriptId', 'inlineDiffScriptId', 'periodicPickerScriptId']) {
         if (entry[key]) {
           await entry.session
             .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry[key] })
@@ -749,6 +801,30 @@ async function watch() {
       entry.inlineDiffSkipped = false;
       entry.lastInlineDiffHash = '';
     }
+    const hadPeriodicPicker = Boolean(entry.periodicPickerScriptId || entry.periodicPickerMounted);
+    if (entry.periodicPickerScriptId) {
+      await entry.session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId })
+        .catch(() => {});
+      entry.periodicPickerScriptId = null;
+    }
+    if (periodicPickerExpr) {
+      const ppAdd = await entry.session
+        .send('Page.addScriptToEvaluateOnNewDocument', { source: periodicPickerExpr })
+        .catch(() => null);
+      if (ppAdd && ppAdd.identifier) entry.periodicPickerScriptId = ppAdd.identifier;
+      const ppEvalRes = await entry.session.evaluate(periodicPickerExpr).catch(() => null);
+      if (ppEvalRes && ppEvalRes.ok) entry.periodicPickerMounted = true;
+    } else if (
+      hadPeriodicPicker &&
+      (typeof shouldEnablePeriodicPicker !== 'function' || !shouldEnablePeriodicPicker(cfgNow)) &&
+      PERIODIC_PICKER_REMOVE_EXPRESSION
+    ) {
+      await entry.session.evaluate(PERIODIC_PICKER_REMOVE_EXPRESSION).catch(() => {});
+      entry.periodicPickerMounted = false;
+    } else if (!periodicPickerExpr) {
+      entry.periodicPickerMounted = false;
+    }
     return res;
   }
 
@@ -772,6 +848,8 @@ async function watch() {
         inlineDiffMounted: false,
         inlineDiffSkipped: false,
         lastInlineDiffHash: '',
+        periodicPickerScriptId: null,
+        periodicPickerMounted: false,
         docGen: 0,
         mainFrameId: null,
         hasFrameTree: false,
@@ -1007,6 +1085,7 @@ async function watch() {
           if (entry.hostI18nScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId });
           if (entry.thoughtScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId });
           if (entry.inlineDiffScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.inlineDiffScriptId });
+          if (entry.periodicPickerScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId });
         } catch {}
         entry.session.close();
       }
@@ -1076,6 +1155,10 @@ async function watch() {
         inlineDiffExpr =
           typeof activeBuildInlineDiffExpression === 'function'
             ? activeBuildInlineDiffExpression(freshCfg)
+            : '';
+        periodicPickerExpr =
+          typeof freshCdp.buildPeriodicPickerExpression === 'function'
+            ? freshCdp.buildPeriodicPickerExpression(freshCfg)
             : '';
       } catch (err) {
         log(`[!] 读取文件失败: ${err.message}`);

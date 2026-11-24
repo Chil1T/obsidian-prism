@@ -586,13 +586,15 @@ test('v107 A2-8: single-pass PrismDaemon.rebuildBundle cold hit parses .bundle-c
     assert.equal(dHit.thoughtExpr, dCold.thoughtExpr);
     assert.equal(dHit.inlineDiffExpr, dCold.inlineDiffExpr);
     assert.equal(dHit.wallpaperExpr, dCold.wallpaperExpr);
-    assert.equal(cacheReads, 1, 'rebuildBundle() cold hit across 7 channels must read .bundle-cache.json only once');
-    assert.equal(cacheParses, 1, 'rebuildBundle() cold hit across 7 channels must JSON.parse .bundle-cache.json only once');
+    assert.equal(dHit.periodicPickerExpr, dCold.periodicPickerExpr);
+    assert.equal(cacheReads, 1, 'rebuildBundle() cold hit across 8 channels must read .bundle-cache.json only once');
+    assert.equal(cacheParses, 1, 'rebuildBundle() cold hit across 8 channels must JSON.parse .bundle-cache.json only once');
 
     const hitStats = dHit.cdp.getBundleCacheStats();
     assert.equal(hitStats.diskHits, 1);
-    assert.equal(hitStats.channelDiskHits, 6);
+    assert.equal(hitStats.channelDiskHits, 7);
     assert.equal(hitStats.channelHitsByName.wallpaper, 1);
+    assert.equal(hitStats.channelHitsByName.periodicPicker, 1);
     assert.equal(hitStats.compileUnifiedRuns, 0);
     assert.equal(hitStats.channelCompileRuns, 0);
 

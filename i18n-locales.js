@@ -389,6 +389,14 @@
       'Remember your last reasoning effort per model and Orchestrator planner, even with the slider turned off.',
       'スライダーオフ時も含め、モデル別および Orchestrator の前回の推論レベルを自動記憶します。',
     ],
+    setPeriodicPickerTitle: ['元素周期表选择器', '元素週期表選擇器', '元素週期表選擇器', 'Periodic Table Picker', '元素周期表ピッカー'],
+    setPeriodicPickerDesc: [
+      '长按底部模型选择器打开 3D 元素周期表，短按仍打开原生列表。',
+      '長按底部模型選擇器開啟 3D 元素週期表，短按仍開啟原生清單。',
+      '長撳底部模型選擇器開 3D 元素週期表，短撳照舊開原生清單。',
+      'Long-press the bottom model selector for the 3D periodic table; short-click opens the native list.',
+      '下部のモデル選択を長押しで 3D 元素周期表を開きます（短押しは標準一覧）。',
+    ],
     setOmniTitle: ['文件检视与右键菜单', '檔案檢視與右鍵選單', '檔案檢視同右鍵選單', 'File Viewer & Context Menu', 'ファイル表示と右クリックメニュー'],
     setOmniDesc: [
       '支持对话内链接与路径点击、右键文件操作及侧边栏多格式预览。',

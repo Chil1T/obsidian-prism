@@ -385,12 +385,19 @@ test('v1.0.1 i18n keys cover all 5 languages for scene presets, 6 new config key
 });
 
 test('settings-panel schema, scene presets, strict apiKey-stripping JSON export, and allowlist-validated JSON import', () => {
-  // Verify all 34 global config keys (including effortMemory, contextMenu, sidebarNavFold, scrollBottomMotion, hostLocalization, omniModule, linkTarget, sidebarStudio, autoUpdate & updateChannel) match exact contract
+  // Verify all 35 global config keys (including effortMemory, periodicModelPicker, contextMenu, sidebarNavFold, scrollBottomMotion, hostLocalization, omniModule, linkTarget, sidebarStudio, autoUpdate & updateChannel) match exact contract
   const { PRISM_SETTINGS_SCHEMA, SCENE_PRESETS, buildSanitizedConfigExport, validateImportedConfigJson, getDefaultSettingsPatch } =
     settingsPanel;
-  assert.equal(Object.keys(PRISM_SETTINGS_SCHEMA).length, 34);
+  assert.equal(Object.keys(PRISM_SETTINGS_SCHEMA).length, 35);
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.effortMemory.allowed, ['on', 'off']);
   assert.equal(PRISM_SETTINGS_SCHEMA.effortMemory.default, 'on');
+  assert.deepEqual(PRISM_SETTINGS_SCHEMA.periodicModelPicker.allowed, ['on', 'off']);
+  assert.equal(PRISM_SETTINGS_SCHEMA.periodicModelPicker.default, 'on');
+  for (const lang of ['zh-CN', 'zh-TW', 'yue', 'en', 'ja']) {
+    const ui = i18nLocales.getUiStrings(lang);
+    assert.ok(typeof ui.setPeriodicPickerTitle === 'string' && ui.setPeriodicPickerTitle.trim().length > 0, `Missing setPeriodicPickerTitle for ${lang}`);
+    assert.ok(typeof ui.setPeriodicPickerDesc === 'string' && ui.setPeriodicPickerDesc.trim().length > 0, `Missing setPeriodicPickerDesc for ${lang}`);
+  }
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.sidebarNavFold.allowed, ['off', 'on']);
   assert.equal(PRISM_SETTINGS_SCHEMA.sidebarNavFold.default, 'off');
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.scrollBottomMotion.allowed, ['smooth', 'instant']);
@@ -477,10 +484,11 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
   assert.equal(validated.thought.profiles[0].apiKey, '');
   assert.equal(validated.thought.profiles[0].keepExistingKey, true);
 
-  // Boolean alias support for omniModule & sidebarNavFold (true -> 'on', false -> 'off') + legacy mascot:'dual' & language:'auto'
-  const boolAlias = validateImportedConfigJson(JSON.stringify({ omniModule: false, sidebarNavFold: true, linkTarget: 'builtin', mascot: 'dual', language: 'auto' }));
+  // Boolean alias support for omniModule, periodicModelPicker & sidebarNavFold (true -> 'on', false -> 'off') + legacy mascot:'dual' & language:'auto'
+  const boolAlias = validateImportedConfigJson(JSON.stringify({ omniModule: false, periodicModelPicker: false, sidebarNavFold: true, linkTarget: 'builtin', mascot: 'dual', language: 'auto' }));
   assert.equal(boolAlias.ok, true);
   assert.equal(boolAlias.settings.omniModule, 'off');
+  assert.equal(boolAlias.settings.periodicModelPicker, 'off');
   assert.equal(boolAlias.settings.sidebarNavFold, 'on');
   assert.equal(boolAlias.settings.linkTarget, 'builtin');
   assert.equal(boolAlias.settings.mascot, 'crab');
@@ -492,8 +500,9 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
   assert.equal(validateImportedConfigJson('not-json').ok, false);
   assert.equal(validateImportedConfigJson('{"unknownOnly": 1}').ok, false);
   const defaultPatch = getDefaultSettingsPatch();
-  assert.equal(Object.keys(defaultPatch).length, 34);
+  assert.equal(Object.keys(defaultPatch).length, 35);
   assert.equal(defaultPatch.effortMemory, 'on');
+  assert.equal(defaultPatch.periodicModelPicker, 'on');
   assert.equal(defaultPatch.sidebarNavFold, 'off');
   assert.equal(defaultPatch.scrollBottomMotion, 'smooth');
 });

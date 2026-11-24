@@ -8,6 +8,7 @@
   "telemetryModule": "auto",
   "effortSliderModule": "auto",
   "effortMemory": "on",
+  "periodicModelPicker": "on",
   "thoughtTranslate": "off",
   "thoughtTrigger": "preload",
   "homeLayout": "studio",

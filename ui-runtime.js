@@ -84,6 +84,7 @@
   };
 
   const BOOL_ALIAS_PAIRS = [['homeRipple', 'ripple'], ['composerRestyle', 'composer'], ['sidebarRestyle', 'sidebar']];
+  const ONOFF_STR_KEYS = 'telemetryModule|effortSliderModule|effortMemory|periodicModelPicker|omniModule|sidebarStudio|autoUpdate|sidebarNavFold'.split('|');
   const pickOf = (v, s, d) => (s.split('|').includes(v) ? v : d);
 
   const normalizeConfigShape = (rawCfg) => {
@@ -113,8 +114,7 @@
     out.codeFont = pickOf(out.codeFont, 'default|jetbrains|cascadia|sfmono', 'default');
     out.ambientIntensity = pickOf(String(out.ambientIntensity ?? '100'), '0|35|70|100', '100');
     out.thoughtView = out.thoughtView === 'bilingual' ? 'bilingual' : 'immersive';
-    out.omniModule = out.omniModule === 'off' || out.omniModule === false ? 'off' : 'on';
-    out.effortMemory = out.effortMemory === 'off' || out.effortMemory === false ? 'off' : 'on';
+    for (const k of ['omniModule', 'effortMemory', 'periodicModelPicker']) out[k] = out[k] === 'off' || out[k] === false ? 'off' : 'on';
     out.linkTarget = out.linkTarget === 'external' ? 'external' : 'builtin';
     out.updateChannel = out.updateChannel === 'beta' ? 'beta' : 'stable';
     const rawLang = (out.language && out.language !== 'auto' ? out.language : '') || (out.lang && out.lang !== 'auto' ? out.lang : '');
@@ -144,7 +144,7 @@
     for (const k of ['smoothCaret', 'contextMenu']) {
       if (k in patch && typeof patch[k] === 'string') patch[k] = patch[k] !== 'off' && patch[k] !== 'false';
     }
-    for (const k of ['telemetryModule', 'effortSliderModule', 'effortMemory', 'omniModule', 'sidebarStudio', 'autoUpdate', 'sidebarNavFold']) {
+    for (const k of ONOFF_STR_KEYS) {
       if (k in patch && typeof patch[k] === 'boolean') patch[k] = patch[k] ? 'on' : 'off';
     }
     return patch;
@@ -260,7 +260,7 @@
       if (key === a && b in base && !(a in base)) return [b, boolStr ? (value ? 'on' : 'off') : value];
     }
     if ('sidebarCompact|smoothCaret|contextMenu'.split('|').includes(key) && typeof base[key] === 'string') return [key, value ? 'on' : 'off'];
-    if ('telemetryModule|effortSliderModule|effortMemory|omniModule|sidebarStudio|autoUpdate|sidebarNavFold'.split('|').includes(key) && typeof value === 'boolean') return [key, value ? 'on' : 'off'];
+    if (ONOFF_STR_KEYS.includes(key) && typeof value === 'boolean') return [key, value ? 'on' : 'off'];
     if (key === 'palette' && value === 'claude') return ['palette', 'warm'];
     if (key === 'mascot') return ['mascot', value === 'dual' ? 'crab' : value];
     return [key, value];
@@ -356,7 +356,9 @@
   const getMinFrameGapMs = () => ({ native: 0, 60: 15.2, 120: 7.5 })[getTargetFps()] ?? 4.8;
   const getTelemetryMode = () => pickOf(cfg.telemetryModule, 'on|off', 'auto');
   const getEffortSliderMode = () => pickOf(cfg.effortSliderModule, 'on|off', 'auto');
-  const getEffortMemoryMode = () => (cfg.effortMemory === 'off' || cfg.effortMemory === false ? 'off' : 'on');
+  const onOffMode = (k) => (cfg[k] === 'off' || cfg[k] === false ? 'off' : 'on');
+  const getEffortMemoryMode = () => onOffMode('effortMemory');
+  const getPeriodicPickerMode = () => onOffMode('periodicModelPicker');
   const getHostLocalizationMode = () => pickOf(cfg.hostLocalization, 'on|off', 'auto');
   const getThoughtTranslateMode = () => pickOf(cfg.thoughtTranslate, 'machine|ai', 'off');
   const getThoughtTriggerTiming = () => (cfg.thoughtTrigger === 'expand' ? 'expand' : 'preload');
@@ -369,7 +371,7 @@
   const getAmbientFloat = () => Number(getAmbientIntensitySetting()) / 100;
   const getAmbientCssValue = () => String(getAmbientFloat());
   const getThoughtView = () => (cfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
-  const getOmniMode = () => (cfg.omniModule === 'off' || cfg.omniModule === false ? 'off' : 'on');
+  const getOmniMode = () => onOffMode('omniModule');
   const getLinkTarget = () => (cfg.linkTarget === 'external' ? 'external' : 'builtin');
 
   const resolveAuraSpectrumMode = () => {
@@ -1332,6 +1334,7 @@
       priPlan?.mo ||
       priPlan?.ops?.some(([, , on]) => on) ||
       ha(de(), 'data-ag-cs-model-menu') ||
+      ga(de(), 'data-ag-pp-open') === '1' ||
       qs(D, MODEL_PANEL_SEL)
     );
     const activeInfoForCrab = getLightweightActiveInfo(primaryCard);
@@ -1375,7 +1378,7 @@
     ) {
       return '';
     }
-    if (cl(btn, '#' + SETTINGS_SEC_ID + ', [role="dialog"], .ag-cs-home-panel, [data-testid="orchestrator-effort-bar"], .ag-cs-crab, ' + EXT_ZH_UI_SEL)) {
+    if (cl(btn, '#' + SETTINGS_SEC_ID + ', #ag-prism-periodic-picker-root, [role="dialog"], .ag-cs-home-panel, [data-testid="orchestrator-effort-bar"], .ag-cs-crab, ' + EXT_ZH_UI_SEL)) {
       return '';
     }
     if (qs(btn, '.ag-cs-model-glyph, .ag-spark-orbit-svg, .ag-cs-thinking-spark')) return '';
@@ -1605,28 +1608,31 @@
   };
 
   const resolveSettingRowActiveValue = (key, lang) => {
-    if (key === 'language') return lang;
-    if (key === 'motionLevel') return getMotionLevel();
-    if (key === 'targetFps') return getTargetFps();
-    if (key === 'lightPreset') return getLightPreset();
-    if (key === 'telemetryModule') return getTelemetryMode();
-    if (key === 'effortSliderModule') return getEffortSliderMode();
-    if (key === 'effortMemory') return getEffortMemoryMode();
-    if (key === 'hostLocalization') return getHostLocalizationMode();
-    if (key === 'omniModule') return getOmniMode();
-    if (key === 'linkTarget') return getLinkTarget();
-    if (key === 'thoughtTranslate') return getThoughtTranslateMode();
-    if (key === 'thoughtTrigger') return getThoughtTriggerTiming();
-    if (key === 'thoughtView') return getThoughtView();
-    if (key === 'accentTone') return getAccentTone();
-    if (key === 'cornerStyle') return getCornerStyle();
-    if (key === 'codeFont') return getCodeFont();
-    if (key === 'codeLigatures') return isCodeLigaturesEnabled();
-    if (key === 'contextMenu') return isContextMenuEnabled();
-    if (key === 'ambientIntensity') return getAmbientIntensitySetting();
-    if (key === 'palette') return getEffectivePalette();
-    if (key === 'mascot') return cfg.mascot === 'dual' ? 'crab' : cfg.mascot;
-    return cfg[key];
+    const fn = {
+      language: () => lang,
+      motionLevel: getMotionLevel,
+      targetFps: getTargetFps,
+      lightPreset: getLightPreset,
+      telemetryModule: getTelemetryMode,
+      effortSliderModule: getEffortSliderMode,
+      effortMemory: getEffortMemoryMode,
+      periodicModelPicker: getPeriodicPickerMode,
+      hostLocalization: getHostLocalizationMode,
+      omniModule: getOmniMode,
+      linkTarget: getLinkTarget,
+      thoughtTranslate: getThoughtTranslateMode,
+      thoughtTrigger: getThoughtTriggerTiming,
+      thoughtView: getThoughtView,
+      accentTone: getAccentTone,
+      cornerStyle: getCornerStyle,
+      codeFont: getCodeFont,
+      codeLigatures: isCodeLigaturesEnabled,
+      contextMenu: isContextMenuEnabled,
+      ambientIntensity: getAmbientIntensitySetting,
+      palette: getEffectivePalette,
+    }[key];
+    if (fn) return fn();
+    return key === 'mascot' && cfg.mascot === 'dual' ? 'crab' : cfg[key];
   };
 
   const isSettingButtonMatch = (key, btnValJson, curVal) => {
@@ -1732,7 +1738,7 @@
   const OWN_PLUGIN_SELECTOR =
     '.ag-cs-home-panel-seat, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-prism-rim-cv, .ag-cs-model-glyph, [data-testid="orchestrator-effort-bar"], .ag-cs-thinking-spark, .ag-cs-smooth-caret, .ag-cs-liftoff-veil, .ag-cs-sidebar-glide-pill, .ag-cs-pill-glide, .ag-cs-stream-chunk, .ag-cs-thought-chunk, .ag-anim-icon, .ag-prism-omni-menu, .ag-prism-omni-pane, .ag-cs-ctx-menu, .ag-cs-ctx-toast, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ces-ag-section, .ces-set, #ag-codex-effort-slider-styles, #ag-pulse-status-bar, #context-card, #' +
     SETTINGS_SEC_ID +
-    ', #ag-prism-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-claude-style-css, #ag-prism-motion-off-css, #ag-prism-host-alert-css, ' +
+    ', #ag-prism-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-prism-periodic-picker-root, #ag-prism-periodic-picker-css, .ag-pp-hold-ring, .ag-pp-mini-keycap, #ag-claude-style-css, #ag-prism-motion-off-css, #ag-prism-host-alert-css, ' +
     EXT_ZH_UI_SEL;
 
   const isOwnPluginNode = (t) => {
@@ -2316,6 +2322,9 @@
         ensurePulseBridge(!!(flags.f || flags.t));
       }
     });
+    if (effectiveFull || flags.c || flags.r || routeJumped) {
+      try { W.__agPrismPeriodicPicker?.onHostTriggerChanged?.(); } catch {}
+    }
     if (!deferHeavyConvWork && (flags.f || flags.r || flags.l || flags.c || flags.b || flags.t || flags.s || flags.g || flags.o)) {
       const enhFlags = routeJumped ? { ...flags, f: true } : flags;
       scheduleHostEnhancerSync(!!(flags.f || routeJumped || flags.g || flags.o || (flags.t && !isConvRunning())), enhFlags);
@@ -2717,6 +2726,10 @@
           }
           const tgt = m.target;
           if (tgt === D.body || tgt === de()) {
+            if (m.attributeName === 'data-ag-pp-open') {
+              dirtyFlags.c = anyRelevant = true;
+              continue;
+            }
             if (m.attributeName === 'data-ag-prism-mode') dirtyFlags.c = true;
             dirtyFlags.t = anyRelevant = true;
             continue;
@@ -2914,7 +2927,7 @@
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['class', 'hidden', 'aria-expanded', 'data-selected', 'data-cascade-id', 'data-ag-prism-host-i18n', 'data-ag-prism-mode'],
+      attributeFilter: ['class', 'hidden', 'aria-expanded', 'data-selected', 'data-cascade-id', 'data-ag-prism-host-i18n', 'data-ag-prism-mode', 'data-ag-pp-open'],
     });
     for (const [evName, handler, opts] of DOC_LISTENERS) D.addEventListener(evName, handler, opts);
     syncCaretListeners(cfg.smoothCaret !== false);
@@ -2986,6 +2999,7 @@
           telemetryModule: getTelemetryMode(),
           effortSliderModule: getEffortSliderMode(),
           effortMemory: getEffortMemoryMode(),
+          periodicModelPicker: getPeriodicPickerMode(),
           hostLocalization: getHostLocalizationMode(),
           thoughtTranslate: getThoughtTranslateMode(),
           thoughtTrigger: getThoughtTriggerTiming(),

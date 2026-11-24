@@ -520,7 +520,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
         .map((b) => b.getAttribute('data-ag-cs-key'))
         .filter(Boolean)
     );
-    assert.equal(settingKeys.size, 34);
+    assert.equal(settingKeys.size, 35);
     for (const expectedKey of [
       'palette',
       'lightPreset',
@@ -533,6 +533,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
       'language',
       'hostLocalization',
       'effortMemory',
+      'periodicModelPicker',
       'composerRestyle',
       'placeholderStyle',
       'smoothCaret',
@@ -668,14 +669,45 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     // Verify sidebarNavFold defaults to 'off', toggles data-ag-cs-sb-fold & getState().cfg, and REMOVE_EXPRESSION cleans it + __agPrismInlineDiffResolve
     assert.equal(html.getAttribute('data-ag-cs-sb-fold'), 'off');
     assert.equal(sandbox.window.__agPrism.getState().cfg.sidebarNavFold, 'off');
+    assert.equal(sandbox.window.__agPrism.getState().cfg.periodicModelPicker, 'on');
     sandbox.window.__agPrism.saveSettingsBatch({ sidebarNavFold: 'on' });
     assert.equal(html.getAttribute('data-ag-cs-sb-fold'), 'on');
     assert.equal(sandbox.window.__agPrism.getState().cfg.sidebarNavFold, 'on');
     sandbox.window.__agPrismInlineDiffResolve = () => {};
 
+    // Verify html[data-ag-pp-open="1"] toggles mascot peek & window.__agPrism.sync() notifies __agPrismPeriodicPicker.onHostTriggerChanged()
+    let ppTriggerHits = 0;
+    let ppDestroyed = false;
+    sandbox.window.__agPrismPeriodicPicker = {
+      onHostTriggerChanged() { ppTriggerHits += 1; },
+      destroy() { ppDestroyed = true; },
+    };
+    const crabStage = card.querySelector('.ag-cs-crab');
+    assert.ok(crabStage, 'Mascot stage must mount on primary composer card');
+    // Remove queuedWrap fixture temporarily so we isolate data-ag-pp-open as the sole peek trigger
+    inputBox.removeChild(queuedWrap);
+    sandbox.window.__agPrism.sync();
+    assert.equal(crabStage.getAttribute('data-ag-mascot-peek'), null, 'Mascot must not peek while periodic picker is closed');
+    html.setAttribute('data-ag-pp-open', '1');
+    sandbox.window.__agPrism.sync();
+    assert.equal(crabStage.getAttribute('data-ag-mascot-peek'), '1', 'html[data-ag-pp-open="1"] must switch mascot into peek mode');
+    assert.ok(ppTriggerHits >= 1, 'window.__agPrism.sync() must notify __agPrismPeriodicPicker.onHostTriggerChanged()');
+    html.removeAttribute('data-ag-pp-open');
+    sandbox.window.__agPrism.sync();
+    assert.equal(crabStage.getAttribute('data-ag-mascot-peek'), null, 'Removing data-ag-pp-open must exit mascot peek mode');
+    html.setAttribute('data-ag-pp-open', '1');
+    html.setAttribute('data-ag-prism-periodic-picker', '1');
+    const ppRootNode = makeNode('div', { id: 'ag-prism-periodic-picker-root' });
+    body.appendChild(ppRootNode);
+
     // Teardown cleanly removes everything and restores host greeting text
     const rem = vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
     assert.ok(rem.removed >= 1);
+    assert.equal(ppDestroyed, true, 'REMOVE_EXPRESSION must destroy __agPrismPeriodicPicker');
+    assert.equal(html.hasAttribute('data-ag-pp-open'), false);
+    assert.equal(html.hasAttribute('data-ag-prism-periodic-picker'), false);
+    assert.equal(doc.getElementById('ag-prism-periodic-picker-root'), null);
+    assert.equal(sandbox.window.__agPrismPeriodicPicker, undefined);
     assert.equal(html.hasAttribute('data-ag-prism'), false);
     assert.equal(html.hasAttribute('data-ag-cs-sb-fold'), false);
     assert.equal(sandbox.window.__agPrismInlineDiffResolve, undefined);
@@ -3940,4 +3972,35 @@ test('Antigravity v2.33.0+ dual-layer CDP opt-in guard: shortcut lossless patch/
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
+});
+
+test('Channel 1 budget (< 684,500 B), periodicModelPicker default on, style.css peek rule & 0 top-level :has(', () => {
+  assert.equal(cdp.DEFAULT_CONFIG.periodicModelPicker, 'on');
+  assert.equal(cdp.shouldEnablePeriodicPicker(cdp.DEFAULT_CONFIG), true);
+  assert.equal(cdp.shouldEnablePeriodicPicker({ periodicModelPicker: 'off' }), false);
+  assert.equal(cdp.buildPeriodicPickerExpression({ ...cdp.DEFAULT_CONFIG, periodicModelPicker: 'off' }), '');
+  assert.deepEqual(cdp.PERIODIC_PICKER_MODULE_FILES, [
+    'pbr-grain-assets.js',
+    'audio-fx.js',
+    'model-catalog.js',
+    'host-bridge.js',
+    'oled-cyber-screen.js',
+    'keyboard-3d-gl.js',
+    'bento-ui.js',
+    'periodic-picker.js',
+  ]);
+
+  const expr = cdp.buildInjectExpression(cdp.DEFAULT_CONFIG);
+  const ch1Bytes = Buffer.byteLength(expr, 'utf8');
+  assert.ok(ch1Bytes < 684500, `Channel 1 bundle must stay strictly < 684,500 B (got ${ch1Bytes} B)`);
+
+  const css = fs.readFileSync(path.join(path.dirname(require.resolve('../cdp.js')), 'style.css'), 'utf8');
+  assert.ok(
+    /\.ag-cs-crab\[data-ag-mascot-peek="1"\][^{]*html\[data-ag-pp-open="1"\] \.ag-cs-crab[^{]*\{z-index:8 !important;pointer-events:none !important;user-select:none !important;/.test(css),
+    'style.css must include html[data-ag-pp-open="1"] .ag-cs-crab in the mascot peek pass-through rule'
+  );
+  const topLevelHas = css
+    .split('\n')
+    .filter((line) => !/^\s*(?:&|@|\/\*)/.test(line) && /:has\(/.test(line));
+  assert.equal(topLevelHas.length, 0, 'style.css must contain 0 top-level :has() rules');
 });

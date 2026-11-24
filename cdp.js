@@ -38,6 +38,7 @@ const DEFAULT_CONFIG = {
   telemetryModule: 'auto',
   effortSliderModule: 'auto',
   effortMemory: 'on',
+  periodicModelPicker: 'on',
   thoughtTranslate: 'off',
   thoughtTrigger: 'preload',
   homeLayout: 'studio',
@@ -82,6 +83,7 @@ const VALIDATORS = {
   telemetryModule: ['auto', 'on', 'off'],
   effortSliderModule: ['auto', 'on', 'off'],
   effortMemory: ['on', 'off'],
+  periodicModelPicker: ['on', 'off'],
   thoughtTranslate: ['off', 'machine', 'ai'],
   thoughtTrigger: ['preload', 'expand'],
   homeLayout: ['studio', 'classic', 'off'],
@@ -197,7 +199,7 @@ function reconcileConfigAliases(raw) {
   if (has('codeLigatures') && typeof out.codeLigatures === 'string') {
     out.codeLigatures = out.codeLigatures === 'on' || out.codeLigatures === 'true';
   }
-  for (const k of ['telemetryModule', 'effortSliderModule', 'effortMemory', 'omniModule', 'sidebarStudio', 'autoUpdate', 'sidebarNavFold']) {
+  for (const k of ['telemetryModule', 'effortSliderModule', 'effortMemory', 'periodicModelPicker', 'omniModule', 'sidebarStudio', 'autoUpdate', 'sidebarNavFold']) {
     if (has(k) && typeof out[k] === 'boolean') {
       out[k] = out[k] ? 'on' : 'off';
     }
@@ -4929,11 +4931,11 @@ let _cssCache = { sig: '', minCss: '', packedExpr: '' };
 const BUNDLE_CACHE_SCHEMA_VERSION = 2;
 const BUNDLE_CACHE_FILENAME = '.bundle-cache.json';
 const BUNDLE_CACHE_MAX_ENTRIES = 4;
-const BUNDLE_CACHE_MAX_FILE_BYTES = 4 * 1024 * 1024;
+const BUNDLE_CACHE_MAX_FILE_BYTES = 6 * 1024 * 1024;
 const BUNDLE_CACHE_MAX_EXPR_BYTES = 2 * 1024 * 1024;
 const BUNDLE_CACHE_MAX_BOOTCFG_BYTES = 64 * 1024;
-const CHANNEL_CACHE_MAX_PAYLOAD_BYTES = 1024 * 1024;
-const CHANNEL_CACHE_NAMES = ['omni', 'sidebar', 'hostI18n', 'thought', 'inlineDiff', 'wallpaper'];
+const CHANNEL_CACHE_MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
+const CHANNEL_CACHE_NAMES = ['omni', 'sidebar', 'hostI18n', 'thought', 'inlineDiff', 'wallpaper', 'periodicPicker'];
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const CODE_HASH_RE = /^[0-9a-z]{1,16}$/;
 
@@ -4951,7 +4953,7 @@ const _bundleCacheStats = {
   channelDiskHits: 0,
   channelDiskMisses: 0,
   channelCompileRuns: 0,
-  channelHitsByName: { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0, wallpaper: 0 },
+  channelHitsByName: { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0, wallpaper: 0, periodicPicker: 0 },
   lastOutcome: 'none',
   lastCachePath: null,
 };
@@ -5748,6 +5750,19 @@ function buildConfigRefreshExpression(customConfig, extraMeta = null) {
           window.__agPrismHostI18n?.destroy?.();
         }
       } catch {}
+      if (effectiveCfg?.periodicModelPicker === 'off' || effectiveCfg?.periodicModelPicker === false) {
+        try {
+          window.__agPrismPeriodicPicker?.destroy?.();
+          document.documentElement?.removeAttribute?.('data-ag-prism-periodic-picker');
+          document.documentElement?.removeAttribute?.('data-ag-pp-open');
+          document.documentElement?.removeAttribute?.('data-ag-pp-holding');
+          document.querySelectorAll?.('#ag-prism-periodic-picker-css, #ag-prism-periodic-picker-root, .ag-pp-hold-ring, .ag-pp-mini-keycap').forEach((n) => n.remove());
+          for (const k of ['__agPrismPeriodicPicker', '__agPrismPeriodicPickerFactory', '__agPrismKeyboard3D', '__agPrismPeriodicKeyboard3D', '__agPrismOledScreen', '__agPrismGrainAssets', '__agPeriodicAudioFx', '__agPeriodicModelCatalog', '__agPeriodicHostBridge', '__agPeriodicBentoUi', '__agPeriodicPbrGrainAssets', '__agPeriodicOledScreen', '__agPeriodicKeyboard3D']) {
+            try { delete window[k]; } catch {}
+            try { delete globalThis[k]; } catch {}
+          }
+        } catch {}
+      }
       if (document.documentElement) {
         if (effectiveCfg?.thoughtTranslate && effectiveCfg.thoughtTranslate !== 'off') {
           document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
@@ -5967,9 +5982,8 @@ function getInjectWrapperTemplate() {
     };
 
     const destroyModules = (includeMain) => {
-      const ks = includeMain
-        ? ['__agPrismTelemetry', '__agPrismEffortSlider', '__agPrismThought', '__agPrismOmni', '__agPrismContextMenu', '__agPrism']
-        : ['__agPrismTelemetry', '__agPrismEffortSlider', '__agPrismThought', '__agPrismOmni', '__agPrismContextMenu'];
+      const ks = ['__agPrismTelemetry', '__agPrismEffortSlider', '__agPrismThought', '__agPrismOmni', '__agPrismContextMenu'];
+      if (includeMain) ks.push('__agPrism');
       for (const k of ks) {
         try { window[k]?.destroy?.(); } catch {}
       }
@@ -5977,11 +5991,12 @@ function getInjectWrapperTemplate() {
 
     const stripForeignMount = () => {
       destroyModules(true);
-      try { window.__agPrismInlineDiff?.destroy?.(); } catch {}
-      try { window.__agPrismContextMenu?.destroy?.(); } catch {}
-      try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}
+      for (const k of ['__agPrismInlineDiff', '__agPrismHostI18n', '__agPrismPeriodicPicker']) {
+        try { window[k]?.destroy?.(); } catch {}
+      }
       try {
-        document.documentElement?.removeAttribute?.('data-ag-cs-model-menu');
+        const de = document.documentElement;
+        for (const a of ['data-ag-prism-host-i18n', 'data-ag-prism-periodic-picker', 'data-ag-pp-open', 'data-ag-cs-model-menu']) de?.removeAttribute?.(a);
         document.querySelectorAll?.('[data-ag-cs-aux-dual],[data-ag-cs-model-overlay]').forEach((el) => {
           el.removeAttribute('data-ag-cs-aux-dual');
           el.removeAttribute('data-ag-cs-model-overlay');
@@ -5994,19 +6009,10 @@ function getInjectWrapperTemplate() {
         try { document.getElementById(id)?.remove(); } catch {}
       }
       try { document.querySelectorAll?.('[data-testid="prism-thought-ai-config"], [data-testid="prism-thought-general-config"], .ag-cs-ctx-menu, .ag-cs-ctx-toast, .ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu')?.forEach?.((el) => el.remove()); } catch {}
-      delete window.__agPrismThought;
-      delete window.__agPrismThoughtSettingsUi;
-      delete globalThis.__agPrismThoughtSettingsUi;
-      delete window.__agPrismInlineDiff;
-      delete globalThis.__agPrismInlineDiff;
-      delete window.__agPrismInlineDiffFactory;
-      delete globalThis.__agPrismInlineDiffFactory;
-      delete window.__agPrismInlineDiffResolve;
-      delete window.__agPrismOmni;
-      delete window.__agPrismContextMenu;
-      delete globalThis.__agPrismContextMenu;
-      delete window.__agPrism;
-      delete window.__agClaudeStyle;
+      for (const k of ['__agPrismThought', '__agPrismThoughtSettingsUi', '__agPrismInlineDiff', '__agPrismInlineDiffFactory', '__agPrismInlineDiffResolve', '__agPrismOmni', '__agPrismContextMenu', '__agPrism', '__agClaudeStyle']) {
+        delete window[k];
+        delete globalThis[k];
+      }
     };
 
     const hasDomWorkbenchMarkers = () => {
@@ -6034,16 +6040,16 @@ function getInjectWrapperTemplate() {
         const href = loc && typeof loc.href === 'string' ? loc.href : '';
         if (!href) return 'ok';
         const low = href.toLowerCase();
-        if (low.startsWith('devtools://') || low.startsWith('data:') || low.startsWith('chrome:') || low.startsWith('chrome-extension:') || low.startsWith('edge:') || low.startsWith('blob:') || low.startsWith('plugin:')) {
+        if (/^(?:devtools:\\/\\/|data:|chrome:|chrome-extension:|edge:|blob:|plugin:)/.test(low)) {
           return 'reject';
         }
-        if (low.startsWith('vscode-file://') || low.startsWith('app://') || low.startsWith('about:')) {
+        if (/^(?:vscode-file:\\/\\/|app:\\/\\/|about:)/.test(low)) {
           const ttl = String(document.title || '').trim();
           return /^(?:untitled|launchpad)$/i.test(ttl) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(low) ? 'reject' : 'ok';
         }
         const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);
         if (!m) {
-          return low.startsWith('http:') || low.startsWith('https:') ? 'reject' : 'ok';
+          return /^https?:/.test(low) ? 'reject' : 'ok';
         }
         const pathname = (m[3] || '/').toLowerCase();
         if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test(pathname)) {
@@ -6127,10 +6133,11 @@ function getInjectWrapperTemplate() {
         } else {
           try { window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {}
         }
-        if (document.documentElement) {
-          if (!document.documentElement.hasAttribute('data-ag-prism')) document.documentElement.setAttribute('data-ag-prism', ${JSON.stringify(PLUGIN_VERSION)});
-          if (effectiveCfg?.thoughtTranslate && effectiveCfg.thoughtTranslate !== 'off') document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
-          else document.documentElement.removeAttribute('data-ag-prism-thought-view');
+        const de = document.documentElement;
+        if (de) {
+          if (!de.hasAttribute('data-ag-prism')) de.setAttribute('data-ag-prism', ${JSON.stringify(PLUGIN_VERSION)});
+          if (effectiveCfg?.thoughtTranslate && effectiveCfg.thoughtTranslate !== 'off') de.setAttribute('data-ag-prism-thought-view', effectiveCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
+          else de.removeAttribute('data-ag-prism-thought-view');
         }
       } catch (e) {
         status = 'error: ' + (e && e.message ? e.message : String(e));
@@ -6563,7 +6570,7 @@ function resetBundleCacheStats() {
   _bundleCacheStats.channelDiskHits = 0;
   _bundleCacheStats.channelDiskMisses = 0;
   _bundleCacheStats.channelCompileRuns = 0;
-  _bundleCacheStats.channelHitsByName = { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0, wallpaper: 0 };
+  _bundleCacheStats.channelHitsByName = { omni: 0, sidebar: 0, hostI18n: 0, thought: 0, inlineDiff: 0, wallpaper: 0, periodicPicker: 0 };
   _bundleCacheStats.lastOutcome = 'none';
   _bundleCacheStats.lastCachePath = null;
   try { _omniClientCache.cachedPaths?.clear?.(); } catch {}
@@ -6572,6 +6579,7 @@ function resetBundleCacheStats() {
   try { _thoughtAssetsCache.cachedPaths?.clear?.(); } catch {}
   try { _inlineDiffClientCache.cachedPaths?.clear?.(); } catch {}
   try { _wallpaperAssetsCache.cachedPaths?.clear?.(); } catch {}
+  try { _periodicPickerCache.cachedPaths?.clear?.(); } catch {}
   invalidateBundleCacheRootCache();
 }
 
@@ -6640,6 +6648,12 @@ function isValidChannelCacheEntry(channelName, entry) {
     if (totalBytes > CHANNEL_CACHE_MAX_PAYLOAD_BYTES) return false;
     if (computeHash(`${entry.minClient}\n${entry.minSettingsUi}`) !== entry.codeHash) return false;
     return sha256Text(`${entry.codeHash}\0${entry.minClient}\0${entry.minSettingsUi}`) === entry.payloadSha256;
+  }
+  if (channelName === 'periodicPicker') {
+    if (!hasOwn('minRuntime') || typeof entry.minRuntime !== 'string' || entry.minRuntime.length === 0) return false;
+    if (Buffer.byteLength(entry.minRuntime, 'utf8') > CHANNEL_CACHE_MAX_PAYLOAD_BYTES) return false;
+    if (computeHash(entry.minRuntime) !== entry.codeHash) return false;
+    return sha256Text(`${entry.codeHash}\0${entry.minRuntime}`) === entry.payloadSha256;
   }
   return false;
 }
@@ -6936,6 +6950,7 @@ function markChannelCachedOnPath(cachePath, chMap) {
     thought: _thoughtAssetsCache,
     inlineDiff: _inlineDiffClientCache,
     wallpaper: _wallpaperAssetsCache,
+    periodicPicker: _periodicPickerCache,
   };
   for (const name of CHANNEL_CACHE_NAMES) {
     const rec = chMap[name];
@@ -8595,6 +8610,234 @@ function buildWallpaperExpression(config = null, opts = null) {
   })()`;
 }
 
+const PERIODIC_PICKER_MODULE_FILES = [
+  'pbr-grain-assets.js',
+  'audio-fx.js',
+  'model-catalog.js',
+  'host-bridge.js',
+  'oled-cyber-screen.js',
+  'keyboard-3d-gl.js',
+  'bento-ui.js',
+  'periodic-picker.js',
+];
+
+let _periodicPickerCache = { sig: '', sourceHash: '', minRuntime: '', codeHash: '', cachedPaths: new Set() };
+
+function shouldEnablePeriodicPicker(config) {
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  return cfg.periodicModelPicker !== 'off' && cfg.periodicModelPicker !== false;
+}
+
+function readCompiledPeriodicPickerAssets(opts = null) {
+  const baseDir = path.join(__dirname, 'vendor', 'periodic-picker');
+  const rtPath = path.join(baseDir, 'periodic-picker.js');
+  if (!fs.existsSync(rtPath)) {
+    return { sig: '', minRuntime: '', codeHash: '' };
+  }
+  const presentModules = [];
+  const sigParts = [];
+  for (const name of PERIODIC_PICKER_MODULE_FILES) {
+    const filePath = path.join(baseDir, name);
+    if (fs.existsSync(filePath)) {
+      presentModules.push({ name, filePath, rel: `vendor/periodic-picker/${name}` });
+      sigParts.push(`${name}:${getFileSig(filePath)}`);
+    } else {
+      sigParts.push(`${name}:none`);
+    }
+  }
+  const sig = sigParts.join('|');
+  const cachePath = resolveBundleCachePathOption(opts);
+  if (!cachePath && _periodicPickerCache.sig === sig && _periodicPickerCache.codeHash) {
+    return _periodicPickerCache;
+  }
+  const fileEntries = presentModules.map((mod) => ({
+    rel: mod.rel,
+    content: fs.readFileSync(mod.filePath),
+  }));
+  const extraTag = presentModules.map((mod) => mod.name).join(',');
+  return resolveChannelAssetsWithDiskCache({
+    channelName: 'periodicPicker',
+    memCache: _periodicPickerCache,
+    setMemCache: (v) => { _periodicPickerCache = v; },
+    sig,
+    fileEntries,
+    extraTag,
+    opts,
+    compileFn: () => {
+      const parts = [];
+      for (const item of fileEntries) {
+        const minPart = minifySingleSource(item.content.toString('utf8'));
+        if (minPart) parts.push(minPart);
+      }
+      const minRuntime = parts.join(';\n');
+      const codeHash = minRuntime ? computeHash(minRuntime) : '';
+      return { minRuntime, codeHash };
+    },
+    toCacheEntry: (assets, sourceHash) => ({
+      sourceHash,
+      codeHash: assets.codeHash,
+      minRuntime: assets.minRuntime,
+      payloadSha256: sha256Text(`${assets.codeHash}\0${assets.minRuntime}`),
+      updatedAt: Date.now(),
+    }),
+    fromCacheEntry: (entry) => ({
+      minRuntime: entry.minRuntime,
+      codeHash: entry.codeHash,
+    }),
+  });
+}
+
+const PERIODIC_PICKER_REMOVE_EXPRESSION = `(() => {
+  try { window.__agPrismPeriodicPicker?.destroy?.(); } catch {}
+  try { document.documentElement?.removeAttribute?.('data-ag-prism-periodic-picker'); } catch {}
+  try { document.documentElement?.removeAttribute?.('data-ag-pp-open'); } catch {}
+  try { document.documentElement?.removeAttribute?.('data-ag-pp-holding'); } catch {}
+  try {
+    document
+      .querySelectorAll?.('#ag-prism-periodic-picker-css, #ag-prism-periodic-picker-root, .ag-pp-hold-ring, .ag-pp-mini-keycap')
+      .forEach((n) => n.remove());
+  } catch {}
+  for (const k of ['__agPrismPeriodicPicker', '__agPrismPeriodicPickerFactory', '__agPrismKeyboard3D', '__agPrismPeriodicKeyboard3D', '__agPrismOledScreen', '__agPrismGrainAssets', '__agPeriodicAudioFx', '__agPeriodicModelCatalog', '__agPeriodicHostBridge', '__agPeriodicBentoUi', '__agPeriodicPbrGrainAssets', '__agPeriodicOledScreen', '__agPeriodicKeyboard3D']) {
+    try { delete window[k]; } catch {}
+    try { delete globalThis[k]; } catch {}
+  }
+  return { ok: true, status: 'off' };
+})()`;
+
+// 第八通道独立注入（元素周期表 3D 模型选择器）：绝不打入静态主包，支持 8 模块顺序合并、.bundle-cache.json 磁盘缓存、长按呼出与 100% 对称卸载
+function buildPeriodicPickerExpression(config = null, opts = null) {
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  if (!shouldEnablePeriodicPicker(cfg)) {
+    return '';
+  }
+  const { minRuntime, codeHash } = readCompiledPeriodicPickerAssets(opts);
+  if (!minRuntime || !codeHash) {
+    return '';
+  }
+  const hashJson = serializeJsonForEval(codeHash);
+
+  return `(() => {
+    try {
+      if (window.self !== window.top) return { ok: false, status: 'skipped-subframe' };
+    } catch {
+      return { ok: false, status: 'skipped-subframe' };
+    }
+    const hasDomMarker = () => {
+      try {
+        if (
+          document.body &&
+          document.body.classList &&
+          (document.body.classList.contains('theme-standalone') || document.body.classList.contains('monaco-workbench'))
+        ) {
+          return true;
+        }
+        return Boolean(
+          typeof document.querySelector === 'function' &&
+            document.querySelector(
+              '.agy-shell, .agy-home, [data-testid="aux-pane-split"], [data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="model-selector-trigger"], .monaco-workbench'
+            )
+        );
+      } catch {
+        return false;
+      }
+    };
+    let needDomMarkerOnReady = false;
+    let isPlainHttpLocalhost = false;
+    try {
+      const loc = typeof window !== 'undefined' && window.location;
+      const href = loc && typeof loc.href === 'string' ? loc.href : '';
+      if (href) {
+        const low = href.toLowerCase();
+        if (low.startsWith('devtools://') || low.startsWith('data:') || low.startsWith('chrome:') || low.startsWith('chrome-extension:') || low.startsWith('edge:') || low.startsWith('blob:') || low.startsWith('plugin:')) {
+          return { ok: false, status: 'skipped-non-host' };
+        }
+        if (low.startsWith('vscode-file://') || low.startsWith('app://') || low.startsWith('about:')) {
+          const ttl = String(document.title || '').trim();
+          if (/^(?:untitled|launchpad)$/i.test(ttl) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(low)) {
+            return { ok: false, status: 'skipped-non-host' };
+          }
+        }
+        if (low.startsWith('http:') || low.startsWith('https:')) {
+          const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);
+          if (!m) return { ok: false, status: 'skipped-non-host' };
+          const pathname = (m[3] || '/').toLowerCase();
+          if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test(pathname)) {
+            return { ok: false, status: 'skipped-non-host' };
+          }
+          if (!hasDomMarker()) {
+            isPlainHttpLocalhost = m[1].toLowerCase() === 'http';
+            const rs = String(document.readyState || '');
+            if (isPlainHttpLocalhost) {
+              if (rs === 'loading') needDomMarkerOnReady = true;
+              else return { ok: false, status: 'skipped-non-host' };
+            } else if (!/\\bantigravity\\b/i.test(String(document.title || ''))) {
+              if (rs === 'loading') needDomMarkerOnReady = true;
+              else return { ok: false, status: 'skipped-non-host' };
+            }
+          }
+        }
+      }
+    } catch {}
+
+    try {
+      const liveCfg = window.__agPrism?.getState?.()?.cfg;
+      if (liveCfg && typeof liveCfg === 'object' && (liveCfg.periodicModelPicker === 'off' || liveCfg.periodicModelPicker === false)) {
+        try {
+          window.__agPrismPeriodicPicker?.destroy?.();
+          document.documentElement?.removeAttribute?.('data-ag-prism-periodic-picker');
+          document.documentElement?.removeAttribute?.('data-ag-pp-open');
+          document.documentElement?.removeAttribute?.('data-ag-pp-holding');
+          document.querySelectorAll?.('#ag-prism-periodic-picker-css, #ag-prism-periodic-picker-root, .ag-pp-hold-ring, .ag-pp-mini-keycap').forEach((n) => n.remove());
+          for (const k of ['__agPrismPeriodicPicker', '__agPrismPeriodicPickerFactory', '__agPrismKeyboard3D', '__agPrismPeriodicKeyboard3D', '__agPrismOledScreen', '__agPrismGrainAssets', '__agPeriodicAudioFx', '__agPeriodicModelCatalog', '__agPeriodicHostBridge', '__agPeriodicBentoUi', '__agPeriodicPbrGrainAssets', '__agPeriodicOledScreen', '__agPeriodicKeyboard3D']) {
+            try { delete window[k]; } catch {}
+            try { delete globalThis[k]; } catch {}
+          }
+        } catch {}
+        return { ok: true, status: 'off', skippedByLiveCfg: true };
+      }
+    } catch {}
+
+    const targetHash = ${hashJson};
+    const mountOrReuse = () => {
+      if (needDomMarkerOnReady && !hasDomMarker() && (isPlainHttpLocalhost || !/\\bantigravity\\b/i.test(String(document.title || '')))) {
+        return { ok: false, status: 'skipped-non-host' };
+      }
+      const existing = window.__agPrismPeriodicPicker;
+      if (existing && existing.__prismCodeHash === targetHash) {
+        const st = typeof existing.getStatus === 'function' ? existing.getStatus() : null;
+        const domActive = !document.documentElement || document.documentElement.getAttribute('data-ag-prism-periodic-picker') === '1';
+        if ((!st || (st.status !== 'off' && st.status !== 'destroyed' && st.mode !== 'off')) && domActive) {
+          return { ok: true, reused: true, codeHash: targetHash, ...(st && typeof st === 'object' ? st : {}) };
+        }
+      }
+      try { existing?.destroy?.(); } catch {}
+
+      ${minRuntime};
+      const factory = window.__agPrismPeriodicPickerFactory || globalThis.__agPrismPeriodicPickerFactory;
+      if (!factory || typeof factory.mountPeriodicPicker !== 'function') {
+        return { ok: false, status: 'factory-missing' };
+      }
+      const inst = factory.mountPeriodicPicker({
+        root: window,
+        doc: document,
+        mode: 'on',
+      });
+      if (inst && typeof inst === 'object') {
+        inst.__prismCodeHash = targetHash;
+        if (!window.__agPrismPeriodicPicker) window.__agPrismPeriodicPicker = inst;
+      }
+      const cur = inst && typeof inst.getStatus === 'function' ? inst.getStatus() : { status: 'active' };
+      return { ok: true, codeHash: targetHash, ...(cur && typeof cur === 'object' ? cur : {}) };
+    };
+
+    if (needDomMarkerOnReady && typeof document.addEventListener === 'function') {
+      document.addEventListener('DOMContentLoaded', () => { try { mountOrReuse(); } catch {} }, { once: true });
+      return { ok: true, status: 'deferred', codeHash: targetHash };
+    }
+    return mountOrReuse();
+  })()`;
+}
+
 const REMOVE_EXPRESSION = `(() => {
   try {
     document.querySelectorAll?.('#ag-prism-wallpaper-root video')?.forEach?.((v) => {
@@ -8635,6 +8878,14 @@ const REMOVE_EXPRESSION = `(() => {
     if (window.__agPrismHostI18n && typeof window.__agPrismHostI18n.destroy === 'function') {
       window.__agPrismHostI18n.destroy();
     }
+  } catch (e) {}
+  try {
+    if (window.__agPrismPeriodicPicker && typeof window.__agPrismPeriodicPicker.destroy === 'function') {
+      window.__agPrismPeriodicPicker.destroy();
+    }
+    document
+      .querySelectorAll?.('#ag-prism-periodic-picker-css, #ag-prism-periodic-picker-root, .ag-pp-hold-ring, .ag-pp-mini-keycap')
+      .forEach((n) => n.remove());
   } catch (e) {}
   try {
     window.__agPrismContextMenu?.destroy?.();
@@ -8722,6 +8973,17 @@ const REMOVE_EXPRESSION = `(() => {
   delete window.__agPrismBrandLogoSvg;
   delete window.__agPrismHostI18n;
   delete window.__agPrismHostI18nFactory;
+  delete window.__agPrismPeriodicPicker;
+  delete window.__agPrismPeriodicPickerFactory;
+  delete window.__agPrismKeyboard3D;
+  delete window.__agPrismPeriodicKeyboard3D;
+  delete window.__agPrismOledScreen;
+  delete window.__agPrismGrainAssets;
+  for (const k of ['__agPeriodicAudioFx', '__agPeriodicModelCatalog', '__agPeriodicHostBridge', '__agPeriodicBentoUi', '__agPeriodicPbrGrainAssets', '__agPeriodicOledScreen', '__agPeriodicKeyboard3D']) {
+    try { delete window[k]; } catch {}
+    try { delete globalThis[k]; } catch {}
+  }
+  try { document.documentElement?.removeAttribute?.('data-ag-pp-holding'); } catch {}
   delete window.__agPrismContextMenu;
   delete window.__agCsI18n;
   delete globalThis.__agSP;
@@ -8729,6 +8991,12 @@ const REMOVE_EXPRESSION = `(() => {
   delete globalThis.__agPrismBrandLogoSvg;
   delete globalThis.__agPrismHostI18n;
   delete globalThis.__agPrismHostI18nFactory;
+  delete globalThis.__agPrismPeriodicPicker;
+  delete globalThis.__agPrismPeriodicPickerFactory;
+  delete globalThis.__agPrismKeyboard3D;
+  delete globalThis.__agPrismPeriodicKeyboard3D;
+  delete globalThis.__agPrismOledScreen;
+  delete globalThis.__agPrismGrainAssets;
   delete globalThis.__agPrismContextMenu;
   delete globalThis.__agPrismTelemetry;
   delete globalThis.__agPrismEffortSlider;
@@ -8810,6 +9078,8 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-prism-link-target',
       'data-ag-prism-sidebar-studio',
       'data-ag-prism-host-i18n',
+      'data-ag-prism-periodic-picker',
+      'data-ag-pp-open',
       'data-ag-prism-mode',
       'data-ag-prism-sidebar-host-sync',
       'data-ag-prism-sidebar-space',
@@ -8991,7 +9261,7 @@ const REMOVE_EXPRESSION = `(() => {
   const nodes = document.querySelectorAll(
     '#' + ${JSON.stringify(STYLE_ID)} +
     ', #' + ${JSON.stringify(LEGACY_STYLE_ID)} +
-    ', #ag-prism-host-alert-css, #ag-prism-settings-v101-css, #ag-prism-studio-v101-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-prism-inline-diff-css, #ag-prism-wallpaper-root, #ag-prism-wallpaper-css, #ag-cs-settings-sec, [data-testid="prism-thought-ai-config"], [data-testid="prism-thought-general-config"], .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ag-prism-sidebar-studio, .ag-prism-sidebar-rail, .ag-prism-sidebar-popover, .ag-prism-sidebar-modal, .ag-cs-home-panel, .ag-cs-home-panel-seat, .ag-cs-ripple-layer, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-mascot, .ag-v2-mascot-stage, .ag-v2-habitat-prop, .ag-cs-crystal-bar, [data-testid="orchestrator-effort-bar"], .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-nav-outline-trigger, .ag-cs-smooth-caret, .ag-cs-perf-backdrop, .ag-cs-ctx-menu, .ag-cs-ctx-toast'
+    ', #ag-prism-host-alert-css, #ag-prism-settings-v101-css, #ag-prism-studio-v101-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-prism-periodic-picker-css, #ag-prism-periodic-picker-root, .ag-pp-hold-ring, .ag-pp-mini-keycap, #ag-prism-inline-diff-css, #ag-prism-wallpaper-root, #ag-prism-wallpaper-css, #ag-cs-settings-sec, [data-testid="prism-thought-ai-config"], [data-testid="prism-thought-general-config"], .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ag-prism-sidebar-studio, .ag-prism-sidebar-rail, .ag-prism-sidebar-popover, .ag-prism-sidebar-modal, .ag-cs-home-panel, .ag-cs-home-panel-seat, .ag-cs-ripple-layer, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-mascot, .ag-v2-mascot-stage, .ag-v2-habitat-prop, .ag-cs-crystal-bar, [data-testid="orchestrator-effort-bar"], .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-nav-outline-trigger, .ag-cs-smooth-caret, .ag-cs-perf-backdrop, .ag-cs-ctx-menu, .ag-cs-ctx-toast'
   );
   nodes.forEach((n) => n.remove());
   return { removed: nodes.length };
@@ -9077,5 +9347,9 @@ module.exports = {
   INLINE_DIFF_REMOVE_EXPRESSION,
   buildWallpaperExpression,
   WALLPAPER_REMOVE_EXPRESSION,
+  PERIODIC_PICKER_MODULE_FILES,
+  shouldEnablePeriodicPicker,
+  buildPeriodicPickerExpression,
+  PERIODIC_PICKER_REMOVE_EXPRESSION,
   isSafeV2SidebarClientSource,
 };

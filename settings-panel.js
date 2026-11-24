@@ -74,6 +74,7 @@
     telemetryModule: S_AUTO,
     effortSliderModule: S_AUTO,
     effortMemory: S_ON,
+    periodicModelPicker: S_ON,
     omniModule: S_ON,
     linkTarget: mkSp(['builtin', 'external']),
     sidebarStudio: S_OFF,
@@ -109,7 +110,7 @@
       const normFn = G.__agCsI18n?.normalizeLanguage;
       val = typeof normFn === 'function' && nav ? normFn(nav) : /^ja\b/i.test(nav) ? 'ja' : /^en\b/i.test(nav) ? 'en' : /^zh[-_](?:HK|MO)/i.test(nav) ? 'yue' : /^zh[-_](?:TW|Hant)/i.test(nav) ? 'zh-TW' : 'zh-CN';
     }
-    if ((key === 'omniModule' || key === 'sidebarStudio' || key === 'autoUpdate' || key === 'sidebarNavFold') && typeof val === 'boolean') val = val ? 'on' : 'off';
+    if ((key === 'periodicModelPicker' || key === 'omniModule' || key === 'sidebarStudio' || key === 'autoUpdate' || key === 'sidebarNavFold') && typeof val === 'boolean') val = val ? 'on' : 'off';
     if (typeof spec.default === 'string' && typeof val === 'number' && Number.isFinite(val)) val = String(val);
     return spec.allowed.includes(val) ? { valid: true, value: val } : { valid: false };
   };
@@ -711,6 +712,7 @@
             RS('telemetryModule', autoOnOff, 'Telemetry'),
             RS('effortSliderModule', autoOnOff, 'EffortSlider'),
             RS('effortMemory', onOffStr, 'EffortMemory'),
+            RS('periodicModelPicker', onOffStr, 'PeriodicPicker'),
             RS('omniModule', onOffStr, 'Omni'),
             RS('linkTarget', [['builtin', U('optLinkBuiltin')], ['external', U('optLinkExternal')]]),
             RS('sidebarStudio', onOffStr),
@@ -722,7 +724,7 @@
             { id: 'appearance', title: U('grpAppearance'), keys: ['palette', 'lightPreset', 'accentTone', 'cornerStyle', 'ambientIntensity', 'motionLevel', 'targetFps', 'homeLayout', 'homeRipple', 'logoInk', 'language', 'hostLocalization'] },
             { id: 'interaction', title: U('grpInteraction'), keys: ['composerRestyle', 'placeholderStyle', 'smoothCaret', 'scrollBottomMotion', 'contextMenu', 'codeFont', 'codeLigatures', 'mascot', 'sidebarRestyle', 'sidebarCompact', 'sidebarNavFold'] },
             { id: 'thought', title: U('grpThought'), keys: ['thoughtTranslate', 'thoughtTrigger', 'thoughtView'] },
-            { id: 'modules', title: U('groupModules'), keys: ['telemetryModule', 'effortSliderModule', 'effortMemory', 'omniModule', 'linkTarget'] },
+            { id: 'modules', title: U('groupModules'), keys: ['telemetryModule', 'effortSliderModule', 'effortMemory', 'periodicModelPicker', 'omniModule', 'linkTarget'] },
             { id: 'beta', title: U('grpBeta'), keys: ['sidebarStudio'] },
           ];
 

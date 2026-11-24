@@ -83,6 +83,7 @@
     'ag-cs-settings-sec': 1,
     'ag-prism-pulse-bar': 1,
     'ag-pulse-status-bar': 1,
+    'ag-prism-periodic-picker-root': 1,
   };
 
   var PRISM_OWNED_ATTRS = [
@@ -95,7 +96,7 @@
     'data-ag-prism-fallback',
   ];
 
-  var PRISM_CLASS_PREFIXES = ['ag-cs-', 'ag-prism-', 'ag-v2-', 'ag-omni-', 'ag-ss-', 'ces-', 'ag-anim-'];
+  var PRISM_CLASS_PREFIXES = ['ag-cs-', 'ag-prism-', 'ag-v2-', 'ag-omni-', 'ag-ss-', 'ag-pp-', 'ces-', 'ag-anim-'];
 
   var EXTERNAL_OWNED_IDS = {
     'agy-theme-switcher': 1,
