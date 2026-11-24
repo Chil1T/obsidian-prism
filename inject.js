@@ -31,6 +31,8 @@ const {
   shouldEnableHostI18n,
   buildHostI18nExpression,
   HOST_I18N_REMOVE_EXPRESSION,
+  ISOLATED_HOST_I18N_PAUSE_EXPRESSION,
+  ISOLATED_HOST_I18N_RESUME_EXPRESSION,
   shouldEnableThought,
   buildThoughtExpression,
   THOUGHT_REMOVE_EXPRESSION,
@@ -119,6 +121,33 @@ function updateConfigSetting(key, value) {
   return updateConfigBatch({ [key]: value });
 }
 
+async function syncIsolatedHostI18nOnEntry(entry, shouldPause) {
+  if (!entry || !entry.session || entry.session.closed) return { pausedAny: false, newlyPaused: false };
+  if (!(entry.contextFrames instanceof Map) || !entry.mainFrameId) return { pausedAny: false, newlyPaused: false };
+  const expr = shouldPause ? ISOLATED_HOST_I18N_PAUSE_EXPRESSION : ISOLATED_HOST_I18N_RESUME_EXPRESSION;
+  if (!expr) return { pausedAny: false, newlyPaused: false };
+  if (!shouldPause && !entry.isolatedHostI18nPaused) return { pausedAny: false, newlyPaused: false };
+  let pausedAny = false;
+  let newlyPaused = false;
+  for (const [ctxId, meta] of entry.contextFrames.entries()) {
+    if (!meta || meta.frameId !== entry.mainFrameId || meta.isDefault === true || meta.type !== 'isolated') continue;
+    const res = await entry.session
+      .send('Runtime.evaluate', { contextId: ctxId, expression: expr, returnByValue: true })
+      .catch(() => null);
+    const val = res && res.result ? res.result.value : null;
+    if (shouldPause && val && val.ok && val.paused) {
+      pausedAny = true;
+      if (!val.alreadyPaused) newlyPaused = true;
+    }
+  }
+  if (shouldPause) {
+    if (pausedAny) entry.isolatedHostI18nPaused = true;
+  } else {
+    entry.isolatedHostI18nPaused = false;
+  }
+  return { pausedAny, newlyPaused };
+}
+
 function createFastConfigRefreshBroadcaster({
   attached,
   readConfig: readCfg = readConfig,
@@ -202,6 +231,8 @@ function createFastConfigRefreshBroadcaster({
       if (!entry || entry.session.closed) continue;
       try {
         await ensureSidebarBinding(entry.session, entry, cfgNow);
+        const hostI18nOffNow = cfgNow?.hostLocalization === 'off';
+        const isoPauseRes = hostI18nOffNow ? await syncIsolatedHostI18nOnEntry(entry, true) : null;
         const entryAck = perEntryAck.get(entry) || 0;
         const refreshExpr =
           canFastRefresh && entryAck > 0
@@ -213,8 +244,14 @@ function createFastConfigRefreshBroadcaster({
             if (omniEnabled && omniExpr && !fast.skippedStale) await entry.session.evaluate(omniExpr).catch(() => {});
             if (sidebarEnabled && sidebarExpr && !fast.skippedStale) await entry.session.evaluate(sidebarExpr).catch(() => {});
             if (!fast.skippedStale) {
-              if (hostI18nExpr && hostI18nEnabled) await entry.session.evaluate(hostI18nExpr).catch(() => {});
+              let hiRes = null;
+              if (hostI18nExpr && hostI18nEnabled) hiRes = await entry.session.evaluate(hostI18nExpr).catch(() => null);
               else if (hostI18nRemoveExpression) await entry.session.evaluate(hostI18nRemoveExpression).catch(() => {});
+              if (hostI18nOffNow && isoPauseRes && isoPauseRes.newlyPaused && (!hiRes || hiRes.reused)) {
+                await entry.session.evaluate("(() => { try { window.__agPrismHostI18n?.setMode?.('off', true); (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {} return true; })()").catch(() => {});
+              } else if (!hostI18nOffNow && entry.isolatedHostI18nPaused) {
+                await syncIsolatedHostI18nOnEntry(entry, false);
+              }
               if (thoughtExpr && thoughtEnabled) {
                 const thRes = await entry.session.evaluate(thoughtExpr).catch(() => null);
                 if (thRes && thRes.ok) entry.thoughtMounted = true;
@@ -752,6 +789,9 @@ async function watch() {
         .catch(() => {});
       entry.hostI18nScriptId = null;
     }
+    if (cfgNow?.hostLocalization === 'off') {
+      await syncIsolatedHostI18nOnEntry(entry, true);
+    }
     if (hostI18nExpr) {
       const hiAdd = await entry.session
         .send('Page.addScriptToEvaluateOnNewDocument', { source: hostI18nExpr })
@@ -760,6 +800,9 @@ async function watch() {
       await entry.session.evaluate(hostI18nExpr).catch(() => {});
     } else if (HOST_I18N_REMOVE_EXPRESSION) {
       await entry.session.evaluate(HOST_I18N_REMOVE_EXPRESSION).catch(() => {});
+    }
+    if (cfgNow?.hostLocalization !== 'off' && entry.isolatedHostI18nPaused) {
+      await syncIsolatedHostI18nOnEntry(entry, false);
     }
     const hadThought = Boolean(entry.thoughtScriptId || entry.thoughtMounted);
     if (entry.thoughtScriptId) {

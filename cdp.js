@@ -7872,6 +7872,115 @@ const HOST_I18N_REMOVE_EXPRESSION = `(() => {
   return { ok: true, status: 'off' };
 })()`;
 
+// 主帧 Electron Isolated Context 外部汉化器（如 preload 注入版 yiheng8023/antigravity-chinese、yuexps/Antigravity-Hans）可逆协同静音表达式
+// 零 app.asar 修改、绝不修改 Map.prototype、绝不删改词典/缓存条目，退出或切回 auto/on 时 100% 无损恢复
+const ISOLATED_HOST_I18N_PAUSE_EXPRESSION = `(() => {
+  try {
+    const g = globalThis;
+    const prev = g.__agPrismIsoHostI18nState;
+    if (prev && prev.paused) {
+      return { ok: true, detected: true, paused: true, alreadyPaused: true, provider: prev.provider || null };
+    }
+    const st = {
+      paused: false,
+      provider: null,
+      agyCachePaused: false,
+      agyCacheRef: null,
+      agyOrigHasDesc: null,
+      agyOrigGetDesc: null,
+      hansSwitched: false,
+      hansPrevLang: null,
+      patchObserverPaused: false,
+      patchObserverRef: null,
+      patchObserverTarget: null,
+      patchObserverOpts: null,
+    };
+    if (
+      g.__AGY_CACHE__ &&
+      typeof g.__AGY_CACHE__.has === 'function' &&
+      typeof g.__AGY_CACHE__.get === 'function' &&
+      (g.__AGY_I18N_INITIALIZED__ || g.__AGY_I18N_DATA__)
+    ) {
+      const cache = g.__AGY_CACHE__;
+      st.agyCacheRef = cache;
+      st.agyOrigHasDesc = Object.getOwnPropertyDescriptor(cache, 'has') || null;
+      st.agyOrigGetDesc = Object.getOwnPropertyDescriptor(cache, 'get') || null;
+      Object.defineProperty(cache, 'has', { value: () => true, configurable: true, writable: true });
+      Object.defineProperty(cache, 'get', { value: () => null, configurable: true, writable: true });
+      st.agyCachePaused = true;
+      st.paused = true;
+      st.provider = 'yiheng8023';
+    }
+    if (typeof g.__antigravityZhSetLang === 'function') {
+      let stored = null;
+      try { stored = g.localStorage && g.localStorage.getItem('antigravityHansLang'); } catch {}
+      const norm = stored !== null ? String(stored).trim().toLowerCase() : '';
+      if (stored === null || (norm !== 'en' && norm !== 'en-us' && norm !== 'off' && norm !== 'false' && norm !== '0')) {
+        st.hansPrevLang = stored && String(stored).trim() ? String(stored).trim() : 'zh-CN';
+        try {
+          g.__antigravityZhSetLang('en');
+          st.hansSwitched = true;
+          st.paused = true;
+          if (!st.provider) st.provider = 'yuexps/Antigravity-Hans';
+        } catch {}
+      }
+    } else if (
+      g.__antigravityZhPatchObserver &&
+      typeof g.__antigravityZhPatchObserver.disconnect === 'function' &&
+      typeof g.__antigravityZhPatchObserver.observe === 'function'
+    ) {
+      try {
+        const obs = g.__antigravityZhPatchObserver;
+        st.patchObserverRef = obs;
+        st.patchObserverTarget = obs._target || obs.target || (typeof document !== 'undefined' && (document.documentElement || document.body)) || null;
+        st.patchObserverOpts = obs.options || { childList: true, subtree: true, characterData: true };
+        obs.disconnect();
+        st.patchObserverPaused = true;
+        st.paused = true;
+        if (!st.provider) st.provider = 'yuexps/Antigravity-Hans';
+      } catch {}
+    }
+    if (!st.paused) {
+      return { ok: true, detected: false, paused: false, alreadyPaused: false, provider: null };
+    }
+    g.__agPrismIsoHostI18nState = st;
+    return { ok: true, detected: true, paused: true, alreadyPaused: false, provider: st.provider };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message ? e.message : e) };
+  }
+})()`;
+
+const ISOLATED_HOST_I18N_RESUME_EXPRESSION = `(() => {
+  try {
+    const g = globalThis;
+    const st = g.__agPrismIsoHostI18nState;
+    if (!st || !st.paused) {
+      return { ok: true, resumed: false, provider: null };
+    }
+    try { delete g.__agPrismIsoHostI18nState; } catch { g.__agPrismIsoHostI18nState = null; }
+    if (st.agyCachePaused && st.agyCacheRef) {
+      try {
+        if (st.agyOrigHasDesc) Object.defineProperty(st.agyCacheRef, 'has', st.agyOrigHasDesc);
+        else delete st.agyCacheRef.has;
+        if (st.agyOrigGetDesc) Object.defineProperty(st.agyCacheRef, 'get', st.agyOrigGetDesc);
+        else delete st.agyCacheRef.get;
+      } catch {}
+      try {
+        if (typeof g.__AGY_RUN_FULL_SCAN__ === 'function') g.__AGY_RUN_FULL_SCAN__();
+      } catch {}
+    }
+    if (st.patchObserverPaused && st.patchObserverRef && st.patchObserverTarget) {
+      try { st.patchObserverRef.observe(st.patchObserverTarget, st.patchObserverOpts); } catch {}
+    }
+    if (st.hansSwitched && typeof g.__antigravityZhSetLang === 'function') {
+      try { g.__antigravityZhSetLang(st.hansPrevLang || 'zh-CN'); } catch {}
+    }
+    return { ok: true, resumed: true, provider: st.provider || null };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message ? e.message : e) };
+  }
+})()`;
+
 // 第四通道独立注入（Host UI 简体中文按需本地化 + off 态反向英文还原）：绝不打入静态主包，支持 4 层自动礼让、3 层温和压制与 100% 无损卸载
 function buildHostI18nExpression(config = null, hostLocaleHint = null, opts = null) {
   let resolvedLocaleHint = hostLocaleHint;
@@ -8006,6 +8115,7 @@ function buildHostI18nExpression(config = null, hostLocaleHint = null, opts = nu
         }
         if (typeof existing.setMode === 'function') {
           const switched = existing.setMode(targetMode);
+          try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
           return { ok: true, modeSwitched: true, codeHash: targetHash, ...switched };
         }
       }
@@ -9688,6 +9798,8 @@ module.exports = {
   shouldEnableHostI18n,
   buildHostI18nExpression,
   HOST_I18N_REMOVE_EXPRESSION,
+  ISOLATED_HOST_I18N_PAUSE_EXPRESSION,
+  ISOLATED_HOST_I18N_RESUME_EXPRESSION,
   shouldEnableThought,
   buildThoughtExpression,
   THOUGHT_REMOVE_EXPRESSION,

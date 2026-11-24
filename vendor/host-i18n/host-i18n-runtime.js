@@ -2095,6 +2095,10 @@
         patchObserverRef: null,
         patchObserverTarget: null,
         patchObserverOpts: null,
+        agyCachePaused: false,
+        agyCacheRef: null,
+        agyOrigHasDesc: null,
+        agyOrigGetDesc: null,
         htmlLangModified: false,
         htmlLangOrig: null,
       };
@@ -2132,6 +2136,36 @@
           tier1State.patchObserverPaused = true;
         } catch (e) {}
       }
+      // 兼容 Main World 注入版 yiheng8023/antigravity-chinese：仅对单实例 __AGY_CACHE__ 做可逆自有属性静音，绝不碰 Map.prototype
+      if (
+        win &&
+        win.__AGY_CACHE__ &&
+        typeof win.__AGY_CACHE__.has === 'function' &&
+        typeof win.__AGY_CACHE__.get === 'function' &&
+        (win.__AGY_I18N_INITIALIZED__ || win.__AGY_I18N_DATA__)
+      ) {
+        try {
+          var agyCache = win.__AGY_CACHE__;
+          tier1State.agyCacheRef = agyCache;
+          tier1State.agyOrigHasDesc = Object.getOwnPropertyDescriptor(agyCache, 'has') || null;
+          tier1State.agyOrigGetDesc = Object.getOwnPropertyDescriptor(agyCache, 'get') || null;
+          Object.defineProperty(agyCache, 'has', {
+            value: function () {
+              return true;
+            },
+            configurable: true,
+            writable: true,
+          });
+          Object.defineProperty(agyCache, 'get', {
+            value: function () {
+              return null;
+            },
+            configurable: true,
+            writable: true,
+          });
+          tier1State.agyCachePaused = true;
+        } catch (e) {}
+      }
       if (doc && doc.documentElement && !hasAttr(doc.documentElement, 'data-ag-prism-lang-owned')) {
         var curHtmlLang = getAttr(doc.documentElement, 'lang');
         if (curHtmlLang && /^zh(?:$|[-_])/i.test(String(curHtmlLang).trim())) {
@@ -2155,6 +2189,23 @@
           }
         } catch (e) {}
       }
+      if (saved.agyCachePaused && saved.agyCacheRef) {
+        try {
+          if (saved.agyOrigHasDesc) {
+            Object.defineProperty(saved.agyCacheRef, 'has', saved.agyOrigHasDesc);
+          } else {
+            delete saved.agyCacheRef.has;
+          }
+          if (saved.agyOrigGetDesc) {
+            Object.defineProperty(saved.agyCacheRef, 'get', saved.agyOrigGetDesc);
+          } else {
+            delete saved.agyCacheRef.get;
+          }
+          if (win && typeof win.__AGY_RUN_FULL_SCAN__ === 'function') {
+            win.__AGY_RUN_FULL_SCAN__();
+          }
+        } catch (e) {}
+      }
       if (saved.patchObserverPaused && saved.patchObserverRef && saved.patchObserverTarget) {
         try {
           saved.patchObserverRef.observe(saved.patchObserverTarget, saved.patchObserverOpts);
@@ -2170,6 +2221,8 @@
     function markTier2SkipElement(el) {
       if (state.mode !== 'off' || !el || el.nodeType !== 1 || typeof el.setAttribute !== 'function') return;
       if (doc && el === doc.documentElement) return;
+      var tag = el.tagName ? String(el.tagName).toUpperCase() : '';
+      if (IGNORED_TAGS[tag] || tag === 'HEAD' || tag === 'META' || tag === 'LINK') return;
       var snap = tier2SkipSnapshots.get(el);
       if (!snap) {
         snap = Object.create(null);
@@ -2588,6 +2641,10 @@
                   if (l1Blk.hit) state.detectedProvider = l1Blk.provider;
                 }
                 setRootStatusAttr('off-blocked');
+                try {
+                  var pApi = win && (win.__agPrism || win.__agClaudeStyle);
+                  if (pApi && typeof pApi.sync === 'function') pApi.sync();
+                } catch (e) {}
               }
               return 'blocked';
             }
@@ -3875,9 +3932,10 @@
       destroy: function () {
         teardownRuntime('off', 'destroyed', false, null, true);
       },
-      setMode: function (nextMode) {
+      setMode: function (nextMode, forceReboot) {
         var norm = nextMode === 'on' || nextMode === 'off' ? nextMode : 'auto';
         if (
+          !forceReboot &&
           !state.destroyed &&
           norm === state.mode &&
           ((norm === 'off' && state.active && (state.status === 'off-enforced' || state.status === 'off-blocked')) ||

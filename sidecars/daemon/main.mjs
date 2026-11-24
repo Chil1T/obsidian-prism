@@ -3232,6 +3232,89 @@ export class PrismDaemon {
     );
   }
 
+  _getMainFrameIsolatedContextIds(entry, filterIds = null) {
+    if (!entry || !(entry.contextFrames instanceof Map) || !entry.mainFrameId) return [];
+    const allowSet = Array.isArray(filterIds) ? new Set(filterIds) : null;
+    const ids = [];
+    for (const [ctxId, meta] of entry.contextFrames.entries()) {
+      if (typeof ctxId !== 'number' || !meta) continue;
+      if (allowSet && !allowSet.has(ctxId)) continue;
+      if (meta.frameId !== entry.mainFrameId) continue;
+      if (meta.isDefault === true) continue;
+      if (meta.type !== 'isolated') continue;
+      ids.push(ctxId);
+    }
+    return ids;
+  }
+
+  async _syncIsolatedHostI18n(entry, shouldPause, opts = null) {
+    const empty = { attempted: 0, pausedAny: false, newlyPaused: false, resumedAny: false };
+    if (!entry || !entry.session || entry.session.closed) return empty;
+    const pauseExpr = this.cdp?.ISOLATED_HOST_I18N_PAUSE_EXPRESSION || '';
+    const resumeExpr = this.cdp?.ISOLATED_HOST_I18N_RESUME_EXPRESSION || '';
+    const expr = shouldPause ? pauseExpr : resumeExpr;
+    if (!expr) return empty;
+    if (!shouldPause && !entry.isolatedHostI18nPaused && !(opts && opts.force)) return empty;
+    const ctxIds = this._getMainFrameIsolatedContextIds(entry, opts && opts.contextIds);
+    if (ctxIds.length === 0) {
+      if (!shouldPause) entry.isolatedHostI18nPaused = false;
+      return empty;
+    }
+    if (!(entry.isolatedHostI18nNoExtCtxs instanceof Set)) {
+      entry.isolatedHostI18nNoExtCtxs = new Set();
+    }
+    const skipCheckedNoExt = Boolean(shouldPause && opts && opts.skipNoExt);
+    let attempted = 0;
+    let pausedAny = false;
+    let newlyPaused = false;
+    let resumedAny = false;
+    for (const ctxId of ctxIds) {
+      if (entry.session.closed) break;
+      if (skipCheckedNoExt && entry.isolatedHostI18nNoExtCtxs.has(ctxId)) continue;
+      attempted += 1;
+      const res = await entry.session
+        .send(
+          'Runtime.evaluate',
+          {
+            contextId: ctxId,
+            expression: expr,
+            returnByValue: true,
+          },
+          1800
+        )
+        .catch(() => null);
+      const val = res && res.result ? res.result.value : null;
+      if (shouldPause) {
+        if (val && val.ok && val.paused) {
+          pausedAny = true;
+          entry.isolatedHostI18nNoExtCtxs.delete(ctxId);
+          if (!val.alreadyPaused) newlyPaused = true;
+        } else if (val && val.ok && val.detected === false) {
+          entry.isolatedHostI18nNoExtCtxs.add(ctxId);
+        }
+      } else if (val && val.ok && val.resumed) {
+        resumedAny = true;
+      }
+    }
+    if (shouldPause) {
+      if (pausedAny) entry.isolatedHostI18nPaused = true;
+    } else {
+      entry.isolatedHostI18nPaused = false;
+    }
+    return { attempted, pausedAny, newlyPaused, resumedAny };
+  }
+
+  async _forceMainWorldHostI18nOffRescan(entry) {
+    if (!entry || !entry.session || entry.session.closed) return;
+    await entry.session
+      .evaluate(
+        "(() => { try { window.__agPrismHostI18n?.setMode?.('off', true); (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {} return true; })()",
+        false,
+        2500
+      )
+      .catch(() => {});
+  }
+
   _setThoughtExpr(expr) {
     const next = typeof expr === 'string' ? expr : '';
     this.thoughtExpr = next;
@@ -5418,6 +5501,13 @@ export class PrismDaemon {
               };
               if (abortIfStale()) return;
 
+              const hostI18nOffNow = currentCfg?.hostLocalization === 'off';
+              let isoPauseRes = null;
+              if (hostI18nOffNow && !entry.session.closed) {
+                isoPauseRes = await this._syncIsolatedHostI18n(entry, true);
+              }
+              if (abortIfStale()) return;
+
               const refreshExpr =
                 canFastRefresh && entryAck > 0
                   ? this.cdp.buildConfigRefreshExpression(null, { __ackEpoch: entryAck })
@@ -5475,17 +5565,25 @@ export class PrismDaemon {
                   (entry.lastHostI18nSig !== hostI18nSig || !entry.hostI18nScriptId || !entry.hostI18nMounted)
               );
               if (hostI18nEnabled && hostI18nSnap) {
+                let evaluatedHostI18nFresh = false;
                 if (!skippedStale && !entry.session.closed && (!refreshedFast || hostI18nChanged)) {
                   const evalRes = await entry.session.evaluate(hostI18nSnap).catch(() => null);
                   if (evalRes && evalRes.ok) {
                     entry.hostI18nMounted = true;
                     entry.lastHostI18nSig = hostI18nSig;
+                    evaluatedHostI18nFresh = !evalRes.reused;
                   }
+                }
+                if (hostI18nOffNow && isoPauseRes && isoPauseRes.newlyPaused && !evaluatedHostI18nFresh && !skippedStale && !entry.session.closed) {
+                  await this._forceMainWorldHostI18nOffRescan(entry);
                 }
               } else if (hadHostI18n && !skippedStale && !entry.session.closed) {
                 await entry.session.evaluate(this._getHostI18nCleanupExpression()).catch(() => {});
                 entry.hostI18nMounted = false;
                 entry.lastHostI18nSig = '';
+              }
+              if (!hostI18nOffNow && entry.isolatedHostI18nPaused && !skippedStale && !entry.session.closed) {
+                await this._syncIsolatedHostI18n(entry, false);
               }
               if (abortIfStale()) return;
               const hadThought = Boolean(entry.thoughtScriptId || entry.thoughtMounted);
@@ -6055,6 +6153,10 @@ export class PrismDaemon {
         entry.hostI18nScriptId = null;
       }
       const hostI18nEnabledNow = this._isHostI18nEnabled(cfgNow);
+      const hostI18nOffAtInject = cfgNow?.hostLocalization === 'off';
+      if (hostI18nOffAtInject && !entry.session.closed) {
+        await this._syncIsolatedHostI18n(entry, true);
+      }
       if (hostI18nEnabledNow) {
         if (!this.hostI18nExpr && typeof this.cdp.buildHostI18nExpression === 'function') {
           const chOpts = this._getChannelCacheOpts(true);
@@ -6087,6 +6189,9 @@ export class PrismDaemon {
         entry.hostI18nMounted = false;
         entry.lastHostI18nSig = '';
         entry.lastHostI18nScriptSig = '';
+      }
+      if (!hostI18nOffAtInject && entry.isolatedHostI18nPaused && !entry.session.closed) {
+        await this._syncIsolatedHostI18n(entry, false);
       }
       const hadThoughtBefore = Boolean(entry.thoughtScriptId || entry.thoughtMounted);
       if (entry.thoughtScriptId) {
@@ -6860,6 +6965,9 @@ export class PrismDaemon {
       hostI18nMounted: false,
       lastHostI18nSig: '',
       lastHostI18nScriptSig: '',
+      isolatedHostI18nPaused: false,
+      isolatedHostI18nNoExtCtxs: new Set(),
+      _isoPauseTimers: new Set(),
       thoughtScriptId: null,
       thoughtMounted: false,
       lastThoughtSig: '',
@@ -6946,12 +7054,39 @@ export class PrismDaemon {
           type,
           docGen: entry.sidebarDocument,
         });
+        const isMainIsolated = Boolean(entry.mainFrameId && frameId === entry.mainFrameId && !isDefault && type === 'isolated');
+        if (isMainIsolated) {
+          const cfgOnCtx = typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null;
+          if (cfgOnCtx?.hostLocalization === 'off' && this.running && !entry.session.closed) {
+            const targetCtxId = ctx.id;
+            const pauseIsoCtx = () => {
+              if (!this.running || entry.session.closed || !entry.contextFrames.has(targetCtxId)) return;
+              const liveCfgNow = typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null;
+              if (liveCfgNow?.hostLocalization !== 'off') return;
+              void this._syncIsolatedHostI18n(entry, true, { contextIds: [targetCtxId] })
+                .then((r) => {
+                  if (r && r.newlyPaused && !entry.session.closed) {
+                    return this._forceMainWorldHostI18nOffRescan(entry);
+                  }
+                })
+                .catch(() => {});
+            };
+            pauseIsoCtx();
+            const retryTid = setTimeout(() => {
+              entry._isoPauseTimers?.delete(retryTid);
+              pauseIsoCtx();
+            }, 350);
+            if (typeof retryTid.unref === 'function') retryTid.unref();
+            entry._isoPauseTimers?.add(retryTid);
+          }
+        }
       });
       session.on('Runtime.executionContextDestroyed', (params) => {
         if (typeof params?.executionContextId === 'number') {
           const destroyedId = params.executionContextId;
           const destroyedMeta = entry.contextFrames.get(destroyedId);
           entry.contextFrames.delete(destroyedId);
+          entry.isolatedHostI18nNoExtCtxs?.delete(destroyedId);
           const wasMainDefault = Boolean(
             destroyedMeta &&
             destroyedMeta.isDefault === true &&
@@ -6968,6 +7103,8 @@ export class PrismDaemon {
       });
       session.on('Runtime.executionContextsCleared', () => {
         entry.contextFrames.clear();
+        entry.isolatedHostI18nNoExtCtxs?.clear();
+        entry.isolatedHostI18nPaused = false;
         revokeSidebarHost();
         entry.pendingAckEpoch = 0;
       });
@@ -7258,10 +7395,18 @@ export class PrismDaemon {
         !sidebarEnabled && Boolean(probe.hasSidebar || entry.sidebarScriptId || entry.sidebarMounted || entry.sidebarBindingAdded);
       const hostI18nEnabled = this._isHostI18nEnabled(cfg);
       const expectedHostI18nMode = cfg?.hostLocalization === 'on' ? 'on' : cfg?.hostLocalization === 'off' ? 'off' : 'auto';
+      const uncheckedIsoCtxs =
+        expectedHostI18nMode === 'off' && !entry.isolatedHostI18nPaused
+          ? this._getMainFrameIsolatedContextIds(entry).filter((cid) => !entry.isolatedHostI18nNoExtCtxs?.has(cid))
+          : [];
+      const needsIsoHostI18nSync =
+        uncheckedIsoCtxs.length > 0 || (expectedHostI18nMode !== 'off' && Boolean(entry.isolatedHostI18nPaused));
       const needsHostI18nHeal =
-        hostI18nEnabled && (!probe.hasHostI18n || !entry.hostI18nScriptId || (probe.hostI18nMode && probe.hostI18nMode !== expectedHostI18nMode));
+        (hostI18nEnabled && (!probe.hasHostI18n || !entry.hostI18nScriptId || (probe.hostI18nMode && probe.hostI18nMode !== expectedHostI18nMode))) ||
+        (expectedHostI18nMode === 'off' && uncheckedIsoCtxs.length > 0);
       const needsHostI18nCleanup =
-        !hostI18nEnabled && Boolean(probe.hasHostI18n || entry.hostI18nScriptId || entry.hostI18nMounted);
+        (!hostI18nEnabled && Boolean(probe.hasHostI18n || entry.hostI18nScriptId || entry.hostI18nMounted)) ||
+        (expectedHostI18nMode !== 'off' && Boolean(entry.isolatedHostI18nPaused) && !hostI18nEnabled);
       const needsThoughtHeal =
         thoughtEnabled &&
         (!probe.hasThought || !probe.hasThoughtSettingsUi || !entry.thoughtScriptId || !entry.thoughtMounted);
@@ -7446,6 +7591,11 @@ export class PrismDaemon {
           entry.sidebarMounted = false;
         }
         if (hostI18nEnabled) {
+          let isoHealRes = null;
+          if (expectedHostI18nMode === 'off') {
+            isoHealRes = await this._syncIsolatedHostI18n(entry, true, { skipNoExt: true });
+          }
+          let evaluatedHostI18nHeal = false;
           if (!probe.hasHostI18n || !entry.hostI18nScriptId || (probe.hostI18nMode && probe.hostI18nMode !== expectedHostI18nMode)) {
             if (!this.hostI18nExpr && typeof this.cdp.buildHostI18nExpression === 'function') {
               const chOpts = this._getChannelCacheOpts(true);
@@ -7470,9 +7620,15 @@ export class PrismDaemon {
                 if (evalRes && evalRes.ok) {
                   entry.hostI18nMounted = true;
                   entry.lastHostI18nSig = hiSig;
+                  evaluatedHostI18nHeal = !evalRes.reused;
                 }
               }
             }
+          }
+          if (expectedHostI18nMode === 'off' && isoHealRes && isoHealRes.newlyPaused && !evaluatedHostI18nHeal) {
+            await this._forceMainWorldHostI18nOffRescan(entry);
+          } else if (expectedHostI18nMode !== 'off' && entry.isolatedHostI18nPaused) {
+            await this._syncIsolatedHostI18n(entry, false);
           }
         } else if (needsHostI18nCleanup) {
           if (entry.hostI18nScriptId) {
@@ -7483,6 +7639,11 @@ export class PrismDaemon {
           entry.hostI18nMounted = false;
           entry.lastHostI18nSig = '';
           entry.lastHostI18nScriptSig = '';
+          if (entry.isolatedHostI18nPaused) {
+            await this._syncIsolatedHostI18n(entry, false);
+          }
+        } else if (expectedHostI18nMode !== 'off' && entry.isolatedHostI18nPaused) {
+          await this._syncIsolatedHostI18n(entry, false);
         }
         if ((periodicPickerEnabled && needsPeriodicPickerHeal) || (!periodicPickerEnabled && needsPeriodicPickerCleanup)) {
           await this._syncPeriodicPickerOnEntry(entry, cfg, {
@@ -7647,33 +7808,46 @@ export class PrismDaemon {
           await entry.session.evaluate(this._buildSidebarCleanupExpression(true), false, 3500).catch(() => {});
           entry.sidebarMounted = false;
         }
-        if (needsHostI18nHeal) {
+        if (needsHostI18nHeal || needsIsoHostI18nSync) {
           healed = true;
-          if (!this.hostI18nExpr && typeof this.cdp.buildHostI18nExpression === 'function') {
-            const chOpts = this._getChannelCacheOpts(true);
-            this.hostI18nExpr = chOpts
-              ? this.cdp.buildHostI18nExpression(cfg, null, chOpts)
-              : this.cdp.buildHostI18nExpression(cfg);
-            if (chOpts && this.running) this._scheduleBundleCacheFlush();
+          let isoHealRes2 = null;
+          if (expectedHostI18nMode === 'off') {
+            isoHealRes2 = await this._syncIsolatedHostI18n(entry, true, { skipNoExt: true });
           }
-          if (this.hostI18nExpr) {
-            const hiSig = this._getHostI18nCfgSig(cfg);
-            if (!entry.hostI18nScriptId) {
-              const hiAdd = await entry.session
-                .send('Page.addScriptToEvaluateOnNewDocument', { source: this.hostI18nExpr })
-                .catch(() => null);
-              if (hiAdd && hiAdd.identifier) {
-                entry.hostI18nScriptId = hiAdd.identifier;
-                entry.lastHostI18nScriptSig = hiSig;
+          let evaluatedHostI18nHeal2 = false;
+          if (hostI18nEnabled && (!probe.hasHostI18n || !entry.hostI18nScriptId || (probe.hostI18nMode && probe.hostI18nMode !== expectedHostI18nMode))) {
+            if (!this.hostI18nExpr && typeof this.cdp.buildHostI18nExpression === 'function') {
+              const chOpts = this._getChannelCacheOpts(true);
+              this.hostI18nExpr = chOpts
+                ? this.cdp.buildHostI18nExpression(cfg, null, chOpts)
+                : this.cdp.buildHostI18nExpression(cfg);
+              if (chOpts && this.running) this._scheduleBundleCacheFlush();
+            }
+            if (this.hostI18nExpr) {
+              const hiSig = this._getHostI18nCfgSig(cfg);
+              if (!entry.hostI18nScriptId) {
+                const hiAdd = await entry.session
+                  .send('Page.addScriptToEvaluateOnNewDocument', { source: this.hostI18nExpr })
+                  .catch(() => null);
+                if (hiAdd && hiAdd.identifier) {
+                  entry.hostI18nScriptId = hiAdd.identifier;
+                  entry.lastHostI18nScriptSig = hiSig;
+                }
+              }
+              if (!probe.hasHostI18n || (probe.hostI18nMode && probe.hostI18nMode !== expectedHostI18nMode)) {
+                const evalRes = await entry.session.evaluate(this.hostI18nExpr, false, 4500).catch(() => null);
+                if (evalRes && evalRes.ok) {
+                  entry.hostI18nMounted = true;
+                  entry.lastHostI18nSig = hiSig;
+                  evaluatedHostI18nHeal2 = !evalRes.reused;
+                }
               }
             }
-            if (!probe.hasHostI18n || (probe.hostI18nMode && probe.hostI18nMode !== expectedHostI18nMode)) {
-              const evalRes = await entry.session.evaluate(this.hostI18nExpr, false, 4500).catch(() => null);
-              if (evalRes && evalRes.ok) {
-                entry.hostI18nMounted = true;
-                entry.lastHostI18nSig = hiSig;
-              }
-            }
+          }
+          if (expectedHostI18nMode === 'off' && isoHealRes2 && isoHealRes2.newlyPaused && !evaluatedHostI18nHeal2) {
+            await this._forceMainWorldHostI18nOffRescan(entry);
+          } else if (expectedHostI18nMode !== 'off' && entry.isolatedHostI18nPaused) {
+            await this._syncIsolatedHostI18n(entry, false);
           }
         } else if (needsHostI18nCleanup) {
           healed = true;
@@ -7685,6 +7859,9 @@ export class PrismDaemon {
           entry.hostI18nMounted = false;
           entry.lastHostI18nSig = '';
           entry.lastHostI18nScriptSig = '';
+          if (entry.isolatedHostI18nPaused) {
+            await this._syncIsolatedHostI18n(entry, false);
+          }
         }
         if (needsPeriodicPickerHeal || needsPeriodicPickerCleanup) {
           healed = true;
@@ -7982,6 +8159,13 @@ export class PrismDaemon {
           await this._resetMascotEntryState(entry);
           if (cleanPageDom && !entry.session.closed) {
             await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
+          }
+          if (entry._isoPauseTimers) {
+            for (const tid of entry._isoPauseTimers) clearTimeout(tid);
+            entry._isoPauseTimers.clear();
+          }
+          if (entry.isolatedHostI18nPaused && !entry.session.closed) {
+            await this._syncIsolatedHostI18n(entry, false).catch(() => {});
           }
         } catch {}
         entry.session.close();
@@ -8375,6 +8559,13 @@ export class PrismDaemon {
             await this._resetPeriodicPickerEntryState(entry);
           await this._resetMascotEntryState(entry);
             await entry.session.evaluate(this.cdp.REMOVE_EXPRESSION).catch(() => {});
+            if (entry._isoPauseTimers) {
+              for (const tid of entry._isoPauseTimers) clearTimeout(tid);
+              entry._isoPauseTimers.clear();
+            }
+            if (entry.isolatedHostI18nPaused) {
+              await this._syncIsolatedHostI18n(entry, false).catch(() => {});
+            }
           }
           entry.session.close();
           this.sessions.delete(wsUrl);

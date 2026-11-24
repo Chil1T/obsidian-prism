@@ -758,3 +758,170 @@ test('Battle 2 Regression: Channel 1 hot-reload never clobbers full UI_TABLE wit
   assert.equal(Boolean(sandbox.__agCsLocales.__isFullLocales || sandbox.__agCsLocales.UI_TABLE), true);
   assert.equal(sandbox.__agCsLocales.getUiStrings('zh-CN').setLanguageTitle, '界面语言');
 });
+
+test('Battle 2 Regression: Isolated Context pause/resume expressions reversibly mute yiheng8023 __AGY_CACHE__ without mutating Map.prototype or entries', () => {
+  assert.equal(typeof cdp.ISOLATED_HOST_I18N_PAUSE_EXPRESSION, 'string');
+  assert.equal(typeof cdp.ISOLATED_HOST_I18N_RESUME_EXPRESSION, 'string');
+
+  const cache = new Map([
+    ['Workspace', '工作区'],
+    ['View', '视图'],
+  ]);
+  let fullScanCalls = 0;
+  const isoSandbox = {
+    __AGY_I18N_INITIALIZED__: true,
+    __AGY_I18N_DATA__: { exact: { Workspace: '工作区' }, patterns: [] },
+    __AGY_CACHE__: cache,
+    __AGY_RUN_FULL_SCAN__: () => { fullScanCalls += 1; },
+  };
+  isoSandbox.globalThis = isoSandbox;
+
+  const r1 = vm.runInNewContext(cdp.ISOLATED_HOST_I18N_PAUSE_EXPRESSION, isoSandbox);
+  assert.equal(r1.ok, true);
+  assert.equal(r1.detected, true);
+  assert.equal(r1.paused, true);
+  assert.equal(r1.alreadyPaused, false);
+  assert.equal(r1.provider, 'yiheng8023');
+
+  // External translateSingleUnit checks cache.has(k) -> true, cache.get(k) -> null (O(1) short-circuit!)
+  assert.equal(cache.has('Workspace'), true);
+  assert.equal(cache.get('Workspace'), null);
+  assert.equal(cache.has('AnyNewString'), true);
+  assert.equal(cache.get('AnyNewString'), null);
+  // Map.prototype MUST remain untouched!
+  const unrelatedMap = new Map([['Workspace', '工作区']]);
+  assert.equal(unrelatedMap.get('Workspace'), '工作区');
+
+  // Idempotent second pause
+  const r2 = vm.runInNewContext(cdp.ISOLATED_HOST_I18N_PAUSE_EXPRESSION, isoSandbox);
+  assert.equal(r2.ok, true);
+  assert.equal(r2.paused, true);
+  assert.equal(r2.alreadyPaused, true);
+
+  // Resume restores exact original entries, removes own overrides, and triggers __AGY_RUN_FULL_SCAN__()
+  const r3 = vm.runInNewContext(cdp.ISOLATED_HOST_I18N_RESUME_EXPRESSION, isoSandbox);
+  assert.equal(r3.ok, true);
+  assert.equal(r3.resumed, true);
+  assert.equal(r3.provider, 'yiheng8023');
+  assert.equal(Object.prototype.hasOwnProperty.call(cache, 'has'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(cache, 'get'), false);
+  assert.equal(cache.get('Workspace'), '工作区');
+  assert.equal(cache.get('View'), '视图');
+  assert.equal(cache.size, 2);
+  assert.equal(fullScanCalls, 1);
+
+  // Clean isolated context without external localizer must be a zero-mutation no-op
+  const cleanSandbox = {};
+  cleanSandbox.globalThis = cleanSandbox;
+  const rClean = vm.runInNewContext(cdp.ISOLATED_HOST_I18N_PAUSE_EXPRESSION, cleanSandbox);
+  assert.equal(rClean.ok, true);
+  assert.equal(rClean.detected, false);
+  assert.equal(rClean.paused, false);
+  assert.equal('__agPrismIsoHostI18nState' in cleanSandbox, false);
+});
+
+test('Battle 2 Regression: Main World Tier 1 pauses yiheng8023 __AGY_CACHE__, forceReboot recovers from off-blocked, off-blocked calls __agPrism.sync(), and <style> never gets Tier 2 skip attrs', () => {
+  const env = createMiniDom('en');
+  const styleEl = env.doc.createElement('style');
+  styleEl.textContent = '.x { content: "设置"; }';
+  (env.doc.head || env.body).appendChild(styleEl);
+
+  const btn = env.doc.createElement('button');
+  btn.textContent = '工作区';
+  env.body.appendChild(btn);
+
+  let syncCalls = 0;
+  env.win.__agPrism = { sync: () => { syncCalls += 1; } };
+
+  const mainCache = new Map([['Workspace', '工作区']]);
+  let mainRescans = 0;
+  env.win.__AGY_I18N_INITIALIZED__ = true;
+  env.win.__AGY_CACHE__ = mainCache;
+  env.win.__AGY_RUN_FULL_SCAN__ = () => { mainRescans += 1; };
+
+  let now = 1000;
+  const timers = [];
+  const inst = hostI18nRuntime.mountHostI18n({
+    root: env.win,
+    doc: env.doc,
+    mode: 'off',
+    dict: zhDict,
+    reversePatterns,
+    nowFn: () => now,
+    setTimeoutFn: (fn) => { timers.push(fn); return timers.length; },
+    clearTimeoutFn: () => {},
+  });
+
+  assert.equal(btn.textContent, 'Workspace');
+  assert.equal(mainCache.get('Workspace'), null, 'Main World yiheng8023 cache must be muted in off mode');
+  assert.equal(styleEl.getAttribute('data-ag-localization-skip'), null, '<style> must never get Tier 2 skip attrs');
+
+  // Simulate hostile external observer forcing 3 conflicts to trigger off-blocked
+  const mo = env.observers.find((o) => o._connected);
+  assert.ok(mo, 'Expected active MutationObserver');
+  const tn = btn.firstChild;
+  for (let i = 0; i < 3; i++) {
+    now += 20;
+    tn.nodeValue = '工作区';
+    mo._emit([{ type: 'characterData', target: tn, addedNodes: [], removedNodes: [] }]);
+    while (timers.length) timers.shift()();
+  }
+  assert.equal(inst.getStatus().status, 'off-blocked');
+  assert.ok(syncCalls >= 1, 'Transition to off-blocked must notify window.__agPrism.sync()');
+
+  // setMode('off', true) forceReboot must clear off-blocked & exemptElements and restore English cleanly
+  btn.textContent = '工作区';
+  const rebootSt = inst.setMode('off', true);
+  assert.equal(rebootSt.status, 'off-enforced');
+  assert.equal(btn.textContent, 'Workspace');
+
+  // destroy() must restore Main World __AGY_CACHE__ and trigger __AGY_RUN_FULL_SCAN__
+  inst.destroy();
+  assert.equal(mainCache.get('Workspace'), '工作区');
+  assert.ok(mainRescans >= 1);
+});
+
+test('Battle 2 Regression: Daemon _syncIsolatedHostI18n strictly targets main-frame isolated contexts only (never default or subframe)', async () => {
+  const daemonMod = await import('../sidecars/daemon/main.mjs');
+  const DaemonCls = daemonMod.PrismDaemon;
+  assert.ok(DaemonCls && DaemonCls.prototype && typeof DaemonCls.prototype._syncIsolatedHostI18n === 'function');
+
+  const evaluated = [];
+  const fakeDaemon = {
+    cdp,
+    _getMainFrameIsolatedContextIds: DaemonCls.prototype._getMainFrameIsolatedContextIds,
+    _syncIsolatedHostI18n: DaemonCls.prototype._syncIsolatedHostI18n,
+  };
+  const entry = {
+    mainFrameId: 'MAIN_FRAME',
+    isolatedHostI18nPaused: false,
+    isolatedHostI18nNoExtCtxs: new Set(),
+    contextFrames: new Map([
+      [1, { frameId: 'MAIN_FRAME', isDefault: true, type: 'default' }],
+      [2, { frameId: 'MAIN_FRAME', isDefault: false, type: 'isolated' }],
+      [3, { frameId: 'SUB_IFRAME', isDefault: false, type: 'isolated' }],
+      [4, { frameId: 'MAIN_FRAME', isDefault: false, type: 'worker' }],
+    ]),
+    session: {
+      closed: false,
+      send: async (method, params) => {
+        evaluated.push({ method, contextId: params.contextId, isPause: params.expression === cdp.ISOLATED_HOST_I18N_PAUSE_EXPRESSION });
+        if (params.expression === cdp.ISOLATED_HOST_I18N_PAUSE_EXPRESSION) {
+          return { result: { value: { ok: true, detected: true, paused: true, alreadyPaused: false, provider: 'yiheng8023' } } };
+        }
+        return { result: { value: { ok: true, resumed: true, provider: 'yiheng8023' } } };
+      },
+    },
+  };
+
+  const pRes = await fakeDaemon._syncIsolatedHostI18n(entry, true);
+  assert.equal(pRes.pausedAny, true);
+  assert.equal(pRes.newlyPaused, true);
+  assert.equal(entry.isolatedHostI18nPaused, true);
+  assert.deepEqual(evaluated.map((e) => e.contextId), [2], 'Must evaluate ONLY on main-frame isolated context id 2');
+
+  const rRes = await fakeDaemon._syncIsolatedHostI18n(entry, false);
+  assert.equal(rRes.resumedAny, true);
+  assert.equal(entry.isolatedHostI18nPaused, false);
+  assert.deepEqual(evaluated.map((e) => [e.contextId, e.isPause]), [[2, true], [2, false]]);
+});
