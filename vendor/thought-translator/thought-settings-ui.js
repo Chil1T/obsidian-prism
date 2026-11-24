@@ -2018,6 +2018,17 @@
         });
     });
 
+    // 通知同窗口已挂载的提示词建议设置卡片同步最新共享渠道列表，防止陈旧凭据覆写
+    const notifyPeerSuggesterUi = () => {
+      try {
+        const sgUi =
+          (typeof window !== 'undefined' && window.__agPrismSuggesterSettingsUi) ||
+          G.__agPrismSuggesterSettingsUi ||
+          null;
+        sgUi?.reloadProfiles?.();
+      } catch {}
+    };
+
     saveBtn.addEventListener('click', (ev) => {
       if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
       const api = resolveThoughtApi();
@@ -2042,6 +2053,7 @@
             try {
               api.scan?.();
             } catch {}
+            notifyPeerSuggesterUi();
           } else {
             setStatus('err', `✕ ${res?.error || curPack.saveErr}`);
           }
@@ -2069,7 +2081,10 @@
       void api
         .saveConfig(payload)
         .then((savedRes) => {
-          if (savedRes && savedRes.ok) applySanitizedConfig(savedRes, { fromSave: true });
+          if (savedRes && savedRes.ok) {
+            applySanitizedConfig(savedRes, { fromSave: true });
+            notifyPeerSuggesterUi();
+          }
           const cur = getActiveProfile();
           return api.testConnection({
             profileId: cur?.id,

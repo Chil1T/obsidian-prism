@@ -3262,3 +3262,401 @@ test('Redteam #256 P1 #6: renderer-rpc-adapter merges before 1024 cap, supports 
   assert.equal(normTraj.trajectory.steps[0].metadata.createdAt, new Date((baseSec + 50000) * 1000).toISOString());
 });
 
+test('Deleted conversations preserve historical token usage across daemon list-summaries and home-studio-panel prune', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { PrismDaemon } = await import('../sidecars/daemon/main.mjs');
+  const homeStudioPanel = require('../home-studio-panel.js');
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-deleted-usage-'));
+  const cachePath = path.join(tmpDir, 'usage-rollup-cache.json');
+  const repoRoot = path.resolve(new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+
+  const liveId = 'aaaaaaaa-1111-4111-8111-111111111111';
+  const deletedId = 'bbbbbbbb-2222-4222-8222-222222222222';
+  const emptyDeletedId = 'cccccccc-3333-4333-8333-333333333333';
+  const sshDeletedId = 'dddddddd-4444-4444-8444-444444444444';
+  const nowSec = 1763500000;
+
+  const makeDayRec = (id, total, calls, stepCount) => ({
+    cascadeId: id,
+    stepCount,
+    lastModifiedSec: nowSec,
+    gmCount: calls,
+    calls,
+    workspace: 'busy-bohr',
+    days: {
+      '2026-11-24': {
+        calls,
+        input: Math.floor(total * 0.6),
+        output: Math.floor(total * 0.4),
+        cacheRead: 0,
+        cacheWrite: 0,
+        total,
+        hours: new Array(24).fill(0),
+        models: total > 0 ? { 'Gemini 4 Neon': { input: Math.floor(total * 0.6), output: Math.floor(total * 0.4), cacheRead: 0, cacheWrite: 0, total, calls } } : {},
+      },
+    },
+  });
+
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevLs = globalThis.localStorage;
+  try {
+    // 1) Backend daemon: diskCache contains liveId, deletedId (real usage), emptyDeletedId (0 tokens), and sshDeletedId (different scope)
+    const daemon = new PrismDaemon({ rootDir: repoRoot, usageCachePath: cachePath, silent: true });
+    daemon._discoverLocalAppConversations = () => [];
+    daemon._putUsageDiskCache(liveId, 4, nowSec, makeDayRec(liveId, 10000, 2, 4), 'local');
+    daemon._putUsageDiskCache(deletedId, 6, nowSec - 60, makeDayRec(deletedId, 42000, 5, 6), 'local');
+    daemon._putUsageDiskCache(emptyDeletedId, 1, nowSec - 120, makeDayRec(emptyDeletedId, 0, 0, 1), 'local');
+    daemon._putUsageDiskCache(sshDeletedId, 5, nowSec - 30, makeDayRec(sshDeletedId, 99000, 3, 5), 'ssh:prod-box');
+    daemon._flushUsageDiskCache();
+
+    // Cold daemon where only liveId remains in GetAllCascadeTrajectories (deletedId was deleted by user)
+    const daemon2 = new PrismDaemon({ rootDir: repoRoot, usageCachePath: cachePath, silent: true });
+    daemon2._discoverLocalAppConversations = () => [];
+    daemon2._lazyLsClient = {
+      server: { port: 12349, mode: 'http' },
+      call: async (method) => {
+        if (method === 'GetAllCascadeTrajectories') {
+          return { trajectorySummaries: { [liveId]: { stepCount: 4, lastModifiedTime: { seconds: String(nowSec) } } } };
+        }
+        return {};
+      },
+    };
+    const listRes = await daemon2.fetchUsageRollupBatch(null, { action: 'list-summaries' });
+    assert.equal(listRes.ok, true);
+    const byId = new Map(listRes.records.map((r) => [r.id, r]));
+    assert.equal(byId.has(liveId), true, 'Live conversation must be returned');
+    assert.equal(byId.has(deletedId), true, 'Deleted conversation with real token usage must still be returned from disk cache');
+    assert.equal(byId.get(deletedId).archived, true, 'Deleted historical record must be flagged archived: true');
+    assert.equal(byId.has(emptyDeletedId), false, 'Deleted 0-token record must not be re-emitted');
+    assert.equal(byId.has(sshDeletedId), false, 'Other scope (ssh:prod-box) archived records must never leak into local scope');
+
+    // 2) Frontend home-studio-panel: deleting a conversation must NOT drop its historical tokens, while 0-token deferred placeholders ARE pruned
+    const storeMem = new Map();
+    globalThis.localStorage = {
+      getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+      setItem: (k, v) => storeMem.set(k, String(v)),
+      removeItem: (k) => storeMem.delete(k),
+    };
+    globalThis.document = {
+      title: 'busy-bohr - Antigravity',
+      documentElement: { setAttribute() {}, removeAttribute() {}, getAttribute() { return null; } },
+      querySelector: () => null,
+      body: null,
+    };
+
+    const deferredPlaceholder = {
+      cascadeId: emptyDeletedId,
+      stepCount: 1,
+      lastModifiedSec: nowSec - 120,
+      gmCount: 0,
+      calls: 0,
+      _do: 1,
+      days: { '2026-11-24': { calls: 1, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, hours: new Array(24).fill(0), models: {} } },
+    };
+    assert.equal(homeStudioPanel.hasPersistedTokens(deferredPlaceholder), false, 'hasPersistedTokens must reject _do deferred 0-token placeholder');
+    storeMem.set('test:deleted:rollup', JSON.stringify({
+      [liveId]: makeDayRec(liveId, 10000, 2, 4),
+      [deletedId]: makeDayRec(deletedId, 42000, 5, 6),
+      [emptyDeletedId]: deferredPlaceholder,
+    }));
+
+    let activeSummaries = {
+      [liveId]: { stepCount: 4, lastModifiedTime: { seconds: nowSec }, workspaces: [{ workspaceFolderAbsoluteUri: 'file:///c:/proj/busy-bohr' }] },
+    };
+    globalThis.window = {
+      document: globalThis.document,
+      __agPrismUsageBridge: {
+        isOnline: () => true,
+        listSummaries: async () => ({
+          ok: true,
+          scopeKey: 'local',
+          summaries: Object.entries(activeSummaries).map(([id, s]) => ({ id, ...s })),
+          records: [
+            { id: liveId, mode: 'full', record: makeDayRec(liveId, 10000, 2, 4) },
+            { id: deletedId, mode: 'full', archived: true, record: makeDayRec(deletedId, 42000, 5, 6) },
+          ],
+        }),
+        fetchBatch: async () => ({ ok: true, records: [] }),
+      },
+    };
+
+    const ctl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:deleted:rollup',
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: activeSummaries } }) }, svc: {} }),
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+
+    await ctl.refreshUsageRollup(true);
+    assert.equal(ctl.getUsageRecordsCount(), 2, 'Live + deleted real-usage records must be retained; 0-token deferred placeholder must be pruned');
+    ctl.flushUsageCacheNow();
+    const persisted = JSON.parse(storeMem.get('test:deleted:rollup') || '{}');
+    assert.ok(persisted[deletedId], 'Deleted conversation usage must persist in localStorage');
+    assert.equal(persisted[emptyDeletedId], undefined, '0-token deferred placeholder must be pruned from localStorage');
+    const agg = usageCore.aggregateUsageRollup(Object.values(persisted), 'all', 0, 'zh-CN', new Date((nowSec + 60) * 1000));
+    assert.equal(agg.tokens, 52000, 'Total tokens must stay 52,000 (10k live + 42k deleted)');
+
+    // 3) Even when ALL live conversations are deleted (entries.length === 0), archived records from listSummaries still hydrate cleanly
+    activeSummaries = {};
+    storeMem.delete('test:deleted:rollup:empty');
+    const ctlEmpty = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:deleted:rollup:empty',
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: {} } }) }, svc: {} }),
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+    await ctlEmpty.refreshUsageRollup(true);
+    assert.equal(ctlEmpty.getUsageRecordsCount(), 2, 'Archived historical usage must still hydrate when 0 live conversations exist');
+
+    // 4) When listSummaries seeds archived records AND fetchBatch is slow/in-flight, seeded archived usage must flush to cache immediately before fetchBatch finishes
+    let resolveSlowBatch = null;
+    const slowKey = 'test:deleted:rollup:slow';
+    storeMem.set(slowKey, JSON.stringify({ [liveId]: makeDayRec(liveId, 10000, 2, 4) }));
+    activeSummaries = {
+      [liveId]: { stepCount: 5, lastModifiedTime: { seconds: nowSec + 10 }, workspaces: [{ workspaceFolderAbsoluteUri: 'file:///c:/proj/busy-bohr' }] },
+    };
+    globalThis.window.__agPrismUsageBridge.fetchBatch = () => new Promise((r) => { resolveSlowBatch = () => r({ ok: true, records: [] }); });
+    const ctlSlow = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: slowKey,
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: activeSummaries } }) }, svc: {} }),
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+    const slowProm = ctlSlow.refreshUsageRollup(true);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(ctlSlow.getUsageRecordsCount(), 2, 'Seeded archived record must be available in memory while fetchBatch is still in-flight');
+    ctlSlow.flushUsageCacheNow();
+    const slowSaved = JSON.parse(storeMem.get(slowKey) || '{}');
+    assert.ok(slowSaved[deletedId], 'Seeded archived record must be persisted even before slow fetchBatch completes');
+    if (resolveSlowBatch) resolveSlowBatch();
+    await slowProm;
+
+    // 5) Frozen Redux/Immer summary objects must NEVER throw TypeError when merging listSummaries metadata (which previously aborted before assigning bridgeRecs!)
+    const frozenKey = 'test:deleted:rollup:frozen';
+    storeMem.delete(frozenKey);
+    const frozenSummaries = Object.freeze({
+      [liveId]: Object.freeze({ stepCount: 4, lastModifiedTime: Object.freeze({ seconds: nowSec }) }),
+    });
+    globalThis.window.__agPrismUsageBridge.listSummaries = async () => ({
+      ok: true,
+      scopeKey: 'local',
+      summaries: [{ id: liveId, stepCount: 4, lastModifiedSec: nowSec, workspace: 'busy-bohr', workspaces: ['file:///c:/proj/busy-bohr'], parentId: 'root-parent-1' }],
+      records: [
+        { id: liveId, mode: 'full', record: makeDayRec(liveId, 10000, 2, 4) },
+        { id: deletedId, mode: 'full', archived: true, record: makeDayRec(deletedId, 42000, 5, 6) },
+      ],
+    });
+    globalThis.window.__agPrismUsageBridge.fetchBatch = async () => ({ ok: true, records: [] });
+    const ctlFrozen = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: frozenKey,
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: frozenSummaries } }) }, svc: {} }),
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+    await ctlFrozen.refreshUsageRollup(true);
+    assert.equal(ctlFrozen.getUsageRecordsCount(), 2, 'Frozen Redux summary objects must not throw or drop bridgeRecs');
+    ctlFrozen.flushUsageCacheNow();
+    const frozenSaved = JSON.parse(storeMem.get(frozenKey) || '{}');
+    assert.ok(frozenSaved[deletedId], 'Archived deleted conversation must hydrate even when Redux summaries are Object.freeze()d');
+  } finally {
+    globalThis.window = prevWin;
+    globalThis.document = prevDoc;
+    globalThis.localStorage = prevLs;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Boundary: stepCount: 0 live conversation coexists with archived: true deleted conversation without triggering extra fetchBatch', async () => {
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const zeroStepId = 'eeeeeeee-5555-4555-8555-555555555555';
+  const archivedId = 'ffffffff-6666-4666-8666-666666666666';
+  const nowSec = 1763500100;
+  const makeRec = (id, total, calls, stepCount) => ({
+    cascadeId: id,
+    stepCount,
+    lastModifiedSec: nowSec,
+    gmCount: calls,
+    calls,
+    workspace: 'busy-bohr',
+    days: {
+      '2026-11-24': { calls, input: Math.floor(total * 0.6), output: Math.floor(total * 0.4), cacheRead: 0, cacheWrite: 0, total, hours: new Array(24).fill(0), models: {} },
+    },
+  });
+
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevLs = globalThis.localStorage;
+  try {
+    const storeMem = new Map();
+    const key = 'test:boundary:zerostep:archived';
+    storeMem.set(key, JSON.stringify({ [zeroStepId]: makeRec(zeroStepId, 8000, 2, 3) }));
+    globalThis.localStorage = {
+      getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+      setItem: (k, v) => storeMem.set(k, String(v)),
+      removeItem: (k) => storeMem.delete(k),
+    };
+    globalThis.document = {
+      title: 'busy-bohr - Antigravity',
+      documentElement: { setAttribute() {}, removeAttribute() {}, getAttribute() { return null; } },
+      querySelector: () => null,
+      body: null,
+    };
+    const activeSummaries = {
+      // 模拟宿主摘要暂报 stepCount: 0 但 lastModifiedTime 未变的在线会话
+      [zeroStepId]: { stepCount: 0, lastModifiedTime: { seconds: nowSec }, workspaces: [{ workspaceFolderAbsoluteUri: 'file:///c:/proj/busy-bohr' }] },
+    };
+    let fetchBatchCalls = 0;
+    globalThis.window = {
+      document: globalThis.document,
+      __agPrismUsageBridge: {
+        isOnline: () => true,
+        listSummaries: async () => ({
+          ok: true,
+          scopeKey: 'local',
+          summaries: [{ id: zeroStepId, stepCount: 0, lastModifiedSec: nowSec, workspace: 'busy-bohr' }],
+          records: [{ id: archivedId, mode: 'full', archived: true, record: makeRec(archivedId, 12000, 3, 5) }],
+        }),
+        fetchBatch: async () => { fetchBatchCalls += 1; return { ok: true, records: [] }; },
+      },
+    };
+    const ctl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: key,
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: activeSummaries } }) }, svc: {} }),
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+    await ctl.refreshUsageRollup(true);
+    assert.equal(fetchBatchCalls, 0, 'stepCount: 0 live conversation with cached real usage must not trigger redundant fetchBatch');
+    assert.equal(ctl.getUsageRecordsCount(), 2, 'Both live stepCount: 0 session and archived: true deleted session must coexist');
+    ctl.flushUsageCacheNow();
+    const saved = JSON.parse(storeMem.get(key) || '{}');
+    assert.equal(saved[zeroStepId]?.days?.['2026-11-24']?.total, 8000);
+    assert.equal(saved[archivedId]?.days?.['2026-11-24']?.total, 12000);
+  } finally {
+    globalThis.window = prevWin;
+    globalThis.document = prevDoc;
+    globalThis.localStorage = prevLs;
+  }
+});
+
+test('Boundary: slow fetchBatch triggers saveUsageCache and renderHomePanel immediately when seededCache is true', async () => {
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const liveId = '11111111-7777-4777-8777-777777777777';
+  const archivedId = '22222222-8888-4888-8888-888888888888';
+  const nowSec = 1763500200;
+  const makeRec = (id, total, calls, stepCount) => ({
+    cascadeId: id,
+    stepCount,
+    lastModifiedSec: nowSec,
+    gmCount: calls,
+    calls,
+    workspace: 'busy-bohr',
+    days: {
+      '2026-11-24': { calls, input: Math.floor(total * 0.6), output: Math.floor(total * 0.4), cacheRead: 0, cacheWrite: 0, total, hours: new Array(24).fill(0), models: {} },
+    },
+  });
+
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevLs = globalThis.localStorage;
+  try {
+    const storeMem = new Map();
+    const key = 'test:boundary:slow:autopersist';
+    // 预置 liveId 让 usageHasData 在初始化时即为 true，确保能直接验证 !usageHasData || seededCache 分支
+    storeMem.set(key, JSON.stringify({ [liveId]: makeRec(liveId, 5000, 1, 2) }));
+    globalThis.localStorage = {
+      getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+      setItem: (k, v) => storeMem.set(k, String(v)),
+      removeItem: (k) => storeMem.delete(k),
+    };
+    globalThis.document = {
+      title: 'busy-bohr - Antigravity',
+      documentElement: { setAttribute() {}, removeAttribute() {}, getAttribute() { return null; } },
+      querySelector: () => null,
+      body: null,
+    };
+    const activeSummaries = {
+      [liveId]: { stepCount: 5, lastModifiedTime: { seconds: nowSec + 20 }, workspaces: [{ workspaceFolderAbsoluteUri: 'file:///c:/proj/busy-bohr' }] },
+    };
+    let resolveSlowBatch = null;
+    let renderLayoutChecks = 0;
+    globalThis.window = {
+      document: globalThis.document,
+      __agPrismUsageBridge: {
+        isOnline: () => true,
+        listSummaries: async () => ({
+          ok: true,
+          scopeKey: 'local',
+          summaries: [{ id: liveId, stepCount: 5, lastModifiedSec: nowSec + 20, workspace: 'busy-bohr' }],
+          records: [{ id: archivedId, mode: 'full', archived: true, record: makeRec(archivedId, 18000, 4, 6) }],
+        }),
+        fetchBatch: () => new Promise((r) => { resolveSlowBatch = () => r({ ok: true, records: [] }); }),
+      },
+    };
+    const ctl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: key,
+      isDestroyed: () => false,
+      getHomeLayout: () => { renderLayoutChecks += 1; return 'studio'; },
+      getLang: () => 'zh-CN',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: activeSummaries } }) }, svc: {} }),
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: () => {},
+      runGuardedMut: (fn) => fn(),
+    });
+    const prom = ctl.refreshUsageRollup(true);
+    // 等待 saveUsageCache() 的 1200ms 延迟存盘自然触发，全程不调用 flushUsageCacheNow()，且 fetchBatch 仍处于 pending
+    await new Promise((r) => setTimeout(r, 1350));
+    assert.ok(renderLayoutChecks >= 1, 'renderHomePanel must run immediately before slow fetchBatch finishes even when usageHasData is already true');
+    const savedBeforeBatchDone = JSON.parse(storeMem.get(key) || '{}');
+    assert.ok(savedBeforeBatchDone[archivedId], 'saveUsageCache must persist seeded archived record automatically while fetchBatch is still in-flight');
+    if (resolveSlowBatch) resolveSlowBatch();
+    await prom;
+  } finally {
+    globalThis.window = prevWin;
+    globalThis.document = prevDoc;
+    globalThis.localStorage = prevLs;
+  }
+});
+

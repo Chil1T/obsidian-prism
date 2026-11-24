@@ -1557,8 +1557,8 @@ test('PrismDaemon HS-1 & SEC-2: 68 rapid-fire setting updates, multi-window cros
     assert.equal(stB.vmWin.__agPrism.getState().cfg.palette, 'obsidian', 'Window B must sync with reloaded Window A');
     assert.equal(stB.vmWin.__agPrism.getState().cfg.accentTone, 'iris');
     assert.ok(
-      activeScripts.size <= 14,
-      `HS-1: Active NewDocument script handles across 2 windows × 7 dynamic channels (main + Omni + Sidebar Studio + Inline Diff + Wallpaper + Periodic Picker + Mascot) must never leak (got ${activeScripts.size})`
+      activeScripts.size <= 16,
+      `HS-1: Active NewDocument script handles across 2 windows × 8 dynamic channels (main + Omni + Sidebar Studio + Inline Diff + Wallpaper + Periodic Picker + Mascot + Suggester) must never leak (got ${activeScripts.size})`
     );
 
     await daemon.stop(false);

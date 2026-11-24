@@ -595,10 +595,11 @@ test('v107 A2-8: single-pass PrismDaemon.rebuildBundle cold hit parses .bundle-c
 
     const hitStats = dHit.cdp.getBundleCacheStats();
     assert.equal(hitStats.diskHits, 1);
-    assert.equal(hitStats.channelDiskHits, 8);
+    assert.equal(hitStats.channelDiskHits, 9);
     assert.equal(hitStats.channelHitsByName.wallpaper, 1);
     assert.equal(hitStats.channelHitsByName.periodicPicker, 1);
     assert.equal(hitStats.channelHitsByName.mascot, 1);
+    assert.equal(hitStats.channelHitsByName.suggester, 1);
     assert.equal(hitStats.compileUnifiedRuns, 0);
     assert.equal(hitStats.channelCompileRuns, 0);
 

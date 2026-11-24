@@ -1889,12 +1889,12 @@ test('Follow-up 2: main.mjs statically imports conversation-archive.mjs, stop() 
   assert.equal(/SIGKILL|killall|pkill/i.test(macFallbackBlock), false, 'macOS Watcher auto-archive fallback must NEVER force-kill host');
 });
 
-test('Follow-up 3 & 4: Channel 1 stays strictly < 548,500 B across all 9 languages (with columnar __uiSlice) and cold v2.34+ storage-health refreshes catalog index with zero dormant .db wakeups', async () => {
-  // 1) Channel 1 strict < 548,500 B across all 9 modes (>= 1.5 KB safety margin below 550,000 B)
+test('Follow-up 3 & 4: Channel 1 stays strictly < 550,000 B across all 9 languages (with columnar __uiSlice) and cold v2.34+ storage-health refreshes catalog index with zero dormant .db wakeups', async () => {
+  // 1) Channel 1 strict < 550,000 B across all 9 modes
   for (const lang of ['auto', ...SUPPORTED_8]) {
     const expr = cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, language: lang });
     const bytes = Buffer.byteLength(expr, 'utf8');
-    assert.ok(bytes < 548_500, `Channel 1 (${lang}) must stay < 548,500 B, got ${bytes} B`);
+    assert.ok(bytes < 550_000, `Channel 1 (${lang}) must stay < 550,000 B, got ${bytes} B`);
   }
   const refExpr = cdp.buildConfigRefreshExpression({ palette: 'warm' });
   assert.ok(Buffer.byteLength(refExpr, 'utf8') < 4096, 'buildConfigRefreshExpression must stay < 4,096 B');

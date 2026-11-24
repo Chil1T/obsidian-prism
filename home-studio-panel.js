@@ -59,6 +59,8 @@
   };
   const studioFb = (l) => STUDIO_FB[normStudioLang(l)] || STUDIO_FB.en;
   const hasRealUsage = (r) => !!(r?.days && (toNum(r.calls) > 0 || Object.values(r.days).some((d) => d && (toNum(d.total || d.tokens) > 0 || toNum(d.calls) > 0))));
+  // 仅依据已落盘的调用次数或真实 token 消耗判断，避免把 _do 延迟占位（days[d].calls===1, total===0）误判为有效消耗
+  const hasPersistedTokens = (r) => !!(r?.days && (toNum(r.calls) > 0 || Object.values(r.days).some((d) => d && toNum(d.total || d.tokens) > 0)));
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const getDoc = () => (typeof document !== 'undefined' ? document : null);
   const getWin = () => (typeof window !== 'undefined' ? window : G);
@@ -398,6 +400,7 @@
         try {
           const sumRes = await usageBridge.listSummaries(8000);
           if (typeof sumRes?.scopeKey === 'string' && sumRes.scopeKey) bridgeScopeKey = normalizeScopeKey(sumRes.scopeKey);
+          bridgeRecs = Array.isArray(sumRes?.records) ? sumRes.records : null;
           const bs = sumRes?.summaries;
           const bList = Array.isArray(bs) ? bs : bs && typeof bs === 'object' ? Object.entries(bs).map(([k, v]) => ({ id: k, ...v })) : [];
           for (const item of bList) {
@@ -416,7 +419,6 @@
               sumsMap.set(sid, cur);
             }
           }
-          bridgeRecs = Array.isArray(sumRes?.records) ? sumRes.records : null;
         } catch {}
       } else if (!liveQuotaSnap) { try { await liveSnapProm; } catch {} }
 
@@ -461,7 +463,7 @@
         for (const oldId of [...usageRecords.keys()]) {
           if (!presentIds.has(oldId)) {
             const oldRec = usageRecords.get(oldId);
-            if (hasRealUsage(oldRec)) continue;
+            if (hasPersistedTokens(oldRec)) continue;
             if (oldRec?.subagent && oldRec?.parentId && presentIds.has(oldRec.parentId)) continue;
             usageRecords.delete(oldId); deletedAny = true;
           }
@@ -471,7 +473,8 @@
       if (staleIds.length === 0) { usageHasData = true; if (canPrune) lastUsageFetchAt = now; if (patchedMeta || deletedAny) saveUsageCache(); renderHomePanel(); return; }
 
       usageLoading = true;
-      if (!usageHasData) renderHomePanel();
+      if (seededCache) saveUsageCache();
+      if (!usageHasData || seededCache) renderHomePanel();
       const dbMeta = (a, b) => {
         const m = toNum(a?.dbMtimeSec || b?.dbMtimeSec), s = toNum(a?.dbSize || b?.dbSize);
         return { ...(m > 0 ? { dbMtimeSec: m } : {}), ...(s > 0 ? { dbSize: s } : {}) };
@@ -898,7 +901,7 @@
     };
   }
 
-  const api = { createHomeStudioPanelController, hasPersistedTokens: hasRealUsage };
+  const api = { createHomeStudioPanelController, hasPersistedTokens };
   if (typeof module === 'object' && module.exports) module.exports = api;
   G.__agPrismHomeStudioPanel = api;
 })(typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : this);

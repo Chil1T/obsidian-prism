@@ -351,7 +351,7 @@
       if (isFn(saveSettingsBatch)) saveSettingsBatch(patch);
       else if (isFn(saveSetting)) for (const [k, v] of O.entries(patch)) saveSetting(k, v);
     };
-    const K_IC = 'isConnected', K_TC = 'textContent', K_CL = 'classList', K_WP = 'prism-wallpaper-slot';
+    const K_IC = 'isConnected', K_TC = 'textContent', K_CL = 'classList', K_WP = 'prism-wallpaper-slot', K_SG = 'prism-suggester-slot';
     const sa = (e, k, v = '') => e.setAttribute(k, String(v));
     const ga = (e, k) => e.getAttribute(k);
     const ra = (e, k) => e.removeAttribute(k);
@@ -376,6 +376,7 @@
         try { rootEl.__prismMountThoughtUi(); } catch {}
       }
       try { rootEl.__prismMountWp?.(l); } catch {}
+      try { rootEl.__prismMountSg?.(l); } catch {}
 
       const de = doc.documentElement;
       const themeAttr = de?.getAttribute?.('data-ag-cs-theme') || '';
@@ -568,6 +569,7 @@
           return;
         }
         try { qs(existing, `[data-testid="${K_WP}"]`)?.__agPrismWpUiHandle?.destroy?.(); } catch {}
+        try { qs(existing, `[data-testid="${K_SG}"]`)?.__agPrismSgUiHandle?.destroy?.(); } catch {}
         existing.remove();
       }
 
@@ -656,6 +658,7 @@
       let thoughtListEl = null;
       let thoughtUiHandle = null;
       let wpSlot = null;
+      let sgSlot = null;
 
       const getThoughtUiHandle = () => {
         const live = sec.__prismThoughtUiHandle || thoughtUiHandle;
@@ -721,6 +724,13 @@
       sec.__prismMountWp = (l) => {
         const f = G.__prismMountWallpaperUi;
         if (wpSlot && f) f(wpSlot, { lang: l || getLang(), getLang, runGuardedMut });
+      };
+      sec.__prismMountSg = (l) => {
+        const f = G.__prismMountSuggesterUi;
+        if (sgSlot && f) {
+          setVis(sgSlot, true);
+          f(sgSlot, { lang: l || getLang(), getLang, runGuardedMut, btnClass: BTN });
+        }
       };
 
       const syncFoldBadgeOnly = (st) => {
@@ -920,6 +930,7 @@
             writeStore(STORAGE_SETTINGS_SUBTAB_KEY, sid);
             for (const sb of subTabBtns) sa(sb, 'aria-selected', ga(sb, 'data-ag-cs-subtab') === sid);
             for (const [gid, gel] of groupElsById.entries()) setVis(gel, sid === 'all' || sid === gid);
+            if (sid === 'beta' || sid === 'all') try { sec.__prismMountSg?.(); } catch {}
           };
           for (const [sid, slbl] of [
             ['appearance', U('subTabAppearance', 'Appearance')],
@@ -962,6 +973,10 @@
             }
             ap(grpEl, list);
             if (grp.id === 'beta') {
+              sgSlot = mkEl('div');
+              sa(sgSlot, 'data-testid', K_SG);
+              setVis(sgSlot, false);
+              ap(grpEl, sgSlot);
               wpSlot = mkEl('div');
               sa(wpSlot, 'data-testid', K_WP);
               setVis(wpSlot, false);
@@ -1449,6 +1464,7 @@
           ap(groupsWrap, ap(aboutGrp, mkEl('div', 'ag-cs-settings-subhead', U('aboutGroupTitle', 'About')), aboutBox));
           ap(foldBody, groupsWrap);
           mountThoughtUiIfReady();
+          try { sec.__prismMountSg?.(lang); } catch {}
 
           let uBusy = false;
           onClk(uBtn, () => runGuardedMut(() => setVis(uBox, !!(uBox.hidden))));
