@@ -8026,6 +8026,7 @@ function buildHostI18nExpression(config = null, hostLocaleHint = null, opts = nu
         inst.__prismCodeHash = targetHash;
       }
       const cur = inst && typeof inst.getStatus === 'function' ? inst.getStatus() : { status: 'active' };
+      try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
       return { ok: true, codeHash: targetHash, ...cur };
     };
 

@@ -38,6 +38,12 @@
     'UI 扩展': 'UI Extensions', 自主模式: 'Autonomous Mode', 高对比度: 'High Contrast',
     已完成: 'Completed', 处理中: 'In Progress', 立即发送: 'Send Now', 刚刚: 'Just now',
     今天: 'Today', 昨天: 'Yesterday', 登录: 'Sign In', 退出登录: 'Sign Out',
+    置顶会话: 'Pinned', 新对话: 'New Conversation', 帐户: 'Account', 编辑器: 'Editor',
+    隐私: 'Privacy', 系统: 'System', 主题: 'Theme', 字体: 'Font', 思考中: 'Thinking',
+    发送: 'Send', 所有项目: 'All Projects', 最近对话: 'Recent Conversations',
+    最近会话: 'Recent Conversations', 当前会话: 'Current Conversation',
+    扩展程序: 'Extensions', 键盘快捷键: 'Keyboard Shortcuts', 登出: 'Sign Out',
+    升级: 'Upgrade', 开启: 'On', 恢复默认: 'Reset to Default',
   });
 
   var REVERSE_PATTERNS = [
@@ -95,24 +101,28 @@
       replacement: 'Worked for $1d $2h $3m',
     },
     {
-      regex: '^已运行\\s*(\\d+)\\s*小时\\s*(\\d+)\\s*分(?:钟)?\\s*(\\d+(?:\\.\\d+)?)\\s*秒$',
+      regex: '^(?:已运行|已用时)\\s*(\\d+)\\s*小时\\s*(\\d+)\\s*分(?:钟)?\\s*(\\d+(?:\\.\\d+)?)\\s*秒$',
       replacement: 'Worked for $1h $2m $3s',
     },
     {
-      regex: '^已运行\\s*(\\d+)\\s*小时\\s*(\\d+)\\s*分(?:钟)?$',
+      regex: '^(?:已运行|已用时)\\s*(\\d+)\\s*小时\\s*(\\d+)\\s*分(?:钟)?$',
       replacement: 'Worked for $1h $2m',
     },
     {
-      regex: '^已运行\\s*(\\d+)\\s*小时$',
+      regex: '^(?:已运行|已用时)\\s*(\\d+)\\s*小时$',
       replacement: 'Worked for $1h',
     },
     {
-      regex: '^已运行\\s*(\\d+)\\s*分(?:钟)?\\s*(\\d+(?:\\.\\d+)?)\\s*秒$',
+      regex: '^(?:已运行|已用时)\\s*(\\d+)\\s*分(?:钟)?\\s*(\\d+(?:\\.\\d+)?)\\s*秒$',
       replacement: 'Worked for $1m $2s',
     },
     {
-      regex: '^已运行\\s*(\\d+)\\s*分(?:钟)?$',
+      regex: '^(?:已运行|已用时)\\s*(\\d+)\\s*分(?:钟)?$',
       replacement: 'Worked for $1m',
+    },
+    {
+      regex: '^(?:已运行|已用时)\\s*(\\d+(?:\\.\\d+)?)\\s*秒$',
+      replacement: 'Worked for $1s',
     },
     {
       regex: '^已运行\\s*(\\d+(?:\\.\\d+)?)\\s*秒$',

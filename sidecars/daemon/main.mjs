@@ -7211,6 +7211,10 @@ export class PrismDaemon {
           hostI18nMode: String(window.__agPrismHostI18n?.getStatus?.()?.mode || ''),
           hasMascot: Boolean(window.__agDualMascotRig || globalThis.__agDualMascotRig),
           mascotCodeHash: String((window.__agDualMascotRig || globalThis.__agDualMascotRig)?.__prismCodeHash || ''),
+          needsSettingsChannel: Boolean(
+            (document.querySelector('[role="dialog"]') || document.getElementById('ag-cs-settings-sec')) &&
+              (!window.__agPrismSettingsPanel || !(window.__agCsLocales && window.__agCsLocales.__isFullLocales))
+          ),
           hasThought: Boolean(window.__agPrismThought),
           hasThoughtSettingsUi: Boolean(window.__agPrismThoughtSettingsUi),
           hasInlineDiff: Boolean(window.__agPrismInlineDiff && !window.__agPrismInlineDiff.getDebugState?.()?.destroyed),
@@ -7697,6 +7701,10 @@ export class PrismDaemon {
             probe,
             runCleanup: needsMascotCleanup,
           });
+        }
+        if (probe.needsSettingsChannel) {
+          healed = true;
+          await this._deliverSettingsChannelToEntry(entry);
         }
         if (needsThoughtHeal) {
           healed = true;

@@ -52,7 +52,8 @@
   const ensureLiteLocalesShim = (slicePayload) => {
     mergeRuntimeUiSlice(slicePayload);
     const cur = getLocalesMod();
-    if (cur && cur.__isFullLocales) return;
+    // 绝不拿 43-key 迷你垫片覆写页面上已有的全量 8 语表（含热重载残留的旧全量表 UI_TABLE）
+    if (cur && (cur.__isFullLocales || cur.UI_TABLE)) return;
     if (cur && cur.__isLiteShim) return;
     const shim = {
       __isLiteShim: true,
@@ -1732,7 +1733,7 @@
     if (destroyed) return;
     const now = Date.now();
     if (now - lastSettingsChannelReqAt < 1000) return;
-    if (!qs(D, '[role="dialog"]')) return;
+    if (!qs(D, '[role="dialog"]') && !byId(SETTINGS_SEC_ID)) return;
     const bindingName = currentBaseConfig?.binding || cfg?.binding || '__agPrismSetting';
     const fn = W[bindingName];
     if (!isFn(fn)) return;
@@ -1744,7 +1745,9 @@
 
   function ensureSettingsSection() {
     const settingsPanelMod = getSettingsPanelMod();
-    if (!settingsPanelMod || typeof settingsPanelMod.mountOrSyncSettingsSection !== 'function') {
+    const locMod = getLocalesMod();
+    const hasFullLocales = Boolean(locMod && (locMod.__isFullLocales || locMod.UI_TABLE));
+    if (!settingsPanelMod || typeof settingsPanelMod.mountOrSyncSettingsSection !== 'function' || !hasFullLocales) {
       requestSettingsChannelIfDialogOpen();
       return;
     }

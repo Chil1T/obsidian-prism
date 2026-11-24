@@ -635,3 +635,126 @@ test('Battle 2 Settings Panel: displays off-enforced chip and off-blocked amber 
     globalThis.window = origWin;
   }
 });
+
+test('Battle 2 Regression: hostLocalization="off" restores under data-ag-cs-win-blur="1" & restores sidebar chrome while protecting Chinese conversation titles', () => {
+  const env = createMiniDom('en');
+  // Simulate visible but unfocused window (data-ag-cs-win-blur="1")
+  env.rootEl.setAttribute('data-ag-cs-win-blur', '1');
+
+  const topBtn = env.doc.createElement('button');
+  topBtn.setAttribute('data-testid', 'title-menu-bar-item');
+  topBtn.textContent = '工作区';
+
+  const sidebarList = env.doc.createElement('div');
+  sidebarList.setAttribute('data-testid', 'conversation-list-sidebar');
+
+  const pinnedHdr = env.doc.createElement('div');
+  pinnedHdr.setAttribute('data-testid', 'pinned-section-header');
+  pinnedHdr.textContent = '置顶会话';
+
+  const projHdr = env.doc.createElement('div');
+  projHdr.setAttribute('data-testid', 'section-header');
+  projHdr.textContent = '项目列表';
+
+  const convRow = env.doc.createElement('button');
+  convRow.setAttribute('data-testid', 'conversation-row-sidebar');
+  convRow.textContent = '设置与工作区性能优化会话';
+
+  const collapseBtn = env.doc.createElement('button');
+  collapseBtn.textContent = '收起';
+
+  const seeAllBtn = env.doc.createElement('button');
+  seeAllBtn.textContent = '查看全部 (24)';
+
+  sidebarList.append(pinnedHdr, projHdr, convRow, collapseBtn, seeAllBtn);
+  env.body.append(topBtn, sidebarList);
+
+  const inst = hostI18nRuntime.mountHostI18n({
+    root: env.win,
+    doc: env.doc,
+    mode: 'off',
+    dict: zhDict,
+    reversePatterns,
+  });
+
+  const st = inst.getStatus();
+  assert.equal(st.status, 'off-enforced');
+  assert.ok(st.restoredCount >= 5, `Expected >=5 restored nodes under win-blur, got ${st.restoredCount}`);
+  assert.equal(topBtn.textContent, 'Workspace');
+  assert.equal(pinnedHdr.textContent, 'Pinned');
+  assert.equal(projHdr.textContent, 'Projects');
+  assert.equal(collapseBtn.textContent, 'Collapse');
+  assert.equal(seeAllBtn.textContent, 'See all (24)');
+  assert.equal(convRow.textContent, '设置与工作区性能优化会话', 'User Chinese conversation title must NEVER be altered');
+
+  // Switching back to auto / destroy restores everything losslessly
+  inst.destroy();
+  assert.equal(topBtn.textContent, '工作区');
+  assert.equal(pinnedHdr.textContent, '置顶会话');
+  assert.equal(collapseBtn.textContent, '收起');
+  assert.equal(seeAllBtn.textContent, '查看全部 (24)');
+});
+
+test('Battle 2 Regression: Channel 1 hot-reload never clobbers full UI_TABLE with 43-key lite shim & requests Ch9 if stale settingsPanel has only lite shim', () => {
+  const env = createMiniDom('en');
+  const dlg = env.doc.createElement('div');
+  dlg.setAttribute('role', 'dialog');
+  const panel = env.doc.createElement('div');
+  panel.className = 'p-6';
+  const h2 = env.doc.createElement('h2');
+  h2.textContent = '外观';
+  const anchor = env.doc.createElement('div');
+  anchor.className = 'space-y-2';
+  panel.append(h2, anchor);
+  dlg.append(panel);
+  env.body.append(dlg);
+
+  const bindingCalls = [];
+  const sandbox = {
+    document: env.doc,
+    location: env.win.location,
+    navigator: { language: 'zh-CN', languages: ['zh-CN'] },
+    localStorage: { _m: new Map(), getItem(k) { return this._m.get(k) ?? null; }, setItem(k, v) { this._m.set(k, String(v)); }, removeItem(k) { this._m.delete(k); } },
+    MutationObserver: env.win.MutationObserver,
+    ResizeObserver: class { observe() {} disconnect() {} },
+    addEventListener() {},
+    removeEventListener() {},
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame: () => {},
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {},
+    performance: { now: () => 0 },
+    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+    [cdp.SETTING_BINDING]: (payload) => bindingCalls.push(JSON.parse(payload)),
+    // Simulate stale settingsPanel left from previous hot-reload WITHOUT full locales
+    __agPrismSettingsPanel: settingsPanel,
+  };
+  sandbox.window = sandbox;
+  sandbox.self = sandbox;
+  sandbox.top = sandbox;
+  sandbox.globalThis = sandbox;
+
+  const ch1Expr = cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, language: 'zh-CN' });
+  vm.runInNewContext(ch1Expr, sandbox);
+
+  // Must NOT mount broken English settings panel with only 43-key lite shim; MUST request Channel 9!
+  assert.equal(env.doc.getElementById('ag-cs-settings-sec'), null, 'Must not render partial English settings panel before full locales arrive');
+  assert.ok(
+    bindingCalls.some((c) => c && c.action === 'request-settings-panel'),
+    'Must request Channel 9 when stale __agPrismSettingsPanel lacks full locales'
+  );
+
+  // Delivering Channel 9 mounts full Chinese settings panel immediately
+  vm.runInNewContext(cdp.buildSettingsChannelExpression(), sandbox);
+  const sec = env.doc.getElementById('ag-cs-settings-sec');
+  assert.ok(sec, 'Settings panel must mount once Channel 9 delivers full locales');
+  sec.__ensureFoldBody?.();
+  assert.equal(sec.querySelector('[data-ag-cs-row="language"] [data-k="t"]')?.textContent, '界面语言');
+
+  // Subsequent Channel 1 hot-reload must NEVER overwrite full locales (UI_TABLE) with lite shim!
+  vm.runInNewContext(ch1Expr, sandbox);
+  assert.equal(Boolean(sandbox.__agCsLocales.__isFullLocales || sandbox.__agCsLocales.UI_TABLE), true);
+  assert.equal(sandbox.__agCsLocales.getUiStrings('zh-CN').setLanguageTitle, '界面语言');
+});

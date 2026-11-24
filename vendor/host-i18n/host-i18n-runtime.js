@@ -3121,12 +3121,60 @@
       }
     }
 
+    // 在 off（强制还原原生英文）模式下，定点还原侧栏固定 UI 壳子（置顶会话/项目列表/收起/查看全部），同时绝对跳过会话标题行与项目名
+    function scanOffSidebarChrome() {
+      if (state.mode !== 'off' || !state.active || state.destroyed || !doc || typeof doc.querySelectorAll !== 'function') return;
+      var safeWalkSubtree = function (rootEl) {
+        if (!rootEl || rootEl.nodeType !== 1 || rootEl.isConnected === false) return;
+        if (isPrismOwnedElement(rootEl) || isExternalOwnedElement(rootEl) || exemptElements.has(rootEl)) return;
+        var tid = getAttr(rootEl, 'data-testid');
+        if (tid === 'conversation-row-sidebar' || tid === 'project-header' || tid === 'workspace-switcher') return;
+        translateAttributes(rootEl);
+        var ch = rootEl.firstChild;
+        while (ch) {
+          if (!state.active || state.destroyed) return;
+          if (ch.nodeType === 3) {
+            translateTextNode(ch, true);
+          } else if (ch.nodeType === 1) {
+            safeWalkSubtree(ch);
+          }
+          ch = ch.nextSibling;
+        }
+      };
+      try {
+        var headers = doc.querySelectorAll('[data-testid="pinned-section-header"], [data-testid="section-header"]');
+        for (var i = 0; i < headers.length; i++) safeWalkSubtree(headers[i]);
+      } catch (e) {}
+      try {
+        var listRoots = doc.querySelectorAll('[data-testid="conversation-list-sidebar"]');
+        for (var l = 0; l < listRoots.length; l++) {
+          var btns = listRoots[l] && typeof listRoots[l].querySelectorAll === 'function' ? listRoots[l].querySelectorAll('button') : [];
+          for (var b = 0; b < btns.length; b++) {
+            var btn = btns[b];
+            if (!btn || btn.isConnected === false) continue;
+            var insideUserRow = false;
+            var cur = btn;
+            while (cur && cur !== listRoots[l]) {
+              var cTid = getAttr(cur, 'data-testid');
+              if (cTid === 'conversation-row-sidebar' || cTid === 'project-header' || cTid === 'workspace-switcher') {
+                insideUserRow = true;
+                break;
+              }
+              cur = cur.parentElement;
+            }
+            if (!insideUserRow) safeWalkSubtree(btn);
+          }
+        }
+      } catch (e) {}
+    }
+
     function safeFullScan() {
       if (!state.active || state.destroyed || !doc || !doc.documentElement) return;
       var visitedSet = new WeakSet();
       disconnectObserver();
       try {
         translateElement(doc.documentElement, visitedSet, null, null);
+        if (state.mode === 'off') scanOffSidebarChrome();
       } catch (e) {}
       reconnectObserver();
     }
@@ -3142,6 +3190,7 @@
       disconnectObserver();
       try {
         translateElement(doc.documentElement, visitedSet, null, budget);
+        if (state.mode === 'off') scanOffSidebarChrome();
       } catch (e) {}
       reconnectObserver();
       if (state.active && !state.destroyed && pendingNodes.length > 0) {
@@ -3566,6 +3615,11 @@
       if (!isPaused()) {
         safeBudgetedScan();
       } else {
+        // 窗口可见但暂时失焦（如热切换配置/外部改 config.json）时，off 模式先同步执行一次全量还原，随后保持 0fps 休眠
+        if (state.mode === 'off' && !(doc && doc.hidden === true)) {
+          safeFullScan();
+          disconnectObserver();
+        }
         hibernating = true;
         missedWhilePaused = true;
       }
@@ -3841,6 +3895,9 @@
             wakeFromHibernation();
           } else if (!isPaused()) {
             safeFullScan();
+          } else if (!(doc && doc.hidden === true)) {
+            safeFullScan();
+            disconnectObserver();
           }
         }
         return instance.getStatus();
