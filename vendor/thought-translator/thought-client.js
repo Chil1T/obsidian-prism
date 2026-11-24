@@ -3619,9 +3619,14 @@
     if (titleScanTimer) return;
     titleScanTimer = setTimeout(() => {
       titleScanTimer = null;
-      if (translateTitles && currentMode !== 'off' && !isDocHiddenOrSleep()) {
-        scanConversationTitles();
+      if (!translateTitles || currentMode === 'off' || isDocHiddenOrSleep()) return;
+      /* 周期表 3D 面板打开期间让出主线程与布局带宽，避免侧边栏标题全量 getBoundingClientRect/checkVisibility 引发掉帧；关闭后自动补扫 */
+      const rEl = docRoot();
+      if (rEl && ga(rEl, 'data-ag-pp-open') === '1') {
+        scheduleTitleScan(600);
+        return;
       }
+      scanConversationTitles();
     }, delayMs);
     titleScanTimer?.unref?.();
   }

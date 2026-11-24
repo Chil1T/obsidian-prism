@@ -57,13 +57,24 @@
       } catch (e) {}
     }
 
+    var _audioRmMqlCache = typeof WeakMap === 'function' ? new WeakMap() : null;
     function isReducedMotion(doc, root) {
       try {
         if (doc && doc.documentElement && doc.documentElement.getAttribute('data-ag-cs-motion') === 'off') {
           return true;
         }
         if (root && typeof root.matchMedia === 'function') {
-          return Boolean(root.matchMedia('(prefers-reduced-motion: reduce)').matches);
+          var mm = root.matchMedia;
+          if (_audioRmMqlCache) {
+            var cached = _audioRmMqlCache.get(root);
+            if (cached && cached.fn === mm && cached.mq) {
+              return Boolean(cached.mq.matches);
+            }
+            var mq = mm.call(root, '(prefers-reduced-motion: reduce)');
+            _audioRmMqlCache.set(root, { fn: mm, mq: mq });
+            return Boolean(mq && mq.matches);
+          }
+          return Boolean(mm.call(root, '(prefers-reduced-motion: reduce)').matches);
         }
       } catch (e) {}
       return false;

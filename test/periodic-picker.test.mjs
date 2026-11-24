@@ -7487,6 +7487,30 @@ test('v1.0.8-beta live-fix (1) 300Hz WebGL2 hot-path: 0 per-frame dynMesh rebuil
   const fluxRebuildsDelta = perf.dynMeshRebuilds - rebuildsBeforeFlux;
   assert.equal(fluxRebuildsDelta, 0, `Animated 30 frames of flux/energyPulse must trigger 0 extra dynMesh rebuilds, got ${fluxRebuildsDelta}`);
 
+  // Regression guard: Bokeh motes (kind=8.0) & flux rings (kind=7.0) MUST use unnormalized pushVertexRawNormal + shader mSize clamp <= 0.065 (prevent 40x giant white disc overdraw)
+  const kb3dSrc = fs.readFileSync(KEYBOARD_3D_FILE, 'utf8');
+  assert.ok(kb3dSrc.includes('function pushVertexRawNormal('), 'keyboard-3d-gl.js must define pushVertexRawNormal');
+  assert.ok(kb3dSrc.includes('clamp(a_normal.x, 0.005, 0.065)'), 'SOLID_VS must clamp bokeh mSize <= 0.065U');
+  const bokehBlockStart = kb3dSrc.indexOf('/* 4. 柔焦光学散景微星尘');
+  const bokehBlock = kb3dSrc.slice(bokehBlockStart, bokehBlockStart + 1800);
+  assert.equal(bokehBlock.includes('mb.pushVertex('), false, 'Bokeh motes must never call normalizing mb.pushVertex()');
+  assert.ok(bokehBlock.includes('mb.pushVertexRawNormal('), 'Bokeh motes must call mb.pushVertexRawNormal()');
+
+  // Regression guard: hovering across keys with unchanged stageMode must NOT force shadowDirty on every frame!
+  r1.setState({ stageMode: 'drawer' });
+  for (let s2 = 0; s2 < 40 && !r1.isIdle(); s2 += 1) r1.step(0.016);
+  const shBeforeHover = r1.getPerfStats().shadowDraws;
+  const skipBeforeHover = r1.getPerfStats().shadowSkips;
+  const hoverTargets = [1, 6, 10, 18, 2, 7, 8, 9, 14, 15, 16, 17];
+  for (let h = 0; h < hoverTargets.length; h += 1) {
+    r1.setState({ stageMode: 'drawer', hoveredZ: hoverTargets[h] }, { deferRender: true });
+    r1.step(0.008);
+  }
+  const shAfterHover = r1.getPerfStats().shadowDraws - shBeforeHover;
+  const skipAfterHover = r1.getPerfStats().shadowSkips - skipBeforeHover;
+  assert.ok(shAfterHover <= 1, `Pure hover with unchanged stageMode must trigger <= 1 shadow pass, got ${shAfterHover}`);
+  assert.ok(skipAfterHover >= 10, `Pure hover must skip shadow pass on static geometry (skips=${skipAfterHover})`);
+
   // 100 consecutive raycast picks across projected keycap centers should hit exact keys using cached inverse matrices
   const projRects = r1.getInteractiveProjectedRects();
   const keyRectList = projRects && Array.isArray(projRects.keys) ? projRects.keys : [];

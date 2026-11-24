@@ -358,15 +358,25 @@
       return null;
     }
 
+    var _oledRmMqlCache = typeof WeakMap === 'function' ? new WeakMap() : null;
     function checkOledPrefersReducedMotion(rt) {
       try {
-        var mm = (rt && typeof rt.matchMedia === 'function')
-          ? rt.matchMedia
-          : (typeof window !== 'undefined' && window && typeof window.matchMedia === 'function' ? window.matchMedia : null);
-        if (mm) {
-          var mq = mm.call(rt || window, '(prefers-reduced-motion: reduce)');
-          if (mq && mq.matches) return true;
+        var host = (rt && typeof rt.matchMedia === 'function')
+          ? rt
+          : (typeof window !== 'undefined' && window && typeof window.matchMedia === 'function' ? window : null);
+        if (!host) return false;
+        var mm = host.matchMedia;
+        if (_oledRmMqlCache) {
+          var cached = _oledRmMqlCache.get(host);
+          if (cached && cached.fn === mm && cached.mq) {
+            return Boolean(cached.mq.matches);
+          }
+          var mq = mm.call(host, '(prefers-reduced-motion: reduce)');
+          _oledRmMqlCache.set(host, { fn: mm, mq: mq });
+          return Boolean(mq && mq.matches);
         }
+        var mq2 = mm.call(host, '(prefers-reduced-motion: reduce)');
+        if (mq2 && mq2.matches) return true;
       } catch (_mmErr) {}
       return false;
     }

@@ -385,9 +385,16 @@
 
   const isMascotEnabled = () => cfg.mascot !== 'off';
 
+  let _rmFn = null;
+  let _rmMql = null;
   const motionReduced = () => {
     if (cfg.motionLevel === 'off') return true;
-    return typeof matchMedia === 'function' && Boolean(matchMedia('(prefers-reduced-motion: reduce)')?.matches);
+    if (typeof matchMedia !== 'function') return false;
+    if (_rmFn !== matchMedia || !_rmMql) {
+      _rmFn = matchMedia;
+      _rmMql = matchMedia('(prefers-reduced-motion: reduce)');
+    }
+    return Boolean(_rmMql?.matches);
   };
 
   const isMotionStandardOrUltra = () => {

@@ -519,15 +519,25 @@
       return null;
     }
 
+    var _rmMqlCache = typeof WeakMap === 'function' ? new WeakMap() : null;
     function checkPrefersReducedMotion(rt) {
       try {
-        var mm = (rt && typeof rt.matchMedia === 'function')
-          ? rt.matchMedia
-          : (typeof window !== 'undefined' && window && typeof window.matchMedia === 'function' ? window.matchMedia : null);
-        if (mm) {
-          var mq = mm.call(rt || window, '(prefers-reduced-motion: reduce)');
-          if (mq && mq.matches) return true;
+        var host = (rt && typeof rt.matchMedia === 'function')
+          ? rt
+          : (typeof window !== 'undefined' && window && typeof window.matchMedia === 'function' ? window : null);
+        if (!host) return false;
+        var mm = host.matchMedia;
+        if (_rmMqlCache) {
+          var cached = _rmMqlCache.get(host);
+          if (cached && cached.fn === mm && cached.mq) {
+            return Boolean(cached.mq.matches);
+          }
+          var mq = mm.call(host, '(prefers-reduced-motion: reduce)');
+          _rmMqlCache.set(host, { fn: mm, mq: mq });
+          return Boolean(mq && mq.matches);
         }
+        var mq2 = mm.call(host, '(prefers-reduced-motion: reduce)');
+        if (mq2 && mq2.matches) return true;
       } catch (_mmErr) {}
       return false;
     }
@@ -1321,6 +1331,17 @@
         return idx;
       }
 
+      /* 专用于 GPU 顶点着色器驱动的磁通环径向偏移 (kind=7.0) 与散景星尘半径 (kind=8.0)：严禁对 a_normal 做单位归一化！ */
+      function pushVertexRawNormal(px, py, pz, nx, ny, nz, r, g, b, rough, metal, emis, kind, u, v) {
+        var idx = positions.length / 3;
+        positions.push(px, py, pz);
+        normals.push(nx, ny, nz);
+        colors.push(r, g, b);
+        params.push(rough, metal, emis, kind || 0);
+        uvs.push(u || 0, v || 0);
+        return idx;
+      }
+
       function addQuad(p0, p1, p2, p3, n, col, mat, uv0, uv1, uv2, uv3) {
         var nx = n[0], ny = n[1], nz = n[2];
         if (nx === 0 && ny === 0 && nz === 0) {
@@ -1548,6 +1569,7 @@
 
       return {
         pushVertex: pushVertex,
+        pushVertexRawNormal: pushVertexRawNormal,
         pushTri: pushTri,
         getIndexCount: getIndexCount,
         addQuad: addQuad,
@@ -3532,15 +3554,15 @@
           var lxOut = ca * rOut;
           var lzOut = sa * rOut;
 
-          /* 将局部径向偏移写入 a_normal(lx, 0, lz)，由 SOLID_VS 按 u_envParams.w 在 GPU 实时驱动呼吸脉动与空间摇摆 */
-          var vIn = mb.pushVertex(
+          /* 将真实局部径向偏移原样写入 a_normal(lx, 0, lz)（不做归一化！），由 SOLID_VS 按 u_envParams.w 在 GPU 实时驱动呼吸脉动与空间摇摆 */
+          var vIn = mb.pushVertexRawNormal(
             ox + lxIn, oy + yInBase, oz + lzIn,
             lxIn, 0, lzIn,
             rc[0], rc[1], rc[2],
             rg.ringIdx, visAlpha, slamCollapse, 7.0,
             u, -1.0
           );
-          var vOut = mb.pushVertex(
+          var vOut = mb.pushVertexRawNormal(
             ox + lxOut, oy + yOutBase, oz + lzOut,
             lxOut, 0, lzOut,
             rc[0], rc[1], rc[2],
@@ -3712,19 +3734,19 @@
         var rSize = moteScale * (0.82 + 0.48 * Math.sin(seed * 19.1) * 0.5) * (0.72 + 0.28 * fade);
         var mVis = visAlpha * fade;
 
-        var q0 = mb.pushVertex(
+        var q0 = mb.pushVertexRawNormal(
           mcx, mcy, mcz,
           rSize, 0, 0, mCol[0], mCol[1], mCol[2], seed, mVis, slamCollapse, 8.0, -1.0, -1.0
         );
-        var q1 = mb.pushVertex(
+        var q1 = mb.pushVertexRawNormal(
           mcx, mcy, mcz,
           rSize, 0, 0, mCol[0], mCol[1], mCol[2], seed, mVis, slamCollapse, 8.0, 1.0, -1.0
         );
-        var q2 = mb.pushVertex(
+        var q2 = mb.pushVertexRawNormal(
           mcx, mcy, mcz,
           rSize, 0, 0, mCol[0], mCol[1], mCol[2], seed, mVis, slamCollapse, 8.0, 1.0, 1.0
         );
-        var q3 = mb.pushVertex(
+        var q3 = mb.pushVertexRawNormal(
           mcx, mcy, mcz,
           rSize, 0, 0, mCol[0], mCol[1], mCol[2], seed, mVis, slamCollapse, 8.0, -1.0, 1.0
         );
@@ -4869,7 +4891,7 @@
       '    } else if (kind > 7.85) {',
       '      float mSeed = a_params.x;',
       '      pos.y += sin(phaseT * 1.9 + mSeed * 6.2831853) * 0.042;',
-      '      float mSize = max(0.005, a_normal.x) * (1.0 + ePulseF * 0.35 + 0.16 * sin(phaseT * 2.6 + mSeed * 12.56637));',
+      '      float mSize = clamp(a_normal.x, 0.005, 0.065) * (1.0 + ePulseF * 0.35 + 0.16 * sin(phaseT * 2.6 + mSeed * 12.56637));',
       '      vec3 wpCenter = (u_model * vec4(pos, 1.0)).xyz;',
       '      vec3 toCam = normalize(u_camPos - wpCenter);',
       '      vec3 upRef = abs(toCam.y) > 0.99 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);',
@@ -6420,6 +6442,8 @@
       var pendingRenderWhilePaused = false;
       var shadowDirty = true;
       var lastShadowGeomSig = '';
+      var lastShadowDrawClockMs = -1000;
+      var SHADOW_THROTTLE_MS = 33.0;
       var lastDynMeshSig = '';
       var keycapInstanceDirty = true;
       var perfStats = {
@@ -7034,6 +7058,7 @@
         }
         shadowDirty = true;
         lastShadowGeomSig = '';
+        lastShadowDrawClockMs = -1000;
         lastDynMeshSig = '';
         keycapInstanceDirty = true;
 
@@ -9677,6 +9702,8 @@
       function computeShadowGeomSignature(palette, shadowMapSize) {
         var q1000 = function (v) { return Math.round((Number(v) || 0) * 1000); };
         var q500 = function (v) { return Math.round((Number(v) || 0) * 500); };
+        /* 近场悬浮微倾角对柔和 PCF 阴影影响极小，按 ~0.05 rad (3°) 粗量化避免扫键每帧重绘 419 万像素阴影图 */
+        var q20 = function (v) { return Math.round((Number(v) || 0) * 20); };
         var parts = [
           shadowMapSize,
           palette && palette.isLight ? 1 : 0,
@@ -9691,16 +9718,16 @@
           introActive ? q1000(introElapsed) : 0,
           Math.round(camDistCur * 100),
           q1000(effortLiftHeightCur),
-          q1000(neighborSympathyCur),
+          q20(neighborSympathyCur),
           q1000(orchLatchCur),
-          q1000(liftPitchCur),
-          q1000(liftRollCur),
-          q1000(liftYawCur),
-          q1000(liftMagXCur),
-          q1000(liftMagZCur),
-          q1000(gyroPitchCur),
-          q1000(gyroRollCur),
-          q1000(gyroYawCur),
+          q20(liftPitchCur),
+          q20(liftRollCur),
+          q20(liftYawCur),
+          q20(liftMagXCur),
+          q20(liftMagZCur),
+          q20(gyroPitchCur),
+          q20(gyroRollCur),
+          q20(gyroYawCur),
           q500(ctrlPressCur[0]),
           q500(ctrlPressCur[1]),
           q500(ctrlPressCur[2]),
@@ -9946,9 +9973,16 @@
         gl.enable(gl.CULL_FACE);
         gl.cullFace(gl.BACK);
 
-        /* ================= Stage A: 2048/1024 按需静态阴影深度贴图 Pass（纯悬停高亮/微光/纯 OLED 帧直接跳过复用！） ================= */
+        /* ================= Stage A: 2048/1024 按需静态阴影深度贴图 Pass（纯悬停高亮/微光/纯 OLED 帧直接跳过复用；高刷连续微动限频 30Hz！） ================= */
         if (shPass) {
-          if (shadowDirty || curShadowSig !== lastShadowGeomSig) {
+          var shadowChanged = curShadowSig !== lastShadowGeomSig;
+          var shadowThrottleReady =
+            lastShadowDrawClockMs < 0 ||
+            animClockMs < lastShadowDrawClockMs ||
+            (animClockMs - lastShadowDrawClockMs) >= SHADOW_THROTTLE_MS ||
+            idle ||
+            isConfirmSlamActiveGlobal();
+          if (shadowDirty || (shadowChanged && shadowThrottleReady)) {
             gl.activeTexture(texUnit1);
             gl.bindTexture(gl.TEXTURE_2D, null);
 
@@ -10005,6 +10039,7 @@
 
             shadowDirty = false;
             lastShadowGeomSig = curShadowSig;
+            lastShadowDrawClockMs = animClockMs;
             perfStats.shadowDraws++;
           } else {
             perfStats.shadowSkips++;
@@ -11972,8 +12007,11 @@
           }
         }
         if (nextState.stageMode !== undefined) {
-          state.stageMode = nextState.stageMode === 'drawer' ? 'drawer' : 'fullscreen';
-          shadowDirty = true;
+          var nextStageModeVal = nextState.stageMode === 'drawer' ? 'drawer' : 'fullscreen';
+          if (nextStageModeVal !== state.stageMode) {
+            state.stageMode = nextStageModeVal;
+            shadowDirty = true;
+          }
         }
         if (nextState.selectedZ !== undefined) {
           state.selectedZ = nextState.selectedZ;
@@ -12376,6 +12414,7 @@
         auxPageWaveElapsed = 0;
         shadowDirty = true;
         lastShadowGeomSig = '';
+        lastShadowDrawClockMs = -1000;
         lastDynMeshSig = '';
         lastKeycapInstSig = '';
 
