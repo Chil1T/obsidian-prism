@@ -39,5 +39,6 @@
   "sidebarStudio": "off",
   "hostLocalization": "auto",
   "autoUpdate": "off",
-  "updateChannel": "stable"
+  "updateChannel": "stable",
+  "autoArchiveOnExit": false
 }

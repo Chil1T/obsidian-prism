@@ -24,6 +24,9 @@ import {
 } from '../../vendor/pulse-dashboard/sidecars/panel/renderer-rpc-adapter.mjs';
 import { discoverLocalConversations } from '../../vendor/pulse-dashboard/sidecars/panel/local-conversations.mjs';
 import { UpdateService, RELEASES_PAGE_URL } from './update-service.mjs';
+import { getGoMemLimitStatus, setGoMemLimit, clearGoMemLimit } from './gomemlimit-service.mjs';
+import { buildStorageGuardBannerExpression, buildStorageGuardDismissExpression } from './storage-guard-ui.mjs';
+import * as conversationArchive from './conversation-archive.mjs';
 
 const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
@@ -54,7 +57,22 @@ const USAGE_CACHE_MAX_BYTES = 4 * 1024 * 1024;
 const USAGE_CACHE_MAX_PER_SCOPE = 1200;
 const USAGE_CACHE_MAX_SCOPES = 32;
 const USAGE_CACHE_MAX_TOTAL_RECORDS = 2400;
+const LOCAL_COLD_WAKEUP_CAP = 12;
 const FORBIDDEN_SCOPE_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+
+export function resolveStorageGuardStatePath(customPath = null) {
+  if (typeof customPath === 'string' && customPath.trim()) {
+    return path.resolve(customPath.trim());
+  }
+  const envPath =
+    typeof process.env.PRISM_STORAGE_GUARD_STATE_PATH === 'string'
+      ? process.env.PRISM_STORAGE_GUARD_STATE_PATH.trim()
+      : '';
+  if (envPath) {
+    return path.resolve(envPath);
+  }
+  return path.join(os.homedir(), '.gemini', 'config', 'obsidian-prism-storage-guard-state.json');
+}
 
 export function resolveUsageCachePath(customPath = null) {
   if (typeof customPath === 'string' && customPath.trim()) {
@@ -220,7 +238,7 @@ export function resolveUsageScopeKey({ explicitScopeKey = '', entry = null, item
   return 'local';
 }
 
-function hasRealUsageRecord(record) {
+export function hasRealUsageRecord(record) {
   if (!record || typeof record !== 'object' || !record.days || typeof record.days !== 'object') return false;
   if (Number(record.calls || 0) > 0) return true;
   for (const d of Object.values(record.days)) {
@@ -2019,6 +2037,10 @@ export class PrismDaemon {
     updateCheckInitialDelayMs = 45000,
     updateCheckIntervalMs = 6 * 60 * 60 * 1000,
     enableAutoUpdateTimer = true,
+    storageGuardStatePath = null,
+    storageGuardInitialDelayMs = 35000,
+    storageGuardIntervalMs = 300000,
+    enableStorageGuardTimer = true,
     silent = false,
   } = {}) {
     this.rootDir = path.resolve(rootDir);
@@ -2095,6 +2117,22 @@ export class PrismDaemon {
     this._usageCacheTimer = null;
     this._storageHealthCache = null;
     this._storageHealthAt = 0;
+    this._storageGuardStateFile = resolveStorageGuardStatePath(storageGuardStatePath);
+    this._enableStorageGuardTimer = enableStorageGuardTimer !== false;
+    const sgInit = Number(storageGuardInitialDelayMs);
+    this._storageGuardInitialDelayMs = Number.isFinite(sgInit) ? Math.max(0, sgInit) : 35000;
+    const sgInt = Number(storageGuardIntervalMs);
+    this._storageGuardIntervalMs = Number.isFinite(sgInt) ? Math.max(5000, sgInt) : 300000;
+    this._storageGuardInitialTimer = null;
+    this._storageGuardIntervalTimer = null;
+    this._storageGuardBannerShownAt = 0;
+    this._lastStorageIndexRefreshAt = 0;
+    this._sawLiveHost = false;
+    this._autoArchiveExitRan = false;
+    this._autoArchiveInFlight = false;
+    this._archiveActionInFlight = false;
+    this._archiveScheduledAt = 0;
+    this._isUninstalling = false;
     this._lastTelemetryActivityAt = 0;
     this._telemetryInFlight = 0;
     this._customMetricsProvider = metricsProvider;
@@ -2198,62 +2236,434 @@ export class PrismDaemon {
     return null;
   }
 
-  async _handleStorageAction(action, _testOverrides = null) {
+  _getAutoArchiveOnExitSetting() {
     try {
-      const modUrl = new URL('./conversation-archive.mjs', import.meta.url);
-      const arch = await import(modUrl.href);
+      const cfg = this.cdp?.readConfig?.();
+      return cfg?.autoArchiveOnExit === true;
+    } catch {
+      return false;
+    }
+  }
+
+  _readStorageGuardState() {
+    try {
+      const file = this._storageGuardStateFile;
+      if (!file || !fs.existsSync(file)) return { snoozeUntilMs: 0, firstPromptShownAt: 0 };
+      const st = assertNotSymlinkSync(file, 'storage guard state');
+      if (!st || !st.isFile() || st.size > 65536) return { snoozeUntilMs: 0, firstPromptShownAt: 0 };
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      return {
+        snoozeUntilMs: Math.max(0, Number(parsed?.snoozeUntilMs || 0) || 0),
+        firstPromptShownAt: Math.max(0, Number(parsed?.firstPromptShownAt || 0) || 0),
+      };
+    } catch {
+      return { snoozeUntilMs: 0, firstPromptShownAt: 0 };
+    }
+  }
+
+  _writeStorageGuardState(patch = {}) {
+    try {
+      const file = this._storageGuardStateFile;
+      if (!file) return null;
+      const cur = this._readStorageGuardState();
+      const next = {
+        schema: 1,
+        snoozeUntilMs:
+          patch.snoozeUntilMs !== undefined ? Math.max(0, Number(patch.snoozeUntilMs) || 0) : cur.snoozeUntilMs,
+        firstPromptShownAt:
+          patch.firstPromptShownAt !== undefined
+            ? Math.max(0, Number(patch.firstPromptShownAt) || 0)
+            : cur.firstPromptShownAt,
+        updatedAt: new Date().toISOString(),
+      };
+      const dir = path.dirname(file);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      writeFileAtomicSync(file, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
+      return next;
+    } catch {
+      return null;
+    }
+  }
+
+  _rememberDiscoveredSubagentList(items = [], scopeKey = 'local') {
+    if (!Array.isArray(items) || items.length === 0) return;
+    const safeScope = normalizeUsageScopeKey(scopeKey) || 'local';
+    if (!this._discoveredSubagentsByScope) this._discoveredSubagentsByScope = new Map();
+    let scopeMap = this._discoveredSubagentsByScope.get(safeScope);
+    if (!scopeMap) {
+      scopeMap = new Map();
+      this._discoveredSubagentsByScope.set(safeScope, scopeMap);
+      while (this._discoveredSubagentsByScope.size > USAGE_CACHE_MAX_SCOPES) {
+        this._discoveredSubagentsByScope.delete(this._discoveredSubagentsByScope.keys().next().value);
+      }
+    }
+    for (const raw of items) {
+      const cid = String(typeof raw === 'string' ? raw : raw?.id || raw?.cascadeId || '').trim().toLowerCase();
+      if (!GUID_RE.test(cid)) continue;
+      const pid = String(typeof raw === 'object' && raw ? raw.parentId || raw.parentConversationId || '' : '').trim().toLowerCase();
+      const prev = scopeMap.get(cid);
+      scopeMap.delete(cid);
+      scopeMap.set(cid, {
+        ...(prev || {}),
+        ...(GUID_RE.test(pid) && pid !== cid ? { parentId: pid } : {}),
+      });
+      while (scopeMap.size > 512) {
+        scopeMap.delete(scopeMap.keys().next().value);
+      }
+    }
+  }
+
+  _rememberVisibleMainIds(ids = []) {
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    if (!this._lastVisibleMainIds) this._lastVisibleMainIds = new Set();
+    for (const raw of ids) {
+      const id = String(raw || '').trim().toLowerCase();
+      if (!GUID_RE.test(id)) continue;
+      this._lastVisibleMainIds.delete(id);
+      this._lastVisibleMainIds.add(id);
+      while (this._lastVisibleMainIds.size > 512) {
+        this._lastVisibleMainIds.delete(this._lastVisibleMainIds.values().next().value);
+      }
+    }
+  }
+
+  _collectArchiveExtraSignals(convDir, visibleMainIds = [], extraSubagents = null) {
+    const discoveredSubagents = new Map();
+    const localSubs = this._getDiscoveredSubagents?.('local');
+    if (localSubs instanceof Map) {
+      for (const [cid, info] of localSubs.entries()) {
+        if (GUID_RE.test(cid)) discoveredSubagents.set(cid.toLowerCase(), info || {});
+      }
+    }
+    // 融合渲染器活跃页面/AgentManager 零 RPC 采集到的子代理列表
+    if (Array.isArray(extraSubagents)) {
+      for (const raw of extraSubagents) {
+        const cid = String(typeof raw === 'string' ? raw : raw?.id || raw?.cascadeId || '').trim().toLowerCase();
+        if (!GUID_RE.test(cid)) continue;
+        const pid = String(typeof raw === 'object' && raw ? raw.parentId || raw.parentConversationId || '' : '').trim().toLowerCase();
+        if (!discoveredSubagents.has(cid)) {
+          discoveredSubagents.set(cid, GUID_RE.test(pid) && pid !== cid ? { parentId: pid } : {});
+        } else if (GUID_RE.test(pid) && pid !== cid && !discoveredSubagents.get(cid)?.parentId) {
+          discoveredSubagents.set(cid, { ...discoveredSubagents.get(cid), parentId: pid });
+        }
+      }
+    }
+    // 融合 MetricsStore 中已记录的委托子代理（delegatedConversations）
+    try {
+      const storeSessions = this._lazyStore?.sessions;
+      if (storeSessions instanceof Map) {
+        for (const [parentId, ent] of storeSessions.entries()) {
+          const delegated = Array.isArray(ent?.data?.delegatedConversations)
+            ? ent.data.delegatedConversations
+            : Array.isArray(ent?.delegatedConversations)
+              ? ent.delegatedConversations
+              : null;
+          if (!delegated) continue;
+          for (const rawChild of delegated) {
+            const cid = String(typeof rawChild === 'string' ? rawChild : rawChild?.id || rawChild?.cascadeId || '').trim().toLowerCase();
+            if (GUID_RE.test(cid) && cid !== String(parentId || '').toLowerCase() && !discoveredSubagents.has(cid)) {
+              discoveredSubagents.set(cid, { parentId: String(parentId || '').toLowerCase() });
+            }
+          }
+        }
+      }
+    } catch {}
+
+    const protectedMainIds = new Set();
+    if (this._lastVisibleMainIds instanceof Set) {
+      for (const id of this._lastVisibleMainIds) {
+        if (GUID_RE.test(id)) protectedMainIds.add(id);
+      }
+    }
+    for (const raw of Array.isArray(visibleMainIds) ? visibleMainIds : []) {
+      const id = String(raw || '').trim().toLowerCase();
+      if (GUID_RE.test(id)) protectedMainIds.add(id);
+    }
+
+    // 读取同级 chapter_titles/ 目录作为主对话辅助保护信号（不跨目录越界）
+    const chapterTitleIds = new Set();
+    try {
+      const chapDir = path.join(path.dirname(path.resolve(convDir)), 'chapter_titles');
+      if (fs.existsSync(chapDir)) {
+        const st = fs.lstatSync(chapDir);
+        if (!st.isSymbolicLink() && st.isDirectory()) {
+          for (const d of fs.readdirSync(chapDir, { withFileTypes: true })) {
+            if (d.isSymbolicLink() || !d.isFile()) continue;
+            const stem = d.name.replace(/\.[^.]+$/, '').toLowerCase();
+            if (GUID_RE.test(stem)) chapterTitleIds.add(stem);
+          }
+        }
+      }
+    } catch {}
+
+    return {
+      discoveredSubagents,
+      protectedMainIds,
+      chapterTitleIds,
+    };
+  }
+
+  _flushCatalogIndexFromMemory(arch, convDir, archiveDir) {
+    try {
+      const mod = arch || conversationArchive;
+      const warmSums = this._lazyStore?.client?.reader?.summaries || {};
+      const extraSignals = this._collectArchiveExtraSignals(convDir, []);
+      const hasWarm =
+        Object.keys(warmSums).length > 0 ||
+        extraSignals.discoveredSubagents.size > 0 ||
+        extraSignals.protectedMainIds.size > 0;
+      if (hasWarm) {
+        mod.saveCatalogIndex(archiveDir, warmSums, { mergeExisting: true, extraSignals });
+        return true;
+      }
+    } catch {}
+    return false;
+  }
+
+  async _checkActiveHostIdleState(_testOverrides = null) {
+    if (typeof _testOverrides?.checkIdle === 'function') {
+      return _testOverrides.checkIdle();
+    }
+    const localEntries = [];
+    for (const entry of this.sessions.values()) {
+      if (!entry || entry.session?.closed) continue;
+      const sc = resolveUsageScopeKey({ entry });
+      if (sc === 'local') localEntries.push(entry);
+    }
+    if (localEntries.length === 0) {
+      return { idle: true, runningCount: 0, domBusy: false, reason: 'no-active-local-window' };
+    }
+    for (const entry of localEntries) {
+      try {
+        const expr = buildRendererRpcExpression('CheckHostIdleState', {});
+        const evalRes = await entry.session.send(
+          'Runtime.evaluate',
+          { expression: expr, awaitPromise: true, returnByValue: true },
+          4000
+        );
+        const val = evalRes?.result?.value;
+        if (val && val.ok && val.data && val.data.idle === false) {
+          return val.data;
+        }
+      } catch {
+        // 无法确认窗口状态时保守按忙碌处理（仅在显式探测失败时防止误打扰）
+        return { idle: false, runningCount: 0, domBusy: false, reason: 'probe-failed' };
+      }
+    }
+    return { idle: true, runningCount: 0, domBusy: false, reason: 'idle' };
+  }
+
+  async _snapshotUsageBeforeArchive(candidateItems = [], { maxFetch = 24, timeoutMs = 8000 } = {}) {
+    if (!Array.isArray(candidateItems) || candidateItems.length === 0) return { fetched: 0, flushed: false };
+    const diskCache = this._getUsageDiskCacheScope('local', false);
+    const missing = [];
+    for (const it of candidateItems) {
+      const id = String(typeof it === 'string' ? it : it?.id || '').trim().toLowerCase();
+      if (!GUID_RE.test(id)) continue;
+      const hit = diskCache.get(id);
+      if (hit?.record && hasRealUsageRecord(hit.record)) continue;
+      const dbEntry = Array.isArray(it?.files) ? it.files.find((f) => f && f.suffix === 'db') : null;
+      const lmSec = Number(it?.mtimeMs || 0) > 0 ? Math.floor(Number(it.mtimeMs) / 1000) : 0;
+      const dbMtimeSec = Number(it?.dbMtimeMs || 0) > 0 ? Math.floor(Number(it.dbMtimeMs) / 1000) : lmSec;
+      const dbSize = Math.max(0, Number(dbEntry?.bytes || 0) || 0);
+      missing.push({
+        id,
+        stepCount: Number(it?.stepCount || 0) || 0,
+        lastModifiedSec: lmSec,
+        ...(dbMtimeSec > 0 ? { dbMtimeSec } : {}),
+        ...(dbSize > 0 ? { dbSize } : {}),
+        subagent: true,
+        ...(it?.parentId ? { parentId: it.parentId } : {}),
+      });
+      if (missing.length >= maxFetch) break;
+    }
+    if (missing.length === 0) {
+      this._flushUsageDiskCache();
+      return { fetched: 0, flushed: true };
+    }
+    let fetched = 0;
+    const deadline = Date.now() + Math.max(1000, timeoutMs);
+    for (let i = 0; i < missing.length && Date.now() < deadline; i += 6) {
+      const slice = missing.slice(i, i + 6);
+      try {
+        const res = await this.fetchUsageRollupBatch(slice, { action: 'fetch-batch', scopeKey: 'local' });
+        if (res?.ok && Array.isArray(res.records)) {
+          fetched += res.records.filter((r) => r && r.mode !== 'error').length;
+        }
+      } catch {
+        break;
+      }
+    }
+    this._flushUsageDiskCache();
+    return { fetched, flushed: true };
+  }
+
+  async _handleStorageAction(action, _testOverrides = null, rawInput = {}) {
+    try {
+      const arch = conversationArchive;
       const now = Number.isFinite(_testOverrides?.now) ? _testOverrides.now : Date.now();
-      if (action === 'storage-health' && this._storageHealthCache && now - this._storageHealthAt < 300000) {
+      const forceFresh = Boolean(rawInput?.force);
+      if (action === 'storage-health' && !forceFresh && this._storageHealthCache && now - this._storageHealthAt < 300000) {
         return this._storageHealthCache;
       }
       const convDir = _testOverrides?.convDir || arch.getDefaultConversationsDir();
       const archiveDir = _testOverrides?.archiveDir || arch.getDefaultArchiveDir();
       let liveSummaries = null;
+      let visibleMainIds = [];
+      let pageSubagents = [];
       const existingIdx = arch.loadCatalogIndex(archiveDir);
       const parsedUpdatedAt = existingIdx?.updatedAt ? Date.parse(existingIdx.updatedAt) : NaN;
       const idxAgeMs = Number.isFinite(parsedUpdatedAt) ? Math.max(0, now - parsedUpdatedAt) : Infinity;
+      const mustRefreshIndex =
+        action === 'prepare-archive' ||
+        action === 'archive-and-restart' ||
+        forceFresh ||
+        !existingIdx ||
+        idxAgeMs > 1800000 ||
+        (action === 'storage-health' && !this._lastStorageIndexRefreshAt);
 
-      if (action === 'prepare-archive' || !existingIdx || idxAgeMs > 1800000) {
-        // Reuse already-warm in-memory summaries first to avoid extra RPC traffic
+      if (mustRefreshIndex) {
         const warmReaderSums = this._lazyStore?.client?.reader?.summaries;
-        if (action !== 'prepare-archive' && warmReaderSums && Object.keys(warmReaderSums).length > 0) {
-          liveSummaries = warmReaderSums;
-        } else {
-          this._telemetryInFlight = (this._telemetryInFlight || 0) + 1;
+        this._telemetryInFlight = (this._telemetryInFlight || 0) + 1;
+        this._lastTelemetryActivityAt = Date.now();
+        try {
+          const client = await this.ensureLsClient();
+          const raw = await client.call('GetAllCascadeTrajectories', {
+            excludeSubtrajectories: false,
+            maxEntries: 4096,
+            includeVisibleMainIds: true,
+          });
+          if (raw?.trajectorySummaries && Object.keys(raw.trajectorySummaries).length > 0) {
+            liveSummaries = raw.trajectorySummaries;
+          }
+          if (Array.isArray(raw?.visibleMainIds) && raw.visibleMainIds.length > 0) {
+            visibleMainIds = raw.visibleMainIds;
+            this._rememberVisibleMainIds(visibleMainIds);
+          }
+          if (Array.isArray(raw?.discoveredSubagentIds) && raw.discoveredSubagentIds.length > 0) {
+            pageSubagents = raw.discoveredSubagentIds;
+            this._rememberDiscoveredSubagentList(pageSubagents, 'local');
+          }
+        } catch {
+        } finally {
+          this._telemetryInFlight = Math.max(0, (this._telemetryInFlight || 1) - 1);
           this._lastTelemetryActivityAt = Date.now();
+        }
+        if (!liveSummaries && warmReaderSums && Object.keys(warmReaderSums).length > 0) {
+          liveSummaries = warmReaderSums;
+        }
+        const extraSignals = this._collectArchiveExtraSignals(convDir, visibleMainIds, pageSubagents);
+        const hasSignalData =
+          Boolean(liveSummaries && Object.keys(liveSummaries).length > 0) ||
+          extraSignals.protectedMainIds.size > 0 ||
+          extraSignals.discoveredSubagents.size > 0;
+        if (hasSignalData) {
           try {
-            const client = await this.ensureLsClient();
-            const raw = await client.call('GetAllCascadeTrajectories', { excludeSubtrajectories: false });
-            if (raw?.trajectorySummaries && Object.keys(raw.trajectorySummaries).length > 0) {
-              liveSummaries = raw.trajectorySummaries;
+            arch.saveCatalogIndex(archiveDir, liveSummaries || {}, { mergeExisting: true, extraSignals });
+            this._lastStorageIndexRefreshAt = now;
+          } catch {}
+        }
+      } else {
+        // 同轮 30 分钟冷却期内亦执行零 LS-RPC 轻量页面/内存增量刷新：
+        // 若存在本地活跃窗口，用 signalsOnly=true 仅读 DOM 与内存 AgentMgr（0 次 LS RPC、0 次 .db 唤醒），
+        // 把刚跑完的新 Swarm Worker / delegatedConversations / 侧栏白名单及时合入索引
+        try {
+          if (this.sessions && typeof this.sessions.values === 'function') {
+            let localEntry = null;
+            for (const entry of this.sessions.values()) {
+              if (!entry || entry.session?.closed || typeof entry.session?.send !== 'function') continue;
+              if (resolveUsageScopeKey({ entry }) === 'local') {
+                localEntry = entry;
+                break;
+              }
             }
-          } catch {
-          } finally {
-            this._telemetryInFlight = Math.max(0, (this._telemetryInFlight || 1) - 1);
-            this._lastTelemetryActivityAt = Date.now();
+            if (localEntry) {
+              const sigExpr = buildRendererRpcExpression('GetAllCascadeTrajectories', {
+                includeVisibleMainIds: true,
+                signalsOnly: true,
+              });
+              const evalRes = await localEntry.session
+                .send('Runtime.evaluate', { expression: sigExpr, awaitPromise: true, returnByValue: true }, 2500)
+                .catch(() => null);
+              const val = evalRes?.result?.value;
+              if (val && val.ok && val.data) {
+                const normSig = normalizeRendererSummaries(val.data);
+                if (Array.isArray(normSig?.visibleMainIds) && normSig.visibleMainIds.length > 0) {
+                  visibleMainIds = normSig.visibleMainIds;
+                  this._rememberVisibleMainIds(visibleMainIds);
+                }
+                if (Array.isArray(normSig?.discoveredSubagentIds) && normSig.discoveredSubagentIds.length > 0) {
+                  pageSubagents = normSig.discoveredSubagentIds;
+                  this._rememberDiscoveredSubagentList(pageSubagents, 'local');
+                }
+              }
+            }
+          }
+        } catch {}
+        const extraSignals = this._collectArchiveExtraSignals(convDir, visibleMainIds, pageSubagents);
+        const prevEntries = existingIdx?.entries || {};
+        let hasUnsavedDelta = false;
+        for (const cid of extraSignals.discoveredSubagents.keys()) {
+          if (extraSignals.protectedMainIds.has(cid) || extraSignals.chapterTitleIds.has(cid)) continue;
+          if (!prevEntries[cid] || prevEntries[cid].subagent !== true) {
+            hasUnsavedDelta = true;
+            break;
           }
         }
-        if (liveSummaries) {
-          try { arch.saveCatalogIndex(archiveDir, liveSummaries); } catch {}
+        if (!hasUnsavedDelta) {
+          for (const mid of extraSignals.protectedMainIds) {
+            if (!prevEntries[mid] || prevEntries[mid].protectedMain !== true) {
+              hasUnsavedDelta = true;
+              break;
+            }
+          }
+        }
+        if (hasUnsavedDelta) {
+          try {
+            arch.saveCatalogIndex(archiveDir, {}, { mergeExisting: true, extraSignals });
+            this._lastStorageIndexRefreshAt = now;
+          } catch {}
         }
       }
+
+      // 只读获取本机 language_server 内存（测试传入自定义 convDir 且未指定 memory hook 时跳过真机进程查询）
+      let lsMemoryMb = null;
+      if (Number.isFinite(_testOverrides?.lsMemoryMb)) {
+        lsMemoryMb = Number(_testOverrides.lsMemoryMb);
+      } else if (typeof _testOverrides?.getMemoryStats === 'function') {
+        const mem = await _testOverrides.getMemoryStats();
+        if (mem?.ok && Number.isFinite(mem.totalMb)) lsMemoryMb = mem.totalMb;
+      } else if (!_testOverrides?.convDir) {
+        const mem = await arch.getLanguageServerMemoryStatsAsync();
+        if (mem?.ok && Number.isFinite(mem.totalMb) && mem.totalMb > 0) lsMemoryMb = mem.totalMb;
+      }
+
+      const subagentHours = Number.isFinite(Number(rawInput?.subagentMaxAgeHours))
+        ? Number(rawInput.subagentMaxAgeHours)
+        : arch.AUTO_ARCHIVE_SUBAGENT_MAX_AGE_HOURS;
 
       const scan =
         typeof arch.scanConversationStorageAsync === 'function'
           ? await arch.scanConversationStorageAsync({
               convDir,
               archiveDir,
-              summaries: liveSummaries,
-              subagentMaxAgeHours: action === 'prepare-archive' ? 1 : 6,
+              summaries: null,
+              subagentMaxAgeHours: subagentHours,
+              lsMemoryMb,
               now,
             })
           : arch.scanConversationStorage({
               convDir,
               archiveDir,
-              summaries: liveSummaries,
-              subagentMaxAgeHours: action === 'prepare-archive' ? 1 : 6,
+              summaries: null,
+              subagentMaxAgeHours: subagentHours,
+              lsMemoryMb,
               now,
             });
+
+      const batches = arch.listArchiveBatches(archiveDir);
+      const lastArchiveResult = arch.readLastArchiveResult(archiveDir);
+      const guardState = this._readStorageGuardState();
       const base = {
         ok: true,
         action,
@@ -2263,19 +2673,107 @@ export class PrismDaemon {
         mainMb: scan.mainMb,
         subagentCount: scan.subagentCount,
         subagentMb: scan.subagentMb,
+        unknownCount: scan.unknownCount,
+        unknownMb: scan.unknownMb,
         archivableSubagentCount: scan.archivableSubagentCount,
         archivableSubagentMb: scan.archivableSubagentMb,
+        lsMemoryMb: scan.lsMemoryMb,
         warn: scan.warn,
+        warnReasons: scan.warnReasons,
+        warnThresholds: scan.warnThresholds,
         archiveDir: scan.archiveDir,
+        autoArchiveOnExit: this._getAutoArchiveOnExitSetting(),
+        batchesCount: batches.length,
+        latestBatch: batches[0] || null,
+        lastArchiveResult,
+        snoozeUntilMs: guardState.snoozeUntilMs,
       };
+
       if (action === 'prepare-archive') {
+        if (scan.archivableSubagents?.length > 0 && !_testOverrides?.skipUsageSnapshot) {
+          await this._snapshotUsageBeforeArchive(scan.archivableSubagents).catch(() => {});
+        }
         const scriptPath = path.join(this.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
         const helpers = arch.writeHelperScripts({ scriptPath, archiveDir });
-        // Do not overwrite 6h storage-health cache with prepare-archive's 1h threshold view
         this._storageHealthCache = null;
         this._storageHealthAt = 0;
         return { ...base, ...helpers };
       }
+
+      if (action === 'archive-and-restart') {
+        if (rawInput?.confirm !== true) {
+          return { ok: false, action, error: 'confirmation_required' };
+        }
+        if (this._archiveActionInFlight || (!_testOverrides && this._archiveScheduledAt > 0 && Date.now() - this._archiveScheduledAt < 15000)) {
+          return { ok: false, action, code: 'ARCHIVE_IN_PROGRESS', error: '已有归档或还原任务正在执行，请勿重复触发。' };
+        }
+        this._archiveActionInFlight = true;
+        try {
+          if (_testOverrides?.forceBusy !== true) {
+            const idleState = await this._checkActiveHostIdleState(_testOverrides);
+            if (!idleState?.idle) {
+              return {
+                ok: false,
+                action,
+                code: 'HOST_BUSY',
+                error: '检测到 AI 正在生成或 Swarm 任务运行中，请等待空闲后再执行归档并重启。',
+                idleState,
+              };
+            }
+          }
+          const snapRes =
+            scan.archivableSubagents?.length > 0 && !_testOverrides?.skipUsageSnapshot
+              ? await this._snapshotUsageBeforeArchive(scan.archivableSubagents, { maxFetch: 24, timeoutMs: 6000 }).catch(() => ({ fetched: 0, flushed: false }))
+              : { fetched: 0, flushed: true };
+          this._flushUsageDiskCache();
+
+          let host = null;
+          if (typeof _testOverrides?.detectHost === 'function') {
+            host = await _testOverrides.detectHost();
+          } else if (typeof this.cdp?.detectRunningAntigravityHost === 'function') {
+            try { host = await this.cdp.detectRunningAntigravityHost(); } catch {}
+          }
+
+          const scriptPath = path.join(this.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
+          const spawnRes = arch.spawnDetachedArchiveTask(
+            {
+              action: 'archive-and-restart',
+              convDir,
+              archiveDir,
+              hostPid: host?.pid || 0,
+              exePath: host?.exePath || '',
+              gracefulQuit: true,
+              relaunch: true,
+              mode: 'subagents',
+              subagentMaxAgeHours: subagentHours,
+              settleMs: 4000,
+            },
+            {
+              scriptPath,
+              spawnHook: _testOverrides?.spawnHook,
+              disableWmiBreakaway: Boolean(_testOverrides?.disableWmiBreakaway),
+            }
+          );
+          if (spawnRes?.spawned) {
+            // 防止宿主优雅退出期间 tick()/stop() 并发启动 auto-exit-archive 与当前手动归档任务冲突
+            this._autoArchiveExitRan = true;
+            if (!_testOverrides) this._archiveScheduledAt = Date.now();
+          }
+          this._storageHealthCache = null;
+          this._storageHealthAt = 0;
+          return {
+            ...base,
+            ok: Boolean(spawnRes?.spawned),
+            ...(spawnRes?.spawned ? {} : { code: spawnRes?.code || 'SPAWN_FAILED', error: spawnRes?.error || 'Failed to launch detached archive task' }),
+            scheduled: Boolean(spawnRes?.spawned),
+            method: spawnRes?.method || 'custom',
+            snapshottedUsageCount: snapRes.fetched || 0,
+          };
+        } finally {
+          this._archiveActionInFlight = false;
+        }
+      }
+
       this._storageHealthCache = base;
       this._storageHealthAt = now;
       return base;
@@ -2284,10 +2782,357 @@ export class PrismDaemon {
     }
   }
 
+  async _handleRestoreArchiveAction(rawInput = {}, _testOverrides = null) {
+    try {
+      const arch = conversationArchive;
+      const convDir = _testOverrides?.convDir || arch.getDefaultConversationsDir();
+      const archiveDir = _testOverrides?.archiveDir || arch.getDefaultArchiveDir();
+      const batches = arch.listArchiveBatches(archiveDir);
+      const lastArchiveResult = arch.readLastArchiveResult(archiveDir);
+      if (rawInput?.listOnly === true) {
+        return { ok: true, action: 'restore-archive', batches, lastArchiveResult };
+      }
+      if (rawInput?.confirm !== true) {
+        return { ok: false, action: 'restore-archive', error: 'confirmation_required', batches };
+      }
+      if (this._archiveActionInFlight || (!_testOverrides && this._archiveScheduledAt > 0 && Date.now() - this._archiveScheduledAt < 15000)) {
+        return { ok: false, action: 'restore-archive', code: 'ARCHIVE_IN_PROGRESS', error: '已有归档或还原任务正在执行，请勿重复触发。', batches };
+      }
+      this._archiveActionInFlight = true;
+      try {
+        if (_testOverrides?.forceBusy !== true) {
+          const idleState = await this._checkActiveHostIdleState(_testOverrides);
+          if (!idleState?.idle) {
+            return {
+              ok: false,
+              action: 'restore-archive',
+              code: 'HOST_BUSY',
+              error: '检测到 AI 正在生成或 Swarm 任务运行中，请等待空闲后再执行无损还原并重启。',
+              idleState,
+              batches,
+            };
+          }
+        }
+        if (batches.length === 0) {
+          return { ok: false, action: 'restore-archive', code: 'NO_BATCH', error: '未找到任何历史归档批次。', batches: [] };
+        }
+        const batchName = typeof rawInput?.batchName === 'string' && rawInput.batchName.trim() ? rawInput.batchName.trim() : 'latest';
+        let host = null;
+        if (typeof _testOverrides?.detectHost === 'function') {
+          host = await _testOverrides.detectHost();
+        } else if (typeof this.cdp?.detectRunningAntigravityHost === 'function') {
+          try { host = await this.cdp.detectRunningAntigravityHost(); } catch {}
+        }
+        const scriptPath = path.join(this.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
+        const spawnRes = arch.spawnDetachedArchiveTask(
+          {
+            action: 'restore-and-restart',
+            convDir,
+            archiveDir,
+            hostPid: host?.pid || 0,
+            exePath: host?.exePath || '',
+            gracefulQuit: true,
+            relaunch: true,
+            batchName,
+            settleMs: 4000,
+          },
+          {
+            scriptPath,
+            spawnHook: _testOverrides?.spawnHook,
+            disableWmiBreakaway: Boolean(_testOverrides?.disableWmiBreakaway),
+          }
+        );
+        if (spawnRes?.spawned) {
+          // 防止随后宿主退出时 auto-exit-archive 把刚刚无损还原的批次又移回归档目录
+          this._autoArchiveExitRan = true;
+          if (!_testOverrides) this._archiveScheduledAt = Date.now();
+        }
+        this._storageHealthCache = null;
+        this._storageHealthAt = 0;
+        return {
+          ok: Boolean(spawnRes?.spawned),
+          ...(spawnRes?.spawned ? {} : { code: spawnRes?.code || 'SPAWN_FAILED', error: spawnRes?.error || 'Failed to launch detached restore task' }),
+          action: 'restore-archive',
+          scheduled: Boolean(spawnRes?.spawned),
+          batchName: batchName === 'latest' ? batches[0].batchName : batchName,
+          batchesCount: batches.length,
+          method: spawnRes?.method || 'custom',
+        };
+      } finally {
+        this._archiveActionInFlight = false;
+      }
+    } catch (err) {
+      return { ok: false, action: 'restore-archive', error: sanitizeSecretText(err?.message || err) };
+    }
+  }
+
+  async _handleStorageSnoozeAction(rawInput = {}) {
+    const hours = Math.max(1, Math.min(168, Number(rawInput?.hours) || 24));
+    const snoozeUntilMs = Date.now() + hours * 3600000;
+    this._writeStorageGuardState({ snoozeUntilMs });
+    this._storageHealthCache = null;
+    this._storageHealthAt = 0;
+    const dismissExpr = buildStorageGuardDismissExpression();
+    for (const entry of this.sessions.values()) {
+      if (entry && !entry.session?.closed) {
+        await entry.session.evaluate(dismissExpr).catch(() => {});
+      }
+    }
+    return { ok: true, action: 'storage-snooze', hours, snoozeUntilMs };
+  }
+
+  async _handleGoMemLimitAction(action, rawInput = {}) {
+    const testOpts = rawInput?._testOverrides && typeof rawInput._testOverrides === 'object' ? rawInput._testOverrides : {};
+    if (action === 'gomemlimit-set') {
+      const res = await setGoMemLimit(rawInput?.value, testOpts);
+      return { ...res, action };
+    }
+    if (action === 'gomemlimit-clear') {
+      const res = await clearGoMemLimit(testOpts);
+      return { ...res, action };
+    }
+    const res = await getGoMemLimitStatus(testOpts);
+    return { ...res, action: 'gomemlimit-status' };
+  }
+
+  async _resolveStorageGuardLanguage(targetEntry, cfg = null, _testOverrides = null) {
+    let i18nCore = null;
+    try {
+      i18nCore = require(path.join(this.rootDir, 'i18n-core.js'));
+    } catch {}
+    const normalizeLang = (raw, fallback = 'en') => {
+      if (typeof i18nCore?.normalizeLanguage === 'function') {
+        return i18nCore.normalizeLanguage(raw, fallback);
+      }
+      const s = String(raw || '').trim().toLowerCase().replace(/_/g, '-').split(/[.@]/)[0];
+      if (!s) return fallback;
+      if (s === 'en' || s.startsWith('en-')) return 'en';
+      if (s === 'ja' || s.startsWith('ja-')) return 'ja';
+      if (s === 'ko' || s.startsWith('ko-')) return 'ko';
+      if (s === 'es' || s.startsWith('es-')) return 'es';
+      if (s === 'fr' || s.startsWith('fr-')) return 'fr';
+      if (s === 'de' || s.startsWith('de-')) return 'de';
+      if (s === 'yue' || s.startsWith('yue-') || s === 'zh-yue') return 'zh-CN';
+      if (/^zh-(?:tw|hk|mo|hant)(?:-|$)/.test(s)) return 'zh-TW';
+      if (s === 'zh' || s.startsWith('zh-')) return 'zh-CN';
+      return fallback;
+    };
+
+    const rawCfgLang = String((cfg && (cfg.language || cfg.lang)) || '').trim();
+    if (rawCfgLang && rawCfgLang.toLowerCase() !== 'auto') {
+      return normalizeLang(rawCfgLang, 'en');
+    }
+
+    // language 为 'auto' 或缺省时，按与 ui-runtime.js 一致的优先级探测目标页面：
+    // data-ag-cs-lang（排除 'auto'）-> navigator.language / navigator.languages[0] -> html[lang]
+    let pageLang = '';
+    if (typeof _testOverrides?.pageLang === 'string') {
+      const ovLang = _testOverrides.pageLang.trim();
+      if (ovLang && ovLang.toLowerCase() !== 'auto') pageLang = ovLang;
+    } else if (targetEntry?.session && !targetEntry.session.closed && typeof targetEntry.session.send === 'function') {
+      try {
+        const langProbeExpr =
+          "(() => { try { const pick = (v) => (typeof v === 'string' && v.trim() && v.trim().toLowerCase() !== 'auto' ? v.trim() : ''); const r = typeof document !== 'undefined' ? document.documentElement : null; const nav = typeof navigator !== 'undefined' ? navigator : null; return pick(r && r.getAttribute && r.getAttribute('data-ag-cs-lang')) || pick(nav && nav.language) || pick(nav && Array.isArray(nav.languages) && nav.languages[0]) || pick(r && r.lang) || ''; } catch { return ''; } })()";
+        const probeRes = await targetEntry.session.send(
+          'Runtime.evaluate',
+          { expression: langProbeExpr, returnByValue: true },
+          1500
+        );
+        const val = probeRes?.result?.value;
+        if (typeof val === 'string' && val.trim() && val.trim().toLowerCase() !== 'auto') {
+          pageLang = val.trim();
+        }
+      } catch {}
+    }
+    if (pageLang) {
+      const normPage = normalizeLang(pageLang, '');
+      if (normPage) return normPage;
+    }
+
+    // 页面尚未标注语言时回退至系统 locale（与 cdp.js resolveSystemLangNode 保持一致）
+    let sysLocale = typeof _testOverrides?.systemLocale === 'string' ? _testOverrides.systemLocale.trim() : '';
+    if (!sysLocale) {
+      try {
+        const candidates = [process.env.LC_ALL, process.env.LC_MESSAGES, process.env.LANG];
+        for (let i = 0; i < candidates.length; i += 1) {
+          const val = String(candidates[i] || '').trim();
+          if (val && !/^(?:c|posix)(?:[.@]|$)/i.test(val)) {
+            sysLocale = val;
+            break;
+          }
+        }
+        if (!sysLocale) {
+          sysLocale = Intl.DateTimeFormat().resolvedOptions().locale || '';
+        }
+      } catch {
+        sysLocale = '';
+      }
+    }
+    return normalizeLang(sysLocale, 'en');
+  }
+
+  async _checkStorageGuardAndNotify(_testOverrides = null) {
+    if (!this.running && !_testOverrides) return { shown: false, reason: 'not-running' };
+    const now = Number.isFinite(_testOverrides?.now) ? _testOverrides.now : Date.now();
+    const state = this._readStorageGuardState();
+    if (state.snoozeUntilMs > now) {
+      return { shown: false, reason: 'snoozed', snoozeUntilMs: state.snoozeUntilMs };
+    }
+    if (!_testOverrides && this._storageGuardBannerShownAt > 0 && now - this._storageGuardBannerShownAt < 1800000) {
+      return { shown: false, reason: 'cooldown' };
+    }
+    const localEntries = [];
+    for (const entry of this.sessions.values()) {
+      if (!entry || entry.session?.closed) continue;
+      const sc = resolveUsageScopeKey({ entry });
+      if (sc === 'local') localEntries.push(entry);
+    }
+    if (localEntries.length === 0) {
+      return { shown: false, reason: 'no-local-window' };
+    }
+
+    const health = await this._handleStorageAction('storage-health', _testOverrides, { force: Boolean(_testOverrides) });
+    if (!health?.ok || !health.warn) {
+      return { shown: false, reason: 'healthy', health };
+    }
+
+    const idleState = await this._checkActiveHostIdleState(_testOverrides);
+    if (!idleState?.idle) {
+      return { shown: false, reason: 'host-busy', idleState, health };
+    }
+
+    const targetEntry = localEntries[0];
+    let ui = {};
+    let resolvedLang = 'en';
+    try {
+      const cfg =
+        _testOverrides?.config && typeof _testOverrides.config === 'object'
+          ? _testOverrides.config
+          : this.cdp?.readConfig?.() || {};
+      resolvedLang = await this._resolveStorageGuardLanguage(targetEntry, cfg, _testOverrides);
+      const locales = require(path.join(this.rootDir, 'i18n-locales.js'));
+      ui = locales.getUiStrings(resolvedLang) || {};
+    } catch {}
+
+    const fmtMb = (v) => (Number(v) >= 1024 ? `${(Number(v) / 1024).toFixed(2)} GB` : `${Math.round(Number(v) || 0)} MB`);
+    const tpl = ui.storageGuardSummaryTpl || 'DB {0} · Subagents {1} ({2}) · LS Memory {3}';
+    const summaryText = tpl
+      .replace(/\{0\}/g, fmtMb(health.totalMb))
+      .replace(/\{1\}/g, String(health.archivableSubagentCount || 0))
+      .replace(/\{2\}/g, fmtMb(health.archivableSubagentMb || health.subagentMb || 0))
+      .replace(/\{3\}/g, health.lsMemoryMb ? fmtMb(health.lsMemoryMb) : '—');
+
+    const closeLabels = {
+      'zh-CN': '关闭',
+      'zh-TW': '關閉',
+      en: 'Close',
+      ja: '閉じる',
+      ko: '닫기',
+      es: 'Cerrar',
+      fr: 'Fermer',
+      de: 'Schließen',
+    };
+    const expr = buildStorageGuardBannerExpression({
+      autoArchiveOnExit: Boolean(health.autoArchiveOnExit),
+      copy: {
+        title: ui.storageGuardTitle || 'Memory & Conversation DB Guard',
+        close: closeLabels[resolvedLang] || 'Close',
+        summary: summaryText,
+        archiveRestartBtn: ui.storageArchiveRestartBtn || 'Archive & Restart',
+        enableAutoExitBtn: ui.storageGuardEnableAutoExitBtn || 'Enable Auto-Archive on Exit',
+        autoExitEnabledMsg: ui.storageAutoExitEnabledMsg || 'Auto-archive on exit enabled',
+        snooze24hBtn: ui.storageGuardSnooze24hBtn || 'Snooze 24h',
+        confirmDesc:
+          ui.storageArchiveRestartConfirmDesc ||
+          'Will save token ledger, close Antigravity gracefully, move finished subagents (>2h) without deleting any files, keep all main chats, and restart.',
+        cancelBtn: ui.uninstallCancelBtn || 'Cancel',
+        confirmBtn: ui.storageArchiveRestartConfirmBtn || 'Confirm Archive & Restart',
+        runningMsg: ui.storageArchiveRestartRunning || 'Saving token ledger & starting safe archiver...',
+        scheduledMsg: ui.storageArchiveRestartScheduled || 'Safe offline archive & restart scheduled.',
+        busyBlockedMsg: ui.storageGuardBusyMsg || 'AI or Swarm is running; retry when idle.',
+      },
+    });
+
+    const evalRes = await targetEntry.session
+      .send('Runtime.evaluate', { expression: expr, returnByValue: true }, 4000)
+      .catch(() => null);
+    const mounted = Boolean(evalRes?.result?.value?.mounted);
+    if (mounted) {
+      this._storageGuardBannerShownAt = now;
+      if (!state.firstPromptShownAt) {
+        this._writeStorageGuardState({ firstPromptShownAt: now });
+      }
+    }
+    return { shown: mounted, lang: resolvedLang, health, idleState };
+  }
+
+  async _maybeRunAutoArchiveOnExit(_testOverrides = null) {
+    if (this._autoArchiveInFlight || this._autoArchiveExitRan) return { ran: false, reason: 'already-ran' };
+    if (this._archiveScheduledAt > 0 && Date.now() - this._archiveScheduledAt < 60000) {
+      return { ran: false, reason: 'manual-archive-scheduled' };
+    }
+    if (!this._sawLiveHost && !_testOverrides?.forceSawHost) return { ran: false, reason: 'no-prior-host' };
+    const enabled =
+      _testOverrides?.autoArchiveOnExit !== undefined
+        ? Boolean(_testOverrides.autoArchiveOnExit)
+        : this._getAutoArchiveOnExitSetting();
+    if (!enabled) return { ran: false, reason: 'disabled-by-default' };
+
+    this._autoArchiveInFlight = true;
+    try {
+      const arch = conversationArchive;
+      const sleepFn =
+        typeof _testOverrides?.sleep === 'function' ? _testOverrides.sleep : (ms) => new Promise((r) => setTimeout(r, ms));
+      const checkRunning =
+        typeof _testOverrides?.checkRunning === 'function' ? _testOverrides.checkRunning : arch.isLanguageServerRunning;
+      const safeRunning = () => {
+        try { return Boolean(checkRunning()); } catch { return true; }
+      };
+      const settleMs = Number.isFinite(_testOverrides?.settleMs) ? _testOverrides.settleMs : 4000;
+      const recheckGapMs = Number.isFinite(_testOverrides?.recheckGapMs) ? _testOverrides.recheckGapMs : 1500;
+
+      // 首次静置 3~5 秒并确认宿主与 language_server 已完全退出
+      if (settleMs > 0) await sleepFn(settleMs);
+      if (safeRunning() || (!_testOverrides && discoverActivePort(this.overridePort, this.portFile))) {
+        return { ran: false, reason: 'host-still-running' };
+      }
+      // 二次 fail-closed 复检
+      if (recheckGapMs > 0) await sleepFn(recheckGapMs);
+      if (safeRunning() || (!_testOverrides && discoverActivePort(this.overridePort, this.portFile))) {
+        return { ran: false, reason: 'host-restarted' };
+      }
+
+      const convDir = _testOverrides?.convDir || arch.getDefaultConversationsDir();
+      const archiveDir = _testOverrides?.archiveDir || arch.getDefaultArchiveDir();
+      // 独立 Daemon 退出归档前同步把内存中最新发现的子代理/摘要增量合并落盘，避免新子代理落入 unknown 漏归档
+      this._flushCatalogIndexFromMemory(arch, convDir, archiveDir);
+      const res = arch.archiveConversations({
+        convDir,
+        archiveDir,
+        mode: 'subagents',
+        subagentMaxAgeHours: arch.AUTO_ARCHIVE_SUBAGENT_MAX_AGE_HOURS,
+        checkRunning: safeRunning,
+      });
+      arch.writeLastArchiveResult(archiveDir, { ...res, action: 'auto-exit-archive', relaunched: false });
+      this._autoArchiveExitRan = true;
+      this._sawLiveHost = false;
+      this._storageHealthCache = null;
+      this._storageHealthAt = 0;
+      this.log(`[storage-guard] Auto-archive on exit finished (ok=${res.ok}, moved=${res.movedCount || 0}, mb=${res.movedMb || 0})`);
+      return { ran: true, result: res };
+    } catch (err) {
+      this.log(`[storage-guard] Auto-archive on exit error: ${sanitizeSecretText(err?.message || err)}`);
+      return { ran: false, reason: 'error', error: sanitizeSecretText(err?.message || err) };
+    } finally {
+      this._autoArchiveInFlight = false;
+    }
+  }
+
   async _handleUninstallAction(rawInput = {}) {
     if (rawInput?.confirm !== true) {
       return { ok: false, action: 'uninstall', error: 'confirmation_required' };
     }
+    this._isUninstalling = true;
     const purgeData = rawInput?.purgeData === true;
     const ov = rawInput?._testOverrides && typeof rawInput._testOverrides === 'object' ? rawInput._testOverrides : null;
     const platform = ov?.platform || process.platform;
@@ -2749,8 +3594,35 @@ export class PrismDaemon {
             : {};
       rawInput = { ...extra, action: rawInput };
     }
-    if (rawInput?.action === 'storage-health' || rawInput?.action === 'prepare-archive') {
-      return this._handleStorageAction(rawInput.action);
+    if (
+      rawInput?.action === 'storage-health' ||
+      rawInput?.action === 'prepare-archive' ||
+      rawInput?.action === 'archive-and-restart'
+    ) {
+      return this._handleStorageAction(rawInput.action, rawInput?._testOverrides || null, rawInput);
+    }
+    if (rawInput?.action === 'restore-archive') {
+      return this._handleRestoreArchiveAction(rawInput, rawInput?._testOverrides || null);
+    }
+    if (rawInput?.action === 'storage-snooze') {
+      return this._handleStorageSnoozeAction(rawInput);
+    }
+    if (rawInput?.action === 'storage-auto-exit') {
+      const enabled = rawInput?.autoArchiveOnExit === true || rawInput?.value === true || rawInput?.value === 'on';
+      const updated = this.updateConfigSetting('autoArchiveOnExit', enabled);
+      if (updated) {
+        this._storageHealthCache = null;
+        this._storageHealthAt = 0;
+        await this.broadcastConfigRefresh().catch(() => {});
+      }
+      return { ok: Boolean(updated), action: 'storage-auto-exit', autoArchiveOnExit: enabled };
+    }
+    if (
+      rawInput?.action === 'gomemlimit-status' ||
+      rawInput?.action === 'gomemlimit-set' ||
+      rawInput?.action === 'gomemlimit-clear'
+    ) {
+      return this._handleGoMemLimitAction(rawInput.action, rawInput);
     }
     if (rawInput?.action === 'uninstall') {
       return this._handleUninstallAction(rawInput);
@@ -4599,6 +5471,7 @@ export class PrismDaemon {
         const parentId = String(
           sum.parentConversationId ||
             meta.parentConversationId ||
+            sum.parentId ||
             sum.parentCascadeId ||
             sum.parentTrajectoryId ||
             meta.parentCascadeId ||
@@ -4608,13 +5481,19 @@ export class PrismDaemon {
         const rootId = String(
           sum.rootConversationId || meta.rootConversationId || sum.rootCascadeId || meta.rootCascadeId || ''
         ).trim();
+        const lowId = id.toLowerCase();
         const subagent = Boolean(
           (typeof usageCore?.isSubagentSummary === 'function' && usageCore.isSubagentSummary(sum)) ||
-            parentId ||
+            (parentId && parentId.toLowerCase() !== lowId) ||
+            (rootId && rootId.toLowerCase() !== lowId) ||
             Number(meta.nestingDepth || sum.nestingDepth || 0) > 0 ||
-            sum.isSubagent ||
-            meta.isSubagent ||
-            meta.subagentName
+            sum.subagent === true ||
+            sum.isSubagent === true ||
+            meta.isSubagent === true ||
+            sum.subagentName ||
+            meta.subagentName ||
+            sum.swarmId ||
+            meta.swarmId
         );
         const stepCount = Math.max(0, Number(sum.stepCount ?? sum.numTotalSteps ?? 0) || 0);
         const lastModifiedSec = toSec(sum.lastModifiedTime || sum.modifiedAt || sum.updatedAt);
@@ -4672,23 +5551,91 @@ export class PrismDaemon {
         const allowLocalDiskScan = scopeKey === 'local' && (!entry || entry._usageScopeVerified === true);
         if (allowLocalDiskScan) {
           try {
+            const diskCache = this._getUsageDiskCacheScope(scopeKey, false);
             const localRes = await this._discoverLocalAppConversations();
+            const coldCandidates = [];
             for (const localEntry of localRes?.conversations || []) {
               const lid = String(localEntry?.id || '').toLowerCase();
-              if (!GUID_RE.test(lid) || byId.has(lid)) continue;
-              // 直接复用 discoverLocalConversations 并发 lstat 返回的 mtimeMs，省去二次串行 lstat
-              const rawMtimeMs = Number.isFinite(localEntry?.dbMtimeMs)
+              if (!GUID_RE.test(lid)) continue;
+              // 严格以主 .db 的 mtime 与 size 作指纹（绝不看 .db-shm），防重启刷 mtime 穿透缓存
+              const hasDbMtime = Number.isFinite(localEntry?.dbMtimeMs) && localEntry.dbMtimeMs > 0;
+              const rawMtimeMs = hasDbMtime
                 ? localEntry.dbMtimeMs
                 : Number.isFinite(localEntry?.mtimeMs)
                 ? localEntry.mtimeMs
                 : 0;
               const mtimeSec = rawMtimeMs > 0 ? Math.floor(rawMtimeMs / 1000) : 0;
+              const dbSize = Number.isFinite(localEntry?.dbSize) && localEntry.dbSize > 0 ? Math.floor(localEntry.dbSize) : 0;
               const knownSub = subMap?.get(lid) || null;
+              const diskHit = diskCache.get(lid) || null;
+
+              const diskUnchanged = Boolean(
+                diskHit &&
+                  diskHit.record?.days &&
+                  ((diskHit.dbMtimeSec > 0 &&
+                    diskHit.dbSize > 0 &&
+                    mtimeSec > 0 &&
+                    dbSize > 0 &&
+                    diskHit.dbMtimeSec === mtimeSec &&
+                    diskHit.dbSize === dbSize) ||
+                    (dbSize === 0 && diskHit.lastModifiedSec > 0 && mtimeSec > 0 && diskHit.lastModifiedSec === mtimeSec) ||
+                    (!diskHit.dbSize && diskHit.lastModifiedSec > 0 && mtimeSec > 0 && mtimeSec <= diskHit.lastModifiedSec))
+              );
+
+              const existingItem = byId.get(lid);
+              if (existingItem) {
+                // v2.34+ searchConversations/Redux 摘要常返回 stepCount:0：为其补齐主 .db 指纹并直接回填缓存步数，根除缓存穿透
+                if (mtimeSec > 0 && !existingItem.dbMtimeSec) existingItem.dbMtimeSec = mtimeSec;
+                if (dbSize > 0 && !existingItem.dbSize) existingItem.dbSize = dbSize;
+                const sameRpcMod = Boolean(
+                  diskHit &&
+                    diskHit.record?.days &&
+                    existingItem.lastModifiedSec > 0 &&
+                    diskHit.lastModifiedSec === existingItem.lastModifiedSec &&
+                    (diskHit.stepCount > 0 || hasRealUsageRecord(diskHit.record))
+                );
+                if (existingItem.stepCount === 0 && (diskUnchanged || sameRpcMod)) {
+                  existingItem.stepCount = Math.max(0, Number(diskHit.stepCount || diskHit.record?.stepCount || 0));
+                  existingItem.diskUnchanged = true;
+                }
+                continue;
+              }
+
+              if (diskUnchanged) {
+                // 文件未变：直接用 diskCache 中的真实 stepCount 与 lastModifiedSec 回填，0 穿透、0 GetCascadeTrajectory RPC
+                const cachedItem = {
+                  id: lid,
+                  stepCount: Math.max(0, Number(diskHit.stepCount || diskHit.record?.stepCount || 0)),
+                  lastModifiedSec: Number(diskHit.lastModifiedSec || mtimeSec),
+                  createdSec: Number(diskHit.lastModifiedSec || mtimeSec),
+                  ...(mtimeSec > 0 ? { dbMtimeSec: mtimeSec } : {}),
+                  ...(dbSize > 0 ? { dbSize } : {}),
+                  diskUnchanged: true,
+                  subagent: Boolean(knownSub || diskHit.record?.subagent),
+                  ...(knownSub?.parentId || diskHit.record?.parentId ? { parentId: knownSub?.parentId || diskHit.record?.parentId } : {}),
+                  ...(knownSub?.workspace || diskHit.record?.workspace ? { workspace: knownSub?.workspace || diskHit.record?.workspace } : {}),
+                  title: '',
+                  status: '',
+                };
+                list.push(cachedItem);
+                byId.set(lid, cachedItem);
+              } else {
+                coldCandidates.push({ lid, mtimeSec, dbSize, knownSub });
+              }
+            }
+            // 取消首页无上限全盘唤醒：未缓存沉睡 .db 按最新时间排序，单轮仅放行前 LOCAL_COLD_WAKEUP_CAP 个，其余标 dormant 不强唤 LS
+            coldCandidates.sort((a, b) => (b.mtimeSec || 0) - (a.mtimeSec || 0));
+            for (let i = 0; i < coldCandidates.length; i += 1) {
+              const { lid, mtimeSec, dbSize, knownSub } = coldCandidates[i];
+              const isDormant = i >= LOCAL_COLD_WAKEUP_CAP;
               const localItem = {
                 id: lid,
                 stepCount: 0,
                 lastModifiedSec: mtimeSec,
                 createdSec: mtimeSec,
+                ...(mtimeSec > 0 ? { dbMtimeSec: mtimeSec } : {}),
+                ...(dbSize > 0 ? { dbSize } : {}),
+                ...(isDormant ? { dormant: true } : {}),
                 subagent: Boolean(knownSub),
                 ...(knownSub?.parentId ? { parentId: knownSub.parentId } : {}),
                 ...(knownSub?.workspace ? { workspace: knownSub.workspace } : {}),
@@ -4778,10 +5725,22 @@ export class PrismDaemon {
       if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return m;
       for (const [k, v] of Object.entries(obj)) {
         if (m.size >= USAGE_CACHE_MAX_PER_SCOPE) break;
-        if (GUID_RE.test(k) && v && v.record?.days && Number(v.stepCount) > 0 && Number(v.lastModifiedSec) > 0) {
+        const sc = Number(v?.stepCount || 0);
+        const lm = Number(v?.lastModifiedSec || 0);
+        const dbMtimeSec = Number(v?.dbMtimeSec || 0);
+        const dbSize = Number(v?.dbSize || 0);
+        if (
+          GUID_RE.test(k) &&
+          v &&
+          v.record?.days &&
+          lm > 0 &&
+          (sc > 0 || (dbMtimeSec > 0 && dbSize > 0) || hasRealUsageRecord(v.record))
+        ) {
           m.set(k.toLowerCase(), {
-            stepCount: Number(v.stepCount),
-            lastModifiedSec: Number(v.lastModifiedSec),
+            stepCount: Math.max(0, sc),
+            lastModifiedSec: lm,
+            ...(dbMtimeSec > 0 ? { dbMtimeSec } : {}),
+            ...(dbSize > 0 ? { dbSize } : {}),
             record: v.record,
           });
         }
@@ -4840,20 +5799,40 @@ export class PrismDaemon {
     return bucket || new Map();
   }
 
-  _putUsageDiskCache(id, stepCount, lastModifiedSec, record, scopeKey = 'local') {
+  _putUsageDiskCache(id, stepCount, lastModifiedSec, record, scopeKey = 'local', diskMeta = null) {
     if (!id || !GUID_RE.test(id) || !record?.days) return;
     const sc = Math.max(0, Number(stepCount || record.stepCount || 0));
     const lm = Math.max(0, Number(lastModifiedSec || record.lastModifiedSec || 0));
-    if (sc <= 0 || lm <= 0) return;
+    const dbMtimeSec = Math.max(0, Number(diskMeta?.dbMtimeSec || record.dbMtimeSec || 0));
+    const dbSize = Math.max(0, Number(diskMeta?.dbSize || record.dbSize || 0));
+    if (lm <= 0 || (sc <= 0 && !(dbMtimeSec > 0 && dbSize > 0) && !hasRealUsageRecord(record))) return;
     const safeScope = normalizeUsageScopeKey(scopeKey) || 'local';
     const bucket = this._getUsageDiskCacheScope(safeScope, true);
     const key = id.toLowerCase();
     const existing = bucket.get(key);
-    // 保护：绝不用空统计覆盖已有真实非空统计
+    // 保护：绝不用空统计覆盖已有真实非空统计；若仅补充主 .db 指纹则保留原真实记录
     if (existing && hasRealUsageRecord(existing.record) && !hasRealUsageRecord(record)) {
+      if ((dbMtimeSec > 0 && existing.dbMtimeSec !== dbMtimeSec) || (dbSize > 0 && existing.dbSize !== dbSize)) {
+        bucket.set(key, {
+          ...existing,
+          ...(dbMtimeSec > 0 ? { dbMtimeSec } : {}),
+          ...(dbSize > 0 ? { dbSize } : {}),
+        });
+        this._usageCacheDirty = true;
+      }
       return;
     }
-    bucket.set(key, { stepCount: sc, lastModifiedSec: lm, record });
+    const nextRecord =
+      dbMtimeSec > 0 || dbSize > 0
+        ? { ...record, ...(dbMtimeSec > 0 ? { dbMtimeSec } : {}), ...(dbSize > 0 ? { dbSize } : {}) }
+        : record;
+    bucket.set(key, {
+      stepCount: sc,
+      lastModifiedSec: lm,
+      ...(dbMtimeSec > 0 ? { dbMtimeSec } : existing?.dbMtimeSec > 0 ? { dbMtimeSec: existing.dbMtimeSec } : {}),
+      ...(dbSize > 0 ? { dbSize } : existing?.dbSize > 0 ? { dbSize: existing.dbSize } : {}),
+      record: nextRecord,
+    });
     this._usageCacheDirty = true;
     if (!this._usageCacheTimer) {
       this._usageCacheTimer = setTimeout(() => {
@@ -5004,12 +5983,22 @@ export class PrismDaemon {
 
       if (action === 'list-summaries') {
         const cachedRecords = [];
+        const presentIds = new Set();
         for (const s of backendPack.list) {
           const sid = String(s?.id || '').trim();
           if (!sid) continue;
-          const hit = diskCache.get(sid.toLowerCase());
+          const lowerId = sid.toLowerCase();
+          presentIds.add(lowerId);
+          const hit = diskCache.get(lowerId);
           if (hit?.record?.days) {
             cachedRecords.push({ id: sid, mode: 'full', record: hit.record });
+          }
+        }
+        // PR #41 (Co-authored-by: @OyatsuSuki): 同步返回同 scopeKey 下已删除/已归档但有真实消耗的历史账本记录（零 RPC、严格 scope 隔离）
+        for (const [key, hit] of diskCache.entries()) {
+          if (presentIds.has(key)) continue;
+          if (hit?.record?.days && hasRealUsageRecord(hit.record)) {
+            cachedRecords.push({ id: hit.record.cascadeId || key, mode: 'full', archived: true, record: hit.record });
           }
         }
         return { ok: true, scopeKey, records: cachedRecords, summaries: backendPack.list };
@@ -5030,6 +6019,9 @@ export class PrismDaemon {
         const stepCount = Math.max(0, Number(item.stepCount || backendSum?.stepCount || 0));
         const lastModifiedSec = Math.max(0, Number(item.lastModifiedSec || backendSum?.lastModifiedSec || 0));
         const createdSec = Math.max(0, Number(item.createdSec || backendSum?.createdSec || lastModifiedSec || 0));
+        const itemDbMtimeSec = Math.max(0, Number(item.dbMtimeSec || backendSum?.dbMtimeSec || 0));
+        const itemDbSize = Math.max(0, Number(item.dbSize || backendSum?.dbSize || 0));
+        const diskMeta = itemDbMtimeSec > 0 || itemDbSize > 0 ? { dbMtimeSec: itemDbMtimeSec, dbSize: itemDbSize } : null;
         const subagent = Boolean(item.subagent || backendSum?.subagent);
         const parentId = String(item.parentId || backendSum?.parentId || '').trim();
         const rootId = String(item.rootId || backendSum?.rootId || '').trim();
@@ -5039,8 +6031,17 @@ export class PrismDaemon {
           : backendSum?.workspaces || [];
         const gmOffset = Math.max(0, Math.floor(Number(item.gmOffset || 0)));
         const diskHit = diskCache.get(id.toLowerCase()) || null;
-        if (!opts?.force && stepCount > 0 && lastModifiedSec > 0) {
-          if (diskHit && diskHit.stepCount === stepCount && diskHit.lastModifiedSec === lastModifiedSec && diskHit.record?.days) {
+        if (!opts?.force && diskHit && diskHit.record?.days) {
+          const hitByStepAndMtime =
+            stepCount > 0 && lastModifiedSec > 0 && diskHit.stepCount === stepCount && diskHit.lastModifiedSec === lastModifiedSec;
+          const hitByDbFingerprint =
+            itemDbMtimeSec > 0 && itemDbSize > 0 && diskHit.dbMtimeSec === itemDbMtimeSec && diskHit.dbSize === itemDbSize;
+          const hitByLegacyZeroStep =
+            stepCount === 0 &&
+            lastModifiedSec > 0 &&
+            diskHit.lastModifiedSec === lastModifiedSec &&
+            (diskHit.stepCount > 0 || hasRealUsageRecord(diskHit.record));
+          if (hitByStepAndMtime || hitByDbFingerprint || hitByLegacyZeroStep) {
             records.push({
               id,
               mode: 'full',
@@ -5102,10 +6103,12 @@ export class PrismDaemon {
               if (workspace && deltaRec && typeof deltaRec === 'object' && !deltaRec.workspace) deltaRec.workspace = workspace;
               if (parentId && deltaRec && typeof deltaRec === 'object' && !deltaRec.parentId) deltaRec.parentId = parentId;
               if (allowDiskCache && diskHit?.record?.days && typeof usageCore.mergeUsageRecordDelta === 'function') {
+                const effSteps = Math.max(stepCount, realStepCount);
+                const effModSec = Math.max(lastModifiedSec, realLastModSec);
                 const merged = usageCore.mergeUsageRecordDelta(diskHit.record, deltaRec, {
                   cascadeId: id,
-                  stepCount: Number(item.stepCount || realStepCount),
-                  lastModifiedSec: Number(item.lastModifiedSec || realLastModSec),
+                  stepCount: effSteps,
+                  lastModifiedSec: effModSec,
                   gmCount: totalGm,
                   subagent,
                   workspace,
@@ -5113,10 +6116,11 @@ export class PrismDaemon {
                 });
                 this._putUsageDiskCache(
                   id,
-                  Number(item.stepCount || realStepCount),
-                  Number(item.lastModifiedSec || realLastModSec),
+                  effSteps,
+                  effModSec,
                   merged,
-                  scopeKey
+                  scopeKey,
+                  diskMeta
                 );
               }
               records.push({
@@ -5134,13 +6138,16 @@ export class PrismDaemon {
               const fullRec = usageCore.analyzeTrajectoryForUsage(fullTraj, enrichedStub, id);
               if (workspace && fullRec && typeof fullRec === 'object' && !fullRec.workspace) fullRec.workspace = workspace;
               if (parentId && fullRec && typeof fullRec === 'object' && !fullRec.parentId) fullRec.parentId = parentId;
+              if (diskMeta?.dbMtimeSec > 0 && fullRec && typeof fullRec === 'object') fullRec.dbMtimeSec = diskMeta.dbMtimeSec;
+              if (diskMeta?.dbSize > 0 && fullRec && typeof fullRec === 'object') fullRec.dbSize = diskMeta.dbSize;
               if (allowDiskCache) {
                 this._putUsageDiskCache(
                   id,
-                  Number(item.stepCount || realStepCount),
-                  Number(item.lastModifiedSec || realLastModSec),
+                  Math.max(stepCount, realStepCount),
+                  Math.max(lastModifiedSec, realLastModSec),
                   fullRec,
-                  scopeKey
+                  scopeKey,
+                  diskMeta
                 );
               }
               records.push({
@@ -5174,10 +6181,13 @@ export class PrismDaemon {
             if (totalGm !== null && totalGm < gmOffset) {
               // Rewound/reverted conversation: rebuild cleanly from offset 0
               const fullMeta = await this._fetchFullGeneratorMetadata(client, id);
-              const fullRec = usageCore.analyzeTrajectoryForUsage(fullMeta, summaryStub, id);
+              const realStepCount = Math.max(stepCount, Number(fullMeta?.numTotalSteps || 0));
+              const fullRec = usageCore.analyzeTrajectoryForUsage(fullMeta, { ...summaryStub, stepCount: realStepCount }, id);
               if (workspace && fullRec && typeof fullRec === 'object' && !fullRec.workspace) fullRec.workspace = workspace;
               if (parentId && fullRec && typeof fullRec === 'object' && !fullRec.parentId) fullRec.parentId = parentId;
-              if (allowDiskCache) this._putUsageDiskCache(id, stepCount, lastModifiedSec, fullRec, scopeKey);
+              if (diskMeta?.dbMtimeSec > 0 && fullRec && typeof fullRec === 'object') fullRec.dbMtimeSec = diskMeta.dbMtimeSec;
+              if (diskMeta?.dbSize > 0 && fullRec && typeof fullRec === 'object') fullRec.dbSize = diskMeta.dbSize;
+              if (allowDiskCache) this._putUsageDiskCache(id, realStepCount, lastModifiedSec, fullRec, scopeKey, diskMeta);
               records.push({
                 id,
                 mode: 'full',
@@ -5219,7 +6229,7 @@ export class PrismDaemon {
                   workspace,
                   parentId,
                 });
-                this._putUsageDiskCache(id, stepCount, lastModifiedSec, merged, scopeKey);
+                this._putUsageDiskCache(id, stepCount, lastModifiedSec, merged, scopeKey, diskMeta);
               }
               records.push({
                 id,
@@ -5235,10 +6245,13 @@ export class PrismDaemon {
             }
           } else {
             const fullMeta = await this._fetchFullGeneratorMetadata(client, id);
-            const fullRec = usageCore.analyzeTrajectoryForUsage(fullMeta, summaryStub, id);
+            const realStepCount = Math.max(stepCount, Number(fullMeta?.numTotalSteps || 0));
+            const fullRec = usageCore.analyzeTrajectoryForUsage(fullMeta, { ...summaryStub, stepCount: realStepCount }, id);
             if (workspace && fullRec && typeof fullRec === 'object' && !fullRec.workspace) fullRec.workspace = workspace;
             if (parentId && fullRec && typeof fullRec === 'object' && !fullRec.parentId) fullRec.parentId = parentId;
-            if (allowDiskCache) this._putUsageDiskCache(id, stepCount, lastModifiedSec, fullRec, scopeKey);
+            if (diskMeta?.dbMtimeSec > 0 && fullRec && typeof fullRec === 'object') fullRec.dbMtimeSec = diskMeta.dbMtimeSec;
+            if (diskMeta?.dbSize > 0 && fullRec && typeof fullRec === 'object') fullRec.dbSize = diskMeta.dbSize;
+            if (allowDiskCache) this._putUsageDiskCache(id, realStepCount, lastModifiedSec, fullRec, scopeKey, diskMeta);
             records.push({
               id,
               mode: 'full',
@@ -5277,6 +6290,10 @@ export class PrismDaemon {
     this._selfConfigWriteUntil = Date.now() + 650;
     writeFileAtomicSync(cfgPath, JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
     this.cdp?.invalidateConfigCache?.();
+    if (Object.prototype.hasOwnProperty.call(expandedPatch, 'autoArchiveOnExit')) {
+      this._storageHealthCache = null;
+      this._storageHealthAt = 0;
+    }
     this._configSeq += 1;
     return true;
   }
@@ -6385,6 +7402,7 @@ export class PrismDaemon {
             ? { ...parsed.payload }
             : {};
       delete inputPayload._testOverrides;
+      delete inputPayload.forceBusy;
       if (inputPayload.confirm === undefined && parsed?.confirm !== undefined) inputPayload.confirm = parsed.confirm;
       if (inputPayload.purgeData === undefined && parsed?.purgeData !== undefined) inputPayload.purgeData = parsed.purgeData;
       if (inputPayload.force === undefined && parsed?.force !== undefined) inputPayload.force = parsed.force;
@@ -6393,6 +7411,13 @@ export class PrismDaemon {
       if (inputPayload.updateChannel === undefined && parsed?.updateChannel !== undefined) inputPayload.updateChannel = parsed.updateChannel;
       if (inputPayload.version === undefined && parsed?.version !== undefined) inputPayload.version = parsed.version;
       if (inputPayload.version === undefined && typeof parsed?.input === 'string') inputPayload.version = parsed.input;
+      if (inputPayload.value === undefined && parsed?.value !== undefined) inputPayload.value = parsed.value;
+      if (inputPayload.batchName === undefined && parsed?.batchName !== undefined) inputPayload.batchName = parsed.batchName;
+      if (inputPayload.hours === undefined && parsed?.hours !== undefined) inputPayload.hours = parsed.hours;
+      if (inputPayload.listOnly === undefined && parsed?.listOnly !== undefined) inputPayload.listOnly = parsed.listOnly;
+      if (inputPayload.autoArchiveOnExit === undefined && parsed?.autoArchiveOnExit !== undefined) {
+        inputPayload.autoArchiveOnExit = parsed.autoArchiveOnExit;
+      }
 
       const result = await this.executeRepoAction({ ...inputPayload, action });
       if (reqId !== null) {
@@ -8390,7 +9415,7 @@ export class PrismDaemon {
     this._pendingTick = false;
     try {
       if (!this.isCurrentOwner()) {
-        await this.stop(false);
+        await this.stop(false, { skipAutoArchive: true });
         return { attached: 0, superseded: true };
       }
 
@@ -8410,6 +9435,9 @@ export class PrismDaemon {
         if (this.sessions.size === 0 && this._prevAttachedCount > 0) {
           this._disconnectedAllSessions = true;
           this._prevAttachedCount = 0;
+        }
+        if (this.sessions.size === 0 && this._sawLiveHost && this._getAutoArchiveOnExitSetting() && !this._autoArchiveInFlight && !this._autoArchiveExitRan) {
+          void this._maybeRunAutoArchiveOnExit().catch(() => {});
         }
         await this._handleMissingCdpPort();
         return { attached: 0, port: null };
@@ -8441,7 +9469,12 @@ export class PrismDaemon {
 
         if (liveEntries.length > 0) {
           await Promise.allSettled(liveEntries.map((entry) => this.verifyAndHealEntry(entry)));
-          if (this.sessions.size === 0 && this._prevAttachedCount > 0) {
+          if (this.sessions.size > 0) {
+            this._sawLiveHost = true;
+            if (!(this._archiveScheduledAt > 0 && Date.now() - this._archiveScheduledAt < 60000)) {
+              this._autoArchiveExitRan = false;
+            }
+          } else if (this._prevAttachedCount > 0) {
             this._disconnectedAllSessions = true;
           }
           this._prevAttachedCount = this.sessions.size;
@@ -8476,6 +9509,9 @@ export class PrismDaemon {
           if (this._prevAttachedCount > 0) {
             this._disconnectedAllSessions = true;
             this._prevAttachedCount = 0;
+          }
+          if (this._sawLiveHost && this._getAutoArchiveOnExitSetting() && !this._autoArchiveInFlight && !this._autoArchiveExitRan) {
+            void this._maybeRunAutoArchiveOnExit().catch(() => {});
           }
           await this._handleMissingCdpPort();
         }
@@ -8585,6 +9621,12 @@ export class PrismDaemon {
 
       // 盲区 3：全部窗口断开后重连，或活跃窗口数从 0 恢复时，立即复位 45 分钟退避并补检快捷方式
       const nowAttachedCount = this.sessions.size;
+      if (nowAttachedCount > 0) {
+        this._sawLiveHost = true;
+        if (!(this._archiveScheduledAt > 0 && Date.now() - this._archiveScheduledAt < 60000)) {
+          this._autoArchiveExitRan = false;
+        }
+      }
       if (nowAttachedCount === 0) {
         if (this._prevAttachedCount > 0 || prevSessionCount > 0) {
           this._disconnectedAllSessions = true;
@@ -8869,13 +9911,83 @@ export class PrismDaemon {
       }, this._updateCheckIntervalMs);
       this._updateIntervalTimer?.unref?.();
     }
+
+    if (this._enableStorageGuardTimer) {
+      this._storageGuardInitialTimer = setTimeout(() => {
+        this._storageGuardInitialTimer = null;
+        if (this.running) {
+          void this._checkStorageGuardAndNotify().catch(() => {});
+        }
+      }, this._storageGuardInitialDelayMs);
+      this._storageGuardInitialTimer?.unref?.();
+
+      this._storageGuardIntervalTimer = setInterval(() => {
+        if (this.running) {
+          void this._checkStorageGuardAndNotify().catch(() => {});
+        }
+      }, this._storageGuardIntervalMs);
+      this._storageGuardIntervalTimer?.unref?.();
+    }
   }
 
-  async stop(cleanPageDom = false) {
+  async stop(cleanPageDom = false, _testOverrides = null) {
     this._flushUsageDiskCache();
+    // 原生 sidecar 随宿主退出时：若开启了退出自动归档且非卸载动作，零 await 同步落盘内存目录索引并同步派生纯等待脱离任务，
+    // 在宿主与 language_server 彻底退出 4s 后静默归档（杜绝异步 import 竞态导致进程退出前尚未完成派生）
+    const autoArchiveEnabled =
+      _testOverrides?.autoArchiveOnExit !== undefined
+        ? Boolean(_testOverrides.autoArchiveOnExit)
+        : this._getAutoArchiveOnExitSetting();
+    const hasRecentManualArchive = this._archiveScheduledAt > 0 && Date.now() - this._archiveScheduledAt < 60000;
+    if (
+      !cleanPageDom &&
+      !_testOverrides?.skipAutoArchive &&
+      !this._isUninstalling &&
+      this._sawLiveHost &&
+      !this._autoArchiveExitRan &&
+      !this._autoArchiveInFlight &&
+      !hasRecentManualArchive &&
+      autoArchiveEnabled
+    ) {
+      this._autoArchiveExitRan = true;
+      try {
+        const arch = _testOverrides?.arch || conversationArchive;
+        const convDir = _testOverrides?.convDir || arch.getDefaultConversationsDir();
+        const archiveDir = _testOverrides?.archiveDir || arch.getDefaultArchiveDir();
+        // 零阻塞同步将内存中已发现的子代理/摘要/侧栏白名单增量合并落盘，避免退出归档时新子代理落入 unknown
+        this._flushCatalogIndexFromMemory(arch, convDir, archiveDir);
+        const scriptPath = path.join(this.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
+        arch.spawnDetachedArchiveTask(
+          {
+            action: 'auto-exit-archive',
+            ...(_testOverrides?.convDir ? { convDir } : {}),
+            ...(_testOverrides?.archiveDir ? { archiveDir } : {}),
+            gracefulQuit: false,
+            relaunch: false,
+            mode: 'subagents',
+            subagentMaxAgeHours: arch.AUTO_ARCHIVE_SUBAGENT_MAX_AGE_HOURS,
+            settleMs: 4000,
+            waitExitTimeoutMs: 30000,
+          },
+          {
+            scriptPath,
+            spawnHook: _testOverrides?.spawnHook,
+            disableWmiBreakaway: Boolean(_testOverrides?.disableWmiBreakaway),
+          }
+        );
+      } catch {}
+    }
     this._sidebarStopped = true;
     this._wallpaperStopped = true;
     this.running = false;
+    if (this._storageGuardInitialTimer) {
+      clearTimeout(this._storageGuardInitialTimer);
+      this._storageGuardInitialTimer = null;
+    }
+    if (this._storageGuardIntervalTimer) {
+      clearInterval(this._storageGuardIntervalTimer);
+      this._storageGuardIntervalTimer = null;
+    }
     if (this._updateInitialTimer) {
       clearTimeout(this._updateInitialTimer);
       this._updateInitialTimer = null;
@@ -9034,12 +10146,12 @@ if (isMainEntry(process.argv[1], __filename)) {
         } else {
           console.log(JSON.stringify({ ok: true, ...res }, null, 2));
         }
-        await daemon.stop(false);
+        await daemon.stop(false, { skipAutoArchive: true });
         process.exit(0);
       })
       .catch(async (err) => {
         console.error('[obsidian-prism daemon] error:', err.message);
-        await daemon.stop(false);
+        await daemon.stop(false, { skipAutoArchive: true });
         process.exitCode = 1;
       });
   } else {

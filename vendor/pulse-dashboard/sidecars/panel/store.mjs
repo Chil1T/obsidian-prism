@@ -81,6 +81,8 @@ export class MetricsStore {
     if (this.background && client.reader) client.reader.isBackgroundManaged = id => this.sessions.get(id)?.backgroundOnly === true;
     this.delegated = new DelegatedUsage(client, {
       owns,
+      maxAgents: 24,
+      refreshMs: 30000,
       onSource: async (scope, id, raw, options = {}) => {
         if (this.owned() && scope === this.storageScope() && this.onTrajectory && (!options.isCurrent || options.isCurrent() === true)) {
           await this.onTrajectory(scope, id, raw, options);

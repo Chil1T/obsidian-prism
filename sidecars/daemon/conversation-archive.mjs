@@ -21,25 +21,36 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const GUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const DB_FILE_RE = /^([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})\.db(?:-(wal|shm))?$/i;
 const BATCH_NAME_RE = /^batch-[0-9T-]+(?:-[a-f0-9]{8})?$/;
-const RUNNING_STATUS_RE = /RUNNING|IN_PROGRESS|ACTIVE/i;
+const RUNNING_STATUS_RE = /RUNNING|IN_PROGRESS|GENERATING|ACTIVE/i;
 const INDEX_FILENAME = '.last-catalog-index.json';
-const WARN_TOTAL_MB = 1024;
-const WARN_SUBAGENT_MB = 512;
+const LAST_ARCHIVE_RESULT_FILENAME = '.last-archive-result.json';
+const ACTIVE_ARCHIVE_TASK_FILENAME = '.archive-task-active.json';
+export const WARN_TOTAL_MB = 1536;
+export const WARN_SUBAGENT_MB = 512;
+export const WARN_LS_MEMORY_MB = 4096;
+export const AUTO_ARCHIVE_SUBAGENT_MAX_AGE_HOURS = 2;
 const DEFAULT_SUBAGENT_MAX_AGE_HOURS = 6;
 const DEFAULT_MAIN_MAX_AGE_DAYS = 14;
 const DEFAULT_KEEP_RECENT_MAIN = 20;
+const MAX_CATALOG_ENTRIES = 8000;
 const WIN_HOST_PROCESS_RE = /^(?:language_server[^"]*|antigravity|agy)\.exe$/i;
+const WIN_LS_ONLY_PROCESS_RE = /^language_server[^"]*\.exe$/i;
 const POSIX_LS_RE = /(?:^|\/)language_server(?:[^\s/]*)?(?:\s|$)/i;
 const POSIX_ANTIGRAVITY_APP_RE = /(?:^|\/)Antigravity(?:\s+Helper(?:\s+\([^)]+\))?)?\.app\/Contents\/MacOS\//i;
 const POSIX_HOST_ARGV0_RE = /^(?:["']?)(?:\S*\/)?(?:antigravity(?:\.appimage)?|agy)(?:["']?)(?:\s|$)/i;
 const POSIX_ELECTRON_APP_RE = /(?:^|\/)antigravity\/resources\/app/i;
 const POSIX_SELF_SCRIPT_RE = /(?:^|[\/\s"'])(?:conversation-archive\.mjs|archive-subagents\.(?:sh|command)|restore-latest-archive\.(?:sh|command))(?:["'\s]|$)/i;
+
+function isRunningTrajectoryStatus(status) {
+  if (status === 2 || status === '2' || status === 'CASCADE_RUN_STATUS_2') return true;
+  return RUNNING_STATUS_RE.test(String(status || ''));
+}
 
 export function getDefaultAntigravityDir(homeDir = os.homedir()) {
   return path.join(homeDir, '.gemini', 'antigravity');
@@ -262,17 +273,28 @@ function safeMoveFileSync(src, dst) {
   }
 }
 
-export function parseWindowsTasklistCsv(csvText) {
+export function parseWindowsTasklistCsv(csvText, { selfPid = process.pid } = {}) {
   const text = String(csvText || '').trim();
   if (!text) return true; // unexpected empty output -> fail-closed
   let parsedCount = 0;
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line) continue;
-    const m = /^\s*"([^"]+)"\s*,\s*"\d+",/.exec(line);
+    const m = /^\s*"([^"]+)"\s*,\s*"(\d+)",/.exec(line);
     if (!m) continue;
     parsedCount++;
-    if (WIN_HOST_PROCESS_RE.test(m[1])) {
+    const imageName = m[1];
+    const pid = Number(m[2]);
+    // 当无全局 node 而以 Antigravity.exe (ELECTRON_RUN_AS_NODE=1) 运行离线归档脚本时，排除自身 PID，绝不排除 language_server
+    if (
+      Number.isInteger(selfPid) &&
+      selfPid > 0 &&
+      pid === selfPid &&
+      !WIN_LS_ONLY_PROCESS_RE.test(imageName)
+    ) {
+      continue;
+    }
+    if (WIN_HOST_PROCESS_RE.test(imageName)) {
       return true;
     }
   }
@@ -329,7 +351,7 @@ export function isLanguageServerRunning({
         ['/NH', '/FO', 'CSV'],
         { encoding: 'utf8', windowsHide: true, timeout: 6000, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }
       );
-      return parseWindowsTasklistCsv(out);
+      return parseWindowsTasklistCsv(out, { selfPid });
     }
     const out = exec('ps', ['-eo', 'pid=,args='], {
       encoding: 'utf8',
@@ -341,6 +363,122 @@ export function isLanguageServerRunning({
   } catch {
     // Any process query failure (non-zero exit, ENOENT, timeout, ENOBUFS) fails closed (true)
     return true;
+  }
+}
+
+/**
+ * 只读解析 Windows tasklist /NH /FO CSV 中 language_server 进程内存占用（严格只读，零跨进程操作）。
+ */
+export function parseWindowsTasklistMemoryCsv(csvText) {
+  const text = String(csvText || '').trim();
+  if (!text) return { ok: false, totalMb: 0, processCount: 0, pids: [], processes: [] };
+  let parsedRows = 0;
+  let totalKb = 0;
+  const pids = [];
+  const processes = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const m = /^\s*"([^"]+)"\s*,\s*"(\d+)"\s*,\s*"[^"]*"\s*,\s*"[^"]*"\s*,\s*"([^"]+)"\s*$/.exec(line);
+    if (!m) continue;
+    parsedRows += 1;
+    const imageName = m[1];
+    const pid = Number(m[2]);
+    if (!WIN_LS_ONLY_PROCESS_RE.test(imageName)) continue;
+    const kbDigits = m[3].replace(/[^\d]/g, '');
+    const kb = kbDigits ? Number(kbDigits) : 0;
+    if (Number.isFinite(kb) && kb > 0) totalKb += kb;
+    if (Number.isInteger(pid) && pid > 0) pids.push(pid);
+    processes.push({ pid, name: imageName, mb: Number((kb / 1024).toFixed(1)) });
+  }
+  if (parsedRows === 0) return { ok: false, totalMb: 0, processCount: 0, pids: [], processes: [] };
+  return {
+    ok: true,
+    totalMb: Number((totalKb / 1024).toFixed(1)),
+    processCount: processes.length,
+    pids,
+    processes,
+  };
+}
+
+/**
+ * 只读解析 POSIX ps -eo pid=,rss=,args= 中 language_server 进程常驻内存占用（KB -> MB）。
+ */
+export function parsePosixPsRss(psText, { selfPid = process.pid, selfPpid = process.ppid } = {}) {
+  const text = String(psText || '').trim();
+  if (!text) return { ok: false, totalMb: 0, processCount: 0, pids: [], processes: [] };
+  let parsedRows = 0;
+  let totalKb = 0;
+  const pids = [];
+  const processes = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.+)$/.exec(rawLine);
+    if (!m) continue;
+    parsedRows += 1;
+    const pid = Number(m[1]);
+    const rssKb = Number(m[2]);
+    const cmd = m[3].trim();
+    if (pid === selfPid) continue;
+    if (
+      POSIX_SELF_SCRIPT_RE.test(cmd) &&
+      (pid === selfPpid || /^(?:["']?)(?:\S*\/)?(?:node|bash|sh|zsh|env)(?:["']?)(?:\s|$)/i.test(cmd))
+    ) {
+      continue;
+    }
+    if (!POSIX_LS_RE.test(cmd)) continue;
+    if (Number.isFinite(rssKb) && rssKb > 0) totalKb += rssKb;
+    if (Number.isInteger(pid) && pid > 0) pids.push(pid);
+    processes.push({ pid, name: 'language_server', mb: Number((rssKb / 1024).toFixed(1)) });
+  }
+  if (parsedRows === 0) return { ok: false, totalMb: 0, processCount: 0, pids: [], processes: [] };
+  return {
+    ok: true,
+    totalMb: Number((totalKb / 1024).toFixed(1)),
+    processCount: processes.length,
+    pids,
+    processes,
+  };
+}
+
+function defaultExecFileAsync(file, args, options) {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, options, (err, stdout) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve(String(stdout || ''));
+    });
+  });
+}
+
+/**
+ * 异步只读探测当前 language_server 进程内存占用（严禁 OpenProcess/EmptyWorkingSet/强杀，0 Google 风控）。
+ */
+export async function getLanguageServerMemoryStatsAsync({
+  platform = process.platform,
+  execAsync = defaultExecFileAsync,
+  selfPid = process.pid,
+  selfPpid = process.ppid,
+} = {}) {
+  try {
+    if (platform === 'win32') {
+      const out = await execAsync('tasklist.exe', ['/NH', '/FO', 'CSV'], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 6000,
+        maxBuffer: 8 * 1024 * 1024,
+      });
+      return parseWindowsTasklistMemoryCsv(out);
+    }
+    const out = await execAsync('ps', ['-eo', 'pid=,rss=,args='], {
+      encoding: 'utf8',
+      timeout: 5000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    return parsePosixPsRss(out, { selfPid, selfPpid });
+  } catch {
+    return { ok: false, totalMb: 0, processCount: 0, pids: [], processes: [] };
   }
 }
 
@@ -371,8 +509,48 @@ function parseSummaryTimeMs(raw) {
   return 0;
 }
 
-export function extractCatalogIndexFromSummaries(rawSummaries) {
+export function extractCatalogIndexFromSummaries(rawSummaries, extraSignals = null) {
   const map = {};
+  const protectedMainIds = new Set();
+  if (extraSignals && extraSignals.protectedMainIds) {
+    const src = extraSignals.protectedMainIds;
+    const iter = src instanceof Set || Array.isArray(src) ? src : Object.keys(src);
+    for (const raw of iter) {
+      const id = String(raw || '').trim().toLowerCase();
+      if (GUID_RE.test(id)) protectedMainIds.add(id);
+    }
+  }
+  const chapterTitleIds = new Set();
+  if (extraSignals && extraSignals.chapterTitleIds) {
+    const src = extraSignals.chapterTitleIds;
+    const iter = src instanceof Set || Array.isArray(src) ? src : Object.keys(src);
+    for (const raw of iter) {
+      const id = String(raw || '').trim().toLowerCase();
+      if (GUID_RE.test(id)) chapterTitleIds.add(id);
+    }
+  }
+  const discoveredSubs = new Map();
+  if (extraSignals && extraSignals.discoveredSubagents) {
+    const rawDisc = extraSignals.discoveredSubagents;
+    const pairs =
+      rawDisc instanceof Map
+        ? [...rawDisc.entries()]
+        : Array.isArray(rawDisc)
+          ? rawDisc.map((x) => (typeof x === 'string' ? [x, {}] : [x?.id || x?.cascadeId || '', x || {}]))
+          : typeof rawDisc === 'object'
+            ? Object.entries(rawDisc)
+            : [];
+    for (const [rawId, info] of pairs) {
+      const id = String(rawId || '').trim().toLowerCase();
+      if (!GUID_RE.test(id)) continue;
+      const pid = String(info?.parentId || info?.parentConversationId || '').trim().toLowerCase();
+      discoveredSubs.set(id, {
+        ...(GUID_RE.test(pid) && pid !== id ? { parentId: pid } : {}),
+        ...(Number(info?.lastModifiedMs) > 0 ? { lastModifiedMs: Number(info.lastModifiedMs) } : {}),
+      });
+    }
+  }
+
   const entries = Array.isArray(rawSummaries)
     ? rawSummaries.map((s) => [s?.id || s?.cascadeId || '', s])
     : Object.entries(rawSummaries || {});
@@ -386,6 +564,8 @@ export function extractCatalogIndexFromSummaries(rawSummaries) {
         s.parentId ||
         s.parentCascadeId ||
         meta.parentCascadeId ||
+        s.parentTrajectoryId ||
+        meta.parentTrajectoryId ||
         ''
     ).trim().toLowerCase();
     const rootId = String(
@@ -396,45 +576,129 @@ export function extractCatalogIndexFromSummaries(rawSummaries) {
         meta.rootCascadeId ||
         ''
     ).trim().toLowerCase();
-    const subagent = Boolean(
-      s.subagent ||
-        parentId ||
+    const swarmId = String(s.swarmId || meta.swarmId || '').trim();
+    const subagentName = String(s.subagentName || meta.subagentName || '').trim();
+    const explicitSubagent = Boolean(
+      s.subagent === true ||
+        (parentId && parentId !== id) ||
+        (rootId && rootId !== id) ||
         Number(meta.nestingDepth || s.nestingDepth || 0) > 0 ||
-        s.isSubagent ||
-        meta.isSubagent ||
-        meta.subagentName
+        s.isSubagent === true ||
+        meta.isSubagent === true ||
+        Boolean(subagentName) ||
+        Boolean(swarmId)
     );
+    const discInfo = discoveredSubs.get(id) || null;
+    const isProtectedMain = protectedMainIds.has(id) && !explicitSubagent;
+    const subagent = !isProtectedMain && (explicitSubagent || Boolean(discInfo && !chapterTitleIds.has(id)));
+    const resolvedParentId = parentId || discInfo?.parentId || '';
     const lastModifiedMs =
       parseSummaryTimeMs(s.lastModifiedTime) ||
       parseSummaryTimeMs(s.modifiedAt) ||
       parseSummaryTimeMs(s.updatedAt) ||
       parseSummaryTimeMs(s.createdTime) ||
-      0;
+      (discInfo?.lastModifiedMs || 0);
     map[id] = {
       subagent,
-      ...(parentId ? { parentId } : {}),
+      ...(isProtectedMain ? { protectedMain: true } : {}),
+      ...(resolvedParentId ? { parentId: resolvedParentId } : {}),
       ...(rootId ? { rootId } : {}),
-      status: String(s.status || ''),
+      status: String(s.status ?? ''),
       stepCount: Math.max(0, Number(s.stepCount ?? s.numTotalSteps ?? 0) || 0),
       title: String(s.summary || s.title || '').slice(0, 120),
       ...(lastModifiedMs > 0 ? { lastModifiedMs } : {}),
     };
   }
+
+  // 补充写入通过主对话 invokeSubagent / delegatedConversations 发现但未出现在 Redux 摘要里的子代理
+  for (const [id, discInfo] of discoveredSubs.entries()) {
+    if (map[id]) continue;
+    if (protectedMainIds.has(id) || chapterTitleIds.has(id)) continue;
+    map[id] = {
+      subagent: true,
+      ...(discInfo.parentId ? { parentId: discInfo.parentId } : {}),
+      status: '',
+      stepCount: 0,
+      title: '',
+      source: 'discovered',
+      ...(discInfo.lastModifiedMs > 0 ? { lastModifiedMs: discInfo.lastModifiedMs } : {}),
+    };
+  }
+
+  // 将显式可见主对话白名单固化为 main，死守主对话
+  for (const mainId of protectedMainIds) {
+    if (!map[mainId]) {
+      map[mainId] = {
+        subagent: false,
+        protectedMain: true,
+        status: '',
+        stepCount: 0,
+        title: '',
+      };
+    }
+  }
   return map;
 }
 
-export function saveCatalogIndex(archiveDir, rawSummaries) {
+export function saveCatalogIndex(archiveDir, rawSummaries, opts = {}) {
   const safeArchive = ensureSafeDir(archiveDir);
-  const index = extractCatalogIndexFromSummaries(rawSummaries);
+  const mergeExisting = opts?.mergeExisting !== false;
+  const maxEntries = Number.isInteger(opts?.maxEntries) && opts.maxEntries > 0 ? opts.maxEntries : MAX_CATALOG_ENTRIES;
+  const fresh = extractCatalogIndexFromSummaries(rawSummaries, opts?.extraSignals || null);
+
+  let merged = fresh;
+  if (mergeExisting) {
+    const existing = loadCatalogIndex(safeArchive);
+    if (existing && existing.entries && typeof existing.entries === 'object') {
+      merged = Object.create(null);
+      for (const [rawId, prev] of Object.entries(existing.entries)) {
+        const id = String(rawId || '').trim().toLowerCase();
+        if (!GUID_RE.test(id) || !prev || typeof prev !== 'object') continue;
+        merged[id] = prev;
+      }
+      for (const [id, next] of Object.entries(fresh)) {
+        const prev = merged[id];
+        if (prev && prev.subagent === true && !next.subagent && !next.protectedMain) {
+          // 防止 v2.34+ 剥离了父字段的 Redux / searchConversations 条目冲掉已权威确认的子代理分类
+          merged[id] = {
+            ...prev,
+            ...(next.title && !prev.title ? { title: next.title } : {}),
+            ...(next.status ? { status: next.status } : {}),
+            ...(Number(next.stepCount) > Number(prev.stepCount || 0) ? { stepCount: next.stepCount } : {}),
+            ...(Number(next.lastModifiedMs) > Number(prev.lastModifiedMs || 0) ? { lastModifiedMs: next.lastModifiedMs } : {}),
+          };
+        } else if (prev && prev.protectedMain === true && (!next.subagent || next.source === 'discovered')) {
+          // 保留先前确认的侧栏可见主对话白名单标记，防后续无 DOM 摘要刷新或启发式 DOM 发现覆盖主对话保护
+          merged[id] = next.subagent
+            ? { ...prev, subagent: false, protectedMain: true }
+            : { ...next, subagent: false, protectedMain: true };
+        } else {
+          merged[id] = next;
+        }
+      }
+      const keys = Object.keys(merged);
+      if (keys.length > maxEntries) {
+        keys.sort((a, b) => (Number(merged[b]?.lastModifiedMs) || 0) - (Number(merged[a]?.lastModifiedMs) || 0));
+        const trimmed = Object.create(null);
+        for (let i = 0; i < maxEntries; i += 1) {
+          trimmed[keys[i]] = merged[keys[i]];
+        }
+        merged = trimmed;
+      }
+    }
+  }
+
+  const plainEntries = {};
+  for (const [k, v] of Object.entries(merged)) plainEntries[k] = v;
   const payload = {
     schema: 1,
     updatedAt: new Date().toISOString(),
-    count: Object.keys(index).length,
-    entries: index,
+    count: Object.keys(plainEntries).length,
+    entries: plainEntries,
   };
   const indexPath = path.join(safeArchive, INDEX_FILENAME);
   atomicWriteJsonSync(indexPath, payload);
-  return { indexPath, count: payload.count, entries: index };
+  return { indexPath, count: payload.count, entries: plainEntries };
 }
 
 export function loadCatalogIndex(archiveDir) {
@@ -490,16 +754,18 @@ function buildStorageScanReport({
   mainMaxAgeDays,
   keepRecentMain,
   excluded,
+  lsMemoryMb = null,
   now,
 }) {
   const items = [];
   for (const g of groups.values()) {
     const info = catalogEntries ? catalogEntries[g.id] || null : null;
     const kind = info ? (info.subagent ? 'subagent' : 'main') : 'unknown';
-    // Prefer authoritative host trajectory lastModifiedTime over filesystem mtime
-    // (opening SQLite DBs on language_server startup touches .db-wal/.db-shm timestamps).
-    const fileMtimeMs = g.dbMtimeMs || g.mtimeMs || 0;
-    const activityMs = info && Number(info.lastModifiedMs) > 0 ? Number(info.lastModifiedMs) : fileMtimeMs;
+    // 判龄严格免疫 .db-shm（Antigravity 重启会刷新全部 .db-shm 时间戳）及 0 字节空 .db-wal：
+    // 优先使用宿主权威 RPC lastModifiedMs，缺失时以主 .db 与非空 .db-wal 的最新 mtime 兜底。
+    const fileMtimeMs = Math.max(g.dbMtimeMs || 0, g.walNonEmptyMtimeMs || 0) || g.mtimeMs || 0;
+    const rpcMs = info && Number(info.lastModifiedMs) > 0 ? Number(info.lastModifiedMs) : 0;
+    const activityMs = rpcMs > 0 ? rpcMs : fileMtimeMs;
     const ageMs = Math.max(0, now - activityMs);
     items.push({
       id: g.id,
@@ -511,7 +777,7 @@ function buildStorageScanReport({
       ageHours: Number((ageMs / 3600000).toFixed(2)),
       ageDays: Number((ageMs / 86400000).toFixed(2)),
       status: info?.status || '',
-      running: RUNNING_STATUS_RE.test(info?.status || ''),
+      running: isRunningTrajectoryStatus(info?.status),
       stepCount: info?.stepCount || 0,
       title: info?.title || '',
       parentId: info?.parentId || '',
@@ -567,6 +833,12 @@ function buildStorageScanReport({
   const unknownMb = Number((unknownBytes / 1048576).toFixed(1));
   const archivableSubagentBytes = archivableSubagents.reduce((s, x) => s + x.bytes, 0);
   const archivableOldMainBytes = archivableOldMain.reduce((s, x) => s + x.bytes, 0);
+  const validLsMemMb = Number.isFinite(Number(lsMemoryMb)) && Number(lsMemoryMb) > 0 ? Number(Number(lsMemoryMb).toFixed(1)) : null;
+
+  const warnReasons = [];
+  if (totalMb >= WARN_TOTAL_MB) warnReasons.push('total');
+  if (subagentMb >= WARN_SUBAGENT_MB) warnReasons.push('subagent');
+  if (validLsMemMb !== null && validLsMemMb >= WARN_LS_MEMORY_MB) warnReasons.push('ls-memory');
 
   return {
     ok: true,
@@ -589,8 +861,10 @@ function buildStorageScanReport({
     archivableSubagentMb: Number((archivableSubagentBytes / 1048576).toFixed(1)),
     archivableOldMainCount: archivableOldMain.length,
     archivableOldMainMb: Number((archivableOldMainBytes / 1048576).toFixed(1)),
-    warn: totalMb >= WARN_TOTAL_MB || subagentMb >= WARN_SUBAGENT_MB,
-    warnThresholds: { totalMb: WARN_TOTAL_MB, subagentMb: WARN_SUBAGENT_MB },
+    lsMemoryMb: validLsMemMb,
+    warn: warnReasons.length > 0,
+    warnReasons,
+    warnThresholds: { totalMb: WARN_TOTAL_MB, subagentMb: WARN_SUBAGENT_MB, lsMemoryMb: WARN_LS_MEMORY_MB },
     archivableSubagents,
     archivableOldMain,
   };
@@ -600,10 +874,12 @@ export function scanConversationStorage({
   convDir = getDefaultConversationsDir(),
   archiveDir = getDefaultArchiveDir(),
   summaries = null,
+  extraSignals = null,
   subagentMaxAgeHours = DEFAULT_SUBAGENT_MAX_AGE_HOURS,
   mainMaxAgeDays = DEFAULT_MAIN_MAX_AGE_DAYS,
   keepRecentMain = DEFAULT_KEEP_RECENT_MAIN,
   excludeIds = [],
+  lsMemoryMb = null,
   now = Date.now(),
 } = {}) {
   const safeConvDir = path.resolve(convDir);
@@ -614,7 +890,7 @@ export function scanConversationStorage({
   let catalogEntries = null;
   let catalogUpdatedAt = null;
   if (summaries && typeof summaries === 'object') {
-    catalogEntries = extractCatalogIndexFromSummaries(summaries);
+    catalogEntries = extractCatalogIndexFromSummaries(summaries, extraSignals);
     catalogUpdatedAt = new Date(now).toISOString();
   } else {
     const loaded = loadCatalogIndex(safeArchiveDir);
@@ -649,7 +925,7 @@ export function scanConversationStorage({
       if (suffix === 'wal' || suffix === 'shm') walBytes += st.size;
       let g = groups.get(id);
       if (!g) {
-        g = { id, files: [], bytes: 0, mtimeMs: 0, dbMtimeMs: 0, hasDb: false };
+        g = { id, files: [], bytes: 0, mtimeMs: 0, dbMtimeMs: 0, walNonEmptyMtimeMs: 0, hasDb: false };
         groups.set(id, g);
       }
       g.files.push({ name: dirent.name, bytes: st.size, suffix });
@@ -657,6 +933,8 @@ export function scanConversationStorage({
       if (suffix === 'db') {
         g.hasDb = true;
         if (st.mtimeMs > g.dbMtimeMs) g.dbMtimeMs = st.mtimeMs;
+      } else if (suffix === 'wal' && st.size > 0) {
+        if (st.mtimeMs > g.walNonEmptyMtimeMs) g.walNonEmptyMtimeMs = st.mtimeMs;
       }
       if (suffix !== 'shm' && st.mtimeMs > g.mtimeMs) g.mtimeMs = st.mtimeMs;
     }
@@ -675,6 +953,7 @@ export function scanConversationStorage({
     mainMaxAgeDays,
     keepRecentMain,
     excluded,
+    lsMemoryMb,
     now,
   });
 }
@@ -683,10 +962,12 @@ export async function scanConversationStorageAsync({
   convDir = getDefaultConversationsDir(),
   archiveDir = getDefaultArchiveDir(),
   summaries = null,
+  extraSignals = null,
   subagentMaxAgeHours = DEFAULT_SUBAGENT_MAX_AGE_HOURS,
   mainMaxAgeDays = DEFAULT_MAIN_MAX_AGE_DAYS,
   keepRecentMain = DEFAULT_KEEP_RECENT_MAIN,
   excludeIds = [],
+  lsMemoryMb = null,
   now = Date.now(),
   concurrency = ASYNC_SCAN_LSTAT_CONCURRENCY,
 } = {}) {
@@ -698,7 +979,7 @@ export async function scanConversationStorageAsync({
   let catalogEntries = null;
   let catalogUpdatedAt = null;
   if (summaries && typeof summaries === 'object') {
-    catalogEntries = extractCatalogIndexFromSummaries(summaries);
+    catalogEntries = extractCatalogIndexFromSummaries(summaries, extraSignals);
     catalogUpdatedAt = new Date(now).toISOString();
   } else {
     const loaded = await loadCatalogIndexAsync(safeArchiveDir);
@@ -756,7 +1037,7 @@ export async function scanConversationStorageAsync({
       if (suffix === 'wal' || suffix === 'shm') walBytes += st.size;
       let g = groups.get(id);
       if (!g) {
-        g = { id, files: [], bytes: 0, mtimeMs: 0, dbMtimeMs: 0, hasDb: false };
+        g = { id, files: [], bytes: 0, mtimeMs: 0, dbMtimeMs: 0, walNonEmptyMtimeMs: 0, hasDb: false };
         groups.set(id, g);
       }
       g.files.push({ name, bytes: st.size, suffix });
@@ -764,6 +1045,8 @@ export async function scanConversationStorageAsync({
       if (suffix === 'db') {
         g.hasDb = true;
         if (st.mtimeMs > g.dbMtimeMs) g.dbMtimeMs = st.mtimeMs;
+      } else if (suffix === 'wal' && st.size > 0) {
+        if (st.mtimeMs > g.walNonEmptyMtimeMs) g.walNonEmptyMtimeMs = st.mtimeMs;
       }
       if (suffix !== 'shm' && st.mtimeMs > g.mtimeMs) g.mtimeMs = st.mtimeMs;
     }
@@ -782,6 +1065,7 @@ export async function scanConversationStorageAsync({
     mainMaxAgeDays,
     keepRecentMain,
     excluded,
+    lsMemoryMb,
     now,
   });
 }
@@ -1205,6 +1489,10 @@ function escapePosixSingleQuoted(p) {
   return `'${p.replace(/'/g, "'\\''")}'`;
 }
 
+function escapePsSingleQuoted(p) {
+  return `'${String(p || '').replace(/'/g, "''")}'`;
+}
+
 export function writeHelperScripts({
   scriptPath,
   archiveDir = getDefaultArchiveDir(),
@@ -1229,7 +1517,7 @@ export function writeHelperScripts({
       'echo ============================================================',
       'echo  请确认已完全关闭 Antigravity（等待 language_server.exe 退出）',
       'echo.',
-      `${nodeCmd} ${scriptArg} --archive --wait-exit --subagent-hours=1`,
+      `${nodeCmd} ${scriptArg} --archive --wait-exit --subagent-hours=${AUTO_ARCHIVE_SUBAGENT_MAX_AGE_HOURS}`,
       'echo.',
       'pause',
       '',
@@ -1258,11 +1546,558 @@ export function writeHelperScripts({
   const scriptArg = escapePosixSingleQuoted(absScript);
   const archiveShPath = path.join(safeArchive, `archive-subagents${ext}`);
   const restoreShPath = path.join(safeArchive, `restore-latest-archive${ext}`);
-  const archiveSh = `#!/usr/bin/env bash\nset -euo pipefail\n${nodeCmd} ${scriptArg} --archive --wait-exit --subagent-hours=1\n`;
+  const archiveSh = `#!/usr/bin/env bash\nset -euo pipefail\n${nodeCmd} ${scriptArg} --archive --wait-exit --subagent-hours=${AUTO_ARCHIVE_SUBAGENT_MAX_AGE_HOURS}\n`;
   const restoreSh = `#!/usr/bin/env bash\nset -euo pipefail\n${nodeCmd} ${scriptArg} --restore latest\n`;
   atomicWriteTextExclusiveSync(archiveShPath, archiveSh, 0o700);
   atomicWriteTextExclusiveSync(restoreShPath, restoreSh, 0o700);
   return { archiveScriptPath: archiveShPath, restoreScriptPath: restoreShPath, archiveDir: safeArchive };
+}
+
+export function readLastArchiveResult(archiveDir = getDefaultArchiveDir()) {
+  try {
+    const filePath = path.join(path.resolve(archiveDir), LAST_ARCHIVE_RESULT_FILENAME);
+    const st = assertPathChainNoSymlinks(filePath, 'last archive result');
+    if (!st || !st.isFile() || st.size > 256 * 1024) return null;
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function writeLastArchiveResult(archiveDir = getDefaultArchiveDir(), result = {}) {
+  try {
+    const safeArchive = ensureSafeDir(archiveDir);
+    const filePath = path.join(safeArchive, LAST_ARCHIVE_RESULT_FILENAME);
+    const payload = {
+      schema: 1,
+      recordedAt: new Date().toISOString(),
+      action: String(result.action || 'archive'),
+      ok: Boolean(result.ok),
+      code: result.code ? String(result.code) : '',
+      error: result.error ? String(result.error).slice(0, 400) : '',
+      movedCount: Number(result.movedCount || 0) || 0,
+      movedMb: Number(result.movedMb || 0) || 0,
+      restoredCount: Number(result.restoredCount || 0) || 0,
+      batchName: result.batchName ? String(result.batchName) : '',
+      relaunched: Boolean(result.relaunched),
+    };
+    atomicWriteJsonSync(filePath, payload);
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+export function writeActiveArchiveTask(archiveDir = getDefaultArchiveDir(), info = {}) {
+  try {
+    const safeArchive = ensureSafeDir(archiveDir);
+    const filePath = path.join(safeArchive, ACTIVE_ARCHIVE_TASK_FILENAME);
+    const pidNum = Number(info.pid);
+    const payload = {
+      schema: 1,
+      action: String(info.action || 'archive-and-restart'),
+      pid: Number.isInteger(pidNum) && pidNum > 0 ? pidNum : 0,
+      startedAt: new Date().toISOString(),
+    };
+    atomicWriteJsonSync(filePath, payload);
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+export function clearActiveArchiveTask(archiveDir = getDefaultArchiveDir(), expectedPid = 0) {
+  try {
+    const filePath = path.join(path.resolve(archiveDir), ACTIVE_ARCHIVE_TASK_FILENAME);
+    const st = assertPathChainNoSymlinks(filePath, 'active archive task');
+    if (!st || !st.isFile()) return false;
+    if (Number.isInteger(expectedPid) && expectedPid > 0) {
+      try {
+        const cur = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        if (cur && Number.isInteger(cur.pid) && cur.pid > 0 && cur.pid !== expectedPid) {
+          return false;
+        }
+      } catch {}
+    }
+    fs.unlinkSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeMacAppBundlePath(rawPath) {
+  const s = String(rawPath || '').trim();
+  if (!s) return '/Applications/Antigravity.app';
+  const m = /^(.+?\.app)(?:\/.*)?$/i.exec(s);
+  if (m && m[1]) return m[1];
+  return '/Applications/Antigravity.app';
+}
+
+const WIN_GRACEFUL_CLOSE_PS = [
+  '$ErrorActionPreference = "SilentlyContinue"',
+  'foreach ($p in @(Get-Process -Name "Antigravity","agy" -ErrorAction SilentlyContinue)) {',
+  '  if ($p.MainWindowHandle -ne 0) { $null = $p.CloseMainWindow() }',
+  '}',
+].join('\n');
+const WIN_GRACEFUL_CLOSE_B64 = Buffer.from(WIN_GRACEFUL_CLOSE_PS, 'utf16le').toString('base64');
+
+const WIN_READ_GOMEMLIMIT_PS =
+  '$v = [Environment]::GetEnvironmentVariable("GOMEMLIMIT", "User"); if ($null -ne $v) { [Console]::Out.Write($v) }';
+const WIN_READ_GOMEMLIMIT_B64 = Buffer.from(WIN_READ_GOMEMLIMIT_PS, 'utf16le').toString('base64');
+const ALLOWED_GOMEMLIMIT_RE = /^(?:1536MiB|2GiB|2500MiB|3GiB|4GiB)$/;
+
+const WIN_WMI_CREATE_PS = [
+  '$ErrorActionPreference = "Stop"',
+  '$cmd = [string]$env:AG_PRISM_WMI_CMD',
+  'if (-not $cmd) { exit 1 }',
+  '$psi = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }',
+  '$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd; ProcessStartupInformation = $psi }',
+  'if ($r -and $r.ReturnValue -eq 0 -and $r.ProcessId) { Write-Output $r.ProcessId }',
+].join('\n');
+const WIN_WMI_CREATE_B64 = Buffer.from(WIN_WMI_CREATE_PS, 'utf16le').toString('base64');
+
+function requestGracefulHostQuit(hostPid, exePath, platform = process.platform) {
+  try {
+    if (platform === 'win32') {
+      // 仅向 Antigravity 主窗口发 WM_CLOSE 温和退出，绝不强杀 language_server.exe
+      execFileSync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_GRACEFUL_CLOSE_B64],
+        { windowsHide: true, timeout: 5000, stdio: 'ignore' }
+      );
+      return true;
+    }
+    if (platform === 'darwin') {
+      const appPath = normalizeMacAppBundlePath(exePath);
+      try {
+        execFileSync(
+          'osascript',
+          ['-e', 'on run argv', '-e', 'tell application (item 1 of argv) to quit', '-e', 'end run', appPath],
+          { timeout: 5000, stdio: 'ignore' }
+        );
+        return true;
+      } catch {}
+      if (Number.isInteger(hostPid) && hostPid > 0) {
+        try { process.kill(hostPid, 'SIGTERM'); return true; } catch {}
+      }
+      return false;
+    }
+    if (Number.isInteger(hostPid) && hostPid > 0) {
+      try { process.kill(hostPid, 'SIGTERM'); return true; } catch {}
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function launchHostWithCdpFlag(exePath, platform = process.platform) {
+  const cleanEnv = { ...process.env };
+  delete cleanEnv.ELECTRON_RUN_AS_NODE;
+  if (platform === 'win32') {
+    // 同步读取最新的用户级 GOMEMLIMIT（仅白名单值），使设置后紧接一键重启即可立即生效
+    try {
+      const freshVal = String(
+        execFileSync(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_READ_GOMEMLIMIT_B64],
+          { encoding: 'utf8', windowsHide: true, timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] }
+        ) || ''
+      ).trim();
+      if (ALLOWED_GOMEMLIMIT_RE.test(freshVal)) cleanEnv.GOMEMLIMIT = freshVal;
+      else if (!freshVal) delete cleanEnv.GOMEMLIMIT;
+    } catch {}
+    const resolvedExe =
+      String(exePath || '').trim() ||
+      path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'antigravity', 'Antigravity.exe');
+    if (!fs.existsSync(resolvedExe)) return false;
+    try {
+      const child = spawn(resolvedExe, ['--remote-debugging-port=0'], {
+        cwd: path.dirname(resolvedExe),
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: false,
+        env: cleanEnv,
+      });
+      child.on('error', () => {});
+      child.unref();
+      return Boolean(child.pid);
+    } catch {
+      return false;
+    }
+  }
+  if (platform === 'darwin') {
+    const appPath = normalizeMacAppBundlePath(exePath);
+    try {
+      const child = spawn('/usr/bin/open', ['-na', appPath, '--args', '--remote-debugging-port=0'], {
+        detached: true,
+        stdio: 'ignore',
+        env: cleanEnv,
+      });
+      child.on('error', () => {});
+      child.unref();
+      return Boolean(child.pid);
+    } catch {
+      return false;
+    }
+  }
+  const resolvedExe = String(exePath || '').trim() || 'antigravity';
+  try {
+    const child = spawn(resolvedExe, ['--remote-debugging-port=0'], {
+      detached: true,
+      stdio: 'ignore',
+      env: cleanEnv,
+    });
+    child.on('error', () => {});
+    child.unref();
+    return Boolean(child.pid);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 纯异步离线归档/还原与可选重启编排器：
+ *   1) 如需重启：仅温和请求关闭 Antigravity（绝不强杀 language_server）
+ *   2) 轮询等待 Antigravity 与 language_server 完全退出（超时则 fail-closed 中止）
+ *   3) 退出后静置 3~5 秒并执行双重 fail-closed isLanguageServerRunning() 确认无锁
+ *   4) 执行原子移动归档或无损还原（途中若宿主重开立刻安全中止）
+ *   5) 如需重启：携带 --remote-debugging-port=0 重开 Antigravity
+ */
+export async function executeArchiveTaskSequence(task = {}, hooks = {}) {
+  const action = String(task.action || 'archive-and-restart');
+  const convDir = task.convDir ? path.resolve(String(task.convDir)) : getDefaultConversationsDir();
+  const archiveDir = task.archiveDir ? path.resolve(String(task.archiveDir)) : getDefaultArchiveDir();
+  const hostPid = Number(task.hostPid) || 0;
+  const exePath = String(task.exePath || '').trim();
+  const gracefulQuit = Boolean(task.gracefulQuit);
+  const relaunch = Boolean(task.relaunch);
+  const waitExitTimeoutMs = Math.max(500, Math.min(180000, Number(task.waitExitTimeoutMs) || 45000));
+  const pollMs = Math.max(50, Math.min(3000, Number(task.pollMs) || 500));
+  const settleMs = Math.max(0, Math.min(15000, Number(task.settleMs ?? 4000)));
+  const recheckGapMs = Math.max(0, Math.min(5000, Number(task.recheckGapMs ?? 1500)));
+  const relaunchDelayMs = Math.max(0, Math.min(5000, Number(task.relaunchDelayMs ?? 500)));
+
+  const sleepFn = typeof hooks.sleep === 'function' ? hooks.sleep : (ms) => new Promise((r) => setTimeout(r, ms));
+  const checkRunning =
+    typeof hooks.checkRunning === 'function' ? hooks.checkRunning : () => isLanguageServerRunning();
+  const safeIsRunning = () => {
+    try {
+      return Boolean(checkRunning());
+    } catch {
+      return true; // fail-closed
+    }
+  };
+  const quitHost =
+    typeof hooks.requestGracefulQuit === 'function'
+      ? hooks.requestGracefulQuit
+      : () => requestGracefulHostQuit(hostPid, exePath);
+  const launchHost =
+    typeof hooks.launchHost === 'function'
+      ? hooks.launchHost
+      : () => launchHostWithCdpFlag(exePath);
+  const runArchive = typeof hooks.archiveFn === 'function' ? hooks.archiveFn : archiveConversations;
+  const runRestore = typeof hooks.restoreFn === 'function' ? hooks.restoreFn : restoreArchiveBatch;
+
+  writeActiveArchiveTask(archiveDir, { action, pid: process.pid });
+  try {
+    if (gracefulQuit && safeIsRunning()) {
+      await quitHost(hostPid, exePath);
+    }
+
+    // 等待 Antigravity 与 language_server 完全退出
+    const deadline = Date.now() + waitExitTimeoutMs;
+    let exited = !safeIsRunning();
+    let nudged = false;
+    const nudgeAt = Date.now() + Math.min(5000, Math.floor(waitExitTimeoutMs / 3));
+    while (!exited && Date.now() <= deadline) {
+      await sleepFn(pollMs);
+      if (!safeIsRunning()) {
+        exited = true;
+        break;
+      }
+      if (gracefulQuit && !nudged && Date.now() >= nudgeAt) {
+        nudged = true;
+        await quitHost(hostPid, exePath);
+      }
+    }
+    if (!exited) {
+      const out = {
+        ok: false,
+        action,
+        code: 'HOST_EXIT_TIMEOUT',
+        error: '等待 Antigravity 与 language_server 退出超时，已安全中止，未移动任何文件。',
+        relaunched: false,
+      };
+      writeLastArchiveResult(archiveDir, out);
+      return out;
+    }
+
+    // 静置 3~5 秒 + 双重 fail-closed 复检
+    if (settleMs > 0) await sleepFn(settleMs);
+    if (safeIsRunning()) {
+      const out = {
+        ok: false,
+        action,
+        code: 'HOST_RESTARTED_DURING_SETTLE',
+        error: '静置等待期间检测到 Antigravity 重新启动，已安全中止。',
+        relaunched: false,
+      };
+      writeLastArchiveResult(archiveDir, out);
+      return out;
+    }
+    if (recheckGapMs > 0) await sleepFn(recheckGapMs);
+    if (safeIsRunning()) {
+      const out = {
+        ok: false,
+        action,
+        code: 'HOST_RESTARTED_DURING_SETTLE',
+        error: '二次复检期间检测到 Antigravity 重新启动，已安全中止。',
+        relaunched: false,
+      };
+      writeLastArchiveResult(archiveDir, out);
+      return out;
+    }
+
+    let opRes;
+    if (action === 'restore-and-restart' || action === 'restore') {
+      opRes = runRestore({
+        convDir,
+        archiveDir,
+        batchName: task.batchName || 'latest',
+        checkRunning: safeIsRunning,
+      });
+    } else {
+      opRes = runArchive({
+        convDir,
+        archiveDir,
+        mode: task.mode === 'subagents+old-main' ? 'subagents+old-main' : 'subagents',
+        subagentMaxAgeHours: Number.isFinite(Number(task.subagentMaxAgeHours))
+          ? Number(task.subagentMaxAgeHours)
+          : AUTO_ARCHIVE_SUBAGENT_MAX_AGE_HOURS,
+        mainMaxAgeDays: Number.isFinite(Number(task.mainMaxAgeDays)) ? Number(task.mainMaxAgeDays) : DEFAULT_MAIN_MAX_AGE_DAYS,
+        keepRecentMain: Number.isInteger(Number(task.keepRecentMain)) ? Number(task.keepRecentMain) : DEFAULT_KEEP_RECENT_MAIN,
+        checkRunning: safeIsRunning,
+      });
+    }
+
+    let relaunched = false;
+    if (relaunch && opRes?.code !== 'LANGUAGE_SERVER_RUNNING' && !safeIsRunning()) {
+      if (relaunchDelayMs > 0) await sleepFn(relaunchDelayMs);
+      if (!safeIsRunning()) {
+        relaunched = Boolean(await launchHost(exePath, ['--remote-debugging-port=0']));
+      }
+    }
+
+    const finalOut = {
+      ...opRes,
+      action,
+      relaunched,
+    };
+    writeLastArchiveResult(archiveDir, finalOut);
+    return finalOut;
+  } finally {
+    clearActiveArchiveTask(archiveDir, process.pid);
+  }
+}
+
+function isElectronHostBinaryPath(rawPath) {
+  const s = String(rawPath || '').trim();
+  if (!s) return false;
+  const base = path.basename(s);
+  if (/^(?:antigravity|agy)(?:\.exe)?$/i.test(base)) return true;
+  if (/Antigravity(?:\s+Helper(?:\s+\([^)]+\))?)?\.app[\\/]Contents[\\/]MacOS[\\/]/i.test(s)) return true;
+  return false;
+}
+
+/**
+ * 解析离线归档脱离任务所用的 Node 运行时：
+ *   1) 当前进程为独立 node 时直接复用；
+ *   2) 当前进程为 Electron 宿主（ELECTRON_RUN_AS_NODE=1）时，优先查找系统独立 node；
+ *   3) 若宿主机未安装全局 node（纯安装版 Antigravity 常见），安全回退复用宿主二进制 + ELECTRON_RUN_AS_NODE=1
+ *      （配合 parseWindowsTasklistCsv / parsePosixProcessList 排除 selfPid，绝不触发自检死锁或 ENOENT 崩溃）。
+ */
+export function resolveArchiveNodeRuntime(
+  nodeExec = process.execPath,
+  { platform = process.platform, whichSync = null, existsSync = fs.existsSync } = {}
+) {
+  const raw = String(nodeExec || '').trim();
+  if (!raw) throw new Error('Unable to resolve Node runtime path');
+  if (!isElectronHostBinaryPath(raw)) {
+    return { execPath: assertSafeHelperPath(path.resolve(raw), 'nodeExecPath'), useElectronAsNode: false };
+  }
+
+  const candidates = [];
+  const runWhich = (bin, args) => {
+    try {
+      const out =
+        typeof whichSync === 'function'
+          ? whichSync(bin, args)
+          : execFileSync(bin, args, {
+              encoding: 'utf8',
+              windowsHide: true,
+              timeout: 3000,
+              stdio: ['ignore', 'pipe', 'ignore'],
+            });
+      for (const line of String(out || '').split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (trimmed) candidates.push(trimmed);
+      }
+    } catch {}
+  };
+  if (platform === 'win32') {
+    runWhich('where.exe', ['node.exe']);
+  } else {
+    runWhich('which', ['node']);
+    candidates.push('/opt/homebrew/bin/node', '/usr/local/bin/node', '/usr/bin/node');
+  }
+
+  for (const cand of candidates) {
+    try {
+      if (isElectronHostBinaryPath(cand)) continue;
+      if (!existsSync(cand)) continue;
+      const safeCand = assertSafeHelperPath(path.resolve(cand), 'nodeExecPath');
+      return { execPath: safeCand, useElectronAsNode: false };
+    } catch {}
+  }
+
+  const safeElectron = assertSafeHelperPath(path.resolve(raw), 'nodeExecPath');
+  if (existsSync(safeElectron)) {
+    return { execPath: safeElectron, useElectronAsNode: true };
+  }
+  throw new Error('No usable Node.js or Electron runtime found for detached archive task');
+}
+
+/**
+ * 派生物理脱离宿主进程树（及 Windows Job Object）的独立离线任务进程。
+ */
+export function spawnDetachedArchiveTask(task = {}, opts = {}) {
+  const archiveDir = ensureSafeDir(task.archiveDir || getDefaultArchiveDir());
+  const scriptPath = assertSafeHelperPath(
+    path.resolve(opts.scriptPath || fileURLToPath(import.meta.url)),
+    'scriptPath'
+  );
+  const runtime = resolveArchiveNodeRuntime(opts.nodeExecPath || process.execPath, {
+    platform: opts.platform || process.platform,
+    whichSync: opts.whichSync,
+    existsSync: opts.existsSync,
+  });
+  const safeNodeExec = runtime.execPath;
+  const useElectronAsNode = runtime.useElectronAsNode;
+  const taskFile = path.join(archiveDir, `.archive-task-${crypto.randomBytes(6).toString('hex')}.json`);
+
+  const safePayload = {
+    schema: 1,
+    action: String(task.action || 'archive-and-restart'),
+    convDir: path.resolve(task.convDir || getDefaultConversationsDir()),
+    archiveDir,
+    hostPid: Number(task.hostPid) || 0,
+    exePath: String(task.exePath || '').trim(),
+    gracefulQuit: Boolean(task.gracefulQuit),
+    relaunch: Boolean(task.relaunch),
+    mode: task.mode === 'subagents+old-main' ? 'subagents+old-main' : 'subagents',
+    subagentMaxAgeHours: Number.isFinite(Number(task.subagentMaxAgeHours))
+      ? Number(task.subagentMaxAgeHours)
+      : AUTO_ARCHIVE_SUBAGENT_MAX_AGE_HOURS,
+    batchName: String(task.batchName || 'latest'),
+    settleMs: Number.isFinite(Number(task.settleMs)) ? Number(task.settleMs) : 4000,
+    waitExitTimeoutMs: Number.isFinite(Number(task.waitExitTimeoutMs)) ? Number(task.waitExitTimeoutMs) : 45000,
+  };
+  atomicWriteJsonSync(taskFile, safePayload);
+
+  if (typeof opts.spawnHook === 'function') {
+    const hookRes = opts.spawnHook({ nodeExec: safeNodeExec, useElectronAsNode, scriptPath, taskFile, payload: safePayload });
+    if (hookRes?.spawned && Number.isInteger(hookRes.pid) && hookRes.pid > 0) {
+      writeActiveArchiveTask(archiveDir, { action: safePayload.action, pid: hookRes.pid });
+    }
+    return hookRes;
+  }
+
+  const cleanEnv = { ...process.env };
+  if (useElectronAsNode) cleanEnv.ELECTRON_RUN_AS_NODE = '1';
+  else delete cleanEnv.ELECTRON_RUN_AS_NODE;
+
+  const cleanupTaskFile = () => {
+    try { fs.unlinkSync(taskFile); } catch {}
+  };
+
+  if (process.platform === 'win32') {
+    const safeTaskFile = assertSafeHelperPath(taskFile, 'taskFile');
+    if (!opts.disableWmiBreakaway) {
+      try {
+        // 通过 Base64 EncodedCommand 启动运行时执行任务文件，物理脱离 Antigravity Job Object
+        const envLine = useElectronAsNode
+          ? '$env:ELECTRON_RUN_AS_NODE = "1"'
+          : 'Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue';
+        const innerPs = [
+          '$ErrorActionPreference = "SilentlyContinue"',
+          envLine,
+          `& ${escapePsSingleQuoted(safeNodeExec)} ${escapePsSingleQuoted(scriptPath)} ${escapePsSingleQuoted(`--run-task=${safeTaskFile}`)}`,
+        ].join('\n');
+        const innerB64 = Buffer.from(innerPs, 'utf16le').toString('base64');
+        const wmiCmd = `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ${innerB64}`;
+        const out = execFileSync(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_WMI_CREATE_B64],
+          {
+            encoding: 'utf8',
+            windowsHide: true,
+            timeout: 6000,
+            stdio: ['ignore', 'pipe', 'ignore'],
+            env: { ...cleanEnv, AG_PRISM_WMI_CMD: wmiCmd },
+          }
+        );
+        const helperPid = parseInt(String(out || '').trim().split(/\s+/).pop(), 10);
+        if (Number.isInteger(helperPid) && helperPid > 0) {
+          writeActiveArchiveTask(archiveDir, { action: safePayload.action, pid: helperPid });
+          return { spawned: true, pid: helperPid, method: 'wmi-breakaway', useElectronAsNode, taskFile };
+        }
+      } catch {}
+    }
+    try {
+      const child = spawn(safeNodeExec, [scriptPath, `--run-task=${safeTaskFile}`], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        cwd: os.tmpdir(),
+        env: cleanEnv,
+      });
+      child.on('error', () => {});
+      if (!child.pid) {
+        cleanupTaskFile();
+        return { spawned: false, code: 'SPAWN_FAILED', error: 'Failed to launch detached archive worker', taskFile: '' };
+      }
+      child.unref();
+      writeActiveArchiveTask(archiveDir, { action: safePayload.action, pid: child.pid });
+      return { spawned: true, pid: child.pid, method: 'detached-spawn', useElectronAsNode, taskFile };
+    } catch (err) {
+      cleanupTaskFile();
+      return { spawned: false, code: 'SPAWN_FAILED', error: String(err?.message || err), taskFile: '' };
+    }
+  }
+
+  try {
+    const child = spawn(safeNodeExec, [scriptPath, `--run-task=${taskFile}`], {
+      detached: true,
+      stdio: 'ignore',
+      cwd: os.tmpdir(),
+      env: cleanEnv,
+    });
+    child.on('error', () => {});
+    if (!child.pid) {
+      cleanupTaskFile();
+      return { spawned: false, code: 'SPAWN_FAILED', error: 'Failed to launch detached archive worker', taskFile: '' };
+    }
+    child.unref();
+    writeActiveArchiveTask(archiveDir, { action: safePayload.action, pid: child.pid });
+    return { spawned: true, pid: child.pid, method: 'detached-spawn', useElectronAsNode, taskFile };
+  } catch (err) {
+    cleanupTaskFile();
+    return { spawned: false, code: 'SPAWN_FAILED', error: String(err?.message || err), taskFile: '' };
+  }
 }
 
 async function fetchLiveSummariesViaClient() {
@@ -1319,6 +2154,7 @@ export function parseCliArgs(argv) {
     waitExit: false,
     json: false,
     restoreBatch: 'latest',
+    runTaskFile: '',
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -1329,6 +2165,14 @@ export function parseCliArgs(argv) {
       opts.action = 'restore';
       if (argv[i + 1] && !argv[i + 1].startsWith('--')) opts.restoreBatch = argv[++i];
     } else if (a === '--list-batches') opts.action = 'list';
+    else if (a === '--run-task') {
+      throw new Error('Invalid CLI option --run-task: missing "=value"');
+    } else if (a.startsWith('--run-task=')) {
+      const f = a.slice('--run-task='.length).trim();
+      if (!f) throw new Error('Invalid CLI option --run-task: expected non-empty path');
+      opts.action = 'run-task';
+      opts.runTaskFile = f;
+    }
     else if (a === '--include-old-main') opts.mode = 'subagents+old-main';
     else if (a === '--dry-run') opts.dryRun = true;
     else if (a === '--wait-exit') opts.waitExit = true;
@@ -1352,6 +2196,21 @@ async function runCli() {
   const opts = parseCliArgs(process.argv.slice(2));
   const convDir = getDefaultConversationsDir();
   const archiveDir = getDefaultArchiveDir();
+
+  if (opts.action === 'run-task') {
+    const resolvedTask = path.resolve(opts.runTaskFile);
+    const st = assertPathChainNoSymlinks(resolvedTask, 'archive task file');
+    if (!st || !st.isFile() || st.size > 256 * 1024) {
+      throw new Error('Archive task file missing or invalid');
+    }
+    const rawText = fs.readFileSync(resolvedTask, 'utf8');
+    try { fs.unlinkSync(resolvedTask); } catch {}
+    const task = JSON.parse(rawText);
+    const res = await executeArchiveTaskSequence(task);
+    if (opts.json) console.log(JSON.stringify(res, null, 2));
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
 
   if (opts.action === 'list') {
     const batches = listArchiveBatches(archiveDir);
@@ -1411,6 +2270,9 @@ async function runCli() {
       keepRecentMain: opts.keepRecentMain,
       dryRun: opts.dryRun,
     });
+    if (!opts.dryRun && res.ok && Number(res.movedCount || 0) > 0) {
+      writeLastArchiveResult(archiveDir, { ...res, action: 'archive', relaunched: false });
+    }
     if (opts.json) console.log(JSON.stringify(res, null, 2));
     else if (!res.ok) {
       console.error(`[拒绝] ${res.error}`);

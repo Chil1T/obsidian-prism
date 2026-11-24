@@ -39,16 +39,26 @@
   const getSettingsPanelMod = () => GT.__agPrismSettingsPanel || W.__agPrismSettingsPanel || null;
 
   // Channel 1 活跃语言迷你词典垫片：未加载按需 Settings 通道前由 bootCfg.__uiSlice 供电；全量 i18n-locales.js 就位后自动退让
-  const runtimeSliceStore = { active: 'en', byLang: Object.create(null) };
+  const runtimeSliceStore = { active: 'en', byLang: O.create(null) };
   const mergeRuntimeUiSlice = (payload) => {
     if (!payload || typeof payload !== 'object') return;
     if (typeof payload.active === 'string' && payload.active) runtimeSliceStore.active = payload.active;
+    if (Array.isArray(payload.keys) && payload.vals && typeof payload.vals === 'object') {
+      for (const [lang, arr] of O.entries(payload.vals)) {
+        if (!Array.isArray(arr)) continue;
+        const dst = { ...(runtimeSliceStore.byLang[lang] || {}) };
+        for (let i = 0; i < payload.keys.length; i++) if (typeof arr[i] === 'string' && arr[i]) dst[payload.keys[i]] = arr[i];
+        runtimeSliceStore.byLang[lang] = dst;
+      }
+    }
     if (payload.byLang && typeof payload.byLang === 'object') {
       for (const [k, v] of O.entries(payload.byLang)) {
         if (v && typeof v === 'object') runtimeSliceStore.byLang[k] = { ...(runtimeSliceStore.byLang[k] || {}), ...v };
       }
     }
   };
+  const LITE_SWARM_FMT = { 'zh-CN': '主会话 {0}% · 子代理 {1}%', 'zh-TW': '主工作階段 {0}% · 子代理 {1}%', ja: 'メイン {0}% · サブ {1}%', ko: '메인 {0}% · 서브 {1}%', es: 'Principal {0}% · Sub {1}%', fr: 'Principal {0}% · Sous {1}%', de: 'Haupt {0}% · Sub {1}%' };
+  const LITE_MORE_FMT = { 'zh-CN': '再显示 {0} 个', 'zh-TW': '再顯示 {0} 個', ja: 'さらに {0} 件表示', ko: '{0}개 더 보기', es: 'Mostrar {0} más', fr: 'Afficher {0} de plus', de: '{0} weitere anzeigen' };
   const ensureLiteLocalesShim = (slicePayload) => {
     mergeRuntimeUiSlice(slicePayload);
     const cur = getLocalesMod();
@@ -59,28 +69,11 @@
       __isLiteShim: true,
       getUiStrings(lang) {
         const l = typeof lang === 'string' && lang ? lang : runtimeSliceStore.active || 'en';
-        const base = runtimeSliceStore.byLang[l] || runtimeSliceStore.byLang.en || runtimeSliceStore.byLang[runtimeSliceStore.active] || {};
-        const out = { ...base };
+        const out = { ...(runtimeSliceStore.byLang[l] || runtimeSliceStore.byLang.en || runtimeSliceStore.byLang[runtimeSliceStore.active] || {}) };
         if (out.optThoughtImmersive && !out.optViewImmersive) out.optViewImmersive = out.optThoughtImmersive;
         if (out.optThoughtBilingual && !out.optViewBilingual) out.optViewBilingual = out.optThoughtBilingual;
-        out.swarmSplitSub = (m, s) =>
-          l === 'zh-CN' ? `主会话 ${m}% · 子代理 ${s}%`
-          : l === 'zh-TW' ? `主工作階段 ${m}% · 子代理 ${s}%`
-          : l === 'ja' ? `メイン ${m}% · サブ ${s}%`
-          : l === 'ko' ? `메인 ${m}% · 서브 ${s}%`
-          : l === 'es' ? `Principal ${m}% · Sub ${s}%`
-          : l === 'fr' ? `Principal ${m}% · Sous ${s}%`
-          : l === 'de' ? `Haupt ${m}% · Sub ${s}%`
-          : `Main ${m}% · Swarm ${s}%`;
-        out.showMoreN = (n) =>
-          l === 'zh-CN' ? `再显示 ${n} 个`
-          : l === 'zh-TW' ? `再顯示 ${n} 個`
-          : l === 'ja' ? `さらに ${n} 件表示`
-          : l === 'ko' ? `${n}개 더 보기`
-          : l === 'es' ? `Mostrar ${n} más`
-          : l === 'fr' ? `Afficher ${n} de plus`
-          : l === 'de' ? `${n} weitere anzeigen`
-          : `Show ${n} more`;
+        out.swarmSplitSub = (m, s) => (LITE_SWARM_FMT[l] || 'Main {0}% · Swarm {1}%').replace('{0}', m).replace('{1}', s);
+        out.showMoreN = (n) => (LITE_MORE_FMT[l] || 'Show {0} more').replace('{0}', n);
         return out;
       },
     };
@@ -156,7 +149,7 @@
     }
     out.placeholderStyle = out.promptStyle = (out.placeholderStyle ?? out.promptStyle) === 'host' ? 'host' : 'studio';
     out.mascot = out.mascot === 'off' || out.mascot === false ? 'off' : out.mascot === 'minis' ? 'minis' : 'crab';
-    for (const k of ['sidebarCompact', 'codeLigatures']) out[k] = out[k] === true || out[k] === 'on';
+    for (const k of ['sidebarCompact', 'codeLigatures', 'autoArchiveOnExit']) out[k] = out[k] === true || out[k] === 'on';
     for (const k of ['sidebarNavFold', 'sidebarStudio', 'autoUpdate']) out[k] = out[k] === 'on' || out[k] === true ? 'on' : 'off';
     for (const k of ['smoothCaret', 'contextMenu']) out[k] = out[k] === undefined ? true : out[k] !== false && out[k] !== 'off';
     out.accentTone = pickOf(out.accentTone, 'follow|cobalt|iris|amber|mono', 'follow');
@@ -399,16 +392,8 @@
         : 'en');
     if (isFn(i18nCore?.normalizeLanguage)) return i18nCore.normalizeLanguage(raw, 'en');
     const low = String(raw || '').trim().toLowerCase().replace(/_/g, '-');
-    if (low === 'en' || low.startsWith('en-')) return 'en';
-    if (low === 'ja' || low.startsWith('ja-')) return 'ja';
-    if (low === 'ko' || low.startsWith('ko-')) return 'ko';
-    if (low === 'es' || low.startsWith('es-')) return 'es';
-    if (low === 'fr' || low.startsWith('fr-')) return 'fr';
-    if (low === 'de' || low.startsWith('de-')) return 'de';
-    if (low === 'yue' || low.startsWith('yue-') || low === 'zh-yue' || low.includes('cantonese')) return 'zh-CN';
-    if (low === 'zh-tw' || low === 'zh-hk' || low.startsWith('zh-hk-') || low === 'zh-mo' || low.startsWith('zh-hant')) return 'zh-TW';
-    if (low === 'zh' || low.startsWith('zh-')) return 'zh-CN';
-    return 'en';
+    if (/^(?:zh|yue)|cantonese/.test(low)) return /tw|hk|mo|hant/.test(low) ? 'zh-TW' : 'zh-CN';
+    return low.match(/^(en|ja|ko|es|fr|de)(?:-|$)/)?.[1] || 'en';
   };
 
   const uiText = (lang = getLang()) => {

@@ -49,18 +49,13 @@
     de: ['Subagenten', 'Token', 'Swarm', 'Ein', 'Aus', 'Wenig Kontingent', 'Wird knapp', 'Reichlich', 'Was steht als Nächstes an', ', ', '?'],
   };
   const normStudioLang = (l) => {
+    const c = G.__agCsI18nCore?.normalizeLanguage;
+    if (isFn(c)) return c(l, 'en');
     const s = String(l || '').trim();
-    if (s === 'yue') return 'zh-CN';
     if (STUDIO_FB[s]) return s;
     const lo = s.toLowerCase();
-    if (/^zh[-_](tw|hant|hk|mo)/.test(lo)) return 'zh-TW';
-    if (/^zh|^yue/.test(lo)) return 'zh-CN';
-    if (/^ja/.test(lo)) return 'ja';
-    if (/^ko/.test(lo)) return 'ko';
-    if (/^es/.test(lo)) return 'es';
-    if (/^fr/.test(lo)) return 'fr';
-    if (/^de/.test(lo)) return 'de';
-    return 'en';
+    if (/^(?:zh|yue)/.test(lo)) return /[-_](?:tw|hant|hk|mo)/.test(lo) ? 'zh-TW' : 'zh-CN';
+    return lo.match(/^(ja|ko|es|fr|de)/)?.[1] || 'en';
   };
   const studioFb = (l) => STUDIO_FB[normStudioLang(l)] || STUDIO_FB.en;
   const hasRealUsage = (r) => !!(r?.days && (toNum(r.calls) > 0 || Object.values(r.days).some((d) => d && (toNum(d.total || d.tokens) > 0 || toNum(d.calls) > 0))));
@@ -410,12 +405,15 @@
             if (!sid) continue;
             if (!sumsMap.has(sid)) sumsMap.set(sid, item);
             else {
-              const cur = sumsMap.get(sid);
-              const im = extractMeta(item);
-              const cm = extractMeta(cur);
+              const cur = { ...sumsMap.get(sid) }, im = extractMeta(item), cm = extractMeta(cur);
               if (item.workspace && !cur.workspace && !cur.workspaces) cur.workspace = item.workspace;
               if (im.u.length && !cur.workspaces) cur.workspaces = im.u;
               if (im.parentId && !cm.parentId) cur.parentId = im.parentId;
+              if (item.dbMtimeSec > 0) cur.dbMtimeSec ||= item.dbMtimeSec;
+              if (item.dbSize > 0) cur.dbSize ||= item.dbSize;
+              if (item.diskUnchanged) cur.diskUnchanged = true;
+              if (!cm.stepCount && im.stepCount > 0) cur.stepCount = im.stepCount;
+              sumsMap.set(sid, cur);
             }
           }
           bridgeRecs = Array.isArray(sumRes?.records) ? sumRes.records : null;
@@ -438,17 +436,22 @@
       const rawTitle = String((getDoc() || win?.document)?.title || '').trim();
       localSaveBlocked = curScope === 'local' && !!(usageBridge && !bridgeOnline) && (!rawTitle || /^antigravity$/i.test(rawTitle)) && !normalizeScopeKey(scOpt) && !normalizeScopeKey(win?.__agPrismScopeKey) && !bridgeScopeKey && !entries.some(([, s]) => wsUrisOf(s).some((u) => /^(?:file:\/\/|[a-z]:[\\/])/i.test(u)));
       detectedCurrentWorkspace = detectCurrentWorkspaceName(entries) || detectedCurrentWorkspace;
-      if (entries.length === 0) { usageHasData = true; if (canPrune) lastUsageFetchAt = now; renderHomePanel(); return; }
+      if (entries.length === 0) { usageHasData = true; if (seededCache) { usageDataEpoch += 1; saveUsageCache(); } if (canPrune) lastUsageFetchAt = now; renderHomePanel(); return; }
 
       const staleIds = [];
       const presentIds = new Set();
       let patchedMeta = seededCache;
       for (const [id, sum] of entries) {
         presentIds.add(id);
+        if (sum?.dormant) continue;
         const m = extractMeta(sum);
         const cached = usageRecords.get(id);
-        if (!cached || (bridgeOnline && cached._do) || toNum(cached.stepCount) !== m.stepCount || toNum(cached.lastModifiedSec) !== m.lastModifiedSec) staleIds.push([id, sum]);
-        else if ((m.workspace && !cached.workspace) || (m.parentId && !cached.parentId)) { cached.workspace ||= m.workspace; cached.parentId ||= m.parentId; patchedMeta = true; }
+        const dS = toNum(sum?.dbSize), dM = toNum(sum?.dbMtimeSec);
+        const sameDb = dM > 0 && toNum(cached?.dbMtimeSec || cached?.lastModifiedSec) === dM && (!dS || !toNum(cached?.dbSize) || toNum(cached.dbSize) === dS);
+        const sameRpc0 = !dM && m.stepCount === 0 && m.lastModifiedSec > 0 && toNum(cached?.lastModifiedSec) === m.lastModifiedSec && (hasRealUsage(cached) || toNum(cached?.stepCount) > 0);
+        const diskMatch = !!(cached && !cached._do && (sum?.diskUnchanged ? (sameDb || !dM) : (sameDb && (m.stepCount === 0 || hasRealUsage(cached))) || sameRpc0));
+        if (!diskMatch && (!cached || (bridgeOnline && cached._do) || toNum(cached.stepCount) !== m.stepCount || toNum(cached.lastModifiedSec) !== m.lastModifiedSec)) staleIds.push([id, sum]);
+        else if (cached && ((m.workspace && !cached.workspace) || (m.parentId && !cached.parentId))) { cached.workspace ||= m.workspace; cached.parentId ||= m.parentId; patchedMeta = true; }
       }
       if (patchedMeta) usageDataEpoch += 1;
       staleIds.sort((a, b) => extractMeta(b[1]).lastModifiedSec - extractMeta(a[1]).lastModifiedSec);
@@ -458,29 +461,35 @@
         for (const oldId of [...usageRecords.keys()]) {
           if (!presentIds.has(oldId)) {
             const oldRec = usageRecords.get(oldId);
+            if (hasRealUsage(oldRec)) continue;
             if (oldRec?.subagent && oldRec?.parentId && presentIds.has(oldRec.parentId)) continue;
             usageRecords.delete(oldId); deletedAny = true;
           }
         }
       }
       if (deletedAny) usageDataEpoch += 1;
-      if (staleIds.length === 0) { usageHasData = true; if (canPrune) lastUsageFetchAt = now; if (patchedMeta) saveUsageCache(); renderHomePanel(); return; }
+      if (staleIds.length === 0) { usageHasData = true; if (canPrune) lastUsageFetchAt = now; if (patchedMeta || deletedAny) saveUsageCache(); renderHomePanel(); return; }
 
       usageLoading = true;
       if (!usageHasData) renderHomePanel();
+      const dbMeta = (a, b) => {
+        const m = toNum(a?.dbMtimeSec || b?.dbMtimeSec), s = toNum(a?.dbSize || b?.dbSize);
+        return { ...(m > 0 ? { dbMtimeSec: m } : {}), ...(s > 0 ? { dbSize: s } : {}) };
+      };
       const applyRecord = (id, sum, prev, rec, m) => {
         if (hasRealUsage(prev) && !hasRealUsage(rec)) usageRecords.set(id, advanceCachedCursor(prev, id, sum, true));
-        else { const n = { ...rec, subagent: !!(rec.subagent || m.subagent), workspace: rec.workspace || m.workspace || '', parentId: rec.parentId || m.parentId || '' }; delete n._do; usageRecords.set(id, n); }
+        else {
+          const n = { ...rec, ...dbMeta(sum, rec), subagent: !!(rec.subagent || m.subagent), workspace: rec.workspace || m.workspace || '', parentId: rec.parentId || m.parentId || '' };
+          delete n._do; usageRecords.set(id, n);
+        }
       };
       try {
         if (usageBridge && isFn(usageBridge.fetchBatch) && bridgeOnline) {
           for (let i = 0; i < staleIds.length && !isDestroyed(); i += 6) {
             const slice = staleIds.slice(i, i + 6);
             const reqItems = slice.map(([id, sum]) => {
-              const c = usageRecords.get(id);
-              const m = extractMeta(sum);
-              const gm = toNum(c?.gmCount);
-              return { id, stepCount: m.stepCount, lastModifiedSec: m.lastModifiedSec, createdSec: m.createdSec, subagent: m.subagent, workspace: m.workspace, ...(m.u.length ? { workspaces: m.u } : {}), parentId: m.parentId, gmOffset: c && !c._do && Number.isInteger(gm) && gm > 0 ? gm : 0 };
+              const c = usageRecords.get(id), m = extractMeta(sum), gm = toNum(c?.gmCount);
+              return { id, stepCount: m.stepCount, lastModifiedSec: m.lastModifiedSec, createdSec: m.createdSec, ...dbMeta(sum), subagent: m.subagent, workspace: m.workspace, ...(m.u.length ? { workspaces: m.u } : {}), parentId: m.parentId, gmOffset: c && !c._do && Number.isInteger(gm) && gm > 0 ? gm : 0 };
             });
             const res = await usageBridge.fetchBatch(reqItems, 18000);
             const byId = res?.ok && Array.isArray(res.records) ? new Map(res.records.map((r) => [r.id, r])) : null;
@@ -889,7 +898,7 @@
     };
   }
 
-  const api = { createHomeStudioPanelController };
+  const api = { createHomeStudioPanelController, hasPersistedTokens: hasRealUsage };
   if (typeof module === 'object' && module.exports) module.exports = api;
   G.__agPrismHomeStudioPanel = api;
 })(typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : this);

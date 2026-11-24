@@ -80,6 +80,7 @@
     sidebarStudio: S_OFF,
     autoUpdate: S_OFF,
     updateChannel: mkSp(['stable', 'beta']),
+    autoArchiveOnExit: S_F,
   });
 
   const SCENE_PRESETS = O.freeze({
@@ -246,7 +247,24 @@
   let pendingCfgToast = null;
 
   const invokePrismRepoAction = (action, ver, extra) => {
-    const act = ['pull', 'storage-health', 'prepare-archive', 'uninstall', 'update-status', 'check-update', 'apply-update'].includes(action) ? action : 'status';
+    const act = [
+      'pull',
+      'storage-health',
+      'prepare-archive',
+      'archive-and-restart',
+      'restore-archive',
+      'storage-snooze',
+      'storage-auto-exit',
+      'gomemlimit-status',
+      'gomemlimit-set',
+      'gomemlimit-clear',
+      'uninstall',
+      'update-status',
+      'check-update',
+      'apply-update',
+    ].includes(action)
+      ? action
+      : 'status';
     const vObj = isObj(ver);
     const ext = vObj ? { ...ver, ...(isObj(extra) ? extra : null) } : isObj(extra) ? extra : null;
     try {
@@ -401,6 +419,14 @@
           if (ga(grp, 'data-switch-on') !== swOn) sa(grp, 'data-switch-on', swOn);
         }
       }
+      const autoExitOn = effVal('autoArchiveOnExit', l) === true;
+      qa(rootEl, 'button[data-ag-cs-auto-archive-exit]').forEach((btn) => {
+        const isOnBtn = ga(btn, 'data-ag-cs-auto-archive-exit') === 'on';
+        const act = isOnBtn === autoExitOn;
+        sa(btn, 'aria-pressed', act);
+        if (act) sa(btn, 'data-active', '1');
+        else ra(btn, 'data-active');
+      });
       for (const [pBtn, m] of dirtyPresets) {
         pBtn.__agAct = m;
         sa(pBtn, 'data-active', m ? '1' : '0');
@@ -1106,7 +1132,62 @@
 
           const storageChip = mkChip(U('storageHealthIdle', 'DB'), 'data-ag-cs-storage-status');
           const archiveBtn = mkB('ag-cs-repo-sync-btn', U('storageArchiveBtn', 'Archive'), 'data-ag-cs-storage-archive');
+          const archRestartBtn = mkB('ag-cs-repo-sync-btn', U('storageArchiveRestartBtn', 'Archive & Restart'), 'data-ag-cs-archive-restart');
+          const restoreBtn = mkB('ag-cs-repo-sync-btn', U('storageRestoreBtn', 'Restore Archive'), 'data-ag-cs-storage-restore');
+          const autoExitOffBtn = mkB('ag-cs-repo-sync-btn', U('storageAutoExitOff', 'Off'), 'data-ag-cs-auto-archive-exit', 'off');
+          const autoExitOnBtn = mkB('ag-cs-repo-sync-btn', U('storageAutoExitOn', 'On'), 'data-ag-cs-auto-archive-exit', 'on');
+          const archActionChip = mkEl('span', 'ag-cs-repo-chip', '');
+          setVis(archActionChip, false);
+          sa(archActionChip, 'data-ag-cs-archive-action-status');
+          const archConfirmBox = mkEl('div', 'ag-cs-thought-cfg-box');
+          setVis(archConfirmBox, false);
+          sa(archConfirmBox, 'data-ag-cs-archive-restart-box', '1');
+          const archConfirmCancel = mkB('ag-cs-thought-btn', U('uninstallCancelBtn', 'Cancel'), 'data-ag-cs-archive-restart-cancel');
+          const archConfirmOk = mkB('ag-cs-thought-btn', U('storageArchiveRestartConfirmBtn', 'Confirm & Restart'), 'data-ag-cs-archive-restart-confirm');
+          ap(
+            archConfirmBox,
+            mkEl('p', 'ag-cs-thought-hint', U('storageArchiveRestartConfirmDesc')),
+            ap(mkEl('div', 'ag-cs-thought-actions'), ap(mkEl('div', 'ag-cs-thought-btn-group'), archConfirmCancel, archConfirmOk))
+          );
+
+          const restoreConfirmBox = mkEl('div', 'ag-cs-thought-cfg-box');
+          setVis(restoreConfirmBox, false);
+          sa(restoreConfirmBox, 'data-ag-cs-storage-restore-box', '1');
+          const restoreDescEl = mkEl('p', 'ag-cs-thought-hint', U('storageRestoreEmpty'));
+          const restoreCancel = mkB('ag-cs-thought-btn', U('uninstallCancelBtn', 'Cancel'), 'data-ag-cs-storage-restore-cancel');
+          const restoreConfirmOk = mkB('ag-cs-thought-btn', U('storageRestoreConfirmBtn', 'Confirm Restore'), 'data-ag-cs-storage-restore-confirm');
+          ap(
+            restoreConfirmBox,
+            restoreDescEl,
+            ap(mkEl('div', 'ag-cs-thought-actions'), ap(mkEl('div', 'ag-cs-thought-btn-group'), restoreCancel, restoreConfirmOk))
+          );
+
+          const goMemChip = mkChip(U('goMemLimitUnset', 'Not set'), 'data-ag-cs-gomemlimit-status');
+          const goMemSel = mkEl('select', 'ag-cs-home-ws-select');
+          sa(goMemSel, 'data-ag-cs-gomemlimit-select', '1');
+          for (const pv of ['2GiB', '2500MiB', '3GiB', '4GiB']) {
+            const opt = mkEl('option', '', pv === '2GiB' ? '2GiB ★' : pv);
+            opt.value = pv;
+            ap(goMemSel, opt);
+          }
+          goMemSel.value = '2GiB';
+          const goMemApplyBtn = mkB('ag-cs-repo-sync-btn', U('goMemLimitApplyBtn', 'Apply'), 'data-ag-cs-gomemlimit-apply');
+          const goMemClearBtn = mkB('ag-cs-repo-sync-btn', U('goMemLimitClearBtn', 'Clear'), 'data-ag-cs-gomemlimit-clear');
+
           let storageBusy = false;
+          let goMemBusy = false;
+          let latestBatchName = '';
+          const syncAutoExitButtons = (enabled) => {
+            const on = Boolean(enabled);
+            runGuardedMut(() => {
+              if (!on) sa(autoExitOffBtn, 'data-active', '1');
+              else ra(autoExitOffBtn, 'data-active');
+              if (on) sa(autoExitOnBtn, 'data-active', '1');
+              else ra(autoExitOnBtn, 'data-active');
+            });
+          };
+          syncAutoExitButtons(resolveSettingRowActiveValue('autoArchiveOnExit') === true);
+
           const applyStorageView = (st, prepared) => {
             if (!storageChip[K_IC] || !st || st.offline || st.timeout) return;
             const u = uiText(getLang()) || ui;
@@ -1116,10 +1197,20 @@
                 return;
               }
               const fmtMb = (v) => (Number(v) >= 1024 ? `${(Number(v) / 1024).toFixed(2)} GB` : `${Math.round(Number(v) || 0)} MB`);
+              if (typeof st.autoArchiveOnExit === 'boolean') syncAutoExitButtons(st.autoArchiveOnExit);
+              latestBatchName = st.latestBatch?.batchName || '';
+              if (latestBatchName) {
+                restoreDescEl[K_TC] = fmtTpl(u.storageRestoreConfirmDesc || '{0}', [latestBatchName]);
+                restoreConfirmOk.disabled = false;
+              } else {
+                restoreDescEl[K_TC] = u.storageRestoreEmpty || 'No archive batches yet';
+                restoreConfirmOk.disabled = true;
+              }
               if (prepared && st.archiveScriptPath) {
                 setChip(storageChip, 'updated', fmtTpl(u.storageReadyTpl || '{0}/{1}:{2}', [st.archivableSubagentCount || 0, fmtMb(st.archivableSubagentMb), st.archiveScriptPath]));
                 try { navigator?.clipboard?.writeText?.(st.archiveScriptPath)?.catch?.(() => {}); } catch {}
               } else {
+                const memSuffix = Number(st.lsMemoryMb) > 0 ? ` · ${fmtTpl(u.storageLsMemTpl || 'LS {0}', [fmtMb(st.lsMemoryMb)])}` : '';
                 setChip(
                   storageChip,
                   st.warn ? 'warn' : 'ok',
@@ -1129,9 +1220,31 @@
                     st.subagentCount || 0,
                     fmtMb(st.subagentMb),
                     st.warn ? u.storageWarn || '!' : u.storageOk || 'OK',
-                  ])
+                  ]) + memSuffix
                 );
-              };
+              }
+            });
+          };
+          const applyGoMemView = (st) => {
+            if (!goMemChip[K_IC] || !st || st.offline || st.timeout) return;
+            const u = uiText(getLang()) || ui;
+            runGuardedMut(() => {
+              if (st.ok === false && st.error) {
+                setChip(goMemChip, 'error', st.error);
+                return;
+              }
+              if (st.appliedValue) {
+                setChip(goMemChip, 'updated', fmtTpl(u.goMemLimitAppliedTpl || 'GOMEMLIMIT={0}', [st.appliedValue]));
+                goMemSel.value = st.appliedValue;
+              } else if (st.cleared) {
+                setChip(goMemChip, 'ok', u.goMemLimitCleared || 'Cleared');
+              } else if (st.configured && st.currentValue) {
+                const note = st.restartRequired ? ` ${u.goMemLimitRestartNote || ''}` : '';
+                setChip(goMemChip, 'ok', fmtTpl(u.goMemLimitActiveTpl || '{0}', [st.currentValue]) + note);
+                if (['2GiB', '2500MiB', '3GiB', '4GiB'].includes(st.currentValue)) goMemSel.value = st.currentValue;
+              } else {
+                setChip(goMemChip, 'idle', u.goMemLimitUnset || 'Not set');
+              }
             });
           };
           const probeStorageSilently = () => {
@@ -1139,6 +1252,9 @@
             void invokePrismRepoAction('storage-health', version)
               .then((st) => st && applyStorageView(st, false))
               .catch((err) => applyStorageView({ ok: false, error: String(err?.message || err) }, false));
+            void invokePrismRepoAction('gomemlimit-status', version)
+              .then((st) => st && applyGoMemView(st))
+              .catch(() => {});
           };
           onClk(archiveBtn, () => {
             if (storageBusy) return;
@@ -1152,7 +1268,137 @@
                 runGuardedMut(() => { if (archiveBtn[K_IC]) archiveBtn.disabled = false; });
               });
           });
-          ap(aboutBox, ap(mkEl('div', 'ag-cs-about-repo-row'), ap(mkEl('div', 'ag-cs-about-repo-info'), mkEl('span', 'font-medium text-foreground', U('storageHealthTitle', 'DB')), storageChip), archiveBtn));
+          const toggleAutoExit = (enabled) => {
+            syncAutoExitButtons(enabled);
+            try { saveSetting('autoArchiveOnExit', enabled); } catch {}
+            void invokePrismRepoAction('storage-auto-exit', version, { autoArchiveOnExit: enabled }).then((r) => {
+              if (r && r.ok !== false && !r.offline && archActionChip[K_IC]) {
+                const u = uiText(getLang()) || ui;
+                runGuardedMut(() => {
+                  setVis(archActionChip, true);
+                  setChip(archActionChip, 'ok', enabled ? u.storageAutoExitEnabledMsg || 'On' : u.storageAutoExitOff || 'Off');
+                });
+              }
+            });
+          };
+          onClk(autoExitOffBtn, () => toggleAutoExit(false));
+          onClk(autoExitOnBtn, () => toggleAutoExit(true));
+          onClk(archRestartBtn, () => runGuardedMut(() => { setVis(restoreConfirmBox, false); setVis(archConfirmBox, !!(archConfirmBox.hidden)); }));
+          onClk(archConfirmCancel, () => runGuardedMut(() => setVis(archConfirmBox, false)));
+          onClk(archConfirmOk, () => {
+            if (storageBusy) return;
+            storageBusy = true;
+            const u = uiText(getLang()) || ui;
+            runGuardedMut(() => {
+              archConfirmOk.disabled = true;
+              setVis(archActionChip, true);
+              setChip(archActionChip, 'idle', u.storageArchiveRestartRunning || '...');
+            });
+            void invokePrismRepoAction('archive-and-restart', version, { confirm: true })
+              .then((r) => {
+                if (!archActionChip[K_IC]) return;
+                const uNow = uiText(getLang()) || ui;
+                runGuardedMut(() => {
+                  setVis(archActionChip, true);
+                  if (r && r.ok) {
+                    setChip(archActionChip, 'updated', uNow.storageArchiveRestartScheduled || 'OK');
+                    setVis(archConfirmBox, false);
+                  } else {
+                    setChip(archActionChip, 'error', r?.code === 'HOST_BUSY' ? (uNow.storageGuardBusyMsg || r.error) : (r?.error || 'Err'));
+                  }
+                });
+              })
+              .finally(() => {
+                storageBusy = false;
+                runGuardedMut(() => { if (archConfirmOk[K_IC]) archConfirmOk.disabled = false; });
+              });
+          });
+          onClk(restoreBtn, () => {
+            runGuardedMut(() => { setVis(archConfirmBox, false); setVis(restoreConfirmBox, !!(restoreConfirmBox.hidden)); });
+            if (!latestBatchName) {
+              void invokePrismRepoAction('restore-archive', version, { listOnly: true }).then((r) => {
+                if (!r || !r.ok || !Array.isArray(r.batches) || !restoreDescEl[K_IC]) return;
+                const uNow = uiText(getLang()) || ui;
+                latestBatchName = r.batches[0]?.batchName || '';
+                runGuardedMut(() => {
+                  restoreDescEl[K_TC] = latestBatchName
+                    ? fmtTpl(uNow.storageRestoreConfirmDesc || '{0}', [latestBatchName])
+                    : (uNow.storageRestoreEmpty || 'No archive batches yet');
+                  restoreConfirmOk.disabled = !latestBatchName;
+                });
+              });
+            }
+          });
+          onClk(restoreCancel, () => runGuardedMut(() => setVis(restoreConfirmBox, false)));
+          onClk(restoreConfirmOk, () => {
+            if (storageBusy || !latestBatchName) return;
+            storageBusy = true;
+            runGuardedMut(() => { restoreConfirmOk.disabled = true; });
+            void invokePrismRepoAction('restore-archive', version, { confirm: true, batchName: latestBatchName })
+              .then((r) => {
+                if (!archActionChip[K_IC]) return;
+                const uNow = uiText(getLang()) || ui;
+                runGuardedMut(() => {
+                  setVis(archActionChip, true);
+                  if (r && r.ok) {
+                    setChip(archActionChip, 'updated', uNow.storageRestoreScheduled || 'OK');
+                    setVis(restoreConfirmBox, false);
+                  } else {
+                    setChip(archActionChip, 'error', r?.code === 'HOST_BUSY' ? (uNow.storageGuardBusyMsg || r.error) : (r?.error || 'Err'));
+                  }
+                });
+              })
+              .finally(() => {
+                storageBusy = false;
+                runGuardedMut(() => { if (restoreConfirmOk[K_IC]) restoreConfirmOk.disabled = !latestBatchName; });
+              });
+          });
+          onClk(goMemApplyBtn, () => {
+            if (goMemBusy) return;
+            goMemBusy = true;
+            runGuardedMut(() => { goMemApplyBtn.disabled = true; goMemClearBtn.disabled = true; });
+            void invokePrismRepoAction('gomemlimit-set', version, { value: goMemSel.value })
+              .then((st) => st && applyGoMemView(st))
+              .finally(() => {
+                goMemBusy = false;
+                runGuardedMut(() => {
+                  if (goMemApplyBtn[K_IC]) goMemApplyBtn.disabled = false;
+                  if (goMemClearBtn[K_IC]) goMemClearBtn.disabled = false;
+                });
+              });
+          });
+          onClk(goMemClearBtn, () => {
+            if (goMemBusy) return;
+            goMemBusy = true;
+            runGuardedMut(() => { goMemApplyBtn.disabled = true; goMemClearBtn.disabled = true; });
+            void invokePrismRepoAction('gomemlimit-clear', version)
+              .then((st) => st && applyGoMemView(st))
+              .finally(() => {
+                goMemBusy = false;
+                runGuardedMut(() => {
+                  if (goMemApplyBtn[K_IC]) goMemApplyBtn.disabled = false;
+                  if (goMemClearBtn[K_IC]) goMemClearBtn.disabled = false;
+                });
+              });
+          });
+
+          const goMemBox = mkEl('div', 'ag-cs-thought-cfg-box');
+          sa(goMemBox, 'data-ag-cs-gomemlimit-box', '1');
+          ap(
+            goMemBox,
+            ap(mkEl('div', 'ag-cs-about-repo-row'), ap(mkEl('div', 'ag-cs-about-repo-info'), mkEl('span', 'font-medium text-foreground', U('goMemLimitTitle', 'GOMEMLIMIT')), goMemChip), ap(mkEl('div', 'ag-cs-thought-btn-group'), goMemSel, goMemApplyBtn, goMemClearBtn)),
+            mkEl('p', 'ag-cs-thought-hint', U('goMemLimitDesc'))
+          );
+
+          ap(
+            aboutBox,
+            ap(mkEl('div', 'ag-cs-about-repo-row'), ap(mkEl('div', 'ag-cs-about-repo-info'), mkEl('span', 'font-medium text-foreground', U('storageHealthTitle', 'DB')), storageChip), archiveBtn),
+            ap(mkEl('div', 'ag-cs-about-repo-row'), ap(mkEl('div', 'ag-cs-about-repo-info'), mkEl('span', 'font-medium text-foreground', U('storageAutoExitTitle', 'Auto-Archive')), mkEl('span', 'ag-cs-thought-hint', U('storageAutoExitDesc'))), ap(mkEl('div', 'ag-cs-thought-btn-group'), autoExitOffBtn, autoExitOnBtn)),
+            ap(mkEl('div', 'ag-cs-about-repo-row'), ap(mkEl('div', 'ag-cs-about-repo-info'), archActionChip), ap(mkEl('div', 'ag-cs-thought-btn-group'), archRestartBtn, restoreBtn)),
+            archConfirmBox,
+            restoreConfirmBox,
+            goMemBox
+          );
 
           const creditsGrid = mkEl('div', 'ag-cs-about-credits');
           for (const item of UPSTREAM_CREDITS) {

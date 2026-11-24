@@ -655,6 +655,7 @@ namespace AgyClaudeStyle.Installer
                     "obsidian-prism-thought.json",
                     "obsidian-prism-thought-cache.json",
                     "obsidian-prism-usage-rollup-cache.json",
+                    "obsidian-prism-storage-guard-state.json",
                     "obsidian-prism-sidebar.json",
                     "obsidian-prism-sidebar.json.lock",
                     "obsidian-prism-wallpaper.json",

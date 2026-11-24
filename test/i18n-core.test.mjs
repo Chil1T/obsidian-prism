@@ -399,10 +399,12 @@ test('v1.0.1 i18n keys cover all 8 languages for scene presets, 6 new config key
 });
 
 test('settings-panel schema, scene presets, strict apiKey-stripping JSON export, and allowlist-validated JSON import', () => {
-  // Verify all 35 global config keys (including effortMemory, periodicModelPicker, contextMenu, sidebarNavFold, scrollBottomMotion, hostLocalization, omniModule, linkTarget, sidebarStudio, autoUpdate & updateChannel) match exact contract
+  // Verify all 36 global config keys (including effortMemory, periodicModelPicker, contextMenu, sidebarNavFold, scrollBottomMotion, hostLocalization, omniModule, linkTarget, sidebarStudio, autoUpdate, updateChannel & autoArchiveOnExit) match exact contract
   const { PRISM_SETTINGS_SCHEMA, SCENE_PRESETS, buildSanitizedConfigExport, validateImportedConfigJson, getDefaultSettingsPatch } =
     settingsPanel;
-  assert.equal(Object.keys(PRISM_SETTINGS_SCHEMA).length, 35);
+  assert.equal(Object.keys(PRISM_SETTINGS_SCHEMA).length, 36);
+  assert.deepEqual(PRISM_SETTINGS_SCHEMA.autoArchiveOnExit.allowed, [true, false]);
+  assert.equal(PRISM_SETTINGS_SCHEMA.autoArchiveOnExit.default, false);
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.effortMemory.allowed, ['on', 'off']);
   assert.equal(PRISM_SETTINGS_SCHEMA.effortMemory.default, 'on');
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.periodicModelPicker.allowed, ['on', 'off']);
@@ -514,7 +516,8 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
   assert.equal(validateImportedConfigJson('not-json').ok, false);
   assert.equal(validateImportedConfigJson('{"unknownOnly": 1}').ok, false);
   const defaultPatch = getDefaultSettingsPatch();
-  assert.equal(Object.keys(defaultPatch).length, 35);
+  assert.equal(Object.keys(defaultPatch).length, 36);
+  assert.equal(defaultPatch.autoArchiveOnExit, false);
   assert.equal(defaultPatch.effortMemory, 'on');
   assert.equal(defaultPatch.periodicModelPicker, 'on');
   assert.equal(defaultPatch.sidebarNavFold, 'off');
