@@ -2157,11 +2157,14 @@ test('PR #45 Quad mascot mode: GPT White Dragon & DeepSeek Whale sprites, 4-camp
   assert.equal(trigInfo.mascotCamp, 'deepseek');
 });
 
-test('Custom mascot roster DSL: canonical folding, 3-way validation parity, multi-instance hot swap & VRAM cleanup, 520px layout, camp fallback & pure-minis r:+m', () => {
+test('Custom mascot roster DSL: single-toggle 0/1 clamp, canonical folding, 3-way validation parity, 4-actor hot swap & VRAM cleanup, 520px layout, camp fallback & pure-minis r:+m', () => {
   const cdp = require('../cdp.js');
   const sp = require('../settings-panel.js');
 
-  // 1. Canonical folding & bidirectional consistency across rig, settings-panel, and cdp
+  assert.equal(rig.MASCOT_MAX_PER_SPECIES, 1, 'MASCOT_MAX_PER_SPECIES must be strictly 1');
+  assert.equal(rig.MASCOT_MAX_TOTAL, 4, 'MASCOT_MAX_TOTAL must be strictly 4');
+
+  // 1. Canonical folding, legacy multi-count 0/1 clamping & bidirectional consistency across rig, settings-panel, and cdp
   const foldCases = [
     ['off', 'off'],
     ['crab', 'crab'],
@@ -2177,10 +2180,13 @@ test('Custom mascot roster DSL: canonical folding, 3-way validation parity, mult
     ['r:w1,d1,k1,c1', 'quad'],
     ['r:w1,d1,k1,c1+m', 'quad-minis'],
     ['r:w1,d1', 'r:d1,w1'],
-    ['r:c2,k1+m', 'r:c2,k1+m'],
+    ['r:c2,k1', 'crab'],
+    ['r:c2,k1+m', 'minis'],
+    ['r:d2,w3', 'r:d1,w1'],
     ['r:+m', 'r:+m'],
-    ['r:c4,k2', 'r:c4,k2'],
-    ['r:c4,k2+m', 'r:c4,k2+m'],
+    ['r:c4,k2', 'crab'],
+    ['r:c4,k2+m', 'minis'],
+    ['r:c2,k2,d1,w1+m', 'quad-minis'],
   ];
   for (const [input, expected] of foldCases) {
     assert.equal(rig.isValidMascotValue(input), true, `rig must accept ${input}`);
@@ -2200,16 +2206,16 @@ test('Custom mascot roster DSL: canonical folding, 3-way validation parity, mult
     assert.equal(sp.validateImportedConfigJson(JSON.stringify({ mascot: bad })).ok, false, `settings-panel must reject ${bad}`);
   }
 
-  // 2. 520px compact non-overlapping layout for 6 main actors + 9-tier totem stack
+  // 2. Legacy multi-count input clamps cleanly to 4 unique main actors + 7-tier totem stack inside 520px
   const { doc } = createRigMockDom(520);
   const hostEl = doc.createElement('div');
   const stage = rig.mountDualMascotStage(hostEl, { mascot: 'r:c2,k2,d1,w1+m', camp: 'claude', streaming: true, reducedMotion: true });
   try {
     let snap = stage.getLayoutSnapshot();
-    assert.equal(snap.mascot, 'r:c2,k2,d1,w1+m');
-    assert.deepEqual(snap.actors.map((a) => a.id), ['cat', 'cat-2', 'clawd', 'clawd-2', 'dragon', 'whale']);
+    assert.equal(snap.mascot, 'quad-minis');
+    assert.deepEqual(snap.actors.map((a) => a.id), ['cat', 'clawd', 'dragon', 'whale']);
 
-    // All 6 actors fit cleanly inside 520px stage without overflow or overlap
+    // All 4 actors fit cleanly inside 520px stage without overflow or overlap
     const xs = snap.actors.map((a) => a.x).sort((a, b) => a - b);
     assert.ok(xs[0] >= 8, `Leftmost actor overflowed: x=${xs[0]}`);
     assert.ok(xs[xs.length - 1] <= 432, `Rightmost actor overflowed 520px stage: x=${xs[xs.length - 1]}`);
@@ -2217,25 +2223,23 @@ test('Custom mascot roster DSL: canonical folding, 3-way validation parity, mult
       assert.ok(xs[i] - xs[i - 1] >= 34, `Actors overlapped at 520px: gap=${xs[i] - xs[i - 1]}`);
     }
 
-    // Camp teamwork: both Claude crabs write while others loaf/sleep
+    // Camp teamwork: Claude crab writes while others loaf/sleep
     const byId = Object.fromEntries(snap.actors.map((a) => [a.id, a]));
     assert.equal(byId.clawd.pose, 'write');
-    assert.equal(byId['clawd-2'].pose, 'write');
     assert.equal(byId.cat.pose, 'loaf');
-    assert.equal(byId['cat-2'].pose, 'loaf');
     assert.equal(byId.dragon.pose, 'sleep');
     assert.equal(byId.whale.pose, 'loaf');
 
-    // Dynamic 9-tier totem stack (6 mains + 3 mini crabs)
-    const chain = ['cat', 'cat-2', 'clawd', 'clawd-2', 'dragon', 'whale', 'cowboy', 'shades', 'wizard'];
+    // Dynamic 7-tier totem stack (4 unique mains + 3 mini crabs)
+    const chain = ['cat', 'clawd', 'dragon', 'whale', 'cowboy', 'shades', 'wizard'];
     for (let i = 1; i < chain.length; i++) {
       assert.equal(stage.stackOnto(chain[i], chain[i - 1]), true, `stackOnto(${chain[i]}, ${chain[i - 1]}) should succeed`);
     }
-    assert.equal(stage.getLayoutSnapshot().towers[0].length, 9, '6 mains + 3 minis must support 9-tier totem tower');
+    assert.equal(stage.getLayoutSnapshot().towers[0].length, 7, '4 mains + 3 minis must support 7-tier totem tower');
 
     // 3. Hot swap down to dragon+whale only: removed DOM nodes & canvases reclaimed to 0x0
-    const removedEls = hostEl.children.filter((n) => ['cat', 'cat-2', 'clawd', 'clawd-2'].includes(n.getAttribute?.('data-mascot-id')));
-    assert.equal(removedEls.length, 4);
+    const removedEls = hostEl.children.filter((n) => ['cat', 'clawd'].includes(n.getAttribute?.('data-mascot-id')));
+    assert.equal(removedEls.length, 2);
     const removedCanvases = removedEls.map((el) => el.children[0]);
 
     stage.setState({ mascot: 'r:d1,w1', camp: 'gemini', streaming: true });
@@ -2306,39 +2310,39 @@ test('Custom mascot roster DSL: canonical folding, 3-way validation parity, mult
   }
 });
 
-test('Periodic picker PP_OPEN 0fps sleep covers dynamic multi-instance roster and restores cleanly', () => {
+test('Periodic picker PP_OPEN 0fps sleep covers 4-species quad-minis roster and restores cleanly', () => {
   const { doc, html } = createRigMockDom(760);
   const hostEl = doc.createElement('div');
   doc.body.appendChild(hostEl);
-  const stage = rig.mountDualMascotStage(hostEl, { mascot: 'r:c2,k1,d2,w1+m', camp: 'gpt', reducedMotion: false });
+  const stage = rig.mountDualMascotStage(hostEl, { mascot: 'quad-minis', camp: 'gpt', reducedMotion: false });
   try {
-    assert.equal(stage.getLayoutSnapshot().actors.length, 6);
-    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 100, 'Active multi-instance roster must tick at 100ms');
+    assert.equal(stage.getLayoutSnapshot().actors.length, 4);
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 100, 'Active quad-minis roster must tick at 100ms');
 
     // Open periodic picker -> immediate 0fps heartbeat pause
     html.setAttribute('data-ag-pp-open', '1');
-    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 0, 'PP_OPEN=1 must pause multi-instance roster heartbeat to 0fps');
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 0, 'PP_OPEN=1 must pause roster heartbeat to 0fps');
     assert.equal(stage.getLayoutSnapshot().perf.timerPaused, true);
 
     // Close periodic picker -> cleanly wakes back to 100ms
     html.removeAttribute('data-ag-pp-open');
-    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 100, 'Removing PP_OPEN must wake multi-instance roster back to 100ms');
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 100, 'Removing PP_OPEN must wake roster back to 100ms');
   } finally {
     stage.dispose();
   }
 });
 
-test('Octopath HD-2D Mascot Casting Stage sub-panel: Ch9 fallback when mascot=off, spotlight/cheer/hover, x2 badge & 6-cap, 5th mini-crab corner, 0x0 VRAM reclaim, 36 schema keys, 8-lang zero-CJK & MIT credits', () => {
+test('Octopath HD-2D 16:9 Mascot Casting Stage sub-panel: Ch9 fallback when mascot=off, 5-slot pure toggles, 4 presets, 0x0 VRAM reclaim, 36 schema keys, 8-lang zero-CJK & MIT credits', () => {
   const fs = require('node:fs');
   const path = require('node:path');
   const sp = require('../settings-panel.js');
   const i18nLocales = require('../i18n-locales.js');
 
-  // 1. Strict 36 schema keys & mascot allowed presets
+  // 1. Strict 36 schema keys & 4 mascot presets
   assert.equal(Object.keys(sp.PRISM_SETTINGS_SCHEMA).length, 36, 'PRISM_SETTINGS_SCHEMA must remain strictly 36 keys');
-  assert.deepEqual([...sp.PRISM_SETTINGS_SCHEMA.mascot.allowed], ['crab', 'minis', 'quad', 'quad-minis', 'off']);
+  assert.deepEqual([...sp.PRISM_SETTINGS_SCHEMA.mascot.allowed], ['crab', 'quad', 'quad-minis', 'off']);
 
-  // 2. 8-language coverage (including all stage keys), zero CJK in en/es/fr/de, and 0 new keys leaked into RUNTIME_UI_KEYS
+  // 2. 8-language coverage (including all stage keys), /4 cap copy, zero CJK in en/es/fr/de, and 0 new keys leaked into RUNTIME_UI_KEYS
   const newKeys = [
     'optMascotCrab', 'optMascotMinis', 'optMascotQuad', 'optMascotQuadMinis', 'optMascotOff',
     'mascotRosterTitle', 'mascotRosterCount', 'mascotRosterMinis',
@@ -2354,6 +2358,7 @@ test('Octopath HD-2D Mascot Casting Stage sub-panel: Ch9 fallback when mascot=of
   const CJK_RE = /[\u3000-\u30ff\u3400-\u9fff\uac00-\ud7af\uff00-\uffef]/;
   for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
     const ui = i18nLocales.getUiStrings(lang);
+    assert.ok(ui.mascotRosterCount.includes('/4'), `mascotRosterCount for ${lang} must reflect /4 cap`);
     for (const k of newKeys) {
       assert.ok(typeof ui[k] === 'string' && ui[k].trim().length > 0, `Missing i18n key ${k} for ${lang}`);
       if (['en', 'es', 'fr', 'de'].includes(lang)) {
@@ -2370,7 +2375,7 @@ test('Octopath HD-2D Mascot Casting Stage sub-panel: Ch9 fallback when mascot=of
   assert.ok(thirdPartyTxt.includes('wp3171216237/dsh-TUI') && thirdPartyTxt.includes('chimney'), 'THIRD_PARTY_NOTICES.md must include wp3171216237/dsh-TUI MIT notice');
   assert.ok(sp.UPSTREAM_CREDITS.some((c) => c.repo === 'wp3171216237/dsh-TUI'), 'settings-panel UPSTREAM_CREDITS must include wp3171216237/dsh-TUI');
 
-  // 4. Interactive HD-2D Stage Sub-panel E2E test starting from mascot='off' (without Ch10 loaded!)
+  // 4. Interactive HD-2D Stage Sub-panel E2E test starting from mascot='off' (without Ch10 loaded, and with Mock 2D Canvas falling back safely)
   const { doc, metrics } = createRigMockDom(760);
   const dlg = doc.createElement('div');
   dlg.setAttribute('role', 'dialog');
@@ -2390,8 +2395,11 @@ test('Octopath HD-2D Mascot Casting Stage sub-panel: Ch9 fallback when mascot=of
   const prevDoc = globalThis.document;
   const prevArt = globalThis.__agPrismMascotArt;
   const prevRig = globalThis.__agDualMascotRig;
+  const prevGl = globalThis.__agOctopathStageWebGL;
   delete globalThis.__agPrismMascotArt;
   delete globalThis.__agDualMascotRig;
+  // Mount WebGL2 engine module into globalThis to verify strict Mock 2D Canvas rejection -> graceful 2.5D fallback
+  globalThis.__agOctopathStageWebGL = require('../vendor/clawd-mascot/octopath-stage-webgl.js');
   globalThis.document = doc;
   try {
     sp.mountOrSyncSettingsSection({
@@ -2414,7 +2422,7 @@ test('Octopath HD-2D Mascot Casting Stage sub-panel: Ch9 fallback when mascot=of
     const mascotRow = panel.querySelector('[data-ag-cs-row="mascot"]');
     assert.ok(mascotRow, 'Mascot settings row must render');
     const presetBtns = mascotRow.querySelectorAll('button[data-ag-cs-key="mascot"]');
-    assert.equal(presetBtns.length, 5, 'Mascot row must keep 5 quick preset buttons');
+    assert.equal(presetBtns.length, 4, 'Mascot row must present 4 quick preset buttons');
     const openStageBtn = mascotRow.querySelector('button[data-ag-mascot-stage-open="1"]');
     assert.ok(openStageBtn, 'Mascot row must render Open Casting Stage button');
     assert.ok(openStageBtn.children[0]?.innerHTML?.includes('<svg'), 'Stage entry button must render built-in SVG spotlight icon (no emoji)');
@@ -2425,9 +2433,11 @@ test('Octopath HD-2D Mascot Casting Stage sub-panel: Ch9 fallback when mascot=of
     assert.equal(stageApi.canvas.height, 0, 'Closed stage canvas height must be 0 (0 VRAM)');
     assert.equal(metrics.rafCalls, 0, 'Closed stage must schedule 0 rAF ticks');
 
-    // Open stage while mascot='off' and Ch10 absent -> renders real 16x10 pixel art via Ch9 fallback
+    // Open stage while mascot='off' and Ch10 absent -> rejects fake 2D Mock as WebGL2 and renders 16:9 2.5D fallback
     openStageBtn.click();
     assert.equal(stageApi.isOpen(), true);
+    assert.equal(stageApi.getBackend(), 'canvas2d', 'Mock 2D Canvas must never fool WebGL2 probe');
+    assert.equal(stageApi.canvas.style.aspectRatio, '16 / 9', 'Stage canvas must use 16:9 cinematic aspect ratio');
     assert.equal(stageApi.getArtSource(), 'ch9-fallback', 'Must use built-in Ch9 fallback pixel renderer when Ch10 is absent');
     assert.ok(stageApi.canvas.width > 0 && stageApi.canvas.height > 0, 'Open stage canvas must allocate backing store');
     assert.ok(metrics.fillRectCalls > 120, `Stage must render real pixel sprites on first frame (got ${metrics.fillRectCalls} fillRects)`);
@@ -2435,13 +2445,20 @@ test('Octopath HD-2D Mascot Casting Stage sub-panel: Ch9 fallback when mascot=of
 
     const stageView = sec.querySelector('[data-ag-mascot-stage-view="1"]');
     assert.equal(stageView.hidden, false);
-    const getVal = (spKey) => stageView.querySelector(`[data-ag-mascot-val="${spKey}"]`).textContent;
-    const inc = (spKey) => stageView.querySelector(`button[data-ag-mascot-inc="${spKey}"]`);
-    const dec = (spKey) => stageView.querySelector(`button[data-ag-mascot-dec="${spKey}"]`);
-    const badge = (spKey) => stageView.querySelector(`[data-ag-stage-badge="${spKey}"]`);
+
+    // Stepper controls & ×2 badges must be completely removed
+    assert.equal(stageView.querySelector('[data-ag-mascot-inc]'), null, 'Stepper + must be removed');
+    assert.equal(stageView.querySelector('[data-ag-mascot-dec]'), null, 'Stepper - must be removed');
+    assert.equal(stageView.querySelector('[data-ag-mascot-val]'), null, 'Stepper value must be removed');
+    assert.equal(stageView.querySelector('[data-ag-stage-badge]'), null, 'Multi-count badge must be removed');
+
+    const toggleBtn = (key) => stageView.querySelector(`button[data-ag-mascot-toggle="${key}"]`);
     const minisBtn = stageView.querySelector('button[data-ag-mascot-minis="1"]');
     const countEl = stageView.querySelector('[data-ag-mascot-count]');
+    const stagePresets = stageView.querySelectorAll('button[data-ag-stage-preset]');
     const stagePreset = (val) => stageView.querySelector(`button[data-ag-stage-preset="${val}"]`);
+    assert.equal(stagePresets.length, 4, 'Stage bottom bar must expose 4 presets');
+    assert.strictEqual(toggleBtn('minis'), minisBtn, '5th toggle button must preserve data-ag-mascot-minis="1" hook');
 
     // Hover resting dragon slot -> spotlight pre-warms (> 0)
     stageApi.hoverSlot(2);
@@ -2451,43 +2468,40 @@ test('Octopath HD-2D Mascot Casting Stage sub-panel: Ch9 fallback when mascot=of
     // Click slot 0 (Claude Crab) -> 0 -> 1 quick toggle triggers spotlight & cheering state
     stageApi.clickSlot(0);
     assert.equal(state.mascot, 'r:c1');
-    assert.equal(getVal('c'), '1');
+    assert.equal(toggleBtn('c').getAttribute('aria-pressed'), 'true');
     assert.equal(stageApi.getSlotStates()[0].cheering, true, 'Activating slot must trigger cheering pose');
     // Click slot 0 again -> 1 -> 0 farewell & spotlight off
     stageApi.clickSlot(0);
     assert.equal(state.mascot, 'off');
+    assert.equal(toggleBtn('c').getAttribute('aria-pressed'), 'false');
     assert.equal(stageApi.getSlotStates()[0].farewell, true, 'Deactivating slot must trigger farewell animation');
 
-    // Stepper + on GPT Dragon twice -> shows ×2 badge and renders sidekick mini-clone
-    inc('d').click();
-    inc('d').click();
-    assert.equal(state.mascot, 'r:d2');
-    assert.equal(badge('d').textContent, '×2', 'Same-species count >= 2 must display ×2 badge');
-    assert.equal(stageApi.getSlotStates()[2].cheering, true, 'Incrementing GPT Dragon must trigger dragonFlame cheer');
+    // Toggle all 4 unique species on via nameplate switches -> total === 4 ('quad')
+    toggleBtn('d').click();
+    assert.equal(state.mascot, 'r:d1');
+    assert.equal(stageApi.getSlotStates()[2].cheering, true, 'Activating GPT Dragon must trigger dragonFlame cheer');
+    toggleBtn('c').click();
+    toggleBtn('k').click();
+    toggleBtn('w').click();
+    assert.equal(state.mascot, 'quad');
+    assert.equal(countEl.getAttribute('data-total'), '4');
 
-    // Fill roster to max 6 mains -> disables all 4 species '+' buttons
-    inc('c').click();
-    inc('k').click();
-    inc('w').click();
-    inc('w').click();
-    assert.equal(state.mascot, 'r:c1,k1,d2,w2');
-    assert.equal(countEl.getAttribute('data-total'), '6');
-    for (const spKey of ['c', 'k', 'd', 'w']) {
-      assert.equal(inc(spKey).disabled, true, `+ button for ${spKey} must disable at 6/6 cap`);
-    }
-
-    // Toggle 5th slot (Mini Crab Corner) -> lights up mini-crab spotlight & updates state
+    // Toggle 5th slot (Mini Crab Corner) -> lights up mini-crab spotlight & updates state to 'quad-minis'
     minisBtn.click();
-    assert.equal(state.mascot, 'r:c1,k1,d2,w2+m');
+    assert.equal(state.mascot, 'quad-minis');
     assert.equal(minisBtn.getAttribute('aria-pressed'), 'true');
     assert.equal(stageApi.getSlotStates()[4].cheering, true, 'Activating 5th mini-crab corner must trigger mini-crab cheer');
 
-    // Clicking stage bottom preset 'quad-minis' syncs roster & triggers spotlights
+    // Clicking stage bottom preset 'crab' syncs roster back to classic dual
+    stagePreset('crab').click();
+    assert.equal(state.mascot, 'crab');
+    assert.equal(countEl.getAttribute('data-total'), '2');
+    assert.equal(stagePreset('crab').getAttribute('aria-pressed'), 'true');
+
+    // Clicking stage bottom preset 'quad-minis' restores all 4 + minis
     stagePreset('quad-minis').click();
     assert.equal(state.mascot, 'quad-minis');
     assert.equal(countEl.getAttribute('data-total'), '4');
-    assert.equal(stagePreset('quad-minis').getAttribute('aria-pressed'), 'true');
-    assert.equal(badge('d').textContent, '', 'Badge hides when species count drops back to 1');
 
     // When Ch10 mascotArt is mounted, stage automatically upgrades to full Ch10 live art renderer
     globalThis.__agPrismMascotArt = rig.mascotArt;
@@ -2528,7 +2542,7 @@ test('Octopath HD-2D Mascot Casting Stage sub-panel: Ch9 fallback when mascot=of
     assert.equal(stageApi.canvas.width, 0);
     assert.equal(metrics.activeRafIds.size, 0);
 
-    // Scene preset 'eco' in main settings resets mascot to 'off' and syncs summary bar to 0/6
+    // Scene preset 'eco' in main settings resets mascot to 'off' and syncs summary bar to 0/4
     const ecoBtn = panel.querySelector('button[data-ag-cs-preset="eco"]');
     assert.ok(ecoBtn, 'Eco scene preset button must exist');
     ecoBtn.click();
@@ -2540,9 +2554,208 @@ test('Octopath HD-2D Mascot Casting Stage sub-panel: Ch9 fallback when mascot=of
     else globalThis.__agPrismMascotArt = prevArt;
     if (prevRig === undefined) delete globalThis.__agDualMascotRig;
     else globalThis.__agDualMascotRig = prevRig;
+    if (prevGl === undefined) delete globalThis.__agOctopathStageWebGL;
+    else globalThis.__agOctopathStageWebGL = prevGl;
     if (prevDoc === undefined) delete globalThis.document;
     else globalThis.document = prevDoc;
   }
+});
+
+test('Octopath WebGL2 HD-2D engine: 4-FBO MRT pipeline, GL_NEAREST pixel filtering, 3D parallax & ray picking, hot-swap atlas & full WEBGL_lose_context VRAM reclaim', () => {
+  const octo = require('../vendor/clawd-mascot/octopath-stage-webgl.js');
+  const cdp = require('../cdp.js');
+
+  // 1. Strict WebGL2 capability probe rejects Mock 2D contexts
+  assert.equal(octo.isRealWebGL2Context({ fillRect() {}, clearRect() {} }), false);
+  assert.equal(octo.isSupported({ getContext: () => ({ fillRect() {} }) }), false);
+
+  // 2. Instrument a faithful WebGL2 mock context to verify shaders, 4 FBOs, MRT, NEAREST filtering, draw calls, and full disposal
+  const counts = {
+    shaders: 0, programs: 0, vaos: 0, buffers: 0, textures: 0, fbos: 0, rbos: 0,
+    delShaders: 0, delPrograms: 0, delVaos: 0, delBuffers: 0, delTextures: 0, delFbos: 0, delRbos: 0,
+    drawCalls: 0, drawBuffersMrt: 0, nearestFilters: 0, loseContextCalls: 0, texSubImageCalls: 0,
+  };
+  let idSeq = 1;
+  const mockGl = {
+    VERTEX_SHADER: 0x8b31, FRAGMENT_SHADER: 0x8b30, COMPILE_STATUS: 0x8b81, LINK_STATUS: 0x8b82,
+    ARRAY_BUFFER: 0x8892, STATIC_DRAW: 0x88e4, FLOAT: 0x1406, TRIANGLES: 0x0004,
+    TEXTURE_2D: 0x0de1, TEXTURE0: 0x84c0, TEXTURE1: 0x84c1, TEXTURE2: 0x84c2,
+    RGBA: 0x1908, UNSIGNED_BYTE: 0x1401, UNPACK_ALIGNMENT: 0x0cf5, UNPACK_FLIP_Y_WEBGL: 0x9240,
+    TEXTURE_MIN_FILTER: 0x2801, TEXTURE_MAG_FILTER: 0x2800, TEXTURE_WRAP_S: 0x2802, TEXTURE_WRAP_T: 0x2803,
+    NEAREST: 0x2600, LINEAR: 0x2601, CLAMP_TO_EDGE: 0x812f, REPEAT: 0x2901,
+    FRAMEBUFFER: 0x8d40, RENDERBUFFER: 0x8d41, DEPTH_COMPONENT16: 0x81a5,
+    COLOR_ATTACHMENT0: 0x8ce0, COLOR_ATTACHMENT1: 0x8ce1, DEPTH_ATTACHMENT: 0x8d00,
+    FRAMEBUFFER_COMPLETE: 0x8cd5, COLOR: 0x1800, DEPTH_BUFFER_BIT: 0x0100,
+    DEPTH_TEST: 0x0b71, BLEND: 0x0be2, SRC_ALPHA: 0x0302, ONE_MINUS_SRC_ALPHA: 0x0303, ONE: 1,
+    createShader() { counts.shaders += 1; return { id: idSeq++ }; },
+    shaderSource() {},
+    compileShader() {},
+    getShaderParameter() { return true; },
+    deleteShader() { counts.delShaders += 1; },
+    createProgram() { counts.programs += 1; return { id: idSeq++ }; },
+    attachShader() {},
+    linkProgram() {},
+    getProgramParameter() { return true; },
+    deleteProgram() { counts.delPrograms += 1; },
+    getUniformLocation(_p, name) { return { name }; },
+    createVertexArray() { counts.vaos += 1; return { id: idSeq++ }; },
+    bindVertexArray() {},
+    deleteVertexArray() { counts.delVaos += 1; },
+    createBuffer() { counts.buffers += 1; return { id: idSeq++ }; },
+    bindBuffer() {},
+    bufferData() {},
+    deleteBuffer() { counts.delBuffers += 1; },
+    enableVertexAttribArray() {},
+    vertexAttribPointer() {},
+    createTexture() { counts.textures += 1; return { id: idSeq++ }; },
+    activeTexture() {},
+    bindTexture() {},
+    pixelStorei() {},
+    texParameteri(_t, _p, val) { if (val === 0x2600) counts.nearestFilters += 1; },
+    texImage2D() {},
+    texSubImage2D() { counts.texSubImageCalls += 1; },
+    deleteTexture() { counts.delTextures += 1; },
+    createFramebuffer() { counts.fbos += 1; return { id: idSeq++ }; },
+    bindFramebuffer() {},
+    framebufferTexture2D() {},
+    checkFramebufferStatus() { return 0x8cd5; },
+    deleteFramebuffer() { counts.delFbos += 1; },
+    createRenderbuffer() { counts.rbos += 1; return { id: idSeq++ }; },
+    bindRenderbuffer() {},
+    renderbufferStorage() {},
+    framebufferRenderbuffer() {},
+    deleteRenderbuffer() { counts.delRbos += 1; },
+    drawBuffers(arr) { if (Array.isArray(arr) && arr.length === 2) counts.drawBuffersMrt += 1; },
+    viewport() {},
+    enable() {},
+    disable() {},
+    depthMask() {},
+    blendFunc() {},
+    clearBufferfv() {},
+    clear() {},
+    useProgram() {},
+    uniform1i() {},
+    uniform2f() {},
+    uniform4f() {},
+    uniform4fv() {},
+    uniformMatrix4fv() {},
+    drawArrays() { counts.drawCalls += 1; },
+    getExtension(name) {
+      if (name === 'WEBGL_lose_context') {
+        return { loseContext() { counts.loseContextCalls += 1; } };
+      }
+      return null;
+    },
+  };
+
+  assert.equal(octo.isRealWebGL2Context(mockGl), true);
+
+  const sprite2d = {
+    imageSmoothingEnabled: false,
+    fillStyle: '',
+    clearRect() {},
+    fillRect() {},
+  };
+  const mockDoc = {
+    defaultView: { devicePixelRatio: 1.5 },
+    createElement(tag) {
+      return { tagName: tag.toUpperCase(), width: 0, height: 0, getContext: (k) => (k === '2d' ? sprite2d : null) };
+    },
+  };
+  const mockCanvas = {
+    width: 0,
+    height: 0,
+    ownerDocument: mockDoc,
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 640, height: 360 }),
+    getContext: (kind) => (kind === 'webgl2' ? mockGl : null),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  const inst = octo.createStage({ canvas: mockCanvas, doc: mockDoc });
+  assert.ok(inst, 'WebGL2 createStage must initialize cleanly on valid WebGL2 context');
+  assert.equal(counts.programs, 4, 'Must compile 4 programs (Scene MRT, FX, Blur, Composite)');
+  assert.ok(counts.nearestFilters >= 10, 'Pixel textures must strictly apply gl.NEAREST');
+
+  // Render a frame with all 5 slots & pointer parallax active
+  inst.setPointer(0.8, -0.5, true);
+  const slotInfos = octo.SLOT_WORLD_POS.map((sp, i) => ({
+    kind: sp.kind,
+    pose: i === 2 ? 'dragonFlame' : i === 3 ? 'whaleSpout' : 'idle',
+    sym: null,
+    cnt: 1,
+    light: 1,
+    cheering: i === 2,
+    cheerProg: i === 2 ? 0.35 : 0,
+    rippleProg: i === 2 ? 0.35 : 0,
+    farewell: false,
+    isHov: false,
+    jumpWorld: 0.1,
+    breath: false,
+    blink: false,
+    animTick: 3,
+    clipTick: 3,
+  }));
+  const ok = inst.render(1000, { dt: 33, light: false, reducedMotion: false, art: rig.mascotArt, tickIdx: 6, slotInfos });
+  assert.equal(ok, true);
+  assert.equal(counts.fbos, 5, 'Must allocate 5 FBOs (Scene MRT + Bloom A/B + Blur A/B)');
+  assert.ok(counts.drawBuffersMrt >= 2, 'Scene pass must target 2-attachment MRT (scene + emissive)');
+  assert.ok(counts.drawCalls >= 40, `Expected full 3D tavern props + mascots + beams + post-FX draw calls (got ${counts.drawCalls})`);
+  assert.ok(counts.texSubImageCalls >= 1, 'Dirty mascot sprites must upload via texSubImage2D');
+
+  const st = inst.getStats();
+  assert.equal(st.backend, 'webgl2');
+  assert.equal(st.width, 960);
+  assert.equal(st.height, 540);
+  assert.equal(st.propCount, 21);
+  assert.ok(st.cameraYawDeg > 0, 'Right pointer must pan camera yaw smoothly');
+
+  // 3D ray/NDC picking hits center slot (index 2: dragon) cleanly
+  assert.equal(inst.pickSlot(0.0, -0.1), 2, '3D projected picking near center must hit slot 2 (GPT Dragon)');
+  assert.equal(inst.pickSlot(0.99, 0.99), -1, 'Upper-right corner sky must return -1');
+
+  // Hot-swap external tavern-atlas-data.js if present (seamless Image decode -> gl.NEAREST upgrade)
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const atlasFile = path.join(path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..'), 'vendor', 'clawd-mascot', 'tavern-atlas-data.js');
+  if (fs.existsSync(atlasFile)) {
+    const prevAtlas = globalThis.__agOctopathTavernAtlas;
+    const prevImg = globalThis.Image;
+    try {
+      const atlas = require(atlasFile);
+      globalThis.__agOctopathTavernAtlas = atlas;
+      globalThis.Image = class MockImage {
+        set src(val) {
+          this._src = val;
+          this.naturalWidth = val === atlas.wallDataUrl ? atlas.wallW : val === atlas.floorDataUrl ? atlas.floorW : atlas.propsW;
+          this.naturalHeight = val === atlas.wallDataUrl ? atlas.wallH : val === atlas.floorDataUrl ? atlas.floorH : atlas.propsH;
+          if (typeof this.onload === 'function') this.onload();
+        }
+      };
+      const okAtlas = inst.render(1050, { dt: 33, light: false, reducedMotion: false, art: rig.mascotArt, tickIdx: 7, slotInfos });
+      assert.equal(okAtlas, true);
+      assert.deepEqual(inst.getStats().atlasLoaded, { wall: true, floor: true, props: true }, 'External tavern-atlas-data.js must hot-swap all 3 textures');
+    } finally {
+      if (prevAtlas === undefined) delete globalThis.__agOctopathTavernAtlas;
+      else globalThis.__agOctopathTavernAtlas = prevAtlas;
+      if (prevImg === undefined) delete globalThis.Image;
+      else globalThis.Image = prevImg;
+    }
+  }
+
+  // Full VRAM reclaim on dispose()
+  inst.dispose();
+  assert.equal(mockCanvas.width, 0);
+  assert.equal(mockCanvas.height, 0);
+  assert.equal(counts.loseContextCalls, 1, 'dispose() must invoke WEBGL_lose_context.loseContext()');
+  assert.equal(counts.delPrograms, counts.programs, 'All WebGL programs must be deleted on dispose');
+  assert.equal(counts.delFbos, counts.fbos, 'All FBOs must be deleted on dispose');
+  assert.equal(counts.delTextures, counts.textures, 'All textures must be deleted on dispose');
+
+  // Channel 9 expression embeds WebGL2 stage module and SETTINGS_REMOVE_EXPRESSION cleans globals
+  const ch9Expr = cdp.buildSettingsChannelExpression();
+  assert.ok(ch9Expr.includes('__agOctopathStageWebGL'), 'Channel 9 must bundle octopath-stage-webgl.js');
+  assert.ok(cdp.SETTINGS_REMOVE_EXPRESSION.includes('__agOctopathStageWebGL'), 'SETTINGS_REMOVE_EXPRESSION must clean WebGL global');
 });
 
 test('Mascot Casting Stage under prefers-reduced-motion: detaching dialog immediately reclaims 0x0 VRAM and unbinds document listeners + MutationObserver', () => {

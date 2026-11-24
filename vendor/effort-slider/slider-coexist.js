@@ -41,7 +41,7 @@
     '[data-testid="autoscroll-viewport"],[data-testid="planner-response-text"],[data-testid="agent-response"],[data-markdown-root],[data-testid="user-message-bubble"],aside,[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-crab,.ag-cs-conv-aura-host,#ag-pulse-status-bar,#ag-prism-pulse-bar,[data-ag-prism-pulse-bar="true"],.ag-cs-panel-row-glyph,.ces-ag-section,.ces-set,[data-ag-owned="1"],[data-testid="orchestrator-effort-bar"],.ag-cs-smooth-caret,.ag-anim-icon,[data-agy-hans-ui],#agy-theme-switcher,#agy-theme-menu,#antigravity-quota-widget,#antigravity-translation-audit';
 
   const EFF_MAP = Object.create(null);
-  for (const g of 'xhigh:xhigh|extra|超高|极高|特高|超高思考;high:high|高|高思考|高推理|高强度;medium:medium|med|中|中等|中思考|中等思考|中推理;low:low|低|低思考|低推理;minimal:minimal|极低|最小|最低;max:max|最高|最大;off:off|关闭|关;auto:auto|自动;adaptive:adaptive|自适应|自適應;thinking:thinking|深度思考|思考中|思考'.split(';')) {
+  for (const g of 'xhigh:xhigh|extra|extra high|超高|极高|極高|特高|很高|超高思考;high:high|高|高思考|高推理|高强度|高強度;medium:medium|med|中|中等|中思考|中等思考|中推理;low:low|低|低思考|低推理;minimal:minimal|极低|極低|最小|最低|极简|極簡;max:max|最高|最大|极限|極限;off:off|关闭|關閉|关|關|无|無|不推理|none|disabled;auto:auto|自动|自動;adaptive:adaptive|自适应|自適應;thinking:thinking|深度思考|思考中|思考'.split(';')) {
     const [k, vs] = g.split(':');
     for (const v of vs.split('|')) EFF_MAP[v] = k;
   }
@@ -53,7 +53,7 @@
   }
 
   function parseLocalizedModelLabel(raw) {
-    const s = String(raw || '').trim().replace(/^(?:Select model|选择模型)\s*[:：]\s*/i, '').trim();
+    const s = String(raw || '').trim().replace(/^(?:Select model|Current|选择模型|選擇模型)\s*[:：]\s*/i, '').trim();
     if (!s) return null;
     const m = /^(.*?)\s*[\(\uff08]([^()\uff08\uff09]+)[\)\uff09]\s*$/.exec(s);
     const eff = m ? normalizeEffortToken(m[2]) : '';

@@ -24,6 +24,7 @@ import {
 } from '../../vendor/pulse-dashboard/sidecars/panel/renderer-rpc-adapter.mjs';
 import { discoverLocalConversations } from '../../vendor/pulse-dashboard/sidecars/panel/local-conversations.mjs';
 import { UpdateService, RELEASES_PAGE_URL } from './update-service.mjs';
+import { AddonRegistry, isLabEnabled as isAddonsLabEnabled } from './addon-registry.mjs';
 import { getGoMemLimitStatus, setGoMemLimit, clearGoMemLimit } from './gomemlimit-service.mjs';
 import { buildStorageGuardBannerExpression, buildStorageGuardDismissExpression } from './storage-guard-ui.mjs';
 import * as conversationArchive from './conversation-archive.mjs';
@@ -2067,6 +2068,8 @@ export class PrismDaemon {
     shortcutBackoffIntervalMs = 45 * 60 * 1000,
     listPagesFallbackIntervalMs = 12000,
     _testUpdateService = null,
+    _testAddonRegistry = null,
+    addonsDir = null,
     updateCheckInitialDelayMs = 45000,
     updateCheckIntervalMs = 6 * 60 * 60 * 1000,
     enableAutoUpdateTimer = true,
@@ -2228,6 +2231,12 @@ export class PrismDaemon {
         _testUpdateService.setChannel(initialUpdateChannel);
       } catch {}
     }
+    this.addonRegistry =
+      _testAddonRegistry ||
+      new AddonRegistry({
+        rootDir: this.rootDir,
+        ...(addonsDir ? { addonsDir } : {}),
+      });
   }
 
   log(msg) {
@@ -2542,6 +2551,20 @@ export class PrismDaemon {
   }
 
   async _handleStorageAction(action, _testOverrides = null, rawInput = {}) {
+    let acquiredArchiveLock = false;
+    if (action === 'archive-and-restart') {
+      if (rawInput?.confirm !== true) {
+        return { ok: false, action, error: 'confirmation_required' };
+      }
+      if (
+        this._archiveActionInFlight ||
+        (!_testOverrides && this._archiveScheduledAt > 0 && Date.now() - this._archiveScheduledAt < 15000)
+      ) {
+        return { ok: false, action, code: 'ARCHIVE_IN_PROGRESS', error: '已有归档或还原任务正在执行，请勿重复触发。' };
+      }
+      this._archiveActionInFlight = true;
+      acquiredArchiveLock = true;
+    }
     try {
       const arch = conversationArchive;
       const now = Number.isFinite(_testOverrides?.now) ? _testOverrides.now : Date.now();
@@ -2744,77 +2767,66 @@ export class PrismDaemon {
       }
 
       if (action === 'archive-and-restart') {
-        if (rawInput?.confirm !== true) {
-          return { ok: false, action, error: 'confirmation_required' };
-        }
-        if (this._archiveActionInFlight || (!_testOverrides && this._archiveScheduledAt > 0 && Date.now() - this._archiveScheduledAt < 15000)) {
-          return { ok: false, action, code: 'ARCHIVE_IN_PROGRESS', error: '已有归档或还原任务正在执行，请勿重复触发。' };
-        }
-        this._archiveActionInFlight = true;
-        try {
-          if (_testOverrides?.forceBusy !== true) {
-            const idleState = await this._checkActiveHostIdleState(_testOverrides);
-            if (!idleState?.idle) {
-              return {
-                ok: false,
-                action,
-                code: 'HOST_BUSY',
-                error: '检测到 AI 正在生成或 Swarm 任务运行中，请等待空闲后再执行归档并重启。',
-                idleState,
-              };
-            }
+        if (_testOverrides?.forceBusy !== true) {
+          const idleState = await this._checkActiveHostIdleState(_testOverrides);
+          if (!idleState?.idle) {
+            return {
+              ok: false,
+              action,
+              code: 'HOST_BUSY',
+              error: '检测到 AI 正在生成或 Swarm 任务运行中，请等待空闲后再执行归档并重启。',
+              idleState,
+            };
           }
-          const snapRes =
-            scan.archivableSubagents?.length > 0 && !_testOverrides?.skipUsageSnapshot
-              ? await this._snapshotUsageBeforeArchive(scan.archivableSubagents, { maxFetch: 24, timeoutMs: 6000 }).catch(() => ({ fetched: 0, flushed: false }))
-              : { fetched: 0, flushed: true };
-          this._flushUsageDiskCache();
+        }
+        const snapRes =
+          scan.archivableSubagents?.length > 0 && !_testOverrides?.skipUsageSnapshot
+            ? await this._snapshotUsageBeforeArchive(scan.archivableSubagents, { maxFetch: 24, timeoutMs: 6000 }).catch(() => ({ fetched: 0, flushed: false }))
+            : { fetched: 0, flushed: true };
+        this._flushUsageDiskCache();
 
-          let host = null;
-          if (typeof _testOverrides?.detectHost === 'function') {
-            host = await _testOverrides.detectHost();
-          } else if (typeof this.cdp?.detectRunningAntigravityHost === 'function') {
-            try { host = await this.cdp.detectRunningAntigravityHost(); } catch {}
-          }
-
-          const scriptPath = path.join(this.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
-          const spawnRes = arch.spawnDetachedArchiveTask(
-            {
-              action: 'archive-and-restart',
-              convDir,
-              archiveDir,
-              hostPid: host?.pid || 0,
-              exePath: host?.exePath || '',
-              gracefulQuit: true,
-              relaunch: true,
-              mode: 'subagents',
-              subagentMaxAgeHours: subagentHours,
-              settleMs: 4000,
-            },
-            {
-              scriptPath,
-              spawnHook: _testOverrides?.spawnHook,
-              disableWmiBreakaway: Boolean(_testOverrides?.disableWmiBreakaway),
-            }
-          );
-          if (spawnRes?.spawned) {
-            // 防止宿主优雅退出期间 tick()/stop() 并发启动 auto-exit-archive 与当前手动归档任务冲突
-            this._autoArchiveExitRan = true;
-            if (!_testOverrides) this._archiveScheduledAt = Date.now();
-          }
-          this._storageHealthCache = null;
-          this._storageHealthAt = 0;
-          return {
-            ...base,
-            ok: Boolean(spawnRes?.spawned),
-            ...(spawnRes?.spawned ? {} : { code: spawnRes?.code || 'SPAWN_FAILED', error: spawnRes?.error || 'Failed to launch detached archive task' }),
-            scheduled: Boolean(spawnRes?.spawned),
-            method: spawnRes?.method || 'custom',
-            snapshottedUsageCount: snapRes.fetched || 0,
-          };
-        } finally {
-          this._archiveActionInFlight = false;
+        let host = null;
+        if (typeof _testOverrides?.detectHost === 'function') {
+          host = await _testOverrides.detectHost();
+        } else if (typeof this.cdp?.detectRunningAntigravityHost === 'function') {
+          try { host = await this.cdp.detectRunningAntigravityHost(); } catch {}
         }
+
+        const scriptPath = path.join(this.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
+        const spawnRes = arch.spawnDetachedArchiveTask(
+          {
+            action: 'archive-and-restart',
+            convDir,
+            archiveDir,
+            hostPid: host?.pid || 0,
+            exePath: host?.exePath || '',
+            gracefulQuit: true,
+            relaunch: true,
+            mode: 'subagents',
+            subagentMaxAgeHours: subagentHours,
+            settleMs: 4000,
+          },
+          {
+            scriptPath,
+            spawnHook: _testOverrides?.spawnHook,
+            disableWmiBreakaway: Boolean(_testOverrides?.disableWmiBreakaway),
+          }
+        );
+        if (spawnRes?.spawned) {
+          // 防止宿主优雅退出期间 tick()/stop() 并发启动 auto-exit-archive 与当前手动归档任务冲突
+          this._autoArchiveExitRan = true;
+          if (!_testOverrides) this._archiveScheduledAt = Date.now();
+        }
+        this._storageHealthCache = null;
+        this._storageHealthAt = 0;
+        return {
+          ...base,
+          ok: Boolean(spawnRes?.spawned),
+          ...(spawnRes?.spawned ? {} : { code: spawnRes?.code || 'SPAWN_FAILED', error: spawnRes?.error || 'Failed to launch detached archive task' }),
+          scheduled: Boolean(spawnRes?.spawned),
+          method: spawnRes?.method || 'custom',
+          snapshottedUsageCount: snapRes.fetched || 0,
+        };
       }
 
       this._storageHealthCache = base;
@@ -2822,6 +2834,10 @@ export class PrismDaemon {
       return base;
     } catch (err) {
       return { ok: false, action, error: sanitizeSecretText(err?.message || err) };
+    } finally {
+      if (acquiredArchiveLock) {
+        this._archiveActionInFlight = false;
+      }
     }
   }
 
@@ -2936,6 +2952,43 @@ export class PrismDaemon {
     }
     const res = await getGoMemLimitStatus(testOpts);
     return { ...res, action: 'gomemlimit-status' };
+  }
+
+  async _handleAddonsAction(action, rawInput = {}) {
+    const envOverride = rawInput?._testOverrides?.env || process.env;
+    if (!isAddonsLabEnabled(envOverride)) {
+      return { ok: false, action, error: 'addons_lab_disabled' };
+    }
+    const registry = rawInput?._testOverrides?.addonRegistry || this.addonRegistry;
+    if (!registry) {
+      return { ok: false, action, error: 'addon_registry_unavailable' };
+    }
+    if (action === 'addons-list') {
+      const res = registry.listAddons();
+      return { ...res, action, labEnabled: true };
+    }
+    if (action === 'addons-status') {
+      const targetId = rawInput?.id || rawInput?.addonId || '';
+      if (typeof targetId === 'string' && targetId.trim()) {
+        const res = registry.getAddonStatus(targetId.trim());
+        return { ...res, action, labEnabled: true };
+      }
+      const res = registry.listAddons();
+      return { ...res, action, labEnabled: true };
+    }
+    if (action === 'addons-install') {
+      const res = await registry.install({
+        manifestUrl: rawInput?.manifestUrl,
+        expectedManifestSha256: rawInput?.expectedManifestSha256 ?? null,
+        id: rawInput?.id || rawInput?.addonId || null,
+      });
+      return { ...res, action, labEnabled: true };
+    }
+    if (action === 'addons-remove') {
+      const res = registry.remove(rawInput?.id || rawInput?.addonId);
+      return { ...res, action, labEnabled: true };
+    }
+    return { ok: false, action, error: 'unknown_addons_action' };
   }
 
   async _resolveStorageGuardLanguage(targetEntry, cfg = null, _testOverrides = null) {
@@ -3669,6 +3722,14 @@ export class PrismDaemon {
     }
     if (rawInput?.action === 'uninstall') {
       return this._handleUninstallAction(rawInput);
+    }
+    if (
+      rawInput?.action === 'addons-list' ||
+      rawInput?.action === 'addons-status' ||
+      rawInput?.action === 'addons-install' ||
+      rawInput?.action === 'addons-remove'
+    ) {
+      return this._handleAddonsAction(rawInput.action, rawInput);
     }
     if (rawInput?.action === 'update-status') {
       const explicitChannel = this._extractExplicitUpdateChannel(rawInput);
@@ -8188,6 +8249,16 @@ export class PrismDaemon {
       if (inputPayload.listOnly === undefined && parsed?.listOnly !== undefined) inputPayload.listOnly = parsed.listOnly;
       if (inputPayload.autoArchiveOnExit === undefined && parsed?.autoArchiveOnExit !== undefined) {
         inputPayload.autoArchiveOnExit = parsed.autoArchiveOnExit;
+      }
+      if (inputPayload.addonId === undefined && parsed?.addonId !== undefined) inputPayload.addonId = parsed.addonId;
+      if (inputPayload.manifestUrl === undefined && parsed?.manifestUrl !== undefined) {
+        inputPayload.manifestUrl = parsed.manifestUrl;
+      }
+      if (
+        inputPayload.expectedManifestSha256 === undefined &&
+        parsed?.expectedManifestSha256 !== undefined
+      ) {
+        inputPayload.expectedManifestSha256 = parsed.expectedManifestSha256;
       }
 
       const result = await this.executeRepoAction({ ...inputPayload, action });

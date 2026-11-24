@@ -29,6 +29,9 @@ const VIEWER_CSP = [
   "base-uri 'none'",
 ].join('; ');
 
+export const SANDBOX_HTML_CSP = "sandbox allow-scripts; connect-src 'none'; form-action 'none'; navigate-to 'none'";
+const SUPPORTED_VIEWER_LANGS = Object.freeze(['zh-CN', 'zh-TW', 'yue', 'en', 'ja', 'ko', 'es', 'fr', 'de']);
+
 const MIME_BY_EXT = Object.freeze({
   '.mp4': 'video/mp4',
   '.m4v': 'video/mp4',
@@ -741,7 +744,8 @@ export class OmniServer {
     };
     if (isSandbox && (ext === '.html' || ext === '.htm')) {
       delete baseHeaders['X-Content-Type-Options'];
-    } else if (!isSandbox && (ext === '.html' || ext === '.htm' || ext === '.xhtml' || ext === '.svg')) {
+      baseHeaders['Content-Security-Policy'] = SANDBOX_HTML_CSP;
+    } else if (ext === '.html' || ext === '.htm' || ext === '.xhtml' || ext === '.svg') {
       baseHeaders['Content-Security-Policy'] = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
     }
 
@@ -1054,7 +1058,7 @@ export class OmniServer {
         const rawCorners = u.searchParams.get('corners') || 'balanced';
         const corners = ['sharp', 'balanced', 'soft'].includes(rawCorners) ? rawCorners : 'balanced';
         const rawLang = u.searchParams.get('lang') || 'zh-CN';
-        const lang = ['zh-CN', 'zh-TW', 'yue', 'en', 'ja'].includes(rawLang) ? rawLang : 'zh-CN';
+        const lang = SUPPORTED_VIEWER_LANGS.includes(rawLang) ? rawLang : 'zh-CN';
 
         const ctx = {
           baseUrl: this.baseUrl,

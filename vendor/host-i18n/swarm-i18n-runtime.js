@@ -200,19 +200,95 @@
     }
   }
 
+  var EXTERNAL_SWARM_GLOBAL_KEYS = [
+    '__AGY_SWARM_I18N__',
+    '__AGY_I18N_INITIALIZED__',
+    '__AGY_I18N__',
+    '__AGY_I18N_DATA__',
+    '__antigravityZhPatchInstalled',
+    '__antigravityZhSetLang',
+    '__antigravityZhPatchObserver',
+    '__agyI18n',
+    '__agyTranslateEnhancementText',
+    '__antigravity_i18n_runner_active',
+    '__ANTIGRAVITY_I18N_DATA__',
+    '__ANTIGRAVITY_REVERSE_MAP__',
+    '__antigravityZh',
+    '__antigravityZhDict',
+    '__agySidebarDragFixInstalled',
+    '__ag_hanhua_engine__',
+    '__AGY_ZHCN__',
+    '__AG_ZH__',
+    '__ANTIGRAVITY_CN__',
+    '__ANTIGRAVITY_I18N__',
+    '__AG_I18N__',
+    '__AG_CN_PATCH__',
+    '__AGY_CN__',
+    '__I18N_PATCHED__',
+  ];
+
+  var EXTERNAL_SWARM_DOM_ATTRS = [
+    'data-agy-i18n',
+    'data-agy-hans-ui',
+    'data-ag-cn',
+    'data-i18n-patched',
+    'data-translated',
+  ];
+
   function detectExternalSwarmI18n(win, doc) {
     try {
-      if (win && win.__AGY_SWARM_I18N__) return 'global-marker';
+      if (win) {
+        for (var g = 0; g < EXTERNAL_SWARM_GLOBAL_KEYS.length; g++) {
+          if (win[EXTERNAL_SWARM_GLOBAL_KEYS[g]]) return 'global-marker';
+        }
+        try {
+          var ls = win.localStorage;
+          var hansLang = ls && typeof ls.getItem === 'function' ? ls.getItem('antigravityHansLang') : null;
+          if (hansLang !== null && hansLang !== undefined) {
+            var normHans = String(hansLang).trim().toLowerCase();
+            if (normHans && normHans !== 'en' && normHans !== 'en-us' && normHans !== 'off' && normHans !== 'false' && normHans !== '0') {
+              return 'storage-marker';
+            }
+          }
+        } catch (_) {}
+      }
     } catch (_) {}
     try {
-      if (doc && typeof doc.querySelector === 'function' && doc.querySelector('[data-agy-i18n]')) {
-        return 'dom-marker';
+      if (doc) {
+        var rootEl0 = doc.documentElement;
+        var bodyEl0 = doc.body;
+        if (rootEl0 && rootEl0.classList && typeof rootEl0.classList.contains === 'function') {
+          if (rootEl0.classList.contains('agy-theme-active') || rootEl0.classList.contains('agy-theme-active-v2')) {
+            return 'dom-marker';
+          }
+        }
+        for (var a = 0; a < EXTERNAL_SWARM_DOM_ATTRS.length; a++) {
+          var attrName = EXTERNAL_SWARM_DOM_ATTRS[a];
+          if ((rootEl0 && getAttr(rootEl0, attrName) !== null) || (bodyEl0 && getAttr(bodyEl0, attrName) !== null)) {
+            return 'dom-marker';
+          }
+        }
+        if (typeof doc.querySelector === 'function') {
+          if (
+            doc.querySelector(
+              '[data-agy-i18n], [data-agy-hans-ui], [data-ag-cn], [data-i18n-patched], [data-translated], #agy-theme-switcher, #antigravity-quota-widget'
+            )
+          ) {
+            return 'dom-marker';
+          }
+        }
       }
     } catch (_) {}
     try {
       var rootEl = doc && doc.documentElement;
       if (rootEl && getAttr(rootEl, ROOT_ATTR) === 'active') {
         return null;
+      }
+      if (rootEl) {
+        var htmlLang = String(getAttr(rootEl, 'lang') || rootEl.lang || '').trim();
+        if (/^zh(?:$|[-_])/i.test(htmlLang)) {
+          return 'html-lang-zh';
+        }
       }
       if (doc && typeof doc.getElementById === 'function') {
         var anchorIds = ['tabbtn-feed', 'tabbtn-members', 'empty-title', 'live-label'];

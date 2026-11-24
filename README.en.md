@@ -253,6 +253,7 @@ Absorbed and adapted third-party components were originally released under the *
 6. **[Microqian2th/dsh-codex-effort-slider](https://github.com/Microqian2th/dsh-codex-effort-slider)** — Detent track snapping, hysteresis thresholds, and damped motion curve reference.
 7. **[mobius/dsh-performance-slider](https://github.com/mobius/dsh-performance-slider)** — Performance tier slider interaction and live visual feedback reference.
 8. **[claudenoshujin/claude-web](https://github.com/claudenoshujin/claude-web)** (by `lulu`) — Mascot stacking interaction reference (clean-room independent physics implementation).
+9. **[wp3171216237/dsh-TUI](https://github.com/wp3171216237/dsh-TUI)** — `MIT License`, `Copyright (c) 2026 chimney (@wp3171216237)` (Visual silhouette, cobalt-blue + white-belly palette, and water-spout animation concept reference for the **Deepy** DeepSeek pixel whale mascot, cleanly adapted in `dual-mascot-rig.js`).
 
 ---
 

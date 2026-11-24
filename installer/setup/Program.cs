@@ -389,6 +389,58 @@ namespace AgyClaudeStyle.Installer
             return false;
         }
 
+        private static bool IsAllowedAddonsOverrideDir(string candidate, string geminiRoot, out string matchedRoot)
+        {
+            matchedRoot = null;
+            if (string.IsNullOrEmpty(candidate) || string.IsNullOrEmpty(candidate.Trim())) return false;
+            string norm;
+            try { norm = NormalizeDirPath(candidate.Trim()); }
+            catch { return false; }
+            if (IsDangerousRootPath(norm)) return false;
+
+            string[] segs = norm.Split(new char[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+            bool owned = false;
+            for (int i = 0; i < segs.Length; i++)
+            {
+                if (string.Equals(segs[i], "conversations_archive", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(segs[i], "prism-knowledge-space", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(segs[i], "antigravity-spark", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+                if (string.Equals(segs[i], "addons", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(segs[i], "obsidian-prism", StringComparison.OrdinalIgnoreCase))
+                {
+                    owned = true;
+                }
+            }
+            if (!owned) return false;
+
+            List<string> allowedRoots = new List<string>();
+            Action<string> addBase = (b) =>
+            {
+                if (string.IsNullOrEmpty(b)) return;
+                try { allowedRoots.Add(NormalizeDirPath(b)); } catch { }
+            };
+            if (!string.IsNullOrEmpty(geminiRoot)) addBase(geminiRoot);
+            string userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrEmpty(userHome)) userHome = Environment.GetEnvironmentVariable("USERPROFILE");
+            if (!string.IsNullOrEmpty(userHome)) addBase(Path.Combine(userHome, ".gemini"));
+            addBase(Path.GetTempPath());
+
+            for (int i = 0; i < allowedRoots.Count; i++)
+            {
+                string root = allowedRoots[i];
+                string prefix = root.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+                if (norm.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    matchedRoot = root;
+                    return true;
+                }
+            }
+            return false;
+        }
+
         private static bool IsAllowedUsageCacheOverrideFile(string candidate, string hostCfgDir, string geminiRoot, out string matchedRoot)
         {
             matchedRoot = null;
@@ -696,6 +748,32 @@ namespace AgyClaudeStyle.Installer
                         string stopRoot = Path.GetDirectoryName(hostCfgDir);
                         AssertNoReparsePointChain(telemetryDir, stopRoot);
                         SafeDeleteDirectory(telemetryDir);
+                    }
+                    catch { }
+                }
+
+                string envAddons = Environment.GetEnvironmentVariable("AG_PRISM_ADDONS_DIR");
+                string addonsDir = null;
+                string addonsStopRoot = geminiRoot;
+                if (!string.IsNullOrEmpty(envAddons) && !string.IsNullOrEmpty(envAddons.Trim()))
+                {
+                    string matchedAddonsRoot;
+                    if (IsAllowedAddonsOverrideDir(envAddons, geminiRoot, out matchedAddonsRoot))
+                    {
+                        addonsDir = NormalizeDirPath(envAddons.Trim());
+                        addonsStopRoot = matchedAddonsRoot;
+                    }
+                }
+                else if (!string.IsNullOrEmpty(geminiRoot))
+                {
+                    addonsDir = Path.Combine(geminiRoot, "antigravity", "sidecar_data", "obsidian-prism", "addons");
+                }
+                if (!string.IsNullOrEmpty(addonsDir) && Directory.Exists(addonsDir) && !IsDangerousRootPath(addonsDir))
+                {
+                    try
+                    {
+                        AssertNoReparsePointChain(addonsDir, addonsStopRoot);
+                        SafeDeleteDirectory(addonsDir);
                     }
                     catch { }
                 }

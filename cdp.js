@@ -130,6 +130,7 @@ function normalizeMascotConfigValue(raw) {
   if (!m) return null;
   const counts = { c: 0, k: 0, d: 0, w: 0 };
   const seen = new Set();
+  let rawTotal = 0;
   let total = 0;
   if (m[1]) {
     for (const tok of m[1].split(',')) {
@@ -137,11 +138,13 @@ function normalizeMascotConfigValue(raw) {
       const cnt = Number(tok.slice(1));
       if (seen.has(sp) || !Number.isInteger(cnt) || cnt < 0 || cnt > 4) return null;
       seen.add(sp);
-      counts[sp] = cnt;
-      total += cnt;
+      rawTotal += cnt;
+      const clamped = cnt > 0 ? 1 : 0;
+      counts[sp] = clamped;
+      total += clamped;
     }
   }
-  if (total > 6) return null;
+  if (rawTotal > 6 || total > 4) return null;
   const minis = Boolean(m[2]);
   if (total === 0 && !minis) return 'off';
   if (counts.c === 1 && counts.k === 1 && counts.d === 0 && counts.w === 0) return minis ? 'minis' : 'crab';
@@ -10191,7 +10194,7 @@ function buildPeriodicPickerExpression(config = null, opts = null) {
   })()`;
 }
 
-// ── 第九通道：设置面板 + 全量 8 语言词典按需独立注入（不占 Channel 1 体积） ──────────
+// ── 第九通道：设置面板 + 全量 8 语言词典 + 八方旅人 WebGL2 选角舞台按需独立注入（不占 Channel 1 体积） ──
 let _settingsChannelCache = { sig: '', sourceHash: '', minRuntime: '', codeHash: '', cachedPaths: new Set() };
 
 function readCompiledSettingsChannelAssets(opts = null) {
@@ -10200,27 +10203,36 @@ function readCompiledSettingsChannelAssets(opts = null) {
   if (!fs.existsSync(locPath) || !fs.existsSync(setPath)) {
     return { sig: '', minRuntime: '', codeHash: '' };
   }
-  const sig = `${getFileSig(locPath)}|${getFileSig(setPath)}`;
+  const atlasPath = path.join(__dirname, 'vendor', 'clawd-mascot', 'tavern-atlas-data.js');
+  const stageGlPath = path.join(__dirname, 'vendor', 'clawd-mascot', 'octopath-stage-webgl.js');
+  const hasAtlas = fs.existsSync(atlasPath);
+  const hasStageGl = fs.existsSync(stageGlPath);
+  const sig = `${getFileSig(locPath)}|${hasAtlas ? getFileSig(atlasPath) : '0'}|${hasStageGl ? getFileSig(stageGlPath) : '0'}|${getFileSig(setPath)}`;
   const cachePath = resolveBundleCachePathOption(opts);
   if (!cachePath && _settingsChannelCache.sig === sig && _settingsChannelCache.codeHash) {
     return _settingsChannelCache;
   }
   const locBuf = fs.readFileSync(locPath);
+  const atlasBuf = hasAtlas ? fs.readFileSync(atlasPath) : null;
+  const stageGlBuf = hasStageGl ? fs.readFileSync(stageGlPath) : null;
   const setBuf = fs.readFileSync(setPath);
+  const fileEntries = [{ rel: 'i18n-locales.js', content: locBuf }];
+  if (atlasBuf) fileEntries.push({ rel: 'vendor/clawd-mascot/tavern-atlas-data.js', content: atlasBuf });
+  if (stageGlBuf) fileEntries.push({ rel: 'vendor/clawd-mascot/octopath-stage-webgl.js', content: stageGlBuf });
+  fileEntries.push({ rel: 'settings-panel.js', content: setBuf });
   return resolveChannelAssetsWithDiskCache({
     channelName: 'settings',
     memCache: _settingsChannelCache,
     setMemCache: (v) => { _settingsChannelCache = v; },
     sig,
-    fileEntries: [
-      { rel: 'i18n-locales.js', content: locBuf },
-      { rel: 'settings-panel.js', content: setBuf },
-    ],
+    fileEntries,
     opts,
     compileFn: () => {
-      const minLoc = minifySingleSource(locBuf.toString('utf8'));
-      const minSet = minifySingleSource(setBuf.toString('utf8'));
-      const minRuntime = `${minLoc};\n${minSet}`;
+      const parts = [minifySingleSource(locBuf.toString('utf8'))];
+      if (atlasBuf) parts.push(atlasBuf.toString('utf8').trim());
+      if (stageGlBuf) parts.push(minifySingleSource(minifyEmbeddedGlslTemplates(stageGlBuf.toString('utf8'))));
+      parts.push(minifySingleSource(setBuf.toString('utf8')));
+      const minRuntime = parts.join(';\n');
       const codeHash = computeHash(minRuntime);
       return { minRuntime, codeHash };
     },
@@ -10239,9 +10251,17 @@ function readCompiledSettingsChannelAssets(opts = null) {
 }
 
 const SETTINGS_REMOVE_EXPRESSION = `(() => {
-  try { document.getElementById('ag-cs-settings-sec')?.remove?.(); } catch {}
+  try {
+    const sec = document.getElementById('ag-cs-settings-sec');
+    sec?.__agMascotStageApi?.dispose?.();
+    sec?.remove?.();
+  } catch {}
   try { delete window.__agPrismSettingsPanel; } catch {}
   try { delete globalThis.__agPrismSettingsPanel; } catch {}
+  try { delete window.__agOctopathStageWebGL; } catch {}
+  try { delete globalThis.__agOctopathStageWebGL; } catch {}
+  try { delete window.__agOctopathTavernAtlas; } catch {}
+  try { delete globalThis.__agOctopathTavernAtlas; } catch {}
   return { ok: true, status: 'off' };
 })()`;
 

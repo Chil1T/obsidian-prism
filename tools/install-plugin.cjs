@@ -121,6 +121,51 @@ function resolveTelemetryDir(hostConfigDir, explicitTelemetryDir = null) {
   return path.join(geminiRoot, "antigravity", "sidecar_data", "obsidian-prism", "telemetry");
 }
 
+function isAllowedAddonsOverrideDir(candidatePath, hostConfigDir = null) {
+  if (!candidatePath) return false;
+  const resolved = path.resolve(candidatePath);
+  if (isProtectedUserDataPath(resolved)) return false;
+  const home = path.resolve(os.homedir());
+  const allowedRoots = [path.join(home, ".gemini"), os.tmpdir()];
+  if (process.platform === "darwin") {
+    allowedRoots.push("/tmp", "/private/tmp");
+  }
+  if (hostConfigDir) {
+    const resolvedCfg = path.resolve(hostConfigDir);
+    const parent = path.dirname(resolvedCfg);
+    if (path.basename(parent).toLowerCase() === ".gemini") {
+      allowedRoots.push(parent);
+    }
+  }
+  const underAllowedRoot = allowedRoots.some((root) => isSubPath(resolved, root));
+  if (!underAllowedRoot) return false;
+  const segments = resolved
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .map((s) => s.toLowerCase());
+  return segments.includes("addons") || segments.includes("obsidian-prism");
+}
+
+function resolveAddonsDir(hostConfigDir, explicitAddonsDir = null) {
+  if (explicitAddonsDir !== null && explicitAddonsDir !== undefined) {
+    const explicitStr = typeof explicitAddonsDir === "string" ? explicitAddonsDir.trim() : "";
+    if (!explicitStr || !isAllowedAddonsOverrideDir(explicitStr, hostConfigDir)) {
+      return null;
+    }
+    return path.resolve(explicitStr);
+  }
+  if (process.env.AG_PRISM_ADDONS_DIR) {
+    const envDir = process.env.AG_PRISM_ADDONS_DIR.trim();
+    if (!envDir || !isAllowedAddonsOverrideDir(envDir, hostConfigDir)) {
+      return null;
+    }
+    return path.resolve(envDir);
+  }
+  if (!hostConfigDir) return null;
+  const geminiRoot = path.dirname(path.resolve(hostConfigDir));
+  return path.join(geminiRoot, "antigravity", "sidecar_data", "obsidian-prism", "addons");
+}
+
 function isValidConfigJsonContent(raw) {
   try {
     const clean = String(raw || "").replace(/^\uFEFF/, "").trim();
@@ -2008,6 +2053,24 @@ async function uninstallPlugin(opts = {}) {
     }
   }
 
+  if (purgeData || opts.purgeAddons === true) {
+    const addonsDir = resolveAddonsDir(hostConfigDir, opts.addonsDir || null);
+    if (addonsDir && !isProtectedUserDataPath(addonsDir) && fs.existsSync(addonsDir)) {
+      try {
+        const pluginDataDir = path.dirname(addonsDir);
+        const sidecarDataDir = path.dirname(pluginDataDir);
+        assertNoSymbolicLinkInChain(addonsDir, null, "addons directory");
+        assertNotSymbolicLink(sidecarDataDir, "sidecar_data directory");
+        assertNotSymbolicLink(pluginDataDir, "sidecar_data/obsidian-prism directory");
+        const addonsStat = assertNotSymbolicLink(addonsDir, "addons directory");
+        if (addonsStat && addonsStat.isDirectory()) {
+          fs.rmSync(addonsDir, { recursive: true, force: true });
+          purgedPaths.push(addonsDir);
+        }
+      } catch {}
+    }
+  }
+
   return {
     ok: true,
     targetDir,
@@ -2294,6 +2357,7 @@ module.exports = {
   getLegacyTempPluginDir,
   resolveHostGeminiConfigDir,
   resolveTelemetryDir,
+  resolveAddonsDir,
   isProtectedUserDataPath,
   syncHostPluginRegistry,
   clearReadOnlyIfRegularFile,

@@ -1090,3 +1090,56 @@ test('swarm-board-i18n 5: install-plugin verifyLiveWindowAttach redacts query se
   assert.equal(m2.winObj.__agDualMascotRig, undefined);
   assert.equal(m2.winObj.__agPrismMascotArt, undefined);
 });
+
+test('Battle 5: detectExternalSwarmI18n yields to Antigravity-Hans, 3169657175, renkeshui, Zero-Touch, generic attrs & html[lang^="zh"]', () => {
+  const mkReadyEnv = () => {
+    const env = createSwarmTestDom();
+    const nav = env.makeEl('nav', { attrs: { 'data-testid': 'swarm-tabs' } });
+    const btn = env.makeEl('button', { id: 'tabbtn-feed', text: 'Board' });
+    nav.append(btn);
+    env.doc.body.append(nav);
+    return { ...env, btn };
+  };
+
+  // 1) Global markers across external localization providers
+  for (const globalKey of [
+    '__antigravityZhPatchInstalled',
+    '__agyI18n',
+    '__antigravity_i18n_runner_active',
+    '__antigravityZh',
+    '__AGY_SWARM_I18N__',
+  ]) {
+    const env = mkReadyEnv();
+    env.win[globalKey] = true;
+    assert.equal(swarmRuntime.detectExternalSwarmI18n(env.win, env.doc), 'global-marker', `Must detect ${globalKey}`);
+    const inst = swarmRuntime.mountSwarmI18n({ root: env.win, doc: env.doc, dict: swarmDict });
+    assert.equal(inst.status, 'yielded', `mountSwarmI18n must yield on ${globalKey}`);
+    assert.equal(env.btn.textContent, 'Board');
+  }
+
+  // 2) Antigravity-Hans localStorage antigravityHansLang ('zh-CN' yields, 'en'/'off' does not)
+  const envHansZh = mkReadyEnv();
+  envHansZh.win.localStorage = { getItem: (k) => (k === 'antigravityHansLang' ? 'zh-CN' : null) };
+  assert.equal(swarmRuntime.detectExternalSwarmI18n(envHansZh.win, envHansZh.doc), 'storage-marker');
+  const envHansEn = mkReadyEnv();
+  envHansEn.win.localStorage = { getItem: (k) => (k === 'antigravityHansLang' ? 'en' : null) };
+  assert.equal(swarmRuntime.detectExternalSwarmI18n(envHansEn.win, envHansEn.doc), null);
+
+  // 3) DOM markers: [data-agy-hans-ui], [data-ag-cn], [data-i18n-patched], [data-translated], #agy-theme-switcher
+  for (const attr of ['data-agy-hans-ui', 'data-ag-cn', 'data-i18n-patched', 'data-translated']) {
+    const env = mkReadyEnv();
+    env.doc.body.setAttribute(attr, '1');
+    assert.equal(swarmRuntime.detectExternalSwarmI18n(env.win, env.doc), 'dom-marker', `Must detect [${attr}]`);
+  }
+  const envTheme = mkReadyEnv();
+  envTheme.doc.body.append(envTheme.makeEl('div', { id: 'agy-theme-switcher' }));
+  assert.equal(swarmRuntime.detectExternalSwarmI18n(envTheme.win, envTheme.doc), 'dom-marker');
+
+  // 4) html[lang^="zh"] yields, html[lang="en"] does not
+  const envLangZh = mkReadyEnv();
+  envLangZh.doc.documentElement.setAttribute('lang', 'zh-CN');
+  assert.equal(swarmRuntime.detectExternalSwarmI18n(envLangZh.win, envLangZh.doc), 'html-lang-zh');
+  const envLangEn = mkReadyEnv();
+  envLangEn.doc.documentElement.setAttribute('lang', 'en');
+  assert.equal(swarmRuntime.detectExternalSwarmI18n(envLangEn.win, envLangEn.doc), null);
+});

@@ -54,6 +54,9 @@
     omniZoomDiagram: ['放大查看图表', '放大檢視圖表', 'Zoom Diagram', '図を拡大表示', '다이어그램 확대', 'Ampliar diagrama', 'Agrandir le diagramme', 'Diagramm vergrößern'],
     omniViewWorkbench: ['检视台视图', '檢視台檢視', 'Workbench View', 'プレビュー表示', '워크벤치 보기', 'Vista Workbench', 'Vue Workbench', 'Workbench-Ansicht'],
     omniViewRaw: ['原始视图', '原始檢視', 'Raw View', 'ソース表示', '원본 보기', 'Vista sin formato', 'Vue brute', 'Rohansicht'],
+    omniViewPreview: ['预览', '預覽', 'Preview', 'プレビュー', '미리보기', 'Vista previa', 'Aperçu', 'Vorschau'],
+    omniViewSource: ['源码', '原始碼', 'Source', 'ソース', '소스', 'Código fuente', 'Code source', 'Quelltext'],
+    omniSandboxIsolated: ['沙盒隔离', '沙盒隔離', 'Sandbox Isolated', 'サンドボックス隔離', '샌드박스 격리', 'Aislado en sandbox', 'Isolé en sandbox', 'Sandbox-isoliert'],
     omniCopied: ['已复制', '已複製', 'Copied', 'コピー済', '복사됨', 'Copiado', 'Copié', 'Kopiert'],
     omniMermaidDiagram: ['Mermaid 图表', 'Mermaid 圖表', 'Mermaid Diagram', 'Mermaid 図', 'Mermaid 다이어그램', 'Diagrama Mermaid', 'Diagramme Mermaid', 'Mermaid-Diagramm'],
     omniMermaidSvg: ['Mermaid SVG 图表', 'Mermaid SVG 圖表', 'Mermaid SVG', 'Mermaid SVG', 'Mermaid SVG', 'Mermaid SVG', 'Mermaid SVG', 'Mermaid SVG'],
@@ -72,6 +75,7 @@
   };
 
   const AUX_SWITCHABLE_EXTS = new Set(Object.keys(PREVIEW_KIND_BY_EXT));
+  const AUTO_PREVIEW_EXTS = new Set(['html', 'htm', 'svg']);
 
   const KNOWN_FILE_EXTS = new Set([
     ...AUX_SWITCHABLE_EXTS,
@@ -668,6 +672,7 @@
     '[data-omni-mermaid-box]:hover>.ag-omni-mermaid-zoom-btn,.ag-omni-mermaid-zoom-btn:focus-visible{opacity:.92}',
     '.ag-omni-mermaid-zoom-btn:hover{opacity:1!important;background:color-mix(in srgb,var(--ag-cs-accent,var(--primary,#669DF6)) 18%,var(--card,#1e293b))}',
     '.ag-omni-aux-bar{display:flex;align-items:center;gap:6px;padding:4px 10px;border-bottom:1px solid var(--ag-cs-border-1,var(--border,rgba(148,163,184,.16)));background:var(--ag-cs-tonal-2,var(--card,var(--ag-cs-panel-bg,rgba(20,23,30,.9))));font-size:11.5px;flex-shrink:0}',
+    '.ag-omni-sandbox-badge{margin-left:auto;display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border-radius:999px;border:1px solid var(--ag-cs-border-1,var(--border,rgba(148,163,184,.2)));background:var(--ag-cs-tonal-1,rgba(255,255,255,.04));color:var(--muted-foreground,var(--ag-cs-muted,#94a3b8));font-size:10.5px;font-weight:500;letter-spacing:.01em;line-height:1;white-space:nowrap;user-select:none;opacity:.86}',
     '.ag-omni-aux-overlay{width:100%;flex:1 1 0%;min-height:360px;border:0;display:block;background:var(--ag-cs-tonal-0,var(--background,#0B0B0E));opacity:0;transition:opacity 140ms ease}',
     '.ag-omni-aux-overlay[data-wb-ready="1"]{opacity:1}',
   ].join('');
@@ -1450,10 +1455,7 @@
         if (rec.iframe && rec.iframe.isConnected && rec.iframe.contentWindow) {
           pushWorkbenchSyncToIframe(rec.iframe, { filePath: rec.filePath });
         }
-        if (rec.btnWb && rec.btnRaw) {
-          rec.btnWb.textContent = s.omniViewWorkbench;
-          rec.btnRaw.textContent = s.omniViewRaw;
-        }
+        syncAuxBarUi(rec, s);
       }
       for (const box of decoratedMermaidBoxes) {
         const btn = box.querySelector?.('.ag-omni-mermaid-zoom-btn');
@@ -1563,6 +1565,7 @@
       el.setAttribute('data-ag-localization-skip', 'true');
       el.setAttribute('data-agy-no-translate', 'true');
       el.setAttribute('data-antigravity-zh-skip', '1');
+      el.setAttribute('data-ag-no-i18n', '');
       return el;
     }
 
@@ -2410,6 +2413,60 @@
       return viewEl;
     }
 
+    function isAutoPreviewFilePath(filePath) {
+      const ext = getFileExt(filePath);
+      return Boolean(ext && AUTO_PREVIEW_EXTS.has(ext));
+    }
+
+    function isNodeAncestorOf(ancestor, node) {
+      let cur = node?.parentElement;
+      while (cur) {
+        if (cur === ancestor) return true;
+        cur = cur.parentElement;
+      }
+      return false;
+    }
+
+    function syncAuxBarUi(rec, strings) {
+      if (!rec || !rec.bar) return;
+      const s = strings || getStrings();
+      const isAuto = isAutoPreviewFilePath(rec.filePath);
+      if (rec.btnWb) rec.btnWb.textContent = isAuto ? s.omniViewPreview : s.omniViewWorkbench;
+      if (rec.btnRaw) rec.btnRaw.textContent = isAuto ? s.omniViewSource : s.omniViewRaw;
+      if (isAuto) {
+        if (!rec.sandboxBadge && D) {
+          const badge = markNoTranslate(D.createElement('span'));
+          badge.className = 'ag-omni-sandbox-badge';
+          badge.setAttribute('data-testid', 'ag-omni-sandbox-badge');
+          badge.setAttribute('data-ag-prism-omni-owned', '1');
+          rec.sandboxBadge = badge;
+        }
+        if (rec.sandboxBadge) {
+          rec.sandboxBadge.textContent = s.omniSandboxIsolated;
+          rec.sandboxBadge.title = s.omniSandboxIsolated;
+          if (rec.sandboxBadge.parentNode !== rec.bar) {
+            rec.bar.appendChild(rec.sandboxBadge);
+          }
+        }
+      } else if (rec.sandboxBadge) {
+        try { rec.sandboxBadge.remove?.(); } catch (_) {}
+        rec.sandboxBadge = null;
+      }
+    }
+
+    function isAutoPreviewAuxShell(shell) {
+      if (!isValidAuxShell(shell)) return false;
+      if (!findClosest(shell, '[data-testid="aux-pane-split"]')) return false;
+      if (findClosest(shell, '[data-testid="csv-file-viewer"], video')) return false;
+      if (shell.querySelector?.('[data-testid="conversation-view"], aside, .agy-home, [data-testid="csv-file-viewer"], video')) {
+        return false;
+      }
+      const rawRef = extractAuxFileRef(shell);
+      if (!rawRef) return false;
+      const { filePath } = parseFileUriToPath(rawRef);
+      return isAutoPreviewFilePath(filePath);
+    }
+
     function unmountSingleAuxSwitch(rec) {
       if (!rec) return;
       for (const item of rec.hiddenKids) {
@@ -2422,6 +2479,7 @@
       }
       try { rec.bar?.remove?.(); } catch (_) {}
       try { rec.iframe?.remove?.(); } catch (_) {}
+      rec.sandboxBadge = null;
       rec.viewEl?.removeAttribute?.('data-omni-aux-mounted');
       rec.hostEl?.removeAttribute?.('data-omni-aux-mounted');
       mountedAuxSwitches.delete(rec);
@@ -2456,18 +2514,29 @@
           unmountSingleAuxSwitch(rec);
           continue;
         }
+        const hostUnsupported = hasHostUnsupportedState(rec.viewEl, rec.hostEl);
+        if (!hostUnsupported && rec.hostEl.querySelector?.('[data-testid="csv-file-viewer"], video')) {
+          unmountSingleAuxSwitch(rec);
+          continue;
+        }
         const curRaw = extractAuxFileRef(rec.hostEl) || extractAuxFileRef(rec.viewEl);
         if (!curRaw) continue;
         const curPath = parseFileUriToPath(curRaw).filePath;
         if (curPath && curPath !== rec.filePath) {
           const nextExt = getFileExt(curPath);
-          if (nextExt && AUX_SWITCHABLE_EXTS.has(nextExt) && hasHostUnsupportedState(rec.viewEl, rec.hostEl)) {
+          const keepUnsupported = Boolean(nextExt && AUX_SWITCHABLE_EXTS.has(nextExt) && hostUnsupported);
+          const keepAutoPreview = Boolean(nextExt && AUTO_PREVIEW_EXTS.has(nextExt) && isAutoPreviewAuxShell(rec.hostEl));
+          if (keepUnsupported || keepAutoPreview) {
             rec.filePath = curPath;
+            syncAuxBarUi(rec, getStrings());
             if (rec.activeMode === 'workbench' && rec.iframe && serverMeta?.baseUrl && serverMeta?.token) {
               const nextSrc = buildViewerUrl(serverMeta, { filePath: curPath, kind: detectPreviewKind(curPath) });
-              if (rec.iframe.src !== nextSrc) rec.iframe.src = nextSrc;
+              if (rec.iframe.src !== nextSrc) {
+                rec.iframe.removeAttribute('data-wb-ready');
+                rec.iframe.src = nextSrc;
+              }
               pushWorkbenchSyncToIframe(rec.iframe, { filePath: curPath });
-            } else if (rec.switchMode && shouldAutoActivateWorkbench(rec.viewEl, rec.hostEl)) {
+            } else if (rec.switchMode && shouldAutoActivateWorkbench(rec.viewEl, rec.hostEl, curPath)) {
               void rec.switchMode(true, { auto: true });
             }
           } else {
@@ -2477,8 +2546,11 @@
       }
     }
 
-    function shouldAutoActivateWorkbench(viewEl, hostEl) {
-      return hasHostUnsupportedState(viewEl, hostEl);
+    function shouldAutoActivateWorkbench(viewEl, hostEl, filePath) {
+      if (hasHostUnsupportedState(viewEl, hostEl)) return true;
+      const resolved =
+        filePath || parseFileUriToPath(extractAuxFileRef(hostEl) || extractAuxFileRef(viewEl)).filePath;
+      return isAutoPreviewFilePath(resolved);
     }
 
     function collectAuxCandidateViews(scopeEl) {
@@ -2498,7 +2570,7 @@
         pushUnique(el);
       }
 
-      // Detect host File Pane `UHc` (>20MB / >200MB / read-error) views lacking data-testid
+      // Detect host File Pane `UHc` (>20MB / >200MB / read-error) and normal `.html/.htm/.svg` views in aux-pane-split
       const shellPool = new Set();
       if (scopeEl !== D.body && scopeEl !== D.documentElement) {
         const ancShell = findClosest(scopeEl, '.relative.h-full.w-full');
@@ -2508,11 +2580,20 @@
         if (isValidAuxShell(sh)) shellPool.add(sh);
       }
 
+      const autoShells = [];
       for (const sh of shellPool) {
         if (sh.querySelector?.(AUX_FILE_VIEW_SELECTOR)) continue;
         const txt = String(sh.textContent || '');
         const hasHostError = txt.length > 0 && txt.length < 4096 && HOST_AUX_ERROR_RE.test(txt);
-        if (hasHostError) pushUnique(sh);
+        if (hasHostError) {
+          pushUnique(sh);
+        } else if (isAutoPreviewAuxShell(sh)) {
+          autoShells.push(sh);
+        }
+      }
+      for (const sh of autoShells) {
+        const hasMoreSpecificDescendant = autoShells.some((other) => other !== sh && isNodeAncestorOf(sh, other));
+        if (!hasMoreSpecificDescendant) pushUnique(sh);
       }
       return candidates;
     }
@@ -2559,21 +2640,20 @@
         const btnWb = D.createElement('button');
         btnWb.type = 'button';
         btnWb.className = 'ag-omni-btn';
-        btnWb.textContent = s.omniViewWorkbench;
 
         const btnRaw = D.createElement('button');
         btnRaw.type = 'button';
         btnRaw.className = 'ag-omni-btn';
         btnRaw.setAttribute('data-active', '1');
-        btnRaw.textContent = s.omniViewRaw;
 
         bar.appendChild(btnWb);
         bar.appendChild(btnRaw);
 
         const rec = {
           viewEl, hostEl, origHostDisplay, origHostFlexDir,
-          bar, btnWb, btnRaw, iframe: null, filePath, hiddenKids: [], activeMode: 'raw',
+          bar, btnWb, btnRaw, sandboxBadge: null, iframe: null, filePath, hiddenKids: [], activeMode: 'raw',
         };
+        syncAuxBarUi(rec, s);
 
         const switchMode = async (toWorkbench, opts = {}) => {
           if (toWorkbench) {
@@ -2584,6 +2664,7 @@
             }
             btnWb.setAttribute('data-active', '1');
             btnRaw.removeAttribute('data-active');
+            syncAuxBarUi(rec, getStrings());
             if (hostEl.style) {
               hostEl.style.display = 'flex';
               hostEl.style.flexDirection = 'column';
@@ -2640,7 +2721,7 @@
         else hostEl.appendChild(bar);
         mountedAuxSwitches.add(rec);
 
-        if (shouldAutoActivateWorkbench(viewEl, hostEl)) {
+        if (shouldAutoActivateWorkbench(viewEl, hostEl, filePath)) {
           void switchMode(true, { auto: true });
         }
       }
@@ -2779,7 +2860,7 @@
           }
           decorateMermaidContainers(r);
           if (!findClosest(r, '[data-testid="conversation-view"]')) {
-            const auxRoot = !scannedAuxSplit && findClosest(r, '[data-testid="aux-pane-split"]');
+            const auxRoot = !scannedAuxSplit && (findClosest(r, '[data-testid="aux-pane-split"]') || r.querySelector?.('[data-testid="aux-pane-split"]'));
             if (auxRoot) {
               scannedAuxSplit = true;
               decorateAuxUnsupportedViews(auxRoot);
@@ -2918,19 +2999,35 @@
             if (isIgnoredMutationTarget(m.target)) continue;
             if (m.type === 'childList') {
               const useHl = supportsHighlightApi();
+              let queuedTargetAux = false;
               for (let j = 0; j < m.addedNodes.length; j++) {
                 const n = m.addedNodes[j];
                 if (n.nodeType !== 1 && n.nodeType !== 3) continue;
                 if (isIgnoredMutationTarget(n)) continue;
                 if (useHl && n.nodeType === 3) {
                   scheduleTextNodeHighlight(n);
+                  if (!queuedTargetAux && mountedAuxSwitches.size > 0 && findClosest(m.target, '[data-testid="aux-pane-split"]')) {
+                    queuedTargetAux = true;
+                    scheduleIncrementalScan(m.target);
+                  }
                 } else {
                   scheduleIncrementalScan(n);
                 }
               }
+              if (
+                !queuedTargetAux &&
+                m.removedNodes.length > 0 &&
+                mountedAuxSwitches.size > 0 &&
+                findClosest(m.target, '[data-testid="aux-pane-split"]')
+              ) {
+                scheduleIncrementalScan(m.target);
+              }
             } else if (m.type === 'characterData' && m.target) {
               if (supportsHighlightApi() && m.target.nodeType === 3) {
                 scheduleTextNodeHighlight(m.target);
+                if (mountedAuxSwitches.size > 0 && findClosest(m.target, '[data-testid="aux-pane-split"]')) {
+                  scheduleIncrementalScan(m.target);
+                }
               } else {
                 scheduleIncrementalScan(m.target);
               }
@@ -2940,6 +3037,15 @@
                 (attrName === 'data-ag-cs-spark-streaming' || attrName === 'data-ag-cs-thought-streaming') &&
                 m.target &&
                 !m.target.hasAttribute?.(attrName)
+              ) {
+                scheduleIncrementalScan(m.target);
+              } else if (
+                (attrName === 'data-active-file-uri' ||
+                  attrName === 'data-file-uri' ||
+                  attrName === 'data-uri' ||
+                  attrName === 'data-file-path') &&
+                m.target &&
+                findClosest(m.target, '[data-testid="aux-pane-split"]')
               ) {
                 scheduleIncrementalScan(m.target);
               }
@@ -2956,6 +3062,10 @@
             attributeFilter: [
               'data-ag-cs-spark-streaming',
               'data-ag-cs-thought-streaming',
+              'data-active-file-uri',
+              'data-file-uri',
+              'data-uri',
+              'data-file-path',
             ],
           });
         }
@@ -3108,6 +3218,7 @@
   return {
     VERSION,
     PREVIEW_KIND_BY_EXT,
+    AUTO_PREVIEW_EXTS,
     createOmniClient,
     shortStableHash,
     normalizeLangCode,

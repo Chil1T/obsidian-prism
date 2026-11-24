@@ -9,12 +9,12 @@
   const isFin = (v) => typeof v === 'number' && Number.isFinite(v);
   const toNum = (v) => { const n = typeof v === 'number' || typeof v === 'bigint' || typeof v === 'string' ? Number(v) : 0; return Number.isFinite(n) ? n : 0; };
   function markNoTr(e) {
-    if (e?.setAttribute) for (const s of 'translate=no,data-no-translate=true,data-ag-localization-skip=true,data-agy-no-translate=true,data-antigravity-zh-skip=1'.split(',')) { const p = s.split('='); e.setAttribute(p[0], p[1]); }
+    if (e?.setAttribute) for (const s of 'translate=no,data-no-translate=true,data-ag-localization-skip=true,data-agy-no-translate=true,data-antigravity-zh-skip=1,data-ag-no-i18n='.split(',')) { const p = s.split('='); e.setAttribute(p[0], p[1]); }
     return e;
   }
 
   const STUDIO_HEAD_CSS = '.ag-cs-home-panel-head{flex-wrap:wrap;row-gap:8px}';
-  const STUDIO_EXTRA_CSS = STUDIO_HEAD_CSS + '.agy-home{--_a:var(--ag-cs-accent,var(--primary,#2563eb));--_m:var(--muted-foreground);--_b:var(--ag-cs-border-1,rgba(148,163,184,.2));--_p:var(--ag-cs-pill-bg,rgba(128,138,158,.08))}.ag-cs-home-tab,.ag-cs-home-range{white-space:nowrap}.ag-cs-home-head-left,.ag-cs-home-head-right{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}.ag-cs-home-head-left{min-width:0}.ag-cs-home-scope-badge,.ag-cs-home-stat-sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ag-cs-home-scope-badge,.ag-cs-quota-pace,.ag-cs-quota-bar,.ag-cs-qbar-solid{border-radius:999px}.ag-cs-home-ws-select,.ag-cs-quota-refresh,.ag-cs-quota-card{border:1px solid var(--_b);background:var(--_p)}.ag-cs-home-ws-select,.ag-cs-quota-refresh{border-radius:var(--ag-cs-r-sm,6px);cursor:pointer}.ag-cs-home-ws-select,.ag-cs-quota-toolbar,.ag-cs-quota-refresh,.ag-cs-quota-win-row,.ag-cs-quota-win-val{font-size:11px}.ag-cs-home-ws-select,.ag-cs-quota-refresh,.ag-cs-quota-name,.ag-cs-quota-win-val{color:var(--foreground)}.ag-cs-home-scope-badge,.ag-cs-quota-name,.ag-cs-quota-pace,.ag-cs-quota-win-val{font-weight:600}.ag-cs-quota-wrap,.ag-cs-quota-card,.ag-cs-quota-win{display:flex;flex-direction:column}.ag-cs-home-stat-sub,.ag-cs-quota-card,.ag-cs-quota-win-val{font-variant-numeric:tabular-nums}.ag-cs-home-stat-sub,.ag-cs-quota-foot{font-size:10px;color:var(--_m);opacity:.82}.ag-cs-home-scope-badge{display:inline-flex;align-items:center;height:20px;max-width:168px;padding:0 7px;font-size:10.5px;color:var(--_a);border:1px solid color-mix(in srgb,currentColor 32%,transparent);background:color-mix(in srgb,currentColor 11%,transparent)}.ag-cs-home-ws-select{height:24px;max-width:156px;padding:0 20px 0 8px;color-scheme:inherit;font-weight:500;outline:none;text-overflow:ellipsis}.ag-cs-home-ws-select option{background:var(--card,#141418);color:var(--foreground,#F2F2F5);}.ag-cs-home-stat-sub{display:block;margin-top:2px;line-height:1.25}.ag-cs-quota-wrap{gap:10px;margin-top:4px;position:relative;z-index:1}.ag-cs-quota-toolbar,.ag-cs-quota-card-head,.ag-cs-quota-win-row{display:flex;align-items:center;justify-content:space-between;gap:6px}.ag-cs-quota-toolbar{color:var(--_m)}.ag-cs-quota-refresh{height:23px;padding:0 9px}.ag-cs-quota-refresh:hover{background:rgba(128,138,158,.16)}.ag-cs-quota-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}.ag-cs-quota-card{padding:11px 12px;border-radius:var(--ag-cs-r-md,10px);gap:8px}.ag-cs-quota-name{font-size:12px}.ag-cs-quota-pace{padding:1.5px 6.5px;font-size:10px;border:1px solid rgba(148,163,184,.24);color:var(--_m)}.ag-cs-quota-pace[data-pace="ok"]{color:var(--_a);border-color:color-mix(in srgb,currentColor 30%,transparent);background:color-mix(in srgb,currentColor 10%,transparent)}.ag-cs-quota-pace[data-pace="tight"]{color:#d97706;border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.12)}.dark .ag-cs-quota-pace[data-pace="tight"]{color:#fbbf24}.ag-cs-quota-pace[data-pace="low"]{color:#dc2626;border-color:rgba(239,68,68,.38);background:rgba(239,68,68,.12)}.dark .ag-cs-quota-pace[data-pace="low"]{color:#f87171}.ag-cs-quota-win{gap:4px}.ag-cs-quota-win-row{align-items:baseline}.ag-cs-quota-win-lbl{color:var(--_m);font-size:10.5px}.ag-cs-quota-bar{position:relative;height:6px;background:rgba(148,163,184,.18);overflow:hidden}.ag-cs-qbar-solid{position:absolute;inset:0 auto 0 0;color:var(--_a);background:linear-gradient(90deg,currentColor,color-mix(in srgb,currentColor 68%,#fff))}.ag-cs-quota-win[data-warn="1"] .ag-cs-qbar-solid{background:linear-gradient(90deg,#d97706,#fbbf24)}.ag-cs-quota-win[data-warn="2"] .ag-cs-qbar-solid{background:linear-gradient(90deg,#dc2626,#f87171)}';
+  const STUDIO_EXTRA_CSS = STUDIO_HEAD_CSS + '.ag-cs-home-tab,.ag-cs-home-range{white-space:nowrap}.ag-cs-home-ws-select{color-scheme:inherit}.ag-cs-home-ws-select option{background:var(--card,#141418);color:var(--foreground,#F2F2F5);}';
 
   const REMOTE_TITLE_RE = /\[(SSH|WSL|Dev Container|Codespaces|Tunnel|Remote):\s*([^\]]+)\]/i;
   const decUri = (v) => { const s = String(v || '').trim(); if (!s) return ''; try { return decodeURIComponent(s); } catch { return s; } };
@@ -50,16 +50,18 @@
     if (!o.parentId) o.subagent = false;
     return o;
   };
-  const STUDIO_FB = {
-    'zh-CN': ['子代理', 'Token', '蜂群', '入', '出', '额度偏低', '余量偏紧', '充裕', '接下来做什么', '，', '？'],
-    'zh-TW': ['子代理', 'Token', '蜂群', '入', '出', '額度偏低', '餘量偏緊', '充裕', '接下來做什麼', '，', '？'],
-    en: ['subagents', 'tokens', 'Swarm', 'in', 'out', 'Low Quota', 'Running Low', 'Healthy', "What's up next", ', ', '?'],
-    ja: ['サブエージェント', 'トークン', 'Swarm', '入力', '出力', '残枠少', '残り少なめ', '余裕あり', '次は何をしますか', '、', '？'],
-    ko: ['서브에이전트', '토큰', 'Swarm', '입력', '출력', '할당량 부족', '잔여량 적음', '여유', '다음은 무엇을 할까요', ', ', '?'],
-    es: ['subagentes', 'tokens', 'Swarm', 'entr.', 'sal.', 'Cuota baja', 'Casi agotada', 'Óptima', '¿Qué hacemos ahora', ', ', '?'],
-    fr: ['sous-agents', 'tokens', 'Swarm', 'entr.', 'sort.', 'Quota bas', 'Presque épuisé', 'Optimal', 'Que faisons-nous ensuite', ', ', ' ?'],
-    de: ['Subagenten', 'Token', 'Swarm', 'Ein', 'Aus', 'Wenig Kontingent', 'Wird knapp', 'Reichlich', 'Was steht als Nächstes an', ', ', '?'],
-  };
+  const STUDIO_FB = Object.fromEntries(
+    [
+      'zh-CN|子代理|Token|蜂群|入|出|额度偏低|余量偏紧|充裕|接下来做什么|，|？',
+      'zh-TW|子代理|Token|蜂群|入|出|額度偏低|餘量偏緊|充裕|接下來做什麼|，|？',
+      "en|subagents|tokens||in|out|Low Quota|Running Low|Healthy|What's up next",
+      'ja|サブエージェント|トークン||入力|出力|残枠少|残り少なめ|余裕あり|次は何をしますか|、|？',
+      'ko|서브에이전트|토큰||입력|출력|할당량 부족|잔여량 적음|여유|다음은 무엇을 할까요',
+      'es|subagentes|tokens||entr.|sal.|Cuota baja|Casi agotada|Óptima|¿Qué hacemos ahora',
+      'fr|sous-agents|tokens||entr.|sort.|Quota bas|Presque épuisé|Optimal|Que faisons-nous ensuite|| ?',
+      'de|Subagenten|Token||Ein|Aus|Wenig Kontingent|Wird knapp|Reichlich|Was steht als Nächstes an',
+    ].map((s) => { const a = s.split('|'); return [a[0], [a[1], a[2], a[3] || 'Swarm', a[4], a[5], a[6], a[7], a[8], a[9], a[10] || ', ', a[11] || '?']]; })
+  );
   const normStudioLang = (l) => {
     const c = G.__agCsI18nCore?.normalizeLanguage;
     if (isFn(c)) return c(l, 'en');
@@ -838,7 +840,7 @@
             ap(heatFrag, sp('ag-cs-home-heat-cell', skeleton ? { 'data-level': lv } : { 'data-level': lv, 'data-tip': tip, 'aria-label': tip }));
           }
           if (heatFrag !== heat) ap(heat, heatFrag);
-          heatTipEl = sp('ag-cs-home-heat-hint', { 'aria-hidden': 'true' });
+          heatTipEl = markNoTr(sp('ag-cs-home-heat-hint', { 'aria-hidden': 'true' }));
           ap(heat, heatTipEl);
           heat.addEventListener('mouseover', (ev) => { const t = ev.target?.closest?.('.ag-cs-home-heat-cell'); if (t) showHeatTip(t, heat); });
           heat.addEventListener('mouseleave', hideHeatTip);
@@ -854,7 +856,14 @@
 
           if (columns.length > 0) {
             let peak = 0;
-            for (const col of columns) { let sum = 0; for (const t of Object.values(col.models)) sum += t; if (sum > peak) peak = sum; }
+            let peakIdx = -1;
+            const dayTotals = [];
+            for (let ci = 0; ci < columns.length; ci++) {
+              let sum = 0;
+              for (const t of Object.values(columns[ci].models)) sum += t;
+              dayTotals.push(sum);
+              if (sum > peak) { peak = sum; peakIdx = ci; }
+            }
             const top = usageCore.axisMax(peak);
             const plot = dv('ag-cs-home-chart-plot');
             const bars = dv('ag-cs-home-chart-bars');
@@ -863,10 +872,9 @@
               tick.style.bottom = `${at * 100}%`;
               ap(plot, tick);
             }
-            for (const col of columns) {
-              let dayTotal = 0;
-              const stack = [];
-              for (const [mId, tok] of Object.entries(col.models)) { dayTotal += tok; stack.push({ id: mId, tokens: tok }); }
+            for (let ci = 0; ci < columns.length; ci++) {
+              const col = columns[ci], dayTotal = dayTotals[ci], stack = [];
+              for (const [mId, tok] of Object.entries(col.models)) stack.push({ id: mId, tokens: tok });
               stack.sort((a, b) => b.tokens - a.tokens || a.id.localeCompare(b.id));
               const colEl = sp('ag-cs-home-chart-col');
               colEl.title = `${usageCore.homeShortDate(fmt, col.date)} · ${fmtTok(dayTotal)}`;
@@ -878,8 +886,33 @@
               }
               ap(bars, colEl);
             }
+            ap(plot, bars);
+            const d = getDoc();
+            if (top > 0 && isFn(d?.createElementNS)) {
+              const sv = (t, a) => { const n = d.createElementNS('http://www.w3.org/2000/svg', t); for (let i = 0; i < a.length; i += 2) n.setAttribute(a[i], a[i + 1]); return n; };
+              const nP = dayTotals.length, f = (v) => v.toFixed(1), cl = (v, a, b) => Math.max(a, Math.min(b, v)), vE = 'vector-effect', nS = 'non-scaling-stroke', cC = 'ag-cs-home-chart-';
+              const svg = sv('svg', ['class', cC + 'svg', 'viewBox', '0 0 1000 160', 'preserveAspectRatio', 'none', 'aria-hidden', 'true']);
+              const lg = sv('linearGradient', ['id', 'ag-cs-ag', 'x1', 0, 'y1', 0, 'x2', 0, 'y2', 1]);
+              for (const s of ['0,.22', '62,.05', '100,0']) { const [o, p] = s.split(','); ap(lg, sv('stop', ['offset', o + '%', 'stop-color', 'currentColor', 'stop-opacity', p])); }
+              ap(svg, ap(sv('defs', []), lg));
+              for (const y of [0, 40, 80, 120]) ap(svg, sv('line', ['class', cC + 'grid', 'x1', 0, 'y1', y, 'x2', 1000, 'y2', y, vE, nS]));
+              const pts = dayTotals.map((v, i) => [nP < 2 ? 500 : ((i + 0.5) / nP) * 1000, Math.max(2, 160 - (v / top) * 160)]);
+              let dl = nP < 2 ? `M0 ${f(pts[0][1])} L1000 ${f(pts[0][1])}` : `M${f(pts[0][0])} ${f(pts[0][1])}`;
+              for (let i = 0; i < nP - 1; i++) {
+                const a = pts[i ? i - 1 : 0], b = pts[i], c = pts[i + 1], e = pts[i + 2 < nP ? i + 2 : nP - 1], lo = Math.min(b[1], c[1]), hi = Math.max(b[1], c[1]);
+                dl += ` C${f(b[0] + (c[0] - a[0]) / 6)} ${f(cl(b[1] + (c[1] - a[1]) / 6, lo, hi))} ${f(c[0] - (e[0] - b[0]) / 6)} ${f(cl(c[1] - (e[1] - b[1]) / 6, lo, hi))} ${f(c[0])} ${f(c[1])}`;
+              }
+              ap(svg, sv('path', ['class', cC + 'area', 'd', `${dl} L${nP < 2 ? 1000 : f(pts[nP - 1][0])} 160 L${nP < 2 ? 0 : f(pts[0][0])} 160 Z`, 'fill', 'url(#ag-cs-ag)']), sv('path', ['class', cC + 'line', 'd', dl, 'fill', 'none', vE, nS]));
+              ap(plot, svg);
+              if (peak > 0 && peakIdx >= 0) {
+                const dot = sp(cC + 'peak', { 'aria-hidden': 'true' });
+                dot.style.left = `${nP < 2 ? 50 : ((peakIdx + 0.5) / nP) * 100}%`;
+                dot.style.bottom = `${Math.min(99, (peak / top) * 100).toFixed(2)}%`;
+                ap(plot, dot);
+              }
+            }
             const axis = dv('ag-cs-home-chart-axis');
-            ap(panel, ap(dv('ag-cs-home-chart'), ap(plot, bars), axis));
+            ap(panel, ap(dv('ag-cs-home-chart'), plot, axis));
             G.requestAnimationFrame?.(() => {
               if (!axis.isConnected) return;
               const labels = columns.map((c) => usageCore.homeShortDate(fmt, c.date));

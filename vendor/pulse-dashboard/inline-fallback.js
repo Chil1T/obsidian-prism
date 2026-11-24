@@ -755,6 +755,7 @@
         [FALLBACK_ATTR]: '1',
         [PRISM_BAR_ATTR]: 'true',
         'data-ag-owned': '1',
+        'data-ag-no-i18n': '',
         translate: 'no',
         'data-no-translate': 'true',
         'data-ag-localization-skip': 'true',

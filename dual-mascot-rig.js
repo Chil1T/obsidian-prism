@@ -1232,10 +1232,10 @@
     return 'greetTurn';
   }
 
-  // ── 自由点选桌宠阵容编解码（向后兼容 5 预设 + dual 别名，单物种 0..4，主宠总数 <= 6）──
+  // ── 自由点选桌宠阵容编解码（向后兼容 5 预设 + dual 别名，单物种纯开关 0/1，主宠总数 <= 4，旧多数量自动夹紧）──
   const MASCOT_SPECIES_ORDER = ['c', 'k', 'd', 'w'];
-  const MASCOT_MAX_PER_SPECIES = 4;
-  const MASCOT_MAX_TOTAL = 6;
+  const MASCOT_MAX_PER_SPECIES = 1;
+  const MASCOT_MAX_TOTAL = 4;
   const MASCOT_PRESET_MAP = {
     off: { c: 0, k: 0, d: 0, w: 0, minis: false },
     crab: { c: 1, k: 1, d: 0, w: 0, minis: false },
@@ -1254,18 +1254,21 @@
     if (!m) return null;
     const out = { c: 0, k: 0, d: 0, w: 0, minis: Boolean(m[2]) };
     const seen = new Set();
+    let rawTotal = 0;
     let total = 0;
     if (m[1]) {
       for (const tok of m[1].split(',')) {
         const sp = tok[0];
         const cnt = Number(tok.slice(1));
-        if (seen.has(sp) || !Number.isInteger(cnt) || cnt < 0 || cnt > MASCOT_MAX_PER_SPECIES) return null;
+        if (seen.has(sp) || !Number.isInteger(cnt) || cnt < 0 || cnt > 4) return null;
         seen.add(sp);
-        out[sp] = cnt;
-        total += cnt;
+        rawTotal += cnt;
+        const clamped = cnt > 0 ? 1 : 0;
+        out[sp] = clamped;
+        total += clamped;
       }
     }
-    if (total > MASCOT_MAX_TOTAL) return null;
+    if (rawTotal > 6 || total > MASCOT_MAX_TOTAL) return null;
     return out;
   }
 
@@ -1274,7 +1277,7 @@
     const counts = { c: 0, k: 0, d: 0, w: 0 };
     let rem = MASCOT_MAX_TOTAL;
     for (const sp of MASCOT_SPECIES_ORDER) {
-      const n = clamp(floor(Number(src[sp]) || 0), 0, min(MASCOT_MAX_PER_SPECIES, rem));
+      const n = clamp(Number(src[sp]) > 0 ? 1 : 0, 0, min(MASCOT_MAX_PER_SPECIES, rem));
       counts[sp] = n;
       rem -= n;
     }
@@ -1413,16 +1416,14 @@
     const buildRosterSpecs = (r) => {
       const specs = [];
       for (const sd of SPECIES_DEF) {
-        const cnt = clamp(floor(Number(r[sd.key]) || 0), 0, MASCOT_MAX_PER_SPECIES);
-        for (let i = 1; i <= cnt; i++) {
-          specs.push({
-            id: i === 1 ? sd.kind : `${sd.kind}-${i}`,
-            kind: sd.kind,
-            label: i === 1 ? sd.label : `${sd.label} #${i}`,
-            phaseTicks: sd.basePhase + (i - 1) * 9,
-            phaseOff: specs.length * 4 + (sd.key === 'k' ? 4 : sd.key === 'd' ? 7 : sd.key === 'w' ? 10 : 0),
-          });
-        }
+        if (!(Number(r[sd.key]) > 0)) continue;
+        specs.push({
+          id: sd.kind,
+          kind: sd.kind,
+          label: sd.label,
+          phaseTicks: sd.basePhase,
+          phaseOff: specs.length * 4 + (sd.key === 'k' ? 4 : sd.key === 'd' ? 7 : sd.key === 'w' ? 10 : 0),
+        });
       }
       return specs;
     };
@@ -5024,8 +5025,8 @@
                 nextRoster.c = 1;
                 nextRoster.k = 1;
               }
-              nextRoster.d = max(1, nextRoster.d);
-              nextRoster.w = max(1, nextRoster.w);
+              nextRoster.d = 1;
+              nextRoster.w = 1;
             } else {
               nextRoster.d = 0;
               nextRoster.w = 0;

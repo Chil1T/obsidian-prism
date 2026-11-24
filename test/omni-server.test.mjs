@@ -565,3 +565,68 @@ test('OmniServer SEC-3/5/6 & WB-4: Host/Origin/CSP/Referrer-Policy, remote UNC b
   }
   assert.equal(assembled, utf8Sample, 'Concatenated UTF-8 slices must match original multibyte text 100%');
 });
+
+test('OmniServer /sandbox/ enforces strict opaque-origin CSP on .html/.htm and /viewer supports full 8+1 locales', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-omni-b3-'));
+  const htmlFile = path.join(tmpDir, 'demo.html');
+  const htmFile = path.join(tmpDir, 'legacy.htm');
+  const cssFile = path.join(tmpDir, 'app.css');
+  const svgFile = path.join(tmpDir, 'vector.svg');
+  const xhtmlFile = path.join(tmpDir, 'doc.xhtml');
+  fs.writeFileSync(htmlFile, '<!doctype html><link rel="stylesheet" href="./app.css"><script>window.__ok=1;</script>', 'utf8');
+  fs.writeFileSync(htmFile, '<!doctype html><h1>HTM</h1>', 'utf8');
+  fs.writeFileSync(cssFile, 'body{margin:0}', 'utf8');
+  fs.writeFileSync(svgFile, '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>', 'utf8');
+  fs.writeFileSync(xhtmlFile, '<html xmlns="http://www.w3.org/1999/xhtml"><body>x</body></html>', 'utf8');
+
+  const server = new OmniServer({ rootDir: tmpDir });
+  t.after(async () => {
+    await server.stop();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+  const info = await server.start();
+
+  const expectedSandboxCsp = "sandbox allow-scripts; connect-src 'none'; form-action 'none'; navigate-to 'none'";
+  for (const targetFile of [htmlFile, htmFile]) {
+    const initRes = await httpGetRaw(
+      `${info.baseUrl}/sandbox-init?token=${info.token}&path=${encodeURIComponent(targetFile)}`
+    );
+    assert.equal(initRes.statusCode, 200);
+    const { sandboxUrl } = JSON.parse(initRes.text);
+    const sbRes = await httpGetRaw(sandboxUrl);
+    assert.equal(sbRes.statusCode, 200);
+    assert.equal(sbRes.headers['content-security-policy'], expectedSandboxCsp);
+    assert.equal(String(sbRes.headers['content-security-policy']).includes("default-src 'none'"), false);
+  }
+
+  // Relative CSS inside /sandbox/ remains readable without breaking styling
+  const initHtml = JSON.parse(
+    (await httpGetRaw(`${info.baseUrl}/sandbox-init?token=${info.token}&path=${encodeURIComponent(htmlFile)}`)).text
+  );
+  const cssUrl = initHtml.sandboxUrl.replace(/demo\.html$/, 'app.css');
+  const cssRes = await httpGetRaw(cssUrl);
+  assert.equal(cssRes.statusCode, 200);
+  assert.equal(cssRes.text, 'body{margin:0}');
+
+  // Direct /sandbox/ access to .svg / .xhtml enforces strict default-src 'none' sandbox CSP
+  const strictDocCsp = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+  for (const assetName of ['vector.svg', 'doc.xhtml']) {
+    const assetRes = await httpGetRaw(initHtml.sandboxUrl.replace(/demo\.html$/, assetName));
+    assert.equal(assetRes.statusCode, 200);
+    assert.equal(
+      assetRes.headers['content-security-policy'],
+      strictDocCsp,
+      `/sandbox/ must enforce strict sandbox CSP on ${assetName}`
+    );
+  }
+
+  // /viewer accepts all 8 locales + yue compatibility and falls back invalid locales to zh-CN
+  for (const lang of ['zh-CN', 'zh-TW', 'yue', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
+    const res = await httpGetRaw(`${info.baseUrl}/viewer?token=${info.token}&kind=mermaid&lang=${encodeURIComponent(lang)}`);
+    assert.equal(res.statusCode, 200);
+    assert.ok(res.text.includes(`<html lang="${lang}"`), `/viewer must preserve lang="${lang}"`);
+  }
+  const fallbackRes = await httpGetRaw(`${info.baseUrl}/viewer?token=${info.token}&kind=mermaid&lang=xx-INVALID`);
+  assert.equal(fallbackRes.statusCode, 200);
+  assert.ok(fallbackRes.text.includes('<html lang="zh-CN"'));
+});

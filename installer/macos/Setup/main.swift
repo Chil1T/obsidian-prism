@@ -1886,6 +1886,42 @@ enum InstallerCore {
         return segments.contains("telemetry") || segments.contains("obsidian-prism")
     }
 
+    private static func resolveAllowedAddonsOverrideDir(_ candidate: String, geminiRoot: String) -> (path: String, stopRoot: String)? {
+        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        let norm = normalizeSystemRootPrefix(trimmed)
+        if isDangerousRootPath(norm) { return nil }
+        let segments = norm.split(separator: "/").map { $0.lowercased() }
+        if segments.contains("conversations_archive") ||
+           segments.contains("prism-knowledge-space") ||
+           segments.contains("antigravity-spark") {
+            return nil
+        }
+        guard segments.contains("addons") || segments.contains("obsidian-prism") else {
+            return nil
+        }
+        let home = normalizeSystemRootPrefix(FileManager.default.homeDirectoryForCurrentUser.path)
+        var allowedRoots = [
+            (home as NSString).appendingPathComponent(".gemini"),
+            normalizeSystemRootPrefix(NSTemporaryDirectory()),
+            "/private/tmp",
+        ]
+        if !geminiRoot.isEmpty {
+            allowedRoots.append(normalizeSystemRootPrefix(geminiRoot))
+        }
+        for base in allowedRoots {
+            let b = (base.count > 1 && base.hasSuffix("/")) ? String(base.dropLast()) : base
+            if !b.isEmpty && norm.hasPrefix(b + "/") {
+                return (norm, b)
+            }
+        }
+        return nil
+    }
+
+    private static func isAllowedAddonsOverrideDir(_ candidate: String, geminiRoot: String) -> Bool {
+        return resolveAllowedAddonsOverrideDir(candidate, geminiRoot: geminiRoot) != nil
+    }
+
     private static func resolveAllowedUsageCacheOverrideFile(_ candidate: String, hostCfgDir: String?, geminiRoot: String?) -> (path: String, stopRoot: String)? {
         let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return nil }
@@ -2081,6 +2117,28 @@ enum InstallerCore {
                 let sidecarDataDir = (pluginDataDir as NSString).deletingLastPathComponent
                 if !isSymbolicLink(sidecarDataDir) && !isSymbolicLink(pluginDataDir) && !isSymbolicLink(telemetryDir) {
                     try? fm.removeItem(atPath: telemetryDir)
+                }
+            }
+
+            let envAddons = ProcessInfo.processInfo.environment["AG_PRISM_ADDONS_DIR"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let addonsTarget: (path: String, stopRoot: String)?
+            if !envAddons.isEmpty {
+                addonsTarget = resolveAllowedAddonsOverrideDir(envAddons, geminiRoot: gRoot)
+            } else if !gRoot.isEmpty {
+                let defAddons = ((gRoot as NSString).appendingPathComponent("antigravity") as NSString)
+                    .appendingPathComponent("sidecar_data/obsidian-prism/addons")
+                addonsTarget = (normalizeSystemRootPrefix(defAddons), normalizeSystemRootPrefix(gRoot))
+            } else {
+                addonsTarget = nil
+            }
+            if let target = addonsTarget, !target.path.isEmpty, fm.fileExists(atPath: target.path), !isDangerousRootPath(target.path) {
+                let pluginDataDir = (target.path as NSString).deletingLastPathComponent
+                let sidecarDataDir = (pluginDataDir as NSString).deletingLastPathComponent
+                if !hasSymbolicLinkInChain(target.path, stopRoot: target.stopRoot) &&
+                   !isSymbolicLink(sidecarDataDir) &&
+                   !isSymbolicLink(pluginDataDir) &&
+                   !isSymbolicLink(target.path) {
+                    try? fm.removeItem(atPath: target.path)
                 }
             }
         }

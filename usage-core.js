@@ -18,109 +18,115 @@
     return Number.isFinite(n) ? n : 0;
   }
 
+  const L8 = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'];
   function resolveLang(langOrZh) {
     if (langOrZh === true) return 'zh-CN';
-    if (langOrZh === false || langOrZh === null) return 'en';
-    if (langOrZh === 'zh-TW' || langOrZh === 'yue' || langOrZh === 'en' || langOrZh === 'ja') return langOrZh;
-    return 'zh-CN';
+    if (!langOrZh) return 'en';
+    const lo = String(langOrZh).trim().toLowerCase();
+    if (!lo) return 'en';
+    if (/^yue(?:$|[-_])/.test(lo)) return 'zh-CN';
+    if (/^zh(?:$|[-_])/.test(lo)) return /tw|hk|mo|hant/.test(lo) ? 'zh-TW' : 'zh-CN';
+    const m = lo.match(/^(en|ja|ko|es|fr|de)(?:$|[-_])/);
+    return m ? m[1] : 'en';
   }
 
-  function pickByLang(map, langOrZh, fallback = '') {
-    const l = resolveLang(langOrZh);
-    if (!map) return fallback;
-    if (map[l] !== undefined) return map[l];
-    if (l === 'yue' && map['zh-TW'] !== undefined) return map['zh-TW'];
-    return map['zh-CN'] !== undefined ? map['zh-CN'] : (map.en !== undefined ? map.en : fallback);
+  function pick8(arr, langOrZh) {
+    const i = L8.indexOf(resolveLang(langOrZh));
+    return arr[i >= 0 ? i : 2] ?? arr[2];
   }
 
+  const mkLbls = (a) => Object.fromEntries(L8.map((k, i) => [k, a[i]]));
   const HOME_RANGES = [
-    { id: 'all', days: 0, labelZh: '全部', labelEn: 'All', labels: { 'zh-CN': '全部', 'zh-TW': '全部', yue: '全部', en: 'All', ja: '全期間' } },
-    { id: '30d', days: 30, labelZh: '30 天', labelEn: '30d', labels: { 'zh-CN': '30 天', 'zh-TW': '30 天', yue: '30 日', en: '30d', ja: '30日間' } },
-    { id: '7d', days: 7, labelZh: '7 天', labelEn: '7d', labels: { 'zh-CN': '7 天', 'zh-TW': '7 天', yue: '7 日', en: '7d', ja: '7日間' } },
-  ];
+    ['all', 0, '全部', 'All', ['全部', '全部', 'All', '全期間', '전체', 'Todo', 'Tout', 'Alle']],
+    ['30d', 30, '30 天', '30d', ['30 天', '30 天', '30d', '30日間', '30일', '30d', '30j', '30T']],
+    ['7d', 7, '7 天', '7d', ['7 天', '7 天', '7d', '7日間', '7일', '7d', '7j', '7T']],
+  ].map(([id, days, labelZh, labelEn, a]) => ({ id, days, labelZh, labelEn, labels: mkLbls(a) }));
 
-  const HOME_BOOKS = [
-    ['tao', 7607, '《道德经》', '《道德經》', '『老子（道徳経）』', 'Tao Te Ching'],
-    ['yellow', 7778, '《黄色壁纸》', '《黃色壁紙》', '『黄色い壁紙』', 'The Yellow Wallpaper'],
-    ['meta', 27557, '《变形记》', '《變形記》', '『変身』', 'Metamorphosis'],
-    ['jekyll', 34713, '《化身博士》', 0, '『ジーキル博士とハイド氏』', 'The Strange Case of Dr Jekyll and Mr Hyde'],
-    ['alice', 37248, '《爱丽丝漫游奇境》', '《愛麗絲夢遊仙境》', '『不思議の国のアリス』', "Alice's Adventures in Wonderland"],
-    ['animal', 39000, '《动物农场》', '《動物農莊》', '『動物農場』', 'Animal Farm'],
-    ['carol', 40306, '《圣诞颂歌》', '《小氣財神》', '『クリスマス・キャロル』', 'A Christmas Carol', '《聖誕頌歌》'],
-    ['wild', 42383, '《野性的呼唤》', '《野性的呼喚》', '『野生の呼び声』', 'The Call of the Wild'],
-    ['time', 42817, '《时间机器》', '《時間機器》', '『タイム・マシン』', 'The Time Machine'],
-    ['oz', 51004, '《绿野仙踪》', '《綠野仙蹤》', '『オズの魔法使い』', 'The Wonderful Wizard of Oz'],
-    ['darkness', 52163, '《黑暗之心》', 0, '『闇の奥』', 'Heart of Darkness'],
-    ['faust', 53930, '《浮士德》', 0, '『ファウスト』', 'Faust'],
-    ['screw', 57484, '《螺丝在拧紧》', '《碧廬冤孽》', '『ねじの回転』', 'The Turn of the Screw'],
-    ['aesop', 60707, '《伊索寓言》', 0, '『イソップ寓話』', "Aesop's Fables"],
-    ['peter', 63821, '《彼得·潘》', '《小飛俠彼得潘》', '『ピーター・パン』', 'Peter Pan'],
-    ['gatsby', 65763, '《了不起的盖茨比》', '《大亨小傳》', '『グレート・ギャツビー』', 'The Great Gatsby'],
-    ['prince', 66670, '《君主论》', '《君王論》', '『君主論』', 'The Prince'],
-    ['invisible', 68163, '《隐形人》', '《隱形人》', '『透明人間』', 'The Invisible Man'],
-    ['andersen', 73931, '《安徒生童话》', '《安徒生童話》', '『アンデルセン童話集』', "Andersen's Fairy Tales"],
-    ['worlds', 80168, '《世界大战》', '《世界大戰》', '『宇宙戦争』', 'The War of the Worlds'],
-    ['beyond', 89836, '《善恶的彼岸》', '《善惡的彼岸》', '『善悪の彼岸』', 'Beyond Good and Evil'],
-    ['whitefang', 96418, '《白牙》', 0, '『白い牙』', 'White Fang'],
-    ['meditations', 96973, '《沉思录》', '《沉思錄》', '『自省録』', 'Meditations'],
-    ['frankenstein', 97886, '《弗兰肯斯坦》', '《科學怪人》', '『フランケンシュタイン』', 'Frankenstein'],
-    ['stone', 100000, '《哈利·波特与魔法石》', '《哈利波特：神秘的魔法石》', '『ハリー・ポッターと賢者の石』', "Harry Potter and the Philosopher's Stone"],
-    ['dorian', 106339, '《道林·格雷的画像》', '《格雷的畫像》', '『ドリアン・グレイの肖像』', 'The Picture of Dorian Gray'],
-    ['tolive', 115000, '《活着》', '《活著》', '『生きる』', 'To Live'],
-    ['hobbit', 123000, '《霍比特人》', '《哈比人歷險記》', '『ホビットの冒険』', 'The Hobbit', '《哈比人》'],
-    ['grimm', 132467, '《格林童话》', '《格林童話》', '『グリム童話集』', "Grimms' Fairy Tales"],
-    ['1984', 136278, '《一九八四》', 0, '『1984年』', 'Nineteen Eighty-Four'],
-    ['sherlock', 138725, '《福尔摩斯冒险史》', '《福爾摩斯冒險史》', '『シャーロック・ホームズの冒険』', 'The Adventures of Sherlock Holmes'],
-    ['gulliver', 138958, '《格列佛游记》', '《格列佛遊記》', '『ガリヴァー旅行記』', "Gulliver's Travels"],
-    ['walden', 152659, '《瓦尔登湖》', '《湖濱散記》', '『ウォールデン 森の生活』', 'Walden'],
-    ['crusoe', 153596, '《鲁滨逊漂流记》', '《魯賓遜漂流記》', '『ロビンソン・クルーソー』', 'Robinson Crusoe'],
-    ['huck', 154263, '《哈克贝利·费恩历险记》', '《頑童歷險記》', '『ハックルベリー・フィンの冒険』', 'Adventures of Huckleberry Finn'],
-    ['divine', 157765, '《神曲》', 0, '『神曲』', 'The Divine Comedy'],
-    ['bovary', 159575, '《包法利夫人》', 0, '『ボヴァリー夫人』', 'Madame Bovary'],
-    ['zarathustra', 161488, '《查拉图斯特拉如是说》', '《查拉圖斯特拉如是說》', '『ツァラトゥストラはこう語った』', 'Thus Spoke Zarathustra'],
-    ['pride', 171701, '《傲慢与偏见》', '《傲慢與偏見》', '『高慢と偏見』', 'Pride and Prejudice'],
-    ['odyssey', 173150, '《奥德赛》', '《奧德賽》', '『オデュッセイア』', 'The Odyssey'],
-    ['twocities', 187333, '《双城记》', '《雙城記》', '『二都物語』', 'A Tale of Two Cities'],
-    ['threebody', 202000, '《三体》', '《三體》', '『三体』', 'The Three-Body Problem'],
-    ['dracula', 213648, '《德古拉》', 0, '『ドラキュラ』', 'Dracula'],
-    ['expectations', 252176, '《远大前程》', '《孤星血淚》', '『大いなる遺産』', 'Great Expectations'],
-    ['janeeyre', 256179, '《简·爱》', '《簡·愛》', '『ジェイン・エア』', 'Jane Eyre'],
-    ['republic', 279539, '《理想国》', '《理想國》', '『国家』', 'The Republic'],
-    ['crime', 285009, '《罪与罚》', '《罪與罰》', '『罪と罰』', 'Crime and Punishment'],
-    ['leviathan', 304696, '《利维坦》', '《利維坦》', '『リヴァイアサン』', 'Leviathan'],
-    ['moby', 306522, '《白鲸》', '《白鯨記》', '『白鯨』', 'Moby-Dick'],
-    ['darkforest', 307000, '《三体Ⅱ·黑暗森林》', '《三體Ⅱ·黑暗森林》', '『三体II 黒暗森林』', 'The Dark Forest'],
-    ['deathsend', 336000, '《三体Ⅲ·死神永生》', '《三體Ⅲ·死神永生》', '『三体III 死神永生』', "Death's End"],
-    ['anna', 481659, '《安娜·卡列尼娜》', 0, '『アンナ・カレーニナ』', 'Anna Karenina'],
-    ['karamazov', 487590, '《卡拉马佐夫兄弟》', '《卡拉馬佐夫兄弟》', '『カラマーゾフの兄弟』', 'The Brothers Karamazov'],
-    ['quixote', 574243, '《堂吉诃德》', '《唐吉訶德》', '『ドン・キホーテ』', 'Don Quixote'],
-    ['lotr', 625000, '《魔戒》', 0, '『指輪物語』', 'The Lord of the Rings'],
-    ['kingdoms', 638009, '《三国演义》', '《三國演義》', '『三国志演義』', 'Romance of the Three Kingdoms'],
-    ['montecristo', 651128, '《基督山伯爵》', '《基督山恩仇記》', '『モンテ・クリスト伯』', 'The Count of Monte Cristo'],
-    ['warpeace', 769001, '《战争与和平》', '《戰爭與和平》', '『戦争と平和』', 'War and Peace'],
-    ['journeywest', 783200, '《西游记》', '《西遊記》', '『西遊記』', 'Journey to the West'],
-    ['miserables', 801791, '《悲惨世界》', '《悲慘世界》', '『レ・ミゼラブル』', 'Les Misérables', '《孤星淚》'],
-    ['redchamber', 903956, '《红楼梦》', '《紅樓夢》', '『紅楼夢』', 'Dream of the Red Chamber'],
-    ['watermargin', 958242, '《水浒传》', '《水滸傳》', '『水滸伝』', 'Water Margin'],
-    ['ordinary', 998000, '《平凡的世界》', 0, '『平凡な世界』', 'Ordinary World'],
-    ['harrypotter', 1409000, '《哈利·波特》全集', '《哈利波特》全集', '『ハリー・ポッター』全巻', 'the whole Harry Potter series'],
-    ['losttime', 1647000, '《追忆似水年华》', '《追憶似水年華》', '『失われた時を求めて』', 'In Search of Lost Time'],
-  ].map(([key, tokens, zh, t, ja, en, yue]) => (yue ? { key, tokens, zh, zhTW: t || zh, yue, ja, en } : { key, tokens, zh, zhTW: t || zh, ja, en }));
+  const wrapTitle = (s, l, r) => (s[0] === l ? s : l + s + r);
+  const HOME_BOOKS = `tao|7607|道德经|道德經|老子（道徳経）|Tao Te Ching
+yellow|7778|黄色壁纸|黃色壁紙|黄色い壁紙|The Yellow Wallpaper
+meta|27557|变形记|變形記|変身|Metamorphosis
+jekyll|34713|化身博士||ジーキル博士とハイド氏|The Strange Case of Dr Jekyll and Mr Hyde
+alice|37248|爱丽丝漫游奇境|愛麗絲夢遊仙境|不思議の国のアリス|Alice's Adventures in Wonderland
+animal|39000|动物农场|動物農莊|動物農場|Animal Farm
+carol|40306|圣诞颂歌|小氣財神|クリスマス・キャロル|A Christmas Carol
+wild|42383|野性的呼唤|野性的呼喚|野生の呼び声|The Call of the Wild
+time|42817|时间机器|時間機器|タイム・マシン|The Time Machine
+oz|51004|绿野仙踪|綠野仙蹤|オズの魔法使い|The Wonderful Wizard of Oz
+darkness|52163|黑暗之心||闇の奥|Heart of Darkness
+faust|53930|浮士德||ファウスト|Faust
+screw|57484|螺丝在拧紧|碧廬冤孽|ねじの回転|The Turn of the Screw
+aesop|60707|伊索寓言||イソップ寓話|Aesop's Fables
+peter|63821|彼得·潘|小飛俠彼得潘|ピーター・パン|Peter Pan
+gatsby|65763|了不起的盖茨比|大亨小傳|グレート・ギャツビー|The Great Gatsby
+prince|66670|君主论|君王論|君主論|The Prince
+invisible|68163|隐形人|隱形人|透明人間|The Invisible Man
+andersen|73931|安徒生童话|安徒生童話|アンデルセン童話集|Andersen's Fairy Tales
+worlds|80168|世界大战|世界大戰|宇宙戦争|The War of the Worlds
+beyond|89836|善恶的彼岸|善惡的彼岸|善悪の彼岸|Beyond Good and Evil
+whitefang|96418|白牙||白い牙|White Fang
+meditations|96973|沉思录|沉思錄|自省録|Meditations
+frankenstein|97886|弗兰肯斯坦|科學怪人|フランケンシュタイン|Frankenstein
+stone|100000|哈利·波特与魔法石|哈利波特：神秘的魔法石|ハリー・ポッターと賢者の石|Harry Potter and the Philosopher's Stone
+dorian|106339|道林·格雷的画像|格雷的畫像|ドリアン・グレイの肖像|The Picture of Dorian Gray
+tolive|115000|活着|活著|生きる|To Live
+hobbit|123000|霍比特人|哈比人歷險記|ホビットの冒険|The Hobbit
+grimm|132467|格林童话|格林童話|グリム童話集|Grimms' Fairy Tales
+1984|136278|一九八四||1984年|Nineteen Eighty-Four
+sherlock|138725|福尔摩斯冒险史|福爾摩斯冒險史|シャーロック・ホームズの冒険|The Adventures of Sherlock Holmes
+gulliver|138958|格列佛游记|格列佛遊記|ガリヴァー旅行記|Gulliver's Travels
+walden|152659|瓦尔登湖|湖濱散記|ウォールデン 森の生活|Walden
+crusoe|153596|鲁滨逊漂流记|魯賓遜漂流記|ロビンソン・クルーソー|Robinson Crusoe
+huck|154263|哈克贝利·费恩历险记|頑童歷險記|ハックルベリー・フィンの冒険|Adventures of Huckleberry Finn
+divine|157765|神曲||神曲|The Divine Comedy
+bovary|159575|包法利夫人||ボヴァリー夫人|Madame Bovary
+zarathustra|161488|查拉图斯特拉如是说|查拉圖斯特拉如是說|ツァラトゥストラはこう語った|Thus Spoke Zarathustra
+pride|171701|傲慢与偏见|傲慢與偏見|高慢と偏見|Pride and Prejudice
+odyssey|173150|奥德赛|奧德賽|オデュッセイア|The Odyssey
+twocities|187333|双城记|雙城記|二都物語|A Tale of Two Cities
+threebody|202000|三体|三體|三体|The Three-Body Problem
+dracula|213648|德古拉||ドラキュラ|Dracula
+expectations|252176|远大前程|孤星血淚|大いなる遺産|Great Expectations
+janeeyre|256179|简·爱|簡·愛|ジェイン・エア|Jane Eyre
+republic|279539|理想国|理想國|国家|The Republic
+crime|285009|罪与罚|罪與罰|罪と罰|Crime and Punishment
+leviathan|304696|利维坦|利維坦|リヴァイアサン|Leviathan
+moby|306522|白鲸|白鯨記|白鯨|Moby-Dick
+darkforest|307000|三体Ⅱ·黑暗森林|三體Ⅱ·黑暗森林|三体II 黒暗森林|The Dark Forest
+deathsend|336000|三体Ⅲ·死神永生|三體Ⅲ·死神永生|三体III 死神永生|Death's End
+anna|481659|安娜·卡列尼娜||アンナ・カレーニナ|Anna Karenina
+karamazov|487590|卡拉马佐夫兄弟|卡拉馬佐夫兄弟|カラマーゾフの兄弟|The Brothers Karamazov
+quixote|574243|堂吉诃德|唐吉訶德|ドン・キホーテ|Don Quixote
+lotr|625000|魔戒||指輪物語|The Lord of the Rings
+kingdoms|638009|三国演义|三國演義|三国志演義|Romance of the Three Kingdoms
+montecristo|651128|基督山伯爵|基督山恩仇記|モンテ・クリスト伯|The Count of Monte Cristo
+warpeace|769001|战争与和平|戰爭與和平|戦争と平和|War and Peace
+journeywest|783200|西游记|西遊記|西遊記|Journey to the West
+miserables|801791|悲惨世界|悲慘世界|レ・ミゼラブル|Les Misérables
+redchamber|903956|红楼梦|紅樓夢|紅楼夢|Dream of the Red Chamber
+watermargin|958242|水浒传|水滸傳|水滸伝|Water Margin
+ordinary|998000|平凡的世界||平凡な世界|Ordinary World
+harrypotter|1409000|《哈利·波特》全集|《哈利波特》全集|『ハリー・ポッター』全巻|the whole Harry Potter series
+losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求めて|In Search of Lost Time`.split('\n').map((row) => {
+    const [key, tk, z0, t0, j0, en] = row.split('|');
+    const zh = wrapTitle(z0, '《', '》');
+    return { key, tokens: +tk, zh, zhTW: t0 ? wrapTitle(t0, '《', '》') : zh, ja: wrapTitle(j0, '『', '』'), en };
+  });
 
   function homeBookTitle(book, langOrZh) {
     if (!book) return '';
     const l = resolveLang(langOrZh);
-    if (l === 'en') return book.en;
-    if (l === 'ja') return book.ja || book.en;
-    if (l === 'yue') return book.yue || book.zhTW || book.zh;
+    if (l === 'zh-CN') return book.zh;
     if (l === 'zh-TW') return book.zhTW || book.zh;
-    return book.zh;
+    if (l === 'ja') return book.ja || book.en;
+    return book.en;
   }
 
   function homeRangeLabel(rangeOrId, langOrZh) {
     const r = typeof rangeOrId === 'string' ? (HOME_RANGES.find((x) => x.id === rangeOrId) || HOME_RANGES[0]) : rangeOrId;
     if (!r) return '';
-    return pickByLang(r.labels, langOrZh, r.labelZh);
+    const l = resolveLang(langOrZh);
+    return (r.labels && (r.labels[l] ?? r.labels.en)) || r.labelEn || '';
   }
 
   function pad2(v) {
@@ -161,14 +167,16 @@
     const l = resolveLang(langOrZh);
     if (l === 'zh-CN') return (h < 12 ? '上午 ' : '下午 ') + h12 + ' 点';
     if (l === 'zh-TW') return (h < 12 ? '上午 ' : '下午 ') + h12 + ' 點';
-    if (l === 'yue') return (h < 12 ? '上晝 ' : '下晝 ') + h12 + ' 點';
     if (l === 'ja') return (h < 12 ? '午前 ' : '午後 ') + h12 + ' 時';
+    if (l === 'ko') return (h < 12 ? '오전 ' : '오후 ') + h12 + '시';
+    if (l === 'fr') return h + 'h';
+    if (l === 'de') return h + ' Uhr';
+    if (l === 'es') return h + ':00';
     return h12 + (h < 12 ? ' AM' : ' PM');
   }
 
   function homeShortDateFormat(langOrZh) {
-    const map = { 'zh-CN': 'zh-CN', 'zh-TW': 'zh-TW', yue: 'zh-HK', en: 'en-US', ja: 'ja-JP' };
-    return new Intl.DateTimeFormat(map[resolveLang(langOrZh)] || 'en-US', { month: 'short', day: 'numeric' });
+    return new Intl.DateTimeFormat(pick8(['zh-CN', 'zh-TW', 'en-US', 'ja-JP', 'ko-KR', 'es-ES', 'fr-FR', 'de-DE'], langOrZh), { month: 'short', day: 'numeric' });
   }
 
   function homeShortDate(format, day) {
@@ -661,11 +669,16 @@
         const l = resolveLang(zh);
         const title = homeBookTitle(book, l);
         const cntStr = formatHomeCount(count);
-        if (l === 'zh-CN') funBook = `你的 Token 用量相当于 ${cntStr} 本${title}。`;
-        else if (l === 'zh-TW') funBook = `您的 Token 用量相當於 ${cntStr} 本${title}。`;
-        else if (l === 'yue') funBook = `你用咗嘅 Token 相當於 ${cntStr} 本${title}。`;
-        else if (l === 'ja') funBook = `消費トークン数は${title} ${cntStr} 冊分に相当します。`;
-        else funBook = `You've used ~${cntStr}× the tokens in ${title}.`;
+        funBook = pick8([
+          `你的 Token 用量相当于 ${cntStr} 本${title}。`,
+          `您的 Token 用量相當於 ${cntStr} 本${title}。`,
+          `You've used ~${cntStr}× the tokens in ${title}.`,
+          `消費トークン数は${title} ${cntStr} 冊分に相当します。`,
+          `사용한 토큰은 ${title} 약 ${cntStr}권 분량입니다.`,
+          `Has usado ~${cntStr}× los tokens de ${title}.`,
+          `Vous avez utilisé ~${cntStr}× les tokens de ${title}.`,
+          `Verbraucht: ~${cntStr}× die Token von ${title}.`,
+        ], l);
       }
     }
 
@@ -717,7 +730,7 @@
     if (kind === 'gemini') return 'Gemini';
     const raw = String(group?.name || group?.id || '').trim();
     if (raw) return raw;
-    return pickByLang({ 'zh-CN': '模型配额', 'zh-TW': '模型配額', yue: '模型配額', en: 'Quota Pool', ja: 'クォータ' }, langOrZh);
+    return pick8(['模型配额', '模型配額', 'Quota Pool', 'クォータ', '할당량 풀', 'Cuota', 'Quota', 'Kontingent'], langOrZh);
   }
 
   function quotaRemaining(bucket) {
@@ -766,23 +779,26 @@
     return list.find((g) => quotaWindows(g).length > 0) || list[0];
   }
 
-  function shortEta(ms, langOrZh) {
-    const l = resolveLang(langOrZh);
-    const v = numOr(ms);
-    if (!(v > 0) || !Number.isFinite(v)) {
-      return pickByLang({ 'zh-CN': '即将刷新', 'zh-TW': '即將重設', yue: '就嚟重設', en: 'Refreshing', ja: '間もなく更新' }, l);
-    }
-    const totalSec = Math.max(1, Math.round(v / 1000));
+  const REFRESHING_L = ['即将刷新', '即將重設', 'Refreshing', '間もなく更新', '곧 초기화', 'Actualizando', 'Actualisation', 'Aktualisiert'];
+
+  function fmtEtaSec(totalSec, l) {
     const d = Math.floor(totalSec / 86400);
     const h = Math.floor((totalSec % 86400) / 3600);
     const m = Math.floor((totalSec % 3600) / 60);
     if (l === 'zh-CN') return d > 0 ? `${d}天${h}小时` : h > 0 ? `${h}小时${m}分` : `${Math.max(1, m)}分钟`;
     if (l === 'zh-TW') return d > 0 ? `${d}天${h}小時` : h > 0 ? `${h}小時${m}分` : `${Math.max(1, m)}分鐘`;
-    if (l === 'yue') return d > 0 ? `${d}日${h}個鐘` : h > 0 ? `${h}個鐘${m}分` : `${Math.max(1, m)}分鐘`;
     if (l === 'ja') return d > 0 ? `${d}日${h}時間` : h > 0 ? `${h}時間${m}分` : `${Math.max(1, m)}分`;
-    if (d > 0) return `${d}d ${h}h`;
-    if (h > 0) return `${h}h ${m}m`;
-    return `${Math.max(1, m)}m`;
+    if (l === 'ko') return d > 0 ? `${d}일 ${h}시간` : h > 0 ? `${h}시간 ${m}분` : `${Math.max(1, m)}분`;
+    if (l === 'fr') return d > 0 ? `${d}j ${h}h` : h > 0 ? `${h}h ${m}m` : `${Math.max(1, m)}m`;
+    if (l === 'de') return d > 0 ? `${d}T ${h}Std` : h > 0 ? `${h}Std ${m}m` : `${Math.max(1, m)}m`;
+    return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${Math.max(1, m)}m`;
+  }
+
+  function shortEta(ms, langOrZh) {
+    const l = resolveLang(langOrZh);
+    const v = numOr(ms);
+    if (!(v > 0) || !Number.isFinite(v)) return pick8(REFRESHING_L, l);
+    return fmtEtaSec(Math.max(1, Math.round(v / 1000)), l);
   }
 
   function quotaForecast(bucket, windowKey, nowMs = Date.now()) {
@@ -866,43 +882,25 @@
       if (!primary || (rank[f.status] ?? 0) > (rank[primary.status] ?? 0)) primary = f;
     }
     const status = primary ? primary.status : 'idle';
-    const label = pickByLang(
+    const label = pick8(
       status === 'exhaust'
-        ? { 'zh-CN': '提前耗尽', 'zh-TW': '提前耗盡', yue: '提早用晒', en: 'Depleting early', ja: '早期枯渇予測' }
+        ? ['提前耗尽', '提前耗盡', 'Depleting early', '早期枯渇予測', '조기 소진 예상', 'Se agota pronto', 'Épuisement rapide', 'Bald erschöpft']
         : status === 'tight'
-        ? { 'zh-CN': '配速偏紧', 'zh-TW': '配速偏緊', yue: '進度偏緊', en: 'Burning fast', ja: '消費やや速め' }
+        ? ['配速偏紧', '配速偏緊', 'Burning fast', '消費やや速め', '소모 빠름', 'Consumo rápido', 'Conso rapide', 'Hoher Verbrauch']
         : status === 'ok'
-        ? { 'zh-CN': '配额充裕', 'zh-TW': '配額充裕', yue: '配額充裕', en: 'On track', ja: 'ペース良好' }
-        : { 'zh-CN': '待命充裕', 'zh-TW': '待命充裕', yue: '待命充裕', en: 'Standby', ja: '待機中' },
+        ? ['配额充裕', '配額充裕', 'On track', 'ペース良好', '정상 페이스', 'En rango', 'Dans les temps', 'Im Plan']
+        : ['待命充裕', '待命充裕', 'Standby', '待機中', '대기 중', 'En espera', 'En veille', 'Bereit'],
       l
     );
     let detail = '';
     if (primary) {
       if (primary.willExhaust && primary.exhaustInMs !== null) {
         const eta = shortEta(primary.exhaustInMs, l);
-        detail = pickByLang(
-          {
-            'zh-CN': `预计 ${eta}后耗尽`,
-            'zh-TW': `預計 ${eta}後耗盡`,
-            yue: `預計 ${eta}後用晒`,
-            en: `Est. empty in ${eta}`,
-            ja: `約${eta}で枯渇予測`,
-          },
-          l
-        );
+        detail = pick8([`预计 ${eta}后耗尽`, `預計 ${eta}後耗盡`, `Est. empty in ${eta}`, `約${eta}で枯渇予測`, `약 ${eta} 후 소진`, `Se agota en ~${eta}`, `Vide dans ~${eta}`, `Leer in ~${eta}`], l);
       } else if (primary.resetInMs > 0) {
         const eta = shortEta(primary.resetInMs, l);
         const endPct = Math.round(primary.endRemaining * 100);
-        detail = pickByLang(
-          {
-            'zh-CN': `${eta}后重置 · 预计结余 ${endPct}%`,
-            'zh-TW': `${eta}後重設 · 預計結餘 ${endPct}%`,
-            yue: `${eta}後重設 · 預計剩 ${endPct}%`,
-            en: `Resets in ${eta} · Est. ${endPct}% left`,
-            ja: `${eta}後に更新 · 予測残 ${endPct}%`,
-          },
-          l
-        );
+        detail = pick8([`${eta}后重置 · 预计结余 ${endPct}%`, `${eta}後重設 · 預計結餘 ${endPct}%`, `Resets in ${eta} · Est. ${endPct}% left`, `${eta}後に更新 · 予測残 ${endPct}%`, `${eta} 후 초기화 · 예상 잔여 ${endPct}%`, `Reinicio en ${eta} · Est. ${endPct}%`, `Reset dans ${eta} · Est. ${endPct}%`, `Reset in ${eta} · Ca. ${endPct}%`], l);
       }
     }
     return {
@@ -1018,19 +1016,7 @@
     const now = typeof n0 === 'number' ? n0 : Date.now() / 1000;
     const sec = (tsSeconds && typeof tsSeconds === 'object' ? tsSec(tsSeconds) : toNum(tsSeconds)) - now;
     const l = resolveLang(langOrZh);
-    if (sec <= 0) {
-      return pickByLang({ 'zh-CN': '即将刷新', 'zh-TW': '即將重設', yue: '就嚟重設', en: 'Refreshing', ja: '間もなく更新' }, l);
-    }
-    const d = Math.floor(sec / 86400);
-    const h = Math.floor((sec % 86400) / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    if (l === 'zh-CN') return d > 0 ? `${d}天${h}小时` : h > 0 ? `${h}小时${m}分` : `${Math.max(1, m)}分钟`;
-    if (l === 'zh-TW') return d > 0 ? `${d}天${h}小時` : h > 0 ? `${h}小時${m}分` : `${Math.max(1, m)}分鐘`;
-    if (l === 'yue') return d > 0 ? `${d}日${h}個鐘` : h > 0 ? `${h}個鐘${m}分` : `${Math.max(1, m)}分鐘`;
-    if (l === 'ja') return d > 0 ? `${d}日${h}時間` : h > 0 ? `${h}時間${m}分` : `${Math.max(1, m)}分`;
-    if (d > 0) return `${d}d ${h}h`;
-    if (h > 0) return `${h}h ${m}m`;
-    return `${Math.max(1, m)}m`;
+    return sec <= 0 ? pick8(REFRESHING_L, l) : fmtEtaSec(sec, l);
   }
 
   return {

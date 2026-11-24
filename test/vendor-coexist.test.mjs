@@ -294,20 +294,41 @@ test('Obsidian Prism brand compliance, GPL-3.0 LICENSE, NOTICE, CITATION.cff, TH
   assert.ok(noticesTxt.includes(disclaimer));
   assert.ok(readmeTxt.includes(disclaimer));
 
+  const readmeEnTxt = fs.readFileSync(path.join(ROOT_DIR, 'README.en.md'), 'utf8');
+  const settingsPanelTxt = fs.readFileSync(path.join(ROOT_DIR, 'settings-panel.js'), 'utf8');
+  const settingsPanelMod = require(path.join(ROOT_DIR, 'settings-panel.js'));
+  const contributorsTxt = fs.readFileSync(path.join(ROOT_DIR, 'CONTRIBUTORS.md'), 'utf8');
+
   const noticeSlugs = extractGithubRepoSlugs(noticesTxt);
   const readmeSlugs = extractGithubRepoSlugs(readmeTxt);
-  const sevenUpstreamSlugs = [
+  const readmeEnSlugs = extractGithubRepoSlugs(readmeEnTxt);
+  const settingsSlugs = new Set((settingsPanelMod.UPSTREAM_CREDITS || []).map((c) => c.repo));
+  const nineUpstreamSlugs = [
     '0DNANCY/agy-claude-style',
     'ATtacK030130/antigrative-dashboard',
     'LLYSH-HANNARI/antigravity-Codex-Claude-effort-slider',
+    'yiheng8023/antigravity-chinese',
     'Nwflower/dsh-claude-style',
     'Microqian2th/dsh-codex-effort-slider',
     'mobius/dsh-performance-slider',
     'claudenoshujin/claude-web',
+    'wp3171216237/dsh-TUI',
   ];
-  for (const slug of sevenUpstreamSlugs) {
+  for (const slug of nineUpstreamSlugs) {
     assert.ok(noticeSlugs.has(slug), `THIRD_PARTY_NOTICES.md must credit ${slug}`);
+    assert.ok(noticeFileTxt.includes(slug), `NOTICE must credit ${slug}`);
     assert.ok(readmeSlugs.has(slug), `README.md must credit ${slug}`);
+    assert.ok(readmeEnSlugs.has(slug), `README.en.md must credit ${slug}`);
+    assert.ok(settingsSlugs.has(slug), `settings-panel.js must credit ${slug}`);
+  }
+  for (const holder of ['0DNANCY', 'AG Pulse contributors', 'LLYSH-HANNARI', 'Antigravity Chinese Localization Contributors', 'wp3171216237']) {
+    assert.ok(noticesTxt.includes(holder), `THIRD_PARTY_NOTICES.md must retain MIT holder ${holder}`);
+    assert.ok(noticeFileTxt.includes(holder), `NOTICE must retain MIT holder ${holder}`);
+    assert.ok(settingsPanelTxt.includes(holder), `settings-panel.js must retain MIT holder ${holder}`);
+  }
+  assert.ok(noticesTxt.includes('swarm-i18n-runtime.js') && noticesTxt.includes('swarm-zh-CN.json'), 'THIRD_PARTY_NOTICES.md §1.4 must document swarm-i18n-runtime.js & swarm-zh-CN.json');
+  for (const contributor of ['@OyatsuSuki', '@yzd05', '@wanghaoyi216', '@Gruu6y']) {
+    assert.ok(contributorsTxt.includes(contributor), `CONTRIBUTORS.md must credit v1.0.8 contributor ${contributor}`);
   }
 
   // Verify absorbed upstream sources exist in vendor/
@@ -330,8 +351,8 @@ test('Obsidian Prism brand compliance, GPL-3.0 LICENSE, NOTICE, CITATION.cff, TH
   }
 });
 
-test('i18n-locales.js covers all 5 languages (zh-CN, zh-TW, yue, en, ja) with Obsidian Prism brand, fold hints, coexistence & About keys', () => {
-  const langs = ['zh-CN', 'zh-TW', 'yue', 'en', 'ja'];
+test('i18n-locales.js covers all 8 languages (zh-CN, zh-TW, en, ja, ko, es, fr, de) + legacy yue fallback with Obsidian Prism brand, fold hints, coexistence & About keys', () => {
+  const langs = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'];
   const requiredKeys = [
     'sectionTitle',
     'sectionSubtitle',
@@ -370,7 +391,7 @@ test('i18n-locales.js covers all 5 languages (zh-CN, zh-TW, yue, en, ja) with Ob
     for (const k of requiredKeys) {
       assert.ok(typeof ui[k] === 'string' && ui[k].length > 0, `Missing ${k} for ${lang}`);
     }
-    assert.ok(/Beta/i.test(ui.setSidebarStudioTitle), `Chat module title must mark Beta for ${lang}`);
+    assert.ok(/B[eê]ta/i.test(ui.setSidebarStudioTitle), `Chat module title must mark Beta for ${lang}`);
   }
   const zh = locales.getUiStrings('zh-CN');
   assert.equal(zh.sectionTitle, 'Obsidian Prism · 黑曜棱镜');
@@ -2537,5 +2558,221 @@ test('host-i18n runtime skips ag-pp- class prefix and #ag-prism-periodic-picker-
     assert.equal(ppInner.childNodes[0].nodeValue, 'Settings', 'Elements inside #ag-prism-periodic-picker-root must NEVER have text translated');
   } finally {
     inst.destroy();
+  }
+});
+
+test('Battle 5: usage-core.js full 8-locale coverage (ko/es/fr/de zero zh-CN fallback, yue->zh-CN, unknown->en)', () => {
+  const usageCore = require(path.join(ROOT_DIR, 'usage-core.js'));
+  assert.equal(usageCore.resolveLang(true), 'zh-CN');
+  assert.equal(usageCore.resolveLang(false), 'en');
+  assert.equal(usageCore.resolveLang(null), 'en');
+  assert.equal(usageCore.resolveLang(undefined), 'en');
+  assert.equal(usageCore.resolveLang('unknown-xx'), 'en');
+  assert.equal(usageCore.resolveLang('yue'), 'zh-CN');
+  assert.equal(usageCore.resolveLang('yue-HK'), 'zh-CN');
+  assert.equal(usageCore.resolveLang('zh-HK'), 'zh-TW');
+  assert.equal(usageCore.resolveLang('ko-KR'), 'ko');
+  assert.equal(usageCore.resolveLang('es-ES'), 'es');
+  assert.equal(usageCore.resolveLang('fr-FR'), 'fr');
+  assert.equal(usageCore.resolveLang('de-DE'), 'de');
+
+  const HAN_RE = /[\u4e00-\u9fff]/;
+  const now = new Date(2026, 10, 14, 12, 0, 0);
+  const dk = usageCore.homeDayKey(now);
+  const recs = [{
+    cascadeId: 'c1',
+    subagent: false,
+    days: { [dk]: { calls: 4, input: 12000, output: 3000, cacheRead: 10000, cacheWrite: 0, total: 25000, hours: Object.assign(new Array(24).fill(0), { 14: 4 }), models: { 'Gemini 4': { input: 12000, output: 3000, cacheRead: 10000, cacheWrite: 0, total: 25000, calls: 4 } } } },
+  }];
+  const nowMs = Date.UTC(2026, 10, 14, 12, 0, 0);
+  const grp = { id: 'custom-pool', windows: { '5h': { available: true, remaining: 0.45, resetAt: new Date(nowMs + 2 * 3600 * 1000).toISOString() } } };
+
+  for (const lang of ['en', 'ko', 'es', 'fr', 'de']) {
+    const rAll = usageCore.homeRangeLabel('all', lang);
+    const r30 = usageCore.homeRangeLabel('30d', lang);
+    const hr = usageCore.formatHomeHour(14, lang);
+    const agg = usageCore.aggregateUsageRollup(recs, 'all', 0, lang, now);
+    const qLbl = usageCore.quotaGroupLabel({ id: '' }, lang);
+    const eta = usageCore.shortEta(90 * 60 * 1000, lang);
+    const eta0 = usageCore.shortEta(0, lang);
+    const rst = usageCore.fmtResetTime(Math.floor(nowMs / 1000) + 5400, lang, Math.floor(nowMs / 1000));
+    const pace = usageCore.groupQuotaPace(grp, lang, nowMs);
+    const dStr = usageCore.homeShortDate(usageCore.homeShortDateFormat(lang), dk);
+    for (const piece of [rAll, r30, hr, agg.funBook, qLbl, eta, eta0, rst, pace.label, pace.detail, dStr]) {
+      assert.ok(typeof piece === 'string' && piece.length > 0, `${lang} returned empty string`);
+      assert.equal(HAN_RE.test(piece), false, `${lang} leaked Han CJK char in "${piece}"`);
+    }
+  }
+  assert.equal(usageCore.homeRangeLabel('all', 'ko'), '전체');
+  assert.equal(usageCore.homeRangeLabel('30d', 'fr'), '30j');
+  assert.equal(usageCore.homeRangeLabel('7d', 'de'), '7T');
+  assert.equal(usageCore.homeRangeLabel('all', 'es'), 'Todo');
+  assert.match(usageCore.aggregateUsageRollup(recs, 'all', 0, 'ko', now).funBook, /토큰/);
+});
+
+test('Battle 5: pulse-dashboard metrics.mjs BigInt/cadence drift guards & store.mjs GetUserStatus quotaInfo fallback', async () => {
+  const { tokenCount, quotaMetrics } = await import('../vendor/pulse-dashboard/sidecars/panel/metrics.mjs');
+  const { MetricsStore, fallbackQuotaFromUserStatus } = await import('../vendor/pulse-dashboard/sidecars/panel/store.mjs');
+
+  // 1) BigInt tokenCount support + safe bounds
+  assert.equal(tokenCount(0n), 0);
+  assert.equal(tokenCount(123456n), 123456);
+  assert.equal(tokenCount(-5n), null);
+  assert.equal(tokenCount(BigInt(Number.MAX_SAFE_INTEGER) + 1n), null);
+
+  // 2) cadence() handles upstream window & bucketId drift variants without misinterpreting explicit non-5h/weekly windows
+  const now = Date.UTC(2026, 10, 14, 12, 0, 0);
+  const isoFuture = new Date(now + 3600 * 1000).toISOString();
+  const qm = quotaMetrics({
+    groups: [
+      {
+        displayName: 'Gemini Drift',
+        buckets: [
+          { bucketId: 'gemini-FIVE_HOURS', window: 'FIVE_HOURS', remainingFraction: 0.72, remainingAmount: 4200n, resetTime: isoFuture },
+          { bucketId: 'gemini-WEEKLY', window: 'WEEKLY', remainingFraction: 0.88, resetTime: isoFuture },
+        ],
+      },
+      {
+        displayName: 'Claude Drift',
+        buckets: [
+          { bucketId: 'claude-5_hours', remainingFraction: 0.55, resetTime: isoFuture },
+          { bucketId: 'claude-7_days', remainingFraction: 0.91, resetTime: isoFuture },
+          { bucketId: 'claude-daily', window: 'daily', remainingFraction: 0.1, resetTime: isoFuture },
+        ],
+      },
+      {
+        displayName: 'Explicit Non-Standard',
+        buckets: [
+          { bucketId: 'other-5h', window: 'monthly', remainingFraction: 0.5, resetTime: isoFuture },
+        ],
+      },
+    ],
+  }, now);
+  assert.equal(qm[0].id, 'gemini');
+  assert.equal(qm[0].windows['5h'].available, true);
+  assert.equal(qm[0].windows['5h'].remaining, 0.72);
+  assert.equal(qm[0].windows['5h'].amount, 4200);
+  assert.equal(qm[0].windows.weekly.available, true);
+  assert.equal(qm[0].windows.weekly.remaining, 0.88);
+  assert.equal(qm[1].id, 'claude');
+  assert.equal(qm[1].windows['5h'].remaining, 0.55);
+  assert.equal(qm[1].windows.weekly.remaining, 0.91);
+  assert.equal(qm[2].windows['5h'].available, false, 'Explicit window="monthly" must not be reinterpreted from bucketId');
+
+  // 3) store.mjs refreshQuota() gracefully falls back to GetUserStatus.clientModelConfigs[].quotaInfo on empty pool or RPC error
+  const userStatusPayload = {
+    userStatus: {
+      email: 'dev@example.com',
+      cascadeModelConfigData: {
+        clientModelConfigs: [
+          { label: 'Gemini 4 Carbon', modelOrAlias: { model: 'gemini-4-carbon' }, quotaInfo: { remainingFraction: 0.8, resetTime: isoFuture } },
+          { label: 'Gemini 4 Flash', modelOrAlias: { model: 'gemini-4-flash' }, quotaInfo: { remainingFraction: 0.65, resetTime: isoFuture } },
+          { label: 'Claude Opus 4.6', modelOrAlias: { model: 'claude-opus-4-6' }, quotaInfo: { remainingFraction: 0.42, resetTime: isoFuture } },
+        ],
+      },
+    },
+  };
+  const directFb = fallbackQuotaFromUserStatus(userStatusPayload, now);
+  assert.equal(directFb.length, 2);
+  assert.equal(directFb.find((g) => g.id === 'gemini').windows['5h'].remaining, 0.65, 'Same-family fallback must pick conservative lowest remainingFraction');
+  assert.equal(directFb.find((g) => g.id === 'claude').windows['5h'].remaining, 0.42);
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-quota-fb-'));
+  try {
+    let quotaMode = 'empty';
+    const mockClient = {
+      async call(method) {
+        if (method === 'GetUserStatus') return userStatusPayload;
+        if (method === 'RetrieveUserQuotaSummary') {
+          if (quotaMode === 'empty') return { groups: [], buckets: [] };
+          throw new Error('RetrieveUserQuotaSummary_deprecated');
+        }
+        return {};
+      },
+    };
+    const store = new MetricsStore(mockClient, { dataDir: tmpDir, transcripts: null });
+    await store.refreshQuota(true);
+    assert.equal(store.quota.length, 2, 'Empty RetrieveUserQuotaSummary must fall back to GetUserStatus quotaInfo');
+    assert.equal(store.quota.find((g) => g.id === 'claude').windows['5h'].remaining, 0.42);
+
+    quotaMode = 'throw';
+    await store.refreshQuota(true);
+    assert.equal(store.quota.length, 2, 'Throwing RetrieveUserQuotaSummary must fall back to GetUserStatus quotaInfo');
+
+    // When both RetrieveUserQuotaSummary throws AND GetUserStatus has no quotaInfo, propagate the error
+    const errStore = new MetricsStore({
+      async call(method) {
+        if (method === 'GetUserStatus') return { userStatus: { email: 'none@example.com' } };
+        throw new Error('rpc_down');
+      },
+    }, { dataDir: tmpDir, transcripts: null });
+    await assert.rejects(() => errStore.refreshQuota(true), /rpc_down/);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('Battle 5: slider-coexist Traditional Chinese EFF_MAP / Current: prefix & full 5+1 anti-translation attributes across all owned modules', () => {
+  // 1) Traditional Chinese EFF_MAP & parseLocalizedModelLabel
+  assert.equal(sliderMod.normalizeEffortToken('極高'), 'xhigh');
+  assert.equal(sliderMod.normalizeEffortToken('極低'), 'minimal');
+  assert.equal(sliderMod.normalizeEffortToken('極簡'), 'minimal');
+  assert.equal(sliderMod.normalizeEffortToken('關閉'), 'off');
+  assert.equal(sliderMod.normalizeEffortToken('關'), 'off');
+  assert.equal(sliderMod.normalizeEffortToken('無'), 'off');
+  const pTw = sliderMod.parseLocalizedModelLabel('選擇模型：Claude Opus 4.6（極高）');
+  assert.equal(pTw.rawBase, 'Claude Opus 4.6');
+  assert.equal(pTw.effort, 'xhigh');
+  assert.equal(pTw.canonicalLabel, 'Claude Opus 4.6 (Extra)');
+  const pCur = sliderMod.parseLocalizedModelLabel('Current: Gemini 4 Hydrogen (Minimal)');
+  assert.equal(pCur.rawBase, 'Gemini 4 Hydrogen');
+  assert.equal(pCur.effort, 'minimal');
+
+  // 2) Full 5+1 anti-translation attributes verified across bento-ui, upstream-client, inline-fallback, home-studio-panel
+  const bentoSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'periodic-picker', 'bento-ui.js'), 'utf8');
+  for (const attr of ['data-ag-no-i18n', 'translate', 'data-no-translate', 'data-ag-localization-skip', 'data-agy-no-translate', 'data-antigravity-zh-skip']) {
+    assert.ok(bentoSrc.includes(`'${attr}'`), `bento-ui.js markPeriodicOwnedRoot must stamp ${attr}`);
+  }
+  const upstreamSlider = require(path.join(ROOT_DIR, 'vendor', 'effort-slider', 'upstream-client.js'));
+  const upEnv = createLightweightDom();
+  const upNode = upEnv.makeEl('div');
+  upstreamSlider.markNoTranslate(upNode);
+  assert.equal(upNode.getAttribute('translate'), 'no');
+  assert.equal(upNode.getAttribute('data-ag-localization-skip'), 'true');
+  assert.equal(upNode.getAttribute('data-agy-no-translate'), 'true');
+  assert.equal(upNode.getAttribute('data-antigravity-zh-skip'), '1');
+  assert.equal(upNode.getAttribute('data-ag-no-i18n'), '');
+
+  const pulseEnv = createLightweightDom();
+  const pulseCtl = telemetryMod.createTelemetryController({ window: pulseEnv.win, document: pulseEnv.doc });
+  try {
+    pulseCtl.sync({ telemetryModule: 'on' });
+    const bar = pulseEnv.doc.getElementById('ag-prism-pulse-bar');
+    assert.equal(bar.getAttribute('data-ag-no-i18n'), '', '#ag-prism-pulse-bar must include data-ag-no-i18n=""');
+    assert.equal(bar.getAttribute('data-no-translate'), 'true');
+    assert.equal(bar.getAttribute('data-ag-localization-skip'), 'true');
+    assert.equal(bar.getAttribute('data-agy-no-translate'), 'true');
+    assert.equal(bar.getAttribute('data-antigravity-zh-skip'), '1');
+  } finally {
+    pulseCtl.destroy();
+  }
+});
+
+test('Smoked Obsidian Wave 1: style.css hygiene (0 :has, ASCII, LF, no BOM, home-panel backdrop-filter:none) & Ch1 < 549,500 B across all 9 locales', () => {
+  const cssBuf = fs.readFileSync(path.join(ROOT_DIR, 'style.css'));
+  assert.equal(cssBuf[0] === 0xef && cssBuf[1] === 0xbb && cssBuf[2] === 0xbf, false, 'style.css must have zero UTF-8 BOM');
+  const css = cssBuf.toString('utf8');
+  assert.equal(css.includes('\r'), false, 'style.css must use LF line endings only (0 CRLF)');
+  assert.equal(css.includes(':has('), false, 'style.css must have 0 :has(');
+  assert.equal(/[^\x00-\x7F]/.test(css), false, 'style.css must be strictly ASCII');
+  const homeLine = css.split('\n').find((l) => l.startsWith('.ag-cs-home-panel{')) || '';
+  assert.ok(homeLine.includes('backdrop-filter:none') && !homeLine.includes('blur('));
+  assert.ok(css.includes('.ag-cs-home-chart-svg{') && css.includes('.ag-cs-home-chart-peak{'));
+  assert.ok(css.includes('--ag-cs-menu-bg:rgba(13,14,18,.94);') && css.includes('--ag-cs-menu-bg-l:rgba(252,253,254,.96);'));
+
+  for (const lang of ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
+    const expr = cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, language: lang }, { bundleCachePath: '' });
+    const bytes = Buffer.byteLength(expr, 'utf8');
+    assert.ok(bytes < 549500, `Channel 1 (${lang}) must be strictly < 549,500 B, got ${bytes}`);
   }
 });

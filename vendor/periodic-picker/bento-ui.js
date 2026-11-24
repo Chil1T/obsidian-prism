@@ -880,6 +880,9 @@
         el.setAttribute('data-ag-owned', '1');
         el.setAttribute('translate', 'no');
         el.setAttribute('data-no-translate', '1');
+        el.setAttribute('data-ag-localization-skip', 'true');
+        el.setAttribute('data-agy-no-translate', 'true');
+        el.setAttribute('data-antigravity-zh-skip', '1');
       }
       if (el.classList && typeof el.classList.add === 'function') {
         if (!el.classList.contains('notranslate')) el.classList.add('notranslate');

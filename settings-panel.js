@@ -64,7 +64,7 @@
     contextMenu: S_T,
     codeFont: mkSp(['default', 'jetbrains', 'cascadia', 'sfmono']),
     codeLigatures: S_F,
-    mascot: mkSp(['crab', 'minis', 'quad', 'quad-minis', 'off'], null, { dual: 'crab' }),
+    mascot: mkSp(['crab', 'quad', 'quad-minis', 'off'], null, { dual: 'crab' }),
     sidebarRestyle: S_T,
     sidebarCompact: S_F,
     sidebarNavFold: mkSp(['off', 'on']),
@@ -121,6 +121,7 @@
     if (!m) return null;
     const out = { c: 0, k: 0, d: 0, w: 0, minis: Boolean(m[2]) };
     const seen = new Set();
+    let rawTotal = 0;
     let total = 0;
     if (m[1]) {
       for (const tok of m[1].split(',')) {
@@ -128,19 +129,21 @@
         const cnt = Number(tok.slice(1));
         if (seen.has(sp) || !Number.isInteger(cnt) || cnt < 0 || cnt > 4) return null;
         seen.add(sp);
-        out[sp] = cnt;
-        total += cnt;
+        rawTotal += cnt;
+        const clamped = cnt > 0 ? 1 : 0;
+        out[sp] = clamped;
+        total += clamped;
       }
     }
-    return total > 6 ? null : out;
+    return rawTotal > 6 || total > 4 ? null : out;
   };
 
   const encodeMascotSpec = (spec) => {
     const src = isObj(spec) ? spec : {};
     const counts = { c: 0, k: 0, d: 0, w: 0 };
-    let rem = 6;
+    let rem = 4;
     for (const sp of MASCOT_SPECIES) {
-      const n = Math.max(0, Math.min(4, Math.min(rem, Math.floor(Number(src[sp]) || 0))));
+      const n = Math.max(0, Math.min(1, Math.min(rem, Number(src[sp]) > 0 ? 1 : 0)));
       counts[sp] = n;
       rem -= n;
     }
@@ -316,13 +319,13 @@
     '<ellipse cx="8" cy="14" rx="5.2" ry="1.1" fill="currentColor" opacity="0.45"/>' +
     '</svg>';
 
-  // ── 《八方旅人》HD-2D 像素舞台独立选角子面板（仅打开且可见时渲染，关闭/隐藏/脱离 DOM 立即停帧并 0×0 回收显存）──
+  // ── 《八方旅人》黑曜石星辰酒馆 HD-2D WebGL2 3D 视差选角子面板（仅打开且可见时渲染，关闭/隐藏/脱离 DOM 立即停帧并 0×0 + WEBGL_lose_context 回收显存）──
   const STAGE_SLOTS = O.freeze([
-    { key: 'c', kind: 'clawd', cx: 56, i18nKey: 'mascotSpeciesCrab', fb: 'Claude Crab', hex: '#d97757', rayA: '249,115,22', rayB: '251,146,60', cheerPose: 'happy', cheerSym: 'spark' },
-    { key: 'k', kind: 'cat', cx: 168, i18nKey: 'mascotSpeciesCat', fb: 'Gemini Cat', hex: '#947fd6', rayA: '139,92,246', rayB: '56,189,248', cheerPose: 'happy', cheerSym: 'heart' },
-    { key: 'd', kind: 'dragon', cx: 280, i18nKey: 'mascotSpeciesDragon', fb: 'GPT Dragon', hex: '#d7dfef', rayA: '226,232,240', rayB: '45,212,191', cheerPose: 'dragonFlame', cheerSym: 'spark' },
-    { key: 'w', kind: 'whale', cx: 392, i18nKey: 'mascotSpeciesWhale', fb: 'DeepSeek Whale', hex: '#4e6fff', rayA: '59,130,246', rayB: '56,189,248', cheerPose: 'whaleSpout', cheerSym: 'spark' },
-    { key: 'm', kind: 'minis', cx: 504, i18nKey: 'mascotStageMinisSlot', fb: 'Mini Crab Corner', hex: '#fb923c', rayA: '251,146,60', rayB: '245,158,11', cheerPose: 'trick', cheerSym: 'spark' },
+    { key: 'c', toggleId: 'c', kind: 'clawd', cx: 72, i18nKey: 'mascotSpeciesCrab', fb: 'Claude Crab', hex: '#d97757', rayA: '249,115,22', rayB: '251,146,60', cheerPose: 'happy', cheerSym: 'spark' },
+    { key: 'k', toggleId: 'k', kind: 'cat', cx: 196, i18nKey: 'mascotSpeciesCat', fb: 'Gemini Cat', hex: '#947fd6', rayA: '139,92,246', rayB: '56,189,248', cheerPose: 'happy', cheerSym: 'heart' },
+    { key: 'd', toggleId: 'd', kind: 'dragon', cx: 320, i18nKey: 'mascotSpeciesDragon', fb: 'GPT Dragon', hex: '#d7dfef', rayA: '226,232,240', rayB: '45,212,191', cheerPose: 'dragonFlame', cheerSym: 'spark' },
+    { key: 'w', toggleId: 'w', kind: 'whale', cx: 444, i18nKey: 'mascotSpeciesWhale', fb: 'DeepSeek Whale', hex: '#4e6fff', rayA: '59,130,246', rayB: '56,189,248', cheerPose: 'whaleSpout', cheerSym: 'spark' },
+    { key: 'm', toggleId: 'minis', kind: 'minis', cx: 566, i18nKey: 'mascotStageMinisSlot', fb: 'Mini Crab Corner', hex: '#fb923c', rayA: '251,146,60', rayB: '245,158,11', cheerPose: 'trick', cheerSym: 'spark' },
   ]);
 
   const createMascotCastingStage = ({
@@ -339,9 +342,9 @@
     handledGroupClicks,
     BTN,
   }) => {
-    const STAGE_W = 560;
-    const STAGE_H = 218;
-    const FRAME_GAP_MS = 45; // ~22fps 轻量丝滑循环
+    const STAGE_W = 640;
+    const STAGE_H = 360;
+    const FRAME_GAP_MS = 33; // WebGL2 丝滑 30fps / 2.5D 轻量降级
     const win = doc.defaultView || getWin();
     const sa = (e, k, v = '') => e.setAttribute(k, String(v));
     const ra = (e, k) => e.removeAttribute(k);
@@ -353,7 +356,7 @@
       return el;
     };
     const nowMs = () => (typeof performance !== 'undefined' && isFn(performance.now) ? performance.now() : Date.now());
-    const reqAF = (fn) => (win && isFn(win.requestAnimationFrame) ? win.requestAnimationFrame(fn) : typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : setTimeout(() => fn(nowMs()), 45));
+    const reqAF = (fn) => (win && isFn(win.requestAnimationFrame) ? win.requestAnimationFrame(fn) : typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : setTimeout(() => fn(nowMs()), 33));
     const canAF = (id) => {
       if (!id) return;
       if (win && isFn(win.cancelAnimationFrame)) win.cancelAnimationFrame(id);
@@ -437,37 +440,45 @@
     sa(hintEl, 'data-ag-stage-hint', '1');
     if (hintEl.style) O.assign(hintEl.style, { fontSize: '11.5px', opacity: '0.72', lineHeight: '1.4' });
 
-    // 2. 单 Canvas HD-2D 微缩舞台容器
+    // 2. 16:9 电影画幅 HD-2D 微缩酒馆舞台容器
     const stageFrame = mk('div');
     sa(stageFrame, 'data-ag-stage-frame', '1');
     if (stageFrame.style) {
       O.assign(stageFrame.style, {
         position: 'relative',
+        width: '100%',
+        aspectRatio: '16 / 9',
         borderRadius: '12px',
         overflow: 'hidden',
-        border: '1px solid var(--ag-cs-border, rgba(148,163,184,0.28))',
-        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06), 0 8px 24px rgba(0,0,0,0.22)',
+        border: '1px solid var(--ag-cs-border, rgba(148,163,184,0.32))',
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08), 0 12px 28px rgba(0,0,0,0.32)',
         lineHeight: '0',
       });
     }
-    const canvas = mk('canvas');
-    sa(canvas, 'data-ag-mascot-stage-canvas', '1');
-    sa(canvas, 'aria-label', 'Mascot Casting Stage');
-    canvas.width = 0;
-    canvas.height = 0;
-    if (canvas.style) {
-      O.assign(canvas.style, {
-        width: '100%',
-        height: 'auto',
-        aspectRatio: `${STAGE_W} / ${STAGE_H}`,
-        display: 'block',
-        imageRendering: 'pixelated',
-        cursor: 'pointer',
-      });
-    }
+
+    const createStageCanvas = () => {
+      const cv = mk('canvas');
+      sa(cv, 'data-ag-mascot-stage-canvas', '1');
+      sa(cv, 'aria-label', 'Mascot Casting Stage');
+      cv.width = 0;
+      cv.height = 0;
+      if (cv.style) {
+        O.assign(cv.style, {
+          width: '100%',
+          height: '100%',
+          aspectRatio: '16 / 9',
+          display: 'block',
+          imageRendering: 'pixelated',
+          cursor: 'pointer',
+        });
+      }
+      return cv;
+    };
+
+    let canvas = createStageCanvas();
     ap(stageFrame, canvas);
 
-    // 3. 与 5 站位严格垂直对齐的底座控制卡（4 主宠步进器 + 1 迷你蟹聚光灯开关）
+    // 3. 与 5 站位严格垂直对齐的 5 张精致像素阵营名牌开关按钮
     const dockGrid = mk('div');
     sa(dockGrid, 'data-ag-stage-dock', '1');
     if (dockGrid.style) {
@@ -478,7 +489,7 @@
       });
     }
 
-    // 4. 底部 5 个快捷预设胶囊
+    // 4. 底部 4 枚快捷预设胶囊（双宠经典 / 四宠同台 / 全员上场 / 全员休息）
     const presetRow = mk('div');
     sa(presetRow, 'data-ag-stage-presets', '1');
     if (presetRow.style) {
@@ -494,7 +505,7 @@
 
     ap(view, hdr, hintEl, stageFrame, dockGrid, presetRow);
 
-    // ── 舞台实时物理与光影状态（5 个固定站位）──
+    // ── 舞台实时物理、3D 视差与光影状态（5 个固定单只纯开关站位）──
     let isOpen = false;
     let disposed = false;
     let rafId = 0;
@@ -504,6 +515,13 @@
     let tickIdx = 0;
     let hoveredSlot = -1;
     let lastArtSource = '';
+    let webglStage = null;
+    let webglBlocked = false;
+    let renderBackend = 'canvas2d';
+    let ptrNormX = 0;
+    let ptrNormY = 0;
+    let ptrInside = false;
+
     const slotStates = STAGE_SLOTS.map((s, i) => ({
       key: s.key,
       light: 0,
@@ -513,8 +531,8 @@
       rippleStart: 0,
       motes: Array.from({ length: 7 }, (_, j) => ({
         x: (j * 17 + i * 11) % 72 - 36,
-        y: (j * 23 + i * 19) % 130,
-        spd: 0.22 + ((j + i) % 4) * 0.11,
+        y: (j * 23 + i * 19) % 210,
+        spd: 0.24 + ((j + i) % 4) * 0.11,
         ph: j * 1.1 + i * 0.7,
       })),
       burst: [],
@@ -523,7 +541,7 @@
     const presetBtns = [];
 
     const readRoster = () => parseMascotSpec(getCurMascot()) || { c: 1, k: 1, d: 0, w: 0, minis: false };
-    const slotCountOf = (r, key) => (key === 'm' ? (r.minis ? 1 : 0) : r[key] || 0);
+    const slotCountOf = (r, key) => (key === 'm' ? (r.minis ? 1 : 0) : r[key] > 0 ? 1 : 0);
 
     const triggerSlotAnim = (idx, kind, now = nowMs()) => {
       const st = slotStates[idx];
@@ -534,8 +552,8 @@
         st.farewellUntil = 0;
         st.rippleStart = now;
         st.burst = Array.from({ length: 9 }, (_, j) => ({
-          dx: (j - 4) * 5.2 + ((j % 2) ? 2 : -2),
-          vy: 0.75 + (j % 3) * 0.35,
+          dx: (j - 4) * 5.8 + ((j % 2) ? 2 : -2),
+          vy: 0.85 + (j % 3) * 0.35,
           t: 0,
         }));
       } else if (kind === 'farewell') {
@@ -570,40 +588,49 @@
       if (sl.key === 'm') {
         next.minis = !next.minis;
       } else {
-        const tot = next.c + next.k + next.d + next.w;
-        if (next[sl.key] > 0) next[sl.key] = 0;
-        else if (tot < 6) next[sl.key] = 1;
-        else {
-          if (countPill.style) countPill.style.borderColor = 'var(--ag-cs-accent, #f97316)';
-          return;
-        }
+        next[sl.key] = next[sl.key] > 0 ? 0 : 1;
       }
       applyRosterChange(next, ev);
     };
 
-    // 构建 5 列底座控制卡
+    // 构建 5 张精致像素阵营名牌开关按钮（零步进器、零 ×2 徽章，一键点亮/熄灯）
     STAGE_SLOTS.forEach((sl, idx) => {
-      const card = mk('div');
-      sa(card, 'data-ag-stage-slot', sl.key);
-      if (card.style) {
-        O.assign(card.style, {
+      const btn = mk('button', BTN);
+      btn.type = 'button';
+      sa(btn, 'data-ag-stage-slot', sl.key);
+      sa(btn, 'data-ag-mascot-toggle', sl.toggleId);
+      if (sl.key === 'm') sa(btn, 'data-ag-mascot-minis', '1');
+      if (btn.style) {
+        O.assign(btn.style, {
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
-          justifyContent: 'space-between',
+          justifyContent: 'center',
           gap: '5px',
-          padding: '6px 5px',
-          borderRadius: '9px',
+          padding: '7px 6px',
+          borderRadius: '10px',
           border: '1px solid var(--ag-cs-border, rgba(148,163,184,0.22))',
           background: 'var(--ag-cs-surface-2, rgba(148,163,184,0.06))',
-          transition: 'border-color 140ms ease, background 140ms ease',
+          cursor: 'pointer',
+          transition: 'border-color 140ms ease, background 140ms ease, box-shadow 140ms ease',
+          minWidth: '0',
         });
       }
-      card.addEventListener('pointerenter', () => { hoveredSlot = idx; if (isOpen && isReducedMotion()) drawStageFrame(nowMs(), true); });
-      card.addEventListener('pointerleave', () => { if (hoveredSlot === idx) hoveredSlot = -1; if (isOpen && isReducedMotion()) drawStageFrame(nowMs(), true); });
+      btn.addEventListener('pointerenter', () => {
+        hoveredSlot = idx;
+        if (isOpen && isReducedMotion()) drawStageFrame(nowMs(), true);
+      });
+      btn.addEventListener('pointerleave', () => {
+        if (hoveredSlot === idx) hoveredSlot = -1;
+        if (isOpen && isReducedMotion()) drawStageFrame(nowMs(), true);
+      });
+      btn.addEventListener('click', (ev) => {
+        ev?.stopPropagation?.();
+        toggleStageSlot(idx, ev);
+      });
 
       const topRow = mk('div');
-      if (topRow.style) O.assign(topRow.style, { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', width: '100%', minWidth: '0' });
+      if (topRow.style) O.assign(topRow.style, { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px', width: '100%', minWidth: '0' });
       const dot = mk('span');
       sa(dot, 'aria-hidden', 'true');
       if (dot.style) {
@@ -618,96 +645,34 @@
       }
       const nameEl = mk('span', '');
       sa(nameEl, 'data-ag-mascot-label', sl.key);
-      if (nameEl.style) O.assign(nameEl.style, { fontSize: '10.5px', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
-      const badgeEl = mk('span', '');
-      sa(badgeEl, 'data-ag-stage-badge', sl.key);
-      if (badgeEl.style) {
-        O.assign(badgeEl.style, {
-          display: 'none',
-          padding: '0 4px',
+      if (nameEl.style) O.assign(nameEl.style, { fontSize: '11px', fontWeight: '700', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
+      ap(topRow, dot, nameEl);
+
+      const statePill = mk('span', '');
+      sa(statePill, 'data-ag-stage-state', sl.key);
+      if (statePill.style) {
+        O.assign(statePill.style, {
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '1px 8px',
           borderRadius: '999px',
           fontSize: '10px',
-          fontWeight: '700',
-          background: `rgba(${sl.rayA}, 0.22)`,
-          border: `1px solid rgba(${sl.rayA}, 0.55)`,
-          lineHeight: '1.35',
-          flexShrink: '0',
+          fontWeight: '600',
+          lineHeight: '1.45',
+          border: '1px solid var(--ag-cs-border, rgba(148,163,184,0.24))',
+          whiteSpace: 'nowrap',
         });
       }
-      ap(topRow, dot, nameEl, badgeEl);
 
-      if (sl.key !== 'm') {
-        const ctrl = mk('div');
-        if (ctrl.style) O.assign(ctrl.style, { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' });
-        const mkStep = (sym, attr, delta) => {
-          const b = mk('button', BTN, sym);
-          b.type = 'button';
-          sa(b, attr, sl.key);
-          if (b.style) {
-            O.assign(b.style, {
-              width: '21px',
-              height: '21px',
-              padding: '0',
-              fontSize: '12px',
-              lineHeight: '1',
-              borderRadius: '6px',
-              border: '1px solid var(--ag-cs-border, rgba(148,163,184,0.3))',
-              cursor: 'pointer',
-            });
-          }
-          b.addEventListener('click', (ev) => {
-            ev?.stopPropagation?.();
-            const cur = readRoster();
-            const next = { ...cur };
-            const tot = next.c + next.k + next.d + next.w;
-            if (delta < 0 && next[sl.key] > 0) next[sl.key] -= 1;
-            else if (delta > 0 && next[sl.key] < 4 && tot < 6) next[sl.key] += 1;
-            else return;
-            applyRosterChange(next, ev);
-          });
-          return b;
-        };
-        const decBtn = mkStep('−', 'data-ag-mascot-dec', -1);
-        const valEl = mk('span', '', '0');
-        sa(valEl, 'data-ag-mascot-val', sl.key);
-        if (valEl.style) O.assign(valEl.style, { minWidth: '14px', textAlign: 'center', fontSize: '11.5px', fontWeight: '700', fontVariantNumeric: 'tabular-nums' });
-        const incBtn = mkStep('+', 'data-ag-mascot-inc', 1);
-        ap(ctrl, decBtn, valEl, incBtn);
-        ap(card, topRow, ctrl);
-        dockRefs[sl.key] = { card, nameEl, badgeEl, decBtn, valEl, incBtn };
-      } else {
-        const mBtn = mk('button', BTN);
-        mBtn.type = 'button';
-        sa(mBtn, 'data-ag-mascot-minis', '1');
-        if (mBtn.style) {
-          O.assign(mBtn.style, {
-            padding: '3px 8px',
-            fontSize: '10.5px',
-            fontWeight: '600',
-            lineHeight: '1.35',
-            borderRadius: '999px',
-            border: '1px solid var(--ag-cs-border, rgba(148,163,184,0.3))',
-            cursor: 'pointer',
-            width: '100%',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          });
-        }
-        mBtn.addEventListener('click', (ev) => {
-          ev?.stopPropagation?.();
-          toggleStageSlot(idx, ev);
-        });
-        ap(card, topRow, mBtn);
-        dockRefs.m = { card, nameEl, badgeEl, mBtn };
-      }
-      ap(dockGrid, card);
+      ap(btn, topRow, statePill);
+      dockRefs[sl.key] = { btn, dot, nameEl, statePill };
+      ap(dockGrid, btn);
     });
 
-    // 构建底部 5 个快捷预设胶囊
+    // 构建底部 4 枚快捷预设胶囊（双宠经典 / 四宠同台 / 全员上场 / 全员休息）
     const STAGE_PRESETS = [
       ['crab', 'mascotStagePresetDual', 'Classic Dual'],
-      ['minis', 'optMascotMinis', 'Dual + Crabs'],
       ['quad', 'mascotStagePresetQuad', 'All Four'],
       ['quad-minis', 'optMascotQuadMinis', 'Quad + Crabs'],
       ['off', 'mascotStagePresetOff', 'All Resting'],
@@ -737,7 +702,7 @@
       ap(presetRow, pb);
     }
 
-    // 同步舞台所有 DOM 文本、徽章、禁用态与预设高亮
+    // 同步舞台所有 DOM 文本、阵营名牌开关态与预设高亮
     const syncStageControls = () => {
       const l = getLang();
       const u = uiText(l) || {};
@@ -747,10 +712,10 @@
       sa(view, 'data-mascot-val', encoded);
       backBtn.textContent = `← ${u.mascotStageBackBtn || 'Back to Settings'}`;
       titleEl.textContent = u.mascotStageTitle || 'Mascot Casting Stage';
-      hintEl.textContent = u.mascotStageHint || 'Click mascots on stage to toggle spotlight, or adjust roster below (max 6 mains)';
-      countPill.textContent = String(u.mascotRosterCount || 'Main {n}/6').replace('{n}', String(total));
+      hintEl.textContent = u.mascotStageHint || 'Click mascots in the tavern or badges below to toggle spotlights; move pointer for 3D parallax';
+      countPill.textContent = String(u.mascotRosterCount || 'Main {n}/4').replace('{n}', String(total));
       sa(countPill, 'data-total', total);
-      if (countPill.style) countPill.style.borderColor = total >= 6 ? 'var(--ag-cs-accent, #60a5fa)' : 'var(--ag-cs-border, rgba(148,163,184,0.26))';
+      if (countPill.style) countPill.style.borderColor = total >= 4 ? 'var(--ag-cs-accent, #60a5fa)' : 'var(--ag-cs-border, rgba(148,163,184,0.26))';
       minisPill.textContent = `${u.mascotRosterMinis || '+3 Mini Crabs'}: ${r.minis ? (u.mascotStageActiveOn || 'On Stage') : (u.mascotStageActiveOff || 'Resting')}`;
       sa(minisPill, 'data-active', r.minis ? '1' : '0');
       if (minisPill.style) {
@@ -761,40 +726,22 @@
       for (const sl of STAGE_SLOTS) {
         const ref = dockRefs[sl.key];
         if (!ref) continue;
+        const on = slotCountOf(r, sl.key) > 0;
         ref.nameEl.textContent = u[sl.i18nKey] || sl.fb;
-        if (sl.key !== 'm') {
-          const cnt = r[sl.key] || 0;
-          ref.valEl.textContent = String(cnt);
-          const decDis = cnt <= 0;
-          const incDis = cnt >= 4 || total >= 6;
-          ref.decBtn.disabled = decDis;
-          ref.incBtn.disabled = incDis;
-          sa(ref.decBtn, 'aria-disabled', decDis);
-          sa(ref.incBtn, 'aria-disabled', incDis);
-          if (ref.decBtn.style) ref.decBtn.style.opacity = decDis ? '0.35' : '1';
-          if (ref.incBtn.style) ref.incBtn.style.opacity = incDis ? '0.35' : '1';
-          ref.badgeEl.textContent = cnt >= 2 ? `×${cnt}` : '';
-          if (ref.badgeEl.style) ref.badgeEl.style.display = cnt >= 2 ? 'inline-block' : 'none';
-          sa(ref.card, 'data-active', cnt > 0 ? '1' : '0');
-          if (ref.card.style) {
-            ref.card.style.borderColor = cnt > 0 ? `rgba(${sl.rayA}, 0.58)` : 'var(--ag-cs-border, rgba(148,163,184,0.2))';
-            ref.card.style.background = cnt > 0 ? `rgba(${sl.rayA}, 0.11)` : 'var(--ag-cs-surface-2, rgba(148,163,184,0.05))';
-          }
-        } else {
-          const on = Boolean(r.minis);
-          ref.mBtn.textContent = on ? (u.mascotStageActiveOn || 'On Stage') : (u.mascotRosterMinis || '+3 Mini Crabs');
-          sa(ref.mBtn, 'aria-pressed', on);
-          if (on) sa(ref.mBtn, 'data-pressed');
-          else ra(ref.mBtn, 'data-pressed');
-          sa(ref.card, 'data-active', on ? '1' : '0');
-          if (ref.mBtn.style) {
-            ref.mBtn.style.borderColor = on ? 'rgba(251,146,60,0.72)' : 'var(--ag-cs-border, rgba(148,163,184,0.28))';
-            ref.mBtn.style.background = on ? 'rgba(251,146,60,0.22)' : 'transparent';
-          }
-          if (ref.card.style) {
-            ref.card.style.borderColor = on ? 'rgba(251,146,60,0.58)' : 'var(--ag-cs-border, rgba(148,163,184,0.2))';
-            ref.card.style.background = on ? 'rgba(251,146,60,0.11)' : 'var(--ag-cs-surface-2, rgba(148,163,184,0.05))';
-          }
+        ref.statePill.textContent = on ? (u.mascotStageActiveOn || 'On Stage') : (u.mascotStageActiveOff || 'Resting');
+        sa(ref.btn, 'aria-pressed', on);
+        sa(ref.btn, 'data-active', on ? '1' : '0');
+        if (on) sa(ref.btn, 'data-pressed');
+        else ra(ref.btn, 'data-pressed');
+        if (ref.btn.style) {
+          ref.btn.style.borderColor = on ? `rgba(${sl.rayA}, 0.68)` : 'var(--ag-cs-border, rgba(148,163,184,0.2))';
+          ref.btn.style.background = on ? `rgba(${sl.rayA}, 0.14)` : 'var(--ag-cs-surface-2, rgba(148,163,184,0.04))';
+          ref.btn.style.boxShadow = on ? `inset 0 1px 0 rgba(${sl.rayB}, 0.28), 0 0 12px rgba(${sl.rayA}, 0.14)` : 'none';
+        }
+        if (ref.statePill.style) {
+          ref.statePill.style.borderColor = on ? `rgba(${sl.rayB}, 0.65)` : 'var(--ag-cs-border, rgba(148,163,184,0.2))';
+          ref.statePill.style.background = on ? `rgba(${sl.rayA}, 0.24)` : 'transparent';
+          ref.statePill.style.opacity = on ? '1' : '0.68';
         }
       }
 
@@ -811,38 +758,118 @@
       }
     };
 
-    // Canvas 鼠标坐标映射到 5 个站位
-    const hitSlotFromEvent = (ev) => {
-      if (!ev || !isFn(canvas.getBoundingClientRect)) return -1;
+    // Canvas 鼠标归一化坐标映射（WebGL2 3D 精确射线拾取 + 2.5D 区域拾取双兼容）
+    const pointerToNdc = (ev) => {
+      if (!ev || !isFn(canvas.getBoundingClientRect)) return null;
       const rect = canvas.getBoundingClientRect();
-      if (!rect || !rect.width) return -1;
-      const lx = ((ev.clientX - rect.left) / rect.width) * STAGE_W;
-      const ly = ((ev.clientY - rect.top) / (rect.height || 1)) * STAGE_H;
-      if (lx < 0 || lx > STAGE_W || ly < 16 || ly > STAGE_H) return -1;
-      return Math.max(0, Math.min(4, Math.floor(lx / (STAGE_W / 5))));
+      if (!rect || !rect.width || !rect.height) return null;
+      const u = (ev.clientX - rect.left) / rect.width;
+      const v = (ev.clientY - rect.top) / rect.height;
+      if (u < 0 || u > 1 || v < 0 || v > 1) return null;
+      return { u, v, nx: u * 2 - 1, ny: 1 - v * 2 };
     };
-    canvas.addEventListener('pointermove', (ev) => {
+    const hitSlotFromEvent = (ev) => {
+      const pt = pointerToNdc(ev);
+      if (!pt) return -1;
+      if (webglStage && isFn(webglStage.pickSlot)) {
+        const hit3d = webglStage.pickSlot(pt.nx, pt.ny);
+        if (hit3d >= 0) return hit3d;
+      }
+      if (pt.v < 0.08) return -1;
+      return Math.max(0, Math.min(4, Math.floor(pt.u * 5)));
+    };
+    const onCanvasPointerMove = (ev) => {
       if (!isOpen) return;
+      const pt = pointerToNdc(ev);
+      if (pt) {
+        ptrNormX = pt.nx;
+        ptrNormY = pt.ny;
+        ptrInside = true;
+        webglStage?.setPointer?.(pt.nx, pt.ny, true);
+      }
       const hit = hitSlotFromEvent(ev);
       if (hit !== hoveredSlot) {
         hoveredSlot = hit;
         if (isReducedMotion()) drawStageFrame(nowMs(), true);
       }
-    });
-    canvas.addEventListener('pointerleave', () => {
+    };
+    const onCanvasPointerLeave = () => {
       hoveredSlot = -1;
+      ptrInside = false;
+      ptrNormX = 0;
+      ptrNormY = 0;
+      webglStage?.setPointer?.(0, 0, false);
       if (isOpen && isReducedMotion()) drawStageFrame(nowMs(), true);
-    });
-    canvas.addEventListener('click', (ev) => {
+    };
+    const onCanvasClick = (ev) => {
       ev?.stopPropagation?.();
       if (!isOpen) return;
       const hit = hitSlotFromEvent(ev);
       if (hit >= 0) toggleStageSlot(hit, ev);
-    });
+    };
+    const bindCanvasEvents = (cv) => {
+      cv.addEventListener('pointermove', onCanvasPointerMove);
+      cv.addEventListener('pointerleave', onCanvasPointerLeave);
+      cv.addEventListener('click', onCanvasClick);
+    };
+    const unbindCanvasEvents = (cv) => {
+      cv.removeEventListener?.('pointermove', onCanvasPointerMove);
+      cv.removeEventListener?.('pointerleave', onCanvasPointerLeave);
+      cv.removeEventListener?.('click', onCanvasClick);
+    };
+    bindCanvasEvents(canvas);
 
-    // ── HD-2D 像素剧场单帧渲染管线 ──
+    const swapToFreshCanvas = () => {
+      unbindCanvasEvents(canvas);
+      const nextCv = createStageCanvas();
+      if (canvas.parentNode) {
+        if (isFn(canvas.parentNode.insertBefore)) canvas.parentNode.insertBefore(nextCv, canvas);
+        else ap(stageFrame, nextCv);
+        canvas.remove?.();
+      } else {
+        ap(stageFrame, nextCv);
+      }
+      canvas = nextCv;
+      api.canvas = nextCv;
+      bindCanvasEvents(canvas);
+    };
+
+    const handleWebglFallback = () => {
+      webglBlocked = true;
+      if (webglStage) {
+        try { webglStage.dispose(); } catch {}
+        webglStage = null;
+      }
+      renderBackend = 'canvas2d';
+      swapToFreshCanvas();
+      if (isOpen && !doc.hidden) drawStageFrame(nowMs(), true);
+    };
+
+    const ensureWebglStage = () => {
+      if (webglStage || webglBlocked || disposed) return webglStage;
+      const glEngine = G.__agOctopathStageWebGL || win?.__agOctopathStageWebGL;
+      if (!glEngine || !isFn(glEngine.createStage)) return null;
+      try {
+        const inst = glEngine.createStage({
+          canvas,
+          doc,
+          onContextLost: handleWebglFallback,
+          onAtlasReady: () => { if (isOpen && !doc.hidden) drawStageFrame(nowMs(), true); },
+        });
+        if (inst) {
+          webglStage = inst;
+          renderBackend = 'webgl2';
+          webglStage.setPointer(ptrNormX, ptrNormY, ptrInside);
+          return webglStage;
+        }
+      } catch {}
+      renderBackend = 'canvas2d';
+      return null;
+    };
+
+    // ── HD-2D 像素剧场单帧渲染管线（优先 WebGL2 3D 视差引擎，自动无损降级 2.5D Canvas）──
     const ensureCanvasBacking = () => {
-      const dpr = Math.min((win?.devicePixelRatio) || 1, 2);
+      const dpr = Math.min((win?.devicePixelRatio) || 1, 1.5);
       const tw = Math.round(STAGE_W * dpr);
       const th = Math.round(STAGE_H * dpr);
       if (canvas.width !== tw || canvas.height !== th) {
@@ -858,20 +885,81 @@
         return;
       }
       if (!force && now - lastDrawAt < FRAME_GAP_MS) return;
-      const dt = lastStepAt ? Math.min(80, Math.max(8, now - lastStepAt)) : 45;
+      const dt = lastStepAt ? Math.min(80, Math.max(8, now - lastStepAt)) : 33;
       lastStepAt = now;
       lastDrawAt = now;
       frameCount += 1;
       tickIdx = Math.floor(now / 150);
 
+      const light = Boolean(isLightThemeNow());
+      const reduced = isReducedMotion();
+      const r = readRoster();
+      const art = resolveMascotArt();
+      lastArtSource = art?.source || 'unknown';
+
+      // 1. 统一推进 5 槽位聚光灯插值、欢呼/告别/涟漪与姿态状态
+      const smoothK = Math.min(1, dt / 110);
+      const slotInfos = [];
+      for (let i = 0; i < STAGE_SLOTS.length; i++) {
+        const sl = STAGE_SLOTS[i];
+        const st = slotStates[i];
+        const cnt = slotCountOf(r, sl.key);
+        const isHov = hoveredSlot === i;
+        const targetLight = cnt > 0 ? 1 : isHov ? 0.45 : 0;
+        st.light += (targetLight - st.light) * (reduced ? 1 : smoothK);
+        if (Math.abs(targetLight - st.light) < 0.01) st.light = targetLight;
+
+        const cheering = st.cheerUntil > now;
+        const farewell = !cheering && st.farewellUntil > now;
+        const cheerProg = cheering ? Math.max(0, Math.min(1, (now - st.cheerStart) / 1150)) : 0;
+        const rippleProg = st.rippleStart && now - st.rippleStart < 780 ? (now - st.rippleStart) / 780 : 0;
+        let pose = 'idle';
+        let jumpPx = 0;
+        let jumpWorld = 0;
+        let sym = null;
+        if (cheering) {
+          pose = sl.cheerPose;
+          sym = sl.cheerSym;
+          const arc = Math.abs(Math.sin(cheerProg * Math.PI * 2));
+          jumpPx = -Math.round(arc * 16);
+          jumpWorld = arc * 0.36;
+        } else if (farewell) {
+          pose = 'wave';
+        } else if (cnt === 0) {
+          pose = isHov ? 'tilt' : 'sleep';
+          if (pose === 'sleep') sym = (tickIdx + i) % 6 < 3 ? 'z1' : 'z2';
+        } else {
+          pose = isHov ? 'tilt' : 'idle';
+        }
+        const breath = pose === 'idle' && (tickIdx + i * 3) % 14 === 0;
+        const blink = pose === 'idle' && (tickIdx + i * 5) % 22 === 0;
+        slotInfos.push({
+          sl, st, cnt, isHov, light: st.light,
+          cheering, farewell, cheerProg, rippleProg,
+          kind: sl.kind, pose, sym, jumpPx, jumpWorld, breath, blink,
+          animTick: tickIdx + i,
+          clipTick: cheering ? Math.floor((now - st.cheerStart) / 120) : tickIdx + i,
+        });
+      }
+
+      // 2. 优先走 WebGL2 HD-2D 3D 视差像素舞台引擎
+      const glInst = ensureWebglStage();
+      if (glInst && !glInst.isContextLost()) {
+        const ok = glInst.render(now, { dt, light, reducedMotion: reduced, art, tickIdx, slotInfos });
+        if (ok) {
+          renderBackend = 'webgl2';
+          return;
+        }
+        handleWebglFallback();
+        return;
+      }
+
+      // 3. 优雅降级：16:9 多层视差 2.5D 星夜酒馆 Canvas 引擎（兼容无 WebGL2 / Mock 测试环境）
+      renderBackend = 'canvas2d';
       const dpr = ensureCanvasBacking();
       const ctx = canvas.getContext?.('2d');
       if (!ctx) return;
 
-      const light = Boolean(isLightThemeNow());
-      const r = readRoster();
-      const art = resolveMascotArt();
-      lastArtSource = art?.source || 'unknown';
       const hasGrad = isFn(ctx.createLinearGradient);
       const hasRad = isFn(ctx.createRadialGradient);
       const hasPoly = isFn(ctx.moveTo) && isFn(ctx.lineTo) && isFn(ctx.fill);
@@ -880,138 +968,155 @@
       ctx.imageSmoothingEnabled = false;
       ctx.clearRect(0, 0, STAGE_W, STAGE_H);
 
-      // 1) HD-2D 景深背景墙（黑曜石酒馆暗夜 / 温润羊皮纸木台）
+      const parX = reduced || !ptrInside ? 0 : Math.round(ptrNormX * 8);
+
+      // 3a) HD-2D 黑曜石星夜酒馆后墙（拱窗星月 + 书架 + 壁炉微光）
       if (hasGrad) {
-        const bg = ctx.createLinearGradient(0, 0, 0, 152);
+        const bg = ctx.createLinearGradient(0, 0, 0, 248);
         if (light) {
           bg.addColorStop(0, '#efe7d6');
           bg.addColorStop(0.55, '#f6efe2');
           bg.addColorStop(1, '#e6d8be');
         } else {
-          bg.addColorStop(0, '#090c14');
-          bg.addColorStop(0.55, '#131827');
+          bg.addColorStop(0, '#080b14');
+          bg.addColorStop(0.55, '#121829');
           bg.addColorStop(1, '#1d2438');
         }
         ctx.fillStyle = bg;
       } else {
         ctx.fillStyle = light ? '#f2eadc' : '#121726';
       }
-      ctx.fillRect(0, 0, STAGE_W, 152);
+      ctx.fillRect(0, 0, STAGE_W, 248);
 
-      // 细腻像素石墙横纹 + 移轴景深散景光斑
+      // 石砖纹理 + 哥特拱窗星月
       ctx.fillStyle = light ? 'rgba(138,108,72,0.06)' : 'rgba(255,255,255,0.025)';
-      for (let y = 26; y < 146; y += 16) ctx.fillRect(0, y, STAGE_W, 1);
-      const bokeh = [[42, 46, 12], [128, 34, 9], [224, 52, 14], [336, 38, 10], [442, 48, 13], [526, 36, 9]];
+      for (let y = 32; y < 238; y += 20) ctx.fillRect(0, y, STAGE_W, 1);
+      for (const wx of [146, 494]) {
+        const x0 = wx + Math.round(parX * 0.35);
+        ctx.fillStyle = light ? '#cbb899' : '#252d44';
+        ctx.fillRect(x0 - 38, 34, 76, 134);
+        ctx.fillStyle = light ? '#b8d1eb' : '#102454';
+        ctx.fillRect(x0 - 32, 42, 64, 120);
+        ctx.fillStyle = light ? '#fff8dc' : '#dceeff';
+        ctx.fillRect(x0 - 12, 60, 10, 10);
+        ctx.fillRect(x0 + 12, 82, 3, 3);
+        ctx.fillRect(x0 - 16, 108, 3, 3);
+      }
+
+      // 居中暖光壁炉
+      const hx = 320 + Math.round(parX * 0.5);
+      ctx.fillStyle = light ? '#a58d70' : '#2e3246';
+      ctx.fillRect(hx - 40, 152, 80, 96);
+      ctx.fillStyle = '#181116';
+      ctx.fillRect(hx - 26, 174, 52, 72);
+      ctx.fillStyle = '#e85d22';
+      ctx.fillRect(hx - 18, 212, 36, 30);
+      ctx.fillStyle = '#ffbc42';
+      ctx.fillRect(hx - 10, 200 + (tickIdx % 2) * 3, 20, 34);
+
+      // 散景暖光点
+      const bokeh = [[52, 72, 16], [164, 54, 12], [274, 82, 18], [392, 60, 14], [510, 74, 16], [596, 56, 12]];
       for (let i = 0; i < bokeh.length; i++) {
         const [bx, by, br] = bokeh[i];
-        const drift = Math.sin(now / 2600 + i * 1.4) * 3;
+        const drift = Math.sin(now / 2600 + i * 1.4) * 4;
         if (hasRad) {
-          const g = ctx.createRadialGradient(bx, by + drift, 1, bx, by + drift, br);
-          g.addColorStop(0, light ? 'rgba(245,180,92,0.18)' : 'rgba(251,191,36,0.13)');
+          const g = ctx.createRadialGradient(bx + parX * 0.5, by + drift, 1, bx + parX * 0.5, by + drift, br);
+          g.addColorStop(0, light ? 'rgba(245,180,92,0.18)' : 'rgba(251,191,36,0.14)');
           g.addColorStop(1, 'rgba(0,0,0,0)');
           ctx.fillStyle = g;
-          ctx.fillRect(bx - br, by + drift - br, br * 2, br * 2);
+          ctx.fillRect(bx + parX * 0.5 - br, by + drift - br, br * 2, br * 2);
         }
       }
 
       // 顶部木石横梁
       ctx.fillStyle = light ? '#8c6d4f' : '#0f1320';
-      ctx.fillRect(0, 0, STAGE_W, 9);
+      ctx.fillRect(0, 0, STAGE_W, 14);
       ctx.fillStyle = light ? '#b08e68' : '#232c44';
-      ctx.fillRect(0, 9, STAGE_W, 2);
+      ctx.fillRect(0, 14, STAGE_W, 3);
 
-      // 2) 透视像素木石舞台地板 + 阶梯台沿阴影
+      // 3b) 透视拼花木石舞台地板 + 阶梯台沿厚度
       if (hasGrad) {
-        const fl = ctx.createLinearGradient(0, 148, 0, 198);
+        const fl = ctx.createLinearGradient(0, 244, 0, 330);
         if (light) {
           fl.addColorStop(0, '#d8c5a5');
           fl.addColorStop(1, '#c4ad89');
         } else {
-          fl.addColorStop(0, '#221e28');
-          fl.addColorStop(1, '#16131c');
+          fl.addColorStop(0, '#2a2029');
+          fl.addColorStop(1, '#18141f');
         }
         ctx.fillStyle = fl;
       } else {
         ctx.fillStyle = light ? '#d2be9c' : '#1b1822';
       }
-      ctx.fillRect(0, 148, STAGE_W, 50);
+      ctx.fillRect(0, 244, STAGE_W, 86);
 
-      // 透视地板放射网格与横向木板缝
-      ctx.fillStyle = light ? 'rgba(92,66,38,0.16)' : 'rgba(255,255,255,0.05)';
-      ctx.fillRect(0, 148, STAGE_W, 2);
-      for (const py of [160, 173, 186]) ctx.fillRect(0, py, STAGE_W, 1);
+      ctx.fillStyle = light ? 'rgba(92,66,38,0.18)' : 'rgba(255,255,255,0.06)';
+      ctx.fillRect(0, 244, STAGE_W, 2);
+      for (const py of [266, 288, 310]) ctx.fillRect(0, py, STAGE_W, 1);
       if (hasPoly && isFn(ctx.stroke)) {
         ctx.save();
         ctx.strokeStyle = light ? 'rgba(92,66,38,0.14)' : 'rgba(255,255,255,0.045)';
         ctx.lineWidth = 1;
         for (let i = 0; i <= 10; i++) {
-          const topX = 28 + i * 50.4;
-          const botX = (topX - STAGE_W / 2) * 1.24 + STAGE_W / 2;
+          const topX = 32 + i * 57.6;
+          const botX = (topX - STAGE_W / 2) * 1.26 + STAGE_W / 2;
           ctx.beginPath();
-          ctx.moveTo(Math.round(topX), 149);
-          ctx.lineTo(Math.round(botX), 196);
+          ctx.moveTo(Math.round(topX), 245);
+          ctx.lineTo(Math.round(botX), 328);
           ctx.stroke();
         }
         ctx.restore();
       }
 
-      // 舞台立体前缘与台阶深影
-      ctx.fillStyle = light ? '#b59971' : '#2d2838';
-      ctx.fillRect(0, 196, STAGE_W, 3);
-      ctx.fillStyle = light ? '#8d704c' : '#110f17';
-      ctx.fillRect(0, 199, STAGE_W, 11);
-      ctx.fillStyle = light ? 'rgba(72,52,32,0.22)' : 'rgba(0,0,0,0.52)';
-      ctx.fillRect(0, 210, STAGE_W, 8);
+      // 立体舞台前缘与台阶深影
+      ctx.fillStyle = light ? '#b59971' : '#322b3e';
+      ctx.fillRect(0, 328, STAGE_W, 4);
+      ctx.fillStyle = light ? '#8d704c' : '#120f18';
+      ctx.fillRect(0, 332, STAGE_W, 16);
+      ctx.fillStyle = light ? 'rgba(72,52,32,0.22)' : 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, 348, STAGE_W, 12);
 
-      // 第 5 站位（右侧迷你小蟹抬高小舞台角）
-      const mPlatX = 452;
-      const mPlatW = 100;
-      const mPlatY = 140;
-      ctx.fillStyle = light ? 'rgba(78,56,34,0.18)' : 'rgba(0,0,0,0.42)';
-      ctx.fillRect(mPlatX - 5, mPlatY + 8, mPlatW + 8, 44);
-      ctx.fillStyle = light ? '#e2d0b2' : '#2c2534';
-      ctx.fillRect(mPlatX, mPlatY, mPlatW, 44);
-      ctx.fillStyle = light ? '#c7ae84' : '#3e354a';
-      ctx.fillRect(mPlatX, mPlatY, mPlatW, 2);
-      ctx.fillStyle = light ? '#9d7f57' : '#17131e';
-      ctx.fillRect(mPlatX, mPlatY + 44, mPlatW, 6);
-      // 左侧微型双阶梯
-      ctx.fillStyle = light ? '#cfb791' : '#262030';
-      ctx.fillRect(mPlatX - 8, mPlatY + 18, 8, 28);
-      ctx.fillStyle = light ? '#9d7f57' : '#17131e';
-      ctx.fillRect(mPlatX - 8, mPlatY + 46, 8, 4);
+      // 第 5 站位（右侧抬高苔藓迷你蟹专属双层石台）
+      const mPlatX = 502;
+      const mPlatW = 126;
+      const mPlatY = 232;
+      ctx.fillStyle = light ? 'rgba(78,56,34,0.18)' : 'rgba(0,0,0,0.46)';
+      ctx.fillRect(mPlatX - 6, mPlatY + 12, mPlatW + 10, 68);
+      ctx.fillStyle = light ? '#e2d0b2' : '#312b3d';
+      ctx.fillRect(mPlatX, mPlatY, mPlatW, 66);
+      ctx.fillStyle = light ? '#79a878' : '#3a7d5c';
+      ctx.fillRect(mPlatX, mPlatY, mPlatW, 4);
+      ctx.fillStyle = light ? '#9d7f57' : '#181421';
+      ctx.fillRect(mPlatX, mPlatY + 66, mPlatW, 10);
+      ctx.fillStyle = light ? '#cfb791' : '#2a2436';
+      ctx.fillRect(mPlatX - 12, mPlatY + 26, 12, 44);
+      ctx.fillStyle = light ? '#9d7f57' : '#181421';
+      ctx.fillRect(mPlatX - 12, mPlatY + 70, 12, 6);
 
-      // 3) 逐站位更新光强插值、绘制地板反射光环/涟漪、角色像素精灵与分身
-      const smoothK = Math.min(1, dt / 110);
-      for (let i = 0; i < STAGE_SLOTS.length; i++) {
-        const sl = STAGE_SLOTS[i];
-        const st = slotStates[i];
-        const cnt = slotCountOf(r, sl.key);
-        const isHov = hoveredSlot === i;
-        const targetLight = cnt > 0 ? 1 : isHov ? 0.45 : 0;
-        st.light += (targetLight - st.light) * (isReducedMotion() ? 1 : smoothK);
-        if (Math.abs(targetLight - st.light) < 0.01) st.light = targetLight;
+      // 3c) 逐站位绘制地板光环/涟漪、单只主角像素精灵与体积聚光灯（零分身！）
+      for (let i = 0; i < slotInfos.length; i++) {
+        const info = slotInfos[i];
+        const { sl, st, cnt, isHov, cheering, farewell, pose, sym, jumpPx, breath, blink, clipTick } = info;
+        const floorY = sl.key === 'm' ? 276 : 292;
 
-        const floorY = sl.key === 'm' ? 166 : 176;
-
-        // 顶梁聚光灯像素灯罩
+        // 顶梁聚光灯罩
         ctx.fillStyle = light ? '#5e4934' : '#283148';
-        ctx.fillRect(sl.cx - 9, 9, 18, 5);
+        ctx.fillRect(sl.cx - 10, 14, 20, 6);
         ctx.fillStyle = st.light > 0.05 ? `rgba(${sl.rayB}, ${0.35 + st.light * 0.65})` : (light ? '#9c8a74' : '#1b2030');
-        ctx.fillRect(sl.cx - 6, 14, 12, 3);
+        ctx.fillRect(sl.cx - 7, 20, 14, 4);
 
-        // 地板椭圆柔边投影 + 阵营光环
+        // 地板柔边投影 + 阵营光环
         if (hasRad) {
-          const sh = ctx.createRadialGradient(sl.cx, floorY + 2, 4, sl.cx, floorY + 2, 36);
-          sh.addColorStop(0, light ? 'rgba(72,52,32,0.22)' : 'rgba(0,0,0,0.48)');
+          const sh = ctx.createRadialGradient(sl.cx, floorY + 2, 5, sl.cx, floorY + 2, 44);
+          sh.addColorStop(0, light ? 'rgba(72,52,32,0.22)' : 'rgba(0,0,0,0.52)');
           sh.addColorStop(1, 'rgba(0,0,0,0)');
           ctx.fillStyle = sh;
-          ctx.fillRect(sl.cx - 38, floorY - 12, 76, 28);
+          ctx.fillRect(sl.cx - 46, floorY - 14, 92, 34);
         }
         if (st.light > 0.03 && hasRad) {
-          const glowR = 30 + st.light * 16;
+          const glowR = 36 + st.light * 20;
           const gl = ctx.createRadialGradient(sl.cx, floorY + 1, 2, sl.cx, floorY + 1, glowR);
-          const aBase = light ? 0.28 : 0.42;
+          const aBase = light ? 0.28 : 0.44;
           gl.addColorStop(0, `rgba(${sl.rayB}, ${(aBase * st.light).toFixed(3)})`);
           gl.addColorStop(0.55, `rgba(${sl.rayA}, ${(aBase * 0.48 * st.light).toFixed(3)})`);
           gl.addColorStop(1, 'rgba(0,0,0,0)');
@@ -1024,167 +1129,125 @@
         }
 
         // 激活瞬间地板扩散双光环涟漪
-        if (st.rippleStart && now - st.rippleStart < 780 && isFn(ctx.ellipse) && isFn(ctx.stroke)) {
-          const rp = (now - st.rippleStart) / 780;
+        if (info.rippleProg > 0 && info.rippleProg < 1 && isFn(ctx.ellipse) && isFn(ctx.stroke)) {
+          const rp = info.rippleProg;
           ctx.save();
           ctx.strokeStyle = `rgba(${sl.rayB}, ${((1 - rp) * 0.78).toFixed(3)})`;
           ctx.lineWidth = 2;
           ctx.beginPath();
-          ctx.ellipse(sl.cx, floorY + 1, 14 + rp * 34, 5 + rp * 12, 0, 0, Math.PI * 2);
+          ctx.ellipse(sl.cx, floorY + 1, 18 + rp * 42, 6 + rp * 15, 0, 0, Math.PI * 2);
           ctx.stroke();
           if (rp > 0.16) {
             const rp2 = (rp - 0.16) / 0.84;
             ctx.strokeStyle = `rgba(${sl.rayA}, ${((1 - rp2) * 0.45).toFixed(3)})`;
             ctx.lineWidth = 1.2;
             ctx.beginPath();
-            ctx.ellipse(sl.cx, floorY + 1, 10 + rp2 * 26, 4 + rp2 * 9, 0, 0, Math.PI * 2);
+            ctx.ellipse(sl.cx, floorY + 1, 12 + rp2 * 32, 5 + rp2 * 11, 0, 0, Math.PI * 2);
             ctx.stroke();
           }
           ctx.restore();
         }
 
-        // 判定当前角色姿态与弹跳位移
-        const cheering = st.cheerUntil > now;
-        const farewell = !cheering && st.farewellUntil > now;
-        let pose = 'idle';
-        let jumpPx = 0;
-        let sym = null;
-        if (cheering) {
-          pose = sl.cheerPose;
-          sym = sl.cheerSym;
-          const cp = (now - st.cheerStart) / 1150;
-          jumpPx = -Math.round(Math.abs(Math.sin(cp * Math.PI * 2)) * 11);
-        } else if (farewell) {
-          pose = 'wave';
-        } else if (cnt === 0) {
-          pose = isHov ? 'tilt' : 'sleep';
-          if (pose === 'sleep') sym = (tickIdx + i) % 6 < 3 ? 'z1' : 'z2';
-        } else {
-          pose = isHov ? 'tilt' : 'idle';
-        }
-
-        // 渲染像素角色（4 主角 vs 迷你小蟹角）
         const shadeAlpha = cnt === 0 && !isHov && !farewell ? (light ? 0.56 : 0.46) : 1;
         ctx.save();
         if (shadeAlpha < 1) ctx.globalAlpha = shadeAlpha;
 
         if (sl.key !== 'm') {
-          // 同物种 count >= 2：主位后方两侧渲染 count - 1 只柔光跟班迷你分身
-          if (cnt >= 2) {
-            const offsets = [[-26, -7], [26, -7], [0, -14]];
-            const miniPx = 2;
-            for (let cIdx = 0; cIdx < Math.min(3, cnt - 1); cIdx++) {
-              const [ox, oy] = offsets[cIdx];
-              const mJump = cheering ? -Math.round(Math.abs(Math.sin(((now - st.cheerStart) / 1150 + cIdx * 0.2) * Math.PI * 2)) * 7) : 0;
-              ctx.save();
-              ctx.globalAlpha = light ? 0.72 : 0.78;
-              const mgx = Math.round((sl.cx + ox) / miniPx) - 8;
-              const mgy = Math.round((floorY + oy + mJump) / miniPx) - 10;
-              art.drawMainActor(ctx, sl.kind, cheering ? 'happy' : 'idle', tickIdx + cIdx + 1, mgx, mgy, miniPx, { noShadow: true });
-              ctx.restore();
-            }
-          }
-          // 主位高清主角 (PX = 3)
-          const mainPx = 3;
-          const breath = pose === 'idle' && (tickIdx + i * 3) % 14 === 0;
-          const blink = pose === 'idle' && (tickIdx + i * 5) % 22 === 0;
+          // 单只高清主角 (PX = 4)，无多只分身
+          const mainPx = 4;
           const oxGrid = Math.round(sl.cx / mainPx) - 8;
           const oyGrid = Math.round((floorY + jumpPx) / mainPx) - 10;
           art.drawMainActor(ctx, sl.kind, pose, tickIdx + i, oxGrid, oyGrid, mainPx, {
-            clipTick: cheering ? Math.floor((now - st.cheerStart) / 120) : tickIdx + i,
+            clipTick,
             sym,
             breath,
             blink,
             noShadow: true,
           });
         } else {
-          // 站位 5：3 只迷你小蟹小舞台角（pxSize = 2）
+          // 站位 5：3 只迷你小蟹立于苔藓石台（pxSize = 2.5 -> 整格 2）
           const mPx = 2;
           const crabDefs = [
-            { id: 'cowboy', dx: -21, dy: 0, phase: 0 },
-            { id: 'shades', dx: 21, dy: 0, phase: 1 },
-            { id: 'wizard', dx: 0, dy: cnt > 0 ? -13 : 2, phase: 2 },
+            { id: 'cowboy', dx: -26, dy: 0, phase: 0 },
+            { id: 'shades', dx: 26, dy: 0, phase: 1 },
+            { id: 'wizard', dx: 0, dy: cnt > 0 ? -16 : 2, phase: 2 },
           ];
           for (const cd of crabDefs) {
             const cJump = cheering
-              ? -Math.round(Math.abs(Math.sin(((now - st.cheerStart) / 1150 + cd.phase * 0.18) * Math.PI * 2)) * 10)
-              : cnt > 0 && !isReducedMotion()
-                ? -Math.round(Math.max(0, Math.sin(now / 420 + cd.phase * 1.6)) * 2)
+              ? -Math.round(Math.abs(Math.sin((info.cheerProg + cd.phase * 0.18) * Math.PI * 2)) * 12)
+              : cnt > 0 && !reduced
+                ? -Math.round(Math.max(0, Math.sin(now / 420 + cd.phase * 1.6)) * 3)
                 : 0;
             const gx = Math.round((sl.cx + cd.dx) / mPx) - 8;
             const gy = Math.round((floorY + cd.dy + cJump) / mPx) - 8;
             art.drawMiniCrab(ctx, cd.id, cheering || isHov ? 'trick' : 'idle', gx, gy, mPx);
           }
           if (cnt === 0 && !isHov && !farewell) {
-            // 未开启时在迷你蟹角上方绘小 z 睡觉像素符号
             ctx.fillStyle = light ? '#6d6258' : '#a8a194';
-            const zy = floorY - 30 - ((tickIdx % 4) < 2 ? 0 : 2);
-            ctx.fillRect(sl.cx + 12, zy, 6, 2);
-            ctx.fillRect(sl.cx + 14, zy + 2, 2, 2);
-            ctx.fillRect(sl.cx + 12, zy + 4, 6, 2);
+            const zy = floorY - 38 - ((tickIdx % 4) < 2 ? 0 : 2);
+            ctx.fillRect(sl.cx + 14, zy, 6, 2);
+            ctx.fillRect(sl.cx + 16, zy + 2, 2, 2);
+            ctx.fillRect(sl.cx + 14, zy + 4, 6, 2);
           }
         }
         ctx.restore();
 
-        // 4) 体积感丁达尔聚光灯（多层斜锥形光束 + 漂浮像素星尘）
+        // 体积感丁达尔聚光灯 + 上升星尘
         if (st.light > 0.03 && hasPoly) {
           ctx.save();
           if (!light) ctx.globalCompositeOperation = 'lighter';
-          const coneTopW = 9;
-          const coneBotW = 46;
+          const coneTopW = 12;
+          const coneBotW = 58;
           if (hasGrad) {
-            const rayG = ctx.createLinearGradient(sl.cx, 16, sl.cx, floorY + 8);
-            const topA = (light ? 0.24 : 0.34) * st.light;
-            const midA = (light ? 0.11 : 0.16) * st.light;
+            const rayG = ctx.createLinearGradient(sl.cx, 22, sl.cx, floorY + 10);
+            const topA = (light ? 0.24 : 0.36) * st.light;
+            const midA = (light ? 0.11 : 0.17) * st.light;
             rayG.addColorStop(0, `rgba(${sl.rayB}, ${topA.toFixed(3)})`);
             rayG.addColorStop(0.55, `rgba(${sl.rayA}, ${midA.toFixed(3)})`);
             rayG.addColorStop(1, 'rgba(0,0,0,0)');
             ctx.fillStyle = rayG;
           } else {
-            ctx.fillStyle = `rgba(${sl.rayA}, ${(0.14 * st.light).toFixed(3)})`;
+            ctx.fillStyle = `rgba(${sl.rayA}, ${(0.15 * st.light).toFixed(3)})`;
           }
           ctx.beginPath();
-          ctx.moveTo(sl.cx - coneTopW, 16);
-          ctx.lineTo(sl.cx + coneTopW, 16);
-          ctx.lineTo(sl.cx + coneBotW, floorY + 8);
-          ctx.lineTo(sl.cx - coneBotW, floorY + 8);
+          ctx.moveTo(sl.cx - coneTopW, 22);
+          ctx.lineTo(sl.cx + coneTopW, 22);
+          ctx.lineTo(sl.cx + coneBotW, floorY + 10);
+          ctx.lineTo(sl.cx - coneBotW, floorY + 10);
           ctx.closePath();
           ctx.fill();
 
-          // 中心核心柔光柱
           if (hasGrad) {
-            const coreG = ctx.createLinearGradient(sl.cx, 16, sl.cx, floorY);
-            coreG.addColorStop(0, `rgba(${sl.rayB}, ${((light ? 0.18 : 0.26) * st.light).toFixed(3)})`);
+            const coreG = ctx.createLinearGradient(sl.cx, 22, sl.cx, floorY);
+            coreG.addColorStop(0, `rgba(${sl.rayB}, ${((light ? 0.18 : 0.28) * st.light).toFixed(3)})`);
             coreG.addColorStop(1, 'rgba(0,0,0,0)');
             ctx.fillStyle = coreG;
             ctx.beginPath();
-            ctx.moveTo(sl.cx - 4, 16);
-            ctx.lineTo(sl.cx + 4, 16);
-            ctx.lineTo(sl.cx + 22, floorY + 2);
-            ctx.lineTo(sl.cx - 22, floorY + 2);
+            ctx.moveTo(sl.cx - 5, 22);
+            ctx.lineTo(sl.cx + 5, 22);
+            ctx.lineTo(sl.cx + 28, floorY + 2);
+            ctx.lineTo(sl.cx - 28, floorY + 2);
             ctx.closePath();
             ctx.fill();
           }
 
-          // 光束中缓缓漂浮的像素星尘微粒
           for (const mt of st.motes) {
-            if (!isReducedMotion()) mt.y -= mt.spd * (dt / 16);
-            if (mt.y < 0) mt.y = 132;
-            const prog = mt.y / 132;
-            const mx = Math.round(sl.cx + mt.x * (0.28 + prog * 0.72) + Math.sin(now / 900 + mt.ph) * 3);
-            const my = Math.round(24 + mt.y);
+            if (!reduced) mt.y -= mt.spd * (dt / 16);
+            if (mt.y < 0) mt.y = 210;
+            const prog = mt.y / 210;
+            const mx = Math.round(sl.cx + mt.x * (0.28 + prog * 0.72) + Math.sin(now / 900 + mt.ph) * 4);
+            const my = Math.round(32 + mt.y);
             const tw = 0.45 + 0.55 * Math.sin(now / 450 + mt.ph);
-            ctx.fillStyle = `rgba(${sl.rayB}, ${(tw * st.light * (light ? 0.65 : 0.82)).toFixed(3)})`;
+            ctx.fillStyle = `rgba(${sl.rayB}, ${(tw * st.light * (light ? 0.65 : 0.84)).toFixed(3)})`;
             ctx.fillRect(mx, my, 2, 2);
           }
 
-          // 欢呼瞬间的爆发星尘
           for (let bi = st.burst.length - 1; bi >= 0; bi--) {
             const b = st.burst[bi];
             b.t += dt / 750;
             if (b.t >= 1) { st.burst.splice(bi, 1); continue; }
-            const bx = Math.round(sl.cx + b.dx * (0.7 + b.t * 1.1));
-            const by = Math.round(floorY - 18 - b.t * 48 * b.vy);
+            const bx = Math.round(sl.cx + b.dx * (0.7 + b.t * 1.2));
+            const by = Math.round(floorY - 24 - b.t * 62 * b.vy);
             ctx.fillStyle = `rgba(${sl.rayB}, ${((1 - b.t) * 0.92).toFixed(3)})`;
             ctx.fillRect(bx, by, 2, 2);
           }
@@ -1192,11 +1255,11 @@
         }
       }
 
-      // 5) 四周 HD-2D 移轴电影暗角 (Vignette)
+      // 3d) 电影级暗角 (Vignette)
       if (hasRad) {
         const vig = ctx.createRadialGradient(STAGE_W / 2, STAGE_H * 0.52, STAGE_W * 0.28, STAGE_W / 2, STAGE_H * 0.52, STAGE_W * 0.64);
         vig.addColorStop(0, 'rgba(0,0,0,0)');
-        vig.addColorStop(1, light ? 'rgba(92,68,42,0.16)' : 'rgba(5,7,14,0.56)');
+        vig.addColorStop(1, light ? 'rgba(92,68,42,0.16)' : 'rgba(5,7,14,0.58)');
         ctx.fillStyle = vig;
         ctx.fillRect(0, 0, STAGE_W, STAGE_H);
       }
@@ -1211,6 +1274,10 @@
 
     const reclaimStageVram = () => {
       stopLoop();
+      if (webglStage) {
+        try { webglStage.dispose(); } catch {}
+        webglStage = null;
+      }
       canvas.width = 0;
       canvas.height = 0;
     };
@@ -1285,7 +1352,6 @@
       view.hidden = false;
       ra(view, 'hidden');
       if (view.style) view.style.display = 'flex';
-      // 同步各站位初始光强
       const r = readRoster();
       STAGE_SLOTS.forEach((sl, idx) => {
         slotStates[idx].light = slotCountOf(r, sl.key) > 0 ? 1 : 0;
@@ -1306,6 +1372,7 @@
       if (!isOpen) return;
       isOpen = false;
       hoveredSlot = -1;
+      ptrInside = false;
       stopDetachObserver();
       reclaimStageVram();
       doc.removeEventListener?.('keydown', onDocKeyDown, true);
@@ -1327,6 +1394,7 @@
       closeStage();
       stopDetachObserver();
       disposed = true;
+      unbindCanvasEvents(canvas);
       reclaimStageVram();
     };
 
@@ -1346,8 +1414,14 @@
       isOpen: () => isOpen,
       getActiveRafId: () => rafId,
       getFrameCount: () => frameCount,
+      getBackend: () => renderBackend,
+      getWebGLStats: () => (webglStage ? webglStage.getStats() : null),
       getArtSource: () => lastArtSource || resolveMascotArt()?.source || 'ch9-fallback',
       getSlotStates: () => slotStates.map((s) => ({ key: s.key, light: s.light, cheering: s.cheerUntil > nowMs(), farewell: s.farewellUntil > nowMs() })),
+      setPointer: (nx, ny, inside = true) => {
+        ptrNormX = nx; ptrNormY = ny; ptrInside = Boolean(inside);
+        webglStage?.setPointer?.(nx, ny, Boolean(inside));
+      },
       hoverSlot: (idx) => { hoveredSlot = idx; if (isOpen) drawStageFrame(nowMs(), true); },
       clickSlot: (idx) => { if (isOpen) toggleStageSlot(idx); },
       renderNow: () => { if (isOpen) drawStageFrame(nowMs(), true); },
@@ -1741,7 +1815,7 @@
         sa(mRosterEl, 'data-mascot-val', encodeMascotSpec(r));
         const rCntEl = qs(mRosterEl, '[data-ag-mascot-summary-count]');
         if (rCntEl) {
-          const ct = String(u.mascotRosterCount || 'Main {n}/6').replace('{n}', String(total));
+          const ct = String(u.mascotRosterCount || 'Main {n}/4').replace('{n}', String(total));
           if (rCntEl[K_TC] !== ct) rCntEl[K_TC] = ct;
           sa(rCntEl, 'data-total', total);
         }
@@ -1795,7 +1869,7 @@
                   });
                 }
                 const txt = doc.createElement('span');
-                txt[K_TC] = cnt > 1 ? `${nm} ×${cnt}` : nm;
+                txt[K_TC] = nm;
                 ap(chip, dot, txt);
                 ap(chipsEl, chip);
               }
@@ -2154,7 +2228,6 @@
             RS('codeLigatures', onOff),
             RS('mascot', [
               ['crab', U('optMascotCrab', 'Dual')],
-              ['minis', U('optMascotMinis', 'Dual + Crabs')],
               ['quad', U('optMascotQuad', 'Quad')],
               ['quad-minis', U('optMascotQuadMinis', 'Quad + Crabs')],
               ['off', U('optMascotOff', U('offLabel', 'Off'))],
@@ -2289,7 +2362,7 @@
               }
               const leftMeta = mkEl('div');
               if (leftMeta.style) O.assign(leftMeta.style, { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', flex: '1 1 200px', minWidth: '0' });
-              const countBadge = mkEl('span', '', String(U('mascotRosterCount', 'Main {n}/6')).replace('{n}', '2'));
+              const countBadge = mkEl('span', '', String(U('mascotRosterCount', 'Main {n}/4')).replace('{n}', '2'));
               sa(countBadge, 'data-ag-mascot-summary-count', '1');
               if (countBadge.style) O.assign(countBadge.style, { fontSize: '11px', fontWeight: '600', fontVariantNumeric: 'tabular-nums', opacity: '0.82' });
               const chipsWrap = mkEl('div');

@@ -4026,3 +4026,185 @@ test('Boundary: legacy poisoned { cascadeId: X, subagent: true, parentId: "", ro
   }
 });
 
+test('Smoked Obsidian Wave 1: home-studio-panel renders pure createElementNS SVG area-line trend chart & stamps full 5+1 no-translate attrs on heatTipEl', () => {
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevLs = globalThis.localStorage;
+  const prevRaf = globalThis.requestAnimationFrame;
+  const svgCreated = [];
+  const innerHtmlWrites = [];
+  const mkNode = (tag, ns = '') => {
+    const attrs = new Map();
+    const listeners = new Map();
+    const node = {
+      nodeType: 1,
+      tagName: String(tag).toUpperCase(),
+      namespaceURI: ns,
+      children: [],
+      parentElement: null,
+      style: {},
+      textContent: '',
+      className: '',
+      isConnected: true,
+      get childElementCount() { return node.children.length; },
+      get previousSibling() {
+        if (!node.parentElement) return null;
+        const i = node.parentElement.children.indexOf(node);
+        return i > 0 ? node.parentElement.children[i - 1] : null;
+      },
+      get nextSibling() {
+        if (!node.parentElement) return null;
+        const i = node.parentElement.children.indexOf(node);
+        return i >= 0 ? node.parentElement.children[i + 1] || null : null;
+      },
+      get innerHTML() { return ''; },
+      set innerHTML(v) {
+        if (v !== '') innerHtmlWrites.push(v);
+        node.children = [];
+      },
+      setAttribute(k, v) {
+        attrs.set(k, String(v));
+        if (k === 'class') node.className = String(v);
+        if (k === 'id') node.id = String(v);
+      },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      removeAttribute(k) { attrs.delete(k); },
+      appendChild(c) {
+        if (!c) return c;
+        c.parentElement = node;
+        node.children.push(c);
+        return c;
+      },
+      insertBefore(c, ref) {
+        if (!ref) return node.appendChild(c);
+        const i = node.children.indexOf(ref);
+        c.parentElement = node;
+        if (i >= 0) node.children.splice(i, 0, c);
+        else node.children.push(c);
+        return c;
+      },
+      removeChild(c) {
+        const i = node.children.indexOf(c);
+        if (i >= 0) node.children.splice(i, 1);
+        c.parentElement = null;
+        return c;
+      },
+      addEventListener(ev, fn) {
+        if (!listeners.has(ev)) listeners.set(ev, []);
+        listeners.get(ev).push(fn);
+      },
+      click() {
+        for (const fn of listeners.get('click') || []) fn({ target: node });
+      },
+      querySelector(sel) { return node.querySelectorAll(sel)[0] || null; },
+      querySelectorAll(sel) {
+        const out = [];
+        const walk = (cur) => {
+          for (const ch of cur.children) {
+            const cls = String(ch.className || '').split(/\s+/);
+            const ok = sel.startsWith('.')
+              ? cls.includes(sel.slice(1))
+              : sel.startsWith('[data-tab="')
+              ? ch.getAttribute('data-tab') === sel.slice(11, -2)
+              : sel === '[data-testid="home-greeting"]'
+              ? ch.getAttribute('data-testid') === 'home-greeting'
+              : ch.tagName === sel.toUpperCase();
+            if (ok) out.push(ch);
+            walk(ch);
+          }
+        };
+        walk(node);
+        return out;
+      },
+    };
+    return node;
+  };
+  try {
+    const docEl = mkNode('html');
+    const head = mkNode('head');
+    const body = mkNode('body');
+    const home = mkNode('div');
+    home.className = 'agy-home';
+    const greeting = mkNode('div');
+    greeting.setAttribute('data-testid', 'home-greeting');
+    home.appendChild(greeting);
+    body.appendChild(home);
+    docEl.appendChild(head);
+    docEl.appendChild(body);
+    const d1 = usageCore.homeDayKey(new Date(Date.now() - 2 * 86400000));
+    const d2 = usageCore.homeDayKey(new Date(Date.now() - 86400000));
+    const d3 = usageCore.homeDayKey(new Date());
+    const lsMap = new Map([[
+      'test:svg-wave1',
+      JSON.stringify({
+        c1: {
+          cascadeId: 'c1',
+          subagent: false,
+          days: {
+            [d1]: { calls: 1, input: 2000, output: 500, cacheRead: 0, cacheWrite: 0, total: 2500, hours: new Array(24).fill(0), models: { 'Gemini 4': { input: 2000, output: 500, cacheRead: 0, cacheWrite: 0, total: 2500, calls: 1 } } },
+            [d2]: { calls: 2, input: 8000, output: 2000, cacheRead: 0, cacheWrite: 0, total: 10000, hours: new Array(24).fill(0), models: { 'Gemini 4': { input: 8000, output: 2000, cacheRead: 0, cacheWrite: 0, total: 10000, calls: 2 } } },
+            [d3]: { calls: 1, input: 4000, output: 1000, cacheRead: 0, cacheWrite: 0, total: 5000, hours: new Array(24).fill(0), models: { 'Claude Opus': { input: 4000, output: 1000, cacheRead: 0, cacheWrite: 0, total: 5000, calls: 1 } } },
+          },
+        },
+      }),
+    ]]);
+    globalThis.localStorage = { getItem: (k) => lsMap.get(k) ?? null, setItem: (k, v) => lsMap.set(k, v) };
+    globalThis.requestAnimationFrame = () => 1;
+    globalThis.document = {
+      documentElement: docEl,
+      head,
+      body,
+      title: 'Antigravity',
+      createElement: (tag) => mkNode(tag),
+      createElementNS: (ns, tag) => { const n = mkNode(tag, ns); svgCreated.push(tag); return n; },
+      getElementById: (id) => head.children.find((c) => c.id === id) || null,
+      querySelector: (sel) => docEl.querySelector(sel),
+    };
+    globalThis.window = { document: globalThis.document };
+
+    const ctl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:svg-wave1',
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'en',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => null,
+      canMountRealCanvas: () => true,
+      setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+    ctl.renderHomePanel(true);
+
+    // 1) Overview heatTipEl carries complete 5+1 anti-translation attributes
+    const heatTip = home.querySelector('.ag-cs-home-heat-hint');
+    assert.ok(heatTip, 'heatTipEl must exist on overview tab');
+    for (const [k, v] of [['translate', 'no'], ['data-no-translate', 'true'], ['data-ag-localization-skip', 'true'], ['data-agy-no-translate', 'true'], ['data-antigravity-zh-skip', '1'], ['data-ag-no-i18n', '']]) {
+      assert.equal(heatTip.getAttribute(k), v, `heatTipEl must carry ${k}="${v}"`);
+    }
+
+    // 2) Switch to Models tab -> pure createElementNS SVG area-line chart & peak marker rendered with zero innerHTML writes
+    const modelsTab = home.querySelector('[data-tab="models"]');
+    assert.ok(modelsTab, 'Models tab button must exist');
+    modelsTab.click();
+
+    const svgEl = home.querySelector('.ag-cs-home-chart-svg');
+    assert.ok(svgEl, 'Models view must mount .ag-cs-home-chart-svg');
+    assert.equal(svgEl.namespaceURI, 'http://www.w3.org/2000/svg');
+    assert.equal(innerHtmlWrites.length, 0, 'SVG trend chart must NEVER assign non-empty innerHTML');
+    assert.ok(svgCreated.includes('linearGradient') && svgCreated.includes('path') && svgCreated.includes('line'));
+    assert.equal(home.querySelectorAll('.ag-cs-home-chart-grid').length, 4, 'Must render 4 horizontal dashed grid lines');
+    assert.ok(home.querySelector('.ag-cs-home-chart-area')?.getAttribute('d')?.endsWith('Z'));
+    assert.ok(home.querySelector('.ag-cs-home-chart-line')?.getAttribute('d')?.includes('C'));
+    const peakDot = home.querySelector('.ag-cs-home-chart-peak');
+    assert.ok(peakDot && peakDot.style.left && peakDot.style.bottom, 'Must render peak anchor dot with % positioning');
+  } finally {
+    globalThis.window = prevWin;
+    globalThis.document = prevDoc;
+    globalThis.localStorage = prevLs;
+    globalThis.requestAnimationFrame = prevRaf;
+  }
+});
+

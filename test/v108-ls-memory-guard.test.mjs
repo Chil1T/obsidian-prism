@@ -1496,7 +1496,12 @@ test('Adversarial review regressions: stop/auto-exit Map.size flush, v2.34 searc
 
     // 6) Bug 6: Concurrency lock prevents double-spawn & REPO_BINDING strips forceBusy
     let releaseFirst = null;
-    const slowCheckIdle = () => new Promise((r) => { releaseFirst = () => r({ idle: true }); });
+    let markEntered;
+    const enteredIdle = new Promise((r) => { markEntered = r; });
+    const slowCheckIdle = () => new Promise((r) => {
+      releaseFirst = () => r({ idle: true });
+      markEntered();
+    });
     let concurrentSpawns = 0;
     const p1 = daemon.executeRepoAction({
       action: 'archive-and-restart',
@@ -1510,7 +1515,6 @@ test('Adversarial review regressions: stop/auto-exit Map.size flush, v2.34 searc
         spawnHook: () => { concurrentSpawns += 1; return { spawned: true, method: 'mock' }; },
       },
     });
-    await new Promise((r) => setTimeout(r, 15));
     const p2 = await daemon.executeRepoAction({
       action: 'archive-and-restart',
       confirm: true,
@@ -1524,6 +1528,7 @@ test('Adversarial review regressions: stop/auto-exit Map.size flush, v2.34 searc
     });
     assert.equal(p2.ok, false);
     assert.equal(p2.code, 'ARCHIVE_IN_PROGRESS', 'Concurrent archive-and-restart must be rejected while one is in flight');
+    await enteredIdle;
     releaseFirst();
     const r1 = await p1;
     assert.equal(r1.ok, true);

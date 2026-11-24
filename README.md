@@ -253,6 +253,7 @@ obsidian-prism/
 6. **[Microqian2th/dsh-codex-effort-slider](https://github.com/Microqian2th/dsh-codex-effort-slider)** — 轨道刻度分档、迟滞吸附与阻尼运动曲线参考致谢。
 7. **[mobius/dsh-performance-slider](https://github.com/mobius/dsh-performance-slider)** — 性能档位滑块交互与实时反馈设计参考致谢。
 8. **[claudenoshujin/claude-web](https://github.com/claudenoshujin/claude-web)** (by `lulu`) — 桌面宠物堆叠交互设计参考致谢（本项目物理逻辑为净室独立实现）。
+9. **[wp3171216237/dsh-TUI](https://github.com/wp3171216237/dsh-TUI)** — `MIT License`, `Copyright (c) 2026 chimney (@wp3171216237)`（**Deepy** DeepSeek 蓝鲸桌宠轮廓配色与喷水动画设计参考致谢，本项目以 `16×10` 零描边像素语法独立适配于 `dual-mascot-rig.js`）。
 
 ---
 
