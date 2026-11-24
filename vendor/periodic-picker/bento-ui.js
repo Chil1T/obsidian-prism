@@ -1698,29 +1698,59 @@
 
     /* ── Bento Twin Cards Builder & Incremental Updater ────────────────────── */
 
+    function clearBentoSessionSwitchFade(bentoRefs, rt) {
+      if (!bentoRefs) return;
+      var clrRaf =
+        (rt && typeof rt.cancelAnimationFrame === 'function' ? rt.cancelAnimationFrame.bind(rt) : null) ||
+        (typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : null);
+      var clrT =
+        (rt && typeof rt.clearTimeout === 'function' ? rt.clearTimeout.bind(rt) : clearTimeout);
+      if (bentoRefs._sessionFadeRaf) {
+        if (clrRaf) {
+          try {
+            clrRaf(bentoRefs._sessionFadeRaf);
+          } catch (e) {}
+        }
+        bentoRefs._sessionFadeRaf = 0;
+      }
+      if (bentoRefs._sessionFadeTimer) {
+        try {
+          clrT(bentoRefs._sessionFadeTimer);
+        } catch (e2) {}
+        bentoRefs._sessionFadeTimer = 0;
+      }
+    }
+
     function triggerBentoSessionSwitchFade(bentoRefs, doc, rt) {
       if (!bentoRefs || isReducedMotion(doc, rt)) return;
+      clearBentoSessionSwitchFade(bentoRefs, rt);
       var cards = [bentoRefs.specCard, bentoRefs.telePod];
       for (var i = 0; i < cards.length; i += 1) {
         var c = cards[i];
         if (!c || !c.classList) continue;
         c.classList.remove('is-session-switching');
-        if (typeof c.offsetWidth === 'number') void c.offsetWidth;
-        c.classList.add('is-session-switching');
       }
+      var reqRaf =
+        (rt && typeof rt.requestAnimationFrame === 'function' ? rt.requestAnimationFrame.bind(rt) : null) ||
+        (typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null);
       var setT = (rt && typeof rt.setTimeout === 'function' ? rt.setTimeout.bind(rt) : setTimeout);
-      var clrT = (rt && typeof rt.clearTimeout === 'function' ? rt.clearTimeout.bind(rt) : clearTimeout);
-      if (bentoRefs._sessionFadeTimer) {
-        try {
-          clrT(bentoRefs._sessionFadeTimer);
-        } catch (e) {}
-      }
-      bentoRefs._sessionFadeTimer = setT(function () {
-        bentoRefs._sessionFadeTimer = 0;
-        for (var j = 0; j < cards.length; j += 1) {
-          if (cards[j] && cards[j].classList) cards[j].classList.remove('is-session-switching');
+      var applySessionFade = function () {
+        bentoRefs._sessionFadeRaf = 0;
+        for (var k = 0; k < cards.length; k += 1) {
+          if (cards[k] && cards[k].classList) cards[k].classList.add('is-session-switching');
         }
-      }, 180);
+        bentoRefs._sessionFadeTimer = setT(function () {
+          bentoRefs._sessionFadeTimer = 0;
+          for (var j = 0; j < cards.length; j += 1) {
+            if (cards[j] && cards[j].classList) cards[j].classList.remove('is-session-switching');
+          }
+        }, 180);
+      };
+      if (reqRaf) {
+        bentoRefs._sessionFadeRaf = reqRaf(applySessionFade);
+      } else {
+        applySessionFade();
+      }
     }
 
     function buildBentoTwinCards(doc, handlers, opts) {
@@ -1958,6 +1988,11 @@
       var effortStrip = mkEl(doc, 'div', 'ag-pp-effort-strip');
       var effortTopRow = mkEl(doc, 'div', 'ag-pp-effort-row-top');
       var effortCapsuleGroup = mkEl(doc, 'div', 'ag-pp-bento-efforts');
+      var effortLockedNoteEl = mkEl(doc, 'span', 'ag-pp-bento-eff-note', '');
+      setStyleVar(effortLockedNoteEl, 'display', 'none');
+      effortLockedNoteEl.hidden = true;
+      effortLockedNoteEl.setAttribute('aria-hidden', 'true');
+      effortCapsuleGroup.appendChild(effortLockedNoteEl);
       var effortNoteEl = mkEl(doc, 'span', 'ag-pp-bento-eff-note ag-pp-bento-foldable', '');
       effortTopRow.appendChild(effortCapsuleGroup);
       effortTopRow.appendChild(effortNoteEl);
@@ -2283,6 +2318,11 @@
         metaIdVal: metaIdVal,
         metaNote: metaNote,
         effortCapsuleGroup: effortCapsuleGroup,
+        _effortBtnPool: [],
+        _effortLockedNoteEl: effortLockedNoteEl,
+        _effortTargetSpec: { kind: 'element', z: null, auxIndex: null },
+        _sessionFadeRaf: 0,
+        _sessionFadeTimer: 0,
         lastBentoEffSig: '',
         effortNoteEl: effortNoteEl,
         sourceCiteEl: sourceCiteEl,
@@ -2636,30 +2676,92 @@
 
       if (bentoRefs.lastBentoEffSig !== bentoEffSig && doc) {
         bentoRefs.lastBentoEffSig = bentoEffSig;
-        bentoRefs.effortCapsuleGroup.textContent = '';
-        if (!bSpec.isAvailable || !bSpec.levels || bSpec.levels.length === 0) {
-          bentoRefs.effortCapsuleGroup.appendChild(
-            mkEl(doc, 'span', 'ag-pp-bento-eff-note', bSpec.stateText || (zh ? '锁定态' : 'Locked'))
-          );
+        if (!Array.isArray(bentoRefs._effortBtnPool)) bentoRefs._effortBtnPool = [];
+        if (!bentoRefs._effortTargetSpec) {
+          bentoRefs._effortTargetSpec = { kind: 'element', z: null, auxIndex: null };
+        }
+        bentoRefs._effortTargetSpec.kind = bSpec.kind;
+        bentoRefs._effortTargetSpec.z = bSpec.z !== undefined ? bSpec.z : null;
+        bentoRefs._effortTargetSpec.auxIndex = bSpec.auxIndex !== undefined ? bSpec.auxIndex : null;
+
+        var lockedNoteEl = bentoRefs._effortLockedNoteEl;
+        if (!lockedNoteEl) {
+          lockedNoteEl = mkEl(doc, 'span', 'ag-pp-bento-eff-note', '');
+          bentoRefs._effortLockedNoteEl = lockedNoteEl;
+          bentoRefs.effortCapsuleGroup.appendChild(lockedNoteEl);
+        }
+
+        var btnPool = bentoRefs._effortBtnPool;
+        var hasLevels = Boolean(bSpec.isAvailable && bSpec.levels && bSpec.levels.length > 0);
+        if (!hasLevels) {
+          lockedNoteEl.textContent = bSpec.stateText || (zh ? '锁定态' : 'Locked');
+          setStyleVar(lockedNoteEl, 'display', '');
+          lockedNoteEl.hidden = false;
+          lockedNoteEl.removeAttribute('aria-hidden');
+          for (var hi = 0; hi < btnPool.length; hi += 1) {
+            var hBtn = btnPool[hi];
+            setStyleVar(hBtn, 'display', 'none');
+            hBtn.hidden = true;
+            hBtn.setAttribute('aria-hidden', 'true');
+            hBtn.setAttribute('tabindex', '-1');
+            hBtn.setAttribute('data-active', '0');
+            hBtn.setAttribute('aria-pressed', 'false');
+            hBtn.removeAttribute('data-bento-effort');
+          }
         } else {
+          setStyleVar(lockedNoteEl, 'display', 'none');
+          lockedNoteEl.hidden = true;
+          lockedNoteEl.setAttribute('aria-hidden', 'true');
           for (var li = 0; li < bSpec.levels.length; li += 1) {
-            (function (lvl) {
-              var cBtn = mkEl(doc, 'button', 'ag-pp-bento-eff-btn', lvl.label);
+            var lvl = bSpec.levels[li];
+            var cBtn = btnPool[li];
+            if (!cBtn) {
+              cBtn = mkEl(doc, 'button', 'ag-pp-bento-eff-btn', lvl.label);
               cBtn.type = 'button';
-              cBtn.setAttribute('data-bento-effort', lvl.effort);
-              cBtn.setAttribute('data-active', lvl.active ? '1' : '0');
-              cBtn.setAttribute('aria-pressed', lvl.active ? 'true' : 'false');
-              cBtn.addEventListener('click', function (ev) {
-                ev.stopPropagation();
-                var h = bentoRefs._handlers;
-                if (bSpec.kind === 'aux' && bSpec.auxIndex !== null && bSpec.auxIndex !== undefined) {
-                  if (h && typeof h.onAuxEffortSelect === 'function') h.onAuxEffortSelect(bSpec.auxIndex, lvl.effort);
-                } else if (bSpec.z !== null && bSpec.z !== undefined) {
-                  if (h && typeof h.onEffortSelect === 'function') h.onEffortSelect(lvl.effort, bSpec.z);
-                }
-              });
+              (function (pooledBtn) {
+                pooledBtn.addEventListener('click', function (ev) {
+                  ev.stopPropagation();
+                  var effCode = pooledBtn.getAttribute('data-bento-effort');
+                  if (!effCode) return;
+                  var h = bentoRefs._handlers;
+                  var tgt = bentoRefs._effortTargetSpec || {};
+                  if (tgt.kind === 'aux' && tgt.auxIndex !== null && tgt.auxIndex !== undefined) {
+                    if (h && typeof h.onAuxEffortSelect === 'function') h.onAuxEffortSelect(tgt.auxIndex, effCode);
+                  } else if (tgt.z !== null && tgt.z !== undefined) {
+                    if (h && typeof h.onEffortSelect === 'function') h.onEffortSelect(effCode, tgt.z);
+                  }
+                });
+              })(cBtn);
               bentoRefs.effortCapsuleGroup.appendChild(cBtn);
-            })(bSpec.levels[li]);
+              btnPool.push(cBtn);
+            }
+            if (cBtn.textContent !== lvl.label) cBtn.textContent = lvl.label;
+            if (cBtn.getAttribute('data-bento-effort') !== lvl.effort) {
+              cBtn.setAttribute('data-bento-effort', lvl.effort);
+            }
+            var activeStr = lvl.active ? '1' : '0';
+            if (cBtn.getAttribute('data-active') !== activeStr) {
+              cBtn.setAttribute('data-active', activeStr);
+              cBtn.setAttribute('aria-pressed', lvl.active ? 'true' : 'false');
+            }
+            if (cBtn.hidden) {
+              setStyleVar(cBtn, 'display', '');
+              cBtn.hidden = false;
+              cBtn.removeAttribute('aria-hidden');
+              cBtn.removeAttribute('tabindex');
+            }
+          }
+          for (var xi = bSpec.levels.length; xi < btnPool.length; xi += 1) {
+            var extraBtn = btnPool[xi];
+            if (!extraBtn.hidden) {
+              setStyleVar(extraBtn, 'display', 'none');
+              extraBtn.hidden = true;
+              extraBtn.setAttribute('aria-hidden', 'true');
+              extraBtn.setAttribute('tabindex', '-1');
+            }
+            extraBtn.setAttribute('data-active', '0');
+            extraBtn.setAttribute('aria-pressed', 'false');
+            extraBtn.removeAttribute('data-bento-effort');
           }
         }
       }
@@ -2844,6 +2946,7 @@
       syncBentoTwinCardsDom: syncBentoTwinCardsDom,
       updateBentoTwinCards: syncBentoTwinCardsDom,
       triggerBentoSessionSwitchFade: triggerBentoSessionSwitchFade,
+      clearBentoSessionSwitchFade: clearBentoSessionSwitchFade,
       mkEl: mkEl,
       mkSvg: mkSvg,
       setStyleVar: setStyleVar,

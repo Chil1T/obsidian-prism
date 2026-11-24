@@ -1206,32 +1206,44 @@
     function intersectRayAABB(ox, oy, oz, dx, dy, dz, minX, minY, minZ, maxX, maxY, maxZ) {
       var tmin = -Infinity;
       var tmax = Infinity;
-      var axesO = [ox, oy, oz];
-      var axesD = [dx, dy, dz];
-      var axesMin = [minX, minY, minZ];
-      var axesMax = [maxX, maxY, maxZ];
+      var invD, t1, t2, tmp;
 
-      for (var i = 0; i < 3; i++) {
-        var o = axesO[i];
-        var d = axesD[i];
-        var bmin = axesMin[i];
-        var bmax = axesMax[i];
-        if (Math.abs(d) < 1e-8) {
-          if (o < bmin || o > bmax) return -1;
-        } else {
-          var invD = 1.0 / d;
-          var t1 = (bmin - o) * invD;
-          var t2 = (bmax - o) * invD;
-          if (t1 > t2) {
-            var tmp = t1;
-            t1 = t2;
-            t2 = tmp;
-          }
-          if (t1 > tmin) tmin = t1;
-          if (t2 < tmax) tmax = t2;
-          if (tmin > tmax) return -1;
-        }
+      if (Math.abs(dx) < 1e-8) {
+        if (ox < minX || ox > maxX) return -1;
+      } else {
+        invD = 1.0 / dx;
+        t1 = (minX - ox) * invD;
+        t2 = (maxX - ox) * invD;
+        if (t1 > t2) { tmp = t1; t1 = t2; t2 = tmp; }
+        if (t1 > tmin) tmin = t1;
+        if (t2 < tmax) tmax = t2;
+        if (tmin > tmax) return -1;
       }
+
+      if (Math.abs(dy) < 1e-8) {
+        if (oy < minY || oy > maxY) return -1;
+      } else {
+        invD = 1.0 / dy;
+        t1 = (minY - oy) * invD;
+        t2 = (maxY - oy) * invD;
+        if (t1 > t2) { tmp = t1; t1 = t2; t2 = tmp; }
+        if (t1 > tmin) tmin = t1;
+        if (t2 < tmax) tmax = t2;
+        if (tmin > tmax) return -1;
+      }
+
+      if (Math.abs(dz) < 1e-8) {
+        if (oz < minZ || oz > maxZ) return -1;
+      } else {
+        invD = 1.0 / dz;
+        t1 = (minZ - oz) * invD;
+        t2 = (maxZ - oz) * invD;
+        if (t1 > t2) { tmp = t1; t1 = t2; t2 = tmp; }
+        if (t1 > tmin) tmin = t1;
+        if (t2 < tmax) tmax = t2;
+        if (tmin > tmax) return -1;
+      }
+
       if (tmax < 0) return -1;
       return tmin >= 0 ? tmin : tmax;
     }
@@ -1555,7 +1567,9 @@
      * - 16x16 原厂 Cherry 横向圆柱微凹指肚顶面（彻底移除外缘反常 +0.34 外翻法线，消除顶面外圈泛白塑料描边！）
      * - 真实微距底腔内构：0.065U 厚壁外裙底沿 + 深凹双色注塑内胆台阶 + 四向加强筋 + 中央 [+] 十字菊花母座
      */
+    var _cachedSculptedKeycapGeom = null;
     function buildSculptedKeycapGeometry() {
+      if (_cachedSculptedKeycapGeom) return _cachedSculptedKeycapGeom;
       var positions = [];
       var normals = [];
       var uvs = [];
@@ -1864,7 +1878,7 @@
       emitCapSubBox(-qSpan, bossBotY, -qSpan, -crossHalfT, slotDepthY, -crossHalfT, 0.44, true, false);
       emitCapSubBox(crossHalfT, bossBotY, -qSpan, qSpan, slotDepthY, -crossHalfT, 0.44, true, false);
 
-      return {
+      _cachedSculptedKeycapGeom = {
         positions: new Float32Array(positions),
         normals: new Float32Array(normals),
         uvs: new Float32Array(uvs),
@@ -1872,8 +1886,10 @@
         indices: new Uint16Array(indices),
         indexCount: indices.length,
       };
+      return _cachedSculptedKeycapGeom;
     }
 
+    var _cachedChassisMeshMap = new Map();
     /**
      * 生成 V10 重型 CNC 客制化铝坨坨外壳网格（buildChassisMesh）：
      * - 加厚阳极氧化铝壁厚（±9.68U × [-3.86, 4.62]）+ Mode/Keycult 标志性双层内沉阶梯倒角（Step-Bezel）
@@ -1882,6 +1898,9 @@
      * - 第 3~12 列、第 1~3 行升级为 R=0.16U 圆角 CNC 内凹斜面金属屏幕外框（随视角与鼠标流转冷冽微光谱高光，零直角生硬白线）
      */
     function buildChassisMesh(palette, includeAuxPad) {
+      var chCacheKey = (palette && palette.id ? palette.id : 'obsidian-dark') + ':' + (includeAuxPad ? 1 : 0);
+      var chCached = _cachedChassisMeshMap.get(chCacheKey);
+      if (chCached) return chCached;
       var mb = createMeshBuilder();
       var colBody = hexToRgb01(palette.caseBody);
       var colStep = hexToRgb01(palette.caseStep || palette.caseBody);
@@ -2435,10 +2454,16 @@
       }
 
       var totalIndexCount = mb.getIndexCount();
-      return mb.build({
+      var builtChassis = mb.build({
         mainIndexCount: mainIndexCount,
         auxIndexCount: totalIndexCount - mainIndexCount,
       });
+      if (_cachedChassisMeshMap.size >= 8) {
+        var firstChKey = _cachedChassisMeshMap.keys().next().value;
+        _cachedChassisMeshMap.delete(firstChKey);
+      }
+      _cachedChassisMeshMap.set(chCacheKey, builtChassis);
+      return builtChassis;
     }
 
     /**
@@ -3491,12 +3516,8 @@
       for (var ri = 0; ri < rings.length; ri++) {
         var rg = rings[ri];
         var rc = rg.col;
-        var ringExpand = (1.0 + ePulse * 0.15 + 0.038 * Math.sin(phaseT * 2.4 + rg.ringIdx * 2.1)) * collapseScale;
-        var wobbleX = Math.sin(phaseT * 1.8 + rg.ringIdx * 1.7) * 0.045 + (cfg.gyroPitch || 0) * 0.30;
-        var wobbleZ = Math.cos(phaseT * 1.5 + rg.ringIdx * 2.3) * 0.045 + (cfg.gyroRoll || 0) * 0.30;
-        var tiltGain = 0.35 + 0.32 * rg.ringIdx;
-        var rIn = (rg.rMid - rg.halfW) * ringExpand;
-        var rOut = (rg.rMid + rg.halfW) * ringExpand;
+        var rIn = (rg.rMid - rg.halfW) * collapseScale;
+        var rOut = (rg.rMid + rg.halfW) * collapseScale;
         var yInBase = (rg.yNorm - rg.slopeY) * effGapH;
         var yOutBase = (rg.yNorm + rg.slopeY) * effGapH;
 
@@ -3508,21 +3529,20 @@
           var sa = Math.sin(ang);
           var lxIn = ca * rIn;
           var lzIn = sa * rIn;
-          var lyIn = yInBase + (lxIn * wobbleZ - lzIn * wobbleX) * tiltGain;
           var lxOut = ca * rOut;
           var lzOut = sa * rOut;
-          var lyOut = yOutBase + (lxOut * wobbleZ - lzOut * wobbleX) * tiltGain;
 
+          /* 将局部径向偏移写入 a_normal(lx, 0, lz)，由 SOLID_VS 按 u_envParams.w 在 GPU 实时驱动呼吸脉动与空间摇摆 */
           var vIn = mb.pushVertex(
-            ox + lxIn, oy + lyIn, oz + lzIn,
-            0, 1, 0,
+            ox + lxIn, oy + yInBase, oz + lzIn,
+            lxIn, 0, lzIn,
             rc[0], rc[1], rc[2],
             rg.ringIdx, visAlpha, slamCollapse, 7.0,
             u, -1.0
           );
           var vOut = mb.pushVertex(
-            ox + lxOut, oy + lyOut, oz + lzOut,
-            0, 1, 0,
+            ox + lxOut, oy + yOutBase, oz + lzOut,
+            lxOut, 0, lzOut,
             rc[0], rc[1], rc[2],
             rg.ringIdx, visAlpha, slamCollapse, 7.0,
             u, 1.0
@@ -3542,7 +3562,7 @@
       /* 2. High (tier=2) & Extra (tier=3) 专属：高亮轴底垂直聚光能量光柱（Condenser Light Pillar, kind = 7.3） */
       if (tier >= 2) {
         var PILLAR_SEGS = 20;
-        var pillarVis = visAlpha * (tier === 3 ? 0.96 : 0.78) * (1.0 + ePulse * 0.35);
+        var pillarVis = visAlpha * (tier === 3 ? 0.96 : 0.78);
         var pRadBot = (tier === 3 ? 0.168 : 0.142) * collapseScale;
         var pRadTop = (tier === 3 ? 0.245 : 0.205) * collapseScale;
         var pY0 = oy - 0.015;
@@ -3590,8 +3610,7 @@
 
       for (var ci = 0; ci < crystalCount; ci++) {
         var cSeed = ((ci * 0.1379) + 0.09) % 1.0;
-        var rawCLife = cSeed + phaseT * (0.20 + tier * 0.035);
-        var cLife = rawCLife - Math.floor(rawCLife);
+        var cLife = 0.14 + 0.68 * ((ci + 0.5) / crystalCount);
         var cFade =
           smoothstepScalar(0.0, 0.15, cLife) *
           (1.0 - smoothstepScalar(0.78, 1.0, cLife)) *
@@ -3607,19 +3626,19 @@
 
         var cBaseAng = ci * 2.39996323;
         var ringBand = 0.215 + ((ci * 5) % 9) * 0.028;
-        var cAng = cBaseAng + cLife * (1.35 + tier * 0.22) + Math.sin(phaseT * 1.15 + cSeed * TWO_PI) * 0.18;
-        var cRad = ringBand * spreadBoost * (1.0 - cLife * 0.10 + ePulse * 0.15) * collapseScale;
+        var cAng = cBaseAng + cLife * (1.35 + tier * 0.22);
+        var cRad = ringBand * spreadBoost * (1.0 - cLife * 0.10) * collapseScale;
         var ccx = ox + Math.cos(cAng) * cRad;
         var ccy = oy + (0.06 + cLife * spiralHeightBoost) * effGapH;
         var ccz = oz + Math.sin(cAng) * cRad;
 
-        var baseHalfW = (0.024 + (ci % 3) * 0.0065 + tier * 0.0025) * (0.76 + 0.24 * cFade) * (1.0 + ePulse * 0.25);
+        var baseHalfW = (0.024 + (ci % 3) * 0.0065 + tier * 0.0025) * (0.76 + 0.24 * cFade);
         var halfH = baseHalfW * (1.58 + (ci % 2) * 0.24);
         var cVis = visAlpha * cFade * (0.90 + tier * 0.05);
 
         /* 每个八面体微晶独立慢速三维自旋姿态正交基 (eX, eY, eZ) */
-        var spinYaw = phaseT * (1.4 + (ci % 4) * 0.35) + ci * 1.13;
-        var spinTilt = 0.42 * Math.sin(phaseT * 1.1 + ci * 1.7) + (ci % 3 - 1) * 0.24;
+        var spinYaw = ci * 1.13;
+        var spinTilt = (ci % 3 - 1) * 0.24;
         var csY = Math.cos(spinYaw), snY = Math.sin(spinYaw);
         var csT = Math.cos(spinTilt), snT = Math.sin(spinTilt);
 
@@ -3665,15 +3684,12 @@
         }
       }
 
-      /* 4. 柔焦光学散景微星尘（Bokeh Motes, kind = 8.0，相机正对 Billboard 四边形） */
-      var rVec = cfg.localRight || [1, 0, 0];
-      var uVec = cfg.localUp || [0, 1, 0];
+      /* 4. 柔焦光学散景微星尘（Bokeh Motes, kind = 8.0，由 SOLID_VS 按 u_camPos 与 u_envParams.w 动态正对相机 Billboard 展开） */
       var MOTE_COUNTS_BY_TIER = [4, 8, 12, 16];
       var moteCount = MOTE_COUNTS_BY_TIER[tier];
       for (var mi = 0; mi < moteCount; mi++) {
         var seed = ((mi * 0.074) + 0.18) % 1.0;
-        var rawLife = seed + phaseT * 0.28;
-        var life = rawLife - Math.floor(rawLife);
+        var life = 0.16 + 0.68 * ((mi + 0.5) / moteCount);
         var fade =
           smoothstepScalar(0.0, 0.18, life) *
           (1.0 - smoothstepScalar(0.74, 1.0, life)) *
@@ -3688,32 +3704,29 @@
         var baseAng = mi * 2.39996323 + 0.8;
         var baseRad = 0.145 + ((mi * 7) % 10) * 0.028;
         var moteScale = 0.028 + (mi % 3) * 0.007;
-        var spiralAng = baseAng + life * 1.65 + Math.sin(phaseT * 1.2 + seed * TWO_PI) * 0.22;
-        var rad = baseRad * spreadBoost * (1.0 - life * 0.16 + ePulse * 0.14) * collapseScale;
+        var spiralAng = baseAng + life * 1.65;
+        var rad = baseRad * spreadBoost * (1.0 - life * 0.16) * collapseScale;
         var mcx = ox + Math.cos(spiralAng) * rad;
         var mcy = oy + (0.08 + life * 0.88) * effGapH;
         var mcz = oz + Math.sin(spiralAng) * rad;
-        var rSize = moteScale * (0.82 + 0.48 * Math.sin(seed * 19.1) * 0.5 + ePulse * 0.35) * (0.72 + 0.28 * fade);
+        var rSize = moteScale * (0.82 + 0.48 * Math.sin(seed * 19.1) * 0.5) * (0.72 + 0.28 * fade);
         var mVis = visAlpha * fade;
 
-        var rx = rVec[0] * rSize, ry = rVec[1] * rSize, rz = rVec[2] * rSize;
-        var ux = uVec[0] * rSize, uy = uVec[1] * rSize, uz = uVec[2] * rSize;
-
         var q0 = mb.pushVertex(
-          mcx - rx - ux, mcy - ry - uy, mcz - rz - uz,
-          0, 1, 0, mCol[0], mCol[1], mCol[2], seed, mVis, slamCollapse, 8.0, -1.0, -1.0
+          mcx, mcy, mcz,
+          rSize, 0, 0, mCol[0], mCol[1], mCol[2], seed, mVis, slamCollapse, 8.0, -1.0, -1.0
         );
         var q1 = mb.pushVertex(
-          mcx + rx - ux, mcy + ry - uy, mcz + rz - uz,
-          0, 1, 0, mCol[0], mCol[1], mCol[2], seed, mVis, slamCollapse, 8.0, 1.0, -1.0
+          mcx, mcy, mcz,
+          rSize, 0, 0, mCol[0], mCol[1], mCol[2], seed, mVis, slamCollapse, 8.0, 1.0, -1.0
         );
         var q2 = mb.pushVertex(
-          mcx + rx + ux, mcy + ry + uy, mcz + rz + uz,
-          0, 1, 0, mCol[0], mCol[1], mCol[2], seed, mVis, slamCollapse, 8.0, 1.0, 1.0
+          mcx, mcy, mcz,
+          rSize, 0, 0, mCol[0], mCol[1], mCol[2], seed, mVis, slamCollapse, 8.0, 1.0, 1.0
         );
         var q3 = mb.pushVertex(
-          mcx - rx + ux, mcy - ry + uy, mcz - rz + uz,
-          0, 1, 0, mCol[0], mCol[1], mCol[2], seed, mVis, slamCollapse, 8.0, -1.0, 1.0
+          mcx, mcy, mcz,
+          rSize, 0, 0, mCol[0], mCol[1], mCol[2], seed, mVis, slamCollapse, 8.0, -1.0, 1.0
         );
         mb.pushTri(q0, q1, q2);
         mb.pushTri(q0, q2, q3);
@@ -3804,26 +3817,107 @@
       ctx.restore();
     }
 
+    var _legendAtlasCache = new Map();
+    var MAX_LEGEND_ATLAS_CACHE = 4;
+
+    function computeLegendAtlasCacheKey(slots, noveltyMap, themeKey) {
+      var sLen = Array.isArray(slots) ? Math.min(slots.length, 90) : 0;
+      var slotParts = [String(sLen)];
+      for (var i = 0; i < sLen; i++) {
+        var sl = slots[i];
+        slotParts.push((sl && sl.z !== undefined ? sl.z : '') + ':' + (sl && sl.symbol ? sl.symbol : ''));
+      }
+      var novParts = [];
+      if (noveltyMap) {
+        var novKeys = ['1', '6', '10', '18'];
+        for (var ni = 0; ni < novKeys.length; ni++) {
+          var nk = novKeys[ni];
+          var ne = noveltyMap[nk];
+          novParts.push(ne && Array.isArray(ne.paths) ? String(ne.paths.length) : '0');
+        }
+      }
+      return (themeKey ? String(themeKey) : 'shared') + '|' + novParts.join(',') + '|' + slotParts.join(',');
+    }
+
+    function computeAuxListSigQuick(auxList) {
+      var list = Array.isArray(auxList) ? auxList : DEFAULT_AUX_MODELS;
+      var parts = [];
+      for (var k = 0; k < AUX_SLOT_COUNT; k++) {
+        var s = list[k] || DEFAULT_AUX_MODELS[k];
+        parts.push(
+          (s ? s.id : '') + ':' + (s ? s.shortLabel : '') + ':' + (s ? s.subLabel : '') + ':' + (s ? s.badgeCode : '') + ':' + (s && s.available ? 1 : 0)
+        );
+      }
+      return parts.join('|');
+    }
+
+    function evictLegendAtlasCache(targetDoc) {
+      var evicted = 0;
+      _legendAtlasCache.forEach(function (entry, key) {
+        if (targetDoc && entry && entry.doc !== targetDoc) return;
+        evicted++;
+        if (entry && entry.surf && entry.surf.canvas) {
+          try {
+            entry.surf.canvas.width = 0;
+            entry.surf.canvas.height = 0;
+          } catch (_evErr) {}
+          entry.surf.ctx = null;
+          entry.surf.canvas = null;
+        }
+        _legendAtlasCache.delete(key);
+      });
+      if (!targetDoc) {
+        _cachedChassisMeshMap.clear();
+      }
+      return evicted;
+    }
+
     /**
      * V9 图集烘焙（2048x2048，R/G 通道分离驱动“高对比主字 + 元素色右上微标”）：
      * - 4 颗核心可用键（1H / 6C / 10Ne / 18Ar）：
      *   大号 700 Bold 符号 + 左上 600 序数写入 R=1.0, G=0.0；右上 NOVELTY_ICONS 矢量微标写入 R=1.0, G=1.0 (#FFFF00)
      * - 86 颗静默底座盲键：
      *   字号缩小 ~20%、字重 500 Medium 极低对比度丝绒微雕暗刻（R 通道 0.22 + B 通道抗锯齿微雕轮廓）
+     * - 模块级按主题/槽位签名复用缓存：同主题二次 open() 0ms 复用，支持 evictLegendAtlasCache() 清理释放
      */
-    function renderLegendAtlasCanvas(doc, slots, grainAssets) {
+    function renderLegendAtlasCanvas(doc, slots, grainAssets, optAuxModels, optThemeKey) {
+      var pkg = resolveGrainPackage(moduleRoot);
+      var noveltyMap = (grainAssets && grainAssets.noveltyIcons) || (pkg && pkg.NOVELTY_ICONS) || null;
+      var cacheKey = computeLegendAtlasCacheKey(slots, noveltyMap, optThemeKey);
+      var targetAuxList = Array.isArray(optAuxModels) ? optAuxModels : DEFAULT_AUX_MODELS;
+      var targetAuxSig = computeAuxListSigQuick(targetAuxList);
+
+      var cached = _legendAtlasCache.get(cacheKey);
+      if (
+        cached &&
+        cached.doc === doc &&
+        cached.surf &&
+        cached.surf.canvas &&
+        cached.surf.ctx &&
+        cached.surf.canvas.width === ATLAS_SIZE &&
+        cached.surf.canvas.height === ATLAS_SIZE
+      ) {
+        _legendAtlasCache.delete(cacheKey);
+        _legendAtlasCache.set(cacheKey, cached);
+        if (cached.auxSig !== targetAuxSig) {
+          renderAuxAtlasCellsToContext(cached.surf.ctx, targetAuxList, false);
+          cached.auxSig = targetAuxSig;
+        }
+        return cached.surf;
+      }
+
       var surf = createOffscreenCanvas(doc, ATLAS_SIZE, ATLAS_SIZE);
       if (!surf) return null;
       var ctx = surf.ctx;
       var cellW = ATLAS_SIZE / ATLAS_COLS;
       var cellH = (ATLAS_SIZE * 0.90) / ATLAS_ROWS;
-
-      var pkg = resolveGrainPackage(moduleRoot);
-      var noveltyMap = (grainAssets && grainAssets.noveltyIcons) || (pkg && pkg.NOVELTY_ICONS) || null;
       var hasPath2D = typeof Path2D === 'function';
 
       ctx.clearRect(0, 0, ATLAS_SIZE, ATLAS_SIZE);
       var sansStack = '"Inter", "SF Pro Display", "Helvetica Neue", "Segoe UI", system-ui, sans-serif';
+
+      var stealthDraws = [];
+      var curFont = '';
 
       for (var i = 0; i < slots.length && i < 90; i++) {
         var slot = slots[i];
@@ -3843,13 +3937,15 @@
           ctx.fillStyle = '#FF0000';
           ctx.textAlign = 'left';
           ctx.textBaseline = 'top';
-          ctx.font = '600 ' + heroNumPx + 'px ' + sansStack;
+          var heroNumFont = '600 ' + heroNumPx + 'px ' + sansStack;
+          if (curFont !== heroNumFont) { ctx.font = heroNumFont; curFont = heroNumFont; }
           ctx.fillText(numStr, x0 + 25, y0 + 20);
 
           var heroSymPx = sym.length >= 3 ? 64 : sym.length === 2 ? 88 : 96;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.font = '700 ' + heroSymPx + 'px ' + sansStack;
+          var heroSymFont = '700 ' + heroSymPx + 'px ' + sansStack;
+          if (curFont !== heroSymFont) { ctx.font = heroSymFont; curFont = heroSymFont; }
           ctx.fillText(sym, x0 + cellW * 0.50, y0 + cellH * 0.62);
 
           var noveltyEntry = noveltyMap ? (noveltyMap[zNum] || noveltyMap[String(zNum)]) : null;
@@ -3888,39 +3984,71 @@
             drawFallbackNoveltyGlyph(ctx, zNum, x0 + cellW - 40, y0 + 36, 17);
           }
         } else {
-          /* 86 颗静默盲键：字号缩小 ~20%，字重 500，R 通道 0.22 微雕暗刻 + B 通道抗锯齿微雕轮廓 */
+          /* 收集 86 颗静默盲键，批处理合并 Canvas 状态切换 */
           var stealthNumPx = isRange ? 21 : numStr.length === 3 ? 25 : 29;
           var stealthSymPx = sym.length >= 3 ? 51 : sym.length === 2 ? 70 : 76;
-
-          ctx.save();
-          ctx.fillStyle = 'rgba(255, 0, 0, 0.22)';
-          ctx.textAlign = 'left';
-          ctx.textBaseline = 'top';
-          ctx.font = '500 ' + stealthNumPx + 'px ' + sansStack;
-          ctx.fillText(numStr, x0 + 28, y0 + 24);
-
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.font = '500 ' + stealthSymPx + 'px ' + sansStack;
-          ctx.fillText(sym, x0 + cellW * 0.50, y0 + cellH * 0.61);
-
-          ctx.globalCompositeOperation = 'lighter';
-          ctx.fillStyle = '#0000FF';
-          ctx.textAlign = 'left';
-          ctx.textBaseline = 'top';
-          ctx.font = '500 ' + stealthNumPx + 'px ' + sansStack;
-          ctx.fillText(numStr, x0 + 28, y0 + 24);
-
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.font = '500 ' + stealthSymPx + 'px ' + sansStack;
-          ctx.fillText(sym, x0 + cellW * 0.50, y0 + cellH * 0.61);
-          ctx.restore();
+          stealthDraws.push({
+            numStr: numStr,
+            sym: sym,
+            nx: x0 + 28,
+            ny: y0 + 24,
+            sx: x0 + cellW * 0.50,
+            sy: y0 + cellH * 0.61,
+            numFont: '500 ' + stealthNumPx + 'px ' + sansStack,
+            symFont: '500 ' + stealthSymPx + 'px ' + sansStack,
+          });
         }
       }
 
+      if (stealthDraws.length > 0) {
+        ctx.save();
+        for (var pass = 0; pass < 2; pass++) {
+          if (pass === 0) {
+            ctx.fillStyle = 'rgba(255, 0, 0, 0.22)';
+          } else {
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.fillStyle = '#0000FF';
+          }
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'top';
+          for (var si1 = 0; si1 < stealthDraws.length; si1++) {
+            var sd1 = stealthDraws[si1];
+            if (curFont !== sd1.numFont) { ctx.font = sd1.numFont; curFont = sd1.numFont; }
+            ctx.fillText(sd1.numStr, sd1.nx, sd1.ny);
+          }
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          for (var si2 = 0; si2 < stealthDraws.length; si2++) {
+            var sd2 = stealthDraws[si2];
+            if (curFont !== sd2.symFont) { ctx.font = sd2.symFont; curFont = sd2.symFont; }
+            ctx.fillText(sd2.sym, sd2.sx, sd2.sy);
+          }
+        }
+        ctx.restore();
+      }
+
       /* 初始化同步烘焙底部富余第 9 行（y ∈ [1844, 2048], v ∈ [0.9004, 1.00]）的 6 槽副盘键帽印字与定制棱镜符号 */
-      renderAuxAtlasCellsToContext(ctx, DEFAULT_AUX_MODELS, 0);
+      renderAuxAtlasCellsToContext(ctx, targetAuxList, false);
+
+      surf.sharedCached = true;
+      if (_legendAtlasCache.size >= MAX_LEGEND_ATLAS_CACHE) {
+        var oldAtlasKey = _legendAtlasCache.keys().next().value;
+        var oldAtlasEnt = _legendAtlasCache.get(oldAtlasKey);
+        if (oldAtlasEnt && oldAtlasEnt.surf && oldAtlasEnt.surf.canvas) {
+          try {
+            oldAtlasEnt.surf.canvas.width = 0;
+            oldAtlasEnt.surf.canvas.height = 0;
+          } catch (_oldAtlasErr) {}
+          oldAtlasEnt.surf.ctx = null;
+          oldAtlasEnt.surf.canvas = null;
+        }
+        _legendAtlasCache.delete(oldAtlasKey);
+      }
+      _legendAtlasCache.set(cacheKey, {
+        doc: doc,
+        surf: surf,
+        auxSig: targetAuxSig,
+      });
 
       return surf;
     }
@@ -4707,6 +4835,9 @@
       'layout(location = 4) in vec2 a_uv;',
       'uniform mat4 u_viewProj;',
       'uniform mat4 u_model;',
+      'uniform vec3 u_camPos;',
+      'uniform vec4 u_envParams;',
+      'uniform vec4 u_prismConfig;',
       'out vec3 v_worldPos;',
       'out vec3 v_localPos;',
       'out vec3 v_normal;',
@@ -4714,10 +4845,47 @@
       'out vec4 v_params;',
       'out vec2 v_uv;',
       'void main() {',
-      '  vec4 wp = u_model * vec4(a_pos, 1.0);',
+      '  vec3 pos = a_pos;',
+      '  vec3 nrm = a_normal;',
+      '  float kind = a_params.w;',
+      '  vec4 wp;',
+      '  if (kind > 6.5) {',
+      '    float phaseT = u_envParams.w;',
+      '    float ePulseF = u_prismConfig.w;',
+      '    if (kind < 7.15) {',
+      '      float ringIdx = a_params.x;',
+      '      float radExpand = 1.0 + ePulseF * 0.14 + 0.038 * sin(phaseT * 2.4 + ringIdx * 2.1);',
+      '      float wobX = sin(phaseT * 1.8 + ringIdx * 1.7) * 0.042;',
+      '      float wobZ = cos(phaseT * 1.5 + ringIdx * 2.3) * 0.042;',
+      '      pos.x += a_normal.x * (radExpand - 1.0);',
+      '      pos.z += a_normal.z * (radExpand - 1.0);',
+      '      pos.y += (a_normal.x * wobZ - a_normal.z * wobX) * (0.35 + 0.32 * ringIdx);',
+      '      nrm = vec3(0.0, 1.0, 0.0);',
+      '      wp = u_model * vec4(pos, 1.0);',
+      '    } else if (kind > 7.45 && kind < 7.85) {',
+      '      float cSeed = a_params.x;',
+      '      pos.y += sin(phaseT * 1.65 + cSeed * 6.2831853) * 0.032 + ePulseF * 0.025;',
+      '      wp = u_model * vec4(pos, 1.0);',
+      '    } else if (kind > 7.85) {',
+      '      float mSeed = a_params.x;',
+      '      pos.y += sin(phaseT * 1.9 + mSeed * 6.2831853) * 0.042;',
+      '      float mSize = max(0.005, a_normal.x) * (1.0 + ePulseF * 0.35 + 0.16 * sin(phaseT * 2.6 + mSeed * 12.56637));',
+      '      vec3 wpCenter = (u_model * vec4(pos, 1.0)).xyz;',
+      '      vec3 toCam = normalize(u_camPos - wpCenter);',
+      '      vec3 upRef = abs(toCam.y) > 0.99 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);',
+      '      vec3 bRight = normalize(cross(upRef, toCam));',
+      '      vec3 bUp = cross(toCam, bRight);',
+      '      wp = vec4(wpCenter + (bRight * a_uv.x + bUp * a_uv.y) * mSize, 1.0);',
+      '      nrm = vec3(0.0, 1.0, 0.0);',
+      '    } else {',
+      '      wp = u_model * vec4(pos, 1.0);',
+      '    }',
+      '  } else {',
+      '    wp = u_model * vec4(pos, 1.0);',
+      '  }',
       '  v_worldPos = wp.xyz;',
-      '  v_localPos = a_pos;',
-      '  v_normal = normalize(mat3(u_model) * a_normal);',
+      '  v_localPos = pos;',
+      '  v_normal = normalize(mat3(u_model) * nrm);',
       '  v_color = a_color;',
       '  v_params = a_params;',
       '  v_uv = a_uv;',
@@ -4769,7 +4937,8 @@
       '  }',
       '  /* kind > 6.5: V11 随思考档位演化的「反重力磁通环 (7.0) + 轴底聚光柱 (7.3) + 三维八面体切面折光微晶 (7.6) + 散景光尘 (8.0)」 */',
       '  if (kind > 6.5) {',
-      '    float visAlpha = v_params.y;',
+      '    float liftGate = smoothstep(0.02, 0.30, u_liftCapShadow.w);',
+      '    float visAlpha = v_params.y * liftGate;',
       '    if (visAlpha <= 0.003) discard;',
       '    float phaseT = u_envParams.w;',
       '    float isLightF = u_envParams.x;',
@@ -5815,6 +5984,7 @@
       var totalInstanceCapacity = Math.max(1, slotCount + AUX_SLOT_COUNT);
       var slotIndexByZ = new Map();
       var slotCoords = new Array(slotCount);
+      var mainRowBucketMap = new Map();
       for (var si = 0; si < slotCount; si++) {
         var sl = slots[si];
         var zKey = sl.slotZ !== undefined ? sl.slotZ : sl.z;
@@ -5822,15 +5992,29 @@
         if (sl.z !== undefined) slotIndexByZ.set(sl.z, si);
         var rowNum = clamp(Math.round(Number(sl.row) || 4), 1, 7);
         var rProf = ROW_SCULPT_PROFILE[rowNum] || ROW_SCULPT_PROFILE[4];
+        var scx = (sl.col - 9.5) * KEY_PITCH;
+        var scz = (sl.row - 4.0) * KEY_PITCH + ROW_Z_OFFSET;
         slotCoords[si] = {
-          x: (sl.col - 9.5) * KEY_PITCH,
-          z: (sl.row - 4.0) * KEY_PITCH + ROW_Z_OFFSET,
+          x: scx,
+          z: scz,
           row: rowNum,
           rowPitch: rProf.pitch,
           rowScaleY: rProf.scaleY,
           rowYBias: rProf.yBias,
         };
+        var rb = mainRowBucketMap.get(rowNum);
+        if (!rb) {
+          rb = { minX: scx - 0.92, maxX: scx + 0.92, minZ: scz - 0.92, maxZ: scz + 0.92, indices: [] };
+          mainRowBucketMap.set(rowNum, rb);
+        } else {
+          if (scx - 0.92 < rb.minX) rb.minX = scx - 0.92;
+          if (scx + 0.92 > rb.maxX) rb.maxX = scx + 0.92;
+          if (scz - 0.92 < rb.minZ) rb.minZ = scz - 0.92;
+          if (scz + 0.92 > rb.maxZ) rb.maxZ = scz + 0.92;
+        }
+        rb.indices.push(si);
       }
+      var mainRowBuckets = Array.from(mainRowBucketMap.values());
 
       /* 右侧 2×3 副盘 6 颗雕塑球帽局部坐标（对齐主盘下半核心键区 Row 5..7 人体工学倾角） */
       var auxSlotCoords = new Array(AUX_SLOT_COUNT);
@@ -6141,13 +6325,25 @@
       var camRightVec = [1, 0, 0];
       var camUpVec = [0, 1, 0];
       var keyLocalMats = new Array(slotCount);
+      var keyLocalInvMats = new Array(slotCount);
+      var keyLocalInvValid = new Uint8Array(slotCount);
+      var keyTrsCache = new Float32Array(slotCount * 8);
+      keyTrsCache.fill(NaN);
       var auxKeyLocalMats = new Array(AUX_SLOT_COUNT);
+      var auxKeyLocalInvMats = new Array(AUX_SLOT_COUNT);
+      var auxKeyLocalInvValid = new Uint8Array(AUX_SLOT_COUNT);
+      var auxKeyTrsCache = new Float32Array(AUX_SLOT_COUNT * 8);
+      auxKeyTrsCache.fill(NaN);
+      var lastPickKind = null;
+      var lastPickIdx = -1;
       var invLiftCapMat = mat4Identity();
       for (var mi = 0; mi < slotCount; mi++) {
         keyLocalMats[mi] = mat4Identity();
+        keyLocalInvMats[mi] = mat4Identity();
       }
       for (var ami = 0; ami < AUX_SLOT_COUNT; ami++) {
         auxKeyLocalMats[ami] = mat4Identity();
+        auxKeyLocalInvMats[ami] = mat4Identity();
       }
 
       /* 预计算左前上斜侧顶主光正交阴影视图矩阵（覆盖主盘 -9.68 至右侧 2×3 副盘 +12.90 及全旋转包络） */
@@ -6166,20 +6362,39 @@
       );
       mat4Multiply(lightViewProjMat, lightProjMat, lightViewMat);
 
-      /* 2x HiDPI 离屏动态画布（1600x480 屏幕纹理 + 2048x2048 键帽图集第 9 行副盘局部刷新条带） */
-      var oledSurf = createOffscreenCanvas(doc, OLED_WIDTH, OLED_HEIGHT);
-      var activeOledCanvas = oledSurf ? oledSurf.canvas : null;
+      /* 2x HiDPI 离屏动态画布按需懒初始化（避免 oledPainter 就绪时额外创建冗余 1600x480 2D 画布） */
+      var oledSurf = null;
+      var activeOledCanvas = null;
       var oledTexAllocated = false;
       var oledTexW = 0;
       var oledTexH = 0;
       var atlasSurf = null;
-      var auxStripSurf = createOffscreenCanvas(doc, ATLAS_SIZE, AUX_ATLAS_H);
+      var auxStripSurf = null;
       var lastAuxAtlasSig = '';
       var oledPainter = null;
       var oledPainterProbed = false;
       var animClockMs = 10000;
       var lastOledSig = '';
+      var lastOledDiscreteSig = '';
+      var lastOledUploadMs = -1;
       var lastChassisThemeId = '';
+
+      function ensureOledSurf() {
+        if (!oledSurf && !disposed) {
+          oledSurf = createOffscreenCanvas(doc, OLED_WIDTH, OLED_HEIGHT);
+          if (!activeOledCanvas && oledSurf) {
+            activeOledCanvas = oledSurf.canvas;
+          }
+        }
+        return oledSurf;
+      }
+
+      function ensureAuxStripSurf() {
+        if (!auxStripSurf && !disposed) {
+          auxStripSurf = createOffscreenCanvas(doc, ATLAS_SIZE, AUX_ATLAS_H);
+        }
+        return auxStripSurf;
+      }
 
       /* WebGL2 或 Canvas 2D 初始化探测 */
       var gl = null;
@@ -6211,6 +6426,7 @@
         shadowDraws: 0,
         shadowSkips: 0,
         frameDraws: 0,
+        dynMeshRebuilds: 0,
       };
       var attrMutationObserver = null;
       var visibilityListenerBound = false;
@@ -6307,6 +6523,8 @@
             onAsyncAssetReady: function () {
               if (disposed || contextLost) return;
               lastOledSig = '';
+              lastOledDiscreteSig = '';
+              lastOledUploadMs = -1;
               if (constructingPainter) return;
               if (isEffectivelyPaused()) {
                 pendingRenderWhilePaused = true;
@@ -6706,8 +6924,8 @@
         var atlasTex = gl.createTexture();
         glRes.textures.push(atlasTex);
         gl.bindTexture(gl.TEXTURE_2D, atlasTex);
-        atlasSurf = renderLegendAtlasCanvas(doc, slots, grainAssets);
-        lastAuxAtlasSig = '';
+        atlasSurf = renderLegendAtlasCanvas(doc, slots, grainAssets, state.auxModels, 'shared');
+        lastAuxAtlasSig = computeAuxListSigQuick(state.auxModels);
         if (atlasSurf && atlasSurf.canvas) {
           gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlasSurf.canvas);
@@ -6884,6 +7102,8 @@
         if (disposed || !gl) return;
         contextLost = false;
         lastOledSig = '';
+        lastOledDiscreteSig = '';
+        lastOledUploadMs = -1;
         lastAuxAtlasSig = '';
         lastChassisThemeId = '';
         lastShadowGeomSig = '';
@@ -7371,49 +7591,33 @@
         };
       }
 
-      function computeControlLayouts() {
+      var _ctrlPickBoundsCache = [
+        { id: 'prism-wave', action: 'prism-wave', shape: 'box', radius: 0, minX: ARTISAN_WAVE_X - 0.458, maxX: ARTISAN_WAVE_X + 0.458, minY: 0.01, maxY: 0, minZ: ROW1_Z - 0.458, maxZ: ROW1_Z + 0.458, cx3d: ARTISAN_WAVE_X, cy3d: 0, cz3d: ROW1_Z },
+        { id: 'reset-view', action: 'reset-view', shape: 'disc', radius: 0.36, minX: CTRL_RESET_X - 0.35, maxX: CTRL_RESET_X + 0.35, minY: HW_DECK_Y_TOP - 0.02, maxY: 0, minZ: ROW1_Z - 0.35, maxZ: ROW1_Z + 0.35, cx3d: CTRL_RESET_X, cy3d: 0, cz3d: ROW1_Z },
+        { id: 'mute', action: 'mute', shape: 'knob', radius: 0, minX: CTRL_MUTE_X - 0.36, maxX: 6.91, minY: HW_DECK_Y_TOP - 0.02, maxY: 0, minZ: ROW1_Z - 0.36, maxZ: ROW1_Z + 0.36, cx3d: CTRL_MUTE_X, cy3d: 0, cz3d: ROW1_Z },
+        { id: 'close', action: 'close', shape: 'box', radius: 0, minX: CTRL_CLOSE_X - 0.345, maxX: CTRL_CLOSE_X + 0.345, minY: HW_DECK_Y_TOP - 0.02, maxY: 0, minZ: ROW1_Z - 0.345, maxZ: ROW1_Z + 0.345, cx3d: CTRL_CLOSE_X, cy3d: 0, cz3d: ROW1_Z },
+      ];
+
+      function computeControlPickBounds() {
         var pWaveY = CAP_Y_BASE + 0.018 + ctrlHoverCur[0] * 0.030 - ctrlPressCur[0] * 0.105 + artisanWaveDipCur;
         var rTopY = HW_DECK_Y_TOP + 0.125 + ctrlHoverCur[1] * 0.016 - ctrlPressCur[1] * 0.062;
         var mTopY = HW_DECK_Y_TOP + 0.245 + ctrlHoverCur[2] * 0.016 - ctrlPressCur[2] * 0.052;
         var cTopY = HW_DECK_Y_TOP + 0.125 + ctrlHoverCur[3] * 0.016 - ctrlPressCur[3] * 0.062;
+        _ctrlPickBoundsCache[0].maxY = pWaveY + 0.655;
+        _ctrlPickBoundsCache[0].cy3d = pWaveY + 0.58;
+        _ctrlPickBoundsCache[1].maxY = rTopY + 0.02;
+        _ctrlPickBoundsCache[1].cy3d = rTopY;
+        _ctrlPickBoundsCache[2].maxY = mTopY + 0.02;
+        _ctrlPickBoundsCache[2].cy3d = mTopY;
+        _ctrlPickBoundsCache[3].maxY = cTopY + 0.02;
+        _ctrlPickBoundsCache[3].cy3d = cTopY;
+        return _ctrlPickBoundsCache;
+      }
+
+      function computeControlLayouts() {
+        var specs = computeControlPickBounds();
         var isMuted = Boolean(state.hardwareState && state.hardwareState.muted);
         var isRot = Math.hypot(orbitPitchCur, orbitYawCur) > 0.015;
-
-        var specs = [
-          {
-            id: 'prism-wave',
-            minX: ARTISAN_WAVE_X - 0.458, maxX: ARTISAN_WAVE_X + 0.458,
-            minY: 0.01, maxY: pWaveY + 0.655,
-            minZ: ROW1_Z - 0.458, maxZ: ROW1_Z + 0.458,
-            cx3d: ARTISAN_WAVE_X, cy3d: pWaveY + 0.58, cz3d: ROW1_Z,
-            shape: 'box',
-          },
-          {
-            id: 'reset-view',
-            minX: CTRL_RESET_X - 0.35, maxX: CTRL_RESET_X + 0.35,
-            minY: HW_DECK_Y_TOP - 0.02, maxY: rTopY + 0.02,
-            minZ: ROW1_Z - 0.35, maxZ: ROW1_Z + 0.35,
-            cx3d: CTRL_RESET_X, cy3d: rTopY, cz3d: ROW1_Z,
-            radius: 0.36,
-            shape: 'disc',
-          },
-          {
-            id: 'mute',
-            minX: CTRL_MUTE_X - 0.36, maxX: 6.91,
-            minY: HW_DECK_Y_TOP - 0.02, maxY: mTopY + 0.02,
-            minZ: ROW1_Z - 0.36, maxZ: ROW1_Z + 0.36,
-            cx3d: CTRL_MUTE_X, cy3d: mTopY, cz3d: ROW1_Z,
-            shape: 'knob',
-          },
-          {
-            id: 'close',
-            minX: CTRL_CLOSE_X - 0.345, maxX: CTRL_CLOSE_X + 0.345,
-            minY: HW_DECK_Y_TOP - 0.02, maxY: cTopY + 0.02,
-            minZ: ROW1_Z - 0.345, maxZ: ROW1_Z + 0.345,
-            cx3d: CTRL_CLOSE_X, cy3d: cTopY, cz3d: ROW1_Z,
-            shape: 'box',
-          },
-        ];
 
         var list = [];
         for (var i = 0; i < specs.length; i++) {
@@ -8082,29 +8286,64 @@
           var sUniform = mixScalar(1.0, CAP_SELECT_SCALE, liftClamped);
           var sy = mixScalar(coord.rowScaleY, CAP_SELECT_SCALE, liftClamped);
 
+          var trsRx = basePitch;
+          var trsRy = 0;
+          var trsRz = baseRoll;
+          var trsSx = 1;
+          var trsPivot = 0;
           if (lift > 0.005) {
-            var localPivot = CAP_HEIGHT * 0.20;
-            var pivotY = localPivot * sy;
-            var rx = clamp(
+            trsPivot = CAP_HEIGHT * 0.20;
+            trsRx = clamp(
               basePitch + (liftPitchCur + gyroPitchCur + zeroGPitchAdd) * liftClamped,
               -26.0 * DEG2RAD,
               26.0 * DEG2RAD
             );
-            var ry = (liftYawCur + gyroYawCur + zeroGYawAdd) * liftClamped;
-            var rz = clamp(
+            trsRy = (liftYawCur + gyroYawCur + zeroGYawAdd) * liftClamped;
+            trsRz = clamp(
               baseRoll + (liftRollCur + gyroRollCur) * liftClamped,
               -26.0 * DEG2RAD,
               26.0 * DEG2RAD
             );
-            var rotM = mat4FromTRS(keyLocalMats[i], tx, ty + pivotY, tz, rx, ry, rz, sUniform, sy, sUniform);
-            rotM[12] -= rotM[4] * localPivot;
-            rotM[13] -= rotM[5] * localPivot;
-            rotM[14] -= rotM[6] * localPivot;
-            if (state.selectedZ === zVal || state.selectedZ === sl.z) {
-              mat4Invert(invLiftCapMat, rotM);
+            trsSx = sUniform;
+          }
+          var tBase = i * 8;
+          var trsChanged =
+            keyTrsCache[tBase] !== tx ||
+            keyTrsCache[tBase + 1] !== ty ||
+            keyTrsCache[tBase + 2] !== tz ||
+            keyTrsCache[tBase + 3] !== trsRx ||
+            keyTrsCache[tBase + 4] !== trsRy ||
+            keyTrsCache[tBase + 5] !== trsRz ||
+            keyTrsCache[tBase + 6] !== trsSx ||
+            keyTrsCache[tBase + 7] !== sy;
+          if (trsChanged) {
+            keyTrsCache[tBase] = tx;
+            keyTrsCache[tBase + 1] = ty;
+            keyTrsCache[tBase + 2] = tz;
+            keyTrsCache[tBase + 3] = trsRx;
+            keyTrsCache[tBase + 4] = trsRy;
+            keyTrsCache[tBase + 5] = trsRz;
+            keyTrsCache[tBase + 6] = trsSx;
+            keyTrsCache[tBase + 7] = sy;
+            if (trsPivot > 0) {
+              var rotM = mat4FromTRS(keyLocalMats[i], tx, ty + trsPivot * sy, tz, trsRx, trsRy, trsRz, trsSx, sy, trsSx);
+              rotM[12] -= rotM[4] * trsPivot;
+              rotM[13] -= rotM[5] * trsPivot;
+              rotM[14] -= rotM[6] * trsPivot;
+            } else {
+              mat4FromTRS(keyLocalMats[i], tx, ty, tz, trsRx, trsRy, trsRz, trsSx, sy, trsSx);
             }
-          } else {
-            mat4FromTRS(keyLocalMats[i], tx, ty, tz, basePitch, 0, baseRoll, 1, sy, 1);
+            keyLocalInvValid[i] = 0;
+          }
+          if (lift > 0.005 && (state.selectedZ === zVal || state.selectedZ === sl.z)) {
+            if (!keyLocalInvValid[i]) {
+              if (mat4Invert(keyLocalInvMats[i], keyLocalMats[i])) {
+                keyLocalInvValid[i] = 1;
+              }
+            }
+            if (keyLocalInvValid[i]) {
+              invLiftCapMat.set(keyLocalInvMats[i]);
+            }
           }
         }
 
@@ -8184,29 +8423,64 @@
             var asUni = mixScalar(1.0, CAP_SELECT_SCALE, aLiftClamped);
             var asy = mixScalar(aCoord.rowScaleY, CAP_SELECT_SCALE, aLiftClamped);
 
+            var aTrsRx = aBasePitch;
+            var aTrsRy = 0;
+            var aTrsRz = aBaseRoll;
+            var aTrsSx = 1;
+            var aTrsPivot = 0;
             if (aLift > 0.005) {
-              var aLocalPivot = CAP_HEIGHT * 0.20;
-              var aPivotY = aLocalPivot * asy;
-              var arx = clamp(
+              aTrsPivot = CAP_HEIGHT * 0.20;
+              aTrsRx = clamp(
                 aBasePitch + (liftPitchCur + gyroPitchCur + zeroGPitchAdd) * aLiftClamped,
                 -26.0 * DEG2RAD,
                 26.0 * DEG2RAD
               );
-              var ary = (liftYawCur + gyroYawCur + zeroGYawAdd) * aLiftClamped;
-              var arz = clamp(
+              aTrsRy = (liftYawCur + gyroYawCur + zeroGYawAdd) * aLiftClamped;
+              aTrsRz = clamp(
                 aBaseRoll + (liftRollCur + gyroRollCur) * aLiftClamped,
                 -26.0 * DEG2RAD,
                 26.0 * DEG2RAD
               );
-              var aRotM = mat4FromTRS(auxKeyLocalMats[ai], atx, aty + aPivotY, atz, arx, ary, arz, asUni, asy, asUni);
-              aRotM[12] -= aRotM[4] * aLocalPivot;
-              aRotM[13] -= aRotM[5] * aLocalPivot;
-              aRotM[14] -= aRotM[6] * aLocalPivot;
-              if (state.selectedAuxIndex === ai) {
-                mat4Invert(invLiftCapMat, aRotM);
+              aTrsSx = asUni;
+            }
+            var atBase = ai * 8;
+            var aTrsChanged =
+              auxKeyTrsCache[atBase] !== atx ||
+              auxKeyTrsCache[atBase + 1] !== aty ||
+              auxKeyTrsCache[atBase + 2] !== atz ||
+              auxKeyTrsCache[atBase + 3] !== aTrsRx ||
+              auxKeyTrsCache[atBase + 4] !== aTrsRy ||
+              auxKeyTrsCache[atBase + 5] !== aTrsRz ||
+              auxKeyTrsCache[atBase + 6] !== aTrsSx ||
+              auxKeyTrsCache[atBase + 7] !== asy;
+            if (aTrsChanged) {
+              auxKeyTrsCache[atBase] = atx;
+              auxKeyTrsCache[atBase + 1] = aty;
+              auxKeyTrsCache[atBase + 2] = atz;
+              auxKeyTrsCache[atBase + 3] = aTrsRx;
+              auxKeyTrsCache[atBase + 4] = aTrsRy;
+              auxKeyTrsCache[atBase + 5] = aTrsRz;
+              auxKeyTrsCache[atBase + 6] = aTrsSx;
+              auxKeyTrsCache[atBase + 7] = asy;
+              if (aTrsPivot > 0) {
+                var aRotM = mat4FromTRS(auxKeyLocalMats[ai], atx, aty + aTrsPivot * asy, atz, aTrsRx, aTrsRy, aTrsRz, aTrsSx, asy, aTrsSx);
+                aRotM[12] -= aRotM[4] * aTrsPivot;
+                aRotM[13] -= aRotM[5] * aTrsPivot;
+                aRotM[14] -= aRotM[6] * aTrsPivot;
+              } else {
+                mat4FromTRS(auxKeyLocalMats[ai], atx, aty, atz, aTrsRx, aTrsRy, aTrsRz, aTrsSx, asy, aTrsSx);
               }
-            } else {
-              mat4FromTRS(auxKeyLocalMats[ai], atx, aty, atz, aBasePitch, 0, aBaseRoll, 1, asy, 1);
+              auxKeyLocalInvValid[ai] = 0;
+            }
+            if (aLift > 0.005 && state.selectedAuxIndex === ai) {
+              if (!auxKeyLocalInvValid[ai]) {
+                if (mat4Invert(auxKeyLocalInvMats[ai], auxKeyLocalMats[ai])) {
+                  auxKeyLocalInvValid[ai] = 1;
+                }
+              }
+              if (auxKeyLocalInvValid[ai]) {
+                invLiftCapMat.set(auxKeyLocalInvMats[ai]);
+              }
             }
           }
         }
@@ -9091,14 +9365,16 @@
         if (atlasSurf && atlasSurf.ctx) {
           renderAuxAtlasCellsToContext(atlasSurf.ctx, state.auxModels, false);
         }
-        if (auxStripSurf && auxStripSurf.ctx) {
-          renderAuxAtlasCellsToContext(auxStripSurf.ctx, state.auxModels, true);
+        var useSubTex = Boolean(gl && glObjs && glObjs.atlasTex && typeof gl.texSubImage2D === 'function');
+        var stripSurf = useSubTex ? ensureAuxStripSurf() : auxStripSurf;
+        if (stripSurf && stripSurf.ctx) {
+          renderAuxAtlasCellsToContext(stripSurf.ctx, state.auxModels, true);
         }
         if (gl && glObjs && glObjs.atlasTex) {
           gl.bindTexture(gl.TEXTURE_2D, glObjs.atlasTex);
           gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-          if (typeof gl.texSubImage2D === 'function' && auxStripSurf && auxStripSurf.canvas) {
-            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, AUX_ATLAS_Y0, gl.RGBA, gl.UNSIGNED_BYTE, auxStripSurf.canvas);
+          if (useSubTex && stripSurf && stripSurf.canvas) {
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, AUX_ATLAS_Y0, gl.RGBA, gl.UNSIGNED_BYTE, stripSurf.canvas);
           } else if (atlasSurf && atlasSurf.canvas) {
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlasSurf.canvas);
           }
@@ -9136,10 +9412,6 @@
         /* V14 静态艺术为主：平时静止不重复重绘 1600x480 海报；仅在切模型/深浅叠化、切档滑块滑动或状态签名变化时刷新贴图 */
         var continuousZeroGOled = false;
 
-        var qOrbP = Math.round(orbitPitchCur * 250);
-        var qOrbY = Math.round(orbitYawCur * 250);
-        var qPulse = Math.round(energyPulseVal * 24);
-
         var oledSig = [
           painter ? 'cyber' : 'builtin',
           palette.id,
@@ -9171,14 +9443,26 @@
           di.pressedEffort || '',
           di.orchLatched ? 1 : 0,
           di.orchUnsupported ? 1 : 0,
-          di.badgeText || '',
           lvSig,
-          qOrbP,
-          qOrbY,
-          qPulse,
         ].join('|');
 
-        if (isPainterAnim || continuousZeroGOled || oledSig !== lastOledSig) {
+        var stateSwitched = oledSig !== lastOledDiscreteSig || lastOledSig === '';
+        var firstUpload = !oledTexAllocated || lastOledUploadMs < 0;
+        var needOledWork = isPainterAnim || continuousZeroGOled || stateSwitched || oledSig !== lastOledSig;
+
+        if (needOledWork) {
+          /* 高刷限频（最高 60Hz, >=15.5ms）：状态切换首帧与初始首帧立即可传，连续动画推进帧受 15.5ms 最小上传间隔保护 */
+          if (
+            !firstUpload &&
+            !stateSwitched &&
+            isPainterAnim &&
+            animClockMs >= lastOledUploadMs &&
+            (animClockMs - lastOledUploadMs) < 15.5
+          ) {
+            idle = false;
+            return computeEffortButtonLayouts();
+          }
+
           var uploadCanvas = null;
           if (painter && typeof painter.render === 'function') {
             try {
@@ -9223,12 +9507,17 @@
             }
           }
 
-          if (!uploadCanvas && oledSurf) {
-            var builtinCaps = computeScreenEffortCapsules(di, effortPressCur, effortHoverCur);
-            renderOledDeckCanvas(oledSurf, di, palette, accentHex, Boolean(tp.isMono), grainAssets, builtinCaps);
-            uploadCanvas = oledSurf.canvas;
+          if (!uploadCanvas) {
+            var fallbackOledSurf = ensureOledSurf();
+            if (fallbackOledSurf) {
+              var builtinCaps = computeScreenEffortCapsules(di, effortPressCur, effortHoverCur);
+              renderOledDeckCanvas(fallbackOledSurf, di, palette, accentHex, Boolean(tp.isMono), grainAssets, builtinCaps);
+              uploadCanvas = fallbackOledSurf.canvas;
+            }
           }
 
+          lastOledUploadMs = animClockMs;
+          lastOledDiscreteSig = oledSig;
           lastOledSig = (isPainterAnim || continuousZeroGOled) ? '__anim__' : oledSig;
 
           if (uploadCanvas) {
@@ -9447,15 +9736,15 @@
 
       function computeDynMeshSignature(palette, activeSwitchInfo, ambientMul, hwCtrl, fluxCfg) {
         var q500 = function (v) { return Math.round((Number(v) || 0) * 500); };
+        var q100 = function (v) { return Math.round((Number(v) || 0) * 100); };
         var parts = [
           palette.id,
           enableAuxPad ? 1 : 0,
-          q500(orchLatchCur),
-          q500(ambientMul),
-          q500(energyPulseVal),
+          Math.round(clamp(orchLatchCur, 0, 1) * 20),
+          q100(ambientMul),
           hwCtrl.muted ? 1 : 0,
           hwCtrl.effortTier,
-          q500(hwCtrl.orbitMag),
+          hwCtrl.orbitMag > 0.015 ? Math.round(clamp(hwCtrl.orbitMag, 0, 0.1) * 40) : 0,
           q500(hwCtrl.prismHover),
           q500(hwCtrl.prismPress),
           q500(hwCtrl.prismWaveDip),
@@ -9474,9 +9763,6 @@
             activeSwitchInfo.slotIndex,
             q500(activeSwitchInfo.x),
             q500(activeSwitchInfo.z),
-            q500(activeSwitchInfo.capX),
-            q500(activeSwitchInfo.capZ),
-            q500(activeSwitchInfo.lift),
             activeSwitchInfo.stemRgb ? (q500(activeSwitchInfo.stemRgb[0]) + ',' + q500(activeSwitchInfo.stemRgb[1]) + ',' + q500(activeSwitchInfo.stemRgb[2])) : '',
             activeSwitchInfo.ledRgb ? (q500(activeSwitchInfo.ledRgb[0]) + ',' + q500(activeSwitchInfo.ledRgb[1]) + ',' + q500(activeSwitchInfo.ledRgb[2])) : ''
           );
@@ -9492,15 +9778,9 @@
             q500(fluxCfg.originY),
             q500(fluxCfg.originZ),
             q500(fluxCfg.gapH),
-            q500(fluxCfg.phaseT),
-            q500(fluxCfg.visAlpha),
-            q500(fluxCfg.energyPulse),
-            q500(fluxCfg.slamCollapse),
-            q500(fluxCfg.gyroPitch),
-            q500(fluxCfg.gyroRoll),
-            q500(fluxCfg.orchBlend),
-            q500(fluxCfg.localRight[0]), q500(fluxCfg.localRight[1]), q500(fluxCfg.localRight[2]),
-            q500(fluxCfg.localUp[0]), q500(fluxCfg.localUp[1]), q500(fluxCfg.localUp[2]),
+            q100(fluxCfg.visAlpha),
+            Math.round(clamp(fluxCfg.slamCollapse || 0, 0, 1) * 20),
+            Math.round(clamp(fluxCfg.orchBlend || 0, 0, 1) * 20),
             q500(fluxCfg.elemRgb[0]), q500(fluxCfg.elemRgb[1]), q500(fluxCfg.elemRgb[2]),
             q500(fluxCfg.secondaryRgb[0]), q500(fluxCfg.secondaryRgb[1]), q500(fluxCfg.secondaryRgb[2])
           );
@@ -9567,66 +9847,54 @@
         var prismCfgVec = [rimToneIdx, sweepWaveX, sweepWaveWeight, energyPulseVal];
 
         var fluxCfg = null;
-        if (switchInfo && switchInfo.lift > 0.02 && ambientMul > 0.01) {
+        var activeSwitchForMesh = switchInfo && switchInfo.lift > 0.04 ? switchInfo : null;
+        if (activeSwitchForMesh && ambientMul > 0.01) {
           var slamActive = isConfirmSlamActiveGlobal();
-          var slamCollapse = slamActive ? clamp(1.0 - switchInfo.lift, 0.0, 1.0) : 0.0;
+          var slamCollapse = slamActive ? clamp(1.0 - activeSwitchForMesh.lift, 0.0, 1.0) : 0.0;
           var airGapBaseY = PLATE_Y + 0.245;
-          var capUnderY = CAP_Y_BASE + switchInfo.lift * effortLiftHeightCur + zeroGBobCur * switchInfo.lift;
+          var tierLiftTarget = EFFORT_TIER_LIFTS[effortTierCur] !== undefined ? EFFORT_TIER_LIFTS[effortTierCur] : effortLiftHeightCur;
+          var capUnderY = CAP_Y_BASE + tierLiftTarget;
           var airGapH = Math.max(0.035, capUnderY - airGapBaseY);
-          var fluxVis =
-            clamp(ambientMul * 1.24, 0.0, 1.0) *
-            smoothstepScalar(0.02, 0.26, switchInfo.lift) *
-            (0.88 + 0.18 * zeroGEnvCur + energyPulseVal * 0.34) *
-            (1.0 - slamCollapse * 0.76);
-          var refInvMat = switchInfo.isAux ? invAuxChassisMat : invChassisMat;
-          var localRight = [
-            refInvMat[0] * camRightVec[0] + refInvMat[4] * camRightVec[1] + refInvMat[8] * camRightVec[2],
-            refInvMat[1] * camRightVec[0] + refInvMat[5] * camRightVec[1] + refInvMat[9] * camRightVec[2],
-            refInvMat[2] * camRightVec[0] + refInvMat[6] * camRightVec[1] + refInvMat[10] * camRightVec[2],
-          ];
-          var localUp = [
-            refInvMat[0] * camUpVec[0] + refInvMat[4] * camUpVec[1] + refInvMat[8] * camUpVec[2],
-            refInvMat[1] * camUpVec[0] + refInvMat[5] * camUpVec[1] + refInvMat[9] * camUpVec[2],
-            refInvMat[2] * camUpVec[0] + refInvMat[6] * camUpVec[1] + refInvMat[10] * camUpVec[2],
-          ];
-          var crystalCols = resolveFluxCrystalColors(switchInfo);
+          var fluxVis = clamp(ambientMul * 1.24, 0.0, 1.0) * (1.0 - slamCollapse * 0.76);
+          var crystalCols = resolveFluxCrystalColors(activeSwitchForMesh);
           fluxCfg = {
-            isAux: Boolean(switchInfo.isAux),
+            isAux: Boolean(activeSwitchForMesh.isAux),
             effortTier: effortTierCur,
-            originX: mixScalar(switchInfo.x, switchInfo.capX, 0.36),
+            originX: activeSwitchForMesh.x,
             originY: airGapBaseY,
-            originZ: mixScalar(switchInfo.z, switchInfo.capZ, 0.36),
+            originZ: activeSwitchForMesh.z,
             gapH: airGapH,
-            phaseT: fluxPhase,
+            phaseT: 0,
             visAlpha: fluxVis,
-            energyPulse: energyPulseVal,
+            energyPulse: 0,
             slamCollapse: slamCollapse,
-            gyroPitch: gyroPitchCur,
-            gyroRoll: gyroRollCur,
+            gyroPitch: 0,
+            gyroRoll: 0,
             elemRgb: crystalCols.primary,
             secondaryRgb: crystalCols.secondary,
             orchBlend: clamp(orchLatchCur, 0.0, 1.0),
-            localRight: localRight,
-            localUp: localUp,
           };
         }
 
         var hwCtrlParams = buildHardwareCtrlParams();
-        var activeSwitchForMesh = switchInfo && switchInfo.lift > 0.04 ? switchInfo : null;
         var dynMeshSig = computeDynMeshSignature(palette, activeSwitchForMesh, ambientMul, hwCtrlParams, fluxCfg);
         if (dynMeshSig !== lastDynMeshSig || glObjs.widgetsGpu.count <= 0) {
+          var steadySwitchForMesh = activeSwitchForMesh
+            ? Object.assign({}, activeSwitchForMesh, { lift: 1.0 })
+            : null;
           var dynMesh = buildDynamicWidgetsMesh({
             palette: palette,
             includeAuxPad: enableAuxPad,
-            switchInfo: activeSwitchForMesh,
+            switchInfo: steadySwitchForMesh,
             orchLatchGlow: clamp(orchLatchCur, 0.0, 1.0),
             ambientMul: ambientMul,
-            energyPulse: energyPulseVal,
+            energyPulse: 0,
             hwCtrl: hwCtrlParams,
             fluxCfg: fluxCfg,
           });
           uploadSolidMesh(glObjs.widgetsGpu, dynMesh, gl.DYNAMIC_DRAW);
           lastDynMeshSig = dynMeshSig;
+          perfStats.dynMeshRebuilds++;
         }
 
         var shPass = glObjs.shadowPass;
@@ -9899,6 +10167,7 @@
           );
 
           gl.useProgram(glObjs.progSolid);
+          gl.uniform4fv(glObjs.uSolid.liftCapShadow, liftShadowVec);
           gl.bindVertexArray(glObjs.widgetsGpu.vao);
           if (glObjs.widgetsGpu.mainFluxCount > 0) {
             gl.uniformMatrix4fv(glObjs.uSolid.model, false, chassisMat);
@@ -10215,7 +10484,6 @@
         syncOffscreenTextures(palette, accentHex);
 
         var switchInfo = resolveActiveSwitchInfo(palette);
-        computeControlLayouts();
 
         if (rendererMode === 'webgl2') {
           renderWebGL2Frame(palette, switchInfo);
@@ -10442,8 +10710,6 @@
       /* ============================================================================
        * 13. 真 3D 射线反投影拾取 pick(clientX, clientY) 与双外设投影矩形导出
        * ============================================================================ */
-      var scratchInvMat = new Float32Array(16);
-
       function pick(clientX, clientY) {
         if (disposed) return null;
         var rect = readCanvasCssRect(false);
@@ -10461,63 +10727,133 @@
         var ndcX = (lx / rw) * 2.0 - 1.0;
         var ndcY = 1.0 - (ly / rh) * 2.0;
 
-        var nearW = transformPoint4(invViewProjMat, ndcX, ndcY, -1.0, 1.0);
-        var farW = transformPoint4(invViewProjMat, ndcX, ndcY, 1.0, 1.0);
-        if (Math.abs(nearW[3]) < 1e-7 || Math.abs(farW[3]) < 1e-7) return null;
+        var ivp = invViewProjMat;
+        var nearX = ivp[0] * ndcX + ivp[4] * ndcY - ivp[8] + ivp[12];
+        var nearY = ivp[1] * ndcX + ivp[5] * ndcY - ivp[9] + ivp[13];
+        var nearZ = ivp[2] * ndcX + ivp[6] * ndcY - ivp[10] + ivp[14];
+        var nearW = ivp[3] * ndcX + ivp[7] * ndcY - ivp[11] + ivp[15];
 
-        var oxW = nearW[0] / nearW[3], oyW = nearW[1] / nearW[3], ozW = nearW[2] / nearW[3];
-        var fxW = farW[0] / farW[3], fyW = farW[1] / farW[3], fzW = farW[2] / farW[3];
-        var dxW = fxW - oxW, dyW = fyW - oyW, dzW = fzW - ozW;
-        var lenW = Math.hypot(dxW, dyW, dzW) || 1;
+        var farX = ivp[0] * ndcX + ivp[4] * ndcY + ivp[8] + ivp[12];
+        var farY = ivp[1] * ndcX + ivp[5] * ndcY + ivp[9] + ivp[13];
+        var farZ = ivp[2] * ndcX + ivp[6] * ndcY + ivp[10] + ivp[14];
+        var farW = ivp[3] * ndcX + ivp[7] * ndcY + ivp[11] + ivp[15];
+
+        if (Math.abs(nearW) < 1e-7 || Math.abs(farW) < 1e-7) return null;
+
+        var oxW = nearX / nearW, oyW = nearY / nearW, ozW = nearZ / nearW;
+        var dxW = farX / farW - oxW, dyW = farY / farW - oyW, dzW = farZ / farW - ozW;
+        var lenW = Math.sqrt(dxW * dxW + dyW * dyW + dzW * dzW) || 1;
         dxW /= lenW; dyW /= lenW; dzW /= lenW;
 
-        var oCh = transformPoint4(invChassisMat, oxW, oyW, ozW, 1.0);
-        var dCh = transformDir3(invChassisMat, dxW, dyW, dzW);
-        var rox = oCh[0], roy = oCh[1], roz = oCh[2];
-        var rdx = dCh[0], rdy = dCh[1], rdz = dCh[2];
+        var icm = invChassisMat;
+        var rox = icm[0] * oxW + icm[4] * oyW + icm[8] * ozW + icm[12];
+        var roy = icm[1] * oxW + icm[5] * oyW + icm[9] * ozW + icm[13];
+        var roz = icm[2] * oxW + icm[6] * oyW + icm[10] * ozW + icm[14];
+        var rdx = icm[0] * dxW + icm[4] * dyW + icm[8] * dzW;
+        var rdy = icm[1] * dxW + icm[5] * dyW + icm[9] * dzW;
+        var rdz = icm[2] * dxW + icm[6] * dyW + icm[10] * dzW;
+        var rLen = Math.sqrt(rdx * rdx + rdy * rdy + rdz * rdz) || 1;
+        rdx /= rLen; rdy /= rLen; rdz /= rLen;
 
         var bestHit = null;
         var bestT = Infinity;
+        var bestHitKind = null;
+        var bestHitIdx = -1;
 
-        /* 1. 精确逆变换检测主盘全部 90 颗球帽（统一以世界空间射线距离 bestT 比较前后遮挡） */
         var midH = CAP_HEIGHT * 0.50;
         var topHitHalf = CAP_TOP_HALF + 0.032;
-        for (var i = 0; i < slotCount; i++) {
-          var sl = slots[i];
-          var zVal = sl.slotZ !== undefined ? sl.slotZ : sl.z;
-          var tKey = -1;
+        var botHitHalf = CAP_BASE_HALF * 0.96;
+        var capMaxY = CAP_HEIGHT + 0.015;
+        var keyZoneTopY = CAP_Y_BASE + EFFORT_TIER_LIFTS[3] + 1.25;
+        var chM = chassisMat;
+        var invRdx = Math.abs(rdx) >= 1e-8 ? 1.0 / rdx : 0;
+        var invRdy = Math.abs(rdy) >= 1e-8 ? 1.0 / rdy : 0;
+        var invRdz = Math.abs(rdz) >= 1e-8 ? 1.0 / rdz : 0;
 
-          var invCap = mat4Invert(scratchInvMat, keyLocalMats[i]);
-          if (invCap) {
-            var oCap = transformPoint4(invCap, rox, roy, roz, 1.0);
-            var dCap = transformDir3(invCap, rdx, rdy, rdz);
-            var tTopL = intersectRayAABB(
-              oCap[0], oCap[1], oCap[2], dCap[0], dCap[1], dCap[2],
-              -topHitHalf, midH, -topHitHalf - 0.025,
-              topHitHalf, CAP_HEIGHT + 0.015, topHitHalf
-            );
-            var tBotL = intersectRayAABB(
-              oCap[0], oCap[1], oCap[2], dCap[0], dCap[1], dCap[2],
-              -CAP_BASE_HALF * 0.96, 0.0, -CAP_BASE_HALF * 0.96,
-              CAP_BASE_HALF * 0.96, midH, CAP_BASE_HALF * 0.96
-            );
-            if (tTopL >= 0 && tBotL >= 0) tKey = Math.min(tTopL, tBotL);
-            else tKey = tTopL >= 0 ? tTopL : tBotL;
+        function checkMainKeySlotFast(i) {
+          var lm = keyLocalMats[i];
+          var lmx = lm[12], lmy = lm[13], lmz = lm[14];
+          var bMinX = lmx - 0.85, bMaxX = lmx + 0.85;
+          var bMinY = lmy - 0.36, bMaxY = lmy + 0.98;
+          var bMinZ = lmz - 0.85, bMaxZ = lmz + 0.85;
+          var tmin = -Infinity, tmax = Infinity;
+          if (invRdx === 0) {
+            if (rox < bMinX || rox > bMaxX) return;
+          } else {
+            var tx1 = (bMinX - rox) * invRdx, tx2 = (bMaxX - rox) * invRdx;
+            if (tx1 > tx2) { var ttmp = tx1; tx1 = tx2; tx2 = ttmp; }
+            if (tx1 > tmin) tmin = tx1;
+            if (tx2 < tmax) tmax = tx2;
+            if (tmin > tmax) return;
+          }
+          if (invRdy === 0) {
+            if (roy < bMinY || roy > bMaxY) return;
+          } else {
+            var ty1 = (bMinY - roy) * invRdy, ty2 = (bMaxY - roy) * invRdy;
+            if (ty1 > ty2) { var ttmp2 = ty1; ty1 = ty2; ty2 = ttmp2; }
+            if (ty1 > tmin) tmin = ty1;
+            if (ty2 < tmax) tmax = ty2;
+            if (tmin > tmax) return;
+          }
+          if (invRdz === 0) {
+            if (roz < bMinZ || roz > bMaxZ) return;
+          } else {
+            var tz1 = (bMinZ - roz) * invRdz, tz2 = (bMaxZ - roz) * invRdz;
+            if (tz1 > tz2) { var ttmp3 = tz1; tz1 = tz2; tz2 = ttmp3; }
+            if (tz1 > tmin) tmin = tz1;
+            if (tz2 < tmax) tmax = tz2;
+            if (tmin > tmax) return;
+          }
+          if (tmax < 0) return;
+          var tBroad = tmin >= 0 ? tmin : tmax;
+          if (tBroad > bestT) return;
 
-            if (tKey >= 0) {
-              var hitLocal = [
-                oCap[0] + dCap[0] * tKey,
-                oCap[1] + dCap[1] * tKey,
-                oCap[2] + dCap[2] * tKey,
-              ];
-              var hitCh = transformPoint4(keyLocalMats[i], hitLocal[0], hitLocal[1], hitLocal[2], 1.0);
-              var hitW = transformPoint4(chassisMat, hitCh[0], hitCh[1], hitCh[2], 1.0);
-              tKey = Math.hypot(hitW[0] - oxW, hitW[1] - oyW, hitW[2] - ozW);
-            }
+          var invCap = keyLocalInvMats[i];
+          if (!keyLocalInvValid[i]) {
+            if (!mat4Invert(invCap, lm)) return;
+            keyLocalInvValid[i] = 1;
           }
 
-          if (tKey >= 0 && tKey < bestT) {
+          var oCx = invCap[0] * rox + invCap[4] * roy + invCap[8] * roz + invCap[12];
+          var oCy = invCap[1] * rox + invCap[5] * roy + invCap[9] * roz + invCap[13];
+          var oCz = invCap[2] * rox + invCap[6] * roy + invCap[10] * roz + invCap[14];
+          var dCx = invCap[0] * rdx + invCap[4] * rdy + invCap[8] * rdz;
+          var dCy = invCap[1] * rdx + invCap[5] * rdy + invCap[9] * rdz;
+          var dCz = invCap[2] * rdx + invCap[6] * rdy + invCap[10] * rdz;
+          var dCLen = Math.sqrt(dCx * dCx + dCy * dCy + dCz * dCz) || 1;
+          dCx /= dCLen; dCy /= dCLen; dCz /= dCLen;
+
+          var tTopL = intersectRayAABB(
+            oCx, oCy, oCz, dCx, dCy, dCz,
+            -topHitHalf, midH, -topHitHalf - 0.025,
+            topHitHalf, capMaxY, topHitHalf
+          );
+          var tBotL = intersectRayAABB(
+            oCx, oCy, oCz, dCx, dCy, dCz,
+            -botHitHalf, 0.0, -botHitHalf,
+            botHitHalf, midH, botHitHalf
+          );
+          var tLocal = (tTopL >= 0 && tBotL >= 0) ? Math.min(tTopL, tBotL) : (tTopL >= 0 ? tTopL : tBotL);
+          if (tLocal < 0) return;
+
+          var hlx = oCx + dCx * tLocal;
+          var hly = oCy + dCy * tLocal;
+          var hlz = oCz + dCz * tLocal;
+          var hChX = lm[0] * hlx + lm[4] * hly + lm[8] * hlz + lm[12];
+          var hChY = lm[1] * hlx + lm[5] * hly + lm[9] * hlz + lm[13];
+          var hChZ = lm[2] * hlx + lm[6] * hly + lm[10] * hlz + lm[14];
+          var hWX = chM[0] * hChX + chM[4] * hChY + chM[8] * hChZ + chM[12];
+          var hWY = chM[1] * hChX + chM[5] * hChY + chM[9] * hChZ + chM[13];
+          var hWZ = chM[2] * hChX + chM[6] * hChY + chM[10] * hChZ + chM[14];
+          var dwx = hWX - oxW, dwy = hWY - oyW, dwz = hWZ - ozW;
+          var tKey = Math.sqrt(dwx * dwx + dwy * dwy + dwz * dwz);
+
+          if (tKey < bestT) {
+            var sl = slots[i];
+            var zVal = sl.slotZ !== undefined ? sl.slotZ : sl.z;
             bestT = tKey;
+            bestHitKind = 'key';
+            bestHitIdx = i;
             bestHit = {
               kind: 'key',
               z: sl.z,
@@ -10527,61 +10863,125 @@
           }
         }
 
-        /* 1b. 精确逆变换检测右侧 2×3 副盘矩阵 auxChassisMat 与 6 颗副盘球帽局部矩阵 */
-        var oAux = null;
-        var dAux = null;
-        if (enableAuxPad) {
-          oAux = transformPoint4(invAuxChassisMat, oxW, oyW, ozW, 1.0);
-          dAux = transformDir3(invAuxChassisMat, dxW, dyW, dzW);
-          var aox = oAux[0], aoy = oAux[1], aoz = oAux[2];
-          var adx = dAux[0], ady = dAux[1], adz = dAux[2];
-
-          for (var ak = 0; ak < AUX_SLOT_COUNT; ak++) {
-            var aSlot = state.auxModels[ak] || DEFAULT_AUX_MODELS[ak];
-            var tAuxKey = -1;
-            var invAuxCap = mat4Invert(scratchInvMat, auxKeyLocalMats[ak]);
-            if (invAuxCap) {
-              var oACap = transformPoint4(invAuxCap, aox, aoy, aoz, 1.0);
-              var dACap = transformDir3(invAuxCap, adx, ady, adz);
-              var tATop = intersectRayAABB(
-                oACap[0], oACap[1], oACap[2], dACap[0], dACap[1], dACap[2],
-                -topHitHalf, midH, -topHitHalf - 0.025,
-                topHitHalf, CAP_HEIGHT + 0.015, topHitHalf
-              );
-              var tABot = intersectRayAABB(
-                oACap[0], oACap[1], oACap[2], dACap[0], dACap[1], dACap[2],
-                -CAP_BASE_HALF * 0.96, 0.0, -CAP_BASE_HALF * 0.96,
-                CAP_BASE_HALF * 0.96, midH, CAP_BASE_HALF * 0.96
-              );
-              if (tATop >= 0 && tABot >= 0) tAuxKey = Math.min(tATop, tABot);
-              else tAuxKey = tATop >= 0 ? tATop : tABot;
-
-              if (tAuxKey >= 0) {
-                var aHitL = [
-                  oACap[0] + dACap[0] * tAuxKey,
-                  oACap[1] + dACap[1] * tAuxKey,
-                  oACap[2] + dACap[2] * tAuxKey,
-                ];
-                var aHitCh = transformPoint4(auxKeyLocalMats[ak], aHitL[0], aHitL[1], aHitL[2], 1.0);
-                var aHitW = transformPoint4(auxChassisMat, aHitCh[0], aHitCh[1], aHitCh[2], 1.0);
-                tAuxKey = Math.hypot(aHitW[0] - oxW, aHitW[1] - oyW, aHitW[2] - ozW);
-              }
-            }
-
-            if (tAuxKey >= 0 && tAuxKey < bestT) {
-              bestT = tAuxKey;
-              bestHit = {
-                kind: 'aux-key',
-                auxIndex: ak,
-                id: aSlot.id,
-                available: Boolean(aSlot.available),
-              };
+        /* 1. 主盘整盘外包围盒快速剔除 + 上次命中键优先 + 7行分桶剪枝 + 缓存逆矩阵检测 */
+        var mainKeysBroadT = intersectRayAABB(
+          rox, roy, roz, rdx, rdy, rdz,
+          -CASE_HALF_W, PLATE_Y - 0.15, CASE_Z_MIN,
+          CASE_HALF_W, keyZoneTopY, CASE_Z_MAX
+        );
+        if (mainKeysBroadT >= 0) {
+          var skipMainIdx = (lastPickKind === 'key' && lastPickIdx >= 0 && lastPickIdx < slotCount) ? lastPickIdx : -1;
+          if (skipMainIdx >= 0) {
+            checkMainKeySlotFast(skipMainIdx);
+          }
+          for (var rbi = 0; rbi < mainRowBuckets.length; rbi++) {
+            var rb = mainRowBuckets[rbi];
+            var tRow = intersectRayAABB(
+              rox, roy, roz, rdx, rdy, rdz,
+              rb.minX, PLATE_Y - 0.25, rb.minZ,
+              rb.maxX, keyZoneTopY, rb.maxZ
+            );
+            if (tRow < 0 || tRow > bestT) continue;
+            var rInds = rb.indices;
+            for (var rii = 0; rii < rInds.length; rii++) {
+              var slotIdx = rInds[rii];
+              if (slotIdx === skipMainIdx) continue;
+              checkMainKeySlotFast(slotIdx);
             }
           }
         }
 
-        /* 2. 精确射线检测第 1 行 4 枚 3D 物理硬件控件（prism-wave, reset-view, mute, close） */
-        var ctrlBoxes = computeControlLayouts();
+        /* 1b. 右侧 2×3 副盘矩阵外包围盒快速剔除 + 缓存逆矩阵检测 */
+        var hasAuxRay = false;
+        var aox = 0, aoy = 0, aoz = 0, adx = 0, ady = 0, adz = 0;
+        if (enableAuxPad) {
+          var iacm = invAuxChassisMat;
+          aox = iacm[0] * oxW + iacm[4] * oyW + iacm[8] * ozW + iacm[12];
+          aoy = iacm[1] * oxW + iacm[5] * oyW + iacm[9] * ozW + iacm[13];
+          aoz = iacm[2] * oxW + iacm[6] * oyW + iacm[10] * ozW + iacm[14];
+          adx = iacm[0] * dxW + iacm[4] * dyW + iacm[8] * dzW;
+          ady = iacm[1] * dxW + iacm[5] * dyW + iacm[9] * dzW;
+          adz = iacm[2] * dxW + iacm[6] * dyW + iacm[10] * dzW;
+          var aLen = Math.sqrt(adx * adx + ady * ady + adz * adz) || 1;
+          adx /= aLen; ady /= aLen; adz /= aLen;
+          hasAuxRay = true;
+
+          var auxKeysBroadT = intersectRayAABB(
+            aox, aoy, aoz, adx, ady, adz,
+            AUX_CASE_X_MIN, PLATE_Y - 0.15, AUX_CASE_Z_MIN,
+            AUX_CASE_X_MAX, keyZoneTopY, AUX_CASE_Z_MAX
+          );
+          if (auxKeysBroadT >= 0) {
+            var achM = auxChassisMat;
+            var skipAuxIdx = (lastPickKind === 'aux-key' && lastPickIdx >= 0 && lastPickIdx < AUX_SLOT_COUNT) ? lastPickIdx : -1;
+            for (var akPass = (skipAuxIdx >= 0 ? -1 : 0); akPass < AUX_SLOT_COUNT; akPass++) {
+              var ak = akPass < 0 ? skipAuxIdx : akPass;
+              if (akPass >= 0 && ak === skipAuxIdx) continue;
+              var alm = auxKeyLocalMats[ak];
+              var tABroad = intersectRayAABB(
+                aox, aoy, aoz, adx, ady, adz,
+                alm[12] - 0.85, alm[13] - 0.36, alm[14] - 0.85,
+                alm[12] + 0.85, alm[13] + 0.98, alm[14] + 0.85
+              );
+              if (tABroad < 0 || tABroad > bestT) continue;
+
+              var invAuxCap = auxKeyLocalInvMats[ak];
+              if (!auxKeyLocalInvValid[ak]) {
+                if (!mat4Invert(invAuxCap, alm)) continue;
+                auxKeyLocalInvValid[ak] = 1;
+              }
+
+              var oACx = invAuxCap[0] * aox + invAuxCap[4] * aoy + invAuxCap[8] * aoz + invAuxCap[12];
+              var oACy = invAuxCap[1] * aox + invAuxCap[5] * aoy + invAuxCap[9] * aoz + invAuxCap[13];
+              var oACz = invAuxCap[2] * aox + invAuxCap[6] * aoy + invAuxCap[10] * aoz + invAuxCap[14];
+              var dACx = invAuxCap[0] * adx + invAuxCap[4] * ady + invAuxCap[8] * adz;
+              var dACy = invAuxCap[1] * adx + invAuxCap[5] * ady + invAuxCap[9] * adz;
+              var dACz = invAuxCap[2] * adx + invAuxCap[6] * ady + invAuxCap[10] * adz;
+              var dACLen = Math.hypot(dACx, dACy, dACz) || 1;
+              dACx /= dACLen; dACy /= dACLen; dACz /= dACLen;
+
+              var tATop = intersectRayAABB(
+                oACx, oACy, oACz, dACx, dACy, dACz,
+                -topHitHalf, midH, -topHitHalf - 0.025,
+                topHitHalf, capMaxY, topHitHalf
+              );
+              var tABot = intersectRayAABB(
+                oACx, oACy, oACz, dACx, dACy, dACz,
+                -botHitHalf, 0.0, -botHitHalf,
+                botHitHalf, midH, botHitHalf
+              );
+              var tALocal = (tATop >= 0 && tABot >= 0) ? Math.min(tATop, tABot) : (tATop >= 0 ? tATop : tABot);
+              if (tALocal < 0) continue;
+
+              var ahlx = oACx + dACx * tALocal;
+              var ahly = oACy + dACy * tALocal;
+              var ahlz = oACz + dACz * tALocal;
+              var aChX = alm[0] * ahlx + alm[4] * ahly + alm[8] * ahlz + alm[12];
+              var aChY = alm[1] * ahlx + alm[5] * ahly + alm[9] * ahlz + alm[13];
+              var aChZ = alm[2] * ahlx + alm[6] * ahly + alm[10] * ahlz + alm[14];
+              var aWX = achM[0] * aChX + achM[4] * aChY + achM[8] * aChZ + achM[12];
+              var aWY = achM[1] * aChX + achM[5] * aChY + achM[9] * aChZ + achM[13];
+              var aWZ = achM[2] * aChX + achM[6] * aChY + achM[10] * aChZ + achM[14];
+              var tAuxKey = Math.hypot(aWX - oxW, aWY - oyW, aWZ - ozW);
+
+              if (tAuxKey < bestT) {
+                var aSlot = state.auxModels[ak] || DEFAULT_AUX_MODELS[ak];
+                bestT = tAuxKey;
+                bestHitKind = 'aux-key';
+                bestHitIdx = ak;
+                bestHit = {
+                  kind: 'aux-key',
+                  auxIndex: ak,
+                  id: aSlot.id,
+                  available: Boolean(aSlot.available),
+                };
+              }
+            }
+          }
+        }
+
+        /* 2. 精确射线检测第 1 行 4 枚 3D 物理硬件控件（零投影计算！） */
+        var ctrlBoxes = computeControlPickBounds();
         for (var ci = 0; ci < ctrlBoxes.length; ci++) {
           var cb = ctrlBoxes[ci];
           var tCtrl = intersectRayAABB(
@@ -10598,10 +10998,14 @@
               hitValid = Math.hypot(hxC - cb.cx3d, hzC - cb.cz3d) <= cb.radius + 0.025;
             }
             if (hitValid) {
-              var cHitW = transformPoint4(chassisMat, hxC, hyC, hzC, 1.0);
-              var tCtrlW = Math.hypot(cHitW[0] - oxW, cHitW[1] - oyW, cHitW[2] - ozW);
+              var cWX = chM[0] * hxC + chM[4] * hyC + chM[8] * hzC + chM[12];
+              var cWY = chM[1] * hxC + chM[5] * hyC + chM[9] * hzC + chM[13];
+              var cWZ = chM[2] * hxC + chM[6] * hyC + chM[10] * hzC + chM[14];
+              var tCtrlW = Math.hypot(cWX - oxW, cWY - oyW, cWZ - ozW);
               if (tCtrlW < bestT) {
                 bestT = tCtrlW;
+                bestHitKind = 'control';
+                bestHitIdx = ci;
                 bestHit = { kind: 'control', id: cb.id, action: cb.action };
               }
             }
@@ -10614,8 +11018,10 @@
           if (tOled >= 0) {
             var oledHitX = rox + rdx * tOled;
             var oledHitZ = roz + rdz * tOled;
-            var oledHitW = transformPoint4(chassisMat, oledHitX, DECK_GLASS_Y, oledHitZ, 1.0);
-            var tOledW = Math.hypot(oledHitW[0] - oxW, oledHitW[1] - oyW, oledHitW[2] - ozW);
+            var oWX = chM[0] * oledHitX + chM[4] * DECK_GLASS_Y + chM[8] * oledHitZ + chM[12];
+            var oWY = chM[1] * oledHitX + chM[5] * DECK_GLASS_Y + chM[9] * oledHitZ + chM[13];
+            var oWZ = chM[2] * oledHitX + chM[6] * DECK_GLASS_Y + chM[10] * oledHitZ + chM[14];
+            var tOledW = Math.hypot(oWX - oxW, oWY - oyW, oWZ - ozW);
             if (tOledW < bestT) {
               var uScreen = (oledHitX - DECK_X_MIN) / (DECK_X_MAX - DECK_X_MIN);
               var vScreen = (oledHitZ - DECK_Z_MIN) / (DECK_Z_MAX - DECK_Z_MIN);
@@ -10625,6 +11031,8 @@
                   var ef = effortCaps[ei];
                   if (uScreen >= ef.u0 && uScreen <= ef.u1 && vScreen >= ef.v0 && vScreen <= ef.v1) {
                     bestT = tOledW;
+                    bestHitKind = 'effort';
+                    bestHitIdx = ei;
                     bestHit = { kind: 'effort', effort: ef.effort };
                     break;
                   }
@@ -10634,7 +11042,13 @@
           }
         }
 
-        if (bestHit) return bestHit;
+        if (bestHit) {
+          lastPickKind = bestHitKind;
+          lastPickIdx = bestHitIdx;
+          return bestHit;
+        }
+        lastPickKind = null;
+        lastPickIdx = -1;
 
         /* 4. 检测主盘与副盘 Step-Bezel CNC 立体铝壳（含大角度旋转后的侧面与二段式底壳） */
         var tChassis = intersectRayAABB(
@@ -10651,15 +11065,15 @@
           }
         }
 
-        if (enableAuxPad && oAux && dAux) {
+        if (enableAuxPad && hasAuxRay) {
           var tAuxChassis = intersectRayAABB(
-            oAux[0], oAux[1], oAux[2], dAux[0], dAux[1], dAux[2],
+            aox, aoy, aoz, adx, ady, adz,
             AUX_CASE_X_MIN, CASE_Y_BOT - 0.04, AUX_CASE_Z_MIN,
             AUX_CASE_X_MAX, CASE_Y_TOP + 0.05, AUX_CASE_Z_MAX
           );
           if (tAuxChassis >= 0) {
-            var aChX = oAux[0] + dAux[0] * tAuxChassis - AUX_CENTER_X;
-            var aChZ = oAux[2] + dAux[2] * tAuxChassis - AUX_CENTER_Z;
+            var aChX = aox + adx * tAuxChassis - AUX_CENTER_X;
+            var aChZ = aoz + adz * tAuxChassis - AUX_CENTER_Z;
             var aHalfW = (AUX_CASE_X_MAX - AUX_CASE_X_MIN) * 0.5;
             var aHalfD = (AUX_CASE_Z_MAX - AUX_CASE_Z_MIN) * 0.5;
             if (sdRoundedBox2D(aChX, aChZ, aHalfW, aHalfD, AUX_CASE_CORNER_R) <= 0.10) {
@@ -11430,7 +11844,7 @@
         return (idx >= 0 && idx < AUX_SLOT_COUNT) ? idx : null;
       }
 
-      function setState(nextState) {
+      function setState(nextState, setOpts) {
         if (disposed || !nextState) return;
         var prevSelectedZ = state.selectedZ;
         var prevHoveredZ = state.hoveredZ;
@@ -11742,7 +12156,12 @@
             auxKeyLiftCur[saIdx] = 0.32;
           }
         }
-        wakeAndRenderSync();
+        if (setOpts && setOpts.deferRender === true) {
+          recomputePointerTargets();
+          requestWake();
+        } else {
+          wakeAndRenderSync();
+        }
       }
 
       function setPointerClient(clientX, clientY, inside) {
@@ -11832,6 +12251,8 @@
         if (painter && typeof painter.showSessionSyncedBadge === 'function') {
           painter.showSessionSyncedBadge(label, durationMs, animClockMs);
           lastOledSig = '';
+          lastOledDiscreteSig = '';
+          lastOledUploadMs = -1;
           wakeAndRenderSync();
         }
       }
@@ -11854,6 +12275,7 @@
           shadowDraws: perfStats.shadowDraws,
           shadowSkips: perfStats.shadowSkips,
           frameDraws: perfStats.frameDraws,
+          dynMeshRebuilds: perfStats.dynMeshRebuilds,
           dpr: dpr,
           shadowMapSize: curShadowSize,
           targetFps: curFps,
@@ -11993,7 +12415,7 @@
 
         var offSurfs = [oledSurf, atlasSurf, auxStripSurf];
         for (var osi = 0; osi < offSurfs.length; osi++) {
-          if (offSurfs[osi] && offSurfs[osi].canvas) {
+          if (offSurfs[osi] && offSurfs[osi].canvas && !offSurfs[osi].sharedCached) {
             try {
               offSurfs[osi].canvas.width = 0;
               offSurfs[osi].canvas.height = 0;
@@ -12011,6 +12433,12 @@
         atlasSurf = null;
         auxStripSurf = null;
         activeOledCanvas = null;
+        lastOledDiscreteSig = '';
+        lastOledUploadMs = -1;
+        lastPickKind = null;
+        lastPickIdx = -1;
+        keyLocalInvValid.fill(0);
+        auxKeyLocalInvValid.fill(0);
       }
 
       /* 首帧静态同步收敛（零残留 rAF） */
@@ -12067,6 +12495,7 @@
 
     return {
       createKeyboard3DRenderer: createKeyboard3DRenderer,
+      evictLegendAtlasCache: evictLegendAtlasCache,
     };
   }
 );

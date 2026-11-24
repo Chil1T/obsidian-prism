@@ -2004,6 +2004,8 @@
       var cacheKey = modeTag + ':' + keyStr;
       var existing = pool.entries.get(cacheKey);
       if (existing && existing.src === src && !existing.disposed) {
+        pool.entries.delete(cacheKey);
+        pool.entries.set(cacheKey, existing);
         return existing;
       }
 
@@ -2013,9 +2015,16 @@
       if (pool.entries.size >= MAX_WALLPAPER_CACHE) {
         var oldestKey = pool.entries.keys().next().value;
         var oldEntry = pool.entries.get(oldestKey);
-        if (oldEntry && oldEntry.img) {
-          oldEntry.img.onload = null;
-          oldEntry.img.onerror = null;
+        if (oldEntry) {
+          oldEntry.disposed = true;
+          if (oldEntry.img) {
+            oldEntry.img.onload = null;
+            oldEntry.img.onerror = null;
+            try {
+              oldEntry.img.src = '';
+            } catch (_evictSrcErr) {}
+            oldEntry.img = null;
+          }
         }
         pool.entries.delete(oldestKey);
       }
@@ -2373,7 +2382,11 @@
         var fKey = modeTag + ':' + String(keyId);
         var targetMap = sharedPool ? sharedPool.frosted : localFrostedCache;
         var cachedCv = targetMap.get(fKey);
-        if (cachedCv && cachedCv.width > 0) return cachedCv;
+        if (cachedCv && cachedCv.width > 0) {
+          targetMap.delete(fKey);
+          targetMap.set(fKey, cachedCv);
+          return cachedCv;
+        }
         if (targetMap.size >= 16) {
           var firstK = targetMap.keys().next().value;
           var oldCv = targetMap.get(firstK);
@@ -2404,6 +2417,8 @@
         var cacheKey = modeTag + ':' + keyStr;
         var existing = wallpaperCache.get(cacheKey);
         if (existing && existing.src === src) {
+          wallpaperCache.delete(cacheKey);
+          wallpaperCache.set(cacheKey, existing);
           return existing;
         }
 
@@ -2416,6 +2431,10 @@
           if (oldEntry && oldEntry.img) {
             oldEntry.img.onload = null;
             oldEntry.img.onerror = null;
+            try {
+              oldEntry.img.src = '';
+            } catch (_evictLocalSrcErr) {}
+            oldEntry.img = null;
           }
           wallpaperCache.delete(oldestKey);
         }
@@ -3005,7 +3024,7 @@
         return !disposed && surf ? surf.canvas : null;
       }
 
-      function releaseCaches() {
+      function releaseLocalCaches() {
         fromBgState = null;
         lastStaticRenderKey = '';
         lastDrawClockMs = 0;
@@ -3032,7 +3051,10 @@
           }
         });
         localFrostedCache.clear();
+      }
 
+      function releaseCaches() {
+        releaseLocalCaches();
         if (sharedPool) {
           evictIdleOledWallpapers(root);
         }
@@ -3059,7 +3081,8 @@
           sharedListener = null;
         }
 
-        releaseCaches();
+        /* Keep sharedPool warm across normal close()->open() cycles; explicit releaseCaches() evicts sharedPool on hidden/destroy */
+        releaseLocalCaches();
 
         if (surf) {
           if (surf.owned && surf.canvas) {

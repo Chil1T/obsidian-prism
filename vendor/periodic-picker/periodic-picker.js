@@ -440,7 +440,12 @@
       /* ── Controller Runtime State ──────────────────────────────────────── */
 
       var holdState = null;
+      var isReplayingNativeTrigger = false;
+      var pendingLongPressReleaseBtn = null;
       var suppressUntilMs = 0;
+      var suppressTargetBtn = null;
+      var suppressTrailingUntilMs = 0;
+      var suppressTrailingBtn = null;
       var suppressTimer = 0;
 
       var overlayEl = null;
@@ -469,10 +474,24 @@
 
       /* High-refresh (120-300Hz) single-frame pointermove coalescing state */
       var lastPointerClient = { x: -9999, y: -9999, active: false };
+      var lastFlushedPointer = { x: NaN, y: NaN, target: null, inside: false };
       var extNearRendererActive = false;
       var pendingPointerMove = null;
       var pointerMoveRafId = 0;
       var lastAuxWheelMs = 0;
+
+      /* Incremental DOM diff caches (0 full 90-key scans on hover!) */
+      var lastDomSelectedZ = undefined;
+      var lastDomHoveredZ = null;
+      var lastDomSelectedAuxLocal = undefined;
+      var lastDomOrchLatched = undefined;
+      var lastDomChromeSig = '';
+      var lastDomHaloSig = '';
+      var lastDomHudSig = '';
+      var lastDomCtrlSig = '';
+      var lastDomBannerSig = '';
+      var availabilityDomVersion = 0;
+      var lastDomAvailVersion = -1;
 
       /* Active host session, pagination & selection state */
       var activeAnchorBtn = null;
@@ -689,6 +708,10 @@
         if (grainMod && typeof grainMod.evictGrainTextures === 'function') {
           try { grainMod.evictGrainTextures(); } catch (e5) {}
         }
+        var kbMod = resolveKeyboard3DFactory(root);
+        if (kbMod && typeof kbMod.evictLegendAtlasCache === 'function') {
+          try { kbMod.evictLegendAtlasCache(); } catch (eKb) {}
+        }
         if (audioEngine && typeof audioEngine.dispose === 'function') {
           try { audioEngine.dispose(); } catch (e6) {}
         }
@@ -696,14 +719,29 @@
 
       /* ── True 0fps Blur / Hidden Sleep Synchronization ─────────────────── */
 
-      function computeHostPaused() {
-        if (doc && doc.hidden) return true;
-        if (windowBlurred) return true;
+      function isHostWinBlurAttrSet() {
         try {
           if (doc && doc.documentElement && typeof doc.documentElement.getAttribute === 'function') {
-            if (doc.documentElement.getAttribute('data-ag-cs-win-blur') === '1') return true;
+            return doc.documentElement.getAttribute('data-ag-cs-win-blur') === '1';
           }
         } catch (e) {}
+        return false;
+      }
+
+      function isDocHiddenNow() {
+        return Boolean(doc && (doc.hidden === true || doc.visibilityState === 'hidden'));
+      }
+
+      function clearStaleBlurIfActive() {
+        if (windowBlurred && !isDocHiddenNow() && !isHostWinBlurAttrSet()) {
+          windowBlurred = false;
+        }
+      }
+
+      function computeHostPaused() {
+        if (isDocHiddenNow()) return true;
+        if (isHostWinBlurAttrSet()) return true;
+        if (windowBlurred) return true;
         return false;
       }
 
@@ -1052,19 +1090,152 @@
           if (!willOpenImmediately && !overlayEl && typeof hostBridge.suppressNativeTooltip === 'function') {
             hostBridge.suppressNativeTooltip(doc, prevHold.btn, false);
           }
-          if (prevHold.didPrewarm && !willOpenImmediately && !overlayEl) {
-            releaseAllHeavyCaches();
-          }
         }
       }
 
-      function armSuppressNextClick() {
+      function armSuppressNextClick(targetBtn) {
         suppressUntilMs = Date.now() + SUPPRESS_CLICK_WINDOW_MS;
-        if (suppressTimer) clearTimer(suppressTimer);
-        suppressTimer = setTimer(function () {
+        suppressTargetBtn = targetBtn || null;
+        if (suppressTimer) {
+          clearTimer(suppressTimer);
           suppressTimer = 0;
-          suppressUntilMs = 0;
-        }, SUPPRESS_CLICK_WINDOW_MS + 20);
+        }
+      }
+
+      function armSuppressTrailingNativeRelease(targetBtn) {
+        suppressTrailingBtn = targetBtn || null;
+        suppressTrailingUntilMs = Date.now() + 260;
+      }
+
+      function isTargetWithinNode(node, target) {
+        if (!node || !target) return false;
+        if (node === target) return true;
+        if (typeof node.contains === 'function') {
+          try { return Boolean(node.contains(target)); } catch (e) {}
+        }
+        return false;
+      }
+
+      function isNativeHostMenuOpen(docRef, triggerBtn) {
+        try {
+          if (triggerBtn && typeof triggerBtn.getAttribute === 'function') {
+            if (triggerBtn.getAttribute('aria-expanded') === 'true') return true;
+            if (triggerBtn.getAttribute('data-state') === 'open') return true;
+            var popOpen = triggerBtn.getAttribute('data-popup-open');
+            if (popOpen !== null && popOpen !== 'false') return true;
+          }
+          if (docRef && typeof docRef.querySelectorAll === 'function') {
+            var menus = docRef.querySelectorAll(
+              '[data-testid="model-selector-panel"], [role="menu"], [data-radix-popper-content-wrapper], [data-radix-menu-content]'
+            );
+            for (var i = 0; i < menus.length; i += 1) {
+              var m = menus[i];
+              if (!m) continue;
+              if (overlayEl && isTargetWithinNode(overlayEl, m)) continue;
+              if (typeof m.getAttribute === 'function') {
+                if (m.getAttribute('data-state') === 'closed') continue;
+                if (m.getAttribute('aria-hidden') === 'true') continue;
+                if (m.hasAttribute && m.hasAttribute('hidden')) continue;
+              }
+              if (typeof m.getBoundingClientRect === 'function') {
+                var mr = m.getBoundingClientRect();
+                var hasText = Boolean(m.textContent && String(m.textContent).trim());
+                if (mr && mr.width === 0 && mr.height === 0 && !hasText) continue;
+              }
+              return true;
+            }
+          }
+        } catch (e) {}
+        return false;
+      }
+
+      function createSyntheticTriggerEvent(kind, type, init) {
+        var win = (doc && doc.defaultView) || root || null;
+        var Ctor = null;
+        if (kind === 'pointer') {
+          Ctor = win && typeof win.PointerEvent === 'function' ? win.PointerEvent : null;
+        }
+        if (!Ctor) {
+          Ctor = win && typeof win.MouseEvent === 'function' ? win.MouseEvent : null;
+        }
+        if (Ctor) {
+          try {
+            return new Ctor(type, init);
+          } catch (e) {}
+        }
+        var evObj = Object.assign(
+          {
+            type: type,
+            bubbles: true,
+            cancelable: true,
+            defaultPrevented: false,
+            propagationStopped: false,
+            immediatePropagationStopped: false,
+            preventDefault: function () { this.defaultPrevented = true; },
+            stopPropagation: function () { this.propagationStopped = true; },
+            stopImmediatePropagation: function () {
+              this.immediatePropagationStopped = true;
+              this.propagationStopped = true;
+            },
+          },
+          init
+        );
+        return evObj;
+      }
+
+      function replayNativeTriggerClick(triggerBtn, meta) {
+        if (!triggerBtn || typeof triggerBtn.dispatchEvent !== 'function' || isDestroyed) return false;
+        var m = meta || {};
+        var cx = Number(m.clientX) || 0;
+        var cy = Number(m.clientY) || 0;
+        var pid = m.pointerId !== undefined ? m.pointerId : 1;
+        var ptype = typeof m.pointerType === 'string' && m.pointerType ? m.pointerType : 'mouse';
+
+        /* Temporarily clear suppression windows so replayed native events always pass cleanly */
+        suppressUntilMs = 0;
+        suppressTargetBtn = null;
+        suppressTrailingUntilMs = 0;
+        suppressTrailingBtn = null;
+        if (suppressTimer) {
+          clearTimer(suppressTimer);
+          suppressTimer = 0;
+        }
+
+        var dispatched = false;
+        isReplayingNativeTrigger = true;
+        try {
+          var seq = [
+            ['pointer', 'pointerdown', { bubbles: true, cancelable: true, button: 0, buttons: 1, pointerId: pid, pointerType: ptype, clientX: cx, clientY: cy, isPrimary: true }],
+            ['mouse', 'mousedown', { bubbles: true, cancelable: true, button: 0, buttons: 1, clientX: cx, clientY: cy }],
+            ['pointer', 'pointerup', { bubbles: true, cancelable: true, button: 0, buttons: 0, pointerId: pid, pointerType: ptype, clientX: cx, clientY: cy, isPrimary: true }],
+            ['mouse', 'mouseup', { bubbles: true, cancelable: true, button: 0, buttons: 0, clientX: cx, clientY: cy }],
+            ['mouse', 'click', { bubbles: true, cancelable: true, button: 0, buttons: 0, clientX: cx, clientY: cy }],
+          ];
+          for (var i = 0; i < seq.length; i += 1) {
+            var evSynth = createSyntheticTriggerEvent(seq[i][0], seq[i][1], seq[i][2]);
+            try {
+              triggerBtn.dispatchEvent(evSynth);
+              dispatched = true;
+            } catch (eDisp) {}
+          }
+        } finally {
+          isReplayingNativeTrigger = false;
+        }
+
+        /* Swallow the physical browser's trailing mouseup/click on triggerBtn so Radix menu does not immediately close */
+        armSuppressTrailingNativeRelease(triggerBtn);
+
+        if (!m.wasNativeMenuOpen && typeof Promise === 'function') {
+          Promise.resolve().then(function () {
+            if (isDestroyed || overlayEl || !isNodeConnectedToDoc(doc, triggerBtn)) return;
+            if (isNativeHostMenuOpen(doc, triggerBtn)) return;
+            var ctxFallback = hostBridge.readHostModelContext(triggerBtn, root, doc);
+            if (ctxFallback && typeof ctxFallback.setIsOpen === 'function') {
+              try { ctxFallback.setIsOpen(true); } catch (eOpen) {}
+            }
+          });
+        }
+        return dispatched;
       }
 
       /* ── Aux 2x3 Pagination Helpers ────────────────────────────────────── */
@@ -1345,6 +1516,10 @@
           }
         }
         rebuildAuxPageSlice();
+        availabilityDomVersion += 1;
+        lastDomSelectedZ = undefined;
+        lastDomSelectedAuxLocal = undefined;
+        lastDomHudSig = '';
         syncHitButtonsAvailabilityDom();
       }
 
@@ -1436,24 +1611,34 @@
         }
       }
 
-      function resolveLevelForElementWithMemory(entry, preferredEffort) {
+      function normalizeEffortCode(raw) {
+        if (typeof hostBridge.normalizeEffortToken === 'function') {
+          return hostBridge.normalizeEffortToken(raw);
+        }
+        var w = String(raw || '').trim().toLowerCase();
+        if (w === 'extra' || w === 'extrahigh' || w === 'extra high') return 'xhigh';
+        if (w === 'med') return 'medium';
+        return w;
+      }
+
+      function resolveLevelForElementWithMemory(entry, explicitPreferred) {
         if (!entry || !entry.levels || !entry.levels.length) return null;
         var rememberedLocal = activeEffortByZ.get(entry.slotZ) || '';
         var rememberedShared =
           typeof hostBridge.getRememberedEffort === 'function'
             ? hostBridge.getRememberedEffort(root, doc, entry.baseName || entry.name, orchLatched)
             : '';
-        return hostBridge.resolveLevelForElement(entry, preferredEffort || rememberedShared, rememberedLocal);
+        return hostBridge.resolveLevelForElement(entry, explicitPreferred || '', rememberedLocal, rememberedShared);
       }
 
-      function resolveLevelForAuxWithMemory(auxSlot, globalAuxIdx, preferredEffort) {
+      function resolveLevelForAuxWithMemory(auxSlot, globalAuxIdx, explicitPreferred) {
         if (!auxSlot || !auxSlot.levels || !auxSlot.levels.length) return null;
         var rememberedLocal = activeEffortByGlobalAux.get(globalAuxIdx) || '';
         var rememberedShared =
           typeof hostBridge.getRememberedEffort === 'function'
             ? hostBridge.getRememberedEffort(root, doc, auxSlot.title || auxSlot.shortLabel, orchLatched)
             : '';
-        return hostBridge.resolveLevelForAuxSlot(auxSlot, preferredEffort || rememberedShared, rememberedLocal);
+        return hostBridge.resolveLevelForAuxSlot(auxSlot, explicitPreferred || '', rememberedLocal, rememberedShared);
       }
 
       /* ── Session Context Signature & Live Host Sync ────────────────────── */
@@ -1893,10 +2078,9 @@
                 ? '第 ' + slot.col + ' 族 · ' + groupInfo.zh + ' · Google 元素直连模型'
                 : 'Group ' + slot.col + ' · ' + groupInfo.en + ' · Google Element Series');
 
-          var currentSelEff = selectedZ !== null ? activeEffortByZ.get(selectedZ) || '' : '';
           var activeEff = selectedZ === slot.z ? activeEffortByZ.get(slot.z) || '' : '';
           if (!activeEff) {
-            var defLvl = resolveLevelForElementWithMemory(availEntry, currentSelEff);
+            var defLvl = resolveLevelForElementWithMemory(availEntry, '');
             activeEff = defLvl ? defLvl.effort : '';
           }
           var levelsOut = [];
@@ -2546,6 +2730,32 @@
         }
       }
 
+      function syncEffortButtonRectsOnly() {
+        if (!overlayEl || !stageEl || !uiRefs || isOrbitDragging) return;
+        if (!uiRefs.effortButtons || uiRefs.effortButtons.length === 0) return;
+        var stageRect = readStageBoundsZeroReflow();
+        var stageW = stageRect && stageRect.valid && stageRect.width > 80 ? stageRect.width : 1280;
+        var stageH = stageRect && stageRect.valid && stageRect.height > 60 ? stageRect.height : 680;
+        var projEfforts = getProjectedEffortsSafe();
+        for (var ei = 0; ei < uiRefs.effortButtons.length; ei += 1) {
+          var eb = uiRefs.effortButtons[ei];
+          var effCode = eb.getAttribute('data-ag-pp-effort');
+          var matchedRect = null;
+          if (projEfforts) {
+            for (var pe = 0; pe < projEfforts.length; pe += 1) {
+              if (projEfforts[pe].effort === effCode) {
+                matchedRect = projEfforts[pe];
+                break;
+              }
+            }
+          }
+          applyBoxRect(
+            eb,
+            matchedRect || { left: stageW * 0.42 + ei * 58, top: stageH * 0.34, width: 52, height: 24 }
+          );
+        }
+      }
+
       function resizeCanvasToStage() {
         if (!stageEl || !canvasEl) return;
         refreshCachedLayoutRects();
@@ -2669,8 +2879,7 @@
         if (slotZ === null || !availableByZ.has(slotZ)) return '';
         if (selectedZ === slotZ && activeEffortByZ.has(slotZ)) return activeEffortByZ.get(slotZ) || '';
         var entry = availableByZ.get(slotZ);
-        var currentSelEff = selectedZ !== null ? activeEffortByZ.get(selectedZ) || '' : '';
-        var defLvl = resolveLevelForElementWithMemory(entry, currentSelEff);
+        var defLvl = resolveLevelForElementWithMemory(entry, '');
         return defLvl ? defLvl.effort : '';
       }
 
@@ -2686,10 +2895,11 @@
         if (isConfirmClosing || isDrawerClosing) return;
         var slot = effectiveAuxAll[globalAuxIdx];
         if (!slot || !slot.available || !slot.levels || !slot.levels.length) return;
+        var wantEff = normalizeEffortCode(effortCode) || effortCode;
         var chosenLvl = null;
         var chosenIdx = 0;
         for (var i = 0; i < slot.levels.length; i += 1) {
-          if (slot.levels[i].effort === effortCode) {
+          if (slot.levels[i].effort === wantEff || normalizeEffortCode(slot.levels[i].effort) === wantEff) {
             chosenLvl = slot.levels[i];
             chosenIdx = i;
             break;
@@ -2736,10 +2946,11 @@
             : resolveInspectedElementZ();
         if (candidateZ === null || !availableByZ.has(candidateZ)) return;
         var entry = availableByZ.get(candidateZ);
+        var wantEff = normalizeEffortCode(effortCode) || effortCode;
         var chosenLvl = null;
         var chosenIdx = 0;
         for (var i = 0; i < entry.levels.length; i += 1) {
-          if (entry.levels[i].effort === effortCode) {
+          if (entry.levels[i].effort === wantEff || normalizeEffortCode(entry.levels[i].effort) === wantEff) {
             chosenLvl = entry.levels[i];
             chosenIdx = i;
             break;
@@ -2799,75 +3010,129 @@
 
       /* ── Unified Scene & Bento DOM Sync (0 getBoundingClientRect on Hover!) */
 
-      function syncSceneAndDom(skipRectSync) {
+      function syncSceneAndDom(skipRectSync, syncOpts) {
         if (!overlayEl || !uiRefs) return;
+        var optsObj = syncOpts && typeof syncOpts === 'object' ? syncOpts : null;
+        var hoverOnly = Boolean(optsObj && optsObj.hoverOnly);
+        var deferRender = Boolean(optsObj && optsObj.deferRender);
         var zh = bentoUi.isZhLocale(doc, root);
         var profile = bentoUi.resolvePrismThemeProfile(doc, root);
 
-        overlayEl.setAttribute('data-theme', profile.theme);
-        overlayEl.setAttribute('data-kit', profile.id);
-        overlayEl.setAttribute('data-rim-tone', profile.rimTone || 'default');
-        overlayEl.setAttribute('data-corners', profile.corners);
-        overlayEl.setAttribute('data-mono', profile.isMono ? '1' : '0');
-        overlayEl.setAttribute('data-stage-mode', stageMode);
-        overlayEl.setAttribute('data-card-flipped', cardFlipped ? '1' : '0');
-        overlayEl.setAttribute('data-orch-latched', orchLatched ? '1' : '0');
-        syncDockCompactState();
+        var chromeSig =
+          profile.theme +
+          '|' + profile.id +
+          '|' + (profile.rimTone || 'default') +
+          '|' + profile.corners +
+          '|' + (profile.isMono ? '1' : '0') +
+          '|' + stageMode +
+          '|' + (cardFlipped ? '1' : '0') +
+          '|' + (orchLatched ? '1' : '0') +
+          '|' + profile.ambientMul;
 
-        var ambOpacity = profile.ambientMul <= 0 ? 0.22 : Math.max(0.35, Math.min(1, profile.ambientMul));
-        setStyleVar(overlayEl, '--pp-ambient-mul', ambOpacity.toFixed(3));
-
-        if (deskmatEl && typeof bentoUi.mountDeskmatTopoSvgIfAvailable === 'function') {
-          bentoUi.mountDeskmatTopoSvgIfAvailable(doc, deskmatEl, root);
+        if (!hoverOnly || chromeSig !== lastDomChromeSig) {
+          if (chromeSig !== lastDomChromeSig) {
+            lastDomChromeSig = chromeSig;
+            overlayEl.setAttribute('data-theme', profile.theme);
+            overlayEl.setAttribute('data-kit', profile.id);
+            overlayEl.setAttribute('data-rim-tone', profile.rimTone || 'default');
+            overlayEl.setAttribute('data-corners', profile.corners);
+            overlayEl.setAttribute('data-mono', profile.isMono ? '1' : '0');
+            overlayEl.setAttribute('data-stage-mode', stageMode);
+            overlayEl.setAttribute('data-card-flipped', cardFlipped ? '1' : '0');
+            overlayEl.setAttribute('data-orch-latched', orchLatched ? '1' : '0');
+            var ambOpacity = profile.ambientMul <= 0 ? 0.22 : Math.max(0.35, Math.min(1, profile.ambientMul));
+            setStyleVar(overlayEl, '--pp-ambient-mul', ambOpacity.toFixed(3));
+            if (deskmatEl && typeof bentoUi.mountDeskmatTopoSvgIfAvailable === 'function') {
+              bentoUi.mountDeskmatTopoSvgIfAvailable(doc, deskmatEl, root);
+            }
+          }
+          if (!hoverOnly) syncDockCompactState();
         }
 
         var haloZ = selectedZ !== null ? selectedZ : resolveInspectedElementZ();
-        var haloGem = bentoUi.hudGemColorsForZ(haloZ, profile);
-        setStyleVar(overlayEl, '--pp-elem-halo', profile.isLight ? haloGem.haloLight : haloGem.haloDark);
-        setStyleVar(overlayEl, '--pp-elem-ring', haloGem.ring);
+        var haloSig = haloZ + '|' + profile.id + '|' + (profile.isLight ? 'L' : 'D');
+        if (haloSig !== lastDomHaloSig) {
+          lastDomHaloSig = haloSig;
+          var haloGem = bentoUi.hudGemColorsForZ(haloZ, profile);
+          setStyleVar(overlayEl, '--pp-elem-halo', profile.isLight ? haloGem.haloLight : haloGem.haloDark);
+          setStyleVar(overlayEl, '--pp-elem-ring', haloGem.ring);
+        }
 
-        keyNodesByZ.forEach(function (btn, z) {
-          if (z === selectedZ) {
-            btn.classList.add('is-levitated');
-            btn.setAttribute('aria-pressed', 'true');
-          } else {
-            btn.classList.remove('is-levitated');
-            if (availableByZ.has(z)) btn.setAttribute('aria-pressed', 'false');
+        /* O(1) incremental keycap DOM sync (only touch prev/next selected & hovered nodes, NEVER loop all 90!) */
+        if (selectedZ !== lastDomSelectedZ) {
+          if (lastDomSelectedZ !== undefined && lastDomSelectedZ !== null) {
+            var prevSelBtn = keyNodesByZ.get(lastDomSelectedZ);
+            if (prevSelBtn) {
+              prevSelBtn.classList.remove('is-levitated');
+              if (availableByZ.has(lastDomSelectedZ)) prevSelBtn.setAttribute('aria-pressed', 'false');
+            }
           }
-        });
+          if (selectedZ !== null) {
+            var nextSelBtn = keyNodesByZ.get(selectedZ);
+            if (nextSelBtn) {
+              nextSelBtn.classList.add('is-levitated');
+              nextSelBtn.setAttribute('aria-pressed', 'true');
+            }
+          }
+          lastDomSelectedZ = selectedZ;
+        }
+        if (hoveredZ !== lastDomHoveredZ) {
+          if (lastDomHoveredZ !== null) {
+            var prevHovBtn = keyNodesByZ.get(lastDomHoveredZ);
+            if (prevHovBtn) prevHovBtn.removeAttribute('data-hovered');
+          }
+          if (hoveredZ !== null) {
+            var nextHovBtn = keyNodesByZ.get(hoveredZ);
+            if (nextHovBtn) nextHovBtn.setAttribute('data-hovered', '1');
+          }
+          lastDomHoveredZ = hoveredZ;
+        }
 
         var localSelAux = getLocalAuxIndex(selectedGlobalAuxIndex);
-        for (var ak = 0; ak < auxKeyNodes.length; ak += 1) {
-          var auxBtn = auxKeyNodes[ak];
-          var aSlot = auxSlots[ak];
-          if (!auxBtn || !aSlot) continue;
-          if (isGlobalOrchToggleSlot(aSlot._globalAuxIndex, aSlot)) {
-            auxBtn.classList.remove('is-levitated');
-            auxBtn.setAttribute('data-latched', orchLatched ? '1' : '0');
-            if (aSlot.available) auxBtn.setAttribute('aria-pressed', orchLatched ? 'true' : 'false');
-          } else {
-            var isAuxSel = localSelAux === ak;
-            if (isAuxSel) {
-              auxBtn.classList.add('is-levitated');
-              auxBtn.setAttribute('aria-pressed', 'true');
-            } else {
+        if (
+          localSelAux !== lastDomSelectedAuxLocal ||
+          orchLatched !== lastDomOrchLatched ||
+          lastDomAvailVersion !== availabilityDomVersion
+        ) {
+          lastDomSelectedAuxLocal = localSelAux;
+          lastDomOrchLatched = orchLatched;
+          lastDomAvailVersion = availabilityDomVersion;
+          for (var ak = 0; ak < auxKeyNodes.length; ak += 1) {
+            var auxBtn = auxKeyNodes[ak];
+            var aSlot = auxSlots[ak];
+            if (!auxBtn || !aSlot) continue;
+            if (isGlobalOrchToggleSlot(aSlot._globalAuxIndex, aSlot)) {
               auxBtn.classList.remove('is-levitated');
-              if (aSlot.available) auxBtn.setAttribute('aria-pressed', 'false');
+              auxBtn.setAttribute('data-latched', orchLatched ? '1' : '0');
+              if (aSlot.available) auxBtn.setAttribute('aria-pressed', orchLatched ? 'true' : 'false');
+            } else {
+              var isAuxSel = localSelAux === ak;
+              if (isAuxSel) {
+                auxBtn.classList.add('is-levitated');
+                auxBtn.setAttribute('aria-pressed', 'true');
+              } else {
+                auxBtn.classList.remove('is-levitated');
+                if (aSlot.available) auxBtn.setAttribute('aria-pressed', 'false');
+              }
             }
           }
         }
 
-        hudChipByZ.forEach(function (chipObj, z) {
-          var c = bentoUi.hudGemColorsForZ(z, profile);
-          var isSel = z === selectedZ;
-          var isAvailChip = availableByZ.has(z);
-          setStyleVar(chipObj.dot, '--dot-bg', c.dot);
-          setStyleVar(chipObj.dot, '--dot-glow', c.glow || c.ring);
-          setStyleVar(chipObj.btn, '--chip-ring', c.ring);
-          chipObj.btn.setAttribute('data-selected', isSel ? '1' : '0');
-          chipObj.btn.setAttribute('data-available', isAvailChip ? '1' : '0');
-          chipObj.btn.setAttribute('aria-pressed', isSel ? 'true' : 'false');
-        });
+        var hudSig = selectedZ + '|' + availabilityDomVersion + '|' + profile.id + '|' + (profile.isLight ? 'L' : 'D');
+        if (hudSig !== lastDomHudSig) {
+          lastDomHudSig = hudSig;
+          hudChipByZ.forEach(function (chipObj, z) {
+            var c = bentoUi.hudGemColorsForZ(z, profile);
+            var isSel = z === selectedZ;
+            var isAvailChip = availableByZ.has(z);
+            setStyleVar(chipObj.dot, '--dot-bg', c.dot);
+            setStyleVar(chipObj.dot, '--dot-glow', c.glow || c.ring);
+            setStyleVar(chipObj.btn, '--chip-ring', c.ring);
+            chipObj.btn.setAttribute('data-selected', isSel ? '1' : '0');
+            chipObj.btn.setAttribute('data-available', isAvailChip ? '1' : '0');
+            chipObj.btn.setAttribute('aria-pressed', isSel ? 'true' : 'false');
+          });
+        }
 
         var payload = buildCurrentDeckPayload(zh);
         var dInfo = payload.deckInfo;
@@ -2893,94 +3158,154 @@
           handlers: bentoRefs ? bentoRefs._handlers : null,
         });
 
-        if (dInfo.sessionBanner) {
-          uiRefs.bannerText.textContent = dInfo.sessionBanner;
-          uiRefs.banner.setAttribute('data-show', '1');
-        } else {
-          uiRefs.bannerText.textContent = '';
-          uiRefs.banner.setAttribute('data-show', '0');
+        var nextSrTitle = dInfo.blindFlash && dInfo.blindFlashBanner ? dInfo.blindFlashBanner : dInfo.title;
+        var bannerSig = (dInfo.sessionBanner || '') + '|' + nextSrTitle + '|' + dInfo.chemLabel + '|' + dInfo.subtitle;
+        if (bannerSig !== lastDomBannerSig) {
+          lastDomBannerSig = bannerSig;
+          if (dInfo.sessionBanner) {
+            uiRefs.bannerText.textContent = dInfo.sessionBanner;
+            uiRefs.banner.setAttribute('data-show', '1');
+          } else {
+            uiRefs.bannerText.textContent = '';
+            uiRefs.banner.setAttribute('data-show', '0');
+          }
+          uiRefs.srTitle.textContent = nextSrTitle;
+          uiRefs.srChem.textContent = dInfo.chemLabel;
+          uiRefs.srSub.textContent = dInfo.subtitle;
         }
-        uiRefs.srTitle.textContent = dInfo.blindFlash && dInfo.blindFlashBanner ? dInfo.blindFlashBanner : dInfo.title;
-        uiRefs.srChem.textContent = dInfo.chemLabel;
-        uiRefs.srSub.textContent = dInfo.subtitle;
 
         var effSig =
           (dInfo.isAuxModel ? 'aux:' + dInfo.globalAuxIndex : String(dInfo.z)) +
           ':' + (orchLatched ? 'orch' : 'solo') +
           '|' + dInfo.levels.map(function (l) { return l.effort + ':' + (l.active ? '1' : '0'); }).join(',');
 
-        var rebuiltEfforts = false;
+        var effortLayoutChanged = false;
         if (uiRefs.lastEffortSig !== effSig) {
-          rebuiltEfforts = true;
+          var prevEffCount = uiRefs.effortButtons.length;
           uiRefs.lastEffortSig = effSig;
-          for (var oldIdx = 0; oldIdx < uiRefs.effortButtons.length; oldIdx += 1) {
-            safeRemove(uiRefs.effortButtons[oldIdx]);
+          if (!Array.isArray(uiRefs.effortButtonPool)) uiRefs.effortButtonPool = [];
+          if (!uiRefs.effortTargetInfo) {
+            uiRefs.effortTargetInfo = { isAuxModel: false, globalAuxIndex: null, z: null, effortTitle: '' };
           }
+          uiRefs.effortTargetInfo.isAuxModel = Boolean(dInfo.isAuxModel);
+          uiRefs.effortTargetInfo.globalAuxIndex =
+            dInfo.globalAuxIndex !== undefined ? dInfo.globalAuxIndex : null;
+          uiRefs.effortTargetInfo.z = dInfo.z;
+          uiRefs.effortTargetInfo.effortTitle = dInfo.effortTitle || '';
+
+          var effPool = uiRefs.effortButtonPool;
           uiRefs.effortButtons.length = 0;
+
           for (var li = 0; li < dInfo.levels.length; li += 1) {
-            (function (lvl) {
-              var eBtn = mkEl(doc, 'button', 'ag-pp-hit-btn ag-pp-seg-btn', lvl.label);
+            var lvl = dInfo.levels[li];
+            var eBtn = effPool[li];
+            if (!eBtn) {
+              eBtn = mkEl(doc, 'button', 'ag-pp-hit-btn ag-pp-seg-btn', lvl.label);
               eBtn.type = 'button';
-              eBtn.setAttribute('data-ag-pp-effort', lvl.effort);
-              eBtn.setAttribute('data-effort', lvl.effort);
-              eBtn.setAttribute('data-active', lvl.active ? '1' : '0');
-              eBtn.setAttribute('aria-pressed', lvl.active ? 'true' : 'false');
-              eBtn.setAttribute('aria-label', dInfo.effortTitle + ': ' + lvl.label);
-              eBtn.addEventListener('focus', function () {
-                if (hoveredEffort !== lvl.effort) {
-                  hoveredEffort = lvl.effort;
-                  syncSceneAndDom(true);
-                }
-              });
-              eBtn.addEventListener('blur', function () {
-                if (hoveredEffort === lvl.effort) {
-                  hoveredEffort = null;
-                  syncSceneAndDom(true);
-                }
-              });
-              eBtn.addEventListener('click', function (ev) {
-                ev.stopPropagation();
-                if (hasPointerCoords(ev) && activeRenderer && typeof activeRenderer.pick === 'function') {
-                  var picked = activeRenderer.pick(ev.clientX, ev.clientY);
-                  if (picked) {
-                    dispatchPickedTarget(picked);
-                    return;
+              (function (pooledBtn) {
+                pooledBtn.addEventListener('focus', function () {
+                  var ef = pooledBtn.getAttribute('data-effort');
+                  if (ef && hoveredEffort !== ef) {
+                    hoveredEffort = ef;
+                    syncSceneAndDom(true, { hoverOnly: true, deferRender: true });
                   }
-                }
-                if (dInfo.isAuxModel && dInfo.globalAuxIndex !== null && dInfo.globalAuxIndex !== undefined) {
-                  handleAuxEffortSelect(dInfo.globalAuxIndex, lvl.effort);
-                } else {
-                  handleEffortSelect(lvl.effort, dInfo.z);
-                }
-              });
+                });
+                pooledBtn.addEventListener('blur', function () {
+                  var ef = pooledBtn.getAttribute('data-effort');
+                  if (ef && hoveredEffort === ef) {
+                    hoveredEffort = null;
+                    syncSceneAndDom(true, { hoverOnly: true, deferRender: true });
+                  }
+                });
+                pooledBtn.addEventListener('click', function (ev) {
+                  ev.stopPropagation();
+                  if (hasPointerCoords(ev) && activeRenderer && typeof activeRenderer.pick === 'function') {
+                    var picked = activeRenderer.pick(ev.clientX, ev.clientY);
+                    if (picked) {
+                      dispatchPickedTarget(picked);
+                      return;
+                    }
+                  }
+                  var ef = pooledBtn.getAttribute('data-effort');
+                  if (!ef) return;
+                  var tgt = uiRefs && uiRefs.effortTargetInfo ? uiRefs.effortTargetInfo : {};
+                  if (tgt.isAuxModel && tgt.globalAuxIndex !== null && tgt.globalAuxIndex !== undefined) {
+                    handleAuxEffortSelect(tgt.globalAuxIndex, ef);
+                  } else {
+                    handleEffortSelect(ef, tgt.z);
+                  }
+                });
+              })(eBtn);
               hitLayerEl.appendChild(eBtn);
-              uiRefs.effortButtons.push(eBtn);
-            })(dInfo.levels[li]);
+              effPool.push(eBtn);
+              effortLayoutChanged = true;
+            }
+            if (eBtn.textContent !== lvl.label) eBtn.textContent = lvl.label;
+            if (eBtn.getAttribute('data-ag-pp-effort') !== lvl.effort) {
+              eBtn.setAttribute('data-ag-pp-effort', lvl.effort);
+              effortLayoutChanged = true;
+            }
+            if (eBtn.getAttribute('data-effort') !== lvl.effort) {
+              eBtn.setAttribute('data-effort', lvl.effort);
+            }
+            var eAct = lvl.active ? '1' : '0';
+            if (eBtn.getAttribute('data-active') !== eAct) {
+              eBtn.setAttribute('data-active', eAct);
+              eBtn.setAttribute('aria-pressed', lvl.active ? 'true' : 'false');
+            }
+            var eAria = dInfo.effortTitle + ': ' + lvl.label;
+            if (eBtn.getAttribute('aria-label') !== eAria) eBtn.setAttribute('aria-label', eAria);
+            if (eBtn.hidden) {
+              setStyleVar(eBtn, 'display', '');
+              eBtn.hidden = false;
+              eBtn.removeAttribute('aria-hidden');
+              eBtn.removeAttribute('tabindex');
+            }
+            uiRefs.effortButtons.push(eBtn);
           }
+
+          for (var xi = dInfo.levels.length; xi < effPool.length; xi += 1) {
+            var unusedBtn = effPool[xi];
+            if (!unusedBtn.hidden) {
+              setStyleVar(unusedBtn, 'display', 'none');
+              unusedBtn.hidden = true;
+              unusedBtn.setAttribute('aria-hidden', 'true');
+              unusedBtn.setAttribute('tabindex', '-1');
+            }
+            unusedBtn.setAttribute('data-active', '0');
+            unusedBtn.setAttribute('aria-pressed', 'false');
+            unusedBtn.removeAttribute('data-ag-pp-effort');
+            unusedBtn.removeAttribute('data-effort');
+          }
+          if (uiRefs.effortButtons.length !== prevEffCount) effortLayoutChanged = true;
         }
 
-        if (uiRefs.resetBtn) {
-          var resetLbl = zh ? '复位三维视角 (R)' : 'Reset 3D View (R)';
-          uiRefs.resetBtn.setAttribute('aria-label', resetLbl);
-          uiRefs.resetBtn.title = resetLbl;
-          if (uiRefs.resetLabel) uiRefs.resetLabel.textContent = zh ? '回正' : 'Reset';
-          var rotFlagNow = getChassisOrbitSafe().isRotated ? '1' : '0';
-          uiRefs.lastRotatedFlag = rotFlagNow;
-          uiRefs.resetBtn.setAttribute('data-rotated', rotFlagNow);
-        }
-        if (uiRefs.muteBtn) {
-          var muteLbl = zh
-            ? (muted ? '已静音（点击开启机械轴音效）' : '切换机械键盘音效')
-            : (muted ? 'Audio muted (Click to unmute)' : 'Toggle Mechanical Keycap Audio');
-          uiRefs.muteBtn.setAttribute('data-muted', muted ? '1' : '0');
-          uiRefs.muteBtn.setAttribute('aria-pressed', muted ? 'true' : 'false');
-          uiRefs.muteBtn.setAttribute('aria-label', muteLbl);
-          uiRefs.muteBtn.title = muteLbl;
-        }
-        if (uiRefs.closeBtn) {
-          var closeLbl = zh ? '确认并关闭' : 'Confirm and close';
-          uiRefs.closeBtn.setAttribute('aria-label', closeLbl);
-          uiRefs.closeBtn.title = closeLbl;
+        var rotFlagNow = getChassisOrbitSafe().isRotated ? '1' : '0';
+        var ctrlSig = (zh ? 'zh' : 'en') + '|' + (muted ? '1' : '0') + '|' + rotFlagNow;
+        if (ctrlSig !== lastDomCtrlSig) {
+          lastDomCtrlSig = ctrlSig;
+          if (uiRefs.resetBtn) {
+            var resetLbl = zh ? '复位三维视角 (R)' : 'Reset 3D View (R)';
+            uiRefs.resetBtn.setAttribute('aria-label', resetLbl);
+            uiRefs.resetBtn.title = resetLbl;
+            if (uiRefs.resetLabel) uiRefs.resetLabel.textContent = zh ? '回正' : 'Reset';
+            uiRefs.lastRotatedFlag = rotFlagNow;
+            uiRefs.resetBtn.setAttribute('data-rotated', rotFlagNow);
+          }
+          if (uiRefs.muteBtn) {
+            var muteLbl = zh
+              ? (muted ? '已静音（点击开启机械轴音效）' : '切换机械键盘音效')
+              : (muted ? 'Audio muted (Click to unmute)' : 'Toggle Mechanical Keycap Audio');
+            uiRefs.muteBtn.setAttribute('data-muted', muted ? '1' : '0');
+            uiRefs.muteBtn.setAttribute('aria-pressed', muted ? 'true' : 'false');
+            uiRefs.muteBtn.setAttribute('aria-label', muteLbl);
+            uiRefs.muteBtn.title = muteLbl;
+          }
+          if (uiRefs.closeBtn) {
+            var closeLbl = zh ? '确认并关闭' : 'Confirm and close';
+            uiRefs.closeBtn.setAttribute('aria-label', closeLbl);
+            uiRefs.closeBtn.title = closeLbl;
+          }
         }
 
         var litTierCount = payload && payload.bentoSpec ? Number(payload.bentoSpec.litDots) || 2 : 2;
@@ -2995,7 +3320,7 @@
         }
         if (activeRenderer && typeof activeRenderer.setState === 'function') {
           try {
-            activeRenderer.setState({
+            var nextRendererState = {
               themeProfile: profile,
               stageMode: stageMode,
               paused: isHostPaused,
@@ -3019,12 +3344,21 @@
               hardwareState: hardwareStatePayload,
               topControls: { muted: muted, hoveredBtn: hoveredBtn, pressedBtn: pressedBtn },
               reducedMotion: bentoUi.isReducedMotion(doc, root),
-            });
+            };
+            if (deferRender) {
+              activeRenderer.setState(nextRendererState, { deferRender: true });
+            } else {
+              activeRenderer.setState(nextRendererState);
+            }
           } catch (e2) {}
         }
 
-        if (!isOrbitDragging && (!skipRectSync || rebuiltEfforts)) {
-          syncHitLayerRects(Boolean(skipRectSync));
+        if (!isOrbitDragging) {
+          if (!skipRectSync) {
+            syncHitLayerRects(false);
+          } else if (effortLayoutChanged && !hoverOnly) {
+            syncEffortButtonRectsOnly();
+          }
         }
       }
 
@@ -3202,8 +3536,7 @@
         inspectedBlindAuxIndex = null;
         blindFlashZ = null;
         extNearRendererActive = false;
-        var prevEff = selectedZ !== null ? activeEffortByZ.get(selectedZ) || '' : '';
-        var chosen = resolveLevelForElementWithMemory(entry, prevEff);
+        var chosen = resolveLevelForElementWithMemory(entry, '');
         selectedZ = slotZ;
         selectedGlobalAuxIndex = null;
         confirmSlamAuxIndex = null;
@@ -3611,7 +3944,20 @@
           var initParsed = catalog.parseElementModelLabel(curOption);
           if (initParsed && fullAvailableByZ.has(initParsed.slotZ)) {
             selectedZ = initParsed.slotZ;
-            activeEffortByZ.set(initParsed.slotZ, initParsed.effort);
+            var initNormEff = normalizeEffortCode(initParsed.effort);
+            if (initNormEff) {
+              activeEffortByZ.set(initParsed.slotZ, initNormEff);
+              var initElEntry = fullAvailableByZ.get(initParsed.slotZ);
+              if (initElEntry && typeof hostBridge.writeSharedEffortMemory === 'function') {
+                hostBridge.writeSharedEffortMemory(
+                  root,
+                  doc,
+                  initElEntry.baseName || initElEntry.name,
+                  initNormEff,
+                  false
+                );
+              }
+            }
           } else {
             var initAuxCls = catalog.classifyNonElementOption(curOption, '');
             if (initAuxCls && initAuxCls.groupKey === 'orchestrator' && (!orchRegistry || orchRegistry.latchCapable)) {
@@ -3632,7 +3978,19 @@
                 if (labelMatched || (initAuxCls && aCandidate.id === initAuxCls.groupKey)) {
                   selectedGlobalAuxIndex = ai;
                   if (initAuxCls && initAuxCls.variantEffort) {
-                    activeEffortByGlobalAux.set(ai, initAuxCls.variantEffort);
+                    var initAuxNormEff = normalizeEffortCode(initAuxCls.variantEffort);
+                    if (initAuxNormEff) {
+                      activeEffortByGlobalAux.set(ai, initAuxNormEff);
+                      if (aCandidate.id !== 'orchestrator' && typeof hostBridge.writeSharedEffortMemory === 'function') {
+                        hostBridge.writeSharedEffortMemory(
+                          root,
+                          doc,
+                          aCandidate.title || aCandidate.shortLabel,
+                          initAuxNormEff,
+                          false
+                        );
+                      }
+                    }
                   }
                   break;
                 }
@@ -3857,7 +4215,7 @@
 
         syncSelectionStateFromHostCtx(activeHostCtx);
         overlayEl.setAttribute('data-orch-latched', orchLatched ? '1' : '0');
-        syncSceneAndDom(true);
+        syncSceneAndDom(true, { deferRender: true });
         syncMiniKeycapBadges();
 
         var zh = bentoUi.isZhLocale(doc, root);
@@ -3924,7 +4282,7 @@
         pressedEffort = null;
         hoveredBtn = null;
         pressedBtn = null;
-        if (hadHoverOrPress) syncSceneAndDom(true);
+        if (hadHoverOrPress) syncSceneAndDom(true, { hoverOnly: true, deferRender: true });
       }
 
       function isTargetInBentoOrHud(target) {
@@ -3945,6 +4303,19 @@
 
         var cx = pm.cx;
         var cy = pm.cy;
+        if (
+          cx === lastFlushedPointer.x &&
+          cy === lastFlushedPointer.y &&
+          pm.target === lastFlushedPointer.target &&
+          pm.insideOverlay === lastFlushedPointer.inside
+        ) {
+          return;
+        }
+        lastFlushedPointer.x = cx;
+        lastFlushedPointer.y = cy;
+        lastFlushedPointer.target = pm.target;
+        lastFlushedPointer.inside = pm.insideOverlay;
+
         if (!pm.insideOverlay) {
           var prox = updateDynamicPrismCssVars(cx, cy);
           if (prox && prox.extDockDist <= EXT_RIM_PROXIMITY_PX) {
@@ -3957,13 +4328,16 @@
           return;
         }
 
+        var coordsMoved = cx !== lastPointerClient.x || cy !== lastPointerClient.y || !lastPointerClient.active;
         lastPointerClient.x = cx;
         lastPointerClient.y = cy;
         lastPointerClient.active = true;
         extNearRendererActive = false;
 
-        updateDynamicPrismCssVars(cx, cy);
-        forwardPointerToRenderer(cx, cy, true);
+        if (coordsMoved) {
+          updateDynamicPrismCssVars(cx, cy);
+          forwardPointerToRenderer(cx, cy, true);
+        }
 
         if (isTargetInBentoOrHud(pm.target)) {
           clearStageHoverAndPress();
@@ -4017,7 +4391,7 @@
                     blindDwellTimer = 0;
                     if (isDestroyed || !overlayEl || isConfirmClosing || isDrawerClosing || blindFlashZ !== null || hoveredZ !== targetBlindZ) return;
                     inspectedBlindZ = targetBlindZ;
-                    syncSceneAndDom(true);
+                    syncSceneAndDom(true, { hoverOnly: true, deferRender: true });
                   }, BLIND_HOVER_DWELL_MS);
                 }
               } else if (nextHovAux !== null && auxSlots[nextHovAux] && !auxSlots[nextHovAux].available) {
@@ -4033,12 +4407,12 @@
                     blindDwellTimer = 0;
                     if (isDestroyed || !overlayEl || isConfirmClosing || isDrawerClosing || hoveredAuxIndex !== targetBlindAux) return;
                     inspectedBlindAuxIndex = targetBlindAux;
-                    syncSceneAndDom(true);
+                    syncSceneAndDom(true, { hoverOnly: true, deferRender: true });
                   }, BLIND_HOVER_DWELL_MS);
                 }
               }
             }
-            syncSceneAndDom(true);
+            syncSceneAndDom(true, { hoverOnly: true, deferRender: true });
           }
         }
       }
@@ -4112,6 +4486,20 @@
         lastPointerClient.x = -9999;
         lastPointerClient.y = -9999;
         lastPointerClient.active = false;
+        lastFlushedPointer.x = NaN;
+        lastFlushedPointer.y = NaN;
+        lastFlushedPointer.target = null;
+        lastFlushedPointer.inside = false;
+        lastDomSelectedZ = undefined;
+        lastDomHoveredZ = null;
+        lastDomSelectedAuxLocal = undefined;
+        lastDomOrchLatched = undefined;
+        lastDomChromeSig = '';
+        lastDomHaloSig = '';
+        lastDomHudSig = '';
+        lastDomCtrlSig = '';
+        lastDomBannerSig = '';
+        lastDomAvailVersion = -1;
 
         syncSelectionStateFromHostCtx(activeHostCtx);
         lastSessionSig = computeSessionContextSignature(activeHostCtx, activeAnchorBtn);
@@ -4397,6 +4785,8 @@
           muteBtn: muteBtn,
           closeBtn: closeBtn,
           effortButtons: [],
+          effortButtonPool: [],
+          effortTargetInfo: { isAuxModel: false, globalAuxIndex: null, z: null, effortTitle: '' },
           lastEffortSig: '',
           lastRotatedFlag: '0',
         };
@@ -4436,6 +4826,7 @@
           }
         }
 
+        clearStaleBlurIfActive();
         isHostPaused = computeHostPaused();
         refreshCachedLayoutRects();
         syncDockCompactState();
@@ -5001,11 +5392,13 @@
         var hadOverlay = Boolean(overlayEl);
 
         if (activeRenderer) {
-          if (typeof activeRenderer.releaseCaches === 'function') {
-            try { activeRenderer.releaseCaches(); } catch (eRc) {}
-          }
-          if (activeRenderer.oledPainter && typeof activeRenderer.oledPainter.releaseCaches === 'function') {
-            try { activeRenderer.oledPainter.releaseCaches(); } catch (eRc2) {}
+          if (co.releaseHeavyCaches) {
+            if (typeof activeRenderer.releaseCaches === 'function') {
+              try { activeRenderer.releaseCaches(); } catch (eRc) {}
+            }
+            if (activeRenderer.oledPainter && typeof activeRenderer.oledPainter.releaseCaches === 'function') {
+              try { activeRenderer.oledPainter.releaseCaches(); } catch (eRc2) {}
+            }
           }
           if (typeof activeRenderer.dispose === 'function') {
             try { activeRenderer.dispose(); } catch (eDisp) {}
@@ -5013,14 +5406,28 @@
           activeRenderer = null;
         }
 
-        if (!co.preserveCaches) {
+        if (audioEngine && typeof audioEngine.dispose === 'function') {
+          try { audioEngine.dispose(); } catch (eAud) {}
+        }
+
+        if (co.releaseHeavyCaches) {
           releaseAllHeavyCaches();
         }
 
-        if (bentoRefs && bentoRefs._sessionFadeTimer) {
-          var clearFadeT = (root && typeof root.clearTimeout === 'function' ? root.clearTimeout : clearTimeout);
-          try { clearFadeT(bentoRefs._sessionFadeTimer); } catch (e) {}
-          bentoRefs._sessionFadeTimer = 0;
+        if (bentoRefs) {
+          if (typeof bentoUi.clearBentoSessionSwitchFade === 'function') {
+            bentoUi.clearBentoSessionSwitchFade(bentoRefs, root);
+          } else {
+            if (bentoRefs._sessionFadeRaf && cancelRaf) {
+              try { cancelRaf(bentoRefs._sessionFadeRaf); } catch (eRaf) {}
+              bentoRefs._sessionFadeRaf = 0;
+            }
+            if (bentoRefs._sessionFadeTimer) {
+              var clearFadeT = (root && typeof root.clearTimeout === 'function' ? root.clearTimeout : clearTimeout);
+              try { clearFadeT(bentoRefs._sessionFadeTimer); } catch (e) {}
+              bentoRefs._sessionFadeTimer = 0;
+            }
+          }
         }
         if (hadOverlay) {
           var toRemove = overlayEl;
@@ -5039,6 +5446,20 @@
           cachedStageBounds.valid = false;
           rimGlowWasActive = false;
           lastStageCursor = '';
+          lastFlushedPointer.x = NaN;
+          lastFlushedPointer.y = NaN;
+          lastFlushedPointer.target = null;
+          lastFlushedPointer.inside = false;
+          lastDomSelectedZ = undefined;
+          lastDomHoveredZ = null;
+          lastDomSelectedAuxLocal = undefined;
+          lastDomOrchLatched = undefined;
+          lastDomChromeSig = '';
+          lastDomHaloSig = '';
+          lastDomHudSig = '';
+          lastDomCtrlSig = '';
+          lastDomBannerSig = '';
+          lastDomAvailVersion = -1;
           keyNodesByZ.clear();
           auxKeyNodes.length = 0;
           hudChipByZ.clear();
@@ -5127,27 +5548,45 @@
       /* ── Global Document & Window Handlers ─────────────────────────────── */
 
       function onDocPointerDown(ev) {
-        if (isDestroyed || currentMode === 'off' || !ev) return;
+        if (isDestroyed || currentMode === 'off' || !ev || isReplayingNativeTrigger) return;
+        if (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey) return;
+
         if (overlayEl) {
-          if (!isDrawerClosing && ev.button === 0 && ev.target && typeof ev.target.closest === 'function') {
+          if (!isDrawerClosing && ev.target && typeof ev.target.closest === 'function') {
             var hitBadge = ev.target.closest('.ag-pp-mini-keycap');
             if (hitBadge && !hostBridge.isInsideExcludedZone(hitBadge)) {
               cancelHold(false);
-              armSuppressNextClick();
+              pendingLongPressReleaseBtn = null;
+              var badgeBtn =
+                (typeof hitBadge.closest === 'function' && hitBadge.closest('button')) || hitBadge;
+              armSuppressNextClick(badgeBtn);
               if (typeof ev.preventDefault === 'function') ev.preventDefault();
               if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
+              if (typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation();
               collapseDrawerAndClose();
+              return;
             }
           }
-          return;
+          if (isTargetWithinNode(overlayEl, ev.target)) return;
         }
-        if (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey) return;
 
         var triggerBtn = hostBridge.matchModelTriggerButton(ev.target, root, doc);
         if (!triggerBtn) return;
 
-        /* Pain Point #2: Suppress native tooltip immediately BEFORE 110ms hold ring without blocking pointerdown/click! */
+        /* User is actively pressing trigger inside this window -> clear any stale blur flag */
+        clearStaleBlurIfActive();
+        if (isHostPaused) syncHostPauseState();
+
+        /* 0ms capture interception: prevent Radix/Base UI from opening native dropdown on pointerdown */
+        if (typeof ev.preventDefault === 'function') ev.preventDefault();
+        if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
+        if (typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation();
+
+        pendingLongPressReleaseBtn = null;
+        suppressTrailingUntilMs = 0;
+        suppressTrailingBtn = null;
         cancelHold(false);
+
         if (typeof hostBridge.setHoldTooltipSuppression === 'function') {
           hostBridge.setHoldTooltipSuppression(doc, true, triggerBtn);
         }
@@ -5155,10 +5594,22 @@
           hostBridge.suppressNativeTooltip(doc, triggerBtn, true);
         }
 
+        var wasOpenAtDown = Boolean(overlayEl && !isDrawerClosing);
+        var wasNativeOpenAtDown = isNativeHostMenuOpen(doc, triggerBtn);
+        var startX = Number(ev.clientX) || 0;
+        var startY = Number(ev.clientY) || 0;
         var state = {
           btn: triggerBtn,
-          startX: Number(ev.clientX) || 0,
-          startY: Number(ev.clientY) || 0,
+          wasOpen: wasOpenAtDown,
+          wasNativeMenuOpen: wasNativeOpenAtDown,
+          pointerId: ev.pointerId !== undefined ? ev.pointerId : 1,
+          pointerType: typeof ev.pointerType === 'string' && ev.pointerType ? ev.pointerType : 'mouse',
+          startX: startX,
+          startY: startY,
+          lastX: startX,
+          lastY: startY,
+          drifted: false,
+          triggeredLongPress: false,
           ring: null,
           ringTimer: 0,
           prewarmTimer: 0,
@@ -5177,24 +5628,57 @@
           if (state.ring && state.ring.el) markPeriodicOwnedRoot(state.ring.el);
         }, HOLD_RING_DELAY_MS);
 
-        state.prewarmTimer = setTimer(function () {
-          if (holdState !== state || isDestroyed || !isNodeConnectedToDoc(doc, triggerBtn)) return;
-          state.prewarmTimer = 0;
-          state.didPrewarm = true;
-          prewarmActiveModelAssets(triggerBtn);
-        }, HOLD_PREWARM_DELAY_MS);
+        if (!wasOpenAtDown) {
+          state.prewarmTimer = setTimer(function () {
+            if (holdState !== state || isDestroyed || !isNodeConnectedToDoc(doc, triggerBtn)) return;
+            state.prewarmTimer = 0;
+            state.didPrewarm = true;
+            prewarmActiveModelAssets(triggerBtn);
+          }, HOLD_PREWARM_DELAY_MS);
+        }
 
         state.openTimer = setTimer(function () {
           if (holdState !== state || isDestroyed || !isNodeConnectedToDoc(doc, triggerBtn)) {
             cancelHold(false);
             return;
           }
+          state.triggeredLongPress = true;
+          pendingLongPressReleaseBtn = triggerBtn;
           cancelHold(true);
-          armSuppressNextClick();
-          var ctx = hostBridge.readHostModelContext(triggerBtn, root, doc);
-          hostBridge.dismissNativeHostMenu(ctx, doc);
-          open(triggerBtn);
+          armSuppressNextClick(triggerBtn);
+          if (state.wasOpen) {
+            collapseDrawerAndClose();
+          } else {
+            var ctx = hostBridge.readHostModelContext(triggerBtn, root, doc);
+            hostBridge.dismissNativeHostMenu(ctx, doc);
+            open(triggerBtn);
+          }
         }, HOLD_OPEN_DELAY_MS);
+      }
+
+      function onDocMouseDown(ev) {
+        if (isDestroyed || currentMode === 'off' || !ev || isReplayingNativeTrigger) return;
+        if (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey) return;
+        if (overlayEl && isTargetWithinNode(overlayEl, ev.target)) return;
+
+        var shouldBlock = false;
+        if (holdState && isTargetWithinNode(holdState.btn, ev.target)) {
+          shouldBlock = true;
+        } else if (
+          suppressUntilMs &&
+          Date.now() <= suppressUntilMs &&
+          (!suppressTargetBtn || isTargetWithinNode(suppressTargetBtn, ev.target))
+        ) {
+          shouldBlock = true;
+        } else if (hostBridge.matchModelTriggerButton(ev.target, root, doc)) {
+          shouldBlock = true;
+        }
+
+        if (shouldBlock) {
+          if (typeof ev.preventDefault === 'function') ev.preventDefault();
+          if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
+          if (typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation();
+        }
       }
 
       function onDocPointerMove(ev) {
@@ -5204,9 +5688,18 @@
           if (!isNodeConnectedToDoc(doc, holdState.btn)) {
             cancelHold(false);
           } else {
-            var dx = (Number(ev.clientX) || 0) - holdState.startX;
-            var dy = (Number(ev.clientY) || 0) - holdState.startY;
-            if (dx * dx + dy * dy >= HOLD_MAX_DRIFT_PX * HOLD_MAX_DRIFT_PX) cancelHold(false);
+            var mx = Number(ev.clientX) || 0;
+            var my = Number(ev.clientY) || 0;
+            holdState.lastX = mx;
+            holdState.lastY = my;
+            var dx = mx - holdState.startX;
+            var dy = my - holdState.startY;
+            if (dx * dx + dy * dy >= HOLD_MAX_DRIFT_PX * HOLD_MAX_DRIFT_PX) {
+              var driftedBtn = holdState.btn;
+              holdState.drifted = true;
+              cancelHold(false);
+              armSuppressTrailingNativeRelease(driftedBtn);
+            }
           }
         }
         if (overlayEl && !isDestroyed && !isConfirmClosing && !isDrawerClosing && !isHostPaused) {
@@ -5217,12 +5710,66 @@
         }
       }
 
-      function onDocPointerEnd() {
-        if (holdState) cancelHold(false);
+      function onDocPointerUp(ev) {
+        if (isDestroyed || currentMode === 'off' || !ev || isReplayingNativeTrigger) return;
+        if (pendingLongPressReleaseBtn) {
+          var lpBtn = pendingLongPressReleaseBtn;
+          pendingLongPressReleaseBtn = null;
+          armSuppressNextClick(lpBtn);
+          if (!overlayEl || !isTargetWithinNode(overlayEl, ev.target)) {
+            if (typeof ev.preventDefault === 'function') ev.preventDefault();
+            if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
+            if (typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation();
+          }
+          return;
+        }
+        if (!holdState) return;
+
+        var st = holdState;
+        var btn = st.btn;
+        var upX = ev.clientX !== undefined ? Number(ev.clientX) || st.startX : st.lastX;
+        var upY = ev.clientY !== undefined ? Number(ev.clientY) || st.startY : st.lastY;
+        var dx = upX - st.startX;
+        var dy = upY - st.startY;
+        var driftedNow = st.drifted || dx * dx + dy * dy >= HOLD_MAX_DRIFT_PX * HOLD_MAX_DRIFT_PX;
+
+        if (typeof ev.preventDefault === 'function') ev.preventDefault();
+        if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
+        if (typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation();
+
+        cancelHold(false);
+
+        if (!driftedNow && !st.triggeredLongPress && isNodeConnectedToDoc(doc, btn)) {
+          if (overlayEl) {
+            close({ silent: true });
+          }
+          replayNativeTriggerClick(btn, {
+            clientX: upX,
+            clientY: upY,
+            pointerId: ev.pointerId !== undefined ? ev.pointerId : st.pointerId,
+            pointerType: typeof ev.pointerType === 'string' && ev.pointerType ? ev.pointerType : st.pointerType,
+            wasNativeMenuOpen: st.wasNativeMenuOpen,
+          });
+        } else {
+          armSuppressTrailingNativeRelease(btn);
+        }
+      }
+
+      function onDocPointerCancel() {
+        pendingLongPressReleaseBtn = null;
+        if (holdState) {
+          var cancelBtn = holdState.btn;
+          cancelHold(false);
+          armSuppressTrailingNativeRelease(cancelBtn);
+        }
       }
 
       function onDocScroll() {
-        if (holdState) cancelHold(false);
+        if (holdState) {
+          var scrollBtn = holdState.btn;
+          cancelHold(false);
+          armSuppressTrailingNativeRelease(scrollBtn);
+        }
         if (overlayEl && !isDestroyed && !isConfirmClosing && !isDrawerClosing && !isOrbitDragging) {
           var nowScrollMs = readClockMs();
           if (nowScrollMs - lastBoundsSyncMs > 120) {
@@ -5233,20 +5780,43 @@
       }
 
       function onDocVisibilityChange() {
-        if (doc && doc.hidden) {
+        if (isDocHiddenNow()) {
+          pendingLongPressReleaseBtn = null;
           if (holdState) cancelHold(false);
           clearDragAndPointerOnBlur();
+          releaseAllHeavyCaches();
+        } else {
+          clearStaleBlurIfActive();
         }
         syncHostPauseState();
       }
 
       function onDocSuppressClick(ev) {
+        if (isReplayingNativeTrigger) return;
+
+        if (suppressTrailingUntilMs) {
+          if (Date.now() > suppressTrailingUntilMs) {
+            suppressTrailingUntilMs = 0;
+            suppressTrailingBtn = null;
+          } else if (ev && isTargetWithinNode(suppressTrailingBtn, ev.target)) {
+            if (typeof ev.preventDefault === 'function') ev.preventDefault();
+            if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
+            if (typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation();
+            if (ev.type === 'click') {
+              suppressTrailingUntilMs = 0;
+              suppressTrailingBtn = null;
+            }
+            return;
+          }
+        }
+
         if (!suppressUntilMs) {
           if (ev && ev.type === 'click' && !overlayEl) syncMiniKeycapBadges();
           return;
         }
         if (Date.now() > suppressUntilMs) {
           suppressUntilMs = 0;
+          suppressTargetBtn = null;
           return;
         }
         if (ev && overlayEl && typeof overlayEl.contains === 'function' && overlayEl.contains(ev.target)) return;
@@ -5257,6 +5827,7 @@
         }
         if (ev && ev.type === 'click') {
           suppressUntilMs = 0;
+          suppressTargetBtn = null;
           if (suppressTimer) {
             clearTimer(suppressTimer);
             suppressTimer = 0;
@@ -5354,8 +5925,10 @@
         }
       }
 
-      function onWindowBlur() {
+      function onWindowBlur(ev) {
+        if (ev && ev.target && root && ev.target !== root) return;
         windowBlurred = true;
+        pendingLongPressReleaseBtn = null;
         if (holdState) cancelHold(false);
         clearDragAndPointerOnBlur();
         syncHostPauseState();
@@ -5401,7 +5974,10 @@
             sawBlurAttr = true;
             sawThemeAttr = true;
           }
-          if (sawBlurAttr) syncHostPauseState();
+          if (sawBlurAttr) {
+            if (!isHostWinBlurAttrSet()) windowBlurred = false;
+            syncHostPauseState();
+          }
           if (sawThemeAttr) {
             bentoUi.invalidateComputedThemeCache(doc);
             syncMiniKeycapBadges();
@@ -5442,10 +6018,11 @@
         doc.documentElement.setAttribute(ROOT_MARKER_ATTR, '1');
         bentoUi.ensureStyles(doc);
         onDoc('pointerdown', onDocPointerDown, true);
+        onDoc('mousedown', onDocMouseDown, true);
         onDoc('pointermove', onDocPointerMove, true);
-        onDoc('pointerup', onDocPointerEnd, true);
-        onDoc('pointercancel', onDocPointerEnd, true);
-        onDoc('contextmenu', onDocPointerEnd, true);
+        onDoc('pointerup', onDocPointerUp, true);
+        onDoc('pointercancel', onDocPointerCancel, true);
+        onDoc('contextmenu', onDocPointerCancel, true);
         onDoc('scroll', onDocScroll, true);
         onDoc('visibilitychange', onDocVisibilityChange, false);
         onDoc('mouseup', onDocSuppressClick, true);
@@ -5461,6 +6038,8 @@
 
       function deactivate() {
         cancelHold(false);
+        pendingLongPressReleaseBtn = null;
+        isReplayingNativeTrigger = false;
         bentoUi.invalidateComputedThemeCache(doc);
         clearBadgeTimer();
         clearTransientAsync();
@@ -5470,7 +6049,10 @@
           suppressTimer = 0;
         }
         suppressUntilMs = 0;
-        close({ silent: true });
+        suppressTargetBtn = null;
+        suppressTrailingUntilMs = 0;
+        suppressTrailingBtn = null;
+        close({ silent: true, releaseHeavyCaches: true });
         releaseAllHeavyCaches();
         removeAllMiniKeycaps();
         removeAllListeners();
@@ -5607,6 +6189,7 @@
       writeSharedEffortMemory: defaultHostBridge.writeSharedEffortMemory,
       getRememberedEffort: defaultHostBridge.getRememberedEffort,
       isEffortMemoryEnabled: defaultHostBridge.isEffortMemoryEnabled,
+      normalizeEffortToken: defaultHostBridge.normalizeEffortToken,
       findFallbackModelTrigger: defaultHostBridge.findFallbackModelTrigger,
       collectVisibleModelTriggerButtons: defaultHostBridge.collectVisibleModelTriggerButtons,
       matchModelTriggerButton: defaultHostBridge.matchModelTriggerButton,
@@ -5631,6 +6214,7 @@
       updateBentoTwinCards: defaultBentoUi.updateBentoTwinCards,
       syncAuxPagerDom: defaultBentoUi.syncAuxPagerDom,
       triggerBentoSessionSwitchFade: defaultBentoUi.triggerBentoSessionSwitchFade,
+      clearBentoSessionSwitchFade: defaultBentoUi.clearBentoSessionSwitchFade,
 
       /* Re-exports from audio-fx.js */
       MUTE_STORAGE_KEY: defaultAudioFx.MUTE_STORAGE_KEY,

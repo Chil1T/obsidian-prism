@@ -1172,16 +1172,31 @@ test('420ms long-press opens picker and dismisses native menu, while <110ms shor
 
   const inst = factory.mountPeriodicPicker({ root: env.window, doc: env.document, mode: 'on' });
 
-  // 1) Short press (< 110ms): no ring, no modal, click passes through unintercepted
-  triggerBtn.dispatchEvent(env.createEventObj('pointerdown', { button: 0, clientX: 120, clientY: 112 }));
+  // 1) Short press (< 110ms): 0ms pointerdown intercepts Radix/Base UI popup, then pointerup replays clean native click sequence and swallows trailing physical click
+  let nativeReplayedClicks = 0;
+  let nativeReplayedPointerDowns = 0;
+  triggerBtn.addEventListener('pointerdown', () => {
+    nativeReplayedPointerDowns += 1;
+  });
+  triggerBtn.addEventListener('click', () => {
+    nativeReplayedClicks += 1;
+  });
+
+  const shortDownEv = env.createEventObj('pointerdown', { button: 0, clientX: 120, clientY: 112 });
+  triggerBtn.dispatchEvent(shortDownEv);
+  assert.equal(shortDownEv.defaultPrevented, true, '0ms pointerdown must be captured to prevent Radix/Base UI opening on hold');
+  assert.equal(nativeReplayedPointerDowns, 0, 'Host must not receive raw pointerdown before short-click release');
   env.advanceTime(60);
   assert.equal(env.document.querySelector('.ag-pp-hold-ring'), null);
   triggerBtn.dispatchEvent(env.createEventObj('pointerup', { button: 0, clientX: 120, clientY: 112 }));
-  const shortClickEv = env.createEventObj('click', { button: 0, clientX: 120, clientY: 112 });
-  const shortAllowed = triggerBtn.dispatchEvent(shortClickEv);
-  assert.equal(shortAllowed, true);
-  assert.equal(shortClickEv.defaultPrevented, false);
-  assert.equal(shortClickEv.propagationStopped, false);
+  assert.equal(nativeReplayedPointerDowns, 1, 'Short-click release must replay native pointerdown cleanly');
+  assert.equal(nativeReplayedClicks, 1, 'Short-click release must replay native click cleanly');
+
+  const trailingPhysicalClick = env.createEventObj('click', { button: 0, clientX: 120, clientY: 112 });
+  const shortAllowed = triggerBtn.dispatchEvent(trailingPhysicalClick);
+  assert.equal(shortAllowed, false, 'Trailing physical click after replay must be swallowed to prevent double-toggle');
+  assert.equal(trailingPhysicalClick.defaultPrevented, true);
+  assert.equal(nativeReplayedClicks, 1, 'Host must still receive exactly 1 click for the short tap');
   assert.equal(inst.isOpen(), false);
   assert.equal(setIsOpenCalls.length, 0);
 
@@ -6428,22 +6443,32 @@ test('V14.1 Cold-Start Zero Decode, 120ms Pre-Warm, Immediate Close Eviction, Ze
   env.document.dispatchEvent(env.createEventObj('keydown', { key: 'Escape' }, env.body));
   assert.equal(hostState.selectedModel.label, 'Claude Sonnet 5.5', 'Escape after conversation switch must never overwrite new conversation model');
 
-  // 4e) Close -> immediate 0fps + immediate bitmap & PBR grain eviction & AudioContext close + instant re-decode on next open
+  // 4e) Close -> immediate 0fps + WebGL/Audio release while retaining warm decoded caches for fast reopen; visibility hidden & destroy() evict caches immediately
   assert.equal(inst.open(triggerBtn2), true);
   assert.ok(inst.getStatus().cachedWallpapers >= 1);
   assert.equal(inst.getStatus().grainDecoded, true);
   inst.close();
   assert.equal(env.getCounts().activeRafs, 0, 'Closing dock must immediately settle to 0fps');
   assert.equal(env.getCounts().activeTimers, 0, 'Closing dock must leave 0 idle eviction timers');
-  assert.equal(inst.getStatus().cachedWallpapers, 0, 'Closing dock must IMMEDIATELY evict cached offscreen wallpaper Images');
-  assert.equal(inst.getStatus().grainDecoded, false, 'Closing dock must IMMEDIATELY evict decoded PBR grain TypedArrays');
   assert.equal(audioCloseCount >= 1 && inst.getStatus().audioState === 'none', true, 'Closing dock must immediately close/release AudioContext');
+  assert.ok(inst.getStatus().cachedWallpapers >= 1, 'Normal close retains warm decoded wallpaper cache for fast reopen');
+  assert.equal(inst.getStatus().grainDecoded, true, 'Normal close retains warm decoded PBR grain cache for fast reopen');
 
-  // Reopen after immediate eviction -> seamlessly re-decodes on demand!
+  // Window backgrounding (visibilitychange: hidden) must immediately evict all heavy caches
+  env.document.visibilityState = 'hidden';
+  env.document.dispatchEvent(env.createEventObj('visibilitychange'));
+  assert.equal(inst.getStatus().cachedWallpapers, 0, 'Backgrounding window must IMMEDIATELY evict cached offscreen wallpaper Images');
+  assert.equal(inst.getStatus().grainDecoded, false, 'Backgrounding window must IMMEDIATELY evict decoded PBR grain TypedArrays');
+  env.document.visibilityState = 'visible';
+  env.document.dispatchEvent(env.createEventObj('visibilitychange'));
+
+  // Reopen after eviction -> seamlessly re-decodes on demand!
   assert.equal(inst.open(triggerBtn2), true);
-  assert.ok(inst.getStatus().cachedWallpapers >= 1, 'Reopening after immediate eviction must seamlessly re-decode active banner');
-  assert.equal(inst.getStatus().grainDecoded, true, 'Reopening after immediate eviction must seamlessly re-decode PBR grain');
-  inst.close();
+  assert.ok(inst.getStatus().cachedWallpapers >= 1, 'Reopening after eviction must seamlessly re-decode active banner');
+  assert.equal(inst.getStatus().grainDecoded, true, 'Reopening after eviction must seamlessly re-decode PBR grain');
+  inst.close({ releaseHeavyCaches: true });
+  assert.equal(inst.getStatus().cachedWallpapers, 0, 'Explicit releaseHeavyCaches close must immediately evict wallpapers');
+  assert.equal(inst.getStatus().grainDecoded, false, 'Explicit releaseHeavyCaches close must immediately evict PBR grain');
 
   // 5) Stress cycle: 25x open -> interact -> close + 10x mount -> destroy with zero leaked handles
   for (let c = 0; c < 25; c += 1) {
@@ -6542,16 +6567,20 @@ test('V14.1 Deep Bug Regression Suite: Animated Drawer Close Immediate Eviction,
   assert.equal(btn.childNodes[2], labelSpan);
   assert.equal(btn.childNodes[3], chevronSvg);
 
-  // 2) Cancelled hold between 120ms and 420ms (never opened dock) MUST immediately release pre-warmed caches!
+  // 2) Cancelled hold between 120ms and 420ms leaves 0 timers and keeps warm cache until hidden/destroy
   env.document.dispatchEvent(env.createEventObj('pointerdown', { button: 0, clientX: 80, clientY: 600 }, btn));
   env.advanceTime(160);
   assert.equal(inst.getStatus().cachedWallpapers, 1, '160ms hold pre-warmed active wallpaper');
   assert.equal(inst.getStatus().grainDecoded, true, '160ms hold pre-warmed PBR grain');
   env.document.dispatchEvent(env.createEventObj('pointerup', { button: 0, clientX: 80, clientY: 600 }, btn));
   assert.equal(inst.isOpen(), false);
-  assert.equal(inst.getStatus().cachedWallpapers, 0, 'Pre-warmed wallpaper from cancelled hold must evict immediately');
-  assert.equal(inst.getStatus().grainDecoded, false, 'Pre-warmed PBR grain from cancelled hold must evict immediately');
   assert.equal(env.getCounts().activeTimers, 0, 'Cancelled hold must leave 0 timers');
+  env.document.visibilityState = 'hidden';
+  env.document.dispatchEvent(env.createEventObj('visibilitychange'));
+  assert.equal(inst.getStatus().cachedWallpapers, 0, 'Hidden visibility must immediately evict pre-warmed wallpaper');
+  assert.equal(inst.getStatus().grainDecoded, false, 'Hidden visibility must immediately evict pre-warmed PBR grain');
+  env.document.visibilityState = 'visible';
+  env.document.dispatchEvent(env.createEventObj('visibilitychange'));
 
   // 3) MOD-02 Mute button, StageMode toggle (F), and live 512K telemetry updates must never freeze on bentoSig!
   assert.equal(inst.open(btn), true);
@@ -6579,16 +6608,18 @@ test('V14.1 Deep Bug Regression Suite: Animated Drawer Close Immediate Eviction,
   assert.notEqual(bigNumEl.textContent, prevTeleText, 'MOD-02 512K telemetry readout must update when host context usage changes');
   assert.ok(bigNumEl.textContent.includes('420K'), `Expected ~420K in telemetry readout, got ${bigNumEl.textContent}`);
 
-  // 4) Animated drawer close (real browser HTMLElement path via quickCloseBtn -> collapseDrawerAndClose) MUST immediately evict!
+  // 4) Animated drawer close (real browser HTMLElement path via quickCloseBtn -> collapseDrawerAndClose) settles to 0fps/0 timers, and destroy() evicts all heavy caches
   assert.ok(closeBtn);
   closeBtn.dispatchEvent(env.createEventObj('click'));
   // Advance past confirmSlam (115ms) + drawer close transition (260ms)
   env.advanceTime(450);
   assert.equal(inst.isOpen(), false, 'Animated drawer close completed');
-  assert.equal(inst.getStatus().cachedWallpapers, 0, 'Animated browser drawer close MUST immediately evict cached wallpapers');
-  assert.equal(inst.getStatus().grainDecoded, false, 'Animated browser drawer close MUST immediately evict decoded PBR grain');
+  assert.equal(env.getCounts().activeRafs, 0, 'Animated drawer close must settle to 0fps');
+  assert.equal(env.getCounts().activeTimers, 0, 'Animated drawer close must leave 0 active timers');
 
   inst.destroy();
+  assert.equal(inst.getStatus().cachedWallpapers, 0, 'destroy() MUST immediately evict cached wallpapers');
+  assert.equal(inst.getStatus().grainDecoded, false, 'destroy() MUST immediately evict decoded PBR grain');
   assert.equal(env.getCounts().activeTimers, 0);
 });
 
@@ -6692,12 +6723,11 @@ test('v1.0.8-beta (a) Open-state session switch 80ms debounce sync: ripple + 1.2
   assert.equal(badgeShownCalls.length, 1, 'Different-model session switch must trigger OLED sync badge');
   assert.equal(badgeShownCalls[0].dur, 1200);
   assert.equal(badgeShownCalls[0].label, '已同步会话');
-  assert.equal(specCard.classList.contains('is-session-switching'), true, 'Spec card must enter .is-session-switching fade');
-  assert.equal(telePod.classList.contains('is-session-switching'), true, 'Telemetry pod must enter .is-session-switching fade');
-
-  // Render at least one frame to confirm OLED canvas draws the synced badge text, then verify 180ms card fade & 1200ms badge clear
+  // Zero-reflow rAF class toggle: enters .is-session-switching on the next animation frame without forced offsetWidth
   env.advanceTime(16);
   env.flushRaf();
+  assert.equal(specCard.classList.contains('is-session-switching'), true, 'Spec card must enter .is-session-switching fade on rAF');
+  assert.equal(telePod.classList.contains('is-session-switching'), true, 'Telemetry pod must enter .is-session-switching fade on rAF');
   assert.ok(capturedOledTexts.includes('已同步会话'), `OLED must render "已同步会话" micro-badge, got ${JSON.stringify(capturedOledTexts)}`);
 
   env.advanceTime(180);
@@ -6764,12 +6794,12 @@ test('v1.0.8-beta (b) Long-press precision tooltip suppression (data-ag-pp-holdi
 
   const inst = factory.mountPeriodicPicker({ root: env.window, doc: env.document, mode: 'on' });
 
-  // 1) Short press: pointerdown suppresses native tooltip immediately without blocking pointerdown or trailing click bubble
+  // 1) Short press: 0ms pointerdown intercepts Radix/Base UI popup & suppresses native tooltip immediately, then pointerup restores tooltip and replays clean click bubbling to host
   triggerBtn.focus();
   const pdEv = env.createEventObj('pointerdown', { button: 0, clientX: 120, clientY: 112 });
   triggerBtn.dispatchEvent(pdEv);
-  assert.equal(pdEv.defaultPrevented, false);
-  assert.equal(pdEv.propagationStopped, false);
+  assert.equal(pdEv.defaultPrevented, true, '0ms pointerdown must be intercepted so native dropdown never pops during hold');
+  assert.equal(pdEv.propagationStopped, true);
   assert.equal(env.html.getAttribute('data-ag-pp-holding'), '1', 'pointerdown must immediately set data-ag-pp-holding="1" before 110ms ring');
   assert.equal(nativeTooltip.getAttribute('data-ag-pp-suppressed-tt'), '1');
   assert.equal(nativeTooltip.style.getPropertyValue('visibility'), 'hidden');
@@ -6781,12 +6811,12 @@ test('v1.0.8-beta (b) Long-press precision tooltip suppression (data-ag-pp-holdi
   triggerBtn.dispatchEvent(env.createEventObj('pointerup', { button: 0, clientX: 120, clientY: 112 }));
   assert.equal(env.html.hasAttribute('data-ag-pp-holding'), false, 'pointerup must clear data-ag-pp-holding');
   assert.equal(nativeTooltip.hasAttribute('data-ag-pp-suppressed-tt'), false, 'pointerup must restore native tooltip');
+  assert.equal(parentClickCount, 1, 'Short-press release must replay click and bubble freely to host');
 
-  const clickEv = env.createEventObj('click', { button: 0, clientX: 120, clientY: 112 });
-  assert.equal(triggerBtn.dispatchEvent(clickEv), true);
-  assert.equal(clickEv.defaultPrevented, false);
-  assert.equal(clickEv.propagationStopped, false);
-  assert.equal(parentClickCount, 1, 'Short-press left click must bubble freely to host');
+  const trailingClickEv = env.createEventObj('click', { button: 0, clientX: 120, clientY: 112 });
+  assert.equal(triggerBtn.dispatchEvent(trailingClickEv), false, 'Trailing physical click after replay must be swallowed');
+  assert.equal(trailingClickEv.defaultPrevented, true);
+  assert.equal(parentClickCount, 1, 'Host must not receive duplicate click from physical mouse release');
 
   // 2) Cancel mid-hold via pointercancel / window blur -> cleanly removes data-ag-pp-holding
   triggerBtn.dispatchEvent(env.createEventObj('pointerdown', { button: 0, clientX: 120, clientY: 112 }));
@@ -7404,4 +7434,221 @@ test('v1.0.8-beta (l) host-i18n ag-pp- whitelist + #ag-prism-periodic-picker-roo
   }
 
   inst.destroy();
+});
+
+test('v1.0.8-beta live-fix (1) 300Hz WebGL2 hot-path: 0 per-frame dynMesh rebuilds, cached pick(), legend atlas reuse/eviction, 0 offsetWidth reflow, and unpaused reopen after blur', () => {
+  const bentoSrc = fs.readFileSync(BENTO_UI_FILE, 'utf8');
+  assert.equal(/\boffsetWidth\b/.test(bentoSrc), false, 'bento-ui.js must have 0 forced offsetWidth layout reflows');
+
+  const env = createPeriodicSandbox({ mock2d: true, mockWebGL2: true });
+  loadPeriodicModuleInSandbox(env, 'model-catalog.js');
+  loadGrainAssetsInSandbox(env);
+  loadOledScreenInSandbox(env);
+  loadKeyboard3DInSandbox(env);
+  const kb3dMod = env.sandbox.__agPrismKeyboard3D;
+  const slots90 = env.sandbox.__agPeriodicModelCatalog.ELEMENTS_90;
+  assert.equal(typeof kb3dMod.evictLegendAtlasCache, 'function', 'keyboard-3d-gl.js must export evictLegendAtlasCache');
+
+  const canvas = env.makeElement('canvas', { width: 1200, height: 600 });
+  canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1200, height: 600, right: 1200, bottom: 600 });
+  const r1 = kb3dMod.createKeyboard3DRenderer({
+    canvas,
+    doc: env.document,
+    root: env.window,
+    slots: slots90,
+  });
+  const availMap = new Map([
+    [1, { slotZ: 1, baseName: 'Gemini 4 Hydrogen', name: 'Hydrogen' }],
+    [6, { slotZ: 6, baseName: 'Gemini 4 Carbon', name: 'Carbon' }],
+    [10, { slotZ: 10, baseName: 'Gemini 4 Neon', name: 'Neon' }],
+    [18, { slotZ: 18, baseName: 'Gemini 4 Argon', name: 'Argon' }],
+  ]);
+  r1.resize(1200, 600, 1.5);
+  r1.setState({
+    themeProfile: { id: 'obsidian-dark', isLight: false, isMono: false, ambientMul: 0.7, primaryHex: '#669DF6' },
+    availableByZ: availMap,
+    selectedZ: 10,
+    hoveredZ: 6,
+    activeEffort: 'xhigh',
+    motionLevel: 'full',
+  });
+  // Settle initial keycap spring levitation so gapH reaches steady state
+  for (let s = 0; s < 160 && !r1.isIdle(); s += 1) {
+    r1.step(0.016);
+  }
+  const rebuildsBeforeFlux = r1.getPerfStats().dynMeshRebuilds;
+  r1.triggerEnergyPulse(1.0);
+
+  // Run 30 animated frames while flux/energyPulse/zeroG are active: GPU shader drives flux -> 0 extra dynMesh rebuilds!
+  for (let f = 0; f < 30; f += 1) {
+    r1.step(0.008);
+  }
+  const perf = r1.getPerfStats();
+  const fluxRebuildsDelta = perf.dynMeshRebuilds - rebuildsBeforeFlux;
+  assert.equal(fluxRebuildsDelta, 0, `Animated 30 frames of flux/energyPulse must trigger 0 extra dynMesh rebuilds, got ${fluxRebuildsDelta}`);
+
+  // 100 consecutive raycast picks across projected keycap centers should hit exact keys using cached inverse matrices
+  const projRects = r1.getInteractiveProjectedRects();
+  const keyRectList = projRects && Array.isArray(projRects.keys) ? projRects.keys : [];
+  assert.ok(keyRectList.length >= 90, `Expected 90 projected key rects, got ${keyRectList.length}`);
+  let exactHits = 0;
+  for (let p = 0; p < 100; p += 1) {
+    const kr = keyRectList[p % keyRectList.length];
+    const targetZ = kr.slotZ !== undefined ? kr.slotZ : kr.z;
+    const hit = r1.pick(kr.left + kr.width * 0.5, kr.top + kr.height * 0.5);
+    if (hit && hit.kind === 'key' && (hit.slotZ === targetZ || hit.z === targetZ)) {
+      exactHits += 1;
+    }
+  }
+  assert.ok(exactHits >= 90, `Cached AABB/inverse-matrix raycast pick() must accurately detect keys (exactHits=${exactHits}/100)`);
+
+  // deferRender: true schedules rAF without throwing or doing blocking rebuild
+  const beforeDeferRebuilds = r1.getPerfStats().dynMeshRebuilds;
+  r1.setState({ hoveredZ: 1 }, { deferRender: true });
+  assert.equal(r1.getPerfStats().dynMeshRebuilds, beforeDeferRebuilds, 'deferRender: true must not synchronously rebuild dynMesh mid-pointermove');
+  env.advanceTime(8);
+  env.flushRaf();
+  r1.dispose();
+
+  // Warm second open reuses module-level legend atlas cache, then evictLegendAtlasCache clears it cleanly
+  const r2 = kb3dMod.createKeyboard3DRenderer({
+    canvas,
+    doc: env.document,
+    root: env.window,
+    state: {
+      themeKey: 'obsidian-dark',
+      availableSet: new Set([1, 6, 10, 18]),
+      selectedZ: 10,
+      activeEffort: 'xhigh',
+      motionLevel: 'full',
+    },
+  });
+  r2.resize(1200, 600, 1.5);
+  env.advanceTime(8);
+  env.flushRaf();
+  r2.dispose();
+  assert.doesNotThrow(() => kb3dMod.evictLegendAtlasCache(env.document));
+
+  // Verify stale window blur attribute/state never causes paused: true upon opening picker
+  const factory = loadPeriodicFactoryInSandbox(env);
+  const triggerBtn = env.makeElement('button', {
+    attrs: { 'data-testid': 'model-selector-trigger' },
+    text: 'Gemini 4 Neon (XHigh)',
+  });
+  env.body.appendChild(triggerBtn);
+  env.window.__agPeriodicMockHost = {
+    selectedModel: { label: 'Gemini 4 Neon (XHigh)', modelId: 'gemini-4-neon-xhigh' },
+    modelOptions: [
+      { label: 'Gemini 4 Neon (XHigh)', modelId: 'gemini-4-neon-xhigh' },
+      { label: 'Gemini 4 Carbon (High)', modelId: 'gemini-4-carbon-high' },
+    ],
+    setModelConfigByLabelForConversation: () => true,
+  };
+  const inst = factory.mountPeriodicPicker({ root: env.window, doc: env.document, mode: 'on' });
+  env.window.dispatchEvent(env.createEventObj('blur'));
+  assert.equal(inst.open(triggerBtn), true);
+  assert.equal(inst.getStatus().paused, false, 'Opening picker actively must clear stale windowBlurred so paused is false');
+  inst.destroy();
+});
+
+test('v1.0.8-beta live-fix (2) Long-press blocks native popup, re-long-press closes open picker, and per-model effort memory preserves Neon Extra across Carbon High round-trip', () => {
+  const env = createPeriodicSandbox({ mock2d: true, mockWebGL2: false });
+  env.window.HTMLElement = function MockHTMLElement() {};
+  loadPeriodicModuleInSandbox(env, 'pbr-grain-assets.js');
+  loadPeriodicModuleInSandbox(env, 'audio-fx.js');
+  loadPeriodicModuleInSandbox(env, 'model-catalog.js');
+  loadPeriodicModuleInSandbox(env, 'host-bridge.js');
+  loadPeriodicModuleInSandbox(env, 'oled-cyber-screen.js');
+  loadPeriodicModuleInSandbox(env, 'keyboard-3d-gl.js');
+  const factory = loadPeriodicFactoryInSandbox(env);
+
+  const triggerBtn = env.makeElement('button', {
+    attrs: { 'data-testid': 'model-selector-trigger', 'aria-haspopup': 'menu', 'aria-expanded': 'false' },
+    text: 'Gemini 4 Neon Extra High',
+  });
+  // Empty ambient listbox (like real Antigravity DOM) must NOT trick isNativeHostMenuOpen into returning true
+  const emptyListbox = env.makeElement('div', { attrs: { role: 'listbox' }, text: '' });
+  emptyListbox.getBoundingClientRect = () => ({ left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 });
+  env.body.appendChild(emptyListbox);
+  env.body.appendChild(triggerBtn);
+
+  let nativePointerDownHits = 0;
+  let nativeMouseDownHits = 0;
+  let nativeClickHits = 0;
+  triggerBtn.addEventListener('pointerdown', () => { nativePointerDownHits += 1; });
+  triggerBtn.addEventListener('mousedown', () => { nativeMouseDownHits += 1; });
+  triggerBtn.addEventListener('click', () => { nativeClickHits += 1; });
+
+  const neXHigh = { label: 'Gemini 4 Neon (XHigh)', modelId: 'gemini-4-neon-xhigh' };
+  const neHigh = { label: 'Gemini 4 Neon (High)', modelId: 'gemini-4-neon-high' };
+  const neMed = { label: 'Gemini 4 Neon (Medium)', modelId: 'gemini-4-neon-medium' };
+  const cHigh = { label: 'Gemini 4 Carbon (High)', modelId: 'gemini-4-carbon-high' };
+  const cMed = { label: 'Gemini 4 Carbon (Medium)', modelId: 'gemini-4-carbon-medium' };
+  const allOpts = [neXHigh, neHigh, neMed, cHigh, cMed];
+
+  const committedLabels = [];
+  const hostState = {
+    conversationId: 'conv-effort-mem',
+    selectedModel: neXHigh,
+    modelOptions: allOpts,
+    setIsOpen: () => {},
+    setModelConfigByLabelForConversation: (label) => {
+      committedLabels.push(label);
+      const found = allOpts.find((o) => o.label === label);
+      if (found) hostState.selectedModel = found;
+      return true;
+    },
+  };
+  env.window.__agPeriodicMockHost = hostState;
+
+  const inst = factory.mountPeriodicPicker({ root: env.window, doc: env.document, mode: 'on' });
+
+  // 1) Long-press >= 420ms intercepts pointerdown & mousedown at 0ms -> 0 native dropdown triggers, picker opens
+  triggerBtn.dispatchEvent(env.createEventObj('pointerdown', { button: 0, clientX: 120, clientY: 600 }));
+  triggerBtn.dispatchEvent(env.createEventObj('mousedown', { button: 0, clientX: 120, clientY: 600 }));
+  env.advanceTime(430);
+  triggerBtn.dispatchEvent(env.createEventObj('pointerup', { button: 0, clientX: 120, clientY: 600 }));
+  triggerBtn.dispatchEvent(env.createEventObj('click', { button: 0, clientX: 120, clientY: 600 }));
+  assert.equal(inst.isOpen(), true, '420ms long-press must open periodic picker');
+  assert.equal(nativePointerDownHits, 0, 'Long-press must never leak pointerdown to host Radix/Base UI');
+  assert.equal(nativeMouseDownHits, 0, 'Long-press must never leak mousedown to host Radix/Base UI');
+  assert.equal(nativeClickHits, 0, 'Long-press must never leak click to host dropdown');
+
+  // 2) Per-model effort memory: currently Neon (XHigh) -> click 6C (Carbon High) -> click back to 10Ne (MUST restore XHigh, NOT High!)
+  const rootEl = env.document.getElementById('ag-prism-periodic-picker-root');
+  const carbonKeyBtn = rootEl.querySelector('button[data-z="6"]');
+  const neonKeyBtn = rootEl.querySelector('button[data-z="10"]');
+  assert.ok(carbonKeyBtn && neonKeyBtn, '6C and 10Ne hit buttons must exist');
+
+  carbonKeyBtn.dispatchEvent(env.createEventObj('click'));
+  assert.equal(hostState.selectedModel.label, 'Gemini 4 Carbon (High)', 'Switching to Carbon must commit Carbon (High)');
+
+  neonKeyBtn.dispatchEvent(env.createEventObj('click'));
+  assert.equal(
+    hostState.selectedModel.label,
+    'Gemini 4 Neon (XHigh)',
+    `Returning to Neon after Carbon High MUST preserve Neon (XHigh), got ${hostState.selectedModel.label} (commits: ${JSON.stringify(committedLabels)})`
+  );
+
+  // Verify shared localStorage effortMemory recorded both models independently
+  const savedMem = JSON.parse(env.window.localStorage.getItem('ag.prism.effortMemory.v1') || '{}');
+  assert.equal(savedMem.models['Gemini 4 Neon'], 'xhigh');
+  assert.equal(savedMem.models['Gemini 4 Carbon'], 'high');
+
+  // 3) Re-long-press on model-selector-trigger while periodic picker is OPEN -> collapses & closes picker with 0 native popup hits
+  triggerBtn.dispatchEvent(env.createEventObj('pointerdown', { button: 0, clientX: 120, clientY: 600 }));
+  triggerBtn.dispatchEvent(env.createEventObj('mousedown', { button: 0, clientX: 120, clientY: 600 }));
+  env.advanceTime(430);
+  triggerBtn.dispatchEvent(env.createEventObj('pointerup', { button: 0, clientX: 120, clientY: 600 }));
+  triggerBtn.dispatchEvent(env.createEventObj('click', { button: 0, clientX: 120, clientY: 600 }));
+  env.advanceTime(320); // allow drawer collapse transition to finish
+  assert.equal(inst.isOpen(), false, 'Re-long-pressing trigger while open must collapse & close periodic picker');
+  assert.equal(nativePointerDownHits, 0, 'Re-long-press close must NOT trigger native dropdown pointerdown');
+  assert.equal(nativeMouseDownHits, 0, 'Re-long-press close must NOT trigger native dropdown mousedown');
+  assert.equal(nativeClickHits, 0, 'Re-long-press close must NOT trigger native dropdown click');
+
+  inst.destroy();
+  const counts = env.getCounts();
+  assert.equal(counts.activeTimers, 0);
+  assert.equal(counts.activeRafs, 0);
 });

@@ -60,6 +60,8 @@ function isThoughtEnabledForConfig(cfg, checker = shouldEnableThought) {
 
 const WATCH = process.argv.includes('--watch');
 const LOG_FILE = path.join(__dirname, 'watch.log');
+const BUNDLE_CACHE_PATH = path.join(__dirname, '.bundle-cache.json');
+const PERIODIC_PICKER_CACHE_OPTS = Object.freeze({ cachePath: BUNDLE_CACHE_PATH });
 
 function log(...args) {
   const line = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
@@ -133,7 +135,8 @@ function createFastConfigRefreshBroadcaster({
     removeExpression: INLINE_DIFF_REMOVE_EXPRESSION || FALLBACK_INLINE_DIFF_REMOVE_EXPRESSION,
   }),
   shouldEnablePeriodicPicker: shouldPeriodicPicker = shouldEnablePeriodicPicker,
-  buildPeriodicPickerExpression: buildPeriodicPicker = buildPeriodicPickerExpression,
+  buildPeriodicPickerExpression: buildPeriodicPicker = (cfg) =>
+    buildPeriodicPickerExpression(cfg, PERIODIC_PICKER_CACHE_OPTS),
   periodicPickerRemoveExpression = PERIODIC_PICKER_REMOVE_EXPRESSION,
   getOmniServerInfo = () => null,
   getSidebarServiceReady = () => false,
@@ -404,7 +407,7 @@ async function injectOnce() {
     typeof shouldEnablePeriodicPicker === 'function' ? shouldEnablePeriodicPicker(cfgNow) : true;
   const periodicPickerExpr =
     periodicPickerEnabled && typeof buildPeriodicPickerExpression === 'function'
-      ? buildPeriodicPickerExpression(cfgNow)
+      ? buildPeriodicPickerExpression(cfgNow, PERIODIC_PICKER_CACHE_OPTS)
       : '';
   for (const page of targets) {
     let session = null;
@@ -569,7 +572,7 @@ async function watch() {
       : '';
   let periodicPickerExpr =
     typeof buildPeriodicPickerExpression === 'function'
-      ? buildPeriodicPickerExpression(initCfg)
+      ? buildPeriodicPickerExpression(initCfg, PERIODIC_PICKER_CACHE_OPTS)
       : '';
   let _lazyReadSafeInlineDiff = null;
   async function loadReadSafeInlineDiff() {
@@ -636,7 +639,7 @@ async function watch() {
       removeExpression: activeInlineDiffRemoveExpression,
     }),
     shouldEnablePeriodicPicker,
-    buildPeriodicPickerExpression,
+    buildPeriodicPickerExpression: (cfg) => buildPeriodicPickerExpression(cfg, PERIODIC_PICKER_CACHE_OPTS),
     periodicPickerRemoveExpression: PERIODIC_PICKER_REMOVE_EXPRESSION,
     getOmniServerInfo: () => (omniServer ? omniServer.getServerInfo() : null),
     getSidebarServiceReady: () => Boolean(sidebarService),
@@ -1158,7 +1161,7 @@ async function watch() {
             : '';
         periodicPickerExpr =
           typeof freshCdp.buildPeriodicPickerExpression === 'function'
-            ? freshCdp.buildPeriodicPickerExpression(freshCfg)
+            ? freshCdp.buildPeriodicPickerExpression(freshCfg, PERIODIC_PICKER_CACHE_OPTS)
             : '';
       } catch (err) {
         log(`[!] 读取文件失败: ${err.message}`);

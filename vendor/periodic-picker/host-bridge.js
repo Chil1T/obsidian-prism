@@ -54,7 +54,7 @@
       /\s*[（(]\s*(超高|极高|超深|高思考|中思考|低思考|极低|最低|深度思考|思考中?|中等|高|中|低|自动|关闭)\s*[)）]\s*$/;
 
     var EN_EFFORT_PAREN_RE =
-      /\s*\(\s*(off|minimal|low|medium|med|high|xhigh|extra|max|auto)(?:\s+thinking)?\s*\)\s*$/i;
+      /\s*\(\s*(off|minimal|low|medium|med|high|xhigh|extra(?:\s+high)?|max|auto)(?:\s+thinking)?\s*\)\s*$/i;
 
     var suppressedTooltipRecords = typeof WeakMap === 'function' ? new WeakMap() : null;
     var suppressedTooltipList = [];
@@ -89,12 +89,14 @@
     }
 
     function stripEffortBaseName(rawLabel, rt) {
+      var clean = String(rawLabel || '').replace(/^.*?\bcurrent:\s*/i, '').trim();
       var cat = resolveModelCatalogModule(rt);
       if (cat && typeof cat.stripEffortSuffixFromLabel === 'function') {
-        var res = cat.stripEffortSuffixFromLabel(rawLabel);
-        if (res && typeof res.baseName === 'string') return res.baseName;
+        var res = cat.stripEffortSuffixFromLabel(clean);
+        if (res && typeof res.baseName === 'string' && res.baseName.trim()) {
+          clean = res.baseName.trim();
+        }
       }
-      var clean = String(rawLabel || '').replace(/^.*?\bcurrent:\s*/i, '').trim();
       var zm = ZH_EFFORT_PAREN_RE.exec(clean);
       if (zm) {
         clean = clean.slice(0, zm.index).trim();
@@ -252,7 +254,8 @@
       var baseKey = stripEffortBaseName(modelKey, rt);
       if (!baseKey) return '';
       var bucket = isOrch ? mem.orch : mem.models;
-      return bucket[baseKey] || bucket[String(modelKey || '').trim()] || '';
+      var rawHit = bucket[baseKey] || bucket[String(modelKey || '').trim()] || '';
+      return rawHit ? normalizeEffortToken(rawHit) : '';
     }
 
     /* ── Native Tooltip Suppression (Hold & Open States) ────────────────────── */
@@ -1246,28 +1249,33 @@
       return fallbackOpt || null;
     }
 
-    function resolveLevelForElement(entry, preferredEffort, rememberedEffort) {
+    function findMatchingEffortLevel(levels, rawEffort) {
+      var want = normalizeEffortToken(rawEffort);
+      if (!want || !Array.isArray(levels)) return null;
+      for (var i = 0; i < levels.length; i += 1) {
+        var lv = levels[i];
+        if (!lv) continue;
+        if (lv.effort === want || normalizeEffortToken(lv.effort) === want) return lv;
+      }
+      return null;
+    }
+
+    function resolveLevelForElement(entry, preferredEffort, rememberedLocal, rememberedShared) {
       if (!entry || !entry.levels || !entry.levels.length) return null;
-      var candidates = [preferredEffort, rememberedEffort, 'high', 'medium'];
+      var candidates = [preferredEffort, rememberedLocal, rememberedShared, 'high', 'medium'];
       for (var c = 0; c < candidates.length; c += 1) {
-        var want = candidates[c];
-        if (!want) continue;
-        for (var i = 0; i < entry.levels.length; i += 1) {
-          if (entry.levels[i].effort === want) return entry.levels[i];
-        }
+        var hit = findMatchingEffortLevel(entry.levels, candidates[c]);
+        if (hit) return hit;
       }
       return entry.levels[entry.levels.length - 1];
     }
 
-    function resolveLevelForAuxSlot(auxSlot, preferredEffort, rememberedEffort) {
+    function resolveLevelForAuxSlot(auxSlot, preferredEffort, rememberedLocal, rememberedShared) {
       if (!auxSlot || !auxSlot.levels || !auxSlot.levels.length) return null;
-      var candidates = [preferredEffort, rememberedEffort, 'high', 'medium'];
+      var candidates = [preferredEffort, rememberedLocal, rememberedShared, 'high', 'medium'];
       for (var c = 0; c < candidates.length; c += 1) {
-        var want = candidates[c];
-        if (!want) continue;
-        for (var i = 0; i < auxSlot.levels.length; i += 1) {
-          if (auxSlot.levels[i].effort === want) return auxSlot.levels[i];
-        }
+        var hit = findMatchingEffortLevel(auxSlot.levels, candidates[c]);
+        if (hit) return hit;
       }
       for (var j = 0; j < auxSlot.levels.length; j += 1) {
         if (auxSlot.defaultOption && auxSlot.levels[j].option === auxSlot.defaultOption) {
@@ -1309,7 +1317,7 @@
           var elSlot = slotByZ && typeof slotByZ.get === 'function' ? slotByZ.get(selectedZ) : null;
           var memElEff = getRememberedEffort(rt, doc, elEntry.baseName || elEntry.name, true, p);
           var prefElEff = (activeEffortByZ && activeEffortByZ.get(selectedZ)) || '';
-          var elChosen = resolveLevelForElement(elEntry, prefElEff, memElEff);
+          var elChosen = resolveLevelForElement(elEntry, '', prefElEff, memElEff);
           if (elChosen && activeEffortByZ) activeEffortByZ.set(selectedZ, elChosen.effort);
           if (elChosen) writeSharedEffortMemory(rt, doc, elEntry.baseName || elEntry.name, elChosen.effort, true, p);
           var elPlannerOpt = resolvePlannerOptionForPick(
@@ -1344,7 +1352,7 @@
           var aSlot = auxSlots[selectedAuxIndex];
           var memAuxEff = getRememberedEffort(rt, doc, aSlot.title || aSlot.shortLabel, true, p);
           var prefAuxEff = (activeEffortByAux && activeEffortByAux.get(selectedAuxIndex)) || '';
-          var aChosen = resolveLevelForAuxSlot(aSlot, prefAuxEff, memAuxEff);
+          var aChosen = resolveLevelForAuxSlot(aSlot, '', prefAuxEff, memAuxEff);
           if (aChosen && activeEffortByAux) activeEffortByAux.set(selectedAuxIndex, aChosen.effort);
           if (aChosen) writeSharedEffortMemory(rt, doc, aSlot.title || aSlot.shortLabel, aChosen.effort, true, p);
           var aFallbackOpt = (aChosen && aChosen.option) || aSlot.defaultOption;
@@ -1379,7 +1387,7 @@
         var stEntry = availableByZ.get(selectedZ);
         var memStEff = getRememberedEffort(rt, doc, stEntry.baseName || stEntry.name, false, p);
         var prefStEff = (activeEffortByZ && activeEffortByZ.get(selectedZ)) || '';
-        var stChosen = resolveLevelForElement(stEntry, prefStEff, memStEff);
+        var stChosen = resolveLevelForElement(stEntry, '', prefStEff, memStEff);
         result.activeCommittedAuxBadge = null;
         result.activeCommittedElementZ = selectedZ;
         if (stChosen) {
@@ -1399,7 +1407,7 @@
         var stAux = auxSlots[selectedAuxIndex];
         var memStAuxEff = getRememberedEffort(rt, doc, stAux.title || stAux.shortLabel, false, p);
         var prefStAuxEff = (activeEffortByAux && activeEffortByAux.get(selectedAuxIndex)) || '';
-        var stAuxChosen = resolveLevelForAuxSlot(stAux, prefStAuxEff, memStAuxEff);
+        var stAuxChosen = resolveLevelForAuxSlot(stAux, '', prefStAuxEff, memStAuxEff);
         var stOpt = (stAuxChosen && stAuxChosen.option) || stAux.defaultOption;
         if (stAuxChosen) {
           if (activeEffortByAux) activeEffortByAux.set(selectedAuxIndex, stAuxChosen.effort);
@@ -1466,6 +1474,7 @@
       setHoldTooltipSuppression: setHoldTooltipSuppression,
       setOpenTooltipSuppression: setOpenTooltipSuppression,
       isEffortMemoryEnabled: isEffortMemoryEnabled,
+      normalizeEffortToken: normalizeEffortToken,
       readSharedEffortMemory: readSharedEffortMemory,
       writeSharedEffortMemory: writeSharedEffortMemory,
       getRememberedEffort: getRememberedEffort,
