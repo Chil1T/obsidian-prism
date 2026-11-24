@@ -126,6 +126,7 @@
     getActiveCrystalTrack,
     setCrystalPointerClient,
     onPointerActivity,
+    onComposerRimUpdate,
   }) {
     const lastPointerPos = { x: -9999, y: -9999 };
     let prismRaf = 0;
@@ -138,6 +139,18 @@
     let cachedOrchEntry = null;
     let prismBoxRo = null;
     const observedPrismSet = new Set();
+    let compRimSig = '0';
+
+    const emitComposerRim = (v) => {
+      if (typeof onComposerRimUpdate !== 'function') return;
+      const on = Boolean(v && v.strength > 0.015);
+      const sig = on ? `1|${Math.round(v.localX / 6)}|${Math.round(v.strength * 12)}|${v.toneKey}|${v.dark ? 1 : 0}` : '0';
+      if (sig === compRimSig) return;
+      compRimSig = sig;
+      try {
+        onComposerRimUpdate(on ? { active: true, localX: v.localX, strength: v.strength, toneKey: v.toneKey, dark: v.dark } : { active: false, localX: -9999, strength: 0, toneKey: 'default', dark: true });
+      } catch {}
+    };
 
     const getDoc = () => (typeof document !== 'undefined' ? document : null);
     function getRootHtml() {
@@ -182,6 +195,7 @@
       for (const e of cachedPrismBoxes) zEnt(e, all);
       zEnt(cachedOrchEntry, all);
       if (all) {
+        emitComposerRim(null);
         for (const c of trackedRimCanvases) zCv(c);
         getDoc()?.querySelectorAll?.('.ag-cs-prism-rim-cv')?.forEach?.(zCv);
       }
@@ -205,6 +219,7 @@
     function clearAllRimCanvases(immediateShrink = false) {
       cachedPrismBoxes.forEach(clearRimEntry);
       clearRimEntry(cachedOrchEntry);
+      emitComposerRim(null);
       getDoc()?.querySelectorAll?.('.ag-cs-prism-rim-cv')?.forEach?.((cv) => {
         try { const ctx = cv.getContext?.('2d'); if (ctx && cv.width > 0 && cv.height > 0) ctx.clearRect(0, 0, cv.width, cv.height); } catch {}
       });
@@ -736,6 +751,7 @@
 
       const dark = isDarkTheme();
       const toneKey = resolveRimToneKey(dark);
+      let compRim = null;
       const drawEntry = (entry, maxR, gradR, vx, vy, minW) => {
         const r = allowReadRect ? entry.rect : null;
         let inRange = false;
@@ -754,6 +770,10 @@
             ly = y - r.top;
           }
         }
+        if (!entry.mirrorMode && !entry.reflectBottomMode && entry.box?.classList?.contains?.('surface-composer-card')) {
+          const st = inRange && Math.abs(ly) < 220 ? Math.min(1, ambientScale * (toneKey === 'mono' ? 0.62 : 1)) * (1 - Math.abs(ly) / 220) : 0;
+          if (!compRim || st > compRim.strength) compRim = { localX: lx, strength: st, toneKey, dark };
+        }
         if (entry.ctx && paintPrismRimCanvas(entry, inRange, lx, ly, gradR, dark, toneKey, ambientScale)) return;
         const nx = inRange ? `${lx.toFixed(1)}px` : '-9999px';
         const ny = inRange ? `${ly.toFixed(1)}px` : '-9999px';
@@ -767,6 +787,7 @@
           setCrystalPointerClient?.(x, y);
         }
       });
+      emitComposerRim(compRim);
       armIdle();
     }
 
@@ -861,6 +882,7 @@
 
     function teardownDynPointerRules() {
       cancelPendingRaf();
+      emitComposerRim(null);
       bindEv('removeEventListener');
       shrinkRims(1);
       trackedRimCanvases.clear();

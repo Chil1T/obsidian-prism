@@ -784,6 +784,9 @@
             notifyMascot('activity', {});
           }
         },
+        onComposerRimUpdate: (info) => {
+          try { msRig?.setRimLight?.(info); } catch {}
+        },
       })
     : noopStub({ getLastPointerPos: () => ({ x: -9999, y: -9999 }) });
 

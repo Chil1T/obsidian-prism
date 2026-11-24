@@ -928,3 +928,181 @@ test('v1.0.7: thought-client auto-translates asynchronously updated & newly adde
     th.destroy();
   }
 });
+
+test('v1.0.7: elevated peek geometry + prism rim ambient bounce light preserves 0fps sleep and dedups micro-jitter', () => {
+  // 1. Verify elevated peek sprite geometry keeps grip claws/paws anchored at oy=7 while lifting body/eyes/ears
+  assert.equal(dualMascotRig.CLAWD_PARTS.body.peek.oy, 2, 'peek body must start at oy=2 (6 rows tall)');
+  assert.equal(dualMascotRig.CLAWD_PARTS.body.peek.rows.length, 6);
+  assert.equal(dualMascotRig.CLAWD_PARTS.eyes.peekOpen.oy, 4, 'peekOpen eyes must sit clearly above rim at oy=4');
+  assert.equal(dualMascotRig.CLAWD_PARTS.eyes.peekHalf.oy, 5);
+  assert.equal(dualMascotRig.CAT_PARTS.ears.peek.oy, 1, 'cat peek ears must rise to oy=1');
+  assert.equal(dualMascotRig.CLAWD_PARTS.clawL.peekGrip.oy, 7);
+  assert.equal(dualMascotRig.CLAWD_PARTS.clawR.peekGrip.oy, 7);
+  assert.equal(dualMascotRig.CAT_PARTS.paws.peekGrip.oy, 7);
+
+  // 2. Mount rig in reducedMotion (0fps sleep) with canvas tracking source-atop gradients
+  const { doc, win } = createFakeDom();
+  const compositeOps = [];
+  const gradCalls = [];
+  const origCreate = doc.createElement.bind(doc);
+  doc.createElement = (tag) => {
+    const el = origCreate(tag);
+    if (String(tag).toLowerCase() === 'canvas') {
+      el.width = 0;
+      el.height = 0;
+      el.getContext = () => ({
+        setTransform() {},
+        clearRect() {},
+        fillRect() {},
+        save() {},
+        restore() {},
+        translate() {},
+        scale() {},
+        rotate() {},
+        beginPath() {},
+        moveTo() {},
+        lineTo() {},
+        closePath() {},
+        clip() {},
+        drawImage() {},
+        set globalCompositeOperation(v) { compositeOps.push(v); },
+        get globalCompositeOperation() { return compositeOps[compositeOps.length - 1] || 'source-over'; },
+        createRadialGradient(x0, y0, r0, x1, y1, r1) {
+          const stops = [];
+          gradCalls.push({ x0, y0, r0, x1, y1, r1, stops });
+          return { addColorStop(o, c) { stops.push([o, c]); } };
+        },
+        fillStyle: '',
+        imageSmoothingEnabled: false,
+      });
+    }
+    return el;
+  };
+  win.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
+  const host = doc.createElement('div');
+  host.getBoundingClientRect = () => ({ left: 0, top: 0, width: 520, height: 84, right: 520, bottom: 84 });
+  doc.body.appendChild(host);
+
+  const rig = dualMascotRig.mountDualMascotStage(host, {
+    doc,
+    win,
+    initialCamp: 'gemini',
+    miniPile: false,
+    reducedMotion: true,
+  });
+
+  try {
+    // Enter peek mode: actor vertical offset must be +1px (gripping rim) with zIndex 8
+    rig.setState({ yieldMode: 'peek' });
+    const peekSnap = rig.getLayoutSnapshot();
+    assert.equal(peekSnap.perf.timerIntervalMs, 0, 'reducedMotion must keep 0fps sleep');
+    assert.equal(peekSnap.actors[0].renderCache.lastY, 1, 'elevated peek must position actor at y=+1px instead of +6px');
+    assert.equal(host.querySelector('.ag-v2-mascot-actor')?.style?.zIndex, '8', 'peek actor z-index must sit at 8 above rim (7) and below cards (12)');
+
+    // Activate composer rim bounce light directly below cat
+    const catCx = peekSnap.actors.find((a) => a.id === 'cat').worldCx;
+    const drawsBefore = peekSnap.perf.canvasDraws;
+    compositeOps.length = 0;
+    gradCalls.length = 0;
+
+    rig.setRimLight({ active: true, localX: catCx, strength: 0.9, toneKey: 'cobalt', dark: true });
+    const litSnap = rig.getLayoutSnapshot();
+    assert.equal(litSnap.perf.timerIntervalMs, 0, 'setRimLight must NEVER wake 0fps sleep timer');
+    assert.equal(litSnap.rimLight.active, true);
+    assert.equal(litSnap.rimLight.toneKey, 'cobalt');
+    assert.ok(litSnap.perf.canvasDraws > drawsBefore, 'illuminating rim near actor must repaint canvas once');
+    assert.ok(compositeOps.includes('source-atop'), 'rim bounce light must paint inside silhouette via source-atop');
+    assert.ok(gradCalls.some((g) => g.stops.some(([, c]) => c.includes('148,228,255'))), 'cobalt dark bounce palette must be applied');
+    assert.ok(litSnap.actors.find((a) => a.id === 'cat').renderCache.tintState.includes(':r'), 'lit actor tintState must include quantized rim bounce key');
+
+    // Micro-jitter within quantization bucket must dedup with 0 extra draws
+    const drawsLit = litSnap.perf.canvasDraws;
+    rig.setRimLight({ active: true, localX: catCx + 1, strength: 0.905, toneKey: 'cobalt', dark: true });
+    assert.equal(rig.getLayoutSnapshot().perf.canvasDraws, drawsLit, 'micro-jitter inside same quantized bucket must not redraw');
+
+    // Clearing rim light resets tintState cleanly and stays 0fps
+    rig.setRimLight({ active: false });
+    const offSnap = rig.getLayoutSnapshot();
+    assert.equal(offSnap.rimLight.active, false);
+    assert.equal(offSnap.perf.timerIntervalMs, 0);
+    assert.equal(offSnap.actors.find((a) => a.id === 'cat').renderCache.tintState.includes(':r'), false, 'clearing rim light must restore clean tintState');
+  } finally {
+    rig.dispose();
+  }
+});
+
+test('v1.0.7: prism-rim-canvas emits quantized onComposerRimUpdate on hover near composer top edge and clears on leave/ambient=0/hidden', () => {
+  const rimMod = require(path.join(ROOT, 'prism-rim-canvas.js'));
+  const { doc, win } = createFakeDom();
+  const prevDoc = globalThis.document;
+  const prevWin = globalThis.window;
+  const prevRaf = globalThis.requestAnimationFrame;
+  const prevCaf = globalThis.cancelAnimationFrame;
+
+  const box = doc.createElement('div');
+  box.className = 'surface-composer-card';
+  box.setAttribute('data-ag-cs-prism-box', '1');
+  box.getBoundingClientRect = () => ({ left: 100, top: 400, right: 620, bottom: 520, width: 520, height: 120 });
+  doc.body.appendChild(box);
+
+  let ambientVal = 100;
+  let rafQueue = [];
+  const events = [];
+
+  globalThis.document = doc;
+  globalThis.window = win;
+  globalThis.requestAnimationFrame = (cb) => { rafQueue.push(cb); return rafQueue.length; };
+  globalThis.cancelAnimationFrame = () => { rafQueue = []; };
+  const flushRaf = () => { const q = rafQueue.splice(0); q.forEach((fn) => fn(performance.now())); };
+
+  const ctrl = rimMod.createPrismRimCanvasController({
+    isDestroyed: () => false,
+    isDarkTheme: () => true,
+    motionReduced: () => false,
+    getMinFrameGapMs: () => 0,
+    getAmbientIntensity: () => ambientVal,
+    getAccentTone: () => 'iris',
+    canMountRealCanvas: () => false,
+    setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+    runGuardedMut: (fn) => fn(),
+    getActiveCrystalTrack: () => null,
+    onComposerRimUpdate: (info) => events.push(info),
+  });
+
+  try {
+    // Move pointer directly onto composer top rim (y=402 -> ly=2)
+    ctrl.onPointerMove({ clientX: 260, clientY: 402 });
+    flushRaf();
+    assert.equal(events.length, 1);
+    assert.equal(events[0].active, true);
+    assert.equal(events[0].toneKey, 'iris');
+    assert.equal(events[0].dark, true);
+    assert.ok(events[0].strength > 0.9, 'pointer right at composer top edge must yield high bounce strength');
+    assert.equal(events[0].localX, 160);
+
+    // Setting ambientIntensity=0 must emit active:false once
+    ambientVal = 0;
+    ctrl.invalidateMetrics();
+    assert.equal(events[events.length - 1].active, false, 'ambient=0 must immediately turn off mascot rim bounce');
+    const offCount = events.length;
+
+    // Repeated invalidation while already off must dedup (no duplicate off spam)
+    ctrl.invalidateMetrics();
+    assert.equal(events.length, offCount, 'repeated inactive clears must deduplicate');
+
+    // Re-enable ambient and hide document -> shrinkRims(1) must also clear bounce light
+    ambientVal = 100;
+    ctrl.onPointerMove({ clientX: 300, clientY: 406 });
+    flushRaf();
+    assert.equal(events[events.length - 1].active, true);
+    doc.hidden = true;
+    ctrl.invalidateMetrics();
+    assert.equal(events[events.length - 1].active, false, 'document.hidden shrink must clear mascot rim bounce');
+  } finally {
+    ctrl.teardown();
+    globalThis.document = prevDoc;
+    globalThis.window = prevWin;
+    globalThis.requestAnimationFrame = prevRaf;
+    globalThis.cancelAnimationFrame = prevCaf;
+  }
+});

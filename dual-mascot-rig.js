@@ -124,6 +124,16 @@
     },
   };
 
+  // 棱镜边环境反光调色表（6色调：[darkCore,darkWash,lightCore,lightWash]）
+  const RIM_PALS = {
+    default: ['164,208,255', '155,114,203', '37,99,235', '124,58,237'],
+    warm: ['255,220,176', '240,163,126', '194,89,52', '217,119,6'],
+    cobalt: ['148,228,255', '66,133,244', '29,78,216', '2,132,199'],
+    iris: ['221,214,254', '165,138,248', '91,33,182', '139,92,246'],
+    amber: ['253,230,138', '242,184,75', '180,83,9', '245,158,11'],
+    mono: ['236,242,248', '148,163,184', '51,65,85', '100,116,139'],
+  };
+
   const F = (rows, ox = 0, oy = 0, extra = null) =>
     extra ? { rows, ox, oy, ...extra } : { rows, ox, oy };
   const rep = (s, n) => Array(n).fill(s);
@@ -143,7 +153,7 @@
 
   // ── 紧凑 RLE 图集（去重派生 + 自动进入 cdp.js 共享 LZ 压缩池，纯函数解码还原同构对象）──
   const SPRITE_ATLAS_RAW =
-    'c.shadow!w12=2,10,g:12h;w14=1,10,g:14h;w10=3,10,g:10h|c.body!stand=2,0:12#*8;tall=2,-1:12#*9;squash=1,2:.12s./14#*6;squash2=1,4:.12s./14#*4;flat=2,7:12s/12#*2;turnL=2,0:11#s*8;turnR=2,0:s11#*8;leanR=2,0:.12#*4/12#.*4;leanL=1,0:12#.*4/.12#*4;peek=2,4:12#*4|c.eyes!open=4,2:o6.o*2;openL=3,2:o6.o*2;openR=5,2:o6.o*2;half=4,3:o6.o;shut=3,3:oo6.oo;happy=3,2:.o6.o./o.o4.o.o;squint=4,2:o6.o/.o4.o./o6.o;wide=3,2:oo6.oo*2;peekOpen=4,6:o6.o*2;peekHalf=4,7:o6.o;flatEyes=4,8:oo4.oo;blink=3,3:ss6.ss;upL=3,1:o6.o*2;up=4,1:o6.o*2;upR=5,1:o6.o*2|c.mouth!small=6,5:.ss.;yawn=6,5:4s/.ss.|c.legs!stand=2,8:.#.#4.#.#.*2;crouch=2,9:.#.#4.#.#.;tuck=2,8:..#.#..#.#..*2;walkA=2,8:.#.s4.#.s./.#6.#3.;walkB=2,8:.s.#4.s.#./3.#6.#.;dangle=2,8:.#.#4.#.#./.#.#8.*2;dangle2=2,8:.#.#4.#.#./8.#.#.*2;flailA=2,8:#3.#..#3.#/#10.#;flailB=2,8:..#.#..#.#../4.#..#4.;flailC=2,8:#..#4.#..#/3.#4.#..#|c.clawL!stub=0,5:##*2;front=0,5:ss*2;up=0,-2:##*2/#.;peekGrip=1,7:ss;flatLeft=0,8:ss;open=0,4:##/.#/##|c.clawR!stub=14,5:##*2;front=14,5:ss*2;up=14,-2:##*2/.#;low=14,8:3#*2;reach1=14,4:3.##/5#;write1=13,6:ss*2;write2=14,5:ss*2;peekGrip=13,7:ss;flatRight=14,8:ss;open=14,4:##/#./##;waveOut=14,-1:.##*2/#..|k.ears!stand=2,-1:#10.#/##8.##;nod=2,0:#10.#/##8.##;loaf=2,2:#10.#/##8.##;airplane=0,0:##12.##/3#10.3#;peek=2,3:#10.#/##8.##;flat=1,6:#12.#;twitchL=2,-1:11.#/##8.##;twitchR=2,-1:#11./##8.##|k.body!stand=2,1:12#*7;loaf=1,4:.12s./14#*5;stretch=2,0:s11#/12#*2/.11#*2/..10#/12#*2;turnL=2,1:11#s*7;turnR=2,1:s11#*7;leanR=2,1:.12#*4/12#.*3;leanL=1,1:12#.*4/.12#*3|k.eyes!loafShut=3,6:oo6.oo;loafHalf=4,6:o6.o|k.paws!none=0,0:;groom1=12,4:ss*2;groom2=12,3:ss*2;cheer=0,2:#14.#*2;up=0,-1:##12.##*2;peekGrip=1,7:ss10.ss;write1=13,5:ss*2;write2=14,6:ss*2;upR=14,0:##*2|k.tail!up=14,3:.s/.#*2/##;sway=14,3:.#*2/s#/#.;curl=14,4:##/.#/s#;loaf=14,6:.#*2/s#;puff=14,2:.#/##*2/s#/#.|p!quill1=15,3:..B/.B./k..;sheet=12,8:6c/ckk3c/6g;mug=13,4:..4D/3DbwD/D.DbbD/3DbbD/..4D;cloth1=13,2:cw../w3c/.cwc/..c.;cloth2=14,3:..cw/3cw/.cwc/..c.;bowl=12,7:5w/DBwBD/.3D.;bowlEmpty=12,8:D3gD/.3D.;chop1=12,4:3.n/..n./.n../n3.;chop2=12,3:3.n/..n./.n../w3.;fishDish=11,7:.PPsPP./7D/.5D.;fishBone=11,7:.M.M.M./7D/.5D.;envS=12,5:6d/ddwwdd/dwddwd/d4wd/6d;envSOpen=12,4:..dd../.dwwd./6d/d4wd*2/6d;letter=14,1:7d/d5cd/d3gccd/d5cd/d4gcd/d5cd/dggccrd/7d;seed=15,8,g:On/nO;p1=16,7,g:O/l*2;p2=16,6,g:O/l*3;p3=14,5,g:..O../..l../O.l.O/.3l./..l..;p4=14,3,g:..O../O.l.O/.3l./O.l.O/.3l./..l..*2;d1=13,0,g:3.O3./O5.O/.O3.O./7./O5.O/7.*2/3.O3.;d2=13,-2,g:.q3.q./3.q3./q5.q/7./.q3.q./7./3.q3.;wilt1=14,3,g:..q../q.l.q/.3l./q.l.q/.3l./..l..*2;wilt2=14,4,g:q4./.q.q./..ll./.q.l./..ll./..l..;wilt3=15,6,g:Q.Q/.l./Ql./.l.;bfUp=13,-4:B3.B/BB.BB/.BkB./..k..;bfDn=13,-4:5.*2/BBkBB/.BkB.;bfRest=7,-3:..B../.BB../..k..;stickUp=14,-9:WW/GG*6;stickLT=9,-9:5.tt/WG3.tt/.GG..tt/..GG.tt/3.GGtt/4.GGt/5.GG;stickRT=14,-9:tt5./tt3.GW/tt..GG./tt.GG../ttGG3./tGG4./GG5.;sirenDim=5,-4:..LL../.4x.*2/6l;sirenL=5,-4:..Lx../.HLxx./.LLxx./6l;sirenF=5,-4:..HH../.LHHL./.4L./6l;sirenR=5,-4:..xL../.xxLH./.xxLL./6l;beamL=-1,-7:J5./.j4./..j3./6./J3j../6./.Jjj..;beamF=4,-7:J..JJ..J/.j.jj.j.;micStand=1,4,g:6.ZZ6./6.Zz6./6.ZZ6./6.Z7.*2/5.4Z5.;micSink1=1,6,g:6.ZZ6./6.Zz6./6.ZZ6./5.4Z5.;micSink2=1,8,g:6.ZZ6./5.4Z5.;smoke=6,-4:.m./mm./.mm/.m.;iceCrystal=5,-6:..av../.aavv./3a3v/.aavv./..av..;laser0=16,7,g:.p./pRp/.p.;laser1=18,8,g:.R./RpR;laser2=15,8,g:pRp/.R.;blueprint=12,2:7B/B4EBB/BE3BEB/B4EBB/BE3BEB/7B;headband=1,1:.12L.L/..10H..L;goalFlame0=4,-7,g:3.Y3./..fYf../.FfYfF./FfYVYfF;goalFlame1=4,-7,g:..Y4./.fYf..Y/FfYVYf./.FfYfF.;goggles=3,0:gAAg..gAAg/gEAg..gEAg;iceCrystalSpin=6,-7:.av./aavv*2/.av.;flag0=14,-6:l4A./lAAyA./l4A./l5.*4;flag1=14,-6:l..3A/lAAyAA/l3A../l5.*4;shadesProp=3,2:4Z..4Z/ZEZZ..ZEZZ;surfboard=1,8,g:..10A../.A10EA.;waveSplash0=-3,6,g:..E./E.A./.AA.;waveSplash1=-3,6,g:E3./.EA./AA..;cloudBig=12,2:..3w../.w3Ew./5wbw/.5b.;cloudMid=13,3:.3w./wEEbw/.3b.;cubeGlow=13,3:.y.y./A3EA/AEyEA/5A;hourglass0=13,1:5n/.byb./..y../.b.b./5n;hourglass1=13,1:5n/.b.b./..y../.byb./5n;pocketWatch=12,4:..y../.ywy./ywnwy/.3y.;micHand=13,2:.ZZ./ZwZZ/.gg./..g.*2;spotlight=5,-9:..VV../.VyyV./V.yy.V;book0=12,4:5B/B3wB/BwgwB/B3wB/5B;book1=12,4:BB.BB/BwBwB/BwgwB/BwBwB/BB.BB;bulbOff=5,-8:..gg../.g..g.*2/..cc..;bulbOn=5,-9:y.yy.y/.yVVy./y4Vy/..yy../..cc..;hotCup0=12,3:.m..m./m..m../5D./D3nDD/D3nD./.3D..;hotCup1=12,3:m..m../.m..m./5D./D3nDD/D3nD./.3D..;donut0=12,4:.3p./pywpp/pp.pn/5n/.3n.;donut1=12,4:.pp../pyw../pp.pn/5n/.3n.;habCactus=0,0,g:3.P3./..lGl../l.lGl../lGlGl.l/..lGlGl/.5n./..3n..;habLamp=0,0,g:..3l../.l3Vl./.l3Yl./..3l../3.z3.*4/..3z..;habHourglass=0,0,g:.5n./..byb../3.y3./..byb../.5n.|s!heart=5,-7:.r.r./5r/.3r./..r..;spark=5,-8:..y..*2/5y/..y..*2;z1=10,-6:4k/..k./.k../4k;z2=12,-9:3k/.k./3k;vein=5,-7:.r.r./rr.rr/5./rr.rr/.r.r.;bang=6,-8:.r.*3/3./.r.;q=5,-9:.3k./k3.k/3.k./..k../5./..k..;note=5,-8:..kk./..k.k/..k../3k../kk3.;sweat=13,-4:.B./BbB*2/.B.;tilde=5,-7:.k3./k.k.k/3.k.;dozeZ0=12,-3:3k/.k./3k;dozeZ1=13,-7:4k/..k./.k../4k;dozeZ2=14,-12:5k/3.k./..k../.k3./5k;fireSpark0=5,-8:..Y../f3.V/..f..;fireSpark1=5,-9:.V..f/..Y../f4.;fireSpark2=5,-8:f..Y./4.V/.f3.;sleepBubble0=12,4:.b./bEb/.b.;sleepBubble1=12,3:.bb./bEwb/bEEb/.bb.|m!cowboy=0,-2:5.6H5./3.10H3./..12R../..12#../..##o6#o##../16#/..12#../3.#.#4.#.#3.;shades=0,0:..12#../..4Gg##g4G../..12G../16#/..12#../3.#.#4.#.#3.;wizard=0,-3:7.MM7./6.MyMM6./5.6M5./..12M../..12#../..##o6#o##../16#/..12#../3.#.#4.#.#3.|ma.cowboy!trick=0,-2:4.6H6./..10H4./.12R3./..12#../..##o6#o##../16#/..12#../..#..#4.#..#..|ma.shades!trick=0,0:..12#../..GwGGw##GwGGw../..12G../16#/..12#../3.#.#4.#.#3.|ma.wizard!trick=0,-3:5.y10./4.yMyMM7./5.6M5./..12M../..12#../..##o6#o##../16#/..12#y./3.#.#4.#.#.y.';
+    'c.shadow!w12=2,10,g:12h;w14=1,10,g:14h;w10=3,10,g:10h|c.body!stand=2,0:12#*8;tall=2,-1:12#*9;squash=1,2:.12s./14#*6;squash2=1,4:.12s./14#*4;flat=2,7:12s/12#*2;turnL=2,0:11#s*8;turnR=2,0:s11#*8;leanR=2,0:.12#*4/12#.*4;leanL=1,0:12#.*4/.12#*4;peek=2,2:12#*6|c.eyes!open=4,2:o6.o*2;openL=3,2:o6.o*2;openR=5,2:o6.o*2;half=4,3:o6.o;shut=3,3:oo6.oo;happy=3,2:.o6.o./o.o4.o.o;squint=4,2:o6.o/.o4.o./o6.o;wide=3,2:oo6.oo*2;peekOpen=4,4:o6.o*2;peekHalf=4,5:o6.o;flatEyes=4,8:oo4.oo;blink=3,3:ss6.ss;upL=3,1:o6.o*2;up=4,1:o6.o*2;upR=5,1:o6.o*2|c.mouth!small=6,5:.ss.;yawn=6,5:4s/.ss.|c.legs!stand=2,8:.#.#4.#.#.*2;crouch=2,9:.#.#4.#.#.;tuck=2,8:..#.#..#.#..*2;walkA=2,8:.#.s4.#.s./.#6.#3.;walkB=2,8:.s.#4.s.#./3.#6.#.;dangle=2,8:.#.#4.#.#./.#.#8.*2;dangle2=2,8:.#.#4.#.#./8.#.#.*2;flailA=2,8:#3.#..#3.#/#10.#;flailB=2,8:..#.#..#.#../4.#..#4.;flailC=2,8:#..#4.#..#/3.#4.#..#|c.clawL!stub=0,5:##*2;front=0,5:ss*2;up=0,-2:##*2/#.;peekGrip=1,7:ss;flatLeft=0,8:ss;open=0,4:##/.#/##|c.clawR!stub=14,5:##*2;front=14,5:ss*2;up=14,-2:##*2/.#;low=14,8:3#*2;reach1=14,4:3.##/5#;write1=13,6:ss*2;write2=14,5:ss*2;peekGrip=13,7:ss;flatRight=14,8:ss;open=14,4:##/#./##;waveOut=14,-1:.##*2/#..|k.ears!stand=2,-1:#10.#/##8.##;nod=2,0:#10.#/##8.##;loaf=2,2:#10.#/##8.##;airplane=0,0:##12.##/3#10.3#;peek=2,1:#10.#/##8.##;flat=1,6:#12.#;twitchL=2,-1:11.#/##8.##;twitchR=2,-1:#11./##8.##|k.body!stand=2,1:12#*7;loaf=1,4:.12s./14#*5;stretch=2,0:s11#/12#*2/.11#*2/..10#/12#*2;turnL=2,1:11#s*7;turnR=2,1:s11#*7;leanR=2,1:.12#*4/12#.*3;leanL=1,1:12#.*4/.12#*3|k.eyes!loafShut=3,6:oo6.oo;loafHalf=4,6:o6.o|k.paws!none=0,0:;groom1=12,4:ss*2;groom2=12,3:ss*2;cheer=0,2:#14.#*2;up=0,-1:##12.##*2;peekGrip=1,7:ss10.ss;write1=13,5:ss*2;write2=14,6:ss*2;upR=14,0:##*2|k.tail!up=14,3:.s/.#*2/##;sway=14,3:.#*2/s#/#.;curl=14,4:##/.#/s#;loaf=14,6:.#*2/s#;puff=14,2:.#/##*2/s#/#.|p!quill1=15,3:..B/.B./k..;sheet=12,8:6c/ckk3c/6g;mug=13,4:..4D/3DbwD/D.DbbD/3DbbD/..4D;cloth1=13,2:cw../w3c/.cwc/..c.;cloth2=14,3:..cw/3cw/.cwc/..c.;bowl=12,7:5w/DBwBD/.3D.;bowlEmpty=12,8:D3gD/.3D.;chop1=12,4:3.n/..n./.n../n3.;chop2=12,3:3.n/..n./.n../w3.;fishDish=11,7:.PPsPP./7D/.5D.;fishBone=11,7:.M.M.M./7D/.5D.;envS=12,5:6d/ddwwdd/dwddwd/d4wd/6d;envSOpen=12,4:..dd../.dwwd./6d/d4wd*2/6d;letter=14,1:7d/d5cd/d3gccd/d5cd/d4gcd/d5cd/dggccrd/7d;seed=15,8,g:On/nO;p1=16,7,g:O/l*2;p2=16,6,g:O/l*3;p3=14,5,g:..O../..l../O.l.O/.3l./..l..;p4=14,3,g:..O../O.l.O/.3l./O.l.O/.3l./..l..*2;d1=13,0,g:3.O3./O5.O/.O3.O./7./O5.O/7.*2/3.O3.;d2=13,-2,g:.q3.q./3.q3./q5.q/7./.q3.q./7./3.q3.;wilt1=14,3,g:..q../q.l.q/.3l./q.l.q/.3l./..l..*2;wilt2=14,4,g:q4./.q.q./..ll./.q.l./..ll./..l..;wilt3=15,6,g:Q.Q/.l./Ql./.l.;bfUp=13,-4:B3.B/BB.BB/.BkB./..k..;bfDn=13,-4:5.*2/BBkBB/.BkB.;bfRest=7,-3:..B../.BB../..k..;stickUp=14,-9:WW/GG*6;stickLT=9,-9:5.tt/WG3.tt/.GG..tt/..GG.tt/3.GGtt/4.GGt/5.GG;stickRT=14,-9:tt5./tt3.GW/tt..GG./tt.GG../ttGG3./tGG4./GG5.;sirenDim=5,-4:..LL../.4x.*2/6l;sirenL=5,-4:..Lx../.HLxx./.LLxx./6l;sirenF=5,-4:..HH../.LHHL./.4L./6l;sirenR=5,-4:..xL../.xxLH./.xxLL./6l;beamL=-1,-7:J5./.j4./..j3./6./J3j../6./.Jjj..;beamF=4,-7:J..JJ..J/.j.jj.j.;micStand=1,4,g:6.ZZ6./6.Zz6./6.ZZ6./6.Z7.*2/5.4Z5.;micSink1=1,6,g:6.ZZ6./6.Zz6./6.ZZ6./5.4Z5.;micSink2=1,8,g:6.ZZ6./5.4Z5.;smoke=6,-4:.m./mm./.mm/.m.;iceCrystal=5,-6:..av../.aavv./3a3v/.aavv./..av..;laser0=16,7,g:.p./pRp/.p.;laser1=18,8,g:.R./RpR;laser2=15,8,g:pRp/.R.;blueprint=12,2:7B/B4EBB/BE3BEB/B4EBB/BE3BEB/7B;headband=1,1:.12L.L/..10H..L;goalFlame0=4,-7,g:3.Y3./..fYf../.FfYfF./FfYVYfF;goalFlame1=4,-7,g:..Y4./.fYf..Y/FfYVYf./.FfYfF.;goggles=3,0:gAAg..gAAg/gEAg..gEAg;iceCrystalSpin=6,-7:.av./aavv*2/.av.;flag0=14,-6:l4A./lAAyA./l4A./l5.*4;flag1=14,-6:l..3A/lAAyAA/l3A../l5.*4;shadesProp=3,2:4Z..4Z/ZEZZ..ZEZZ;surfboard=1,8,g:..10A../.A10EA.;waveSplash0=-3,6,g:..E./E.A./.AA.;waveSplash1=-3,6,g:E3./.EA./AA..;cloudBig=12,2:..3w../.w3Ew./5wbw/.5b.;cloudMid=13,3:.3w./wEEbw/.3b.;cubeGlow=13,3:.y.y./A3EA/AEyEA/5A;hourglass0=13,1:5n/.byb./..y../.b.b./5n;hourglass1=13,1:5n/.b.b./..y../.byb./5n;pocketWatch=12,4:..y../.ywy./ywnwy/.3y.;micHand=13,2:.ZZ./ZwZZ/.gg./..g.*2;spotlight=5,-9:..VV../.VyyV./V.yy.V;book0=12,4:5B/B3wB/BwgwB/B3wB/5B;book1=12,4:BB.BB/BwBwB/BwgwB/BwBwB/BB.BB;bulbOff=5,-8:..gg../.g..g.*2/..cc..;bulbOn=5,-9:y.yy.y/.yVVy./y4Vy/..yy../..cc..;hotCup0=12,3:.m..m./m..m../5D./D3nDD/D3nD./.3D..;hotCup1=12,3:m..m../.m..m./5D./D3nDD/D3nD./.3D..;donut0=12,4:.3p./pywpp/pp.pn/5n/.3n.;donut1=12,4:.pp../pyw../pp.pn/5n/.3n.;habCactus=0,0,g:3.P3./..lGl../l.lGl../lGlGl.l/..lGlGl/.5n./..3n..;habLamp=0,0,g:..3l../.l3Vl./.l3Yl./..3l../3.z3.*4/..3z..;habHourglass=0,0,g:.5n./..byb../3.y3./..byb../.5n.|s!heart=5,-7:.r.r./5r/.3r./..r..;spark=5,-8:..y..*2/5y/..y..*2;z1=10,-6:4k/..k./.k../4k;z2=12,-9:3k/.k./3k;vein=5,-7:.r.r./rr.rr/5./rr.rr/.r.r.;bang=6,-8:.r.*3/3./.r.;q=5,-9:.3k./k3.k/3.k./..k../5./..k..;note=5,-8:..kk./..k.k/..k../3k../kk3.;sweat=13,-4:.B./BbB*2/.B.;tilde=5,-7:.k3./k.k.k/3.k.;dozeZ0=12,-3:3k/.k./3k;dozeZ1=13,-7:4k/..k./.k../4k;dozeZ2=14,-12:5k/3.k./..k../.k3./5k;fireSpark0=5,-8:..Y../f3.V/..f..;fireSpark1=5,-9:.V..f/..Y../f4.;fireSpark2=5,-8:f..Y./4.V/.f3.;sleepBubble0=12,4:.b./bEb/.b.;sleepBubble1=12,3:.bb./bEwb/bEEb/.bb.|m!cowboy=0,-2:5.6H5./3.10H3./..12R../..12#../..##o6#o##../16#/..12#../3.#.#4.#.#3.;shades=0,0:..12#../..4Gg##g4G../..12G../16#/..12#../3.#.#4.#.#3.;wizard=0,-3:7.MM7./6.MyMM6./5.6M5./..12M../..12#../..##o6#o##../16#/..12#../3.#.#4.#.#3.|ma.cowboy!trick=0,-2:4.6H6./..10H4./.12R3./..12#../..##o6#o##../16#/..12#../..#..#4.#..#..|ma.shades!trick=0,0:..12#../..GwGGw##GwGGw../..12G../16#/..12#../3.#.#4.#.#3.|ma.wizard!trick=0,-3:5.y10./4.yMyMM7./5.6M5./..12M../..12#../..##o6#o##../16#/..12#y./3.#.#4.#.#.y.';
 
   function decodeSpriteAtlas(raw) {
     const out = { c: {}, k: {}, p: {}, s: {}, m: {}, ma: {} };
@@ -591,6 +601,7 @@
           options.overlayPainter(c2, oxGrid, oyGrid, pxSize);
         }
       }
+      if (typeof options.rimPainter === 'function') options.rimPainter(c2, cssW, oxGrid, oyGrid, pxSize);
       c2.restore();
     };
 
@@ -1588,6 +1599,8 @@
     let tickTimer = null;
     let currentTickMs = 0;
     let lastMiniDisplay = null;
+    const rim = { on: false, x: -9999, s: 0, t: 'default', d: true };
+    let rimSig = '0';
     const perfStats = {
       canvasDraws: 0,
       canvasSkips: 0,
@@ -2446,7 +2459,7 @@
       } else if (yieldMode === 'leap' && !actor.dragging && actor.y === 0) {
         yPx -= leapOffsetY;
       } else if (yieldMode === 'peek' && !actor.dragging) {
-        yPx += 6;
+        yPx += 1;
       }
       const direct = syncDirectMotionDomAttr(actor, actor.el);
       const depth = actor.stackedOn ? getStackDepth(actor.id) : 0;
@@ -2956,7 +2969,15 @@
 
         const flip = inspectState ? inspectState.mirror : Boolean(a.mirror);
         const rulerOn = Boolean(inspectState && inspectState.ruler);
-        const tintState = `${a.kind}:${crystalActive ? 1 : 0}:${rulerOn ? 1 : 0}:${isChromaCat ? `p${phaseBucket}_${earSparkPhase}` : '0'}`;
+        let bLv = 0;
+        let bDir = 0;
+        if (!inspectState && rim.on) {
+          const dx = getEntWorldCx(a) - rim.x;
+          const fy = a.stackedOn ? computeWorldFootY(a) : (a.y || 0);
+          bLv = Math.round(rim.s * Math.max(0, 1 - Math.abs(dx) / 240) * Math.max(0, 1 - Math.abs(fy) / 48) * 12);
+          if (bLv > 0) bDir = Math.max(-2, Math.min(2, Math.round(-dx / 55)));
+        }
+        const tintState = `${a.kind}:${crystalActive ? 1 : 0}:${rulerOn ? 1 : 0}:${isChromaCat ? `p${phaseBucket}_${earSparkPhase}` : '0'}${bLv ? `:r${bLv}_${bDir}_${rim.t}_${rim.d ? 1 : 0}` : ''}`;
         const snappedTy = Math.round(Number(nodOffset || 0) / PX) * PX;
         const frameIdx = computeLayersFrameIdx(layers);
         const rc = a.lastRender;
@@ -3016,6 +3037,30 @@
                   }
                 }
               : null;
+          const rimPainter =
+            bLv > 0
+              ? (c2, cw, oxG, oyG, pxS) => {
+                  if (typeof c2.createRadialGradient !== 'function') return;
+                  const p = RIM_PALS[rim.t] || RIM_PALS.default;
+                  const o = rim.d ? 0 : 2;
+                  const lv = (bLv / 12) * (rim.d ? 1 : 0.65);
+                  const by = (oyG + (yieldMode === 'peek' && !a.dragging ? 8 : 10)) * pxS;
+                  const gx = (oxG + 8) * pxS + bDir * 9;
+                  const paint = (yy, r, h, s0, s1) => {
+                    const g = c2.createRadialGradient(gx, yy, 0, gx, yy, r);
+                    g.addColorStop(0, s0);
+                    if (s1) g.addColorStop(0.5, s1);
+                    g.addColorStop(1, `rgba(${p[o + (s1 ? 1 : 0)]},0)`);
+                    c2.fillStyle = g;
+                    c2.fillRect(0, Math.max(0, by - h), cw, h);
+                  };
+                  c2.save();
+                  c2.globalCompositeOperation = 'source-atop';
+                  paint(by + 2, 34, 30, `rgba(${p[o]},${(0.36 * lv).toFixed(3)})`, `rgba(${p[o + 1]},${(0.16 * lv).toFixed(3)})`);
+                  paint(by, 26, pxS, `rgba(${p[o]},${(0.3 * lv).toFixed(3)})`, '');
+                  c2.restore();
+                }
+              : null;
           renderPixelLayers(a.canvas, dpr, OX, OY, PX, PALETTES[a.kind], layers, {
             ctx: a._ctx,
             mirror: flip,
@@ -3026,6 +3071,7 @@
             clipBottomY,
             colorResolver,
             overlayPainter,
+            rimPainter,
           });
           perfStats.canvasDraws += 1;
         }
@@ -5133,6 +5179,23 @@
         }
         renderAllFrames(now);
       },
+      setRimLight(n = null) {
+        if (disposed) return;
+        const on = Boolean(n && n.active && Number(n.strength) > 0.015);
+        const x = on ? Number(n.localX) || 0 : -9999;
+        const s = on ? Math.max(0, Math.min(1, Number(n.strength) || 0)) : 0;
+        const t = on && RIM_PALS[n.toneKey] ? n.toneKey : 'default';
+        const d = on ? n.dark !== false : true;
+        const sig = on ? `1|${Math.round(x / 6)}|${Math.round(s * 12)}|${t}|${d ? 1 : 0}` : '0';
+        if (sig === rimSig) return;
+        rimSig = sig;
+        rim.on = on;
+        rim.x = x;
+        rim.s = s;
+        rim.t = t;
+        rim.d = d;
+        if (!isVramSleepState() && !isWindowBlurred()) renderAllFrames(performance.now());
+      },
       getLayoutSnapshot() {
         const now = performance.now();
         return {
@@ -5142,6 +5205,7 @@
           // 生态联动与按需渲染遥测只读诊断
           dozing,
           orchestrator,
+          rimLight: { active: rim.on, strength: Math.round(rim.s * 100) / 100, toneKey: rim.t },
           habitat: {
             mode: resolveHabitatMode(),
             scheduleActive: Date.now() < scheduleWatchUntil,
@@ -5230,6 +5294,9 @@
       syncPowerState: syncPwr,
       dispose() {
         disposed = true;
+        rim.on = false;
+        rim.s = 0;
+        rimSig = '0';
         for (const a of [actors.cat, actors.clawd]) {
           if (a) {
             a.dragging = false;
