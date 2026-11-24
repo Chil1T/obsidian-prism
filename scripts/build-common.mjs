@@ -35,6 +35,7 @@ function createManifest() {
     defaultConfig: cdp.DEFAULT_CONFIG,
     validators: VALIDATORS,
     removeExpression: cdp.REMOVE_EXPRESSION,
+    swarmI18nRemoveExpression: cdp.SWARM_I18N_REMOVE_EXPRESSION,
   };
 }
 

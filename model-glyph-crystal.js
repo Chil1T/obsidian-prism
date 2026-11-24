@@ -23,19 +23,10 @@
     return String(rawText || '').replace(ZH_EFFORT_PAREN_RE, '').trim();
   };
 
-  const normalizeModelEffortLabel = (rawText) => {
-    return String(rawText || '').replace(ZH_EFFORT_PAREN_RE, (_, t) =>
-      t === '超高' || t === '极高' || t === '超深'
-        ? ' (xhigh)'
-        : t === '中' || t === '中等' || t === '中思考'
-        ? ' (medium)'
-        : t === '低' || t === '低思考' || t === '极低' || t === '最低'
-        ? ' (low)'
-        : t === '自动'
-        ? ' (auto)'
-        : ' (high)'
+  const normalizeModelEffortLabel = (rawText) =>
+    String(rawText || '').replace(ZH_EFFORT_PAREN_RE, (_, t) =>
+      /超高|极高|超深/.test(t) ? ' (xhigh)' : t[0] === '中' ? ' (medium)' : t.includes('低') ? ' (low)' : t === '自动' ? ' (auto)' : ' (high)'
     );
-  };
 
   const readButtonLabelWithoutGlyph = (el) => {
     if (!el) return '';
@@ -69,29 +60,31 @@
     return parts.join(' ').trim();
   };
 
+  const RE_CL = /\b(claude|anthropic|sonnet|opus|haiku)\b/;
+  const RE_GPT = /\b(gpt|openai|o[134]|codex)\b/;
+  const RE_DS = /\bdeepseek\b/;
+
   const parseModelLabelInfo = (rawText) => {
     const norm = normalizeModelEffortLabel(rawText).toLowerCase();
     const base = stripTranslatedEffortSuffix(rawText).toLowerCase();
     const isOrchestrator = /\borchestrator\b|编排|调度器/.test(base);
     let brand = 'gemini';
-    if (/\bclaude\b|\banthropic\b|\bsonnet\b|\bopus\b|\bhaiku\b/.test(base)) {
-      brand = 'claude';
-    } else if (/\bgpt\b|\bopenai\b|\bo1\b|\bo3\b|\bo4\b|\bcodex\b|\bdeepseek\b/.test(base)) {
-      brand = 'openai';
-    } else if (isOrchestrator) {
-      brand = 'antigravity';
-    } else if (/\bantigravity\b/.test(base) && !/\bgemini\b|\bneon\b|\bargon\b|\bcarbon\b|\bhydrogen\b|\bflash\b/.test(base)) {
-      brand = 'antigravity';
-    }
+    if (RE_CL.test(base)) brand = 'claude';
+    else if (RE_GPT.test(base) || RE_DS.test(base)) brand = 'openai';
+    else if (isOrchestrator || (/\bantigravity\b/.test(base) && !/\b(gemini|neon|argon|carbon|hydrogen|flash)\b/.test(base))) brand = 'antigravity';
 
-    let tier = 'medium';
-    if (/\bgpt-oss\b|\bfixed\b|固定/.test(norm)) tier = 'fixed';
-    else if (/\bxhigh\b|\bextra\b|超高|极高|超深/.test(norm)) tier = 'xhigh';
-    else if (/\bhigh\b|\bmax\b|\bthinking\b|深度思考|高思考|思考|高/.test(norm)) tier = 'high';
-    else if (/\blow\b|\blite\b|\bminimal\b|低思考|极低|最低|低/.test(norm)) tier = 'low';
-    else if (/\bmedium\b|\bmed\b|中思考|中等|中/.test(norm)) tier = 'medium';
-    else if (isOrchestrator) tier = 'auto';
+    const tier = /\b(gpt-oss|fixed)\b|固定/.test(norm) ? 'fixed'
+      : /\b(xhigh|extra)\b|超高|极高|超深/.test(norm) ? 'xhigh'
+      : /\b(high|max|thinking)\b|深度思考|高思考|思考|高/.test(norm) ? 'high'
+      : /\b(low|lite|minimal)\b|低思考|极低|最低|低/.test(norm) ? 'low'
+      : /\b(medium|med)\b|中思考|中等|中/.test(norm) ? 'medium'
+      : isOrchestrator ? 'auto' : 'medium';
     return { brand, tier, isOrchestrator, camp: brand === 'claude' ? 'claude' : 'gemini' };
+  };
+
+  const resolveMascotCamp = (rawText) => {
+    const b = stripTranslatedEffortSuffix(rawText).toLowerCase();
+    return RE_CL.test(b) ? 'claude' : RE_DS.test(b) || b.includes('深度求索') ? 'deepseek' : RE_GPT.test(b) ? 'gpt' : 'gemini';
   };
 
   const createModelGlyphCrystalController = ({
@@ -226,11 +219,10 @@
     };
 
     const parseModelTriggerInfo = (btn) => {
-      const info = parseModelLabelInfo(readButtonLabelWithoutGlyph(btn));
-      if (info.isOrchestrator && ga(btn, 'data-ces-orch-b') === 'claude') {
-        info.brand = 'claude';
-        info.camp = 'claude';
-      }
+      const raw = readButtonLabelWithoutGlyph(btn);
+      const info = parseModelLabelInfo(raw);
+      info.mascotCamp = resolveMascotCamp(raw);
+      if (info.isOrchestrator && ga(btn, 'data-ces-orch-b') === 'claude') info.brand = info.camp = info.mascotCamp = 'claude';
       return info;
     };
 
@@ -756,6 +748,7 @@
       stripTranslatedEffortSuffix,
       normalizeModelEffortLabel,
       parseModelLabelInfo,
+      resolveMascotCamp,
       parseModelTriggerInfo,
       renderSparkSvg,
       buildBrandMarkSvg,
@@ -786,6 +779,7 @@
     stripTranslatedEffortSuffix,
     normalizeModelEffortLabel,
     parseModelLabelInfo,
+    resolveMascotCamp,
     createModelGlyphCrystalController,
   };
   if (typeof module === 'object' && module.exports) module.exports = api;

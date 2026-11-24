@@ -1850,3 +1850,760 @@ test('WO-MAIN-001B: 9 Slash theaters, 4 contextual links, habitat 3-mode 0fps pr
     stage.dispose();
   }
 });
+
+function createRigMockDom(clientWidth = 760) {
+  const htmlAttrs = new Map();
+  const moInstances = [];
+  const docListeners = new Map();
+  const metrics = { fillRectCalls: 0, rafCalls: 0, cancelRafCalls: 0, activeRafIds: new Set(), nextRafId: 1 };
+  const makeEl = (tag) => {
+    const attrs = new Map();
+    const listeners = new Map();
+    const children = [];
+    const ctx = {
+      setTransform() {}, clearRect() {}, save() {}, restore() {},
+      translate() {}, scale() {}, rotate() {}, beginPath() {}, rect() {}, clip() {}, drawImage() {},
+      moveTo() {}, lineTo() {}, closePath() {}, fill() {}, stroke() {}, ellipse() {},
+      createLinearGradient() { return { addColorStop() {} }; },
+      createRadialGradient() { return { addColorStop() {} }; },
+      fillRect() { metrics.fillRectCalls += 1; },
+    };
+    const node = {
+      tagName: String(tag).toUpperCase(),
+      id: '',
+      clientWidth,
+      width: 96,
+      height: 84,
+      dataset: {},
+      className: '',
+      textContent: '',
+      disabled: false,
+      style: { display: '', zIndex: '', transform: '', transition: '', cursor: '', opacity: '' },
+      children,
+      parentNode: null,
+      get parentElement() { return this.parentNode; },
+      get isConnected() {
+        let cur = this;
+        while (cur) {
+          if (cur === body || cur === head || cur === documentElement) return true;
+          cur = cur.parentNode;
+        }
+        return false;
+      },
+      get firstChild() { return children[0] || null; },
+      setAttribute(k, v) { attrs.set(k, String(v)); },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) { attrs.delete(k); },
+      appendChild(ch) {
+        if (ch.parentNode && ch.parentNode !== this) ch.parentNode.removeChild?.(ch);
+        children.push(ch);
+        ch.parentNode = this;
+        return ch;
+      },
+      insertBefore(ch, ref) {
+        if (ch.parentNode && ch.parentNode !== this) ch.parentNode.removeChild?.(ch);
+        const idx = children.indexOf(ref);
+        if (idx >= 0) children.splice(idx, 0, ch);
+        else children.push(ch);
+        ch.parentNode = this;
+        return ch;
+      },
+      removeChild(ch) {
+        const i = children.indexOf(ch);
+        if (i >= 0) {
+          children.splice(i, 1);
+          ch.parentNode = null;
+          for (const mo of [...moInstances]) {
+            if (mo.active && mo.opts?.childList) {
+              let cur = this;
+              while (cur) {
+                if (cur === mo.target) {
+                  mo.cb([{ type: 'childList', target: this, removedNodes: [ch] }]);
+                  break;
+                }
+                if (!mo.opts?.subtree) break;
+                cur = cur.parentNode;
+              }
+            }
+          }
+        }
+      },
+      remove() { this.parentNode?.removeChild?.(this); },
+      addEventListener(t, fn) { if (!listeners.has(t)) listeners.set(t, new Set()); listeners.get(t).add(fn); },
+      removeEventListener(t, fn) { listeners.get(t)?.delete(fn); },
+      dispatchEvent(ev) {
+        const set = listeners.get(ev.type);
+        if (set) for (const fn of [...set]) fn(ev);
+      },
+      click() { this.dispatchEvent({ type: 'click', stopPropagation() {}, preventDefault() {} }); },
+      getContext() { return ctx; },
+      getBoundingClientRect() { return { left: 0, right: 96, top: 0, bottom: 84, width: 96, height: 84 }; },
+      matchesSingle(sel) {
+        const s = sel.trim();
+        if (!s) return false;
+        if (s.startsWith('#')) return this.id === s.slice(1);
+        const m = /^(?:([a-z0-9_-]+))?(?:\.([a-z0-9_-]+))?(?:\[([^\]=]+)(?:="([^"]*)")?\])?$/i.exec(s);
+        if (!m) return false;
+        if (m[1] && this.tagName !== m[1].toUpperCase()) return false;
+        if (m[2] && !String(this.className || '').split(/\s+/).includes(m[2])) return false;
+        if (m[3]) {
+          if (!this.hasAttribute(m[3])) return false;
+          if (m[4] !== undefined && this.getAttribute(m[3]) !== m[4]) return false;
+        }
+        return true;
+      },
+      querySelectorAll(sel) {
+        const out = [];
+        const groups = sel.split(',').map((g) => g.trim().split(/\s+/).filter(Boolean));
+        const matchParts = (el, parts) => {
+          if (!parts.length || !el.matchesSingle(parts[parts.length - 1])) return false;
+          if (parts.length === 1) return true;
+          let idx = parts.length - 2;
+          let p = el.parentNode;
+          while (p && idx >= 0) {
+            if (p.matchesSingle?.(parts[idx])) idx -= 1;
+            p = p.parentNode;
+          }
+          return idx < 0;
+        };
+        const walk = (cur) => {
+          for (const ch of cur.children || []) {
+            if (groups.some((parts) => matchParts(ch, parts))) out.push(ch);
+            walk(ch);
+          }
+        };
+        walk(this);
+        return out;
+      },
+      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+      closest(sel) {
+        let cur = this;
+        while (cur) {
+          if (cur.matchesSingle?.(sel)) return cur;
+          cur = cur.parentNode;
+        }
+        return null;
+      },
+      classList: {
+        _set: new Set(),
+        add(c) { this._set.add(c); },
+        remove(c) { this._set.delete(c); },
+        contains(c) { return this._set.has(c); },
+      },
+    };
+    return node;
+  };
+  class MockMutationObserver {
+    constructor(cb) { this.cb = cb; this.active = false; this.target = null; this.opts = null; moInstances.push(this); }
+    observe(target, opts = {}) { this.active = true; this.target = target; this.opts = opts; }
+    disconnect() { this.active = false; }
+  }
+  const documentElement = {
+    setAttribute(k, v) {
+      htmlAttrs.set(k, String(v));
+      for (const mo of [...moInstances]) if (mo.active && (!mo.target || mo.target === documentElement)) mo.cb([{ attributeName: k }]);
+    },
+    getAttribute(k) { return htmlAttrs.has(k) ? htmlAttrs.get(k) : null; },
+    hasAttribute(k) { return htmlAttrs.has(k); },
+    removeAttribute(k) {
+      htmlAttrs.delete(k);
+      for (const mo of [...moInstances]) if (mo.active && (!mo.target || mo.target === documentElement)) mo.cb([{ attributeName: k }]);
+    },
+    classList: { contains: () => false },
+  };
+  const head = makeEl('head');
+  const body = makeEl('body');
+  const doc = {
+    hidden: false,
+    documentElement,
+    head,
+    body,
+    defaultView: {
+      devicePixelRatio: 1,
+      MutationObserver: MockMutationObserver,
+      addEventListener() {},
+      removeEventListener() {},
+      requestAnimationFrame: () => {
+        metrics.rafCalls += 1;
+        const id = metrics.nextRafId++;
+        metrics.activeRafIds.add(id);
+        return id;
+      },
+      cancelAnimationFrame: (id) => {
+        metrics.cancelRafCalls += 1;
+        metrics.activeRafIds.delete(id);
+      },
+    },
+    createElement(tag) { const n = makeEl(tag); n.ownerDocument = doc; return n; },
+    addEventListener(t, fn) { if (!docListeners.has(t)) docListeners.set(t, new Set()); docListeners.get(t).add(fn); },
+    removeEventListener(t, fn) { docListeners.get(t)?.delete(fn); },
+    dispatchEvent(ev) {
+      const set = docListeners.get(ev.type);
+      if (set) for (const fn of [...set]) fn(ev);
+    },
+    getElementById(id) {
+      const find = (cur) => {
+        for (const ch of cur.children || []) {
+          if (ch.id === id) return ch;
+          const hit = find(ch);
+          if (hit) return hit;
+        }
+        return null;
+      };
+      return find(head) || find(body);
+    },
+    querySelectorAll(sel) { return body.querySelectorAll(sel); },
+    querySelector(sel) { return body.querySelector(sel); },
+  };
+  return { doc, html: documentElement, moInstances, metrics, docListeners };
+}
+
+test('PR #45 Quad mascot mode: GPT White Dragon & DeepSeek Whale sprites, 4-camp handoff, 7-tier stacking, hot quad toggle, and resolveMascotCamp', () => {
+  assert.equal(rig.CLAWD_PARTS.clawL.low, undefined, 'CLAWD_PARTS.clawL.low invariant must remain undefined');
+  assert.ok(rig.DRAGON_PARTS?.body?.stand, 'DRAGON_PARTS should be exported with body.stand');
+  assert.ok(rig.WHALE_PARTS?.body?.stand, 'WHALE_PARTS should be exported with body.stand');
+  assert.ok(rig.PALETTES.dragon && rig.PALETTES.whale, 'PALETTES must include dragon and whale');
+
+  // 1. Every pose across all 4 species resolves valid palette keys and grounded maxY <= 9
+  const checkPoses = ['idle', 'walk', 'happy', 'sleep', 'loaf', 'squash', 'flat', 'peek', 'angry', 'dragonFlame', 'whaleSpout', 'slashBoost'];
+  for (const kind of ['clawd', 'cat', 'dragon', 'whale']) {
+    const pal = rig.PALETTES[kind];
+    for (const pose of checkPoses) {
+      for (let t = 0; t < 4; t++) {
+        const layers = rig.buildClipLayers(kind, pose, t, { clipTick: t, noShadow: pose === 'peek' });
+        assert.ok(layers.length > 0, `${kind}:${pose}@${t} must emit layers`);
+        let maxY = -99;
+        for (const l of layers) {
+          for (let r = 0; r < (l.rows || []).length; r++) {
+            const row = l.rows[r];
+            for (let i = 0; i < row.length; i++) {
+              const ch = row[i];
+              if (ch === '.' || ch === ' ') continue;
+              assert.ok(pal[ch], `Missing palette key '${ch}' for ${kind}:${pose}@${t}`);
+              if (!l.grounded && l.oy + r > maxY) maxY = l.oy + r;
+            }
+          }
+        }
+        if (pose !== 'peek' && pose !== 'walk') {
+          assert.ok(maxY <= 9, `${kind}:${pose}@${t} exceeded ground baseline maxY=${maxY}`);
+        }
+      }
+    }
+  }
+
+  // 2. Quad mount, 4-camp leadership, 7-tier stacking, and lossless hot toggle quad <-> dual
+  const { doc } = createRigMockDom(760);
+  const hostEl = doc.createElement('div');
+  const stage = rig.mountDualMascotStage(hostEl, { quadEnabled: true, miniPileEnabled: true, camp: 'gpt', reducedMotion: true });
+  try {
+    let snap = stage.getLayoutSnapshot();
+    assert.equal(snap.quadEnabled, true);
+    assert.equal(snap.mascot, 'quad-minis');
+    assert.equal(snap.camp, 'gpt');
+    assert.deepEqual(snap.actors.map((a) => a.id), ['cat', 'clawd', 'dragon', 'whale']);
+    assert.equal(hostEl.children.filter((n) => n.className === 'ag-v2-mascot-actor').length, 4);
+
+    // Camp switch to deepseek moves whale into leader slot
+    stage.setState({ camp: 'deepseek' });
+    snap = stage.getLayoutSnapshot();
+    assert.equal(snap.camp, 'deepseek');
+
+    // 7-tier totem stacking across 4 mains + 3 mini crabs
+    assert.equal(stage.stackOnto('cat', 'clawd'), true);
+    assert.equal(stage.stackOnto('dragon', 'cat'), true);
+    assert.equal(stage.stackOnto('whale', 'dragon'), true);
+    assert.equal(stage.stackOnto('cowboy', 'whale'), true);
+    assert.equal(stage.stackOnto('shades', 'cowboy'), true);
+    assert.equal(stage.stackOnto('wizard', 'shades'), true);
+    snap = stage.getLayoutSnapshot();
+    assert.equal(snap.towers[0].length, 7, 'Quad + minis must support up to 7-tier totem tower');
+
+    // Hot toggle quadEnabled -> false cleanly unmounts dragon & whale DOM
+    stage.setState({ quadEnabled: false, camp: 'claude' });
+    snap = stage.getLayoutSnapshot();
+    assert.equal(snap.quadEnabled, false);
+    assert.equal(snap.mascot, 'minis');
+    assert.deepEqual(snap.actors.map((a) => a.id), ['cat', 'clawd']);
+    assert.equal(hostEl.children.filter((n) => n.className === 'ag-v2-mascot-actor').length, 2);
+
+    // Hot toggle back to true remounts dragon & whale cleanly
+    stage.setState({ quadEnabled: true });
+    assert.equal(hostEl.children.filter((n) => n.className === 'ag-v2-mascot-actor').length, 4);
+  } finally {
+    stage.dispose();
+  }
+  assert.equal(hostEl.children.filter((n) => n.className === 'ag-v2-mascot-actor').length, 0);
+
+  // 3. Model camp resolver + strict parseModelLabelInfo shape preservation
+  const mgc = require('../model-glyph-crystal.js');
+  assert.equal(mgc.resolveMascotCamp('Claude Sonnet 4.6'), 'claude');
+  assert.equal(mgc.resolveMascotCamp('Gemini 2.5 Pro'), 'gemini');
+  assert.equal(mgc.resolveMascotCamp('GPT-5.2 (低)'), 'gpt');
+  assert.equal(mgc.resolveMascotCamp('o3-mini'), 'gpt');
+  assert.equal(mgc.resolveMascotCamp('DeepSeek R1'), 'deepseek');
+  assert.equal(mgc.resolveMascotCamp('深度求索 V3'), 'deepseek');
+  assert.deepEqual(mgc.parseModelLabelInfo('GPT-5.2 (低)'), {
+    brand: 'openai',
+    tier: 'low',
+    isOrchestrator: false,
+    camp: 'gemini',
+  });
+  const ctrl = mgc.createModelGlyphCrystalController({});
+  const mockBtn = { nodeType: 1, textContent: 'DeepSeek R1 (高思考)', getAttribute: () => null };
+  const trigInfo = ctrl.parseModelTriggerInfo(mockBtn);
+  assert.equal(trigInfo.brand, 'openai');
+  assert.equal(trigInfo.camp, 'gemini');
+  assert.equal(trigInfo.mascotCamp, 'deepseek');
+});
+
+test('Custom mascot roster DSL: canonical folding, 3-way validation parity, multi-instance hot swap & VRAM cleanup, 520px layout, camp fallback & pure-minis r:+m', () => {
+  const cdp = require('../cdp.js');
+  const sp = require('../settings-panel.js');
+
+  // 1. Canonical folding & bidirectional consistency across rig, settings-panel, and cdp
+  const foldCases = [
+    ['off', 'off'],
+    ['crab', 'crab'],
+    ['dual', 'crab'],
+    ['minis', 'minis'],
+    ['quad', 'quad'],
+    ['quad-minis', 'quad-minis'],
+    ['r:c0', 'off'],
+    ['r:c0,k0,d0,w0', 'off'],
+    ['r:c1,k1', 'crab'],
+    ['r:k1,c1', 'crab'],
+    ['r:c1,k1+m', 'minis'],
+    ['r:w1,d1,k1,c1', 'quad'],
+    ['r:w1,d1,k1,c1+m', 'quad-minis'],
+    ['r:w1,d1', 'r:d1,w1'],
+    ['r:c2,k1+m', 'r:c2,k1+m'],
+    ['r:+m', 'r:+m'],
+    ['r:c4,k2', 'r:c4,k2'],
+    ['r:c4,k2+m', 'r:c4,k2+m'],
+  ];
+  for (const [input, expected] of foldCases) {
+    assert.equal(rig.isValidMascotValue(input), true, `rig must accept ${input}`);
+    assert.equal(rig.normalizeMascotValue(input), expected, `rig fold mismatch for ${input}`);
+    assert.equal(cdp.validateConfigEntry('mascot', input), true, `cdp must accept ${input}`);
+    assert.equal(cdp.reconcileConfigAliases({ mascot: input }).mascot, expected, `cdp reconcile fold mismatch for ${input}`);
+    const imp = sp.validateImportedConfigJson(JSON.stringify({ mascot: input }));
+    assert.equal(imp.ok, true, `settings-panel must accept ${input}`);
+    assert.equal(imp.settings.mascot, expected, `settings-panel fold mismatch for ${input}`);
+  }
+
+  // Invalid DSL inputs strictly rejected by all 3 validators
+  const invalidCases = ['r:', 'r:x1', 'r:c5', 'r:c4,k3', 'r:c2,k2,d2,w1', 'r:c1,c2', 'r:c-1', 'r:c1+x', 'r:c1+m+m', 'invalid', ''];
+  for (const bad of invalidCases) {
+    assert.equal(rig.isValidMascotValue(bad), false, `rig must reject ${bad}`);
+    assert.equal(cdp.validateConfigEntry('mascot', bad), false, `cdp must reject ${bad}`);
+    assert.equal(sp.validateImportedConfigJson(JSON.stringify({ mascot: bad })).ok, false, `settings-panel must reject ${bad}`);
+  }
+
+  // 2. 520px compact non-overlapping layout for 6 main actors + 9-tier totem stack
+  const { doc } = createRigMockDom(520);
+  const hostEl = doc.createElement('div');
+  const stage = rig.mountDualMascotStage(hostEl, { mascot: 'r:c2,k2,d1,w1+m', camp: 'claude', streaming: true, reducedMotion: true });
+  try {
+    let snap = stage.getLayoutSnapshot();
+    assert.equal(snap.mascot, 'r:c2,k2,d1,w1+m');
+    assert.deepEqual(snap.actors.map((a) => a.id), ['cat', 'cat-2', 'clawd', 'clawd-2', 'dragon', 'whale']);
+
+    // All 6 actors fit cleanly inside 520px stage without overflow or overlap
+    const xs = snap.actors.map((a) => a.x).sort((a, b) => a - b);
+    assert.ok(xs[0] >= 8, `Leftmost actor overflowed: x=${xs[0]}`);
+    assert.ok(xs[xs.length - 1] <= 432, `Rightmost actor overflowed 520px stage: x=${xs[xs.length - 1]}`);
+    for (let i = 1; i < xs.length; i++) {
+      assert.ok(xs[i] - xs[i - 1] >= 34, `Actors overlapped at 520px: gap=${xs[i] - xs[i - 1]}`);
+    }
+
+    // Camp teamwork: both Claude crabs write while others loaf/sleep
+    const byId = Object.fromEntries(snap.actors.map((a) => [a.id, a]));
+    assert.equal(byId.clawd.pose, 'write');
+    assert.equal(byId['clawd-2'].pose, 'write');
+    assert.equal(byId.cat.pose, 'loaf');
+    assert.equal(byId['cat-2'].pose, 'loaf');
+    assert.equal(byId.dragon.pose, 'sleep');
+    assert.equal(byId.whale.pose, 'loaf');
+
+    // Dynamic 9-tier totem stack (6 mains + 3 mini crabs)
+    const chain = ['cat', 'cat-2', 'clawd', 'clawd-2', 'dragon', 'whale', 'cowboy', 'shades', 'wizard'];
+    for (let i = 1; i < chain.length; i++) {
+      assert.equal(stage.stackOnto(chain[i], chain[i - 1]), true, `stackOnto(${chain[i]}, ${chain[i - 1]}) should succeed`);
+    }
+    assert.equal(stage.getLayoutSnapshot().towers[0].length, 9, '6 mains + 3 minis must support 9-tier totem tower');
+
+    // 3. Hot swap down to dragon+whale only: removed DOM nodes & canvases reclaimed to 0x0
+    const removedEls = hostEl.children.filter((n) => ['cat', 'cat-2', 'clawd', 'clawd-2'].includes(n.getAttribute?.('data-mascot-id')));
+    assert.equal(removedEls.length, 4);
+    const removedCanvases = removedEls.map((el) => el.children[0]);
+
+    stage.setState({ mascot: 'r:d1,w1', camp: 'gemini', streaming: true });
+    snap = stage.getLayoutSnapshot();
+    assert.equal(snap.mascot, 'r:d1,w1');
+    assert.deepEqual(snap.actors.map((a) => a.id), ['dragon', 'whale']);
+    assert.equal(hostEl.children.filter((n) => n.className === 'ag-v2-mascot-actor').length, 2);
+    for (const cv of removedCanvases) {
+      assert.equal(cv.width, 0, 'Removed actor canvas width must be reclaimed to 0');
+      assert.equal(cv.height, 0, 'Removed actor canvas height must be reclaimed to 0');
+      assert.equal(cv._ctx, null, 'Removed actor canvas _ctx must be cleared');
+    }
+
+    // Absent-camp fallback: camp='gemini' with only dragon+whale triggers handoff onto dragon ('happy'),
+    // and direct streaming mount with absent camp cleanly assigns 'write' to activeMainActors()[0] (dragon)
+    const dOnly = Object.fromEntries(snap.actors.map((a) => [a.id, a]));
+    assert.equal(dOnly.dragon.pose, 'happy', 'Camp handoff with absent camp must target fallback leader dragon');
+    const hostFallback = doc.createElement('div');
+    const stageFallback = rig.mountDualMascotStage(hostFallback, { mascot: 'r:d1,w1', camp: 'gemini', streaming: true, reducedMotion: true });
+    try {
+      const fbById = Object.fromEntries(stageFallback.getLayoutSnapshot().actors.map((a) => [a.id, a]));
+      assert.equal(fbById.dragon.pose, 'write', 'Absent camp during streaming must gracefully fall back to activeMainActors()[0]');
+      assert.equal(fbById.whale.pose, 'loaf');
+    } finally {
+      stageFallback.dispose();
+    }
+
+    // 4. Pure mini-crabs mode r:+m (0 main actors): zero errors across all interactions & notifications
+    stage.setState({ mascot: 'r:+m', camp: 'claude', streaming: false });
+    snap = stage.getLayoutSnapshot();
+    assert.equal(snap.mascot, 'r:+m');
+    assert.equal(snap.actors.length, 0);
+    assert.equal(snap.miniPileEnabled, true);
+    assert.equal(hostEl.children.filter((n) => n.className === 'ag-v2-mascot-actor').length, 0);
+
+    assert.doesNotThrow(() => {
+      stage.notify('send');
+      stage.notify('vial-high');
+      stage.notify('aura-complete');
+      stage.notify('code-copied');
+      stage.notify('files-changed');
+      stage.notify('model-shift');
+      stage.notify('effort-tier', { tier: 'high' });
+      stage.notify('slash-cmd', { cmd: 'plan' });
+      stage.notify('slash-cmd', { cmd: 'teamwork' });
+      stage.notify('streamDone', { error: false });
+      stage.notify('streamDone', { error: true });
+      stage.onUserType('hello?');
+      stage.onUserType('world!');
+      stage.onUserType('typing');
+      stage.triggerDemo('bump');
+      stage.triggerDemo('stack');
+      stage.triggerDemo('unstack');
+      stage.triggerDemo('toss');
+      stage.triggerDemo('poke');
+      stage.triggerDemo('campSwitch');
+      stage.triggerDemo('theater');
+      stage.poke('cat');
+      stage.feed('cat', 'donut');
+    }, 'Pure mini-crabs mode r:+m must execute all actions with zero errors');
+
+    // Mini crabs can still stack up to 3 tiers in r:+m mode
+    assert.equal(stage.stackOnto('shades', 'cowboy'), true);
+    assert.equal(stage.stackOnto('wizard', 'shades'), true);
+    assert.equal(stage.getLayoutSnapshot().towers[0].length, 3);
+  } finally {
+    stage.dispose();
+  }
+});
+
+test('Periodic picker PP_OPEN 0fps sleep covers dynamic multi-instance roster and restores cleanly', () => {
+  const { doc, html } = createRigMockDom(760);
+  const hostEl = doc.createElement('div');
+  doc.body.appendChild(hostEl);
+  const stage = rig.mountDualMascotStage(hostEl, { mascot: 'r:c2,k1,d2,w1+m', camp: 'gpt', reducedMotion: false });
+  try {
+    assert.equal(stage.getLayoutSnapshot().actors.length, 6);
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 100, 'Active multi-instance roster must tick at 100ms');
+
+    // Open periodic picker -> immediate 0fps heartbeat pause
+    html.setAttribute('data-ag-pp-open', '1');
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 0, 'PP_OPEN=1 must pause multi-instance roster heartbeat to 0fps');
+    assert.equal(stage.getLayoutSnapshot().perf.timerPaused, true);
+
+    // Close periodic picker -> cleanly wakes back to 100ms
+    html.removeAttribute('data-ag-pp-open');
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 100, 'Removing PP_OPEN must wake multi-instance roster back to 100ms');
+  } finally {
+    stage.dispose();
+  }
+});
+
+test('Octopath HD-2D Mascot Casting Stage sub-panel: Ch9 fallback when mascot=off, spotlight/cheer/hover, x2 badge & 6-cap, 5th mini-crab corner, 0x0 VRAM reclaim, 36 schema keys, 8-lang zero-CJK & MIT credits', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const sp = require('../settings-panel.js');
+  const i18nLocales = require('../i18n-locales.js');
+
+  // 1. Strict 36 schema keys & mascot allowed presets
+  assert.equal(Object.keys(sp.PRISM_SETTINGS_SCHEMA).length, 36, 'PRISM_SETTINGS_SCHEMA must remain strictly 36 keys');
+  assert.deepEqual([...sp.PRISM_SETTINGS_SCHEMA.mascot.allowed], ['crab', 'minis', 'quad', 'quad-minis', 'off']);
+
+  // 2. 8-language coverage (including all stage keys), zero CJK in en/es/fr/de, and 0 new keys leaked into RUNTIME_UI_KEYS
+  const newKeys = [
+    'optMascotCrab', 'optMascotMinis', 'optMascotQuad', 'optMascotQuadMinis', 'optMascotOff',
+    'mascotRosterTitle', 'mascotRosterCount', 'mascotRosterMinis',
+    'mascotSpeciesCrab', 'mascotSpeciesCat', 'mascotSpeciesDragon', 'mascotSpeciesWhale',
+    'mascotStageOpenBtn', 'mascotStageTitle', 'mascotStageBackBtn', 'mascotStageHint',
+    'mascotStagePresetDual', 'mascotStagePresetQuad', 'mascotStagePresetOff',
+    'mascotStageMinisSlot', 'mascotStageActiveOn', 'mascotStageActiveOff',
+  ];
+  const runtimeKeySet = new Set(i18nLocales.RUNTIME_UI_KEYS);
+  for (const k of newKeys) {
+    assert.equal(runtimeKeySet.has(k), false, `New mascot settings key '${k}' must NOT be in RUNTIME_UI_KEYS`);
+  }
+  const CJK_RE = /[\u3000-\u30ff\u3400-\u9fff\uac00-\ud7af\uff00-\uffef]/;
+  for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
+    const ui = i18nLocales.getUiStrings(lang);
+    for (const k of newKeys) {
+      assert.ok(typeof ui[k] === 'string' && ui[k].trim().length > 0, `Missing i18n key ${k} for ${lang}`);
+      if (['en', 'es', 'fr', 'de'].includes(lang)) {
+        assert.equal(CJK_RE.test(ui[k]), false, `CJK leak in ${lang}.${k}: ${ui[k]}`);
+      }
+    }
+  }
+
+  // 3. Credits & third-party MIT attribution for wp3171216237/dsh-TUI
+  const rootDir = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
+  const noticeTxt = fs.readFileSync(path.join(rootDir, 'NOTICE'), 'utf8');
+  const thirdPartyTxt = fs.readFileSync(path.join(rootDir, 'THIRD_PARTY_NOTICES.md'), 'utf8');
+  assert.ok(noticeTxt.includes('wp3171216237/dsh-TUI'), 'NOTICE must credit wp3171216237/dsh-TUI');
+  assert.ok(thirdPartyTxt.includes('wp3171216237/dsh-TUI') && thirdPartyTxt.includes('chimney'), 'THIRD_PARTY_NOTICES.md must include wp3171216237/dsh-TUI MIT notice');
+  assert.ok(sp.UPSTREAM_CREDITS.some((c) => c.repo === 'wp3171216237/dsh-TUI'), 'settings-panel UPSTREAM_CREDITS must include wp3171216237/dsh-TUI');
+
+  // 4. Interactive HD-2D Stage Sub-panel E2E test starting from mascot='off' (without Ch10 loaded!)
+  const { doc, metrics } = createRigMockDom(760);
+  const dlg = doc.createElement('div');
+  dlg.setAttribute('role', 'dialog');
+  const panel = doc.createElement('div');
+  panel.className = 'p-6';
+  const anchor = doc.createElement('div');
+  anchor.className = 'space-y-2';
+  const h2 = doc.createElement('h2');
+  h2.textContent = 'Appearance';
+  anchor.appendChild(h2);
+  panel.appendChild(anchor);
+  dlg.appendChild(panel);
+  doc.body.appendChild(dlg);
+
+  const state = { ...sp.getDefaultSettingsPatch(), mascot: 'off' };
+  const langNow = 'zh-CN';
+  const prevDoc = globalThis.document;
+  const prevArt = globalThis.__agPrismMascotArt;
+  const prevRig = globalThis.__agDualMascotRig;
+  delete globalThis.__agPrismMascotArt;
+  delete globalThis.__agDualMascotRig;
+  globalThis.document = doc;
+  try {
+    sp.mountOrSyncSettingsSection({
+      version: '1.0.8',
+      lazyFold: false,
+      getLang: () => langNow,
+      uiText: (l) => i18nLocales.getUiStrings(l),
+      formatSettingsSummary: () => 'summary',
+      resolveSettingRowActiveValue: (k) => state[k],
+      saveSetting: (k, v) => { state[k] = v; },
+      saveSettingsBatch: (patch) => { Object.assign(state, patch); },
+      getThoughtTranslateMode: () => state.thoughtTranslate,
+      runGuardedMut: (fn) => fn(),
+    });
+
+    const sec = doc.getElementById(sp.SETTINGS_SEC_ID);
+    assert.ok(sec && sec.__agMascotStageApi, 'Settings section must expose __agMascotStageApi');
+    const stageApi = sec.__agMascotStageApi;
+
+    const mascotRow = panel.querySelector('[data-ag-cs-row="mascot"]');
+    assert.ok(mascotRow, 'Mascot settings row must render');
+    const presetBtns = mascotRow.querySelectorAll('button[data-ag-cs-key="mascot"]');
+    assert.equal(presetBtns.length, 5, 'Mascot row must keep 5 quick preset buttons');
+    const openStageBtn = mascotRow.querySelector('button[data-ag-mascot-stage-open="1"]');
+    assert.ok(openStageBtn, 'Mascot row must render Open Casting Stage button');
+    assert.ok(openStageBtn.children[0]?.innerHTML?.includes('<svg'), 'Stage entry button must render built-in SVG spotlight icon (no emoji)');
+
+    // Before opening stage: 0 CPU / 0 VRAM invariant
+    assert.equal(stageApi.isOpen(), false);
+    assert.equal(stageApi.canvas.width, 0, 'Closed stage canvas width must be 0 (0 VRAM)');
+    assert.equal(stageApi.canvas.height, 0, 'Closed stage canvas height must be 0 (0 VRAM)');
+    assert.equal(metrics.rafCalls, 0, 'Closed stage must schedule 0 rAF ticks');
+
+    // Open stage while mascot='off' and Ch10 absent -> renders real 16x10 pixel art via Ch9 fallback
+    openStageBtn.click();
+    assert.equal(stageApi.isOpen(), true);
+    assert.equal(stageApi.getArtSource(), 'ch9-fallback', 'Must use built-in Ch9 fallback pixel renderer when Ch10 is absent');
+    assert.ok(stageApi.canvas.width > 0 && stageApi.canvas.height > 0, 'Open stage canvas must allocate backing store');
+    assert.ok(metrics.fillRectCalls > 120, `Stage must render real pixel sprites on first frame (got ${metrics.fillRectCalls} fillRects)`);
+    assert.ok(metrics.activeRafIds.size >= 1, 'Open stage must run active rAF loop');
+
+    const stageView = sec.querySelector('[data-ag-mascot-stage-view="1"]');
+    assert.equal(stageView.hidden, false);
+    const getVal = (spKey) => stageView.querySelector(`[data-ag-mascot-val="${spKey}"]`).textContent;
+    const inc = (spKey) => stageView.querySelector(`button[data-ag-mascot-inc="${spKey}"]`);
+    const dec = (spKey) => stageView.querySelector(`button[data-ag-mascot-dec="${spKey}"]`);
+    const badge = (spKey) => stageView.querySelector(`[data-ag-stage-badge="${spKey}"]`);
+    const minisBtn = stageView.querySelector('button[data-ag-mascot-minis="1"]');
+    const countEl = stageView.querySelector('[data-ag-mascot-count]');
+    const stagePreset = (val) => stageView.querySelector(`button[data-ag-stage-preset="${val}"]`);
+
+    // Hover resting dragon slot -> spotlight pre-warms (> 0)
+    stageApi.hoverSlot(2);
+    assert.ok(stageApi.getSlotStates()[2].light > 0, 'Hovering resting slot must warm up spotlight');
+    stageApi.hoverSlot(-1);
+
+    // Click slot 0 (Claude Crab) -> 0 -> 1 quick toggle triggers spotlight & cheering state
+    stageApi.clickSlot(0);
+    assert.equal(state.mascot, 'r:c1');
+    assert.equal(getVal('c'), '1');
+    assert.equal(stageApi.getSlotStates()[0].cheering, true, 'Activating slot must trigger cheering pose');
+    // Click slot 0 again -> 1 -> 0 farewell & spotlight off
+    stageApi.clickSlot(0);
+    assert.equal(state.mascot, 'off');
+    assert.equal(stageApi.getSlotStates()[0].farewell, true, 'Deactivating slot must trigger farewell animation');
+
+    // Stepper + on GPT Dragon twice -> shows ×2 badge and renders sidekick mini-clone
+    inc('d').click();
+    inc('d').click();
+    assert.equal(state.mascot, 'r:d2');
+    assert.equal(badge('d').textContent, '×2', 'Same-species count >= 2 must display ×2 badge');
+    assert.equal(stageApi.getSlotStates()[2].cheering, true, 'Incrementing GPT Dragon must trigger dragonFlame cheer');
+
+    // Fill roster to max 6 mains -> disables all 4 species '+' buttons
+    inc('c').click();
+    inc('k').click();
+    inc('w').click();
+    inc('w').click();
+    assert.equal(state.mascot, 'r:c1,k1,d2,w2');
+    assert.equal(countEl.getAttribute('data-total'), '6');
+    for (const spKey of ['c', 'k', 'd', 'w']) {
+      assert.equal(inc(spKey).disabled, true, `+ button for ${spKey} must disable at 6/6 cap`);
+    }
+
+    // Toggle 5th slot (Mini Crab Corner) -> lights up mini-crab spotlight & updates state
+    minisBtn.click();
+    assert.equal(state.mascot, 'r:c1,k1,d2,w2+m');
+    assert.equal(minisBtn.getAttribute('aria-pressed'), 'true');
+    assert.equal(stageApi.getSlotStates()[4].cheering, true, 'Activating 5th mini-crab corner must trigger mini-crab cheer');
+
+    // Clicking stage bottom preset 'quad-minis' syncs roster & triggers spotlights
+    stagePreset('quad-minis').click();
+    assert.equal(state.mascot, 'quad-minis');
+    assert.equal(countEl.getAttribute('data-total'), '4');
+    assert.equal(stagePreset('quad-minis').getAttribute('aria-pressed'), 'true');
+    assert.equal(badge('d').textContent, '', 'Badge hides when species count drops back to 1');
+
+    // When Ch10 mascotArt is mounted, stage automatically upgrades to full Ch10 live art renderer
+    globalThis.__agPrismMascotArt = rig.mascotArt;
+    stageApi.renderNow();
+    assert.equal(stageApi.getArtSource(), 'ch10-rig', 'Stage must prefer live Ch10 __agPrismMascotArt when loaded');
+
+    // document.hidden = true immediately cancels rAF and reclaims canvas to 0x0 VRAM
+    const cancelsBeforeHide = metrics.cancelRafCalls;
+    doc.hidden = true;
+    doc.dispatchEvent({ type: 'visibilitychange' });
+    assert.ok(metrics.cancelRafCalls > cancelsBeforeHide, 'document.hidden must cancel active rAF');
+    assert.equal(metrics.activeRafIds.size, 0, '0 active rAF loops while document.hidden');
+    assert.equal(stageApi.canvas.width, 0, 'document.hidden must reclaim stage canvas width to 0');
+    assert.equal(stageApi.canvas.height, 0, 'document.hidden must reclaim stage canvas height to 0');
+
+    // Restore visible -> canvas & rAF resume cleanly
+    doc.hidden = false;
+    doc.dispatchEvent({ type: 'visibilitychange' });
+    assert.ok(stageApi.canvas.width > 0 && stageApi.canvas.height > 0);
+    assert.ok(metrics.activeRafIds.size >= 1);
+
+    // Press Escape -> exits stage, cancels rAF, reclaims 0x0 VRAM, restores main settings with synced summary
+    const cancelsBeforeEsc = metrics.cancelRafCalls;
+    doc.dispatchEvent({ type: 'keydown', key: 'Escape', preventDefault() {}, stopPropagation() {} });
+    assert.equal(stageApi.isOpen(), false);
+    assert.equal(stageView.hidden, true);
+    assert.ok(metrics.cancelRafCalls > cancelsBeforeEsc, 'Esc exit must cancel active rAF');
+    assert.equal(metrics.activeRafIds.size, 0);
+    assert.equal(stageApi.canvas.width, 0, 'Closing stage must reclaim canvas width to 0');
+    assert.equal(stageApi.canvas.height, 0, 'Closing stage must reclaim canvas height to 0');
+    assert.equal(mascotRow.querySelector('[data-ag-mascot-summary-count]').getAttribute('data-total'), '4');
+
+    // Re-open & exit via Back button also cleanly reclaims VRAM
+    openStageBtn.click();
+    assert.equal(stageApi.isOpen(), true);
+    stageView.querySelector('button[data-ag-mascot-stage-back="1"]').click();
+    assert.equal(stageApi.isOpen(), false);
+    assert.equal(stageApi.canvas.width, 0);
+    assert.equal(metrics.activeRafIds.size, 0);
+
+    // Scene preset 'eco' in main settings resets mascot to 'off' and syncs summary bar to 0/6
+    const ecoBtn = panel.querySelector('button[data-ag-cs-preset="eco"]');
+    assert.ok(ecoBtn, 'Eco scene preset button must exist');
+    ecoBtn.click();
+    assert.equal(state.mascot, 'off');
+    assert.equal(mascotRow.querySelector('[data-ag-mascot-summary-count]').getAttribute('data-total'), '0');
+    assert.equal(presetBtns.find((b) => b.getAttribute('data-ag-cs-val') === '"off"').getAttribute('aria-pressed'), 'true');
+  } finally {
+    if (prevArt === undefined) delete globalThis.__agPrismMascotArt;
+    else globalThis.__agPrismMascotArt = prevArt;
+    if (prevRig === undefined) delete globalThis.__agDualMascotRig;
+    else globalThis.__agDualMascotRig = prevRig;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+  }
+});
+
+test('Mascot Casting Stage under prefers-reduced-motion: detaching dialog immediately reclaims 0x0 VRAM and unbinds document listeners + MutationObserver', () => {
+  const sp = require('../settings-panel.js');
+  const i18nLocales = require('../i18n-locales.js');
+  const { doc, moInstances, docListeners } = createRigMockDom(760);
+  doc.defaultView.matchMedia = () => ({ matches: true });
+
+  const dlg = doc.createElement('div');
+  dlg.setAttribute('role', 'dialog');
+  const panel = doc.createElement('div');
+  panel.className = 'p-6';
+  const anchor = doc.createElement('div');
+  anchor.className = 'space-y-2';
+  const h2 = doc.createElement('h2');
+  h2.textContent = 'Appearance';
+  anchor.appendChild(h2);
+  panel.appendChild(anchor);
+  dlg.appendChild(panel);
+  doc.body.appendChild(dlg);
+
+  const state = { ...sp.getDefaultSettingsPatch(), mascot: 'quad' };
+  const prevDoc = globalThis.document;
+  globalThis.document = doc;
+  try {
+    sp.mountOrSyncSettingsSection({
+      version: '1.0.8',
+      lazyFold: false,
+      getLang: () => 'en',
+      uiText: (l) => i18nLocales.getUiStrings(l),
+      formatSettingsSummary: () => 'summary',
+      resolveSettingRowActiveValue: (k) => state[k],
+      saveSetting: (k, v) => { state[k] = v; },
+      saveSettingsBatch: (patch) => { Object.assign(state, patch); },
+      getThoughtTranslateMode: () => state.thoughtTranslate,
+      runGuardedMut: (fn) => fn(),
+    });
+
+    const sec = doc.getElementById(sp.SETTINGS_SEC_ID);
+    const stageApi = sec.__agMascotStageApi;
+    const openStageBtn = panel.querySelector('button[data-ag-mascot-stage-open="1"]');
+    openStageBtn.click();
+
+    assert.equal(stageApi.isOpen(), true);
+    assert.equal(stageApi.getActiveRafId(), 0, 'reducedMotion stage must not schedule continuous rAF loop');
+    assert.ok(stageApi.canvas.width > 0 && stageApi.canvas.height > 0, 'reducedMotion stage must still draw initial frame');
+    assert.equal(docListeners.get('keydown')?.size || 0, 1);
+    assert.equal(docListeners.get('visibilitychange')?.size || 0, 1);
+    assert.ok(moInstances.some((m) => m.active && m.opts?.childList), 'Detach MutationObserver must be active while stage is open');
+
+    // Simulate React directly unmounting the settings dialog without pressing Esc or visibilitychange
+    dlg.remove();
+
+    assert.equal(stageApi.isOpen(), false, 'Detaching settings dialog must immediately close stage even under reducedMotion');
+    assert.equal(stageApi.canvas.width, 0, 'Detaching dialog must immediately reclaim canvas width to 0');
+    assert.equal(stageApi.canvas.height, 0, 'Detaching dialog must immediately reclaim canvas height to 0');
+    assert.equal(docListeners.get('keydown')?.size || 0, 0, 'keydown listener must be unbound immediately on detach');
+    assert.equal(docListeners.get('visibilitychange')?.size || 0, 0, 'visibilitychange listener must be unbound immediately on detach');
+    assert.equal(moInstances.some((m) => m.active && m.opts?.childList), false, 'Detach MutationObserver must self-disconnect after cleanup');
+  } finally {
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+  }
+});

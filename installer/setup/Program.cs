@@ -2250,7 +2250,7 @@ namespace AgyClaudeStyle.Installer
                                 List<string> titles = new List<string>();
                                 for (int p = 0; p < pages.Count; p++)
                                 {
-                                    titles.Add(CdpHelper.ShortTitle(pages[p]));
+                                    titles.Add(RedactSensitiveUrl(CdpHelper.ShortTitle(pages[p])));
                                     using (CdpSession s = CdpSession.ConnectAsync(pages[p].WebSocketDebuggerUrl, 2000).GetAwaiter().GetResult())
                                     {
                                         object okVal = s.EvaluateAsync("Boolean(window.__agPrism || window.__agClaudeStyle)", false).GetAwaiter().GetResult();
@@ -2384,6 +2384,81 @@ namespace AgyClaudeStyle.Installer
             }
         }
 
+        private const string FallbackSwarmI18nRemoveExpression =
+            "(() => { try { window.__agPrismSwarmI18n && window.__agPrismSwarmI18n.destroy && window.__agPrismSwarmI18n.destroy(); } catch {} try { document.documentElement && document.documentElement.removeAttribute && document.documentElement.removeAttribute('data-ag-prism-swarm-i18n'); } catch {} try { delete window.__agPrismSwarmI18n; } catch {} try { delete globalThis.__agPrismSwarmI18n; } catch {} try { delete window.__agPrismSwarmI18nFactory; } catch {} try { delete globalThis.__agPrismSwarmI18nFactory; } catch {} return { ok: true, status: 'off' }; })()";
+
+        private static readonly System.Text.RegularExpressions.Regex SensitiveUrlQueryRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"([?&](?:token|auth|signature|key|secret)=)[^&\s#""']+",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled
+            );
+
+        private static readonly System.Text.RegularExpressions.Regex SwarmSidecarHostRegex =
+            new System.Text.RegularExpressions.Regex(
+                @"^swarm--swarm_board-\d+$",
+                System.Text.RegularExpressions.RegexOptions.Compiled
+            );
+
+        private static string RedactSensitiveUrl(string raw)
+        {
+            if (string.IsNullOrEmpty(raw)) return "";
+            return SensitiveUrlQueryRegex.Replace(raw, "$1<REDACTED>");
+        }
+
+        private static bool IsSwarmSidecarUrl(string rawUrl)
+        {
+            if (string.IsNullOrWhiteSpace(rawUrl)) return false;
+            try
+            {
+                Uri u = new Uri(rawUrl.Trim());
+                if (!string.Equals(u.Scheme, "plugin", StringComparison.OrdinalIgnoreCase)) return false;
+                if (!SwarmSidecarHostRegex.IsMatch(u.Host ?? "")) return false;
+                if (!u.IsDefaultPort && u.Port >= 0) return false;
+                if (!string.IsNullOrEmpty(u.UserInfo)) return false;
+                if (!string.Equals(u.AbsolutePath, "/", StringComparison.Ordinal)) return false;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static async Task<List<CdpPageInfo>> ListSwarmTargetsAsync(int port)
+        {
+            List<CdpPageInfo> res = new List<CdpPageInfo>();
+            using (System.Net.Http.HttpClient http = new System.Net.Http.HttpClient())
+            {
+                http.Timeout = TimeSpan.FromMilliseconds(2000);
+                string url = string.Format("http://127.0.0.1:{0}/json/list", port);
+                string json = await http.GetStringAsync(url).ConfigureAwait(false);
+                List<object> targets = MiniJson.ParseArray(json);
+                if (targets == null) return res;
+                for (int i = 0; i < targets.Count; i++)
+                {
+                    Dictionary<string, object> t = targets[i] as Dictionary<string, object>;
+                    if (t == null) continue;
+                    string type = t.ContainsKey("type") ? (t["type"] as string ?? "") : "";
+                    string wsUrl = t.ContainsKey("webSocketDebuggerUrl") ? (t["webSocketDebuggerUrl"] as string ?? "") : "";
+                    string pageUrl = t.ContainsKey("url") ? (t["url"] as string ?? "") : "";
+                    string title = t.ContainsKey("title") ? (t["title"] as string ?? "") : "";
+                    if ((string.Equals(type, "iframe", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(type, "page", StringComparison.OrdinalIgnoreCase)) &&
+                        !string.IsNullOrEmpty(wsUrl) &&
+                        IsSwarmSidecarUrl(pageUrl))
+                    {
+                        CdpPageInfo info = new CdpPageInfo();
+                        info.Id = t.ContainsKey("id") ? (t["id"] as string ?? wsUrl) : wsUrl;
+                        info.Title = RedactSensitiveUrl(string.IsNullOrEmpty(title) ? pageUrl : title);
+                        info.Url = RedactSensitiveUrl(pageUrl);
+                        info.WebSocketDebuggerUrl = wsUrl;
+                        res.Add(info);
+                    }
+                }
+            }
+            return res;
+        }
+
         public static OperationResult RunUninstall(InstallerOptions opts, Action<int, string> progress)
         {
             OperationResult result = new OperationResult();
@@ -2422,11 +2497,22 @@ namespace AgyClaudeStyle.Installer
             int? port = CdpHelper.ReadPort(opts.CdpPort);
             result.CdpPort = port;
             string removeExpr = null;
-            if (File.Exists(Path.Combine(installDir, "manifest.json")))
+            string swarmRemoveExpr = null;
+            string manifestPath = Path.Combine(installDir, "manifest.json");
+            if (File.Exists(manifestPath))
             {
                 try { removeExpr = PluginManifest.Load(installDir).RemoveExpression; } catch { }
+                try
+                {
+                    Dictionary<string, object> rawDisk = MiniJson.ParseObject(File.ReadAllText(manifestPath, Encoding.UTF8));
+                    if (rawDisk != null && rawDisk.ContainsKey("swarmI18nRemoveExpression"))
+                    {
+                        swarmRemoveExpr = rawDisk["swarmI18nRemoveExpression"] as string;
+                    }
+                }
+                catch { }
             }
-            if (string.IsNullOrEmpty(removeExpr))
+            if (string.IsNullOrEmpty(removeExpr) || string.IsNullOrEmpty(swarmRemoveExpr))
             {
                 try
                 {
@@ -2439,12 +2525,23 @@ namespace AgyClaudeStyle.Installer
                             using (StreamReader sr = new StreamReader(entry.Open(), Encoding.UTF8))
                             {
                                 Dictionary<string, object> raw = MiniJson.ParseObject(sr.ReadToEnd());
-                                if (raw.ContainsKey("removeExpression")) removeExpr = raw["removeExpression"] as string;
+                                if (string.IsNullOrEmpty(removeExpr) && raw.ContainsKey("removeExpression"))
+                                {
+                                    removeExpr = raw["removeExpression"] as string;
+                                }
+                                if (string.IsNullOrEmpty(swarmRemoveExpr) && raw.ContainsKey("swarmI18nRemoveExpression"))
+                                {
+                                    swarmRemoveExpr = raw["swarmI18nRemoveExpression"] as string;
+                                }
                             }
                         }
                     }
                 }
                 catch { }
+            }
+            if (string.IsNullOrEmpty(swarmRemoveExpr))
+            {
+                swarmRemoveExpr = FallbackSwarmI18nRemoveExpression;
             }
 
             if (port.HasValue && !string.IsNullOrEmpty(removeExpr))
@@ -2459,9 +2556,30 @@ namespace AgyClaudeStyle.Installer
                             using (CdpSession s = CdpSession.ConnectAsync(pages[i].WebSocketDebuggerUrl, 3000).GetAwaiter().GetResult())
                             {
                                 s.EvaluateAsync(removeExpr, false).GetAwaiter().GetResult();
-                                string title = CdpHelper.ShortTitle(pages[i]);
+                                string title = RedactSensitiveUrl(CdpHelper.ShortTitle(pages[i]));
                                 result.InjectedPages.Add(title);
                                 report(55, InstallerI18n.TrFormat("已恢复原生界面: {0}", "Restored native UI: {0}", title));
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+            }
+            if (port.HasValue && !string.IsNullOrEmpty(swarmRemoveExpr))
+            {
+                try
+                {
+                    List<CdpPageInfo> swarmTargets = ListSwarmTargetsAsync(port.Value).GetAwaiter().GetResult();
+                    for (int i = 0; i < swarmTargets.Count; i++)
+                    {
+                        try
+                        {
+                            using (CdpSession s = CdpSession.ConnectAsync(swarmTargets[i].WebSocketDebuggerUrl, 2000).GetAwaiter().GetResult())
+                            {
+                                s.EvaluateAsync(swarmRemoveExpr, false).GetAwaiter().GetResult();
+                                string title = RedactSensitiveUrl(CdpHelper.ShortTitle(swarmTargets[i]));
+                                report(62, InstallerI18n.TrFormat("已恢复原生 Swarm 面板: {0}", "Restored native Swarm pane: {0}", title));
                             }
                         }
                         catch { }

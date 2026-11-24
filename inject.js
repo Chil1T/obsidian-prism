@@ -69,8 +69,19 @@ const LOG_FILE = path.join(__dirname, 'watch.log');
 const BUNDLE_CACHE_PATH = path.join(__dirname, '.bundle-cache.json');
 const PERIODIC_PICKER_CACHE_OPTS = Object.freeze({ cachePath: BUNDLE_CACHE_PATH });
 
+const SECRET_TOKEN_RE =
+  /(sk-[A-Za-z0-9_\-]{6,}|AIza[A-Za-z0-9_\-]{12,}|xai-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+[A-Za-z0-9._\-]{8,})/gi;
+const URL_SECRET_QUERY_RE = /([?&](?:token|auth|signature|key|secret)=)[^&\s#"']+/gi;
+
+function sanitizeSecretText(text) {
+  return String(text || '')
+    .replace(/https?:\/\/[^/\s:@]+:[^/\s@]+@/gi, 'https://***@')
+    .replace(URL_SECRET_QUERY_RE, '$1<REDACTED>')
+    .replace(SECRET_TOKEN_RE, '***REDACTED***');
+}
+
 function log(...args) {
-  const line = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+  const line = sanitizeSecretText(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
   console.log(line);
   if (WATCH) {
     try {
@@ -80,17 +91,8 @@ function log(...args) {
 }
 
 function shortTitle(page) {
-  const t = page.title || page.url;
+  const t = sanitizeSecretText(page.title || page.url || '');
   return t.length > 60 ? t.slice(0, 57) + '...' : t;
-}
-
-const SECRET_TOKEN_RE =
-  /(sk-[A-Za-z0-9_\-]{6,}|AIza[A-Za-z0-9_\-]{12,}|xai-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+[A-Za-z0-9._\-]{8,})/gi;
-
-function sanitizeSecretText(text) {
-  return String(text || '')
-    .replace(/https?:\/\/[^/\s:@]+:[^/\s@]+@/gi, 'https://***@')
-    .replace(SECRET_TOKEN_RE, '***REDACTED***');
 }
 
 function serializeJsonForEval(val) {

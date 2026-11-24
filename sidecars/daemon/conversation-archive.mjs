@@ -558,7 +558,7 @@ export function extractCatalogIndexFromSummaries(rawSummaries, extraSignals = nu
     const id = String(rawId || s?.id || s?.cascadeId || '').trim().toLowerCase();
     if (!GUID_RE.test(id) || !s || typeof s !== 'object') continue;
     const meta = s.trajectoryMetadata && typeof s.trajectoryMetadata === 'object' ? s.trajectoryMetadata : {};
-    const parentId = String(
+    const rawParentId = String(
       s.parentConversationId ||
         meta.parentConversationId ||
         s.parentId ||
@@ -568,7 +568,8 @@ export function extractCatalogIndexFromSummaries(rawSummaries, extraSignals = nu
         meta.parentTrajectoryId ||
         ''
     ).trim().toLowerCase();
-    const rootId = String(
+    const parentId = rawParentId && rawParentId !== id ? rawParentId : '';
+    const rawRootId = String(
       s.rootConversationId ||
         meta.rootConversationId ||
         s.rootId ||
@@ -576,12 +577,14 @@ export function extractCatalogIndexFromSummaries(rawSummaries, extraSignals = nu
         meta.rootCascadeId ||
         ''
     ).trim().toLowerCase();
+    const rootId = rawRootId && rawRootId !== id ? rawRootId : '';
     const swarmId = String(s.swarmId || meta.swarmId || '').trim();
     const subagentName = String(s.subagentName || meta.subagentName || '').trim();
+    const selfPoison = Boolean((rawParentId && rawParentId === id) || (!parentId && rawRootId && rawRootId === id));
     const explicitSubagent = Boolean(
-      s.subagent === true ||
-        (parentId && parentId !== id) ||
-        (rootId && rootId !== id) ||
+      (s.subagent === true && !selfPoison) ||
+        Boolean(parentId) ||
+        Boolean(rootId) ||
         Number(meta.nestingDepth || s.nestingDepth || 0) > 0 ||
         s.isSubagent === true ||
         meta.isSubagent === true ||
@@ -591,7 +594,11 @@ export function extractCatalogIndexFromSummaries(rawSummaries, extraSignals = nu
     const discInfo = discoveredSubs.get(id) || null;
     const isProtectedMain = protectedMainIds.has(id) && !explicitSubagent;
     const subagent = !isProtectedMain && (explicitSubagent || Boolean(discInfo && !chapterTitleIds.has(id)));
-    const resolvedParentId = parentId || discInfo?.parentId || '';
+    const discParent =
+      discInfo?.parentId && String(discInfo.parentId).trim().toLowerCase() !== id
+        ? String(discInfo.parentId).trim().toLowerCase()
+        : '';
+    const resolvedParentId = parentId || discParent || '';
     const lastModifiedMs =
       parseSummaryTimeMs(s.lastModifiedTime) ||
       parseSummaryTimeMs(s.modifiedAt) ||
@@ -1648,6 +1655,65 @@ const WIN_READ_GOMEMLIMIT_PS =
   '$v = [Environment]::GetEnvironmentVariable("GOMEMLIMIT", "User"); if ($null -ne $v) { [Console]::Out.Write($v) }';
 const WIN_READ_GOMEMLIMIT_B64 = Buffer.from(WIN_READ_GOMEMLIMIT_PS, 'utf16le').toString('base64');
 const ALLOWED_GOMEMLIMIT_RE = /^(?:1536MiB|2GiB|2500MiB|3GiB|4GiB)$/;
+const LINUX_ENVD_GOMEMLIMIT_LINE_RE = /^GOMEMLIMIT=([0-9]+(B|KiB|MiB|GiB|TiB))$/;
+
+export function readLinuxEnvDGoMemLimit(opts = {}) {
+  const env = opts.env || process.env;
+  const homeDir = opts.homeDir ? path.resolve(opts.homeDir) : os.homedir();
+  const hasCustomHome = Boolean(opts.homeDir && path.resolve(opts.homeDir) !== path.resolve(os.homedir()));
+  const xdgConfig =
+    !hasCustomHome && env && typeof env.XDG_CONFIG_HOME === 'string' && env.XDG_CONFIG_HOME.trim()
+      ? path.resolve(env.XDG_CONFIG_HOME.trim())
+      : path.join(homeDir, '.config');
+  const confPath = opts.envFile
+    ? path.resolve(opts.envFile)
+    : path.join(xdgConfig, 'environment.d', '90-obsidian-prism-gomemlimit.conf');
+  try {
+    const dirStat = fs.lstatSync(path.dirname(confPath));
+    if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) return '';
+    const fileStat = fs.lstatSync(confPath);
+    if (fileStat.isSymbolicLink() || !fileStat.isFile()) return '';
+    const lines = fs.readFileSync(confPath, 'utf8').split(/\r?\n/);
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      const m = LINUX_ENVD_GOMEMLIMIT_LINE_RE.exec(line);
+      if (m && m[1]) return m[1];
+    }
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+export function resolveLinuxHostExecutable(exePath, opts = {}) {
+  const existsFn = typeof opts.existsSync === 'function' ? opts.existsSync : fs.existsSync;
+  const homeDir = opts.homeDir ? path.resolve(opts.homeDir) : os.homedir();
+  const explicit = String(exePath || '').trim();
+  if (explicit) {
+    if (!explicit.includes('/') && !explicit.includes('\\')) {
+      return explicit;
+    }
+    try {
+      if (existsFn(explicit)) return explicit;
+    } catch {}
+  }
+  const candidates = Array.isArray(opts.candidatePaths) && opts.candidatePaths.length > 0
+    ? opts.candidatePaths
+    : [
+        '/usr/share/antigravity/antigravity',
+        '/opt/Antigravity/antigravity',
+        '/usr/bin/antigravity',
+        path.join(homeDir, '.local', 'bin', 'antigravity'),
+      ];
+  for (const cand of candidates) {
+    if (!cand) continue;
+    try {
+      if (existsFn(cand)) return cand;
+    } catch {}
+  }
+  return 'antigravity';
+}
 
 const WIN_WMI_CREATE_PS = [
   '$ErrorActionPreference = "Stop"',
@@ -1694,8 +1760,10 @@ function requestGracefulHostQuit(hostPid, exePath, platform = process.platform) 
   }
 }
 
-function launchHostWithCdpFlag(exePath, platform = process.platform) {
-  const cleanEnv = { ...process.env };
+export function launchHostWithCdpFlag(exePath, platform = process.platform, opts = {}) {
+  const baseEnv = opts && opts.env ? opts.env : process.env;
+  const spawnFn = opts && typeof opts.spawnFn === 'function' ? opts.spawnFn : spawn;
+  const cleanEnv = { ...baseEnv };
   delete cleanEnv.ELECTRON_RUN_AS_NODE;
   if (platform === 'win32') {
     // 同步读取最新的用户级 GOMEMLIMIT（仅白名单值），使设置后紧接一键重启即可立即生效
@@ -1715,16 +1783,16 @@ function launchHostWithCdpFlag(exePath, platform = process.platform) {
       path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'antigravity', 'Antigravity.exe');
     if (!fs.existsSync(resolvedExe)) return false;
     try {
-      const child = spawn(resolvedExe, ['--remote-debugging-port=0'], {
+      const child = spawnFn(resolvedExe, ['--remote-debugging-port=0'], {
         cwd: path.dirname(resolvedExe),
         detached: true,
         stdio: 'ignore',
         windowsHide: false,
         env: cleanEnv,
       });
-      child.on('error', () => {});
-      child.unref();
-      return Boolean(child.pid);
+      if (child && typeof child.on === 'function') child.on('error', () => {});
+      if (child && typeof child.unref === 'function') child.unref();
+      return Boolean(child && child.pid);
     } catch {
       return false;
     }
@@ -1732,28 +1800,44 @@ function launchHostWithCdpFlag(exePath, platform = process.platform) {
   if (platform === 'darwin') {
     const appPath = normalizeMacAppBundlePath(exePath);
     try {
-      const child = spawn('/usr/bin/open', ['-na', appPath, '--args', '--remote-debugging-port=0'], {
+      const child = spawnFn('/usr/bin/open', ['-na', appPath, '--args', '--remote-debugging-port=0'], {
         detached: true,
         stdio: 'ignore',
         env: cleanEnv,
       });
-      child.on('error', () => {});
-      child.unref();
-      return Boolean(child.pid);
+      if (child && typeof child.on === 'function') child.on('error', () => {});
+      if (child && typeof child.unref === 'function') child.unref();
+      return Boolean(child && child.pid);
     } catch {
       return false;
     }
   }
-  const resolvedExe = String(exePath || '').trim() || 'antigravity';
+  const freshLinuxGoMem = readLinuxEnvDGoMemLimit({
+    env: baseEnv,
+    homeDir: opts.homeDir,
+    envFile: opts.envFile,
+  });
+  if (freshLinuxGoMem) {
+    cleanEnv.GOMEMLIMIT = freshLinuxGoMem;
+  }
+  const resolvedExe = resolveLinuxHostExecutable(exePath, opts);
   try {
-    const child = spawn(resolvedExe, ['--remote-debugging-port=0'], {
+    const spawnOpts = {
       detached: true,
       stdio: 'ignore',
       env: cleanEnv,
-    });
-    child.on('error', () => {});
-    child.unref();
-    return Boolean(child.pid);
+    };
+    if (resolvedExe.includes('/') && path.isAbsolute(resolvedExe)) {
+      const parentDir = path.dirname(resolvedExe);
+      try {
+        const existsFn = typeof opts.existsSync === 'function' ? opts.existsSync : fs.existsSync;
+        if (existsFn(parentDir)) spawnOpts.cwd = parentDir;
+      } catch {}
+    }
+    const child = spawnFn(resolvedExe, ['--remote-debugging-port=0'], spawnOpts);
+    if (child && typeof child.on === 'function') child.on('error', () => {});
+    if (child && typeof child.unref === 'function') child.unref();
+    return Boolean(child && child.pid);
   } catch {
     return false;
   }

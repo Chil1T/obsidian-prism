@@ -18,6 +18,7 @@ const WALLPAPER_BINDING = '__agPrismWallpaperCall';
 const SUGGESTER_BINDING = '__agPrismSuggestCall';
 const IS_MAC = process.platform === 'darwin';
 const IS_WIN = process.platform === 'win32';
+const IS_LINUX = process.platform === 'linux';
 
 const APP_DATA = IS_MAC
   ? path.join(os.homedir(), 'Library', 'Application Support')
@@ -96,7 +97,7 @@ const VALIDATORS = {
   composer: ['on', 'off'],
   placeholderStyle: ['studio', 'host'],
   promptStyle: ['studio', 'host'],
-  mascot: ['crab', 'minis', 'dual', 'off'],
+  mascot: ['crab', 'minis', 'quad', 'quad-minis', 'dual', 'off'],
   logoInk: ['accent', 'foreground'],
   sidebarRestyle: 'boolean',
   sidebar: ['on', 'off'],
@@ -120,12 +121,47 @@ const VALIDATORS = {
   autoArchiveOnExit: 'boolean',
 };
 
+function normalizeMascotConfigValue(raw) {
+  if (typeof raw !== 'string') return null;
+  if (raw === 'dual') return 'crab';
+  if (raw === 'off' || raw === 'crab' || raw === 'minis' || raw === 'quad' || raw === 'quad-minis') return raw;
+  if (!raw.startsWith('r:') || raw.length <= 2) return null;
+  const m = /^r:(?:([ckdw][0-4](?:,[ckdw][0-4])*)?(\+m)?)$/.exec(raw);
+  if (!m) return null;
+  const counts = { c: 0, k: 0, d: 0, w: 0 };
+  const seen = new Set();
+  let total = 0;
+  if (m[1]) {
+    for (const tok of m[1].split(',')) {
+      const sp = tok[0];
+      const cnt = Number(tok.slice(1));
+      if (seen.has(sp) || !Number.isInteger(cnt) || cnt < 0 || cnt > 4) return null;
+      seen.add(sp);
+      counts[sp] = cnt;
+      total += cnt;
+    }
+  }
+  if (total > 6) return null;
+  const minis = Boolean(m[2]);
+  if (total === 0 && !minis) return 'off';
+  if (counts.c === 1 && counts.k === 1 && counts.d === 0 && counts.w === 0) return minis ? 'minis' : 'crab';
+  if (counts.c === 1 && counts.k === 1 && counts.d === 1 && counts.w === 1) return minis ? 'quad-minis' : 'quad';
+  const parts = [];
+  for (const sp of ['c', 'k', 'd', 'w']) {
+    if (counts[sp] > 0) parts.push(sp + counts[sp]);
+  }
+  return 'r:' + parts.join(',') + (minis ? '+m' : '');
+}
+
 function validateConfigEntry(key, value) {
   if (key === 'pollIntervalMs') {
     return typeof value === 'number' && Number.isInteger(value) && value >= 500 && value <= 60000;
   }
   if (key === 'autoPromptCdpRelaunch') {
     return typeof value === 'boolean';
+  }
+  if (key === 'mascot') {
+    return normalizeMascotConfigValue(value) !== null;
   }
   if (!Object.prototype.hasOwnProperty.call(VALIDATORS, key)) return false;
   const rule = VALIDATORS[key];
@@ -220,8 +256,9 @@ function reconcileConfigAliases(raw) {
   if (has('palette') && out.palette === 'claude') {
     out.palette = 'warm';
   }
-  if (has('mascot') && out.mascot === 'dual') {
-    out.mascot = 'crab';
+  if (has('mascot') && typeof out.mascot === 'string') {
+    const normMascot = normalizeMascotConfigValue(out.mascot);
+    if (normMascot !== null) out.mascot = normMascot;
   }
   return out;
 }
@@ -453,6 +490,7 @@ function inspectProcessSync(pid, opts = null) {
     if (platform === 'linux') {
       let imageName = '';
       let commandLine = '';
+      let processStartMs = 0;
       try {
         imageName = fs.readFileSync(`/proc/${n}/comm`, 'utf8').trim();
       } catch {}
@@ -462,12 +500,30 @@ function inspectProcessSync(pid, opts = null) {
           commandLine = rawCmd.toString('utf8').replace(/\0+/g, ' ').trim();
         }
       } catch {}
+      try {
+        const statText = fs.readFileSync(`/proc/${n}/stat`, 'utf8');
+        const rparen = statText.lastIndexOf(')');
+        if (rparen > 0) {
+          const fields = statText.slice(rparen + 2).trim().split(/\s+/);
+          const startTicks = Number(fields[19]);
+          if (Number.isFinite(startTicks) && startTicks > 0) {
+            const procStat = fs.readFileSync('/proc/stat', 'utf8');
+            const btimeMatch = /^btime\s+(\d+)$/m.exec(procStat);
+            if (btimeMatch) {
+              const bootSec = Number(btimeMatch[1]);
+              if (Number.isFinite(bootSec) && bootSec > 0) {
+                processStartMs = Math.round(bootSec * 1000 + (startTicks / 100) * 1000);
+              }
+            }
+          }
+        }
+      } catch {}
       if (!imageName && !commandLine) return null;
       return {
         pid: n,
         imageName: imageName || commandLine.split(/\s+/)[0] || '',
-        startTime: 0,
-        processStartMs: 0,
+        startTime: processStartMs,
+        processStartMs,
         commandLine,
       };
     }
@@ -634,18 +690,57 @@ function isAntigravityShortcutTarget(targetPath) {
   return base === 'antigravity.exe';
 }
 
-// 精准识别真正的 Antigravity 主进程（过滤 --type= 渲染/GPU 子进程、sidecar_sdk 守护进程与第三方 antigravity-tools）
+// 严格识别 Linux 下的 Antigravity 主可执行目标（原生二进制、.AppImage，排除 crashpad/language_server/tools/obsidian-prism）
+function isAntigravityLinuxTarget(targetPath) {
+  const cleaned = String(targetPath || '').trim().replace(/^["']+|["']+$/g, '');
+  if (!cleaned) return false;
+  const lowPath = cleaned.replace(/\\/g, '/').toLowerCase();
+  if (
+    lowPath.includes('antigravity-tools') ||
+    lowPath.includes('antigravity_tools') ||
+    lowPath.includes('uninstall') ||
+    lowPath.includes('obsidian-prism') ||
+    lowPath.includes('chrome_crashpad_handler') ||
+    lowPath.includes('language_server')
+  ) {
+    return false;
+  }
+  const parts = lowPath.split('/');
+  const base = (parts[parts.length - 1] || '').trim();
+  if (!base) return false;
+  if (base === 'antigravity') return true;
+  if (/^antigravity(?:[-_.][a-z0-9._+-]+)?\.appimage$/i.test(base)) return true;
+  return false;
+}
+
+// 精准识别真正的 Antigravity 主进程（过滤 --type= 渲染/GPU 子进程、crashpad、language_server、sidecar_sdk 守护进程与第三方 antigravity-tools）
 function isMainAntigravityProcessSignature(imageName, commandLine = '') {
-  const rawImg = String(imageName || '').trim().replace(/^"+|"+$/g, '');
-  const imgParts = rawImg.split(/[\\/]/);
-  const baseImg = (imgParts[imgParts.length - 1] || '').trim().toLowerCase();
-  if (baseImg !== 'antigravity' && baseImg !== 'antigravity.exe') {
+  const rawImg = String(imageName || '').trim().replace(/^["']+|["']+$/g, '');
+  const normImg = rawImg.replace(/\\/g, '/').toLowerCase();
+  if (
+    normImg.includes('antigravity-tools') ||
+    normImg.includes('antigravity_tools') ||
+    normImg.includes('uninstall') ||
+    normImg.includes('chrome_crashpad_handler') ||
+    normImg.includes('language_server')
+  ) {
+    return false;
+  }
+  const imgParts = normImg.split('/');
+  const baseImg = (imgParts[imgParts.length - 1] || '').trim();
+  const isValidBase =
+    baseImg === 'antigravity' ||
+    baseImg === 'antigravity.exe' ||
+    /^antigravity(?:[-_.][a-z0-9._+-]+)?\.appimage$/i.test(baseImg);
+  if (!isValidBase) {
     return false;
   }
   const normCmd = String(commandLine || '').replace(/\\/g, '/').toLowerCase();
   if (!normCmd) return true;
   if (normCmd.includes('--type=')) return false;
   if (
+    normCmd.includes('chrome_crashpad_handler') ||
+    normCmd.includes('language_server') ||
     normCmd.includes('sidecar_sdk') ||
     normCmd.includes('register_loader.js') ||
     normCmd.includes('sidecars/daemon/main.mjs') ||
@@ -653,6 +748,7 @@ function isMainAntigravityProcessSignature(imageName, commandLine = '') {
     normCmd.includes('/watch.js') ||
     normCmd.includes('--run-guard') ||
     normCmd.includes('antigravity-tools') ||
+    normCmd.includes('antigravity_tools') ||
     normCmd.includes('uninstall antigravity')
   ) {
     return false;
@@ -862,9 +958,588 @@ async function runWindowsShortcutAdapterAsync(searchDirs, extraFiles) {
   };
 }
 
+const LINUX_DESKTOP_SHADOW_MARKER = '# obsidian-prism-shadow-of=';
+const LINUX_DESKTOP_FIELD_CODE_RE = /^%[fFuUdDnNickvm]$/;
+const LINUX_DEFAULT_SYSTEM_DESKTOP_DIRS = Object.freeze([
+  '/usr/share/applications',
+  '/usr/local/share/applications',
+  '/var/lib/snapd/desktop/applications',
+]);
+const LINUX_GOMEMLIMIT_LINE_RE = /^GOMEMLIMIT=([0-9]+(?:B|KiB|MiB|GiB|TiB))$/;
+
+function getDefaultLinuxDesktopDirs(opts = {}) {
+  const env = opts.env || process.env;
+  const home = opts.homeDir ? path.resolve(opts.homeDir) : os.homedir();
+  const hasCustomHome = Boolean(opts.homeDir && path.resolve(opts.homeDir) !== path.resolve(os.homedir()));
+  const xdgDataHome =
+    !hasCustomHome && env && typeof env.XDG_DATA_HOME === 'string' && env.XDG_DATA_HOME.trim()
+      ? path.resolve(env.XDG_DATA_HOME.trim())
+      : path.join(home, '.local', 'share');
+  const userAppsDir = opts.userApplicationsDir
+    ? path.resolve(opts.userApplicationsDir)
+    : path.join(xdgDataHome, 'applications');
+  const desktopDir = path.join(home, 'Desktop');
+  return {
+    userAppsDir,
+    searchDirs: [
+      userAppsDir,
+      desktopDir,
+      ...LINUX_DEFAULT_SYSTEM_DESKTOP_DIRS,
+    ],
+  };
+}
+
+// 线性词法分词器解析 freedesktop Desktop Entry Exec= 值（支持双引号、单引号与反斜杠转义）
+function tokenizeDesktopExec(execValue) {
+  const s = String(execValue || '');
+  const tokens = [];
+  let i = 0;
+  const len = s.length;
+  while (i < len) {
+    while (i < len && (s[i] === ' ' || s[i] === '\t')) i++;
+    if (i >= len) break;
+    const start = i;
+    let value = '';
+    let inQuote = '';
+    while (i < len) {
+      const ch = s[i];
+      if (inQuote === '"') {
+        if (ch === '\\' && i + 1 < len) {
+          value += s[i + 1];
+          i += 2;
+          continue;
+        }
+        if (ch === '"') {
+          inQuote = '';
+          i++;
+          continue;
+        }
+        value += ch;
+        i++;
+      } else if (inQuote === "'") {
+        if (ch === "'") {
+          inQuote = '';
+          i++;
+          continue;
+        }
+        value += ch;
+        i++;
+      } else {
+        if (ch === ' ' || ch === '\t') break;
+        if (ch === '\\' && i + 1 < len) {
+          value += s[i + 1];
+          i += 2;
+          continue;
+        }
+        if (ch === '"' || ch === "'") {
+          inQuote = ch;
+          i++;
+          continue;
+        }
+        value += ch;
+        i++;
+      }
+    }
+    tokens.push({ raw: s.slice(start, i), value, start, end: i });
+  }
+  return tokens;
+}
+
+// 从 Exec= token 序列提取真正的目标可执行路径（自动跳过前置 env 与 KEY=VAL 环境变量赋值）
+function extractDesktopExecTarget(execValue) {
+  const tokens = tokenizeDesktopExec(execValue);
+  if (tokens.length === 0) return { target: '', targetIndex: -1, tokens };
+  let idx = 0;
+  const firstBase = tokens[0].value.replace(/\\/g, '/').split('/').pop().toLowerCase();
+  if (firstBase === 'env') {
+    idx = 1;
+    while (idx < tokens.length) {
+      const val = tokens[idx].value;
+      if (val === '--') {
+        idx += 1;
+        break;
+      }
+      if (val.startsWith('-')) {
+        idx += val === '-u' || val === '--unset' || val === '-C' || val === '--chdir' ? 2 : 1;
+        continue;
+      }
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(val)) {
+        idx += 1;
+        continue;
+      }
+      break;
+    }
+  }
+  if (idx >= tokens.length) return { target: '', targetIndex: -1, tokens };
+  return { target: tokens[idx].value, targetIndex: idx, tokens };
+}
+
+// 无损修补单条 Desktop Entry Exec= 值：保留已有 --remote-debugging-port，并在 %U/%F 等占位符前精确插入
+function patchDesktopExecLine(execValue) {
+  const orig = String(execValue || '');
+  const { target, targetIndex, tokens } = extractDesktopExecTarget(orig);
+  if (targetIndex < 0 || !isAntigravityLinuxTarget(target)) {
+    return { value: orig, changed: false, matched: false, alreadySet: false };
+  }
+  if (hasRemoteDebuggingPortSwitch(orig)) {
+    return { value: orig, changed: false, matched: true, alreadySet: true };
+  }
+  let fieldCodeIdx = -1;
+  for (let i = targetIndex + 1; i < tokens.length; i++) {
+    if (LINUX_DESKTOP_FIELD_CODE_RE.test(tokens[i].value)) {
+      fieldCodeIdx = i;
+      break;
+    }
+  }
+  const rawTokens = tokens.map((t) => t.raw);
+  if (fieldCodeIdx >= 0) {
+    rawTokens.splice(fieldCodeIdx, 0, CDP_OPT_IN_SWITCH);
+  } else {
+    rawTokens.push(CDP_OPT_IN_SWITCH);
+  }
+  return { value: rawTokens.join(' '), changed: true, matched: true, alreadySet: false };
+}
+
+// 精准剥离单条 Desktop Entry Exec= 值中的 --remote-debugging-port=0（保留自定义端口、引号与占位符顺序）
+function stripDesktopExecLine(execValue) {
+  const orig = String(execValue || '');
+  const { target, targetIndex, tokens } = extractDesktopExecTarget(orig);
+  if (targetIndex < 0 || !isAntigravityLinuxTarget(target)) {
+    return { value: orig, changed: false, matched: false };
+  }
+  let removed = false;
+  const kept = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (i > targetIndex && tokens[i].value.toLowerCase() === CDP_OPT_IN_SWITCH) {
+      removed = true;
+      continue;
+    }
+    kept.push(tokens[i].raw);
+  }
+  if (!removed) {
+    return { value: orig, changed: false, matched: true };
+  }
+  return { value: kept.join(' '), changed: true, matched: true };
+}
+
+function readDesktopShadowMarker(content) {
+  const lines = String(content || '').split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith(LINUX_DESKTOP_SHADOW_MARKER)) {
+      const orig = trimmed.slice(LINUX_DESKTOP_SHADOW_MARKER.length).trim();
+      return orig || null;
+    }
+  }
+  return null;
+}
+
+function isManagedPrismDesktopContent(content) {
+  return /^\s*X-ObsidianPrism-Managed\s*=\s*true\s*$/im.test(String(content || ''));
+}
+
+// 解析并修补整份 .desktop 内容（支持 [Desktop Entry] 与多个 [Desktop Action ...] 段）
+function patchDesktopEntryContent(rawContent, opts = {}) {
+  const lines = String(rawContent || '').replace(/\r\n/g, '\n').split('\n');
+  let inSupportedSection = false;
+  let matched = false;
+  let changed = false;
+  let alreadySet = false;
+  let patchedExecCount = 0;
+  const outLines = lines.map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return line;
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      inSupportedSection = trimmed === '[Desktop Entry]' || trimmed.startsWith('[Desktop Action ');
+      return line;
+    }
+    if (!inSupportedSection) return line;
+    const execMatch = /^(\s*Exec\s*=\s*)(.*)$/.exec(line);
+    if (!execMatch) return line;
+    const res = patchDesktopExecLine(execMatch[2]);
+    if (res.matched) {
+      matched = true;
+      if (res.changed) {
+        changed = true;
+        patchedExecCount += 1;
+        return execMatch[1] + res.value;
+      }
+      if (res.alreadySet) {
+        alreadySet = true;
+      }
+    }
+    return line;
+  });
+  if (matched && changed && opts.shadowOf && !readDesktopShadowMarker(rawContent)) {
+    const safeOrig = String(opts.shadowOf).replace(/[\r\n]+/g, ' ').trim();
+    if (safeOrig) {
+      outLines.unshift(`${LINUX_DESKTOP_SHADOW_MARKER}${safeOrig}`);
+    }
+  }
+  return {
+    content: outLines.join('\n'),
+    matched,
+    changed,
+    alreadySet: matched && !changed && alreadySet,
+    patchedExecCount,
+  };
+}
+
+// 卸载还原整份 .desktop 内容中的 --remote-debugging-port=0
+function stripDesktopEntryContent(rawContent) {
+  const lines = String(rawContent || '').replace(/\r\n/g, '\n').split('\n');
+  let inSupportedSection = false;
+  let matched = false;
+  let changed = false;
+  const outLines = lines.map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) return line;
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      inSupportedSection = trimmed === '[Desktop Entry]' || trimmed.startsWith('[Desktop Action ');
+      return line;
+    }
+    if (!inSupportedSection) return line;
+    const execMatch = /^(\s*Exec\s*=\s*)(.*)$/.exec(line);
+    if (!execMatch) return line;
+    const res = stripDesktopExecLine(execMatch[2]);
+    if (res.matched) {
+      matched = true;
+      if (res.changed) {
+        changed = true;
+        return execMatch[1] + res.value;
+      }
+    }
+    return line;
+  });
+  return { content: outLines.join('\n'), matched, changed };
+}
+
+function isPathInsideDir(filePath, dirPath) {
+  if (!filePath || !dirPath) return false;
+  const rel = path.relative(path.resolve(dirPath), path.resolve(filePath));
+  return Boolean(rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function isLinuxReadOnlyOrSystemDesktopPath(filePath, systemDirs) {
+  const resolved = path.resolve(filePath);
+  const dirs = Array.isArray(systemDirs) && systemDirs.length > 0 ? systemDirs : LINUX_DEFAULT_SYSTEM_DESKTOP_DIRS;
+  for (const sysDir of dirs) {
+    if (!sysDir) continue;
+    const normSys = path.resolve(sysDir);
+    if (resolved === normSys || isPathInsideDir(resolved, normSys)) {
+      return true;
+    }
+  }
+  try {
+    fs.accessSync(resolved, fs.constants.W_OK);
+    fs.accessSync(path.dirname(resolved), fs.constants.W_OK);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function writeDesktopFileAtomicSync(filePath, content, fileMode = 0o644) {
+  const resolved = path.resolve(filePath);
+  const dir = path.dirname(resolved);
+  if (isSymlinkPathSync(dir) || isSymlinkPathSync(resolved)) {
+    throw new Error(`Refusing symbolic link desktop path: ${resolved}`);
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  if (isSymlinkPathSync(dir) || isSymlinkPathSync(resolved)) {
+    throw new Error(`Refusing symbolic link desktop path: ${resolved}`);
+  }
+  const tmpPath = `${resolved}.tmp.${process.pid}.${crypto.randomBytes(6).toString('hex')}`;
+  let fd = null;
+  try {
+    fd = fs.openSync(tmpPath, 'wx', fileMode);
+    fs.writeFileSync(fd, content, 'utf8');
+    fs.closeSync(fd);
+    fd = null;
+    try { fs.chmodSync(tmpPath, fileMode); } catch {}
+    if (isSymlinkPathSync(dir) || isSymlinkPathSync(resolved)) {
+      throw new Error(`Refusing symbolic link desktop path: ${resolved}`);
+    }
+    fs.renameSync(tmpPath, resolved);
+    try { fs.chmodSync(resolved, fileMode); } catch {}
+  } catch (err) {
+    if (fd !== null) {
+      try { fs.closeSync(fd); } catch {}
+    }
+    try { fs.unlinkSync(tmpPath); } catch {}
+    throw err;
+  }
+}
+
+function ensureLinuxDesktopShortcutsCdpFlag(opts = {}) {
+  const defaults = getDefaultLinuxDesktopDirs(opts);
+  const userAppsDir = defaults.userAppsDir;
+  const searchDirs = Array.isArray(opts.searchDirs) && opts.searchDirs.length > 0
+    ? opts.searchDirs.map((d) => path.resolve(d))
+    : defaults.searchDirs.map((d) => path.resolve(d));
+  const systemDirs = Array.isArray(opts.systemDirs)
+    ? [...LINUX_DEFAULT_SYSTEM_DESKTOP_DIRS, ...opts.systemDirs.map((d) => path.resolve(d))]
+    : [...LINUX_DEFAULT_SYSTEM_DESKTOP_DIRS];
+
+  let scanned = 0;
+  let matched = 0;
+  const patched = [];
+  const alreadySet = [];
+  const skipped = [];
+  const shadowCreated = [];
+  const seenFiles = new Set();
+  const userBasenames = new Set();
+
+  // 预先记录用户 applications 目录中已有的 .desktop basename，用于识别已存在的 XDG 覆盖
+  try {
+    if (fs.existsSync(userAppsDir) && !isSymlinkPathSync(userAppsDir)) {
+      for (const name of fs.readdirSync(userAppsDir)) {
+        if (name.endsWith('.desktop')) {
+          userBasenames.add(name);
+        }
+      }
+    }
+  } catch {}
+
+  for (const dir of searchDirs) {
+    if (!dir) continue;
+    try {
+      const dirLst = fs.lstatSync(dir);
+      if (dirLst.isSymbolicLink() || !dirLst.isDirectory()) {
+        if (dirLst.isSymbolicLink()) skipped.push(dir);
+        continue;
+      }
+    } catch {
+      continue;
+    }
+
+    let names = [];
+    try {
+      names = fs.readdirSync(dir).filter((n) => n.endsWith('.desktop')).sort();
+    } catch {
+      continue;
+    }
+
+    for (const name of names) {
+      const filePath = path.join(dir, name);
+      if (seenFiles.has(filePath)) continue;
+      seenFiles.add(filePath);
+
+      let st;
+      try {
+        st = fs.lstatSync(filePath);
+      } catch {
+        continue;
+      }
+      if (st.isSymbolicLink()) {
+        skipped.push(filePath);
+        continue;
+      }
+      if (!st.isFile()) continue;
+
+      const isSystemOrRo = isLinuxReadOnlyOrSystemDesktopPath(filePath, systemDirs);
+      // 若系统目录的 .desktop 在用户 applications 目录已有同名条目，则遵循 XDG 优先级跳过
+      if (isSystemOrRo && userBasenames.has(name) && !isPathInsideDir(filePath, userAppsDir)) {
+        continue;
+      }
+
+      scanned += 1;
+      let rawContent = '';
+      try {
+        rawContent = fs.readFileSync(filePath, 'utf8');
+      } catch {
+        skipped.push(filePath);
+        continue;
+      }
+
+      const patchRes = patchDesktopEntryContent(rawContent, isSystemOrRo ? { shadowOf: filePath } : {});
+      if (!patchRes.matched) continue;
+      matched += 1;
+
+      if (!patchRes.changed) {
+        alreadySet.push(filePath);
+        continue;
+      }
+
+      if (isSystemOrRo) {
+        const shadowPath = path.join(userAppsDir, name);
+        if (isSymlinkPathSync(userAppsDir) || isSymlinkPathSync(shadowPath)) {
+          skipped.push(shadowPath);
+          continue;
+        }
+        try {
+          writeDesktopFileAtomicSync(shadowPath, patchRes.content, 0o644);
+          userBasenames.add(name);
+          patched.push(shadowPath);
+          shadowCreated.push({ shadowPath, originalPath: filePath });
+        } catch {
+          skipped.push(filePath);
+        }
+      } else {
+        try {
+          const mode = (st.mode & 0o777) || 0o644;
+          writeDesktopFileAtomicSync(filePath, patchRes.content, mode);
+          patched.push(filePath);
+        } catch {
+          skipped.push(filePath);
+        }
+      }
+    }
+  }
+
+  if (opts.pluginDir && patched.length > 0) {
+    const prev = readPatchedShortcutsRecord(opts.pluginDir);
+    writePatchedShortcutsRecord(opts.pluginDir, [...prev, ...patched]);
+  }
+
+  return {
+    supported: true,
+    scanned,
+    matched,
+    patched,
+    alreadySet,
+    skipped,
+    shadowCreated,
+  };
+}
+
+function restoreLinuxDesktopShortcutsCdpFlag(opts = {}) {
+  const defaults = getDefaultLinuxDesktopDirs(opts);
+  const userAppsDir = defaults.userAppsDir;
+  const searchDirs = Array.isArray(opts.searchDirs) && opts.searchDirs.length > 0
+    ? opts.searchDirs.map((d) => path.resolve(d))
+    : [userAppsDir, path.join(opts.homeDir ? path.resolve(opts.homeDir) : os.homedir(), 'Desktop')];
+  const systemDirs = Array.isArray(opts.systemDirs)
+    ? [...LINUX_DEFAULT_SYSTEM_DESKTOP_DIRS, ...opts.systemDirs.map((d) => path.resolve(d))]
+    : [...LINUX_DEFAULT_SYSTEM_DESKTOP_DIRS];
+
+  const recorded = opts.pluginDir ? readPatchedShortcutsRecord(opts.pluginDir) : [];
+  const candidates = new Set();
+  for (const p of recorded) {
+    if (typeof p === 'string' && p.endsWith('.desktop')) {
+      candidates.add(path.resolve(p));
+    }
+  }
+  for (const dir of searchDirs) {
+    if (!dir) continue;
+    try {
+      const dirLst = fs.lstatSync(dir);
+      if (dirLst.isSymbolicLink() || !dirLst.isDirectory()) continue;
+      for (const name of fs.readdirSync(dir)) {
+        if (name.endsWith('.desktop')) {
+          candidates.add(path.join(dir, name));
+        }
+      }
+    } catch {}
+  }
+
+  const restored = [];
+  const skipped = [];
+  const shadowRemoved = [];
+
+  for (const filePath of candidates) {
+    let st;
+    try {
+      st = fs.lstatSync(filePath);
+    } catch {
+      continue;
+    }
+    if (st.isSymbolicLink()) {
+      skipped.push(filePath);
+      continue;
+    }
+    if (!st.isFile()) continue;
+    if (isLinuxReadOnlyOrSystemDesktopPath(filePath, systemDirs)) {
+      continue;
+    }
+    let rawContent = '';
+    try {
+      rawContent = fs.readFileSync(filePath, 'utf8');
+    } catch {
+      skipped.push(filePath);
+      continue;
+    }
+    if (isManagedPrismDesktopContent(rawContent)) {
+      continue;
+    }
+    const shadowOf = readDesktopShadowMarker(rawContent);
+    if (shadowOf) {
+      try {
+        if (isSymlinkPathSync(path.dirname(filePath)) || isSymlinkPathSync(filePath)) {
+          skipped.push(filePath);
+          continue;
+        }
+        fs.unlinkSync(filePath);
+        restored.push(filePath);
+        shadowRemoved.push({ shadowPath: filePath, originalPath: shadowOf });
+      } catch {
+        skipped.push(filePath);
+      }
+      continue;
+    }
+    const stripped = stripDesktopEntryContent(rawContent);
+    if (!stripped.changed) continue;
+    try {
+      const mode = (st.mode & 0o777) || 0o644;
+      writeDesktopFileAtomicSync(filePath, stripped.content, mode);
+      restored.push(filePath);
+    } catch {
+      skipped.push(filePath);
+    }
+  }
+
+  if (opts.pluginDir) {
+    try {
+      const recFile = path.join(opts.pluginDir, PATCHED_SHORTCUTS_FILENAME);
+      if (fs.existsSync(recFile) && !isSymlinkPathSync(recFile)) fs.unlinkSync(recFile);
+    } catch {}
+  }
+
+  return {
+    supported: true,
+    restored,
+    skipped,
+    shadowRemoved,
+  };
+}
+
+// 严格按白名单正则读取 ~/.config/environment.d/90-obsidian-prism-gomemlimit.conf（零 source / eval，拦截 symlink）
+function readLinuxGoMemLimitFromEnvD(opts = {}) {
+  const env = opts.env || process.env;
+  const home = opts.homeDir ? path.resolve(opts.homeDir) : os.homedir();
+  const hasCustomHome = Boolean(opts.homeDir && path.resolve(opts.homeDir) !== path.resolve(os.homedir()));
+  const xdgConfig =
+    !hasCustomHome && env && typeof env.XDG_CONFIG_HOME === 'string' && env.XDG_CONFIG_HOME.trim()
+      ? path.resolve(env.XDG_CONFIG_HOME.trim())
+      : path.join(home, '.config');
+  const confPath = opts.envFile
+    ? path.resolve(opts.envFile)
+    : path.join(xdgConfig, 'environment.d', '90-obsidian-prism-gomemlimit.conf');
+  try {
+    const dir = path.dirname(confPath);
+    if (isSymlinkPathSync(dir) || isSymlinkPathSync(confPath)) return '';
+    const st = fs.lstatSync(confPath);
+    if (!st.isFile()) return '';
+    const lines = fs.readFileSync(confPath, 'utf8').split(/\r?\n/);
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      const m = LINUX_GOMEMLIMIT_LINE_RE.exec(line);
+      if (m && m[1]) return m[1];
+    }
+    return '';
+  } catch {
+    return '';
+  }
+}
+
 // 异步非阻塞版：供常驻 Daemon 事件循环后台巡检快捷方式，避免 execFileSync 卡死 CDP RPC 与 Omni 流式媒体
 async function ensureAntigravityShortcutsCdpFlagAsync(opts = {}) {
-  const isWinPlatform = opts.platformOverride ? opts.platformOverride === 'win32' : IS_WIN;
+  const effectivePlatform = opts.platformOverride || process.platform;
+  if (effectivePlatform === 'linux' && typeof opts.shortcutAdapter !== 'function') {
+    return ensureLinuxDesktopShortcutsCdpFlag(opts);
+  }
+  const isWinPlatform = effectivePlatform === 'win32';
   if (!isWinPlatform && typeof opts.shortcutAdapter !== 'function') {
     return { supported: false, scanned: 0, matched: 0, patched: [], alreadySet: [], skipped: [] };
   }
@@ -913,9 +1588,13 @@ async function ensureAntigravityShortcutsCdpFlagAsync(opts = {}) {
   }
 }
 
-// 扫描并无损为 Antigravity.lnk 补齐 --remote-debugging-port=0（支持真实 Windows COM 与注入式沙箱适配器）
+// 扫描并无损为 Antigravity 快捷方式（Windows .lnk / Linux XDG .desktop）补齐 --remote-debugging-port=0
 function ensureAntigravityShortcutsCdpFlag(opts = {}) {
-  const isWinPlatform = opts.platformOverride ? opts.platformOverride === 'win32' : IS_WIN;
+  const effectivePlatform = opts.platformOverride || process.platform;
+  if (effectivePlatform === 'linux' && typeof opts.shortcutAdapter !== 'function') {
+    return ensureLinuxDesktopShortcutsCdpFlag(opts);
+  }
+  const isWinPlatform = effectivePlatform === 'win32';
   if (!isWinPlatform && typeof opts.shortcutAdapter !== 'function') {
     return { supported: false, scanned: 0, matched: 0, patched: [], alreadySet: [], skipped: [] };
   }
@@ -964,9 +1643,13 @@ function ensureAntigravityShortcutsCdpFlag(opts = {}) {
   }
 }
 
-// 卸载时精准剥离 Antigravity.lnk 中的 --remote-debugging-port=0 并保留用户原有其他启动参数
+// 卸载时精准剥离 Antigravity 快捷方式（Windows .lnk / Linux XDG .desktop + Shadow Copy 撤回）中的 --remote-debugging-port=0
 function restoreAntigravityShortcutsCdpFlag(opts = {}) {
-  const isWinPlatform = opts.platformOverride ? opts.platformOverride === 'win32' : IS_WIN;
+  const effectivePlatform = opts.platformOverride || process.platform;
+  if (effectivePlatform === 'linux' && typeof opts.shortcutAdapter !== 'function') {
+    return restoreLinuxDesktopShortcutsCdpFlag(opts);
+  }
+  const isWinPlatform = effectivePlatform === 'win32';
   if (!isWinPlatform && typeof opts.shortcutAdapter !== 'function') {
     return { supported: false, restored: [], skipped: [] };
   }
@@ -1089,7 +1772,79 @@ function selectPrimaryHostCandidate(candidates, nowMs = Date.now()) {
   return mains[0];
 }
 
-function parsePosixPsHostCandidates(psStdout, nowMs = Date.now()) {
+function extractPosixCommandExecutable(cmdLine) {
+  const s = String(cmdLine || '').trim();
+  if (!s) return '';
+  if (s[0] === '"' || s[0] === "'") {
+    const q = s[0];
+    let out = '';
+    for (let i = 1; i < s.length; i++) {
+      const ch = s[i];
+      if (q === '"' && ch === '\\' && i + 1 < s.length) {
+        out += s[i + 1];
+        i += 1;
+        continue;
+      }
+      if (ch === q) break;
+      out += ch;
+    }
+    return out;
+  }
+  const macAppIdx = s.indexOf('.app/Contents/MacOS/');
+  if (macAppIdx > 0) {
+    const slashAfter = s.indexOf(' ', macAppIdx + 20);
+    return slashAfter > 0 ? s.slice(0, slashAfter) : s;
+  }
+  const linuxSpacedMatch = /^(\/[^\0]*?\/(?:antigravity(?:[-_.][^\s/]+\.appimage|\.appimage)?))(?=\s|$)/i.exec(s);
+  if (linuxSpacedMatch && linuxSpacedMatch[1]) {
+    return linuxSpacedMatch[1];
+  }
+  const spIdx = s.indexOf(' ');
+  return spIdx > 0 ? s.slice(0, spIdx) : s;
+}
+
+function parseAppImageFromProcEnviron(rawEnviron) {
+  if (!rawEnviron) return '';
+  const text = Buffer.isBuffer(rawEnviron) ? rawEnviron.toString('utf8') : String(rawEnviron);
+  const parts = text.split(/\0|\r?\n/);
+  for (const entry of parts) {
+    if (entry.startsWith('APPIMAGE=')) {
+      const val = entry.slice('APPIMAGE='.length).trim();
+      if (val) return val;
+    }
+  }
+  return '';
+}
+
+function parsePosixPsHostCandidates(psStdout, nowMs = Date.now(), opts = null) {
+  const effectivePlatform = (opts && opts.platformOverride) || process.platform;
+  const isMacPlatform = effectivePlatform === 'darwin';
+  const isLinuxPlatform = effectivePlatform === 'linux';
+  const readProcExe =
+    opts && typeof opts.readProcExe === 'function'
+      ? opts.readProcExe
+      : isLinuxPlatform && IS_LINUX
+        ? (pid) => {
+            try {
+              return fs.readlinkSync(`/proc/${pid}/exe`);
+            } catch {
+              return '';
+            }
+          }
+        : null;
+  const readProcEnviron =
+    opts && typeof opts.readProcEnviron === 'function'
+      ? opts.readProcEnviron
+      : isLinuxPlatform && IS_LINUX
+        ? (pid) => {
+            try {
+              return fs.readFileSync(`/proc/${pid}/environ`);
+            } catch {
+              return '';
+            }
+          }
+        : null;
+
   const lines = String(psStdout || '').split(/\r?\n/);
   const list = [];
   for (const rawLine of lines) {
@@ -1100,26 +1855,55 @@ function parsePosixPsHostCandidates(psStdout, nowMs = Date.now()) {
     const pid = parseInt(m[1], 10);
     const elapsedMs = parsePsElapsedMs(m[2]);
     const cmdLine = m[3].trim();
-    if (!cmdLine.toLowerCase().includes('antigravity')) continue;
-    let firstExe = cmdLine;
-    const macAppIdx = cmdLine.indexOf('.app/Contents/MacOS/');
-    if (macAppIdx > 0) {
-      const slashAfter = cmdLine.indexOf(' ', macAppIdx + 20);
-      firstExe = slashAfter > 0 ? cmdLine.slice(0, slashAfter) : cmdLine;
-    } else {
-      const spIdx = cmdLine.indexOf(' ');
-      firstExe = spIdx > 0 ? cmdLine.slice(0, spIdx) : cmdLine;
+    const lowCmd = cmdLine.toLowerCase();
+    const looksRelevant = lowCmd.includes('antigravity') || lowCmd.includes('.mount_antigr');
+    let procExe = '';
+    let appImagePath = '';
+    if (isLinuxPlatform && (looksRelevant || (opts && opts.probeAllProc))) {
+      if (readProcExe) {
+        try {
+          procExe = String(readProcExe(pid) || '').replace(/\s+\(deleted\)$/, '').trim();
+        } catch {
+          procExe = '';
+        }
+      }
+      if (readProcEnviron) {
+        try {
+          appImagePath = parseAppImageFromProcEnviron(readProcEnviron(pid));
+        } catch {
+          appImagePath = '';
+        }
+      }
     }
+    if (!looksRelevant && !isAntigravityLinuxTarget(procExe) && !isAntigravityLinuxTarget(appImagePath)) {
+      continue;
+    }
+    const firstExe = extractPosixCommandExecutable(cmdLine);
     let appBundlePath = firstExe;
     const appEnd = firstExe.indexOf('.app/');
     if (appEnd > 0) {
       appBundlePath = firstExe.slice(0, appEnd + 4);
     }
+    let resolvedExePath = isMacPlatform && appBundlePath.endsWith('.app') ? appBundlePath : firstExe;
+    let resolvedImageName = firstExe;
+    if (isLinuxPlatform) {
+      if (appImagePath && isAntigravityLinuxTarget(appImagePath)) {
+        resolvedExePath = appImagePath;
+        if (!isAntigravityLinuxTarget(resolvedImageName)) {
+          resolvedImageName = appImagePath;
+        }
+      } else if (procExe && isAntigravityLinuxTarget(procExe)) {
+        resolvedExePath = procExe;
+        if (!isAntigravityLinuxTarget(resolvedImageName)) {
+          resolvedImageName = procExe;
+        }
+      }
+    }
     list.push({
       pid,
-      imageName: firstExe,
+      imageName: resolvedImageName,
       startMs: elapsedMs > 0 ? Math.max(1, nowMs - elapsedMs) : 0,
-      exePath: IS_MAC && appBundlePath.endsWith('.app') ? appBundlePath : firstExe,
+      exePath: resolvedExePath,
       commandLine: cmdLine,
     });
   }
@@ -1148,7 +1932,7 @@ function detectRunningAntigravityHostSync(opts = {}) {
       timeout: 3000,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
-    return selectPrimaryHostCandidate(parsePosixPsHostCandidates(psOut, nowMs), nowMs);
+    return selectPrimaryHostCandidate(parsePosixPsHostCandidates(psOut, nowMs, opts), nowMs);
   } catch {
     return null;
   }
@@ -1194,7 +1978,7 @@ function detectRunningAntigravityHost(opts = {}) {
           resolve(null);
           return;
         }
-        resolve(selectPrimaryHostCandidate(parsePosixPsHostCandidates(stdout, nowMs), nowMs));
+        resolve(selectPrimaryHostCandidate(parsePosixPsHostCandidates(stdout, nowMs, opts), nowMs));
       }
     );
   });
@@ -1214,6 +1998,10 @@ function getRelaunchPromptStatePaths(pluginDir, extraDirs = []) {
     } else if (IS_MAC) {
       const macWatcherDir = path.join(os.homedir(), 'Library', 'Application Support', 'obsidian-prism');
       if (fs.existsSync(macWatcherDir)) dirs.push(macWatcherDir);
+    } else if (IS_LINUX) {
+      const xdgState = process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state');
+      const linuxStateDir = path.join(xdgState, 'obsidian-prism');
+      if (fs.existsSync(linuxStateDir)) dirs.push(linuxStateDir);
     }
   }
   const uniq = [];
@@ -1364,9 +2152,12 @@ function promptUserForHostRelaunch(opts = {}) {
   if (typeof opts.dialogHook === 'function') {
     return Promise.resolve(opts.dialogHook(copy)).then((ans) => Boolean(ans));
   }
+  const effectivePlatform = opts.platformOverride || process.platform;
+  const execFn = typeof opts.execFileFn === 'function' ? opts.execFileFn : execFile;
+  const env = opts.env || process.env;
   return new Promise((resolve) => {
-    if (IS_WIN) {
-      execFile(
+    if (effectivePlatform === 'win32') {
+      execFn(
         'powershell.exe',
         ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_MESSAGEBOX_B64],
         {
@@ -1374,7 +2165,7 @@ function promptUserForHostRelaunch(opts = {}) {
           windowsHide: true,
           timeout: 120000,
           env: {
-            ...process.env,
+            ...env,
             AG_PRISM_DLG_TITLE: copy.title,
             AG_PRISM_DLG_BODY: copy.body,
           },
@@ -1389,17 +2180,71 @@ function promptUserForHostRelaunch(opts = {}) {
       );
       return;
     }
-    if (IS_MAC) {
-      execFile(
+    if (effectivePlatform === 'darwin') {
+      execFn(
         'osascript',
         ['-e', MAC_DIALOG_APPLESCRIPT, copy.body, copy.title, copy.laterBtn, copy.relaunchBtn],
-        { encoding: 'utf8', timeout: 120000 },
+        { encoding: 'utf8', timeout: 120000, env },
         (err, stdout) => {
           if (err) {
             resolve(false);
             return;
           }
           resolve(String(stdout || '').trim() === copy.relaunchBtn);
+        }
+      );
+      return;
+    }
+    if (effectivePlatform === 'linux') {
+      const hasGuiSession = Boolean(
+        (env && typeof env.DISPLAY === 'string' && env.DISPLAY.trim()) ||
+          (env && typeof env.WAYLAND_DISPLAY === 'string' && env.WAYLAND_DISPLAY.trim())
+      );
+      if (!hasGuiSession) {
+        resolve(false);
+        return;
+      }
+      execFn(
+        'zenity',
+        [
+          '--question',
+          '--no-markup',
+          '--title',
+          copy.title,
+          '--text',
+          copy.body,
+          '--ok-label',
+          copy.relaunchBtn,
+          '--cancel-label',
+          copy.laterBtn,
+        ],
+        { encoding: 'utf8', timeout: 120000, env },
+        (zenityErr) => {
+          if (!zenityErr) {
+            resolve(true);
+            return;
+          }
+          if (zenityErr.code !== 'ENOENT') {
+            resolve(false);
+            return;
+          }
+          execFn(
+            'kdialog',
+            [
+              '--title',
+              copy.title,
+              '--yesno',
+              copy.body,
+              '--yes-label',
+              copy.relaunchBtn,
+              '--no-label',
+              copy.laterBtn,
+            ],
+            { encoding: 'utf8', timeout: 120000, env },
+            (kdialogErr) => {
+              resolve(!kdialogErr);
+            }
+          );
         }
       );
       return;
@@ -1543,6 +2388,66 @@ const MAC_DETACHED_RELAUNCH_SH = [
   'open -na "$app_path" --args --remote-debugging-port=0 >/dev/null 2>&1 &',
 ].join('\n');
 
+// 纯 POSIX sh 脱离重启脚本（所有动态参数经位置参数 "$1" "$2" 传入，零拼接、零 SIGKILL、零 app.asar 修改）
+const LINUX_DETACHED_RELAUNCH_SH = [
+  'target_pid="$1"',
+  'exe_path="$2"',
+  'unset ELECTRON_RUN_AS_NODE',
+  'resolve_exe() {',
+  '  if [ -n "$exe_path" ] && [ -x "$exe_path" ]; then',
+  '    printf \'%s\\n\' "$exe_path"',
+  '    return 0',
+  '  fi',
+  '  for cand in "/usr/share/antigravity/antigravity" "/opt/Antigravity/antigravity" "/usr/bin/antigravity" "$HOME/.local/bin/antigravity"; do',
+  '    if [ -x "$cand" ]; then',
+  '      printf \'%s\\n\' "$cand"',
+  '      return 0',
+  '    fi',
+  '  done',
+  '  if command -v antigravity >/dev/null 2>&1; then',
+  '    command -v antigravity',
+  '    return 0',
+  '  fi',
+  '  return 1',
+  '}',
+  'kill -TERM "$target_pid" >/dev/null 2>&1 || true',
+  'xdg_cfg="${XDG_CONFIG_HOME:-$HOME/.config}"',
+  'lock_file="$xdg_cfg/Antigravity/SingletonLock"',
+  'i=0',
+  'exited=0',
+  'while [ "$i" -lt 120 ]; do',
+  '  main_alive=0',
+  '  lock_alive=0',
+  '  if kill -0 "$target_pid" >/dev/null 2>&1; then main_alive=1; fi',
+  '  if [ -L "$lock_file" ]; then',
+  '    link_dest="$(readlink "$lock_file" 2>/dev/null || true)"',
+  '    lock_pid="${link_dest##*-}"',
+  '    case "$lock_pid" in',
+  '      \'\'|*[!0-9]*) lock_alive=1 ;;',
+  '      *) if kill -0 "$lock_pid" >/dev/null 2>&1; then lock_alive=1; fi ;;',
+  '    esac',
+  '  elif [ -e "$lock_file" ]; then',
+  '    lock_alive=1',
+  '  fi',
+  '  if [ "$main_alive" -eq 0 ] && [ "$lock_alive" -eq 0 ]; then exited=1; break; fi',
+  '  if [ "$i" -eq 40 ] && [ "$main_alive" -eq 1 ]; then kill -TERM "$target_pid" >/dev/null 2>&1 || true; fi',
+  '  sleep 0.25',
+  '  i=$((i + 1))',
+  'done',
+  'if [ "$exited" -ne 1 ] && kill -0 "$target_pid" >/dev/null 2>&1; then exit 0; fi',
+  'sleep 0.5',
+  'env_conf="$xdg_cfg/environment.d/90-obsidian-prism-gomemlimit.conf"',
+  'if [ -f "$env_conf" ] && [ ! -L "$env_conf" ]; then',
+  '  gomem_line="$(grep -E \'^GOMEMLIMIT=([0-9]+(B|KiB|MiB|GiB|TiB))$\' "$env_conf" 2>/dev/null | head -n 1 || true)"',
+  '  if [ -n "$gomem_line" ]; then',
+  '    export GOMEMLIMIT="${gomem_line#GOMEMLIMIT=}"',
+  '  fi',
+  'fi',
+  'launch_exe="$(resolve_exe || true)"',
+  'if [ -z "$launch_exe" ]; then exit 0; fi',
+  'nohup "$launch_exe" --remote-debugging-port=0 >/dev/null 2>&1 </dev/null &',
+].join('\n');
+
 // 派生物理脱离宿主进程树与 Job Object 的独立微进程执行「温和退出 -> 等单实例锁释放 -> 带参重开」
 function spawnDetachedHostRelaunchHelper(task, opts = {}) {
   const hostPid = Number(task && task.hostPid);
@@ -1556,7 +2461,9 @@ function spawnDetachedHostRelaunchHelper(task, opts = {}) {
       args: [CDP_OPT_IN_SWITCH],
     });
   }
-  if (IS_WIN) {
+  const effectivePlatform = opts.platformOverride || process.platform;
+  const spawnFn = typeof opts.spawnFn === 'function' ? opts.spawnFn : spawn;
+  if (effectivePlatform === 'win32') {
     const privateStateDir = path.join(os.homedir(), '.gemini', 'config', 'plugins', 'obsidian-prism');
     fs.mkdirSync(privateStateDir, { recursive: true });
     const privateTaskFile = path.join(privateStateDir, '.relaunch-task.json');
@@ -1591,7 +2498,7 @@ function spawnDetachedHostRelaunchHelper(task, opts = {}) {
         }
       } catch {}
     }
-    const child = spawn(
+    const child = spawnFn(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_DETACHED_RELAUNCH_B64],
       {
@@ -1601,21 +2508,34 @@ function spawnDetachedHostRelaunchHelper(task, opts = {}) {
         env: { ...process.env, AG_PRISM_RELAUNCH_TASK_FILE: privateTaskFile },
       }
     );
-    child.unref();
-    return { spawned: true, pid: child.pid || null, method: 'detached-spawn' };
+    if (child && typeof child.unref === 'function') child.unref();
+    return { spawned: true, pid: (child && child.pid) || null, method: 'detached-spawn' };
   }
 
-  if (IS_MAC) {
+  if (effectivePlatform === 'darwin') {
     const appPath = normalizeMacAppBundlePath(task.exePath);
     const cleanEnv = { ...process.env };
     delete cleanEnv.ELECTRON_RUN_AS_NODE;
-    const child = spawn('/usr/bin/nohup', ['/bin/sh', '-c', MAC_DETACHED_RELAUNCH_SH, 'sh', String(hostPid), appPath], {
+    const child = spawnFn('/usr/bin/nohup', ['/bin/sh', '-c', MAC_DETACHED_RELAUNCH_SH, 'sh', String(hostPid), appPath], {
       detached: true,
       stdio: 'ignore',
       env: cleanEnv,
     });
-    child.unref();
-    return { spawned: true, pid: child.pid || null, method: 'nohup-sh', appPath };
+    if (child && typeof child.unref === 'function') child.unref();
+    return { spawned: true, pid: (child && child.pid) || null, method: 'nohup-sh', appPath };
+  }
+
+  if (effectivePlatform === 'linux') {
+    const exePath = String(task.exePath || '').trim();
+    const cleanEnv = { ...(opts.env || process.env) };
+    delete cleanEnv.ELECTRON_RUN_AS_NODE;
+    const child = spawnFn('/bin/sh', ['-c', LINUX_DETACHED_RELAUNCH_SH, '--', String(hostPid), exePath], {
+      detached: true,
+      stdio: 'ignore',
+      env: cleanEnv,
+    });
+    if (child && typeof child.unref === 'function') child.unref();
+    return { spawned: true, pid: (child && child.pid) || null, method: 'linux-sh', exePath };
   }
 
   return { spawned: false, reason: 'unsupported-platform' };
@@ -1661,12 +2581,58 @@ function isEligibleTarget(target) {
   return false;
 }
 
+const SENSITIVE_URL_QUERY_RE = /([?&](?:token|auth|signature|key|secret)=)[^&\s#"']+/gi;
+const SWARM_SIDECAR_HOST_RE = /^swarm--swarm_board-\d+$/;
+
+function redactSensitiveUrl(rawUrl) {
+  if (rawUrl === null || rawUrl === undefined) return '';
+  return String(rawUrl)
+    .replace(/(https?:\/\/)[^/\s:@]+:[^/\s@]+@/gi, '$1***@')
+    .replace(SENSITIVE_URL_QUERY_RE, '$1<REDACTED>');
+}
+
+function isSwarmSidecarUrl(rawUrl) {
+  const s = String(rawUrl || '').trim();
+  if (!s) return false;
+  try {
+    const u = new URL(s);
+    return (
+      u.protocol === 'plugin:' &&
+      SWARM_SIDECAR_HOST_RE.test(u.hostname || '') &&
+      !u.port &&
+      !u.username &&
+      !u.password &&
+      u.pathname === '/'
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function listPages(port) {
   const res = await fetch(`http://127.0.0.1:${port}/json/list`, {
     signal: AbortSignal.timeout(2000),
   });
   const targets = await res.json();
   return targets.filter(isEligibleTarget);
+}
+
+async function listSwarmTargets(port) {
+  const res = await fetch(`http://127.0.0.1:${port}/json/list`, {
+    signal: AbortSignal.timeout(2000),
+  });
+  const targets = await res.json();
+  if (!Array.isArray(targets)) return [];
+  return targets
+    .filter((t) => {
+      if (!t || (t.type !== 'iframe' && t.type !== 'page') || !t.webSocketDebuggerUrl) return false;
+      return isSwarmSidecarUrl(t.url);
+    })
+    .map((t) => ({
+      ...t,
+      url: redactSensitiveUrl(t.url || ''),
+      title: redactSensitiveUrl(t.title || t.url || ''),
+    }));
 }
 
 async function getBrowserWsUrl(port) {
@@ -1690,6 +2656,8 @@ class CdpSession {
     this.closed = false;
     this.onClose = null;
     this.listeners = new Map();
+    this.sessionListeners = new Map();
+    this._childSessions = new Map();
     ws.addEventListener('message', (evt) => {
       let msg;
       try {
@@ -1698,6 +2666,13 @@ class CdpSession {
         return;
       }
       if (msg.method) {
+        if (msg.sessionId) {
+          const sMap = this.sessionListeners.get(msg.sessionId);
+          if (sMap) {
+            for (const cb of sMap.get(msg.method) || []) cb(msg.params);
+          }
+          return;
+        }
         for (const cb of this.listeners.get(msg.method) || []) cb(msg.params);
         return;
       }
@@ -1716,6 +2691,14 @@ class CdpSession {
         p.reject(new Error(reason || 'CDP connection closed'));
       }
       this.pending.clear();
+      const children = [...this._childSessions.values()];
+      this._childSessions.clear();
+      this.sessionListeners.clear();
+      for (const ch of children) {
+        try {
+          ch.detachLocal();
+        } catch {}
+      }
       if (this.onClose) {
         try {
           this.onClose();
@@ -1755,7 +2738,7 @@ class CdpSession {
     });
   }
 
-  send(method, params = {}, timeoutMs = 5000) {
+  send(method, params = {}, timeoutMs = 5000, sessionId = null) {
     if (this.closed) return Promise.reject(new Error('CDP connection closed'));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
@@ -1766,7 +2749,8 @@ class CdpSession {
       if (timer && typeof timer.unref === 'function') timer.unref();
       this.pending.set(id, { resolve, reject, timer });
       try {
-        this.ws.send(JSON.stringify({ id, method, params }));
+        const payload = sessionId ? { id, method, params, sessionId } : { id, method, params };
+        this.ws.send(JSON.stringify(payload));
       } catch (err) {
         clearTimeout(timer);
         this.pending.delete(id);
@@ -1778,6 +2762,83 @@ class CdpSession {
   on(method, callback) {
     if (!this.listeners.has(method)) this.listeners.set(method, []);
     this.listeners.get(method).push(callback);
+  }
+
+  onSessionEvent(sessionId, method, callback) {
+    if (!sessionId || !method || typeof callback !== 'function') return;
+    let sMap = this.sessionListeners.get(sessionId);
+    if (!sMap) {
+      sMap = new Map();
+      this.sessionListeners.set(sessionId, sMap);
+    }
+    if (!sMap.has(method)) sMap.set(method, []);
+    sMap.get(method).push(callback);
+  }
+
+  offSession(sessionId) {
+    if (!sessionId) return;
+    this.sessionListeners.delete(sessionId);
+    this._childSessions.delete(sessionId);
+  }
+
+  createChildSession(sessionId, targetId = '') {
+    const parent = this;
+    let childClosed = false;
+    const child = {
+      sessionId: String(sessionId || ''),
+      targetId: String(targetId || ''),
+      parent,
+      onClose: null,
+      get closed() {
+        return childClosed || parent.closed;
+      },
+      send(method, params = {}, timeoutMs = 5000) {
+        if (childClosed || parent.closed) {
+          return Promise.reject(new Error('CDP child session closed'));
+        }
+        return parent.send(method, params, timeoutMs, child.sessionId);
+      },
+      on(method, callback) {
+        if (childClosed || parent.closed) return;
+        parent.onSessionEvent(child.sessionId, method, callback);
+      },
+      async evaluate(expression, awaitPromise = false, timeoutMs = 4000) {
+        const res = await child.send(
+          'Runtime.evaluate',
+          {
+            expression,
+            returnByValue: true,
+            awaitPromise,
+          },
+          timeoutMs
+        );
+        if (res && res.exceptionDetails) {
+          throw new Error(res.exceptionDetails.exception?.description || res.exceptionDetails.text);
+        }
+        return res && res.result ? res.result.value : undefined;
+      },
+      detachLocal() {
+        if (childClosed) return;
+        childClosed = true;
+        parent.offSession(child.sessionId);
+        if (typeof child.onClose === 'function') {
+          try {
+            child.onClose();
+          } catch {}
+        }
+      },
+      close() {
+        if (childClosed) return;
+        child.detachLocal();
+        if (!parent.closed && child.sessionId) {
+          parent.send('Target.detachFromTarget', { sessionId: child.sessionId }, 1500).catch(() => {});
+        }
+      },
+    };
+    if (child.sessionId) {
+      this._childSessions.set(child.sessionId, child);
+    }
+    return child;
   }
 
   async evaluate(expression, awaitPromise = false, timeoutMs = 4000) {
@@ -4953,7 +6014,7 @@ const BUNDLE_CACHE_MAX_FILE_BYTES = 6 * 1024 * 1024;
 const BUNDLE_CACHE_MAX_EXPR_BYTES = 2 * 1024 * 1024;
 const BUNDLE_CACHE_MAX_BOOTCFG_BYTES = 64 * 1024;
 const CHANNEL_CACHE_MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
-const CHANNEL_CACHE_NAMES = ['omni', 'sidebar', 'hostI18n', 'thought', 'inlineDiff', 'wallpaper', 'periodicPicker', 'settings', 'mascot', 'suggester'];
+const CHANNEL_CACHE_NAMES = ['omni', 'sidebar', 'hostI18n', 'swarmI18n', 'thought', 'inlineDiff', 'wallpaper', 'periodicPicker', 'settings', 'mascot', 'suggester'];
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const CODE_HASH_RE = /^[0-9a-z]{1,16}$/;
 
@@ -5865,6 +6926,8 @@ function getConfigRefreshTemplate() {
           document.querySelectorAll?.('.ag-cs-crab-stage,.ag-cs-mascot-stage').forEach((n) => n.remove());
           delete window.__agDualMascotRig;
           delete globalThis.__agDualMascotRig;
+          delete window.__agPrismMascotArt;
+          delete globalThis.__agPrismMascotArt;
         } catch {}
       }
       if (effectiveCfg?.periodicModelPicker === 'off' || effectiveCfg?.periodicModelPicker === false) {
@@ -6586,6 +7649,7 @@ function resetBundleCacheStats() {
   try { _omniClientCache.cachedPaths?.clear?.(); } catch {}
   try { _sidebarClientCache.cachedPaths?.clear?.(); } catch {}
   try { _hostI18nCache.cachedPaths?.clear?.(); } catch {}
+  try { _swarmI18nCache.cachedPaths?.clear?.(); } catch {}
   try { _thoughtAssetsCache.cachedPaths?.clear?.(); } catch {}
   try { _inlineDiffClientCache.cachedPaths?.clear?.(); } catch {}
   try { _wallpaperAssetsCache.cachedPaths?.clear?.(); } catch {}
@@ -6644,7 +7708,7 @@ function isValidChannelCacheEntry(channelName, entry) {
     if (computeHash(entry.minCode) !== entry.codeHash) return false;
     return sha256Text(`${entry.codeHash}\0${entry.minCode}`) === entry.payloadSha256;
   }
-  if (channelName === 'hostI18n') {
+  if (channelName === 'hostI18n' || channelName === 'swarmI18n') {
     if (!hasOwn('minRuntime') || typeof entry.minRuntime !== 'string' || entry.minRuntime.length === 0) return false;
     if (!hasOwn('dictRaw') || typeof entry.dictRaw !== 'string' || entry.dictRaw.length === 0) return false;
     const totalBytes = Buffer.byteLength(entry.minRuntime, 'utf8') + Buffer.byteLength(entry.dictRaw, 'utf8');
@@ -6958,6 +8022,7 @@ function markChannelCachedOnPath(cachePath, chMap) {
     omni: _omniClientCache,
     sidebar: _sidebarClientCache,
     hostI18n: _hostI18nCache,
+    swarmI18n: _swarmI18nCache,
     thought: _thoughtAssetsCache,
     inlineDiff: _inlineDiffClientCache,
     wallpaper: _wallpaperAssetsCache,
@@ -8022,6 +9087,149 @@ function buildHostI18nExpression(config = null, hostLocaleHint = null, opts = nu
     };
 
     if (needDomMarkerOnReady && typeof document.addEventListener === 'function') {
+      document.addEventListener('DOMContentLoaded', () => { try { mountOrReuse(); } catch {} }, { once: true });
+      return { ok: true, status: 'deferred', codeHash: targetHash };
+    }
+    return mountOrReuse();
+  })()`;
+}
+
+let _swarmI18nCache = { sig: '', sourceHash: '', minRuntime: '', dictRaw: '', codeHash: '', cachedPaths: new Set() };
+
+function shouldEnableSwarmI18n(config, hostLocaleHint = null) {
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  const mode = cfg.hostLocalization || 'auto';
+  // 原生 Swarm 面板本身为英文：off 模式或非简体中文 auto 模式严格 0 附着 / 立即卸载还原英文
+  if (mode === 'off') return false;
+  return shouldEnableHostI18n(cfg, hostLocaleHint);
+}
+
+function readCompiledSwarmI18nAssets(opts = null) {
+  const rtPath = path.join(__dirname, 'vendor', 'host-i18n', 'swarm-i18n-runtime.js');
+  const dictPath = path.join(__dirname, 'vendor', 'host-i18n', 'swarm-zh-CN.json');
+  if (!fs.existsSync(rtPath) || !fs.existsSync(dictPath)) {
+    return { minRuntime: '', dictRaw: '', codeHash: '' };
+  }
+  const sig = `${getFileSig(rtPath)}|${getFileSig(dictPath)}`;
+  const cachePath = resolveBundleCachePathOption(opts);
+  if (!cachePath && _swarmI18nCache.sig === sig && _swarmI18nCache.codeHash) {
+    return _swarmI18nCache;
+  }
+  const rtBuf = fs.readFileSync(rtPath);
+  const dictBuf = fs.readFileSync(dictPath);
+  const fileEntries = [
+    { rel: 'vendor/host-i18n/swarm-i18n-runtime.js', content: rtBuf },
+    { rel: 'vendor/host-i18n/swarm-zh-CN.json', content: dictBuf },
+  ];
+  return resolveChannelAssetsWithDiskCache({
+    channelName: 'swarmI18n',
+    memCache: _swarmI18nCache,
+    setMemCache: (v) => { _swarmI18nCache = v; },
+    sig,
+    fileEntries,
+    opts,
+    compileFn: () => {
+      const minRuntime = minifySingleSource(rtBuf.toString('utf8'));
+      const parsedDict = JSON.parse(dictBuf.toString('utf8'));
+      const dictRaw = JSON.stringify(parsedDict).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+      const codeHash = computeHash(`${minRuntime}:${dictRaw}`);
+      return { minRuntime, dictRaw, codeHash };
+    },
+    toCacheEntry: (assets, sourceHash) => ({
+      sourceHash,
+      codeHash: assets.codeHash,
+      minRuntime: assets.minRuntime,
+      dictRaw: assets.dictRaw,
+      payloadSha256: sha256Text(`${assets.codeHash}\0${assets.minRuntime}\0${assets.dictRaw}`),
+      updatedAt: Date.now(),
+    }),
+    fromCacheEntry: (entry) => ({
+      minRuntime: entry.minRuntime,
+      dictRaw: entry.dictRaw,
+      codeHash: entry.codeHash,
+    }),
+  });
+}
+
+const SWARM_I18N_REMOVE_EXPRESSION = `(() => {
+  try { window.__agPrismSwarmI18n?.destroy?.(); } catch {}
+  try { document.documentElement?.removeAttribute?.('data-ag-prism-swarm-i18n'); } catch {}
+  try { delete window.__agPrismSwarmI18n; } catch {}
+  try { delete globalThis.__agPrismSwarmI18n; } catch {}
+  try { delete window.__agPrismSwarmI18nFactory; } catch {}
+  try { delete globalThis.__agPrismSwarmI18nFactory; } catch {}
+  return { ok: true, status: 'off' };
+})()`;
+
+// Issue #18 层 B：Swarm 独立侧栏 Webview (plugin://swarm--swarm_board-*) 按需纯 CDP 汉化表达式
+// 零 app.asar 修改、0 B Channel 1 增量、支持按需磁盘缓存与 100% 无损英文还原
+function buildSwarmI18nExpression(config = null, hostLocaleHint = null, opts = null) {
+  let resolvedLocaleHint = hostLocaleHint;
+  let resolvedOpts = opts;
+  if (hostLocaleHint && typeof hostLocaleHint === 'object' && !resolvedOpts) {
+    resolvedOpts = hostLocaleHint;
+    resolvedLocaleHint = null;
+  }
+  const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+  if (!shouldEnableSwarmI18n(cfg, resolvedLocaleHint)) {
+    return '';
+  }
+  const { minRuntime, dictRaw, codeHash } = readCompiledSwarmI18nAssets(resolvedOpts);
+  if (!minRuntime || !dictRaw) {
+    return '';
+  }
+  const hashJson = serializeJsonForEval(codeHash);
+
+  return `(() => {
+    try {
+      const loc = typeof window !== 'undefined' && window.location;
+      if (
+        !loc ||
+        loc.protocol !== 'plugin:' ||
+        !/^swarm--swarm_board-\\d+$/.test(String(loc.hostname || '')) ||
+        loc.port ||
+        loc.username ||
+        loc.password ||
+        String(loc.pathname || '/') !== '/'
+      ) {
+        return { ok: false, status: 'skipped-non-swarm-url' };
+      }
+    } catch {
+      return { ok: false, status: 'skipped-non-swarm-url' };
+    }
+
+    const targetHash = ${hashJson};
+    const mountOrReuse = () => {
+      const existing = window.__agPrismSwarmI18n;
+      if (existing && existing.__prismCodeHash === targetHash && typeof existing.getStatus === 'function') {
+        const st = existing.getStatus();
+        if (st && (st.status === 'active' || st.status === 'yielded')) {
+          if (st.status === 'active' && typeof existing.scan === 'function') {
+            try { existing.scan(); } catch {}
+          }
+          return { ok: true, reused: true, codeHash: targetHash, ...st };
+        }
+      }
+      try { existing?.destroy?.(); } catch {}
+
+      ${minRuntime};
+      const factory = window.__agPrismSwarmI18nFactory || globalThis.__agPrismSwarmI18nFactory;
+      if (!factory || typeof factory.mountSwarmI18n !== 'function') {
+        return { ok: false, status: 'factory-missing' };
+      }
+      const inst = factory.mountSwarmI18n({
+        root: window,
+        doc: document,
+        dict: ${dictRaw},
+      });
+      if (inst && typeof inst === 'object') {
+        inst.__prismCodeHash = targetHash;
+      }
+      const cur = inst && typeof inst.getStatus === 'function' ? inst.getStatus() : { status: 'active' };
+      return { ok: Boolean(inst && inst.ok !== false), codeHash: targetHash, ...cur };
+    };
+
+    if (typeof document !== 'undefined' && document.readyState === 'loading' && !document.body && typeof document.addEventListener === 'function') {
       document.addEventListener('DOMContentLoaded', () => { try { mountOrReuse(); } catch {} }, { once: true });
       return { ok: true, status: 'deferred', codeHash: targetHash };
     }
@@ -9131,6 +10339,8 @@ const MASCOT_REMOVE_EXPRESSION = `(() => {
   try { document.documentElement?.removeAttribute?.('data-ag-cs-has-crab'); } catch {}
   try { delete window.__agDualMascotRig; } catch {}
   try { delete globalThis.__agDualMascotRig; } catch {}
+  try { delete window.__agPrismMascotArt; } catch {}
+  try { delete globalThis.__agPrismMascotArt; } catch {}
   return { ok: true, status: 'off' };
 })()`;
 
@@ -9154,7 +10364,7 @@ function buildMascotChannelExpression(config = null, opts = null) {
       const liveCfg = window.__agPrism?.getState?.()?.cfg;
       if (liveCfg && (liveCfg.mascot === 'off' || liveCfg.mascot === false)) {
         try { document.querySelectorAll?.('.ag-cs-crab-stage, .ag-cs-mascot-stage').forEach((n) => n.remove()); } catch {}
-        try { delete window.__agDualMascotRig; delete globalThis.__agDualMascotRig; } catch {}
+        try { delete window.__agDualMascotRig; delete globalThis.__agDualMascotRig; delete window.__agPrismMascotArt; delete globalThis.__agPrismMascotArt; } catch {}
         return { ok: true, status: 'off', skippedByLiveCfg: true };
       }
     } catch {}
@@ -9667,6 +10877,7 @@ const REMOVE_EXPRESSION = `(() => {
   delete globalThis.__agCodexEffortSliderDisableAutoBoot;
   delete globalThis.__agCsUiMain;
   delete globalThis.__agDualMascotRig;
+  delete globalThis.__agPrismMascotArt;
   delete globalThis.__agCrystalPrismCore;
   delete globalThis.__agVialCore;
   delete globalThis.__agMotionEngine;
@@ -9934,19 +11145,40 @@ module.exports = {
   validateConfigEntry,
   reconcileConfigAliases,
   isEligibleTarget,
+  isSwarmSidecarUrl,
+  redactSensitiveUrl,
   readPidFromLockFile,
   inspectProcessSync,
   matchesExpectedDaemonSignature,
   isExpectedDaemonProcess,
   CDP_OPT_IN_SWITCH,
+  IS_LINUX,
+  LINUX_DESKTOP_SHADOW_MARKER,
+  LINUX_GOMEMLIMIT_LINE_RE,
   hasRemoteDebuggingPortSwitch,
   appendCdpFlagToArguments,
   stripCdpFlagFromArguments,
   isAntigravityShortcutTarget,
+  isAntigravityLinuxTarget,
   isMainAntigravityProcessSignature,
+  tokenizeDesktopExec,
+  extractDesktopExecTarget,
+  patchDesktopExecLine,
+  stripDesktopExecLine,
+  readDesktopShadowMarker,
+  isManagedPrismDesktopContent,
+  patchDesktopEntryContent,
+  stripDesktopEntryContent,
+  getDefaultLinuxDesktopDirs,
+  ensureLinuxDesktopShortcutsCdpFlag,
+  restoreLinuxDesktopShortcutsCdpFlag,
+  readLinuxGoMemLimitFromEnvD,
   ensureAntigravityShortcutsCdpFlag,
   ensureAntigravityShortcutsCdpFlagAsync,
   restoreAntigravityShortcutsCdpFlag,
+  extractPosixCommandExecutable,
+  parseAppImageFromProcEnviron,
+  parsePosixPsHostCandidates,
   detectRunningAntigravityHostSync,
   detectRunningAntigravityHost,
   getRelaunchPromptStatePaths,
@@ -9956,6 +11188,7 @@ module.exports = {
   executeHostRelaunchSequence,
   normalizeMacAppBundlePath,
   MAC_DETACHED_RELAUNCH_SH,
+  LINUX_DETACHED_RELAUNCH_SH,
   spawnDetachedHostRelaunchHelper,
   RUNTIME_PARTS,
   SYNC_ROOT_FILES,
@@ -9966,6 +11199,7 @@ module.exports = {
   readCss,
   readPort,
   listPages,
+  listSwarmTargets,
   getBrowserWsUrl,
   CdpSession,
   minifyCss,
@@ -9989,6 +11223,9 @@ module.exports = {
   shouldEnableHostI18n,
   buildHostI18nExpression,
   HOST_I18N_REMOVE_EXPRESSION,
+  shouldEnableSwarmI18n,
+  buildSwarmI18nExpression,
+  SWARM_I18N_REMOVE_EXPRESSION,
   ISOLATED_HOST_I18N_PAUSE_EXPRESSION,
   ISOLATED_HOST_I18N_RESUME_EXPRESSION,
   shouldEnableThought,

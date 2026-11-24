@@ -64,7 +64,7 @@
     contextMenu: S_T,
     codeFont: mkSp(['default', 'jetbrains', 'cascadia', 'sfmono']),
     codeLigatures: S_F,
-    mascot: mkSp(['crab', 'minis', 'off'], null, { dual: 'crab' }),
+    mascot: mkSp(['crab', 'minis', 'quad', 'quad-minis', 'off'], null, { dual: 'crab' }),
     sidebarRestyle: S_T,
     sidebarCompact: S_F,
     sidebarNavFold: mkSp(['off', 'on']),
@@ -102,9 +102,1268 @@
       .replace(/\b(?:sk|rk|pk|ak|AIza)[A-Za-z0-9_\-]{10,}\b/g, '[REDACTED]')
       .replace(/\bBearer\s+[A-Za-z0-9._\-]{10,}\b/gi, 'Bearer [REDACTED]');
 
+  const MASCOT_SPECIES = O.freeze(['c', 'k', 'd', 'w']);
+  const MASCOT_PRESETS = O.freeze({
+    off: O.freeze({ c: 0, k: 0, d: 0, w: 0, minis: false }),
+    crab: O.freeze({ c: 1, k: 1, d: 0, w: 0, minis: false }),
+    dual: O.freeze({ c: 1, k: 1, d: 0, w: 0, minis: false }),
+    minis: O.freeze({ c: 1, k: 1, d: 0, w: 0, minis: true }),
+    quad: O.freeze({ c: 1, k: 1, d: 1, w: 1, minis: false }),
+    'quad-minis': O.freeze({ c: 1, k: 1, d: 1, w: 1, minis: true }),
+  });
+
+  const parseMascotSpec = (raw) => {
+    if (raw === false) return { c: 0, k: 0, d: 0, w: 0, minis: false };
+    if (typeof raw !== 'string') return null;
+    if (hasOwn(MASCOT_PRESETS, raw)) return { ...MASCOT_PRESETS[raw] };
+    if (!raw.startsWith('r:') || raw.length <= 2) return null;
+    const m = /^r:(?:([ckdw][0-4](?:,[ckdw][0-4])*)?(\+m)?)$/.exec(raw);
+    if (!m) return null;
+    const out = { c: 0, k: 0, d: 0, w: 0, minis: Boolean(m[2]) };
+    const seen = new Set();
+    let total = 0;
+    if (m[1]) {
+      for (const tok of m[1].split(',')) {
+        const sp = tok[0];
+        const cnt = Number(tok.slice(1));
+        if (seen.has(sp) || !Number.isInteger(cnt) || cnt < 0 || cnt > 4) return null;
+        seen.add(sp);
+        out[sp] = cnt;
+        total += cnt;
+      }
+    }
+    return total > 6 ? null : out;
+  };
+
+  const encodeMascotSpec = (spec) => {
+    const src = isObj(spec) ? spec : {};
+    const counts = { c: 0, k: 0, d: 0, w: 0 };
+    let rem = 6;
+    for (const sp of MASCOT_SPECIES) {
+      const n = Math.max(0, Math.min(4, Math.min(rem, Math.floor(Number(src[sp]) || 0))));
+      counts[sp] = n;
+      rem -= n;
+    }
+    const minis = Boolean(src.minis);
+    const total = counts.c + counts.k + counts.d + counts.w;
+    if (total === 0 && !minis) return 'off';
+    if (counts.c === 1 && counts.k === 1 && counts.d === 0 && counts.w === 0) return minis ? 'minis' : 'crab';
+    if (counts.c === 1 && counts.k === 1 && counts.d === 1 && counts.w === 1) return minis ? 'quad-minis' : 'quad';
+    const parts = [];
+    for (const sp of MASCOT_SPECIES) if (counts[sp] > 0) parts.push(sp + counts[sp]);
+    return 'r:' + parts.join(',') + (minis ? '+m' : '');
+  };
+
+  // ── 紧凑同源 16×10 像素精灵兜底引擎（当 mascot='off' 未注入 Ch10 时依然 100% 真实高清像素渲染）──
+  const FALLBACK_MASCOT_ART = (() => {
+    const decPal = (s, base) => {
+      const o = base ? { ...base } : {};
+      for (const p of s.split(';')) o[p[0]] = p[1] === 'r' ? p.slice(1) : '#' + p.slice(1);
+      return o;
+    };
+    const SH = decPal('k9c958c;B5b8fb9;rcc4f45;ye8b64a;hrgba(20, 20, 19, 0.22);F9e3324;fc9642a;Ye0a23c;Vfff1dc;A3d8bff;Ed6e8ff;a93c5fd');
+    const PALS = {
+      clawd: decPal('#d97757;sbf684c;o141413;Od97757;qe8a88e;Qf1cbbb', SH),
+      cat: decPal('#947fd6;s735eb5;o141413;ka89fc4;B6a8fd6;O947fd6;qb6a7e6;Qd9cff6', SH),
+      dragon: decPal('#d7dfef;s95a1c2;o1e1936;Oc6cce6;qbfbde6;Qe2e1f7;Uedf1fc;Ta3a5d6;X818ab2', SH),
+      whale: decPal('#4e6fff;s3450cf;o141413;O4e6fff;q86a2ff;Qc7d6ff;Ue5f0ff;Ta8cbff;X38bdf8', SH),
+      cowboy: decPal('#d97757;sbf684c;o141413;H8b5e3c;Ra6744e;hrgba(20, 20, 19, 0.18)'),
+      shades: decPal('#e0896b;sc16f53;o141413;G141413;g6d778a;wffffff;hrgba(20, 20, 19, 0.18)'),
+      wizard: decPal('#8a74cf;s6a56aa;o141413;M5c4b9e;ye8b64a;bcfe3ee;hrgba(20, 20, 19, 0.18)'),
+    };
+    const decF = (spec) => {
+      const ci = spec.indexOf(':');
+      const [ox, oy] = spec.slice(0, ci).split(',').map(Number);
+      const rows = [];
+      const body = spec.slice(ci + 1);
+      if (body) {
+        for (const seg of body.split('/')) {
+          const st = seg.indexOf('*');
+          const rRaw = st >= 0 ? seg.slice(0, st) : seg;
+          const n = st >= 0 ? +seg.slice(st + 1) : 1;
+          const row = rRaw.replace(/(\d+)(.)/g, (_, cnt, ch) => ch.repeat(+cnt));
+          for (let i = 0; i < n; i++) rows.push(row);
+        }
+      }
+      return { ox, oy, rows };
+    };
+    const decGrp = (raw) => {
+      const g = {};
+      for (const item of raw.split(';')) {
+        const eq = item.indexOf('=');
+        g[item.slice(0, eq)] = decF(item.slice(eq + 1));
+      }
+      return g;
+    };
+    const C = {
+      body: decGrp('stand=2,0:12#*8;squash=1,2:.12s./14#*6;turnL=2,0:11#s*8;turnR=2,0:s11#*8'),
+      eyes: decGrp('open=4,2:o6.o*2;half=4,3:o6.o;shut=3,3:oo6.oo;happy=3,2:.o6.o./o.o4.o.o;squint=4,2:o6.o/.o4.o./o6.o'),
+      legs: decGrp('stand=2,8:.#.#4.#.#.*2;crouch=2,9:.#.#4.#.#.;tuck=2,8:..#.#..#.#..*2'),
+      clawL: decGrp('stub=0,5:##*2;up=0,-2:##*2/#.;open=0,4:##/.#/##'),
+      clawR: decGrp('stub=14,5:##*2;up=14,-2:##*2/.#;waveOut=14,-1:.##*2/#..'),
+    };
+    const K = {
+      ears: decGrp('stand=2,-1:#10.#/##8.##;nod=2,0:#10.#/##8.##;loaf=2,2:#10.#/##8.##;airplane=0,0:##12.##/3#10.3#'),
+      body: decGrp('stand=2,1:12#*7;loaf=1,4:.12s./14#*5;squash=1,2:.12s./14#*6;turnL=2,1:11#s*7'),
+      eyes: decGrp('open=4,3:o6.o*2;half=4,4:o6.o;shut=3,4:oo6.oo;happy=3,3:.o6.o./o.o4.o.o;loafShut=3,6:oo6.oo;loafHalf=4,6:o6.o'),
+      paws: decGrp('none=0,0:;cheer=0,2:#14.#*2;up=0,-1:##12.##*2;upR=14,0:##*2'),
+      tail: decGrp('up=14,3:.s/.#*2/##;sway=14,3:.#*2/s#/#.;loaf=14,6:.#*2/s#;puff=14,2:.#/##*2/s#/#.'),
+    };
+    const D = {
+      ears: decGrp('stand=1,-1:.T12.T./..XT8.TX..;nod=1,0:.T12.T./..XT8.TX..;airplane=1,-1:T14.T/.XT10.TX.'),
+      body: decGrp('stand=2,1:12#*4/3#6U3#/3#6q3#/3#6U3#;squash=1,2:.12s./14#*2/4#6U4#/4#6q4#/4#6U4#;turnL=2,1:11#s*4/##6U3#s/##6q3#s/##6U3#s;turnR=2,1:s11#*4/s3#6U##/s3#6q##/s3#6U##'),
+      legs: decGrp('stand=2,8:.##6.##.*2;crouch=2,9:.##6.##.;tuck=2,8:..##4.##..*2'),
+      paws: decGrp('none=0,2:X14.X/Xq12.qX/.X12.X.;cheer=0,0:X14.X/Xq12.qX/.XX10.XX.;up=-1,1:XX14.XX/Xqq12.qqX/.XX12.XX.;tuck=1,4:X12.X*2;upR=0,0:14.XX/13.qX/13.X.'),
+      tail: decGrp('up=14,4:3.T/..XT/.##./##s.;sway=14,5:3.T/.##T/##s.;curl=14,6:.##T/##s.;puff=14,3:3.T/..#T/.##./##s.'),
+    };
+    const W = {
+      body: decGrp('stand=2,1:.10#./12#*4/##8U##/#10U#/.#8U#./..8T..;squash=1,3:..10s../.12#./14#*2/##10U##/.#10U#./..10T..;loaf=2,4:.10s./12#*2/##8U##/#10U#/.10T.;turnL=2,1:.9#s./11#s*4/#8U##s/10U#s/.8U#s./..8T..'),
+      paws: decGrp('none=0,6:.s/ss;flap=0,5:ss/.s;cheer=0,4:ss12.ss/.s12.s.;up=0,2:ss12.ss/.s12.s.;tuck=1,7:s;upR=14,4:ss/.s'),
+      tail: decGrp('up=13,1:..#..#/..4#/3.##./..3#./.3#../##s3.;sway=13,2:3.#..#/..4#./..3#../.3#3./##s4.;loaf=13,5:..#.#./.3#../##s3.;puff=13,0:..#..#/..4#/..3#./.3#../3#3./##s3.'),
+    };
+    const FX = decGrp(
+      'dragonFlame0=14,4:.f./YVf/.f.;dragonFlame1=14,3:..fF./.YVfF/VYYfF/.fF..;dragonFlame2=14,3:3.fF./.fYVfF/VYYfF./..fF..;' +
+      'whaleSpout0=5,-3:.B..B./..AA../..BA../..AA..;whaleSpout1=4,-5:.B4.B./B.A..A.B/..AB.BA./3.AA3./3.BA3./3.AA3.;whaleSpout2=3,-5:..B4.B../.A6.A./B3.BB3.B/4.AA4./.B..BA..B./4.AA4.;' +
+      'z1=10,-6:4k/..k./.k../4k;z2=12,-9:3k/.k./3k;spark=5,-8:..y..*2/5y/..y..*2;heart=5,-7:.r.r./5r/.3r./..r..;' +
+      'fireSpark0=5,-8:..Y../f3.V/..f..;fireSpark1=5,-9:.V..f/..Y../f4.;fireSpark2=5,-8:f..Y./4.V/.f3.'
+    );
+    const MINIS = decGrp(
+      'cowboy=0,-2:5.6H5./3.10H3./..12R../..12#../..##o6#o##../16#/..12#../3.#.#4.#.#3.;' +
+      'cowboyT=0,-2:4.6H6./..10H4./.12R3./..12#../..##o6#o##../16#/..12#../..#..#4.#..#..;' +
+      'shades=0,0:..12#../..4Gg##g4G../..12G../16#/..12#../3.#.#4.#.#3.;' +
+      'shadesT=0,0:..12#../..GwGGw##GwGGw../..12G../16#/..12#../3.#.#4.#.#3.;' +
+      'wizard=0,-3:7.MM7./6.MyMM6./5.6M5./..12M../..12#../..##o6#o##../16#/..12#../3.#.#4.#.#3.;' +
+      'wizardT=0,-3:5.y10./4.yMyMM7./5.6M5./..12M../..12#../..##o6#o##../16#/..12#y./3.#.#4.#.#.y.'
+    );
+    const drawLayers = (ctx, oxGrid, oyGrid, pxSize, pal, layers) => {
+      for (const l of layers) {
+        if (!l || !l.rows) continue;
+        for (let r = 0; r < l.rows.length; r++) {
+          const row = l.rows[r];
+          for (let c = 0; c < row.length; c++) {
+            const ch = row[c];
+            if (ch === '.' || ch === ' ') continue;
+            const col = pal[ch];
+            if (!col) continue;
+            ctx.fillStyle = col;
+            ctx.fillRect((oxGrid + l.ox + c) * pxSize, (oyGrid + l.oy + r) * pxSize, pxSize, pxSize);
+          }
+        }
+      }
+    };
+    return {
+      source: 'ch9-fallback',
+      PALETTES: PALS,
+      drawMainActor(ctx, kind, poseKey, tickIdx, oxGrid, oyGrid, pxSize, opts = {}) {
+        if (!ctx) return 0;
+        const pal = PALS[kind] || PALS.clawd;
+        const m = tickIdx % 2;
+        const t3 = tickIdx % 3;
+        const layers = [];
+        const sym = opts.sym && FX[opts.sym] ? FX[opts.sym] : null;
+        if (kind === 'clawd') {
+          if (poseKey === 'sleep') layers.push(C.legs.tuck, C.body.squash, C.eyes.shut, C.clawL.stub, C.clawR.stub);
+          else if (poseKey === 'tilt') layers.push(C.legs.stand, C.body.turnL, C.eyes.half, C.clawL.stub, C.clawR.stub);
+          else if (poseKey === 'happy') layers.push(m ? C.legs.crouch : C.legs.stand, m ? C.body.squash : C.body.stand, C.eyes.happy, C.clawL.up, C.clawR.up);
+          else if (poseKey === 'wave') layers.push(C.legs.stand, C.body.stand, C.eyes.happy, C.clawL.stub, m ? C.clawR.waveOut : C.clawR.up);
+          else layers.push(opts.breath ? C.legs.crouch : C.legs.stand, C.body.stand, opts.blink ? C.eyes.half : C.eyes.open, C.clawL.stub, C.clawR.stub);
+        } else if (kind === 'cat') {
+          if (poseKey === 'sleep') layers.push(K.tail.loaf, K.body.loaf, K.ears.loaf, K.eyes.loafShut);
+          else if (poseKey === 'tilt') layers.push(K.tail.up, C.legs.stand, K.body.turnL, K.ears.nod, K.eyes.half);
+          else if (poseKey === 'happy') layers.push(m ? K.tail.puff : K.tail.up, C.legs.stand, K.body.stand, m ? K.ears.nod : K.ears.stand, K.eyes.happy, K.paws.cheer);
+          else if (poseKey === 'wave') layers.push(K.tail.up, C.legs.stand, K.body.stand, K.ears.nod, K.eyes.happy, m ? K.paws.upR : K.paws.none);
+          else layers.push(m ? K.tail.sway : K.tail.up, C.legs.stand, K.body.stand, K.ears.stand, opts.blink ? K.eyes.half : K.eyes.open);
+        } else if (kind === 'dragon') {
+          if (poseKey === 'sleep') layers.push(D.tail.curl, D.legs.tuck, D.body.squash, D.ears.nod, K.eyes.shut, D.paws.tuck);
+          else if (poseKey === 'tilt') layers.push(D.tail.up, D.legs.stand, D.body.turnL, D.ears.nod, K.eyes.half, D.paws.none);
+          else if (poseKey === 'dragonFlame') layers.push(D.tail.puff, D.legs.stand, D.body.turnR, D.ears.airplane, K.eyes.happy, m ? D.paws.up : D.paws.cheer, FX['dragonFlame' + t3], FX['fireSpark' + t3]);
+          else if (poseKey === 'happy') layers.push(m ? D.tail.puff : D.tail.up, D.legs.stand, D.body.stand, m ? D.ears.nod : D.ears.stand, K.eyes.happy, m ? D.paws.up : D.paws.cheer);
+          else if (poseKey === 'wave') layers.push(D.tail.up, D.legs.stand, D.body.stand, D.ears.nod, K.eyes.happy, m ? D.paws.upR : D.paws.none);
+          else layers.push(m ? D.tail.sway : D.tail.up, D.legs.stand, D.body.stand, D.ears.stand, opts.blink ? K.eyes.half : K.eyes.open, D.paws.none);
+        } else {
+          if (poseKey === 'sleep') layers.push(W.tail.loaf, W.body.loaf, { ...K.eyes.loafShut, oy: 5 }, W.paws.tuck);
+          else if (poseKey === 'tilt') layers.push(W.tail.up, W.body.turnL, K.eyes.half, W.paws.flap);
+          else if (poseKey === 'whaleSpout') layers.push(W.tail.puff, m ? W.body.squash : W.body.stand, K.eyes.happy, m ? W.paws.cheer : W.paws.up, FX['whaleSpout' + t3]);
+          else if (poseKey === 'happy') layers.push(m ? W.tail.puff : W.tail.up, W.body.stand, K.eyes.happy, W.paws.cheer, FX['whaleSpout' + (m ? 1 : 0)]);
+          else if (poseKey === 'wave') layers.push(W.tail.up, W.body.stand, K.eyes.happy, m ? W.paws.upR : W.paws.flap);
+          else layers.push(m ? W.tail.sway : W.tail.up, W.body.stand, opts.blink ? K.eyes.half : K.eyes.open, m ? W.paws.flap : W.paws.none);
+        }
+        if (sym) layers.push(sym);
+        drawLayers(ctx, oxGrid, oyGrid, pxSize, pal, layers);
+        return layers.length;
+      },
+      drawMiniCrab(ctx, id, frameKey, oxGrid, oyGrid, pxSize) {
+        if (!ctx) return 0;
+        const pal = PALS[id] || PALS.cowboy;
+        const spr = frameKey === 'trick' ? MINIS[id + 'T'] || MINIS[id] : MINIS[id];
+        if (!spr) return 0;
+        drawLayers(ctx, oxGrid, oyGrid, pxSize, pal, [spr]);
+        return 1;
+      },
+    };
+  })();
+
+  const resolveMascotArt = () => {
+    const winRef = getWin();
+    return G.__agPrismMascotArt || winRef?.__agPrismMascotArt || G.__agDualMascotRig?.mascotArt || winRef?.__agDualMascotRig?.mascotArt || FALLBACK_MASCOT_ART;
+  };
+
+  const SPOTLIGHT_ICON_SVG =
+    '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+    '<path d="M5.5 2.5h5l-.8 2.6H6.3L5.5 2.5Z" fill="currentColor"/>' +
+    '<path d="M6.2 5.4h3.6L13.5 14h-11L6.2 5.4Z" fill="currentColor" opacity="0.28"/>' +
+    '<path d="M7.2 5.4h1.6L10.4 14H5.6L7.2 5.4Z" fill="currentColor" opacity="0.55"/>' +
+    '<ellipse cx="8" cy="14" rx="5.2" ry="1.1" fill="currentColor" opacity="0.45"/>' +
+    '</svg>';
+
+  // ── 《八方旅人》HD-2D 像素舞台独立选角子面板（仅打开且可见时渲染，关闭/隐藏/脱离 DOM 立即停帧并 0×0 回收显存）──
+  const STAGE_SLOTS = O.freeze([
+    { key: 'c', kind: 'clawd', cx: 56, i18nKey: 'mascotSpeciesCrab', fb: 'Claude Crab', hex: '#d97757', rayA: '249,115,22', rayB: '251,146,60', cheerPose: 'happy', cheerSym: 'spark' },
+    { key: 'k', kind: 'cat', cx: 168, i18nKey: 'mascotSpeciesCat', fb: 'Gemini Cat', hex: '#947fd6', rayA: '139,92,246', rayB: '56,189,248', cheerPose: 'happy', cheerSym: 'heart' },
+    { key: 'd', kind: 'dragon', cx: 280, i18nKey: 'mascotSpeciesDragon', fb: 'GPT Dragon', hex: '#d7dfef', rayA: '226,232,240', rayB: '45,212,191', cheerPose: 'dragonFlame', cheerSym: 'spark' },
+    { key: 'w', kind: 'whale', cx: 392, i18nKey: 'mascotSpeciesWhale', fb: 'DeepSeek Whale', hex: '#4e6fff', rayA: '59,130,246', rayB: '56,189,248', cheerPose: 'whaleSpout', cheerSym: 'spark' },
+    { key: 'm', kind: 'minis', cx: 504, i18nKey: 'mascotStageMinisSlot', fb: 'Mini Crab Corner', hex: '#fb923c', rayA: '251,146,60', rayB: '245,158,11', cheerPose: 'trick', cheerSym: 'spark' },
+  ]);
+
+  const createMascotCastingStage = ({
+    doc,
+    sec,
+    foldBody,
+    getMainBlocks,
+    getLang,
+    uiText,
+    getCurMascot,
+    setMascotValue,
+    isLightThemeNow,
+    syncRoot,
+    handledGroupClicks,
+    BTN,
+  }) => {
+    const STAGE_W = 560;
+    const STAGE_H = 218;
+    const FRAME_GAP_MS = 45; // ~22fps 轻量丝滑循环
+    const win = doc.defaultView || getWin();
+    const sa = (e, k, v = '') => e.setAttribute(k, String(v));
+    const ra = (e, k) => e.removeAttribute(k);
+    const ap = (p, ...cs) => { for (const c of cs) if (c) p.appendChild(c); return p; };
+    const mk = (tag, cls, txt) => {
+      const el = doc.createElement(tag);
+      if (cls) el.className = cls;
+      if (txt !== undefined) el.textContent = txt;
+      return el;
+    };
+    const nowMs = () => (typeof performance !== 'undefined' && isFn(performance.now) ? performance.now() : Date.now());
+    const reqAF = (fn) => (win && isFn(win.requestAnimationFrame) ? win.requestAnimationFrame(fn) : typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : setTimeout(() => fn(nowMs()), 45));
+    const canAF = (id) => {
+      if (!id) return;
+      if (win && isFn(win.cancelAnimationFrame)) win.cancelAnimationFrame(id);
+      else if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(id);
+      else clearTimeout(id);
+    };
+    const isReducedMotion = () => {
+      try { return Boolean(win?.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches); } catch { return false; }
+    };
+
+    const view = mk('div', 'ag-cs-mascot-stage-view');
+    sa(view, 'data-ag-mascot-stage-view', '1');
+    sa(view, 'hidden', '');
+    view.hidden = true;
+    if (view.style) {
+      O.assign(view.style, {
+        display: 'none',
+        flexDirection: 'column',
+        gap: '10px',
+        padding: '4px 0 6px',
+      });
+    }
+
+    // 1. 顶栏：「← 返回设置」+ 舞台标题 + 实时计数/迷你蟹状态
+    const hdr = mk('div');
+    sa(hdr, 'data-ag-stage-header', '1');
+    if (hdr.style) O.assign(hdr.style, { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' });
+    const hdrLeft = mk('div');
+    if (hdrLeft.style) O.assign(hdrLeft.style, { display: 'flex', alignItems: 'center', gap: '8px' });
+    const backBtn = mk('button', BTN);
+    backBtn.type = 'button';
+    sa(backBtn, 'data-ag-mascot-stage-back', '1');
+    if (backBtn.style) {
+      O.assign(backBtn.style, {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '5px',
+        padding: '4px 10px',
+        borderRadius: '8px',
+        fontSize: '12px',
+        fontWeight: '600',
+        border: '1px solid var(--ag-cs-border, rgba(148,163,184,0.28))',
+        cursor: 'pointer',
+      });
+    }
+    const titleEl = mk('span', '');
+    sa(titleEl, 'data-ag-stage-title', '1');
+    if (titleEl.style) O.assign(titleEl.style, { fontSize: '13.5px', fontWeight: '700', letterSpacing: '0.01em' });
+    ap(hdrLeft, backBtn, titleEl);
+
+    const hdrRight = mk('div');
+    if (hdrRight.style) O.assign(hdrRight.style, { display: 'flex', alignItems: 'center', gap: '6px' });
+    const countPill = mk('span', '');
+    sa(countPill, 'data-ag-mascot-count', '1');
+    if (countPill.style) {
+      O.assign(countPill.style, {
+        padding: '2px 8px',
+        borderRadius: '999px',
+        fontSize: '11.5px',
+        fontWeight: '600',
+        fontVariantNumeric: 'tabular-nums',
+        border: '1px solid var(--ag-cs-border, rgba(148,163,184,0.26))',
+        background: 'var(--ag-cs-surface-2, rgba(148,163,184,0.1))',
+      });
+    }
+    const minisPill = mk('span', '');
+    sa(minisPill, 'data-ag-stage-minis-pill', '1');
+    if (minisPill.style) {
+      O.assign(minisPill.style, {
+        padding: '2px 8px',
+        borderRadius: '999px',
+        fontSize: '11px',
+        fontWeight: '600',
+        border: '1px solid var(--ag-cs-border, rgba(148,163,184,0.24))',
+      });
+    }
+    ap(hdrRight, countPill, minisPill);
+    ap(hdr, hdrLeft, hdrRight);
+
+    const hintEl = mk('div', '');
+    sa(hintEl, 'data-ag-stage-hint', '1');
+    if (hintEl.style) O.assign(hintEl.style, { fontSize: '11.5px', opacity: '0.72', lineHeight: '1.4' });
+
+    // 2. 单 Canvas HD-2D 微缩舞台容器
+    const stageFrame = mk('div');
+    sa(stageFrame, 'data-ag-stage-frame', '1');
+    if (stageFrame.style) {
+      O.assign(stageFrame.style, {
+        position: 'relative',
+        borderRadius: '12px',
+        overflow: 'hidden',
+        border: '1px solid var(--ag-cs-border, rgba(148,163,184,0.28))',
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06), 0 8px 24px rgba(0,0,0,0.22)',
+        lineHeight: '0',
+      });
+    }
+    const canvas = mk('canvas');
+    sa(canvas, 'data-ag-mascot-stage-canvas', '1');
+    sa(canvas, 'aria-label', 'Mascot Casting Stage');
+    canvas.width = 0;
+    canvas.height = 0;
+    if (canvas.style) {
+      O.assign(canvas.style, {
+        width: '100%',
+        height: 'auto',
+        aspectRatio: `${STAGE_W} / ${STAGE_H}`,
+        display: 'block',
+        imageRendering: 'pixelated',
+        cursor: 'pointer',
+      });
+    }
+    ap(stageFrame, canvas);
+
+    // 3. 与 5 站位严格垂直对齐的底座控制卡（4 主宠步进器 + 1 迷你蟹聚光灯开关）
+    const dockGrid = mk('div');
+    sa(dockGrid, 'data-ag-stage-dock', '1');
+    if (dockGrid.style) {
+      O.assign(dockGrid.style, {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+        gap: '6px',
+      });
+    }
+
+    // 4. 底部 5 个快捷预设胶囊
+    const presetRow = mk('div');
+    sa(presetRow, 'data-ag-stage-presets', '1');
+    if (presetRow.style) {
+      O.assign(presetRow.style, {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '6px',
+        paddingTop: '2px',
+      });
+    }
+
+    ap(view, hdr, hintEl, stageFrame, dockGrid, presetRow);
+
+    // ── 舞台实时物理与光影状态（5 个固定站位）──
+    let isOpen = false;
+    let disposed = false;
+    let rafId = 0;
+    let lastDrawAt = 0;
+    let lastStepAt = 0;
+    let frameCount = 0;
+    let tickIdx = 0;
+    let hoveredSlot = -1;
+    let lastArtSource = '';
+    const slotStates = STAGE_SLOTS.map((s, i) => ({
+      key: s.key,
+      light: 0,
+      cheerUntil: 0,
+      cheerStart: 0,
+      farewellUntil: 0,
+      rippleStart: 0,
+      motes: Array.from({ length: 7 }, (_, j) => ({
+        x: (j * 17 + i * 11) % 72 - 36,
+        y: (j * 23 + i * 19) % 130,
+        spd: 0.22 + ((j + i) % 4) * 0.11,
+        ph: j * 1.1 + i * 0.7,
+      })),
+      burst: [],
+    }));
+    const dockRefs = {};
+    const presetBtns = [];
+
+    const readRoster = () => parseMascotSpec(getCurMascot()) || { c: 1, k: 1, d: 0, w: 0, minis: false };
+    const slotCountOf = (r, key) => (key === 'm' ? (r.minis ? 1 : 0) : r[key] || 0);
+
+    const triggerSlotAnim = (idx, kind, now = nowMs()) => {
+      const st = slotStates[idx];
+      if (!st) return;
+      if (kind === 'cheer') {
+        st.cheerStart = now;
+        st.cheerUntil = now + 1150;
+        st.farewellUntil = 0;
+        st.rippleStart = now;
+        st.burst = Array.from({ length: 9 }, (_, j) => ({
+          dx: (j - 4) * 5.2 + ((j % 2) ? 2 : -2),
+          vy: 0.75 + (j % 3) * 0.35,
+          t: 0,
+        }));
+      } else if (kind === 'farewell') {
+        st.farewellUntil = now + 520;
+        st.cheerUntil = 0;
+      }
+    };
+
+    const applyRosterChange = (nextRoster, ev) => {
+      if (ev && typeof ev === 'object' && handledGroupClicks) handledGroupClicks.add(ev);
+      const prevR = readRoster();
+      const encoded = encodeMascotSpec(nextRoster);
+      const cleanNext = parseMascotSpec(encoded) || { c: 0, k: 0, d: 0, w: 0, minis: false };
+      const now = nowMs();
+      STAGE_SLOTS.forEach((sl, idx) => {
+        const before = slotCountOf(prevR, sl.key);
+        const after = slotCountOf(cleanNext, sl.key);
+        if (after > before) triggerSlotAnim(idx, 'cheer', now);
+        else if (after === 0 && before > 0) triggerSlotAnim(idx, 'farewell', now);
+      });
+      setMascotValue(encoded);
+      syncStageControls();
+      syncRoot();
+      if (isOpen) drawStageFrame(now, true);
+    };
+
+    const toggleStageSlot = (idx, ev) => {
+      const sl = STAGE_SLOTS[idx];
+      if (!sl) return;
+      const cur = readRoster();
+      const next = { ...cur };
+      if (sl.key === 'm') {
+        next.minis = !next.minis;
+      } else {
+        const tot = next.c + next.k + next.d + next.w;
+        if (next[sl.key] > 0) next[sl.key] = 0;
+        else if (tot < 6) next[sl.key] = 1;
+        else {
+          if (countPill.style) countPill.style.borderColor = 'var(--ag-cs-accent, #f97316)';
+          return;
+        }
+      }
+      applyRosterChange(next, ev);
+    };
+
+    // 构建 5 列底座控制卡
+    STAGE_SLOTS.forEach((sl, idx) => {
+      const card = mk('div');
+      sa(card, 'data-ag-stage-slot', sl.key);
+      if (card.style) {
+        O.assign(card.style, {
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '5px',
+          padding: '6px 5px',
+          borderRadius: '9px',
+          border: '1px solid var(--ag-cs-border, rgba(148,163,184,0.22))',
+          background: 'var(--ag-cs-surface-2, rgba(148,163,184,0.06))',
+          transition: 'border-color 140ms ease, background 140ms ease',
+        });
+      }
+      card.addEventListener('pointerenter', () => { hoveredSlot = idx; if (isOpen && isReducedMotion()) drawStageFrame(nowMs(), true); });
+      card.addEventListener('pointerleave', () => { if (hoveredSlot === idx) hoveredSlot = -1; if (isOpen && isReducedMotion()) drawStageFrame(nowMs(), true); });
+
+      const topRow = mk('div');
+      if (topRow.style) O.assign(topRow.style, { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', width: '100%', minWidth: '0' });
+      const dot = mk('span');
+      sa(dot, 'aria-hidden', 'true');
+      if (dot.style) {
+        O.assign(dot.style, {
+          width: '7px',
+          height: '7px',
+          borderRadius: '2px',
+          background: sl.hex,
+          flexShrink: '0',
+          boxShadow: sl.key === 'd' ? 'inset 0 0 0 1px rgba(30,25,54,0.32)' : 'none',
+        });
+      }
+      const nameEl = mk('span', '');
+      sa(nameEl, 'data-ag-mascot-label', sl.key);
+      if (nameEl.style) O.assign(nameEl.style, { fontSize: '10.5px', fontWeight: '600', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
+      const badgeEl = mk('span', '');
+      sa(badgeEl, 'data-ag-stage-badge', sl.key);
+      if (badgeEl.style) {
+        O.assign(badgeEl.style, {
+          display: 'none',
+          padding: '0 4px',
+          borderRadius: '999px',
+          fontSize: '10px',
+          fontWeight: '700',
+          background: `rgba(${sl.rayA}, 0.22)`,
+          border: `1px solid rgba(${sl.rayA}, 0.55)`,
+          lineHeight: '1.35',
+          flexShrink: '0',
+        });
+      }
+      ap(topRow, dot, nameEl, badgeEl);
+
+      if (sl.key !== 'm') {
+        const ctrl = mk('div');
+        if (ctrl.style) O.assign(ctrl.style, { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' });
+        const mkStep = (sym, attr, delta) => {
+          const b = mk('button', BTN, sym);
+          b.type = 'button';
+          sa(b, attr, sl.key);
+          if (b.style) {
+            O.assign(b.style, {
+              width: '21px',
+              height: '21px',
+              padding: '0',
+              fontSize: '12px',
+              lineHeight: '1',
+              borderRadius: '6px',
+              border: '1px solid var(--ag-cs-border, rgba(148,163,184,0.3))',
+              cursor: 'pointer',
+            });
+          }
+          b.addEventListener('click', (ev) => {
+            ev?.stopPropagation?.();
+            const cur = readRoster();
+            const next = { ...cur };
+            const tot = next.c + next.k + next.d + next.w;
+            if (delta < 0 && next[sl.key] > 0) next[sl.key] -= 1;
+            else if (delta > 0 && next[sl.key] < 4 && tot < 6) next[sl.key] += 1;
+            else return;
+            applyRosterChange(next, ev);
+          });
+          return b;
+        };
+        const decBtn = mkStep('−', 'data-ag-mascot-dec', -1);
+        const valEl = mk('span', '', '0');
+        sa(valEl, 'data-ag-mascot-val', sl.key);
+        if (valEl.style) O.assign(valEl.style, { minWidth: '14px', textAlign: 'center', fontSize: '11.5px', fontWeight: '700', fontVariantNumeric: 'tabular-nums' });
+        const incBtn = mkStep('+', 'data-ag-mascot-inc', 1);
+        ap(ctrl, decBtn, valEl, incBtn);
+        ap(card, topRow, ctrl);
+        dockRefs[sl.key] = { card, nameEl, badgeEl, decBtn, valEl, incBtn };
+      } else {
+        const mBtn = mk('button', BTN);
+        mBtn.type = 'button';
+        sa(mBtn, 'data-ag-mascot-minis', '1');
+        if (mBtn.style) {
+          O.assign(mBtn.style, {
+            padding: '3px 8px',
+            fontSize: '10.5px',
+            fontWeight: '600',
+            lineHeight: '1.35',
+            borderRadius: '999px',
+            border: '1px solid var(--ag-cs-border, rgba(148,163,184,0.3))',
+            cursor: 'pointer',
+            width: '100%',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          });
+        }
+        mBtn.addEventListener('click', (ev) => {
+          ev?.stopPropagation?.();
+          toggleStageSlot(idx, ev);
+        });
+        ap(card, topRow, mBtn);
+        dockRefs.m = { card, nameEl, badgeEl, mBtn };
+      }
+      ap(dockGrid, card);
+    });
+
+    // 构建底部 5 个快捷预设胶囊
+    const STAGE_PRESETS = [
+      ['crab', 'mascotStagePresetDual', 'Classic Dual'],
+      ['minis', 'optMascotMinis', 'Dual + Crabs'],
+      ['quad', 'mascotStagePresetQuad', 'All Four'],
+      ['quad-minis', 'optMascotQuadMinis', 'Quad + Crabs'],
+      ['off', 'mascotStagePresetOff', 'All Resting'],
+    ];
+    for (const [val, i18nKey, fb] of STAGE_PRESETS) {
+      const pb = mk('button', BTN);
+      pb.type = 'button';
+      sa(pb, 'data-ag-stage-preset', val);
+      if (pb.style) {
+        O.assign(pb.style, {
+          padding: '4px 10px',
+          fontSize: '11px',
+          fontWeight: '600',
+          borderRadius: '999px',
+          border: '1px solid var(--ag-cs-border, rgba(148,163,184,0.28))',
+          cursor: 'pointer',
+          flex: '1 1 auto',
+          textAlign: 'center',
+        });
+      }
+      pb.addEventListener('click', (ev) => {
+        ev?.stopPropagation?.();
+        const nextR = parseMascotSpec(val) || { c: 0, k: 0, d: 0, w: 0, minis: false };
+        applyRosterChange(nextR, ev);
+      });
+      presetBtns.push({ btn: pb, val, i18nKey, fb });
+      ap(presetRow, pb);
+    }
+
+    // 同步舞台所有 DOM 文本、徽章、禁用态与预设高亮
+    const syncStageControls = () => {
+      const l = getLang();
+      const u = uiText(l) || {};
+      const r = readRoster();
+      const encoded = encodeMascotSpec(r);
+      const total = r.c + r.k + r.d + r.w;
+      sa(view, 'data-mascot-val', encoded);
+      backBtn.textContent = `← ${u.mascotStageBackBtn || 'Back to Settings'}`;
+      titleEl.textContent = u.mascotStageTitle || 'Mascot Casting Stage';
+      hintEl.textContent = u.mascotStageHint || 'Click mascots on stage to toggle spotlight, or adjust roster below (max 6 mains)';
+      countPill.textContent = String(u.mascotRosterCount || 'Main {n}/6').replace('{n}', String(total));
+      sa(countPill, 'data-total', total);
+      if (countPill.style) countPill.style.borderColor = total >= 6 ? 'var(--ag-cs-accent, #60a5fa)' : 'var(--ag-cs-border, rgba(148,163,184,0.26))';
+      minisPill.textContent = `${u.mascotRosterMinis || '+3 Mini Crabs'}: ${r.minis ? (u.mascotStageActiveOn || 'On Stage') : (u.mascotStageActiveOff || 'Resting')}`;
+      sa(minisPill, 'data-active', r.minis ? '1' : '0');
+      if (minisPill.style) {
+        minisPill.style.borderColor = r.minis ? 'rgba(251,146,60,0.65)' : 'var(--ag-cs-border, rgba(148,163,184,0.24))';
+        minisPill.style.background = r.minis ? 'rgba(251,146,60,0.16)' : 'transparent';
+      }
+
+      for (const sl of STAGE_SLOTS) {
+        const ref = dockRefs[sl.key];
+        if (!ref) continue;
+        ref.nameEl.textContent = u[sl.i18nKey] || sl.fb;
+        if (sl.key !== 'm') {
+          const cnt = r[sl.key] || 0;
+          ref.valEl.textContent = String(cnt);
+          const decDis = cnt <= 0;
+          const incDis = cnt >= 4 || total >= 6;
+          ref.decBtn.disabled = decDis;
+          ref.incBtn.disabled = incDis;
+          sa(ref.decBtn, 'aria-disabled', decDis);
+          sa(ref.incBtn, 'aria-disabled', incDis);
+          if (ref.decBtn.style) ref.decBtn.style.opacity = decDis ? '0.35' : '1';
+          if (ref.incBtn.style) ref.incBtn.style.opacity = incDis ? '0.35' : '1';
+          ref.badgeEl.textContent = cnt >= 2 ? `×${cnt}` : '';
+          if (ref.badgeEl.style) ref.badgeEl.style.display = cnt >= 2 ? 'inline-block' : 'none';
+          sa(ref.card, 'data-active', cnt > 0 ? '1' : '0');
+          if (ref.card.style) {
+            ref.card.style.borderColor = cnt > 0 ? `rgba(${sl.rayA}, 0.58)` : 'var(--ag-cs-border, rgba(148,163,184,0.2))';
+            ref.card.style.background = cnt > 0 ? `rgba(${sl.rayA}, 0.11)` : 'var(--ag-cs-surface-2, rgba(148,163,184,0.05))';
+          }
+        } else {
+          const on = Boolean(r.minis);
+          ref.mBtn.textContent = on ? (u.mascotStageActiveOn || 'On Stage') : (u.mascotRosterMinis || '+3 Mini Crabs');
+          sa(ref.mBtn, 'aria-pressed', on);
+          if (on) sa(ref.mBtn, 'data-pressed');
+          else ra(ref.mBtn, 'data-pressed');
+          sa(ref.card, 'data-active', on ? '1' : '0');
+          if (ref.mBtn.style) {
+            ref.mBtn.style.borderColor = on ? 'rgba(251,146,60,0.72)' : 'var(--ag-cs-border, rgba(148,163,184,0.28))';
+            ref.mBtn.style.background = on ? 'rgba(251,146,60,0.22)' : 'transparent';
+          }
+          if (ref.card.style) {
+            ref.card.style.borderColor = on ? 'rgba(251,146,60,0.58)' : 'var(--ag-cs-border, rgba(148,163,184,0.2))';
+            ref.card.style.background = on ? 'rgba(251,146,60,0.11)' : 'var(--ag-cs-surface-2, rgba(148,163,184,0.05))';
+          }
+        }
+      }
+
+      for (const p of presetBtns) {
+        p.btn.textContent = u[p.i18nKey] || p.fb;
+        const act = encoded === p.val;
+        sa(p.btn, 'aria-pressed', act);
+        if (act) sa(p.btn, 'data-pressed');
+        else ra(p.btn, 'data-pressed');
+        if (p.btn.style) {
+          p.btn.style.borderColor = act ? 'var(--ag-cs-accent, #60a5fa)' : 'var(--ag-cs-border, rgba(148,163,184,0.26))';
+          p.btn.style.background = act ? 'color-mix(in srgb, var(--ag-cs-accent, #60a5fa) 18%, transparent)' : 'transparent';
+        }
+      }
+    };
+
+    // Canvas 鼠标坐标映射到 5 个站位
+    const hitSlotFromEvent = (ev) => {
+      if (!ev || !isFn(canvas.getBoundingClientRect)) return -1;
+      const rect = canvas.getBoundingClientRect();
+      if (!rect || !rect.width) return -1;
+      const lx = ((ev.clientX - rect.left) / rect.width) * STAGE_W;
+      const ly = ((ev.clientY - rect.top) / (rect.height || 1)) * STAGE_H;
+      if (lx < 0 || lx > STAGE_W || ly < 16 || ly > STAGE_H) return -1;
+      return Math.max(0, Math.min(4, Math.floor(lx / (STAGE_W / 5))));
+    };
+    canvas.addEventListener('pointermove', (ev) => {
+      if (!isOpen) return;
+      const hit = hitSlotFromEvent(ev);
+      if (hit !== hoveredSlot) {
+        hoveredSlot = hit;
+        if (isReducedMotion()) drawStageFrame(nowMs(), true);
+      }
+    });
+    canvas.addEventListener('pointerleave', () => {
+      hoveredSlot = -1;
+      if (isOpen && isReducedMotion()) drawStageFrame(nowMs(), true);
+    });
+    canvas.addEventListener('click', (ev) => {
+      ev?.stopPropagation?.();
+      if (!isOpen) return;
+      const hit = hitSlotFromEvent(ev);
+      if (hit >= 0) toggleStageSlot(hit, ev);
+    });
+
+    // ── HD-2D 像素剧场单帧渲染管线 ──
+    const ensureCanvasBacking = () => {
+      const dpr = Math.min((win?.devicePixelRatio) || 1, 2);
+      const tw = Math.round(STAGE_W * dpr);
+      const th = Math.round(STAGE_H * dpr);
+      if (canvas.width !== tw || canvas.height !== th) {
+        canvas.width = tw;
+        canvas.height = th;
+      }
+      return dpr;
+    };
+
+    const drawStageFrame = (now, force = false) => {
+      if (!isOpen || disposed || doc.hidden || view.isConnected === false) {
+        reclaimStageVram();
+        return;
+      }
+      if (!force && now - lastDrawAt < FRAME_GAP_MS) return;
+      const dt = lastStepAt ? Math.min(80, Math.max(8, now - lastStepAt)) : 45;
+      lastStepAt = now;
+      lastDrawAt = now;
+      frameCount += 1;
+      tickIdx = Math.floor(now / 150);
+
+      const dpr = ensureCanvasBacking();
+      const ctx = canvas.getContext?.('2d');
+      if (!ctx) return;
+
+      const light = Boolean(isLightThemeNow());
+      const r = readRoster();
+      const art = resolveMascotArt();
+      lastArtSource = art?.source || 'unknown';
+      const hasGrad = isFn(ctx.createLinearGradient);
+      const hasRad = isFn(ctx.createRadialGradient);
+      const hasPoly = isFn(ctx.moveTo) && isFn(ctx.lineTo) && isFn(ctx.fill);
+
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, STAGE_W, STAGE_H);
+
+      // 1) HD-2D 景深背景墙（黑曜石酒馆暗夜 / 温润羊皮纸木台）
+      if (hasGrad) {
+        const bg = ctx.createLinearGradient(0, 0, 0, 152);
+        if (light) {
+          bg.addColorStop(0, '#efe7d6');
+          bg.addColorStop(0.55, '#f6efe2');
+          bg.addColorStop(1, '#e6d8be');
+        } else {
+          bg.addColorStop(0, '#090c14');
+          bg.addColorStop(0.55, '#131827');
+          bg.addColorStop(1, '#1d2438');
+        }
+        ctx.fillStyle = bg;
+      } else {
+        ctx.fillStyle = light ? '#f2eadc' : '#121726';
+      }
+      ctx.fillRect(0, 0, STAGE_W, 152);
+
+      // 细腻像素石墙横纹 + 移轴景深散景光斑
+      ctx.fillStyle = light ? 'rgba(138,108,72,0.06)' : 'rgba(255,255,255,0.025)';
+      for (let y = 26; y < 146; y += 16) ctx.fillRect(0, y, STAGE_W, 1);
+      const bokeh = [[42, 46, 12], [128, 34, 9], [224, 52, 14], [336, 38, 10], [442, 48, 13], [526, 36, 9]];
+      for (let i = 0; i < bokeh.length; i++) {
+        const [bx, by, br] = bokeh[i];
+        const drift = Math.sin(now / 2600 + i * 1.4) * 3;
+        if (hasRad) {
+          const g = ctx.createRadialGradient(bx, by + drift, 1, bx, by + drift, br);
+          g.addColorStop(0, light ? 'rgba(245,180,92,0.18)' : 'rgba(251,191,36,0.13)');
+          g.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.fillStyle = g;
+          ctx.fillRect(bx - br, by + drift - br, br * 2, br * 2);
+        }
+      }
+
+      // 顶部木石横梁
+      ctx.fillStyle = light ? '#8c6d4f' : '#0f1320';
+      ctx.fillRect(0, 0, STAGE_W, 9);
+      ctx.fillStyle = light ? '#b08e68' : '#232c44';
+      ctx.fillRect(0, 9, STAGE_W, 2);
+
+      // 2) 透视像素木石舞台地板 + 阶梯台沿阴影
+      if (hasGrad) {
+        const fl = ctx.createLinearGradient(0, 148, 0, 198);
+        if (light) {
+          fl.addColorStop(0, '#d8c5a5');
+          fl.addColorStop(1, '#c4ad89');
+        } else {
+          fl.addColorStop(0, '#221e28');
+          fl.addColorStop(1, '#16131c');
+        }
+        ctx.fillStyle = fl;
+      } else {
+        ctx.fillStyle = light ? '#d2be9c' : '#1b1822';
+      }
+      ctx.fillRect(0, 148, STAGE_W, 50);
+
+      // 透视地板放射网格与横向木板缝
+      ctx.fillStyle = light ? 'rgba(92,66,38,0.16)' : 'rgba(255,255,255,0.05)';
+      ctx.fillRect(0, 148, STAGE_W, 2);
+      for (const py of [160, 173, 186]) ctx.fillRect(0, py, STAGE_W, 1);
+      if (hasPoly && isFn(ctx.stroke)) {
+        ctx.save();
+        ctx.strokeStyle = light ? 'rgba(92,66,38,0.14)' : 'rgba(255,255,255,0.045)';
+        ctx.lineWidth = 1;
+        for (let i = 0; i <= 10; i++) {
+          const topX = 28 + i * 50.4;
+          const botX = (topX - STAGE_W / 2) * 1.24 + STAGE_W / 2;
+          ctx.beginPath();
+          ctx.moveTo(Math.round(topX), 149);
+          ctx.lineTo(Math.round(botX), 196);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // 舞台立体前缘与台阶深影
+      ctx.fillStyle = light ? '#b59971' : '#2d2838';
+      ctx.fillRect(0, 196, STAGE_W, 3);
+      ctx.fillStyle = light ? '#8d704c' : '#110f17';
+      ctx.fillRect(0, 199, STAGE_W, 11);
+      ctx.fillStyle = light ? 'rgba(72,52,32,0.22)' : 'rgba(0,0,0,0.52)';
+      ctx.fillRect(0, 210, STAGE_W, 8);
+
+      // 第 5 站位（右侧迷你小蟹抬高小舞台角）
+      const mPlatX = 452;
+      const mPlatW = 100;
+      const mPlatY = 140;
+      ctx.fillStyle = light ? 'rgba(78,56,34,0.18)' : 'rgba(0,0,0,0.42)';
+      ctx.fillRect(mPlatX - 5, mPlatY + 8, mPlatW + 8, 44);
+      ctx.fillStyle = light ? '#e2d0b2' : '#2c2534';
+      ctx.fillRect(mPlatX, mPlatY, mPlatW, 44);
+      ctx.fillStyle = light ? '#c7ae84' : '#3e354a';
+      ctx.fillRect(mPlatX, mPlatY, mPlatW, 2);
+      ctx.fillStyle = light ? '#9d7f57' : '#17131e';
+      ctx.fillRect(mPlatX, mPlatY + 44, mPlatW, 6);
+      // 左侧微型双阶梯
+      ctx.fillStyle = light ? '#cfb791' : '#262030';
+      ctx.fillRect(mPlatX - 8, mPlatY + 18, 8, 28);
+      ctx.fillStyle = light ? '#9d7f57' : '#17131e';
+      ctx.fillRect(mPlatX - 8, mPlatY + 46, 8, 4);
+
+      // 3) 逐站位更新光强插值、绘制地板反射光环/涟漪、角色像素精灵与分身
+      const smoothK = Math.min(1, dt / 110);
+      for (let i = 0; i < STAGE_SLOTS.length; i++) {
+        const sl = STAGE_SLOTS[i];
+        const st = slotStates[i];
+        const cnt = slotCountOf(r, sl.key);
+        const isHov = hoveredSlot === i;
+        const targetLight = cnt > 0 ? 1 : isHov ? 0.45 : 0;
+        st.light += (targetLight - st.light) * (isReducedMotion() ? 1 : smoothK);
+        if (Math.abs(targetLight - st.light) < 0.01) st.light = targetLight;
+
+        const floorY = sl.key === 'm' ? 166 : 176;
+
+        // 顶梁聚光灯像素灯罩
+        ctx.fillStyle = light ? '#5e4934' : '#283148';
+        ctx.fillRect(sl.cx - 9, 9, 18, 5);
+        ctx.fillStyle = st.light > 0.05 ? `rgba(${sl.rayB}, ${0.35 + st.light * 0.65})` : (light ? '#9c8a74' : '#1b2030');
+        ctx.fillRect(sl.cx - 6, 14, 12, 3);
+
+        // 地板椭圆柔边投影 + 阵营光环
+        if (hasRad) {
+          const sh = ctx.createRadialGradient(sl.cx, floorY + 2, 4, sl.cx, floorY + 2, 36);
+          sh.addColorStop(0, light ? 'rgba(72,52,32,0.22)' : 'rgba(0,0,0,0.48)');
+          sh.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.fillStyle = sh;
+          ctx.fillRect(sl.cx - 38, floorY - 12, 76, 28);
+        }
+        if (st.light > 0.03 && hasRad) {
+          const glowR = 30 + st.light * 16;
+          const gl = ctx.createRadialGradient(sl.cx, floorY + 1, 2, sl.cx, floorY + 1, glowR);
+          const aBase = light ? 0.28 : 0.42;
+          gl.addColorStop(0, `rgba(${sl.rayB}, ${(aBase * st.light).toFixed(3)})`);
+          gl.addColorStop(0.55, `rgba(${sl.rayA}, ${(aBase * 0.48 * st.light).toFixed(3)})`);
+          gl.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.save();
+          ctx.translate(sl.cx, floorY + 1);
+          ctx.scale(1, 0.38);
+          ctx.fillStyle = gl;
+          ctx.fillRect(-glowR, -glowR, glowR * 2, glowR * 2);
+          ctx.restore();
+        }
+
+        // 激活瞬间地板扩散双光环涟漪
+        if (st.rippleStart && now - st.rippleStart < 780 && isFn(ctx.ellipse) && isFn(ctx.stroke)) {
+          const rp = (now - st.rippleStart) / 780;
+          ctx.save();
+          ctx.strokeStyle = `rgba(${sl.rayB}, ${((1 - rp) * 0.78).toFixed(3)})`;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.ellipse(sl.cx, floorY + 1, 14 + rp * 34, 5 + rp * 12, 0, 0, Math.PI * 2);
+          ctx.stroke();
+          if (rp > 0.16) {
+            const rp2 = (rp - 0.16) / 0.84;
+            ctx.strokeStyle = `rgba(${sl.rayA}, ${((1 - rp2) * 0.45).toFixed(3)})`;
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.ellipse(sl.cx, floorY + 1, 10 + rp2 * 26, 4 + rp2 * 9, 0, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
+
+        // 判定当前角色姿态与弹跳位移
+        const cheering = st.cheerUntil > now;
+        const farewell = !cheering && st.farewellUntil > now;
+        let pose = 'idle';
+        let jumpPx = 0;
+        let sym = null;
+        if (cheering) {
+          pose = sl.cheerPose;
+          sym = sl.cheerSym;
+          const cp = (now - st.cheerStart) / 1150;
+          jumpPx = -Math.round(Math.abs(Math.sin(cp * Math.PI * 2)) * 11);
+        } else if (farewell) {
+          pose = 'wave';
+        } else if (cnt === 0) {
+          pose = isHov ? 'tilt' : 'sleep';
+          if (pose === 'sleep') sym = (tickIdx + i) % 6 < 3 ? 'z1' : 'z2';
+        } else {
+          pose = isHov ? 'tilt' : 'idle';
+        }
+
+        // 渲染像素角色（4 主角 vs 迷你小蟹角）
+        const shadeAlpha = cnt === 0 && !isHov && !farewell ? (light ? 0.56 : 0.46) : 1;
+        ctx.save();
+        if (shadeAlpha < 1) ctx.globalAlpha = shadeAlpha;
+
+        if (sl.key !== 'm') {
+          // 同物种 count >= 2：主位后方两侧渲染 count - 1 只柔光跟班迷你分身
+          if (cnt >= 2) {
+            const offsets = [[-26, -7], [26, -7], [0, -14]];
+            const miniPx = 2;
+            for (let cIdx = 0; cIdx < Math.min(3, cnt - 1); cIdx++) {
+              const [ox, oy] = offsets[cIdx];
+              const mJump = cheering ? -Math.round(Math.abs(Math.sin(((now - st.cheerStart) / 1150 + cIdx * 0.2) * Math.PI * 2)) * 7) : 0;
+              ctx.save();
+              ctx.globalAlpha = light ? 0.72 : 0.78;
+              const mgx = Math.round((sl.cx + ox) / miniPx) - 8;
+              const mgy = Math.round((floorY + oy + mJump) / miniPx) - 10;
+              art.drawMainActor(ctx, sl.kind, cheering ? 'happy' : 'idle', tickIdx + cIdx + 1, mgx, mgy, miniPx, { noShadow: true });
+              ctx.restore();
+            }
+          }
+          // 主位高清主角 (PX = 3)
+          const mainPx = 3;
+          const breath = pose === 'idle' && (tickIdx + i * 3) % 14 === 0;
+          const blink = pose === 'idle' && (tickIdx + i * 5) % 22 === 0;
+          const oxGrid = Math.round(sl.cx / mainPx) - 8;
+          const oyGrid = Math.round((floorY + jumpPx) / mainPx) - 10;
+          art.drawMainActor(ctx, sl.kind, pose, tickIdx + i, oxGrid, oyGrid, mainPx, {
+            clipTick: cheering ? Math.floor((now - st.cheerStart) / 120) : tickIdx + i,
+            sym,
+            breath,
+            blink,
+            noShadow: true,
+          });
+        } else {
+          // 站位 5：3 只迷你小蟹小舞台角（pxSize = 2）
+          const mPx = 2;
+          const crabDefs = [
+            { id: 'cowboy', dx: -21, dy: 0, phase: 0 },
+            { id: 'shades', dx: 21, dy: 0, phase: 1 },
+            { id: 'wizard', dx: 0, dy: cnt > 0 ? -13 : 2, phase: 2 },
+          ];
+          for (const cd of crabDefs) {
+            const cJump = cheering
+              ? -Math.round(Math.abs(Math.sin(((now - st.cheerStart) / 1150 + cd.phase * 0.18) * Math.PI * 2)) * 10)
+              : cnt > 0 && !isReducedMotion()
+                ? -Math.round(Math.max(0, Math.sin(now / 420 + cd.phase * 1.6)) * 2)
+                : 0;
+            const gx = Math.round((sl.cx + cd.dx) / mPx) - 8;
+            const gy = Math.round((floorY + cd.dy + cJump) / mPx) - 8;
+            art.drawMiniCrab(ctx, cd.id, cheering || isHov ? 'trick' : 'idle', gx, gy, mPx);
+          }
+          if (cnt === 0 && !isHov && !farewell) {
+            // 未开启时在迷你蟹角上方绘小 z 睡觉像素符号
+            ctx.fillStyle = light ? '#6d6258' : '#a8a194';
+            const zy = floorY - 30 - ((tickIdx % 4) < 2 ? 0 : 2);
+            ctx.fillRect(sl.cx + 12, zy, 6, 2);
+            ctx.fillRect(sl.cx + 14, zy + 2, 2, 2);
+            ctx.fillRect(sl.cx + 12, zy + 4, 6, 2);
+          }
+        }
+        ctx.restore();
+
+        // 4) 体积感丁达尔聚光灯（多层斜锥形光束 + 漂浮像素星尘）
+        if (st.light > 0.03 && hasPoly) {
+          ctx.save();
+          if (!light) ctx.globalCompositeOperation = 'lighter';
+          const coneTopW = 9;
+          const coneBotW = 46;
+          if (hasGrad) {
+            const rayG = ctx.createLinearGradient(sl.cx, 16, sl.cx, floorY + 8);
+            const topA = (light ? 0.24 : 0.34) * st.light;
+            const midA = (light ? 0.11 : 0.16) * st.light;
+            rayG.addColorStop(0, `rgba(${sl.rayB}, ${topA.toFixed(3)})`);
+            rayG.addColorStop(0.55, `rgba(${sl.rayA}, ${midA.toFixed(3)})`);
+            rayG.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = rayG;
+          } else {
+            ctx.fillStyle = `rgba(${sl.rayA}, ${(0.14 * st.light).toFixed(3)})`;
+          }
+          ctx.beginPath();
+          ctx.moveTo(sl.cx - coneTopW, 16);
+          ctx.lineTo(sl.cx + coneTopW, 16);
+          ctx.lineTo(sl.cx + coneBotW, floorY + 8);
+          ctx.lineTo(sl.cx - coneBotW, floorY + 8);
+          ctx.closePath();
+          ctx.fill();
+
+          // 中心核心柔光柱
+          if (hasGrad) {
+            const coreG = ctx.createLinearGradient(sl.cx, 16, sl.cx, floorY);
+            coreG.addColorStop(0, `rgba(${sl.rayB}, ${((light ? 0.18 : 0.26) * st.light).toFixed(3)})`);
+            coreG.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = coreG;
+            ctx.beginPath();
+            ctx.moveTo(sl.cx - 4, 16);
+            ctx.lineTo(sl.cx + 4, 16);
+            ctx.lineTo(sl.cx + 22, floorY + 2);
+            ctx.lineTo(sl.cx - 22, floorY + 2);
+            ctx.closePath();
+            ctx.fill();
+          }
+
+          // 光束中缓缓漂浮的像素星尘微粒
+          for (const mt of st.motes) {
+            if (!isReducedMotion()) mt.y -= mt.spd * (dt / 16);
+            if (mt.y < 0) mt.y = 132;
+            const prog = mt.y / 132;
+            const mx = Math.round(sl.cx + mt.x * (0.28 + prog * 0.72) + Math.sin(now / 900 + mt.ph) * 3);
+            const my = Math.round(24 + mt.y);
+            const tw = 0.45 + 0.55 * Math.sin(now / 450 + mt.ph);
+            ctx.fillStyle = `rgba(${sl.rayB}, ${(tw * st.light * (light ? 0.65 : 0.82)).toFixed(3)})`;
+            ctx.fillRect(mx, my, 2, 2);
+          }
+
+          // 欢呼瞬间的爆发星尘
+          for (let bi = st.burst.length - 1; bi >= 0; bi--) {
+            const b = st.burst[bi];
+            b.t += dt / 750;
+            if (b.t >= 1) { st.burst.splice(bi, 1); continue; }
+            const bx = Math.round(sl.cx + b.dx * (0.7 + b.t * 1.1));
+            const by = Math.round(floorY - 18 - b.t * 48 * b.vy);
+            ctx.fillStyle = `rgba(${sl.rayB}, ${((1 - b.t) * 0.92).toFixed(3)})`;
+            ctx.fillRect(bx, by, 2, 2);
+          }
+          ctx.restore();
+        }
+      }
+
+      // 5) 四周 HD-2D 移轴电影暗角 (Vignette)
+      if (hasRad) {
+        const vig = ctx.createRadialGradient(STAGE_W / 2, STAGE_H * 0.52, STAGE_W * 0.28, STAGE_W / 2, STAGE_H * 0.52, STAGE_W * 0.64);
+        vig.addColorStop(0, 'rgba(0,0,0,0)');
+        vig.addColorStop(1, light ? 'rgba(92,68,42,0.16)' : 'rgba(5,7,14,0.56)');
+        ctx.fillStyle = vig;
+        ctx.fillRect(0, 0, STAGE_W, STAGE_H);
+      }
+    };
+
+    const stopLoop = () => {
+      if (rafId) {
+        canAF(rafId);
+        rafId = 0;
+      }
+    };
+
+    const reclaimStageVram = () => {
+      stopLoop();
+      canvas.width = 0;
+      canvas.height = 0;
+    };
+
+    const stepLoop = (ts) => {
+      rafId = 0;
+      if (!isOpen || disposed || view.isConnected === false) {
+        if (isOpen) closeStage();
+        else reclaimStageVram();
+        return;
+      }
+      if (doc.hidden) {
+        reclaimStageVram();
+        return;
+      }
+      drawStageFrame(ts || nowMs(), false);
+      if (isOpen && !disposed && !doc.hidden && !isReducedMotion()) {
+        rafId = reqAF(stepLoop);
+      }
+    };
+
+    const onDocKeyDown = (ev) => {
+      if (!isOpen) return;
+      if (view.isConnected === false) { closeStage(); return; }
+      if (ev?.key === 'Escape') {
+        ev.preventDefault?.();
+        ev.stopPropagation?.();
+        closeStage();
+      }
+    };
+    const onDocVisChange = () => {
+      if (!isOpen) return;
+      if (view.isConnected === false) { closeStage(); return; }
+      if (doc.hidden) {
+        reclaimStageVram();
+      } else {
+        drawStageFrame(nowMs(), true);
+        if (!rafId && !isReducedMotion()) rafId = reqAF(stepLoop);
+      }
+    };
+
+    let detachMo = null;
+    const stopDetachObserver = () => {
+      if (!detachMo) return;
+      try { detachMo.disconnect(); } catch {}
+      detachMo = null;
+    };
+    const startDetachObserver = () => {
+      stopDetachObserver();
+      const MO = win?.MutationObserver || (typeof MutationObserver === 'function' ? MutationObserver : null);
+      const watchRoot = doc.body || sec.closest?.('[role="dialog"]')?.parentNode || sec.parentNode;
+      if (!MO || !watchRoot) return;
+      try {
+        detachMo = new MO(() => {
+          if (isOpen && view.isConnected === false) closeStage();
+        });
+        detachMo.observe(watchRoot, { childList: true, subtree: true });
+      } catch {
+        detachMo = null;
+      }
+    };
+
+    const openStage = () => {
+      if (disposed || isOpen) return;
+      isOpen = true;
+      for (const blk of getMainBlocks()) {
+        if (!blk) continue;
+        blk.hidden = true;
+        sa(blk, 'hidden', '');
+        if (blk.style) blk.style.display = 'none';
+      }
+      view.hidden = false;
+      ra(view, 'hidden');
+      if (view.style) view.style.display = 'flex';
+      // 同步各站位初始光强
+      const r = readRoster();
+      STAGE_SLOTS.forEach((sl, idx) => {
+        slotStates[idx].light = slotCountOf(r, sl.key) > 0 ? 1 : 0;
+        slotStates[idx].cheerUntil = 0;
+        slotStates[idx].farewellUntil = 0;
+      });
+      syncStageControls();
+      doc.addEventListener?.('keydown', onDocKeyDown, true);
+      doc.addEventListener?.('visibilitychange', onDocVisChange);
+      startDetachObserver();
+      if (!doc.hidden) {
+        drawStageFrame(nowMs(), true);
+        if (!isReducedMotion()) rafId = reqAF(stepLoop);
+      }
+    };
+
+    const closeStage = () => {
+      if (!isOpen) return;
+      isOpen = false;
+      hoveredSlot = -1;
+      stopDetachObserver();
+      reclaimStageVram();
+      doc.removeEventListener?.('keydown', onDocKeyDown, true);
+      doc.removeEventListener?.('visibilitychange', onDocVisChange);
+      view.hidden = true;
+      sa(view, 'hidden', '');
+      if (view.style) view.style.display = 'none';
+      for (const blk of getMainBlocks()) {
+        if (!blk) continue;
+        blk.hidden = false;
+        ra(blk, 'hidden');
+        if (blk.style) blk.style.display = '';
+      }
+      if (sec.isConnected !== false) syncRoot();
+    };
+
+    const disposeStage = () => {
+      if (disposed) return;
+      closeStage();
+      stopDetachObserver();
+      disposed = true;
+      reclaimStageVram();
+    };
+
+    backBtn.addEventListener('click', (ev) => {
+      ev?.stopPropagation?.();
+      closeStage();
+    });
+
+    ap(foldBody, view);
+    const api = {
+      el: view,
+      canvas,
+      open: openStage,
+      close: closeStage,
+      dispose: disposeStage,
+      sync: syncStageControls,
+      isOpen: () => isOpen,
+      getActiveRafId: () => rafId,
+      getFrameCount: () => frameCount,
+      getArtSource: () => lastArtSource || resolveMascotArt()?.source || 'ch9-fallback',
+      getSlotStates: () => slotStates.map((s) => ({ key: s.key, light: s.light, cheering: s.cheerUntil > nowMs(), farewell: s.farewellUntil > nowMs() })),
+      hoverSlot: (idx) => { hoveredSlot = idx; if (isOpen) drawStageFrame(nowMs(), true); },
+      clickSlot: (idx) => { if (isOpen) toggleStageSlot(idx); },
+      renderNow: () => { if (isOpen) drawStageFrame(nowMs(), true); },
+    };
+    sec.__agMascotStageApi = api;
+    return api;
+  };
+
   const sanitizeKeyVal = (key, rawVal) => {
     if (!hasOwn(PRISM_SETTINGS_SCHEMA, key)) return { valid: false };
     const spec = PRISM_SETTINGS_SCHEMA[key];
+    if (key === 'mascot') {
+      if (typeof rawVal !== 'string') return { valid: false };
+      const parsed = parseMascotSpec(rawVal);
+      return parsed ? { valid: true, value: encodeMascotSpec(parsed) } : { valid: false };
+    }
     let val = typeof rawVal === 'string' && spec.aliases && hasOwn(spec.aliases, rawVal) ? spec.aliases[rawVal] : rawVal;
     if (key === 'language' && val === 'auto') {
       const nav = typeof navigator !== 'undefined' && navigator?.language ? navigator.language : '';
@@ -222,6 +1481,7 @@
     ['Microqian2th/dsh-codex-effort-slider', 'Upstream'],
     ['mobius/dsh-performance-slider', 'Upstream'],
     ['claudenoshujin/claude-web', 'Mascot Pile & Micro-Ecology Interaction Inspiration'],
+    ['wp3171216237/dsh-TUI', 'MIT · chimney (Deepy Whale Inspiration)'],
   ].map(([repo, meta]) => ({ repo, url: 'https://github.com/' + repo, meta }));
 
   const LICENSE_SUMMARY_TEXT = [
@@ -240,6 +1500,7 @@
     '  - Copyright (c) 2026 AG Pulse contributors (antigrative-dashboard)',
     '  - Copyright (c) 2026 月上寒 / LLYSH-HANNARI (antigravity-Codex-Claude-effort-slider)',
     '  - Copyright (c) 2026 Antigravity Chinese Localization Contributors (yiheng8023/antigravity-chinese)',
+    '  - Copyright (c) 2026 chimney / @wp3171216237 (dsh-TUI / Deepy mascot reference)',
     '',
     'See LICENSE, NOTICE, CITATION.cff, and THIRD_PARTY_NOTICES.md in the repository.',
   ].join('\n');
@@ -336,6 +1597,10 @@
 
     const effVal = (k, l) => {
       const v = isFn(resolveSettingRowActiveValue) ? resolveSettingRowActiveValue(k, l) : undefined;
+      if (k === 'mascot' && v !== undefined && v !== null && v !== '') {
+        const p = parseMascotSpec(v);
+        return p ? encodeMascotSpec(p) : PRISM_SETTINGS_SCHEMA.mascot.default;
+      }
       return v !== undefined && v !== null && v !== '' ? v : PRISM_SETTINGS_SCHEMA[k]?.default;
     };
     const matchBtn = (k, valJson, cur) => {
@@ -468,6 +1733,99 @@
         else if (isLightTheme && curPal === 'host' && u.lightPresetHintHost) lpText = u.lightPresetHintHost;
         if (lpDescEl[K_TC] !== lpText) lpDescEl[K_TC] = lpText;
       }
+      const mRosterEl = qs(rootEl, '[data-ag-mascot-roster="1"]');
+      if (mRosterEl) {
+        const mCur = effVal('mascot', l);
+        const r = parseMascotSpec(mCur) || { c: 1, k: 1, d: 0, w: 0, minis: false };
+        const total = r.c + r.k + r.d + r.w;
+        sa(mRosterEl, 'data-mascot-val', encodeMascotSpec(r));
+        const rCntEl = qs(mRosterEl, '[data-ag-mascot-summary-count]');
+        if (rCntEl) {
+          const ct = String(u.mascotRosterCount || 'Main {n}/6').replace('{n}', String(total));
+          if (rCntEl[K_TC] !== ct) rCntEl[K_TC] = ct;
+          sa(rCntEl, 'data-total', total);
+        }
+        const openLblEl = qs(mRosterEl, '[data-ag-mascot-stage-open-label]');
+        if (openLblEl) {
+          const ol = u.mascotStageOpenBtn || 'Open Casting Stage';
+          if (openLblEl[K_TC] !== ol) openLblEl[K_TC] = ol;
+        }
+        const chipsEl = qs(mRosterEl, '[data-ag-mascot-summary-chips]');
+        if (chipsEl) {
+          const spInfo = [
+            ['c', '#d97757', u.mascotSpeciesCrab || 'Claude Crab', r.c],
+            ['k', '#947fd6', u.mascotSpeciesCat || 'Gemini Cat', r.k],
+            ['d', '#d7dfef', u.mascotSpeciesDragon || 'GPT Dragon', r.d],
+            ['w', '#4e6fff', u.mascotSpeciesWhale || 'DeepSeek Whale', r.w],
+          ].filter((x) => x[3] > 0);
+          const chipSig = `${spInfo.map((x) => x[0] + x[3]).join(',')}|${r.minis ? 1 : 0}|${l}`;
+          if (chipsEl.__agChipSig !== chipSig) {
+            chipsEl.__agChipSig = chipSig;
+            while (chipsEl.firstChild) chipsEl.removeChild(chipsEl.firstChild);
+            if (!spInfo.length && !r.minis) {
+              const restTag = doc.createElement('span');
+              restTag[K_TC] = u.mascotStagePresetOff || 'All Resting';
+              if (restTag.style) O.assign(restTag.style, { fontSize: '11px', opacity: '0.68' });
+              ap(chipsEl, restTag);
+            } else {
+              for (const [sp, col, nm, cnt] of spInfo) {
+                const chip = doc.createElement('span');
+                sa(chip, 'data-ag-summary-sp', sp);
+                if (chip.style) {
+                  O.assign(chip.style, {
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    padding: '1px 6px',
+                    borderRadius: '999px',
+                    fontSize: '10.5px',
+                    border: '1px solid var(--ag-cs-border, rgba(148,163,184,0.24))',
+                    background: 'var(--ag-cs-surface, rgba(148,163,184,0.06))',
+                  });
+                }
+                const dot = doc.createElement('span');
+                sa(dot, 'aria-hidden', 'true');
+                if (dot.style) {
+                  O.assign(dot.style, {
+                    width: '6px',
+                    height: '6px',
+                    borderRadius: '2px',
+                    background: col,
+                    flexShrink: '0',
+                  });
+                }
+                const txt = doc.createElement('span');
+                txt[K_TC] = cnt > 1 ? `${nm} ×${cnt}` : nm;
+                ap(chip, dot, txt);
+                ap(chipsEl, chip);
+              }
+              if (r.minis) {
+                const mChip = doc.createElement('span');
+                sa(mChip, 'data-ag-summary-sp', 'm');
+                mChip[K_TC] = u.mascotRosterMinis || '+3 Mini Crabs';
+                if (mChip.style) {
+                  O.assign(mChip.style, {
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    padding: '1px 6px',
+                    borderRadius: '999px',
+                    fontSize: '10.5px',
+                    border: '1px solid rgba(251,146,60,0.45)',
+                    background: 'rgba(251,146,60,0.12)',
+                  });
+                }
+                ap(chipsEl, mChip);
+              }
+            }
+          }
+        }
+      }
+      if (rootEl.__agMascotStageApi) {
+        try {
+          rootEl.__agMascotStageApi.sync();
+          if (rootEl.__agMascotStageApi.isOpen()) rootEl.__agMascotStageApi.renderNow();
+        } catch {}
+      }
       const hiRow = qs(rootEl, '[data-ag-cs-row="hostLocalization"]');
       const hiDescEl = hiRow ? qs(hiRow, '[data-k="d"]') : null;
       if (hiDescEl) {
@@ -570,6 +1928,7 @@
         }
         try { qs(existing, `[data-testid="${K_WP}"]`)?.__agPrismWpUiHandle?.destroy?.(); } catch {}
         try { qs(existing, `[data-testid="${K_SG}"]`)?.__agPrismSgUiHandle?.destroy?.(); } catch {}
+        try { existing.__agMascotStageApi?.dispose?.(); } catch {}
         existing.remove();
       }
 
@@ -793,7 +2152,13 @@
             R('contextMenu', 'rowContextMenuTitle', 'rowContextMenuDesc', onOff),
             RS('codeFont', [['default', U('optFontDefault')], ['jetbrains', 'JetBrains Mono'], ['cascadia', 'Cascadia Code'], ['sfmono', U('optFontSfmono', 'SF Mono')]]),
             RS('codeLigatures', onOff),
-            RS('mascot', [['crab', U('optMascotCrab', 'Crab Mascot')], ['minis', U('optMascotMinis', 'Dual + Crabs')], ['off', U('optMascotOff', U('offLabel', 'Off'))]]),
+            RS('mascot', [
+              ['crab', U('optMascotCrab', 'Dual')],
+              ['minis', U('optMascotMinis', 'Dual + Crabs')],
+              ['quad', U('optMascotQuad', 'Quad')],
+              ['quad-minis', U('optMascotQuadMinis', 'Quad + Crabs')],
+              ['off', U('optMascotOff', U('offLabel', 'Off'))],
+            ]),
             RS('sidebarRestyle', onOff, 'Sidebar'),
             RS('sidebarCompact', onOff),
             R('sidebarNavFold', 'setSidebarNavFoldLabel', 'setSidebarNavFoldDesc', [['off', U('optSidebarNavFoldOff', 'Show All')], ['on', U('optSidebarNavFoldOn', 'Fold Extra')]]),
@@ -904,7 +2269,65 @@
               });
               ap(group, b);
             }
-            return ap(row, ap(mkEl('div', 'py-2'), textCol, ap(mkEl('div', 'shrink-0'), group)));
+            ap(row, ap(mkEl('div', 'py-2'), textCol, ap(mkEl('div', 'shrink-0'), group)));
+            if (r.key === 'mascot') {
+              const rosterBox = mkEl('div', 'ag-cs-mascot-roster');
+              sa(rosterBox, 'data-ag-mascot-roster', '1');
+              if (rosterBox.style) {
+                O.assign(rosterBox.style, {
+                  margin: '2px 0 10px',
+                  padding: '8px 10px',
+                  borderRadius: '10px',
+                  border: '1px solid var(--ag-cs-border, rgba(148,163,184,0.22))',
+                  background: 'var(--ag-cs-surface-2, rgba(148,163,184,0.06))',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '10px',
+                  flexWrap: 'wrap',
+                });
+              }
+              const leftMeta = mkEl('div');
+              if (leftMeta.style) O.assign(leftMeta.style, { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', flex: '1 1 200px', minWidth: '0' });
+              const countBadge = mkEl('span', '', String(U('mascotRosterCount', 'Main {n}/6')).replace('{n}', '2'));
+              sa(countBadge, 'data-ag-mascot-summary-count', '1');
+              if (countBadge.style) O.assign(countBadge.style, { fontSize: '11px', fontWeight: '600', fontVariantNumeric: 'tabular-nums', opacity: '0.82' });
+              const chipsWrap = mkEl('div');
+              sa(chipsWrap, 'data-ag-mascot-summary-chips', '1');
+              if (chipsWrap.style) O.assign(chipsWrap.style, { display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' });
+              ap(leftMeta, countBadge, chipsWrap);
+
+              const openStageBtn = mkB(BTN, undefined, 'data-ag-mascot-stage-open', '1');
+              if (openStageBtn.style) {
+                O.assign(openStageBtn.style, {
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '5px 11px',
+                  borderRadius: '8px',
+                  fontSize: '11.5px',
+                  fontWeight: '600',
+                  border: '1px solid var(--ag-cs-accent, rgba(96,165,250,0.55))',
+                  background: 'color-mix(in srgb, var(--ag-cs-accent, #60a5fa) 14%, transparent)',
+                  cursor: 'pointer',
+                  flexShrink: '0',
+                });
+              }
+              const iconWrap = mkEl('span');
+              sa(iconWrap, 'aria-hidden', 'true');
+              if (iconWrap.style) O.assign(iconWrap.style, { display: 'inline-flex', alignItems: 'center', lineHeight: '0' });
+              iconWrap.innerHTML = SPOTLIGHT_ICON_SVG;
+              const openLbl = mkEl('span', '', U('mascotStageOpenBtn', 'Open Casting Stage'));
+              sa(openLbl, 'data-ag-mascot-stage-open-label', '1');
+              ap(openStageBtn, iconWrap, openLbl);
+              onClk(openStageBtn, (ev) => {
+                if (ev && typeof ev === 'object' && handledGroupClicks) handledGroupClicks.add(ev);
+                sec.__agMascotStageApi?.open?.();
+              });
+              ap(rosterBox, leftMeta, openStageBtn);
+              ap(row, rosterBox);
+            }
+            return row;
           };
 
           const topDeck = mkEl('div', 'ag-cs-settings-topdeck');
@@ -1613,6 +3036,28 @@
 
           ap(foldBody, ap(cfgFooter, ap(mkEl('div', 'ag-cs-cfg-meta'), mkEl('span', 'ag-cs-cfg-title', U('cfgToolbarTitle', 'Config')), cfgHint), ap(mkEl('div', 'ag-cs-cfg-actions'), exportBtn, importBtn, resetBtn)));
 
+          createMascotCastingStage({
+            doc,
+            sec,
+            foldBody,
+            getMainBlocks: () => [topDeck, groupsWrap, cfgFooter],
+            getLang,
+            uiText,
+            getCurMascot: () => effVal('mascot', getLang()),
+            setMascotValue: (val) => saveSetting('mascot', val),
+            isLightThemeNow: () => {
+              const de = doc.documentElement;
+              const tAttr = de?.getAttribute?.('data-ag-cs-theme') || '';
+              return tAttr === 'light' || (!tAttr && (Boolean(de?.[K_CL]?.contains?.('light')) || Boolean(doc.body?.[K_CL]?.contains?.('light'))));
+            },
+            syncRoot: () => {
+              const curL = getLang();
+              syncRootState(sec, curL, uiText(curL));
+            },
+            handledGroupClicks,
+            BTN,
+          });
+
           applySubTab(activeSubTab);
           sec.__lastSyncSig = '';
           const lNow = getLang();
@@ -1629,6 +3074,7 @@
         const openStr = nextOpen ? '1' : '0';
         writeStore(STORAGE_SETTINGS_OPEN_KEY, openStr);
         if (nextOpen) ensureFoldBodyBuilt();
+        else sec.__agMascotStageApi?.close?.();
         runGuardedMut(() => {
           sa(sec, 'data-open', openStr);
           sa(sec, 'data-ag-cs-open', openStr);
@@ -1667,6 +3113,9 @@
     PRISM_STORAGE_KEYS,
     SCENE_PRESETS,
     UPSTREAM_CREDITS,
+    parseMascotSpec,
+    encodeMascotSpec,
+    FALLBACK_MASCOT_ART,
     getDefaultSettingsPatch,
     buildSanitizedConfigExport,
     validateImportedConfigJson,

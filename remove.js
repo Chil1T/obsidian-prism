@@ -6,8 +6,11 @@ const path = require('path');
 const {
   PID_FILE,
   REMOVE_EXPRESSION,
+  SWARM_I18N_REMOVE_EXPRESSION,
+  redactSensitiveUrl,
   readPort,
   listPages,
+  listSwarmTargets,
   CdpSession,
   readPidFromLockFile,
   isExpectedDaemonProcess,
@@ -318,9 +321,28 @@ async function main(argv = process.argv.slice(2), opts = {}) {
         const session = await CdpSession.connect(page.webSocketDebuggerUrl);
         try {
           const res = await session.evaluate(REMOVE_EXPRESSION);
-          console.log(`[✓] 已恢复原生界面: ${page.title || page.url} (清理节点 ${res?.removed ?? 0})`);
+          const safeTitle = redactSensitiveUrl(page.title || page.url || '');
+          console.log(`[✓] 已恢复原生界面: ${safeTitle} (清理节点 ${res?.removed ?? 0})`);
         } finally {
           session.close();
+        }
+      }
+    }
+    let swarmTargets = [];
+    try {
+      swarmTargets = await listSwarmTargets(port);
+    } catch {}
+    if (Array.isArray(swarmTargets) && swarmTargets.length > 0) {
+      for (const target of swarmTargets) {
+        let session = null;
+        try {
+          session = await CdpSession.connect(target.webSocketDebuggerUrl, 2000);
+          await session.evaluate(SWARM_I18N_REMOVE_EXPRESSION);
+          const safeTitle = redactSensitiveUrl(target.title || target.url || 'Swarm');
+          console.log(`[✓] 已恢复原生 Swarm 面板: ${safeTitle}`);
+        } catch {
+        } finally {
+          if (session) session.close();
         }
       }
     }

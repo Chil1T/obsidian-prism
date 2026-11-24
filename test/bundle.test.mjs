@@ -487,11 +487,11 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
     assert.ok(thoughtCfgBox, 'Expected built-in OpenAI thought translator config card hot-mounted into open settingsSec');
     assert.equal(thoughtCfgBox.hidden, false, 'Thought AI config card should be visible when mode is ai');
 
-    // Verify About section: Git status/sync button + 8 upstream repo external links + GPL-3.0 & upstream MIT notices + Google disclaimer
+    // Verify About section: Git status/sync button + 9 upstream repo external links + GPL-3.0 & upstream MIT notices + Google disclaimer
     const aboutBox = settingsSec.querySelector('.ag-cs-about-box');
     assert.ok(aboutBox, 'Expected .ag-cs-about-box inside About group');
     const creditLinks = aboutBox.querySelectorAll('a');
-    assert.equal(creditLinks.length, 8, 'Expected all 8 upstream credited repository links');
+    assert.equal(creditLinks.length, 9, 'Expected all 9 upstream credited repository links');
     assert.deepEqual(
       creditLinks.map((a) => a.getAttribute('href')),
       [
@@ -503,6 +503,7 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
         'https://github.com/Microqian2th/dsh-codex-effort-slider',
         'https://github.com/mobius/dsh-performance-slider',
         'https://github.com/claudenoshujin/claude-web',
+        'https://github.com/wp3171216237/dsh-TUI',
       ]
     );
     for (const a of creditLinks) {

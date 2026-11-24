@@ -1694,7 +1694,7 @@ enum InstallerCore {
                             var allReady = true
                             var titles: [String] = []
                             for page in pages {
-                                titles.append(CdpHelper.shortTitle(page))
+                                titles.append(redactSensitiveUrl(CdpHelper.shortTitle(page)))
                                 do {
                                     let session = try CdpSession.connect(wsUrl: page.webSocketDebuggerUrl, timeoutMs: 2000)
                                     defer { session.close() }
@@ -2096,6 +2096,88 @@ enum InstallerCore {
         }
     }
 
+    private static let fallbackSwarmI18nRemoveExpression: String =
+        "(() => { try { window.__agPrismSwarmI18n?.destroy?.(); } catch {} try { document.documentElement?.removeAttribute?.('data-ag-prism-swarm-i18n'); } catch {} try { delete window.__agPrismSwarmI18n; } catch {} try { delete globalThis.__agPrismSwarmI18n; } catch {} try { delete window.__agPrismSwarmI18nFactory; } catch {} try { delete globalThis.__agPrismSwarmI18nFactory; } catch {} return { ok: true, status: 'off' }; })()"
+
+    private static func redactSensitiveUrl(_ raw: String) -> String {
+        guard !raw.isEmpty else { return "" }
+        guard let re = try? NSRegularExpression(pattern: "([?&](?:token|auth|signature|key|secret)=)[^&\\s#\"']+", options: [.caseInsensitive]) else {
+            return raw
+        }
+        let range = NSRange(raw.startIndex..<raw.endIndex, in: raw)
+        return re.stringByReplacingMatches(in: raw, options: [], range: range, withTemplate: "$1<REDACTED>")
+    }
+
+    private static func isSwarmSidecarUrl(_ rawUrl: String) -> Bool {
+        let trimmed = rawUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let comps = URLComponents(string: trimmed) else { return false }
+        guard (comps.scheme ?? "").lowercased() == "plugin" else { return false }
+        guard comps.port == nil, comps.user == nil, comps.password == nil else { return false }
+        guard comps.path == "/" else { return false }
+        let host = comps.host ?? ""
+        return host.range(of: "^swarm--swarm_board-\\d+$", options: .regularExpression) != nil
+    }
+
+    private static func readSwarmI18nRemoveExpression(installDir: String, payloadDir: String?) -> String {
+        let dirs = [installDir, payloadDir].compactMap { $0 }.filter { !$0.isEmpty }
+        for dir in dirs {
+            let manifestPath = (dir as NSString).appendingPathComponent("manifest.json")
+            if let text = try? String(contentsOfFile: manifestPath, encoding: .utf8),
+               let raw = try? MiniJson.parseObject(text),
+               let expr = raw["swarmI18nRemoveExpression"]?.stringValue,
+               !expr.isEmpty {
+                return expr
+            }
+        }
+        return fallbackSwarmI18nRemoveExpression
+    }
+
+    private static func listSwarmTargets(port: Int) throws -> [CdpPageInfo] {
+        guard let url = URL(string: "http://127.0.0.1:\(port)/json/list") else {
+            return []
+        }
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.connectionProxyDictionary = [:]
+        cfg.timeoutIntervalForRequest = 2.0
+        cfg.timeoutIntervalForResource = 2.0
+        let session = URLSession(configuration: cfg)
+        defer { session.finishTasksAndInvalidate() }
+
+        let sem = DispatchSemaphore(value: 0)
+        var fetchedData: Data?
+        var fetchedError: Error?
+        let task = session.dataTask(with: url) { data, _, err in
+            fetchedData = data
+            fetchedError = err
+            sem.signal()
+        }
+        task.resume()
+        if sem.wait(timeout: .now() + .milliseconds(2500)) == .timedOut {
+            task.cancel()
+            return []
+        }
+        if let err = fetchedError { throw err }
+        guard let data = fetchedData, let jsonText = String(data: data, encoding: .utf8) else {
+            return []
+        }
+        let targets = try MiniJson.parseArray(jsonText)
+        var out: [CdpPageInfo] = []
+        for targetVal in targets {
+            guard let t = targetVal.objectValue else { continue }
+            let type = (t["type"]?.stringValue ?? "").lowercased()
+            let wsUrl = t["webSocketDebuggerUrl"]?.stringValue ?? ""
+            let pageUrl = t["url"]?.stringValue ?? ""
+            let title = t["title"]?.stringValue ?? ""
+            if (type == "iframe" || type == "page") && !wsUrl.isEmpty && isSwarmSidecarUrl(pageUrl) {
+                let id = t["id"]?.stringValue ?? wsUrl
+                let safeUrl = redactSensitiveUrl(pageUrl)
+                let safeTitle = redactSensitiveUrl(title.isEmpty ? pageUrl : title)
+                out.append(CdpPageInfo(id: id, title: safeTitle, url: safeUrl, webSocketDebuggerUrl: wsUrl))
+            }
+        }
+        return out
+    }
+
     static func runUninstall(opts: InstallerOptions, progress: ((Int, String) -> Void)?) -> OperationResult {
         let result = OperationResult()
         result.mode = "uninstall"
@@ -2148,6 +2230,7 @@ enum InstallerCore {
                   !m.removeExpression.isEmpty {
             removeExpr = m.removeExpression
         }
+        let swarmRemoveExpr = readSwarmI18nRemoveExpression(installDir: installDir, payloadDir: resolvePayloadDir())
 
         if let port = port, let expr = removeExpr, !expr.isEmpty,
            let pages = try? CdpHelper.listPages(port: port) {
@@ -2155,11 +2238,26 @@ enum InstallerCore {
                 if let session = try? CdpSession.connect(wsUrl: page.webSocketDebuggerUrl, timeoutMs: 3000) {
                     defer { session.close() }
                     if (try? session.evaluate(expr, awaitPromise: false)) != nil {
-                        let title = CdpHelper.shortTitle(page)
+                        let title = redactSensitiveUrl(CdpHelper.shortTitle(page))
                         result.injectedPages.append(title)
                         report(55, InstallerI18n.tr(
                             "已恢复原生界面: \(title)",
                             "Restored native UI: \(title)"
+                        ))
+                    }
+                }
+            }
+        }
+        if let port = port, !swarmRemoveExpr.isEmpty,
+           let swarmTargets = try? listSwarmTargets(port: port) {
+            for target in swarmTargets {
+                if let session = try? CdpSession.connect(wsUrl: target.webSocketDebuggerUrl, timeoutMs: 2000) {
+                    defer { session.close() }
+                    if (try? session.evaluate(swarmRemoveExpr, awaitPromise: false)) != nil {
+                        let title = redactSensitiveUrl(CdpHelper.shortTitle(target))
+                        report(62, InstallerI18n.tr(
+                            "已恢复原生 Swarm 面板: \(title)",
+                            "Restored native Swarm pane: \(title)"
                         ))
                     }
                 }
