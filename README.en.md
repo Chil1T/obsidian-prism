@@ -261,5 +261,5 @@ Absorbed and adapted third-party components were originally released under the *
 
 Heartfelt thanks to every community contributor whose Pull Requests, security hardening, performance profiling, and bug reports help shape Obsidian Prism!
 
-- **Full Hall of Contributors & Detailed Credits**: See [**`CONTRIBUTORS.md`**](./CONTRIBUTORS.md) (permanently crediting all PR authors and key issue reporters, alongside release notes in [`CHANGELOG.md`](./CHANGELOG.md)).
+- **Full Hall of Contributors & Detailed Credits**: See [**`docs/CONTRIBUTORS.md`**](./docs/CONTRIBUTORS.md) (permanently crediting all PR authors and key issue reporters, alongside release notes in [`CHANGELOG.md`](./CHANGELOG.md)).
 - Contributions via [Issues](https://github.com/RMvdesi/obsidian-prism/issues) and [Pull Requests](https://github.com/RMvdesi/obsidian-prism/pulls) are always welcome!

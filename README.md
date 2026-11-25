@@ -261,5 +261,5 @@ obsidian-prism/
 
 衷心感谢所有通过 Pull Request、安全加固、性能剖析与一线缺陷定位推动 Obsidian Prism 持续演进的社区伙伴！
 
-- **完整社区贡献者荣誉名录与贡献详情**：请见 [**`CONTRIBUTORS.md`**](./CONTRIBUTORS.md)（永久收录全部 PR 贡献者与核心 Issue 定位反馈者，并同步留档于 [`CHANGELOG.md`](./CHANGELOG.md)）。
+- **完整社区贡献者荣誉名录与贡献详情**：请见 [**`docs/CONTRIBUTORS.md`**](./docs/CONTRIBUTORS.md)（永久收录全部 PR 贡献者与核心 Issue 定位反馈者，并同步留档于 [`CHANGELOG.md`](./CHANGELOG.md)）。
 - 欢迎通过 [Issues](https://github.com/RMvdesi/obsidian-prism/issues) 与 [Pull Requests](https://github.com/RMvdesi/obsidian-prism/pulls) 一起参与打磨！
