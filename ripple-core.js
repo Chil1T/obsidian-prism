@@ -871,8 +871,9 @@ color = vec4(rgb * a, a);
         gl.uniform4f(uniforms.neb0, n0 ? n0.x * dpr : 0, n0 ? n0.y * dpr : 0, n0 ? n0.radius * dpr : 1, n0 ? n0.strength * amb : 0);
         gl.uniform4f(uniforms.neb1, n1 ? n1.x * dpr : 0, n1 ? n1.y * dpr : 0, n1 ? n1.radius * dpr : 1, n1 ? n1.strength * amb : 0);
         gl.uniform4f(uniforms.neb2, n2 ? n2.x * dpr : 0, n2 ? n2.y * dpr : 0, n2 ? n2.radius * dpr : 1, n2 ? n2.strength * amb : 0);
-        gl.uniform4f(uniforms.nebOpt, n0 ? n0.hue : 0, n1 ? n1.hue : 0, n2 ? n2.hue : 0, RIPPLE.nebulaTint * amb * (specCode === 5 ? 0.45 : 1));
-        gl.uniform1f(uniforms.nebulaLift, RIPPLE.nebulaLift * amb * (palette.nebulaLiftScale ?? 1));
+        const nebL = palette.nebulaLiftScale ?? 1;
+        gl.uniform4f(uniforms.nebOpt, n0 ? n0.hue : 0, n1 ? n1.hue : 0, n2 ? n2.hue : 0, RIPPLE.nebulaTint * amb * (specCode === 5 ? 0.45 : 1) * (0.35 + 0.65 * nebL));
+        gl.uniform1f(uniforms.nebulaLift, RIPPLE.nebulaLift * amb * nebL);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, cellTexture);
         if (uploadCells !== false) {
@@ -988,8 +989,9 @@ color = vec4(rgb * a, a);
         }
         const auraTintScale = RIPPLE.auraTint * (specCode === 5 ? 0.55 : 1);
         const auraLiftScale = RIPPLE.auraLift * (palette.auraLiftScale ?? 1);
-        const nebTintScale = RIPPLE.nebulaTint * amb * (specCode === 5 ? 0.45 : 1);
-        const nebLiftScale = RIPPLE.nebulaLift * amb * (palette.nebulaLiftScale ?? 1);
+        const nebL = palette.nebulaLiftScale ?? 1;
+        const nebTintScale = RIPPLE.nebulaTint * amb * (specCode === 5 ? 0.45 : 1) * (0.35 + 0.65 * nebL);
+        const nebLiftScale = RIPPLE.nebulaLift * amb * nebL;
         const prismGain = RIPPLE.prismTint * palette.prismStrength * (specCode === 5 ? 0.45 : 1);
         const stepX = RIPPLE.cellWidth * dpr;
         const stepY = RIPPLE.cellHeight * dpr;
@@ -1283,9 +1285,9 @@ color = vec4(rgb * a, a);
       effective.aura = ambient <= 0.001 ? null : (palette.aura || null);
       effective.ambientIntensity = ambient;
       effective.spectrumCode = specCode;
-      effective.alphaScale = cl01(palette.alphaScale, c ? (ambient <= 0.001 ? 0 : 0.44) : 1);
-      effective.nebulaLiftScale = cl01(palette.nebulaLiftScale, c ? 0 : 1);
-      effective.auraLiftScale = cl01(palette.auraLiftScale, c ? 0.25 : 1);
+      effective.alphaScale = cl01(palette.alphaScale, c ? (ambient <= 0.001 ? 0 : 0.85) : 1);
+      effective.nebulaLiftScale = cl01(palette.nebulaLiftScale, c ? 0.75 : 1);
+      effective.auraLiftScale = cl01(palette.auraLiftScale, c ? 0.75 : 1);
       if (palette.nebula === false || ambient <= 0.001) {
         effective.nebula = null;
         lastNebulaEnabled = false;

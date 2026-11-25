@@ -616,9 +616,15 @@ enum CdpHelper {
         }
         if let cr = out["convRipple"] {
             if case .bool(let b) = cr {
-                out["convRipple"] = .bool(b)
-            } else if let s = cr.stringValue?.lowercased() {
-                out["convRipple"] = .bool(s == "on" || s == "true")
+                out["convRipple"] = .string(b ? "medium" : "off")
+            } else if let s = cr.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+                if s == "on" || s == "true" {
+                    out["convRipple"] = .string("medium")
+                } else if s == "off" || s == "false" {
+                    out["convRipple"] = .string("off")
+                } else if s == "subtle" || s == "medium" || s == "full" {
+                    out["convRipple"] = .string(s)
+                }
             }
         }
         if let cl = out["codeLigatures"] {

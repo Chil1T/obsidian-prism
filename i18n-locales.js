@@ -1300,15 +1300,19 @@
     ],
     setConvRippleTitle: ['对话页字符波纹', '對話頁字元波紋', 'Chat Matrix Ripple', '会話文字リップル', '대화 문자 리플', 'Onda matricial en chat', 'Onde matricielle de chat', 'Chat-Matrixwelle'],
     setConvRippleDesc: [
-      '在对话页背景铺设低干扰字符点阵波纹（默认关闭，开启自定义壁纸或浏览器分屏时自动避让）。',
-      '在對話頁背景鋪設低干擾字元點陣波紋（預設關閉，開啟自訂桌布或瀏覽器分割畫面時自動避讓）。',
-      'Subtle character matrix ripple on chat background (off by default; auto-yields to custom wallpaper or browser split view).',
-      '会話画面の背景に控えめな文字グリッド波紋を表示します（既定はオフ、カスタム壁紙やブラウザ分割時は自動回避）。',
-      '대화 화면 배경에 은은한 문자 매트릭스 파동을 표시합니다 (기본 꺼짐, 사용자 배경화면·브라우저 분할 시 자동 양보).',
-      'Onda sutil de matriz de caracteres en el fondo del chat (desactivada por defecto; cede paso al fondo personalizado o vista dividida).',
-      'Onde matricielle discrète en arrière-plan du chat (désactivée par défaut ; s’efface avec un fond personnalisé ou l’écran partagé).',
-      'Dezente Zeichenmatrix-Welle im Chat-Hintergrund (standardmäßig aus; weicht bei eigenem Hintergrundbild oder geteilter Ansicht aus).',
+      '在对话页背景铺设字符点阵波纹并调节显示强度（默认关闭，开启自定义壁纸或浏览器分屏时自动避让）。',
+      '在對話頁背景鋪設字元點陣波紋並調節顯示強度（預設關閉，開啟自訂桌布或瀏覽器分割畫面時自動避讓）。',
+      'Character matrix ripple on chat background with adjustable intensity (off by default; auto-yields to custom wallpaper or split view).',
+      '会話背景に文字グリッド波紋を表示し強度を調整します（既定はオフ、カスタム壁紙やブラウザ分割時は自動回避）。',
+      '대화 배경에 문자 매트릭스 파동을 표시하고 강도를 조절합니다 (기본 꺼짐, 사용자 배경화면·브라우저 분할 시 자동 양보).',
+      'Onda de matriz de caracteres en el fondo del chat con intensidad ajustable (desactivada por defecto; cede paso al fondo personalizado o vista dividida).',
+      'Onde matricielle en arrière-plan du chat à intensité réglable (désactivée par défaut ; s’efface avec un fond personnalisé ou l’écran partagé).',
+      'Zeichenmatrix-Welle im Chat-Hintergrund mit einstellbarer Intensität (standardmäßig aus; weicht bei eigenem Hintergrundbild oder geteilter Ansicht aus).',
     ],
+    optConvRippleOff: ['关闭', '關閉', 'Off', 'オフ', '끄기', 'Desactivado', 'Désactivé', 'Aus'],
+    optConvRippleSubtle: ['微光', '微光', 'Subtle', '微光', '은은함', 'Sutil', 'Subtil', 'Dezent'],
+    optConvRippleMedium: ['标准', '標準', 'Medium', '標準', '보통', 'Medio', 'Moyen', 'Mittel'],
+    optConvRippleFull: ['鲜明', '鮮明', 'Full', '鮮明', '선명', 'Intenso', 'Intense', 'Kräftig'],
 
     // ── Thought Translator & OpenAI Polisher ─────────────────────────────────
     grpThought: [

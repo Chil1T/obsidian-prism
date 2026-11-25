@@ -130,6 +130,7 @@
   const BOOL_ALIAS_PAIRS = [['homeRipple', 'ripple'], ['composerRestyle', 'composer'], ['sidebarRestyle', 'sidebar']];
   const ONOFF_STR_KEYS = 'telemetryModule|effortSliderModule|effortMemory|periodicModelPicker|omniModule|sidebarStudio|autoUpdate|sidebarNavFold'.split('|');
   const pickOf = (v, s, d) => (s.split('|').includes(v) ? v : d);
+  const normConvRipple = (v) => (v === true || v === 'true' || v === 'on' ? 'medium' : pickOf(v, 'subtle|medium|full', 'off'));
 
   const normalizeConfigShape = (rawCfg) => {
     const out = { ...(rawCfg || {}) };
@@ -149,7 +150,8 @@
     }
     out.placeholderStyle = out.promptStyle = (out.placeholderStyle ?? out.promptStyle) === 'host' ? 'host' : 'studio';
     out.mascot = out.mascot === 'off' || out.mascot === false ? 'off' : /^(minis|quad(-minis)?|r:[ckdw0-4,+m]+)$/.test(out.mascot) ? out.mascot : 'crab';
-    for (const k of ['convRipple', 'sidebarCompact', 'codeLigatures', 'autoArchiveOnExit']) out[k] = out[k] === true || out[k] === 'on';
+    out.convRipple = normConvRipple(out.convRipple);
+    for (const k of ['sidebarCompact', 'codeLigatures', 'autoArchiveOnExit']) out[k] = out[k] === true || out[k] === 'on';
     for (const k of ['sidebarNavFold', 'sidebarStudio', 'autoUpdate']) out[k] = out[k] === 'on' || out[k] === true ? 'on' : 'off';
     for (const k of ['smoothCaret', 'contextMenu']) out[k] = out[k] === undefined ? true : out[k] !== false && out[k] !== 'off';
     out.accentTone = pickOf(out.accentTone, 'follow|cobalt|iris|amber|mono', 'follow');
@@ -192,7 +194,8 @@
         patch[sKey] = on ? 'on' : 'off';
       }
     }
-    for (const k of ['convRipple', 'sidebarCompact', 'codeLigatures', 'autoArchiveOnExit']) {
+    if ('convRipple' in patch) patch.convRipple = normConvRipple(patch.convRipple);
+    for (const k of ['sidebarCompact', 'codeLigatures', 'autoArchiveOnExit']) {
       if (k in patch && typeof patch[k] === 'string') patch[k] = patch[k] === 'on' || patch[k] === 'true';
     }
     for (const k of ['smoothCaret', 'contextMenu']) {
@@ -741,7 +744,8 @@
         rippleCore,
         isDestroyed: () => destroyed,
         isAllowed: () => cfg.homeRipple !== false && cfg.homeLayout !== 'off',
-        isConvAllowed: () => cfg.convRipple === true,
+        isConvAllowed: () => cfg.convRipple !== 'off',
+        getConvLevel: () => cfg.convRipple,
         isConvRunning,
         isDarkTheme,
         motionReduced,

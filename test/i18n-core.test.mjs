@@ -411,8 +411,8 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
   assert.equal(Object.keys(PRISM_SETTINGS_SCHEMA).length, 37);
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.homeRipple.allowed, [true, false]);
   assert.equal(PRISM_SETTINGS_SCHEMA.homeRipple.default, true);
-  assert.deepEqual(PRISM_SETTINGS_SCHEMA.convRipple.allowed, [true, false]);
-  assert.equal(PRISM_SETTINGS_SCHEMA.convRipple.default, false);
+  assert.deepEqual(PRISM_SETTINGS_SCHEMA.convRipple.allowed, ['off', 'subtle', 'medium', 'full']);
+  assert.equal(PRISM_SETTINGS_SCHEMA.convRipple.default, 'off');
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.autoArchiveOnExit.allowed, [true, false]);
   assert.equal(PRISM_SETTINGS_SCHEMA.autoArchiveOnExit.default, false);
   assert.deepEqual(PRISM_SETTINGS_SCHEMA.effortMemory.allowed, ['on', 'off']);
@@ -528,35 +528,42 @@ test('settings-panel schema, scene presets, strict apiKey-stripping JSON export,
   const defaultPatch = getDefaultSettingsPatch();
   assert.equal(Object.keys(defaultPatch).length, 37);
   assert.equal(defaultPatch.homeRipple, true);
-  assert.equal(defaultPatch.convRipple, false);
+  assert.equal(defaultPatch.convRipple, 'off');
   assert.equal(defaultPatch.autoArchiveOnExit, false);
   assert.equal(defaultPatch.effortMemory, 'on');
   assert.equal(defaultPatch.periodicModelPicker, 'on');
   assert.equal(defaultPatch.sidebarNavFold, 'off');
   assert.equal(defaultPatch.scrollBottomMotion, 'smooth');
 
-  // convRipple 8-language i18n coverage (0 CJK in en/es/fr/de, 0 runtime slice leak) + export/import/preset compatibility
+  // convRipple 8-language i18n coverage (0 CJK in en/es/fr/de, 0 runtime slice leak) + 4-tier export/import/preset & legacy bool compatibility
   const CJK_RE_CR = /[\u3000-\u30ff\u3400-\u9fff\uac00-\ud7af\uff00-\uffef]/;
   const runtimeKeySetCr = new Set(i18nLocales.RUNTIME_UI_KEYS);
-  assert.equal(runtimeKeySetCr.has('setConvRippleTitle'), false);
-  assert.equal(runtimeKeySetCr.has('setConvRippleDesc'), false);
+  const convI18nKeys = ['setConvRippleTitle', 'setConvRippleDesc', 'optConvRippleOff', 'optConvRippleSubtle', 'optConvRippleMedium', 'optConvRippleFull'];
+  for (const ck of convI18nKeys) {
+    assert.equal(runtimeKeySetCr.has(ck), false, `${ck} must NOT be in RUNTIME_UI_KEYS`);
+  }
   for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
     const ui = i18nLocales.getUiStrings(lang);
-    assert.ok(typeof ui.setConvRippleTitle === 'string' && ui.setConvRippleTitle.trim().length > 0, `Missing setConvRippleTitle for ${lang}`);
-    assert.ok(typeof ui.setConvRippleDesc === 'string' && ui.setConvRippleDesc.trim().length > 0, `Missing setConvRippleDesc for ${lang}`);
-    if (['en', 'es', 'fr', 'de'].includes(lang)) {
-      assert.equal(CJK_RE_CR.test(ui.setConvRippleTitle), false, `CJK leak in setConvRippleTitle (${lang})`);
-      assert.equal(CJK_RE_CR.test(ui.setConvRippleDesc), false, `CJK leak in setConvRippleDesc (${lang})`);
+    for (const ck of convI18nKeys) {
+      assert.ok(typeof ui[ck] === 'string' && ui[ck].trim().length > 0, `Missing ${ck} for ${lang}`);
+      if (['en', 'es', 'fr', 'de'].includes(lang)) {
+        assert.equal(CJK_RE_CR.test(ui[ck]), false, `CJK leak in ${ck} (${lang})`);
+      }
     }
   }
   assert.equal(SCENE_PRESETS.ultra.homeRipple, true);
-  assert.equal(SCENE_PRESETS.focus.convRipple, false);
-  assert.equal(SCENE_PRESETS.eco.convRipple, false);
-  const expConvOn = buildSanitizedConfigExport({ convRipple: true }, null, '1.0.8');
-  assert.equal(expConvOn.settings.convRipple, true);
-  const impConvOn = validateImportedConfigJson(JSON.stringify({ settings: { convRipple: true } }));
-  assert.equal(impConvOn.ok, true);
-  assert.equal(impConvOn.settings.convRipple, true);
+  assert.equal(SCENE_PRESETS.focus.convRipple, 'off');
+  assert.equal(SCENE_PRESETS.eco.convRipple, 'off');
+  const expConvFull = buildSanitizedConfigExport({ convRipple: 'full' }, null, '1.0.8');
+  assert.equal(expConvFull.settings.convRipple, 'full');
+  const expConvLegacy = buildSanitizedConfigExport({ convRipple: true }, null, '1.0.8');
+  assert.equal(expConvLegacy.settings.convRipple, 'medium');
+  const impConvSubtle = validateImportedConfigJson(JSON.stringify({ settings: { convRipple: 'subtle' } }));
+  assert.equal(impConvSubtle.ok, true);
+  assert.equal(impConvSubtle.settings.convRipple, 'subtle');
+  const impConvLegacy = validateImportedConfigJson(JSON.stringify({ settings: { convRipple: true } }));
+  assert.equal(impConvLegacy.ok, true);
+  assert.equal(impConvLegacy.settings.convRipple, 'medium');
 });
 
 test('UX-1 / OP-5 / UX-4 / UX-9 regressions: async thought config export, tech->technical normalization, preset sidebarCompact reset, lightPreset context hints, and Effort Slider off/i18n', () => {

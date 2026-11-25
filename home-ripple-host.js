@@ -11,6 +11,12 @@
   const C_ATTR = 'data-ag-cs-conv-ripple';
   const H_ATTR = 'data-ag-cs-conv-ripple-host';
   const SB_S = 'aside,[data-side-panel-body]';
+  const L_ATTR = 'data-conv-level';
+  const C_P = {
+    subtle: [0.6, 0.4, 0.45, 0.55, 32, 340, 72, 196, 0.62, 0.28, 0.72],
+    medium: [0.85, 0.75, 0.75, 0.82, 22, 270, 54, 215, 0.85, 0.34, 0.88],
+    full: [1, 1, 1, 1, 16, 220, 42, 230, 1, 0.4, 1],
+  };
   const isF = (v) => typeof v === 'function';
   const ga = (e, k) => e?.getAttribute?.(k);
   const ra = (e, k) => { if (e?.hasAttribute?.(k)) e.removeAttribute(k); };
@@ -27,6 +33,7 @@
     isDestroyed,
     isAllowed,
     isConvAllowed,
+    getConvLevel,
     isConvRunning,
     isDarkTheme,
     motionReduced,
@@ -46,6 +53,7 @@
     let unbindWin = null;
     let syncModeFn = null;
     let streamChkFn = null;
+    let refLvFn = null;
 
     const getHtml = () => docOf()?.documentElement || null;
 
@@ -70,12 +78,22 @@
       );
     }
 
+    function convLv() {
+      if (isF(isConvAllowed) && !isConvAllowed()) return 'off';
+      if (isF(getConvLevel)) {
+        const v = getConvLevel();
+        return v === true || v === 'true' || v === 'on' ? 'medium' : v === 'subtle' || v === 'medium' || v === 'full' ? v : 'off';
+      }
+      return isF(isConvAllowed) && isConvAllowed() ? 'medium' : 'off';
+    }
+
     function resolveTarget() {
       const d = docOf();
       if (!d) return null;
       const home = d.querySelector('.agy-home');
-      if (home) return isAllowed() ? { mode: 'home', root: home } : null;
-      if (!isF(isConvAllowed) || !isConvAllowed() || isConvBlocked() || !isF(d.querySelectorAll)) return null;
+      if (home) return isAllowed() ? { mode: 'home', root: home, level: 'off' } : null;
+      const lv = convLv();
+      if (lv === 'off' || isConvBlocked() || !isF(d.querySelectorAll)) return null;
       const views = Array.from(d.querySelectorAll('[data-testid="conversation-view"]')).filter(
         (v) => !v.hidden && v.style?.display !== 'none' && v.style?.visibility !== 'hidden' && !v.closest?.('[data-testid="subagent-tab-conversation"]')
       );
@@ -94,7 +112,7 @@
       const v0 = views[0];
       for (const s of ['[data-main-content-body]', '.agy-sheet', '[data-split-panes]', '.agy-inset-shell']) {
         const c = v0.closest?.(s);
-        if (ok(c)) return { mode: 'conv', root: c };
+        if (ok(c)) return { mode: 'conv', root: c, level: lv };
       }
       let p = v0.parentElement;
       if (views.length > 1) {
@@ -102,7 +120,7 @@
       } else if (p && (ga(p, 'data-ag-cs-conv-seat') === '1' || p.hasAttribute?.('data-tiling-pane')) && ok(p.parentElement)) {
         p = p.parentElement;
       }
-      return ok(p) ? { mode: 'conv', root: p } : null;
+      return ok(p) ? { mode: 'conv', root: p, level: lv } : null;
     }
 
     const ambScale = () => parseAmb(isF(getAmbientIntensity) ? getAmbientIntensity() : ga(getHtml(), 'data-ag-cs-ambient'));
@@ -131,24 +149,29 @@
       return t;
     }
 
-    function buildPal(tok, aSt, now, ambRaw, sp, mode) {
+    function buildPal(tok, aSt, now, ambRaw, sp, mode, lv) {
       const t = tok || defTokens(isDarkTheme(), sp);
       const amb = cl(Number.isFinite(ambRaw) ? ambRaw : 1, 0, 1);
       const c = mode === 'conv';
-      const radius = c ? 190 : 230;
+      const cp = c ? C_P[lv] || C_P.medium : null;
+      const radius = cp ? cp[7] : 230;
       const on = Boolean(aSt?.active && !motionReduced() && amb > 0.001);
+      const baseP = sp === 'mono' ? 0.45 : 1;
       return {
         ink: t.ink,
         wave: t.wave,
         dark: t.dark,
         fontFamily: t.fontFamily,
         conv: c,
-        prismStrength: amb * (c ? (sp === 'mono' ? 0.28 : 0.56) : sp === 'mono' ? 0.45 : 1),
+        alphaScale: cp ? (amb <= 0.001 ? 0 : cp[0]) : 1,
+        nebulaLiftScale: cp ? cp[1] : 1,
+        auraLiftScale: cp ? cp[2] : 1,
+        prismStrength: amb * baseP * (cp ? cp[8] : 1),
         ambientIntensity: amb,
         spectrum: sp,
-        nebula: c || amb <= 0.001 ? false : undefined,
-        aura: on ? { x: aSt.x, y: aSt.y, radius, strength: amb * (c ? 0.36 : 1), active: true } : { x: 0, y: 0, radius, strength: 0, active: false },
-        auraPhase: (now || 0) * (c ? 0.0004 : 0.0006),
+        nebula: amb <= 0.001 ? false : undefined,
+        aura: on ? { x: aSt.x, y: aSt.y, radius, strength: amb * (cp ? cp[3] : 1), active: true } : { x: 0, y: 0, radius, strength: 0, active: false },
+        auraPhase: (now || 0) * (cp ? 0.00045 + 0.00015 * cp[3] : 0.0006),
       };
     }
 
@@ -194,7 +217,7 @@
       m.field?.dispose?.();
       m.glow?.dispose?.();
       m.host.remove();
-      rippleMount = ro = unbindWin = syncModeFn = streamChkFn = null;
+      rippleMount = ro = unbindWin = syncModeFn = streamChkFn = refLvFn = null;
     }
 
     function isIgnoredConv(t, press) {
@@ -221,7 +244,7 @@
 
     function syncRipple() {
       if (!rippleCore) return;
-      if (!isAllowed() && !(isF(isConvAllowed) && isConvAllowed())) return unmountRipple();
+      if (!isAllowed() && convLv() === 'off') return unmountRipple();
       const target = resolveTarget();
       if (!target) {
         setConvState(false, null);
@@ -230,11 +253,15 @@
       }
       const mode = target.mode;
       const tr = target.root;
+      const lv = target.level || 'off';
       if (rippleMount) {
         const mc = rippleMount.mode !== mode;
+        const lc = rippleMount.convLevel !== lv;
         if (rippleMount.parked || rippleMount.root !== tr || !rippleMount.canvas.isConnected || mc) {
           ro?.disconnect();
           if (rippleMount.root !== tr) detachRoot(rippleMount);
+          rippleMount.convLevel = lv;
+          setAttrIfChanged(rippleMount.host, L_ATTR, lv);
           if (mc) {
             rippleMount.mode = mode;
             setAttrIfChanged(rippleMount.host, 'data-ripple-mode', mode);
@@ -244,7 +271,11 @@
           rippleMount.reattach?.();
         } else {
           setConvState(mode === 'conv', tr);
-          if (mode === 'conv') streamChkFn?.();
+          if (lc) {
+            rippleMount.convLevel = lv;
+            setAttrIfChanged(rippleMount.host, L_ATTR, lv);
+            refLvFn?.();
+          } else if (mode === 'conv') streamChkFn?.();
         }
         return;
       }
@@ -258,6 +289,7 @@
       };
       const host = mkEl('div', 'ag-cs-ripple-host');
       host.setAttribute('data-ripple-mode', mode);
+      host.setAttribute(L_ATTR, lv);
       let canvas = mkEl('canvas', 'ag-cs-ripple-canvas');
       host.appendChild(canvas);
 
@@ -286,6 +318,7 @@
 
       const state = {
         mode,
+        convLevel: lv,
         root: tr,
         host,
         glowCanvas: null,
@@ -426,7 +459,7 @@
         state.sleeping = false;
         ra(host, 'data-ripple-sleep');
         if (hP() || isStr()) {
-          if (!drawn && hasSz(canvas)) drawFrame(nowOf());
+          if ((!drawn || force1) && hasSz(canvas)) drawFrame(nowOf());
           return enterIdleSleep();
         }
         wanted = true;
@@ -453,7 +486,7 @@
         lastTs = now;
         const rawGap = Math.max(0, Number(getMinFrameGapMs?.() ?? 0) || 0);
         const minGap =
-          state.mode === 'home' && (state.waves?.active?.() || (auraState.active && lsa > 0 && now - lsa < 180) || (tideAt > 0 && now - tideAt < 480))
+          (state.mode === 'home' || state.convLevel === 'full') && (state.waves?.active?.() || (auraState.active && lsa > 0 && now - lsa < 180) || (tideAt > 0 && now - tideAt < 480))
             ? rawGap
             : Math.max(33, rawGap);
         if (!still && drawn && !force1 && minGap > 0 && lastDraw > 0 && now - lastDraw < minGap && !hP()) {
@@ -491,7 +524,7 @@
           force1 = false;
           if (!tok) tok = sampleTok(canvas);
           const sp = specMode(tok.dark);
-          const pal = buildPal(tok, auraState, now, amb, sp, state.mode);
+          const pal = buildPal(tok, auraState, now, amb, sp, state.mode, state.convLevel);
           if (hasSz(state.glowCanvas)) {
             if (amb <= 0.001) {
               if (!gZero) { state.glow?.clear?.(); gZero = true; }
@@ -510,6 +543,11 @@
 
       state.wake = wake;
       state.reclaim = reclaim;
+      refLvFn = () => {
+        force1 = true;
+        invAll();
+        d.hidden ? reclaim() : wake();
+      };
       state.reattach = () => {
         if (timer) { clearTimeout(timer); timer = 0; }
         prev = nowOf();
@@ -539,9 +577,10 @@
         if (!isAB()) wb = false;
         if (hP() || isStr()) return;
         const c = state.mode === 'conv';
+        const cp = c ? C_P[state.convLevel] || C_P.medium : null;
         const nr = nowOf();
         if (c) {
-          if ((lcma > 0 && nr - lcma < 48) || isIgnoredConv(ev.target, false)) return;
+          if ((lcma > 0 && nr - lcma < cp[4]) || isIgnoredConv(ev.target, false)) return;
           lcma = nr;
         }
         if (!cRect || nr - cRectAt > 1500) {
@@ -560,13 +599,13 @@
         if (lx !== null && ly !== null) {
           const dist = Math.hypot(x - lx, y - ly);
           const spd = dist / Math.max(0.004, (now - lsa) / 1000);
-          const ms = c ? 380 : 220;
-          const cs = c ? 84 : 42;
+          const ms = cp ? cp[5] : 220;
+          const cs = cp ? cp[6] : 42;
           if (spd >= ms) {
             carry += dist;
             if (carry >= cs) {
               carry = Math.min(20, carry - cs);
-              state.waves.skimmer?.(Math.floor(x / rippleCore.RIPPLE.cellWidth), Math.floor(y / rippleCore.RIPPLE.cellHeight), cl((spd - ms) / 1800, 0.05, 1) * (c ? 0.42 : 1));
+              state.waves.skimmer?.(Math.floor(x / rippleCore.RIPPLE.cellWidth), Math.floor(y / rippleCore.RIPPLE.cellHeight), cl((spd - ms) / 1800, 0.05, 1) * (cp ? cp[3] : 1));
             }
           } else carry *= 0.85;
         }
@@ -597,6 +636,7 @@
         if (ev.button !== 0 || motionReduced() || ambScale() <= 0.001 || hP() || isStr()) return;
         const c = state.mode === 'conv';
         if (c && isIgnoredConv(ev.target, true)) return;
+        const cp = c ? C_P[state.convLevel] || C_P.medium : null;
         const r = canvas.getBoundingClientRect();
         cRect = r;
         cRectAt = nowOf();
@@ -604,7 +644,7 @@
         state.waves.disturb(
           Math.floor((ev.clientX - r.left) / rippleCore.RIPPLE.cellWidth),
           Math.floor((ev.clientY - r.top) / rippleCore.RIPPLE.cellHeight),
-          c ? { amplitudeScale: 0.52, radiusScale: 0.78, duration: 0.24, loadWeight: 0.7 } : undefined
+          cp && state.convLevel !== 'full' ? { amplitudeScale: cp[3], radiusScale: 0.72 + 0.28 * cp[3], duration: cp[9], loadWeight: cp[10] } : undefined
         );
         state.field.invalidate();
         wake();
@@ -613,7 +653,7 @@
 
       const onVis = () => {
         if (d.hidden) return reclaim();
-        if (state.mode === 'conv' || (isF(isConvAllowed) && isConvAllowed())) {
+        if (state.mode === 'conv' || convLv() !== 'off') {
           if (isConvBlocked()) { if (!state.parked) parkRipple(); return; }
           if (state.parked) return syncRipple();
         }

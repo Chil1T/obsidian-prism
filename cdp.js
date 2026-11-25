@@ -46,7 +46,7 @@ const DEFAULT_CONFIG = {
   homeLayout: 'studio',
   homeMode: 'studio',
   homeRipple: true,
-  convRipple: false,
+  convRipple: 'off',
   ripple: 'on',
   composerRestyle: true,
   composer: 'on',
@@ -93,7 +93,7 @@ const VALIDATORS = {
   homeLayout: ['studio', 'classic', 'off'],
   homeMode: ['studio', 'classic', 'off'],
   homeRipple: 'boolean',
-  convRipple: 'boolean',
+  convRipple: ['off', 'subtle', 'medium', 'full'],
   ripple: ['on', 'off'],
   composerRestyle: 'boolean',
   composer: ['on', 'off'],
@@ -212,8 +212,18 @@ function reconcileConfigAliases(raw) {
     out.ripple = on ? 'on' : 'off';
   }
 
-  if (has('convRipple') && typeof out.convRipple === 'string') {
-    out.convRipple = out.convRipple === 'on' || out.convRipple === 'true';
+  if (has('convRipple')) {
+    const rawCr = out.convRipple;
+    if (rawCr === true) {
+      out.convRipple = 'medium';
+    } else if (rawCr === false) {
+      out.convRipple = 'off';
+    } else if (typeof rawCr === 'string') {
+      const lowCr = rawCr.trim().toLowerCase();
+      if (lowCr === 'true' || lowCr === 'on') out.convRipple = 'medium';
+      else if (lowCr === 'false' || lowCr === 'off') out.convRipple = 'off';
+      else if (lowCr === 'subtle' || lowCr === 'medium' || lowCr === 'full') out.convRipple = lowCr;
+    }
   }
 
   if (has('composerRestyle')) {

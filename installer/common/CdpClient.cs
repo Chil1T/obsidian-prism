@@ -875,12 +875,18 @@ namespace AgyClaudeStyle
                 object cr = res["convRipple"];
                 if (cr is bool)
                 {
-                    res["convRipple"] = (bool)cr;
+                    res["convRipple"] = (bool)cr ? "medium" : "off";
                 }
                 else
                 {
                     string crs = cr as string;
-                    res["convRipple"] = crs != null && (string.Equals(crs, "on", StringComparison.OrdinalIgnoreCase) || string.Equals(crs, "true", StringComparison.OrdinalIgnoreCase));
+                    if (crs != null)
+                    {
+                        string lowCr = crs.Trim().ToLowerInvariant();
+                        if (lowCr == "on" || lowCr == "true") res["convRipple"] = "medium";
+                        else if (lowCr == "off" || lowCr == "false") res["convRipple"] = "off";
+                        else if (lowCr == "subtle" || lowCr == "medium" || lowCr == "full") res["convRipple"] = lowCr;
+                    }
                 }
             }
             if (res.ContainsKey("codeLigatures"))

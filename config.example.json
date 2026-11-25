@@ -14,7 +14,7 @@
   "homeLayout": "studio",
   "homeMode": "studio",
   "homeRipple": true,
-  "convRipple": false,
+  "convRipple": "off",
   "ripple": "on",
   "composerRestyle": true,
   "composer": "on",

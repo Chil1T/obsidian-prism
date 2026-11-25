@@ -525,6 +525,9 @@ test('Issue #63 CSS, hygiene & Channel 1 budget gate (< 549,500 B, ~2 KB delta, 
     css.includes('[data-testid="conversation-view"]::before{background:none !important;opacity:0 !important;}'),
     'conv ripple must suppress harsh top gradient bar on conversation-view::before'
   );
+  for (const tok of ['div.flex-1.min-h-0', '[data-split-root]', '[data-tiling-pane]', '[data-pane-id]', '[data-testid="overview-panel-host"]', '[data-ag-cs-conv-seat="1"]']) {
+    assert.ok(css.includes(tok), `style.css conv transparency chain must cover live Antigravity container ${tok}`);
+  }
 
   for (const lang of ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
     const expr = cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, language: lang }, { bundleCachePath: '' });
@@ -538,7 +541,7 @@ test('Issue #63 CSS, hygiene & Channel 1 budget gate (< 549,500 B, ~2 KB delta, 
   assert.ok(autoBytes < 545000, `Channel 1 auto must leave >4.5 KB headroom under 549,500 B, got ${autoBytes} B`);
 });
 
-test('Issue #63 ripple-core conv subtle optics: ~0.44x alpha in dark & light, nebulaLift=0, 0 idle 40ms redraws', () => {
+test('Issue #63 ripple-core 4-tier conv optics: subtle(0.60) < medium(0.85) < full(1.00) in dark & light + WebGL2 uniforms', () => {
   const cols = 40;
   const rows = 20;
   const { cellWidth, cellHeight } = rippleCore.RIPPLE;
@@ -556,39 +559,40 @@ test('Issue #63 ripple-core conv subtle optics: ~0.44x alpha in dark & light, ne
     return { maxA, sumA };
   };
 
+  const tiers = [
+    { name: 'subtle', alphaScale: 0.60, nebulaLiftScale: 0.40, auraLiftScale: 0.45 },
+    { name: 'medium', alphaScale: 0.85, nebulaLiftScale: 0.75, auraLiftScale: 0.75 },
+    { name: 'full', alphaScale: 1.00, nebulaLiftScale: 1.00, auraLiftScale: 1.00 },
+  ];
+
   for (const dark of [true, false]) {
     const cvHome = make2DMockCanvas(W, H);
-    const cvConv = make2DMockCanvas(W, H);
-    const wHome = rippleCore.createWaveField(cols, rows, () => 0.5);
-    const wConv = rippleCore.createWaveField(cols, rows, () => 0.5);
-    const fHome = rippleCore.createGlyphField(cvHome, cols, rows, wHome);
-    const fConv = rippleCore.createGlyphField(cvConv, cols, rows, wConv);
-
+    const fHome = rippleCore.createGlyphField(cvHome, cols, rows, rippleCore.createWaveField(cols, rows, () => 0.5));
     const base = {
       dark,
       ink: dark ? [146, 148, 156] : [104, 114, 134],
       wave: dark ? [214, 218, 228] : [37, 99, 235],
       aura: null,
-      nebula: false,
       ambientIntensity: 1,
     };
     fHome.draw(1000, base, false);
-    fConv.draw(1000, { ...base, conv: true, alphaScale: 0.44, nebulaLiftScale: 0, auraLiftScale: 0.25 }, false);
-
     const sHome = sampleMaxAlpha(cvHome);
-    const sConv = sampleMaxAlpha(cvConv);
-    assert.ok(sConv.maxA > 0 && sConv.sumA > 0, `conv subtle glyph layer must stay faintly visible (${dark ? 'dark' : 'light'})`);
-    const ratio = sConv.maxA / sHome.maxA;
-    assert.ok(
-      ratio >= 0.36 && ratio <= 0.52,
-      `expected conv/home peak alpha ratio around 0.42~0.46 in ${dark ? 'dark' : 'light'}, got ${ratio.toFixed(3)} (${sConv.maxA}/${sHome.maxA})`
-    );
-    assert.equal(fConv.needsDraw(1060, false), false, 'conv mode with nebula:false must NOT trigger 40ms idle redraws');
     fHome.dispose();
-    fConv.dispose();
+
+    const stats = {};
+    for (const t of tiers) {
+      const cv = make2DMockCanvas(W, H);
+      const f = rippleCore.createGlyphField(cv, cols, rows, rippleCore.createWaveField(cols, rows, () => 0.5));
+      f.draw(1000, { ...base, conv: true, alphaScale: t.alphaScale, nebulaLiftScale: t.nebulaLiftScale, auraLiftScale: t.auraLiftScale }, false);
+      stats[t.name] = sampleMaxAlpha(cv);
+      f.dispose();
+    }
+    assert.ok(stats.subtle.sumA > 0 && stats.subtle.sumA < stats.medium.sumA, `subtle < medium in ${dark ? 'dark' : 'light'}`);
+    assert.ok(stats.medium.sumA < stats.full.sumA, `medium < full in ${dark ? 'dark' : 'light'}`);
+    assert.equal(stats.full.sumA, sHome.sumA, `full tier must match home intensity in ${dark ? 'dark' : 'light'}`);
   }
 
-  // Verify WebGL2 uniforms honor nebulaLiftScale=0 and auraLiftScale=0.25
+  // Verify WebGL2 uniforms honor 3-tier nebulaLiftScale & auraLiftScale accurately
   const prevForce = globalThis.__agRippleForce2D;
   globalThis.__agRippleForce2D = false;
   try {
@@ -606,21 +610,24 @@ test('Issue #63 ripple-core conv subtle optics: ~0.44x alpha in dark & light, ne
     const wf = rippleCore.createWaveField(cols, rows, () => 0.5);
     const field = rippleCore.createGlyphField(glCanvas, cols, rows, wf);
     assert.equal(field.mode, 'webgl2');
-    field.draw(1000, {
-      dark: true,
-      ink: [146, 148, 156],
-      wave: [214, 218, 228],
-      conv: true,
-      alphaScale: 0.44,
-      nebula: false,
-      nebulaLiftScale: 0,
-      auraLiftScale: 0.25,
-      ambientIntensity: 0.7,
-      aura: { x: 100, y: 100, radius: 190, strength: 0.25, active: true },
-    }, false);
-    assert.equal(gl._uniforms.get('nebulaLift'), 0, 'WebGL2 nebulaLift must be 0 in conv mode');
-    const expectedAuraLift = rippleCore.RIPPLE.auraLift * 0.7 * 0.25;
-    assert.ok(Math.abs(gl._uniforms.get('auraLift') - expectedAuraLift) < 1e-6, 'WebGL2 auraLift must scale by ambientIntensity & auraLiftScale');
+    for (const t of tiers) {
+      field.invalidate();
+      field.draw(1000, {
+        dark: true,
+        ink: [146, 148, 156],
+        wave: [214, 218, 228],
+        conv: true,
+        alphaScale: t.alphaScale,
+        nebulaLiftScale: t.nebulaLiftScale,
+        auraLiftScale: t.auraLiftScale,
+        ambientIntensity: 0.7,
+        aura: { x: 100, y: 100, radius: 215, strength: 0.82, active: true },
+      }, false);
+      const expNeb = rippleCore.RIPPLE.nebulaLift * 0.7 * t.nebulaLiftScale;
+      const expAura = rippleCore.RIPPLE.auraLift * 0.7 * t.auraLiftScale;
+      assert.ok(Math.abs(gl._uniforms.get('nebulaLift') - expNeb) < 1e-6, `WebGL2 nebulaLift mismatch for ${t.name}`);
+      assert.ok(Math.abs(gl._uniforms.get('auraLift') - expAura) < 1e-6, `WebGL2 auraLift mismatch for ${t.name}`);
+    }
     field.dispose();
   } finally {
     if (prevForce === undefined) delete globalThis.__agRippleForce2D;
@@ -668,12 +675,14 @@ test('Issue #63 home-ripple-host conv mode: single WebGL2 canvas on main shell, 
   globalThis.performance = { now: () => nowMs };
 
   let ctl = null;
+  let convLevel = 'subtle';
   try {
     ctl = homeRippleHost.createHomeRippleController({
       rippleCore: wrappedCore,
       isDestroyed: () => false,
       isAllowed: () => true,
-      isConvAllowed: () => true,
+      isConvAllowed: () => convLevel !== 'off' && convLevel !== false,
+      getConvLevel: () => convLevel,
       isConvRunning: () => false,
       isDarkTheme: () => true,
       motionReduced: () => false,
@@ -689,6 +698,38 @@ test('Issue #63 home-ripple-host conv mode: single WebGL2 canvas on main shell, 
     const m = ctl.getMount();
     assert.ok(m, 'conv ripple mount must exist');
     assert.equal(m.mode, 'conv');
+    assert.equal(m.convLevel, 'subtle');
+    assert.equal(m.host.getAttribute('data-conv-level'), 'subtle');
+    assert.ok(Math.abs(env.glTracker.lastGl._uniforms.get('nebulaLift') - rippleCore.RIPPLE.nebulaLift * 0.40) < 1e-6, 'subtle nebulaLift must be 0.40x');
+    assert.ok(Math.abs(env.glTracker.lastGl._uniforms.get('auraLift') - rippleCore.RIPPLE.auraLift * 0.45) < 1e-6, 'subtle auraLift must be 0.45x');
+
+    // Hot-switch tiers subtle -> medium -> full without recreating WebGL2 context
+    const drawsBeforeHot = env.glTracker.draws;
+    convLevel = 'medium';
+    ctl.sync();
+    flushRaf(nowMs += 20);
+    assert.equal(m.convLevel, 'medium');
+    assert.equal(m.host.getAttribute('data-conv-level'), 'medium');
+    assert.ok(env.glTracker.draws > drawsBeforeHot, 'hot-switching convLevel must immediately draw a refreshed frame');
+    assert.ok(Math.abs(env.glTracker.lastGl._uniforms.get('nebulaLift') - rippleCore.RIPPLE.nebulaLift * 0.75) < 1e-6, 'medium nebulaLift must be 0.75x');
+    assert.ok(Math.abs(env.glTracker.lastGl._uniforms.get('auraLift') - rippleCore.RIPPLE.auraLift * 0.75) < 1e-6, 'medium auraLift must be 0.75x');
+    assert.equal(m.sleeping, true, 'must return to 0fps sleep right after hot tier refresh');
+
+    convLevel = 'full';
+    ctl.sync();
+    flushRaf(nowMs += 20);
+    assert.equal(m.convLevel, 'full');
+    assert.equal(m.host.getAttribute('data-conv-level'), 'full');
+    assert.ok(Math.abs(env.glTracker.lastGl._uniforms.get('nebulaLift') - rippleCore.RIPPLE.nebulaLift * 1.00) < 1e-6, 'full nebulaLift must be 1.00x');
+    assert.ok(Math.abs(env.glTracker.lastGl._uniforms.get('auraLift') - rippleCore.RIPPLE.auraLift * 1.00) < 1e-6, 'full auraLift must be 1.00x');
+    assert.equal(env.glTracker.contexts, 1, 'hot-switching 4 tiers must reuse single WebGL2 context');
+    assert.equal(env.glTracker.loseContext, 0);
+
+    // Legacy boolean true maps to medium
+    convLevel = true;
+    ctl.sync();
+    flushRaf(nowMs += 20);
+    assert.equal(m.convLevel, 'medium', 'legacy boolean true must resolve to medium');
     assert.equal(m.root, layoutDom.mainBody, 'must mount onto [data-main-content-body] spanning Split View');
     assert.equal(m.glowCanvas, null, 'conv mode must strictly skip glowCanvas');
     assert.equal(m.glow, null);
@@ -900,7 +941,7 @@ test('Issue #63 conv pointer filtering, streaming 0fps guard, 1200ms idle sleep,
   }
 });
 
-test('Issue #63 ui-runtime integration: default convRipple=false is 0-intrusion, convRipple=true works with homeLayout=off/homeRipple=false, and destroy() cleans all attrs', () => {
+test('Issue #63 ui-runtime integration: 4-tier convRipple (off/subtle/medium/full), legacy bool compat, hot-switch, and destroy() cleanup', () => {
   const env = createConvDomEnv();
   const layoutDom = buildSplitShellLayout(env, 2);
   let nowMs = 3000;
@@ -943,33 +984,47 @@ test('Issue #63 ui-runtime integration: default convRipple=false is 0-intrusion,
   vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'home-ripple-host.js'), 'utf8'), sb);
   vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'ui-runtime.js'), 'utf8'), sb);
 
-  // 1) Default config (convRipple omitted -> false): 0 intrusion
+  // 1) Default config (convRipple omitted -> 'off'): 0 intrusion
   sb.__agCsUiMain({ homeLayout: 'off', homeRipple: false, motionLevel: 'ultra', ambientIntensity: '100' });
   const api = sb.__agPrism;
-  assert.equal(api.getState().cfg.convRipple, false, 'convRipple must default to false');
+  assert.equal(api.getState().cfg.convRipple, 'off', 'convRipple must default to "off"');
   assert.equal(api.getState().hasRipple, false);
   assert.equal(env.html.hasAttribute('data-ag-cs-conv-ripple'), false);
   assert.equal(layoutDom.mainBody.querySelector('.ag-cs-ripple-host'), null);
 
-  // 2) Enable convRipple=true while homeLayout='off' & homeRipple=false -> activates on main shell
+  // 2) Legacy boolean true -> normalized to 'medium', activates even with homeLayout='off' & homeRipple=false
   api.refreshConfig({ convRipple: true, homeLayout: 'off', homeRipple: false, motionLevel: 'ultra', ambientIntensity: '100' });
   while (rafs.length) rafs.shift()(nowMs += 16);
-  assert.equal(api.getState().cfg.convRipple, true);
+  assert.equal(api.getState().cfg.convRipple, 'medium', 'legacy boolean true must normalize to "medium"');
   assert.equal(api.getState().hasRipple, true);
   assert.equal(api.getState().rippleMode, 'conv');
   assert.equal(env.html.getAttribute('data-ag-cs-conv-ripple'), '1');
   assert.equal(layoutDom.mainBody.getAttribute('data-ag-cs-conv-ripple-host'), '1');
+  assert.equal(layoutDom.mainBody.querySelector('.ag-cs-ripple-host').getAttribute('data-conv-level'), 'medium');
   assert.equal(layoutDom.mainBody.querySelectorAll('.ag-cs-brand-glow').length, 0, 'conv mode must mount 0 glowCanvas');
   assert.equal(layoutDom.mainBody.querySelectorAll('.ag-cs-ripple-canvas').length, 1, 'conv mode must mount 1 rippleCanvas');
 
+  // 2b) Hot-switch subtle -> full -> off (legacy false -> 'off')
+  for (const lv of ['subtle', 'full']) {
+    api.refreshConfig({ convRipple: lv, homeLayout: 'off', homeRipple: false, motionLevel: 'ultra', ambientIntensity: '100' });
+    while (rafs.length) rafs.shift()(nowMs += 16);
+    assert.equal(api.getState().cfg.convRipple, lv);
+    assert.equal(layoutDom.mainBody.querySelector('.ag-cs-ripple-host').getAttribute('data-conv-level'), lv);
+  }
+  api.refreshConfig({ convRipple: false, homeLayout: 'off', homeRipple: false, motionLevel: 'ultra', ambientIntensity: '100' });
+  assert.equal(api.getState().cfg.convRipple, 'off', 'legacy boolean false must normalize to "off"');
+  assert.equal(api.getState().hasRipple, false);
+  assert.equal(env.html.hasAttribute('data-ag-cs-conv-ripple'), false);
+
   // 3) motionLevel='off' disables conv ripple and strips data-ag-cs-conv-ripple
-  api.refreshConfig({ convRipple: true, homeLayout: 'off', homeRipple: false, motionLevel: 'off', ambientIntensity: '100' });
+  api.refreshConfig({ convRipple: 'full', homeLayout: 'off', homeRipple: false, motionLevel: 'off', ambientIntensity: '100' });
   assert.equal(env.html.hasAttribute('data-ag-cs-conv-ripple'), false);
   assert.equal(api.getState().hasRipple, false);
 
   // 4) Re-enable motionLevel='standard', then destroy() leaves 0 residual attrs or DOM
-  api.refreshConfig({ convRipple: true, homeLayout: 'off', homeRipple: false, motionLevel: 'standard', ambientIntensity: '100' });
+  api.refreshConfig({ convRipple: 'subtle', homeLayout: 'off', homeRipple: false, motionLevel: 'standard', ambientIntensity: '100' });
   assert.equal(env.html.getAttribute('data-ag-cs-conv-ripple'), '1');
+  assert.equal(layoutDom.mainBody.querySelector('.ag-cs-ripple-host').getAttribute('data-conv-level'), 'subtle');
   api.destroy();
   assert.equal(env.html.hasAttribute('data-ag-cs-conv-ripple'), false);
   assert.equal(layoutDom.mainBody.hasAttribute('data-ag-cs-conv-ripple-host'), false);
@@ -984,7 +1039,7 @@ test('Issue #63 ui-runtime integration: default convRipple=false is 0-intrusion,
   layoutDom.mainBody.clientWidth = undefined;
   layoutDom.mainBody.clientHeight = undefined;
   assert.doesNotThrow(() => {
-    sb.__agCsUiMain({ convRipple: true, homeLayout: 'off', homeRipple: false, motionLevel: 'standard', ambientIntensity: '100' });
+    sb.__agCsUiMain({ convRipple: 'medium', homeLayout: 'off', homeRipple: false, motionLevel: 'standard', ambientIntensity: '100' });
     sb.__agPrism.destroy();
   }, 'ui-runtime + home-ripple-host must survive undefined container clientWidth/clientHeight');
 });

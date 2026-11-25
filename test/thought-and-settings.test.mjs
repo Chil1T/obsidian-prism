@@ -435,7 +435,7 @@ test('mountOrSyncSettingsSection mounts all 27 settings (including omniModule, l
     assert.equal(clipboardWrites.length, 1);
     const exportedObj = JSON.parse(clipboardWrites[0]);
     assert.equal(Object.keys(exportedObj.settings).length, 37);
-    assert.equal(exportedObj.settings.convRipple, false);
+    assert.equal(exportedObj.settings.convRipple, 'off');
     assert.equal(exportedObj.settings.autoArchiveOnExit, false);
     assert.equal(exportedObj.settings.effortMemory, 'on');
     assert.equal(exportedObj.settings.periodicModelPicker, 'on');

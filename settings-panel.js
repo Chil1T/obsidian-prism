@@ -54,7 +54,7 @@
     targetFps: mkSp(['60', '120', '180', 'native'], '180'),
     homeLayout: mkSp(['studio', 'classic', 'off']),
     homeRipple: S_T,
-    convRipple: S_F,
+    convRipple: mkSp(['off', 'subtle', 'medium', 'full'], 'off', { on: 'medium', true: 'medium', false: 'off' }),
     logoInk: mkSp(['accent', 'foreground']),
     language: mkSp(['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'], 'zh-CN', { yue: 'zh-CN', 'zh-HK': 'zh-TW', 'zh-MO': 'zh-TW' }),
     hostLocalization: S_AUTO,
@@ -86,8 +86,8 @@
 
   const SCENE_PRESETS = O.freeze({
     ultra: O.freeze({ motionLevel: 'ultra', targetFps: '180', homeRipple: true, mascot: 'crab', sidebarCompact: false, smoothCaret: true, ambientIntensity: '100' }),
-    focus: O.freeze({ motionLevel: 'subtle', targetFps: '120', homeRipple: false, convRipple: false, mascot: 'off', sidebarCompact: true, smoothCaret: true, ambientIntensity: '35' }),
-    eco: O.freeze({ motionLevel: 'off', targetFps: '60', homeRipple: false, convRipple: false, mascot: 'off', sidebarCompact: false, smoothCaret: false, ambientIntensity: '0' }),
+    focus: O.freeze({ motionLevel: 'subtle', targetFps: '120', homeRipple: false, convRipple: 'off', mascot: 'off', sidebarCompact: true, smoothCaret: true, ambientIntensity: '35' }),
+    eco: O.freeze({ motionLevel: 'off', targetFps: '60', homeRipple: false, convRipple: 'off', mascot: 'off', sidebarCompact: false, smoothCaret: false, ambientIntensity: '0' }),
   });
 
   const normThoughtStyle = (s) => (s === 'tech' || s === 'technical' ? 'technical' : s === 'concise' || s === 'custom' ? s : null);
@@ -1468,6 +1468,7 @@
       }
     }
     if ((key === 'periodicModelPicker' || key === 'omniModule' || key === 'sidebarStudio' || key === 'autoUpdate' || key === 'sidebarNavFold') && typeof val === 'boolean') val = val ? 'on' : 'off';
+    if (key === 'convRipple' && typeof val === 'boolean') val = val ? 'medium' : 'off';
     if (typeof spec.default === 'string' && typeof val === 'number' && Number.isFinite(val)) val = String(val);
     return spec.allowed.includes(val) ? { valid: true, value: val } : { valid: false };
   };
@@ -1812,6 +1813,10 @@
       if (k === 'mascot' && v !== undefined && v !== null && v !== '') {
         const p = parseMascotSpec(v);
         return p ? encodeMascotSpec(p) : PRISM_SETTINGS_SCHEMA.mascot.default;
+      }
+      if (k === 'convRipple') {
+        if (v === true || v === 'true' || v === 'on') return 'medium';
+        if (v === false || v === 'false') return 'off';
       }
       return v !== undefined && v !== null && v !== '' ? v : PRISM_SETTINGS_SCHEMA[k]?.default;
     };
@@ -2365,7 +2370,12 @@
             RS('targetFps', [['60', U('optFps60', '60')], ['120', U('optFps120', '120')], ['180', U('optFps180', '180')], ['native', U('optFpsNative')]]),
             RS('homeLayout', [['studio', U('optStudio')], ['classic', U('optClassic')], ['off', U('optNativeOff')]]),
             RS('homeRipple', onOff, 'Ripple'),
-            RS('convRipple', onOff),
+            RS('convRipple', [
+              ['off', U('optConvRippleOff', U('offLabel', 'Off'))],
+              ['subtle', U('optConvRippleSubtle', 'Subtle')],
+              ['medium', U('optConvRippleMedium', 'Medium')],
+              ['full', U('optConvRippleFull', 'Full')],
+            ]),
             RS('logoInk', [['accent', U('optAccent')], ['foreground', U('optForeground')]]),
             RS('language', langOpts),
             RS('hostLocalization', [['auto', U('optHostI18nAuto', 'Auto')], ['on', U('optHostI18nOn', U('onLabel', 'On'))], ['off', U('optHostI18nOff', U('offLabel', 'Off'))]], 'HostI18n'),

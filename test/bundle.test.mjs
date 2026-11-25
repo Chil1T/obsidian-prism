@@ -3436,16 +3436,21 @@ test('v1.0.1 compiler safety fixes, unified shared string pool (< 690 KiB CI bud
   }
   const reconciledLegacy = cdp.reconcileConfigAliases({ ripple: 'off', convRipple: 'on', homeMode: 'classic', lang: 'en', sidebar: 'off' });
   assert.equal(reconciledLegacy.homeRipple, false);
-  assert.equal(reconciledLegacy.convRipple, true);
+  assert.equal(reconciledLegacy.convRipple, 'medium');
+  assert.equal(cdp.reconcileConfigAliases({ convRipple: true }).convRipple, 'medium');
+  assert.equal(cdp.reconcileConfigAliases({ convRipple: false }).convRipple, 'off');
+  assert.equal(cdp.reconcileConfigAliases({ convRipple: 'full' }).convRipple, 'full');
   assert.equal(reconciledLegacy.homeLayout, 'classic');
   assert.equal(reconciledLegacy.language, 'en');
   assert.equal(reconciledLegacy.sidebarRestyle, false);
-  assert.equal(cdp.DEFAULT_CONFIG.convRipple, false);
-  assert.equal(cdp.validateConfigEntry('convRipple', true), true);
-  assert.equal(cdp.validateConfigEntry('convRipple', false), true);
+  assert.equal(cdp.DEFAULT_CONFIG.convRipple, 'off');
+  for (const tier of ['off', 'subtle', 'medium', 'full']) {
+    assert.equal(cdp.validateConfigEntry('convRipple', tier), true);
+  }
   assert.equal(cdp.validateConfigEntry('convRipple', 'invalid'), false);
-  assert.equal(expr1.includes('setConvRippleTitle'), false);
-  assert.equal(expr1.includes('setConvRippleDesc'), false);
+  for (const k of ['setConvRippleTitle', 'setConvRippleDesc', 'optConvRippleOff', 'optConvRippleSubtle', 'optConvRippleMedium', 'optConvRippleFull']) {
+    assert.equal(expr1.includes(k), false);
+  }
 
   // In-page host identity guard aborts cleanly on foreign user preview pages
   const foreignStyles = [];

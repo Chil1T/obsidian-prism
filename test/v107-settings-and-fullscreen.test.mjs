@@ -700,7 +700,7 @@ test('#6 updateChannel sends { version, channel } immediately without 40ms race 
     targetFps: '180',
     homeLayout: 'studio',
     homeRipple: true,
-    convRipple: false,
+    convRipple: 'off',
     logoInk: 'accent',
     language: 'zh-CN',
     hostLocalization: 'auto',
@@ -815,15 +815,22 @@ test('#6 updateChannel sends { version, channel } immediately without 40ms race 
     assert.equal(rowOf('convRipple').style.opacity, '');
     assert.equal(rowOf('convRipple').hasAttribute('data-ag-cs-dimmed'), false);
 
-    // convRipple switch sits adjacent right after homeRipple and toggles state.convRipple cleanly
+    // convRipple 4-tier segmented control sits adjacent right after homeRipple and updates state.convRipple cleanly
     const hrRow = rowOf('homeRipple');
     const crRow = rowOf('convRipple');
     const sibs = hrRow.parentElement.children;
     assert.equal(sibs.indexOf(crRow), sibs.indexOf(hrRow) + 1);
-    btnOf('convRipple', true).click();
-    assert.equal(state.convRipple, true);
-    btnOf('convRipple', false).click();
-    assert.equal(state.convRipple, false);
+    const crBtns = crRow.querySelectorAll('button[data-ag-cs-key="convRipple"]');
+    assert.deepEqual(
+      crBtns.map((b) => b.getAttribute('data-ag-cs-val')),
+      ['"off"', '"subtle"', '"medium"', '"full"']
+    );
+    assert.equal(crBtns[0].parentElement.hasAttribute('data-ui-kind'), false, '4-tier convRipple must render as segmented group, not switch');
+    for (const tier of ['subtle', 'medium', 'full', 'off']) {
+      btnOf('convRipple', tier).click();
+      assert.equal(state.convRipple, tier);
+      assert.equal(btnOf('convRipple', tier).getAttribute('aria-pressed'), 'true');
+    }
 
     // omniModule=off -> linkTarget dims
     btnOf('omniModule', 'off').click();
