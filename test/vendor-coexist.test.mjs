@@ -2776,3 +2776,48 @@ test('Smoked Obsidian Wave 1: style.css hygiene (0 :has, ASCII, LF, no BOM, home
     assert.ok(bytes < 549500, `Channel 1 (${lang}) must be strictly < 549,500 B, got ${bytes}`);
   }
 });
+
+test('Issue #81: inline-fallback TIER_CSS uses --pt-c instead of --c so external Dashboard card background is never overridden', async () => {
+  const fbPath = path.join(ROOT_DIR, 'vendor', 'pulse-dashboard', 'inline-fallback.js');
+  const bridgePath = path.join(ROOT_DIR, 'pulse-vial-bridge.js');
+  const fbSrc = fs.readFileSync(fbPath, 'utf8');
+  const bridgeBytes = fs.statSync(bridgePath).size;
+
+  assert.ok(bridgeBytes < 31000, `pulse-vial-bridge.js must stay < 31,000 B (got ${bridgeBytes})`);
+  assert.equal(/--c\s*:/.test(fbSrc), false, 'inline-fallback.js must not declare --c: CSS custom property');
+  assert.equal(/var\(\s*--c\s*[,)]/.test(fbSrc), false, 'inline-fallback.js must not reference var(--c)');
+  assert.ok(fbSrc.includes('--pt-c:var(--pv-tint,var(--pulse-ring,#3186ff))'), 'TIER_CSS must declare isolated --pt-c');
+  assert.ok(fbSrc.includes('color-mix(in srgb,var(--pt-c) '), 'TIER_CSS tier-5 highlight must reference var(--pt-c)');
+
+  // Runtime check: external #ag-pulse-status-bar receives style[data-pt="1"] without --c collision
+  const telemetryMod = require(fbPath);
+  const env = createLightweightDom();
+  const extBar = env.doc.createElement('div');
+  extBar.id = 'ag-pulse-status-bar';
+  const extStyles = [];
+  const bridgeStyle = env.doc.createElement('style');
+  bridgeStyle.setAttribute('data-ag-cs-pulse-style', '1');
+  bridgeStyle.textContent = ':host{--c:linear-gradient(160deg,#12151ff5,#0b0d13fa);}.card{background:var(--c)!important;}';
+  extStyles.push(bridgeStyle);
+  extBar.shadowRoot = {
+    querySelector: (sel) => (String(sel).includes('data-pt') ? extStyles.find((s) => s.getAttribute('data-pt') === '1') || null : null),
+    appendChild: (el) => { extStyles.push(el); return el; },
+  };
+  const footer = env.doc.createElement('div');
+  footer.className = 'agy-composer-footer';
+  footer.getBoundingClientRect = () => ({ left: 0, top: 0, width: 320, height: 30, right: 320, bottom: 30 });
+  footer.appendChild(extBar);
+  env.doc.body.appendChild(footer);
+
+  const ctl = telemetryMod.createTelemetryController({ window: env.win, document: env.doc });
+  try {
+    ctl.sync({ telemetryModule: 'auto' });
+    const ptStyle = extStyles.find((s) => s.getAttribute('data-pt') === '1');
+    assert.ok(ptStyle, 'external bar shadowRoot must receive style[data-pt="1"]');
+    assert.equal(/--c\s*:/.test(ptStyle.textContent), false, 'injected style[data-pt="1"] must not define --c:');
+    assert.ok(ptStyle.textContent.includes('--pt-c:'), 'injected style[data-pt="1"] must define --pt-c:');
+    assert.ok(ptStyle.textContent.includes('var(--pt-c)'), 'injected style[data-pt="1"] must reference var(--pt-c)');
+  } finally {
+    ctl.destroy();
+  }
+});
