@@ -12,6 +12,9 @@
   const H_ATTR = 'data-ag-cs-conv-ripple-host';
   const SB_S = 'aside,[data-side-panel-body]';
   const L_ATTR = 'data-conv-level';
+  const G_CLS = 'ag-cs-brand-glow';
+  const G_TID = 'onboarding-brand-glow';
+  const R_CLS = 'ag-cs-ripple-canvas';
   const C_P = {
     subtle: [0.6, 0.4, 0.45, 0.55, 32, 340, 72, 196, 0.62, 0.28, 0.72],
     medium: [0.85, 0.75, 0.75, 0.82, 22, 270, 54, 215, 0.85, 0.34, 0.88],
@@ -47,6 +50,8 @@
     let convHost = null;
     let timer = 0;
     let rRaf = 0;
+    let recT = 0;
+    let recRaf = 0;
     let mountedAt = 0;
     let tideAt = 0;
     let ro = null;
@@ -189,6 +194,11 @@
       rRaf = cAF(rRaf);
     }
 
+    function clearRec() {
+      if (recT) { clearTimeout(recT); recT = 0; }
+      recRaf = cAF(recRaf);
+    }
+
     function detachRoot(m) {
       if (!m?.root) return;
       bindRoot(m.root, m, false);
@@ -199,6 +209,7 @@
       setConvState(false, null);
       if (!rippleMount) return;
       stopTimers(rippleMount);
+      clearRec();
       ro?.disconnect();
       detachRoot(rippleMount);
       rippleMount.host.remove();
@@ -211,6 +222,7 @@
       if (!rippleMount) return;
       const m = rippleMount;
       stopTimers(m);
+      clearRec();
       ro?.disconnect();
       unbindWin?.();
       detachRoot(m);
@@ -290,7 +302,7 @@
       const host = mkEl('div', 'ag-cs-ripple-host');
       host.setAttribute('data-ripple-mode', mode);
       host.setAttribute(L_ATTR, lv);
-      let canvas = mkEl('canvas', 'ag-cs-ripple-canvas');
+      let canvas = mkEl('canvas', R_CLS);
       host.appendChild(canvas);
 
       const auraState = { x: 0, y: 0, active: false };
@@ -315,6 +327,9 @@
       let pw = 0;
       let ph = 0;
       let shrunk = false;
+      let fLost = false;
+      let gLost = false;
+      let recTries = 0;
 
       const state = {
         mode,
@@ -342,34 +357,122 @@
       const hP = () => Boolean(d.hidden || wb || isAB() || isPp() || (state.mode === 'conv' && isConvBlocked()));
       const hasSz = (c) => Boolean(c && c.width > 0 && c.height > 0);
       const invAll = () => { state.field?.invalidate?.(); state.glow?.invalidate?.(); };
+      const setVis = (el, on) => { if (el?.style) el.style.display = on ? '' : 'none'; };
+      const isLost = (cv, inst) => Boolean(inst?.isContextLost?.() || (inst?.mode !== '2d' && cv?.getContext?.('webgl2')?.isContextLost?.()));
+      const hasG = isF(rippleCore.mountBrandHorizonGlow);
+
+      function swapCv(oldEl, cls, tid, bf) {
+        const n = mkEl('canvas', cls);
+        if (tid) n.setAttribute('data-testid', tid);
+        oldEl?.replaceWith ? oldEl.replaceWith(n) : oldEl?.parentNode?.replaceChild ? oldEl.parentNode.replaceChild(n, oldEl) : (oldEl?.remove?.(), bf && host.insertBefore ? host.insertBefore(n, canvas) : host.appendChild(n));
+        return n;
+      }
+
+      function setCvSz(cols, rows) {
+        canvas.width = pw;
+        canvas.height = ph;
+        canvas.style.width = `${cols * rippleCore.RIPPLE.cellWidth}px`;
+        canvas.style.height = `${rows * rippleCore.RIPPLE.cellHeight}px`;
+      }
+
+      function onLost(isF0) {
+        if (isDestroyed() || state.parked) return;
+        if (isF0) { fLost = true; setVis(canvas, 0); }
+        else { gLost = true; setVis(state.glowCanvas, 0); }
+        if (recTries >= 3 || recT || recRaf) return;
+        const run = () => { recT = recRaf = 0; recoverLost(); };
+        const tid = typeof setTimeout === 'function' ? setTimeout(run, 32) : 0;
+        if (tid) recT = tid;
+        else if (typeof requestAnimationFrame === 'function') recRaf = rAF(run);
+        else run();
+      }
+
+      function mountGlow(p2d, sw) {
+        if (!state.glowCanvas) return;
+        if (sw) { try { state.glow?.dispose?.(true); } catch {} state.glowCanvas = swapCv(state.glowCanvas, G_CLS, G_TID, 1); }
+        const mk = (u) => (hasG ? rippleCore.mountBrandHorizonGlow(state.glowCanvas, { prefer2D: !!u, onContextLost: () => onLost(0) }) : { mode: 'none', resize() {}, draw() {}, dispose() {} });
+        let g = mk(p2d);
+        if (hasG && g?.mode === 'none' && !p2d) {
+          try { g.dispose?.(true); } catch {}
+          state.glowCanvas = swapCv(state.glowCanvas, G_CLS, G_TID, 1);
+          g = mk(1);
+        }
+        state.glow = g;
+        gLost = false;
+        setVis(state.glowCanvas, !hasG || g?.mode !== 'none');
+      }
+
+      function mountField(cols, rows, p2d, sw) {
+        if (sw) canvas = state.canvas = swapCv(canvas, R_CLS);
+        setCvSz(cols, rows);
+        const mk = (u) => rippleCore.createGlyphField(canvas, cols, rows, state.waves, { prefer2D: !!u, onContextLost: () => onLost(1) });
+        let f = mk(p2d);
+        if (cols > 0 && rows > 0 && f?.mode === 'none' && !p2d) {
+          try { f.dispose?.(true); } catch {}
+          canvas = state.canvas = swapCv(canvas, R_CLS);
+          setCvSz(cols, rows);
+          f = mk(1);
+        }
+        fLost = false;
+        setVis(canvas, cols <= 0 || rows <= 0 || f?.mode !== 'none');
+        return f;
+      }
+
+      function recoverLost() {
+        if (isDestroyed() || state.parked || (!fLost && !gLost)) return;
+        if (d.hidden) return reclaim();
+        const nf = fLost;
+        const ng = gLost;
+        fLost = gLost = false;
+        const p2d = ++recTries >= 2;
+        if (nf && state.width > 0 && state.height > 0) {
+          try { state.field?.dispose?.(true); } catch {}
+          state.field = mountField(Math.ceil(state.width / rippleCore.RIPPLE.cellWidth), Math.ceil(state.height / rippleCore.RIPPLE.cellHeight), p2d, 1);
+          tok = sampleTok(canvas);
+          cRect = null;
+          updateCalm();
+        }
+        if (ng && state.glowCanvas && state.mode === 'home') {
+          mountGlow(p2d, 1);
+          if (state.width > 0 && state.height > 0 && state.glow?.mode !== 'none') state.glow?.resize?.(state.width, state.height, 0.6);
+        }
+        force1 = true;
+        drawn = false;
+        invAll();
+        wake();
+      }
 
       syncModeFn = (nm) => {
         if (nm === 'conv') {
+          gLost = false;
           try { state.glow?.dispose?.(); } catch {}
           state.glow = null;
           state.glowCanvas?.remove?.();
           state.glowCanvas = null;
           tideAt = 0;
         } else if (!state.glowCanvas) {
-          const gc = mkEl('canvas', 'ag-cs-brand-glow');
-          gc.setAttribute('data-testid', 'onboarding-brand-glow');
+          const gc = mkEl('canvas', G_CLS);
+          gc.setAttribute('data-testid', G_TID);
           host.insertBefore ? host.insertBefore(gc, state.canvas) : host.appendChild(gc);
           state.glowCanvas = gc;
-          state.glow = rippleCore.mountBrandHorizonGlow ? rippleCore.mountBrandHorizonGlow(gc) : { mode: 'none', resize() {}, draw() {}, dispose() {} };
+          mountGlow(0, 0);
         }
         gZero = false;
       };
       syncModeFn(mode);
 
-      const syncG = (w, h) => {
+      function syncG(w, h) {
         const gc = state.glowCanvas;
         if (!gc || w <= 0 || h <= 0) return;
+        if (gLost || isLost(gc, state.glow)) mountGlow(recTries >= 2, 1);
+        const cur = state.glowCanvas;
+        if (!cur || (hasG && state.glow?.mode === 'none')) return;
         state.glow?.resize?.(w, h, 0.6);
-        if (!gc.width || !gc.height) {
-          gc.width = Math.max(1, Math.round(w * 0.6));
-          gc.height = Math.max(1, Math.round(h * 0.6));
+        if (!cur.width || !cur.height) {
+          cur.width = Math.max(1, Math.round(w * 0.6));
+          cur.height = Math.max(1, Math.round(h * 0.6));
         }
-      };
+      }
 
       const reclaim = () => {
         enterIdleSleep();
@@ -402,9 +505,10 @@
         const h = Math.max(0, Number(cur.clientHeight) || 0);
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
         const gc = state.glowCanvas;
-        if (w === state.width && h === state.height && dpr === state.dpr) {
+        const lostF = fLost || isLost(canvas, state.field);
+        if (w === state.width && h === state.height && dpr === state.dpr && !lostF) {
           cRect = null;
-          if (shrunk || (pw > 0 && ph > 0 && (!hasSz(canvas) || (gc && !hasSz(gc))))) {
+          if (shrunk || gLost || isLost(gc, state.glow) || (pw > 0 && ph > 0 && (!hasSz(canvas) || (gc && !hasSz(gc))))) {
             shrunk = drawn = false;
             force1 = true;
             canvas.width = pw;
@@ -418,6 +522,7 @@
         const ch = rippleCore.RIPPLE.cellHeight;
         const cols = Math.ceil(w / cw);
         const rows = Math.ceil(h / ch);
+        const was2d = state.field?.mode === '2d';
         state.width = w;
         state.height = h;
         state.dpr = dpr;
@@ -426,18 +531,9 @@
         shrunk = drawn = false;
         force1 = true;
         state.field.dispose(true);
-        if (canvas.getContext?.('webgl2')?.isContextLost?.()) {
-          const next = mkEl('canvas', 'ag-cs-ripple-canvas');
-          canvas.replaceWith ? canvas.replaceWith(next) : host.replaceChild?.(next, canvas);
-          canvas = state.canvas = next;
-        }
-        canvas.width = pw;
-        canvas.height = ph;
-        canvas.style.width = `${cols * cw}px`;
-        canvas.style.height = `${rows * ch}px`;
         syncG(w, h);
         state.waves = rippleCore.createWaveField(cols, rows);
-        state.field = rippleCore.createGlyphField(canvas, cols, rows, state.waves);
+        state.field = mountField(cols, rows, was2d && !lostF, lostF);
         tok = sampleTok(canvas);
         cRect = null;
         updateCalm();
@@ -550,6 +646,9 @@
       };
       state.reattach = () => {
         if (timer) { clearTimeout(timer); timer = 0; }
+        clearRec();
+        fLost = gLost = false;
+        recTries = 0;
         prev = nowOf();
         wanted = false;
         force1 = true;

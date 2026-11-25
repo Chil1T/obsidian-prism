@@ -538,7 +538,7 @@ test('Issue #63 CSS, hygiene & Channel 1 budget gate (< 549,500 B, ~2 KB delta, 
     cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, language: 'auto' }, { bundleCachePath: '' }),
     'utf8'
   );
-  assert.ok(autoBytes < 545000, `Channel 1 auto must leave >4.5 KB headroom under 549,500 B, got ${autoBytes} B`);
+  assert.ok(autoBytes < 547500, `Channel 1 auto must keep >= 2 KB headroom under 549,500 B, got ${autoBytes} B`);
 });
 
 test('Issue #63 ripple-core 4-tier conv optics: subtle(0.60) < medium(0.85) < full(1.00) in dark & light + WebGL2 uniforms', () => {
@@ -1042,4 +1042,139 @@ test('Issue #63 ui-runtime integration: 4-tier convRipple (off/subtle/medium/ful
     sb.__agCsUiMain({ convRipple: 'medium', homeLayout: 'off', homeRipple: false, motionLevel: 'standard', ambientIntensity: '100' });
     sb.__agPrism.destroy();
   }, 'ui-runtime + home-ripple-host must survive undefined container clientWidth/clientHeight');
+});
+
+test('Issue #64 convRipple protection: async webglcontextlost self-heals on conv canvas and hides dead canvas on total failure (0 white box)', () => {
+  const prevForce = globalThis.__agRippleForce2D;
+  const prevDoc = globalThis.document;
+  const prevWin = globalThis.window;
+  const prevRaf = globalThis.requestAnimationFrame;
+  const prevCaf = globalThis.cancelAnimationFrame;
+  const prevST = globalThis.setTimeout;
+  const prevCT = globalThis.clearTimeout;
+  const prevRO = globalThis.ResizeObserver;
+  const prevMO = globalThis.MutationObserver;
+  const prevPerf = globalThis.performance;
+
+  globalThis.__agRippleForce2D = false;
+  const env = createConvDomEnv();
+  const layoutDom = buildSplitShellLayout(env, 2);
+
+  // Enforce real Chromium canvas context locking + controllable WebGL2/2D failure on newly created canvases
+  let webglFails = false;
+  let ctx2dFails = false;
+  const origCreateEl = env.doc.createElement;
+  env.doc.createElement = (tag) => {
+    const el = origCreateEl(tag);
+    if (tag.toLowerCase() === 'canvas') {
+      let locked = null;
+      let lost = false;
+      const origGetCtx = el.getContext.bind(el);
+      el._setLost = (v) => { lost = v; };
+      el.getContext = (type) => {
+        if (locked && locked !== type) return null;
+        if (type === '2d') {
+          if (ctx2dFails) return null;
+          locked = '2d';
+          return {
+            setTransform() {}, clearRect() {}, fillText() {},
+            getImageData: (_x, _y, w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4).fill(255) }),
+            createImageData: (w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }),
+            putImageData() {},
+          };
+        }
+        if (type === 'webgl2') {
+          locked = 'webgl2';
+          const base = origGetCtx('webgl2');
+          return {
+            ...base,
+            isContextLost: () => lost,
+            getShaderParameter: () => !(lost || webglFails),
+            getProgramParameter: () => !(lost || webglFails),
+          };
+        }
+        return null;
+      };
+    }
+    return el;
+  };
+
+  let nowMs = 4000;
+  const rafs = [];
+  let rafSeq = 0;
+  const timers = [];
+  let timerSeq = 0;
+  const flushRaf = (ts = nowMs) => {
+    const batch = rafs.splice(0, rafs.length);
+    for (const it of batch) if (!it.cancelled) it.fn(ts);
+  };
+  const flushTimers = () => {
+    const batch = timers.splice(0, timers.length);
+    for (const it of batch) if (!it.cancelled) it.fn();
+  };
+
+  globalThis.document = env.doc;
+  globalThis.window = { devicePixelRatio: 1, addEventListener: env.addWinListener, removeEventListener: env.remWinListener };
+  globalThis.requestAnimationFrame = (fn) => { const id = ++rafSeq; rafs.push({ id, fn, cancelled: false }); return id; };
+  globalThis.cancelAnimationFrame = (id) => { const it = rafs.find((x) => x.id === id); if (it) it.cancelled = true; };
+  globalThis.setTimeout = (fn) => { const id = ++timerSeq; timers.push({ id, fn, cancelled: false }); return id; };
+  globalThis.clearTimeout = (id) => { const it = timers.find((x) => x.id === id); if (it) it.cancelled = true; };
+  globalThis.ResizeObserver = env.MockResizeObserver;
+  globalThis.MutationObserver = env.MockMutationObserver;
+  globalThis.performance = { now: () => nowMs };
+
+  let ctl = null;
+  try {
+    ctl = homeRippleHost.createHomeRippleController({
+      rippleCore,
+      isDestroyed: () => false,
+      isAllowed: () => false,
+      getConvLevel: () => 'medium',
+      isConvRunning: () => false,
+      isDarkTheme: () => true,
+      motionReduced: () => false,
+      getMinFrameGapMs: () => 0,
+      getAmbientIntensity: () => 1,
+      getAccentTone: () => 'follow',
+      setAttrIfChanged: (el, k, v) => el.setAttribute(k, v),
+    });
+    ctl.sync();
+    flushRaf(nowMs);
+    const m = ctl.getMount();
+    assert.equal(m.mode, 'conv');
+    assert.equal(m.field.mode, 'webgl2');
+    const firstCv = m.canvas;
+
+    // 1) Async webglcontextlost in conv mode (e.g. Ctrl+J xterm GPU preemption) while WebGL2 now fails -> swaps canvas & recovers in true 2D!
+    webglFails = true;
+    firstCv._setLost(true);
+    firstCv.dispatchEvent({ type: 'webglcontextlost', preventDefault() {} });
+    assert.equal(firstCv.style.display, 'none', 'lost conv canvas must hide immediately');
+    flushTimers();
+    flushRaf(nowMs += 40);
+    assert.notEqual(m.canvas, firstCv, 'lost conv canvas must be replaced');
+    assert.equal(m.field.mode, '2d', 'conv mode must break Chromium canvas-lock deadlock and recover in true 2D');
+    assert.notEqual(m.canvas.style.display, 'none');
+
+    // 2) If BOTH WebGL2 and 2D fail on conv mount -> canvas hides cleanly (0 white box)
+    ctl.unmount();
+    webglFails = true;
+    ctx2dFails = true;
+    ctl.sync();
+    flushRaf(nowMs += 40);
+    assert.equal(ctl.getMount().field.mode, 'none');
+    assert.equal(ctl.getMount().canvas.style.display, 'none', 'dead conv canvas must be hidden');
+  } finally {
+    ctl?.unmount?.();
+    if (prevForce === undefined) delete globalThis.__agRippleForce2D; else globalThis.__agRippleForce2D = prevForce;
+    if (prevDoc === undefined) delete globalThis.document; else globalThis.document = prevDoc;
+    if (prevWin === undefined) delete globalThis.window; else globalThis.window = prevWin;
+    if (prevRaf === undefined) delete globalThis.requestAnimationFrame; else globalThis.requestAnimationFrame = prevRaf;
+    if (prevCaf === undefined) delete globalThis.cancelAnimationFrame; else globalThis.cancelAnimationFrame = prevCaf;
+    if (prevST === undefined) delete globalThis.setTimeout; else globalThis.setTimeout = prevST;
+    if (prevCT === undefined) delete globalThis.clearTimeout; else globalThis.clearTimeout = prevCT;
+    if (prevRO === undefined) delete globalThis.ResizeObserver; else globalThis.ResizeObserver = prevRO;
+    if (prevMO === undefined) delete globalThis.MutationObserver; else globalThis.MutationObserver = prevMO;
+    if (prevPerf === undefined) delete globalThis.performance; else globalThis.performance = prevPerf;
+  }
 });

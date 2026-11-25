@@ -785,7 +785,14 @@ color = vec4(rgb * a, a);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       return tex;
     }
+    function free() {
+      if (program) gl.deleteProgram(program);
+      if (cellTexture) gl.deleteTexture(cellTexture);
+      if (atlasTexture) gl.deleteTexture(atlasTexture);
+      program = cellTexture = atlasTexture = null;
+    }
     function build() {
+      free();
       program = gl.createProgram();
       const vs = compile(gl.VERTEX_SHADER, VERTEX_SHADER);
       const fs = compile(gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
@@ -832,11 +839,6 @@ color = vec4(rgb * a, a);
       gl.uniform1f(uniforms.glyphCount, GLYPHS.length);
       atlasKey = key;
     }
-    function free() {
-      if (program) gl.deleteProgram(program);
-      if (cellTexture) gl.deleteTexture(cellTexture);
-      if (atlasTexture) gl.deleteTexture(atlasTexture);
-    }
     try {
       build();
     } catch {
@@ -847,7 +849,9 @@ color = vec4(rgb * a, a);
       mode: 'webgl2',
       data,
       build,
+      isContextLost: () => Boolean(gl.isContextLost?.()),
       draw(palette, dpr, uploadCells = true) {
+        if (!program || gl.isContextLost?.()) return;
         buildAtlas(palette.fontFamily, dpr);
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.uniform2f(uniforms.size, canvas.width, canvas.height);
@@ -1147,7 +1151,7 @@ color = vec4(rgb * a, a);
   function createGlyphField(canvas, columns, rows, waves, options) {
     columns = clampDim(columns);
     rows = clampDim(rows);
-    const force2D = typeof globalThis !== 'undefined' && globalThis.__agRippleForce2D === true;
+    const force2D = Boolean(options && (options.prefer2D || options.force2D)) || (typeof globalThis !== 'undefined' && globalThis.__agRippleForce2D === true);
     const renderer = (columns > 0 && rows > 0)
       ? ((force2D ? null : createWebGL2Renderer(canvas, columns, rows)) || create2DRenderer(canvas, columns, rows))
       : null;
@@ -1237,11 +1241,8 @@ color = vec4(rgb * a, a);
       }
       return lastZonesNormalized;
     }
-    function onContextLost(e) { e.preventDefault(); }
-    function onContextRestored() {
-      if (renderer) renderer.build();
-      stale = true;
-    }
+    const onContextLost = (e) => { e?.preventDefault?.(); try { options?.onContextLost?.(e); } catch {} };
+    const onContextRestored = () => { try { renderer?.build?.(); } catch {} stale = true; };
     if (canvas && canvas.addEventListener) {
       canvas.addEventListener('webglcontextlost', onContextLost);
       canvas.addEventListener('webglcontextrestored', onContextRestored);
@@ -1306,6 +1307,7 @@ color = vec4(rgb * a, a);
     }
     return {
       mode: renderer ? renderer.mode : 'none',
+      isContextLost: () => Boolean(renderer && renderer.isContextLost && renderer.isContextLost()),
       invalidate() { stale = true; },
       setCalmZones(zones) {
         instanceZones = normalizeZones(zones);
@@ -1956,7 +1958,12 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
       }
       return sh;
     }
+    function free() {
+      if (program) gl.deleteProgram(program);
+      program = null;
+    }
     function build() {
+      free();
       const vs = compile(gl.VERTEX_SHADER, GLOW_VERT_SHADER);
       const fs = compile(gl.FRAGMENT_SHADER, HORIZON_FRAGMENT_SHADER);
       program = gl.createProgram();
@@ -1976,18 +1983,21 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
     try {
       build();
     } catch {
-      if (program) gl.deleteProgram(program);
+      try { free(); } catch {}
       return null;
     }
     return {
       mode: 'webgl2',
       build,
+      isContextLost: () => Boolean(gl.isContextLost?.()),
       clear() {
+        if (!program || gl.isContextLost?.()) return;
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT);
       },
       draw(w, h, dpr, timeSec, dark, intensity, presence, reach = DEFAULT_HORIZON_AURA.reach, prism = 0, surge = 0, speed = 1, spectrumCode = 0, semanticCode = 0) {
+        if (!program || gl.isContextLost?.()) return;
         gl.viewport(0, 0, w, h);
         gl.useProgram(program);
         gl.uniform2f(u.uRes, w, h);
@@ -2007,10 +2017,9 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
       },
-      dispose() {
-        if (program) gl.deleteProgram(program);
-        program = null;
-        try { gl.getExtension?.('WEBGL_lose_context')?.loseContext?.(); } catch {}
+      dispose(keep) {
+        free();
+        if (!keep) try { gl.getExtension?.('WEBGL_lose_context')?.loseContext?.(); } catch {}
       },
     };
   }
@@ -2311,10 +2320,11 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
         draw() {},
         drawStaticSnapshot() { return false; },
         isSleeping() { return true; },
+        isContextLost() { return false; },
         dispose() {},
       };
     }
-    const force2D = Boolean(options.force2D) || (typeof globalThis !== 'undefined' && globalThis.__agRippleForce2D === true);
+    const force2D = Boolean(options.prefer2D || options.force2D) || (typeof globalThis !== 'undefined' && globalThis.__agRippleForce2D === true);
     const renderer = (force2D ? null : createBrandHorizonGLRenderer(canvas)) || createBrandHorizon2DRenderer(canvas);
     let cssW = Math.max(0, Number(options.width || canvas.clientWidth || 0));
     let cssH = Math.max(0, Number(options.height || canvas.clientHeight || 0));
@@ -2351,11 +2361,8 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
     let clearedZero = false;
     let stale = true;
     let sleeping = false;
-    function onContextLost(e) { if (e && e.preventDefault) e.preventDefault(); }
-    function onContextRestored() {
-      if (renderer && renderer.build) renderer.build();
-      stale = true;
-    }
+    const onContextLost = (e) => { e?.preventDefault?.(); try { options?.onContextLost?.(e); } catch {} };
+    const onContextRestored = () => { try { renderer?.build?.(); } catch {} stale = true; };
     if (canvas.addEventListener) {
       canvas.addEventListener('webglcontextlost', onContextLost);
       canvas.addEventListener('webglcontextrestored', onContextRestored);
@@ -2570,6 +2577,7 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
     }
     return {
       mode: renderer ? renderer.mode : 'none',
+      isContextLost: () => Boolean(renderer && renderer.isContextLost && renderer.isContextLost()),
       resize(w, h, nextDpr) {
         syncSize(w, h, nextDpr);
       },
@@ -2600,13 +2608,13 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
         stale = true;
         return renderInternal(nowInput, isDarkOrOpts, strengthArg, extraArg, true);
       },
-      dispose() {
+      dispose(keep) {
         sleeping = true;
         if (canvas.removeEventListener) {
           canvas.removeEventListener('webglcontextlost', onContextLost);
           canvas.removeEventListener('webglcontextrestored', onContextRestored);
         }
-        if (renderer) renderer.dispose();
+        if (renderer) renderer.dispose(keep);
       },
     };
   }

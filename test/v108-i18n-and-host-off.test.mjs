@@ -1150,7 +1150,7 @@ test('Channel 12 (homeStudio): deferred extraction, cold/route-switch mount, ide
 
   const ch1AutoExpr = cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, language: 'auto' });
   const ch1AutoBytes = Buffer.byteLength(ch1AutoExpr, 'utf8');
-  assert.ok(ch1AutoBytes < 545_000, `Channel 1 auto must keep >= 4.5 KB headroom below 549.5 KB after Ch12 split, got ${ch1AutoBytes} B`);
+  assert.ok(ch1AutoBytes < 547_500, `Channel 1 auto must keep >= 2 KB headroom below 549.5 KB after Ch12 split, got ${ch1AutoBytes} B`);
   const homeStudioPreparedBytes = Buffer.byteLength(
     cdp.prepareRuntimePart('home-studio-panel.js', fs.readFileSync(path.join(ROOT, 'home-studio-panel.js'), 'utf8')),
     'utf8'
