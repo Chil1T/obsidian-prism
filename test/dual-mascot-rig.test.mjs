@@ -3072,3 +3072,25 @@ test('PR #51 queued-messages-card roof-perch: zero bottom gap, interactive roof 
     for (const id of timers) clearTimeout(id);
   }
 });
+
+test('subtle motion [role="button"] rules exclude .ag-v2-mascot-actor and [data-no-press-spring="1"] so transform positioning is preserved on hover/active', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { fileURLToPath } = require('node:url');
+  const cssPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'style.css');
+  const css = fs.readFileSync(cssPath, 'utf8');
+  const subtleStart = css.indexOf('&[data-ag-cs-motion="subtle"]{');
+  assert.ok(subtleStart >= 0, 'style.css must define &[data-ag-cs-motion="subtle"]');
+  const subtleEnd = css.indexOf('\n}', subtleStart);
+  assert.ok(subtleEnd > subtleStart, 'subtle motion block must close cleanly');
+  const subtleBlock = css.slice(subtleStart, subtleEnd);
+
+  const lines = subtleBlock.split('\n').filter((line) => line.includes('[role="button"]'));
+  assert.equal(lines.length, 2, 'expected transition override and :hover/:active transform:none rules for [role="button"] in subtle block');
+  for (const line of lines) {
+    assert.ok(
+      line.includes('[role="button"]:not(.ag-v2-mascot-actor):not([data-no-press-spring="1"])'),
+      `subtle rule must exclude mascot actors so inline translate3d is never clobbered: ${line}`
+    );
+  }
+});

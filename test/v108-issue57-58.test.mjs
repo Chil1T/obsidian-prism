@@ -334,12 +334,12 @@ test('Issue #58 Bugs 3 & 5: focus outline suppression on conversation-view/autos
   assert.ok(subtleIdx > 0, 'subtle motion block must exist');
   const subtleSlice = css.slice(subtleIdx, css.indexOf('\n}\n', subtleIdx));
   assert.ok(
-    subtleSlice.includes('& :is(button,[role="button"]):not(.ag-v2-mascot-actor):not([data-no-press-spring="1"]):is(:hover,:active){transform:none !important;}'),
+    subtleSlice.includes('& :is(button,[role="button"]:not(.ag-v2-mascot-actor):not([data-no-press-spring="1"])):is(:hover,:active){transform:none !important;}'),
     'subtle motion mode must exclude .ag-v2-mascot-actor from transform:none !important on :hover/:active'
   );
   assert.ok(
-    subtleSlice.includes('[role="button"]:not(.ag-v2-mascot-actor)'),
-    'subtle motion transition-property rule must exclude .ag-v2-mascot-actor'
+    subtleSlice.includes('[role="button"]:not(.ag-v2-mascot-actor):not([data-no-press-spring="1"])'),
+    'subtle motion transition-property rule must exclude .ag-v2-mascot-actor and [data-no-press-spring="1"]'
   );
 
   // Issue #58 residual #1: peek mode must NOT hide .ag-v2-mini-pile (keeps 3 mini crabs visible), while keeping .ag-v2-mascot-actor::after shadow hidden & pointer-events passthrough
@@ -390,6 +390,25 @@ test('Issue #58 Bugs 3 & 5: focus outline suppression on conversation-view/autos
   assert.ok(leftFlexLine.includes('flex:0 1 auto !important;'), 'left footer flex wrappers must allow shrinking for /btw button');
   const modelTrigLine = footerSlice.split('\n').find((l) => l.startsWith('& [data-testid="model-selector-trigger"]{')) || '';
   assert.ok(modelTrigLine.includes('flex:0 1 auto !important;'), 'model-selector-trigger must shrink first to yield space for /btw button');
+
+  // Issue #80 anti-flicker CSS hardening:
+  // 1) Keep legacy z-index:65 rule AND elevate nested positioning containers to z-index:6010 above host z-[6000]
+  assert.ok(
+    css.includes('html[data-ag-cs-model-menu="1"] :is([data-ag-cs-model-submenu="1"],[data-testid="context-menu-submenu-popup"]){z-index:65 !important;}'),
+    'must retain legacy z-index:65 model submenu rule'
+  );
+  assert.ok(
+    css.includes('html[data-ag-cs-model-menu="1"] :is([role="presentation"],[data-nested],[data-side]):is([data-ag-cs-model-submenu="1"],[data-testid="context-menu-submenu-popup"]){z-index:6010 !important;}'),
+    'must elevate v2.35+ nested model submenu positioning containers above host z-[6000]'
+  );
+  // 2) Disable scale(.965) & ag-cs-lens-in zoom jitter on L2 / nested model submenus (opacity-only transition)
+  assert.ok(
+    css.includes('html[data-ag-cs-style][data-ag-cs-model-menu="1"] :is([data-ag-cs-model-submenu="1"],[data-ag-cs-model-submenu="1"] .agy-overlay,[data-ag-cs-orch-l2="1"],[data-testid="context-menu-submenu-popup"]):not(#_){animation:none !important;transition:opacity 100ms ease-out !important;&:is([data-starting-style],[data-ending-style]){opacity:0 !important;transform:none !important;}}'),
+    'must disable lens-in / scale(.965) hitbox shrinkage on L2 / nested model submenus'
+  );
+  // 3) All 4 :not([data-ces-orch-row="1"]) menu-item rules must also exclude [data-testid="orchestrator-picker-row"] against frame-0 height jump
+  const orchExclMatches = css.match(/:not\(\[data-ces-orch-row="1"\]\):not\(\[data-testid="orchestrator-picker-row"\]\)/g) || [];
+  assert.equal(orchExclMatches.length, 4, 'all 4 menu-item overlay rules must exclude [data-testid="orchestrator-picker-row"] on frame 0');
 });
 
 test('Issue #58 Bug 4: crystal-prism-core anti-aliasing (aaPx >= 1/dpr), inset rimLine avoiding rimD<1px halo, and single-layer canvas clipping', () => {
