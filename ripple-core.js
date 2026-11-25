@@ -232,7 +232,10 @@
     }
     return out;
   }
+  function clampDim(n) { return n > 0 && Number.isFinite(n) ? Math.floor(n) : 0; }
   function createWaveField(columns, rows, random = Math.random) {
+    columns = clampDim(columns);
+    rows = clampDim(rows);
     const cells = columns * rows;
     const height = new Float32Array(cells);
     const velocity = new Float32Array(cells);
@@ -857,7 +860,7 @@ color = vec4(rgb * a, a);
         const specCode = Number(palette.spectrumCode ?? 0);
         gl.uniform4f(uniforms.aura, aura.x * dpr, aura.y * dpr, aura.radius * dpr, aura.strength * amb);
         gl.uniform4f(uniforms.optics, RIPPLE.auraTint * (specCode === 5 ? 0.55 : 1), RIPPLE.prismTint * (specCode === 5 ? 0.45 : 1), RIPPLE.prismCap, palette.prismStrength);
-        gl.uniform1f(uniforms.auraLift, RIPPLE.auraLift * amb);
+        gl.uniform1f(uniforms.auraLift, RIPPLE.auraLift * amb * (palette.auraLiftScale ?? 1));
         gl.uniform1f(uniforms.auraPhase, palette.auraPhase || 0);
         gl.uniform1f(uniforms.lightMode, palette.dark === false ? 1 : 0);
         gl.uniform1f(uniforms.spectrumMode, specCode);
@@ -869,7 +872,7 @@ color = vec4(rgb * a, a);
         gl.uniform4f(uniforms.neb1, n1 ? n1.x * dpr : 0, n1 ? n1.y * dpr : 0, n1 ? n1.radius * dpr : 1, n1 ? n1.strength * amb : 0);
         gl.uniform4f(uniforms.neb2, n2 ? n2.x * dpr : 0, n2 ? n2.y * dpr : 0, n2 ? n2.radius * dpr : 1, n2 ? n2.strength * amb : 0);
         gl.uniform4f(uniforms.nebOpt, n0 ? n0.hue : 0, n1 ? n1.hue : 0, n2 ? n2.hue : 0, RIPPLE.nebulaTint * amb * (specCode === 5 ? 0.45 : 1));
-        gl.uniform1f(uniforms.nebulaLift, RIPPLE.nebulaLift * amb);
+        gl.uniform1f(uniforms.nebulaLift, RIPPLE.nebulaLift * amb * (palette.nebulaLiftScale ?? 1));
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, cellTexture);
         if (uploadCells !== false) {
@@ -984,8 +987,9 @@ color = vec4(rgb * a, a);
           }
         }
         const auraTintScale = RIPPLE.auraTint * (specCode === 5 ? 0.55 : 1);
+        const auraLiftScale = RIPPLE.auraLift * (palette.auraLiftScale ?? 1);
         const nebTintScale = RIPPLE.nebulaTint * amb * (specCode === 5 ? 0.45 : 1);
-        const nebLiftScale = RIPPLE.nebulaLift * amb;
+        const nebLiftScale = RIPPLE.nebulaLift * amb * (palette.nebulaLiftScale ?? 1);
         const prismGain = RIPPLE.prismTint * palette.prismStrength * (specCode === 5 ? 0.45 : 1);
         const stepX = RIPPLE.cellWidth * dpr;
         const stepY = RIPPLE.cellHeight * dpr;
@@ -1058,9 +1062,9 @@ color = vec4(rgb * a, a);
             const nebT = wNebC * nebTintScale;
             const prismT = packed > 31 ? ((packed >> 5) / PRISM_LEVELS) * prismGain * (0.88 + 0.12 * wAura) : 0;
             if (isLight) {
-              alpha = Math.min(0.88, alpha * (1 + (RIPPLE.auraLift + 0.72) * wAura * auraStrength + prismT * 0.62 + nebLiftScale * 0.66 * wNebC));
+              alpha = Math.min(0.88, alpha * (1 + (auraLiftScale + 0.72) * wAura * auraStrength + prismT * 0.62 + nebLiftScale * 0.66 * wNebC));
             } else if (wAura > 0 || wNebC > 0) {
-              alpha = Math.min(1, alpha * (1 + RIPPLE.auraLift * wAura * auraStrength + nebLiftScale * wNebC));
+              alpha = Math.min(1, alpha * (1 + auraLiftScale * wAura * auraStrength + nebLiftScale * wNebC));
             }
             const total = auraT + prismT + nebT;
             if (total > 0.0001) {
@@ -1139,6 +1143,8 @@ color = vec4(rgb * a, a);
     return typeof document !== 'undefined' && Boolean(document && document.hidden === true);
   }
   function createGlyphField(canvas, columns, rows, waves, options) {
+    columns = clampDim(columns);
+    rows = clampDim(rows);
     const force2D = typeof globalThis !== 'undefined' && globalThis.__agRippleForce2D === true;
     const renderer = (columns > 0 && rows > 0)
       ? ((force2D ? null : createWebGL2Renderer(canvas, columns, rows)) || create2DRenderer(canvas, columns, rows))
@@ -1155,13 +1161,14 @@ color = vec4(rgb * a, a);
     const wasLit = new Uint8Array(cells);
     let lastIdleRefreshMs = -Infinity;
     let lastIdleDark = null;
+    let lastIdleAlphaScale = -1;
     const cloudColumns = new Map();
     const nebulaState = [
       { x: 0, y: 0, radius: 1, strength: 0, hue: 0 },
       { x: 0, y: 0, radius: 1, strength: 0, hue: 0 },
       { x: 0, y: 0, radius: 1, strength: 0, hue: 0 },
     ];
-    const effective = { dark: true, ink: [0, 0, 0], wave: [0, 0, 0], fontFamily: 'monospace', aura: null, nebula: nebulaState, prismStrength: 1, auraPhase: 0, ambientIntensity: 1, spectrumCode: 0 };
+    const effective = { dark: true, ink: [0, 0, 0], wave: [0, 0, 0], fontFamily: 'monospace', aura: null, nebula: nebulaState, prismStrength: 1, auraPhase: 0, ambientIntensity: 1, spectrumCode: 0, alphaScale: 1, nebulaLiftScale: 1, auraLiftScale: 1 };
     let lastNebulaEnabled = true;
     let instanceZones = normalizeZones(options && options.calmZones);
     let appliedKey = null;
@@ -1270,11 +1277,15 @@ color = vec4(rgb * a, a);
         effective.ink[i] = Math.round(ink[i] + (RIPPLE.lightInkCool[i] - ink[i]) * mix);
         effective.wave[i] = Math.round(wave[i] + (RIPPLE.lightWaveCool[i] - wave[i]) * mix * 0.65);
       }
+      const c = palette.conv === true, cl01 = (v, d) => (v !== undefined ? clampFinite(v, 1, 0, 1) : d);
       effective.dark = dark;
       effective.fontFamily = palette.fontFamily || 'monospace';
       effective.aura = ambient <= 0.001 ? null : (palette.aura || null);
       effective.ambientIntensity = ambient;
       effective.spectrumCode = specCode;
+      effective.alphaScale = cl01(palette.alphaScale, c ? (ambient <= 0.001 ? 0 : 0.44) : 1);
+      effective.nebulaLiftScale = cl01(palette.nebulaLiftScale, c ? 0 : 1);
+      effective.auraLiftScale = cl01(palette.auraLiftScale, c ? 0.25 : 1);
       if (palette.nebula === false || ambient <= 0.001) {
         effective.nebula = null;
         lastNebulaEnabled = false;
@@ -1383,6 +1394,7 @@ color = vec4(rgb * a, a);
           stale ||
           tick !== lastTick ||
           eff.dark !== lastIdleDark ||
+          eff.alphaScale !== lastIdleAlphaScale ||
           renderer.mode !== 'webgl2' ||
           Math.abs(now - lastIdleRefreshMs) >= 40;
 
@@ -1404,12 +1416,13 @@ color = vec4(rgb * a, a);
           for (const abs of cloudColumns.keys()) if (abs < drift) cloudColumns.delete(abs);
           lastIdleRefreshMs = now;
           lastIdleDark = eff.dark;
+          lastIdleAlphaScale = eff.alphaScale;
         }
         const decay = still
           ? 0
           : (rawDt > 0 ? Math.exp(-rawDt / RIPPLE.glowDecay) : (waveActive ? 1 : 0.88));
         const idleAlpha = eff.dark ? RIPPLE.idleAlphaDark : RIPPLE.idleAlphaLight;
-        const themeScale = eff.dark ? 1 : RIPPLE.lightAlphaScale;
+        const themeScale = (eff.dark ? 1 : RIPPLE.lightAlphaScale) * eff.alphaScale;
         const omega = (TAU / RIPPLE.breathPeriod) * seconds;
         const bs = Math.sin(omega);
         const bc = Math.cos(omega);

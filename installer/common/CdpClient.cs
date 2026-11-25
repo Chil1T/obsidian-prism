@@ -870,6 +870,19 @@ namespace AgyClaudeStyle
             {
                 res["contextMenu"] = ToBoolOnOff(res["contextMenu"]);
             }
+            if (res.ContainsKey("convRipple"))
+            {
+                object cr = res["convRipple"];
+                if (cr is bool)
+                {
+                    res["convRipple"] = (bool)cr;
+                }
+                else
+                {
+                    string crs = cr as string;
+                    res["convRipple"] = crs != null && (string.Equals(crs, "on", StringComparison.OrdinalIgnoreCase) || string.Equals(crs, "true", StringComparison.OrdinalIgnoreCase));
+                }
+            }
             if (res.ContainsKey("codeLigatures"))
             {
                 object cl = res["codeLigatures"];

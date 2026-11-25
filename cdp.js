@@ -46,6 +46,7 @@ const DEFAULT_CONFIG = {
   homeLayout: 'studio',
   homeMode: 'studio',
   homeRipple: true,
+  convRipple: false,
   ripple: 'on',
   composerRestyle: true,
   composer: 'on',
@@ -92,6 +93,7 @@ const VALIDATORS = {
   homeLayout: ['studio', 'classic', 'off'],
   homeMode: ['studio', 'classic', 'off'],
   homeRipple: 'boolean',
+  convRipple: 'boolean',
   ripple: ['on', 'off'],
   composerRestyle: 'boolean',
   composer: ['on', 'off'],
@@ -208,6 +210,10 @@ function reconcileConfigAliases(raw) {
     const on = out.ripple !== 'off' && out.ripple !== false;
     out.homeRipple = on;
     out.ripple = on ? 'on' : 'off';
+  }
+
+  if (has('convRipple') && typeof out.convRipple === 'string') {
+    out.convRipple = out.convRipple === 'on' || out.convRipple === 'true';
   }
 
   if (has('composerRestyle')) {

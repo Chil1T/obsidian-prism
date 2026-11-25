@@ -54,6 +54,7 @@
     targetFps: mkSp(['60', '120', '180', 'native'], '180'),
     homeLayout: mkSp(['studio', 'classic', 'off']),
     homeRipple: S_T,
+    convRipple: S_F,
     logoInk: mkSp(['accent', 'foreground']),
     language: mkSp(['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'], 'zh-CN', { yue: 'zh-CN', 'zh-HK': 'zh-TW', 'zh-MO': 'zh-TW' }),
     hostLocalization: S_AUTO,
@@ -85,8 +86,8 @@
 
   const SCENE_PRESETS = O.freeze({
     ultra: O.freeze({ motionLevel: 'ultra', targetFps: '180', homeRipple: true, mascot: 'crab', sidebarCompact: false, smoothCaret: true, ambientIntensity: '100' }),
-    focus: O.freeze({ motionLevel: 'subtle', targetFps: '120', homeRipple: false, mascot: 'off', sidebarCompact: true, smoothCaret: true, ambientIntensity: '35' }),
-    eco: O.freeze({ motionLevel: 'off', targetFps: '60', homeRipple: false, mascot: 'off', sidebarCompact: false, smoothCaret: false, ambientIntensity: '0' }),
+    focus: O.freeze({ motionLevel: 'subtle', targetFps: '120', homeRipple: false, convRipple: false, mascot: 'off', sidebarCompact: true, smoothCaret: true, ambientIntensity: '35' }),
+    eco: O.freeze({ motionLevel: 'off', targetFps: '60', homeRipple: false, convRipple: false, mascot: 'off', sidebarCompact: false, smoothCaret: false, ambientIntensity: '0' }),
   });
 
   const normThoughtStyle = (s) => (s === 'tech' || s === 'technical' ? 'technical' : s === 'concise' || s === 'custom' ? s : null);
@@ -1930,13 +1931,15 @@
         const tb = qs(rootEl, '[data-testid="prism-thought-ai-config"]');
         if (tb) tb.hidden = tmMode !== 'ai';
       }
+      const isMotionOff = effVal('motionLevel', l) === 'off';
       for (const [dk, dim] of [
         ['placeholderStyle', effVal('composerRestyle', l) === false],
         ['sidebarCompact', effVal('sidebarRestyle', l) === false],
         ['sidebarNavFold', effVal('sidebarRestyle', l) === false],
         ['thoughtTrigger', tmMode === 'off'],
         ['thoughtView', tmMode === 'off'],
-        ['homeRipple', effVal('homeLayout', l) === 'off'],
+        ['homeRipple', isMotionOff || effVal('homeLayout', l) === 'off'],
+        ['convRipple', isMotionOff],
         ['linkTarget', effVal('omniModule', l) === 'off'],
       ]) {
         const dr = qs(rootEl, `[data-ag-cs-row="${dk}"]`);
@@ -2362,6 +2365,7 @@
             RS('targetFps', [['60', U('optFps60', '60')], ['120', U('optFps120', '120')], ['180', U('optFps180', '180')], ['native', U('optFpsNative')]]),
             RS('homeLayout', [['studio', U('optStudio')], ['classic', U('optClassic')], ['off', U('optNativeOff')]]),
             RS('homeRipple', onOff, 'Ripple'),
+            RS('convRipple', onOff),
             RS('logoInk', [['accent', U('optAccent')], ['foreground', U('optForeground')]]),
             RS('language', langOpts),
             RS('hostLocalization', [['auto', U('optHostI18nAuto', 'Auto')], ['on', U('optHostI18nOn', U('onLabel', 'On'))], ['off', U('optHostI18nOff', U('offLabel', 'Off'))]], 'HostI18n'),
@@ -2396,7 +2400,7 @@
           ]) rowDefs[r.key] = r;
 
           const groups = [
-            { id: 'appearance', title: U('grpAppearance'), keys: ['palette', 'lightPreset', 'accentTone', 'cornerStyle', 'ambientIntensity', 'motionLevel', 'targetFps', 'homeLayout', 'homeRipple', 'logoInk', 'language', 'hostLocalization'] },
+            { id: 'appearance', title: U('grpAppearance'), keys: ['palette', 'lightPreset', 'accentTone', 'cornerStyle', 'ambientIntensity', 'motionLevel', 'targetFps', 'homeLayout', 'homeRipple', 'convRipple', 'logoInk', 'language', 'hostLocalization'] },
             { id: 'interaction', title: U('grpInteraction'), keys: ['composerRestyle', 'placeholderStyle', 'smoothCaret', 'scrollBottomMotion', 'contextMenu', 'codeFont', 'codeLigatures', 'mascot', 'sidebarRestyle', 'sidebarCompact', 'sidebarNavFold'] },
             { id: 'thought', title: U('grpThought'), keys: ['thoughtTranslate', 'thoughtTrigger', 'thoughtView'] },
             { id: 'modules', title: U('groupModules'), keys: ['telemetryModule', 'effortSliderModule', 'effortMemory', 'periodicModelPicker', 'omniModule', 'linkTarget'] },

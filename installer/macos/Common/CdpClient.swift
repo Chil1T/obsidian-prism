@@ -614,6 +614,13 @@ enum CdpHelper {
         if out["contextMenu"] != nil {
             out["contextMenu"] = .bool(toBoolOnOff(out["contextMenu"]))
         }
+        if let cr = out["convRipple"] {
+            if case .bool(let b) = cr {
+                out["convRipple"] = .bool(b)
+            } else if let s = cr.stringValue?.lowercased() {
+                out["convRipple"] = .bool(s == "on" || s == "true")
+            }
+        }
         if let cl = out["codeLigatures"] {
             if case .bool(let b) = cl {
                 out["codeLigatures"] = .bool(b)
