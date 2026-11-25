@@ -1507,8 +1507,8 @@ test('PrismDaemon HS-1 & SEC-2: 68 rapid-fire setting updates, multi-window cros
     assert.equal(stB.vmWin.__agPrism.getState().cfg.palette, 'warm', 'Window B must receive Window A cross-window sync');
     assert.equal(stB.vmWin.__agPrism.getState().cfg.accentTone, 'cobalt');
     assert.ok(
-      totalAddScriptCalls <= 20,
-      `HS-1: Single-flight coalescing should collapse 68 rapid clicks across 2 windows (got ${totalAddScriptCalls})`
+      totalAddScriptCalls <= 22,
+      `HS-1: Single-flight coalescing should collapse 68 rapid clicks across 2 windows × 9 dynamic channels (got ${totalAddScriptCalls})`
     );
 
     // Phase B (Cross-window epoch isolation): Window B (localWriteEpoch 1..12 << Window A's 68!) rapid-fires 12 updates
@@ -1578,8 +1578,8 @@ test('PrismDaemon HS-1 & SEC-2: 68 rapid-fire setting updates, multi-window cros
     assert.equal(stB.vmWin.__agPrism.getState().cfg.palette, 'obsidian', 'Window B must sync with reloaded Window A');
     assert.equal(stB.vmWin.__agPrism.getState().cfg.accentTone, 'iris');
     assert.ok(
-      activeScripts.size <= 16,
-      `HS-1: Active NewDocument script handles across 2 windows × 8 dynamic channels (main + Omni + Sidebar Studio + Inline Diff + Wallpaper + Periodic Picker + Mascot + Suggester) must never leak (got ${activeScripts.size})`
+      activeScripts.size <= 18,
+      `HS-1: Active NewDocument script handles across 2 windows × 9 dynamic channels (main + Omni + Sidebar Studio + Inline Diff + Wallpaper + Periodic Picker + Mascot + Suggester + Home Studio) must never leak (got ${activeScripts.size})`
     );
 
     await daemon.stop(false);

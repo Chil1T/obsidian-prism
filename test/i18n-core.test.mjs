@@ -784,6 +784,7 @@ test('PR #50 & PR #41/#49: DEFAULT_CONFIG & config.example.json default to auto,
     const expr = cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, ...(cfgOverride || {}) });
     const res = vm.runInNewContext(expr, sandbox);
     assert.equal(res.status, 'ok');
+    vm.runInNewContext(cdp.buildHomeStudioChannelExpression({ ...cdp.DEFAULT_CONFIG, ...(cfgOverride || {}) }), sandbox);
     vm.runInNewContext(settingsCh9Expr, sandbox);
     const sec = doc.getElementById('ag-cs-settings-sec');
     sec?.__ensureFoldBody?.();

@@ -353,8 +353,9 @@ test('inject expression mounts cleanly without model-button or telemetry conflic
   try {
     const res = vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), sandbox);
     assert.equal(res.status, 'ok');
-    // Load Channel 10 Mascot (split out of Channel 1) & Channel 9 Settings on demand
+    // Load Channel 10 Mascot, Channel 12 Home Studio (split out of Channel 1) & Channel 9 Settings on demand
     vm.runInNewContext(cdp.buildMascotChannelExpression(cdp.DEFAULT_CONFIG), sandbox);
+    vm.runInNewContext(cdp.buildHomeStudioChannelExpression(cdp.DEFAULT_CONFIG), sandbox);
     vm.runInNewContext(cdp.buildSettingsChannelExpression(), sandbox);
     assert.equal(html.getAttribute('data-ag-cs-style'), '1');
     assert.equal(html.getAttribute('data-ag-cs-palette'), 'obsidian');
@@ -1084,8 +1085,9 @@ test('Q&A takeover card, side-question panel, and running tasks clear Clawd masc
   try {
     const res = vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), sandbox);
     assert.equal(res.status, 'ok');
-    // Load Channel 10 Mascot (split out of Channel 1) & Channel 9 Settings on demand
+    // Load Channel 10 Mascot, Channel 12 Home Studio (split out of Channel 1) & Channel 9 Settings on demand
     vm.runInNewContext(cdp.buildMascotChannelExpression(cdp.DEFAULT_CONFIG), sandbox);
+    vm.runInNewContext(cdp.buildHomeStudioChannelExpression(cdp.DEFAULT_CONFIG), sandbox);
     vm.runInNewContext(cdp.buildSettingsChannelExpression(), sandbox);
 
     // 1. Q&A takeover card alone: wrapper raised by 46px with data-ag-cs-takeover="1"
@@ -1482,8 +1484,9 @@ test('v3.5.1 mounts dual mascot stage, brand optical glyphs, Orchestrator crysta
   try {
     const res = vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), sandbox);
     assert.equal(res.status, 'ok');
-    // Load Channel 10 Mascot (split out of Channel 1) & Channel 9 Settings on demand
+    // Load Channel 10 Mascot, Channel 12 Home Studio (split out of Channel 1) & Channel 9 Settings on demand
     vm.runInNewContext(cdp.buildMascotChannelExpression(cdp.DEFAULT_CONFIG), sandbox);
+    vm.runInNewContext(cdp.buildHomeStudioChannelExpression(cdp.DEFAULT_CONFIG), sandbox);
     vm.runInNewContext(cdp.buildSettingsChannelExpression(), sandbox);
 
     // 1. Dual mascot stage mounts 2 real actor canvases (Clawd & Cat, 96x84)
@@ -3233,9 +3236,11 @@ test('v1.0.1 compiler safety fixes, unified shared string pool (< 690 KiB CI bud
   assert.ok(expr2.includes('"palette":"warm"'));
   assert.ok(expr2.includes('"accentTone":"iris"'));
 
-  // 6. All 6 extracted/Wave2 microkernel domain modules registered in RUNTIME_PARTS & SYNC_ROOT_FILES
+  // 6. Extracted/Wave2 microkernel domain modules registered in RUNTIME_PARTS (or DEFERRED_ROOT_MODULES for Channel 12) & SYNC_ROOT_FILES
+  assert.equal(cdp.RUNTIME_PARTS.includes('home-studio-panel.js'), false, 'home-studio-panel.js must be split out of Channel 1 RUNTIME_PARTS into Channel 12');
+  assert.ok(cdp.DEFERRED_ROOT_MODULES.includes('home-studio-panel.js'), 'Missing home-studio-panel.js in DEFERRED_ROOT_MODULES');
+  assert.ok(cdp.SYNC_ROOT_FILES.includes('home-studio-panel.js'), 'Missing home-studio-panel.js in SYNC_ROOT_FILES');
   for (const modName of [
-    'home-studio-panel.js',
     'home-ripple-host.js',
     'model-glyph-crystal.js',
     'stream-choreography.js',
