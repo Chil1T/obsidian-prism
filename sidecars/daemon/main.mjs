@@ -2550,6 +2550,39 @@ export class PrismDaemon {
     return { fetched, flushed: true };
   }
 
+  _resolveCdpQuitTarget(_testOverrides = null) {
+    if (_testOverrides?.cdpPort !== undefined) {
+      return {
+        cdpPort: Number(_testOverrides.cdpPort) || 0,
+        cdpBrowserWsPath: String(_testOverrides.cdpBrowserWsPath || '').trim(),
+      };
+    }
+    if (_testOverrides) {
+      return { cdpPort: 0, cdpBrowserWsPath: '' };
+    }
+    const verifiedPort = Number(this.browserPort) || 0;
+    const rawPort = this.overridePort || verifiedPort || discoverActivePort(this.overridePort, this.portFile) || 0;
+    const cdpPort = Number.isInteger(Number(rawPort)) && Number(rawPort) > 0 && Number(rawPort) <= 65535 ? Number(rawPort) : 0;
+    let cdpBrowserWsPath = '';
+    if (cdpPort > 0 && !this.overridePort) {
+      const files = this.portFile ? [this.portFile] : resolvePortFileCandidates();
+      for (const file of files) {
+        try {
+          const st = fs.lstatSync(file);
+          if (st.isSymbolicLink() || !st.isFile() || st.size > 2048) continue;
+          const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+          const filePort = parseInt(String(lines[0] || '').trim(), 10);
+          const wsPath = String(lines[1] || '').trim();
+          if (filePort === cdpPort && wsPath.startsWith('/devtools/browser/') && !/[\r\n\s]/.test(wsPath)) {
+            cdpBrowserWsPath = wsPath;
+            break;
+          }
+        } catch {}
+      }
+    }
+    return { cdpPort, cdpBrowserWsPath };
+  }
+
   async _handleStorageAction(action, _testOverrides = null, rawInput = {}) {
     let acquiredArchiveLock = false;
     if (action === 'archive-and-restart') {
@@ -2906,6 +2939,7 @@ export class PrismDaemon {
           try { host = await this.cdp.detectRunningAntigravityHost(); } catch {}
         }
 
+        const cdpTarget = this._resolveCdpQuitTarget(_testOverrides);
         const scriptPath = path.join(this.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
         const spawnRes = arch.spawnDetachedArchiveTask(
           {
@@ -2913,6 +2947,8 @@ export class PrismDaemon {
             convDir,
             archiveDir,
             hostPid: host?.pid || 0,
+            cdpPort: cdpTarget.cdpPort,
+            cdpBrowserWsPath: cdpTarget.cdpBrowserWsPath,
             exePath: host?.exePath || '',
             gracefulQuit: true,
             relaunch: true,
@@ -3021,6 +3057,7 @@ export class PrismDaemon {
         } else if (typeof this.cdp?.detectRunningAntigravityHost === 'function') {
           try { host = await this.cdp.detectRunningAntigravityHost(); } catch {}
         }
+        const cdpTarget = this._resolveCdpQuitTarget(_testOverrides);
         const scriptPath = path.join(this.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
         const spawnRes = arch.spawnDetachedArchiveTask(
           {
@@ -3028,6 +3065,8 @@ export class PrismDaemon {
             convDir,
             archiveDir,
             hostPid: host?.pid || 0,
+            cdpPort: cdpTarget.cdpPort,
+            cdpBrowserWsPath: cdpTarget.cdpBrowserWsPath,
             exePath: host?.exePath || '',
             gracefulQuit: true,
             relaunch: true,
