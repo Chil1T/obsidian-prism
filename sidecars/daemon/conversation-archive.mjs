@@ -2178,7 +2178,6 @@ export async function requestCdpBrowserClose(cdpPort, opts = {}) {
     };
     // 超时未收到 {id:1} ACK 且未正常关闭时一律返回 false，立即触发 CloseMainWindow 回退
     const timer = setTimeout(() => finish(false), timeoutMs);
-    if (timer && typeof timer.unref === 'function') timer.unref();
     try {
       ws = new WsCtor(parsed.href);
     } catch {
