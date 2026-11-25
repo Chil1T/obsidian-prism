@@ -240,16 +240,45 @@ function atomicWriteJsonSync(filePath, data) {
   atomicWriteTextExclusiveSync(filePath, JSON.stringify(data, null, 2) + '\n', 0o600);
 }
 
-function safeMoveFileSync(src, dst) {
-  const srcStat = assertPathChainNoSymlinks(src, 'source file');
+function safeMoveFileSync(src, dst, { trustedParentDirs = false } = {}) {
+  let srcStat;
+  if (trustedParentDirs) {
+    try {
+      srcStat = fs.lstatSync(src);
+    } catch (err) {
+      if (err && err.code === 'ENOENT') srcStat = null;
+      else throw err;
+    }
+    if (srcStat && srcStat.isSymbolicLink()) {
+      throw new Error(`Refusing symbolic link in source file: ${src}`);
+    }
+  } else {
+    srcStat = assertPathChainNoSymlinks(src, 'source file');
+  }
   if (!srcStat || !srcStat.isFile()) {
     throw new Error(`Source is not a regular file: ${src}`);
   }
-  const dstStat = assertPathChainNoSymlinks(dst, 'destination file');
+
+  let dstStat;
+  if (trustedParentDirs) {
+    try {
+      dstStat = fs.lstatSync(dst);
+    } catch (err) {
+      if (err && err.code === 'ENOENT') dstStat = null;
+      else throw err;
+    }
+    if (dstStat && dstStat.isSymbolicLink()) {
+      throw new Error(`Refusing symbolic link in destination file: ${dst}`);
+    }
+  } else {
+    dstStat = assertPathChainNoSymlinks(dst, 'destination file');
+  }
   if (dstStat) {
     throw new Error(`Destination already exists: ${dst}`);
   }
-  ensureSafeDir(path.dirname(dst));
+  if (!trustedParentDirs) {
+    ensureSafeDir(path.dirname(dst));
+  }
   try {
     fs.renameSync(src, dst);
   } catch (err) {
@@ -273,10 +302,234 @@ function safeMoveFileSync(src, dst) {
   }
 }
 
-export function parseWindowsTasklistCsv(csvText, { selfPid = process.pid } = {}) {
+const WIN_AGY_ONLY_PROCESS_RE = /^agy\.exe$/i;
+const ARCHIVE_TRACE_FILENAME = 'archive-trace.log';
+const MAX_ARCHIVE_TRACE_BYTES = 512 * 1024;
+const AGY_ACP_SUBCOMMAND_RE = /(?:^|[\\/\s"'])agy(?:\.exe)?["']?\s+acp(?:\s|$)/i;
+
+function getPlatformPathModule(platform = process.platform) {
+  return platform === 'win32' ? path.win32 : path.posix;
+}
+
+function expandTildePath(p, homeDir, platform = process.platform) {
+  const raw = String(p || '').trim();
+  if (!raw || !homeDir) return raw;
+  const pathMod = getPlatformPathModule(platform);
+  if (raw === '~') return homeDir;
+  if (raw.startsWith('~/') || (platform === 'win32' && raw.startsWith('~\\'))) {
+    return pathMod.join(homeDir, raw.slice(2));
+  }
+  return raw;
+}
+
+function normalizePathForCompare(p, platform = process.platform, homeDir = '') {
+  const expanded = expandTildePath(p, homeDir, platform);
+  const raw = String(expanded || '').trim();
+  if (!raw) return '';
+  const pathMod = getPlatformPathModule(platform);
+  const preNormalized = platform === 'win32' ? raw.replace(/\//g, '\\') : raw;
+  const resolved = pathMod.resolve(preNormalized);
+  return platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function extractCliFlagValue(cmdLine, flagName) {
+  const s = String(cmdLine || '');
+  const escaped = flagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const eqRe = new RegExp(`(?:^|\\s)${escaped}=(?:"([^"]+)"|'([^']+)'|(\\S+))`, 'i');
+  const eqMatch = eqRe.exec(s);
+  if (eqMatch) return (eqMatch[1] ?? eqMatch[2] ?? eqMatch[3] ?? '').trim();
+  const spRe = new RegExp(`(?:^|\\s)${escaped}\\s+(?:"([^"]+)"|'([^']+)'|(\\S+))`, 'i');
+  const spMatch = spRe.exec(s);
+  if (spMatch) return (spMatch[1] ?? spMatch[2] ?? spMatch[3] ?? '').trim();
+  return '';
+}
+
+/**
+ * 判断命令行是否为第三方工具（如 T3 Code）派生的独立隔离存储区 `agy acp` 进程。
+ * 严格 fail-closed：
+ *   - 绝不豁免 language_server、Antigravity 桌面主程序或非 `acp` 子命令（如 `agy chat`）；
+ *   - 前置校验 `--gemini-dir`：支持 `~` 展开，拒绝默认 `~/.gemini` 与 `~/.gemini/antigravity`；
+ *   - 校验 `--app-data-dir`：完整路径（含 `~` 展开）全路径归一化对照默认数据目录，短名拒绝 `antigravity`；
+ *   - 命令行缺失、为空或未显式指向独立非默认隔离目录时一律返回 false（按活跃宿主拦截）。
+ */
+export function isIsolatedExternalAgyCommandLine(
+  cmdLine,
+  {
+    platform = process.platform,
+    defaultGeminiDir = path.join(os.homedir(), '.gemini'),
+    defaultAppDataDir = '',
+    homeDir = '',
+  } = {}
+) {
+  const s = String(cmdLine || '').trim();
+  if (!s) return false;
+  if (/language_server/i.test(s)) return false;
+  if (!AGY_ACP_SUBCOMMAND_RE.test(s)) return false;
+
+  const pathMod = getPlatformPathModule(platform);
+  let defaultGem = '';
+  let defaultGemAntigravity = '';
+  let inferredHome = '';
+  try {
+    const baseGem = String(defaultGeminiDir || '').trim();
+    const resolvedBaseGem = baseGem
+      ? pathMod.resolve(platform === 'win32' ? baseGem.replace(/\//g, '\\') : baseGem)
+      : '';
+    inferredHome =
+      String(homeDir || '').trim() ||
+      (resolvedBaseGem ? pathMod.dirname(resolvedBaseGem) : os.homedir());
+    defaultGem = normalizePathForCompare(baseGem, platform, inferredHome);
+    defaultGemAntigravity = baseGem
+      ? normalizePathForCompare(pathMod.join(baseGem, 'antigravity'), platform, inferredHome)
+      : '';
+  } catch {
+    return false;
+  }
+
+  let hasIsolatedGeminiDir = false;
+  const geminiDir = extractCliFlagValue(s, '--gemini-dir');
+  if (geminiDir) {
+    try {
+      const targetGem = normalizePathForCompare(geminiDir, platform, inferredHome);
+      if (!targetGem || targetGem === defaultGem || targetGem === defaultGemAntigravity) {
+        return false;
+      }
+      hasIsolatedGeminiDir = true;
+    } catch {
+      return false;
+    }
+  }
+
+  let hasIsolatedAppDataDir = false;
+  const appDataDir = extractCliFlagValue(s, '--app-data-dir');
+  if (appDataDir) {
+    if (/[\\/]|^~(?:$|[\\/])/.test(appDataDir)) {
+      try {
+        const targetAppData = normalizePathForCompare(appDataDir, platform, inferredHome);
+        if (!targetAppData) return false;
+        const defaultAppDataCandidates = new Set();
+        if (defaultGem) defaultAppDataCandidates.add(defaultGem);
+        if (defaultGemAntigravity) defaultAppDataCandidates.add(defaultGemAntigravity);
+        if (defaultAppDataDir) {
+          defaultAppDataCandidates.add(normalizePathForCompare(defaultAppDataDir, platform, inferredHome));
+        }
+        if (platform === 'win32') {
+          if (inferredHome) {
+            defaultAppDataCandidates.add(
+              normalizePathForCompare(path.win32.join(inferredHome, 'AppData', 'Roaming', 'Antigravity'), 'win32', inferredHome)
+            );
+            defaultAppDataCandidates.add(
+              normalizePathForCompare(path.win32.join(inferredHome, 'AppData', 'Local', 'Antigravity'), 'win32', inferredHome)
+            );
+          }
+          if (process.platform === 'win32') {
+            defaultAppDataCandidates.add(
+              normalizePathForCompare(path.win32.dirname(getDefaultWindowsAppStoragePath()), 'win32', inferredHome)
+            );
+          }
+        } else if (platform === 'darwin' && inferredHome) {
+          defaultAppDataCandidates.add(
+            normalizePathForCompare(path.posix.join(inferredHome, 'Library', 'Application Support', 'Antigravity'), 'darwin', inferredHome)
+          );
+        } else if (inferredHome) {
+          defaultAppDataCandidates.add(
+            normalizePathForCompare(path.posix.join(inferredHome, '.config', 'Antigravity'), platform, inferredHome)
+          );
+        }
+        if (defaultAppDataCandidates.has(targetAppData)) {
+          return false;
+        }
+        hasIsolatedAppDataDir = true;
+      } catch {
+        return false;
+      }
+    } else {
+      if (appDataDir.toLowerCase() === 'antigravity') {
+        return false;
+      }
+      hasIsolatedAppDataDir = true;
+    }
+  }
+
+  return hasIsolatedGeminiDir || hasIsolatedAppDataDir;
+}
+
+const WIN_AGY_CMD_CACHE_TTL_MS = 120_000;
+const _winAgyCmdCacheByResolver = new WeakMap();
+
+function getWinAgyCmdCache(resolverKey) {
+  let cache = _winAgyCmdCacheByResolver.get(resolverKey);
+  if (!cache) {
+    cache = new Map();
+    _winAgyCmdCacheByResolver.set(resolverKey, cache);
+  }
+  return cache;
+}
+
+function pruneWinAgyCmdCache(resolverKey, liveAgyPids = [], now = Date.now()) {
+  if (typeof resolverKey !== 'function') return;
+  const cache = getWinAgyCmdCache(resolverKey);
+  if (cache.size === 0) return;
+  const liveSet = new Set(liveAgyPids);
+  for (const [pid, entry] of cache.entries()) {
+    if (!liveSet.has(pid) || now - entry.at > WIN_AGY_CMD_CACHE_TTL_MS) {
+      cache.delete(pid);
+    }
+  }
+}
+
+function resolveWindowsAgyCommandLinesCached(pids, resolver) {
+  const validPids = Array.from(new Set(pids.filter((p) => Number.isInteger(p) && p > 0)));
+  const map = new Map();
+  if (typeof resolver !== 'function') return map;
+  if (validPids.length === 0) {
+    pruneWinAgyCmdCache(resolver, []);
+    return map;
+  }
+  const now = Date.now();
+  pruneWinAgyCmdCache(resolver, validPids, now);
+  const cache = getWinAgyCmdCache(resolver);
+  const missingPids = [];
+  for (const pid of validPids) {
+    const hit = cache.get(pid);
+    if (hit && typeof hit.cmd === 'string' && hit.cmd) {
+      map.set(pid, hit.cmd);
+    } else {
+      missingPids.push(pid);
+    }
+  }
+  if (missingPids.length === 0) return map;
+
+  const queried = resolver(missingPids);
+  const fetchedAt = Date.now();
+  for (const pid of missingPids) {
+    const cmd = queried instanceof Map ? queried.get(pid) : queried?.[pid];
+    if (typeof cmd === 'string' && cmd) {
+      map.set(pid, cmd);
+      cache.set(pid, { cmd, at: fetchedAt });
+    }
+  }
+  return map;
+}
+
+export function parseWindowsTasklistCsvDetailed(
+  csvText,
+  {
+    selfPid = process.pid,
+    queryCommandLines = null,
+    resolveAgyCommandLines = null,
+    onLiveAgyPids = null,
+    defaultGeminiDir = path.join(os.homedir(), '.gemini'),
+    defaultAppDataDir = '',
+  } = {}
+) {
   const text = String(csvText || '').trim();
-  if (!text) return true; // unexpected empty output -> fail-closed
+  if (!text) {
+    return { running: true, blockers: [{ imageName: '<empty-tasklist>', pid: 0 }], ignoredAcp: [] };
+  }
   let parsedCount = 0;
+  const hardBlockers = [];
+  const agyCandidates = [];
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line) continue;
@@ -295,14 +548,75 @@ export function parseWindowsTasklistCsv(csvText, { selfPid = process.pid } = {})
       continue;
     }
     if (WIN_HOST_PROCESS_RE.test(imageName)) {
-      return true;
+      if (WIN_AGY_ONLY_PROCESS_RE.test(imageName)) {
+        agyCandidates.push({ imageName, pid });
+      } else {
+        hardBlockers.push({ imageName, pid });
+      }
     }
   }
   // If tasklist returned non-CSV/error text with zero valid process rows -> fail-closed
-  return parsedCount === 0;
+  if (parsedCount === 0) {
+    return { running: true, blockers: [{ imageName: '<invalid-tasklist-csv>', pid: 0 }], ignoredAcp: [] };
+  }
+  if (typeof onLiveAgyPids === 'function') {
+    try { onLiveAgyPids(agyCandidates.map((c) => c.pid)); } catch {}
+  }
+  if (hardBlockers.length > 0) {
+    return { running: true, blockers: hardBlockers, ignoredAcp: [] };
+  }
+  if (agyCandidates.length === 0) {
+    return { running: false, blockers: [], ignoredAcp: [] };
+  }
+  const cmdResolver =
+    typeof queryCommandLines === 'function'
+      ? queryCommandLines
+      : typeof resolveAgyCommandLines === 'function'
+        ? resolveAgyCommandLines
+        : null;
+  // Windows 默认纯原生 tasklist 只读探针：无外部注入的 queryCommandLines 时对 agy.exe 严格 fail-closed 拦截
+  if (!cmdResolver) {
+    return { running: true, blockers: agyCandidates, ignoredAcp: [] };
+  }
+  try {
+    const cmdMap = cmdResolver(agyCandidates.map((c) => c.pid));
+    const blockers = [];
+    const ignoredAcp = [];
+    for (const cand of agyCandidates) {
+      const cmd = cmdMap instanceof Map ? cmdMap.get(cand.pid) : cmdMap?.[cand.pid];
+      if (
+        cmd &&
+        isIsolatedExternalAgyCommandLine(cmd, {
+          platform: 'win32',
+          defaultGeminiDir,
+          defaultAppDataDir,
+        })
+      ) {
+        ignoredAcp.push({ ...cand, isolatedAcp: true });
+      } else {
+        blockers.push(cand);
+      }
+    }
+    return { running: blockers.length > 0, blockers, ignoredAcp };
+  } catch {
+    return { running: true, blockers: agyCandidates, ignoredAcp: [] };
+  }
 }
 
-export function parsePosixProcessList(psText, { selfPid = process.pid, selfPpid = process.ppid } = {}) {
+export function parseWindowsTasklistCsv(csvText, opts = {}) {
+  return parseWindowsTasklistCsvDetailed(csvText, opts).running;
+}
+
+export function parsePosixProcessList(
+  psText,
+  {
+    selfPid = process.pid,
+    selfPpid = process.ppid,
+    platform = process.platform === 'darwin' ? 'darwin' : 'linux',
+    defaultGeminiDir = path.join(os.homedir(), '.gemini'),
+    defaultAppDataDir = '',
+  } = {}
+) {
   const text = String(psText || '').trim();
   if (!text) return true; // unexpected empty output -> fail-closed
   let parsedCount = 0;
@@ -323,26 +637,35 @@ export function parsePosixProcessList(psText, { selfPid = process.pid, selfPpid 
     if (
       POSIX_LS_RE.test(cmd) ||
       POSIX_ANTIGRAVITY_APP_RE.test(cmd) ||
-      POSIX_HOST_ARGV0_RE.test(cmd) ||
       POSIX_ELECTRON_APP_RE.test(cmd)
     ) {
+      return true;
+    }
+    if (POSIX_HOST_ARGV0_RE.test(cmd)) {
+      if (
+        isIsolatedExternalAgyCommandLine(cmd, {
+          platform,
+          defaultGeminiDir,
+          defaultAppDataDir,
+        })
+      ) {
+        continue;
+      }
       return true;
     }
   }
   return parsedCount === 0;
 }
 
-/**
- * Fail-closed check: returns true if language_server OR Antigravity/agy host is running,
- * or if process detection itself fails/errors/times out.
- * Note: offline CLI tool cannot enforce OS-level host startup mutex across closed-source
- * Antigravity; users must keep Antigravity closed until the archive command finishes.
- */
-export function isLanguageServerRunning({
+export function inspectLanguageServerProcesses({
   platform = process.platform,
   exec = execFileSync,
   selfPid = process.pid,
   selfPpid = process.ppid,
+  queryCommandLines = undefined,
+  resolveAgyCommandLines = undefined,
+  defaultGeminiDir = path.join(os.homedir(), '.gemini'),
+  defaultAppDataDir = '',
 } = {}) {
   try {
     if (platform === 'win32') {
@@ -351,19 +674,127 @@ export function isLanguageServerRunning({
         ['/NH', '/FO', 'CSV'],
         { encoding: 'utf8', windowsHide: true, timeout: 6000, maxBuffer: 8 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }
       );
-      return parseWindowsTasklistCsv(out, { selfPid });
+      const injectedResolver =
+        typeof queryCommandLines === 'function'
+          ? queryCommandLines
+          : typeof resolveAgyCommandLines === 'function'
+            ? resolveAgyCommandLines
+            : null;
+      const cachedResolver = injectedResolver
+        ? (pids) => resolveWindowsAgyCommandLinesCached(pids, injectedResolver)
+        : null;
+      const onLiveAgyPids = injectedResolver
+        ? (pids) => pruneWinAgyCmdCache(injectedResolver, pids)
+        : null;
+      return parseWindowsTasklistCsvDetailed(out, {
+        selfPid,
+        queryCommandLines: cachedResolver,
+        onLiveAgyPids,
+        defaultGeminiDir,
+        defaultAppDataDir,
+      });
     }
-    const out = exec('ps', ['-eo', 'pid=,args='], {
+    const out = exec('ps', ['-ww', '-eo', 'pid=,args='], {
       encoding: 'utf8',
       timeout: 5000,
       maxBuffer: 8 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    return parsePosixProcessList(out, { selfPid, selfPpid });
-  } catch {
+    const posixPlatform = platform === 'darwin' ? 'darwin' : 'linux';
+    const running = parsePosixProcessList(out, {
+      selfPid,
+      selfPpid,
+      platform: posixPlatform,
+      defaultGeminiDir,
+      defaultAppDataDir,
+    });
+    return { running, blockers: running ? [{ imageName: 'posix-host', pid: 0 }] : [], ignoredAcp: [] };
+  } catch (err) {
     // Any process query failure (non-zero exit, ENOENT, timeout, ENOBUFS) fails closed (true)
-    return true;
+    return {
+      running: true,
+      blockers: [{ imageName: `<probe-error:${String(err?.code || 'ERR')}>`, pid: 0 }],
+      ignoredAcp: [],
+    };
   }
+}
+
+/**
+ * Fail-closed check: returns true if language_server OR Antigravity/agy host is running,
+ * or if process detection itself fails/errors/times out.
+ * Note: offline CLI tool cannot enforce OS-level host startup mutex across closed-source
+ * Antigravity; users must keep Antigravity closed until the archive command finishes.
+ */
+export function isLanguageServerRunning(opts = {}) {
+  return inspectLanguageServerProcesses(opts).running;
+}
+
+const LOOP_RUNNING_CHECK_INTERVAL_MS = 500;
+
+/**
+ * 为批量文件移动循环构造节流版进程探针：
+ *   - 入口已执行过一次无节流 fail-closed 检查；
+ *   - 循环内对真实系统探针按 500ms 时间窗节流（避免 100+ 会话触发数百次 tasklist/ps 进程派生风暴），
+ *     一旦检测到宿主启动立即锁定为 true，并包含系统时钟回拨保护；
+ *   - 对单元测试注入的无标记同步 mock 函数保持逐次调用零节流。
+ */
+export function createLoopRunningChecker(
+  isRunning,
+  rawCheckRunning,
+  minIntervalMs = LOOP_RUNNING_CHECK_INTERVAL_MS,
+  nowFn = Date.now
+) {
+  const allowThrottle =
+    rawCheckRunning === isLanguageServerRunning || Boolean(rawCheckRunning?.__allowLoopThrottle);
+  if (!allowThrottle || !(minIntervalMs > 0)) {
+    return isRunning;
+  }
+  let lastCheckedAt = nowFn();
+  let latchedRunning = false;
+  return () => {
+    if (latchedRunning) return true;
+    const now = nowFn();
+    if (now < lastCheckedAt) lastCheckedAt = 0;
+    if (now - lastCheckedAt < minIntervalMs) {
+      return false;
+    }
+    lastCheckedAt = now;
+    latchedRunning = Boolean(isRunning());
+    return latchedRunning;
+  };
+}
+
+export function appendArchiveTrace(archiveDir, event, detail = {}) {
+  try {
+    const safeDir = ensureSafeDir(archiveDir || getDefaultArchiveDir());
+    const logPath = path.join(safeDir, ARCHIVE_TRACE_FILENAME);
+    assertPathChainNoSymlinks(logPath, 'archive trace log');
+    try {
+      const st = fs.existsSync(logPath) ? fs.lstatSync(logPath) : null;
+      if (st && st.isFile() && st.size > MAX_ARCHIVE_TRACE_BYTES) {
+        const raw = fs.readFileSync(logPath, 'utf8');
+        const keepChars = Math.floor(MAX_ARCHIVE_TRACE_BYTES / 2);
+        const cut = Math.max(0, raw.length - keepChars);
+        let tail;
+        if (cut > 0 && raw[cut - 1] !== '\n') {
+          const nl = raw.indexOf('\n', cut);
+          tail = nl >= 0 ? raw.slice(nl + 1) : '';
+        } else {
+          tail = raw.slice(cut);
+        }
+        fs.writeFileSync(logPath, tail, { encoding: 'utf8', mode: 0o600 });
+        try { fs.chmodSync(logPath, 0o600); } catch {}
+      }
+    } catch {}
+    const line = JSON.stringify({
+      ts: new Date().toISOString(),
+      pid: process.pid,
+      event,
+      ...detail,
+    }) + '\n';
+    fs.appendFileSync(logPath, line, { encoding: 'utf8', mode: 0o600 });
+    try { fs.chmodSync(logPath, 0o600); } catch {}
+  } catch {}
 }
 
 /**
@@ -1237,11 +1668,17 @@ export function archiveConversations({
       return m;
     };
 
+    // Verify both parent directories once up front so per-file moves avoid O(depth) redundant parent lstat walks
+    assertPathChainNoSymlinks(scan.convDir, 'conversations directory');
+    assertPathChainNoSymlinks(batchDir, 'batch directory');
+
     // Write pre-move journal manifest BEFORE moving any file so crashes are always discoverable
     persistManifest('in-progress');
 
+    const isRunningInLoop = createLoopRunningChecker(isRunning, checkRunning);
+
     for (const item of targets) {
-      if (isRunning()) {
+      if (isRunningInLoop()) {
         abortedByHostRestart = true;
         failedItems.push({ id: item.id, error: 'LANGUAGE_SERVER_STARTED_MID_ARCHIVE' });
         break;
@@ -1261,14 +1698,16 @@ export function archiveConversations({
         const src = path.join(scan.convDir, f.name);
         const dst = path.join(batchDir, f.name);
         try {
-          safeMoveFileSync(src, dst);
+          safeMoveFileSync(src, dst, { trustedParentDirs: true });
           movedFiles.push(f.name);
         } catch (err) {
           itemFailed = err?.message || String(err);
           const rollbackErrors = [];
           for (const backName of [...movedFiles].reverse()) {
             try {
-              safeMoveFileSync(path.join(batchDir, backName), path.join(scan.convDir, backName));
+              safeMoveFileSync(path.join(batchDir, backName), path.join(scan.convDir, backName), {
+                trustedParentDirs: true,
+              });
             } catch (rbErr) {
               rollbackErrors.push({
                 file: backName,
@@ -1286,6 +1725,9 @@ export function archiveConversations({
       }
       if (itemFailed) {
         failedItems.push({ id: item.id, error: itemFailed });
+        if (partialSplits.length > 0) {
+          persistManifest('in-progress');
+        }
       } else {
         const bundleBytes = liveFiles.reduce((s, f) => s + f.bytes, 0);
         movedBytes += bundleBytes;
@@ -1298,12 +1740,11 @@ export function archiveConversations({
           parentId: item.parentId,
           files: movedFiles,
         });
-      }
-      // Incrementally commit manifest after each conversation so crash recovery never loses track
-      persistManifest('in-progress');
-      if (isRunning()) {
-        abortedByHostRestart = true;
-        break;
+        // Checkpoint manifest periodically without triggering N hardware fsyncs on Windows Defender/NTFS;
+        // crash recovery already scans batchDir directly for any in-progress manifest.
+        if (movedItems.length % 25 === 0) {
+          persistManifest('in-progress');
+        }
       }
     }
 
@@ -1456,8 +1897,12 @@ export function restoreArchiveBatch({
     const failed = [];
     const partialSplits = [];
 
+    assertPathChainNoSymlinks(chosen.batchDir, 'batch directory');
+    assertPathChainNoSymlinks(safeConvDir, 'conversations directory');
+    const isRunningInLoop = createLoopRunningChecker(isRunning, checkRunning);
+
     for (const item of restoreItems) {
-      if (isRunning()) {
+      if (isRunningInLoop()) {
         failed.push({ id: item.id, error: 'LANGUAGE_SERVER_STARTED_MID_RESTORE' });
         break;
       }
@@ -1475,14 +1920,16 @@ export function restoreArchiveBatch({
         const dst = path.join(safeConvDir, fn);
         if (!fs.existsSync(src)) continue;
         try {
-          safeMoveFileSync(src, dst);
+          safeMoveFileSync(src, dst, { trustedParentDirs: true });
           doneFiles.push(fn);
         } catch (err) {
           errMsg = err?.message || String(err);
           const rollbackErrors = [];
           for (const bfn of [...doneFiles].reverse()) {
             try {
-              safeMoveFileSync(path.join(safeConvDir, bfn), path.join(chosen.batchDir, bfn));
+              safeMoveFileSync(path.join(safeConvDir, bfn), path.join(chosen.batchDir, bfn), {
+                trustedParentDirs: true,
+              });
             } catch (rbErr) {
               rollbackErrors.push({
                 file: bfn,
@@ -2492,15 +2939,23 @@ export async function executeArchiveTaskSequence(task = {}, hooks = {}) {
   const relaunchDelayMs = Math.max(0, Math.min(5000, Number(task.relaunchDelayMs ?? 500)));
 
   const sleepFn = typeof hooks.sleep === 'function' ? hooks.sleep : (ms) => new Promise((r) => setTimeout(r, ms));
-  const checkRunning =
-    typeof hooks.checkRunning === 'function' ? hooks.checkRunning : () => isLanguageServerRunning({ platform: targetPlatform });
+  const hasCustomCheck = typeof hooks.checkRunning === 'function';
+  let lastInspect = { running: false, blockers: [], ignoredAcp: [] };
   const safeIsRunning = () => {
     try {
-      return Boolean(checkRunning());
+      if (hasCustomCheck) {
+        const r = Boolean(hooks.checkRunning());
+        lastInspect = { running: r, blockers: r ? [{ imageName: 'custom-hook', pid: 0 }] : [], ignoredAcp: [] };
+        return r;
+      }
+      lastInspect = inspectLanguageServerProcesses({ platform: targetPlatform });
+      return Boolean(lastInspect.running);
     } catch {
+      lastInspect = { running: true, blockers: [{ imageName: 'exception', pid: 0 }], ignoredAcp: [] };
       return true; // fail-closed
     }
   };
+  safeIsRunning.__allowLoopThrottle = !hasCustomCheck;
   const quitHost =
     typeof hooks.requestGracefulQuit === 'function'
       ? hooks.requestGracefulQuit
@@ -2533,7 +2988,11 @@ export async function executeArchiveTaskSequence(task = {}, hooks = {}) {
       ? getDefaultWindowsAppStoragePath()
       : '';
 
+  const seqStartedAt = Date.now();
+  const trace = (event, detail = {}) => appendArchiveTrace(archiveDir, event, detail);
+
   writeActiveArchiveTask(archiveDir, { action, pid: process.pid });
+  trace('TASK_START', { action, hostPid, exePath, gracefulQuit, relaunch, waitExitTimeoutMs, settleMs });
   try {
     let exited = !safeIsRunning();
     let quitRequested = false;
@@ -2547,44 +3006,66 @@ export async function executeArchiveTaskSequence(task = {}, hooks = {}) {
             writeAtomicFn: hooks.writeAppStorageAtomicFn,
             readFileSyncFn: hooks.readAppStorageSyncFn,
           });
+          trace('RUN_IN_BG_GUARD', { suspended: Boolean(runInBgGuard?.suspended), initialBlockers: lastInspect.blockers });
         }
         const firstQuit = await quitHost(hostPid, exePath, { cdpPort, expectedBrowserWsPath, attempt: 1 });
         quitRequested = Boolean(firstQuit && (firstQuit === true || firstQuit.ok === true));
+        trace('QUIT_REQUESTED', { ok: quitRequested });
       }
 
       // 等待 Antigravity 与 language_server 完全退出
       const deadline = Date.now() + waitExitTimeoutMs;
       exited = !safeIsRunning();
       let nudged = false;
+      let pollIter = 0;
+      let lastPollTraceAt = 0;
       const nudgeAt = Date.now() + Math.min(5000, Math.floor(waitExitTimeoutMs / 3));
       while (!exited && Date.now() <= deadline) {
         await sleepFn(pollMs);
+        pollIter += 1;
         if (!safeIsRunning()) {
           exited = true;
           break;
         }
-        if (gracefulQuit && !nudged && Date.now() >= nudgeAt) {
+        const nowPoll = Date.now();
+        if (pollIter === 1 || nowPoll - lastPollTraceAt >= 2500) {
+          lastPollTraceAt = nowPoll;
+          trace('WAIT_POLL', {
+            elapsedMs: nowPoll - seqStartedAt,
+            blockers: lastInspect.blockers,
+            ignoredAcp: lastInspect.ignoredAcp,
+          });
+        }
+        if (gracefulQuit && !nudged && nowPoll >= nudgeAt) {
           nudged = true;
           if (targetPlatform === 'win32') {
             if (cdpPort > 0) {
               const retryQuit = await quitHost(hostPid, exePath, { cdpPort, expectedBrowserWsPath, attempt: 2 });
               if (retryQuit && (retryQuit === true || retryQuit.ok === true)) quitRequested = true;
+              trace('WAIT_NUDGE', { elapsedMs: Date.now() - seqStartedAt, ok: quitRequested, blockers: lastInspect.blockers });
             }
           } else {
             const retryQuit = await quitHost(hostPid, exePath, { cdpPort: 0, attempt: 2 });
             if (retryQuit && (retryQuit === true || retryQuit.ok === true)) quitRequested = true;
+            trace('WAIT_NUDGE', { elapsedMs: Date.now() - seqStartedAt, ok: quitRequested, blockers: lastInspect.blockers });
           }
         }
       }
     } finally {
       if (runInBgGuard && runInBgGuard.suspended) {
-        await runInBgGuard.restore({
-          retries: 3,
-          retryDelayMs: Number.isFinite(Number(hooks.appStorageRestoreDelayMs))
-            ? Number(hooks.appStorageRestoreDelayMs)
-            : 50,
-          sleepFn,
-        });
+        let restoredBg = false;
+        try {
+          restoredBg = Boolean(
+            await runInBgGuard.restore({
+              retries: 3,
+              retryDelayMs: Number.isFinite(Number(hooks.appStorageRestoreDelayMs))
+                ? Number(hooks.appStorageRestoreDelayMs)
+                : 50,
+              sleepFn,
+            })
+          );
+        } catch {}
+        trace('RUN_IN_BG_RESTORED', { restored: restoredBg });
       }
     }
     if (!exited) {
@@ -2605,13 +3086,21 @@ export async function executeArchiveTaskSequence(task = {}, hooks = {}) {
             error: '等待 Antigravity 与 language_server 退出超时，已安全中止，未移动任何文件。',
             relaunched: false,
           };
+      trace(out.code, {
+        elapsedMs: Date.now() - seqStartedAt,
+        blockers: lastInspect.blockers,
+        ignoredAcp: lastInspect.ignoredAcp,
+      });
       writeLastArchiveResult(archiveDir, out);
       return out;
     }
 
+    trace('HOST_EXITED', { elapsedMs: Date.now() - seqStartedAt, ignoredAcp: lastInspect.ignoredAcp });
+
     // 静置 3~5 秒 + 双重 fail-closed 复检
     if (settleMs > 0) await sleepFn(settleMs);
     if (safeIsRunning()) {
+      trace('HOST_RESTARTED_DURING_SETTLE', { phase: 'settle-1', blockers: lastInspect.blockers });
       const out = {
         ok: false,
         action,
@@ -2624,6 +3113,7 @@ export async function executeArchiveTaskSequence(task = {}, hooks = {}) {
     }
     if (recheckGapMs > 0) await sleepFn(recheckGapMs);
     if (safeIsRunning()) {
+      trace('HOST_RESTARTED_DURING_SETTLE', { phase: 'settle-2', blockers: lastInspect.blockers });
       const out = {
         ok: false,
         action,
@@ -2634,6 +3124,8 @@ export async function executeArchiveTaskSequence(task = {}, hooks = {}) {
       writeLastArchiveResult(archiveDir, out);
       return out;
     }
+
+    trace('SETTLE_PASSED', { settleMs, recheckGapMs });
 
     let opRes;
     if (action === 'restore-and-restart' || action === 'restore') {
@@ -2657,6 +3149,16 @@ export async function executeArchiveTaskSequence(task = {}, hooks = {}) {
       });
     }
 
+    trace('ARCHIVE_OP_FINISHED', {
+      ok: Boolean(opRes?.ok),
+      code: opRes?.code || null,
+      movedCount: opRes?.movedCount || 0,
+      movedMb: opRes?.movedMb || 0,
+      restoredCount: opRes?.restoredCount || 0,
+      batchName: opRes?.batchName || '',
+      error: opRes?.error || null,
+    });
+
     let relaunched = false;
     if (relaunch && opRes?.code !== 'LANGUAGE_SERVER_RUNNING' && !safeIsRunning()) {
       if (relaunchDelayMs > 0) await sleepFn(relaunchDelayMs);
@@ -2664,6 +3166,8 @@ export async function executeArchiveTaskSequence(task = {}, hooks = {}) {
         relaunched = Boolean(await launchHost(exePath, ['--remote-debugging-port=0']));
       }
     }
+
+    trace('TASK_DONE', { ok: Boolean(opRes?.ok), relaunched, totalElapsedMs: Date.now() - seqStartedAt });
 
     const finalOut = {
       ...opRes,

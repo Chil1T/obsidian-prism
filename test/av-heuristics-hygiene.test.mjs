@@ -36,6 +36,7 @@ function readUtf8Strict(relPath) {
 
 test('av-hygiene 1: main.mjs & track-3 daemon modules have zero PowerShell/Win32_Process/EncodedCommand, zero inline credential wordlists, and zero inline token prefixes', () => {
   const mainSrc = readUtf8Strict('sidecars/daemon/main.mjs');
+  const archiveSrc = readUtf8Strict('sidecars/daemon/conversation-archive.mjs');
   const redactSrc = readUtf8Strict('sidecars/daemon/redact.mjs');
   const rulesSrc = readUtf8Strict('sidecars/daemon/sensitive-path-rules.json');
   readUtf8Strict('test/av-heuristics-hygiene.test.mjs');
@@ -51,6 +52,15 @@ test('av-hygiene 1: main.mjs & track-3 daemon modules have zero PowerShell/Win32
   ];
   for (const [label, re] of mainForbiddenPatterns) {
     assert.equal(re.test(mainSrc), false, `sidecars/daemon/main.mjs must contain 0 ${label}`);
+  }
+
+  const archiveForbiddenPatterns = [
+    ...mainForbiddenPatterns,
+    ['Get-' + 'CimInstance', new RegExp('Get-' + 'CimInstance', 'i')],
+    ['wm' + 'ic', new RegExp('\\bwm' + 'ic\\b', 'i')],
+  ];
+  for (const [label, re] of archiveForbiddenPatterns) {
+    assert.equal(re.test(archiveSrc), false, `sidecars/daemon/conversation-archive.mjs must contain 0 ${label}`);
   }
 
   const inlineCredentialLiterals = [
