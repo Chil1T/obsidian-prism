@@ -26,21 +26,30 @@ test('step-plan checklist card and home-panel align with Obsidian Prism floating
   const spLine = css.split('\n').find((l) => l.includes('[data-testid="step-plan-item"]{')) || '';
   assert.ok(spLine.length > 0, 'must style step-plan-item');
 
-  // PR #43 local-variable architecture + floating overview-shell material on step-plan
+  // PR #43 + v1.0.8 layered monochrome mirror optics & 5-state obsidian star-core icons on step-plan
   assert.ok(spLine.includes('& [data-testid="step-plan"]{'), 'must style step-plan card');
   assert.ok(spLine.includes('border-radius:13px !important;'), 'step-plan must match overview-shell 13px radius');
   assert.ok(spLine.includes('var(--ag-cs-menu-bg,var(--ag-cs-panel-bg,rgba(14,16,22,.94)))'), 'step-plan must share overview-shell dark obsidian surface');
-  assert.ok(spLine.includes('var(--ag-cs-menu-sheen)'), 'step-plan must share overview-shell top-light micro-prism sheen');
+  assert.ok(spLine.includes('radial-gradient(108% 52px at 50% 0%,rgba(168,200,255,.048) 0%,transparent 74%),var(--ag-cs-menu-sheen)'), 'step-plan must layer restrained cool-silver top diffusion over sheen');
   assert.ok(spLine.includes('var(--ag-cs-menu-bd)'), 'step-plan must share overview-shell 1px stepped border');
-  assert.ok(spLine.includes('inset 0 1px 0 rgba(235,243,255,.115)'), 'step-plan must share overview-shell top specular highlight');
+  assert.ok(spLine.includes('inset 0 1px 0 rgba(235,243,255,.14)'), 'step-plan must render crisp icy-silver top specular edge');
+  assert.ok(spLine.includes('&[data-ag-sp-running="1"]{') && spLine.includes('rgba(56,176,255,.15)'), 'running step-plan must render nebula cyan-violet top ambient glow');
   assert.ok(spLine.includes('& [data-testid="step-plan-chip"]{'), 'must style step-plan-chip');
-  assert.ok(spLine.includes('&[data-status="in_progress"]{--_sc:var(--warning);') && spLine.includes('&>svg{'), 'must differentiate paused in_progress svg with static amber ring');
-  assert.ok(spLine.includes('&[data-status="done"]{'), 'must style done state');
-  assert.ok(spLine.includes('&[data-status="pending"]{'), 'must style pending state');
-  assert.ok(spLine.includes('&[data-status="failed"]{'), 'must style failed state');
-  assert.ok(spLine.includes('&[data-status="skipped"]{'), 'must style skipped state');
+  assert.ok(spLine.includes('&[data-status="in_progress"]{--_sc:var(--warning);') && spLine.includes('&>svg{'), 'must differentiate paused in_progress svg with static amber obsidian core');
+  assert.ok(spLine.includes('&[data-status="done"]{--_sc:var(--success);') && spLine.includes('drop-shadow('), 'done state must render obsidian star-core emerald ring + glowing checkmark');
+  assert.ok(spLine.includes('&[data-status="pending"]{') && spLine.includes('width:3.5px;height:3.5px;'), 'pending state must render obsidian well + centered 3.5px dormant star dot');
+  assert.ok(spLine.includes('&[data-status="failed"]{--_sc:var(--error);'), 'failed state must render obsidian core + crimson ring + cross');
+  assert.ok(spLine.includes('&[data-status="skipped"]{') && spLine.includes('width:6px;height:1.5px;'), 'skipped state must render dashed ring + centered 6x1.5px dash');
   assert.ok(spLine.includes('translate:-50% -50%;') && !spLine.includes('transform:translate('), 'pseudo-element centering must use individual translate before individual rotate');
   assert.equal(spLine.includes('opacity:'), false, 'step-plan-item text must not stack low opacity over --muted-foreground');
+
+  // Overview-shell & step-plan 4s GPU opacity breathing ambient + strict pause guards
+  assert.ok(baseSection.includes('@keyframes ag-ov-br{'), 'must define GPU-only opacity breathing keyframe for running ambient');
+  assert.ok(baseSection.includes('animation:ag-ov-br 4s ease-in-out infinite;'), 'running overview-shell & step-plan ::after must breathe over 4s');
+  assert.ok(baseSection.includes('[data-ag-overview-running="1"]::after,& [data-ag-sp-running="1"]::after,') && baseSection.includes('animation-play-state:paused !important;'), 'win-blur/pp-open must pause running ambient breathing');
+  assert.ok(baseSection.includes('html[data-ag-cs-style]:not(#_) :is(.no-transitions,.no-transitions *){transition:none !important;animation:none !important;}'), 'must preserve v2.35.1 .no-transitions session-switch freeze');
+  assert.ok(baseSection.includes('& [data-lexical-editor="true"]{min-height:40px !important;font-size:14px !important;line-height:22px !important;transition:none !important;}'), 'must disable lexical editor 100ms collapse transition');
+  assert.ok(baseSection.includes(':not([data-testid*="home-wallpaper"]):not([class*="home-wallpaper"])'), 'must yield to v2.35.1 native home-wallpaper layer');
 
   // State transition keyframe, reduced-motion (--_sa:none), and Windows High Contrast fallback
   const kfLine = css.split('\n').find((l) => l.includes('@keyframes ag-sp-in{')) || '';
@@ -137,18 +146,27 @@ test('prism-rim-canvas caps step-plan rims to newest 2 visible expanded cards, m
     if (tag === 'canvas') {
       el.width = 0;
       el.height = 0;
+      el._strokeStops = [];
       el.getContext = (t) => (t === '2d' ? {
         globalAlpha: 1,
         lineWidth: 1,
         strokeStyle: null,
+        fillStyle: null,
         save() {},
         restore() {},
+        clip() {},
+        fillRect() {},
         translate() {},
         clearRect() {},
         beginPath() {},
         roundRect() {},
-        stroke() {},
-        createRadialGradient: () => ({ addColorStop() {} }),
+        moveTo() {},
+        lineTo() {},
+        closePath() {},
+        fill() {},
+        stroke() { if (this.strokeStyle?._stops) el._strokeStops = this.strokeStyle._stops.slice(); },
+        createRadialGradient: () => { const _stops = []; return { _stops, addColorStop(o, c) { _stops.push([o, c]); } }; },
+        createLinearGradient: () => ({ addColorStop() {} }),
       } : null);
     }
     return el;
@@ -232,18 +250,24 @@ test('prism-rim-canvas caps step-plan rims to newest 2 visible expanded cards, m
     runGuardedMut: (fn) => fn(),
   });
 
-  // 1) Initial pointer move mounts ONLY newest 2 visible expanded step-plans (sp2, sp1) + homePanel
+  // 1) Initial pointer move mounts ONLY newest 2 visible expanded step-plans (sp2, sp1) + homePanel with monochrome ice-silver mirror rim
   ctl.onPointerMove({ clientX: 200, clientY: 300 });
   flushRaf();
   assert.equal(sp2.getAttribute('data-ag-cs-prism-box'), '1');
   assert.equal(sp1.getAttribute('data-ag-cs-prism-box'), '1');
+  assert.equal(sp2.getAttribute('data-ag-cs-prism-mirror'), '1', 'mounted step-plan must enable monochrome mirror rim');
+  assert.equal(sp1.getAttribute('data-ag-cs-prism-mirror'), '1', 'mounted step-plan must enable monochrome mirror rim');
+  assert.equal(homePanel.getAttribute('data-ag-cs-prism-mirror'), '1', 'home-panel must enable monochrome mirror rim');
   assert.equal(sp0.getAttribute('data-ag-cs-prism-box'), null, '3rd older step-plan must not mount rim canvas');
+  assert.equal(sp0.getAttribute('data-ag-cs-prism-mirror'), null, 'unmounted step-plan must not carry prism-mirror');
   assert.equal(sp3.getAttribute('data-ag-cs-prism-box'), null, 'offscreen step-plan must not mount rim canvas');
   assert.ok(sp2.querySelector('.ag-cs-prism-rim-cv'));
   assert.ok(sp1.querySelector('.ag-cs-prism-rim-cv'));
   assert.equal(sp0.querySelector('.ag-cs-prism-rim-cv'), null);
   const homeCv1 = homePanel.querySelector('.ag-cs-prism-rim-cv');
   assert.ok(homeCv1 && homeCv1.width === 520 && homeCv1.height === 320, 'home-panel rim canvas must mount at exact inset:0 bounds');
+  assert.ok(homeCv1._strokeStops.some(([, c]) => c === 'rgba(232,240,252,0.56)'), 'home-panel rim must stroke ice-silver monochrome mirror edge (no rainbow)');
+  assert.ok(sp1.querySelector('.ag-cs-prism-rim-cv')._strokeStops.some(([, c]) => c === 'rgba(232,240,252,0.56)'), 'step-plan rim must stroke ice-silver monochrome mirror edge (no rainbow)');
 
   // 2) Scrolling sp2 out of viewport via IntersectionObserver immediately unmounts & reclaims 0x0 VRAM, promoting sp0
   const sp2Cv = sp2.querySelector('.ag-cs-prism-rim-cv');
@@ -254,15 +278,18 @@ test('prism-rim-canvas caps step-plan rims to newest 2 visible expanded cards, m
     { target: sp3, isIntersecting: false, boundingClientRect: sp3._rect },
   ]);
   assert.equal(sp2.getAttribute('data-ag-cs-prism-box'), null, 'scrolled-out step-plan must lose prism-box immediately');
+  assert.equal(sp2.getAttribute('data-ag-cs-prism-mirror'), null, 'scrolled-out step-plan must lose prism-mirror immediately');
   assert.equal(sp2.querySelector('.ag-cs-prism-rim-cv'), null, 'scrolled-out step-plan canvas must be removed immediately');
   assert.equal(sp2Cv.width, 0, 'scrolled-out step-plan canvas VRAM must shrink to 0x0');
   assert.equal(sp0.getAttribute('data-ag-cs-prism-box'), '1', 'visible expanded sp0 should be promoted into top-2 slot');
+  assert.equal(sp0.getAttribute('data-ag-cs-prism-mirror'), '1', 'promoted sp0 must gain prism-mirror immediately');
 
   // 3) Collapsing sp1 immediately unmounts its rim canvas on markDirty()
   const sp1Cv = sp1.querySelector('.ag-cs-prism-rim-cv');
   sp1.setAttribute('aria-expanded', 'false');
   ctl.markDirty();
   assert.equal(sp1.getAttribute('data-ag-cs-prism-box'), null, 'collapsed step-plan must lose prism-box immediately');
+  assert.equal(sp1.getAttribute('data-ag-cs-prism-mirror'), null, 'collapsed step-plan must lose prism-mirror immediately');
   assert.equal(sp1.querySelector('.ag-cs-prism-rim-cv'), null);
   assert.equal(sp1Cv.width, 0, 'collapsed step-plan canvas VRAM must shrink to 0x0');
 
@@ -314,4 +341,231 @@ test('model-selector trigger relaxes container cap to min(300px,100%) and exclud
     css.includes('&[data-t~="1"] [data-testid="model-selector-trigger"]>span:not(.ag-cs-model-glyph):not(.ag-pp-mini-keycap),&[data-t~="2"] [data-testid="permissions-selector-trigger"]>span{'),
     'compact data-t~="1" collapse rule must exclude .ag-pp-mini-keycap',
   );
+});
+
+test('host-workbench-enhancer detects status-task-running, enforces grid-rows-[1fr], stamps data-ag-sp-running on active step-plan, and cleans up on destroy', () => {
+  const enhancerMod = require('../host-workbench-enhancer.js');
+  const makeNode = (tag, opts = {}) => {
+    const attrs = new Map(Object.entries(opts.attrs || {}));
+    const kids = [];
+    const n = {
+      nodeType: 1,
+      tagName: tag.toUpperCase(),
+      className: opts.className || '',
+      parentElement: null,
+      children: kids,
+      getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+      setAttribute: (k, v) => attrs.set(k, String(v)),
+      hasAttribute: (k) => attrs.has(k),
+      removeAttribute: (k) => attrs.delete(k),
+      appendChild(c) { c.parentElement = n; kids.push(c); return c; },
+      remove() {},
+      matches(sel) {
+        return String(sel).split(',').map((s) => s.trim()).filter(Boolean).some((part) => {
+          const tokens = part.split(/\s+/);
+          const leaf = tokens[tokens.length - 1];
+          const matchLeaf = (el, expr) => {
+            if (!el) return false;
+            let rem = expr;
+            const cls = [];
+            rem = rem.replace(/\.((?:\\.|[^.\[\s])+)/g, (_, c) => { cls.push(c.replace(/\\/g, '')); return ''; });
+            const attrRe = /\[([^=\]]+)(?:="([^"]*)")?\]/g;
+            let m;
+            while ((m = attrRe.exec(rem))) {
+              if (m[2] !== undefined ? el.getAttribute(m[1]) !== m[2] : !el.hasAttribute(m[1])) return false;
+            }
+            const tagPart = rem.replace(attrRe, '').trim();
+            if (tagPart && el.tagName !== tagPart.toUpperCase()) return false;
+            const cList = String(el.className || '').split(/\s+/).filter(Boolean);
+            return cls.every((c) => cList.includes(c));
+          };
+          if (!matchLeaf(n, leaf)) return false;
+          if (tokens.length === 1) return true;
+          let cur = n.parentElement;
+          for (let i = tokens.length - 2; i >= 0; i--) {
+            while (cur && !matchLeaf(cur, tokens[i])) cur = cur.parentElement;
+            if (!cur) return false;
+            cur = cur.parentElement;
+          }
+          return true;
+        });
+      },
+      querySelectorAll(sel) {
+        const out = [];
+        const walk = (x) => { for (const c of x.children) { if (c.matches(sel)) out.push(c); walk(c); } };
+        walk(n);
+        return out;
+      },
+      querySelector(sel) { return n.querySelectorAll(sel)[0] || null; },
+    };
+    return n;
+  };
+
+  const doc = makeNode('document');
+  const html = makeNode('html');
+  const body = makeNode('body');
+  doc.appendChild(html);
+  html.appendChild(body);
+  doc.documentElement = html;
+  doc.body = body;
+
+  // 1) Collapsed running-items-panel (grid-rows-[0fr]) containing a task-running icon must NOT falsely trigger overview-running
+  const runPanel = makeNode('div', { className: 'grid grid-rows-[0fr]', attrs: { 'data-testid': 'running-items-panel' } });
+  const bgRowHidden = makeNode('div', { attrs: { 'data-testid': 'background-task-row' } });
+  bgRowHidden.appendChild(makeNode('svg', { attrs: { 'data-testid': 'status-task-running' } }));
+  runPanel.appendChild(bgRowHidden);
+
+  const ovShell = makeNode('div', { attrs: { 'data-ag-cs-overview-shell': '1' } });
+  const ovPanel = makeNode('div', { attrs: { 'data-testid': 'overview-panel' } });
+  const sec = makeNode('div', { className: 'p-1' });
+  const secBtn = makeNode('button');
+  const bgRowOv = makeNode('div', { attrs: { 'data-testid': 'background-task-row' } });
+  sec.appendChild(secBtn);
+  sec.appendChild(bgRowOv);
+  ovPanel.appendChild(sec);
+  ovShell.appendChild(ovPanel);
+
+  // 2) Two step-plan cards: spActive has in_progress + status-loading-spinner; spPaused has in_progress + static svg only
+  const spActive = makeNode('div', { attrs: { 'data-testid': 'step-plan' } });
+  const itemActive = makeNode('div', { attrs: { 'data-testid': 'step-plan-item', 'data-status': 'in_progress' } });
+  itemActive.appendChild(makeNode('span', { attrs: { 'data-testid': 'status-loading-spinner' } }));
+  spActive.appendChild(itemActive);
+
+  const spPaused = makeNode('div', { attrs: { 'data-testid': 'step-plan' } });
+  const itemPaused = makeNode('div', { attrs: { 'data-testid': 'step-plan-item', 'data-status': 'in_progress' } });
+  itemPaused.appendChild(makeNode('svg'));
+  spPaused.appendChild(itemPaused);
+
+  body.appendChild(runPanel);
+  body.appendChild(ovShell);
+  body.appendChild(spActive);
+  body.appendChild(spPaused);
+
+  const ctl = enhancerMod.createHostEnhancerController({
+    doc,
+    win: { addEventListener() {}, removeEventListener() {}, matchMedia: () => ({ matches: false }) },
+    getConfig: () => ({}),
+    isDestroyed: () => false,
+    runGuardedMut: (fn) => fn(),
+  });
+
+  ctl.sync({ o: true });
+  assert.equal(ovShell.getAttribute('data-ag-overview-running'), null, 'collapsed 0fr running-items-panel must not trigger overview-running');
+  assert.equal(spActive.getAttribute('data-ag-sp-running'), '1', 'active step-plan with spinner must receive data-ag-sp-running="1"');
+  assert.equal(spPaused.getAttribute('data-ag-sp-running'), null, 'paused step-plan without spinner must not receive data-ag-sp-running');
+
+  // Expanding running-items-panel to grid-rows-[1fr] or mounting status-task-running inside overview activates ambient
+  runPanel.className = 'grid grid-rows-[1fr]';
+  ctl.sync({ o: true });
+  assert.equal(ovShell.getAttribute('data-ag-overview-running'), '1', 'expanded 1fr running-items-panel with status-task-running must activate overview-running');
+
+  runPanel.className = 'grid grid-rows-[0fr]';
+  bgRowOv.appendChild(makeNode('svg', { attrs: { 'data-testid': 'status-task-running' } }));
+  ctl.sync({ o: true });
+  assert.equal(bgRowOv.getAttribute('data-ag-sub-running'), '1', 'background-task-row with status-task-running must get data-ag-sub-running="1"');
+  assert.equal(secBtn.getAttribute('data-ag-sub-sec-running'), '1');
+  assert.equal(ovShell.getAttribute('data-ag-overview-running'), '1');
+
+  ctl.destroy();
+  assert.equal(spActive.getAttribute('data-ag-sp-running'), null, 'destroy() must strip data-ag-sp-running');
+  assert.equal(ovShell.getAttribute('data-ag-overview-running'), null, 'destroy() must strip data-ag-overview-running');
+});
+
+test('stream-choreography decouples triggerHeroALiftoff / triggerHeroBHomeReturn from v2.35.1 animate-fade-in & no-transitions', () => {
+  const scMod = require('../stream-choreography.js');
+  const springCalls = [];
+  const staggerCalls = [];
+  const motionEngine = {
+    spring(el, kfs, opts) { springCalls.push({ el, kfs, opts }); },
+    stagger(els, kfs, opts) { staggerCalls.push({ els, kfs, opts }); },
+  };
+
+  const makeEl = (attrs = {}, cls = '', rect = { left: 0, top: 600, width: 640, height: 100 }) => {
+    const m = new Map(Object.entries(attrs));
+    const el = {
+      nodeType: 1,
+      tagName: 'DIV',
+      className: cls,
+      parentElement: null,
+      children: [],
+      style: { setProperty() {}, removeProperty() {} },
+      classList: { contains: (c) => String(el.className || '').split(/\s+/).includes(c), remove() {} },
+      getAttribute: (k) => (m.has(k) ? m.get(k) : null),
+      setAttribute: (k, v) => m.set(k, String(v)),
+      hasAttribute: (k) => m.has(k),
+      removeAttribute: (k) => m.delete(k),
+      appendChild(c) { c.parentElement = el; el.children.push(c); return c; },
+      remove() {},
+      getBoundingClientRect: () => rect,
+      matches(sel) {
+        return String(sel).split(',').map((s) => s.trim()).some((s) => {
+          if (s.startsWith('.')) return el.classList.contains(s.slice(1));
+          const am = s.match(/^\[([^=\]]+)="([^"]*)"\]$/);
+          return am ? el.getAttribute(am[1]) === am[2] : false;
+        });
+      },
+      closest(sel) { let c = el; while (c) { if (c.matches(sel)) return c; c = c.parentElement; } return null; },
+      querySelectorAll(sel) {
+        const out = [];
+        const walk = (x) => { for (const c of x.children) { if (c.matches(sel)) out.push(c); walk(c); } };
+        walk(el);
+        return out;
+      },
+      querySelector(sel) { return el.querySelectorAll(sel)[0] || null; },
+    };
+    return el;
+  };
+
+  const prevDoc = globalThis.document;
+  const body = makeEl();
+  const home = makeEl({}, 'agy-home animate-fade-in');
+  home.appendChild(makeEl({ 'data-testid': 'home-greeting' }, '', { left: 0, top: 120, width: 520, height: 40 }));
+  home.appendChild(makeEl({}, 'ag-cs-home-panel', { left: 0, top: 180, width: 520, height: 280 }));
+  home.appendChild(makeEl({ 'data-testid': 'agent-input-box' }, '', { left: 0, top: 480, width: 520, height: 96 }));
+
+  const conv = makeEl({ 'data-testid': 'conversation-view' });
+  const fadeWrap = makeEl({}, 'w-full transition-opacity animate-fade-in');
+  const convInput = makeEl({ 'data-testid': 'agent-input-box' }, '', { left: 0, top: 820, width: 640, height: 96 });
+  fadeWrap.appendChild(convInput);
+  conv.appendChild(fadeWrap);
+  body.appendChild(home);
+  body.appendChild(conv);
+
+  globalThis.document = {
+    body,
+    documentElement: makeEl(),
+    createElement: () => makeEl(),
+    querySelector: (s) => body.querySelector(s),
+    querySelectorAll: (s) => body.querySelectorAll(s),
+  };
+
+  try {
+    const ctl = scMod.createStreamChoreographyController({
+      motionEngine,
+      isDestroyed: () => false,
+      isMotionStandardOrUltra: () => true,
+      isMotionUltra: () => true,
+      setAttrIfChanged: (el, k, v) => el.setAttribute(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+    // 1) Initialize in Home -> samples home composer rect (top=480)
+    ctl.syncHeroRouteChoreography({ inHome: true, formalConv: null, checkCaustics: false });
+    // 2) Transition Home -> Conv (input wrapped in v2.35.1 .animate-fade-in) -> triggers triggerHeroALiftoff with clamped dy
+    ctl.syncHeroRouteChoreography({ inHome: false, formalConv: conv, convInputRect: { left: 0, top: 820, width: 640, height: 96 }, checkCaustics: false });
+    assert.equal(springCalls.length, 1);
+    const dyMatch = springCalls[0].kfs[0].transform.match(/translateY\((-?\d+)px\)/);
+    assert.ok(dyMatch, 'liftoff spring must animate translateY');
+    const dy = Number(dyMatch[1]);
+    assert.ok(dy >= -24 && dy <= 0, `liftoff under .animate-fade-in must clamp dy to [-24, 0], got ${dy}`);
+
+    // 3) Transition Conv -> Home -> triggers triggerHeroBHomeReturn without conflicting opacity keyframe
+    ctl.syncHeroRouteChoreography({ inHome: true, formalConv: null, checkCaustics: false });
+    assert.equal(staggerCalls.length, 1);
+    assert.equal('opacity' in staggerCalls[0].kfs[0], false, 'triggerHeroBHomeReturn must omit conflicting opacity keyframe');
+    assert.equal('opacity' in staggerCalls[0].kfs[1], false, 'triggerHeroBHomeReturn must omit conflicting opacity keyframe');
+    ctl.flushAllStreamArtifacts();
+  } finally {
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+  }
 });

@@ -1593,3 +1593,68 @@ test('P0 cross-card & cross-window profiles bidirectional sync across THOUGHT_BI
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('UX regression: reusing mounted Suggester card on settings sync updates language without calling refreshState() or wiping unsaved form drafts', async () => {
+  const dom = createFakeSuggesterDom({ lang: 'en', withComposer: false });
+  const { fakeDoc, fakeWin, sgSlot } = dom;
+  let getConfigCalls = 0;
+
+  fakeWin.__agPrismSuggestCall = (rawPayload) => {
+    const msg = JSON.parse(rawPayload);
+    if (msg.action === 'get-config') getConfigCalls += 1;
+    setTimeout(() => {
+      fakeWin.__agPrismSuggesterResolve(msg.id, {
+        ok: true,
+        config: { enabled: true, ttlMinutes: 15, activeProfileId: 'default' },
+        backend: { aiReady: false, profileName: 'Default', model: 'gpt-4o-mini' },
+        profiles: [
+          {
+            id: 'default',
+            name: 'Default',
+            baseUrl: 'https://api.openai.com/v1',
+            model: 'gpt-4o-mini',
+            hasApiKey: false,
+            maskedKey: '',
+          },
+        ],
+      });
+    }, 5);
+  };
+
+  const ctx = vm.createContext(fakeWin);
+  vm.runInContext(cdp.buildSuggesterExpression(), ctx);
+  await new Promise((r) => setTimeout(r, 25));
+
+  const firstHandle = sgSlot.__agPrismSgUiHandle;
+  assert.ok(firstHandle, 'Expected mounted Suggester handle');
+  const callsBeforeSync = getConfigCalls;
+  assert.ok(callsBeforeSync >= 1, 'Initial mount should fetch config at least once');
+
+  const urlInput = sgSlot.querySelector('[data-testid="prism-sg-base-url"]');
+  const modelInput = sgSlot.querySelector('[data-testid="prism-sg-model-input"]');
+  const keyInput = sgSlot.querySelector('[data-testid="prism-sg-api-key"]');
+  assert.ok(urlInput && modelInput && keyInput, 'Expected baseUrl, model, and apiKey form inputs');
+
+  // Simulate user typing unsaved values into all three fields
+  urlInput.value = 'https://custom.proxy.local/v1';
+  urlInput.dispatchEvent(new fakeWin.Event('input'));
+  modelInput.value = 'gemini-2.5-flash-draft';
+  modelInput.dispatchEvent(new fakeWin.Event('input'));
+  keyInput.value = 'sk-unsaved-draft-key-999999';
+  keyInput.dispatchEvent(new fakeWin.Event('input'));
+
+  // Simulate repeated settings-panel sync calling mountSuggesterUi on existing slot (same lang & switched lang)
+  const reusedSameLang = fakeWin.__prismMountSuggesterUi(sgSlot, { lang: 'en' });
+  const reusedZh = fakeWin.__prismMountSuggesterUi(sgSlot, { lang: 'zh-CN' });
+  await new Promise((r) => setTimeout(r, 25));
+
+  assert.equal(reusedSameLang, firstHandle);
+  assert.equal(reusedZh, firstHandle);
+  assert.equal(getConfigCalls, callsBeforeSync, 'Reusing existingHandle must NEVER re-trigger refreshState()/get-config');
+  assert.equal(urlInput.value, 'https://custom.proxy.local/v1', 'Unsaved Base URL must be preserved');
+  assert.equal(modelInput.value, 'gemini-2.5-flash-draft', 'Unsaved Model must be preserved');
+  assert.equal(keyInput.value, 'sk-unsaved-draft-key-999999', 'Unsaved API Key draft must be preserved');
+  assert.equal(firstHandle.root.getAttribute('data-ag-cs-lang'), 'zh-CN', 'Language update must still apply cleanly');
+
+  fakeWin.__agPrismSuggester.destroy();
+});

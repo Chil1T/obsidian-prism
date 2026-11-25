@@ -715,7 +715,7 @@
         secondaryHex: '#67E8F9',
         secondaryHexLight: '#0891B2',
         glowRgba: 'rgba(0, 212, 255, 0.30)',
-        taglineZh: '电光青蓝亚秒级响应核 · 大规模代码检索与高频跑腿主力',
+        taglineZh: '电光青蓝亚秒级响应核 · 大规模代码检索与高频分诊主力',
         taglineEn: 'Sub-Second Hyper-Velocity Core · Rapid Codebase Exploration & Triage',
         scenesZh: ['极速检索', '日志初筛', '高频并发'],
         scenesEn: ['Fast Search', 'Log Triage', 'Parallel'],

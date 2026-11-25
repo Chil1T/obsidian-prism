@@ -3814,7 +3814,7 @@ export class PrismDaemon {
           ),
         };
       }
-      if (!baseState.checkedAt) {
+      if (!baseState.checkedAt && this._getAutoUpdateSetting() === 'on') {
         void this.runUpdateCheck({ force: false, manual: false, allowAutoApply: false, channel }).catch(() => {});
         return { ...baseState, checking: true };
       }
@@ -5258,7 +5258,7 @@ export class PrismDaemon {
   _getMascotCleanupExpression() {
     return (
       this.cdp?.MASCOT_REMOVE_EXPRESSION ||
-      "(() => { try { document.querySelectorAll?.('.ag-cs-crab-stage, .ag-cs-mascot-stage').forEach((n) => n.remove()); document.documentElement?.removeAttribute?.('data-ag-cs-has-crab'); delete window.__agDualMascotRig; delete globalThis.__agDualMascotRig; } catch {} return { ok: true, status: 'off' }; })()"
+      "(() => { try { window.__agDualMascotRig?.dispose?.(); } catch {} try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {} try { document.querySelectorAll?.('.ag-cs-crab, .ag-cs-dual-stage, .ag-cs-crab-stage, .ag-cs-mascot-stage, .ag-v2-mascot-stage, .ag-v2-habitat-prop').forEach((n) => { try { n.__agMascotApi?.dispose?.(); } catch {} n.remove?.(); }); } catch {} try { document.querySelectorAll?.('[data-ag-cs-crab-anchor]').forEach((n) => n.removeAttribute?.('data-ag-cs-crab-anchor')); } catch {} try { document.documentElement?.removeAttribute?.('data-ag-cs-has-crab'); document.documentElement?.removeAttribute?.('data-ag-cs-mascot-drag'); } catch {} try { delete window.__agDualMascotRig; delete globalThis.__agDualMascotRig; delete window.__agPrismMascotArt; delete globalThis.__agPrismMascotArt; } catch {} return { ok: true, status: 'off' }; })()"
     );
   }
 
@@ -7204,7 +7204,7 @@ export class PrismDaemon {
           this._releaseIdleTelemetry(true);
         }
         const { channel: syncedUpdateChannel, changed: updateChannelChanged } = this._syncUpdateServiceChannel(currentCfg);
-        if (updateChannelChanged && this.running) {
+        if (updateChannelChanged && this.running && this._getAutoUpdateSetting() === 'on') {
           void this.runUpdateCheck({ force: true, manual: false, allowAutoApply: false, channel: syncedUpdateChannel }).catch(() => {});
         }
         const omniEnabled = this._isOmniEnabled(currentCfg);
@@ -11158,14 +11158,14 @@ export class PrismDaemon {
     if (this._enableAutoUpdateTimer) {
       this._updateInitialTimer = setTimeout(() => {
         this._updateInitialTimer = null;
-        if (this.running) {
+        if (this.running && this._getAutoUpdateSetting() === 'on') {
           void this.runUpdateCheck({ force: false, manual: false, allowAutoApply: true }).catch(() => {});
         }
       }, this._updateCheckInitialDelayMs);
       this._updateInitialTimer?.unref?.();
 
       this._updateIntervalTimer = setInterval(() => {
-        if (this.running) {
+        if (this.running && this._getAutoUpdateSetting() === 'on') {
           void this.runUpdateCheck({ force: false, manual: false, allowAutoApply: true }).catch(() => {});
         }
       }, this._updateCheckIntervalMs);

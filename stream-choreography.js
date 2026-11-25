@@ -695,12 +695,19 @@
       if (inputBox && typeof motionEngine?.spring === 'function') {
         const nr = measuredRect || rectOf(inputBox);
         const rawDelta = r && nr ? Math.round(r.top - nr.top) : -160;
-        const dy = Math.max(-420, Math.min(-24, rawDelta === 0 ? -140 : rawDelta));
+        const hostFade = Boolean(
+          closestOf(inputBox, '.animate-fade-in, .no-transitions') ||
+            closestOf(formalConv, '.no-transitions') ||
+            clHas(formalConv, 'no-transitions')
+        );
+        const dy = hostFade
+          ? Math.max(-24, Math.min(0, rawDelta === 0 ? -10 : Math.round(rawDelta * 0.08)))
+          : Math.max(-420, Math.min(-24, rawDelta === 0 ? -140 : rawDelta));
         try {
           motionEngine.spring(
             inputBox,
-            [{ transform: `translateY(${dy}px) scale(0.985)` }, { transform: 'translateY(0) scale(1)' }],
-            { durationMs: 480, stiffness: 310, damping: 28, slot: 'liftoff-dock' }
+            [{ transform: `translateY(${dy}px) scale(${hostFade ? 0.996 : 0.985})` }, { transform: 'translateY(0) scale(1)' }],
+            { durationMs: hostFade ? 220 : 480, stiffness: hostFade ? 360 : 310, damping: hostFade ? 32 : 28, slot: 'liftoff-dock' }
           );
         } catch {}
       }
@@ -719,12 +726,12 @@
         );
         if (items.length > 0) {
           try {
-            motionEngine.stagger(items, [{ opacity: 0.01, transform: 'translateY(10px)' }, { opacity: 1, transform: 'translateY(0px)' }], {
-              durationMs: 220,
-              delayStep: 24,
-              stepMs: 24,
+            motionEngine.stagger(items, [{ transform: 'translateY(8px)' }, { transform: 'translateY(0px)' }], {
+              durationMs: 200,
+              delayStep: 20,
+              stepMs: 20,
               stiffness: 360,
-              damping: 30,
+              damping: 32,
               slot: 'home-return',
             });
           } catch {}

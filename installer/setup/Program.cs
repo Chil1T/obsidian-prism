@@ -891,8 +891,8 @@ namespace AgyClaudeStyle.Installer
                             if (log != null)
                             {
                                 log(InstallerI18n.TrFormat(
-                                    "已停止原生 Sidecar Daemon (PID {0})",
-                                    "Stopped native Sidecar Daemon (PID {0})",
+                                    "已停止本地守护服务 (PID {0})",
+                                    "Stopped local background daemon (PID {0})",
                                     pid.Value
                                 ));
                             }
@@ -938,8 +938,8 @@ namespace AgyClaudeStyle.Installer
                                     if (log != null)
                                     {
                                         log(InstallerI18n.TrFormat(
-                                            "已清理残留 Sidecar Daemon (PID {0})",
-                                            "Cleaned up orphaned Sidecar Daemon (PID {0})",
+                                            "已清理残留守护服务 (PID {0})",
+                                            "Cleaned up orphaned background daemon (PID {0})",
                                             candPid
                                         ));
                                     }
@@ -1794,7 +1794,7 @@ namespace AgyClaudeStyle.Installer
         public static string BuildHelpText()
         {
             return InstallerI18n.Tr(
-                "Obsidian Prism · 黑曜棱镜 Windows 安装与修补工具\r\n" +
+                "Obsidian Prism · 黑曜棱镜 Windows 安装与配置工具\r\n" +
                 "用法: obsidian-prism-installer.exe [选项]\r\n\r\n" +
                 "选项:\r\n" +
                 "  --silent, -s, /S      静默模式运行（无交互界面）\r\n" +
@@ -1804,15 +1804,15 @@ namespace AgyClaudeStyle.Installer
                 "  --popup               静默模式下执行完成后弹窗提示结果\r\n" +
                 "  --no-autostart        安装时跳过开机自启与卸载注册表项\r\n" +
                 "  --no-kill-legacy      安装时不终止旧版 Node 守护进程\r\n" +
-                "  --no-native-daemon    不自动拉起原生 Sidecar Daemon\r\n" +
+                "  --no-native-daemon    不自动拉起本地守护服务\r\n" +
                 "  --no-relaunch-prompt  不弹出 Antigravity 带参重开提示\r\n" +
                 "  --install-dir <目录>  自定义后台守护安装目录\r\n" +
-                "  --plugin-dir <目录>   自定义原生 Sidecar 插件目录\r\n" +
+                "  --plugin-dir <目录>   自定义本地插件目录\r\n" +
                 "  --cdp-port <端口>     指定 Antigravity CDP 调试端口\r\n" +
                 "  --lang <zh|en>        指定界面与日志语言（覆盖 AG_PRISM_LANG 与系统语言）\r\n" +
                 "  --out <文件>          将执行结果写入指定文件\r\n" +
                 "  --help, -h, /?        显示此帮助信息",
-                "Obsidian Prism Installer & Patcher for Windows\r\n" +
+                "Obsidian Prism Installer for Windows\r\n" +
                 "Usage: obsidian-prism-installer.exe [options]\r\n\r\n" +
                 "Options:\r\n" +
                 "  --silent, -s, /S      Run silently without the GUI window\r\n" +
@@ -1822,10 +1822,10 @@ namespace AgyClaudeStyle.Installer
                 "  --popup               Show a result dialog after silent execution\r\n" +
                 "  --no-autostart        Skip startup shortcut and Uninstall registry registration\r\n" +
                 "  --no-kill-legacy      Do not stop legacy Node watcher processes during install\r\n" +
-                "  --no-native-daemon    Do not auto-start the native Sidecar Daemon\r\n" +
+                "  --no-native-daemon    Do not auto-start the local background daemon\r\n" +
                 "  --no-relaunch-prompt  Disable the Antigravity CDP relaunch prompt\r\n" +
                 "  --install-dir <dir>   Custom directory for background watcher files\r\n" +
-                "  --plugin-dir <dir>    Custom directory for the native Sidecar plugin\r\n" +
+                "  --plugin-dir <dir>    Custom directory for the local plugin\r\n" +
                 "  --cdp-port <port>     Override the Antigravity CDP debug port\r\n" +
                 "  --lang <zh|en>        Set UI/log language (overrides AG_PRISM_LANG and OS locale)\r\n" +
                 "  --out <file>          Write result output to the specified file\r\n" +
@@ -1966,7 +1966,7 @@ namespace AgyClaudeStyle.Installer
                 }
 
                 currentStep = "stop-legacy";
-                currentStepLabel = InstallerI18n.Tr("停止旧版守护与 Sidecar", "Stop legacy watcher & Sidecar");
+                currentStepLabel = InstallerI18n.Tr("停止旧版守护服务", "Stop legacy watcher & daemon");
                 currentTargetPath = installDir;
                 report(28, InstallerI18n.Tr("正在停止旧版守护进程（如存在）...", "Stopping existing watcher processes (if any)..."));
                 StopWatcherInDir(installDir, (m) => report(32, m));
@@ -1978,7 +1978,7 @@ namespace AgyClaudeStyle.Installer
 
                 currentStep = "prepare-dirs";
                 currentStepLabel = InstallerI18n.Tr("校验并准备安装目录", "Validate & prepare install directories");
-                report(45, InstallerI18n.Tr("正在部署原生 Sidecar 插件与独立守护资源...", "Deploying native Sidecar plugin & standalone watcher resources..."));
+                report(45, InstallerI18n.Tr("正在部署本地插件与独立守护资源...", "Deploying local plugin & standalone watcher resources..."));
                 currentTargetPath = installDir;
                 AssertNoReparsePointChain(installDir, ResolveInstallChainStopRoot(installDir));
                 Directory.CreateDirectory(installDir);
@@ -2096,8 +2096,8 @@ namespace AgyClaudeStyle.Installer
                     }
                 }
                 report(62, preservedConfig
-                    ? InstallerI18n.Tr("已保留本机现有 config.json 用户配置并同步部署原生 Sidecar 插件", "Preserved existing config.json and deployed native Sidecar plugin")
-                    : InstallerI18n.Tr("已部署原生 Sidecar 插件并写入默认配置 config.json", "Deployed native Sidecar plugin and wrote default config.json"));
+                    ? InstallerI18n.Tr("已保留本机现有 config.json 用户配置并同步部署本地插件", "Preserved existing config.json and deployed local plugin")
+                    : InstallerI18n.Tr("已部署本地插件并写入默认配置 config.json", "Deployed local plugin and wrote default config.json"));
 
                 try
                 {
@@ -2126,7 +2126,7 @@ namespace AgyClaudeStyle.Installer
                 );
 
                 currentStep = "patch-shortcuts";
-                currentStepLabel = InstallerI18n.Tr("维护 Antigravity 快捷方式参数", "Patch Antigravity shortcut arguments");
+                currentStepLabel = InstallerI18n.Tr("维护 Antigravity 快捷方式参数", "Update Antigravity shortcut arguments");
                 currentTargetPath = "";
                 string shortcutStateDir = !string.IsNullOrEmpty(pluginDir) ? pluginDir : installDir;
                 int skippedShortcuts = 0;
@@ -2156,8 +2156,8 @@ namespace AgyClaudeStyle.Installer
                 catch (Exception scEx)
                 {
                     string warn = InstallerI18n.TrFormat(
-                        "[!] 快捷方式参数修补异常（非致命，核心插件已安装）: {0}",
-                        "[!] Shortcut patching warning (non-fatal, core plugin installed): {0}",
+                        "[!] 快捷方式启动参数配置异常（非致命，核心插件已安装）: {0}",
+                        "[!] Shortcut configuration warning (non-fatal, core plugin installed): {0}",
                         scEx.Message
                     );
                     result.Warnings.Add(warn);
@@ -2169,7 +2169,7 @@ namespace AgyClaudeStyle.Installer
                 currentTargetPath = GetStartupShortcutPath();
                 if (!opts.NoAutostart)
                 {
-                    report(72, InstallerI18n.Tr("正在配置 Windows 开机自动修补与卸载入口...", "Configuring Windows startup shortcut & uninstall entry..."));
+                    report(72, InstallerI18n.Tr("正在配置 Windows 开机自启与卸载入口...", "Configuring Windows startup shortcut & uninstall entry..."));
                     try
                     {
                         CreateStartupShortcut(installDir, pluginDir);
@@ -2205,11 +2205,11 @@ namespace AgyClaudeStyle.Installer
                 }
 
                 currentStep = "start-native-daemon";
-                currentStepLabel = InstallerI18n.Tr("激活原生 Sidecar Daemon", "Start native Sidecar Daemon");
+                currentStepLabel = InstallerI18n.Tr("激活本地守护服务", "Start local background daemon");
                 currentTargetPath = pluginDir ?? "";
                 if (!opts.NoNativeDaemon && result.NativePluginDeployed)
                 {
-                    report(78, InstallerI18n.Tr("正在激活原生五通道 Sidecar Daemon...", "Starting native 5-channel Sidecar Daemon..."));
+                    report(78, InstallerI18n.Tr("正在激活本地插件与后台守护服务...", "Starting local plugin & background daemon..."));
                     result.NativeDaemonStarted = CdpHelper.EnsureNativeDaemonRunning(pluginDir, opts.CdpPort, ag.ExePath, (m) => report(80, m));
                 }
 
@@ -2270,8 +2270,8 @@ namespace AgyClaudeStyle.Installer
                     if (result.NativeDaemonStarted)
                     {
                         string warn = InstallerI18n.TrFormat(
-                            "[!] 启动独立守护 obsidian-prism-watcher.exe 受阻（可能被杀毒软件拦截，但原生 Sidecar Daemon 已运行）: {0}",
-                            "[!] Standalone watcher obsidian-prism-watcher.exe failed to start (possibly blocked by antivirus, but native Sidecar Daemon is running): {0}",
+                            "[!] 启动独立守护 obsidian-prism-watcher.exe 受阻（可能被杀毒软件拦截，但本地守护服务已运行）: {0}",
+                            "[!] Standalone watcher obsidian-prism-watcher.exe failed to start (possibly blocked by antivirus, but local background daemon is running): {0}",
                             watcherStartErr != null ? watcherStartErr.Message : InstallerI18n.Tr("未知原因", "Unknown reason")
                         );
                         result.Warnings.Add(warn);
@@ -2365,13 +2365,13 @@ namespace AgyClaudeStyle.Installer
                 if (result.InjectedPages.Count > 0)
                 {
                     result.Headline = InstallerI18n.TrFormat(
-                        "修补成功！已实时注入 {0} 个 Antigravity 窗口",
-                        "Patched! Injected {0} Antigravity window(s)",
+                        "安装成功！已实时激活 {0} 个 Antigravity 窗口",
+                        "Installed! Activated {0} Antigravity window(s)",
                         result.InjectedPages.Count
                     );
                     result.Detail = InstallerI18n.Tr(
-                        "已部署原生五通道 Sidecar 插件与后台热备守护，并配置开机自启。后续打开新窗口或更新 Antigravity 后也会自动生效。",
-                        "Native 5-channel Sidecar plugin, standby watcher & autostart are configured. New windows and future Antigravity updates will auto-apply."
+                        "已部署本地插件与后台守护服务，并配置开机自启。后续打开新窗口或更新 Antigravity 后也会自动生效。",
+                        "Local plugin, standby watcher & autostart are configured. New windows and future Antigravity updates will auto-apply."
                     );
                     for (int i = 0; i < result.InjectedPages.Count; i++)
                     {
@@ -2385,12 +2385,12 @@ namespace AgyClaudeStyle.Installer
                 else if (cdpReachable && port.HasValue)
                 {
                     result.Headline = InstallerI18n.Tr(
-                        "已安装原生插件并启动守护！等待 Antigravity 窗口就绪",
+                        "已安装本地插件并启动守护！等待 Antigravity 窗口就绪",
                         "Installed & watcher started! Waiting for window"
                     );
                     result.Detail = InstallerI18n.TrFormat(
-                        "已部署原生 Sidecar 插件并启动后台守护。检测到调试端口 {0}，窗口就绪后将自动完成注入。",
-                        "Native Sidecar plugin & watcher are running. Detected debug port {0}; injection will complete automatically once a window is ready.",
+                        "已部署本地插件并启动后台守护。检测到调试端口 {0}，窗口就绪后将自动完成激活。",
+                        "Local plugin & watcher are running. Detected debug port {0}; activation will complete automatically once a window is ready.",
                         port.Value
                     );
                 }
@@ -2422,8 +2422,8 @@ namespace AgyClaudeStyle.Installer
                     else
                     {
                         result.Headline = InstallerI18n.Tr(
-                            "安装成功！原生 Sidecar 插件与自动修补已就绪",
-                            "Installed! Native Sidecar & watcher are ready"
+                            "安装成功！本地插件与后台守护已就绪",
+                            "Installed! Local plugin & watcher are ready"
                         );
                         if (result.PatchedShortcuts == 0 && alreadySetShortcuts == 0 && skippedShortcuts > 0)
                         {
@@ -2722,7 +2722,7 @@ namespace AgyClaudeStyle.Installer
 
             if (!string.IsNullOrEmpty(pluginDir) && Directory.Exists(pluginDir))
             {
-                report(80, InstallerI18n.TrFormat("正在清理原生 Sidecar 插件目录: {0}", "Removing native Sidecar plugin directory: {0}", pluginDir));
+                report(80, InstallerI18n.TrFormat("正在清理本地插件目录: {0}", "Removing local plugin directory: {0}", pluginDir));
                 try { SafeDeleteDirectory(pluginDir); } catch { }
             }
 
@@ -2861,7 +2861,7 @@ namespace AgyClaudeStyle.Installer
 
             SuspendLayout();
 
-            Text = InstallerI18n.Tr("Obsidian Prism · 黑曜棱镜 安装与修补工具", "Obsidian Prism Installer & Patcher");
+            Text = InstallerI18n.Tr("Obsidian Prism · 黑曜棱镜 安装与配置工具", "Obsidian Prism Installer");
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -3175,8 +3175,8 @@ namespace AgyClaudeStyle.Installer
                     );
                     _statusHeadline.ForeColor = Color.FromArgb(28, 25, 23);
                     _statusDetail.Text = InstallerI18n.Tr(
-                        "将部署原生 Sidecar 插件、后台热备守护与开机自启（不修改 Antigravity 核心程序文件）。请点击「立即安装」开始，或点击「取消」退出。",
-                        "Deploys the native Sidecar plugin, standby watcher & autostart without modifying Antigravity binaries. Click 'Install Now' to proceed."
+                        "将部署本地插件、后台热备守护与开机自启（不修改 Antigravity 核心程序文件）。请点击「立即安装」开始，或点击「取消」退出。",
+                        "Deploys the local plugin, standby watcher & autostart without modifying Antigravity binaries. Click 'Install Now' to proceed."
                     );
                     _installBtn.Text = InstallerI18n.Tr("立即安装", "Install Now");
                 }
@@ -3250,13 +3250,13 @@ namespace AgyClaudeStyle.Installer
             if (_busy) return;
             _busy = true;
             _statusHeadline.Text = InstallerI18n.Tr(
-                "正在安装并修补本机 Antigravity Desktop...",
-                "Installing & patching Antigravity Desktop..."
+                "正在安装并配置本机 Antigravity Desktop...",
+                "Installing & configuring Antigravity Desktop..."
             );
             _statusHeadline.ForeColor = Color.FromArgb(28, 25, 23);
             _statusDetail.Text = InstallerI18n.Tr(
-                "正在部署原生 Sidecar 插件与后台热备守护，请稍候...",
-                "Deploying native Sidecar plugin and standby background watcher, please wait..."
+                "正在部署本地插件与后台守护服务，请稍候...",
+                "Deploying local plugin and standby background watcher, please wait..."
             );
             _progressBar.Value = 5;
             SetButtonsEnabled(false);
@@ -3346,12 +3346,12 @@ namespace AgyClaudeStyle.Installer
                             if (relaunched)
                             {
                                 _statusHeadline.Text = InstallerI18n.Tr(
-                                    "修补成功！已带参重开并激活 Antigravity 界面",
-                                    "Patched! Antigravity relaunched & activated"
+                                    "安装成功！已带参重开并激活 Antigravity 界面",
+                                    "Installed! Antigravity relaunched & activated"
                                 );
                                 _statusDetail.Text = InstallerI18n.Tr(
-                                    "已自动为快捷方式补齐 --remote-debugging-port=0 并激活五通道原生 Sidecar 守护，后续日常启动将自动生效。",
-                                    "Shortcuts were updated with --remote-debugging-port=0 and the 5-channel native Sidecar daemon is active for future launches."
+                                    "已自动为快捷方式补齐 --remote-debugging-port=0 并激活本地插件与后台守护服务，后续日常启动将自动生效。",
+                                    "Shortcuts were updated with --remote-debugging-port=0 and the local plugin & background daemon are active for future launches."
                                 );
                             }
                         }
@@ -3362,8 +3362,8 @@ namespace AgyClaudeStyle.Installer
             {
                 InstallerStepException stepEx = ex as InstallerStepException;
                 string stepTitle = stepEx != null
-                    ? InstallerI18n.TrFormat("修补失败 · {0}", "Patch failed · {0}", stepEx.StepLabel)
-                    : InstallerI18n.Tr("修补失败", "Patch failed");
+                    ? InstallerI18n.TrFormat("安装失败 · {0}", "Installation failed · {0}", stepEx.StepLabel)
+                    : InstallerI18n.Tr("安装失败", "Installation failed");
                 string hint = stepEx != null && !string.IsNullOrEmpty(stepEx.Hint)
                     ? stepEx.Hint
                     : InstallerCore.BuildFailureHint(ex, stepEx != null ? stepEx.StepCode : "");

@@ -15,10 +15,6 @@ const cdp = require(path.join(ROOT_DIR, 'cdp.js'));
 const VALIDATORS = { ...cdp.VALIDATORS };
 
 function getEffectiveRuntimeParts() {
-  const brandMarkRel = 'assets/brand-mark-svg.js';
-  if (fs.existsSync(path.join(ROOT_DIR, brandMarkRel))) {
-    return [brandMarkRel, ...cdp.RUNTIME_PARTS];
-  }
   return [...cdp.RUNTIME_PARTS];
 }
 

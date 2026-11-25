@@ -3047,15 +3047,15 @@ test('PR #51 queued-messages-card roof-perch: zero bottom gap, interactive roof 
     mainMo.cb([{ type: 'childList', target: rtcWrap, addedNodes: [], removedNodes: [takeoverWrap] }]);
     flushRaf();
 
-    // 3) Hardening: [data-ag-queued-act="1"] exit animation smoothly returns mascot to composer WITHOUT adding 60px gap
+    // 3) Hardening: during [data-ag-queued-act="1"] 150ms exit animation, keep mascot anchored on queuedCard without jumping or toggling margin-bottom
     queuedRow.setAttribute('data-ag-queued-act', '1');
     mainMo.cb([{ type: 'attributes', target: queuedRow, attributeName: 'data-ag-queued-act' }]);
     flushRaf();
-    assert.equal(card.getAttribute('data-ag-cs-crab-anchor'), 'composer', 'exiting queued card must smoothly return mascot to primary composer card');
-    assert.equal(card.querySelector('.ag-cs-crab'), crab);
-    assert.equal(queuedWrap.hasAttribute('data-ag-cs-queued'), false, 'exiting queued card must NOT jump +60px via data-ag-cs-queued');
+    assert.equal(queuedCard.getAttribute('data-ag-cs-crab-anchor'), 'queued', 'exiting queued card must hold mascot anchor until node hides/unmounts to avoid jump flicker');
+    assert.equal(queuedCard.querySelector('.ag-cs-crab'), crab);
+    assert.equal(queuedWrap.hasAttribute('data-ag-cs-queued'), false, 'exiting queued card must NOT jump +46px via data-ag-cs-queued');
 
-    // 4) Clearing exit flag re-docks on queued roof; hiding/removing queued card returns cleanly to composer
+    // 4) Clearing exit flag stays on queued roof; hiding/removing queued card returns cleanly to composer
     queuedRow.removeAttribute('data-ag-queued-act');
     mainMo.cb([{ type: 'attributes', target: queuedRow, attributeName: 'data-ag-queued-act' }]);
     flushRaf();

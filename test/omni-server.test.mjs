@@ -630,3 +630,81 @@ test('OmniServer /sandbox/ enforces strict opaque-origin CSP on .html/.htm and /
   assert.equal(fallbackRes.statusCode, 200);
   assert.ok(fallbackRes.text.includes('<html lang="zh-CN"'));
 });
+
+test('OmniServer CORS hardening: zero wildcard *, reflects verified local Origin or /sandbox/ null Origin with Vary: Origin', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ag-omni-cors-'));
+  const htmlFile = path.join(tmpDir, 'index.html');
+  const txtFile = path.join(tmpDir, 'sample.txt');
+  fs.writeFileSync(htmlFile, '<!doctype html><h1>Sandbox</h1>', 'utf8');
+  fs.writeFileSync(txtFile, 'hello omni cors', 'utf8');
+
+  const server = new OmniServer({ rootDir: tmpDir });
+  t.after(async () => {
+    await server.stop();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+  const info = await server.start();
+
+  const httpReq = (method, urlStr, headers = {}) =>
+    new Promise((resolve, reject) => {
+      const u = new URL(urlStr);
+      const req = http.request(
+        { hostname: '127.0.0.1', port: Number(u.port), path: u.pathname + u.search, method, headers },
+        (res) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => resolve({ statusCode: res.statusCode, headers: res.headers, text: Buffer.concat(chunks).toString('utf8') }));
+        }
+      );
+      req.on('error', reject);
+      req.end();
+    });
+
+  const streamUrl = `${info.baseUrl}/stream?token=${info.token}&path=${encodeURIComponent(txtFile)}`;
+  const sbInit = JSON.parse(
+    (await httpGetRaw(`${info.baseUrl}/sandbox-init?token=${info.token}&path=${encodeURIComponent(htmlFile)}`)).text
+  );
+  const sandboxUrl = sbInit.sandboxUrl;
+
+  // 1) No Origin -> no Access-Control-Allow-Origin (never *), includes Vary: Origin
+  const noOriginStream = await httpGetRaw(streamUrl);
+  assert.equal(noOriginStream.statusCode, 200);
+  assert.equal(noOriginStream.headers['access-control-allow-origin'], undefined);
+  assert.equal(noOriginStream.headers.vary, 'Origin');
+
+  // 2) Verified local Origins -> reflected verbatim + Vary: Origin (never *) on GET & OPTIONS
+  for (const okOrigin of ['vscode-file://vscode-app', info.baseUrl, 'http://localhost:3000']) {
+    const getRes = await httpGetRaw(streamUrl, { Origin: okOrigin });
+    assert.equal(getRes.statusCode, 200);
+    assert.equal(getRes.headers['access-control-allow-origin'], okOrigin);
+    assert.notEqual(getRes.headers['access-control-allow-origin'], '*');
+    assert.equal(getRes.headers.vary, 'Origin');
+
+    const optRes = await httpReq('OPTIONS', streamUrl, { Origin: okOrigin });
+    assert.equal(optRes.statusCode, 204);
+    assert.equal(optRes.headers['access-control-allow-origin'], okOrigin);
+    assert.notEqual(optRes.headers['access-control-allow-origin'], '*');
+    assert.equal(optRes.headers.vary, 'Origin');
+  }
+
+  // 3) Opaque sandbox Origin: null -> allowed & reflected on /sandbox/ (GET & OPTIONS), NOT reflected on /stream
+  const sbNullGet = await httpGetRaw(sandboxUrl, { Origin: 'null' });
+  assert.equal(sbNullGet.statusCode, 200);
+  assert.equal(sbNullGet.headers['access-control-allow-origin'], 'null');
+  assert.equal(sbNullGet.headers.vary, 'Origin');
+
+  const sbNullOpt = await httpReq('OPTIONS', sandboxUrl, { Origin: 'null' });
+  assert.equal(sbNullOpt.statusCode, 204);
+  assert.equal(sbNullOpt.headers['access-control-allow-origin'], 'null');
+  assert.equal(sbNullOpt.headers.vary, 'Origin');
+
+  const streamNullGet = await httpGetRaw(streamUrl, { Origin: 'null' });
+  assert.equal(streamNullGet.statusCode, 200);
+  assert.equal(streamNullGet.headers['access-control-allow-origin'], undefined);
+  assert.equal(streamNullGet.headers.vary, 'Origin');
+
+  // 4) Untrusted external Origin -> 403 on GET & OPTIONS with no CORS reflection
+  const evilOpt = await httpReq('OPTIONS', streamUrl, { Origin: 'https://evil.example.com' });
+  assert.equal(evilOpt.statusCode, 403);
+  assert.equal(evilOpt.headers['access-control-allow-origin'], undefined);
+});

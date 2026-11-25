@@ -53,6 +53,7 @@
         metaKicker: '原生模型元信息', metaModel: '名称', metaEffort: '推理档位', metaDefault: '默认', metaId: '原生标识',
         metaNote: '未收录于 2026Q4 基准库 · 仅展示真实宿主元数据',
         ttHead: '2026Q4 评测口径与思考档位说明',
+        infoAria: '评测指标与思考档位说明',
         ttLines: ['AA v5：Artificial Analysis 综合智力指数（满分 100）', 'TermBench：命令行与终端自主排障通过率（%）', 'HLE-D / GPQA-D：前沿科学与多步难题推理（%）', 'SWE-Pro / AutoBench：真实软件工程修复率（%）', '思考档位：Low 极速响应 · Med 均衡 · High 深度 · XHigh 极限推理'],
         locked: '锁定态', hoverTag: '预览', activeTag: '当前',
         orchTopo: '双核路由拓扑 · DUAL-CORE', planner: '规划核', runner: '执行核',
@@ -73,6 +74,7 @@
         metaKicker: '原生模型中繼資料', metaModel: '名稱', metaEffort: '推理檔位', metaDefault: '預設', metaId: '原生識別',
         metaNote: '未收錄於 2026Q4 基準庫 · 僅顯示真實宿主中繼資料',
         ttHead: '2026Q4 評測口徑與思考檔位說明',
+        infoAria: '評測指標與思考檔位說明',
         ttLines: ['AA v5：Artificial Analysis 綜合智力指數（滿分 100）', 'TermBench：命令列與終端自主排障通過率（%）', 'HLE-D / GPQA-D：前沿科學與多步難題推理（%）', 'SWE-Pro / AutoBench：真實軟體工程修復率（%）', '思考檔位：Low 極速響應 · Med 均衡 · High 深度 · XHigh 極限推理'],
         locked: '鎖定態', hoverTag: '預覽', activeTag: '目前',
         orchTopo: '雙核路由拓樸 · DUAL-CORE', planner: '規劃核', runner: '執行核',
@@ -93,6 +95,7 @@
         metaKicker: 'NATIVE MODEL METADATA', metaModel: 'MODEL', metaEffort: 'EFFORT', metaDefault: 'Default', metaId: 'TAG / ID',
         metaNote: 'Not listed in 2026Q4 benchmarks · Showing live host metadata',
         ttHead: '2026Q4 Benchmarks & Thinking Tiers',
+        infoAria: 'Benchmark metrics and thinking tiers explanation',
         ttLines: ['AA v5: Artificial Analysis Intelligence Index (0-100)', 'TermBench: Autonomous terminal & CLI task accuracy (%)', 'HLE-D / GPQA-D: Frontier science & deep reasoning (%)', 'SWE-Pro / AutoBench: Real-world software engineering (%)', 'Effort: Low Fast · Med Balanced · High Deep · XHigh Max'],
         locked: 'Locked', hoverTag: 'Hover', activeTag: 'Active',
         orchTopo: 'Dual-Core Routing Topology', planner: 'PLANNER', runner: 'RUNNER',
@@ -113,6 +116,7 @@
         metaKicker: 'ネイティブモデルメタ情報', metaModel: 'モデル', metaEffort: '推論レベル', metaDefault: '既定', metaId: '識別子',
         metaNote: '2026Q4 ベンチ対象外 · ホスト実メタデータを表示中',
         ttHead: '2026Q4 評価指標と推論レベル説明',
+        infoAria: '評価指標と推論レベルの説明',
         ttLines: ['AA v5：Artificial Analysis 総合知能指数 (100点満点)', 'TermBench：端末・CLI 自律修復成功率 (%)', 'HLE-D / GPQA-D：先端科学・多段推論正答率 (%)', 'SWE-Pro / AutoBench：実ソフトウェア修正率 (%)', '推論レベル：Low 高速 · Med 均衡 · High 深層 · XHigh 極限'],
         locked: 'ロック中', hoverTag: 'プレビュー', activeTag: '現在',
         orchTopo: 'デュアルコア経路トポロジ', planner: '計画コア', runner: '実行コア',
@@ -133,6 +137,7 @@
         metaKicker: '기본 모델 메타데이터', metaModel: '모델', metaEffort: '추론 수준', metaDefault: '기본값', metaId: '태그 / ID',
         metaNote: '2026Q4 벤치마크 미등재 · 호스트 메타데이터 표시 중',
         ttHead: '2026Q4 벤치마크 및 사고 수준 안내',
+        infoAria: '벤치마크 지표 및 사고 수준 안내',
         ttLines: ['AA v5: Artificial Analysis 종합 지능 지수 (0-100)', 'TermBench: 터미널·CLI 자율 작업 정확도 (%)', 'HLE-D / GPQA-D: 첨단 과학 및 심층 추론 (%)', 'SWE-Pro / AutoBench: 실제 소프트웨어 엔지니어링 (%)', '수준: Low 고속 · Med 균형 · High 심층 · XHigh 최대'],
         locked: '잠김', hoverTag: '미리보기', activeTag: '활성',
         orchTopo: '듀얼 코어 라우팅 토폴로지', planner: '플래너', runner: '러너',
@@ -153,6 +158,7 @@
         metaKicker: 'METADATOS DEL MODELO', metaModel: 'MODELO', metaEffort: 'ESFUERZO', metaDefault: 'Predet.', metaId: 'TAG / ID',
         metaNote: 'Fuera de benchmarks 2026Q4 · Mostrando metadatos reales',
         ttHead: 'Benchmarks 2026Q4 y niveles de esfuerzo',
+        infoAria: 'Explicación de métricas y niveles de razonamiento',
         ttLines: ['AA v5: Índice de inteligencia Artificial Analysis (0-100)', 'TermBench: Precisión autónoma en terminal y CLI (%)', 'HLE-D / GPQA-D: Ciencia de frontera y razonamiento (%)', 'SWE-Pro / AutoBench: Ingeniería de software real (%)', 'Esfuerzo: Low Rápido · Med Equil. · High Prof. · XHigh Máx'],
         locked: 'Bloqueado', hoverTag: 'Vista previa', activeTag: 'Activo',
         orchTopo: 'Topología de doble núcleo', planner: 'PLANIF.', runner: 'EJECUTOR',
@@ -173,6 +179,7 @@
         metaKicker: 'MÉTADONNÉES NATIVES', metaModel: 'MODÈLE', metaEffort: 'EFFORT', metaDefault: 'Défaut', metaId: 'TAG / ID',
         metaNote: 'Absent des benchmarks 2026Q4 · Métadonnées hôte réelles',
         ttHead: 'Benchmarks 2026Q4 et niveaux de réflexion',
+        infoAria: 'Explication des benchmarks et niveaux de réflexion',
         ttLines: ['AA v5 : Indice d’intelligence Artificial Analysis (0-100)', 'TermBench : Précision autonome terminal & CLI (%)', 'HLE-D / GPQA-D : Science avancée & raisonnement (%)', 'SWE-Pro / AutoBench : Génie logiciel réel (%)', 'Effort : Low Rapide · Med Équil. · High Prof. · XHigh Max'],
         locked: 'Verrouillé', hoverTag: 'Aperçu', activeTag: 'Actif',
         orchTopo: 'Topologie double cœur', planner: 'PLANIF.', runner: 'EXÉC.',
@@ -193,6 +200,7 @@
         metaKicker: 'NATIVE MODELL-METADATEN', metaModel: 'MODELL', metaEffort: 'AUFWAND', metaDefault: 'Standard', metaId: 'TAG / ID',
         metaNote: 'Nicht in 2026Q4-Benchmarks · Zeige echte Host-Metadaten',
         ttHead: '2026Q4-Benchmarks & Denkstufen',
+        infoAria: 'Erklärung zu Benchmarks und Denkstufen',
         ttLines: ['AA v5: Artificial Analysis Intelligence Index (0-100)', 'TermBench: Autonome Terminal- & CLI-Aufgaben (%)', 'HLE-D / GPQA-D: Spitzenwissenschaft & Tiefenlogik (%)', 'SWE-Pro / AutoBench: Reale Softwareentwicklung (%)', 'Aufwand: Low Schnell · Med Ausgew. · High Tief · XHigh Max'],
         locked: 'Gesperrt', hoverTag: 'Vorschau', activeTag: 'Aktiv',
         orchTopo: 'Dual-Core-Routingtopologie', planner: 'PLANER', runner: 'RUNNER',
@@ -2204,7 +2212,7 @@
       var sourceCiteEl = mkEl(doc, 'div', 'ag-pp-bench-source', BENCHMARK_SOURCE_CITATION);
       var infoBtn = mkEl(doc, 'button', 'ag-pp-info-trigger', 'i');
       infoBtn.type = 'button';
-      infoBtn.setAttribute('aria-label', 'Benchmark metrics and thinking tiers explanation');
+      infoBtn.setAttribute('aria-label', packInit.infoAria || 'Benchmark metrics and thinking tiers explanation');
       var benchTooltip = mkEl(doc, 'div', 'ag-pp-bench-tooltip');
       markPeriodicOwnedRoot(benchTooltip);
       benchTooltip.setAttribute('role', 'tooltip');
@@ -2514,6 +2522,7 @@
         lastBentoEffSig: '',
         effortNoteEl: effortNoteEl,
         sourceCiteEl: sourceCiteEl,
+        infoBtn: infoBtn,
         ttHead: ttHead,
         ttLines: ttLines,
         teleKicker: teleKicker,
@@ -2835,6 +2844,9 @@
       if (bentoRefs.sourceCiteEl) {
         bentoRefs.sourceCiteEl.textContent = useShortCite ? BENCHMARK_SOURCE_CITATION_SHORT : BENCHMARK_SOURCE_CITATION;
         bentoRefs.sourceCiteEl.title = BENCHMARK_SOURCE_CITATION;
+      }
+      if (bentoRefs.infoBtn && pack.infoAria) {
+        bentoRefs.infoBtn.setAttribute('aria-label', pack.infoAria);
       }
       if (bentoRefs.ttHead && Array.isArray(bentoRefs.ttLines)) {
         bentoRefs.ttHead.textContent = pack.ttHead;

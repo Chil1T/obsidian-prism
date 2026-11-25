@@ -1753,6 +1753,7 @@ test('Conv-aura wave smoothness & 450ms semantic blend: non-negative running sur
   delete globalThis.__agRippleForce2D;
   try {
     const uniformValues = new Map();
+    let loseContextCalls = 0;
     const gl = {
       VERTEX_SHADER: 35633,
       FRAGMENT_SHADER: 35632,
@@ -1781,6 +1782,7 @@ test('Conv-aura wave smoothness & 450ms semantic blend: non-negative running sur
       uniform2f() {},
       uniform1f(loc, v) { if (loc?.name) uniformValues.set(loc.name, v); },
       drawArrays() {},
+      getExtension: (n) => (n === 'WEBGL_lose_context' ? { loseContext() { loseContextCalls += 1; } } : null),
     };
     const canvas = {
       width: 0,
@@ -1827,6 +1829,69 @@ test('Conv-aura wave smoothness & 450ms semantic blend: non-negative running sur
     assert.ok(semExit > 3.01 && semExit < 3.98, `Expected smooth fractional uSemantic crossfade on exit, got ${semExit}`);
 
     glow.dispose();
+    assert.equal(loseContextCalls, 1, 'createHorizonGlowWebGL.dispose() must invoke WEBGL_lose_context.loseContext()');
+
+    // 3) Verify createWebGLRenderer.dispose() also invokes WEBGL_lose_context.loseContext()
+    let glyphLoseCalls = 0;
+    const glGlyph = {
+      ...gl,
+      TEXTURE_2D: 3553,
+      TEXTURE0: 33984,
+      TEXTURE1: 33985,
+      RGBA: 6408,
+      RGBA8: 32856,
+      UNSIGNED_BYTE: 5121,
+      LINEAR: 9729,
+      NEAREST: 9728,
+      CLAMP_TO_EDGE: 33071,
+      TEXTURE_MIN_FILTER: 10241,
+      TEXTURE_MAG_FILTER: 10240,
+      TEXTURE_WRAP_S: 10242,
+      TEXTURE_WRAP_T: 10243,
+      BLEND: 3042,
+      SRC_ALPHA: 770,
+      ONE_MINUS_SRC_ALPHA: 771,
+      createTexture: () => ({}),
+      deleteTexture() {},
+      activeTexture() {},
+      bindTexture() {},
+      texParameteri() {},
+      texStorage2D() {},
+      texImage2D() {},
+      texSubImage2D() {},
+      enable() {},
+      blendFunc() {},
+      uniform1i() {},
+      uniform3f() {},
+      uniform4f() {},
+      getExtension: (n) => (n === 'WEBGL_lose_context' ? { loseContext() { glyphLoseCalls += 1; } } : null),
+    };
+    const glyphCanvas = {
+      width: 0,
+      height: 0,
+      ownerDocument: {
+        createElement: () => ({
+          width: 0,
+          height: 0,
+          getContext: () => ({
+            setTransform() {},
+            clearRect() {},
+            fillText() {},
+            font: '',
+            fillStyle: '',
+            textAlign: '',
+            textBaseline: '',
+          }),
+        }),
+      },
+      getContext: (t) => (t === 'webgl2' ? glGlyph : null),
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    const gField = rippleCore.createGlyphField(glyphCanvas, 16, 8);
+    assert.equal(gField.mode, 'webgl2');
+    gField.dispose();
+    assert.equal(glyphLoseCalls, 1, 'createWebGLRenderer.dispose() must invoke WEBGL_lose_context.loseContext()');
   } finally {
     if (prevForce !== undefined) globalThis.__agRippleForce2D = prevForce;
   }

@@ -173,12 +173,28 @@ function createFastConfigRefreshBroadcaster({
   buildPeriodicPickerExpression: buildPeriodicPicker = (cfg) =>
     buildPeriodicPickerExpression(cfg, PERIODIC_PICKER_CACHE_OPTS),
   periodicPickerRemoveExpression = PERIODIC_PICKER_REMOVE_EXPRESSION,
+  shouldEnableMascot: shouldMascot = undefined,
+  buildMascotChannelExpression: buildMascot = undefined,
+  mascotRemoveExpression = MASCOT_REMOVE_EXPRESSION,
   getOmniServerInfo = () => null,
   getSidebarServiceReady = () => false,
   sidebarBinding = SIDEBAR_BINDING,
   ensureSidebarBinding = async () => false,
   onExpressionsUpdated = null,
 } = {}) {
+  const useDefaultMascot = buildInj === buildInjectExpression && shouldMascot === undefined && buildMascot === undefined;
+  const resolveShouldMascot =
+    typeof shouldMascot === 'function'
+      ? shouldMascot
+      : useDefaultMascot || typeof buildMascot === 'function'
+        ? shouldEnableMascot
+        : null;
+  const resolveBuildMascot =
+    typeof buildMascot === 'function'
+      ? buildMascot
+      : useDefaultMascot || typeof shouldMascot === 'function'
+        ? (cfg) => buildMascotChannelExpression(cfg, PERIODIC_PICKER_CACHE_OPTS)
+        : null;
   return async function broadcastFastConfigRefresh() {
     const perEntryAck = new Map();
     for (const entry of attached.values()) {
@@ -224,8 +240,13 @@ function createFastConfigRefreshBroadcaster({
       periodicPickerEnabled && typeof buildPeriodicPicker === 'function'
         ? buildPeriodicPicker(cfgNow)
         : '';
+    const mascotEnabled = typeof resolveShouldMascot === 'function' ? Boolean(resolveShouldMascot(cfgNow)) : false;
+    const mascotExpr =
+      mascotEnabled && typeof resolveBuildMascot === 'function'
+        ? resolveBuildMascot(cfgNow)
+        : '';
     if (typeof onExpressionsUpdated === 'function') {
-      onExpressionsUpdated({ expr, omniExpr, sidebarExpr, hostI18nExpr, thoughtExpr, inlineDiffExpr, periodicPickerExpr });
+      onExpressionsUpdated({ expr, omniExpr, sidebarExpr, hostI18nExpr, thoughtExpr, inlineDiffExpr, periodicPickerExpr, mascotExpr });
     }
     const canFastRefresh = typeof buildRefresh === 'function';
     const baseRefreshExpr = canFastRefresh ? buildRefresh() : null;
@@ -292,6 +313,13 @@ function createFastConfigRefreshBroadcaster({
                 if (periodicPickerRemoveExpression) await entry.session.evaluate(periodicPickerRemoveExpression).catch(() => {});
                 entry.periodicPickerMounted = false;
               }
+              if (mascotExpr && mascotEnabled) {
+                const mRes = await entry.session.evaluate(mascotExpr).catch(() => null);
+                if (mRes && mRes.ok) entry.mascotMounted = true;
+              } else if (!mascotEnabled && (entry.mascotScriptId || entry.mascotMounted)) {
+                if (mascotRemoveExpression) await entry.session.evaluate(mascotRemoveExpression).catch(() => {});
+                entry.mascotMounted = false;
+              }
             }
           } else {
             const reRes = await entry.session.evaluate(expr).catch(() => null);
@@ -349,6 +377,13 @@ function createFastConfigRefreshBroadcaster({
               if (periodicPickerRemoveExpression) await entry.session.evaluate(periodicPickerRemoveExpression).catch(() => {});
               entry.periodicPickerMounted = false;
             }
+            if (mascotExpr && mascotEnabled) {
+              const mRes = await entry.session.evaluate(mascotExpr).catch(() => null);
+              if (mRes && mRes.ok) entry.mascotMounted = true;
+            } else if (!mascotEnabled && (entry.mascotScriptId || entry.mascotMounted)) {
+              if (mascotRemoveExpression) await entry.session.evaluate(mascotRemoveExpression).catch(() => {});
+              entry.mascotMounted = false;
+            }
           }
         }
         if (entry.scriptId) {
@@ -404,6 +439,14 @@ function createFastConfigRefreshBroadcaster({
         if (periodicPickerExpr && periodicPickerEnabled) {
           const ppAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: periodicPickerExpr }).catch(() => null);
           entry.periodicPickerScriptId = ppAdd && ppAdd.identifier ? ppAdd.identifier : null;
+        }
+        if (entry.mascotScriptId) {
+          await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.mascotScriptId }).catch(() => {});
+          entry.mascotScriptId = null;
+        }
+        if (mascotExpr && mascotEnabled) {
+          const mAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: mascotExpr }).catch(() => null);
+          entry.mascotScriptId = mAdd && mAdd.identifier ? mAdd.identifier : null;
         }
       } catch {}
     }
@@ -702,6 +745,9 @@ async function watch() {
     shouldEnablePeriodicPicker,
     buildPeriodicPickerExpression: (cfg) => buildPeriodicPickerExpression(cfg, PERIODIC_PICKER_CACHE_OPTS),
     periodicPickerRemoveExpression: PERIODIC_PICKER_REMOVE_EXPRESSION,
+    shouldEnableMascot,
+    buildMascotChannelExpression: (cfg) => buildMascotChannelExpression(cfg, PERIODIC_PICKER_CACHE_OPTS),
+    mascotRemoveExpression: MASCOT_REMOVE_EXPRESSION,
     getOmniServerInfo: () => (omniServer ? omniServer.getServerInfo() : null),
     getSidebarServiceReady: () => Boolean(sidebarService),
     sidebarBinding: SIDEBAR_BINDING,
@@ -731,7 +777,7 @@ async function watch() {
     const res = await entry.session.evaluate(expr);
     entry.sidebarHostVerified = Boolean(res && res.status === 'ok');
     if (res && res.status === 'skipped-non-host') {
-      for (const key of ['scriptId', 'omniScriptId', 'sidebarScriptId', 'hostI18nScriptId', 'thoughtScriptId', 'inlineDiffScriptId', 'periodicPickerScriptId']) {
+      for (const key of ['scriptId', 'omniScriptId', 'sidebarScriptId', 'hostI18nScriptId', 'thoughtScriptId', 'inlineDiffScriptId', 'periodicPickerScriptId', 'mascotScriptId']) {
         if (entry[key]) {
           await entry.session
             .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry[key] })
@@ -895,6 +941,7 @@ async function watch() {
     } else if (!periodicPickerExpr) {
       entry.periodicPickerMounted = false;
     }
+    const hadMascot = Boolean(entry.mascotScriptId || entry.mascotMounted);
     const mascotEnabledNow = typeof shouldEnableMascot === 'function' ? shouldEnableMascot(cfgNow) : cfgNow?.mascot !== 'off';
     const mascotExprNow =
       mascotEnabledNow && typeof buildMascotChannelExpression === 'function'
@@ -913,7 +960,7 @@ async function watch() {
       if (mAdd && mAdd.identifier) entry.mascotScriptId = mAdd.identifier;
       const mEval = await entry.session.evaluate(mascotExprNow).catch(() => null);
       if (mEval && mEval.ok) entry.mascotMounted = true;
-    } else if (!mascotEnabledNow && entry.mascotMounted && MASCOT_REMOVE_EXPRESSION) {
+    } else if (!mascotEnabledNow && hadMascot && MASCOT_REMOVE_EXPRESSION) {
       await entry.session.evaluate(MASCOT_REMOVE_EXPRESSION).catch(() => {});
       entry.mascotMounted = false;
     }

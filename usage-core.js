@@ -106,7 +106,7 @@ miserables|801791|悲惨世界|悲慘世界|レ・ミゼラブル|Les Misérable
 redchamber|903956|红楼梦|紅樓夢|紅楼夢|Dream of the Red Chamber
 watermargin|958242|水浒传|水滸傳|水滸伝|Water Margin
 ordinary|998000|平凡的世界||平凡な世界|Ordinary World
-harrypotter|1409000|《哈利·波特》全集|《哈利波特》全集|『ハリー・ポッター』全巻|the whole Harry Potter series
+harrypotter|1409000|《哈利·波特》全集|《哈利波特》全集|『ハリー・ポッター』全巻|the entire Harry Potter series
 losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求めて|In Search of Lost Time`.split('\n').map((row) => {
     const [key, tk, z0, t0, j0, en] = row.split('|');
     const zh = wrapTitle(z0, '《', '》');

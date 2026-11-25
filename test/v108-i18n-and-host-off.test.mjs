@@ -973,3 +973,165 @@ test('PR #50 Integration: _resolveStorageGuardLanguage honors Windows UI Display
   const macSetup = fs.readFileSync(path.join(ROOT, 'installer/macos/Setup/main.swift'), 'utf8');
   assert.ok(macSetup.includes('activeCfg["language"]?.stringValue ?? "auto"'), 'macOS Setup main.swift must fallback language to "auto"');
 });
+
+test('Pre-release hardening: Ch1->Ch9 brand-mark slimming, Mascot cleanup selectors, REMOVE_EXPRESSION attrs, inject.js mascot refresh & v2.35.1 compat', async () => {
+  // 1) assets/brand-mark-svg.js moved out of Channel 1 into Channel 9 + SETTINGS_REMOVE_EXPRESSION cleanup + disk cache sourceHash
+  const ch1Expr = cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, language: 'auto' });
+  const ch1Bytes = Buffer.byteLength(ch1Expr, 'utf8');
+  assert.equal(ch1Expr.includes('ag-cs-brand-logo-svg'), false, 'Channel 1 must NOT inline brand-mark-svg.js');
+  assert.ok(ch1Bytes < 549_500, `Channel 1 must keep safe headroom (< 549,500 B), got ${ch1Bytes} B`);
+
+  const ch9Expr = cdp.buildSettingsChannelExpression();
+  assert.ok(ch9Expr.includes('ag-cs-brand-logo-svg'), 'Channel 9 must bundle assets/brand-mark-svg.js');
+  assert.ok(ch9Expr.includes('__agPrismBrandLogoSvg'), 'Channel 9 must define __agPrismBrandLogoSvg');
+  assert.ok(cdp.SETTINGS_REMOVE_EXPRESSION.includes('__agPrismBrandLogoSvg'), 'SETTINGS_REMOVE_EXPRESSION must clean __agPrismBrandLogoSvg');
+
+  // Verify SETTINGS_REMOVE_EXPRESSION removes __agPrismBrandLogoSvg at runtime
+  const sEnv = createMiniDom('en');
+  sEnv.win.__agPrismBrandLogoSvg = '<svg/>';
+  sEnv.win.__agPrismSettingsPanel = {};
+  vm.runInNewContext(cdp.SETTINGS_REMOVE_EXPRESSION, sEnv.win);
+  assert.equal(sEnv.win.__agPrismBrandLogoSvg, undefined);
+  assert.equal(sEnv.win.__agPrismSettingsPanel, undefined);
+
+  // 2) Mascot cleanup selectors + dispose()/sync() + [data-ag-cs-crab-anchor] & data-ag-cs-mascot-drag
+  for (const label of ['MASCOT_REMOVE_EXPRESSION', 'skippedByLiveCfg', 'configRefresh']) {
+    const mEnv = createMiniDom('en');
+    const anchor = mEnv.doc.createElement('div');
+    anchor.setAttribute('data-ag-cs-crab-anchor', 'composer');
+    const stage1 = mEnv.doc.createElement('div');
+    stage1.className = 'ag-cs-crab ag-cs-dual-stage';
+    let stageDisposed = 0;
+    stage1.__agMascotApi = { dispose() { stageDisposed += 1; } };
+    const stage2 = mEnv.doc.createElement('div');
+    stage2.className = 'ag-v2-mascot-stage';
+    const prop = mEnv.doc.createElement('div');
+    prop.className = 'ag-v2-habitat-prop';
+    anchor.appendChild(stage1);
+    mEnv.body.append(anchor, stage2, prop);
+    mEnv.rootEl.setAttribute('data-ag-cs-has-crab', '1');
+    mEnv.rootEl.setAttribute('data-ag-cs-mascot-drag', '1');
+    let rigDisposed = 0;
+    let prismSynced = 0;
+    mEnv.win.__agDualMascotRig = { dispose() { rigDisposed += 1; } };
+    mEnv.win.__agPrismMascotArt = { source: 'ch10-rig' };
+    mEnv.win.__agPrism = {
+      version: cdp.PLUGIN_VERSION,
+      getState: () => ({ cfg: { mascot: 'off' } }),
+      refreshConfig: () => ({ cfg: { mascot: 'off' } }),
+      sync: () => { prismSynced += 1; },
+    };
+
+    if (label === 'MASCOT_REMOVE_EXPRESSION') {
+      vm.runInNewContext(cdp.MASCOT_REMOVE_EXPRESSION, mEnv.win);
+    } else if (label === 'skippedByLiveCfg') {
+      const mExpr = cdp.buildMascotChannelExpression({ ...cdp.DEFAULT_CONFIG, mascot: 'crab' });
+      const res = vm.runInNewContext(mExpr, mEnv.win);
+      assert.equal(res.skippedByLiveCfg, true);
+    } else {
+      const refExpr = cdp.buildConfigRefreshExpression({ ...cdp.DEFAULT_CONFIG, mascot: 'off' });
+      const chMatch = /"codeHash":"([^"]+)"/.exec(refExpr);
+      assert.ok(chMatch, 'Expected codeHash in configRefresh expression');
+      mEnv.win.__agPrism.codeHash = chMatch[1];
+      const refRes = vm.runInNewContext(refExpr, mEnv.win);
+      assert.equal(refRes.refreshed, true);
+    }
+
+    assert.ok(rigDisposed >= 1, `${label}: must call __agDualMascotRig.dispose() before deleting globals`);
+    assert.ok(prismSynced >= 1, `${label}: must call __agPrism.sync()`);
+    assert.equal(stageDisposed, 1, `${label}: must call stage.__agMascotApi.dispose()`);
+    assert.equal(mEnv.doc.querySelector('.ag-cs-crab'), null, `${label}: must remove .ag-cs-crab`);
+    assert.equal(mEnv.doc.querySelector('.ag-v2-mascot-stage'), null, `${label}: must remove .ag-v2-mascot-stage`);
+    assert.equal(mEnv.doc.querySelector('.ag-v2-habitat-prop'), null, `${label}: must remove .ag-v2-habitat-prop`);
+    assert.equal(anchor.hasAttribute('data-ag-cs-crab-anchor'), false, `${label}: must clear data-ag-cs-crab-anchor`);
+    assert.equal(mEnv.rootEl.hasAttribute('data-ag-cs-has-crab'), false, `${label}: must clear data-ag-cs-has-crab`);
+    assert.equal(mEnv.rootEl.hasAttribute('data-ag-cs-mascot-drag'), false, `${label}: must clear data-ag-cs-mascot-drag`);
+    assert.equal(mEnv.win.__agDualMascotRig, undefined);
+    assert.equal(mEnv.win.__agPrismMascotArt, undefined);
+  }
+
+  // 3) REMOVE_EXPRESSION cleans all 7 newly audited attributes
+  const rEnv = createMiniDom('en');
+  const attrTarget = rEnv.doc.createElement('div');
+  const requiredAttrs = [
+    'data-ag-cs-crab-anchor',
+    'data-ag-sp-running',
+    'data-ag-cs-queued',
+    'data-ag-cs-conv-seat',
+    'data-ag-cs-home-sheet',
+    'data-ag-cs-input-layer',
+    'data-ag-cs-vp-wrap',
+  ];
+  for (const attr of requiredAttrs) attrTarget.setAttribute(attr, '1');
+  rEnv.body.appendChild(attrTarget);
+  vm.runInNewContext(cdp.REMOVE_EXPRESSION, rEnv.win);
+  for (const attr of requiredAttrs) {
+    assert.equal(attrTarget.hasAttribute(attr), false, `REMOVE_EXPRESSION must strip ${attr}`);
+  }
+
+  // 4) inject.js createFastConfigRefreshBroadcaster supports Mascot enable -> disable lifecycle
+  const injectMod = require(path.join(ROOT, 'inject.js'));
+  let mCfg = { ...cdp.DEFAULT_CONFIG, mascot: 'crab', omniModule: 'off', sidebarStudio: 'off', hostLocalization: 'auto', thoughtTranslate: 'off', periodicModelPicker: 'off' };
+  const evals = [];
+  const sends = [];
+  const mockEntry = {
+    session: {
+      closed: false,
+      evaluate: async (code) => {
+        evals.push(code);
+        return code === '__REF__' ? { refreshed: true } : { ok: true };
+      },
+      send: async (method, params) => {
+        sends.push({ method, params });
+        return method === 'Page.addScriptToEvaluateOnNewDocument' ? { identifier: `id:${params.source}` } : {};
+      },
+    },
+    scriptId: null,
+    mascotScriptId: null,
+    mascotMounted: false,
+    pendingAckEpoch: 0,
+  };
+  const bc = injectMod._createFastConfigRefreshBroadcaster({
+    attached: new Map([['w1', mockEntry]]),
+    readConfig: () => mCfg,
+    buildInjectExpression: () => '__MAIN__',
+    buildConfigRefreshExpression: () => '__REF__',
+    shouldEnableHostI18n: () => false,
+    hostI18nRemoveExpression: '',
+    getThoughtHooks: () => ({ shouldEnable: () => false, buildExpression: () => '', removeExpression: '' }),
+    getInlineDiffHooks: () => ({ buildExpression: () => '', removeExpression: '' }),
+    shouldEnablePeriodicPicker: () => false,
+    periodicPickerRemoveExpression: '',
+    shouldEnableMascot: (c) => c.mascot !== 'off',
+    buildMascotChannelExpression: () => '__MASCOT__',
+    mascotRemoveExpression: '__MASCOT_REMOVE__',
+  });
+  await bc();
+  assert.ok(evals.includes('__MASCOT__'), 'Broadcaster must evaluate mascotExpr when mascot is enabled');
+  assert.equal(mockEntry.mascotScriptId, 'id:__MASCOT__');
+  assert.equal(mockEntry.mascotMounted, true);
+
+  evals.length = 0;
+  mCfg = { ...mCfg, mascot: 'off' };
+  await bc();
+  assert.ok(evals.includes('__MASCOT_REMOVE__'), 'Broadcaster must evaluate mascotRemoveExpression when mascot turns off');
+  assert.equal(mockEntry.mascotScriptId, null);
+  assert.equal(mockEntry.mascotMounted, false);
+
+  // 5) v2.35.1 compat: wallpaper-client hides plugin-theme-home-wallpaper only when enabled (0 :has()), effort-slider hides orchestrator-picker-effort
+  const wpMod = require(path.join(ROOT, 'vendor/wallpaper/wallpaper-client.js'));
+  assert.equal(wpMod.WALLPAPER_CSS.includes(':has('), false);
+  assert.ok(
+    wpMod.WALLPAPER_CSS.includes('html[data-ag-prism-wallpaper="on"]:not([data-ag-prism-wallpaper-hole="1"]) [data-testid="plugin-theme-home-wallpaper"]'),
+    'wallpaper-client CSS must suppress native plugin-theme-home-wallpaper only while Prism wallpaper is active'
+  );
+  const upSliderSrc = fs.readFileSync(path.join(ROOT, 'vendor/effort-slider/upstream-client.js'), 'utf8');
+  assert.ok(
+    upSliderSrc.includes("html[data-ces-slider-ready='1'] [role='menu']:has([data-testid='orchestrator-picker-effort']):not(:has([data-testid='model-selector-panel']))"),
+    'effort-slider SLIDER_CSS must suppress v2.35.1 orchestrator-picker-effort submenu while excluding model-selector-panel'
+  );
+  assert.ok(
+    upSliderSrc.includes('m.matches(\'[data-testid="orchestrator-picker-effort"]\')'),
+    'effort-slider _isL3/_sySubs must detect v2.35.1 orchestrator-picker-effort nodes'
+  );
+});

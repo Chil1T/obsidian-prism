@@ -28,7 +28,7 @@
   const addS = (g, a) => { for (let i = 0; i < a.length; i += 2) g.addColorStop(a[i], a[i + 1]); return g; };
   const palS = (g, tk, dk) => { for (const [o, c] of (RIM_PALETTES[tk] || RIM_PALETTES.default)[dk ? 'dark' : 'light']) g.addColorStop(o, c); return g; };
   const rg = (rgb, a) => `rgba(${rgb},${a.toFixed(4)})`;
-  const PB = 'data-ag-cs-prism-box', CV_A = 'data-ag-cs-prism-cv', CV_C = 'ag-cs-prism-rim-cv', CV_S = '.' + CV_C;
+  const PB = 'data-ag-cs-prism-box', PM = 'data-ag-cs-prism-mirror', CV_A = 'data-ag-cs-prism-cv', CV_C = 'ag-cs-prism-rim-cv', CV_S = '.' + CV_C;
 
   const parseAmbientScale = (raw) =>
     G.__agPrismRipple?.parseAmbientScale
@@ -251,16 +251,18 @@
       const prevA = ctx.globalAlpha;
 
       if (isMirror) {
-        ctx.save();
-        strokeRoundedRectPath(ctx, 0, 0, w, h, Math.min(w * 0.5, h * 0.5, cssR * dpr));
-        ctx.clip();
-        ctx.fillStyle = addS(
-          ctx.createRadialGradient(gx, gy, 0, gx, gy, 210 * dpr),
-          dark ? [0, rg('238,245,255', 0.068 * effA), 0.42, rg('206,224,250', 0.026 * effA), 0.8, rg('180,202,238', 0.006 * effA), 1, 'rgba(180,202,238,0)'] : [0, rg('37,99,235', 0.042 * effA), 0.5, rg('37,99,235', 0.014 * effA), 1, 'rgba(37,99,235,0)']
-        );
-        ctx.fillRect(0, 0, w, h);
-        if (isFn(ctx.translate) && isFn(ctx.createLinearGradient)) drawMirrorCursorReflection(ctx, gx, gy, w, h, dpr, dark, effA, entry.rect.width, entry.rect.height, localX, localY);
-        ctx.restore();
+        if (isFn(ctx.save) && isFn(ctx.clip) && isFn(ctx.fillRect)) {
+          ctx.save();
+          strokeRoundedRectPath(ctx, 0, 0, w, h, Math.min(w * 0.5, h * 0.5, cssR * dpr));
+          ctx.clip();
+          ctx.fillStyle = addS(
+            ctx.createRadialGradient(gx, gy, 0, gx, gy, 210 * dpr),
+            dark ? [0, rg('238,245,255', 0.068 * effA), 0.42, rg('206,224,250', 0.026 * effA), 0.8, rg('180,202,238', 0.006 * effA), 1, 'rgba(180,202,238,0)'] : [0, rg('37,99,235', 0.042 * effA), 0.5, rg('37,99,235', 0.014 * effA), 1, 'rgba(37,99,235,0)']
+          );
+          ctx.fillRect(0, 0, w, h);
+          if (isFn(ctx.translate) && isFn(ctx.createLinearGradient)) drawMirrorCursorReflection(ctx, gx, gy, w, h, dpr, dark, effA, entry.rect.width, entry.rect.height, localX, localY);
+          ctx.restore();
+        }
         ctx.globalAlpha = effA;
         strokeRoundedRectPath(ctx, inset, inset, rw, rh, rr);
         ctx.lineWidth = 1.35 * dpr;
@@ -374,9 +376,13 @@
       }
       for (const s of Array.from(spOn)) if (!des.has(s)) {
         spOn.delete(s);
-        try { ra(s, PB); s.style?.removeProperty?.('--ag-px'); s.style?.removeProperty?.('--ag-py'); } catch {}
+        try { ra(s, PB); ra(s, PM); s.style?.removeProperty?.('--ag-px'); s.style?.removeProperty?.('--ag-py'); } catch {}
       }
-      for (const s of des) if (!spOn.has(s)) { setAttrIfChanged(s, PB, '1'); spOn.add(s); }
+      for (const s of des) {
+        setAttrIfChanged(s, PB, '1');
+        setAttrIfChanged(s, PM, '1');
+        spOn.add(s);
+      }
     };
     const syncSp = (rd) => {
       if (isDestroyed()) return;
@@ -410,8 +416,10 @@
       runGuardedMut(() => {
         if (sp.ps.length || spOn.size || spObs.size) applySp(sp.ps, sp.des);
         for (const { box, prev, borderRadius, rect } of preMeasured) {
-          const mirrorMode = ga(box, 'data-ag-cs-prism-mirror') === '1', reflectBottomMode = !mirrorMode && ga(box, 'data-ag-cs-prism-reflect') === 'bottom';
-          const pad = mirrorMode || box.classList?.contains?.('ag-cs-home-panel') || ga(box, 'data-testid') === 'step-plan' ? 0 : 2;
+          const isHp = Boolean(box.classList?.contains?.('ag-cs-home-panel'));
+          if (isHp && ga(box, PM) !== '1') setAttrIfChanged(box, PM, '1');
+          const mirrorMode = ga(box, PM) === '1' || isHp, reflectBottomMode = !mirrorMode && ga(box, 'data-ag-cs-prism-reflect') === 'bottom';
+          const pad = mirrorMode || isHp || ga(box, 'data-testid') === 'step-plan' ? 0 : 2;
           next.push(mkEntry(box, rect, prev, pad, borderRadius, mirrorMode, reflectBottomMode));
         }
         if (trackEl) nextOrch = mkEntry(trackEl, orchRect, cachedOrchEntry?.box === trackEl ? cachedOrchEntry : null, 0, 999, false, false);
@@ -538,7 +546,7 @@
       observedPrismSet.clear();
       if (stepPlanIo) { try { stepPlanIo.disconnect(); } catch {} stepPlanIo = null; }
       spObs.clear(); spVis.clear();
-      for (const s of spOn) { try { ra(s, PB); } catch {} }
+      for (const s of spOn) { try { ra(s, PB); ra(s, PM); } catch {} }
       spOn.clear();
       const d = getDoc();
       if (d) {

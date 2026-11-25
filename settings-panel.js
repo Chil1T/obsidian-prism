@@ -1474,6 +1474,10 @@
   const buildSanitizedConfigExport = (currentSettings = {}, rawThoughtCfg = null, version = '1.0.7') => {
     const settings = {};
     for (const [k, spec] of O.entries(PRISM_SETTINGS_SCHEMA)) {
+      if (k === 'language' && String(currentSettings[k] ?? '').trim().toLowerCase() === 'auto') {
+        settings[k] = 'auto';
+        continue;
+      }
       const c = sanitizeKeyVal(k, currentSettings[k]);
       settings[k] = c.valid ? c.value : spec.default;
     }
@@ -1717,8 +1721,6 @@
       if (typeof rootEl.__prismMountThoughtUi === 'function') {
         try { rootEl.__prismMountThoughtUi(); } catch {}
       }
-      try { rootEl.__prismMountWp?.(l); } catch {}
-      try { rootEl.__prismMountSg?.(l); } catch {}
 
       const de = doc.documentElement;
       const themeAttr = de?.getAttribute?.('data-ag-cs-theme') || '';
@@ -1729,11 +1731,22 @@
       const tmMode = getThoughtTranslateMode();
       const thLive = rootEl.__prismThoughtUiHandle;
       const hasThUi = Boolean(thLive && thLive.box?.[K_IC]);
-      const sigParts = [l, isLightTheme ? 1 : 0, hiState, tmMode, hasThUi ? 1 : 0, ns];
+      const wpSlotEl = qs(rootEl, `[data-testid="${K_WP}"]`);
+      const sgSlotEl = qs(rootEl, `[data-testid="${K_SG}"]`);
+      const hasWpUi = Boolean(wpSlotEl?.__agPrismWpUiHandle?.root && wpSlotEl.__agPrismWpUiHandle.root.parentNode === wpSlotEl);
+      const hasSgUi = Boolean(sgSlotEl?.__agPrismSgUiHandle?.root && sgSlotEl.__agPrismSgUiHandle.root.parentNode === sgSlotEl);
+      const hasWpFn = isFn(G.__prismMountWallpaperUi);
+      const hasSgFn = isFn(G.__prismMountSuggesterUi);
+      const sigParts = [l, isLightTheme ? 1 : 0, hiState, tmMode, hasThUi ? 1 : 0, hasWpFn ? 1 : 0, hasWpUi ? 1 : 0, hasSgFn ? 1 : 0, hasSgUi ? 1 : 0, ns];
       for (const k of SCHEMA_KEYS) sigParts.push(effVal(k, l));
       const nextSig = sigParts.join('\x1f');
       if (rootEl.__lastSyncSig === nextSig) return;
       rootEl.__lastSyncSig = nextSig;
+
+      const betaLangChanged = rootEl.__lastBetaLang !== l;
+      rootEl.__lastBetaLang = l;
+      if (!hasWpUi || betaLangChanged) { try { rootEl.__prismMountWp?.(l); } catch {} }
+      if (!hasSgUi || betaLangChanged) { try { rootEl.__prismMountSg?.(l); } catch {} }
 
       const dirtyBtns = [];
       qa(rootEl, 'button[data-ag-cs-key]').forEach((btn) => {
@@ -2159,14 +2172,14 @@
       sec.__prismMountThoughtUi = mountThoughtUiIfReady;
       sec.__prismMountWp = (l) => {
         const f = G.__prismMountWallpaperUi;
-        if (wpSlot && f) f(wpSlot, { lang: l || getLang(), getLang, runGuardedMut });
+        if (!wpSlot || !f) return;
+        f(wpSlot, { lang: l || getLang(), getLang, runGuardedMut });
       };
       sec.__prismMountSg = (l) => {
         const f = G.__prismMountSuggesterUi;
-        if (sgSlot && f) {
-          setVis(sgSlot, true);
-          f(sgSlot, { lang: l || getLang(), getLang, runGuardedMut, btnClass: BTN });
-        }
+        if (!sgSlot || !f) return;
+        setVis(sgSlot, true);
+        f(sgSlot, { lang: l || getLang(), getLang, runGuardedMut, btnClass: BTN });
       };
 
       const syncFoldBadgeOnly = (st) => {
@@ -2466,7 +2479,7 @@
             }
             ap(grpEl, mkEl('div', 'ag-cs-settings-subhead', grp.title));
             if (grp.id === 'beta') {
-              const bNote = mkEl('div', 'ag-cs-beta-notice', U('betaPlaceholderNotice', 'Notice: Beta items are mostly placeholders and not ready for normal use.'));
+              const bNote = mkEl('div', 'ag-cs-beta-notice', U('betaPlaceholderNotice', 'Note: This section contains experimental features that are off by default and may evolve across versions.'));
               sa(bNote, 'data-testid', 'prism-beta-notice');
               ap(grpEl, bNote);
             }
@@ -2784,8 +2797,23 @@
           });
           const toggleAutoExit = (enabled) => {
             syncAutoExitButtons(enabled);
-            try { saveSetting('autoArchiveOnExit', enabled); } catch {}
+            const win = getWin();
+            const repoBridge = win?.__agPrismRepoBridge;
+            const hasRepoBridge = isFn(repoBridge) || isFn(repoBridge?.['storage-auto-exit']) || isFn(repoBridge?.call);
+            const hasSettingBinding = isFn(win?.__agPrismSetting) || isFn(win?.__agClaudeStyleSetting);
+            if (!hasRepoBridge) {
+              try { saveSetting('autoArchiveOnExit', enabled); } catch {}
+              return;
+            }
+            // 无 CDP setting 绑定（纯内存状态/单测环境）时同步本地状态；真运行态仅走 storage-auto-exit 单路写盘与广播
+            if (!hasSettingBinding) {
+              try { saveSetting('autoArchiveOnExit', enabled); } catch {}
+            }
             void invokePrismRepoAction('storage-auto-exit', version, { autoArchiveOnExit: enabled }).then((r) => {
+              if (r?.offline && hasSettingBinding) {
+                try { saveSetting('autoArchiveOnExit', enabled); } catch {}
+                return;
+              }
               if (r && r.ok !== false && !r.offline && archActionChip[K_IC]) {
                 const u = uiText(getLang()) || ui;
                 runGuardedMut(() => {
@@ -3013,10 +3041,28 @@
             pendingCfgToast = null;
           }
 
+          const isPersistedAutoLang = () => {
+            const liveCfg = isFn(ctx.getConfig) ? ctx.getConfig() : null;
+            if (isObj(liveCfg)) {
+              const raw = String(liveCfg.language ?? liveCfg.lang ?? '').trim().toLowerCase();
+              if (raw) return raw === 'auto';
+            }
+            for (const sk of ['ag-prism:config', 'ag-prism:lastFileConfig']) {
+              try {
+                const rawStr = readStore(sk);
+                if (!rawStr) continue;
+                const obj = JSON.parse(rawStr);
+                const raw = String(obj?.language ?? obj?.lang ?? '').trim().toLowerCase();
+                if (raw) return raw === 'auto';
+              } catch {}
+            }
+            return false;
+          };
           const exportBtn = mkB('ag-cs-cfg-btn', U('cfgExportBtn', 'Export JSON'), 'data-ag-cs-cfg-action', 'export');
           onClk(exportBtn, async () => {
             const lNow = getLang(), uNow = uiText(lNow), cur = {};
             for (const k of SCHEMA_KEYS) cur[k] = effVal(k, lNow);
+            if (isPersistedAutoLang()) cur.language = 'auto';
             const win = getWin();
             const rawThought = await Promise.resolve(
               win?.__agPrismThought?.getConfig ? win.__agPrismThought.getConfig() : win?.__agPrismThoughtBridge?.call?.({ action: 'get-config' })

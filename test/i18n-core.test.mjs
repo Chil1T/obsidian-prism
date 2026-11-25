@@ -832,6 +832,8 @@ test('PR #50 & PR #41/#49: DEFAULT_CONFIG & config.example.json default to auto,
     assert.equal(settingsPanel.validateImportedConfigJson('{"language":"auto"}').settings.language, 'fr');
     Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { language: 'zh-CN' } });
     assert.equal(settingsPanel.validateImportedConfigJson('{"language":"auto"}').settings.language, 'zh-CN');
+    assert.equal(settingsPanel.buildSanitizedConfigExport({ language: 'auto' }).settings.language, 'auto');
+    assert.equal(settingsPanel.buildSanitizedConfigExport({ language: 'AUTO' }).settings.language, 'auto');
   } finally {
     if (origNavDesc) Object.defineProperty(globalThis, 'navigator', origNavDesc);
     else delete globalThis.navigator;

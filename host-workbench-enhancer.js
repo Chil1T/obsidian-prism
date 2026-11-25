@@ -1499,15 +1499,20 @@
 
     function syncSubagentRunningAmbient() {
       if (isDead() || !doc?.querySelectorAll) return;
-      const SP = '[data-testid="status-loading-spinner"]';
+      const SP = '[data-testid="status-loading-spinner"], [data-testid="status-task-running"]';
       const rows = qa(doc, '[data-testid="subagent-node"], [data-testid="running-row"], [data-testid="background-task-row"]');
+      const sps = qa(doc, '[data-testid="step-plan"]');
       const ovPanel = qs(doc, '[data-testid="overview-panel"]');
       const ovShell = qs(doc, '[data-ag-cs-overview-shell="1"]') || ovPanel?.parentElement || null;
-      const inRun = Boolean(qs(qs(doc, '[data-testid="running-items-panel"]'), SP));
+      const inRun = Boolean(qs(qs(doc, '[data-testid="running-items-panel"].grid-rows-\\[1fr\\]'), SP));
       mut(() => {
         for (const r of rows) {
           if (qs(r, SP)) setA(r, 'data-ag-sub-running', '1');
           else if (ha(r, 'data-ag-sub-running')) ra(r, 'data-ag-sub-running');
+        }
+        for (const sp of sps) {
+          if (qs(sp, '[data-testid="step-plan-item"][data-status="in_progress"] [data-testid="status-loading-spinner"]')) setA(sp, 'data-ag-sp-running', '1');
+          else if (ha(sp, 'data-ag-sp-running')) ra(sp, 'data-ag-sp-running');
         }
         if (!ovPanel) {
           if (ha(ovShell, 'data-ag-overview-running')) ra(ovShell, 'data-ag-overview-running');
@@ -1922,6 +1927,8 @@
       if (isFull || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged) {
         syncCodeBlocks();
         syncNavRails();
+      }
+      if (isFull || flags.o || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged) {
         syncSubagentRunningAmbient();
       }
       if (isFull || flags.s || flags.r || flags.t || langChanged) {
@@ -1999,7 +2006,7 @@
           for (const sel of ['.ag-cs-code-fold-btn', '.ag-cs-nav-outline-popover', '.ag-cs-nav-outline-trigger', '.ag-cs-sb-more-wrap']) {
             qa(doc, sel).forEach((n) => n.remove());
           }
-          for (const k of 'cs-code-folded|cs-code-sticky|perm-selected|perm-sandbox-sep|sub-running|sub-sec-running|overview-running|sb-more-hidden|sb-more-item|scrolling|ov-sec-anim|cs-settings-dlg|cs-settings-nav|cs-nav-active'.split(
+          for (const k of 'cs-code-folded|cs-code-sticky|perm-selected|perm-sandbox-sep|sub-running|sub-sec-running|overview-running|sp-running|sb-more-hidden|sb-more-item|scrolling|ov-sec-anim|cs-settings-dlg|cs-settings-nav|cs-nav-active'.split(
             '|'
           )) {
             const a = 'data-ag-' + k;

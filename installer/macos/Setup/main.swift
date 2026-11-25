@@ -182,8 +182,8 @@ enum InstallerCore {
             if CdpHelper.isExpectedDaemonProcess(pid: pid, pluginDir: pluginDir) && terminatePid(pid) {
                 stoppedPids.insert(pid)
                 log?(InstallerI18n.tr(
-                    "已停止原生 Sidecar Daemon (PID \(pid))",
-                    "Stopped native Sidecar Daemon (PID \(pid))"
+                    "已停止本地守护服务 (PID \(pid))",
+                    "Stopped local background daemon (PID \(pid))"
                 ))
             }
         }
@@ -239,8 +239,8 @@ enum InstallerCore {
                 if terminatePid(pid) {
                     stoppedPids.insert(pid)
                     log?(InstallerI18n.tr(
-                        "已清理残留 Sidecar Daemon (PID \(pid))",
-                        "Cleaned up lingering Sidecar Daemon (PID \(pid))"
+                        "已清理残留守护服务 (PID \(pid))",
+                        "Cleaned up lingering background daemon (PID \(pid))"
                     ))
                 }
             }
@@ -1413,8 +1413,8 @@ enum InstallerCore {
 
             currentStep = "prepare-dirs"
             report(45, InstallerI18n.tr(
-                "正在部署原生 Sidecar 插件与独立守护资源...",
-                "Deploying native Sidecar plugin and standalone watcher assets..."
+                "正在部署本地插件与独立守护资源...",
+                "Deploying local plugin and standalone watcher assets..."
             ))
             let fm = FileManager.default
             currentTargetPath = installDir
@@ -1532,12 +1532,12 @@ enum InstallerCore {
             result.preservedExistingConfig = preservedConfig
             report(62, preservedConfig
                 ? InstallerI18n.tr(
-                    "已保留本机现有 config.json 用户配置并同步部署原生 Sidecar 插件",
-                    "Preserved existing config.json and deployed native Sidecar plugin"
+                    "已保留本机现有 config.json 用户配置并同步部署本地插件",
+                    "Preserved existing config.json and deployed local plugin"
                 )
                 : InstallerI18n.tr(
-                    "已部署原生 Sidecar 插件并写入默认配置 config.json",
-                    "Deployed native Sidecar plugin and wrote default config.json"
+                    "已部署本地插件并写入默认配置 config.json",
+                    "Deployed local plugin and wrote default config.json"
                 )
             )
 
@@ -1581,8 +1581,8 @@ enum InstallerCore {
             currentTargetPath = pluginDir
             if !opts.noNativeDaemon && result.nativePluginDeployed {
                 report(68, InstallerI18n.tr(
-                    "正在通过内置运行时自举启动五通道原生 Sidecar Daemon...",
-                    "Bootstrapping 5-channel native Sidecar Daemon via bundled runtime..."
+                    "正在通过内置运行时启动本地守护服务...",
+                    "Starting local background daemon via bundled runtime..."
                 ))
                 result.nativeDaemonStarted = CdpHelper.ensureNativeDaemonRunning(
                     pluginDir: pluginDir,
@@ -1661,8 +1661,8 @@ enum InstallerCore {
                     if result.nativeDaemonStarted {
                         let errDesc = spawnErr?.localizedDescription ?? InstallerI18n.tr("未知错误", "Unknown error")
                         let warn = InstallerI18n.tr(
-                            "[!] 启动独立守护 obsidian-prism-watcher 失败（非致命，原生 Sidecar Daemon 已运行）: \(errDesc)",
-                            "[!] Failed to launch standalone obsidian-prism-watcher (non-fatal; native Sidecar Daemon is running): \(errDesc)"
+                            "[!] 启动独立守护 obsidian-prism-watcher 失败（非致命，本地守护服务已运行）: \(errDesc)",
+                            "[!] Failed to launch standalone obsidian-prism-watcher (non-fatal; local background daemon is running): \(errDesc)"
                         )
                         result.warnings.append(warn)
                         report(84, warn)
@@ -1724,12 +1724,12 @@ enum InstallerCore {
             result.ok = true
             if !result.injectedPages.isEmpty {
                 result.headline = InstallerI18n.tr(
-                    "修补成功！已实时注入 \(result.injectedPages.count) 个 Antigravity 窗口",
-                    "Success! Live-injected \(result.injectedPages.count) Antigravity window(s)"
+                    "安装成功！已实时激活 \(result.injectedPages.count) 个 Antigravity 窗口",
+                    "Installed! Activated \(result.injectedPages.count) Antigravity window(s)"
                 )
                 result.detail = InstallerI18n.tr(
-                    "已部署原生五通道 Sidecar 插件与后台热备守护，并配置登录自启。后续打开新窗口或更新 Antigravity 后也会自动生效。",
-                    "Deployed the native 5-channel Sidecar plugin, standby watcher, and auto-start. New windows and future Antigravity updates will apply automatically."
+                    "已部署本地插件与后台守护服务，并配置登录自启。后续打开新窗口或更新 Antigravity 后也会自动生效。",
+                    "Deployed the local plugin, standby watcher, and auto-start. New windows and future Antigravity updates will apply automatically."
                 )
                 for title in result.injectedPages {
                     report(98, InstallerI18n.tr(
@@ -1739,12 +1739,12 @@ enum InstallerCore {
                 }
             } else if cdpReachable, let port = port {
                 result.headline = InstallerI18n.tr(
-                    "已安装原生插件并启动守护！等待 Antigravity 窗口就绪",
-                    "Native plugin installed & watcher running! Waiting for Antigravity window"
+                    "已安装本地插件并启动守护！等待 Antigravity 窗口就绪",
+                    "Local plugin installed & watcher running! Waiting for Antigravity window"
                 )
                 result.detail = InstallerI18n.tr(
-                    "已部署原生 Sidecar 插件并启动后台守护。检测到调试端口 \(port)，窗口就绪后将自动完成注入。",
-                    "Deployed native Sidecar plugin and background watcher. Debug port \(port) is reachable; injection will complete automatically once a window is ready."
+                    "已部署本地插件并启动后台守护。检测到调试端口 \(port)，窗口就绪后将自动完成激活。",
+                    "Deployed local plugin and background watcher. Debug port \(port) is reachable; activation will complete automatically once a window is ready."
                 )
             } else if opts.cdpPort == nil, CdpHelper.findBareAntigravityMainProcess() != nil {
                 result.bareHostDetected = true
@@ -1758,8 +1758,8 @@ enum InstallerCore {
                 )
             } else {
                 result.headline = InstallerI18n.tr(
-                    "安装成功！原生 Sidecar 插件与自动修补已就绪",
-                    "Installed! Native Sidecar plugin & auto-patcher ready"
+                    "安装成功！本地插件与后台守护已就绪",
+                    "Installed! Local plugin & background watcher ready"
                 )
                 result.detail = InstallerI18n.tr(
                     "当前未检测到运行中的 Antigravity Desktop；原生插件与守护进程已就绪，打开 Antigravity Desktop 后会自动立即生效。",
@@ -2343,8 +2343,8 @@ enum InstallerCore {
         }
         if !pluginDir.isEmpty && FileManager.default.fileExists(atPath: pluginDir) && !isSymbolicLink(pluginDir) {
             report(78, InstallerI18n.tr(
-                "正在清理原生 Sidecar 插件目录: \(pluginDir)",
-                "Removing native Sidecar plugin directory: \(pluginDir)"
+                "正在清理本地插件目录: \(pluginDir)",
+                "Removing local plugin directory: \(pluginDir)"
             ))
             try? FileManager.default.removeItem(atPath: pluginDir)
         }
@@ -2469,8 +2469,8 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
             defer: false
         )
         win.title = InstallerI18n.tr(
-            "Obsidian Prism 安装与修补工具",
-            "Obsidian Prism Installer & Patcher"
+            "Obsidian Prism 安装与配置工具",
+            "Obsidian Prism Installer"
         )
         win.appearance = NSAppearance(named: .aqua)
         win.backgroundColor = Self.srgb(248, 246, 243)
@@ -2492,8 +2492,8 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
         header.addSubview(iconView)
 
         let titleLabel = NSTextField(labelWithString: InstallerI18n.tr(
-            "Obsidian Prism · 自动修补安装器",
-            "Obsidian Prism · Auto-Patching Installer"
+            "Obsidian Prism · 安装与配置工具",
+            "Obsidian Prism Installer"
         ))
         titleLabel.frame = NSRect(x: 76, y: 15, width: 492, height: 24)
         titleLabel.textColor = Self.srgb(250, 248, 245)
@@ -2758,8 +2758,8 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
                     )
                     self.statusHeadline.textColor = Self.srgb(28, 25, 23)
                     self.statusDetail.stringValue = InstallerI18n.tr(
-                        "将部署原生 Sidecar 插件与 LaunchAgent 守护（不修改 Antigravity 核心程序文件）。请点击「立即安装」开始，或点击「取消」退出。",
-                        "Deploys the native Sidecar plugin and LaunchAgent watcher without modifying Antigravity.app binaries. Click \"Install Now\" to proceed."
+                        "将部署本地插件与 LaunchAgent 守护（不修改 Antigravity 核心程序文件）。请点击「立即安装」开始，或点击「取消」退出。",
+                        "Deploys the local plugin and LaunchAgent watcher without modifying Antigravity.app binaries. Click \"Install Now\" to proceed."
                     )
                     self.installBtn.title = InstallerI18n.tr("立即安装", "Install Now")
                 }
@@ -2824,13 +2824,13 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
         busy = true
         opts.createLauncher = (launcherCheckbox.state == .on)
         statusHeadline.stringValue = InstallerI18n.tr(
-            "正在安装并修补本机 Antigravity Desktop...",
-            "Installing and patching Antigravity Desktop..."
+            "正在安装并配置本机 Antigravity Desktop...",
+            "Installing and configuring Antigravity Desktop..."
         )
         statusHeadline.textColor = Self.srgb(28, 25, 23)
         statusDetail.stringValue = InstallerI18n.tr(
-            "正在部署原生 Sidecar 插件与后台热备守护，请稍候...",
-            "Deploying native Sidecar plugin and background watcher, please wait..."
+            "正在部署本地插件与后台守护服务，请稍候...",
+            "Deploying local plugin and background watcher, please wait..."
         )
         progressBar.doubleValue = 5
         setButtonsEnabled(false)
@@ -2880,8 +2880,8 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
                             "Activate Obsidian Prism Now"
                         )
                         alert.informativeText = InstallerI18n.tr(
-                            "检测到正在运行的 Antigravity (v2.33.0+) 未开启本地光学桥接端口（--remote-debugging-port=0）。\n\n是否立即重新打开 Antigravity 使黑曜棱镜（Obsidian Prism）五通道界面当场生效？",
-                            "Antigravity (v2.33.0+) is currently running without the local optical bridge flag (--remote-debugging-port=0).\n\nRelaunch Antigravity now to activate the 5-channel Obsidian Prism UI immediately?"
+                            "检测到正在运行的 Antigravity (v2.33.0+) 未开启本地光学桥接端口（--remote-debugging-port=0）。\n\n是否立即重新打开 Antigravity 使黑曜棱镜（Obsidian Prism）界面当场生效？",
+                            "Antigravity (v2.33.0+) is currently running without the local optical bridge flag (--remote-debugging-port=0).\n\nRelaunch Antigravity now to activate the Obsidian Prism UI immediately?"
                         )
                         alert.alertStyle = .informational
                         alert.addButton(withTitle: InstallerI18n.tr("立即重新打开", "Relaunch Now"))
@@ -2923,12 +2923,12 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
                                 DispatchQueue.main.async {
                                     if ok {
                                         self.statusHeadline.stringValue = InstallerI18n.tr(
-                                            "修补成功！已带参重开并激活 Antigravity 界面",
-                                            "Success! Antigravity relaunched and activated"
+                                            "安装成功！已带参重开并激活 Antigravity 界面",
+                                            "Installed! Antigravity relaunched and activated"
                                         )
                                         self.statusDetail.stringValue = InstallerI18n.tr(
-                                            "已带 --remote-debugging-port=0 重新打开 Antigravity 并激活五通道原生 Sidecar 守护。",
-                                            "Relaunched Antigravity with --remote-debugging-port=0 and activated the 5-channel native Sidecar daemon."
+                                            "已带 --remote-debugging-port=0 重新打开 Antigravity 并激活本地插件与后台守护服务。",
+                                            "Relaunched Antigravity with --remote-debugging-port=0 and activated the local plugin and background daemon."
                                         )
                                     }
                                     self.busy = false
@@ -2944,7 +2944,7 @@ final class InstallerAppDelegate: NSObject, NSApplicationDelegate, NSWindowDeleg
                     "[✗] Error: \(error.localizedDescription)"
                 ))
                 DispatchQueue.main.async {
-                    self.statusHeadline.stringValue = InstallerI18n.tr("修补失败", "Installation Failed")
+                    self.statusHeadline.stringValue = InstallerI18n.tr("安装失败", "Installation Failed")
                     self.statusHeadline.textColor = Self.srgb(185, 28, 28)
                     self.statusDetail.stringValue = error.localizedDescription
                     self.launchAgBtn.isHidden = true

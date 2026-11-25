@@ -1190,7 +1190,7 @@ test('wallpaper-settings-ui.js: 0 innerHTML, 8 locales + yue migration, 5+1 anti
         uiText: () => ({
           grpAppearance: 'Appearance',
           grpBeta: 'Beta Features',
-          betaPlaceholderNotice: 'Notice: Beta items are mostly placeholders right now and are not ready for normal use.',
+          betaPlaceholderNotice: 'Note: This section contains experimental features that are off by default and may evolve across versions.',
           sectionTitle: 'Obsidian Prism',
         }),
         isZh: () => activeLang.startsWith('zh'),
@@ -1210,7 +1210,7 @@ test('wallpaper-settings-ui.js: 0 innerHTML, 8 locales + yue migration, 5+1 anti
       assert.ok(capturedSlot.closest('[data-ag-cs-group="beta"]'), 'Wallpaper slot must live inside Beta group');
       assert.equal(capturedSlot.closest('[data-ag-cs-group="appearance"]'), null, 'Wallpaper slot must no longer live inside Appearance group');
       const betaNotice = env.doc.querySelector('[data-ag-cs-group="beta"] [data-testid="prism-beta-notice"]');
-      assert.ok(betaNotice && /placeholder/i.test(betaNotice.textContent), 'Beta group must render explicit placeholder warning notice');
+      assert.ok(betaNotice && /experimental/i.test(betaNotice.textContent), 'Beta group must render explicit experimental notice');
       assert.equal(lastMountLang, 'en');
 
       // Switch language en -> ja and verify wallpaper UI remounts/syncs with ja locale

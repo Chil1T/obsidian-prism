@@ -666,14 +666,43 @@ export class OmniServer {
     return rawHost === `127.0.0.1:${this.port}` || rawHost === '127.0.0.1';
   }
 
+  _isTrustedLocalOrigin(origin) {
+    if (typeof origin !== 'string' || !origin || origin === 'null' || /[\r\n\s]/.test(origin)) {
+      return false;
+    }
+    const lowOrigin = origin.toLowerCase();
+    if (/^(?:vscode-file|app):\/\/[a-z0-9._-]+(?:\/[^\s]*)?$/.test(lowOrigin)) {
+      return true;
+    }
+    if (/^file:\/\/[^\s]*$/.test(lowOrigin)) {
+      return true;
+    }
+    return /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/.test(lowOrigin);
+  }
+
+  _resolveCorsHeaders(req, { isSandbox = false } = {}) {
+    const rawOrigin = typeof req.headers?.origin === 'string' ? req.headers.origin.trim() : '';
+    const corsHeaders = { Vary: 'Origin' };
+    if (!rawOrigin) {
+      return corsHeaders;
+    }
+    if (rawOrigin === 'null') {
+      if (isSandbox) {
+        corsHeaders['Access-Control-Allow-Origin'] = 'null';
+      }
+      return corsHeaders;
+    }
+    if (this._isTrustedLocalOrigin(rawOrigin)) {
+      corsHeaders['Access-Control-Allow-Origin'] = rawOrigin;
+    }
+    return corsHeaders;
+  }
+
   _isTrustedOriginAndFetchSite(req, { isSandbox = false, isViewerOrStream = false } = {}) {
     const origin = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
     let trustedLocalOrigin = false;
     if (origin && origin !== 'null') {
-      const lowOrigin = origin.toLowerCase();
-      if (lowOrigin.startsWith('vscode-file://') || lowOrigin.startsWith('app://') || lowOrigin.startsWith('file://')) {
-        trustedLocalOrigin = true;
-      } else if (/^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(lowOrigin)) {
+      if (this._isTrustedLocalOrigin(origin)) {
         trustedLocalOrigin = true;
       } else {
         return false;
@@ -738,7 +767,7 @@ export class OmniServer {
       'Accept-Ranges': 'bytes',
       'Cache-Control': 'private, max-age=0, must-revalidate',
       'Referrer-Policy': 'no-referrer',
-      'Access-Control-Allow-Origin': '*',
+      ...this._resolveCorsHeaders(req, { isSandbox }),
       'Access-Control-Expose-Headers': 'Accept-Ranges, Content-Range, Content-Length',
       'X-Content-Type-Options': 'nosniff',
     };
@@ -828,7 +857,7 @@ export class OmniServer {
       if (req.method === 'OPTIONS') {
         if (isSandboxRoute || pathname === '/stream') {
           res.writeHead(204, {
-            'Access-Control-Allow-Origin': '*',
+            ...this._resolveCorsHeaders(req, { isSandbox: isSandboxRoute }),
             'Access-Control-Allow-Headers': 'Range, Content-Type',
             'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
             'Access-Control-Max-Age': '600',

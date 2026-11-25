@@ -873,6 +873,7 @@ color = vec4(rgb * a, a);
         gl.deleteProgram(program);
         gl.deleteTexture(cellTexture);
         gl.deleteTexture(atlasTexture);
+        try { gl.getExtension?.('WEBGL_lose_context')?.loseContext?.(); } catch {}
       },
     };
   }
@@ -1986,6 +1987,7 @@ outColor = clamp(vec4(premulRgb, outAlpha), 0.0, 1.0);
       dispose() {
         if (program) gl.deleteProgram(program);
         program = null;
+        try { gl.getExtension?.('WEBGL_lose_context')?.loseContext?.(); } catch {}
       },
     };
   }

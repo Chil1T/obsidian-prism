@@ -223,7 +223,6 @@
     if (existingHandle && existingHandle.root && existingHandle.root.parentNode === slotEl) {
       guard(() => unhideSlot(slotEl));
       existingHandle.updateLang(resolveLang(doc, ctx));
-      void existingHandle.refreshState();
       return existingHandle;
     }
 

@@ -185,7 +185,7 @@ namespace AgyClaudeStyle.Watcher
                 "  --dir <目录>          指定守护资源目录\r\n" +
                 "  --plugin-dir <目录>   指定原生插件目录\r\n" +
                 "  --cdp-port <端口>     指定 CDP 调试端口\r\n" +
-                "  --no-native-daemon    禁用自动拉起原生 Sidecar Daemon\r\n" +
+                "  --no-native-daemon    禁用自动拉起本地守护服务\r\n" +
                 "  --no-relaunch-prompt  禁用裸启重开提示弹窗\r\n" +
                 "  --lang <zh|en>        指定界面/日志语言（覆盖 AG_PRISM_LANG 与系统语言）\r\n" +
                 "  --out <文件>          将结果输出到指定文件\r\n" +
@@ -199,7 +199,7 @@ namespace AgyClaudeStyle.Watcher
                 "  --dir <dir>           Specify watcher directory\r\n" +
                 "  --plugin-dir <dir>    Specify native plugin directory\r\n" +
                 "  --cdp-port <port>     Specify CDP debug port\r\n" +
-                "  --no-native-daemon    Do not auto-start native Sidecar Daemon\r\n" +
+                "  --no-native-daemon    Do not auto-start local background daemon\r\n" +
                 "  --no-relaunch-prompt  Disable bare-launch relaunch prompt\r\n" +
                 "  --lang <zh|en>        Set UI/log language (overrides AG_PRISM_LANG and OS locale)\r\n" +
                 "  --out <file>          Write result to the specified file\r\n" +
@@ -1242,8 +1242,8 @@ namespace AgyClaudeStyle.Watcher
                                     {
                                         yieldingToDaemon = true;
                                         Log(InstallerI18n.Tr(
-                                            "[~] 检测到原生 Sidecar Daemon 运行中，Watcher 进入热备避让态",
-                                            "[~] Native Sidecar Daemon detected; Watcher entering standby mode"
+                                            "[~] 检测到本地守护服务运行中，Watcher 进入热备避让态",
+                                            "[~] Local background daemon detected; Watcher entering standby mode"
                                         ));
                                     }
                                 }
@@ -1254,8 +1254,8 @@ namespace AgyClaudeStyle.Watcher
                             {
                                 yieldingToDaemon = false;
                                 Log(InstallerI18n.Tr(
-                                    "[+] 原生 Sidecar Daemon 已离线，Watcher 接管实时注入",
-                                    "[+] Native Sidecar Daemon offline; Watcher taking over live injection"
+                                    "[+] 本地守护服务已离线，Watcher 接管实时注入",
+                                    "[+] Local background daemon offline; Watcher taking over live injection"
                                 ));
                             }
 

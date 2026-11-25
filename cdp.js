@@ -6200,10 +6200,6 @@ function readPackedCssExpr() {
 }
 
 function getEffectiveBundlePartNames() {
-  const brandRel = 'assets/brand-mark-svg.js';
-  if (fs.existsSync(path.join(__dirname, brandRel))) {
-    return [brandRel, ...RUNTIME_PARTS];
-  }
   return [...RUNTIME_PARTS];
 }
 
@@ -6283,6 +6279,7 @@ function stripJsFunctionsByName(src, replacementsByName) {
 function stripUnusedUpstreamMenuObserver(src) {
   const preCleaned = src
     .replace(/\bvar\s+(?:SET_TITLE_I18N|SET_HEAD_I18N|FILL_RADIUS_CSS|TRACK_HEIGHT|BASE_SPEEDUP|MIN_HEIGHT_SLOTS|CLAUDE_ROWS|CLAUDE_KNOB_[WHR]|TRACE_CAPACITY|traceRingBuffer)\s*=\s*(?:\{[^{}]*\}|[^;\n]+);?/g, '')
+    .replace(/\bvar\s+SETTINGS_SCHEMA\s*=\s*_F\(\[[\s\S]*?(?=\r?\nfunction\s+schemaDefaults\b)/, '')
     .replace(/,\s*(?:label|hint|labelEn|hintEn)\s*:\s*"[^"]*"/g, '')
     .replace(/(?<!function\s)\btracePush\([^\n;]*\);?/g, '')
     .replace(/if\s*\(\s*typeof\s+window\s*!==\s*"undefined"\s*&&[\s\S]*?(?=\nreturn\s*\{)/, '')
@@ -6296,6 +6293,8 @@ function stripUnusedUpstreamMenuObserver(src) {
       }
     });
   return stripJsFunctionsByName(preCleaned, {
+    schemaDefaults: 'function schemaDefaults(){return{v:1,motion:"fast",ticks:"highlight"};}',
+    normalizeSettings: 'function normalizeSettings(r){var b={v:1,motion:"fast",ticks:"highlight"};if(!r||typeof r!=="object")return b;if(r.motion==="fast"||r.motion==="quick"||r.motion==="full")b.motion=r.motion;else if(!r.motion&&r.reducedMotion===true)b.motion="quick";if(r.ticks==="highlight"||r.ticks==="dim"||r.ticks==="hidden")b.ticks=r.ticks;return b;}',
     installMenuObserver: 'function installMenuObserver(){return{stop:function(){},rescan:function(){},getCurrent:function(){return null;}};}',
     openSettingsPanel: 'function openSettingsPanel(){return function(){};}',
     installSettingsUi: 'function installSettingsUi(){return{stop:function(){}};}',
@@ -6991,7 +6990,15 @@ function getConfigRefreshTemplate() {
       } catch {}
       if (effectiveCfg?.mascot === 'off' || effectiveCfg?.mascot === false) {
         try {
-          document.querySelectorAll?.('.ag-cs-crab-stage,.ag-cs-mascot-stage').forEach((n) => n.remove());
+          try { window.__agDualMascotRig?.dispose?.(); } catch {}
+          try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
+          document.querySelectorAll?.('.ag-cs-crab, .ag-cs-dual-stage, .ag-cs-crab-stage, .ag-cs-mascot-stage, .ag-v2-mascot-stage, .ag-v2-habitat-prop').forEach((n) => {
+            try { n.__agMascotApi?.dispose?.(); } catch {}
+            n.remove?.();
+          });
+          document.querySelectorAll?.('[data-ag-cs-crab-anchor]').forEach((n) => n.removeAttribute?.('data-ag-cs-crab-anchor'));
+          document.documentElement?.removeAttribute?.('data-ag-cs-has-crab');
+          document.documentElement?.removeAttribute?.('data-ag-cs-mascot-drag');
           delete window.__agDualMascotRig;
           delete globalThis.__agDualMascotRig;
           delete window.__agPrismMascotArt;
@@ -7318,7 +7325,6 @@ function getBundleSourceFiles() {
   const files = [
     { rel: 'cdp.js', fullPath: __filename, optional: false },
     { rel: 'style.css', fullPath: path.join(__dirname, 'style.css'), optional: false },
-    { rel: 'assets/brand-mark-svg.js', fullPath: path.join(__dirname, 'assets', 'brand-mark-svg.js'), optional: true },
     // i18n-locales.js 虽已拆至按需 Settings 通道，但其活跃语言迷你切片会打入 Channel 1 bootCfg.__uiSlice，故纳入源哈希确保缓存强一致
     { rel: 'i18n-locales.js', fullPath: path.join(__dirname, 'i18n-locales.js'), optional: true },
   ];
@@ -10251,20 +10257,24 @@ function readCompiledSettingsChannelAssets(opts = null) {
   if (!fs.existsSync(locPath) || !fs.existsSync(setPath)) {
     return { sig: '', minRuntime: '', codeHash: '' };
   }
+  const brandPath = path.join(__dirname, 'assets', 'brand-mark-svg.js');
   const atlasPath = path.join(__dirname, 'vendor', 'clawd-mascot', 'tavern-atlas-data.js');
   const stageGlPath = path.join(__dirname, 'vendor', 'clawd-mascot', 'octopath-stage-webgl.js');
+  const hasBrand = fs.existsSync(brandPath);
   const hasAtlas = fs.existsSync(atlasPath);
   const hasStageGl = fs.existsSync(stageGlPath);
-  const sig = `${getFileSig(locPath)}|${hasAtlas ? getFileSig(atlasPath) : '0'}|${hasStageGl ? getFileSig(stageGlPath) : '0'}|${getFileSig(setPath)}`;
+  const sig = `${getFileSig(locPath)}|${hasBrand ? getFileSig(brandPath) : '0'}|${hasAtlas ? getFileSig(atlasPath) : '0'}|${hasStageGl ? getFileSig(stageGlPath) : '0'}|${getFileSig(setPath)}`;
   const cachePath = resolveBundleCachePathOption(opts);
   if (!cachePath && _settingsChannelCache.sig === sig && _settingsChannelCache.codeHash) {
     return _settingsChannelCache;
   }
   const locBuf = fs.readFileSync(locPath);
+  const brandBuf = hasBrand ? fs.readFileSync(brandPath) : null;
   const atlasBuf = hasAtlas ? fs.readFileSync(atlasPath) : null;
   const stageGlBuf = hasStageGl ? fs.readFileSync(stageGlPath) : null;
   const setBuf = fs.readFileSync(setPath);
   const fileEntries = [{ rel: 'i18n-locales.js', content: locBuf }];
+  if (brandBuf) fileEntries.push({ rel: 'assets/brand-mark-svg.js', content: brandBuf });
   if (atlasBuf) fileEntries.push({ rel: 'vendor/clawd-mascot/tavern-atlas-data.js', content: atlasBuf });
   if (stageGlBuf) fileEntries.push({ rel: 'vendor/clawd-mascot/octopath-stage-webgl.js', content: stageGlBuf });
   fileEntries.push({ rel: 'settings-panel.js', content: setBuf });
@@ -10277,6 +10287,7 @@ function readCompiledSettingsChannelAssets(opts = null) {
     opts,
     compileFn: () => {
       const parts = [minifySingleSource(locBuf.toString('utf8'))];
+      if (brandBuf) parts.push(minifySingleSource(brandBuf.toString('utf8')));
       if (atlasBuf) parts.push(atlasBuf.toString('utf8').trim());
       if (stageGlBuf) parts.push(minifySingleSource(minifyEmbeddedGlslTemplates(stageGlBuf.toString('utf8'))));
       parts.push(minifySingleSource(setBuf.toString('utf8')));
@@ -10306,6 +10317,8 @@ const SETTINGS_REMOVE_EXPRESSION = `(() => {
   } catch {}
   try { delete window.__agPrismSettingsPanel; } catch {}
   try { delete globalThis.__agPrismSettingsPanel; } catch {}
+  try { delete window.__agPrismBrandLogoSvg; } catch {}
+  try { delete globalThis.__agPrismBrandLogoSvg; } catch {}
   try { delete window.__agOctopathStageWebGL; } catch {}
   try { delete globalThis.__agOctopathStageWebGL; } catch {}
   try { delete window.__agOctopathTavernAtlas; } catch {}
@@ -10403,8 +10416,17 @@ function readCompiledMascotAssets(opts = null) {
 }
 
 const MASCOT_REMOVE_EXPRESSION = `(() => {
-  try { document.querySelectorAll?.('.ag-cs-crab-stage, .ag-cs-mascot-stage').forEach((n) => n.remove()); } catch {}
+  try { window.__agDualMascotRig?.dispose?.(); } catch {}
+  try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
+  try {
+    document.querySelectorAll?.('.ag-cs-crab, .ag-cs-dual-stage, .ag-cs-crab-stage, .ag-cs-mascot-stage, .ag-v2-mascot-stage, .ag-v2-habitat-prop').forEach((n) => {
+      try { n.__agMascotApi?.dispose?.(); } catch {}
+      n.remove?.();
+    });
+  } catch {}
+  try { document.querySelectorAll?.('[data-ag-cs-crab-anchor]').forEach((n) => n.removeAttribute?.('data-ag-cs-crab-anchor')); } catch {}
   try { document.documentElement?.removeAttribute?.('data-ag-cs-has-crab'); } catch {}
+  try { document.documentElement?.removeAttribute?.('data-ag-cs-mascot-drag'); } catch {}
   try { delete window.__agDualMascotRig; } catch {}
   try { delete globalThis.__agDualMascotRig; } catch {}
   try { delete window.__agPrismMascotArt; } catch {}
@@ -10431,7 +10453,16 @@ function buildMascotChannelExpression(config = null, opts = null) {
     try {
       const liveCfg = window.__agPrism?.getState?.()?.cfg;
       if (liveCfg && (liveCfg.mascot === 'off' || liveCfg.mascot === false)) {
-        try { document.querySelectorAll?.('.ag-cs-crab-stage, .ag-cs-mascot-stage').forEach((n) => n.remove()); } catch {}
+        try { window.__agDualMascotRig?.dispose?.(); } catch {}
+        try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
+        try {
+          document.querySelectorAll?.('.ag-cs-crab, .ag-cs-dual-stage, .ag-cs-crab-stage, .ag-cs-mascot-stage, .ag-v2-mascot-stage, .ag-v2-habitat-prop').forEach((n) => {
+            try { n.__agMascotApi?.dispose?.(); } catch {}
+            n.remove?.();
+          });
+        } catch {}
+        try { document.querySelectorAll?.('[data-ag-cs-crab-anchor]').forEach((n) => n.removeAttribute?.('data-ag-cs-crab-anchor')); } catch {}
+        try { document.documentElement?.removeAttribute?.('data-ag-cs-has-crab'); document.documentElement?.removeAttribute?.('data-ag-cs-mascot-drag'); } catch {}
         try { delete window.__agDualMascotRig; delete globalThis.__agDualMascotRig; delete window.__agPrismMascotArt; delete globalThis.__agPrismMascotArt; } catch {}
         return { ok: true, status: 'off', skippedByLiveCfg: true };
       }
@@ -11119,6 +11150,13 @@ const REMOVE_EXPRESSION = `(() => {
     'data-ag-diff-state',
     'data-ag-cs-inline-diff',
     'data-ag-prism-scope',
+    'data-ag-cs-crab-anchor',
+    'data-ag-sp-running',
+    'data-ag-cs-queued',
+    'data-ag-cs-conv-seat',
+    'data-ag-cs-home-sheet',
+    'data-ag-cs-input-layer',
+    'data-ag-cs-vp-wrap',
   ].forEach((attr) => {
     document.querySelectorAll('[' + attr + ']').forEach((el) => el.removeAttribute(attr));
   });
@@ -11188,7 +11226,7 @@ const REMOVE_EXPRESSION = `(() => {
   const nodes = document.querySelectorAll(
     '#' + ${JSON.stringify(STYLE_ID)} +
     ', #' + ${JSON.stringify(LEGACY_STYLE_ID)} +
-    ', #ag-prism-host-alert-css, #ag-prism-settings-v101-css, #ag-prism-studio-v101-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-prism-periodic-picker-css, #ag-prism-periodic-picker-root, .ag-pp-hold-ring, .ag-pp-mini-keycap, #ag-prism-inline-diff-css, #ag-prism-wallpaper-root, #ag-prism-wallpaper-css, #ag-prism-suggester-css, #ag-prism-model-dd-css, [data-testid="prism-suggest-trigger"], [data-testid="prism-ghost-overlay"], #ag-prism-storage-guard, #ag-prism-storage-guard-css, #ag-cs-settings-sec, [data-testid="prism-thought-ai-config"], [data-testid="prism-thought-general-config"], .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ag-prism-sidebar-studio, .ag-prism-sidebar-rail, .ag-prism-sidebar-popover, .ag-prism-sidebar-modal, .ag-cs-home-panel, .ag-cs-home-panel-seat, .ag-cs-ripple-layer, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-mascot, .ag-v2-mascot-stage, .ag-v2-habitat-prop, .ag-cs-crystal-bar, [data-testid="orchestrator-effort-bar"], .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-nav-outline-trigger, .ag-cs-smooth-caret, .ag-cs-perf-backdrop, .ag-cs-ctx-menu, .ag-cs-ctx-toast'
+    ', #ag-prism-host-alert-css, #ag-prism-settings-v101-css, #ag-prism-studio-v101-css, #ag-prism-omni-css, #ag-prism-sidebar-studio-css, #ag-prism-periodic-picker-css, #ag-prism-periodic-picker-root, .ag-pp-hold-ring, .ag-pp-mini-keycap, #ag-prism-inline-diff-css, #ag-prism-wallpaper-root, #ag-prism-wallpaper-css, #ag-prism-suggester-css, #ag-prism-model-dd-css, [data-testid="prism-suggest-trigger"], [data-testid="prism-ghost-overlay"], #ag-prism-storage-guard, #ag-prism-storage-guard-css, #ag-cs-settings-sec, [data-testid="prism-thought-ai-config"], [data-testid="prism-thought-general-config"], .ag-omni-dock, .ag-omni-menu, .ag-prism-omni-menu, .ag-prism-omni-pane, [data-ag-prism-omni-owned="1"], [data-ag-prism-sidebar-owned="1"], .ag-prism-sidebar-studio, .ag-prism-sidebar-rail, .ag-prism-sidebar-popover, .ag-prism-sidebar-modal, .ag-cs-home-panel, .ag-cs-home-panel-seat, .ag-cs-ripple-layer, .ag-cs-ripple-host, .ag-cs-conv-aura-host, .ag-cs-crab, .ag-cs-dual-stage, .ag-cs-crab-stage, .ag-cs-mascot-stage, .ag-cs-mascot, .ag-v2-mascot-stage, .ag-v2-habitat-prop, .ag-cs-crystal-bar, [data-testid="orchestrator-effort-bar"], .ag-cs-prism-rim-cv, .ag-cs-code-fold-btn, .ag-cs-nav-outline-popover, .ag-cs-nav-outline-trigger, .ag-cs-smooth-caret, .ag-cs-perf-backdrop, .ag-cs-ctx-menu, .ag-cs-ctx-toast'
   );
   nodes.forEach((n) => n.remove());
   return { removed: nodes.length };
