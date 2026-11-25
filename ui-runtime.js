@@ -738,20 +738,7 @@
         isConvRunning,
         runGuardedMut,
         setAttrIfChanged,
-        getConfig: () => ({
-          ...cfg,
-          palette: getEffectivePalette(),
-          lightPreset: getLightPreset(),
-          motionLevel: getMotionLevel(),
-          accentTone: getAccentTone(),
-          cornerStyle: getCornerStyle(),
-          scrollBottomMotion: cfg.scrollBottomMotion === 'instant' ? 'instant' : 'smooth',
-          sidebarNavFold: cfg.sidebarNavFold === 'on' ? 'on' : 'off',
-          codeFont: getCodeFont(),
-          codeLigatures: isCodeLigaturesEnabled(),
-          ambientIntensity: getAmbientIntensitySetting(),
-          thoughtView: getThoughtView(),
-        }),
+        getConfig: () => normalizeConfigShape(cfg),
       })
     : noopStub();
 
@@ -1511,33 +1498,8 @@
     return `${palLabel} · ${lp} · ${mlLabel}`;
   };
 
-  const resolveSettingRowActiveValue = (key, lang) => {
-    const fn = {
-      language: () => lang,
-      motionLevel: getMotionLevel,
-      targetFps: getTargetFps,
-      lightPreset: getLightPreset,
-      telemetryModule: getTelemetryMode,
-      effortSliderModule: getEffortSliderMode,
-      effortMemory: getEffortMemoryMode,
-      periodicModelPicker: getPeriodicPickerMode,
-      hostLocalization: getHostLocalizationMode,
-      omniModule: getOmniMode,
-      linkTarget: getLinkTarget,
-      thoughtTranslate: getThoughtTranslateMode,
-      thoughtTrigger: getThoughtTriggerTiming,
-      thoughtView: getThoughtView,
-      accentTone: getAccentTone,
-      cornerStyle: getCornerStyle,
-      codeFont: getCodeFont,
-      codeLigatures: isCodeLigaturesEnabled,
-      contextMenu: isContextMenuEnabled,
-      ambientIntensity: getAmbientIntensitySetting,
-      palette: getEffectivePalette,
-    }[key];
-    if (fn) return fn();
-    return key === 'mascot' && cfg.mascot === 'dual' ? 'crab' : cfg[key];
-  };
+  const resolveSettingRowActiveValue = (key, lang) =>
+    key === 'language' ? lang : key === 'mascot' && cfg.mascot === 'dual' ? 'crab' : normalizeConfigShape(cfg)[key];
 
   const isSettingButtonMatch = (key, btnValJson, curVal) => {
     if (JSON.stringify(curVal) === btnValJson) return true;
@@ -1693,6 +1655,26 @@
       if (!isArr) for (const w of qa(el, '[data-ag-cs-bg-cmd-wrap="1"]')) syncBgCmdWrapParent(w);
       for (const c of qa(el, '[data-testid="background-task-command"]')) syncBgCmdWrapParent(c[K_PE]);
     }
+  };
+
+  const A_BL = 'data-ag-cs-bleed', BLEED_TRIGS = new Set(['thinking-collapsible-trigger', 'tool-group-collapsible', 'worked-for-collapsible']), bleedEls = new Set();
+  const syncBleedTables = () => {
+    const hosts = qa(D, '.md-table-host');
+    if (!hosts.length && !bleedEls.size) return;
+    const next = new Set();
+    for (const h of hosts) {
+      if (!h || h[K_IC] === false) continue;
+      const vp = cl(h, '[data-testid="autoscroll-viewport"]');
+      for (let c = h[K_PE]; c && c !== D.body; c = c[K_PE]) {
+        if (tagU(c) === 'DIV') {
+          const p = c[K_PE], ch = p?.children, pv = c.previousElementSibling !== undefined ? c.previousElementSibling : ch ? ch[AF(ch).indexOf(c) - 1] : null;
+          if ((vp && clHas(c, 'flex') && clHas(c, 'items-start') && (p === vp || clHas(p, 'flex-col'))) || BLEED_TRIGS.has(tidOf(pv)) || (clHas(c, 'flex') && clHas(c, 'flex-row') && clHas(p, 'flex-col'))) next.add(c);
+        }
+        if (c === vp) break;
+      }
+    }
+    for (const e of bleedEls) if (!next.has(e)) { ra(e, A_BL); bleedEls.delete(e); }
+    for (const e of next) { setAttrIfChanged(e, A_BL, '1'); bleedEls.add(e); }
   };
 
   const AH_ID = 'ag-prism-host-alert-css', TS_A = 'data-ag-turbo-dedup', TI_A = 'data-ag-turbo-img';
@@ -1973,6 +1955,7 @@
     }
 
     if (tid === 'step-plan' || q('[data-testid="step-plan"]')) dirtyFlags.o = true;
+    if (cls.includes('md-table-host') || q('.md-table-host')) dirtyFlags.l = true;
 
     if (tid === 'thinking-collapsible-trigger') {
       dirtyFlags.l = dirtyFlags.tk = true;
@@ -2125,6 +2108,9 @@
       if (effectiveFull || flags.m) {
         stampBgCmdWrap(effectiveFull ? D : bgCmdNodes);
       }
+      if (effectiveFull || flags.l || flags.r || flags.c) {
+        syncBleedTables();
+      }
       if (effectiveFull || turboRoots) {
         syncHostTurbo(effectiveFull ? D : turboRoots);
       }
@@ -2206,6 +2192,7 @@
             if (!convNow) return false;
             runGuardedMut(() => {
               stampBgCmdWrap(convNow);
+              syncBleedTables();
               streamChoreoCtl.syncThinkingSparks(latestPrimaryModelInfo);
               streamChoreoCtl.syncDualStreamEngine();
               streamChoreoCtl.syncHeroCCaustics();
@@ -2734,7 +2721,7 @@
     const safe = (fn) => { try { fn?.(); } catch {} };
     cancelScheduledSync();
     streamChoreoCtl.clearTransientTimers();
-    for (const s of [dirtyAddedRoots, dirtyCollapsibleTargets, dirtyBgCmds, dirtyTurboRoots]) s.clear();
+    for (const s of [dirtyAddedRoots, dirtyCollapsibleTargets, dirtyBgCmds, dirtyTurboRoots, bleedEls]) s.clear();
     clearWinBlur();
     finishResizing(false);
     unmountCrab();
@@ -2858,34 +2845,7 @@
       return {
         brand: 'Obsidian Prism',
         version: VERSION,
-        cfg: {
-          ...cfg,
-          palette: getEffectivePalette(),
-          lightPreset: getLightPreset(),
-          motionLevel: getMotionLevel(),
-          targetFps: getTargetFps(),
-          telemetryModule: getTelemetryMode(),
-          effortSliderModule: getEffortSliderMode(),
-          effortMemory: getEffortMemoryMode(),
-          periodicModelPicker: getPeriodicPickerMode(),
-          hostLocalization: getHostLocalizationMode(),
-          thoughtTranslate: getThoughtTranslateMode(),
-          thoughtTrigger: getThoughtTriggerTiming(),
-          thoughtView: getThoughtView(),
-          accentTone: getAccentTone(),
-          cornerStyle: getCornerStyle(),
-          scrollBottomMotion: cfg.scrollBottomMotion === 'instant' ? 'instant' : 'smooth',
-          sidebarNavFold: cfg.sidebarNavFold === 'on' ? 'on' : 'off',
-          codeFont: getCodeFont(),
-          codeLigatures: isCodeLigaturesEnabled(),
-          contextMenu: isContextMenuEnabled(),
-          ambientIntensity: getAmbientIntensitySetting(),
-          omniModule: getOmniMode(),
-          linkTarget: getLinkTarget(),
-          sidebarStudio: cfg.sidebarStudio === 'on' ? 'on' : 'off',
-          autoUpdate: cfg.autoUpdate === 'on' ? 'on' : 'off',
-          updateChannel: cfg.updateChannel === 'beta' ? 'beta' : 'stable',
-        },
+        cfg: normalizeConfigShape(cfg),
         motionLevel: getMotionLevel(), lightPreset: getLightPreset(),
         hasThoughtModule: !!W.__agPrismThought, hasOmniModule: !!W.__agPrismOmni, hasSidebarStudio: !!W.__agPrismSidebar,
         hasContextMenu: !!(W.__agPrismContextMenu || GT.__agPrismContextMenu), hasHostEnhancer: isFn(hostEnhancerCtl?.getDebugState),
@@ -2915,7 +2875,7 @@
       qa(D, `[${A_Q}],[${A_TK}]`).forEach((e) => { ra(e, A_Q); ra(e, A_TK); rp(e, 'margin-bottom'); });
       qa(D, '[data-ag-row-stagger]').forEach((e) => { ra(e, 'data-ag-row-stagger'); rp(e, '--ag-row-i'); });
       qa(D, '.agy-overlay,.agy-fastpick,[data-testid="context-menu-popup"],[data-testid="context-menu-submenu-popup"],[data-ag-cs-overview-shell]').forEach((e) => { rp(e, '--ag-origin-x'); rp(e, '--ag-origin-y'); });
-      for (const s of 'placeholder|orch-active|model-overlay|aux-dual|overview-shell|prism-mirror|prism-reflect|settings-dlg|settings-nav|nav-active|conv-seat|vp-wrap|home-sheet|row-running|menu-open|auto-unfolded|outer-open|caustic|fiber-camp|sonar|stage-glide|liftoff-bubble|thought-streaming|spark-streaming|prism-cv|code-folded|bg-cmd-wrap|input-layer|hdr-open|rich-pre|glide-item|crab-anchor'.split('|')) {
+      for (const s of 'placeholder|orch-active|model-overlay|aux-dual|overview-shell|prism-mirror|prism-reflect|settings-dlg|settings-nav|nav-active|conv-seat|vp-wrap|home-sheet|row-running|menu-open|auto-unfolded|outer-open|caustic|fiber-camp|sonar|stage-glide|liftoff-bubble|thought-streaming|spark-streaming|prism-cv|code-folded|bg-cmd-wrap|input-layer|hdr-open|rich-pre|glide-item|crab-anchor|bleed'.split('|')) {
         const a = 'data-ag-cs-' + s;
         qa(D, `[${a}]`).forEach((e) => ra(e, a));
       }

@@ -637,7 +637,7 @@
     'happy:e=happy,C:b=squash/stand~f,C:l=crouch/stand~f,C:L=up,C:R=up,K:a=nod/stand~f,K:w=cheer,K:t=up/puff~f|' +
     'pet:e=happy,C:b=squash/stand~f,C:l=crouch/stand~f,C:L=up,C:R=up,K:a=nod/stand~f,K:w=cheer,K:t=up/puff~f|' +
     'jiggle:l=flailA/flailB/flailC~3,e=happy,C:L=up,C:R=up,K:a=stand,K:t=puff|' +
-    'peek:sh=~,b=peek,l=~,C:e=peekOpen/peekOpen/peekOpen/peekHalf~4,C:L=peekGrip,C:R=peekGrip,K:a=peek,K:e=peekOpen,K:w=peekGrip,K:t=loaf|' +
+    'peek:z=1,N:l=crouch,e=open/open/open/half~4,C:L=front,C:R=front,K:t=curl,W:e=peekOpen/peekOpen/peekOpen/loafHalf~4,W:w=tuck,W:t=loaf|' +
     'angry:b=squash/stand~f,l=walkA/walkB~f,C:e=squint,K:a=airplane,K:e=wide,K:t=puff|' +
     'groom:K:a=nod,K:e=shut,K:w=groom1/groom2~f|' +
     'tilt:b=turnL,e=half,K:a=nod,K:t=curl|' +
@@ -854,6 +854,7 @@
 
     if (isFelineRig && s.body === 'squash' && s.ears === 'stand') s.ears = 'nod';
     if (isDragon && (poseKey === 'happy' || poseKey === 'pet')) s.paws = frameMod ? 'up' : 'cheer';
+    if (isDragon && poseKey === 'peek') s.paws = 'tuck';
     if (isWhale && (poseKey === 'happy' || poseKey === 'pet') && !s.prop1) s.prop1 = frameMod ? 'whaleSpout1' : 'whaleSpout0';
     if (isWhale && poseKey === 'flat') s.tail = 'loaf';
     if (isFelineRig && SLOW_TAIL_POSES.has(poseKey)) {
@@ -1580,6 +1581,8 @@
     const CANVAS_H = 84;
     const OX = 8;
     const OY = 17;
+    const PEEK_Y = 3;
+    const MINI_PEEK_Y = 2;
 
     if (isFn(hostEl.removeChild)) {
       while (hostEl.firstChild) hostEl.removeChild(hostEl.firstChild);
@@ -1608,7 +1611,7 @@
       if (actor.el) return;
       const btn = markNoTrOwned(doc.createElement('div'));
       btn.className = 'ag-v2-mascot-actor';
-      for (const [k, v] of [['data-mascot-id', actor.id], ['data-no-press-spring', '1'], ['role', 'button'], ['tabindex', '0'], ['aria-label', actor.label]]) btn.setAttribute(k, v);
+      for (const [k, v] of [['data-mascot-id', actor.id], ['data-no-press-spring', '1'], ['role', 'button'], ['tabindex', '-1'], ['aria-label', actor.label]]) btn.setAttribute(k, v);
       const cv = markNoTrOwned(doc.createElement('canvas'));
       cv.className = 'ag-v2-mascot-canvas';
       cv.width = round(CANVAS_W * dpr);
@@ -1808,16 +1811,15 @@
       });
     }
     const maxXFor = (w) => max(8, max(96, w - 14 - (popoverRightWidth > 0 ? min(w - 150, popoverRightWidth + 16) : 0)) - 80);
+    const miniZ = (m) => (yieldMode === 'peek' ? '8' : m.dragging ? '39' : m.stackedOn ? String(25 + getStackDepth(m.id) * 2) : '25');
     const syncTower = (a, now = nowMs()) => {
       if (isMiniEnt(a)) {
         const dom = a.canvas || a.el;
         if (dom) {
           const direct = syncDirectMotionDomAttr(a, dom);
           const tx = snapCoord(isFin(a.px) ? a.px : a.x, direct);
-          const ty = snapCoord(a.y || 0, direct);
-          const depth = a.stackedOn ? getStackDepth(a.id) : 0;
-          const tz = a.dragging ? '39' : depth > 0 ? String(25 + depth * 2) : '25';
-          applyMiniTransform(a, tx, ty, tz, a.dragging || a.ballisticActive ? a.rot : 0);
+          const ty = snapCoord((a.y || 0) + (yieldMode === 'peek' && !a.dragging ? MINI_PEEK_Y : 0), direct);
+          applyMiniTransform(a, tx, ty, miniZ(a), a.dragging || a.ballisticActive ? a.rot : 0);
         }
       } else {
         applyActorTransform(a, now);
@@ -1831,12 +1833,10 @@
           if (!dom) continue;
           const direct = syncDirectMotionDomAttr(r, dom);
           const tx = snapCoord(getEntWorldCx(a) - 32, direct);
-          const ty = snapCoord(computeWorldFootY(r), direct);
-          const depth = r.stackedOn ? getStackDepth(r.id) : 0;
-          const tz = r.dragging ? '39' : depth > 0 ? String(25 + depth * 2) : '25';
+          const ty = snapCoord(computeWorldFootY(r) + (yieldMode === 'peek' && !r.dragging ? PEEK_Y : 0), direct);
           r.px = tx;
           r.lastX = round(tx);
-          applyMiniTransform(r, tx, ty, tz, 0);
+          applyMiniTransform(r, tx, ty, miniZ(r), 0);
         } else {
           applyActorTransform(r, now);
         }
@@ -2392,11 +2392,11 @@
         const root = getTowerRoot(actor.id);
         const worldCx = getEntWorldCx(root || actor);
         actor.x = clampActorX(worldCx - 48);
-        yPx = computeWorldFootY(actor) + (yieldMode === 'leap' ? -leapOffsetY : 0);
+        yPx = computeWorldFootY(actor) + (yieldMode === 'leap' ? -leapOffsetY : yieldMode === 'peek' && !actor.dragging ? PEEK_Y : 0);
       } else if (yieldMode === 'leap' && !actor.dragging && actor.y === 0) {
         yPx -= leapOffsetY;
       } else if (yieldMode === 'peek' && !actor.dragging) {
-        yPx += 1;
+        yPx += PEEK_Y;
       }
       const direct = syncDirectMotionDomAttr(actor, actor.el);
       const depth = actor.stackedOn ? getStackDepth(actor.id) : 0;
@@ -2877,7 +2877,6 @@
         let sqH = inspectState ? inspectState.sqH : st ? st.sqH : 0;
         if (!inspectState && !st && hasRider && pose !== 'idle') sqH = -1;
         a.lastSq = { w: sqW, h: sqH };
-        const clipBottomY = yieldMode === 'peek' && !a.dragging && !inspectState ? (OY + 8) * PX : undefined;
         const ftk = tickIdx - a.forceTwitchStart;
         const forcedTwitch = ftk >= 0 && ftk < 4 && ftk !== 2 ? a.forceTwitchSide : null;
 
@@ -2894,7 +2893,7 @@
           crystal: crystalActive,
           crystalBob: !reducedMotion && floor(tickIdx / 6) % 2 === 1,
           eyeScan: inspectState ? 0 : a.eyeScan || fx.glance,
-          noShadow: a.dragging || a.y < -2 || !!a.stackedOn || yieldMode === 'peek',
+          noShadow: a.dragging || a.y < -2 || !!a.stackedOn,
           dir: a.faceDir || (a.vx < 0 || a.patrolDir < 0 ? 'left' : 'right'),
         });
 
@@ -2932,7 +2931,6 @@
           rc.tyPx === snappedTy &&
           rc.sqW === sqW &&
           rc.sqH === sqH &&
-          rc.clipBottomY === clipBottomY &&
           rc.cw === a.canvas.width &&
           rc.ch === a.canvas.height
         ) {
@@ -2945,7 +2943,6 @@
           rc.tyPx = snappedTy;
           rc.sqW = sqW;
           rc.sqH = sqH;
-          rc.clipBottomY = clipBottomY;
           rc.cw = a.canvas.width;
           rc.ch = a.canvas.height;
           const colorResolver = isChromaCat
@@ -2986,7 +2983,7 @@
                   const p = RIM_PALS[rim.t] || RIM_PALS.default;
                   const o = rim.d ? 0 : 2;
                   const lv = (bLv / 12) * (rim.d ? 1 : 0.65);
-                  const by = (oyG + (yieldMode === 'peek' && !a.dragging ? 8 : 10)) * pxS;
+                  const by = (oyG + 10) * pxS;
                   const gx = (oxG + 8) * pxS + bDir * 9;
                   const paint = (yy, r, h, s0, s1) => {
                     const g = c2.createRadialGradient(gx, yy, 0, gx, yy, r);
@@ -3010,7 +3007,6 @@
             sqW,
             sqH,
             rotDeg: 0,
-            clipBottomY,
             colorResolver,
             overlayPainter,
             rimPainter,
@@ -3026,7 +3022,7 @@
       }
       if (miniPileEnabled) {
         const safeRight = max(48, (stageBoundsX().maxX || 680) - 48);
-        if (!reducedMotion && !dozing && lastCrabStepTick !== tickIdx) {
+        if (!reducedMotion && !dozing && yieldMode !== 'peek' && lastCrabStepTick !== tickIdx) {
           lastCrabStepTick = tickIdx;
           const freeCorridorCrabs = miniCrabs.filter((mc) => !mc.dragging && !mc.ballisticActive && !mc.stackedOn && !mc.leap && mc.y === 0);
           const crabEvs = stepMiniCrabCorridor(freeCorridorCrabs, {
@@ -3042,7 +3038,7 @@
         syncAllStackedFollowers();
         miniCrabs.forEach((mc, idx) => {
           const anim = MINI_ANIM_FRAMES[mc.id];
-          const moving = !reducedMotion && !dozing;
+          const moving = !reducedMotion && !dozing && yieldMode !== 'peek';
 
           // 自动搭便车超时后轻巧侧跳落地
           if (mc.stackedOn && mc.perchUntil > 0 && now >= mc.perchUntil && !mc.dragging) {
@@ -3138,7 +3134,7 @@
             const root = getTowerRoot(mc.id);
             const wCx = getEntWorldCx(root || mc);
             targetX = snapCoord(wCx - 32, mcDirect);
-            targetY = snapCoord(computeWorldFootY(mc), mcDirect);
+            targetY = snapCoord(computeWorldFootY(mc) + (yieldMode === 'peek' ? PEEK_Y : 0), mcDirect);
             mc.px = targetX;
             mc.lastX = round(targetX);
           } else if (actPos) {
@@ -3155,12 +3151,11 @@
                 ? clamp(mc.px, 2, safeRight)
                 : clamp(mc.px ?? mc.x, 2, safeRight);
             targetX = snapCoord(rawX, mcDirect);
-            targetY = snapCoord(mc.y || 0, mcDirect);
+            targetY = snapCoord((mc.y || 0) + (yieldMode === 'peek' && !mc.dragging && !mc.stackedOn && !mc.leap ? MINI_PEEK_Y : 0), mcDirect);
             mc.lastX = round(targetX);
           }
 
-          const depth = mc.stackedOn ? getStackDepth(mc.id) : 0;
-          const mz = mc.dragging ? '39' : depth > 0 ? String(25 + depth * 2) : '25';
+          const mz = miniZ(mc);
           const mKey = `${computeLayersFrameIdx([targetSprite])}|${targetMirror ? 1 : 0}|${targetTy}|${mc.canvas.width}`;
           if (mc.lastFrameKey !== mKey) {
             mc.lastFrameKey = mKey;
@@ -3191,11 +3186,12 @@
       // 二次刷新被防重叠微调后的 DOM transform（若未变则自动命中缓存 0 写入）
       for (const a of activeMainActors()) applyActorTransform(a, now);
       if (miniPileEnabled) {
+        const miniPeekY = yieldMode === 'peek' ? MINI_PEEK_Y : 0;
         for (const mc of miniCrabs) {
           if (!mc.dragging && !mc.ballisticActive && !mc.stackedOn && !mc.act && !mc.leap && mc.y === 0) {
             syncDirectMotionDomAttr(mc, mc.canvas);
             const tx = round(mc.px);
-            applyMiniTransform(mc, tx, 0, null, 0);
+            applyMiniTransform(mc, tx, miniPeekY, null, 0);
           }
         }
       }
@@ -4975,7 +4971,7 @@
       }
       for (const a of activeMainActors()) {
         if (!a?.el) continue;
-        a.el.setAttribute?.('tabindex', isPeek ? '-1' : '0');
+        a.el.setAttribute?.('tabindex', '-1');
         if (isPeek) a.el.setAttribute?.('aria-hidden', 'true');
         else a.el.removeAttribute?.('aria-hidden');
         if (a.el.style) a.el.style.pointerEvents = isPeek ? 'none' : '';
@@ -4983,7 +4979,13 @@
       }
       if (miniGroupEl?.style) miniGroupEl.style.pointerEvents = isPeek ? 'none' : '';
       for (const mc of miniCrabs) {
-        if (mc?.el?.style) mc.el.style.pointerEvents = isPeek ? 'none' : 'auto';
+        if (!mc?.el) continue;
+        if (mc.el.style) mc.el.style.pointerEvents = isPeek ? 'none' : 'auto';
+        const mz = miniZ(mc);
+        if (mc.lastDomZ !== mz) {
+          mc.lastDomZ = mz;
+          if (mc.el.style) mc.el.style.zIndex = mz;
+        }
       }
     };
 
