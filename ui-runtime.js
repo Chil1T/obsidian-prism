@@ -1293,10 +1293,15 @@
         const cleanLbl = modelGlyphCtl.readButtonLabelWithoutGlyph(modelBtn);
         if (cleanLbl) {
           const normLbl = modelGlyphCtl.normalizeModelEffortLabel ? modelGlyphCtl.normalizeModelEffortLabel(cleanLbl) : cleanLbl, modelSig = `${mInfo.brand}:${normLbl.toLowerCase()}`;
-          if (hs.lastModelSig === null) hs.lastModelSig = modelSig;
-          else if (modelSig !== hs.lastModelSig) {
-            hs.lastModelSig = modelSig; hs.pendingModelShiftNotify = true;
-            if (isMotionUltra()) streamChoreoCtl.triggerHeroDFiberPulse(card, modelBtn, mInfo.brand);
+          const c = (qs(D, '.agy-home') ? 'H:' : 'C:') + (W.location?.pathname || ''), dd = ga(modelBtn, 'data-disabled');
+          if (hs.lastModelSig === null || hs.lastModelCard !== card || hs.lastModelCtx !== c) {
+            hs.lastModelSig = modelSig; hs.lastModelCtx = c; hs.lastModelCard = card;
+          } else if (modelSig !== hs.lastModelSig) {
+            hs.lastModelSig = modelSig;
+            if (!(modelBtn.disabled || ha(modelBtn, 'disabled') || ga(modelBtn, 'aria-disabled') === 'true' || (dd != null && dd !== 'false'))) {
+              hs.pendingModelShiftNotify = true;
+              if (isMotionUltra()) streamChoreoCtl.triggerHeroDFiberPulse(card, modelBtn, mInfo.brand);
+            }
           }
         }
       }

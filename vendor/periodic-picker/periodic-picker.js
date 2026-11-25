@@ -96,6 +96,9 @@
     var HOLD_OPEN_DELAY_MS = 420;
     var HOLD_MAX_DRIFT_PX = 10;
     var SESSION_SYNC_DEBOUNCE_MS = 80;
+    var SESSION_SYNC_CLICK_FOLLOWUP_MS = 200;
+    var SESSION_SYNC_ROUTE_FOLLOWUP_MS = 220;
+    var OPEN_LOCK_GUARD_INTERVAL_MS = 280;
     var SESSION_BADGE_DURATION_MS = 1200;
     var SHORT_VIEWPORT_HEIGHT_PX = 560;
     var SUPPRESS_CLICK_WINDOW_MS = 800;
@@ -454,6 +457,24 @@
 
       var setTimer = root && typeof root.setTimeout === 'function' ? root.setTimeout.bind(root) : setTimeout;
       var clearTimer = root && typeof root.clearTimeout === 'function' ? root.clearTimeout.bind(root) : clearTimeout;
+      var setIntervalFn =
+        root && typeof root.setInterval === 'function'
+          ? root.setInterval.bind(root)
+          : typeof setInterval === 'function'
+          ? setInterval
+          : null;
+      var clearIntervalFn =
+        root && typeof root.clearInterval === 'function'
+          ? root.clearInterval.bind(root)
+          : typeof clearInterval === 'function'
+          ? clearInterval
+          : null;
+      function isHostModelTriggerLocked(triggerBtn) {
+        if (typeof hostBridge.isModelTriggerLocked === 'function') {
+          return Boolean(hostBridge.isModelTriggerLocked(triggerBtn, doc));
+        }
+        return false;
+      }
       var reqRaf =
         root && typeof root.requestAnimationFrame === 'function'
           ? root.requestAnimationFrame.bind(root)
@@ -686,6 +707,8 @@
       /* Open-only session sync state (80ms debounce + zero-redraw identical signature) */
       var lastSessionSig = { fullSig: '', modelSig: '', convId: '' };
       var sessionSyncTimer = 0;
+      var sessionSyncFollowupTimer = 0;
+      var openLockGuardTimer = 0;
       var sessionTriggerObserver = null;
       var sessionHistoryPatched = false;
       var origHistoryPushState = null;
@@ -693,6 +716,7 @@
       var wrappedHistoryPushState = null;
       var wrappedHistoryReplaceState = null;
       var openSessionWindowListeners = [];
+      var openSessionDocListeners = [];
 
       /* Focus / visibility 0fps sleep state */
       var windowBlurred = false;
@@ -798,6 +822,22 @@
         }
       }
 
+      function clearSessionSyncFollowupTimer() {
+        if (sessionSyncFollowupTimer) {
+          clearTimer(sessionSyncFollowupTimer);
+          sessionSyncFollowupTimer = 0;
+        }
+      }
+
+      function clearOpenLockGuardTimer() {
+        if (openLockGuardTimer) {
+          if (clearIntervalFn) {
+            try { clearIntervalFn(openLockGuardTimer); } catch (e) {}
+          }
+          openLockGuardTimer = 0;
+        }
+      }
+
       function clearTransientAsync() {
         if (openRafId && cancelRaf) cancelRaf(openRafId);
         openRafId = 0;
@@ -806,6 +846,8 @@
         stopOrbitFollowSync();
         cancelPendingPointerMoveRaf();
         clearSessionSyncTimer();
+        clearSessionSyncFollowupTimer();
+        clearOpenLockGuardTimer();
         blindDwellTimer = 0;
         blindFlashTimer = 0;
         blindFlashZ = null;
@@ -1331,6 +1373,7 @@
 
       function replayNativeTriggerClick(triggerBtn, meta) {
         if (!triggerBtn || typeof triggerBtn.dispatchEvent !== 'function' || isDestroyed) return false;
+        if (isHostModelTriggerLocked(triggerBtn)) return false;
         var m = meta || {};
         var cx = Number(m.clientX) || 0;
         var cy = Number(m.clientY) || 0;
@@ -4301,12 +4344,26 @@
             if (overlayEl && (m.target === overlayEl || (typeof overlayEl.contains === 'function' && overlayEl.contains(m.target)))) {
               continue;
             }
+            var liveTrigger =
+              (activeAnchorBtn && isNodeConnectedToDoc(doc, activeAnchorBtn) ? activeAnchorBtn : null) ||
+              hostBridge.findFallbackModelTrigger(doc);
+            if (isHostModelTriggerLocked(liveTrigger)) {
+              cancelHold(false);
+              collapseDrawerAndClose();
+              return;
+            }
             scheduleSessionSync(SESSION_SYNC_DEBOUNCE_MS);
             return;
           }
         });
         try {
-          sessionTriggerObserver.observe(targetNode, { childList: true, characterData: true, subtree: true });
+          sessionTriggerObserver.observe(targetNode, {
+            childList: true,
+            characterData: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['disabled', 'aria-disabled', 'data-disabled', 'data-model-label'],
+          });
         } catch (e2) {
           sessionTriggerObserver = null;
         }
@@ -4314,10 +4371,22 @@
 
       function detachOpenSessionSyncWatchers() {
         clearSessionSyncTimer();
+        clearSessionSyncFollowupTimer();
+        clearOpenLockGuardTimer();
         if (sessionTriggerObserver) {
           try { sessionTriggerObserver.disconnect(); } catch (e) {}
           sessionTriggerObserver = null;
         }
+        if (doc && typeof doc.removeEventListener === 'function') {
+          for (var di = 0; di < openSessionDocListeners.length; di += 1) {
+            doc.removeEventListener(
+              openSessionDocListeners[di][0],
+              openSessionDocListeners[di][1],
+              openSessionDocListeners[di][2]
+            );
+          }
+        }
+        openSessionDocListeners.length = 0;
         if (root && typeof root.removeEventListener === 'function') {
           for (var i = 0; i < openSessionWindowListeners.length; i += 1) {
             root.removeEventListener(openSessionWindowListeners[i][0], openSessionWindowListeners[i][1], false);
@@ -4350,7 +4419,18 @@
 
         var onRouteSignal = function () {
           scheduleSessionSync(SESSION_SYNC_DEBOUNCE_MS);
+          scheduleSessionSyncFollowup(SESSION_SYNC_ROUTE_FOLLOWUP_MS);
         };
+        var onOpenExternalClick = function (ev) {
+          if (!overlayEl || isDestroyed || isDrawerClosing || isConfirmClosing || currentMode === 'off') return;
+          if (ev && isTargetWithinNode(overlayEl, ev.target)) return;
+          scheduleSessionSync(SESSION_SYNC_DEBOUNCE_MS);
+          scheduleSessionSyncFollowup(SESSION_SYNC_CLICK_FOLLOWUP_MS);
+        };
+        if (doc && typeof doc.addEventListener === 'function') {
+          doc.addEventListener('click', onOpenExternalClick, true);
+          openSessionDocListeners.push(['click', onOpenExternalClick, true]);
+        }
         if (root && typeof root.addEventListener === 'function') {
           root.addEventListener('popstate', onRouteSignal, false);
           root.addEventListener('hashchange', onRouteSignal, false);
@@ -4362,7 +4442,7 @@
               origHistoryPushState = root.history.pushState;
               wrappedHistoryPushState = function () {
                 var ret = origHistoryPushState.apply(this, arguments);
-                scheduleSessionSync(SESSION_SYNC_DEBOUNCE_MS);
+                onRouteSignal();
                 return ret;
               };
               root.history.pushState = wrappedHistoryPushState;
@@ -4372,13 +4452,29 @@
               origHistoryReplaceState = root.history.replaceState;
               wrappedHistoryReplaceState = function () {
                 var ret = origHistoryReplaceState.apply(this, arguments);
-                scheduleSessionSync(SESSION_SYNC_DEBOUNCE_MS);
+                onRouteSignal();
                 return ret;
               };
               root.history.replaceState = wrappedHistoryReplaceState;
               sessionHistoryPatched = true;
             }
           } catch (e) {}
+        }
+        if (setIntervalFn) {
+          openLockGuardTimer = setIntervalFn(function () {
+            if (!overlayEl || isDestroyed || isDrawerClosing || isConfirmClosing || currentMode === 'off') {
+              clearOpenLockGuardTimer();
+              return;
+            }
+            var probeTrigger =
+              hostBridge.findFallbackModelTrigger(doc) ||
+              (activeAnchorBtn && isNodeConnectedToDoc(doc, activeAnchorBtn) ? activeAnchorBtn : null);
+            if (isHostModelTriggerLocked(probeTrigger)) {
+              clearOpenLockGuardTimer();
+              cancelHold(false);
+              collapseDrawerAndClose();
+            }
+          }, OPEN_LOCK_GUARD_INTERVAL_MS);
         }
         attachLocalSessionTriggerObserver();
       }
@@ -4395,6 +4491,13 @@
 
         var triggerReplaced = Boolean(latestTrigger && latestTrigger !== activeAnchorBtn);
         if (latestTrigger) activeAnchorBtn = latestTrigger;
+
+        /* Lock guard MUST run before re-docking or same-signature early return (e.g. switching to a running session with the same model) */
+        if (isHostModelTriggerLocked(latestTrigger)) {
+          cancelHold(false);
+          collapseDrawerAndClose();
+          return true;
+        }
 
         /* Seamlessly re-dock in-flow drawer if conversation-view container was swapped */
         if (stageMode === 'drawer') {
@@ -4470,10 +4573,27 @@
         sessionSyncTimer = setTimer(runSessionSyncFromHost, Math.max(0, Number(delayMs) || SESSION_SYNC_DEBOUNCE_MS));
       }
 
+      function scheduleSessionSyncFollowup(delayMs) {
+        if (!overlayEl || isDestroyed || isDrawerClosing || isConfirmClosing || currentMode === 'off') return;
+        clearSessionSyncFollowupTimer();
+        sessionSyncFollowupTimer = setTimer(function () {
+          sessionSyncFollowupTimer = 0;
+          runSessionSyncFromHost();
+        }, Math.max(0, Number(delayMs) || SESSION_SYNC_CLICK_FOLLOWUP_MS));
+      }
+
       /* Public host callback wired by ui-runtime.js: closed -> sync mini keycap, open -> 80ms debounced sync */
       function onHostTriggerChanged() {
         if (isDestroyed || currentMode === 'off') return;
         if (overlayEl && !isDrawerClosing) {
+          var liveTrigger =
+            hostBridge.findFallbackModelTrigger(doc) ||
+            (activeAnchorBtn && isNodeConnectedToDoc(doc, activeAnchorBtn) ? activeAnchorBtn : null);
+          if (isHostModelTriggerLocked(liveTrigger)) {
+            cancelHold(false);
+            collapseDrawerAndClose();
+            return;
+          }
           scheduleSessionSync(SESSION_SYNC_DEBOUNCE_MS);
           return;
         }
@@ -4738,6 +4858,13 @@
 
       function open(anchorBtn) {
         if (isDestroyed || currentMode === 'off' || !doc || !doc.body) return false;
+        var triggerEl = anchorBtn || hostBridge.findFallbackModelTrigger(doc);
+        if (isHostModelTriggerLocked(triggerEl)) {
+          if (overlayEl) {
+            close({ silent: true });
+          }
+          return false;
+        }
         bentoUi.ensureStyles(doc);
         if (audioEngine && typeof audioEngine.rearm === 'function') audioEngine.rearm();
         lastStageCursor = '';
@@ -4753,7 +4880,6 @@
           close({ silent: true, preserveCaches: true });
         }
 
-        var triggerEl = anchorBtn || hostBridge.findFallbackModelTrigger(doc);
         activeAnchorBtn = triggerEl || null;
         activeHostCtx = hostBridge.readHostModelContext(triggerEl, root, doc);
 
@@ -6058,6 +6184,15 @@
         var triggerBtn = hostBridge.matchModelTriggerButton(ev.target, root, doc);
         if (!triggerBtn) return;
 
+        if (isHostModelTriggerLocked(triggerBtn)) {
+          pendingLongPressReleaseBtn = null;
+          cancelHold(false);
+          if (overlayEl && !isDrawerClosing) {
+            collapseDrawerAndClose();
+          }
+          return;
+        }
+
         /* User is actively pressing trigger inside this window -> clear any stale blur flag */
         clearStaleBlurIfActive();
         if (isHostPaused) syncHostPauseState();
@@ -6104,8 +6239,10 @@
         holdState = state;
 
         state.ringTimer = setTimer(function () {
-          if (holdState !== state || isDestroyed || !isNodeConnectedToDoc(doc, triggerBtn)) {
+          var lockedNow = isHostModelTriggerLocked(triggerBtn);
+          if (holdState !== state || isDestroyed || !isNodeConnectedToDoc(doc, triggerBtn) || lockedNow) {
             cancelHold(false);
+            if (lockedNow && overlayEl && !isDrawerClosing) collapseDrawerAndClose();
             return;
           }
           state.ringTimer = 0;
@@ -6115,7 +6252,14 @@
 
         if (!wasOpenAtDown) {
           state.prewarmTimer = setTimer(function () {
-            if (holdState !== state || isDestroyed || !isNodeConnectedToDoc(doc, triggerBtn)) return;
+            var lockedNow = isHostModelTriggerLocked(triggerBtn);
+            if (holdState !== state || isDestroyed || !isNodeConnectedToDoc(doc, triggerBtn) || lockedNow) {
+              if (lockedNow) {
+                cancelHold(false);
+                if (overlayEl && !isDrawerClosing) collapseDrawerAndClose();
+              }
+              return;
+            }
             state.prewarmTimer = 0;
             state.didPrewarm = true;
             prewarmActiveModelAssets(triggerBtn);
@@ -6123,8 +6267,10 @@
         }
 
         state.openTimer = setTimer(function () {
-          if (holdState !== state || isDestroyed || !isNodeConnectedToDoc(doc, triggerBtn)) {
+          var lockedNow = isHostModelTriggerLocked(triggerBtn);
+          if (holdState !== state || isDestroyed || !isNodeConnectedToDoc(doc, triggerBtn) || lockedNow) {
             cancelHold(false);
+            if (lockedNow && overlayEl && !isDrawerClosing) collapseDrawerAndClose();
             return;
           }
           state.triggeredLongPress = true;
@@ -6146,6 +6292,16 @@
         if (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey) return;
         if (overlayEl && isTargetWithinNode(overlayEl, ev.target)) return;
 
+        var matchedTrigger = hostBridge.matchModelTriggerButton(ev.target, root, doc);
+        var lockProbeBtn = matchedTrigger || (holdState && isTargetWithinNode(holdState.btn, ev.target) ? holdState.btn : null);
+        if (lockProbeBtn && isHostModelTriggerLocked(lockProbeBtn)) {
+          cancelHold(false);
+          if (overlayEl && !isDrawerClosing) {
+            collapseDrawerAndClose();
+          }
+          return;
+        }
+
         var shouldBlock = false;
         if (holdState && isTargetWithinNode(holdState.btn, ev.target)) {
           shouldBlock = true;
@@ -6155,7 +6311,7 @@
           (!suppressTargetBtn || isTargetWithinNode(suppressTargetBtn, ev.target))
         ) {
           shouldBlock = true;
-        } else if (hostBridge.matchModelTriggerButton(ev.target, root, doc)) {
+        } else if (matchedTrigger) {
           shouldBlock = true;
         }
 
@@ -6170,8 +6326,10 @@
         if (!holdState && (!overlayEl || isConfirmClosing || isDrawerClosing || isHostPaused)) return;
         if (!ev || isDestroyed) return;
         if (holdState) {
-          if (!isNodeConnectedToDoc(doc, holdState.btn)) {
+          if (!isNodeConnectedToDoc(doc, holdState.btn) || isHostModelTriggerLocked(holdState.btn)) {
+            var lockedInMove = isHostModelTriggerLocked(holdState.btn);
             cancelHold(false);
+            if (lockedInMove && overlayEl && !isDrawerClosing) collapseDrawerAndClose();
           } else {
             var mx = Number(ev.clientX) || 0;
             var my = Number(ev.clientY) || 0;
@@ -6223,6 +6381,14 @@
 
         var st = holdState;
         var btn = st.btn;
+        if (isHostModelTriggerLocked(btn)) {
+          cancelHold(false);
+          armSuppressTrailingNativeRelease(btn);
+          if (overlayEl && !isDrawerClosing) {
+            collapseDrawerAndClose();
+          }
+          return;
+        }
         var upX = ev.clientX !== undefined ? Number(ev.clientX) || st.startX : st.lastX;
         var upY = ev.clientY !== undefined ? Number(ev.clientY) || st.startY : st.lastY;
         var dx = upX - st.startX;
@@ -6688,6 +6854,7 @@
       isEffortMemoryEnabled: defaultHostBridge.isEffortMemoryEnabled,
       normalizeEffortToken: defaultHostBridge.normalizeEffortToken,
       findFallbackModelTrigger: defaultHostBridge.findFallbackModelTrigger,
+      isModelTriggerLocked: defaultHostBridge.isModelTriggerLocked,
       collectVisibleModelTriggerButtons: defaultHostBridge.collectVisibleModelTriggerButtons,
       matchModelTriggerButton: defaultHostBridge.matchModelTriggerButton,
       dismissNativeHostMenu: defaultHostBridge.dismissNativeHostMenu,

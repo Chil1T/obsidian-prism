@@ -984,6 +984,51 @@
       return null;
     }
 
+    function isModelTriggerLocked(triggerBtn, doc) {
+      var btn = triggerBtn || findFallbackModelTrigger(doc);
+      if (btn) {
+        try {
+          if (btn.disabled === true) return true;
+          if (typeof btn.hasAttribute === 'function' && btn.hasAttribute('disabled')) return true;
+          if (typeof btn.getAttribute === 'function') {
+            if (btn.getAttribute('aria-disabled') === 'true') return true;
+            var dd = btn.getAttribute('data-disabled');
+            if (dd !== null && dd !== undefined && dd !== 'false') return true;
+            var al = btn.getAttribute('aria-label') || '';
+            if (/cannot be changed while.*running|运行中.*无法切换/i.test(al)) return true;
+          }
+          var cls = typeof btn.className === 'string' ? btn.className : '';
+          if (cls && cls.indexOf('cursor-not-allowed') !== -1) return true;
+        } catch (eBtn) {}
+      }
+      var scope = null;
+      if (btn && typeof btn.closest === 'function') {
+        scope = btn.closest('[data-testid="agent-input-box"]');
+      }
+      if (!scope && doc && typeof doc.querySelectorAll === 'function') {
+        try {
+          var boxes = doc.querySelectorAll('[data-testid="agent-input-box"]');
+          for (var i = 0; i < boxes.length; i += 1) {
+            var b = boxes[i];
+            if (b && (typeof b.closest !== 'function' || !b.closest('[data-testid="subagent-tab-conversation"]'))) {
+              scope = b;
+              break;
+            }
+          }
+        } catch (eBox) {}
+      }
+      if (scope && typeof scope.querySelector === 'function') {
+        try {
+          var cancelBtn = scope.querySelector('[data-testid="input-cancel-button"]');
+          if (cancelBtn) {
+            var hidden = cancelBtn.hidden === true || (cancelBtn.style && cancelBtn.style.display === 'none');
+            if (!hidden) return true;
+          }
+        } catch (eCan) {}
+      }
+      return false;
+    }
+
     function collectVisibleModelTriggerButtons(doc) {
       var found = [];
       if (!doc || typeof doc.querySelectorAll !== 'function') return found;
@@ -1466,6 +1511,7 @@
       triggerDomMenuItemIfPresent: triggerDomMenuItemIfPresent,
       syncHostWithActiveState: syncHostWithActiveState,
       findFallbackModelTrigger: findFallbackModelTrigger,
+      isModelTriggerLocked: isModelTriggerLocked,
       collectVisibleModelTriggerButtons: collectVisibleModelTriggerButtons,
       matchModelTriggerButton: matchModelTriggerButton,
       readCleanButtonLabel: readCleanButtonLabel,
