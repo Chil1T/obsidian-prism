@@ -250,21 +250,10 @@
   let lastFormalConvEl = null;
   let lastFormalCascadeId = '';
   let lastStoreSnapKey = '';
-  const dirtyFlags = {
-    f: true,
-    t: false,
-    r: false,
-    s: false,
-    a: false,
-    c: false,
-    b: false,
-    o: false,
-    l: false,
-    tk: false,
-    cf: false,
-    g: false,
-    m: false,
-  };
+  const DIRTY_KEYS = 'f|t|r|s|a|c|b|o|l|tk|cf|g|m'.split('|');
+  const dirtyFlags = {};
+  const setAllDirty = (v) => { for (const k of DIRTY_KEYS) dirtyFlags[k] = v; };
+  setAllDirty(true);
   const perfStats = {
     lastSyncMs: 0,
     syncCount: 0,
@@ -272,9 +261,7 @@
     iconFullRuns: 0,
   };
 
-  const markAllDirty = () => {
-    for (const k of O.keys(dirtyFlags)) dirtyFlags[k] = true;
-  };
+  const markAllDirty = () => setAllDirty(true);
 
   const resolveWireSettingPair = (key, value) => {
     const base = currentBaseConfig || {};
@@ -347,9 +334,8 @@
       pickConcreteLang(cfg.lang) ||
       pickConcreteLang(currentBaseConfig?.language) ||
       pickConcreteLang(currentBaseConfig?.lang) ||
-      (typeof navigator !== 'undefined' && (navigator.language || (navigator.languages && navigator.languages[0]))
-        ? navigator.language || navigator.languages[0]
-        : 'en');
+      (typeof navigator !== 'undefined' && (navigator.language || navigator.languages?.[0])) ||
+      'en';
     if (isFn(i18nCore?.normalizeLanguage)) return i18nCore.normalizeLanguage(raw, 'en');
     const low = String(raw || '').trim().toLowerCase().replace(/_/g, '-');
     if (/^(?:zh|yue)|cantonese/.test(low)) return /tw|hk|mo|hant/.test(low) ? 'zh-TW' : 'zh-CN';
@@ -470,6 +456,11 @@
   // ── Antigravity React Fiber & Store Bridge ─────────────────────────────
   let cachedSvc = null, cachedStore = null, storeUnsub = null, storeDebounce = null;
 
+  const findFiber = (el) => {
+    const k = el && O.keys(el).find((s) => s.startsWith('__reactFiber$'));
+    return k ? el[k] : null;
+  };
+
   const ensureHooks = (allowPartial = false) => {
     if (cachedSvc && cachedStore) return { svc: cachedSvc, store: cachedStore };
     const anchors = qa(
@@ -477,8 +468,7 @@
       '[data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="conversation-row-sidebar"], [data-testid="new-conversation-button"], [data-testid="home-greeting"]'
     );
     for (const el of anchors) {
-      const key = O.keys(el).find((k) => k.startsWith('__reactFiber$'));
-      for (let f = key && el[key]; f && !(cachedSvc && cachedStore); f = f.return) {
+      for (let f = findFiber(el); f && !(cachedSvc && cachedStore); f = f.return) {
         const p = f.memoizedProps;
         if (!cachedStore && isFn(p?.store?.getState)) cachedStore = p.store;
         for (let d = f.dependencies?.firstContext; d; d = d.next) {
@@ -516,9 +506,7 @@
     const m = location.pathname.match(/\/c\/([0-9a-f-]{36})/i);
     if (m) return m[1];
     const readCascadeFromFiber = (el, maxDepth) => {
-      if (!el) return '';
-      const key = O.keys(el).find((k) => k.startsWith('__reactFiber$'));
-      for (let f = key && el[key], d = 0; f && d < maxDepth; f = f.return, d++) {
+      for (let f = findFiber(el), d = 0; f && d < maxDepth; f = f.return, d++) {
         const p = f.memoizedProps || f.pendingProps;
         if (p && typeof p.cascadeId === 'string' && p.cascadeId) return p.cascadeId;
       }
@@ -635,11 +623,18 @@
       reducedMotion: motionReduced(),
     };
 
-    const dualMascotRig = getDualMascotRig();
-    const mountFn = dualMascotRig && (dualMascotRig.mountDualMascotStage || dualMascotRig.createDualMascotRig);
+    const rigMod = getDualMascotRig();
+    const mountFn = rigMod && (rigMod.mountDualMascotStage || rigMod.createDualMascotRig);
+    const rigHash = rigMod?.__prismCodeHash || '';
+    if (msRig && rigMod && (msRig.__r !== rigMod || (rigHash && msRig.__h !== rigHash))) {
+      try { (msRig.dispose || msRig.destroy)?.call(msRig); } catch {}
+      msRig = null;
+      if (msRoot) msRoot.textContent = '';
+    }
     if (!msRig && mountFn && canMountRealCanvas(msRoot)) {
       try {
         msRig = mountFn(msRoot, nextState);
+        if (msRig) { msRig.__r = rigMod; msRig.__h = rigHash; }
       } catch {
         msRig = null;
       }
@@ -2018,8 +2013,9 @@
   let enhancerSyncRaf = 0;
   let lastEnhancerSyncAt = 0;
   const ENH_KEYS = 'frlcbtsgo'.split('');
-  const enhancerDirty = { f: false, r: false, l: false, c: false, b: false, t: false, s: false, g: false, o: false };
+  const enhancerDirty = {};
   const resetEnhancerDirty = () => { for (const k of ENH_KEYS) enhancerDirty[k] = false; };
+  resetEnhancerDirty();
   const mergeEnhancerDirty = (src) => {
     if (!src) { enhancerDirty.f = true; return; }
     for (const k of ENH_KEYS) if (src[k]) enhancerDirty[k] = true;
@@ -2071,7 +2067,7 @@
     dirtyCollapsibleTargets.clear();
     dirtyBgCmds.clear();
     dirtyTurboRoots.clear();
-    for (const k of O.keys(dirtyFlags)) dirtyFlags[k] = false;
+    setAllDirty(false);
 
     const prevWasInHome = streamChoreoCtl.heroState.wasInHome;
     const prevWasInConv = streamChoreoCtl.heroState.wasInFormalConv;

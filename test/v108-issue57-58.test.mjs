@@ -383,6 +383,101 @@ test('Issue #58 Bug 4: crystal-prism-core anti-aliasing (aaPx >= 1/dpr), inset r
   assert.equal(canvasLine.includes('border-radius:999px'), false, '.ag-cs-orch-canvas must not apply redundant second border-radius:999px over track clip');
 });
 
+test('Channel 10 hot-reload: updating window.__agDualMascotRig and calling sync() disposes old msRig, clears stale DOM, and mounts new rig', () => {
+  const { doc } = createFakeDom();
+  const origCreateEl = doc.createElement.bind(doc);
+  doc.createElement = (tag, attrs) => {
+    const el = origCreateEl(tag, attrs);
+    if (String(tag).toLowerCase() === 'canvas') {
+      el.dataset = {};
+      el.getContext = () => ({});
+    }
+    return el;
+  };
+  const conv = doc.createElement('div', { 'data-testid': 'conversation-view', 'data-cascade-id': '00000000-0000-0000-0000-000000000002' });
+  const inputBox = doc.createElement('div', { 'data-testid': 'agent-input-box' });
+  const card = doc.createElement('div', { class: 'surface-composer-card' });
+  inputBox.appendChild(card);
+  conv.appendChild(inputBox);
+  doc.body.appendChild(conv);
+
+  let disposedV1 = 0, mountsV1 = 0, disposedV2 = 0, mountsV2 = 0, setStateV2 = 0;
+  const rigV1 = {
+    __prismCodeHash: 'oldhash1',
+    mountDualMascotStage(hostEl) {
+      mountsV1 += 1;
+      const staleActor = doc.createElement('div', { class: 'ag-v2-mascot-actor', tabindex: '0' });
+      hostEl.appendChild(staleActor);
+      return {
+        setState() {},
+        destroy() { disposedV1 += 1; },
+      };
+    },
+  };
+  const rigV2 = {
+    __prismCodeHash: 'newhash2',
+    mountDualMascotStage(hostEl) {
+      mountsV2 += 1;
+      const actor = doc.createElement('div', { class: 'ag-v2-mascot-actor', tabindex: '-1' });
+      hostEl.appendChild(actor);
+      return {
+        setState() { setStateV2 += 1; },
+        dispose() { disposedV2 += 1; actor.remove(); },
+      };
+    },
+  };
+
+  const sandbox = {
+    document: doc,
+    location: { pathname: '/c/00000000-0000-0000-0000-000000000002' },
+    navigator: { language: 'en' },
+    performance: { now: () => 100 },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame() {},
+    setTimeout: () => 1,
+    clearTimeout() {},
+    setInterval: () => 1,
+    clearInterval() {},
+    addEventListener() {},
+    removeEventListener() {},
+    MutationObserver: class { observe() {} disconnect() {} takeRecords() { return []; } },
+    __agDualMascotRig: rigV1,
+    Map, Set, WeakMap, WeakSet, Proxy, Array, Object, Math, Number, String, Boolean, Date, RegExp, JSON,
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+
+  const uiSrc = fs.readFileSync(path.join(ROOT, 'ui-runtime.js'), 'utf8');
+  vm.runInNewContext(uiSrc, sandbox);
+  sandbox.__agCsUiMain({ language: 'en', mascot: 'crab', motionLevel: 'standard' });
+
+  assert.equal(mountsV1, 1, 'initial mount must use rigV1');
+  assert.equal(disposedV1, 0);
+  assert.equal(doc.querySelectorAll('.ag-v2-mascot-actor').length, 1);
+  assert.equal(doc.querySelector('.ag-v2-mascot-actor')?.getAttribute('tabindex'), '0');
+
+  // Simulate Channel 10 hot-reload replacing window.__agDualMascotRig and calling sync()
+  sandbox.__agDualMascotRig = rigV2;
+  sandbox.__agPrism.sync();
+
+  assert.equal(disposedV1, 1, 'stale rigV1 must be disposed/destroyed once on Channel 10 hot-reload');
+  assert.equal(mountsV2, 1, 'new rigV2 must mount once into existing stage');
+  assert.equal(disposedV2, 0);
+  assert.equal(doc.querySelectorAll('.ag-cs-dual-stage').length, 1, 'must keep single mascot stage without duplicates');
+  assert.equal(doc.querySelectorAll('.ag-v2-mascot-actor').length, 1, 'stale rigV1 DOM nodes must be cleared');
+  assert.equal(doc.querySelector('.ag-v2-mascot-actor')?.getAttribute('tabindex'), '-1', 'remounted actor must reflect rigV2 tabindex="-1"');
+
+  // Re-syncing with same rigV2 must reuse existing instance without remount
+  sandbox.__agPrism.sync();
+  assert.equal(mountsV2, 1, 'unchanged rigV2 must not remount');
+  assert.equal(disposedV2, 0);
+  assert.ok(setStateV2 >= 1, 'unchanged rigV2 must update via setState');
+
+  sandbox.__agPrism.destroy();
+  assert.equal(disposedV2, 1, 'destroy() must dispose active rigV2');
+});
+
 test('Gate checks: Channel 1 stays < 549,500 B across all 9 languages and edited files have 0 BOM / 0 CRLF / 0 :has() / 0 non-ASCII CSS', () => {
   for (const lang of ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de']) {
     const bytes = Buffer.byteLength(
