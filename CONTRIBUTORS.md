@@ -30,7 +30,11 @@
 
 > 感谢以下伙伴提交的高质量性能剖析、根因线索、截图复现与体验建议：
 
-- **[@IASUI](https://github.com/IASUI)** — [#58](https://github.com/RMvdesi/obsidian-prism/issues/58)：汇总提交 5 项界面交互与视觉细节反馈，推动模型菜单展开时桌宠微蹲防裁切、桌宠移出 Tab 链、Orchestrator 滑条抗锯齿与防白毛边以及滚动视口防贯穿蓝线修复落地。
+- **[@water707](https://github.com/water707)** — [#64](https://github.com/RMvdesi/obsidian-prism/issues/64)：精准复现并源码级定位 Windows Studio 首页开启字符波纹时 `Ctrl+J` 开关终端触发 `WEBGL_lose_context` 导致白屏的根因，推动 WebGL2 上下文保留与三层防白屏自愈加固落地。
+- **[@VehideX](https://github.com/VehideX)** — [#63](https://github.com/RMvdesi/obsidian-prism/issues/63)：提出普通对话页字符波纹背景诉求及方案参考，并反馈拖动侧栏 resize 引发白屏画布的线索，推动 4 档「对话页字符波纹」落地。
+- **[@yuaniyuan](https://github.com/yuaniyuan)** — [#59](https://github.com/RMvdesi/obsidian-prism/issues/59)：通过 `elementsFromPoint` 精准抓取 Antigravity `v2.34+` 壳层（`.agy-inset-shell` / `.agy-sheet` / 内层 `flex-1` / `.bg-sidebar`）遮挡自定义壁纸与多层叠暗问题，推动双主题壁纸透出修复。
+- **[@Xinbeok](https://github.com/Xinbeok)** — [PR #60](https://github.com/RMvdesi/obsidian-prism/pull/60)：在 macOS + Antigravity `v2.35.1` 环境下完成稳定复现与本地验证反馈，助力 WebGL2 缩放上下文保留修复合入。
+- **[@IASUI](https://github.com/IASUI)** — [#58](https://github.com/RMvdesi/obsidian-prism/issues/58)、[#62](https://github.com/RMvdesi/obsidian-prism/issues/62)：汇总提交 5 项界面交互与视觉细节反馈（桌宠微蹲防裁切、移出 Tab 链、滑条抗锯齿与防贯穿蓝线），并系统提出多分屏视图（Split View）分割栏统一与全分屏独立状态/多实例适配方案。
 - **[@legegeCoder](https://github.com/legegeCoder)** — [#57](https://github.com/RMvdesi/obsidian-prism/issues/57)：精准定位宽 Markdown 表格被容器裁切问题，推动恢复原生破栏全览豁免机制。
 - **[@wanghaoyi216](https://github.com/wanghaoyi216)** — [#44](https://github.com/RMvdesi/obsidian-prism/issues/44)：提出并推动 Linux 原生环境支持方案，促成无根 XDG `.desktop` 启动器、`/proc` + AppImage 主进程识别、零依赖 `.tar.gz` 构建与 `SIGHUP` 优雅退出落地。
 - **[@Gruu6y](https://github.com/Gruu6y)** — [#2](https://github.com/RMvdesi/obsidian-prism/issues/2)、[#3](https://github.com/RMvdesi/obsidian-prism/issues/3)、[#8](https://github.com/RMvdesi/obsidian-prism/issues/8)、[#18](https://github.com/RMvdesi/obsidian-prism/issues/18)：全链路渲染/流式/守护进程深度性能剖析与优化方案、设置弹窗 Read-then-Write 零回流建议、Windows 双重滚动条根因定位与 Swarm 纯 CDP 按需汉化提案。
