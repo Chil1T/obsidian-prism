@@ -453,7 +453,7 @@ function defaultExecFileAsync(file, args, options) {
 }
 
 /**
- * 异步只读探测当前 language_server 进程内存占用（严禁 OpenProcess/EmptyWorkingSet/强杀，0 Google 风控）。
+ * 异步只读探测当前 language_server 进程内存占用（仅通过系统标准进程列表接口只读采集，零跨进程句柄操作，0 Google 风控）。
  */
 export async function getLanguageServerMemoryStatsAsync({
   platform = process.platform,
@@ -1529,10 +1529,6 @@ function escapePosixSingleQuoted(p) {
   return `'${p.replace(/'/g, "'\\''")}'`;
 }
 
-function escapePsSingleQuoted(p) {
-  return `'${String(p || '').replace(/'/g, "''")}'`;
-}
-
 export function validateBatchSelector(batchName = 'latest') {
   const raw = String(batchName ?? 'latest').trim() || 'latest';
   if (raw === 'latest') return 'latest';
@@ -1914,6 +1910,7 @@ export function writeLastArchiveResult(archiveDir = getDefaultArchiveDir(), resu
       restoredCount: Number(result.restoredCount || 0) || 0,
       batchName: result.batchName ? String(result.batchName) : '',
       relaunched: Boolean(result.relaunched),
+      ...(result.manualQuitRequired ? { manualQuitRequired: true } : {}),
     };
     atomicWriteJsonSync(filePath, payload);
     return payload;
@@ -1968,19 +1965,149 @@ function normalizeMacAppBundlePath(rawPath) {
   return '/Applications/Antigravity.app';
 }
 
-const WIN_GRACEFUL_CLOSE_PS = [
-  '$ErrorActionPreference = "SilentlyContinue"',
-  'foreach ($p in @(Get-Process -Name "Antigravity","agy" -ErrorAction SilentlyContinue)) {',
-  '  if ($p.MainWindowHandle -ne 0) { $null = $p.CloseMainWindow() }',
-  '}',
-].join('\n');
-const WIN_GRACEFUL_CLOSE_B64 = Buffer.from(WIN_GRACEFUL_CLOSE_PS, 'utf16le').toString('base64');
-
-const WIN_READ_GOMEMLIMIT_PS =
-  '$v = [Environment]::GetEnvironmentVariable("GOMEMLIMIT", "User"); if ($null -ne $v) { [Console]::Out.Write($v) }';
-const WIN_READ_GOMEMLIMIT_B64 = Buffer.from(WIN_READ_GOMEMLIMIT_PS, 'utf16le').toString('base64');
+const WIN_ENV_REG_KEY = 'HKCU\\Environment';
+const APP_STORAGE_MAX_BYTES = 8 * 1024 * 1024;
 const ALLOWED_GOMEMLIMIT_RE = /^(?:1536MiB|2GiB|2500MiB|3GiB|4GiB)$/;
 const LINUX_ENVD_GOMEMLIMIT_LINE_RE = /^GOMEMLIMIT=([0-9]+(B|KiB|MiB|GiB|TiB))$/;
+
+function parseWindowsRegQueryValue(output, valueName = 'GOMEMLIMIT') {
+  const escaped = String(valueName || 'GOMEMLIMIT').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`^\\s*${escaped}\\s+REG_(?:EXPAND_)?SZ\\s+(.+?)\\s*$`, 'im');
+  for (const rawLine of String(output || '').split(/\r?\n/)) {
+    const m = re.exec(rawLine);
+    if (m && m[1]) return m[1].trim();
+  }
+  return '';
+}
+
+function isWindowsRegNotFoundError(err) {
+  const msg = String(err?.stderr || err?.message || err || '');
+  if (/access is denied|拒绝访问|permission denied|ENOENT|EACCES|EPERM/i.test(msg)) {
+    return false;
+  }
+  if (/unable to find|cannot find|not found|找不到|見つかりません|찾을 수 없|no se encontr|introuvable|nicht gefunden/i.test(msg)) {
+    return true;
+  }
+  return Number(err?.status) === 1 || Number(err?.code) === 1;
+}
+
+export function readWindowsUserGoMemLimitSync(opts = {}) {
+  const execSyncFn = typeof opts.execFileSyncFn === 'function' ? opts.execFileSyncFn : execFileSync;
+  try {
+    const out = execSyncFn(
+      'reg.exe',
+      ['query', WIN_ENV_REG_KEY, '/v', 'GOMEMLIMIT'],
+      { encoding: 'utf8', windowsHide: true, timeout: 4000, stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+    const value = parseWindowsRegQueryValue(out, 'GOMEMLIMIT');
+    return { found: Boolean(value), notFound: !value, value };
+  } catch (err) {
+    if (isWindowsRegNotFoundError(err)) {
+      return { found: false, notFound: true, value: '' };
+    }
+    return { found: false, notFound: false, value: '' };
+  }
+}
+
+export function getDefaultWindowsAppStoragePath({ env = process.env, homeDir = os.homedir() } = {}) {
+  const appData =
+    typeof env?.APPDATA === 'string' && env.APPDATA.trim()
+      ? env.APPDATA.trim()
+      : path.join(homeDir, 'AppData', 'Roaming');
+  return path.join(appData, 'Antigravity', 'app_storage.json');
+}
+
+/**
+ * Windows 托盘防卡死守卫：
+ *   在请求 Antigravity 优雅退出前，若 app_storage.json 中开启了 runInBackground="true"，
+ *   通过全链路 lstatSync 非符号链接校验 + 原子排他写将其临时挂起为 "false"；
+ *   并在调用方 finally 阶段重读磁盘最新 app_storage.json（保留宿主退出期间写入的布局/状态字段），
+ *   带 3 次短重试无损恢复原值。
+ */
+export function suspendWindowsRunInBackgroundForQuit(appStoragePath, opts = {}) {
+  const platform = opts.platform || process.platform;
+  const resolved = appStoragePath ? path.resolve(String(appStoragePath)) : '';
+  const noop = {
+    suspended: false,
+    filePath: resolved,
+    originalValue: undefined,
+    reason: 'skipped',
+    restore: async () => false,
+  };
+  if (platform !== 'win32' || !resolved) return noop;
+
+  const writeFn = typeof opts.writeAtomicFn === 'function' ? opts.writeAtomicFn : atomicWriteTextExclusiveSync;
+  const readFn = typeof opts.readFileSyncFn === 'function' ? opts.readFileSyncFn : fs.readFileSync;
+  let originalValue;
+  try {
+    const st = assertPathChainNoSymlinks(resolved, 'Antigravity app_storage.json');
+    if (!st || !st.isFile() || st.size > APP_STORAGE_MAX_BYTES) {
+      return { ...noop, reason: 'missing-or-invalid' };
+    }
+    const raw = readFn(resolved, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ...noop, reason: 'invalid-json' };
+    }
+    originalValue = parsed.runInBackground;
+    if (originalValue !== 'true' && originalValue !== true) {
+      return { ...noop, reason: 'not-enabled', originalValue };
+    }
+    const suspendedPayload = {
+      ...parsed,
+      runInBackground: typeof originalValue === 'boolean' ? false : 'false',
+    };
+    writeFn(resolved, JSON.stringify(suspendedPayload, null, 2) + '\n', 0o600);
+  } catch (err) {
+    return { ...noop, reason: 'error', error: String(err?.message || err) };
+  }
+
+  let restored = false;
+  const restore = async ({ retries = 3, retryDelayMs = 50, sleepFn } = {}) => {
+    if (restored) return true;
+    const maxAttempts = Math.max(1, Math.min(10, Number(retries) || 3));
+    const delayMs = Math.max(0, Math.min(2000, Number(retryDelayMs ?? 50)));
+    const wait =
+      typeof sleepFn === 'function'
+        ? sleepFn
+        : typeof opts.sleepFn === 'function'
+          ? opts.sleepFn
+          : (ms) => new Promise((r) => setTimeout(r, ms));
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const st = assertPathChainNoSymlinks(resolved, 'Antigravity app_storage.json');
+        if (!st || !st.isFile() || st.size > APP_STORAGE_MAX_BYTES) {
+          throw new Error('Antigravity app_storage.json missing or unsafe during restore');
+        }
+        const latestRaw = readFn(resolved, 'utf8');
+        const latest = JSON.parse(latestRaw);
+        if (!latest || typeof latest !== 'object' || Array.isArray(latest)) {
+          throw new Error('Antigravity app_storage.json contains non-object JSON during restore');
+        }
+        latest.runInBackground = originalValue;
+        writeFn(resolved, JSON.stringify(latest, null, 2) + '\n', 0o600);
+        restored = true;
+        return true;
+      } catch (err) {
+        if (/symbolic link/i.test(String(err?.message || ''))) {
+          return false;
+        }
+        if (attempt < maxAttempts && delayMs > 0) {
+          await wait(delayMs);
+        }
+      }
+    }
+    return false;
+  };
+
+  return {
+    suspended: true,
+    filePath: resolved,
+    originalValue,
+    reason: 'suspended',
+    restore,
+  };
+}
 
 export function readLinuxEnvDGoMemLimit(opts = {}) {
   const env = opts.env || process.env;
@@ -2039,16 +2166,6 @@ export function resolveLinuxHostExecutable(exePath, opts = {}) {
   }
   return 'antigravity';
 }
-
-const WIN_WMI_CREATE_PS = [
-  '$ErrorActionPreference = "Stop"',
-  '$cmd = [string]$env:AG_PRISM_WMI_CMD',
-  'if (-not $cmd) { exit 1 }',
-  '$psi = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [uint16]0 }',
-  '$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd; ProcessStartupInformation = $psi }',
-  'if ($r -and $r.ReturnValue -eq 0 -and $r.ProcessId) { Write-Output $r.ProcessId }',
-].join('\n');
-const WIN_WMI_CREATE_B64 = Buffer.from(WIN_WMI_CREATE_PS, 'utf16le').toString('base64');
 
 function normalizeLoopbackCdpPort(rawPort) {
   const n = Number(rawPort);
@@ -2122,7 +2239,6 @@ export async function requestCdpBrowserClose(cdpPort, opts = {}) {
   const fetchJsonLoopback = async (endpointPath) => {
     const controller = new AbortController();
     const fetchTimer = setTimeout(() => controller.abort(), Math.min(1500, timeoutMs));
-    if (fetchTimer && typeof fetchTimer.unref === 'function') fetchTimer.unref();
     try {
       const res = await fetchImpl(`http://127.0.0.1:${port}${endpointPath}`, { signal: controller.signal });
       if (!res || !res.ok) return null;
@@ -2176,7 +2292,7 @@ export async function requestCdpBrowserClose(cdpPort, opts = {}) {
       } catch {}
       resolve(Boolean(ok));
     };
-    // 超时未收到 {id:1} ACK 且未正常关闭时一律返回 false，立即触发 CloseMainWindow 回退
+    // 超时未收到 {id:1} ACK 且未正常关闭时一律 fail-closed 返回 false
     const timer = setTimeout(() => finish(false), timeoutMs);
     try {
       ws = new WsCtor(parsed.href);
@@ -2220,25 +2336,30 @@ export async function requestCdpBrowserClose(cdpPort, opts = {}) {
 }
 
 export async function requestGracefulHostQuit(hostPid, exePath, platform = process.platform, opts = {}) {
+  const detailed = Boolean(opts?.detailed);
+  const makeResult = (ok, method, code = '', message = '') =>
+    detailed
+      ? { ok: Boolean(ok), method, manualQuitRequired: code === 'MANUAL_QUIT_REQUIRED', code, message }
+      : Boolean(ok);
   const cdpPort = normalizeLoopbackCdpPort(opts?.cdpPort);
   const cdpCloseFn = typeof opts?.requestCdpClose === 'function' ? opts.requestCdpClose : requestCdpBrowserClose;
   if (cdpPort > 0) {
     try {
       const closedViaCdp = await cdpCloseFn(cdpPort, opts);
-      if (closedViaCdp) return true;
+      if (closedViaCdp) return makeResult(true, 'cdp');
     } catch {}
   }
   const execSyncFn = typeof opts?.execFileSyncFn === 'function' ? opts.execFileSyncFn : execFileSync;
   const killFn = typeof opts?.killFn === 'function' ? opts.killFn : process.kill;
   try {
     if (platform === 'win32') {
-      // 回退：仅向 Antigravity 主窗口发 WM_CLOSE 温和退出，绝不强杀 language_server.exe
-      execSyncFn(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_GRACEFUL_CLOSE_B64],
-        { windowsHide: true, timeout: 5000, stdio: 'ignore' }
+      // Windows 零脚本/零强杀策略：无可用 loopback CDP 或 CDP 未响应时返回温和提示，引导用户手动完全退出
+      return makeResult(
+        false,
+        'manual-required',
+        'MANUAL_QUIT_REQUIRED',
+        '当前无法通过本机 CDP 自动关闭 Antigravity，请先手动完全退出 Antigravity 后重试。'
       );
-      return true;
     }
     if (platform === 'darwin') {
       const appPath = normalizeMacAppBundlePath(exePath);
@@ -2248,44 +2369,42 @@ export async function requestGracefulHostQuit(hostPid, exePath, platform = proce
           ['-e', 'on run argv', '-e', 'tell application (item 1 of argv) to quit', '-e', 'end run', appPath],
           { timeout: 5000, stdio: 'ignore' }
         );
-        return true;
+        return makeResult(true, 'osascript');
       } catch {}
       if (Number.isInteger(hostPid) && hostPid > 0) {
-        try { killFn(hostPid, 'SIGTERM'); return true; } catch {}
+        try { killFn(hostPid, 'SIGTERM'); return makeResult(true, 'sigterm'); } catch {}
       }
-      return false;
+      return makeResult(false, 'manual-required', 'MANUAL_QUIT_REQUIRED', '请手动完全退出 Antigravity 后重试。');
     }
     if (Number.isInteger(hostPid) && hostPid > 0) {
-      try { killFn(hostPid, 'SIGTERM'); return true; } catch {}
+      try { killFn(hostPid, 'SIGTERM'); return makeResult(true, 'sigterm'); } catch {}
     }
-    return false;
+    return makeResult(false, 'manual-required', 'MANUAL_QUIT_REQUIRED', '请手动完全退出 Antigravity 后重试。');
   } catch {
-    return false;
+    return makeResult(false, 'manual-required', 'MANUAL_QUIT_REQUIRED', '请手动完全退出 Antigravity 后重试。');
   }
 }
 
 export function launchHostWithCdpFlag(exePath, platform = process.platform, opts = {}) {
   const baseEnv = opts && opts.env ? opts.env : process.env;
   const spawnFn = opts && typeof opts.spawnFn === 'function' ? opts.spawnFn : spawn;
+  const existsFn = opts && typeof opts.existsSync === 'function' ? opts.existsSync : fs.existsSync;
+  const execSyncFn = opts && typeof opts.execFileSyncFn === 'function' ? opts.execFileSyncFn : execFileSync;
   const cleanEnv = { ...baseEnv };
   delete cleanEnv.ELECTRON_RUN_AS_NODE;
   if (platform === 'win32') {
-    // 同步读取最新的用户级 GOMEMLIMIT（仅白名单值），使设置后紧接一键重启即可立即生效
-    try {
-      const freshVal = String(
-        execFileSync(
-          'powershell.exe',
-          ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_READ_GOMEMLIMIT_B64],
-          { encoding: 'utf8', windowsHide: true, timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] }
-        ) || ''
-      ).trim();
-      if (ALLOWED_GOMEMLIMIT_RE.test(freshVal)) cleanEnv.GOMEMLIMIT = freshVal;
-      else if (!freshVal) delete cleanEnv.GOMEMLIMIT;
-    } catch {}
+    // 通过原生 reg.exe 同步读取最新的用户级 GOMEMLIMIT（仅白名单值），使设置后紧接一键重启即可立即生效
+    const regResult = readWindowsUserGoMemLimitSync({ execFileSyncFn: execSyncFn });
+    if (regResult.found) {
+      if (ALLOWED_GOMEMLIMIT_RE.test(regResult.value)) cleanEnv.GOMEMLIMIT = regResult.value;
+      else if (!regResult.value) delete cleanEnv.GOMEMLIMIT;
+    } else if (regResult.notFound) {
+      delete cleanEnv.GOMEMLIMIT;
+    }
     const resolvedExe =
       String(exePath || '').trim() ||
-      path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'antigravity', 'Antigravity.exe');
-    if (!fs.existsSync(resolvedExe)) return false;
+      path.join(baseEnv.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'Programs', 'antigravity', 'Antigravity.exe');
+    if (!existsFn(resolvedExe)) return false;
     try {
       const child = spawnFn(resolvedExe, ['--remote-debugging-port=0'], {
         cwd: path.dirname(resolvedExe),
@@ -2357,6 +2476,7 @@ export function launchHostWithCdpFlag(exePath, platform = process.platform, opts
  */
 export async function executeArchiveTaskSequence(task = {}, hooks = {}) {
   const action = String(task.action || 'archive-and-restart');
+  const targetPlatform = hooks.platform || process.platform;
   const convDir = task.convDir ? path.resolve(String(task.convDir)) : getDefaultConversationsDir();
   const archiveDir = task.archiveDir ? path.resolve(String(task.archiveDir)) : getDefaultArchiveDir();
   const hostPid = Number(task.hostPid) || 0;
@@ -2373,7 +2493,7 @@ export async function executeArchiveTaskSequence(task = {}, hooks = {}) {
 
   const sleepFn = typeof hooks.sleep === 'function' ? hooks.sleep : (ms) => new Promise((r) => setTimeout(r, ms));
   const checkRunning =
-    typeof hooks.checkRunning === 'function' ? hooks.checkRunning : () => isLanguageServerRunning();
+    typeof hooks.checkRunning === 'function' ? hooks.checkRunning : () => isLanguageServerRunning({ platform: targetPlatform });
   const safeIsRunning = () => {
     try {
       return Boolean(checkRunning());
@@ -2384,44 +2504,107 @@ export async function executeArchiveTaskSequence(task = {}, hooks = {}) {
   const quitHost =
     typeof hooks.requestGracefulQuit === 'function'
       ? hooks.requestGracefulQuit
-      : (pid, exe, quitOpts) => requestGracefulHostQuit(pid, exe, process.platform, quitOpts);
+      : (pid, exe, quitOpts) => requestGracefulHostQuit(pid, exe, targetPlatform, quitOpts);
   const launchHost =
     typeof hooks.launchHost === 'function'
       ? hooks.launchHost
-      : () => launchHostWithCdpFlag(exePath);
+      : () => launchHostWithCdpFlag(exePath, targetPlatform);
   const runArchive = typeof hooks.archiveFn === 'function' ? hooks.archiveFn : archiveConversations;
   const runRestore = typeof hooks.restoreFn === 'function' ? hooks.restoreFn : restoreArchiveBatch;
 
+  const explicitAppStoragePath =
+    typeof hooks.appStoragePath === 'string' && hooks.appStoragePath.trim()
+      ? hooks.appStoragePath.trim()
+      : typeof task.appStoragePath === 'string' && task.appStoragePath.trim()
+        ? task.appStoragePath.trim()
+        : '';
+  const hasAnyTestHook = Boolean(
+    typeof hooks.requestGracefulQuit === 'function' ||
+      typeof hooks.checkRunning === 'function' ||
+      typeof hooks.launchHost === 'function' ||
+      typeof hooks.archiveFn === 'function' ||
+      typeof hooks.restoreFn === 'function' ||
+      typeof hooks.sleep === 'function'
+  );
+  // 单测未显式传入 appStoragePath 时自动跳过，绝不触碰本机真实 %APPDATA%\Antigravity\app_storage.json
+  const effectiveAppStoragePath = explicitAppStoragePath
+    ? explicitAppStoragePath
+    : !hasAnyTestHook && targetPlatform === 'win32'
+      ? getDefaultWindowsAppStoragePath()
+      : '';
+
   writeActiveArchiveTask(archiveDir, { action, pid: process.pid });
   try {
-    if (gracefulQuit && safeIsRunning()) {
-      await quitHost(hostPid, exePath, { cdpPort, expectedBrowserWsPath, attempt: 1 });
-    }
-
-    // 等待 Antigravity 与 language_server 完全退出
-    const deadline = Date.now() + waitExitTimeoutMs;
     let exited = !safeIsRunning();
-    let nudged = false;
-    const nudgeAt = Date.now() + Math.min(5000, Math.floor(waitExitTimeoutMs / 3));
-    while (!exited && Date.now() <= deadline) {
-      await sleepFn(pollMs);
-      if (!safeIsRunning()) {
-        exited = true;
-        break;
+    let quitRequested = false;
+    let runInBgGuard = null;
+    try {
+      if (gracefulQuit && !exited) {
+        if (targetPlatform === 'win32' && effectiveAppStoragePath) {
+          runInBgGuard = suspendWindowsRunInBackgroundForQuit(effectiveAppStoragePath, {
+            platform: targetPlatform,
+            sleepFn,
+            writeAtomicFn: hooks.writeAppStorageAtomicFn,
+            readFileSyncFn: hooks.readAppStorageSyncFn,
+          });
+        }
+        const firstQuit = await quitHost(hostPid, exePath, { cdpPort, expectedBrowserWsPath, attempt: 1 });
+        quitRequested = Boolean(firstQuit && (firstQuit === true || firstQuit.ok === true));
       }
-      if (gracefulQuit && !nudged && Date.now() >= nudgeAt) {
-        nudged = true;
-        await quitHost(hostPid, exePath, { cdpPort: 0, attempt: 2 });
+
+      // 等待 Antigravity 与 language_server 完全退出
+      const deadline = Date.now() + waitExitTimeoutMs;
+      exited = !safeIsRunning();
+      let nudged = false;
+      const nudgeAt = Date.now() + Math.min(5000, Math.floor(waitExitTimeoutMs / 3));
+      while (!exited && Date.now() <= deadline) {
+        await sleepFn(pollMs);
+        if (!safeIsRunning()) {
+          exited = true;
+          break;
+        }
+        if (gracefulQuit && !nudged && Date.now() >= nudgeAt) {
+          nudged = true;
+          if (targetPlatform === 'win32') {
+            if (cdpPort > 0) {
+              const retryQuit = await quitHost(hostPid, exePath, { cdpPort, expectedBrowserWsPath, attempt: 2 });
+              if (retryQuit && (retryQuit === true || retryQuit.ok === true)) quitRequested = true;
+            }
+          } else {
+            const retryQuit = await quitHost(hostPid, exePath, { cdpPort: 0, attempt: 2 });
+            if (retryQuit && (retryQuit === true || retryQuit.ok === true)) quitRequested = true;
+          }
+        }
+      }
+    } finally {
+      if (runInBgGuard && runInBgGuard.suspended) {
+        await runInBgGuard.restore({
+          retries: 3,
+          retryDelayMs: Number.isFinite(Number(hooks.appStorageRestoreDelayMs))
+            ? Number(hooks.appStorageRestoreDelayMs)
+            : 50,
+          sleepFn,
+        });
       }
     }
     if (!exited) {
-      const out = {
-        ok: false,
-        action,
-        code: 'HOST_EXIT_TIMEOUT',
-        error: '等待 Antigravity 与 language_server 退出超时，已安全中止，未移动任何文件。',
-        relaunched: false,
-      };
+      const manualQuitRequired = Boolean(gracefulQuit && !quitRequested);
+      const out = manualQuitRequired
+        ? {
+            ok: false,
+            action,
+            code: 'MANUAL_QUIT_REQUIRED',
+            manualQuitRequired: true,
+            error: '当前无法通过本机 CDP 自动关闭 Antigravity，请先手动完全退出 Antigravity 后重试（未移动任何文件）。',
+            relaunched: false,
+          }
+        : {
+            ok: false,
+            action,
+            code: 'HOST_EXIT_TIMEOUT',
+            error: '等待 Antigravity 与 language_server 退出超时，已安全中止，未移动任何文件。',
+            relaunched: false,
+          };
       writeLastArchiveResult(archiveDir, out);
       return out;
     }
@@ -2562,16 +2745,17 @@ export function resolveArchiveNodeRuntime(
 }
 
 /**
- * 派生物理脱离宿主进程树（及 Windows Job Object）的独立离线任务进程。
+ * 派生物理脱离当前进程树的独立离线任务进程（纯 Node 原生 detached spawn + unref）。
  */
 export function spawnDetachedArchiveTask(task = {}, opts = {}) {
+  const targetPlatform = opts.platform || process.platform;
   const archiveDir = ensureSafeDir(task.archiveDir || getDefaultArchiveDir());
   const scriptPath = assertSafeHelperPath(
     path.resolve(opts.scriptPath || fileURLToPath(import.meta.url)),
     'scriptPath'
   );
   const runtime = resolveArchiveNodeRuntime(opts.nodeExecPath || process.execPath, {
-    platform: opts.platform || process.platform,
+    platform: targetPlatform,
     whichSync: opts.whichSync,
     existsSync: opts.existsSync,
   });
@@ -2597,6 +2781,9 @@ export function spawnDetachedArchiveTask(task = {}, opts = {}) {
     batchName: String(task.batchName || 'latest'),
     settleMs: Number.isFinite(Number(task.settleMs)) ? Number(task.settleMs) : 4000,
     waitExitTimeoutMs: Number.isFinite(Number(task.waitExitTimeoutMs)) ? Number(task.waitExitTimeoutMs) : 45000,
+    ...(typeof task.appStoragePath === 'string' && task.appStoragePath.trim()
+      ? { appStoragePath: path.resolve(task.appStoragePath.trim()) }
+      : {}),
   };
   atomicWriteJsonSync(taskFile, safePayload);
 
@@ -2608,7 +2795,8 @@ export function spawnDetachedArchiveTask(task = {}, opts = {}) {
     return hookRes;
   }
 
-  const cleanEnv = { ...process.env };
+  const baseEnv = opts.env && typeof opts.env === 'object' ? opts.env : process.env;
+  const cleanEnv = { ...baseEnv };
   if (useElectronAsNode) cleanEnv.ELECTRON_RUN_AS_NODE = '1';
   else delete cleanEnv.ELECTRON_RUN_AS_NODE;
 
@@ -2616,74 +2804,24 @@ export function spawnDetachedArchiveTask(task = {}, opts = {}) {
     try { fs.unlinkSync(taskFile); } catch {}
   };
 
-  if (process.platform === 'win32') {
-    const safeTaskFile = assertSafeHelperPath(taskFile, 'taskFile');
-    if (!opts.disableWmiBreakaway) {
-      try {
-        // 通过 Base64 EncodedCommand 启动运行时执行任务文件，物理脱离 Antigravity Job Object
-        const envLine = useElectronAsNode
-          ? '$env:ELECTRON_RUN_AS_NODE = "1"'
-          : 'Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue';
-        const innerPs = [
-          '$ErrorActionPreference = "SilentlyContinue"',
-          envLine,
-          `& ${escapePsSingleQuoted(safeNodeExec)} ${escapePsSingleQuoted(scriptPath)} ${escapePsSingleQuoted(`--run-task=${safeTaskFile}`)}`,
-        ].join('\n');
-        const innerB64 = Buffer.from(innerPs, 'utf16le').toString('base64');
-        const wmiCmd = `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ${innerB64}`;
-        const out = execFileSync(
-          'powershell.exe',
-          ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', WIN_WMI_CREATE_B64],
-          {
-            encoding: 'utf8',
-            windowsHide: true,
-            timeout: 6000,
-            stdio: ['ignore', 'pipe', 'ignore'],
-            env: { ...cleanEnv, AG_PRISM_WMI_CMD: wmiCmd },
-          }
-        );
-        const helperPid = parseInt(String(out || '').trim().split(/\s+/).pop(), 10);
-        if (Number.isInteger(helperPid) && helperPid > 0) {
-          writeActiveArchiveTask(archiveDir, { action: safePayload.action, pid: helperPid });
-          return { spawned: true, pid: helperPid, method: 'wmi-breakaway', useElectronAsNode, taskFile };
-        }
-      } catch {}
-    }
-    try {
-      const child = spawn(safeNodeExec, [scriptPath, `--run-task=${safeTaskFile}`], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-        cwd: os.tmpdir(),
-        env: cleanEnv,
-      });
-      child.on('error', () => {});
-      if (!child.pid) {
-        cleanupTaskFile();
-        return { spawned: false, code: 'SPAWN_FAILED', error: 'Failed to launch detached archive worker', taskFile: '' };
-      }
-      child.unref();
-      writeActiveArchiveTask(archiveDir, { action: safePayload.action, pid: child.pid });
-      return { spawned: true, pid: child.pid, method: 'detached-spawn', useElectronAsNode, taskFile };
-    } catch (err) {
-      cleanupTaskFile();
-      return { spawned: false, code: 'SPAWN_FAILED', error: String(err?.message || err), taskFile: '' };
-    }
-  }
+  const spawnFn = typeof opts.spawnFn === 'function' ? opts.spawnFn : spawn;
+  const safeTaskFile = targetPlatform === 'win32' ? assertSafeHelperPath(taskFile, 'taskFile') : taskFile;
+  const spawnOpts = {
+    detached: true,
+    stdio: 'ignore',
+    cwd: os.tmpdir(),
+    env: cleanEnv,
+    ...(targetPlatform === 'win32' ? { windowsHide: true } : {}),
+  };
 
   try {
-    const child = spawn(safeNodeExec, [scriptPath, `--run-task=${taskFile}`], {
-      detached: true,
-      stdio: 'ignore',
-      cwd: os.tmpdir(),
-      env: cleanEnv,
-    });
-    child.on('error', () => {});
-    if (!child.pid) {
+    const child = spawnFn(safeNodeExec, [scriptPath, `--run-task=${safeTaskFile}`], spawnOpts);
+    if (child && typeof child.on === 'function') child.on('error', () => {});
+    if (!child || !child.pid) {
       cleanupTaskFile();
       return { spawned: false, code: 'SPAWN_FAILED', error: 'Failed to launch detached archive worker', taskFile: '' };
     }
-    child.unref();
+    if (typeof child.unref === 'function') child.unref();
     writeActiveArchiveTask(archiveDir, { action: safePayload.action, pid: child.pid });
     return { spawned: true, pid: child.pid, method: 'detached-spawn', useElectronAsNode, taskFile };
   } catch (err) {

@@ -8,7 +8,7 @@
  *    （含 plugin.json、assets/logo.svg、THIRD_PARTY_NOTICES.md、sidecars/daemon/sidecar.json、全部运行时与 vendor/）；
  * 2. 自动停用并清理旧临时插件目录 ~/.gemini/config/plugins/antigravity-prism（若存在用户配置则平滑迁入新目录）；
  * 3. 写入 repo-meta.json 链接本地 Git 源码目录，支持设置面板「检查 / 同步 Git 更新」；
- * 4. 通过 PowerShell Start-Process -WindowStyle Hidden 脱离终端 Job Object 确保后台守护实例已启动并接管当前 CDP 窗口！
+ * 4. 通过纯 Node detached + windowsHide 脱离派生确保后台守护实例已启动并接管当前 CDP 窗口！
  */
 
 const crypto = require("node:crypto");
@@ -1766,7 +1766,6 @@ async function installPlugin(opts = {}) {
 
     const spawnRes = spawnBreakawayNodeProcess(daemonArgs, {
       cwd: path.dirname(daemonScript),
-      disablePowerShellBreakaway: Boolean(opts.disablePowerShellBreakaway),
     });
 
     const pidFile = path.join(targetDir, ".daemon.pid");

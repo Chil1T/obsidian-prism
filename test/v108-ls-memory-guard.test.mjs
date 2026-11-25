@@ -11,6 +11,7 @@ import * as arch from '../sidecars/daemon/conversation-archive.mjs';
 import {
   ALLOWED_GOMEMLIMIT_PRESETS,
   isValidGoMemLimitValue,
+  parseWindowsRegQueryValue,
   getGoMemLimitStatus,
   setGoMemLimit,
   clearGoMemLimit,
@@ -1009,32 +1010,107 @@ test('Defense 3: optional Go native GOMEMLIMIT enforces strict preset allowlist,
     assert.equal(res.code, 'INVALID_GOMEMLIMIT');
   }
 
-  // 1) Windows: passes value exclusively via AG_PRISM_GOMEMLIMIT_VAL env var (zero command interpolation)
+  // 1) Windows: uses native reg.exe array args exclusively (zero PowerShell / zero shell interpolation)
+  assert.equal(
+    parseWindowsRegQueryValue('\r\nHKEY_CURRENT_USER\\Environment\r\n    GOMEMLIMIT    REG_SZ    3GiB\r\n'),
+    '3GiB'
+  );
+  assert.equal(
+    parseWindowsRegQueryValue('    GOMEMLIMIT    REG_EXPAND_SZ    2500MiB  \r\n'),
+    '2500MiB'
+  );
+  assert.equal(parseWindowsRegQueryValue('ERROR: The system was unable to find the specified registry key or value.'), '');
+
   let winUserVal = '';
   const winCalls = [];
   const winExec = async (bin, args, opts) => {
-    winCalls.push({ bin, args, envVal: opts?.env?.AG_PRISM_GOMEMLIMIT_VAL });
-    if (opts?.env?.AG_PRISM_GOMEMLIMIT_VAL) {
-      winUserVal = opts.env.AG_PRISM_GOMEMLIMIT_VAL;
-      return '';
+    winCalls.push({ bin, args, opts });
+    assert.equal(bin, 'reg.exe', 'Windows GOMEMLIMIT must invoke reg.exe exclusively');
+    assert.equal(opts?.windowsHide, true);
+    if (args[0] === 'add') {
+      assert.deepEqual(args.slice(0, 6), ['add', 'HKCU\\Environment', '/v', 'GOMEMLIMIT', '/t', 'REG_SZ']);
+      assert.equal(args[6], '/d');
+      assert.equal(args[8], '/f');
+      winUserVal = args[7];
+      return 'The operation completed successfully.\r\n';
     }
-    const decoded = Buffer.from(args[args.length - 1], 'base64').toString('utf16le');
-    if (decoded.includes('SetEnvironmentVariable("GOMEMLIMIT", $null')) {
+    if (args[0] === 'delete') {
+      assert.deepEqual(args, ['delete', 'HKCU\\Environment', '/v', 'GOMEMLIMIT', '/f']);
+      if (!winUserVal) {
+        const err = new Error('ERROR: The system was unable to find the specified registry key or value.');
+        err.code = 1;
+        throw err;
+      }
       winUserVal = '';
-      return '';
+      return 'The operation completed successfully.\r\n';
     }
-    return winUserVal;
+    if (args[0] === 'query') {
+      assert.deepEqual(args, ['query', 'HKCU\\Environment', '/v', 'GOMEMLIMIT']);
+      if (!winUserVal) {
+        const err = new Error('ERROR: The system was unable to find the specified registry key or value.');
+        err.code = 1;
+        throw err;
+      }
+      return `\r\nHKEY_CURRENT_USER\\Environment\r\n    GOMEMLIMIT    REG_SZ    ${winUserVal}\r\n`;
+    }
+    throw new Error(`Unexpected reg.exe args: ${JSON.stringify(args)}`);
   };
   const winSet = await setGoMemLimit('2GiB', { platform: 'win32', execAsync: winExec, env: {} });
   assert.equal(winSet.ok, true);
   assert.equal(winSet.currentValue, '2GiB');
+  assert.equal(winSet.source, 'win-user-env');
   assert.equal(winSet.restartRequired, true);
-  assert.equal(winCalls[0].envVal, '2GiB');
+  assert.deepEqual(winCalls[0].args, ['add', 'HKCU\\Environment', '/v', 'GOMEMLIMIT', '/t', 'REG_SZ', '/d', '2GiB', '/f']);
 
   const winClear = await clearGoMemLimit({ platform: 'win32', execAsync: winExec, env: { GOMEMLIMIT: '2GiB' } });
   assert.equal(winClear.ok, true);
   assert.equal(winClear.configured, false);
+  assert.equal(winClear.currentValue, '');
   assert.equal(winClear.cleared, true);
+  assert.equal(winClear.restartRequired, true);
+
+  // Idempotent clear when GOMEMLIMIT is already absent in HKCU\Environment
+  const winClearAgain = await clearGoMemLimit({ platform: 'win32', execAsync: winExec, env: {} });
+  assert.equal(winClearAgain.ok, true);
+  assert.equal(winClearAgain.configured, false);
+  assert.equal(winClearAgain.cleared, true);
+
+  // Genuine access denied error on reg.exe delete MUST NOT be masked as success
+  const winDenied = await clearGoMemLimit({
+    platform: 'win32',
+    execAsync: async () => {
+      const err = new Error('ERROR: Access is denied.');
+      err.code = 1;
+      throw err;
+    },
+    env: {},
+  });
+  assert.equal(winDenied.ok, false);
+  assert.equal(winDenied.code, 'CLEAR_FAILED');
+
+  // Static AV/host-redline hygiene check on gomemlimit-service.mjs and conversation-archive.mjs
+  const forbiddenPatterns = [
+    /-EncodedCommand/i,
+    /-WindowStyle\s+Hidden/i,
+    /\bWin32_Process\b/i,
+    /\bInvoke-CimMethod\b/i,
+    /\bGet-CimInstance\b/i,
+    /\bwmic\b/i,
+    /\bpowershell(?:\.exe)?\b/i,
+    /\btaskkill\b/i,
+    /\bStop-Process\b/i,
+    /\bSIGKILL\b/i,
+    /\bTerminateProcess\b/i,
+    /\bOpenProcess\b/i,
+    /app\.asar/i,
+    /(?:fetchTimer|timer)\.unref\s*\(/i,
+  ];
+  for (const rel of ['sidecars/daemon/gomemlimit-service.mjs', 'sidecars/daemon/conversation-archive.mjs']) {
+    const src = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+    for (const re of forbiddenPatterns) {
+      assert.equal(re.test(src), false, `${rel} must contain 0 matches for ${re}`);
+    }
+  }
 
   // 2) Linux: isolated ~/.config/environment.d/90-obsidian-prism-gomemlimit.conf
   const tmpDir = mkTmp('prism-gomem-');

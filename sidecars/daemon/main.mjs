@@ -28,6 +28,9 @@ import { AddonRegistry, isLabEnabled as isAddonsLabEnabled } from './addon-regis
 import { getGoMemLimitStatus, setGoMemLimit, clearGoMemLimit } from './gomemlimit-service.mjs';
 import { buildStorageGuardBannerExpression, buildStorageGuardDismissExpression } from './storage-guard-ui.mjs';
 import * as conversationArchive from './conversation-archive.mjs';
+import { sanitizeSecretText } from './redact.mjs';
+
+export { sanitizeSecretText };
 
 const require = createRequire(import.meta.url);
 const __filename = fileURLToPath(import.meta.url);
@@ -304,17 +307,6 @@ function execGit(args, cwd, timeoutMs = 12000, extraConfigs = []) {
       }
     );
   });
-}
-
-const SECRET_TOKEN_RE =
-  /(sk-[A-Za-z0-9_\-]{6,}|AIza[A-Za-z0-9_\-]{12,}|xai-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{12,}|github_pat_[A-Za-z0-9_]{12,}|Bearer\s+[A-Za-z0-9._\-]{8,})/gi;
-const URL_SECRET_QUERY_RE = /([?&](?:token|auth|signature|key|secret)=)[^&\s#"']+/gi;
-
-export function sanitizeSecretText(text) {
-  return String(text || '')
-    .replace(/https?:\/\/[^/\s:@]+:[^/\s@]+@/gi, 'https://***@')
-    .replace(URL_SECRET_QUERY_RE, '$1<REDACTED>')
-    .replace(SECRET_TOKEN_RE, '***REDACTED***');
 }
 
 function serializeJsonForEval(val) {
@@ -627,84 +619,18 @@ const INLINE_DIFF_REV_PARSE_TIMEOUT_MS = 3000;
 const INLINE_DIFF_GIT_DIFF_TIMEOUT_MS = 4500;
 const INLINE_DIFF_MAX_GIT_POINTER_BYTES = 4096;
 
-const INLINE_DIFF_SENSITIVE_BASENAMES = new Set([
-  'config.json',
-  'model-hub.config.json',
-  'secrets.json',
-  'credentials.json',
-  'auth.json',
-  'token.json',
-  'mcp_config.json',
-  'transcript.jsonl',
-  'transcript_full.jsonl',
-  'state.vscdb',
-  '.claude.json',
-  'keys.txt',
-  '.npmrc',
-  '.pypirc',
-  '.git-credentials',
-  '.netrc',
-  'kubeconfig',
-  'cookies',
-  'cookies-journal',
-  'login data',
-  'login data-journal',
-  'local state',
-  'web data',
-]);
-
-const INLINE_DIFF_SENSITIVE_EXTS = new Set([
-  '.env',
-  '.pem',
-  '.key',
-  '.p12',
-  '.pfx',
-  '.kdbx',
-  '.jks',
-  '.keystore',
-  '.ppk',
-  '.ovpn',
-  '.vscdb',
-  '.sqlite',
-  '.sqlite3',
-  '.db',
-]);
-
-const INLINE_DIFF_SENSITIVE_DIRS = new Set([
-  '.ssh',
-  '.aws',
-  '.gnupg',
-  '.kube',
-  '.gemini',
-  '.azure',
-  '.claude',
-  '.codex',
-]);
-
-const INLINE_DIFF_SENSITIVE_SSH_KEYS = new Set([
-  'id_rsa',
-  'id_ed25519',
-  'id_ecdsa',
-  'id_dsa',
-  'id_ed25519_sk',
-  'id_ecdsa_sk',
-]);
-
-const INLINE_DIFF_SENSITIVE_SYS_PREFIX_RE =
-  /^(?:\/(?:proc|sys|dev|etc)(?:\/|$)|(?:[a-z]:)?\/(?:windows|program files(?: \(x86\))?|programdata)(?:\/|$))/;
-
-const INLINE_DIFF_SENSITIVE_SUBPATH_RE =
-  /(?:^|\/)(?:\.config\/(?:gcloud|gh)|appdata\/roaming|appdata\/local\/google|library\/application support\/google|library\/keychains)(?:\/|$)/;
-
-const INLINE_DIFF_SENSITIVE_SYS_SUFFIXES = [
-  '/etc/shadow',
-  '/etc/gshadow',
-  '/etc/master.passwd',
-  '/etc/sudoers',
-  '/windows/system32/config/sam',
-  '/windows/system32/config/system',
-  '/windows/system32/config/security',
-];
+const SENSITIVE_PATH_RULES = JSON.parse(
+  fs.readFileSync(new URL('./sensitive-path-rules.json', import.meta.url), 'utf8')
+);
+const INLINE_DIFF_SENSITIVE_BASENAMES = new Set(SENSITIVE_PATH_RULES.basenames || []);
+const INLINE_DIFF_SENSITIVE_EXTS = new Set(SENSITIVE_PATH_RULES.extensions || []);
+const INLINE_DIFF_SENSITIVE_DIRS = new Set(SENSITIVE_PATH_RULES.directories || []);
+const INLINE_DIFF_SENSITIVE_SSH_KEYS = new Set(SENSITIVE_PATH_RULES.sshKeyNames || []);
+const INLINE_DIFF_SENSITIVE_SYS_PREFIX_RE = new RegExp(SENSITIVE_PATH_RULES.sysPrefixPattern);
+const INLINE_DIFF_SENSITIVE_SUBPATH_RE = new RegExp(SENSITIVE_PATH_RULES.subpathPattern);
+const INLINE_DIFF_SENSITIVE_SYS_SUFFIXES = Array.isArray(SENSITIVE_PATH_RULES.sysSuffixes)
+  ? SENSITIVE_PATH_RULES.sysSuffixes
+  : [];
 
 function clampPositiveInt(value, fallback, maxAllowed) {
   const n = Number(value);
@@ -738,7 +664,7 @@ function hasDotDotPathSegment(rawPath) {
   return parts.some((seg) => seg === '..');
 }
 
-function isSensitiveInlineDiffPath(filePath) {
+export function isSensitiveInlineDiffPath(filePath) {
   if (typeof filePath !== 'string' || !filePath) return true;
   let normalized = filePath.replace(/\\/g, '/');
   while (normalized.endsWith('/')) normalized = normalized.slice(0, -1);
@@ -1998,6 +1924,87 @@ function isAutomatedTestRuntime() {
   return Array.isArray(process.execArgv) && process.execArgv.some((a) => a === '--test' || a.startsWith('--test-'));
 }
 
+const WINDOWS_DAEMON_IMAGE_RE =
+  /^(?:node|nodejs|obsidian-prism(?:-watcher)?|watcher|agy-claude-style|antigravity|electron|agy)(?:\.exe)?$/i;
+
+/**
+ * 解析 Windows `tasklist /FO CSV /NH` 输出中的目标 PID 映像名。
+ */
+export function parseTasklistCsvImageName(csvOutput, expectedPid) {
+  const targetPid = Number(expectedPid);
+  if (!Number.isInteger(targetPid) || targetPid <= 0) return '';
+  const lines = String(csvOutput || '').split(/\r?\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || !line.startsWith('"')) continue;
+    const fields = [];
+    let cur = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i += 1) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          cur += '"';
+          i += 1;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === ',' && !inQuotes) {
+        fields.push(cur);
+        cur = '';
+      } else {
+        cur += ch;
+      }
+    }
+    fields.push(cur);
+    if (fields.length >= 2 && Number(fields[1].trim()) === targetPid) {
+      return String(fields[0] || '').trim();
+    }
+  }
+  return '';
+}
+
+/**
+ * 通过原生 `tasklist /FO CSV /NH` 查询指定 Windows PID 的进程映像名。
+ */
+export function queryWindowsProcessImageNameSync(pid, execFn = execFileSync) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0) return '';
+  try {
+    const out = execFn('tasklist', ['/FI', `PID eq ${n}`, '/FO', 'CSV', '/NH'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return parseTasklistCsvImageName(out, n);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 校验 .daemon.pid 锁文件中的 PID 与 ownerToken 是否有效且指向旧守护实例。
+ */
+export function verifyDaemonPidLockToken(pidFile, expectedPid, currentOwnerToken = '') {
+  const targetPid = Number(expectedPid);
+  if (!pidFile || !Number.isInteger(targetPid) || targetPid <= 0) return false;
+  try {
+    const st = fs.lstatSync(pidFile);
+    if (st.isSymbolicLink() || !st.isFile()) return false;
+    const raw = fs.readFileSync(pidFile, 'utf8').trim();
+    if (!raw || !raw.startsWith('{')) return false;
+    const parsed = JSON.parse(raw);
+    if (Number(parsed?.pid) !== targetPid) return false;
+    const token = typeof parsed?.token === 'string' ? parsed.token.trim() : '';
+    if (!token) return false;
+    if (currentOwnerToken && token === currentOwnerToken) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function queryProcessCommandLineSync(pid) {
   const n = Number(pid);
   if (!Number.isInteger(n) || n <= 0) return null;
@@ -2008,13 +2015,7 @@ function queryProcessCommandLineSync(pid) {
       return raw.toString('utf8').replace(/\0+/g, ' ').trim();
     }
     if (process.platform === 'win32') {
-      const psScript = `(Get-CimInstance Win32_Process -Filter 'ProcessId = ${n}' -ErrorAction SilentlyContinue).CommandLine`;
-      const out = execFileSync(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-Command', psScript],
-        { encoding: 'utf8', windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }
-      );
-      return String(out || '').trim();
+      return null;
     }
     const out = execFileSync('ps', ['-p', String(n), '-o', 'command='], {
       encoding: 'utf8',
@@ -11446,7 +11447,13 @@ export class PrismDaemon {
     }
   }
 
-  stopExistingDaemon({ verifyPid = null, inspectCommandLine = null, inspectProcess = null, killProcess = null } = {}) {
+  stopExistingDaemon({
+    verifyPid = null,
+    inspectCommandLine = null,
+    inspectProcess = null,
+    queryTasklist = null,
+    killProcess = null,
+  } = {}) {
     try {
       if (!this.pidFile) return false;
       let pidStat;
@@ -11487,7 +11494,7 @@ export class PrismDaemon {
           // 兼容单测显式覆写 this.cdp.isExpectedDaemonProcess 注入校验钩子
           safeToKill = Boolean(this.cdp.isExpectedDaemonProcess(prevPid, this.pidFile));
         } else {
-          // P2-5: 复用 cdp.js 单次进程探针，避免 Windows 启动抢锁连续拉起两次 powershell.exe
+          // P2-5: 复用 cdp.js 单次进程探针，避免 Windows 启动抢锁重复拉起外部进程探针
           const hasUnifiedProbe =
             typeof inspectProcess === 'function' || typeof this.cdp.inspectProcessSync === 'function';
           const procInfo =
@@ -11501,14 +11508,24 @@ export class PrismDaemon {
             : Boolean(this.cdp.isExpectedDaemonProcess(prevPid, this.pidFile));
           if (!cdpVerified) {
             safeToKill = false;
+          } else if (typeof inspectCommandLine === 'function') {
+            safeToKill = isObsidianPrismDaemonCommandLine(inspectCommandLine(prevPid));
+          } else if (hasUnifiedProbe && typeof procInfo?.commandLine === 'string' && procInfo.commandLine.trim()) {
+            // 存在命令行信息时执行命令行身份复核，防误杀无关 node 进程
+            safeToKill = isObsidianPrismDaemonCommandLine(procInfo.commandLine);
+          } else if (process.platform === 'win32') {
+            // Windows 无命令行探针时使用原生 tasklist /FO CSV /NH 映像名 + .daemon.pid 锁文件 token 双重校验
+            const imgName =
+              (procInfo && typeof procInfo.imageName === 'string' && procInfo.imageName.trim()) ||
+              (typeof queryTasklist === 'function'
+                ? queryTasklist(prevPid)
+                : queryWindowsProcessImageNameSync(prevPid));
+            safeToKill =
+              Boolean(imgName) &&
+              WINDOWS_DAEMON_IMAGE_RE.test(imgName.trim()) &&
+              verifyDaemonPidLockToken(this.pidFile, prevPid, this.ownerToken);
           } else {
-            // 标准 cdp.isExpectedDaemonProcess 对 node.exe 仅核对映像名，补充命令行身份复核防误杀无关 node 进程
-            const cmd =
-              typeof inspectCommandLine === 'function'
-                ? inspectCommandLine(prevPid)
-                : hasUnifiedProbe
-                ? procInfo?.commandLine || ''
-                : queryProcessCommandLineSync(prevPid);
+            const cmd = hasUnifiedProbe ? procInfo?.commandLine || '' : queryProcessCommandLineSync(prevPid);
             safeToKill = isObsidianPrismDaemonCommandLine(cmd);
           }
         }
