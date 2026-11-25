@@ -1586,13 +1586,143 @@
     'See LICENSE, NOTICE, CITATION.cff, and THIRD_PARTY_NOTICES.md in the repository.',
   ].join('\n');
 
+  // Channel 9 内置 8 语种存储明细与归档工作台文案（0 B 进 Ch1，完整 8 语、无废弃 yue、未知语种回退 en）
+  const STORAGE_WB_UI = O.freeze({
+    'zh-CN': O.freeze({
+      summary: '存储明细与无损归档工作台',
+      oldMainBtn: '含 >14 天旧主对话',
+      oldMainConfirmDesc:
+        '确认后将生成独立的离线归档脚本（archive-old-main，不覆盖默认子代理脚本），除已结束子代理外还将移动超过 14 天且在最近 20 条之外的旧主对话（只移动不删除，随时可按批次无损还原）。请先退出 Antigravity 再运行脚本。',
+      oldMainConfirmBtn: '确认生成旧主对话脚本',
+      oldMainReadyTpl: '旧主对话归档脚本就绪（可归档 {0} 项 / {1}），退出 Antigravity 后运行：{2}',
+      refreshBtn: '刷新',
+      loading: '正在扫描存储明细…',
+      batchSelectLabel: '选择还原批次：',
+      restoreSelectedDescTpl: '将温和关闭 Antigravity，把所选批次（{0}）全部文件无损移回对话库并自动重启。',
+      restoreScriptBtn: '生成离线还原脚本',
+      restoreScriptReadyTpl: '还原脚本就绪（{0}），退出 Antigravity 后运行：{1}',
+    }),
+    'zh-TW': O.freeze({
+      summary: '儲存明細與無損封存工作台',
+      oldMainBtn: '含 >14 天舊主對話',
+      oldMainConfirmDesc:
+        '確認後將產生獨立的離線封存腳本（archive-old-main，不覆蓋預設子代理腳本），除已結束子代理外還會移動超過 14 天且在最近 20 筆之外的舊主對話（只移動不刪除，隨時可按批次無損還原）。請先退出 Antigravity 再執行腳本。',
+      oldMainConfirmBtn: '確認產生舊主對話腳本',
+      oldMainReadyTpl: '舊主對話封存腳本就緒（可封存 {0} 項 / {1}），退出 Antigravity 後執行：{2}',
+      refreshBtn: '重新整理',
+      loading: '正在掃描儲存明細…',
+      batchSelectLabel: '選擇還原批次：',
+      restoreSelectedDescTpl: '將溫和關閉 Antigravity，把所選批次（{0}）全部檔案無損移回對話庫並自動重啟。',
+      restoreScriptBtn: '產生離線還原腳本',
+      restoreScriptReadyTpl: '還原腳本就緒（{0}），退出 Antigravity 後執行：{1}',
+    }),
+    en: O.freeze({
+      summary: 'Storage Details & Lossless Archive Workbench',
+      oldMainBtn: 'Include >14d Main',
+      oldMainConfirmDesc:
+        'This writes a separate offline script (archive-old-main, leaving the default subagent script intact) that moves finished subagents plus main chats older than 14 days outside the latest 20 (move-only, zero deletion, restorable per batch). Quit Antigravity before running it.',
+      oldMainConfirmBtn: 'Confirm Old-Main Script',
+      oldMainReadyTpl: 'Old-main archive script ready ({0} items / {1}). Quit Antigravity & run: {2}',
+      refreshBtn: 'Refresh',
+      loading: 'Scanning storage details…',
+      batchSelectLabel: 'Archive batch:',
+      restoreSelectedDescTpl: 'Will close Antigravity gracefully, restore the selected batch ({0}) losslessly, and relaunch.',
+      restoreScriptBtn: 'Offline Restore Script',
+      restoreScriptReadyTpl: 'Restore script ready ({0}). Quit Antigravity & run: {1}',
+    }),
+    ja: O.freeze({
+      summary: 'ストレージ詳細・無損失アーカイブ管理',
+      oldMainBtn: '>14日前の主会話も含む',
+      oldMainConfirmDesc:
+        '専用のオフラインスクリプト（archive-old-main、既定のサブエージェント用スクリプトは上書きしません）を生成します。完了済みサブエージェントに加え、最新20件を除く14日超の主会話を削除せず移動します（バッチ別復元可）。Antigravity 終了後に実行してください。',
+      oldMainConfirmBtn: '旧主会話スクリプトを生成',
+      oldMainReadyTpl: '旧主会話アーカイブスクリプト準備完了（{0} 件 / {1}）。Antigravity 終了後に実行：{2}',
+      refreshBtn: '更新',
+      loading: 'ストレージ詳細をスキャン中…',
+      batchSelectLabel: '復元バッチ：',
+      restoreSelectedDescTpl: 'Antigravity を安全終了し、選択したバッチ（{0}）を無損失で復元して再起動します。',
+      restoreScriptBtn: 'オフライン復元スクリプト',
+      restoreScriptReadyTpl: '復元スクリプト準備完了（{0}）。Antigravity 終了後に実行：{1}',
+    }),
+    ko: O.freeze({
+      summary: '저장소 상세 및 무손실 아카이브 작업대',
+      oldMainBtn: '14일 초과 기본 대화 포함',
+      oldMainConfirmDesc:
+        '별도의 오프라인 스크립트(archive-old-main, 기본 서브에이전트 스크립트를 덮어쓰지 않음)를 생성합니다. 종료된 서브에이전트와 함께 최근 20개를 제외한 14일 초과 기본 대화를 삭제 없이 이동합니다(배치별 무손실 복원 가능). Antigravity 종료 후 실행하세요.',
+      oldMainConfirmBtn: '이전 기본 대화 스크립트 생성',
+      oldMainReadyTpl: '이전 기본 대화 스크립트 준비됨 ({0}건 / {1}). Antigravity 종료 후 실행: {2}',
+      refreshBtn: '새로고침',
+      loading: '저장소 상세 정보 스캔 중…',
+      batchSelectLabel: '복원할 배치:',
+      restoreSelectedDescTpl: 'Antigravity를 정상 종료하고 선택한 배치({0})를 무손실 복원한 뒤 자동 재시작합니다.',
+      restoreScriptBtn: '오프라인 복원 스크립트',
+      restoreScriptReadyTpl: '복원 스크립트 준비됨 ({0}). Antigravity 종료 후 실행: {1}',
+    }),
+    es: O.freeze({
+      summary: 'Detalles de almacenamiento y archivo sin pérdida',
+      oldMainBtn: 'Incluir chats >14 d',
+      oldMainConfirmDesc:
+        'Genera un script sin conexión independiente (archive-old-main, sin sobrescribir el script predeterminado de subagentes) para mover subagentes finalizados y chats principales de más de 14 días fuera de los 20 más recientes (solo mover, sin borrar y restaurable por lote). Cierra Antigravity antes de ejecutarlo.',
+      oldMainConfirmBtn: 'Confirmar script (>14 d)',
+      oldMainReadyTpl: 'Script para chats >14 d listo ({0} elem. / {1}). Cierra Antigravity y ejecuta: {2}',
+      refreshBtn: 'Actualizar',
+      loading: 'Escaneando detalles de almacenamiento…',
+      batchSelectLabel: 'Lote a restaurar:',
+      restoreSelectedDescTpl: 'Cerrará Antigravity de forma segura, restaurará el lote seleccionado ({0}) sin pérdidas y reiniciará.',
+      restoreScriptBtn: 'Script de restauración',
+      restoreScriptReadyTpl: 'Script de restauración listo ({0}). Cierra Antigravity y ejecuta: {1}',
+    }),
+    fr: O.freeze({
+      summary: 'Détails de stockage et archivage sans perte',
+      oldMainBtn: 'Inclure chats >14 j',
+      oldMainConfirmDesc:
+        'Génère un script hors ligne distinct (archive-old-main, sans écraser le script sous-agents par défaut) qui déplace les sous-agents terminés ainsi que les discussions principales de plus de 14 jours hors des 20 plus récentes (déplacement seul, sans suppression, restaurable par lot). Fermez Antigravity avant exécution.',
+      oldMainConfirmBtn: 'Confirmer le script (>14 j)',
+      oldMainReadyTpl: 'Script chats >14 j prêt ({0} élém. / {1}). Fermez Antigravity puis exécutez : {2}',
+      refreshBtn: 'Actualiser',
+      loading: 'Analyse des détails de stockage…',
+      batchSelectLabel: 'Lot à restaurer :',
+      restoreSelectedDescTpl: 'Fermera Antigravity proprement, restaurera le lot sélectionné ({0}) sans perte puis redémarrera.',
+      restoreScriptBtn: 'Script de restauration',
+      restoreScriptReadyTpl: 'Script de restauration prêt ({0}). Fermez Antigravity puis exécutez : {1}',
+    }),
+    de: O.freeze({
+      summary: 'Speicherdetails & verlustfreie Archiv-Werkbank',
+      oldMainBtn: 'Hauptchats >14 T. einschließen',
+      oldMainConfirmDesc:
+        'Erstellt ein separates Offline-Skript (archive-old-main, überschreibt nicht das Standard-Subagenten-Skript), das beendete Subagenten sowie Hauptchats älter als 14 Tage außerhalb der letzten 20 verschiebt (kein Löschen, stapelweise wiederherstellbar). Vor dem Ausführen Antigravity schließen.',
+      oldMainConfirmBtn: 'Skript (>14 T.) erstellen',
+      oldMainReadyTpl: 'Archivskript >14 T. bereit ({0} Einträge / {1}). Antigravity schließen & ausführen: {2}',
+      refreshBtn: 'Aktualisieren',
+      loading: 'Speicherdetails werden gescannt…',
+      batchSelectLabel: 'Archivstapel:',
+      restoreSelectedDescTpl: 'Beendet Antigravity sauber, stellt den ausgewählten Stapel ({0}) verlustfrei wieder her und startet neu.',
+      restoreScriptBtn: 'Offline-Wiederherstellungsskript',
+      restoreScriptReadyTpl: 'Wiederherstellungsskript bereit ({0}). Antigravity schließen & ausführen: {1}',
+    }),
+  });
+
+  const getStorageWbUi = (lang) => {
+    const s = String(lang || '').trim().toLowerCase().replace(/_/g, '-');
+    if (s === 'zh-tw' || s === 'zh-hk' || s === 'zh-mo' || s.startsWith('zh-hant')) return STORAGE_WB_UI['zh-TW'];
+    if (s === 'zh' || s === 'zh-cn' || s === 'zh-sg' || s.startsWith('zh-hans') || s === 'yue' || s.startsWith('yue-')) return STORAGE_WB_UI['zh-CN'];
+    if (s === 'ja' || s.startsWith('ja-')) return STORAGE_WB_UI.ja;
+    if (s === 'ko' || s.startsWith('ko-')) return STORAGE_WB_UI.ko;
+    if (s === 'es' || s.startsWith('es-')) return STORAGE_WB_UI.es;
+    if (s === 'fr' || s.startsWith('fr-')) return STORAGE_WB_UI.fr;
+    if (s === 'de' || s.startsWith('de-')) return STORAGE_WB_UI.de;
+    return STORAGE_WB_UI.en;
+  };
+
   let pendingCfgToast = null;
 
   const invokePrismRepoAction = (action, ver, extra) => {
     const act = [
       'pull',
       'storage-health',
+      'storage-detail',
       'prepare-archive',
+      'prepare-restore',
       'archive-and-restart',
       'restore-archive',
       'storage-snooze',
@@ -2657,6 +2787,7 @@
               });
           });
 
+          const wbInitUi = getStorageWbUi(lang);
           const storageChip = mkChip(U('storageHealthIdle', 'DB'), 'data-ag-cs-storage-status');
           const archiveBtn = mkB('ag-cs-repo-sync-btn', U('storageArchiveBtn', 'Archive'), 'data-ag-cs-storage-archive');
           const archRestartBtn = mkB('ag-cs-repo-sync-btn', U('storageArchiveRestartBtn', 'Archive & Restart'), 'data-ag-cs-archive-restart');
@@ -2680,13 +2811,51 @@
           const restoreConfirmBox = mkEl('div', 'ag-cs-thought-cfg-box');
           setVis(restoreConfirmBox, false);
           sa(restoreConfirmBox, 'data-ag-cs-storage-restore-box', '1');
+          const restoreBatchSelect = mkEl('select', 'ag-cs-home-ws-select');
+          sa(restoreBatchSelect, 'data-ag-cs-storage-batch-select', '1');
+          const restoreBatchRow = ap(
+            mkEl('div', 'ag-cs-about-repo-row'),
+            mkEl('span', 'ag-cs-thought-hint', wbInitUi.batchSelectLabel),
+            restoreBatchSelect
+          );
+          setVis(restoreBatchRow, false);
           const restoreDescEl = mkEl('p', 'ag-cs-thought-hint', U('storageRestoreEmpty'));
           const restoreCancel = mkB('ag-cs-thought-btn', U('uninstallCancelBtn', 'Cancel'), 'data-ag-cs-storage-restore-cancel');
+          const restoreScriptBtn = mkB('ag-cs-thought-btn', wbInitUi.restoreScriptBtn, 'data-ag-cs-storage-res');
+          restoreScriptBtn.disabled = true;
           const restoreConfirmOk = mkB('ag-cs-thought-btn', U('storageRestoreConfirmBtn', 'Confirm Restore'), 'data-ag-cs-storage-restore-confirm');
+          restoreConfirmOk.disabled = true;
           ap(
             restoreConfirmBox,
+            restoreBatchRow,
             restoreDescEl,
-            ap(mkEl('div', 'ag-cs-thought-actions'), ap(mkEl('div', 'ag-cs-thought-btn-group'), restoreCancel, restoreConfirmOk))
+            ap(mkEl('div', 'ag-cs-thought-actions'), ap(mkEl('div', 'ag-cs-thought-btn-group'), restoreCancel, restoreScriptBtn, restoreConfirmOk))
+          );
+
+          // 懒加载存储明细与归档工作台抽屉（展开前 0 storage-detail 请求；>14d 预设必须经二次确认且与其它确认框互斥）
+          const stWb = mkEl('details', 'ag-cs-thought-cfg-box');
+          sa(stWb, 'data-ag-cs-storage-wb', '1');
+          const stSum = mkEl('summary', '', wbInitUi.summary);
+          const stPre = mkEl('pre', 'ag-cs-license-pre', '');
+          sa(stPre, 'data-ag-cs-storage-detail', '1');
+          const stOldBtn = mkB('ag-cs-repo-sync-btn', wbInitUi.oldMainBtn, 'data-ag-cs-storage-old');
+          const stRefBtn = mkB('ag-cs-repo-sync-btn', wbInitUi.refreshBtn, 'data-ag-cs-storage-ref');
+          const oldMainConfirmBox = mkEl('div', 'ag-cs-thought-cfg-box');
+          setVis(oldMainConfirmBox, false);
+          sa(oldMainConfirmBox, 'data-ag-cs-storage-old-box', '1');
+          const oldMainConfirmCancel = mkB('ag-cs-thought-btn', U('uninstallCancelBtn', 'Cancel'), 'data-ag-cs-storage-old-cancel');
+          const oldMainConfirmOk = mkB('ag-cs-thought-btn', wbInitUi.oldMainConfirmBtn, 'data-ag-cs-storage-old-confirm');
+          ap(
+            oldMainConfirmBox,
+            mkEl('p', 'ag-cs-thought-hint', wbInitUi.oldMainConfirmDesc),
+            ap(mkEl('div', 'ag-cs-thought-actions'), ap(mkEl('div', 'ag-cs-thought-btn-group'), oldMainConfirmCancel, oldMainConfirmOk))
+          );
+          ap(
+            stWb,
+            stSum,
+            stPre,
+            ap(mkEl('div', 'ag-cs-about-repo-row'), ap(mkEl('div', 'ag-cs-thought-btn-group'), stOldBtn, stRefBtn)),
+            oldMainConfirmBox
           );
 
           const goMemChip = mkChip(U('goMemLimitUnset', 'Not set'), 'data-ag-cs-gomemlimit-status');
@@ -2703,7 +2872,65 @@
 
           let storageBusy = false;
           let goMemBusy = false;
-          let latestBatchName = '';
+          let detailLoaded = false;
+          let selectedBatchName = '';
+          let cachedBatches = [];
+          const fmtMbShort = (v) => (Number(v) >= 1024 ? `${(Number(v) / 1024).toFixed(2)} GB` : `${Math.round(Number(v) || 0)} MB`);
+          const toggleConfirmBox = (targetBox) => {
+            const boxes = [archConfirmBox, restoreConfirmBox, oldMainConfirmBox];
+            const shouldOpen = Boolean(targetBox && targetBox.hidden);
+            runGuardedMut(() => {
+              for (const box of boxes) setVis(box, box === targetBox ? shouldOpen : false);
+            });
+            return shouldOpen;
+          };
+          const syncRestoreDesc = () => {
+            const uNow = uiText(getLang()) || ui;
+            const wl = getStorageWbUi(getLang());
+            if (selectedBatchName) {
+              restoreDescEl[K_TC] = fmtTpl(wl.restoreSelectedDescTpl || uNow.storageRestoreConfirmDesc || '{0}', [selectedBatchName]);
+              restoreConfirmOk.disabled = false;
+              restoreScriptBtn.disabled = false;
+            } else {
+              restoreDescEl[K_TC] = uNow.storageRestoreEmpty || 'No archive batches yet';
+              restoreConfirmOk.disabled = true;
+              restoreScriptBtn.disabled = true;
+            }
+          };
+          const syncRestoreBatches = (batches, latestBatch) => {
+            const list = [];
+            if (isArr(batches)) {
+              for (const b of batches) {
+                if (b && typeof b.batchName === 'string' && b.batchName) list.push(b);
+              }
+            }
+            if (list.length === 0 && latestBatch && typeof latestBatch.batchName === 'string' && latestBatch.batchName) {
+              list.push(latestBatch);
+            }
+            cachedBatches = list;
+            const prevSelected = selectedBatchName;
+            restoreBatchSelect[K_TC] = '';
+            for (const b of list) {
+              const label =
+                b.movedCount !== undefined || b.movedMb !== undefined
+                  ? `${b.batchName} (${b.movedCount || 0}/${fmtMbShort(b.movedMb)})`
+                  : b.batchName;
+              const opt = mkEl('option', '', label);
+              opt.value = b.batchName;
+              ap(restoreBatchSelect, opt);
+            }
+            if (list.length > 0) {
+              const kept = list.some((b) => b.batchName === prevSelected) ? prevSelected : list[0].batchName;
+              selectedBatchName = kept;
+              restoreBatchSelect.value = kept;
+              setVis(restoreBatchRow, true);
+            } else {
+              selectedBatchName = '';
+              restoreBatchSelect.value = '';
+              setVis(restoreBatchRow, false);
+            }
+            syncRestoreDesc();
+          };
           const syncAutoExitButtons = (enabled) => {
             const on = Boolean(enabled);
             runGuardedMut(() => {
@@ -2718,34 +2945,44 @@
           const applyStorageView = (st, prepared) => {
             if (!storageChip[K_IC] || !st || st.offline || st.timeout) return;
             const u = uiText(getLang()) || ui;
+            const wl = getStorageWbUi(getLang());
             runGuardedMut(() => {
+              if (typeof st.detailText === 'string') {
+                stPre[K_TC] = st.detailText;
+                detailLoaded = true;
+              }
+              if (isArr(st.batches) || st.latestBatch) {
+                syncRestoreBatches(st.batches, st.latestBatch);
+              }
               if (st.ok === false && st.error) {
                 setChip(storageChip, 'error', st.error);
                 return;
               }
-              const fmtMb = (v) => (Number(v) >= 1024 ? `${(Number(v) / 1024).toFixed(2)} GB` : `${Math.round(Number(v) || 0)} MB`);
               if (typeof st.autoArchiveOnExit === 'boolean') syncAutoExitButtons(st.autoArchiveOnExit);
-              latestBatchName = st.latestBatch?.batchName || '';
-              if (latestBatchName) {
-                restoreDescEl[K_TC] = fmtTpl(u.storageRestoreConfirmDesc || '{0}', [latestBatchName]);
-                restoreConfirmOk.disabled = false;
-              } else {
-                restoreDescEl[K_TC] = u.storageRestoreEmpty || 'No archive batches yet';
-                restoreConfirmOk.disabled = true;
-              }
-              if (prepared && st.archiveScriptPath) {
-                setChip(storageChip, 'updated', fmtTpl(u.storageReadyTpl || '{0}/{1}:{2}', [st.archivableSubagentCount || 0, fmtMb(st.archivableSubagentMb), st.archiveScriptPath]));
-                try { navigator?.clipboard?.writeText?.(st.archiveScriptPath)?.catch?.(() => {}); } catch {}
-              } else {
-                const memSuffix = Number(st.lsMemoryMb) > 0 ? ` · ${fmtTpl(u.storageLsMemTpl || 'LS {0}', [fmtMb(st.lsMemoryMb)])}` : '';
+              const clipPath = st.clipPath || st.archiveScriptPath || st.restoreScriptPath;
+              if (prepared && (st.chipText || clipPath)) {
+                let chipMsg = st.chipText;
+                if (!chipMsg && st.mode === 'subagents+old-main' && st.archiveScriptPath) {
+                  const totalCnt = (st.archivableSubagentCount || 0) + (st.archivableOldMainCount || 0);
+                  const totalMb = (Number(st.archivableSubagentMb) || 0) + (Number(st.archivableOldMainMb) || 0);
+                  chipMsg = fmtTpl(wl.oldMainReadyTpl || '{0}/{1}:{2}', [totalCnt, fmtMbShort(totalMb), st.archiveScriptPath]);
+                } else if (!chipMsg && st.action === 'prepare-restore' && st.restoreScriptPath) {
+                  chipMsg = fmtTpl(wl.restoreScriptReadyTpl || '{0}:{1}', [st.batchName || selectedBatchName || 'latest', st.restoreScriptPath]);
+                } else if (!chipMsg && st.archiveScriptPath) {
+                  chipMsg = fmtTpl(u.storageReadyTpl || '{0}/{1}:{2}', [st.archivableSubagentCount || 0, fmtMbShort(st.archivableSubagentMb), st.archiveScriptPath]);
+                }
+                setChip(storageChip, 'updated', chipMsg || clipPath);
+                try { if (clipPath) navigator?.clipboard?.writeText?.(clipPath)?.catch?.(() => {}); } catch {}
+              } else if (st.action !== 'storage-detail') {
+                const memSuffix = Number(st.lsMemoryMb) > 0 ? ` · ${fmtTpl(u.storageLsMemTpl || 'LS {0}', [fmtMbShort(st.lsMemoryMb)])}` : '';
                 setChip(
                   storageChip,
                   st.warn ? 'warn' : 'ok',
                   fmtTpl(u.storageSummaryTpl || '{0}({1}/{2}/{3}){4}', [
-                    fmtMb(st.totalMb),
+                    fmtMbShort(st.totalMb),
                     st.mainCount || 0,
                     st.subagentCount || 0,
-                    fmtMb(st.subagentMb),
+                    fmtMbShort(st.subagentMb),
                     st.warn ? u.storageWarn || '!' : u.storageOk || 'OK',
                   ]) + memSuffix
                 );
@@ -2776,18 +3013,65 @@
           };
           const probeStorageSilently = () => {
             if (storageBusy) return;
-            void invokePrismRepoAction('storage-health', version)
+            void invokePrismRepoAction('storage-health', version, { lang: getLang() })
               .then((st) => st && applyStorageView(st, false))
               .catch((err) => applyStorageView({ ok: false, error: String(err?.message || err) }, false));
             void invokePrismRepoAction('gomemlimit-status', version)
               .then((st) => st && applyGoMemView(st))
               .catch(() => {});
           };
+          const loadStorageDetail = (force) => {
+            if (storageBusy) return;
+            storageBusy = true;
+            const wl = getStorageWbUi(getLang());
+            runGuardedMut(() => {
+              stRefBtn.disabled = true;
+              if (!detailLoaded) stPre[K_TC] = wl.loading;
+            });
+            void invokePrismRepoAction('storage-detail', version, { lang: getLang(), ...(force ? { force: true } : null) })
+              .then((st) => st && applyStorageView(st, false))
+              .catch((err) => applyStorageView({ ok: false, error: String(err?.message || err) }, false))
+              .finally(() => {
+                storageBusy = false;
+                runGuardedMut(() => { if (stRefBtn[K_IC]) stRefBtn.disabled = false; });
+              });
+          };
+          on(stWb, 'toggle', () => {
+            if (stWb.open && !detailLoaded) loadStorageDetail(false);
+          });
+          onClk(stRefBtn, () => loadStorageDetail(true));
+          onClk(stOldBtn, () => { toggleConfirmBox(oldMainConfirmBox); });
+          onClk(oldMainConfirmCancel, () => runGuardedMut(() => setVis(oldMainConfirmBox, false)));
+          onClk(oldMainConfirmOk, () => {
+            if (storageBusy) return;
+            storageBusy = true;
+            runGuardedMut(() => { oldMainConfirmOk.disabled = true; });
+            void invokePrismRepoAction('prepare-archive', version, {
+              mode: 'subagents+old-main',
+              oldMain: true,
+              confirm: true,
+              lang: getLang(),
+            })
+              .then((st) => {
+                if (!st) return;
+                applyStorageView(st, true);
+                if (st.ok !== false) runGuardedMut(() => setVis(oldMainConfirmBox, false));
+              })
+              .catch((err) => applyStorageView({ ok: false, error: String(err?.message || err) }, false))
+              .finally(() => {
+                storageBusy = false;
+                runGuardedMut(() => { if (oldMainConfirmOk[K_IC]) oldMainConfirmOk.disabled = false; });
+              });
+          });
+          on(restoreBatchSelect, 'change', () => {
+            selectedBatchName = restoreBatchSelect.value || '';
+            runGuardedMut(() => syncRestoreDesc());
+          });
           onClk(archiveBtn, () => {
             if (storageBusy) return;
             storageBusy = true;
             runGuardedMut(() => { archiveBtn.disabled = true; });
-            void invokePrismRepoAction('prepare-archive', version)
+            void invokePrismRepoAction('prepare-archive', version, { lang: getLang() })
               .then((st) => st && applyStorageView(st, true))
               .catch((err) => applyStorageView({ ok: false, error: String(err?.message || err) }, false))
               .finally(() => {
@@ -2825,7 +3109,7 @@
           };
           onClk(autoExitOffBtn, () => toggleAutoExit(false));
           onClk(autoExitOnBtn, () => toggleAutoExit(true));
-          onClk(archRestartBtn, () => runGuardedMut(() => { setVis(restoreConfirmBox, false); setVis(archConfirmBox, !!(archConfirmBox.hidden)); }));
+          onClk(archRestartBtn, () => { toggleConfirmBox(archConfirmBox); });
           onClk(archConfirmCancel, () => runGuardedMut(() => setVis(archConfirmBox, false)));
           onClk(archConfirmOk, () => {
             if (storageBusy) return;
@@ -2856,27 +3140,32 @@
               });
           });
           onClk(restoreBtn, () => {
-            runGuardedMut(() => { setVis(archConfirmBox, false); setVis(restoreConfirmBox, !!(restoreConfirmBox.hidden)); });
-            if (!latestBatchName) {
+            const opened = toggleConfirmBox(restoreConfirmBox);
+            if (opened) {
               void invokePrismRepoAction('restore-archive', version, { listOnly: true }).then((r) => {
                 if (!r || !r.ok || !Array.isArray(r.batches) || !restoreDescEl[K_IC]) return;
-                const uNow = uiText(getLang()) || ui;
-                latestBatchName = r.batches[0]?.batchName || '';
-                runGuardedMut(() => {
-                  restoreDescEl[K_TC] = latestBatchName
-                    ? fmtTpl(uNow.storageRestoreConfirmDesc || '{0}', [latestBatchName])
-                    : (uNow.storageRestoreEmpty || 'No archive batches yet');
-                  restoreConfirmOk.disabled = !latestBatchName;
-                });
+                runGuardedMut(() => syncRestoreBatches(r.batches, r.batches[0] || null));
               });
             }
           });
           onClk(restoreCancel, () => runGuardedMut(() => setVis(restoreConfirmBox, false)));
+          onClk(restoreScriptBtn, () => {
+            if (storageBusy || !selectedBatchName) return;
+            storageBusy = true;
+            runGuardedMut(() => { restoreScriptBtn.disabled = true; });
+            void invokePrismRepoAction('prepare-restore', version, { batchName: selectedBatchName, lang: getLang() })
+              .then((st) => st && applyStorageView(st, true))
+              .catch((err) => applyStorageView({ ok: false, error: String(err?.message || err) }, false))
+              .finally(() => {
+                storageBusy = false;
+                runGuardedMut(() => { if (restoreScriptBtn[K_IC]) restoreScriptBtn.disabled = !selectedBatchName; });
+              });
+          });
           onClk(restoreConfirmOk, () => {
-            if (storageBusy || !latestBatchName) return;
+            if (storageBusy || !selectedBatchName) return;
             storageBusy = true;
             runGuardedMut(() => { restoreConfirmOk.disabled = true; });
-            void invokePrismRepoAction('restore-archive', version, { confirm: true, batchName: latestBatchName })
+            void invokePrismRepoAction('restore-archive', version, { confirm: true, batchName: selectedBatchName })
               .then((r) => {
                 if (!archActionChip[K_IC]) return;
                 const uNow = uiText(getLang()) || ui;
@@ -2892,7 +3181,7 @@
               })
               .finally(() => {
                 storageBusy = false;
-                runGuardedMut(() => { if (restoreConfirmOk[K_IC]) restoreConfirmOk.disabled = !latestBatchName; });
+                runGuardedMut(() => { if (restoreConfirmOk[K_IC]) restoreConfirmOk.disabled = !selectedBatchName; });
               });
           });
           onClk(goMemApplyBtn, () => {
@@ -2939,6 +3228,7 @@
             ap(mkEl('div', 'ag-cs-about-repo-row'), ap(mkEl('div', 'ag-cs-about-repo-info'), archActionChip), ap(mkEl('div', 'ag-cs-thought-btn-group'), archRestartBtn, restoreBtn)),
             archConfirmBox,
             restoreConfirmBox,
+            stWb,
             goMemBox
           );
 

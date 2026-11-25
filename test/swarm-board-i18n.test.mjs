@@ -383,10 +383,10 @@ test('swarm-board-i18n 2: Ch1 zero byte delta, zh-CN.json intact, dictionary & r
     'RUNTIME_PARTS must not contain swarm-i18n files'
   );
 
-  // Layer A zh-CN.json untouched (exact=3367, patterns=327)
+  // Layer A zh-CN.json (v3.3.63: exact=4763, patterns=405)
   const hostDict = JSON.parse(fs.readFileSync(path.join(ROOT, 'vendor', 'host-i18n', 'zh-CN.json'), 'utf8'));
-  assert.equal(Object.keys(hostDict.exact).length, 3367);
-  assert.equal(hostDict.patterns.length, 327);
+  assert.equal(Object.keys(hostDict.exact).length, 4763);
+  assert.equal(hostDict.patterns.length, 405);
 
   // UTF-8 no BOM, pure LF, no new Map() in swarm-i18n-runtime.js
   for (const rel of ['vendor/host-i18n/swarm-zh-CN.json', 'vendor/host-i18n/swarm-i18n-runtime.js']) {

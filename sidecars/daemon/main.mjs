@@ -2569,11 +2569,63 @@ export class PrismDaemon {
       const arch = conversationArchive;
       const now = Number.isFinite(_testOverrides?.now) ? _testOverrides.now : Date.now();
       const forceFresh = Boolean(rawInput?.force);
+      const reqLang = typeof rawInput?.lang === 'string' && rawInput.lang.trim() ? rawInput.lang.trim() : 'en';
+      const labels = typeof arch.getStorageWorkbenchLabels === 'function' ? arch.getStorageWorkbenchLabels(reqLang) : null;
+      const fmtBatches = (list) =>
+        list.map((b) => [
+          b.batchName,
+          `${b.batchName} (${b.movedCount || 0}/${Number(b.movedMb) >= 1024 ? `${(Number(b.movedMb) / 1024).toFixed(2)} GB` : `${Math.round(Number(b.movedMb) || 0)} MB`})`,
+        ]);
       if (action === 'storage-health' && !forceFresh && this._storageHealthCache && now - this._storageHealthAt < 300000) {
         return this._storageHealthCache;
       }
       const convDir = _testOverrides?.convDir || arch.getDefaultConversationsDir();
       const archiveDir = _testOverrides?.archiveDir || arch.getDefaultArchiveDir();
+
+      if (action === 'prepare-restore') {
+        const batches = arch.listArchiveBatches(archiveDir).slice(0, 12);
+        const rawBatch =
+          typeof rawInput?.batchName === 'string' && rawInput.batchName.trim()
+            ? rawInput.batchName.trim()
+            : typeof rawInput?.batch === 'string' && rawInput.batch.trim()
+              ? rawInput.batch.trim()
+              : 'latest';
+        let validatedBatch = 'latest';
+        try {
+          validatedBatch = arch.validateBatchSelector(rawBatch || 'latest');
+        } catch (err) {
+          return { ok: false, action, code: 'INVALID_BATCH', error: sanitizeSecretText(err?.message || 'invalid_batch'), batches };
+        }
+        const matched =
+          validatedBatch === 'latest'
+            ? batches[0] || null
+            : batches.find((b) => b.batchName === validatedBatch) || null;
+        if (!matched) {
+          return { ok: false, action, code: 'BATCH_NOT_FOUND', error: 'batch_not_found', batches, ...(labels ? { labels } : {}) };
+        }
+        const scriptPath = path.join(this.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
+        const helpers = arch.writeHelperScripts({
+          scriptPath,
+          archiveDir,
+          restoreBatch: matched.batchName,
+          writeArchiveScript: false,
+          writeRestoreScript: true,
+        });
+        const chipText = labels?.restoreReadyTpl
+          ? labels.restoreReadyTpl.replace('{0}', matched.batchName).replace('{1}', helpers.restoreScriptPath)
+          : `${matched.batchName}: ${helpers.restoreScriptPath}`;
+        return {
+          ok: true,
+          action,
+          batchName: matched.batchName,
+          batches,
+          wbB: fmtBatches(batches),
+          ...helpers,
+          chipText,
+          clipPath: helpers.restoreScriptPath,
+          ...(labels ? { labels, wbL: [labels.summary, labels.archiveOldMain, labels.restoreBtn, labels.refreshBtn] } : {}),
+        };
+      }
       let liveSummaries = null;
       let visibleMainIds = [];
       let pageSubagents = [];
@@ -2728,12 +2780,14 @@ export class PrismDaemon {
             });
 
       const batches = arch.listArchiveBatches(archiveDir);
+      const recentBatches = batches.slice(0, 12);
       const lastArchiveResult = arch.readLastArchiveResult(archiveDir);
       const guardState = this._readStorageGuardState();
       const base = {
         ok: true,
         action,
         totalMb: scan.totalMb,
+        walMb: scan.walMb,
         conversationCount: scan.conversationCount,
         mainCount: scan.mainCount,
         mainMb: scan.mainMb,
@@ -2743,6 +2797,8 @@ export class PrismDaemon {
         unknownMb: scan.unknownMb,
         archivableSubagentCount: scan.archivableSubagentCount,
         archivableSubagentMb: scan.archivableSubagentMb,
+        archivableOldMainCount: scan.archivableOldMainCount,
+        archivableOldMainMb: scan.archivableOldMainMb,
         lsMemoryMb: scan.lsMemoryMb,
         warn: scan.warn,
         warnReasons: scan.warnReasons,
@@ -2750,20 +2806,78 @@ export class PrismDaemon {
         archiveDir: scan.archiveDir,
         autoArchiveOnExit: this._getAutoArchiveOnExitSetting(),
         batchesCount: batches.length,
+        batches: recentBatches,
         latestBatch: batches[0] || null,
         lastArchiveResult,
         snoozeUntilMs: guardState.snoozeUntilMs,
       };
 
+      if (action === 'storage-detail') {
+        const topConsumers = Array.isArray(scan.topConsumers) ? scan.topConsumers : [];
+        const detailObj = {
+          ...base,
+          subagentMaxAgeHours: subagentHours,
+          topConsumers,
+          batches: recentBatches,
+        };
+        const detailText =
+          typeof arch.formatStorageDetailReport === 'function'
+            ? arch.formatStorageDetailReport(detailObj, reqLang)
+            : '';
+        return {
+          ...detailObj,
+          detailText,
+          wbB: fmtBatches(recentBatches),
+          ...(labels ? { labels, wbL: [labels.summary, labels.archiveOldMain, labels.restoreBtn, labels.refreshBtn] } : {}),
+        };
+      }
+
       if (action === 'prepare-archive') {
-        if (scan.archivableSubagents?.length > 0 && !_testOverrides?.skipUsageSnapshot) {
-          await this._snapshotUsageBeforeArchive(scan.archivableSubagents).catch(() => {});
+        const mode =
+          rawInput?.mode === 'subagents+old-main' || rawInput?.oldMain === true
+            ? 'subagents+old-main'
+            : 'subagents';
+        if (mode === 'subagents+old-main' && rawInput?.confirm !== true) {
+          return { ok: false, action, error: 'confirmation_required', mode };
+        }
+        const snapshotTargets =
+          mode === 'subagents+old-main'
+            ? [...(scan.archivableSubagents || []), ...(scan.archivableOldMain || [])]
+            : [...(scan.archivableSubagents || [])];
+        if (snapshotTargets.length > 0 && !_testOverrides?.skipUsageSnapshot) {
+          await this._snapshotUsageBeforeArchive(snapshotTargets).catch(() => {});
         }
         const scriptPath = path.join(this.rootDir, 'sidecars', 'daemon', 'conversation-archive.mjs');
-        const helpers = arch.writeHelperScripts({ scriptPath, archiveDir });
+        // old-main 预设仅写独立 archive-old-main.*，绝不覆盖默认子代理归档脚本或默认还原脚本
+        const helpers = arch.writeHelperScripts({
+          scriptPath,
+          archiveDir,
+          mode,
+          subagentMaxAgeHours: subagentHours,
+          writeArchiveScript: true,
+          writeRestoreScript: mode !== 'subagents+old-main',
+        });
         this._storageHealthCache = null;
         this._storageHealthAt = 0;
-        return { ...base, ...helpers };
+        const fmtMbChip = (v) => (Number(v) >= 1024 ? `${(Number(v) / 1024).toFixed(2)} GB` : `${Math.round(Number(v) || 0)} MB`);
+        const totalArchCount = (base.archivableSubagentCount || 0) + (base.archivableOldMainCount || 0);
+        const totalArchMb = (Number(base.archivableSubagentMb) || 0) + (Number(base.archivableOldMainMb) || 0);
+        const extraChip =
+          mode === 'subagents+old-main'
+            ? labels?.oldMainReadyTpl
+              ? labels.oldMainReadyTpl
+                  .replace('{0}', String(totalArchCount))
+                  .replace('{1}', fmtMbChip(totalArchMb))
+                  .replace('{2}', helpers.archiveScriptPath)
+              : `${totalArchCount} (${fmtMbChip(totalArchMb)}) · ${helpers.archiveScriptPath}`
+            : undefined;
+        return {
+          ...base,
+          ...helpers,
+          wbB: fmtBatches(recentBatches),
+          ...(extraChip ? { chipText: extraChip, clipPath: helpers.archiveScriptPath } : {}),
+          ...(labels ? { labels, wbL: [labels.summary, labels.archiveOldMain, labels.restoreBtn, labels.refreshBtn] } : {}),
+        };
       }
 
       if (action === 'archive-and-restart') {
@@ -2875,7 +2989,32 @@ export class PrismDaemon {
         if (batches.length === 0) {
           return { ok: false, action: 'restore-archive', code: 'NO_BATCH', error: '未找到任何历史归档批次。', batches: [] };
         }
-        const batchName = typeof rawInput?.batchName === 'string' && rawInput.batchName.trim() ? rawInput.batchName.trim() : 'latest';
+        const rawBatch =
+          typeof rawInput?.batchName === 'string' && rawInput.batchName.trim()
+            ? rawInput.batchName.trim()
+            : typeof rawInput?.batch === 'string' && rawInput.batch.trim()
+              ? rawInput.batch.trim()
+              : 'latest';
+        let batchName = 'latest';
+        try {
+          batchName = arch.validateBatchSelector(rawBatch);
+        } catch (err) {
+          return {
+            ok: false,
+            action: 'restore-archive',
+            code: 'INVALID_BATCH',
+            error: sanitizeSecretText(err?.message || 'invalid_batch'),
+            batches,
+          };
+        }
+        const matchedBatch =
+          batchName === 'latest'
+            ? batches[0] || null
+            : batches.find((b) => b.batchName === batchName) || null;
+        if (!matchedBatch) {
+          return { ok: false, action: 'restore-archive', code: 'BATCH_NOT_FOUND', error: 'batch_not_found', batches };
+        }
+        const resolvedBatchName = matchedBatch.batchName;
         let host = null;
         if (typeof _testOverrides?.detectHost === 'function') {
           host = await _testOverrides.detectHost();
@@ -2892,7 +3031,7 @@ export class PrismDaemon {
             exePath: host?.exePath || '',
             gracefulQuit: true,
             relaunch: true,
-            batchName,
+            batchName: resolvedBatchName,
             settleMs: 4000,
           },
           {
@@ -2913,7 +3052,7 @@ export class PrismDaemon {
           ...(spawnRes?.spawned ? {} : { code: spawnRes?.code || 'SPAWN_FAILED', error: spawnRes?.error || 'Failed to launch detached restore task' }),
           action: 'restore-archive',
           scheduled: Boolean(spawnRes?.spawned),
-          batchName: batchName === 'latest' ? batches[0].batchName : batchName,
+          batchName: resolvedBatchName,
           batchesCount: batches.length,
           method: spawnRes?.method || 'custom',
         };
@@ -3701,7 +3840,9 @@ export class PrismDaemon {
     }
     if (
       rawInput?.action === 'storage-health' ||
+      rawInput?.action === 'storage-detail' ||
       rawInput?.action === 'prepare-archive' ||
+      rawInput?.action === 'prepare-restore' ||
       rawInput?.action === 'archive-and-restart'
     ) {
       return this._handleStorageAction(rawInput.action, rawInput?._testOverrides || null, rawInput);
@@ -8259,6 +8400,8 @@ export class PrismDaemon {
             : {};
       delete inputPayload._testOverrides;
       delete inputPayload.forceBusy;
+      delete inputPayload.convDir;
+      delete inputPayload.archiveDir;
       if (inputPayload.confirm === undefined && parsed?.confirm !== undefined) inputPayload.confirm = parsed.confirm;
       if (inputPayload.purgeData === undefined && parsed?.purgeData !== undefined) inputPayload.purgeData = parsed.purgeData;
       if (inputPayload.force === undefined && parsed?.force !== undefined) inputPayload.force = parsed.force;
@@ -8269,6 +8412,10 @@ export class PrismDaemon {
       if (inputPayload.version === undefined && typeof parsed?.input === 'string') inputPayload.version = parsed.input;
       if (inputPayload.value === undefined && parsed?.value !== undefined) inputPayload.value = parsed.value;
       if (inputPayload.batchName === undefined && parsed?.batchName !== undefined) inputPayload.batchName = parsed.batchName;
+      if (inputPayload.batch === undefined && parsed?.batch !== undefined) inputPayload.batch = parsed.batch;
+      if (inputPayload.lang === undefined && parsed?.lang !== undefined) inputPayload.lang = parsed.lang;
+      if (inputPayload.mode === undefined && parsed?.mode !== undefined) inputPayload.mode = parsed.mode;
+      if (inputPayload.oldMain === undefined && parsed?.oldMain !== undefined) inputPayload.oldMain = parsed.oldMain;
       if (inputPayload.hours === undefined && parsed?.hours !== undefined) inputPayload.hours = parsed.hours;
       if (inputPayload.listOnly === undefined && parsed?.listOnly !== undefined) inputPayload.listOnly = parsed.listOnly;
       if (inputPayload.autoArchiveOnExit === undefined && parsed?.autoArchiveOnExit !== undefined) {

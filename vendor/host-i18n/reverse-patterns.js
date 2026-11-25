@@ -43,7 +43,7 @@
     发送: 'Send', 所有项目: 'All Projects', 最近对话: 'Recent Conversations',
     最近会话: 'Recent Conversations', 当前会话: 'Current Conversation',
     扩展程序: 'Extensions', 键盘快捷键: 'Keyboard Shortcuts', 登出: 'Sign Out',
-    升级: 'Upgrade', 开启: 'On', 恢复默认: 'Reset to Default',
+    升级: 'Upgrade', 开启: 'On', 恢复默认: 'Reset to Default', 折叠: 'Collapse', 极速: 'Turbo',
   });
 
   var REVERSE_PATTERNS = [

@@ -38,9 +38,9 @@ Any derivative work or modified redistribution MUST remain open-source under **G
 - **Original License**: MIT License (compatible with `GPL-3.0-only`)
 - **Scope in Obsidian Prism**: Absorbed in `vendor/effort-slider/` for interactive reasoning effort slider inside the model selector menu, enhanced with smart coexistence yielding and 120ms MutationObserver throttling.
 
-### 1.4 `yiheng8023/antigravity-chinese` (`v3.3.19`)
+### 1.4 `yiheng8023/antigravity-chinese` (`v3.3.63`)
 - **Repository**: <https://github.com/yiheng8023/antigravity-chinese>
-- **Upstream Baseline**: `v3.3.19` (Author: `yiheng8023`)
+- **Upstream Baseline**: `v3.3.63` (Author: `yiheng8023`)
 - **Copyright**: `Copyright (c) 2026 Antigravity Chinese Localization Contributors`
 - **Original License**: MIT License (compatible with `GPL-3.0-only`)
 - **Scope in Obsidian Prism**: Upstream `zh-CN` dictionary source (`vendor/host-i18n/zh-CN.json`) and DOM translation matching pattern reference; re-architected cleanly in `vendor/host-i18n/host-i18n-runtime.js` (Zero-ASAR pure CDP Channel 4 on-demand localization) and `vendor/host-i18n/swarm-i18n-runtime.js` + `vendor/host-i18n/swarm-zh-CN.json` (zero-Ch1-byte Swarm OOPIF `plugin://swarm--swarm_board-*` on-demand localization), featuring universal 4-layer auto-yield (explicitly yielding to `yiheng8023` `__AGY_SWARM_I18N__` / `[data-agy-i18n]`, `Antigravity-Hans`, `3169657175`, `renkeshui`, `Zero-Touch`, and generic localization markers), ping-pong conflict circuit breaker, and `WeakMap`-backed lossless `destroy()`.
