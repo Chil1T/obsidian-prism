@@ -1853,6 +1853,7 @@
     'tool-group-collapsible',
     'changed-files-card-header',
     'sidecar-iframe',
+    'sidecar-iframe-slot',
     'artifact-view',
   ]);
 
@@ -1980,7 +1981,7 @@
     } else if (hasChildEl) {
       const collHit = qs(
         el,
-        '[data-testid="worked-for-collapsible"], [data-testid="thinking-collapsible-trigger"], [data-testid="changed-files-card-header"], [data-testid="sidecar-iframe"], [data-testid="artifact-view"], pre'
+        '[data-testid="worked-for-collapsible"], [data-testid="thinking-collapsible-trigger"], [data-testid="changed-files-card-header"], [data-testid="sidecar-iframe"], [data-testid="sidecar-iframe-slot"], [data-testid="artifact-view"], pre'
       );
       if (collHit) {
         dirtyFlags.l = true;

@@ -1856,7 +1856,10 @@
       try {
         const t = ev?.target;
         if (isDead() || !t?.closest) return;
-        if (cl(t, '[data-testid="permissions-selector-trigger"]')) {
+        const pt = cl(t, '[data-testid="permissions-selector-trigger"]');
+        if (pt) {
+          const dd = ga(pt, 'data-disabled');
+          if (pt.disabled || ha(pt, 'disabled') || ga(pt, 'aria-disabled') === 'true' || (dd != null && dd !== 'false')) return;
           win?.requestAnimationFrame?.(() => {
             if (!isDead()) syncPermissionsMenuState();
           });
@@ -1923,7 +1926,7 @@
       const langChanged = Boolean(lastSyncedLang && curLang !== lastSyncedLang);
       lastSyncedLang = curLang;
       if (isFull || flags.c || flags.l || flags.r || flags.s) syncCascadeChange(true);
-      if (isFull || flags.t || flags.r) syncSidecarThemeBridge(false);
+      if (isFull || flags.t || flags.r || flags.l) syncSidecarThemeBridge(false);
       if (isFull || flags.c || flags.l || flags.b || flags.r || flags.t || langChanged) {
         syncCodeBlocks();
         syncNavRails();
