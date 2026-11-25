@@ -24,6 +24,7 @@
 | **[@Kazaorus](https://github.com/Kazaorus)** | [PR #19](https://github.com/RMvdesi/obsidian-prism/pull/19) | 修复软链 / Windows Junction 下守护进程 CLI 入口路径判定。<br>*Resolved symlinks and Windows junctions in the daemon CLI entry-point check.* |
 | **[@DDykarc](https://github.com/DDykarc)** | [PR #12](https://github.com/RMvdesi/obsidian-prism/pull/12) · [PR #79](https://github.com/RMvdesi/obsidian-prism/pull/79) | 修复中文界面下推理等级滑块「中等 ↔ Medium」乒乓闪烁问题，并精准定位和修复 `subtle` 动效档位下像素桌宠悬停/点击左移问题。<br>*Resolved Chinese UI effort-slider "中等 ↔ Medium" ping-pong flicker and fixed mascot hover/click left-shift under `subtle` motion mode.* |
 | **[@SuzumiyaHaruhi719](https://github.com/SuzumiyaHaruhi719)** | [PR #17](https://github.com/RMvdesi/obsidian-prism/pull/17) | 修复 Home Studio 外部 `agPulseHost` 返回空配额时回退至 Prism 自带指标桥接。<br>*Restored Prism metrics fallback in Home Studio when external `agPulseHost` returns empty quotas.* |
+| **[@alanheverton](https://github.com/alanheverton)** | [PR #86](https://github.com/RMvdesi/obsidian-prism/pull/86) | 将 8 个测试文件中的 `URL.pathname` 替换为 `fileURLToPath`，修复含空格或非 ASCII 路径仓库的测试执行。<br>*Replaced `URL.pathname` with `fileURLToPath` across 8 test files to support repositories in spaced or non-ASCII paths.* |
 
 ---
 
