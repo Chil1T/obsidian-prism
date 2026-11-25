@@ -972,9 +972,9 @@ enum InstallerCore {
     }
 
     static func generateLauncherInfoPlist(version: String) -> String {
-        let safeShort = xmlEscape(version.isEmpty ? "1.0.7" : version)
-        let numericParts = version.split(separator: "-").first.map(String.init) ?? "1.0.7"
-        let safeBundleVer = xmlEscape(numericParts.isEmpty ? "1.0.7" : numericParts)
+        let safeShort = xmlEscape(version.isEmpty ? "1.0.8-beta.1" : version)
+        let numericParts = version.split(separator: "-").first.map(String.init) ?? "1.0.8"
+        let safeBundleVer = xmlEscape(numericParts.isEmpty ? "1.0.8" : numericParts)
         return """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

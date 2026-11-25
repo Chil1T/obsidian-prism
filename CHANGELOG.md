@@ -5,6 +5,70 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 本项目遵循语义化版本（SemVer）规范，记录各正式版本的新增功能、架构变更、安全加固与缺陷修复。
 
+## [1.0.8-beta.1] - 2026-11-25
+
+> **Obsidian Prism `v1.0.8-beta.1` 预发布版**引入按需 **3D 机械键盘「元素周期表」模型选择器（Channel 8）**、**8 语完整国际化与 Channel 1 瘦身（-136 KB）**、**4 层零风控 `language_server` 内存治理与存储明细工作台**、**完整 Linux 原生支持**、**四物种像素桌宠与 3D 视差黑曜石星辰酒馆像素舞台**、**Omni 默认安全沙盒预览与 Prompt Suggester（Channel 11）**，以及面向 **Antigravity `v2.35.0` / `v2.35.1`** 的视觉精修与 12 个社区 PR 集成。
+>
+> **协议与来源说明 / Design Provenance & License Notice**：本版本集成的 3D 元素周期表视觉与交互设计稿源自作者本人另一仓库 **[RMvdesi/prism-periodic-console](https://github.com/RMvdesi/prism-periodic-console)**（该设计稿仓库采用较严的 `All Rights Reserved` 协议；本项目内由原作者集成实现并按 `obsidian-prism` 的 **GPL-3.0** 协议开源发布）。
+> *The 3D periodic-table visual and interaction design study originates from the author's separate repository [RMvdesi/prism-periodic-console](https://github.com/RMvdesi/prism-periodic-console) (`All Rights Reserved`); its integration in this repository is implemented by the original author and released under `obsidian-prism`'s **GPL-3.0** license.*
+
+### Periodic-Table 3D Model Picker & Architecture / 3D 元素周期表模型选择器与架构瘦身
+
+- **3D 机械键盘「元素周期表」模型选择器（Channel 8）**：
+  - 按需加载的独立 WebGL2 PBR 机械键帽矩阵与实时 OLED HUD 状态面板，支持通过模型菜单键帽标识快速呼出与切换模型/推理档位；
+  - 深度面向 300Hz 高刷屏提帧优化：引入并行 Shader 编译、动态缩减 GPU 几何面数与 OLED 纹理上传频次、消除全页滚动容器回流，展开期间自动暂停非必要后台模块，关闭后立即停帧并回收显存；
+  - 运行态与交互协同加固：对话生成期间自动锁定禁止唤起，切换至正在运行的会话时自动收回，同时在展开态保持全页棱镜边缘对指针的同步响应。
+  - *3D Mechanical Keyboard Periodic-Table Model Picker (Channel 8)*: On-demand WebGL2 PBR keycap console with OLED HUD and 300Hz frame-pacing optimizations (parallel shader compilation, reduced GPU geometry/OLED uploads, zero-reflow layout, background module pausing when open). Locks invocation during active turns, auto-dismisses when switching into running sessions, and keeps page-wide prism rims pointer-reactive while open. Design study originates from [RMvdesi/prism-periodic-console](https://github.com/RMvdesi/prism-periodic-console) (`All Rights Reserved`) and is integrated here by the original author under **GPL-3.0**.
+- **8 语完整国际化、Channel 1 架构瘦身（-136 KB）与可逆原生英文还原（[#18](https://github.com/RMvdesi/obsidian-prism/issues/18) · [PR #55](https://github.com/RMvdesi/obsidian-prism/pull/55)）**：
+  - 界面与扩展模块全面支持 **8 种语言**（简中 / 繁中 / 英 / 日 / 韩 / 西 / 法 / 德，收敛移除独立粤语分支并补全 8 语文案零漏翻）；同步升级上游 `v3.3.63` 汉化词库（[PR #55](https://github.com/RMvdesi/obsidian-prism/pull/55)）；
+  - 将设置面板与完整多语词典拆分至按需 **Channel 9**、像素桌宠引擎拆分至按需 **Channel 10**，使 Channel 1 主包体积下降 **-136 KB**（全 9 种语言模式严格 `< 549,500 B`）；
+  - 完善 `hostLocalization: 'off'` 下的可逆原生英文还原（支持对隔离上下文外部汉化插件的可逆暂停，覆盖侧栏与失焦态回退）；
+  - 落地 **Swarm 侧栏面板（`plugin://swarm--swarm_board-*`）纯 CDP 按需汉化**（[#18](https://github.com/RMvdesi/obsidian-prism/issues/18) 层 B，零 Channel 1 体积开销，内容区/代码/成员名隔离且支持无损还原），并完成全链路 `?token=` 敏感查询参数脱敏。
+  - *8-Locale Parity, Channel 1 Slimming (-136 KB), Reversible Native-EN Restore & Swarm CDP Localization (#18 / PR #55)*: Ships complete 8-locale support (zh-CN/zh-TW/en/ja/ko/es/fr/de) and upgrades the upstream `v3.3.63` zh-CN dictionary (PR #55); splits Settings/full locales to on-demand Channel 9 and Mascot runtime to Channel 10 (-136 KB on Channel 1, `< 549,500 B` across all 9 modes); adds reversible native-English restoration in `hostLocalization: 'off'` (including isolated external localizers); and adds zero-Ch1-overhead Swarm OOPIF pure-CDP localization (#18 Layer B) with full-chain `?token=` redaction.
+
+### Memory Governance, Storage Workbench & Linux Native Support / 内存治理、存储工作台与 Linux 原生支持
+
+- **4 层零风控 `language_server` 内存治理与存储明细工作台（[#40](https://github.com/RMvdesi/obsidian-prism/issues/40) · [#47](https://github.com/RMvdesi/obsidian-prism/issues/47) · [PR #41](https://github.com/RMvdesi/obsidian-prism/pull/41) · [PR #48](https://github.com/RMvdesi/obsidian-prism/pull/48) · [PR #56](https://github.com/RMvdesi/obsidian-prism/pull/56)）**：
+  - 零修改宿主二进制、零跨进程内存干预的 4 层治理体系：修复 `v2.34+` Home Studio `stepCount: 0` 缓存抖动并节流运行中全量扫描；空闲态触发的存储守卫提醒横幅（带 24h 稍后提醒与确认后归档重启）；可选退出自动归档旧子代理（默认关闭，仅归档 `>2h` 子代理，不触碰主会话）；可选 Go `GOMEMLIMIT` 用户环境变量软上限配置与一键清理；
+  - 在 **设置 → 关于** 新增存储明细与无损归档工作台（[PR #56](https://github.com/RMvdesi/obsidian-prism/pull/56)）：提供按体积排序的 Top-5 会话排行、`<details>` 懒加载明细列表、多批次选择无损还原、独立 `>14d` 旧主会话归档预设及三路互斥二次确认门禁；
+  - 保留已删除与已归档会话在 Home Studio 账本中的真实历史 Token 统计（[#40](https://github.com/RMvdesi/obsidian-prism/issues/40) · [PR #41](https://github.com/RMvdesi/obsidian-prism/pull/41)），并防护与自动修复自引用 `rootConversationId` 毒化记录（[#47](https://github.com/RMvdesi/obsidian-prism/issues/47) · [PR #48](https://github.com/RMvdesi/obsidian-prism/pull/48)）。
+  - *4-Layer Zero-Risk `language_server` Memory Governance & Storage Details Workbench (#40/#47 / PR #41/#48/#56)*: Eliminates v2.34+ cache thrashing, adds an idle-only Storage Guard banner, opt-in exit auto-archiving for old subagents (>2h only, never main chats), and opt-in `GOMEMLIMIT` user env controls; adds an About-sheet Storage Details & Archive Workbench (Top-5 size ranking, lazy `<details>`, multi-batch lossless restore, `>14d` old-main archive preset with mutually exclusive confirmations); preserves real token totals for deleted/archived chats (#40/PR #41); and heals self-referential `rootConversationId` entries (#47/PR #48).
+- **完整 Linux 原生支持（[#44](https://github.com/RMvdesi/obsidian-prism/issues/44)）**：
+  - 新增零外部依赖便携构建（`scripts/build-linux.mjs` 输出 `obsidian-prism-linux-portable.tar.gz`，含 `install.sh` / `uninstall.sh` / `status.sh`）并接入 CI 发布流水线与 `SHA256SUMS.txt`；
+  - 实现免 `root` 的 XDG `.desktop` 阴影覆写与托管启动器（`antigravity-prism.desktop`），卸载时完整还原；补齐 `/proc` 与 `APPIMAGE` 主进程识别、`zenity`/`kdialog` 重启恢复引导、支持 `GOMEMLIMIT` 的 POSIX 独立重启及 `SIGHUP` 守护进程优雅退出。
+  - *Full Native Linux Support (#44)*: Adds zero-dependency portable `.tar.gz` packaging (`install.sh`/`uninstall.sh`/`status.sh`) in release CI, rootless XDG `.desktop` shadow overrides and managed launcher with lossless rollback, `/proc` + `APPIMAGE` detection, `zenity`/`kdialog` relaunch prompts, and `SIGHUP` graceful daemon shutdown.
+
+### Mascot Casting Stage, Omni Sandbox, Prompt Suggester & Extensibility / 桌宠舞台、Omni 沙盒、提示词建议器与扩展底座
+
+- **四物种像素桌宠与 3D 视差黑曜石星辰酒馆像素舞台（[PR #45](https://github.com/RMvdesi/obsidian-prism/pull/45)）**：
+  - 新增 **GPT 白龙** 与 **DeepSeek 蓝鲸** 像素桌宠，支持四物种自由选角及 0/1 单只纯开关控制；
+  - 在设置面板按需集成 WebGL2 **3D 视差黑曜石星辰酒馆像素舞台**（运行于 Channel 9，零 Channel 1 体积负担；仅面板展开且可见时渲染，关闭/隐藏/脱离 DOM 立即停帧并回收显存），并修复 Channel 10 热更新时的实时桌宠重挂载。
+  - *Four-Species Pixel Mascots & 3D Parallax Obsidian Star Tavern Pixel Stage (PR #45)*: Adds GPT white dragon and DeepSeek blue whale pixel sprites with clean 0/1 single-pet toggles and an on-demand WebGL2 3D Parallax Obsidian Star Tavern Pixel Stage inside Channel 9 (zero Channel 1 overhead, instant `0x0` + `WEBGL_lose_context` VRAM reclaim when hidden), plus live mascot remount on Channel 10 hot-reload.
+- **Omni 默认安全沙盒预览、Prompt Suggester（Channel 11）与 AddonRegistry 底座（[PR #42](https://github.com/RMvdesi/obsidian-prism/pull/42)）**：
+  - Omni 侧边栏默认开启 `.html` / `.htm` / `.svg` 本地文件安全预览，采用严格 Opaque Origin 沙盒与收紧的本机 CORS 策略隔离渲染；
+  - 集成 **Prompt Suggester 提示词建议器** 作为独立按需 **Channel 11**（Beta，默认关闭，Channel 1 零注入开销；支持 8 语种、双向配置同步及 Tab/Esc 排除元素周期表与菜单冲突，[PR #42](https://github.com/RMvdesi/obsidian-prism/pull/42)）；
+  - 新增本地可插拔 `AddonRegistry` 底层注册表（默认 0 联网请求），并统一四平台 `--purge-data` 清理范围。
+  - *Omni Default Sandboxed Previews, Channel 11 Prompt Suggester (Beta) & Local `AddonRegistry` (PR #42)*: Enables default sandboxed `.html`/`.htm`/`.svg` previews in the Omni side pane with Opaque Origin isolation and tightened CORS; integrates Prompt Suggester as on-demand Channel 11 (Beta, off by default, zero Ch1 bytes, 8-locale, Tab/Esc menu-safe); and introduces a zero-network `AddonRegistry` foundation with unified `--purge-data` cleanup.
+
+### Smoked Obsidian Polish & Antigravity `v2.35.0` / `v2.35.1` Compatibility / 视觉精修与宿主兼容性修复
+
+- **Smoked Obsidian 视觉细节统一与 `v2.35.0` / `v2.35.1` 全方位适配（[PR #43](https://github.com/RMvdesi/obsidian-prism/pull/43) · [PR #49](https://github.com/RMvdesi/obsidian-prism/pull/49) · [PR #50](https://github.com/RMvdesi/obsidian-prism/pull/50) · [PR #51](https://github.com/RMvdesi/obsidian-prism/pull/51) · [PR #53](https://github.com/RMvdesi/obsidian-prism/pull/53) · [PR #54](https://github.com/RMvdesi/obsidian-prism/pull/54) · [#52](https://github.com/RMvdesi/obsidian-prism/issues/52)）**：
+  - 视觉层面：流内任务卡新增 5 态黑曜星核图标与单色镜面光感边缘，新建会话升级精密 SVG 数据盘，右悬浮盘加入子代理 4s 呼吸环境光；吸收 Agent 步骤计划纯 CSS 样式并修复含迷你键帽的模型触发器截断（[PR #43](https://github.com/RMvdesi/obsidian-prism/pull/43)），修复普通排队卡顶部零空隙桌宠停靠（[PR #51](https://github.com/RMvdesi/obsidian-prism/pull/51)）；
+  - 宿主与系统兼容：修复对话中途挂载 `sidecar-iframe-slot` 扩展侧栏主题同步（[PR #53](https://github.com/RMvdesi/obsidian-prism/pull/53)）；恢复 High 默认推理档位记忆并加固生成中锁定态模型/权限选择器防护（[PR #54](https://github.com/RMvdesi/obsidian-prism/pull/54)）；强化 Windows UI 显示语言优先解析、默认 `'auto'` 策略、防守护进程 heal 空转及本地提示兼容（[PR #49](https://github.com/RMvdesi/obsidian-prism/pull/49) · [PR #50](https://github.com/RMvdesi/obsidian-prism/pull/50)）；强制 `autoUpdate: 'off'` 下零静默网络请求。
+  - *Smoked Obsidian Facets & Antigravity `v2.35.0`/`v2.35.1` Parity (#52 / PR #43/#49/#50/#51/#53/#54)*: Adds 5-state Obsidian star-core task icons, monochrome specular rims, precision Home Studio SVG charts, 4s subagent breathing glow, pure-CSS step-plan styling & trigger truncation fix (PR #43), and zero-gap queued-card mascot docking (PR #51); fixes mid-conversation `sidecar-iframe-slot` theme sync (PR #53), High-default effort memory & locked selector guards (PR #54), Windows UI locale detection & daemon heal guard (PR #49/#50), and zero silent network calls when `autoUpdate: 'off'`.
+- **核心渲染与交互缺陷修复（[#57](https://github.com/RMvdesi/obsidian-prism/issues/57) · [#58](https://github.com/RMvdesi/obsidian-prism/issues/58)）**：
+  - 修复输入框 CSSOM 遮罩丢弃缺陷，消除发送消息与切换会话时误触发的光纤蓝闪与动画叠加；
+  - 恢复宽 Markdown 表格原生破栏全览豁免（`syncBleedTables()` + `:not([data-ag-cs-bleed="1"])`，[#57](https://github.com/RMvdesi/obsidian-prism/issues/57)）；
+  - 解决多项界面交互细节（[#58](https://github.com/RMvdesi/obsidian-prism/issues/58)）：模型菜单展开时桌宠改用全躯干轻蹲姿态避免底部裁切、桌宠节点固定 `tabindex="-1"` 移出键盘 Tab 焦点链、修复 Orchestrator 水晶滑条抗锯齿与边缘白毛边、消除滚动视口获焦时的贯穿蓝线。
+  - *Core Rendering & UX Fixes (#57 / #58)*: Fixes composer CSSOM mask drop and spurious send/switch fiber flash; restores native bleed exemptions for wide Markdown tables (#57); and fixes model-menu mascot crouch clearance, mascot Tab-chain exclusion (`tabindex="-1"`), Orchestrator crystal slider anti-aliasing/fringe edges, and full-height focus lines on scroll viewports (#58).
+
+### Acknowledgements / 社区致谢（Community Credits）
+
+- 衷心感谢通过 PR、兼容性排查与细致复现推动 `v1.0.8-beta.1` 落地的各位社区贡献者（全部 PR 贡献者均已保留 `Co-authored-by` 署名并收录于 [`CONTRIBUTORS.md`](./CONTRIBUTORS.md)）：
+  - **代码贡献（PR）**：**[@tone-leh](https://github.com/tone-leh)**（PR #53 / #54 / #55 / #56 & #52）、**[@OyatsuSuki](https://github.com/OyatsuSuki)**（PR #41 / #43 / #48 & #40 / #47）、**[@Gruu6y](https://github.com/Gruu6y)**（PR #45 & #18）、**[@yzd05](https://github.com/yzd05)**（PR #42）、**[@hukun01](https://github.com/hukun01)**（PR #49 / #50）、**[@zmzwynzj](https://github.com/zmzwynzj)**（PR #51）。
+  - **问题定位与社区反馈**：**[@wanghaoyi216](https://github.com/wanghaoyi216)**（#44）、**[@legegeCoder](https://github.com/legegeCoder)**（#57）、**[@IASUI](https://github.com/IASUI)**（#58）。
+  - *Special thanks to all PR authors and issue reporters who contributed to `v1.0.8-beta.1`: [@tone-leh](https://github.com/tone-leh), [@OyatsuSuki](https://github.com/OyatsuSuki), [@Gruu6y](https://github.com/Gruu6y), [@yzd05](https://github.com/yzd05), [@hukun01](https://github.com/hukun01), [@zmzwynzj](https://github.com/zmzwynzj), [@wanghaoyi216](https://github.com/wanghaoyi216), [@legegeCoder](https://github.com/legegeCoder), and [@IASUI](https://github.com/IASUI).*
+
 ## [1.0.7] - 2026-11-24
 
 > **Obsidian Prism `v1.0.7` 正式版**汇总了自 `v1.0.6` 以来的全部 Beta 阶段迭代与最终打磨，涵盖 **Smoked Obsidian 视觉打磨与桌面双宠光学交互**、**模块化按需加载架构与 45x 冷启动提速**、**思考过程与新会话标题自动翻译 / 一键诊断**、**中英双语 Windows & macOS 安装器与更新后自动恢复**、**10 个社区 PR 融合**以及**修复全部 CodeQL 安全告警**。
