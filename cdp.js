@@ -35,6 +35,7 @@ const DEFAULT_CONFIG = {
   lang: 'auto',
   palette: 'obsidian',
   lightPreset: 'crystal',
+  darkAuraStyle: 'prism',
   motionLevel: 'ultra',
   targetFps: '180',
   telemetryModule: 'auto',
@@ -66,6 +67,7 @@ const DEFAULT_CONFIG = {
   codeFont: 'default',
   codeLigatures: false,
   ambientIntensity: '100',
+  darkAura: 'balanced',
   thoughtView: 'immersive',
   omniModule: 'on',
   linkTarget: 'builtin',
@@ -82,6 +84,7 @@ const VALIDATORS = {
   lang: ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'],
   palette: ['host', 'obsidian', 'warm', 'claude'],
   lightPreset: ['crystal', 'alabaster'],
+  darkAuraStyle: ['prism', 'neon'],
   motionLevel: ['off', 'subtle', 'standard', 'ultra'],
   targetFps: ['60', '120', '180', 'native'],
   telemetryModule: ['auto', 'on', 'off'],
@@ -113,6 +116,7 @@ const VALIDATORS = {
   codeFont: ['default', 'jetbrains', 'cascadia', 'sfmono'],
   codeLigatures: 'boolean',
   ambientIntensity: ['0', '35', '70', '100'],
+  darkAura: ['subtle', 'balanced', 'vivid'],
   thoughtView: ['immersive', 'bilingual'],
   omniModule: ['on', 'off'],
   linkTarget: ['builtin', 'external'],
@@ -8168,8 +8172,9 @@ function getInjectWrapperTemplate() {
       cleanOld();
       let st = D.getElementById(SID);
       if (!st) { st = D.createElement('style'); st.id = SID; }
-      const fk = __AG_INJ_CSSHASH__;
-      if (st.getAttribute?.('data-ag-cs-flat') !== fk + ':' + (st.textContent || '').length) {
+      const fk = __AG_INJ_CSSHASH__, flatOk = st.getAttribute?.('data-ag-cs-flat') === fk + ':' + (st.textContent || '').length;
+      const rawOk = st.getAttribute?.('data-ag-cs-css-hash') === fk && (st.textContent || '').length > 0 && typeof CSS !== 'undefined' && CSS.supports?.('selector(&)');
+      if (!flatOk && !rawOk) {
         const c = getCss();
         if (st.textContent !== c) st.textContent = c;
         st.removeAttribute?.('data-ag-cs-flat');
@@ -11450,6 +11455,16 @@ function buildSettingsChannelExpression(config = null, opts = null) {
       try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
       return { ok: true, reused: true, codeHash: targetHash };
     }
+    try {
+      const staleSec = document.getElementById?.('ag-cs-settings-sec');
+      if (staleSec) {
+        try { staleSec.querySelector?.('[data-testid="prism-wallpaper-slot"]')?.__agPrismWpUiHandle?.destroy?.(); } catch {}
+        try { staleSec.querySelector?.('[data-testid="prism-suggester-slot"]')?.__agPrismSgUiHandle?.destroy?.(); } catch {}
+        try { staleSec.__agMascotStageApi?.dispose?.(); } catch {}
+        try { staleSec.__prismThoughtUiHandle = null; } catch {}
+        staleSec.remove?.();
+      }
+    } catch {}
     ${minRuntime};
     try {
       const panel = globalThis.__agPrismSettingsPanel || window.__agPrismSettingsPanel;
@@ -11465,7 +11480,7 @@ function buildSettingsChannelExpression(config = null, opts = null) {
     } catch {}
     try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
     try { document.getElementById('ag-cs-settings-sec')?.__prismMountThoughtUi?.(); } catch {}
-    try { window.__prismMountWallpaperUi?.(); } catch {}
+    try { document.getElementById('ag-cs-settings-sec')?.__prismMountWp?.(); } catch {}
     try { (document.getElementById('ag-cs-settings-sec') || document.getElementById('ag-prism-settings-sec'))?.__prismMountSg?.(); } catch {}
     return { ok: true, codeHash: targetHash };
   })()`;
@@ -12267,6 +12282,8 @@ const REMOVE_EXPRESSION = `(() => {
       'data-ag-cs-code-font',
       'data-ag-cs-ligatures',
       'data-ag-cs-ambient',
+      'data-ag-cs-dark-aura',
+      'data-ag-cs-dark-aura-style',
       'data-ag-prism-thought-view',
       'data-ag-prism-omni',
       'data-ag-prism-link-target',

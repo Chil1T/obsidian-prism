@@ -135,12 +135,10 @@
   const normalizeConfigShape = (rawCfg) => {
     const out = { ...(rawCfg || {}) };
     out.palette = pickOf(out.palette === 'claude' ? 'warm' : out.palette, 'host|obsidian|warm', 'obsidian');
-    out.lightPreset = out.lightPreset === 'alabaster' ? 'alabaster' : 'crystal';
     out.motionLevel = pickOf(out.motionLevel, 'off|subtle|standard|ultra', 'ultra');
     out.targetFps = pickOf(out.targetFps, '60|120|180|native', '180');
     for (const k of ['telemetryModule', 'effortSliderModule', 'hostLocalization']) out[k] = pickOf(out[k], 'on|off', 'auto');
     out.thoughtTranslate = pickOf(out.thoughtTranslate, 'machine|ai', 'off');
-    out.thoughtTrigger = out.thoughtTrigger === 'expand' ? 'expand' : 'preload';
     out.homeLayout = out.homeMode = pickOf(out.homeLayout ?? out.homeMode, 'classic|off', 'studio');
     for (const [bKey, sKey] of BOOL_ALIAS_PAIRS) {
       const v = out[bKey] !== undefined ? out[bKey] : out[sKey];
@@ -156,13 +154,11 @@
     for (const k of ['smoothCaret', 'contextMenu']) out[k] = out[k] === undefined ? true : out[k] !== false && out[k] !== 'off';
     out.accentTone = pickOf(out.accentTone, 'follow|cobalt|iris|amber|mono', 'follow');
     out.cornerStyle = pickOf(out.cornerStyle, 'sharp|balanced|soft', 'balanced');
-    out.scrollBottomMotion = out.scrollBottomMotion === 'instant' ? 'instant' : 'smooth';
     out.codeFont = pickOf(out.codeFont, 'default|jetbrains|cascadia|sfmono', 'default');
     out.ambientIntensity = pickOf(String(out.ambientIntensity ?? '100'), '0|35|70|100', '100');
-    out.thoughtView = out.thoughtView === 'bilingual' ? 'bilingual' : 'immersive';
+    out.darkAura = pickOf(out.darkAura, 'subtle|balanced|vivid', 'balanced');
     for (const k of ['omniModule', 'effortMemory', 'periodicModelPicker']) out[k] = out[k] === 'off' || out[k] === false ? 'off' : 'on';
-    out.linkTarget = out.linkTarget === 'external' ? 'external' : 'builtin';
-    out.updateChannel = out.updateChannel === 'beta' ? 'beta' : 'stable';
+    for (const [k, a, b] of [['lightPreset','alabaster','crystal'],['darkAuraStyle','neon','prism'],['thoughtTrigger','expand','preload'],['scrollBottomMotion','instant','smooth'],['thoughtView','bilingual','immersive'],['linkTarget','external','builtin'],['updateChannel','beta','stable']]) out[k] = out[k] === a ? a : b;
     const migrateLegacyLang = (v) => {
       if (typeof v !== 'string') return '';
       const t = v.trim();
@@ -288,7 +284,7 @@
   const routeConfigDirtyFlags = (prevCfg, nextCfg, patch) => {
     dirtyFlags.g = true;
     const any = (s) => s.split('|').some((k) => prevCfg[k] !== nextCfg[k] || O.hasOwn(patch, k));
-    if (any('palette|lightPreset|accentTone|ambientIntensity|cornerStyle|codeFont|codeLigatures')) dirtyFlags.t = true;
+    if (any('palette|lightPreset|accentTone|ambientIntensity|darkAura|darkAuraStyle|cornerStyle|codeFont|codeLigatures')) dirtyFlags.t = true;
     if (any('accentTone|composerRestyle|placeholderStyle|mascot|smoothCaret|telemetryModule|motionLevel|language')) dirtyFlags.c = true;
     if (any('homeLayout|homeRipple|convRipple|motionLevel|language')) dirtyFlags.r = true;
     if (any('sidebarRestyle|sidebarCompact|sidebarNavFold')) dirtyFlags.s = true;
@@ -928,6 +924,7 @@
   const MOTION_OFF_STYLE_ID = 'ag-prism-motion-off-css';
 
   function flattenMainStyleSheet() {
+    if (typeof CSS !== 'undefined' && CSS.supports?.('selector(&)')) return;
     const el = document.getElementById?.('ag-prism-css');
     const rules = el?.sheet?.cssRules;
     const key = el?.getAttribute?.('data-ag-cs-css-hash') || CODE_HASH || '1';
@@ -1086,15 +1083,17 @@
         style: '1', theme: dark ? 'dark' : 'light', palette, 'light-preset': lightPreset, motion: motionLv,
         'target-fps': targetFps, telemetry: telemetryMod, 'effort-slider': effortSliderMod,
         'thought-translate': getThoughtTranslateMode(), accent: getAccentTone(), corners: getCornerStyle(),
-        'scroll-bottom': cfg.scrollBottomMotion === 'instant' ? 'instant' : 'smooth', 'code-font': getCodeFont(),
+        'scroll-bottom': cfg.scrollBottomMotion, 'code-font': getCodeFont(),
         ligatures: isCodeLigaturesEnabled() ? '1' : '0', ambient: getAmbientCssValue(),
-        home: cfg.homeLayout === 'classic' ? 'classic' : cfg.homeLayout === 'off' ? 'off' : 'studio',
-        composer: cfg.composerRestyle === false ? 'off' : 'on', 'logo-ink': cfg.logoInk === 'foreground' ? 'foreground' : 'accent',
-        sidebar: cfg.sidebarRestyle === false ? 'off' : 'on', 'sidebar-compact': cfg.sidebarCompact === true ? 'on' : 'off',
-        'sb-fold': cfg.sidebarNavFold === 'on' ? 'on' : 'off', lang,
+        'dark-aura': cfg.darkAura,
+        'dark-aura-style': cfg.darkAuraStyle,
+        home: cfg.homeLayout,
+        composer: cfg.composer, 'logo-ink': cfg.logoInk === 'foreground' ? 'foreground' : 'accent',
+        sidebar: cfg.sidebar, 'sidebar-compact': cfg.sidebarCompact ? 'on' : 'off',
+        'sb-fold': cfg.sidebarNavFold, lang,
       };
       for (const [k, v] of O.entries(csA)) setAttrIfChanged(html, 'data-ag-cs-' + k, v);
-      for (const [k, v] of [['', VERSION], ['-omni', getOmniMode()], ['-link-target', getLinkTarget()], ['-sidebar-studio', cfg.sidebarStudio === 'on' ? 'on' : 'off']]) {
+      for (const [k, v] of [['', VERSION], ['-omni', getOmniMode()], ['-link-target', getLinkTarget()], ['-sidebar-studio', cfg.sidebarStudio]]) {
         setAttrIfChanged(html, 'data-ag-prism' + k, v);
       }
       if (cfg.sidebarRestyle === false) {
@@ -1133,7 +1132,7 @@
         lastAppliedLang = lang;
         if (prevLang) refreshOpenUiForLanguage();
       }
-      const themeKey = `${palette}|${lightPreset}|${dark ? 'd' : 'l'}|${getAccentTone()}|${getAmbientIntensitySetting()}|${getCornerStyle()}`;
+      const themeKey = `${palette}|${lightPreset}|${dark ? 'd' : 'l'}|${getAccentTone()}|${getAmbientIntensitySetting()}|${cfg.darkAura}|${cfg.darkAuraStyle}|${getCornerStyle()}`;
       if (themeKey !== lastThemeKey) {
         lastThemeKey = themeKey;
         refreshOptics();
@@ -1439,9 +1438,7 @@
       priPlan?.mo ||
       priPlan?.ops?.some(([, , on]) => on) ||
       pulseCoversPri ||
-      ha(de(), 'data-ag-cs-model-menu') ||
-      ga(de(), 'data-ag-pp-open') === '1' ||
-      qs(D, MODEL_PANEL_SEL)
+      ga(de(), 'data-ag-pp-open') === '1'
     );
     const activeInfoForCrab = getLightweightActiveInfo(primaryCard);
     queuedCrabAnchor = priPlan?.queuedAnchor || null;
@@ -1998,7 +1995,7 @@
     if (!isElementLike(el)) return;
     const tid = tidOf(el);
     const role = String(ga(el, 'role') || '');
-    const cls = String(el.className || '');
+    const cls = typeof el.className === 'string' ? el.className : String(el.className?.baseVal || ga(el, 'class') || '');
     const tg = tagU(el);
     const hasChildEl =
       el.firstElementChild !== undefined ? !!(el.firstElementChild) : !!(el.children && el.children.length > 0);
@@ -2028,7 +2025,7 @@
     const ancDlg = parentCtx ? parentCtx.inDlg : !!(cl(el, '[role="dialog"]'));
     const ancMdl = parentCtx ? parentCtx.inMdl : !!(cl(el, MODEL_PANEL_SEL));
 
-    let touchedButtons = false, inPlainDialog = false;
+    let touchedButtons = false, inPlainDialog = false, inSbR = false;
     const inConvStream = tid !== 'conversation-view' && tid !== 'agent-input-box' && !cls.includes('agy-home') && ancConv && !ancComp;
     const chkDlg = (rootHit) => {
       inPlainDialog = true;
@@ -2046,9 +2043,16 @@
         dirtyFlags.r = dirtyFlags.c = dirtyFlags.l = dirtyFlags.tk = dirtyFlags.cf = touchedButtons = true;
       }
 
-      if (tid === 'conversation-row-sidebar' || tid === 'breadcrumb-segment' || tid === 'conversation-row-history' || ancSide || q('[data-testid="conversation-row-sidebar"],[data-testid="breadcrumb-segment"],[data-testid="conversation-row-history"]')) {
-        dirtyFlags.s = true;
-        if (isAdded) touchedButtons = true;
+      const isRc = tid === 'conversation-row-sidebar' || tid === 'breadcrumb-segment' || tid === 'conversation-row-history' || q('[data-testid="conversation-row-sidebar"],[data-testid="breadcrumb-segment"],[data-testid="conversation-row-history"]');
+      const inSR = !isRc && (parentCtx ? parentCtx.inSR : cl(el, '[data-testid="conversation-row-sidebar"]'));
+      if (isRc || ancSide || inSR) {
+        if (inSR) {
+          inSbR = true;
+          if (tid === 'status-loading-spinner' || tid.includes('stop') || tid.includes('cancel') || cls.includes('lucide-square') || cls.includes('lucide-circle-stop') || q('[data-testid="status-loading-spinner"],.lucide-square,.lucide-circle-stop')) dirtyFlags.s = true;
+        } else {
+          dirtyFlags.s = true;
+          if (isAdded) touchedButtons = true;
+        }
       }
 
       if (COMP_TIDS.has(tid) || cls.includes('surface-composer-card') || ancComp || q(`${S_IB}, [data-testid="input-cancel-button"], ${TK_SEL}, [data-testid="queued-messages-card"], .surface-composer-card`)) {
@@ -2137,7 +2141,7 @@
       }
     }
 
-    if (!inPlainDialog) {
+    if (!inPlainDialog && !inSbR) {
       if (isAdded && (touchedButtons || isHostButtonCandidate(el) || q(HOST_BTN_QUERY))) {
         dirtyFlags.b = true;
         dirtyAddedRoots.add(el);
@@ -2169,7 +2173,8 @@
     const modelOverlayChanged = !!(flags.o) && (!!modelPanelNow || hadModelPanelOpen);
     const cPlan = isFullSync || flags.c || modelOverlayChanged ? measureCrabClearanceAll() : null;
     if (flags.f || flags.r || flags.c || flags.t) convAuraCtl.prime?.();
-    return { inHome, inHero, formalConv, curCascadeId, isConvSwap, isAsyncConvEntry, homeComposerSampled, convInputRect, sidebarSnap, visibleChangedHeaders, lensOverlays, caretList, modelPanelNow, modelOverlayChanged, cPlan };
+    const checkCaustics = Boolean(flags.f || flags.cf || flags.r);
+    return { inHome, inHero, formalConv, curCascadeId, isConvSwap, isAsyncConvEntry, homeComposerSampled, convInputRect, sidebarSnap, visibleChangedHeaders, lensOverlays, caretList, modelPanelNow, modelOverlayChanged, cPlan, checkCaustics };
   };
 
   let enhancerSyncTimer = 0;
@@ -2312,10 +2317,11 @@
       } else if (!deferHeavyConvWork && flags.tk) {
         streamChoreoCtl.syncThinkingSparks(latestPrimaryModelInfo, latestPaneModelMap);
       }
-      if (flags.f || flags.r || flags.s || flags.c) {
+      if (flags.f || flags.r || flags.c) {
         streamChoreoCtl.syncHeroRouteChoreography(measured);
-      } else if (flags.cf) {
-        streamChoreoCtl.syncHeroCCaustics(measured.visibleChangedHeaders);
+      } else {
+        if (flags.s && measured.sidebarSnap) streamChoreoCtl.syncSidebarSelectionGlide(measured.sidebarSnap);
+        if (flags.cf) streamChoreoCtl.syncHeroCCaustics(measured.visibleChangedHeaders);
       }
       if (!deferHeavyConvWork && (flags.f || flags.r || flags.c || flags.l)) {
         streamChoreoCtl.syncDualStreamEngine();
@@ -2468,7 +2474,7 @@
   }
 
   // ── Event Handlers ─────────────────────────────────────────────────────
-  let blurTm = 0;
+  let blurTm = 0, lbr = 0;
   const clearWinBlur = () => {
     try {
       if (blurTm) { CT(blurTm); blurTm = 0; }
@@ -2484,10 +2490,13 @@
   };
   const wakeWinBlur = () => {
     try {
-      if (blurTm || ha(de(), BLUR_ATTR)) {
-        clearWinBlur();
-        if (typeof document.hasFocus === 'function' && !document.hasFocus()) onWinBlur();
-      }
+      const hasA = ha(de(), BLUR_ATTR);
+      if (!hasA && !blurTm) return;
+      const t = performance.now();
+      if (!hasA && blurTm && t - lbr < 400) return;
+      lbr = t;
+      clearWinBlur();
+      if (typeof document.hasFocus === 'function' && !document.hasFocus()) onWinBlur();
     } catch {}
   };
   function onWinBlur() {
@@ -2497,6 +2506,7 @@
         scheduleResizingEnd();
       }
       if (destroyed || blurTm) return;
+      lbr = performance.now();
       blurTm = ST(() => {
         try {
           blurTm = 0;
@@ -2600,6 +2610,7 @@
       if (ev.key === '[' && !ev.ctrlKey && !ev.metaKey && !ev.altKey && !isEditableTarget(ev.target) && !cl(ev.target, '[role="dialog"], .monaco-editor')) {
         const html = de(), k = 'data-ag-cs-sidebar-collapsed';
         if (!html || cfg.sidebarRestyle === false) return;
+        bumpResizingPulse();
         ga(html, k) === '1' ? ra(html, k) : sa(html, k, '1');
       }
     } catch {}
@@ -2825,6 +2836,7 @@
                       inConv: !!(cl(tgt, '[data-testid="conversation-view"]')),
                       inComp: !!(cl(tgt, S_IB)),
                       inSide: !!(cl(tgt, 'aside')),
+                      inSR: !!(cl(tgt, '[data-testid="conversation-row-sidebar"]')),
                       inDlg: !!(cl(tgt, '[role="dialog"]')),
                       inMdl: !!(cl(tgt, MODEL_PANEL_SEL)),
                     };
@@ -2950,7 +2962,7 @@
     activePollMs = nextMs;
     pollTimer = setInterval(() => {
       if (destroyed || D.hidden) return;
-      const expectedThemeKey = `${getEffectivePalette()}|${getLightPreset()}|${isDarkTheme() ? 'd' : 'l'}|${getAccentTone()}|${getAmbientIntensitySetting()}|${getCornerStyle()}`;
+      const expectedThemeKey = `${getEffectivePalette()}|${getLightPreset()}|${isDarkTheme() ? 'd' : 'l'}|${getAccentTone()}|${getAmbientIntensitySetting()}|${cfg.darkAura}|${cfg.darkAuraStyle}|${getCornerStyle()}`;
       if (expectedThemeKey !== lastThemeKey || !ha(de(), 'data-ag-prism')) applyRootAttrs();
       if (cfg.homeLayout === 'studio') {
         if (homeStudioCtl.wasHero()) homeStudioCtl.scheduleUsageRollupRefresh(1800);
