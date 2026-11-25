@@ -293,15 +293,27 @@ test('prism-rim-canvas caps step-plan rims to newest 2 visible expanded cards, m
   assert.equal(sp1.querySelector('.ag-cs-prism-rim-cv'), null);
   assert.equal(sp1Cv.width, 0, 'collapsed step-plan canvas VRAM must shrink to 0x0');
 
-  // 4) Periodic picker open (data-ag-pp-open="1") immediately sleeps 0fps & shrinks VRAM to 0x0
+  // 4) Periodic picker open (data-ag-pp-open="1") keeps prism/mirror rims responsive while win-blur/hidden still sleeps & reclaims
   ctl.onPointerMove({ clientX: 210, clientY: 140 });
   flushRaf();
   assert.ok(homePanel.querySelector('.ag-cs-prism-rim-cv').width > 0);
   htmlEl.setAttribute('data-ag-pp-open', '1');
   ctl.pauseForOverlay();
-  assert.equal(homePanel.querySelector('.ag-cs-prism-rim-cv').width, 0, 'pp-open must reclaim rim canvas to 0x0');
+  assert.ok(homePanel.querySelector('.ag-cs-prism-rim-cv').width > 0, 'pp-open must keep prism/mirror rim canvases active');
   ctl.onPointerMove({ clientX: 220, clientY: 160 });
-  assert.equal(rafs.size, 0, 'pp-open must stay 0fps on pointermove');
+  assert.ok(rafs.size > 0, 'pp-open must stay responsive on pointermove');
+  flushRaf();
+  assert.ok(homePanel.querySelector('.ag-cs-prism-rim-cv').width > 0);
+  // Real window blur / document hidden still pauses 0fps & reclaims VRAM
+  htmlEl.setAttribute('data-ag-cs-win-blur', '1');
+  ctl.pauseForOverlay();
+  ctl.onPointerMove({ clientX: 225, clientY: 165 });
+  assert.equal(rafs.size, 0, 'win-blur must stay 0fps on pointermove');
+  fakeDoc.hidden = true;
+  ctl.pauseForOverlay();
+  assert.equal(homePanel.querySelector('.ag-cs-prism-rim-cv').width, 0, 'hidden document must reclaim rim canvas to 0x0');
+  fakeDoc.hidden = false;
+  htmlEl.removeAttribute('data-ag-cs-win-blur');
   htmlEl.removeAttribute('data-ag-pp-open');
 
   // 5) Home panel innerHTML reset (tab switch) self-heals rim canvas on next move, and detaching home-panel reclaims immediately

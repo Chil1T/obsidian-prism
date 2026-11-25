@@ -2362,7 +2362,6 @@
   }
   const onWinPointerMove = (ev) => {
     try {
-      if (ga(de(), 'data-ag-pp-open') === '1') return;
       wakeWinBlur();
       if (isDragSuspendedRoot()) return;
       prismRimCtl.onPointerMove(ev);
@@ -2548,7 +2547,10 @@
   };
 
   const onDocTransitionEnd = (ev) => {
-    try { if (cfg.smoothCaret !== false && cl(ev?.target, S_IB)) smoothCaretCtl.queue(false, true, false); } catch {}
+    try {
+      if (ev?.target?.id === 'ag-prism-periodic-picker-root' && ev.propertyName === 'height') prismRimCtl.markDirty();
+      if (cfg.smoothCaret !== false && cl(ev?.target, S_IB)) smoothCaretCtl.queue(false, true, false);
+    } catch {}
   };
 
   const ATTR_OBSERVED_TIDS = new Set([
@@ -2585,9 +2587,7 @@
           const tgt = m.target;
           if (tgt === D.body || tgt === de()) {
             if (m.attributeName === 'data-ag-pp-open') {
-              if (ga(de(), 'data-ag-pp-open') === '1') {
-                try { prismRimCtl.pauseForOverlay?.(); } catch {}
-              }
+              prismRimCtl.markDirty();
               dirtyFlags.c = anyRelevant = true;
               continue;
             }
@@ -2715,7 +2715,7 @@
   };
 
   const WIN_LISTENERS = [
-    ['pointermove', onWinPointerMove, { passive: true }],
+    ['pointermove', onWinPointerMove, CAP_PASSIVE],
     ['pointerup', onWinPointerUp, { passive: true }],
     ['pointercancel', onWinPointerUp, { passive: true }],
     ['resize', onWinResize, { passive: true }],

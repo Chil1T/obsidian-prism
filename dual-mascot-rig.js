@@ -5256,7 +5256,7 @@
         rim.s = s;
         rim.t = t;
         rim.d = d;
-        if (!isVramSleepState() && !isWindowBlurred()) renderAllFrames();
+        if (!isVramSleepState() && !isWindowBlurred() && !isPpOpen()) renderAllFrames();
       },
       getLayoutSnapshot() {
         const now = nowMs();
@@ -5354,7 +5354,7 @@
         if (disposed) return;
         parked = false;
         syncHeartbeat();
-        if (!isVramSleepState() && !isWindowBlurred()) renderAllFrames();
+        if (!isVramSleepState() && !isWindowBlurred() && !isPpOpen()) renderAllFrames();
       },
       syncPowerState: syncPwr,
       dispose() {

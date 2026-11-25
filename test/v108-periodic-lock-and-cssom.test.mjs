@@ -813,3 +813,276 @@ test('periodic-picker: blocks open/hold/replay when running & auto-collapses on 
   assert.equal(counts.activeIntervals, 0, 'destroy() must clean all intervals');
   assert.equal(counts.activeObservers, 0, 'destroy() must disconnect all observers');
 });
+
+test('prism-rim + ui-runtime: data-ag-pp-open="1" keeps composer, step-plan, home-panel & mirror rims responsive via window capture while preserving picker bubble firewall, layout transitionend sync, and win-blur/hidden reclaim', () => {
+  const env = createDomSandbox({ pathname: '/conv-rim-pp' });
+  const rafs = new Map();
+  let nextRaf = 1;
+  env.win.requestAnimationFrame = (fn) => { const id = nextRaf++; rafs.set(id, fn); return id; };
+  env.win.cancelAnimationFrame = (id) => { rafs.delete(id); };
+  env.sandbox.requestAnimationFrame = env.win.requestAnimationFrame;
+  env.sandbox.cancelAnimationFrame = env.win.cancelAnimationFrame;
+  const flushRafs = (dt = 20) => {
+    env.advanceTime(dt);
+    const list = Array.from(rafs.entries());
+    rafs.clear();
+    for (const [, fn] of list) fn(env.win.performance.now());
+  };
+
+  // Patch makeEl / createElement so nodes expose ownerDocument/dataset/nextElementSibling and <canvas> exposes 2D context
+  const origMakeEl = env.makeEl;
+  const origCreateEl = env.doc.createElement;
+  const enhanceEl = (el) => {
+    if (!el || el._rimEnhanced) return el;
+    el._rimEnhanced = true;
+    el.ownerDocument = env.doc;
+    if (!el.dataset) el.dataset = {};
+    if (!('nextElementSibling' in el)) {
+      Object.defineProperty(el, 'nextElementSibling', {
+        get() {
+          if (!this.parentNode) return null;
+          const list = this.parentNode.children || [];
+          const i = list.indexOf(this);
+          return i >= 0 ? list[i + 1] || null : null;
+        },
+      });
+    }
+    if (el.tagName !== 'CANVAS') return el;
+    const strokes = [];
+    let tx = 0;
+    let ty = 0;
+    const ctx = {
+      globalAlpha: 1,
+      globalCompositeOperation: 'source-over',
+      lineWidth: 1,
+      strokeStyle: null,
+      fillStyle: null,
+      clearRect() { el._cleared = (el._cleared || 0) + 1; },
+      save() {},
+      restore() { tx = 0; ty = 0; },
+      translate(x, y) { tx = x; ty = y; },
+      clip() {},
+      fillRect() {},
+      fill() {},
+      beginPath() {},
+      roundRect() {},
+      moveTo() {},
+      lineTo() {},
+      arcTo() {},
+      closePath() {},
+      stroke() { strokes.push({ w: el.width, h: el.height, tx, ty }); },
+      createRadialGradient() { return { addColorStop() {} }; },
+      createLinearGradient() { return { addColorStop() {} }; },
+    };
+    el._strokes = strokes;
+    el.getContext = (k) => (k === '2d' ? ctx : null);
+    return el;
+  };
+  env.makeEl = (tag, opts) => enhanceEl(origMakeEl(tag, opts));
+  env.doc.createElement = (tag) => enhanceEl(origCreateEl(tag));
+  enhanceEl(env.html);
+  enhanceEl(env.body);
+  env.doc.hasFocus = () => true;
+
+  // Full browser-faithful capture->target->bubble dispatch including window phase
+  const winCapListeners = new Map();
+  const winBubListeners = new Map();
+  const origWinAdd = env.win.addEventListener.bind(env.win);
+  const origWinRem = env.win.removeEventListener.bind(env.win);
+  env.win.addEventListener = (type, fn, opts) => {
+    const cap = typeof opts === 'boolean' ? opts : Boolean(opts && opts.capture);
+    const m = cap ? winCapListeners : winBubListeners;
+    if (!m.has(type)) m.set(type, new Set());
+    m.get(type).add(fn);
+    return origWinAdd(type, fn, opts);
+  };
+  env.win.removeEventListener = (type, fn, opts) => {
+    const cap = typeof opts === 'boolean' ? opts : Boolean(opts && opts.capture);
+    const m = cap ? winCapListeners : winBubListeners;
+    m.get(type)?.delete(fn);
+    return origWinRem(type, fn, opts);
+  };
+  env.sandbox.addEventListener = env.win.addEventListener;
+  env.sandbox.removeEventListener = env.win.removeEventListener;
+
+  const dispatchBrowserEvent = (target, type, init = {}) => {
+    const ev = env.createEvent(type, init, target);
+    if (init.propertyName) ev.propertyName = init.propertyName;
+    const chain = [];
+    let cur = target;
+    while (cur) { chain.unshift(cur); cur = cur.parentNode || null; }
+    // 1) window capture
+    ev.currentTarget = env.win;
+    for (const fn of Array.from(winCapListeners.get(type) || [])) {
+      fn.call(env.win, ev);
+      if (ev.immediatePropagationStopped) return ev;
+    }
+    if (ev.propagationStopped) return ev;
+    // 2) document + ancestors capture
+    for (const el of chain) {
+      ev.currentTarget = el;
+      for (const fn of el._getListeners(type, true)) {
+        fn.call(el, ev);
+        if (ev.immediatePropagationStopped) return ev;
+      }
+      if (ev.propagationStopped) return ev;
+    }
+    // 3) target + ancestors bubble
+    for (let i = chain.length - 1; i >= 0; i -= 1) {
+      const el = chain[i];
+      ev.currentTarget = el;
+      for (const fn of el._getListeners(type, false)) {
+        fn.call(el, ev);
+        if (ev.immediatePropagationStopped) return ev;
+      }
+      if (ev.propagationStopped || !ev.bubbles) return ev;
+    }
+    // 4) window bubble
+    ev.currentTarget = env.win;
+    for (const fn of Array.from(winBubListeners.get(type) || [])) {
+      fn.call(env.win, ev);
+      if (ev.immediatePropagationStopped) return ev;
+    }
+    return ev;
+  };
+
+  // Build scene: composer card + visible step-plan + home-panel + overview mirror card + periodic picker root with bubble firewall
+  const convView = env.makeEl('div', { attrs: { 'data-testid': 'conversation-view' } });
+  const stepPlanRect = { left: 120, top: 80, right: 620, bottom: 200, width: 500, height: 120 };
+  const stepPlan = env.makeEl('div', { attrs: { 'data-testid': 'step-plan', 'aria-expanded': 'true' }, rect: stepPlanRect });
+  let composerRect = { left: 120, top: 520, right: 680, bottom: 640, width: 560, height: 120 };
+  const inputBox = env.makeEl('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const composerCard = env.makeEl('div', { className: 'surface-composer-card', rect: composerRect });
+  composerCard.getBoundingClientRect = () => composerRect;
+  const triggerBtn = env.makeEl('button', {
+    attrs: { 'data-testid': 'model-selector-trigger' },
+    text: 'Gemini 4 Carbon (High)',
+  });
+  composerCard.appendChild(triggerBtn);
+  inputBox.appendChild(composerCard);
+
+  const homePanel = env.makeEl('div', {
+    className: 'ag-cs-home-panel',
+    attrs: { 'data-ag-cs-prism-box': '1', 'data-ag-cs-prism-mirror': '1' },
+    rect: { left: 740, top: 120, right: 1180, bottom: 340, width: 440, height: 220 },
+  });
+  const overviewMirror = env.makeEl('div', {
+    attrs: { 'data-testid': 'overview-panel', 'data-ag-cs-prism-box': '1', 'data-ag-cs-prism-mirror': '1' },
+    rect: { left: 740, top: 420, right: 1180, bottom: 600, width: 440, height: 180 },
+  });
+
+  // Periodic picker root enforcing its 300Hz bubble firewall (stops pointermove/pointerover from bubbling to host body)
+  const pickerRoot = env.makeEl('div', {
+    id: 'ag-prism-periodic-picker-root',
+    rect: { left: 120, top: 644, right: 680, bottom: 860, width: 560, height: 216 },
+  });
+  const pickerCanvas = env.makeEl('canvas', { className: 'ag-pp-gl-canvas' });
+  pickerRoot.appendChild(pickerCanvas);
+  const stopBubble = (ev) => { ev.stopPropagation(); };
+  for (const evType of ['pointerover', 'pointerout', 'mouseover', 'mouseout', 'pointermove']) {
+    pickerRoot.addEventListener(evType, stopBubble);
+  }
+
+  let hostBubbleHits = 0;
+  for (const evType of ['pointerover', 'pointerout', 'mouseover', 'mouseout', 'pointermove']) {
+    env.body.addEventListener(evType, () => { hostBubbleHits += 1; });
+  }
+
+  convView.appendChild(stepPlan);
+  convView.appendChild(inputBox);
+  convView.appendChild(pickerRoot);
+  env.body.appendChild(convView);
+  env.body.appendChild(homePanel);
+  env.body.appendChild(overviewMirror);
+
+  // Inject full Channel 1 runtime
+  const injectExpr = cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, language: 'zh-CN', motionLevel: 'ultra' }, { bundleCachePath: '' });
+  const res = vm.runInContext(injectExpr, env.sandbox);
+  assert.equal(res.status, 'ok');
+
+  // Verify pointermove is bound on window capture phase so picker stopPropagation cannot starve prism rims
+  assert.ok((winCapListeners.get('pointermove')?.size || 0) >= 1, 'ui-runtime must listen to pointermove in window capture phase');
+
+  // Initial pointermove populates rim canvases on all containers
+  dispatchBrowserEvent(composerCard, 'pointermove', { clientX: 300, clientY: 560 });
+  flushRafs();
+  const compCv = composerCard.querySelector('.ag-cs-prism-rim-cv');
+  const spCv = stepPlan.querySelector('.ag-cs-prism-rim-cv');
+  const homeCv = homePanel.querySelector('.ag-cs-prism-rim-cv');
+  const ovCv = overviewMirror.querySelector('.ag-cs-prism-rim-cv');
+  assert.ok(compCv && compCv.width > 0 && compCv.height > 0, 'composer rim canvas must draw initially');
+  assert.ok(spCv && homeCv && ovCv, 'step-plan, home-panel & overview mirror must all mount rim canvases');
+
+  // 1) Open periodic picker (data-ag-pp-open="1") & fire MutationObserver: existing rim canvases MUST NOT be cleared/reclaimed
+  env.html.setAttribute('data-ag-pp-open', '1');
+  env.triggerMutations(env.html, [{ type: 'attributes', attributeName: 'data-ag-pp-open', target: env.html }]);
+  assert.ok(compCv.width > 0 && compCv.height > 0, 'opening periodic picker must NOT shrink composer rim canvas');
+
+  // 2) Pointer moves INSIDE periodic picker near composer top/bottom edge:
+  //    picker bubble firewall keeps hostBubbleHits === 0, yet composer rim still redraws with updated coords!
+  hostBubbleHits = 0;
+  const compStrokesBefore = compCv._strokes.length;
+  dispatchBrowserEvent(pickerCanvas, 'pointerover', { clientX: 410, clientY: 660 });
+  dispatchBrowserEvent(pickerCanvas, 'pointermove', { clientX: 410, clientY: 660 });
+  assert.equal(hostBubbleHits, 0, 'picker 300Hz bubble firewall must still block pointerover/pointermove from reaching host body');
+  flushRafs();
+  assert.ok(compCv._strokes.length > compStrokesBefore, 'composer rim canvas must redraw while pointer moves inside periodic picker');
+  assert.ok(compCv.width > 0 && compCv.height > 0);
+  const lastCompStroke1 = compCv._strokes.at(-1);
+
+  // Move horizontally across composer while data-ag-pp-open="1" -> highlight coordinates track pointer
+  dispatchBrowserEvent(composerCard, 'pointermove', { clientX: 540, clientY: 580 });
+  flushRafs();
+  const lastCompStroke2 = compCv._strokes.at(-1);
+  assert.ok(lastCompStroke2.tx > lastCompStroke1.tx + 80, 'composer rim highlight must track horizontal pointer movement while pp-open');
+
+  // 3) Other containers (step-plan, home-panel, overview-panel) ALSO stay responsive while data-ag-pp-open="1"
+  const spStrokesBefore = spCv._strokes.length;
+  dispatchBrowserEvent(stepPlan, 'pointermove', { clientX: 260, clientY: 130 });
+  flushRafs();
+  assert.ok(spCv.width > 0 && spCv.height > 0 && spCv._strokes.length > spStrokesBefore, 'step-plan rim must draw while data-ag-pp-open="1"');
+
+  const homeStrokesBefore = homeCv._strokes.length;
+  const ovStrokesBefore = ovCv._strokes.length;
+  dispatchBrowserEvent(homePanel, 'pointermove', { clientX: 880, clientY: 360 });
+  flushRafs();
+  assert.ok(homeCv.width > 0 && homeCv.height > 0 && homeCv._strokes.length > homeStrokesBefore, 'home-panel rim must draw while data-ag-pp-open="1"');
+  assert.ok(ovCv.width > 0 && ovCv.height > 0 && ovCv._strokes.length > ovStrokesBefore, 'overview mirror rim must draw while data-ag-pp-open="1"');
+
+  // 4) Drawer height transition pushes composer upward -> transitionend(height) immediately invalidates cached rect (no 1500ms wait)
+  composerRect = { left: 120, top: 240, right: 680, bottom: 360, width: 560, height: 120 };
+  dispatchBrowserEvent(pickerRoot, 'transitionend', { propertyName: 'height' });
+  const strokesBeforeShift = compCv._strokes.length;
+  dispatchBrowserEvent(composerCard, 'pointermove', { clientX: 310, clientY: 280 });
+  flushRafs();
+  assert.ok(compCv._strokes.length > strokesBeforeShift, 'composer rim must immediately follow new layout rect after drawer height transitionend');
+  assert.ok(Math.abs(compCv._strokes.at(-1).ty - (280 - 240 + 1)) <= 2, 'composer rim localY must match shifted rect top=240');
+
+  // 5) Real window blur / document hidden / pointerleave still pause & reclaim cleanly
+  env.html.setAttribute('data-ag-cs-win-blur', '1');
+  const strokesBeforeBlur = compCv._strokes.length;
+  dispatchBrowserEvent(composerCard, 'pointermove', { clientX: 350, clientY: 290 });
+  // Note: ui-runtime wakes blur on pointermove; verify direct hidden state reclaims to 0x0 immediately
+  env.doc.hidden = true;
+  dispatchBrowserEvent(env.doc, 'visibilitychange');
+  assert.equal(compCv.width, 0, 'document.hidden must reclaim composer rim canvas to 0x0');
+  assert.equal(spCv.width, 0, 'document.hidden must reclaim step-plan rim canvas to 0x0');
+  assert.equal(homeCv.width, 0, 'document.hidden must reclaim home-panel rim canvas to 0x0');
+  assert.equal(ovCv.width, 0, 'document.hidden must reclaim overview rim canvas to 0x0');
+  assert.equal(rafs.size, 0, 'document.hidden must leave 0 pending rAF');
+
+  // Restore visible, draw once, then pointerleave clears cleanly
+  env.doc.hidden = false;
+  env.html.removeAttribute('data-ag-cs-win-blur');
+  dispatchBrowserEvent(composerCard, 'pointermove', { clientX: 340, clientY: 290 });
+  flushRafs();
+  assert.ok(compCv.width > 0 && compCv._strokes.length > strokesBeforeBlur);
+  const clearedBeforeLeave = compCv._cleared || 0;
+  dispatchBrowserEvent(env.html, 'pointerleave');
+  flushRafs();
+  assert.ok((compCv._cleared || 0) > clearedBeforeLeave, 'pointerleave must clear composer rim canvas');
+
+  env.html.removeAttribute('data-ag-pp-open');
+  vm.runInContext(cdp.REMOVE_EXPRESSION, env.sandbox);
+  assert.equal(winCapListeners.get('pointermove')?.size || 0, 0, 'remove expression must cleanly unbind capture pointermove listener');
+});

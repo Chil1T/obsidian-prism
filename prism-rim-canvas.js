@@ -76,8 +76,7 @@
     };
 
     const isH = () => Boolean(getDoc()?.hidden);
-    const isPpOpen = () => ga(getHtml(), 'data-ag-pp-open') === '1';
-    const isWB = () => isH() || ga(getHtml(), 'data-ag-cs-win-blur') === '1' || isPpOpen();
+    const isWB = () => isH() || ga(getHtml(), 'data-ag-cs-win-blur') === '1';
     const isDragSuspended = () => { const h = getHtml(); return ga(h, 'data-ag-cs-resizing') === '1' || ga(h, 'data-ag-cs-mascot-drag') === '1'; };
     const clrIdle = () => { if (idleT) { isFn(G.clearTimeout) && clearTimeout(idleT); idleT = 0; } };
     const zCv = (c) => { if (c && (c.width || c.height)) c.width = c.height = 0; };
@@ -559,7 +558,7 @@
 
     return {
       onPointerMove, cancelPendingRaf,
-      pauseForOverlay: () => { if (!isDestroyed()) { cancelPendingRaf(); clearAllRimCanvases(isPpOpen()); } },
+      pauseForOverlay: () => { if (!isDestroyed() && isWB()) { cancelPendingRaf(); clearAllRimCanvases(isH()); } },
       teardown, markDirty, invalidateMetrics, getLastPointerPos: () => lastPointerPos,
     };
   }

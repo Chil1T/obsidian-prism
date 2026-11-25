@@ -7825,7 +7825,6 @@ test('v1.0.8-beta perf-dom-bg: 3D hit-layer pointer isolation, event bubble fire
 
   const checkSleepFiles = [
     ['ui-runtime.js', "ga(de(), 'data-ag-pp-open') === '1'"],
-    ['prism-rim-canvas.js', "'data-ag-pp-open'"],
     ['dual-mascot-rig.js', "const PP_OPEN = 'data-ag-pp-open'"],
     ['vendor/wallpaper/wallpaper-client.js', "html.getAttribute('data-ag-pp-open') === '1'"],
     ['conv-aura.js', "const PP_OPEN = 'data-ag-pp-open'"],
@@ -7836,6 +7835,10 @@ test('v1.0.8-beta perf-dom-bg: 3D hit-layer pointer isolation, event bubble fire
     const content = fs.readFileSync(path.join(ROOT_DIR, relFile), 'utf8');
     assert.ok(content.includes(needle), `${relFile} must integrate data-ag-pp-open="1" 0fps sleep guard`);
   }
+  const rimSrc = fs.readFileSync(path.join(ROOT_DIR, 'prism-rim-canvas.js'), 'utf8');
+  assert.equal(rimSrc.includes('data-ag-pp-open'), false, 'prism-rim-canvas.js must keep prism/mirror rims responsive while data-ag-pp-open="1"');
+  const mascotSrc = fs.readFileSync(path.join(ROOT_DIR, 'dual-mascot-rig.js'), 'utf8');
+  assert.ok(mascotSrc.includes('!isVramSleepState() && !isWindowBlurred() && !isPpOpen()'), 'dual-mascot-rig setRimLight must respect !isPpOpen() 0fps sleep guard');
   const styleCssSrc = fs.readFileSync(path.join(ROOT_DIR, 'style.css'), 'utf8');
   assert.equal(/^[^&]*:has\(/m.test(styleCssSrc), false, 'style.css must never introduce top-level :has()');
 
