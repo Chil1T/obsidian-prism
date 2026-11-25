@@ -1007,7 +1007,7 @@ function createMockStudioDom(initialTitle = 'obsidian-prism — Antigravity') {
       this._textContent = '';
     }
     get innerHTML() { return this._innerHTML || ''; }
-    setAttribute(k, v) { this.attrs.set(k, String(v)); if (k === 'id') this.id = String(v); }
+    setAttribute(k, v) { this.attrs.set(k, String(v)); if (k === 'id') this.id = String(v); if (k === 'class') this.className = String(v); }
     getAttribute(k) { return this.attrs.has(k) ? this.attrs.get(k) : null; }
     hasAttribute(k) { return this.attrs.has(k); }
     removeAttribute(k) { this.attrs.delete(k); }
@@ -1069,6 +1069,9 @@ function createMockStudioDom(initialTitle = 'obsidian-prism — Antigravity') {
       return out;
     }
     querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
+    contains(node) { let cur = node; while (cur) { if (cur === this) return true; cur = cur.parentElement; } return false; }
+    focus() { doc.activeElement = this; }
+    click() { this.listeners.get('click')?.({ currentTarget: this, target: this }); }
   }
 
   const doc = {
@@ -1076,7 +1079,9 @@ function createMockStudioDom(initialTitle = 'obsidian-prism — Antigravity') {
     documentElement: null,
     head: null,
     body: null,
+    activeElement: null,
     createElement(tag) { return new MockNode(tag); },
+    createElementNS(ns, tag) { const n = new MockNode(tag); n.namespaceURI = ns; return n; },
     createDocumentFragment() { return new MockNode('#FRAGMENT'); },
     getElementById(id) {
       const find = (n) => {
@@ -4205,6 +4210,402 @@ test('Smoked Obsidian Wave 1: home-studio-panel renders pure createElementNS SVG
     globalThis.document = prevDoc;
     globalThis.localStorage = prevLs;
     globalThis.requestAnimationFrame = prevRaf;
+  }
+});
+
+test('PR #41: Home Studio distinguishes cumulative vs active-only sessions with 8-language toolbar toggle, SVG icon, focus preservation, and localStorage persistence', async () => {
+  const fs = require('node:fs');
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const i18nLocales = require('../i18n-locales.js');
+  const nowSec = Math.floor(Date.now() / 1000);
+  const dKey = usageCore.homeDayKey(new Date(nowSec * 1000));
+  const mkRec = (id, total, calls, extra = {}) => ({
+    cascadeId: id,
+    stepCount: 10,
+    lastModifiedSec: nowSec,
+    gmCount: calls,
+    calls,
+    workspace: 'busy-bohr',
+    days: {
+      [dKey]: {
+        calls,
+        input: total,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total,
+        hours: new Array(24).fill(0),
+        models: { 'Gemini 4': { input: total, output: 0, cacheRead: 0, cacheWrite: 0, total, calls } },
+      },
+    },
+    ...extra,
+  });
+
+  // 1) usage-core: includeArchived + walkRec archived inheritance + self-parent cycle guard
+  const liveMain = mkRec('11111111-1111-4111-8111-111111111111', 1000, 2);
+  const selfRefMain = mkRec('44444444-4444-4444-8444-444444444444', 600, 1, { parentId: '44444444-4444-4444-8444-444444444444', subagent: true });
+  const archMain = mkRec('22222222-2222-4222-8222-222222222222', 3000, 4, { archived: true });
+  const archSub = mkRec('33333333-3333-4333-8333-333333333333', 500, 1, { subagent: true, parentId: archMain.cascadeId });
+
+  const allAgg = usageCore.aggregateUsageRollup([liveMain, selfRefMain, archMain, archSub], 'all', 0.1, 'zh-CN', new Date(nowSec * 1000), { includeArchived: true });
+  assert.equal(allAgg.sessions, 3);
+  assert.equal(allAgg.activeSessions, 2);
+  assert.equal(allAgg.archivedSessions, 1);
+  assert.equal(allAgg.hasArchived, true);
+  assert.equal(allAgg.tokens, 5100);
+  assert.equal(allAgg.calls, 8);
+
+  const actAgg = usageCore.aggregateUsageRollup([liveMain, selfRefMain, archMain, archSub], 'all', 0.1, 'zh-CN', new Date(nowSec * 1000), { includeArchived: false });
+  assert.equal(actAgg.sessions, 2, 'Active-only mode must count only non-archived main sessions (including self-parent healed main)');
+  assert.equal(actAgg.activeSessions, 2);
+  assert.equal(actAgg.archivedSessions, 1, 'archivedSessions count must stay available when active-only is enabled');
+  assert.equal(actAgg.hasArchived, true);
+  assert.equal(actAgg.tokens, 1600, 'Active-only mode must exclude both archived main and its inherited subagent');
+  assert.equal(actAgg.calls, 3);
+
+  const EXPECTED_8 = {
+    'zh-CN': { all: '含归档', active: '仅当前', kA: '当前', kH: '归档' },
+    'zh-TW': { all: '含歸檔', active: '僅當前', kA: '當前', kH: '歸檔' },
+    en: { all: 'All', active: 'Current', kA: 'Active', kH: 'Archived' },
+    ja: { all: '履歴含む', active: '現在のみ', kA: '現在', kH: 'アーカイブ' },
+    ko: { all: '보관 포함', active: '현재만', kA: '현재', kH: '보관' },
+    es: { all: 'Todo', active: 'Actuales', kA: 'Activas', kH: 'Archiv.' },
+    fr: { all: 'Tout', active: 'Actuelles', kA: 'Actives', kH: 'Archiv.' },
+    de: { all: 'Alle', active: 'Aktuell', kA: 'Aktiv', kH: 'Archiv.' },
+  };
+  const NON_CJK = new Set(['en', 'es', 'fr', 'de']);
+  const HAN_RE = /[\u4E00-\u9FFF]/;
+
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevLs = globalThis.localStorage;
+  try {
+    // 2) Panel stamping/clearing of archived flag, SVG toggle, focus restoration, persistence, and 8-language verification
+    for (const [lang, exp] of Object.entries(EXPECTED_8)) {
+      const storeMem = new Map();
+      const key = `test:scope-toggle:rollup:${lang}`;
+      storeMem.set(key, JSON.stringify({
+        [liveMain.cascadeId]: { ...liveMain, archived: true },
+        [archMain.cascadeId]: { ...archMain, archived: false },
+      }));
+      globalThis.localStorage = {
+        getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+        setItem: (k, v) => storeMem.set(k, String(v)),
+        removeItem: (k) => storeMem.delete(k),
+      };
+      const dom = createMockStudioDom('Antigravity');
+      globalThis.document = dom.doc;
+      globalThis.window = {
+        document: dom.doc,
+        __agPrismUsageBridge: {
+          isOnline: () => true,
+          listSummaries: async () => ({
+            ok: true,
+            scopeKey: 'local',
+            summaries: [{ id: liveMain.cascadeId, stepCount: 10, lastModifiedSec: nowSec, workspace: 'busy-bohr' }],
+            records: [
+              { id: liveMain.cascadeId, mode: 'full', record: liveMain },
+              { id: archMain.cascadeId, mode: 'full', archived: true, record: archMain },
+            ],
+          }),
+          fetchBatch: async () => ({ ok: true, records: [] }),
+        },
+      };
+      const uiFromLocales = i18nLocales.getUiStrings(lang);
+      const ctl = homeStudioPanel.createHomeStudioPanelController({
+        usageCore,
+        storageUsageCacheKey: key,
+        isDestroyed: () => false,
+        getHomeLayout: () => 'studio',
+        getLang: () => lang,
+        // Verify STUDIO_FB fallback directly for zh-CN/en/de and i18nLocales uiText for all others
+        uiText: (l) => (lang === 'en' ? {} : i18nLocales.getUiStrings(l)),
+        getDisplayName: () => 'Dev',
+        ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: { [liveMain.cascadeId]: { stepCount: 10, lastModifiedTime: { seconds: nowSec } } } } }) }, svc: {} }),
+        canMountRealCanvas: () => false,
+        setAttrIfChanged: () => {},
+        runGuardedMut: (fn) => fn(),
+      });
+      await ctl.refreshUsageRollup(true);
+      ctl.flushUsageCacheNow();
+      const saved = JSON.parse(storeMem.get(key) || '{}');
+      assert.equal(Boolean(saved[liveMain.cascadeId]?.archived), false, `Live conversation must clear archived flag (${lang})`);
+      assert.equal(saved[archMain.cascadeId]?.archived, true, `Deleted conversation must be stamped archived: true (${lang})`);
+
+      ctl.renderHomePanel(true);
+      const tg1 = dom.doc.querySelector('.ag-cs-home-head-right [data-ag-scope-toggle]');
+      assert.ok(tg1, `Scope toggle must render inside .ag-cs-home-head-right (${lang})`);
+      assert.equal(tg1.getAttribute('aria-pressed'), 'false');
+      assert.equal(tg1.textContent, exp.all, `Cumulative toggle label mismatch for ${lang}`);
+      assert.equal(uiFromLocales.homeScopeAll, exp.all, `i18n homeScopeAll mismatch for ${lang}`);
+      assert.equal(uiFromLocales.homeScopeActive, exp.active, `i18n homeScopeActive mismatch for ${lang}`);
+      assert.equal(uiFromLocales.homeScopeActiveCount, exp.kA, `i18n homeScopeActiveCount mismatch for ${lang}`);
+      assert.equal(uiFromLocales.homeScopeArchivedCount, exp.kH, `i18n homeScopeArchivedCount mismatch for ${lang}`);
+      const svgEl = tg1.querySelector('svg');
+      const pathEl = svgEl?.querySelector('path');
+      assert.equal(svgEl?.namespaceURI, 'http://www.w3.org/2000/svg');
+      assert.equal(svgEl?.getAttribute('aria-hidden'), 'true');
+      assert.equal(svgEl?.getAttribute('focusable'), 'false');
+      assert.equal(pathEl?.getAttribute('d'), 'M7 10h14l-4-4m0 8H3l4 4');
+
+      const sub1 = dom.doc.querySelector('[data-stat="sessions"] .ag-cs-home-stat-sub');
+      assert.equal(sub1?.tagName, 'SPAN', 'Sessions KPI subtitle must be a static <span>');
+      assert.equal(sub1?.textContent, `${exp.kA} 1 · ${exp.kH} 1`, `Sessions breakdown subtitle mismatch for ${lang}`);
+      if (NON_CJK.has(lang)) {
+        assert.equal(HAN_RE.test(tg1.textContent), false, `Toggle text must have zero Han chars in ${lang}`);
+        assert.equal(HAN_RE.test(tg1.getAttribute('aria-label') || ''), false, `Toggle aria-label must have zero Han chars in ${lang}`);
+        assert.equal(HAN_RE.test(sub1.textContent), false, `Sessions subtitle must have zero Han chars in ${lang}`);
+      }
+
+      tg1.focus();
+      tg1.click();
+      const tg2 = dom.doc.querySelector('.ag-cs-home-head-right [data-ag-scope-toggle]');
+      assert.equal(tg2?.getAttribute('aria-pressed'), 'true');
+      assert.equal(tg2?.textContent, exp.active, `Active-only toggle label mismatch for ${lang}`);
+      assert.equal(storeMem.get('ag-prism:homeSessionScope.v1'), 'active');
+      assert.equal(dom.doc.activeElement, tg2, `Focus must be restored across re-render (${lang})`);
+      if (NON_CJK.has(lang)) assert.equal(HAN_RE.test(tg2.textContent), false, `Active toggle text must have zero Han chars in ${lang}`);
+
+      const modelsTab = dom.doc.querySelector('[data-tab="models"]');
+      modelsTab.click();
+      const tgModels = dom.doc.querySelector('.ag-cs-home-head-right [data-ag-scope-toggle]');
+      assert.ok(tgModels, `Scope toggle must stay visible on Models tab (${lang})`);
+      assert.equal(tgModels.getAttribute('aria-pressed'), 'true');
+
+      const quotasTab = dom.doc.querySelector('[data-tab="quotas"]');
+      quotasTab.click();
+      assert.equal(dom.doc.querySelector('.ag-cs-home-head-right [data-ag-scope-toggle]'), null, 'Quotas tab must not render session scope toggle');
+    }
+
+    // 3) Static source redlines & preserved exports
+    assert.equal(typeof homeStudioPanel.hasPersistedTokens, 'function', 'hasPersistedTokens export must remain intact');
+    const hspSrc = fs.readFileSync(require.resolve('../home-studio-panel.js'), 'utf8');
+    assert.equal(hspSrc.includes('⇄'), false, 'Session scope toggle must use inline SVG instead of Unicode ⇄');
+    assert.ok(hspSrc.includes('M7 10h14l-4-4m0 8H3l4 4'));
+    assert.ok(hspSrc.includes("'aria-hidden', 'true'") && hspSrc.includes("'aria-pressed'"));
+    assert.ok(hspSrc.includes(':focus-visible{outline:2px solid var(--_a)'));
+    assert.ok(hspSrc.includes('ag-prism:homeSessionScope.v1'));
+    assert.equal(hspSrc.includes("lang === 'yue'"), false, 'home-studio-panel.js must not reintroduce legacy yue branches');
+  } finally {
+    if (prevWin === undefined) delete globalThis.window;
+    else globalThis.window = prevWin;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevLs === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevLs;
+  }
+});
+
+test('PR #49: Home Studio clarifies local-sessions-only scope across all 8 languages without crowding Sessions/Tokens subtitles', async () => {
+  const i18nLocales = require('../i18n-locales.js');
+  const homeStudioPanel = require('../home-studio-panel.js');
+  const prevWin = globalThis.window;
+  const prevDoc = globalThis.document;
+  const prevStorage = globalThis.localStorage;
+
+  const EXPECTED_LOCAL_8 = {
+    'zh-CN': ['仅本地', '仅统计本机已保存会话（不含云端）'],
+    'zh-TW': ['僅本機', '僅統計本機已儲存工作階段（不含雲端）'],
+    en: ['Local only', 'Counts saved local sessions only (excludes cloud)'],
+    ja: ['ローカルのみ', 'ローカル保存済みセッションのみ集計（クラウド除く）'],
+    ko: ['로컬만', '로컬 저장 세션만 집계 (클라우드 제외)'],
+    es: ['Solo local', 'Solo sesiones locales guardadas (sin nube)'],
+    fr: ['Local', 'Sessions locales enregistrées uniquement (hors cloud)'],
+    de: ['Nur lokal', 'Nur lokal gespeicherte Sitzungen (ohne Cloud)'],
+  };
+  const NON_CJK = new Set(['en', 'es', 'fr', 'de']);
+  const HAN_RE = /[\u4E00-\u9FFF]/;
+
+  const sec = 1763400900;
+  const dKey = usageCore.homeDayKey(new Date(sec * 1000));
+  const storeMem = new Map();
+  globalThis.localStorage = {
+    getItem: (k) => (storeMem.has(k) ? storeMem.get(k) : null),
+    setItem: (k, v) => { storeMem.set(k, String(v)); },
+    removeItem: (k) => { storeMem.delete(k); },
+  };
+
+  try {
+    const runScenario = async (lang, withSubagent, withArchived = false) => {
+      const [expTag, expNote] = EXPECTED_LOCAL_8[lang];
+      const ui = i18nLocales.getUiStrings(lang);
+      assert.equal(ui.homeLocalOnlyTag, expTag, `i18n homeLocalOnlyTag mismatch for ${lang}`);
+      assert.equal(ui.homeLocalScopeNote, expNote, `i18n homeLocalScopeNote mismatch for ${lang}`);
+      const dom = createMockStudioDom('obsidian-prism — Antigravity');
+      globalThis.document = dom.doc;
+      globalThis.window = {
+        document: dom.doc,
+        location: { href: 'vscode-file://vscode-app/workbench.html' },
+        __agPrismUsageBridge: {
+          isOnline: () => true,
+          listSummaries: async () => ({
+            ok: true,
+            scopeKey: 'local',
+            summaries: withSubagent
+              ? [
+                  { id: 'main-1', stepCount: 4, lastModifiedSec: sec, workspace: 'proj' },
+                  { id: 'sub-1', stepCount: 2, lastModifiedSec: sec, subagent: true, parentId: 'main-1', workspace: 'proj' },
+                ]
+              : [{ id: 'main-1', stepCount: 4, lastModifiedSec: sec, workspace: 'proj' }],
+            records: withArchived
+              ? [{
+                  id: 'arch-1',
+                  mode: 'full',
+                  archived: true,
+                  record: {
+                    cascadeId: 'arch-1',
+                    stepCount: 3,
+                    lastModifiedSec: sec - 60,
+                    gmCount: 1,
+                    subagent: false,
+                    workspace: 'proj',
+                    parentId: '',
+                    calls: 1,
+                    days: { [dKey]: { calls: 1, input: 1000, output: 500, cacheRead: 0, cacheWrite: 0, total: 1500, hours: new Array(24).fill(0), models: { 'Gemini 4 Carbon': { input: 1000, output: 500, cacheRead: 0, cacheWrite: 0, total: 1500, calls: 1 } } } },
+                  },
+                }]
+              : [],
+          }),
+          fetchBatch: async (items) => ({
+            ok: true,
+            scopeKey: 'local',
+            records: items.map((it) => ({
+              id: it.id,
+              mode: 'full',
+              record: {
+                cascadeId: it.id,
+                stepCount: it.stepCount,
+                lastModifiedSec: it.lastModifiedSec,
+                gmCount: 1,
+                subagent: !!it.subagent,
+                workspace: 'proj',
+                parentId: it.parentId || '',
+                calls: 2,
+                days: {
+                  [dKey]: {
+                    calls: 2,
+                    input: 4000,
+                    output: 1000,
+                    cacheRead: 5000,
+                    cacheWrite: 0,
+                    total: 10000,
+                    hours: new Array(24).fill(0),
+                    models: { 'Gemini 4 Carbon': { input: 4000, output: 1000, cacheRead: 5000, cacheWrite: 0, total: 10000, calls: 2 } },
+                  },
+                },
+              },
+            })),
+          }),
+        },
+      };
+
+      const ctl = homeStudioPanel.createHomeStudioPanelController({
+        usageCore,
+        storageUsageCacheKey: `test:local-note:${lang}:${withSubagent ? 'sub' : 'main'}:${withArchived ? 'arch' : 'noarch'}`,
+        isDestroyed: () => false,
+        getHomeLayout: () => 'studio',
+        getLang: () => lang,
+        uiText: (l) => i18nLocales.getUiStrings(l),
+        getDisplayName: () => 'Dev',
+        ensureHooks: () => ({ store: { getState: () => ({ trajectorySummaries: { summaries: {} } }) }, svc: {} }),
+        canMountRealCanvas: () => true,
+        setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+        runGuardedMut: (fn) => fn(),
+      });
+
+      await ctl.refreshUsageRollup(true);
+      assert.equal(dom.doc.querySelector('.ag-cs-home-scope-badge'), null, 'Local window must not render remote scope badge');
+
+      const tokSub = dom.doc.querySelector('[data-stat="tokens"] .ag-cs-home-stat-sub');
+      const tokVal = dom.doc.querySelector('[data-stat="tokens"] .ag-cs-home-stat-value');
+      assert.ok(tokSub && tokVal, `Tokens stat subtext and value must render (${lang})`);
+      assert.ok(tokVal.title.includes(expNote), `Tokens tooltip must include localized local-scope note (${lang})`);
+      if (withSubagent) {
+        const expSubPct = withArchived ? 47 : 50;
+        assert.equal(tokSub.textContent, ui.swarmSplitSub(100 - expSubPct, expSubPct), 'Tokens subtext must preserve swarm split when subagent tokens exist');
+      } else {
+        assert.equal(tokSub.textContent, expTag, `Tokens subtext must show local-only tag (${lang})`);
+      }
+
+      const cacheSub = dom.doc.querySelector('[data-stat="cache"] .ag-cs-home-stat-sub');
+      const cacheVal = dom.doc.querySelector('[data-stat="cache"] .ag-cs-home-stat-value');
+      assert.ok(cacheSub && cacheVal);
+      assert.equal(cacheSub.textContent, expTag);
+      assert.ok(cacheVal.title.includes(expNote));
+
+      if (withArchived) {
+        const sesSub = dom.doc.querySelector('[data-stat="sessions"] .ag-cs-home-stat-sub');
+        assert.ok(sesSub && !sesSub.textContent.includes(expTag), 'Sessions archived breakdown must remain cleanly separated from local-only tag');
+      }
+
+      const heatEl = dom.doc.querySelector('.ag-cs-home-heat');
+      assert.ok(heatEl);
+      assert.equal(heatEl.getAttribute('data-local-only'), '1');
+      assert.equal(heatEl.getAttribute('aria-label'), expNote);
+      assert.equal(heatEl.title, '', 'Heatmap must not set native title to avoid overlapping hover tips');
+
+      const noteOverview = dom.doc.querySelector('.ag-cs-home-local-note');
+      assert.ok(noteOverview);
+      assert.equal(noteOverview.getAttribute('data-local-scope-note'), '1');
+      assert.equal(noteOverview.textContent, expNote);
+      if (NON_CJK.has(lang)) {
+        assert.equal(HAN_RE.test(cacheSub.textContent), false, `Local tag must have zero Han chars in ${lang}`);
+        assert.equal(HAN_RE.test(noteOverview.textContent), false, `Local scope note must have zero Han chars in ${lang}`);
+      }
+
+      const clickTab = (tabId) => {
+        const btn = dom.doc.querySelectorAll('.ag-cs-home-tab').find((b) => b.getAttribute('data-tab') === tabId);
+        assert.ok(btn);
+        btn.click();
+      };
+
+      clickTab('models');
+      const noteModels = dom.doc.querySelector('.ag-cs-home-local-note');
+      assert.ok(noteModels, 'Models tab with data must render local-scope note');
+      assert.equal(noteModels.textContent, expNote);
+
+      clickTab('quotas');
+      assert.equal(dom.doc.querySelector('.ag-cs-home-local-note'), null, 'Quotas tab must not render local-scope note');
+    };
+
+    for (const lang of Object.keys(EXPECTED_LOCAL_8)) {
+      await runScenario(lang, false, false);
+    }
+    await runScenario('en', true, false);
+    await runScenario('en', true, true);
+    await runScenario('zh-CN', true, true);
+
+    // Empty Models tab also displays local-scope note
+    const emptyDom = createMockStudioDom('obsidian-prism — Antigravity');
+    globalThis.document = emptyDom.doc;
+    globalThis.window = { document: emptyDom.doc, location: { href: 'vscode-file://vscode-app/workbench.html' } };
+    const emptyCtl = homeStudioPanel.createHomeStudioPanelController({
+      usageCore,
+      storageUsageCacheKey: 'test:local-note:empty',
+      isDestroyed: () => false,
+      getHomeLayout: () => 'studio',
+      getLang: () => 'de',
+      uiText: () => ({}),
+      getDisplayName: () => 'Dev',
+      ensureHooks: () => null,
+      canMountRealCanvas: () => false,
+      setAttrIfChanged: (el, k, v) => el?.setAttribute?.(k, v),
+      runGuardedMut: (fn) => fn(),
+    });
+    emptyCtl.renderHomePanel(true);
+    const modelsTab = emptyDom.doc.querySelectorAll('.ag-cs-home-tab').find((b) => b.getAttribute('data-tab') === 'models');
+    modelsTab.click();
+    assert.ok(emptyDom.doc.querySelector('.ag-cs-home-models-empty'));
+    const emptyNote = emptyDom.doc.querySelector('.ag-cs-home-local-note');
+    assert.ok(emptyNote, 'Empty Models tab must still render local-scope note');
+    assert.equal(emptyNote.textContent, EXPECTED_LOCAL_8.de[1]);
+  } finally {
+    if (prevWin === undefined) delete globalThis.window;
+    else globalThis.window = prevWin;
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+    if (prevStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevStorage;
   }
 });
 

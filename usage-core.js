@@ -37,10 +37,10 @@
 
   const mkLbls = (a) => Object.fromEntries(L8.map((k, i) => [k, a[i]]));
   const HOME_RANGES = [
-    ['all', 0, '全部', 'All', ['全部', '全部', 'All', '全期間', '전체', 'Todo', 'Tout', 'Alle']],
-    ['30d', 30, '30 天', '30d', ['30 天', '30 天', '30d', '30日間', '30일', '30d', '30j', '30T']],
-    ['7d', 7, '7 天', '7d', ['7 天', '7 天', '7d', '7日間', '7일', '7d', '7j', '7T']],
-  ].map(([id, days, labelZh, labelEn, a]) => ({ id, days, labelZh, labelEn, labels: mkLbls(a) }));
+    ['all', 0, ['全部', '全部', 'All', '全期間', '전체', 'Todo', 'Tout', 'Alle']],
+    ['30d', 30, ['30 天', '30 天', '30d', '30日間', '30일', '30d', '30j', '30T']],
+    ['7d', 7, ['7 天', '7 天', '7d', '7日間', '7일', '7d', '7j', '7T']],
+  ].map(([id, days, a]) => ({ id, days, labelZh: a[0], labelEn: a[2], labels: mkLbls(a) }));
 
   const wrapTitle = (s, l, r) => (s[0] === l ? s : l + s + r);
   const HOME_BOOKS = `tao|7607|道德经|道德經|老子（道徳経）|Tao Te Ching
@@ -163,20 +163,19 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
 
   function formatHomeHour(hour, langOrZh) {
     const h = ((Math.floor(toNum(hour)) % 24) + 24) % 24;
-    const h12 = h % 12 === 0 ? 12 : h % 12;
+    const h12 = h % 12 || 12;
+    const pm = h >= 12 ? 1 : 0;
     const l = resolveLang(langOrZh);
-    if (l === 'zh-CN') return (h < 12 ? '上午 ' : '下午 ') + h12 + ' 点';
-    if (l === 'zh-TW') return (h < 12 ? '上午 ' : '下午 ') + h12 + ' 點';
-    if (l === 'ja') return (h < 12 ? '午前 ' : '午後 ') + h12 + ' 時';
-    if (l === 'ko') return (h < 12 ? '오전 ' : '오후 ') + h12 + '시';
     if (l === 'fr') return h + 'h';
     if (l === 'de') return h + ' Uhr';
     if (l === 'es') return h + ':00';
-    return h12 + (h < 12 ? ' AM' : ' PM');
+    if (l === 'en') return h12 + (pm ? ' PM' : ' AM');
+    const [a, b, s] = pick8(['上午 |下午 | 点', '上午 |下午 | 點', '', '午前 |午後 | 時', '오전 |오후 |시'], l).split('|');
+    return (pm ? b : a) + h12 + s;
   }
 
   function homeShortDateFormat(langOrZh) {
-    return new Intl.DateTimeFormat(pick8(['zh-CN', 'zh-TW', 'en-US', 'ja-JP', 'ko-KR', 'es-ES', 'fr-FR', 'de-DE'], langOrZh), { month: 'short', day: 'numeric' });
+    return new Intl.DateTimeFormat(pick8('zh-CN,zh-TW,en-US,ja-JP,ko-KR,es-ES,fr-FR,de-DE'.split(','), langOrZh), { month: 'short', day: 'numeric' });
   }
 
   function homeShortDate(format, day) {
@@ -199,71 +198,49 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
   }
 
   function cleanModelName(val) {
-    const direct = val?.modelDisplayName || val?.responseModel || val?.modelName;
-    if (direct && String(direct).trim()) return String(direct).trim();
-    const m = val?.model;
-    if (typeof m === 'string' && m.trim()) {
-      return /^\d+$/.test(m.trim()) ? 'Model #' + m.trim() : m.trim();
-    }
-    if (m) return 'Model #' + m;
-    return 'unknown';
+    const d = String(val?.modelDisplayName || val?.responseModel || val?.modelName || '').trim();
+    if (d) return d;
+    const m = val?.model, ms = typeof m === 'string' ? m.trim() : '';
+    return ms ? (/^\d+$/.test(ms) ? 'Model #' + ms : ms) : m ? 'Model #' + m : 'unknown';
   }
 
   function eqId(a, b) { return !!(a && b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase()); }
 
+  const pickS = (...a) => String(a.find(Boolean) || '').trim();
   function isSubagentSummary(summary, selfId) {
     if (!summary || typeof summary !== 'object') return false;
-    const s = String(selfId || summary.cascadeId || summary.id || '').trim();
-    const m = summary.trajectoryMetadata || {};
-    const p = String(m.parentConversationId || summary.parentConversationId || summary.parentId || '').trim();
-    const r = String(m.rootConversationId || summary.rootConversationId || summary.rootId || '').trim();
-    if ((p && !eqId(p, s)) || (s && r && !eqId(r, s)) || toNum(m.nestingDepth) > 0) return true;
-    return summary.subagent === true && !eqId(p, s) && !eqId(r, s);
+    const s = pickS(selfId, summary.cascadeId, summary.id), m = summary.trajectoryMetadata || {};
+    const p = pickS(m.parentConversationId, summary.parentConversationId, summary.parentId);
+    const r = pickS(m.rootConversationId, summary.rootConversationId, summary.rootId);
+    return !!((p && !eqId(p, s)) || (s && r && !eqId(r, s)) || toNum(m.nestingDepth) > 0 || (summary.subagent === true && !eqId(p, s) && !eqId(r, s)));
   }
 
   function normalizeWorkspaceLabel(rawUriOrPath) {
-    const s = String(rawUriOrPath || '').trim();
+    let s = String(rawUriOrPath || '').trim();
     if (!s) return '';
-    try {
-      const decoded = decodeURIComponent(s.replace(/^file:\/\//i, '')).replace(/[\\/]+$/, '');
-      const segs = decoded.split(/[\\/]/).filter(Boolean);
-      return segs.length ? segs[segs.length - 1] : '';
-    } catch {
-      const segs = s.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean);
-      return segs.length ? segs[segs.length - 1] : '';
-    }
+    try { s = decodeURIComponent(s.replace(/^file:\/\//i, '')); } catch {}
+    return s.replace(/[\\/]+$/, '').split(/[\\/]/).filter(Boolean).pop() || '';
   }
 
   function extractWorkspaceId(summaryObj, trajObj) {
-    if (summaryObj && typeof summaryObj.workspace === 'string' && summaryObj.workspace.trim()) {
-      return normalizeWorkspaceLabel(summaryObj.workspace);
-    }
-    const wsList =
-      summaryObj?.workspaces ||
-      summaryObj?.trajectoryMetadata?.workspaces ||
-      trajObj?.metadata?.workspaces ||
-      [];
-    const first = Array.isArray(wsList) && wsList.length ? wsList[0] : null;
-    const candidate =
-      first?.workspaceFolderAbsoluteUri ||
-      first?.gitRootAbsoluteUri ||
-      first?.uri ||
-      first?.path ||
-      summaryObj?.workspaceUri ||
-      summaryObj?.workspacePath ||
-      summaryObj?.trajectoryMetadata?.workspaceUri ||
-      '';
-    return normalizeWorkspaceLabel(candidate);
+    if (typeof summaryObj?.workspace === 'string' && summaryObj.workspace.trim()) return normalizeWorkspaceLabel(summaryObj.workspace);
+    const tm = summaryObj?.trajectoryMetadata;
+    const ws = summaryObj?.workspaces || tm?.workspaces || trajObj?.metadata?.workspaces;
+    const f = Array.isArray(ws) ? ws[0] : null;
+    return normalizeWorkspaceLabel(f?.workspaceFolderAbsoluteUri || f?.gitRootAbsoluteUri || f?.uri || f?.path || summaryObj?.workspaceUri || summaryObj?.workspacePath || tm?.workspaceUri || '');
   }
 
   function extractParentConversationId(summaryObj, trajObj, selfId) {
-    const s = String(selfId || summaryObj?.cascadeId || summaryObj?.id || trajObj?.cascadeId || '').trim();
-    const tm = summaryObj?.trajectoryMetadata;
-    const p = String(tm?.parentConversationId || summaryObj?.parentConversationId || summaryObj?.parentId || trajObj?.metadata?.parentConversationId || '').trim();
+    const s = pickS(selfId, summaryObj?.cascadeId, summaryObj?.id, trajObj?.cascadeId), tm = summaryObj?.trajectoryMetadata;
+    const p = pickS(tm?.parentConversationId, summaryObj?.parentConversationId, summaryObj?.parentId, trajObj?.metadata?.parentConversationId);
     if (p) return eqId(p, s) ? '' : p;
-    const r = String(tm?.rootConversationId || summaryObj?.rootConversationId || summaryObj?.rootId || '').trim();
+    const r = pickS(tm?.rootConversationId, summaryObj?.rootConversationId, summaryObj?.rootId);
     return r && s && !eqId(r, s) ? r : '';
   }
+
+  const M_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'total', 'calls'];
+  const mkMod = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, calls: 0 });
+  const mkDay = () => ({ calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, hours: new Array(24).fill(0), models: {} });
 
   // Extract a compact, JSON-serializable per-conversation usage record for caching.
   function analyzeTrajectoryForUsage(trajObj, summaryObj, cascadeId) {
@@ -288,33 +265,24 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
       if (!val) continue;
       const u = val.usage || val.retryInfos?.[val.retryInfos.length - 1]?.usage || gmList[i]?.usage;
       if (!u) continue;
-      const input = toNum(u.inputTokens);
-      const cacheRead = toNum(u.cacheReadTokens);
-      const cacheWrite = toNum(u.cacheWriteTokens);
-      const output = toNum(u.outputTokens);
+      const [input, cacheRead, cacheWrite, output] = [u.inputTokens, u.cacheReadTokens, u.cacheWriteTokens, u.outputTokens].map(toNum);
       const total = input + cacheRead + cacheWrite + output;
-      if (total <= 0 && input === 0 && output === 0) continue;
+      if (total <= 0 && !input && !output) continue;
 
       calls += 1;
       const sIndices = Array.isArray(gmList[i].stepIndices) ? gmList[i].stepIndices : [];
       let ts = 0;
-      for (let k = 0; k < sIndices.length; k++) {
-        const hit = stepTime.get(numOr(sIndices[k]));
-        if (hit) {
-          ts = hit;
-          break;
-        }
+      for (const idx of sIndices) {
+        const hit = stepTime.get(numOr(idx));
+        if (hit) { ts = hit; break; }
       }
       if (!ts) {
-        const chatCreatedMs = tsToMs(val?.chatStartMetadata?.createdAt);
-        if (chatCreatedMs > 0) {
-          ts = chatCreatedMs;
-        } else if (steps.length === 0 && createdMs > 0 && lastModMs > createdMs && sIndices.length > 0) {
-          const ratio = Math.min(1, Math.max(0, toNum(sIndices[0]) / totalStepSpan));
-          ts = Math.round(createdMs + ratio * (lastModMs - createdMs));
-        } else {
-          ts = fallbackMs;
-        }
+        const chatMs = tsToMs(val?.chatStartMetadata?.createdAt);
+        ts = chatMs > 0
+          ? chatMs
+          : !steps.length && createdMs > 0 && lastModMs > createdMs && sIndices.length > 0
+          ? Math.round(createdMs + Math.min(1, Math.max(0, toNum(sIndices[0]) / totalStepSpan)) * (lastModMs - createdMs))
+          : fallbackMs;
       }
       if (!ts) continue;
 
@@ -323,39 +291,10 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
       const hour = d.getHours();
       const modelId = cleanModelName(val);
 
-      let day = days[dayKey];
-      if (!day) {
-        day = {
-          calls: 0,
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-          hours: new Array(24).fill(0),
-          models: {},
-        };
-        days[dayKey] = day;
-      }
-      day.calls += 1;
-      day.input += input;
-      day.output += output;
-      day.cacheRead += cacheRead;
-      day.cacheWrite += cacheWrite;
-      day.total += total;
+      const day = days[dayKey] || (days[dayKey] = mkDay());
+      const mod = day.models[modelId] || (day.models[modelId] = mkMod());
+      for (const o of [day, mod]) { o.calls += 1; o.input += input; o.output += output; o.cacheRead += cacheRead; o.cacheWrite += cacheWrite; o.total += total; }
       day.hours[hour] = (day.hours[hour] || 0) + 1;
-
-      let mod = day.models[modelId];
-      if (!mod) {
-        mod = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, calls: 0 };
-        day.models[modelId] = mod;
-      }
-      mod.input += input;
-      mod.output += output;
-      mod.cacheRead += cacheRead;
-      mod.cacheWrite += cacheWrite;
-      mod.total += total;
-      mod.calls += 1;
     }
 
     const lastModifiedSec =
@@ -381,64 +320,19 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
   function mergeUsageRecordDelta(baseRec, deltaRec, nextMeta = {}) {
     if (!baseRec || !baseRec.days) return deltaRec;
     const days = {};
-    for (const [dk, d] of Object.entries(baseRec.days)) {
-      if (!d) continue;
-      const models = {};
-      for (const [mk, mv] of Object.entries(d.models || {})) {
-        if (mv) models[mk] = { input: toNum(mv.input), output: toNum(mv.output), cacheRead: toNum(mv.cacheRead), cacheWrite: toNum(mv.cacheWrite), total: toNum(mv.total), calls: toNum(mv.calls) };
-      }
-      const hours = new Array(24).fill(0);
-      if (Array.isArray(d.hours)) for (let h = 0; h < 24; h++) hours[h] = toNum(d.hours[h]);
-      days[dk] = {
-        calls: toNum(d.calls),
-        input: toNum(d.input),
-        output: toNum(d.output),
-        cacheRead: toNum(d.cacheRead),
-        cacheWrite: toNum(d.cacheWrite),
-        total: toNum(d.total),
-        hours,
-        models,
-      };
-    }
-    if (deltaRec && deltaRec.days) {
-      for (const [dk, dd] of Object.entries(deltaRec.days)) {
+    for (const src of [baseRec.days, deltaRec?.days]) {
+      if (!src) continue;
+      for (const [dk, dd] of Object.entries(src)) {
         if (!dd) continue;
-        let dst = days[dk];
-        if (!dst) {
-          dst = {
-            calls: 0,
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-            hours: new Array(24).fill(0),
-            models: {},
-          };
-          days[dk] = dst;
-        }
-        dst.calls += toNum(dd.calls);
-        dst.input += toNum(dd.input);
-        dst.output += toNum(dd.output);
-        dst.cacheRead += toNum(dd.cacheRead);
-        dst.cacheWrite += toNum(dd.cacheWrite);
-        dst.total += toNum(dd.total);
+        const dst = days[dk] || (days[dk] = mkDay());
+        for (const k of M_KEYS) dst[k] += toNum(dd[k]);
         if (Array.isArray(dd.hours)) {
           for (let h = 0; h < 24; h++) dst.hours[h] = (dst.hours[h] || 0) + toNum(dd.hours[h]);
         }
         for (const [mk, mv] of Object.entries(dd.models || {})) {
           if (!mv) continue;
-          let dm = dst.models[mk];
-          if (!dm) {
-            dm = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, calls: 0 };
-            dst.models[mk] = dm;
-          }
-          dm.input += toNum(mv.input);
-          dm.output += toNum(mv.output);
-          dm.cacheRead += toNum(mv.cacheRead);
-          dm.cacheWrite += toNum(mv.cacheWrite);
-          dm.total += toNum(mv.total);
-          dm.calls += toNum(mv.calls);
+          const dm = dst.models[mk] || (dst.models[mk] = mkMod());
+          for (const k of M_KEYS) dm[k] += toNum(mv[k]);
         }
       }
     }
@@ -474,9 +368,8 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
       if (tokens > peak) peak = tokens;
       cells.push({ date: key, tokens, level: 0 });
     }
-    for (let c = 0; c < cells.length; c++) {
-      if (cells[c].tokens <= 0 || peak <= 0) continue;
-      cells[c].level = Math.max(1, Math.min(HOME_HEAT_STEPS, Math.ceil((cells[c].tokens / peak) * HOME_HEAT_STEPS)));
+    for (const cell of cells) {
+      if (cell.tokens > 0 && peak > 0) cell.level = Math.max(1, Math.min(HOME_HEAT_STEPS, Math.ceil((cell.tokens / peak) * HOME_HEAT_STEPS)));
     }
     return { cells, peak };
   }
@@ -486,25 +379,17 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
     const rangeObj = HOME_RANGES.find((r) => r.id === rangeId) || HOME_RANGES[0];
     const start = homeRangeStart(rangeObj.days, nowDate);
     const inRange = (dateStr) => start === null || dateStr >= start;
-    const workspaceFilter =
-      options && typeof options.workspace === 'string' && options.workspace && options.workspace !== 'all'
-        ? options.workspace
-        : '';
+    const workspaceFilter = typeof options?.workspace === 'string' && options.workspace && options.workspace !== 'all' ? options.workspace : '';
+    const incArch = options?.includeArchived !== false;
 
     const byId = new Map();
-    for (let i = 0; i < list.length; i++) {
-      const r = list[i];
-      if (r && r.cascadeId) byId.set(r.cascadeId, r);
-    }
-    const resolveRecWorkspace = (rec) => {
-      if (!rec) return '';
-      if (rec.workspace) return String(rec.workspace);
-      let cur = rec;
-      for (let hop = 0; hop < 4 && cur && cur.parentId && !eqId(cur.parentId, cur.cascadeId); hop++) {
-        const p = byId.get(cur.parentId);
-        if (!p) break;
-        if (p.workspace) return String(p.workspace);
-        cur = p;
+    for (const r of list) if (r?.cascadeId) byId.set(r.cascadeId, r);
+    const walkRec = (rec, fn) => {
+      for (let c = rec, h = 0; c && h < 5; h++) {
+        const v = fn(c);
+        if (v) return v;
+        if (!c.parentId || eqId(c.parentId, c.cascadeId)) break;
+        c = byId.get(c.parentId);
       }
       return '';
     };
@@ -515,7 +400,10 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
     let totalCalls = 0;
     let totalInput = 0;
     let totalCacheRead = 0;
+    let hasArch = false;
     const sessionSet = new Set();
+    const actSet = new Set();
+    const archSet = new Set();
     const subagentSessionSet = new Set();
     const activeDaySet = new Set();
     const hourCounts = new Array(24).fill(0);
@@ -527,55 +415,42 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
     for (let i = 0; i < list.length; i++) {
       const rec = list[i];
       if (!rec || !rec.days) continue;
+      const rid = rec.cascadeId || String(i);
       const isSub = !!(rec.subagent && !eqId(rec.parentId, rec.cascadeId) && (rec.parentId || !eqId(rec.rootId || rec.rootConversationId, rec.cascadeId)));
-      const wsId = resolveRecWorkspace(rec);
+      const isArch = Boolean(walkRec(rec, (c) => c.archived));
+      if (!isSub && isArch) hasArch = true;
+      const wsId = String(walkRec(rec, (c) => c.workspace) || '');
       const dayKeys = Object.keys(rec.days);
+      const matchWs = !workspaceFilter || wsId === workspaceFilter;
 
-      // Accumulate workspace index across all records in range regardless of active workspaceFilter
-      if (wsId) {
-        let wsEntry = workspaceMap[wsId];
-        if (!wsEntry) {
-          wsEntry = { id: wsId, tokens: 0, sessionsSet: new Set() };
-          workspaceMap[wsId] = wsEntry;
-        }
-        for (let d = 0; d < dayKeys.length; d++) {
-          const dk = dayKeys[d];
-          if (!inRange(dk)) continue;
-          const day = rec.days[dk];
-          if (!day) continue;
-          const dt = toNum(day.total);
-          wsEntry.tokens += dt;
-          if (!isSub && (dt > 0 || toNum(day.calls) > 0)) {
-            wsEntry.sessionsSet.add(rec.cascadeId || String(i));
-          }
-        }
-      }
+      if (!isSub && isArch && matchWs && dayKeys.some((dk) => inRange(dk) && (toNum(rec.days[dk]?.total) > 0 || toNum(rec.days[dk]?.calls) > 0))) archSet.add(rid);
+      if (!incArch && isArch) continue;
 
-      if (workspaceFilter && wsId !== workspaceFilter) continue;
-
+      const wsEntry = wsId ? workspaceMap[wsId] || (workspaceMap[wsId] = { id: wsId, tokens: 0, sessionsSet: new Set() }) : null;
       let countedSessionInRange = false;
-      for (let d = 0; d < dayKeys.length; d++) {
-        const dk = dayKeys[d];
+      for (const dk of dayKeys) {
         const day = rec.days[dk];
         if (!day) continue;
         const dTotal = toNum(day.total);
-        allDayTotals[dk] = (allDayTotals[dk] || 0) + dTotal;
-
-        if (day.models) {
-          if (!allDayModels[dk]) allDayModels[dk] = {};
-          for (const [mId, mData] of Object.entries(day.models)) {
-            allDayModels[dk][mId] = (allDayModels[dk][mId] || 0) + toNum(mData.total);
-          }
-        }
-
-        if (!inRange(dk)) continue;
         const dCalls = toNum(day.calls);
+        const okRange = inRange(dk);
+        if (wsEntry && okRange) {
+          wsEntry.tokens += dTotal;
+          if (!isSub && (dTotal > 0 || dCalls > 0)) wsEntry.sessionsSet.add(rid);
+        }
+        if (!matchWs) continue;
+        allDayTotals[dk] = (allDayTotals[dk] || 0) + dTotal;
+        if (day.models) {
+          const dm = allDayModels[dk] || (allDayModels[dk] = {});
+          for (const [mId, mData] of Object.entries(day.models)) dm[mId] = (dm[mId] || 0) + toNum(mData.total);
+        }
+        if (!okRange) continue;
         if (dTotal > 0 || dCalls > 0) {
           activeDaySet.add(dk);
-          if (isSub) {
-            subagentSessionSet.add(rec.cascadeId || String(i));
-          } else if (!countedSessionInRange) {
-            sessionSet.add(rec.cascadeId || String(i));
+          if (isSub) subagentSessionSet.add(rid);
+          else if (!countedSessionInRange) {
+            sessionSet.add(rid);
+            if (!isArch) actSet.add(rid);
             countedSessionInRange = true;
           }
         }
@@ -584,41 +459,17 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
         else mainTokens += dTotal;
         totalCalls += dCalls;
         const dCacheRead = toNum(day.cacheRead);
-        const dInp = toNum(day.input) + dCacheRead + toNum(day.cacheWrite);
-        totalInput += dInp;
+        totalInput += toNum(day.input) + dCacheRead + toNum(day.cacheWrite);
         totalCacheRead += dCacheRead;
-
-        if (Array.isArray(day.hours)) {
-          for (let h = 0; h < 24; h++) {
-            hourCounts[h] += toNum(day.hours[h]);
-          }
-        }
+        if (Array.isArray(day.hours)) for (let h = 0; h < 24; h++) hourCounts[h] += toNum(day.hours[h]);
         if (day.models) {
           for (const [mId, mData] of Object.entries(day.models)) {
-            let entry = modelTotals[mId];
-            if (!entry) {
-              entry = {
-                id: mId,
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-                tokens: 0,
-                subagentTokens: 0,
-                calls: 0,
-                sessionsSet: new Set(),
-              };
-              modelTotals[mId] = entry;
-            }
+            const entry = modelTotals[mId] || (modelTotals[mId] = { id: mId, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, subagentTokens: 0, calls: 0, sessionsSet: new Set() });
             const mTok = toNum(mData.total);
-            entry.input += toNum(mData.input);
-            entry.output += toNum(mData.output);
-            entry.cacheRead += toNum(mData.cacheRead);
-            entry.cacheWrite += toNum(mData.cacheWrite);
+            for (const k of ['input', 'output', 'cacheRead', 'cacheWrite', 'calls']) entry[k] += toNum(mData[k]);
             entry.tokens += mTok;
             if (isSub) entry.subagentTokens += mTok;
-            entry.calls += toNum(mData.calls);
-            if (!isSub) entry.sessionsSet.add(rec.cascadeId || String(i));
+            if (!isSub) entry.sessionsSet.add(rid);
           }
         }
       }
@@ -633,20 +484,9 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
     const peakHour = hourSum > 0 ? formatHomeHour(bestHour, zh) : null;
 
     const models = Object.values(modelTotals)
-      .map((m) => {
+      .map(({ sessionsSet, ...m }) => {
         const mInp = m.input + m.cacheRead + m.cacheWrite;
-        return {
-          id: m.id,
-          input: m.input,
-          output: m.output,
-          cacheRead: m.cacheRead,
-          cacheWrite: m.cacheWrite,
-          tokens: m.tokens,
-          subagentTokens: m.subagentTokens,
-          cacheHitRate: mInp > 0 ? m.cacheRead / mInp : null,
-          calls: m.calls,
-          sessions: m.sessionsSet.size,
-        };
+        return { ...m, cacheHitRate: mInp > 0 ? m.cacheRead / mInp : null, sessions: sessionsSet.size };
       })
       .sort((a, b) => b.tokens - a.tokens || b.calls - a.calls || a.id.localeCompare(b.id));
 
@@ -692,6 +532,9 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
 
     return {
       sessions: sessionSet.size,
+      activeSessions: actSet.size,
+      archivedSessions: archSet.size,
+      hasArchived: hasArch,
       subagentSessions: subagentSessionSet.size,
       calls: totalCalls,
       tokens: totalTokens,
@@ -723,35 +566,23 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
     return 'other';
   }
 
+  const Q_KIND_LBL = { 'gemini-argon': 'Gemini (Argon)', claude: 'Claude / GPT', gemini: 'Gemini' };
+  const Q_POOL_FB = '模型配额|模型配額|Quota Pool|クォータ|할당량 풀|Cuota|Quota|Kontingent'.split('|');
   function quotaGroupLabel(group, langOrZh) {
-    const kind = quotaGroupKind(group);
-    if (kind === 'gemini-argon') return 'Gemini (Argon)';
-    if (kind === 'claude') return 'Claude / GPT';
-    if (kind === 'gemini') return 'Gemini';
-    const raw = String(group?.name || group?.id || '').trim();
-    if (raw) return raw;
-    return pick8(['模型配额', '模型配額', 'Quota Pool', 'クォータ', '할당량 풀', 'Cuota', 'Quota', 'Kontingent'], langOrZh);
+    return Q_KIND_LBL[quotaGroupKind(group)] || String(group?.name || group?.id || '').trim() || pick8(Q_POOL_FB, langOrZh);
   }
 
   function quotaRemaining(bucket) {
     if (!bucket || typeof bucket !== 'object' || bucket.available === false || bucket.disabled === true) return null;
     if (bucket.expired === true) return 1;
     const r = numOr(bucket.remaining ?? bucket.remainingFraction);
-    if (typeof r === 'number' && Number.isFinite(r)) return Math.max(0, Math.min(1, r));
-    if (typeof r === 'string' && r.trim() !== '' && Number.isFinite(Number(r))) {
-      return Math.max(0, Math.min(1, Number(r)));
-    }
-    return null;
+    const n = typeof r === 'number' ? r : typeof r === 'string' && r.trim() ? Number(r) : NaN;
+    return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null;
   }
 
   function quotaWindows(group) {
     if (!group || typeof group !== 'object') return [];
-    const w5 = group.windows?.['5h'] || group.fiveHour || null;
-    const ww = group.windows?.weekly || group.weekly || null;
-    const out = [];
-    if (w5 && quotaRemaining(w5) !== null) out.push(['5h', w5]);
-    if (ww && quotaRemaining(ww) !== null) out.push(['weekly', ww]);
-    return out;
+    return [['5h', group.windows?.['5h'] || group.fiveHour], ['weekly', group.windows?.weekly || group.weekly]].filter(([, b]) => b && quotaRemaining(b) !== null);
   }
 
   function chooseQuotaGroup(groups, models, selectedId) {
@@ -761,37 +592,27 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
       const hit = list.find((g) => g.id === selectedId || g.name === selectedId);
       if (hit) return hit;
     }
+    const byK = (k) => list.find((g) => quotaGroupKind(g) === k);
     const modelStr = (Array.isArray(models) ? models.join(' ') : String(models || '')).toLowerCase();
-    if (/argon/.test(modelStr)) {
-      const argon = list.find((g) => quotaGroupKind(g) === 'gemini-argon');
-      if (argon) return argon;
-      const gem = list.find((g) => quotaGroupKind(g) === 'gemini');
-      if (gem) return gem;
-    } else if (/claude|anthropic|sonnet|opus|haiku|gpt|openai|o1|o3|o4/.test(modelStr)) {
-      const cld = list.find((g) => quotaGroupKind(g) === 'claude');
-      if (cld) return cld;
-    } else if (/gemini|carbon|hydrogen|pro|flash/.test(modelStr)) {
-      const gem = list.find((g) => quotaGroupKind(g) === 'gemini');
-      if (gem) return gem;
-      const argon = list.find((g) => quotaGroupKind(g) === 'gemini-argon');
-      if (argon) return argon;
-    }
-    return list.find((g) => quotaWindows(g).length > 0) || list[0];
+    const pick = /argon/.test(modelStr)
+      ? byK('gemini-argon') || byK('gemini')
+      : /claude|anthropic|sonnet|opus|haiku|gpt|openai|o1|o3|o4/.test(modelStr)
+      ? byK('claude')
+      : /gemini|carbon|hydrogen|pro|flash/.test(modelStr)
+      ? byK('gemini') || byK('gemini-argon')
+      : null;
+    return pick || list.find((g) => quotaWindows(g).length > 0) || list[0];
   }
 
-  const REFRESHING_L = ['即将刷新', '即將重設', 'Refreshing', '間もなく更新', '곧 초기화', 'Actualizando', 'Actualisation', 'Aktualisiert'];
+  const REFRESHING_L = '即将刷新|即將重設|Refreshing|間もなく更新|곧 초기화|Actualizando|Actualisation|Aktualisiert'.split('|');
 
+  const ETA_U = ['天|小时|分|分钟|', '天|小時|分|分鐘|', 'd|h|m|m| ', '日|時間|分|分|', '일|시간|분|분| ', 'd|h|m|m| ', 'j|h|m|m| ', 'T|Std|m|m| '];
   function fmtEtaSec(totalSec, l) {
     const d = Math.floor(totalSec / 86400);
     const h = Math.floor((totalSec % 86400) / 3600);
     const m = Math.floor((totalSec % 3600) / 60);
-    if (l === 'zh-CN') return d > 0 ? `${d}天${h}小时` : h > 0 ? `${h}小时${m}分` : `${Math.max(1, m)}分钟`;
-    if (l === 'zh-TW') return d > 0 ? `${d}天${h}小時` : h > 0 ? `${h}小時${m}分` : `${Math.max(1, m)}分鐘`;
-    if (l === 'ja') return d > 0 ? `${d}日${h}時間` : h > 0 ? `${h}時間${m}分` : `${Math.max(1, m)}分`;
-    if (l === 'ko') return d > 0 ? `${d}일 ${h}시간` : h > 0 ? `${h}시간 ${m}분` : `${Math.max(1, m)}분`;
-    if (l === 'fr') return d > 0 ? `${d}j ${h}h` : h > 0 ? `${h}h ${m}m` : `${Math.max(1, m)}m`;
-    if (l === 'de') return d > 0 ? `${d}T ${h}Std` : h > 0 ? `${h}Std ${m}m` : `${Math.max(1, m)}m`;
-    return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${Math.max(1, m)}m`;
+    const u = pick8(ETA_U, l).split('|');
+    return d > 0 ? `${d}${u[0]}${u[4]}${h}${u[1]}` : h > 0 ? `${h}${u[1]}${u[4]}${m}${u[2]}` : `${Math.max(1, m)}${u[3]}`;
   }
 
   function shortEta(ms, langOrZh) {
@@ -808,20 +629,12 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
     const spanMs = windowKey === 'weekly' ? 7 * 86400 * 1000 : 5 * 3600 * 1000;
     const r0 = numOr(bucket?.resetAt ?? bucket?.resetTime);
     const resetMs = typeof r0 === 'number' ? (r0 > 1e11 ? r0 : r0 * 1000) : (tsToMs(r0) || NaN);
+    const mkFc = (endRemaining, forecastDrop, willExhaust, exhaustInMs, paceRatio, status, resetAtMs, resetInMs) => ({
+      window: windowKey, remaining: rem, endRemaining, forecastDrop, willExhaust, exhaustInMs, paceRatio, status, resetAtMs, resetInMs,
+    });
 
     if (!Number.isFinite(resetMs) || resetMs <= now) {
-      return {
-        window: windowKey,
-        remaining: rem,
-        endRemaining: rem,
-        forecastDrop: 0,
-        willExhaust: false,
-        exhaustInMs: null,
-        paceRatio: 0,
-        status: rem < 1 ? 'ok' : 'idle',
-        resetAtMs: Number.isFinite(resetMs) ? resetMs : null,
-        resetInMs: 0,
-      };
+      return mkFc(rem, 0, false, null, 0, rem < 1 ? 'ok' : 'idle', Number.isFinite(resetMs) ? resetMs : null, 0);
     }
 
     const leftMs = Math.max(0, Math.min(spanMs, resetMs - now));
@@ -830,68 +643,45 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
     const minSmoothMs = windowKey === 'weekly' ? 2 * 3600 * 1000 : 15 * 60 * 1000;
 
     if (used < 0.005 || elapsedMs < 3 * 60 * 1000) {
-      return {
-        window: windowKey,
-        remaining: rem,
-        endRemaining: rem,
-        forecastDrop: 0,
-        willExhaust: rem <= 0.005,
-        exhaustInMs: rem <= 0.005 ? 0 : null,
-        paceRatio: 0,
-        status: rem <= 0.005 ? 'exhaust' : 'idle',
-        resetAtMs: resetMs,
-        resetInMs: leftMs,
-      };
+      return mkFc(rem, 0, rem <= 0.005, rem <= 0.005 ? 0 : null, 0, rem <= 0.005 ? 'exhaust' : 'idle', resetMs, leftMs);
     }
 
     const burnPerMs = used / Math.max(elapsedMs, minSmoothMs);
-    const projectedExtra = burnPerMs * leftMs;
-    const endRemaining = Math.max(0, Math.min(rem, rem - projectedExtra));
-    const forecastDrop = Math.max(0, rem - endRemaining);
+    const endRemaining = Math.max(0, Math.min(rem, rem - burnPerMs * leftMs));
     const idealUsed = spanMs > 0 ? elapsedMs / spanMs : 0;
     const paceRatio = idealUsed > 0.02 ? used / idealUsed : used / 0.02;
     const timeToZeroMs = burnPerMs > 0 ? rem / burnPerMs : Infinity;
     const willExhaust = rem <= 0.01 || (timeToZeroMs < leftMs * 0.95 && used >= 0.06);
+    const status = willExhaust ? 'exhaust' : paceRatio > 1.18 && used >= 0.05 ? 'tight' : used < 0.01 ? 'idle' : 'ok';
 
-    let status = 'ok';
-    if (willExhaust) status = 'exhaust';
-    else if (paceRatio > 1.18 && used >= 0.05) status = 'tight';
-    else if (used < 0.01) status = 'idle';
-
-    return {
-      window: windowKey,
-      remaining: rem,
+    return mkFc(
       endRemaining,
-      forecastDrop,
+      Math.max(0, rem - endRemaining),
       willExhaust,
-      exhaustInMs: Number.isFinite(timeToZeroMs) && willExhaust ? Math.max(0, Math.round(timeToZeroMs)) : null,
-      paceRatio: Number(paceRatio.toFixed(2)),
+      Number.isFinite(timeToZeroMs) && willExhaust ? Math.max(0, Math.round(timeToZeroMs)) : null,
+      Number(paceRatio.toFixed(2)),
       status,
-      resetAtMs: resetMs,
-      resetInMs: leftMs,
-    };
+      resetMs,
+      leftMs
+    );
   }
 
+  const Q_LBL = {
+    exhaust: '提前耗尽|提前耗盡|Depleting early|早期枯渇予測|조기 소진 예상|Se agota pronto|Épuisement rapide|Bald erschöpft'.split('|'),
+    tight: '配速偏紧|配速偏緊|Burning fast|消費やや速め|소모 빠름|Consumo rápido|Conso rapide|Hoher Verbrauch'.split('|'),
+    ok: '配额充裕|配額充裕|On track|ペース良好|정상 페이스|En rango|Dans les temps|Im Plan'.split('|'),
+    idle: '待命充裕|待命充裕|Standby|待機中|대기 중|En espera|En veille|Bereit'.split('|'),
+  };
   function groupQuotaPace(group, langOrZh, nowMs = Date.now()) {
     const l = resolveLang(langOrZh);
-    const wins = quotaWindows(group);
-    const forecasts = wins.map(([wk, b]) => quotaForecast(b, wk, nowMs)).filter(Boolean);
+    const forecasts = quotaWindows(group).map(([wk, b]) => quotaForecast(b, wk, nowMs)).filter(Boolean);
     const rank = { exhaust: 3, tight: 2, ok: 1, idle: 0 };
     let primary = null;
     for (const f of forecasts) {
       if (!primary || (rank[f.status] ?? 0) > (rank[primary.status] ?? 0)) primary = f;
     }
     const status = primary ? primary.status : 'idle';
-    const label = pick8(
-      status === 'exhaust'
-        ? ['提前耗尽', '提前耗盡', 'Depleting early', '早期枯渇予測', '조기 소진 예상', 'Se agota pronto', 'Épuisement rapide', 'Bald erschöpft']
-        : status === 'tight'
-        ? ['配速偏紧', '配速偏緊', 'Burning fast', '消費やや速め', '소모 빠름', 'Consumo rápido', 'Conso rapide', 'Hoher Verbrauch']
-        : status === 'ok'
-        ? ['配额充裕', '配額充裕', 'On track', 'ペース良好', '정상 페이스', 'En rango', 'Dans les temps', 'Im Plan']
-        : ['待命充裕', '待命充裕', 'Standby', '待機中', '대기 중', 'En espera', 'En veille', 'Bereit'],
-      l
-    );
+    const label = pick8(Q_LBL[status] || Q_LBL.idle, l);
     let detail = '';
     if (primary) {
       if (primary.willExhaust && primary.exhaustInMs !== null) {
@@ -903,13 +693,7 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
         detail = pick8([`${eta}后重置 · 预计结余 ${endPct}%`, `${eta}後重設 · 預計結餘 ${endPct}%`, `Resets in ${eta} · Est. ${endPct}% left`, `${eta}後に更新 · 予測残 ${endPct}%`, `${eta} 후 초기화 · 예상 잔여 ${endPct}%`, `Reinicio en ${eta} · Est. ${endPct}%`, `Reset dans ${eta} · Est. ${endPct}%`, `Reset in ${eta} · Ca. ${endPct}%`], l);
       }
     }
-    return {
-      status,
-      label,
-      detail,
-      primary,
-      forecasts,
-    };
+    return { status, label, detail, primary, forecasts };
   }
 
   function axisMax(peak) {
@@ -922,70 +706,52 @@ losttime|1647000|追忆似水年华|追憶似水年華|失われた時を求め�
   }
 
   function homeChartTicks(widths, axisWidth, gap = 8, columnGap = 2) {
-    const count = widths.length;
-    if (count === 0 || !(axisWidth > 0)) return [];
-    const column = (axisWidth - columnGap * (count - 1)) / count;
-    if (!(column > 0)) return [];
-    let widest = 0;
-    for (let i = 0; i < count; i++) {
-      if (widths[i] > widest) widest = widths[i];
-    }
-    const edgeShift = Math.max(0, widest / 2 - column / 2);
+    const n = widths.length;
+    if (!n || !(axisWidth > 0)) return [];
+    const col = (axisWidth - columnGap * (n - 1)) / n;
+    if (!(col > 0)) return [];
+    const widest = Math.max(0, ...widths);
+    const need = widest + gap + Math.max(0, (widest - col) / 2);
     let step = 1;
-    while (step < count && step * (column + columnGap) < widest + gap + edgeShift) step += 1;
+    while (step < n && step * (col + columnGap) < need) step += 1;
     const boxes = [];
-    for (let i = count - 1; i >= 0; i -= step) {
-      const width = widths[i];
-      const centre = i * (column + columnGap) + column / 2;
-      const left = Math.min(Math.max(centre - width / 2, 0), Math.max(axisWidth - width, 0));
-      boxes.unshift({ index: i, left });
+    for (let i = n - 1; i >= 0; i -= step) {
+      const w = widths[i];
+      boxes.unshift({ index: i, left: Math.min(Math.max(i * (col + columnGap) + (col - w) / 2, 0), Math.max(axisWidth - w, 0)) });
     }
     const kept = [];
     for (let i = boxes.length - 1; i >= 0; i--) {
-      const box = boxes[i];
-      const next = kept[0];
-      if (next === undefined || box.left + widths[box.index] + gap <= next.left) kept.unshift(box);
+      if (!kept[0] || boxes[i].left + widths[boxes[i].index] + gap <= kept[0].left) kept.unshift(boxes[i]);
     }
     return kept;
   }
 
   function createHomeModelColours() {
     const assigned = new Map();
-    function preferred(id) {
-      let hash = 2166136261;
-      for (let i = 0; i < id.length; i++) hash = Math.imul(hash ^ id.charCodeAt(i), 16777619);
-      return (hash >>> 0) % HOME_MODEL_COLOUR_COUNT;
-    }
     return function assign(ids) {
-      const unique = Array.from(new Set(ids)).sort();
       const out = {};
-      for (let i = 0; i < unique.length; i++) {
-        const id = unique[i];
-        if (assigned.has(id)) {
-          out[id] = assigned.get(id);
-          continue;
-        }
+      for (const id of Array.from(new Set(ids)).sort()) {
+        if (assigned.has(id)) { out[id] = assigned.get(id); continue; }
         const used = new Set(assigned.values());
-        let colour = preferred(id);
-        while (used.size < HOME_MODEL_COLOUR_COUNT && used.has(colour)) {
-          colour = (colour + 1) % HOME_MODEL_COLOUR_COUNT;
-        }
-        assigned.set(id, colour);
-        out[id] = colour;
+        let h = 2166136261;
+        for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+        let c = (h >>> 0) % HOME_MODEL_COLOUR_COUNT;
+        while (used.size < HOME_MODEL_COLOUR_COUNT && used.has(c)) c = (c + 1) % HOME_MODEL_COLOUR_COUNT;
+        assigned.set(id, c);
+        out[id] = c;
       }
       return out;
     };
   }
 
   function durSec(d) {
-    if (!d) return 0;
-    return typeof d === 'object' ? toNum(d.seconds) + toNum(d.nanos) / 1e9 : toNum(d);
+    return !d ? 0 : typeof d === 'object' ? toNum(d.seconds) + toNum(d.nanos) / 1e9 : toNum(d);
   }
 
   function tsSec(ts) {
     if (!ts) return 0;
     if (typeof ts === 'string') { const ms = Date.parse(ts); return Number.isFinite(ms) ? ms / 1000 : toNum(ts); }
-    return typeof ts === 'object' ? toNum(ts.seconds) + toNum(ts.nanos) / 1e9 : toNum(ts);
+    return durSec(ts);
   }
 
   function fmtK(n) {

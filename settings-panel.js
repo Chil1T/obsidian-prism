@@ -1440,7 +1440,10 @@
     }
     let val = typeof rawVal === 'string' && spec.aliases && hasOwn(spec.aliases, rawVal) ? spec.aliases[rawVal] : rawVal;
     if (key === 'language' && val === 'auto') {
-      const nav = typeof navigator !== 'undefined' && navigator?.language ? navigator.language : '';
+      const nav =
+        typeof navigator !== 'undefined' && (navigator?.languages?.[0] || navigator?.language)
+          ? navigator.languages?.[0] || navigator.language
+          : '';
       const normFn = G.__agCsI18nCore?.normalizeLanguage || G.__agCsI18n?.normalizeLanguage;
       if (typeof normFn === 'function' && nav) {
         val = normFn(nav, 'en');
@@ -3092,6 +3095,7 @@
           const resetBtn = mkB('ag-cs-cfg-btn', U('cfgResetBtn', 'Reset Defaults'), 'data-ag-cs-cfg-action', 'reset');
           onClk(resetBtn, () => {
             const defs = getDefaultSettingsPatch();
+            defs.language = 'auto';
             pendingCfgToast = { key: 'cfgResetOk', fallback: 'OK', tone: 'ok', exp: Date.now() + 2500 };
             applyBatch(defs);
             const curTh = getThoughtUiHandle();

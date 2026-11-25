@@ -2820,3 +2820,255 @@ test('Mascot Casting Stage under prefers-reduced-motion: detaching dialog immedi
     else globalThis.document = prevDoc;
   }
 });
+
+test('PR #51 queued-messages-card roof-perch: zero bottom gap, interactive roof anchor, upper takeover clearance, zero W->R reflow, and smooth fallback on [data-ag-queued-act="1"] exit', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const vm = await import('node:vm');
+  const { fileURLToPath } = await import('node:url');
+  const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const cdp = require('../cdp.js');
+
+  const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
+  assert.ok(
+    css.includes('& [data-ag-cs-crab-anchor="queued"]{position:relative !important;overflow:visible !important;}'),
+    'style.css must enforce relative+visible positioning on [data-ag-cs-crab-anchor="queued"]'
+  );
+
+  const events = [];
+  let tracking = false;
+  const observers = [];
+  const rafQueue = [];
+  const timers = new Set();
+
+  const makeEl = (tag, opts = {}) => {
+    const attrs = new Map(Object.entries(opts.attrs || {}));
+    if (opts.id) attrs.set('id', opts.id);
+    if (opts.className) attrs.set('class', opts.className);
+    const styles = new Map();
+    const children = [];
+    const node = {
+      nodeType: 1,
+      tagName: tag.toUpperCase(),
+      parentElement: null,
+      children,
+      childNodes: children,
+      _text: opts.text || '',
+      _rect: opts.rect || { left: 0, top: 0, width: 320, height: 40, right: 320, bottom: 40 },
+      _offsetHeight: opts.offsetHeight ?? 40,
+      get id() { return attrs.get('id') || ''; },
+      set id(v) { attrs.set('id', String(v)); },
+      get className() { return attrs.get('class') || ''; },
+      set className(v) { attrs.set('class', String(v)); },
+      get hidden() { return attrs.has('hidden'); },
+      set hidden(v) { if (v) attrs.set('hidden', ''); else attrs.delete('hidden'); },
+      get childElementCount() { return children.length; },
+      get firstChild() { return children[0] || null; },
+      get firstElementChild() { return children[0] || null; },
+      get offsetHeight() { if (tracking) events.push({ op: 'R', kind: 'offsetHeight' }); return this._offsetHeight; },
+      get textContent() { return this._text + children.map((c) => c.textContent).join(''); },
+      set textContent(v) { this._text = String(v); children.length = 0; },
+      get isConnected() {
+        let cur = this;
+        while (cur) { if (cur === html) return true; cur = cur.parentElement; }
+        return false;
+      },
+      classList: {
+        contains: (c) => (attrs.get('class') || '').split(/\s+/).filter(Boolean).includes(c),
+        add: (...cs) => { const s = new Set((attrs.get('class') || '').split(/\s+/).filter(Boolean)); cs.forEach((c) => s.add(c)); attrs.set('class', [...s].join(' ')); },
+        remove: (...cs) => { const s = new Set((attrs.get('class') || '').split(/\s+/).filter(Boolean)); cs.forEach((c) => s.delete(c)); attrs.set('class', [...s].join(' ')); },
+      },
+      style: {
+        get display() { return styles.get('display') || ''; },
+        set display(v) { if (v) styles.set('display', String(v)); else styles.delete('display'); },
+        get visibility() { return styles.get('visibility') || ''; },
+        set visibility(v) { if (v) styles.set('visibility', String(v)); else styles.delete('visibility'); },
+        setProperty(k, v) { if (tracking && k === 'margin-bottom') events.push({ op: 'W', detail: k }); styles.set(String(k), String(v)); },
+        getPropertyValue: (k) => styles.get(String(k)) || '',
+        removeProperty(k) { if (tracking && k === 'margin-bottom') events.push({ op: 'W', detail: k }); styles.delete(String(k)); },
+      },
+      getBoundingClientRect() { if (tracking) events.push({ op: 'R', kind: 'rect' }); return this._rect; },
+      checkVisibility() { if (tracking) events.push({ op: 'R', kind: 'checkVis' }); return !this.hidden && styles.get('display') !== 'none' && styles.get('visibility') !== 'hidden'; },
+      getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+      setAttribute(k, v) {
+        if (tracking && ['data-ag-cs-queued', 'data-ag-cs-takeover', 'data-ag-cs-crab-anchor'].includes(k)) events.push({ op: 'W', detail: k });
+        attrs.set(k, String(v));
+      },
+      hasAttribute: (k) => attrs.has(k),
+      removeAttribute(k) {
+        if (tracking && ['data-ag-cs-queued', 'data-ag-cs-takeover', 'data-ag-cs-crab-anchor'].includes(k)) events.push({ op: 'W', detail: k });
+        attrs.delete(k);
+      },
+      appendChild(c) { if (c.parentElement) c.remove(); c.parentElement = this; children.push(c); return c; },
+      insertBefore(c, ref) { if (c.parentElement) c.remove(); c.parentElement = this; const i = children.indexOf(ref); if (i >= 0) children.splice(i, 0, c); else children.push(c); return c; },
+      removeChild(c) { const i = children.indexOf(c); if (i >= 0) { children.splice(i, 1); c.parentElement = null; } return c; },
+      remove() { if (!this.parentElement) return; const i = this.parentElement.children.indexOf(this); if (i >= 0) this.parentElement.children.splice(i, 1); this.parentElement = null; },
+      matches(sel) {
+        return String(sel).split(',').map((s) => s.trim()).filter(Boolean).some((s) => {
+          const leaf = s.split(/\s+/).pop();
+          if (leaf.startsWith('#')) return this.id === leaf.slice(1).replace(/\\/g, '');
+          if (leaf.startsWith('.')) return this.classList.contains(leaf.slice(1));
+          const am = leaf.match(/^([a-zA-Z0-9_-]*)\[([^=\]]+)(?:="([^"]*)")?\]$/);
+          if (am) {
+            if (am[1] && this.tagName !== am[1].toUpperCase()) return false;
+            return am[3] !== undefined ? this.getAttribute(am[2]) === am[3] : this.hasAttribute(am[2]);
+          }
+          return this.tagName === leaf.toUpperCase();
+        });
+      },
+      closest(sel) { let c = this; while (c) { if (c.matches(sel)) return c; c = c.parentElement; } return null; },
+      querySelectorAll(sel) {
+        const out = [];
+        const walk = (n) => {
+          for (const ch of n.children) {
+            if (ch.matches(sel)) out.push(ch);
+            walk(ch);
+          }
+        };
+        walk(this);
+        return out;
+      },
+      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    return node;
+  };
+
+  const html = makeEl('html');
+  const head = makeEl('head');
+  const body = makeEl('body');
+  html.appendChild(head);
+  html.appendChild(body);
+
+  const convView = makeEl('div', { attrs: { 'data-testid': 'conversation-view' } });
+  const rtcWrap = makeEl('div', { className: 'flex flex-col' });
+  const takeoverWrap = makeEl('div', { className: 'relative' });
+  const takeoverCard = makeEl('div', { attrs: { 'data-testid': 'interaction-takeover-card' }, text: 'Approve command' });
+  takeoverWrap.appendChild(takeoverCard);
+  const inputBox = makeEl('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const queuedWrap = makeEl('div', { className: 'relative z-[1] flex flex-col gap-2 w-full mb-2' });
+  const queuedCard = makeEl('div', { attrs: { 'data-testid': 'queued-messages-card' } });
+  const queuedRow = makeEl('div', { text: '1 queued message' });
+  queuedCard.appendChild(queuedRow);
+  queuedWrap.appendChild(queuedCard);
+
+  const composerShell = makeEl('div', { id: 'antigravity.agentSidePanelInputBox', className: 'surface-composer' });
+  const card = makeEl('div', { className: 'surface-composer-card', rect: { left: 0, top: 200, width: 640, height: 96, right: 640, bottom: 296 }, offsetHeight: 96 });
+  card.appendChild(makeEl('div', { className: 'agy-composer-footer' }));
+  composerShell.appendChild(card);
+
+  inputBox.appendChild(queuedWrap);
+  inputBox.appendChild(composerShell);
+  rtcWrap.appendChild(inputBox);
+  convView.appendChild(rtcWrap);
+  body.appendChild(convView);
+
+  const doc = {
+    documentElement: html,
+    head,
+    body,
+    hidden: false,
+    hasFocus: () => true,
+    createElement: (t) => makeEl(t),
+    getElementById: (id) => html.querySelector(`#${id}`),
+    querySelector: (s) => html.querySelector(s),
+    querySelectorAll: (s) => html.querySelectorAll(s),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  const sandbox = {
+    console,
+    document: doc,
+    location: { pathname: '/conv' },
+    navigator: { language: 'en-US' },
+    performance: { now: () => Date.now() },
+    CSS: { highlights: new Map() },
+    MutationObserver: class {
+      constructor(cb) { this.cb = cb; observers.push(this); }
+      observe(t, opts) { this.target = t; this.opts = opts; }
+      disconnect() {}
+      takeRecords() { return []; }
+    },
+    ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
+    requestAnimationFrame: (fn) => { rafQueue.push(fn); return rafQueue.length; },
+    cancelAnimationFrame() {},
+    getComputedStyle: (el) => ({
+      display: el.style.display || 'block',
+      visibility: el.style.visibility || 'visible',
+      position: 'static',
+      borderTopLeftRadius: '10px',
+      getPropertyValue: (k) => el?.style?.getPropertyValue?.(k) || '',
+    }),
+    matchMedia: () => ({ matches: false }),
+    setTimeout: (fn, ms) => { const id = setTimeout(fn, ms); timers.add(id); return id; },
+    clearTimeout: (id) => { timers.delete(id); clearTimeout(id); },
+    setInterval: () => 0,
+    clearInterval() {},
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  const flushRaf = () => { while (rafQueue.length) rafQueue.shift()(Date.now()); };
+
+  try {
+    const res = vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG, { bundleCachePath: '' }), sandbox);
+    assert.equal(res.status, 'ok');
+
+    // 1) Visible queued-messages-card becomes mascot roof anchor with zero bottom gap & full interactivity
+    assert.equal(queuedWrap.hasAttribute('data-ag-cs-queued'), false, 'queued wrapper must have 0 bottom-gap attribute');
+    assert.equal(queuedWrap.style.getPropertyValue('margin-bottom'), '', 'queued wrapper must have 0 inline margin-bottom');
+    assert.equal(queuedCard.getAttribute('data-ag-cs-crab-anchor'), 'queued');
+    assert.equal(card.hasAttribute('data-ag-cs-crab-anchor'), false);
+    const crab = queuedCard.querySelector('.ag-cs-crab');
+    assert.ok(crab, 'mascot stage must perch on queued-messages-card roof');
+    assert.equal(crab.getAttribute('data-ag-mascot-peek'), null, 'mascot must remain interactive (non-peek) when queued card is alone');
+
+    const mainMo = observers.find((o) => Array.isArray(o.opts?.attributeFilter) && o.opts.attributeFilter.includes('data-ag-queued-act'));
+    assert.ok(mainMo, 'Main MutationObserver must observe data-ag-queued-act');
+
+    // 2) Upper interaction-takeover-card preserves clearance above queued roof & executes zero W->R reflows
+    events.length = 0;
+    tracking = true;
+    rtcWrap.children.unshift(takeoverWrap);
+    takeoverWrap.parentElement = rtcWrap;
+    mainMo.cb([{ type: 'childList', target: rtcWrap, addedNodes: [takeoverWrap], removedNodes: [] }]);
+    flushRaf();
+    tracking = false;
+    const firstWriteIdx = events.findIndex((e) => e.op === 'W');
+    const readAfterWrite = firstWriteIdx >= 0 && events.slice(firstWriteIdx + 1).some((e) => e.op === 'R');
+    assert.equal(readAfterWrite, false, 'sync must perform zero layout reads after clearance/anchor writes (0 W->R)');
+    assert.equal(takeoverWrap.getAttribute('data-ag-cs-takeover'), '1', 'takeover above queued card must keep clearance');
+    assert.equal(queuedCard.getAttribute('data-ag-cs-crab-anchor'), 'queued');
+    takeoverWrap.remove();
+    mainMo.cb([{ type: 'childList', target: rtcWrap, addedNodes: [], removedNodes: [takeoverWrap] }]);
+    flushRaf();
+
+    // 3) Hardening: [data-ag-queued-act="1"] exit animation smoothly returns mascot to composer WITHOUT adding 60px gap
+    queuedRow.setAttribute('data-ag-queued-act', '1');
+    mainMo.cb([{ type: 'attributes', target: queuedRow, attributeName: 'data-ag-queued-act' }]);
+    flushRaf();
+    assert.equal(card.getAttribute('data-ag-cs-crab-anchor'), 'composer', 'exiting queued card must smoothly return mascot to primary composer card');
+    assert.equal(card.querySelector('.ag-cs-crab'), crab);
+    assert.equal(queuedWrap.hasAttribute('data-ag-cs-queued'), false, 'exiting queued card must NOT jump +60px via data-ag-cs-queued');
+
+    // 4) Clearing exit flag re-docks on queued roof; hiding/removing queued card returns cleanly to composer
+    queuedRow.removeAttribute('data-ag-queued-act');
+    mainMo.cb([{ type: 'attributes', target: queuedRow, attributeName: 'data-ag-queued-act' }]);
+    flushRaf();
+    assert.equal(queuedCard.getAttribute('data-ag-cs-crab-anchor'), 'queued');
+    assert.equal(queuedCard.querySelector('.ag-cs-crab'), crab);
+
+    queuedCard.hidden = true;
+    mainMo.cb([{ type: 'attributes', target: queuedCard, attributeName: 'hidden' }]);
+    flushRaf();
+    assert.equal(card.getAttribute('data-ag-cs-crab-anchor'), 'composer', 'hidden queued card must return mascot to primary composer card');
+    assert.equal(card.querySelector('.ag-cs-crab'), crab);
+  } finally {
+    try { sandbox.__agPrism?.destroy?.(); } catch {}
+    for (const id of timers) clearTimeout(id);
+  }
+});

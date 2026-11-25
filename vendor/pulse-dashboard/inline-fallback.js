@@ -50,7 +50,7 @@
     let v = String(raw || '').trim();
     if (!v || v.toLowerCase() === 'auto') {
       const navObj = win && 'navigator' in win ? win.navigator : (typeof navigator !== 'undefined' ? navigator : null);
-      v = String(navObj?.language || '').trim();
+      v = String(navObj?.languages?.[0] || navObj?.language || '').trim();
     }
     const s = v.toLowerCase().replace(/_/g, '-');
     if (!s || s === 'auto') return 'en';
@@ -867,7 +867,9 @@
     };
 
     function sync(cfg) {
-      if (cfg && typeof cfg.language === 'string' && cfg.language) expLang = normFbLang(cfg.language, gW());
+      if (cfg && typeof cfg.language === 'string' && cfg.language) {
+        expLang = cfg.language.trim().toLowerCase() === 'auto' ? '' : normFbLang(cfg.language, gW());
+      }
       const raw = cfg && cfg.telemetryModule;
       mode = raw === 'on' || raw === 'off' ? raw : 'auto';
       if (srEl && mode !== 'off') {

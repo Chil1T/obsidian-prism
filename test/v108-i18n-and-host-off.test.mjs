@@ -925,3 +925,51 @@ test('Battle 2 Regression: Daemon _syncIsolatedHostI18n strictly targets main-fr
   assert.equal(entry.isolatedHostI18nPaused, false);
   assert.deepEqual(evaluated.map((e) => [e.contextId, e.isPause]), [[2, true], [2, false]]);
 });
+
+test('PR #50 Integration: _resolveStorageGuardLanguage honors Windows UI Display Language & installers default to auto while CdpClient.cs keeps off reverse channel', async () => {
+  const daemonMod = await import('../sidecars/daemon/main.mjs');
+  const { PrismDaemon } = daemonMod;
+  const prevLcAll = process.env.LC_ALL;
+  const prevLcMsg = process.env.LC_MESSAGES;
+  const prevLang = process.env.LANG;
+  const origIntl = Intl.DateTimeFormat;
+  try {
+    process.env.LC_ALL = '';
+    process.env.LC_MESSAGES = '';
+    process.env.LANG = '';
+    Intl.DateTimeFormat = function () {
+      return { resolvedOptions: () => ({ locale: 'zh-CN' }) };
+    };
+    cdp._setWindowsUiLocaleReaderForTest(() => 'en-US');
+
+    const daemon = new PrismDaemon({ rootDir: ROOT, silent: true, enableStorageGuardTimer: false, enableAutoUpdateTimer: false });
+    daemon.cdp = cdp;
+    const langEn = await daemon._resolveStorageGuardLanguage(null, { language: 'auto' });
+    assert.equal(langEn, 'en', '_resolveStorageGuardLanguage must prefer Windows UI language en-US over Intl zh-CN');
+
+    cdp._setWindowsUiLocaleReaderForTest(() => 'zh-Hans-CN');
+    const langZh = await daemon._resolveStorageGuardLanguage(null, { language: 'auto' });
+    assert.equal(langZh, 'zh-CN', '_resolveStorageGuardLanguage must resolve Windows UI language zh-Hans-CN');
+  } finally {
+    Intl.DateTimeFormat = origIntl;
+    cdp._setWindowsUiLocaleReaderForTest(null);
+    if (prevLcAll === undefined) delete process.env.LC_ALL; else process.env.LC_ALL = prevLcAll;
+    if (prevLcMsg === undefined) delete process.env.LC_MESSAGES; else process.env.LC_MESSAGES = prevLcMsg;
+    if (prevLang === undefined) delete process.env.LANG; else process.env.LANG = prevLang;
+  }
+
+  // Installer C# / Swift source contracts
+  const cdpCs = fs.readFileSync(path.join(ROOT, 'installer/common/CdpClient.cs'), 'utf8');
+  assert.ok(cdpCs.includes("navigator.languages && navigator.languages[0]"), 'CdpClient.cs must prioritize navigator.languages[0]');
+  assert.ok(cdpCs.includes("if (hiMode === 'off') window.__agPrismHostI18n?.setMode?.('off')"), 'CdpClient.cs must preserve hostLocalization="off" setMode("off") reverse channel');
+
+  const cdpSwift = fs.readFileSync(path.join(ROOT, 'installer/macos/Common/CdpClient.swift'), 'utf8');
+  assert.ok(cdpSwift.includes("navigator.languages && navigator.languages[0]"), 'CdpClient.swift must prioritize navigator.languages[0]');
+  assert.ok(cdpSwift.includes("if (hiMode === 'off') window.__agPrismHostI18n?.setMode?.('off')"), 'CdpClient.swift must preserve hostLocalization="off" setMode("off") reverse channel');
+
+  const winSetup = fs.readFileSync(path.join(ROOT, 'installer/setup/Program.cs'), 'utf8');
+  assert.ok(winSetup.includes('activeCfg.ContainsKey("language") ? activeCfg["language"] : "auto"'), 'Windows Setup Program.cs must fallback language to "auto"');
+
+  const macSetup = fs.readFileSync(path.join(ROOT, 'installer/macos/Setup/main.swift'), 'utf8');
+  assert.ok(macSetup.includes('activeCfg["language"]?.stringValue ?? "auto"'), 'macOS Setup main.swift must fallback language to "auto"');
+});

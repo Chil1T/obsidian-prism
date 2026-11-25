@@ -14,7 +14,7 @@
   }
 
   const STUDIO_HEAD_CSS = '.ag-cs-home-panel-head{flex-wrap:wrap;row-gap:8px}';
-  const STUDIO_EXTRA_CSS = STUDIO_HEAD_CSS + '.ag-cs-home-tab,.ag-cs-home-range{white-space:nowrap}.ag-cs-home-ws-select{color-scheme:inherit}.ag-cs-home-ws-select option{background:var(--card,#141418);color:var(--foreground,#F2F2F5);}';
+  const STUDIO_EXTRA_CSS = STUDIO_HEAD_CSS + '.ag-cs-home-tab,.ag-cs-home-range{white-space:nowrap}.ag-cs-home-ws-select{color-scheme:inherit}.ag-cs-home-ws-select option{background:var(--card,#141418);color:var(--foreground,#F2F2F5);}.agy-home{--_a:var(--ag-cs-accent);--_b:1px solid var(--_kb)}.ag-cs-hs-tg,.ag-cs-home-local-note{font-size:11px}.ag-cs-hs-tg{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:var(--_b);border-radius:6px;background:var(--_tb);color:var(--foreground);font-family:inherit;font-weight:500;white-space:nowrap;cursor:pointer;&:hover{background:var(--ag-cs-hover-wash)}&[aria-pressed="true"]{color:var(--_a);border-color:color-mix(in srgb,currentColor 32%,#0000);background:color-mix(in srgb,currentColor 11%,#0000)}& svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}}:is(.ag-cs-home-ws-select,.ag-cs-hs-tg,.ag-cs-quota-refresh):focus-visible{outline:2px solid var(--_a);outline-offset:1px}.ag-cs-home-local-note{line-height:1.4;color:var(--muted-foreground);opacity:.86;padding-top:8px;border-top:var(--_b)}';
 
   const REMOTE_TITLE_RE = /\[(SSH|WSL|Dev Container|Codespaces|Tunnel|Remote):\s*([^\]]+)\]/i;
   const decUri = (v) => { const s = String(v || '').trim(); if (!s) return ''; try { return decodeURIComponent(s); } catch { return s; } };
@@ -22,10 +22,11 @@
     const c = decUri(v).toLowerCase().replace(/[^a-z0-9._:@-]+/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
     return !c || /^(?:__proto__|constructor|prototype)$/.test(c) ? '' : `${pfx}:${c}`;
   };
+  const mkRem = (k, v) => (/^ssh(?:-remote)?$/i.test(k) ? packScope('ssh', v) : packScope('remote', `${k.toLowerCase()}-${v}`));
   const extractScopeFromUri = (u) => {
     const s = decUri(u);
     const m = s && (s.match(/[?&#]remoteAuthority=([^&#\s]+)/i)?.[1] || s).match(/(?:^|vscode-remote:\/\/)([a-z0-9_-]+)\+([^/&#?\s]+)/i);
-    return !m ? '' : m[1].toLowerCase() === 'ssh-remote' ? packScope('ssh', m[2]) : packScope('remote', `${m[1]}-${m[2]}`);
+    return m ? mkRem(m[1], m[2]) : '';
   };
   const normalizeScopeKey = (raw) => {
     const s = String(raw || '').trim();
@@ -34,8 +35,7 @@
     const pm = s.match(/^(ssh|remote):(.+)$/i);
     if (pm) return packScope(pm[1].toLowerCase(), pm[2]);
     const tm = s.match(REMOTE_TITLE_RE);
-    if (tm) return tm[1].toLowerCase() === 'ssh' ? packScope('ssh', tm[2]) : packScope('remote', `${tm[1]}-${tm[2]}`);
-    return extractScopeFromUri(s);
+    return tm ? mkRem(tm[1], tm[2]) : extractScopeFromUri(s);
   };
   const formatScopeBadge = (sc) => (!sc || sc === 'local' ? '' : sc.startsWith('ssh:') ? 'SSH · ' + sc.slice(4) : sc.startsWith('remote:') ? 'Remote' + (sc.slice(7) ? ' · ' + sc.slice(7) : '') : '');
   const eqId = (a, b) => !!(a && b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase());
@@ -51,16 +51,14 @@
     return o;
   };
   const STUDIO_FB = Object.fromEntries(
-    [
-      'zh-CN|子代理|Token|蜂群|入|出|额度偏低|余量偏紧|充裕|接下来做什么|，|？',
-      'zh-TW|子代理|Token|蜂群|入|出|額度偏低|餘量偏緊|充裕|接下來做什麼|，|？',
-      "en|subagents|tokens||in|out|Low Quota|Running Low|Healthy|What's up next",
-      'ja|サブエージェント|トークン||入力|出力|残枠少|残り少なめ|余裕あり|次は何をしますか|、|？',
-      'ko|서브에이전트|토큰||입력|출력|할당량 부족|잔여량 적음|여유|다음은 무엇을 할까요',
-      'es|subagentes|tokens||entr.|sal.|Cuota baja|Casi agotada|Óptima|¿Qué hacemos ahora',
-      'fr|sous-agents|tokens||entr.|sort.|Quota bas|Presque épuisé|Optimal|Que faisons-nous ensuite|| ?',
-      'de|Subagenten|Token||Ein|Aus|Wenig Kontingent|Wird knapp|Reichlich|Was steht als Nächstes an',
-    ].map((s) => { const a = s.split('|'); return [a[0], [a[1], a[2], a[3] || 'Swarm', a[4], a[5], a[6], a[7], a[8], a[9], a[10] || ', ', a[11] || '?']]; })
+    `zh-CN|子代理|Token|蜂群|入|出|额度偏低|余量偏紧|充裕|接下来做什么|，|？|含归档|仅当前|当前|归档|仅本地|仅统计本机已保存会话（不含云端）
+zh-TW|子代理|Token|蜂群|入|出|額度偏低|餘量偏緊|充裕|接下來做什麼|，|？|含歸檔|僅當前|當前|歸檔|僅本機|僅統計本機已儲存工作階段（不含雲端）
+en|subagents|tokens||in|out|Low Quota|Running Low|Healthy|What's up next|||All|Current|Active|Archived|Local only|Counts saved local sessions only (excludes cloud)
+ja|サブエージェント|トークン||入力|出力|残枠少|残り少なめ|余裕あり|次は何をしますか|、|？|履歴含む|現在のみ|現在|アーカイブ|ローカルのみ|ローカル保存済みセッションのみ集計（クラウド除く）
+ko|서브에이전트|토큰||입력|출력|할당량 부족|잔여량 적음|여유|다음은 무엇을 할까요|||보관 포함|현재만|현재|보관|로컬만|로컬 저장 세션만 집계 (클라우드 제외)
+es|subagentes|tokens||entr.|sal.|Cuota baja|Casi agotada|Óptima|¿Qué hacemos ahora|||Todo|Actuales|Activas|Archiv.|Solo local|Solo sesiones locales guardadas (sin nube)
+fr|sous-agents|tokens||entr.|sort.|Quota bas|Presque épuisé|Optimal|Que faisons-nous ensuite|| ?|Tout|Actuelles|Actives|Archiv.|Local|Sessions locales enregistrées uniquement (hors cloud)
+de|Subagenten|Token||Ein|Aus|Wenig Kontingent|Wird knapp|Reichlich|Was steht als Nächstes an|||Alle|Aktuell|Aktiv|Archiv.|Nur lokal|Nur lokal gespeicherte Sitzungen (ohne Cloud)`.split('\n').map((s) => { const a = s.split('|'); return [a[0], [a[1], a[2], a[3] || 'Swarm', a[4], a[5], a[6], a[7], a[8], a[9], a[10] || ', ', a[11] || '?', ...a.slice(12)]]; })
   );
   const normStudioLang = (l) => {
     const c = G.__agCsI18nCore?.normalizeLanguage;
@@ -72,9 +70,10 @@
     return lo.match(/^(ja|ko|es|fr|de)/)?.[1] || 'en';
   };
   const studioFb = (l) => STUDIO_FB[normStudioLang(l)] || STUDIO_FB.en;
-  const hasRealUsage = (r) => !!(r?.days && (toNum(r.calls) > 0 || Object.values(r.days).some((d) => d && (toNum(d.total || d.tokens) > 0 || toNum(d.calls) > 0))));
+  const hasTok = (r, c) => !!(r?.days && (toNum(r.calls) > 0 || Object.values(r.days).some((d) => d && (toNum(d.total || d.tokens) > 0 || (c && toNum(d.calls) > 0)))));
+  const hasRealUsage = (r) => hasTok(r, 1);
   // 仅依据已落盘的调用次数或真实 token 消耗判断，避免把 _do 延迟占位（days[d].calls===1, total===0）误判为有效消耗
-  const hasPersistedTokens = (r) => !!(r?.days && (toNum(r.calls) > 0 || Object.values(r.days).some((d) => d && toNum(d.total || d.tokens) > 0)));
+  const hasPersistedTokens = (r) => hasTok(r);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const getDoc = () => (typeof document !== 'undefined' ? document : null);
   const getWin = () => (typeof window !== 'undefined' ? window : G);
@@ -129,6 +128,8 @@
     let activeTab = 'overview';
     let activeRange = 'all';
     let activeWorkspace = 'all';
+    let includeArchived = true;
+    const scopePrefKey = 'ag-prism:homeSessionScope.v1';
     let detectedCurrentWorkspace = '';
     let lastPanelRenderKey = '';
     let cachedAggKey = '';
@@ -144,8 +145,12 @@
     };
     const sp = (c, t, a) => mk('span', c, t, a);
     const dv = (c, t, a) => mk('div', c, t, a);
+    const HC = 'ag-cs-home-';
+    const QC = 'ag-cs-quota-';
     const bt = (c, t, fn, a) => { const e = mk('button', c, t, a); e.type = 'button'; e.addEventListener('click', fn); return e; };
     const ap = (p, ...cs) => { for (const c of cs) if (c) p.appendChild(c); return p; };
+    const mkSv = (d, t, a) => { const n = d.createElementNS('http://www.w3.org/2000/svg', t); for (let i = 0; i < a.length; i += 2) n.setAttribute(a[i], a[i + 1]); return n; };
+    const setArch = (r, on) => { const o = { ...r }; if (on) o.archived = true; else delete o.archived; return o; };
     const scopeStorageKey = (sc) => (sc && sc !== 'local' ? `${storageUsageCacheKey}:${sc}` : storageUsageCacheKey);
     const clearSaveTimers = () => {
       if (saveUsageTimer) { clearTimeout(saveUsageTimer); saveUsageTimer = 0; }
@@ -196,6 +201,7 @@
     syncScopeAttr(curScope);
 
     const getLs = () => (typeof localStorage !== 'undefined' && localStorage) || null;
+    try { if (getLs()?.getItem(scopePrefKey) === 'active') includeArchived = false; } catch {}
     const loadScopeCache = (sc) => {
       usageRecords.clear(); usageHasData = false; cacheHealed = false;
       try {
@@ -234,9 +240,7 @@
           entries.sort((a, b) => toNum(b[1]?.lastModifiedSec) - toNum(a[1]?.lastModifiedSec));
           entries = entries.slice(0, 1200);
         }
-        const obj = {};
-        for (const [id, rec] of entries) obj[id] = rec;
-        ls.setItem(scopeStorageKey(curScope), JSON.stringify(obj, (_, v) => (typeof v === 'bigint' ? Number(v) : v)));
+        ls.setItem(scopeStorageKey(curScope), JSON.stringify(Object.fromEntries(entries), (_, v) => (typeof v === 'bigint' ? Number(v) : v)));
       } catch {}
     };
     const saveUsageCache = () => {
@@ -252,25 +256,23 @@
     };
 
     const toSec = (n, o, iso) => { const s = toNum(n || o?.seconds); if (s) return s; const t = typeof o === 'string' ? o : iso; return typeof t === 'string' ? Math.floor((Date.parse(t) || 0) / 1000) : 0; };
+    const pickStr = (a, b, c) => String(a || b || c || '').trim();
     const extractMeta = (sum, id) => {
       const tm = sum?.trajectoryMetadata;
-      const s = String(id || sum?.id || sum?.cascadeId || '').trim();
+      const s = pickStr(id, sum?.id, sum?.cascadeId);
       const workspace = usageCore?.extractWorkspaceId ? usageCore.extractWorkspaceId(sum) : String(sum?.workspace || '');
-      const dp = String(tm?.parentConversationId || sum?.parentConversationId || sum?.parentId || '').trim();
-      const rp = String(tm?.rootConversationId || sum?.rootConversationId || sum?.rootId || '').trim();
+      const dp = pickStr(tm?.parentConversationId, sum?.parentConversationId, sum?.parentId);
+      const rp = pickStr(tm?.rootConversationId, sum?.rootConversationId, sum?.rootId);
       const parentId = dp && !eqId(dp, s) ? dp : rp && s && !eqId(rp, s) ? rp : '';
-      const selfBad = eqId(dp, s) || (!dp && eqId(rp, s));
-      const subagent = !!(parentId || usageCore?.isSubagentSummary?.(sum, s) || (sum?.subagent && !selfBad));
+      const subagent = !!(parentId || usageCore?.isSubagentSummary?.(sum, s) || (sum?.subagent && !(eqId(dp, s) || (!dp && eqId(rp, s)))));
       return { workspace, u: wsUrisOf(sum), parentId, subagent, lastModifiedSec: toSec(sum?.lastModifiedSec, sum?.lastModifiedTime, sum?.modifiedAt), createdSec: toSec(sum?.createdSec, sum?.createdTime, sum?.createdAt), stepCount: toNum(sum?.stepCount ?? sum?.steps ?? 0) };
     };
 
     const advanceCachedCursor = (prev, id, sum, defer) => {
       const m = extractMeta(sum, id);
       const p = fixRec(id, prev);
-      const tail = defer ? { _do: 1 } : null;
-      if (p?.days) {
-        return { ...p, stepCount: m.stepCount, lastModifiedSec: m.lastModifiedSec, subagent: !!(p.subagent || m.subagent), workspace: m.workspace || p.workspace || '', parentId: m.parentId || p.parentId || '', ...tail };
-      }
+      const base = { stepCount: m.stepCount, lastModifiedSec: m.lastModifiedSec, workspace: m.workspace || p?.workspace || '', parentId: m.parentId || p?.parentId || '', ...(defer ? { _do: 1 } : null) };
+      if (p?.days) return setArch({ ...p, ...base, subagent: !!(p.subagent || m.subagent) }, false);
       const sec = m.lastModifiedSec || m.createdSec || 0;
       const days = {};
       if (sec > 0 && usageCore?.homeDayKey) {
@@ -279,7 +281,7 @@
         hours[d.getHours()] = 1;
         days[usageCore.homeDayKey(d)] = { calls: 1, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, hours, models: {} };
       }
-      return { cascadeId: String(id || ''), stepCount: m.stepCount, lastModifiedSec: m.lastModifiedSec, gmCount: 0, subagent: m.subagent, workspace: m.workspace, parentId: m.parentId, calls: 0, days, ...tail };
+      return { cascadeId: String(id || ''), gmCount: 0, subagent: m.subagent, calls: 0, days, ...base };
     };
 
     const detectCurrentWorkspaceName = (entries) => {
@@ -308,23 +310,12 @@
       Promise.resolve().then(fn).then((v) => done(v || null), () => done(null));
     });
     const callPrismMetricsBinding = (win, input) => {
-      const resName = '__agPrismMetricsResolve';
-      const reqId = 800000000 + (++quotaBindingSeq);
-      const prev = win[resName];
-      let cb = null;
-      let restored = false;
-      const restore = () => {
-        if (restored) return;
-        restored = true;
-        if (win[resName] === cb) { if (prev !== undefined) win[resName] = prev; else delete win[resName]; }
-      };
-      return withTimeout(() => new Promise((resolve) => {
-        cb = (id, payload) => {
-          if (id === reqId) { restore(); resolve(payload && typeof payload === 'object' ? payload : null); }
-          else if (isFn(prev)) prev(id, payload);
-        };
-        win[resName] = cb;
-        try { win.__agPrismMetricsCall(JSON.stringify({ id: reqId, input })); } catch { restore(); resolve(null); }
+      const k = '__agPrismMetricsResolve', reqId = 800000000 + (++quotaBindingSeq), prev = win[k];
+      let cb, done;
+      const restore = () => { if (!done) { done = 1; if (win[k] === cb) { if (prev !== undefined) win[k] = prev; else delete win[k]; } } };
+      return withTimeout(() => new Promise((res) => {
+        win[k] = cb = (id, p) => (id === reqId ? (restore(), res(p && typeof p === 'object' ? p : null)) : isFn(prev) && prev(id, p));
+        try { win.__agPrismMetricsCall(JSON.stringify({ id: reqId, input })); } catch { restore(); res(null); }
       }), 10500, restore);
     };
 
@@ -332,32 +323,22 @@
       if (isDestroyed()) return liveQuotaSnap;
       if (quotaLoading && quotaPending) return quotaPending;
       const now = Date.now();
-      if (!force) {
-        if (hasUsableQuotas(liveQuotaSnap) && inCooldown(lastQuotaFetchAt, 45000, now)) return liveQuotaSnap;
-        if (!opts?.ignoreFailCooldown && inCooldown(lastQuotaFailAt, 15000, now)) return liveQuotaSnap;
-      }
+      if (!force && ((hasUsableQuotas(liveQuotaSnap) && inCooldown(lastQuotaFetchAt, 45000, now)) || (!opts?.ignoreFailCooldown && inCooldown(lastQuotaFailAt, 15000, now)))) return liveQuotaSnap;
       const win = getWin();
       if (!win) return null;
-      const doc = getDoc() || win.document || null;
-      const telemetryOff = doc?.documentElement?.getAttribute?.('data-ag-cs-telemetry') === 'off';
+      const telemetryOff = (getDoc() || win.document)?.documentElement?.getAttribute?.('data-ag-cs-telemetry') === 'off';
       quotaLoading = true;
       if (activeTab === 'quotas') renderHomePanel();
-      const pending = (async () => {
+      return (quotaPending = (async () => {
         try {
-          const ff = !!force;
-          const req = { conversationId: null, force: ff, quotaRefresh: !!(opts?.quotaRefresh ?? ff), selectLatest: false };
-          const host = win.agPulseHost;
-          const isPrismHost = !!host?.__prismFallback;
-          const hm = host?.getMetrics;
-          const bridge = win.__agPrismMetricsBridge;
-          const tel = win.__agPrismTelemetry;
+          const req = { conversationId: null, force: !!force, quotaRefresh: !!(opts?.quotaRefresh ?? force), selectLatest: false };
+          const host = win.agPulseHost, hm = host?.getMetrics, isPH = !!host?.__prismFallback, bridge = win.__agPrismMetricsBridge, tel = win.__agPrismTelemetry;
           let snap = null;
           const pick = (v) => { if (hasUsableQuotas(v)) snap = v; };
           const tryPick = async (fn, ms) => pick(await withTimeout(fn, ms));
-
-          if (isFn(hm) && !isPrismHost) await tryPick(() => hm.call(host, req), 3000);
+          if (isFn(hm) && !isPH) await tryPick(() => hm.call(host, req), 3000);
           if (!hasUsableQuotas(snap) && !telemetryOff) {
-            if (isPrismHost && isFn(hm)) await tryPick(() => hm.call(host, req), 10500);
+            if (isPH && isFn(hm)) await tryPick(() => hm.call(host, req), 10500);
             else if (isFn(bridge?.getMetrics)) await tryPick(() => bridge.getMetrics(req), 10500);
             else if (isFn(win.__agPrismMetricsCall)) pick(await callPrismMetricsBinding(win, req));
             else if (!hm && isFn(tel?.refresh)) await tryPick(() => tel.refresh(), 4500);
@@ -373,8 +354,7 @@
           quotaLoading = false; quotaPending = null;
           if (!isDestroyed() && activeTab === 'quotas') renderHomePanel();
         }
-      })();
-      return (quotaPending = pending);
+      })());
     };
 
     const scheduleUsageRollupRefresh = (delayMs = 1800) => {
@@ -452,12 +432,13 @@
       for (const hit of Array.isArray(bridgeRecs) ? bridgeRecs : []) {
         if (!hit?.id || !hit.record?.days) continue;
         const cur = usageRecords.get(hit.id);
-        const cr = fixRec(hit.id, hit.record);
-        if (!cur || fixRec(hit.id, cur) !== cur || ((cur._do || !hasRealUsage(cur)) && hasRealUsage(cr))) { usageRecords.set(hit.id, cr); seededCache = true; }
+        let cr = fixRec(hit.id, hit.record);
+        if (!!hit.archived !== !!cr.archived) cr = setArch(cr, !!hit.archived);
+        if (!cur || fixRec(hit.id, cur) !== cur || !!cur.archived !== !!cr.archived || ((cur._do || !hasRealUsage(cur)) && hasRealUsage(cr))) { usageRecords.set(hit.id, cr); seededCache = true; }
       }
 
       if (curScope === 'local' && Array.isArray(liveQuotaSnap?.conversations)) {
-        for (const c of liveQuotaSnap.conversations) if (c?.id && !sumsMap.has(c.id)) sumsMap.set(c.id, { stepCount: toNum(c.steps), subagent: !!c.subagent, parentConversationId: c.parentConversationId || '', rootConversationId: c.rootConversationId || '', workspace: c.workspace || '', modifiedAt: c.modifiedAt || '' });
+        for (const c of liveQuotaSnap.conversations) if (c?.id && !sumsMap.has(c.id)) sumsMap.set(c.id, { stepCount: toNum(c.steps), subagent: !!c.subagent, parentId: c.parentConversationId || '', rootId: c.rootConversationId || '', workspace: c.workspace || '', modifiedAt: c.modifiedAt || '' });
       }
       const entries = [...sumsMap];
       const canPrune = bridgeOnline;
@@ -482,8 +463,8 @@
         if (!diskMatch && (!cached || (bridgeOnline && cached._do) || toNum(cached.stepCount) !== m.stepCount || toNum(cached.lastModifiedSec) !== m.lastModifiedSec)) staleIds.push([id, sum]);
         else if (cached) {
           const nc = fixRec(id, cached);
-          if (nc !== cached || (m.workspace && !nc.workspace) || (m.parentId && !nc.parentId)) {
-            usageRecords.set(id, { ...nc, workspace: nc.workspace || m.workspace || '', parentId: nc.parentId || m.parentId || '' });
+          if (nc !== cached || nc.archived || (m.workspace && !nc.workspace) || (m.parentId && !nc.parentId)) {
+            usageRecords.set(id, setArch({ ...nc, workspace: nc.workspace || m.workspace || '', parentId: nc.parentId || m.parentId || '' }, false));
             patchedMeta = true;
           }
         }
@@ -496,13 +477,19 @@
         for (const oldId of [...usageRecords.keys()]) {
           if (!presentIds.has(oldId)) {
             const oldRec = usageRecords.get(oldId);
-            if (hasPersistedTokens(oldRec)) continue;
-            if (oldRec?.subagent && oldRec?.parentId && presentIds.has(oldRec.parentId)) continue;
+            if (oldRec?.subagent && oldRec?.parentId && presentIds.has(oldRec.parentId)) {
+              if (oldRec.archived) { usageRecords.set(oldId, setArch(oldRec, false)); patchedMeta = true; }
+              continue;
+            }
+            if (hasPersistedTokens(oldRec)) {
+              if (!oldRec.archived) { usageRecords.set(oldId, setArch(oldRec, true)); patchedMeta = true; }
+              continue;
+            }
             usageRecords.delete(oldId); deletedAny = true;
           }
         }
       }
-      if (deletedAny) usageDataEpoch += 1;
+      if (deletedAny || patchedMeta) usageDataEpoch += 1;
       if (staleIds.length === 0) { usageHasData = true; if (canPrune) lastUsageFetchAt = now; if (patchedMeta || deletedAny) saveUsageCache(); renderHomePanel(); return; }
 
       usageLoading = true;
@@ -512,11 +499,12 @@
         const m = toNum(a?.dbMtimeSec || b?.dbMtimeSec), s = toNum(a?.dbSize || b?.dbSize);
         return { ...(m > 0 ? { dbMtimeSec: m } : {}), ...(s > 0 ? { dbSize: s } : {}) };
       };
+      const deferRec = (id, prev, sum) => usageRecords.set(id, advanceCachedCursor(prev, id, sum, true));
       const applyRecord = (id, sum, prev, rec, m) => {
-        if (hasRealUsage(prev) && !hasRealUsage(rec)) usageRecords.set(id, advanceCachedCursor(prev, id, sum, true));
+        if (hasRealUsage(prev) && !hasRealUsage(rec)) deferRec(id, prev, sum);
         else {
           const cr = fixRec(id, rec);
-          const n = { ...cr, ...dbMeta(sum, cr), subagent: !!(cr.subagent || m.subagent), workspace: cr.workspace || m.workspace || '', parentId: cr.parentId || m.parentId || '' };
+          const n = setArch({ ...cr, ...dbMeta(sum, cr), subagent: !!(cr.subagent || m.subagent), workspace: cr.workspace || m.workspace || '', parentId: cr.parentId || m.parentId || '' }, false);
           delete n._do; usageRecords.set(id, n);
         }
       };
@@ -525,21 +513,19 @@
           for (let i = 0; i < staleIds.length && !isDestroyed(); i += 6) {
             const slice = staleIds.slice(i, i + 6);
             const reqItems = slice.map(([id, sum]) => {
-              const c = usageRecords.get(id), m = extractMeta(sum, id), gm = toNum(c?.gmCount);
-              return { id, stepCount: m.stepCount, lastModifiedSec: m.lastModifiedSec, createdSec: m.createdSec, ...dbMeta(sum), subagent: m.subagent, workspace: m.workspace, ...(m.u.length ? { workspaces: m.u } : {}), parentId: m.parentId, gmOffset: c && !c._do && Number.isInteger(gm) && gm > 0 ? gm : 0 };
+              const c = usageRecords.get(id), { u, ...mr } = extractMeta(sum, id), gm = toNum(c?.gmCount);
+              return { id, ...mr, ...dbMeta(sum), ...(u.length ? { workspaces: u } : {}), gmOffset: c && !c._do && Number.isInteger(gm) && gm > 0 ? gm : 0 };
             });
             const res = await usageBridge.fetchBatch(reqItems, 18000);
             const byId = res?.ok && Array.isArray(res.records) ? new Map(res.records.map((r) => [r.id, r])) : null;
             for (const [id, sum] of slice) {
-              const prev = usageRecords.get(id);
-              const hit = byId?.get(id);
-              const m = extractMeta(sum, id);
+              const prev = usageRecords.get(id), hit = byId?.get(id), m = extractMeta(sum, id);
               if (hit?.mode === 'full' && hit.record) applyRecord(id, sum, prev, hit.record, m);
               else if (hit?.mode === 'delta' && hit.delta && usageCore.mergeUsageRecordDelta) {
-                const nr = usageCore.mergeUsageRecordDelta(fixRec(id, prev), hit.delta, { cascadeId: id, stepCount: m.stepCount, lastModifiedSec: m.lastModifiedSec, gmCount: toNum(hit.gmCount), subagent: m.subagent, workspace: m.workspace, parentId: m.parentId });
-                if (nr && typeof nr === 'object') delete nr._do;
+                const nr = usageCore.mergeUsageRecordDelta(fixRec(id, prev), hit.delta, { cascadeId: id, ...m, gmCount: toNum(hit.gmCount) });
+                if (nr && typeof nr === 'object') { delete nr._do; delete nr.archived; }
                 usageRecords.set(id, fixRec(id, nr));
-              } else usageRecords.set(id, advanceCachedCursor(prev, id, sum, true));
+              } else deferRec(id, prev, sum);
             }
             if (i + 6 < staleIds.length && !isDestroyed()) await sleep(40);
           }
@@ -548,15 +534,14 @@
           const canDirect = isFn(h.svc?.getCascadeTrajectory);
           for (let i = 0; i < staleIds.length && !isDestroyed(); i += CONC) {
             await Promise.all(staleIds.slice(i, i + CONC).map(async ([id, sum]) => {
-              const prev = usageRecords.get(id);
-              const m = extractMeta(sum, id);
-              if (!canDirect || m.stepCount > 240) { usageRecords.set(id, advanceCachedCursor(prev, id, sum, true)); return; }
+              const prev = usageRecords.get(id), m = extractMeta(sum, id);
+              if (!canDirect || m.stepCount > 240) { deferRec(id, prev, sum); return; }
               try {
                 let tId = null;
                 const toP = new Promise((_, rej) => { tId = setTimeout(() => rej(new Error('timeout')), 2800); });
                 const res = await Promise.race([h.svc.getCascadeTrajectory({ cascadeId: id }), toP]).finally(() => { if (tId !== null) clearTimeout(tId); });
                 applyRecord(id, sum, prev, usageCore.analyzeTrajectoryForUsage(res, sum, id), m);
-              } catch { usageRecords.set(id, advanceCachedCursor(prev, id, sum, true)); }
+              } catch { deferRec(id, prev, sum); }
             }));
             if (i + CONC < staleIds.length && !isDestroyed()) await sleep(usageHasData ? 120 : 24);
           }
@@ -620,15 +605,12 @@
       const tipText = cell.getAttribute('data-tip');
       if (!tipText) return;
       shownHeatCell = cell;
-      const gW = grid.clientWidth || 480;
-      const gH = grid.clientHeight || 96;
-      const cL = cell.offsetLeft || 0;
-      const cT = cell.offsetTop || 0;
-      const cW = cell.offsetWidth || 10;
-      const cH = cell.offsetHeight || 10;
+      const gW = grid.clientWidth || 480, gH = grid.clientHeight || 96;
+      const cL = cell.offsetLeft || 0, cT = cell.offsetTop || 0, cW = cell.offsetWidth || 10, cH = cell.offsetHeight || 10;
       const estW = Math.max(88, Math.min(240, tipText.length * 6.8 + 18));
-      const left = Math.min(Math.max(cL + cW * 0.5 - estW * 0.5, 0), Math.max(0, gW - estW));
-      const top = gH - cT - cH > cT && gH - cT - cH >= 30 ? cT + cH + 6 : cT - 30;
+      const left = Math.min(Math.max(cL + (cW - estW) * 0.5, 0), Math.max(0, gW - estW));
+      const bH = gH - cT - cH;
+      const top = bH > cT && bH >= 30 ? cT + cH + 6 : cT - 30;
       runGuardedMut(() => {
         if (heatTipEl.textContent !== tipText) heatTipEl.textContent = tipText;
         heatTipEl.style.transform = `translate3d(${Math.round(left)}px,${Math.round(top)}px,0)`;
@@ -670,8 +652,8 @@
       const greeting = home.querySelector('[data-testid="home-greeting"]');
       if (!greeting?.parentElement) return null;
       if (!panelSeat || !panelEl) {
-        panelSeat = markNoTr(dv('ag-cs-home-panel-seat', { 'data-ag-no-i18n': '', 'data-ag-owned': '1' }));
-        panelEl = mk('section', 'ag-cs-home-panel');
+        panelSeat = markNoTr(dv(HC + 'panel-seat', { 'data-ag-no-i18n': '', 'data-ag-owned': '1' }));
+        panelEl = mk('section', HC + 'panel');
         ap(panelSeat, panelEl);
       }
       if (!panelSeat.isConnected || panelSeat.parentElement !== greeting.parentElement || panelSeat.previousSibling !== greeting) {
@@ -680,52 +662,44 @@
       return panelEl;
     };
 
+    const dAct = (k, v, on) => (on ? { [k]: v, 'data-active': '' } : { [k]: v });
+
     const renderQuotasView = (panel, lang, ui) => {
-      const fmtTok = usageCore.formatCompactTokens;
-      const qWin = usageCore.quotaWindows;
-      const wrap = dv('ag-cs-quota-wrap');
-      const refreshBtn = bt('ag-cs-quota-refresh', quotaLoading ? ui.thinkingEllipsis || 'Loading…' : ui.refreshBtnTitle || 'Refresh', () => {
+      const fmtTok = usageCore.formatCompactTokens, qWin = usageCore.quotaWindows, wrap = dv(QC + 'wrap');
+      const refreshBtn = bt(QC + 'refresh', quotaLoading ? ui.thinkingEllipsis || 'Loading…' : ui.refreshBtnTitle || 'Refresh', () => {
         const now = Date.now();
         if (quotaLoading || inCooldown(lastManualRefreshAt, 5000, now)) return;
         lastManualRefreshAt = lastQuotaTabTriggerAt = now;
         void refreshLiveTelemetrySnapshot(true);
       });
       refreshBtn.disabled = quotaLoading;
-      ap(wrap, ap(dv('ag-cs-quota-toolbar'), sp('', ui.quotaPoolsTitle || 'Model Quota Pools Remaining'), refreshBtn));
+      ap(wrap, ap(dv(QC + 'toolbar'), sp('', ui.quotaPoolsTitle || 'Model Quota Pools Remaining'), refreshBtn));
 
       const groups = Array.isArray(liveQuotaSnap?.groups) ? liveQuotaSnap.groups.filter((g) => g && (!qWin || qWin(g).length > 0)) : [];
-      if (groups.length === 0) { ap(panel, ap(wrap, dv('ag-cs-home-models-empty', quotaLoading ? ui.quotaLoading || 'Loading…' : ui.quotaEmptyHint || 'Waiting for live quota snapshot…'))); return; }
+      if (!groups.length) { ap(panel, ap(wrap, dv(HC + 'models-empty', quotaLoading ? ui.quotaLoading || 'Loading…' : ui.quotaEmptyHint || 'Waiting for live quota snapshot…'))); return; }
 
-      const grid = dv('ag-cs-quota-grid');
-      const quotaWinUsage = liveQuotaSnap?.usage?.quotaWindows || null;
-      const qFb = studioFb(lang);
-      const healthBadgeFor = (r) => (!(r >= 0 && r <= 1) ? { s: 'idle', l: '—' }
-        : r <= 0.15 ? { s: 'low', l: ui.quotaLow || qFb[5] }
-        : r <= 0.35 ? { s: 'tight', l: ui.quotaTight || qFb[6] }
-        : { s: 'ok', l: ui.quotaHealthy || qFb[7] });
+      const grid = dv(QC + 'grid'), qUsage = liveQuotaSnap?.usage?.quotaWindows, qFb = studioFb(lang);
+      const badge = (r) => (!(r >= 0 && r <= 1) ? ['idle', '—'] : r <= 0.15 ? ['low', ui.quotaLow || qFb[5]] : r <= 0.35 ? ['tight', ui.quotaTight || qFb[6]] : ['ok', ui.quotaHealthy || qFb[7]]);
       for (const grp of groups) {
-        const card = dv('ag-cs-quota-card', { 'data-quota-kind': usageCore.quotaGroupKind ? usageCore.quotaGroupKind(grp) : 'other' });
-        const winEntries = [];
+        const card = dv(QC + 'card', { 'data-quota-kind': usageCore.quotaGroupKind?.(grp) || 'other' }), wins = [];
         let minRem = 2;
         for (const [wk, bucket] of qWin ? qWin(grp) : []) {
           const fc = usageCore.quotaForecast?.(bucket, wk);
           if (!fc) continue;
           const rem = isFin(fc.remaining) ? Math.max(0, Math.min(1, fc.remaining)) : 0;
           if (rem < minRem) minRem = rem;
-          winEntries.push([wk, fc, rem]);
+          wins.push([wk, fc, rem]);
         }
-        const bi = healthBadgeFor(minRem <= 1 ? minRem : -1);
-        ap(card, ap(dv('ag-cs-quota-card-head'), sp('ag-cs-quota-name', usageCore.quotaGroupLabel ? usageCore.quotaGroupLabel(grp, lang) : grp.name || grp.id), sp('ag-cs-quota-pace', bi.l, { 'data-pace': bi.s })));
-
-        for (const [wk, fc, rem] of winEntries) {
-          const winBox = dv('ag-cs-quota-win', rem <= 0.15 ? { 'data-warn': '2' } : rem <= 0.35 ? { 'data-warn': '1' } : null);
+        const [bs, bl] = badge(minRem <= 1 ? minRem : -1);
+        ap(card, ap(dv(QC + 'card-head'), sp(QC + 'name', usageCore.quotaGroupLabel?.(grp, lang) || grp.name || grp.id), sp(QC + 'pace', bl, { 'data-pace': bs })));
+        for (const [wk, fc, rem] of wins) {
           const eta = fc.resetInMs > 0 && usageCore.shortEta ? ` · ${usageCore.shortEta(fc.resetInMs, lang)}` : '';
           const solid = mk('i', 'ag-cs-qbar-solid');
           solid.style.width = `${(rem * 100).toFixed(1)}%`;
-          ap(card, ap(winBox, ap(dv('ag-cs-quota-win-row'), sp('ag-cs-quota-win-lbl', wk === 'weekly' ? ui.weeklyLabel || 'Weekly' : ui.fiveHourLabel || '5h'), sp('ag-cs-quota-win-val', `${Math.round(rem * 100)}%${eta}`)), ap(dv('ag-cs-quota-bar'), solid)));
+          ap(card, ap(dv(QC + 'win', rem <= 0.15 ? { 'data-warn': '2' } : rem <= 0.35 ? { 'data-warn': '1' } : null), ap(dv(QC + 'win-row'), sp(QC + 'win-lbl', wk === 'weekly' ? ui.weeklyLabel || 'Weekly' : ui.fiveHourLabel || '5h'), sp(QC + 'win-val', `${Math.round(rem * 100)}%${eta}`)), ap(dv(QC + 'bar'), solid)));
         }
-        const footText = quotaWinUsage?.[grp.id]?.totalTokens > 0 ? `${fmtTok(quotaWinUsage[grp.id].totalTokens)} tok` : '';
-        if (footText) ap(card, dv('ag-cs-quota-foot', footText));
+        const tok = qUsage?.[grp.id]?.totalTokens;
+        if (tok > 0) ap(card, dv(QC + 'foot', `${fmtTok(tok)} tok`));
         ap(grid, card);
       }
       ap(panel, ap(wrap, grid));
@@ -741,10 +715,10 @@
       const ui = uiText(lang);
       const fb = studioFb(lang);
       const skeleton = !usageHasData;
-      const aggKey = `${usageDataEpoch}|${usageRecords.size}|${activeRange}|${activeWorkspace}|${lang}|${bookPick}`;
+      const aggKey = `${usageDataEpoch}|${usageRecords.size}|${activeRange}|${activeWorkspace}|${+includeArchived}|${lang}|${bookPick}`;
       let data = cachedAggData;
       if (!data || cachedAggKey !== aggKey) {
-        data = usageCore.aggregateUsageRollup([...usageRecords.values()], activeRange, bookPick, lang, undefined, { workspace: activeWorkspace });
+        data = usageCore.aggregateUsageRollup([...usageRecords.values()], activeRange, bookPick, lang, undefined, { workspace: activeWorkspace, includeArchived });
         cachedAggKey = aggKey; cachedAggData = data;
       }
       const wsList = Array.isArray(data.workspaces) ? data.workspaces : [];
@@ -753,24 +727,36 @@
         return renderHomePanel(true);
       }
       const isQuotasTab = activeTab === 'quotas';
-      const renderKey = [curScope, lang, activeTab, activeRange, activeWorkspace, +modelsExpanded, +skeleton, isQuotasTab ? +quotaLoading : 0, isQuotasTab ? quotaEpoch : 0, usageRecords.size, data.sessions, data.calls, data.tokens, data.subagentTokens || 0, data.cacheHitRate != null ? data.cacheHitRate.toFixed(3) : '-', data.activeDays, data.model || ''].join('|');
+      const arch = toNum(data.archivedSessions);
+      const hasArch = !!(data.hasArchived || arch > 0);
+      const renderKey = [curScope, lang, activeTab, activeRange, activeWorkspace, +includeArchived, +hasArch, +modelsExpanded, +skeleton, isQuotasTab ? +quotaLoading : 0, isQuotasTab ? quotaEpoch : 0, usageRecords.size, data.sessions, arch, data.calls, data.tokens, data.subagentTokens || 0, data.cacheHitRate != null ? data.cacheHitRate.toFixed(3) : '-', data.activeDays, data.model || ''].join('|');
       if (!force && renderKey === lastPanelRenderKey && panel.childElementCount > 0) return;
       lastPanelRenderKey = renderKey;
+
+      const d = getDoc();
+      const ae = d?.activeElement;
+      let focusSel = '';
+      if (ae && panel.contains?.(ae)) {
+        for (const a of ['data-ag-scope-toggle', 'data-tab', 'data-range', 'data-ag-cs-ws-filter']) {
+          const v = ae.getAttribute?.(a);
+          if (v != null) { focusSel = a === 'data-ag-scope-toggle' ? `[${a}]` : `[${a}="${v}"]`; break; }
+        }
+      }
 
       runGuardedMut(() => {
         panel.innerHTML = '';
 
-        const headLeft = dv('ag-cs-home-head-left');
-        const tabs = dv('ag-cs-home-tabs');
+        const headLeft = dv(HC + 'head-left');
+        const tabs = dv(HC + 'tabs');
         for (const [id, label] of [['overview', ui.tabOverview || 'Overview'], ['models', ui.tabModels || 'Models'], ['quotas', ui.tabQuotas || 'Quotas']]) {
-          ap(tabs, bt('ag-cs-home-tab', label, () => {
+          ap(tabs, bt(HC + 'tab', label, () => {
             activeTab = id;
             if (id === 'quotas' && !hasUsableQuotas(liveQuotaSnap)) {
               const now = Date.now();
               if (!inCooldown(lastQuotaTabTriggerAt, 20000, now)) { lastQuotaTabTriggerAt = now; void refreshLiveTelemetrySnapshot(false, { quotaRefresh: true, ignoreFailCooldown: true }); }
             }
             renderHomePanel();
-          }, activeTab === id ? { 'data-tab': id, 'data-active': '' } : { 'data-tab': id }));
+          }, dAct('data-tab', id, activeTab === id)));
         }
         ap(headLeft, tabs);
         const scopeLabel = formatScopeBadge(curScope);
@@ -780,10 +766,11 @@
           ap(headLeft, badge);
         }
 
-        const headRight = dv('ag-cs-home-head-right');
+        const [allLbl, actLbl, kA, kH, localTag, localNote] = 'homeScopeAll,homeScopeActive,homeScopeActiveCount,homeScopeArchivedCount,homeLocalOnlyTag,homeLocalScopeNote'.split(',').map((k, i) => ui[k] || fb[11 + i]);
+        const headRight = dv(HC + 'head-right');
         if (!isQuotasTab) {
           if (wsList.length > 0) {
-            const sel = mk('select', 'ag-cs-home-ws-select', { 'data-ag-cs-ws-filter': '1', 'aria-label': ui.workspaceFilterAria || 'Workspace filter' });
+            const sel = mk('select', HC + 'ws-select', { 'data-ag-cs-ws-filter': '1', 'aria-label': ui.workspaceFilterAria || 'Workspace filter' });
             const addOpt = (v, t) => { const o = mk('option', '', t); o.value = v; ap(sel, o); };
             addOpt('all', ui.workspaceAll || 'All Projects');
             for (const ws of wsList) addOpt(ws.id, `${detectedCurrentWorkspace && ws.id === detectedCurrentWorkspace ? '● ' : ''}${ws.id} (${fmtTok(ws.tokens)})`);
@@ -791,63 +778,74 @@
             sel.addEventListener('change', () => { activeWorkspace = sel.value || 'all'; renderHomePanel(); });
             ap(headRight, sel);
           }
-          const ranges = dv('ag-cs-home-ranges');
+          if (!skeleton && (hasArch || !includeArchived)) {
+            const tTip = `${allLbl} / ${actLbl}`;
+            const sv = isFn(d?.createElementNS) ? ap(mkSv(d, 'svg', ['viewBox', '0 0 24 24', 'aria-hidden', 'true', 'focusable', 'false']), mkSv(d, 'path', ['d', 'M7 10h14l-4-4m0 8H3l4 4'])) : null;
+            const tg = ap(bt('ag-cs-hs-tg', '', () => { includeArchived = !includeArchived; try { getLs()?.setItem(scopePrefKey, includeArchived ? 'all' : 'active'); } catch {} cachedAggKey = ''; renderHomePanel(true); }, { 'data-ag-scope-toggle': includeArchived ? 'all' : 'active', 'aria-pressed': String(!includeArchived), 'aria-label': tTip }), sv, sp('', includeArchived ? allLbl : actLbl));
+            tg.title = tTip;
+            ap(headRight, tg);
+          }
+          const ranges = dv(HC + 'ranges');
           for (const r of usageCore.HOME_RANGES) {
-            ap(ranges, bt('ag-cs-home-range', usageCore.homeRangeLabel ? usageCore.homeRangeLabel(r, lang) : r.labelEn, () => { activeRange = r.id; renderHomePanel(); }, activeRange === r.id ? { 'data-range': r.id, 'data-active': '' } : { 'data-range': r.id }));
+            ap(ranges, bt(HC + 'range', usageCore.homeRangeLabel?.(r, lang) || r.labelEn, () => { activeRange = r.id; renderHomePanel(); }, dAct('data-range', r.id, activeRange === r.id)));
           }
           ap(headRight, ranges);
         }
-        ap(panel, ap(dv('ag-cs-home-panel-head'), headLeft, headRight));
+        ap(panel, ap(dv(HC + 'panel-head'), headLeft, headRight));
 
         if (isQuotasTab) { renderQuotasView(panel, lang, ui); return; }
 
+        const makeLocalNote = () => dv(HC + 'local-note', localNote, { 'data-local-scope-note': '1' });
+        const ac = fmtCnt(toNum(data.activeSessions));
+        const ar = fmtCnt(arch);
+        const sS = arch > 0 ? `${kA} ${ac} · ${kH} ${ar}` : !includeArchived ? actLbl : '';
+
+        const stC = HC + 'stat';
         if (activeTab === 'overview') {
-          const stats = dv('ag-cs-home-stats');
+          const stats = dv(stC + 's');
           const cacheVal = isFin(data.cacheHitRate) ? usageCore.fmtPct(data.cacheHitRate * 100, 1) : '—';
           const cacheTitle = typeof data.cacheHitRate === 'number' ? `${ui.cacheRead || 'Cache'}: ${fmtTok(data.cacheReadTokens || 0)} / ${fmtTok(data.totalInput || 0)}${data.peakHour ? ` · ${data.peakHour}` : ''}` : data.peakHour || '—';
-          const subTok = toNum(data.subagentTokens);
-          const subSes = toNum(data.subagentSessions);
+          const subTok = toNum(data.subagentTokens), subSes = toNum(data.subagentSessions);
           const subPct = data.tokens > 0 && subTok > 0 ? Math.round((subTok / data.tokens) * 100) : 0;
-          const swarmBadge = ui.swarmBadge || fb[2];
-          const subUnit = ui.subagentsUnit || fb[0];
-          const tokUnit = ui.tokenUnit || fb[1];
+          const [subUnit, tokUnit, swarmBadge] = ['subagentsUnit', 'tokenUnit', 'swarmBadge'].map((k, i) => ui[k] || fb[i]);
           const swarmSub = subTok > 0 ? (isFn(ui.swarmSplitSub) ? ui.swarmSplitSub(100 - subPct, subPct) : `Main ${100 - subPct}% · ${swarmBadge} ${subPct}%`) : '';
+          const sT = `${data.sessions}${subSes > 0 ? ` + ${subSes} ${subUnit}` : ''}${arch > 0 ? ` (${kA} ${ac} · ${kH} ${ar})` : ''}`;
 
           for (const [k, lb, vt, tt, stx] of [
-            ['sessions', ui.kpiSessions || 'Sessions', fmtCnt(data.sessions), subSes > 0 ? `${data.sessions} + ${subSes} ${subUnit}` : String(data.sessions)],
+            ['sessions', ui.kpiSessions || 'Sessions', fmtCnt(data.sessions), sT, sS],
             ['calls', ui.kpiCalls || 'Messages', fmtCnt(data.calls), String(data.calls)],
-            ['tokens', ui.kpiTokens || 'Total tokens', fmtTok(data.tokens), `${fmtCnt(data.tokens)} ${tokUnit}${swarmSub ? ` (${swarmSub})` : ''}`, swarmSub],
+            ['tokens', ui.kpiTokens || 'Total tokens', fmtTok(data.tokens), `${fmtCnt(data.tokens)} ${tokUnit}${swarmSub ? ` (${swarmSub})` : ''} · ${localNote}`, swarmSub || localTag],
             ['days', ui.kpiDays || 'Active days', fmtCnt(data.activeDays), String(data.activeDays)],
-            ['cache', ui.kpiCacheHit || 'Cache Hit Rate', cacheVal, cacheTitle],
+            ['cache', ui.kpiCacheHit || 'Cache Hit Rate', cacheVal, cacheTitle !== '—' ? `${cacheTitle} · ${localNote}` : localNote, localTag],
             ['model', ui.kpiFavModel || 'Favorite model', data.model || '—', data.model || '—'],
           ]) {
-            const cell = dv('ag-cs-home-stat', skeleton ? { 'data-stat': k, 'data-skeleton': '' } : { 'data-stat': k });
-            const val = sp('ag-cs-home-stat-value', skeleton ? '' : vt);
+            const cell = dv(stC, skeleton ? { 'data-stat': k, 'data-skeleton': '' } : { 'data-stat': k });
+            const val = sp(stC + '-value', skeleton ? '' : vt);
             if (!skeleton) val.title = tt;
-            let sEl = null;
-            if (!skeleton && stx) { sEl = sp('ag-cs-home-stat-sub', stx); sEl.title = tt; }
-            ap(stats, ap(cell, sp('ag-cs-home-stat-label', lb), val, sEl));
+            const sEl = !skeleton && stx ? sp(stC + '-sub', stx) : null;
+            if (sEl) sEl.title = tt;
+            ap(stats, ap(cell, sp(stC + '-label', lb), val, sEl));
           }
           ap(panel, stats);
 
-          const heat = dv('ag-cs-home-heat', skeleton ? { 'data-skeleton': '' } : null);
+          const heat = dv(HC + 'heat', { ...(skeleton ? { 'data-skeleton': '' } : {}), 'data-local-only': '1', 'aria-label': localNote });
           const fmt = usageCore.homeShortDateFormat(lang);
-          const d = getDoc();
           const heatFrag = isFn(d?.createDocumentFragment) ? d.createDocumentFragment() : heat;
           for (const c of data.grid.cells) {
             const lv = String(c.level);
-            const tip = skeleton ? '' : `${usageCore.homeShortDate(fmt, c.date)} — ${fmtTok(c.tokens)} ${ui.tokenUnit || fb[1]}`;
-            ap(heatFrag, sp('ag-cs-home-heat-cell', skeleton ? { 'data-level': lv } : { 'data-level': lv, 'data-tip': tip, 'aria-label': tip }));
+            const tip = skeleton ? '' : `${usageCore.homeShortDate(fmt, c.date)} — ${fmtTok(c.tokens)} ${tokUnit}`;
+            ap(heatFrag, sp(HC + 'heat-cell', skeleton ? { 'data-level': lv } : { 'data-level': lv, 'data-tip': tip, 'aria-label': tip }));
           }
           if (heatFrag !== heat) ap(heat, heatFrag);
-          heatTipEl = markNoTr(sp('ag-cs-home-heat-hint', { 'aria-hidden': 'true' }));
+          heatTipEl = markNoTr(sp(HC + 'heat-hint', { 'aria-hidden': 'true' }));
           ap(heat, heatTipEl);
-          heat.addEventListener('mouseover', (ev) => { const t = ev.target?.closest?.('.ag-cs-home-heat-cell'); if (t) showHeatTip(t, heat); });
+          heat.addEventListener('mouseover', (ev) => { const t = ev.target?.closest?.('.' + HC + 'heat-cell'); if (t) showHeatTip(t, heat); });
           heat.addEventListener('mouseleave', hideHeatTip);
-          ap(panel, heat, data.funBook ? sp('ag-cs-home-fun', data.funBook) : null);
+          ap(panel, heat, data.funBook ? sp(HC + 'fun', data.funBook) : null, makeLocalNote());
         } else {
           const models = data.models || [];
-          if (models.length === 0) { ap(panel, dv('ag-cs-home-models-empty', ui.noModelUsage || 'No model usage data yet')); return; }
+          const emptyMsg = ui.noModelUsage || 'No model usage data yet';
+          if (models.length === 0) { ap(panel, dv(HC + 'models-empty', !includeArchived && arch > 0 ? `${emptyMsg} (${kH} ${ar})` : emptyMsg), makeLocalNote()); return; }
           const ids = models.map((m) => m.id);
           const columns = data.modelDays || [];
           const fmt = usageCore.homeShortDateFormat(lang);
@@ -865,32 +863,30 @@
               if (sum > peak) { peak = sum; peakIdx = ci; }
             }
             const top = usageCore.axisMax(peak);
-            const plot = dv('ag-cs-home-chart-plot');
-            const bars = dv('ag-cs-home-chart-bars');
+            const cC = HC + 'chart-';
+            const plot = dv(cC + 'plot');
+            const bars = dv(cC + 'bars');
             for (const at of [1, 0.75, 0.5, 0.25, 0]) {
-              const tick = sp('ag-cs-home-chart-tick', top > 0 ? fmtTok(top * at) : '');
+              const tick = sp(cC + 'tick', top > 0 ? fmtTok(top * at) : '');
               tick.style.bottom = `${at * 100}%`;
               ap(plot, tick);
             }
             for (let ci = 0; ci < columns.length; ci++) {
-              const col = columns[ci], dayTotal = dayTotals[ci], stack = [];
-              for (const [mId, tok] of Object.entries(col.models)) stack.push({ id: mId, tokens: tok });
-              stack.sort((a, b) => b.tokens - a.tokens || a.id.localeCompare(b.id));
-              const colEl = sp('ag-cs-home-chart-col');
+              const col = columns[ci], dayTotal = dayTotals[ci];
+              const colEl = sp(cC + 'col');
               colEl.title = `${usageCore.homeShortDate(fmt, col.date)} · ${fmtTok(dayTotal)}`;
               colEl.style.height = `${top > 0 ? (dayTotal / top) * 100 : 0}%`;
-              for (const slice of stack) {
-                const seg = sp('ag-cs-home-chart-seg', { 'data-color': String(colours[slice.id] ?? 0) });
-                seg.style.height = `${dayTotal > 0 ? (slice.tokens / dayTotal) * 100 : 0}%`;
+              for (const [mId, tok] of Object.entries(col.models).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
+                const seg = sp(cC + 'seg', { 'data-color': String(colours[mId] ?? 0) });
+                seg.style.height = `${dayTotal > 0 ? (tok / dayTotal) * 100 : 0}%`;
                 ap(colEl, seg);
               }
               ap(bars, colEl);
             }
             ap(plot, bars);
-            const d = getDoc();
             if (top > 0 && isFn(d?.createElementNS)) {
-              const sv = (t, a) => { const n = d.createElementNS('http://www.w3.org/2000/svg', t); for (let i = 0; i < a.length; i += 2) n.setAttribute(a[i], a[i + 1]); return n; };
-              const nP = dayTotals.length, f = (v) => v.toFixed(1), cl = (v, a, b) => Math.max(a, Math.min(b, v)), vE = 'vector-effect', nS = 'non-scaling-stroke', cC = 'ag-cs-home-chart-';
+              const sv = (t, a) => mkSv(d, t, a);
+              const nP = dayTotals.length, f = (v) => v.toFixed(1), cl = (v, a, b) => Math.max(a, Math.min(b, v)), vE = 'vector-effect', nS = 'non-scaling-stroke';
               const svg = sv('svg', ['class', cC + 'svg', 'viewBox', '0 0 1000 160', 'preserveAspectRatio', 'none', 'aria-hidden', 'true']);
               const lg = sv('linearGradient', ['id', 'ag-cs-ag', 'x1', 0, 'y1', 0, 'x2', 0, 'y2', 1]);
               for (const s of ['0,.22', '62,.05', '100,0']) { const [o, p] = s.split(','); ap(lg, sv('stop', ['offset', o + '%', 'stop-color', 'currentColor', 'stop-opacity', p])); }
@@ -911,42 +907,43 @@
                 ap(plot, dot);
               }
             }
-            const axis = dv('ag-cs-home-chart-axis');
-            ap(panel, ap(dv('ag-cs-home-chart'), plot, axis));
+            const axis = dv(cC + 'axis');
+            ap(panel, ap(dv(HC + 'chart'), plot, axis));
             G.requestAnimationFrame?.(() => {
               if (!axis.isConnected) return;
               const labels = columns.map((c) => usageCore.homeShortDate(fmt, c.date));
               const ticks = usageCore.homeChartTicks(labels.map((l) => Math.max(32, l.length * 6.5)), plot.clientWidth || 420);
               runGuardedMut(() => {
                 axis.innerHTML = '';
-                for (const tk of ticks) { const lb = sp('ag-cs-home-chart-label', labels[tk.index]); lb.style.left = `${tk.left}px`; ap(axis, lb); }
+                for (const tk of ticks) { const lb = sp(cC + 'label', labels[tk.index]); lb.style.left = `${tk.left}px`; ap(axis, lb); }
               });
             });
           }
 
-          let totalAll = 0;
-          for (const m of models) totalAll += m.tokens;
+          const totalAll = models.reduce((s, m) => s + m.tokens, 0);
           const rowCap = usageCore.HOME_MODEL_ROWS;
           const shown = modelsExpanded ? models : models.slice(0, rowCap);
-          const listEl = dv('ag-cs-home-models');
+          const mC = HC + 'model';
+          const listEl = dv(mC + 's');
           const swarmBadge = ui.swarmBadge || fb[2];
           const inUnit = ui.tokensInShort || fb[3];
           const outUnit = ui.tokensOutShort || fb[4];
           for (const m of shown) {
-            const row = dv('ag-cs-home-model');
+            const row = dv(mC);
             const subShare = m.tokens > 0 && m.subagentTokens > 0 ? ` · ${swarmBadge} ${Math.round((m.subagentTokens / m.tokens) * 100)}%` : '';
             row.title = `${m.id} · ${m.sessions} ${ui.sessionsUnit || 'sessions'}${subShare}`;
             const inp = (m.input || 0) + (m.cacheRead || 0) + (m.cacheWrite || 0);
             const cacheTag = isFin(m.cacheHitRate) ? ` · ${Math.round(m.cacheHitRate * 100)}% ${ui.cacheShort || 'Cache'}` : '';
-            ap(listEl, ap(row, sp('ag-cs-home-model-swatch', { 'data-color': String(colours[m.id] ?? 0) }), sp('ag-cs-home-model-name', m.id), sp('ag-cs-home-model-split', `${fmtTok(inp)} ${inUnit} · ${fmtTok(m.output || 0)} ${outUnit}${cacheTag}`), sp('ag-cs-home-model-share', totalAll > 0 ? (Math.round((m.tokens / totalAll) * 1000) / 10).toFixed(1) + '%' : '—')));
+            ap(listEl, ap(row, sp(mC + '-swatch', { 'data-color': String(colours[m.id] ?? 0) }), sp(mC + '-name', m.id), sp(mC + '-split', `${fmtTok(inp)} ${inUnit} · ${fmtTok(m.output || 0)} ${outUnit}${cacheTag}`), sp(mC + '-share', totalAll > 0 ? (Math.round((m.tokens / totalAll) * 1000) / 10).toFixed(1) + '%' : '—')));
           }
           if (models.length > rowCap) {
             const hc = models.length - shown.length;
-            ap(listEl, bt('ag-cs-home-models-more', modelsExpanded ? ui.showLess || 'Show less' : isFn(ui.showMoreN) ? ui.showMoreN(hc) : `Show ${hc} more`, () => { modelsExpanded = !modelsExpanded; renderHomePanel(); }));
+            ap(listEl, bt(mC + 's-more', modelsExpanded ? ui.showLess || 'Show less' : isFn(ui.showMoreN) ? ui.showMoreN(hc) : `Show ${hc} more`, () => { modelsExpanded = !modelsExpanded; renderHomePanel(); }));
           }
-          ap(panel, listEl);
+          ap(panel, listEl, makeLocalNote());
         }
       });
+      if (focusSel) try { panel.querySelector?.(focusSel)?.focus?.(); } catch {}
     };
 
     return {

@@ -969,6 +969,7 @@ test('[P0-1] shouldEnableHostI18n resolves LANG=zh_CN.UTF-8 and skips LC_ALL=C.U
     Intl.DateTimeFormat = function () {
       return { resolvedOptions: () => ({ locale: 'zh-CN' }) };
     };
+    cdp._setWindowsUiLocaleReaderForTest(() => '');
     try {
       process.env.LC_ALL = 'C.UTF-8';
       process.env.LC_MESSAGES = 'POSIX';
@@ -976,11 +977,221 @@ test('[P0-1] shouldEnableHostI18n resolves LANG=zh_CN.UTF-8 and skips LC_ALL=C.U
       assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'auto' }), true);
     } finally {
       Intl.DateTimeFormat = origIntl;
+      cdp._setWindowsUiLocaleReaderForTest(null);
     }
 
     assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'auto' }, 'zh_CN.UTF-8'), true);
     assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'auto' }, 'C.UTF-8'), false);
   } finally {
+    if (prevLcAll === undefined) delete process.env.LC_ALL; else process.env.LC_ALL = prevLcAll;
+    if (prevLcMsg === undefined) delete process.env.LC_MESSAGES; else process.env.LC_MESSAGES = prevLcMsg;
+    if (prevLang === undefined) delete process.env.LANG; else process.env.LANG = prevLang;
+  }
+});
+
+test('[PR #50] Windows UI Display Language overrides Intl regional format, preserves hostLocalization="off" reverse channel, and prevents daemon skippedByLiveCfg heal churn', async () => {
+  const prevLcAll = process.env.LC_ALL;
+  const prevLcMsg = process.env.LC_MESSAGES;
+  const prevLang = process.env.LANG;
+  const origIntl = Intl.DateTimeFormat;
+  try {
+    process.env.LC_ALL = '';
+    process.env.LC_MESSAGES = '';
+    process.env.LANG = '';
+
+    // Case 1: Windows Display Language is en-US while Regional Format (Intl) is zh-CN -> auto must NOT enable zh-CN host-i18n
+    Intl.DateTimeFormat = function () {
+      return { resolvedOptions: () => ({ locale: 'zh-CN' }) };
+    };
+    cdp._setWindowsUiLocaleReaderForTest(() => 'en-US');
+    assert.equal(cdp.readWindowsPreferredUiLanguage(), 'en-US');
+    assert.equal(cdp.detectSystemUiLocale(), 'en-US');
+    assert.equal(cdp.resolveSystemLangNode(), 'en');
+    assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'auto' }), false);
+    assert.equal(cdp.shouldEnableHostI18n({}), false);
+    // CRITICAL redline: hostLocalization='off' MUST still return true to mount reverse English restoration channel
+    assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'off', language: 'auto' }), true);
+    assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'off', language: 'en' }), true);
+    const copyEn = cdp.buildRelaunchDialogCopy('auto');
+    assert.equal(copyEn.relaunchBtn, 'Relaunch Now');
+    assert.equal(/[\u4e00-\u9fa5]/.test(copyEn.body), false);
+
+    // Case 2: Windows Display Language is zh-Hans-CN while Intl is en-US -> enables zh-CN host-i18n and Chinese relaunch prompt
+    Intl.DateTimeFormat = function () {
+      return { resolvedOptions: () => ({ locale: 'en-US' }) };
+    };
+    cdp._setWindowsUiLocaleReaderForTest(() => 'zh-Hans-CN');
+    assert.equal(cdp.readWindowsPreferredUiLanguage(), 'zh-Hans-CN');
+    assert.equal(cdp.detectSystemUiLocale(), 'zh-Hans-CN');
+    assert.equal(cdp.resolveSystemLangNode(), 'zh-CN');
+    assert.equal(cdp.shouldEnableHostI18n({ hostLocalization: 'auto', language: 'auto' }), true);
+    const copyZh = cdp.buildRelaunchDialogCopy('auto');
+    assert.equal(copyZh.relaunchBtn, '立即重开');
+
+    // Case 3: buildConfigRefreshExpression honors navigator.languages[0] for auto non-zh destroy() AND preserves setMode('off')
+    const runRefresh = (cfg, nav) => {
+      const calls = [];
+      const refExpr = cdp.buildConfigRefreshExpression(cfg);
+      const sb = {
+        navigator: nav,
+        document: {
+          documentElement: {
+            setAttribute() {},
+            removeAttribute() {},
+          },
+          querySelectorAll: () => [],
+        },
+        window: null,
+        globalThis: null,
+        __agPrism: {
+          version: cdp.PLUGIN_VERSION,
+          codeHash: JSON.parse(refExpr.match(/"codeHash":"([^"]+)"/)[1] ? `"${refExpr.match(/"codeHash":"([^"]+)"/)[1]}"` : '""'),
+          refreshConfig: () => true,
+          getState: () => ({ cfg }),
+        },
+        __agPrismHostI18n: {
+          setMode: (m) => calls.push(['setMode', m]),
+          destroy: () => calls.push(['destroy']),
+        },
+      };
+      sb.window = sb;
+      sb.globalThis = sb;
+      const res = vm.runInNewContext(refExpr, sb);
+      assert.equal(res.refreshed, true);
+      return calls;
+    };
+
+    assert.deepEqual(
+      runRefresh({ ...cdp.DEFAULT_CONFIG, hostLocalization: 'off', language: 'auto' }, { language: 'en-US', languages: ['en-US'] }),
+      [['setMode', 'off']],
+      'hostLocalization="off" must invoke setMode("off"), never destroy()'
+    );
+    assert.deepEqual(
+      runRefresh({ ...cdp.DEFAULT_CONFIG, hostLocalization: 'auto', language: 'auto' }, { language: 'zh-CN', languages: ['en-US', 'zh-CN'] }),
+      [['destroy']],
+      'auto mode must prioritize navigator.languages[0] and gracefully destroy() hostI18n on non-zh UI'
+    );
+    assert.deepEqual(
+      runRefresh({ ...cdp.DEFAULT_CONFIG, hostLocalization: 'auto', language: 'auto' }, { language: 'en-US', languages: ['zh-CN', 'en-US'] }),
+      [['setMode', 'auto']],
+      'auto mode with zh-CN primary navigator.languages[0] keeps setMode("auto")'
+    );
+
+    // Case 4: PrismDaemon consumes skippedByLiveCfg and prevents repeated verifyAndHeal churn on the same sig
+    const { PrismDaemon } = await import('../sidecars/daemon/main.mjs');
+    let hostI18nEvalCount = 0;
+    let currentCfg = { ...cdp.DEFAULT_CONFIG, hostLocalization: 'auto', language: 'auto', omniModule: 'off', sidebarStudio: 'off', thoughtTranslate: 'off', periodicModelPicker: 'off', mascot: 'off' };
+    const daemon = new PrismDaemon({ rootDir: ROOT, silent: true, enableStorageGuardTimer: false, enableAutoUpdateTimer: false });
+    daemon.cdp = {
+      ...cdp,
+      readConfig: () => ({ ...currentCfg }),
+      shouldEnableHostI18n: (c) => (c.hostLocalization === 'off' ? true : c.hostLocalization === 'on' ? true : true),
+      buildHostI18nExpression: () => '(() => ({ ok: true, status: "off", skippedByLiveCfg: true }))()',
+    };
+    daemon.injectExpr = '(() => ({ ok: true }))()';
+    daemon.hostI18nExpr = '(() => ({ ok: true, status: "off", skippedByLiveCfg: true }))()';
+    const entry = {
+      wsUrl: 'ws://skip-guard',
+      pageId: 'p1',
+      url: 'vscode-file://vscode-app/workbench.html',
+      title: 'Antigravity',
+      mainFrameId: 'MAIN',
+      contextFrames: new Map(),
+      isolatedHostI18nPaused: false,
+      isolatedHostI18nNoExtCtxs: new Set(),
+      scriptId: 'main-1',
+      omniScriptId: null,
+      lastOmniExpr: '',
+      sidebarScriptId: null,
+      sidebarBindingAdded: false,
+      sidebarMounted: false,
+      hostI18nScriptId: 'hi-1',
+      hostI18nMounted: false,
+      hostI18nSkippedByLiveCfg: false,
+      lastHostI18nSig: '',
+      lastHostI18nScriptSig: 'auto:auto',
+      thoughtScriptId: null,
+      thoughtMounted: false,
+      inlineDiffScriptId: null,
+      inlineDiffMounted: false,
+      inlineDiffSkipped: true,
+      wallpaperScriptId: null,
+      wallpaperMounted: false,
+      wallpaperSkipped: true,
+      suggesterScriptId: null,
+      suggesterMounted: false,
+      suggesterSkipped: true,
+      periodicPickerScriptId: null,
+      periodicPickerMounted: false,
+      mascotScriptId: null,
+      mascotMounted: false,
+      session: {
+        closed: false,
+        send: async (m) => (m === 'Page.addScriptToEvaluateOnNewDocument' ? { identifier: 'hi-new' } : {}),
+        evaluate: async (expr) => {
+          if (expr.includes('hasHostI18n')) {
+            return {
+              ready: true,
+              isHostDom: true,
+              hasStyle: true,
+              hasRuntime: true,
+              hasOmni: false,
+              hasSidebar: false,
+              hasSidebarBridge: false,
+              hasHostI18n: false,
+              hostI18nMode: '',
+              hasThought: false,
+              hasThoughtSettingsUi: false,
+              hasInlineDiff: false,
+              hasWallpaper: false,
+              hasWallpaperUi: false,
+              hasSuggester: false,
+              hasSuggesterUi: false,
+              hasPeriodicPicker: false,
+              hasMascot: false,
+              codeHash: daemon.cdp.buildInjectExpression ? '' : '',
+              href: 'vscode-file://vscode-app/workbench.html',
+            };
+          }
+          if (expr.includes('skippedByLiveCfg')) {
+            hostI18nEvalCount += 1;
+            return { ok: true, status: 'off', skippedByLiveCfg: true };
+          }
+          return { ok: true };
+        },
+      },
+    };
+    // First verify: evaluates once and records hostI18nSkippedByLiveCfg = true
+    await daemon._verifyAndHealEntryUnlocked(entry);
+    assert.equal(hostI18nEvalCount, 1);
+    assert.equal(entry.hostI18nMounted, false);
+    assert.equal(entry.hostI18nSkippedByLiveCfg, true);
+    assert.equal(entry.lastHostI18nSig, 'auto:auto');
+
+    // Second verify under same sig: MUST NOT re-evaluate hostI18nExpr (0 churn!)
+    await daemon._verifyAndHealEntryUnlocked(entry);
+    assert.equal(hostI18nEvalCount, 1, 'Repeated health checks under same sig must skip hostI18n heal');
+
+    // Config changes to hostLocalization='off': sig changes -> guard clears and evaluates reverse mode
+    currentCfg = { ...currentCfg, hostLocalization: 'off' };
+    daemon.hostI18nExpr = '(() => ({ ok: true, status: "off-enforced" }))()';
+    let offEvaluated = 0;
+    const origEval = entry.session.evaluate;
+    entry.session.evaluate = async (expr) => {
+      if (expr.includes('off-enforced')) {
+        offEvaluated += 1;
+        return { ok: true, status: 'off-enforced' };
+      }
+      return origEval(expr);
+    };
+    await daemon._verifyAndHealEntryUnlocked(entry);
+    assert.equal(offEvaluated, 1, 'Switching to hostLocalization="off" must bypass old skippedByLiveCfg sig');
+    assert.equal(entry.hostI18nMounted, true);
+    assert.equal(entry.hostI18nSkippedByLiveCfg, false);
+    assert.equal(entry.lastHostI18nSig, 'off:auto');
+  } finally {
+    Intl.DateTimeFormat = origIntl;
+    cdp._setWindowsUiLocaleReaderForTest(null);
     if (prevLcAll === undefined) delete process.env.LC_ALL; else process.env.LC_ALL = prevLcAll;
     if (prevLcMsg === undefined) delete process.env.LC_MESSAGES; else process.env.LC_MESSAGES = prevLcMsg;
     if (prevLang === undefined) delete process.env.LANG; else process.env.LANG = prevLang;

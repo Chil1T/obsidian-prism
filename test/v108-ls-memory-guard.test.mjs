@@ -902,6 +902,9 @@ test('Defense 2B: default-off autoArchiveOnExit, fail-closed offline sequence (g
       session: {
         closed: false,
         send: async (_m, p) => {
+          if (typeof p?.expression === 'string' && p.expression.includes('data-ag-cs-lang')) {
+            return { result: { value: 'zh-CN' } };
+          }
           evalHistory.push(p.expression);
           return { result: { value: { mounted: true } } };
         },

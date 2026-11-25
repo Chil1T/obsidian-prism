@@ -197,11 +197,13 @@ void main() {
     vec3 sPos = vec3(uSlotPos[i].x, uSlotPos[i].y + 1.15, uSlotPos[i].z);
     vec3 dVec = sPos - vWorldPos;
     float rHoriz = length(vec2(vWorldPos.x - uSlotPos[i].x, vWorldPos.z - uSlotPos[i].z));
-    float att = li / (1.0 + dot(dVec, dVec) * 0.65);
-    float pool = smoothstep(1.18, 0.06, rHoriz) * li;
-    slotLightSum += uSlotCol[i].rgb * (att * 0.44 + pool * isFloor * 0.82);
+    float att = li / (1.0 + dot(dVec, dVec) * mix(0.86, 0.65, lightMode));
+    float poolCore = smoothstep(0.84, 0.14, rHoriz) * li;
+    float poolSoft = smoothstep(1.16, 0.16, rHoriz) * li;
+    vec3 spotTint = mix(uSlotCol[i].rgb, vec3(1.0, 0.94, 0.86), 0.36);
+    slotLightSum += uSlotCol[i].rgb * (att * 0.48 + poolSoft * isFloor * mix(0.58, 0.50, lightMode)) + spotTint * (poolCore * isFloor * mix(1.18, 0.48, lightMode));
     if (rHoriz < 0.88) {
-      slotRimCol = mix(slotRimCol, uSlotCol[i].rgb, 0.72);
+      slotRimCol = mix(slotRimCol, uSlotCol[i].rgb, 0.75);
       slotRimBoost = max(slotRimBoost, li);
     }
   }
@@ -209,13 +211,14 @@ void main() {
   vec3 emOut = vec3(0.0);
   if (isMascot > 0.5) {
     float aLum = dot(albedo, vec3(0.299, 0.587, 0.114));
-    vec3 vivid = clamp(mix(vec3(aLum), albedo, 1.12), 0.0, 1.0);
-    float activeAmt = smoothstep(0.38, 1.0, shadeDim);
-    float bright = clamp(mix(1.04, 1.02, lightMode) + slotRimBoost * mix(0.11, 0.06, lightMode), 0.96, 1.16);
+    vec3 vivid = clamp(mix(vec3(aLum), albedo, 1.18), 0.0, 1.0);
+    float activeAmt = smoothstep(0.41, 1.0, shadeDim);
+    float bright = clamp(mix(0.95, 1.00, lightMode) + slotRimBoost * mix(0.06, 0.05, lightMode), 0.92, 1.04);
     vec3 litMascot = vivid * bright;
-    vec3 muted = mix(vec3(aLum), albedo, mix(0.48, 0.78, lightMode));
-    vec3 nightTint = mix(vec3(0.31, 0.32, 0.36), vec3(0.68, 0.65, 0.61), lightMode);
-    color = mix(muted * nightTint, litMascot, activeAmt);
+    vec3 muted = mix(vec3(aLum), albedo, mix(0.45, 0.78, lightMode));
+    vec3 sleepBase = pow(max(muted, vec3(0.001)), vec3(mix(1.16, 1.0, lightMode)));
+    vec3 nightTint = mix(vec3(0.24, 0.25, 0.29), vec3(0.68, 0.65, 0.61), lightMode);
+    color = mix(sleepBase * nightTint, litMascot, activeAmt);
     if (rimAmt > 0.01) {
       float aL = texture(uTex, clamp(vUv + vec2(-uTexelSize.x, 0.0), uUvBounds.xy, uUvBounds.zw)).a;
       float aR = texture(uTex, clamp(vUv + vec2(uTexelSize.x, 0.0), uUvBounds.xy, uUvBounds.zw)).a;
@@ -223,10 +226,12 @@ void main() {
       float aD = texture(uTex, clamp(vUv + vec2(0.0, uTexelSize.y), uUvBounds.xy, uUvBounds.zw)).a;
       float edge = step(min(min(aL, aR), min(aU, aD)), 0.15);
       float topBias = step(aU, 0.15) * 0.55 + 0.45;
-      vec3 rimColor = mix(vec3(1.0, 0.74, 0.36), slotRimCol, clamp(slotRimBoost, 0.0, 1.0));
-      float rimPow = edge * topBias * rimAmt * (0.14 + slotRimBoost * 0.34);
-      color += rimColor * rimPow * mix(0.42, 0.24, lightMode);
-      emOut += rimColor * rimPow * 0.32;
+      vec3 sleepRim = mix(vec3(0.54, 0.64, 0.82), vec3(0.92, 0.82, 0.68), lightMode);
+      vec3 baseRim = mix(sleepRim, vec3(1.0, 0.74, 0.36), activeAmt);
+      vec3 rimColor = mix(baseRim, slotRimCol, clamp(slotRimBoost, 0.0, 1.0));
+      float rimPow = edge * topBias * rimAmt * (mix(0.11, 0.14, activeAmt) + slotRimBoost * 0.36);
+      color += rimColor * rimPow * mix(0.38, 0.24, lightMode);
+      emOut += rimColor * rimPow * mix(0.12, 0.24, activeAmt);
     }
     if (uEmissive.a > 0.001) {
       float fxSat = max(max(tex.r, tex.g), tex.b) - min(min(tex.r, tex.g), tex.b);
@@ -236,28 +241,35 @@ void main() {
       emOut += glow;
     }
   } else {
-    vec3 ambientDark = mix(vec3(0.052, 0.068, 0.128), vec3(0.090, 0.082, 0.118), isFloor);
+    vec3 ambientDark = mix(vec3(0.032, 0.044, 0.088), vec3(0.058, 0.054, 0.082), isFloor);
     vec3 ambientLight = mix(vec3(0.50, 0.45, 0.39), vec3(0.62, 0.56, 0.49), isFloor);
     vec3 amb = mix(ambientDark, ambientLight, lightMode);
     vec3 moonDir = normalize(vec3(-0.32, 0.68, 0.66));
     float moonNdL = max(dot(N, moonDir), 0.0) * 0.55 + 0.45;
-    vec3 moonCol = mix(vec3(0.16, 0.28, 0.54), vec3(0.28, 0.32, 0.40), lightMode);
+    vec3 moonCol = mix(vec3(0.105, 0.19, 0.38), vec3(0.28, 0.32, 0.40), lightMode);
     vec3 lit = amb + moonCol * moonNdL * 0.26;
     vec3 hVec = vec3(uHearth.x, uHearth.y, uHearth.z) - vWorldPos;
-    float hDist2 = dot(hVec, hVec) + 0.38;
-    float hAtt = uHearth.w / (1.0 + hDist2 * 0.40);
-    float hNdL = mix(max(dot(N, normalize(hVec)), 0.0) * 0.65 + 0.35, 0.80, isSprite);
-    lit += vec3(1.22, 0.56, 0.18) * hAtt * hNdL;
+    float hDist2 = dot(hVec, hVec) + mix(0.26, 0.38, lightMode);
+    float hAtt = uHearth.w / (1.0 + hDist2 * mix(0.64, 0.40, lightMode));
+    float hNdL = mix(max(dot(N, normalize(hVec)), 0.0) * 0.70 + 0.30, 0.82, isSprite);
+    lit += mix(vec3(1.40, 0.60, 0.18), vec3(1.22, 0.56, 0.18), lightMode) * hAtt * hNdL;
     vec3 lanPosA = vec3(-2.35, 2.75, -1.55);
     vec3 lanPosB = vec3(2.35, 2.75, -1.55);
     vec3 lanPosC = vec3(0.0, 3.05, -1.15);
+    vec3 candPos = vec3(1.48, 1.32, -2.35);
     float dA = length(lanPosA - vWorldPos);
     float dB = length(lanPosB - vWorldPos);
     float dC = length(lanPosC - vWorldPos);
-    float warmPool = 0.64 / (1.0 + dA * dA * 0.32) + 0.64 / (1.0 + dB * dB * 0.32) + 0.82 / (1.0 + dC * dC * 0.26);
-    lit += vec3(1.05, 0.70, 0.32) * warmPool * mix(0.46, 0.36, lightMode);
+    float dK = length(candPos - vWorldPos);
+    float lanK = mix(0.52, 0.32, lightMode);
+    float lanKC = mix(0.44, 0.26, lightMode);
+    float warmPool = mix(0.76, 0.64, lightMode) / (1.0 + dA * dA * lanK)
+      + mix(0.76, 0.64, lightMode) / (1.0 + dB * dB * lanK)
+      + mix(1.04, 0.82, lightMode) / (1.0 + dC * dC * lanKC)
+      + (1.0 - lightMode) * 0.64 / (1.0 + dK * dK * 0.92);
+    lit += mix(vec3(1.16, 0.72, 0.30), vec3(1.05, 0.70, 0.32), lightMode) * warmPool * mix(0.48, 0.36, lightMode);
     lit += slotLightSum;
-    lit = lit / (1.0 + lit * 0.24);
+    lit = lit / (1.0 + lit * mix(0.18, 0.24, lightMode));
     color = albedo * lit;
     if (rimAmt > 0.01) {
       float aL = texture(uTex, clamp(vUv + vec2(-uTexelSize.x, 0.0), uUvBounds.xy, uUvBounds.zw)).a;
@@ -267,7 +279,7 @@ void main() {
       float edge = step(min(min(aL, aR), min(aU, aD)), 0.15);
       float topBias = step(aU, 0.15) * 0.55 + 0.45;
       vec3 rimColor = mix(vec3(1.0, 0.72, 0.34), slotRimCol, clamp(slotRimBoost, 0.0, 1.0));
-      float rimPow = edge * topBias * rimAmt * (0.28 + slotRimBoost * 0.42);
+      float rimPow = edge * topBias * rimAmt * (0.26 + slotRimBoost * 0.46);
       color += rimColor * rimPow * mix(0.55, 0.30, lightMode);
       emOut += rimColor * rimPow * 0.36;
     }
@@ -277,10 +289,10 @@ void main() {
     }
     if (uEmissive.a > 0.001) {
       float lum = dot(tex.rgb, vec3(0.299, 0.587, 0.114));
-      float mask = smoothstep(0.46, 0.86, lum);
+      float mask = smoothstep(mix(0.52, 0.46, lightMode), 0.88, lum);
       float pulse = 0.90 + 0.10 * sin(timeSec * 4.5 + vWorldPos.x * 2.1);
       vec3 glow = mix(tex.rgb, uEmissive.rgb, 0.38) * mask * uEmissive.a * pulse;
-      color += glow * 0.48;
+      color += glow * mix(0.54, 0.48, lightMode);
       emOut += glow;
     }
   }
@@ -320,12 +332,22 @@ void main() {
   vec3 col = uColor.rgb;
   if (mode < 0.5) {
     float edgeX = 1.0 - abs(vUv.x * 2.0 - 1.0);
-    float core = pow(max(edgeX, 0.0), 1.85);
-    float soft = pow(max(edgeX, 0.0), 0.90);
-    float fadeY = smoothstep(0.0, 0.14, vUv.y) * pow(max(1.0 - vUv.y, 0.0), 1.25);
-    float shimmer = 0.86 + 0.14 * sin(vUv.x * 16.0 + timeSec * 1.8 + vWorldPos.x);
-    alpha = (soft * 0.42 + core * 0.58) * fadeY * shimmer * uColor.a;
-    col = mix(uColor.rgb, vec3(1.0, 0.94, 0.82), core * 0.14);
+    if (p1 > 0.5) {
+      float mask = smoothstep(0.05, 0.23, edgeX);
+      float core = pow(max(edgeX, 0.0), 2.15);
+      float edgeLine = smoothstep(0.06, 0.19, edgeX) * (1.0 - smoothstep(0.19, 0.38, edgeX)) * 0.38;
+      float fadeY = smoothstep(0.0, 0.10, vUv.y) * pow(max(1.0 - vUv.y * 0.92, 0.0), 0.92);
+      float shafts = 0.80 + 0.20 * sin(vUv.x * 22.0 + timeSec * 1.7 + vWorldPos.x * 1.5);
+      alpha = (mask * 0.32 + core * 0.64 + edgeLine) * fadeY * shafts * uColor.a;
+      col = mix(uColor.rgb, vec3(1.0, 0.96, 0.88), core * 0.12);
+    } else {
+      float core = pow(max(edgeX, 0.0), 1.85);
+      float soft = pow(max(edgeX, 0.0), 0.90);
+      float fadeY = smoothstep(0.0, 0.14, vUv.y) * pow(max(1.0 - vUv.y, 0.0), 1.25);
+      float shimmer = 0.86 + 0.14 * sin(vUv.x * 16.0 + timeSec * 1.8 + vWorldPos.x);
+      alpha = (soft * 0.42 + core * 0.58) * fadeY * shimmer * uColor.a;
+      col = mix(uColor.rgb, vec3(1.0, 0.94, 0.82), core * 0.14);
+    }
   } else if (mode < 1.5) {
     vec2 d = vUv * 2.0 - 1.0;
     float r = length(d);
@@ -336,12 +358,12 @@ void main() {
     vec2 d = vUv * 2.0 - 1.0;
     float r = length(d);
     if (r > 1.0) discard;
-    float ring1 = exp(-pow((r - p1) / 0.075, 2.0));
-    float ring2 = exp(-pow((r - max(0.05, p1 - 0.18)) / 0.055, 2.0)) * 0.62;
+    float ring1 = exp(-pow((r - p1) / 0.056, 2.0));
+    float ring2 = exp(-pow((r - max(0.05, p1 - 0.20)) / 0.040, 2.0)) * 0.72;
     float angle = atan(d.y, d.x);
-    float runes = 0.72 + 0.28 * sin(angle * 12.0 + timeSec * 3.0);
+    float runes = 0.76 + 0.24 * sin(angle * 12.0 + timeSec * 2.8);
     alpha = (ring1 + ring2) * runes * uColor.a;
-    col = mix(uColor.rgb, vec3(1.0, 0.96, 0.88), ring1 * 0.4);
+    col = mix(uColor.rgb, vec3(1.0, 0.97, 0.90), ring1 * 0.34);
   } else {
     vec2 d = abs(vUv * 2.0 - 1.0);
     float sq = max(d.x, d.y);
@@ -406,12 +428,16 @@ void main() {
   vec3 col = mix(sharp, soft, coc);
   col += bloom * bloomStr;
   float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
-  vec3 shadowTone = mix(vec3(0.88, 0.94, 1.14), vec3(1.02, 0.99, 0.95), lightMode);
-  vec3 highTone = mix(vec3(1.08, 1.00, 0.88), vec3(1.03, 1.01, 0.96), lightMode);
+  vec3 shadowTone = mix(vec3(0.82, 0.90, 1.14), vec3(1.02, 0.99, 0.95), lightMode);
+  vec3 highTone = mix(vec3(1.10, 1.01, 0.87), vec3(1.03, 1.01, 0.96), lightMode);
   col *= mix(shadowTone, highTone, smoothstep(0.14, 0.74, lum));
-  col = acesFilm(col * mix(1.04, 0.98, lightMode));
+  col = acesFilm(col * mix(1.05, 0.98, lightMode));
+  float outL = max(dot(col, vec3(0.2126, 0.7152, 0.0722)), 0.0001);
+  float sCurve = outL * outL * (3.0 - 2.0 * outL);
+  float targetL = mix(outL, sCurve, (1.0 - lightMode) * 0.34);
+  col = clamp(col * (targetL / outL), 0.0, 1.0);
   vec2 vp = (vUv - vec2(0.5, 0.52)) * vec2(1.15, 1.0);
-  float vig = 1.0 - smoothstep(0.30, 0.84, length(vp)) * vigStr;
+  float vig = 1.0 - smoothstep(mix(0.24, 0.30, lightMode), mix(0.78, 0.84, lightMode), length(vp)) * vigStr;
   col *= vig;
   fragColor = vec4(col, 1.0);
 }`;
@@ -1487,15 +1513,15 @@ void main() {
       gl.enable(gl.DEPTH_TEST);
       gl.depthMask(true);
       gl.disable(gl.BLEND);
-      gl.clearBufferfv(gl.COLOR, 0, lightMode > 0.5 ? [0.88, 0.82, 0.72, 1.0] : [0.03, 0.04, 0.08, 1.0]);
+      gl.clearBufferfv(gl.COLOR, 0, lightMode > 0.5 ? [0.88, 0.82, 0.72, 1.0] : [0.015, 0.022, 0.048, 1.0]);
       gl.clearBufferfv(gl.COLOR, 1, [0.0, 0.0, 0.0, 1.0]);
       gl.clear(gl.DEPTH_BUFFER_BIT);
 
       gl.useProgram(progScene);
       gl.uniformMatrix4fv(uScene.uViewProj, false, vp);
       gl.uniform4f(uScene.uLightTheme, lightMode, timeSec, 0, 0);
-      const hearthFlicker = 1.92 + 0.28 * Math.sin(timeSec * 7.3) + 0.16 * Math.sin(timeSec * 13.1);
-      gl.uniform4f(uScene.uHearth, -0.02, 0.76, -3.12, hearthFlicker * (lightMode > 0.5 ? 0.68 : 1.0));
+      const hearthFlicker = 2.40 + 0.34 * Math.sin(timeSec * 7.3) + 0.18 * Math.sin(timeSec * 13.1);
+      gl.uniform4f(uScene.uHearth, -0.02, 0.76, -3.12, hearthFlicker * (lightMode > 0.5 ? 0.55 : 1.0));
 
       const slotPosArr = new Float32Array(20);
       const slotColArr = new Float32Array(20);
@@ -1516,7 +1542,7 @@ void main() {
 
       // 3a) 远景黑曜石酒馆星夜后墙 (z = -3.50)
       drawSceneMesh(meshWall, wallTexInfo, modelMat(0, 0, -3.50, 1, 1, 1), {
-        emissive: [0.92, 0.86, 0.78, lightMode > 0.5 ? 0.28 : 0.62],
+        emissive: [0.96, 0.84, 0.70, lightMode > 0.5 ? 0.28 : 0.72],
         flags: [0, 0, 1, 0],
       });
 
@@ -1600,22 +1626,27 @@ void main() {
         drawFxMesh(meshFxFloor, modelMat(sp.x, sp.y + 0.016, sp.z, shScale, 1, shScale * 0.68), [0.02, 0.02, 0.05, lightMode > 0.5 ? 0.24 : 0.58], [1.0, timeSec, 1.8, 0.0]);
       }
 
-      // Additive 混合绘地板阵营池光与点亮瞬间双环魔法涟漪
+      // Additive 混合绘地板阵营池光、常驻锐利双环魔法光池与点亮瞬间魔法涟漪
       gl.blendFunc(gl.ONE, gl.ONE);
       for (let i = 0; i < 5; i++) {
         const sp = SLOT_WORLD_POS[i];
         const info = slotInfos[i];
         if (!info) continue;
         if (info.light > 0.02) {
-          const rad = (i === 4 ? 1.46 : 1.24) + info.light * 0.24;
-          const a = info.light * (lightMode > 0.5 ? 0.26 : 0.46);
-          drawFxMesh(meshFxFloor, modelMat(sp.x, sp.y + 0.020, sp.z, rad, 1, rad * 0.78), [sp.colHi[0], sp.colHi[1], sp.colHi[2], a], [1.0, timeSec, 1.5, 0.68]);
+          const rad = (i === 4 ? 1.48 : 1.28) + info.light * 0.20;
+          const a = info.light * (lightMode > 0.5 ? 0.22 : 0.38);
+          drawFxMesh(meshFxFloor, modelMat(sp.x, sp.y + 0.020, sp.z, rad, 1, rad * 0.78), [sp.col[0], sp.col[1], sp.col[2], a], [1.0, timeSec, 1.9, 0.45]);
+          const ringPulse = 0.95 + 0.05 * Math.sin(timeSec * 3.0 + i * 1.3);
+          const ringRad = (i === 4 ? 1.44 : 1.22) * ringPulse;
+          const rippleYield = info.rippleProg > 0 && info.rippleProg < 1 ? 0.55 + info.rippleProg * 0.45 : 1.0;
+          const ringA = info.light * rippleYield * (lightMode > 0.5 ? 0.20 : 0.48);
+          drawFxMesh(meshFxFloor, modelMat(sp.x, sp.y + 0.022, sp.z, ringRad, 1, ringRad * 0.78), [sp.colHi[0], sp.colHi[1], sp.colHi[2], ringA], [2.0, timeSec, 0.78, 0.72]);
         }
         if (info.rippleProg > 0 && info.rippleProg < 1) {
           const rp = info.rippleProg;
           const scale = (i === 4 ? 1.58 : 1.44) * (0.45 + rp * 0.95);
-          const alpha = (1.0 - rp) * 0.82;
-          drawFxMesh(meshFxFloor, modelMat(sp.x, sp.y + 0.024, sp.z, scale, 1, scale * 0.82), [sp.colHi[0], sp.colHi[1], sp.colHi[2], alpha], [2.0, timeSec, 0.35 + rp * 0.55, 0.95]);
+          const alpha = (1.0 - rp) * 0.74;
+          drawFxMesh(meshFxFloor, modelMat(sp.x, sp.y + 0.025, sp.z, scale, 1, scale * 0.82), [sp.colHi[0], sp.colHi[1], sp.colHi[2], alpha], [2.0, timeSec, 0.35 + rp * 0.55, 0.78]);
         }
       }
 
@@ -1670,20 +1701,20 @@ void main() {
       gl.uniformMatrix4fv(uFx.uViewProj, false, vp);
 
       // 左右哥特拱窗斜射冷月丁达尔光束（塑造冷暖强对比）
-      const moonA = lightMode > 0.5 ? 0.08 : 0.26;
-      drawFxMesh(meshFxCard, modelMat(-2.30, 1.58, -2.98, 1.85, 2.95, 1, 0, -0.26), [0.28, 0.54, 1.0, moonA], [0.0, timeSec, 0, 0.78]);
-      drawFxMesh(meshFxCard, modelMat(2.30, 1.58, -2.98, 1.85, 2.95, 1, 0, 0.26), [0.28, 0.54, 1.0, moonA], [0.0, timeSec, 0, 0.78]);
+      const moonA = lightMode > 0.5 ? 0.08 : 0.20;
+      drawFxMesh(meshFxCard, modelMat(-2.30, 1.58, -2.98, 1.85, 2.95, 1, 0, -0.26), [0.28, 0.54, 1.0, moonA], [0.0, timeSec, 0, 0.74]);
+      drawFxMesh(meshFxCard, modelMat(2.30, 1.58, -2.98, 1.85, 2.95, 1, 0, 0.26), [0.28, 0.54, 1.0, moonA], [0.0, timeSec, 0, 0.74]);
 
       // 居中壁炉动态炽烈暖光晕与升腾火星粒子（精准落于后墙大壁炉膛口，零重叠穿帮）
       const hearthZ = atlasLoadedFlags.wall ? -3.26 : -2.62;
       const hearthY = atlasLoadedFlags.wall ? 0.64 : 0.46;
-      const hGlowA = (lightMode > 0.5 ? 0.20 : 0.48) * (0.85 + 0.15 * Math.sin(timeSec * 9.2));
-      drawFxMesh(meshFxCard, modelMat(-0.02, hearthY, hearthZ, 1.42, 1.06, 1), [1.0, 0.46, 0.12, hGlowA], [1.0, timeSec, 1.65, 1.28]);
+      const hGlowA = (lightMode > 0.5 ? 0.20 : 0.58) * (0.85 + 0.15 * Math.sin(timeSec * 9.2));
+      drawFxMesh(meshFxCard, modelMat(-0.02, hearthY, hearthZ, 1.46, 1.10, 1), [1.0, 0.48, 0.12, hGlowA], [1.0, timeSec, 1.72, 1.46]);
       for (let e = 0; e < 9; e++) {
         const ep = ((timeSec * (0.38 + (e % 4) * 0.08) + e * 0.19) % 1.0);
         const ex = -0.02 + Math.sin(timeSec * 3.1 + e * 2.1) * (0.18 + ep * 0.16) + ((e % 3) - 1) * 0.14;
         const ey = 0.26 + ep * 0.96;
-        drawFxMesh(meshFxCard, modelMat(ex, ey, hearthZ + 0.06, 0.055, 0.055, 1), [1.0, 0.74 - ep * 0.36, 0.20, (1.0 - ep) * 0.96], [3.0, timeSec, 0, 1.45]);
+        drawFxMesh(meshFxCard, modelMat(ex, ey, hearthZ + 0.06, 0.055, 0.055, 1), [1.0, 0.74 - ep * 0.36, 0.20, (1.0 - ep) * 0.98], [3.0, timeSec, 0, 1.55]);
       }
 
       // 精准联动美术图集各摆件发光核 (glowX, glowY) 的 3D 柔暖/荧光 Bloom 呼吸光晕
@@ -1699,9 +1730,9 @@ void main() {
         const gx = item.x + (rect.glowX - 0.5) * w;
         const gy = yTop - rect.glowY * item.h;
         const pulse = 0.84 + 0.16 * Math.sin(timeSec * 4.2 + i * 1.7);
-        const haloSz = Math.min(1.05, Math.max(0.42, item.h * 0.56));
-        const haloA = (lightMode > 0.5 ? 0.13 : 0.28) * pulse;
-        drawFxMesh(meshFxCard, modelMat(gx, gy, item.z + 0.05, haloSz, haloSz, 1), [item.emCol[0], item.emCol[1], item.emCol[2], haloA], [1.0, timeSec, 1.9, 1.15]);
+        const haloSz = Math.min(1.02, Math.max(0.42, item.h * 0.54));
+        const haloA = (lightMode > 0.5 ? 0.13 : 0.34) * pulse;
+        drawFxMesh(meshFxCard, modelMat(gx, gy, item.z + 0.05, haloSz, haloSz, 1), [item.emCol[0], item.emCol[1], item.emCol[2], haloA], [1.0, timeSec, 2.0, 1.28]);
       }
 
       // 5 束可开关真 3D 交叉锥形体积光柱（略偏后置 z - 0.10 令高饱和光柱从主角头顶与身后划破暗夜，绝不糊白精灵面部！）
@@ -1709,10 +1740,10 @@ void main() {
         const sp = SLOT_WORLD_POS[i];
         const info = slotInfos[i];
         if (!info || info.light <= 0.02) continue;
-        const beamA = info.light * (lightMode > 0.5 ? 0.16 : 0.34);
-        drawFxMesh(meshBeamCone, modelMat(sp.x, sp.y, sp.z - 0.10, 1, 1, 1), [sp.col[0], sp.col[1], sp.col[2], beamA], [0.0, timeSec, 0, 0.82]);
+        const beamA = info.light * (lightMode > 0.5 ? 0.15 : 0.36);
+        drawFxMesh(meshBeamCone, modelMat(sp.x, sp.y, sp.z - 0.10, 1, 1, 1), [sp.col[0], sp.col[1], sp.col[2], beamA], [0.0, timeSec, 1.0, 0.62]);
         // 顶梁发光灯芯（高 Emissive 进 Bloom）
-        drawFxMesh(meshFxCard, modelMat(sp.x, sp.y + 2.95, sp.z - 0.08, 0.38, 0.22, 1), [sp.colHi[0], sp.colHi[1], sp.colHi[2], info.light * 0.92], [1.0, timeSec, 1.3, 1.35]);
+        drawFxMesh(meshFxCard, modelMat(sp.x, sp.y + 2.95, sp.z - 0.08, 0.40, 0.23, 1), [sp.colHi[0], sp.colHi[1], sp.colHi[2], info.light * 0.94], [1.0, timeSec, 1.35, 1.44]);
         // 槽位上升 3D 像素金粉星尘
         for (let k = 0; k < 6; k++) {
           const prog = ((timeSec * (0.18 + (k % 3) * 0.07) + k * 0.17 + i * 0.11) % 1.0);
@@ -1722,7 +1753,7 @@ void main() {
           const my = sp.y + 0.24 + prog * 2.40;
           const mz = sp.z - 0.08 + Math.sin(ang) * rad * 0.6;
           const tw = (0.45 + 0.55 * Math.sin(timeSec * 4.2 + k * 1.9)) * Math.sin(prog * Math.PI) * info.light;
-          drawFxMesh(meshFxCard, modelMat(mx, my, mz, 0.065, 0.065, 1), [sp.colHi[0], sp.colHi[1], sp.colHi[2], tw * 0.90], [3.0, timeSec, 0, 1.25]);
+          drawFxMesh(meshFxCard, modelMat(mx, my, mz, 0.065, 0.065, 1), [sp.colHi[0], sp.colHi[1], sp.colHi[2], tw * 0.92], [3.0, timeSec, 0, 1.32]);
         }
         // 点亮瞬间 3D 爆发星尘
         if (info.cheerProg > 0 && info.cheerProg < 0.72) {
@@ -1732,7 +1763,7 @@ void main() {
             const bx = sp.x + Math.cos(ba) * (0.16 + bp * 0.68);
             const by = sp.y + 0.38 + bp * (0.85 + (b % 3) * 0.35);
             const bz = sp.z - 0.04 + Math.sin(ba) * (0.14 + bp * 0.44);
-            drawFxMesh(meshFxCard, modelMat(bx, by, bz, 0.078, 0.078, 1), [sp.colHi[0], sp.colHi[1], sp.colHi[2], (1.0 - bp) * 0.92], [3.0, timeSec, 0, 1.35]);
+            drawFxMesh(meshFxCard, modelMat(bx, by, bz, 0.078, 0.078, 1), [sp.colHi[0], sp.colHi[1], sp.colHi[2], (1.0 - bp) * 0.94], [3.0, timeSec, 0, 1.42]);
           }
         }
       }
@@ -1745,7 +1776,7 @@ void main() {
         const px = d.x + Math.sin(timeSec * 0.7 + d.ph) * 0.14;
         const tw = 0.45 + 0.55 * Math.sin(timeSec * 2.1 + d.ph);
         const col = d.warm ? [1.0, 0.78, 0.38] : [0.56, 0.78, 1.0];
-        const a = tw * (lightMode > 0.5 ? 0.30 : 0.52);
+        const a = tw * (lightMode > 0.5 ? 0.30 : 0.48);
         const mode = i < 10 ? 1.0 : 3.0;
         drawFxMesh(meshFxCard, modelMat(px, py, d.z, d.size, d.size, 1), [col[0], col[1], col[2], a], [mode, timeSec, 1.6, 1.15]);
       }
@@ -1760,7 +1791,7 @@ void main() {
       // 5. Pass 3: 1/2 分辨率移轴景深模糊缓冲
       runBlurPass(sceneTex, blurFboA, blurTexA, blurFboB, blurTexB, blurW, blurH, 1.45);
 
-      // 6. Pass 4: 最终电影级合成（Tilt-Shift 移轴景深 + Bloom + ACES Filmic + 暗角）
+      // 6. Pass 4: 最终电影级合成（Tilt-Shift 移轴景深 + Bloom + ACES Filmic + S-Curve + 暗角）
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.viewport(0, 0, fbW, fbH);
       gl.useProgram(progComp);
@@ -1774,9 +1805,9 @@ void main() {
       gl.activeTexture(gl.TEXTURE2);
       gl.bindTexture(gl.TEXTURE_2D, bloomTexB);
       gl.uniform1i(uComp.uBloom, 2);
-      const bloomStr = lightMode > 0.5 ? 0.34 : 0.56;
+      const bloomStr = lightMode > 0.5 ? 0.34 : 0.65;
       const dofStr = lightMode > 0.5 ? 0.50 : 0.66;
-      const vigStr = lightMode > 0.5 ? 0.24 : 0.62;
+      const vigStr = lightMode > 0.5 ? 0.24 : 0.74;
       gl.uniform4f(uComp.uGrade, lightMode, bloomStr, dofStr, vigStr);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
 
