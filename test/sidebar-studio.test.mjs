@@ -3899,8 +3899,8 @@ test('Issue #78 + PR #77: sidebar-client matches data-ag-cs-theme=light, body.th
   assert.equal(clientSrc.includes('feGaussianBlur'), false, 'sidebar-client.js must not ship 11-filter feGaussianBlur SVG');
   assert.ok(clientSrc.includes('id="agy-brand-g0"') && clientSrc.includes('id="agy-brand-g2"'), 'brand SVG must use lightweight radialGradient fills');
   assert.equal(clientSrc.includes('blur(96px)'), false, 'aura orbs must not use blur(96px)');
-  assert.ok(clientSrc.includes('filter:blur(24px)'), 'aura orbs must cap blur at 24px');
-  assert.ok(clientSrc.includes('backdrop-filter:blur(12px) saturate(125%)'), 'vessel backdrop-filter must be downgraded to blur(12px) saturate(125%)');
+  assert.equal(clientSrc.includes('filter:blur(24px)'), false, 'aura orbs must purge GPU blur(24px) in favor of soft multi-stop radial-gradient');
+  assert.ok(clientSrc.includes('.ag-prism-vessel{position:relative;border-radius:26px;background:color-mix(in srgb,var(--ag-sb-container) 93%,transparent);box-shadow:'), 'vessel must raise opacity to ~93% and remove redundant backdrop-filter');
 
   // 2) Extract CLIENT_CSS array rules and verify zero dark-fallback leaks on host light DOM (body.theme-light + html[data-ag-cs-theme="light"])
   const cssBlockMatch = clientSrc.match(/const CLIENT_CSS = \[\s*([\s\S]*?)\s*\]\.join\(''\);/);

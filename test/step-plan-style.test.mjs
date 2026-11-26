@@ -36,7 +36,7 @@ test('step-plan checklist card and home-panel align with Obsidian Prism floating
   assert.ok(spLine.includes('&[data-ag-sp-running="1"]{') && spLine.includes('rgba(56,176,255,.15)'), 'running step-plan must render nebula cyan-violet top ambient glow');
   assert.ok(spLine.includes('& [data-testid="step-plan-chip"]{'), 'must style step-plan-chip');
   assert.ok(spLine.includes('&[data-status="in_progress"]{--_sc:var(--warning);') && spLine.includes('&>svg{'), 'must differentiate paused in_progress svg with static amber obsidian core');
-  assert.ok(spLine.includes('&[data-status="done"]{--_sc:var(--success);') && spLine.includes('drop-shadow('), 'done state must render obsidian star-core emerald ring + glowing checkmark');
+  assert.ok(spLine.includes('&[data-status="done"]{--_sc:var(--success);') && !spLine.includes('drop-shadow(') && spLine.includes('border:solid color-mix('), 'done state must render obsidian star-core emerald ring + zero-filter checkmark highlight');
   assert.ok(spLine.includes('&[data-status="pending"]{') && spLine.includes('width:3.5px;height:3.5px;'), 'pending state must render obsidian well + centered 3.5px dormant star dot');
   assert.ok(spLine.includes('&[data-status="failed"]{--_sc:var(--error);'), 'failed state must render obsidian core + crimson ring + cross');
   assert.ok(spLine.includes('&[data-status="skipped"]{') && spLine.includes('width:6px;height:1.5px;'), 'skipped state must render dashed ring + centered 6x1.5px dash');

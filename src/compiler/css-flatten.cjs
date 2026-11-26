@@ -275,6 +275,7 @@ function hasBalancedBraces(css) {
 function flattenNestedCss(rawCss, options = null) {
   if (typeof rawCss !== 'string' || !rawCss) return '';
   const supportsSelector = options && typeof options.supportsSelector === 'function' ? options.supportsSelector : null;
+  const shouldExpandTopLevelIs = Boolean(options && options.expandTopLevelIs === true);
   const css = stripCssCommentsSafe(rawCss);
   if (!hasBalancedBraces(css)) return rawCss;
 
@@ -373,6 +374,45 @@ function flattenNestedCss(rawCss, options = null) {
     return res;
   };
 
+  const PSEUDO_ELEM_RE = /::|:(?:before|after|first-line|first-letter|-webkit-|-moz-|-ms-|-o-)/i;
+  const foldDescendantList = (P, children) => {
+    const groups = new Map();
+    const order = [];
+    for (let i = 0; i < children.length; i++) {
+      const c = children[i];
+      if (c.startsWith('& ')) {
+        const rest = c.slice(2).trim();
+        if (rest && !rest.includes('&') && !/^[>+~]/.test(rest) && !PSEUDO_ELEM_RE.test(rest) && isOkSel(rest)) {
+          const sp = getSpec(rest);
+          if (sp === sp) {
+            let bucket = groups.get(sp);
+            if (!bucket) {
+              bucket = [];
+              groups.set(sp, bucket);
+              order.push({ kind: 'grp', sp, bucket });
+            }
+            bucket.push(rest);
+            continue;
+          }
+        }
+      }
+      order.push({ kind: 'raw', c });
+    }
+    const plainMode = isCompoundSelector(P) ? 2 : 1;
+    const outList = [];
+    for (let i = 0; i < order.length; i++) {
+      const it = order[i];
+      if (it.kind === 'raw') {
+        outList.push(substParent(it.c, P, plainMode));
+      } else if (it.bucket.length >= 2) {
+        outList.push(P + ' :is(' + it.bucket.join(',') + ')');
+      } else {
+        outList.push(substParent('& ' + it.bucket[0], P, plainMode));
+      }
+    }
+    return outList;
+  };
+
   const resolveSelectors = (rawPrelude, parentSels) => {
     let list = splitTopLevelCommas(rawPrelude);
     if (parentSels && parentSels.length) {
@@ -390,9 +430,11 @@ function flattenNestedCss(rawCss, options = null) {
         });
         return hasAmp ? c : '& ' + c;
       });
-      if (parentSels.length > 1 && (!sameSpecificity(parentSels) || parentSels.length * list.length > 200)) {
+      if (parentSels.length > 1 && (!sameSpecificity(parentSels) || list.length > 1 || parentSels.length * list.length > 200)) {
         const joinedParents = parentSels.join(',');
         list = list.map((c) => substParent(c, joinedParents, 0));
+      } else if (parentSels.length === 1 && list.length > 1 && parentSels[0].length >= 20) {
+        list = foldDescendantList(parentSels[0], list);
       } else {
         const combined = [];
         for (let pIdx = 0; pIdx < parentSels.length; pIdx++) {
@@ -405,6 +447,7 @@ function flattenNestedCss(rawCss, options = null) {
         list = combined;
       }
     }
+    if (!shouldExpandTopLevelIs) return list;
     const expanded = [];
     for (let i = 0; i < list.length; i++) {
       const ex = expandTopLevelIs(list[i]);
