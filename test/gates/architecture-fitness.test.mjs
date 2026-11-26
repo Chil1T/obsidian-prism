@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { builtinModules } from 'node:module';
+import { builtinModules, createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { assertCssHygiene } from '../helpers/mini-dom.mjs';
+
+const require = createRequire(import.meta.url);
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
 const BUILTINS = new Set([...builtinModules, ...builtinModules.map((m) => `node:${m}`)]);
@@ -377,4 +379,124 @@ test('Law 6b: Runtime innerHTML / outerHTML / insertAdjacentHTML write ratchet p
 
   assert.equal(coreNonEmptyTotal, 0, `Runtime non-empty innerHTML writes must be 0 (got ${coreNonEmptyTotal})`);
   assert.deepEqual(violations, [], `Runtime HTML-sink ratchet violations:\n${violations.join('\n')}`);
+});
+
+test('Law 11: Zero prototype Mixin God Object (0 Object.assign(*.prototype, ...) across src/)', () => {
+  const srcFiles = ALL_FILES.filter((f) => /^src\/.+\.(?:mjs|cjs|js)$/.test(f));
+  const protoMixinRe = /\bObject\.assign\s*\(\s*[^,)]+\.prototype\b/g;
+  const violations = [];
+  for (const f of srcFiles) {
+    const clean = stripJsComments(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+    if (protoMixinRe.test(clean)) {
+      violations.push(`${f}: forbidden Object.assign(*.prototype, ...) prototype mixin detected`);
+    }
+    protoMixinRe.lastIndex = 0;
+  }
+  assert.deepEqual(violations, [], `Prototype Mixin God Object violations:\n${violations.join('\n')}`);
+});
+
+test('Law 12: Unique Channel SSOT (0 parallel channel tables; cache/stats/health-probe derived from CHANNEL_REGISTRY)', async () => {
+  // 1) Deleted redundant parallel channel table files must never return
+  for (const forbidden of [
+    'src/daemon/runtime-channel-specs.mjs',
+    'src/channels/inject-runtime-channels.cjs',
+  ]) {
+    assert.equal(
+      fs.existsSync(path.join(ROOT, forbidden)),
+      false,
+      `Forbidden redundant parallel channel table resurrected: ${forbidden}`
+    );
+  }
+
+  // 2) Forbid re-introducing parallel hardcoded channel tables in daemon / inject / packaging scripts
+  const guardedFiles = [
+    ...ALL_FILES.filter((f) => /^src\/daemon\/.+\.mjs$/.test(f)),
+    'inject.js',
+    'scripts/build-common.mjs',
+  ];
+  const forbiddenPatterns = [
+    { label: 'RUNTIME_CHANNEL_SPECS', re: /\bRUNTIME_CHANNEL_SPECS\b/ },
+    { label: 'INJECT_RUNTIME_CHANNELS', re: /\bINJECT_RUNTIME_CHANNELS\b/ },
+    { label: 'hardcoded OFFLOADED_RUNTIME_TOP_FILES array', re: /\bOFFLOADED_RUNTIME_TOP_FILES\s*=\s*(?:Object\.freeze\s*\(\s*)?\[/ },
+    { label: 'hardcoded STATIC_RUNTIME_CHANNEL_IDS array', re: /\bSTATIC_RUNTIME_CHANNEL_IDS\s*=\s*(?:Object\.freeze\s*\(\s*)?\[/ },
+  ];
+  const symbolViolations = [];
+  for (const f of guardedFiles) {
+    const clean = stripJsComments(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+    for (const { label, re } of forbiddenPatterns) {
+      if (re.test(clean)) {
+        symbolViolations.push(`${f}: forbidden parallel channel table pattern "${label}"`);
+      }
+    }
+  }
+  assert.deepEqual(symbolViolations, [], `Parallel channel table regressions:\n${symbolViolations.join('\n')}`);
+
+  // 3) CHANNEL_CACHE_NAMES, channelHitsByName, and PAGE_HEALTH_PROBE_EXPRESSION strictly derive from CHANNEL_REGISTRY
+  const cdp = require(path.join(ROOT, 'cdp.js'));
+  const cacheValidate = require(path.join(ROOT, 'src', 'compiler', 'cache-validate.cjs'));
+  const { PAGE_HEALTH_PROBE_EXPRESSION } = await import('../../src/daemon/session-heal-channels.mjs');
+
+  const registryCacheKeys = cdp.CHANNEL_REGISTRY.map((ch) => ch.cacheKey);
+  assert.deepEqual(
+    [...cacheValidate.CHANNEL_CACHE_NAMES],
+    registryCacheKeys,
+    'src/compiler/cache-validate.cjs CHANNEL_CACHE_NAMES must stay 100% synced with CHANNEL_REGISTRY'
+  );
+  assert.deepEqual(
+    Object.keys(cdp.getBundleCacheStats().channelHitsByName),
+    registryCacheKeys,
+    'bundle-cache channelHitsByName keys must stay 100% synced with CHANNEL_REGISTRY'
+  );
+  for (const ch of cdp.CHANNEL_REGISTRY) {
+    if (ch.probeKey) {
+      assert.ok(
+        PAGE_HEALTH_PROBE_EXPRESSION.includes(`${ch.probeKey}:`),
+        `PAGE_HEALTH_PROBE_EXPRESSION missing probeKey "${ch.probeKey}" for channel "${ch.id}"`
+      );
+    }
+    if (ch.probeHashKey) {
+      assert.ok(
+        PAGE_HEALTH_PROBE_EXPRESSION.includes(`${ch.probeHashKey}:`),
+        `PAGE_HEALTH_PROBE_EXPRESSION missing probeHashKey "${ch.probeHashKey}" for channel "${ch.id}"`
+      );
+    }
+  }
+});
+
+test('Law 13: config.example.json 100% aligned with CONFIG_SCHEMA (all non-optional keys, defaults & validators)', () => {
+  const cdp = require(path.join(ROOT, 'cdp.js'));
+  const exampleCfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.example.json'), 'utf8'));
+  const exampleKeys = Object.keys(exampleCfg).sort();
+  const defaultKeys = Object.keys(cdp.DEFAULT_CONFIG).sort();
+  const requiredSchemaKeys = Object.entries(cdp.CONFIG_SCHEMA)
+    .filter(([, def]) => !def.optional)
+    .map(([k]) => k)
+    .sort();
+  const validatorSchemaKeys = Object.entries(cdp.CONFIG_SCHEMA)
+    .filter(([, def]) => !def.optional && def.inValidators !== false)
+    .map(([k]) => k)
+    .sort();
+
+  assert.deepEqual(
+    exampleKeys,
+    requiredSchemaKeys,
+    'config.example.json keys must match CONFIG_SCHEMA non-optional keys 100%'
+  );
+  assert.deepEqual(
+    exampleKeys,
+    defaultKeys,
+    'config.example.json keys must match DEFAULT_CONFIG keys 100%'
+  );
+  assert.deepEqual(
+    Object.keys(cdp.VALIDATORS).sort(),
+    validatorSchemaKeys,
+    'VALIDATORS keys must match CONFIG_SCHEMA entries where inValidators !== false'
+  );
+  for (const key of requiredSchemaKeys) {
+    assert.deepEqual(
+      exampleCfg[key],
+      cdp.CONFIG_SCHEMA[key].default,
+      `config.example.json.${key} must match CONFIG_SCHEMA.${key}.default`
+    );
+  }
 });

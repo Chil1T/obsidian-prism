@@ -43,5 +43,6 @@
   "hostLocalization": "auto",
   "autoUpdate": "off",
   "updateChannel": "stable",
-  "autoArchiveOnExit": false
+  "autoArchiveOnExit": false,
+  "pollIntervalMs": 2500
 }

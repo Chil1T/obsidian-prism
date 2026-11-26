@@ -19,17 +19,29 @@ const cdp = require(path.join(ROOT_DIR, 'cdp.js'));
 
 const VALIDATORS = { ...cdp.VALIDATORS };
 
-// Ch13-Ch16 已下沉至 Node 延迟通道；保持 manifest.parts 与 cdp.RUNTIME_PARTS 1:1 对齐确保 C#/Swift 与 Node codeHash 一致，
-// 同时把 7 个下沉通道源文件一并打包进安装顶层目录与 native-plugin/。
-const OFFLOADED_RUNTIME_TOP_FILES = [
-  'vial-core.js',
-  'pulse-vial-bridge.js',
-  'vendor/pulse-dashboard/inline-fallback.js',
-  'vendor/effort-slider/upstream-client.js',
-  'vendor/effort-slider/slider-coexist.js',
-  'host-workbench-enhancer.js',
-  'context-menu-btw.js',
-];
+// 全部延迟/按需通道文件与静态预编译清单均从 cdp.CHANNEL_REGISTRY 唯一真相源自动派生（零平行硬编码清单）
+const STATIC_RUNTIME_CHANNEL_IDS = cdp.RUNTIME_TIER_CHANNEL_IDS;
+
+function getStaticRuntimeChannels() {
+  return (cdp.CHANNEL_REGISTRY || []).filter((ch) => ch && ch.staticRuntimePack);
+}
+
+function collectRegistryChannelFiles(channelId) {
+  const ch = typeof cdp.findChannel === 'function' ? cdp.findChannel(channelId) : null;
+  if (!ch || !Array.isArray(ch.files)) return [];
+  const entries = [];
+  for (const rel of ch.files) {
+    const abs = path.join(ROOT_DIR, ...rel.split('/'));
+    if (!fs.existsSync(abs)) continue;
+    try {
+      entries.push({
+        name: rel,
+        data: Buffer.from(cdp.minifyJs(fs.readFileSync(abs, 'utf8')), 'utf8'),
+      });
+    } catch {}
+  }
+  return entries;
+}
 
 function createManifest() {
   return {
@@ -153,98 +165,11 @@ function renderPrismIconPng(size) {
   return encodePngRgba(size, size, rgba);
 }
 
-function collectOptionalSidebarTopEntries() {
-  const sidebarClientRel = 'vendor/sidebar-studio/sidebar-client.js';
-  const sidebarClientAbs = path.join(ROOT_DIR, 'vendor', 'sidebar-studio', 'sidebar-client.js');
-  if (!fs.existsSync(sidebarClientAbs)) return [];
-  try {
-    return [
-      {
-        name: sidebarClientRel,
-        data: Buffer.from(cdp.minifyJs(fs.readFileSync(sidebarClientAbs, 'utf8')), 'utf8'),
-      },
-    ];
-  } catch {
-    return [];
-  }
-}
-
-function collectOptionalThoughtTopEntries() {
-  const entries = [];
-  for (const rel of [
-    'vendor/thought-translator/thought-client.js',
-    'vendor/thought-translator/thought-settings-ui.js',
-  ]) {
-    const abs = path.join(ROOT_DIR, ...rel.split('/'));
-    if (!fs.existsSync(abs)) continue;
-    try {
-      entries.push({
-        name: rel,
-        data: Buffer.from(cdp.minifyJs(fs.readFileSync(abs, 'utf8')), 'utf8'),
-      });
-    } catch {}
-  }
-  return entries;
-}
-
-function collectOptionalInlineDiffTopEntries() {
-  const rel = 'vendor/inline-diff/inline-diff-client.js';
-  const abs = path.join(ROOT_DIR, 'vendor', 'inline-diff', 'inline-diff-client.js');
-  if (!fs.existsSync(abs)) return [];
-  try {
-    return [
-      {
-        name: rel,
-        data: Buffer.from(cdp.minifyJs(fs.readFileSync(abs, 'utf8')), 'utf8'),
-      },
-    ];
-  } catch {
-    return [];
-  }
-}
-
-function collectOptionalWallpaperTopEntries() {
-  const entries = [];
-  for (const rel of [
-    'vendor/wallpaper/wallpaper-client.js',
-    'vendor/wallpaper/wallpaper-settings-ui.js',
-  ]) {
-    const abs = path.join(ROOT_DIR, ...rel.split('/'));
-    if (!fs.existsSync(abs)) continue;
-    try {
-      entries.push({
-        name: rel,
-        data: Buffer.from(cdp.minifyJs(fs.readFileSync(abs, 'utf8')), 'utf8'),
-      });
-    } catch {}
-  }
-  return entries;
-}
-
-function collectOptionalSuggesterTopEntries() {
-  const entries = [];
-  for (const rel of [
-    'vendor/prompt-suggester/suggester-client.js',
-    'vendor/prompt-suggester/suggester-settings-ui.js',
-  ]) {
-    const abs = path.join(ROOT_DIR, ...rel.split('/'));
-    if (!fs.existsSync(abs)) continue;
-    try {
-      entries.push({
-        name: rel,
-        data: Buffer.from(cdp.minifyJs(fs.readFileSync(abs, 'utf8')), 'utf8'),
-      });
-    } catch {}
-  }
-  return entries;
-}
-
-const STATIC_RUNTIME_CHANNEL_IDS = Object.freeze([
-  'telemetry',
-  'effortSlider',
-  'workbenchEnhancer',
-  'contextMenu',
-]);
+function collectOptionalSidebarTopEntries() { return collectRegistryChannelFiles('sidebar'); }
+function collectOptionalThoughtTopEntries() { return collectRegistryChannelFiles('thought'); }
+function collectOptionalInlineDiffTopEntries() { return collectRegistryChannelFiles('inlineDiff'); }
+function collectOptionalWallpaperTopEntries() { return collectRegistryChannelFiles('wallpaper'); }
+function collectOptionalSuggesterTopEntries() { return collectRegistryChannelFiles('suggester'); }
 
 // 打包期复用 cdp.CHANNEL_REGISTRY 静态预编译 Ch13-Ch16 兜底表达式至顶层 runtime-channels/<id>.js，
 // 供无 Node 原生 Watcher 按 config.json 开关条件直接读取注入（零 C#/Swift 手拼 JS 模板）。
@@ -261,10 +186,10 @@ function collectStaticRuntimeChannelEntries() {
     contextMenu: true,
   };
   const entries = [];
-  for (const id of STATIC_RUNTIME_CHANNEL_IDS) {
-    const ch = typeof cdp.findChannel === 'function' ? cdp.findChannel(id) : null;
-    if (!ch || typeof ch.build !== 'function') {
-      throw new Error(`Missing CHANNEL_REGISTRY entry for static runtime channel: ${id}`);
+  for (const ch of getStaticRuntimeChannels()) {
+    const id = ch.id;
+    if (typeof ch.build !== 'function') {
+      throw new Error(`Missing CHANNEL_REGISTRY builder for static runtime channel: ${id}`);
     }
     const expr = String(ch.build(allEnabledCfg, { noDiskCache: true }) || '');
     if (!expr) {
@@ -280,15 +205,8 @@ function collectStaticRuntimeChannelEntries() {
 
 function collectOptionalOffloadedRuntimeTopEntries() {
   const entries = [];
-  for (const rel of OFFLOADED_RUNTIME_TOP_FILES) {
-    const abs = path.join(ROOT_DIR, ...rel.split('/'));
-    if (!fs.existsSync(abs)) continue;
-    try {
-      entries.push({
-        name: rel,
-        data: Buffer.from(cdp.minifyJs(fs.readFileSync(abs, 'utf8')), 'utf8'),
-      });
-    } catch {}
+  for (const ch of getStaticRuntimeChannels()) {
+    entries.push(...collectRegistryChannelFiles(ch.id));
   }
   entries.push(...collectStaticRuntimeChannelEntries());
   return entries;
@@ -296,21 +214,11 @@ function collectOptionalOffloadedRuntimeTopEntries() {
 
 function collectOptionalOmniTopEntries() {
   const entries = [];
-  const omniClientRel = 'vendor/omni-viewer/omni-client.js';
-  const omniClientAbs = path.join(ROOT_DIR, 'vendor', 'omni-viewer', 'omni-client.js');
-  if (fs.existsSync(omniClientAbs)) {
-    try {
-      entries.push({
-        name: omniClientRel,
-        data: Buffer.from(cdp.minifyJs(fs.readFileSync(omniClientAbs, 'utf8')), 'utf8'),
-      });
-    } catch {}
+  for (const ch of cdp.CHANNEL_REGISTRY || []) {
+    if (ch && ch.topLevelPack && !ch.staticRuntimePack) {
+      entries.push(...collectRegistryChannelFiles(ch.id));
+    }
   }
-  entries.push(...collectOptionalSidebarTopEntries());
-  entries.push(...collectOptionalThoughtTopEntries());
-  entries.push(...collectOptionalInlineDiffTopEntries());
-  entries.push(...collectOptionalWallpaperTopEntries());
-  entries.push(...collectOptionalSuggesterTopEntries());
   entries.push(...collectOptionalOffloadedRuntimeTopEntries());
   return entries;
 }

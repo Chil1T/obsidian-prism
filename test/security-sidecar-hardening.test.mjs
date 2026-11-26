@@ -1049,9 +1049,6 @@ test('security-sidecar 5: inject.js isolates injectOnce errors (preserving Chann
       if (spec === 'fs') return mockFs;
       if (spec === 'path') return path;
       if (spec === './cdp') return mockCdp;
-      if (spec === './src/channels/inject-runtime-channels.cjs') {
-        return cjsRequire(path.join(ROOT, 'src', 'channels', 'inject-runtime-channels.cjs'));
-      }
       throw new Error(`Unexpected require: ${spec}`);
     };
     reqFn.cache = {};

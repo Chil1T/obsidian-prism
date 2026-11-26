@@ -18,6 +18,10 @@ const {
 const { createBundleCacheIo } = require('./bundle-cache-io.cjs');
 
 function createInitialBundleCacheStats() {
+  const channelHitsByName = {};
+  for (const name of CHANNEL_CACHE_NAMES) {
+    channelHitsByName[name] = 0;
+  }
   return {
     diskHits: 0,
     diskBaseHits: 0,
@@ -32,23 +36,7 @@ function createInitialBundleCacheStats() {
     channelDiskHits: 0,
     channelDiskMisses: 0,
     channelCompileRuns: 0,
-    channelHitsByName: {
-      omni: 0,
-      sidebar: 0,
-      hostI18n: 0,
-      thought: 0,
-      inlineDiff: 0,
-      wallpaper: 0,
-      periodicPicker: 0,
-      settings: 0,
-      mascot: 0,
-      suggester: 0,
-      homeStudio: 0,
-      telemetry: 0,
-      effortSlider: 0,
-      workbenchEnhancer: 0,
-      contextMenu: 0,
-    },
+    channelHitsByName,
     lastOutcome: 'none',
     lastCachePath: null,
   };

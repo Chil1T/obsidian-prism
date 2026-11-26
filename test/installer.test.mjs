@@ -411,7 +411,7 @@ test('installer manifest validators match inject.js, cdp.js, and config.example.
   assert.deepEqual(Object.keys(VALIDATORS).sort(), Object.keys(cdp.VALIDATORS).sort());
 
   const exampleCfg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'config.example.json'), 'utf8'));
-  assert.deepEqual(Object.keys(exampleCfg).sort(), Object.keys(cdp.VALIDATORS).sort());
+  assert.deepEqual(Object.keys(exampleCfg).sort(), Object.keys(cdp.DEFAULT_CONFIG).sort());
   for (const k of Object.keys(cdp.VALIDATORS)) {
     assert.ok(k in cdp.DEFAULT_CONFIG, `DEFAULT_CONFIG includes ${k}`);
     assert.ok(k in exampleCfg, `config.example.json includes ${k}`);

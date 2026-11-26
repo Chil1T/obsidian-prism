@@ -21,6 +21,14 @@ import {
   evaluateTargetInfoChange,
 } from '../sidecars/daemon/main.mjs';
 import {
+  SessionRegistry,
+  ChannelOrchestrator,
+  TelemetrySubsystem,
+  UpdateStorageSubsystem,
+  RpcDispatcher,
+  DaemonLoop,
+} from '../src/daemon/index.mjs';
+import {
   ensureEntryFsm,
   recordEntryCh1Outcome,
   onEntryDomReadySignal,
@@ -724,4 +732,57 @@ test('Hot-reload P0: _readCdpTreeSig detects src/**/*.cjs edits, clears src requ
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
+});
+
+test('Phase 4B True Microkernel: PrismDaemon composes 4 isolated subsystems (0 prototype mixins) and drives all 16 channels from CHANNEL_REGISTRY', () => {
+  const daemon = new PrismDaemon({
+    rootDir: ROOT_DIR,
+    silent: true,
+    enableAutoUpdateTimer: false,
+    enableStorageGuardTimer: false,
+    bundleCachePath: false,
+  });
+
+  // 1) All 4 core subsystems + collaborators are composed as distinct class instances
+  assert.ok(daemon.sessionRegistry instanceof SessionRegistry, 'daemon.sessionRegistry must be SessionRegistry');
+  assert.ok(daemon.channelOrchestrator instanceof ChannelOrchestrator, 'daemon.channelOrchestrator must be ChannelOrchestrator');
+  assert.ok(daemon.telemetrySubsystem instanceof TelemetrySubsystem, 'daemon.telemetrySubsystem must be TelemetrySubsystem');
+  assert.ok(daemon.updateStorageSubsystem instanceof UpdateStorageSubsystem, 'daemon.updateStorageSubsystem must be UpdateStorageSubsystem');
+  assert.ok(daemon.rpcDispatcher instanceof RpcDispatcher, 'daemon.rpcDispatcher must be RpcDispatcher');
+  assert.ok(daemon.daemonLoop instanceof DaemonLoop, 'daemon.daemonLoop must be DaemonLoop');
+
+  // 2) Encapsulated state ownership: each subsystem holds its own domain state without sharing a God Object prototype mixin
+  assert.equal(daemon.sessions, daemon.sessionRegistry.sessions);
+  assert.equal(daemon.updateService, daemon.updateStorageSubsystem.updateService);
+  assert.equal(daemon.addonRegistry, daemon.updateStorageSubsystem.addonRegistry);
+  assert.equal(daemon._quotaForceRefreshGuard, daemon.telemetrySubsystem._quotaForceRefreshGuard);
+  assert.equal(daemon.channelOrchestrator._channelStore.size, cdp.CHANNEL_REGISTRY.length);
+  for (const ch of cdp.CHANNEL_REGISTRY) {
+    assert.ok(
+      daemon.channelOrchestrator._channelStore.has(ch.id),
+      `ChannelOrchestrator._channelStore must track registry channel "${ch.id}"`
+    );
+    assert.equal(daemon.channelOrchestrator.getRegisteredChannel(ch.id)?.id, ch.id);
+  }
+
+  // 3) Table-driven channel expression slot isolation via ChannelOrchestrator
+  const probeSample = '(() => { const targetHash = "p4bHash77"; return { ok: true }; })()';
+  daemon.channelOrchestrator.setChannelExpr('periodicPicker', probeSample);
+  assert.equal(daemon.periodicPickerExpr, probeSample);
+  assert.equal(daemon.channelOrchestrator.getChannelExprHash('periodicPicker'), 'p4bHash77');
+  assert.equal(daemon.periodicPickerCodeHash, 'p4bHash77');
+
+  // 4) Independent instances do not share mutable subsystem instances
+  const daemon2 = new PrismDaemon({
+    rootDir: ROOT_DIR,
+    silent: true,
+    enableAutoUpdateTimer: false,
+    enableStorageGuardTimer: false,
+    bundleCachePath: false,
+  });
+  assert.notEqual(daemon.sessionRegistry, daemon2.sessionRegistry);
+  assert.notEqual(daemon.channelOrchestrator, daemon2.channelOrchestrator);
+  assert.notEqual(daemon.telemetrySubsystem, daemon2.telemetrySubsystem);
+  assert.notEqual(daemon.updateStorageSubsystem, daemon2.updateStorageSubsystem);
+  assert.equal(daemon2.periodicPickerExpr, '');
 });

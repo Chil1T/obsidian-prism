@@ -1,4 +1,4 @@
-// Obsidian Prism Binding RPC 表驱动分发器与统一主帧上下文鉴权（Tier 2）
+// Obsidian Prism Binding RPC 表驱动分发器与统一主帧上下文鉴权（Tier 2，独立组合类，无原型 Mixin）
 import { OMNI_BINDING } from '../../vendor/omni-viewer/omni-server.mjs';
 import { sanitizeSecretText } from '../../sidecars/daemon/redact.mjs';
 import {
@@ -36,18 +36,15 @@ export function isTrustedMainFrameBindingCall(entry, executionContextId) {
     return true;
   }
 
-  // 真实帧树、已识别主帧、已登记上下文映射或带有未登记/已销毁 executionContextId 时一律 fail-closed
   if (entry.hasFrameTree || entry.mainFrameId) return false;
   if (contexts && contexts.size > 0) return false;
   if (hasCtxId) return false;
-  // 非测试运行时未拿到帧树时 fail-closed；仅兼容无帧树且无上下文 ID 的极简单测 mock
   if (!isAutomatedTestRuntime()) return false;
   return true;
 }
 
 /**
- * 统一受信任宿主上下文守卫：替代原 4 处复制粘贴的 isCurrentContext / isCurrentHost 闭包。
- * 同时校验窗口存活、sidebarHostVerified、主帧默认上下文引用、docGen 文档代际及 sidebarHostContextId。
+ * 统一受信任宿主上下文守卫：校验窗口存活、sidebarHostVerified、主帧默认上下文引用、docGen 文档代际及 sidebarHostContextId。
  */
 export function isTrustedHostContext(
   entry,
@@ -100,33 +97,50 @@ export function isTrustedHostContext(
   return true;
 }
 
-async function handleSettingBinding(daemon, entry, payload, executionContextId) {
+export function resolveTrustedBroadcastContextId(other) {
+  if (!other || other.session?.closed || other.sidebarHostVerified !== true) {
+    return { ok: false, contextId: undefined };
+  }
+  const contexts = other.contextFrames instanceof Map ? other.contextFrames : null;
+  const hasTrackedFrames = Boolean(other.hasFrameTree || other.mainFrameId || (contexts && contexts.size > 0));
+  if (!hasTrackedFrames) {
+    return isAutomatedTestRuntime()
+      ? { ok: true, contextId: typeof other.sidebarHostContextId === 'number' ? other.sidebarHostContextId : undefined }
+      : { ok: false, contextId: undefined };
+  }
+  if (!isTrustedHostContext(other, other.sidebarHostContextId, null, { requireTrackedFrames: true })) {
+    return { ok: false, contextId: undefined };
+  }
+  return { ok: true, contextId: other.sidebarHostContextId };
+}
+
+async function handleSettingBinding(rpc, entry, payload, executionContextId) {
   if (typeof payload !== 'string' || payload.length > 8192) return;
   try {
     const parsed = JSON.parse(payload);
     if (!parsed || typeof parsed !== 'object') return;
     if (parsed.action === 'request-settings-panel') {
-      await daemon._deliverSettingsChannelToEntry(entry, executionContextId);
+      await rpc.channelOrchestrator.deliverSettingsChannelToEntry(entry, executionContextId);
       return;
     }
     if (parsed.action === 'request-home-studio-panel') {
-      await daemon._deliverHomeStudioChannelToEntry(entry, executionContextId);
+      await rpc.channelOrchestrator.deliverHomeStudioChannelToEntry(entry, executionContextId);
       return;
     }
     const updated =
       parsed.action === 'patch-batch' && parsed.entries && typeof parsed.entries === 'object'
-        ? daemon.updateConfigBatch(parsed.entries)
-        : daemon.updateConfigSetting(parsed.key, parsed.value);
+        ? rpc.channelOrchestrator.updateConfigBatch(parsed.entries)
+        : rpc.channelOrchestrator.updateConfigSetting(parsed.key, parsed.value);
     if (updated) {
       if (entry && Number.isSafeInteger(parsed.clientEpoch) && parsed.clientEpoch > 0) {
         entry.pendingAckEpoch = parsed.clientEpoch;
       }
-      await daemon.broadcastConfigRefresh();
+      await rpc.invokeBroadcastConfigRefresh();
     }
   } catch {}
 }
 
-async function handleRepoBinding(daemon, entry, payload, executionContextId) {
+async function handleRepoBinding(rpc, entry, payload, executionContextId) {
   if (typeof payload !== 'string' || payload.length > 4096) return;
   let parsed;
   try { parsed = JSON.parse(payload); } catch { return; }
@@ -155,7 +169,7 @@ async function handleRepoBinding(daemon, entry, payload, executionContextId) {
   }
   if (inputPayload.version === undefined && typeof parsed?.input === 'string') inputPayload.version = parsed.input;
 
-  const result = await daemon.executeRepoAction({ ...inputPayload, action });
+  const result = await rpc.invokeExecuteRepoAction({ ...inputPayload, action });
   if (reqId !== null) {
     const safeId = Number(reqId) | 0;
     const jsonRes = serializeJsonForEval(result);
@@ -172,30 +186,29 @@ async function handleRepoBinding(daemon, entry, payload, executionContextId) {
   }
 }
 
-async function handleMetricsBinding(daemon, entry, payload, executionContextId) {
+async function handleMetricsBinding(rpc, entry, payload, executionContextId) {
   if (typeof payload !== 'string' || payload.length > 4096) return;
   let parsed;
   try { parsed = JSON.parse(payload); } catch { return; }
   const reqId = parsed && Number.isSafeInteger(parsed.id) ? parsed.id : null;
   if (!reqId) return;
 
+  const tel = rpc.telemetrySubsystem;
   let result;
-  if (!daemon._customMetricsProvider && daemon._isTelemetryDisabled()) {
-    daemon._releaseIdleTelemetry(true);
+  if (!tel._customMetricsProvider && tel.isDisabled()) {
+    tel.releaseIdle(true);
     result = { connection: 'disabled', speed: null, groups: [] };
   } else {
-    daemon._telemetryInFlight = (daemon._telemetryInFlight || 0) + 1;
-    daemon._lastTelemetryActivityAt = Date.now();
+    tel.beginActivity();
     try {
-      const collector = await daemon.ensureMetricsCollector();
+      const collector = await tel.ensureMetricsCollector();
       result = await collector(parsed.input || {});
     } catch (err) {
       result = { connection: 'offline', error: err?.message || 'Metrics unavailable', speed: null, groups: [] };
     } finally {
-      daemon._telemetryInFlight = Math.max(0, (daemon._telemetryInFlight || 1) - 1);
-      daemon._lastTelemetryActivityAt = Date.now();
-      if (!daemon._customMetricsProvider && daemon._isTelemetryDisabled() && daemon._telemetryInFlight === 0) {
-        daemon._releaseIdleTelemetry(true);
+      tel.endActivity();
+      if (!tel._customMetricsProvider && tel.isDisabled() && tel._telemetryInFlight === 0) {
+        tel.releaseIdle(true);
       }
     }
   }
@@ -206,7 +219,7 @@ async function handleMetricsBinding(daemon, entry, payload, executionContextId) 
   await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
 }
 
-async function handleThoughtBinding(daemon, entry, payload, executionContextId) {
+async function handleThoughtBinding(rpc, entry, payload, executionContextId) {
   if (typeof payload !== 'string' || payload.length > 131072) return;
   let parsed;
   try { parsed = JSON.parse(payload); } catch { return; }
@@ -217,7 +230,7 @@ async function handleThoughtBinding(daemon, entry, payload, executionContextId) 
 
   let result;
   try {
-    const svc = await daemon.ensureThoughtService();
+    const svc = await rpc.channelOrchestrator.ensureThoughtService();
     if (action === 'get-config') {
       result = svc.getSanitizedConfig();
     } else if (action === 'save-config') {
@@ -311,9 +324,9 @@ async function handleThoughtBinding(daemon, entry, payload, executionContextId) 
       if (typeof executionContextId === 'number') selfParams.contextId = executionContextId;
       notifyTasks.push(entry.session.send('Runtime.evaluate', selfParams, 2000).catch(() => {}));
     }
-    for (const other of daemon.sessions.values()) {
+    for (const other of rpc.sessionRegistry.sessions.values()) {
       if (!other || other === entry) continue;
-      const target = daemon._resolveTrustedBroadcastContextId(other);
+      const target = resolveTrustedBroadcastContextId(other);
       if (!target.ok) continue;
       const peerParams = { expression: peerNotifyExpr, returnByValue: true, awaitPromise: false };
       if (typeof target.contextId === 'number') peerParams.contextId = target.contextId;
@@ -323,18 +336,18 @@ async function handleThoughtBinding(daemon, entry, payload, executionContextId) 
   }
 }
 
-async function handleUsageBinding(daemon, entry, payload, executionContextId) {
+async function handleUsageBinding(rpc, entry, payload, executionContextId) {
   if (typeof payload !== 'string' || payload.length > 65536) return;
   let parsed;
   try { parsed = JSON.parse(payload); } catch { return; }
   const reqId = parsed && Number.isSafeInteger(parsed.id) ? parsed.id : null;
   if (reqId === null) return;
-  daemon._telemetryInFlight = (daemon._telemetryInFlight || 0) + 1;
-  daemon._lastTelemetryActivityAt = Date.now();
+  const tel = rpc.telemetrySubsystem;
+  tel.beginActivity();
   let result;
   try {
     const reqScopeKey = typeof parsed.scopeKey === 'string' && parsed.scopeKey.trim() ? parsed.scopeKey.trim() : '';
-    result = await daemon.fetchUsageRollupBatch(parsed.items, {
+    result = await tel.fetchUsageRollupBatch(parsed.items, {
       action: parsed.action || 'fetch-batch',
       includeSummaries: Boolean(parsed.includeSummaries),
       entry,
@@ -343,8 +356,7 @@ async function handleUsageBinding(daemon, entry, payload, executionContextId) {
   } catch (err) {
     result = { ok: false, error: sanitizeSecretText(err?.message || err), records: [] };
   } finally {
-    daemon._telemetryInFlight = Math.max(0, (daemon._telemetryInFlight || 1) - 1);
-    daemon._lastTelemetryActivityAt = Date.now();
+    tel.endActivity();
   }
   if (!entry.session.closed) {
     const safeId = Number(reqId) | 0;
@@ -355,7 +367,7 @@ async function handleUsageBinding(daemon, entry, payload, executionContextId) {
   }
 }
 
-async function handleInlineDiffBinding(daemon, entry, payload, executionContextId) {
+async function handleInlineDiffBinding(_rpc, entry, payload, executionContextId) {
   const initialCtx = typeof executionContextId === 'number' ? entry.contextFrames?.get(executionContextId) : undefined;
   const expectedDocGen = typeof entry.sidebarDocument === 'number' ? entry.sidebarDocument : null;
   const checkCtx = () =>
@@ -396,7 +408,7 @@ async function handleInlineDiffBinding(daemon, entry, payload, executionContextI
   return resp;
 }
 
-async function handleOmniBinding(daemon, entry, payload, executionContextId) {
+async function handleOmniBinding(rpc, entry, payload, executionContextId) {
   if (typeof payload !== 'string' || payload.length > 65536) return;
   let parsed;
   try { parsed = JSON.parse(payload); } catch { return; }
@@ -410,11 +422,11 @@ async function handleOmniBinding(daemon, entry, payload, executionContextId) {
     ...(parsed.payload && typeof parsed.payload === 'object' ? parsed.payload : {}),
   };
   let result;
-  if (!daemon._isOmniEnabled()) {
+  if (!rpc.channelOrchestrator.isChannelEnabled('omni')) {
     result = { ok: false, error: 'omni_disabled' };
   } else {
     try {
-      const srv = await daemon.ensureOmniServer();
+      const srv = await rpc.channelOrchestrator.ensureOmniServer();
       result = await srv.handleRpcAction(action, mergedParams);
     } catch (err) {
       result = { ok: false, error: sanitizeSecretText(err?.message || err) };
@@ -430,17 +442,19 @@ async function handleOmniBinding(daemon, entry, payload, executionContextId) {
   }
 }
 
-async function handleSidebarBinding(daemon, entry, payload, executionContextId) {
+async function handleSidebarBinding(rpc, entry, payload, executionContextId) {
   const initialCtx = typeof executionContextId === 'number' ? entry.contextFrames?.get(executionContextId) : undefined;
+  const services = rpc.channelOrchestrator.services;
   const checkHost = () =>
     isTrustedHostContext(entry, executionContextId, null, {
-      stopped: Boolean(daemon._sidebarStopped),
+      stopped: Boolean(services._sidebarStopped),
       expectedContext: initialCtx,
       requireTrackedFrames: true,
       strictContextType: true,
     });
   if (!checkHost()) return;
-  if (daemon.cdp?.readConfig?.()?.sidebarStudio !== 'on') {
+  const cdp = rpc.getCdp();
+  if (cdp?.readConfig?.()?.sidebarStudio !== 'on') {
     return { ok: false, error: 'Chat Beta is disabled' };
   }
   if (typeof payload !== 'string') return;
@@ -460,8 +474,8 @@ async function handleSidebarBinding(daemon, entry, payload, executionContextId) 
   };
   let result = unavailable;
   try {
-    if (daemon.cdp?.readConfig?.()?.sidebarStudio === 'on') {
-      const svc = await daemon.ensureSidebarService();
+    if (rpc.getCdp()?.readConfig?.()?.sidebarStudio === 'on') {
+      const svc = await rpc.channelOrchestrator.ensureSidebarService();
       if (!checkHost()) return;
       if (typeof svc?.handleRpc === 'function') result = await svc.handleRpc(request);
     } else {
@@ -478,12 +492,13 @@ async function handleSidebarBinding(daemon, entry, payload, executionContextId) 
   return result;
 }
 
-async function handleWallpaperBinding(daemon, entry, payload, executionContextId) {
+async function handleWallpaperBinding(rpc, entry, payload, executionContextId) {
   const initialCtx = typeof executionContextId === 'number' ? entry.contextFrames?.get(executionContextId) : undefined;
   const expectedDocGen = typeof entry.sidebarDocument === 'number' ? entry.sidebarDocument : null;
+  const services = rpc.channelOrchestrator.services;
   const checkCtx = () =>
     isTrustedHostContext(entry, executionContextId, expectedDocGen, {
-      stopped: Boolean(daemon._wallpaperStopped),
+      stopped: Boolean(services._wallpaperStopped),
       expectedContext: initialCtx,
     });
   if (!checkCtx()) return;
@@ -516,7 +531,7 @@ async function handleWallpaperBinding(daemon, entry, payload, executionContextId
   let result;
   let svc = null;
   try {
-    svc = await daemon.ensureWallpaperService();
+    svc = await rpc.channelOrchestrator.ensureWallpaperService();
     result = !svc || typeof svc.handleAction !== 'function'
       ? { ok: false, error: 'wallpaper_service_unavailable' }
       : await svc.handleAction(action, actionPayload);
@@ -541,7 +556,7 @@ async function handleWallpaperBinding(daemon, entry, payload, executionContextId
     }
     if (latestCfg && typeof latestCfg === 'object') {
       const syncExpr = `window.__agPrismWallpaper?.applyConfig?.(${serializeJsonForEval(latestCfg)})`;
-      for (const other of daemon.sessions.values()) {
+      for (const other of rpc.sessionRegistry.sessions.values()) {
         if (!other || other === entry || other.wallpaperSkipped) continue;
         if (!isTrustedHostContext(other, other.sidebarHostContextId, null, { requireTrackedFrames: true })) continue;
         void other.session
@@ -553,12 +568,13 @@ async function handleWallpaperBinding(daemon, entry, payload, executionContextId
   return result;
 }
 
-async function handleSuggesterBinding(daemon, entry, payload, executionContextId) {
+async function handleSuggesterBinding(rpc, entry, payload, executionContextId) {
   const initialCtx = typeof executionContextId === 'number' ? entry.contextFrames?.get(executionContextId) : undefined;
   const expectedDocGen = typeof entry.sidebarDocument === 'number' ? entry.sidebarDocument : null;
+  const services = rpc.channelOrchestrator.services;
   const checkCtx = () =>
     isTrustedHostContext(entry, executionContextId, expectedDocGen, {
-      stopped: Boolean(daemon._suggesterStopped),
+      stopped: Boolean(services._suggesterStopped),
       expectedContext: initialCtx,
     });
   if (!checkCtx()) return;
@@ -591,7 +607,7 @@ async function handleSuggesterBinding(daemon, entry, payload, executionContextId
   let result;
   let svc = null;
   try {
-    svc = await daemon.ensureSuggesterService();
+    svc = await rpc.channelOrchestrator.ensureSuggesterService();
     result = !svc || typeof svc.handleAction !== 'function'
       ? { ok: false, error: 'suggester_service_unavailable' }
       : await svc.handleAction(action, actionPayload);
@@ -641,9 +657,9 @@ async function handleSuggesterBinding(daemon, entry, payload, executionContextId
       if (typeof executionContextId === 'number') selfParams.contextId = executionContextId;
       broadcastTasks.push(entry.session.send('Runtime.evaluate', selfParams, 2000).catch(() => {}));
     }
-    for (const other of daemon.sessions.values()) {
+    for (const other of rpc.sessionRegistry.sessions.values()) {
       if (!other || other === entry || other.suggesterSkipped) continue;
-      const target = daemon._resolveTrustedBroadcastContextId(other);
+      const target = resolveTrustedBroadcastContextId(other);
       if (!target.ok) continue;
       const peerParams = { expression: peerSyncExpr, returnByValue: true, awaitPromise: false };
       if (typeof target.contextId === 'number') peerParams.contextId = target.contextId;
@@ -666,46 +682,63 @@ const STATIC_BINDING_TABLE = Object.freeze({
   [SUGGESTER_BINDING]: handleSuggesterBinding,
 });
 
-export const rpcDispatcherMethods = {
-  _isTrustedMainFrameBindingCall(entry, executionContextId) {
-    return isTrustedMainFrameBindingCall(entry, executionContextId);
-  },
+export class RpcDispatcher {
+  constructor({
+    getCdp = () => null,
+    sessionRegistry = null,
+    channelOrchestrator = null,
+    telemetrySubsystem = null,
+    updateStorageSubsystem = null,
+    invokeExecuteRepoAction = null,
+    invokeBroadcastConfigRefresh = null,
+    invokeEnsureMainFrameId = null,
+  } = {}) {
+    this._getCdp = getCdp;
+    this.sessionRegistry = sessionRegistry;
+    this.channelOrchestrator = channelOrchestrator;
+    this.telemetrySubsystem = telemetrySubsystem;
+    this.updateStorageSubsystem = updateStorageSubsystem;
+    this._invokeExecuteRepoAction = invokeExecuteRepoAction;
+    this._invokeBroadcastConfigRefresh = invokeBroadcastConfigRefresh;
+    this._invokeEnsureMainFrameId = invokeEnsureMainFrameId;
+  }
 
-  _resolveTrustedBroadcastContextId(other) {
-    if (!other || other.session?.closed || other.sidebarHostVerified !== true) {
-      return { ok: false, contextId: undefined };
-    }
-    const contexts = other.contextFrames instanceof Map ? other.contextFrames : null;
-    const hasTrackedFrames = Boolean(other.hasFrameTree || other.mainFrameId || (contexts && contexts.size > 0));
-    if (!hasTrackedFrames) {
-      return isAutomatedTestRuntime()
-        ? { ok: true, contextId: typeof other.sidebarHostContextId === 'number' ? other.sidebarHostContextId : undefined }
-        : { ok: false, contextId: undefined };
-    }
-    if (!isTrustedHostContext(other, other.sidebarHostContextId, null, { requireTrackedFrames: true })) {
-      return { ok: false, contextId: undefined };
-    }
-    return { ok: true, contextId: other.sidebarHostContextId };
-  },
+  getCdp() { return this._getCdp(); }
+
+  invokeExecuteRepoAction(payload) {
+    if (typeof this._invokeExecuteRepoAction === 'function') return this._invokeExecuteRepoAction(payload);
+    return this.updateStorageSubsystem.executeRepoAction(payload);
+  }
+
+  invokeBroadcastConfigRefresh() {
+    if (typeof this._invokeBroadcastConfigRefresh === 'function') return this._invokeBroadcastConfigRefresh();
+    return this.channelOrchestrator.broadcastConfigRefresh();
+  }
+
+  invokeEnsureMainFrameId(entry, timeoutMs, retries) {
+    if (typeof this._invokeEnsureMainFrameId === 'function') return this._invokeEnsureMainFrameId(entry, timeoutMs, retries);
+    return this.sessionRegistry.ensureMainFrameId(entry, timeoutMs, retries);
+  }
 
   async handleBindingCall(entry, { name, payload, executionContextId }) {
-    if (!this._isTrustedMainFrameBindingCall(entry, executionContextId)) {
+    if (!isTrustedMainFrameBindingCall(entry, executionContextId)) {
       if (!entry || entry.mainFrameId || entry.session?.closed) return;
       const hasCtxId = typeof executionContextId === 'number';
       const meta = hasCtxId && entry.contextFrames instanceof Map ? entry.contextFrames.get(executionContextId) : null;
       if (meta && (meta.isDefault !== true || (meta.type && meta.type !== 'default'))) return;
-      await this._ensureMainFrameId(entry, 3000, 0);
-      if (!this._isTrustedMainFrameBindingCall(entry, executionContextId)) return;
+      await this.invokeEnsureMainFrameId(entry, 3000, 0);
+      if (!isTrustedMainFrameBindingCall(entry, executionContextId)) return;
     }
 
-    if (name === this.cdp.SETTING_BINDING || name === this.cdp.LEGACY_SETTING_BINDING) {
+    const cdp = this.getCdp();
+    if (name === cdp?.SETTING_BINDING || name === cdp?.LEGACY_SETTING_BINDING) {
       return handleSettingBinding(this, entry, payload, executionContextId);
     }
-    const activeWallpaperBinding = this.cdp?.WALLPAPER_BINDING || WALLPAPER_BINDING;
+    const activeWallpaperBinding = cdp?.WALLPAPER_BINDING || WALLPAPER_BINDING;
     if (name === activeWallpaperBinding) {
       return handleWallpaperBinding(this, entry, payload, executionContextId);
     }
-    const activeSuggesterBinding = this.cdp?.SUGGESTER_BINDING || SUGGESTER_BINDING;
+    const activeSuggesterBinding = cdp?.SUGGESTER_BINDING || SUGGESTER_BINDING;
     if (name === activeSuggesterBinding) {
       return handleSuggesterBinding(this, entry, payload, executionContextId);
     }
@@ -713,5 +746,5 @@ export const rpcDispatcherMethods = {
     if (typeof handler === 'function') {
       return handler(this, entry, payload, executionContextId);
     }
-  },
-};
+  }
+}
