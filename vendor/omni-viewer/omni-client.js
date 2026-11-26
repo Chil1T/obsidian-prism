@@ -32,7 +32,7 @@
 })(typeof window !== 'undefined' ? window : globalThis, function () {
   'use strict';
 
-  const VERSION = '1.0.8-beta.3';
+  const VERSION = '1.0.8-beta.4';
   const STYLE_EL_ID = 'ag-prism-omni-css';
   const HL_URL_NAME = 'ag-omni-url';
   const HL_PATH_NAME = 'ag-omni-path';
