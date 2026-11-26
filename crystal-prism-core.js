@@ -8,26 +8,13 @@
   'use strict';
   const M = Math;
 
-  const PROXIMITY_RADIUS_PX = 105;
+  const PROXIMITY_RADIUS_PX = 105, PROXIMITY_ATTACK_SEC = 0.045, PROXIMITY_RELEASE_SEC = 0.28, WAKE_DURATION_SEC = 0.7;
 
-  // 近场光强非对称指数平滑时间常数（秒）：靠近快速点亮、离开缓慢复归纯白水晶
-  const PROXIMITY_ATTACK_SEC = 0.045;
-  const PROXIMITY_RELEASE_SEC = 0.28;
-  // 「光学唤醒」冷白扫光时长（秒）
-  const WAKE_DURATION_SEC = 0.7;
-
-  function clamp(v, lo, hi) {
-    return M.min(hi, M.max(lo, v));
-  }
+  const clamp = (v, lo, hi) => M.min(hi, M.max(lo, v));
 
   function resolveCrystalAccentCode(raw) {
     const k = String(raw || 'default').trim().toLowerCase();
-    if (k === 'mono' || k === 'monochrome') return 5;
-    if (k === 'amber') return 4;
-    if (k === 'iris') return 3;
-    if (k === 'cobalt') return 2;
-    if (k === 'warm' || k === 'claude' || k === 'alabaster') return 1;
-    return 0;
+    return k === 'mono' || k === 'monochrome' ? 5 : k === 'amber' ? 4 : k === 'iris' ? 3 : k === 'cobalt' ? 2 : k === 'warm' || k === 'claude' || k === 'alabaster' ? 1 : 0;
   }
 
   const FALLBACK_SPECTRA = {
@@ -39,45 +26,26 @@
     5: ['#94a3b8', '#cbd5e1', '#e2e8f0', '#f8fafc'],
   };
 
-  /**
-   * 计算鼠标局部坐标 (localX, localY) 到圆角胶囊轨道 [0..width, 0..height] 的光学近场权重 (0..1)。
-   * 感应半径显著小于输入框大棱镜边框 (220px)，仅在靠近约 105px 内激活色散反应。
-   */
+  // 计算鼠标局部坐标到圆角胶囊轨道的近场权重 (0..1)
   function computeProximityFactor(localX, localY, width, height, radius = PROXIMITY_RADIUS_PX) {
-    if (!Number.isFinite(localX) || !Number.isFinite(localY) || localX < -2000 || localY < -2000) {
-      return 0;
-    }
-    const w = M.max(2, Number(width) || 0);
-    const h = M.max(2, Number(height) || 0);
-    const r = M.max(1, Number(radius) || PROXIMITY_RADIUS_PX);
-    const capR = M.min(w, h) * 0.5;
-    const cx = localX - w * 0.5;
-    const cy = localY - h * 0.5;
-    const halfInnerW = M.max(0, w * 0.5 - capR);
-    const dx = M.max(0, M.abs(cx) - halfInnerW);
-    const dy = M.abs(cy);
-    const dist = M.hypot(dx, dy) - capR;
-
+    if (!Number.isFinite(localX) || !Number.isFinite(localY) || localX < -2000 || localY < -2000) return 0;
+    const w = M.max(2, Number(width) || 0), h = M.max(2, Number(height) || 0), r = M.max(1, Number(radius) || PROXIMITY_RADIUS_PX);
+    const capR = M.min(w, h) * 0.5, cx = localX - w * 0.5, cy = localY - h * 0.5;
+    const dx = M.max(0, M.abs(cx) - M.max(0, w * 0.5 - capR)), dist = M.hypot(dx, M.abs(cy)) - capR;
     if (dist <= 0) return 1;
     if (dist >= r) return 0;
     const u = 1 - dist / r;
-    // 平滑二次 S 曲线，外缘自然收敛
     return u * u * (3 - 2 * u);
   }
 
-  /**
-   * 4 路星芒锚点（u, v 为左上原点的归一化坐标，着色器与 2D 降级共用同一份数据源）。
-   * 主频取黄金比 / 无理数系（e/10、(3-√5)/2、√5/10、π/10），两两不可公度，永不进入同步节拍；
-   * 再叠加一层缓慢的相位抖动（wobFreq / wobAmp），打破机械等距的闪烁节奏。
-   */
+  // 4 路异步星芒锚点（着色器与 2D 降级共用）
   const GLINT_ANCHORS = [
     { u: 0.17, v: 0.30, freq: 0.2718282, phase: 0.15, wobFreq: 0.0713, wobAmp: 0.55, wobPhase: 0.4, scale: 1.0 },
     { u: 0.41, v: 0.64, freq: 0.3819660, phase: 1.72, wobFreq: 0.0527, wobAmp: 0.62, wobPhase: 2.1, scale: 0.92 },
     { u: 0.63, v: 0.32, freq: 0.2236068, phase: 3.29, wobFreq: 0.0891, wobAmp: 0.48, wobPhase: 4.3, scale: 1.05 },
     { u: 0.83, v: 0.62, freq: 0.3141593, phase: 4.86, wobFreq: 0.0618, wobAmp: 0.58, wobPhase: 5.6, scale: 0.88 },
   ];
-  const REDUCED_GLINT_INTENSITY = [0, 0.42, 0.24, 0];
-  const TWO_PI = M.PI * 2;
+  const REDUCED_GLINT_INTENSITY = [0, 0.42, 0.24, 0], TWO_PI = M.PI * 2;
 
   // 单路星芒强度（纯函数、零分配）
   function glintIntensityAt(a, t) {
@@ -745,48 +713,15 @@ void main() {
     let reduceMotion = Boolean(options.reduceMotion);
     const force2D = Boolean(options.force2D);
 
-    let pointerClientX = -9999;
-    let pointerClientY = -9999;
-    // 指针在画布左上原点坐标系下的局部位置（仅在指针事件 / 低频校准时读取 rect）
-    let pointerLocalX = -9999;
-    let pointerLocalY = -9999;
-    let rectAge = 0;
-    let currentProximity = 0;
-    let targetProximity = 0;
-    let elapsedTime = 0.25;
-    let lastCssW = 0;
-    let lastCssH = 0;
-    let wakeT = -1;
-    let hasDrawnFrame = false;
-    let lastDrawW = -1;
-    let lastDrawH = -1;
-    let lastDrawDpr = -1;
-    let lastDrawDark = null;
-    let lastDrawStrength = -1;
-    let lastDrawAccent = -1;
-    let lastDrawAmbient = -1;
-    let lastDrawReduce = null;
-    let lastDrawHideLock = null;
-    let lastDrawFillRatio = -1;
-    let fillSettleSec = 0;
-    let liquidAccumSec = 0;
-    let wasLiquidFlow = false;
-    let wasProximityActive = false;
-    let wasGlintActive = false;
-    let wasWaking = false;
-    let glintAccumSec = 0;
-    let drawCount = 0;
-    let skippedCount = 0;
-    const glintBuf = new Float32Array(4);
-    const lastDrawnGlint = new Float32Array(4);
+    let pointerClientX = -9999, pointerClientY = -9999, pointerLocalX = -9999, pointerLocalY = -9999;
+    let rectAge = 0, currentProximity = 0, targetProximity = 0, elapsedTime = 0.25, lastCssW = 0, lastCssH = 0, wakeT = -1;
+    let hasDrawnFrame = false, lastDrawW = -1, lastDrawH = -1, lastDrawDpr = -1, lastDrawDark = null;
+    let lastDrawStrength = -1, lastDrawAccent = -1, lastDrawAmbient = -1, lastDrawReduce = null, lastDrawHideLock = null;
+    let lastDrawFillRatio = -1, fillSettleSec = 0, liquidAccumSec = 0, wasLiquidFlow = false, wasProximityActive = false;
+    let wasGlintActive = false, wasWaking = false, glintAccumSec = 0, drawCount = 0, skippedCount = 0;
+    const glintBuf = new Float32Array(4), lastDrawnGlint = new Float32Array(4);
 
-    // ── 尺寸缓存：ResizeObserver 推送，取消每帧 getBoundingClientRect ──
-    let cachedW = 0;
-    let cachedH = 0;
-    let cachedL = 0;
-    let cachedT = 0;
-    let hasRect = false;
-    let resizeObserver = null;
+    let cachedW = 0, cachedH = 0, cachedL = 0, cachedT = 0, hasRect = false, resizeObserver = null;
     const seedSizeFromRect = () => {
       const rect = typeof canvas.getBoundingClientRect === 'function' ? canvas.getBoundingClientRect() : null;
       cachedW = rect ? rect.width : canvas.width || 0;
@@ -834,44 +769,35 @@ void main() {
       gl.enableVertexAttribArray(0);
       gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
-      const uloc = (name) => gl.getUniformLocation(prog, name);
+      const ul = (name) => gl.getUniformLocation(prog, name);
       return {
-        gl,
-        prog,
-        buf,
+        gl, prog, buf,
         u: {
-          res: uloc('u_res'),
-          dpr: uloc('u_dpr'),
-          time: uloc('u_time'),
-          dark: uloc('u_dark'),
-          pointer: uloc('u_pointer'),
-          proximity: uloc('u_proximity'),
-          reduce: uloc('u_reduce'),
-          glints: uloc('u_glints'),
-          glintU: uloc('u_glintU'),
-          glintV: uloc('u_glintV'),
-          wake: uloc('u_wake'),
-          accent: uloc('u_accent'),
-          ambient: uloc('u_ambient'),
+          res: ul('u_res'), dpr: ul('u_dpr'), time: ul('u_time'), dark: ul('u_dark'),
+          pointer: ul('u_pointer'), proximity: ul('u_proximity'), reduce: ul('u_reduce'),
+          glints: ul('u_glints'), glintU: ul('u_glintU'), glintV: ul('u_glintV'),
+          wake: ul('u_wake'), accent: ul('u_accent'), ambient: ul('u_ambient'),
         },
       };
     };
 
+    const readPerfMode = () => {
+      const rw = typeof globalThis !== 'undefined' && globalThis.__agPrismRippleWorker;
+      if (rw && typeof rw.getPerfMode === 'function') return rw.getPerfMode();
+      const h = typeof document !== 'undefined' && document.documentElement;
+      const raw = (h && ((h.dataset && h.dataset.agCsPerfMode) || (h.getAttribute && h.getAttribute('data-ag-cs-perf-mode')))) || '';
+      const v = String(raw).trim().toLowerCase();
+      return v === 'performance' || v === 'quality' || v === 'balanced' ? v : 'balanced';
+    };
     if (!force2D) {
       try {
+        const pm = readPerfMode();
         const gl = canvas.getContext('webgl2', {
-          alpha: true,
-          antialias: true,
-          premultipliedAlpha: true,
-          powerPreference: 'high-performance',
+          alpha: true, antialias: pm === 'quality', premultipliedAlpha: true,
+          powerPreference: pm === 'performance' ? 'low-power' : 'default',
         });
-        if (gl) {
-          glState = initWebGL2(gl);
-          rendererMode = 'webgl2';
-        }
-      } catch {
-        glState = null;
-      }
+        if (gl) { glState = initWebGL2(gl); rendererMode = 'webgl2'; }
+      } catch { glState = null; }
     }
 
     if (!glState) {
@@ -964,7 +890,8 @@ void main() {
         }
       }
 
-      const dpr = M.min(2.5, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+      const maxDpr = readPerfMode() === 'performance' ? 1.0 : 1.5;
+      const dpr = M.min(maxDpr, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
       const targetW = M.max(4, M.round(cssW * dpr));
       const targetH = M.max(4, M.round(cssH * dpr));
 

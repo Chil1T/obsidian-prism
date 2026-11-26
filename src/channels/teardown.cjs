@@ -86,6 +86,7 @@ const REMOVE_EXPRESSION = `(() => {
   try { (window.__agPrismFontCustomizer || globalThis.__agPrismFontCustomizer)?.dispose?.(document); } catch (e) {}
   try { (window.__agPrismReducedMotionGuard || globalThis.__agPrismReducedMotionGuard)?.dispose?.(document); } catch (e) {}
   try { (window.__agPrismSettingsExtBeta4 || globalThis.__agPrismSettingsExtBeta4)?.dispose?.(document); } catch (e) {}
+  try { (window.__agPrismRippleWorker || globalThis.__agPrismRippleWorker)?.disposeAll?.(); } catch (e) {}
   try {
     if (window.__agPrism && typeof window.__agPrism.destroy === 'function') {
       window.__agPrism.destroy();
@@ -256,7 +257,7 @@ const REMOVE_EXPRESSION = `(() => {
   delete globalThis.__agCsRippleCore;
   delete globalThis.__agCsUsageCore;
   delete globalThis.__agCsI18nCore;
-  for (const k of ['__agPrismReducedMotion', '__agPrismApplyIgnoreReducedMotion', '__agPrismReducedMotionGuard', '__agPrismFontCustomizer', '__agPrismI18nExtBeta4', '__agPrismSettingsExtBeta4']) {
+  for (const k of ['__agPrismReducedMotion', '__agPrismApplyIgnoreReducedMotion', '__agPrismReducedMotionGuard', '__agPrismFontCustomizer', '__agPrismI18nExtBeta4', '__agPrismSettingsExtBeta4', '__agPrismRippleWorker']) {
     try { delete window[k]; } catch {}
     try { delete globalThis[k]; } catch {}
   }

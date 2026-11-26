@@ -7,60 +7,20 @@
 })(typeof globalThis !== 'undefined' ? globalThis : window, function () {
   'use strict';
 
-  const WAVE_NODES = 24;
-  const TUBE_X = 34; // 96px 画布内，流体舱居中在 x=34（宽 ~43.2 => x:12.4..55.6，右侧绘制 3.5px 激光微刻标尺）
-  const TUBE_OUT_R = 21.6;
-  const TUBE_IN_R = 19.6;
-  const LIP_Y = 18.5;
-  const TOP_OUT = 18.5;
-  const TOP_IN = 20.5;
-  const RC_TOP_OUT = 14.5;
-  const RC_TOP_IN = 12.5;
-  const HEM_Y = 175.0; // 液位基准（沿用 HEM_Y + 14 作为腔底液位映射参考）
-  // 一体封闭式修长圆角高硼硅/暗曜石纯透晶舱（极简 2.0px 薄晶壁 + 顶底对称精密圆角）
-  const FLOOR_OUT = 198.0;
-  const FLOOR_IN = 195.0;
-  const RC_OUT = 14.5;
-  const RC_IN = 12.5;
-  const FIXED_DT = 1 / 120; // 固定物理子步：60Hz / 144Hz 刷新率下演化一致
-  const MAX_FRAME_DT = 0.05; // 真实帧间隔上限
-  const MAX_SUBSTEPS = 8;
-  const GRAVITY = 460.0; // 像素级重力加速度 px/s²
-  const SETTLE_MIN_AGE_SEC = 1.1; // 入场至少 1.1s 且液位/波能收敛后才进入 0fps 物理休眠
+  const WAVE_NODES = 24, TUBE_X = 34, TUBE_OUT_R = 21.6, TUBE_IN_R = 19.6, LIP_Y = 18.5;
+  const TOP_OUT = 18.5, TOP_IN = 20.5, RC_TOP_OUT = 14.5, RC_TOP_IN = 12.5, HEM_Y = 175.0;
+  const FLOOR_OUT = 198.0, FLOOR_IN = 195.0, RC_OUT = 14.5, RC_IN = 12.5;
+  const FIXED_DT = 1 / 120, MAX_FRAME_DT = 0.05, MAX_SUBSTEPS = 8, GRAVITY = 460.0, SETTLE_MIN_AGE_SEC = 1.1;
 
   const clampFillVal = (v) => Math.max(0.06, Math.min(0.95, Number.isFinite(+v) ? +v : 0.46));
 
-  /**
-   * 创建高阻尼精密光学水平仪流体舱物理模拟器
-   * （24节点硅油阻尼浅水波 + 高阻尼重力摆 + 内壁润湿 + 显式液滴激波 + 流式星尘缓升 + 静止收敛检测）
-   */
+  // 高阻尼光学水平仪流体舱物理模拟器
   function createWaterVialPhysics(initialOptions = {}) {
-    const waveH = new Float32Array(WAVE_NODES);
-    const waveV = new Float32Array(WAVE_NODES);
-
-    let fill = clampFillVal(initialOptions.fill ?? 0.46);
-    let targetFill = fill;
-    let streaming = initialOptions.streaming !== false;
-
-    // 倾角与水平仪阻尼动力学（最大 ±0.48 rad）
-    let tiltAngle = 0;
-    let tiltVel = 0;
-
-    // 内壁挂水润湿高度（归一化在液体上方延伸长度 0..0.42）
-    let wetLeft = 0;
-    let wetRight = 0;
-
-    // 显式下落光滴与星尘微泡（活动列表 + 对象池，稳态零分配）
-    let pendantProgress = 0;
-    let dropCooldown = 0;
-    let streamClock = 0;
-    let dustCooldown = 0.42;
-    let accumulator = 0;
-    let tiltAcc = 0;
-    const fallingDrops = [];
-    const bubbles = [];
-    const dropPool = [];
-    const bubblePool = [];
+    const waveH = new Float32Array(WAVE_NODES), waveV = new Float32Array(WAVE_NODES);
+    let fill = clampFillVal(initialOptions.fill ?? 0.46), targetFill = fill, streaming = initialOptions.streaming !== false;
+    let tiltAngle = 0, tiltVel = 0, wetLeft = 0, wetRight = 0;
+    let pendantProgress = 0, dropCooldown = 0, streamClock = 0, dustCooldown = 0.42, accumulator = 0, tiltAcc = 0;
+    const fallingDrops = [], bubbles = [], dropPool = [], bubblePool = [];
 
     const getSurfaceYNormalized = () => 1 - fill;
 
@@ -1024,9 +984,16 @@
       };
     };
 
-    let glState = null;
-    let glCanvas = null;
-    let glContextLost = false;
+    let glState = null, glCanvas = null, glContextLost = false, layeredGl = false, lastScaleSig = '';
+    const readVialPerf = () => {
+      const rw = typeof globalThis !== 'undefined' && globalThis.__agPrismRippleWorker;
+      if (rw && typeof rw.getPerfMode === 'function') return rw.getPerfMode();
+      const h = typeof document !== 'undefined' && document.documentElement;
+      const raw = (h && ((h.dataset && h.dataset.agCsPerfMode) || (h.getAttribute && h.getAttribute('data-ag-cs-perf-mode')))) || '';
+      const v = String(raw).trim().toLowerCase();
+      return v === 'performance' || v === 'quality' || v === 'balanced' ? v : 'balanced';
+    };
+    const glOpts = () => ({ alpha: true, antialias: readVialPerf() === 'quality', premultipliedAlpha: false });
 
     const buildGlState = (gl) => {
       const prog = compileProgram(gl, VERT_SRC, FRAG_SRC);
@@ -1036,59 +1003,36 @@
       const locPos = gl.getAttribLocation(prog, 'a_pos');
       gl.enableVertexAttribArray(locPos);
       gl.vertexAttribPointer(locPos, 2, gl.FLOAT, false, 0, 0);
+      const ul = (n) => gl.getUniformLocation(prog, n);
       return {
-        gl,
-        prog,
-        buf,
+        gl, prog, buf,
         u: {
-          res: gl.getUniformLocation(prog, 'u_res'),
-          time: gl.getUniformLocation(prog, 'u_time'),
-          dark: gl.getUniformLocation(prog, 'u_dark'),
-          fill: gl.getUniformLocation(prog, 'u_fill'),
-          tilt: gl.getUniformLocation(prog, 'u_tilt'),
-          tint: gl.getUniformLocation(prog, 'u_tint'),
-          camp: gl.getUniformLocation(prog, 'u_camp'),
-          accent: gl.getUniformLocation(prog, 'u_accent'),
-          critical: gl.getUniformLocation(prog, 'u_critical'),
-          pendant: gl.getUniformLocation(prog, 'u_pendant'),
-          wetL: gl.getUniformLocation(prog, 'u_wetL'),
-          wetR: gl.getUniformLocation(prog, 'u_wetR'),
-          hoverSlice: gl.getUniformLocation(prog, 'u_hoverSlice'),
-          wave: gl.getUniformLocation(prog, 'u_wave[0]'),
-          drops: gl.getUniformLocation(prog, 'u_drops[0]'),
-          bubbles: gl.getUniformLocation(prog, 'u_bubbles[0]'),
-          bubShape: gl.getUniformLocation(prog, 'u_bubShape[0]'),
-          raySlope: gl.getUniformLocation(prog, 'u_raySlope[0]'),
-          ratios: gl.getUniformLocation(prog, 'u_ratios'),
+          res: ul('u_res'), time: ul('u_time'), dark: ul('u_dark'), fill: ul('u_fill'), tilt: ul('u_tilt'),
+          tint: ul('u_tint'), camp: ul('u_camp'), accent: ul('u_accent'), critical: ul('u_critical'),
+          pendant: ul('u_pendant'), wetL: ul('u_wetL'), wetR: ul('u_wetR'), hoverSlice: ul('u_hoverSlice'),
+          wave: ul('u_wave[0]'), drops: ul('u_drops[0]'), bubbles: ul('u_bubbles[0]'),
+          bubShape: ul('u_bubShape[0]'), raySlope: ul('u_raySlope[0]'), ratios: ul('u_ratios'),
         },
       };
     };
 
     const onGlLost = (ev) => {
       if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-      glContextLost = true;
-      glState = null;
-      dirtyRender = true;
-      if (typeof options.onWake === 'function') {
-        try { options.onWake(); } catch {}
-      }
+      glContextLost = true; glState = null; dirtyRender = true; lastScaleSig = '';
+      if (layeredGl && glCanvas?.style) glCanvas.style.display = 'none';
+      if (typeof options.onWake === 'function') { try { options.onWake(); } catch {} }
     };
 
     const onGlRestored = () => {
       if (!glCanvas) return;
       try {
-        const gl = glCanvas.getContext('webgl2', { alpha: true, antialias: true, premultipliedAlpha: false });
+        const gl = glCanvas.getContext('webgl2', glOpts());
         if (gl) {
-          glState = buildGlState(gl);
-          glContextLost = false;
-          dirtyRender = true;
-          if (typeof options.onWake === 'function') {
-            try { options.onWake(); } catch {}
-          }
+          glState = buildGlState(gl); glContextLost = false; dirtyRender = true; lastScaleSig = '';
+          if (layeredGl && glCanvas?.style) glCanvas.style.display = '';
+          if (typeof options.onWake === 'function') { try { options.onWake(); } catch {} }
         }
-      } catch {
-        glState = null;
-      }
+      } catch { glState = null; }
     };
 
     if (typeof document !== 'undefined' && ctx2d) {
@@ -1098,9 +1042,24 @@
           glCanvas.addEventListener('webglcontextlost', onGlLost);
           glCanvas.addEventListener('webglcontextrestored', onGlRestored);
         }
-        const gl = glCanvas.getContext('webgl2', { alpha: true, antialias: true, premultipliedAlpha: false });
+        const gl = glCanvas.getContext('webgl2', glOpts());
         if (gl) {
           glState = buildGlState(gl);
+          const p = canvas && canvas.parentNode;
+          if (p && typeof p.insertBefore === 'function') {
+            layeredGl = true;
+            if (p.style && !p.style.position) p.style.position = 'relative';
+            glCanvas.setAttribute?.('data-ag-vial-gl', '1');
+            glCanvas.setAttribute?.('aria-hidden', 'true');
+            if (glCanvas.style) {
+              Object.assign(glCanvas.style, { position: 'absolute', left: '0', top: '0', width: `${cssW}px`, height: `${cssH}px`, pointerEvents: 'none', zIndex: '0' });
+            }
+            if (canvas.style) {
+              if (!canvas.style.position) canvas.style.position = 'relative';
+              canvas.style.zIndex = '1';
+            }
+            p.insertBefore(glCanvas, canvas);
+          }
         }
       } catch (err) {
         if (typeof console !== 'undefined') console.warn('[vial-core] WebGL2 不可用，降级 2D：', err && err.message);
@@ -1345,19 +1304,8 @@
       const slope = Math.tan(tilt) * TUBE_IN_R;
       const isClaude = st.camp === 'claude';
       const isCrit = Boolean(st.critical);
-      const bladeCol = isCrit
-        ? isDark
-          ? 'rgba(255, 236, 168, 0.94)'
-          : 'rgba(234, 88, 12, 0.96)'
-        : tone === 'mono'
-          ? isDark ? 'rgba(244, 244, 245, 0.94)' : 'rgba(39, 39, 42, 0.96)'
-          : tone === 'amber'
-            ? isDark ? 'rgba(253, 224, 71, 0.94)' : 'rgba(180, 83, 9, 0.96)'
-            : tone === 'iris'
-              ? isDark ? 'rgba(221, 214, 254, 0.94)' : 'rgba(109, 40, 217, 0.96)'
-              : isDark
-                ? 'rgba(176, 224, 255, 0.94)'
-                : 'rgba(3, 105, 161, 0.96)';
+      const tCol = (m, a, i, c) => (tone === 'mono' ? m : tone === 'amber' ? a : tone === 'iris' ? i : c);
+      const bladeCol = isCrit ? (isDark ? 'rgba(255, 236, 168, 0.94)' : 'rgba(234, 88, 12, 0.96)') : tCol(isDark ? 'rgba(244, 244, 245, 0.94)' : 'rgba(39, 39, 42, 0.96)', isDark ? 'rgba(253, 224, 71, 0.94)' : 'rgba(180, 83, 9, 0.96)', isDark ? 'rgba(221, 214, 254, 0.94)' : 'rgba(109, 40, 217, 0.96)', isDark ? 'rgba(176, 224, 255, 0.94)' : 'rgba(3, 105, 161, 0.96)');
 
       ctx.save();
 
@@ -1369,68 +1317,24 @@
       // 2. 连续电离能量柱
       if (surfY < FLOOR_IN - 0.5) {
         const liqGrad = ctx.createLinearGradient(TUBE_X, FLOOR_IN, TUBE_X, Math.min(FLOOR_IN - 6, surfY));
-        if (isCrit) {
-          if (isDark) {
-            liqGrad.addColorStop(0.0, 'rgba(92, 37, 9, 0.92)');
-            liqGrad.addColorStop(0.38, 'rgba(189, 84, 19, 0.90)');
-            liqGrad.addColorStop(0.75, 'rgba(241, 153, 18, 0.90)');
-            liqGrad.addColorStop(1.0, 'rgba(254, 213, 79, 0.90)');
-          } else {
-            liqGrad.addColorStop(0.0, 'rgba(124, 58, 237, 0.94)');
-            liqGrad.addColorStop(0.52, 'rgba(234, 88, 12, 0.93)');
-            liqGrad.addColorStop(1.0, 'rgba(245, 158, 11, 0.94)');
-          }
-        } else if (tone === 'mono') {
-          if (isDark) {
-            liqGrad.addColorStop(0.0, 'rgba(24, 24, 27, 0.92)');
-            liqGrad.addColorStop(0.45, 'rgba(82, 82, 91, 0.90)');
-            liqGrad.addColorStop(1.0, 'rgba(212, 212, 216, 0.90)');
-          } else {
-            liqGrad.addColorStop(0.0, 'rgba(39, 39, 42, 0.94)');
-            liqGrad.addColorStop(0.52, 'rgba(82, 82, 91, 0.93)');
-            liqGrad.addColorStop(1.0, 'rgba(113, 113, 122, 0.94)');
-          }
-        } else if (tone === 'amber') {
-          if (isDark) {
-            liqGrad.addColorStop(0.0, 'rgba(69, 26, 3, 0.92)');
-            liqGrad.addColorStop(0.45, 'rgba(180, 83, 9, 0.90)');
-            liqGrad.addColorStop(1.0, 'rgba(251, 191, 36, 0.90)');
-          } else {
-            liqGrad.addColorStop(0.0, 'rgba(146, 64, 14, 0.94)');
-            liqGrad.addColorStop(0.52, 'rgba(217, 119, 6, 0.93)');
-            liqGrad.addColorStop(1.0, 'rgba(245, 158, 11, 0.94)');
-          }
-        } else if (tone === 'iris') {
-          if (isDark) {
-            liqGrad.addColorStop(0.0, 'rgba(46, 16, 101, 0.92)');
-            liqGrad.addColorStop(0.45, 'rgba(109, 40, 217, 0.90)');
-            liqGrad.addColorStop(1.0, 'rgba(196, 181, 253, 0.90)');
-          } else {
-            liqGrad.addColorStop(0.0, 'rgba(91, 33, 182, 0.94)');
-            liqGrad.addColorStop(0.52, 'rgba(124, 58, 237, 0.93)');
-            liqGrad.addColorStop(1.0, 'rgba(168, 85, 247, 0.94)');
-          }
-        } else if (isDark) {
-          liqGrad.addColorStop(0.0, 'rgba(15, 23, 58, 0.92)');
-          liqGrad.addColorStop(0.36, isClaude ? 'rgba(32, 72, 180, 0.90)' : 'rgba(27, 73, 178, 0.90)');
-          liqGrad.addColorStop(0.74, isClaude ? 'rgba(64, 132, 252, 0.90)' : 'rgba(49, 134, 255, 0.90)');
-          liqGrad.addColorStop(1.0, 'rgba(92, 198, 252, 0.90)');
-        } else if (snap.fill >= 0.72) {
-          liqGrad.addColorStop(0.0, '#1D4ED8');
-          liqGrad.addColorStop(0.55, '#4F46E5');
-          liqGrad.addColorStop(1.0, '#7C3AED');
-        } else {
-          liqGrad.addColorStop(0.0, 'rgba(29, 78, 216, 0.94)');
-          liqGrad.addColorStop(0.52, isClaude ? 'rgba(59, 102, 228, 0.93)' : 'rgba(37, 99, 235, 0.93)');
-          liqGrad.addColorStop(1.0, 'rgba(2, 132, 199, 0.94)');
-        }
+        const stops = isCrit
+          ? (isDark ? [[0, 'rgba(92, 37, 9, 0.92)'], [0.38, 'rgba(189, 84, 19, 0.90)'], [0.75, 'rgba(241, 153, 18, 0.90)'], [1, 'rgba(254, 213, 79, 0.90)']] : [[0, 'rgba(124, 58, 237, 0.94)'], [0.52, 'rgba(234, 88, 12, 0.93)'], [1, 'rgba(245, 158, 11, 0.94)']])
+          : tone === 'mono'
+            ? (isDark ? [[0, 'rgba(24, 24, 27, 0.92)'], [0.45, 'rgba(82, 82, 91, 0.90)'], [1, 'rgba(212, 212, 216, 0.90)']] : [[0, 'rgba(39, 39, 42, 0.94)'], [0.52, 'rgba(82, 82, 91, 0.93)'], [1, 'rgba(113, 113, 122, 0.94)']])
+            : tone === 'amber'
+              ? (isDark ? [[0, 'rgba(69, 26, 3, 0.92)'], [0.45, 'rgba(180, 83, 9, 0.90)'], [1, 'rgba(251, 191, 36, 0.90)']] : [[0, 'rgba(146, 64, 14, 0.94)'], [0.52, 'rgba(217, 119, 6, 0.93)'], [1, 'rgba(245, 158, 11, 0.94)']])
+              : tone === 'iris'
+                ? (isDark ? [[0, 'rgba(46, 16, 101, 0.92)'], [0.45, 'rgba(109, 40, 217, 0.90)'], [1, 'rgba(196, 181, 253, 0.90)']] : [[0, 'rgba(91, 33, 182, 0.94)'], [0.52, 'rgba(124, 58, 237, 0.93)'], [1, 'rgba(168, 85, 247, 0.94)']])
+                : isDark
+                  ? [[0, 'rgba(15, 23, 58, 0.92)'], [0.36, isClaude ? 'rgba(32, 72, 180, 0.90)' : 'rgba(27, 73, 178, 0.90)'], [0.74, isClaude ? 'rgba(64, 132, 252, 0.90)' : 'rgba(49, 134, 255, 0.90)'], [1, 'rgba(92, 198, 252, 0.90)']]
+                  : snap.fill >= 0.72
+                    ? [[0, '#1D4ED8'], [0.55, '#4F46E5'], [1, '#7C3AED']]
+                    : [[0, 'rgba(29, 78, 216, 0.94)'], [0.52, isClaude ? 'rgba(59, 102, 228, 0.93)' : 'rgba(37, 99, 235, 0.93)'], [1, 'rgba(2, 132, 199, 0.94)']];
+        for (const [o, c] of stops) liqGrad.addColorStop(o, c);
         traceCapsuleColumn(ctx, TUBE_X, TUBE_IN_R, surfY - slope, surfY + slope, FLOOR_IN, RC_IN);
-        ctx.fillStyle = liqGrad;
-        ctx.fill();
-
+        ctx.fillStyle = liqGrad; ctx.fill();
         traceCapsuleColumn(ctx, TUBE_X, TUBE_IN_R, surfY - slope, surfY + slope, FLOOR_IN, RC_IN);
-        ctx.fillStyle = getIonCylGrad(ctx, isDark, tone);
-        ctx.fill();
+        ctx.fillStyle = getIonCylGrad(ctx, isDark, tone); ctx.fill();
       }
 
       // 3. 失重微米星尘点阵与晶莹气泡描边
@@ -1481,41 +1385,13 @@
 
       // 4. 3D 弯月面与色调一致的折射刀锋
       ctx.save();
-      ctx.translate(TUBE_X, surfY);
-      ctx.rotate(tilt);
-      ctx.fillStyle = isCrit
-        ? 'rgba(234, 88, 12, 0.44)'
-        : tone === 'mono'
-          ? isDark ? 'rgba(212, 212, 216, 0.32)' : 'rgba(82, 82, 91, 0.48)'
-          : tone === 'amber'
-            ? isDark ? 'rgba(251, 191, 36, 0.36)' : 'rgba(217, 119, 6, 0.50)'
-            : tone === 'iris'
-              ? isDark ? 'rgba(196, 181, 253, 0.36)' : 'rgba(124, 58, 237, 0.50)'
-              : isDark
-                ? 'rgba(92, 198, 252, 0.36)'
-                : 'rgba(2, 132, 199, 0.56)';
-      ctx.beginPath();
-      ctx.ellipse(0, 0, TUBE_IN_R - 0.3, 4.0, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.strokeStyle =
-        tone === 'mono'
-          ? isDark ? 'rgba(228, 228, 231, 0.42)' : 'rgba(63, 63, 70, 0.56)'
-          : tone === 'amber'
-            ? isDark ? 'rgba(253, 224, 71, 0.42)' : 'rgba(180, 83, 9, 0.56)'
-            : tone === 'iris'
-              ? isDark ? 'rgba(221, 214, 254, 0.44)' : 'rgba(109, 40, 217, 0.56)'
-              : isDark ? 'rgba(176, 224, 255, 0.44)' : 'rgba(29, 78, 216, 0.58)';
-      ctx.lineWidth = 0.75;
-      ctx.beginPath();
-      ctx.ellipse(0, 0, TUBE_IN_R - 0.3, 4.0, 0, Math.PI, Math.PI * 2);
-      ctx.stroke();
-
-      ctx.strokeStyle = bladeCol;
-      ctx.lineWidth = 1.15;
-      ctx.beginPath();
-      ctx.ellipse(0, 0, TUBE_IN_R - 0.3, 4.0, 0, 0, Math.PI);
-      ctx.stroke();
+      ctx.translate(TUBE_X, surfY); ctx.rotate(tilt);
+      ctx.fillStyle = isCrit ? 'rgba(234, 88, 12, 0.44)' : tCol(isDark ? 'rgba(212, 212, 216, 0.32)' : 'rgba(82, 82, 91, 0.48)', isDark ? 'rgba(251, 191, 36, 0.36)' : 'rgba(217, 119, 6, 0.50)', isDark ? 'rgba(196, 181, 253, 0.36)' : 'rgba(124, 58, 237, 0.50)', isDark ? 'rgba(92, 198, 252, 0.36)' : 'rgba(2, 132, 199, 0.56)');
+      ctx.beginPath(); ctx.ellipse(0, 0, TUBE_IN_R - 0.3, 4.0, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = tCol(isDark ? 'rgba(228, 228, 231, 0.42)' : 'rgba(63, 63, 70, 0.56)', isDark ? 'rgba(253, 224, 71, 0.42)' : 'rgba(180, 83, 9, 0.56)', isDark ? 'rgba(221, 214, 254, 0.44)' : 'rgba(109, 40, 217, 0.56)', isDark ? 'rgba(176, 224, 255, 0.44)' : 'rgba(29, 78, 216, 0.58)');
+      ctx.lineWidth = 0.75; ctx.beginPath(); ctx.ellipse(0, 0, TUBE_IN_R - 0.3, 4.0, 0, Math.PI, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = bladeCol; ctx.lineWidth = 1.15;
+      ctx.beginPath(); ctx.ellipse(0, 0, TUBE_IN_R - 0.3, 4.0, 0, 0, Math.PI); ctx.stroke();
       ctx.restore();
 
       // 4b. 悬停切片图例时的 1px 光学聚焦环（2D 保底与 WebGL2 一致）
@@ -1566,18 +1442,8 @@
       }
 
       traceClosedCapsule(ctx, TUBE_X, TUBE_OUT_R, TOP_OUT, FLOOR_OUT, RC_OUT, RC_OUT);
-      ctx.strokeStyle =
-        tone === 'mono'
-          ? isDark ? 'rgba(212, 212, 216, 0.68)' : 'rgba(82, 82, 91, 0.68)'
-          : tone === 'amber'
-            ? isDark ? 'rgba(251, 191, 36, 0.62)' : 'rgba(146, 64, 14, 0.68)'
-            : tone === 'iris'
-              ? isDark ? 'rgba(196, 181, 253, 0.64)' : 'rgba(91, 33, 182, 0.68)'
-              : isDark ? 'rgba(172, 204, 248, 0.68)' : 'rgba(30, 64, 175, 0.68)';
-      ctx.lineWidth = isDark ? 1.0 : 1.15;
-      ctx.stroke();
-
-      ctx.restore();
+      ctx.strokeStyle = tCol(isDark ? 'rgba(212, 212, 216, 0.68)' : 'rgba(82, 82, 91, 0.68)', isDark ? 'rgba(251, 191, 36, 0.62)' : 'rgba(146, 64, 14, 0.68)', isDark ? 'rgba(196, 181, 253, 0.64)' : 'rgba(91, 33, 182, 0.68)', isDark ? 'rgba(172, 204, 248, 0.68)' : 'rgba(30, 64, 175, 0.68)');
+      ctx.lineWidth = isDark ? 1.0 : 1.15; ctx.stroke(); ctx.restore();
     };
 
     const stepInternal = (dtSec, isInitBoot) => {
@@ -1596,16 +1462,16 @@
         }
       }
 
-      const dpr = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, 2);
+      const pm = readVialPerf();
+      const maxDpr = pm === 'performance' ? 1 : pm === 'quality' ? 2 : 1.5;
+      const dpr = Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, maxDpr);
       const targetW = Math.round(cssW * dpr);
       const targetH = Math.round(cssH * dpr);
       if (canvas.width !== targetW || canvas.height !== targetH) {
         canvas.width = targetW;
         canvas.height = targetH;
+        lastScaleSig = '';
       }
-
-      ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx2d.clearRect(0, 0, cssW, cssH);
 
       const snap = phys.readSnapshotInto(snapBuf);
 
@@ -1615,6 +1481,7 @@
       if (glState && !glAlive) {
         glContextLost = true;
         glState = null;
+        lastScaleSig = '';
       }
 
       if (glAlive && glState && glCanvas) {
@@ -1629,24 +1496,16 @@
         gl.useProgram(prog);
 
         const tintVec = st.critical ? TINT_CRITICAL : st.camp === 'claude' ? TINT_ASTRAL : TINT_HORIZON;
-
         dropArr.fill(0);
         for (let i = 0; i < Math.min(4, phys.fallingDrops.length); i++) {
           const d = phys.fallingDrops[i];
-          dropArr[i * 4 + 0] = d.x;
-          dropArr[i * 4 + 1] = d.y;
-          dropArr[i * 4 + 2] = d.r;
-          dropArr[i * 4 + 3] = 1.0;
+          dropArr[i * 4] = d.x; dropArr[i * 4 + 1] = d.y; dropArr[i * 4 + 2] = d.r; dropArr[i * 4 + 3] = 1.0;
         }
         bubArr.fill(0);
         for (let i = 0; i < Math.min(8, phys.bubbles.length); i++) {
           const b = phys.bubbles[i];
-          bubArr[i * 4 + 0] = b.x;
-          bubArr[i * 4 + 1] = b.y;
-          bubArr[i * 4 + 2] = b.r;
-          bubArr[i * 4 + 3] = b.alpha;
-          bubShapeArr[i * 2 + 0] = b.aspect || 1.0;
-          bubShapeArr[i * 2 + 1] = snap.tiltAngle;
+          bubArr[i * 4] = b.x; bubArr[i * 4 + 1] = b.y; bubArr[i * 4 + 2] = b.r; bubArr[i * 4 + 3] = b.alpha;
+          bubShapeArr[i * 2] = b.aspect || 1.0; bubShapeArr[i * 2 + 1] = snap.tiltAngle;
         }
         updateRaySlopes(snap.tiltAngle, elapsedTime);
 
@@ -1673,12 +1532,30 @@
         gl.uniform1fv(u.raySlope, raySlopeArr);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-        ctx2d.drawImage(glCanvas, 0, 0, cssW, cssH);
+        if (layeredGl) {
+          if (glCanvas.style && glCanvas.style.display === 'none') glCanvas.style.display = '';
+          const sSig = `${st.isDark ? 1 : 0}|${st.accentTone}|${st.critical ? 1 : 0}|${st.maxTokens}|${snap.fill >= 0.238 ? 1 : 0}${snap.fill >= 0.488 ? 1 : 0}${snap.fill >= 0.738 ? 1 : 0}|${targetW}x${targetH}`;
+          if (sSig !== lastScaleSig) {
+            ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx2d.clearRect(0, 0, cssW, cssH);
+            drawScaleMarks(ctx2d, st, snap.fill);
+            lastScaleSig = sSig;
+          }
+        } else {
+          ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+          ctx2d.clearRect(0, 0, cssW, cssH);
+          ctx2d.drawImage(glCanvas, 0, 0, cssW, cssH);
+          drawScaleMarks(ctx2d, st, snap.fill);
+        }
       } else {
+        if (layeredGl && glCanvas?.style) glCanvas.style.display = 'none';
+        lastScaleSig = '';
+        ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx2d.clearRect(0, 0, cssW, cssH);
         drawFallback2D(ctx2d, st);
+        drawScaleMarks(ctx2d, st, snap.fill);
       }
 
-      drawScaleMarks(ctx2d, st, snap.fill);
       renderedSig = buildVisualSig(st);
       dirtyRender = false;
     };
@@ -1734,6 +1611,7 @@
       getDebugState() {
         return {
           rendererMode: getRendererMode(),
+          zeroCopy: Boolean(layeredGl && glState && !glContextLost),
           settled: isSettled(),
           settleClock: Number(settleClock.toFixed(3)),
           ...phys.getSnapshot(),
@@ -1748,6 +1626,10 @@
         if (glCanvas && typeof glCanvas.removeEventListener === 'function') {
           glCanvas.removeEventListener('webglcontextlost', onGlLost);
           glCanvas.removeEventListener('webglcontextrestored', onGlRestored);
+        }
+        if (layeredGl && glCanvas) {
+          try { glCanvas.remove?.(); } catch {}
+          layeredGl = false;
         }
         if (glState) {
           const { gl, prog, buf } = glState;
