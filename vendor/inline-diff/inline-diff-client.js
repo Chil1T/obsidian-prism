@@ -303,6 +303,16 @@
         fr: 'Le diff en ligne est indisponible pour cette étape. Clic droit pour ouvrir dans la barre latérale.',
         de: 'Inline-Diff ist für diesen Schritt nicht verfügbar. Rechtsklick zum Öffnen in der Seitenleiste.',
       },
+      inlineDiffSensitive: {
+        'zh-CN': '该文件受隐私安全规则保护，已跳过行内预览（可右键在侧栏查看）',
+        'zh-TW': '該檔案受隱私安全規則保護，已略過行內預覽（可右鍵在側欄檢視）',
+        en: 'Protected by privacy rules; inline preview skipped (right-click to view in Sidebar).',
+        ja: 'プライバシー保護ルールによりインライン表示をスキップしました（右クリックでサイドバー表示）',
+        ko: '개인정보 보호 규칙으로 인라인 미리보기를 건너뛰었습니다(우클릭하여 사이드바에서 보기).',
+        es: 'Protegido por reglas de privacidad; vista previa en línea omitida (clic derecho para ver en la barra lateral).',
+        fr: 'Protégé par les règles de confidentialité ; aperçu en ligne ignoré (clic droit pour voir dans la barre latérale).',
+        de: 'Durch Datenschutzregeln geschützt; Inline-Vorschau übersprungen (Rechtsklick für Seitenleiste).',
+      },
       inlineDiffSnapshotNotice: {
         'zh-CN': '未受 Git 追踪 · 预览当前文件内容（右键可在侧栏打开完整对比）',
         'zh-TW': '未受 Git 追蹤 · 預覽目前檔案內容（右鍵可在側欄開啟完整對比）',
@@ -792,7 +802,11 @@
         mk(
           'div',
           P + 'empty',
-          stateKind === 'binary' ? getUiText('inlineDiffBinary') : getUiText('inlineDiffNoPreview')
+          stateKind === 'binary'
+            ? getUiText('inlineDiffBinary')
+            : stateKind === 'sensitive'
+              ? getUiText('inlineDiffSensitive')
+              : getUiText('inlineDiffNoPreview')
         )
       );
     }
@@ -1078,7 +1092,7 @@
         if (resp?.ok && Array.isArray(resp.lines) && resp.lines.length > 0) {
           renderInlineDiffBody(body, resp.lines, 'lines', resp.mode, stepStats, resp, openSb);
         } else {
-          renderInlineDiffBody(body, [], resp?.mode === 'binary' ? 'binary' : 'empty');
+          renderInlineDiffBody(body, [], resp?.mode === 'binary' ? 'binary' : resp?.error === 'blocked_sensitive' ? 'sensitive' : 'empty');
         }
       };
       let pendingRpc = null;

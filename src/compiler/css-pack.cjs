@@ -164,13 +164,13 @@ const PROTECTED_CSS_LITERALS = ['interaction-takeover-card', 'side-question-pane
 
 const LZSS_SAFE_ASCII = (() => {
   const arr = [];
-  for (let c = 35; c <= 126; c++) {
-    if (c !== 60 && c !== 62 && c !== 92) arr.push(c);
+  for (let c = 32; c <= 126; c++) {
+    if (c !== 34 && c !== 60 && c !== 62 && c !== 92) arr.push(c);
   }
-  return arr; // 89 unescaped 1-byte JSON ASCII chars (no ", <, >, \)
+  return arr; // 91 unescaped 1-byte JSON ASCII chars (no ", <, >, \)
 })();
 
-// 纯同步零-eval UTF-16 LZSS 压缩器（~2.7ms 解码，支持完整 BMP/CJK/Emoji 与首现受保护字面量原样保留）
+// 纯同步零-eval UTF-16 LZSS 压缩器（~2.7ms 解码，自适应大窗口覆盖全量 CSS/词典，支持完整 BMP/CJK/Emoji）
 function packLzssJsExpr(text, protectFirstList = []) {
   if (typeof text !== 'string' || text.length < 1024) return null;
   const n = text.length;
@@ -199,12 +199,18 @@ function packLzssJsExpr(text, protectFirstList = []) {
 
   const tokStart = bestStart;
   const tokEnd = bestStart + bestLen;
-  const BASE = LZSS_SAFE_ASCII.length; // 89
-  const shortSlots = Math.floor(bestLen * 0.72);
+  const BASE = LZSS_SAFE_ASCII.length; // 91
+  const isLarge = n > 80000;
+  const shortLenSpan = isLarge ? 18 : 22;
+  const longLenSpan = isLarge ? 56 : 96;
+  const shortMaxLen = 2 + shortLenSpan;
+  const longMaxLen = 3 + longLenSpan;
+  const maxSteps = isLarge ? 1024 : 768;
+  const shortSlots = Math.floor(bestLen * (isLarge ? 0.5 : 0.62));
   const longBase = tokStart + shortSlots;
   const longSlots = bestLen - shortSlots;
-  const shortMaxDist = Math.floor((shortSlots * BASE) / 24);
-  const longMaxDist = Math.min(65535, Math.floor((longSlots * BASE * BASE) / 128));
+  const shortMaxDist = Math.floor((shortSlots * BASE) / shortLenSpan);
+  const longMaxDist = Math.min(262144, Math.floor((longSlots * BASE * BASE) / longLenSpan));
   if (shortMaxDist < 64 || longMaxDist < 512) return null;
 
   const protectedPos = protectFirstList && protectFirstList.length > 0 ? new Uint8Array(n) : null;
@@ -257,7 +263,7 @@ function packLzssJsExpr(text, protectFirstList = []) {
     let bestDist = 0;
     let bestGain = 0;
     let steps = 0;
-    let maxLen = Math.min(131, n - pos);
+    let maxLen = Math.min(longMaxLen, n - pos);
     if (protectedPos) {
       for (let k = 1; k < maxLen; k++) {
         if (protectedPos[pos + k]) {
@@ -269,7 +275,7 @@ function packLzssJsExpr(text, protectFirstList = []) {
     }
     const c1 = text.charCodeAt(pos + 1);
     const c2 = text.charCodeAt(pos + 2);
-    while (cur >= 0 && pos - cur <= longMaxDist && steps < 384) {
+    while (cur >= 0 && pos - cur <= longMaxDist && steps < maxSteps) {
       steps++;
       if (
         text.charCodeAt(cur) === c0 &&
@@ -291,7 +297,7 @@ function packLzssJsExpr(text, protectFirstList = []) {
         }
         if (l >= 3) {
           const dist = pos - cur;
-          const cost = dist <= shortMaxDist && l <= 26 ? 3 : l >= 4 ? 4 : 999;
+          const cost = dist <= shortMaxDist && l <= shortMaxLen ? 3 : l >= 4 ? 4 : 999;
           const gain = matchBytes - cost;
           if (gain > bestGain || (gain === bestGain && l > bestMatchLen)) {
             bestGain = gain;
@@ -318,11 +324,11 @@ function packLzssJsExpr(text, protectFirstList = []) {
         i++;
         continue;
       }
-      if (m.dist <= shortMaxDist && m.len <= 26) {
-        const st = (m.dist - 1) * 24 + (m.len - 3);
+      if (m.dist <= shortMaxDist && m.len <= shortMaxLen) {
+        const st = (m.dist - 1) * shortLenSpan + (m.len - 3);
         out.push(String.fromCharCode(tokStart + Math.floor(st / BASE), LZSS_SAFE_ASCII[st % BASE]));
       } else {
-        const st = (m.dist - 1) * 128 + (m.len - 4);
+        const st = (m.dist - 1) * longLenSpan + (m.len - 4);
         const q = Math.floor(st / BASE);
         out.push(
           String.fromCharCode(
@@ -345,7 +351,7 @@ function packLzssJsExpr(text, protectFirstList = []) {
   // 严格无损往返验证（与运行时解码器逐字节一致）
   const o = new Uint16Array(n);
   let p = 0;
-  const decG = (c) => c - 35 - (c > 60) - (c > 62) - (c > 92);
+  const decG = (c) => c - 32 - (c > 34) - (c > 60) - (c > 62) - (c > 92);
   for (let idx = 0; idx < encoded.length; ) {
     const c = encoded.charCodeAt(idx++);
     if (c < tokStart || c >= tokEnd) {
@@ -358,13 +364,13 @@ function packLzssJsExpr(text, protectFirstList = []) {
     let l;
     let d;
     if (c < longBase) {
-      st = (c - tokStart) * 89 + v1;
-      l = 3 + (st % 24);
-      d = 1 + ((st / 24) | 0);
+      st = (c - tokStart) * BASE + v1;
+      l = 3 + (st % shortLenSpan);
+      d = 1 + ((st / shortLenSpan) | 0);
     } else {
-      st = ((c - longBase) * 89 + v1) * 89 + decG(encoded.charCodeAt(idx++));
-      l = 4 + (st % 128);
-      d = 1 + ((st / 128) | 0);
+      st = ((c - longBase) * BASE + v1) * BASE + decG(encoded.charCodeAt(idx++));
+      l = 4 + (st % longLenSpan);
+      d = 1 + ((st / longLenSpan) | 0);
     }
     let q = p - d;
     if (q < 0 || p + l > n) return null;
@@ -378,7 +384,7 @@ function packLzssJsExpr(text, protectFirstList = []) {
   if (verify !== text) return null;
 
   const rangeCheck = tokEnd === 2048 ? `c<${tokStart}||c>=2048` : `c<${tokStart}||c>=${tokEnd}`;
-  return `(()=>{let s=${serializeJsValue(encoded)},o=new Uint16Array(${n}),p=0,g=c=>c-35-(c>60)-(c>62)-(c>92),r="",i=0;for(;i<s.length;){let c=s.charCodeAt(i++);if(${rangeCheck}){o[p++]=c;continue}let v=g(s.charCodeAt(i++)),t,l,d;if(c<${longBase}){t=(c-${tokStart})*89+v;l=3+t%24;d=1+(t/24|0)}else{t=((c-${longBase})*89+v)*89+g(s.charCodeAt(i++));l=4+t%128;d=1+(t/128|0)}for(let q=p-d;l--;)o[p++]=o[q++]}for(i=0;i<p;i+=16384)r+=String.fromCharCode.apply(null,o.subarray(i,i+16384<p?i+16384:p));return r})()`;
+  return `(()=>{let s=${serializeJsValue(encoded)},o=new Uint16Array(${n}),p=0,g=c=>c-32-(c>34)-(c>60)-(c>62)-(c>92),r="",i=0;for(;i<s.length;){let c=s.charCodeAt(i++);if(${rangeCheck}){o[p++]=c;continue}let v=g(s.charCodeAt(i++)),t,l,d;if(c<${longBase}){t=(c-${tokStart})*${BASE}+v;l=3+t%${shortLenSpan};d=1+(t/${shortLenSpan}|0)}else{t=((c-${longBase})*${BASE}+v)*${BASE}+g(s.charCodeAt(i++));l=4+t%${longLenSpan};d=1+(t/${longLenSpan}|0)}for(let q=p-d;l--;)o[p++]=o[q++]}for(i=0;i<p;i+=16384)r+=String.fromCharCode.apply(null,o.subarray(i,i+16384<p?i+16384:p));return r})()`;
 }
 
 // Fast 2-gram pre-filter + Batch Top-K non-overlapping greedy phrase replacement
