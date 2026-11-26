@@ -1,4 +1,4 @@
-// 宿主本地化独立通道构建器：通道 4（Host UI 本地化 / 反向英文还原）与层 B（Swarm 侧栏汉化）
+// 宿主本地化独立通道构建器：通道 4（Host UI 按语种动态本地化 / 反向英文还原）与层 B（Swarm 侧栏按语种本地化）
 'use strict';
 
 const fs = require('fs');
@@ -11,17 +11,48 @@ const {
 } = require('../utils/fs-safe.cjs');
 const { reconcileConfigAliases } = require('../config/schema.cjs');
 const { resolveBundleCachePathOption } = require('../compiler/cache-validate.cjs');
+const { packTextJsExpr } = require('../compiler/js-serializer.cjs');
 const { minifySingleSource } = require('../compiler/js-string-pool.cjs');
 const { CHANNEL_MAIN_FRAME_HOST_GUARD } = require('./host-guard.cjs');
 
+const DICT_COMPRESS_THRESHOLD_BYTES = 470000;
+
 function createI18nChannelBuilders({ rootDir, readConfig, detectSystemUiLocale, bundleCache }) {
+  function resolveHostI18nLocale(language, hostLocaleHint = null) {
+    const raw = String(language || 'auto').trim().toLowerCase().replace(/_/g, '-');
+    const effective =
+      raw === 'auto'
+        ? String(hostLocaleHint || detectSystemUiLocale() || '').trim().split(/[.@]/)[0].toLowerCase().replace(/_/g, '-')
+        : raw;
+    return effective === 'tr' || effective.startsWith('tr-') || effective === 'turkish' || effective === 'türkçe' || effective === 'turkce'
+      ? 'tr'
+      : 'zh-CN';
+  }
+
+  function getHostI18nDictionaryPath(config, hostLocaleHint = null) {
+    const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+    const effective = resolveHostI18nLocale(cfg.language || cfg.lang || 'auto', hostLocaleHint);
+    return path.join(rootDir, 'vendor', 'host-i18n', effective === 'tr' ? 'tr.json' : 'zh-CN.json');
+  }
+
+  function getSwarmI18nDictionaryPath(config, hostLocaleHint = null) {
+    const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+    const effective = resolveHostI18nLocale(cfg.language || cfg.lang || 'auto', hostLocaleHint);
+    return path.join(rootDir, 'vendor', 'host-i18n', effective === 'tr' ? 'swarm-tr.json' : 'swarm-zh-CN.json');
+  }
+
   function shouldEnableHostI18n(config, hostLocaleHint = null) {
     const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
     const mode = cfg.hostLocalization || 'auto';
+    const lang = cfg.language || cfg.lang || 'auto';
+    const effective = resolveHostI18nLocale(lang, hostLocaleHint);
+    if (effective === 'tr') {
+      if (mode === 'off') return false;
+      return fs.existsSync(path.join(rootDir, 'vendor', 'host-i18n', 'tr.json'));
+    }
     // off 模式挂载第四通道进入反向英文还原（温和压制外部运行时 DOM 汉化，零 app.asar 修改）
     if (mode === 'off') return true;
     if (mode === 'on') return true;
-    const lang = cfg.language || cfg.lang || 'auto';
     if (lang === 'zh-CN') return true;
     if (lang === 'auto') {
       const sysLocale = hostLocaleHint || detectSystemUiLocale();
@@ -35,12 +66,15 @@ function createI18nChannelBuilders({ rootDir, readConfig, detectSystemUiLocale, 
   function readCompiledHostI18nAssets(opts = null) {
     const rtPath = path.join(rootDir, 'vendor', 'host-i18n', 'host-i18n-runtime.js');
     const revPath = path.join(rootDir, 'vendor', 'host-i18n', 'reverse-patterns.js');
-    const dictPath = path.join(rootDir, 'vendor', 'host-i18n', 'zh-CN.json');
+    const cfg = opts?.config && typeof opts.config === 'object' ? reconcileConfigAliases(opts.config) : readConfig();
+    const effectiveLang = resolveHostI18nLocale(cfg.language || cfg.lang || 'auto', opts?.hostLocaleHint || null);
+    const dictPath = getHostI18nDictionaryPath(cfg, opts?.hostLocaleHint || null);
+    const dictRel = path.basename(dictPath);
     if (!fs.existsSync(rtPath) || !fs.existsSync(dictPath)) {
       return { minRuntime: '', dictRaw: '', codeHash: '' };
     }
     const hasRev = fs.existsSync(revPath);
-    const sig = `${getFileSig(rtPath)}|${hasRev ? getFileSig(revPath) : 'norev'}|${getFileSig(dictPath)}`;
+    const sig = `${effectiveLang}|${getFileSig(rtPath)}|${hasRev ? getFileSig(revPath) : 'norev'}|${getFileSig(dictPath)}`;
     const cachePath = resolveBundleCachePathOption(opts);
     const curMem = bundleCache.getChannelMemCache('hostI18n');
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
@@ -49,18 +83,23 @@ function createI18nChannelBuilders({ rootDir, readConfig, detectSystemUiLocale, 
     const fileEntries = [];
     if (hasRev) fileEntries.push({ rel: 'vendor/host-i18n/reverse-patterns.js', fullPath: revPath });
     fileEntries.push({ rel: 'vendor/host-i18n/host-i18n-runtime.js', fullPath: rtPath });
-    fileEntries.push({ rel: 'vendor/host-i18n/zh-CN.json', fullPath: dictPath });
+    fileEntries.push({ rel: `vendor/host-i18n/${dictRel}`, fullPath: dictPath });
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'hostI18n',
       sig,
       fileEntries,
+      extraTag: effectiveLang,
       opts,
       compileFn: () => {
         const minRev = hasRev ? minifySingleSource(fs.readFileSync(revPath, 'utf8'), { allowMemberProps: false }) : '';
         const minRt = minifySingleSource(fs.readFileSync(rtPath, 'utf8'), { allowMemberProps: false });
         const minRuntime = minRev ? `${minRev};\n${minRt}` : minRt;
         const parsedDict = JSON.parse(fs.readFileSync(dictPath, 'utf8'));
-        const dictRaw = JSON.stringify(parsedDict).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+        const plainJson = JSON.stringify(parsedDict).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+        const dictRaw =
+          effectiveLang === 'tr' || Buffer.byteLength(plainJson, 'utf8') > DICT_COMPRESS_THRESHOLD_BYTES
+            ? `JSON.parse(${packTextJsExpr(plainJson, 5600)})`
+            : plainJson;
         const codeHash = computeHash(`${minRuntime}:${dictRaw}`);
         return { minRuntime, dictRaw, codeHash };
       },
@@ -80,7 +119,7 @@ function createI18nChannelBuilders({ rootDir, readConfig, detectSystemUiLocale, 
     });
   }
 
-  // 第四通道独立注入（Host UI 简体中文按需本地化 + off 态反向英文还原）：绝不打入静态主包，支持 4 层自动礼让、3 层温和压制与 100% 无损卸载
+  // 第四通道独立注入（Host UI 按语种动态本地化 + off 态反向英文还原）：绝不打入静态主包，仅加载当前激活语种单份词库
   function buildHostI18nExpression(config = null, hostLocaleHint = null, opts = null) {
     let resolvedLocaleHint = hostLocaleHint;
     let resolvedOpts = opts;
@@ -92,12 +131,19 @@ function createI18nChannelBuilders({ rootDir, readConfig, detectSystemUiLocale, 
     if (!shouldEnableHostI18n(cfg, resolvedLocaleHint)) {
       return '';
     }
-    const { minRuntime, dictRaw, codeHash } = readCompiledHostI18nAssets(resolvedOpts);
+    const effectiveHostLang = resolveHostI18nLocale(cfg.language || cfg.lang || 'auto', resolvedLocaleHint);
+    const { minRuntime, dictRaw, codeHash } = readCompiledHostI18nAssets({
+      ...(resolvedOpts || {}),
+      config: { ...cfg, language: effectiveHostLang },
+      hostLocaleHint: resolvedLocaleHint,
+    });
     if (!minRuntime || !dictRaw) {
       return '';
     }
     const mode = cfg.hostLocalization === 'on' ? 'on' : cfg.hostLocalization === 'off' ? 'off' : 'auto';
     const modeJson = serializeJsonForEval(mode);
+    const localeOption = effectiveHostLang === 'tr' ? 'locale: "tr",' : '';
+    const effectiveLangJson = serializeJsonForEval(effectiveHostLang);
     const hashJson = serializeJsonForEval(codeHash);
 
     return `(() => {
@@ -115,21 +161,28 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
         } else {
           targetMode = 'auto';
           const liveLang = liveCfg.language || liveCfg.lang || '';
-          if (liveLang && liveLang !== 'zh-CN' && liveLang !== 'auto') {
-            try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}
-            return { ok: true, status: 'off', skippedByLiveCfg: true };
-          }
-          if (!liveLang || liveLang === 'auto') {
-            const navLang = String(
-              (typeof navigator !== 'undefined' && ((navigator.languages && navigator.languages[0]) || navigator.language)) || ''
-            )
-              .trim()
-              .split(/[.@]/)[0]
-              .toLowerCase()
-              .replace(/_/g, '-');
-            if (navLang && navLang !== 'zh' && !/^zh-(?:cn|hans|sg)(?:-|$)/.test(navLang)) {
+          if (${effectiveLangJson} === 'tr') {
+            if (liveLang && liveLang !== 'tr' && liveLang !== 'auto') {
               try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}
               return { ok: true, status: 'off', skippedByLiveCfg: true };
+            }
+          } else {
+            if (liveLang && liveLang !== 'zh-CN' && liveLang !== 'auto') {
+              try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}
+              return { ok: true, status: 'off', skippedByLiveCfg: true };
+            }
+            if (!liveLang || liveLang === 'auto') {
+              const navLang = String(
+                (typeof navigator !== 'undefined' && ((navigator.languages && navigator.languages[0]) || navigator.language)) || ''
+              )
+                .trim()
+                .split(/[.@]/)[0]
+                .toLowerCase()
+                .replace(/_/g, '-');
+              if (navLang && navLang !== 'zh' && !/^zh-(?:cn|hans|sg)(?:-|$)/.test(navLang)) {
+                try { window.__agPrismHostI18n?.destroy?.(); document.documentElement?.removeAttribute?.('data-ag-prism-host-i18n'); } catch {}
+                return { ok: true, status: 'off', skippedByLiveCfg: true };
+              }
             }
           }
         }
@@ -170,6 +223,7 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
         root: window,
         doc: document,
         mode: targetMode,
+        ${localeOption}
         dict: ${dictRaw},
       });
       if (inst && typeof inst === 'object') {
@@ -194,18 +248,22 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
   function shouldEnableSwarmI18n(config, hostLocaleHint = null) {
     const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
     const mode = cfg.hostLocalization || 'auto';
-    // 原生 Swarm 面板本身为英文：off 模式或非简体中文 auto 模式严格 0 附着 / 立即卸载还原英文
+    // 原生 Swarm 面板本身为英文：off 模式或无词库语种严格 0 附着 / 立即卸载还原英文
     if (mode === 'off') return false;
-    return shouldEnableHostI18n(cfg, hostLocaleHint);
+    if (!shouldEnableHostI18n(cfg, hostLocaleHint)) return false;
+    return fs.existsSync(getSwarmI18nDictionaryPath(cfg, hostLocaleHint));
   }
 
   function readCompiledSwarmI18nAssets(opts = null) {
     const rtPath = path.join(rootDir, 'vendor', 'host-i18n', 'swarm-i18n-runtime.js');
-    const dictPath = path.join(rootDir, 'vendor', 'host-i18n', 'swarm-zh-CN.json');
+    const cfg = opts?.config && typeof opts.config === 'object' ? reconcileConfigAliases(opts.config) : readConfig();
+    const effectiveLang = resolveHostI18nLocale(cfg.language || cfg.lang || 'auto', opts?.hostLocaleHint || null);
+    const dictPath = getSwarmI18nDictionaryPath(cfg, opts?.hostLocaleHint || null);
+    const dictRel = path.basename(dictPath);
     if (!fs.existsSync(rtPath) || !fs.existsSync(dictPath)) {
       return { minRuntime: '', dictRaw: '', codeHash: '' };
     }
-    const sig = `${getFileSig(rtPath)}|${getFileSig(dictPath)}`;
+    const sig = `${effectiveLang}|${getFileSig(rtPath)}|${getFileSig(dictPath)}`;
     const cachePath = resolveBundleCachePathOption(opts);
     const curMem = bundleCache.getChannelMemCache('swarmI18n');
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
@@ -213,12 +271,13 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     }
     const fileEntries = [
       { rel: 'vendor/host-i18n/swarm-i18n-runtime.js', fullPath: rtPath },
-      { rel: 'vendor/host-i18n/swarm-zh-CN.json', fullPath: dictPath },
+      { rel: `vendor/host-i18n/${dictRel}`, fullPath: dictPath },
     ];
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'swarmI18n',
       sig,
       fileEntries,
+      extraTag: effectiveLang,
       opts,
       compileFn: () => {
         const minRuntime = minifySingleSource(fs.readFileSync(rtPath, 'utf8'), { allowMemberProps: false });
@@ -243,8 +302,8 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     });
   }
 
-  // Issue #18 层 B：Swarm 独立侧栏 Webview (plugin://swarm--swarm_board-*) 按需纯 CDP 汉化表达式
-  // 零 app.asar 修改、0 B Channel 1 增量、支持按需磁盘缓存与 100% 无损英文还原
+  // Issue #18 层 B：Swarm 独立侧栏 Webview (plugin://swarm--swarm_board-*) 按需纯 CDP 本地化表达式
+  // 零 app.asar 修改、0 B Channel 1 增量、仅按需加载当前语种词库并支持 100% 无损英文还原
   function buildSwarmI18nExpression(config = null, hostLocaleHint = null, opts = null) {
     let resolvedLocaleHint = hostLocaleHint;
     let resolvedOpts = opts;
@@ -256,7 +315,12 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     if (!shouldEnableSwarmI18n(cfg, resolvedLocaleHint)) {
       return '';
     }
-    const { minRuntime, dictRaw, codeHash } = readCompiledSwarmI18nAssets(resolvedOpts);
+    const effectiveSwarmLang = resolveHostI18nLocale(cfg.language || cfg.lang || 'auto', resolvedLocaleHint);
+    const { minRuntime, dictRaw, codeHash } = readCompiledSwarmI18nAssets({
+      ...(resolvedOpts || {}),
+      config: { ...cfg, language: effectiveSwarmLang },
+      hostLocaleHint: resolvedLocaleHint,
+    });
     if (!minRuntime || !dictRaw) {
       return '';
     }
@@ -324,6 +388,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
   }
 
   return {
+    resolveHostI18nLocale,
+    getHostI18nDictionaryPath,
+    getSwarmI18nDictionaryPath,
     shouldEnableHostI18n,
     buildHostI18nExpression,
     shouldEnableSwarmI18n,

@@ -1,23 +1,6 @@
 /**
- * Obsidian Prism — V14 Google DeepMind Official Spectrum · Full-Bleed Dark & Light Key Art Display (1600x480)
- *
- * V14 核心光学架构（对标 Google 官方模型发布视觉 · 静态主视觉优先 · 克制微动效辅助）：
- *   1. 1600x480 满幅贯通式 Google DeepMind 官方海报横幅（0 简陋代码多面体、0 中间劈半竖线）：
- *      - 左至中区（~42%）：满幅高精烘焙折光光学玻璃雕塑（1H 天青球环 / 6C 官方皇家钴蓝虹彩水晶簇 /
- *        10Ne 珊瑚红橙→暖金莫比乌斯玻璃环 / 18Ar 电光靛紫同心光学透镜 / Claude 陶土暖珀拱门 /
- *        Flash 电光青双棱羽翼 / GPT 银青冰晶六角结 / Orch 星云紫金陀螺双环）+ 半透明大号元素符号水印，
- *        无缝向右流淌过渡至纯净社论排版留白区。
- *   2. 真·暗夜（Dark）与白昼（Light）双套独立海报底图适配：
- *      - 暗色主题（obsidian-dark / warm-dark）：深邃星云天鹅绒夜底 + 自发光折光玻璃雕塑 + 纯白锐字 + 烟熏毛玻璃胶囊；
- *      - 浅色主题（crystal-light / alabaster-light）：明亮白昼瓷白冰雾渐变底 + 日光通透彩色玻璃雕塑 + 深炭墨高对比锐字 + 白冰毛玻璃胶囊（彻底消灭浅色黑砖屏！）。
- *   3. 静态艺术为主，微动效仅作克制点睛（严格 0fps 静止休眠）：
- *      - 静止态 100% 零耗电（isAnimating() === false）；
- *      - 仅在切模型/切深浅主题（200ms 柔滑叠化 + 微妙水平视差滑移）、切档位（220ms 毛玻璃胶囊阻尼滑移 + ~8% 柔光微涌）、
- *        以及指针掠过/旋转视角（斜向清透玻璃镜面掠光）时响应，随后立即回归 0fps。
- *
- * Contract:
- *   globalThis.__agPrismOledScreen = { createOledScreenPainter }
- *   module.exports = { createOledScreenPainter }
+ * Obsidian Prism — V14 Full-Bleed Dark & Light Key Art Display (1600x480, 0fps idle)
+ * Contract: globalThis.__agPrismOledScreen / module.exports = { createOledScreenPainter }
  */
 (function (root, factory) {
   var api = factory(root);
@@ -344,9 +327,9 @@
       ko: { nonPlanner: 'NON-PLANNER · 오케스트레이션 잠금', standbyAux: 'STANDBY · 예약된 매크로 슬롯', synced: '동기화됨' },
       es: { nonPlanner: 'NON-PLANNER · BLOQUEADO EN ORCH', standbyAux: 'STANDBY · RANURA RESERVADA', synced: 'SINCRONIZADO' },
       fr: { nonPlanner: 'NON-PLANNER · VERROUILLÉ ORCH', standbyAux: 'STANDBY · EMPLACEMENT RÉSERVÉ', synced: 'SYNCHRONISÉ' },
-      de: { nonPlanner: 'NON-PLANNER · IN ORCH GESPERRT', standbyAux: 'STANDBY · RESERVIERTER SLOT', synced: 'SYNCHRONISIERT' },
+      de:{nonPlanner:'NON-PLANNER · IN ORCH GESPERRT',standbyAux:'STANDBY · RESERVIERTER SLOT',synced:'SYNCHRONISIERT'},
+      tr:{nonPlanner:'NON-PLANNER · ORCH KİLİTLİ',standbyAux:'STANDBY · AYRILMIŞ YUVA',synced:'EŞİTLENDİ'},
     };
-
     function normalizeOledLang(raw) {
       var s = String(raw || '').trim().toLowerCase().replace(/_/g, '-');
       if (!s || s === 'auto') return '';
@@ -358,6 +341,7 @@
       if (/^es(?:$|-)/.test(s) || s === 'spanish') return 'es';
       if (/^fr(?:$|-)/.test(s) || s === 'french') return 'fr';
       if (/^de(?:$|-)/.test(s) || s === 'german') return 'de';
+      if (/^tr(?:$|-)/.test(s) || s === 'turkish' || s === 'türkçe') return 'tr';
       if (/^en(?:$|-)/.test(s) || s === 'english') return 'en';
       return '';
     }

@@ -604,11 +604,11 @@ test('W5-4 (Issue #110 i18n): periodic-picker 8-locale tierNonPlanner & unrelNon
   const block = pickerSrc.slice(startIdx, endIdx);
   const PP_I18N = new Function(`${block}; return PP_I18N;`)();
 
-  const CANONICAL_8 = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'];
-  const NON_CJK = new Set(['en', 'ko', 'es', 'fr', 'de']);
+  const CANONICAL_9 = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'tr'];
+  const NON_CJK = new Set(['en', 'ko', 'es', 'fr', 'de', 'tr']);
   const CJK_RE = /[\u3400-\u9FFF\uF900-\uFAFF]/;
 
-  for (const loc of CANONICAL_8) {
+  for (const loc of CANONICAL_9) {
     const pack = PP_I18N[loc];
     assert.ok(pack, `PP_I18N missing locale ${loc}`);
     for (const key of ['tierNonPlanner', 'unrelNonPlanner']) {

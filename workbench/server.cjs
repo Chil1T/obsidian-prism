@@ -8,10 +8,7 @@ const { pathToFileURL } = require('node:url');
 const WORKBENCH_DIR = __dirname;
 const REPO_ROOT = path.resolve(__dirname, '..');
 const PKG_VERSION = (() => {
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
-    if (pkg && typeof pkg.version === 'string' && pkg.version.trim()) return pkg.version.trim();
-  } catch {}
+  try { const v = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'))?.version?.trim(); if (v) return v; } catch {}
   return '1.0.8-beta.3';
 })();
 const DEFAULT_TOKENS_PATH = path.join(WORKBENCH_DIR, 'design-tokens.json');
@@ -133,7 +130,7 @@ function parseReplicaPrismConfig(searchParams) {
     homeLayout: ['studio', 'classic', 'off'],
     telemetryModule: ['auto', 'on', 'off'],
     effortSliderModule: ['auto', 'on', 'off'],
-    language: ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'],
+    language: ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de', 'tr'],
     codeFont: ['default', 'jetbrains', 'cascadia', 'sfmono'],
   };
   for (const [k, vals] of Object.entries(allow)) {

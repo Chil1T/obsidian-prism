@@ -1,11 +1,5 @@
 /**
- * Obsidian Prism — Channel 4 On-Demand Host UI Localization Runtime
- * Zero-dependency UMD runtime (CommonJS + Browser IIFE) with:
- *   1. Universal 4-layer external localization auto-yield (known markers, zero-signature Chrome UI zh-CN sampling,
- *      1200ms delayed-plugin recheck, and 3000ms ping-pong conflict circuit breaker)
- *   2. 100% reversible destroy() using WeakMap snapshots (zero DOM property pollution)
- *   3. Strict Prism-owned UI, model-selector, code/editor, and chat-prose isolation
- *   4. 0fps visibility/blur/win-blur hibernation + time-sliced rAF scheduling (<= 80 nodes & < 5ms/frame)
+ * Obsidian Prism — Channel 4 On-Demand Host UI Localization Runtime (UMD, WeakMap reversible, 0fps idle)
  *
  * Upstream Credit:
  *   Dictionary & DOM localization approach inspired by yiheng8023/antigravity-chinese (v3.3.63)
@@ -757,26 +751,11 @@
   }
 
   function detectExternalLocalization(rootObj, doc, options) {
+    if (options && options.locale === 'tr') return { detected: false, layer: 0, reason: null, provider: null, detail: null };
     var l1 = detectLayer1External(rootObj, doc);
-    if (l1.hit) {
-      return {
-        detected: true,
-        layer: 1,
-        reason: 'external-ui-zh',
-        provider: l1.provider || 'generic-external',
-        detail: l1.detail,
-      };
-    }
+    if (l1.hit) return { detected: true, layer: 1, reason: 'external-ui-zh', provider: l1.provider || 'generic-external', detail: l1.detail };
     var l2 = detectLayer2ChromeZh(doc, options);
-    if (l2.hit) {
-      return {
-        detected: true,
-        layer: 2,
-        reason: 'external-ui-zh',
-        provider: 'generic-zh-dom',
-        detail: l2,
-      };
-    }
+    if (l2.hit) return { detected: true, layer: 2, reason: 'external-ui-zh', provider: 'generic-zh-dom', detail: l2 };
     return { detected: false, layer: 0, reason: null, provider: null, detail: l2 };
   }
 
@@ -1887,12 +1866,9 @@
       }
     } catch (e) {}
     var mode = opts.mode === 'on' || opts.mode === 'off' ? opts.mode : 'auto';
-    var nowFn =
-      typeof opts.nowFn === 'function'
-        ? opts.nowFn
-        : function () {
-            return Date.now();
-          };
+    var locale = opts.locale === 'tr' ? 'tr' : 'zh-CN';
+    var initialHtmlLang = doc && doc.documentElement ? getAttr(doc.documentElement, 'lang') : null;
+    var nowFn = typeof opts.nowFn === 'function' ? opts.nowFn : function () { return Date.now(); };
     var perfNowFn =
       typeof opts.perfNowFn === 'function'
         ? opts.perfNowFn
@@ -2627,7 +2603,7 @@
         origText !== undefined
           ? currentText === origText
           : hasOwn.call(st.entries, currentText) || currentText === st.lastOrig;
-      var isExternalZh = ZH_CHAR_RE.test(currentText || '') && currentText !== expectedText;
+      var isExternalZh = locale !== 'tr' && ZH_CHAR_RE.test(currentText || '') && currentText !== expectedText;
       if (isBackToOrig || isExternalZh) {
         var refAt = translatedAt || st.lastTranslatedAt;
         var inWindow =
@@ -2738,7 +2714,7 @@
 
       // Host updated to genuinely new English copy (e.g. "Save" -> "Saved")
       var isBackToOrig = currentVal === snap.orig;
-      var isExternalZh = ZH_CHAR_RE.test(currentVal || '');
+      var isExternalZh = locale !== 'tr' && ZH_CHAR_RE.test(currentVal || '');
       if (!isBackToOrig && !isExternalZh) {
         textSnapshots.delete(node);
         modifiedTextNodes.delete(node);
@@ -2757,6 +2733,7 @@
 
       var isBackToOrig = hasOwn.call(st.entries, curText) || curText === st.lastOrig;
       var isExternalZh =
+        locale !== 'tr' &&
         ZH_CHAR_RE.test(curText) &&
         curText !== st.lastExpected &&
         (!st.lastExpected || curText.indexOf(st.lastExpected) === -1) &&
@@ -3911,6 +3888,7 @@ win.addEventListener('focus', focusHandler);
 function boot(targetMode) {
 mode = targetMode === 'on' || targetMode === 'off' ? targetMode : 'auto';
 state.mode = mode;
+if (locale === 'tr' && doc && doc.documentElement) { try { doc.documentElement.setAttribute('lang', 'tr'); } catch (e) {} }
 selectEngineForMode(mode);
 state.destroyed = false;
 state.yielded = false;
@@ -3947,14 +3925,10 @@ return;
 }
 
       if (mode === 'auto') {
-        var extCheck = detectExternalLocalization(win, doc);
+        var extCheck = detectExternalLocalization(win, doc, { locale: locale });
         if (extCheck.detected) {
-          state.active = false;
-          state.status = 'yielded';
-          state.reason = extCheck.reason || 'external-ui-zh';
-          state.detectedProvider = extCheck.provider || 'generic-external';
-          state.yielded = true;
-          setRootStatusAttr('yielded');
+          state.active = false; state.status = 'yielded'; state.reason = extCheck.reason || 'external-ui-zh';
+          state.detectedProvider = extCheck.provider || 'generic-external'; state.yielded = true; setRootStatusAttr('yielded');
           return;
         }
       }
@@ -3968,7 +3942,7 @@ return;
           domReadyHandler = function () {
             if (!state.active || state.destroyed) return;
             if (state.mode === 'auto') {
-              var recheck = detectExternalLocalization(win, doc);
+              var recheck = detectExternalLocalization(win, doc, { locale: locale });
               if (recheck.detected) {
                 yieldAndRollback(recheck.reason || 'external-ui-zh', recheck.provider);
                 return;
@@ -3990,19 +3964,16 @@ return;
         var modUnits = countTranslatedUnits();
         var isOffMode = state.mode === 'off';
         return {
-          active: state.active,
-          mode: state.mode,
-          status: state.status,
-          reason: state.reason,
-          detectedProvider: state.detectedProvider,
-          translatedCount: isOffMode ? 0 : modUnits,
-          restoredCount: isOffMode ? modUnits : 0,
-          blockedCount: isOffMode ? blockedElementsTracker.countActive() : 0,
-          yielded: state.yielded,
+          active: state.active, mode: state.mode, status: state.status, reason: state.reason,
+          detectedProvider: state.detectedProvider, translatedCount: isOffMode ? 0 : modUnits,
+          restoredCount: isOffMode ? modUnits : 0, blockedCount: isOffMode ? blockedElementsTracker.countActive() : 0, yielded: state.yielded,
         };
       },
       destroy: function () {
         teardownRuntime('off', 'destroyed', false, null, true);
+        if (locale === 'tr' && doc && doc.documentElement && getAttr(doc.documentElement, 'lang') === 'tr') {
+          try { if (initialHtmlLang === null) doc.documentElement.removeAttribute('lang'); else doc.documentElement.setAttribute('lang', initialHtmlLang); } catch (e) {}
+        }
       },
       setMode: function (nextMode, forceReboot) {
         var norm = nextMode === 'on' || nextMode === 'off' ? nextMode : 'auto';

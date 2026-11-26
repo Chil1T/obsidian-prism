@@ -1076,6 +1076,7 @@ test('Host enhancer supports 8 languages + yue->zh-CN migration + live switch, a
     ['es', 'Contraer (52L)', 'Contraer pasos'],
     ['fr', 'Replier (52L)', 'Replier étapes'],
     ['de', 'Einklappen (52Z)', 'Schritte einklappen'],
+    ['tr', 'Katla (52 satır)', 'Adımları katla'],
     ['en', 'Fold (52L)', 'Fold Steps'],
   ]) {
     curLang = nextLang;
