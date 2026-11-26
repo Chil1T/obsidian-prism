@@ -118,6 +118,10 @@ function makeMinimalDaemon({
   daemon.mascotExpr = '';
   daemon.homeStudioExpr = '';
   daemon.settingsExpr = '';
+  daemon.telemetryExpr = '';
+  daemon.effortSliderExpr = '';
+  daemon.workbenchEnhancerExpr = '';
+  daemon.contextMenuExpr = '';
   daemon.sessions = new Map();
   daemon.swarmSessions = new Map();
   daemon._swarmAttaching = new Set();
@@ -146,6 +150,10 @@ function makeMinimalDaemon({
     periodicModelPicker: 'off',
     mascot: 'off',
     homeLayout: 'default',
+    telemetryModule: 'off',
+    effortSliderModule: 'off',
+    workbenchEnhancer: 'off',
+    contextMenu: false,
   };
   daemon.cdp = {
     PLUGIN_VERSION: cdp.PLUGIN_VERSION,
@@ -165,6 +173,10 @@ function makeMinimalDaemon({
     shouldEnablePeriodicPicker: () => false,
     shouldEnableMascot: () => false,
     shouldEnableHomeStudio: () => false,
+    shouldEnableTelemetry: () => false,
+    shouldEnableEffortSlider: () => false,
+    shouldEnableWorkbenchEnhancer: () => false,
+    shouldEnableContextMenu: () => false,
     buildConfigRefreshExpression: () => `/* CFG_SYNC ${JSON.stringify(daemon.cdp.readConfig())} */`,
   };
   daemon.rebuildBundle = () => {};

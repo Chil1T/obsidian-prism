@@ -10,6 +10,7 @@ import {
   recordChannelOff,
   recordChannelFailure,
 } from './session-fsm.mjs';
+import { RUNTIME_CHANNEL_SPECS } from './runtime-channel-specs.mjs';
 
 async function syncPersistentNewDocScript(daemon, entry, enabled, source, scriptProp, sigProp, targetSig) {
   if (!enabled || !source) {
@@ -170,6 +171,16 @@ export const sessionBroadcastMethods = {
         }
         const homeStudioHash = homeStudioSnap ? this._getHomeStudioExprHash(homeStudioSnap) : '';
         const homeStudioSig = homeStudioEnabled ? `${this._getHomeStudioCfgSig(currentCfg)}:${homeStudioHash}` : '';
+        const runtimeSnaps = RUNTIME_CHANNEL_SPECS.map((spec) => {
+          const enabled = this._hasRuntimeChannelFile(spec) && this._isRuntimeChannelEnabled(spec, currentCfg);
+          let snap = this[spec.exprField] || '';
+          if (enabled && !snap && typeof this.cdp[spec.cdpBuild] === 'function') {
+            snap = this._buildRuntimeChannelExpr(spec, currentCfg);
+          }
+          const hash = snap ? this._getRuntimeChannelExprHash(spec, snap) : '';
+          const sig = enabled ? `${this._getRuntimeChannelCfgSig(spec, currentCfg)}:${hash}` : '';
+          return { spec, enabled, snap, hash, sig };
+        });
 
         const canFastRefresh = typeof this.cdp.buildConfigRefreshExpression === 'function';
         const baseRefreshExpr = canFastRefresh ? this.cdp.buildConfigRefreshExpression() : null;
@@ -465,6 +476,35 @@ export const sessionBroadcastMethods = {
                 recordChannelOff(entry, 'homeStudio');
               }
 
+              // Channels 13~16: Telemetry / Effort Slider / Workbench Enhancer / Context Menu
+              for (const rs of runtimeSnaps) {
+                if (abortIfStale()) return;
+                const { spec, enabled, snap, hash, sig } = rs;
+                const hadBefore = Boolean(entry[spec.scriptField] || entry[spec.mountedField]);
+                const changed = Boolean(
+                  enabled && snap &&
+                  (forceFullConvergence || entry[spec.sigField] !== sig || !entry[spec.scriptField] || !entry[spec.mountedField])
+                );
+                if (enabled && snap) {
+                  if (!skippedStale && !entry.session.closed && (!refreshedFast || changed)) {
+                    const evalRes = await entry.session.evaluate(snap).catch(() => null);
+                    if (evalRes && evalRes.ok) {
+                      entry[spec.mountedField] = !evalRes.skippedByLiveCfg;
+                      entry[spec.sigField] = sig;
+                      if (evalRes.skippedByLiveCfg) recordChannelSkipped(entry, spec.id, { codeHash: hash });
+                      else recordChannelSuccess(entry, spec.id, { codeHash: hash, scriptId: entry[spec.scriptField] });
+                    } else {
+                      recordChannelFailure(entry, spec.id);
+                    }
+                  }
+                } else if ((hadBefore || !this._isRuntimeChannelEnabled(spec, currentCfg)) && !skippedStale && !entry.session.closed) {
+                  if (hadBefore) await entry.session.evaluate(this._getRuntimeChannelCleanupExpression(spec)).catch(() => {});
+                  entry[spec.mountedField] = false;
+                  entry[spec.sigField] = '';
+                  recordChannelOff(entry, spec.id);
+                }
+              }
+
               // Coalesce persistent NewDocument script replacement; if interrupted, mark dirty for guaranteed next-pass convergence
               if (this._broadcastPending || this._configSeq !== snapSeq || entry.session.closed) {
                 entry._configConvergenceDirty = true;
@@ -483,6 +523,9 @@ export const sessionBroadcastMethods = {
               await syncPersistentNewDocScript(this, entry, Boolean(mascotEnabled && mascotSnap), mascotSnap, 'mascotScriptId', 'lastMascotScriptSig', mascotSig);
               await syncPersistentNewDocScript(this, entry, Boolean(suggesterSnap), suggesterSnap, 'suggesterScriptId', 'lastSuggesterScriptHash', suggesterHash);
               await syncPersistentNewDocScript(this, entry, Boolean(homeStudioEnabled && homeStudioSnap), homeStudioSnap, 'homeStudioScriptId', 'lastHomeStudioScriptSig', homeStudioSig);
+              for (const rs of runtimeSnaps) {
+                await syncPersistentNewDocScript(this, entry, Boolean(rs.enabled && rs.snap), rs.snap, rs.spec.scriptField, rs.spec.scriptSigField, rs.sig);
+              }
 
               entry.appliedConfigSeq = snapSeq;
               entry._configConvergenceDirty = false;

@@ -110,80 +110,62 @@ function createCh1Templates({
   function getConfigRefreshTemplate() {
     if (_configRefreshTemplate) return _configRefreshTemplate;
     const rawTpl = `(() => {
-      const cfg = __AG_REF_CFG__;
-      const api = window.__agPrism || window.__agClaudeStyle;
+      const cfg = __AG_REF_CFG__, W = window, D = document, G = globalThis;
+      const api = W.__agPrism || W.__agClaudeStyle;
       if (api && api.version === __AG_REF_VER__ && api.codeHash === __AG_REF_HASH__ && typeof api.refreshConfig === 'function') {
-        const applied = api.refreshConfig(cfg);
-        if (applied === false) return { refreshed: true, skippedStale: true, version: api.version };
-        const effectiveCfg = api.getState?.()?.cfg || cfg;
-        try { window.__agPrismTelemetry?.sync?.(effectiveCfg); } catch {}
-        try { window.__agPrismEffortSlider?.sync?.(effectiveCfg); } catch {}
-        try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}
-        try { window.__agPrismInlineDiff?.sync?.(effectiveCfg); } catch {}
-        if (effectiveCfg?.omniModule === 'off') { try { window.__agPrismOmni?.destroy?.(); } catch {} }
-        else { try { window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {} }
-        if (effectiveCfg?.sidebarStudio !== 'on') {
-          try { window.__agPrismSidebar?.sync?.(effectiveCfg, window.__agPrismSidebarMeta || null); } catch {}
-          try { window.__agPrismSidebar?.destroy?.(); } catch {}
-          try { delete window.__agPrismSidebar; } catch {}
-          try {
-            if (document.documentElement) {
-              ['data-ag-prism-mode','data-ag-prism-chat-kind','data-ag-prism-chat-telemetry','data-ag-cs-space','data-ag-cs-space-palette','data-ag-cs-space-accent'].forEach((a) => document.documentElement.removeAttribute(a));
-            }
-          } catch {}
-        } else {
-          try { window.__agPrismSidebar?.sync?.(effectiveCfg, window.__agPrismSidebarMeta || null); } catch {}
-        }
+        if (api.refreshConfig(cfg) === false) return { refreshed: true, skippedStale: true, version: api.version };
+        const e = api.getState?.()?.cfg || cfg, de = D.documentElement;
+        if (e?.telemetryModule === 'off' || e?.telemetryModule === false) { try { api.detachTelemetry?.(); W.__agPrismTelemetry?.destroy?.(); } catch {} }
+        else { try { W.__agPrismTelemetry?.sync?.(e); api.syncTelemetry?.(); } catch {} }
+        if (e?.effortSliderModule === 'off' || e?.effortSliderModule === false) { try { W.__agPrismEffortSlider?.destroy?.(); } catch {} }
+        else { try { W.__agPrismEffortSlider?.sync?.(e); } catch {} }
+        if (e?.contextMenu === false || e?.contextMenu === 'off') { try { W.__agPrismContextMenu?.destroy?.(); } catch {} }
+        try { W.__agPrismThought?.sync?.(e); } catch {}
+        try { W.__agPrismInlineDiff?.sync?.(e); } catch {}
+        if (e?.omniModule === 'off') { try { W.__agPrismOmni?.destroy?.(); } catch {} }
+        else { try { W.__agPrismOmni?.sync?.(e, W.__agPrismOmniServerMeta || null); } catch {} }
+        if (e?.sidebarStudio !== 'on') {
+          try { W.__agPrismSidebar?.sync?.(e, W.__agPrismSidebarMeta || null); W.__agPrismSidebar?.destroy?.(); delete W.__agPrismSidebar; } catch {}
+          try { if (de) ['data-ag-prism-mode','data-ag-prism-chat-kind','data-ag-prism-chat-telemetry','data-ag-cs-space','data-ag-cs-space-palette','data-ag-cs-space-accent'].forEach((a) => de.removeAttribute(a)); } catch {}
+        } else { try { W.__agPrismSidebar?.sync?.(e, W.__agPrismSidebarMeta || null); } catch {} }
         try {
-          const hiMode = effectiveCfg?.hostLocalization;
-          const hiLang = effectiveCfg?.language;
+          const hiMode = e?.hostLocalization, hiLang = e?.language;
           const navL = String((typeof navigator !== 'undefined' && ((navigator.languages && navigator.languages[0]) || navigator.language)) || '').trim();
-          if (hiMode === 'off') window.__agPrismHostI18n?.setMode?.('off');
-          else if (hiMode === 'on') window.__agPrismHostI18n?.setMode?.('on');
-          else if ((hiLang && hiLang !== 'zh-CN' && hiLang !== 'auto') || ((!hiLang || hiLang === 'auto') && navL && !/^zh(?:$|-(?:cn|hans|sg)(?:-|$))/i.test(navL))) window.__agPrismHostI18n?.destroy?.();
-          else window.__agPrismHostI18n?.setMode?.('auto');
+          if (hiMode === 'off') W.__agPrismHostI18n?.setMode?.('off');
+          else if (hiMode === 'on') W.__agPrismHostI18n?.setMode?.('on');
+          else if ((hiLang && hiLang !== 'zh-CN' && hiLang !== 'auto') || ((!hiLang || hiLang === 'auto') && navL && !/^zh(?:$|-(?:cn|hans|sg)(?:-|$))/i.test(navL))) W.__agPrismHostI18n?.destroy?.();
+          else W.__agPrismHostI18n?.setMode?.('auto');
         } catch {}
-        if (effectiveCfg?.mascot === 'off' || effectiveCfg?.mascot === false) {
+        if (e?.mascot === 'off' || e?.mascot === false) {
           try {
-            try { window.__agDualMascotRig?.dispose?.(); } catch {}
-            try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
-            document.querySelectorAll?.('.ag-cs-crab, .ag-cs-dual-stage, .ag-cs-crab-stage, .ag-cs-mascot-stage, .ag-v2-mascot-stage, .ag-v2-habitat-prop').forEach((n) => {
-              try { n.__agMascotApi?.dispose?.(); } catch {}
-              n.remove?.();
-            });
-            document.querySelectorAll?.('[data-ag-cs-crab-anchor]').forEach((n) => n.removeAttribute?.('data-ag-cs-crab-anchor'));
-            document.documentElement?.removeAttribute?.('data-ag-cs-has-crab');
-            document.documentElement?.removeAttribute?.('data-ag-cs-mascot-drag');
-            delete window.__agDualMascotRig;
-            delete globalThis.__agDualMascotRig;
-            delete window.__agPrismMascotArt;
-            delete globalThis.__agPrismMascotArt;
+            try { W.__agDualMascotRig?.dispose?.(); } catch {}
+            try { api.sync?.(); } catch {}
+            D.querySelectorAll?.('.ag-cs-crab,.ag-cs-dual-stage,.ag-cs-crab-stage,.ag-cs-mascot-stage,.ag-v2-mascot-stage,.ag-v2-habitat-prop').forEach((n) => { try { n.__agMascotApi?.dispose?.(); } catch {} n.remove?.(); });
+            D.querySelectorAll?.('[data-ag-cs-crab-anchor]').forEach((n) => n.removeAttribute?.('data-ag-cs-crab-anchor'));
+            de?.removeAttribute?.('data-ag-cs-has-crab'); de?.removeAttribute?.('data-ag-cs-mascot-drag');
+            delete W.__agDualMascotRig; delete G.__agDualMascotRig; delete W.__agPrismMascotArt; delete G.__agPrismMascotArt;
           } catch {}
         }
-        if (effectiveCfg?.homeLayout && effectiveCfg.homeLayout !== 'studio') {
+        if (e?.homeLayout && e.homeLayout !== 'studio') {
           try {
-            (window.__agPrism || window.__agClaudeStyle)?.detachHomeStudio?.();
-            document.getElementById?.('ag-prism-studio-v101-css')?.remove?.();
-            document.querySelectorAll?.('.ag-cs-home-panel-seat,.ag-cs-home-panel')?.forEach?.((n) => n.remove());
-            document.documentElement?.removeAttribute?.('data-ag-prism-scope');
-            for (const k of ['__agPrismHomeStudioPanel', '__agHomeStudioPanel']) { delete window[k]; delete globalThis[k]; }
+            api.detachHomeStudio?.(); D.getElementById?.('ag-prism-studio-v101-css')?.remove?.();
+            D.querySelectorAll?.('.ag-cs-home-panel-seat,.ag-cs-home-panel')?.forEach?.((n) => n.remove());
+            de?.removeAttribute?.('data-ag-prism-scope');
+            for (const k of ['__agPrismHomeStudioPanel', '__agHomeStudioPanel']) { delete W[k]; delete G[k]; }
           } catch {}
         }
-        if (effectiveCfg?.periodicModelPicker === 'off' || effectiveCfg?.periodicModelPicker === false) {
+        if (e?.periodicModelPicker === 'off' || e?.periodicModelPicker === false) {
           try {
-            window.__agPrismPeriodicPicker?.destroy?.();
-            ['data-ag-prism-periodic-picker','data-ag-pp-open','data-ag-pp-holding'].forEach((a) => document.documentElement?.removeAttribute?.(a));
-            document.querySelectorAll?.('#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap').forEach((n) => n.remove());
-            ['__agPrismPeriodicPicker','__agPrismPeriodicPickerFactory','__agPrismKeyboard3D','__agPrismPeriodicKeyboard3D','__agPrismOledScreen','__agPrismGrainAssets','__agPeriodicAudioFx','__agPeriodicModelCatalog','__agPeriodicHostBridge','__agPeriodicBentoUi','__agPeriodicPbrGrainAssets','__agPeriodicOledScreen','__agPeriodicKeyboard3D'].forEach((k) => { try { delete window[k]; } catch {} try { delete globalThis[k]; } catch {} });
+            W.__agPrismPeriodicPicker?.destroy?.();
+            ['data-ag-prism-periodic-picker','data-ag-pp-open','data-ag-pp-holding'].forEach((a) => de?.removeAttribute?.(a));
+            D.querySelectorAll?.('#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap').forEach((n) => n.remove());
+            ['__agPrismPeriodicPicker','__agPrismPeriodicPickerFactory','__agPrismKeyboard3D','__agPrismPeriodicKeyboard3D','__agPrismOledScreen','__agPrismGrainAssets','__agPeriodicAudioFx','__agPeriodicModelCatalog','__agPeriodicHostBridge','__agPeriodicBentoUi','__agPeriodicPbrGrainAssets','__agPeriodicOledScreen','__agPeriodicKeyboard3D'].forEach((k) => { try { delete W[k]; } catch {} try { delete G[k]; } catch {} });
           } catch {}
         }
-        if (document.documentElement) {
-          if (effectiveCfg?.thoughtTranslate && effectiveCfg.thoughtTranslate !== 'off') {
-            document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
-          } else {
-            document.documentElement.removeAttribute('data-ag-prism-thought-view');
-          }
-          document.documentElement.setAttribute('data-ag-prism-sidebar-studio', effectiveCfg?.sidebarStudio === 'on' ? 'on' : 'off');
+        if (de) {
+          if (e?.thoughtTranslate && e.thoughtTranslate !== 'off') de.setAttribute('data-ag-prism-thought-view', e.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
+          else de.removeAttribute('data-ag-prism-thought-view');
+          de.setAttribute('data-ag-prism-sidebar-studio', e?.sidebarStudio === 'on' ? 'on' : 'off');
         }
         return { refreshed: true, version: api.version };
       }
@@ -435,7 +417,7 @@ function createCh1Templates({
           else D.addEventListener('DOMContentLoaded', applyStyle, { once: true });
           const bootCfg = __AG_INJ_BOOTCFG__;
           const cur = W.__agPrism || W.__agClaudeStyle;
-          if (cur && cur.version === VER && cur.codeHash === __AG_INJ_CODEHASH__ && W.__agPrismTelemetry && W.__agPrismEffortSlider) {
+          if (cur && cur.version === VER && cur.codeHash === __AG_INJ_CODEHASH__) {
             cur.refreshConfig(bootCfg);
           } else {
             destroyMods(false);

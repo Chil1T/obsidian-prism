@@ -4,6 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { isAutomatedTestRuntime } from './pid-lock.mjs';
+import { RUNTIME_CHANNEL_SPECS } from './runtime-channel-specs.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -225,6 +226,9 @@ export const channelCoordinatorMethods = {
     this._buildMascotExprForConfig(cfg, cacheOpts);
     this._buildSuggesterExprForConfig(cfg, cacheOpts);
     this._buildHomeStudioExprForConfig(cfg, cacheOpts);
+    for (const spec of RUNTIME_CHANNEL_SPECS) {
+      this._buildRuntimeChannelExpr(spec, cfg, cacheOpts);
+    }
 
     if (bundleCachePath) {
       if (deferDiskCacheWrite) {
@@ -660,4 +664,60 @@ export const channelCoordinatorMethods = {
     return hash;
   },
   _getHomeStudioCleanupExpression() { return resolveChannelTeardown(this.cdp, 'homeStudio', 'HOME_STUDIO_REMOVE_EXPRESSION'); },
+
+  _hasRuntimeChannelFile(spec) {
+    return hasChannelAssetFile(this.rootDir, this.cdp, spec.id, spec.fallbackRel);
+  },
+  _isRuntimeChannelEnabled(spec, cfgOverride = null) {
+    try {
+      const cfg = cfgOverride || this.cdp?.readConfig?.();
+      const fn = this.cdp?.[spec.cdpShouldEnable];
+      if (typeof fn === 'function') return Boolean(fn(cfg));
+      const reg = this.getRegisteredChannel(spec.id);
+      if (typeof reg?.shouldEnable === 'function') return Boolean(reg.shouldEnable(cfg));
+      return Boolean(spec.defaultShouldEnable(cfg));
+    } catch {
+      return false;
+    }
+  },
+  _getRuntimeChannelCfgSig(spec, cfgOverride = null) {
+    try {
+      const cfg = cfgOverride || this.cdp?.readConfig?.() || {};
+      return spec.getCfgSig(cfg);
+    } catch {
+      return 'on';
+    }
+  },
+  _setRuntimeChannelExpr(spec, expr) {
+    const next = typeof expr === 'string' ? expr : '';
+    this[spec.exprField] = next;
+    this[spec.hashSrcField] = next;
+    this[spec.hashField] = extractTargetCodeHash(next);
+    return next;
+  },
+  _buildRuntimeChannelExpr(spec, cfgOverride = null, cacheOpts = undefined) {
+    const cfg = cfgOverride || (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
+    const buildFn = this.cdp?.[spec.cdpBuild];
+    if (typeof buildFn !== 'function' || !this._hasRuntimeChannelFile(spec) || !this._isRuntimeChannelEnabled(spec, cfg)) {
+      return this._setRuntimeChannelExpr(spec, '');
+    }
+    const opts = cacheOpts !== undefined ? cacheOpts : this._getChannelCacheOpts(true);
+    const expr = opts ? buildFn(cfg, opts) : buildFn(cfg);
+    if (cacheOpts === undefined && opts && this.running) this._scheduleBundleCacheFlush();
+    return this._setRuntimeChannelExpr(spec, expr);
+  },
+  _getRuntimeChannelExprHash(spec, exprOverride = undefined) {
+    const str = typeof exprOverride === 'string' ? exprOverride : typeof this[spec.exprField] === 'string' ? this[spec.exprField] : '';
+    if (!str) return '';
+    if (str === this[spec.hashSrcField] && this[spec.hashField]) return this[spec.hashField];
+    const hash = extractTargetCodeHash(str);
+    if (str === this[spec.exprField]) {
+      this[spec.hashSrcField] = str;
+      this[spec.hashField] = hash;
+    }
+    return hash;
+  },
+  _getRuntimeChannelCleanupExpression(spec) {
+    return resolveChannelTeardown(this.cdp, spec.id, spec.cdpRemove);
+  },
 };

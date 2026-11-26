@@ -143,7 +143,7 @@ test('CONFIG_SCHEMA is the single source of truth for DEFAULT_CONFIG, VALIDATORS
   assert.equal(reconciled.sidebar, 'off');
 });
 
-test('CHANNEL_REGISTRY contract covers all 12 delayed/on-demand channels with valid metadata and gating', () => {
+test('CHANNEL_REGISTRY contract covers all 16 delayed/on-demand channels with valid metadata and gating', () => {
   const expectedIds = [
     'omni',
     'sidebar',
@@ -157,6 +157,10 @@ test('CHANNEL_REGISTRY contract covers all 12 delayed/on-demand channels with va
     'mascot',
     'suggester',
     'homeStudio',
+    'telemetry',
+    'effortSlider',
+    'workbenchEnhancer',
+    'contextMenu',
   ];
 
   const descriptors = cdp.getChannelDescriptors();
@@ -198,6 +202,13 @@ test('CHANNEL_REGISTRY contract covers all 12 delayed/on-demand channels with va
     periodicModelPicker: 'off',
     mascot: 'off',
     homeLayout: 'native',
+    telemetryModule: 'off',
+    effortSliderModule: 'off',
+    sidebarNavFold: 'off',
+    scrollBottomMotion: 'instant',
+    sidebarRestyle: false,
+    motionLevel: 'off',
+    contextMenu: false,
   };
   assert.equal(cdp.findChannel('omni').shouldEnable(gatedOffCfg), false);
   assert.equal(cdp.findChannel('sidebar').shouldEnable(gatedOffCfg), false);
@@ -211,10 +222,18 @@ test('CHANNEL_REGISTRY contract covers all 12 delayed/on-demand channels with va
   assert.equal(cdp.findChannel('mascot').build(gatedOffCfg), '');
   assert.equal(cdp.findChannel('homeStudio').shouldEnable(gatedOffCfg), false);
   assert.equal(cdp.findChannel('homeStudio').build(gatedOffCfg), '');
+  assert.equal(cdp.findChannel('telemetry').shouldEnable(gatedOffCfg), false);
+  assert.equal(cdp.findChannel('telemetry').build(gatedOffCfg), '');
+  assert.equal(cdp.findChannel('effortSlider').shouldEnable(gatedOffCfg), false);
+  assert.equal(cdp.findChannel('effortSlider').build(gatedOffCfg), '');
+  assert.equal(cdp.findChannel('workbenchEnhancer').shouldEnable(gatedOffCfg), false);
+  assert.equal(cdp.findChannel('workbenchEnhancer').build(gatedOffCfg), '');
+  assert.equal(cdp.findChannel('contextMenu').shouldEnable(gatedOffCfg), false);
+  assert.equal(cdp.findChannel('contextMenu').build(gatedOffCfg), '');
 
   const offReport = cdp.getChannelBudgetReport(gatedOffCfg, { noDiskCache: true });
   assert.equal(offReport.ok, true);
-  for (const id of ['omni', 'sidebar', 'swarmI18n', 'thought', 'periodicPicker', 'mascot', 'homeStudio']) {
+  for (const id of ['omni', 'sidebar', 'swarmI18n', 'thought', 'periodicPicker', 'mascot', 'homeStudio', 'telemetry', 'effortSlider', 'workbenchEnhancer', 'contextMenu']) {
     const row = offReport.channels.find((c) => c.id === id);
     assert.equal(row.enabled, false);
     assert.equal(row.bytes, 0);

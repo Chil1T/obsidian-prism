@@ -21,6 +21,7 @@ import {
   recordChannelOff,
   recordChannelFailure,
 } from './session-fsm.mjs';
+import { RUNTIME_CHANNEL_SPECS, initRuntimeChannelEntryFields } from './runtime-channel-specs.mjs';
 
 export const sessionApplyMethods = {
   _runEntryExclusive(entry, fn) {
@@ -216,6 +217,12 @@ export const sessionApplyMethods = {
           this._buildHomeStudioExprForConfig(curCfg, chOpts);
           if (chOpts && this.homeStudioExpr) usedChCache = true;
         }
+        for (const spec of RUNTIME_CHANNEL_SPECS) {
+          if (!this[spec.exprField] && this._hasRuntimeChannelFile(spec) && this._isRuntimeChannelEnabled(spec, curCfg) && typeof this.cdp[spec.cdpBuild] === 'function') {
+            this._buildRuntimeChannelExpr(spec, curCfg, chOpts);
+            if (chOpts && this[spec.exprField]) usedChCache = true;
+          }
+        }
         if (usedChCache && this.running) this._scheduleBundleCacheFlush();
       }
 
@@ -402,10 +409,13 @@ export const sessionApplyMethods = {
         recordChannelOff(entry, 'wallpaper');
       }
 
-      // Channels 8, 10, 12: Periodic Picker / Mascot / Home Studio
+      // Channels 8, 10, 12 & 13~16: Periodic Picker / Mascot / Home Studio / Runtime Offloaded Channels
       await this._syncPeriodicPickerOnEntry(entry, getCurrentCfg(), { forceReplaceScript: true, forceEval: true, evalTimeoutMs: 0, cleanupTimeoutMs: 0 });
       await this._syncMascotOnEntry(entry, getCurrentCfg(), { forceReplaceScript: true, forceEval: true, evalTimeoutMs: 0, cleanupTimeoutMs: 0 });
       await this._syncHomeStudioOnEntry(entry, getCurrentCfg(), { forceReplaceScript: true, forceEval: true, evalTimeoutMs: 0, cleanupTimeoutMs: 0 });
+      for (const spec of RUNTIME_CHANNEL_SPECS) {
+        await this._syncRuntimeChannelOnEntry(entry, spec, getCurrentCfg(), { forceReplaceScript: true, forceEval: true, evalTimeoutMs: 0, cleanupTimeoutMs: 0 });
+      }
 
       // Channel 11: Suggester
       const hadSuggesterBefore = Boolean(entry.suggesterScriptId || entry.suggesterMounted);
@@ -450,7 +460,7 @@ export const sessionApplyMethods = {
     if (this.sessions.has(wsUrl)) return this.sessions.get(wsUrl);
 
     const session = await this.cdp.CdpSession.connect(wsUrl, 3500);
-    const entry = ensureEntryFsm({
+    const entry = ensureEntryFsm(initRuntimeChannelEntryFields({
       wsUrl,
       pageId: target.id,
       url: String(target.url || ''),
@@ -519,7 +529,7 @@ export const sessionApplyMethods = {
       pendingAckEpoch: 0,
       _healTimer: null,
       _opChain: Promise.resolve(),
-    });
+    }));
     this.sessions.set(wsUrl, entry);
 
     session.onClose = () => {

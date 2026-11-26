@@ -8,8 +8,10 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
+import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+const cjsRequire = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const importRel = (rel) => import(pathToFileURL(path.join(ROOT, rel)).href);
 
@@ -1047,6 +1049,9 @@ test('security-sidecar 5: inject.js isolates injectOnce errors (preserving Chann
       if (spec === 'fs') return mockFs;
       if (spec === 'path') return path;
       if (spec === './cdp') return mockCdp;
+      if (spec === './src/channels/inject-runtime-channels.cjs') {
+        return cjsRequire(path.join(ROOT, 'src', 'channels', 'inject-runtime-channels.cjs'));
+      }
       throw new Error(`Unexpected require: ${spec}`);
     };
     reqFn.cache = {};

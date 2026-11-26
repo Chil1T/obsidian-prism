@@ -33,38 +33,31 @@
   const crystalPrismCore = GT.__agCrystalPrismCore;
   const motionEngine = GT.__agMotionEngine;
   const animatedIcons = GT.__agAnimatedIcons;
-  const pulseVialBridgeMod = GT.__agCsPulseVialBridge;
+  const getPulseVialBridgeMod = () => GT.__agCsPulseVialBridge || W.__agCsPulseVialBridge || null;
   const convAuraMod = GT.__agPrismConvAura;
   const smoothCaretMod = GT.__agPrismSmoothCaret;
   const getSettingsPanelMod = () => GT.__agPrismSettingsPanel || W.__agPrismSettingsPanel || null;
 
-  // Channel 1 活跃语言迷你词典垫片：未加载按需 Settings 通道前由 bootCfg.__uiSlice 供电；全量 i18n-locales.js 就位后自动退让
   const runtimeSliceStore = { active: 'en', byLang: O.create(null) };
-  const mergeRuntimeUiSlice = (payload) => {
-    if (!payload || typeof payload !== 'object') return;
-    if (typeof payload.active === 'string' && payload.active) runtimeSliceStore.active = payload.active;
-    if (Array.isArray(payload.keys) && payload.vals && typeof payload.vals === 'object') {
-      for (const [lang, arr] of O.entries(payload.vals)) {
+  const mergeRuntimeUiSlice = (p) => {
+    if (!p || typeof p !== 'object') return;
+    if (typeof p.active === 'string' && p.active) runtimeSliceStore.active = p.active;
+    if (Array.isArray(p.keys) && p.vals && typeof p.vals === 'object') {
+      for (const [l, arr] of O.entries(p.vals)) {
         if (!Array.isArray(arr)) continue;
-        const dst = { ...(runtimeSliceStore.byLang[lang] || {}) };
-        for (let i = 0; i < payload.keys.length; i++) if (typeof arr[i] === 'string' && arr[i]) dst[payload.keys[i]] = arr[i];
-        runtimeSliceStore.byLang[lang] = dst;
+        const dst = { ...(runtimeSliceStore.byLang[l] || {}) };
+        for (let i = 0; i < p.keys.length; i++) if (typeof arr[i] === 'string' && arr[i]) dst[p.keys[i]] = arr[i];
+        runtimeSliceStore.byLang[l] = dst;
       }
     }
-    if (payload.byLang && typeof payload.byLang === 'object') {
-      for (const [k, v] of O.entries(payload.byLang)) {
-        if (v && typeof v === 'object') runtimeSliceStore.byLang[k] = { ...(runtimeSliceStore.byLang[k] || {}), ...v };
-      }
-    }
+    if (p.byLang && typeof p.byLang === 'object') for (const [k, v] of O.entries(p.byLang)) if (v && typeof v === 'object') runtimeSliceStore.byLang[k] = { ...(runtimeSliceStore.byLang[k] || {}), ...v };
   };
   const LITE_SWARM_FMT = { 'zh-CN': '主会话 {0}% · 子代理 {1}%', 'zh-TW': '主工作階段 {0}% · 子代理 {1}%', ja: 'メイン {0}% · サブ {1}%', ko: '메인 {0}% · 서브 {1}%', es: 'Principal {0}% · Sub {1}%', fr: 'Principal {0}% · Sous {1}%', de: 'Haupt {0}% · Sub {1}%' };
   const LITE_MORE_FMT = { 'zh-CN': '再显示 {0} 个', 'zh-TW': '再顯示 {0} 個', ja: 'さらに {0} 件表示', ko: '{0}개 더 보기', es: 'Mostrar {0} más', fr: 'Afficher {0} de plus', de: '{0} weitere anzeigen' };
   const ensureLiteLocalesShim = (slicePayload) => {
     mergeRuntimeUiSlice(slicePayload);
     const cur = getLocalesMod();
-    // 绝不拿 43-key 迷你垫片覆写页面上已有的全量 8 语表（含热重载残留的旧全量表 UI_TABLE）
-    if (cur && (cur.__isFullLocales || cur.UI_TABLE)) return;
-    if (cur && cur.__isLiteShim) return;
+    if (cur && (cur.__isFullLocales || cur.UI_TABLE || cur.__isLiteShim)) return;
     const shim = {
       __isLiteShim: true,
       getUiStrings(lang) {
@@ -77,55 +70,23 @@
         return out;
       },
     };
-    GT.__agCsLocales = shim;
-    W.__agCsLocales = shim;
+    GT.__agCsLocales = W.__agCsLocales = shim;
   };
   if (initialConfig && initialConfig.__uiSlice) ensureLiteLocalesShim(initialConfig.__uiSlice);
   const getHomeStudioMod = () => GT.__agPrismHomeStudioPanel || W.__agPrismHomeStudioPanel || GT.__agHomeStudioPanel || W.__agHomeStudioPanel || null;
-  const homeRippleMod = GT.__agPrismHomeRippleHost;
-  const modelGlyphMod = GT.__agPrismModelGlyphCrystal;
-  const streamChoreoMod = GT.__agPrismStreamChoreography;
-  const prismRimMod = GT.__agPrismRimCanvas;
-  const hostEnhancerMod = GT.__agPrismHostEnhancer;
+  const homeRippleMod = GT.__agPrismHomeRippleHost, modelGlyphMod = GT.__agPrismModelGlyphCrystal, streamChoreoMod = GT.__agPrismStreamChoreography, prismRimMod = GT.__agPrismRimCanvas;
+  const getHostEnhancerMod = () => GT.__agPrismHostEnhancer || W.__agPrismHostEnhancer || null;
   let ownedCtxMenu = W.__agPrismContextMenu || GT.__agPrismContextMenu || null;
 
-  // 新品牌 Obsidian Prism 主存储键 + 旧版历史键平滑迁移兼容
-  const STORAGE_PRISM_KEY = 'ag-prism:config';
-  const STORAGE_LEGACY_COLON_KEY = 'ag-claude-style:config';
-  const STORAGE_LEGACY_V3_KEY = 'agClaudeStyle.settings.v3';
-  const STORAGE_FILE_CFG_KEY = 'ag-prism:lastFileConfig';
-  const STORAGE_USAGE_CACHE_KEY = 'ag-prism:trajRollup.v1';
-  const SETTINGS_SEC_ID = 'ag-cs-settings-sec';
-  const MODEL_PANEL_SEL = '[data-testid="model-selector-panel"]';
-  const BLUR_ATTR = 'data-ag-cs-win-blur';
+  const STORAGE_PRISM_KEY = 'ag-prism:config', STORAGE_LEGACY_COLON_KEY = 'ag-claude-style:config', STORAGE_LEGACY_V3_KEY = 'agClaudeStyle.settings.v3', STORAGE_FILE_CFG_KEY = 'ag-prism:lastFileConfig', STORAGE_USAGE_CACHE_KEY = 'ag-prism:trajRollup.v1', SETTINGS_SEC_ID = 'ag-cs-settings-sec', MODEL_PANEL_SEL = '[data-testid="model-selector-panel"]', BLUR_ATTR = 'data-ag-cs-win-blur';
   const K_IC = 'isConnected', K_PE = 'parentElement', K_TC = 'textContent', K_CL = 'classList';
-  const isFn = (v) => typeof v === 'function';
-  const de = () => D.documentElement;
-  const byId = (id) => D.getElementById?.(id) || null;
-  const ga = (e, k) => e?.getAttribute?.(k);
-  const sa = (e, k, v = '') => e?.setAttribute?.(k, String(v));
-  const ha = (e, k) => !!(e?.hasAttribute?.(k));
-  const ra = (e, k) => e?.removeAttribute?.(k);
-  const qs = (e, s) => e?.querySelector?.(s) || null;
-  const qa = (e, s) => e?.querySelectorAll?.(s) || [];
-  const cl = (e, s) => e?.closest?.(s) || null;
-  const sp = (e, k, v) => e?.style?.setProperty?.(k, v);
-  const rp = (e, k) => e?.style?.removeProperty?.(k);
-  const clHas = (e, c) => !!(e?.[K_CL]?.contains?.(c));
-  const rc = (e) => (isFn(e?.getBoundingClientRect) ? e.getBoundingClientRect() : null);
-  const tidOf = (e) => String(ga(e, 'data-testid') || '');
-  const tagU = (e) => String(e?.tagName || '').toUpperCase();
+  const isFn = (v) => typeof v === 'function', de = () => D.documentElement, byId = (id) => D.getElementById?.(id) || null;
+  const ga = (e, k) => e?.getAttribute?.(k), sa = (e, k, v = '') => e?.setAttribute?.(k, String(v)), ha = (e, k) => !!(e?.hasAttribute?.(k)), ra = (e, k) => e?.removeAttribute?.(k);
+  const qs = (e, s) => e?.querySelector?.(s) || null, qa = (e, s) => e?.querySelectorAll?.(s) || [], cl = (e, s) => e?.closest?.(s) || null;
+  const sp = (e, k, v) => e?.style?.setProperty?.(k, v), rp = (e, k) => e?.style?.removeProperty?.(k), clHas = (e, c) => !!(e?.[K_CL]?.contains?.(c));
+  const rc = (e) => (isFn(e?.getBoundingClientRect) ? e.getBoundingClientRect() : null), tidOf = (e) => String(ga(e, 'data-testid') || ''), tagU = (e) => String(e?.tagName || '').toUpperCase();
   const isElementLike = (n) => !!(n && (n.nodeType === 1 || (n.nodeType === undefined && typeof n.tagName === 'string')));
-
-  const safeParseJsonObj = (raw) => {
-    if (!raw || typeof raw !== 'string') return null;
-    try {
-      const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
-    } catch {
-      return null;
-    }
-  };
+  const safeParseJsonObj = (raw) => { if (!raw || typeof raw !== 'string') return null; try { const p = JSON.parse(raw); return p && typeof p === 'object' && !Array.isArray(p) ? p : null; } catch { return null; } };
 
   const BOOL_ALIAS_PAIRS = [['homeRipple', 'ripple'], ['composerRestyle', 'composer'], ['sidebarRestyle', 'sidebar']];
   const ONOFF_STR_KEYS = 'telemetryModule|effortSliderModule|effortMemory|periodicModelPicker|omniModule|sidebarStudio|autoUpdate|sidebarNavFold'.split('|');
@@ -679,117 +640,45 @@
   let lastHomeStudioChannelReqAt = 0;
 
   const disposeActiveHomeStudio = () => {
-    const prev = activeHomeStudioInst;
-    activeHomeStudioInst = null;
-    activeHomeStudioMod = null;
-    if (!prev) return;
-    if (isFn(prev.dispose)) { try { prev.dispose(); } catch {} return; }
-    for (const k of ['flushUsageCacheNow', 'unmountPanelSeat', 'restoreGreetings']) {
-      try { prev[k]?.(); } catch {}
-    }
+    const p = activeHomeStudioInst; activeHomeStudioInst = activeHomeStudioMod = null;
+    if (!p) return;
+    if (isFn(p.dispose)) { try { p.dispose(); } catch {} return; }
+    for (const k of ['flushUsageCacheNow', 'unmountPanelSeat', 'restoreGreetings']) try { p[k]?.(); } catch {}
   };
-
   const requestHomeStudioChannelIfNeeded = () => {
-    if (destroyed || cfg.homeLayout !== 'studio') return;
-    const now = Date.now();
-    if (now - lastHomeStudioChannelReqAt < 1000) return;
-    if (!qs(D, '.agy-home')) return;
-    const bindingName = currentBaseConfig?.binding || cfg?.binding || '__agPrismSetting';
-    const fn = W[bindingName];
+    if (destroyed || cfg.homeLayout !== 'studio' || Date.now() - lastHomeStudioChannelReqAt < 1000 || !qs(D, '.agy-home')) return;
+    const fn = W[currentBaseConfig?.binding || cfg?.binding || '__agPrismSetting'];
     if (!isFn(fn)) return;
-    lastHomeStudioChannelReqAt = now;
-    try { fn(JSON.stringify({ action: 'request-home-studio-panel' })); } catch {}
+    lastHomeStudioChannelReqAt = Date.now();
+    try { fn(SJ({ action: 'request-home-studio-panel' })); } catch {}
   };
-
   const resolveHomeStudioCtl = () => {
     const mod = getHomeStudioMod();
-    if (!mod || !isFn(mod.createHomeStudioPanelController)) {
-      if (activeHomeStudioInst) disposeActiveHomeStudio();
-      return homeStudioFallback;
-    }
+    if (!mod || !isFn(mod.createHomeStudioPanelController)) { if (activeHomeStudioInst) disposeActiveHomeStudio(); return homeStudioFallback; }
     if (activeHomeStudioInst && activeHomeStudioMod === mod) return activeHomeStudioInst;
     if (activeHomeStudioInst) disposeActiveHomeStudio();
     if (destroyed) return homeStudioFallback;
     activeHomeStudioMod = mod;
-    activeHomeStudioInst = mod.createHomeStudioPanelController({
-      usageCore,
-      storageUsageCacheKey: STORAGE_USAGE_CACHE_KEY,
-      isDestroyed: () => destroyed,
-      getHomeLayout: () => cfg.homeLayout,
-      getLang,
-      uiText,
-      getDisplayName,
-      ensureHooks,
-      canMountRealCanvas,
-      setAttrIfChanged,
-      runGuardedMut,
-    });
+    activeHomeStudioInst = mod.createHomeStudioPanelController({ usageCore, storageUsageCacheKey: STORAGE_USAGE_CACHE_KEY, isDestroyed: () => destroyed, getHomeLayout: () => cfg.homeLayout, getLang, uiText, getDisplayName, ensureHooks, canMountRealCanvas, setAttrIfChanged, runGuardedMut });
     return activeHomeStudioInst;
   };
-
-  const homeStudioCtl = new Proxy({}, {
-    get: (_, k) => (...args) => {
-      const ctl = resolveHomeStudioCtl();
-      const fn = ctl[k];
-      return isFn(fn) ? fn.apply(ctl, args) : null;
-    },
-  });
-
-  const rippleCtl = homeRippleMod?.createHomeRippleController
-    ? homeRippleMod.createHomeRippleController({
-        rippleCore,
-        isDestroyed: () => destroyed,
-        isAllowed: () => cfg.homeRipple !== false && cfg.homeLayout !== 'off',
-        isConvAllowed: () => cfg.convRipple !== 'off',
-        getConvLevel: () => cfg.convRipple,
-        isConvRunning,
-        isDarkTheme,
-        motionReduced,
-        getMinFrameGapMs,
-        getAmbientIntensity: getAmbientFloat,
-        getAccentTone,
-        getEffectivePalette,
-        setAttrIfChanged,
-        onPointerPressMascot: (clientX) => {
-          if (msRig && msRoot) {
-            try {
-              const mr = rc(msRoot);
-              if (mr) notifyMascot('ripple', { x: clientX - mr.left });
-            } catch {}
-          }
-        },
-      })
-    : noopStub();
-
-  const convAuraCtl = convAuraMod?.createConvAuraController
-    ? convAuraMod.createConvAuraController({
-        isDestroyed: () => destroyed,
-        isHomeRippleEnabled: () => getAmbientFloat() > 0,
-        isMotionStandardOrUltra,
-        isDarkTheme,
-        getMinFrameGapMs,
-        getAmbientIntensity: getAmbientFloat,
-        getSpectrumMode: resolveAuraSpectrumMode,
-        isWindowFocused: () => (isFn(D.hasFocus) ? D.hasFocus() : !D.hidden),
-        rippleCore,
-        setAttrIfChanged,
-        runGuardedMut,
-      })
-    : noopStub({ advancePhase: () => 'off' });
-
-  const hostEnhancerCtl = hostEnhancerMod?.createHostEnhancerController
-    ? hostEnhancerMod.createHostEnhancerController({
-        doc: D,
-        win: W,
-        getLang,
-        t: (k) => (k ? uiText()[k] : uiText()),
-        isDestroyed: () => destroyed,
-        isConvRunning,
-        runGuardedMut,
-        setAttrIfChanged,
-        getConfig: () => normalizeConfigShape(cfg),
-      })
-    : noopStub();
+  const homeStudioCtl = new Proxy({}, { get: (_, k) => (...a) => { const c = resolveHomeStudioCtl(); return isFn(c[k]) ? c[k].apply(c, a) : null; } });
+  const rippleCtl = homeRippleMod?.createHomeRippleController ? homeRippleMod.createHomeRippleController({ rippleCore, isDestroyed: () => destroyed, isAllowed: () => cfg.homeRipple !== false && cfg.homeLayout !== 'off', isConvAllowed: () => cfg.convRipple !== 'off', getConvLevel: () => cfg.convRipple, isConvRunning, isDarkTheme, motionReduced, getMinFrameGapMs, getAmbientIntensity: getAmbientFloat, getAccentTone, getEffectivePalette, setAttrIfChanged, onPointerPressMascot: (x) => { if (msRig && msRoot) try { const mr = rc(msRoot); if (mr) notifyMascot('ripple', { x: x - mr.left }); } catch {} } }) : noopStub();
+  const convAuraCtl = convAuraMod?.createConvAuraController ? convAuraMod.createConvAuraController({ isDestroyed: () => destroyed, isHomeRippleEnabled: () => getAmbientFloat() > 0, isMotionStandardOrUltra, isDarkTheme, getMinFrameGapMs, getAmbientIntensity: getAmbientFloat, getSpectrumMode: resolveAuraSpectrumMode, isWindowFocused: () => (isFn(D.hasFocus) ? D.hasFocus() : !D.hidden), rippleCore, setAttrIfChanged, runGuardedMut }) : noopStub({ advancePhase: () => 'off' });
+  const hostEnhancerFallback = noopStub();
+  let activeHostEnhancerMod = null, activeHostEnhancerInst = null;
+  const disposeActiveHostEnhancer = () => { const p = activeHostEnhancerInst; activeHostEnhancerInst = activeHostEnhancerMod = null; if (p) try { p.destroy?.(); } catch {} };
+  const resolveHostEnhancerCtl = () => {
+    const mod = getHostEnhancerMod();
+    if (!mod || !isFn(mod.createHostEnhancerController)) { if (activeHostEnhancerInst) disposeActiveHostEnhancer(); return hostEnhancerFallback; }
+    if (activeHostEnhancerInst && activeHostEnhancerMod === mod) return activeHostEnhancerInst;
+    if (activeHostEnhancerInst) disposeActiveHostEnhancer();
+    if (destroyed) return hostEnhancerFallback;
+    activeHostEnhancerMod = mod;
+    activeHostEnhancerInst = mod.createHostEnhancerController({ doc: D, win: W, getLang, t: (k) => (k ? uiText()[k] : uiText()), isDestroyed: () => destroyed, isConvRunning, runGuardedMut, setAttrIfChanged, getConfig: () => normalizeConfigShape(cfg) });
+    return activeHostEnhancerInst;
+  };
+  const hostEnhancerCtl = new Proxy({}, { get: (_, k) => k === 'getDebugState' ? (() => { const c = resolveHostEnhancerCtl(); return c !== hostEnhancerFallback && isFn(c?.getDebugState) ? () => c.getDebugState() : undefined; })() : (...a) => { const c = resolveHostEnhancerCtl(); return isFn(c?.[k]) ? c[k].apply(c, a) : null; } });
 
   function isConvRunning() {
     return !!(convAuraMod && isFn(convAuraMod.isConvRunning) && convAuraMod.isConvRunning());
@@ -1038,7 +927,7 @@
     const tel = W.__agPrismTelemetry, eff = W.__agPrismEffortSlider, th = W.__agPrismThought, thUi = W.__agPrismThoughtSettingsUi;
     const omni = W.__agPrismOmni, meta = W.__agPrismOmniServerMeta || null, sb = W.__agPrismSidebar, sbMeta = W.__agPrismSidebarMeta || null;
     const ctxMenu = W.__agPrismContextMenu || GT.__agPrismContextMenu, hiInst = W.__agPrismHostI18n;
-    if (ctxMenu && !ownedCtxMenu) ownedCtxMenu = ctxMenu;
+    ownedCtxMenu = ctxMenu || null;
     const motionLv = getMotionLevel(), ctxEnabled = isContextMenuEnabled() && !destroyed, hiMode = getHostLocalizationMode(), curLang = getLang();
     const key = [
       VERSION, curLang, motionLv, getTelemetryMode(), getEffortSliderMode(), getEffortMemoryMode(), hiMode,
@@ -1732,22 +1621,18 @@
     if (changed && !destroyed) { dirtyFlags.c = true; scheduleSync(); }
   };
 
-  function ensurePulseBridge(forceSync = false) {
-    healBlockedExternalPulseBar();
-    syncContextCardOpenNotify();
-    if (destroyed || !isFn(pulseVialBridgeMod?.mountPulseVialBridge)) return;
-    if (getTelemetryMode() === 'off') {
-      if (pulseBridgeInst) { try { pulseBridgeInst.destroy?.(); } catch {} pulseBridgeInst = null; }
-      return;
-    }
-    if (!pulseBridgeInst) {
-      try { pulseBridgeInst = pulseVialBridgeMod.mountPulseVialBridge({ win: W, doc: D }); } catch { pulseBridgeInst = null; }
-    } else if (forceSync && isFn(pulseBridgeInst.sync)) {
-      try {
-        void pulseBridgeInst.sync();
-      } catch {}
-    }
+  let pulseBridgeModRef = null;
+  function detachPulseBridge() {
+    if (pulseBridgeInst) { try { pulseBridgeInst.destroy?.(); } catch {} pulseBridgeInst = null; }
+    pulseBridgeModRef = null;
   }
+  const ensurePulseBridge = (forceSync = false) => {
+    healBlockedExternalPulseBar(); syncContextCardOpenNotify();
+    const mod = getPulseVialBridgeMod();
+    if (destroyed || !isFn(mod?.mountPulseVialBridge) || getTelemetryMode() === 'off') { detachPulseBridge(); return; }
+    if (!pulseBridgeInst || pulseBridgeModRef !== mod) { detachPulseBridge(); pulseBridgeModRef = mod; try { pulseBridgeInst = mod.mountPulseVialBridge({ win: W, doc: D }); } catch { pulseBridgeInst = null; } }
+    else if (forceSync && isFn(pulseBridgeInst.sync)) { try { void pulseBridgeInst.sync(); } catch {} }
+  };
 
   // ── FastDOM Two-Phase Incremental Synchronization Loop ─────────────────
   let syncQueued = false;
@@ -3001,51 +2886,30 @@
   };
 
   const prismRuntimeApi = {
-    brand: 'Obsidian Prism',
-    version: VERSION,
-    legacyApiVersion: LEGACY_API_VERSION,
-    codeHash: CODE_HASH,
-    flattenCss: flattenMainStyleSheet,
-    saveSettingsBatch,
+    brand: 'Obsidian Prism', version: VERSION, legacyApiVersion: LEGACY_API_VERSION, codeHash: CODE_HASH,
+    flattenCss: flattenMainStyleSheet, saveSettingsBatch,
     refreshConfig(next) {
       if (next && typeof next === 'object') {
         if (next.__uiSlice) ensureLiteLocalesShim(next.__uiSlice);
-        const fromFile = !!(next.__fromFile);
-        const ackEpoch = Number(next.__ackEpoch) || 0;
-        if (fromFile && ackEpoch > 0 && ackEpoch < localWriteEpoch) {
-          return false;
-        }
+        const fromFile = !!(next.__fromFile), ackEpoch = Number(next.__ackEpoch) || 0;
+        if (fromFile && ackEpoch > 0 && ackEpoch < localWriteEpoch) return false;
         const cleanNext = expandSettingAliases(stripRuntimeMetaKeys(next));
         currentBaseConfig = { ...currentBaseConfig, ...cleanNext };
         if (next.pollIntervalMs !== undefined) currentBaseConfig.pollIntervalMs = next.pollIntervalMs;
         if (next.binding !== undefined) currentBaseConfig.binding = next.binding;
         cfg = loadSettings(currentBaseConfig, fromFile ? null : cleanNext);
-      } else {
-        cfg = loadSettings(currentBaseConfig);
-      }
+      } else cfg = loadSettings(currentBaseConfig);
       if (lifecycleStarted && !destroyed) restartPollTimer();
-      markAllDirty();
-      lastAbsorbedSyncKey = '';
-      applyRootAttrs(true);
-      runSync(true);
+      markAllDirty(); lastAbsorbedSyncKey = ''; applyRootAttrs(true); runSync(true);
       return true;
     },
-    sync() {
-      if (!destroyed) {
-        lastAbsorbedSyncKey = '';
-        runSync(true);
-      }
-    },
-    syncHomeStudio() {
-      if (destroyed) return;
-      resolveHomeStudioCtl();
-      if (!lifecycleStarted) return;
-      markAllDirty();
-      runSync(true);
-    },
-    detachHomeStudio() {
-      disposeActiveHomeStudio();
-    },
+    sync() { if (!destroyed) { lastAbsorbedSyncKey = ''; runSync(true); } },
+    syncHomeStudio() { if (destroyed) return; resolveHomeStudioCtl(); if (!lifecycleStarted) return; markAllDirty(); runSync(true); },
+    detachHomeStudio: disposeActiveHomeStudio,
+    syncTelemetry() { if (destroyed) return; ensurePulseBridge(true); syncAbsorbedModules(true); },
+    detachTelemetry: detachPulseBridge,
+    syncHostEnhancer() { if (destroyed) return; const c = resolveHostEnhancerCtl(); try { c.onThemeChange?.(false); c.sync?.(); } catch {} },
+    detachHostEnhancer: disposeActiveHostEnhancer,
     syncAbsorbed: () => syncAbsorbedModules(true),
     getState() {
       const convAura = convAuraCtl.getInstance();

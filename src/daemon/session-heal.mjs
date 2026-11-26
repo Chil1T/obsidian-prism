@@ -16,6 +16,7 @@ import {
   isChannelInCooldown,
 } from './session-fsm.mjs';
 import { PAGE_HEALTH_PROBE_EXPRESSION, healSecondaryChannels } from './session-heal-channels.mjs';
+import { RUNTIME_CHANNEL_SPECS } from './runtime-channel-specs.mjs';
 
 export const sessionHealMethods = {
   async verifyAndHealEntry(entry, force = false) {
@@ -82,6 +83,23 @@ export const sessionHealMethods = {
         ? !entry.homeStudioScriptId || !entry.homeStudioMounted || Boolean(expectedHomeStudioEarlySig && (entry.lastHomeStudioSig !== expectedHomeStudioEarlySig || entry.lastHomeStudioScriptSig !== expectedHomeStudioEarlySig))
         : Boolean(entry.homeStudioScriptId || entry.homeStudioMounted));
 
+    let runtimeChannelsNeedSync = false;
+    for (const spec of RUNTIME_CHANNEL_SPECS) {
+      if (isChannelInCooldown(entry, spec.id, now)) continue;
+      const avail = this._isRuntimeChannelEnabled(spec, cfg) && this._hasRuntimeChannelFile(spec);
+      const expSig =
+        avail && this[spec.exprField]
+          ? `${this._getRuntimeChannelCfgSig(spec, cfg)}:${this._getRuntimeChannelExprHash(spec, this[spec.exprField])}`
+          : '';
+      const need = avail
+        ? !entry[spec.scriptField] || !entry[spec.mountedField] || Boolean(expSig && (entry[spec.sigField] !== expSig || entry[spec.scriptSigField] !== expSig))
+        : Boolean(entry[spec.scriptField] || entry[spec.mountedField]);
+      if (need) {
+        runtimeChannelsNeedSync = true;
+        break;
+      }
+    }
+
     const hashMatches = !this.codeHash || entry.lastVerifiedCodeHash === this.codeHash;
     if (
       !force &&
@@ -93,6 +111,7 @@ export const sessionHealMethods = {
       !periodicPickerNeedsSync &&
       !mascotNeedsSync &&
       !homeStudioNeedsSync &&
+      !runtimeChannelsNeedSync &&
       !entry.verifyDirty &&
       hashMatches &&
       entry.lastVerifyAt > 0 &&
@@ -252,6 +271,23 @@ export const sessionHealMethods = {
         (!probe.hasHomeStudio || homeStudioHashMismatch || homeStudioScriptStale);
       const needsHomeStudioCleanup = !homeStudioEnabled && Boolean(probe.hasHomeStudio || entry.homeStudioScriptId || entry.homeStudioMounted);
 
+      const runtimeChannels = RUNTIME_CHANNEL_SPECS.map((spec) => {
+        const enabled = this._isRuntimeChannelEnabled(spec, cfg);
+        const hasOnDisk = enabled && this._hasRuntimeChannelFile(spec);
+        if (hasOnDisk && !this[spec.exprField] && typeof this.cdp?.[spec.cdpBuild] === 'function') {
+          this._buildRuntimeChannelExpr(spec, cfg);
+        }
+        const expHash = hasOnDisk && this[spec.exprField] ? this._getRuntimeChannelExprHash(spec, this[spec.exprField]) : '';
+        const expSig = hasOnDisk && this[spec.exprField] ? `${this._getRuntimeChannelCfgSig(spec, cfg)}:${expHash}` : '';
+        const hashMismatch = Boolean(expHash && probe[spec.probeHashField] !== expHash);
+        const scriptStale = Boolean(!entry[spec.scriptField] || (expSig && entry[spec.scriptSigField] !== expSig));
+        const needsHeal =
+          hasOnDisk && !isChannelInCooldown(entry, spec.id, now) &&
+          (!probe[spec.probeHasField] || hashMismatch || scriptStale);
+        const needsCleanup = !enabled && Boolean(probe[spec.probeHasField] || entry[spec.scriptField] || entry[spec.mountedField]);
+        return { spec, enabled, hasOnDisk, needsHeal, needsCleanup };
+      });
+
       const shouldCheckSettingsHash = Boolean(probe.needsSettingsChannel || probe.hasSettingsPanel || probe.settingsCodeHash);
       const expectedSettingsHash = shouldCheckSettingsHash ? this._getSettingsExprHash(this._ensureSettingsExpr()) : '';
       const settingsHashMismatch = Boolean(expectedSettingsHash && (probe.hasSettingsPanel || probe.settingsCodeHash) && probe.settingsCodeHash !== expectedSettingsHash);
@@ -269,6 +305,7 @@ export const sessionHealMethods = {
         periodicPickerEnabled, needsPeriodicPickerHeal, needsPeriodicPickerCleanup,
         mascotEnabled, needsMascotHeal, needsMascotCleanup,
         homeStudioEnabled, hasHomeStudioOnDisk, needsHomeStudioHeal, needsHomeStudioCleanup,
+        runtimeChannels,
         needsSettingsHeal,
       };
 

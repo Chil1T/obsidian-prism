@@ -1,5 +1,14 @@
 // Inject Obsidian Prism into Antigravity windows over CDP (--watch for daemon hot-reload).
 const fs = require('fs'), path = require('path');
+const cdpMod = require('./cdp');
+const {
+  FALLBACK_INLINE_DIFF_REMOVE_EXPRESSION,
+  buildRuntimeChannelBundleMap,
+  applyRuntimeChannelsOnce,
+  evalRuntimeChannelsOnEntry,
+  syncRuntimeChannelScriptsOnEntry,
+  clearAllEntryScripts,
+} = require('./src/channels/inject-runtime-channels.cjs');
 const {
   PORT_FILE,
   PID_FILE,
@@ -40,12 +49,10 @@ const {
   shouldEnableMascot,
   buildMascotChannelExpression,
   MASCOT_REMOVE_EXPRESSION,
-} = require('./cdp');
+} = cdpMod;
 
 const FALLBACK_THOUGHT_REMOVE_EXPRESSION =
   "(() => { try { window.__agPrismThought?.destroy?.(); } catch {} try { document.querySelectorAll('[data-testid=\"prism-thought-ai-config\"],[data-testid=\"prism-thought-general-config\"]').forEach((n) => n.remove()); } catch {} try { delete window.__agPrismThought; } catch {} try { delete globalThis.__agPrismThought; } catch {} try { delete window.__agPrismThoughtSettingsUi; } catch {} try { delete globalThis.__agPrismThoughtSettingsUi; } catch {} return { ok: true, status: 'off' }; })()";
-const FALLBACK_INLINE_DIFF_REMOVE_EXPRESSION =
-  "(() => { try { window.__agPrismInlineDiff?.destroy?.(); } catch {} try { document.getElementById('ag-prism-inline-diff-css')?.remove(); } catch {} try { document.querySelectorAll('.ag-cs-inline-diff-box, .ag-cs-diff-ctx-menu').forEach((n) => n.remove()); } catch {} try { delete window.__agPrismInlineDiff; } catch {} try { delete globalThis.__agPrismInlineDiff; } catch {} try { delete window.__agPrismInlineDiffFactory; } catch {} try { delete globalThis.__agPrismInlineDiffFactory; } catch {} try { delete window.__agPrismInlineDiffResolve; } catch {} return { ok: true, status: 'off' }; })()";
 const INLINE_DIFF_MAX_PAYLOAD_BYTES = 16384;
 const INLINE_DIFF_MAX_URI_LENGTH = 2048;
 
@@ -155,9 +162,11 @@ function createFastConfigRefreshBroadcaster({
   getSidebarServiceReady = () => false,
   sidebarBinding = SIDEBAR_BINDING,
   ensureSidebarBinding = async () => false,
+  getRuntimeChannelCdp = undefined,
   onExpressionsUpdated = null,
 } = {}) {
   const useDefaultMascot = buildInj === buildInjectExpression && shouldMascot === undefined && buildMascot === undefined;
+  const resolveRuntimeCdp = typeof getRuntimeChannelCdp === 'function' ? getRuntimeChannelCdp : (buildInj === buildInjectExpression ? () => cdpMod : null);
   const resolveShouldMascot =
     typeof shouldMascot === 'function'
       ? shouldMascot
@@ -220,6 +229,8 @@ function createFastConfigRefreshBroadcaster({
       mascotEnabled && typeof resolveBuildMascot === 'function'
         ? resolveBuildMascot(cfgNow)
         : '';
+    const rtCdp = typeof resolveRuntimeCdp === 'function' ? resolveRuntimeCdp() : null;
+    const runtimeChannelItems = rtCdp ? buildRuntimeChannelBundleMap(rtCdp, cfgNow, PERIODIC_PICKER_CACHE_OPTS) : [];
     if (typeof onExpressionsUpdated === 'function') {
       onExpressionsUpdated({ expr, omniExpr, sidebarExpr, hostI18nExpr, thoughtExpr, inlineDiffExpr, periodicPickerExpr, mascotExpr });
     }
@@ -295,6 +306,7 @@ function createFastConfigRefreshBroadcaster({
                 if (mascotRemoveExpression) await entry.session.evaluate(mascotRemoveExpression).catch(() => {});
                 entry.mascotMounted = false;
               }
+              if (runtimeChannelItems.length) await evalRuntimeChannelsOnEntry(entry, runtimeChannelItems);
             }
           } else {
             const reRes = await entry.session.evaluate(expr).catch(() => null);
@@ -359,6 +371,7 @@ function createFastConfigRefreshBroadcaster({
               if (mascotRemoveExpression) await entry.session.evaluate(mascotRemoveExpression).catch(() => {});
               entry.mascotMounted = false;
             }
+            if (runtimeChannelItems.length) await evalRuntimeChannelsOnEntry(entry, runtimeChannelItems);
           }
         }
         if (entry.scriptId) {
@@ -423,6 +436,7 @@ function createFastConfigRefreshBroadcaster({
           const mAdd = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source: mascotExpr }).catch(() => null);
           entry.mascotScriptId = mAdd && mAdd.identifier ? mAdd.identifier : null;
         }
+        if (runtimeChannelItems.length) await syncRuntimeChannelScriptsOnEntry(entry, runtimeChannelItems);
       } catch {}
     }
   };
@@ -485,6 +499,7 @@ async function injectOnce() {
     try {
       session = await CdpSession.connect(page.webSocketDebuggerUrl);
       const res = await session.evaluate(expr);
+      await applyRuntimeChannelsOnce(session, cdpMod, cfgNow, PERIODIC_PICKER_CACHE_OPTS);
       if (settingsExpr) {
         await session.evaluate(settingsExpr).catch(() => {});
       }
@@ -621,6 +636,7 @@ async function watch() {
   }
 
   const initCfg = readConfig();
+  let activeRuntimeCdp = cdpMod;
   let expr = buildInjectExpression();
   let omniExpr =
     initCfg?.omniModule !== 'off' && typeof buildOmniClientExpression === 'function'
@@ -727,6 +743,7 @@ async function watch() {
     getSidebarServiceReady: () => Boolean(sidebarService),
     sidebarBinding: SIDEBAR_BINDING,
     ensureSidebarBinding,
+    getRuntimeChannelCdp: () => activeRuntimeCdp,
     onExpressionsUpdated: (next) => {
       expr = next.expr;
       omniExpr = next.omniExpr;
@@ -752,14 +769,7 @@ async function watch() {
     const res = await entry.session.evaluate(expr);
     entry.sidebarHostVerified = Boolean(res && res.status === 'ok');
     if (res && res.status === 'skipped-non-host') {
-      for (const key of ['scriptId', 'omniScriptId', 'sidebarScriptId', 'hostI18nScriptId', 'thoughtScriptId', 'inlineDiffScriptId', 'periodicPickerScriptId', 'mascotScriptId']) {
-        if (entry[key]) {
-          await entry.session
-            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry[key] })
-            .catch(() => {});
-          entry[key] = null;
-        }
-      }
+      await clearAllEntryScripts(entry);
       if (entry.sidebarBindingAdded && SIDEBAR_BINDING) {
         await entry.session.send('Runtime.removeBinding', { name: SIDEBAR_BINDING }).catch(() => {});
         entry.sidebarBindingAdded = false;
@@ -939,6 +949,9 @@ async function watch() {
       await entry.session.evaluate(MASCOT_REMOVE_EXPRESSION).catch(() => {});
       entry.mascotMounted = false;
     }
+    const rtItems = buildRuntimeChannelBundleMap(activeRuntimeCdp, cfgNow, PERIODIC_PICKER_CACHE_OPTS);
+    await syncRuntimeChannelScriptsOnEntry(entry, rtItems);
+    await evalRuntimeChannelsOnEntry(entry, rtItems);
     return res;
   }
 
@@ -1205,16 +1218,7 @@ async function watch() {
     } catch (err) {
       const entry = attached.get(page.id);
       if (entry) {
-        try {
-          if (entry.scriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId });
-          if (entry.omniScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.omniScriptId });
-          if (entry.sidebarScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.sidebarScriptId });
-          if (entry.hostI18nScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.hostI18nScriptId });
-          if (entry.thoughtScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.thoughtScriptId });
-          if (entry.inlineDiffScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.inlineDiffScriptId });
-          if (entry.periodicPickerScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.periodicPickerScriptId });
-          if (entry.mascotScriptId) await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.mascotScriptId });
-        } catch {}
+        try { await clearAllEntryScripts(entry); } catch {}
         entry.session.close();
       }
       attached.delete(page.id);
@@ -1257,6 +1261,7 @@ async function watch() {
       try {
         delete require.cache[require.resolve('./cdp')];
         const freshCdp = require('./cdp');
+        activeRuntimeCdp = freshCdp;
         const freshCfg = typeof freshCdp.readConfig === 'function' ? freshCdp.readConfig() : readConfig();
         expr = freshCdp.buildInjectExpression();
         omniExpr =

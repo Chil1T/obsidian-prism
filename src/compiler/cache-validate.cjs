@@ -24,6 +24,10 @@ const CHANNEL_CACHE_NAMES = Object.freeze([
   'mascot',
   'suggester',
   'homeStudio',
+  'telemetry',
+  'effortSlider',
+  'workbenchEnhancer',
+  'contextMenu',
 ]);
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const CODE_HASH_RE = /^[0-9a-z]{1,16}$/;
@@ -155,7 +159,16 @@ function isValidChannelCacheEntry(channelName, entry) {
     if (computeHash(`${entry.minClient}\n${entry.minSettingsUi}`) !== entry.codeHash) return false;
     return sha256Text(`${entry.codeHash}\0${entry.minClient}\0${entry.minSettingsUi}`) === entry.payloadSha256;
   }
-  if (channelName === 'periodicPicker' || channelName === 'settings' || channelName === 'mascot' || channelName === 'homeStudio') {
+  if (
+    channelName === 'periodicPicker' ||
+    channelName === 'settings' ||
+    channelName === 'mascot' ||
+    channelName === 'homeStudio' ||
+    channelName === 'telemetry' ||
+    channelName === 'effortSlider' ||
+    channelName === 'workbenchEnhancer' ||
+    channelName === 'contextMenu'
+  ) {
     if (!hasOwn('minRuntime') || typeof entry.minRuntime !== 'string' || entry.minRuntime.length === 0) return false;
     if (Buffer.byteLength(entry.minRuntime, 'utf8') > CHANNEL_CACHE_MAX_PAYLOAD_BYTES) return false;
     if (computeHash(entry.minRuntime) !== entry.codeHash) return false;

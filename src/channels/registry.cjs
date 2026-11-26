@@ -125,6 +125,45 @@ const CHANNEL_STATIC_SPECS = Object.freeze([
     files: Object.freeze(['home-studio-panel.js']),
     budgetBytes: 56 * 1024,
   }),
+  Object.freeze({
+    id: 'telemetry',
+    channelNumber: 13,
+    label: 'Telemetry Bar & Physical Vial',
+    configKeys: Object.freeze(['telemetryModule', 'language']),
+    files: Object.freeze([
+      'vial-core.js',
+      'pulse-vial-bridge.js',
+      'vendor/pulse-dashboard/inline-fallback.js',
+    ]),
+    budgetBytes: 128 * 1024,
+  }),
+  Object.freeze({
+    id: 'effortSlider',
+    channelNumber: 14,
+    label: 'Reasoning Effort Slider',
+    configKeys: Object.freeze(['effortSliderModule', 'effortMemory']),
+    files: Object.freeze([
+      'vendor/effort-slider/upstream-client.js',
+      'vendor/effort-slider/slider-coexist.js',
+    ]),
+    budgetBytes: 96 * 1024,
+  }),
+  Object.freeze({
+    id: 'workbenchEnhancer',
+    channelNumber: 15,
+    label: 'Workbench Deep-Surface Enhancer',
+    configKeys: Object.freeze(['sidebarNavFold', 'scrollBottomMotion', 'sidebarRestyle', 'motionLevel']),
+    files: Object.freeze(['host-workbench-enhancer.js']),
+    budgetBytes: 56 * 1024,
+  }),
+  Object.freeze({
+    id: 'contextMenu',
+    channelNumber: 16,
+    label: 'Context Menu & /btw Side Chat',
+    configKeys: Object.freeze(['contextMenu', 'language', 'motionLevel']),
+    files: Object.freeze(['context-menu-btw.js']),
+    budgetBytes: 28 * 1024,
+  }),
 ]);
 
 function createChannelRegistry({ builders, readConfig }) {
@@ -181,6 +220,10 @@ function createChannelRegistry({ builders, readConfig }) {
     bindEntry('mascot', builders.shouldEnableMascot, builders.buildMascotChannelExpression),
     bindEntry('suggester', alwaysEnabled, builders.buildSuggesterExpression),
     bindEntry('homeStudio', builders.shouldEnableHomeStudio, builders.buildHomeStudioChannelExpression),
+    bindEntry('telemetry', builders.shouldEnableTelemetry, builders.buildTelemetryChannelExpression),
+    bindEntry('effortSlider', builders.shouldEnableEffortSlider, builders.buildEffortSliderChannelExpression),
+    bindEntry('workbenchEnhancer', builders.shouldEnableWorkbenchEnhancer, builders.buildWorkbenchEnhancerChannelExpression),
+    bindEntry('contextMenu', builders.shouldEnableContextMenu, builders.buildContextMenuChannelExpression),
   ]);
 
   const registryById = new Map(CHANNEL_REGISTRY.map((ch) => [ch.id, ch]));

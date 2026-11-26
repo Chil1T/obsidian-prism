@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url);
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
 const cdp = require(path.join(ROOT, 'cdp.js'));
 
-const CH1_HARD_LIMIT = 549500;
+const CH1_HARD_LIMIT = 390000;
 const BRIDGE_HARD_LIMIT = 31000;
 const CONFIG_REFRESH_HARD_LIMIT = 4096;
 const TARGET_LOCALES = ['auto', 'zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'fr', 'de'];
@@ -46,7 +46,7 @@ function listTrackedFiles() {
   }
 }
 
-test('Law 4: Channel 1 (auto + 8 locales) < 549,500 B, pulse-vial-bridge.js < 31,000 B, incremental configRefresh < 4,096 B', () => {
+test('Law 4: Channel 1 (auto + 8 locales) < 390,000 B, pulse-vial-bridge.js < 31,000 B, incremental configRefresh < 4,096 B', () => {
   const summary = [];
   for (const locale of TARGET_LOCALES) {
     const expr = cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, language: locale });
@@ -78,7 +78,7 @@ test('Law 4: Channel 1 (auto + 8 locales) < 549,500 B, pulse-vial-bridge.js < 31
 });
 
 test('Law 4+: Declarative CHANNEL_REGISTRY multi-channel payloads stay within per-channel budgets', () => {
-  assert.ok(Array.isArray(cdp.CHANNEL_REGISTRY) && cdp.CHANNEL_REGISTRY.length >= 12, 'CHANNEL_REGISTRY must cover all 12 delayed/on-demand channels');
+  assert.ok(Array.isArray(cdp.CHANNEL_REGISTRY) && cdp.CHANNEL_REGISTRY.length >= 16, 'CHANNEL_REGISTRY must cover all 16 delayed/on-demand channels');
   const seenIds = new Set();
   for (const ch of cdp.CHANNEL_REGISTRY) {
     assert.equal(typeof ch.id, 'string');
@@ -102,6 +102,12 @@ test('Law 4+: Declarative CHANNEL_REGISTRY multi-channel payloads stay within pe
     periodicModelPicker: 'on',
     mascot: 'crab',
     homeLayout: 'studio',
+    telemetryModule: 'auto',
+    effortSliderModule: 'on',
+    contextMenu: true,
+    sidebarNavFold: true,
+    scrollBottomMotion: 'on',
+    sidebarRestyle: true,
   };
   const report = cdp.getChannelBudgetReport(allEnabledCfg, { noDiskCache: true });
   assert.equal(report.ok, true, `Over-budget channels: ${report.overBudgetChannels.join(', ')}`);
@@ -114,6 +120,28 @@ test('Law 4+: Declarative CHANNEL_REGISTRY multi-channel payloads stay within pe
       `Channel ${ch.id} payload ${ch.bytes} B exceeds budgetBytes ${ch.budgetBytes} B`
     );
     lines.push(`${ch.id}=${ch.bytes}B/${ch.budgetBytes}B`);
+  }
+
+  // 4 条 Phase 3B 下沉通道在关闭态必须 0 编译 / 0 注入（0 B）
+  const offloadedDisabledCfg = {
+    ...cdp.DEFAULT_CONFIG,
+    telemetryModule: 'off',
+    effortSliderModule: 'off',
+    sidebarNavFold: 'off',
+    scrollBottomMotion: 'instant',
+    sidebarRestyle: false,
+    motionLevel: 'off',
+    contextMenu: false,
+  };
+  const offReport = cdp.getChannelBudgetReport(offloadedDisabledCfg, { noDiskCache: true });
+  for (const id of ['telemetry', 'effortSlider', 'workbenchEnhancer', 'contextMenu']) {
+    const ch = cdp.findChannel(id);
+    assert.ok(ch, `Offloaded channel ${id} must be registered`);
+    assert.equal(ch.shouldEnable(offloadedDisabledCfg), false, `${id} shouldEnable must be false when gated off`);
+    assert.equal(ch.build(offloadedDisabledCfg, { noDiskCache: true }), '', `${id} build must return empty string when gated off`);
+    const row = offReport.channels.find((c) => c.id === id);
+    assert.equal(row.enabled, false);
+    assert.equal(row.bytes, 0);
   }
   console.log(`[bundle-budget] Channels (${report.channels.length}): ${lines.join(', ')}`);
 });

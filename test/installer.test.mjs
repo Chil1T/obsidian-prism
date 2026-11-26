@@ -436,7 +436,7 @@ test('installer manifest validators match inject.js, cdp.js, and config.example.
   assert.equal(exampleCfg.codeLigatures, false);
   assert.equal(exampleCfg.ambientIntensity, '100');
   assert.equal(exampleCfg.thoughtView, 'immersive');
-  assert.ok(cdp.RUNTIME_PARTS.includes('host-workbench-enhancer.js'));
+  assert.ok(cdp.DEFERRED_ROOT_MODULES.includes('host-workbench-enhancer.js'));
   assert.ok(cdp.SYNC_ROOT_FILES.includes('host-workbench-enhancer.js'));
 });
 

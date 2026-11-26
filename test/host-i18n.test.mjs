@@ -1173,7 +1173,7 @@ test('[PR #50] Windows UI Display Language overrides Intl regional format, prese
               href: 'vscode-file://vscode-app/workbench.html',
             };
           }
-          if (expr.includes('skippedByLiveCfg')) {
+          if (expr === daemon.hostI18nExpr) {
             hostI18nEvalCount += 1;
             return { ok: true, status: 'off', skippedByLiveCfg: true };
           }

@@ -19,9 +19,17 @@ const cdp = require(path.join(ROOT_DIR, 'cdp.js'));
 
 const VALIDATORS = { ...cdp.VALIDATORS };
 
-function getEffectiveRuntimeParts() {
-  return [...cdp.RUNTIME_PARTS];
-}
+// Ch13-Ch16 已下沉至 Node 延迟通道；保持 manifest.parts 与 cdp.RUNTIME_PARTS 1:1 对齐确保 C#/Swift 与 Node codeHash 一致，
+// 同时把 7 个下沉通道源文件一并打包进安装顶层目录与 native-plugin/。
+const OFFLOADED_RUNTIME_TOP_FILES = [
+  'vial-core.js',
+  'pulse-vial-bridge.js',
+  'vendor/pulse-dashboard/inline-fallback.js',
+  'vendor/effort-slider/upstream-client.js',
+  'vendor/effort-slider/slider-coexist.js',
+  'host-workbench-enhancer.js',
+  'context-menu-btw.js',
+];
 
 function createManifest() {
   return {
@@ -32,7 +40,7 @@ function createManifest() {
     inlineDiffBinding: cdp.INLINE_DIFF_BINDING,
     wallpaperBinding: cdp.WALLPAPER_BINDING,
     suggesterBinding: cdp.SUGGESTER_BINDING,
-    parts: getEffectiveRuntimeParts(),
+    parts: [...cdp.RUNTIME_PARTS],
     defaultConfig: cdp.DEFAULT_CONFIG,
     validators: VALIDATORS,
     removeExpression: cdp.REMOVE_EXPRESSION,
@@ -231,6 +239,21 @@ function collectOptionalSuggesterTopEntries() {
   return entries;
 }
 
+function collectOptionalOffloadedRuntimeTopEntries() {
+  const entries = [];
+  for (const rel of OFFLOADED_RUNTIME_TOP_FILES) {
+    const abs = path.join(ROOT_DIR, ...rel.split('/'));
+    if (!fs.existsSync(abs)) continue;
+    try {
+      entries.push({
+        name: rel,
+        data: Buffer.from(cdp.minifyJs(fs.readFileSync(abs, 'utf8')), 'utf8'),
+      });
+    } catch {}
+  }
+  return entries;
+}
+
 function collectOptionalOmniTopEntries() {
   const entries = [];
   const omniClientRel = 'vendor/omni-viewer/omni-client.js';
@@ -248,6 +271,7 @@ function collectOptionalOmniTopEntries() {
   entries.push(...collectOptionalInlineDiffTopEntries());
   entries.push(...collectOptionalWallpaperTopEntries());
   entries.push(...collectOptionalSuggesterTopEntries());
+  entries.push(...collectOptionalOffloadedRuntimeTopEntries());
   return entries;
 }
 
