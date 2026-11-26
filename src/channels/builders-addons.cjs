@@ -26,29 +26,38 @@ function createAddonChannelBuilders({ rootDir, readConfig, bundleCache }) {
   }
 
   function readCompiledThoughtAssets(opts = null) {
+    const verbsPath = path.join(rootDir, 'vendor', 'thought-translator', 'tool-step-verbs.js');
     const clientPath = path.join(rootDir, 'vendor', 'thought-translator', 'thought-client.js');
     const settingsUiPath = path.join(rootDir, 'vendor', 'thought-translator', 'thought-settings-ui.js');
     if (!fs.existsSync(clientPath) || !fs.existsSync(settingsUiPath)) {
       return { sig: '', minClient: '', minSettingsUi: '', codeHash: '' };
     }
-    const sig = `${getFileSig(clientPath)}|${getFileSig(settingsUiPath)}`;
+    const hasVerbs = fs.existsSync(verbsPath);
+    const sig = `${hasVerbs ? getFileSig(verbsPath) : '0'}|${getFileSig(clientPath)}|${getFileSig(settingsUiPath)}`;
     const cachePath = resolveBundleCachePathOption(opts);
     const curMem = bundleCache.getChannelMemCache('thought');
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
+    const verbsBuf = hasVerbs ? fs.readFileSync(verbsPath) : null;
     const clientBuf = fs.readFileSync(clientPath);
     const settingsBuf = fs.readFileSync(settingsUiPath);
+    const fileEntries = [];
+    if (verbsBuf) fileEntries.push({ rel: 'vendor/thought-translator/tool-step-verbs.js', content: verbsBuf });
+    fileEntries.push(
+      { rel: 'vendor/thought-translator/thought-client.js', content: clientBuf },
+      { rel: 'vendor/thought-translator/thought-settings-ui.js', content: settingsBuf }
+    );
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'thought',
       sig,
-      fileEntries: [
-        { rel: 'vendor/thought-translator/thought-client.js', content: clientBuf },
-        { rel: 'vendor/thought-translator/thought-settings-ui.js', content: settingsBuf },
-      ],
+      fileEntries,
       opts,
       compileFn: () => {
-        const minClient = minifySingleSource(clientBuf.toString('utf8'));
+        const minClientParts = [];
+        if (verbsBuf) minClientParts.push(minifySingleSource(verbsBuf.toString('utf8')));
+        minClientParts.push(minifySingleSource(clientBuf.toString('utf8')));
+        const minClient = minClientParts.join(';\n');
         const minSettingsUi = minifySingleSource(settingsBuf.toString('utf8'));
         const codeHash = computeHash(`${minClient}\n${minSettingsUi}`);
         return { minClient, minSettingsUi, codeHash };
@@ -104,6 +113,8 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       try { document.querySelectorAll?.('[data-testid="prism-thought-ai-config"], [data-testid="prism-thought-general-config"]')?.forEach?.((el) => el.remove()); } catch {}
       try { delete window.__agPrismThought; } catch {}
       try { delete globalThis.__agPrismThought; } catch {}
+      try { delete window.__agPrismToolStepVerbs; } catch {}
+      try { delete globalThis.__agPrismToolStepVerbs; } catch {}
       try { delete window.__agPrismThoughtSettingsUi; } catch {}
       try { delete globalThis.__agPrismThoughtSettingsUi; } catch {}
       try {

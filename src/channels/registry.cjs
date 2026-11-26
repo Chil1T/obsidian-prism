@@ -145,7 +145,11 @@ const CHANNEL_STATIC_SPECS = Object.freeze([
   defineSpec({
     id: 'thought', cacheFormat: 'clientAndUi', channelNumber: 5, order: 50, tier: 'addon', topLevelPack: true,
     label: 'Thought Stream Translator', configKeys: ['thoughtTranslate', 'thoughtTrigger', 'thoughtView'],
-    files: ['vendor/thought-translator/thought-client.js', 'vendor/thought-translator/thought-settings-ui.js'],
+    files: [
+      'vendor/thought-translator/tool-step-verbs.js',
+      'vendor/thought-translator/thought-client.js',
+      'vendor/thought-translator/thought-settings-ui.js',
+    ],
     mountGlobal: '__agPrismThought', bindingConst: 'THOUGHT_BINDING',
     probeHashKey: '', probeExtraKeys: ['hasThoughtSettingsUi'], hashMode: 'sha256', budgetBytes: 160 * 1024,
     probeLines: [

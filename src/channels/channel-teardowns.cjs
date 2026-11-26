@@ -174,6 +174,8 @@ const THOUGHT_REMOVE_EXPRESSION = `(() => {
   try { document.querySelectorAll?.('[data-testid="prism-thought-ai-config"], [data-testid="prism-thought-general-config"]')?.forEach?.((el) => el.remove()); } catch {}
   try { delete window.__agPrismThought; } catch {}
   try { delete globalThis.__agPrismThought; } catch {}
+  try { delete window.__agPrismToolStepVerbs; } catch {}
+  try { delete globalThis.__agPrismToolStepVerbs; } catch {}
   try { delete window.__agPrismThoughtSettingsUi; } catch {}
   try { delete globalThis.__agPrismThoughtSettingsUi; } catch {}
   try {

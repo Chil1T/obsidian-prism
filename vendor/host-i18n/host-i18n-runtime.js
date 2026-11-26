@@ -123,7 +123,6 @@
     'user-message-content': 1,
     'user-input-step': 1,
     'planner-response-text': 1,
-    'agent-response': 1,
     'artifact-view': 1,
     'side-question-panel': 1,
     'side-question-conversation': 1,
@@ -162,27 +161,15 @@
 
   var EXTERNAL_GLOBAL_SIGNATURE_GROUPS = [
     { provider: 'antigravity-cn-community', keys: ['__agySidebarDragFixInstalled'] },
-    {
-      provider: 'yuexps/Antigravity-Hans',
-      keys: ['__antigravityZhPatchInstalled', '__antigravityZhSetLang', '__antigravityZhPatchObserver'],
-    },
-    {
-      provider: 'yiheng8023',
-      keys: ['__AGY_I18N_INITIALIZED__', '__AGY_I18N_DATA__', '__AGY_CREATE_ENGINE__', '__AGY_SWARM_I18N__', '__AGY_I18N__'],
-    },
+    { provider: 'yuexps/Antigravity-Hans', keys: ['__antigravityZhPatchInstalled', '__antigravityZhSetLang', '__antigravityZhPatchObserver'] },
+    { provider: 'yiheng8023', keys: ['__AGY_I18N_INITIALIZED__', '__AGY_I18N_DATA__', '__AGY_CREATE_ENGINE__', '__AGY_SWARM_I18N__', '__AGY_I18N__'] },
     { provider: '3169657175', keys: ['__agyI18n', '__agyTranslateEnhancementText'] },
-    {
-      provider: 'renkeshui',
-      keys: ['__antigravity_i18n_runner_active', '__ANTIGRAVITY_I18N_DATA__', '__ANTIGRAVITY_REVERSE_MAP__'],
-    },
+    { provider: 'renkeshui', keys: ['__antigravity_i18n_runner_active', '__ANTIGRAVITY_I18N_DATA__', '__ANTIGRAVITY_REVERSE_MAP__'] },
     { provider: 'nianshou555qiansui', keys: ['__ag_hanhua_engine__'] },
     { provider: 'Ace2025001', keys: ['__AGY_ZHCN__', '__AGY_ZHCN_LOOKUP__'] },
     { provider: 'Zero-Touch', keys: ['__antigravityZh', '__antigravityZhDict'] },
     { provider: 'yunjuanyunshu', keys: ['__AG_ZH__'] },
-    {
-      provider: 'generic-external',
-      keys: ['__ANTIGRAVITY_CN__', '__ANTIGRAVITY_I18N__', '__AG_I18N__', '__AG_CN_PATCH__', '__AGY_CN__', '__I18N_PATCHED__'],
-    },
+    { provider: 'generic-external', keys: ['__ANTIGRAVITY_CN__', '__ANTIGRAVITY_I18N__', '__AG_I18N__', '__AG_CN_PATCH__', '__AGY_CN__', '__I18N_PATCHED__'] },
   ];
 
   var KNOWN_EXTERNAL_ATTRS = ['data-agy-i18n', 'data-ag-cn', 'data-i18n-patched', 'data-translated'];
@@ -340,7 +327,7 @@
   function isConversationStreamSelf(el) {
     if (!el || el.nodeType !== 1) return false;
     var tid = getAttr(el, 'data-testid');
-    if (tid === 'conversation-view' || tid === 'agent-input-box') return true;
+    if (tid === 'conversation-view' || tid === 'agent-input-box' || tid === 'agent-response') return true;
     if (hasAttr(el, 'data-cascade-id')) return true;
     return false;
   }
@@ -355,7 +342,7 @@
       return true;
     }
     var tid = getAttr(el, 'data-testid');
-    if (tid === 'permissions-selector-trigger' || tid === 'plan-command-fyi-alert') return true;
+    if (tid === 'permissions-selector-trigger' || tid === 'plan-command-fyi-alert' || tid === 'changed-files-card-header') return true;
     return false;
   }
 

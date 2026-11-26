@@ -1,10 +1,4 @@
 // Obsidian Prism — Unified Thought Translator & Polisher Client Runtime
-// Incorporates proven anti-jank & anti-retranslate safeguards + v1.0.1 workbench capabilities:
-// 1. Rendered-signature idempotence (`data-op-zh-sig` + `data-raw-zh`) -> 0 redundant DOM rebuilds on cache hit;
-// 2. Global `inflightBySig` flight pool across React panel remounts + pre-commit source-hash verification -> 0 duplicate requests & 0 misplacement;
-// 3. Monotonic `minHeight` lock during streaming + `scrollTop` preservation + non-regressive pending state -> 0 height collapse jank;
-// 4. Safe `file://` source path & `#L` line-anchor pill restoration delegating clicks to host native anchors (strict `file://` whitelist, 0 XSS);
-// 5. Explicit `machine-fallback` badge, viewport-first priority scheduling + cancel-pending, per-block retry/retranslate, bilingual stacked view & dual cache management.
 
 (function (root) {
   'use strict';
@@ -3197,7 +3191,7 @@
   function isExcludedToolAncestor(el, thoughtPanelSet) {
     if (!el || el.nodeType !== 1) return true;
     if (thoughtPanelSet && thoughtPanelSet.has(el)) return true;
-    if (isOverlayOrIgnoredElement(el)) return true;
+    if (isOverlayOrIgnoredElement(el) || W.__agPrismToolStepVerbs?.isProseBoundaryEl?.(el)) return true;
     const tag = el.tagName ? String(el.tagName).toUpperCase() : '';
     if (TOOL_SKIP_TAGS.has(tag)) return true;
     const tid = ga(el, 'data-testid') || '';
@@ -3215,30 +3209,34 @@
     return `${lead}${translatedStr}${trail}`;
   }
 
-  function collectToolSummaryTextNodes(rootNode, outList, visitedNodes, thoughtPanelSet) {
-    if (!rootNode || outList.length >= 24) return;
+  function collectToolSummaryTextNodes(rootNode, outList, visitedNodes, thoughtPanelSet, counts) {
+    const c = counts || { ai: 0, st: 0 };
+    if (!rootNode || (c.ai >= 24 && c.st >= 200)) return;
     const nt = rootNode.nodeType;
     if (nt === 3) {
       if (visitedNodes.has(rootNode)) return;
       visitedNodes.add(rootNode);
       const val = getTnStr(rootNode);
+      const activeLang = resolveActiveLang();
       const prevRec = toolSummaryNodeMap.get(rootNode);
-      if (prevRec && prevRec.trans === val && prevRec.lang === resolveActiveLang() && prevRec.mode === currentMode) {
-        return;
-      }
+      if (prevRec && prevRec.trans === val && prevRec.lang === activeLang && prevRec.mode === currentMode) return;
       if (val.length > 1024) return;
       const trimmed = trm(val);
-      if (!trimmed || trimmed.length < 4 || trimmed.length > 280) return;
-      if (!isToolSummaryCandidate(trimmed, resolveActiveLang())) return;
+      if (!trimmed) return;
+      const staticTr = W.__agPrismToolStepVerbs?.lookupStaticToolVerb?.(trimmed, activeLang) || null;
+      if (staticTr) {
+        if (c.st < 200) { c.st += 1; outList.push({ tn: rootNode, el: parEl(rootNode), raw: val, trimmed, staticTr }); }
+        return;
+      }
+      if (c.ai >= 24 || trimmed.length < 4 || trimmed.length > 280 || !isToolSummaryCandidate(trimmed, activeLang)) return;
+      c.ai += 1;
       outList.push({ tn: rootNode, el: parEl(rootNode), raw: val, trimmed });
       return;
     }
     if (nt !== 1 || isExcludedToolAncestor(rootNode, thoughtPanelSet)) return;
     const chs = rootNode[K_CN];
     if (!chs || !chs.length) return;
-    for (let i = 0; i < chs.length && outList.length < 24; i++) {
-      collectToolSummaryTextNodes(chs[i], outList, visitedNodes, thoughtPanelSet);
-    }
+    for (let i = 0; i < chs.length && (c.ai < 24 || c.st < 200); i++) collectToolSummaryTextNodes(chs[i], outList, visitedNodes, thoughtPanelSet, c);
   }
 
   function applyToolSummaryText(item, translatedStr, activeLang, mode) {
@@ -3303,13 +3301,14 @@
     };
 
     const groupTrigs = scope.querySelectorAll ? scope.querySelectorAll(SEL_TOOL_TRIGGERS) : [];
+    const findBody = W.__agPrismToolStepVerbs?.findToolCollapsibleBody;
     for (let i = 0; i < groupTrigs.length; i++) {
       const trig = groupTrigs[i];
-      if (!trig || ga(trig, A_EXP) !== 'true') continue;
-      const bodyDiv = nextSib(trig);
-      if (bodyDiv && String(bodyDiv.tagName || '').toUpperCase() === 'DIV') {
-        pushContainer(bodyDiv);
-      }
+      if (!trig) continue;
+      if (ga(trig, 'data-testid') === 'tool-group-collapsible') pushContainer(trig);
+      if (ga(trig, A_EXP) !== 'true') continue;
+      const bodyDiv = findBody ? findBody(trig) : nextSib(trig);
+      if (bodyDiv && (findBody || String(bodyDiv.tagName || '').toUpperCase() === 'DIV')) pushContainer(bodyDiv);
     }
 
     const rowEls = scope.querySelectorAll ? scope.querySelectorAll(SEL_TOOL_ROWS) : [];
@@ -3371,12 +3370,10 @@
 
       for (let i = 0; i < candidates.length; i++) {
         const cand = candidates[i];
+        if (cand.staticTr) { applyToolSummaryText(cand, cand.staticTr, activeLang, activeMode); continue; }
         const cacheKey = `${modePrefix}${cand.trimmed}`;
         const hit = toolSummaryCache.get(cacheKey);
-        if (hit) {
-          applyToolSummaryText(cand, hit, activeLang, activeMode);
-          continue;
-        }
+        if (hit) { applyToolSummaryText(cand, hit, activeLang, activeMode); continue; }
         const failUntil = toolSummaryFailedUntil.get(cacheKey);
         if (failUntil) {
           if (now < failUntil) continue;
