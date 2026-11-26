@@ -28,7 +28,21 @@ const PURGE_DATA_FILES = Object.freeze([
   'obsidian-prism-wallpaper.json',
   'obsidian-prism-suggester.json',
 ]);
-const DEFAULT_OBSOLETE_PATHS = Object.freeze([]);
+const DEFAULT_OBSOLETE_PATHS = Object.freeze([
+  // 历史已退役模块（10 项：原 Swarm 独立包与旧版壁纸 Studio/HUD/程序化脚本，仓内已清零）
+  'vendor/swarm-prism/index.js',
+  'vendor/swarm-prism/swarm-assets.js',
+  'vendor/swarm-prism/swarm-i18n.js',
+  'vendor/swarm-prism/swarm-prism.css',
+  'vendor/swarm-prism/swarm-runtime.js',
+  'vendor/wallpaper/studio-ui/index.html',
+  'vendor/wallpaper/studio-ui/studio.css',
+  'vendor/wallpaper/studio-ui/studio.js',
+  'vendor/wallpaper/wallpaper-hud.js',
+  'vendor/wallpaper/wallpaper-procedural.js',
+  // 已彻底退役的旧版 app.asar 补丁脚本
+  'tools/patch-asar.cjs',
+]);
 const ATOMIC_UPGRADE_RETRY_BACKOFFS_MS = Object.freeze([100, 250, 500]);
 
 const EXCLUDED_SYNC_PREFIXES = Object.freeze(['assets/screenshots']);

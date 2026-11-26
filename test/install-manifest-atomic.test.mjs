@@ -12,6 +12,7 @@ import {
   INSTALL_MANIFEST_LAYOUT_VERSION,
   PROTECTED_USER_PATHS,
   PURGE_DATA_FILES,
+  DEFAULT_OBSOLETE_PATHS,
   ATOMIC_UPGRADE_RETRY_BACKOFFS_MS,
   computeBufferSha256,
   computeFileSha256,
@@ -743,6 +744,109 @@ test('Production sync paths (repo-sync.cjs & tools/install-plugin.cjs) execute r
     assert.equal(fs.readFileSync(path.join(installTarget, 'custom.css'), 'utf8'), '/* install user css */\n');
     assert.equal(fs.readFileSync(path.join(installTarget, 'wallpapers', 'hero.webp'), 'utf8'), 'USER-HERO');
     assert.equal(typeof syncPluginDirWithManifest, 'function');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('DEFAULT_OBSOLETE_PATHS covers retired dead files safely and copyDirRecursiveSync executes atomic upgrade with rollback & user-data protection', () => {
+  const expectedRetired = [
+    'vendor/swarm-prism/index.js',
+    'vendor/swarm-prism/swarm-assets.js',
+    'vendor/swarm-prism/swarm-i18n.js',
+    'vendor/swarm-prism/swarm-prism.css',
+    'vendor/swarm-prism/swarm-runtime.js',
+    'vendor/wallpaper/studio-ui/index.html',
+    'vendor/wallpaper/studio-ui/studio.css',
+    'vendor/wallpaper/studio-ui/studio.js',
+    'vendor/wallpaper/wallpaper-hud.js',
+    'vendor/wallpaper/wallpaper-procedural.js',
+    'tools/patch-asar.cjs',
+  ];
+
+  for (const rel of expectedRetired) {
+    assert.ok(DEFAULT_OBSOLETE_PATHS.includes(rel), `DEFAULT_OBSOLETE_PATHS missing retired file: ${rel}`);
+    assert.equal(isSafeManagedRelPath(rel), true, `Retired obsolete path must be safe relative path: ${rel}`);
+    assert.equal(isProtectedUserPath(rel, PROTECTED_USER_PATHS), false, `Obsolete path must never target protected user path: ${rel}`);
+    assert.equal(fs.existsSync(path.join(ROOT, ...rel.split('/'))), false, `Obsolete path must not exist in active repository: ${rel}`);
+  }
+
+  // Active wallpaper runtime modules must never appear in DEFAULT_OBSOLETE_PATHS
+  for (const activeFile of [
+    'vendor/wallpaper/wallpaper-client.js',
+    'vendor/wallpaper/wallpaper-service.mjs',
+    'vendor/wallpaper/wallpaper-settings-ui.js',
+  ]) {
+    assert.equal(DEFAULT_OBSOLETE_PATHS.includes(activeFile), false, `Active runtime file must not be in DEFAULT_OBSOLETE_PATHS: ${activeFile}`);
+  }
+
+  const tmpDir = mkTmp('prism-copy-atomic-');
+  try {
+    const srcDir = path.join(tmpDir, 'src');
+    const dstDir = path.join(tmpDir, 'dst');
+    fs.mkdirSync(path.join(srcDir, 'vendor', 'wallpaper'), { recursive: true });
+    fs.mkdirSync(path.join(dstDir, 'vendor', 'swarm-prism'), { recursive: true });
+    fs.mkdirSync(path.join(dstDir, 'vendor', 'wallpaper', 'studio-ui'), { recursive: true });
+    fs.mkdirSync(path.join(dstDir, 'tools'), { recursive: true });
+    fs.mkdirSync(path.join(dstDir, 'wallpapers'), { recursive: true });
+
+    // Source files (including protected paths that must never overwrite user data)
+    fs.writeFileSync(path.join(srcDir, 'cdp.js'), '// v2 cdp\n', 'utf8');
+    fs.writeFileSync(path.join(srcDir, 'vendor', 'wallpaper', 'wallpaper-client.js'), '// v2 wp client\n', 'utf8');
+    fs.writeFileSync(path.join(srcDir, 'config.json'), '{"palette":"default-must-not-overwrite"}\n', 'utf8');
+    fs.writeFileSync(path.join(srcDir, 'custom.css'), '/* must not overwrite */\n', 'utf8');
+
+    // Existing destination: v1 managed files + user protected assets + all 11 retired dead files
+    fs.writeFileSync(path.join(dstDir, 'cdp.js'), '// v1 cdp\n', 'utf8');
+    fs.writeFileSync(path.join(dstDir, 'vendor', 'wallpaper', 'wallpaper-client.js'), '// v1 wp client\n', 'utf8');
+    fs.writeFileSync(path.join(dstDir, 'config.json'), '{"palette":"warm","keep":true}\n', 'utf8');
+    fs.writeFileSync(path.join(dstDir, 'custom.css'), '/* my user css */\n', 'utf8');
+    fs.writeFileSync(path.join(dstDir, 'wallpapers', 'my-bg.webp'), 'USER-WALLPAPER-MEDIA', 'utf8');
+    for (const rel of expectedRetired) {
+      const abs = path.join(dstDir, ...rel.split('/'));
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, `// dead ${rel}\n`, 'utf8');
+    }
+
+    // 1) Mid-commit failure triggers full atomic rollback (v1 files, user data, and dead files remain consistent; 0 temp dirs)
+    assert.throws(
+      () =>
+        installPluginMod.copyDirRecursiveSync(srcDir, dstDir, '', PROTECTED_USER_PATHS, {
+          _testHooks: {
+            beforeCommitFile(relPath) {
+              if (relPath === 'vendor/wallpaper/wallpaper-client.js') {
+                const err = new Error('Simulated copyDirRecursiveSync commit interruption');
+                err.code = 'EIO';
+                throw err;
+              }
+            },
+          },
+        }),
+      (err) => err && err.code === 'EIO' && err.rolledBack === true
+    );
+    assert.equal(fs.readFileSync(path.join(dstDir, 'cdp.js'), 'utf8'), '// v1 cdp\n', 'cdp.js must roll back to v1');
+    assert.equal(fs.readFileSync(path.join(dstDir, 'config.json'), 'utf8'), '{"palette":"warm","keep":true}\n');
+    assert.equal(fs.readFileSync(path.join(dstDir, 'wallpapers', 'my-bg.webp'), 'utf8'), 'USER-WALLPAPER-MEDIA');
+    assert.equal(fs.existsSync(path.join(dstDir, 'vendor', 'swarm-prism', 'index.js')), true, 'obsolete files remain intact after rollback');
+
+    // 2) Successful atomic upgrade replaces managed files, purges all 11 dead files & empty dirs, and preserves user assets byte-for-byte
+    const appliedCount = installPluginMod.copyDirRecursiveSync(srcDir, dstDir);
+    assert.equal(appliedCount, 2);
+    assert.equal(fs.readFileSync(path.join(dstDir, 'cdp.js'), 'utf8'), '// v2 cdp\n');
+    assert.equal(fs.readFileSync(path.join(dstDir, 'vendor', 'wallpaper', 'wallpaper-client.js'), 'utf8'), '// v2 wp client\n');
+    assert.equal(fs.readFileSync(path.join(dstDir, 'config.json'), 'utf8'), '{"palette":"warm","keep":true}\n');
+    assert.equal(fs.readFileSync(path.join(dstDir, 'custom.css'), 'utf8'), '/* my user css */\n');
+    assert.equal(fs.readFileSync(path.join(dstDir, 'wallpapers', 'my-bg.webp'), 'utf8'), 'USER-WALLPAPER-MEDIA');
+    for (const rel of expectedRetired) {
+      assert.equal(fs.existsSync(path.join(dstDir, ...rel.split('/'))), false, `Retired dead file must be purged: ${rel}`);
+    }
+    assert.equal(fs.existsSync(path.join(dstDir, 'vendor', 'swarm-prism')), false, 'Empty vendor/swarm-prism dir must be pruned');
+    assert.equal(fs.existsSync(path.join(dstDir, 'vendor', 'wallpaper', 'studio-ui')), false, 'Empty vendor/wallpaper/studio-ui dir must be pruned');
+    assert.equal(
+      fs.readdirSync(dstDir).some((n) => n.startsWith('.staging-') || n.startsWith('.rollback-')),
+      false,
+      'No .staging-* or .rollback-* temp directories may remain'
+    );
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
