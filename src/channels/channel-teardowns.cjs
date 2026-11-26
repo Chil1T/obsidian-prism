@@ -284,10 +284,12 @@ const SETTINGS_REMOVE_EXPRESSION = `(() => {
 })()`;
 
 const MASCOT_REMOVE_EXPRESSION = `(() => {
+  try { (window.__agPrismMascotHop || globalThis.__agPrismMascotHop)?.dispose?.(); } catch {}
   try { window.__agDualMascotRig?.dispose?.(); } catch {}
   try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
+  try { document.getElementById?.('ag-prism-mascot-hop-style')?.remove?.(); } catch {}
   try {
-    document.querySelectorAll?.('.ag-cs-crab, .ag-cs-dual-stage, .ag-cs-crab-stage, .ag-cs-mascot-stage, .ag-v2-mascot-stage, .ag-v2-habitat-prop').forEach((n) => {
+    document.querySelectorAll?.('.ag-cs-crab, .ag-cs-dual-stage, .ag-cs-crab-stage, .ag-cs-mascot-stage, .ag-v2-mascot-stage, .ag-v2-habitat-prop, .ag-prism-mascot-hop-layer').forEach((n) => {
       try { n.__agMascotApi?.dispose?.(); } catch {}
       n.remove?.();
     });
@@ -299,6 +301,8 @@ const MASCOT_REMOVE_EXPRESSION = `(() => {
   try { delete globalThis.__agDualMascotRig; } catch {}
   try { delete window.__agPrismMascotArt; } catch {}
   try { delete globalThis.__agPrismMascotArt; } catch {}
+  try { delete window.__agPrismMascotHop; } catch {}
+  try { delete globalThis.__agPrismMascotHop; } catch {}
   return { ok: true, status: 'off' };
 })()`;
 

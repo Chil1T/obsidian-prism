@@ -1350,30 +1350,28 @@
       return el;
     };
 
-    // ── prefers-reduced-motion：无 window / matchMedia 时安全降级为 false ──
-    let reducedMotion = false;
-    let reducedMq = null;
+    // prefers-reduced-motion（协同 data-ag-cs-ignore-rm 契约；无 matchMedia 安全降级 false）
+    const IGN_RM = 'data-ag-cs-ignore-rm', MOT_A = 'data-ag-cs-motion';
+    const getHopApi = () => win?.__agPrismMascotHop || G?.__agPrismMascotHop || null;
+    const resolveRm = (v) => {
+      const r = doc?.documentElement;
+      return r?.getAttribute?.(MOT_A) === 'off' ? true : r?.getAttribute?.(IGN_RM) === '1' ? false : !!v;
+    };
+    let reducedMotion = false, reducedMq = null;
     const onReducedChange = (e) => {
-      reducedMotion = !!(e?.matches);
-      if (reducedMotion) freezeMotion();
-      else lastActivityAt = nowMs();
+      reducedMotion = resolveRm((e || reducedMq)?.matches);
+      if (reducedMotion) freezeMotion(); else lastActivityAt = nowMs();
       syncHeartbeat();
     };
     try {
       if (win && isFn(win.matchMedia)) {
         reducedMq = win.matchMedia('(prefers-reduced-motion: reduce)');
-        reducedMotion = !!(reducedMq?.matches);
-        if (reducedMq && isFn(reducedMq.addEventListener)) {
-          reducedMq.addEventListener('change', onReducedChange);
-        } else if (reducedMq && isFn(reducedMq.addListener)) {
-          reducedMq.addListener(onReducedChange);
-        }
+        reducedMotion = resolveRm(reducedMq?.matches);
+        if (isFn(reducedMq?.addEventListener)) reducedMq.addEventListener('change', onReducedChange);
+        else if (isFn(reducedMq?.addListener)) reducedMq.addListener(onReducedChange);
       }
-    } catch {
-      reducedMotion = false;
-      reducedMq = null;
-    }
-    if (options.reducedMotion !== undefined) reducedMotion = !!options.reducedMotion;
+    } catch { reducedMotion = false; reducedMq = null; }
+    if (options.reducedMotion !== undefined) reducedMotion = resolveRm(options.reducedMotion);
 
     // 统一托管的延时器（剧目分镜 / 起跳预备），dispose 时全部清理
     const pendingTimers = new Set();
@@ -4376,14 +4374,12 @@
           const resizeEnded = wasResizingAttr && !nowResizingAttr;
           wasResizingAttr = nowResizingAttr;
           if (resizeEnded) onStageResizeReleased();
-          const hasPowerMut =
-            !Array.isArray(records) ||
-            records.some(
-              (r) => !r || !r.attributeName || r.attributeName === WB || r.attributeName === PM || r.attributeName === PP_OPEN
-            );
-          if (hasPowerMut) syncPwr();
+          if (Array.isArray(records) && records.some((r) => r && (r.attributeName === IGN_RM || r.attributeName === MOT_A))) {
+            onReducedChange(reducedMq);
+          }
+          if (!Array.isArray(records) || records.some((r) => !r || !r.attributeName || r.attributeName === WB || r.attributeName === PM || r.attributeName === PP_OPEN)) syncPwr();
         });
-        mo.observe(doc.documentElement, { attributes: true, attributeFilter: [WB, PM, PP_OPEN, RESIZE_ATTR] });
+        mo.observe(doc.documentElement, { attributes: true, attributeFilter: [WB, PM, PP_OPEN, RESIZE_ATTR, IGN_RM, MOT_A] });
         cleanups.push(() => mo.disconnect());
       } catch {}
     }
@@ -4996,63 +4992,36 @@
         if (next.popoverRightWidth !== undefined) popoverRightWidth = Number(next.popoverRightWidth || 0);
         if (next.orchestrator !== undefined) orchestrator = !!next.orchestrator;
         if (next.reducedMotion !== undefined) {
-          reducedMotion = !!next.reducedMotion;
+          reducedMotion = resolveRm(next.reducedMotion);
           if (reducedMotion && !prev[10]) freezeMotion();
           else if (!reducedMotion && prev[10]) lastActivityAt = nowMs();
         }
-
-        let nextRoster = { ...roster };
-        let rosterFromSpec = false;
+        let nextRoster = { ...roster }, rosterFromSpec = false;
         if (next.mascot !== undefined) {
           const parsed = parseMascotSpec(next.mascot);
-          if (parsed) {
-            nextRoster = parsed;
-            rosterFromSpec = true;
-          }
+          if (parsed) { nextRoster = parsed; rosterFromSpec = true; }
         }
         if (!rosterFromSpec) {
           if (next.quadEnabled !== undefined) {
-            const q = !!next.quadEnabled;
-            if (q) {
-              if (nextRoster.c === 0 && nextRoster.k === 0 && nextRoster.d === 0 && nextRoster.w === 0) {
-                nextRoster.c = 1;
-                nextRoster.k = 1;
-              }
-              nextRoster.d = 1;
-              nextRoster.w = 1;
+            if (next.quadEnabled) {
+              if (!nextRoster.c && !nextRoster.k && !nextRoster.d && !nextRoster.w) { nextRoster.c = 1; nextRoster.k = 1; }
+              nextRoster.d = 1; nextRoster.w = 1;
             } else {
-              nextRoster.d = 0;
-              nextRoster.w = 0;
-              if (nextRoster.c === 0 && nextRoster.k === 0) {
-                nextRoster.c = 1;
-                nextRoster.k = 1;
-              }
+              nextRoster.d = 0; nextRoster.w = 0;
+              if (!nextRoster.c && !nextRoster.k) { nextRoster.c = 1; nextRoster.k = 1; }
             }
           }
           if (next.miniPileEnabled !== undefined) nextRoster.minis = !!next.miniPileEnabled;
         }
-        const nextMascotSpec = encodeMascotSpec(nextRoster);
-        const nextQuad = nextRoster.d > 0 || nextRoster.w > 0;
-        const nextMinis = !!nextRoster.minis;
-        roster = nextRoster;
-        mascotSpec = nextMascotSpec;
-        quadEnabled = nextQuad;
-        miniPileEnabled = nextMinis;
-
+        roster = nextRoster; mascotSpec = encodeMascotSpec(nextRoster);
+        quadEnabled = nextRoster.d > 0 || nextRoster.w > 0; miniPileEnabled = !!nextRoster.minis;
         const cur = [popoverRightWidth, camp, streaming, streamTier, hasError, yieldMode, leapOffsetY, miniPileEnabled, quadEnabled, orchestrator, reducedMotion, mascotSpec];
         if (cur.every((v, i) => v === prev[i])) return;
-
         if (mascotSpec !== prev[11] || quadEnabled !== prev[8]) {
-          const domChanged = syncRosterActors();
-          if (domChanged) {
-            resetHomePositions(false);
-            syncPeekInteractivity();
-          }
+          if (syncRosterActors()) { resetHomePositions(false); syncPeekInteractivity(); }
         }
         if (camp !== prev[1]) {
-          // 挂载后阵营实际变化：自动播放领衔交接（站位交换在其内部完成）
-          markActivity();
-          campHandoff(prev[1]);
+          markActivity(); campHandoff(prev[1]);
           if (nowMs() - lastHandoffAt > 50) resetHomePositions(popoverRightWidth !== prev[0]);
         } else if (popoverRightWidth !== prev[0] || miniPileEnabled !== prev[7]) {
           resetHomePositions(popoverRightWidth !== prev[0]);
@@ -5350,37 +5319,26 @@
         if (!isVramSleepState() && !isWindowBlurred() && !isPpOpen()) renderAllFrames();
       },
       syncPowerState: syncPwr,
+      getHopBridge: getHopApi,
       dispose() {
         disposed = true;
-        rim.on = false;
-        rim.s = 0;
-        rimSig = '0';
+        rim.on = false; rim.s = 0; rimSig = '0';
+        try { getHopApi()?.cancelForStage?.(hostEl); } catch {}
         const liveMains = activeMainActors();
-        for (const e of [...liveMains, ...miniCrabs]) {
-          if (e) { e.dragging = e.ballisticActive = false; e.rot = 0; }
-        }
+        for (const e of [...liveMains, ...miniCrabs]) if (e) { e.dragging = e.ballisticActive = false; e.rot = 0; }
         syncMascotDragRootAttr();
         if (tickTimer !== null) { clearInterval(tickTimer); tickTimer = null; }
         currentTickMs = 0;
         if (dragRafId && cAF) { try { cAF(dragRafId); } catch {} dragRafId = 0; }
         dragRafPending = false;
         if (resizeRaf && cAF) { try { cAF(resizeRaf); } catch {} resizeRaf = 0; }
-        clearTimeout(pauseTimer);
-        clearTimeout(theaterTimer);
-        pendingTimers.forEach((t) => clearTimeout(t));
-        pendingTimers.clear();
-        try {
-          if (reducedMq?.removeEventListener) reducedMq.removeEventListener('change', onReducedChange);
-          else if (reducedMq?.removeListener) reducedMq.removeListener(onReducedChange);
-        } catch {}
+        clearTimeout(pauseTimer); clearTimeout(theaterTimer);
+        pendingTimers.forEach((t) => clearTimeout(t)); pendingTimers.clear();
+        try { reducedMq?.removeEventListener?.('change', onReducedChange) ?? reducedMq?.removeListener?.(onReducedChange); } catch {}
         pairCooldowns.clear();
         try {
-          reclaimStageVram();
-          zeroCv(fxCanvas, 1);
-          zeroCv(habitatCanvas, 1);
-          for (const e of [...liveMains, ...miniCrabs]) {
-            if (e) { e._ctx = null; zeroCv(e.canvas, 1); }
-          }
+          reclaimStageVram(); zeroCv(fxCanvas, 1); zeroCv(habitatCanvas, 1);
+          for (const e of [...liveMains, ...miniCrabs]) if (e) { e._ctx = null; zeroCv(e.canvas, 1); }
         } catch {}
         cleanups.forEach((fn) => fn());
         for (const n of [miniGroupEl, ...liveMains.map((a) => a.el), fxCanvas, habitatCanvas]) rmNode(n);

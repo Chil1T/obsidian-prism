@@ -243,7 +243,7 @@ const CHANNEL_STATIC_SPECS = Object.freeze([
   }),
   defineSpec({
     id: 'mascot', channelNumber: 10, order: 100, tier: 'addon',
-    label: 'Dual Mascot Rig', configKeys: ['mascot'], files: ['dual-mascot-rig.js'],
+    label: 'Dual Mascot Rig', configKeys: ['mascot'], files: ['src/runtime/mascot-hop-transition.js', 'dual-mascot-rig.js'],
     mountGlobal: '__agDualMascotRig', budgetBytes: 128 * 1024,
     probeLines: [
       'hasMascot: Boolean(window.__agDualMascotRig || globalThis.__agDualMascotRig)',
