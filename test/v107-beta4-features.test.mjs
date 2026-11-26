@@ -1081,11 +1081,20 @@ test('v1.0.7 / Issue #58: full-body gentle crouch peek (no hard bottom clip) + p
     rig.setRimLight({ active: true, localX: catCx + 1, strength: 0.905, toneKey: 'cobalt', dark: true });
     assert.equal(rig.getLayoutSnapshot().perf.canvasDraws, drawsLit, 'micro-jitter inside same quantized bucket must not redraw');
 
-    // While periodic picker is open (data-ag-pp-open="1"), setRimLight must preserve 0fps sleep & skip repaint
+    // While periodic picker is open in balanced/quality mode, mascot rim bounce stays responsive (no freeze);
+    // in performance/eco mode (or win-blur), setRimLight must enforce 0fps sleep & skip repaint
+    doc.documentElement.setAttribute('data-ag-cs-perf-mode', 'balanced');
     doc.documentElement.setAttribute('data-ag-pp-open', '1');
     rig.setRimLight({ active: true, localX: catCx, strength: 0.5, toneKey: 'iris', dark: true });
-    assert.equal(rig.getLayoutSnapshot().perf.canvasDraws, drawsLit, 'setRimLight must skip repaint while periodic picker is open');
-    assert.equal(rig.getLayoutSnapshot().perf.timerIntervalMs, 0, 'periodic picker open must preserve 0fps sleep');
+    const drawsBalancedPp = rig.getLayoutSnapshot().perf.canvasDraws;
+    assert.ok(drawsBalancedPp > drawsLit, 'balanced mode must keep mascot rim bounce responsive while periodic picker is open');
+    assert.equal(rig.getLayoutSnapshot().perf.timerIntervalMs, 0, 'reducedMotion test fixture stays 0fps');
+
+    doc.documentElement.setAttribute('data-ag-cs-perf-mode', 'performance');
+    rig.setRimLight({ active: true, localX: catCx, strength: 0.75, toneKey: 'amber', dark: true });
+    assert.equal(rig.getLayoutSnapshot().perf.canvasDraws, drawsBalancedPp, 'performance mode + periodic picker open must skip repaint');
+    assert.equal(rig.getLayoutSnapshot().perf.timerIntervalMs, 0, 'performance mode + periodic picker open must preserve 0fps sleep');
+    doc.documentElement.removeAttribute('data-ag-cs-perf-mode');
     doc.documentElement.removeAttribute('data-ag-pp-open');
 
     // Clearing rim light resets tintState cleanly and stays 0fps

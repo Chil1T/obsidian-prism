@@ -446,37 +446,9 @@
 
       /* ── Controller Runtime State ──────────────────────────────────────── */
 
-      var holdState = null;
-      var isReplayingNativeTrigger = false;
-      var pendingLongPressReleaseBtn = null;
-      var suppressUntilMs = 0;
-      var suppressTargetBtn = null;
-      var suppressTrailingUntilMs = 0;
-      var suppressTrailingBtn = null;
-      var suppressTimer = 0;
-
-      var overlayEl = null;
-      var deskmatEl = null;
-      var dockTopRimEl = null;
-      var dockGripEl = null;
-      var spatialDockEl = null;
-      var bentoRefs = null;
-      var stageEl = null;
-      var floorShadowEl = null;
-      var canvasEl = null;
-      var hitLayerEl = null;
-      var hudPillEl = null;
-      var swatchesWrapEl = null;
-      var activeRenderer = null;
-      var standbyRenderer = null;
-      var standbyDisposeTimer = 0;
-      var dockResizeObserver = null;
-      var cachedShell = null;
-      var cachedHostTelemetry = null;
-      var activeHudElementsKey = '';
-
-      var cachedOverlayWidth = 1280;
-      var cachedComposerHeight = 0;
+      var holdState = null, isReplayingNativeTrigger = false, pendingLongPressReleaseBtn = null, suppressUntilMs = 0, suppressTargetBtn = null, suppressTrailingUntilMs = 0, suppressTrailingBtn = null, suppressTimer = 0;
+      var overlayEl = null, deskmatEl = null, dockTopRimEl = null, dockGripEl = null, spatialDockEl = null, bentoRefs = null, stageEl = null, floorShadowEl = null, canvasEl = null, hitLayerEl = null, hudPillEl = null, swatchesWrapEl = null, activeRenderer = null, standbyRenderer = null, standbyDisposeTimer = 0, dockResizeObserver = null, cachedShell = null, cachedHostTelemetry = null, activeHudElementsKey = '';
+      var cachedOverlayWidth = 1280, cachedComposerHeight = 0;
       var cachedDockBounds = { left: 60, top: 220, width: 1280, height: 340 };
       var cachedCardBounds = { left: 74, top: 232, width: 300, height: 316 };
       var cachedRightCardBounds = { left: 1080, top: 232, width: 246, height: 316 };
@@ -583,7 +555,7 @@
 
       var openRafId = 0, modeLayoutRafId = 0, orbitSyncRafId = 0, dockResizeRafId = 0;
       var badgeSyncTimer = 0, blindDwellTimer = 0, blindFlashTimer = 0, confirmCloseTimer = 0, drawerClosingTimer = 0, drawerTransTmr = 0;
-      var drawerTrans = false, drawerLockW = 0, drawerEstStageH = 314, a11yKeysOk = false;
+      var drawerTrans = false, drawerLockW = 0, drawerEstStageW = 760, drawerEstStageH = 314, a11yKeysOk = false;
       var pendingTimers = new Set();
 
       /* Lightweight documentElement-only attribute observer (NEVER observes document.body!) */
@@ -975,24 +947,19 @@
 
       function placeMiniBadgeInButton(btn, badge) {
         if (!btn || !badge) return;
-        var glyph = typeof btn.querySelector === 'function' ? btn.querySelector('.ag-cs-model-glyph') : null;
-        if (glyph && glyph.parentNode === btn && typeof btn.insertBefore === 'function') {
+        var glyph = isFn(btn.querySelector) ? btn.querySelector('.ag-cs-model-glyph') : null;
+        if (glyph && glyph.parentNode === btn && isFn(btn.insertBefore)) {
           if (badge.parentNode !== btn || glyph.nextSibling !== badge) {
             if (glyph.nextSibling) btn.insertBefore(badge, glyph.nextSibling);
-            else if (typeof btn.appendChild === 'function') btn.appendChild(badge);
+            else if (isFn(btn.appendChild)) btn.appendChild(badge);
           }
           return;
         }
-        if (badge.parentNode === btn) return;
-        var chList = btn.children || btn.childNodes;
-        var lastChild =
-          btn.lastElementChild || btn.lastChild || (chList && chList.length > 0 ? chList[chList.length - 1] : null);
-        var lastTag = lastChild && lastChild.tagName ? String(lastChild.tagName).toLowerCase() : '';
-        if (lastTag === 'svg' && lastChild !== btn.firstChild && lastChild.parentNode === btn && typeof btn.insertBefore === 'function') {
-          btn.insertBefore(badge, lastChild);
+        if (isFn(btn.insertBefore) && btn.firstChild) {
+          if (btn.firstChild !== badge) btn.insertBefore(badge, btn.firstChild);
           return;
         }
-        if (typeof btn.appendChild === 'function') btn.appendChild(badge);
+        if (badge.parentNode !== btn && isFn(btn.appendChild)) btn.appendChild(badge);
       }
 
       function syncMiniKeycapOnSingleButton(btn, profile) {
@@ -2392,11 +2359,20 @@
         var r = el.getBoundingClientRect();
         return r && r.width > minW && r.height > minH ? { left: Number(r.left) || 0, top: Number(r.top) || 0, width: Number(r.width) || dw, height: Number(r.height) || dh } : null;
       }
+      function isFn(v) { return typeof v === 'function'; }
+      function commitStageRect(r, drFb) {
+        if (r && r.width > 80 && (r.height > 60 || drFb)) {
+          cachedStageBounds = { left: Number(r.left) || 0, top: Number(r.top) || 0, width: Number(r.width), height: r.height > 60 ? Number(r.height) : drawerEstStageH, valid: true };
+          if (activeRenderer && isFn(activeRenderer.syncCanvasBounds)) activeRenderer.syncCanvasBounds(cachedStageBounds);
+          return true;
+        }
+        return (cachedStageBounds.valid = false);
+      }
       function refreshCachedLayoutRects(force) {
         if (!overlayEl) return;
         var nowMs = readClockMs();
-        var sFn = stageEl && typeof stageEl.getBoundingClientRect === 'function' ? stageEl.getBoundingClientRect : null;
-        var oFn = typeof overlayEl.getBoundingClientRect === 'function' ? overlayEl.getBoundingClientRect : null;
+        var sFn = stageEl && isFn(stageEl.getBoundingClientRect) ? stageEl.getBoundingClientRect : null;
+        var oFn = isFn(overlayEl.getBoundingClientRect) ? overlayEl.getBoundingClientRect : null;
         if (!force && cachedStageBounds.valid && rCache.el === overlayEl && lastStageRectFn === sFn && rCache.fn === oFn && rCache.m === stageMode && rCache.t > 0 && nowMs >= rCache.t && nowMs - rCache.t <= 16) return;
         try {
           if (oFn) {
@@ -2408,27 +2384,23 @@
           if (cachedOverlayWidth <= 160 && overlayEl.parentElement) {
             var pw = Number(overlayEl.parentElement.clientWidth) || 0;
             if (pw > 160) cachedOverlayWidth = pw;
-            else if (typeof overlayEl.parentElement.getBoundingClientRect === 'function') {
+            else if (isFn(overlayEl.parentElement.getBoundingClientRect)) {
               var pr = overlayEl.parentElement.getBoundingClientRect();
               if (pr && pr.width > 160) cachedOverlayWidth = Number(pr.width) || 0;
             }
           }
           var hostBox = overlayEl.parentElement;
-          var composerBox = (hostBox && typeof hostBox.querySelector === 'function' && hostBox.querySelector('[data-testid="agent-input-box"]')) ||
-            (doc && typeof doc.querySelector === 'function' ? doc.querySelector('[data-testid="agent-input-box"]') : null);
-          var compR = composerBox && typeof composerBox.getBoundingClientRect === 'function' ? composerBox.getBoundingClientRect() : null;
+          var composerBox = (hostBox && isFn(hostBox.querySelector) && hostBox.querySelector('[data-testid="agent-input-box"]')) ||
+            (doc && isFn(doc.querySelector) ? doc.querySelector('[data-testid="agent-input-box"]') : null);
+          var compR = composerBox && isFn(composerBox.getBoundingClientRect) ? composerBox.getBoundingClientRect() : null;
           cachedComposerHeight = compR && compR.height > 28 ? Number(compR.height) : 0;
           var cr = bentoRefs ? readBoxRect(bentoRefs.grid, 20, 20, 300, 316) : null;
           if (cr) cachedCardBounds = cr;
           var rr = bentoRefs ? readBoxRect(bentoRefs.rightWing, 20, 20, 246, 316) : null;
           if (rr) cachedRightCardBounds = rr;
           if (sFn) {
-            var sr = readBoxRect(stageEl, 80, 60, 1280, 680);
             lastStageRectFn = sFn;
-            if (sr) {
-              sr.valid = true; cachedStageBounds = sr;
-              if (activeRenderer && typeof activeRenderer.syncCanvasBounds === 'function') activeRenderer.syncCanvasBounds(cachedStageBounds);
-            } else cachedStageBounds.valid = false;
+            commitStageRect(stageEl.getBoundingClientRect(), stageMode === 'drawer');
           }
           rCache.t = nowMs; rCache.el = overlayEl; rCache.fn = oFn; rCache.m = stageMode;
         } catch (e) {}
@@ -2468,7 +2440,9 @@
         var useShortSource = tier !== 'wide' || measuredW < 1260;
         if (tier !== 'narrow' && compactExpanded) compactExpanded = false;
         var compExpFlag = tier === 'narrow' && compactExpanded ? '1' : '0';
-        drawerEstStageH = Math.max(120, Math.round(Math.min(Math.max(120, winH - 176), isShortVp ? clampedShortH : tier === 'medium' ? Math.max(368, Math.min(422, winH * 0.43)) : Math.max(336, Math.min(392, winH * 0.38))) - (isShortVp ? 13 : tier === 'medium' ? 64 : tier === 'narrow' ? 59 : 22)));
+        var clm = function (v, a, b) { return Math.max(a, Math.min(b, v)); };
+        drawerEstStageH = Math.max(120, Math.round(Math.min(Math.max(120, winH - 176), isShortVp ? clampedShortH : tier === 'medium' ? clm(winH * 0.43, 368, 422) : clm(winH * 0.38, 336, 392)) - (isShortVp ? 13 : tier === 'medium' ? 64 : tier === 'narrow' ? 59 : 22)));
+        drawerEstStageW = Math.max(160, Math.round(tier === 'wide' ? measuredW - clm(measuredW * 0.248, 284, 338) - clm(measuredW * 0.192, 218, 268) - (isShortVp ? 36 : 52) : tier === 'medium' ? measuredW - clm(measuredW * 0.275, 278, 328) - (isShortVp ? 28 : 34) : measuredW - 20));
 
         var nextSig = 'drawer|' + tier + '|' + (isCompact ? '1' : '0') + '|' + (isSpecCompact ? '1' : '0') + '|' + (useShortSource ? '1' : '0') + '|' + compExpFlag + '|' + (isShortVp ? clampedShortH : '0');
         if (lastDockCompactSig === nextSig) return false;
@@ -2636,19 +2610,11 @@
       }
 
       function readStageBoundsZeroReflow() {
-        if (stageEl && stageEl.getBoundingClientRect !== lastStageRectFn && typeof stageEl.getBoundingClientRect === 'function') {
+        if (stageEl && stageEl.getBoundingClientRect !== lastStageRectFn && isFn(stageEl.getBoundingClientRect)) {
           try {
             var sr = stageEl.getBoundingClientRect();
             lastStageRectFn = stageEl.getBoundingClientRect;
-            if (sr && sr.width > 80 && sr.height > 60) {
-              cachedStageBounds = {
-                left: Number(sr.left) || 0,
-                top: Number(sr.top) || 0,
-                width: Number(sr.width) || 1280,
-                height: Number(sr.height) || 680,
-                valid: true,
-              };
-            }
+            if (sr && sr.width > 80 && sr.height > 60) commitStageRect(sr, false);
           } catch (e) {}
         }
         return cachedStageBounds;
@@ -2741,10 +2707,12 @@
       function resizeCanvasToStage(skipRectRefresh, deferRender, overrideH) {
         if (!stageEl || !canvasEl) return;
         if (!skipRectRefresh || !cachedStageBounds.valid) refreshCachedLayoutRects();
-        var sBounds = readStageBoundsZeroReflow(), cssW = sBounds.valid ? sBounds.width : 1280, cssH = overrideH > 60 ? overrideH : (sBounds.valid ? sBounds.height : 680);
-        var bArg = overrideH > 60 ? { left: sBounds.valid ? sBounds.left : 0, top: sBounds.valid ? sBounds.top : 0, width: cssW, height: cssH, valid: true } : (sBounds.valid ? sBounds : null);
+        var sBounds = readStageBoundsZeroReflow(), isDr = stageMode === 'drawer';
+        var cssW = sBounds.valid ? sBounds.width : (isDr ? drawerEstStageW : 1280);
+        var cssH = overrideH > 60 ? overrideH : (sBounds.valid ? sBounds.height : (isDr ? drawerEstStageH : 680));
+        var bArg = (overrideH > 60 || (!sBounds.valid && isDr)) ? { left: sBounds.valid ? sBounds.left : 0, top: sBounds.valid ? sBounds.top : 0, width: cssW, height: cssH, valid: true } : (sBounds.valid ? sBounds : null);
         var dpr = Math.min(2, Math.max(1, Number(root && root.devicePixelRatio) || 1));
-        if (activeRenderer && typeof activeRenderer.resize === 'function') {
+        if (activeRenderer && isFn(activeRenderer.resize)) {
           try { activeRenderer.resize(cssW, cssH, dpr, bArg, deferRender ? { deferRender: true } : undefined); } catch (e) {}
         }
       }
@@ -4844,9 +4812,13 @@
         var pinnedScrollEl = null;
         if (stageMode === 'drawer') {
           var drawerMount = resolveDrawerMountHost(doc, triggerEl);
+          var mountHost = drawerMount.host || doc.body;
+          var preW = Number(mountHost && mountHost.clientWidth) || (root && Number(root.innerWidth) > 160 ? Number(root.innerWidth) : 0);
+          if (preW > 160) cachedOverlayWidth = preW;
+          syncDockCompactState();
           overlayEl.setAttribute('data-in-flow', drawerMount.inFlow ? '1' : '0');
           if (drawerMount.inFlow) pinnedScrollEl = findNearBottomScrollContainer(drawerMount.host);
-          (drawerMount.host || doc.body).appendChild(overlayEl);
+          mountHost.appendChild(overlayEl);
         } else {
           doc.body.appendChild(overlayEl);
         }
@@ -4907,14 +4879,16 @@
         clearStaleBlurIfActive();
         isHostPaused = computeHostPaused();
         refreshCachedLayoutRects(true);
-        syncDockCompactState();
+        if (syncDockCompactState() && stageMode === 'drawer' && stageEl && isFn(stageEl.getBoundingClientRect)) {
+          try { commitStageRect(stageEl.getBoundingClientRect(), true); } catch (ePost) {}
+        }
         drawerTrans = Boolean(stageMode === 'drawer' && reqRaf && !bentoUi.isReducedMotion(doc, root));
         drawerLockW = drawerTrans ? (cachedOverlayWidth || cachedDockBounds.width || 0) : 0;
         resizeCanvasToStage(true, true, drawerTrans ? lockDrawerTransCanvasH() : 0);
         syncSceneAndDom(true, { deferTelemetryDomScan: Boolean(reqRaf) });
         if (isHostPaused) applyRendererPausedState(true);
 
-        if (activeRenderer && !isHostPaused && !bentoUi.isReducedMotion(doc, root) && typeof activeRenderer.triggerIntroWake === 'function') {
+        if (activeRenderer && !isHostPaused && !bentoUi.isReducedMotion(doc, root) && isFn(activeRenderer.triggerIntroWake)) {
           try {
             activeRenderer.triggerIntroWake();
             scheduleSettledRectSync();
@@ -4931,7 +4905,7 @@
           var stopHoverBubbleToHost = function (ev) {
             if (!ev) return;
             if (ev.type === 'mouseout' && !ev.relatedTarget && !ev.toElement) return;
-            if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
+            if (isFn(ev.stopPropagation)) ev.stopPropagation();
           };
           overlayEl.addEventListener('pointerover', stopHoverBubbleToHost);
           overlayEl.addEventListener('pointerout', stopHoverBubbleToHost);
@@ -4946,9 +4920,9 @@
                 var blockClick = !isTargetInBentoOrHud(ev && ev.target) && readClockMs() <= suppressPostDragClickUntil;
                 suppressPostDragClickUntil = 0;
                 if (blockClick) {
-                  if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
-                  if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
-                  if (ev && typeof ev.stopImmediatePropagation === 'function') ev.stopImmediatePropagation();
+                  if (ev && isFn(ev.preventDefault)) ev.preventDefault();
+                  if (ev && isFn(ev.stopPropagation)) ev.stopPropagation();
+                  if (ev && isFn(ev.stopImmediatePropagation)) ev.stopImmediatePropagation();
                   return;
                 }
               }
@@ -4964,21 +4938,21 @@
           var deltaY = Number(ev.deltaY) || 0;
           if (!deltaY) return;
 
-          var hitWheel = activeRenderer && typeof activeRenderer.pick === 'function' ? activeRenderer.pick(wx, wy) : null;
+          var hitWheel = activeRenderer && isFn(activeRenderer.pick) ? activeRenderer.pick(wx, wy) : null;
           if (hitWheel && hitWheel.kind === 'control' && resolvePickedControlAction(hitWheel) === 'mute') {
-            if (typeof ev.preventDefault === 'function') ev.preventDefault();
-            if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
+            if (isFn(ev.preventDefault)) ev.preventDefault();
+            if (isFn(ev.stopPropagation)) ev.stopPropagation();
             stepActiveEffortByDelta(deltaY < 0 ? 1 : -1);
             return;
           }
           if (auxPageCount > 1) {
             var overAuxPager = Boolean(
-              bentoRefs && bentoRefs.auxPager && ev.target && typeof bentoRefs.auxPager.contains === 'function' && bentoRefs.auxPager.contains(ev.target)
+              bentoRefs && bentoRefs.auxPager && ev.target && isFn(bentoRefs.auxPager.contains) && bentoRefs.auxPager.contains(ev.target)
             );
             var overAuxPad = Boolean((hitWheel && hitWheel.kind === 'aux-key') || overAuxPager || isPointInAuxPadRegion(wx, wy));
             if (overAuxPad) {
-              if (typeof ev.preventDefault === 'function') ev.preventDefault();
-              if (typeof ev.stopPropagation === 'function') ev.stopPropagation();
+              if (isFn(ev.preventDefault)) ev.preventDefault();
+              if (isFn(ev.stopPropagation)) ev.stopPropagation();
               var nowWheelMs = readClockMs();
               if (nowWheelMs - lastAuxWheelMs >= AUX_WHEEL_THROTTLE_MS) {
                 lastAuxWheelMs = nowWheelMs;
@@ -5026,9 +5000,9 @@
             refreshCachedLayoutRects();
           }
 
-          var hit = activeRenderer && typeof activeRenderer.pick === 'function' ? activeRenderer.pick(sx, sy) : null;
+          var hit = activeRenderer && isFn(activeRenderer.pick) ? activeRenderer.pick(sx, sy) : null;
           var targetEffAttr =
-            ev.target && typeof ev.target.getAttribute === 'function' ? ev.target.getAttribute('data-ag-pp-effort') : null;
+            ev.target && isFn(ev.target.getAttribute) ? ev.target.getAttribute('data-ag-pp-effort') : null;
           var curDeckDown = buildCurrentDeckPayload(resolveCurrentLang());
           var isAvailInspected = Boolean(
             curDeckDown.deckInfo && curDeckDown.deckInfo.isAvailable && curDeckDown.deckInfo.levels && curDeckDown.deckInfo.levels.length > 1
@@ -5118,7 +5092,7 @@
         });
 
         overlayEl.addEventListener('pointermove', function (ev) {
-          if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+          if (ev && isFn(ev.stopPropagation)) ev.stopPropagation();
           if (!overlayEl || isDestroyed || isConfirmClosing || isDrawerClosing || isHostPaused || !ev) return;
           var cx = Number(ev.clientX) || 0;
           var cy = Number(ev.clientY) || 0;
@@ -5137,7 +5111,7 @@
                 gestureState.dragged = true;
                 overlayEl.setAttribute('data-effort-dragging', '1');
                 try {
-                  if (typeof overlayEl.setPointerCapture === 'function' && ev.pointerId !== undefined) overlayEl.setPointerCapture(ev.pointerId);
+                  if (isFn(overlayEl.setPointerCapture) && ev.pointerId !== undefined) overlayEl.setPointerCapture(ev.pointerId);
                 } catch (e) {}
               }
               gestureState.accumPx += Math.abs(kDx) >= Math.abs(kDy) ? kDx : kDy;
@@ -5155,7 +5129,7 @@
                 gestureState.scrubbing = true;
                 overlayEl.setAttribute('data-effort-dragging', '1');
                 try {
-                  if (typeof overlayEl.setPointerCapture === 'function' && ev.pointerId !== undefined) overlayEl.setPointerCapture(ev.pointerId);
+                  if (isFn(overlayEl.setPointerCapture) && ev.pointerId !== undefined) overlayEl.setPointerCapture(ev.pointerId);
                 } catch (e2) {}
               }
               if (gestureState.scrubbing) {
@@ -5378,6 +5352,7 @@
               var rafW = cachedOverlayWidth || cachedDockBounds.width || 0;
               if (!drawerTrans || rafTierChanged || (drawerLockW > 0 && Math.abs(rafW - drawerLockW) > 2)) {
                 if (drawerTrans) drawerLockW = rafW;
+                if (rafTierChanged) refreshCachedLayoutRects(true);
                 resizeCanvasToStage(true, true, drawerTrans ? lockDrawerTransCanvasH() : 0);
               }
               syncHitLayerRects(true);

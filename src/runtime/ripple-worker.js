@@ -15,12 +15,12 @@
   const active = new Set(), retryCbs = new Set();
   let pW = null, pUrl = '', pCache = null, pPend = null, fallbacks = 0, pRetries = 0, pRetryAt = 0, pTimer = 0, mgDepth = 0, lastNested = null;
 
+  const isF = (v) => typeof v === 'function';
   const cl = (v, lo, hi) => { const n = Number(v); return Number.isFinite(n) ? M.max(lo, M.min(hi, n)) : lo; };
   const getDoc = (d) => d || (typeof document !== 'undefined' ? document : null);
-  const getPerfMode = (doc) => {
-    const h = getDoc(doc)?.documentElement, r = h ? String(h.dataset?.agCsPerfMode || h.getAttribute?.('data-ag-cs-perf-mode') || '').trim().toLowerCase() : '';
-    return r === 'performance' || r === 'quality' || r === 'balanced' ? r : 'balanced';
-  };
+  const ga = (h, k) => h?.getAttribute?.(k);
+  const rawPerf = (d) => { const h = getDoc(d)?.documentElement; return String(h?.dataset?.agCsPerfMode || ga(h, 'data-ag-cs-perf-mode') || '').trim().toLowerCase(); };
+  const getPerfMode = (d) => PERF_PROFILES[rawPerf(d)]?.mode || 'balanced';
   const getPerfProfile = (doc) => PERF_PROFILES[getPerfMode(doc)] || PERF_PROFILES.balanced;
   const getPerfMinGapMs = (doc) => getPerfProfile(doc).minGapMs;
   const resolveRippleDpr = (raw, doc) => M.min(Number(raw) > 0 ? Number(raw) : 1, getPerfProfile(doc).rippleMaxDpr);
@@ -33,7 +33,7 @@
   }
   function isHostPaused(doc) {
     const d = getDoc(doc), h = d?.documentElement;
-    return Boolean(d && (d.hidden === true || (h?.getAttribute && (h.getAttribute('data-ag-cs-win-blur') === '1' || h.getAttribute('data-ag-pp-open') === '1'))));
+    return Boolean(d && (d.hidden === true || ga(h, 'data-ag-cs-win-blur') === '1' || (ga(h, 'data-ag-pp-open') === '1' && /^(performance|eco)$/.test(rawPerf(d)))));
   }
 
   const PROBE_WORKER_SRC = "'use strict';self.onmessage=e=>{var d=e?.data;if(d?.type!=='probe'||!d.canvas)return;try{var g=d.canvas.getContext('webgl2',{alpha:true,premultipliedAlpha:true,antialias:false,preserveDrawingBuffer:false}),ok=Boolean(g&&!g.isContextLost?.());g&&g.getExtension('WEBGL_lose_context')?.loseContext();self.postMessage({type:'probe',ok,reason:ok?'ok':'webgl2-null'})}catch(x){self.postMessage({type:'probe',ok:false,reason:String(x?.message||x||'probe-err')})}};";
@@ -73,7 +73,7 @@
   const hasOff = () => Boolean(gApi('OffscreenCanvas') && gApi('Worker') && gApi('Blob') && gApi('URL')?.createObjectURL);
   const clrRetry = () => { if (pTimer) { clearTimeout(pTimer); pTimer = 0; } retryCbs.clear(); };
   function schedRetry(o = {}, cb) {
-    if (typeof cb === 'function') retryCbs.add(cb);
+    if (isF(cb)) retryCbs.add(cb);
     if (pTimer || !pCache || pCache.ok || !pCache.retryable) return;
     pTimer = setTimeout(() => {
       pTimer = 0;
@@ -122,12 +122,12 @@
     const ro = { timeoutMs: o.probeTimeoutMs, retryDelayMs: o.probeRetryDelayMs };
     if (!pCache || (!pCache.ok && pCache.retryable && Date.now() >= pRetryAt)) {
       warmProbe(ro);
-      if (typeof o.onProbeReady === 'function' && pPend) {
+      if (isF(o.onProbeReady) && pPend) {
         pPend.then((r) => { if (r?.ok) try { o.onProbeReady(r); } catch {} else if (r?.retryable) schedRetry(ro, o.onProbeReady); });
       }
       return false;
     }
-    if (!pCache.ok) { if (pCache.retryable && typeof o.onProbeReady === 'function') schedRetry(ro, o.onProbeReady); return false; }
+    if (!pCache.ok) { if (pCache.retryable && isF(o.onProbeReady)) schedRetry(ro, o.onProbeReady); return false; }
     return true;
   }
   function mkChan(ref, o, hk) {
@@ -171,10 +171,10 @@
   }
 
   function mountGlowWorker(cv, o = {}) {
-    if (!cv || typeof cv.transferControlToOffscreen !== 'function' || o.prefer2D || o.force2D || G?.__agRippleForce2D === true) return null;
+    if (!cv || !isF(cv.transferControlToOffscreen) || o.prefer2D || o.force2D || G?.__agRippleForce2D === true) return null;
     const core = o.rippleCore || G?.__agCsRippleCore || null, ws = core?.WORKER_SHADERS;
     const fs = ws?.glowFs || core?.HORIZON_FRAGMENT_SHADER || core?.GLOW_FRAG_SHADER, vs = ws?.glowVs || core?.GLOW_VERT_SHADER;
-    if (!fs || !vs || typeof core?.mountBrandHorizonGlow !== 'function' || !checkProbe(o)) return null;
+    if (!fs || !vs || !isF(core?.mountBrandHorizonGlow) || !checkProbe(o)) return null;
     const doc = cv.ownerDocument || getDoc(o.doc), iMs = M.max(200, Number(o.idleTimeoutMs) || IDLE_SLEEP_MS);
     let paused = false, sleeping = false, pR = null, pD = null, cW = M.max(0, Number(o.width ?? 0)), cH = M.max(0, Number(o.height ?? 0));
     let dpr = cl(o.dpr || 1, 0.5, 2), pw = cW > 0 ? M.max(1, M.round(cW * dpr)) : 0, ph = cH > 0 ? M.max(1, M.round(cH * dpr)) : 0;
@@ -184,6 +184,7 @@
       onSlept: () => { sleeping = true; },
       onReady: () => { if (pR) { ch.post(pR); pR = null; } if (pD && !paused) { ch.post(pD); pD = null; } if (paused) ch.post({ type: 'sleep' }); },
     });
+    const ok = () => { const s = ch.state(); return s.ready && !s.disposed && !s.failed; };
     const setPaused = (flag) => { const s = ch.state(); if (s.disposed || s.failed) return; if (flag) { if (!paused) { paused = sleeping = true; if (s.ready) ch.post({ type: 'sleep' }); } } else paused = false; };
     Object.assign(ext, {
       isContextLost: () => { const s = ch.state(); return s.contextLost || s.failed; },
@@ -193,12 +194,12 @@
         const npw = nw > 0 ? M.max(1, M.round(nw * nd)) : 0, nph = nh > 0 ? M.max(1, M.round(nh * nd)) : 0;
         if (nw === cW && nh === cH && nd === dpr && npw === pw && nph === ph) return false;
         cW = nw; cH = nh; dpr = nd; pw = npw; ph = nph;
-        const m = { type: 'resize', pw, ph, dpr, syncDraw: true }, s = ch.state();
-        if (s.ready && !s.disposed && !s.failed) ch.post(m); else pR = m;
+        const m = { type: 'resize', pw, ph, dpr, syncDraw: true };
+        if (ok()) ch.post(m); else pR = m;
         return true;
       },
-      clear() { sleeping = paused = true; const s = ch.state(); if (s.ready && !s.disposed && !s.failed) ch.post({ type: 'clear' }); },
-      releaseBackingStore() { pw = ph = 0; sleeping = paused = true; pR = pD = null; const s = ch.state(); if (s.ready && !s.disposed && !s.failed) ch.post({ type: 'release' }); },
+      clear() { sleeping = paused = true; if (ok()) ch.post({ type: 'clear' }); },
+      releaseBackingStore() { pw = ph = 0; sleeping = paused = true; pR = pD = null; if (ok()) ch.post({ type: 'release' }); },
       draw(_w, _h, _d, timeSec, dark, intensity, presence, reach, prism, surge, speed, spec, sem, meta) {
         sleeping = Boolean(meta?.still); if (!sleeping) paused = false;
         const hu = core.computeHorizonUniforms?.(Boolean(dark), presence, prism, surge, speed, spec, sem) || null;
@@ -221,7 +222,7 @@
 
   function mountManagedGlow(cfg = {}) {
     const { getCanvas, swapCanvas, rippleCore, doc, prefer2D, allowWorker = true, onContextLost, onFallbackDone, onUpgradeReady } = cfg;
-    const cv0 = typeof getCanvas === 'function' ? getCanvas() : null, noop = { mode: 'none', resize() {}, clear() {}, draw() {}, drawStaticSnapshot() {}, dispose() {} };
+    const cv0 = isF(getCanvas) ? getCanvas() : null, noop = { mode: 'none', resize() {}, clear() {}, draw() {}, drawStaticSnapshot() {}, dispose() {} };
     if (!cv0 || !rippleCore?.mountBrandHorizonGlow) return noop;
     mgDepth += 1;
     try {
@@ -230,7 +231,7 @@
         const prevN = lastNested; lastNested = null;
         const w = mountGlowWorker(cv0, {
           rippleCore, doc, width: 0, height: 0, probeTimeoutMs: cfg.probeTimeoutMs, probeRetryDelayMs: cfg.probeRetryDelayMs, initTimeoutMs: cfg.initTimeoutMs, onContextLost,
-          onFallback: (r) => { if (inSync && typeof onFallbackDone === 'function') syncFb = true; try { syncRet = onFallbackDone?.(r); } catch {} },
+          onFallback: (r) => { if (inSync && isF(onFallbackDone)) syncFb = true; try { syncRet = onFallbackDone?.(r); } catch {} },
           onProbeReady: (r) => { try { onUpgradeReady?.(r); } catch {} },
         });
         inSync = false; const inner = lastNested; lastNested = prevN;
@@ -239,17 +240,17 @@
       }
       const mk = (u) => rippleCore.mountBrandHorizonGlow(getCanvas(), { prefer2D: !!u, width: 0, height: 0, onContextLost });
       let g = mk(prefer2D);
-      if (g?.mode === 'none' && !prefer2D && typeof swapCanvas === 'function') { try { g.dispose?.(true); } catch {} swapCanvas(); g = mk(true); }
+      if (g?.mode === 'none' && !prefer2D && isF(swapCanvas)) { try { g.dispose?.(true); } catch {} swapCanvas(); g = mk(true); }
       if (mgDepth > 1) lastNested = g;
       return g;
     } finally { mgDepth -= 1; }
   }
 
   function mountFieldWorker(cv, cols, rows, waves, o = {}) {
-    if (!cv || typeof cv.transferControlToOffscreen !== 'function' || cols <= 0 || rows <= 0 || o.prefer2D || o.force2D || G?.__agRippleForce2D === true) return null;
+    if (!cv || !isF(cv.transferControlToOffscreen) || cols <= 0 || rows <= 0 || o.prefer2D || o.force2D || G?.__agRippleForce2D === true) return null;
     const core = o.rippleCore || G?.__agCsRippleCore || null, ws = core?.WORKER_SHADERS;
     const vs = ws?.fieldVs || core?.VERTEX_SHADER, fs = ws?.fieldFs || core?.FRAGMENT_SHADER;
-    if (!vs || !fs || typeof core?.createGlyphField !== 'function' || !checkProbe(o)) return null;
+    if (!vs || !fs || !isF(core?.createGlyphField) || !checkProbe(o)) return null;
     const R = core.RIPPLE;
     let cN = cols, rN = rows, dpr = cl(o.dpr || 1, 0.5, 2), pw = M.round(cN * R.cellWidth * dpr), ph = M.round(rN * R.cellHeight * dpr);
     let data = new Uint8Array(cN * rN * 4), pR = null, pD = null;
@@ -281,7 +282,7 @@
 
   function mountManagedField(cfg = {}) {
     const { getCanvas, swapCanvas, cols, rows, dpr, waves, rippleCore, prefer2D, allowWorker = true, onContextLost, onFallbackDone, onUpgradeReady } = cfg;
-    const cv0 = typeof getCanvas === 'function' ? getCanvas() : null;
+    const cv0 = isF(getCanvas) ? getCanvas() : null;
     if (!cv0 || !rippleCore?.createGlyphField || cols <= 0 || rows <= 0) return rippleCore?.createGlyphField ? rippleCore.createGlyphField(cv0, cols, rows, waves, { prefer2D: !!prefer2D, onContextLost }) : { mode: 'none', dispose() {}, invalidate() {}, draw() {}, needsDraw: () => false, busy: () => false };
     if (!prefer2D && allowWorker) {
       let syncFb = false, syncRet = null;
@@ -291,7 +292,7 @@
     }
     const mk = (u) => rippleCore.createGlyphField(getCanvas(), cols, rows, waves, { prefer2D: !!u, onContextLost });
     let f = mk(prefer2D);
-    if (f?.mode === 'none' && !prefer2D && typeof swapCanvas === 'function') { try { f.dispose?.(true); } catch {} swapCanvas(); f = mk(true); }
+    if (f?.mode === 'none' && !prefer2D && isF(swapCanvas)) { try { f.dispose?.(true); } catch {} swapCanvas(); f = mk(true); }
     return f;
   }
 

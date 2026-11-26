@@ -2308,7 +2308,7 @@ test('Custom mascot roster DSL: single-toggle 0/1 clamp, canonical folding, 3-wa
   }
 });
 
-test('Periodic picker PP_OPEN 0fps sleep covers 4-species quad-minis roster and restores cleanly', () => {
+test('Periodic picker PP_OPEN keeps 100ms breathing in balanced/quality and enforces 0fps sleep in performance/eco or win-blur', () => {
   const { doc, html } = createRigMockDom(760);
   const hostEl = doc.createElement('div');
   doc.body.appendChild(hostEl);
@@ -2317,14 +2317,23 @@ test('Periodic picker PP_OPEN 0fps sleep covers 4-species quad-minis roster and 
     assert.equal(stage.getLayoutSnapshot().actors.length, 4);
     assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 100, 'Active quad-minis roster must tick at 100ms');
 
-    // Open periodic picker -> immediate 0fps heartbeat pause
+    // Open periodic picker in balanced/quality -> stays alive at 100ms (cute peek breathing/blinking preserved)
+    html.setAttribute('data-ag-cs-perf-mode', 'balanced');
     html.setAttribute('data-ag-pp-open', '1');
-    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 0, 'PP_OPEN=1 must pause roster heartbeat to 0fps');
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 100, 'Balanced mode + PP_OPEN=1 must keep mascot breathing alive');
+
+    // Switch to performance / eco mode while PP_OPEN=1 -> immediate 0fps heartbeat pause
+    html.setAttribute('data-ag-cs-perf-mode', 'performance');
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 0, 'Performance mode + PP_OPEN=1 must pause roster heartbeat to 0fps');
     assert.equal(stage.getLayoutSnapshot().perf.timerPaused, true);
+
+    html.setAttribute('data-ag-cs-perf-mode', 'eco');
+    assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 0, 'Eco mode + PP_OPEN=1 must pause roster heartbeat to 0fps');
 
     // Close periodic picker -> cleanly wakes back to 100ms
     html.removeAttribute('data-ag-pp-open');
     assert.equal(stage.getLayoutSnapshot().perf.timerIntervalMs, 100, 'Removing PP_OPEN must wake roster back to 100ms');
+    html.removeAttribute('data-ag-cs-perf-mode');
   } finally {
     stage.dispose();
   }

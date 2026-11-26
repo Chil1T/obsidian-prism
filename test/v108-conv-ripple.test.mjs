@@ -896,11 +896,22 @@ test('Issue #63 conv pointer filtering, streaming 0fps guard, 1200ms idle sleep,
     assert.equal(m.sleeping, true, 'stationary pointer >= 1200ms must enter 0fps idle sleep');
     assert.equal(rafQueue.filter((x) => !x.cancelled).length, 0);
 
-    // 5) Periodic picker & win blur pause cleanly
+    // 5) Periodic picker keeps conv ripple alive in balanced/quality, pauses strictly in performance/eco or win-blur
+    env.html.setAttribute('data-ag-cs-perf-mode', 'balanced');
     env.html.setAttribute('data-ag-pp-open', '1');
+    nowMs += 100;
     layoutDom.mainBody.dispatchEvent({ type: 'pointermove', clientX: 360, clientY: 320, target: layoutDom.panes[0].blank });
-    assert.equal(m.sleeping, true, 'periodic picker open must keep conv ripple paused');
+    assert.equal(m.sleeping, false, 'balanced mode must keep conv ripple alive while periodic picker is open');
+    env.html.setAttribute('data-ag-cs-perf-mode', 'performance');
+    assert.equal(m.sleeping, true, 'performance mode + periodic picker open must pause conv ripple');
+    nowMs += 100;
+    layoutDom.mainBody.dispatchEvent({ type: 'pointermove', clientX: 380, clientY: 340, target: layoutDom.panes[0].blank });
+    assert.equal(m.sleeping, true, 'performance mode + periodic picker open must keep conv ripple paused on pointermove');
     env.html.removeAttribute('data-ag-pp-open');
+    env.html.removeAttribute('data-ag-cs-perf-mode');
+    env.html.setAttribute('data-ag-cs-win-blur', '1');
+    assert.equal(m.sleeping, true, 'win-blur must still pause conv ripple');
+    env.html.removeAttribute('data-ag-cs-win-blur');
 
     // 6) Custom wallpaper active -> immediately parks & clears data-ag-cs-conv-ripple, restores on disable
     env.html.setAttribute('data-ag-prism-wallpaper', 'on');

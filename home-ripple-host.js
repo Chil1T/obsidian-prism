@@ -153,7 +153,7 @@
         field: { mode: 'none', dispose() {}, invalidate() {}, draw() {}, needsDraw: () => false, busy: () => false }, rafId: 0,
       };
       const dead = () => isD() || st.parked;
-      const isAB = () => ga(html(), WB) === '1', isPp = () => ga(html(), PP_OPEN) === '1', isRz = () => ga(html(), RZA) === '1';
+      const isAB = () => ga(html(), WB) === '1', isPp = () => ga(html(), PP_OPEN) === '1' && (st.mode !== 'conv' || /^(?:performance|eco)$/.test(pMode())), isRz = () => ga(html(), RZA) === '1';
       const isStr = () => st.mode === 'conv' && isF(isConvRunning) && Boolean(isConvRunning());
       const hP = () => Boolean(d.hidden || wb || isAB() || isPp() || (st.mode === 'conv' && isCB()));
       const hasSz = (c) => Boolean(c && c.width > 0 && c.height > 0);

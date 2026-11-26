@@ -216,13 +216,11 @@
     const WB = 'data-ag-cs-win-blur', PM_A = 'data-ag-cs-perf-mode';
     const PP_OPEN = 'data-ag-pp-open';
     const getHtml = () => (typeof document !== 'undefined' ? document.documentElement : null);
+    const ga = (k) => getHtml()?.getAttribute?.(k);
     const rw = () => G.__agPrismRippleWorker || null;
-    const getPerfMode = () => {
-      const h = getHtml();
-      return String(h?.dataset?.agCsPerfMode || h?.getAttribute?.(PM_A) || '').trim().toLowerCase();
-    };
-    const isAB = () => getHtml()?.getAttribute?.(WB) === '1';
-    const isPpOpen = () => getHtml()?.getAttribute?.(PP_OPEN) === '1';
+    const getPerfMode = () => String(getHtml()?.dataset?.agCsPerfMode || ga(PM_A) || '').trim().toLowerCase();
+    const isAB = () => ga(WB) === '1';
+    const isPpOpen = () => ga(PP_OPEN) === '1' && /^(performance|eco)$/.test(getPerfMode());
     const isH = () => !!(typeof document !== 'undefined' && document.hidden);
     const isP = () => !!(isH() || isAB() || wb || isPpOpen());
 

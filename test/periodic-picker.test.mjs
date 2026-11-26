@@ -1787,7 +1787,8 @@ test('V2 Host bottom trigger .ag-pp-mini-keycap badge sync preserves React HostT
   );
   assert.equal(badge.style.getPropertyValue('--mk-bg').includes('#317660'), false, 'Carbon must have strictly zero legacy green');
   assert.equal(badge.style.getPropertyValue('--mk-skirt'), '', 'V14.1 hairline badge must have zero fake 3D bottom skirt');
-  assert.equal(triggerBtn.childNodes[0], hostTextNode, 'Must preserve exact React HostText reference');
+  assert.equal(triggerBtn.childNodes[0], badge, 'Mini badge must stay pinned on the left side when glyph is absent');
+  assert.equal(triggerBtn.childNodes[1], hostTextNode, 'Must preserve exact React HostText reference');
   assert.equal(hostTextNode.nodeValue, 'Gemini 4 Carbon (High)');
 
   // 1b) Monochrome accent switches hairline micro-badge variables to pure neutral zero-chroma tones
@@ -1812,7 +1813,8 @@ test('V2 Host bottom trigger .ag-pp-mini-keycap badge sync preserves React HostT
     const auxBadge = triggerBtn.querySelector('.ag-pp-mini-keycap');
     assert.ok(auxBadge, `Expected compact hairline badge for ${auxCase.label}`);
     assert.equal(auxBadge.textContent, auxCase.expected);
-    assert.equal(triggerBtn.childNodes[0], hostTextNode);
+    assert.equal(triggerBtn.childNodes[0], auxBadge);
+    assert.equal(triggerBtn.childNodes[1], hostTextNode);
   }
 
   for (const unsupported of [
@@ -6049,7 +6051,7 @@ test('V14.1 Theme-Native Hairline Mini-Badge (.ag-pp-mini-keycap): Zero Fake 3D 
     const b = triggerBtn.querySelector('.ag-pp-mini-keycap');
     assert.ok(b, `Expected badge for ${opt.label}`);
     assert.equal(b.textContent, expText, `Expected "${expText}" for ${opt.label}, got "${b.textContent}"`);
-    assert.equal(triggerBtn.childNodes[0], hostText, 'Zero React HostText mutation');
+    assert.ok(triggerBtn.childNodes[0] === b && triggerBtn.childNodes[1] === hostText, 'Zero React HostText mutation & badge pinned left');
   }
 
   for (const [plannerOpt, expOrchCode] of [
@@ -6577,18 +6579,19 @@ test('V14.1 Deep Bug Regression Suite: Animated Drawer Close Immediate Eviction,
 
   const inst = factory.mountPeriodicPicker({ root: env.window, doc: env.document, mode: 'on' });
 
-  // 1) Without .ag-cs-model-glyph, badge mounts BEFORE trailing chevron <svg> while preserving childNodes[0] === labelSpan
+  // 1) Without .ag-cs-model-glyph, badge stays pinned on the left side BEFORE labelSpan (0 left/right jumping!)
   const badge = btn.querySelector('.ag-pp-mini-keycap');
   assert.ok(badge);
-  assert.equal(btn.childNodes[0], labelSpan, 'First child must remain untouched');
-  assert.equal(badge.nextSibling, chevronSvg, 'Badge must sit before trailing chevron <svg>');
+  assert.equal(btn.childNodes[0], badge, 'Without glyph, badge must stay pinned at button start (left of model label)');
+  assert.equal(badge.nextSibling, labelSpan, 'Badge must sit immediately to the left of labelSpan');
+  assert.equal(labelSpan.nextSibling, chevronSvg, 'Trailing chevron <svg> must stay on the far right');
 
-  // Inject .ag-cs-model-glyph at start of button -> syncBadges self-heals order to [glyph, badge, labelSpan, chevronSvg]
+  // Inject .ag-cs-model-glyph at start of button -> syncBadges preserves [glyph, badge, labelSpan, chevronSvg] with 0 horizontal jump
   const glyph = env.makeElement('span', { className: 'ag-cs-model-glyph' });
   btn.insertBefore(glyph, btn.firstChild);
   inst.syncBadges();
   assert.equal(btn.childNodes[0], glyph);
-  assert.equal(btn.childNodes[1], badge, 'Badge must self-heal right after late-mounted .ag-cs-model-glyph');
+  assert.equal(btn.childNodes[1], badge, 'Badge must sit immediately after .ag-cs-model-glyph and left of labelSpan');
   assert.equal(btn.childNodes[2], labelSpan);
   assert.equal(btn.childNodes[3], chevronSvg);
 
@@ -7849,11 +7852,15 @@ test('v1.0.8-beta perf-dom-bg: 3D hit-layer pointer isolation, event bubble fire
     ['vendor/wallpaper/wallpaper-client.js', "html.getAttribute('data-ag-pp-open') === '1'"],
     ['conv-aura.js', "const PP_OPEN = 'data-ag-pp-open'"],
     ['home-ripple-host.js', "const PP_OPEN = 'data-ag-pp-open'"],
-    ['style.css', ':is([data-ag-cs-win-blur="1"],[data-ag-pp-open="1"])'],
+    ['style.css', ':is([data-ag-cs-win-blur="1"],[data-ag-pp-open="1"]:is([data-ag-cs-perf-mode="performance"],[data-ag-cs-perf-mode="eco"]))'],
   ];
   for (const [relFile, needle] of checkSleepFiles) {
     const content = fs.readFileSync(path.join(ROOT_DIR, relFile), 'utf8');
-    assert.ok(content.includes(needle), `${relFile} must integrate data-ag-pp-open="1" 0fps sleep guard`);
+    assert.ok(content.includes(needle), `${relFile} must integrate perf-mode-gated data-ag-pp-open="1" guard`);
+  }
+  for (const relPerfFile of ['dual-mascot-rig.js', 'vendor/wallpaper/wallpaper-client.js', 'conv-aura.js', 'home-ripple-host.js']) {
+    const content = fs.readFileSync(path.join(ROOT_DIR, relPerfFile), 'utf8');
+    assert.ok(content.includes('data-ag-cs-perf-mode'), `${relPerfFile} must scope pp-open sleep to performance/eco modes`);
   }
   const rimSrc = fs.readFileSync(path.join(ROOT_DIR, 'prism-rim-canvas.js'), 'utf8');
   assert.equal(rimSrc.includes('data-ag-pp-open'), false, 'prism-rim-canvas.js must keep prism/mirror rims responsive while data-ag-pp-open="1"');
@@ -7866,4 +7873,158 @@ test('v1.0.8-beta perf-dom-bg: 3D hit-layer pointer isolation, event bubble fire
   const counts = env.getCounts();
   assert.equal(counts.activeTimers, 0);
   assert.equal(counts.activeRafs, 0);
+});
+
+test('W6 PP-UX: (1) wallpaper/conv-aura stay alive under balanced pp-open & pause under performance/eco; (2) stub & full mini-badge lock left with 0 jump; (3) drawer frame-0 pre-tiers & avoids narrow aspect distortion', () => {
+  // 1) Wallpaper video playback stays active in balanced/quality when pp-open=1, pauses in performance/eco or win-blur
+  const wpMod = require(path.join(ROOT_DIR, 'vendor', 'wallpaper', 'wallpaper-client.js'));
+  const wpEnv = createPeriodicSandbox();
+  let wpPaused = false;
+  const origCreateEl = wpEnv.document.createElement;
+  wpEnv.document.createElement = (tag) => {
+    const el = origCreateEl(tag);
+    if (String(tag).toLowerCase() === 'video') {
+      el.pause = () => { wpPaused = true; };
+      el.play = () => { wpPaused = false; return Promise.resolve(); };
+    }
+    return el;
+  };
+  const wpCtl = wpMod.createWallpaperClient({ window: wpEnv.window, document: wpEnv.document });
+  wpCtl.applyConfig({ enabled: true, mediaPath: 'C:/wp.mp4', mediaType: 'video', mediaUrl: 'http://127.0.0.1:45555/wp/1', rev: 1 });
+  assert.equal(wpPaused, false, 'video wallpaper should play initially');
+  wpEnv.html.setAttribute('data-ag-cs-perf-mode', 'balanced');
+  wpEnv.html.setAttribute('data-ag-pp-open', '1');
+  wpEnv.triggerMutations(wpEnv.html, [{ type: 'attributes', attributeName: 'data-ag-pp-open', target: wpEnv.html }]);
+  assert.equal(wpPaused, false, 'balanced mode + pp-open=1 must NOT freeze live wallpaper');
+  wpEnv.html.setAttribute('data-ag-cs-perf-mode', 'performance');
+  wpEnv.triggerMutations(wpEnv.html, [{ type: 'attributes', attributeName: 'data-ag-cs-perf-mode', target: wpEnv.html }]);
+  assert.equal(wpPaused, true, 'performance mode + pp-open=1 must pause live wallpaper');
+  wpEnv.html.setAttribute('data-ag-cs-perf-mode', 'quality');
+  wpEnv.triggerMutations(wpEnv.html, [{ type: 'attributes', attributeName: 'data-ag-cs-perf-mode', target: wpEnv.html }]);
+  assert.equal(wpPaused, false, 'switching back to quality mode must resume live wallpaper');
+  wpEnv.html.setAttribute('data-ag-cs-perf-mode', 'eco');
+  wpEnv.triggerMutations(wpEnv.html, [{ type: 'attributes', attributeName: 'data-ag-cs-perf-mode', target: wpEnv.html }]);
+  assert.equal(wpPaused, true, 'eco mode + pp-open=1 must pause live wallpaper');
+  wpEnv.html.removeAttribute('data-ag-pp-open');
+  wpEnv.html.removeAttribute('data-ag-cs-perf-mode');
+  wpEnv.triggerMutations(wpEnv.html, [{ type: 'attributes', attributeName: 'data-ag-pp-open', target: wpEnv.html }]);
+  assert.equal(wpPaused, false, 'closing periodic picker must keep wallpaper playing');
+  wpCtl.destroy();
+
+  // 2) Stub & Full mini-keycap stay pinned left of model label in both glyph-absent & glyph-present states (0 left/right jump)
+  const stubMod = require(path.join(ROOT_DIR, 'vendor', 'periodic-picker', 'periodic-picker-stub.js'));
+  const posEnv = createPeriodicSandbox();
+  const btnNoGlyph = posEnv.makeElement('button', { attrs: { 'data-testid': 'model-selector-trigger' }, useChildNodes: true });
+  const lbl1 = posEnv.makeElement('span', { text: 'Gemini 4 Neon' });
+  const chev1 = posEnv.makeElement('svg', {});
+  btnNoGlyph.appendChild(lbl1);
+  btnNoGlyph.appendChild(chev1);
+  const btnWithGlyph = posEnv.makeElement('button', { attrs: { 'data-testid': 'model-selector-trigger' }, useChildNodes: true });
+  const gly2 = posEnv.makeElement('span', { className: 'ag-cs-model-glyph' });
+  const lbl2 = posEnv.makeElement('span', { text: 'Gemini 4 Carbon (High)' });
+  const chev2 = posEnv.makeElement('svg', {});
+  btnWithGlyph.appendChild(gly2);
+  btnWithGlyph.appendChild(lbl2);
+  btnWithGlyph.appendChild(chev2);
+  posEnv.body.appendChild(btnNoGlyph);
+  posEnv.body.appendChild(btnWithGlyph);
+
+  const stubInst = stubMod.mountPeriodicPickerStub({ root: posEnv.window, doc: posEnv.document });
+  const stubBadge1 = btnNoGlyph.querySelector('.ag-pp-mini-keycap');
+  const stubBadge2 = btnWithGlyph.querySelector('.ag-pp-mini-keycap');
+  assert.ok(stubBadge1 && stubBadge2);
+  assert.equal(btnNoGlyph.childNodes[0], stubBadge1, 'Stub without glyph must insert badge at start (left of label)');
+  assert.equal(btnNoGlyph.childNodes[1], lbl1);
+  assert.equal(btnWithGlyph.childNodes[0], gly2);
+  assert.equal(btnWithGlyph.childNodes[1], stubBadge2, 'Stub with glyph must insert badge right after glyph (left of label)');
+  assert.equal(btnWithGlyph.childNodes[2], lbl2);
+  stubInst.destroy(true);
+
+  posEnv.window.__agPeriodicMockHost = {
+    selectedModel: { label: 'Gemini 4 Neon', modelId: 'gemini-4-ne' },
+    modelOptions: [
+      { label: 'Gemini 4 Neon', modelId: 'gemini-4-ne' },
+      { label: 'Gemini 4 Carbon (High)', modelId: 'gemini-4-c-high' },
+    ],
+  };
+  const fullFactory = loadPeriodicFactoryInSandbox(posEnv);
+  const fullInst = fullFactory.mountPeriodicPicker({ root: posEnv.window, doc: posEnv.document, mode: 'on' });
+  assert.equal(btnNoGlyph.childNodes[0], stubBadge1, 'Full mount without glyph must keep badge pinned left');
+  assert.equal(btnNoGlyph.childNodes[1], lbl1);
+  assert.equal(btnWithGlyph.childNodes[0], gly2);
+  assert.equal(btnWithGlyph.childNodes[1], stubBadge2, 'Full mount with glyph must keep badge right after glyph');
+  // Simulate late glyph mount on btnNoGlyph -> badge remains immediately left of lbl1 with 0 right-side jump
+  const lateGly = posEnv.makeElement('span', { className: 'ag-cs-model-glyph' });
+  btnNoGlyph.insertBefore(lateGly, btnNoGlyph.firstChild);
+  fullInst.syncBadges();
+  assert.equal(btnNoGlyph.childNodes[0], lateGly);
+  assert.equal(btnNoGlyph.childNodes[1], stubBadge1);
+  assert.equal(btnNoGlyph.childNodes[2], lbl1);
+  fullInst.destroy();
+
+  // 3) Drawer open frame-0: pre-sets final data-dock-tier before layout & never feeds collapsed height=0 or narrow 3-col width into renderer
+  const drEnv = createPeriodicSandbox({ mock2d: true, mockWebGL2: true });
+  drEnv.window.innerWidth = 900;
+  drEnv.window.innerHeight = 820;
+  loadGrainAssetsInSandbox(drEnv);
+  loadOledScreenInSandbox(drEnv);
+  loadKeyboard3DInSandbox(drEnv);
+  const drFactory = loadPeriodicFactoryInSandbox(drEnv);
+  const resizeLog = [];
+  const origKbCreate = drEnv.window.__agPrismKeyboard3D.createKeyboard3DRenderer;
+  drEnv.window.__agPrismKeyboard3D.createKeyboard3DRenderer = (opts) => {
+    const r = origKbCreate(opts);
+    const origResize = r.resize;
+    r.resize = (w, h, dpr, bRect, rOpts) => {
+      resizeLog.push({ w, h, aspect: w / Math.max(1, h) });
+      return origResize(w, h, dpr, bRect, rOpts);
+    };
+    return r;
+  };
+  const convHost = drEnv.makeElement('div', { attrs: { 'data-testid': 'conversation-view' }, className: 'flex-col' });
+  convHost.clientWidth = 900;
+  const drBtn = drEnv.makeElement('button', { attrs: { 'data-testid': 'model-selector-trigger' }, text: 'Gemini 4 Neon' });
+  convHost.appendChild(drBtn);
+  drEnv.body.appendChild(convHost);
+  drEnv.window.__agPeriodicMockHost = {
+    selectedModel: { label: 'Gemini 4 Neon', modelId: 'gemini-4-ne' },
+    modelOptions: [{ label: 'Gemini 4 Neon', modelId: 'gemini-4-ne' }],
+  };
+  // Mock getBoundingClientRect to simulate frame-0 drawer height=0 and 3-column squeeze if data-dock-tier were missing
+  const origMakeEl = drEnv.document.createElement;
+  drEnv.document.createElement = (tag) => {
+    const el = origMakeEl(tag);
+    const origRect = el.getBoundingClientRect;
+    el.getBoundingClientRect = function () {
+      if (this.id === 'ag-prism-periodic-picker-root') {
+        const opened = this.getAttribute('data-open') === '1';
+        return { left: 0, top: 480, width: 900, height: opened ? 336 : 0, right: 900, bottom: opened ? 816 : 480 };
+      }
+      if (this.className && String(this.className).includes('ag-pp-stage')) {
+        const rootNode = drEnv.document.getElementById('ag-prism-periodic-picker-root');
+        const tier = rootNode ? rootNode.getAttribute('data-dock-tier') : null;
+        const opened = rootNode && rootNode.getAttribute('data-open') === '1';
+        // Without data-dock-tier="narrow", 3-column flex squeezes stage to 346px; with narrow, stage is 880px
+        const w = tier === 'narrow' ? 880 : 346;
+        const h = opened ? 314 : 0;
+        return { left: 10, top: 490, width: w, height: h, right: 10 + w, bottom: 490 + h };
+      }
+      return origRect.call(this);
+    };
+    return el;
+  };
+  const drInst = drFactory.mountPeriodicPicker({ root: drEnv.window, doc: drEnv.document, mode: 'on' });
+  assert.equal(drInst.open(drBtn), true);
+  const drRoot = drEnv.document.getElementById('ag-prism-periodic-picker-root');
+  assert.equal(drRoot.getAttribute('data-dock-tier'), 'narrow', 'drawer must pre-apply narrow dock tier before frame-0 measure');
+  assert.ok(resizeLog.length >= 1, 'drawer open must call renderer.resize');
+  assert.equal(resizeLog[0].w, 880, `frame-0 renderer width must match steady narrow width 880 (never 346 squeeze or 1280 fallback), got ${resizeLog[0].w}`);
+  assert.ok(resizeLog[0].h >= 240, `frame-0 renderer height must be steady (>=240, never 0), got ${resizeLog[0].h}`);
+  assert.ok(resizeLog[0].aspect >= 1.5 && resizeLog[0].aspect <= 3.8, `frame-0 aspect must avoid narrow/wide distortion, got ${resizeLog[0].aspect}`);
+  const bentoCssSrc = fs.readFileSync(path.join(ROOT_DIR, 'vendor', 'periodic-picker', 'bento-ui.js'), 'utf8');
+  assert.ok(
+    bentoCssSrc.includes('#ag-prism-periodic-picker-root[data-stage-mode="drawer"] .ag-pp-spatial-dock{flex:0 0 auto;height:var(--pp-dh);'),
+    'bento-ui.js must lock .ag-pp-spatial-dock to steady height for curtain-reveal opening'
+  );
+  drInst.destroy();
 });
