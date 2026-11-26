@@ -1489,8 +1489,6 @@ for (const el of qa(r, HOST_BTN_QUERY)) if (!isThoughtIsolatedNode(el)) set.add(
       if (!h || h[K_IC] === false) continue;
       const vp = cl(h, '[data-testid="autoscroll-viewport"]');
       for (let c = h[K_PE]; c && c !== D.body; c = c[K_PE]) {
-        const ct = tidOf(c);
-        if (ct === 'agent-response' || ct === 'turn-cards-container') next.add(c);
         if (tagU(c) === 'DIV') {
           const p = c[K_PE]; let pv = c.previousElementSibling;
           if (pv === undefined) { pv = null; const ch = p?.children; if (ch) for (let i = 1; i < ch.length; i++) if (ch[i] === c) { pv = ch[i - 1]; break; } }

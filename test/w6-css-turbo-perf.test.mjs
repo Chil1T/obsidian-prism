@@ -38,8 +38,8 @@ function extractRulesForSelector(cssText, token) {
   return matched;
 }
 
-test('W6-1: 5 large overlays purge real-time backdrop-filter blur while preserving lightweight menu blur', () => {
-  const purgedLargeTokens = [
+test('W7-1: 5 core overlays restore frosted-glass backdrop-filter while disabling blur only in performance/motion=off with 0 scroll/stream flicker', () => {
+  const restoredGlassTokens = [
     '[data-ag-cs-overview-shell="1"]',
     '.animate-overview-panel',
     '.aux-drawer-popup',
@@ -55,33 +55,16 @@ test('W6-1: 5 large overlays purge real-time backdrop-filter blur while preservi
     '.floating-comment-card',
   ];
 
-  for (const token of purgedLargeTokens) {
+  for (const token of restoredGlassTokens) {
     const rules = extractRulesForSelector(flatCss, token);
-    assert.ok(rules.length > 0, `flattened CSS must still style ${token}`);
-    for (const rule of rules) {
-      assert.equal(
-        /backdrop-filter\s*:\s*blur\(/i.test(rule.body),
-        false,
-        `large overlay ${token} must not apply backdrop-filter:blur() in rule: ${rule.raw.slice(0, 200)}`
-      );
-    }
+    assert.ok(rules.length > 0, `flattened CSS must style ${token}`);
     assert.ok(
-      rules.some((r) => /backdrop-filter\s*:\s*none/i.test(r.body)),
-      `large overlay ${token} must explicitly disable backdrop-filter:none`
+      rules.some((r) => /backdrop-filter\s*:\s*blur\(16px\)/i.test(r.body)),
+      `core overlay ${token} must restore frosted-glass backdrop-filter:blur(16px)`
     );
   }
 
-  // Heavy overlay group must use dense opaque dark surface & light override
-  const heavyOverlayLine = cssLines.find(
-    (l) => l.includes('[data-ag-cs-overview-shell="1"]') && l.includes('.animate-overview-panel') && l.includes('backdrop-filter:none')
-  );
-  assert.ok(heavyOverlayLine, 'overview-shell / animate-overview-panel / aux-drawer-popup / toast must have dedicated non-blur rule');
-  assert.ok(
-    heavyOverlayLine.includes('.965') && heavyOverlayLine.includes('var(--ag-cs-menu-sheen)'),
-    'heavy overlay rule must use high-opacity dark surface (.965) with top optical sheen'
-  );
-
-  // Required lightweight menus retain blur(16px)
+  // Lightweight menus also keep frosted-glass blur(16px)
   const ctxMenuRules = extractRulesForSelector(flatCss, '.ag-cs-ctx-menu');
   assert.ok(
     ctxMenuRules.some((r) => r.body.includes('backdrop-filter:blur(16px) saturate(140%)')),
@@ -93,46 +76,74 @@ test('W6-1: 5 large overlays purge real-time backdrop-filter blur while preservi
     'lightweight context-menu-popup group must preserve backdrop-filter:blur(16px)'
   );
 
-  // Small selection pill suppresses blur in win-blur / performance / stream-active modes
-  const blurSuppressLine = cssLines.find(
-    (l) => l.includes('[data-ag-cs-win-blur="1"]') && l.includes('.agy-selection-pill') && l.includes('backdrop-filter:none')
+  // Blur degradation is strictly scoped to performance / motion="off" (NEVER transient perf-busy / stream-active / scrolling / win-blur)
+  const blurDegradeLine = cssLines.find(
+    (l) =>
+      l.includes(':is([data-ag-cs-perf-mode="performance"],[data-ag-cs-motion="off"])') &&
+      l.includes('backdrop-filter:none!important')
   );
-  assert.ok(blurSuppressLine, '.agy-selection-pill must suppress backdrop-filter under win-blur / performance / stream-active');
+  assert.ok(blurDegradeLine, 'style.css must disable backdrop-filter in performance and motion="off" modes');
+  for (const token of restoredGlassTokens) {
+    assert.ok(
+      blurDegradeLine.includes(token),
+      `performance/motion="off" blur degradation rule must cover ${token}`
+    );
+  }
+  assert.ok(
+    blurDegradeLine.includes('.agy-selection-pill') && blurDegradeLine.includes('.agy-scroll-bottom'),
+    'performance/motion="off" blur degradation rule must cover floating pills and scroll-bottom button'
+  );
+
+  // Zero transient scroll/stream/win-blur backdrop-filter:none flicker triggers anywhere in style.css
+  const blurNoneLines = cssLines.filter((l) => /backdrop-filter\s*:\s*none/i.test(l));
+  for (const line of blurNoneLines) {
+    assert.equal(line.includes('data-ag-perf-busy'), false, `must not strip blur on perf-busy: ${line.slice(0, 160)}`);
+    assert.equal(line.includes('data-ag-cs-stream-active'), false, `must not strip blur on stream-active: ${line.slice(0, 160)}`);
+    assert.equal(line.includes('data-ag-scrolling'), false, `must not strip blur on scrolling: ${line.slice(0, 160)}`);
+    assert.equal(line.includes('data-ag-cs-win-blur'), false, `must not strip blur on win-blur: ${line.slice(0, 160)}`);
+  }
 });
 
-test('W6-2: 300Hz infinite @keyframes use steps() throttling and win-blur freezes host + plugin animations', () => {
-  // ag-ov-br uses steps(24) and is disabled in performance mode
-  const ovBrLine = cssLines.find((l) => l.includes('ag-ov-br 4s'));
-  assert.ok(ovBrLine, 'style.css must define ag-ov-br 4s breathing animation');
-  assert.ok(ovBrLine.includes('steps(24)'), 'ag-ov-br 4s infinite must step-throttle with steps(24)');
-
-  const perfModeLine = cssLines.find((l) => l.includes('[data-ag-cs-perf-mode="performance"]') && l.includes('[data-ag-overview-running="1"]'));
-  assert.ok(perfModeLine, 'performance mode must explicitly configure running overlays & spinners');
+test('W7-2: default animations restore smooth GPU linear/ease-in-out (0 low-FPS steps()) and win-blur freeze is scoped strictly to performance/eco', () => {
+  // Default animations must be smooth (only allowed steps() is pixel mini-crab transition steps(2,end))
+  const stepLines = cssLines.filter((l) => /steps\(/i.test(l));
+  assert.equal(stepLines.length, 1, `only pixel mini-crab transition may use steps(), found: ${stepLines.join(' | ')}`);
   assert.ok(
-    perfModeLine.includes('[data-ag-overview-running="1"]') &&
-      perfModeLine.includes('[data-ag-sp-running="1"]') &&
-      perfModeLine.includes('animation:none!important'),
+    stepLines[0].includes('.ag-v2-mini-crab-canvas') && stepLines[0].includes('transition:transform .16s steps(2,end)'),
+    'sole steps() usage must be .ag-v2-mini-crab-canvas pixel transition'
+  );
+
+  // Explicit smooth timing checks on restored running & skeleton animations
+  assert.ok(rawCss.includes('animation:ag-ov-br 4s ease-in-out infinite'), 'ag-ov-br must use smooth ease-in-out');
+  assert.ok(rawCss.includes('animation:ag-cs-pulse 2.8s ease-in-out infinite'), 'sub-running pulse must use smooth ease-in-out');
+  assert.ok(rawCss.includes('animation:ag-cs-pulse 1.5s ease-in-out infinite'), 'home skeleton pulse must use smooth ease-in-out');
+  assert.ok(rawCss.includes('animation:ag-cs-orbit-spin 1.9s linear infinite'), 'input-cancel-button orbit must use smooth linear');
+  assert.ok(rawCss.includes('animation:ag-cs-spark-orbit 2.4s ease-in-out infinite'), 'thinking spark orbit must use smooth ease-in-out');
+  assert.ok(rawCss.includes('animation:ag-cs-orbit-spin 2.4s linear infinite'), 'status-loading-spinner orbit must use smooth linear');
+  assert.ok(rawCss.includes('animation:ag-st-p 2.2s ease-in-out infinite !important'), 'status-loading-spinner core dot must use smooth ease-in-out');
+  assert.ok(rawCss.includes('animation:ag-cs-comet-tip 1.1s ease-in-out infinite'), 'thought streaming comet tip must use smooth ease-in-out');
+
+  // Performance mode retains power-saving ambient disable without choppy low-FPS steps()
+  const perfModeLine = cssLines.find(
+    (l) => l.includes('[data-ag-cs-perf-mode="performance"]') && l.includes('[data-ag-overview-running="1"]')
+  );
+  assert.ok(perfModeLine, 'performance mode must disable ambient breathing on overview & step-plan');
+  assert.ok(
+    perfModeLine.includes('[data-ag-sp-running="1"]') && perfModeLine.includes('animation:none!important'),
     'performance mode must disable ag-ov-br breathing animation on overview & step-plan'
   );
-  assert.ok(
-    perfModeLine.includes('[data-testid="input-cancel-button"]') &&
-      perfModeLine.includes('[data-testid="status-loading-spinner"]') &&
-      /steps\(1[0-6]\)/.test(perfModeLine),
-    'performance mode must tighten spinner & cancel-button steps()'
-  );
 
-  // sub-running::before & skeleton ag-cs-pulse use steps(16)
-  const pulseUsages = cssLines.filter((l) => l.includes('animation:ag-cs-pulse'));
-  assert.ok(pulseUsages.length >= 3, 'style.css must have sub-running & skeleton ag-cs-pulse animations');
-  for (const line of pulseUsages) {
-    assert.ok(line.includes('steps(16)'), `ag-cs-pulse must use steps(16) throttling: ${line.slice(0, 140)}`);
-  }
-
-  // [data-ag-cs-win-blur="1"] freezes both native host and plugin animations
+  // win-blur & pp-open CSS animation pause is scoped strictly to performance/eco so dual-screen default mode stays alive
   const winBlurLine = cssLines.find(
     (l) => l.includes('[data-ag-cs-win-blur="1"]') && l.includes('animation-play-state:paused')
   );
-  assert.ok(winBlurLine, 'style.css must define [data-ag-cs-win-blur="1"] animation-play-state:paused rule');
+  assert.ok(winBlurLine, 'style.css must define performance/eco win-blur animation-play-state:paused rule');
+  assert.ok(
+    winBlurLine.includes(
+      'html[data-ag-cs-style]:is([data-ag-cs-win-blur="1"],[data-ag-pp-open="1"]):is([data-ag-cs-perf-mode="performance"],[data-ag-cs-perf-mode="eco"])'
+    ),
+    'win-blur animation pause must be scoped strictly to performance/eco modes'
+  );
   const requiredPausedSelectors = [
     '.shimmer-text-mask',
     '.shimmer-text-content',
@@ -147,7 +158,7 @@ test('W6-2: 300Hz infinite @keyframes use steps() throttling and win-blur freeze
     '[data-testid="status-loading-spinner"]::before',
   ];
   for (const sel of requiredPausedSelectors) {
-    assert.ok(winBlurLine.includes(sel), `win-blur freeze rule must pause ${sel}`);
+    assert.ok(winBlurLine.includes(sel), `performance/eco win-blur rule must still pause ${sel}`);
   }
   assert.equal(
     /:is\([^)]*::(?:before|after)/.test(rawCss),
@@ -156,15 +167,30 @@ test('W6-2: 300Hz infinite @keyframes use steps() throttling and win-blur freeze
   );
 });
 
-test('W6-3: long-conversation offscreen virtualization applies content-visibility:auto safely with bleed & tail guards', () => {
-  const cvLines = cssLines.filter((l) => l.includes('content-visibility:auto'));
-  assert.ok(cvLines.length >= 2, 'style.css must contain content-visibility:auto rules');
+test('W7-3: sticky-breaking whole-turn/pre contain-intrinsic-block-size virtualization is removed while preserving legacy bleed guards', () => {
+  // Wave 6 whole-turn & generic viewport pre virtualization must be removed
+  assert.equal(
+    rawCss.includes('contain-intrinsic-block-size'),
+    false,
+    'style.css must not apply sticky-breaking contain-intrinsic-block-size virtualization on turns/pre'
+  );
+  assert.equal(
+    rawCss.includes(':is([data-testid="agent-response"],[data-testid="user-message"],[data-testid="turn-cards-container"]):not(:last-child)'),
+    false,
+    'must not apply content-visibility:auto to whole agent-response/user-message/turn-cards-container blocks'
+  );
+  assert.equal(
+    rawCss.includes('[data-testid="autoscroll-viewport"] pre:not(:last-child)'),
+    false,
+    'must not apply generic autoscroll-viewport pre content-visibility:auto that breaks sticky headers'
+  );
 
-  // Every content-visibility:auto line must exclude bleed-marked tables
+  const cvLines = cssLines.filter((l) => l.includes('content-visibility:auto'));
+  assert.ok(cvLines.length >= 3, 'style.css must preserve legacy Issue #57 content-visibility:auto rules');
   for (const line of cvLines) {
     assert.ok(
       line.includes(':not([data-ag-cs-bleed="1"])'),
-      `every content-visibility:auto line must exclude [data-ag-cs-bleed="1"]: ${line.slice(0, 180)}`
+      `every remaining content-visibility:auto line must exclude [data-ag-cs-bleed="1"]: ${line.slice(0, 180)}`
     );
   }
 
@@ -173,32 +199,6 @@ test('W6-3: long-conversation offscreen virtualization applies content-visibilit
     (l) => l.includes('conversation-row-sidebar') && l.includes('content-visibility')
   );
   assert.equal(sidebarCvLines.length, 0, 'conversation-row-sidebar must have 0 content-visibility rules');
-
-  // Long conversation non-tail turns & pre blocks
-  const turnLine = cssLines.find(
-    (l) =>
-      l.includes('[data-testid="conversation-view"] [data-testid="autoscroll-viewport"]') &&
-      l.includes('[data-testid="agent-response"]') &&
-      l.includes('[data-testid="user-message"]') &&
-      l.includes('[data-testid="turn-cards-container"]')
-  );
-  assert.ok(turnLine, 'must define content-visibility:auto for non-tail conversation turns');
-  assert.ok(
-    turnLine.includes(':not(:last-child):not([data-ag-cs-bleed="1"])') &&
-      turnLine.includes('content-visibility:auto') &&
-      turnLine.includes('contain-intrinsic-block-size:auto 220px'),
-    'conversation turn virtualization must guard :not(:last-child):not([data-ag-cs-bleed="1"]) with 220px intrinsic block size'
-  );
-
-  const preLine = cssLines.find(
-    (l) =>
-      l.includes('[data-testid="conversation-view"] [data-testid="autoscroll-viewport"] pre:not(:last-child):not([data-ag-cs-bleed="1"])')
-  );
-  assert.ok(preLine, 'must define content-visibility:auto for non-tail conversation pre blocks');
-  assert.ok(
-    preLine.includes('content-visibility:auto') && preLine.includes('contain-intrinsic-block-size:auto 180px'),
-    'conversation pre virtualization must use contain-intrinsic-block-size:auto 180px'
-  );
 
   // Preserve legacy history & markdown pre contracts
   assert.ok(

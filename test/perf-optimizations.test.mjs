@@ -1229,18 +1229,18 @@ test('perf guard 20: Host Turbo alert.css dedup+restore, async img, hidden sidec
     /pre:not\(\[data-ag-cs-rich-pre="1"\]\),pre>div:is\(\.border,\.bg-muted\)>div:nth-child\(2\),\.agy-md-table\.md-table-frame,table:not\(\.md-table-el\)\)\{contain:layout style;?\}/,
     'Read-only code bodies and Markdown tables must have safe contain:layout style without contain:paint'
   );
-  const blurRuleMatch = css.match(/html\[data-ag-cs-style\](?:\[data-ag-cs-win-blur="1"\]|:is\(\[data-ag-cs-win-blur="1"\],\[data-ag-pp-open="1"\](?::is\(\[data-ag-cs-perf-mode="performance"\],\[data-ag-cs-perf-mode="eco"\]\))?\))\{[^\n]+\}/);
-  assert.ok(blurRuleMatch, 'style.css must define window-blur & performance/eco pp-open animation pause rule');
+  const blurRuleMatch = css.match(/html\[data-ag-cs-style\]:is\(\[data-ag-cs-win-blur="1"\],\[data-ag-pp-open="1"\]\):is\(\[data-ag-cs-perf-mode="performance"\],\[data-ag-cs-perf-mode="eco"\]\)\{[^\n]+\}/);
+  assert.ok(blurRuleMatch, 'style.css must define performance/eco-scoped window-blur & pp-open animation pause rule');
   assert.ok(
-    blurRuleMatch[0].includes('[data-ag-pp-open="1"]:is([data-ag-cs-perf-mode="performance"],[data-ag-cs-perf-mode="eco"])'),
-    'Periodic picker open animation pause must be scoped strictly to performance/eco modes'
+    blurRuleMatch[0].includes(':is([data-ag-cs-win-blur="1"],[data-ag-pp-open="1"]):is([data-ag-cs-perf-mode="performance"],[data-ag-cs-perf-mode="eco"])'),
+    'Window-blur & periodic-picker animation pause must be scoped strictly to performance/eco modes so default mode stays alive'
   );
   assert.ok(
     blurRuleMatch[0].includes('animation-play-state:paused !important;') &&
       blurRuleMatch[0].includes('[data-testid="status-loading-spinner"]::before') &&
       blurRuleMatch[0].includes('.shimmer-text-mask') &&
       blurRuleMatch[0].includes('.shimmer-text-content'),
-    'Window-blur rule must pause spinner, dot, and shimmer animations'
+    'Performance/eco window-blur rule must pause spinner, dot, and shimmer animations'
   );
   assert.equal(/:is\([^)]*::(?:before|after)/.test(blurRuleMatch[0]), false, 'Pseudo-elements must never be placed inside :is()');
 
@@ -1634,15 +1634,15 @@ test('perf guard 21: Issues #2/#3/#5/#7/#8 + PR #6 + #35 queued-message 3-gears 
   const uiMainFactory = require(path.join(ROOT, 'ui-runtime.js'));
   const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
 
-  // 1) CSS & REMOVE_EXPRESSION hygiene: 0 :has(), 0 non-ASCII, stepped animations, blur/off backdrop-filter:none, fold-body contain:layout style, Issue #8 scrollbar fix
+  // 1) CSS & REMOVE_EXPRESSION hygiene: 0 :has(), 0 non-ASCII, smooth GPU animations, perf/off backdrop-filter:none, fold-body contain:layout style, Issue #8 scrollbar fix
   assert.equal((css.match(/:has\(/g) || []).length, 0, 'style.css must contain zero :has() selectors');
   assert.equal(/[^\x00-\x7F]/.test(css), false, 'style.css must contain zero non-ASCII characters');
-  assert.ok(css.includes('ag-cs-spark-orbit 2.4s steps(36) infinite'), 'PR #6: spark orbit must use discrete steps(36)');
-  assert.ok(css.includes('ag-cs-orbit-spin 2.4s steps(36) infinite'), 'PR #6: spinner orbit must use discrete steps(36)');
-  assert.ok(css.includes('ag-cs-comet-tip 1.1s steps(18) infinite'), 'PR #6: streaming comet tip must use discrete steps(18)');
+  assert.ok(css.includes('ag-cs-spark-orbit 2.4s ease-in-out infinite'), 'W7: spark orbit must use smooth ease-in-out');
+  assert.ok(css.includes('ag-cs-orbit-spin 2.4s linear infinite'), 'W7: spinner orbit must use smooth linear');
+  assert.ok(css.includes('ag-cs-comet-tip 1.1s ease-in-out infinite'), 'W7: streaming comet tip must use smooth ease-in-out');
   assert.ok(
-    /html\[data-ag-cs-style\]:is\(\[data-ag-cs-win-blur="1"\],\[data-ag-cs-motion="off"\][^\n]*backdrop-filter:none\s*!important/.test(css),
-    'Issue #2: win-blur & motion=off must disable backdrop-filter on transient overlays'
+    /html\[data-ag-cs-style\]:not\(#_\):is\(\[data-ag-cs-perf-mode="performance"\],\[data-ag-cs-motion="off"\][^\n]*backdrop-filter:none\s*!important/.test(css),
+    'W7: performance & motion=off must disable backdrop-filter on overlays without transient scroll/stream flicker'
   );
   assert.ok(
     css.includes('& .ag-cs-settings-fold-body{display:none;') && /contain:layout style;?\}/.test(css),

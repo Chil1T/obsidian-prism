@@ -357,8 +357,8 @@ test('w6-1: host-workbench-enhancer eliminates scroll layout thrashing, skips co
   }
 });
 
-// 2. ui-runtime: syncBleedTables marks agent-response & turn-cards-container, axO debounces childList & reuses MO, syncTakeoverNow batches & keeps Read < Write
-test('w6-2: ui-runtime syncBleedTables marks turn/response ancestors, axO debounces childList without redundant disconnect, syncTakeoverNow separates Read/Write', async () => {
+// 2. ui-runtime: legacy syncBleedTables cleans Wave 6 turn/response over-marking, axO debounces childList & reuses MO, syncTakeoverNow batches & keeps Read < Write
+test('w6-2: ui-runtime omits Wave 6 whole-turn bleed marking, axO debounces childList without redundant disconnect, syncTakeoverNow separates Read/Write', async () => {
   const { doc, win } = createMiniDom();
   const uiSrc = fs.readFileSync(path.join(ROOT, 'ui-runtime.js'), 'utf8');
 
@@ -447,15 +447,11 @@ test('w6-2: ui-runtime syncBleedTables marks turn/response ancestors, axO deboun
 
   const api = sb.window.__agPrism;
   try {
-    // 2a) syncBleedTables marks both agent-response and turn-cards-container with data-ag-cs-bleed="1"
-    assert.equal(agentResp.getAttribute('data-ag-cs-bleed'), '1', 'agent-response containing .md-table-host must get data-ag-cs-bleed="1"');
-    assert.equal(turnCards.getAttribute('data-ag-cs-bleed'), '1', 'turn-cards-container containing .md-table-host must get data-ag-cs-bleed="1"');
-
-    // Removing table cleans up bleed attributes on next sync
+    // 2a) Wave 6 whole-turn content-visibility:auto was reverted, so agent-response & turn-cards-container no longer need bleed workaround attrs
+    assert.equal(agentResp.hasAttribute('data-ag-cs-bleed'), false, 'agent-response no longer requires Wave 6 bleed attr');
+    assert.equal(turnCards.hasAttribute('data-ag-cs-bleed'), false, 'turn-cards-container no longer requires Wave 6 bleed attr');
     tblHost.remove();
     api.sync();
-    assert.equal(agentResp.hasAttribute('data-ag-cs-bleed'), false, 'agent-response bleed attr must clear when table is removed');
-    assert.equal(turnCards.hasAttribute('data-ag-cs-bleed'), false, 'turn-cards-container bleed attr must clear when table is removed');
 
     // 2b) axO childList storm is debounced (64ms) & reuses same observer (0 disconnect when first/last unchanged)
     const axMo = moInstances.find((m) => m.targets.some((t) => t.target === auxSplit));
@@ -690,8 +686,8 @@ test('w6-4: prompt-suggester avoids querySelector storms on streaming text/inlin
   }
 });
 
-// 5. Extension modules 300Hz steps() throttling, win-blur freeze, perf-mode blur stripping, 0 :has(, pure ASCII
-test('w6-5: omni, sidebar-studio, and effort-slider enforce steps() 300Hz throttling, win-blur freeze, and performance blur removal', () => {
+// 5. Extension modules smooth default GPU animations, perf-scoped win-blur freeze, perf-mode blur stripping, 0 :has(, pure ASCII
+test('w6-5: omni, sidebar-studio, and effort-slider keep smooth default animations, perf-scoped win-blur freeze, and performance blur removal', () => {
   const omniSrc = fs.readFileSync(path.join(ROOT, 'vendor', 'omni-viewer', 'omni-client.js'), 'utf8');
   const omniCss = (omniSrc.match(/const OMNI_CSS = \[([\s\S]*?)\]\.join\(''\);/) || [])[1] || '';
   assert.ok(omniCss.includes('html[data-ag-cs-style]:is([data-ag-cs-win-blur="1"],[data-ag-cs-perf-mode="performance"],[data-ag-cs-motion="off"]) :is(.ag-omni-menu,.ag-prism-omni-menu){backdrop-filter:none!important;-webkit-backdrop-filter:none!important}'), 'OMNI_CSS must strip backdrop-filter on win-blur/performance/motion=off');
@@ -701,18 +697,19 @@ test('w6-5: omni, sidebar-studio, and effort-slider enforce steps() 300Hz thrott
   const sbSrc = fs.readFileSync(path.join(ROOT, 'vendor', 'sidebar-studio', 'sidebar-client.js'), 'utf8');
   const sbCss = (sbSrc.match(/const CLIENT_CSS = \[([\s\S]*?)\]\.join\(''\);/) || [])[1] || '';
   for (const needle of [
-    'animation:ag-sb-dot-pulse 2s steps(20) infinite',
-    'animation:ag-sb-dot-pulse 1.5s steps(20) infinite',
-    'animation:ag-sb-spin 1s steps(24) infinite',
-    'animation:ag-sb-breathe-a 8s steps(24) infinite',
-    'animation:ag-sb-breathe-b 11.5s steps(24) infinite alternate',
-    'animation:ag-sb-halo 7.5s steps(24) infinite',
-    'html[data-ag-cs-style][data-ag-cs-win-blur="1"] :is(.ag-prism-aura-orb,.ag-prism-vessel::after,.ag-prism-sb-spin,.ag-prism-sb-dot){animation-play-state:paused!important}',
-    'html[data-ag-cs-style]:is([data-ag-cs-win-blur="1"],[data-ag-cs-perf-mode="performance"],[data-ag-cs-motion="off"]) :is(.ag-prism-sidebar-popover,.ag-prism-chat-policy-chip){backdrop-filter:none!important;-webkit-backdrop-filter:none!important}',
-    'html[data-ag-cs-style]:is([data-ag-cs-perf-mode="performance"],[data-ag-cs-motion="off"]) :is(.ag-prism-sidebar-popover,.ag-prism-chat-policy-chip){background:var(--ag-sb-container)!important;opacity:.98}',
+    'animation:ag-sb-dot-pulse 2s ease-in-out infinite',
+    'animation:ag-sb-dot-pulse 1.5s ease-in-out infinite',
+    'animation:ag-sb-spin 1s linear infinite',
+    'animation:ag-sb-breathe-a 8s ease-in-out infinite',
+    'animation:ag-sb-breathe-b 11.5s ease-in-out infinite alternate',
+    'animation:ag-sb-halo 7.5s linear infinite',
+    'html[data-ag-cs-style][data-ag-cs-win-blur="1"]:is([data-ag-cs-perf-mode="performance"],[data-ag-cs-perf-mode="eco"]) .ag-prism-vessel::after,html[data-ag-cs-style][data-ag-cs-win-blur="1"]:is([data-ag-cs-perf-mode="performance"],[data-ag-cs-perf-mode="eco"]) :is(.ag-prism-aura-orb,.ag-prism-sb-spin,.ag-prism-sb-dot){animation-play-state:paused!important}',
+    'html[data-ag-cs-style]:is([data-ag-cs-perf-mode="performance"],[data-ag-cs-motion="off"]) :is(.ag-prism-sidebar-popover,.ag-prism-chat-policy-chip){backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:var(--ag-sb-container)!important;opacity:.98}',
   ]) {
     assert.ok(sbCss.includes(needle), `sidebar-client CLIENT_CSS missing: ${needle}`);
   }
+  assert.equal(/steps\(/i.test(sbCss), false, 'sidebar-client CLIENT_CSS must have 0 choppy steps() animations');
+  assert.equal(/:is\([^)]*::(?:before|after)/.test(sbCss), false, 'sidebar-client CLIENT_CSS must not place pseudo-elements inside :is()');
   assert.equal(/:has\(/.test(sbCss), false, 'sidebar-client CLIENT_CSS must contain 0 :has(');
   assert.equal(/[^\x00-\x7F]/.test(sbCss.replace(/content:"[^"]*"/g, '')), false, 'sidebar-client CLIENT_CSS selectors/props must remain pure ASCII');
 
