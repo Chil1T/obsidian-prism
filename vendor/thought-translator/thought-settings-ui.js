@@ -1652,7 +1652,7 @@
     };
 
     clearKeyBtn.addEventListener('click', (ev) => {
-      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+      ev?.stopPropagation?.();
       const cur = getActiveProfile();
       if (!cur) return;
       cur.clearSavedKey = true;
@@ -1665,7 +1665,7 @@
       const cur = getActiveProfile();
       if (!cur) return;
       cur.name = nameInput.value.trim() || cur.name || 'Profile';
-      cur.baseUrl = urlInput.value.trim() || 'https://api.openai.com/v1';
+      cur.baseUrl = urlInput.value.trim() || (cur.baseUrlError ? '' : 'https://api.openai.com/v1');
       cur.model = modelInput.value.trim();
       if (keyInput.value.trim()) {
         cur.draftKey = keyInput.value.trim();
@@ -1684,7 +1684,7 @@
           chip.setAttribute('data-active', p.id === state.activeProfileId ? '1' : '0');
           chip.textContent = p.name || p.id;
           chip.addEventListener('click', (ev) => {
-            if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+            ev?.stopPropagation?.();
             syncFormIntoProfile();
             state.activeProfileId = p.id;
             state.fetchedModels = [];
@@ -1700,7 +1700,7 @@
         addBtn.setAttribute('data-testid', 'thought-add-profile-btn');
         addBtn.textContent = ui.thoughtAddProfileBtn || pack.addProfile;
         addBtn.addEventListener('click', (ev) => {
-          if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+          ev?.stopPropagation?.();
           syncFormIntoProfile();
           const curPack = getPack();
           const nextNum = state.profiles.length + 1;
@@ -1729,7 +1729,7 @@
           delBtn.setAttribute('data-testid', 'thought-del-profile-btn');
           delBtn.textContent = ui.thoughtDelProfileBtn || pack.delProfile;
           delBtn.addEventListener('click', (ev) => {
-            if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+            ev?.stopPropagation?.();
             if (state.profiles.length <= 1) return;
             state.profiles = state.profiles.filter((item) => item.id !== state.activeProfileId);
             state.activeProfileId = state.profiles[0].id;
@@ -1741,12 +1741,14 @@
         const cur = getActiveProfile();
         if (cur) {
           nameInput.value = cur.name || '';
-          urlInput.value = cur.baseUrl || 'https://api.openai.com/v1';
+          urlInput.value = cur.baseUrl || (cur.baseUrlError ? '' : 'https://api.openai.com/v1');
           modelInput.value = cur.model || '';
           keyInput.value = cur.draftKey || '';
           syncKeyHintForUrl(cur);
         }
       });
+      const curErr = getActiveProfile()?.baseUrlError;
+      if (curErr) setStatus('err', `✕ ${curErr}`);
     };
 
     const refreshStaticLabels = () => {
@@ -1778,15 +1780,14 @@
       const cur = getActiveProfile();
       if (cur) {
         cur.name = nameInput.value;
-        const activeChip =
-          profPills.querySelector && profPills.querySelector(`[data-profile-id="${cur.id}"]`);
+        const activeChip = profPills.querySelector?.(`[data-profile-id="${cur.id}"]`);
         if (activeChip) activeChip.textContent = cur.name.trim() || cur.id;
       }
     });
     urlInput.addEventListener('input', () => {
       const cur = getActiveProfile();
       if (cur) {
-        cur.baseUrl = urlInput.value;
+        cur.baseUrl = urlInput.value; cur.baseUrlError = '';
         syncKeyHintForUrl(cur);
       }
     });
@@ -1854,6 +1855,7 @@
           id: p.id,
           name: p.name,
           baseUrl: p.baseUrl,
+          baseUrlError: p.baseUrlError || '',
           model: p.model,
           hasApiKey: Boolean(p.hasApiKey),
           maskedKey: p.maskedKey || '',
@@ -1957,7 +1959,7 @@
     };
 
     fetchModelsBtn.addEventListener('click', (ev) => {
-      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+      ev?.stopPropagation?.();
       const api = resolveThoughtApi();
       if (!api || typeof api.fetchModels !== 'function' || state.busy) return;
       syncFormIntoProfile();
@@ -2030,7 +2032,7 @@
     };
 
     saveBtn.addEventListener('click', (ev) => {
-      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+      ev?.stopPropagation?.();
       const api = resolveThoughtApi();
       if (!api || typeof api.saveConfig !== 'function' || state.busy) return;
       if (hasThoughtBridge() && !state.loaded) return;
@@ -2065,7 +2067,7 @@
     });
 
     testBtn.addEventListener('click', (ev) => {
-      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+      ev?.stopPropagation?.();
       const api = resolveThoughtApi();
       if (!api || typeof api.testConnection !== 'function' || state.busy) return;
       if (hasThoughtBridge() && !state.loaded) return;
@@ -2109,15 +2111,12 @@
     });
 
     clearCacheBtn.addEventListener('click', (ev) => {
-      if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
+      ev?.stopPropagation?.();
       if (state.busy) return;
       state.busy = true;
       clearCacheBtn.disabled = true;
-
       const api = resolveThoughtApi();
-      if (api && typeof api.clearLocalCache === 'function') {
-        api.clearLocalCache();
-      }
+      api?.clearLocalCache?.();
 
       const rpcCall = resolveThoughtRpcCall();
       const daemonClear = rpcCall
