@@ -77,6 +77,47 @@ test('Law 4: Channel 1 (auto + 8 locales) < 549,500 B, pulse-vial-bridge.js < 31
   );
 });
 
+test('Law 4+: Declarative CHANNEL_REGISTRY multi-channel payloads stay within per-channel budgets', () => {
+  assert.ok(Array.isArray(cdp.CHANNEL_REGISTRY) && cdp.CHANNEL_REGISTRY.length >= 12, 'CHANNEL_REGISTRY must cover all 12 delayed/on-demand channels');
+  const seenIds = new Set();
+  for (const ch of cdp.CHANNEL_REGISTRY) {
+    assert.equal(typeof ch.id, 'string');
+    assert.ok(ch.id.length > 0 && !seenIds.has(ch.id), `Duplicate or empty channel id: ${ch.id}`);
+    seenIds.add(ch.id);
+    assert.ok(Array.isArray(ch.configKeys), `Channel ${ch.id} must declare configKeys array`);
+    assert.ok(Array.isArray(ch.files) && ch.files.length > 0, `Channel ${ch.id} must declare non-empty files array`);
+    assert.ok(Number.isInteger(ch.budgetBytes) && ch.budgetBytes > 0, `Channel ${ch.id} must declare positive integer budgetBytes`);
+    assert.equal(typeof ch.shouldEnable, 'function', `Channel ${ch.id} must declare shouldEnable()`);
+    assert.equal(typeof ch.build, 'function', `Channel ${ch.id} must declare build()`);
+    assert.equal(typeof ch.teardown, 'string');
+    assert.ok(ch.teardown.length > 0, `Channel ${ch.id} must declare non-empty teardown expression`);
+  }
+
+  const allEnabledCfg = {
+    ...cdp.DEFAULT_CONFIG,
+    omniModule: 'on',
+    sidebarStudio: 'on',
+    hostLocalization: 'on',
+    thoughtTranslate: 'ai',
+    periodicModelPicker: 'on',
+    mascot: 'crab',
+    homeLayout: 'studio',
+  };
+  const report = cdp.getChannelBudgetReport(allEnabledCfg, { noDiskCache: true });
+  assert.equal(report.ok, true, `Over-budget channels: ${report.overBudgetChannels.join(', ')}`);
+  const lines = [];
+  for (const ch of report.channels) {
+    assert.equal(ch.enabled, true, `Channel ${ch.id} expected enabled under allEnabledCfg`);
+    assert.ok(ch.bytes > 0, `Channel ${ch.id} compiled to 0 B unexpectedly`);
+    assert.ok(
+      ch.bytes <= ch.budgetBytes,
+      `Channel ${ch.id} payload ${ch.bytes} B exceeds budgetBytes ${ch.budgetBytes} B`
+    );
+    lines.push(`${ch.id}=${ch.bytes}B/${ch.budgetBytes}B`);
+  }
+  console.log(`[bundle-budget] Channels (${report.channels.length}): ${lines.join(', ')}`);
+});
+
 test('Law 10: Tracked core text files enforce strict 0 UTF-8 BOM and 0 CRLF line endings', () => {
   const tracked = listTrackedFiles();
   const coreTextRe = /\.(?:mjs|cjs|js|css|json|md|yml|yaml|cff|manifest|cs|swift|html|svg|txt)$/i;

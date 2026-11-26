@@ -464,6 +464,7 @@ test('v107 A2-7: default buildInjectExpression never pollutes repo, and PrismDae
     fs.mkdirSync(fakeWorktree, { recursive: true });
     fs.writeFileSync(path.join(fakeWorktree, '.git'), 'gitdir: /tmp/fake\n', 'utf8');
     fs.copyFileSync(CDP_PATH, path.join(fakeWorktree, 'cdp.js'));
+    fs.cpSync(path.join(ROOT, 'src'), path.join(fakeWorktree, 'src'), { recursive: true });
     const wtDaemon = new PrismDaemon({ rootDir: fakeWorktree, silent: true, enableAutoUpdateTimer: false });
     assert.equal(wtDaemon.resolveBundleCachePath(), null, 'PrismDaemon must recognize git worktree .git file');
 

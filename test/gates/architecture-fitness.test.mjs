@@ -73,7 +73,7 @@ const NEW_FILE_MAX_BYTES = 40960;
 const VERSION_LEN_SLACK_BYTES = 16;
 
 const LEGACY_SIZE_RATCHET = Object.freeze({
-  'cdp.js': { maxLines: 12699, maxBytes: 488431 },
+  'cdp.js': { maxLines: 300, maxBytes: 15360 },
   'conv-aura.js': { maxLines: 1269, maxBytes: 49696 },
   'crystal-prism-core.js': { maxLines: 1203, maxBytes: 46570 },
   'dual-mascot-rig.js': { maxLines: 5460, maxBytes: 230380 },

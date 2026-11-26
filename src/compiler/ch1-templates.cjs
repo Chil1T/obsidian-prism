@@ -1,0 +1,500 @@
+// Channel 1 运行时语种切片、增量 configRefresh 模板与主注入壳模板生成器
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const { getFileSig } = require('../utils/fs-safe.cjs');
+const {
+  STYLE_ID,
+  LEGACY_STYLE_ID,
+  SETTING_BINDING,
+  reconcileConfigAliases,
+} = require('../config/schema.cjs');
+const { minifySingleSource } = require('./js-string-pool.cjs');
+
+// Channel 1 自身实际消费的最小运行时 key 集（Omni / InlineDiff 均在各自独立通道内自带完整 8 语表，无需重复打入 Channel 1 bootCfg）
+const CH1_RUNTIME_UI_KEYS = Object.freeze([
+  'cacheRead', 'cacheShort', 'effortTitle', 'fiveHourLabel',
+  'homeLocalOnlyTag', 'homeLocalScopeNote', 'homeScopeActive', 'homeScopeActiveCount', 'homeScopeAll', 'homeScopeArchivedCount',
+  'kpiCacheHit', 'kpiCalls', 'kpiDays', 'kpiFavModel', 'kpiSessions', 'kpiTokens',
+  'noModelUsage',
+  'optHost', 'optLightAlabaster', 'optLightCrystal', 'optMotionOff', 'optMotionStandard', 'optMotionSubtle',
+  'optMotionUltra', 'optObsidian', 'optThoughtBilingual', 'optThoughtImmersive', 'optWarm',
+  'quotaEmptyHint', 'quotaJustNow', 'quotaLoading', 'quotaPoolsTitle', 'refreshBtnTitle', 'sessionsUnit',
+  'showLess', 'sidebarLessLabel', 'sidebarMoreLabel', 'studioPlaceholder', 'subagentsUnit', 'swarmBadge',
+  'tabModels', 'tabOverview', 'tabQuotas', 'thinkingEllipsis', 'tokenUnit', 'tokensInShort', 'tokensOutShort',
+  'weeklyLabel', 'workspaceAll', 'workspaceFilterAria',
+]);
+
+function normalizeLangIdNode(rawLang, fallback = 'en') {
+  const raw = typeof rawLang === 'string' ? rawLang.trim().toLowerCase().replace(/_/g, '-') : '';
+  if (!raw || raw === 'auto') return fallback;
+  if (raw === 'en' || raw.startsWith('en-') || raw === 'english') return 'en';
+  if (raw === 'ja' || raw.startsWith('ja-') || raw === 'jp' || raw === 'japanese') return 'ja';
+  if (raw === 'ko' || raw.startsWith('ko-') || raw === 'kr' || raw === 'korean') return 'ko';
+  if (raw === 'es' || raw.startsWith('es-') || raw === 'spanish') return 'es';
+  if (raw === 'fr' || raw.startsWith('fr-') || raw === 'french') return 'fr';
+  if (raw === 'de' || raw.startsWith('de-') || raw === 'german') return 'de';
+  if (raw === 'yue' || raw.startsWith('yue-') || raw === 'zh-yue' || raw.includes('cantonese')) return 'zh-CN';
+  if (raw === 'zh-tw' || raw === 'zh-hk' || raw.startsWith('zh-hk-') || raw === 'zh-mo' || raw === 'zh-hant' || raw.startsWith('zh-hant-') || raw === 'tw' || raw === 'hant') return 'zh-TW';
+  if (raw === 'zh' || raw === 'zh-cn' || raw === 'zh-hans' || raw.startsWith('zh-')) return 'zh-CN';
+  return fallback;
+}
+
+function extractSingleLangRuntimeSlice(mod, langId) {
+  if (!mod) return {};
+  const src =
+    typeof mod.getRuntimeUiSlice === 'function'
+      ? mod.getRuntimeUiSlice(langId)?.strings
+      : typeof mod.getUiStrings === 'function'
+        ? mod.getUiStrings(langId)
+        : null;
+  if (!src || typeof src !== 'object') return {};
+  const out = {};
+  for (let i = 0; i < CH1_RUNTIME_UI_KEYS.length; i++) {
+    const k = CH1_RUNTIME_UI_KEYS[i];
+    if (typeof src[k] === 'string') out[k] = src[k];
+  }
+  return out;
+}
+
+function createCh1Templates({
+  rootDir = path.resolve(__dirname, '..', '..'),
+  pluginVersion,
+  readConfig,
+  resolveCurrentBundleCodeHash,
+  detectSystemUiLocale,
+}) {
+  let _localesFreshCache = { sig: '', mod: null };
+  let _configRefreshTemplate = '';
+  let _injectWrapperTemplate = null;
+
+  function loadLocalesModuleFresh() {
+    const locPath = path.join(rootDir, 'i18n-locales.js');
+    if (!fs.existsSync(locPath)) return null;
+    try {
+      const sig = getFileSig(locPath);
+      if (_localesFreshCache.sig === sig && _localesFreshCache.mod) {
+        return _localesFreshCache.mod;
+      }
+      try { delete require.cache[require.resolve(locPath)]; } catch {}
+      const mod = require(locPath);
+      _localesFreshCache = { sig, mod };
+      return mod;
+    } catch {
+      return null;
+    }
+  }
+
+  function resolveSystemLangNode(hostLocaleHint = null) {
+    const sysLocale = hostLocaleHint || detectSystemUiLocale();
+    const stripped = String(sysLocale || '').trim().split(/[.@]/)[0];
+    return normalizeLangIdNode(stripped, 'en');
+  }
+
+  // 为 Channel 1 bootCfg 生成当前活跃语言（及 auto 模式下的 en 兜底）迷你运行时词典（列式编码消除双语重复键名）
+  function buildRuntimeUiSlicePayload(config) {
+    const mod = loadLocalesModuleFresh();
+    if (!mod) return null;
+    const rawLang = (config && (config.language || config.lang)) || 'auto';
+    const isAuto = String(rawLang).trim().toLowerCase() === 'auto';
+    const primary = isAuto ? resolveSystemLangNode() : normalizeLangIdNode(rawLang, 'en');
+    const pObj = extractSingleLangRuntimeSlice(mod, primary);
+    const enObj = isAuto && primary !== 'en' ? extractSingleLangRuntimeSlice(mod, 'en') : null;
+    const keys = CH1_RUNTIME_UI_KEYS.filter((k) => typeof pObj[k] === 'string' || typeof enObj?.[k] === 'string');
+    const vals = { [primary]: keys.map((k) => pObj[k] ?? '') };
+    if (enObj) vals.en = keys.map((k) => enObj[k] ?? '');
+    return { active: primary, keys, vals };
+  }
+
+  function getConfigRefreshTemplate() {
+    if (_configRefreshTemplate) return _configRefreshTemplate;
+    const rawTpl = `(() => {
+      const cfg = __AG_REF_CFG__;
+      const api = window.__agPrism || window.__agClaudeStyle;
+      if (api && api.version === __AG_REF_VER__ && api.codeHash === __AG_REF_HASH__ && typeof api.refreshConfig === 'function') {
+        const applied = api.refreshConfig(cfg);
+        if (applied === false) return { refreshed: true, skippedStale: true, version: api.version };
+        const effectiveCfg = api.getState?.()?.cfg || cfg;
+        try { window.__agPrismTelemetry?.sync?.(effectiveCfg); } catch {}
+        try { window.__agPrismEffortSlider?.sync?.(effectiveCfg); } catch {}
+        try { window.__agPrismThought?.sync?.(effectiveCfg); } catch {}
+        try { window.__agPrismInlineDiff?.sync?.(effectiveCfg); } catch {}
+        if (effectiveCfg?.omniModule === 'off') { try { window.__agPrismOmni?.destroy?.(); } catch {} }
+        else { try { window.__agPrismOmni?.sync?.(effectiveCfg, window.__agPrismOmniServerMeta || null); } catch {} }
+        if (effectiveCfg?.sidebarStudio !== 'on') {
+          try { window.__agPrismSidebar?.sync?.(effectiveCfg, window.__agPrismSidebarMeta || null); } catch {}
+          try { window.__agPrismSidebar?.destroy?.(); } catch {}
+          try { delete window.__agPrismSidebar; } catch {}
+          try {
+            if (document.documentElement) {
+              ['data-ag-prism-mode','data-ag-prism-chat-kind','data-ag-prism-chat-telemetry','data-ag-cs-space','data-ag-cs-space-palette','data-ag-cs-space-accent'].forEach((a) => document.documentElement.removeAttribute(a));
+            }
+          } catch {}
+        } else {
+          try { window.__agPrismSidebar?.sync?.(effectiveCfg, window.__agPrismSidebarMeta || null); } catch {}
+        }
+        try {
+          const hiMode = effectiveCfg?.hostLocalization;
+          const hiLang = effectiveCfg?.language;
+          const navL = String((typeof navigator !== 'undefined' && ((navigator.languages && navigator.languages[0]) || navigator.language)) || '').trim();
+          if (hiMode === 'off') window.__agPrismHostI18n?.setMode?.('off');
+          else if (hiMode === 'on') window.__agPrismHostI18n?.setMode?.('on');
+          else if ((hiLang && hiLang !== 'zh-CN' && hiLang !== 'auto') || ((!hiLang || hiLang === 'auto') && navL && !/^zh(?:$|-(?:cn|hans|sg)(?:-|$))/i.test(navL))) window.__agPrismHostI18n?.destroy?.();
+          else window.__agPrismHostI18n?.setMode?.('auto');
+        } catch {}
+        if (effectiveCfg?.mascot === 'off' || effectiveCfg?.mascot === false) {
+          try {
+            try { window.__agDualMascotRig?.dispose?.(); } catch {}
+            try { (window.__agPrism || window.__agClaudeStyle)?.sync?.(); } catch {}
+            document.querySelectorAll?.('.ag-cs-crab, .ag-cs-dual-stage, .ag-cs-crab-stage, .ag-cs-mascot-stage, .ag-v2-mascot-stage, .ag-v2-habitat-prop').forEach((n) => {
+              try { n.__agMascotApi?.dispose?.(); } catch {}
+              n.remove?.();
+            });
+            document.querySelectorAll?.('[data-ag-cs-crab-anchor]').forEach((n) => n.removeAttribute?.('data-ag-cs-crab-anchor'));
+            document.documentElement?.removeAttribute?.('data-ag-cs-has-crab');
+            document.documentElement?.removeAttribute?.('data-ag-cs-mascot-drag');
+            delete window.__agDualMascotRig;
+            delete globalThis.__agDualMascotRig;
+            delete window.__agPrismMascotArt;
+            delete globalThis.__agPrismMascotArt;
+          } catch {}
+        }
+        if (effectiveCfg?.homeLayout && effectiveCfg.homeLayout !== 'studio') {
+          try {
+            (window.__agPrism || window.__agClaudeStyle)?.detachHomeStudio?.();
+            document.getElementById?.('ag-prism-studio-v101-css')?.remove?.();
+            document.querySelectorAll?.('.ag-cs-home-panel-seat,.ag-cs-home-panel')?.forEach?.((n) => n.remove());
+            document.documentElement?.removeAttribute?.('data-ag-prism-scope');
+            for (const k of ['__agPrismHomeStudioPanel', '__agHomeStudioPanel']) { delete window[k]; delete globalThis[k]; }
+          } catch {}
+        }
+        if (effectiveCfg?.periodicModelPicker === 'off' || effectiveCfg?.periodicModelPicker === false) {
+          try {
+            window.__agPrismPeriodicPicker?.destroy?.();
+            ['data-ag-prism-periodic-picker','data-ag-pp-open','data-ag-pp-holding'].forEach((a) => document.documentElement?.removeAttribute?.(a));
+            document.querySelectorAll?.('#ag-prism-periodic-picker-css,#ag-prism-periodic-picker-root,.ag-pp-hold-ring,.ag-pp-mini-keycap').forEach((n) => n.remove());
+            ['__agPrismPeriodicPicker','__agPrismPeriodicPickerFactory','__agPrismKeyboard3D','__agPrismPeriodicKeyboard3D','__agPrismOledScreen','__agPrismGrainAssets','__agPeriodicAudioFx','__agPeriodicModelCatalog','__agPeriodicHostBridge','__agPeriodicBentoUi','__agPeriodicPbrGrainAssets','__agPeriodicOledScreen','__agPeriodicKeyboard3D'].forEach((k) => { try { delete window[k]; } catch {} try { delete globalThis[k]; } catch {} });
+          } catch {}
+        }
+        if (document.documentElement) {
+          if (effectiveCfg?.thoughtTranslate && effectiveCfg.thoughtTranslate !== 'off') {
+            document.documentElement.setAttribute('data-ag-prism-thought-view', effectiveCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
+          } else {
+            document.documentElement.removeAttribute('data-ag-prism-thought-view');
+          }
+          document.documentElement.setAttribute('data-ag-prism-sidebar-studio', effectiveCfg?.sidebarStudio === 'on' ? 'on' : 'off');
+        }
+        return { refreshed: true, version: api.version };
+      }
+      return { refreshed: false };
+    })()`;
+    _configRefreshTemplate = minifySingleSource(rawTpl);
+    return _configRefreshTemplate;
+  }
+
+  function buildConfigRefreshExpression(customConfig, extraMeta = null) {
+    const config = customConfig ? reconcileConfigAliases(customConfig) : readConfig();
+    const codeHash = resolveCurrentBundleCodeHash();
+    const hasExplicitLang = !customConfig || Object.prototype.hasOwnProperty.call(config, 'language') || Object.prototype.hasOwnProperty.call(config, 'lang');
+    const uiSlice = hasExplicitLang ? buildRuntimeUiSlicePayload(config) : null;
+    const bootCfg = {
+      ...config,
+      ...(uiSlice ? { __uiSlice: uiSlice } : {}),
+      ...(extraMeta && typeof extraMeta === 'object' ? extraMeta : {}),
+      binding: SETTING_BINDING,
+      codeHash,
+      __fromFile: true,
+    };
+    return getConfigRefreshTemplate()
+      .replace('__AG_REF_CFG__', () => JSON.stringify(bootCfg))
+      .replace('__AG_REF_VER__', () => JSON.stringify(pluginVersion))
+      .replace('__AG_REF_HASH__', () => JSON.stringify(codeHash));
+  }
+
+  function getInjectWrapperTemplate() {
+    if (_injectWrapperTemplate) return _injectWrapperTemplate;
+    const rawTpl = `(() => {
+      const W = window, D = document, G = globalThis, isF = (v) => typeof v === 'function';
+      const VER = ${JSON.stringify(pluginVersion)}, SID = ${JSON.stringify(STYLE_ID)}, LSID = ${JSON.stringify(LEGACY_STYLE_ID)};
+      let _css = null;
+      const getCss = () => (_css === null ? (_css = __AG_INJ_CSS__) : _css);
+      const cleanOld = () => {
+        try { D.getElementById(LSID)?.remove(); } catch {}
+        try {
+          const o = W.__agClaudeStyle;
+          if (o && (!W.__agPrism || Number(o.version) <= 2)) {
+            if (isF(o.destroy)) o.destroy();
+            delete W.__agClaudeStyle;
+          }
+        } catch {}
+      };
+      const applyStyle = () => {
+        const p = D.head || D.documentElement;
+        if (!p) return;
+        cleanOld();
+        let st = D.getElementById(SID);
+        if (!st) { st = D.createElement('style'); st.id = SID; }
+        const fk = __AG_INJ_CSSHASH__, flatOk = st.getAttribute?.('data-ag-cs-flat') === fk + ':' + (st.textContent || '').length;
+        const rawOk = st.getAttribute?.('data-ag-cs-css-hash') === fk && (st.textContent || '').length > 0 && typeof CSS !== 'undefined' && CSS.supports?.('selector(&)');
+        if (!flatOk && !rawOk) {
+          const c = getCss();
+          if (st.textContent !== c) st.textContent = c;
+          st.removeAttribute?.('data-ag-cs-flat');
+          st.setAttribute?.('data-ag-cs-css-hash', fk);
+        }
+        if (st.parentNode !== p || p.lastElementChild !== st) p.appendChild(st);
+        try { W.__agPrism?.flattenCss?.(); } catch {}
+      };
+
+      const mkRpc = (bk, lim, onTo, onErr, disp) => {
+        const pend = new Map();
+        let seq = 0;
+        const send = (mkReq, ms, ext, bypass) =>
+          new Promise((res) => {
+            if (!bypass && pend.size >= lim) { res(onErr('busy', true)); return; }
+            const id = ++seq, it = ext ? { res, t: null, ...ext } : { res, t: null };
+            it.arm = (d = ms) => { clearTimeout(it.t); it.t = setTimeout(() => { pend.delete(id); res(onTo()); }, d); };
+            it.arm();
+            pend.set(id, it);
+            try { W[bk](JSON.stringify(mkReq(id))); }
+            catch (e) { clearTimeout(it.t); pend.delete(id); res(onErr(String(e && e.message ? e.message : e), false)); }
+          });
+        const resolve = (id, r) => {
+          const it = pend.get(id);
+          if (!it) return;
+          clearTimeout(it.t);
+          pend.delete(id);
+          it.res(r);
+        };
+        const dispose = () => {
+          for (const it of pend.values()) { clearTimeout(it.t); it.res(disp); }
+          pend.clear();
+        };
+        return { pend, send, resolve, dispose };
+      };
+
+      const ensureRepo = () => {
+        try {
+          if (W.__agPrismRepoBridge?.__prismBridgeReady) return;
+          const c = mkRpc('__agPrismRepoCall', 8, () => ({ ok: false, timeout: true, noRemote: true, hasRemote: false }), (e) => ({ ok: false, error: e }), { ok: false, disposed: true });
+          const fn = (inp) => {
+            const p = typeof inp === 'string' ? { action: inp } : inp && typeof inp === 'object' ? { ...inp } : { action: 'status' };
+            const a = p.action || 'status';
+            if (!isF(W.__agPrismRepoCall)) {
+              return Promise.resolve({
+                ok: false, offline: true, action: a, isGitRepo: false, noRemote: true, hasRemote: false,
+                branch: 'local', commit: VER, shortHash: VER, remoteUrl: '', hasUpdates: false, upToDate: true, updated: false, message: 'Sidecar daemon offline',
+              });
+            }
+            return c.send((id) => ({ id, action: a, input: p }), 16000).then((r) => (r && !r.action ? { ...r, action: a } : r));
+          };
+          Object.assign(fn, {
+            __prismBridgeReady: true, call: fn, request: fn,
+            status: () => fn({ action: 'status' }), pull: () => fn({ action: 'pull' }), sync: () => fn({ action: 'pull' }),
+            resolve: c.resolve, dispose: c.dispose,
+          });
+          W.__agPrismRepoBridge = fn;
+          W.__agPrismRepoResolve = c.resolve;
+        } catch {}
+      };
+
+      const ensureThought = () => {
+        try {
+          const cur = W.__agPrismThoughtBridge;
+          if (cur?.__prismBridgeReady && isF(cur.cacheStats) && isF(cur.cancelTranslate)) return;
+          try { cur?.dispose?.(); } catch {}
+          const c = mkRpc('__agPrismThoughtCall', 64, () => ({ ok: false, timeout: true, error: 'Request timed out' }), (e) => ({ ok: false, error: e }), { ok: false, disposed: true });
+          const rpc = (p, onP, ms = 48000) => {
+            const a = p?.action || 'get-config';
+            if (!isF(W.__agPrismThoughtCall)) return Promise.resolve({ ok: false, offline: true, action: a, error: 'Sidecar daemon offline' });
+            const ctrl = a === 'cancel-translate' || a === 'cache-stats' || a === 'clear-cache';
+            return c.send((id) => ({ id, action: a, input: p }), ms, onP ? { onP, buf: '' } : null, ctrl).then((r) => (r && !r.action && !r.ok ? { ...r, action: a } : r));
+          };
+          const b = {
+            __prismBridgeReady: true,
+            call: (i) => rpc(i && typeof i === 'object' ? { ...i } : { action: String(i || 'get-config') }, null, 25000),
+            translateStream: (o, onP) => rpc({ ...(o && typeof o === 'object' ? o : {}), action: 'translate-stream', text: o?.text || '', mode: o?.mode || 'ai' }, onP, Math.min(180000, 90000 + Math.max(0, c.pend.size - 2) * 30000)),
+            cancelTranslate: (v) => rpc(v && typeof v === 'object' ? { ...v, action: 'cancel-translate' } : { action: 'cancel-translate', requestId: v, key: v }, null, 8000),
+            cacheStats: () => rpc({ action: 'cache-stats' }, null, 8000),
+            clearCache: () => rpc({ action: 'clear-cache' }, null, 8000),
+            onChunk: (id, ch) => {
+              const it = c.pend.get(id);
+              if (!it || !isF(it.onP)) return;
+              let txt = null;
+              if (typeof ch === 'string') { it.buf = txt = ch; }
+              else if (ch && typeof ch === 'object' && typeof ch.a === 'string') {
+                const s = typeof it.buf === 'string' ? it.buf : '';
+                if ((ch.o | 0) === s.length) it.buf = txt = s + ch.a;
+              }
+              if (txt !== null) {
+                try { it.arm?.(60000); } catch {}
+                try { it.onP(txt); } catch {}
+              }
+            },
+            resolve: c.resolve,
+            dispose: c.dispose,
+          };
+          W.__agPrismThoughtBridge = b;
+          W.__agPrismThoughtOnChunk = b.onChunk;
+          W.__agPrismThoughtResolve = c.resolve;
+        } catch {}
+      };
+
+      const ensureUsage = () => {
+        try {
+          const cur = W.__agPrismUsageBridge;
+          if (cur?.__prismBridgeReady && isF(cur.listSummaries)) return;
+          try { cur?.dispose?.(); } catch {}
+          const fu = (x) => ({ ok: false, records: [], summaries: [], ...x });
+          const c = mkRpc('__agPrismUsageCall', 12, () => fu({ timeout: true }), (e, b) => fu(b ? { busy: true } : { error: e }), fu({ disposed: true }));
+          const rpc = (q, ms = 18000) => (!isF(W.__agPrismUsageCall) ? Promise.resolve(fu({ offline: true })) : c.send((id) => ({ id, ...q }), ms));
+          const b = {
+            __prismBridgeReady: true,
+            isOnline: () => isF(W.__agPrismUsageCall),
+            fetchBatch: (o, ms = 18000) => (o && typeof o === 'object' && !Array.isArray(o) ? rpc({ action: o.action || 'fetch-batch', items: Array.isArray(o.items) ? o.items : [], includeSummaries: Boolean(o.includeSummaries) }, ms) : rpc({ action: 'fetch-batch', items: Array.isArray(o) ? o : [] }, ms)),
+            listSummaries: (ms = 12000) => rpc({ action: 'list-summaries', items: [], includeSummaries: true }, ms),
+            resolve: c.resolve,
+            dispose: c.dispose,
+          };
+          W.__agPrismUsageBridge = b;
+          W.__agPrismUsageResolve = c.resolve;
+        } catch {}
+      };
+
+      const destroyMods = (incMain) => {
+        const ks = '__agPrismTelemetry,__agPrismEffortSlider,__agPrismThought,__agPrismOmni,__agPrismContextMenu'.split(',');
+        if (incMain) ks.push('__agPrism');
+        for (const k of ks) { try { W[k]?.destroy?.(); } catch {} }
+      };
+
+      const stripForeign = () => {
+        destroyMods(true);
+        for (const k of '__agPrismInlineDiff,__agPrismHostI18n,__agPrismPeriodicPicker'.split(',')) { try { W[k]?.destroy?.(); } catch {} }
+        try {
+          const de = D.documentElement;
+          for (const a of 'data-ag-prism-host-i18n,data-ag-prism-periodic-picker,data-ag-pp-open,data-ag-cs-model-menu'.split(',')) de?.removeAttribute?.(a);
+          D.querySelectorAll?.('[data-ag-cs-aux-dual],[data-ag-cs-model-overlay]').forEach((el) => {
+            el.removeAttribute('data-ag-cs-aux-dual');
+            el.removeAttribute('data-ag-cs-model-overlay');
+          });
+        } catch {}
+        for (const k of '__agPrismRepoBridge,__agPrismThoughtBridge,__agPrismUsageBridge,__agPrismOmniBridge'.split(',')) { try { W[k]?.dispose?.(); } catch {} }
+        for (const id of [SID, LSID, 'ag-prism-settings-v101-css', 'ag-prism-studio-v101-css', 'ag-prism-omni-css', 'ag-prism-inline-diff-css']) { try { D.getElementById(id)?.remove(); } catch {} }
+        try { D.querySelectorAll?.('[data-testid="prism-thought-ai-config"],[data-testid="prism-thought-general-config"],.ag-cs-ctx-menu,.ag-cs-ctx-toast,.ag-cs-inline-diff-box,.ag-cs-diff-ctx-menu')?.forEach?.((el) => el.remove()); } catch {}
+        for (const k of '__agPrismThought,__agPrismThoughtSettingsUi,__agPrismInlineDiff,__agPrismInlineDiffFactory,__agPrismInlineDiffResolve,__agPrismOmni,__agPrismContextMenu,__agPrism,__agClaudeStyle'.split(',')) {
+          delete W[k];
+          delete G[k];
+        }
+      };
+
+      const hasMarkers = () => {
+        try {
+          const cl = D.body?.classList;
+          if (cl && (cl.contains('theme-standalone') || cl.contains('monaco-workbench'))) return true;
+          return Boolean(D.querySelector('.agy-shell,.agy-home,[data-testid="aux-pane-split"],[data-testid="conversation-view"],[data-testid="agent-input-box"],[data-testid="model-selector-trigger"],.monaco-workbench'));
+        } catch { return false; }
+      };
+
+      const checkHost = () => {
+        try {
+          const href = typeof W.location?.href === 'string' ? W.location.href : '';
+          if (!href) return 'ok';
+          const low = href.toLowerCase();
+          if (/^(?:devtools:\\/\\/|data:|chrome:|chrome-extension:|edge:|blob:|plugin:)/.test(low)) return 'reject';
+          if (/^(?:vscode-file:\\/\\/|app:\\/\\/|about:)/.test(low)) {
+            return /^(?:untitled|launchpad)$/i.test(String(D.title || '').trim()) || /\\/launchpad(?:\\.html)?(?:[?#]|$)/i.test(low) ? 'reject' : 'ok';
+          }
+          const m = /^(https?):\\/\\/(127\\.0\\.0\\.1|localhost|\\[::1\\])(?::\\d+)?(\\/[^?#]*)?(?:[?#]|$)/i.exec(href);
+          if (!m) return /^https?:/.test(low) ? 'reject' : 'ok';
+          if (/^\\/(?:viewer(?:\\/|$)|sandbox(?:\\/|$)|stream(?:\\/|$)|api(?:\\/|$))/.test((m[3] || '/').toLowerCase())) return 'reject';
+          if (hasMarkers()) return 'ok';
+          const rs = String(D.readyState || '');
+          if (m[1].toLowerCase() === 'http') return rs === 'loading' ? 'defer' : 'reject';
+          if (/\\bantigravity\\b/i.test(String(D.title || ''))) return 'ok';
+          return rs === 'complete' ? 'reject' : 'ok';
+        } catch { return 'ok'; }
+      };
+
+      let status = 'ok', mounted = false;
+      const mount = () => {
+        if (mounted || !D.documentElement) return;
+        const v = checkHost();
+        if (v === 'reject') { status = 'skipped-non-host'; stripForeign(); return; }
+        if (v === 'defer') { status = 'deferred'; D.addEventListener('DOMContentLoaded', () => mount(), { once: true }); return; }
+        mounted = true;
+        if (W.addEventListener && String(D.readyState || '') !== 'complete') {
+          W.addEventListener('load', () => { if (checkHost() === 'reject') stripForeign(); }, { once: true });
+        }
+        try {
+          cleanOld();
+          ensureRepo();
+          ensureThought();
+          ensureUsage();
+          if (D.head) applyStyle();
+          else D.addEventListener('DOMContentLoaded', applyStyle, { once: true });
+          const bootCfg = __AG_INJ_BOOTCFG__;
+          const cur = W.__agPrism || W.__agClaudeStyle;
+          if (cur && cur.version === VER && cur.codeHash === __AG_INJ_CODEHASH__ && W.__agPrismTelemetry && W.__agPrismEffortSlider) {
+            cur.refreshConfig(bootCfg);
+          } else {
+            destroyMods(false);
+            try { D.querySelectorAll('[data-ag-prism-fallback="1"]').forEach((n) => n.remove()); } catch {}
+            __AG_INJ_BUNDLE__();
+            if (isF(G.__agCsUiMain)) G.__agCsUiMain(bootCfg);
+          }
+          if (W.__agClaudeStyle && !W.__agPrism) W.__agPrism = W.__agClaudeStyle;
+          else if (W.__agPrism) W.__agClaudeStyle = W.__agPrism;
+          const eCfg = (isF(W.__agPrism?.getState) ? W.__agPrism.getState()?.cfg : null) || bootCfg;
+          if (eCfg?.omniModule === 'off') { try { W.__agPrismOmni?.destroy?.(); } catch {} }
+          else { try { W.__agPrismOmni?.sync?.(eCfg, W.__agPrismOmniServerMeta || null); } catch {} }
+          const de = D.documentElement;
+          if (de) {
+            if (!de.hasAttribute('data-ag-prism')) de.setAttribute('data-ag-prism', VER);
+            if (eCfg?.thoughtTranslate && eCfg.thoughtTranslate !== 'off') de.setAttribute('data-ag-prism-thought-view', eCfg.thoughtView === 'bilingual' ? 'bilingual' : 'immersive');
+            else de.removeAttribute('data-ag-prism-thought-view');
+          }
+        } catch (e) {
+          status = 'error: ' + (e?.message || String(e));
+          if (typeof console !== 'undefined' && console.error) console.error('[obsidian-prism] init error:', e);
+        }
+      };
+
+      if (D.documentElement) mount();
+      else {
+        status = 'deferred';
+        const onR = () => {
+          if (D.documentElement) {
+            D.removeEventListener('readystatechange', onR);
+            D.removeEventListener('DOMContentLoaded', onR);
+            mount();
+          }
+        };
+        D.addEventListener('readystatechange', onR);
+        D.addEventListener('DOMContentLoaded', onR);
+      }
+      const api = W.__agPrism || W.__agClaudeStyle;
+      return { version: VER, status, state: isF(api?.getState) ? api.getState() : null };
+    })()`;
+    _injectWrapperTemplate = minifySingleSource(rawTpl);
+    return _injectWrapperTemplate;
+  }
+
+  return {
+    CH1_RUNTIME_UI_KEYS,
+    normalizeLangIdNode,
+    resolveSystemLangNode,
+    loadLocalesModuleFresh,
+    buildRuntimeUiSlicePayload,
+    getConfigRefreshTemplate,
+    buildConfigRefreshExpression,
+    getInjectWrapperTemplate,
+  };
+}
+
+module.exports = {
+  CH1_RUNTIME_UI_KEYS,
+  normalizeLangIdNode,
+  extractSingleLangRuntimeSlice,
+  createCh1Templates,
+};
