@@ -1,1216 +1,798 @@
-(function (root, factory) {
-  if (typeof module === 'object' && module.exports) {
-    module.exports = factory(root);
-  } else {
-    try { root.__agPrismTelemetry?.destroy?.(); } catch {}
-    if (typeof window !== 'undefined' && window !== root) {
-      try { window.__agPrismTelemetry?.destroy?.(); } catch {}
-    }
-    const api = factory(root);
-    root.__agPrismTelemetry = api;
-    if (typeof window !== 'undefined') window.__agPrismTelemetry = api;
-  }
-})(typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : this, function (globalRoot) {
-  'use strict';
-  const isFn = (v) => typeof v === 'function';
-
-  const BAR_ID='ag-pulse-status-bar',PRISM_BAR_ID='ag-prism-pulse-bar',PRISM_BAR_ATTR='data-ag-prism-pulse-bar',FALLBACK_ATTR='data-ag-prism-fallback',HID_ATTR='data-ag-prism-hidden',METRICS_BINDING='__agPrismMetricsCall',WAIT_MS=1500,GRACE_MS=3500,GUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  const TIER_ATTR='data-t',TIER_STYLE_ATTR='data-pt',TIER_VALS=['0','1','1 2','1 2 3','1 2 3 4','1 2 3 4 5'];
-  const expCss = (s) => {
-    const t = ['var(--e)', ':host([data-t~="', '[data-card="', 'color-mix(in srgb,var(--pt-c) ', 'overflow:hidden;white-space:nowrap;', 'transform:scale(.9) translateX(4px);pointer-events:none!important', 'border-radius:', 'background:'];
-    for (let i = 0; i < t.length; i++) s = s.split('$' + i).join(t[i]);
-    return s.replace(/!(?!important)/g, '!important');
-  };
-  const TIER_CSS = expCss('[hidden]{display:none!}:host{--e:cubic-bezier(.22,1,.36,1);--pt-c:var(--pv-tint,var(--pulse-ring,#3186ff))}.bar{transition:gap .28s $0}.bar>:is(.chip,.dot){$4max-width:132px;opacity:1;transform-origin:right;transition:max-width .28s $0,opacity .17s ease-out,padding .28s $0,margin .28s $0,gap .28s $0,transform .28s $0,background .16s,border-color .22s,box-shadow .22s}.bar>[data-card="cache"]{max-width:240px}.bar>$2context"]{max-width:136px}.bar>.dot{max-width:16px}:where(.bar>.chip>*:not(.context-ring):not(svg)){$4max-width:108px;flex-shrink:0;opacity:1;transform-origin:right;transition:max-width .28s $0,opacity .17s ease-out,margin .28s $0,padding .28s $0,transform .28s $0}.context-ring{will-change:transform;transition:transform .28s $0}$12"]) :is(.cache-total,.sub-badge,$2cache"] .dim,.countdown),$14"]) $2context"] .context-label,$15"]) $2context"]>:not(.context-ring){max-width:0!important;flex-shrink:1!important;opacity:0!;margin:0!;padding:0!;$5}$13"]) .bar>:is($2cache"],$2week"]),$14"]) .bar>:is($2speed"],$2five"],.dot){max-width:0!;min-width:0!;flex-shrink:1!;opacity:0!;padding:0!;margin:0!;gap:0!;border:0!;$5}$13"]) .bar>$2cache"]::before,$14"]) .bar>$2context"]::before{opacity:0!;content:none!}$14"]) .bar>$2context"]{margin-left:0!}$14"]) .bar{gap:0}$15"]) $2context"]{width:26px!;min-width:26px!;height:26px!;padding:0!;gap:0!;$6999px!;justify-content:center!;$7$39%,transparent);border:1px solid $328%,rgba(148,163,184,.28))}$15"]) $2context"]:is(:hover,[aria-expanded="true"]){$7$317%,transparent);border-color:$348%,rgba(148,163,184,.4));box-shadow:0 0 10px -2px $345%,transparent)}$15"]) .context-ring{transform:scale(1.27)}:host([data-pv-motion="off"]) :is(.bar,.bar *),:host-context(html[data-ag-cs-resizing="1"]) :is(.bar,.bar *){transition:none!}@media (prefers-reduced-motion:reduce){:host-context(html:not([data-ag-cs-ignore-rm="1"])) :is(.bar,.bar *){transition:none!}}');
-
-  const SHADOW_CSS = expCss(':host,*,::before,::after{box-sizing:border-box}:host,.bar,.chip{display:inline-flex;align-items:center}:host{--ch:#dae2f0db;--mu:#94a0b6b8;--f:#eef1f7;--pv-tint:#3186ff;flex:0 0 auto;position:relative;font:11px/16px Inter,system-ui,-apple-system,"Segoe UI",sans-serif;font-variant-numeric:tabular-nums;color:var(--ch);user-select:none;z-index:20}:host-context(html[data-ag-cs-theme="light"]),:host([data-pv-light="1"]){--ch:#1e293b;--mu:#475569;--f:#0f172a;--pv-tint:#2563eb}:host([hidden]),.sub-badge[hidden],.card[hidden],.footnote[hidden],.footnote:empty,:host([data-layout="blocked"])>.bar{display:none!}:host([data-layout="blocked"]){position:fixed!;left:-9999px!;top:-9999px!;width:0!;height:0!;margin:0!;padding:0!;overflow:hidden!;visibility:hidden!;pointer-events:none!}.bar{gap:2px;flex:none}.bar .chip{flex:none;white-space:nowrap;gap:3.5px;height:24px;padding:0 5px;border:0;$65px;$7transparent;color:var(--ch);font:inherit;line-height:16px;font-size:11px;cursor:pointer;overflow:visible;font-variant-numeric:tabular-nums;transition:background .15s,color .15s}.bar .chip:is(:hover,[aria-expanded="true"]){$7rgba(255,255,255,.05);color:var(--f)}:host-context(html[data-ag-cs-theme="light"]) .bar .chip:is(:hover,[aria-expanded="true"]),:host([data-pv-light="1"]) .bar .chip:is(:hover,[aria-expanded="true"]){$7rgba(15,23,42,.05)}.bar .chip strong{font-weight:600}.chip svg{width:12px;height:12px;stroke:currentColor;stroke-width:1.5;fill:none;opacity:.75;flex:none}.bar .chip .dim{color:var(--mu);opacity:.66;font-size:9.5px}.bar .chip [data-i18n="cache"]{opacity:.62}.bar .chip[data-card="speed"]>span:last-child{opacity:.66;font-size:10px}:host(:not(.icons-only)) :is(.chip[data-card="speed"]>:is(svg,.rounds),.chip[data-card="cache"]>:is(svg:first-child,.cache-total,.dim),.chip[data-card="context"]>.context-label){display:none!}:host(:not(.icons-only)) .bar .chip:not([hidden])~.chip:not([hidden]){position:relative;margin-left:6px}:host(:not(.icons-only)) .bar .chip:not([hidden])~.chip:not([hidden])::before{content:"·";position:absolute;left:-4px;top:50%;transform:translate(-50%,-50%);color:var(--mu);opacity:.32;pointer-events:none}.sub-badge{font-size:10px;opacity:.82;color:var(--primary,#38bdf8);font-weight:500;margin-right:2px}.context-ring{width:11px;height:11px;$650%;$7conic-gradient(var(--pv-tint,#3186ff) var(--used-angle,36deg),rgba(148,163,184,.28) 0);display:inline-block;position:relative;flex:none}.context-ring::after{content:"";position:absolute;inset:2.2px;$650%;$7var(--card,#141720)}:host-context(html[data-ag-cs-theme="light"]) .context-ring::after,:host([data-pv-light="1"]) .context-ring::after{$7var(--card,#f8fafc)}.card{position:absolute;right:0;left:auto;bottom:calc(100% + 10px);width:min(304px,calc(100vw - 24px));padding:12px 13px;$610px;border:1px solid rgba(148,163,184,.22);$7var(--card,#12151ef5);color:var(--foreground,#eef1f7);box-shadow:0 16px 40px rgba(0,0,0,.36);z-index:9999}$14"]) .card{right:-84px;width:min(296px,calc(100vw - 32px))}.heading{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:11px;font-weight:600;margin-bottom:6px}.heading>span:first-child{white-space:nowrap}#context-summary{display:block;font-size:13px;font-weight:600;margin-bottom:2px}#context-tokens{margin:0 0 8px;font-size:11px;opacity:.76}.track{height:5px;$6999px;$7rgba(148,163,184,.18);overflow:hidden;margin:6px 0 10px}.track>i{display:block;height:100%;width:0%;$6999px;$7linear-gradient(90deg,#2563eb,#38bdf8)}dl{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;margin:8px 0;font-size:11px}dt{opacity:.64}dd{margin:0;text-align:right;font-weight:500;$4text-overflow:ellipsis}.footnote{margin:6px 0 0;font-size:10px;opacity:.58}') + TIER_CSS;
-
-  const isFin = (v) => typeof v === 'number' && Number.isFinite(v);
-  const FB_ROWS = {
-    'zh-CN': '缓存|吞吐速率|首字延迟|最近速率|上下文窗口|当前模型|已用|剩余|代理',
-    'zh-TW': '快取|吞吐速率|首字延遲|最近速率|上下文視窗|目前模型|已用|剩餘|代理',
-    en: 'Cache|Throughput|TTFT|Latest Rate|Context Window|Active Model|used|free| sub',
-    ja: 'キャッシュ|スループット|初回応答|最新速度|コンテキスト|現在のモデル|使用|残り| サブ',
-    ko: '캐시|처리 속도|첫 토큰 지연|최근 속도|컨텍스트 창|현재 모델|사용|여유| 서브',
-    es: 'Caché|Rendimiento|TTFT|Velocidad rec.|Ventana de ctx|Modelo activo|usado|libre| sub',
-    fr: 'Cache|Débit|TTFT|Dernier débit|Fenêtre ctx|Modèle actif|utilisé|libre| sous',
-    de: 'Cache|Durchsatz|TTFT|Akt. Rate|Kontextfenster|Aktives Modell|belegt|frei| Sub',
-  };
-  function normFbLang(raw, win) {
-    let v = String(raw || '').trim();
-    if (!v || v.toLowerCase() === 'auto') {
-      const navObj = win && 'navigator' in win ? win.navigator : (typeof navigator !== 'undefined' ? navigator : null);
-      v = String(navObj?.languages?.[0] || navObj?.language || '').trim();
-    }
-    const s = v.toLowerCase().replace(/_/g, '-');
-    if (!s || s === 'auto') return 'en';
-    if (s === 'yue' || s.startsWith('yue-') || s === 'zh-yue' || s.includes('cantonese')) return 'zh-CN';
-    if (/^zh-(tw|hant|hk|mo)/.test(s) || s === 'tw' || s === 'hant') return 'zh-TW';
-    if (/^zh/.test(s)) return 'zh-CN';
-    if (/^(ja|jp)/.test(s) || s === 'japanese') return 'ja';
-    if (/^(ko|kr)/.test(s) || s === 'korean') return 'ko';
-    if (/^es/.test(s) || s === 'spanish') return 'es';
-    if (/^fr/.test(s) || s === 'french') return 'fr';
-    if (/^de/.test(s) || s === 'german') return 'de';
-    return 'en';
-  }
-  const FB_I18N = Object.fromEntries(
-    Object.entries(FB_ROWS).map(([lk, s]) => {
-      const r = s.split('|');
-      return [
-        lk,
-        {
-          cache: r[0], speedHeading: r[1], ttft: r[2], latestRate: r[3],
-          ctxHeading: r[4], curModel: r[5],
-          summary: (p, rem) => `${p}% ${r[6]} · ${rem}% ${r[7]}`,
-          agents: (n) => `${n}${r[8]}`,
-        },
-      ];
-    })
-  );
-
-  function fmtTok(n) {
-    if (!isFin(n) || n < 0) return '—';
-    if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, '')}M`;
-    if (n >= 1e3) return `${Math.round(n / 1e3)}K`;
-    return String(Math.round(n));
-  }
-
-  function mk(doc, tag, attrs, kids) {
-    const el = doc.createElement(tag);
-    if (attrs) {
-      for (const [k, v] of Object.entries(attrs)) {
-        if (v == null) continue;
-        if (k === 'text') el.textContent = String(v);
-        else if (k === 'cls') el.className = String(v);
-        else if (k === 'hidden') el.hidden = !!(v);
-        else el.setAttribute(k, String(v));
-      }
-    }
-    if (kids) for (const c of kids) if (c) el.appendChild(c);
-    return el;
-  }
-
-  let reqSeq = 0;
-
-  function createTelemetryController(envOpts) {
-    const gW = () => (envOpts && envOpts.window) || (typeof window !== 'undefined' ? window : globalRoot);
-    const gD = () => (envOpts && envOpts.document) || gW()?.document || null;
-
-    let mode = 'auto', waitTm = null, rescTm = null, pollTm = null;
-    let hasHost = false, yielded = false, lastSig = '', detAt = 0;
-    let docOff = null, popOff = null, winResOff = null, lastSnap = null, mApi = null, mRes = null, seatObs = null, healTm = null;
-    let expLang = '', activeHost = null, winBlur = false, pollSusp = false, blurOff = null, blurObs = null, extGuardHeld = false;
-    const pend = new Map(), insts = new Map(), instByHost = new WeakMap(), extTiers = new Map(), snapByCid = new Map(), locSnaps = new WeakMap();
-
-    const TIER_CUTS = [640, 515, 450, 395, 345], FT_SEL = '.agy-composer-footer,[data-testid="input-box-bottom-toolbar"]';
-    const isConn = (doc, el) => {
-      if (!el || el.isConnected === false) return false;
-      if (el.isConnected === true) return true;
-      if (!el.parentNode && !el.parentElement) return false;
-      if (doc && isFn(doc.getElementById) && el.id && typeof doc.querySelectorAll !== 'function') {
-        const b = doc.getElementById(el.id);
-        if (b && b !== el) return false;
-      }
-      return true;
-    };
-
-    const getPrimaryInst = () => {
-      const doc = gD();
-      let first = null;
-      for (const it of insts.values()) {
-        if (!isConn(doc, it.host)) continue;
-        if (!first) first = it;
-        if (it.host.id === PRISM_BAR_ID) return it;
-      }
-      return first;
-    };
-
-    const isCardOpen = (it) => !!(it && ((it.xCard && !it.xCard.hidden) || (it.sCard && !it.sCard.hidden)));
-
-    const resolveActiveInst = () => {
-      const doc = gD();
-      for (const it of insts.values()) {
-        if (isConn(doc, it.host) && isCardOpen(it)) return it;
-      }
-      if (activeHost && isConn(doc, activeHost)) {
-        const hit = instByHost.get(activeHost);
-        if (hit) return hit;
-      }
-      const actEl = doc?.activeElement;
-      if (actEl) {
-        const actCv = actEl.closest?.('[data-testid="conversation-view"],[data-testid="agent-input-box"]');
-        if (actCv) {
-          for (const it of insts.values()) {
-            if (isConn(doc, it.host) && (actCv === it.anc || actCv.contains?.(it.anc))) return it;
-          }
-        }
-      }
-      return getPrimaryInst();
-    };
-
-    const syncPrimaryId = () => {
-      const doc = gD();
-      let primary = null;
-      for (const it of insts.values()) {
-        if (!isConn(doc, it.host)) continue;
-        if (!primary) primary = it;
-        if (it.host.id === PRISM_BAR_ID) { primary = it; break; }
-      }
-      for (const it of insts.values()) {
-        if (it === primary) {
-          if (it.host.id !== PRISM_BAR_ID) it.host.setAttribute('id', PRISM_BAR_ID);
-        } else if (it.host.id) {
-          it.host.removeAttribute?.('id');
-          if (it.host.id) it.host.id = '';
-        }
-      }
-    };
-
-    const applyTierRec = (rec, force = false) => {
-      rec.raf = 0;
-      const doc = gD(), ft = mode !== 'off' && rec.anc && isConn(doc, rec.anc) ? rec.anc : null;
-      const w = rec.hasPendW ? rec.pendW : ft?.getBoundingClientRect?.().width;
-      rec.pendW = 0;
-      rec.hasPendW = false;
-      if (!ft || !isFin(w) || w <= 0) return;
-      let t = rec.curTier;
-      while (t < 5 && w < TIER_CUTS[t]) t++;
-      while (t > 0 && w >= TIER_CUTS[t - 1] + 12) t--;
-      const tv = TIER_VALS[(rec.curTier = t)] || '0';
-      if (!force && tv === rec.lastTv && ft.getAttribute?.(TIER_ATTR) === tv) return;
-      rec.lastTv = tv;
-      if (ft.getAttribute?.(TIER_ATTR) !== tv) ft.setAttribute?.(TIER_ATTR, tv);
-      if (rec.host) {
-        if (rec.host.getAttribute?.(HID_ATTR) !== '1' && rec.host.getAttribute?.(TIER_ATTR) !== tv) rec.host.setAttribute?.(TIER_ATTR, tv);
-        return;
-      }
-      const exts = findExtBars(doc);
-      const localExts = exts.filter((b) => b && (ft.contains?.(b) || b.parentElement === ft));
-      const targets = localExts.length ? localExts : extTiers.size <= 1 ? exts : [];
-      for (const b of targets) {
-        if (!b || b.getAttribute?.(HID_ATTR) === '1') continue;
-        if (b.getAttribute?.(TIER_ATTR) !== tv) b.setAttribute?.(TIER_ATTR, tv);
-        if (b.shadowRoot && !b.shadowRoot.querySelector?.(`style[${TIER_STYLE_ATTR}="1"]`)) {
-          try { const st = doc.createElement('style'); st.setAttribute(TIER_STYLE_ATTR, '1'); st.textContent = TIER_CSS; b.shadowRoot.appendChild(st); } catch {}
-        }
-      }
-    };
-
-    const gBus = () => { const w = gW(); return w?.__agDomBus || w?.__agPrismDomBus || null; };
-    const subMo = (id, root, opt, fn, pri) => {
-      const b = gBus(), w = gW();
-      if (b?.subscribe) return { disconnect: b.subscribe(id, fn, { doc: gD(), win: w, priority: pri, observeOptions: opt }) };
-      if (!isFn(w?.MutationObserver) || !root) return null;
-      const mo = new w.MutationObserver(fn); try { mo.observe(root, opt); } catch {} return mo;
-    };
-    const readEntryW = (e) => (Array.isArray(e?.borderBoxSize) ? e.borderBoxSize[0] : e?.borderBoxSize)?.inlineSize ?? (Array.isArray(e?.contentBoxSize) ? e.contentBoxSize[0] : e?.contentBoxSize)?.inlineSize ?? e?.contentRect?.width;
-    const schedTierRec = (rec, entries) => {
-      if (entries && typeof entries.length === 'number') {
-        let rw = NaN;
-        for (let i = entries.length - 1; i >= 0; i--) { const w0 = readEntryW(entries[i]); if (isFin(w0) && w0 >= 0) { rw = w0; break; } }
-        if (isFin(rw)) { rec.pendW = rw; rec.hasPendW = true; }
-      } else rec.hasPendW = false;
-      if (!rec.raf && mode !== 'off') { const w = gW(); rec.raf = w?.requestAnimationFrame ? w.requestAnimationFrame(() => applyTierRec(rec, false)) : (applyTierRec(rec, false), 0); }
-    };
-    const ensWinResize = () => {
-      const w = gW();
-      if (!winResOff && w && isFn(w.addEventListener)) {
-        const onR = () => { for (const it of insts.values()) schedTierRec(it, null); for (const et of extTiers.values()) schedTierRec(et, null); };
-        w.addEventListener('resize', onR, { passive: true }); winResOff = () => w.removeEventListener?.('resize', onR);
-      }
-    };
-    const attachTierRec = (rec) => {
-      const w = gW();
-      if (!w || !rec?.anc || mode === 'off') return;
-      if (!rec.ro) {
-        const b = gBus();
-        if (b?.observeSize) try { rec.ro = { disconnect: b.observeSize(rec.anc, (sz, en) => schedTierRec(rec, [en || { borderBoxSize: [{ inlineSize: sz.width }] }])) }; } catch {}
-        else if (isFn(w.ResizeObserver)) try { rec.ro = new w.ResizeObserver((es) => schedTierRec(rec, es)); rec.ro.observe(rec.anc); } catch {}
-      }
-      ensWinResize(); if (!rec.lastTv || !rec.ro) applyTierRec(rec, true);
-    };
-    const detachTierRec = (rec) => {
-      if (!rec) return;
-      try { if (rec.raf) gW()?.cancelAnimationFrame?.(rec.raf); rec.ro?.disconnect?.(); rec.anc?.removeAttribute?.(TIER_ATTR); } catch {}
-      rec.raf = 0; rec.ro = null; rec.curTier = 0; rec.pendW = 0; rec.hasPendW = false; rec.lastTv = '';
-    };
-    const clrExtTiers = () => { for (const et of extTiers.values()) detachTierRec(et); extTiers.clear(); };
-    const clrTier = () => {
-      for (const it of insts.values()) detachTierRec(it);
-      clrExtTiers(); try { winResOff?.(); } catch {} winResOff = null;
-      for (const b of gD()?.querySelectorAll?.(`#${PRISM_BAR_ID},[${PRISM_BAR_ATTR}],#${BAR_ID},[id^="${BAR_ID}"],[data-ag-pulse-bar]`) || []) try { b.removeAttribute?.(TIER_ATTR); b.shadowRoot?.querySelector?.(`style[${TIER_STYLE_ATTR}="1"]`)?.remove?.(); } catch {}
-    };
-    const ensTierObs = () => {
-      const doc = gD();
-      if (!doc || mode === 'off') return;
-      if (insts.size > 0) { clrExtTiers(); for (const it of insts.values()) attachTierRec(it); return; }
-      const fts = findAnchors(doc, true), ftSet = new Set(fts);
-      for (const [anc, et] of extTiers) if (!ftSet.has(anc) || !isConn(doc, anc)) { detachTierRec(et); extTiers.delete(anc); }
-      for (const ft of fts) {
-        let et = extTiers.get(ft);
-        if (!et) extTiers.set(ft, et = { anc: ft, host: null, ro: null, raf: 0, curTier: 0, pendW: 0, hasPendW: false, lastTv: '' });
-        attachTierRec(et);
-      }
-    };
-
-    const bindHook = () => {
-      const w = gW();
-      if (!w) return;
-      if (!mRes) {
-        mRes = (id, pl) => {
-          const it = pend.get(id);
-          if (!it) return;
-          clearTimeout(it.timer); pend.delete(id);
-          if (pl && pl.connection !== 'local-estimate' && pl.groups?.length > 0) {
-            const prev = (it.cid && snapByCid.get(it.cid)) || lastSnap;
-            const ks = !pl.speed && prev?.speed, kc = !pl.conversations?.length && prev?.conversations?.length;
-            const merged = ks || kc ? { ...pl, ...(ks ? { speed: prev.speed } : {}), ...(kc ? { conversations: prev.conversations } : {}) } : pl;
-            if (it.cid) { snapByCid.set(it.cid, merged); if (snapByCid.size > 32) snapByCid.delete(snapByCid.keys().next().value); }
-            if (!lastSnap || !it.cid || resolveActiveInst()?.cid === it.cid) lastSnap = merged;
-          }
-          it.resolve(pl);
-        };
-      }
-      if (w.__agPrismMetricsResolve !== mRes) w.__agPrismMetricsResolve = mRes;
-    };
-    const clrWait = () => { if (waitTm !== null) { clearTimeout(waitTm); waitTm = null; } if (rescTm !== null) { clearTimeout(rescTm); rescTm = null; } };
-    const clrPoll = () => { if (pollTm !== null) { clearInterval(pollTm); pollTm = null; } };
-    const isBlur = () => { const d = gD(); return !!(d?.hidden || d?.documentElement?.getAttribute?.('data-ag-cs-win-blur') === '1' || winBlur); };
-    const clrBlur = () => { try { blurOff?.(); blurObs?.disconnect?.(); } catch {} blurOff = blurObs = null; winBlur = pollSusp = false; };
-    const startPoll = () => {
-      clrPoll();
-      if (insts.size === 0 || mode === 'off') return;
-      if (isBlur()) { pollSusp = true; return; }
-      pollSusp = false; pollTm = setInterval(() => { isBlur() ? (pollSusp = true, clrPoll()) : void refresh(); }, 4000); pollTm?.unref?.();
-    };
-    const syncBlur = (res) => {
-      if (insts.size === 0 || mode === 'off') { clrPoll(); pollSusp = false; return; }
-      if (isBlur()) { pollSusp = true; clrPoll(); return; }
-      const was = pollSusp; pollSusp = false;
-      if (pollTm === null) startPoll();
-      if (was && res) void refresh();
-    };
-    const ensBlur = () => {
-      const w = gW(), d = gD();
-      if (!w || !d) return;
-      if (!blurOff && isFn(w.addEventListener)) {
-        const onB = () => { winBlur = true; syncBlur(false); }, onF = () => { winBlur = false; syncBlur(true); }, onV = () => { if (!gD()?.hidden) winBlur = false; syncBlur(!gD()?.hidden); };
-        w.addEventListener('blur', onB); w.addEventListener('focus', onF); d.addEventListener?.('visibilitychange', onV);
-        blurOff = () => { w.removeEventListener?.('blur', onB); w.removeEventListener?.('focus', onF); d.removeEventListener?.('visibilitychange', onV); };
-      }
-      if (!blurObs && d.documentElement) try { blurObs = subMo('pulse-blur', d.documentElement, { childList: false, subtree: false, attributes: true, attributeFilter: ['data-ag-cs-win-blur'] }, () => { const b = gD()?.documentElement?.getAttribute?.('data-ag-cs-win-blur') === '1'; if (!b) winBlur = false; syncBlur(!b); }, 'high'); } catch {}
-    };
-    const clrSeat = () => {
-      if (healTm !== null) { clearTimeout(healTm); healTm = null; }
-      if (seatObs) { try { seatObs.disconnect(); } catch {} seatObs = null; }
-      if (popOff) { try { popOff(); } catch {} popOff = null; }
-      clrTier();
-    };
-    const isConv = (doc, w, anc) => {
-      if (!doc || anc?.closest?.('.agy-home') || doc.querySelector?.('.agy-home, [data-testid="home-greeting"]')) return false;
-      const pn = w?.location?.pathname;
-      if (typeof pn === 'string' && pn && !/\/c\/[0-9a-f-]{8,}/i.test(pn) && !doc.querySelector?.('[data-testid="conversation-view"]') && !anc?.closest?.('[data-cascade-id]') && !doc.querySelector?.('[data-cascade-id]')) return false;
-      return true;
-    };
-    const HIDE_PROPS = 'position:fixed|left:-9999px|top:-9999px|width:1px|height:1px|opacity:0|pointer-events:none|visibility:hidden|overflow:hidden'.split('|').map((s) => s.split(':'));
-    const findExtBars = (doc) => {
-      if (!doc) return [];
-      const seen = new Set(), out = [], add = (el) => { if (el && !seen.has(el)) { seen.add(el); out.push(el); } };
-      if (isFn(doc.querySelectorAll)) try { const s = doc.querySelectorAll('#' + BAR_ID + ',[id^="' + BAR_ID + '"],[data-ag-pulse-bar="true"]'); for (let i = 0; i < s.length; i++) add(s[i]); } catch {}
-      if (isFn(doc.getElementById)) add(doc.getElementById(BAR_ID));
-      return out;
-    };
-    const purgeOrphans = (doc) => {
-      if (!doc || typeof doc.querySelectorAll !== 'function') return;
-      const live = new Set();
-      for (const it of insts.values()) live.add(it.host);
-      const list = doc.querySelectorAll('[' + FALLBACK_ATTR + '="1"], #' + PRISM_BAR_ID + ', [' + PRISM_BAR_ATTR + ']');
-      for (let i = 0; i < list.length; i++) if (!live.has(list[i])) try { list[i].remove(); } catch {}
-    };
-
-    const usableExt = (doc, b) => {
-      if (!b || b.getAttribute?.(FALLBACK_ATTR) === '1' || !isConn(doc, b)) return false;
-      if (b.getAttribute?.(HID_ATTR) === '1' || b.getAttribute?.('data-layout') === 'blocked' || b.hidden === true) return false;
-      if (b.style && b.style.display === 'none') return false;
-      if (doc && doc.body && (b.parentElement === doc.body || b.parentNode === doc.body)) return false;
-      if (b.closest?.('.agy-home')) return false;
-      return true;
-    };
-
-    const hasExt = (barsArg, knownConv = false) => {
-      const w = gW(), doc = gD();
-      if (!w || !doc || (!knownConv && !isConv(doc, w))) return false;
-      const bars = barsArg || findExtBars(doc);
-      let sawDead = false;
-      for (let i = 0; i < bars.length; i++) {
-        const b = bars[i];
-        if (!b || b.getAttribute?.(FALLBACK_ATTR) === '1' || !isConn(doc, b) || b.getAttribute?.(HID_ATTR) === '1') continue;
-        if (usableExt(doc, b)) { detAt = 0; return true; }
-        sawDead = true;
-      }
-      if (sawDead) return false;
-      const sig = [
-        w.__agPulseRuntimeOwner ? String(w.__agPulseRuntimeOwner) : '',
-        w.__agPulseRuntimeBridge ? 'b' : '',
-        w.__agPulseInlineInstalled && !extGuardHeld ? '1' : '',
-        w.agPulseHost && !w.agPulseHost.__prismFallback ? 'h' : '',
-      ].join('|');
-      if (sig !== '|||') {
-        const now = Date.now();
-        if (sig !== lastSig) { lastSig = sig; detAt = now; return true; }
-        if (!detAt) detAt = now;
-        return now - detAt < GRACE_MS;
-      }
-      lastSig = '';
-      detAt = 0;
-      return false;
-    };
-
-    const showExt = () => {
-      if (extGuardHeld) {
-        extGuardHeld = false;
-        const w = gW();
-        if (w && !w.__agPulseDispose) w.__agPulseInlineInstalled = false;
-      }
-      const bars = findExtBars(gD());
-      for (let i = 0; i < bars.length; i++) {
-        const b = bars[i];
-        if (b && b.getAttribute?.(HID_ATTR) === '1') {
-          b.removeAttribute(HID_ATTR);
-          if (b.style) {
-            if (isFn(b.style.removeProperty)) {
-              b.style.removeProperty('display');
-              for (let j = 0; j < HIDE_PROPS.length; j++) b.style.removeProperty(HIDE_PROPS[j][0]);
-            } else {
-              b.style.opacity = '';
-              b.style.position = '';
-              b.style.pointerEvents = '';
-            }
-          }
-        }
-      }
-    };
-
-    const hideExt = (disposeExt = false) => {
-      if (disposeExt) {
-        const w = gW();
-        if (w) {
-          try { w.__agPulseDispose?.(); } catch {}
-          w.__agPulseInlineInstalled = true;
-          extGuardHeld = true;
-        }
-      }
-      const bars = findExtBars(gD());
-      for (let i = 0; i < bars.length; i++) {
-        const b = bars[i];
-        if (b && b.getAttribute?.(FALLBACK_ATTR) !== '1') {
-          b.setAttribute(HID_ATTR, '1');
-          if (b.style) {
-            b.style.removeProperty?.('display');
-            if (isFn(b.style.setProperty)) {
-              for (let j = 0; j < HIDE_PROPS.length; j++) b.style.setProperty(HIDE_PROPS[j][0], HIDE_PROPS[j][1], 'important');
-            } else {
-              b.style.position = 'fixed';
-              b.style.left = '-9999px';
-              b.style.opacity = '0';
-              b.style.pointerEvents = 'none';
-            }
-          }
-        }
-      }
-    };
-
-    const ensBridge = () => {
-      const w = gW();
-      if (!w) return;
-      bindHook();
-      if (!mApi) {
-        mApi = { __prismOwned: true, getMetrics: (inp) => reqSnap(inp), getLatestSnapshot: () => lastSnap };
-      }
-      w.__agPrismMetricsBridge = mApi;
-    };
-
-    const rmHost = () => {
-      const w = gW();
-      if (hasHost && w?.agPulseHost?.__prismFallback) delete w.agPulseHost;
-      hasHost = false;
-    };
-
-    const ensHost = () => {
-      const w = gW();
-      if (!w) return;
-      ensBridge();
-      if (!w.agPulseHost || typeof w.agPulseHost.getMetrics !== 'function') {
-        w.agPulseHost = {
-          __prismFallback: true,
-          getMetrics: (inp) => reqSnap(inp),
-          getLatestSnapshot: () => lastSnap,
-          getPreferences: () => Promise.resolve({ language: resolveCurLang() }),
-          setPreferences: (v) => Promise.resolve(v || {}),
-          report: () => {},
-        };
-        hasHost = true;
-      }
-    };
-
-    const disposeInst = (it, notifyBridge = true) => {
-      if (!it) return;
-      detachTierRec(it);
-      try {
-        if (it.xCard) it.xCard.hidden = true;
-        if (it.sCard) it.sCard.hidden = true;
-        if (notifyBridge) gW()?.__agPulseExternalBridge?.({ event: 'dispose', host: it.host });
-      } catch {}
-      try { it.host.remove(); } catch {}
-      if (activeHost === it.host) activeHost = null;
-      instByHost.delete(it.host);
-      insts.delete(it.anc);
-    };
-
-    const unmountFb = (keepBridge = false) => {
-      clrWait();
-      clrPoll();
-      clrBlur();
-      if (docOff) { try { docOff(); } catch {} docOff = null; }
-      if (!keepBridge) {
-        clrSeat();
-        for (const it of pend.values()) { clearTimeout(it.timer); it.resolve(null); }
-        pend.clear();
-        rmHost();
-      }
-      const list = Array.from(insts.values());
-      for (let i = 0; i < list.length; i++) disposeInst(list[i], false);
-      if (list.length > 0) {
-        try { gW()?.__agPulseExternalBridge?.({ event: 'dispose' }); } catch {}
-      }
-      purgeOrphans(gD());
-      activeHost = null;
-    };
-
-    const detCid = (node, multiPane = false) => {
-      try {
-        const cid = node?.closest?.('[data-cascade-id]')?.getAttribute?.('data-cascade-id');
-        if (cid && GUID_RE.test(cid)) return cid;
-        const cv = node?.closest?.('[data-testid="conversation-view"]');
-        const cvCid = cv?.getAttribute?.('data-cascade-id') || cv?.querySelector?.('[data-cascade-id]')?.getAttribute?.('data-cascade-id');
-        if (cvCid && GUID_RE.test(cvCid)) return cvCid;
-        if (!multiPane) {
-          const m = gW()?.location?.pathname?.match?.(/\/c\/([0-9a-f-]{36})/i);
-          if (m) return m[1];
-        }
-        return null;
-      } catch { return null; }
-    };
-
-    const estSnap = (node = null) => {
-      const doc = gD();
-      const scope = node?.closest?.('[data-testid="conversation-view"]') || doc;
-      const now = Date.now();
-      const cached = scope ? locSnaps.get(scope) : null;
-      if (cached && now - cached.at < 5000) return cached.snap;
-      let model = 'Gemini 4', chars = 0;
-      try {
-        const tr = scope?.querySelector?.('[data-testid="model-selector-trigger"]') || doc?.querySelector?.('[data-testid="model-selector-trigger"]');
-        const lb = tr?.getAttribute?.('aria-label') || tr?.textContent?.trim();
-        if (lb) model = lb;
-        const vw = scope && scope !== doc ? scope : doc?.querySelector?.('[data-testid="conversation-view"]');
-        if (vw && isFn(vw.querySelectorAll)) {
-          const ts = vw.querySelectorAll('[data-testid="planner-response-text"],[data-testid="agent-response"],[data-testid="user-message-bubble"]');
-          if (ts?.length > 0) {
-            const n = Math.min(4, ts.length);
-            let s = 0;
-            for (let i = ts.length - n; i < ts.length; i++) s += (ts[i].textContent || '').length;
-            chars = Math.round((s / n) * ts.length);
-          }
-        } else if (typeof vw?.textContent === 'string') chars = vw.textContent.length;
-      } catch {}
-      const maxTokens = 512000, usedTokens = Math.max(4200, Math.min(maxTokens, Math.round(chars / 3.2) + 8400));
-      const usedFraction = Math.min(0.98, usedTokens / maxTokens);
-      const snap = {
-        connection: 'local-estimate',
-        speed: { model, tps: null, latestTps: null, ttftSeconds: null, rounds: 0, cacheHitRate: null, totalTokens: usedTokens, context: { model, usedTokens, maxTokens, usedFraction, sampledAt: now } },
-        groups: [],
-      };
-      if (scope) locSnaps.set(scope, { at: now, snap });
-      return snap;
-    };
-
-    const reqSnap = (inp, scopeNode = null) => {
-      const w = gW();
-      bindHook();
-      const si = inp && typeof inp === 'object' ? { ...inp } : {};
-      if (si.usageSync) delete si.usageSync;
-      const cid = typeof si.conversationId === 'string' ? si.conversationId : null;
-      const fallbackSnap = () => (cid && snapByCid.get(cid)) || (!cid && lastSnap) || estSnap(scopeNode);
-      if (w && typeof w[METRICS_BINDING] === 'function') {
-        return new Promise((resolve) => {
-          const cap = Math.max(8, insts.size * 3);
-          if (pend.size >= cap) { resolve(fallbackSnap()); return; }
-          const id = ++reqSeq;
-          const timeoutMs = si.force || si.quotaRefresh ? 10000 : 4500;
-          const timer = setTimeout(() => { pend.delete(id); resolve(fallbackSnap()); }, timeoutMs);
-          pend.set(id, { resolve, timer, cid });
-          try {
-            w[METRICS_BINDING](JSON.stringify({ id, input: si }));
-          } catch {
-            clearTimeout(timer);
-            pend.delete(id);
-            resolve(fallbackSnap());
-          }
-        });
-      }
-      return Promise.resolve(estSnap(scopeNode));
-    };
-
-    const resolveCurLang = () => {
-      const attr = gD()?.documentElement?.getAttribute?.('data-ag-cs-lang');
-      const cand = (attr && attr !== 'auto' ? attr : '') || (expLang && expLang !== 'auto' ? expLang : '');
-      return normFbLang(cand, gW());
-    };
-    const gStr = () => FB_I18N[resolveCurLang()] || FB_I18N.en;
-    const syncLblsFor = (sr) => {
-      if (!sr) return;
-      const t = gStr(), ns = sr.querySelectorAll?.('[data-fb-i18n]') || [];
-      for (let i = 0; i < ns.length; i++) {
-        const k = ns[i].getAttribute('data-fb-i18n');
-        if (k && typeof t[k] === 'string' && ns[i].textContent !== t[k]) ns[i].textContent = t[k];
-      }
-    };
-
-    const applySnapToInst = (it, snap) => {
-      if (!it || !it.sr || !it.host) return;
-      if (snap && typeof snap === 'object') {
-        it.snap = snap;
-        if (it.cid) {
-          snapByCid.set(it.cid, snap);
-          if (snapByCid.size > 32) snapByCid.delete(snapByCid.keys().next().value);
-        }
-        const act = resolveActiveInst();
-        if (!lastSnap || !act || act === it) lastSnap = snap;
-      }
-      const sr = it.sr, fbEl = it.host;
-      const sp = snap?.speed || {}, ctx = sp.context || {};
-      const maxTok = ctx.maxTokens > 0 ? ctx.maxTokens : 512000;
-      const uf = isFin(ctx.usedFraction) ? Math.max(0, Math.min(1, ctx.usedFraction)) : 0.04;
-      const uTok = isFin(ctx.usedTokens) ? ctx.usedTokens : Math.round(uf * maxTok);
-      const pct = Math.round(uf * 100), rem = Math.max(0, 100 - pct);
-      const model = ctx.model || sp.model || 'Antigravity Model';
-      const tot = sp.taskUsage?.total?.totalTokens ?? sp.tokens?.totalTokens ?? sp.cache?.totalTokens ?? sp.totalTokens ?? 0;
-      const hit = isFin(sp.cache?.hitRate) ? sp.cache.hitRate : sp.cacheHitRate;
-      const subs = Number(sp.taskUsage?.subagents || 0);
-      const proc = snap?.collection?.state === 'processing';
-
-      if (proc) fbEl.setAttribute('data-collection', 'processing');
-      else fbEl.removeAttribute('data-collection');
-
-      const t = gStr();
-      syncLblsFor(sr);
-      const sT = (id, v) => { const e = sr.getElementById(id), s = String(v); if (e && e.textContent !== s) e.textContent = s; };
-      sT('rounds', sp.rounds > 0 ? `${sp.rounds}r` : '—');
-      sT('tps', isFin(sp.tps) && sp.tps > 0 ? sp.tps.toFixed(1) : '—');
-      sT('cache-total', `${fmtTok(tot > 0 ? tot : uTok)} tok`);
-      sT('cache-rate', isFin(hit) ? `${(hit * 100).toFixed(1)}%` : '—');
-
-      const sb = sr.getElementById('subagent-badge');
-      if (sb) {
-        if (subs > 0) {
-          sb.hidden = false;
-          const bt = t.agents(subs);
-          if (sb.textContent !== bt) sb.textContent = bt;
-        } else sb.hidden = true;
-      }
-
-      sT('context-percent', `${pct}%`);
-      sT('ttft', typeof sp.ttftSeconds === 'number' ? `${sp.ttftSeconds.toFixed(2)}s` : '—');
-      sT('latest-rate', typeof sp.latestTps === 'number' ? `${sp.latestTps.toFixed(1)} tok/s` : '—');
-      sT('context-summary', t.summary(pct, rem));
-      sT('context-tokens', `${fmtTok(uTok)} / ${fmtTok(maxTok)} tok`);
-      sT('context-model', model);
-      const noteEl = sr.getElementById('context-note');
-      if (noteEl) {
-        noteEl.hidden = true;
-        if (noteEl.textContent) noteEl.textContent = '';
-      }
-
-      const fl = sr.getElementById('context-fill');
-      if (fl?.style) fl.style.width = `${pct}%`;
-      const rg = sr.getElementById('context-ring');
-      rg?.style?.setProperty?.('--used-angle', `${Math.round(uf * 360)}deg`);
-      try { gW()?.__agPulseExternalBridge?.({ event: 'render', data: snap, host: fbEl, conversationId: it.cid }); } catch {}
-    };
-
-    const isHidAnc = (el) =>
-      !el ||
-      el.hidden === true ||
-      el.style?.display === 'none' ||
-      !!(el.closest?.('.agy-home, aside, [data-testid="conversation-list-sidebar"], [data-testid="conversation-row-sidebar"], [hidden], [inert]'));
-    const isTopWrap = (p) => {
-      if (!p) return true;
-      const c = String(p.className || '').trim();
-      return !!(c && /\bmin-w-0\b/.test(c) && !/\b(?:flex|inline-flex|agy-composer-footer)\b/.test(c));
-    };
-
-    const findAnchors = (doc, knownConv = false) => {
-      if (!doc) return [];
-      const w = gW();
-      if (!knownConv && !isConv(doc, w)) return [];
-      const out = [], seen = new Set();
-      let rawFts = isFn(doc.querySelectorAll) ? Array.from(doc.querySelectorAll(FT_SEL)) : [];
-      if (rawFts.length === 0 && isFn(doc.querySelector)) {
-        const oneFt = doc.querySelector(FT_SEL);
-        if (oneFt) rawFts = [oneFt];
-      }
-      const boxMap = new Map();
-      for (let i = 0; i < rawFts.length; i++) {
-        const ft = rawFts[i];
-        if (!ft || seen.has(ft) || isHidAnc(ft) || (!knownConv && !isConv(doc, w, ft))) continue;
-        const box = ft.closest?.('[data-testid="agent-input-box"]') || null;
-        if (box) {
-          const prev = boxMap.get(box);
-          if (prev) {
-            if (/\bagy-composer-footer\b/.test(String(ft.className || '')) && !/\bagy-composer-footer\b/.test(String(prev.className || ''))) {
-              const idx = out.indexOf(prev);
-              if (idx >= 0) out[idx] = ft;
-              seen.delete(prev);
-              seen.add(ft);
-              boxMap.set(box, ft);
-            }
-            continue;
-          }
-          boxMap.set(box, ft);
-        }
-        seen.add(ft);
-        out.push(ft);
-      }
-      if (out.length > 0) return out;
-      let mbs = isFn(doc.querySelectorAll) ? Array.from(doc.querySelectorAll('[data-testid="model-selector-trigger"]')) : [];
-      if (mbs.length === 0 && isFn(doc.querySelector)) {
-        const oneMb = doc.querySelector('[data-testid="model-selector-trigger"]');
-        if (oneMb) mbs = [oneMb];
-      }
-      for (let i = 0; i < mbs.length; i++) {
-        const mb = mbs[i], anc = mb?.parentElement;
-        if (anc && !seen.has(anc) && !isHidAnc(mb) && !isTopWrap(anc) && (knownConv || isConv(doc, w, mb))) {
-          seen.add(anc);
-          out.push(anc);
-        }
-      }
-      return out;
-    };
-
-    const hasAnyAnchor = (doc, knownConv = false) => {
-      if (!doc) return false;
-      const w = gW();
-      if (!knownConv && !isConv(doc, w)) return false;
-      const ft = doc.querySelector?.(FT_SEL);
-      if (ft && !isHidAnc(ft) && (knownConv || isConv(doc, w, ft))) return true;
-      const mb = doc.querySelector?.('[data-testid="model-selector-trigger"]');
-      const anc = mb?.parentElement;
-      return !!(anc && !isHidAnc(mb) && !isTopWrap(anc) && (knownConv || isConv(doc, w, mb)));
-    };
-
-    const seatIn = (anc, el) => {
-      if (!anc || !el) return false;
-      const kids = anc.children || [];
-      if (/\bagy-composer-footer\b/.test(String(anc.className || '')) && kids.length >= 2 && isFn(anc.insertBefore)) {
-        const last = kids[kids.length - 1];
-        if (last && last !== el) { anc.insertBefore(el, last); return true; }
-      }
-      anc.appendChild(el);
-      return true;
-    };
-
-    const closeCards = (it, notify = false) => {
-      if (!it || (!it.xCard || it.xCard.hidden) && (!it.sCard || it.sCard.hidden)) return false;
-      if (it.xCard) it.xCard.hidden = true;
-      if (it.sCard) it.sCard.hidden = true;
-      it.xChip?.setAttribute('aria-expanded', 'false');
-      it.sChip?.setAttribute('aria-expanded', 'false');
-      if (notify) {
-        try { gW()?.__agPulseExternalBridge?.({ event: 'card', host: it.host, open: false }); } catch {}
-      }
-      return true;
-    };
-
-    const ensDocClick = (doc) => {
-      if (docOff || !doc || typeof doc.addEventListener !== 'function') return;
-      const onDoc = (ev) => {
-        for (const it of insts.values()) {
-          if (ev?.target === it.host || it.host.contains?.(ev?.target)) continue;
-          closeCards(it, true);
-        }
-      };
-      doc.addEventListener('click', onDoc);
-      docOff = () => doc.removeEventListener('click', onDoc);
-    };
-
-    const refreshInst = async (it) => {
-      const doc = gD();
-      if (!it || !doc || !isConn(doc, it.host) || mode === 'off') return null;
-      const cid = detCid(it.host, insts.size > 1);
-      it.cid = cid;
-      const snap = await reqSnap({ conversationId: cid, force: false }, it.host);
-      if (insts.get(it.anc) === it && isConn(gD(), it.host)) applySnapToInst(it, snap);
-      return snap;
-    };
-
-    const createBarInst = (doc, anc) => {
-      const w = gW();
-      const E = (t, a, k) => mk(doc, t, a, k);
-      const host = E('div', {
-        [FALLBACK_ATTR]: '1',
-        [PRISM_BAR_ATTR]: 'true',
-        'data-ag-owned': '1',
-        'data-ag-no-i18n': '',
-        translate: 'no',
-        'data-no-translate': 'true',
-        'data-ag-localization-skip': 'true',
-        'data-agy-no-translate': 'true',
-        'data-antigravity-zh-skip': '1',
-      });
-      if (typeof host.attachShadow !== 'function') return null;
-      const sr = host.attachShadow({ mode: 'open' });
-      sr.appendChild(E('style', { text: SHADOW_CSS }));
-
-      const t0 = gStr();
-      const sChip = E('button', { type: 'button', cls: 'chip', 'data-card': 'speed' }, [
-        E('span', { cls: 'rounds dim', id: 'rounds', text: '—' }),
-        E('strong', { id: 'tps', text: '—' }),
-        E('span', { cls: 'dim', text: 'tok/s' }),
-      ]);
-      const cChip = E('button', { type: 'button', cls: 'chip', 'data-card': 'cache' }, [
-        E('span', { cls: 'cache-total', id: 'cache-total', text: '—' }),
-        E('span', { cls: 'sub-badge', id: 'subagent-badge', hidden: true, text: '' }),
-        E('span', { cls: 'dim', text: '·' }),
-        E('span', { 'data-i18n': 'cache', 'data-fb-i18n': 'cache', text: t0.cache }),
-        E('strong', { id: 'cache-rate', text: '—' }),
-      ]);
-      const xChip = E('button', { type: 'button', cls: 'chip', 'data-card': 'context', 'aria-expanded': 'false' }, [
-        E('span', { cls: 'context-ring', id: 'context-ring' }),
-        E('span', { cls: 'context-label dim', 'data-i18n': 'contextShort', text: 'Ctx' }),
-        E('strong', { id: 'context-percent', text: '0%' }),
-      ]);
-      const sCard = E('section', { cls: 'card', id: 'speed-card', hidden: true }, [
-        E('div', { cls: 'heading' }, [E('span', { 'data-fb-i18n': 'speedHeading', text: t0.speedHeading })]),
-        E('dl', null, [
-          E('dt', { 'data-fb-i18n': 'ttft', text: t0.ttft }),
-          E('dd', { id: 'ttft', text: '—' }),
-          E('dt', { 'data-fb-i18n': 'latestRate', text: t0.latestRate }),
-          E('dd', { id: 'latest-rate', text: '—' }),
-        ]),
-      ]);
-      const xCard = E('section', { cls: 'card context-card', id: 'context-card', hidden: true }, [
-        E('div', { cls: 'heading' }, [E('span', { 'data-fb-i18n': 'ctxHeading', text: t0.ctxHeading })]),
-        E('strong', { id: 'context-summary', text: t0.summary(0, 100) }),
-        E('p', { id: 'context-tokens', text: '— / 512K tok' }),
-        E('div', { cls: 'track', id: 'context-track' }, [E('i', { id: 'context-fill' })]),
-        E('dl', null, [
-          E('dt', { 'data-fb-i18n': 'curModel', text: t0.curModel }),
-          E('dd', { id: 'context-model', text: '—' }),
-        ]),
-        E('p', { cls: 'footnote', id: 'context-note', hidden: true, text: '' }),
-      ]);
-
-      sr.appendChild(E('div', { cls: 'bar' }, [sChip, cChip, xChip]));
-      sr.appendChild(sCard);
-      sr.appendChild(xCard);
-
-      const it = {
-        anc, host, sr, sChip, cChip, xChip, sCard, xCard,
-        ro: null, raf: 0, curTier: 0, pendW: 0, hasPendW: false, lastTv: '', cid: null, snap: null,
-      };
-
-      const markAct = () => { activeHost = host; };
-      host.addEventListener?.('pointerdown', markAct);
-      host.addEventListener?.('focusin', markAct);
-
-      const tog = (card, btn) => {
-        const nx = !!(card.hidden);
-        activeHost = host;
-        for (const other of insts.values()) {
-          if (other !== it) closeCards(other, false);
-        }
-        sCard.hidden = xCard.hidden = true;
-        sChip.setAttribute('aria-expanded', 'false');
-        xChip.setAttribute('aria-expanded', 'false');
-        card.hidden = !nx;
-        btn.setAttribute('aria-expanded', String(nx));
-        if (nx) void refreshInst(it);
-        try { w.__agPulseExternalBridge?.({ event: 'card', host, open: nx, data: it.snap || lastSnap }); } catch {}
-      };
-      xChip.addEventListener('click', (e) => { e?.stopPropagation?.(); tog(xCard, xChip); });
-      sChip.addEventListener('click', (e) => { e?.stopPropagation?.(); tog(sCard, sChip); });
-
-      seatIn(anc, host);
-      insts.set(anc, it);
-      instByHost.set(host, it);
-      attachTierRec(it);
-      return it;
-    };
-
-    const reconcileBars = (doc) => {
-      const w = gW();
-      if (!doc || !w) return { mounted: false, added: [], reseated: [] };
-      const anchors = findAnchors(doc, true);
-      const ancSet = new Set(anchors);
-      for (const [anc, it] of Array.from(insts.entries())) {
-        if (!ancSet.has(anc) || !isConn(doc, anc)) disposeInst(it, true);
-      }
-      const added = [], reseated = [];
-      for (let i = 0; i < anchors.length; i++) {
-        const anc = anchors[i];
-        const existing = insts.get(anc);
-        if (existing) {
-          if (!isConn(doc, existing.host) || existing.host.parentElement !== anc) {
-            try {
-              seatIn(anc, existing.host);
-              reseated.push(existing);
-            } catch {}
-          }
-          attachTierRec(existing);
-        } else {
-          const created = createBarInst(doc, anc);
-          if (created) added.push(created);
-        }
-      }
-      syncPrimaryId();
-      purgeOrphans(doc);
-      if (insts.size > 0) {
-        clrExtTiers();
-        ensDocClick(doc);
-        yielded = false;
-      } else {
-        if (docOff) { try { docOff(); } catch {} docOff = null; }
-        clrPoll();
-      }
-      for (let i = 0; i < added.length; i++) {
-        try { w.__agPulseExternalBridge?.({ event: 'mount', host: added[i].host }); } catch {}
-      }
-      for (let i = 0; i < reseated.length; i++) {
-        try { w.__agPulseExternalBridge?.({ event: 'mount', host: reseated[i].host }); } catch {}
-      }
-      return { mounted: insts.size > 0, added, reseated };
-    };
-
-    let lastHealAt = 0;
-    const HC_A = 'data-hover-card-popup';
-    const SB_SEL = 'aside,[data-testid="sidebar-split"]>div:first-child,[data-testid="conversation-row-sidebar"],[data-testid="project-header"],[data-hover-card-popup]';
-    const IGN_STREAM_SEL =
-      '[data-testid="autoscroll-viewport"],[data-testid="planner-response-text"],[data-testid="agent-response"],[data-markdown-root],[data-testid="background-task-command"],[data-testid="running-items-card"],' + SB_SEL + ',[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-conv-aura-host,.ag-cs-crab,.ag-cs-prism-rim-cv,.ag-anim-icon,.ag-cs-thinking-spark,[data-agy-hans-ui],#agy-theme-switcher,#agy-theme-menu,#antigravity-quota-widget,#antigravity-translation-audit';
-    const isHcPortal = (el) => {
-      if (!el || el.tagName === 'BODY' || el.tagName === 'HTML') return false;
-      const h = (n, k) => !!n?.hasAttribute?.(k), f = el.firstElementChild;
-      return h(el, HC_A) || h(f, HC_A) || h(f?.firstElementChild, HC_A) || (h(el, 'data-base-ui-portal') && !!el.querySelector?.('[data-hover-card-popup]'));
-    };
-    const isIgnoredStreamNode = (t) => {
-      const el = t?.nodeType === 1 ? t : t?.parentElement;
-      return !!(el && (isHcPortal(el) || (el.closest && !el.closest('.agy-composer-footer,[data-testid="input-box-bottom-toolbar"]') && el.closest(IGN_STREAM_SEL))));
-    };
-
-    const anchorsChanged = (doc) => {
-      const ancs = findAnchors(doc, true);
-      if (ancs.length !== insts.size) return true;
-      for (let i = 0; i < ancs.length; i++) {
-        const it = insts.get(ancs[i]);
-        if (!it || !isConn(doc, it.host) || it.host.parentElement !== ancs[i]) return true;
-      }
-      return false;
-    };
-
-    const ensSeatObs = () => {
-      const w = gW(), doc = gD();
-      if (!w || !doc || mode === 'off') return;
-      const runHeal = () => {
-        healTm = null;
-        lastHealAt = Date.now();
-        if (mode === 'off') return;
-        const d = gD(), wn = gW();
-        if (!d || !wn) return;
-        if (!isConv(d, wn)) { yielded = false; if (insts.size > 0) unmountFb(true); hideExt(false); return; }
-        if (mode === 'on') hideExt(true);
-        else { showExt(); if (hasExt(null, true)) { yielded = true; if (insts.size > 0) unmountFb(true); ensTierObs(); return; } }
-        if (insts.size > 0) { const res = reconcileBars(d); if (res.added.length > 0) void refresh(); else if (insts.size > 0) ensTierObs(); }
-        else if ((mode === 'on' || waitTm === null) && findAnchors(d, true).length > 0) mountFb();
-      };
-      const schedHeal = (fast = false) => {
-        if (mode === 'off' || healTm !== null) return;
-        healTm = setTimeout(runHeal, fast || Date.now() - lastHealAt >= 180 ? 45 : 180);
-        healTm?.unref?.();
-      };
-      if (!seatObs && (doc.body || doc.documentElement)) {
-        seatObs = subMo('pulse-seat', doc.body || doc.documentElement, { childList: true, subtree: true }, (recs) => {
-          if (mode === 'off' || healTm !== null) return;
-          if (Array.isArray(recs) && recs.length > 0) {
-            const ignAll = (l) => { if (l) for (let j = 0; j < l.length; j++) if (!isIgnoredStreamNode(l[j])) return false; return true; };
-            let rel = false;
-            for (let i = 0; i < recs.length; i++) { const r = recs[i], a = r?.addedNodes, rm = r?.removedNodes; if (isIgnoredStreamNode(r?.target) || (((a?.length || 0) + (rm?.length || 0)) && ignAll(a) && ignAll(rm))) continue; rel = true; break; }
-            if (!rel) return;
-          }
-          const inC = isConv(doc, w);
-          let bars = null;
-          const gB = () => bars || (bars = findExtBars(doc)), visB = (b) => b && b.getAttribute?.(HID_ATTR) !== '1';
-          if (!inC) { if (insts.size > 0 || gB().some(visB)) schedHeal(true); return; }
-          if (insts.size > 0) { if (anchorsChanged(doc)) { schedHeal(false); return; } }
-          else if (waitTm === null && !hasExt(gB(), true) && hasAnyAnchor(doc, true)) { schedHeal(true); return; }
-          const extMissingTier = gB().some((b) => visB(b) && b.shadowRoot && !b.shadowRoot.querySelector?.(`style[${TIER_STYLE_ATTR}="1"]`));
-          let deadExtTier = false;
-          for (const anc of extTiers.keys()) if (!isConn(doc, anc)) { deadExtTier = true; break; }
-          if (deadExtTier || extMissingTier || (mode === 'on' && gB().some((b) => visB(b) && b.getAttribute?.(FALLBACK_ATTR) !== '1'))) schedHeal(false);
-        }, 'low');
-      }
-      if (!popOff && isFn(w.addEventListener)) {
-        const onPop = () => schedHeal(true);
-        w.addEventListener('popstate', onPop);
-        popOff = () => w.removeEventListener?.('popstate', onPop);
-      }
-    };
-
-    async function refresh() {
-      const w = gW(), doc = gD();
-      if (!envOpts && w?.__agPrismTelemetry && w.__agPrismTelemetry !== api) { unmountFb(); return null; }
-      if (!isConv(doc, w)) {
-        yielded = false;
-        unmountFb(true);
-        if (mode !== 'off') hideExt();
-        return null;
-      }
-      if (mode === 'on') hideExt(true);
-      else {
-        showExt();
-        if (hasExt(null, true)) { yielded = true; unmountFb(true); ensTierObs(); return null; }
-      }
-      if (mode !== 'off') {
-        if (insts.size > 0 || ((mode === 'on' || !hasExt(null, true)) && waitTm === null && findAnchors(doc, true).length > 0)) {
-          reconcileBars(doc);
-        }
-      }
-      if (insts.size === 0) return null;
-      ensTierObs();
-      const live = Array.from(insts.values()).filter((it) => isConn(doc, it.host));
-      if (live.length === 0) return null;
-      const multi = live.length > 1;
-      const reqByKey = new Map();
-      for (let i = 0; i < live.length; i++) {
-        const it = live[i];
-        it.cid = detCid(it.host, multi);
-        const key = it.cid || `__pane_${i}`;
-        if (!reqByKey.has(key)) reqByKey.set(key, reqSnap({ conversationId: it.cid, force: false }, it.host));
-      }
-      const snaps = new Map();
-      await Promise.all(Array.from(reqByKey.entries()).map(async ([k, p]) => { snaps.set(k, await p); }));
-      let actSnap = null;
-      const act = resolveActiveInst();
-      for (let i = 0; i < live.length; i++) {
-        const it = live[i];
-        const key = it.cid || `__pane_${i}`;
-        const snap = snaps.get(key) || null;
-        if (insts.get(it.anc) === it && isConn(gD(), it.host)) applySnapToInst(it, snap);
-        if (it === act || (!act && i === 0)) actSnap = snap;
-      }
-      return actSnap ?? lastSnap;
-    }
-
-    function mountFb() {
-      const w = gW(), doc = gD();
-      if (!w || !doc || (typeof doc.attachShadow === 'undefined' && typeof doc.createElement !== 'function')) return false;
-      if (!envOpts && w.__agPrismTelemetry && w.__agPrismTelemetry !== api) { unmountFb(); return false; }
-      if (mode === 'off') return false;
-      if (!isConv(doc, w)) {
-        yielded = false;
-        unmountFb(true);
-        hideExt();
-        ensSeatObs();
-        return false;
-      }
-      if (mode === 'on') hideExt(true);
-      else if (hasExt(null, true)) { yielded = true; unmountFb(true); ensSeatObs(); return false; }
-
-      const res = reconcileBars(doc);
-      ensSeatObs();
-      if (!res.mounted) return false;
-      ensHost();
-      ensTierObs();
-      ensBlur();
-      if (res.added.length > 0 || pollTm === null) {
-        void refresh();
-        startPoll();
-      }
-      return true;
-    }
-
-    const getBars = () => {
-      const doc = gD(), out = [];
-      for (const it of insts.values()) if (isConn(doc, it.host)) out.push(it.host);
-      return out;
-    };
-
-    const getBarForView = (node) => {
-      const doc = gD();
-      if (!node || !doc) return null;
-      const direct = instByHost.get(node);
-      if (direct && isConn(doc, direct.host)) return direct.host;
-      const cvSel = '[data-testid="conversation-view"],[data-testid="agent-input-box"],.agy-composer-footer';
-      const cv = node.matches?.(cvSel) ? node : node.closest?.(cvSel);
-      if (cv) {
-        for (const it of insts.values()) {
-          if (isConn(doc, it.host) && (cv === it.anc || cv.contains?.(it.anc) || it.anc.contains?.(cv))) return it.host;
-        }
-        const ext = cv.querySelector?.('#' + BAR_ID + ',[data-ag-pulse-bar="true"]');
-        if (ext && usableExt(doc, ext)) return ext;
-      }
-      return null;
-    };
-
-    const setActiveBar = (target) => {
-      const doc = gD();
-      if (!target) { activeHost = null; return null; }
-      const h = instByHost.has(target) ? target : getBarForView(target);
-      if (!h || !isConn(doc, h)) return null;
-      activeHost = h;
-      const it = instByHost.get(h);
-      try { gW()?.__agPulseExternalBridge?.({ event: 'focus', host: h, data: it?.snap || lastSnap }); } catch {}
-      return h;
-    };
-
-    const getSnapshotForBar = (hostOrCid) => {
-      if (!hostOrCid) return resolveActiveInst()?.snap || lastSnap;
-      if (typeof hostOrCid === 'string') return snapByCid.get(hostOrCid) || lastSnap;
-      const it = instByHost.get(hostOrCid) || instByHost.get(getBarForView(hostOrCid));
-      return it?.snap || (it?.cid && snapByCid.get(it.cid)) || lastSnap;
-    };
-
-    const getState = () => {
-      const doc = gD();
-      let mountedCount = 0;
-      for (const it of insts.values()) if (isConn(doc, it.host)) mountedCount++;
-      const mounted = mountedCount > 0;
-      const blurred = isBlur();
-      if (mounted && blurred && pollTm !== null) { pollSusp = true; clrPoll(); }
-      return {
-        mode,
-        mountedFallback: mounted,
-        mountedCount,
-        waitingForExternal: waitTm !== null,
-        yieldedToExternal: !!(mode === 'auto' && (yielded || hasExt())),
-        hasExternal: hasExt(),
-        pollSuspended: !!(mounted && (pollSusp || blurred)),
-      };
-    };
-
-    function sync(cfg) {
-      if (cfg && typeof cfg.language === 'string' && cfg.language) {
-        expLang = cfg.language.trim().toLowerCase() === 'auto' ? '' : normFbLang(cfg.language, gW());
-      }
-      const raw = cfg && cfg.telemetryModule;
-      mode = raw === 'on' || raw === 'off' ? raw : 'auto';
-      if (insts.size > 0 && mode !== 'off') {
-        for (const it of insts.values()) {
-          syncLblsFor(it.sr);
-          if (it.snap || lastSnap) applySnapToInst(it, it.snap || lastSnap);
-        }
-      }
-      if (mode === 'off') {
-        yielded = false;
-        unmountFb();
-        hideExt();
-        return getState();
-      }
-      ensBridge();
-      ensSeatObs();
-      const doc = gD(), w = gW();
-      if (!isConv(doc, w)) {
-        yielded = false;
-        unmountFb(true);
-        hideExt();
-        ensHost();
-        return getState();
-      }
-      if (mode === 'on') {
-        yielded = false;
-        clrWait();
-        hideExt(true);
-        ensHost();
-        mountFb();
-        return getState();
-      }
-      showExt();
-      if (hasExt()) {
-        yielded = true;
-        unmountFb(true);
-        ensHost();
-        ensTierObs();
-        if (detAt > 0 && rescTm === null) {
-          rescTm = setTimeout(() => {
-            rescTm = null;
-            if (mode !== 'off' && !hasExt()) mountFb();
-          }, GRACE_MS + 60);
-          rescTm?.unref?.();
-        }
-        return getState();
-      }
-      if (insts.size > 0) {
-        reconcileBars(doc);
-        if (insts.size > 0) return getState();
-      }
-      if (findExtBars(doc).some((b) => b && b.getAttribute?.(FALLBACK_ATTR) !== '1' && isConn(doc, b) && !usableExt(doc, b))) {
-        clrWait();
-        mountFb();
-        return getState();
-      }
-      if (waitTm === null) {
-        const ms = isFin(cfg?.__fallbackDelayMs) && cfg.__fallbackDelayMs >= 0 ? cfg.__fallbackDelayMs : WAIT_MS;
-        waitTm = setTimeout(waitTimerDone, ms);
-        waitTm?.unref?.();
-      }
-      return getState();
-    }
-
-    function waitTimerDone() {
-      waitTm = null;
-      if (mode !== 'auto') return;
-      if (!isConv(gD(), gW())) { unmountFb(true); hideExt(); return; }
-      if (hasExt()) { yielded = true; unmountFb(true); ensHost(); ensTierObs(); return; }
-      mountFb();
-    }
-
-    function destroy() {
-      clrWait();
-      clrSeat();
-      unmountFb();
-      showExt();
-      snapByCid.clear();
-      const w = gW();
-      if (w) {
-        if (mApi && w.__agPrismMetricsBridge === mApi) delete w.__agPrismMetricsBridge;
-        if (mRes && w.__agPrismMetricsResolve === mRes) delete w.__agPrismMetricsResolve;
-      }
-      yielded = false;
-      lastSig = '';
-      detAt = 0;
-    }
-
-    const api = {
-      BAR_ID,
-      PRISM_BAR_ID,
-      PRISM_BAR_ATTR,
-      FALLBACK_ATTR,
-      METRICS_BINDING,
-      sync,
-      destroy,
-      refresh,
-      getLatestSnapshot: () => resolveActiveInst()?.snap || lastSnap,
-      getSnapshotForBar,
-      getBars,
-      getPrimaryBar: () => getPrimaryInst()?.host || null,
-      getActiveBar: () => resolveActiveInst()?.host || null,
-      setActiveBar,
-      getBarForView,
-      getState,
-      createTelemetryController,
-    };
-    return api;
-  }
-
-  return createTelemetryController();
+(function(root,factory){
+if(typeof module==='object'&&module.exports){module.exports=factory(root);}else{
+try{root.__agPrismTelemetry?.destroy?.();}catch{}
+if(typeof window!=='undefined'&&window!==root)try{window.__agPrismTelemetry?.destroy?.();}catch{}
+const api=factory(root);root.__agPrismTelemetry=api;if(typeof window!=='undefined')window.__agPrismTelemetry=api;
+}
+})(typeof globalThis!=='undefined'?globalThis:typeof window!=='undefined'?window:this,function(globalRoot){
+'use strict';
+const isFn=v=>typeof v==='function',isFin=v=>typeof v==='number'&&Number.isFinite(v);
+const gA=(e,k)=>e?.getAttribute?.(k),sA=(e,k,v)=>e?.setAttribute?.(k,v),rA=(e,k)=>e?.removeAttribute?.(k);
+const qS=(e,s)=>e?.querySelector?.(s),qA=(e,s)=>e?.querySelectorAll?.(s);
+const emitB=(w,p)=>{try{w?.__agPulseExternalBridge?.(p);}catch{}};
+
+const BAR_ID='ag-pulse-status-bar',PRISM_BAR_ID='ag-prism-pulse-bar',PRISM_BAR_ATTR='data-ag-prism-pulse-bar',FALLBACK_ATTR='data-ag-prism-fallback',HID_ATTR='data-ag-prism-hidden',METRICS_BINDING='__agPrismMetricsCall';
+const WAIT_MS=1500,GRACE_MS=3500,SW_DEBOUNCE_MS=30,LRU_MAX=32,GUID_RE=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,URL_CID_RE=/\/c\/([0-9a-f-]{36})/i;
+const TIER_ATTR='data-t',TIER_STYLE_ATTR='data-pt',TIER_VALS=['0','1','1 2','1 2 3','1 2 3 4','1 2 3 4 5'];
+const CID_A='data-cascade-id',CID_S='['+CID_A+']',CV_S='[data-testid="conversation-view"]',AE_A='aria-expanded',IB_S='[data-testid="agent-input-box"]',MS_S='[data-testid="model-selector-trigger"]';
+const expCss=s=>{
+const t=['var(--e)',':host([data-t~="','[data-card="','color-mix(in srgb,var(--pt-c) ','overflow:hidden;white-space:nowrap;','transform:scale(.9) translateX(4px);pointer-events:none!important','border-radius:','background:'];
+for(let i=0;i<t.length;i++)s=s.split('$'+i).join(t[i]);
+return s.replace(/!(?!important)/g,'!important');
+};
+const TIER_CSS=expCss('[hidden]{display:none!}:host{--e:cubic-bezier(.22,1,.36,1);--pt-c:var(--pv-tint,var(--pulse-ring,#3186ff))}.bar{transition:gap .28s $0}.bar>:is(.chip,.dot){$4max-width:132px;opacity:1;transform-origin:right;transition:max-width .28s $0,opacity .17s ease-out,padding .28s $0,margin .28s $0,gap .28s $0,transform .28s $0,background .16s,border-color .22s,box-shadow .22s}.bar>[data-card="cache"]{max-width:240px}.bar>$2context"]{max-width:136px}.bar>.dot{max-width:16px}:where(.bar>.chip>*:not(.context-ring):not(svg)){$4max-width:108px;flex-shrink:0;opacity:1;transform-origin:right;transition:max-width .28s $0,opacity .17s ease-out,margin .28s $0,padding .28s $0,transform .28s $0}.context-ring{will-change:transform;transition:transform .28s $0}$12"]) :is(.cache-total,.sub-badge,$2cache"] .dim,.countdown),$14"]) $2context"] .context-label,$15"]) $2context"]>:not(.context-ring){max-width:0!important;flex-shrink:1!important;opacity:0!;margin:0!;padding:0!;$5}$13"]) .bar>:is($2cache"],$2week"]),$14"]) .bar>:is($2speed"],$2five"],.dot){max-width:0!;min-width:0!;flex-shrink:1!;opacity:0!;padding:0!;margin:0!;gap:0!;border:0!;$5}$13"]) .bar>$2cache"]::before,$13"]) .bar>$2week"]::before,$14"]) .bar>$2five"]::before,$14"]) .bar>$2context"]::before{opacity:0!;content:none!}$14"]) .bar>$2context"]{margin-left:0!}$14"]) .bar{gap:0}$15"]) $2context"]{width:26px!;min-width:26px!;height:26px!;padding:0!;gap:0!;$6999px!;justify-content:center!;$7$39%,transparent);border:1px solid $328%,rgba(148,163,184,.28))}$15"]) $2context"]:is(:hover,[aria-expanded="true"]){$7$317%,transparent);border-color:$348%,rgba(148,163,184,.4));box-shadow:0 0 10px -2px $345%,transparent)}$15"]) .context-ring{transform:scale(1.27)}:host([data-pv-motion="off"]) :is(.bar,.bar *),:host-context(html[data-ag-cs-resizing="1"]) :is(.bar,.bar *){transition:none!}@media (prefers-reduced-motion:reduce){:host-context(html:not([data-ag-cs-ignore-rm="1"])) :is(.bar,.bar *){transition:none!}}');
+const SHADOW_CSS=expCss(':host,*,::before,::after{box-sizing:border-box}:host,.bar,.chip{display:inline-flex;align-items:center}:host{--ch:#dae2f0db;--mu:#94a0b6b8;--f:#eef1f7;--pv-tint:#3186ff;flex:0 0 auto;position:relative;font:11px/16px Inter,system-ui,-apple-system,"Segoe UI",sans-serif;font-variant-numeric:tabular-nums;color:var(--ch);user-select:none;z-index:20}:host-context(html[data-ag-cs-theme="light"]),:host([data-pv-light="1"]){--ch:#1e293b;--mu:#475569;--f:#0f172a;--pv-tint:#2563eb;--pv-w1:#d97706;--pv-w2:#dc2626}:host([hidden]),.sub-badge[hidden],.card[hidden],.footnote[hidden],.footnote:empty,:host([data-layout="blocked"])>.bar{display:none!}:host([data-layout="blocked"]){position:fixed!;left:-9999px!;top:-9999px!;width:0!;height:0!;margin:0!;padding:0!;overflow:hidden!;visibility:hidden!;pointer-events:none!}.bar{gap:2px;flex:none}.bar .chip{flex:none;white-space:nowrap;gap:3.5px;height:24px;padding:0 5px;border:0;$65px;$7transparent;color:var(--ch);font:inherit;line-height:16px;font-size:11px;cursor:pointer;overflow:visible;font-variant-numeric:tabular-nums;transition:background .15s,color .15s}.bar .chip:is(:hover,[aria-expanded="true"]){$7rgba(255,255,255,.05);color:var(--f)}:host-context(html[data-ag-cs-theme="light"]) .bar .chip:is(:hover,[aria-expanded="true"]),:host([data-pv-light="1"]) .bar .chip:is(:hover,[aria-expanded="true"]){$7rgba(15,23,42,.05)}.bar .chip strong{font-weight:600}.bar .chip[data-warn="1"] strong{color:var(--pv-w1,#f59e0b)}.bar .chip[data-warn="2"] strong{color:var(--pv-w2,#f87171)}.chip svg{width:12px;height:12px;stroke:currentColor;stroke-width:1.5;fill:none;opacity:.75;flex:none}.bar .chip .dim{color:var(--mu);opacity:.66;font-size:9.5px}.bar .chip :is([data-i18n="cache"],[data-i18n="five"],[data-i18n="week"]){opacity:.62}.bar .chip[data-card="speed"]>span:last-child{opacity:.66;font-size:10px}:host(:not(.icons-only)) :is(.chip[data-card="speed"]>:is(svg,.rounds),.chip[data-card="cache"]>:is(svg:first-child,.cache-total,.dim),.chip[data-card="context"]>.context-label){display:none!}:host(:not(.icons-only)) .bar .chip:not([hidden])~.chip:not([hidden]){position:relative;margin-left:6px}:host(:not(.icons-only)) .bar .chip:not([hidden])~.chip:not([hidden])::before{content:"·";position:absolute;left:-4px;top:50%;transform:translate(-50%,-50%);color:var(--mu);opacity:.32;pointer-events:none}.sub-badge{font-size:10px;opacity:.82;color:var(--primary,#38bdf8);font-weight:500;margin-right:2px}.context-ring{width:11px;height:11px;$650%;$7conic-gradient(var(--pv-tint,#3186ff) var(--used-angle,36deg),rgba(148,163,184,.28) 0);display:inline-block;position:relative;flex:none}.context-ring::after{content:"";position:absolute;inset:2.2px;$650%;$7var(--card,#141720)}:host-context(html[data-ag-cs-theme="light"]) .context-ring::after,:host([data-pv-light="1"]) .context-ring::after{$7var(--card,#f8fafc)}.card{position:absolute;right:0;left:auto;bottom:calc(100% + 10px);width:min(304px,calc(100vw - 24px));padding:12px 13px;$610px;border:1px solid rgba(148,163,184,.22);$7var(--card,#12151ef5);color:var(--foreground,#eef1f7);box-shadow:0 16px 40px rgba(0,0,0,.36);z-index:9999}$14"]) .card{right:-84px;width:min(296px,calc(100vw - 32px))}.heading{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:11px;font-weight:600;margin-bottom:6px}.heading>span:first-child{white-space:nowrap}#context-summary{display:block;font-size:13px;font-weight:600;margin-bottom:2px}#context-tokens{margin:0 0 8px;font-size:11px;opacity:.76}.track{height:5px;$6999px;$7rgba(148,163,184,.18);overflow:hidden;margin:6px 0 10px}.track>i{display:block;height:100%;width:0%;$6999px;$7linear-gradient(90deg,#2563eb,#38bdf8)}dl{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;margin:8px 0;font-size:11px}dt{opacity:.64}dd{margin:0;text-align:right;font-weight:500;$4text-overflow:ellipsis}.footnote{margin:6px 0 0;font-size:10px;opacity:.58}')+TIER_CSS;
+
+const FB_ROWS={
+'zh-CN':'缓存|吞吐速率|首字延迟|最近速率|上下文窗口|当前模型|已用|剩余|代理|5h|周',
+'zh-TW':'快取|吞吐速率|首字延遲|最近速率|上下文視窗|目前模型|已用|剩餘|代理|5h|週',
+en:'Cache|Throughput|TTFT|Latest Rate|Context Window|Active Model|used|free| sub|5h|Wk',
+ja:'キャッシュ|スループット|初回応答|最新速度|コンテキスト|現在のモデル|使用|残り| サブ|5h|週',
+ko:'캐시|처리 속도|첫 토큰 지연|최근 속도|컨텍스트 창|현재 모델|사용|여유| 서브|5h|주',
+es:'Caché|Rendimiento|TTFT|Velocidad rec.|Ventana de ctx|Modelo activo|usado|libre| sub|5h|Sem',
+fr:'Cache|Débit|TTFT|Dernier débit|Fenêtre ctx|Modèle actif|utilisé|libre| sous|5h|Heb',
+de:'Cache|Durchsatz|TTFT|Akt. Rate|Kontextfenster|Aktives Modell|belegt|frei| Sub|5h|W',
+};
+function normFbLang(raw,win){
+let v=String(raw||'').trim();
+if(!v||v.toLowerCase()==='auto'){
+const nv=win&&'navigator'in win?win.navigator:(typeof navigator!=='undefined'?navigator:null);
+v=String(nv?.languages?.[0]||nv?.language||'').trim();
+}
+const s=v.toLowerCase().replace(/_/g,'-');
+if(!s||s==='auto')return 'en';
+if(s==='yue'||s.startsWith('yue-')||s==='zh-yue'||s.includes('cantonese'))return 'zh-CN';
+if(/^zh-(tw|hant|hk|mo)/.test(s)||s==='tw'||s==='hant')return 'zh-TW';
+if(/^zh/.test(s))return 'zh-CN';
+if(/^(ja|jp)/.test(s)||s==='japanese')return 'ja';
+if(/^(ko|kr)/.test(s)||s==='korean')return 'ko';
+if(/^es/.test(s)||s==='spanish')return 'es';
+if(/^fr/.test(s)||s==='french')return 'fr';
+if(/^de/.test(s)||s==='german')return 'de';
+return 'en';
+}
+const FB_I18N=Object.fromEntries(Object.entries(FB_ROWS).map(([lk,s])=>{
+const r=s.split('|');
+return[lk,{cache:r[0],speedHeading:r[1],ttft:r[2],latestRate:r[3],ctxHeading:r[4],curModel:r[5],fiveShort:r[9],weekShort:r[10],summary:(p,rem)=>`${p}% ${r[6]} · ${rem}% ${r[7]}`,agents:n=>`${n}${r[8]}`}];
+}));
+
+// 配额池倒计时、窗口解析与独立本地匹配器（beta.4 对话页冷启动无 __agCsUsageCore 时兜底）
+const qEta=r=>{
+const ms=typeof r==='number'?(r>1e11?r:r*1e3):Date.parse(r||''),d0=ms-Date.now();
+if(!isFin(d0)||d0<=0)return '';
+const s=Math.max(1,Math.round(d0/1e3)),d=(s/86400)|0,h=((s%86400)/3600)|0;
+return d?`${d}d${h}h`:h?`${h}h${((s%3600)/60)|0}m`:`${Math.max(1,(s/60)|0)}m`;
+};
+const qWin=b=>{
+if(!b||typeof b!=='object'||b.available===false||b.disabled)return null;
+if(b.expired)return{r:1,t:b.resetAt??b.resetTime};
+const n=+(b.remaining??b.remainingFraction);
+return isFin(n)?{r:Math.max(0,Math.min(1,n)),t:b.resetAt??b.resetTime}:null;
+};
+const hasAvailQWin=g=>!!(qWin(g?.windows?.['5h']||g?.fiveHour)||qWin(g?.windows?.weekly||g?.weekly));
+const qKind=g=>{
+const k=`${g.id||''} ${g.name||''} ${g.description||''} ${g.windows?.['5h']?.id||''} ${g.windows?.weekly?.id||''}`.toLowerCase();
+return /argon|wtu/.test(k)?'argon':/claude|anthropic|gpt|openai/.test(k)?'claude':/gemini|google/.test(k)?'gemini':'other';
+};
+function chooseQuotaGroupFallback(groups,model){
+const list=Array.isArray(groups)?groups.filter(g=>g&&typeof g==='object'):[];
+if(!list.length)return null;
+const byK=k=>list.find(g=>qKind(g)===k),ms=String(model||'').toLowerCase();
+const pick=/argon/.test(ms)?byK('argon')||byK('gemini'):/claude|anthropic|sonnet|opus|haiku|gpt|openai|\bo[134]\b/.test(ms)?byK('claude'):/gemini|carbon|hydrogen|neon|pro|flash/.test(ms)?byK('gemini')||byK('argon'):null;
+return pick||list.find(hasAvailQWin)||byK('gemini')||list[0];
+}
+const qGrp=(gs,m,w)=>{
+if(!Array.isArray(gs)||!gs.length)return null;
+const uc=w?.__agCsUsageCore;
+if(uc?.chooseQuotaGroup)try{const hit=uc.chooseQuotaGroup(gs,m);if(hit)return hit;}catch{}
+return chooseQuotaGroupFallback(gs,m);
+};
+
+// 多实例安全共享 History API 轻量路由钩子（引用计数归零时 100% 还原原始方法）
+const histHooks=new WeakMap();
+function subHistory(w,fn){
+const h=w?.history;
+if(!h||(!isFn(h.pushState)&&!isFn(h.replaceState)))return null;
+let rec=histHooks.get(h);
+if(!rec){
+const oP=isFn(h.pushState)?h.pushState:null,oR=isFn(h.replaceState)?h.replaceState:null;
+rec={oP,oR,wP:null,wR:null,cbs:new Set()};
+const emit=()=>{for(const cb of Array.from(rec.cbs))try{cb();}catch{}};
+try{
+if(oP){rec.wP=function(){const r=oP.apply(this,arguments);emit();return r;};h.pushState=rec.wP;}
+if(oR){rec.wR=function(){const r=oR.apply(this,arguments);emit();return r;};h.replaceState=rec.wR;}
+}catch{return null;}
+histHooks.set(h,rec);
+}
+rec.cbs.add(fn);
+return()=>{
+rec.cbs.delete(fn);
+if(rec.cbs.size===0){
+try{if(rec.oP&&h.pushState===rec.wP)h.pushState=rec.oP;if(rec.oR&&h.replaceState===rec.wR)h.replaceState=rec.oR;}catch{}
+histHooks.delete(h);
+}
+};
+}
+
+const fmtTok=n=>!isFin(n)||n<0?'—':n>=1e6?`${(n/1e6).toFixed(1).replace(/\.0$/,'')}M`:n>=1e3?`${Math.round(n/1e3)}K`:String(Math.round(n));
+function mk(doc,tag,attrs,kids){
+const el=doc.createElement(tag);
+if(attrs)for(const[k,v]of Object.entries(attrs)){
+if(v==null)continue;
+if(k==='text')el.textContent=String(v);else if(k==='cls')el.className=String(v);else if(k==='hidden')el.hidden=!!v;else el.setAttribute(k,String(v));
+}
+if(kids)for(const c of kids)if(c)el.appendChild(c);
+return el;
+}
+
+const HOST_ATTRS=Object.freeze({[FALLBACK_ATTR]:'1',[PRISM_BAR_ATTR]:'true','data-ag-owned':'1','data-ag-no-i18n':'',translate:'no','data-no-translate':'true','data-ag-localization-skip':'true','data-agy-no-translate':'true','data-antigravity-zh-skip':'1'});
+const HIDE_PROPS='position:fixed|left:-9999px|top:-9999px|width:1px|height:1px|opacity:0|pointer-events:none|visibility:hidden|overflow:hidden'.split('|').map(s=>s.split(':'));
+const TIER_CUTS=[640,515,450,395,345],FT_SEL='.agy-composer-footer,[data-testid="input-box-bottom-toolbar"]',HC_A='data-hover-card-popup';
+const SB_SEL='aside,[data-testid="sidebar-split"]>div:first-child,[data-testid="conversation-row-sidebar"],[data-testid="project-header"],[data-hover-card-popup]';
+const IGN_STREAM_SEL='[data-testid="autoscroll-viewport"],[data-testid="planner-response-text"],[data-testid="agent-response"],[data-markdown-root],[data-testid="background-task-command"],[data-testid="running-items-card"],'+SB_SEL+',[data-op-thought="1"],.ag-prism-thought-overlay,.ag-cs-conv-aura-host,.ag-cs-crab,.ag-cs-prism-rim-cv,.ag-anim-icon,.ag-cs-thinking-spark,[data-agy-hans-ui],#agy-theme-switcher,#agy-theme-menu,#antigravity-quota-widget,#antigravity-translation-audit';
+let reqSeq=0;
+
+function createTelemetryController(envOpts){
+const gW=()=>(envOpts&&envOpts.window)||(typeof window!=='undefined'?window:globalRoot);
+const gD=()=>(envOpts&&envOpts.document)||gW()?.document||null;
+
+let mode='auto',waitTm=null,rescTm=null,pollTm=null,swTm=null;
+let hasHost=false,yielded=false,lastSig='',detAt=0,lastHealAt=0;
+let docOff=null,popOff=null,winResOff=null,lastSnap=null,mApi=null,mRes=null,seatObs=null,healTm=null;
+let expLang='',activeHost=null,winBlur=false,pollSusp=false,blurOff=null,blurObs=null,extGuardHeld=false,lastHref='',lastUrlCid='';
+const pend=new Map(),inFlight=new Map(),insts=new Map(),instByHost=new WeakMap(),extTiers=new Map(),snapByCid=new Map(),locSnaps=new WeakMap();
+
+const readRouteKey=w=>{const l=w?.location;return l?`${l.href||''}|${l.pathname||''}|${l.hash||''}`:'';};
+const extractUrlCid=w=>{const l=w?.location,m=(typeof l?.pathname==='string'&&l.pathname.match(URL_CID_RE))||(typeof l?.href==='string'&&l.href.match(URL_CID_RE));return m?m[1]:null;};
+const putCidSnap=(cid,snap)=>{
+if(!cid||!snap||typeof snap!=='object')return;
+const prev=snapByCid.get(cid);
+if(snap.connection==='local-estimate'&&prev&&prev.connection!=='local-estimate')return;
+snapByCid.delete(cid);snapByCid.set(cid,snap);
+if(snapByCid.size>LRU_MAX)snapByCid.delete(snapByCid.keys().next().value);
+};
+const getCidSnap=cid=>{
+if(!cid||!snapByCid.has(cid))return null;
+const v=snapByCid.get(cid);snapByCid.delete(cid);snapByCid.set(cid,v);return v;
+};
+const isConn=(doc,el)=>{
+if(!el||el.isConnected===false)return false;
+if(el.isConnected===true)return true;
+if(!el.parentNode&&!el.parentElement)return false;
+if(doc&&isFn(doc.getElementById)&&el.id&&!isFn(doc.querySelectorAll)){const b=doc.getElementById(el.id);if(b&&b!==el)return false;}
+return true;
+};
+const getPrimaryInst=()=>{
+const doc=gD();let first=null;
+for(const it of insts.values()){if(!isConn(doc,it.host))continue;if(!first)first=it;if(it.host.id===PRISM_BAR_ID)return it;}
+return first;
+};
+const isCardOpen=it=>!!(it&&((it.xCard&&!it.xCard.hidden)||(it.sCard&&!it.sCard.hidden)));
+const resolveActiveInst=()=>{
+const doc=gD();
+for(const it of insts.values())if(isConn(doc,it.host)&&isCardOpen(it))return it;
+if(activeHost&&isConn(doc,activeHost)){const hit=instByHost.get(activeHost);if(hit)return hit;}
+const actCv=doc?.activeElement?.closest?.(CV_S+','+IB_S);
+if(actCv)for(const it of insts.values())if(isConn(doc,it.host)&&(actCv===it.anc||actCv.contains?.(it.anc)))return it;
+return getPrimaryInst();
+};
+const syncPrimaryId=()=>{
+const doc=gD();let primary=null;
+for(const it of insts.values()){if(!isConn(doc,it.host))continue;if(!primary)primary=it;if(it.host.id===PRISM_BAR_ID){primary=it;break;}}
+for(const it of insts.values()){
+if(it===primary){if(it.host.id!==PRISM_BAR_ID)sA(it.host,'id',PRISM_BAR_ID);}
+else if(it.host.id){rA(it.host,'id');if(it.host.id)it.host.id='';}
+}
+};
+
+const applyTierRec=(rec,force=false)=>{
+rec.raf=0;
+const doc=gD(),ft=mode!=='off'&&rec.anc&&isConn(doc,rec.anc)?rec.anc:null;
+const w=rec.hasPendW?rec.pendW:ft?.getBoundingClientRect?.().width;
+rec.pendW=0;rec.hasPendW=false;
+if(!ft||!isFin(w)||w<=0)return;
+let t=rec.curTier;
+while(t<5&&w<TIER_CUTS[t])t++;
+while(t>0&&w>=TIER_CUTS[t-1]+12)t--;
+const tv=TIER_VALS[(rec.curTier=t)]||'0';
+if(!force&&tv===rec.lastTv&&gA(ft,TIER_ATTR)===tv)return;
+rec.lastTv=tv;
+if(gA(ft,TIER_ATTR)!==tv)sA(ft,TIER_ATTR,tv);
+if(rec.host){if(gA(rec.host,HID_ATTR)!=='1'&&gA(rec.host,TIER_ATTR)!==tv)sA(rec.host,TIER_ATTR,tv);return;}
+const exts=findExtBars(doc),localExts=exts.filter(b=>b&&(ft.contains?.(b)||b.parentElement===ft));
+for(const b of(localExts.length?localExts:extTiers.size<=1?exts:[])){
+if(!b||gA(b,HID_ATTR)==='1')continue;
+if(gA(b,TIER_ATTR)!==tv)sA(b,TIER_ATTR,tv);
+if(b.shadowRoot&&!qS(b.shadowRoot,`style[${TIER_STYLE_ATTR}="1"]`))try{const st=doc.createElement('style');sA(st,TIER_STYLE_ATTR,'1');st.textContent=TIER_CSS;b.shadowRoot.appendChild(st);}catch{}
+}
+};
+const gBus=()=>{const w=gW();return w?.__agDomBus||w?.__agPrismDomBus||null;};
+const subMo=(id,root,opt,fn,pri)=>{
+const b=gBus(),w=gW();
+if(b?.subscribe)return{disconnect:b.subscribe(id,fn,{doc:gD(),win:w,priority:pri,observeOptions:opt})};
+if(!isFn(w?.MutationObserver)||!root)return null;
+const mo=new w.MutationObserver(fn);try{mo.observe(root,opt);}catch{}return mo;
+};
+const readEntryW=e=>(Array.isArray(e?.borderBoxSize)?e.borderBoxSize[0]:e?.borderBoxSize)?.inlineSize??(Array.isArray(e?.contentBoxSize)?e.contentBoxSize[0]:e?.contentBoxSize)?.inlineSize??e?.contentRect?.width;
+const schedTierRec=(rec,entries)=>{
+if(entries&&typeof entries.length==='number'){
+let rw=NaN;for(let i=entries.length-1;i>=0;i--){const w0=readEntryW(entries[i]);if(isFin(w0)&&w0>=0){rw=w0;break;}}
+if(isFin(rw)){rec.pendW=rw;rec.hasPendW=true;}
+}else rec.hasPendW=false;
+if(!rec.raf&&mode!=='off'){const w=gW();rec.raf=w?.requestAnimationFrame?w.requestAnimationFrame(()=>applyTierRec(rec,false)):(applyTierRec(rec,false),0);}
+};
+const ensWinResize=()=>{
+const w=gW();
+if(!winResOff&&w&&isFn(w.addEventListener)){
+const onR=()=>{for(const it of insts.values())schedTierRec(it,null);for(const et of extTiers.values())schedTierRec(et,null);};
+w.addEventListener('resize',onR,{passive:true});winResOff=()=>w.removeEventListener?.('resize',onR);
+}
+};
+const attachTierRec=rec=>{
+const w=gW();
+if(!w||!rec?.anc||mode==='off')return;
+if(!rec.ro){
+const b=gBus();
+if(b?.observeSize)try{rec.ro={disconnect:b.observeSize(rec.anc,(sz,en)=>schedTierRec(rec,[en||{borderBoxSize:[{inlineSize:sz.width}]}]))};}catch{}
+else if(isFn(w.ResizeObserver))try{rec.ro=new w.ResizeObserver(es=>schedTierRec(rec,es));rec.ro.observe(rec.anc);}catch{}
+}
+ensWinResize();if(!rec.lastTv||!rec.ro)applyTierRec(rec,true);
+};
+const detachTierRec=rec=>{
+if(!rec)return;
+try{if(rec.raf)gW()?.cancelAnimationFrame?.(rec.raf);rec.ro?.disconnect?.();rA(rec.anc,TIER_ATTR);}catch{}
+rec.raf=0;rec.ro=null;rec.curTier=0;rec.pendW=0;rec.hasPendW=false;rec.lastTv='';
+};
+const clrExtTiers=()=>{for(const et of extTiers.values())detachTierRec(et);extTiers.clear();};
+const clrTier=()=>{
+for(const it of insts.values())detachTierRec(it);
+clrExtTiers();try{winResOff?.();}catch{}winResOff=null;
+for(const b of qA(gD(),`#${PRISM_BAR_ID},[${PRISM_BAR_ATTR}],#${BAR_ID},[id^="${BAR_ID}"],[data-ag-pulse-bar]`)||[])try{rA(b,TIER_ATTR);qS(b.shadowRoot,`style[${TIER_STYLE_ATTR}="1"]`)?.remove?.();}catch{}
+};
+const ensTierObs=()=>{
+const doc=gD();if(!doc||mode==='off')return;
+if(insts.size>0){clrExtTiers();for(const it of insts.values())attachTierRec(it);return;}
+const fts=findAnchors(doc,true),ftSet=new Set(fts);
+for(const[anc,et]of extTiers)if(!ftSet.has(anc)||!isConn(doc,anc)){detachTierRec(et);extTiers.delete(anc);}
+for(const ft of fts){let et=extTiers.get(ft);if(!et)extTiers.set(ft,et={anc:ft,host:null,ro:null,raf:0,curTier:0,pendW:0,hasPendW:false,lastTv:''});attachTierRec(et);}
+};
+
+const bindHook=()=>{
+const w=gW();if(!w)return;
+if(!mRes){
+mRes=(id,pl)=>{
+const it=pend.get(id);if(!it)return;
+clearTimeout(it.timer);pend.delete(id);
+if(pl&&pl.connection!=='local-estimate'&&pl.groups?.length>0){
+const prev=(it.cid&&snapByCid.get(it.cid))||(!it.cid?lastSnap:null);
+const ks=!pl.speed&&prev?.speed,kc=!pl.conversations?.length&&prev?.conversations?.length;
+const merged=ks||kc?{...pl,...(ks?{speed:prev.speed}:{}),...(kc?{conversations:prev.conversations}:{})}:pl;
+if(it.cid)putCidSnap(it.cid,merged);
+if(!lastSnap||!it.cid||resolveActiveInst()?.cid===it.cid)lastSnap=merged;
+}
+it.onSettle?.();it.resolve(pl);
+};
+}
+if(w.__agPrismMetricsResolve!==mRes)w.__agPrismMetricsResolve=mRes;
+};
+const clrWait=()=>{if(waitTm!==null){clearTimeout(waitTm);waitTm=null;}if(rescTm!==null){clearTimeout(rescTm);rescTm=null;}};
+const clrSw=()=>{if(swTm!==null){clearTimeout(swTm);swTm=null;}};
+const clrPoll=()=>{if(pollTm!==null){clearInterval(pollTm);pollTm=null;}};
+const isBlur=()=>{const d=gD();return!!(d?.hidden||gA(d?.documentElement,'data-ag-cs-win-blur')==='1'||winBlur);};
+const clrBlur=()=>{try{blurOff?.();blurObs?.disconnect?.();}catch{}blurOff=blurObs=null;winBlur=pollSusp=false;};
+const startPoll=()=>{
+clrPoll();if(insts.size===0||mode==='off')return;
+if(isBlur()){pollSusp=true;return;}
+pollSusp=false;pollTm=setInterval(()=>{isBlur()?(pollSusp=true,clrPoll()):void refresh();},4000);pollTm?.unref?.();
+};
+const syncBlur=res=>{
+if(insts.size===0||mode==='off'){clrPoll();pollSusp=false;return;}
+if(isBlur()){pollSusp=true;clrPoll();return;}
+const was=pollSusp;pollSusp=false;if(pollTm===null)startPoll();if(was&&res)void refresh();
+};
+const ensBlur=()=>{
+const w=gW(),d=gD();if(!w||!d)return;
+if(!blurOff&&isFn(w.addEventListener)){
+const onB=()=>{winBlur=true;syncBlur(false);},onF=()=>{winBlur=false;syncBlur(true);},onV=()=>{if(!gD()?.hidden)winBlur=false;syncBlur(!gD()?.hidden);};
+w.addEventListener('blur',onB);w.addEventListener('focus',onF);d.addEventListener?.('visibilitychange',onV);
+blurOff=()=>{w.removeEventListener?.('blur',onB);w.removeEventListener?.('focus',onF);d.removeEventListener?.('visibilitychange',onV);};
+}
+if(!blurObs&&d.documentElement)try{blurObs=subMo('pulse-blur',d.documentElement,{childList:false,subtree:false,attributes:true,attributeFilter:['data-ag-cs-win-blur']},()=>{const b=gA(gD()?.documentElement,'data-ag-cs-win-blur')==='1';if(!b)winBlur=false;syncBlur(!b);},'high');}catch{}
+};
+const clrSeat=()=>{
+clrSw();if(healTm!==null){clearTimeout(healTm);healTm=null;}
+if(seatObs){try{seatObs.disconnect();}catch{}seatObs=null;}
+if(popOff){try{popOff();}catch{}popOff=null;}
+clrTier();
+};
+const isConv=(doc,w,anc)=>{
+if(!doc||anc?.closest?.('.agy-home')||qS(doc,'.agy-home, [data-testid="home-greeting"]'))return false;
+const pn=w?.location?.pathname;
+if(typeof pn==='string'&&pn&&!/\/c\/[0-9a-f-]{8,}/i.test(pn)&&!qS(doc,CV_S)&&!anc?.closest?.(CID_S)&&!qS(doc,CID_S))return false;
+return true;
+};
+const findExtBars=doc=>{
+if(!doc)return[];
+const seen=new Set(),out=[],add=el=>{if(el&&!seen.has(el)){seen.add(el);out.push(el);}};
+if(isFn(doc.querySelectorAll))try{const s=doc.querySelectorAll('#'+BAR_ID+',[id^="'+BAR_ID+'"],[data-ag-pulse-bar="true"]');for(let i=0;i<s.length;i++)add(s[i]);}catch{}
+if(isFn(doc.getElementById))add(doc.getElementById(BAR_ID));
+return out;
+};
+const purgeOrphans=doc=>{
+if(!doc||!isFn(doc.querySelectorAll))return;
+const live=new Set();for(const it of insts.values())live.add(it.host);
+const list=doc.querySelectorAll('['+FALLBACK_ATTR+'="1"], #'+PRISM_BAR_ID+', ['+PRISM_BAR_ATTR+']');
+for(let i=0;i<list.length;i++)if(!live.has(list[i]))try{list[i].remove();}catch{}
+};
+const usableExt=(doc,b)=>{
+if(!b||gA(b,FALLBACK_ATTR)==='1'||!isConn(doc,b))return false;
+if(gA(b,HID_ATTR)==='1'||gA(b,'data-layout')==='blocked'||b.hidden===true)return false;
+if(b.style&&b.style.display==='none')return false;
+if(doc&&doc.body&&(b.parentElement===doc.body||b.parentNode===doc.body))return false;
+return!b.closest?.('.agy-home');
+};
+const hasExt=(barsArg,knownConv=false)=>{
+const w=gW(),doc=gD();if(!w||!doc||(!knownConv&&!isConv(doc,w)))return false;
+const bars=barsArg||findExtBars(doc);let sawDead=false;
+for(let i=0;i<bars.length;i++){
+const b=bars[i];if(!b||gA(b,FALLBACK_ATTR)==='1'||!isConn(doc,b)||gA(b,HID_ATTR)==='1')continue;
+if(usableExt(doc,b)){detAt=0;return true;}
+sawDead=true;
+}
+if(sawDead)return false;
+const sig=[w.__agPulseRuntimeOwner?String(w.__agPulseRuntimeOwner):'',w.__agPulseRuntimeBridge?'b':'',w.__agPulseInlineInstalled&&!extGuardHeld?'1':'',w.agPulseHost&&!w.agPulseHost.__prismFallback?'h':''].join('|');
+if(sig!=='|||'){const now=Date.now();if(sig!==lastSig){lastSig=sig;detAt=now;return true;}if(!detAt)detAt=now;return now-detAt<GRACE_MS;}
+lastSig='';detAt=0;return false;
+};
+const showExt=()=>{
+if(extGuardHeld){extGuardHeld=false;const w=gW();if(w&&!w.__agPulseDispose)w.__agPulseInlineInstalled=false;}
+for(const b of findExtBars(gD()))if(b&&gA(b,HID_ATTR)==='1'){
+rA(b,HID_ATTR);
+if(b.style){
+if(isFn(b.style.removeProperty)){b.style.removeProperty('display');for(let j=0;j<HIDE_PROPS.length;j++)b.style.removeProperty(HIDE_PROPS[j][0]);}
+else{b.style.opacity='';b.style.position='';b.style.pointerEvents='';}
+}
+}
+};
+const hideExt=(disposeExt=false)=>{
+if(disposeExt){const w=gW();if(w){try{w.__agPulseDispose?.();}catch{}w.__agPulseInlineInstalled=true;extGuardHeld=true;}}
+for(const b of findExtBars(gD()))if(b&&gA(b,FALLBACK_ATTR)!=='1'){
+sA(b,HID_ATTR,'1');
+if(b.style){
+b.style.removeProperty?.('display');
+if(isFn(b.style.setProperty))for(let j=0;j<HIDE_PROPS.length;j++)b.style.setProperty(HIDE_PROPS[j][0],HIDE_PROPS[j][1],'important');
+else{b.style.position='fixed';b.style.left='-9999px';b.style.opacity='0';b.style.pointerEvents='none';}
+}
+}
+};
+const ensBridge=()=>{const w=gW();if(!w)return;bindHook();if(!mApi)mApi={__prismOwned:true,getMetrics:inp=>reqSnap(inp),getLatestSnapshot:()=>lastSnap};w.__agPrismMetricsBridge=mApi;};
+const rmHost=()=>{const w=gW();if(hasHost&&w?.agPulseHost?.__prismFallback)delete w.agPulseHost;hasHost=false;};
+const ensHost=()=>{
+const w=gW();if(!w)return;ensBridge();
+if(!w.agPulseHost||!isFn(w.agPulseHost.getMetrics)){
+w.agPulseHost={__prismFallback:true,getMetrics:inp=>reqSnap(inp),getLatestSnapshot:()=>lastSnap,getPreferences:()=>Promise.resolve({language:resolveCurLang()}),setPreferences:v=>Promise.resolve(v||{}),report:()=>{}};
+hasHost=true;
+}
+};
+const disposeInst=(it,notifyBridge=true)=>{
+if(!it)return;detachTierRec(it);
+try{if(it.xCard)it.xCard.hidden=true;if(it.sCard)it.sCard.hidden=true;if(notifyBridge)emitB(gW(),{event:'dispose',host:it.host});}catch{}
+try{it.host.remove();}catch{}
+if(activeHost===it.host)activeHost=null;
+instByHost.delete(it.host);insts.delete(it.anc);
+};
+const unmountFb=(keepBridge=false)=>{
+clrWait();clrSw();clrPoll();clrBlur();
+if(docOff){try{docOff();}catch{}docOff=null;}
+if(!keepBridge){clrSeat();for(const it of pend.values()){clearTimeout(it.timer);it.onSettle?.();it.resolve(null);}pend.clear();inFlight.clear();rmHost();}
+const list=Array.from(insts.values());for(let i=0;i<list.length;i++)disposeInst(list[i],false);
+if(list.length>0)emitB(gW(),{event:'dispose'});
+purgeOrphans(gD());activeHost=null;
+};
+
+const detCid=(node,multiPane=false)=>{
+try{
+const cid=gA(node?.closest?.(CID_S),CID_A);if(cid&&GUID_RE.test(cid))return cid;
+const cv=node?.closest?.(CV_S),cvCid=gA(cv,CID_A)||gA(qS(cv,CID_S),CID_A);if(cvCid&&GUID_RE.test(cvCid))return cvCid;
+if(!multiPane){const uc=extractUrlCid(gW());if(uc)return uc;}
+return null;
+}catch{return null;}
+};
+const estSnap=(node=null)=>{
+const doc=gD(),scope=node?.closest?.(CV_S)||doc,now=Date.now(),cached=scope?locSnaps.get(scope):null;
+if(cached&&now-cached.at<5000)return cached.snap;
+let model='Gemini 4',chars=0;
+try{
+const tr=qS(scope,MS_S)||qS(doc,MS_S),lb=gA(tr,'aria-label')||tr?.textContent?.trim();
+if(lb)model=lb;
+const vw=scope&&scope!==doc?scope:qS(doc,CV_S);
+if(vw&&isFn(vw.querySelectorAll)){
+const ts=vw.querySelectorAll('[data-testid="planner-response-text"],[data-testid="agent-response"],[data-testid="user-message-bubble"]');
+if(ts?.length>0){const n=Math.min(4,ts.length);let s=0;for(let i=ts.length-n;i<ts.length;i++)s+=(ts[i].textContent||'').length;chars=Math.round((s/n)*ts.length);}
+}else if(typeof vw?.textContent==='string')chars=vw.textContent.length;
+}catch{}
+const maxTokens=512000,usedTokens=Math.max(4200,Math.min(maxTokens,Math.round(chars/3.2)+8400));
+const snap={connection:'local-estimate',speed:{model,tps:null,latestTps:null,ttftSeconds:null,rounds:0,cacheHitRate:null,totalTokens:usedTokens,context:{model,usedTokens,maxTokens,usedFraction:Math.min(0.98,usedTokens/maxTokens),sampledAt:now}},groups:[]};
+if(scope)locSnaps.set(scope,{at:now,snap});
+return snap;
+};
+const reqSnap=(inp,scopeNode=null,onSettle=null)=>{
+const w=gW();bindHook();
+const si=inp&&typeof inp==='object'?{...inp}:{};if(si.usageSync)delete si.usageSync;
+const cid=typeof si.conversationId==='string'?si.conversationId:null;
+const fb=()=>(cid&&snapByCid.get(cid))||(!cid&&lastSnap)||estSnap(scopeNode);
+if(w&&isFn(w[METRICS_BINDING])){
+return new Promise(resolve=>{
+if(pend.size>=Math.max(8,insts.size*3)){onSettle?.();resolve(fb());return;}
+const id=++reqSeq,timer=setTimeout(()=>{pend.delete(id);onSettle?.();resolve(fb());},si.force||si.quotaRefresh?10000:4500);
+pend.set(id,{resolve,timer,cid,onSettle});
+try{w[METRICS_BINDING](JSON.stringify({id,input:si}));}
+catch{clearTimeout(timer);pend.delete(id);onSettle?.();resolve(fb());}
+});
+}
+onSettle?.();return Promise.resolve(estSnap(scopeNode));
+};
+// 按 key 单飞去重：同步回包零滞留，异步在途复用 Promise
+const reqSnapSF=(key,inp,scopeNode)=>{
+if(!inp?.force&&inFlight.has(key))return inFlight.get(key);
+let settled=false,p=null;
+const done=()=>{if(settled)return;settled=true;if(p&&inFlight.get(key)===p)inFlight.delete(key);};
+p=reqSnap(inp,scopeNode,done);
+if(!settled){inFlight.set(key,p);p.finally(done);}
+return p;
+};
+
+const resolveCurLang=()=>{const a=gA(gD()?.documentElement,'data-ag-cs-lang');return normFbLang((a&&a!=='auto'?a:'')||(expLang&&expLang!=='auto'?expLang:''),gW());};
+const gStr=()=>FB_I18N[resolveCurLang()]||FB_I18N.en;
+const syncLblsFor=sr=>{
+if(!sr)return;const t=gStr(),ns=qA(sr,'[data-fb-i18n]')||[];
+for(let i=0;i<ns.length;i++){const k=gA(ns[i],'data-fb-i18n');if(k&&typeof t[k]==='string'&&ns[i].textContent!==t[k])ns[i].textContent=t[k];}
+};
+const applySnapToInst=(it,snap)=>{
+if(!it||!it.sr||!it.host)return;
+if(snap&&typeof snap==='object'){
+it.snap=snap;if(it.cid)putCidSnap(it.cid,snap);
+const act=resolveActiveInst();if(!lastSnap||!act||act===it)lastSnap=snap;
+}
+const sr=it.sr,fbEl=it.host,sp=snap?.speed||{},ctx=sp.context||{};
+const maxTok=ctx.maxTokens>0?ctx.maxTokens:512000,uf=isFin(ctx.usedFraction)?Math.max(0,Math.min(1,ctx.usedFraction)):0.04;
+const uTok=isFin(ctx.usedTokens)?ctx.usedTokens:Math.round(uf*maxTok),pct=Math.round(uf*100),rem=Math.max(0,100-pct);
+const model=ctx.model||sp.model||'Antigravity Model',tot=sp.taskUsage?.total?.totalTokens??sp.tokens?.totalTokens??sp.cache?.totalTokens??sp.totalTokens??0;
+const hit=isFin(sp.cache?.hitRate)?sp.cache.hitRate:sp.cacheHitRate,subs=Number(sp.taskUsage?.subagents||0);
+if(snap?.collection?.state==='processing')sA(fbEl,'data-collection','processing');else rA(fbEl,'data-collection');
+
+const t=gStr();syncLblsFor(sr);
+const sT=(id,v)=>{const e=sr.getElementById(id),s=String(v);if(e&&e.textContent!==s)e.textContent=s;};
+sT('rounds',sp.rounds>0?`${sp.rounds}r`:'—');sT('tps',isFin(sp.tps)&&sp.tps>0?sp.tps.toFixed(1):'—');
+sT('cache-total',`${fmtTok(tot>0?tot:uTok)} tok`);sT('cache-rate',isFin(hit)?`${(hit*100).toFixed(1)}%`:'—');
+const sb=sr.getElementById('subagent-badge');
+if(sb){if(subs>0){sb.hidden=false;const bt=t.agents(subs);if(sb.textContent!==bt)sb.textContent=bt;}else sb.hidden=true;}
+sT('context-percent',`${pct}%`);sT('ttft',typeof sp.ttftSeconds==='number'?`${sp.ttftSeconds.toFixed(2)}s`:'—');
+sT('latest-rate',typeof sp.latestTps==='number'?`${sp.latestTps.toFixed(1)} tok/s`:'—');
+sT('context-summary',t.summary(pct,rem));sT('context-tokens',`${fmtTok(uTok)} / ${fmtTok(maxTok)} tok`);sT('context-model',model);
+const noteEl=sr.getElementById('context-note');if(noteEl){noteEl.hidden=true;if(noteEl.textContent)noteEl.textContent='';}
+const fl=sr.getElementById('context-fill');if(fl?.style)fl.style.width=`${pct}%`;
+sr.getElementById('context-ring')?.style?.setProperty?.('--used-angle',`${Math.round(uf*360)}deg`);
+
+const qGs=Array.isArray(snap?.groups)&&(snap.groups.length||snap.connection!=='local-estimate')?(it.lastGroups=snap.groups):it.lastGroups;
+const g=qGrp(qGs,model,gW()),gn=g?.name||g?.id||'';
+const setQ=(chip,id,w0,lbl)=>{
+if(!chip)return;
+if(!w0){chip.hidden=true;rA(chip,'data-warn');rA(chip,'title');sT(id,'—');return;}
+const p=Math.round(w0.r*100),e=qEta(w0.t);
+chip.hidden=false;sT(id,`${p}%`);
+if(w0.r<=0.15)sA(chip,'data-warn','2');else if(w0.r<=0.35)sA(chip,'data-warn','1');else rA(chip,'data-warn');
+sA(chip,'title',`${gn?gn+' · ':''}${lbl} ${p}%${e?` (${e})`:''}`);
+};
+setQ(it.fChip,'five-balance',qWin(g?.windows?.['5h']||g?.fiveHour),t.fiveShort);
+setQ(it.wChip,'week-balance',qWin(g?.windows?.weekly||g?.weekly),t.weekShort);
+emitB(gW(),{event:'render',data:snap,host:fbEl,conversationId:it.cid});
+};
+
+const isHidAnc=el=>!el||el.hidden===true||el.style?.display==='none'||!!(el.closest?.('.agy-home, aside, [data-testid="conversation-list-sidebar"], [data-testid="conversation-row-sidebar"], [hidden], [inert]'));
+const isTopWrap=p=>{if(!p)return true;const c=String(p.className||'').trim();return!!(c&&/\bmin-w-0\b/.test(c)&&!/\b(?:flex|inline-flex|agy-composer-footer)\b/.test(c));};
+const findAnchors=(doc,knownConv=false)=>{
+if(!doc)return[];const w=gW();if(!knownConv&&!isConv(doc,w))return[];
+const out=[],seen=new Set();
+let rawFts=isFn(doc.querySelectorAll)?Array.from(doc.querySelectorAll(FT_SEL)):[];
+if(rawFts.length===0&&isFn(doc.querySelector)){const one=doc.querySelector(FT_SEL);if(one)rawFts=[one];}
+const boxMap=new Map();
+for(let i=0;i<rawFts.length;i++){
+const ft=rawFts[i];if(!ft||seen.has(ft)||isHidAnc(ft)||(!knownConv&&!isConv(doc,w,ft)))continue;
+const box=ft.closest?.(IB_S)||null;
+if(box){
+const prev=boxMap.get(box);
+if(prev){if(/\bagy-composer-footer\b/.test(String(ft.className||''))&&!/\bagy-composer-footer\b/.test(String(prev.className||''))){const idx=out.indexOf(prev);if(idx>=0)out[idx]=ft;seen.delete(prev);seen.add(ft);boxMap.set(box,ft);}continue;}
+boxMap.set(box,ft);
+}
+seen.add(ft);out.push(ft);
+}
+if(out.length>0)return out;
+let mbs=isFn(doc.querySelectorAll)?Array.from(doc.querySelectorAll(MS_S)):[];
+if(mbs.length===0&&isFn(doc.querySelector)){const oneMb=doc.querySelector(MS_S);if(oneMb)mbs=[oneMb];}
+for(let i=0;i<mbs.length;i++){const mb=mbs[i],anc=mb?.parentElement;if(anc&&!seen.has(anc)&&!isHidAnc(mb)&&!isTopWrap(anc)&&(knownConv||isConv(doc,w,mb))){seen.add(anc);out.push(anc);}}
+return out;
+};
+const hasAnyAnchor=(doc,knownConv=false)=>{
+if(!doc)return false;const w=gW();if(!knownConv&&!isConv(doc,w))return false;
+const ft=qS(doc,FT_SEL);if(ft&&!isHidAnc(ft)&&(knownConv||isConv(doc,w,ft)))return true;
+const mb=qS(doc,MS_S),anc=mb?.parentElement;
+return!!(anc&&!isHidAnc(mb)&&!isTopWrap(anc)&&(knownConv||isConv(doc,w,mb)));
+};
+const seatIn=(anc,el)=>{
+if(!anc||!el)return false;const kids=anc.children||[];
+if(/\bagy-composer-footer\b/.test(String(anc.className||''))&&kids.length>=2&&isFn(anc.insertBefore)){const last=kids[kids.length-1];if(last&&last!==el){anc.insertBefore(el,last);return true;}}
+anc.appendChild(el);return true;
+};
+
+const closeCards=(it,notify=false)=>{
+if(!it||(!it.xCard||it.xCard.hidden)&&(!it.sCard||it.sCard.hidden))return false;
+if(it.xCard)it.xCard.hidden=true;if(it.sCard)it.sCard.hidden=true;
+for(const c of[it.fChip,it.wChip,it.xChip,it.sChip])sA(c,AE_A,'false');
+if(notify)emitB(gW(),{event:'card',host:it.host,open:false});
+return true;
+};
+const ensDocClick=doc=>{
+if(docOff||!doc||!isFn(doc.addEventListener))return;
+const onDoc=ev=>{for(const it of insts.values())if(ev?.target!==it.host&&!it.host.contains?.(ev?.target))closeCards(it,true);};
+doc.addEventListener('click',onDoc);docOff=()=>doc.removeEventListener('click',onDoc);
+};
+const isStaleResult=(it,reqCid,reqGen,multi)=>{
+if(insts.get(it.anc)!==it||!isConn(gD(),it.host)||reqGen!==it.reqGen)return true;
+if(reqCid&&it.cid&&it.cid!==reqCid)return true;
+const liveCid=detCid(it.host,multi);return!!(reqCid&&liveCid&&liveCid!==reqCid);
+};
+const refreshInst=async it=>{
+const doc=gD();if(!it||!doc||!isConn(doc,it.host)||mode==='off')return null;
+const multi=insts.size>1,cid=detCid(it.host,multi);
+if(cid!==it.cid){it.cid=cid;it.reqGen++;}
+const reqGen=it.reqGen,snap=await reqSnapSF(cid||`__inst_${reqGen}`,{conversationId:cid,force:false},it.host);
+if(!isStaleResult(it,cid,reqGen,multi))applySnapToInst(it,snap);
+return snap;
+};
+
+const createBarInst=(doc,anc)=>{
+const w=gW(),E=(t,a,k)=>mk(doc,t,a,k),host=E('div',HOST_ATTRS);
+if(!isFn(host.attachShadow))return null;
+const sr=host.attachShadow({mode:'open'});sr.appendChild(E('style',{text:SHADOW_CSS}));
+const t0=gStr();
+const fChip=E('button',{type:'button',cls:'chip','data-card':'five',[AE_A]:'false',hidden:true},[E('span',{'data-i18n':'five','data-fb-i18n':'fiveShort',text:t0.fiveShort}),E('strong',{id:'five-balance',text:'—'})]);
+const wChip=E('button',{type:'button',cls:'chip','data-card':'week',[AE_A]:'false',hidden:true},[E('span',{'data-i18n':'week','data-fb-i18n':'weekShort',text:t0.weekShort}),E('strong',{id:'week-balance',text:'—'})]);
+const sChip=E('button',{type:'button',cls:'chip','data-card':'speed'},[E('span',{cls:'rounds dim',id:'rounds',text:'—'}),E('strong',{id:'tps',text:'—'}),E('span',{cls:'dim',text:'tok/s'})]);
+const cChip=E('button',{type:'button',cls:'chip','data-card':'cache'},[E('span',{cls:'cache-total',id:'cache-total',text:'—'}),E('span',{cls:'sub-badge',id:'subagent-badge',hidden:true,text:''}),E('span',{cls:'dim',text:'·'}),E('span',{'data-i18n':'cache','data-fb-i18n':'cache',text:t0.cache}),E('strong',{id:'cache-rate',text:'—'})]);
+const xChip=E('button',{type:'button',cls:'chip','data-card':'context',[AE_A]:'false'},[E('span',{cls:'context-ring',id:'context-ring'}),E('span',{cls:'context-label dim','data-i18n':'contextShort',text:'Ctx'}),E('strong',{id:'context-percent',text:'0%'})]);
+const sCard=E('section',{cls:'card',id:'speed-card',hidden:true},[E('div',{cls:'heading'},[E('span',{'data-fb-i18n':'speedHeading',text:t0.speedHeading})]),E('dl',null,[E('dt',{'data-fb-i18n':'ttft',text:t0.ttft}),E('dd',{id:'ttft',text:'—'}),E('dt',{'data-fb-i18n':'latestRate',text:t0.latestRate}),E('dd',{id:'latest-rate',text:'—'})])]);
+const xCard=E('section',{cls:'card context-card',id:'context-card',hidden:true},[E('div',{cls:'heading'},[E('span',{'data-fb-i18n':'ctxHeading',text:t0.ctxHeading})]),E('strong',{id:'context-summary',text:t0.summary(0,100)}),E('p',{id:'context-tokens',text:'— / 512K tok'}),E('div',{cls:'track',id:'context-track'},[E('i',{id:'context-fill'})]),E('dl',null,[E('dt',{'data-fb-i18n':'curModel',text:t0.curModel}),E('dd',{id:'context-model',text:'—'})]),E('p',{cls:'footnote',id:'context-note',hidden:true,text:''})]);
+sr.appendChild(E('div',{cls:'bar'},[fChip,wChip,sChip,cChip,xChip]));sr.appendChild(sCard);sr.appendChild(xCard);
+
+const it={anc,host,sr,fChip,wChip,sChip,cChip,xChip,sCard,xCard,ro:null,raf:0,curTier:0,pendW:0,hasPendW:false,lastTv:'',cid:null,snap:null,lastGroups:null,reqGen:0};
+const markAct=()=>{activeHost=host;};host.addEventListener?.('pointerdown',markAct);host.addEventListener?.('focusin',markAct);
+const tog=(card,btn)=>{
+const nx=!!card.hidden;activeHost=host;
+for(const other of insts.values())if(other!==it)closeCards(other,false);
+sCard.hidden=xCard.hidden=true;for(const c of[fChip,wChip,sChip,xChip])sA(c,AE_A,'false');
+card.hidden=!nx;sA(btn,AE_A,String(nx));
+if(nx)void refreshInst(it);
+emitB(w,{event:'card',host,open:nx,data:it.snap||lastSnap});
+};
+fChip.addEventListener('click',e=>{e?.stopPropagation?.();tog(xCard,fChip);});
+wChip.addEventListener('click',e=>{e?.stopPropagation?.();tog(xCard,wChip);});
+xChip.addEventListener('click',e=>{e?.stopPropagation?.();tog(xCard,xChip);});
+sChip.addEventListener('click',e=>{e?.stopPropagation?.();tog(sCard,sChip);});
+
+seatIn(anc,host);insts.set(anc,it);instByHost.set(host,it);attachTierRec(it);
+const initCid=detCid(host,insts.size>1);
+if(initCid){it.cid=initCid;const cached=getCidSnap(initCid);if(cached)applySnapToInst(it,cached);}
+return it;
+};
+
+const reconcileBars=doc=>{
+const w=gW();if(!doc||!w)return{mounted:false,added:[],reseated:[]};
+const anchors=findAnchors(doc,true),ancSet=new Set(anchors);
+for(const[anc,it]of Array.from(insts.entries()))if(!ancSet.has(anc)||!isConn(doc,anc))disposeInst(it,true);
+const added=[],reseated=[];
+for(let i=0;i<anchors.length;i++){
+const anc=anchors[i],ex=insts.get(anc);
+if(ex){if(!isConn(doc,ex.host)||ex.host.parentElement!==anc)try{seatIn(anc,ex.host);reseated.push(ex);}catch{}attachTierRec(ex);}
+else{const cr=createBarInst(doc,anc);if(cr)added.push(cr);}
+}
+syncPrimaryId();purgeOrphans(doc);
+if(insts.size>0){clrExtTiers();ensDocClick(doc);yielded=false;}else{if(docOff){try{docOff();}catch{}docOff=null;}clrPoll();}
+for(const x of added)emitB(w,{event:'mount',host:x.host});
+for(const x of reseated)emitB(w,{event:'mount',host:x.host});
+return{mounted:insts.size>0,added,reseated};
+};
+
+const isHcPortal=el=>{
+if(!el||el.tagName==='BODY'||el.tagName==='HTML')return false;
+const h=(n,k)=>!!n?.hasAttribute?.(k),f=el.firstElementChild;
+return h(el,HC_A)||h(f,HC_A)||h(f?.firstElementChild,HC_A)||(h(el,'data-base-ui-portal')&&!!qS(el,'[data-hover-card-popup]'));
+};
+const isIgnoredStreamNode=t=>{const el=t?.nodeType===1?t:t?.parentElement;return!!(el&&(isHcPortal(el)||(el.closest&&!el.closest(FT_SEL)&&el.closest(IGN_STREAM_SEL))));};
+const anchorsChanged=doc=>{
+const ancs=findAnchors(doc,true);if(ancs.length!==insts.size)return true;
+for(let i=0;i<ancs.length;i++){const it=insts.get(ancs[i]);if(!it||!isConn(doc,it.host)||it.host.parentElement!==ancs[i])return true;}
+return false;
+};
+
+// 切会话极速链路：0ms 瞬显 LRU + 立刻打破 4s 轮询，~30ms 防抖单飞即时刷新
+const schedSwitchRefresh=targetCid=>{
+clrPoll();clrSw();
+swTm=setTimeout(()=>{
+swTm=null;if(mode==='off'||insts.size===0)return;
+void refresh({immediate:true,cascadeId:targetCid}).finally(()=>{if(insts.size>0&&mode!=='off'&&!isBlur())startPoll();});
+},SW_DEBOUNCE_MS);
+swTm?.unref?.();
+};
+const checkConvSwitch=(doc,w,fromRoute=false)=>{
+const curHref=readRouteKey(w),urlChanged=curHref!==lastHref,curUrlCid=extractUrlCid(w),urlCidChanged=!!(curUrlCid&&curUrlCid!==lastUrlCid);
+if(urlChanged)lastHref=curHref;if(curUrlCid)lastUrlCid=curUrlCid;
+if(insts.size===0)return false;
+const multi=insts.size>1;let switched=false,targetCid=null;
+for(const it of insts.values()){
+if(!isConn(doc,it.host))continue;
+const nextCid=!multi&&(fromRoute||urlCidChanged)&&curUrlCid?curUrlCid:detCid(it.host,multi);
+if(nextCid!==it.cid){
+switched=true;targetCid=nextCid;it.cid=nextCid;it.reqGen++;
+const cached=nextCid?getCidSnap(nextCid):null;if(cached)applySnapToInst(it,cached);
+}else if(fromRoute&&urlChanged){switched=true;targetCid=nextCid;it.reqGen++;}
+}
+if(switched)schedSwitchRefresh(targetCid);
+return switched;
+};
+
+const ensSeatObs=()=>{
+const w=gW(),doc=gD();if(!w||!doc||mode==='off')return;
+if(!lastHref)lastHref=readRouteKey(w);if(!lastUrlCid)lastUrlCid=extractUrlCid(w)||'';
+const runHeal=()=>{
+healTm=null;lastHealAt=Date.now();if(mode==='off')return;
+const d=gD(),wn=gW();if(!d||!wn)return;
+if(!isConv(d,wn)){yielded=false;if(insts.size>0)unmountFb(true);hideExt(false);return;}
+if(mode==='on')hideExt(true);else{showExt();if(hasExt(null,true)){yielded=true;if(insts.size>0)unmountFb(true);ensTierObs();return;}}
+if(insts.size>0){const res=reconcileBars(d),sw=checkConvSwitch(d,wn,false);if(res.added.length>0&&!sw)void refresh();else if(insts.size>0)ensTierObs();}
+else if((mode==='on'||waitTm===null)&&findAnchors(d,true).length>0)mountFb();
+};
+const schedHeal=(fast=false)=>{if(mode==='off'||healTm!==null)return;healTm=setTimeout(runHeal,fast||Date.now()-lastHealAt>=180?45:180);healTm?.unref?.();};
+if(!seatObs&&(doc.body||doc.documentElement)){
+seatObs=subMo('pulse-seat',doc.body||doc.documentElement,{childList:true,subtree:true,attributes:true,attributeFilter:[CID_A]},recs=>{
+if(mode==='off')return;
+if(Array.isArray(recs)&&recs.length>0){
+const ignAll=l=>{if(l)for(let j=0;j<l.length;j++)if(!isIgnoredStreamNode(l[j]))return false;return true;};
+let rel=false;
+for(let i=0;i<recs.length;i++){const r=recs[i],a=r?.addedNodes,rm=r?.removedNodes;if(r?.type==='attributes'&&r?.attributeName===CID_A){rel=true;break;}if(isIgnoredStreamNode(r?.target)||(((a?.length||0)+(rm?.length||0))&&ignAll(a)&&ignAll(rm)))continue;rel=true;break;}
+if(!rel)return;
+}
+const inC=isConv(doc,w);let bars=null;
+const gB=()=>bars||(bars=findExtBars(doc)),visB=b=>b&&gA(b,HID_ATTR)!=='1';
+if(!inC){if(insts.size>0||gB().some(visB))schedHeal(true);return;}
+if(insts.size>0){const sw=checkConvSwitch(doc,w,false);if(anchorsChanged(doc)){schedHeal(sw);return;}if(sw)return;}
+else if(waitTm===null&&!hasExt(gB(),true)&&hasAnyAnchor(doc,true)){schedHeal(true);return;}
+if(healTm!==null)return;
+const extMissingTier=gB().some(b=>visB(b)&&b.shadowRoot&&!qS(b.shadowRoot,`style[${TIER_STYLE_ATTR}="1"]`));
+let deadExtTier=false;for(const anc of extTiers.keys())if(!isConn(doc,anc)){deadExtTier=true;break;}
+if(deadExtTier||extMissingTier||(mode==='on'&&gB().some(b=>visB(b)&&gA(b,FALLBACK_ATTR)!=='1')))schedHeal(false);
+},'low');
+}
+if(!popOff){
+const onRoute=()=>{
+if(mode==='off')return;const d=gD(),wn=gW();if(!d||!wn)return;
+if(!isConv(d,wn)){schedHeal(true);return;}
+if(insts.size>0){checkConvSwitch(d,wn,true);if(anchorsChanged(d))schedHeal(true);}else schedHeal(true);
+};
+const offs=[];
+if(isFn(w.addEventListener)){w.addEventListener('popstate',onRoute);w.addEventListener('hashchange',onRoute);offs.push(()=>{w.removeEventListener?.('popstate',onRoute);w.removeEventListener?.('hashchange',onRoute);});}
+const hOff=subHistory(w,onRoute);if(hOff)offs.push(hOff);
+if(offs.length>0)popOff=()=>{for(const f of offs)try{f();}catch{}};
+}
+};
+
+async function refresh(opts){
+const w=gW(),doc=gD();
+if(!envOpts&&w?.__agPrismTelemetry&&w.__agPrismTelemetry!==api){unmountFb();return null;}
+if(!isConv(doc,w)){yielded=false;unmountFb(true);if(mode!=='off')hideExt();return null;}
+if(mode==='on')hideExt(true);else{showExt();if(hasExt(null,true)){yielded=true;unmountFb(true);ensTierObs();return null;}}
+if(mode!=='off'&&(insts.size>0||((mode==='on'||!hasExt(null,true))&&waitTm===null&&findAnchors(doc,true).length>0)))reconcileBars(doc);
+if(insts.size===0)return null;
+if(opts?.immediate)clrSw();
+ensTierObs();
+const live=Array.from(insts.values()).filter(it=>isConn(doc,it.host));if(live.length===0)return null;
+const multi=live.length>1,force=!!opts?.force,hintCid=!multi&&typeof opts?.cascadeId==='string'&&GUID_RE.test(opts.cascadeId)?opts.cascadeId:null;
+const reqByKey=new Map(),plan=[];
+for(let i=0;i<live.length;i++){
+const it=live[i],nextCid=hintCid||detCid(it.host,multi);
+if(nextCid!==it.cid){it.cid=nextCid;it.reqGen++;const cached=nextCid?getCidSnap(nextCid):null;if(cached)applySnapToInst(it,cached);}
+const key=it.cid||`__pane_${i}`;
+plan.push({it,reqCid:it.cid,reqGen:it.reqGen,key});
+if(!reqByKey.has(key))reqByKey.set(key,reqSnapSF(key,{conversationId:it.cid,force},it.host));
+}
+const snaps=new Map();
+await Promise.all(Array.from(reqByKey.entries()).map(async([k,p])=>{snaps.set(k,await p);}));
+let actSnap=null;const act=resolveActiveInst();
+for(let i=0;i<plan.length;i++){
+const{it,reqCid,reqGen,key}=plan[i],snap=snaps.get(key)||null;
+if(isStaleResult(it,reqCid,reqGen,multi)){if(reqCid&&snap&&snap.connection!=='local-estimate')putCidSnap(reqCid,snap);continue;}
+applySnapToInst(it,snap);
+if(it===act||(!act&&i===0))actSnap=snap;
+}
+return actSnap??lastSnap;
+}
+
+function mountFb(){
+const w=gW(),doc=gD();
+if(!w||!doc||(typeof doc.attachShadow==='undefined'&&!isFn(doc.createElement)))return false;
+if(!envOpts&&w.__agPrismTelemetry&&w.__agPrismTelemetry!==api){unmountFb();return false;}
+if(mode==='off')return false;
+if(!isConv(doc,w)){yielded=false;unmountFb(true);hideExt();ensSeatObs();return false;}
+if(mode==='on')hideExt(true);else if(hasExt(null,true)){yielded=true;unmountFb(true);ensSeatObs();return false;}
+const res=reconcileBars(doc);ensSeatObs();if(!res.mounted)return false;
+ensHost();ensTierObs();ensBlur();lastHref=readRouteKey(w);lastUrlCid=extractUrlCid(w)||'';
+if(res.added.length>0||pollTm===null){void refresh();startPoll();}
+return true;
+}
+
+const getBars=()=>{const doc=gD(),out=[];for(const it of insts.values())if(isConn(doc,it.host))out.push(it.host);return out;};
+const getBarForView=node=>{
+const doc=gD();if(!node||!doc)return null;
+const direct=instByHost.get(node);if(direct&&isConn(doc,direct.host))return direct.host;
+const cvSel=CV_S+','+IB_S+',.agy-composer-footer',cv=node.matches?.(cvSel)?node:node.closest?.(cvSel);
+if(cv){
+for(const it of insts.values())if(isConn(doc,it.host)&&(cv===it.anc||cv.contains?.(it.anc)||it.anc.contains?.(cv)))return it.host;
+const ext=qS(cv,'#'+BAR_ID+',[data-ag-pulse-bar="true"]');if(ext&&usableExt(doc,ext))return ext;
+}
+return null;
+};
+const setActiveBar=target=>{
+const doc=gD();if(!target){activeHost=null;return null;}
+const h=instByHost.has(target)?target:getBarForView(target);if(!h||!isConn(doc,h))return null;
+activeHost=h;emitB(gW(),{event:'focus',host:h,data:instByHost.get(h)?.snap||lastSnap});return h;
+};
+const getSnapshotForBar=hostOrCid=>{
+if(!hostOrCid)return resolveActiveInst()?.snap||lastSnap;
+if(typeof hostOrCid==='string')return snapByCid.get(hostOrCid)||lastSnap;
+const it=instByHost.get(hostOrCid)||instByHost.get(getBarForView(hostOrCid));
+return it?.snap||(it?.cid&&snapByCid.get(it.cid))||lastSnap;
+};
+const getState=()=>{
+const doc=gD();let mountedCount=0;for(const it of insts.values())if(isConn(doc,it.host))mountedCount++;
+const mounted=mountedCount>0,blurred=isBlur();if(mounted&&blurred&&pollTm!==null){pollSusp=true;clrPoll();}
+return{mode,mountedFallback:mounted,mountedCount,waitingForExternal:waitTm!==null,yieldedToExternal:!!(mode==='auto'&&(yielded||hasExt())),hasExternal:hasExt(),pollSuspended:!!(mounted&&(pollSusp||blurred))};
+};
+
+function sync(cfg){
+if(cfg&&typeof cfg.language==='string'&&cfg.language)expLang=cfg.language.trim().toLowerCase()==='auto'?'':normFbLang(cfg.language,gW());
+const raw=cfg&&cfg.telemetryModule;mode=raw==='on'||raw==='off'?raw:'auto';
+if(insts.size>0&&mode!=='off')for(const it of insts.values()){syncLblsFor(it.sr);if(it.snap||lastSnap)applySnapToInst(it,it.snap||lastSnap);}
+if(mode==='off'){yielded=false;unmountFb();hideExt();return getState();}
+ensBridge();ensSeatObs();
+const doc=gD(),w=gW();
+if(!isConv(doc,w)){yielded=false;unmountFb(true);hideExt();ensHost();return getState();}
+if(mode==='on'){yielded=false;clrWait();hideExt(true);ensHost();mountFb();return getState();}
+showExt();
+if(hasExt()){
+yielded=true;unmountFb(true);ensHost();ensTierObs();
+if(detAt>0&&rescTm===null){rescTm=setTimeout(()=>{rescTm=null;if(mode!=='off'&&!hasExt())mountFb();},GRACE_MS+60);rescTm?.unref?.();}
+return getState();
+}
+if(insts.size>0){reconcileBars(doc);if(insts.size>0)return getState();}
+if(findExtBars(doc).some(b=>b&&gA(b,FALLBACK_ATTR)!=='1'&&isConn(doc,b)&&!usableExt(doc,b))){clrWait();mountFb();return getState();}
+if(waitTm===null){const ms=isFin(cfg?.__fallbackDelayMs)&&cfg.__fallbackDelayMs>=0?cfg.__fallbackDelayMs:WAIT_MS;waitTm=setTimeout(waitTimerDone,ms);waitTm?.unref?.();}
+return getState();
+}
+function waitTimerDone(){
+waitTm=null;if(mode!=='auto')return;
+if(!isConv(gD(),gW())){unmountFb(true);hideExt();return;}
+if(hasExt()){yielded=true;unmountFb(true);ensHost();ensTierObs();return;}
+mountFb();
+}
+function destroy(){
+clrWait();clrSw();clrSeat();unmountFb();showExt();snapByCid.clear();inFlight.clear();
+const w=gW();if(w){if(mApi&&w.__agPrismMetricsBridge===mApi)delete w.__agPrismMetricsBridge;if(mRes&&w.__agPrismMetricsResolve===mRes)delete w.__agPrismMetricsResolve;}
+yielded=false;lastSig='';detAt=0;lastSnap=null;lastHref='';lastUrlCid='';
+}
+
+const api={BAR_ID,PRISM_BAR_ID,PRISM_BAR_ATTR,FALLBACK_ATTR,METRICS_BINDING,sync,destroy,refresh,chooseQuotaGroupFallback,getLatestSnapshot:()=>resolveActiveInst()?.snap||lastSnap,getSnapshotForBar,getBars,getPrimaryBar:()=>getPrimaryInst()?.host||null,getActiveBar:()=>resolveActiveInst()?.host||null,setActiveBar,getBarForView,getState,createTelemetryController};
+return api;
+}
+
+return createTelemetryController();
 });
