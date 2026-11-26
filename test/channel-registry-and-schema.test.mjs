@@ -94,12 +94,33 @@ test('CONFIG_SCHEMA is the single source of truth for DEFAULT_CONFIG, VALIDATORS
   assert.ok(schema && typeof schema === 'object' && !Array.isArray(schema));
   const exampleCfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.example.json'), 'utf8'));
 
-  // VALIDATORS keys must match config.example.json 1:1
+  // config.example.json keys must match DEFAULT_CONFIG & CONFIG_SCHEMA non-optional keys (46 keys) 1:1
+  const requiredSchemaKeys = Object.entries(schema)
+    .filter(([, def]) => !def.optional)
+    .map(([k]) => k)
+    .sort();
+  const validatorSchemaKeys = Object.entries(schema)
+    .filter(([, def]) => !def.optional && def.inValidators !== false)
+    .map(([k]) => k)
+    .sort();
+  assert.deepEqual(
+    Object.keys(cdp.DEFAULT_CONFIG).sort(),
+    Object.keys(exampleCfg).sort(),
+    'DEFAULT_CONFIG derived from CONFIG_SCHEMA must match config.example.json keys 1:1'
+  );
+  assert.deepEqual(
+    requiredSchemaKeys,
+    Object.keys(exampleCfg).sort(),
+    'CONFIG_SCHEMA non-optional keys must match config.example.json keys 1:1'
+  );
   assert.deepEqual(
     Object.keys(cdp.VALIDATORS).sort(),
-    Object.keys(exampleCfg).sort(),
-    'VALIDATORS derived from CONFIG_SCHEMA must match config.example.json keys'
+    validatorSchemaKeys,
+    'VALIDATORS derived from CONFIG_SCHEMA must match all inValidators !== false keys'
   );
+  for (const key of requiredSchemaKeys) {
+    assert.equal(exampleCfg[key], schema[key].default, `config.example.json.${key} must match CONFIG_SCHEMA.${key}.default`);
+  }
 
   // Every required entry in CONFIG_SCHEMA appears in DEFAULT_CONFIG with matching default
   for (const [key, def] of Object.entries(schema)) {
@@ -166,12 +187,35 @@ test('CHANNEL_REGISTRY contract covers all 16 delayed/on-demand channels with va
   const descriptors = cdp.getChannelDescriptors();
   assert.deepEqual(descriptors.map((d) => d.id), expectedIds);
 
+  // Verify unified Phase 4B SSOT derivations: CHANNEL_CACHE_NAMES, order monotonic, probe expression synthesis
+  assert.deepEqual(
+    [...cdp.CHANNEL_CACHE_NAMES],
+    cdp.CHANNEL_REGISTRY.map((c) => c.cacheKey),
+    'CHANNEL_CACHE_NAMES must be strictly derived from CHANNEL_REGISTRY'
+  );
+  const probeExpr = cdp.buildPageHealthProbeExpression();
+  assert.doesNotThrow(() => new vm.Script(probeExpr), 'buildPageHealthProbeExpression() must compile cleanly');
+
+  let prevOrder = 0;
   for (const id of expectedIds) {
     const ch = cdp.findChannel(id);
     assert.ok(ch, `findChannel('${id}') must resolve`);
     assert.equal(ch.id, id);
+    assert.equal(ch.cacheKey, id);
     assert.ok(Number.isFinite(ch.channelNumber) && ch.channelNumber >= 2);
+    assert.ok(Number.isInteger(ch.order) && ch.order > prevOrder, `Channel ${id} order must be strictly ascending`);
+    prevOrder = ch.order;
+    assert.ok(['core', 'i18n', 'addon', 'studio', 'runtime'].includes(ch.tier), `Channel ${id} has valid tier`);
+    assert.ok(['main-page-persistent', 'on-demand-rpc', 'oopif-swarm'].includes(ch.injectMode), `Channel ${id} has valid injectMode`);
+    assert.ok(typeof ch.mountGlobal === 'string' && ch.mountGlobal.startsWith('__ag'), `Channel ${id} has valid mountGlobal`);
+    assert.ok(ch.fields && typeof ch.fields === 'object', `Channel ${id} exposes structured fields metadata`);
     assert.ok(Number.isInteger(ch.budgetBytes) && ch.budgetBytes > 0);
+    if (ch.probeKey) {
+      assert.ok(probeExpr.includes(`${ch.probeKey}:`), `Probe expression must include ${ch.probeKey}`);
+    }
+    if (ch.probeHashKey) {
+      assert.ok(probeExpr.includes(`${ch.probeHashKey}:`), `Probe expression must include ${ch.probeHashKey}`);
+    }
     for (const key of ch.configKeys) {
       assert.ok(
         Object.prototype.hasOwnProperty.call(cdp.CONFIG_SCHEMA, key),

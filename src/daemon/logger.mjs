@@ -1,10 +1,17 @@
-// Obsidian Prism 守护进程日志落盘、0o600 权限与路径/凭据脱敏（Tier 0）
+// Obsidian Prism 守护进程日志子组件（0o600 权限与路径/凭据脱敏，Tier 0，无原型 Mixin）
 import fs from 'node:fs';
 import { sanitizeSecretText, sanitizeLogLine } from '../../sidecars/daemon/redact.mjs';
 
 export const DAEMON_LOG_MAX_BYTES = 512 * 1024;
 
-export const loggerMethods = {
+export class DaemonLogger {
+  constructor({ logFile = '', silent = false, getCdp = () => null } = {}) {
+    this.logFile = logFile;
+    this.silent = Boolean(silent);
+    this._getCdp = getCdp;
+    this._logBytes = -1;
+  }
+
   log(msg) {
     if (!this.silent) {
       try {
@@ -24,15 +31,16 @@ export const loggerMethods = {
         this._logBytes += Buffer.byteLength(line, 'utf8');
       } catch {}
     }
-  },
+  }
 
-  _redactSensitiveText(text) {
+  redactSensitiveText(text) {
+    const cdp = this._getCdp?.();
     const base =
-      typeof this.cdp?.redactSensitiveUrl === 'function'
-        ? this.cdp.redactSensitiveUrl(text)
+      typeof cdp?.redactSensitiveUrl === 'function'
+        ? cdp.redactSensitiveUrl(text)
         : String(text || '');
     return sanitizeSecretText(base);
-  },
-};
+  }
+}
 
 export { sanitizeSecretText, sanitizeLogLine };

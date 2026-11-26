@@ -3,6 +3,7 @@
 
 const path = require('path');
 const { sha256Text, computeHash } = require('../utils/fs-safe.cjs');
+const { CHANNEL_CACHE_NAMES, CHANNEL_CACHE_FORMAT_MAP } = require('../channels/registry.cjs');
 
 const BUNDLE_CACHE_SCHEMA_VERSION = 2;
 const BUNDLE_CACHE_FILENAME = '.bundle-cache.json';
@@ -11,24 +12,6 @@ const BUNDLE_CACHE_MAX_FILE_BYTES = 6 * 1024 * 1024;
 const BUNDLE_CACHE_MAX_EXPR_BYTES = 2 * 1024 * 1024;
 const BUNDLE_CACHE_MAX_BOOTCFG_BYTES = 64 * 1024;
 const CHANNEL_CACHE_MAX_PAYLOAD_BYTES = 2 * 1024 * 1024;
-const CHANNEL_CACHE_NAMES = Object.freeze([
-  'omni',
-  'sidebar',
-  'hostI18n',
-  'swarmI18n',
-  'thought',
-  'inlineDiff',
-  'wallpaper',
-  'periodicPicker',
-  'settings',
-  'mascot',
-  'suggester',
-  'homeStudio',
-  'telemetry',
-  'effortSlider',
-  'workbenchEnhancer',
-  'contextMenu',
-]);
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const CODE_HASH_RE = /^[0-9a-z]{1,16}$/;
 const BUNDLE_CACHE_ROOT_MEM_TTL_MS = 500;
@@ -136,14 +119,15 @@ function isValidChannelCacheEntry(channelName, entry) {
   if (!hasOwn('payloadSha256') || typeof entry.payloadSha256 !== 'string' || !SHA256_HEX_RE.test(entry.payloadSha256)) {
     return false;
   }
-  if (channelName === 'omni' || channelName === 'sidebar' || channelName === 'inlineDiff') {
+  const format = CHANNEL_CACHE_FORMAT_MAP[channelName];
+  if (format === 'minCode') {
     if (!hasOwn('minCode') || typeof entry.minCode !== 'string' || entry.minCode.length === 0) return false;
     if (Buffer.byteLength(entry.minCode, 'utf8') > CHANNEL_CACHE_MAX_PAYLOAD_BYTES) return false;
     if (channelName === 'sidebar' && /setPrefValues?/i.test(entry.minCode)) return false;
     if (computeHash(entry.minCode) !== entry.codeHash) return false;
     return sha256Text(`${entry.codeHash}\0${entry.minCode}`) === entry.payloadSha256;
   }
-  if (channelName === 'hostI18n' || channelName === 'swarmI18n') {
+  if (format === 'runtimeAndDict') {
     if (!hasOwn('minRuntime') || typeof entry.minRuntime !== 'string' || entry.minRuntime.length === 0) return false;
     if (!hasOwn('dictRaw') || typeof entry.dictRaw !== 'string' || entry.dictRaw.length === 0) return false;
     const totalBytes = Buffer.byteLength(entry.minRuntime, 'utf8') + Buffer.byteLength(entry.dictRaw, 'utf8');
@@ -151,7 +135,7 @@ function isValidChannelCacheEntry(channelName, entry) {
     if (computeHash(`${entry.minRuntime}:${entry.dictRaw}`) !== entry.codeHash) return false;
     return sha256Text(`${entry.codeHash}\0${entry.minRuntime}\0${entry.dictRaw}`) === entry.payloadSha256;
   }
-  if (channelName === 'thought' || channelName === 'wallpaper' || channelName === 'suggester') {
+  if (format === 'clientAndUi') {
     if (!hasOwn('minClient') || typeof entry.minClient !== 'string' || entry.minClient.length === 0) return false;
     if (!hasOwn('minSettingsUi') || typeof entry.minSettingsUi !== 'string' || entry.minSettingsUi.length === 0) return false;
     const totalBytes = Buffer.byteLength(entry.minClient, 'utf8') + Buffer.byteLength(entry.minSettingsUi, 'utf8');
@@ -159,16 +143,7 @@ function isValidChannelCacheEntry(channelName, entry) {
     if (computeHash(`${entry.minClient}\n${entry.minSettingsUi}`) !== entry.codeHash) return false;
     return sha256Text(`${entry.codeHash}\0${entry.minClient}\0${entry.minSettingsUi}`) === entry.payloadSha256;
   }
-  if (
-    channelName === 'periodicPicker' ||
-    channelName === 'settings' ||
-    channelName === 'mascot' ||
-    channelName === 'homeStudio' ||
-    channelName === 'telemetry' ||
-    channelName === 'effortSlider' ||
-    channelName === 'workbenchEnhancer' ||
-    channelName === 'contextMenu'
-  ) {
+  if (format === 'minRuntime') {
     if (!hasOwn('minRuntime') || typeof entry.minRuntime !== 'string' || entry.minRuntime.length === 0) return false;
     if (Buffer.byteLength(entry.minRuntime, 'utf8') > CHANNEL_CACHE_MAX_PAYLOAD_BYTES) return false;
     if (computeHash(entry.minRuntime) !== entry.codeHash) return false;

@@ -5327,12 +5327,13 @@ test('V13.1 Review Hardening: Daemon hash-level hot-heal upgrade, AUX-06 anti-sm
     fs.readFileSync(path.join(ROOT_DIR, 'src', 'daemon', 'session-heal-channels.mjs'), 'utf8') +
     '\n' +
     fs.readFileSync(path.join(ROOT_DIR, 'src', 'daemon', 'channel-coordinator.mjs'), 'utf8');
+  const { PAGE_HEALTH_PROBE_EXPRESSION } = await import(new URL('../src/daemon/session-heal-channels.mjs', import.meta.url));
 
-  // 1) Daemon verifyPage probes periodicPickerCodeHash & upgrades stale mounted codeHash
+  // 1) Daemon verifyPage probes periodicPickerCodeHash & upgrades stale mounted codeHash (table-driven via CHANNEL_REGISTRY)
   assert.ok(
-    daemonSrc.includes('periodicPickerCodeHash:') &&
-      daemonSrc.includes('_extractPeriodicPickerCodeHash') &&
-      daemonSrc.includes('periodicPickerHashMismatch'),
+    PAGE_HEALTH_PROBE_EXPRESSION.includes('periodicPickerCodeHash:') &&
+      daemonSrc.includes('getChannelExprHash') &&
+      daemonSrc.includes('hashMismatch'),
     'PrismDaemon must probe and hot-heal stale periodicPickerCodeHash rather than skipping when hasPeriodicPicker is true'
   );
   const { PrismDaemon } = await import(new URL('../sidecars/daemon/main.mjs', import.meta.url));

@@ -1,4 +1,4 @@
-// Obsidian Prism .daemon.pid 锁抢占、存活检测、释放与优雅关闭既有 daemon（Tier 0）
+// Obsidian Prism .daemon.pid 锁抢占、存活检测、释放与优雅关闭既有 daemon（Tier 0，无原型 Mixin）
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -28,9 +28,6 @@ export function isAutomatedTestRuntime() {
   return Array.isArray(process.execArgv) && process.execArgv.some((a) => a === '--test' || a.startsWith('--test-'));
 }
 
-/**
- * 解析 Windows `tasklist /FO CSV /NH` 输出中的目标 PID 映像名。
- */
 export function parseTasklistCsvImageName(csvOutput, expectedPid) {
   const targetPid = Number(expectedPid);
   if (!Number.isInteger(targetPid) || targetPid <= 0) return '';
@@ -65,9 +62,6 @@ export function parseTasklistCsvImageName(csvOutput, expectedPid) {
   return '';
 }
 
-/**
- * 通过原生 `tasklist /FO CSV /NH` 查询指定 Windows PID 的进程映像名。
- */
 export function queryWindowsProcessImageNameSync(pid, execFn = execFileSync) {
   const n = Number(pid);
   if (!Number.isInteger(n) || n <= 0) return '';
@@ -84,9 +78,6 @@ export function queryWindowsProcessImageNameSync(pid, execFn = execFileSync) {
   }
 }
 
-/**
- * 校验 .daemon.pid 锁文件中的 PID 与 ownerToken 是否有效且指向旧守护实例。
- */
 export function verifyDaemonPidLockToken(pidFile, expectedPid, currentOwnerToken = '') {
   const targetPid = Number(expectedPid);
   if (!pidFile || !Number.isInteger(targetPid) || targetPid <= 0) return false;
@@ -136,7 +127,6 @@ export function isObsidianPrismDaemonCommandLine(commandLine) {
   const hasPrismBrand = /(?:obsidian-prism|antigravity-prism|agy-claude-style)/.test(cmd);
   const hasDaemonScript = /(?:sidecars\/daemon\/main\.mjs|\/daemon\/main\.mjs|\/watch\.js)\b/.test(cmd);
   if (hasPrismBrand && hasDaemonScript) return true;
-  // 宿主以 sidecars/daemon 为工作目录拉起时，命令行为 node main.mjs 或 Antigravity --import=.../sidecar_sdk/register_loader.js main.mjs
   const hasRelativeMain = /(?:^|[\s"'=])main\.mjs(?:$|[\s"'])/.test(cmd);
   if (
     hasRelativeMain &&
@@ -165,11 +155,6 @@ export function parseArgs(argv) {
   return { once, port, rootDir, gitRepoDir, outFile };
 }
 
-/**
- * 判断当前模块是否作为 CLI 主入口启动。
- * 复用 canonicalRealpathSync() 解析符号链接与 Windows Junction（例如 ~/.gemini 迁至其他盘符），
- * 并在 Win32 下统一规范化盘符大小写与长路径前缀。
- */
 export function isMainEntry(argv1, moduleFilename) {
   if (!argv1 || !moduleFilename) return false;
   let selfPath = String(moduleFilename);
@@ -237,7 +222,26 @@ export function registerDaemonShutdownSignals(daemon, opts = {}) {
   };
 }
 
-export const pidLockMethods = {
+export class PidLockManager {
+  constructor({
+    pidFile = '',
+    ownerToken = '',
+    getCdp = () => null,
+    loadedCdpVerifier = null,
+    daemonPidVerifier = null,
+  } = {}) {
+    this.pidFile = pidFile;
+    this.ownerToken = ownerToken;
+    this._getCdp = getCdp;
+    this._loadedCdpVerifier = typeof loadedCdpVerifier === 'function' ? loadedCdpVerifier : null;
+    this._daemonPidVerifier = typeof daemonPidVerifier === 'function' ? daemonPidVerifier : null;
+    this._ownerFileCache = null;
+  }
+
+  setLoadedCdpVerifier(fn) {
+    this._loadedCdpVerifier = typeof fn === 'function' ? fn : null;
+  }
+
   stopExistingDaemon({
     verifyPid = null,
     inspectCommandLine = null,
@@ -255,9 +259,10 @@ export const pidLockMethods = {
       }
       if (pidStat.isSymbolicLink() || !pidStat.isFile()) return false;
 
+      const cdp = this._getCdp?.();
       const prevPid =
-        typeof this.cdp?.readPidFromLockFile === 'function'
-          ? this.cdp.readPidFromLockFile(this.pidFile)
+        typeof cdp?.readPidFromLockFile === 'function'
+          ? cdp.readPidFromLockFile(this.pidFile)
           : (() => {
               const raw = fs.readFileSync(this.pidFile, 'utf8').trim();
               if (/^\d+$/.test(raw)) return parseInt(raw, 10);
@@ -277,35 +282,31 @@ export const pidLockMethods = {
       let safeToKill = false;
       if (customVerifier) {
         safeToKill = Boolean(customVerifier(prevPid, this.pidFile));
-      } else if (typeof this.cdp?.isExpectedDaemonProcess === 'function') {
+      } else if (typeof cdp?.isExpectedDaemonProcess === 'function') {
         const isDefaultVerifier =
-          this.cdp.isExpectedDaemonProcess === this._loadedCdpVerifier ||
-          this.cdp.isExpectedDaemonProcess === defaultCdp.isExpectedDaemonProcess;
+          cdp.isExpectedDaemonProcess === this._loadedCdpVerifier ||
+          cdp.isExpectedDaemonProcess === defaultCdp.isExpectedDaemonProcess;
         if (!isDefaultVerifier) {
-          // 兼容单测显式覆写 this.cdp.isExpectedDaemonProcess 注入校验钩子
-          safeToKill = Boolean(this.cdp.isExpectedDaemonProcess(prevPid, this.pidFile));
+          safeToKill = Boolean(cdp.isExpectedDaemonProcess(prevPid, this.pidFile));
         } else {
-          // P2-5: 复用 cdp.js 单次进程探针，避免 Windows 启动抢锁重复拉起外部进程探针
           const hasUnifiedProbe =
-            typeof inspectProcess === 'function' || typeof this.cdp.inspectProcessSync === 'function';
+            typeof inspectProcess === 'function' || typeof cdp.inspectProcessSync === 'function';
           const procInfo =
             typeof inspectProcess === 'function'
               ? inspectProcess(prevPid)
-              : typeof this.cdp.inspectProcessSync === 'function'
-              ? this.cdp.inspectProcessSync(prevPid)
+              : typeof cdp.inspectProcessSync === 'function'
+              ? cdp.inspectProcessSync(prevPid)
               : null;
           const cdpVerified = hasUnifiedProbe
-            ? Boolean(this.cdp.isExpectedDaemonProcess(prevPid, { procInfo, lockFile: this.pidFile }))
-            : Boolean(this.cdp.isExpectedDaemonProcess(prevPid, this.pidFile));
+            ? Boolean(cdp.isExpectedDaemonProcess(prevPid, { procInfo, lockFile: this.pidFile }))
+            : Boolean(cdp.isExpectedDaemonProcess(prevPid, this.pidFile));
           if (!cdpVerified) {
             safeToKill = false;
           } else if (typeof inspectCommandLine === 'function') {
             safeToKill = isObsidianPrismDaemonCommandLine(inspectCommandLine(prevPid));
           } else if (hasUnifiedProbe && typeof procInfo?.commandLine === 'string' && procInfo.commandLine.trim()) {
-            // 存在命令行信息时执行命令行身份复核，防误杀无关 node 进程
             safeToKill = isObsidianPrismDaemonCommandLine(procInfo.commandLine);
           } else if (process.platform === 'win32') {
-            // Windows 无命令行探针时使用原生 tasklist /FO CSV /NH 映像名 + .daemon.pid 锁文件 token 双重校验
             const imgName =
               (procInfo && typeof procInfo.imageName === 'string' && procInfo.imageName.trim()) ||
               (typeof queryTasklist === 'function'
@@ -321,7 +322,6 @@ export const pidLockMethods = {
           }
         }
       } else {
-        // 无有效身份校验钩子时严格 fail-closed，绝不盲杀无关 PID
         safeToKill = false;
       }
 
@@ -336,7 +336,7 @@ export const pidLockMethods = {
     } catch {
       return false;
     }
-  },
+  }
 
   claimOwnership() {
     this.stopExistingDaemon();
@@ -355,7 +355,7 @@ export const pidLockMethods = {
       );
       this._ownerFileCache = null;
     } catch {}
-  },
+  }
 
   isCurrentOwner() {
     try {
@@ -382,7 +382,7 @@ export const pidLockMethods = {
       this._ownerFileCache = null;
       return true;
     }
-  },
+  }
 
   releaseOwnership() {
     this._ownerFileCache = null;
@@ -399,5 +399,5 @@ export const pidLockMethods = {
         fs.unlinkSync(this.pidFile);
       }
     } catch {}
-  },
-};
+  }
+}

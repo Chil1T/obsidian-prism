@@ -1,4 +1,4 @@
-// Obsidian Prism 遥测 Scope 归一化、远程环境隔离与 Renderer LS-RPC 路由（Tier 1）
+// Obsidian Prism 遥测 Scope 归一化、远程环境隔离与 Renderer LS-RPC 路由纯函数（无原型 Mixin，供 TelemetrySubsystem 调用）
 import {
   buildRendererRpcExpression,
   extractModelLabelMap,
@@ -15,7 +15,6 @@ function sanitizeScopeSegment(raw) {
   try {
     s = decodeURIComponent(s);
   } catch {}
-  // VS Code Remote-SSH 有时将 authority JSON 编码为 hex 字符串（如 {"hostName":"prod-box"}）
   if (/^[0-9a-f]{8,}$/i.test(s) && s.length % 2 === 0 && s.length <= 512) {
     try {
       const decoded = Buffer.from(s, 'hex').toString('utf8');
@@ -189,149 +188,145 @@ export function hasRealUsageRecord(record) {
   return false;
 }
 
-export const telemetryScopeMethods = {
-  _resolveEntryScopeKey(entry) {
-    if (!entry || typeof entry !== 'object') return 'local';
-    return resolveUsageScopeKey({ entry });
-  },
+export function resolveEntryScopeKey(entry) {
+  if (!entry || typeof entry !== 'object') return 'local';
+  return resolveUsageScopeKey({ entry });
+}
 
-  _getRendererRpcCandidates(opts = null) {
-    const preferredEntry = opts?.preferredEntry || null;
-    const explicitScope = normalizeUsageScopeKey(opts?.scopeKey || '');
-    const preferredValid = Boolean(
-      preferredEntry &&
-        preferredEntry.session &&
-        !preferredEntry.session.closed &&
-        !/^(?:devtools|chrome-extension|chrome|about):/i.test(String(preferredEntry.url || ''))
-    );
-    if (opts?.strictEntry === true) {
-      return preferredValid ? [preferredEntry] : [];
+export function getRendererRpcCandidates(tel, opts = null) {
+  const preferredEntry = opts?.preferredEntry || null;
+  const explicitScope = normalizeUsageScopeKey(opts?.scopeKey || '');
+  const preferredValid = Boolean(
+    preferredEntry &&
+      preferredEntry.session &&
+      !preferredEntry.session.closed &&
+      !/^(?:devtools|chrome-extension|chrome|about):/i.test(String(preferredEntry.url || ''))
+  );
+  if (opts?.strictEntry === true) {
+    return preferredValid ? [preferredEntry] : [];
+  }
+  const targetScope = explicitScope || (preferredValid ? resolveEntryScopeKey(preferredEntry) : '');
+  const out = [];
+  if (preferredValid) out.push(preferredEntry);
+  const others = [];
+  const sessions = tel._getSessions();
+  if (sessions && typeof sessions.values === 'function') {
+    for (const entry of sessions.values()) {
+      if (!entry || entry === preferredEntry || !entry.session || entry.session.closed) continue;
+      const url = String(entry.url || '');
+      if (/^(?:devtools|chrome-extension|chrome|about):/i.test(url)) continue;
+      const entryScope = resolveEntryScopeKey(entry);
+      if (targetScope && entryScope !== targetScope) continue;
+      const isLocalHost = /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\//i.test(url);
+      const isLocalScope = entryScope === 'local';
+      others.push({
+        entry,
+        score: (isLocalScope ? 4 : 0) + (isLocalHost ? 2 : 0) + (entry.healthyStreak > 0 ? 1 : 0),
+      });
     }
-    const targetScope = explicitScope || (preferredValid ? this._resolveEntryScopeKey(preferredEntry) : '');
-    const out = [];
-    if (preferredValid) {
-      out.push(preferredEntry);
-    }
-    const others = [];
-    if (this.sessions && typeof this.sessions.values === 'function') {
-      for (const entry of this.sessions.values()) {
-        if (!entry || entry === preferredEntry || !entry.session || entry.session.closed) continue;
-        const url = String(entry.url || '');
-        if (/^(?:devtools|chrome-extension|chrome|about):/i.test(url)) continue;
-        const entryScope = this._resolveEntryScopeKey(entry);
-        // 严格环境隔离：指定了 targetScope 或 preferredEntry 时，仅允许同 scope 候选回退，严禁 SSH 与 Local 互相跨路由
-        if (targetScope && entryScope !== targetScope) continue;
-        const isLocalHost = /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?\//i.test(url);
-        const isLocalScope = entryScope === 'local';
-        others.push({
-          entry,
-          score: (isLocalScope ? 4 : 0) + (isLocalHost ? 2 : 0) + (entry.healthyStreak > 0 ? 1 : 0),
-        });
+  }
+  others.sort((a, b) => b.score - a.score);
+  for (const x of others) out.push(x.entry);
+  return out;
+}
+
+export function createScopedRendererClient(tel, entry, scopeKey, extraOpts = null) {
+  const safeScope = normalizeUsageScopeKey(scopeKey) || 'local';
+  const routeOpts = {
+    preferredEntry: entry,
+    scopeKey: safeScope,
+    ...(extraOpts?.strictEntry ? { strictEntry: true } : {}),
+  };
+  return {
+    server: { port: 0, csrf: '', pid: 0, mode: 'renderer-proxy', scopeKey: safeScope },
+    call: (method, body = {}) => tel.invokeRendererLsRpc(method, body, routeOpts),
+    trajectory: (cascadeId) => tel.invokeRendererLsRpc('GetCascadeTrajectory', { cascadeId }, routeOpts),
+  };
+}
+
+export function resolveActiveRpcScope(tel) {
+  const asyncCtx = RPC_ROUTE_STORAGE.getStore();
+  if (asyncCtx && asyncCtx.owner === tel) {
+    const sc =
+      normalizeUsageScopeKey(asyncCtx.scopeKey || '') ||
+      (asyncCtx.preferredEntry ? resolveEntryScopeKey(asyncCtx.preferredEntry) : '');
+    return sc || 'local';
+  }
+  return 'local';
+}
+
+export async function invokeRendererLsRpc(tel, method, body = {}, opts = null) {
+  let effectiveBody = body;
+  if (method === 'RetrieveUserQuotaSummary' && tel._quotaForceRefreshGuard) {
+    const decision = tel._quotaForceRefreshGuard.prepare(body);
+    if (decision.action === 'cached') return decision.result;
+    effectiveBody = decision.body;
+  }
+  const asyncCtx = RPC_ROUTE_STORAGE.getStore();
+  const routeOpts = opts || (asyncCtx && asyncCtx.owner === tel ? asyncCtx : null);
+  const candidates = tel.getRendererRpcCandidates(routeOpts);
+  if (!candidates.length) {
+    throw new Error('等待 Antigravity 主窗口连接');
+  }
+  const expr = buildRendererRpcExpression(method, effectiveBody);
+  const timeoutMs = method === 'Probe' ? 2600 : 12000;
+  let lastErr = null;
+  for (const entry of candidates) {
+    try {
+      const res = await entry.session.evaluate(expr, true, timeoutMs);
+      if (!res || res.ok !== true) {
+        lastErr = new Error(String(res?.error || 'renderer_ls_unavailable'));
+        continue;
       }
-    }
-    others.sort((a, b) => b.score - a.score);
-    for (const x of others) out.push(x.entry);
-    return out;
-  },
-
-  _createScopedRendererClient(entry, scopeKey, extraOpts = null) {
-    const safeScope = normalizeUsageScopeKey(scopeKey) || 'local';
-    const routeOpts = {
-      preferredEntry: entry,
-      scopeKey: safeScope,
-      ...(extraOpts?.strictEntry ? { strictEntry: true } : {}),
-    };
-    return {
-      server: { port: 0, csrf: '', pid: 0, mode: 'renderer-proxy', scopeKey: safeScope },
-      call: (method, body = {}) => this._invokeRendererLsRpc(method, body, routeOpts),
-      trajectory: (cascadeId) => this._invokeRendererLsRpc('GetCascadeTrajectory', { cascadeId }, routeOpts),
-    };
-  },
-
-  _resolveActiveRpcScope() {
-    const asyncCtx = RPC_ROUTE_STORAGE.getStore();
-    if (asyncCtx && asyncCtx.daemon === this) {
-      const sc =
-        normalizeUsageScopeKey(asyncCtx.scopeKey || '') ||
-        (asyncCtx.preferredEntry ? this._resolveEntryScopeKey(asyncCtx.preferredEntry) : '');
-      return sc || 'local';
-    }
-    return 'local';
-  },
-
-  async _invokeRendererLsRpc(method, body = {}, opts = null) {
-    let effectiveBody = body;
-    if (method === 'RetrieveUserQuotaSummary' && this._quotaForceRefreshGuard) {
-      const decision = this._quotaForceRefreshGuard.prepare(body);
-      if (decision.action === 'cached') return decision.result;
-      effectiveBody = decision.body;
-    }
-    const asyncCtx = RPC_ROUTE_STORAGE.getStore();
-    const routeOpts = opts || (asyncCtx && asyncCtx.daemon === this ? asyncCtx : null);
-    const candidates = this._getRendererRpcCandidates(routeOpts);
-    if (!candidates.length) {
-      throw new Error('等待 Antigravity 主窗口连接');
-    }
-    const expr = buildRendererRpcExpression(method, effectiveBody);
-    const timeoutMs = method === 'Probe' ? 2600 : 12000;
-    let lastErr = null;
-    for (const entry of candidates) {
-      try {
-        const res = await entry.session.evaluate(expr, true, timeoutMs);
-        if (!res || res.ok !== true) {
-          lastErr = new Error(String(res?.error || 'renderer_ls_unavailable'));
-          continue;
-        }
-        const raw = res.data;
-        if (method === 'Probe') return raw;
-        if (method === 'GetUserStatus') {
-          const normalized = normalizeRendererUserStatus(raw);
-          const labels = extractModelLabelMap(normalized);
-          if (labels.size > 0) {
-            if (!this._rendererModelLabels) this._rendererModelLabels = new Map();
-            for (const [k, v] of labels.entries()) {
-              if (this._rendererModelLabels.size >= 256 && !this._rendererModelLabels.has(k)) break;
-              this._rendererModelLabels.set(k, v);
-            }
+      const raw = res.data;
+      if (method === 'Probe') return raw;
+      if (method === 'GetUserStatus') {
+        const normalized = normalizeRendererUserStatus(raw);
+        const labels = extractModelLabelMap(normalized);
+        if (labels.size > 0) {
+          if (!tel._rendererModelLabels) tel._rendererModelLabels = new Map();
+          for (const [k, v] of labels.entries()) {
+            if (tel._rendererModelLabels.size >= 256 && !tel._rendererModelLabels.has(k)) break;
+            tel._rendererModelLabels.set(k, v);
           }
-          return normalized;
         }
-        if (method === 'RetrieveUserQuotaSummary') {
-          const normalized = normalizeRendererQuotaSummary(raw);
-          this._quotaForceRefreshGuard?.recordSuccess(normalized);
-          return normalized;
-        }
-        if (method === 'GetAllCascadeTrajectories') {
-          const scopeHint = normalizeUsageScopeKey(raw?.scopeHint || '');
-          const normalized = normalizeRendererSummaries(raw);
-          const inferredRemote =
-            (scopeHint && scopeHint !== 'local' ? scopeHint : '') ||
-            inferRemoteScopeFromSummariesOrItems(Object.values(normalized?.trajectorySummaries || {}));
-          if (inferredRemote) {
-            entry.detectedScopeKey = inferredRemote;
-            entry._usageScopeVerified = true;
-            if (routeOpts?.scopeKey === 'local' && !routeOpts?.preferredEntry) {
-              lastErr = new Error('renderer_scope_mismatch');
-              continue;
-            }
-          }
-          if (scopeHint) {
-            Object.defineProperty(normalized, '_scopeHint', {
-              value: scopeHint,
-              enumerable: false,
-              configurable: true,
-            });
-          }
-          return normalized;
-        }
-        if (method === 'GetCascadeTrajectory') {
-          return normalizeRendererTrajectory(raw, body?.cascadeId, this._rendererModelLabels || null);
-        }
-        return raw;
-      } catch (err) {
-        lastErr = err;
+        return normalized;
       }
+      if (method === 'RetrieveUserQuotaSummary') {
+        const normalized = normalizeRendererQuotaSummary(raw);
+        tel._quotaForceRefreshGuard?.recordSuccess(normalized);
+        return normalized;
+      }
+      if (method === 'GetAllCascadeTrajectories') {
+        const scopeHint = normalizeUsageScopeKey(raw?.scopeHint || '');
+        const normalized = normalizeRendererSummaries(raw);
+        const inferredRemote =
+          (scopeHint && scopeHint !== 'local' ? scopeHint : '') ||
+          inferRemoteScopeFromSummariesOrItems(Object.values(normalized?.trajectorySummaries || {}));
+        if (inferredRemote) {
+          entry.detectedScopeKey = inferredRemote;
+          entry._usageScopeVerified = true;
+          if (routeOpts?.scopeKey === 'local' && !routeOpts?.preferredEntry) {
+            lastErr = new Error('renderer_scope_mismatch');
+            continue;
+          }
+        }
+        if (scopeHint) {
+          Object.defineProperty(normalized, '_scopeHint', {
+            value: scopeHint,
+            enumerable: false,
+            configurable: true,
+          });
+        }
+        return normalized;
+      }
+      if (method === 'GetCascadeTrajectory') {
+        return normalizeRendererTrajectory(raw, body?.cascadeId, tel._rendererModelLabels || null);
+      }
+      return raw;
+    } catch (err) {
+      lastErr = err;
     }
-    throw lastErr || new Error('Antigravity 渲染器遥测通道暂不可用');
-  },
-};
+  }
+  throw lastErr || new Error('Antigravity 渲染器遥测通道暂不可用');
+}

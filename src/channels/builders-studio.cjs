@@ -14,17 +14,7 @@ const { resolveBundleCachePathOption } = require('../compiler/cache-validate.cjs
 const { minifyEmbeddedCssTemplate } = require('../compiler/js-serializer.cjs');
 const { minifySingleSource } = require('../compiler/js-string-pool.cjs');
 const { CHANNEL_MAIN_FRAME_HOST_GUARD } = require('./host-guard.cjs');
-
-const PERIODIC_PICKER_MODULE_FILES = [
-  'pbr-grain-assets.js',
-  'audio-fx.js',
-  'model-catalog.js',
-  'host-bridge.js',
-  'oled-cyber-screen.js',
-  'keyboard-3d-gl.js',
-  'bento-ui.js',
-  'periodic-picker.js',
-];
+const { PERIODIC_PICKER_MODULE_FILES } = require('./registry.cjs');
 
 function createStudioChannelBuilders({ rootDir, readConfig, bundleCache }) {
   function readCompiledWallpaperAssets(opts = null) {

@@ -1,52 +1,86 @@
-// Obsidian Prism Swarm 汉化独立生命周期管理器（OOPIF + 同进程子 Frame + 隔离世界 host-i18n 协调，Tier 1）
+// Obsidian Prism Swarm 汉化独立生命周期管理器（OOPIF + 同进程子 Frame + 隔离世界 host-i18n 协调，独立组合类，无原型 Mixin）
 
-export const swarmSessionMethods = {
-  _isSwarmI18nEnabled(cfgOverride = null) {
+export class SwarmSessionManager {
+  constructor({
+    getCdp = () => null,
+    isRunning = () => false,
+    log = () => {},
+    redact = (t) => String(t || ''),
+    getBrowserSession = () => null,
+    getSessions = () => new Map(),
+    getManagedTimers = () => null,
+    getChannelCacheOpts = () => null,
+    scheduleBundleCacheFlush = () => {},
+  } = {}) {
+    this._getCdp = getCdp;
+    this._isRunning = isRunning;
+    this._log = log;
+    this._redact = redact;
+    this._getBrowserSession = getBrowserSession;
+    this._getSessions = getSessions;
+    this._getManagedTimers = getManagedTimers;
+    this._getChannelCacheOpts = getChannelCacheOpts;
+    this._scheduleBundleCacheFlush = scheduleBundleCacheFlush;
+
+    this.swarmSessions = new Map();
+    this._swarmAttaching = new Set();
+    this.swarmI18nExpr = '';
+    this.swarmI18nCodeHash = '';
+  }
+
+  resetCompiledCache() {
+    this.swarmI18nExpr = '';
+    this.swarmI18nCodeHash = '';
+  }
+
+  isSwarmI18nEnabled(cfgOverride = null) {
     try {
-      const cfg = cfgOverride || this.cdp?.readConfig?.();
-      if (typeof this.cdp?.shouldEnableSwarmI18n === 'function') {
-        return Boolean(this.cdp.shouldEnableSwarmI18n(cfg));
+      const cdp = this._getCdp();
+      const cfg = cfgOverride || cdp?.readConfig?.();
+      if (typeof cdp?.shouldEnableSwarmI18n === 'function') {
+        return Boolean(cdp.shouldEnableSwarmI18n(cfg));
       }
       return false;
     } catch {
       return false;
     }
-  },
+  }
 
-  _isSwarmTargetInfo(info) {
+  isSwarmTargetInfo(info) {
     if (!info || typeof info !== 'object') return false;
     if (info.type !== 'iframe' && info.type !== 'page') return false;
-    if (typeof this.cdp?.isSwarmSidecarUrl !== 'function') return false;
-    return Boolean(this.cdp.isSwarmSidecarUrl(info.url));
-  },
+    const cdp = this._getCdp();
+    if (typeof cdp?.isSwarmSidecarUrl !== 'function') return false;
+    return Boolean(cdp.isSwarmSidecarUrl(info.url));
+  }
 
-  _getSwarmI18nCleanupExpression() {
+  getSwarmI18nCleanupExpression() {
+    const cdp = this._getCdp();
     return (
-      this.cdp?.SWARM_I18N_REMOVE_EXPRESSION ||
+      cdp?.SWARM_I18N_REMOVE_EXPRESSION ||
       "(() => { try { window.__agPrismSwarmI18n?.destroy?.(); } catch {} try { document.documentElement?.removeAttribute?.('data-ag-prism-swarm-i18n'); } catch {} return { ok: true, status: 'off' }; })()"
     );
-  },
+  }
 
-  _ensureSwarmI18nExpr(cfgOverride = null) {
-    const cfg = cfgOverride || (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
-    if (!this._isSwarmI18nEnabled(cfg) || typeof this.cdp?.buildSwarmI18nExpression !== 'function') {
+  ensureSwarmI18nExpr(cfgOverride = null) {
+    const cdp = this._getCdp();
+    const cfg = cfgOverride || (typeof cdp?.readConfig === 'function' ? cdp.readConfig() : null);
+    if (!this.isSwarmI18nEnabled(cfg) || typeof cdp?.buildSwarmI18nExpression !== 'function') {
       this.swarmI18nExpr = '';
       this.swarmI18nCodeHash = '';
       return '';
     }
     if (this.swarmI18nExpr) return this.swarmI18nExpr;
     const chOpts = this._getChannelCacheOpts(true);
-    const expr = chOpts
-      ? this.cdp.buildSwarmI18nExpression(cfg, null, chOpts)
-      : this.cdp.buildSwarmI18nExpression(cfg);
-    if (chOpts && this.running) this._scheduleBundleCacheFlush();
+    const expr = chOpts ? cdp.buildSwarmI18nExpression(cfg, null, chOpts) : cdp.buildSwarmI18nExpression(cfg);
+    if (chOpts && this._isRunning()) this._scheduleBundleCacheFlush();
     this.swarmI18nExpr = expr || '';
     const hm = this.swarmI18nExpr.match(/targetHash\s*=\s*"([^"]+)"/);
     this.swarmI18nCodeHash = hm ? hm[1] : '';
     return this.swarmI18nExpr;
-  },
+  }
 
-  _cleanupSwarmSessionLocal(targetId) {
+  cleanupSwarmSessionLocal(targetId) {
     if (!targetId) return;
     this._swarmAttaching.delete(targetId);
     const entry = this.swarmSessions.get(targetId);
@@ -54,19 +88,38 @@ export const swarmSessionMethods = {
     this.swarmSessions.delete(targetId);
     if (entry._reloadTimer) {
       clearTimeout(entry._reloadTimer);
-      this._managedTimers?.delete(entry._reloadTimer);
+      this._getManagedTimers()?.delete(entry._reloadTimer);
       entry._reloadTimer = null;
     }
     try {
+      const bSession = this._getBrowserSession();
       if (typeof entry.session?.detachLocal === 'function') {
         entry.session.detachLocal();
-      } else if (typeof this.browserSession?.offSession === 'function' && entry.sessionId) {
-        this.browserSession.offSession(entry.sessionId);
+      } else if (typeof bSession?.offSession === 'function' && entry.sessionId) {
+        bSession.offSession(entry.sessionId);
       }
     } catch {}
-  },
+  }
 
-  async _detachSwarmSession(targetId, cleanDom = true) {
+  cleanupAllSwarmSessionsLocal() {
+    for (const tid of [...this.swarmSessions.keys()]) {
+      this.cleanupSwarmSessionLocal(tid);
+    }
+    this.swarmSessions.clear();
+    this._swarmAttaching.clear();
+  }
+
+  cleanupSwarmBySessionId(sessionId) {
+    if (!sessionId) return;
+    for (const [k, ent] of this.swarmSessions.entries()) {
+      if (ent && ent.sessionId === sessionId) {
+        this.cleanupSwarmSessionLocal(k);
+        break;
+      }
+    }
+  }
+
+  async detachSwarmSession(targetId, cleanDom = true) {
     if (!targetId) return;
     this._swarmAttaching.delete(targetId);
     const entry = this.swarmSessions.get(targetId);
@@ -74,11 +127,11 @@ export const swarmSessionMethods = {
     this.swarmSessions.delete(targetId);
     if (entry._reloadTimer) {
       clearTimeout(entry._reloadTimer);
-      this._managedTimers?.delete(entry._reloadTimer);
+      this._getManagedTimers()?.delete(entry._reloadTimer);
       entry._reloadTimer = null;
     }
     const child = entry.session;
-    const parent = entry.parentSession || this.browserSession;
+    const parent = entry.parentSession || this._getBrowserSession();
     try {
       if (child && !child.closed) {
         if (entry.scriptId) {
@@ -88,7 +141,7 @@ export const swarmSessionMethods = {
           entry.scriptId = null;
         }
         if (cleanDom) {
-          await child.evaluate(this._getSwarmI18nCleanupExpression(), false, 2500).catch(() => {});
+          await child.evaluate(this.getSwarmI18nCleanupExpression(), false, 2500).catch(() => {});
         }
       }
     } catch {}
@@ -104,17 +157,17 @@ export const swarmSessionMethods = {
         await parent.send('Target.detachFromTarget', { sessionId: entry.sessionId }, 1500).catch(() => {});
       }
     } catch {}
-  },
+  }
 
-  async _detachAllSwarmSessions(cleanDom = false) {
+  async detachAllSwarmSessions(cleanDom = false) {
     const ids = [...this.swarmSessions.keys()];
     this._swarmAttaching.clear();
     if (ids.length === 0) return;
-    await Promise.allSettled(ids.map((tid) => this._detachSwarmSession(tid, cleanDom)));
+    await Promise.allSettled(ids.map((tid) => this.detachSwarmSession(tid, cleanDom)));
     this.swarmSessions.clear();
-  },
+  }
 
-  _createSwarmChildSession(bSession, sessionId, targetId) {
+  createSwarmChildSession(bSession, sessionId, targetId) {
     if (typeof bSession.createChildSession === 'function') {
       return bSession.createChildSession(sessionId, targetId);
     }
@@ -158,30 +211,31 @@ export const swarmSessionMethods = {
         }
       },
     };
-  },
+  }
 
-  async _attachSwarmTarget(info, cfgOverride = null) {
-    const bSession = this.browserSession;
-    if (!bSession || bSession.closed || !this.running) return null;
+  async attachSwarmTarget(info, cfgOverride = null) {
+    const bSession = this._getBrowserSession();
+    if (!bSession || bSession.closed || !this._isRunning()) return null;
     const targetId = String(info?.targetId || info?.id || '').trim();
-    if (!targetId || !this._isSwarmTargetInfo(info)) return null;
+    if (!targetId || !this.isSwarmTargetInfo(info)) return null;
 
-    const cfg = cfgOverride || (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
-    if (!this._isSwarmI18nEnabled(cfg)) {
+    const cdp = this._getCdp();
+    const cfg = cfgOverride || (typeof cdp?.readConfig === 'function' ? cdp.readConfig() : null);
+    if (!this.isSwarmI18nEnabled(cfg)) {
       if (this.swarmSessions.has(targetId)) {
-        await this._detachSwarmSession(targetId, true);
+        await this.detachSwarmSession(targetId, true);
       }
       return null;
     }
 
-    const safeUrl = this._redactSensitiveText(info.url || '');
-    const safeTitle = this._redactSensitiveText(info.title || info.url || 'Swarm');
+    const safeUrl = this._redact(info.url || '');
+    const safeTitle = this._redact(info.title || info.url || 'Swarm');
 
     const existing = this.swarmSessions.get(targetId);
     if (existing && !existing.session.closed) {
       existing.url = safeUrl;
       existing.title = safeTitle;
-      const swarmExpr = this._ensureSwarmI18nExpr(cfg);
+      const swarmExpr = this.ensureSwarmI18nExpr(cfg);
       if (swarmExpr && existing.codeHash !== this.swarmI18nCodeHash) {
         if (existing.scriptId) {
           await existing.session
@@ -204,26 +258,25 @@ export const swarmSessionMethods = {
     let sessionId = '';
     let child = null;
     try {
-      const swarmExpr = this._ensureSwarmI18nExpr(cfg);
+      const swarmExpr = this.ensureSwarmI18nExpr(cfg);
       if (!swarmExpr) return null;
 
       const attached = await bSession.send('Target.attachToTarget', { targetId, flatten: true }, 2500);
       sessionId = String(attached?.sessionId || '').trim();
-      if (!sessionId || !this.running || bSession.closed) {
+      if (!sessionId || !this._isRunning() || bSession.closed) {
         if (sessionId && !bSession.closed) {
           await bSession.send('Target.detachFromTarget', { sessionId }, 1500).catch(() => {});
         }
         return null;
       }
 
-      const liveCfg = typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : cfg;
-      if (!this._isSwarmI18nEnabled(liveCfg)) {
+      const liveCfg = typeof this._getCdp()?.readConfig === 'function' ? this._getCdp().readConfig() : cfg;
+      if (!this.isSwarmI18nEnabled(liveCfg)) {
         await bSession.send('Target.detachFromTarget', { sessionId }, 1500).catch(() => {});
         return null;
       }
 
-      child = this._createSwarmChildSession(bSession, sessionId, targetId);
-      // 严格仅启用 Page 域：0 Runtime.addBinding、0 主包注入
+      child = this.createSwarmChildSession(bSession, sessionId, targetId);
       await child.send('Page.enable', {}, 2000).catch(() => {});
       const addRes = await child
         .send('Page.addScriptToEvaluateOnNewDocument', { source: swarmExpr }, 2200)
@@ -243,39 +296,42 @@ export const swarmSessionMethods = {
       this.swarmSessions.set(targetId, entry);
 
       const reapplyOnReload = () => {
-        if (!this.running || child.closed || this.swarmSessions.get(targetId) !== entry) return;
+        if (!this._isRunning() || child.closed || this.swarmSessions.get(targetId) !== entry) return;
+        const managedTimers = this._getManagedTimers();
         if (entry._reloadTimer) {
           clearTimeout(entry._reloadTimer);
-          this._managedTimers?.delete(entry._reloadTimer);
+          managedTimers?.delete(entry._reloadTimer);
           entry._reloadTimer = null;
         }
         const t = setTimeout(() => {
           entry._reloadTimer = null;
-          this._managedTimers?.delete(t);
-          if (!this.running || child.closed || this.swarmSessions.get(targetId) !== entry) return;
-          const reloadCfg = typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null;
-          if (!this._isSwarmI18nEnabled(reloadCfg)) {
-            void this._detachSwarmSession(targetId, true).catch(() => {});
+          managedTimers?.delete(t);
+          if (!this._isRunning() || child.closed || this.swarmSessions.get(targetId) !== entry) return;
+          const reloadCfg = typeof this._getCdp()?.readConfig === 'function' ? this._getCdp().readConfig() : null;
+          if (!this.isSwarmI18nEnabled(reloadCfg)) {
+            void this.detachSwarmSession(targetId, true).catch(() => {});
             return;
           }
-          const exprNow = this._ensureSwarmI18nExpr(reloadCfg);
+          const exprNow = this.ensureSwarmI18nExpr(reloadCfg);
           if (exprNow) {
             void child.evaluate(exprNow, false, 3500).catch(() => {});
           }
         }, 60);
         if (typeof t.unref === 'function') t.unref();
         entry._reloadTimer = t;
-        this._managedTimers?.add(t);
+        managedTimers?.add(t);
       };
       child.on('Page.domContentLoadedEventFired', reapplyOnReload);
       child.on('Page.loadEventFired', reapplyOnReload);
 
       const evalRes = await child.evaluate(swarmExpr, false, 3500).catch(() => null);
-      this.log(`[✓] Attached Swarm board i18n: ${safeTitle} (${evalRes?.status || 'ok'})`);
+      this._log(`[✓] Attached Swarm board i18n: ${safeTitle} (${evalRes?.status || 'ok'})`);
       return entry;
     } catch {
       if (child) {
-        try { child.detachLocal(); } catch {}
+        try {
+          child.detachLocal();
+        } catch {}
       }
       if (sessionId && !bSession.closed && !this.swarmSessions.has(targetId)) {
         await bSession.send('Target.detachFromTarget', { sessionId }, 1500).catch(() => {});
@@ -284,48 +340,51 @@ export const swarmSessionMethods = {
     } finally {
       this._swarmAttaching.delete(targetId);
     }
-  },
+  }
 
-  async _handleSwarmTargetEvent(info) {
+  async handleSwarmTargetEvent(info) {
     if (!info || typeof info !== 'object') return;
     const tid = String(info.targetId || info.id || '').trim();
     if (!tid) return;
-    if (!this._isSwarmTargetInfo(info)) {
+    if (!this.isSwarmTargetInfo(info)) {
       if (this.swarmSessions.has(tid)) {
-        await this._detachSwarmSession(tid, true);
+        await this.detachSwarmSession(tid, true);
       }
       return;
     }
-    const cfg = typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null;
-    if (!this._isSwarmI18nEnabled(cfg)) {
+    const cdp = this._getCdp();
+    const cfg = typeof cdp?.readConfig === 'function' ? cdp.readConfig() : null;
+    if (!this.isSwarmI18nEnabled(cfg)) {
       if (this.swarmSessions.has(tid)) {
-        await this._detachSwarmSession(tid, true);
+        await this.detachSwarmSession(tid, true);
       }
       return;
     }
-    await this._attachSwarmTarget(info, cfg);
-  },
+    await this.attachSwarmTarget(info, cfg);
+  }
 
-  async _scanExistingSwarmTargets(bSession = null) {
-    const bs = bSession || this.browserSession;
-    if (!bs || bs.closed || !this.running) return 0;
-    const cfg = typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null;
-    if (!this._isSwarmI18nEnabled(cfg)) return 0;
+  async scanExistingSwarmTargets(bSession = null) {
+    const bs = bSession || this._getBrowserSession();
+    if (!bs || bs.closed || !this._isRunning()) return 0;
+    const cdp = this._getCdp();
+    const cfg = typeof cdp?.readConfig === 'function' ? cdp.readConfig() : null;
+    if (!this.isSwarmI18nEnabled(cfg)) return 0;
     const res = await bs.send('Target.getTargets', {}, 2000).catch(() => null);
     const infos = Array.isArray(res?.targetInfos) ? res.targetInfos : [];
-    const swarmInfos = infos.filter((info) => this._isSwarmTargetInfo(info));
+    const swarmInfos = infos.filter((info) => this.isSwarmTargetInfo(info));
     if (swarmInfos.length === 0) return 0;
-    await Promise.allSettled(swarmInfos.map((info) => this._attachSwarmTarget(info, cfg)));
+    await Promise.allSettled(swarmInfos.map((info) => this.attachSwarmTarget(info, cfg)));
     return swarmInfos.length;
-  },
+  }
 
-  async _injectSwarmIntoSubFrame(entry, frameId, ctxId, cfgOverride = null) {
+  async injectSwarmIntoSubFrame(entry, frameId, ctxId, cfgOverride = null) {
     if (!entry || entry.session.closed || !frameId || typeof ctxId !== 'number') return;
     if (frameId === entry.mainFrameId) return;
     if (this.swarmSessions.has(frameId)) return;
-    const cfg = cfgOverride || (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
-    if (!this._isSwarmI18nEnabled(cfg)) return;
-    const expr = this._ensureSwarmI18nExpr(cfg);
+    const cdp = this._getCdp();
+    const cfg = cfgOverride || (typeof cdp?.readConfig === 'function' ? cdp.readConfig() : null);
+    if (!this.isSwarmI18nEnabled(cfg)) return;
+    const expr = this.ensureSwarmI18nExpr(cfg);
     if (!expr) return;
     const sub = entry.swarmSubFrames?.get(frameId);
     const evalRes = await entry.session
@@ -335,12 +394,12 @@ export const swarmSessionMethods = {
       sub.mounted = true;
       sub.codeHash = this.swarmI18nCodeHash;
     }
-  },
+  }
 
-  async _cleanupSwarmSubFrames(entry, cleanDom = true) {
+  async cleanupSwarmSubFrames(entry, cleanDom = true) {
     if (!entry || !(entry.swarmSubFrames instanceof Map) || entry.swarmSubFrames.size === 0) return;
     if (cleanDom && !entry.session.closed) {
-      const cleanupExpr = this._getSwarmI18nCleanupExpression();
+      const cleanupExpr = this.getSwarmI18nCleanupExpression();
       for (const sub of entry.swarmSubFrames.values()) {
         if (sub && typeof sub.contextId === 'number') {
           await entry.session
@@ -350,22 +409,24 @@ export const swarmSessionMethods = {
         }
       }
     }
-  },
+  }
 
-  async _syncSwarmSessionsForConfig(cfgOverride = null) {
-    const cfg = cfgOverride || (typeof this.cdp?.readConfig === 'function' ? this.cdp.readConfig() : null);
-    const enabled = this._isSwarmI18nEnabled(cfg);
+  async syncSwarmSessionsForConfig(cfgOverride = null) {
+    const cdp = this._getCdp();
+    const cfg = cfgOverride || (typeof cdp?.readConfig === 'function' ? cdp.readConfig() : null);
+    const enabled = this.isSwarmI18nEnabled(cfg);
+    const sessions = this._getSessions();
     if (!enabled) {
       this.swarmI18nExpr = '';
       this.swarmI18nCodeHash = '';
-      await this._detachAllSwarmSessions(true);
-      for (const entry of this.sessions.values()) {
-        await this._cleanupSwarmSubFrames(entry, true).catch(() => {});
+      await this.detachAllSwarmSessions(true);
+      for (const entry of sessions.values()) {
+        await this.cleanupSwarmSubFrames(entry, true).catch(() => {});
       }
       return;
     }
     if (this.swarmSessions.size > 0) {
-      const swarmExpr = this._ensureSwarmI18nExpr(cfg);
+      const swarmExpr = this.ensureSwarmI18nExpr(cfg);
       if (swarmExpr) {
         const entries = [...this.swarmSessions.values()];
         await Promise.allSettled(
@@ -386,20 +447,23 @@ export const swarmSessionMethods = {
           })
         );
       }
-    } else if (this.browserSession && !this.browserSession.closed) {
-      await this._scanExistingSwarmTargets(this.browserSession).catch(() => {});
+    } else {
+      const bs = this._getBrowserSession();
+      if (bs && !bs.closed) {
+        await this.scanExistingSwarmTargets(bs).catch(() => {});
+      }
     }
-    for (const entry of this.sessions.values()) {
+    for (const entry of sessions.values()) {
       if (!entry || entry.session.closed || !(entry.swarmSubFrames instanceof Map)) continue;
       for (const [fid, sub] of entry.swarmSubFrames.entries()) {
         if (sub && typeof sub.contextId === 'number') {
-          await this._injectSwarmIntoSubFrame(entry, fid, sub.contextId, cfg).catch(() => {});
+          await this.injectSwarmIntoSubFrame(entry, fid, sub.contextId, cfg).catch(() => {});
         }
       }
     }
-  },
+  }
 
-  _getMainFrameIsolatedContextIds(entry, filterIds = null) {
+  getMainFrameIsolatedContextIds(entry, filterIds = null) {
     if (!entry || !(entry.contextFrames instanceof Map) || !entry.mainFrameId) return [];
     const allowSet = Array.isArray(filterIds) ? new Set(filterIds) : null;
     const ids = [];
@@ -412,17 +476,18 @@ export const swarmSessionMethods = {
       ids.push(ctxId);
     }
     return ids;
-  },
+  }
 
-  async _syncIsolatedHostI18n(entry, shouldPause, opts = null) {
+  async syncIsolatedHostI18n(entry, shouldPause, opts = null) {
     const empty = { attempted: 0, pausedAny: false, newlyPaused: false, resumedAny: false };
     if (!entry || !entry.session || entry.session.closed) return empty;
-    const pauseExpr = this.cdp?.ISOLATED_HOST_I18N_PAUSE_EXPRESSION || '';
-    const resumeExpr = this.cdp?.ISOLATED_HOST_I18N_RESUME_EXPRESSION || '';
+    const cdp = this._getCdp();
+    const pauseExpr = cdp?.ISOLATED_HOST_I18N_PAUSE_EXPRESSION || '';
+    const resumeExpr = cdp?.ISOLATED_HOST_I18N_RESUME_EXPRESSION || '';
     const expr = shouldPause ? pauseExpr : resumeExpr;
     if (!expr) return empty;
     if (!shouldPause && !entry.isolatedHostI18nPaused && !(opts && opts.force)) return empty;
-    const ctxIds = this._getMainFrameIsolatedContextIds(entry, opts && opts.contextIds);
+    const ctxIds = this.getMainFrameIsolatedContextIds(entry, opts && opts.contextIds);
     if (ctxIds.length === 0) {
       if (!shouldPause) entry.isolatedHostI18nPaused = false;
       return empty;
@@ -461,9 +526,9 @@ export const swarmSessionMethods = {
       entry.isolatedHostI18nPaused = false;
     }
     return { attempted, pausedAny, newlyPaused, resumedAny };
-  },
+  }
 
-  async _forceMainWorldHostI18nOffRescan(entry) {
+  async forceMainWorldHostI18nOffRescan(entry) {
     if (!entry || !entry.session || entry.session.closed) return;
     await entry.session
       .evaluate(
@@ -472,5 +537,5 @@ export const swarmSessionMethods = {
         2500
       )
       .catch(() => {});
-  },
-};
+  }
+}
