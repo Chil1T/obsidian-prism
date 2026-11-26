@@ -39,14 +39,11 @@ function createAddonChannelBuilders({ rootDir, readConfig, bundleCache }) {
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
-    const verbsBuf = hasVerbs ? fs.readFileSync(verbsPath) : null;
-    const clientBuf = fs.readFileSync(clientPath);
-    const settingsBuf = fs.readFileSync(settingsUiPath);
     const fileEntries = [];
-    if (verbsBuf) fileEntries.push({ rel: 'vendor/thought-translator/tool-step-verbs.js', content: verbsBuf });
+    if (hasVerbs) fileEntries.push({ rel: 'vendor/thought-translator/tool-step-verbs.js', fullPath: verbsPath });
     fileEntries.push(
-      { rel: 'vendor/thought-translator/thought-client.js', content: clientBuf },
-      { rel: 'vendor/thought-translator/thought-settings-ui.js', content: settingsBuf }
+      { rel: 'vendor/thought-translator/thought-client.js', fullPath: clientPath },
+      { rel: 'vendor/thought-translator/thought-settings-ui.js', fullPath: settingsUiPath }
     );
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'thought',
@@ -55,10 +52,10 @@ function createAddonChannelBuilders({ rootDir, readConfig, bundleCache }) {
       opts,
       compileFn: () => {
         const minClientParts = [];
-        if (verbsBuf) minClientParts.push(minifySingleSource(verbsBuf.toString('utf8')));
-        minClientParts.push(minifySingleSource(clientBuf.toString('utf8')));
+        if (hasVerbs) minClientParts.push(minifySingleSource(fs.readFileSync(verbsPath, 'utf8'), { allowMemberProps: false }));
+        minClientParts.push(minifySingleSource(fs.readFileSync(clientPath, 'utf8'), { allowMemberProps: false }));
         const minClient = minClientParts.join(';\n');
-        const minSettingsUi = minifySingleSource(settingsBuf.toString('utf8'));
+        const minSettingsUi = minifySingleSource(fs.readFileSync(settingsUiPath, 'utf8'), { allowMemberProps: false });
         const codeHash = computeHash(`${minClient}\n${minSettingsUi}`);
         return { minClient, minSettingsUi, codeHash };
       },
@@ -221,33 +218,26 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
-    const locBuf = fs.readFileSync(locPath);
-    const brandBuf = hasBrand ? fs.readFileSync(brandPath) : null;
-    const atlasBuf = hasAtlas ? fs.readFileSync(atlasPath) : null;
-    const stageGlBuf = hasStageGl ? fs.readFileSync(stageGlPath) : null;
-    const setBuf = fs.readFileSync(setPath);
-    const i18nExtBuf = hasI18nExt ? fs.readFileSync(i18nExtPath) : null;
-    const setExtBuf = hasSetExt ? fs.readFileSync(setExtPath) : null;
-    const fileEntries = [{ rel: 'i18n-locales.js', content: locBuf }];
-    if (brandBuf) fileEntries.push({ rel: 'assets/brand-mark-svg.js', content: brandBuf });
-    if (atlasBuf) fileEntries.push({ rel: 'vendor/clawd-mascot/tavern-atlas-data.js', content: atlasBuf });
-    if (stageGlBuf) fileEntries.push({ rel: 'vendor/clawd-mascot/octopath-stage-webgl.js', content: stageGlBuf });
-    if (i18nExtBuf) fileEntries.push({ rel: 'src/runtime/i18n-ext-beta4.js', content: i18nExtBuf });
-    fileEntries.push({ rel: 'settings-panel.js', content: setBuf });
-    if (setExtBuf) fileEntries.push({ rel: 'src/runtime/settings-ext-beta4.js', content: setExtBuf });
+    const fileEntries = [{ rel: 'i18n-locales.js', fullPath: locPath }];
+    if (hasBrand) fileEntries.push({ rel: 'assets/brand-mark-svg.js', fullPath: brandPath });
+    if (hasAtlas) fileEntries.push({ rel: 'vendor/clawd-mascot/tavern-atlas-data.js', fullPath: atlasPath });
+    if (hasStageGl) fileEntries.push({ rel: 'vendor/clawd-mascot/octopath-stage-webgl.js', fullPath: stageGlPath });
+    if (hasI18nExt) fileEntries.push({ rel: 'src/runtime/i18n-ext-beta4.js', fullPath: i18nExtPath });
+    fileEntries.push({ rel: 'settings-panel.js', fullPath: setPath });
+    if (hasSetExt) fileEntries.push({ rel: 'src/runtime/settings-ext-beta4.js', fullPath: setExtPath });
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'settings',
       sig,
       fileEntries,
       opts,
       compileFn: () => {
-        const parts = [minifySingleSource(locBuf.toString('utf8'))];
-        if (brandBuf) parts.push(minifySingleSource(brandBuf.toString('utf8')));
-        if (atlasBuf) parts.push(atlasBuf.toString('utf8').trim());
-        if (stageGlBuf) parts.push(minifySingleSource(minifyEmbeddedGlslTemplates(stageGlBuf.toString('utf8'))));
-        if (i18nExtBuf) parts.push(minifySingleSource(i18nExtBuf.toString('utf8')));
-        parts.push(minifySingleSource(setBuf.toString('utf8')));
-        if (setExtBuf) parts.push(minifySingleSource(setExtBuf.toString('utf8')));
+        const parts = [minifySingleSource(fs.readFileSync(locPath, 'utf8'), { allowMemberProps: false })];
+        if (hasBrand) parts.push(minifySingleSource(fs.readFileSync(brandPath, 'utf8'), { allowMemberProps: false }));
+        if (hasAtlas) parts.push(fs.readFileSync(atlasPath, 'utf8').trim());
+        if (hasStageGl) parts.push(minifySingleSource(minifyEmbeddedGlslTemplates(fs.readFileSync(stageGlPath, 'utf8')), { allowMemberProps: false }));
+        if (hasI18nExt) parts.push(minifySingleSource(fs.readFileSync(i18nExtPath, 'utf8'), { allowMemberProps: false }));
+        parts.push(minifySingleSource(fs.readFileSync(setPath, 'utf8'), { allowMemberProps: false }));
+        if (hasSetExt) parts.push(minifySingleSource(fs.readFileSync(setExtPath, 'utf8'), { allowMemberProps: false }));
         const minRuntime = parts.join(';\n');
         const codeHash = computeHash(minRuntime);
         return { minRuntime, codeHash };
@@ -343,11 +333,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
-    const hopBuf = hasHop ? fs.readFileSync(hopPath) : null;
-    const buf = fs.readFileSync(mascotPath);
     const fileEntries = [];
-    if (hopBuf) fileEntries.push({ rel: 'src/runtime/mascot-hop-transition.js', content: hopBuf });
-    fileEntries.push({ rel: 'dual-mascot-rig.js', content: buf });
+    if (hasHop) fileEntries.push({ rel: 'src/runtime/mascot-hop-transition.js', fullPath: hopPath });
+    fileEntries.push({ rel: 'dual-mascot-rig.js', fullPath: mascotPath });
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'mascot',
       sig,
@@ -355,8 +343,8 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       opts,
       compileFn: () => {
         const parts = [];
-        if (hopBuf) parts.push(minifySingleSource(hopBuf.toString('utf8')));
-        parts.push(minifySingleSource(buf.toString('utf8')));
+        if (hasHop) parts.push(minifySingleSource(fs.readFileSync(hopPath, 'utf8'), { allowMemberProps: false }));
+        parts.push(minifySingleSource(fs.readFileSync(mascotPath, 'utf8'), { allowMemberProps: false }));
         const minRuntime = parts.join(';\n');
         const codeHash = computeHash(minRuntime);
         return { minRuntime, codeHash };
@@ -446,19 +434,17 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
-    const clientBuf = fs.readFileSync(clientPath);
-    const settingsBuf = fs.readFileSync(settingsUiPath);
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'suggester',
       sig,
       fileEntries: [
-        { rel: 'vendor/prompt-suggester/suggester-client.js', content: clientBuf },
-        { rel: 'vendor/prompt-suggester/suggester-settings-ui.js', content: settingsBuf },
+        { rel: 'vendor/prompt-suggester/suggester-client.js', fullPath: clientPath },
+        { rel: 'vendor/prompt-suggester/suggester-settings-ui.js', fullPath: settingsUiPath },
       ],
       opts,
       compileFn: () => {
-        const minClient = minifySingleSource(clientBuf.toString('utf8'));
-        const minSettingsUi = minifySingleSource(settingsBuf.toString('utf8'));
+        const minClient = minifySingleSource(fs.readFileSync(clientPath, 'utf8'), { allowMemberProps: false });
+        const minSettingsUi = minifySingleSource(fs.readFileSync(settingsUiPath, 'utf8'), { allowMemberProps: false });
         const codeHash = computeHash(`${minClient}\n${minSettingsUi}`);
         return { minClient, minSettingsUi, codeHash };
       },
@@ -497,8 +483,8 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       typeof resolvedOpts.customClientSource === 'string' &&
       typeof resolvedOpts.customSettingsUiSource === 'string'
     ) {
-      minClient = resolvedOpts.customClientSource ? minifySingleSource(resolvedOpts.customClientSource) : '';
-      minSettingsUi = resolvedOpts.customSettingsUiSource ? minifySingleSource(resolvedOpts.customSettingsUiSource) : '';
+      minClient = resolvedOpts.customClientSource ? minifySingleSource(resolvedOpts.customClientSource, { allowMemberProps: false }) : '';
+      minSettingsUi = resolvedOpts.customSettingsUiSource ? minifySingleSource(resolvedOpts.customSettingsUiSource, { allowMemberProps: false }) : '';
       codeHash = minClient && minSettingsUi ? computeHash(`${minClient}\n${minSettingsUi}`) : '';
     } else {
       const compiled = readCompiledSuggesterAssets(resolvedOpts);

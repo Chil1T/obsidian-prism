@@ -1,17 +1,49 @@
-// Obsidian Prism 守护进程主循环、fs.watch SHA-256 指纹热重载与启停生命周期（Tier 3，独立组合类，无原型 Mixin）
+// Obsidian Prism 守护进程主循环、fs.watch 端口/配置实时唤醒、24h 自适应退避与启停生命周期（Tier 3，独立组合类）
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import * as conversationArchive from '../../sidecars/daemon/conversation-archive.mjs';
-import { DEFAULT_ROOT_DIR, discoverActivePort, isPluginEnabledInHostConfig } from './constants.mjs';
+import {
+  DEFAULT_ROOT_DIR,
+  resolvePortFileCandidates,
+  discoverActivePort,
+  isPluginEnabledInHostConfig,
+} from './constants.mjs';
 import {
   HOST_FSM_STATES,
   ENTRY_FSM_STATES,
   transitionEntryState,
 } from './session-fsm.mjs';
+import { evalFireAndForgetSafe } from './channel-sync-engine.mjs';
 
 const require = createRequire(import.meta.url);
 const runInBgRecovery = require('../platform/run-in-bg-recovery.cjs');
+
+// Windows Node 24 下 fs.watch 收到 8.3 短路径（如 ADMINI~1）会触发 libuv 断言崩溃，调用前必须 realpathSync.native 归一化
+export function resolveSafeWatchDir(dirPath) {
+  if (!dirPath || typeof dirPath !== 'string') return '';
+  try {
+    return typeof fs.realpathSync?.native === 'function'
+      ? fs.realpathSync.native(dirPath)
+      : fs.realpathSync(dirPath);
+  } catch {
+    return path.resolve(dirPath);
+  }
+}
+
+function isPortFileCompleteAndValid(filePath) {
+  try {
+    const st = fs.lstatSync(filePath);
+    if (st.isSymbolicLink() || !st.isFile() || st.size <= 0 || st.size > 4096) return false;
+    const text = fs.readFileSync(filePath, 'utf8');
+    if (!text.includes('\n')) return false;
+    const firstLine = text.split(/\r?\n/, 1)[0]?.trim() || '';
+    const port = Number.parseInt(firstLine, 10);
+    return Number.isInteger(port) && port >= 1 && port <= 65535;
+  } catch {
+    return false;
+  }
+}
 
 export class DaemonLoop {
   constructor({
@@ -71,6 +103,8 @@ export class DaemonLoop {
     this.busy = false;
     this.timer = null;
     this.fsw = null;
+    this._portWatchers = [];
+    this._portRetryTimers = new Set();
     this._reloadTimer = null;
     this._pendingTick = false;
   }
@@ -137,6 +171,130 @@ export class DaemonLoop {
       getDefaultAppStoragePath: conversationArchive.getDefaultAntigravityAppStoragePath,
       log: (m) => this.log(m),
     });
+  }
+
+  // 24h 长期驻留自适应轮询退避：事件通道在线时拉长至 20-25s，由 fs.watch / Target 事件即时唤醒
+  _computeNextPollDelayMs() {
+    if (this.pollIntervalMs < 1000) return this.pollIntervalMs;
+    const reg = this.sessionRegistry;
+    const rg = this.relaunchGuard;
+    if (reg.hostFsmState === HOST_FSM_STATES.MISSING_CDP) {
+      const noPortWaitActive =
+        rg &&
+        rg._noPortSinceMs > 0 &&
+        Date.now() - rg._noPortSinceMs < (Number(rg.noPortRelaunchThresholdMs) || 8000);
+      if (noPortWaitActive) return this.pollIntervalMs;
+      return Math.max(this.pollIntervalMs, 20000);
+    }
+    if (
+      reg.hostFsmState === HOST_FSM_STATES.ATTACHED &&
+      reg.sessions.size > 0 &&
+      reg.browserSession &&
+      !reg.browserSession.closed &&
+      reg._browserDiscoverySubscribed
+    ) {
+      let allHealthyBackoff = true;
+      for (const entry of reg.sessions.values()) {
+        if (
+          !entry ||
+          entry.session?.closed ||
+          entry.verifyDirty ||
+          entry.fsmState !== ENTRY_FSM_STATES.HEALTHY_BACKOFF ||
+          (entry.healthyStreak || 0) < 2
+        ) {
+          allHealthyBackoff = false;
+          break;
+        }
+      }
+      if (allHealthyBackoff) return Math.max(this.pollIntervalMs, 25000);
+    }
+    return this.pollIntervalMs;
+  }
+
+  _scheduleNextPollTimer() {
+    if (!this.running) return;
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    const delayMs = this._computeNextPollDelayMs();
+    this.timer = setTimeout(async () => {
+      if (!this.running) return;
+      try {
+        await this._tick();
+      } catch {}
+      if (this.running) this._scheduleNextPollTimer();
+    }, delayMs);
+  }
+
+  _verifyPortFileAndWake(filesForDir, attempt = 0) {
+    if (!this.running) return;
+    for (const filePath of filesForDir) {
+      if (isPortFileCompleteAndValid(filePath)) {
+        this._scheduleImmediateTick(0);
+        return;
+      }
+    }
+    if (attempt >= 3) return;
+    const tid = setTimeout(() => {
+      this._portRetryTimers.delete(tid);
+      this._verifyPortFileAndWake(filesForDir, attempt + 1);
+    }, 20);
+    if (typeof tid.unref === 'function') tid.unref();
+    this._portRetryTimers.add(tid);
+  }
+
+  _startPortFileWatchers() {
+    this._stopPortFileWatchers();
+    const explicitPortFile = this._getPortFile();
+    const overridePort = this._getOverridePort();
+    if (overridePort && !explicitPortFile) return;
+
+    const candidates = explicitPortFile ? [explicitPortFile] : resolvePortFileCandidates();
+    const byDir = new Map();
+    for (const rawFile of candidates) {
+      if (!rawFile || typeof rawFile !== 'string') continue;
+      const absFile = path.resolve(rawFile);
+      const rawDir = path.dirname(absFile);
+      if (!fs.existsSync(rawDir)) continue;
+      const realDir = resolveSafeWatchDir(rawDir);
+      if (!realDir) continue;
+      let entry = byDir.get(realDir);
+      if (!entry) {
+        entry = { files: [], names: new Set() };
+        byDir.set(realDir, entry);
+      }
+      const normFile = path.join(realDir, path.basename(absFile));
+      entry.files.push(normFile);
+      entry.names.add(path.basename(absFile).toLowerCase());
+    }
+
+    for (const [realDir, info] of byDir.entries()) {
+      try {
+        const watcher = fs.watch(realDir, { persistent: false }, (_eventType, filename) => {
+          if (!this.running) return;
+          const base = filename ? path.basename(String(filename)).toLowerCase() : '';
+          if (base && !info.names.has(base)) return;
+          this._verifyPortFileAndWake(info.files, 0);
+        });
+        watcher.on?.('error', () => {
+          try { watcher.close(); } catch {}
+          const idx = this._portWatchers.indexOf(watcher);
+          if (idx >= 0) this._portWatchers.splice(idx, 1);
+        });
+        if (typeof watcher.unref === 'function') watcher.unref();
+        this._portWatchers.push(watcher);
+      } catch {}
+    }
+  }
+
+  _stopPortFileWatchers() {
+    for (const tid of this._portRetryTimers) clearTimeout(tid);
+    this._portRetryTimers.clear();
+    for (const w of this._portWatchers) {
+      try { w.close(); } catch {}
+    }
+    this._portWatchers = [];
   }
 
   async tick() {
@@ -294,14 +452,13 @@ export class DaemonLoop {
           continue;
         }
         if (!activeUrls.has(wsUrl)) {
-          // 防御 SPA 短暂标题漂移（如 Swarm "Full View" -> "Untitled Conversation"）：卸载前先复核页面真实 DOM
           const check = await this._verifyAndHealEntry(entry, true);
           if (check && check.alive && (!check.ready || check.isHostDom)) {
             continue;
           }
           if (!entry.session.closed) {
             await ch.teardownAllEntryChannelScripts(entry, entry.session, { removeBindings: true });
-            await entry.session.evaluate(cdp.REMOVE_EXPRESSION).catch(() => {});
+            await evalFireAndForgetSafe(entry.session, cdp.REMOVE_EXPRESSION, 0);
             if (entry._isoPauseTimers) {
               for (const tid of entry._isoPauseTimers) clearTimeout(tid);
               entry._isoPauseTimers.clear();
@@ -387,7 +544,7 @@ export class DaemonLoop {
     if (watchFiles) {
       let pendingCodeChange = false;
       const devWatch = process.env.AG_PRISM_DEV_WATCH === '1';
-      const watchTargetDir = devWatch ? rootDir : path.dirname(configPath);
+      const watchTargetDir = resolveSafeWatchDir(devWatch ? rootDir : path.dirname(configPath));
       const configBaseName = path.basename(configPath);
       let lastConfigMtimeMs = 0;
       try {
@@ -445,13 +602,17 @@ export class DaemonLoop {
             this._reloadTimer.unref();
           }
         });
+        this.fsw.on?.('error', () => {
+          try { this.fsw?.close(); } catch {}
+          this.fsw = null;
+        });
         if (this.fsw && typeof this.fsw.unref === 'function') this.fsw.unref();
       } catch {}
+
+      this._startPortFileWatchers();
     }
 
-    this.timer = setInterval(() => {
-      void this._tick();
-    }, this.pollIntervalMs);
+    this._scheduleNextPollTimer();
     void this._tick();
     upd.startTimers();
   }
@@ -464,20 +625,20 @@ export class DaemonLoop {
 
     reg.hostFsmState = HOST_FSM_STATES.STOPPING;
     tel.flushUsageDiskCache();
-    // 原生 sidecar 随宿主退出时：若开启了退出自动归档且非卸载动作，零 await 同步落盘内存目录索引并同步派生纯等待脱离任务
     upd.triggerDetachedExitArchiveSync(conversationArchive, cleanPageDom, _testOverrides);
 
     ch.services.markStopping();
     this.running = false;
     upd.stopTimers();
     if (this.timer) {
-      clearInterval(this.timer);
+      clearTimeout(this.timer);
       this.timer = null;
     }
     if (this._reloadTimer) {
       clearTimeout(this._reloadTimer);
       this._reloadTimer = null;
     }
+    this._stopPortFileWatchers();
     ch.clearFlushTimer();
     reg.clearAllTimers();
     if (this.fsw) {
@@ -490,6 +651,7 @@ export class DaemonLoop {
     await tel.disposeAll();
     await ch.services.disposeAll();
     this._releaseOwnership();
+    this.logger?.flush?.();
     reg.hostFsmState = HOST_FSM_STATES.IDLE;
   }
 }

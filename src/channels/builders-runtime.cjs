@@ -56,17 +56,16 @@ function createRuntimeChannelBuilders({ rootDir, readConfig, bundleCache }) {
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
-    const bufs = absPaths.map((p) => fs.readFileSync(p));
-    const fileEntries = rels.map((rel, i) => ({ rel, content: bufs[i] }));
+    const fileEntries = rels.map((rel, i) => ({ rel, fullPath: absPaths[i] }));
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'telemetry',
       sig,
       fileEntries,
       opts,
       compileFn: () => {
-        const vialMin = minifySingleSource(bufs[0].toString('utf8'));
-        const bridgeMin = minifySingleSource(minifyEmbeddedCssTemplate(bufs[1].toString('utf8')));
-        const fallbackMin = minifySingleSource(minifyEmbeddedCssTemplate(bufs[2].toString('utf8')));
+        const vialMin = minifySingleSource(fs.readFileSync(absPaths[0], 'utf8'), { allowMemberProps: false });
+        const bridgeMin = minifySingleSource(minifyEmbeddedCssTemplate(fs.readFileSync(absPaths[1], 'utf8')), { allowMemberProps: false });
+        const fallbackMin = minifySingleSource(minifyEmbeddedCssTemplate(fs.readFileSync(absPaths[2], 'utf8')), { allowMemberProps: false });
         const minRuntime = [vialMin, bridgeMin, fallbackMin].join(';\n');
         const codeHash = computeHash(minRuntime);
         return { minRuntime, codeHash };
@@ -197,20 +196,18 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
-    const upBuf = fs.readFileSync(upPath);
-    const coBuf = fs.readFileSync(coPath);
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'effortSlider',
       sig,
       fileEntries: [
-        { rel: upRel, content: upBuf },
-        { rel: coRel, content: coBuf },
+        { rel: upRel, fullPath: upPath },
+        { rel: coRel, fullPath: coPath },
       ],
       opts,
       compileFn: () => {
-        const upPre = stripUnusedUpstreamMenuObserver(upBuf.toString('utf8'));
-        const upMin = minifySingleSource(upPre);
-        const coMin = minifySingleSource(coBuf.toString('utf8'));
+        const upPre = stripUnusedUpstreamMenuObserver(fs.readFileSync(upPath, 'utf8'));
+        const upMin = minifySingleSource(upPre, { allowMemberProps: false });
+        const coMin = minifySingleSource(fs.readFileSync(coPath, 'utf8'), { allowMemberProps: false });
         const minRuntime =
           'globalThis.__agCodexEffortSliderDisableAutoBoot=!0;if(typeof window!=="undefined")window.__agCodexEffortSliderDisableAutoBoot=!0;\n' +
           `${upMin};\n${coMin}`;
@@ -338,14 +335,13 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
-    const buf = fs.readFileSync(filePath);
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'workbenchEnhancer',
       sig,
-      fileEntries: [{ rel: 'host-workbench-enhancer.js', content: buf }],
+      fileEntries: [{ rel: 'host-workbench-enhancer.js', fullPath: filePath }],
       opts,
       compileFn: () => {
-        const minRuntime = minifySingleSource(buf.toString('utf8'));
+        const minRuntime = minifySingleSource(fs.readFileSync(filePath, 'utf8'), { allowMemberProps: false });
         const codeHash = computeHash(minRuntime);
         return { minRuntime, codeHash };
       },
@@ -459,14 +455,13 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
-    const buf = fs.readFileSync(filePath);
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'contextMenu',
       sig,
-      fileEntries: [{ rel: 'context-menu-btw.js', content: buf }],
+      fileEntries: [{ rel: 'context-menu-btw.js', fullPath: filePath }],
       opts,
       compileFn: () => {
-        const minRuntime = minifySingleSource(buf.toString('utf8'));
+        const minRuntime = minifySingleSource(fs.readFileSync(filePath, 'utf8'), { allowMemberProps: false });
         const codeHash = computeHash(minRuntime);
         return { minRuntime, codeHash };
       },

@@ -1,6 +1,17 @@
 #!/usr/bin/env node
 // Obsidian Prism 守护进程兼容入口壳（薄 Facade：保持 plugin.json 启动路径、CLI 行为与全部 named exports 100% 兼容）
+import module from 'node:module';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+try {
+  if (typeof module.enableCompileCache === 'function') {
+    const compileCacheDir = path.join(os.homedir(), '.gemini', 'antigravity', 'sidecar_data', 'obsidian-prism', 'compile-cache');
+    module.enableCompileCache(compileCacheDir);
+  }
+} catch {}
+
 import {
   sanitizeSecretText,
   sanitizeLogLine,

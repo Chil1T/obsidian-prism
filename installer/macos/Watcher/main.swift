@@ -314,21 +314,14 @@ final class WatcherApp {
         try? "".write(toFile: logFile, atomically: false, encoding: .utf8)
 
         var manifest: PluginManifest
-        var currentExpr: String
-        var currentOmniExpr: String
-        var currentThoughtExpr: String
-        var currentInlineDiffExpr: String
-        var currentRuntimeChannels: [String: String]
+        var currentExpr = ""
+        var currentOmniExpr = ""
+        var currentThoughtExpr = ""
+        var currentInlineDiffExpr = ""
+        var currentRuntimeChannels: [String: String] = [:]
+        var fallbackScriptsLoaded = false
         do {
             manifest = try PluginManifest.load(baseDir: baseDir)
-            let initCfg = CdpHelper.readConfig(baseDir: baseDir, manifest: manifest)
-            currentExpr = try CdpHelper.buildInjectExpression(baseDir: baseDir, manifest: manifest)
-            currentOmniExpr = CdpHelper.buildOmniClientExpression(baseDir: baseDir, manifest: manifest)
-            currentThoughtExpr = CdpHelper.shouldEnableThought(initCfg)
-                ? CdpHelper.buildThoughtExpression(baseDir: baseDir, cfg: initCfg)
-                : ""
-            currentInlineDiffExpr = CdpHelper.buildInlineDiffExpression(baseDir: baseDir, cfg: initCfg)
-            currentRuntimeChannels = RuntimeChannelFallback.loadEnabledExpressions(baseDir: baseDir, cfg: initCfg)
         } catch {
             log(InstallerI18n.tr(
                 "[!] 初始化加载失败: \(error.localizedDescription)",
@@ -348,7 +341,29 @@ final class WatcherApp {
         let stateLock = NSLock()
         var attached: [String: AttachedEntry] = [:]
         var attaching: Set<String> = []
-        var lastDirStamp = computeDirStamp()
+        var lastDirStamp: [String: String] = [:]
+
+        // 懒加载兜底脚本：仅在确认原生 Daemon 离线、由 Watcher 接管时才读取拼接
+        let ensureFallbackScriptsLoaded: () -> Void = {
+            stateLock.lock()
+            if fallbackScriptsLoaded { stateLock.unlock(); return }
+            stateLock.unlock()
+            guard let m = try? PluginManifest.load(baseDir: self.baseDir),
+                  let expr = try? CdpHelper.buildInjectExpression(baseDir: self.baseDir, manifest: m) else { return }
+            let cfg = CdpHelper.readConfig(baseDir: self.baseDir, manifest: m)
+            let omni = CdpHelper.buildOmniClientExpression(baseDir: self.baseDir, manifest: m)
+            let thought = CdpHelper.shouldEnableThought(cfg) ? CdpHelper.buildThoughtExpression(baseDir: self.baseDir, cfg: cfg) : ""
+            let diff = CdpHelper.buildInlineDiffExpression(baseDir: self.baseDir, cfg: cfg)
+            let rt = RuntimeChannelFallback.loadEnabledExpressions(baseDir: self.baseDir, cfg: cfg)
+            let stamp = self.computeDirStamp()
+            stateLock.lock()
+            if !fallbackScriptsLoaded {
+                manifest = m; currentExpr = expr; currentOmniExpr = omni
+                currentThoughtExpr = thought; currentInlineDiffExpr = diff
+                currentRuntimeChannels = rt; lastDirStamp = stamp; fallbackScriptsLoaded = true
+            }
+            stateLock.unlock()
+        }
 
         let exitSem = DispatchSemaphore(value: 0)
         var shouldExit = false
@@ -544,6 +559,7 @@ final class WatcherApp {
                 }
 
                 _ = try s.send("Runtime.enable", params: nil, timeoutMs: 5000)
+                ensureFallbackScriptsLoaded()
                 stateLock.lock()
                 let bindingName = manifest.settingBinding
                 let exprSnap = currentExpr
@@ -627,6 +643,7 @@ final class WatcherApp {
                 currentThoughtExpr = nextThoughtExpr
                 currentInlineDiffExpr = nextInlineDiffExpr
                 currentRuntimeChannels = nextRuntimeChannels
+                fallbackScriptsLoaded = true
                 let entries = Array(attached.values)
                 stateLock.unlock()
 
@@ -711,6 +728,10 @@ final class WatcherApp {
         if dirFd >= 0 {
             let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: dirFd, eventMask: [.write, .rename, .extend, .delete], queue: reloadQueue)
             src.setEventHandler {
+                stateLock.lock()
+                let skipStandby = !fallbackScriptsLoaded && attached.isEmpty
+                stateLock.unlock()
+                if skipStandby { return }
                 let currentStamp = self.computeDirStamp()
                 stateLock.lock()
                 let changed = self.firstChangedFile(oldStamp: lastDirStamp, newStamp: currentStamp)
@@ -781,6 +802,11 @@ final class WatcherApp {
                         if CdpHelper.ensureNativeDaemonRunning(pluginDir: pluginDir, cdpPort: activeLivePort, log: { msg in
                             self.log("[+] \(msg)")
                         }) {
+                            // 1.5s 避让窗口等待原生 Daemon 落锁接管，防未压缩 codeHash 抢注引发二次全量重注
+                            for _ in 0..<10 where !isExiting() {
+                                if CdpHelper.isNativeDaemonAlive(pluginDir: pluginDir) { break }
+                                _ = exitSem.wait(timeout: .now() + .milliseconds(150))
+                            }
                             nativeAlive = true
                         }
                     }
@@ -823,9 +849,9 @@ final class WatcherApp {
                 ))
             }
 
-            // Poll fallback for in-place edits that don't fire directory vnode write events
-            reloadQueue.sync {
-                performReload(nil)
+            // DispatchSource 已监听目录变更；仅在 dirSource 不可用且进入兜底态时才降级扫描
+            if dirSource == nil && fallbackScriptsLoaded {
+                reloadQueue.sync { performReload(nil) }
             }
 
             if let stalePort = rawPort, livePort == nil {
@@ -913,6 +939,7 @@ final class WatcherApp {
 
             if let port = livePort,
                let pages = livePages {
+                ensureFallbackScriptsLoaded()
                 hadLiveHost = true
                 if lastPort != port {
                     stateLock.lock()

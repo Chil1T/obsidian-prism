@@ -1,4 +1,4 @@
-// .bundle-cache.json v2 高层编排：热模板复用、多通道磁盘缓存、延迟批量刷盘与 buildInjectExpression
+// .bundle-cache.json / 分片 .bundle-cache/ v2 高层编排：热模板复用、stat 快速验签、多通道磁盘缓存、延迟批量刷盘与 buildInjectExpression
 'use strict';
 
 const path = require('path');
@@ -7,10 +7,14 @@ const { SETTING_BINDING, reconcileConfigAliases } = require('../config/schema.cj
 const {
   BUNDLE_CACHE_SCHEMA_VERSION,
   BUNDLE_CACHE_FILENAME,
+  BUNDLE_CACHE_SHARD_DIRNAME,
   BUNDLE_CACHE_MAX_ENTRIES,
   CHANNEL_CACHE_NAMES,
+  CHANNEL_SUB_SLOTS,
   SHA256_HEX_RE,
   resolveBundleCachePathOption,
+  isShardedCachePath,
+  resolveChannelStatsKey,
   isValidBundleBaseTemplate,
   isValidBundleCacheEntry,
   extractValidChannelsMap,
@@ -25,6 +29,7 @@ function createInitialBundleCacheStats() {
   return {
     diskHits: 0,
     diskBaseHits: 0,
+    diskFastStatHits: 0,
     diskMisses: 0,
     diskWrites: 0,
     diskWriteFailures: 0,
@@ -34,6 +39,7 @@ function createInitialBundleCacheStats() {
     cssMinifyRuns: 0,
     deferredExprHashRuns: 0,
     channelDiskHits: 0,
+    channelFastStatHits: 0,
     channelDiskMisses: 0,
     channelCompileRuns: 0,
     channelHitsByName,
@@ -90,24 +96,42 @@ function createBundleCache({
     io.invalidateBundleCacheRootCache();
   }
 
-  function queuePendingChannelCacheWrite(cachePath, channelName, record) {
+  function queuePendingChannelCacheWrite(cachePath, channelName, record, opts = null) {
     if (!cachePath || !channelName || !record) return;
     const resolved = path.resolve(cachePath);
     let bucket = _pendingChannelCacheWrites.get(resolved);
     if (!bucket) {
-      bucket = {};
+      bucket = { records: {}, opts };
       _pendingChannelCacheWrites.set(resolved, bucket);
     }
-    bucket[channelName] = record;
+    bucket.records[channelName] = record;
+    if (opts && opts.sharded !== undefined) bucket.opts = opts;
   }
 
-  function persistChannelsOnlySync(cachePath, channelUpdates) {
+  function persistChannelsOnlySync(cachePath, channelUpdates, opts = null) {
     if (!cachePath || !channelUpdates || typeof channelUpdates !== 'object') return false;
     const resolved = path.resolve(cachePath);
-    const existing = io.readValidBundleCacheRootSync(resolved);
+    const validUpdates = extractValidChannelsMap(channelUpdates);
+    const keys = Object.keys(validUpdates);
+    if (keys.length === 0) return false;
+
+    if (isShardedCachePath(resolved, opts)) {
+      let anyOk = false;
+      for (const name of keys) {
+        if (io.writeChannelShardAtomicSync(resolved, name, validUpdates[name], opts)) {
+          stats.diskWrites += 1;
+          anyOk = true;
+        } else {
+          stats.diskWriteFailures += 1;
+        }
+      }
+      return anyOk;
+    }
+
+    const existing = io.readValidBundleCacheRootSync(resolved, false, opts);
     const mergedChannels = {
       ...extractValidChannelsMap(existing?.channels),
-      ...extractValidChannelsMap(channelUpdates),
+      ...validUpdates,
     };
     if (Object.keys(mergedChannels).length === 0) return false;
     const payload =
@@ -120,6 +144,8 @@ function createBundleCache({
             schemaVersion: BUNDLE_CACHE_SCHEMA_VERSION,
             pluginVersion,
             sourceHash: existing.sourceHash,
+            ...(existing.sourceStats ? { sourceStats: existing.sourceStats } : {}),
+            ...(existing.statsBindingSha256 ? { statsBindingSha256: existing.statsBindingSha256 } : {}),
             codeHash: existing.codeHash,
             basePrefix: existing.basePrefix,
             baseSuffix: existing.baseSuffix,
@@ -132,7 +158,7 @@ function createBundleCache({
             pluginVersion,
             channels: mergedChannels,
           };
-    if (io.writeBundleCacheAtomicSync(resolved, payload)) {
+    if (io.writeBundleCacheAtomicSync(resolved, payload, opts)) {
       stats.diskWrites += 1;
       return true;
     }
@@ -172,8 +198,45 @@ function createBundleCache({
 
     const resolvedCachePath = path.resolve(cachePath);
     stats.lastCachePath = resolvedCachePath;
-    const sourceHash = io.computeChannelSourceHash(channelName, fileEntries, extraTag);
+    let computedSourceHash = '';
+    const ensureSourceHash = () => {
+      if (!computedSourceHash) {
+        computedSourceHash = io.computeChannelSourceHash(channelName, fileEntries, extraTag);
+      }
+      return computedSourceHash;
+    };
 
+    const diskHit = io.tryReadChannelCacheHitSync(resolvedCachePath, channelName, ensureSourceHash, {
+      fileEntries,
+      extraTag,
+      opts,
+    });
+    if (diskHit.hit) {
+      const hitSourceHash = diskHit.sourceHash || computedSourceHash;
+      if (
+        curMem &&
+        curMem.sourceHash === hitSourceHash &&
+        curMem.cachedPaths &&
+        curMem.cachedPaths.has(resolvedCachePath)
+      ) {
+        return curMem;
+      }
+      stats.channelDiskHits += 1;
+      if (diskHit.usedFastStat) stats.channelFastStatHits += 1;
+      const statsKey = resolveChannelStatsKey(channelName);
+      stats.channelHitsByName[statsKey] = (stats.channelHitsByName[statsKey] || 0) + 1;
+      const restored = fromCacheEntry(diskHit.entry);
+      const cachedPaths =
+        curMem && curMem.sourceHash === hitSourceHash && curMem.cachedPaths
+          ? curMem.cachedPaths
+          : new Set();
+      cachedPaths.add(resolvedCachePath);
+      const nextMem = { ...restored, sig, sourceHash: hitSourceHash, cachedPaths };
+      updateMem(nextMem);
+      return nextMem;
+    }
+
+    const sourceHash = ensureSourceHash();
     if (
       curMem &&
       curMem.sourceHash === sourceHash &&
@@ -181,21 +244,6 @@ function createBundleCache({
       curMem.cachedPaths.has(resolvedCachePath)
     ) {
       return curMem;
-    }
-
-    const diskHit = io.tryReadChannelCacheHitSync(resolvedCachePath, channelName, sourceHash);
-    if (diskHit.hit) {
-      stats.channelDiskHits += 1;
-      stats.channelHitsByName[channelName] = (stats.channelHitsByName[channelName] || 0) + 1;
-      const restored = fromCacheEntry(diskHit.entry);
-      const cachedPaths =
-        curMem && curMem.sourceHash === sourceHash && curMem.cachedPaths
-          ? curMem.cachedPaths
-          : new Set();
-      cachedPaths.add(resolvedCachePath);
-      const nextMem = { ...restored, sig, sourceHash, cachedPaths };
-      updateMem(nextMem);
-      return nextMem;
     }
 
     stats.channelDiskMisses += 1;
@@ -206,14 +254,16 @@ function createBundleCache({
       stats.channelCompileRuns += 1;
       assets = compileFn();
     }
-    const record = toCacheEntry(assets, sourceHash);
+    const baseRecord = toCacheEntry(assets, sourceHash);
+    const statMeta = io.getChannelSourceStatsMeta(channelName, fileEntries, extraTag, sourceHash);
+    const record = statMeta ? { ...baseRecord, ...statMeta } : baseRecord;
     const cachedPaths =
       curMem && curMem.sourceHash === sourceHash && curMem.cachedPaths
         ? curMem.cachedPaths
         : new Set();
     if (deferCacheWrite) {
-      queuePendingChannelCacheWrite(resolvedCachePath, channelName, record);
-    } else if (persistChannelsOnlySync(resolvedCachePath, { [channelName]: record })) {
+      queuePendingChannelCacheWrite(resolvedCachePath, channelName, record, opts);
+    } else if (persistChannelsOnlySync(resolvedCachePath, { [channelName]: record }, opts)) {
       cachedPaths.add(resolvedCachePath);
     }
     const nextMem = { ...assets, sig, sourceHash, cachedPaths };
@@ -227,15 +277,17 @@ function createBundleCache({
     baseForDisk,
     newEntry,
     existingRawEntries = null,
-    extraChannels = null
+    extraChannels = null,
+    opts = null
   ) {
     if (!cachePath || !sourceHash || !baseForDisk || !newEntry) return false;
     const resolved = path.resolve(cachePath);
+    const sharded = isShardedCachePath(resolved, opts);
     let rawEntries = Array.isArray(existingRawEntries) ? existingRawEntries : null;
     let existingChannels = {};
-    const existingRoot = io.readValidBundleCacheRootSync(resolved);
+    const existingRoot = io.readValidBundleCacheRootSync(resolved, false, opts);
     if (existingRoot) {
-      existingChannels = extractValidChannelsMap(existingRoot.channels);
+      if (!sharded) existingChannels = extractValidChannelsMap(existingRoot.channels);
       if (rawEntries === null && existingRoot.sourceHash === sourceHash && Array.isArray(existingRoot.entries)) {
         rawEntries = existingRoot.entries;
       }
@@ -259,6 +311,9 @@ function createBundleCache({
         seen.add(rawEnt.configHash);
         retained.push({
           configHash: rawEnt.configHash,
+          ...(typeof rawEnt.fastConfigKey === 'string' && SHA256_HEX_RE.test(rawEnt.fastConfigKey)
+            ? { fastConfigKey: rawEnt.fastConfigKey }
+            : {}),
           codeHash: rawEnt.codeHash,
           bootCfgJson: rawEnt.bootCfgJson,
           exprSha256: rawEnt.exprSha256,
@@ -266,10 +321,42 @@ function createBundleCache({
         });
       }
     }
-    const pendingForPath = _pendingChannelCacheWrites.get(resolved) || null;
-    if (pendingForPath) {
+    const pendingBucket = _pendingChannelCacheWrites.get(resolved) || null;
+    if (pendingBucket) {
       _pendingChannelCacheWrites.delete(resolved);
     }
+    const pendingForPath = pendingBucket ? pendingBucket.records : null;
+    const statMeta = io.getBundleSourceStatsMeta(sourceHash);
+
+    if (sharded) {
+      const ch1Payload = {
+        schemaVersion: BUNDLE_CACHE_SCHEMA_VERSION,
+        pluginVersion,
+        sourceHash,
+        ...(statMeta ? statMeta : {}),
+        codeHash: baseForDisk.codeHash,
+        basePrefix: baseForDisk.basePrefix,
+        baseSuffix: baseForDisk.baseSuffix,
+        baseSha256: baseForDisk.baseSha256,
+        entries: [newEntry, ...retained],
+      };
+      let ch1Ok = false;
+      if (io.writeBundleCacheAtomicSync(resolved, ch1Payload, opts)) {
+        stats.diskWrites += 1;
+        ch1Ok = true;
+      } else {
+        stats.diskWriteFailures += 1;
+      }
+      const shardChannels = {
+        ...extractValidChannelsMap(pendingForPath),
+        ...extractValidChannelsMap(extraChannels),
+      };
+      if (Object.keys(shardChannels).length > 0) {
+        persistChannelsOnlySync(resolved, shardChannels, opts);
+      }
+      return ch1Ok;
+    }
+
     const mergedChannels = {
       ...existingChannels,
       ...extractValidChannelsMap(pendingForPath),
@@ -279,6 +366,7 @@ function createBundleCache({
       schemaVersion: BUNDLE_CACHE_SCHEMA_VERSION,
       pluginVersion,
       sourceHash,
+      ...(statMeta ? statMeta : {}),
       codeHash: baseForDisk.codeHash,
       basePrefix: baseForDisk.basePrefix,
       baseSuffix: baseForDisk.baseSuffix,
@@ -286,7 +374,7 @@ function createBundleCache({
       entries: [newEntry, ...retained],
       ...(Object.keys(mergedChannels).length > 0 ? { channels: mergedChannels } : {}),
     };
-    if (io.writeBundleCacheAtomicSync(resolved, payload)) {
+    if (io.writeBundleCacheAtomicSync(resolved, payload, opts)) {
       stats.diskWrites += 1;
       return true;
     }
@@ -297,7 +385,8 @@ function createBundleCache({
   function markChannelCachedOnPath(cachePath, chMap) {
     if (!cachePath || !chMap || typeof chMap !== 'object') return;
     const resolved = path.resolve(cachePath);
-    for (const name of CHANNEL_CACHE_NAMES) {
+    const allNames = [...CHANNEL_CACHE_NAMES, ...Object.keys(CHANNEL_SUB_SLOTS)];
+    for (const name of allNames) {
       const rec = chMap[name];
       const mem = _channelMemCaches.get(name);
       if (rec && mem && mem.sourceHash && mem.sourceHash === rec.sourceHash && mem.cachedPaths) {
@@ -315,10 +404,11 @@ function createBundleCache({
     let anyWritten = false;
     if (pending) {
       const resolved = path.resolve(pending.cachePath);
-      const matchedChannels = pendingChannelsSnapshot.get(resolved) || null;
-      if (matchedChannels) {
+      const matchedBucket = pendingChannelsSnapshot.get(resolved) || null;
+      if (matchedBucket) {
         pendingChannelsSnapshot.delete(resolved);
       }
+      const matchedChannels = matchedBucket ? matchedBucket.records : null;
       if (!pending.newEntry.exprSha256) {
         const exprText =
           typeof pending.deferredExpr === 'string'
@@ -334,7 +424,8 @@ function createBundleCache({
           pending.baseForDisk,
           pending.newEntry,
           null,
-          matchedChannels
+          matchedChannels,
+          pending.opts || matchedBucket?.opts || null
         )
       ) {
         markChannelCachedOnPath(resolved, matchedChannels);
@@ -342,8 +433,9 @@ function createBundleCache({
       }
     }
 
-    for (const [chPath, chMap] of pendingChannelsSnapshot.entries()) {
-      if (persistChannelsOnlySync(chPath, chMap)) {
+    for (const [chPath, bucket] of pendingChannelsSnapshot.entries()) {
+      const chMap = bucket?.records || null;
+      if (chMap && persistChannelsOnlySync(chPath, chMap, bucket?.opts || null)) {
         markChannelCachedOnPath(chPath, chMap);
         anyWritten = true;
       }
@@ -374,15 +466,21 @@ function createBundleCache({
 
   function buildInjectExpression(customConfig, opts = null) {
     const config = customConfig ? reconcileConfigAliases(customConfig) : readConfig();
-    const uiSlice = templates.buildRuntimeUiSlicePayload(config);
-    const buildBootCfgJson = (codeHash) =>
-      JSON.stringify({
+    let _lazyUiSlice = undefined;
+    const getUiSlice = () => {
+      if (_lazyUiSlice === undefined) _lazyUiSlice = templates.buildRuntimeUiSlicePayload(config);
+      return _lazyUiSlice;
+    };
+    const buildBootCfgJson = (codeHash) => {
+      const uiSlice = getUiSlice();
+      return JSON.stringify({
         ...config,
         ...(uiSlice ? { __uiSlice: uiSlice } : {}),
         binding: SETTING_BINDING,
         codeHash,
         __fromFile: true,
       });
+    };
     const cachePath = resolveBundleCachePathOption(opts);
     const deferCacheWrite = Boolean(opts && opts.deferCacheWrite === true);
 
@@ -392,12 +490,13 @@ function createBundleCache({
           const codeHash = _warmBaseCache.codeHash;
           const bootCfgJson = buildBootCfgJson(codeHash);
           const expr = _warmBaseCache.basePrefix + bootCfgJson + _warmBaseCache.baseSuffix;
-          const configHash = io.computeBundleConfigHash(config);
+          const configHash = io.computeBundleConfigHash(config, getUiSlice());
           stats.diskBaseHits += 1;
           stats.lastOutcome = 'warm-base-hit';
           stats.lastCachePath = cachePath;
           _pendingDiskCachePersist = {
             cachePath,
+            opts,
             sourceHash: _warmBaseCache.sourceHash,
             baseForDisk: {
               codeHash,
@@ -421,6 +520,7 @@ function createBundleCache({
 
     let sourceHash = '';
     let configHash = '';
+    let fastConfigKey = '';
     let existingRawEntries = [];
     let cachedBaseTemplate = null;
     let forceInvalidateMem = false;
@@ -428,17 +528,32 @@ function createBundleCache({
     if (cachePath) {
       stats.lastCachePath = cachePath;
       try {
-        sourceHash = io.computeBundleSourceHash();
-        configHash = io.computeBundleConfigHash(config);
-        const lookup = io.tryReadBundleCacheHitSync(cachePath, sourceHash, configHash);
+        fastConfigKey = io.computeBundleFastConfigKey(config);
+        const ensureConfigHash = () => {
+          if (!configHash) configHash = io.computeBundleConfigHash(config, getUiSlice());
+          return configHash;
+        };
+        const ensureSourceHash = () => {
+          if (!sourceHash) sourceHash = io.computeBundleSourceHash();
+          return sourceHash;
+        };
+        const lookup = io.tryReadBundleCacheHitSync(
+          cachePath,
+          ensureSourceHash,
+          ensureConfigHash,
+          opts && typeof opts === 'object' ? { ...opts, fastConfigKey } : { fastConfigKey }
+        );
+        if (lookup.sourceHash) sourceHash = lookup.sourceHash;
+        if (lookup.configHash) configHash = lookup.configHash;
         if (lookup.hit) {
           stats.diskHits += 1;
+          if (lookup.usedFastStat) stats.diskFastStatHits += 1;
           stats.lastOutcome = 'disk-hit';
           _diskCacheLastSource = { sourceHash, codeHash: lookup.codeHash };
           if (lookup.baseTemplate) {
             try {
               _warmBaseCache = {
-                statSig: io.getBundleSourceStatSig(),
+                statSig: lookup.statSig || io.getBundleSourceStatSig(),
                 sourceHash,
                 ...lookup.baseTemplate,
               };
@@ -446,6 +561,8 @@ function createBundleCache({
           }
           return lookup.expr;
         }
+        if (!sourceHash) sourceHash = ensureSourceHash();
+        if (!configHash) configHash = ensureConfigHash();
         stats.diskMisses += 1;
         if (lookup.reason === 'source-hash-mismatch') {
           forceInvalidateMem = true;
@@ -527,10 +644,12 @@ function createBundleCache({
       if (deferCacheWrite) {
         _pendingDiskCachePersist = {
           cachePath,
+          opts,
           sourceHash,
           baseForDisk,
           newEntry: {
             configHash,
+            ...(fastConfigKey ? { fastConfigKey } : {}),
             codeHash,
             bootCfgJson,
             exprSha256: null,
@@ -541,13 +660,14 @@ function createBundleCache({
       } else {
         const newEntry = {
           configHash,
+          ...(fastConfigKey ? { fastConfigKey } : {}),
           codeHash,
           bootCfgJson,
           exprSha256: sha256Text(expr),
           updatedAt: Date.now(),
         };
         _pendingDiskCachePersist = null;
-        persistBundleCacheRecordSync(cachePath, sourceHash, baseForDisk, newEntry, existingRawEntries);
+        persistBundleCacheRecordSync(cachePath, sourceHash, baseForDisk, newEntry, existingRawEntries, null, opts);
       }
     }
 
@@ -557,6 +677,7 @@ function createBundleCache({
   return {
     BUNDLE_CACHE_SCHEMA_VERSION,
     BUNDLE_CACHE_FILENAME,
+    BUNDLE_CACHE_SHARD_DIRNAME,
     BUNDLE_CACHE_MAX_ENTRIES,
     getChannelMemCache,
     setChannelMemCache,
@@ -574,6 +695,7 @@ function createBundleCache({
 module.exports = {
   BUNDLE_CACHE_SCHEMA_VERSION,
   BUNDLE_CACHE_FILENAME,
+  BUNDLE_CACHE_SHARD_DIRNAME,
   BUNDLE_CACHE_MAX_ENTRIES,
   createInitialBundleCacheStats,
   createBundleCache,

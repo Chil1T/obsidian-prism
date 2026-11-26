@@ -52,7 +52,7 @@ export class SessionRegistry {
     this._lastListPagesAt = 0;
     this._forceListPagesNextTick = false;
     const fallbackListMs = Number(deps.listPagesFallbackIntervalMs);
-    this._listPagesFallbackIntervalMs = Number.isFinite(fallbackListMs) ? Math.max(100, fallbackListMs) : 12000;
+    this._listPagesFallbackIntervalMs = Number.isFinite(fallbackListMs) ? Math.max(100, fallbackListMs) : 60000;
     this._discoverTimer = null;
     this._discoverTimerTargetAt = 0;
     this._managedTimers = new Set();
@@ -436,27 +436,41 @@ export class SessionRegistry {
         }
       });
 
-      await session.send('Page.enable');
-      await this.ensureMainFrameId(entry, 4500, 1);
-      await session.send('Runtime.enable');
       session.on('Runtime.bindingCalled', (params) => {
         void this._deps.onBindingCall(entry, params || {});
       });
 
       const liveCdp = this._deps.getCdp();
-      await session.send('Runtime.addBinding', { name: liveCdp.SETTING_BINDING });
-      await session.send('Runtime.addBinding', { name: liveCdp.LEGACY_SETTING_BINDING }).catch(() => {});
-      await session.send('Runtime.addBinding', { name: METRICS_BINDING });
-      await session.send('Runtime.addBinding', { name: REPO_BINDING });
-      await session.send('Runtime.addBinding', { name: THOUGHT_BINDING });
-      await session.send('Runtime.addBinding', { name: USAGE_BINDING });
-      await session.send('Runtime.addBinding', { name: INLINE_DIFF_BINDING });
+      const omniEnabled = Boolean(this._deps.isOmniEnabled?.());
+      const sidebarEnabled = Boolean(this._deps.isSidebarStudioEnabled?.());
+      const seenBindings = new Set();
+      const addUniqueBinding = (bindingName, swallowErr = false) => {
+        if (!bindingName || seenBindings.has(bindingName)) return null;
+        seenBindings.add(bindingName);
+        const p = session.send('Runtime.addBinding', { name: bindingName });
+        return swallowErr ? p.catch(() => {}) : p;
+      };
+
+      // 并发打包 CDP 域握手与去重后的 Runtime.addBinding（11 RTT -> 1 并发批次）
+      const handshakeTasks = [
+        session.send('Page.enable'),
+        this.ensureMainFrameId(entry, 4500, 1),
+        session.send('Runtime.enable'),
+        addUniqueBinding(liveCdp.SETTING_BINDING),
+        addUniqueBinding(liveCdp.LEGACY_SETTING_BINDING, true),
+        addUniqueBinding(METRICS_BINDING),
+        addUniqueBinding(REPO_BINDING),
+        addUniqueBinding(THOUGHT_BINDING),
+        addUniqueBinding(USAGE_BINDING),
+        addUniqueBinding(INLINE_DIFF_BINDING),
+        omniEnabled ? addUniqueBinding(OMNI_BINDING) : null,
+        sidebarEnabled ? addUniqueBinding(SIDEBAR_BINDING) : null,
+      ].filter(Boolean);
+      await Promise.all(handshakeTasks);
+      entry.thoughtBindingAdded = true;
       entry.inlineDiffBindingAdded = true;
-      if (this._deps.isOmniEnabled?.()) await session.send('Runtime.addBinding', { name: OMNI_BINDING });
-      if (this._deps.isSidebarStudioEnabled?.()) {
-        await session.send('Runtime.addBinding', { name: SIDEBAR_BINDING });
-        entry.sidebarBindingAdded = true;
-      }
+      if (omniEnabled) entry.omniBindingAdded = true;
+      if (sidebarEnabled) entry.sidebarBindingAdded = true;
 
       const healOnNav = () => {
         if (!this._deps.isRunning() || entry.session.closed) return;

@@ -1,4 +1,4 @@
-// Obsidian Prism 全 16 通道表驱动挂载、增量同步、配置广播收敛与拆卸引擎（消费 CHANNEL_REGISTRY，无原型 Mixin）
+// Obsidian Prism 全 16 通道表驱动挂载、3 级关键路径流水线、按需 Ch8 下发、配置广播收敛与拆卸引擎（消费 CHANNEL_REGISTRY）
 import { OMNI_BINDING } from '../../vendor/omni-viewer/omni-server.mjs';
 import {
   THOUGHT_BINDING,
@@ -21,9 +21,9 @@ import {
 import { CHANNEL_STATIC_SPECS, buildSidebarCleanupExpression } from './channel-coordinator.mjs';
 
 const BINDING_BY_CHANNEL = Object.freeze({
-  omni: { name: () => OMNI_BINDING, addedField: null },
+  omni: { name: () => OMNI_BINDING, addedField: 'omniBindingAdded' },
   sidebar: { name: () => SIDEBAR_BINDING, addedField: 'sidebarBindingAdded' },
-  thought: { name: () => THOUGHT_BINDING, addedField: null },
+  thought: { name: () => THOUGHT_BINDING, addedField: 'thoughtBindingAdded' },
   inlineDiff: { name: () => INLINE_DIFF_BINDING, addedField: 'inlineDiffBindingAdded' },
   wallpaper: { name: (cdp) => cdp?.WALLPAPER_BINDING || WALLPAPER_BINDING, addedField: 'wallpaperBindingAdded' },
   suggester: { name: (cdp) => cdp?.SUGGESTER_BINDING || SUGGESTER_BINDING, addedField: 'suggesterBindingAdded' },
@@ -32,6 +32,52 @@ const BINDING_BY_CHANNEL = Object.freeze({
 const PERSISTENT_SPECS = Object.freeze(
   CHANNEL_STATIC_SPECS.filter((s) => s.injectMode === 'main-page-persistent').sort((a, b) => a.order - b.order)
 );
+
+const PERIODIC_STUB_CLEANUP_SNIPPET =
+  "try{window.__agPrismPeriodicStub?.destroy?.()}catch{}for(const k of['__agPrismPeriodicStub','__agPrismPeriodicStubFactory','__agPeriodicPendingOpen','__agPeriodicFullLoaded','__agPeriodicStubHash']){try{delete window[k]}catch{}try{delete globalThis[k]}catch{}}";
+
+function isTier2PipelineSpec(spec) {
+  return spec.tier === 'core' || spec.tier === 'i18n' || spec.id === 'telemetry' || spec.id === 'homeStudio';
+}
+
+export function evalFireAndForgetSafe(session, expr, timeoutMs = 0, executionContextId = null) {
+  if (!session || session.closed || !expr) return Promise.resolve();
+  const trimmed = String(expr).trim().replace(/;+\s*$/, '');
+  const expression = `${trimmed};void 0`;
+  const hasCtx = typeof executionContextId === 'number' && executionContextId > 0;
+  const hasOwnEval = Object.prototype.hasOwnProperty.call(session, 'evaluate') && typeof session.evaluate === 'function';
+  if (typeof session.send === 'function' && (hasCtx || !hasOwnEval || Boolean(session.parent))) {
+    const params = { expression, returnByValue: false, awaitPromise: false };
+    if (hasCtx) params.contextId = executionContextId;
+    const p = timeoutMs > 0 ? session.send('Runtime.evaluate', params, timeoutMs) : session.send('Runtime.evaluate', params);
+    return p.catch(() => {});
+  }
+  if (typeof session.evaluate === 'function') {
+    const p = timeoutMs > 0 ? session.evaluate(expr, false, timeoutMs) : session.evaluate(expr);
+    return p.catch(() => {});
+  }
+  return Promise.resolve();
+}
+
+function buildEffectiveCleanupExpr(orch, spec, forceSidebarCleanup = false) {
+  if (spec.id === 'sidebar') return buildSidebarCleanupExpression(forceSidebarCleanup);
+  const base = orch.getChannelCleanupExpression(spec);
+  if (spec.id === 'periodicPicker') {
+    return `(() => { ${PERIODIC_STUB_CLEANUP_SNIPPET} ${base ? `try { (${base}); } catch {}` : ''} })()`;
+  }
+  return base;
+}
+
+function resetEntryChannelState(entry, spec, markSkipped = false) {
+  const f = spec.fields;
+  if (f.mountedField) entry[f.mountedField] = false;
+  if (f.sigField) entry[f.sigField] = '';
+  if (f.scriptSigField) entry[f.scriptSigField] = '';
+  if (f.skippedField) entry[f.skippedField] = Boolean(markSkipped);
+  if (spec.id === 'hostI18n') entry.hostI18nSkippedByLiveCfg = false;
+  if (spec.id === 'periodicPicker') entry.periodicPickerFullDelivered = false;
+  recordChannelOff(entry, spec.id);
+}
 
 export async function evalChannelExpressionSafe(session, expr, timeoutMs) {
   try {
@@ -53,11 +99,10 @@ export function extractChannelFailureDetail(evalRes) {
   const errStr = typeof evalRes.error === 'string' && evalRes.error.trim() ? evalRes.error.trim() : '';
   const statusStr = typeof evalRes.status === 'string' && evalRes.status.trim() ? evalRes.status.trim() : '';
   const stackStr = typeof evalRes.stack === 'string' && evalRes.stack.trim() ? evalRes.stack.trim() : '';
-  const hasCrashDetail = Boolean(errStr || statusStr === 'error' || statusStr === 'eval-error');
   return {
     error: errStr || statusStr || 'channel-eval-failed',
     stack: stackStr,
-    hasCrashDetail,
+    hasCrashDetail: Boolean(errStr || statusStr === 'error' || statusStr === 'eval-error'),
   };
 }
 
@@ -96,19 +141,31 @@ export async function removeChannelBinding(orch, entry, channelId, timeoutMs = 2
   if (meta.addedField) entry[meta.addedField] = false;
 }
 
-export async function replaceEntryNewDocScript(entry, scriptProp, source) {
-  if (!entry || !scriptProp || entry.session?.closed) return null;
-  if (entry[scriptProp]) {
-    await entry.session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry[scriptProp] }).catch(() => {});
+export async function replaceEntryNewDocScript(entry, scriptProp, source, sessionOverride = null) {
+  const session = sessionOverride || entry?.session;
+  if (!entry || !scriptProp) return null;
+  if (!entry._newDocLocks) entry._newDocLocks = new Map();
+  const prev = entry._newDocLocks.get(scriptProp) || Promise.resolve();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  entry._newDocLocks.set(scriptProp, gate);
+  await prev;
+  try {
+    if (entry[scriptProp] && session && !session.closed) {
+      await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry[scriptProp] }).catch(() => {});
+    }
     entry[scriptProp] = null;
+    if (!source || !session || session.closed) return null;
+    const addRes = await session.send('Page.addScriptToEvaluateOnNewDocument', { source }).catch(() => null);
+    if (addRes && addRes.identifier) {
+      entry[scriptProp] = addRes.identifier;
+      return addRes.identifier;
+    }
+    return null;
+  } finally {
+    if (entry._newDocLocks.get(scriptProp) === gate) entry._newDocLocks.delete(scriptProp);
+    release();
   }
-  if (!source) return null;
-  const addRes = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', { source }).catch(() => null);
-  if (addRes && addRes.identifier) {
-    entry[scriptProp] = addRes.identifier;
-    return addRes.identifier;
-  }
-  return null;
 }
 
 export async function syncPersistentNewDocScript(entry, enabled, source, scriptProp, sigProp, targetSig) {
@@ -149,28 +206,115 @@ export async function recordTrackableSkipOutcome(orch, entry, spec, evalRes, has
   }
 }
 
+async function recordPersistentEvalOutcome(orch, entry, spec, evalRes, { chHash, chSig, scriptId, stage, now = Date.now(), resetThoughtOnFail = false }) {
+  const id = spec.id;
+  const f = spec.fields;
+  if (spec.tracksSkippedNonHost) {
+    await recordTrackableSkipOutcome(orch, entry, spec, evalRes, chHash, now, stage);
+  } else if (id === 'omni') {
+    if (evalRes && evalRes.ok !== false) recordChannelSuccess(entry, 'omni', { scriptId });
+    else recordChannelEvalFailure(orch, entry, 'omni', evalRes, { now, stage });
+  } else if (id === 'sidebar') {
+    if (evalRes === null || evalRes?.status === 'error' || evalRes?.status === 'eval-error' || (evalRes?.ok === false && evalRes?.error)) {
+      recordChannelEvalFailure(orch, entry, 'sidebar', evalRes, { now, stage });
+    } else {
+      entry.sidebarMounted = true;
+      recordChannelSuccess(entry, 'sidebar', { scriptId });
+    }
+  } else if (id === 'hostI18n') {
+    if (evalRes?.skippedByLiveCfg) {
+      entry.hostI18nMounted = false;
+      entry.hostI18nSkippedByLiveCfg = true;
+      entry.lastHostI18nSig = chSig;
+      recordChannelSkipped(entry, 'hostI18n', { codeHash: chSig });
+    } else if (evalRes && evalRes.ok) {
+      entry.hostI18nMounted = true;
+      entry.hostI18nSkippedByLiveCfg = false;
+      entry.lastHostI18nSig = chSig;
+      recordChannelSuccess(entry, 'hostI18n', { codeHash: chSig, scriptId });
+    } else {
+      recordChannelEvalFailure(orch, entry, 'hostI18n', evalRes, { now, stage });
+    }
+  } else if (evalRes && evalRes.ok) {
+    if (spec.respectSkippedByLiveCfg && evalRes.skippedByLiveCfg) {
+      entry[f.mountedField] = false;
+      if (f.sigField) entry[f.sigField] = chSig;
+      recordChannelSkipped(entry, id, { codeHash: chHash || chSig });
+    } else {
+      if (f.mountedField) entry[f.mountedField] = true;
+      if (f.sigField) entry[f.sigField] = chSig;
+      recordChannelSuccess(entry, id, { codeHash: chHash || chSig, scriptId });
+    }
+  } else {
+    if (id === 'thought' && resetThoughtOnFail) {
+      entry.thoughtMounted = false;
+      entry.lastThoughtSig = '';
+    }
+    recordChannelEvalFailure(orch, entry, id, evalRes, { now, stage });
+  }
+}
+
+// Ch8 按需拉取完整 8 模块包并自动接管轻桩（由 request-periodic-picker 控制信道触发）
+export async function deliverPeriodicPickerFullToEntry(orch, entry, executionContextId = null) {
+  if (!orch || !entry || entry.session?.closed || entry._periodicPickerFullInFlight) return false;
+  const cdp = orch.getCdp();
+  const cfgNow = typeof cdp?.readConfig === 'function' ? cdp.readConfig() : null;
+  const spec = orch.getRegisteredChannel('periodicPicker');
+  if (!spec || !orch.isChannelEnabled(spec, cfgNow) || !orch.hasChannelFile(spec)) return false;
+  if (typeof cdp?.buildPeriodicPickerExpression !== 'function') return false;
+
+  const opts = orch.getChannelCacheOpts(true);
+  const fullExpr = opts
+    ? cdp.buildPeriodicPickerExpression(cfgNow, opts)
+    : cdp.buildPeriodicPickerExpression(cfgNow);
+  if (!fullExpr) return false;
+  if (opts && orch.isRunning()) orch.scheduleBundleCacheFlush();
+
+  entry._periodicPickerFullInFlight = true;
+  try {
+    const evalParams = { expression: fullExpr, returnByValue: true };
+    if (typeof executionContextId === 'number' && executionContextId > 0) evalParams.contextId = executionContextId;
+    let caughtErr = null;
+    const res = await entry.session.send('Runtime.evaluate', evalParams, 8000).catch((err) => {
+      caughtErr = err;
+      return null;
+    });
+    const val = res?.result?.value;
+    if (val?.ok) {
+      entry.periodicPickerMounted = !val.skippedByLiveCfg;
+      entry.periodicPickerFullDelivered = !val.skippedByLiveCfg;
+      const stubExpr = orch.getChannelExpr('periodicPicker');
+      const stubHash = stubExpr ? orch.getChannelExprHash(spec, stubExpr) : orch.getChannelExprHash(spec, fullExpr);
+      const stubSig = stubExpr ? orch.getChannelCfgSig(spec, cfgNow, stubExpr) : orch.getChannelCfgSig(spec, cfgNow, fullExpr);
+      if (stubSig) entry.lastPeriodicPickerSig = stubSig;
+      if (val.skippedByLiveCfg) recordChannelSkipped(entry, 'periodicPicker', { codeHash: stubHash });
+      else recordChannelSuccess(entry, 'periodicPicker', { codeHash: stubHash, scriptId: entry.periodicPickerScriptId });
+      return true;
+    }
+    const errObj = caughtErr
+      ? { ok: false, status: 'eval-error', error: String(caughtErr.message || caughtErr).slice(0, 300), stack: String(caughtErr.stack || '').slice(0, 600) }
+      : res?.exceptionDetails
+        ? { ok: false, status: 'eval-error', error: String(res.exceptionDetails.exception?.description || res.exceptionDetails.text || 'exception').slice(0, 300) }
+        : val;
+    recordChannelEvalFailure(orch, entry, 'periodicPicker', errObj, { stage: 'on-demand-rpc' });
+    return false;
+  } finally {
+    entry._periodicPickerFullInFlight = false;
+  }
+}
+
 export async function cleanupChannelOnEntry(orch, entry, spec, { forceSidebarCleanup = false, timeoutMs = 3500 } = {}) {
   if (!entry || !spec) return;
   const f = spec.fields;
-  if (f.scriptField) {
-    await replaceEntryNewDocScript(entry, f.scriptField, '');
-  }
+  if (f.scriptField) await replaceEntryNewDocScript(entry, f.scriptField, '');
   if (spec.id === 'sidebar' || spec.id === 'wallpaper' || spec.id === 'suggester') {
     await removeChannelBinding(orch, entry, spec.id);
   }
   if (!entry.session.closed) {
-    const cleanupExpr = spec.id === 'sidebar' ? buildSidebarCleanupExpression(forceSidebarCleanup) : orch.getChannelCleanupExpression(spec);
-    if (cleanupExpr) {
-      if (timeoutMs > 0) await entry.session.evaluate(cleanupExpr, false, timeoutMs).catch(() => null);
-      else await entry.session.evaluate(cleanupExpr).catch(() => null);
-    }
+    const cleanupExpr = buildEffectiveCleanupExpr(orch, spec, forceSidebarCleanup);
+    if (cleanupExpr) await evalFireAndForgetSafe(entry.session, cleanupExpr, timeoutMs);
   }
-  if (f.mountedField) entry[f.mountedField] = false;
-  if (f.sigField) entry[f.sigField] = '';
-  if (f.scriptSigField) entry[f.scriptSigField] = '';
-  if (f.skippedField) entry[f.skippedField] = false;
-  if (spec.id === 'hostI18n') entry.hostI18nSkippedByLiveCfg = false;
-  recordChannelOff(entry, spec.id);
+  resetEntryChannelState(entry, spec, false);
 }
 
 export async function teardownAllEntryChannelScripts(
@@ -180,27 +324,15 @@ export async function teardownAllEntryChannelScripts(
   { markSkippedNonHost = false, removeBindings = true, resetMascot = true, resetHomeStudio = true } = {}
 ) {
   if (!entry) return;
-  if (entry.scriptId && session && !session.closed) {
-    await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId }).catch(() => {});
-  }
-  entry.scriptId = null;
+  await replaceEntryNewDocScript(entry, 'scriptId', '', session);
 
   for (const spec of PERSISTENT_SPECS) {
-    if (spec.id === 'mascot' && !resetMascot) continue;
-    if (spec.id === 'homeStudio' && !resetHomeStudio) continue;
+    if ((spec.id === 'mascot' && !resetMascot) || (spec.id === 'homeStudio' && !resetHomeStudio)) continue;
     const f = spec.fields;
     if (f.scriptField) {
-      if (entry[f.scriptField] && session && !session.closed) {
-        await session.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry[f.scriptField] }).catch(() => {});
-      }
-      entry[f.scriptField] = null;
+      await replaceEntryNewDocScript(entry, f.scriptField, '', session);
     }
-    if (f.mountedField) entry[f.mountedField] = false;
-    if (f.sigField) entry[f.sigField] = '';
-    if (f.scriptSigField) entry[f.scriptSigField] = '';
-    if (f.skippedField) entry[f.skippedField] = Boolean(markSkippedNonHost);
-    if (spec.id === 'hostI18n') entry.hostI18nSkippedByLiveCfg = false;
-    recordChannelOff(entry, spec.id);
+    resetEntryChannelState(entry, spec, markSkippedNonHost);
   }
 
   if (removeBindings) {
@@ -214,29 +346,24 @@ export async function healSingleChannelOnEntry(orch, entry, spec, cfg, probe, { 
   const id = spec.id;
   const f = spec.fields;
 
-  // 1) 服务/绑定前置钩子
   if (id === 'omni' && !afterCh1Heal) {
     await orch.ensureOmniServer().catch(() => null);
     await ensureChannelBinding(orch, entry, 'omni', 2600, true);
   } else if (id === 'sidebar' && !afterCh1Heal) {
     await orch.ensureSidebarService().catch(() => null);
     await ensureChannelBinding(orch, entry, 'sidebar', 2600, true);
-  } else if (id === 'thought' && !afterCh1Heal) {
-    await ensureChannelBinding(orch, entry, 'thought', 2600, true);
-  } else if (id === 'inlineDiff' && !afterCh1Heal) {
-    await ensureChannelBinding(orch, entry, 'inlineDiff', 2600, true);
+  } else if ((id === 'thought' || id === 'inlineDiff') && !afterCh1Heal) {
+    await ensureChannelBinding(orch, entry, id, 2600, true);
   } else if (id === 'wallpaper' || id === 'suggester') {
     await ensureChannelBinding(orch, entry, id, 2600, true);
   }
 
-  // 2) 确保编译表达式就绪
   const activeExpr = orch.ensureChannelExpr(spec, cfg);
   if (!activeExpr || entry.session.closed) return;
 
   const chHash = orch.getChannelExprHash(spec, activeExpr);
   const chSig = id === 'omni' ? activeExpr : orch.getChannelCfgSig(spec, cfg, activeExpr);
 
-  // 3) 同步持久化 NewDocument 脚本
   if (f.scriptField && id !== 'sidebar') {
     const needScriptReplace =
       !entry[f.scriptField] ||
@@ -248,57 +375,80 @@ export async function healSingleChannelOnEntry(orch, entry, spec, cfg, probe, { 
     }
   }
 
-  // 4) 判定是否需要立即 evaluate 挂载/更新
   let needsEval = forceEval || afterCh1Heal || !probe;
   if (!needsEval) {
-    if (id === 'omni' || id === 'sidebar') {
-      needsEval = true;
-    } else if (id === 'thought') {
-      needsEval = !probe.hasThought || !probe.hasThoughtSettingsUi || !entry.thoughtMounted;
-    } else if (id === 'inlineDiff') {
-      needsEval = !probe.hasInlineDiff || !entry.inlineDiffMounted;
-    } else if (id === 'wallpaper') {
-      needsEval = !probe.hasWallpaper || !probe.hasWallpaperUi || hashMismatch || !entry.wallpaperMounted;
-    } else if (id === 'suggester') {
-      needsEval = probe.hasSuggester === false || probe.hasSuggesterUi === false || !entry.suggesterMounted;
-    } else {
-      needsEval = !probe[f.probeHasField] || Boolean(chHash && f.probeHashField && probe[f.probeHashField] !== chHash);
-    }
+    if (id === 'omni' || id === 'sidebar') needsEval = true;
+    else if (id === 'thought') needsEval = !probe.hasThought || !probe.hasThoughtSettingsUi || !entry.thoughtMounted;
+    else if (id === 'inlineDiff') needsEval = !probe.hasInlineDiff || !entry.inlineDiffMounted;
+    else if (id === 'wallpaper') needsEval = !probe.hasWallpaper || !probe.hasWallpaperUi || hashMismatch || !entry.wallpaperMounted;
+    else if (id === 'suggester') needsEval = probe.hasSuggester === false || probe.hasSuggesterUi === false || !entry.suggesterMounted;
+    else needsEval = !probe[f.probeHasField] || Boolean(chHash && f.probeHashField && probe[f.probeHashField] !== chHash);
   }
   if (!needsEval || entry.session.closed) return;
 
   const evalTimeoutMs = id === 'omni' || id === 'sidebar' ? 3500 : 4500;
   const evalRes = await evalChannelExpressionSafe(entry.session, activeExpr, evalTimeoutMs);
+  await recordPersistentEvalOutcome(orch, entry, spec, evalRes, {
+    chHash,
+    chSig,
+    scriptId: entry[f.scriptField],
+    stage: 'heal',
+    now,
+    resetThoughtOnFail: afterCh1Heal,
+  });
+}
 
-  // 5) 统一结果记录与 Per-Channel 熔断状态更新
-  if (spec.tracksSkippedNonHost) {
-    await recordTrackableSkipOutcome(orch, entry, spec, evalRes, chHash, now, 'heal');
-  } else if (id === 'omni') {
-    if (evalRes && evalRes.ok !== false) recordChannelSuccess(entry, 'omni', { scriptId: entry.omniScriptId });
-    else recordChannelEvalFailure(orch, entry, 'omni', evalRes, { now, stage: 'heal' });
+async function applySinglePersistentChannel(orch, entry, spec, getCurrentCfg) {
+  if (entry.session.closed) return;
+  const cfgNow = getCurrentCfg();
+  const id = spec.id;
+  const f = spec.fields;
+  const hadBefore = Boolean((f.scriptField && entry[f.scriptField]) || (f.mountedField && entry[f.mountedField]) || (id === 'omni' && entry.lastOmniExpr));
+
+  if (id === 'hostI18n' && cfgNow?.hostLocalization === 'off' && !entry.session.closed) {
+    await orch.swarmManager.syncIsolatedHostI18n(entry, true);
+  }
+  if (f.scriptField) await replaceEntryNewDocScript(entry, f.scriptField, '');
+
+  const enabledNow = spec.tracksSkippedNonHost
+    ? true
+    : orch.isChannelEnabled(spec, cfgNow) && (id === 'omni' || id === 'sidebar' || id === 'hostI18n' || id === 'thought' || orch.hasChannelFile(spec));
+
+  if (enabledNow) {
+    if (id === 'sidebar' && !orch.services.sidebarService) await orch.ensureSidebarService().catch(() => null);
+    if (BINDING_BY_CHANNEL[id]) await ensureChannelBinding(orch, entry, id);
+    const activeExpr = id === 'omni' ? orch.getChannelExpr('omni') : orch.ensureChannelExpr(spec, cfgNow);
+    if (activeExpr) {
+      const chHash = orch.getChannelExprHash(spec, activeExpr);
+      const chSig = id === 'omni' ? activeExpr : orch.getChannelCfgSig(spec, cfgNow, activeExpr);
+      const addedId = f.scriptField ? await replaceEntryNewDocScript(entry, f.scriptField, activeExpr) : null;
+      if (f.scriptSigField) entry[f.scriptSigField] = addedId ? chSig : '';
+      const evalRes = await evalChannelExpressionSafe(entry.session, activeExpr, 0);
+      await recordPersistentEvalOutcome(orch, entry, spec, evalRes, {
+        chHash,
+        chSig,
+        scriptId: addedId,
+        stage: 'apply',
+        resetThoughtOnFail: true,
+      });
+    } else if (hadBefore) {
+      await cleanupChannelOnEntry(orch, entry, spec, { forceSidebarCleanup: hadBefore, timeoutMs: 0 });
+    } else {
+      resetEntryChannelState(entry, spec, false);
+    }
   } else if (id === 'sidebar') {
-    if (evalRes === null || evalRes?.status === 'error' || evalRes?.status === 'eval-error' || (evalRes?.ok === false && evalRes?.error)) {
-      recordChannelEvalFailure(orch, entry, 'sidebar', evalRes, { now, stage: 'heal' });
-    } else {
-      entry.sidebarMounted = true;
-      recordChannelSuccess(entry, 'sidebar', { scriptId: entry.sidebarScriptId });
-    }
-  } else if (evalRes && evalRes.ok) {
-    if (spec.respectSkippedByLiveCfg && evalRes.skippedByLiveCfg) {
-      entry[f.mountedField] = false;
-      if (f.sigField) entry[f.sigField] = chSig;
-      recordChannelSkipped(entry, id, { codeHash: chHash || chSig });
-    } else {
-      if (f.mountedField) entry[f.mountedField] = true;
-      if (f.sigField) entry[f.sigField] = chSig;
-      recordChannelSuccess(entry, id, { codeHash: chHash || chSig, scriptId: entry[f.scriptField] });
-    }
+    await removeChannelBinding(orch, entry, 'sidebar');
+    await evalFireAndForgetSafe(entry.session, buildSidebarCleanupExpression(hadBefore), 0);
+    entry.sidebarMounted = false;
+    recordChannelOff(entry, 'sidebar');
+  } else if (hadBefore) {
+    await cleanupChannelOnEntry(orch, entry, spec, { timeoutMs: 0 });
   } else {
-    if (id === 'thought' && afterCh1Heal) {
-      entry.thoughtMounted = false;
-      entry.lastThoughtSig = '';
-    }
-    recordChannelEvalFailure(orch, entry, id, evalRes, { now, stage: 'heal' });
+    resetEntryChannelState(entry, spec, false);
+  }
+
+  if (id === 'hostI18n' && cfgNow?.hostLocalization !== 'off' && entry.isolatedHostI18nPaused && !entry.session.closed) {
+    await orch.swarmManager.syncIsolatedHostI18n(entry, false);
   }
 }
 
@@ -319,12 +469,12 @@ export async function applyAllChannelsToEntry(orch, entry) {
       return cfg;
     };
 
-    const omniSpec = orch.getRegisteredChannel('omni');
-    const sidebarSpec = orch.getRegisteredChannel('sidebar');
-    const omniEnabledInit = orch.isChannelEnabled(omniSpec, cfg);
-    if (omniEnabledInit) await orch.ensureOmniServer().catch(() => null);
-    const sidebarEnabledInit = orch.isChannelEnabled(sidebarSpec, cfg);
-    if (sidebarEnabledInit) await orch.ensureSidebarService().catch(() => null);
+    const omniEnabledInit = orch.isChannelEnabled(orch.getRegisteredChannel('omni'), cfg);
+    const sidebarEnabledInit = orch.isChannelEnabled(orch.getRegisteredChannel('sidebar'), cfg);
+    await Promise.all([
+      omniEnabledInit ? orch.ensureOmniServer().catch(() => null) : Promise.resolve(null),
+      sidebarEnabledInit ? orch.ensureSidebarService().catch(() => null) : Promise.resolve(null),
+    ]);
 
     if (!orch.injectExpr) {
       orch.rebuildBundle();
@@ -333,10 +483,7 @@ export async function applyAllChannelsToEntry(orch, entry) {
       const chOpts = orch.getChannelCacheOpts(true);
       let usedChCache = false;
       for (const spec of PERSISTENT_SPECS) {
-        if (spec.id === 'omni' && !omniEnabledInit) {
-          orch.setChannelExpr('omni', '');
-          continue;
-        }
+        if (spec.id === 'omni' && !omniEnabledInit) { orch.setChannelExpr('omni', ''); continue; }
         if (orch.getChannelExpr(spec.id)) continue;
         if (spec.id === 'omni' && !orch.services.omniServer) continue;
         const canBuild = spec.tracksSkippedNonHost
@@ -349,6 +496,7 @@ export async function applyAllChannelsToEntry(orch, entry) {
       if (usedChCache && orch.isRunning()) orch.scheduleBundleCacheFlush();
     }
 
+    // Tier 1：Ch1 样式与运行期主框架优先注入
     await replaceEntryNewDocScript(entry, 'scriptId', orch.injectExpr);
     const sidebarDocument = entry.sidebarDocument;
     const mainRes = await entry.session.evaluate(orch.injectExpr);
@@ -371,109 +519,15 @@ export async function applyAllChannelsToEntry(orch, entry) {
       return mainRes;
     }
 
-    // 统一表驱动挂载/清理全部持久通道（Ch2~Ch8, Ch10~Ch16）
-    for (const spec of PERSISTENT_SPECS) {
-      if (entry.session.closed) break;
-      const cfgNow = getCurrentCfg();
-      const id = spec.id;
-      const f = spec.fields;
-      const hadBefore = Boolean((f.scriptField && entry[f.scriptField]) || (f.mountedField && entry[f.mountedField]) || (id === 'omni' && entry.lastOmniExpr));
-
-      if (id === 'hostI18n' && cfgNow?.hostLocalization === 'off' && !entry.session.closed) {
-        await orch.swarmManager.syncIsolatedHostI18n(entry, true);
-      }
-
-      if (f.scriptField) await replaceEntryNewDocScript(entry, f.scriptField, '');
-
-      const enabledNow = spec.tracksSkippedNonHost
-        ? true
-        : orch.isChannelEnabled(spec, cfgNow) && (id === 'omni' || id === 'sidebar' || id === 'hostI18n' || id === 'thought' || orch.hasChannelFile(spec));
-
-      if (enabledNow) {
-        if (id === 'sidebar' && !orch.services.sidebarService) await orch.ensureSidebarService().catch(() => null);
-        if (BINDING_BY_CHANNEL[id]) await ensureChannelBinding(orch, entry, id);
-        const activeExpr = id === 'omni' ? orch.getChannelExpr('omni') : orch.ensureChannelExpr(spec, cfgNow);
-        if (activeExpr) {
-          const chHash = orch.getChannelExprHash(spec, activeExpr);
-          const chSig = id === 'omni' ? activeExpr : orch.getChannelCfgSig(spec, cfgNow, activeExpr);
-          const addedId = f.scriptField ? await replaceEntryNewDocScript(entry, f.scriptField, activeExpr) : null;
-          if (f.scriptSigField) entry[f.scriptSigField] = addedId ? chSig : '';
-          const evalRes = await evalChannelExpressionSafe(entry.session, activeExpr, 0);
-
-          if (spec.tracksSkippedNonHost) {
-            await recordTrackableSkipOutcome(orch, entry, spec, evalRes, chHash, Date.now(), 'apply');
-          } else if (id === 'omni') {
-            if (evalRes && evalRes.ok !== false) recordChannelSuccess(entry, 'omni', { scriptId: addedId });
-            else recordChannelEvalFailure(orch, entry, 'omni', evalRes, { stage: 'apply' });
-          } else if (id === 'sidebar') {
-            if (evalRes === null || evalRes?.status === 'error' || evalRes?.status === 'eval-error' || (evalRes?.ok === false && evalRes?.error)) {
-              recordChannelEvalFailure(orch, entry, 'sidebar', evalRes, { stage: 'apply' });
-            } else {
-              entry.sidebarMounted = true;
-              recordChannelSuccess(entry, 'sidebar', { scriptId: addedId });
-            }
-          } else if (id === 'hostI18n') {
-            if (evalRes?.skippedByLiveCfg) {
-              entry.hostI18nMounted = false;
-              entry.hostI18nSkippedByLiveCfg = true;
-              entry.lastHostI18nSig = chSig;
-              recordChannelSkipped(entry, 'hostI18n', { codeHash: chSig });
-            } else if (evalRes && evalRes.ok) {
-              entry.hostI18nMounted = true;
-              entry.hostI18nSkippedByLiveCfg = false;
-              entry.lastHostI18nSig = chSig;
-              recordChannelSuccess(entry, 'hostI18n', { codeHash: chSig, scriptId: addedId });
-            } else {
-              recordChannelEvalFailure(orch, entry, 'hostI18n', evalRes, { stage: 'apply' });
-            }
-          } else if (evalRes && evalRes.ok) {
-            if (spec.respectSkippedByLiveCfg && evalRes.skippedByLiveCfg) {
-              entry[f.mountedField] = false;
-              if (f.sigField) entry[f.sigField] = chSig;
-              recordChannelSkipped(entry, id, { codeHash: chHash || chSig });
-            } else {
-              if (f.mountedField) entry[f.mountedField] = true;
-              if (f.sigField) entry[f.sigField] = chSig;
-              recordChannelSuccess(entry, id, { codeHash: chHash || chSig, scriptId: addedId });
-            }
-          } else {
-            if (id === 'thought') {
-              entry.thoughtMounted = false;
-              entry.lastThoughtSig = '';
-            }
-            recordChannelEvalFailure(orch, entry, id, evalRes, { stage: 'apply' });
-          }
-        } else {
-          if (hadBefore) await cleanupChannelOnEntry(orch, entry, spec, { forceSidebarCleanup: hadBefore, timeoutMs: 0 });
-          else {
-            if (f.mountedField) entry[f.mountedField] = false;
-            if (f.sigField) entry[f.sigField] = '';
-            if (f.scriptSigField) entry[f.scriptSigField] = '';
-            if (f.skippedField) entry[f.skippedField] = false;
-            recordChannelOff(entry, id);
-          }
-        }
-      } else {
-        if (id === 'sidebar') {
-          await removeChannelBinding(orch, entry, 'sidebar');
-          await entry.session.evaluate(buildSidebarCleanupExpression(hadBefore)).catch(() => null);
-          entry.sidebarMounted = false;
-          recordChannelOff(entry, 'sidebar');
-        } else if (hadBefore) {
-          await cleanupChannelOnEntry(orch, entry, spec, { timeoutMs: 0 });
-        } else {
-          if (f.mountedField) entry[f.mountedField] = false;
-          if (f.sigField) entry[f.sigField] = '';
-          if (f.scriptSigField) entry[f.scriptSigField] = '';
-          if (f.skippedField) entry[f.skippedField] = false;
-          if (id === 'hostI18n') entry.hostI18nSkippedByLiveCfg = false;
-          recordChannelOff(entry, id);
-        }
-      }
-
-      if (id === 'hostI18n' && cfgNow?.hostLocalization !== 'off' && entry.isolatedHostI18nPaused && !entry.session.closed) {
-        await orch.swarmManager.syncIsolatedHostI18n(entry, false);
-      }
+    // Tier 2：核心可见交互通道（core / i18n / telemetry / homeStudio）并发注入
+    const tier2Specs = PERSISTENT_SPECS.filter(isTier2PipelineSpec);
+    const tier3Specs = PERSISTENT_SPECS.filter((s) => !isTier2PipelineSpec(s));
+    if (!entry.session.closed && tier2Specs.length > 0) {
+      await Promise.allSettled(tier2Specs.map((spec) => applySinglePersistentChannel(orch, entry, spec, getCurrentCfg)));
+    }
+    // Tier 3：次级与轻桩通道分批并发（每批 4 个）
+    for (let i = 0; i < tier3Specs.length && !entry.session.closed; i += 4) {
+      await Promise.allSettled(tier3Specs.slice(i, i + 4).map((spec) => applySinglePersistentChannel(orch, entry, spec, getCurrentCfg)));
     }
 
     entry.lastVerifyAt = Date.now();
@@ -491,9 +545,7 @@ export async function applyAllChannelsToEntry(orch, entry) {
 export async function runBroadcastConfigRefresh(orch) {
   orch._broadcastPending = true;
   if (orch._broadcastRunning) {
-    return new Promise((resolve) => {
-      orch._broadcastWaiters.push(resolve);
-    });
+    return new Promise((resolve) => { orch._broadcastWaiters.push(resolve); });
   }
 
   orch._broadcastRunning = true;
@@ -501,8 +553,7 @@ export async function runBroadcastConfigRefresh(orch) {
     while (orch._broadcastPending) {
       orch._broadcastPending = false;
       const snapSeq = orch._configSeq;
-      const sessions = orch.sessionRegistry.sessions;
-      const activeItems = [...sessions.values()].filter((item) => item && !item.session.closed);
+      const activeItems = [...orch.sessionRegistry.sessions.values()].filter((item) => item && !item.session.closed);
       const perEntryAck = new Map();
       for (const item of activeItems) {
         resetAllChannelCircuits(item);
@@ -540,7 +591,6 @@ export async function runBroadcastConfigRefresh(orch) {
       if (currentCfg?.telemetryModule === 'off') orch.onTelemetryDisabled?.();
       orch.onConfigRefreshed?.(currentCfg);
 
-      // 表驱动构建全部持久通道快照
       const channelSnaps = PERSISTENT_SPECS.map((spec) => {
         const id = spec.id;
         const enabled = spec.tracksSkippedNonHost
@@ -602,7 +652,6 @@ export async function runBroadcastConfigRefresh(orch) {
               await entry.session.evaluate(injectSnap).catch(() => {});
             }
 
-            // 单循环表驱动广播更新全部持久通道（Ch2~Ch16）
             for (const cs of channelSnaps) {
               if (abortIfStale()) return;
               const { spec, enabled, snap, hash, sig } = cs;
@@ -621,18 +670,13 @@ export async function runBroadcastConfigRefresh(orch) {
                     await ensureChannelBinding(orch, entry, 'sidebar');
                     if (snap && !entry.session.closed) {
                       const sbRes = await evalChannelExpressionSafe(entry.session, snap, 0);
-                      if (sbRes === null || sbRes?.status === 'error' || sbRes?.status === 'eval-error' || (sbRes?.ok === false && sbRes?.error)) {
-                        recordChannelEvalFailure(orch, entry, 'sidebar', sbRes, { stage: 'broadcast' });
-                      } else {
-                        entry.sidebarMounted = true;
-                        recordChannelSuccess(entry, 'sidebar', { scriptId: entry.sidebarScriptId });
-                      }
+                      await recordPersistentEvalOutcome(orch, entry, spec, sbRes, { chHash: hash, chSig: sig, scriptId: entry.sidebarScriptId, stage: 'broadcast' });
                     }
                   }
                 } else {
                   await removeChannelBinding(orch, entry, 'sidebar');
                   if (hadBefore && !skippedStale && !entry.session.closed) {
-                    await entry.session.evaluate(buildSidebarCleanupExpression(true)).catch(() => {});
+                    await evalFireAndForgetSafe(entry.session, buildSidebarCleanupExpression(true), 0);
                   }
                   entry.sidebarMounted = false;
                   recordChannelOff(entry, 'sidebar');
@@ -650,30 +694,15 @@ export async function runBroadcastConfigRefresh(orch) {
                   let evaluatedFresh = false;
                   if (!skippedStale && !entry.session.closed && (!refreshedFast || changed)) {
                     const evalRes = await evalChannelExpressionSafe(entry.session, snap, 0);
-                    if (evalRes?.skippedByLiveCfg) {
-                      entry.hostI18nMounted = false;
-                      entry.hostI18nSkippedByLiveCfg = true;
-                      entry.lastHostI18nSig = sig;
-                      recordChannelSkipped(entry, 'hostI18n', { codeHash: sig });
-                    } else if (evalRes && evalRes.ok) {
-                      entry.hostI18nMounted = true;
-                      entry.hostI18nSkippedByLiveCfg = false;
-                      entry.lastHostI18nSig = sig;
-                      evaluatedFresh = !evalRes.reused;
-                      recordChannelSuccess(entry, 'hostI18n', { codeHash: sig, scriptId: entry.hostI18nScriptId });
-                    } else {
-                      recordChannelEvalFailure(orch, entry, 'hostI18n', evalRes, { stage: 'broadcast' });
-                    }
+                    evaluatedFresh = Boolean(evalRes && evalRes.ok && !evalRes.skippedByLiveCfg && !evalRes.reused);
+                    await recordPersistentEvalOutcome(orch, entry, spec, evalRes, { chHash: hash, chSig: sig, scriptId: entry.hostI18nScriptId, stage: 'broadcast' });
                   }
                   if (hostI18nOffNow && isoPauseRes && isoPauseRes.newlyPaused && !evaluatedFresh && !skippedStale && !entry.session.closed) {
                     await orch.swarmManager.forceMainWorldHostI18nOffRescan(entry);
                   }
                 } else if (hadBefore && !skippedStale && !entry.session.closed) {
-                  await entry.session.evaluate(orch.getChannelCleanupExpression(spec)).catch(() => {});
-                  entry.hostI18nMounted = false;
-                  entry.hostI18nSkippedByLiveCfg = false;
-                  entry.lastHostI18nSig = '';
-                  recordChannelOff(entry, 'hostI18n');
+                  await evalFireAndForgetSafe(entry.session, buildEffectiveCleanupExpr(orch, spec), 0);
+                  resetEntryChannelState(entry, spec, false);
                 }
                 if (!hostI18nOffNow && entry.isolatedHostI18nPaused && !skippedStale && !entry.session.closed) {
                   await orch.swarmManager.syncIsolatedHostI18n(entry, false);
@@ -683,49 +712,22 @@ export async function runBroadcastConfigRefresh(orch) {
 
               const isSkipped = Boolean(spec.tracksSkippedNonHost && f.skippedField && entry[f.skippedField]);
               const changed = Boolean(
-                enabled &&
-                  snap &&
-                  !isSkipped &&
-                  (forceFullConvergence ||
-                    (f.sigField && entry[f.sigField] !== sig) ||
-                    (f.scriptField && !entry[f.scriptField]) ||
-                    (f.mountedField && !entry[f.mountedField]))
+                enabled && snap && !isSkipped &&
+                  (forceFullConvergence || (f.sigField && entry[f.sigField] !== sig) || (f.scriptField && !entry[f.scriptField]) || (f.mountedField && !entry[f.mountedField]))
               );
-
               if (enabled && snap) {
                 if (!skippedStale && !entry.session.closed && !isSkipped && (!refreshedFast || changed)) {
                   if (BINDING_BY_CHANNEL[id]) await ensureChannelBinding(orch, entry, id);
                   const evalRes = await evalChannelExpressionSafe(entry.session, snap, 0);
-                  if (spec.tracksSkippedNonHost) {
-                    await recordTrackableSkipOutcome(orch, entry, spec, evalRes, hash, Date.now(), 'broadcast');
-                  } else if (id === 'omni') {
-                    if (evalRes && evalRes.ok !== false) recordChannelSuccess(entry, 'omni', { scriptId: entry.omniScriptId });
-                    else recordChannelEvalFailure(orch, entry, 'omni', evalRes, { stage: 'broadcast' });
-                  } else if (evalRes && evalRes.ok) {
-                    if (spec.respectSkippedByLiveCfg && evalRes.skippedByLiveCfg) {
-                      entry[f.mountedField] = false;
-                      if (f.sigField) entry[f.sigField] = sig;
-                      recordChannelSkipped(entry, id, { codeHash: hash || sig });
-                    } else {
-                      if (f.mountedField) entry[f.mountedField] = true;
-                      if (f.sigField) entry[f.sigField] = sig;
-                      recordChannelSuccess(entry, id, { codeHash: hash || sig, scriptId: entry[f.scriptField] });
-                    }
-                  } else {
-                    recordChannelEvalFailure(orch, entry, id, evalRes, { stage: 'broadcast' });
-                  }
+                  await recordPersistentEvalOutcome(orch, entry, spec, evalRes, { chHash: hash, chSig: sig, scriptId: entry[f.scriptField], stage: 'broadcast' });
                 }
               } else if ((hadBefore || (!spec.tracksSkippedNonHost && id !== 'omni' && id !== 'thought' && !orch.isChannelEnabled(spec, currentCfg))) && !skippedStale && !entry.session.closed) {
                 if (id === 'wallpaper' || id === 'suggester') await removeChannelBinding(orch, entry, id);
-                if (hadBefore) await entry.session.evaluate(orch.getChannelCleanupExpression(spec)).catch(() => {});
-                if (f.mountedField) entry[f.mountedField] = false;
-                if (f.sigField) entry[f.sigField] = '';
-                if (f.skippedField) entry[f.skippedField] = false;
-                recordChannelOff(entry, id);
+                if (hadBefore) await evalFireAndForgetSafe(entry.session, buildEffectiveCleanupExpr(orch, spec), 0);
+                resetEntryChannelState(entry, spec, false);
               }
             }
 
-            // 合并收敛所有持久 NewDocument 脚本，若中途被新配置序号打断则标脏确保下一轮完整收敛
             if (orch._broadcastPending || orch._configSeq !== snapSeq || entry.session.closed) {
               entry._configConvergenceDirty = true;
               orch._broadcastPending = true;

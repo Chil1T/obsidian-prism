@@ -29,19 +29,17 @@ function createStudioChannelBuilders({ rootDir, readConfig, bundleCache }) {
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
-    const clientBuf = fs.readFileSync(clientPath);
-    const settingsBuf = fs.readFileSync(settingsUiPath);
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'wallpaper',
       sig,
       fileEntries: [
-        { rel: 'vendor/wallpaper/wallpaper-client.js', content: clientBuf },
-        { rel: 'vendor/wallpaper/wallpaper-settings-ui.js', content: settingsBuf },
+        { rel: 'vendor/wallpaper/wallpaper-client.js', fullPath: clientPath },
+        { rel: 'vendor/wallpaper/wallpaper-settings-ui.js', fullPath: settingsUiPath },
       ],
       opts,
       compileFn: () => {
-        const minClient = minifySingleSource(clientBuf.toString('utf8'));
-        const minSettingsUi = minifySingleSource(settingsBuf.toString('utf8'));
+        const minClient = minifySingleSource(fs.readFileSync(clientPath, 'utf8'), { allowMemberProps: false });
+        const minSettingsUi = minifySingleSource(fs.readFileSync(settingsUiPath, 'utf8'), { allowMemberProps: false });
         const codeHash = computeHash(`${minClient}\n${minSettingsUi}`);
         return { minClient, minSettingsUi, codeHash };
       },
@@ -67,8 +65,8 @@ function createStudioChannelBuilders({ rootDir, readConfig, bundleCache }) {
     let minSettingsUi = '';
     let codeHash = '';
     if (opts && typeof opts.customClientSource === 'string' && typeof opts.customSettingsUiSource === 'string') {
-      minClient = opts.customClientSource ? minifySingleSource(opts.customClientSource) : '';
-      minSettingsUi = opts.customSettingsUiSource ? minifySingleSource(opts.customSettingsUiSource) : '';
+      minClient = opts.customClientSource ? minifySingleSource(opts.customClientSource, { allowMemberProps: false }) : '';
+      minSettingsUi = opts.customSettingsUiSource ? minifySingleSource(opts.customSettingsUiSource, { allowMemberProps: false }) : '';
       codeHash = minClient && minSettingsUi ? computeHash(`${minClient}\n${minSettingsUi}`) : '';
     } else {
       const compiled = readCompiledWallpaperAssets(opts);
@@ -196,6 +194,122 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     return cfg.periodicModelPicker !== 'off' && cfg.periodicModelPicker !== false;
   }
 
+  // 纯数据表模块（非热渲染循环）保留属性键池化，给 Ch8 820 KB 预算留足充裕安全余量，其余 6 个热交互/渲染模块恢复原生 V8 .prop IC
+  const PERIODIC_PICKER_DATA_ONLY_MODULES = new Set(['pbr-grain-assets.js', 'model-catalog.js']);
+
+  function readCompiledPeriodicPickerStubAssets(opts = null) {
+    const stubPath = path.join(rootDir, 'vendor', 'periodic-picker', 'periodic-picker-stub.js');
+    if (!fs.existsSync(stubPath)) {
+      return { sig: '', minRuntime: '', codeHash: '' };
+    }
+    const sig = getFileSig(stubPath);
+    const cachePath = resolveBundleCachePathOption(opts);
+    const curMem = bundleCache.getChannelMemCache('periodicPickerStub');
+    if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
+      return curMem;
+    }
+    const fileEntries = [{ rel: 'vendor/periodic-picker/periodic-picker-stub.js', fullPath: stubPath }];
+    return bundleCache.resolveChannelAssetsWithDiskCache({
+      channelName: 'periodicPickerStub',
+      sig,
+      fileEntries,
+      opts,
+      compileFn: () => {
+        const raw = fs.readFileSync(stubPath, 'utf8');
+        const minRuntime = minifySingleSource(raw, { allowMemberProps: false });
+        const codeHash = minRuntime ? computeHash(minRuntime) : '';
+        return { minRuntime, codeHash };
+      },
+      toCacheEntry: (assets, sourceHash) => ({
+        sourceHash,
+        codeHash: assets.codeHash,
+        minRuntime: assets.minRuntime,
+        payloadSha256: sha256Text(`${assets.codeHash}\0${assets.minRuntime}`),
+        updatedAt: Date.now(),
+      }),
+      fromCacheEntry: (entry) => ({
+        minRuntime: entry.minRuntime,
+        codeHash: entry.codeHash,
+      }),
+    });
+  }
+
+  // 第八通道首帧轻触发桩（<2 KB）：监听 [data-testid="model-selector-trigger"] hover 预热与 pointerdown，经控制信道按需拉取完整 8 模块包；off 态连桩也不注入
+  function buildPeriodicPickerStubExpression(config = null, opts = null) {
+    const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
+    if (!shouldEnablePeriodicPicker(cfg)) {
+      return '';
+    }
+    const { minRuntime, codeHash } = readCompiledPeriodicPickerStubAssets(opts);
+    if (!minRuntime || !codeHash) {
+      return '';
+    }
+    const hashJson = serializeJsonForEval(codeHash);
+
+    return `(() => {
+  try {
+${CHANNEL_MAIN_FRAME_HOST_GUARD}
+
+    try {
+      const liveCfg = window.__agPrism?.getState?.()?.cfg;
+      if (liveCfg && typeof liveCfg === 'object' && (liveCfg.periodicModelPicker === 'off' || liveCfg.periodicModelPicker === false)) {
+        try { window.__agPrismPeriodicStub?.destroy?.(); } catch {}
+        try { window.__agPrismPeriodicPicker?.destroy?.(); } catch {}
+        for (const k of ['__agPrismPeriodicStub', '__agPrismPeriodicStubFactory', '__agPeriodicPendingOpen', '__agPeriodicFullLoaded', '__agPeriodicStubHash']) {
+          try { delete window[k]; } catch {}
+          try { delete globalThis[k]; } catch {}
+        }
+        return { ok: true, status: 'off', skippedByLiveCfg: true };
+      }
+    } catch {}
+
+    const targetHash = ${hashJson};
+    const mountOrReuse = () => {
+      if (needDomMarkerOnReady && !hasDomMarker() && (isPlainHttpLocalhost || !/\\bantigravity\\b/i.test(String(document.title || '')))) {
+        return { ok: false, status: 'skipped-non-host' };
+      }
+      const fullInst = window.__agPrismPeriodicPicker;
+      if (window.__agPeriodicFullLoaded === true && fullInst) {
+        const st = typeof fullInst.getStatus === 'function' ? fullInst.getStatus() : null;
+        if (!st || (st.status !== 'off' && st.status !== 'destroyed')) {
+          try { window.__agPeriodicStubHash = targetHash; } catch {}
+          return { ok: true, reused: true, fullLoaded: true, codeHash: targetHash };
+        }
+      }
+      const existingStub = window.__agPrismPeriodicStub;
+      if (existingStub && existingStub.__prismCodeHash === targetHash) {
+        const st = typeof existingStub.getStatus === 'function' ? existingStub.getStatus() : null;
+        if (!st || (st.status !== 'off' && st.status !== 'destroyed')) {
+          try { window.__agPeriodicStubHash = targetHash; } catch {}
+          return { ok: true, reused: true, stub: true, codeHash: targetHash };
+        }
+      }
+      try { existingStub?.destroy?.(); } catch {}
+      ${minRuntime};
+      const factory = window.__agPrismPeriodicStubFactory || globalThis.__agPrismPeriodicStubFactory;
+      if (!factory || typeof factory.mountPeriodicPickerStub !== 'function') {
+        return { ok: false, status: 'stub-factory-missing' };
+      }
+      const stub = factory.mountPeriodicPickerStub({ root: window, doc: document });
+      if (stub && typeof stub === 'object') {
+        stub.__prismCodeHash = targetHash;
+        if (!window.__agPrismPeriodicStub) window.__agPrismPeriodicStub = stub;
+      }
+      try { window.__agPeriodicStubHash = targetHash; } catch {}
+      return { ok: true, status: 'stub', codeHash: targetHash };
+    };
+
+    if (needDomMarkerOnReady && typeof document.addEventListener === 'function') {
+      document.addEventListener('DOMContentLoaded', () => { try { mountOrReuse(); } catch {} }, { once: true });
+      return { ok: true, status: 'deferred', codeHash: targetHash };
+    }
+    return mountOrReuse();
+  } catch (err) {
+    return { ok: false, status: 'error', channel: 'periodicPicker', error: String(err && err.message || err).slice(0, 300), stack: String(err && err.stack || '').slice(0, 600) };
+  }
+  })()`;
+  }
+
   function readCompiledPeriodicPickerAssets(opts = null) {
     const baseDir = path.join(rootDir, 'vendor', 'periodic-picker');
     const rtPath = path.join(baseDir, 'periodic-picker.js');
@@ -221,7 +335,8 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     }
     const fileEntries = presentModules.map((mod) => ({
       rel: mod.rel,
-      content: fs.readFileSync(mod.filePath),
+      fullPath: mod.filePath,
+      name: mod.name,
     }));
     const extraTag = presentModules.map((mod) => mod.name).join(',');
     return bundleCache.resolveChannelAssetsWithDiskCache({
@@ -233,7 +348,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       compileFn: () => {
         const parts = [];
         for (const item of fileEntries) {
-          const minPart = minifySingleSource(item.content.toString('utf8'));
+          const buf = Buffer.isBuffer(item.content) ? item.content : fs.readFileSync(item.fullPath);
+          const allowMemberProps = PERIODIC_PICKER_DATA_ONLY_MODULES.has(item.name);
+          const minPart = minifySingleSource(buf.toString('utf8'), { allowMemberProps });
           if (minPart) parts.push(minPart);
         }
         const minRuntime = parts.join(';\n');
@@ -254,7 +371,7 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     });
   }
 
-  // 第八通道独立注入（元素周期表 3D 模型选择器）：绝不打入静态主包，支持 8 模块顺序合并、.bundle-cache.json 磁盘缓存、长按呼出与 100% 对称卸载
+  // 第八通道完整包按需注入（元素周期表 3D 模型选择器 8 模块）：绝不打入静态主包，加载后自动接管轻桩与挂起打开状态并 100% 对称卸载
   function buildPeriodicPickerExpression(config = null, opts = null) {
     const cfg = config && typeof config === 'object' ? reconcileConfigAliases(config) : readConfig();
     if (!shouldEnablePeriodicPicker(cfg)) {
@@ -274,12 +391,13 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       const liveCfg = window.__agPrism?.getState?.()?.cfg;
       if (liveCfg && typeof liveCfg === 'object' && (liveCfg.periodicModelPicker === 'off' || liveCfg.periodicModelPicker === false)) {
         try {
+          window.__agPrismPeriodicStub?.destroy?.();
           window.__agPrismPeriodicPicker?.destroy?.();
           document.documentElement?.removeAttribute?.('data-ag-prism-periodic-picker');
           document.documentElement?.removeAttribute?.('data-ag-pp-open');
           document.documentElement?.removeAttribute?.('data-ag-pp-holding');
           document.querySelectorAll?.('#ag-prism-periodic-picker-css, #ag-prism-periodic-picker-root, .ag-pp-hold-ring, .ag-pp-mini-keycap').forEach((n) => n.remove());
-          for (const k of ['__agPrismPeriodicPicker', '__agPrismPeriodicPickerFactory', '__agPrismKeyboard3D', '__agPrismPeriodicKeyboard3D', '__agPrismOledScreen', '__agPrismGrainAssets', '__agPeriodicAudioFx', '__agPeriodicModelCatalog', '__agPeriodicHostBridge', '__agPeriodicBentoUi', '__agPeriodicPbrGrainAssets', '__agPeriodicOledScreen', '__agPeriodicKeyboard3D']) {
+          for (const k of ['__agPrismPeriodicStub', '__agPrismPeriodicStubFactory', '__agPeriodicPendingOpen', '__agPeriodicFullLoaded', '__agPeriodicStubHash', '__agPrismPeriodicPicker', '__agPrismPeriodicPickerFactory', '__agPrismKeyboard3D', '__agPrismPeriodicKeyboard3D', '__agPrismOledScreen', '__agPrismGrainAssets', '__agPeriodicAudioFx', '__agPeriodicModelCatalog', '__agPeriodicHostBridge', '__agPeriodicBentoUi', '__agPeriodicPbrGrainAssets', '__agPeriodicOledScreen', '__agPeriodicKeyboard3D']) {
             try { delete window[k]; } catch {}
             try { delete globalThis[k]; } catch {}
           }
@@ -289,6 +407,18 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     } catch {}
 
     const targetHash = ${hashJson};
+    const consumePendingOpen = (inst) => {
+      try {
+        const pending = window.__agPeriodicPendingOpen;
+        if (!pending || typeof pending !== 'object') return;
+        try { delete window.__agPeriodicPendingOpen; } catch {}
+        const ageMs = Date.now() - (Number(pending.pointerDownAt) || 0);
+        const holdMs = pending.releasedAt ? (pending.releasedAt - (Number(pending.pointerDownAt) || 0)) : 9999;
+        if (pending.autoOpen && ageMs >= 0 && ageMs < 10000 && holdMs >= 260 && typeof inst?.open === 'function') {
+          inst.open(pending.trigger || undefined);
+        }
+      } catch {}
+    };
     const mountOrReuse = () => {
       if (needDomMarkerOnReady && !hasDomMarker() && (isPlainHttpLocalhost || !/\\bantigravity\\b/i.test(String(document.title || '')))) {
         return { ok: false, status: 'skipped-non-host' };
@@ -298,9 +428,14 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
         const st = typeof existing.getStatus === 'function' ? existing.getStatus() : null;
         const domActive = !document.documentElement || document.documentElement.getAttribute('data-ag-prism-periodic-picker') === '1';
         if ((!st || (st.status !== 'off' && st.status !== 'destroyed' && st.mode !== 'off')) && domActive) {
+          try { window.__agPrismPeriodicStub?.destroy?.(); } catch {}
+          try { window.__agPeriodicFullLoaded = true; globalThis.__agPeriodicFullLoaded = true; } catch {}
+          consumePendingOpen(existing);
           return { ok: true, reused: true, codeHash: targetHash, ...(st && typeof st === 'object' ? st : {}) };
         }
       }
+      try { window.__agPrismPeriodicStub?.destroy?.(); } catch {}
+      try { delete window.__agPrismPeriodicStub; delete window.__agPrismPeriodicStubFactory; } catch {}
       try { existing?.destroy?.(); } catch {}
 
       ${minRuntime};
@@ -317,6 +452,8 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
         inst.__prismCodeHash = targetHash;
         if (!window.__agPrismPeriodicPicker) window.__agPrismPeriodicPicker = inst;
       }
+      try { window.__agPeriodicFullLoaded = true; globalThis.__agPeriodicFullLoaded = true; } catch {}
+      consumePendingOpen(inst);
       const cur = inst && typeof inst.getStatus === 'function' ? inst.getStatus() : { status: 'active' };
       return { ok: true, codeHash: targetHash, ...(cur && typeof cur === 'object' ? cur : {}) };
     };
@@ -350,22 +487,20 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
-    const buf = fs.readFileSync(studioPath);
-    const usageBuf = hasUsage ? fs.readFileSync(usagePath) : null;
-    const fileEntries = usageBuf
+    const fileEntries = hasUsage
       ? [
-          { rel: 'usage-core.js', content: usageBuf },
-          { rel: 'home-studio-panel.js', content: buf },
+          { rel: 'usage-core.js', fullPath: usagePath },
+          { rel: 'home-studio-panel.js', fullPath: studioPath },
         ]
-      : [{ rel: 'home-studio-panel.js', content: buf }];
+      : [{ rel: 'home-studio-panel.js', fullPath: studioPath }];
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'homeStudio',
       sig,
       fileEntries,
       opts,
       compileFn: () => {
-        const studioSrc = minifyEmbeddedCssTemplate(buf.toString('utf8'));
-        const combined = usageBuf ? `${usageBuf.toString('utf8')}\n;\n${studioSrc}` : studioSrc;
+        const studioSrc = minifyEmbeddedCssTemplate(fs.readFileSync(studioPath, 'utf8'));
+        const combined = hasUsage ? `${fs.readFileSync(usagePath, 'utf8')}\n;\n${studioSrc}` : studioSrc;
         const minRuntime = minifySingleSource(combined);
         const codeHash = computeHash(minRuntime);
         return { minRuntime, codeHash };
@@ -474,6 +609,7 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     PERIODIC_PICKER_MODULE_FILES,
     buildWallpaperExpression,
     shouldEnablePeriodicPicker,
+    buildPeriodicPickerStubExpression,
     buildPeriodicPickerExpression,
     shouldEnableHomeStudio,
     buildHomeStudioChannelExpression,

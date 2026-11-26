@@ -137,14 +137,26 @@ export async function verifyAndHealEntryUnlocked(orch, entry, force = false) {
       healed = true;
       if (omniEnabled) await orch.ensureOmniServer().catch(() => null);
       if (sidebarEnabled) await orch.ensureSidebarService().catch(() => null);
-      await entry.session.send('Runtime.addBinding', { name: cdp.SETTING_BINDING }, 2600).catch(() => {});
-      await entry.session.send('Runtime.addBinding', { name: METRICS_BINDING }, 2600).catch(() => {});
-      await entry.session.send('Runtime.addBinding', { name: REPO_BINDING }, 2600).catch(() => {});
-      await entry.session.send('Runtime.addBinding', { name: THOUGHT_BINDING }, 2600).catch(() => {});
-      await entry.session.send('Runtime.addBinding', { name: USAGE_BINDING }, 2600).catch(() => {});
-      await orch.ensureBinding(entry, 'inlineDiff', 2600, true);
-      if (omniEnabled) await entry.session.send('Runtime.addBinding', { name: OMNI_BINDING }, 2600).catch(() => {});
-      if (sidebarEnabled) await orch.ensureBinding(entry, 'sidebar', 2600, true);
+      const seenBind = new Set();
+      const bindTask = (name) => {
+        if (!name || seenBind.has(name)) return null;
+        seenBind.add(name);
+        return entry.session.send('Runtime.addBinding', { name }, 2600).catch(() => {});
+      };
+      await Promise.all(
+        [
+          bindTask(cdp.SETTING_BINDING),
+          bindTask(METRICS_BINDING),
+          bindTask(REPO_BINDING),
+          bindTask(THOUGHT_BINDING),
+          bindTask(USAGE_BINDING),
+          orch.ensureBinding(entry, 'inlineDiff', 2600, true),
+          omniEnabled ? bindTask(OMNI_BINDING) : null,
+          sidebarEnabled ? orch.ensureBinding(entry, 'sidebar', 2600, true) : null,
+        ].filter(Boolean)
+      );
+      entry.thoughtBindingAdded = true;
+      if (omniEnabled) entry.omniBindingAdded = true;
 
       const sidebarDocument = entry.sidebarDocument;
       const healRes = await entry.session.evaluate(orch.injectExpr, false, 4500);

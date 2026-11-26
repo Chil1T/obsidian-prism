@@ -66,6 +66,7 @@ import {
   isTrustedHostContext,
   resolveTrustedBroadcastContextId,
 } from './rpc-dispatcher.mjs';
+import { deliverPeriodicPickerFullToEntry } from './channel-sync-engine.mjs';
 import { DaemonLoop } from './daemon-loop.mjs';
 import { SwarmSessionManager } from './swarm-session-manager.mjs';
 import { PrismDaemonCompatBase } from './daemon-compat-props.mjs';
@@ -100,7 +101,7 @@ export class PrismDaemon extends PrismDaemonCompatBase {
       noPortRelaunchThresholdMs = 8000,
       shortcutCheckIntervalMs = 300000,
       shortcutBackoffIntervalMs = 45 * 60 * 1000,
-      listPagesFallbackIntervalMs = 12000,
+      listPagesFallbackIntervalMs = 60000,
       _testUpdateService = null,
       _testAddonRegistry = null,
       addonsDir = null,
@@ -369,6 +370,7 @@ export class PrismDaemon extends PrismDaemonCompatBase {
   _ensureHomeStudioExpr(c, o) { return this._s().channelOrchestrator.ensureChannelExpr('homeStudio', c, o); }
   _deliverSettingsChannelToEntry(e, ctx) { return this._s().channelOrchestrator.deliverSettingsChannelToEntry(e, ctx); }
   _deliverHomeStudioChannelToEntry(e, ctx) { return this._s().channelOrchestrator.deliverHomeStudioChannelToEntry(e, ctx); }
+  _deliverPeriodicPickerFullToEntry(e, ctx) { return deliverPeriodicPickerFullToEntry(this._s().channelOrchestrator, e, ctx); }
   _teardownAllEntryChannelScripts(e, s, o) { return this._s().channelOrchestrator.teardownAllEntryChannelScripts(e, s, o); }
   _resolveWatchedConfigPath() { return this._s().channelOrchestrator.resolveWatchedConfigPath(); }
   _syncConfigFingerprintFromDisk(p) { return this._s().channelOrchestrator.syncConfigFingerprintFromDisk(p); }
@@ -475,12 +477,35 @@ export class PrismDaemon extends PrismDaemonCompatBase {
   stop(cleanPageDom = false, _testOverrides = null) { return this._s().daemonLoop.stop(cleanPageDom, _testOverrides); }
 }
 
+function resolveCliShardedBundleCachePath(rootDir, gitRepoDir) {
+  if (typeof process.env.AG_PRISM_BUNDLE_CACHE_PATH === 'string' && process.env.AG_PRISM_BUNDLE_CACHE_PATH.trim()) {
+    return undefined;
+  }
+  try {
+    const absRoot = path.resolve(rootDir || DEFAULT_ROOT_DIR);
+    const isGit = Boolean(
+      (gitRepoDir && path.resolve(gitRepoDir).toLowerCase() === absRoot.toLowerCase()) ||
+        fs.existsSync(path.join(absRoot, '.git'))
+    );
+    if (!isGit) {
+      const st = fs.lstatSync(absRoot);
+      if (!st.isSymbolicLink() && st.isDirectory()) {
+        fs.accessSync(absRoot, fs.constants.W_OK);
+        return path.join(absRoot, '.bundle-cache');
+      }
+    }
+  } catch {}
+  return undefined;
+}
+
 export function runDaemonCli(argv = process.argv) {
   const cli = parseArgs(argv);
+  const shardedCachePath = resolveCliShardedBundleCachePath(cli.rootDir, cli.gitRepoDir);
   const daemon = new PrismDaemon({
     rootDir: cli.rootDir,
     gitRepoDir: cli.gitRepoDir,
     overridePort: cli.port,
+    ...(shardedCachePath ? { bundleCachePath: shardedCachePath } : {}),
   });
 
   if (cli.once) {

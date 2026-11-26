@@ -46,23 +46,20 @@ function createI18nChannelBuilders({ rootDir, readConfig, detectSystemUiLocale, 
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
-    const rtBuf = fs.readFileSync(rtPath);
-    const revBuf = hasRev ? fs.readFileSync(revPath) : null;
-    const dictBuf = fs.readFileSync(dictPath);
     const fileEntries = [];
-    if (revBuf) fileEntries.push({ rel: 'vendor/host-i18n/reverse-patterns.js', content: revBuf });
-    fileEntries.push({ rel: 'vendor/host-i18n/host-i18n-runtime.js', content: rtBuf });
-    fileEntries.push({ rel: 'vendor/host-i18n/zh-CN.json', content: dictBuf });
+    if (hasRev) fileEntries.push({ rel: 'vendor/host-i18n/reverse-patterns.js', fullPath: revPath });
+    fileEntries.push({ rel: 'vendor/host-i18n/host-i18n-runtime.js', fullPath: rtPath });
+    fileEntries.push({ rel: 'vendor/host-i18n/zh-CN.json', fullPath: dictPath });
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'hostI18n',
       sig,
       fileEntries,
       opts,
       compileFn: () => {
-        const minRev = revBuf ? minifySingleSource(revBuf.toString('utf8')) : '';
-        const minRt = minifySingleSource(rtBuf.toString('utf8'));
+        const minRev = hasRev ? minifySingleSource(fs.readFileSync(revPath, 'utf8'), { allowMemberProps: false }) : '';
+        const minRt = minifySingleSource(fs.readFileSync(rtPath, 'utf8'), { allowMemberProps: false });
         const minRuntime = minRev ? `${minRev};\n${minRt}` : minRt;
-        const parsedDict = JSON.parse(dictBuf.toString('utf8'));
+        const parsedDict = JSON.parse(fs.readFileSync(dictPath, 'utf8'));
         const dictRaw = JSON.stringify(parsedDict).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
         const codeHash = computeHash(`${minRuntime}:${dictRaw}`);
         return { minRuntime, dictRaw, codeHash };
@@ -214,11 +211,9 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
     if (!cachePath && curMem && curMem.sig === sig && curMem.codeHash) {
       return curMem;
     }
-    const rtBuf = fs.readFileSync(rtPath);
-    const dictBuf = fs.readFileSync(dictPath);
     const fileEntries = [
-      { rel: 'vendor/host-i18n/swarm-i18n-runtime.js', content: rtBuf },
-      { rel: 'vendor/host-i18n/swarm-zh-CN.json', content: dictBuf },
+      { rel: 'vendor/host-i18n/swarm-i18n-runtime.js', fullPath: rtPath },
+      { rel: 'vendor/host-i18n/swarm-zh-CN.json', fullPath: dictPath },
     ];
     return bundleCache.resolveChannelAssetsWithDiskCache({
       channelName: 'swarmI18n',
@@ -226,8 +221,8 @@ ${CHANNEL_MAIN_FRAME_HOST_GUARD}
       fileEntries,
       opts,
       compileFn: () => {
-        const minRuntime = minifySingleSource(rtBuf.toString('utf8'));
-        const parsedDict = JSON.parse(dictBuf.toString('utf8'));
+        const minRuntime = minifySingleSource(fs.readFileSync(rtPath, 'utf8'), { allowMemberProps: false });
+        const parsedDict = JSON.parse(fs.readFileSync(dictPath, 'utf8'));
         const dictRaw = JSON.stringify(parsedDict).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
         const codeHash = computeHash(`${minRuntime}:${dictRaw}`);
         return { minRuntime, dictRaw, codeHash };

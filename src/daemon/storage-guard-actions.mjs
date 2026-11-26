@@ -302,11 +302,25 @@ export async function handleStorageAction(upd, action, _testOverrides = null, ra
         b.batchName,
         `${b.batchName} (${b.movedCount || 0}/${Number(b.movedMb) >= 1024 ? `${(Number(b.movedMb) / 1024).toFixed(2)} GB` : `${Math.round(Number(b.movedMb) || 0)} MB`})`,
       ]);
-    if (action === 'storage-health' && !forceFresh && upd._storageHealthCache && now - upd._storageHealthAt < 300000) {
-      return upd._storageHealthCache;
-    }
     const convDir = _testOverrides?.convDir || arch.getDefaultConversationsDir();
     const archiveDir = _testOverrides?.archiveDir || arch.getDefaultArchiveDir();
+    let convDirMtimeMs = 0;
+    try {
+      convDirMtimeMs = fs.statSync(convDir).mtimeMs || 0;
+    } catch {}
+    if (action === 'storage-health' && !forceFresh && upd._storageHealthCache) {
+      const sameConvDir =
+        convDirMtimeMs > 0 &&
+        upd._storageHealthConvMtimeMs === convDirMtimeMs &&
+        !upd._storageHealthCache.warn;
+      const idleStreak = sameConvDir ? Math.max(0, Number(upd._storageHealthIdleStreak) || 0) : 0;
+      const effectiveTtlMs = sameConvDir
+        ? Math.min(30 * 60 * 1000, 300000 * Math.pow(2, Math.min(3, idleStreak)))
+        : 300000;
+      if (now - upd._storageHealthAt < effectiveTtlMs) {
+        return upd._storageHealthCache;
+      }
+    }
 
     if (action === 'prepare-restore') {
       const batches = arch.listArchiveBatches(archiveDir).slice(0, 12);
@@ -655,6 +669,14 @@ export async function handleStorageAction(upd, action, _testOverrides = null, ra
       };
     }
 
+    const unchangedHealthy =
+      convDirMtimeMs > 0 &&
+      upd._storageHealthConvMtimeMs === convDirMtimeMs &&
+      !base.warn;
+    upd._storageHealthConvMtimeMs = convDirMtimeMs;
+    upd._storageHealthIdleStreak = unchangedHealthy
+      ? Math.min(3, (Number(upd._storageHealthIdleStreak) || 0) + 1)
+      : 0;
     upd._storageHealthCache = base;
     upd._storageHealthAt = now;
     return base;

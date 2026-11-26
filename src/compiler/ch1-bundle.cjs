@@ -26,6 +26,13 @@ const {
   foldStaticCssConstTokens,
 } = require('./part-preprocess.cjs');
 
+// Ch1 高频 DOM 热模块禁用成员属性（.prop / ?.prop）池化，恢复 V8 原生 Monomorphic IC
+const CH1_NO_MEMBER_PROP_POOL_PARTS = new Set([
+  'src/runtime/dom-bus.js',
+  'stream-choreography.js',
+  'ui-runtime.js',
+]);
+
 function createCh1Compiler({
   rootDir = path.resolve(__dirname, '..', '..'),
   stats,
@@ -68,12 +75,12 @@ function createCh1Compiler({
     return [...RUNTIME_PARTS];
   }
 
-  function getMangledUnit(unitKey, sig, src) {
+  function getMangledUnit(unitKey, sig, src, allowMemberProps = true) {
     const hit = _mangledUnitCache.get(unitKey);
     if (hit && hit.sig === sig) return hit;
     if (stats) stats.mangledUnitRuns += 1;
     const tokens = desugarInterpolatedTemplateTokens(mangleSafeLocals(foldStaticCssConstTokens(tokenizeJs(src))));
-    const occs = scanModulePoolCandidates(tokens, true);
+    const occs = scanModulePoolCandidates(tokens, allowMemberProps);
     const entry = { sig, tokens, occs };
     _mangledUnitCache.set(unitKey, entry);
     return entry;
@@ -113,9 +120,10 @@ function createCh1Compiler({
 
     for (const pm of partMeta) {
       const raw = fs.readFileSync(pm.fullPath, 'utf8');
+      const allowMemberProps = !CH1_NO_MEMBER_PROP_POOL_PARTS.has(pm.partName);
       const units = preprocessPartToUnits(pm.partName, raw, rootDir).map((u) => {
-        const uSig = `${pm.sig}:${u.key}`;
-        const mangled = getMangledUnit(u.key, uSig, u.src);
+        const uSig = `${pm.sig}:${u.key}:${allowMemberProps ? 1 : 0}`;
+        const mangled = getMangledUnit(u.key, uSig, u.src, allowMemberProps);
         for (const [strVal, list] of mangled.occs.entries()) {
           let g = globalStats.get(strVal);
           if (!g) {
@@ -263,7 +271,8 @@ function createCh1Compiler({
         return `globalThis.__agCodexEffortSliderDisableAutoBoot=!0;if(typeof window!=="undefined")window.__agCodexEffortSliderDisableAutoBoot=!0;\n${upstreamMin}\n${wrapperMin}`;
       }
     }
-    return minifySingleSource(prepped);
+    const singleOpts = CH1_NO_MEMBER_PROP_POOL_PARTS.has(normName) ? { allowMemberProps: false } : null;
+    return minifySingleSource(prepped, singleOpts);
   }
 
   function readRuntimeBundle() {

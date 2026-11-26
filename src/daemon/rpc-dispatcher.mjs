@@ -19,6 +19,23 @@ import { serializeJsonForEval } from './fs-atomic.mjs';
 import { isAutomatedTestRuntime } from './pid-lock.mjs';
 import { INLINE_DIFF_MAX_PAYLOAD_BYTES, INLINE_DIFF_MAX_URI_LENGTH } from './inline-diff-filter.mjs';
 import { readSafeInlineDiff } from './inline-diff-service.mjs';
+import { deliverPeriodicPickerFullToEntry } from './channel-sync-engine.mjs';
+
+// 统一 Fire-and-Forget 回调派发：强制 returnByValue:false / awaitPromise:false 且表达式末尾 ;void 0，防 V8 Inspector objectId 泄漏
+function sendFireAndForgetEval(session, expr, executionContextId = null, timeoutMs = 0, { rethrow = false } = {}) {
+  if (!session || session.closed || !expr) return Promise.resolve();
+  const trimmed = String(expr).trim().replace(/;+\s*$/, '');
+  const params = {
+    expression: `${trimmed};void 0`,
+    returnByValue: false,
+    awaitPromise: false,
+  };
+  if (typeof executionContextId === 'number' && executionContextId > 0) {
+    params.contextId = executionContextId;
+  }
+  const p = timeoutMs > 0 ? session.send('Runtime.evaluate', params, timeoutMs) : session.send('Runtime.evaluate', params);
+  return rethrow ? p : p.catch(() => {});
+}
 
 /**
  * 公共主帧执行上下文基础校验（fail-closed）。
@@ -127,6 +144,10 @@ async function handleSettingBinding(rpc, entry, payload, executionContextId) {
       await rpc.channelOrchestrator.deliverHomeStudioChannelToEntry(entry, executionContextId);
       return;
     }
+    if (parsed.action === 'request-periodic-picker') {
+      await deliverPeriodicPickerFullToEntry(rpc.channelOrchestrator, entry, executionContextId);
+      return;
+    }
     const updated =
       parsed.action === 'patch-batch' && parsed.entries && typeof parsed.entries === 'object'
         ? rpc.channelOrchestrator.updateConfigBatch(parsed.entries)
@@ -180,9 +201,7 @@ async function handleRepoBinding(rpc, entry, payload, executionContextId) {
         window.__agPrismRepoResolve(${safeId}, ${jsonRes});
       }
     })()`;
-    const evalParams = { expression: expr, returnByValue: true };
-    if (executionContextId) evalParams.contextId = executionContextId;
-    await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+    await sendFireAndForgetEval(entry.session, expr, executionContextId);
   }
 }
 
@@ -214,9 +233,7 @@ async function handleMetricsBinding(rpc, entry, payload, executionContextId) {
   }
   const safeId = Number(reqId) | 0;
   const expr = `window.__agPrismMetricsResolve && window.__agPrismMetricsResolve(${safeId}, ${serializeJsonForEval(result)})`;
-  const evalParams = { expression: expr, returnByValue: true };
-  if (executionContextId) evalParams.contextId = executionContextId;
-  await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+  await sendFireAndForgetEval(entry.session, expr, executionContextId);
 }
 
 async function handleThoughtBinding(rpc, entry, payload, executionContextId) {
@@ -272,10 +289,8 @@ async function handleThoughtBinding(rpc, entry, payload, executionContextId) {
             const frame = lastSent.length > 0 && target.startsWith(lastSent) ? { a: target.slice(lastSent.length), o: lastSent.length } : target;
             const safeId = Number(reqId) | 0;
             const chunkExpr = `window.__agPrismThoughtOnChunk && window.__agPrismThoughtOnChunk(${safeId}, ${serializeJsonForEval(frame)})`;
-            const chunkParams = { expression: chunkExpr, returnByValue: true };
-            if (executionContextId) chunkParams.contextId = executionContextId;
             try {
-              await entry.session.send('Runtime.evaluate', chunkParams);
+              await sendFireAndForgetEval(entry.session, chunkExpr, executionContextId, 0, { rethrow: true });
               lastSent = target;
             } catch {
               lastSent = '';
@@ -311,26 +326,20 @@ async function handleThoughtBinding(rpc, entry, payload, executionContextId) {
     const safeJson = serializeJsonForEval(result);
     const payloadExpr = safeJson.length > 4096 ? `JSON.parse(${serializeJsonForEval(safeJson)})` : safeJson;
     const resolveExpr = `window.__agPrismThoughtResolve && window.__agPrismThoughtResolve(${safeId}, ${payloadExpr})`;
-    const evalParams = { expression: resolveExpr, returnByValue: true };
-    if (executionContextId) evalParams.contextId = executionContextId;
-    await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+    await sendFireAndForgetEval(entry.session, resolveExpr, executionContextId);
   }
   if (action === 'save-config' && result && result.ok) {
     const selfNotifyExpr = '(() => { try { window.__agPrismSuggesterSettingsUi?.reloadProfiles?.(); } catch {} try { window.__agPrismSuggester?.sync?.(); } catch {} })()';
     const peerNotifyExpr = "(() => { try { window.__agPrismSuggesterSettingsUi?.reloadProfiles?.(); } catch {} try { window.__agPrismSuggester?.sync?.(); } catch {} try { const sec = document.getElementById?.('ag-cs-settings-sec') || document.getElementById?.('ag-prism-settings-sec'); sec?.__prismThoughtUiHandle?.reloadConfig?.(); } catch {} })()";
     const notifyTasks = [];
     if (!entry.session.closed) {
-      const selfParams = { expression: selfNotifyExpr, returnByValue: true, awaitPromise: false };
-      if (typeof executionContextId === 'number') selfParams.contextId = executionContextId;
-      notifyTasks.push(entry.session.send('Runtime.evaluate', selfParams, 2000).catch(() => {}));
+      notifyTasks.push(sendFireAndForgetEval(entry.session, selfNotifyExpr, executionContextId, 2000));
     }
     for (const other of rpc.sessionRegistry.sessions.values()) {
       if (!other || other === entry) continue;
       const target = resolveTrustedBroadcastContextId(other);
       if (!target.ok) continue;
-      const peerParams = { expression: peerNotifyExpr, returnByValue: true, awaitPromise: false };
-      if (typeof target.contextId === 'number') peerParams.contextId = target.contextId;
-      notifyTasks.push(other.session.send('Runtime.evaluate', peerParams, 2000).catch(() => {}));
+      notifyTasks.push(sendFireAndForgetEval(other.session, peerNotifyExpr, target.contextId, 2000));
     }
     if (notifyTasks.length > 0) await Promise.allSettled(notifyTasks);
   }
@@ -361,9 +370,7 @@ async function handleUsageBinding(rpc, entry, payload, executionContextId) {
   if (!entry.session.closed) {
     const safeId = Number(reqId) | 0;
     const resolveExpr = `window.__agPrismUsageResolve && window.__agPrismUsageResolve(${safeId}, ${serializeJsonForEval(result)})`;
-    const evalParams = { expression: resolveExpr, returnByValue: true };
-    if (executionContextId) evalParams.contextId = executionContextId;
-    await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+    await sendFireAndForgetEval(entry.session, resolveExpr, executionContextId);
   }
 }
 
@@ -401,9 +408,7 @@ async function handleInlineDiffBinding(_rpc, entry, payload, executionContextId)
   }
   if (checkCtx()) {
     const resolveExpr = `window.__agPrismInlineDiffResolve?.(${reqId}, ${serializeJsonForEval(resp)})`;
-    await entry.session
-      .send('Runtime.evaluate', { expression: resolveExpr, contextId: executionContextId, returnByValue: true })
-      .catch(() => {});
+    await sendFireAndForgetEval(entry.session, resolveExpr, executionContextId);
   }
   return resp;
 }
@@ -436,9 +441,7 @@ async function handleOmniBinding(rpc, entry, payload, executionContextId) {
     const safeId = Number(reqId) | 0;
     const jsonRes = serializeJsonForEval(result);
     const resolveExpr = `(() => { const r = ${jsonRes}; const b = window.__agPrismOmniBridge; if (b && typeof b.resolve === 'function') b.resolve(${safeId}, r); if (typeof window.__agPrismOmniResolve === 'function' && (!b || window.__agPrismOmniResolve !== b.resolve)) window.__agPrismOmniResolve(${safeId}, r); })()`;
-    const evalParams = { expression: resolveExpr, returnByValue: true };
-    if (executionContextId) evalParams.contextId = executionContextId;
-    await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+    await sendFireAndForgetEval(entry.session, resolveExpr, executionContextId);
   }
 }
 
@@ -485,9 +488,7 @@ async function handleSidebarBinding(rpc, entry, payload, executionContextId) {
   if (checkHost()) {
     const jsonRes = serializeJsonForEval(result);
     const resolveExpr = `(() => { const r = ${jsonRes}; const b = window.__agPrismSidebarBridge; if (b && typeof b.resolve === 'function') b.resolve(${safeId}, r); if (typeof window.__agPrismSidebarResolve === 'function' && (!b || window.__agPrismSidebarResolve !== b.resolve)) window.__agPrismSidebarResolve(${safeId}, r); })()`;
-    const evalParams = { expression: resolveExpr, returnByValue: true };
-    if (executionContextId) evalParams.contextId = executionContextId;
-    await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+    await sendFireAndForgetEval(entry.session, resolveExpr, executionContextId);
   }
   return result;
 }
@@ -515,9 +516,7 @@ async function handleWallpaperBinding(rpc, entry, payload, executionContextId) {
     if (checkCtx()) {
       const safeId = Number(reqId) | 0;
       const resolveExpr = `(() => { const r = ${serializeJsonForEval(errRes)}; if (typeof window.__agPrismWallpaperResolve === 'function') window.__agPrismWallpaperResolve(${safeId}, r); else if (window.__agPrismWallpaperBridge && typeof window.__agPrismWallpaperBridge.resolve === 'function') window.__agPrismWallpaperBridge.resolve(${safeId}, r); })()`;
-      const evalParams = { expression: resolveExpr, returnByValue: true };
-      if (typeof executionContextId === 'number') evalParams.contextId = executionContextId;
-      await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+      await sendFireAndForgetEval(entry.session, resolveExpr, executionContextId);
     }
     return errRes;
   }
@@ -544,9 +543,7 @@ async function handleWallpaperBinding(rpc, entry, payload, executionContextId) {
     const safeJson = serializeJsonForEval(result);
     const payloadExpr = safeJson.length > 4096 ? `JSON.parse(${serializeJsonForEval(safeJson)})` : safeJson;
     const resolveExpr = `(() => { const r = ${payloadExpr}; if (typeof window.__agPrismWallpaperResolve === 'function') window.__agPrismWallpaperResolve(${safeId}, r); else if (window.__agPrismWallpaperBridge && typeof window.__agPrismWallpaperBridge.resolve === 'function') window.__agPrismWallpaperBridge.resolve(${safeId}, r); })()`;
-    const evalParams = { expression: resolveExpr, returnByValue: true };
-    if (typeof executionContextId === 'number') evalParams.contextId = executionContextId;
-    await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+    await sendFireAndForgetEval(entry.session, resolveExpr, executionContextId);
   }
 
   if (result && result.ok && (action === 'save-config' || action === 'pick-media' || action === 'clear-media')) {
@@ -559,9 +556,7 @@ async function handleWallpaperBinding(rpc, entry, payload, executionContextId) {
       for (const other of rpc.sessionRegistry.sessions.values()) {
         if (!other || other === entry || other.wallpaperSkipped) continue;
         if (!isTrustedHostContext(other, other.sidebarHostContextId, null, { requireTrackedFrames: true })) continue;
-        void other.session
-          .send('Runtime.evaluate', { expression: syncExpr, contextId: other.sidebarHostContextId, returnByValue: true, awaitPromise: false }, 2000)
-          .catch(() => {});
+        void sendFireAndForgetEval(other.session, syncExpr, other.sidebarHostContextId, 2000);
       }
     }
   }
@@ -591,9 +586,7 @@ async function handleSuggesterBinding(rpc, entry, payload, executionContextId) {
     if (checkCtx()) {
       const safeId = Number(reqId) | 0;
       const resolveExpr = `(() => { const r = ${serializeJsonForEval(errRes)}; if (typeof window.__agPrismSuggesterResolve === 'function') window.__agPrismSuggesterResolve(${safeId}, r); else if (window.__agPrismSuggesterBridge && typeof window.__agPrismSuggesterBridge.resolve === 'function') window.__agPrismSuggesterBridge.resolve(${safeId}, r); })()`;
-      const evalParams = { expression: resolveExpr, returnByValue: true };
-      if (typeof executionContextId === 'number') evalParams.contextId = executionContextId;
-      await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+      await sendFireAndForgetEval(entry.session, resolveExpr, executionContextId);
     }
     return errRes;
   }
@@ -620,9 +613,7 @@ async function handleSuggesterBinding(rpc, entry, payload, executionContextId) {
     const safeJson = serializeJsonForEval(result);
     const payloadExpr = safeJson.length > 4096 ? `JSON.parse(${serializeJsonForEval(safeJson)})` : safeJson;
     const resolveExpr = `(() => { const r = ${payloadExpr}; if (typeof window.__agPrismSuggesterResolve === 'function') window.__agPrismSuggesterResolve(${safeId}, r); else if (window.__agPrismSuggesterBridge && typeof window.__agPrismSuggesterBridge.resolve === 'function') window.__agPrismSuggesterBridge.resolve(${safeId}, r); })()`;
-    const evalParams = { expression: resolveExpr, returnByValue: true };
-    if (typeof executionContextId === 'number') evalParams.contextId = executionContextId;
-    await entry.session.send('Runtime.evaluate', evalParams).catch(() => {});
+    await sendFireAndForgetEval(entry.session, resolveExpr, executionContextId);
   }
 
   const shouldBroadcastSync =
@@ -653,17 +644,13 @@ async function handleSuggesterBinding(rpc, entry, payload, executionContextId) {
     const peerSyncExpr = `(() => { ${applyStmt} try { window.__agPrismSuggesterSettingsUi?.reloadProfiles?.(); } catch {} ${thoughtReloadStmt} })()`;
     const broadcastTasks = [];
     if (checkCtx()) {
-      const selfParams = { expression: selfSyncExpr, returnByValue: true, awaitPromise: false };
-      if (typeof executionContextId === 'number') selfParams.contextId = executionContextId;
-      broadcastTasks.push(entry.session.send('Runtime.evaluate', selfParams, 2000).catch(() => {}));
+      broadcastTasks.push(sendFireAndForgetEval(entry.session, selfSyncExpr, executionContextId, 2000));
     }
     for (const other of rpc.sessionRegistry.sessions.values()) {
       if (!other || other === entry || other.suggesterSkipped) continue;
       const target = resolveTrustedBroadcastContextId(other);
       if (!target.ok) continue;
-      const peerParams = { expression: peerSyncExpr, returnByValue: true, awaitPromise: false };
-      if (typeof target.contextId === 'number') peerParams.contextId = target.contextId;
-      broadcastTasks.push(other.session.send('Runtime.evaluate', peerParams, 2000).catch(() => {}));
+      broadcastTasks.push(sendFireAndForgetEval(other.session, peerSyncExpr, target.contextId, 2000));
     }
     if (broadcastTasks.length > 0) await Promise.allSettled(broadcastTasks);
   }
