@@ -127,6 +127,13 @@ function buildAnchorSpecs(parsed) {
       replace: (_, pre, _cur, post) => `${pre}${windows4}${post}`,
     },
     {
+      rel: 'installer/watcher/app.manifest',
+      label: 'watcher app.manifest assemblyIdentity 4-part version',
+      pattern: /(<assemblyIdentity\s+version=")([^"]+)(")/,
+      expected: windows4,
+      replace: (_, pre, _cur, post) => `${pre}${windows4}${post}`,
+    },
+    {
       rel: 'installer/common/CdpClient.cs',
       label: 'CdpClient.cs PluginManifest fallback version',
       pattern: /(m\.Version\s*=\s*GetString\(raw,\s*"version",\s*")([^"]+)("\);)/,

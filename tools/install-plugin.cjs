@@ -29,6 +29,8 @@ const {
   detectRunningAntigravityHostSync,
   recordRelaunchPromptState,
 } = require(path.join(ROOT_DIR, "cdp.js"));
+const im = require(path.join(ROOT_DIR, "src", "platform", "install-manifest.mjs"));
+const repoSync = require(path.join(ROOT_DIR, "src", "platform", "repo-sync.mjs"));
 
 function resolveDefaultPluginVersion(sourceDir = ROOT_DIR) {
   try {
@@ -1319,39 +1321,24 @@ function removeLinuxLosslessLauncher(opts = {}) {
 
 const DIRS_TO_SYNC = ["assets", "src", "vendor", "sidecars"];
 
-function shouldSkipSyncEntry(name) {
-  if (name === "__pycache__" || name === ".DS_Store" || name === ".daemon.pid") return true;
-  const lower = String(name || "").toLowerCase();
-  if (lower.endsWith(".log") || lower.endsWith(".tmp")) return true;
-  if (/\.tmp\.[a-z0-9._-]+$/i.test(name)) return true;
-  return false;
-}
-
-function copyDirRecursiveSync(srcDir, dstDir) {
-  const srcStat = assertNotSymbolicLink(srcDir, "source directory");
-  if (!srcStat) return 0;
-  if (!srcStat.isDirectory()) {
-    throw new Error(`Refusing non-directory source: ${srcDir}`);
-  }
+function copyDirRecursiveSync(srcDir, dstDir, relPrefix = "", prot = im.PROTECTED_USER_PATHS) {
+  const st = assertNotSymbolicLink(srcDir, "source directory");
+  if (!st) return 0;
+  if (!st.isDirectory()) throw new Error(`Refusing non-directory source: ${srcDir}`);
   assertNotSymbolicLink(dstDir, "destination directory");
   fs.mkdirSync(dstDir, { recursive: true });
   assertNotSymbolicLink(dstDir, "destination directory");
   let copied = 0;
-  for (const entry of fs.readdirSync(srcDir, { withFileTypes: true })) {
-    if (shouldSkipSyncEntry(entry.name)) continue;
-    const srcPath = path.join(srcDir, entry.name);
-    const dstPath = path.join(dstDir, entry.name);
-    if (entry.isSymbolicLink()) {
-      throw new Error(`Refusing symbolic link entry: ${srcPath}`);
-    }
-    const entryStat = assertNotSymbolicLink(srcPath, "source");
-    assertNotSymbolicLink(dstPath, "destination");
-    if (entry.isDirectory() || (entryStat && entryStat.isDirectory())) {
-      copied += copyDirRecursiveSync(srcPath, dstPath);
-    } else if (entry.isFile() || (entryStat && entryStat.isFile())) {
-      safeCopyFileNoSymlink(srcPath, dstPath);
-      copied += 1;
-    }
+  for (const e of fs.readdirSync(srcDir, { withFileTypes: true })) {
+    const rel = relPrefix ? `${relPrefix}/${e.name}` : e.name;
+    if (im.shouldExcludeSyncRelPath(rel)) continue;
+    const s = path.join(srcDir, e.name), d = path.join(dstDir, e.name);
+    if (e.isSymbolicLink()) throw new Error(`Refusing symbolic link entry: ${s}`);
+    const es = assertNotSymbolicLink(s, "source");
+    assertNotSymbolicLink(d, "destination");
+    if (im.isProtectedUserPath(rel, prot) && fs.existsSync(d)) continue;
+    if (e.isDirectory() || (es && es.isDirectory())) copied += copyDirRecursiveSync(s, d, rel, prot);
+    else if (e.isFile() || (es && es.isFile())) { safeCopyFileNoSymlink(s, d); copied += 1; }
   }
   return copied;
 }
@@ -1532,25 +1519,11 @@ async function installPlugin(opts = {}) {
 
   const stoppedOldPid = await stopExistingDaemonInDir(targetDir, opts.daemonStopOpts);
 
-  let copiedFiles = 0;
-  const missingOptional = [];
-  for (const rel of ROOT_FILES_TO_SYNC) {
-    const src = path.join(sourceDir, rel);
-    const dst = path.join(targetDir, rel);
-    const srcStat = assertNotSymbolicLink(src, "source");
-    if (srcStat) {
-      safeCopyFileNoSymlink(src, dst);
-      copiedFiles += 1;
-    } else {
-      missingOptional.push(rel);
-    }
-  }
-
-  for (const dirName of DIRS_TO_SYNC) {
-    const srcSub = path.join(sourceDir, dirName);
-    const dstSub = path.join(targetDir, dirName);
-    copiedFiles += copyDirRecursiveSync(srcSub, dstSub);
-  }
+  const { copiedFiles: syncedCount, missingOptional } = repoSync.syncPluginDirWithManifest({
+    sourceDir, targetDir, rootFiles: ROOT_FILES_TO_SYNC, dirs: DIRS_TO_SYNC,
+    copyFile: safeCopyFileNoSymlink, copyDir: copyDirRecursiveSync, assertNotSymlink: assertNotSymbolicLink,
+  });
+  let copiedFiles = syncedCount;
 
   // Record linked Git repository metadata so Sidecar can inspect/pull source repo
   const repoMetaPath = path.join(targetDir, "repo-meta.json");
@@ -1975,41 +1948,24 @@ async function uninstallPlugin(opts = {}) {
 
   syncHostPluginRegistry(hostConfigDir, false);
 
-  if (fs.existsSync(targetDir)) {
-    const tStat = assertNotSymbolicLink(targetDir, "target directory");
-    if (tStat) {
-      fs.rmSync(targetDir, { recursive: true, force: true });
-    }
+  if (fs.existsSync(targetDir) && assertNotSymbolicLink(targetDir, "target directory")) {
+    if (!purgeData && repoSync.hasUserOwnedAssetsInDir(targetDir)) repoSync.removeManagedFilesKeepingUserAssets(targetDir);
+    else fs.rmSync(targetDir, { recursive: true, force: true });
   }
-
   let cleanedLegacyPluginDir = false;
   if (legacyDir && !isProtectedUserDataPath(legacyDir)) {
     try {
       const legStat = assertNotSymbolicLink(legacyDir, "legacy plugin directory");
-      if (legStat && legStat.isDirectory()) {
-        fs.rmSync(legacyDir, { recursive: true, force: true });
-        cleanedLegacyPluginDir = !fs.existsSync(legacyDir);
-      }
+      if (legStat && legStat.isDirectory()) { fs.rmSync(legacyDir, { recursive: true, force: true }); cleanedLegacyPluginDir = !fs.existsSync(legacyDir); }
     } catch {}
   }
-
   const purgedPaths = [];
   if (purgeData) {
     if (hostConfigDir) {
       try {
         assertNotSymbolicLink(hostConfigDir, "host config directory");
-        const exactFiles = [
-          "obsidian-prism-config.backup.json",
-          "obsidian-prism-thought.json",
-          "obsidian-prism-thought-cache.json",
-          "obsidian-prism-usage-rollup-cache.json",
-          "obsidian-prism-storage-guard-state.json",
-          "obsidian-prism-sidebar.json",
-          "obsidian-prism-sidebar.json.lock",
-          "obsidian-prism-wallpaper.json",
-          "obsidian-prism-suggester.json",
-        ];
-        for (const name of exactFiles) {
+        // PURGE_DATA_FILES (includes obsidian-prism-storage-guard-state.json)
+        for (const name of im.PURGE_DATA_FILES) {
           const fp = path.join(hostConfigDir, name);
           if (safeUnlinkNoSymlink(fp, name)) purgedPaths.push(fp);
         }

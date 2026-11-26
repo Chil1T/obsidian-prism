@@ -871,6 +871,7 @@ test(
           '/r:System.Windows.Forms.dll',
           path.join(ROOT_DIR, 'installer', 'common', 'MiniJson.cs'),
           path.join(ROOT_DIR, 'installer', 'common', 'CdpClient.cs'),
+          path.join(ROOT_DIR, 'installer', 'common', 'InstallManifest.cs'),
           path.join(ROOT_DIR, 'installer', 'setup', 'Program.cs'),
           probeCs,
         ],
