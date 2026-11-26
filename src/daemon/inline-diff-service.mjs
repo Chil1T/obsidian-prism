@@ -349,7 +349,7 @@ async function runWithInlineDiffSemaphore(taskFn) {
   }
 }
 
-function projectInlineDiffEntry(rawEntry, { maxDiffLines, maxSnapshotLines, maxLineChars, hintAdd, hintDel, hintIsCreated }) {
+function projectInlineDiffEntry(rawEntry, { maxDiffLines, maxSnapshotLines, maxLineChars, hintAdd, hintDel, hintIsCreated, expand = false }) {
   if (!rawEntry || !rawEntry.ok) {
     return rawEntry || { ok: false, error: 'read_failed' };
   }
@@ -361,6 +361,7 @@ function projectInlineDiffEntry(rawEntry, { maxDiffLines, maxSnapshotLines, maxL
       maxLines: maxDiffLines,
       maxLineChars,
       hints: hintAdd > 0 || hintDel > 0 ? { additions: hintAdd, deletions: hintDel } : null,
+      expand: Boolean(expand),
     });
     if (parsed.ok === false || parsed.blocked) {
       return { ok: false, reason: 'blocked', error: 'blocked' };
@@ -368,7 +369,7 @@ function projectInlineDiffEntry(rawEntry, { maxDiffLines, maxSnapshotLines, maxL
     if (parsed.isBinary) {
       return { ok: true, mode: 'binary', fileName: rawEntry.fileName, additions: 0, deletions: 0, truncated: false, totalLines: 0, lines: [] };
     }
-    return {
+    const projected = {
       ok: true,
       mode: 'git-diff',
       fileName: rawEntry.fileName,
@@ -379,6 +380,8 @@ function projectInlineDiffEntry(rawEntry, { maxDiffLines, maxSnapshotLines, maxL
       totalLines: Number.isFinite(parsed.totalLines) ? parsed.totalLines : parsed.lines.length,
       lines: parsed.lines,
     };
+    if (parsed.cumulativeDiff) projected.cumulativeDiff = true;
+    return projected;
   }
   const textLines = rawEntry.rawText.length > 0 ? rawEntry.rawText.split('\n') : [];
   if (!rawEntry.byteTruncated && textLines.length > 0 && textLines[textLines.length - 1] === '') {
@@ -497,7 +500,7 @@ export async function readSafeInlineDiff(rawUri, opts = {}) {
   const skipGitSubprocess = isNonGit || hasUnsafeGitConfig(realGitDir, realCommonGitDir);
   const wantCommitFallback = !isNonGit && (hintAdd > 0 || hintDel > 0) && !hintIsCreated ? 1 : 0;
   const rawCacheKey = `${realPath}|${st.mtimeMs}|${st.size}|${isNonGit ? 'nogit' : gitIndexMtimeMs}|${skipGitSubprocess ? 1 : 0}|${wantCommitFallback}|${maxReadBytes}|${gitMaxBuffer}`;
-  const projectionOpts = { maxDiffLines, maxSnapshotLines, maxLineChars, hintAdd, hintDel, hintIsCreated };
+  const projectionOpts = { maxDiffLines, maxSnapshotLines, maxLineChars, hintAdd, hintDel, hintIsCreated, expand };
 
   if (!opts?.noCache) {
     const cachedRaw = getInlineDiffCached(rawCacheKey);
