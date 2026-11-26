@@ -693,9 +693,9 @@ test('perf guard 14: flattenMainStyleSheet preserves :not(:is(...)), prefix &, a
   assert.ok(fakeStyle.textContent.includes('html[x] .card:not(:is(.a,.b)){display: block;}'), 'must never expand :is() inside :not()');
   assert.ok(fakeStyle.textContent.includes('html[x] .card [data-x=":is(p,q)"]{color: blue;}'), 'must never expand :is() inside quoted attribute values');
 
-  const cdpSrc = fs.readFileSync(path.join(ROOT, 'cdp.js'), 'utf8');
-  const minMatch = cdpSrc.match(/function minifyCss\(css\)[\s\S]*?\n\}/);
-  assert.ok(minMatch, 'minifyCss must exist in cdp.js');
+  const cssPackSrc = fs.readFileSync(path.join(ROOT, 'src', 'compiler', 'css-pack.cjs'), 'utf8');
+  const minMatch = cssPackSrc.match(/function minifyCss\(css\)[\s\S]*?\n\}/);
+  assert.ok(minMatch, 'minifyCss must exist in src/compiler/css-pack.cjs');
   const sbCss = { Set };
   vm.runInNewContext(`${minMatch[0]}; globalThis.minifyCss = minifyCss;`, sbCss);
   const sample = '#aabbcc-box { content: "v: 0.5 #aabbcc !important"; background: url(/files/0.5.png); color: red !important; }';
