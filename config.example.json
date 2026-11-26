@@ -9,6 +9,7 @@
   "ignoreReducedMotion": false,
   "targetFps": "180",
   "telemetryModule": "auto",
+  "telemetryQuotaMode": "compact",
   "effortSliderModule": "auto",
   "effortMemory": "on",
   "periodicModelPicker": "on",

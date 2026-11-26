@@ -1917,7 +1917,8 @@ test('inline-fallback renders 5h and weekly quota chips in composer bar, hides u
     assert.equal(barChildren[1], wChip, 'weekly quota chip sits before speed chip');
     assert.equal(barChildren[2], sChip);
 
-    assert.equal(fChip.hidden, false);
+    // Default compact mode picks the tighter window (weekly 34% < 5h 92%) while detail card shows both
+    assert.equal(fChip.hidden, true, 'default compact mode hides looser 5h chip when weekly is tighter');
     assert.equal(sr.getElementById('five-balance').textContent, '92%');
     assert.equal(fChip.getAttribute('data-warn'), null);
 
@@ -1925,6 +1926,13 @@ test('inline-fallback renders 5h and weekly quota chips in composer bar, hides u
     assert.equal(sr.getElementById('week-balance').textContent, '34%');
     assert.equal(wChip.getAttribute('data-warn'), '1', '<= 35% must mark data-warn="1"');
     assert.ok((wChip.getAttribute('title') || '').includes('周 34%'));
+    assert.match(sr.getElementById('context-five-quota').textContent, /^92% · /);
+    assert.match(sr.getElementById('context-week-quota').textContent, /^34% · /);
+
+    // telemetryQuotaMode='both' displays both 5h and weekly chips simultaneously
+    ctrl.sync({ telemetryModule: 'on', telemetryQuotaMode: 'both', language: 'zh-CN' });
+    assert.equal(fChip.hidden, false, 'both mode shows 5h chip');
+    assert.equal(wChip.hidden, false, 'both mode shows weekly chip');
 
     // Click weekly chip -> opens context/quota detail card cleanly
     const ctxCard = sr.getElementById('context-card');
@@ -1933,17 +1941,21 @@ test('inline-fallback renders 5h and weekly quota chips in composer bar, hides u
     assert.equal(ctxCard.hidden, false, 'clicking quota chip opens detail card');
     assert.equal(wChip.getAttribute('aria-expanded'), 'true');
 
-    // Switch active model to Claude (critical 5h 14%, unavailable weekly)
+    // Switch active model to Claude (critical 5h 14%, unavailable weekly) in compact mode
+    ctrl.sync({ telemetryModule: 'on', telemetryQuotaMode: 'compact', language: 'zh-CN' });
     mockModel = 'Claude Opus';
     await ctrl.refresh();
+    assert.equal(fChip.hidden, false, 'compact mode shows sole available 5h chip');
     assert.equal(sr.getElementById('five-balance').textContent, '14%');
     assert.equal(fChip.getAttribute('data-warn'), '2', '<= 15% must mark data-warn="2"');
     assert.equal(wChip.hidden, true, 'unavailable weekly window must hide week chip');
 
-    // Responsive TIER_CSS retains fold hooks for week (tier 3) and five (tier 4)
+    // Responsive TIER_CSS retains progressive fold hooks for speed/cache/week/five
     const cssText = sr.querySelector('style').textContent;
+    assert.ok(cssText.includes('[data-card="speed"]'), 'shadow CSS must keep tier-1 fold rule for speed chip');
+    assert.ok(cssText.includes('[data-card="cache"]'), 'shadow CSS must keep tier-2 fold rule for cache chip');
     assert.ok(cssText.includes('[data-card="week"]'), 'shadow CSS must keep tier-3 fold rule for week chip');
-    assert.ok(cssText.includes('[data-card="five"]'), 'shadow CSS must keep tier-4 fold rule for five chip');
+    assert.ok(cssText.includes('[data-card="five"]'), 'shadow CSS must keep tier-3 fold rule for five chip');
   } finally {
     ctrl.destroy();
   }

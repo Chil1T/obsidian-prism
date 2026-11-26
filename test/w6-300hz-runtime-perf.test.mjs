@@ -719,13 +719,16 @@ test('w6-5: omni, sidebar-studio, and effort-slider enforce steps() 300Hz thrott
   const efSrc = fs.readFileSync(path.join(ROOT, 'vendor', 'effort-slider', 'upstream-client.js'), 'utf8');
   const efCss = (efSrc.match(/var SLIDER_CSS = "([^\n]*)";/) || [])[1] || '';
   for (const needle of [
-    'animation:ces-sweep 2.4s steps(24) infinite',
-    'animation:ces-star-sweep steps(24) infinite',
+    'animation:ces-sweep 2.4s linear infinite',
+    'animation:ces-star-sweep linear infinite',
+    "html[data-ag-cs-style][data-ag-cs-perf-mode='performance'] :is(.ces-star,.ces-energy__sweep){animation-timing-function:steps(24)!important}",
     "html[data-ag-cs-style][data-ag-cs-win-blur='1'] :is(.ces-star,.ces-energy__sweep){animation-play-state:paused!important}",
     "html[data-ag-cs-style]:is([data-ag-cs-win-blur='1'],[data-ag-cs-perf-mode='performance'],[data-ag-cs-motion='off']) .ces-set{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:rgba(24,24,28,.99)}",
   ]) {
     assert.ok(efCss.includes(needle), `effort-slider SLIDER_CSS missing: ${needle}`);
   }
+  assert.equal(efCss.includes('animation:ces-sweep 2.4s steps(24)'), false, 'default ces-sweep must stay smooth linear (not throttled to steps(24))');
+  assert.equal(efCss.includes('animation:ces-star-sweep steps(24)'), false, 'default ces-star-sweep must stay smooth linear (not throttled to steps(24))');
   assert.equal(/[^\x00-\x7F]/.test(efCss), false, 'effort-slider SLIDER_CSS must remain pure ASCII');
 });
 

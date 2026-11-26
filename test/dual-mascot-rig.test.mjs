@@ -1008,9 +1008,10 @@ test('Issue #1 & perf guard: dual mascots (cat + clawd) track side-panel push/dr
   assert.equal(ftAttrs.get('data-t'), '0');
   const callsAfterInit = rectCalls;
   ftRoCb([{ contentRect: { width: 610 } }]);
-  assert.equal(ftAttrs.get('data-t'), '1');
+  assert.equal(ftAttrs.get('data-t'), '0');
+  assert.equal(barAttrs.get('data-t'), '1 2');
   ftRoCb([{ contentRect: { width: 340 } }]);
-  assert.equal(ftAttrs.get('data-t'), '1 2 3 4 5');
+  assert.equal(ftAttrs.get('data-t'), '1 2');
   assert.equal(barAttrs.get('data-t'), '1 2 3 4 5');
   assert.equal(rectCalls, callsAfterInit, 'ResizeObserver path must use contentRect.width with 0 getBoundingClientRect reflows');
   assert.equal(/(?<![a-z-])width:0!important/.test(injectedTierCss), false, 'TIER_CSS must not use non-interpolable width:0!important');
@@ -1338,7 +1339,8 @@ test('Red-team regressions: wide rebound (reducedMotion=false), narrower restore
     assert.ok(disconnectedCount >= 1, 'Session switch rebuilding footer must disconnect stale ResizeObserver');
     assert.equal(observedEls[observedEls.length - 1], newFt, 'Session switch must rebind ResizeObserver to rebuilt footer');
     assert.equal(newBar.hasStyle(), true, 'Rebuilt external bar must receive style[data-pt="1"]');
-    assert.equal(newFt.getAttribute('data-t'), '1 2 3 4 5', 'Rebuilt narrow footer must immediately compute tier 5');
+    assert.equal(newFt.getAttribute('data-t'), '1 2', 'Rebuilt narrow footer must immediately compute decoupled outer footerTier "1 2"');
+    assert.equal(newBar.getAttribute('data-t'), '1 2 3 4 5', 'Rebuilt narrow bar must immediately compute tier 5');
     ctl.destroy();
   }
 });
