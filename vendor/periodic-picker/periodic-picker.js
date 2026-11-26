@@ -481,15 +481,15 @@
       var cachedCardBounds = { left: 74, top: 232, width: 300, height: 316 };
       var cachedRightCardBounds = { left: 1080, top: 232, width: 246, height: 316 };
       var cachedStageBounds = { left: 320, top: 220, width: 760, height: 340, valid: false };
-      var lastStageRectFn = null;
-      var rimGlowWasActive = false;
-      var rimDockWasActive = false;
-      var rimCardWasActive = false;
-      var rimRightWasActive = false;
-      var lastDockCompactSig = '';
-      var lastShadowPxStr = '';
-      var lastShadowPyStr = '';
-      var lastStageCursor = '';
+      var lastStageRectFn = null, rCache = { t: 0, el: null, fn: null, m: '' };
+      var rimGlowWasActive = false, rimDockWasActive = false, rimCardWasActive = false, rimRightWasActive = false;
+      var rimP = { x: NaN, y: NaN, d: Infinity, cT: 0, rT: 0 }, bCache = { k: '', p: null };
+      var lastDockCompactSig = '', lastShadowPxStr = '', lastShadowPyStr = '', lastStageCursor = '';
+      function resetUltraPerfCaches() {
+        rCache.t = 0; rCache.el = null; rCache.fn = null; rCache.m = '';
+        rimP.x = NaN; rimP.y = NaN; rimP.d = Infinity; rimP.cT = 0; rimP.rT = 0;
+        bCache.k = ''; bCache.p = null;
+      }
 
       /* High-refresh (120-300Hz) single-frame pointermove coalescing state */
       var lastPointerClient = { x: -9999, y: -9999, active: false };
@@ -696,7 +696,7 @@
         if (!was || !overlayEl || isDestroyed || isConfirmClosing || isDrawerClosing) return;
         if (dockResizeRafId && cancelRaf) cancelRaf(dockResizeRafId);
         dockResizeRafId = 0; lastBoundsSyncMs = readClockMs();
-        refreshCachedLayoutRects();
+        refreshCachedLayoutRects(true);
         resizeCanvasToStage(!syncDockCompactState(), true);
         if (!isOrbitDragging) syncHitLayerRects(true);
         syncSceneAndDom(true);
@@ -2385,10 +2385,14 @@
         var r = el.getBoundingClientRect();
         return r && r.width > minW && r.height > minH ? { left: Number(r.left) || 0, top: Number(r.top) || 0, width: Number(r.width) || dw, height: Number(r.height) || dh } : null;
       }
-      function refreshCachedLayoutRects() {
+      function refreshCachedLayoutRects(force) {
         if (!overlayEl) return;
+        var nowMs = readClockMs();
+        var sFn = stageEl && typeof stageEl.getBoundingClientRect === 'function' ? stageEl.getBoundingClientRect : null;
+        var oFn = typeof overlayEl.getBoundingClientRect === 'function' ? overlayEl.getBoundingClientRect : null;
+        if (!force && cachedStageBounds.valid && rCache.el === overlayEl && lastStageRectFn === sFn && rCache.fn === oFn && rCache.m === stageMode && rCache.t > 0 && nowMs >= rCache.t && nowMs - rCache.t <= 16) return;
         try {
-          if (typeof overlayEl.getBoundingClientRect === 'function') {
+          if (oFn) {
             var or = overlayEl.getBoundingClientRect();
             if (or && or.width > 160) cachedOverlayWidth = Number(or.width) || 0;
           }
@@ -2411,14 +2415,15 @@
           if (cr) cachedCardBounds = cr;
           var rr = bentoRefs ? readBoxRect(bentoRefs.rightWing, 20, 20, 246, 316) : null;
           if (rr) cachedRightCardBounds = rr;
-          if (stageEl && typeof stageEl.getBoundingClientRect === 'function') {
+          if (sFn) {
             var sr = readBoxRect(stageEl, 80, 60, 1280, 680);
-            lastStageRectFn = stageEl.getBoundingClientRect;
+            lastStageRectFn = sFn;
             if (sr) {
               sr.valid = true; cachedStageBounds = sr;
               if (activeRenderer && typeof activeRenderer.syncCanvasBounds === 'function') activeRenderer.syncCanvasBounds(cachedStageBounds);
             } else cachedStageBounds.valid = false;
           }
+          rCache.t = nowMs; rCache.el = overlayEl; rCache.fn = oFn; rCache.m = stageMode;
         } catch (e) {}
       }
 
@@ -2489,114 +2494,70 @@
 
       var lastBoundsSyncMs = 0;
 
+      function writeCardRim(el, was, near, a, x, y, now, tk, pfx) {
+        if (!el) return was;
+        if (near) {
+          if (!was || now - rimP[tk] >= 16) {
+            rimP[tk] = now;
+            setStyleVar(el, '--ag-pp-' + pfx + '-rim-alpha', a.toFixed(3));
+            setStyleVar(el, '--ag-pp-' + pfx + '-px', Math.round(x) + 'px');
+            setStyleVar(el, '--ag-pp-' + pfx + '-py', Math.round(y) + 'px');
+          }
+          return true;
+        }
+        if (was) {
+          rimP[tk] = 0;
+          setStyleVar(el, '--ag-pp-' + pfx + '-rim-alpha', '0');
+          setStyleVar(el, '--ag-pp-' + pfx + '-px', '-999px');
+          setStyleVar(el, '--ag-pp-' + pfx + '-py', '-999px');
+        }
+        return false;
+      }
+      function clearCardRimGlows() {
+        rimCardWasActive = writeCardRim(bentoRefs && bentoRefs.specCardRim, rimCardWasActive, false, 0, 0, 0, 0, 'cT', 'card');
+        rimRightWasActive = writeCardRim(bentoRefs && bentoRefs.telePodRim, rimRightWasActive, false, 0, 0, 0, 0, 'rT', 'right');
+      }
       function clearLocalRimGlow() {
         if (!overlayEl) return;
-        if (rimGlowWasActive) {
-          rimGlowWasActive = false;
-          overlayEl.setAttribute('data-pointer-near', '0');
-        }
+        rimP.x = NaN; rimP.y = NaN; rimP.d = Infinity;
+        if (rimGlowWasActive) { rimGlowWasActive = false; overlayEl.setAttribute('data-pointer-near', '0'); }
         if (rimDockWasActive && dockTopRimEl) {
           rimDockWasActive = false;
           setStyleVar(dockTopRimEl, '--ag-pp-dock-rim-alpha', '0');
           setStyleVar(dockTopRimEl, '--ag-pp-px', '-999px');
         }
-        var specRim = bentoRefs && bentoRefs.specCardRim;
-        if (rimCardWasActive && specRim) {
-          rimCardWasActive = false;
-          setStyleVar(specRim, '--ag-pp-card-rim-alpha', '0');
-          setStyleVar(specRim, '--ag-pp-card-px', '-999px');
-          setStyleVar(specRim, '--ag-pp-card-py', '-999px');
-        }
-        var teleRim = bentoRefs && bentoRefs.telePodRim;
-        if (rimRightWasActive && teleRim) {
-          rimRightWasActive = false;
-          setStyleVar(teleRim, '--ag-pp-right-rim-alpha', '0');
-          setStyleVar(teleRim, '--ag-pp-right-px', '-999px');
-          setStyleVar(teleRim, '--ag-pp-right-py', '-999px');
-        }
+        clearCardRimGlows();
       }
-
-      function updateDynamicPrismCssVars(clientX, clientY) {
+      function updateDynamicPrismCssVars(clientX, clientY, inOv) {
         if (!overlayEl) return { nearAny: false, extDockDist: Infinity };
-        var cx = Number(clientX) || 0;
-        var cy = Number(clientY) || 0;
-        var b = cachedDockBounds;
-        var cb = cachedCardBounds;
-        var rb = cachedRightCardBounds;
-        var localX = cx - b.left;
-        var localY = cy - b.top;
-        var cardX = cx - cb.left;
-        var cardY = cy - cb.top;
-        var rightX = cx - rb.left;
-        var rightY = cy - rb.top;
-
-        var dxDock = Math.max(0, -localX, localX - b.width);
-        var dyDockBox = Math.max(0, -localY, localY - b.height);
-        var extDockDist = Math.hypot(dxDock, dyDockBox);
-        var dyTopEdge = localY < 0 ? -localY : localY * 0.78;
-        var dockAlpha = smoothRimWeight(Math.hypot(dxDock, dyTopEdge), EXT_RIM_PROXIMITY_PX);
-
-        var cardAlpha = smoothRimWeight(
-          Math.hypot(Math.max(0, -cardX, cardX - cb.width), Math.max(0, -cardY, cardY - cb.height)),
-          EXT_RIM_PROXIMITY_PX
-        );
-        var rightAlpha = smoothRimWeight(
-          Math.hypot(Math.max(0, -rightX, rightX - rb.width), Math.max(0, -rightY, rightY - rb.height)),
-          EXT_RIM_PROXIMITY_PX
-        );
-
-        var dockNear = dockAlpha > 0.008;
-        var cardNear = cardAlpha > 0.008;
-        var rightNear = rightAlpha > 0.008;
-        var nearAny = dockNear || cardNear || rightNear;
-        if (!nearAny && !rimGlowWasActive) return { nearAny: false, extDockDist: extDockDist };
-        if (!nearAny && rimGlowWasActive) {
-          clearLocalRimGlow();
-          return { nearAny: false, extDockDist: extDockDist };
+        if (isOrbitDragging || (gestureState && (gestureState.isOrbitDragging || gestureState.scrubbing))) {
+          if (rimCardWasActive || rimRightWasActive) clearCardRimGlows();
+          return { nearAny: false, extDockDist: Infinity };
         }
-        if (!rimGlowWasActive) {
-          rimGlowWasActive = true;
-          overlayEl.setAttribute('data-pointer-near', '1');
+        var cx = Number(clientX) || 0, cy = Number(clientY) || 0;
+        if (Number.isFinite(rimP.x)) {
+          var rdx = cx - rimP.x, rdy = cy - rimP.y;
+          if (rdx * rdx + rdy * rdy < 4) return { nearAny: rimGlowWasActive, extDockDist: rimP.d };
         }
+        var b = cachedDockBounds, cb = cachedCardBounds, rb = cachedRightCardBounds;
+        var lx = cx - b.left, ly = cy - b.top, cardX = cx - cb.left, cardY = cy - cb.top, rx = cx - rb.left, ry = cy - rb.top;
+        var dxD = Math.max(0, -lx, lx - b.width), extDockDist = Math.hypot(dxD, Math.max(0, -ly, ly - b.height));
+        rimP.x = cx; rimP.y = cy; rimP.d = extDockDist;
+        var dockA = smoothRimWeight(Math.hypot(dxD, ly < 0 ? -ly : ly * 0.78), EXT_RIM_PROXIMITY_PX);
+        var cD = Math.hypot(Math.max(0, -cardX, cardX - cb.width), Math.max(0, -cardY, cardY - cb.height));
+        var rD = Math.hypot(Math.max(0, -rx, rx - rb.width), Math.max(0, -ry, ry - rb.height));
+        var cardA = (inOv !== true || cD <= 6) ? smoothRimWeight(cD, EXT_RIM_PROXIMITY_PX) : 0;
+        var rightA = (inOv !== true || rD <= 6) ? smoothRimWeight(rD, EXT_RIM_PROXIMITY_PX) : 0;
+        var dNear = dockA > 0.008, cNear = cardA > 0.008, rNear = rightA > 0.008, nearAny = dNear || cNear || rNear;
+        if (!nearAny) { if (rimGlowWasActive) clearLocalRimGlow(); return { nearAny: false, extDockDist: extDockDist }; }
+        if (!rimGlowWasActive) { rimGlowWasActive = true; overlayEl.setAttribute('data-pointer-near', '1'); }
+        var now = readClockMs();
         if (dockTopRimEl) {
-          if (dockNear) {
-            rimDockWasActive = true;
-            setStyleVar(dockTopRimEl, '--ag-pp-dock-rim-alpha', dockAlpha.toFixed(3));
-            setStyleVar(dockTopRimEl, '--ag-pp-px', localX.toFixed(1) + 'px');
-          } else if (rimDockWasActive) {
-            rimDockWasActive = false;
-            setStyleVar(dockTopRimEl, '--ag-pp-dock-rim-alpha', '0');
-            setStyleVar(dockTopRimEl, '--ag-pp-px', '-999px');
-          }
+          if (dNear) { rimDockWasActive = true; setStyleVar(dockTopRimEl, '--ag-pp-dock-rim-alpha', dockA.toFixed(3)); setStyleVar(dockTopRimEl, '--ag-pp-px', Math.round(lx) + 'px'); }
+          else if (rimDockWasActive) { rimDockWasActive = false; setStyleVar(dockTopRimEl, '--ag-pp-dock-rim-alpha', '0'); setStyleVar(dockTopRimEl, '--ag-pp-px', '-999px'); }
         }
-        var specRim = bentoRefs && bentoRefs.specCardRim;
-        if (specRim) {
-          if (cardNear) {
-            rimCardWasActive = true;
-            setStyleVar(specRim, '--ag-pp-card-rim-alpha', cardAlpha.toFixed(3));
-            setStyleVar(specRim, '--ag-pp-card-px', cardX.toFixed(1) + 'px');
-            setStyleVar(specRim, '--ag-pp-card-py', cardY.toFixed(1) + 'px');
-          } else if (rimCardWasActive) {
-            rimCardWasActive = false;
-            setStyleVar(specRim, '--ag-pp-card-rim-alpha', '0');
-            setStyleVar(specRim, '--ag-pp-card-px', '-999px');
-            setStyleVar(specRim, '--ag-pp-card-py', '-999px');
-          }
-        }
-        var teleRim = bentoRefs && bentoRefs.telePodRim;
-        if (teleRim) {
-          if (rightNear) {
-            rimRightWasActive = true;
-            setStyleVar(teleRim, '--ag-pp-right-rim-alpha', rightAlpha.toFixed(3));
-            setStyleVar(teleRim, '--ag-pp-right-px', rightX.toFixed(1) + 'px');
-            setStyleVar(teleRim, '--ag-pp-right-py', rightY.toFixed(1) + 'px');
-          } else if (rimRightWasActive) {
-            rimRightWasActive = false;
-            setStyleVar(teleRim, '--ag-pp-right-rim-alpha', '0');
-            setStyleVar(teleRim, '--ag-pp-right-px', '-999px');
-            setStyleVar(teleRim, '--ag-pp-right-py', '-999px');
-          }
-        }
+        rimCardWasActive = writeCardRim(bentoRefs && bentoRefs.specCardRim, rimCardWasActive, cNear, cardA, cardX, cardY, now, 'cT', 'card');
+        rimRightWasActive = writeCardRim(bentoRefs && bentoRefs.telePodRim, rimRightWasActive, rNear, rightA, rx, ry, now, 'rT', 'right');
         return { nearAny: nearAny, extDockDist: extDockDist };
       }
 
@@ -3166,40 +3127,30 @@
           });
         }
 
-        var payload = buildCurrentDeckPayload(langCode);
-        var dInfo = payload.deckInfo;
+        var hGA = resolveGlobalAuxIndexFromLocal(hoveredAuxIndex);
+        var eHA = hoveredAuxIndex !== null && isGlobalOrchToggleSlot(hGA, auxSlots[hoveredAuxIndex]) && orchLatched ? null : hoveredAuxIndex;
+        var dk = (eHA !== null && auxSlots[eHA]) ? 'a' + auxSlots[eHA]._globalAuxIndex + ':' + (auxSlots[eHA].available ? 1 : 0)
+          : (hoveredZ !== null && availableByZ.has(hoveredZ)) ? 'e' + hoveredZ
+          : inspectedBlindZ !== null ? 'be' + inspectedBlindZ
+          : (inspectedBlindAuxIndex !== null && auxSlots[inspectedBlindAuxIndex]) ? 'ba' + auxSlots[inspectedBlindAuxIndex]._globalAuxIndex
+          : (blindFlashZ !== null && !availableByZ.has(blindFlashZ)) ? 'f' + blindFlashZ
+          : (selectedGlobalAuxIndex !== null && effectiveAuxAll[selectedGlobalAuxIndex]) ? 'sa' + selectedGlobalAuxIndex
+          : 'z' + resolveInspectedElementZ() + (hGA === 0 && orchLatched ? 'o' : '');
+        var bk = dk + '|' + selectedZ + '|' + selectedGlobalAuxIndex + '|' + activeAuxPage + '|' + availabilityDomVersion + '|' + langCode + '|' + blindFlashZ + '|' + chromeSig + '|' + (muted ? 1 : 0) + (compactExpanded ? 1 : 0);
+        var skipBento = Boolean(hoverOnly && bCache.p && bCache.k === bk);
+        var payload = skipBento ? bCache.p : (bCache.k = bk, bCache.p = buildCurrentDeckPayload(langCode));
+        var dInfo = payload.deckInfo, effortLayoutChanged = false;
+        if (skipBento && dInfo) { dInfo.hoveredEffort = hoveredEffort; dInfo.pressedEffort = pressedEffort; dInfo.dragEffortProgress = dragEffortProgress; }
+        if (!skipBento) {
         var committed = resolveCommittedTelemetrySpec(zh);
-        var telemetry;
-        if (hoverOnly) {
-          telemetry = cachedHostTelemetry || { available: false, reason: 'offline' };
-        } else if (optsObj && optsObj.deferTelemetryDomScan) {
-          telemetry = hostBridge.readHostContextTelemetry(doc, root, { skipDomScan: true, anchorBtn: activeAnchorBtn });
-          cachedHostTelemetry = telemetry;
-        } else {
-          telemetry = hostBridge.readHostContextTelemetry(doc, root, { anchorBtn: activeAnchorBtn });
-          cachedHostTelemetry = telemetry;
-        }
-
+        var telemetry = hoverOnly ? (cachedHostTelemetry || { available: false, reason: 'offline' })
+          : (cachedHostTelemetry = hostBridge.readHostContextTelemetry(doc, root, optsObj && optsObj.deferTelemetryDomScan ? { skipDomScan: true, anchorBtn: activeAnchorBtn } : { anchorBtn: activeAnchorBtn }));
         bentoUi.syncBentoTwinCardsDom(bentoRefs, {
-          doc: doc,
-          root: root,
-          overlayEl: overlayEl,
-          bSpec: payload.bentoSpec,
-          committed: committed,
-          telemetry: telemetry,
-          lang: langCode,
-          zh: zh,
-          profile: profile,
-          stageMode: stageMode,
-          muted: muted,
-          cardFlipped: cardFlipped,
-          compactExpanded: compactExpanded,
-          orchLatched: orchLatched,
-          auxPage: activeAuxPage,
-          auxPageCount: auxPageCount,
+          doc: doc, root: root, overlayEl: overlayEl, bSpec: payload.bentoSpec, committed: committed, telemetry: telemetry,
+          lang: langCode, zh: zh, profile: profile, stageMode: stageMode, muted: muted, cardFlipped: cardFlipped,
+          compactExpanded: compactExpanded, orchLatched: orchLatched, auxPage: activeAuxPage, auxPageCount: auxPageCount,
           handlers: bentoRefs ? bentoRefs._handlers : null,
         });
-
         var nextSrTitle = dInfo.blindFlash && dInfo.blindFlashBanner ? dInfo.blindFlashBanner : dInfo.title;
         var bannerSig = (dInfo.sessionBanner || '') + '|' + nextSrTitle + '|' + dInfo.chemLabel + '|' + dInfo.subtitle;
         if (bannerSig !== lastDomBannerSig) {
@@ -3208,11 +3159,8 @@
           uiRefs.banner.setAttribute('data-show', dInfo.sessionBanner ? '1' : '0');
           uiRefs.srTitle.textContent = nextSrTitle; uiRefs.srChem.textContent = dInfo.chemLabel; uiRefs.srSub.textContent = dInfo.subtitle;
         }
-
         var effSig = (dInfo.isAuxModel ? 'aux:' + dInfo.globalAuxIndex : String(dInfo.z)) + ':' + (orchLatched ? 'orch' : 'solo') + '|' +
           dInfo.levels.map(function (l) { return l.effort + ':' + (l.active ? '1' : '0'); }).join(',');
-
-        var effortLayoutChanged = false;
         if (uiRefs.lastEffortSig !== effSig) {
           var prevEffCount = uiRefs.effortButtons.length;
           uiRefs.lastEffortSig = effSig;
@@ -3221,7 +3169,6 @@
           uiRefs.effortTargetInfo.isAuxModel = Boolean(dInfo.isAuxModel);
           uiRefs.effortTargetInfo.globalAuxIndex = dInfo.globalAuxIndex !== undefined ? dInfo.globalAuxIndex : null;
           uiRefs.effortTargetInfo.z = dInfo.z; uiRefs.effortTargetInfo.effortTitle = dInfo.effortTitle || '';
-
           var effPool = uiRefs.effortButtonPool; uiRefs.effortButtons.length = 0;
           for (var li = 0; li < dInfo.levels.length; li += 1) {
             var lvl = dInfo.levels[li], eBtn = effPool[li];
@@ -3260,7 +3207,6 @@
             if (eBtn.hidden) { setStyleVar(eBtn, 'display', ''); eBtn.hidden = false; eBtn.removeAttribute('aria-hidden'); eBtn.removeAttribute('tabindex'); }
             uiRefs.effortButtons.push(eBtn);
           }
-
           for (var xi = dInfo.levels.length; xi < effPool.length; xi += 1) {
             var unusedBtn = effPool[xi];
             if (!unusedBtn.hidden) { setStyleVar(unusedBtn, 'display', 'none'); unusedBtn.hidden = true; unusedBtn.setAttribute('aria-hidden', 'true'); unusedBtn.setAttribute('tabindex', '-1'); }
@@ -3268,6 +3214,7 @@
             unusedBtn.removeAttribute('data-ag-pp-effort'); unusedBtn.removeAttribute('data-effort');
           }
           if (uiRefs.effortButtons.length !== prevEffCount) effortLayoutChanged = true;
+        }
         }
 
         var rotFlagNow = getChassisOrbitSafe().isRotated ? '1' : '0';
@@ -4308,12 +4255,16 @@
 
       /* ── High-Refresh Single-Frame rAF Pointer Move Coalescing ─────────── */
 
+      function applyStageCursor(c) {
+        if (lastStageCursor === c) return;
+        lastStageCursor = c;
+        if (canvasEl) setStyleVar(canvasEl, 'cursor', c);
+      }
+
       function clearStageHoverAndPress() {
         if (isConfirmClosing || isDrawerClosing) return;
         cancelBlindDwellTimer();
-        lastStageCursor = 'default';
-        if (stageEl) setStyleVar(stageEl, 'cursor', 'default');
-        if (canvasEl) setStyleVar(canvasEl, 'cursor', 'default');
+        applyStageCursor('default');
         var hadHoverOrPress =
           hoveredZ !== null ||
           hoveredAuxIndex !== null ||
@@ -4370,7 +4321,7 @@
         lastFlushedPointer.inside = pm.insideOverlay;
 
         if (!pm.insideOverlay) {
-          var prox = updateDynamicPrismCssVars(cx, cy);
+          var prox = updateDynamicPrismCssVars(cx, cy, false);
           if (prox && prox.extDockDist <= EXT_RIM_PROXIMITY_PX) {
             extNearRendererActive = true;
             forwardPointerToRenderer(cx, cy, true);
@@ -4388,7 +4339,7 @@
         extNearRendererActive = false;
 
         if (coordsMoved) {
-          updateDynamicPrismCssVars(cx, cy);
+          updateDynamicPrismCssVars(cx, cy, true);
           forwardPointerToRenderer(cx, cy, true);
         }
 
@@ -4411,12 +4362,7 @@
             (hitMove && hitMove.kind === 'key' && availableByZ.has(nextHovZ)) ||
             (hitMove && hitMove.kind === 'aux-key' && Boolean(auxSlots[nextHovAux] && auxSlots[nextHovAux].available)) ||
             (hitMove && (hitMove.kind === 'effort' || hitMove.kind === 'control'));
-          var cursorVal = interactiveCursor ? 'pointer' : 'default';
-          if (lastStageCursor !== cursorVal) {
-            lastStageCursor = cursorVal;
-            setStyleVar(stageEl, 'cursor', cursorVal);
-            setStyleVar(canvasEl, 'cursor', cursorVal);
-          }
+          applyStageCursor(interactiveCursor ? 'pointer' : 'default');
 
           if (
             nextHovZ !== hoveredZ ||
@@ -4612,6 +4558,7 @@
         lastFlushedPointer.x = NaN; lastFlushedPointer.y = NaN; lastFlushedPointer.target = null; lastFlushedPointer.inside = false;
         lastDomSelectedZ = undefined; lastDomHoveredZ = null; lastDomSelectedAuxLocal = undefined; lastDomOrchLatched = undefined;
         lastDomChromeSig = ''; lastDomHaloSig = ''; lastDomHudSig = ''; lastDomCtrlSig = ''; lastDomBannerSig = ''; lastDomAvailVersion = -1;
+        resetUltraPerfCaches();
 
         syncSelectionStateFromHostCtx(activeHostCtx);
         lastSessionSig = computeSessionContextSignature(activeHostCtx, activeAnchorBtn);
@@ -4943,7 +4890,7 @@
               var flushRo = function () {
                 dockResizeRafId = 0;
                 if (!overlayEl || isDestroyed || isDrawerClosing || (drawerTrans && stageMode === 'drawer')) return;
-                refreshCachedLayoutRects();
+                refreshCachedLayoutRects(true);
                 resizeCanvasToStage(!syncDockCompactState(), !isConfirmClosing);
                 if (!isOrbitDragging) syncHitLayerRects(true);
                 if (!isConfirmClosing) syncSceneAndDom(true);
@@ -4972,8 +4919,9 @@
 
         clearStaleBlurIfActive();
         isHostPaused = computeHostPaused();
-        refreshCachedLayoutRects();
-        resizeCanvasToStage(!syncDockCompactState(), true);
+        refreshCachedLayoutRects(true);
+        syncDockCompactState();
+        resizeCanvasToStage(true, true);
         drawerTrans = Boolean(stageMode === 'drawer' && reqRaf && !bentoUi.isReducedMotion(doc, root));
         drawerLockW = drawerTrans ? (cachedOverlayWidth || cachedDockBounds.width || 0) : 0;
         syncSceneAndDom(true, { deferTelemetryDomScan: Boolean(reqRaf) });
@@ -5267,6 +5215,7 @@
                   pointerDownOutside = false;
                   cancelBlindDwellTimer();
                   cancelPendingPointerMoveRaf();
+                  clearLocalRimGlow();
                   if (
                     hoveredZ !== null || hoveredAuxIndex !== null || inspectedBlindZ !== null || inspectedBlindAuxIndex !== null ||
                     pressedZ !== null || pressedAuxIndex !== null || pressedEffort !== null || pressedBtn !== null
@@ -5402,7 +5351,7 @@
           if (!ev || ev.target === overlayEl) {
             if (ev && ev.propertyName && ev.propertyName !== 'height') return;
             if (drawerTrans) endDrawerTrans();
-            else { lastBoundsSyncMs = readClockMs(); refreshCachedLayoutRects(); syncDockCompactState(); }
+            else { lastBoundsSyncMs = readClockMs(); refreshCachedLayoutRects(true); syncDockCompactState(); }
           }
         });
 
@@ -5411,7 +5360,7 @@
           if (isOrbitDragging || (gestureState && gestureState.scrubbing)) return;
           cancelPendingPointerMoveRaf();
           if (ev && ev.relatedTarget && Number.isFinite(Number(ev.clientX)) && Number.isFinite(Number(ev.clientY))) {
-            updateDynamicPrismCssVars(ev.clientX, ev.clientY);
+            updateDynamicPrismCssVars(ev.clientX, ev.clientY, false);
           } else {
             clearLocalRimGlow();
           }
@@ -5434,7 +5383,7 @@
               lastPointerClient.y = -9999;
               lastPointerClient.active = false;
               if (ev && ev.relatedTarget && Number.isFinite(Number(ev.clientX)) && Number.isFinite(Number(ev.clientY))) {
-                updateDynamicPrismCssVars(ev.clientX, ev.clientY);
+                updateDynamicPrismCssVars(ev.clientX, ev.clientY, false);
               } else {
                 clearLocalRimGlow();
               }
@@ -5449,27 +5398,32 @@
           openRafId = reqRaf(function () {
             openRafId = 0;
             if (overlayEl && !isDrawerClosing) {
+              /* 单帧内 Read-then-Write：先合并测量（16ms 内复用缓存），再统一写 data-open / canvas / scrollTop */
+              refreshCachedLayoutRects();
+              var pinnedScrollH = 0;
+              if (pinnedScrollEl) {
+                try { pinnedScrollH = pinnedScrollEl.scrollHeight; } catch (e0) {}
+              }
               overlayEl.setAttribute('data-open', '1');
               if (drawerTrans) {
                 if (drawerTransTmr) { clearTimer(drawerTransTmr); pendingTimers.delete(drawerTransTmr); }
                 drawerTransTmr = scheduleTrackedTimer(endDrawerTrans, DOCK_OPEN_TRANSITION_MS + 32);
               }
+              var rafTierChanged = syncDockCompactState();
+              var rafW = cachedOverlayWidth || cachedDockBounds.width || 0;
+              if (!drawerTrans || rafTierChanged || (drawerLockW > 0 && Math.abs(rafW - drawerLockW) > 2)) {
+                if (drawerTrans) drawerLockW = rafW;
+                resizeCanvasToStage(true, true);
+              }
+              syncHitLayerRects(true);
               if (pinnedScrollEl) {
-                try { pinnedScrollEl.scrollTop = pinnedScrollEl.scrollHeight; } catch (e) {}
+                try { pinnedScrollEl.scrollTop = pinnedScrollH; } catch (e) {}
                 scheduleTrackedTimer(function () {
                   if (overlayEl && !isDrawerClosing && pinnedScrollEl) {
                     try { pinnedScrollEl.scrollTop = pinnedScrollEl.scrollHeight; } catch (e2) {}
                   }
                 }, DOCK_OPEN_TRANSITION_MS + 16);
               }
-              refreshCachedLayoutRects();
-              var rafTierChanged = syncDockCompactState();
-              var rafW = cachedOverlayWidth || cachedDockBounds.width || 0;
-              if (!drawerTrans || rafTierChanged || (drawerLockW > 0 && Math.abs(rafW - drawerLockW) > 2)) {
-                if (drawerTrans) drawerLockW = rafW;
-                resizeCanvasToStage(!rafTierChanged, true);
-              }
-              syncHitLayerRects(true);
               if (cachedHostTelemetry && cachedHostTelemetry.domScanDeferred) {
                 var fullTele = hostBridge.readHostContextTelemetry(doc, root, { anchorBtn: activeAnchorBtn });
                 cachedHostTelemetry = fullTele;
@@ -5579,6 +5533,7 @@
           lastFlushedPointer.x = NaN; lastFlushedPointer.y = NaN; lastFlushedPointer.target = null; lastFlushedPointer.inside = false;
           lastDomSelectedZ = undefined; lastDomHoveredZ = null; lastDomSelectedAuxLocal = undefined; lastDomOrchLatched = undefined;
           lastDomChromeSig = ''; lastDomHaloSig = ''; lastDomHudSig = ''; lastDomCtrlSig = ''; lastDomBannerSig = ''; lastDomAvailVersion = -1;
+        resetUltraPerfCaches();
           keyNodesByZ.clear(); auxKeyNodes.length = 0; hudChipByZ.clear();
           safeRemove(toRemove); syncMiniKeycapBadges();
           if (keepWarmStandby && standbyRenderer) scheduleStandbyReclaim(isDocHiddenNow() ? STANDBY_HIDDEN_MS : STANDBY_RECLAIM_MS);
@@ -5605,7 +5560,7 @@
         lastPointerClient.x = isInside ? Number(clientX) || 0 : -9999;
         lastPointerClient.y = isInside ? Number(clientY) || 0 : -9999;
         lastPointerClient.active = isInside;
-        if (isInside) updateDynamicPrismCssVars(clientX, clientY);
+        if (isInside) updateDynamicPrismCssVars(clientX, clientY, true);
         else clearLocalRimGlow();
         if (!forwardPointerToRenderer(clientX, clientY, isInside)) return false;
         scheduleSettledRectSync();
@@ -6070,7 +6025,7 @@
         if (holdState) cancelHold(false);
         if (overlayEl && !isDrawerClosing) {
           clrDrawerTrans();
-          refreshCachedLayoutRects();
+          refreshCachedLayoutRects(true);
           resizeCanvasToStage(!syncDockCompactState(), !isConfirmClosing);
           syncHitLayerRects(true, { includeKeys: true });
           if (!isConfirmClosing) syncSceneAndDom(true);

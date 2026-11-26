@@ -500,10 +500,10 @@
     var CAM_TARGET_SUITE = [1.34, -0.05, 0.38];
     var CAM_TARGET_SUITE_DRAWER = [1.39, -0.06, 0.39];
 
-    /* 1024×1024 实时阴影贴图（像素量 -75%，仍是主画布 ~2.8× 超采，配合 6-tap IGN Vogel 柔和细腻）与左前上斜侧顶主光 */
+    /* 1024/512 分级实时阴影贴图（低中/性能档降采至 512 填充率 -75%，配合 4/6-tap IGN Vogel 柔和细腻）与左前上斜侧顶主光 */
     var SHADOW_MAP_SIZE = 1024;
     var SHADOW_MAP_SIZE_ULTRA = 1024;
-    var SHADOW_MAP_SIZE_REDUCED = 1024;
+    var SHADOW_MAP_SIZE_REDUCED = 512;
     var MAIN_LIGHT_DIR = (function () {
       var lx = -0.46, ly = 0.74, lz = 0.49;
       var l = Math.hypot(lx, ly, lz);
@@ -524,8 +524,9 @@
       for (var i = 0; i < str.length; i++) h = Math.imul((h ^ str.charCodeAt(i)) >>> 0, 16777619) >>> 0;
       return Math.imul((h ^ 0xff) >>> 0, 16777619) >>> 0;
     }
-    function resolveMinFrameGapMs(fpsKey, steadyZeroGOnly) {
-      return fpsKey === '60' ? 15.5 : fpsKey === '120' ? 7.6 : fpsKey === '180' ? 4.9 : (steadyZeroGOnly ? 15.5 : 7.6);
+    function resolveMinFrameGapMs(fpsKey, steadyZeroGOnly, perfMode) {
+      if (perfMode) return 15.5;
+      return fpsKey === '60' ? 15.5 : fpsKey === '120' ? 7.6 : fpsKey === '180' ? 4.9 : (steadyZeroGOnly ? 15.5 : 0);
     }
 
     function normalizeMotionLevel(raw) {
@@ -4604,63 +4605,21 @@
     ].join('\n');
 
     var GLSL_PBR_COMMON = [
-      'const float PI = 3.14159265359;',
+      'const float PI=3.14159265359;',
+      'float grainTexelSize(sampler2D t){return 1./float(max(textureSize(t,0).x,1));}',
+      'vec3 srgbToLinear(vec3 c){return pow(max(c,vec3(0.)),vec3(2.2));}',
+      'vec3 acesToneMap(vec3 x){return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14),0.,1.);}',
+      'vec3 linearToDisplaySrgb(vec3 l,vec2 fc){vec3 s=pow(acesToneMap(max(l,vec3(0.))),vec3(1./2.2));',
+      'float d=fract(52.9829189*fract(dot(fc,vec2(.06711056,.00583715))))-.5;return clamp(s+d/255.,0.,1.);}',
+      'float D_GGX(float ndh,float a){float a2=a*a,d=(ndh*ndh)*(a2-1.)+1.;return a2/max(PI*d*d,1e-6);}',
+      'float V_SmithGGX(float nv,float nl,float a){float a2=a*a;return .5/max(nl*sqrt(nv*(nv-nv*a2)+a2)+nv*sqrt(nl*(nl-nl*a2)+a2),1e-5);}',
+      'vec3 F_Schlick(float vdh,vec3 f0){float x=clamp(1.-vdh,0.,1.),x2=x*x;return f0+(1.-f0)*(x2*x2*x);}',
+      'vec3 F_SchlickRoughness(float ndv,vec3 f0,float r){float x=clamp(1.-ndv,0.,1.),x2=x*x;return f0+(max(vec3(1.-r),f0)-f0)*(x2*x2*x);}',
       '',
-      'float grainTexelSize(sampler2D tex) {',
-      '  return 1.0 / float(max(textureSize(tex, 0).x, 1));',
-      '}',
-      '',
-      'vec3 srgbToLinear(vec3 c) {',
-      '  return pow(max(c, vec3(0.0)), vec3(2.2));',
-      '}',
-      '',
-      'vec3 acesToneMap(vec3 x) {',
-      '  const float a = 2.51;',
-      '  const float b = 0.03;',
-      '  const float c = 2.43;',
-      '  const float d = 0.59;',
-      '  const float e = 0.14;',
-      '  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);',
-      '}',
-      '',
-      'vec3 linearToDisplaySrgb(vec3 linCol, vec2 fragCoord) {',
-      '  vec3 mapped = acesToneMap(max(linCol, vec3(0.0)));',
-      '  vec3 srgb = pow(mapped, vec3(1.0 / 2.2));',
-      '  float dither = fract(52.9829189 * fract(dot(fragCoord, vec2(0.06711056, 0.00583715)))) - 0.5;',
-      '  return clamp(srgb + dither / 255.0, 0.0, 1.0);',
-      '}',
-      '',
-      'float D_GGX(float ndh, float alpha) {',
-      '  float a2 = alpha * alpha;',
-      '  float d = (ndh * ndh) * (a2 - 1.0) + 1.0;',
-      '  return a2 / max(PI * d * d, 1e-6);',
-      '}',
-      '',
-      'float V_SmithGGX(float ndv, float ndl, float alpha) {',
-      '  float a2 = alpha * alpha;',
-      '  float gv = ndl * sqrt(ndv * (ndv - ndv * a2) + a2);',
-      '  float gl = ndv * sqrt(ndl * (ndl - ndl * a2) + a2);',
-      '  return 0.5 / max(gv + gl, 1e-5);',
-      '}',
-      '',
-      'vec3 F_Schlick(float vdh, vec3 f0) {',
-      '  float x = clamp(1.0 - vdh, 0.0, 1.0);',
-      '  float x2 = x * x;',
-      '  return f0 + (1.0 - f0) * (x2 * x2 * x);',
-      '}',
-      '',
-      'vec3 F_SchlickRoughness(float ndv, vec3 f0, float rough) {',
-      '  float x = clamp(1.0 - ndv, 0.0, 1.0);',
-      '  float x2 = x * x;',
-      '  return f0 + (max(vec3(1.0 - rough), f0) - f0) * (x2 * x2 * x);',
-      '}',
-      '',
-      'vec2 dirToEquirectUv(vec3 d) {',
-      '  float phi = (abs(d.x) < 1e-5 && abs(d.z) < 1e-5) ? 0.0 : atan(d.z, d.x);',
-      '  float u = phi * (0.5 / PI) + 0.5;',
-      '  float v = acos(clamp(d.y, -1.0, 1.0)) / PI;',
-      '  return vec2(u, v);',
-      '}',
+      'vec2 dirToEquirectUv(vec3 d){float ax=abs(d.x),az=abs(d.z),t=min(ax,az)/max(max(ax,az),1e-6),t2=t*t;',
+      'float a=((-.04649647*t2+.15931422)*t2-.32762276)*t2*t+t;if(az>ax)a=1.5707963-a;if(d.x<0.)a=3.1415927-a;if(d.z<0.)a=-a;',
+      'float ay=abs(clamp(d.y,-1.,1.)),h=sqrt(max(0.,1.-ay))*(.5+ay*(-.067518+ay*(.023638-.005962*ay)));',
+      'return vec2(a*(.5/PI)+.5,d.y<0.?1.-h:h);}',
       '',
       '/* 对齐项目 prism-rim-canvas.js 的 6 套家族棱镜光谱（default / warm / cobalt / iris / amber / mono） */',
       'vec3 mix4Stops(vec3 c0, vec3 c1, vec3 c2, vec3 c3, float t) {',
@@ -4784,62 +4743,22 @@
       '  return outRim * ambientMul;',
       '}',
       '',
-      'vec3 sampleStudioHDRI(vec3 R, float roughness, float isLightTheme) {',
-      '  vec3 d = normalize(R);',
-      '  float blur = mix(0.016, 0.54, roughness * roughness);',
-      '  /* Space Black 纯正中性暗房天幕：彻底根除深色外壳发蓝灰/发闷雾感！ */',
-      '  vec3 zenith = mix(vec3(0.036, 0.038, 0.044), vec3(0.34, 0.36, 0.41), isLightTheme);',
-      '  vec3 nadir = mix(vec3(0.009, 0.010, 0.013), vec3(0.12, 0.13, 0.15), isLightTheme);',
-      '  vec3 env = mix(nadir, zenith, smoothstep(-0.32, 0.78, d.y));',
-      '',
-      '  /* 左前上斜侧顶主柔光箱镜像 */',
-      '  if (d.y > 0.04) {',
-      '    vec2 ceilUv = d.xz / max(d.y, 0.10);',
-      '    vec2 sbDelta = abs(ceilUv - vec2(-0.42, 0.44)) - vec2(1.18, 0.44);',
-      '    float sbDist = length(max(sbDelta, 0.0)) + min(max(sbDelta.x, sbDelta.y), 0.0);',
-      '    float sbMask = 1.0 - smoothstep(-blur * 0.42, blur * 1.30 + 0.04, sbDist);',
-      '    float silkFalloff = 1.0 - 0.24 * clamp(length(ceilUv - vec2(-0.42, 0.44)) * 0.48, 0.0, 1.0);',
-      '    float sbScale = mix(1.06, 0.90, isLightTheme);',
-      '    env += vec3(2.55, 2.52, 2.48) * sbScale * sbMask * silkFalloff * smoothstep(0.04, 0.28, d.y);',
-      '  }',
-      '',
-      '  /* 底部摄影棚柔银补光反光板（大角度旋转检视二段式底壳与镜面大配重时提供通透金属切面层次） */',
-      '  if (d.y < -0.12) {',
-      '    float underBounce = smoothstep(-0.12, -0.72, d.y) * smoothstep(-0.45, 0.65, d.z);',
-      '    env += mix(vec3(0.42, 0.45, 0.52), vec3(0.56, 0.58, 0.64), isLightTheme) * underBounce * (1.0 - roughness * 0.55);',
-      '  }',
-      '',
-      '  /* 右后上戏剧化轮廓逆光灯条 */',
-      '  vec3 rimDir = normalize(vec3(0.62, 0.46, -0.63));',
-      '  float rimDot = max(dot(d, rimDir), 0.0);',
-      '  float rimBand = smoothstep(0.83 - blur * 0.48, 0.968, rimDot);',
-      '  env += vec3(1.18, 1.32, 1.62) * rimBand;',
-      '',
-      '  /* 右前暖香槟补光反光卡 */',
-      '  vec3 fillDir = normalize(vec3(0.52, 0.38, 0.76));',
-      '  float fillDot = max(dot(d, fillDir), 0.0);',
-      '  float fillCard = smoothstep(0.78 - blur * 0.50, 0.945, fillDot);',
-      '  env += vec3(0.84, 0.78, 0.70) * fillCard;',
-      '',
-      '  return env;',
-      '}',
-      '',
-      'vec3 sampleMetalStudioEnv(sampler2D metalEnvTex, vec3 R, float roughness, float isLightTheme) {',
-      '  vec3 d = normalize(R);',
-      '  vec2 uv = dirToEquirectUv(d);',
-      '  float lod = clamp(0.45 + roughness * 4.4, 0.0, 4.5);',
-      '  vec3 texSrgb = textureLod(metalEnvTex, uv, lod).rgb;',
-      '  vec3 texLin = srgbToLinear(texSrgb);',
-      '  float luma = dot(texLin, vec3(0.2126, 0.7152, 0.0722));',
-      '  float stripBoost = 1.0 + smoothstep(0.24, 0.88, luma) * mix(2.15, 1.65, isLightTheme);',
-      '  vec3 texHdr = texLin * stripBoost;',
-      '  vec3 analyticHdr = sampleStudioHDRI(d, roughness, isLightTheme);',
-      '  float diagArg = clamp(1.0 - abs(d.x * -0.56 + d.z * 0.52 - 0.10) / (0.44 + roughness * 0.52), 0.0, 1.0);',
-      '  float diagBand = diagArg * diagArg * (3.0 - 2.0 * diagArg) * smoothstep(-0.16, 0.52, d.y);',
-      '  vec3 diagStrip = vec3(1.42, 1.46, 1.56) * diagBand * mix(0.68, 0.64, isLightTheme);',
-      '  vec3 baseLift = mix(vec3(0.0), vec3(0.22, 0.23, 0.26), isLightTheme * smoothstep(-0.28, 0.80, d.y));',
-      '  return mix(analyticHdr, texHdr, mix(0.22, 0.34, isLightTheme)) + diagStrip + baseLift;',
-      '}',
+      'const vec3 STUDIO_RIM_DIR=vec3(.62133,.46099,-.63136),STUDIO_FILL_DIR=vec3(.52198,.38145,.76290);',
+      'vec3 sampleStudioHDRIUnit(vec3 d,float r,float l){float bl=mix(.016,.54,r*r);',
+      'vec3 e=mix(mix(vec3(.009,.01,.013),vec3(.12,.13,.15),l),mix(vec3(.036,.038,.044),vec3(.34,.36,.41),l),smoothstep(-.32,.78,d.y));',
+      'if(d.y>.04){vec2 o=d.xz/max(d.y,.1)-vec2(-.42,.44),q=abs(o)-vec2(1.18,.44);',
+      'float sd=length(max(q,0.))+min(max(q.x,q.y),0.),m=1.-smoothstep(-bl*.42,bl*1.3+.04,sd);',
+      'e+=vec3(2.55,2.52,2.48)*mix(1.06,.9,l)*m*(1.-.24*clamp(length(o)*.48,0.,1.))*smoothstep(.04,.28,d.y);',
+      '}else if(d.y<-.12){e+=mix(vec3(.42,.45,.52),vec3(.56,.58,.64),l)*smoothstep(-.12,-.72,d.y)*smoothstep(-.45,.65,d.z)*(1.-r*.55);}',
+      'e+=vec3(1.18,1.32,1.62)*smoothstep(.83-bl*.48,.968,max(dot(d,STUDIO_RIM_DIR),0.));',
+      'return e+vec3(.84,.78,.7)*smoothstep(.78-bl*.5,.945,max(dot(d,STUDIO_FILL_DIR),0.));}',
+      'vec3 sampleStudioHDRI(vec3 R,float r,float l){return sampleStudioHDRIUnit(normalize(R),r,l);}',
+      'vec3 sampleMetalStudioEnvUv(sampler2D t,vec3 d,vec2 uv,float r,float l){',
+      'vec3 tl=srgbToLinear(textureLod(t,uv,clamp(.45+r*4.4,0.,4.5)).rgb);',
+      'vec3 th=tl*(1.+smoothstep(.24,.88,dot(tl,vec3(.2126,.7152,.0722)))*mix(2.15,1.65,l));',
+      'float da=clamp(1.-abs(d.x*-.56+d.z*.52-.1)/(.44+r*.52),0.,1.),db=da*da*(3.-2.*da)*smoothstep(-.16,.52,d.y);',
+      'return mix(sampleStudioHDRIUnit(d,r,l),th,mix(.22,.34,l))+vec3(1.42,1.46,1.56)*db*mix(.68,.64,l)+mix(vec3(0.),vec3(.22,.23,.26),l*smoothstep(-.28,.8,d.y));}',
+      'vec3 sampleMetalStudioEnv(sampler2D t,vec3 R,float r,float l){vec3 d=normalize(R);return sampleMetalStudioEnvUv(t,d,dirToEquirectUv(d),r,l);}',
       '',
       'float sampleVogelShadow(sampler2D shadowTex, mat4 lightVP, vec3 worldPos, vec3 worldN, vec3 lightDir, float shadowEnabled) {',
       '  if (shadowEnabled < 0.5) return 1.0;',
@@ -4963,90 +4882,38 @@
       '',
       GLSL_PBR_COMMON,
       '',
-      'float sdRoundBox2D(vec2 p, vec2 b, float r) {',
-      '  vec2 q = abs(p) - b + r;',
-      '  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;',
-      '}',
-      '',
-      'void main() {',
-      '  float kind = v_params.w;',
-      '  if (kind > 2.5 && kind < 3.5) {',
-      '    vec2 p = v_localPos.xz - vec2(0.05, 0.38);',
-      '    float d = sdRoundBox2D(p, vec2(9.64, 4.20), 0.56);',
-      '    float contactAo = exp(-max(d, 0.0) * 5.4) * 0.64;',
-      '    float softDrop = smoothstep(0.58, -0.20, d) * 0.54;',
-      '    float alpha = clamp((contactAo + softDrop) * v_params.x, 0.0, 0.80);',
-      '    outColor = vec4(0.0, 0.0, 0.0, alpha);',
-      '    return;',
-      '  }',
-      '  /* kind > 6.5: V11 随思考档位演化的「反重力磁通环 (7.0) + 轴底聚光柱 (7.3) + 三维八面体切面折光微晶 (7.6) + 散景光尘 (8.0)」 */',
-      '  if (kind > 6.5) {',
-      '    float liftGate = smoothstep(0.02, 0.30, u_liftCapShadow.w);',
-      '    float visAlpha = v_params.y * liftGate;',
-      '    if (visAlpha <= 0.003) discard;',
-      '    float phaseT = u_envParams.w;',
-      '    float isLightF = u_envParams.x;',
-      '    float toneIdxF = u_prismConfig.x;',
-      '    float ePulseF = u_prismConfig.w;',
-      '    float slamCollapse = clamp(v_params.z, 0.0, 1.0);',
-      '    vec3 elemLin = srgbToLinear(v_color);',
-      '    if (kind < 7.15) {',
-      '      float uAng = v_uv.x;',
-      '      float radT = abs(v_uv.y);',
-      '      float ringIdx = v_params.x;',
-      '      float radialCore = exp(-radT * radT * 3.1);',
-      '      float dirSign = mod(ringIdx, 2.0) < 0.5 ? 1.0 : -1.25;',
-      '      float wave1 = 0.56 + 0.44 * sin((uAng * 2.0 + phaseT * 0.36 * dirSign) * 6.2831853);',
-      '      float wave2 = 0.65 + 0.35 * cos((uAng * 3.0 - phaseT * 0.24 * dirSign + ringIdx * 0.4) * 6.2831853);',
-      '      float specPhase = fract(uAng * 1.5 + phaseT * 0.16 * dirSign + ringIdx * 0.33);',
-      '      vec3 prismLin = samplePrismSpectrum6(specPhase, radialCore * wave1 * 0.58, toneIdxF, isLightF);',
-      '      vec3 ringLin = mix(elemLin * 1.52, prismLin * 1.36, 0.58) * (1.0 + ePulseF * 0.90 + slamCollapse * 0.65);',
-      '      vec3 ringSrgb = linearToDisplaySrgb(ringLin * (2.15 + ePulseF * 0.85), gl_FragCoord.xy);',
-      '      float rAlpha = clamp(radialCore * (0.56 + 0.52 * wave1 * wave2) * visAlpha * mix(0.96, 0.82, isLightF) * (1.0 + ePulseF * 0.35), 0.0, 0.98);',
-      '      outColor = vec4(ringSrgb * rAlpha, rAlpha * mix(0.30, 0.72, isLightF));',
-      '    } else if (kind < 7.45) {',
-      '      /* High / Extra 档专属：高亮轴底垂直聚光能量光柱 */',
-      '      float pHeightT = clamp(v_uv.y, 0.0, 1.0);',
-      '      vec3 Vpil = normalize(u_camPos.xyz - v_worldPos);',
-      '      vec3 Npil = normalize(v_normal);',
-      '      float centerCore = pow(clamp(abs(dot(Npil, Vpil)), 0.0, 1.0), 1.45);',
-      '      float vertEnv = smoothstep(0.0, 0.16, pHeightT) * pow(max(0.0, 1.0 - pHeightT * 0.88), 1.35);',
-      '      float shimmerP = 0.74 + 0.26 * sin((v_uv.x * 3.0 - phaseT * 0.55 + pHeightT * 0.8) * 6.2831853);',
-      '      vec3 pPrism = samplePrismSpectrum6(fract(v_uv.x + pHeightT * 0.45 - phaseT * 0.20), centerCore * 0.75, toneIdxF, isLightF);',
-      '      vec3 pilLin = mix(elemLin * 1.65, pPrism * 1.35, 0.44) * (1.85 + ePulseF * 0.95);',
-      '      vec3 pilSrgb = linearToDisplaySrgb(pilLin, gl_FragCoord.xy);',
-      '      float pAlpha = clamp(centerCore * vertEnv * shimmerP * visAlpha * mix(0.46, 0.34, isLightF), 0.0, 0.85);',
-      '      outColor = vec4(pilSrgb * pAlpha, pAlpha * mix(0.24, 0.58, isLightF));',
-      '    } else if (kind < 7.85) {',
-      '      vec3 Vcr = normalize(u_camPos.xyz - v_worldPos);',
-      '      vec3 Ncr = normalize(v_normal);',
-      '      vec3 Lcr = normalize(u_lightDir.xyz);',
-      '      float ndvCr = abs(dot(Ncr, Vcr));',
-      '      float fresCr = 0.26 + 0.74 * pow(1.0 - clamp(ndvCr, 0.0, 1.0), 2.2);',
-      '      vec3 Hcr = normalize(Vcr + Lcr);',
-      '      float facetGlint = pow(max(abs(dot(Ncr, Hcr)), 0.0), 22.0);',
-      '      float facetBody = 0.38 + 0.62 * max(abs(dot(Ncr, Lcr)), 0.0);',
-      '      float apexBright = 0.75 + 0.45 * abs(v_uv.y);',
-      '      float crPhase = fract(v_params.x * 1.9 + ndvCr * 0.55 + phaseT * 0.24);',
-      '      vec3 crPrism = samplePrismSpectrum6(crPhase, facetGlint * 0.92 + 0.25, toneIdxF, isLightF);',
-      '      vec3 crLin = (elemLin * (1.55 * facetBody * apexBright) + crPrism * (0.95 * fresCr + 2.40 * facetGlint)) * (1.95 + ePulseF * 0.95);',
-      '      vec3 crSrgb = linearToDisplaySrgb(crLin, gl_FragCoord.xy);',
-      '      float crAlpha = clamp((0.52 + 0.44 * fresCr + 0.45 * facetGlint) * visAlpha * mix(0.96, 0.88, isLightF), 0.0, 0.98);',
-      '      outColor = vec4(crSrgb * crAlpha, crAlpha * mix(0.42, 0.78, isLightF));',
-      '    } else {',
-      '      float r2 = dot(v_uv, v_uv);',
-      '      if (r2 > 1.0) discard;',
-      '      float moteCore = exp(-r2 * 4.4);',
-      '      float moteHalo = exp(-r2 * 1.55) * 0.72;',
-      '      float mPhase = fract(v_params.x * 2.7 + phaseT * 0.22);',
-      '      vec3 mPrism = samplePrismSpectrum6(mPhase, moteCore * 0.80, toneIdxF, isLightF);',
-      '      vec3 moteLin = mix(elemLin * 1.55, mPrism * 1.40, 0.62) * (2.35 + ePulseF * 1.10);',
-      '      vec3 moteSrgb = linearToDisplaySrgb(moteLin, gl_FragCoord.xy);',
-      '      float mAlpha = clamp((moteCore + moteHalo) * visAlpha * mix(0.98, 0.85, isLightF), 0.0, 0.98);',
-      '      outColor = vec4(moteSrgb * mAlpha, mAlpha * mix(0.28, 0.72, isLightF));',
-      '    }',
-      '    return;',
-      '  }',
+      'float sdRoundBox2D(vec2 p,vec2 b,float r){vec2 q=abs(p)-b+r;return length(max(q,0.))+min(max(q.x,q.y),0.)-r;}',
+      'void main(){',
+      '  float kind=v_params.w;',
+      '  if(kind>2.5&&kind<3.5){float d=sdRoundBox2D(v_localPos.xz-vec2(.05,.38),vec2(9.64,4.2),.56);',
+      '    outColor=vec4(0.,0.,0.,clamp((exp(-max(d,0.)*5.4)*.64+smoothstep(.58,-.2,d)*.54)*v_params.x,0.,.8));return;}',
+      '  if(kind>6.5){',
+      '    float visAlpha=v_params.y*smoothstep(.02,.3,u_liftCapShadow.w);if(visAlpha<=.003)discard;',
+      '    float phaseT=u_envParams.w,isLightF=u_envParams.x,toneIdxF=u_prismConfig.x,ePulseF=u_prismConfig.w,slamCollapse=clamp(v_params.z,0.,1.);',
+      '    vec3 elemLin=srgbToLinear(v_color);',
+      '    if(kind<7.15){float uA=v_uv.x,rT=abs(v_uv.y),rI=v_params.x,rC=exp(-rT*rT*3.1),dS=mod(rI,2.)<.5?1.:-1.25;',
+      '      float w1=.56+.44*sin((uA*2.+phaseT*.36*dS)*6.2831853),w2=.65+.35*cos((uA*3.-phaseT*.24*dS+rI*.4)*6.2831853);',
+      '      vec3 pL=samplePrismSpectrum6(fract(uA*1.5+phaseT*.16*dS+rI*.33),rC*w1*.58,toneIdxF,isLightF);',
+      '      vec3 rS=linearToDisplaySrgb(mix(elemLin*1.52,pL*1.36,.58)*(1.+ePulseF*.9+slamCollapse*.65)*(2.15+ePulseF*.85),gl_FragCoord.xy);',
+      '      float rA=clamp(rC*(.56+.52*w1*w2)*visAlpha*mix(.96,.82,isLightF)*(1.+ePulseF*.35),0.,.98);',
+      '      outColor=vec4(rS*rA,rA*mix(.3,.72,isLightF));',
+      '    }else if(kind<7.45){float pH=clamp(v_uv.y,0.,1.);vec3 Vp=normalize(u_camPos.xyz-v_worldPos),Np=normalize(v_normal);',
+      '      float cC=pow(clamp(abs(dot(Np,Vp)),0.,1.),1.45),vE=smoothstep(0.,.16,pH)*pow(max(0.,1.-pH*.88),1.35);',
+      '      float shP=.74+.26*sin((v_uv.x*3.-phaseT*.55+pH*.8)*6.2831853);',
+      '      vec3 pP=samplePrismSpectrum6(fract(v_uv.x+pH*.45-phaseT*.2),cC*.75,toneIdxF,isLightF);',
+      '      vec3 pS=linearToDisplaySrgb(mix(elemLin*1.65,pP*1.35,.44)*(1.85+ePulseF*.95),gl_FragCoord.xy);',
+      '      float pA=clamp(cC*vE*shP*visAlpha*mix(.46,.34,isLightF),0.,.85);outColor=vec4(pS*pA,pA*mix(.24,.58,isLightF));',
+      '    }else if(kind<7.85){vec3 Vc=normalize(u_camPos.xyz-v_worldPos),Nc=normalize(v_normal),Lc=normalize(u_lightDir.xyz);',
+      '      float nvC=abs(dot(Nc,Vc)),frC=.26+.74*pow(1.-clamp(nvC,0.,1.),2.2),fG=pow(max(abs(dot(Nc,normalize(Vc+Lc))),0.),22.);',
+      '      float fB=.38+.62*max(abs(dot(Nc,Lc)),0.),aB=.75+.45*abs(v_uv.y);',
+      '      vec3 cP=samplePrismSpectrum6(fract(v_params.x*1.9+nvC*.55+phaseT*.24),fG*.92+.25,toneIdxF,isLightF);',
+      '      vec3 cS=linearToDisplaySrgb((elemLin*(1.55*fB*aB)+cP*(.95*frC+2.4*fG))*(1.95+ePulseF*.95),gl_FragCoord.xy);',
+      '      float cA=clamp((.52+.44*frC+.45*fG)*visAlpha*mix(.96,.88,isLightF),0.,.98);outColor=vec4(cS*cA,cA*mix(.42,.78,isLightF));',
+      '    }else{float r2=dot(v_uv,v_uv);if(r2>1.)discard;float mC=exp(-r2*4.4),mH=exp(-r2*1.55)*.72;',
+      '      vec3 mP=samplePrismSpectrum6(fract(v_params.x*2.7+phaseT*.22),mC*.8,toneIdxF,isLightF);',
+      '      vec3 mS=linearToDisplaySrgb(mix(elemLin*1.55,mP*1.4,.62)*(2.35+ePulseF*1.1),gl_FragCoord.xy);',
+      '      float mA=clamp((mC+mH)*visAlpha*mix(.98,.85,isLightF),0.,.98);outColor=vec4(mS*mA,mA*mix(.28,.72,isLightF));}',
+      '    return;}',
       '',
       '  float rough = v_params.x;',
       '  float metal = v_params.y;',
@@ -5192,17 +5059,17 @@
       '  vec3 Lo = (diffColor / PI + specBrdf * studioSweep) * mainLightRad * ndl;',
       '',
       '  /* 右后上戏剧化冷/暖轮廓逆光（Rim Light） */',
-      '  vec3 rimDir = normalize(vec3(0.62, 0.46, -0.63));',
-      '  vec3 Hrim = normalize(V + rimDir);',
-      '  float ndlRim = max(dot(N, rimDir), 0.0);',
+      '  vec3 Hrim = normalize(V + STUDIO_RIM_DIR);',
+      '  float ndlRim = max(dot(N, STUDIO_RIM_DIR), 0.0);',
       '  float ndhRim = max(dot(N, Hrim), 0.0);',
       '  float rimSpec = D_GGX(ndhRim, max(0.010, alphaRough)) * 0.16 * ndlRim;',
       '  vec3 rimColLin = u_rimTint.xyz * mix(0.76, 0.48, isLight);',
       '  vec3 LoRim = (f0 * rimSpec + diffColor * ndlRim * 0.08) * rimColLin;',
       '',
-      '  vec3 R = reflect(-V, N);',
-      '  vec3 envSpec = sampleMetalStudioEnv(u_metalEnvTex, R, rough, isLight) * studioSweep;',
-      '  vec3 envDiff = sampleStudioHDRI(N, 0.92, isLight);',
+      '  vec3 Rd = normalize(reflect(-V, N));',
+      '  vec2 Ruv = dirToEquirectUv(Rd);',
+      '  vec3 envSpec = sampleMetalStudioEnvUv(u_metalEnvTex, Rd, Ruv, rough, isLight) * studioSweep;',
+      '  vec3 envDiff = sampleStudioHDRIUnit(N, 0.92, isLight);',
       '  vec3 kS = F_SchlickRoughness(ndv, f0, rough);',
       '  vec3 kD = max(vec3(0.0), (1.0 - kS) * max(1.0 - metal, oxideDiffWeight * 0.65));',
       '  float specOcc = mix(0.38, 1.0, shadow * 0.64 + 0.36) * cavityAo;',
@@ -5217,13 +5084,13 @@
       '',
       '  if (kind > 4.5 && kind < 5.5) {',
       '    float fresPc = pow(1.0 - ndv, 3.4);',
-      '    vec3 clearCoatSpec = sampleMetalStudioEnv(u_metalEnvTex, R, 0.13, isLight) * (0.06 + 0.36 * fresPc);',
+      '    vec3 clearCoatSpec = sampleMetalStudioEnvUv(u_metalEnvTex, Rd, Ruv, 0.13, isLight) * (0.06 + 0.36 * fresPc);',
       '    float lensBleed = smoothstep(0.04, -0.28, v_localPos.z - u_liftCapShadow.z) * 0.18 * step(0.01, u_switchLightPos.w);',
       '    vec3 pcBleedCol = u_switchLightPos.w > 0.01 ? srgbToLinear(u_switchLightColor) : vec3(0.45, 0.65, 0.95);',
       '    totalLin = totalLin * 0.62 + clearCoatSpec + pcBleedCol * lensBleed * shadow;',
       '  } else if (kind > 1.5 && kind < 2.5) {',
       '    float fresLens = 0.08 + 0.92 * pow(1.0 - ndv, 3.8);',
-      '    vec3 lensCoat = sampleMetalStudioEnv(u_metalEnvTex, R, 0.055, isLight) * fresLens * mix(0.46, 0.34, isLight);',
+      '    vec3 lensCoat = sampleMetalStudioEnvUv(u_metalEnvTex, Rd, Ruv, 0.055, isLight) * fresLens * mix(0.46, 0.34, isLight);',
       '    vec3 gemCore = albedo * (emis * mix(0.96, 0.88, isLight));',
       '    float peakCh = max(gemCore.r, max(gemCore.g, gemCore.b));',
       '    gemCore /= (1.0 + peakCh * 0.40);',
@@ -5599,9 +5466,8 @@
       '  }',
       '',
       '  /* 大幅收敛盲键顶面边缘的 LoRim 泛白塑料圈，仅保留侧壁极微妙体积轮廓与陶瓷键温润釉边 */',
-      '  vec3 rimDir = normalize(vec3(0.62, 0.46, -0.63));',
-      '  vec3 Hrim = normalize(V + rimDir);',
-      '  float ndlRim = max(dot(Nc, rimDir), 0.0);',
+      '  vec3 Hrim = normalize(V + STUDIO_RIM_DIR);',
+      '  float ndlRim = max(dot(Nc, STUDIO_RIM_DIR), 0.0);',
       '  float ndhRim = max(dot(Nc, Hrim), 0.0);',
       '  float stealthTopSuppress = 1.0 - smoothstep(0.42, 0.85, v_part) * (1.0 - isAvail);',
       '  float rimEdge = (pow(1.0 - ndvC, 2.6) * 0.62 + 0.22) * stealthTopSuppress;',
@@ -5618,7 +5484,7 @@
       '    envCoat = sampleMetalStudioEnv(u_metalEnvTex, Rc, clearcoatRoughness, u_envParams.x) * mix(0.82, 0.68, u_envParams.x);',
       '    fcEnv = (0.055 + 0.945 * pow(clamp(1.0 - ndvC, 0.0, 1.0), 4.6)) * clearcoat * coatInkGuard;',
       '  }',
-      '  vec3 envDiff = sampleStudioHDRI(N, 0.94, u_envParams.x) * mix(0.90, 0.96, u_envParams.x);',
+      '  vec3 envDiff = sampleStudioHDRIUnit(N, 0.94, u_envParams.x) * mix(0.90, 0.96, u_envParams.x);',
       '  vec3 kS = F_SchlickRoughness(ndv, f0, rough);',
       '  vec3 kD = (1.0 - kS) * (1.0 - fcEnv * 0.56);',
       '  float envSpecOcc = cavityAo * mix(0.46, 1.0, shadow);',
@@ -6525,8 +6391,13 @@
         return Boolean(state.reducedMotion || resolveMotionLevel() === 'off');
       }
 
+      function isPerformanceMode() {
+        var pm = String(readDocAttr('data-ag-cs-perf-mode') || '').trim().toLowerCase();
+        return pm === 'performance' || pm === 'eco';
+      }
+
       function resolveTargetShadowMapSize() {
-        return resolveMotionLevel() === 'ultra' ? SHADOW_MAP_SIZE_ULTRA : SHADOW_MAP_SIZE_REDUCED;
+        return (!isPerformanceMode() && resolveMotionLevel() === 'ultra') ? SHADOW_MAP_SIZE_ULTRA : SHADOW_MAP_SIZE_REDUCED;
       }
 
       var activeShadowMapSize = resolveTargetShadowMapSize();
@@ -10011,7 +9882,7 @@
         var texUnit1 = gl.TEXTURE0 + 1;
         var texUnit2 = gl.TEXTURE0 + 2;
         var texUnit3 = gl.TEXTURE0 + 3;
-        var useUltraPcf = resolveMotionLevel() === 'ultra' && (canvas ? canvas.width <= 1800 : true);
+        var useUltraPcf = !isPerformanceMode() && resolveMotionLevel() === 'ultra' && (canvas ? canvas.width <= 1800 : true);
         var shadowEnabled = shPass ? (useUltraPcf ? 2.0 : 1.0) : 0.0;
 
         gl.enable(gl.DEPTH_TEST);
@@ -10651,7 +10522,7 @@
         }
         var ts = typeof now === 'number' && Number.isFinite(now) ? now : readNowMs(root);
         var steadyZeroG = Boolean(zeroGRemainSec > 0 && onlyZeroGActive && isMagneticSpringAtRest());
-        var minFrameGapMs = resolveMinFrameGapMs(resolveTargetFps(), steadyZeroG);
+        var minFrameGapMs = resolveMinFrameGapMs(resolveTargetFps(), steadyZeroG, isPerformanceMode());
         if (minFrameGapMs > 0 && lastDrawAt > 0 && ts >= lastDrawAt && (ts - lastDrawAt) < minFrameGapMs) {
           if (!idle || pendingRenderWhilePaused) {
             scheduleAnimLoop(pendingRenderWhilePaused);
@@ -10793,7 +10664,7 @@
           attrMutationObserver = new MutObsCtor(onHostRootAttrMutated);
           attrMutationObserver.observe(doc.documentElement, {
             attributes: true,
-            attributeFilter: ['data-ag-cs-win-blur', 'data-ag-cs-target-fps', 'data-ag-cs-motion'],
+            attributeFilter: ['data-ag-cs-win-blur', 'data-ag-cs-target-fps', 'data-ag-cs-motion', 'data-ag-cs-perf-mode'],
           });
         } catch (_moErr) {
           attrMutationObserver = null;
@@ -11932,7 +11803,11 @@
         cssWidth = Math.max(64, Number(nextCssW) || cssWidth || 1040);
         cssHeight = Math.max(48, Number(nextCssH) || cssHeight || 552);
         var rawDpr = Math.min(1.5, Math.max(1, Number(nextDpr) || 1));
-        dpr = (cssWidth * rawDpr > 1800) ? Math.min(rawDpr, 1.35) : rawDpr;
+        var effDpr = (cssWidth * rawDpr > 1800) ? Math.min(rawDpr, 1.35) : rawDpr;
+        var maxPixels = 2200000;
+        var rawPixels = cssWidth * cssHeight * effDpr * effDpr;
+        if (rawPixels > maxPixels) effDpr *= Math.sqrt(maxPixels / rawPixels);
+        dpr = effDpr;
         if (optBoundsRect && typeof optBoundsRect === 'object') {
           cachedCanvasRect = { left: Number(optBoundsRect.left) || 0, top: Number(optBoundsRect.top) || 0, width: cssWidth, height: cssHeight };
           if (canvas) lastCanvasRectFn = canvas.getBoundingClientRect;
