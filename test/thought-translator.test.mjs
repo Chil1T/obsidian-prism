@@ -2893,38 +2893,45 @@ test('Issue #14 system proxy detection: Windows reg query, macOS scutil, env pri
   assert.equal(bypassedByNoProxy, null);
 
   let execCount = 0;
-  const cachedSvc = new ThoughtTranslatorService({
-    proxyEnv: {},
-    proxyPlatform: 'win32',
-    proxyExecFileSync: () => {
-      execCount++;
-      return winSplitOut;
-    },
-  });
-  const pHttps = cachedSvc._resolveProxyForUrl('https://translate.googleapis.com/translate_a/single');
-  const pHttp = cachedSvc._resolveProxyForUrl('http://public.service.test/v1/models');
-  const pOverride = cachedSvc._resolveProxyForUrl('https://sub.example.com/v1');
-  const pLocal = cachedSvc._resolveProxyForUrl('http://127.0.0.1:11434/v1/models');
-  assert.equal(pHttps?.port, 7891);
-  assert.equal(pHttp?.port, 7890);
-  assert.equal(pOverride, null, 'Windows ProxyOverride *.example.com must bypass proxy');
-  assert.equal(pLocal, null, '127.0.0.1 must always bypass proxy');
-  assert.equal(execCount, 1, 'OS proxy probe must be cached for 30s across calls');
+  const proxyCfgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prism-thought-proxy-probe-'));
+  try {
+    const cachedSvc = new ThoughtTranslatorService({
+      configDir: proxyCfgDir,
+      proxyEnv: {},
+      proxyPlatform: 'win32',
+      proxyExecFileSync: () => {
+        execCount++;
+        return winSplitOut;
+      },
+    });
+    const pHttps = cachedSvc._resolveProxyForUrl('https://translate.googleapis.com/translate_a/single');
+    const pHttp = cachedSvc._resolveProxyForUrl('http://public.service.test/v1/models');
+    const pOverride = cachedSvc._resolveProxyForUrl('https://sub.example.com/v1');
+    const pLocal = cachedSvc._resolveProxyForUrl('http://127.0.0.1:11434/v1/models');
+    assert.equal(pHttps?.port, 7891);
+    assert.equal(pHttp?.port, 7890);
+    assert.equal(pOverride, null, 'Windows ProxyOverride *.example.com must bypass proxy');
+    assert.equal(pLocal, null, '127.0.0.1 must always bypass proxy');
+    assert.equal(execCount, 1, 'OS proxy probe must be cached for 30s across calls');
 
-  const failingProbeSvc = new ThoughtTranslatorService({
-    proxyEnv: {},
-    proxyPlatform: 'darwin',
-    proxyExecFileSync: () => {
-      throw new Error('scutil unavailable');
-    },
-  });
-  assert.equal(
-    failingProbeSvc._resolveProxyForUrl('https://translate.googleapis.com/translate_a/single'),
-    null,
-    'OS proxy detection error must degrade silently to direct connection'
-  );
-  cachedSvc.dispose();
-  failingProbeSvc.dispose();
+    const failingProbeSvc = new ThoughtTranslatorService({
+      configDir: proxyCfgDir,
+      proxyEnv: {},
+      proxyPlatform: 'darwin',
+      proxyExecFileSync: () => {
+        throw new Error('scutil unavailable');
+      },
+    });
+    assert.equal(
+      failingProbeSvc._resolveProxyForUrl('https://translate.googleapis.com/translate_a/single'),
+      null,
+      'OS proxy detection error must degrade silently to direct connection'
+    );
+    cachedSvc.dispose();
+    failingProbeSvc.dispose();
+  } finally {
+    fs.rmSync(proxyCfgDir, { recursive: true, force: true });
+  }
 });
 
 test('Issue #14 end-to-end local proxy transport: HTTP forwarding, SSE streaming, CONNECT handshake, AbortSignal cancel & redirect:error enforcement', async () => {

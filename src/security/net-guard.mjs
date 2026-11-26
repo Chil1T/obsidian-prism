@@ -26,6 +26,7 @@ export function isBlockedCloudOrUnspecifiedIpv4(a, b, c, d) {
   if (a === 0) return true; // 0.0.0.0/8 未指定地址
   if (a === 169 && b === 254) return true; // 169.254.0.0/16 云元数据与链路本地
   if (a === 100 && b === 100 && c === 100 && d === 200) return true; // 阿里云元数据
+  if (a >= 224) return true; // 组播与保留地址段（224.0.0.0/4、240.0.0.0/4、255.255.255.255）
   return false;
 }
 
@@ -146,6 +147,7 @@ export function isBlockedSsrfHost(rawHost) {
       return false;
     }
     if ((h[0] & 0xffc0) === 0xfe80) return true; // fe80::/10
+    if ((h[0] & 0xff00) === 0xff00) return true; // ff00::/8 组播地址
     if (h[0] === 0xfd00 && h[1] === 0x0ec2) return true; // AWS IMDSv2 IPv6
     const emb = extractEmbeddedIpv4FromIpv6(h);
     if (emb && isBlockedCloudOrUnspecifiedIpv4(emb[0], emb[1], emb[2], emb[3])) return true;

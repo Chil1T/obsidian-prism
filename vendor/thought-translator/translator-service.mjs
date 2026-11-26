@@ -197,11 +197,25 @@ export function redactSecrets(text, explicitKey = '') {
 
 export function validateOpenAiBaseUrl(rawUrl, opts = {}) {
   let u = String(rawUrl || '').trim();
-  if (!u) return { ok: true, url: 'https://api.openai.com/v1', isDefault: true };
-  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u)) {
-    const bare = u.split('/')[0].toLowerCase();
-    const isLoopbackBare = bare.startsWith('localhost') || bare.startsWith('127.') || bare.startsWith('[::1]');
-    u = (isLoopbackBare ? 'http://' : 'https://') + u;
+  if (!u) return { ok: true, url: 'https://api.openai.com/v1', isDefault: true, insecureHttp: false };
+  const hasExplicitScheme =
+    /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(u) ||
+    /^[a-zA-Z][a-zA-Z0-9+.-]*:(?!\d+(?:[/?#]|$))/.test(u);
+  if (!hasExplicitScheme) {
+    const authority = u.split(/[/?#]/)[0].toLowerCase().replace(/^[^@]*@/, '');
+    const bareHost = authority.startsWith('[')
+      ? authority.slice(0, authority.indexOf(']') + 1)
+      : authority.split(':')[0];
+    const bareV4 = parseIpv4Octets(bareHost);
+    const isLocalOrLanBare =
+      isExplicitLoopbackHost(bareHost) ||
+      Boolean(
+        bareV4 &&
+          (bareV4[0] === 10 ||
+            (bareV4[0] === 192 && bareV4[1] === 168) ||
+            (bareV4[0] === 172 && bareV4[1] >= 16 && bareV4[1] <= 31))
+      );
+    u = (isLocalOrLanBare ? 'http://' : 'https://') + u;
   }
   try {
     const parsed = new URL(u);
@@ -215,7 +229,8 @@ export function validateOpenAiBaseUrl(rawUrl, opts = {}) {
     if (parsed.port && BLOCKED_AI_PORTS.has(Number(parsed.port))) {
       return { ok: false, reason: 'blocked-port', error: `Blocked Base URL port: ${parsed.port}` };
     }
-    if (parsed.protocol === 'http:' && !isExplicitLoopbackHost(cleanHost) && !opts?.allowInsecureHttp) {
+    const insecureHttp = Boolean(parsed.protocol === 'http:' && !isExplicitLoopbackHost(cleanHost));
+    if (insecureHttp && opts?.allowInsecureHttp === false) {
       return {
         ok: false,
         reason: 'insecure-http',
@@ -234,7 +249,7 @@ export function validateOpenAiBaseUrl(rawUrl, opts = {}) {
     let pathname = stripTrailingSlashes(parsed.pathname);
     pathname = stripTrailingSlashes(pathname.replace(/\/chat\/completions$/i, '').replace(/\/models$/i, ''));
     if (!pathname) pathname = '/v1';
-    return { ok: true, url: `${parsed.origin}${pathname}`, isDefault: false };
+    return { ok: true, url: `${parsed.origin}${pathname}`, isDefault: false, insecureHttp };
   } catch {
     return { ok: false, reason: 'invalid-url', error: 'Invalid Base URL format' };
   }
@@ -254,7 +269,10 @@ export const MAX_TOTAL_THOUGHT_CHARS = 96000;
 export function isKeylessAllowedEndpoint(rawUrl) {
   const raw = String(rawUrl || '').trim();
   if (!raw) return false;
-  const withProto = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw) ? raw : 'http://' + raw;
+  const hasExplicitScheme =
+    /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw) ||
+    /^[a-zA-Z][a-zA-Z0-9+.-]*:(?!\d+(?:[/?#]|$))/.test(raw);
+  const withProto = hasExplicitScheme ? raw : 'http://' + raw;
   try {
     const rawParsed = new URL(withProto);
     if (rawParsed.protocol !== 'http:' && rawParsed.protocol !== 'https:') return false;
@@ -1166,8 +1184,8 @@ export class ThoughtTranslatorService {
     this._proxyExecFileAsync = typeof opts.proxyExecFileAsync === 'function' ? opts.proxyExecFileAsync : null;
     this._proxyTlsOptions = opts.proxyTlsOptions || null;
     this._dnsLookup = typeof opts.dnsLookup === 'function' ? opts.dnsLookup : null;
-    this._allowInsecureHttp = Boolean(opts.allowInsecureHttp);
-    this._allowPrivateIp = Boolean(opts.allowPrivateIp);
+    this._allowInsecureHttp = opts.allowInsecureHttp !== false;
+    this._allowPrivateIp = opts.allowPrivateIp !== false;
     this._socks5HandshakeTimeoutMs = Number(opts.socks5HandshakeTimeoutMs) || 0;
     this._connectHandshakeTimeoutMs = Number(opts.connectHandshakeTimeoutMs) || 0;
     this._proxyCache = { ts: 0, value: null, loaded: false };
@@ -1260,7 +1278,12 @@ export class ThoughtTranslatorService {
       if (seen.has(id)) continue;
       seen.add(id);
       const rawBaseUrl = typeof item.baseUrl === 'string' ? item.baseUrl.trim() : '';
-      const allowHttp = Boolean(item.allowInsecureHttp || raw.allowInsecureHttp || this._allowInsecureHttp);
+      const allowHttp =
+        item.allowInsecureHttp !== undefined
+          ? Boolean(item.allowInsecureHttp)
+          : raw.allowInsecureHttp !== undefined
+          ? Boolean(raw.allowInsecureHttp)
+          : this._allowInsecureHttp;
       const checkedUrl = validateOpenAiBaseUrl(rawBaseUrl, { allowInsecureHttp: allowHttp });
       const preservedError = !rawBaseUrl && typeof item.baseUrlError === 'string' ? item.baseUrlError.trim() : '';
       const profileRec = {
@@ -1269,7 +1292,7 @@ export class ThoughtTranslatorService {
         baseUrl: checkedUrl.ok && !preservedError ? checkedUrl.url : '',
         apiKey: typeof item.apiKey === 'string' ? item.apiKey.trim() : '',
         model: String(item.model || '').trim().slice(0, 120),
-        ...(allowHttp ? { allowInsecureHttp: true } : {}),
+        ...(typeof item.allowInsecureHttp === 'boolean' ? { allowInsecureHttp: item.allowInsecureHttp } : {}),
       };
       if (!checkedUrl.ok) {
         profileRec.baseUrlError = checkedUrl.error;
@@ -1292,7 +1315,7 @@ export class ThoughtTranslatorService {
       translateTitles,
       activeProfileId,
       profiles,
-      ...(raw.allowInsecureHttp ? { allowInsecureHttp: true } : {}),
+      ...(typeof raw.allowInsecureHttp === 'boolean' ? { allowInsecureHttp: raw.allowInsecureHttp } : {}),
     };
   }
 
@@ -1325,6 +1348,7 @@ export class ThoughtTranslatorService {
         id: p.id,
         name: p.name,
         baseUrl: p.baseUrl,
+        ...(p.baseUrlError ? { baseUrlError: p.baseUrlError } : {}),
         model: p.model,
         hasApiKey: Boolean(p.apiKey),
         keylessAllowed: isKeylessAllowedEndpoint(p.baseUrl),
@@ -1410,16 +1434,16 @@ export class ThoughtTranslatorService {
               apiKey: looksLikeMask || isMaskedUnchanged ? (old ? old.apiKey : '') : rawKey,
               ...(p?.allowInsecureHttp !== undefined
                 ? { allowInsecureHttp: Boolean(p.allowInsecureHttp) }
-                : old?.allowInsecureHttp
-                ? { allowInsecureHttp: true }
+                : typeof old?.allowInsecureHttp === 'boolean'
+                ? { allowInsecureHttp: old.allowInsecureHttp }
                 : {}),
             };
           })
         : prev.profiles,
       ...(input.allowInsecureHttp !== undefined
         ? { allowInsecureHttp: Boolean(input.allowInsecureHttp) }
-        : prev.allowInsecureHttp
-        ? { allowInsecureHttp: true }
+        : typeof prev.allowInsecureHttp === 'boolean'
+        ? { allowInsecureHttp: prev.allowInsecureHttp }
         : {}),
     };
 
@@ -1429,6 +1453,15 @@ export class ThoughtTranslatorService {
     const out = this.getSanitizedConfig();
     if (persisted && persisted.ok === false) {
       return { ...out, ok: false, error: persisted.error || 'Failed to persist translator config' };
+    }
+    if (Array.isArray(input.profiles)) {
+      const activeProf = this._config.profiles.find((p) => p.id === this._config.activeProfileId);
+      const invalidProf = activeProf?.baseUrlError
+        ? activeProf
+        : this._config.profiles.find((p) => p.baseUrlError);
+      if (invalidProf?.baseUrlError) {
+        return { ...out, ok: false, error: invalidProf.baseUrlError };
+      }
     }
     return out;
   }
@@ -1440,7 +1473,14 @@ export class ThoughtTranslatorService {
     const hasInputUrl = typeof input.baseUrl === 'string' && input.baseUrl.trim() !== '';
     let baseUrl = 'https://api.openai.com/v1';
     let baseUrlError = '';
-    const allowHttp = Boolean(input.allowInsecureHttp || saved?.allowInsecureHttp || store.allowInsecureHttp || this._allowInsecureHttp);
+    const allowHttp =
+      input.allowInsecureHttp !== undefined
+        ? Boolean(input.allowInsecureHttp)
+        : saved?.allowInsecureHttp !== undefined
+        ? Boolean(saved.allowInsecureHttp)
+        : store.allowInsecureHttp !== undefined
+        ? Boolean(store.allowInsecureHttp)
+        : this._allowInsecureHttp;
     if (hasInputUrl) {
       const checked = validateOpenAiBaseUrl(input.baseUrl, { allowInsecureHttp: allowHttp });
       if (checked.ok) {
