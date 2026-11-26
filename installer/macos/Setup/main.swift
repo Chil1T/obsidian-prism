@@ -13,6 +13,7 @@ final class InstallerOptions {
     var noKillLegacy = false
     var noNativeDaemon = false
     var noRelaunchPrompt = false
+    var noAutoRelaunch = false
     var purgeData = false
     var createLauncher = true
     var explicitLauncherFlag = false
@@ -489,31 +490,21 @@ enum InstallerCore {
             .replacingOccurrences(of: "'", with: "&apos;")
     }
 
-    static func registerLaunchAgent(installDir: String, pluginDir: String, cdpPort: Int?, noNativeDaemon: Bool = false, noRelaunchPrompt: Bool = false, lang: String? = nil) throws {
+    static func registerLaunchAgent(installDir: String, pluginDir: String, cdpPort: Int?, noNativeDaemon: Bool = false, noRelaunchPrompt: Bool = false, noAutoRelaunch: Bool = false, lang: String? = nil) throws {
         let plistPath = getLaunchAgentPlistPath()
         let launchAgentsDir = (plistPath as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(atPath: launchAgentsDir, withIntermediateDirectories: true, attributes: nil)
 
         let watcherExe = (installDir as NSString).appendingPathComponent(watcherExeName)
-        var args = [watcherExe, "--watch", "--dir", installDir]
-        if !pluginDir.isEmpty {
-            args.append("--plugin-dir")
-            args.append(pluginDir)
-        }
-        if let port = cdpPort, port > 0 {
-            args.append("--cdp-port")
-            args.append(String(port))
-        }
-        if noNativeDaemon {
-            args.append("--no-native-daemon")
-        }
-        if noRelaunchPrompt {
-            args.append("--no-relaunch-prompt")
-        }
-        if let explicitLang = InstallerI18n.normalizeLangCode(lang) {
-            args.append("--lang")
-            args.append(explicitLang)
-        }
+        let args = [watcherExe] + CdpHelper.buildWatcherWatchArgs(
+            installDir: installDir,
+            pluginDir: pluginDir,
+            cdpPort: cdpPort,
+            noNativeDaemon: noNativeDaemon,
+            noRelaunchPrompt: noRelaunchPrompt,
+            noAutoRelaunch: noAutoRelaunch,
+            lang: lang
+        )
         let argsXml = args.map { "    <string>\(xmlEscape($0))</string>" }.joined(separator: "\n")
         let outLog = (installDir as NSString).appendingPathComponent("launchd.out.log")
         let errLog = (installDir as NSString).appendingPathComponent("launchd.err.log")
@@ -531,6 +522,10 @@ enum InstallerCore {
           </array>
           <key>WorkingDirectory</key>
           <string>\(xmlEscape(installDir))</string>
+          <key>LimitLoadToSessionType</key>
+          <string>Aqua</string>
+          <key>ProcessType</key>
+          <string>Background</string>
           <key>RunAtLoad</key>
           <true/>
           <key>KeepAlive</key>
@@ -552,27 +547,17 @@ enum InstallerCore {
         }
     }
 
-    private static func spawnWatcherDirectly(installDir: String, pluginDir: String, cdpPort: Int?, noNativeDaemon: Bool = false, noRelaunchPrompt: Bool = false, lang: String? = nil) throws {
+    private static func spawnWatcherDirectly(installDir: String, pluginDir: String, cdpPort: Int?, noNativeDaemon: Bool = false, noRelaunchPrompt: Bool = false, noAutoRelaunch: Bool = false, lang: String? = nil) throws {
         let watcherExe = (installDir as NSString).appendingPathComponent(watcherExeName)
-        var args = ["--watch", "--dir", installDir]
-        if !pluginDir.isEmpty {
-            args.append("--plugin-dir")
-            args.append(pluginDir)
-        }
-        if let port = cdpPort, port > 0 {
-            args.append("--cdp-port")
-            args.append(String(port))
-        }
-        if noNativeDaemon {
-            args.append("--no-native-daemon")
-        }
-        if noRelaunchPrompt {
-            args.append("--no-relaunch-prompt")
-        }
-        if let explicitLang = InstallerI18n.normalizeLangCode(lang) {
-            args.append("--lang")
-            args.append(explicitLang)
-        }
+        let args = CdpHelper.buildWatcherWatchArgs(
+            installDir: installDir,
+            pluginDir: pluginDir,
+            cdpPort: cdpPort,
+            noNativeDaemon: noNativeDaemon,
+            noRelaunchPrompt: noRelaunchPrompt,
+            noAutoRelaunch: noAutoRelaunch,
+            lang: lang
+        )
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: watcherExe)
         proc.arguments = args
@@ -1574,6 +1559,7 @@ enum InstallerCore {
                         cdpPort: opts.cdpPort,
                         noNativeDaemon: opts.noNativeDaemon,
                         noRelaunchPrompt: opts.noRelaunchPrompt,
+                        noAutoRelaunch: opts.noAutoRelaunch,
                         lang: opts.lang
                     )
                     Thread.sleep(forTimeInterval: 0.25)
@@ -1613,6 +1599,7 @@ enum InstallerCore {
                             cdpPort: opts.cdpPort,
                             noNativeDaemon: opts.noNativeDaemon,
                             noRelaunchPrompt: opts.noRelaunchPrompt,
+                            noAutoRelaunch: opts.noAutoRelaunch,
                             lang: opts.lang
                         )
                         spawned = true
@@ -3028,6 +3015,8 @@ func parseInstallerArgs(_ args: [String]) -> InstallerOptions {
         else if a == "--no-kill-legacy" { opts.noKillLegacy = true }
         else if a == "--no-native-daemon" { opts.noNativeDaemon = true }
         else if a == "--no-relaunch-prompt" { opts.noRelaunchPrompt = true }
+        else if a == "--auto-relaunch" { opts.noAutoRelaunch = false }
+        else if a == "--no-auto-relaunch" { opts.noAutoRelaunch = true }
         else if a == "--purge-data" { opts.purgeData = true }
         else if a == "--create-launcher" {
             opts.createLauncher = true

@@ -86,11 +86,12 @@ final class WatcherApp {
     private let isWatch: Bool
     private let noNativeDaemon: Bool
     private let noRelaunchPrompt: Bool
+    private let noAutoRelaunchCliFlag: Bool
     private let logLock = NSLock()
     private let promptedHostsLock = NSLock()
     private var promptedHostKeys: Set<String> = []
 
-    init(baseDir: String, pluginDir: String, isWatch: Bool, noNativeDaemon: Bool = false, noRelaunchPrompt: Bool = false) {
+    init(baseDir: String, pluginDir: String, isWatch: Bool, noNativeDaemon: Bool = false, noRelaunchPrompt: Bool = false, noAutoRelaunch: Bool = false) {
         self.baseDir = baseDir
         self.pluginDir = pluginDir
         self.logFile = (baseDir as NSString).appendingPathComponent("watch.log")
@@ -99,6 +100,7 @@ final class WatcherApp {
         self.isWatch = isWatch
         self.noNativeDaemon = noNativeDaemon || (ProcessInfo.processInfo.environment["AG_PRISM_NO_NATIVE_DAEMON"] == "1")
         self.noRelaunchPrompt = noRelaunchPrompt
+        self.noAutoRelaunchCliFlag = noAutoRelaunch
     }
 
     func log(_ line: String) {
@@ -755,8 +757,11 @@ final class WatcherApp {
         var yieldingToDaemon = false
         var hadLiveHost = false
         var exitArchiveInFlight = false
+        var autoRelaunchInFlight = false
         var lastDaemonSpawnAttempt = Date.distantPast
-        while !isExiting() {
+
+        let runMainWatchLoop: () -> Void = { [self] in
+            while !isExiting() {
             var nativeAlive = !pluginDir.isEmpty && CdpHelper.isNativeDaemonAlive(pluginDir: pluginDir)
             var rawPort: Int? = nil
             var livePort: Int? = nil
@@ -863,7 +868,11 @@ final class WatcherApp {
                 }
             }
 
-            if livePort == nil && overridePort == nil {
+            stateLock.lock()
+            let relaunchGuardBusy = autoRelaunchInFlight
+            stateLock.unlock()
+
+            if livePort == nil && overridePort == nil && !relaunchGuardBusy {
                 let env = ProcessInfo.processInfo.environment
                 let mockDec = env["AG_PRISM_MOCK_RELAUNCH_DECISION"] ?? ""
                 var allowPrompt = !self.noRelaunchPrompt &&
@@ -937,7 +946,25 @@ final class WatcherApp {
             }
 
             _ = exitSem.wait(timeout: .now() + .seconds(2))
+            }
         }
+
+        LaunchGuard.runWatchWithOptionalObserver(
+            baseDir: self.baseDir,
+            pluginDir: self.pluginDir,
+            overridePort: overridePort,
+            noRelaunchPrompt: self.noRelaunchPrompt,
+            noAutoRelaunch: self.noAutoRelaunchCliFlag,
+            isDefaultDir: isDefaultDir,
+            isExiting: isExiting,
+            setAutoRelaunchInFlight: { active in
+                stateLock.lock()
+                autoRelaunchInFlight = active
+                stateLock.unlock()
+            },
+            log: { [weak self] msg in self?.log(msg) },
+            runMainWatchLoop: runMainWatchLoop
+        )
 
         dirSource?.cancel()
         termSource.cancel()
@@ -1417,6 +1444,7 @@ func runWatcherMain() -> Int32 {
     var outFile: String?
     var noNativeDaemon = false
     var noRelaunchPrompt = false
+    var noAutoRelaunch = false
 
     let args = CommandLine.arguments
     var i = 1
@@ -1425,8 +1453,11 @@ func runWatcherMain() -> Int32 {
         if a == "--watch" { mode = "watch" }
         else if a == "--once" { mode = "once" }
         else if a == "--remove" { mode = "remove" }
+        else if a == "--self-test-launch-guard" { mode = "self-test-launch-guard" }
         else if a == "--no-native-daemon" { noNativeDaemon = true }
         else if a == "--no-relaunch-prompt" { noRelaunchPrompt = true }
+        else if a == "--auto-relaunch" { noAutoRelaunch = false }
+        else if a == "--no-auto-relaunch" { noAutoRelaunch = true }
         else if a == "--dir" && i + 1 < args.count { i += 1; customDir = args[i] }
         else if a == "--plugin-dir" && i + 1 < args.count { i += 1; customPluginDir = args[i] }
         else if a == "--cdp-port" && i + 1 < args.count {
@@ -1467,7 +1498,11 @@ func runWatcherMain() -> Int32 {
         pluginDir = (parentDir as NSString).appendingPathComponent("\(baseName)-native-plugin")
     }
 
-    let app = WatcherApp(baseDir: baseDir, pluginDir: pluginDir, isWatch: mode == "watch", noNativeDaemon: noNativeDaemon, noRelaunchPrompt: noRelaunchPrompt)
+    if mode == "self-test-launch-guard" {
+        return LaunchGuard.runSelfTest()
+    }
+
+    let app = WatcherApp(baseDir: baseDir, pluginDir: pluginDir, isWatch: mode == "watch", noNativeDaemon: noNativeDaemon, noRelaunchPrompt: noRelaunchPrompt, noAutoRelaunch: noAutoRelaunch)
 
     if mode == "once" {
         return app.runOnce(overridePort: overridePort, outFile: outFile)

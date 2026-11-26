@@ -100,6 +100,7 @@ const CONFIG_SCHEMA = Object.freeze({
   autoArchiveOnExit: Object.freeze({ type: 'boolean', default: false, stringBoolMode: 'strictOn' }),
   pollIntervalMs: Object.freeze({ type: 'integer', default: 2500, min: 500, max: 60000, inValidators: false }),
   autoPromptCdpRelaunch: Object.freeze({ type: 'boolean', optional: true, strictBoolean: true, inValidators: false }),
+  autoRelaunchOnBareLaunch: Object.freeze({ type: 'boolean', optional: true, strictBoolean: true, inValidators: false }),
 });
 
 const DEFAULT_CONFIG = {};

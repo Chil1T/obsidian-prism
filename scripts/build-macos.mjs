@@ -181,6 +181,7 @@ function buildMacosApp({
   try {
     const commonMiniJson = path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'MiniJson.swift');
     const commonCdpClient = path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'CdpClient.swift');
+    const commonLaunchGuard = path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'LaunchGuard.swift');
     const commonRuntimeChannels = path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'RuntimeChannels.swift');
     const commonInstallManifest = path.join(ROOT_DIR, 'installer', 'macos', 'Common', 'InstallManifest.swift');
     const watcherMain = path.join(ROOT_DIR, 'installer', 'macos', 'Watcher', 'main.swift');
@@ -191,7 +192,8 @@ function buildMacosApp({
       swiftc,
       lipo,
       sdkPath,
-      sources: [commonMiniJson, commonCdpClient, commonRuntimeChannels, watcherMain],
+      sources: [commonMiniJson, commonCdpClient, commonLaunchGuard, commonRuntimeChannels, watcherMain],
+      frameworks: ['AppKit'],
       outputPath: watcherOut,
       stageDir,
       name: 'watcher',
@@ -202,7 +204,7 @@ function buildMacosApp({
       swiftc,
       lipo,
       sdkPath,
-      sources: [commonMiniJson, commonCdpClient, commonRuntimeChannels, commonInstallManifest, setupMain],
+      sources: [commonMiniJson, commonCdpClient, commonLaunchGuard, commonRuntimeChannels, commonInstallManifest, setupMain],
       frameworks: ['Cocoa'],
       outputPath: setupOut,
       stageDir,
